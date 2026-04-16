@@ -74,7 +74,7 @@ docs/                      # design documents
 
 ```bash
 pip install -e ".[dev]"
-ruff check src/
+ruff check .
 pytest -q --tb=short
 svprpe --help
 ```

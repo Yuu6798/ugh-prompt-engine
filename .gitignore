@@ -25,5 +25,10 @@ Thumbs.db
 *.db
 *.sqlite
 
+# Generated output
+examples/expected_output/*
+examples/sample_input/*
+!examples/**/.gitkeep
+
 # Claude Code local settings
 .claude/settings.local.json

@@ -25,12 +25,13 @@ svprpe generate rpe.json --output-dir ./output --format yaml
 svprpe generate rpe.json --format text
 ```
 
-### `svprpe evaluate --audio <audio>`
+### `svprpe evaluate --audio <audio> [--svp <svp.yaml>]`
 
 Evaluate audio quality and SVP consistency.
 
 ```bash
 svprpe evaluate --audio track.wav -o evaluation.json
+svprpe evaluate --audio track.wav --svp svp.yaml -o evaluation.json
 ```
 
 ### `svprpe run <audio>`
