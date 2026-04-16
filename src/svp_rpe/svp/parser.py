@@ -1,0 +1,103 @@
+"""svp/parser.py — Parse external SVP files (YAML or text) into ParsedSVP."""
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from typing import Optional
+
+import yaml
+
+from svp_rpe.eval.diff_models import ParsedSVP
+
+
+def parse_svp_yaml(data: dict) -> ParsedSVP:
+    """Parse a dict (from YAML) into ParsedSVP."""
+    analysis = data.get("analysis_rpe", {})
+    gen = data.get("svp_for_generation", {})
+    minimal = data.get("minimal_svp", {})
+
+    return ParsedSVP(
+        por_core=analysis.get("por_core", minimal.get("c", "")),
+        por_surface=analysis.get("por_surface", []),
+        grv_primary=analysis.get("grv_primary", ""),
+        grv_anchors=gen.get("constraints", []),
+        delta_e_profile=minimal.get("de", ""),
+        bpm=analysis.get("bpm"),
+        key=analysis.get("key"),
+        mode=analysis.get("mode"),
+        duration_sec=analysis.get("duration_sec"),
+        constraints=gen.get("constraints", []),
+        style_tags=gen.get("style_tags", []),
+        instrumentation_notes=[],
+        raw_text=str(data),
+    )
+
+
+def _extract_field(text: str, pattern: str) -> str:
+    """Extract a field value from markdown-style text."""
+    m = re.search(pattern, text, re.IGNORECASE)
+    return m.group(1).strip() if m else ""
+
+
+def _extract_float(text: str, pattern: str) -> Optional[float]:
+    """Extract a float from text."""
+    m = re.search(pattern, text, re.IGNORECASE)
+    if m:
+        try:
+            return float(m.group(1))
+        except ValueError:
+            pass
+    return None
+
+
+def parse_svp_text(text: str) -> ParsedSVP:
+    """Parse a text/markdown SVP into ParsedSVP."""
+    por_core = _extract_field(text, r"(?:Core|por_core)[:\s]*(.+)")
+    por_surface_raw = _extract_field(text, r"(?:Surface|por_surface)[:\s]*(.+)")
+    por_surface = [s.strip() for s in por_surface_raw.split(",") if s.strip()]
+
+    grv_primary = _extract_field(text, r"(?:Gravity|grv_primary|grv)[:\s]*(.+)")
+    delta_e = _extract_field(text, r"(?:ΔE|delta_e|Energy)[:\s]*(.+)")
+
+    bpm = _extract_float(text, r"(?:BPM|Tempo)[:\s]*~?(\d+\.?\d*)")
+    key_raw = _extract_field(text, r"Key[:\s]*(.+)")
+    key = key_raw.split()[0] if key_raw else None
+    mode = key_raw.split()[1] if key_raw and len(key_raw.split()) > 1 else None
+
+    duration = _extract_float(text, r"Duration[:\s]*(\d+\.?\d*)")
+
+    # Extract constraints from bullet points
+    constraints = re.findall(r"[-•]\s*(.+)", text)
+    style_tags = re.findall(r"#(\w+)", text)
+
+    return ParsedSVP(
+        por_core=por_core,
+        por_surface=por_surface,
+        grv_primary=grv_primary,
+        grv_anchors=[],
+        delta_e_profile=delta_e,
+        bpm=bpm,
+        key=key,
+        mode=mode,
+        duration_sec=duration,
+        constraints=constraints[:10],
+        style_tags=style_tags[:10],
+        instrumentation_notes=[],
+        raw_text=text,
+    )
+
+
+def load_svp(path: str) -> ParsedSVP:
+    """Load and parse an SVP file (YAML or text)."""
+    p = Path(path)
+    if not p.is_file():
+        raise FileNotFoundError(f"SVP file not found: {p}")
+
+    content = p.read_text(encoding="utf-8")
+
+    if p.suffix in (".yaml", ".yml"):
+        data = yaml.safe_load(content)
+        if isinstance(data, dict):
+            return parse_svp_yaml(data)
+
+    return parse_svp_text(content)

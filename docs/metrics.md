@@ -48,5 +48,27 @@
 ## Scoring
 
 RPE Score: proximity to Pro baseline, each metric [0,1], averaged.
-UGHer Score: semantic consistency (PoR similarity, GRV consistency, ΔE assessment, physical accuracy).
+
+UGHer Score (4-component, v0.2):
+- `por_lexical_similarity`: token + synonym overlap of por_core (config/synonym_map.yaml)
+- `grv_anchor_match`: BPM/key/duration/primary anchor alignment
+- `delta_e_profile_alignment`: transition type + intensity match
+- `instrumentation_context_alignment`: production notes token overlap
+
 Integrated: `w_ugher * ugher + w_rpe * rpe` (default 50/50).
+
+## Valley Depth Methods (v0.2)
+
+| Method | Formula | Use Case |
+|--------|---------|----------|
+| `rms_percentile` | P90(RMS) - P10(RMS) | Frame-level dynamic range |
+| `section_ar` | AR_main - AR_min across sections | Section-level contrast |
+| `hybrid` (default) | 0.5 * rms_percentile + 0.5 * section_ar | Balanced estimate |
+
+ValleyDiagnostics output: rms_p90, rms_p10, ar_main, ar_min, chorus_sections, lowest_section, confidence.
+
+## Comparison Metrics (v0.2)
+
+SemanticDiff: por_lexical_similarity, grv_anchor_match, delta_e_profile_alignment, instrumentation_context_alignment.
+PhysicalDiff: bpm_diff, key_match, rms_diff, valley_diff, active_rate_diff, thickness_diff.
+action_hints: auto-generated improvement suggestions based on diffs.

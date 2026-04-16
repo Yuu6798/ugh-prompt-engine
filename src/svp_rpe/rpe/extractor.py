@@ -1,15 +1,17 @@
 """rpe/extractor.py — RPE integrated extraction pipeline.
 
-Combines audio loading, physical feature extraction, structure detection,
-and semantic rule-based mapping into RPEBundle output.
+Combines audio loading, physical feature extraction, improved structure detection,
+valley strategy, and semantic rule-based mapping into RPEBundle output.
 """
 from __future__ import annotations
 
+from typing import Optional
+
 import numpy as np
 
+from svp_rpe.eval.diff_models import SectionFeature, ValleyDiagnostics
 from svp_rpe.io.audio_loader import AudioData, load_audio
-from svp_rpe.rpe.models import PhysicalRPE, RPEBundle
-from svp_rpe.rpe.semantic_rules import generate_semantic
+from svp_rpe.rpe.models import PhysicalRPE, RPEBundle, SectionMarker
 from svp_rpe.rpe.physical_features import (
     compute_active_rate,
     compute_bpm,
@@ -20,15 +22,64 @@ from svp_rpe.rpe.physical_features import (
     compute_spectral_profile,
     compute_stereo_profile,
     compute_thickness,
-    compute_valley_depth,
 )
-from svp_rpe.rpe.structure import detect_sections
+from svp_rpe.rpe.section_features import extract_section_features
+from svp_rpe.rpe.semantic_rules import generate_semantic
+from svp_rpe.rpe.structure_labels import assign_labels
+from svp_rpe.rpe.structure_novelty import compute_novelty_curve, find_boundaries
+from svp_rpe.rpe.valley import compute_valley_depth
+
+# Keep legacy import for backward compat
 
 
-def extract_physical(audio: AudioData) -> PhysicalRPE:
-    """Extract PhysicalRPE from loaded audio data.
+def _detect_sections_v2(y: np.ndarray, sr: int) -> list[SectionMarker]:
+    """Improved section detection using multi-feature novelty."""
+    import librosa
 
-    Deterministic: same AudioData → same PhysicalRPE.
+    duration = len(y) / sr
+    if duration <= 5.0:
+        return [SectionMarker(label="Full", start_sec=0.0, end_sec=round(duration, 4))]
+
+    novelty = compute_novelty_curve(y, sr)
+    boundaries = find_boundaries(novelty, sr, duration)
+
+    rms = librosa.feature.rms(y=y, hop_length=512)[0]
+
+    # Compute section-level RMS for labeling
+    section_rms: list[float] = []
+    for i in range(len(boundaries) - 1):
+        start_frame = int(boundaries[i] * sr / 512)
+        end_frame = min(int(boundaries[i + 1] * sr / 512), len(rms))
+        sec_rms = float(np.mean(rms[start_frame:end_frame])) if end_frame > start_frame else 0.0
+        section_rms.append(sec_rms)
+
+    # Assign labels
+    labels = assign_labels(section_rms, len(section_rms))
+
+    sections = []
+    for i in range(len(boundaries) - 1):
+        label = labels[i] if i < len(labels) else f"section_{i + 1:02d}"
+        sections.append(SectionMarker(
+            label=label,
+            start_sec=boundaries[i],
+            end_sec=boundaries[i + 1],
+            rms_mean=round(section_rms[i], 4) if i < len(section_rms) else None,
+        ))
+
+    if not sections:
+        sections = [SectionMarker(label="Full", start_sec=0.0, end_sec=round(duration, 4))]
+
+    return sections
+
+
+def extract_physical(
+    audio: AudioData,
+    *,
+    valley_method: str = "hybrid",
+) -> tuple[PhysicalRPE, Optional[ValleyDiagnostics], list[SectionFeature]]:
+    """Extract PhysicalRPE with improved structure and valley estimation.
+
+    Returns (PhysicalRPE, ValleyDiagnostics, [SectionFeature]).
     """
     y = audio.y_mono
     sr = audio.sr
@@ -37,7 +88,6 @@ def extract_physical(audio: AudioData) -> PhysicalRPE:
     peak_amplitude = float(np.max(np.abs(y)))
     crest_factor = compute_crest_factor(y)
     active_rate = compute_active_rate(y, sr)
-    valley_depth = compute_valley_depth(y, sr)
     thickness = compute_thickness(y, sr)
     spectral_profile = compute_spectral_profile(y, sr)
     onset_density = compute_onset_density(y, sr)
@@ -49,9 +99,18 @@ def extract_physical(audio: AudioData) -> PhysicalRPE:
     if audio.y_stereo is not None:
         stereo_profile = compute_stereo_profile(audio.y_stereo, sr)
 
-    structure = detect_sections(y, sr)
+    # Improved structure detection
+    structure = _detect_sections_v2(y, sr)
 
-    return PhysicalRPE(
+    # Valley depth with strategy pattern
+    valley_depth, valley_diag = compute_valley_depth(
+        y, sr, structure, method=valley_method,
+    )
+
+    # Per-section features
+    section_features = extract_section_features(y, sr, structure)
+
+    phys = PhysicalRPE(
         bpm=bpm,
         bpm_confidence=bpm_confidence,
         key=key,
@@ -65,6 +124,7 @@ def extract_physical(audio: AudioData) -> PhysicalRPE:
         crest_factor=crest_factor,
         active_rate=round(active_rate, 4),
         valley_depth=valley_depth,
+        valley_depth_method=valley_method,
         thickness=thickness,
         spectral_centroid=spectral_profile.centroid,
         spectral_profile=spectral_profile,
@@ -72,16 +132,25 @@ def extract_physical(audio: AudioData) -> PhysicalRPE:
         onset_density=onset_density,
     )
 
+    return phys, valley_diag, section_features
+
 
 def extract_physical_from_file(path: str) -> PhysicalRPE:
     """Convenience: load audio file and extract PhysicalRPE in one call."""
     audio = load_audio(path)
-    return extract_physical(audio)
+    phys, _, _ = extract_physical(audio)
+    return phys
 
 
-def extract_rpe(audio: AudioData) -> RPEBundle:
+def extract_rpe(
+    audio: AudioData,
+    *,
+    valley_method: str = "hybrid",
+) -> RPEBundle:
     """Full RPE extraction: physical + semantic → RPEBundle."""
-    phys = extract_physical(audio)
+    phys, valley_diag, section_features = extract_physical(
+        audio, valley_method=valley_method,
+    )
     sem = generate_semantic(phys)
     return RPEBundle(
         physical=phys,
@@ -94,7 +163,11 @@ def extract_rpe(audio: AudioData) -> RPEBundle:
     )
 
 
-def extract_rpe_from_file(path: str) -> RPEBundle:
+def extract_rpe_from_file(
+    path: str,
+    *,
+    valley_method: str = "hybrid",
+) -> RPEBundle:
     """Convenience: load audio file and extract full RPEBundle."""
     audio = load_audio(path)
-    return extract_rpe(audio)
+    return extract_rpe(audio, valley_method=valley_method)

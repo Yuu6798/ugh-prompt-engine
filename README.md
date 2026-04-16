@@ -32,8 +32,17 @@ svprpe extract track.wav -o rpe.json
 svprpe generate rpe.json --format yaml
 svprpe evaluate --audio track.wav
 
-# Print to stdout
-svprpe run track.wav --no-save
+# Compare against external SVP
+svprpe evaluate --audio track.wav --svp design.yaml
+
+# Compare reference vs candidate
+svprpe compare --reference-audio ref.wav --candidate-audio gen.wav
+
+# Batch processing
+svprpe batch ./audio_files --svp-dir ./designs --mode compare --output-dir ./results
+
+# Valley method selection
+svprpe run track.wav --valley-method section_ar
 
 # Help
 svprpe --help

@@ -80,7 +80,7 @@ class TestStructure:
 class TestExtractor:
     def test_extract_physical_returns_valid(self, sine_wave_mono):
         audio = load_audio(sine_wave_mono)
-        rpe = extract_physical(audio)
+        rpe, valley_diag, section_features = extract_physical(audio)
         assert rpe.duration_sec > 0
         assert len(rpe.structure) >= 1
         assert rpe.rms_mean >= 0
@@ -97,6 +97,6 @@ class TestExtractor:
 
     def test_stereo_has_stereo_profile(self, sine_wave_stereo):
         audio = load_audio(sine_wave_stereo)
-        rpe = extract_physical(audio)
+        rpe, _, _ = extract_physical(audio)
         assert rpe.stereo_profile is not None
         assert 0.0 <= rpe.stereo_profile.width <= 1.0
