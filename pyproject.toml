@@ -1,30 +1,39 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.backends._legacy:_Backend"
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
-name = "ugh-prompt-engine"
+name = "svp-rpe"
 version = "0.1.0"
 description = "SVP (Semantic Vector Prompt) + RPE (Reverse Prompt Engineering) — UGHer ecosystem prompt infrastructure"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [{name = "Yuu6798"}]
-
-dependencies = []
-
-[project.optional-dependencies]
-dev = [
-    "pytest",
-    "ruff",
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "librosa>=0.10",
+    "soundfile>=0.12",
+    "pydantic>=2.0",
+    "typer>=0.9",
+    "pyyaml>=6.0",
+    "rich>=13.0",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "ruff>=0.1"]
+
+[project.scripts]
+svprpe = "svp_rpe.cli:app"
+
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"

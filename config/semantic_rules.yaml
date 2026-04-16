@@ -1,0 +1,13 @@
+rules:
+  - condition: {bpm_min: 140, brightness_min: 0.6, active_rate_min: 0.8}
+    por_labels: [energetic, driving, dense]
+  - condition: {mode: minor, spectral_centroid_max: 2000}
+    por_labels: [dark, melancholic, introspective]
+  - condition: {valley_depth_min: 0.3}
+    por_labels: [dynamic, dramatic, contrastive]
+  - condition: {valley_depth_max: 0.1, active_rate_min: 0.8}
+    por_labels: [continuous, wall-like, compressed]
+  - condition: {stereo_width_min: 0.7}
+    por_labels: [spacious, cinematic]
+  - condition: {low_ratio_min: 0.4}
+    por_labels: [bass-heavy, grounded]
