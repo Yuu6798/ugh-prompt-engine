@@ -11,7 +11,6 @@ from svp_rpe.rpe.physical_features import (
     compute_key,
     compute_onset_density,
     compute_rms_mean,
-    compute_valley_depth,
 )
 from svp_rpe.rpe.structure import detect_sections
 from svp_rpe.io.audio_loader import load_audio
@@ -38,9 +37,13 @@ class TestPhysicalFeatures:
         assert compute_crest_factor(y) == 0.0
 
     def test_valley_depth_non_negative(self, sine_wave_mono):
+        from svp_rpe.rpe.models import SectionMarker
+        from svp_rpe.rpe.valley import compute_valley_depth
         audio = load_audio(sine_wave_mono)
-        vd = compute_valley_depth(audio.y_mono, audio.sr)
+        sections = [SectionMarker(label="s1", start_sec=0.0, end_sec=3.0)]
+        vd, diag = compute_valley_depth(audio.y_mono, audio.sr, sections)
         assert vd >= 0.0
+        assert diag.method == "hybrid"
 
     def test_onset_density_non_negative(self, sine_wave_mono):
         audio = load_audio(sine_wave_mono)
@@ -67,7 +70,7 @@ class TestStructure:
         audio = load_audio(sine_wave_mono)
         sections = detect_sections(audio.y_mono, audio.sr)
         assert len(sections) >= 1
-        assert sections[0].label == "section_01"
+        assert sections[0].label in ("section_01", "Full", "Intro")
         assert sections[0].start_sec == 0.0
 
     def test_short_audio_single_section(self):

@@ -116,9 +116,13 @@ def run_batch(
         # Generate summary.csv
         csv_lines = ["rank,audio,integrated_score,ugher_score,rpe_score"]
         for i, r in enumerate(ranked):
+            ugher = r.get("ugher_score")
+            rpe_s = r.get("rpe_score")
+            ugher_str = f"{ugher:.4f}" if isinstance(ugher, float) else "N/A"
+            rpe_str = f"{rpe_s:.4f}" if isinstance(rpe_s, float) else "N/A"
             csv_lines.append(
                 f"{i+1},{r['audio']},{r['integrated_score']:.4f},"
-                f"{r.get('ugher_score', 'N/A')},{r.get('rpe_score', 'N/A')}"
+                f"{ugher_str},{rpe_str}"
             )
         (out / "summary.csv").write_text("\n".join(csv_lines), encoding="utf-8")
 

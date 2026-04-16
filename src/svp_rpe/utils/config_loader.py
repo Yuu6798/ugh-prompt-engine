@@ -6,7 +6,21 @@ from typing import Any
 
 import yaml
 
-_CONFIG_DIR = Path(__file__).parent.parent.parent.parent / "config"
+
+def _find_config_dir() -> Path:
+    """Locate the config/ directory. Searches relative to module, then CWD."""
+    candidates = [
+        Path(__file__).resolve().parents[3] / "config",  # src layout
+        Path.cwd() / "config",                            # CWD fallback
+    ]
+    for p in candidates:
+        if p.is_dir():
+            return p
+    # Return first candidate even if missing — FileNotFoundError on load
+    return candidates[0]
+
+
+_CONFIG_DIR = _find_config_dir()
 
 
 def load_config(name: str) -> dict[str, Any]:
