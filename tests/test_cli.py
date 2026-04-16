@@ -14,13 +14,18 @@ def test_help():
     assert "SVP-RPE" in result.output
 
 
-def test_extract_stub():
-    result = runner.invoke(app, ["extract", "test.wav"])
+def test_extract_with_real_audio(sine_wave_mono):
+    result = runner.invoke(app, ["extract", sine_wave_mono])
     assert result.exit_code == 0
-    assert "stub" in result.output
+    assert "RPE" in result.output or "schema_version" in result.output
 
 
-def test_run_stub():
-    result = runner.invoke(app, ["run", "test.wav"])
+def test_run_with_real_audio(sine_wave_mono):
+    result = runner.invoke(app, ["run", sine_wave_mono, "--no-save"])
     assert result.exit_code == 0
-    assert "stub" in result.output
+    assert "Integrated Score" in result.output
+
+
+def test_extract_missing_file():
+    result = runner.invoke(app, ["extract", "nonexistent.wav"])
+    assert result.exit_code != 0
