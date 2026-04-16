@@ -90,9 +90,25 @@ svprpe --help
 
 ## Git Workflow
 
-- `main` — 安定版
+- `main` — 安定版。直接 push 禁止（PR 必須）
 - `claude/*` — 作業ブランチ
 - Conventional Commits: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`
+
+### Pull Request 必須ルール
+
+**リモートへの変更反映は必ず PR を経由すること。**
+main への直接 push は禁止。作業ブランチで commit → push → PR 作成 → マージの流れを守る。
+
+```bash
+# 1. 作業ブランチで開発
+git checkout -b claude/<topic>
+
+# 2. commit + push
+git push -u origin claude/<topic>
+
+# 3. PR 作成
+gh pr create --title "..." --body "..."
+```
 
 ## ugh-audit-core パターン対応
 
