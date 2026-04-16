@@ -267,3 +267,49 @@ class TestExtractorV2:
             phys, diag, _ = extract_physical(audio, valley_method=method)
             assert phys.valley_depth_method == method
             assert diag.method == method
+
+
+# ---------------------------------------------------------------------------
+# Batch runner tests
+# ---------------------------------------------------------------------------
+
+
+class TestBatchRunner:
+    def test_batch_empty_dir(self, tmp_path):
+        from svp_rpe.batch.runner import run_batch
+        empty = tmp_path / "empty_dir"
+        empty.mkdir()
+        result = run_batch(str(empty))
+        # No audio files → error key or total_files == 0
+        if "error" in result:
+            assert "no audio" in result["error"]
+        else:
+            assert result["total_files"] == 0
+
+    def test_batch_with_audio(self, tmp_path):
+        from svp_rpe.batch.runner import run_batch
+        import soundfile as sf
+        import numpy as np
+        # Create a dedicated batch dir with one audio file
+        batch_dir = tmp_path / "batch_input"
+        batch_dir.mkdir()
+        sr = 22050
+        y = 0.5 * np.sin(2 * np.pi * 440 * np.linspace(0, 3, int(sr * 3))).astype(np.float32)
+        sf.write(str(batch_dir / "test.wav"), y, sr)
+
+        out_dir = tmp_path / "batch_out"
+        result = run_batch(str(batch_dir), output_dir=str(out_dir))
+        assert result["total_files"] == 1
+        assert result["successful"] == 1
+        assert (out_dir / "ranking.json").is_file()
+        assert (out_dir / "summary.csv").is_file()
+
+    def test_batch_discovery_matching(self):
+        from pathlib import Path
+        from svp_rpe.batch.discovery import match_audio_to_svp
+        audios = [Path("track_a.wav"), Path("track_b.wav")]
+        svps = [Path("track_a_design.yaml"), Path("other.yaml")]
+        matches = match_audio_to_svp(audios, svps)
+        assert len(matches) == 2
+        assert len(matches[0][1]) == 1  # track_a matches track_a_design
+        assert matches[0][1][0].name == "track_a_design.yaml"

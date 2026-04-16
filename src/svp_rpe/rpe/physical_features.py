@@ -45,8 +45,8 @@ def compute_crest_factor(y: np.ndarray) -> float:
     return round(peak / rms, 4)
 
 
-def compute_valley_depth(y: np.ndarray, sr: int, method: str = "rms") -> float:
-    """Dynamic range: P90 - P10 of frame RMS."""
+def _valley_depth_simple(y: np.ndarray, sr: int) -> float:
+    """Simple dynamic range: P90 - P10 of frame RMS. Used internally by thickness."""
     rms = librosa.feature.rms(y=y)[0]
     if len(rms) < 2:
         return 0.0
@@ -69,7 +69,7 @@ def compute_thickness(y: np.ndarray, sr: int) -> float:
     rms_norm = _clamp(rms / 0.5)
 
     # Valley inverse: less valley = more continuous = thicker
-    valley = compute_valley_depth(y, sr)
+    valley = _valley_depth_simple(y, sr)
     valley_norm = _clamp(valley / 0.5)
 
     w1, w2, w3 = 1.0, 1.0, 1.0

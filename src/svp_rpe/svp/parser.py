@@ -20,7 +20,7 @@ def parse_svp_yaml(data: dict) -> ParsedSVP:
         por_core=analysis.get("por_core", minimal.get("c", "")),
         por_surface=analysis.get("por_surface", []),
         grv_primary=analysis.get("grv_primary", ""),
-        grv_anchors=gen.get("constraints", []),
+        grv_anchors=[],  # populated only from text-format SVPs
         delta_e_profile=minimal.get("de", ""),
         bpm=analysis.get("bpm"),
         key=analysis.get("key"),

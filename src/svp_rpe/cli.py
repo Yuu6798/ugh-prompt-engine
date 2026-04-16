@@ -168,8 +168,6 @@ def compare(
         from svp_rpe.svp.generator import generate_svp
 
         svp_bundle = generate_svp(ref_rpe)
-        # Convert SVPBundle to ParsedSVP for comparison
-        parsed_svp = load_svp.__wrapped__ if hasattr(load_svp, "__wrapped__") else None
         from svp_rpe.eval.diff_models import ParsedSVP
         parsed_svp = ParsedSVP(
             por_core=svp_bundle.analysis_rpe.por_core,
