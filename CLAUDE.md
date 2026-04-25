@@ -210,7 +210,8 @@ svprpe --help
 
 ### Pull Request
 
-**変更は必ず Pull Request で実施する**。`main` への直接 push は禁止。
+**コード・ドキュメント変更は必ず Pull Request で実施する**。`main` への直接 push は
+原則禁止（唯一の例外は Branches 節に記載した `.claude/memory/` 運用ログ）。
 PR はリンク発行で作成する（`gh pr create` は使わない）。
 
 ```bash
