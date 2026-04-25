@@ -125,6 +125,17 @@ docs/                          # design documents
 examples/                      # sample_input/ + expected_output/
 ```
 
+### 設計ドキュメント索引
+
+新規 `docs/<topic>.md` を作成したらこの表に 1 行追加する（README の同様の表も同期）。
+
+| ドキュメント | 内容 |
+|---|---|
+| [`docs/architecture.md`](docs/architecture.md) | パイプライン三層設計、モジュール責務、config 役割、v0.2 既知の制限 |
+| [`docs/metrics.md`](docs/metrics.md) | RPE 物理指標の定義式、Pro baseline 値、UGHer 4 成分スコアリング、valley 3 戦略 |
+| [`docs/cli.md`](docs/cli.md) | 6 コマンドのリファレンス: extract / generate / evaluate / compare / run / batch |
+| [`docs/roadmap.md`](docs/roadmap.md) | PoC (達成済み) と Pre-prototype マイルストーン (P1–P5)、推奨実行順 |
+
 ## ドキュメント管理ポリシー
 
 **CLAUDE.md はリポジトリ横断の普遍的内容のみ記述する (目標: 400 行以内)。**
