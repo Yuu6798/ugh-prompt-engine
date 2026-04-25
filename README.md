@@ -59,26 +59,43 @@ src/svp_rpe/               # Main package (src layout)
 │   ├── extractor.py       # Integrated pipeline
 │   ├── physical_features.py  # librosa-based features
 │   ├── semantic_rules.py  # Rule-based mapping
-│   └── structure.py       # Segment detection
+│   ├── structure.py       # Segment detection
+│   ├── structure_labels.py    # Section labeling
+│   ├── structure_novelty.py   # Novelty curve detection
+│   ├── section_features.py    # Per-section feature vectors
+│   └── valley.py          # Valley depth strategies
 ├── svp/                   # SVP generation
 │   ├── models.py          # SVPBundle, MinimalSVP
 │   ├── generator.py       # RPE → SVP conversion
+│   ├── parser.py          # External SVP loader (compare)
+│   ├── templates.py       # Template definitions
 │   ├── render_yaml.py     # YAML output
 │   └── render_text.py     # Markdown output
 ├── eval/                  # Evaluation
 │   ├── models.py          # RPEScore, UGHerScore, IntegratedScore
 │   ├── scorer_rpe.py      # Physical quality scoring
 │   ├── scorer_ugher.py    # Semantic consistency scoring
-│   └── scorer_integrated.py  # Weighted integration
+│   ├── scorer_integrated.py  # Weighted integration
+│   ├── anchor_matcher.py     # GRV anchor alignment
+│   ├── comparison.py         # compare command core
+│   ├── delta_e_alignment.py  # ΔE profile matching
+│   ├── diff_models.py        # diff data structures
+│   └── semantic_similarity.py # Token + synonym overlap
+├── batch/                 # Batch processing
+│   ├── runner.py          # batch command core
+│   ├── discovery.py       # Input file discovery
+│   └── report.py          # Report rendering
 └── utils/config_loader.py # YAML config loading
 
 config/                    # External configuration
 ├── pro_baseline.yaml      # Pro reference values
 ├── semantic_rules.yaml    # Physical → semantic rules
-└── svp_templates.yaml     # SVP templates
+├── svp_templates.yaml     # SVP templates
+└── synonym_map.yaml       # Synonym groups (UGHer scorer)
 
-tests/                     # pytest (49 tests)
+tests/                     # pytest
 docs/                      # Design documents
+examples/                  # sample_input/ + expected_output/
 ```
 
 ## Development
@@ -99,6 +116,7 @@ svprpe --help
 - [Architecture](docs/architecture.md) — Pipeline design and module overview
 - [Metrics](docs/metrics.md) — Physical metric definitions and Pro baseline
 - [CLI Reference](docs/cli.md) — Command usage
+- [Roadmap](docs/roadmap.md) — PoC milestones (M0–M5) + Pre-prototype plan (P1–P5)
 
 ## License
 
