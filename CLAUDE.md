@@ -77,42 +77,52 @@ Agent({"subagent_type": "Explore", "prompt": "..."})
 
 ```
 src/svp_rpe/
-├── __init__.py
-├── cli.py                 # typer CLI (svprpe command)
+├── cli.py                     # typer CLI (svprpe command)
 ├── io/
-│   ├── __init__.py
-│   └── audio_loader.py    # WAV/MP3 loading + AudioMetadata
-├── rpe/
-│   ├── __init__.py
-│   ├── models.py          # PhysicalRPE, SemanticRPE, RPEBundle
-│   ├── extractor.py       # RPE integrated pipeline
-│   ├── physical_features.py  # librosa-based features
-│   ├── semantic_rules.py  # rule-based semantic generation
-│   └── structure.py       # segment division
-├── svp/
-│   ├── __init__.py
-│   ├── models.py          # SVPBundle, MinimalSVP
-│   ├── generator.py       # RPE → SVP conversion
-│   ├── templates.py       # template definitions
-│   ├── render_yaml.py     # YAML output
-│   └── render_text.py     # Markdown/TXT output
-├── eval/
-│   ├── __init__.py
-│   ├── models.py          # RPEScore, UGHerScore, IntegratedScore
-│   ├── scorer_rpe.py      # RPE physical scoring
-│   ├── scorer_ugher.py    # UGHer semantic scoring
-│   └── scorer_integrated.py  # weighted integration
+│   └── audio_loader.py        # WAV/MP3 loading + AudioMetadata
+├── rpe/                       # RPE 抽出層
+│   ├── models.py              # PhysicalRPE, SemanticRPE, RPEBundle
+│   ├── extractor.py           # 統合パイプライン
+│   ├── physical_features.py   # librosa-based 物理特徴量
+│   ├── semantic_rules.py      # ルールベース意味層
+│   ├── structure.py           # セグメント分割
+│   ├── structure_labels.py    # セクションラベル付与
+│   ├── structure_novelty.py   # novelty 検出
+│   ├── section_features.py    # セクション粒度特徴
+│   └── valley.py              # valley 検出 (--valley-method)
+├── svp/                       # SVP 生成層
+│   ├── models.py              # SVPBundle, MinimalSVP
+│   ├── generator.py           # RPE → SVP 変換
+│   ├── parser.py              # 既存 SVP の読み込み (compare 用)
+│   ├── templates.py           # テンプレート定義
+│   ├── render_yaml.py         # YAML 出力
+│   └── render_text.py         # Markdown/TXT 出力
+├── eval/                      # 評価層
+│   ├── models.py              # RPEScore, UGHerScore, IntegratedScore
+│   ├── scorer_rpe.py          # RPE 物理スコア
+│   ├── scorer_ugher.py        # UGHer 意味スコア
+│   ├── scorer_integrated.py   # 重み付き統合
+│   ├── anchor_matcher.py      # アンカーマッチング
+│   ├── comparison.py          # compare コマンド本体
+│   ├── delta_e_alignment.py   # ΔE 整列
+│   ├── diff_models.py         # diff データ構造
+│   └── semantic_similarity.py # 意味類似度
+├── batch/                     # バッチ処理
+│   ├── runner.py              # batch コマンド本体
+│   ├── discovery.py           # 入力ファイル発見
+│   └── report.py              # レポート出力
 └── utils/
-    ├── __init__.py
-    └── config_loader.py   # YAML config loading
+    └── config_loader.py       # YAML config loading
 
 config/
-├── pro_baseline.yaml      # RPE Pro baseline values
-├── semantic_rules.yaml    # physical → semantic mapping rules
-└── svp_templates.yaml     # SVP generation templates
+├── pro_baseline.yaml          # RPE Pro baseline values
+├── semantic_rules.yaml        # physical → semantic mapping rules
+├── svp_templates.yaml         # SVP generation templates
+└── synonym_map.yaml           # 同義語マップ (UGHer scorer 用)
 
-tests/                     # pytest
-docs/                      # design documents
+tests/                         # pytest
+docs/                          # design documents
+examples/                      # sample_input/ + expected_output/
 ```
 
 ## ドキュメント管理ポリシー
