@@ -41,10 +41,10 @@ Agent ツールで spawn する際は必ず `model: "sonnet"` を指定するこ
 
 ```python
 # 正しい例
-Agent({ model: "sonnet", subagent_type: "Explore", prompt: "..." })
+Agent({"model": "sonnet", "subagent_type": "Explore", "prompt": "..."})
 
 # NG — model 省略すると Opus で動き、コスト効率が下がる
-Agent({ subagent_type: "Explore", prompt: "..." })
+Agent({"subagent_type": "Explore", "prompt": "..."})
 ```
 
 ## Session Memory（永続記憶ワークフロー）
