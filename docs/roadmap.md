@@ -5,6 +5,10 @@
 - **PoC** = コアパイプラインが動く段階 (現状)
 - **Pre-prototype** = 外部レビュアーが検証・評価できる段階 (次)
 
+> **目的別の詳細ロードマップ**: 「定量観測（目的1）完成」までの専用計画は
+> [`docs/roadmap_goal1.md`](roadmap_goal1.md) を参照。
+> 本ドキュメントは段階軸（PoC / Pre-prototype）、roadmap_goal1.md は目的軸の整理。
+
 ---
 
 ## 1. PoC フローチャート (現状: v0.2)
