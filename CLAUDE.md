@@ -47,6 +47,25 @@ Agent({"model": "sonnet", "subagent_type": "Explore", "prompt": "..."})
 Agent({"subagent_type": "Explore", "prompt": "..."})
 ```
 
+## Workflow（Claude × Codex × User 分業オーケストレーション）
+
+このリポジトリは **設計と実装を分業** する:
+
+- **Claude Code (Opus)** — 設計、仕様策定、レビュー判断、フェーズ計画
+- **Codex** — 実装、テスト追加、PR 作成 + Completion Summary 記述
+- **User** — エージェント間の橋渡し、最終承認、ループのトリガー
+
+サイクル:
+
+1. Claude が `AGENTS.md` 規定の **Task Brief** を発行
+2. User が Task Brief を Codex に貼って実装依頼
+3. Codex が `codex/<topic>` ブランチで実装 → PR 作成（本文は **Completion Summary** 形式）
+4. User が PR URL を Claude に共有
+5. Claude が Completion Summary を読み、次の Task Brief 発行 or マージ判断 → 1 に戻る
+
+**Claude は本リポジトリでコードを書かない**（docs / CLAUDE.md / AGENTS.md / 設計仕様は可）。
+コミュニケーション・フォーマット規約の詳細: [`AGENTS.md`](AGENTS.md)
+
 ## Session Memory（永続記憶ワークフロー）
 
 セッション間の記憶喪失を防ぐため、`.claude/memory/` にセッションサマリーを蓄積する。
@@ -135,6 +154,7 @@ examples/                      # sample_input/ + expected_output/
 | [`docs/metrics.md`](docs/metrics.md) | RPE 物理指標の定義式、Pro baseline 値、UGHer 4 成分スコアリング、valley 3 戦略 |
 | [`docs/cli.md`](docs/cli.md) | 6 コマンドのリファレンス: extract / generate / evaluate / compare / run / batch |
 | [`docs/roadmap.md`](docs/roadmap.md) | PoC (達成済み) と Pre-prototype マイルストーン (P1–P5)、推奨実行順 |
+| [`docs/roadmap_goal1.md`](docs/roadmap_goal1.md) | 目的1（定量観測）完成までのフェーズ Q0–Q5、完成定義、クリティカルパス |
 
 ## ドキュメント管理ポリシー
 
