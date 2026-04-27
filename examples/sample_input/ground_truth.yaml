@@ -1,0 +1,155 @@
+- id: synth_01_slow_pad_c_major
+  filename: synth_01_slow_pad_c_major.wav
+  bpm: 60.0
+  key: C
+  mode: major
+  time_signature: 4/4
+  sample_rate: 44100
+  bit_depth: 16
+  channels: 1
+  duration_sec: 40.0
+  expected_sections:
+  - intro
+  - body
+  - outro
+  sections:
+  - label: intro
+    start_sec: 0.0
+    end_sec: 8.0
+  - label: body
+    start_sec: 8.0
+    end_sec: 34.0
+  - label: outro
+    start_sec: 34.0
+    end_sec: 40.0
+  section_boundaries_sec:
+  - 0.0
+  - 8.0
+  - 34.0
+  - 40.0
+  expected_brightness_band: low
+  sha256: 933781ffb22a7396bb619a6d2f0ffe8d61dfb718fec8ee846bf3f94ce78cf294
+- id: synth_02_minor_pulse_a_minor
+  filename: synth_02_minor_pulse_a_minor.wav
+  bpm: 90.0
+  key: A
+  mode: minor
+  time_signature: 4/4
+  sample_rate: 44100
+  bit_depth: 16
+  channels: 1
+  duration_sec: 36.0
+  expected_sections:
+  - intro
+  - body
+  - outro
+  sections:
+  - label: intro
+    start_sec: 0.0
+    end_sec: 8.0
+  - label: body
+    start_sec: 8.0
+    end_sec: 30.0
+  - label: outro
+    start_sec: 30.0
+    end_sec: 36.0
+  section_boundaries_sec:
+  - 0.0
+  - 8.0
+  - 30.0
+  - 36.0
+  expected_brightness_band: mid
+  sha256: 8133577a697880d9231dd895aedd3e1ccfe0f5c8f12ce34550de43b3bb550b43
+- id: synth_03_mid_groove_g_major
+  filename: synth_03_mid_groove_g_major.wav
+  bpm: 120.0
+  key: G
+  mode: major
+  time_signature: 4/4
+  sample_rate: 44100
+  bit_depth: 16
+  channels: 1
+  duration_sec: 44.0
+  expected_sections:
+  - intro
+  - body
+  - outro
+  sections:
+  - label: intro
+    start_sec: 0.0
+    end_sec: 8.0
+  - label: body
+    start_sec: 8.0
+    end_sec: 38.0
+  - label: outro
+    start_sec: 38.0
+    end_sec: 44.0
+  section_boundaries_sec:
+  - 0.0
+  - 8.0
+  - 38.0
+  - 44.0
+  expected_brightness_band: mid
+  sha256: 7a2124626fbc2e670ce68615d2c8c04347c04964018c3b790cca663f0fb1a98a
+- id: synth_04_waltz_fsharp_minor
+  filename: synth_04_waltz_fsharp_minor.wav
+  bpm: 140.0
+  key: F#
+  mode: minor
+  time_signature: 3/4
+  sample_rate: 44100
+  bit_depth: 16
+  channels: 1
+  duration_sec: 45.0
+  expected_sections:
+  - intro
+  - body
+  - outro
+  sections:
+  - label: intro
+    start_sec: 0.0
+    end_sec: 8.0
+  - label: body
+    start_sec: 8.0
+    end_sec: 39.0
+  - label: outro
+    start_sec: 39.0
+    end_sec: 45.0
+  section_boundaries_sec:
+  - 0.0
+  - 8.0
+  - 39.0
+  - 45.0
+  expected_brightness_band: high
+  sha256: cc8e38b60e6a02ee0beb1cd74113c7a40bfcf58c2ae13df62d25d40cf657c45e
+- id: synth_05_fast_bright_d_major
+  filename: synth_05_fast_bright_d_major.wav
+  bpm: 170.0
+  key: D
+  mode: major
+  time_signature: 4/4
+  sample_rate: 44100
+  bit_depth: 16
+  channels: 1
+  duration_sec: 42.0
+  expected_sections:
+  - intro
+  - body
+  - outro
+  sections:
+  - label: intro
+    start_sec: 0.0
+    end_sec: 8.0
+  - label: body
+    start_sec: 8.0
+    end_sec: 36.0
+  - label: outro
+    start_sec: 36.0
+    end_sec: 42.0
+  section_boundaries_sec:
+  - 0.0
+  - 8.0
+  - 36.0
+  - 42.0
+  expected_brightness_band: high
+  sha256: 9f4cf9e86d1e35a40895c60bb8dc88dfbc5bc1ba38e21f9908de878fa9ca06cc
