@@ -172,7 +172,9 @@ def load_domain_profile(domain: str = "music", path: Optional[Path | str] = None
     if path is not None:
         data = _load_profile_file(Path(path))
     else:
-        data = _load_local_profile(domain) or _load_packaged_profile(domain)
+        data = _load_local_profile(domain)
+        if data is None:
+            data = _load_packaged_profile(domain)
         if data is None:
             searched = ", ".join(str(p) for p in _local_profile_paths(domain))
             raise FileNotFoundError(

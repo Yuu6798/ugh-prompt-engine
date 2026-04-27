@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from svp_rpe.eval.comparison import compare_metric_values
 from svp_rpe.eval.diff_models import PhysicalDiff
 from svp_rpe.rpe.models import (
@@ -103,7 +106,7 @@ def test_parser_extracts_new_source_and_generation_hints() -> None:
     assert parsed.domain == "music"
     assert parsed.source_artifact is not None
     assert parsed.source_artifact["type"] == "audio"
-    assert parsed.instrumentation_notes == ["synth bass and drums"]
+    assert parsed.instrumentation_notes == ["synth bass and drums", "compressed mix"]
 
 
 def test_profile_defaults_are_applied_when_no_rule_matches() -> None:
@@ -180,6 +183,22 @@ def test_default_profile_falls_back_to_packaged_resource(monkeypatch) -> None:
 
     assert profile.domain == "music"
     assert "bpm" in profile.diff_metric_names
+
+
+def test_empty_local_profile_override_is_not_replaced_by_packaged(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    profile_path = tmp_path / "music.yaml"
+    profile_path.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        domain_profile_module,
+        "_local_profile_paths",
+        lambda domain: [profile_path],
+    )
+
+    with pytest.raises(ValidationError):
+        load_domain_profile("music")
 
 
 def test_generate_svp_works_with_packaged_music_profile(monkeypatch) -> None:

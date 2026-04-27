@@ -60,6 +60,24 @@ class TestSVPParser:
         parsed = parse_svp_yaml(data)
         assert parsed.instrumentation_notes == []
 
+    def test_parse_yaml_includes_generation_hint_production_notes(self):
+        data = {
+            "analysis_rpe": {"por_core": "test"},
+            "svp_for_generation": {
+                "generation_hints": {
+                    "instrumentation_summary": "synth bass",
+                    "production_notes": ["compressed mix", "wide stereo"],
+                },
+            },
+            "minimal_svp": {"c": "test", "de": "flat"},
+        }
+        parsed = parse_svp_yaml(data)
+        assert parsed.instrumentation_notes == [
+            "synth bass",
+            "compressed mix",
+            "wide stereo",
+        ]
+
     def test_parse_yaml_ignores_non_mapping_source_artifact(self):
         data = {
             "analysis_rpe": {"por_core": "test"},

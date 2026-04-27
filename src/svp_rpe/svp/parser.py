@@ -58,10 +58,19 @@ def _as_domain(value: Any) -> str:
 
 def _extract_instrumentation_notes(gen: Mapping[str, Any]) -> list[str]:
     if "instrumentation_notes" in gen:
-        value: Any = gen["instrumentation_notes"]
-    else:
-        hints = _as_mapping(gen.get("generation_hints"))
-        value = hints.get("instrumentation_notes") or hints.get("instrumentation_summary")
+        return _as_notes(gen["instrumentation_notes"])
+
+    hints = _as_mapping(gen.get("generation_hints"))
+    notes = (
+        _as_notes(hints["instrumentation_notes"])
+        if "instrumentation_notes" in hints
+        else _as_notes(hints.get("instrumentation_summary"))
+    )
+    notes.extend(_as_notes(hints.get("production_notes")))
+    return notes
+
+
+def _as_notes(value: Any) -> list[str]:
     if value is None:
         return []
     if isinstance(value, list):
