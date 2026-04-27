@@ -14,6 +14,7 @@ from svp_rpe.rpe.models import (
     SpectralProfile,
 )
 from svp_rpe.svp.domain_profile import load_domain_profile
+from svp_rpe.svp import domain_profile as domain_profile_module
 from svp_rpe.svp.generator import generate_svp
 from svp_rpe.svp.parser import parse_svp_yaml
 from svp_rpe.svp.render_yaml import render_yaml
@@ -149,6 +150,15 @@ diff_metrics:
     assert profile.format_delta_e(context) == "rising_contrast"
 
 
+def test_default_profile_falls_back_to_packaged_resource(monkeypatch) -> None:
+    monkeypatch.setattr(domain_profile_module, "_local_profile_paths", lambda domain: [])
+
+    profile = load_domain_profile("music")
+
+    assert profile.domain == "music"
+    assert "bpm" in profile.diff_metric_names
+
+
 def test_physical_diff_keeps_legacy_fields_and_generic_metrics() -> None:
     legacy = PhysicalDiff(bpm_diff=8.0, key_match=True, rms_diff=0.02)
 
@@ -167,3 +177,18 @@ def test_physical_diff_keeps_legacy_fields_and_generic_metrics() -> None:
     assert generic.domain == "video"
     assert generic.metric("shot_rhythm").passed is True
     assert generic.metric("brightness").passed is True
+
+
+def test_numeric_metric_without_tolerance_uses_distance_score() -> None:
+    generic = compare_metric_values(
+        {"brightness": 0.7},
+        {"brightness": 0.62},
+        metric_names=["brightness"],
+        domain="image",
+    )
+
+    metric = generic.metric("brightness")
+    assert metric is not None
+    assert metric.passed is None
+    assert metric.diff == 0.07999999999999996
+    assert 0.9 < generic.overall < 1.0

@@ -1,0 +1,105 @@
+schema_version: "1.0"
+domain: music
+source_artifact_type: audio
+default_por_surface:
+  - musical
+default_grv_primary: balanced
+prompt_template: |-
+  Core character: {por_core}
+  Gravity anchor: {grv_primary}
+  Energy profile: {delta_e_transition} (intensity {delta_e_intensity_2dp})
+  Tempo: ~{bpm_rounded} BPM
+por_check_template: "Maintains core character: {por_core}"
+grv_check_template: "Preserves gravity anchor: {grv_primary}"
+delta_e_check_template: "Energy follows {delta_e_transition} pattern"
+style_tag_sources:
+  - por_surface
+  - cultural_context
+por_surface_rules:
+  - condition: {bpm_min: 140, brightness_min: 0.6, active_rate_min: 0.8}
+    labels: [energetic, driving, dense]
+  - condition: {mode: minor, spectral_centroid_max: 2000}
+    labels: [dark, melancholic, introspective]
+  - condition: {valley_depth_min: 0.3}
+    labels: [dynamic, dramatic, contrastive]
+  - condition: {valley_depth_max: 0.1, active_rate_min: 0.8}
+    labels: [continuous, wall-like, compressed]
+  - condition: {stereo_width_min: 0.7}
+    labels: [spacious, cinematic]
+  - condition: {low_ratio_min: 0.4}
+    labels: [bass-heavy, grounded]
+grv_primary_vocab:
+  - condition: {low_ratio_min: 0.4}
+    label: bass-heavy
+  - condition: {brightness_min: 0.6}
+    label: bright
+  - condition: {mid_ratio_min: 0.45}
+    label: mid-focused
+section_label_vocab:
+  - Intro
+  - Verse
+  - Chorus
+  - Bridge
+  - Outro
+constraint_templates:
+  - id: tempo_range
+    condition: {tempo_range_exists: true}
+    template: "BPM range: {tempo_range}"
+  - id: active_rate
+    condition: {active_rate_pct_exists: true}
+    template: "Active rate target: {active_rate_pct}"
+  - id: crest_factor
+    condition: {crest_factor_1dp_exists: true}
+    template: "Crest factor target: ~{crest_factor_1dp}"
+  - id: stereo_width
+    condition: {stereo_width_pct_exists: true}
+    template: "Stereo width: {stereo_width_pct}"
+physical_check_templates:
+  - id: rms
+    condition: {rms_mean_exists: true}
+    template: "RMS within +/-20% of {rms_mean:.3f}"
+  - id: active_rate
+    condition: {active_rate_pct_exists: true}
+    template: "Active rate within +/-10% of {active_rate_pct}"
+  - id: bpm
+    condition: {bpm_rounded_exists: true}
+    template: "BPM within +/-10 of {bpm_rounded}"
+  - id: key
+    condition: {key_suggestion_exists: true}
+    template: "Key matches {key_suggestion}"
+minimal_constraint_templates:
+  - id: bpm
+    condition: {bpm_rounded_exists: true}
+    template: "bpm~{bpm_rounded}"
+  - id: key
+    condition: {key_exists: true}
+    template: "key={key}"
+  - id: energy
+    condition: {delta_e_transition_exists: true}
+    template: "energy={delta_e_transition}"
+delta_e_vocab:
+  - condition: {valley_depth_min: 0.3}
+    label: dramatic_contrast
+  - condition: {valley_depth_max: 0.1, active_rate_min: 0.8}
+    label: continuous_pressure
+  - condition: {active_rate_min: 0.8}
+    label: high_continuity
+  - condition: {}
+    label: moderate_motion
+diff_metrics:
+  - name: bpm
+    tolerance: 10
+    unit: bpm
+  - name: key
+    exact_match: true
+  - name: rms_mean
+    tolerance: 0.2
+  - name: valley_depth
+    tolerance: 0.2
+  - name: active_rate
+    tolerance: 0.1
+  - name: thickness
+    tolerance: 0.2
+  - name: spectral_centroid
+    tolerance: 300
+    unit: hz

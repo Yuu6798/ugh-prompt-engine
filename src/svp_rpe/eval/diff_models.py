@@ -38,7 +38,9 @@ class MetricDiff(BaseModel):
         if self.passed is None:
             if self.tolerance is not None and self.diff is not None:
                 self.passed = self.diff <= self.tolerance
-            elif self.target is not None:
+            elif self.target is not None and not (
+                isinstance(self.actual, (int, float)) and isinstance(self.target, (int, float))
+            ):
                 self.passed = self.actual == self.target
         return self
 

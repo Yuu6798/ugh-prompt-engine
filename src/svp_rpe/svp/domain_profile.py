@@ -1,6 +1,7 @@
 """Domain profile support for SVP value vocabularies and templates."""
 from __future__ import annotations
 
+from importlib.resources import files
 from pathlib import Path
 from string import Formatter
 from typing import Any, Dict, Iterable, List, Mapping, Optional
@@ -164,23 +165,54 @@ class DomainProfile(ProfileModel):
 
 
 def load_domain_profile(domain: str = "music", path: Optional[Path | str] = None) -> DomainProfile:
-    profile_path = Path(path) if path is not None else _find_profile_path(domain)
-    with profile_path.open(encoding="utf-8") as f:
-        data = yaml.safe_load(f)
+    if path is not None:
+        data = _load_profile_file(Path(path))
+    else:
+        data = _load_local_profile(domain) or _load_packaged_profile(domain)
+        if data is None:
+            searched = ", ".join(str(p) for p in _local_profile_paths(domain))
+            raise FileNotFoundError(
+                f"domain profile not found for {domain!r}; searched {searched} "
+                "and packaged svp_rpe.config.domain_profiles resources"
+            )
     if not isinstance(data, dict):
-        raise ValueError(f"domain profile must be a mapping: {profile_path}")
+        raise ValueError(f"domain profile must be a mapping: {domain}")
     return DomainProfile.model_validate(data)
 
 
-def _find_profile_path(domain: str) -> Path:
-    candidates = [
+def _load_profile_file(path: Path) -> dict[str, Any]:
+    with path.open(encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    if not isinstance(data, dict):
+        raise ValueError(f"domain profile must be a mapping: {path}")
+    return data
+
+
+def _load_local_profile(domain: str) -> Optional[dict[str, Any]]:
+    for candidate in _local_profile_paths(domain):
+        if candidate.is_file():
+            return _load_profile_file(candidate)
+    return None
+
+
+def _load_packaged_profile(domain: str) -> Optional[dict[str, Any]]:
+    try:
+        resource = files("svp_rpe.config.domain_profiles").joinpath(f"{domain}.yaml")
+    except ModuleNotFoundError:
+        return None
+    if not resource.is_file():
+        return None
+    data = yaml.safe_load(resource.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"domain profile must be a mapping: packaged {domain}.yaml")
+    return data
+
+
+def _local_profile_paths(domain: str) -> list[Path]:
+    return [
         Path(__file__).resolve().parents[3] / "config" / "domain_profiles" / f"{domain}.yaml",
         Path.cwd() / "config" / "domain_profiles" / f"{domain}.yaml",
     ]
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate
-    return candidates[0]
 
 
 def _render_templates(rules: Iterable[TemplateRule], context: Mapping[str, Any]) -> List[str]:
