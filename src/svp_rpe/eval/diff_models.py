@@ -75,7 +75,12 @@ class PhysicalDiff(BaseModel):
     def populate_generic_metrics(self) -> "PhysicalDiff":
         if self.metrics:
             return self
+        legacy_fields_set = set(self.LEGACY_METRIC_FIELDS) & self.model_fields_set
+        if not legacy_fields_set:
+            return self
         for field_name in self.LEGACY_METRIC_FIELDS:
+            if field_name not in legacy_fields_set:
+                continue
             value = getattr(self, field_name)
             if field_name == "bpm_diff" and value is None:
                 continue

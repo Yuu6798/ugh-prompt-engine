@@ -94,6 +94,17 @@ def test_parser_extracts_new_source_and_generation_hints() -> None:
     assert parsed.instrumentation_notes == ["synth bass and drums"]
 
 
+def test_profile_defaults_are_applied_when_no_rule_matches() -> None:
+    rpe = _make_rpe()
+    rpe.physical.spectral_profile.low_ratio = 0.1
+    rpe.physical.spectral_profile.brightness = 0.1
+    svp = generate_svp(rpe)
+
+    assert svp.analysis_rpe.por_surface == ["musical"]
+    assert svp.analysis_rpe.grv_primary == "balanced"
+    assert svp.svp_for_generation.style_tags == ["musical", "electronic/dance"]
+
+
 def test_profile_yaml_can_swap_value_vocab_without_schema_change(tmp_path: Path) -> None:
     profile_path = tmp_path / "video.yaml"
     profile_path.write_text(
@@ -192,3 +203,16 @@ def test_numeric_metric_without_tolerance_uses_distance_score() -> None:
     assert metric.passed is None
     assert metric.diff == 0.07999999999999996
     assert 0.9 < generic.overall < 1.0
+
+
+def test_generic_diff_with_no_overlapping_metrics_stays_empty() -> None:
+    generic = compare_metric_values(
+        {"brightness": 0.7},
+        {"shot_rhythm": "medium"},
+        metric_names=["brightness", "shot_rhythm"],
+        domain="video",
+    )
+
+    assert generic.domain == "video"
+    assert generic.metrics == {}
+    assert generic.overall == 0.0

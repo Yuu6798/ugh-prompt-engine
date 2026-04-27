@@ -147,12 +147,8 @@ def generate_svp(bundle: RPEBundle, *, domain: str = "music") -> SVPBundle:
     """
     profile = load_domain_profile(domain)
     context = _build_context(bundle)
-    profile_por_surface = profile.select_por_surface(context)
-    if profile_por_surface != profile.default_por_surface:
-        context["por_surface"] = profile_por_surface
-    profile_grv = profile.select_grv_primary(context)
-    if profile_grv != profile.default_grv_primary or not context.get("grv_primary"):
-        context["grv_primary"] = profile_grv
+    context["por_surface"] = profile.select_por_surface(context)
+    context["grv_primary"] = profile.select_grv_primary(context)
     return SVPBundle(
         domain=profile.domain,
         data_lineage=_build_data_lineage(bundle, profile),
