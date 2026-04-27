@@ -30,7 +30,7 @@ def parse_svp_yaml(data: dict) -> ParsedSVP:
         }
 
     return ParsedSVP(
-        domain=data.get("domain", "music"),
+        domain=_as_domain(data.get("domain")),
         source_artifact=source_artifact,
         por_core=analysis.get("por_core", minimal.get("c", "")),
         por_surface=analysis.get("por_surface", []),
@@ -50,6 +50,10 @@ def parse_svp_yaml(data: dict) -> ParsedSVP:
 
 def _as_mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
+
+
+def _as_domain(value: Any) -> str:
+    return value.strip() if isinstance(value, str) and value.strip() else "music"
 
 
 def _extract_instrumentation_notes(gen: Mapping[str, Any]) -> list[str]:

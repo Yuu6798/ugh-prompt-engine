@@ -61,6 +61,19 @@ class TestSVPParser:
         parsed = parse_svp_yaml(data)
         assert parsed.source_artifact is None
 
+    def test_parse_yaml_defaults_invalid_domain_to_music(self):
+        data = {
+            "domain": None,
+            "analysis_rpe": {"por_core": "test"},
+            "minimal_svp": {"c": "test", "de": "flat"},
+        }
+        parsed = parse_svp_yaml(data)
+        assert parsed.domain == "music"
+
+        data["domain"] = ["not", "a", "domain"]
+        parsed = parse_svp_yaml(data)
+        assert parsed.domain == "music"
+
     def test_parse_text(self):
         text = """
         Core: energetic driving track
