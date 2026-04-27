@@ -28,7 +28,7 @@
   - 34.0
   - 40.0
   expected_brightness_band: low
-  sha256: 55f41260f0bafffa1ca5a5d506f21a6b06d86b98d4577a6ac75bb9ece414983f
+  sha256: 933781ffb22a7396bb619a6d2f0ffe8d61dfb718fec8ee846bf3f94ce78cf294
 - id: synth_02_minor_pulse_a_minor
   filename: synth_02_minor_pulse_a_minor.wav
   bpm: 90.0
@@ -59,7 +59,7 @@
   - 30.0
   - 36.0
   expected_brightness_band: mid
-  sha256: 5a91b6763f634f42266452626bbfd0e4603fbf12144cb0f4d58e5eca50fad663
+  sha256: 8133577a697880d9231dd895aedd3e1ccfe0f5c8f12ce34550de43b3bb550b43
 - id: synth_03_mid_groove_g_major
   filename: synth_03_mid_groove_g_major.wav
   bpm: 120.0
@@ -121,7 +121,7 @@
   - 39.0
   - 45.0
   expected_brightness_band: high
-  sha256: 33d0565cc88a147cc001015a18028acf3c86b465cb78eba906ee996213c9c2d6
+  sha256: cc8e38b60e6a02ee0beb1cd74113c7a40bfcf58c2ae13df62d25d40cf657c45e
 - id: synth_05_fast_bright_d_major
   filename: synth_05_fast_bright_d_major.wav
   bpm: 170.0
@@ -152,4 +152,4 @@
   - 36.0
   - 42.0
   expected_brightness_band: high
-  sha256: ec96d4c4849de1cc36c78a9df24be063fe4d4f131e9cf2ff9df02c2d28124698
+  sha256: 9f4cf9e86d1e35a40895c60bb8dc88dfbc5bc1ba38e21f9908de878fa9ca06cc

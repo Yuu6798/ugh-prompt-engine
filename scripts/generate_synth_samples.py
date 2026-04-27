@@ -19,24 +19,33 @@ DEFAULT_OUTPUT_DIR = ROOT / "examples" / "sample_input"
 
 NOTE_FREQUENCIES = {
     "C3": 130.8128,
+    "C#3": 138.5913,
     "D3": 146.8324,
     "E3": 164.8138,
+    "F3": 174.6141,
     "F#3": 184.9972,
     "G3": 195.9977,
+    "G#3": 207.6523,
     "A3": 220.0000,
     "B3": 246.9417,
     "C4": 261.6256,
+    "C#4": 277.1826,
     "D4": 293.6648,
     "E4": 329.6276,
+    "F4": 349.2282,
     "F#4": 369.9944,
     "G4": 391.9954,
+    "G#4": 415.3047,
     "A4": 440.0000,
     "B4": 493.8833,
     "C5": 523.2511,
+    "C#5": 554.3653,
     "D5": 587.3295,
     "E5": 659.2551,
+    "F5": 698.4565,
     "F#5": 739.9888,
     "G5": 783.9909,
+    "G#5": 830.6094,
     "A5": 880.0000,
     "B5": 987.7666,
 }
@@ -85,7 +94,7 @@ SAMPLES = (
         seed=101,
         chords=(
             ("C3", "E3", "G3"),
-            ("F#3", "A3", "C4"),
+            ("F3", "A3", "C4"),
             ("G3", "B3", "D4"),
             ("C3", "E3", "G3"),
         ),
@@ -104,7 +113,7 @@ SAMPLES = (
         seed=202,
         chords=(
             ("A3", "C4", "E4"),
-            ("F#3", "A3", "C4"),
+            ("F3", "A3", "C4"),
             ("G3", "B3", "D4"),
             ("A3", "C4", "E4"),
         ),
@@ -141,10 +150,10 @@ SAMPLES = (
         expected_brightness_band="high",
         seed=404,
         chords=(
-            ("F#3", "A3", "C4"),
+            ("F#3", "A3", "C#4"),
             ("D4", "F#4", "A4"),
-            ("E4", "G4", "B4"),
-            ("F#3", "A3", "C4"),
+            ("C#4", "E4", "G#4"),
+            ("F#3", "A3", "C#4"),
         ),
         harmonic_weights=(1.0, 0.45, 0.25, 0.10),
         body_gain=0.46,
@@ -162,7 +171,7 @@ SAMPLES = (
         chords=(
             ("D4", "F#4", "A4"),
             ("G4", "B4", "D5"),
-            ("A4", "C5", "E5"),
+            ("A4", "C#5", "E5"),
             ("D4", "F#4", "A4"),
         ),
         harmonic_weights=(1.0, 0.55, 0.32, 0.16),
@@ -315,22 +324,32 @@ def verify_samples(output_dir: Path) -> int:
         return 1
     expected_rows = yaml.safe_load(truth_path.read_text(encoding="utf-8"))
     expected_by_id = {row["id"]: row for row in expected_rows}
+    generated_rows = ground_truth_rows()
+    generated_by_id = {row["id"]: row for row in generated_rows}
 
     ok = True
+    generated_ids = {spec.id for spec in SAMPLES}
+    for sample_id in sorted(set(expected_by_id) - generated_ids):
+        print(f"Unexpected ground-truth row: {sample_id}", file=sys.stderr)
+        ok = False
+
     for spec in SAMPLES:
         row = expected_by_id.get(spec.id)
         if row is None:
             print(f"Missing ground-truth row for {spec.id}", file=sys.stderr)
             ok = False
             continue
-        expected_hash = sha256_bytes(wav_bytes(render_sample(spec)))
-        if row.get("sha256") != expected_hash:
+        generated_row = generated_by_id[spec.id]
+        for field, generated_value in generated_row.items():
+            if row.get(field) == generated_value:
+                continue
             print(
-                f"Ground truth hash mismatch for {spec.filename}: "
-                f"expected {row.get('sha256')}, regenerated {expected_hash}",
+                f"Ground truth metadata mismatch for {spec.filename} field '{field}': "
+                f"expected {generated_value!r}, got {row.get(field)!r}",
                 file=sys.stderr,
             )
             ok = False
+        expected_hash = generated_row["sha256"]
         path = output_dir / spec.filename
         if not path.is_file():
             print(f"Missing WAV: {path}", file=sys.stderr)

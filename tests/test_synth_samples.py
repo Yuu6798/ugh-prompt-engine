@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import shutil
 from pathlib import Path
 
 import soundfile as sf
@@ -64,3 +65,26 @@ def test_synth_sample_verify_command_passes() -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Verified 5 synth samples" in result.stdout
+
+
+def test_synth_sample_verify_rejects_metadata_mismatch(tmp_path: Path) -> None:
+    for wav_path in SAMPLE_DIR.glob("synth_*.wav"):
+        shutil.copy2(wav_path, tmp_path / wav_path.name)
+
+    rows = _ground_truth_rows()
+    rows[0]["bpm"] = 61.0
+    (tmp_path / "ground_truth.yaml").write_text(
+        yaml.safe_dump(rows, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(GENERATOR), "--output-dir", str(tmp_path), "--verify"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "Ground truth metadata mismatch" in result.stderr
