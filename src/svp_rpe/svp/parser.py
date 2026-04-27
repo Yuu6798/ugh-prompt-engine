@@ -16,7 +16,12 @@ def parse_svp_yaml(data: dict) -> ParsedSVP:
     gen = _as_mapping(data.get("svp_for_generation"))
     minimal = _as_mapping(data.get("minimal_svp"))
     lineage = _as_mapping(data.get("data_lineage"))
-    source_artifact = lineage.get("source_artifact")
+    raw_source_artifact = lineage.get("source_artifact")
+    source_artifact = (
+        dict(raw_source_artifact)
+        if isinstance(raw_source_artifact, Mapping)
+        else None
+    )
     if source_artifact is None and lineage.get("source_audio"):
         source_artifact = {
             "type": "audio",

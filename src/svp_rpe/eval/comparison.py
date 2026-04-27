@@ -154,6 +154,8 @@ def compare_metric_values(
             continue
         ref_value = reference[name]
         cand_value = candidate[name]
+        if ref_value is None or cand_value is None:
+            continue
         tolerance = tolerance_map.get(name)
         if _is_numeric_metric_value(ref_value) and _is_numeric_metric_value(cand_value):
             diff = abs(float(cand_value) - float(ref_value))

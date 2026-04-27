@@ -48,6 +48,19 @@ class TestSVPParser:
         parsed = parse_svp_yaml(data)
         assert parsed.instrumentation_notes == []
 
+    def test_parse_yaml_ignores_non_mapping_source_artifact(self):
+        data = {
+            "analysis_rpe": {"por_core": "test"},
+            "data_lineage": {"source_artifact": "not a mapping"},
+            "minimal_svp": {"c": "test", "de": "flat"},
+        }
+        parsed = parse_svp_yaml(data)
+        assert parsed.source_artifact is None
+
+        data["data_lineage"]["source_artifact"] = ["not", "a", "mapping"]
+        parsed = parse_svp_yaml(data)
+        assert parsed.source_artifact is None
+
     def test_parse_text(self):
         text = """
         Core: energetic driving track

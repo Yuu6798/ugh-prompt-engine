@@ -266,3 +266,16 @@ def test_explicit_empty_metric_names_disables_comparison() -> None:
     assert generic.domain == "video"
     assert generic.metrics == {}
     assert generic.overall == 0.0
+
+
+def test_none_metric_values_are_skipped() -> None:
+    generic = compare_metric_values(
+        {"optional_flag": None, "brightness": 0.7},
+        {"optional_flag": None, "brightness": 0.7},
+        metric_names=["optional_flag"],
+        domain="video",
+    )
+
+    assert generic.domain == "video"
+    assert generic.metrics == {}
+    assert generic.overall == 0.0
