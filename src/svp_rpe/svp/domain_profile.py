@@ -4,10 +4,12 @@ from __future__ import annotations
 from importlib.resources import files
 from pathlib import Path
 from string import Formatter
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from svp_rpe.rpe.models import SemanticLabel
 
 
 class ProfileModel(BaseModel):
@@ -19,9 +21,28 @@ class LabelRule(ProfileModel):
     label: str
 
 
+class LabelSpec(ProfileModel):
+    label: str
+    confidence: float = 0.5
+
+
 class LabelsRule(ProfileModel):
+    id: Optional[str] = None
     condition: Dict[str, Any] = Field(default_factory=dict)
-    labels: List[str]
+    layer: Literal["perceptual", "structural", "semantic_hypothesis"] = "perceptual"
+    labels: List[LabelSpec]
+
+    @field_validator("labels", mode="before")
+    @classmethod
+    def coerce_label_specs(cls, value: object) -> object:
+        if isinstance(value, list):
+            return [
+                {"label": item}
+                if isinstance(item, str)
+                else item
+                for item in value
+            ]
+        return value
 
 
 class TemplateRule(ProfileModel):
@@ -59,12 +80,35 @@ class DomainProfile(ProfileModel):
     delta_e_vocab: List[LabelRule] = Field(default_factory=list)
     diff_metrics: List[DiffMetricSpec] = Field(default_factory=list)
 
-    def select_por_surface(self, context: Mapping[str, Any]) -> List[str]:
-        labels: List[str] = []
-        for rule in self.por_surface_rules:
-            if _matches(rule.condition, context):
-                labels.extend(rule.labels)
-        return _unique(labels) or list(self.default_por_surface)
+    def select_por_surface(self, context: Mapping[str, Any]) -> List[SemanticLabel]:
+        labels: List[SemanticLabel] = []
+        for index, rule in enumerate(self.por_surface_rules):
+            evidence = _condition_evidence(rule.condition, context)
+            if evidence is None:
+                continue
+            source_rule = rule.id or f"profile.por_surface.{index}"
+            labels.extend(
+                SemanticLabel(
+                    label=spec.label,
+                    layer=rule.layer,
+                    confidence=spec.confidence,
+                    evidence=evidence,
+                    source_rule=source_rule,
+                )
+                for spec in rule.labels
+            )
+        if labels:
+            return _unique_semantic_labels(labels)
+        return [
+            SemanticLabel(
+                label=label,
+                layer="perceptual",
+                confidence=0.5,
+                evidence=[f"default_por_surface={label}"],
+                source_rule="profile.default_por_surface",
+            )
+            for label in self.default_por_surface
+        ]
 
     def select_grv_primary(self, context: Mapping[str, Any]) -> str:
         for rule in self.grv_primary_vocab:
@@ -97,12 +141,12 @@ class DomainProfile(ProfileModel):
     def build_style_tags(
         self,
         context: Mapping[str, Any],
-        por_surface: Iterable[str],
+        por_surface: Iterable[str | SemanticLabel],
     ) -> List[str]:
         tags: List[str] = []
         for source in self.style_tag_sources:
             if source == "por_surface":
-                tags.extend(por_surface)
+                tags.extend(_label_text(item) for item in por_surface)
                 continue
             value = _value_for(source, context)
             if isinstance(value, list):
@@ -271,35 +315,54 @@ class _FormatContext(dict):
 
 
 def _matches(condition: Mapping[str, Any], context: Mapping[str, Any]) -> bool:
+    return _condition_evidence(condition, context) is not None
+
+
+def _condition_evidence(
+    condition: Mapping[str, Any],
+    context: Mapping[str, Any],
+) -> Optional[List[str]]:
+    evidence: List[str] = []
     for raw_key, expected in condition.items():
         if raw_key.endswith("_min"):
             key = raw_key[: -len("_min")]
             value = _value_for(key, context)
             if not isinstance(value, (int, float)) or float(value) < float(expected):
-                return False
+                return None
+            evidence.append(f"{key}={_format_value(value)} >= {_format_value(expected)}")
         elif raw_key.endswith("_max"):
             key = raw_key[: -len("_max")]
             value = _value_for(key, context)
             if not isinstance(value, (int, float)) or float(value) > float(expected):
-                return False
+                return None
+            evidence.append(f"{key}={_format_value(value)} <= {_format_value(expected)}")
         elif raw_key.endswith("_exists"):
             key = raw_key[: -len("_exists")]
             exists = _value_for(key, context) is not None
             if bool(expected) != exists:
-                return False
+                return None
+            evidence.append(f"{key}_exists={exists}")
         elif raw_key.endswith("_in"):
             key = raw_key[: -len("_in")]
             value = _value_for(key, context)
             if value not in expected:
-                return False
+                return None
+            evidence.append(f"{key}={_format_value(value)} in {expected}")
         else:
             value = _value_for(raw_key, context)
             if isinstance(value, str) and isinstance(expected, str):
                 if value.lower() != expected.lower():
-                    return False
+                    return None
             elif value != expected:
-                return False
-    return True
+                return None
+            evidence.append(f"{raw_key}={_format_value(value)} == {_format_value(expected)}")
+    return evidence
+
+
+def _format_value(value: Any) -> str:
+    if isinstance(value, float):
+        return f"{value:.4g}"
+    return str(value)
 
 
 def _value_for(path: str, context: Mapping[str, Any]) -> Any:
@@ -321,5 +384,21 @@ def _unique(values: Iterable[str]) -> List[str]:
         if value in seen:
             continue
         seen.add(value)
+        output.append(value)
+    return output
+
+
+def _label_text(value: str | SemanticLabel) -> str:
+    return value.label if isinstance(value, SemanticLabel) else str(value)
+
+
+def _unique_semantic_labels(values: Iterable[SemanticLabel]) -> List[SemanticLabel]:
+    seen = set()
+    output: List[SemanticLabel] = []
+    for value in values:
+        key = (value.layer, value.label)
+        if key in seen:
+            continue
+        seen.add(key)
         output.append(value)
     return output

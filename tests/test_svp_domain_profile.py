@@ -13,6 +13,7 @@ from svp_rpe.rpe.models import (
     PhysicalRPE,
     RPEBundle,
     SectionMarker,
+    SemanticLabel,
     SemanticRPE,
     SpectralProfile,
 )
@@ -53,7 +54,22 @@ def _make_rpe() -> RPEBundle:
     )
     semantic = SemanticRPE(
         por_core="energetic grounded track",
-        por_surface=["energetic", "grounded"],
+        por_surface=[
+            SemanticLabel(
+                label="energetic",
+                layer="semantic_hypothesis",
+                confidence=0.68,
+                evidence=["bpm=128 >= 120", "active_rate=0.85 >= 0.8"],
+                source_rule="fixture.hyp",
+            ),
+            SemanticLabel(
+                label="grounded",
+                layer="perceptual",
+                confidence=0.8,
+                evidence=["low_ratio=0.42 >= 0.4"],
+                source_rule="fixture.perc",
+            ),
+        ],
         grv_anchor=GrvAnchor(primary="bass-heavy"),
         delta_e_profile=DeltaEProfile(
             transition_type="gradual_build",
@@ -112,12 +128,15 @@ def test_parser_extracts_new_source_and_generation_hints() -> None:
 def test_profile_defaults_are_applied_when_no_rule_matches() -> None:
     rpe = _make_rpe()
     rpe.physical.spectral_profile.low_ratio = 0.1
+    rpe.physical.spectral_profile.mid_ratio = 0.1
     rpe.physical.spectral_profile.brightness = 0.1
+    rpe.physical.active_rate = 0.5
+    rpe.physical.valley_depth = 0.05
     svp = generate_svp(rpe)
 
     assert svp.analysis_rpe.por_surface == ["musical"]
     assert svp.analysis_rpe.grv_primary == "balanced"
-    assert svp.svp_for_generation.style_tags == ["musical", "electronic/dance"]
+    assert svp.svp_for_generation.style_tags == []
 
 
 def test_profile_yaml_can_swap_value_vocab_without_schema_change(tmp_path: Path) -> None:
@@ -169,7 +188,9 @@ diff_metrics:
     }
 
     assert profile.domain == "video"
-    assert profile.select_por_surface(context) == ["warm-toned", "intimate"]
+    selected = profile.select_por_surface(context)
+    assert [label.label for label in selected] == ["warm-toned", "intimate"]
+    assert all(label.layer == "perceptual" for label in selected)
     assert profile.select_grv_primary(context) == "warm-toned"
     assert profile.format_structure_summary(context) == "3 sections: Opening, Body, Climax"
     assert profile.render_constraints(context) == ["Scene count: 3"]

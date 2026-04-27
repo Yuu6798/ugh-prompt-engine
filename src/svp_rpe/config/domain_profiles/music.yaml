@@ -14,20 +14,67 @@ grv_check_template: "Preserves gravity anchor: {grv_primary}"
 delta_e_check_template: "Energy follows {delta_e_transition} pattern"
 style_tag_sources:
   - por_surface
-  - cultural_context
 por_surface_rules:
-  - condition: {bpm_min: 140, brightness_min: 0.6, active_rate_min: 0.8}
-    labels: [energetic, driving, dense]
-  - condition: {mode: minor, spectral_centroid_max: 2000}
-    labels: [dark, melancholic, introspective]
-  - condition: {valley_depth_min: 0.3}
-    labels: [dynamic, dramatic, contrastive]
-  - condition: {valley_depth_max: 0.1, active_rate_min: 0.8}
-    labels: [continuous, wall-like, compressed]
-  - condition: {stereo_width_min: 0.7}
-    labels: [spacious, cinematic]
-  - condition: {low_ratio_min: 0.4}
-    labels: [bass-heavy, grounded]
+  - id: perc.high_tempo
+    layer: perceptual
+    condition: {bpm_min: 140}
+    labels:
+      - {label: high_tempo, confidence: 0.95}
+  - id: perc.bright
+    layer: perceptual
+    condition: {brightness_min: 0.6}
+    labels:
+      - {label: bright, confidence: 0.90}
+  - id: perc.bass_heavy
+    layer: perceptual
+    condition: {low_ratio_min: 0.4}
+    labels:
+      - {label: bass-heavy, confidence: 0.90}
+      - {label: grounded, confidence: 0.80}
+  - id: perc.mid_focused
+    layer: perceptual
+    condition: {mid_ratio_min: 0.45}
+    labels:
+      - {label: mid-focused, confidence: 0.80}
+  - id: struct.dynamic
+    layer: structural
+    condition: {valley_depth_min: 0.3}
+    labels:
+      - {label: dynamic, confidence: 0.85}
+      - {label: contrastive, confidence: 0.80}
+  - id: struct.gradual_motion
+    layer: structural
+    condition: {valley_depth_min: 0.15}
+    labels:
+      - {label: evolving, confidence: 0.75}
+  - id: struct.continuous
+    layer: structural
+    condition: {valley_depth_max: 0.1, active_rate_min: 0.8}
+    labels:
+      - {label: continuous, confidence: 0.85}
+      - {label: wall-like, confidence: 0.75}
+  - id: struct.spacious
+    layer: structural
+    condition: {stereo_width_min: 0.7}
+    labels:
+      - {label: spacious, confidence: 0.85}
+  - id: hyp.melancholic
+    layer: semantic_hypothesis
+    condition: {mode: minor, spectral_centroid_max: 2000, valley_depth_min: 0.15}
+    labels:
+      - {label: melancholic, confidence: 0.55}
+      - {label: introspective, confidence: 0.50}
+  - id: hyp.energetic
+    layer: semantic_hypothesis
+    condition: {bpm_min: 140, brightness_min: 0.6, active_rate_min: 0.8}
+    labels:
+      - {label: energetic, confidence: 0.68}
+      - {label: driving, confidence: 0.65}
+  - id: hyp.cinematic
+    layer: semantic_hypothesis
+    condition: {valley_depth_min: 0.3, stereo_width_min: 0.7}
+    labels:
+      - {label: cinematic, confidence: 0.60}
 grv_primary_vocab:
   - condition: {low_ratio_min: 0.4}
     label: bass-heavy

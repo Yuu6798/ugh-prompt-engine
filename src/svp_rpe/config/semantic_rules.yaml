@@ -1,13 +1,56 @@
-rules:
-  - condition: {bpm_min: 140, brightness_min: 0.6, active_rate_min: 0.8}
-    por_labels: [energetic, driving, dense]
-  - condition: {mode: minor, spectral_centroid_max: 2000}
-    por_labels: [dark, melancholic, introspective]
-  - condition: {valley_depth_min: 0.3}
-    por_labels: [dynamic, dramatic, contrastive]
-  - condition: {valley_depth_max: 0.1, active_rate_min: 0.8}
-    por_labels: [continuous, wall-like, compressed]
-  - condition: {stereo_width_min: 0.7}
-    por_labels: [spacious, cinematic]
-  - condition: {low_ratio_min: 0.4}
-    por_labels: [bass-heavy, grounded]
+schema_version: "2.0"
+
+perceptual:
+  - id: perc.high_tempo
+    condition: {bpm_min: 140}
+    labels:
+      - {label: high_tempo, confidence: 0.95}
+  - id: perc.bright
+    condition: {brightness_min: 0.6}
+    labels:
+      - {label: bright, confidence: 0.90}
+  - id: perc.bass_heavy
+    condition: {low_ratio_min: 0.4}
+    labels:
+      - {label: bass-heavy, confidence: 0.90}
+      - {label: grounded, confidence: 0.80}
+  - id: perc.mid_focused
+    condition: {mid_ratio_min: 0.45}
+    labels:
+      - {label: mid-focused, confidence: 0.80}
+
+structural:
+  - id: struct.dynamic
+    condition: {valley_depth_min: 0.3}
+    labels:
+      - {label: dynamic, confidence: 0.85}
+      - {label: contrastive, confidence: 0.80}
+  - id: struct.gradual_motion
+    condition: {valley_depth_min: 0.15}
+    labels:
+      - {label: evolving, confidence: 0.75}
+  - id: struct.continuous
+    condition: {valley_depth_max: 0.1, active_rate_min: 0.8}
+    labels:
+      - {label: continuous, confidence: 0.85}
+      - {label: wall-like, confidence: 0.75}
+  - id: struct.spacious
+    condition: {stereo_width_min: 0.7}
+    labels:
+      - {label: spacious, confidence: 0.85}
+
+semantic_hypothesis:
+  - id: hyp.melancholic
+    condition: {mode: minor, spectral_centroid_max: 2000, valley_depth_min: 0.15}
+    labels:
+      - {label: melancholic, confidence: 0.55}
+      - {label: introspective, confidence: 0.50}
+  - id: hyp.energetic
+    condition: {bpm_min: 140, brightness_min: 0.6, active_rate_min: 0.8}
+    labels:
+      - {label: energetic, confidence: 0.68}
+      - {label: driving, confidence: 0.65}
+  - id: hyp.cinematic
+    condition: {valley_depth_min: 0.3, stereo_width_min: 0.7}
+    labels:
+      - {label: cinematic, confidence: 0.60}
