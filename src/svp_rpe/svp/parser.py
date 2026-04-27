@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 import yaml
 
@@ -12,10 +12,10 @@ from svp_rpe.eval.diff_models import ParsedSVP
 
 def parse_svp_yaml(data: dict) -> ParsedSVP:
     """Parse a dict (from YAML) into ParsedSVP."""
-    analysis = data.get("analysis_rpe", {})
-    gen = data.get("svp_for_generation", {})
-    minimal = data.get("minimal_svp", {})
-    lineage = data.get("data_lineage", {})
+    analysis = _as_mapping(data.get("analysis_rpe"))
+    gen = _as_mapping(data.get("svp_for_generation"))
+    minimal = _as_mapping(data.get("minimal_svp"))
+    lineage = _as_mapping(data.get("data_lineage"))
     source_artifact = lineage.get("source_artifact")
     if source_artifact is None and lineage.get("source_audio"):
         source_artifact = {
@@ -43,11 +43,15 @@ def parse_svp_yaml(data: dict) -> ParsedSVP:
     )
 
 
-def _extract_instrumentation_notes(gen: dict) -> list[str]:
+def _as_mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _extract_instrumentation_notes(gen: Mapping[str, Any]) -> list[str]:
     if gen.get("instrumentation_notes"):
         value: Any = gen["instrumentation_notes"]
     else:
-        hints = gen.get("generation_hints", {})
+        hints = _as_mapping(gen.get("generation_hints"))
         value = hints.get("instrumentation_notes") or hints.get("instrumentation_summary")
     if value is None:
         return []

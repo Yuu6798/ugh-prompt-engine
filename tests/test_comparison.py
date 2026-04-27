@@ -35,6 +35,19 @@ class TestSVPParser:
         assert parsed.por_core == "energetic"
         assert parsed.por_surface == ["bright"]
 
+    def test_parse_yaml_ignores_non_mapping_generation_hints(self):
+        data = {
+            "analysis_rpe": {"por_core": "test"},
+            "svp_for_generation": {"generation_hints": None},
+            "minimal_svp": {"c": "test", "de": "flat"},
+        }
+        parsed = parse_svp_yaml(data)
+        assert parsed.instrumentation_notes == []
+
+        data["svp_for_generation"]["generation_hints"] = "not a mapping"
+        parsed = parse_svp_yaml(data)
+        assert parsed.instrumentation_notes == []
+
     def test_parse_text(self):
         text = """
         Core: energetic driving track

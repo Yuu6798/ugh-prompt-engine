@@ -140,7 +140,11 @@ def compare_metric_values(
     domain: str = "generic",
 ) -> PhysicalDiff:
     """Compare arbitrary domain metrics into generic MetricDiff entries."""
-    names = list(metric_names or sorted(set(reference.keys()) & set(candidate.keys())))
+    names = (
+        list(metric_names)
+        if metric_names is not None
+        else sorted(set(reference.keys()) & set(candidate.keys()))
+    )
     tolerance_map = dict(tolerances or {})
     metrics: dict[str, MetricDiff] = {}
     scores: list[float] = []

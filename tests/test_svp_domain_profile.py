@@ -242,3 +242,16 @@ def test_generic_diff_with_no_overlapping_metrics_stays_empty() -> None:
     assert generic.domain == "video"
     assert generic.metrics == {}
     assert generic.overall == 0.0
+
+
+def test_explicit_empty_metric_names_disables_comparison() -> None:
+    generic = compare_metric_values(
+        {"brightness": 0.7},
+        {"brightness": 0.7},
+        metric_names=[],
+        domain="video",
+    )
+
+    assert generic.domain == "video"
+    assert generic.metrics == {}
+    assert generic.overall == 0.0
