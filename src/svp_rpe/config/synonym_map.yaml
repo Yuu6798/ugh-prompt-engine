@@ -1,0 +1,17 @@
+# Synonym groups for semantic similarity scoring.
+# Each group contains terms that should be treated as equivalent.
+groups:
+  - [energetic, driving, high-energy, powerful, intense]
+  - [dark, melancholic, somber, moody, brooding]
+  - [bright, sparkling, crisp, shimmering]
+  - [spacious, wide, cinematic, expansive]
+  - [bass-heavy, low-end, grounded, deep-bass]
+  - [compressed, dense, wall-like, continuous]
+  - [dynamic, dramatic, contrastive, varied]
+  - [ambient, atmospheric, ethereal, dreamy]
+  - [uptempo, fast, quick, rapid]
+  - [downtempo, slow, relaxed, chill]
+  - [electronic, synth, digital, synthetic]
+  - [acoustic, organic, natural, live]
+  - [introspective, contemplative, reflective, meditative]
+  - [hopeful, uplifting, optimistic, positive]

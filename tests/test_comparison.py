@@ -35,6 +35,75 @@ class TestSVPParser:
         assert parsed.por_core == "energetic"
         assert parsed.por_surface == ["bright"]
 
+    def test_parse_yaml_ignores_non_mapping_generation_hints(self):
+        data = {
+            "analysis_rpe": {"por_core": "test"},
+            "svp_for_generation": {"generation_hints": None},
+            "minimal_svp": {"c": "test", "de": "flat"},
+        }
+        parsed = parse_svp_yaml(data)
+        assert parsed.instrumentation_notes == []
+
+        data["svp_for_generation"]["generation_hints"] = "not a mapping"
+        parsed = parse_svp_yaml(data)
+        assert parsed.instrumentation_notes == []
+
+    def test_parse_yaml_respects_explicit_empty_instrumentation_notes(self):
+        data = {
+            "analysis_rpe": {"por_core": "test"},
+            "svp_for_generation": {
+                "instrumentation_notes": [],
+                "generation_hints": {"instrumentation_summary": "synth bass"},
+            },
+            "minimal_svp": {"c": "test", "de": "flat"},
+        }
+        parsed = parse_svp_yaml(data)
+        assert parsed.instrumentation_notes == []
+
+    def test_parse_yaml_includes_generation_hint_production_notes(self):
+        data = {
+            "analysis_rpe": {"por_core": "test"},
+            "svp_for_generation": {
+                "generation_hints": {
+                    "instrumentation_summary": "synth bass",
+                    "production_notes": ["compressed mix", "wide stereo"],
+                },
+            },
+            "minimal_svp": {"c": "test", "de": "flat"},
+        }
+        parsed = parse_svp_yaml(data)
+        assert parsed.instrumentation_notes == [
+            "synth bass",
+            "compressed mix",
+            "wide stereo",
+        ]
+
+    def test_parse_yaml_ignores_non_mapping_source_artifact(self):
+        data = {
+            "analysis_rpe": {"por_core": "test"},
+            "data_lineage": {"source_artifact": "not a mapping"},
+            "minimal_svp": {"c": "test", "de": "flat"},
+        }
+        parsed = parse_svp_yaml(data)
+        assert parsed.source_artifact is None
+
+        data["data_lineage"]["source_artifact"] = ["not", "a", "mapping"]
+        parsed = parse_svp_yaml(data)
+        assert parsed.source_artifact is None
+
+    def test_parse_yaml_defaults_invalid_domain_to_music(self):
+        data = {
+            "domain": None,
+            "analysis_rpe": {"por_core": "test"},
+            "minimal_svp": {"c": "test", "de": "flat"},
+        }
+        parsed = parse_svp_yaml(data)
+        assert parsed.domain == "music"
+
+        data["domain"] = ["not", "a", "domain"]
+        parsed = parse_svp_yaml(data)
+        assert parsed.domain == "music"
+
     def test_parse_text(self):
         text = """
         Core: energetic driving track
