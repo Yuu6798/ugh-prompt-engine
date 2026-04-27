@@ -1,9 +1,9 @@
 """rpe/models.py — RPE data models (Pydantic)."""
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Literal, Optional
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class SpectralProfile(BaseModel):
@@ -87,12 +87,29 @@ class DeltaEProfile(BaseModel):
     description: str
 
 
+class SemanticLabel(BaseModel):
+    """Evidence-bearing semantic label emitted by deterministic rules."""
+
+    label: str
+    layer: Literal["perceptual", "structural", "semantic_hypothesis"]
+    confidence: float
+    evidence: List[str] = Field(default_factory=list)
+    source_rule: str
+
+    @field_validator("confidence")
+    @classmethod
+    def confidence_in_range(cls, v: float) -> float:
+        if not 0.0 <= v <= 1.0:
+            raise ValueError("confidence must be between 0.0 and 1.0")
+        return v
+
+
 class SemanticRPE(BaseModel):
     """Semantic layer generated from physical features via rule-based mapping."""
 
-    schema_version: str = "1.0"
+    schema_version: str = "2.0"
     por_core: str                      # core semantic description
-    por_surface: List[str]             # surface-level labels
+    por_surface: List[SemanticLabel]   # evidence-bearing labels
     grv_anchor: GrvAnchor
     delta_e_profile: DeltaEProfile
     cultural_context: List[str]
@@ -102,6 +119,13 @@ class SemanticRPE(BaseModel):
     estimation_disclaimer: str = (
         "semantic層はルールベース推定であり、意味理解の真値ではない"
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_legacy_schema(cls, data: object) -> object:
+        if isinstance(data, dict) and data.get("schema_version") == "1.0":
+            raise ValueError("SemanticRPE schema_version 1.0 is unsupported; regenerate RPE")
+        return data
 
 
 class RPEBundle(BaseModel):

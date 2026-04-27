@@ -15,15 +15,17 @@ def test_load_pro_baseline():
 
 def test_load_semantic_rules():
     cfg = load_config("semantic_rules")
-    assert "rules" in cfg
-    assert len(cfg["rules"]) >= 1
+    assert cfg["schema_version"] == "2.0"
+    assert len(cfg["perceptual"]) >= 1
+    assert len(cfg["structural"]) >= 1
+    assert len(cfg["semantic_hypothesis"]) >= 1
 
 
 def test_load_packaged_configs_without_local_config(monkeypatch):
     monkeypatch.setattr(config_loader_module, "_local_config_paths", lambda name: [])
 
     assert "rms_mean_pro" in load_config("pro_baseline")
-    assert "rules" in load_config("semantic_rules")
+    assert load_config("semantic_rules")["schema_version"] == "2.0"
     assert "groups" in load_config("synonym_map")
     assert "default" in load_config("svp_templates")
 

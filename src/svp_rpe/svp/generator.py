@@ -5,7 +5,7 @@ Deterministic: same RPEBundle → same SVPBundle.
 """
 from __future__ import annotations
 
-from svp_rpe.rpe.models import RPEBundle
+from svp_rpe.rpe.models import RPEBundle, SemanticLabel
 from svp_rpe.svp.domain_profile import DomainProfile, load_domain_profile
 from svp_rpe.svp.models import (
     AnalysisRPE,
@@ -17,6 +17,31 @@ from svp_rpe.svp.models import (
     SourceArtifact,
 )
 
+PRIMARY_STYLE_LAYERS = {"perceptual", "structural"}
+PRIMARY_CONFIDENCE_MIN = 0.70
+
+
+def _label_texts(labels: list[SemanticLabel]) -> list[str]:
+    return [label.label for label in labels]
+
+
+def _primary_style_labels(labels: list[SemanticLabel]) -> list[SemanticLabel]:
+    return [
+        label
+        for label in labels
+        if label.layer in PRIMARY_STYLE_LAYERS
+        and label.confidence >= PRIMARY_CONFIDENCE_MIN
+    ]
+
+
+def _candidate_context(labels: list[SemanticLabel]) -> list[dict]:
+    return [
+        label.model_dump()
+        for label in labels
+        if label.layer == "semantic_hypothesis"
+        and label.confidence < PRIMARY_CONFIDENCE_MIN
+    ]
+
 
 def _build_context(bundle: RPEBundle) -> dict:
     phys = bundle.physical
@@ -25,6 +50,7 @@ def _build_context(bundle: RPEBundle) -> dict:
         "source_path": bundle.audio_file,
         "por_core": sem.por_core,
         "por_surface": sem.por_surface,
+        "por_surface_labels": _label_texts(sem.por_surface),
         "grv_primary": sem.grv_anchor.primary,
         "duration_sec": phys.duration_sec,
         "sections": phys.structure,
@@ -81,7 +107,7 @@ def _build_analysis_rpe(bundle: RPEBundle, profile: DomainProfile, context: dict
 
     return AnalysisRPE(
         por_core=sem.por_core,
-        por_surface=context.get("por_surface", sem.por_surface),
+        por_surface=_label_texts(context.get("por_surface", sem.por_surface)),
         grv_primary=context.get("grv_primary", sem.grv_anchor.primary),
         bpm=phys.bpm,
         key=phys.key,
@@ -105,16 +131,18 @@ def _build_svp_for_generation(
 ) -> SVPForGeneration:
     sem = bundle.semantic
     por_surface = context.get("por_surface", sem.por_surface)
+    primary_labels = _primary_style_labels(por_surface)
 
     return SVPForGeneration(
         prompt_text=profile.render_prompt(context),
         constraints=profile.render_constraints(context),
-        style_tags=profile.build_style_tags(context, por_surface),
+        style_tags=_label_texts(primary_labels),
         tempo_range=context.get("tempo_range"),
         key_suggestion=context.get("key_suggestion"),
         generation_hints={
             "instrumentation_summary": sem.instrumentation_summary,
             "production_notes": sem.production_notes,
+            "candidate_context": _candidate_context(por_surface),
         },
     )
 
@@ -148,6 +176,7 @@ def generate_svp(bundle: RPEBundle, *, domain: str = "music") -> SVPBundle:
     profile = load_domain_profile(domain)
     context = _build_context(bundle)
     context["por_surface"] = profile.select_por_surface(context)
+    context["por_surface_labels"] = _label_texts(context["por_surface"])
     context["grv_primary"] = profile.select_grv_primary(context)
     return SVPBundle(
         domain=profile.domain,

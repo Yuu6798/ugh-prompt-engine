@@ -8,6 +8,7 @@ from svp_rpe.rpe.models import (
     GrvAnchor,
     PhysicalRPE,
     SectionMarker,
+    SemanticLabel,
     SemanticRPE,
     SpectralProfile,
 )
@@ -71,7 +72,22 @@ class TestSemanticRPE:
     def test_valid_construction(self):
         s = SemanticRPE(
             por_core="energetic driving track",
-            por_surface=["energetic", "driving"],
+            por_surface=[
+                SemanticLabel(
+                    label="energetic",
+                    layer="perceptual",
+                    confidence=0.9,
+                    evidence=["bpm=152 >= 140"],
+                    source_rule="perc.high_tempo",
+                ),
+                SemanticLabel(
+                    label="driving",
+                    layer="semantic_hypothesis",
+                    confidence=0.65,
+                    evidence=["bpm=152 >= 140", "active_rate=0.85 >= 0.8"],
+                    source_rule="hyp.energetic",
+                ),
+            ],
             grv_anchor=GrvAnchor(primary="bass-heavy"),
             delta_e_profile=DeltaEProfile(
                 transition_type="gradual_build", intensity=0.7,

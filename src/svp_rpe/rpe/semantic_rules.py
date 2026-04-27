@@ -1,57 +1,164 @@
-"""rpe/semantic_rules.py — rule-based physical-to-semantic mapping.
-
-Maps PhysicalRPE features to SemanticRPE labels using deterministic rules
-from config/semantic_rules.yaml. No LLM, no probabilistic inference.
-"""
+"""Rule-based physical-to-semantic mapping with evidence-bearing labels."""
 from __future__ import annotations
 
-from typing import List
+from typing import Any, Iterable, List, Literal, Mapping, Optional
 
 from svp_rpe.rpe.models import (
     DeltaEProfile,
     GrvAnchor,
     PhysicalRPE,
+    SemanticLabel,
     SemanticRPE,
 )
 from svp_rpe.utils.config_loader import load_config
 
-
-def _check_condition(condition: dict, phys: PhysicalRPE) -> bool:
-    """Check if a rule condition matches the physical features."""
-    for key, threshold in condition.items():
-        if key == "bpm_min" and (phys.bpm is None or phys.bpm < threshold):
-            return False
-        if key == "bpm_max" and (phys.bpm is None or phys.bpm > threshold):
-            return False
-        if key == "brightness_min" and phys.spectral_profile.brightness < threshold:
-            return False
-        if key == "brightness_max" and phys.spectral_profile.brightness > threshold:
-            return False
-        if key == "active_rate_min" and phys.active_rate < threshold:
-            return False
-        if key == "active_rate_max" and phys.active_rate > threshold:
-            return False
-        if key == "mode" and phys.mode != threshold:
-            return False
-        if key == "spectral_centroid_max" and phys.spectral_centroid > threshold:
-            return False
-        if key == "spectral_centroid_min" and phys.spectral_centroid < threshold:
-            return False
-        if key == "valley_depth_min" and phys.valley_depth < threshold:
-            return False
-        if key == "valley_depth_max" and phys.valley_depth > threshold:
-            return False
-        if key == "stereo_width_min":
-            if phys.stereo_profile is None or phys.stereo_profile.width < threshold:
-                return False
-        if key == "low_ratio_min" and phys.spectral_profile.low_ratio < threshold:
-            return False
-    return True
+SemanticLayer = Literal["perceptual", "structural", "semantic_hypothesis"]
+SEMANTIC_LAYERS: tuple[SemanticLayer, ...] = (
+    "perceptual",
+    "structural",
+    "semantic_hypothesis",
+)
+HIGH_CONFIDENCE = 0.70
 
 
-def _infer_grv_anchor(phys: PhysicalRPE, por_surface: List[str]) -> GrvAnchor:
+def _feature_value(name: str, phys: PhysicalRPE) -> Any:
+    """Return a comparable physical value by rule key."""
+    if name == "bpm":
+        return phys.bpm
+    if name == "brightness":
+        return phys.spectral_profile.brightness
+    if name == "active_rate":
+        return phys.active_rate
+    if name == "mode":
+        return phys.mode
+    if name == "spectral_centroid":
+        return phys.spectral_centroid
+    if name == "valley_depth":
+        return phys.valley_depth
+    if name == "stereo_width":
+        return phys.stereo_profile.width if phys.stereo_profile else None
+    if name == "low_ratio":
+        return phys.spectral_profile.low_ratio
+    if name == "mid_ratio":
+        return phys.spectral_profile.mid_ratio
+    if name == "high_ratio":
+        return phys.spectral_profile.high_ratio
+    if name == "crest_factor":
+        return phys.crest_factor
+    if name == "thickness":
+        return phys.thickness
+    if name == "onset_density":
+        return phys.onset_density
+    return getattr(phys, name, None)
+
+
+def _fmt(value: Any) -> str:
+    if isinstance(value, float):
+        return f"{value:.4g}"
+    return str(value)
+
+
+def _condition_key(raw_key: str) -> tuple[str, str]:
+    if raw_key.endswith("_min"):
+        return raw_key[: -len("_min")], ">="
+    if raw_key.endswith("_max"):
+        return raw_key[: -len("_max")], "<="
+    return raw_key, "=="
+
+
+def _condition_evidence(condition: Mapping[str, Any], phys: PhysicalRPE) -> Optional[list[str]]:
+    """Return evidence strings when all conditions match, otherwise None."""
+    evidence: list[str] = []
+    for raw_key, expected in condition.items():
+        feature_name, operator = _condition_key(raw_key)
+        actual = _feature_value(feature_name, phys)
+        if actual is None:
+            return None
+        if operator == ">=":
+            if not isinstance(actual, (int, float)) or float(actual) < float(expected):
+                return None
+        elif operator == "<=":
+            if not isinstance(actual, (int, float)) or float(actual) > float(expected):
+                return None
+        elif isinstance(actual, str) and isinstance(expected, str):
+            if actual.lower() != expected.lower():
+                return None
+        elif actual != expected:
+            return None
+        evidence.append(f"{feature_name}={_fmt(actual)} {operator} {_fmt(expected)}")
+    return evidence
+
+
+def _emit_labels(
+    *,
+    layer: SemanticLayer,
+    rule: Mapping[str, Any],
+    evidence: list[str],
+) -> list[SemanticLabel]:
+    labels: list[SemanticLabel] = []
+    source_rule = str(rule.get("id") or f"{layer}.unnamed")
+    for spec in rule.get("labels", []):
+        if isinstance(spec, str):
+            label = spec
+            confidence = 0.5
+        else:
+            label = str(spec.get("label", ""))
+            confidence = float(spec.get("confidence", 0.5))
+        if not label:
+            continue
+        labels.append(
+            SemanticLabel(
+                label=label,
+                layer=layer,
+                confidence=round(confidence, 4),
+                evidence=list(evidence),
+                source_rule=source_rule,
+            )
+        )
+    return labels
+
+
+def _dedupe_labels(labels: Iterable[SemanticLabel]) -> list[SemanticLabel]:
+    best: dict[tuple[str, str], SemanticLabel] = {}
+    order: list[tuple[str, str]] = []
+    for item in labels:
+        key = (item.layer, item.label)
+        if key not in best:
+            best[key] = item
+            order.append(key)
+            continue
+        if item.confidence > best[key].confidence:
+            best[key] = item
+    return [best[key] for key in order]
+
+
+def _validate_rule(layer: SemanticLayer, rule: Mapping[str, Any]) -> None:
+    if layer == "semantic_hypothesis" and len(rule.get("condition", {})) < 2:
+        rule_id = rule.get("id", "<unnamed>")
+        raise ValueError(f"semantic_hypothesis rule requires >=2 conditions: {rule_id}")
+
+
+def _labels_from_rules(phys: PhysicalRPE, config: Mapping[str, Any]) -> tuple[list[SemanticLabel], list[str]]:
+    labels: list[SemanticLabel] = []
+    confidence_notes: list[str] = []
+    for layer in SEMANTIC_LAYERS:
+        for rule in config.get(layer, []):
+            _validate_rule(layer, rule)
+            condition = rule.get("condition", {})
+            evidence = _condition_evidence(condition, phys)
+            if evidence is None:
+                continue
+            emitted = _emit_labels(layer=layer, rule=rule, evidence=evidence)
+            labels.extend(emitted)
+            confidence_notes.append(
+                f"rule matched: {rule.get('id', '<unnamed>')} -> "
+                f"{[label.label for label in emitted]}"
+            )
+    return _dedupe_labels(labels), confidence_notes
+
+
+def _infer_grv_anchor(phys: PhysicalRPE, por_surface: List[SemanticLabel]) -> GrvAnchor:
     """Determine gravity anchor from physical features."""
-    # Primary based on strongest spectral region
     sp = phys.spectral_profile
     if sp.low_ratio >= sp.mid_ratio and sp.low_ratio >= sp.high_ratio:
         primary = "bass-heavy"
@@ -101,13 +208,20 @@ def _infer_delta_e_profile(phys: PhysicalRPE) -> DeltaEProfile:
     )
 
 
-def _build_por_core(por_surface: List[str], phys: PhysicalRPE) -> str:
-    """Build core semantic description from surface labels and features."""
-    if not por_surface:
+def _build_por_core(por_surface: List[SemanticLabel], phys: PhysicalRPE) -> str:
+    """Build core description from high-confidence perceptual/structural labels."""
+    high_conf_labels = sorted(
+        [
+            label
+            for label in por_surface
+            if label.layer in ("perceptual", "structural")
+            and label.confidence >= HIGH_CONFIDENCE
+        ],
+        key=lambda label: (-label.confidence, label.label),
+    )[:3]
+    if not high_conf_labels:
         return f"Audio with {phys.spectral_profile.brightness:.0%} brightness"
-
-    core_labels = por_surface[:3]
-    return f"A {', '.join(core_labels)} sonic character"
+    return f"A {', '.join(label.label for label in high_conf_labels)} sonic character"
 
 
 def _infer_cultural_context(phys: PhysicalRPE) -> List[str]:
@@ -127,43 +241,18 @@ def _infer_cultural_context(phys: PhysicalRPE) -> List[str]:
 
 
 def generate_semantic(phys: PhysicalRPE) -> SemanticRPE:
-    """Generate SemanticRPE from PhysicalRPE using rule-based mapping.
-
-    Loads rules from config/semantic_rules.yaml.
-    Deterministic: same PhysicalRPE → same SemanticRPE.
-    """
+    """Generate SemanticRPE from PhysicalRPE using deterministic rules."""
     try:
         config = load_config("semantic_rules")
-        rules = config.get("rules", [])
     except FileNotFoundError:
-        rules = []
+        config = {}
 
-    # Apply rules to get surface labels
-    por_surface: List[str] = []
-    confidence_notes: List[str] = []
-
-    for rule in rules:
-        condition = rule.get("condition", {})
-        labels = rule.get("por_labels", [])
-        if _check_condition(condition, phys):
-            por_surface.extend(labels)
-            confidence_notes.append(f"rule matched: {condition} → {labels}")
-
-    # Deduplicate while preserving order
-    seen = set()
-    unique_surface: List[str] = []
-    for label in por_surface:
-        if label not in seen:
-            unique_surface.append(label)
-            seen.add(label)
-    por_surface = unique_surface
-
+    por_surface, confidence_notes = _labels_from_rules(phys, config)
     por_core = _build_por_core(por_surface, phys)
     grv_anchor = _infer_grv_anchor(phys, por_surface)
     delta_e_profile = _infer_delta_e_profile(phys)
     cultural_context = _infer_cultural_context(phys)
 
-    # Instrumentation summary (heuristic)
     instrumentation = "Unknown instrumentation"
     if phys.spectral_profile.low_ratio > 0.35:
         instrumentation = "Bass-heavy production with prominent low-end"
