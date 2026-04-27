@@ -1,0 +1,5 @@
+# SVP generation templates
+default:
+  prompt_prefix: "Create a musical piece with the following characteristics:"
+  constraint_format: "- {constraint}"
+  style_tag_format: "#{tag}"

@@ -31,6 +31,7 @@ svprpe = "svp_rpe.cli:app"
 where = ["src"]
 
 [tool.setuptools.package-data]
+"svp_rpe.config" = ["*.yaml"]
 "svp_rpe.config.domain_profiles" = ["*.yaml"]
 
 [tool.pytest.ini_options]

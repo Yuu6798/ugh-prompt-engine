@@ -171,6 +171,16 @@ def test_default_profile_falls_back_to_packaged_resource(monkeypatch) -> None:
     assert "bpm" in profile.diff_metric_names
 
 
+def test_generate_svp_works_with_packaged_music_profile(monkeypatch) -> None:
+    monkeypatch.setattr(domain_profile_module, "_local_profile_paths", lambda domain: [])
+
+    svp = generate_svp(_make_rpe())
+
+    assert svp.domain == "music"
+    assert svp.svp_for_generation.constraints
+    assert svp.minimal_svp.de == "gradual_build (0.70)"
+
+
 def test_physical_diff_keeps_legacy_fields_and_generic_metrics() -> None:
     legacy = PhysicalDiff(bpm_diff=8.0, key_match=True, rms_diff=0.02)
 

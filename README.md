@@ -2,6 +2,14 @@
 
 SVP (Semantic Vector Prompt) + RPE (Reverse Prompt Engineering) — UGHer ecosystem prompt infrastructure.
 
+## Current Status
+
+- **Current status: PoC**
+- **Not yet validated as production music quality evaluator**
+- Deterministic local pipeline, but score validity requires a validation dataset.
+
+See [Validation Status](docs/validation.md) for the current validation boundary and required ground truth.
+
 ## Overview
 
 音楽ファイル（WAV/MP3）から RPE を抽出し、決定論的に SVP を生成し、
@@ -113,6 +121,7 @@ svprpe --help
 
 ## Documentation
 
+- [Validation Status](docs/validation.md) — PoC label, unvalidated metrics, and required ground truth
 - [Architecture](docs/architecture.md) — Pipeline design and module overview
 - [Metrics](docs/metrics.md) — Physical metric definitions and Pro baseline
 - [CLI Reference](docs/cli.md) — Command usage
