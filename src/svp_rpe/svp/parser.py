@@ -1,9 +1,9 @@
-"""svp/parser.py — Parse external SVP files (YAML or text) into ParsedSVP."""
+"""svp/parser.py - Parse external SVP files (YAML or text) into ParsedSVP."""
 from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import yaml
 
@@ -15,12 +15,22 @@ def parse_svp_yaml(data: dict) -> ParsedSVP:
     analysis = data.get("analysis_rpe", {})
     gen = data.get("svp_for_generation", {})
     minimal = data.get("minimal_svp", {})
+    lineage = data.get("data_lineage", {})
+    source_artifact = lineage.get("source_artifact")
+    if source_artifact is None and lineage.get("source_audio"):
+        source_artifact = {
+            "type": "audio",
+            "path": lineage["source_audio"],
+            "metadata": {"legacy_field": "source_audio"},
+        }
 
     return ParsedSVP(
+        domain=data.get("domain", "music"),
+        source_artifact=source_artifact,
         por_core=analysis.get("por_core", minimal.get("c", "")),
         por_surface=analysis.get("por_surface", []),
         grv_primary=analysis.get("grv_primary", ""),
-        grv_anchors=[],  # populated only from text-format SVPs
+        grv_anchors=[],
         delta_e_profile=minimal.get("de", ""),
         bpm=analysis.get("bpm"),
         key=analysis.get("key"),
@@ -28,9 +38,22 @@ def parse_svp_yaml(data: dict) -> ParsedSVP:
         duration_sec=analysis.get("duration_sec"),
         constraints=gen.get("constraints", []),
         style_tags=gen.get("style_tags", []),
-        instrumentation_notes=[],
+        instrumentation_notes=_extract_instrumentation_notes(gen),
         raw_text=str(data),
     )
+
+
+def _extract_instrumentation_notes(gen: dict) -> list[str]:
+    if gen.get("instrumentation_notes"):
+        value: Any = gen["instrumentation_notes"]
+    else:
+        hints = gen.get("generation_hints", {})
+        value = hints.get("instrumentation_notes") or hints.get("instrumentation_summary")
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return [str(value)]
 
 
 def _extract_field(text: str, pattern: str) -> str:
@@ -57,7 +80,7 @@ def parse_svp_text(text: str) -> ParsedSVP:
     por_surface = [s.strip() for s in por_surface_raw.split(",") if s.strip()]
 
     grv_primary = _extract_field(text, r"(?:Gravity|grv_primary|grv)[:\s]*(.+)")
-    delta_e = _extract_field(text, r"(?:ΔE|delta_e|Energy)[:\s]*(.+)")
+    delta_e = _extract_field(text, r"(?:ΔE|ﾎ忍|delta_e|Energy)[:\s]*(.+)")
 
     bpm = _extract_float(text, r"(?:BPM|Tempo)[:\s]*~?(\d+\.?\d*)")
     key_raw = _extract_field(text, r"Key[:\s]*(.+)")
@@ -66,11 +89,12 @@ def parse_svp_text(text: str) -> ParsedSVP:
 
     duration = _extract_float(text, r"Duration[:\s]*(\d+\.?\d*)")
 
-    # Extract constraints from bullet points
-    constraints = re.findall(r"[-•]\s*(.+)", text)
+    constraints = re.findall(r"[-•窶｢]\s*(.+)", text)
     style_tags = re.findall(r"#(\w+)", text)
 
     return ParsedSVP(
+        domain="music",
+        source_artifact=None,
         por_core=por_core,
         por_surface=por_surface,
         grv_primary=grv_primary,

@@ -1,27 +1,53 @@
-"""eval/diff_models.py — Data models for comparison and diagnostics."""
+"""eval/diff_models.py - Data models for comparison and diagnostics."""
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Any, ClassVar, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 
 class SemanticDiff(BaseModel):
     """Semantic layer difference between reference and candidate."""
 
     schema_version: str = "1.0"
-    por_lexical_similarity: float    # [0,1] token/synonym overlap of por_core
-    grv_anchor_match: float          # [0,1] anchor alignment
-    delta_e_profile_alignment: float  # [0,1] energy profile match
-    instrumentation_context_alignment: float  # [0,1]
+    por_lexical_similarity: float
+    grv_anchor_match: float
+    delta_e_profile_alignment: float
+    instrumentation_context_alignment: float
     overall: float
-    details: Dict[str, str] = {}
+    details: Dict[str, str] = Field(default_factory=dict)
+
+
+class MetricDiff(BaseModel):
+    """Generic metric comparison item."""
+
+    name: str
+    actual: Any = None
+    target: Any = None
+    diff: Optional[float] = None
+    unit: Optional[str] = None
+    tolerance: Optional[float] = None
+    passed: Optional[bool] = None
+
+    @model_validator(mode="after")
+    def derive_diff_and_passed(self) -> "MetricDiff":
+        if self.diff is None and isinstance(self.actual, (int, float)) and isinstance(
+            self.target, (int, float)
+        ):
+            self.diff = abs(float(self.actual) - float(self.target))
+        if self.passed is None:
+            if self.tolerance is not None and self.diff is not None:
+                self.passed = self.diff <= self.tolerance
+            elif self.target is not None:
+                self.passed = self.actual == self.target
+        return self
 
 
 class PhysicalDiff(BaseModel):
     """Physical layer difference between reference and candidate."""
 
     schema_version: str = "1.0"
+    domain: str = "music"
     bpm_diff: Optional[float] = None
     key_match: bool = False
     rms_diff: float = 0.0
@@ -29,20 +55,59 @@ class PhysicalDiff(BaseModel):
     active_rate_diff: float = 0.0
     thickness_diff: float = 0.0
     spectral_centroid_diff: float = 0.0
+    metrics: Dict[str, MetricDiff] = Field(default_factory=dict)
     overall: float = 0.0
-    details: Dict[str, str] = {}
+    details: Dict[str, str] = Field(default_factory=dict)
+
+    LEGACY_METRIC_FIELDS: ClassVar[tuple[str, ...]] = (
+        "bpm_diff",
+        "key_match",
+        "rms_diff",
+        "valley_diff",
+        "active_rate_diff",
+        "thickness_diff",
+        "spectral_centroid_diff",
+    )
+
+    @model_validator(mode="after")
+    def populate_generic_metrics(self) -> "PhysicalDiff":
+        if self.metrics:
+            return self
+        for field_name in self.LEGACY_METRIC_FIELDS:
+            value = getattr(self, field_name)
+            if field_name == "bpm_diff" and value is None:
+                continue
+            if field_name.endswith("_match"):
+                self.metrics[field_name] = MetricDiff(
+                    name=field_name,
+                    actual=value,
+                    target=True,
+                    passed=bool(value),
+                )
+            else:
+                signed = float(value)
+                self.metrics[field_name] = MetricDiff(
+                    name=field_name,
+                    actual=signed,
+                    target=0.0,
+                    diff=abs(signed),
+                )
+        return self
+
+    def metric(self, name: str) -> Optional[MetricDiff]:
+        return self.metrics.get(name)
 
 
 class ValleyDiagnostics(BaseModel):
     """Diagnostic data for valley_depth computation."""
 
     schema_version: str = "1.0"
-    method: str                    # "rms_percentile" | "section_ar" | "hybrid"
+    method: str
     rms_p90: float = 0.0
     rms_p10: float = 0.0
     ar_main: float = 0.0
     ar_min: float = 0.0
-    chorus_sections: List[str] = []
+    chorus_sections: List[str] = Field(default_factory=list)
     lowest_section: str = ""
     confidence: float = 0.5
     rms_percentile_value: float = 0.0
@@ -68,18 +133,20 @@ class ParsedSVP(BaseModel):
     """Parsed external SVP file."""
 
     schema_version: str = "1.0"
+    domain: str = "music"
+    source_artifact: Optional[Dict[str, Any]] = None
     por_core: str = ""
-    por_surface: List[str] = []
+    por_surface: List[str] = Field(default_factory=list)
     grv_primary: str = ""
-    grv_anchors: List[str] = []
+    grv_anchors: List[str] = Field(default_factory=list)
     delta_e_profile: str = ""
     bpm: Optional[float] = None
     key: Optional[str] = None
     mode: Optional[str] = None
     duration_sec: Optional[float] = None
-    constraints: List[str] = []
-    style_tags: List[str] = []
-    instrumentation_notes: List[str] = []
+    constraints: List[str] = Field(default_factory=list)
+    style_tags: List[str] = Field(default_factory=list)
+    instrumentation_notes: List[str] = Field(default_factory=list)
     raw_text: str = ""
 
 
@@ -91,6 +158,6 @@ class ComparisonResult(BaseModel):
     physical_diff: PhysicalDiff
     action_hints: List[str]
     overall_score: float
-    mode: str = "compare"  # "self" | "compare"
+    mode: str = "compare"
     reference_source: str = ""
     candidate_source: str = ""

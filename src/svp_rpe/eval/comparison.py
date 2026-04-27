@@ -5,12 +5,13 @@ Generates action hints from detected diffs.
 """
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Any, Iterable, List, Mapping, Optional
 
 from svp_rpe.eval.anchor_matcher import grv_anchor_match
 from svp_rpe.eval.delta_e_alignment import delta_e_profile_alignment
 from svp_rpe.eval.diff_models import (
     ComparisonResult,
+    MetricDiff,
     ParsedSVP,
     PhysicalDiff,
     SemanticDiff,
@@ -124,6 +125,55 @@ def compute_physical_diff(
         spectral_centroid_diff=sc_diff,
         overall=overall,
     )
+
+
+def compare_metric_values(
+    reference: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+    *,
+    metric_names: Optional[Iterable[str]] = None,
+    tolerances: Optional[Mapping[str, float]] = None,
+    domain: str = "generic",
+) -> PhysicalDiff:
+    """Compare arbitrary domain metrics into generic MetricDiff entries."""
+    names = list(metric_names or sorted(set(reference.keys()) & set(candidate.keys())))
+    tolerance_map = dict(tolerances or {})
+    metrics: dict[str, MetricDiff] = {}
+    scores: list[float] = []
+
+    for name in names:
+        if name not in reference or name not in candidate:
+            continue
+        ref_value = reference[name]
+        cand_value = candidate[name]
+        tolerance = tolerance_map.get(name)
+        if isinstance(ref_value, (int, float)) and isinstance(cand_value, (int, float)):
+            diff = abs(float(cand_value) - float(ref_value))
+            passed = diff <= tolerance if tolerance is not None else None
+            metric = MetricDiff(
+                name=name,
+                actual=cand_value,
+                target=ref_value,
+                diff=diff,
+                tolerance=tolerance,
+                passed=passed,
+            )
+        else:
+            metric = MetricDiff(
+                name=name,
+                actual=cand_value,
+                target=ref_value,
+                passed=cand_value == ref_value,
+            )
+        metrics[name] = metric
+
+        if metric.passed is not None:
+            scores.append(1.0 if metric.passed else 0.0)
+        elif metric.diff is not None:
+            scores.append(1.0 / (1.0 + metric.diff))
+
+    overall = round(sum(scores) / max(len(scores), 1), 4)
+    return PhysicalDiff(domain=domain, metrics=metrics, overall=overall)
 
 
 # ---------------------------------------------------------------------------
