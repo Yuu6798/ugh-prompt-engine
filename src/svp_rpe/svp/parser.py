@@ -57,7 +57,7 @@ def _as_domain(value: Any) -> str:
 
 
 def _extract_instrumentation_notes(gen: Mapping[str, Any]) -> list[str]:
-    if gen.get("instrumentation_notes"):
+    if "instrumentation_notes" in gen:
         value: Any = gen["instrumentation_notes"]
     else:
         hints = _as_mapping(gen.get("generation_hints"))

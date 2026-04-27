@@ -10,7 +10,9 @@ import yaml
 
 def load_config(name: str) -> dict[str, Any]:
     """Load YAML config, preferring local config/ over packaged resources."""
-    data = _load_local_config(name) or _load_packaged_config(name)
+    data = _load_local_config(name)
+    if data is None:
+        data = _load_packaged_config(name)
     if data is None:
         searched = ", ".join(str(p) for p in _local_config_paths(name))
         raise FileNotFoundError(

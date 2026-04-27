@@ -28,6 +28,14 @@ def test_load_packaged_configs_without_local_config(monkeypatch):
     assert "default" in load_config("svp_templates")
 
 
+def test_empty_local_config_override_is_preserved(monkeypatch, tmp_path):
+    path = tmp_path / "semantic_rules.yaml"
+    path.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(config_loader_module, "_local_config_paths", lambda name: [path])
+
+    assert load_config("semantic_rules") == {}
+
+
 def test_load_nonexistent_raises():
     with pytest.raises(FileNotFoundError):
         load_config("nonexistent_config")
