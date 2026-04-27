@@ -140,12 +140,16 @@ class DomainProfile(ProfileModel):
         existing = _value_for("delta_e_profile", context)
         if existing:
             return str(existing)
-        for rule in self.delta_e_vocab:
-            if _matches(rule.condition, context):
-                label = rule.label
-                break
+        transition = _value_for("delta_e_transition", context)
+        if transition:
+            label = str(transition)
         else:
-            label = "stable"
+            for rule in self.delta_e_vocab:
+                if _matches(rule.condition, context):
+                    label = rule.label
+                    break
+            else:
+                label = "stable"
         intensity = _value_for("delta_e_intensity", context)
         if isinstance(intensity, (int, float)):
             return f"{label} ({float(intensity):.2f})"

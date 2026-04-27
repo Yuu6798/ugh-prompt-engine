@@ -85,6 +85,17 @@ def test_generated_yaml_uses_source_artifact_not_source_audio() -> None:
     assert svp.minimal_svp.de == "gradual_build (0.70)"
 
 
+def test_minimal_svp_preserves_extracted_delta_e_transition() -> None:
+    rpe = _make_rpe()
+    rpe.semantic.delta_e_profile.transition_type = "flat"
+
+    svp = generate_svp(rpe)
+    parsed = parse_svp_yaml(svp.model_dump(exclude_none=True))
+
+    assert svp.minimal_svp.de == "flat (0.70)"
+    assert parsed.delta_e_profile == "flat (0.70)"
+
+
 def test_parser_extracts_new_source_and_generation_hints() -> None:
     svp = generate_svp(_make_rpe())
     parsed = parse_svp_yaml(svp.model_dump(exclude_none=True))
