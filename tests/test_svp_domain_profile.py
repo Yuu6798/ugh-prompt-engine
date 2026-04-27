@@ -82,6 +82,7 @@ def test_generated_yaml_uses_source_artifact_not_source_audio() -> None:
     assert "source_audio:" not in yaml_text
     assert "BPM range: 118-138" in yaml_text
     assert svp.evaluation_criteria.metric_checks["domain"] == "music"
+    assert svp.minimal_svp.de == "gradual_build (0.70)"
 
 
 def test_parser_extracts_new_source_and_generation_hints() -> None:
@@ -203,6 +204,21 @@ def test_numeric_metric_without_tolerance_uses_distance_score() -> None:
     assert metric.passed is None
     assert metric.diff == 0.07999999999999996
     assert 0.9 < generic.overall < 1.0
+
+
+def test_boolean_metric_uses_categorical_scoring() -> None:
+    generic = compare_metric_values(
+        {"has_hook": True},
+        {"has_hook": False},
+        metric_names=["has_hook"],
+        domain="video",
+    )
+
+    metric = generic.metric("has_hook")
+    assert metric is not None
+    assert metric.diff is None
+    assert metric.passed is False
+    assert generic.overall == 0.0
 
 
 def test_generic_diff_with_no_overlapping_metrics_stays_empty() -> None:

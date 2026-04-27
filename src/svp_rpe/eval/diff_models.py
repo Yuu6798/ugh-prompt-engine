@@ -31,15 +31,19 @@ class MetricDiff(BaseModel):
 
     @model_validator(mode="after")
     def derive_diff_and_passed(self) -> "MetricDiff":
-        if self.diff is None and isinstance(self.actual, (int, float)) and isinstance(
-            self.target, (int, float)
-        ):
+        actual_is_numeric = isinstance(self.actual, (int, float)) and not isinstance(
+            self.actual, bool
+        )
+        target_is_numeric = isinstance(self.target, (int, float)) and not isinstance(
+            self.target, bool
+        )
+        if self.diff is None and actual_is_numeric and target_is_numeric:
             self.diff = abs(float(self.actual) - float(self.target))
         if self.passed is None:
             if self.tolerance is not None and self.diff is not None:
                 self.passed = self.diff <= self.tolerance
             elif self.target is not None and not (
-                isinstance(self.actual, (int, float)) and isinstance(self.target, (int, float))
+                actual_is_numeric and target_is_numeric
             ):
                 self.passed = self.actual == self.target
         return self

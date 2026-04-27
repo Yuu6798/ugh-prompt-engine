@@ -24,6 +24,10 @@ def _clamp(v: float) -> float:
     return max(0.0, min(1.0, v))
 
 
+def _is_numeric_metric_value(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 def _instrumentation_alignment(notes_a: List[str], notes_b: List[str]) -> float:
     """Token overlap of instrumentation notes."""
     if not notes_a and not notes_b:
@@ -147,7 +151,7 @@ def compare_metric_values(
         ref_value = reference[name]
         cand_value = candidate[name]
         tolerance = tolerance_map.get(name)
-        if isinstance(ref_value, (int, float)) and isinstance(cand_value, (int, float)):
+        if _is_numeric_metric_value(ref_value) and _is_numeric_metric_value(cand_value):
             diff = abs(float(cand_value) - float(ref_value))
             passed = diff <= tolerance if tolerance is not None else None
             metric = MetricDiff(

@@ -80,12 +80,12 @@ minimal_constraint_templates:
 delta_e_vocab:
   - condition: {valley_depth_min: 0.3}
     label: dramatic_contrast
-  - condition: {valley_depth_max: 0.1, active_rate_min: 0.8}
-    label: continuous_pressure
+  - condition: {valley_depth_min: 0.15}
+    label: gradual_build
   - condition: {active_rate_min: 0.8}
-    label: high_continuity
+    label: sustained_energy
   - condition: {}
-    label: moderate_motion
+    label: flat
 diff_metrics:
   - name: bpm
     tolerance: 10
