@@ -1,4 +1,4 @@
-"""svp/render_yaml.py - SVPBundle to YAML output."""
+"""svp/render_yaml.py — SVPBundle → YAML output."""
 from __future__ import annotations
 
 import yaml

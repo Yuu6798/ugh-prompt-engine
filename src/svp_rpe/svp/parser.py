@@ -1,4 +1,4 @@
-"""svp/parser.py - Parse external SVP files (YAML or text) into ParsedSVP."""
+"""svp/parser.py — Parse external SVP files (YAML or text) into ParsedSVP."""
 from __future__ import annotations
 
 import re
@@ -80,7 +80,7 @@ def parse_svp_text(text: str) -> ParsedSVP:
     por_surface = [s.strip() for s in por_surface_raw.split(",") if s.strip()]
 
     grv_primary = _extract_field(text, r"(?:Gravity|grv_primary|grv)[:\s]*(.+)")
-    delta_e = _extract_field(text, r"(?:ΔE|ﾎ忍|delta_e|Energy)[:\s]*(.+)")
+    delta_e = _extract_field(text, r"(?:ΔE|delta_e|Energy)[:\s]*(.+)")
 
     bpm = _extract_float(text, r"(?:BPM|Tempo)[:\s]*~?(\d+\.?\d*)")
     key_raw = _extract_field(text, r"Key[:\s]*(.+)")
@@ -89,7 +89,8 @@ def parse_svp_text(text: str) -> ParsedSVP:
 
     duration = _extract_float(text, r"Duration[:\s]*(\d+\.?\d*)")
 
-    constraints = re.findall(r"[-•窶｢]\s*(.+)", text)
+    # Extract constraints from bullet points
+    constraints = re.findall(r"[-•]\s*(.+)", text)
     style_tags = re.findall(r"#(\w+)", text)
 
     return ParsedSVP(

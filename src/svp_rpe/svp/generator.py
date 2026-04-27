@@ -1,7 +1,7 @@
-"""svp/generator.py - RPEBundle to SVPBundle deterministic conversion.
+"""svp/generator.py — RPEBundle → SVPBundle deterministic conversion.
 
 Transforms a complete RPE analysis into a structured prompt (SVP).
-Deterministic: same RPEBundle to same SVPBundle.
+Deterministic: same RPEBundle → same SVPBundle.
 """
 from __future__ import annotations
 
@@ -141,9 +141,9 @@ def _build_minimal_svp(bundle: RPEBundle, profile: DomainProfile, context: dict)
 
 
 def generate_svp(bundle: RPEBundle, *, domain: str = "music") -> SVPBundle:
-    """Convert RPEBundle to SVPBundle.
+    """Convert RPEBundle → SVPBundle.
 
-    Deterministic: same RPEBundle to same SVPBundle.
+    Deterministic: same RPEBundle → same SVPBundle.
     """
     profile = load_domain_profile(domain)
     context = _build_context(bundle)

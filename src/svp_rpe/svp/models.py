@@ -1,4 +1,4 @@
-"""svp/models.py - SVP data models (Pydantic)."""
+"""svp/models.py — SVP data models (Pydantic)."""
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional

@@ -1,4 +1,4 @@
-"""eval/diff_models.py - Data models for comparison and diagnostics."""
+"""eval/diff_models.py — Data models for comparison and diagnostics."""
 from __future__ import annotations
 
 from typing import Any, ClassVar, Dict, List, Optional
