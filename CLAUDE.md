@@ -155,6 +155,7 @@ examples/                      # sample_input/ + expected_output/
 | [`docs/cli.md`](docs/cli.md) | 6 コマンドのリファレンス: extract / generate / evaluate / compare / run / batch |
 | [`docs/roadmap.md`](docs/roadmap.md) | PoC (達成済み) と Pre-prototype マイルストーン (P1–P5)、推奨実行順 |
 | [`docs/roadmap_goal1.md`](docs/roadmap_goal1.md) | 目的1（定量観測）完成までのフェーズ Q0–Q5、完成定義、クリティカルパス |
+| [`docs/validation.md`](docs/validation.md) | Q0-5 baseline: 5 曲の対真値比較（BPM / key / segment）、Q0 完了基準のチェック、Coverage Matrix |
 
 ## ドキュメント管理ポリシー
 
