@@ -1,0 +1,89 @@
+schema_version: '1.0'
+domain: music
+data_lineage:
+  schema_version: '1.0'
+  source_artifact:
+    schema_version: '1.0'
+    type: audio
+    path: examples/sample_input/synth_04_waltz_fsharp_minor.wav
+    metadata:
+      duration_sec: 45.0
+      sample_rate: 22050
+      channels: 1
+      format: wav
+  rpe_version: '1.0'
+  svp_version: '1.0'
+  generation_method: deterministic_rule_based
+analysis_rpe:
+  schema_version: '1.0'
+  por_core: A bass-heavy, continuous, grounded sonic character
+  por_surface:
+  - bass-heavy
+  - grounded
+  - continuous
+  - wall-like
+  grv_primary: bass-heavy
+  bpm: 136.0
+  key: F#
+  mode: minor
+  duration_sec: 45.0
+  structure_summary: '6 sections: Intro, Bridge, Chorus, Verse, Chorus, Outro'
+  domain_features:
+    rms_mean: 0.2184
+    active_rate: 0.9923
+    valley_depth: 0.0958
+    thickness: 1.4218
+    spectral_centroid: 815.92
+svp_for_generation:
+  schema_version: '1.0'
+  prompt_text: 'Core character: A bass-heavy, continuous, grounded sonic character
+
+    Gravity anchor: bass-heavy
+
+    Energy profile: sustained_energy (intensity 0.50)
+
+    Tempo: ~136 BPM'
+  constraints:
+  - 'BPM range: 126-146'
+  - 'Active rate target: 99%'
+  - 'Crest factor target: ~3.6'
+  style_tags:
+  - bass-heavy
+  - grounded
+  - continuous
+  - wall-like
+  tempo_range: 126-146
+  key_suggestion: F# minor
+  generation_hints:
+    instrumentation_summary: Bass-heavy production with prominent low-end
+    production_notes:
+    - Continuous energy, minimal silence
+    candidate_context: []
+evaluation_criteria:
+  schema_version: '1.0'
+  por_check: 'Maintains core character: A bass-heavy, continuous, grounded sonic character'
+  grv_check: 'Preserves gravity anchor: bass-heavy'
+  delta_e_check: Energy follows sustained_energy pattern
+  physical_checks:
+  - RMS within +/-20% of 0.218
+  - Active rate within +/-10% of 99%
+  - BPM within +/-10 of 136
+  - Key matches F# minor
+  metric_checks:
+    domain: music
+    metrics:
+    - bpm
+    - key
+    - rms_mean
+    - valley_depth
+    - active_rate
+    - thickness
+    - spectral_centroid
+minimal_svp:
+  schema_version: '1.0'
+  c: A bass-heavy, continuous, grounded sonic character
+  g:
+  - bpm~136
+  - key=F#
+  - energy=sustained_energy
+  de: sustained_energy (0.50)

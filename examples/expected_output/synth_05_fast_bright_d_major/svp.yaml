@@ -1,0 +1,85 @@
+schema_version: '1.0'
+domain: music
+data_lineage:
+  schema_version: '1.0'
+  source_artifact:
+    schema_version: '1.0'
+    type: audio
+    path: examples/sample_input/synth_05_fast_bright_d_major.wav
+    metadata:
+      duration_sec: 42.0
+      sample_rate: 22050
+      channels: 1
+      format: wav
+  rpe_version: '1.0'
+  svp_version: '1.0'
+  generation_method: deterministic_rule_based
+analysis_rpe:
+  schema_version: '1.0'
+  por_core: A high_tempo, mid-focused sonic character
+  por_surface:
+  - high_tempo
+  - mid-focused
+  grv_primary: mid-focused
+  bpm: 172.27
+  key: D
+  mode: major
+  duration_sec: 42.0
+  structure_summary: '6 sections: Intro, Bridge, Chorus, Chorus, Verse, Outro'
+  domain_features:
+    rms_mean: 0.2101
+    active_rate: 0.9917
+    valley_depth: 0.1058
+    thickness: 1.3728
+    spectral_centroid: 1055.74
+svp_for_generation:
+  schema_version: '1.0'
+  prompt_text: 'Core character: A high_tempo, mid-focused sonic character
+
+    Gravity anchor: mid-focused
+
+    Energy profile: sustained_energy (intensity 0.50)
+
+    Tempo: ~172 BPM'
+  constraints:
+  - 'BPM range: 162-182'
+  - 'Active rate target: 99%'
+  - 'Crest factor target: ~3.8'
+  style_tags:
+  - high_tempo
+  - mid-focused
+  tempo_range: 162-182
+  key_suggestion: D major
+  generation_hints:
+    instrumentation_summary: Mid-focused production
+    production_notes:
+    - Continuous energy, minimal silence
+    candidate_context: []
+evaluation_criteria:
+  schema_version: '1.0'
+  por_check: 'Maintains core character: A high_tempo, mid-focused sonic character'
+  grv_check: 'Preserves gravity anchor: mid-focused'
+  delta_e_check: Energy follows sustained_energy pattern
+  physical_checks:
+  - RMS within +/-20% of 0.210
+  - Active rate within +/-10% of 99%
+  - BPM within +/-10 of 172
+  - Key matches D major
+  metric_checks:
+    domain: music
+    metrics:
+    - bpm
+    - key
+    - rms_mean
+    - valley_depth
+    - active_rate
+    - thickness
+    - spectral_centroid
+minimal_svp:
+  schema_version: '1.0'
+  c: A high_tempo, mid-focused sonic character
+  g:
+  - bpm~172
+  - key=D
+  - energy=sustained_energy
+  de: sustained_energy (0.50)

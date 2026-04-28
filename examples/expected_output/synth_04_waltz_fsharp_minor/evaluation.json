@@ -1,0 +1,27 @@
+{
+  "rpe_score": {
+    "schema_version": "1.0",
+    "rms_score": 0.7347,
+    "active_rate_score": 0.8454,
+    "crest_factor_score": 0.7216,
+    "valley_score": 0.5977,
+    "thickness_score": 0.6584,
+    "overall": 0.7116
+  },
+  "ugher_score": {
+    "schema_version": "1.0",
+    "por_similarity": 0.3158,
+    "grv_consistency": 1.0,
+    "delta_e_assessment": 1.0,
+    "physical_accuracy": 1.0,
+    "overall": 0.7947
+  },
+  "integrated_score": {
+    "schema_version": "1.0",
+    "ugher_score": 0.7947,
+    "rpe_score": 0.7116,
+    "integrated_score": 0.7531,
+    "ugher_weight": 0.5,
+    "rpe_weight": 0.5
+  }
+}
