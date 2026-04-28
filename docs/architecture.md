@@ -100,3 +100,10 @@ Audio (WAV/MP3) → RPE Extraction → SVP Generation → Evaluation
 - Section labels are energy-heuristic (not ML-based)
 - Time signature fixed at 4/4 (low confidence)
 - Batch mode is sequential (no parallel processing)
+- **Scorer / comparison は semantic v2.0 の新情報（`SemanticLabel.confidence` /
+  `evidence` / `layer`）を未活用** — `eval/scorer_ugher.py` と
+  `eval/comparison.py` は `por_core` / `grv_anchor` / `delta_e_profile` のみを
+  参照する。PR #8 で導入された evidence-bearing 層の confidence 重み付けや
+  layer ごとのスコア分離は未実装。改善余地として
+  [`roadmap_goal1.md`](roadmap_goal1.md) Q4 の "未活用 / フォローアップ余地"
+  節（Q4-fu1）を参照
