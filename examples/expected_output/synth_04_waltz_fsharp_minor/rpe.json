@@ -1,0 +1,152 @@
+{
+  "schema_version": "1.0",
+  "physical": {
+    "schema_version": "1.0",
+    "bpm": 136.0,
+    "bpm_confidence": 0.8667,
+    "key": "F#",
+    "mode": "minor",
+    "key_confidence": 0.9782,
+    "duration_sec": 45.0,
+    "sample_rate": 22050,
+    "time_signature": "4/4",
+    "time_signature_confidence": 0.3,
+    "structure": [
+      {
+        "schema_version": "1.0",
+        "label": "Intro",
+        "start_sec": 0.0,
+        "end_sec": 6.6873,
+        "rms_mean": 0.2383
+      },
+      {
+        "schema_version": "1.0",
+        "label": "Bridge",
+        "start_sec": 6.6873,
+        "end_sec": 14.3964,
+        "rms_mean": 0.2275
+      },
+      {
+        "schema_version": "1.0",
+        "label": "Chorus",
+        "start_sec": 14.3964,
+        "end_sec": 22.0822,
+        "rms_mean": 0.2377
+      },
+      {
+        "schema_version": "1.0",
+        "label": "Verse",
+        "start_sec": 22.0822,
+        "end_sec": 30.4181,
+        "rms_mean": 0.2375
+      },
+      {
+        "schema_version": "1.0",
+        "label": "Chorus",
+        "start_sec": 30.4181,
+        "end_sec": 37.7789,
+        "rms_mean": 0.238
+      },
+      {
+        "schema_version": "1.0",
+        "label": "Outro",
+        "start_sec": 37.7789,
+        "end_sec": 45.0,
+        "rms_mean": 0.1281
+      }
+    ],
+    "rms_mean": 0.2184,
+    "peak_amplitude": 0.8181,
+    "crest_factor": 3.6082,
+    "active_rate": 0.9923,
+    "valley_depth": 0.0958,
+    "valley_depth_method": "hybrid",
+    "thickness": 1.4218,
+    "spectral_centroid": 815.92,
+    "spectral_profile": {
+      "schema_version": "1.0",
+      "centroid": 815.92,
+      "low_ratio": 0.6145,
+      "mid_ratio": 0.3855,
+      "high_ratio": 0.0,
+      "brightness": 0.0
+    },
+    "stereo_profile": null,
+    "onset_density": 0.1333
+  },
+  "semantic": {
+    "schema_version": "2.0",
+    "por_core": "A bass-heavy, continuous, grounded sonic character",
+    "por_surface": [
+      {
+        "label": "bass-heavy",
+        "layer": "perceptual",
+        "confidence": 0.9,
+        "evidence": [
+          "low_ratio=0.6145 >= 0.4"
+        ],
+        "source_rule": "perc.bass_heavy"
+      },
+      {
+        "label": "grounded",
+        "layer": "perceptual",
+        "confidence": 0.8,
+        "evidence": [
+          "low_ratio=0.6145 >= 0.4"
+        ],
+        "source_rule": "perc.bass_heavy"
+      },
+      {
+        "label": "continuous",
+        "layer": "structural",
+        "confidence": 0.85,
+        "evidence": [
+          "valley_depth=0.0958 <= 0.1",
+          "active_rate=0.9923 >= 0.8"
+        ],
+        "source_rule": "struct.continuous"
+      },
+      {
+        "label": "wall-like",
+        "layer": "structural",
+        "confidence": 0.75,
+        "evidence": [
+          "valley_depth=0.0958 <= 0.1",
+          "active_rate=0.9923 >= 0.8"
+        ],
+        "source_rule": "struct.continuous"
+      }
+    ],
+    "grv_anchor": {
+      "schema_version": "1.0",
+      "primary": "bass-heavy",
+      "secondary": [
+        "dense"
+      ],
+      "confidence": 0.7
+    },
+    "delta_e_profile": {
+      "schema_version": "1.0",
+      "transition_type": "sustained_energy",
+      "intensity": 0.4961,
+      "description": "Consistently high energy with minimal transitions"
+    },
+    "cultural_context": [
+      "bass-music"
+    ],
+    "instrumentation_summary": "Bass-heavy production with prominent low-end",
+    "production_notes": [
+      "Continuous energy, minimal silence"
+    ],
+    "confidence_notes": [
+      "rule matched: perc.bass_heavy -> ['bass-heavy', 'grounded']",
+      "rule matched: struct.continuous -> ['continuous', 'wall-like']"
+    ],
+    "estimation_disclaimer": "semantic層はルールベース推定であり、意味理解の真値ではない"
+  },
+  "audio_file": "/home/user/ugh-prompt-engine/examples/sample_input/synth_04_waltz_fsharp_minor.wav",
+  "audio_duration_sec": 45.0,
+  "audio_sample_rate": 22050,
+  "audio_channels": 1,
+  "audio_format": "wav"
+}

@@ -1,0 +1,132 @@
+{
+  "schema_version": "1.0",
+  "physical": {
+    "schema_version": "1.0",
+    "bpm": 172.27,
+    "bpm_confidence": 0.5645,
+    "key": "D",
+    "mode": "major",
+    "key_confidence": 0.9819,
+    "duration_sec": 42.0,
+    "sample_rate": 22050,
+    "time_signature": "4/4",
+    "time_signature_confidence": 0.3,
+    "structure": [
+      {
+        "schema_version": "1.0",
+        "label": "Intro",
+        "start_sec": 0.0,
+        "end_sec": 6.7106,
+        "rms_mean": 0.2515
+      },
+      {
+        "schema_version": "1.0",
+        "label": "Bridge",
+        "start_sec": 6.7106,
+        "end_sec": 13.6766,
+        "rms_mean": 0.2168
+      },
+      {
+        "schema_version": "1.0",
+        "label": "Chorus",
+        "start_sec": 13.6766,
+        "end_sec": 20.689,
+        "rms_mean": 0.2243
+      },
+      {
+        "schema_version": "1.0",
+        "label": "Chorus",
+        "start_sec": 20.689,
+        "end_sec": 27.6782,
+        "rms_mean": 0.2242
+      },
+      {
+        "schema_version": "1.0",
+        "label": "Verse",
+        "start_sec": 27.6782,
+        "end_sec": 34.9228,
+        "rms_mean": 0.2239
+      },
+      {
+        "schema_version": "1.0",
+        "label": "Outro",
+        "start_sec": 34.9228,
+        "end_sec": 42.0,
+        "rms_mean": 0.1228
+      }
+    ],
+    "rms_mean": 0.2101,
+    "peak_amplitude": 0.8224,
+    "crest_factor": 3.7514,
+    "active_rate": 0.9917,
+    "valley_depth": 0.1058,
+    "valley_depth_method": "hybrid",
+    "thickness": 1.3728,
+    "spectral_centroid": 1055.74,
+    "spectral_profile": {
+      "schema_version": "1.0",
+      "centroid": 1055.74,
+      "low_ratio": 0.3214,
+      "mid_ratio": 0.6786,
+      "high_ratio": 0.0001,
+      "brightness": 0.0001
+    },
+    "stereo_profile": null,
+    "onset_density": 0.1429
+  },
+  "semantic": {
+    "schema_version": "2.0",
+    "por_core": "A high_tempo, mid-focused sonic character",
+    "por_surface": [
+      {
+        "label": "high_tempo",
+        "layer": "perceptual",
+        "confidence": 0.95,
+        "evidence": [
+          "bpm=172.3 >= 140"
+        ],
+        "source_rule": "perc.high_tempo"
+      },
+      {
+        "label": "mid-focused",
+        "layer": "perceptual",
+        "confidence": 0.8,
+        "evidence": [
+          "mid_ratio=0.6786 >= 0.45"
+        ],
+        "source_rule": "perc.mid_focused"
+      }
+    ],
+    "grv_anchor": {
+      "schema_version": "1.0",
+      "primary": "mid-focused",
+      "secondary": [
+        "dense"
+      ],
+      "confidence": 0.5
+    },
+    "delta_e_profile": {
+      "schema_version": "1.0",
+      "transition_type": "sustained_energy",
+      "intensity": 0.4959,
+      "description": "Consistently high energy with minimal transitions"
+    },
+    "cultural_context": [
+      "electronic/dance"
+    ],
+    "instrumentation_summary": "Mid-focused production",
+    "production_notes": [
+      "Continuous energy, minimal silence"
+    ],
+    "confidence_notes": [
+      "rule matched: perc.high_tempo -> ['high_tempo']",
+      "rule matched: perc.mid_focused -> ['mid-focused']"
+    ],
+    "estimation_disclaimer": "semantic層はルールベース推定であり、意味理解の真値ではない"
+  },
+  "audio_file": "/home/user/ugh-prompt-engine/examples/sample_input/synth_05_fast_bright_d_major.wav",
+  "audio_duration_sec": 42.0,
+  "audio_sample_rate": 22050,
+  "audio_channels": 1,
+  "audio_format": "wav"
+}
