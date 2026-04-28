@@ -3,7 +3,7 @@
   "physical": {
     "schema_version": "1.0",
     "bpm": 123.05,
-    "bpm_confidence": 0.9746,
+    "bpm_confidence": 0.8779,
     "key": "G",
     "mode": "major",
     "key_confidence": 0.9832,
