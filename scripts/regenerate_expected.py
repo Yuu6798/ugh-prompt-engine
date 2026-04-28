@@ -107,8 +107,11 @@ def collect_artefacts(
     return artefacts
 
 
-def write_outputs(artefacts: list[tuple[str, str, str]]) -> list[tuple[str, str]]:
-    """Write all artefacts + hashes.txt. Returns [(rel_path, sha256), ...]."""
+def write_outputs(artefacts: list[tuple[str, str, str]]) -> tuple[list[tuple[str, str]], list[str]]:
+    """Write all artefacts + hashes.txt and sweep orphans.
+
+    Returns ([(rel_path, sha256), ...], [removed_rel_path, ...]).
+    """
     EXPECTED_DIR.mkdir(parents=True, exist_ok=True)
     summary: list[tuple[str, str]] = []
     for rel, digest, text in artefacts:
@@ -120,7 +123,27 @@ def write_outputs(artefacts: list[tuple[str, str, str]]) -> list[tuple[str, str]
         "".join(f"{digest}  {rel}\n" for rel, digest in summary),
         encoding="utf-8",
     )
-    return summary
+    canonical = {rel for rel, _, _ in artefacts}
+    removed = sweep_orphans(canonical)
+    return summary, removed
+
+
+def sweep_orphans(canonical: set[str]) -> list[str]:
+    """Delete files / empty dirs under EXPECTED_DIR that are not canonical.
+
+    Preserves `hashes.txt` and `README.md`. Returns the list of removed paths
+    (repo-relative under EXPECTED_DIR) so callers can report what was cleaned.
+    """
+    removed: list[str] = []
+    orphans = sorted(discover_disk_artefacts() - canonical)
+    for rel in orphans:
+        path = EXPECTED_DIR / rel
+        path.unlink()
+        removed.append(rel)
+    for path in sorted(EXPECTED_DIR.rglob("*"), key=lambda p: -len(p.parts)):
+        if path.is_dir() and not any(path.iterdir()):
+            path.rmdir()
+    return removed
 
 
 def parse_hash_file() -> dict[str, str]:
@@ -230,10 +253,14 @@ def main(argv: list[str] | None = None) -> int:
         return check_outputs(songs)
 
     artefacts = collect_artefacts(songs)
-    summary = write_outputs(artefacts)
+    summary, removed = write_outputs(artefacts)
     print(f"[regenerate] wrote {len(summary)} artefacts under {EXPECTED_DIR.relative_to(ROOT)}/")
     for rel, digest in summary:
         print(f"  {digest[:12]}…  {rel}")
+    if removed:
+        print(f"[regenerate] swept {len(removed)} orphan file(s):")
+        for rel in removed:
+            print(f"  - {rel}")
     return 0
 
 
