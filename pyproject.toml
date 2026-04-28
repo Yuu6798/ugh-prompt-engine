@@ -19,6 +19,7 @@ dependencies = [
     "typer>=0.9",
     "pyyaml>=6.0",
     "rich>=13.0",
+    "pyloudnorm>=0.1",
 ]
 
 [project.optional-dependencies]

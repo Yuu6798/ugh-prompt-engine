@@ -17,6 +17,7 @@ from svp_rpe.rpe.physical_features import (
     compute_bpm,
     compute_crest_factor,
     compute_key,
+    compute_loudness,
     compute_onset_density,
     compute_rms_mean,
     compute_spectral_profile,
@@ -95,6 +96,10 @@ def extract_physical(
     bpm, bpm_confidence = compute_bpm(y, sr)
     key, mode, key_confidence = compute_key(y, sr)
 
+    # ITU-R BS.1770 loudness; uses stereo when available, else mono.
+    loudness_input = audio.y_stereo if audio.y_stereo is not None else y
+    loudness_lufs, true_peak_dbfs = compute_loudness(loudness_input, sr)
+
     stereo_profile = None
     if audio.y_stereo is not None:
         stereo_profile = compute_stereo_profile(audio.y_stereo, sr)
@@ -122,6 +127,8 @@ def extract_physical(
         rms_mean=round(rms_mean, 4),
         peak_amplitude=round(peak_amplitude, 4),
         crest_factor=crest_factor,
+        loudness_lufs_integrated=loudness_lufs,
+        true_peak_dbfs=true_peak_dbfs,
         active_rate=round(active_rate, 4),
         valley_depth=valley_depth,
         valley_depth_method=valley_method,

@@ -9,8 +9,15 @@ from typing import Optional
 
 import librosa
 import numpy as np
+from scipy import signal as scipy_signal
 
 from svp_rpe.rpe.models import SpectralProfile, StereoProfile
+
+try:
+    import pyloudnorm as pyln
+    _HAS_PYLOUDNORM = True
+except ModuleNotFoundError:  # pragma: no cover - optional at runtime
+    _HAS_PYLOUDNORM = False
 
 
 def _clamp(value: float, lo: float = 0.0, hi: float = 1.0) -> float:
@@ -149,6 +156,64 @@ def compute_onset_density(y: np.ndarray, sr: int) -> float:
     if duration == 0:
         return 0.0
     return round(len(onsets) / duration, 4)
+
+
+def compute_loudness(
+    y: np.ndarray, sr: int
+) -> tuple[Optional[float], Optional[float]]:
+    """Compute ITU-R BS.1770 integrated loudness (LUFS) and true peak (dBFS).
+
+    Accepts mono `(samples,)` and channel-first stereo `(channels, samples)`
+    (the layout produced by `audio_loader.load_audio`). Internally transposes
+    stereo to samples-first for pyloudnorm and aligns the resampling axis
+    accordingly.
+
+    Returns (None, None) when pyloudnorm is unavailable, the audio is shorter
+    than the minimum gating block length, or the signal is digital silence.
+    """
+    if not _HAS_PYLOUDNORM or y.size == 0:
+        return (None, None)
+
+    if y.ndim == 1:
+        signal = y
+        n_samples = signal.shape[0]
+    elif y.ndim == 2:
+        # Codebase uses channel-first (channels, samples); pyloudnorm wants
+        # samples-first (samples, channels).
+        signal = y.T
+        n_samples = signal.shape[0]
+    else:
+        return (None, None)
+
+    # pyloudnorm requires at least 0.4 s of audio for the gating block size.
+    if n_samples / sr < 0.4:
+        return (None, None)
+
+    try:
+        meter = pyln.Meter(sr)
+        lufs = float(meter.integrated_loudness(signal))
+    except (ValueError, ZeroDivisionError):
+        lufs = None
+    else:
+        # Digital silence yields -inf; drop to None to avoid serialising inf.
+        if not np.isfinite(lufs):
+            lufs = None
+        else:
+            lufs = round(lufs, 2)
+
+    # True peak via 4x oversampling per ITU-R BS.1770-4 simplified path.
+    peak_abs = float(np.max(np.abs(signal)))
+    if peak_abs <= 0.0:
+        return (lufs, None)
+    try:
+        upsampled = scipy_signal.resample_poly(signal, 4, 1, axis=0)
+        true_peak_lin = float(np.max(np.abs(upsampled)))
+    except ValueError:
+        true_peak_lin = peak_abs
+    if true_peak_lin <= 0.0:
+        return (lufs, None)
+    true_peak_dbfs = round(20.0 * float(np.log10(true_peak_lin)), 2)
+    return (lufs, true_peak_dbfs)
 
 
 def compute_bpm(y: np.ndarray, sr: int) -> tuple[Optional[float], Optional[float]]:
