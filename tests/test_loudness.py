@@ -72,3 +72,25 @@ def test_true_peak_matches_amplitude(amplitude: float, expected_true_peak: float
     _, true_peak = compute_loudness(signal, SR)
     assert true_peak is not None
     assert abs(true_peak - expected_true_peak) <= 0.5
+
+
+def test_channel_first_stereo_input_is_measured() -> None:
+    """Regression: channel-first (channels, samples) stereo must produce LUFS.
+
+    `audio_loader.load_audio` returns `y_stereo` shaped `(channels, samples)`.
+    A naive `len(y)` check on that layout reports `2`, which used to trip
+    the minimum-block-length guard and silently fall back to `(None, None)`
+    for every stereo file.
+    """
+    left = _generate_sine(amplitude=0.1, freq_hz=1000.0, duration_s=5.0)
+    right = _generate_sine(amplitude=0.1, freq_hz=1000.0, duration_s=5.0)
+    channel_first = np.stack([left, right], axis=0)  # (2, samples)
+    assert channel_first.shape == (2, SR * 5)
+
+    lufs, true_peak = compute_loudness(channel_first, SR)
+    assert lufs is not None, "channel-first stereo must not silently fall back to None"
+    assert true_peak is not None
+    # Two correlated channels at -20 dBFS each → ITU sums to ~-20 LUFS region;
+    # the exact value depends on K-weighting and channel summation.
+    assert -25.0 <= lufs <= -15.0
+    assert -20.5 <= true_peak <= -19.5

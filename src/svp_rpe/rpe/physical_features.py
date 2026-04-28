@@ -163,21 +163,35 @@ def compute_loudness(
 ) -> tuple[Optional[float], Optional[float]]:
     """Compute ITU-R BS.1770 integrated loudness (LUFS) and true peak (dBFS).
 
+    Accepts mono `(samples,)` and channel-first stereo `(channels, samples)`
+    (the layout produced by `audio_loader.load_audio`). Internally transposes
+    stereo to samples-first for pyloudnorm and aligns the resampling axis
+    accordingly.
+
     Returns (None, None) when pyloudnorm is unavailable, the audio is shorter
-    than the minimum block length, or the signal is digital silence.
+    than the minimum gating block length, or the signal is digital silence.
     """
-    if not _HAS_PYLOUDNORM:
+    if not _HAS_PYLOUDNORM or y.size == 0:
         return (None, None)
-    if y.size == 0:
+
+    if y.ndim == 1:
+        signal = y
+        n_samples = signal.shape[0]
+    elif y.ndim == 2:
+        # Codebase uses channel-first (channels, samples); pyloudnorm wants
+        # samples-first (samples, channels).
+        signal = y.T
+        n_samples = signal.shape[0]
+    else:
         return (None, None)
 
     # pyloudnorm requires at least 0.4 s of audio for the gating block size.
-    if len(y) / sr < 0.4:
+    if n_samples / sr < 0.4:
         return (None, None)
 
     try:
         meter = pyln.Meter(sr)
-        lufs = float(meter.integrated_loudness(y))
+        lufs = float(meter.integrated_loudness(signal))
     except (ValueError, ZeroDivisionError):
         lufs = None
     else:
@@ -188,11 +202,11 @@ def compute_loudness(
             lufs = round(lufs, 2)
 
     # True peak via 4x oversampling per ITU-R BS.1770-4 simplified path.
-    peak_abs = float(np.max(np.abs(y)))
+    peak_abs = float(np.max(np.abs(signal)))
     if peak_abs <= 0.0:
         return (lufs, None)
     try:
-        upsampled = scipy_signal.resample_poly(y, 4, 1, axis=0)
+        upsampled = scipy_signal.resample_poly(signal, 4, 1, axis=0)
         true_peak_lin = float(np.max(np.abs(upsampled)))
     except ValueError:
         true_peak_lin = peak_abs
