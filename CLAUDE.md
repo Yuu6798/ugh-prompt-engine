@@ -263,6 +263,38 @@ git push -u origin <branch-name>
 # https://github.com/Yuu6798/ugh-prompt-engine/compare/main...<branch-name>?expand=1
 ```
 
+#### PR 本文の必須記述
+
+PR を作成するときは、**本文を必ず作成する**（リンクのみ提示で本文を空にしない）。
+GitHub MCP の `mcp__github__create_pull_request` で本文を渡すか、リンク経由で
+User が作成する場合も同等の本文を Claude が事前に提示する。
+
+本文に最低限含める要素:
+
+```markdown
+## Summary
+<2–4 行で「何を / なぜ」変更したかを記述>
+
+## Changes
+- <主要な変更点を箇条書き、ファイル単位 or 機能単位>
+
+## Verification
+- [ ] `ruff check .` pass
+- [ ] `pytest -q --tb=short` pass
+- [ ] <該当する場合> 手動検証手順とその結果
+
+## Related
+- Phase: <roadmap_goal1.md の Q-ID 等>
+- Brief / Issue: <該当する場合のリンク>
+
+## Notes for Reviewer
+<逸脱事項、未解決課題、次のループへの引き継ぎ等。なければ "None">
+```
+
+ドキュメント単独 PR の場合は `Verification` を「該当なし（docs のみ）」で省略可。
+Codex が PR を作成する場合は [`AGENTS.md`](AGENTS.md) §2 の Completion Summary
+フォーマットを本フォーマットの代わりに使ってよい（情報量は等価）。
+
 ## CI 基本方針
 
 - Push / PR で lint（`ruff check .`）+ test（`pytest -q --tb=short`）が通ることを必須とする
