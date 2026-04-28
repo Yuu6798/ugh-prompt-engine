@@ -241,7 +241,11 @@ def compute_bpm(y: np.ndarray, sr: int) -> tuple[Optional[float], Optional[float
 
     beat_times = librosa.frames_to_time(np.asarray(beats), sr=sr)
     intervals = np.diff(beat_times)
-    if intervals.size < 1:
+    # Need ≥2 intervals (≥3 beats) for std to carry information. With a
+    # single interval, std is mathematically 0 → CV 0 → confidence 1.0,
+    # which is a false certainty when there is not enough evidence to
+    # measure regularity.
+    if intervals.size < 2:
         return round(bpm, 2), 0.0
 
     mean_interval = float(np.mean(intervals))

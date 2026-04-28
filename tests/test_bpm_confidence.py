@@ -94,6 +94,45 @@ def test_confidence_is_rounded_to_4_decimals() -> None:
     assert round(confidence, 4) == confidence
 
 
+def test_two_beat_scenario_does_not_yield_false_certainty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression for Codex P2: a single inter-beat interval has std == 0,
+    which would naively yield CV 0 and confidence 1.0 — false certainty.
+    With ≥2 intervals required, two-beat outputs degrade to confidence 0.0.
+    """
+    from svp_rpe.rpe import physical_features
+
+    # Stub librosa.beat.beat_track to return exactly 2 beats. The actual
+    # waveform is irrelevant once we override the tracker.
+    def fake_beat_track(*, y, sr):
+        return 120.0, np.array([0, sr // 2])  # 2 beat frames
+
+    monkeypatch.setattr(physical_features.librosa.beat, "beat_track", fake_beat_track)
+
+    sr = 22050
+    bpm, confidence = compute_bpm(np.zeros(sr * 2, dtype=np.float32), sr)
+    assert bpm == 120.0
+    assert confidence == 0.0, (
+        f"two-beat input must not yield confidence > 0 (got {confidence}); "
+        "single interval has std == 0 which would otherwise be false certainty"
+    )
+
+
+def test_three_beat_scenario_can_compute_confidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Three regular beats (= 2 equal intervals) gives CV ~0 → confidence 1.0,
+    which is now mathematically meaningful (std is over 2 samples)."""
+    from svp_rpe.rpe import physical_features
+
+    def fake_beat_track(*, y, sr):
+        return 120.0, np.array([0, sr // 2, sr])
+
+    monkeypatch.setattr(physical_features.librosa.beat, "beat_track", fake_beat_track)
+
+    sr = 22050
+    _, confidence = compute_bpm(np.zeros(sr * 2, dtype=np.float32), sr)
+    assert confidence is not None
+    assert confidence > 0.7
+
+
 def test_legacy_distance_from_120_formula_is_gone() -> None:
     """Regression: synth_03 (BPM ~123) should NOT yield ~0.975 from the
     legacy `1 - abs(bpm-120)/120` formula. The new formula gives ~0.88."""
