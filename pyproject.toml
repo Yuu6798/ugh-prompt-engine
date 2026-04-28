@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "ruff>=0.1"]
+dev = ["pytest>=7.0", "ruff>=0.1", "mir_eval>=0.7"]
 
 [project.scripts]
 svprpe = "svp_rpe.cli:app"
