@@ -11,7 +11,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import yaml
 
 from svp_rpe.io.audio_loader import load_audio
 from svp_rpe.rpe.physical_features import (
@@ -29,53 +28,46 @@ ROOT = Path(__file__).resolve().parents[1]
 SAMPLE_DIR = ROOT / "examples" / "sample_input"
 GROUND_TRUTH = SAMPLE_DIR / "ground_truth.yaml"
 
-
-def _truth_within_tolerance(tolerance: float = 5.0) -> list[tuple[str, float]]:
-    """Return [(filename, gt_bpm), ...] for songs likely within ±tolerance.
-
-    We evaluate the actual extractor first to keep the AC ('confidence > 0.7
-    when within ±5 BPM') self-validating: only assert on songs the extractor
-    can hit.
-    """
-    raw = yaml.safe_load(GROUND_TRUTH.read_text(encoding="utf-8"))
-    eligible: list[tuple[str, float]] = []
-    for entry in raw:
-        audio = load_audio(str(SAMPLE_DIR / entry["filename"]))
-        bpm, _ = compute_bpm(audio.y_mono, audio.sr)
-        if bpm is not None and abs(bpm - float(entry["bpm"])) <= tolerance:
-            eligible.append((entry["filename"], float(entry["bpm"])))
-    return eligible
-
-
-ELIGIBLE_SONGS = _truth_within_tolerance()
+# Q1-3 が AC 達成を保証する **固定** fixtures。動的に「現在 ±5 に入っている曲」
+# を探して parametrize するのではなく、ロードマップ策定時に extractor が
+# ±5 BPM 以内に推定できることが確認された 4 曲を hardcode する。
+# こうすることで以下の回帰を確実に検出できる:
+#   - 個別 fixture の extractor 回帰（例: synth_02 の Δ が ±5 を超える）
+#   - confidence formula の回帰（confidence ≤ 0.7）
+# 動的 ELIGIBLE_SONGS 方式だと回帰した曲が silently 除外されて回帰が
+# 検出できなかった (Codex P2 round 3)。
+REQUIRED_Q1_3_FIXTURES: tuple[tuple[str, float], ...] = (
+    ("synth_02_minor_pulse_a_minor.wav", 90.0),
+    ("synth_03_mid_groove_g_major.wav", 120.0),
+    ("synth_04_waltz_fsharp_minor.wav", 140.0),
+    ("synth_05_fast_bright_d_major.wav", 170.0),
+)
 
 
 @pytest.mark.parametrize(
     ("filename", "gt_bpm"),
-    ELIGIBLE_SONGS,
-    ids=[name for name, _ in ELIGIBLE_SONGS],
+    REQUIRED_Q1_3_FIXTURES,
+    ids=[name for name, _ in REQUIRED_Q1_3_FIXTURES],
 )
 def test_in_range_song_has_confidence_above_0_7(filename: str, gt_bpm: float) -> None:
-    """AC: 真値 ±5 BPM 以内のとき confidence > 0.7."""
+    """AC: 真値 ±5 BPM 以内のとき confidence > 0.7.
+
+    各 fixture について **両方** を assert する:
+      1. precondition: extractor が ±5 BPM 以内に推定（extractor 回帰検出）
+      2. AC: confidence > Q1_3_AC_CONFIDENCE_FLOOR (formula 回帰検出)
+    """
     audio = load_audio(str(SAMPLE_DIR / filename))
     bpm, confidence = compute_bpm(audio.y_mono, audio.sr)
 
     assert bpm is not None
     assert abs(bpm - gt_bpm) <= 5.0, (
-        f"precondition: extractor must land within ±5 BPM of {gt_bpm}, got {bpm}"
+        f"extractor regression: {filename} expected ±5 BPM of {gt_bpm}, got {bpm}. "
+        "If this is intentional, update REQUIRED_Q1_3_FIXTURES and validation.md."
     )
     assert confidence is not None
     assert confidence > Q1_3_AC_CONFIDENCE_FLOOR, (
         f"AC violation: {filename} extracted BPM {bpm} (gt {gt_bpm}, within ±5) "
         f"but confidence {confidence} ≤ {Q1_3_AC_CONFIDENCE_FLOOR}"
-    )
-
-
-def test_eligible_songs_cover_majority() -> None:
-    """At least 4 of the 5 synth songs should land within ±5 BPM."""
-    assert len(ELIGIBLE_SONGS) >= 4, (
-        f"only {len(ELIGIBLE_SONGS)} synth song(s) within ±5 BPM; "
-        "Q1-3 AC needs 4+ for the parametrized confidence test"
     )
 
 
