@@ -216,13 +216,44 @@ def compute_loudness(
     return (lufs, true_peak_dbfs)
 
 
+# BPM confidence calibration (Q1-3).
+# Formula: confidence = clamp(1.0 - BPM_CONFIDENCE_CV_SCALE * CV, 0.0, 1.0)
+# The 5.0 scale is empirically tuned: synth samples within ±5 BPM of truth
+# observe CV ∈ [0.024, 0.035], yielding confidence ∈ [0.83, 0.88], comfortably
+# above the Q1-3 acceptance threshold (>0.7). Adjust if the extractor changes.
+BPM_CONFIDENCE_CV_SCALE = 5.0
+BPM_CONFIDENCE_AC_THRESHOLD = 0.7
+
+
 def compute_bpm(y: np.ndarray, sr: int) -> tuple[Optional[float], Optional[float]]:
-    """Estimate BPM. Returns (bpm, confidence)."""
-    tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+    """Estimate BPM via librosa.beat.beat_track. Returns (bpm, confidence).
+
+    `confidence` reflects the **regularity of detected beats** rather than
+    the static distance from a "typical" 120 BPM. Regular beats → low CV →
+    high confidence. See BPM_CONFIDENCE_CV_SCALE for calibration notes; the
+    Q1-3 acceptance criterion is confidence > BPM_CONFIDENCE_AC_THRESHOLD
+    (0.7) when the estimate is within ±5 BPM of truth.
+    """
+    tempo, beats = librosa.beat.beat_track(y=y, sr=sr)
     bpm = float(np.atleast_1d(tempo)[0])
-    # librosa doesn't provide confidence directly; use a heuristic
-    # confidence is higher when BPM is in typical range
-    confidence = _clamp(1.0 - abs(bpm - 120) / 120.0) if bpm > 0 else 0.0
+    if bpm <= 0:
+        return None, 0.0
+
+    beat_times = librosa.frames_to_time(np.asarray(beats), sr=sr)
+    intervals = np.diff(beat_times)
+    # Need ≥2 intervals (≥3 beats) for std to carry information. With a
+    # single interval, std is mathematically 0 → CV 0 → confidence 1.0,
+    # which is a false certainty when there is not enough evidence to
+    # measure regularity.
+    if intervals.size < 2:
+        return round(bpm, 2), 0.0
+
+    mean_interval = float(np.mean(intervals))
+    if mean_interval <= 0.0:
+        return round(bpm, 2), 0.0
+
+    cv = float(np.std(intervals) / mean_interval)
+    confidence = _clamp(1.0 - BPM_CONFIDENCE_CV_SCALE * cv, 0.0, 1.0)
     return round(bpm, 2), round(confidence, 4)
 
 
