@@ -14,7 +14,10 @@ import pytest
 import yaml
 
 from svp_rpe.io.audio_loader import load_audio
-from svp_rpe.rpe.physical_features import compute_bpm
+from svp_rpe.rpe.physical_features import (
+    BPM_CONFIDENCE_AC_THRESHOLD,
+    compute_bpm,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 SAMPLE_DIR = ROOT / "examples" / "sample_input"
@@ -56,9 +59,9 @@ def test_in_range_song_has_confidence_above_0_7(filename: str, gt_bpm: float) ->
         f"precondition: extractor must land within ±5 BPM of {gt_bpm}, got {bpm}"
     )
     assert confidence is not None
-    assert confidence > 0.7, (
+    assert confidence > BPM_CONFIDENCE_AC_THRESHOLD, (
         f"AC violation: {filename} extracted BPM {bpm} (gt {gt_bpm}, within ±5) "
-        f"but confidence {confidence} ≤ 0.7"
+        f"but confidence {confidence} ≤ {BPM_CONFIDENCE_AC_THRESHOLD}"
     )
 
 

@@ -216,15 +216,23 @@ def compute_loudness(
     return (lufs, true_peak_dbfs)
 
 
+# BPM confidence calibration (Q1-3).
+# Formula: confidence = clamp(1.0 - BPM_CONFIDENCE_CV_SCALE * CV, 0.0, 1.0)
+# The 5.0 scale is empirically tuned: synth samples within ±5 BPM of truth
+# observe CV ∈ [0.024, 0.035], yielding confidence ∈ [0.83, 0.88], comfortably
+# above the Q1-3 acceptance threshold (>0.7). Adjust if the extractor changes.
+BPM_CONFIDENCE_CV_SCALE = 5.0
+BPM_CONFIDENCE_AC_THRESHOLD = 0.7
+
+
 def compute_bpm(y: np.ndarray, sr: int) -> tuple[Optional[float], Optional[float]]:
     """Estimate BPM via librosa.beat.beat_track. Returns (bpm, confidence).
 
-    `confidence` is rank-based on the **regularity of detected beats** rather
-    than the static distance from a "typical" 120 BPM. Concretely:
-    confidence = clamp(1.0 - 5.0 * CV(beat_intervals), 0.0, 1.0), where CV is
-    the coefficient of variation of inter-beat intervals. Regular beats →
-    low CV → high confidence. The 5× coefficient is calibrated so synth
-    samples within ±5 BPM of truth land in [0.83, 0.88] (>0.7 AC).
+    `confidence` reflects the **regularity of detected beats** rather than
+    the static distance from a "typical" 120 BPM. Regular beats → low CV →
+    high confidence. See BPM_CONFIDENCE_CV_SCALE for calibration notes; the
+    Q1-3 acceptance criterion is confidence > BPM_CONFIDENCE_AC_THRESHOLD
+    (0.7) when the estimate is within ±5 BPM of truth.
     """
     tempo, beats = librosa.beat.beat_track(y=y, sr=sr)
     bpm = float(np.atleast_1d(tempo)[0])
@@ -241,7 +249,7 @@ def compute_bpm(y: np.ndarray, sr: int) -> tuple[Optional[float], Optional[float
         return round(bpm, 2), 0.0
 
     cv = float(np.std(intervals) / mean_interval)
-    confidence = _clamp(1.0 - 5.0 * cv, 0.0, 1.0)
+    confidence = _clamp(1.0 - BPM_CONFIDENCE_CV_SCALE * cv, 0.0, 1.0)
     return round(bpm, 2), round(confidence, 4)
 
 
