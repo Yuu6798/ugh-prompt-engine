@@ -19,6 +19,12 @@ from svp_rpe.rpe.physical_features import (
     compute_bpm,
 )
 
+# Q1-3 acceptance criterion (roadmap_goal1.md): BPM 推定が真値 ±5 BPM 以内
+# のとき confidence > 0.7。production の定数とは独立に test 側で pin して
+# おくことで、定数が誤って 0.7 未満に下げられた場合にこの test が回帰を
+# 検出できる。
+Q1_3_AC_CONFIDENCE_FLOOR = 0.7
+
 ROOT = Path(__file__).resolve().parents[1]
 SAMPLE_DIR = ROOT / "examples" / "sample_input"
 GROUND_TRUTH = SAMPLE_DIR / "ground_truth.yaml"
@@ -59,9 +65,9 @@ def test_in_range_song_has_confidence_above_0_7(filename: str, gt_bpm: float) ->
         f"precondition: extractor must land within ±5 BPM of {gt_bpm}, got {bpm}"
     )
     assert confidence is not None
-    assert confidence > BPM_CONFIDENCE_AC_THRESHOLD, (
+    assert confidence > Q1_3_AC_CONFIDENCE_FLOOR, (
         f"AC violation: {filename} extracted BPM {bpm} (gt {gt_bpm}, within ±5) "
-        f"but confidence {confidence} ≤ {BPM_CONFIDENCE_AC_THRESHOLD}"
+        f"but confidence {confidence} ≤ {Q1_3_AC_CONFIDENCE_FLOOR}"
     )
 
 
@@ -131,6 +137,21 @@ def test_three_beat_scenario_can_compute_confidence(monkeypatch: pytest.MonkeyPa
     _, confidence = compute_bpm(np.zeros(sr * 2, dtype=np.float32), sr)
     assert confidence is not None
     assert confidence > 0.7
+
+
+def test_production_constant_matches_q1_3_ac() -> None:
+    """Production の BPM_CONFIDENCE_AC_THRESHOLD は roadmap Q1-3 AC と一致するべき。
+
+    どちらかが drift したら（例: production 側を 0.5 に下げる、ロードマップを
+    厳しくする）この test が catch する。`test_in_range_song_has_confidence_above_0_7`
+    は AC を直接 pin しているので requirement regression は確実に検出されるが、
+    本 test は production 側との同期も同時に強制する。
+    """
+    assert BPM_CONFIDENCE_AC_THRESHOLD == Q1_3_AC_CONFIDENCE_FLOOR, (
+        f"production threshold {BPM_CONFIDENCE_AC_THRESHOLD} drifted from "
+        f"Q1-3 AC {Q1_3_AC_CONFIDENCE_FLOOR}; reconcile roadmap_goal1.md, "
+        "physical_features.BPM_CONFIDENCE_AC_THRESHOLD, and this test."
+    )
 
 
 def test_legacy_distance_from_120_formula_is_gone() -> None:
