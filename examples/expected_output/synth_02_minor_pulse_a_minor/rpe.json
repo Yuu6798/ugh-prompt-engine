@@ -124,7 +124,7 @@
     ],
     "estimation_disclaimer": "semantic層はルールベース推定であり、意味理解の真値ではない"
   },
-  "audio_file": "/home/user/ugh-prompt-engine/examples/sample_input/synth_02_minor_pulse_a_minor.wav",
+  "audio_file": "examples/sample_input/synth_02_minor_pulse_a_minor.wav",
   "audio_duration_sec": 36.0,
   "audio_sample_rate": 22050,
   "audio_channels": 1,

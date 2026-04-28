@@ -1,7 +1,7 @@
 """scripts/regenerate_expected.py — Regenerate examples/expected_output reference.
 
-For each WAV in `examples/sample_input/` listed in `ground_truth.yaml`, runs the
-full pipeline (extract → generate → evaluate) and writes the canonical
+Runs the full pipeline (extract → generate → evaluate) for every WAV listed in
+`examples/sample_input/ground_truth.yaml` and writes the canonical
 `rpe.json` / `svp.yaml` / `evaluation.json` triples under
 `examples/expected_output/<song_id>/`. Also (re)writes a `hashes.txt` with
 SHA-256 checksums for snapshot comparison.
@@ -17,7 +17,6 @@ import hashlib
 import json
 import sys
 from pathlib import Path
-from typing import Iterable, Tuple
 
 import yaml
 
@@ -33,32 +32,42 @@ SAMPLE_DIR = ROOT / "examples" / "sample_input"
 EXPECTED_DIR = ROOT / "examples" / "expected_output"
 GROUND_TRUTH = SAMPLE_DIR / "ground_truth.yaml"
 HASH_FILE = EXPECTED_DIR / "hashes.txt"
+README_FILE = EXPECTED_DIR / "README.md"
 VALLEY_METHOD = "hybrid"
+ARTEFACT_FILES = ("rpe.json", "svp.yaml", "evaluation.json")
 
 
-def load_song_ids() -> list[Tuple[str, Path]]:
-    """Return [(song_id, audio_path), ...] from ground_truth.yaml."""
+def load_song_ids() -> list[tuple[str, Path, str]]:
+    """Return [(song_id, abs_audio_path, repo_relative_audio_path), ...]."""
     data = yaml.safe_load(GROUND_TRUTH.read_text(encoding="utf-8"))
     if not isinstance(data, list):
         raise ValueError(f"unexpected ground_truth.yaml structure: {type(data)}")
-    songs: list[Tuple[str, Path]] = []
+    songs: list[tuple[str, Path, str]] = []
     for entry in data:
         song_id = entry["id"]
         audio_path = SAMPLE_DIR / entry["filename"]
         if not audio_path.is_file():
             raise FileNotFoundError(f"missing sample WAV: {audio_path}")
-        songs.append((song_id, audio_path))
+        rel_path = audio_path.relative_to(ROOT).as_posix()
+        songs.append((song_id, audio_path, rel_path))
     return songs
 
 
-def render_outputs(audio_path: Path) -> dict[str, str]:
+def render_outputs(audio_path: Path, audio_path_rel: str) -> dict[str, str]:
     """Run pipeline once, return {filename: serialized_text} mapping.
 
-    Uses the same serialization parameters as `svprpe run --output-dir` so that
-    the byte-level output is identical to the CLI artefact.
+    The repo-relative `audio_path_rel` overrides absolute path fields in the
+    output bundles so the bytes are independent of the checkout location.
     """
     rpe_bundle = extract_rpe_from_file(str(audio_path), valley_method=VALLEY_METHOD)
+    rpe_bundle.audio_file = audio_path_rel
+
     svp_bundle = generate_svp(rpe_bundle)
+    if svp_bundle.data_lineage.source_artifact is not None:
+        svp_bundle.data_lineage.source_artifact.path = audio_path_rel
+    if svp_bundle.data_lineage.source_audio is not None:
+        svp_bundle.data_lineage.source_audio = audio_path_rel
+
     rpe_score = score_rpe(rpe_bundle.physical)
     ugher_score = score_ugher(rpe_bundle, svp_bundle)
     integrated = score_integrated(ugher_score, rpe_score)
@@ -74,32 +83,35 @@ def render_outputs(audio_path: Path) -> dict[str, str]:
         ensure_ascii=False,
         indent=2,
     )
-    return {
-        "rpe.json": rpe_json,
-        "svp.yaml": svp_yaml,
-        "evaluation.json": eval_json,
-    }
+    return {"rpe.json": rpe_json, "svp.yaml": svp_yaml, "evaluation.json": eval_json}
 
 
 def sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def iter_artefacts(songs: Iterable[Tuple[str, Path]]) -> Iterable[Tuple[str, str, str]]:
-    """Yield (relative_path, sha256, text) for every (song, file) pair."""
-    for song_id, audio_path in songs:
-        outputs = render_outputs(audio_path)
-        for filename in ("rpe.json", "svp.yaml", "evaluation.json"):
+def collect_artefacts(
+    songs: list[tuple[str, Path, str]],
+) -> list[tuple[str, str, str]]:
+    """Run the pipeline for every song and return [(rel_path, sha256, text), ...].
+
+    Materialised eagerly so a partial failure leaves disk untouched.
+    """
+    artefacts: list[tuple[str, str, str]] = []
+    for song_id, audio_path, audio_path_rel in songs:
+        outputs = render_outputs(audio_path, audio_path_rel)
+        for filename in ARTEFACT_FILES:
             text = outputs[filename]
             rel = f"{song_id}/{filename}"
-            yield rel, sha256_text(text), text
+            artefacts.append((rel, sha256_text(text), text))
+    return artefacts
 
 
-def write_outputs(songs: list[Tuple[str, Path]]) -> list[Tuple[str, str]]:
-    """Regenerate all expected_output files and return [(rel_path, sha256), ...]."""
+def write_outputs(artefacts: list[tuple[str, str, str]]) -> list[tuple[str, str]]:
+    """Write all artefacts + hashes.txt. Returns [(rel_path, sha256), ...]."""
     EXPECTED_DIR.mkdir(parents=True, exist_ok=True)
-    summary: list[Tuple[str, str]] = []
-    for rel, digest, text in iter_artefacts(songs):
+    summary: list[tuple[str, str]] = []
+    for rel, digest, text in artefacts:
         out_path = EXPECTED_DIR / rel
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(text, encoding="utf-8")
@@ -120,26 +132,38 @@ def parse_hash_file() -> dict[str, str]:
         if not line:
             continue
         digest, _, rel = line.partition("  ")
-        if not rel:
-            continue
-        expected[rel] = digest
+        if rel:
+            expected[rel] = digest
     return expected
 
 
-def check_outputs(songs: list[Tuple[str, Path]]) -> int:
-    """Compare regenerated artefacts against committed files.
+def discover_disk_artefacts() -> set[str]:
+    """Return repo-relative artefact paths currently on disk under EXPECTED_DIR."""
+    if not EXPECTED_DIR.is_dir():
+        return set()
+    found: set[str] = set()
+    for path in EXPECTED_DIR.rglob("*"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(EXPECTED_DIR).as_posix()
+        if path == HASH_FILE or path == README_FILE:
+            continue
+        found.add(rel)
+    return found
 
-    Returns process exit code (0=ok, 1=mismatch).
-    """
+
+def check_outputs(songs: list[tuple[str, Path, str]]) -> int:
+    """Compare regenerated artefacts against committed files. 0=ok, 1=mismatch."""
     expected_hashes = parse_hash_file()
     if not expected_hashes:
         print("[check] hashes.txt is missing or empty; run without --check first.",
               file=sys.stderr)
         return 1
 
+    artefacts = collect_artefacts(songs)
     mismatches: list[str] = []
     seen: set[str] = set()
-    for rel, digest, text in iter_artefacts(songs):
+    for rel, digest, text in artefacts:
         seen.add(rel)
         committed_path = EXPECTED_DIR / rel
         committed_text = (
@@ -167,9 +191,12 @@ def check_outputs(songs: list[Tuple[str, Path]]) -> int:
                 f"(pipeline={digest[:12]}…, hashes.txt={committed_hash[:12]}…)"
             )
 
-    extra = sorted(set(expected_hashes) - seen)
-    for rel in extra:
+    for rel in sorted(set(expected_hashes) - seen):
         mismatches.append(f"{rel}: listed in hashes.txt but not produced (stale entry)")
+
+    orphans = sorted(discover_disk_artefacts() - seen)
+    for rel in orphans:
+        mismatches.append(f"{rel}: orphan file on disk (not produced by current ground_truth)")
 
     if mismatches:
         print("[check] FAIL — expected_output is out of sync:", file=sys.stderr)
@@ -187,7 +214,9 @@ def check_outputs(songs: list[Tuple[str, Path]]) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description="Regenerate or verify examples/expected_output snapshots.",
+    )
     parser.add_argument(
         "--check",
         action="store_true",
@@ -200,7 +229,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.check:
         return check_outputs(songs)
 
-    summary = write_outputs(songs)
+    artefacts = collect_artefacts(songs)
+    summary = write_outputs(artefacts)
     print(f"[regenerate] wrote {len(summary)} artefacts under {EXPECTED_DIR.relative_to(ROOT)}/")
     for rel, digest in summary:
         print(f"  {digest[:12]}…  {rel}")

@@ -5,7 +5,7 @@ data_lineage:
   source_artifact:
     schema_version: '1.0'
     type: audio
-    path: /home/user/ugh-prompt-engine/examples/sample_input/synth_05_fast_bright_d_major.wav
+    path: examples/sample_input/synth_05_fast_bright_d_major.wav
     metadata:
       duration_sec: 42.0
       sample_rate: 22050
