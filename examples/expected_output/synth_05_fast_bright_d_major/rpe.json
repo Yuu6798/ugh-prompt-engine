@@ -58,6 +58,8 @@
     "rms_mean": 0.2101,
     "peak_amplitude": 0.8224,
     "crest_factor": 3.7514,
+    "loudness_lufs_integrated": -13.55,
+    "true_peak_dbfs": -1.69,
     "active_rate": 0.9917,
     "valley_depth": 0.1058,
     "valley_depth_method": "hybrid",

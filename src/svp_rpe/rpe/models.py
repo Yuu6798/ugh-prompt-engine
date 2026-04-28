@@ -52,6 +52,8 @@ class PhysicalRPE(BaseModel):
     rms_mean: float
     peak_amplitude: float
     crest_factor: float
+    loudness_lufs_integrated: Optional[float] = None
+    true_peak_dbfs: Optional[float] = None
     active_rate: float
     valley_depth: float
     valley_depth_method: str = "rms"
