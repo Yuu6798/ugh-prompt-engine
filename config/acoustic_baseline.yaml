@@ -1,0 +1,8 @@
+# Acoustic baseline — Q1-4 starting values, calibration pending
+# Genre profile: lightly mixed acoustic / live recording
+# Lower RMS, higher crest factor, more dynamic range than Pro
+rms_mean_pro: 0.180
+active_rate_ideal: 0.700
+crest_factor_ideal: 7.0
+valley_depth_pro: 0.350
+thickness_pro: 1.500

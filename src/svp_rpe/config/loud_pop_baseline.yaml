@@ -1,0 +1,8 @@
+# Loud Pop baseline — Q1-4 starting values, calibration pending
+# Genre profile: heavily compressed, peak-loud commercial pop
+# Higher RMS, lower crest factor, less valley depth than Pro
+rms_mean_pro: 0.350
+active_rate_ideal: 0.950
+crest_factor_ideal: 3.5
+valley_depth_pro: 0.150
+thickness_pro: 2.300

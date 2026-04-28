@@ -24,4 +24,5 @@ Claude が起草し、User が Codex に渡す Task Brief を蓄積する。
 | Q0-4 | mir_eval 統合 + ground-truth 検証スクリプト | `claude/q0-4-mir-eval-validation` | merged: PR #13（Plan B 継続） |
 | Q0-5 | validation.md 初版（5 曲ベースライン） | `claude/q0-5-validation-doc` | merged: PR #14（Plan B 継続） |
 | Q1-1 | LUFS / true_peak (pyloudnorm) | `claude/q1-1-loudness-lufs` | merged: PR #15（Plan B 継続、Codex P1 stereo bug fix 込み） |
-| Q1-3 | BPM 信頼度の再設計 (CV-based) | `claude/q1-3-bpm-confidence` | Claude 代行で実装中（Plan B 継続） |
+| Q1-3 | BPM 信頼度の再設計 (CV-based) | `claude/q1-3-bpm-confidence` | merged: PR #16（Codex P2 round 1-3 含む、Plan B 継続） |
+| Q1-4 | pro_baseline ジャンル別拡張 (Pro / Loud Pop / Acoustic / EDM) | `claude/q1-4-genre-baseline` | Claude 代行で実装中（Plan B 継続） |

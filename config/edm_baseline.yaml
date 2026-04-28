@@ -1,0 +1,8 @@
+# EDM baseline — Q1-4 starting values, calibration pending
+# Genre profile: maximally compressed, peak-loud club music
+# Highest RMS, lowest crest factor, minimal valley depth
+rms_mean_pro: 0.400
+active_rate_ideal: 0.970
+crest_factor_ideal: 3.0
+valley_depth_pro: 0.100
+thickness_pro: 2.500
