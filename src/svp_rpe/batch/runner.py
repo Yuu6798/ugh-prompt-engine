@@ -21,6 +21,7 @@ def run_batch(
     svp_dir: Optional[str] = None,
     mode: str = "evaluate",  # "evaluate" | "compare"
     output_dir: Optional[str] = None,
+    baseline: str = "pro",
 ) -> dict:
     """Run batch processing on a directory of audio files.
 
@@ -41,7 +42,7 @@ def run_batch(
         try:
             rpe_bundle = extract_rpe_from_file(str(audio_path))
             svp_bundle = generate_svp(rpe_bundle)
-            rpe_score = score_rpe(rpe_bundle.physical)
+            rpe_score = score_rpe(rpe_bundle.physical, baseline=baseline)
             ugher_score = score_ugher(rpe_bundle, svp_bundle)
             integrated = score_integrated(ugher_score, rpe_score)
 
@@ -50,6 +51,7 @@ def run_batch(
                 "integrated_score": integrated.integrated_score,
                 "ugher_score": ugher_score.overall,
                 "rpe_score": rpe_score.overall,
+                "baseline_profile": rpe_score.baseline_profile,
             }
 
             # Compare mode: evaluate against each SVP candidate
@@ -92,6 +94,7 @@ def run_batch(
         "total_files": len(audio_files),
         "successful": len([r for r in results if "error" not in r]),
         "failed": len([r for r in results if "error" in r]),
+        "baseline_profile": baseline,
         "ranking": [
             {"rank": i + 1, "audio": r["audio"], "score": r["integrated_score"]}
             for i, r in enumerate(ranked)
@@ -114,7 +117,7 @@ def run_batch(
         )
 
         # Generate summary.csv
-        csv_lines = ["rank,audio,integrated_score,ugher_score,rpe_score"]
+        csv_lines = ["rank,audio,integrated_score,ugher_score,rpe_score,baseline_profile"]
         for i, r in enumerate(ranked):
             ugher = r.get("ugher_score")
             rpe_s = r.get("rpe_score")
@@ -122,7 +125,7 @@ def run_batch(
             rpe_str = f"{rpe_s:.4f}" if isinstance(rpe_s, float) else "N/A"
             csv_lines.append(
                 f"{i+1},{r['audio']},{r['integrated_score']:.4f},"
-                f"{ugher_str},{rpe_str}"
+                f"{ugher_str},{rpe_str},{r.get('baseline_profile', baseline)}"
             )
         (out / "summary.csv").write_text("\n".join(csv_lines), encoding="utf-8")
 

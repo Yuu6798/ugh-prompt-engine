@@ -222,7 +222,7 @@ def check_outputs(songs: list[tuple[str, Path, str]]) -> int:
         mismatches.append(f"{rel}: orphan file on disk (not produced by current ground_truth)")
 
     if mismatches:
-        print("[check] FAIL — expected_output is out of sync:", file=sys.stderr)
+        print("[check] FAIL - expected_output is out of sync:", file=sys.stderr)
         for line in mismatches:
             print(f"  - {line}", file=sys.stderr)
         print(
@@ -232,7 +232,7 @@ def check_outputs(songs: list[tuple[str, Path, str]]) -> int:
         )
         return 1
 
-    print(f"[check] OK — {len(seen)} artefacts match hashes.txt")
+    print(f"[check] OK - {len(seen)} artefacts match hashes.txt")
     return 0
 
 

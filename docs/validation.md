@@ -91,6 +91,7 @@ Q0 完了で「定量的に検証済み」になった項目を ✅ で示す。
 | Key detection | ✅ Quantitatively validated (Q0-4) | `mir_eval.key.evaluate` Weighted Score |
 | Section boundaries | ✅ Partially validated (Q0-4) | `mir_eval.segment.detection` F@0.5s / F@3s |
 | Snapshot determinism | ✅ Verified (Q0-2/Q0-3) | 15 件の hash 比較 CI |
+| Genre baseline scoring | Partially verified (Q1-4) | 4 profiles load and score deterministically; no genre-labeled validation corpus yet |
 | RPE physical scores | Unverified | Heuristic proximity to static baseline |
 | UGHer score | Unverified | Token / anchor / Delta-E heuristics |
 | SVP YAML output | ✅ Deterministic | Stable hashes for same synthetic input |
@@ -100,6 +101,8 @@ Q0 完了で「定量的に検証済み」になった項目を ✅ で示す。
 
 - `rpe_score` / `ugher_score` / `integrated_score` は production 音楽品質の
   真値ラベルではない
+- `--baseline pro|loud_pop|acoustic|edm` は比較基準の切替であり、ジャンルや
+  制作品質を自動判定するものではない
 - 高スコア = 「実装ヒューリスティクに近い」であり「良い音楽」ではない
 - パイプラインは固定環境下で決定論的だが、メトリック妥当性には検証
   データセットが必須
@@ -110,6 +113,8 @@ Q0 完了で「定量的に検証済み」になった項目を ✅ で示す。
 
 - **Q0 fix-up**: synth_01 BPM octave error の解消（Q1-3 と同期）
 - **Q1**: LUFS / 拍子 / BPM 信頼度の業界標準準拠
+- **Q1-4 follow-up**: genre-labeled validation corpus で `pro` / `loud_pop` /
+  `acoustic` / `edm` baseline の妥当性を検証
 - **Q2**: downbeat / chord / melody の時系列観測
 - **CC0 実音源の追加**: 合成サイン波だけでは genre coverage 不足
 - **`rpe_score` / `ugher_score` のキャリブレーション**: 人手ラベル付きの

@@ -13,6 +13,18 @@ def test_load_pro_baseline():
     assert isinstance(cfg["rms_mean_pro"], float)
 
 
+@pytest.mark.parametrize("name", ["loud_pop_baseline", "acoustic_baseline", "edm_baseline"])
+def test_load_baseline_profiles(name: str):
+    cfg = load_config(name)
+    assert set(cfg) == {
+        "rms_mean_pro",
+        "active_rate_ideal",
+        "crest_factor_ideal",
+        "valley_depth_pro",
+        "thickness_pro",
+    }
+
+
 def test_load_semantic_rules():
     cfg = load_config("semantic_rules")
     assert cfg["schema_version"] == "2.0"
@@ -25,6 +37,9 @@ def test_load_packaged_configs_without_local_config(monkeypatch):
     monkeypatch.setattr(config_loader_module, "_local_config_paths", lambda name: [])
 
     assert "rms_mean_pro" in load_config("pro_baseline")
+    assert "rms_mean_pro" in load_config("loud_pop_baseline")
+    assert "rms_mean_pro" in load_config("acoustic_baseline")
+    assert "rms_mean_pro" in load_config("edm_baseline")
     assert load_config("semantic_rules")["schema_version"] == "2.0"
     assert "groups" in load_config("synonym_map")
     assert "default" in load_config("svp_templates")

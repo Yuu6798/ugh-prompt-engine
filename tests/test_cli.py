@@ -26,6 +26,12 @@ def test_run_with_real_audio(sine_wave_mono):
     assert "Integrated Score" in result.output
 
 
+def test_evaluate_accepts_baseline_profile(sine_wave_mono):
+    result = runner.invoke(app, ["evaluate", "--audio", sine_wave_mono, "--baseline", "edm"])
+    assert result.exit_code == 0
+    assert '"baseline_profile": "edm"' in result.output
+
+
 def test_extract_missing_file():
     result = runner.invoke(app, ["extract", "nonexistent.wav"])
     assert result.exit_code != 0

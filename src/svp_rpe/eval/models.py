@@ -7,7 +7,8 @@ from pydantic import BaseModel
 class RPEScore(BaseModel):
     """RPE physical quality score against Pro baseline."""
 
-    schema_version: str = "1.0"
+    schema_version: str = "1.1"
+    baseline_profile: str = "pro"
     rms_score: float
     active_rate_score: float
     crest_factor_score: float
