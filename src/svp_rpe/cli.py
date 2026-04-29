@@ -14,14 +14,19 @@ import json
 from pathlib import Path
 from typing import Optional
 
+import click
 import typer
 from rich.console import Console
+
+from svp_rpe.eval.scorer_rpe import BASELINE_CONFIGS
 
 app = typer.Typer(
     name="svprpe",
     help="SVP-RPE: Audio analysis → RPE extraction → SVP generation → Evaluation",
 )
 console = Console()
+BASELINE_PROFILE_CHOICE = click.Choice(sorted(BASELINE_CONFIGS))
+BASELINE_PROFILE_HELP = "RPE baseline profile used as scoring reference."
 
 
 @app.command()
@@ -89,7 +94,8 @@ def evaluate(
     baseline: str = typer.Option(
         "pro",
         "--baseline",
-        help="RPE baseline profile: pro | loud_pop | acoustic | edm",
+        click_type=BASELINE_PROFILE_CHOICE,
+        help=BASELINE_PROFILE_HELP,
     ),
 ) -> None:
     """Evaluate audio. With --svp: compare against external SVP. Without: self-evaluate."""
@@ -212,7 +218,8 @@ def run(
     baseline: str = typer.Option(
         "pro",
         "--baseline",
-        help="RPE baseline profile: pro | loud_pop | acoustic | edm",
+        click_type=BASELINE_PROFILE_CHOICE,
+        help=BASELINE_PROFILE_HELP,
     ),
 ) -> None:
     """Run full pipeline: extract → generate → evaluate."""
@@ -277,7 +284,8 @@ def batch(
     baseline: str = typer.Option(
         "pro",
         "--baseline",
-        help="RPE baseline profile: pro | loud_pop | acoustic | edm",
+        click_type=BASELINE_PROFILE_CHOICE,
+        help=BASELINE_PROFILE_HELP,
     ),
 ) -> None:
     """Batch process multiple audio files."""
