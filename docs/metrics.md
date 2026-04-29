@@ -51,15 +51,28 @@ an audio-level 6/8 fixture is deferred until the sample set is expanded.
 | Width | RMS(L-R) / RMS(L+R) |
 | Correlation | Pearson correlation between L and R channels |
 
-## Pro Baseline (config/pro_baseline.yaml)
+## Baseline Profiles (Q1-4)
 
-| Metric | Pro Value |
-|--------|----------|
-| rms_mean | 0.298 |
-| active_rate | 0.915 |
-| crest_factor | 5.0 |
-| valley_depth | 0.2165 |
-| thickness | 2.105 |
+`score_rpe()` compares physical metrics against a named baseline profile.
+The default is `pro`, preserving the original single-baseline behavior.
+
+| Profile | Config | Intended use |
+|---|---|---|
+| `pro` | `config/pro_baseline.yaml` | General commercial mastering baseline |
+| `loud_pop` | `config/loud_pop_baseline.yaml` | Loud pop / rock with high RMS and lower crest factor |
+| `acoustic` | `config/acoustic_baseline.yaml` | Acoustic / jazz with lower RMS and wider dynamics |
+| `edm` | `config/edm_baseline.yaml` | Electronic / dance mixes with dense low-end and stronger section contrast |
+
+| Metric | pro | loud_pop | acoustic | edm |
+|--------|---:|---:|---:|---:|
+| rms_mean | 0.298 | 0.38 | 0.15 | 0.35 |
+| active_rate | 0.915 | 0.95 | 0.75 | 0.92 |
+| crest_factor | 5.0 | 3.5 | 8.0 | 4.0 |
+| valley_depth | 0.2165 | 0.15 | 0.25 | 0.35 |
+| thickness | 2.105 | 2.5 | 1.5 | 2.8 |
+
+These values are initial calibration anchors, not production-quality truth.
+Select explicitly via `score_rpe(phys, baseline="edm")` or CLI `--baseline edm`.
 
 ## Scoring
 

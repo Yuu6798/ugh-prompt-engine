@@ -32,6 +32,7 @@ import mir_eval.key
 import mir_eval.segment
 import mir_eval.tempo
 
+from svp_rpe.eval.scorer_rpe import score_rpe
 from svp_rpe.rpe.extractor import extract_rpe_from_file
 from svp_rpe.rpe.models import PhysicalRPE
 
@@ -54,6 +55,7 @@ class TruthSong:
     bpm: float
     key: str
     mode: str
+    baseline_profile: str
     time_signature: str
     sections: list[tuple[float, float]]
 
@@ -94,12 +96,24 @@ class SegmentResult:
 
 
 @dataclass
+class BaselineScoreResult:
+    profile: str
+    overall: float
+    rms_score: float
+    active_rate_score: float
+    crest_factor_score: float
+    valley_score: float
+    thickness_score: float
+
+
+@dataclass
 class SongValidation:
     song_id: str
     bpm: BPMResult
     key: KeyResult
     time_signature: TimeSignatureResult
     segments: SegmentResult
+    baseline_score: BaselineScoreResult
     passes_thresholds: bool
     threshold_failures: list[str]
 
@@ -125,6 +139,7 @@ def load_truth() -> list[TruthSong]:
                 bpm=float(entry["bpm"]),
                 key=str(entry["key"]),
                 mode=str(entry["mode"]),
+                baseline_profile=str(entry.get("baseline_profile", "pro")),
                 time_signature=str(entry["time_signature"]),
                 sections=sections,
             )
@@ -211,6 +226,19 @@ def evaluate_segments(
     )
 
 
+def evaluate_baseline_score(phys: PhysicalRPE, baseline_profile: str) -> BaselineScoreResult:
+    score = score_rpe(phys, baseline=baseline_profile)
+    return BaselineScoreResult(
+        profile=score.baseline_profile,
+        overall=score.overall,
+        rms_score=score.rms_score,
+        active_rate_score=score.active_rate_score,
+        crest_factor_score=score.crest_factor_score,
+        valley_score=score.valley_score,
+        thickness_score=score.thickness_score,
+    )
+
+
 def evaluate_song(song: TruthSong) -> SongValidation:
     rpe = extract_rpe_from_file(str(song.audio_path), valley_method=VALLEY_METHOD)
     phys = rpe.physical
@@ -219,10 +247,11 @@ def evaluate_song(song: TruthSong) -> SongValidation:
     key_result = evaluate_key(phys, song.key, song.mode)
     time_signature_result = evaluate_time_signature(phys, song.time_signature)
     seg_result = evaluate_segments(phys, song.sections)
+    baseline_result = evaluate_baseline_score(phys, song.baseline_profile)
 
     failures: list[str] = []
     if bpm_result.abs_diff is None or bpm_result.abs_diff >= BPM_MAX_ABS_DIFF:
-        failures.append(f"BPM diff {bpm_result.abs_diff} ≥ {BPM_MAX_ABS_DIFF}")
+        failures.append(f"BPM diff {bpm_result.abs_diff} >= {BPM_MAX_ABS_DIFF}")
     if key_result.weighted_score < KEY_MIN_SCORE:
         failures.append(f"Key score {key_result.weighted_score:.3f} < {KEY_MIN_SCORE}")
     if TIME_SIGNATURE_REQUIRE_MATCH and not time_signature_result.match:
@@ -239,6 +268,7 @@ def evaluate_song(song: TruthSong) -> SongValidation:
         key=key_result,
         time_signature=time_signature_result,
         segments=seg_result,
+        baseline_score=baseline_result,
         passes_thresholds=not failures,
         threshold_failures=failures,
     )
@@ -248,13 +278,14 @@ def render_markdown(results: list[SongValidation]) -> str:
     lines: list[str] = []
     lines.append("# Validation against ground truth\n")
     lines.append("| song_id | BPM est / ref / Δ | tempo p | key est / ref / score | "
-                 "meter est / ref / conf | seg F@0.5s | seg F@3s | check |")
-    lines.append("|---|---|---|---|---|---|---|---|")
+                 "meter est / ref / conf | seg F@0.5s | seg F@3s | "
+                 "baseline / score | check |")
+    lines.append("|---|---|---|---|---|---|---|---|---|")
     for r in results:
         bpm_diff = "n/a" if r.bpm.abs_diff is None else f"{r.bpm.abs_diff:.2f}"
         bpm_est = "n/a" if r.bpm.estimated is None else f"{r.bpm.estimated:.2f}"
         key_est = r.key.estimated or "n/a"
-        check = "✅" if r.passes_thresholds else "❌"
+        check = "pass" if r.passes_thresholds else "fail"
         lines.append(
             f"| {r.song_id} "
             f"| {bpm_est} / {r.bpm.reference:.2f} / {bpm_diff} "
@@ -264,6 +295,7 @@ def render_markdown(results: list[SongValidation]) -> str:
             f"{r.time_signature.confidence:.2f} "
             f"| {r.segments.f_at_0_5s:.2f} "
             f"| {r.segments.f_at_3_0s:.2f} "
+            f"| {r.baseline_score.profile} / {r.baseline_score.overall:.2f} "
             f"| {check} |"
         )
     failed = [r for r in results if not r.passes_thresholds]

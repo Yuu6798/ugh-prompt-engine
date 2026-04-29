@@ -1,6 +1,7 @@
 {
   "rpe_score": {
-    "schema_version": "1.0",
+    "schema_version": "1.1",
+    "baseline_profile": "pro",
     "rms_score": 0.7573,
     "active_rate_score": 0.8458,
     "crest_factor_score": 0.7004,

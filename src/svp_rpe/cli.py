@@ -14,14 +14,19 @@ import json
 from pathlib import Path
 from typing import Optional
 
+import click
 import typer
 from rich.console import Console
+
+from svp_rpe.eval.scorer_rpe import BASELINE_CONFIGS
 
 app = typer.Typer(
     name="svprpe",
     help="SVP-RPE: Audio analysis → RPE extraction → SVP generation → Evaluation",
 )
 console = Console()
+BASELINE_PROFILE_CHOICE = click.Choice(sorted(BASELINE_CONFIGS))
+BASELINE_PROFILE_HELP = "RPE baseline profile used as scoring reference."
 
 
 @app.command()
@@ -86,6 +91,12 @@ def evaluate(
     output: Optional[str] = typer.Option(None, "-o", "--output", help="Output JSON path"),
     valley_method: str = typer.Option("hybrid", "--valley-method",
                                        help="Valley method: rms_percentile/section_ar/hybrid"),
+    baseline: str = typer.Option(
+        "pro",
+        "--baseline",
+        click_type=BASELINE_PROFILE_CHOICE,
+        help=BASELINE_PROFILE_HELP,
+    ),
 ) -> None:
     """Evaluate audio. With --svp: compare against external SVP. Without: self-evaluate."""
     from svp_rpe.eval.scorer_integrated import score_integrated
@@ -98,7 +109,7 @@ def evaluate(
     rpe_bundle = extract_rpe_from_file(audio, valley_method=valley_method)
     svp_bundle = generate_svp(rpe_bundle)
 
-    rpe_score = score_rpe(rpe_bundle.physical)
+    rpe_score = score_rpe(rpe_bundle.physical, baseline=baseline)
     ugher_score = score_ugher(rpe_bundle, svp_bundle)
     integrated = score_integrated(ugher_score, rpe_score)
 
@@ -204,6 +215,12 @@ def run(
     no_save: bool = typer.Option(False, "--no-save", help="Print to stdout only"),
     valley_method: str = typer.Option("hybrid", "--valley-method",
                                        help="Valley method: rms_percentile/section_ar/hybrid"),
+    baseline: str = typer.Option(
+        "pro",
+        "--baseline",
+        click_type=BASELINE_PROFILE_CHOICE,
+        help=BASELINE_PROFILE_HELP,
+    ),
 ) -> None:
     """Run full pipeline: extract → generate → evaluate."""
     from svp_rpe.eval.scorer_integrated import score_integrated
@@ -221,7 +238,7 @@ def run(
     svp_bundle = generate_svp(rpe_bundle)
     console.print("[green]✓[/green] SVP generation complete")
 
-    rpe_score = score_rpe(rpe_bundle.physical)
+    rpe_score = score_rpe(rpe_bundle.physical, baseline=baseline)
     ugher_score = score_ugher(rpe_bundle, svp_bundle)
     integrated = score_integrated(ugher_score, rpe_score)
     console.print("[green]✓[/green] Evaluation complete")
@@ -264,6 +281,12 @@ def batch(
     svp_dir: Optional[str] = typer.Option(None, "--svp-dir", help="Directory with SVP candidates"),
     mode: str = typer.Option("evaluate", "--mode", help="Mode: evaluate | compare"),
     output_dir: Optional[str] = typer.Option(None, "--output-dir", help="Output directory"),
+    baseline: str = typer.Option(
+        "pro",
+        "--baseline",
+        click_type=BASELINE_PROFILE_CHOICE,
+        help=BASELINE_PROFILE_HELP,
+    ),
 ) -> None:
     """Batch process multiple audio files."""
     from svp_rpe.batch.runner import run_batch
@@ -274,6 +297,7 @@ def batch(
         svp_dir=svp_dir,
         mode=mode,
         output_dir=output_dir,
+        baseline=baseline,
     )
 
     console.print(f"\n[bold]Results: {summary['successful']}/{summary['total_files']} successful[/bold]")

@@ -1,6 +1,7 @@
 """tests/test_cli.py — CLI smoke tests."""
 from __future__ import annotations
 
+import pytest
 from typer.testing import CliRunner
 
 from svp_rpe.cli import app
@@ -24,6 +25,33 @@ def test_run_with_real_audio(sine_wave_mono):
     result = runner.invoke(app, ["run", sine_wave_mono, "--no-save"])
     assert result.exit_code == 0
     assert "Integrated Score" in result.output
+
+
+def test_evaluate_accepts_baseline_profile(sine_wave_mono):
+    result = runner.invoke(app, ["evaluate", "--audio", sine_wave_mono, "--baseline", "edm"])
+    assert result.exit_code == 0
+    assert '"baseline_profile": "edm"' in result.output
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["evaluate", "--audio", "nonexistent.wav", "--baseline", "jazz"],
+        ["run", "nonexistent.wav", "--baseline", "jazz"],
+        ["batch", "nonexistent_dir", "--baseline", "jazz"],
+    ],
+)
+def test_baseline_option_rejects_unknown_profile(args):
+    result = runner.invoke(app, args)
+
+    # Choice validation should reject the profile before command body execution.
+    assert result.exit_code != 0
+    assert "Invalid value" in result.output
+    assert "jazz" in result.output
+    assert "acoustic" in result.output
+    assert "edm" in result.output
+    assert "loud_pop" in result.output
+    assert "pro" in result.output
 
 
 def test_extract_missing_file():
