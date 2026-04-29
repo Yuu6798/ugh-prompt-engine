@@ -44,7 +44,8 @@ This repository provides a deterministic local SVP/RPE pipeline. Q0
 - **meter est / ref / conf**: 推定拍子 / 真値拍子 / `time_signature_confidence`
 - **seg F@0.5s / F@3s**: `mir_eval.segment.detection` の F-measure
   （boundary tolerance window 0.5s および 3.0s）
-- **check**: `--check` モードの thresholds (BPM<5, key>=0.5, segF3>=0.5)
+- **check**: `--check` モードの thresholds
+  (BPM<5, key>=0.5, time_signature exact match, segF3>=0.5)
 
 ### 1.3 集計
 
