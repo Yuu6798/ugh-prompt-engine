@@ -81,6 +81,24 @@ This repository provides a deterministic local SVP/RPE pipeline. Q0
   改善しており、**マクロ構造は捉えているが境界は粗い**。Q2 (時系列深化)
   の `madmom` downbeat 統合で改善余地
 
+### 1.6 Q1-4 baseline profile observation
+
+`ground_truth.yaml` now records an explicit `baseline_profile` for each
+synthetic sample. `validate_against_truth.py --json` reports a
+`baseline_score` block for the selected profile, but this is an observed
+heuristic score only; it is not included in `--check` thresholds and is not a
+production quality label.
+The table values below are snapshot values from the current deterministic
+pipeline and should be regenerated when scoring logic changes.
+
+| song_id | baseline_profile | rpe baseline score |
+|---|---|---:|
+| synth_01_slow_pad_c_major | acoustic | 0.54 |
+| synth_02_minor_pulse_a_minor | pro | 0.72 |
+| synth_03_mid_groove_g_major | loud_pop | 0.74 |
+| synth_04_waltz_fsharp_minor | acoustic | 0.57 |
+| synth_05_fast_bright_d_major | edm | 0.56 |
+
 ## 2. Coverage Matrix
 
 Q0 完了で「定量的に検証済み」になった項目を ✅ で示す。
@@ -91,7 +109,7 @@ Q0 完了で「定量的に検証済み」になった項目を ✅ で示す。
 | Key detection | ✅ Quantitatively validated (Q0-4) | `mir_eval.key.evaluate` Weighted Score |
 | Section boundaries | ✅ Partially validated (Q0-4) | `mir_eval.segment.detection` F@0.5s / F@3s |
 | Snapshot determinism | ✅ Verified (Q0-2/Q0-3) | 15 件の hash 比較 CI |
-| Genre baseline scoring | Partially verified (Q1-4) | 4 profiles load and score deterministically; no genre-labeled validation corpus yet |
+| Genre baseline scoring | Partially verified (Q1-4) | 4 profiles load and score deterministically; synth ground truth records explicit baseline_profile and validation JSON reports baseline_score; no genre-labeled validation corpus yet |
 | RPE physical scores | Unverified | Heuristic proximity to static baseline |
 | UGHer score | Unverified | Token / anchor / Delta-E heuristics |
 | SVP YAML output | ✅ Deterministic | Stable hashes for same synthetic input |

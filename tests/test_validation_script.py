@@ -36,6 +36,7 @@ def test_validation_json_schema_has_required_keys() -> None:
         "bpm",
         "key",
         "segments",
+        "baseline_score",
         "passes_thresholds",
         "threshold_failures",
     }
@@ -46,6 +47,21 @@ def test_validation_json_schema_has_required_keys() -> None:
         "n_estimated",
         "f_at_0_5s",
         "f_at_3_0s",
+    }
+    assert set(sample["baseline_score"]) == {
+        "profile",
+        "overall",
+        "rms_score",
+        "active_rate_score",
+        "crest_factor_score",
+        "valley_score",
+        "thickness_score",
+    }
+    assert sample["baseline_score"]["profile"] in {
+        "pro",
+        "loud_pop",
+        "acoustic",
+        "edm",
     }
 
 

@@ -34,6 +34,12 @@ def test_synth_samples_match_ground_truth_audio_metadata() -> None:
     }
     assert [row["time_signature"] for row in rows].count("4/4") == 4
     assert [row["time_signature"] for row in rows].count("3/4") == 1
+    assert {row["baseline_profile"] for row in rows} == {
+        "pro",
+        "loud_pop",
+        "acoustic",
+        "edm",
+    }
 
     for row in rows:
         path = SAMPLE_DIR / row["filename"]

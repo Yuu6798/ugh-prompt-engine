@@ -59,6 +59,7 @@ class SampleSpec:
     key: str
     mode: str
     time_signature: str
+    baseline_profile: str
     duration_sec: float
     expected_brightness_band: str
     seed: int
@@ -89,6 +90,7 @@ SAMPLES = (
         key="C",
         mode="major",
         time_signature="4/4",
+        baseline_profile="acoustic",
         duration_sec=40.0,
         expected_brightness_band="low",
         seed=101,
@@ -108,6 +110,7 @@ SAMPLES = (
         key="A",
         mode="minor",
         time_signature="4/4",
+        baseline_profile="pro",
         duration_sec=36.0,
         expected_brightness_band="mid",
         seed=202,
@@ -127,6 +130,7 @@ SAMPLES = (
         key="G",
         mode="major",
         time_signature="4/4",
+        baseline_profile="loud_pop",
         duration_sec=44.0,
         expected_brightness_band="mid",
         seed=303,
@@ -146,6 +150,7 @@ SAMPLES = (
         key="F#",
         mode="minor",
         time_signature="3/4",
+        baseline_profile="acoustic",
         duration_sec=45.0,
         expected_brightness_band="high",
         seed=404,
@@ -165,6 +170,7 @@ SAMPLES = (
         key="D",
         mode="major",
         time_signature="4/4",
+        baseline_profile="edm",
         duration_sec=42.0,
         expected_brightness_band="high",
         seed=505,
@@ -281,6 +287,7 @@ def ground_truth_rows() -> list[dict]:
                 "key": spec.key,
                 "mode": spec.mode,
                 "time_signature": spec.time_signature,
+                "baseline_profile": spec.baseline_profile,
                 "sample_rate": SAMPLE_RATE,
                 "bit_depth": 16,
                 "channels": 1,
