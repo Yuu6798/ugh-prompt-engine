@@ -16,7 +16,8 @@ This repository provides a deterministic local SVP/RPE pipeline. Q0
   生成された合成サイン波。BPM / key / 拍子 / 構造境界が事前に既知）
 - **真値**: `examples/sample_input/ground_truth.yaml`
 - **比較ツール**: [`scripts/validate_against_truth.py`](../scripts/validate_against_truth.py)
-  が `mir_eval` で BPM / key / section boundaries を比較
+  が `mir_eval` で BPM / key / section boundaries を比較し、time_signature は
+  exact match で比較
 - **再現コマンド**:
   ```bash
   python scripts/validate_against_truth.py            # markdown
@@ -26,13 +27,13 @@ This repository provides a deterministic local SVP/RPE pipeline. Q0
 
 ### 1.2 Per-song results
 
-| song_id | BPM est / ref / Δ | tempo p | key score | seg F@0.5s | seg F@3s | check |
-|---|---|---|---|---|---|---|
-| synth_01_slow_pad_c_major | 123.05 / 60.00 / 63.05 | 0.00 | 1.00 | 0.60 | 0.80 | ❌ |
-| synth_02_minor_pulse_a_minor | 89.10 / 90.00 / 0.90 | 1.00 | 1.00 | 0.36 | 0.73 | ✅ |
-| synth_03_mid_groove_g_major | 123.05 / 120.00 / 3.05 | 1.00 | 1.00 | 0.36 | 0.73 | ✅ |
-| synth_04_waltz_fsharp_minor | 136.00 / 140.00 / 4.00 | 1.00 | 1.00 | 0.36 | 0.73 | ✅ |
-| synth_05_fast_bright_d_major | 172.27 / 170.00 / 2.27 | 1.00 | 1.00 | 0.36 | 0.73 | ✅ |
+| song_id | BPM est / ref / Δ | tempo p | key score | meter est / ref / conf | seg F@0.5s | seg F@3s | check |
+|---|---|---|---|---|---|---|---|
+| synth_01_slow_pad_c_major | 123.05 / 60.00 / 63.05 | 0.00 | 1.00 | 4/4 / 4/4 / 0.71 | 0.60 | 0.80 | ❌ |
+| synth_02_minor_pulse_a_minor | 89.10 / 90.00 / 0.90 | 1.00 | 1.00 | 4/4 / 4/4 / 1.00 | 0.36 | 0.73 | ✅ |
+| synth_03_mid_groove_g_major | 123.05 / 120.00 / 3.05 | 1.00 | 1.00 | 4/4 / 4/4 / 0.58 | 0.36 | 0.73 | ✅ |
+| synth_04_waltz_fsharp_minor | 136.00 / 140.00 / 4.00 | 1.00 | 1.00 | 3/4 / 3/4 / 1.00 | 0.36 | 0.73 | ✅ |
+| synth_05_fast_bright_d_major | 172.27 / 170.00 / 2.27 | 1.00 | 1.00 | 4/4 / 4/4 / 0.68 | 0.36 | 0.73 | ✅ |
 
 各列の意味:
 
@@ -40,6 +41,7 @@ This repository provides a deterministic local SVP/RPE pipeline. Q0
 - **tempo p**: `mir_eval.tempo.detection` の p_score (`tol=0.08`)
 - **key score**: `mir_eval.key.evaluate` の Weighted Score（1.0 = 完全一致、
   0.3 = relative key, 0.0 = unrelated）
+- **meter est / ref / conf**: 推定拍子 / 真値拍子 / `time_signature_confidence`
 - **seg F@0.5s / F@3s**: `mir_eval.segment.detection` の F-measure
   （boundary tolerance window 0.5s および 3.0s）
 - **check**: `--check` モードの thresholds (BPM<5, key>=0.5, segF3>=0.5)
@@ -52,6 +54,7 @@ This repository provides a deterministic local SVP/RPE pipeline. Q0
 | BPM 平均絶対誤差（synth_01 除外） | 2.56 | 4 曲のみ |
 | BPM 誤差 < 5 BPM の曲数 | 4/5 (80%) | synth_01 のみ未達 |
 | Key 完全一致率 | 5/5 (100%) | Krumhansl-Kessler templates が synth に対し全勝 |
+| Time signature 完全一致率 | 5/5 (100%) | Q1-2: 4/4 x4 + 3/4 x1 |
 | Section F@3s 平均 | 0.744 | 全曲が threshold 0.5 を上回る |
 | `--check` 通過 | 4/5 (80%) | |
 
@@ -89,6 +92,7 @@ Q0 完了で「定量的に検証済み」になった項目を ✅ で示す。
 |---|---|---|
 | BPM extraction | ✅ Quantitatively validated (Q0-4) | `mir_eval.tempo.detection` against synth ground truth |
 | Key detection | ✅ Quantitatively validated (Q0-4) | `mir_eval.key.evaluate` Weighted Score |
+| Time signature detection | ✅ Quantitatively validated (Q1-2) | Exact match against synth ground truth (`4/4` x4, `3/4` x1); `6/8` unit-tested only |
 | Section boundaries | ✅ Partially validated (Q0-4) | `mir_eval.segment.detection` F@0.5s / F@3s |
 | Snapshot determinism | ✅ Verified (Q0-2/Q0-3) | 15 件の hash 比較 CI |
 | RPE physical scores | Unverified | Heuristic proximity to static baseline |
@@ -109,7 +113,7 @@ Q0 完了で「定量的に検証済み」になった項目を ✅ で示す。
 ## 4. Next Validation Work
 
 - **Q0 fix-up**: synth_01 BPM octave error の解消（Q1-3 と同期）
-- **Q1**: LUFS / 拍子 / BPM 信頼度の業界標準準拠
+- **Q1**: 残る測定標準化（ジャンル別 baseline、6/8 audio fixture の追加検討）
 - **Q2**: downbeat / chord / melody の時系列観測
 - **CC0 実音源の追加**: 合成サイン波だけでは genre coverage 不足
 - **`rpe_score` / `ugher_score` のキャリブレーション**: 人手ラベル付きの
