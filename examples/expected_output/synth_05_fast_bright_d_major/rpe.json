@@ -10,7 +10,7 @@
     "duration_sec": 42.0,
     "sample_rate": 22050,
     "time_signature": "4/4",
-    "time_signature_confidence": 0.3,
+    "time_signature_confidence": 0.677,
     "structure": [
       {
         "schema_version": "1.0",

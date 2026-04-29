@@ -25,8 +25,24 @@
 | Metric | Definition |
 |--------|-----------|
 | BPM | Beats per minute (librosa beat_track) |
+| Time Signature | Beat-level onset strength autocorrelation over supported meters (`3/4`, `4/4`, `6/8`) |
 | Key | Chroma → Krumhansl-Kessler template matching |
 | Onset Density | Onsets per second |
+
+### Time Signature Detection (Q1-2)
+
+`compute_time_signature()` estimates meter without learned models:
+
+1. Detect beats with `librosa.beat.beat_track`.
+2. Sample normalized onset strength around each beat.
+3. Compute autocorrelation over the beat-strength sequence.
+4. Emit `3/4` when lag-3 clearly dominates nearby duple/quadruple lags.
+5. Emit `6/8` when lag-6 dominates lag-3 while lag-3 remains strong.
+6. Fall back to `4/4` with low confidence when beat evidence is insufficient.
+
+The current validation set contains four `4/4` synth samples and one `3/4`
+waltz sample. `6/8` support is covered by a synthetic beat-strength unit test;
+an audio-level 6/8 fixture is deferred until the sample set is expanded.
 
 ## Stereo Metrics
 

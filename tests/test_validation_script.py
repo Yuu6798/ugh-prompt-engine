@@ -25,6 +25,7 @@ def test_validation_json_schema_has_required_keys() -> None:
         "bpm_max_abs_diff",
         "key_min_score",
         "segment_f_min_at_3s",
+        "time_signature_require_match",
     }
     assert payload["summary"]["total"] == len(results)
     assert 0 <= payload["summary"]["passing"] <= payload["summary"]["total"]
@@ -35,6 +36,7 @@ def test_validation_json_schema_has_required_keys() -> None:
         "song_id",
         "bpm",
         "key",
+        "time_signature",
         "segments",
         "baseline_score",
         "passes_thresholds",
@@ -42,6 +44,7 @@ def test_validation_json_schema_has_required_keys() -> None:
     }
     assert set(sample["bpm"]) == {"estimated", "reference", "abs_diff", "p_score"}
     assert set(sample["key"]) == {"estimated", "reference", "weighted_score"}
+    assert set(sample["time_signature"]) == {"estimated", "reference", "confidence", "match"}
     assert set(sample["segments"]) >= {
         "n_reference",
         "n_estimated",

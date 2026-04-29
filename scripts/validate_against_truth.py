@@ -2,13 +2,14 @@
 
 For every song in `examples/sample_input/ground_truth.yaml`, runs the RPE
 extractor and scores BPM / key / section-boundaries against the recorded
-truth using `mir_eval`. Outputs either a markdown table (default) or a
+truth using `mir_eval`; time_signature is checked by exact match against
+ground_truth.yaml. Outputs either a markdown table (default) or a
 machine-readable JSON document (`--json`).
 
 `--check` enforces minimum-quality thresholds (BPM err <5, key score ≥0.5,
-segment F@3s ≥0.5) and exits 1 on any violation; without `--check` the
-script reports the numbers and exits 0 so developers can inspect drift
-without breaking a workflow.
+time_signature exact match, segment F@3s ≥0.5) and exits 1 on any violation;
+without `--check` the script reports the numbers and exits 0 so developers can
+inspect drift without breaking a workflow.
 
 Usage:
     python scripts/validate_against_truth.py            # markdown table to stdout
@@ -44,6 +45,7 @@ VALLEY_METHOD = "hybrid"
 BPM_MAX_ABS_DIFF = 5.0
 KEY_MIN_SCORE = 0.5
 SEGMENT_F_MIN_AT_3S = 0.5
+TIME_SIGNATURE_REQUIRE_MATCH = True
 
 
 @dataclass
@@ -54,6 +56,7 @@ class TruthSong:
     key: str
     mode: str
     baseline_profile: str
+    time_signature: str
     sections: list[tuple[float, float]]
 
 
@@ -70,6 +73,14 @@ class KeyResult:
     estimated: str | None
     reference: str
     weighted_score: float
+
+
+@dataclass
+class TimeSignatureResult:
+    estimated: str
+    reference: str
+    confidence: float
+    match: bool
 
 
 @dataclass
@@ -100,6 +111,7 @@ class SongValidation:
     song_id: str
     bpm: BPMResult
     key: KeyResult
+    time_signature: TimeSignatureResult
     segments: SegmentResult
     baseline_score: BaselineScoreResult
     passes_thresholds: bool
@@ -128,6 +140,7 @@ def load_truth() -> list[TruthSong]:
                 key=str(entry["key"]),
                 mode=str(entry["mode"]),
                 baseline_profile=str(entry.get("baseline_profile", "pro")),
+                time_signature=str(entry["time_signature"]),
                 sections=sections,
             )
         )
@@ -168,6 +181,16 @@ def evaluate_key(phys: PhysicalRPE, gt_key: str, gt_mode: str) -> KeyResult:
     except ValueError:
         weighted = 0.0
     return KeyResult(estimated=est_str, reference=ref_str, weighted_score=weighted)
+
+
+def evaluate_time_signature(phys: PhysicalRPE, gt_time_signature: str) -> TimeSignatureResult:
+    est = phys.time_signature
+    return TimeSignatureResult(
+        estimated=est,
+        reference=gt_time_signature,
+        confidence=phys.time_signature_confidence,
+        match=est == gt_time_signature,
+    )
 
 
 def evaluate_segments(
@@ -222,6 +245,7 @@ def evaluate_song(song: TruthSong) -> SongValidation:
 
     bpm_result = evaluate_bpm(phys, song.bpm)
     key_result = evaluate_key(phys, song.key, song.mode)
+    time_signature_result = evaluate_time_signature(phys, song.time_signature)
     seg_result = evaluate_segments(phys, song.sections)
     baseline_result = evaluate_baseline_score(phys, song.baseline_profile)
 
@@ -230,6 +254,11 @@ def evaluate_song(song: TruthSong) -> SongValidation:
         failures.append(f"BPM diff {bpm_result.abs_diff} >= {BPM_MAX_ABS_DIFF}")
     if key_result.weighted_score < KEY_MIN_SCORE:
         failures.append(f"Key score {key_result.weighted_score:.3f} < {KEY_MIN_SCORE}")
+    if TIME_SIGNATURE_REQUIRE_MATCH and not time_signature_result.match:
+        failures.append(
+            f"Time signature {time_signature_result.estimated} != "
+            f"{time_signature_result.reference}"
+        )
     if seg_result.f_at_3_0s < SEGMENT_F_MIN_AT_3S:
         failures.append(f"Segment F@3s {seg_result.f_at_3_0s:.3f} < {SEGMENT_F_MIN_AT_3S}")
 
@@ -237,6 +266,7 @@ def evaluate_song(song: TruthSong) -> SongValidation:
         song_id=song.song_id,
         bpm=bpm_result,
         key=key_result,
+        time_signature=time_signature_result,
         segments=seg_result,
         baseline_score=baseline_result,
         passes_thresholds=not failures,
@@ -247,9 +277,10 @@ def evaluate_song(song: TruthSong) -> SongValidation:
 def render_markdown(results: list[SongValidation]) -> str:
     lines: list[str] = []
     lines.append("# Validation against ground truth\n")
-    lines.append("| song_id | BPM est / ref / delta | tempo p | key est / ref / score | "
-                 "seg F@0.5s | seg F@3s | baseline / score | check |")
-    lines.append("|---|---|---|---|---|---|---|---|")
+    lines.append("| song_id | BPM est / ref / Δ | tempo p | key est / ref / score | "
+                 "meter est / ref / conf | seg F@0.5s | seg F@3s | "
+                 "baseline / score | check |")
+    lines.append("|---|---|---|---|---|---|---|---|---|")
     for r in results:
         bpm_diff = "n/a" if r.bpm.abs_diff is None else f"{r.bpm.abs_diff:.2f}"
         bpm_est = "n/a" if r.bpm.estimated is None else f"{r.bpm.estimated:.2f}"
@@ -260,6 +291,8 @@ def render_markdown(results: list[SongValidation]) -> str:
             f"| {bpm_est} / {r.bpm.reference:.2f} / {bpm_diff} "
             f"| {r.bpm.p_score:.2f} "
             f"| {key_est} / {r.key.reference} / {r.key.weighted_score:.2f} "
+            f"| {r.time_signature.estimated} / {r.time_signature.reference} / "
+            f"{r.time_signature.confidence:.2f} "
             f"| {r.segments.f_at_0_5s:.2f} "
             f"| {r.segments.f_at_3_0s:.2f} "
             f"| {r.baseline_score.profile} / {r.baseline_score.overall:.2f} "
@@ -280,6 +313,7 @@ def render_json(results: list[SongValidation]) -> str:
             "bpm_max_abs_diff": BPM_MAX_ABS_DIFF,
             "key_min_score": KEY_MIN_SCORE,
             "segment_f_min_at_3s": SEGMENT_F_MIN_AT_3S,
+            "time_signature_require_match": TIME_SIGNATURE_REQUIRE_MATCH,
         },
         "songs": [asdict(r) for r in results],
         "summary": {
@@ -290,7 +324,15 @@ def render_json(results: list[SongValidation]) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
 
 
+def _configure_stdio() -> None:
+    """Use UTF-8 for emoji/status output on Windows terminals when possible."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _configure_stdio()
     parser = argparse.ArgumentParser(
         description="Validate svp-rpe output against ground_truth.yaml using mir_eval.",
     )

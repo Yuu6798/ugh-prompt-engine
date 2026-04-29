@@ -236,7 +236,15 @@ def check_outputs(songs: list[tuple[str, Path, str]]) -> int:
     return 0
 
 
+def _configure_stdio() -> None:
+    """Use UTF-8 for status output on Windows terminals when possible."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _configure_stdio()
     parser = argparse.ArgumentParser(
         description="Regenerate or verify examples/expected_output snapshots.",
     )

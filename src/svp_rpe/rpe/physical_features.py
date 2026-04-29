@@ -224,6 +224,20 @@ def compute_loudness(
 BPM_CONFIDENCE_CV_SCALE = 5.0
 BPM_CONFIDENCE_AC_THRESHOLD = 0.7
 
+# Time signature calibration (Q1-2).
+# The detector reads beat-level onset strength periodicity. Triple meter is
+# emitted only when the 3-beat autocorrelation peak clearly beats nearby
+# duple/quadruple candidates; otherwise "4/4" remains the conservative
+# fallback instead of claiming weak evidence as a meter change.
+TS_MIN_BEATS = 12
+TS_WINSOR_PERCENTILE = 90.0
+TS_TRIPLE_AC_THRESHOLD = 0.30
+TS_TRIPLE_MARGIN_THRESHOLD = 0.15
+TS_COMPOUND_AC_THRESHOLD = 0.45
+TS_COMPOUND_MARGIN_THRESHOLD = 0.08
+TS_FOUR_FOUR_BASE_CONFIDENCE = 0.55
+TS_CONFIDENCE_GAIN = 1.5
+
 
 def compute_bpm(y: np.ndarray, sr: int) -> tuple[Optional[float], Optional[float]]:
     """Estimate BPM via librosa.beat.beat_track. Returns (bpm, confidence).
@@ -255,6 +269,115 @@ def compute_bpm(y: np.ndarray, sr: int) -> tuple[Optional[float], Optional[float
     cv = float(np.std(intervals) / mean_interval)
     confidence = _clamp(1.0 - BPM_CONFIDENCE_CV_SCALE * cv, 0.0, 1.0)
     return round(bpm, 2), round(confidence, 4)
+
+
+def _beat_strength_autocorrelation(
+    beat_strengths: np.ndarray,
+    *,
+    max_lag: int = 8,
+) -> dict[int, float]:
+    """Autocorrelation over beat-level onset strengths for meter inference."""
+    strengths = np.asarray(beat_strengths, dtype=float)
+    if strengths.size <= max_lag:
+        return {}
+
+    if not np.any(np.isfinite(strengths)):
+        return {}
+    strengths = np.nan_to_num(strengths, nan=0.0, posinf=0.0, neginf=0.0)
+    strengths = np.minimum(strengths, np.percentile(strengths, TS_WINSOR_PERCENTILE))
+    centered = strengths - float(np.mean(strengths))
+    denom = float(np.dot(centered, centered))
+    if denom <= 0.0:
+        return {}
+
+    correlations: dict[int, float] = {}
+    for lag in range(1, max_lag + 1):
+        if centered.size <= lag:
+            break
+        left = centered[:-lag]
+        right = centered[lag:]
+        lag_denom = float(np.sqrt(np.dot(left, left) * np.dot(right, right)))
+        if lag_denom <= 0.0:
+            correlations[lag] = 0.0
+        else:
+            correlations[lag] = float(np.dot(left, right) / lag_denom)
+    return correlations
+
+
+def _classify_time_signature_from_beat_strengths(
+    beat_strengths: np.ndarray,
+) -> tuple[str, float]:
+    """Classify meter from beat-level strength periodicity.
+
+    Returns one of "3/4", "4/4", "6/8". The fallback is "4/4" with a low
+    confidence when there is not enough beat evidence.
+    """
+    strengths = np.asarray(beat_strengths, dtype=float)
+    if strengths.size < TS_MIN_BEATS:
+        return "4/4", 0.0
+
+    ac = _beat_strength_autocorrelation(strengths)
+    if not ac:
+        return "4/4", 0.0
+
+    ac2 = ac.get(2, 0.0)
+    ac3 = ac.get(3, 0.0)
+    ac4 = ac.get(4, 0.0)
+    ac6 = ac.get(6, 0.0)
+    ac8 = ac.get(8, 0.0)
+
+    compound_margin = ac6 - ac3
+    if (
+        ac6 >= TS_COMPOUND_AC_THRESHOLD
+        and ac3 >= TS_TRIPLE_AC_THRESHOLD
+        and compound_margin >= TS_COMPOUND_MARGIN_THRESHOLD
+    ):
+        confidence = _clamp(
+            0.60 + TS_CONFIDENCE_GAIN * (ac6 - TS_COMPOUND_AC_THRESHOLD)
+            + compound_margin,
+        )
+        return "6/8", round(confidence, 4)
+
+    triple_margin = ac3 - max(ac2, ac4)
+    if ac3 >= TS_TRIPLE_AC_THRESHOLD and triple_margin >= TS_TRIPLE_MARGIN_THRESHOLD:
+        confidence = _clamp(
+            0.60 + TS_CONFIDENCE_GAIN * (ac3 - TS_TRIPLE_AC_THRESHOLD)
+            + triple_margin,
+        )
+        return "3/4", round(confidence, 4)
+
+    four_four_evidence = max(ac4, ac8, 0.0) - max(ac3, 0.0)
+    confidence = _clamp(TS_FOUR_FOUR_BASE_CONFIDENCE + max(0.0, four_four_evidence))
+    return "4/4", round(confidence, 4)
+
+
+def compute_time_signature(y: np.ndarray, sr: int) -> tuple[str, float]:
+    """Estimate time signature from beat-level onset strength periodicity.
+
+    The detector distinguishes the currently supported meters ("3/4", "4/4",
+    "6/8") without learned models. When beat evidence is insufficient, it
+    returns the conservative fallback ("4/4", 0.0).
+    """
+    if y.size == 0:
+        return "4/4", 0.0
+
+    _, beats = librosa.beat.beat_track(y=y, sr=sr)
+    beat_frames = np.asarray(beats, dtype=int)
+    if beat_frames.size < TS_MIN_BEATS:
+        return "4/4", 0.0
+
+    onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=512).astype(float)
+    if onset_env.size == 0 or float(np.max(onset_env)) <= 0.0:
+        return "4/4", 0.0
+    onset_env = onset_env / float(np.max(onset_env))
+
+    beat_strengths: list[float] = []
+    for frame in beat_frames:
+        lo = max(0, int(frame) - 1)
+        hi = min(onset_env.size, int(frame) + 2)
+        beat_strengths.append(float(np.max(onset_env[lo:hi])) if hi > lo else 0.0)
+
+    return _classify_time_signature_from_beat_strengths(np.asarray(beat_strengths))
 
 
 def compute_key(y: np.ndarray, sr: int) -> tuple[Optional[str], Optional[str], Optional[float]]:
