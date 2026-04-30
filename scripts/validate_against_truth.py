@@ -33,11 +33,15 @@ import mir_eval.key
 import mir_eval.segment
 import mir_eval.tempo
 
-from svp_rpe.eval.scorer_rpe import score_rpe
-from svp_rpe.rpe.extractor import extract_rpe_from_file
-from svp_rpe.rpe.models import PhysicalRPE
-
 ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from svp_rpe.eval.scorer_rpe import score_rpe  # noqa: E402
+from svp_rpe.rpe.extractor import extract_rpe_from_file  # noqa: E402
+from svp_rpe.rpe.models import PhysicalRPE  # noqa: E402
+
 SAMPLE_DIR = ROOT / "examples" / "sample_input"
 GROUND_TRUTH = SAMPLE_DIR / "ground_truth.yaml"
 VALLEY_METHOD = "hybrid"
@@ -50,6 +54,9 @@ TIME_SIGNATURE_REQUIRE_MATCH = True
 DOWNBEAT_WINDOW_SEC = 0.35
 DOWNBEAT_HIT_RATE_MIN = 0.8
 CHORD_EVENT_HIT_RATE_MIN = 0.75
+MELODY_PITCH_ACCURACY_MIN = 0.80
+MELODY_VOICING_RECALL_MIN = 0.50
+MELODY_CENTS_TOLERANCE = 50.0
 
 
 @dataclass
@@ -63,6 +70,7 @@ class TruthSong:
     time_signature: str
     downbeats_sec: list[float]
     chord_events: list[dict[str, Any]]
+    melody_events: list[dict[str, Any]]
     sections: list[tuple[float, float]]
 
 
@@ -108,6 +116,15 @@ class ChordResult:
 
 
 @dataclass
+class MelodyResult:
+    n_reference_frames: int
+    n_voiced_frames: int
+    voicing_recall: float
+    pitch_accuracy_50c: float
+    mean_abs_cents: float | None
+
+
+@dataclass
 class SegmentResult:
     n_reference: int
     n_estimated: int
@@ -138,6 +155,7 @@ class SongValidation:
     time_signature: TimeSignatureResult
     downbeats: DownbeatResult
     chords: ChordResult
+    melody: MelodyResult
     segments: SegmentResult
     baseline_score: BaselineScoreResult
     passes_thresholds: bool
@@ -169,6 +187,7 @@ def load_truth() -> list[TruthSong]:
                 time_signature=str(entry["time_signature"]),
                 downbeats_sec=[float(t) for t in entry.get("downbeats_sec", [])],
                 chord_events=list(entry.get("chord_events", [])),
+                melody_events=list(entry.get("melody_events", [])),
                 sections=sections,
             )
         )
@@ -329,6 +348,64 @@ def evaluate_chords(
     )
 
 
+def _melody_frequency_at(
+    melody_events: list[dict[str, Any]],
+    time_sec: float,
+) -> float | None:
+    for event in melody_events:
+        if "frequency_hz" not in event:
+            continue
+        start = float(event["start_sec"])
+        end = float(event["end_sec"])
+        if start <= time_sec < end:
+            return float(event["frequency_hz"])
+    return None
+
+
+def evaluate_melody(
+    phys: PhysicalRPE,
+    gt_melody_events: list[dict[str, Any]],
+) -> MelodyResult:
+    contour = phys.melody_contour
+    if contour is None or not gt_melody_events:
+        return MelodyResult(
+            n_reference_frames=0,
+            n_voiced_frames=0,
+            voicing_recall=0.0,
+            pitch_accuracy_50c=0.0,
+            mean_abs_cents=None,
+        )
+
+    hits = 0
+    reference_frames = 0
+    voiced_frames = 0
+    cents_errors: list[float] = []
+    for time_sec, freq_hz, voicing in zip(
+        contour.times,
+        contour.frequencies_hz,
+        contour.voicing,
+    ):
+        expected_hz = _melody_frequency_at(gt_melody_events, float(time_sec))
+        if expected_hz is None:
+            continue
+        reference_frames += 1
+        if float(voicing) < 0.5 or float(freq_hz) <= 0.0:
+            continue
+        voiced_frames += 1
+        cents = abs(1200.0 * float(np.log2(float(freq_hz) / expected_hz)))
+        cents_errors.append(cents)
+        if cents <= MELODY_CENTS_TOLERANCE:
+            hits += 1
+
+    return MelodyResult(
+        n_reference_frames=reference_frames,
+        n_voiced_frames=voiced_frames,
+        voicing_recall=round(voiced_frames / reference_frames, 4) if reference_frames else 0.0,
+        pitch_accuracy_50c=round(hits / voiced_frames, 4) if voiced_frames else 0.0,
+        mean_abs_cents=round(float(np.mean(cents_errors)), 4) if cents_errors else None,
+    )
+
+
 def evaluate_segments(
     phys: PhysicalRPE, gt_sections: list[tuple[float, float]]
 ) -> SegmentResult:
@@ -384,6 +461,7 @@ def evaluate_song(song: TruthSong) -> SongValidation:
     time_signature_result = evaluate_time_signature(phys, song.time_signature)
     downbeat_result = evaluate_downbeats(phys, song.downbeats_sec)
     chord_result = evaluate_chords(phys, song.chord_events)
+    melody_result = evaluate_melody(phys, song.melody_events)
     seg_result = evaluate_segments(phys, song.sections)
     baseline_result = evaluate_baseline_score(phys, song.baseline_profile)
 
@@ -407,6 +485,16 @@ def evaluate_song(song: TruthSong) -> SongValidation:
             f"Chord hit-rate {chord_result.event_hit_rate:.3f} < "
             f"{CHORD_EVENT_HIT_RATE_MIN}"
         )
+    if melody_result.voicing_recall < MELODY_VOICING_RECALL_MIN:
+        failures.append(
+            f"Melody voicing recall {melody_result.voicing_recall:.3f} < "
+            f"{MELODY_VOICING_RECALL_MIN}"
+        )
+    if melody_result.pitch_accuracy_50c < MELODY_PITCH_ACCURACY_MIN:
+        failures.append(
+            f"Melody pitch accuracy {melody_result.pitch_accuracy_50c:.3f} < "
+            f"{MELODY_PITCH_ACCURACY_MIN}"
+        )
     if seg_result.f_at_3_0s < SEGMENT_F_MIN_AT_3S:
         failures.append(f"Segment F@3s {seg_result.f_at_3_0s:.3f} < {SEGMENT_F_MIN_AT_3S}")
 
@@ -417,6 +505,7 @@ def evaluate_song(song: TruthSong) -> SongValidation:
         time_signature=time_signature_result,
         downbeats=downbeat_result,
         chords=chord_result,
+        melody=melody_result,
         segments=seg_result,
         baseline_score=baseline_result,
         passes_thresholds=not failures,
@@ -429,9 +518,10 @@ def render_markdown(results: list[SongValidation]) -> str:
     lines.append("# Validation against ground truth\n")
     lines.append("| song_id | BPM est / ref / Δ | tempo p | key est / ref / score | "
                  "meter est / ref / conf | downbeat hit | chord hit | "
+                 "melody acc | melody recall | "
                  "seg F@0.5s | seg F@3s | "
                  "baseline / score | check |")
-    lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for r in results:
         bpm_diff = "n/a" if r.bpm.abs_diff is None else f"{r.bpm.abs_diff:.2f}"
         bpm_est = "n/a" if r.bpm.estimated is None else f"{r.bpm.estimated:.2f}"
@@ -446,6 +536,8 @@ def render_markdown(results: list[SongValidation]) -> str:
             f"{r.time_signature.confidence:.2f} "
             f"| {r.downbeats.hit_rate:.2f} "
             f"| {r.chords.event_hit_rate:.2f} "
+            f"| {r.melody.pitch_accuracy_50c:.2f} "
+            f"| {r.melody.voicing_recall:.2f} "
             f"| {r.segments.f_at_0_5s:.2f} "
             f"| {r.segments.f_at_3_0s:.2f} "
             f"| {r.baseline_score.profile} / {r.baseline_score.overall:.2f} "
@@ -470,6 +562,9 @@ def render_json(results: list[SongValidation]) -> str:
             "downbeat_window_sec": DOWNBEAT_WINDOW_SEC,
             "downbeat_hit_rate_min": DOWNBEAT_HIT_RATE_MIN,
             "chord_event_hit_rate_min": CHORD_EVENT_HIT_RATE_MIN,
+            "melody_pitch_accuracy_min": MELODY_PITCH_ACCURACY_MIN,
+            "melody_voicing_recall_min": MELODY_VOICING_RECALL_MIN,
+            "melody_cents_tolerance": MELODY_CENTS_TOLERANCE,
         },
         "songs": [asdict(r) for r in results],
         "summary": {

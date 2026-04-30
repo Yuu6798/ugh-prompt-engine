@@ -16,54 +16,73 @@ data_lineage:
   generation_method: deterministic_rule_based
 analysis_rpe:
   schema_version: '1.0'
-  por_core: A bass-heavy, grounded sonic character
+  por_core: A mid-focused, evolving sonic character
   por_surface:
-  - bass-heavy
-  - grounded
-  grv_primary: bass-heavy
-  bpm: 89.1
+  - mid-focused
+  - evolving
+  - melancholic
+  - introspective
+  grv_primary: mid-focused
+  bpm: 92.29
   key: A
   mode: minor
   duration_sec: 36.0
-  structure_summary: '6 sections: Intro, Bridge, Verse, Chorus, Chorus, Outro'
+  structure_summary: '6 sections: Intro, Bridge, Chorus, Verse, Chorus, Outro'
   domain_features:
-    rms_mean: 0.2291
-    active_rate: 0.991
-    valley_depth: 0.1051
-    thickness: 1.4257
-    spectral_centroid: 779.84
+    rms_mean: 0.257
+    active_rate: 0.98
+    valley_depth: 0.193
+    thickness: 1.1912
+    spectral_centroid: 780.02
 svp_for_generation:
   schema_version: '1.0'
-  prompt_text: 'Core character: A bass-heavy, grounded sonic character
+  prompt_text: 'Core character: A mid-focused, evolving sonic character
 
-    Gravity anchor: bass-heavy
+    Gravity anchor: mid-focused
 
-    Energy profile: sustained_energy (intensity 0.50)
+    Energy profile: gradual_build (intensity 0.39)
 
-    Tempo: ~89 BPM'
+    Tempo: ~92 BPM'
   constraints:
-  - 'BPM range: 79-99'
-  - 'Active rate target: 99%'
-  - 'Crest factor target: ~3.4'
+  - 'BPM range: 82-102'
+  - 'Active rate target: 98%'
+  - 'Crest factor target: ~2.8'
   style_tags:
-  - bass-heavy
-  - grounded
-  tempo_range: 79-99
+  - mid-focused
+  - evolving
+  tempo_range: 82-102
   key_suggestion: A minor
   generation_hints:
-    instrumentation_summary: Bass-heavy production with prominent low-end
+    instrumentation_summary: Mid-focused production
     production_notes:
+    - Heavily compressed (low crest factor)
     - Continuous energy, minimal silence
-    candidate_context: []
+    candidate_context:
+    - label: melancholic
+      layer: semantic_hypothesis
+      confidence: 0.55
+      evidence:
+      - mode=minor == minor
+      - spectral_centroid=780 <= 2000
+      - valley_depth=0.193 >= 0.15
+      source_rule: hyp.melancholic
+    - label: introspective
+      layer: semantic_hypothesis
+      confidence: 0.5
+      evidence:
+      - mode=minor == minor
+      - spectral_centroid=780 <= 2000
+      - valley_depth=0.193 >= 0.15
+      source_rule: hyp.melancholic
 evaluation_criteria:
   schema_version: '1.0'
-  por_check: 'Maintains core character: A bass-heavy, grounded sonic character'
-  grv_check: 'Preserves gravity anchor: bass-heavy'
-  delta_e_check: Energy follows sustained_energy pattern
+  por_check: 'Maintains core character: A mid-focused, evolving sonic character'
+  grv_check: 'Preserves gravity anchor: mid-focused'
+  delta_e_check: Energy follows gradual_build pattern
   physical_checks:
-  - RMS within +/-20% of 0.229
-  - Active rate within +/-10% of 99%
-  - BPM within +/-10 of 89
+  - RMS within +/-20% of 0.257
+  - Active rate within +/-10% of 98%
+  - BPM within +/-10 of 92
   - Key matches A minor
   metric_checks:
     domain: music
@@ -77,9 +96,9 @@ evaluation_criteria:
     - spectral_centroid
 minimal_svp:
   schema_version: '1.0'
-  c: A bass-heavy, grounded sonic character
+  c: A mid-focused, evolving sonic character
   g:
-  - bpm~89
+  - bpm~92
   - key=A
-  - energy=sustained_energy
-  de: sustained_energy (0.50)
+  - energy=gradual_build
+  de: gradual_build (0.39)

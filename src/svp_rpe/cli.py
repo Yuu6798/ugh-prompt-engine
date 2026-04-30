@@ -213,21 +213,34 @@ def compare(
 def ci_check(
     target_svp: str = typer.Argument(..., help="Path to TargetSVP JSON"),
     observed_rpe: str = typer.Argument(..., help="Path to ObservedRPE fixture JSON"),
-    output: Optional[str] = typer.Option(None, "-o", "--output", help="Output JSON path"),
+    output: Optional[str] = typer.Option(None, "-o", "--output", help="Output path"),
+    output_format: str = typer.Option(
+        "json",
+        "--format",
+        click_type=click.Choice(["json", "markdown"]),
+        help="Output format: json | markdown",
+    ),
 ) -> None:
     """Run deterministic semantic CI: TargetSVP → ExpectedRPE → Diff → RepairSVP."""
-    from svp_rpe.semantic_ci import ObservedRPE, TargetSVP, run_semantic_ci
+    from svp_rpe.semantic_ci import ObservedRPE, TargetSVP, render_markdown, run_semantic_ci
 
     target_data = json.loads(Path(target_svp).read_text(encoding="utf-8"))
     observed_data = json.loads(Path(observed_rpe).read_text(encoding="utf-8"))
     result = run_semantic_ci(TargetSVP(**target_data), ObservedRPE(**observed_data))
-    result_json = json.dumps(result.model_dump(mode="json"), ensure_ascii=False, indent=2)
+    content = (
+        render_markdown(result)
+        if output_format == "markdown"
+        else json.dumps(result.model_dump(mode="json"), ensure_ascii=False, indent=2)
+    )
 
     if output:
-        Path(output).write_text(result_json, encoding="utf-8")
+        Path(output).write_text(content, encoding="utf-8")
         console.print(f"[green]Semantic CI result saved to {output}[/green]")
     else:
-        typer.echo(result_json)
+        if output_format == "markdown":
+            typer.echo(content, nl=False)
+        else:
+            typer.echo(content)
 
 
 @app.command()

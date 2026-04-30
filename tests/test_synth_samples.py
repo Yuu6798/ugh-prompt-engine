@@ -50,6 +50,8 @@ def test_synth_samples_match_ground_truth_audio_metadata() -> None:
         assert row["downbeats_sec"]
         assert len(row["chord_events"]) == 4
         assert len({event["chord"] for event in row["chord_events"]}) >= 3
+        assert len(row["melody_events"]) >= 4
+        assert all(event["frequency_hz"] > 0 for event in row["melody_events"])
         assert 30.0 <= row["duration_sec"] <= 60.0
 
         info = sf.info(str(path))

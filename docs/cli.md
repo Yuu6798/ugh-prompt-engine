@@ -65,12 +65,14 @@ Run the deterministic semantic CI fixture loop.
 ```bash
 svprpe ci-check target_svp.json observed_rpe.json
 svprpe ci-check target_svp.json observed_rpe.json -o semantic_ci_result.json
+svprpe ci-check target_svp.json observed_rpe.json --format markdown -o semantic_ci_report.md
 svprpe ci-check examples/semantic_ci/pass_perfect/target_svp.json \
   examples/semantic_ci/pass_perfect/observed_rpe.json
 ```
 
 Output includes `expected_rpe`, `semantic_diff`, `repair_svp`, `repaired_svp`, and
-`roundtrip_log`.
+`roundtrip_log`. Use `--format markdown` for a human-readable report with verdict,
+signal diff, metric diff, repair plan, and hash trail.
 
 ### `svprpe run <audio>`
 
@@ -104,7 +106,7 @@ Outputs: `ranking.json`, `summary.csv`, `summary.json`, `next_action.md`.
 |--------|-------------|
 | `--output` / `-o` | Output file path |
 | `--output-dir` | Output directory (creates if needed) |
-| `--format` | Output format: `yaml` (default) or `text` |
+| `--format` | Output format. `generate`: `yaml` (default) or `text`; `ci-check`: `json` (default) or `markdown` |
 | `--no-save` | Print output to stdout instead of saving |
 | `--valley-method` | Valley depth method: `hybrid` (default), `rms_percentile`, `section_ar` |
 | `--baseline` | RPE baseline profile: `pro`, `loud_pop`, `acoustic`, or `edm` |
