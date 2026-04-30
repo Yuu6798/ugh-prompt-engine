@@ -1,0 +1,15 @@
+{
+  "id": "observed-repair-degraded",
+  "domain": "music",
+  "signals": [
+    "148 bpm",
+    "bass-heavy",
+    "dark ambient",
+    "unexpected pad"
+  ],
+  "metrics": {
+    "active_rate": 0.4,
+    "bpm": 132.0
+  },
+  "source": "fixture"
+}

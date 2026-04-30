@@ -1,0 +1,303 @@
+{
+  "schema_version": "1.0",
+  "target_svp": {
+    "schema_version": "1.0",
+    "id": "semantic-ci-repair-degraded",
+    "domain": "music",
+    "core": "energetic driving dense",
+    "surface": [
+      "bright",
+      "wide stereo"
+    ],
+    "grv": [
+      "148 bpm",
+      "bass-heavy"
+    ],
+    "delta_e_profile": "gradual build",
+    "preserve": [
+      "chorus lift",
+      "energetic driving dense"
+    ],
+    "avoid": [
+      "dark ambient"
+    ],
+    "lock": [
+      "148 bpm"
+    ],
+    "metric_targets": {
+      "active_rate": 0.9,
+      "bpm": 148.0
+    },
+    "tolerances": {
+      "active_rate": 0.0,
+      "bpm": 0.0
+    },
+    "change_budget": 3,
+    "notes": []
+  },
+  "expected_rpe": {
+    "schema_version": "1.0",
+    "source_svp_id": "semantic-ci-repair-degraded",
+    "domain": "music",
+    "required_signals": [
+      "148 bpm",
+      "bass-heavy",
+      "bright",
+      "chorus lift",
+      "energetic driving dense",
+      "gradual build",
+      "wide stereo"
+    ],
+    "allowed_signals": [
+      "148 bpm",
+      "bass-heavy",
+      "bright",
+      "chorus lift",
+      "energetic driving dense",
+      "gradual build",
+      "wide stereo"
+    ],
+    "prohibited_signals": [
+      "dark ambient"
+    ],
+    "locked_signals": [
+      "148 bpm"
+    ],
+    "metric_targets": {
+      "active_rate": 0.9,
+      "bpm": 148.0
+    },
+    "tolerances": {
+      "active_rate": 0.0,
+      "bpm": 0.0
+    },
+    "change_budget": 3,
+    "source_hash": "464d6db707cba366d70fecaa50ddbe4174285018fde8d8bf58d10d24ae88e3a5"
+  },
+  "observed_rpe": {
+    "schema_version": "1.0",
+    "id": "observed-repair-degraded",
+    "domain": "music",
+    "signals": [
+      "148 bpm",
+      "bass-heavy",
+      "dark ambient",
+      "unexpected pad"
+    ],
+    "metrics": {
+      "active_rate": 0.4,
+      "bpm": 132.0
+    },
+    "source": "fixture"
+  },
+  "semantic_diff": {
+    "schema_version": "1.0",
+    "missing": [
+      "bright",
+      "chorus lift",
+      "energetic driving dense",
+      "gradual build",
+      "wide stereo"
+    ],
+    "preserved": [
+      "148 bpm",
+      "bass-heavy"
+    ],
+    "over_changed": [
+      "dark ambient",
+      "unexpected pad"
+    ],
+    "metric_diffs": [
+      {
+        "name": "active_rate",
+        "expected": 0.9,
+        "observed": 0.4,
+        "tolerance": 0.0,
+        "diff": 0.5,
+        "passed": false
+      },
+      {
+        "name": "bpm",
+        "expected": 148.0,
+        "observed": 132.0,
+        "tolerance": 0.0,
+        "diff": 16.0,
+        "passed": false
+      }
+    ],
+    "loss": 0.5894,
+    "verdict": "repair"
+  },
+  "repair_svp": {
+    "schema_version": "1.0",
+    "source_svp_id": "semantic-ci-repair-degraded",
+    "change_budget": 3,
+    "preserve": [
+      "148 bpm",
+      "bass-heavy",
+      "chorus lift",
+      "energetic driving dense"
+    ],
+    "restore": [
+      "bright",
+      "chorus lift",
+      "energetic driving dense"
+    ],
+    "reduce": [],
+    "lock": [
+      "148 bpm",
+      "bass-heavy"
+    ],
+    "deferred_restore": [
+      "gradual build",
+      "wide stereo"
+    ],
+    "deferred_reduce": [
+      "dark ambient",
+      "unexpected pad"
+    ],
+    "repair_order": [
+      {
+        "op": "preserve",
+        "signal": "148 bpm",
+        "applied": true
+      },
+      {
+        "op": "preserve",
+        "signal": "bass-heavy",
+        "applied": true
+      },
+      {
+        "op": "preserve",
+        "signal": "chorus lift",
+        "applied": true
+      },
+      {
+        "op": "preserve",
+        "signal": "energetic driving dense",
+        "applied": true
+      },
+      {
+        "op": "restore",
+        "signal": "bright",
+        "applied": true
+      },
+      {
+        "op": "restore",
+        "signal": "chorus lift",
+        "applied": true
+      },
+      {
+        "op": "restore",
+        "signal": "energetic driving dense",
+        "applied": true
+      },
+      {
+        "op": "lock",
+        "signal": "148 bpm",
+        "applied": true
+      },
+      {
+        "op": "lock",
+        "signal": "bass-heavy",
+        "applied": true
+      },
+      {
+        "op": "restore",
+        "signal": "gradual build",
+        "applied": false
+      },
+      {
+        "op": "restore",
+        "signal": "wide stereo",
+        "applied": false
+      },
+      {
+        "op": "reduce",
+        "signal": "dark ambient",
+        "applied": false
+      },
+      {
+        "op": "reduce",
+        "signal": "unexpected pad",
+        "applied": false
+      }
+    ]
+  },
+  "repaired_svp": {
+    "schema_version": "1.0",
+    "id": "semantic-ci-repair-degraded",
+    "domain": "music",
+    "core": "energetic driving dense",
+    "surface": [
+      "bright",
+      "chorus lift",
+      "energetic driving dense",
+      "wide stereo"
+    ],
+    "grv": [
+      "148 bpm",
+      "bass-heavy"
+    ],
+    "delta_e_profile": "gradual build",
+    "preserve": [
+      "148 bpm",
+      "bass-heavy",
+      "chorus lift",
+      "energetic driving dense"
+    ],
+    "avoid": [
+      "dark ambient"
+    ],
+    "lock": [
+      "148 bpm",
+      "bass-heavy"
+    ],
+    "metric_targets": {
+      "active_rate": 0.9,
+      "bpm": 148.0
+    },
+    "tolerances": {
+      "active_rate": 0.0,
+      "bpm": 0.0
+    },
+    "change_budget": 3,
+    "notes": []
+  },
+  "roundtrip_log": {
+    "schema_version": "1.0",
+    "target_svp_hash": "464d6db707cba366d70fecaa50ddbe4174285018fde8d8bf58d10d24ae88e3a5",
+    "expected_rpe_hash": "3e77d54c9ebe38331cad3b9c326c4a63fe0f03b6f397dbf59bdb42a4bfc825b9",
+    "observed_rpe_hash": "71d6a0e6a483284017aca6a64e1f344123aa3dcdd9be55adc968d78649798c97",
+    "semantic_diff_hash": "062d8bb8188357565be458d489a74e301d5fe459591d26faccc33f7366f3ef68",
+    "repair_svp_hash": "36517f41bbc12539b085bf7cf31163cd22bb73de942ec54bbd981dcf248e12df",
+    "transitions": [
+      {
+        "name": "target_svp",
+        "input_hash": "",
+        "output_hash": "464d6db707cba366d70fecaa50ddbe4174285018fde8d8bf58d10d24ae88e3a5"
+      },
+      {
+        "name": "expected_rpe",
+        "input_hash": "464d6db707cba366d70fecaa50ddbe4174285018fde8d8bf58d10d24ae88e3a5",
+        "output_hash": "3e77d54c9ebe38331cad3b9c326c4a63fe0f03b6f397dbf59bdb42a4bfc825b9"
+      },
+      {
+        "name": "observed_rpe",
+        "input_hash": "",
+        "output_hash": "71d6a0e6a483284017aca6a64e1f344123aa3dcdd9be55adc968d78649798c97"
+      },
+      {
+        "name": "semantic_diff",
+        "input_hash": "3e77d54c9ebe38331cad3b9c326c4a63fe0f03b6f397dbf59bdb42a4bfc825b9:71d6a0e6a483284017aca6a64e1f344123aa3dcdd9be55adc968d78649798c97",
+        "output_hash": "062d8bb8188357565be458d489a74e301d5fe459591d26faccc33f7366f3ef68"
+      },
+      {
+        "name": "repair_svp",
+        "input_hash": "062d8bb8188357565be458d489a74e301d5fe459591d26faccc33f7366f3ef68",
+        "output_hash": "36517f41bbc12539b085bf7cf31163cd22bb73de942ec54bbd981dcf248e12df"
+      }
+    ],
+    "final_hash": "aa264950a0b7f6f0cdbee3f47b34ee792c601278fbd130f0b251610d833312cd"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "id": "semantic-ci-pass-perfect",
+  "domain": "music",
+  "core": "energetic driving dense",
+  "surface": [
+    "bright",
+    "wide stereo"
+  ],
+  "grv": [
+    "bass-heavy",
+    "148 bpm"
+  ],
+  "delta_e_profile": "gradual build",
+  "preserve": [
+    "chorus lift"
+  ],
+  "avoid": [
+    "dark ambient"
+  ],
+  "lock": [
+    "148 bpm"
+  ],
+  "metric_targets": {
+    "active_rate": 0.9,
+    "bpm": 148.0
+  },
+  "tolerances": {
+    "active_rate": 0.0,
+    "bpm": 0.0
+  },
+  "change_budget": 3
+}

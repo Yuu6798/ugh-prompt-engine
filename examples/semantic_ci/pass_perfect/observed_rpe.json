@@ -1,0 +1,18 @@
+{
+  "id": "observed-pass-perfect",
+  "domain": "music",
+  "signals": [
+    "148 bpm",
+    "bass-heavy",
+    "bright",
+    "chorus lift",
+    "energetic driving dense",
+    "gradual build",
+    "wide stereo"
+  ],
+  "metrics": {
+    "active_rate": 0.9,
+    "bpm": 148.0
+  },
+  "source": "fixture"
+}

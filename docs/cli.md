@@ -65,6 +65,8 @@ Run the deterministic semantic CI fixture loop.
 ```bash
 svprpe ci-check target_svp.json observed_rpe.json
 svprpe ci-check target_svp.json observed_rpe.json -o semantic_ci_result.json
+svprpe ci-check examples/semantic_ci/pass_perfect/target_svp.json \
+  examples/semantic_ci/pass_perfect/observed_rpe.json
 ```
 
 Output includes `expected_rpe`, `semantic_diff`, `repair_svp`, `repaired_svp`, and

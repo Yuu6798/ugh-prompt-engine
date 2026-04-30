@@ -227,7 +227,7 @@ def ci_check(
         Path(output).write_text(result_json, encoding="utf-8")
         console.print(f"[green]Semantic CI result saved to {output}[/green]")
     else:
-        console.print(result_json)
+        typer.echo(result_json)
 
 
 @app.command()
