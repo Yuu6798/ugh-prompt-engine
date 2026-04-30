@@ -1,7 +1,9 @@
 """eval/models.py — Evaluation score models (Pydantic)."""
 from __future__ import annotations
 
-from pydantic import BaseModel
+from typing import Any
+
+from pydantic import BaseModel, Field, model_serializer
 
 
 class RPEScore(BaseModel):
@@ -15,6 +17,14 @@ class RPEScore(BaseModel):
     valley_score: float
     thickness_score: float
     overall: float
+    stem_scores: dict[str, "RPEScore"] = Field(default_factory=dict)
+
+    @model_serializer(mode="wrap")
+    def omit_empty_stem_scores(self, handler: Any) -> dict[str, Any]:
+        data = handler(self)
+        if not self.stem_scores:
+            data.pop("stem_scores", None)
+        return data
 
 
 class UGHerScore(BaseModel):

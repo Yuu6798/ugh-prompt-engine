@@ -4,6 +4,7 @@ Each physical metric is scored [0,1] by proximity to a selected reference profil
 """
 from __future__ import annotations
 
+import warnings
 from typing import Final
 
 from svp_rpe.eval.models import RPEScore
@@ -23,6 +24,13 @@ PRO_BASELINE_DEFAULTS: Final[dict[str, float]] = {
     "crest_factor_ideal": 5.0,
     "valley_depth_pro": 0.2165,
     "thickness_pro": 2.105,
+}
+
+STEM_BASELINE_PROFILES: Final[dict[str, str]] = {
+    "vocals": "acoustic",
+    "drums": "edm",
+    "bass": "edm",
+    "other": "pro",
 }
 
 
@@ -52,8 +60,12 @@ def _load_baseline_config(baseline: str) -> dict[str, float]:
         raise
 
 
-def score_rpe(phys: PhysicalRPE, *, baseline: str = "pro") -> RPEScore:
-    """Score PhysicalRPE against a named baseline profile."""
+def _score_single_rpe(
+    phys: PhysicalRPE,
+    *,
+    baseline: str,
+    stem_scores: dict[str, RPEScore] | None = None,
+) -> RPEScore:
     cfg = _load_baseline_config(baseline)
     rms_score = _proximity_score(phys.rms_mean, cfg["rms_mean_pro"], 0.3)
     active_rate_score = _proximity_score(phys.active_rate, cfg["active_rate_ideal"], 0.5)
@@ -74,4 +86,43 @@ def score_rpe(phys: PhysicalRPE, *, baseline: str = "pro") -> RPEScore:
         valley_score=round(valley_score, 4),
         thickness_score=round(thickness_score, 4),
         overall=overall,
+        stem_scores=stem_scores or {},
     )
+
+
+def _baseline_for_stem(stem_name: str, fallback: str) -> str:
+    baseline = STEM_BASELINE_PROFILES.get(stem_name)
+    if baseline is None:
+        warnings.warn(
+            f"Unknown stem {stem_name!r}; scoring against parent baseline {fallback!r}.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return fallback
+    return baseline
+
+
+def _score_stem_rpe(stem_name: str, stem_phys: PhysicalRPE, *, parent_baseline: str) -> RPEScore:
+    if stem_phys.stem_rpe:
+        warnings.warn(
+            f"Nested stem_rpe under stem {stem_name!r} is ignored during scoring.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    return _score_single_rpe(
+        stem_phys,
+        baseline=_baseline_for_stem(stem_name, parent_baseline),
+    )
+
+
+def score_rpe(phys: PhysicalRPE, *, baseline: str = "pro") -> RPEScore:
+    """Score PhysicalRPE against a named baseline profile."""
+    stem_scores = {
+        stem_name: _score_stem_rpe(
+            stem_name,
+            stem_phys,
+            parent_baseline=baseline,
+        )
+        for stem_name, stem_phys in phys.stem_rpe.items()
+    }
+    return _score_single_rpe(phys, baseline=baseline, stem_scores=stem_scores)
