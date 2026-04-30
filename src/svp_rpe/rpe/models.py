@@ -1,9 +1,9 @@
 """rpe/models.py — RPE data models (Pydantic)."""
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_serializer, model_validator
 
 
 class SpectralProfile(BaseModel):
@@ -107,6 +107,7 @@ class PhysicalRPE(BaseModel):
     spectral_profile: SpectralProfile
     stereo_profile: Optional[StereoProfile] = None
     onset_density: float
+    stem_rpe: dict[str, "PhysicalRPE"] = Field(default_factory=dict)
 
     @field_validator("structure")
     @classmethod
@@ -114,6 +115,13 @@ class PhysicalRPE(BaseModel):
         if not v:
             raise ValueError("structure must contain at least one section")
         return v
+
+    @model_serializer(mode="wrap")
+    def omit_empty_stem_rpe(self, handler: Any) -> dict[str, Any]:
+        data = handler(self)
+        if not self.stem_rpe:
+            data.pop("stem_rpe", None)
+        return data
 
 
 class GrvAnchor(BaseModel):

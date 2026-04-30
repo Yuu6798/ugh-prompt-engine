@@ -84,12 +84,14 @@ def _as_numpy(value: Any) -> np.ndarray:
     if hasattr(value, "cpu"):
         value = value.cpu()
     if hasattr(value, "numpy"):
-        return np.asarray(value.numpy())
+        return value.numpy()
     return np.asarray(value)
 
 
 def _to_mono_float32(value: Any) -> np.ndarray:
-    arr = np.squeeze(_as_numpy(value))
+    arr = _as_numpy(value)
+    while arr.ndim > 2 and arr.shape[0] == 1:
+        arr = arr[0]
     if arr.ndim == 2:
         arr = np.mean(arr, axis=0)
     elif arr.ndim != 1:
@@ -115,7 +117,10 @@ def _separator_sample_rate(separator: Any) -> int:
             stacklevel=2,
         )
         return DEFAULT_SAMPLE_RATE
-    return int(sample_rate)
+    sample_rate = int(sample_rate)
+    if sample_rate <= 0:
+        raise ValueError("Demucs samplerate must be positive")
+    return sample_rate
 
 
 def separate_stems(
@@ -133,14 +138,7 @@ def separate_stems(
     if not isinstance(separated, dict):
         raise ValueError("Demucs separator returned an invalid stem mapping")
 
-    keys = frozenset(separated)
-    if keys != REQUIRED_STEMS:
-        missing = sorted(REQUIRED_STEMS - keys)
-        extra = sorted(keys - REQUIRED_STEMS)
-        raise ValueError(f"Demucs stems must contain exactly {sorted(REQUIRED_STEMS)}; "
-                         f"missing={missing}, extra={extra}")
-
-    stems = {name: _to_mono_float32(separated[name]) for name in STEM_NAMES}
+    stems = {name: _to_mono_float32(stem) for name, stem in separated.items()}
     sample_rate = _separator_sample_rate(separator)
     n_samples = max((len(stem) for stem in stems.values()), default=0)
 
@@ -148,6 +146,6 @@ def separate_stems(
         source_path=str(source_path),
         model_name=model,
         sample_rate=sample_rate,
-        duration_sec=round(n_samples / sample_rate, 4) if sample_rate else 0.0,
+        duration_sec=round(n_samples / sample_rate, 4),
         stems=stems,
     )

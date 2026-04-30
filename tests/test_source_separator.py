@@ -117,6 +117,33 @@ def test_separate_stems_with_fake_demucs(monkeypatch: pytest.MonkeyPatch, tmp_pa
         np.testing.assert_allclose(stem, np.full(16, 0.5, dtype=np.float32))
 
 
+def test_separate_stems_accepts_single_batch_dim(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class FakeSeparator:
+        samplerate = 44100
+
+        def __init__(self, *, model: str, device: str) -> None:
+            pass
+
+        def separate_audio_file(self, path: Path):
+            stereo = np.stack([
+                np.ones(16, dtype=np.float32),
+                np.zeros(16, dtype=np.float32),
+            ])
+            return path, {name: stereo[None, :, :] for name in STEM_NAMES}
+
+    monkeypatch.setattr(source_separator, "_HAS_DEMUCS", True)
+    monkeypatch.setattr(source_separator, "_DemucsAPI", FakeSeparator)
+
+    bundle = separate_stems(tmp_path / "fixture.wav")
+
+    for stem in bundle.stems.values():
+        assert stem.shape == (16,)
+        np.testing.assert_allclose(stem, np.full(16, 0.5, dtype=np.float32))
+
+
 def test_separate_stems_warns_when_samplerate_missing(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -146,6 +173,8 @@ def test_separate_stems_rejects_incomplete_demucs_output(
     tmp_path: Path,
 ) -> None:
     class FakeSeparator:
+        samplerate = 44100
+
         def __init__(self, *, model: str, device: str) -> None:
             pass
 
