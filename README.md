@@ -48,7 +48,8 @@ svprpe evaluate --audio track.wav --svp design.yaml
 svprpe compare --reference-audio ref.wav --candidate-audio gen.wav
 
 # Deterministic semantic CI fixture check
-svprpe ci-check target_svp.json observed_rpe.json
+svprpe ci-check examples/semantic_ci/pass_perfect/target_svp.json \
+  examples/semantic_ci/pass_perfect/observed_rpe.json
 
 # Batch processing
 svprpe batch ./audio_files --svp-dir ./designs --mode compare --output-dir ./results

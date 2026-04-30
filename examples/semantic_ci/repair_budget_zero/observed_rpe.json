@@ -1,0 +1,12 @@
+{
+  "id": "observed-repair-budget-zero",
+  "domain": "music",
+  "signals": [
+    "unexpected pad"
+  ],
+  "metrics": {
+    "active_rate": 0.4,
+    "bpm": 132.0
+  },
+  "source": "fixture"
+}

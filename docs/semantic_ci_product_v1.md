@@ -36,6 +36,10 @@ the product loop is deterministic before connecting it to measurement adapters.
 Expected RPE is the center of the loop. It makes SVP more than a prompt: it also states what must
 be checked after generation.
 
+`TargetSVP.core` is automatically added to `preserve` during validation. This makes the main
+semantic intent a protected signal even when fixture authors omit it from the explicit preserve
+list.
+
 ## Implementation
 
 Code lives in `src/svp_rpe/semantic_ci/`.
@@ -75,7 +79,13 @@ CLI:
 ```bash
 svprpe ci-check target_svp.json observed_rpe.json
 svprpe ci-check target_svp.json observed_rpe.json -o semantic_ci_result.json
+svprpe ci-check examples/semantic_ci/pass_perfect/target_svp.json \
+  examples/semantic_ci/pass_perfect/observed_rpe.json
 ```
+
+Committed fixtures live under `examples/semantic_ci/`. Each scenario has
+`target_svp.json`, `observed_rpe.json`, and `expected_output.json` so reviewers can
+compare CLI output against a golden snapshot.
 
 ## Minimal Win Conditions
 
@@ -91,6 +101,15 @@ V1 is considered working when these conditions hold:
 8. Same input produces the same output and same hash.
 
 The test suite locks these in `tests/test_semantic_ci.py`.
+
+V1 computes loss as:
+
+```text
+loss = min(1.0, 0.6 * missing_loss + 0.2 * over_changed_loss + 0.2 * metric_loss)
+```
+
+The weights are fixed in V1 so snapshot drift is easy to detect. Later versions can externalize
+them once there is validation data.
 
 ## Repair Mapping
 
