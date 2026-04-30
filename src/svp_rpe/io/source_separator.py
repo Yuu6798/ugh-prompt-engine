@@ -5,19 +5,19 @@ package install and CI path do not require torch/Demucs.
 """
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, field_validator
 
-try:  # pragma: no cover - exercised via monkeypatch in tests.
-    from demucs.api import Separator as _DemucsAPI
-
-    _HAS_DEMUCS = True
-except ImportError:  # pragma: no cover - environment dependent.
+try:
+    from demucs.api import Separator as _DemucsAPI  # pragma: no cover - optional dependency
+except ImportError:
     _DemucsAPI = None
-    _HAS_DEMUCS = False
+
+_HAS_DEMUCS = _DemucsAPI is not None
 
 DEFAULT_MODEL = "htdemucs_ft"
 DEFAULT_SAMPLE_RATE = 44100
@@ -97,13 +97,25 @@ def _to_mono_float32(value: Any) -> np.ndarray:
     return np.asarray(arr, dtype=np.float32)
 
 
-def _load_demucs_separator() -> type:
+def _load_demucs_separator() -> type[Any]:
     if not _HAS_DEMUCS or _DemucsAPI is None:
         raise SeparatorNotAvailableError(
             "demucs is not installed. Install the optional extra with: "
             "pip install 'svp-rpe[separate]'"
         )
     return _DemucsAPI
+
+
+def _separator_sample_rate(separator: Any) -> int:
+    sample_rate = getattr(separator, "samplerate", None)
+    if sample_rate is None:
+        warnings.warn(
+            "Demucs separator did not expose samplerate; using 44100 Hz.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return DEFAULT_SAMPLE_RATE
+    return int(sample_rate)
 
 
 def separate_stems(
@@ -129,7 +141,7 @@ def separate_stems(
                          f"missing={missing}, extra={extra}")
 
     stems = {name: _to_mono_float32(separated[name]) for name in STEM_NAMES}
-    sample_rate = int(getattr(separator, "samplerate", DEFAULT_SAMPLE_RATE))
+    sample_rate = _separator_sample_rate(separator)
     n_samples = max((len(stem) for stem in stems.values()), default=0)
 
     return StemBundle(

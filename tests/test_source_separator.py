@@ -117,6 +117,30 @@ def test_separate_stems_with_fake_demucs(monkeypatch: pytest.MonkeyPatch, tmp_pa
         np.testing.assert_allclose(stem, np.full(16, 0.5, dtype=np.float32))
 
 
+def test_separate_stems_warns_when_samplerate_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class FakeSeparator:
+        def __init__(self, *, model: str, device: str) -> None:
+            pass
+
+        def separate_audio_file(self, path: Path):
+            return path, _stems(n_samples=16)
+
+    monkeypatch.setattr(source_separator, "_HAS_DEMUCS", True)
+    monkeypatch.setattr(source_separator, "_DemucsAPI", FakeSeparator)
+
+    with pytest.warns(RuntimeWarning, match="did not expose samplerate"):
+        bundle = separate_stems(tmp_path / "fixture.wav")
+
+    assert bundle.sample_rate == source_separator.DEFAULT_SAMPLE_RATE
+    assert bundle.duration_sec == pytest.approx(
+        16 / source_separator.DEFAULT_SAMPLE_RATE,
+        abs=1e-4,
+    )
+
+
 def test_separate_stems_rejects_incomplete_demucs_output(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
