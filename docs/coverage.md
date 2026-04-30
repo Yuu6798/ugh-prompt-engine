@@ -43,7 +43,7 @@ These features exist, but their interpretation should stay conservative.
 
 | Area | Current status | Missing validation |
 |---|---|---|
-| Per-stem RPE | `--separate` opt-in Demucs adapter emits vocals, drums, bass, and other `PhysicalRPE` entries | No stem-level ground-truth corpus; no per-stem BPM/key/brightness validation yet |
+| Per-stem RPE | `--separate` opt-in Demucs adapter emits vocals, drums, bass, and other `PhysicalRPE` entries; synthetic summed-stem residual and BPM alignment are covered by `tests/test_stem_validation.py` | No real-audio stem-level ground-truth corpus; no per-stem key/brightness validation yet |
 | Per-stem scoring | `score_rpe()` emits nested `stem_scores` with vocal/drum/bass/other baseline mapping | Baseline values are initial anchors, not validated against separated real stems |
 | Genre baseline scoring | `pro`, `loud_pop`, `acoustic`, and `edm` profiles are selectable | Profile values are hand-calibrated anchors, not genre consensus truth |
 | External SVP comparison | `compare` and `evaluate --svp` compute semantic and physical diffs | Diff thresholds are heuristic and not calibrated against human review labels |
@@ -99,4 +99,7 @@ Known failures are documented:
 - `synth_01_slow_pad_c_major`: BPM octave error
 - `synth_02_minor_pulse_a_minor`: downbeat phase drift
 
-Real-audio CC0 validation and stem-level ground truth remain future work.
+Real-audio CC0 validation and stem-level ground truth remain future work. Q3
+stem residual and BPM alignment have deterministic synthetic coverage plus the
+manual `scripts/validate_stem_separation.py` sign-off path for local Demucs
+runs.
