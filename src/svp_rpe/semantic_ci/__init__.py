@@ -21,6 +21,7 @@ from svp_rpe.semantic_ci.models import (
     SemanticDiff,
     TargetSVP,
 )
+from svp_rpe.semantic_ci.report import render_markdown
 
 __all__ = [
     "ExpectedRPE",
@@ -37,6 +38,7 @@ __all__ = [
     "compare_expected_observed",
     "generate_expected_rpe",
     "generate_repair_svp",
+    "render_markdown",
     "run_semantic_ci",
     "stable_hash",
 ]
