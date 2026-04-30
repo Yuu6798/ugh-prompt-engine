@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, model_serializer
 class RPEScore(BaseModel):
     """RPE physical quality score against Pro baseline."""
 
-    schema_version: str = "1.1"
+    schema_version: str = "1.2"
     baseline_profile: str = "pro"
     rms_score: float
     active_rate_score: float

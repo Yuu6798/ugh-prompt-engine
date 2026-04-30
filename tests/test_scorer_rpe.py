@@ -42,7 +42,7 @@ def test_baseline_profile_exact_match_scores_one(profile: str) -> None:
 
     score = score_rpe(phys, baseline=profile)
 
-    assert score.schema_version == "1.1"
+    assert score.schema_version == "1.2"
     assert score.baseline_profile == profile
     assert score.overall == 1.0
     assert score.rms_score == 1.0
@@ -81,6 +81,19 @@ def test_stem_rpe_scores_use_stem_baseline_profiles() -> None:
         assert stem_score.baseline_profile == STEM_BASELINE_PROFILES[stem_name]
         assert stem_score.overall == 1.0
         assert stem_score.stem_scores == {}
+
+
+def test_stem_score_keeps_partial_distance_when_not_at_stem_baseline() -> None:
+    phys = _physical_at_baseline("pro").model_copy(
+        update={"stem_rpe": {"vocals": _physical_at_baseline("edm")}},
+    )
+
+    score = score_rpe(phys, baseline="pro")
+
+    vocal_score = score.stem_scores["vocals"]
+    assert vocal_score.baseline_profile == "acoustic"
+    assert 0.0 < vocal_score.overall < 1.0
+    assert vocal_score.rms_score < 1.0
 
 
 def test_stem_scores_are_serialized_only_when_present() -> None:

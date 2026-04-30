@@ -96,7 +96,7 @@ def _baseline_for_stem(stem_name: str, fallback: str) -> str:
         warnings.warn(
             f"Unknown stem {stem_name!r}; scoring against parent baseline {fallback!r}.",
             RuntimeWarning,
-            stacklevel=2,
+            stacklevel=3,
         )
         return fallback
     return baseline
