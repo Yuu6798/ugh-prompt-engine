@@ -76,6 +76,12 @@ def validate_stem_reconstruction(
     sample range. This is a validation signal, not a guarantee that Demucs is
     energy-conserving on real music.
     """
+    if int(audio.sr) != int(stem_bundle.sample_rate):
+        raise ValueError(
+            "audio and stem_bundle sample rates must match for reconstruction "
+            f"validation: audio={audio.sr}, stems={stem_bundle.sample_rate}"
+        )
+
     source = np.asarray(audio.y_mono, dtype=np.float32)
     reconstructed = sum_stems(stem_bundle)
     compared_samples = min(source.size, reconstructed.size)

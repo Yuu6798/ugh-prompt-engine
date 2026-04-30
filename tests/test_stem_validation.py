@@ -171,6 +171,14 @@ def test_stem_sum_residual_fails_for_empty_source_with_nonempty_stems() -> None:
     assert result.residual_ratio == 1.0
 
 
+def test_stem_sum_residual_rejects_sample_rate_mismatch() -> None:
+    audio, bundle = _synthetic_stem_fixture()
+    mismatched_audio = audio.model_copy(update={"sr": audio.sr // 2})
+
+    with pytest.raises(ValueError, match="sample rates must match"):
+        validate_stem_reconstruction(mismatched_audio, bundle)
+
+
 def test_per_stem_bpm_matches_full_mix_on_synthetic_fixture() -> None:
     audio, bundle = _synthetic_stem_fixture()
 

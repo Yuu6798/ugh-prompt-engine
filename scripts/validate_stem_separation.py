@@ -46,7 +46,9 @@ def validate_file(
     residual_threshold: float,
     bpm_tolerance: float,
 ) -> dict[str, Any]:
-    audio = load_audio(str(audio_path))
+    # Keep the full mix at native sample rate so summed-stem residual compares
+    # waveforms on the same sample grid as Demucs output.
+    audio = load_audio(str(audio_path), target_sr=None)
     stem_bundle = separate_stems(audio_path, model=model, device=device)
     physical, _, _ = extract_physical(audio, stem_bundle=stem_bundle)
 
