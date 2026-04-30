@@ -4,6 +4,7 @@
 
 - Verdict: pass
 - Loss: 0.0000
+- Threshold: 0.0000
 - Target SVP: semantic-ci-pass-perfect
 - Observed RPE: observed-pass-perfect
 
@@ -56,6 +57,6 @@
 | target_svp | af2925ebb32d |
 | expected_rpe | 4b6c2c2c1709 |
 | observed_rpe | b77b3fb9f778 |
-| semantic_diff | a607dfc4d5e5 |
+| semantic_diff | fb058e0ff65b |
 | repair_svp | 558443b328ed |
-| final | d01e40adef68 |
+| final | 23789d091c03 |

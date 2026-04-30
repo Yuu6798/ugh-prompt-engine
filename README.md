@@ -53,6 +53,8 @@ svprpe ci-check examples/semantic_ci/pass_perfect/target_svp.json \
 svprpe ci-check examples/semantic_ci/repair_degraded/target_svp.json \
   examples/semantic_ci/repair_degraded/observed_rpe.json --format markdown \
   -o semantic_ci_report.md
+svprpe ci-check examples/semantic_ci/repair_degraded/target_svp.json \
+  examples/semantic_ci/repair_degraded/observed_rpe.json --threshold 0.6
 
 # Batch processing
 svprpe batch ./audio_files --svp-dir ./designs --mode compare --output-dir ./results

@@ -220,13 +220,23 @@ def ci_check(
         click_type=click.Choice(["json", "markdown"]),
         help="Output format: json | markdown",
     ),
+    threshold: float = typer.Option(
+        0.0,
+        "--threshold",
+        click_type=click.FloatRange(0.0, 1.0),
+        help="Pass semantic CI when loss is less than or equal to this threshold.",
+    ),
 ) -> None:
     """Run deterministic semantic CI: TargetSVP → ExpectedRPE → Diff → RepairSVP."""
     from svp_rpe.semantic_ci import ObservedRPE, TargetSVP, render_markdown, run_semantic_ci
 
     target_data = json.loads(Path(target_svp).read_text(encoding="utf-8"))
     observed_data = json.loads(Path(observed_rpe).read_text(encoding="utf-8"))
-    result = run_semantic_ci(TargetSVP(**target_data), ObservedRPE(**observed_data))
+    result = run_semantic_ci(
+        TargetSVP(**target_data),
+        ObservedRPE(**observed_data),
+        threshold=threshold,
+    )
     content = (
         render_markdown(result)
         if output_format == "markdown"
@@ -241,6 +251,9 @@ def ci_check(
             typer.echo(content, nl=False)
         else:
             typer.echo(content)
+
+    if result.semantic_diff.verdict == "repair":
+        raise typer.Exit(code=1)
 
 
 @app.command()

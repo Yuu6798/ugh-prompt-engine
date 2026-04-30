@@ -123,7 +123,11 @@ def _metric_loss(metric_diffs: list[MetricDiff]) -> float:
     return sum(losses) / len(losses)
 
 
-def compare_expected_observed(expected: ExpectedRPE, observed: ObservedRPE) -> SemanticDiff:
+def compare_expected_observed(
+    expected: ExpectedRPE,
+    observed: ObservedRPE,
+    threshold: float = 0.0,
+) -> SemanticDiff:
     """Compare Expected RPE against an Observed RPE fixture."""
 
     expected_required = set(expected.required_signals)
@@ -158,7 +162,8 @@ def compare_expected_observed(expected: ExpectedRPE, observed: ObservedRPE) -> S
         over_changed=over_changed,
         metric_diffs=metric_diffs,
         loss=loss,
-        verdict="pass" if loss == 0.0 else "repair",
+        threshold=threshold,
+        verdict="pass" if loss <= threshold else "repair",
     )
 
 
@@ -245,11 +250,15 @@ def _build_roundtrip_log(
     )
 
 
-def run_semantic_ci(target_svp: TargetSVP, observed_rpe: ObservedRPE) -> SemanticCIRun:
+def run_semantic_ci(
+    target_svp: TargetSVP,
+    observed_rpe: ObservedRPE,
+    threshold: float = 0.0,
+) -> SemanticCIRun:
     """Run the Phase 1 deterministic semantic CI loop."""
 
     expected_rpe = generate_expected_rpe(target_svp)
-    semantic_diff = compare_expected_observed(expected_rpe, observed_rpe)
+    semantic_diff = compare_expected_observed(expected_rpe, observed_rpe, threshold=threshold)
     repair_svp = generate_repair_svp(target_svp, semantic_diff)
     repaired_svp = apply_repair_svp(target_svp, repair_svp)
     roundtrip_log = _build_roundtrip_log(

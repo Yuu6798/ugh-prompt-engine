@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from typer.testing import CliRunner
 
 from svp_rpe.cli import app
@@ -51,6 +52,15 @@ def _matching_observed() -> ObservedRPE:
     )
 
 
+def _degraded_observed() -> ObservedRPE:
+    return ObservedRPE(
+        id="fixture-degraded",
+        domain="music",
+        signals=["148 bpm", "bass-heavy", "dark ambient", "unexpected pad"],
+        metrics={"bpm": 132.0, "active_rate": 0.4},
+    )
+
+
 def test_target_svp_generates_expected_rpe_deterministically():
     target = _target()
 
@@ -74,12 +84,7 @@ def test_matching_observed_rpe_has_zero_loss():
 
 def test_degraded_observed_rpe_increases_loss_and_splits_diff():
     target = _target()
-    observed = ObservedRPE(
-        id="fixture-degraded",
-        domain="music",
-        signals=["148 bpm", "bass-heavy", "dark ambient", "unexpected pad"],
-        metrics={"bpm": 132.0, "active_rate": 0.4},
-    )
+    observed = _degraded_observed()
 
     diff = compare_expected_observed(generate_expected_rpe(target), observed)
 
@@ -91,6 +96,48 @@ def test_degraded_observed_rpe_increases_loss_and_splits_diff():
     assert "dark ambient" in diff.over_changed
     assert "unexpected pad" in diff.over_changed
     assert all(not metric.passed for metric in diff.metric_diffs)
+
+
+def test_threshold_zero_preserves_repair_verdict():
+    target = _target()
+
+    diff = compare_expected_observed(
+        generate_expected_rpe(target),
+        _degraded_observed(),
+        threshold=0.0,
+    )
+
+    assert diff.loss > 0.0
+    assert diff.verdict == "repair"
+
+
+def test_threshold_can_convert_repair_to_pass():
+    result = run_semantic_ci(_target(), _degraded_observed(), threshold=1.0)
+
+    assert result.semantic_diff.loss > 0.0
+    assert result.semantic_diff.threshold == 1.0
+    assert result.semantic_diff.verdict == "pass"
+
+
+def test_threshold_just_below_loss_keeps_repair():
+    baseline = run_semantic_ci(_target(), _degraded_observed())
+
+    result = run_semantic_ci(
+        _target(),
+        _degraded_observed(),
+        threshold=baseline.semantic_diff.loss - 0.0001,
+    )
+
+    assert result.semantic_diff.verdict == "repair"
+
+
+def test_threshold_at_loss_converts_to_pass():
+    baseline = run_semantic_ci(_target(), _degraded_observed())
+
+    result = run_semantic_ci(_target(), _degraded_observed(), threshold=baseline.semantic_diff.loss)
+
+    assert result.semantic_diff.threshold == baseline.semantic_diff.loss
+    assert result.semantic_diff.verdict == "pass"
 
 
 def test_repair_svp_separates_preserve_restore_reduce_lock():
@@ -235,3 +282,52 @@ def test_ci_check_cli_outputs_roundtrip_log(tmp_path):
     assert result.exit_code == 0
     assert '"roundtrip_log"' in result.output
     assert '"loss": 0.0' in result.output
+
+
+def test_ci_check_cli_exits_one_for_repair(tmp_path):
+    target_path = tmp_path / "target.json"
+    observed_path = tmp_path / "observed.json"
+    target_path.write_text(
+        json.dumps(_target().model_dump(mode="json"), ensure_ascii=False),
+        encoding="utf-8",
+    )
+    observed_path.write_text(
+        json.dumps(_degraded_observed().model_dump(mode="json"), ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(app, ["ci-check", str(target_path), str(observed_path)])
+
+    assert result.exit_code == 1
+    assert '"verdict": "repair"' in result.output
+
+
+def test_ci_check_cli_threshold_can_pass_repair(tmp_path):
+    target_path = tmp_path / "target.json"
+    observed_path = tmp_path / "observed.json"
+    target_path.write_text(
+        json.dumps(_target().model_dump(mode="json"), ensure_ascii=False),
+        encoding="utf-8",
+    )
+    observed_path.write_text(
+        json.dumps(_degraded_observed().model_dump(mode="json"), ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    baseline = run_semantic_ci(_target(), _degraded_observed())
+    result = CliRunner().invoke(
+        app,
+        [
+            "ci-check",
+            str(target_path),
+            str(observed_path),
+            "--threshold",
+            str(baseline.semantic_diff.loss),
+        ],
+    )
+
+    assert result.exit_code == 0
+    output = json.loads(result.output)
+    assert output["semantic_diff"]["loss"] > 0.0
+    assert output["semantic_diff"]["threshold"] == pytest.approx(baseline.semantic_diff.loss)
+    assert output["semantic_diff"]["verdict"] == "pass"

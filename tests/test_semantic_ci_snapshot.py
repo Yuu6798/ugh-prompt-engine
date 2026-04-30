@@ -1,6 +1,7 @@
 """Golden snapshot tests for examples/semantic_ci fixtures."""
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -33,8 +34,12 @@ def test_ci_check_cli_matches_snapshot(scenario: str) -> None:
         ],
     )
 
-    assert result.exit_code == 0
-    assert result.output == expected_path.read_text(encoding="utf-8")
+    expected_text = expected_path.read_text(encoding="utf-8")
+    expected_result = json.loads(expected_text)
+    expected_exit_code = 0 if expected_result["semantic_diff"]["verdict"] == "pass" else 1
+
+    assert result.exit_code == expected_exit_code
+    assert result.output == expected_text
 
 
 def test_regenerate_ci_fixtures_check_mode() -> None:
