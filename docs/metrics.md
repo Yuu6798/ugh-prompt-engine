@@ -28,6 +28,7 @@
 | Time Signature | Beat-level onset strength autocorrelation over supported meters (`3/4`, `4/4`, `6/8`) |
 | Downbeat Times | Beat-strength phase pick over the inferred meter (`PhysicalRPE.downbeat_times`) |
 | Chord Events | Major/minor triad template match over chroma (`PhysicalRPE.chord_events`) |
+| Melody Contour | `librosa.pyin` monophonic pitch contour (`PhysicalRPE.melody_contour`) |
 | Key | Chroma → Krumhansl-Kessler template matching |
 | Onset Density | Onsets per second |
 
@@ -75,6 +76,20 @@ dependencies:
 The detector is intentionally limited to major/minor triads. It is a
 deterministic validation baseline for the synthetic I/IV/V-style samples, not a
 production chord recognizer.
+
+### Melody Contour Extraction (Q2-3)
+
+`compute_melody_contour()` estimates a monophonic pitch track without adding new
+dependencies:
+
+1. High-pass the input at 300 Hz to reduce bass/chord root dominance.
+2. Run `librosa.pyin` with C2-C7 bounds and hop length 2048.
+3. Store frame-aligned `times`, `frequencies_hz`, and `voicing` probabilities.
+4. Emit `None` for silence or tracks with no meaningful voicing evidence.
+
+The current validation target is synthetic, clearly voiced melody regions:
+pitch accuracy within +/-50 cents and voicing recall over the melody ground
+truth intervals. This is not a production vocal transcription system.
 
 ## Stereo Metrics
 

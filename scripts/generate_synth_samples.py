@@ -81,6 +81,8 @@ class SampleSpec:
     chords: tuple[tuple[str, ...], ...]
     harmonic_weights: tuple[float, ...]
     body_gain: float
+    melody_notes: tuple[str, ...]
+    melody_gain: float
 
     @property
     def filename(self) -> str:
@@ -133,6 +135,30 @@ class SampleSpec:
             )
         return tuple(events)
 
+    @property
+    def melody_events(self) -> tuple[dict[str, float | str], ...]:
+        body = self.sections[1]
+        body_start = float(body["start_sec"])
+        body_end = float(body["end_sec"])
+        note_duration = (body_end - body_start) / len(self.melody_notes)
+        events: list[dict[str, float | str]] = []
+        for note_index, note in enumerate(self.melody_notes):
+            start_sec = body_start + note_index * note_duration
+            end_sec = (
+                body_end
+                if note_index == len(self.melody_notes) - 1
+                else start_sec + note_duration
+            )
+            events.append(
+                {
+                    "note": note,
+                    "frequency_hz": round(NOTE_FREQUENCIES[note], 4),
+                    "start_sec": round(start_sec, 4),
+                    "end_sec": round(end_sec, 4),
+                }
+            )
+        return tuple(events)
+
 
 SAMPLES = (
     SampleSpec(
@@ -154,6 +180,8 @@ SAMPLES = (
         ),
         harmonic_weights=(1.0, 0.18),
         body_gain=0.42,
+        melody_notes=("C5", "F5", "G5", "C5"),
+        melody_gain=0.55,
     ),
     SampleSpec(
         id="synth_02_minor_pulse_a_minor",
@@ -174,6 +202,8 @@ SAMPLES = (
         ),
         harmonic_weights=(1.0, 0.30, 0.12),
         body_gain=0.45,
+        melody_notes=("A4", "F5", "G5", "A4"),
+        melody_gain=0.55,
     ),
     SampleSpec(
         id="synth_03_mid_groove_g_major",
@@ -194,6 +224,8 @@ SAMPLES = (
         ),
         harmonic_weights=(1.0, 0.36, 0.18),
         body_gain=0.48,
+        melody_notes=("G4", "C5", "D5", "G4"),
+        melody_gain=0.55,
     ),
     SampleSpec(
         id="synth_04_waltz_fsharp_minor",
@@ -214,6 +246,8 @@ SAMPLES = (
         ),
         harmonic_weights=(1.0, 0.45, 0.25, 0.10),
         body_gain=0.46,
+        melody_notes=("F#4", "D5", "C#5", "F#4"),
+        melody_gain=0.55,
     ),
     SampleSpec(
         id="synth_05_fast_bright_d_major",
@@ -234,6 +268,8 @@ SAMPLES = (
         ),
         harmonic_weights=(1.0, 0.55, 0.32, 0.16),
         body_gain=0.44,
+        melody_notes=("D5", "G5", "A5", "D5"),
+        melody_gain=0.55,
     ),
 )
 
@@ -318,6 +354,14 @@ def render_sample(spec: SampleSpec) -> np.ndarray:
         tremolo = 0.82 + 0.18 * pulse
         signal[start:end] = spec.body_gain * chord_wave * tremolo
 
+    for event in spec.melody_events:
+        start = int(round(float(event["start_sec"]) * SAMPLE_RATE))
+        end = int(round(float(event["end_sec"]) * SAMPLE_RATE))
+        local_t = t[start:end] - t[start]
+        note_wave = np.sin(2.0 * np.pi * float(event["frequency_hz"]) * local_t)
+        note_wave *= _adsr_envelope(len(note_wave), 0.03, 0.05)
+        signal[start:end] += spec.melody_gain * note_wave
+
     outro_t = t[outro_start:] - t[outro_start]
     outro_chord = _chord_signal(outro_t, spec.chords[-1], spec.harmonic_weights)
     signal[outro_start:] = 0.32 * outro_chord
@@ -368,6 +412,7 @@ def ground_truth_rows() -> list[dict]:
                 + [spec.duration_sec],
                 "downbeats_sec": list(spec.downbeats_sec),
                 "chord_events": list(spec.chord_events),
+                "melody_events": list(spec.melody_events),
                 "expected_brightness_band": spec.expected_brightness_band,
                 "sha256": sha256_bytes(data),
             }

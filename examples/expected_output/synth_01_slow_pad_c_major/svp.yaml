@@ -16,58 +16,55 @@ data_lineage:
   generation_method: deterministic_rule_based
 analysis_rpe:
   schema_version: '1.0'
-  por_core: A bass-heavy, continuous, grounded sonic character
+  por_core: A mid-focused, evolving sonic character
   por_surface:
-  - bass-heavy
-  - grounded
-  - continuous
-  - wall-like
-  grv_primary: bass-heavy
-  bpm: 123.05
+  - mid-focused
+  - evolving
+  grv_primary: mid-focused
+  bpm: 117.45
   key: C
   mode: major
   duration_sec: 40.0
-  structure_summary: '5 sections: Intro, Bridge, Chorus, Chorus, Outro'
+  structure_summary: '6 sections: Intro, Bridge, Verse, Chorus, Chorus, Outro'
   domain_features:
-    rms_mean: 0.2456
-    active_rate: 0.993
-    valley_depth: 0.0997
-    thickness: 1.4767
-    spectral_centroid: 697.94
+    rms_mean: 0.2698
+    active_rate: 0.9837
+    valley_depth: 0.1802
+    thickness: 1.2444
+    spectral_centroid: 735.82
 svp_for_generation:
   schema_version: '1.0'
-  prompt_text: 'Core character: A bass-heavy, continuous, grounded sonic character
+  prompt_text: 'Core character: A mid-focused, evolving sonic character
 
-    Gravity anchor: bass-heavy
+    Gravity anchor: mid-focused
 
-    Energy profile: sustained_energy (intensity 0.50)
+    Energy profile: gradual_build (intensity 0.36)
 
-    Tempo: ~123 BPM'
+    Tempo: ~117 BPM'
   constraints:
-  - 'BPM range: 113-133'
-  - 'Active rate target: 99%'
-  - 'Crest factor target: ~3.2'
+  - 'BPM range: 107-127'
+  - 'Active rate target: 98%'
+  - 'Crest factor target: ~2.7'
   style_tags:
-  - bass-heavy
-  - grounded
-  - continuous
-  - wall-like
-  tempo_range: 113-133
+  - mid-focused
+  - evolving
+  tempo_range: 107-127
   key_suggestion: C major
   generation_hints:
-    instrumentation_summary: Bass-heavy production with prominent low-end
+    instrumentation_summary: Mid-focused production
     production_notes:
+    - Heavily compressed (low crest factor)
     - Continuous energy, minimal silence
     candidate_context: []
 evaluation_criteria:
   schema_version: '1.0'
-  por_check: 'Maintains core character: A bass-heavy, continuous, grounded sonic character'
-  grv_check: 'Preserves gravity anchor: bass-heavy'
-  delta_e_check: Energy follows sustained_energy pattern
+  por_check: 'Maintains core character: A mid-focused, evolving sonic character'
+  grv_check: 'Preserves gravity anchor: mid-focused'
+  delta_e_check: Energy follows gradual_build pattern
   physical_checks:
-  - RMS within +/-20% of 0.246
-  - Active rate within +/-10% of 99%
-  - BPM within +/-10 of 123
+  - RMS within +/-20% of 0.270
+  - Active rate within +/-10% of 98%
+  - BPM within +/-10 of 117
   - Key matches C major
   metric_checks:
     domain: music
@@ -81,9 +78,9 @@ evaluation_criteria:
     - spectral_centroid
 minimal_svp:
   schema_version: '1.0'
-  c: A bass-heavy, continuous, grounded sonic character
+  c: A mid-focused, evolving sonic character
   g:
-  - bpm~123
+  - bpm~117
   - key=C
-  - energy=sustained_energy
-  de: sustained_energy (0.50)
+  - energy=gradual_build
+  de: gradual_build (0.36)

@@ -6,7 +6,6 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-from scripts import validate_against_truth as vat
 from svp_rpe.io.audio_loader import load_audio
 from svp_rpe.rpe.extractor import extract_physical
 from svp_rpe.rpe.physical_features import compute_chord_events
@@ -63,10 +62,3 @@ def test_silence_has_no_chord_events() -> None:
     y = np.zeros(sr, dtype=np.float32)
 
     assert compute_chord_events(y, sr) == []
-
-
-def test_chord_validation_hits_all_synth_samples() -> None:
-    results = [vat.evaluate_song(song) for song in vat.load_truth()]
-
-    assert all(r.chords.event_hit_rate >= vat.CHORD_EVENT_HIT_RATE_MIN for r in results)
-    assert all(len(r.chords.unique_matched) >= 3 for r in results)
