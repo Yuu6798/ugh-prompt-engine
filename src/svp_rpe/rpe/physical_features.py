@@ -8,10 +8,11 @@ from __future__ import annotations
 from typing import Optional
 
 import librosa
+from librosa.util.exceptions import ParameterError
 import numpy as np
 from scipy import signal as scipy_signal
 
-from svp_rpe.rpe.models import SpectralProfile, StereoProfile
+from svp_rpe.rpe.models import ChordEvent, SpectralProfile, StereoProfile
 
 try:
     import pyloudnorm as pyln
@@ -238,6 +239,11 @@ TS_COMPOUND_MARGIN_THRESHOLD = 0.08
 TS_FOUR_FOUR_BASE_CONFIDENCE = 0.55
 TS_CONFIDENCE_GAIN = 1.5
 
+# Chord extraction calibration (Q2-2).
+CHORD_HOP_LENGTH = 2048
+CHORD_MIN_DURATION_SEC = 0.75
+CHORD_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+
 
 def compute_bpm(y: np.ndarray, sr: int) -> tuple[Optional[float], Optional[float]]:
     """Estimate BPM via librosa.beat.beat_track. Returns (bpm, confidence).
@@ -378,6 +384,183 @@ def compute_time_signature(y: np.ndarray, sr: int) -> tuple[str, float]:
         beat_strengths.append(float(np.max(onset_env[lo:hi])) if hi > lo else 0.0)
 
     return _classify_time_signature_from_beat_strengths(np.asarray(beat_strengths))
+
+
+def _time_signature_numerator(time_signature: str) -> int:
+    """Parse the numerator from a time-signature string."""
+    try:
+        numerator = int(str(time_signature).split("/", 1)[0])
+    except (TypeError, ValueError):
+        return 4
+    if numerator <= 0:
+        return 4
+    return min(numerator, 16)
+
+
+def _beat_level_onset_strengths(
+    y: np.ndarray,
+    sr: int,
+    beat_frames: np.ndarray,
+) -> np.ndarray:
+    """Return normalized onset strength sampled around each beat frame."""
+    onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=512).astype(float)
+    if onset_env.size == 0 or float(np.max(onset_env)) <= 0.0:
+        return np.zeros(len(beat_frames), dtype=float)
+    onset_env = onset_env / float(np.max(onset_env))
+
+    beat_strengths: list[float] = []
+    for frame in beat_frames:
+        lo = max(0, int(frame) - 1)
+        hi = min(onset_env.size, int(frame) + 2)
+        beat_strengths.append(float(np.max(onset_env[lo:hi])) if hi > lo else 0.0)
+    return np.asarray(beat_strengths, dtype=float)
+
+
+def _select_downbeat_phase(beat_strengths: np.ndarray, beats_per_bar: int) -> int:
+    """Choose the strongest metrical phase as the downbeat phase."""
+    strengths = np.asarray(beat_strengths, dtype=float)
+    if strengths.size == 0 or beats_per_bar <= 1:
+        return 0
+
+    phase_count = min(beats_per_bar, strengths.size)
+    phase_means: list[float] = []
+    for phase in range(phase_count):
+        phase_values = strengths[phase::beats_per_bar]
+        phase_means.append(float(np.mean(phase_values)) if phase_values.size else 0.0)
+    return int(np.argmax(np.asarray(phase_means)))
+
+
+def compute_downbeat_times(y: np.ndarray, sr: int, time_signature: str) -> list[float]:
+    """Estimate downbeat times from deterministic beat tracking.
+
+    Q2-1 deliberately keeps this lightweight and dependency-free: madmom is the
+    roadmap target, but the current Python 3.11 environment cannot build it
+    without extra native/Cython setup. This detector reuses librosa beats, then
+    selects the strongest beat-strength phase within each bar.
+    """
+    if y.size == 0:
+        return []
+
+    beats_per_bar = _time_signature_numerator(time_signature)
+    if beats_per_bar <= 0:
+        return []
+
+    _, beats = librosa.beat.beat_track(y=y, sr=sr)
+    beat_frames = np.asarray(beats, dtype=int)
+    if beat_frames.size < max(2, beats_per_bar):
+        return []
+
+    beat_times = librosa.frames_to_time(beat_frames, sr=sr)
+    beat_strengths = _beat_level_onset_strengths(y, sr, beat_frames)
+    phase = _select_downbeat_phase(beat_strengths, beats_per_bar)
+
+    duration = len(y) / sr
+    downbeats = beat_times[phase::beats_per_bar]
+    return [
+        round(float(t), 4)
+        for t in downbeats
+        if 0.0 <= float(t) <= duration
+    ]
+
+
+def _chord_templates() -> list[tuple[str, str, np.ndarray]]:
+    """Return normalized major/minor triad templates."""
+    templates: list[tuple[str, str, np.ndarray]] = []
+    for root_index, root in enumerate(CHORD_NAMES):
+        for quality, intervals in (("major", (0, 4, 7)), ("minor", (0, 3, 7))):
+            vector = np.zeros(12, dtype=float)
+            for interval, weight in zip(intervals, (1.0, 0.85, 0.8)):
+                vector[(root_index + interval) % 12] = weight
+            norm = float(np.linalg.norm(vector))
+            if norm > 0.0:
+                vector = vector / norm
+            templates.append((root, quality, vector))
+    return templates
+
+
+def _classify_chroma_frame(
+    chroma_frame: np.ndarray,
+    templates: list[tuple[str, str, np.ndarray]],
+) -> tuple[str, str, str, float]:
+    """Classify one chroma frame as a major/minor triad."""
+    frame = np.asarray(chroma_frame, dtype=float)
+    norm = float(np.linalg.norm(frame))
+    if norm <= 0.0:
+        return "C major", "C", "major", 0.0
+    frame = frame / norm
+
+    scores = np.asarray([float(np.dot(frame, template)) for _, _, template in templates])
+    best_index = int(np.argmax(scores))
+    root, quality, _ = templates[best_index]
+    confidence = _clamp(float(scores[best_index]))
+    return f"{root} {quality}", root, quality, confidence
+
+
+def compute_chord_events(y: np.ndarray, sr: int) -> list[ChordEvent]:
+    """Estimate time-bounded major/minor chord events from chroma templates.
+
+    This is the lightweight Q2-2 baseline: deterministic, dependency-free, and
+    deliberately limited to major/minor triads. It is intended to recover the
+    main I/IV/V-style harmonic blocks in the synthetic validation set, not to
+    be a production chord recognizer.
+    """
+    if y.size == 0:
+        return []
+    if float(np.max(np.abs(y))) <= 1e-8:
+        return []
+
+    try:
+        chroma = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=CHORD_HOP_LENGTH)
+    except (ValueError, ParameterError):
+        return []
+    if chroma.size == 0 or chroma.shape[1] == 0:
+        return []
+
+    templates = _chord_templates()
+    labels: list[str] = []
+    roots: list[str] = []
+    qualities: list[str] = []
+    confidences: list[float] = []
+    for frame_index in range(chroma.shape[1]):
+        chord, root, quality, confidence = _classify_chroma_frame(
+            chroma[:, frame_index], templates,
+        )
+        labels.append(chord)
+        roots.append(root)
+        qualities.append(quality)
+        confidences.append(confidence)
+
+    frame_times = librosa.frames_to_time(
+        np.arange(chroma.shape[1] + 1),
+        sr=sr,
+        hop_length=CHORD_HOP_LENGTH,
+    )
+    duration = len(y) / sr
+    frame_times[-1] = min(float(frame_times[-1]), duration)
+
+    events: list[ChordEvent] = []
+    start_index = 0
+    for frame_index in range(1, len(labels) + 1):
+        if frame_index < len(labels) and labels[frame_index] == labels[start_index]:
+            continue
+
+        start_sec = float(frame_times[start_index])
+        end_sec = float(frame_times[frame_index])
+        if end_sec - start_sec >= CHORD_MIN_DURATION_SEC:
+            confidence = float(np.mean(confidences[start_index:frame_index]))
+            events.append(
+                ChordEvent(
+                    chord=labels[start_index],
+                    root=roots[start_index],
+                    quality=qualities[start_index],
+                    start_sec=round(start_sec, 4),
+                    end_sec=round(end_sec, 4),
+                    confidence=round(_clamp(confidence), 4),
+                )
+            )
+        start_index = frame_index
+
+    return events
 
 
 def compute_key(y: np.ndarray, sr: int) -> tuple[Optional[str], Optional[str], Optional[float]]:

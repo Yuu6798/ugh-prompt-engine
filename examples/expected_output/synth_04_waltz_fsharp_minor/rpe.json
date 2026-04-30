@@ -11,6 +11,95 @@
     "sample_rate": 22050,
     "time_signature": "3/4",
     "time_signature_confidence": 1.0,
+    "downbeat_times": [
+      0.0697,
+      1.37,
+      2.7167,
+      4.0635,
+      5.4335,
+      6.7338,
+      8.0341,
+      9.3344,
+      10.5883,
+      11.8886,
+      13.1657,
+      14.466,
+      15.7896,
+      17.0667,
+      18.367,
+      19.6441,
+      20.9212,
+      22.2215,
+      23.5218,
+      24.8221,
+      26.0992,
+      27.3995,
+      28.6766,
+      29.9537,
+      31.2773,
+      32.5776,
+      33.8547,
+      35.1318,
+      36.4321,
+      37.7092,
+      39.0327
+    ],
+    "chord_events": [
+      {
+        "schema_version": "1.0",
+        "chord": "F# minor",
+        "root": "F#",
+        "quality": "minor",
+        "start_sec": 0.4644,
+        "end_sec": 1.7647,
+        "confidence": 0.6537
+      },
+      {
+        "schema_version": "1.0",
+        "chord": "F# minor",
+        "root": "F#",
+        "quality": "minor",
+        "start_sec": 5.0155,
+        "end_sec": 6.0372,
+        "confidence": 0.6521
+      },
+      {
+        "schema_version": "1.0",
+        "chord": "F# minor",
+        "root": "F#",
+        "quality": "minor",
+        "start_sec": 7.6161,
+        "end_sec": 15.7896,
+        "confidence": 0.977
+      },
+      {
+        "schema_version": "1.0",
+        "chord": "D major",
+        "root": "D",
+        "quality": "major",
+        "start_sec": 15.7896,
+        "end_sec": 23.5915,
+        "confidence": 0.9899
+      },
+      {
+        "schema_version": "1.0",
+        "chord": "C# minor",
+        "root": "C#",
+        "quality": "minor",
+        "start_sec": 23.5915,
+        "end_sec": 31.3005,
+        "confidence": 0.9931
+      },
+      {
+        "schema_version": "1.0",
+        "chord": "F# minor",
+        "root": "F#",
+        "quality": "minor",
+        "start_sec": 31.3005,
+        "end_sec": 45.0,
+        "confidence": 0.9916
+      }
+    ],
     "structure": [
       {
         "schema_version": "1.0",

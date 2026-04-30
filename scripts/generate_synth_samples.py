@@ -50,6 +50,21 @@ NOTE_FREQUENCIES = {
     "B5": 987.7666,
 }
 
+NOTE_TO_PC = {
+    "C": 0,
+    "C#": 1,
+    "D": 2,
+    "D#": 3,
+    "E": 4,
+    "F": 5,
+    "F#": 6,
+    "G": 7,
+    "G#": 8,
+    "A": 9,
+    "A#": 10,
+    "B": 11,
+}
+
 
 @dataclass(frozen=True)
 class SampleSpec:
@@ -80,6 +95,43 @@ class SampleSpec:
             {"label": "body", "start_sec": intro_end, "end_sec": outro_start},
             {"label": "outro", "start_sec": outro_start, "end_sec": self.duration_sec},
         )
+
+    @property
+    def downbeats_sec(self) -> tuple[float, ...]:
+        beat_period = 60.0 / self.bpm
+        beats_per_bar = int(self.time_signature.split("/", 1)[0])
+        bar_period = beat_period * beats_per_bar
+        body = self.sections[1]
+        t = float(body["start_sec"])
+        end = float(body["end_sec"])
+        downbeats: list[float] = []
+        while t <= end + 1e-6:
+            downbeats.append(round(t, 4))
+            t += bar_period
+        return tuple(downbeats)
+
+    @property
+    def chord_events(self) -> tuple[dict[str, float | str], ...]:
+        body = self.sections[1]
+        body_start = float(body["start_sec"])
+        body_end = float(body["end_sec"])
+        chord_duration = (body_end - body_start) / len(self.chords)
+        events: list[dict[str, float | str]] = []
+        for chord_index, notes in enumerate(self.chords):
+            root = _note_name(notes[0])
+            quality = _chord_quality(root, notes)
+            start_sec = body_start + chord_index * chord_duration
+            end_sec = body_end if chord_index == len(self.chords) - 1 else start_sec + chord_duration
+            events.append(
+                {
+                    "chord": f"{root} {quality}",
+                    "root": root,
+                    "quality": quality,
+                    "start_sec": round(start_sec, 4),
+                    "end_sec": round(end_sec, 4),
+                }
+            )
+        return tuple(events)
 
 
 SAMPLES = (
@@ -184,6 +236,21 @@ SAMPLES = (
         body_gain=0.44,
     ),
 )
+
+
+def _note_name(note: str) -> str:
+    return note[:-1]
+
+
+def _chord_quality(root: str, notes: Iterable[str]) -> str:
+    root_pc = NOTE_TO_PC[root]
+    intervals = {
+        (NOTE_TO_PC[_note_name(note)] - root_pc) % 12
+        for note in notes
+    }
+    if 3 in intervals:
+        return "minor"
+    return "major"
 
 
 def _time_axis(duration_sec: float) -> np.ndarray:
@@ -299,6 +366,8 @@ def ground_truth_rows() -> list[dict]:
                     for section in spec.sections
                 ]
                 + [spec.duration_sec],
+                "downbeats_sec": list(spec.downbeats_sec),
+                "chord_events": list(spec.chord_events),
                 "expected_brightness_band": spec.expected_brightness_band,
                 "sha256": sha256_bytes(data),
             }

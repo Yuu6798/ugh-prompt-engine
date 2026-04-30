@@ -26,6 +26,9 @@ def test_validation_json_schema_has_required_keys() -> None:
         "key_min_score",
         "segment_f_min_at_3s",
         "time_signature_require_match",
+        "downbeat_window_sec",
+        "downbeat_hit_rate_min",
+        "chord_event_hit_rate_min",
     }
     assert payload["summary"]["total"] == len(results)
     assert 0 <= payload["summary"]["passing"] <= payload["summary"]["total"]
@@ -37,6 +40,8 @@ def test_validation_json_schema_has_required_keys() -> None:
         "bpm",
         "key",
         "time_signature",
+        "downbeats",
+        "chords",
         "segments",
         "baseline_score",
         "passes_thresholds",
@@ -45,6 +50,20 @@ def test_validation_json_schema_has_required_keys() -> None:
     assert set(sample["bpm"]) == {"estimated", "reference", "abs_diff", "p_score"}
     assert set(sample["key"]) == {"estimated", "reference", "weighted_score"}
     assert set(sample["time_signature"]) == {"estimated", "reference", "confidence", "match"}
+    assert set(sample["downbeats"]) == {
+        "n_reference",
+        "n_estimated",
+        "hit_rate",
+        "mean_abs_error_sec",
+        "window_sec",
+    }
+    assert set(sample["chords"]) == {
+        "n_reference",
+        "n_estimated",
+        "event_hit_rate",
+        "unique_reference",
+        "unique_matched",
+    }
     assert set(sample["segments"]) >= {
         "n_reference",
         "n_estimated",
@@ -75,4 +94,18 @@ def test_validation_at_least_three_songs_pass_thresholds() -> None:
     assert passing >= 3, (
         f"only {passing}/{len(results)} songs pass thresholds; "
         "Q0-4 expects at least 3 (see Brief)"
+    )
+
+
+def test_downbeat_validation_hits_four_of_five_synth_samples() -> None:
+    """Q2-1 regression: downbeat hit-rate should pass on at least 4/5 samples."""
+    results = [vat.evaluate_song(song) for song in vat.load_truth()]
+    passing = sum(
+        1
+        for r in results
+        if r.downbeats.hit_rate >= vat.DOWNBEAT_HIT_RATE_MIN
+    )
+
+    assert passing >= 4, (
+        f"only {passing}/{len(results)} songs meet downbeat hit-rate threshold"
     )

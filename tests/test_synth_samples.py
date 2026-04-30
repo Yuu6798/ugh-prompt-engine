@@ -46,6 +46,10 @@ def test_synth_samples_match_ground_truth_audio_metadata() -> None:
         assert path.is_file()
         assert path.name == f"{row['id']}.wav"
         assert row["expected_sections"] == ["intro", "body", "outro"]
+        assert row["downbeats_sec"] == sorted(row["downbeats_sec"])
+        assert row["downbeats_sec"]
+        assert len(row["chord_events"]) == 4
+        assert len({event["chord"] for event in row["chord_events"]}) >= 3
         assert 30.0 <= row["duration_sec"] <= 60.0
 
         info = sf.info(str(path))
