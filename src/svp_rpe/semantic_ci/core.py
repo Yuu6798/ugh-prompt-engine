@@ -222,10 +222,12 @@ def _build_roundtrip_log(
     observed_rpe: ObservedRPE,
     semantic_diff: SemanticDiff,
     repair_svp: RepairSVP,
+    threshold: float = 0.0,
 ) -> RoundTripLog:
     target_hash = stable_hash(target_svp)
     expected_hash = stable_hash(expected_rpe)
     observed_hash = stable_hash(observed_rpe)
+    threshold_hash = stable_hash({"threshold": threshold})
     diff_hash = stable_hash(semantic_diff)
     repair_hash = stable_hash(repair_svp)
     transitions = [
@@ -234,7 +236,7 @@ def _build_roundtrip_log(
         RoundTripStep(name="observed_rpe", output_hash=observed_hash),
         RoundTripStep(
             name="semantic_diff",
-            input_hash=f"{expected_hash}:{observed_hash}",
+            input_hash=f"{expected_hash}:{observed_hash}:{threshold_hash}",
             output_hash=diff_hash,
         ),
         RoundTripStep(name="repair_svp", input_hash=diff_hash, output_hash=repair_hash),
@@ -267,6 +269,7 @@ def run_semantic_ci(
         observed_rpe,
         semantic_diff,
         repair_svp,
+        threshold,
     )
     return SemanticCIRun(
         target_svp=target_svp,

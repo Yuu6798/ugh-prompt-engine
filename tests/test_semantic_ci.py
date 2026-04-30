@@ -140,6 +140,20 @@ def test_threshold_at_loss_converts_to_pass():
     assert result.semantic_diff.verdict == "pass"
 
 
+def test_threshold_is_part_of_semantic_diff_transition_input_hash():
+    strict = run_semantic_ci(_target(), _degraded_observed(), threshold=0.0)
+    tolerant = run_semantic_ci(_target(), _degraded_observed(), threshold=1.0)
+
+    strict_transition = strict.roundtrip_log.transitions[3]
+    tolerant_transition = tolerant.roundtrip_log.transitions[3]
+
+    assert strict_transition.name == "semantic_diff"
+    assert tolerant_transition.name == "semantic_diff"
+    assert strict_transition.input_hash != tolerant_transition.input_hash
+    assert stable_hash({"threshold": 0.0}) in strict_transition.input_hash
+    assert stable_hash({"threshold": 1.0}) in tolerant_transition.input_hash
+
+
 def test_repair_svp_separates_preserve_restore_reduce_lock():
     target = _target(change_budget=10)
     diff = compare_expected_observed(
