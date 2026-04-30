@@ -44,6 +44,62 @@
       37.7092,
       39.0327
     ],
+    "chord_events": [
+      {
+        "schema_version": "1.0",
+        "chord": "F# minor",
+        "root": "F#",
+        "quality": "minor",
+        "start_sec": 0.4644,
+        "end_sec": 1.7647,
+        "confidence": 0.6537
+      },
+      {
+        "schema_version": "1.0",
+        "chord": "F# minor",
+        "root": "F#",
+        "quality": "minor",
+        "start_sec": 5.0155,
+        "end_sec": 6.0372,
+        "confidence": 0.6521
+      },
+      {
+        "schema_version": "1.0",
+        "chord": "F# minor",
+        "root": "F#",
+        "quality": "minor",
+        "start_sec": 7.6161,
+        "end_sec": 15.7896,
+        "confidence": 0.977
+      },
+      {
+        "schema_version": "1.0",
+        "chord": "D major",
+        "root": "D",
+        "quality": "major",
+        "start_sec": 15.7896,
+        "end_sec": 23.5915,
+        "confidence": 0.9899
+      },
+      {
+        "schema_version": "1.0",
+        "chord": "C# minor",
+        "root": "C#",
+        "quality": "minor",
+        "start_sec": 23.5915,
+        "end_sec": 31.3005,
+        "confidence": 0.9931
+      },
+      {
+        "schema_version": "1.0",
+        "chord": "F# minor",
+        "root": "F#",
+        "quality": "minor",
+        "start_sec": 31.3005,
+        "end_sec": 45.0,
+        "confidence": 0.9916
+      }
+    ],
     "structure": [
       {
         "schema_version": "1.0",

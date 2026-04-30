@@ -27,6 +27,7 @@
 | BPM | Beats per minute (librosa beat_track) |
 | Time Signature | Beat-level onset strength autocorrelation over supported meters (`3/4`, `4/4`, `6/8`) |
 | Downbeat Times | Beat-strength phase pick over the inferred meter (`PhysicalRPE.downbeat_times`) |
+| Chord Events | Major/minor triad template match over chroma (`PhysicalRPE.chord_events`) |
 | Key | Chroma → Krumhansl-Kessler template matching |
 | Onset Density | Onsets per second |
 
@@ -59,6 +60,21 @@ This is a lightweight deterministic fallback. The roadmap target remains
 madmom-backed downbeat tracking, but `madmom==0.16.1` does not currently build
 cleanly in the Python 3.11 environment without extra native/Cython setup. The
 fallback gives a reviewable Q2-1 baseline while keeping installation stable.
+
+### Chord Event Detection (Q2-2)
+
+`compute_chord_events()` estimates coarse harmonic blocks without new
+dependencies:
+
+1. Compute `librosa.feature.chroma_cqt`.
+2. Match each chroma frame against normalized major/minor triad templates.
+3. Merge consecutive frames with the same chord.
+4. Drop events shorter than 0.75s.
+5. Emit `ChordEvent(chord, root, quality, start_sec, end_sec, confidence)`.
+
+The detector is intentionally limited to major/minor triads. It is a
+deterministic validation baseline for the synthetic I/IV/V-style samples, not a
+production chord recognizer.
 
 ## Stereo Metrics
 

@@ -15,6 +15,7 @@ from svp_rpe.rpe.models import PhysicalRPE, RPEBundle, SectionMarker
 from svp_rpe.rpe.physical_features import (
     compute_active_rate,
     compute_bpm,
+    compute_chord_events,
     compute_crest_factor,
     compute_key,
     compute_loudness,
@@ -98,6 +99,7 @@ def extract_physical(
     bpm, bpm_confidence = compute_bpm(y, sr)
     time_signature, time_signature_confidence = compute_time_signature(y, sr)
     downbeat_times = compute_downbeat_times(y, sr, time_signature)
+    chord_events = compute_chord_events(y, sr)
     key, mode, key_confidence = compute_key(y, sr)
 
     # ITU-R BS.1770 loudness; uses stereo when available, else mono.
@@ -128,6 +130,7 @@ def extract_physical(
         time_signature=time_signature,
         time_signature_confidence=time_signature_confidence,
         downbeat_times=downbeat_times,
+        chord_events=chord_events,
         duration_sec=round(len(y) / sr, 4),
         sample_rate=sr,
         structure=structure,

@@ -25,6 +25,53 @@
       27.2138,
       30.0234
     ],
+    "chord_events": [
+      {
+        "schema_version": "1.0",
+        "chord": "A minor",
+        "root": "A",
+        "quality": "minor",
+        "start_sec": 1.0217,
+        "end_sec": 2.7864,
+        "confidence": 0.6526
+      },
+      {
+        "schema_version": "1.0",
+        "chord": "A minor",
+        "root": "A",
+        "quality": "minor",
+        "start_sec": 7.9877,
+        "end_sec": 13.5605,
+        "confidence": 0.9921
+      },
+      {
+        "schema_version": "1.0",
+        "chord": "F major",
+        "root": "F",
+        "quality": "major",
+        "start_sec": 13.5605,
+        "end_sec": 19.0404,
+        "confidence": 0.9962
+      },
+      {
+        "schema_version": "1.0",
+        "chord": "G major",
+        "root": "G",
+        "quality": "major",
+        "start_sec": 19.0404,
+        "end_sec": 24.5203,
+        "confidence": 0.9955
+      },
+      {
+        "schema_version": "1.0",
+        "chord": "A minor",
+        "root": "A",
+        "quality": "minor",
+        "start_sec": 24.5203,
+        "end_sec": 36.0,
+        "confidence": 0.993
+      }
+    ],
     "structure": [
       {
         "schema_version": "1.0",

@@ -7,9 +7,10 @@ ground_truth.yaml. Outputs either a markdown table (default) or a
 machine-readable JSON document (`--json`).
 
 `--check` enforces minimum-quality thresholds (BPM err <5, key score ≥0.5,
-time_signature exact match, downbeat hit-rate ≥0.8, segment F@3s ≥0.5) and
-exits 1 on any violation; without `--check` the script reports the numbers and
-exits 0 so developers can inspect drift without breaking a workflow.
+time_signature exact match, downbeat hit-rate ≥0.8, chord hit-rate ≥0.75,
+segment F@3s ≥0.5) and exits 1 on any violation; without `--check` the script
+reports the numbers and exits 0 so developers can inspect drift without
+breaking a workflow.
 
 Usage:
     python scripts/validate_against_truth.py            # markdown table to stdout
@@ -48,6 +49,7 @@ SEGMENT_F_MIN_AT_3S = 0.5
 TIME_SIGNATURE_REQUIRE_MATCH = True
 DOWNBEAT_WINDOW_SEC = 0.35
 DOWNBEAT_HIT_RATE_MIN = 0.8
+CHORD_EVENT_HIT_RATE_MIN = 0.75
 
 
 @dataclass
@@ -60,6 +62,7 @@ class TruthSong:
     baseline_profile: str
     time_signature: str
     downbeats_sec: list[float]
+    chord_events: list[dict[str, Any]]
     sections: list[tuple[float, float]]
 
 
@@ -96,6 +99,15 @@ class DownbeatResult:
 
 
 @dataclass
+class ChordResult:
+    n_reference: int
+    n_estimated: int
+    event_hit_rate: float
+    unique_reference: list[str]
+    unique_matched: list[str]
+
+
+@dataclass
 class SegmentResult:
     n_reference: int
     n_estimated: int
@@ -125,6 +137,7 @@ class SongValidation:
     key: KeyResult
     time_signature: TimeSignatureResult
     downbeats: DownbeatResult
+    chords: ChordResult
     segments: SegmentResult
     baseline_score: BaselineScoreResult
     passes_thresholds: bool
@@ -155,6 +168,7 @@ def load_truth() -> list[TruthSong]:
                 baseline_profile=str(entry.get("baseline_profile", "pro")),
                 time_signature=str(entry["time_signature"]),
                 downbeats_sec=[float(t) for t in entry.get("downbeats_sec", [])],
+                chord_events=list(entry.get("chord_events", [])),
                 sections=sections,
             )
         )
@@ -264,6 +278,57 @@ def evaluate_downbeats(
     )
 
 
+def _event_overlap(start_a: float, end_a: float, start_b: float, end_b: float) -> float:
+    return max(0.0, min(end_a, end_b) - max(start_a, start_b))
+
+
+def evaluate_chords(
+    phys: PhysicalRPE,
+    gt_chord_events: list[dict[str, Any]],
+) -> ChordResult:
+    ref_events = [
+        event
+        for event in gt_chord_events
+        if "chord" in event and "start_sec" in event and "end_sec" in event
+    ]
+    if not ref_events:
+        return ChordResult(
+            n_reference=0,
+            n_estimated=len(phys.chord_events),
+            event_hit_rate=0.0,
+            unique_reference=[],
+            unique_matched=[],
+        )
+
+    matched_labels: list[str] = []
+    for ref in ref_events:
+        ref_start = float(ref["start_sec"])
+        ref_end = float(ref["end_sec"])
+        candidates = [
+            pred
+            for pred in phys.chord_events
+            if _event_overlap(ref_start, ref_end, pred.start_sec, pred.end_sec) > 0.0
+        ]
+        if not candidates:
+            continue
+        best = max(
+            candidates,
+            key=lambda pred: _event_overlap(ref_start, ref_end, pred.start_sec, pred.end_sec),
+        )
+        if best.chord == str(ref["chord"]):
+            matched_labels.append(best.chord)
+
+    unique_reference = sorted({str(event["chord"]) for event in ref_events})
+    unique_matched = sorted(set(matched_labels))
+    return ChordResult(
+        n_reference=len(ref_events),
+        n_estimated=len(phys.chord_events),
+        event_hit_rate=round(len(matched_labels) / len(ref_events), 4),
+        unique_reference=unique_reference,
+        unique_matched=unique_matched,
+    )
+
+
 def evaluate_segments(
     phys: PhysicalRPE, gt_sections: list[tuple[float, float]]
 ) -> SegmentResult:
@@ -318,6 +383,7 @@ def evaluate_song(song: TruthSong) -> SongValidation:
     key_result = evaluate_key(phys, song.key, song.mode)
     time_signature_result = evaluate_time_signature(phys, song.time_signature)
     downbeat_result = evaluate_downbeats(phys, song.downbeats_sec)
+    chord_result = evaluate_chords(phys, song.chord_events)
     seg_result = evaluate_segments(phys, song.sections)
     baseline_result = evaluate_baseline_score(phys, song.baseline_profile)
 
@@ -336,6 +402,11 @@ def evaluate_song(song: TruthSong) -> SongValidation:
             f"Downbeat hit-rate {downbeat_result.hit_rate:.3f} < "
             f"{DOWNBEAT_HIT_RATE_MIN}"
         )
+    if chord_result.event_hit_rate < CHORD_EVENT_HIT_RATE_MIN:
+        failures.append(
+            f"Chord hit-rate {chord_result.event_hit_rate:.3f} < "
+            f"{CHORD_EVENT_HIT_RATE_MIN}"
+        )
     if seg_result.f_at_3_0s < SEGMENT_F_MIN_AT_3S:
         failures.append(f"Segment F@3s {seg_result.f_at_3_0s:.3f} < {SEGMENT_F_MIN_AT_3S}")
 
@@ -345,6 +416,7 @@ def evaluate_song(song: TruthSong) -> SongValidation:
         key=key_result,
         time_signature=time_signature_result,
         downbeats=downbeat_result,
+        chords=chord_result,
         segments=seg_result,
         baseline_score=baseline_result,
         passes_thresholds=not failures,
@@ -356,9 +428,10 @@ def render_markdown(results: list[SongValidation]) -> str:
     lines: list[str] = []
     lines.append("# Validation against ground truth\n")
     lines.append("| song_id | BPM est / ref / Δ | tempo p | key est / ref / score | "
-                 "meter est / ref / conf | downbeat hit | seg F@0.5s | seg F@3s | "
+                 "meter est / ref / conf | downbeat hit | chord hit | "
+                 "seg F@0.5s | seg F@3s | "
                  "baseline / score | check |")
-    lines.append("|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
     for r in results:
         bpm_diff = "n/a" if r.bpm.abs_diff is None else f"{r.bpm.abs_diff:.2f}"
         bpm_est = "n/a" if r.bpm.estimated is None else f"{r.bpm.estimated:.2f}"
@@ -372,6 +445,7 @@ def render_markdown(results: list[SongValidation]) -> str:
             f"| {r.time_signature.estimated} / {r.time_signature.reference} / "
             f"{r.time_signature.confidence:.2f} "
             f"| {r.downbeats.hit_rate:.2f} "
+            f"| {r.chords.event_hit_rate:.2f} "
             f"| {r.segments.f_at_0_5s:.2f} "
             f"| {r.segments.f_at_3_0s:.2f} "
             f"| {r.baseline_score.profile} / {r.baseline_score.overall:.2f} "
@@ -395,6 +469,7 @@ def render_json(results: list[SongValidation]) -> str:
             "time_signature_require_match": TIME_SIGNATURE_REQUIRE_MATCH,
             "downbeat_window_sec": DOWNBEAT_WINDOW_SEC,
             "downbeat_hit_rate_min": DOWNBEAT_HIT_RATE_MIN,
+            "chord_event_hit_rate_min": CHORD_EVENT_HIT_RATE_MIN,
         },
         "songs": [asdict(r) for r in results],
         "summary": {

@@ -8,10 +8,11 @@ from __future__ import annotations
 from typing import Optional
 
 import librosa
+from librosa.util.exceptions import ParameterError
 import numpy as np
 from scipy import signal as scipy_signal
 
-from svp_rpe.rpe.models import SpectralProfile, StereoProfile
+from svp_rpe.rpe.models import ChordEvent, SpectralProfile, StereoProfile
 
 try:
     import pyloudnorm as pyln
@@ -238,6 +239,11 @@ TS_COMPOUND_MARGIN_THRESHOLD = 0.08
 TS_FOUR_FOUR_BASE_CONFIDENCE = 0.55
 TS_CONFIDENCE_GAIN = 1.5
 
+# Chord extraction calibration (Q2-2).
+CHORD_HOP_LENGTH = 2048
+CHORD_MIN_DURATION_SEC = 0.75
+CHORD_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+
 
 def compute_bpm(y: np.ndarray, sr: int) -> tuple[Optional[float], Optional[float]]:
     """Estimate BPM via librosa.beat.beat_track. Returns (bpm, confidence).
@@ -455,6 +461,106 @@ def compute_downbeat_times(y: np.ndarray, sr: int, time_signature: str) -> list[
         for t in downbeats
         if 0.0 <= float(t) <= duration
     ]
+
+
+def _chord_templates() -> list[tuple[str, str, np.ndarray]]:
+    """Return normalized major/minor triad templates."""
+    templates: list[tuple[str, str, np.ndarray]] = []
+    for root_index, root in enumerate(CHORD_NAMES):
+        for quality, intervals in (("major", (0, 4, 7)), ("minor", (0, 3, 7))):
+            vector = np.zeros(12, dtype=float)
+            for interval, weight in zip(intervals, (1.0, 0.85, 0.8)):
+                vector[(root_index + interval) % 12] = weight
+            norm = float(np.linalg.norm(vector))
+            if norm > 0.0:
+                vector = vector / norm
+            templates.append((root, quality, vector))
+    return templates
+
+
+def _classify_chroma_frame(
+    chroma_frame: np.ndarray,
+    templates: list[tuple[str, str, np.ndarray]],
+) -> tuple[str, str, str, float]:
+    """Classify one chroma frame as a major/minor triad."""
+    frame = np.asarray(chroma_frame, dtype=float)
+    norm = float(np.linalg.norm(frame))
+    if norm <= 0.0:
+        return "C major", "C", "major", 0.0
+    frame = frame / norm
+
+    scores = np.asarray([float(np.dot(frame, template)) for _, _, template in templates])
+    best_index = int(np.argmax(scores))
+    root, quality, _ = templates[best_index]
+    confidence = _clamp(float(scores[best_index]))
+    return f"{root} {quality}", root, quality, confidence
+
+
+def compute_chord_events(y: np.ndarray, sr: int) -> list[ChordEvent]:
+    """Estimate time-bounded major/minor chord events from chroma templates.
+
+    This is the lightweight Q2-2 baseline: deterministic, dependency-free, and
+    deliberately limited to major/minor triads. It is intended to recover the
+    main I/IV/V-style harmonic blocks in the synthetic validation set, not to
+    be a production chord recognizer.
+    """
+    if y.size == 0:
+        return []
+    if float(np.max(np.abs(y))) <= 1e-8:
+        return []
+
+    try:
+        chroma = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=CHORD_HOP_LENGTH)
+    except (ValueError, ParameterError):
+        return []
+    if chroma.size == 0 or chroma.shape[1] == 0:
+        return []
+
+    templates = _chord_templates()
+    labels: list[str] = []
+    roots: list[str] = []
+    qualities: list[str] = []
+    confidences: list[float] = []
+    for frame_index in range(chroma.shape[1]):
+        chord, root, quality, confidence = _classify_chroma_frame(
+            chroma[:, frame_index], templates,
+        )
+        labels.append(chord)
+        roots.append(root)
+        qualities.append(quality)
+        confidences.append(confidence)
+
+    frame_times = librosa.frames_to_time(
+        np.arange(chroma.shape[1] + 1),
+        sr=sr,
+        hop_length=CHORD_HOP_LENGTH,
+    )
+    duration = len(y) / sr
+    frame_times[-1] = min(float(frame_times[-1]), duration)
+
+    events: list[ChordEvent] = []
+    start_index = 0
+    for frame_index in range(1, len(labels) + 1):
+        if frame_index < len(labels) and labels[frame_index] == labels[start_index]:
+            continue
+
+        start_sec = float(frame_times[start_index])
+        end_sec = float(frame_times[frame_index])
+        if end_sec - start_sec >= CHORD_MIN_DURATION_SEC:
+            confidence = float(np.mean(confidences[start_index:frame_index]))
+            events.append(
+                ChordEvent(
+                    chord=labels[start_index],
+                    root=roots[start_index],
+                    quality=qualities[start_index],
+                    start_sec=round(start_sec, 4),
+                    end_sec=round(end_sec, 4),
+                    confidence=round(_clamp(confidence), 4),
+                )
+            )
+        start_index = frame_index
+
+    return events
 
 
 def compute_key(y: np.ndarray, sr: int) -> tuple[Optional[str], Optional[str], Optional[float]]:

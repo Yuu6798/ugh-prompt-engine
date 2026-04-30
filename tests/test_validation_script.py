@@ -28,6 +28,7 @@ def test_validation_json_schema_has_required_keys() -> None:
         "time_signature_require_match",
         "downbeat_window_sec",
         "downbeat_hit_rate_min",
+        "chord_event_hit_rate_min",
     }
     assert payload["summary"]["total"] == len(results)
     assert 0 <= payload["summary"]["passing"] <= payload["summary"]["total"]
@@ -40,6 +41,7 @@ def test_validation_json_schema_has_required_keys() -> None:
         "key",
         "time_signature",
         "downbeats",
+        "chords",
         "segments",
         "baseline_score",
         "passes_thresholds",
@@ -54,6 +56,13 @@ def test_validation_json_schema_has_required_keys() -> None:
         "hit_rate",
         "mean_abs_error_sec",
         "window_sec",
+    }
+    assert set(sample["chords"]) == {
+        "n_reference",
+        "n_estimated",
+        "event_hit_rate",
+        "unique_reference",
+        "unique_matched",
     }
     assert set(sample["segments"]) >= {
         "n_reference",

@@ -36,6 +36,27 @@
   - 24.0
   - 28.0
   - 32.0
+  chord_events:
+  - chord: C major
+    root: C
+    quality: major
+    start_sec: 8.0
+    end_sec: 14.5
+  - chord: F major
+    root: F
+    quality: major
+    start_sec: 14.5
+    end_sec: 21.0
+  - chord: G major
+    root: G
+    quality: major
+    start_sec: 21.0
+    end_sec: 27.5
+  - chord: C major
+    root: C
+    quality: major
+    start_sec: 27.5
+    end_sec: 34.0
   expected_brightness_band: low
   sha256: 933781ffb22a7396bb619a6d2f0ffe8d61dfb718fec8ee846bf3f94ce78cf294
 - id: synth_02_minor_pulse_a_minor
@@ -78,6 +99,27 @@
   - 24.0
   - 26.6667
   - 29.3333
+  chord_events:
+  - chord: A minor
+    root: A
+    quality: minor
+    start_sec: 8.0
+    end_sec: 13.5
+  - chord: F major
+    root: F
+    quality: major
+    start_sec: 13.5
+    end_sec: 19.0
+  - chord: G major
+    root: G
+    quality: major
+    start_sec: 19.0
+    end_sec: 24.5
+  - chord: A minor
+    root: A
+    quality: minor
+    start_sec: 24.5
+    end_sec: 30.0
   expected_brightness_band: mid
   sha256: 8133577a697880d9231dd895aedd3e1ccfe0f5c8f12ce34550de43b3bb550b43
 - id: synth_03_mid_groove_g_major
@@ -127,6 +169,27 @@
   - 34.0
   - 36.0
   - 38.0
+  chord_events:
+  - chord: G major
+    root: G
+    quality: major
+    start_sec: 8.0
+    end_sec: 15.5
+  - chord: C major
+    root: C
+    quality: major
+    start_sec: 15.5
+    end_sec: 23.0
+  - chord: D major
+    root: D
+    quality: major
+    start_sec: 23.0
+    end_sec: 30.5
+  - chord: G major
+    root: G
+    quality: major
+    start_sec: 30.5
+    end_sec: 38.0
   expected_brightness_band: mid
   sha256: 7a2124626fbc2e670ce68615d2c8c04347c04964018c3b790cca663f0fb1a98a
 - id: synth_04_waltz_fsharp_minor
@@ -185,6 +248,27 @@
   - 36.2857
   - 37.5714
   - 38.8571
+  chord_events:
+  - chord: F# minor
+    root: F#
+    quality: minor
+    start_sec: 8.0
+    end_sec: 15.75
+  - chord: D major
+    root: D
+    quality: major
+    start_sec: 15.75
+    end_sec: 23.5
+  - chord: C# minor
+    root: C#
+    quality: minor
+    start_sec: 23.5
+    end_sec: 31.25
+  - chord: F# minor
+    root: F#
+    quality: minor
+    start_sec: 31.25
+    end_sec: 39.0
   expected_brightness_band: high
   sha256: cc8e38b60e6a02ee0beb1cd74113c7a40bfcf58c2ae13df62d25d40cf657c45e
 - id: synth_05_fast_bright_d_major
@@ -238,5 +322,26 @@
   - 32.0
   - 33.4118
   - 34.8235
+  chord_events:
+  - chord: D major
+    root: D
+    quality: major
+    start_sec: 8.0
+    end_sec: 15.0
+  - chord: G major
+    root: G
+    quality: major
+    start_sec: 15.0
+    end_sec: 22.0
+  - chord: A major
+    root: A
+    quality: major
+    start_sec: 22.0
+    end_sec: 29.0
+  - chord: D major
+    root: D
+    quality: major
+    start_sec: 29.0
+    end_sec: 36.0
   expected_brightness_band: high
   sha256: 9f4cf9e86d1e35a40895c60bb8dc88dfbc5bc1ba38e21f9908de878fa9ca06cc

@@ -35,6 +35,25 @@ class SectionMarker(BaseModel):
     rms_mean: Optional[float] = None
 
 
+class ChordEvent(BaseModel):
+    """Time-bounded chord estimate."""
+
+    schema_version: str = "1.0"
+    chord: str             # e.g. "C major", "A minor"
+    root: str              # e.g. "C", "F#"
+    quality: Literal["major", "minor"]
+    start_sec: float
+    end_sec: float
+    confidence: float
+
+    @field_validator("confidence")
+    @classmethod
+    def chord_confidence_in_range(cls, v: float) -> float:
+        if not 0.0 <= v <= 1.0:
+            raise ValueError("confidence must be between 0.0 and 1.0")
+        return v
+
+
 class PhysicalRPE(BaseModel):
     """Physical audio features extracted from waveform."""
 
@@ -49,6 +68,7 @@ class PhysicalRPE(BaseModel):
     time_signature: str = "4/4"
     time_signature_confidence: float = 0.3
     downbeat_times: List[float] = Field(default_factory=list)
+    chord_events: List[ChordEvent] = Field(default_factory=list)
     structure: List[SectionMarker]
     rms_mean: float
     peak_amplitude: float

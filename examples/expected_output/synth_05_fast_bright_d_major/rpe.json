@@ -39,6 +39,44 @@
       34.6674,
       36.0374
     ],
+    "chord_events": [
+      {
+        "schema_version": "1.0",
+        "chord": "D major",
+        "root": "D",
+        "quality": "major",
+        "start_sec": 7.9877,
+        "end_sec": 15.0465,
+        "confidence": 0.9899
+      },
+      {
+        "schema_version": "1.0",
+        "chord": "G major",
+        "root": "G",
+        "quality": "major",
+        "start_sec": 15.0465,
+        "end_sec": 22.0125,
+        "confidence": 0.9932
+      },
+      {
+        "schema_version": "1.0",
+        "chord": "A major",
+        "root": "A",
+        "quality": "major",
+        "start_sec": 22.0125,
+        "end_sec": 29.0714,
+        "confidence": 0.9901
+      },
+      {
+        "schema_version": "1.0",
+        "chord": "D major",
+        "root": "D",
+        "quality": "major",
+        "start_sec": 29.0714,
+        "end_sec": 42.0,
+        "confidence": 0.9893
+      }
+    ],
     "structure": [
       {
         "schema_version": "1.0",
