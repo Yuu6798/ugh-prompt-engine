@@ -78,8 +78,8 @@ def generate_expected_rpe(target_svp: TargetSVP) -> ExpectedRPE:
         metric_targets=dict(sorted(target_svp.metric_targets.items())),
         tolerances=dict(sorted(target_svp.tolerances.items())),
         change_budget=target_svp.change_budget,
+        source_hash=stable_hash(target_svp),
     )
-    expected.source_hash = stable_hash(target_svp)
     return expected
 
 

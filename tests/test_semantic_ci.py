@@ -138,6 +138,60 @@ def test_change_budget_limits_restore_and_reduce_edits():
     assert repair.deferred_restore or repair.deferred_reduce
 
 
+def test_change_budget_zero_defers_restore_and_reduce_edits():
+    target = _target(change_budget=0)
+    observed = ObservedRPE(
+        id="fixture-zero-budget",
+        domain="music",
+        signals=["unexpected pad"],
+        metrics={},
+    )
+
+    result = run_semantic_ci(target, observed)
+    repair = result.repair_svp
+
+    assert repair.restore == []
+    assert repair.reduce == []
+    assert repair.deferred_restore
+    assert repair.deferred_reduce == ["unexpected pad"]
+    assert all(
+        not action.applied
+        for action in repair.repair_order
+        if action.op in {"restore", "reduce"}
+    )
+
+
+def test_categorical_metric_diff_and_repaired_svp_mapping():
+    target = TargetSVP(
+        id="target-categorical",
+        domain="image",
+        core="calm monochrome portrait",
+        surface=["soft light"],
+        avoid=["neon background"],
+        lock=["monochrome"],
+        metric_targets={"aspect": "square"},
+        change_budget=4,
+    )
+    observed = ObservedRPE(
+        id="fixture-categorical",
+        domain="image",
+        signals=["calm monochrome portrait", "neon background"],
+        metrics={"aspect": "wide"},
+    )
+
+    result = run_semantic_ci(target, observed)
+
+    metric = result.semantic_diff.metric_diffs[0]
+    assert metric.name == "aspect"
+    assert metric.passed is False
+    assert metric.diff is None
+    assert "soft light" in result.repair_svp.restore
+    assert "neon background" in result.repair_svp.reduce
+    assert "soft light" in result.repaired_svp.surface
+    assert "neon background" in result.repaired_svp.avoid
+    assert "monochrome" in result.repaired_svp.lock
+
+
 def test_roundtrip_log_records_state_transitions_and_hashes():
     result = run_semantic_ci(_target(), _matching_observed())
     log = result.roundtrip_log

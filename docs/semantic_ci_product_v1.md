@@ -92,6 +92,21 @@ V1 is considered working when these conditions hold:
 
 The test suite locks these in `tests/test_semantic_ci.py`.
 
+## Repair Mapping
+
+V1 applies the repair plan back to `TargetSVP` with a deliberately small mapping:
+
+| Repair field | Repaired TargetSVP field |
+|---|---|
+| `preserve` | `preserve` |
+| `restore` | `surface` |
+| `reduce` | `avoid` |
+| `lock` | `lock` |
+
+Preserved observed signals are also copied into `lock` in V1. This keeps a successful fixture from
+being accidentally rewritten in the next loop. Later versions can make that behavior configurable
+when repair plans become generator-specific.
+
 ## Current Boundary
 
 - RPE extraction from real artifacts is not part of this V1 core.

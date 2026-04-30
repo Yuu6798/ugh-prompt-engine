@@ -11,7 +11,11 @@ def _normalize_signal(value: str) -> str:
 
 
 def normalize_signals(values: List[str]) -> List[str]:
-    normalized = [_normalize_signal(v) for v in values if _normalize_signal(v)]
+    normalized = []
+    for value in values:
+        signal = _normalize_signal(value)
+        if signal:
+            normalized.append(signal)
     return sorted(dict.fromkeys(normalized))
 
 
