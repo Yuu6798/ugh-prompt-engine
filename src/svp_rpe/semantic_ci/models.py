@@ -121,6 +121,7 @@ class SemanticDiff(BaseModel):
     over_changed: List[str] = Field(default_factory=list)
     metric_diffs: List[MetricDiff] = Field(default_factory=list)
     loss: float = 0.0
+    threshold: float = 0.0
     verdict: Literal["pass", "repair"] = "pass"
 
 

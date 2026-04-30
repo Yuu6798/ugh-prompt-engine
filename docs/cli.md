@@ -66,13 +66,16 @@ Run the deterministic semantic CI fixture loop.
 svprpe ci-check target_svp.json observed_rpe.json
 svprpe ci-check target_svp.json observed_rpe.json -o semantic_ci_result.json
 svprpe ci-check target_svp.json observed_rpe.json --format markdown -o semantic_ci_report.md
+svprpe ci-check target_svp.json observed_rpe.json --threshold 0.15
 svprpe ci-check examples/semantic_ci/pass_perfect/target_svp.json \
   examples/semantic_ci/pass_perfect/observed_rpe.json
 ```
 
 Output includes `expected_rpe`, `semantic_diff`, `repair_svp`, `repaired_svp`, and
 `roundtrip_log`. Use `--format markdown` for a human-readable report with verdict,
-signal diff, metric diff, repair plan, and hash trail.
+signal diff, metric diff, repair plan, and hash trail. The command exits with code
+`1` when the final verdict is `repair`, so it can be used as a CI gate. Use
+`--threshold` to treat loss values less than or equal to the threshold as `pass`.
 
 ### `svprpe run <audio>`
 
@@ -107,6 +110,7 @@ Outputs: `ranking.json`, `summary.csv`, `summary.json`, `next_action.md`.
 | `--output` / `-o` | Output file path |
 | `--output-dir` | Output directory (creates if needed) |
 | `--format` | Output format. `generate`: `yaml` (default) or `text`; `ci-check`: `json` (default) or `markdown` |
+| `--threshold` | Semantic CI pass threshold from `0.0` to `1.0` (`ci-check` only) |
 | `--no-save` | Print output to stdout instead of saving |
 | `--valley-method` | Valley depth method: `hybrid` (default), `rms_percentile`, `section_ar` |
 | `--baseline` | RPE baseline profile: `pro`, `loud_pop`, `acoustic`, or `edm` |

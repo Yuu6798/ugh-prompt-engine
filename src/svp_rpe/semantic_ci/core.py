@@ -123,7 +123,11 @@ def _metric_loss(metric_diffs: list[MetricDiff]) -> float:
     return sum(losses) / len(losses)
 
 
-def compare_expected_observed(expected: ExpectedRPE, observed: ObservedRPE) -> SemanticDiff:
+def compare_expected_observed(
+    expected: ExpectedRPE,
+    observed: ObservedRPE,
+    threshold: float = 0.0,
+) -> SemanticDiff:
     """Compare Expected RPE against an Observed RPE fixture."""
 
     expected_required = set(expected.required_signals)
@@ -158,7 +162,8 @@ def compare_expected_observed(expected: ExpectedRPE, observed: ObservedRPE) -> S
         over_changed=over_changed,
         metric_diffs=metric_diffs,
         loss=loss,
-        verdict="pass" if loss == 0.0 else "repair",
+        threshold=threshold,
+        verdict="pass" if loss <= threshold else "repair",
     )
 
 
@@ -217,10 +222,12 @@ def _build_roundtrip_log(
     observed_rpe: ObservedRPE,
     semantic_diff: SemanticDiff,
     repair_svp: RepairSVP,
+    threshold: float = 0.0,
 ) -> RoundTripLog:
     target_hash = stable_hash(target_svp)
     expected_hash = stable_hash(expected_rpe)
     observed_hash = stable_hash(observed_rpe)
+    threshold_hash = stable_hash({"threshold": threshold})
     diff_hash = stable_hash(semantic_diff)
     repair_hash = stable_hash(repair_svp)
     transitions = [
@@ -229,7 +236,7 @@ def _build_roundtrip_log(
         RoundTripStep(name="observed_rpe", output_hash=observed_hash),
         RoundTripStep(
             name="semantic_diff",
-            input_hash=f"{expected_hash}:{observed_hash}",
+            input_hash=f"{expected_hash}:{observed_hash}:{threshold_hash}",
             output_hash=diff_hash,
         ),
         RoundTripStep(name="repair_svp", input_hash=diff_hash, output_hash=repair_hash),
@@ -245,11 +252,15 @@ def _build_roundtrip_log(
     )
 
 
-def run_semantic_ci(target_svp: TargetSVP, observed_rpe: ObservedRPE) -> SemanticCIRun:
+def run_semantic_ci(
+    target_svp: TargetSVP,
+    observed_rpe: ObservedRPE,
+    threshold: float = 0.0,
+) -> SemanticCIRun:
     """Run the Phase 1 deterministic semantic CI loop."""
 
     expected_rpe = generate_expected_rpe(target_svp)
-    semantic_diff = compare_expected_observed(expected_rpe, observed_rpe)
+    semantic_diff = compare_expected_observed(expected_rpe, observed_rpe, threshold=threshold)
     repair_svp = generate_repair_svp(target_svp, semantic_diff)
     repaired_svp = apply_repair_svp(target_svp, repair_svp)
     roundtrip_log = _build_roundtrip_log(
@@ -258,6 +269,7 @@ def run_semantic_ci(target_svp: TargetSVP, observed_rpe: ObservedRPE) -> Semanti
         observed_rpe,
         semantic_diff,
         repair_svp,
+        threshold,
     )
     return SemanticCIRun(
         target_svp=target_svp,

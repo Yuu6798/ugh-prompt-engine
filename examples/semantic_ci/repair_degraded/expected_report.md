@@ -4,6 +4,7 @@
 
 - Verdict: repair
 - Loss: 0.5894
+- Threshold: 0.0000
 - Target SVP: semantic-ci-repair-degraded
 - Observed RPE: observed-repair-degraded
 
@@ -55,6 +56,6 @@
 | target_svp | 464d6db707cb |
 | expected_rpe | 3e77d54c9ebe |
 | observed_rpe | 71d6a0e6a483 |
-| semantic_diff | 062d8bb81883 |
+| semantic_diff | 168373607177 |
 | repair_svp | 36517f41bbc1 |
-| final | aa264950a0b7 |
+| final | 2f5f607cf417 |

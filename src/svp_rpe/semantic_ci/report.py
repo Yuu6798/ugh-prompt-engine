@@ -131,6 +131,7 @@ def render_markdown(run: SemanticCIRun) -> str:
         "",
         f"- Verdict: {diff.verdict}",
         f"- Loss: {diff.loss:.4f}",
+        f"- Threshold: {diff.threshold:.4f}",
         f"- Target SVP: {_escape_cell(run.target_svp.id)}",
         f"- Observed RPE: {_escape_cell(run.observed_rpe.id)}",
         "",

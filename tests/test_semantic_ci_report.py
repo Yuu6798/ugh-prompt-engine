@@ -76,7 +76,7 @@ def test_ci_check_cli_markdown_stdout_matches_snapshot() -> None:
         ],
     )
 
-    assert result.exit_code == 0
+    assert result.exit_code == 1
     assert result.output == (scenario_dir / "expected_report.md").read_text(encoding="utf-8")
 
 
@@ -96,7 +96,7 @@ def test_ci_check_cli_markdown_output_file_matches_snapshot(tmp_path) -> None:
         ],
     )
 
-    assert result.exit_code == 0
+    assert result.exit_code == 1
     assert output_path.read_text(encoding="utf-8") == (
         scenario_dir / "expected_report.md"
     ).read_text(encoding="utf-8")

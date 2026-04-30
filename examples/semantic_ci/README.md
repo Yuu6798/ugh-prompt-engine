@@ -7,7 +7,11 @@ svprpe ci-check examples/semantic_ci/pass_perfect/target_svp.json examples/seman
 svprpe ci-check examples/semantic_ci/repair_degraded/target_svp.json examples/semantic_ci/repair_degraded/observed_rpe.json
 svprpe ci-check examples/semantic_ci/repair_budget_zero/target_svp.json examples/semantic_ci/repair_budget_zero/observed_rpe.json
 svprpe ci-check examples/semantic_ci/repair_degraded/target_svp.json examples/semantic_ci/repair_degraded/observed_rpe.json --format markdown
+svprpe ci-check examples/semantic_ci/repair_degraded/target_svp.json examples/semantic_ci/repair_degraded/observed_rpe.json --threshold 0.6
 ```
+
+`ci-check` exits with code `1` for `repair` verdicts. Use `--threshold` when a CI
+job should tolerate bounded semantic drift.
 
 Each scenario contains:
 
