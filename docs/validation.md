@@ -99,7 +99,7 @@ heavy for the default CI environment. Current validation is split accordingly:
 
 | Q3 criterion | Synthetic CI status | Real-audio / Demucs status |
 |---|---|---|
-| Summed-stem residual < 5% | Verified by `tests/test_stem_validation.py` using deterministic synthetic stems | Local Demucs smoke test on `synth_03_mid_groove_g_major` passed with `htdemucs` CPU: residual `0.034802`; no committed real-audio stem corpus yet |
+| Summed-stem residual < 5% | Verified by `tests/test_stem_validation.py` using deterministic synthetic stems | Local Demucs smoke tests passed with `htdemucs` CPU: `synth_03` residual `0.034802`; external real-audio 30s MP3 excerpt residual `0.032082`; no committed real-audio stem corpus yet |
 | Per-stem BPM matches full mix | Verified by `tests/test_stem_validation.py` on a pulsed synthetic stem bundle | Local Demucs smoke test on `synth_03_mid_groove_g_major` failed: drums `24.15` BPM and vocals `129.20` BPM vs full mix `120.19`; sparse stems may not yield stable BPM |
 
 Manual real-audio check:

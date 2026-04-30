@@ -46,10 +46,10 @@ def validate_file(
     residual_threshold: float,
     bpm_tolerance: float,
 ) -> dict[str, Any]:
-    # Keep the full mix at native sample rate so summed-stem residual compares
-    # waveforms on the same sample grid as Demucs output.
-    audio = load_audio(str(audio_path), target_sr=None)
     stem_bundle = separate_stems(audio_path, model=model, device=device)
+    # Keep the full mix on the same sample grid as Demucs output. Real MP3
+    # files can be 48 kHz while Demucs emits 44.1 kHz stems.
+    audio = load_audio(str(audio_path), target_sr=stem_bundle.sample_rate)
     physical, _, _ = extract_physical(audio, stem_bundle=stem_bundle)
 
     residual = validate_stem_reconstruction(
