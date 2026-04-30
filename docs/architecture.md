@@ -69,6 +69,12 @@ Audio (WAV/MP3) → RPE Extraction → SVP Generation → Evaluation
 - SemanticDiff + PhysicalDiff + action_hints generation
 - Self and cross-comparison modes
 
+### semantic_ci/ (v1)
+- Deterministic Target SVP → Expected RPE fixture comparison core
+- Splits SemanticDiff into missing / preserved / over_changed
+- Emits budgeted RepairSVP with preserve / restore / reduce / lock
+- Records RoundTripLog hashes for reproducibility
+
 ### eval/semantic_similarity.py (v0.2)
 - Token + synonym overlap for PoR similarity
 - Synonym map config: config/synonym_map.yaml

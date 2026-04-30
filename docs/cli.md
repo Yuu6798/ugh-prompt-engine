@@ -58,6 +58,18 @@ svprpe compare --reference-audio ref.wav --candidate-audio gen.wav --reference-s
 
 Output: `semantic_diff`, `physical_diff`, `action_hints`, `overall_score`.
 
+### `svprpe ci-check <target_svp.json> <observed_rpe.json>`
+
+Run the deterministic semantic CI fixture loop.
+
+```bash
+svprpe ci-check target_svp.json observed_rpe.json
+svprpe ci-check target_svp.json observed_rpe.json -o semantic_ci_result.json
+```
+
+Output includes `expected_rpe`, `semantic_diff`, `repair_svp`, `repaired_svp`, and
+`roundtrip_log`.
+
 ### `svprpe run <audio>`
 
 Run full pipeline: extract → generate → evaluate.

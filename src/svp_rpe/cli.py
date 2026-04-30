@@ -5,6 +5,7 @@ Commands:
   svprpe generate <rpe>         → SVP YAML/TXT
   svprpe evaluate --audio <wav> → Evaluation JSON (self or with --svp)
   svprpe compare ...            → Reference vs candidate comparison
+  svprpe ci-check ...           → Deterministic semantic CI fixture check
   svprpe run <audio>            → Full pipeline
   svprpe batch <dir>            → Batch processing
 """
@@ -204,6 +205,27 @@ def compare(
     if output:
         Path(output).write_text(result_json, encoding="utf-8")
         console.print(f"[green]Comparison saved to {output}[/green]")
+    else:
+        console.print(result_json)
+
+
+@app.command("ci-check")
+def ci_check(
+    target_svp: str = typer.Argument(..., help="Path to TargetSVP JSON"),
+    observed_rpe: str = typer.Argument(..., help="Path to ObservedRPE fixture JSON"),
+    output: Optional[str] = typer.Option(None, "-o", "--output", help="Output JSON path"),
+) -> None:
+    """Run deterministic semantic CI: TargetSVP → ExpectedRPE → Diff → RepairSVP."""
+    from svp_rpe.semantic_ci import ObservedRPE, TargetSVP, run_semantic_ci
+
+    target_data = json.loads(Path(target_svp).read_text(encoding="utf-8"))
+    observed_data = json.loads(Path(observed_rpe).read_text(encoding="utf-8"))
+    result = run_semantic_ci(TargetSVP(**target_data), ObservedRPE(**observed_data))
+    result_json = json.dumps(result.model_dump(mode="json"), ensure_ascii=False, indent=2)
+
+    if output:
+        Path(output).write_text(result_json, encoding="utf-8")
+        console.print(f"[green]Semantic CI result saved to {output}[/green]")
     else:
         console.print(result_json)
 
