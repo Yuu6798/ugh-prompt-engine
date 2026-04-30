@@ -99,7 +99,7 @@ def _to_mono_float32(value: Any) -> np.ndarray:
     return np.asarray(arr, dtype=np.float32)
 
 
-def _load_demucs_separator() -> type[Any]:
+def _get_demucs_separator_class() -> type[Any]:
     if not _HAS_DEMUCS or _DemucsAPI is None:
         raise SeparatorNotAvailableError(
             "demucs is not installed. Install the optional extra with: "
@@ -131,7 +131,7 @@ def separate_stems(
 ) -> StemBundle:
     """Separate an audio file into vocals, drums, bass, and other stems."""
     source_path = Path(path)
-    separator_cls = _load_demucs_separator()
+    separator_cls = _get_demucs_separator_class()
     separator = separator_cls(model=model, device=device)
     _, separated = separator.separate_audio_file(source_path)
 

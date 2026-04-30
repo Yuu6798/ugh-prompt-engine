@@ -40,8 +40,6 @@ from svp_rpe.rpe.structure_labels import assign_labels
 from svp_rpe.rpe.structure_novelty import compute_novelty_curve, find_boundaries
 from svp_rpe.rpe.valley import compute_valley_depth
 
-# Keep legacy import for backward compat
-
 
 def _detect_sections_v2(y: np.ndarray, sr: int) -> list[SectionMarker]:
     """Improved section detection using multi-feature novelty."""
@@ -120,6 +118,22 @@ def _extract_stem_rpe(
         stem_phys, _, _ = extract_physical(stem_audio, valley_method=valley_method)
         stem_rpe[stem_name] = stem_phys
     return stem_rpe
+
+
+def _maybe_separate_stems(
+    path: str | Path,
+    *,
+    include_stems: bool,
+    separation_model: str,
+    separation_device: str,
+) -> StemBundle | None:
+    if not include_stems:
+        return None
+    return separate_audio_stems(
+        Path(path),
+        model=separation_model,
+        device=separation_device,
+    )
 
 
 def extract_physical(
@@ -217,14 +231,11 @@ def extract_physical_from_file(
 ) -> PhysicalRPE:
     """Convenience: load audio file and extract PhysicalRPE in one call."""
     audio = load_audio(path)
-    stem_bundle = (
-        separate_audio_stems(
-            Path(path),
-            model=separation_model,
-            device=separation_device,
-        )
-        if include_stems
-        else None
+    stem_bundle = _maybe_separate_stems(
+        path,
+        include_stems=include_stems,
+        separation_model=separation_model,
+        separation_device=separation_device,
     )
     phys, _, _ = extract_physical(
         audio,
@@ -268,14 +279,11 @@ def extract_rpe_from_file(
 ) -> RPEBundle:
     """Convenience: load audio file and extract full RPEBundle."""
     audio = load_audio(path)
-    stem_bundle = (
-        separate_audio_stems(
-            Path(path),
-            model=separation_model,
-            device=separation_device,
-        )
-        if include_stems
-        else None
+    stem_bundle = _maybe_separate_stems(
+        path,
+        include_stems=include_stems,
+        separation_model=separation_model,
+        separation_device=separation_device,
     )
     return extract_rpe(
         audio,
