@@ -6,9 +6,19 @@ import json
 import sys
 from pathlib import Path
 
-from svp_rpe.semantic_ci import ObservedRPE, SemanticCIRun, TargetSVP, render_markdown, run_semantic_ci
-
 ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from svp_rpe.semantic_ci import (  # noqa: E402
+    ObservedRPE,
+    SemanticCIRun,
+    TargetSVP,
+    render_markdown,
+    run_semantic_ci,
+)
+
 FIXTURE_DIR = ROOT / "examples" / "semantic_ci"
 SCENARIOS = ("pass_perfect", "repair_degraded", "repair_budget_zero")
 
