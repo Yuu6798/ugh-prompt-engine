@@ -26,6 +26,7 @@
 |--------|-----------|
 | BPM | Beats per minute (librosa beat_track) |
 | Time Signature | Beat-level onset strength autocorrelation over supported meters (`3/4`, `4/4`, `6/8`) |
+| Downbeat Times | Beat-strength phase pick over the inferred meter (`PhysicalRPE.downbeat_times`) |
 | Key | Chroma → Krumhansl-Kessler template matching |
 | Onset Density | Onsets per second |
 
@@ -43,6 +44,21 @@
 The current validation set contains four `4/4` synth samples and one `3/4`
 waltz sample. `6/8` support is covered by a synthetic beat-strength unit test;
 an audio-level 6/8 fixture is deferred until the sample set is expanded.
+
+### Downbeat Detection (Q2-1)
+
+`compute_downbeat_times()` estimates downbeats without learned models:
+
+1. Detect beats with `librosa.beat.beat_track`.
+2. Sample normalized onset strength around each beat.
+3. Parse the inferred meter numerator (`3/4` → 3, `4/4` → 4, `6/8` → 6).
+4. Choose the strongest beat-strength phase within each bar.
+5. Emit `PhysicalRPE.downbeat_times` as sorted seconds.
+
+This is a lightweight deterministic fallback. The roadmap target remains
+madmom-backed downbeat tracking, but `madmom==0.16.1` does not currently build
+cleanly in the Python 3.11 environment without extra native/Cython setup. The
+fallback gives a reviewable Q2-1 baseline while keeping installation stable.
 
 ## Stereo Metrics
 

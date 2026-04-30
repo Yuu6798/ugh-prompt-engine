@@ -81,6 +81,20 @@ class SampleSpec:
             {"label": "outro", "start_sec": outro_start, "end_sec": self.duration_sec},
         )
 
+    @property
+    def downbeats_sec(self) -> tuple[float, ...]:
+        beat_period = 60.0 / self.bpm
+        beats_per_bar = int(self.time_signature.split("/", 1)[0])
+        bar_period = beat_period * beats_per_bar
+        body = self.sections[1]
+        t = float(body["start_sec"])
+        end = float(body["end_sec"])
+        downbeats: list[float] = []
+        while t <= end + 1e-6:
+            downbeats.append(round(t, 4))
+            t += bar_period
+        return tuple(downbeats)
+
 
 SAMPLES = (
     SampleSpec(
@@ -299,6 +313,7 @@ def ground_truth_rows() -> list[dict]:
                     for section in spec.sections
                 ]
                 + [spec.duration_sec],
+                "downbeats_sec": list(spec.downbeats_sec),
                 "expected_brightness_band": spec.expected_brightness_band,
                 "sha256": sha256_bytes(data),
             }

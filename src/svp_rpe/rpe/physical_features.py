@@ -380,6 +380,83 @@ def compute_time_signature(y: np.ndarray, sr: int) -> tuple[str, float]:
     return _classify_time_signature_from_beat_strengths(np.asarray(beat_strengths))
 
 
+def _time_signature_numerator(time_signature: str) -> int:
+    """Parse the numerator from a time-signature string."""
+    try:
+        numerator = int(str(time_signature).split("/", 1)[0])
+    except (TypeError, ValueError):
+        return 4
+    if numerator <= 0:
+        return 4
+    return min(numerator, 16)
+
+
+def _beat_level_onset_strengths(
+    y: np.ndarray,
+    sr: int,
+    beat_frames: np.ndarray,
+) -> np.ndarray:
+    """Return normalized onset strength sampled around each beat frame."""
+    onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=512).astype(float)
+    if onset_env.size == 0 or float(np.max(onset_env)) <= 0.0:
+        return np.zeros(len(beat_frames), dtype=float)
+    onset_env = onset_env / float(np.max(onset_env))
+
+    beat_strengths: list[float] = []
+    for frame in beat_frames:
+        lo = max(0, int(frame) - 1)
+        hi = min(onset_env.size, int(frame) + 2)
+        beat_strengths.append(float(np.max(onset_env[lo:hi])) if hi > lo else 0.0)
+    return np.asarray(beat_strengths, dtype=float)
+
+
+def _select_downbeat_phase(beat_strengths: np.ndarray, beats_per_bar: int) -> int:
+    """Choose the strongest metrical phase as the downbeat phase."""
+    strengths = np.asarray(beat_strengths, dtype=float)
+    if strengths.size == 0 or beats_per_bar <= 1:
+        return 0
+
+    phase_count = min(beats_per_bar, strengths.size)
+    phase_means: list[float] = []
+    for phase in range(phase_count):
+        phase_values = strengths[phase::beats_per_bar]
+        phase_means.append(float(np.mean(phase_values)) if phase_values.size else 0.0)
+    return int(np.argmax(np.asarray(phase_means)))
+
+
+def compute_downbeat_times(y: np.ndarray, sr: int, time_signature: str) -> list[float]:
+    """Estimate downbeat times from deterministic beat tracking.
+
+    Q2-1 deliberately keeps this lightweight and dependency-free: madmom is the
+    roadmap target, but the current Python 3.11 environment cannot build it
+    without extra native/Cython setup. This detector reuses librosa beats, then
+    selects the strongest beat-strength phase within each bar.
+    """
+    if y.size == 0:
+        return []
+
+    beats_per_bar = _time_signature_numerator(time_signature)
+    if beats_per_bar <= 0:
+        return []
+
+    _, beats = librosa.beat.beat_track(y=y, sr=sr)
+    beat_frames = np.asarray(beats, dtype=int)
+    if beat_frames.size < max(2, beats_per_bar):
+        return []
+
+    beat_times = librosa.frames_to_time(beat_frames, sr=sr)
+    beat_strengths = _beat_level_onset_strengths(y, sr, beat_frames)
+    phase = _select_downbeat_phase(beat_strengths, beats_per_bar)
+
+    duration = len(y) / sr
+    downbeats = beat_times[phase::beats_per_bar]
+    return [
+        round(float(t), 4)
+        for t in downbeats
+        if 0.0 <= float(t) <= duration
+    ]
+
+
 def compute_key(y: np.ndarray, sr: int) -> tuple[Optional[str], Optional[str], Optional[float]]:
     """Estimate key via chroma → Krumhansl-Kessler template matching.
 

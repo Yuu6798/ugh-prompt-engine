@@ -11,6 +11,20 @@
     "sample_rate": 22050,
     "time_signature": "4/4",
     "time_signature_confidence": 1.0,
+    "downbeat_times": [
+      0.0697,
+      2.7864,
+      5.4335,
+      8.0341,
+      10.7044,
+      13.5372,
+      16.2075,
+      19.0404,
+      21.7107,
+      24.5203,
+      27.2138,
+      30.0234
+    ],
     "structure": [
       {
         "schema_version": "1.0",

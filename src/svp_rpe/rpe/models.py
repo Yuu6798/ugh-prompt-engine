@@ -48,6 +48,7 @@ class PhysicalRPE(BaseModel):
     sample_rate: int
     time_signature: str = "4/4"
     time_signature_confidence: float = 0.3
+    downbeat_times: List[float] = Field(default_factory=list)
     structure: List[SectionMarker]
     rms_mean: float
     peak_amplitude: float
