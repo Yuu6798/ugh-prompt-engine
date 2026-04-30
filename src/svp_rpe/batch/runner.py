@@ -22,6 +22,9 @@ def run_batch(
     mode: str = "evaluate",  # "evaluate" | "compare"
     output_dir: Optional[str] = None,
     baseline: str = "pro",
+    include_stems: bool = False,
+    separation_model: str = "htdemucs_ft",
+    separation_device: str = "cpu",
 ) -> dict:
     """Run batch processing on a directory of audio files.
 
@@ -40,7 +43,12 @@ def run_batch(
 
     for audio_path, svp_paths in pairs:
         try:
-            rpe_bundle = extract_rpe_from_file(str(audio_path))
+            rpe_bundle = extract_rpe_from_file(
+                str(audio_path),
+                include_stems=include_stems,
+                separation_model=separation_model,
+                separation_device=separation_device,
+            )
             svp_bundle = generate_svp(rpe_bundle)
             rpe_score = score_rpe(rpe_bundle.physical, baseline=baseline)
             ugher_score = score_ugher(rpe_bundle, svp_bundle)
