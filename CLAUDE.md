@@ -156,6 +156,7 @@ examples/                      # sample_input/ + expected_output/
 | [`docs/roadmap.md`](docs/roadmap.md) | PoC (達成済み) と Pre-prototype マイルストーン (P1–P5)、推奨実行順 |
 | [`docs/roadmap_goal1.md`](docs/roadmap_goal1.md) | 目的1（定量観測）完成までのフェーズ Q0–Q5、完成定義、クリティカルパス |
 | [`docs/validation.md`](docs/validation.md) | Q0-5 baseline: 5 曲の対真値比較（BPM / key / segment）、Q0 完了基準のチェック、Coverage Matrix |
+| [`docs/code_semantic_ci_design.md`](docs/code_semantic_ci_design.md) | Code Edition v0.1 設計仕様: 3-state RPE (Baseline/Expected/Observed)、Constraint type system (state/delta/repair)、Python MVP の P1–P5 計画 |
 
 ## ドキュメント管理ポリシー
 
