@@ -26,6 +26,14 @@ PRO_BASELINE_DEFAULTS: Final[dict[str, float]] = {
     "thickness_pro": 2.105,
 }
 
+# Per-stem baseline mapping. Genre-agnostic defaults chosen for spectral
+# overlap with each stem's typical dynamics:
+# - vocals  → acoustic: low active_rate, moderate crest_factor (sustained voice)
+# - drums   → edm:      high active_rate, low crest (percussive, compressed)
+# - bass    → edm:      similar dynamics, low-frequency dominant
+# - other   → pro:      mixed content fallback
+# Override per-genre by calling score_rpe() with an explicit baseline at the
+# parent level; STEM_BASELINE_PROFILES intentionally stays static.
 STEM_BASELINE_PROFILES: Final[dict[str, str]] = {
     "vocals": "acoustic",
     "drums": "edm",

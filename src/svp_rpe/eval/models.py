@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field, model_serializer
+from pydantic import BaseModel, Field, field_validator, model_serializer
 
 
 class RPEScore(BaseModel):
@@ -18,6 +18,19 @@ class RPEScore(BaseModel):
     thickness_score: float
     overall: float
     stem_scores: dict[str, "RPEScore"] = Field(default_factory=dict)
+
+    @field_validator("stem_scores")
+    @classmethod
+    def stem_scores_are_flat(
+        cls, value: dict[str, "RPEScore"]
+    ) -> dict[str, "RPEScore"]:
+        nested = sorted(name for name, score in value.items() if score.stem_scores)
+        if nested:
+            raise ValueError(
+                f"stem_scores must not contain nested stem_scores; "
+                f"offenders: {nested}"
+            )
+        return value
 
     @model_serializer(mode="wrap")
     def omit_empty_stem_scores(self, handler: Any) -> dict[str, Any]:

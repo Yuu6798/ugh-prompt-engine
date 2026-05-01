@@ -195,8 +195,9 @@ def test_run_separate_options_forward_to_extractor(monkeypatch):
     assert calls[0][1]["separation_device"] == "cuda"
 
 
-def test_compare_separate_applies_to_reference_and_candidate(monkeypatch):
-    calls = _patch_fake_extractor(monkeypatch)
+def test_compare_does_not_accept_separate_flag(monkeypatch):
+    """compare's stem flag was removed because comparison engine ignores stem_rpe."""
+    _patch_fake_extractor(monkeypatch)
 
     result = runner.invoke(
         app,
@@ -207,59 +208,11 @@ def test_compare_separate_applies_to_reference_and_candidate(monkeypatch):
             "--candidate-audio",
             "candidate.wav",
             "--separate",
-            "--separation-model",
-            "fake-model",
         ],
     )
 
-    assert result.exit_code == 0
-    assert [call[0] for call in calls] == ["ref.wav", "candidate.wav"]
-    assert all(call[1]["include_stems"] is True for call in calls)
-    assert all(call[1]["separation_model"] == "fake-model" for call in calls)
-
-
-def test_compare_separate_with_candidate_svp_extracts_reference_only(monkeypatch, tmp_path):
-    calls = _patch_fake_extractor(monkeypatch)
-    candidate_svp = tmp_path / "candidate.yaml"
-    candidate_svp.write_text(
-        """
-analysis_rpe:
-  por_core: A controlled test audio
-  por_surface: [controlled]
-  grv_primary: controlled
-  bpm: 120
-  key: C
-  mode: major
-  duration_sec: 1.0
-svp_for_generation:
-  constraints: []
-  style_tags: []
-minimal_svp:
-  c: controlled
-  g: []
-  de: flat
-""".strip(),
-        encoding="utf-8",
-    )
-
-    result = runner.invoke(
-        app,
-        [
-            "compare",
-            "--reference-audio",
-            "ref.wav",
-            "--candidate-svp",
-            str(candidate_svp),
-            "--separate",
-            "--separation-device",
-            "cuda",
-        ],
-    )
-
-    assert result.exit_code == 0
-    assert [call[0] for call in calls] == ["ref.wav"]
-    assert calls[0][1]["include_stems"] is True
-    assert calls[0][1]["separation_device"] == "cuda"
+    assert result.exit_code != 0
+    assert "no such option" in result.output.lower() or "--separate" in result.output
 
 
 def test_batch_separate_options_forward_to_runner(monkeypatch):

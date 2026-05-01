@@ -131,3 +131,29 @@ def test_nested_stem_rpe_warns_and_is_not_scored_recursively() -> None:
 
     assert set(score.stem_scores) == {"vocals"}
     assert score.stem_scores["vocals"].stem_scores == {}
+
+
+def test_rpe_score_rejects_nested_stem_scores() -> None:
+    """RPEScore validator must reject manually-constructed nested stem_scores."""
+    from svp_rpe.eval.models import RPEScore
+
+    base_kwargs = dict(
+        rms_score=1.0,
+        active_rate_score=1.0,
+        crest_factor_score=1.0,
+        valley_score=1.0,
+        thickness_score=1.0,
+        overall=1.0,
+    )
+    nested_inner = RPEScore(
+        baseline_profile="acoustic",
+        stem_scores={"bass": RPEScore(baseline_profile="edm", **base_kwargs)},
+        **base_kwargs,
+    )
+
+    with pytest.raises(ValueError, match="must not contain nested stem_scores"):
+        RPEScore(
+            baseline_profile="pro",
+            stem_scores={"vocals": nested_inner},
+            **base_kwargs,
+        )

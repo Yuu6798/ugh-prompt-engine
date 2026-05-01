@@ -59,15 +59,16 @@ svprpe compare --reference-audio ref.wav --candidate-svp candidate.yaml
 
 # Reference audio vs candidate audio
 svprpe compare --reference-audio ref.wav --candidate-audio gen.wav
-svprpe compare --reference-audio ref.wav --candidate-audio gen.wav --separate
 
 # With reference SVP
 svprpe compare --reference-audio ref.wav --candidate-audio gen.wav --reference-svp ref.yaml
 ```
 
 Output: `semantic_diff`, `physical_diff`, `action_hints`, `overall_score`.
-With `--separate`, both reference and candidate audio extraction use stem
-separation.
+
+`--separate` is intentionally **not** supported here because the comparison
+engine does not consume `PhysicalRPE.stem_rpe`. Use `evaluate --separate` or
+`run --separate` for per-stem analysis.
 
 ### `svprpe ci-check <target_svp.json> <observed_rpe.json>`
 
@@ -127,7 +128,7 @@ Outputs: `ranking.json`, `summary.csv`, `summary.json`, `next_action.md`.
 | `--no-save` | Print output to stdout instead of saving |
 | `--valley-method` | Valley depth method: `hybrid` (default), `rms_percentile`, `section_ar` |
 | `--baseline` | RPE baseline profile: `pro`, `loud_pop`, `acoustic`, or `edm` |
-| `--separate` | Enable opt-in Demucs source separation for audio extraction commands |
+| `--separate` | Enable opt-in Demucs source separation (`extract` / `evaluate` / `run` / `batch` only — not `compare`) |
 | `--separation-model` | Demucs model name used with `--separate` (default: `htdemucs_ft`) |
 | `--separation-device` | Demucs inference device used with `--separate` (default: `cpu`) |
 | `--svp` | External SVP file for comparison |
