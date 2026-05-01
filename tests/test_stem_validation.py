@@ -219,6 +219,36 @@ def test_stem_tail_loss_is_counted_in_residual() -> None:
     assert result.residual_ratio > DEFAULT_STEM_RESIDUAL_THRESHOLD
 
 
+def test_short_stem_bundle_against_full_source_fails() -> None:
+    """All stems are half-length but the source is full: the unreconstructed
+    tail must fail Q3's `<5%` contract.
+
+    The first half of the stems matches the source perfectly (residual = 0
+    there), so a naive overlap-only check would pass. Padding the
+    reconstruction to the source length forces the second-half source energy
+    into the residual.
+    """
+    audio, bundle = _synthetic_stem_fixture()
+    full_length = audio.y_mono.size
+    half_length = full_length // 2
+    short_stems = {
+        name: stem[:half_length].copy() for name, stem in bundle.stems.items()
+    }
+    short_bundle = bundle.model_copy(
+        update={
+            "stems": short_stems,
+            "duration_sec": round(half_length / bundle.sample_rate, 4),
+        }
+    )
+
+    result = validate_stem_reconstruction(audio, short_bundle)
+
+    assert result.length_delta_samples == full_length - half_length
+    assert result.compared_samples == half_length
+    assert not result.passed
+    assert result.residual_ratio > DEFAULT_STEM_RESIDUAL_THRESHOLD
+
+
 def test_stem_sum_residual_rejects_sample_rate_mismatch() -> None:
     audio, bundle = _synthetic_stem_fixture()
     mismatched_audio = audio.model_copy(update={"sr": audio.sr // 2})
