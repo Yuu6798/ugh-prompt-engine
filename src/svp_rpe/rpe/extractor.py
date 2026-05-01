@@ -5,12 +5,18 @@ valley strategy, and semantic rule-based mapping into RPEBundle output.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
 
 from svp_rpe.eval.diff_models import SectionFeature, ValleyDiagnostics
-from svp_rpe.io.audio_loader import AudioData, load_audio
+from svp_rpe.io.audio_loader import AudioData, AudioMetadata, load_audio
+from svp_rpe.io.source_separator import (
+    STEM_NAMES,
+    StemBundle,
+    separate_stems as separate_audio_stems,
+)
 from svp_rpe.rpe.models import PhysicalRPE, RPEBundle, SectionMarker
 from svp_rpe.rpe.physical_features import (
     compute_active_rate,
@@ -33,8 +39,6 @@ from svp_rpe.rpe.semantic_rules import generate_semantic
 from svp_rpe.rpe.structure_labels import assign_labels
 from svp_rpe.rpe.structure_novelty import compute_novelty_curve, find_boundaries
 from svp_rpe.rpe.valley import compute_valley_depth
-
-# Keep legacy import for backward compat
 
 
 def _detect_sections_v2(y: np.ndarray, sr: int) -> list[SectionMarker]:
@@ -77,10 +81,66 @@ def _detect_sections_v2(y: np.ndarray, sr: int) -> list[SectionMarker]:
     return sections
 
 
+def _audio_from_stem(
+    stem_bundle: StemBundle,
+    stem_name: str,
+    stem: np.ndarray,
+) -> AudioData:
+    sample_rate = stem_bundle.sample_rate
+    duration_sec = round(len(stem) / sample_rate, 4)
+    metadata = AudioMetadata(
+        file_path=f"{stem_bundle.source_path}#{stem_name}",
+        duration_sec=duration_sec,
+        sample_rate=sample_rate,
+        channels=1,
+        format="stem",
+    )
+    return AudioData(
+        metadata=metadata,
+        y_mono=stem.astype(np.float32, copy=False),
+        y_stereo=None,
+        sr=sample_rate,
+    )
+
+
+def _extract_stem_rpe(
+    stem_bundle: StemBundle,
+    *,
+    valley_method: str,
+) -> dict[str, PhysicalRPE]:
+    stem_rpe: dict[str, PhysicalRPE] = {}
+    for stem_name in STEM_NAMES:
+        stem_audio = _audio_from_stem(
+            stem_bundle,
+            stem_name,
+            stem_bundle.stems[stem_name],
+        )
+        stem_phys, _, _ = extract_physical(stem_audio, valley_method=valley_method)
+        stem_rpe[stem_name] = stem_phys
+    return stem_rpe
+
+
+def _maybe_separate_stems(
+    path: str | Path,
+    *,
+    include_stems: bool,
+    separation_model: str,
+    separation_device: str,
+) -> StemBundle | None:
+    if not include_stems:
+        return None
+    return separate_audio_stems(
+        Path(path),
+        model=separation_model,
+        device=separation_device,
+    )
+
+
 def extract_physical(
     audio: AudioData,
     *,
     valley_method: str = "hybrid",
+    stem_bundle: StemBundle | None = None,
 ) -> tuple[PhysicalRPE, Optional[ValleyDiagnostics], list[SectionFeature]]:
     """Extract PhysicalRPE with improved structure and valley estimation.
 
@@ -122,6 +182,11 @@ def extract_physical(
 
     # Per-section features
     section_features = extract_section_features(y, sr, structure)
+    stem_rpe = (
+        _extract_stem_rpe(stem_bundle, valley_method=valley_method)
+        if stem_bundle is not None
+        else {}
+    )
 
     phys = PhysicalRPE(
         bpm=bpm,
@@ -150,15 +215,33 @@ def extract_physical(
         spectral_profile=spectral_profile,
         stereo_profile=stereo_profile,
         onset_density=onset_density,
+        stem_rpe=stem_rpe,
     )
 
     return phys, valley_diag, section_features
 
 
-def extract_physical_from_file(path: str) -> PhysicalRPE:
+def extract_physical_from_file(
+    path: str,
+    *,
+    valley_method: str = "hybrid",
+    include_stems: bool = False,
+    separation_model: str = "htdemucs_ft",
+    separation_device: str = "cpu",
+) -> PhysicalRPE:
     """Convenience: load audio file and extract PhysicalRPE in one call."""
     audio = load_audio(path)
-    phys, _, _ = extract_physical(audio)
+    stem_bundle = _maybe_separate_stems(
+        path,
+        include_stems=include_stems,
+        separation_model=separation_model,
+        separation_device=separation_device,
+    )
+    phys, _, _ = extract_physical(
+        audio,
+        valley_method=valley_method,
+        stem_bundle=stem_bundle,
+    )
     return phys
 
 
@@ -166,10 +249,13 @@ def extract_rpe(
     audio: AudioData,
     *,
     valley_method: str = "hybrid",
+    stem_bundle: StemBundle | None = None,
 ) -> RPEBundle:
     """Full RPE extraction: physical + semantic → RPEBundle."""
     phys, valley_diag, section_features = extract_physical(
-        audio, valley_method=valley_method,
+        audio,
+        valley_method=valley_method,
+        stem_bundle=stem_bundle,
     )
     sem = generate_semantic(phys)
     return RPEBundle(
@@ -187,7 +273,20 @@ def extract_rpe_from_file(
     path: str,
     *,
     valley_method: str = "hybrid",
+    include_stems: bool = False,
+    separation_model: str = "htdemucs_ft",
+    separation_device: str = "cpu",
 ) -> RPEBundle:
     """Convenience: load audio file and extract full RPEBundle."""
     audio = load_audio(path)
-    return extract_rpe(audio, valley_method=valley_method)
+    stem_bundle = _maybe_separate_stems(
+        path,
+        include_stems=include_stems,
+        separation_model=separation_model,
+        separation_device=separation_device,
+    )
+    return extract_rpe(
+        audio,
+        valley_method=valley_method,
+        stem_bundle=stem_bundle,
+    )
