@@ -4,6 +4,8 @@
 
 ```bash
 pip install -e ".[dev]"
+# Include Demucs when using --separate:
+pip install -e ".[dev,separate]"
 ```
 
 ## Commands
@@ -15,7 +17,12 @@ Extract RPE (physical + semantic) from an audio file.
 ```bash
 svprpe extract track.wav -o rpe.json
 svprpe extract track.wav --valley-method rms_percentile -o rpe.json
+svprpe extract track.wav --separate --separation-model htdemucs_ft -o rpe.json
 ```
+
+`--separate` is opt-in because Demucs is slow and requires the optional
+`svp-rpe[separate]` dependency. When enabled, the emitted RPE includes
+`physical.stem_rpe` for vocals, drums, bass, and other.
 
 ### `svprpe generate <rpe.json>`
 
@@ -34,6 +41,7 @@ Evaluate audio. Without `--svp`: self-evaluate. With `--svp`: compare against ex
 # Self-evaluation
 svprpe evaluate --audio track.wav -o evaluation.json
 svprpe evaluate --audio track.wav --baseline edm -o evaluation.json
+svprpe evaluate --audio track.wav --separate -o evaluation.json
 
 # Compare against external SVP
 svprpe evaluate --audio track.wav --svp design.yaml -o evaluation.json
@@ -57,6 +65,10 @@ svprpe compare --reference-audio ref.wav --candidate-audio gen.wav --reference-s
 ```
 
 Output: `semantic_diff`, `physical_diff`, `action_hints`, `overall_score`.
+
+`--separate` is intentionally **not** supported here because the comparison
+engine does not consume `PhysicalRPE.stem_rpe`. Use `evaluate --separate` or
+`run --separate` for per-stem analysis.
 
 ### `svprpe ci-check <target_svp.json> <observed_rpe.json>`
 
@@ -86,6 +98,7 @@ svprpe run track.wav --output-dir ./output
 svprpe run track.wav --no-save
 svprpe run track.wav --valley-method section_ar --output-dir ./output
 svprpe run track.wav --baseline acoustic --output-dir ./output
+svprpe run track.wav --separate --output-dir ./output
 ```
 
 ### `svprpe batch <dir>`
@@ -96,6 +109,7 @@ Batch process multiple audio files.
 # Evaluate all audio files in directory
 svprpe batch ./audio_files --output-dir ./batch_out
 svprpe batch ./audio_files --baseline loud_pop --output-dir ./batch_out
+svprpe batch ./audio_files --separate --output-dir ./batch_out
 
 # Compare each audio against SVP candidates
 svprpe batch ./audio_files --svp-dir ./svp_candidates --mode compare --output-dir ./batch_out
@@ -114,6 +128,9 @@ Outputs: `ranking.json`, `summary.csv`, `summary.json`, `next_action.md`.
 | `--no-save` | Print output to stdout instead of saving |
 | `--valley-method` | Valley depth method: `hybrid` (default), `rms_percentile`, `section_ar` |
 | `--baseline` | RPE baseline profile: `pro`, `loud_pop`, `acoustic`, or `edm` |
+| `--separate` | Enable opt-in Demucs source separation (`extract` / `evaluate` / `run` / `batch` only — not `compare`) |
+| `--separation-model` | Demucs model name used with `--separate` (default: `htdemucs_ft`) |
+| `--separation-device` | Demucs inference device used with `--separate` (default: `cpu`) |
 | `--svp` | External SVP file for comparison |
 | `--svp-dir` | Directory with SVP candidates (batch mode) |
 | `--mode` | Batch mode: `evaluate` (default) or `compare` |

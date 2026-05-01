@@ -1,13 +1,15 @@
 """eval/models.py — Evaluation score models (Pydantic)."""
 from __future__ import annotations
 
-from pydantic import BaseModel
+from typing import Any
+
+from pydantic import BaseModel, Field, field_validator, model_serializer
 
 
 class RPEScore(BaseModel):
     """RPE physical quality score against Pro baseline."""
 
-    schema_version: str = "1.1"
+    schema_version: str = "1.2"
     baseline_profile: str = "pro"
     rms_score: float
     active_rate_score: float
@@ -15,6 +17,27 @@ class RPEScore(BaseModel):
     valley_score: float
     thickness_score: float
     overall: float
+    stem_scores: dict[str, "RPEScore"] = Field(default_factory=dict)
+
+    @field_validator("stem_scores")
+    @classmethod
+    def stem_scores_are_flat(
+        cls, value: dict[str, "RPEScore"]
+    ) -> dict[str, "RPEScore"]:
+        nested = sorted(name for name, score in value.items() if score.stem_scores)
+        if nested:
+            raise ValueError(
+                f"stem_scores must not contain nested stem_scores; "
+                f"offenders: {nested}"
+            )
+        return value
+
+    @model_serializer(mode="wrap")
+    def omit_empty_stem_scores(self, handler: Any) -> dict[str, Any]:
+        data = handler(self)
+        if not self.stem_scores:
+            data.pop("stem_scores", None)
+        return data
 
 
 class UGHerScore(BaseModel):

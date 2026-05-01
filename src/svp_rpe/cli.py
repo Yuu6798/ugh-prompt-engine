@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Annotated, Optional
 
 import click
 import typer
@@ -28,6 +28,19 @@ app = typer.Typer(
 console = Console()
 BASELINE_PROFILE_CHOICE = click.Choice(sorted(BASELINE_CONFIGS))
 BASELINE_PROFILE_HELP = "RPE baseline profile used as scoring reference."
+DEFAULT_SEPARATION_MODEL = "htdemucs_ft"
+DEFAULT_SEPARATION_DEVICE = "cpu"
+SEPARATE_HELP = "Enable Demucs stem separation (opt-in). Requires demucs installed."
+SEPARATION_MODEL_HELP = "Demucs model name used when --separate is set."
+SEPARATION_DEVICE_HELP = "Demucs inference device used when --separate is set."
+
+SeparateOption = Annotated[bool, typer.Option("--separate", help=SEPARATE_HELP)]
+SeparationModelOption = Annotated[
+    str, typer.Option("--separation-model", help=SEPARATION_MODEL_HELP)
+]
+SeparationDeviceOption = Annotated[
+    str, typer.Option("--separation-device", help=SEPARATION_DEVICE_HELP)
+]
 
 
 @app.command()
@@ -36,12 +49,21 @@ def extract(
     output: Optional[str] = typer.Option(None, "-o", "--output", help="Output JSON path"),
     valley_method: str = typer.Option("hybrid", "--valley-method",
                                        help="Valley method: rms_percentile/section_ar/hybrid"),
+    separate: SeparateOption = False,
+    separation_model: SeparationModelOption = DEFAULT_SEPARATION_MODEL,
+    separation_device: SeparationDeviceOption = DEFAULT_SEPARATION_DEVICE,
 ) -> None:
     """Extract RPE from audio file."""
     from svp_rpe.rpe.extractor import extract_rpe_from_file
 
     console.print(f"[bold]Extracting RPE from {audio}...[/bold]")
-    bundle = extract_rpe_from_file(audio, valley_method=valley_method)
+    bundle = extract_rpe_from_file(
+        audio,
+        valley_method=valley_method,
+        include_stems=separate,
+        separation_model=separation_model,
+        separation_device=separation_device,
+    )
     result = bundle.model_dump()
     result_json = json.dumps(result, ensure_ascii=False, indent=2)
 
@@ -98,6 +120,9 @@ def evaluate(
         click_type=BASELINE_PROFILE_CHOICE,
         help=BASELINE_PROFILE_HELP,
     ),
+    separate: SeparateOption = False,
+    separation_model: SeparationModelOption = DEFAULT_SEPARATION_MODEL,
+    separation_device: SeparationDeviceOption = DEFAULT_SEPARATION_DEVICE,
 ) -> None:
     """Evaluate audio. With --svp: compare against external SVP. Without: self-evaluate."""
     from svp_rpe.eval.scorer_integrated import score_integrated
@@ -107,7 +132,13 @@ def evaluate(
     from svp_rpe.svp.generator import generate_svp
 
     console.print(f"[bold]Evaluating {audio}...[/bold]")
-    rpe_bundle = extract_rpe_from_file(audio, valley_method=valley_method)
+    rpe_bundle = extract_rpe_from_file(
+        audio,
+        valley_method=valley_method,
+        include_stems=separate,
+        separation_model=separation_model,
+        separation_device=separation_device,
+    )
     svp_bundle = generate_svp(rpe_bundle)
 
     rpe_score = score_rpe(rpe_bundle.physical, baseline=baseline)
@@ -155,7 +186,12 @@ def compare(
     valley_method: str = typer.Option("hybrid", "--valley-method",
                                        help="Valley method: rms_percentile/section_ar/hybrid"),
 ) -> None:
-    """Compare reference audio against candidate audio/SVP."""
+    """Compare reference audio against candidate audio/SVP.
+
+    Note: stem separation is not supported here because the comparison engine
+    does not consume PhysicalRPE.stem_rpe. Use `evaluate --separate` or
+    `run --separate` for per-stem analysis.
+    """
     from svp_rpe.eval.comparison import compare_rpe_vs_svp
     from svp_rpe.rpe.extractor import extract_rpe_from_file
     from svp_rpe.svp.parser import load_svp
@@ -269,6 +305,9 @@ def run(
         click_type=BASELINE_PROFILE_CHOICE,
         help=BASELINE_PROFILE_HELP,
     ),
+    separate: SeparateOption = False,
+    separation_model: SeparationModelOption = DEFAULT_SEPARATION_MODEL,
+    separation_device: SeparationDeviceOption = DEFAULT_SEPARATION_DEVICE,
 ) -> None:
     """Run full pipeline: extract → generate → evaluate."""
     from svp_rpe.eval.scorer_integrated import score_integrated
@@ -280,7 +319,13 @@ def run(
 
     console.print(f"[bold]Running full pipeline on {audio}...[/bold]")
 
-    rpe_bundle = extract_rpe_from_file(audio, valley_method=valley_method)
+    rpe_bundle = extract_rpe_from_file(
+        audio,
+        valley_method=valley_method,
+        include_stems=separate,
+        separation_model=separation_model,
+        separation_device=separation_device,
+    )
     console.print("[green]✓[/green] RPE extraction complete")
 
     svp_bundle = generate_svp(rpe_bundle)
@@ -335,6 +380,9 @@ def batch(
         click_type=BASELINE_PROFILE_CHOICE,
         help=BASELINE_PROFILE_HELP,
     ),
+    separate: SeparateOption = False,
+    separation_model: SeparationModelOption = DEFAULT_SEPARATION_MODEL,
+    separation_device: SeparationDeviceOption = DEFAULT_SEPARATION_DEVICE,
 ) -> None:
     """Batch process multiple audio files."""
     from svp_rpe.batch.runner import run_batch
@@ -346,6 +394,9 @@ def batch(
         mode=mode,
         output_dir=output_dir,
         baseline=baseline,
+        include_stems=separate,
+        separation_model=separation_model,
+        separation_device=separation_device,
     )
 
     console.print(f"\n[bold]Results: {summary['successful']}/{summary['total_files']} successful[/bold]")

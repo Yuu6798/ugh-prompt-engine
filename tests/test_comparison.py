@@ -373,6 +373,55 @@ class TestBatchRunner:
         assert (out_dir / "ranking.json").is_file()
         assert (out_dir / "summary.csv").is_file()
 
+    def test_batch_forwards_stem_separation_options(self, monkeypatch, tmp_path):
+        from types import SimpleNamespace
+        import soundfile as sf
+        import numpy as np
+        import svp_rpe.batch.runner as batch_runner
+
+        batch_dir = tmp_path / "batch_input"
+        batch_dir.mkdir()
+        sr = 22050
+        y = np.zeros(sr, dtype=np.float32)
+        sf.write(str(batch_dir / "test.wav"), y, sr)
+
+        calls: list[dict] = []
+
+        def fake_extract(path: str, **kwargs):
+            calls.append({"path": path, **kwargs})
+            return SimpleNamespace(physical=object())
+
+        monkeypatch.setattr(batch_runner, "extract_rpe_from_file", fake_extract)
+        monkeypatch.setattr(batch_runner, "generate_svp", lambda rpe: object())
+        monkeypatch.setattr(
+            batch_runner,
+            "score_rpe",
+            lambda physical, baseline: SimpleNamespace(overall=0.8, baseline_profile=baseline),
+        )
+        monkeypatch.setattr(batch_runner, "score_ugher", lambda rpe, svp: SimpleNamespace(overall=0.7))
+        monkeypatch.setattr(
+            batch_runner,
+            "score_integrated",
+            lambda ugher, rpe: SimpleNamespace(integrated_score=0.75),
+        )
+
+        result = batch_runner.run_batch(
+            str(batch_dir),
+            include_stems=True,
+            separation_model="fake-model",
+            separation_device="cuda",
+        )
+
+        assert result["successful"] == 1
+        assert calls == [
+            {
+                "path": str(batch_dir / "test.wav"),
+                "include_stems": True,
+                "separation_model": "fake-model",
+                "separation_device": "cuda",
+            }
+        ]
+
     def test_batch_discovery_matching(self):
         from pathlib import Path
         from svp_rpe.batch.discovery import match_audio_to_svp
