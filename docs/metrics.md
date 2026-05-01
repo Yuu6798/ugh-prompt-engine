@@ -25,8 +25,71 @@
 | Metric | Definition |
 |--------|-----------|
 | BPM | Beats per minute (librosa beat_track) |
+| Time Signature | Beat-level onset strength autocorrelation over supported meters (`3/4`, `4/4`, `6/8`) |
+| Downbeat Times | Beat-strength phase pick over the inferred meter (`PhysicalRPE.downbeat_times`) |
+| Chord Events | Major/minor triad template match over chroma (`PhysicalRPE.chord_events`) |
+| Melody Contour | `librosa.pyin` monophonic pitch contour (`PhysicalRPE.melody_contour`) |
 | Key | Chroma → Krumhansl-Kessler template matching |
 | Onset Density | Onsets per second |
+
+### Time Signature Detection (Q1-2)
+
+`compute_time_signature()` estimates meter without learned models:
+
+1. Detect beats with `librosa.beat.beat_track`.
+2. Sample normalized onset strength around each beat.
+3. Compute autocorrelation over the beat-strength sequence.
+4. Emit `3/4` when lag-3 clearly dominates nearby duple/quadruple lags.
+5. Emit `6/8` when lag-6 dominates lag-3 while lag-3 remains strong.
+6. Fall back to `4/4` with low confidence when beat evidence is insufficient.
+
+The current validation set contains four `4/4` synth samples and one `3/4`
+waltz sample. `6/8` support is covered by a synthetic beat-strength unit test;
+an audio-level 6/8 fixture is deferred until the sample set is expanded.
+
+### Downbeat Detection (Q2-1)
+
+`compute_downbeat_times()` estimates downbeats without learned models:
+
+1. Detect beats with `librosa.beat.beat_track`.
+2. Sample normalized onset strength around each beat.
+3. Parse the inferred meter numerator (`3/4` → 3, `4/4` → 4, `6/8` → 6).
+4. Choose the strongest beat-strength phase within each bar.
+5. Emit `PhysicalRPE.downbeat_times` as sorted seconds.
+
+This is a lightweight deterministic fallback. The roadmap target remains
+madmom-backed downbeat tracking, but `madmom==0.16.1` does not currently build
+cleanly in the Python 3.11 environment without extra native/Cython setup. The
+fallback gives a reviewable Q2-1 baseline while keeping installation stable.
+
+### Chord Event Detection (Q2-2)
+
+`compute_chord_events()` estimates coarse harmonic blocks without new
+dependencies:
+
+1. Compute `librosa.feature.chroma_cqt`.
+2. Match each chroma frame against normalized major/minor triad templates.
+3. Merge consecutive frames with the same chord.
+4. Drop events shorter than 0.75s.
+5. Emit `ChordEvent(chord, root, quality, start_sec, end_sec, confidence)`.
+
+The detector is intentionally limited to major/minor triads. It is a
+deterministic validation baseline for the synthetic I/IV/V-style samples, not a
+production chord recognizer.
+
+### Melody Contour Extraction (Q2-3)
+
+`compute_melody_contour()` estimates a monophonic pitch track without adding new
+dependencies:
+
+1. High-pass the input at 300 Hz to reduce bass/chord root dominance.
+2. Run `librosa.pyin` with C2-C7 bounds and hop length 2048.
+3. Store frame-aligned `times`, `frequencies_hz`, and `voicing` probabilities.
+4. Emit `None` for silence or tracks with no meaningful voicing evidence.
+
+The current validation target is synthetic, clearly voiced melody regions:
+pitch accuracy within +/-50 cents and voicing recall over the melody ground
+truth intervals. This is not a production vocal transcription system.
 
 ## Stereo Metrics
 
@@ -35,15 +98,28 @@
 | Width | RMS(L-R) / RMS(L+R) |
 | Correlation | Pearson correlation between L and R channels |
 
-## Pro Baseline (config/pro_baseline.yaml)
+## Baseline Profiles (Q1-4)
 
-| Metric | Pro Value |
-|--------|----------|
-| rms_mean | 0.298 |
-| active_rate | 0.915 |
-| crest_factor | 5.0 |
-| valley_depth | 0.2165 |
-| thickness | 2.105 |
+`score_rpe()` compares physical metrics against a named baseline profile.
+The default is `pro`, preserving the original single-baseline behavior.
+
+| Profile | Config | Intended use |
+|---|---|---|
+| `pro` | `config/pro_baseline.yaml` | General commercial mastering baseline |
+| `loud_pop` | `config/loud_pop_baseline.yaml` | Loud pop / rock with high RMS and lower crest factor |
+| `acoustic` | `config/acoustic_baseline.yaml` | Acoustic / jazz with lower RMS and wider dynamics |
+| `edm` | `config/edm_baseline.yaml` | Electronic / dance mixes with dense low-end and stronger section contrast |
+
+| Metric | pro | loud_pop | acoustic | edm |
+|--------|---:|---:|---:|---:|
+| rms_mean | 0.298 | 0.38 | 0.15 | 0.35 |
+| active_rate | 0.915 | 0.95 | 0.75 | 0.92 |
+| crest_factor | 5.0 | 3.5 | 8.0 | 4.0 |
+| valley_depth | 0.2165 | 0.15 | 0.25 | 0.35 |
+| thickness | 2.105 | 2.5 | 1.5 | 2.8 |
+
+These values are initial calibration anchors, not production-quality truth.
+Select explicitly via `score_rpe(phys, baseline="edm")` or CLI `--baseline edm`.
 
 ## Scoring
 

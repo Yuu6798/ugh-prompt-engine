@@ -20,14 +20,18 @@ from pathlib import Path
 
 import yaml
 
-from svp_rpe.eval.scorer_integrated import score_integrated
-from svp_rpe.eval.scorer_rpe import score_rpe
-from svp_rpe.eval.scorer_ugher import score_ugher
-from svp_rpe.rpe.extractor import extract_rpe_from_file
-from svp_rpe.svp.generator import generate_svp
-from svp_rpe.svp.render_yaml import render_yaml
-
 ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from svp_rpe.eval.scorer_integrated import score_integrated  # noqa: E402
+from svp_rpe.eval.scorer_rpe import score_rpe  # noqa: E402
+from svp_rpe.eval.scorer_ugher import score_ugher  # noqa: E402
+from svp_rpe.rpe.extractor import extract_rpe_from_file  # noqa: E402
+from svp_rpe.svp.generator import generate_svp  # noqa: E402
+from svp_rpe.svp.render_yaml import render_yaml  # noqa: E402
+
 SAMPLE_DIR = ROOT / "examples" / "sample_input"
 EXPECTED_DIR = ROOT / "examples" / "expected_output"
 GROUND_TRUTH = SAMPLE_DIR / "ground_truth.yaml"
@@ -222,7 +226,7 @@ def check_outputs(songs: list[tuple[str, Path, str]]) -> int:
         mismatches.append(f"{rel}: orphan file on disk (not produced by current ground_truth)")
 
     if mismatches:
-        print("[check] FAIL — expected_output is out of sync:", file=sys.stderr)
+        print("[check] FAIL - expected_output is out of sync:", file=sys.stderr)
         for line in mismatches:
             print(f"  - {line}", file=sys.stderr)
         print(
@@ -232,11 +236,19 @@ def check_outputs(songs: list[tuple[str, Path, str]]) -> int:
         )
         return 1
 
-    print(f"[check] OK — {len(seen)} artefacts match hashes.txt")
+    print(f"[check] OK - {len(seen)} artefacts match hashes.txt")
     return 0
 
 
+def _configure_stdio() -> None:
+    """Use UTF-8 for status output on Windows terminals when possible."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _configure_stdio()
     parser = argparse.ArgumentParser(
         description="Regenerate or verify examples/expected_output snapshots.",
     )

@@ -1,0 +1,312 @@
+{
+  "schema_version": "1.0",
+  "target_svp": {
+    "schema_version": "1.0",
+    "id": "semantic-ci-pass-perfect",
+    "domain": "music",
+    "core": "energetic driving dense",
+    "surface": [
+      "bright",
+      "wide stereo"
+    ],
+    "grv": [
+      "148 bpm",
+      "bass-heavy"
+    ],
+    "delta_e_profile": "gradual build",
+    "preserve": [
+      "chorus lift",
+      "energetic driving dense"
+    ],
+    "avoid": [
+      "dark ambient"
+    ],
+    "lock": [
+      "148 bpm"
+    ],
+    "metric_targets": {
+      "active_rate": 0.9,
+      "bpm": 148.0
+    },
+    "tolerances": {
+      "active_rate": 0.0,
+      "bpm": 0.0
+    },
+    "change_budget": 3,
+    "notes": []
+  },
+  "expected_rpe": {
+    "schema_version": "1.0",
+    "source_svp_id": "semantic-ci-pass-perfect",
+    "domain": "music",
+    "required_signals": [
+      "148 bpm",
+      "bass-heavy",
+      "bright",
+      "chorus lift",
+      "energetic driving dense",
+      "gradual build",
+      "wide stereo"
+    ],
+    "allowed_signals": [
+      "148 bpm",
+      "bass-heavy",
+      "bright",
+      "chorus lift",
+      "energetic driving dense",
+      "gradual build",
+      "wide stereo"
+    ],
+    "prohibited_signals": [
+      "dark ambient"
+    ],
+    "locked_signals": [
+      "148 bpm"
+    ],
+    "metric_targets": {
+      "active_rate": 0.9,
+      "bpm": 148.0
+    },
+    "tolerances": {
+      "active_rate": 0.0,
+      "bpm": 0.0
+    },
+    "change_budget": 3,
+    "source_hash": "af2925ebb32d01994773a6e49c2522bf5b1141a0863d865cf8f026b7265b8660"
+  },
+  "observed_rpe": {
+    "schema_version": "1.0",
+    "id": "observed-pass-perfect",
+    "domain": "music",
+    "signals": [
+      "148 bpm",
+      "bass-heavy",
+      "bright",
+      "chorus lift",
+      "energetic driving dense",
+      "gradual build",
+      "wide stereo"
+    ],
+    "metrics": {
+      "active_rate": 0.9,
+      "bpm": 148.0
+    },
+    "source": "fixture"
+  },
+  "semantic_diff": {
+    "schema_version": "1.0",
+    "missing": [],
+    "preserved": [
+      "148 bpm",
+      "bass-heavy",
+      "bright",
+      "chorus lift",
+      "energetic driving dense",
+      "gradual build",
+      "wide stereo"
+    ],
+    "over_changed": [],
+    "metric_diffs": [
+      {
+        "name": "active_rate",
+        "expected": 0.9,
+        "observed": 0.9,
+        "tolerance": 0.0,
+        "diff": 0.0,
+        "passed": true
+      },
+      {
+        "name": "bpm",
+        "expected": 148.0,
+        "observed": 148.0,
+        "tolerance": 0.0,
+        "diff": 0.0,
+        "passed": true
+      }
+    ],
+    "loss": 0.0,
+    "threshold": 0.0,
+    "verdict": "pass"
+  },
+  "repair_svp": {
+    "schema_version": "1.0",
+    "source_svp_id": "semantic-ci-pass-perfect",
+    "change_budget": 3,
+    "preserve": [
+      "148 bpm",
+      "bass-heavy",
+      "bright",
+      "chorus lift",
+      "energetic driving dense",
+      "gradual build",
+      "wide stereo"
+    ],
+    "restore": [],
+    "reduce": [],
+    "lock": [
+      "148 bpm",
+      "bass-heavy",
+      "bright",
+      "chorus lift",
+      "energetic driving dense",
+      "gradual build",
+      "wide stereo"
+    ],
+    "deferred_restore": [],
+    "deferred_reduce": [],
+    "repair_order": [
+      {
+        "op": "preserve",
+        "signal": "148 bpm",
+        "applied": true
+      },
+      {
+        "op": "preserve",
+        "signal": "bass-heavy",
+        "applied": true
+      },
+      {
+        "op": "preserve",
+        "signal": "bright",
+        "applied": true
+      },
+      {
+        "op": "preserve",
+        "signal": "chorus lift",
+        "applied": true
+      },
+      {
+        "op": "preserve",
+        "signal": "energetic driving dense",
+        "applied": true
+      },
+      {
+        "op": "preserve",
+        "signal": "gradual build",
+        "applied": true
+      },
+      {
+        "op": "preserve",
+        "signal": "wide stereo",
+        "applied": true
+      },
+      {
+        "op": "lock",
+        "signal": "148 bpm",
+        "applied": true
+      },
+      {
+        "op": "lock",
+        "signal": "bass-heavy",
+        "applied": true
+      },
+      {
+        "op": "lock",
+        "signal": "bright",
+        "applied": true
+      },
+      {
+        "op": "lock",
+        "signal": "chorus lift",
+        "applied": true
+      },
+      {
+        "op": "lock",
+        "signal": "energetic driving dense",
+        "applied": true
+      },
+      {
+        "op": "lock",
+        "signal": "gradual build",
+        "applied": true
+      },
+      {
+        "op": "lock",
+        "signal": "wide stereo",
+        "applied": true
+      }
+    ]
+  },
+  "repaired_svp": {
+    "schema_version": "1.0",
+    "id": "semantic-ci-pass-perfect",
+    "domain": "music",
+    "core": "energetic driving dense",
+    "surface": [
+      "bright",
+      "wide stereo"
+    ],
+    "grv": [
+      "148 bpm",
+      "bass-heavy"
+    ],
+    "delta_e_profile": "gradual build",
+    "preserve": [
+      "148 bpm",
+      "bass-heavy",
+      "bright",
+      "chorus lift",
+      "energetic driving dense",
+      "gradual build",
+      "wide stereo"
+    ],
+    "avoid": [
+      "dark ambient"
+    ],
+    "lock": [
+      "148 bpm",
+      "bass-heavy",
+      "bright",
+      "chorus lift",
+      "energetic driving dense",
+      "gradual build",
+      "wide stereo"
+    ],
+    "metric_targets": {
+      "active_rate": 0.9,
+      "bpm": 148.0
+    },
+    "tolerances": {
+      "active_rate": 0.0,
+      "bpm": 0.0
+    },
+    "change_budget": 3,
+    "notes": []
+  },
+  "roundtrip_log": {
+    "schema_version": "1.0",
+    "target_svp_hash": "af2925ebb32d01994773a6e49c2522bf5b1141a0863d865cf8f026b7265b8660",
+    "expected_rpe_hash": "4b6c2c2c170999f4e29aefe024f9b9efaf54c37a9b86d466fb7462c7ff077973",
+    "observed_rpe_hash": "b77b3fb9f77805257c5332ca2c0d8f1be2745b335811bbf18dc4ab8920e9bb0d",
+    "semantic_diff_hash": "fb058e0ff65b6fd773b40608469c032b86fef9ff1f4449e98a80b7258c7c22bf",
+    "repair_svp_hash": "558443b328edaf67324dbf5d08188d380e2d203746c56e579728ac439eb6bdb8",
+    "transitions": [
+      {
+        "name": "target_svp",
+        "input_hash": "",
+        "output_hash": "af2925ebb32d01994773a6e49c2522bf5b1141a0863d865cf8f026b7265b8660"
+      },
+      {
+        "name": "expected_rpe",
+        "input_hash": "af2925ebb32d01994773a6e49c2522bf5b1141a0863d865cf8f026b7265b8660",
+        "output_hash": "4b6c2c2c170999f4e29aefe024f9b9efaf54c37a9b86d466fb7462c7ff077973"
+      },
+      {
+        "name": "observed_rpe",
+        "input_hash": "",
+        "output_hash": "b77b3fb9f77805257c5332ca2c0d8f1be2745b335811bbf18dc4ab8920e9bb0d"
+      },
+      {
+        "name": "semantic_diff",
+        "input_hash": "4b6c2c2c170999f4e29aefe024f9b9efaf54c37a9b86d466fb7462c7ff077973:b77b3fb9f77805257c5332ca2c0d8f1be2745b335811bbf18dc4ab8920e9bb0d:a22a59d5ab6a852f77f917dcacf5e57906ede07134ccd5c5f469ccaf070ab5f3",
+        "output_hash": "fb058e0ff65b6fd773b40608469c032b86fef9ff1f4449e98a80b7258c7c22bf"
+      },
+      {
+        "name": "repair_svp",
+        "input_hash": "fb058e0ff65b6fd773b40608469c032b86fef9ff1f4449e98a80b7258c7c22bf",
+        "output_hash": "558443b328edaf67324dbf5d08188d380e2d203746c56e579728ac439eb6bdb8"
+      }
+    ],
+    "final_hash": "23789d091c03fab88a62ec8a613ac642f8f1dfdccc9bffb84bf6e60590e293b2"
+  }
+}

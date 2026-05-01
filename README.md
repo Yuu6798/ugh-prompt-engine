@@ -18,6 +18,7 @@ UGHer 系 + RPE 系の二系統評価を行うローカル完結型ツール。
 - **RPE**: 音声波形から物理特徴量 + ルールベース意味層を抽出
 - **SVP**: RPE から構造化プロンプトを決定論的に生成
 - **Eval**: Pro 基準値 (RPE) + 意味的整合性 (UGHer) の統合スコアリング
+- **Semantic CI**: Target SVP から Expected RPE を生成し、fixture と比較して修復SVPを返す
 
 API キー不要、LLM 不要、同一入力 → 同一出力の完全決定論的パイプライン。
 
@@ -45,6 +46,15 @@ svprpe evaluate --audio track.wav --svp design.yaml
 
 # Compare reference vs candidate
 svprpe compare --reference-audio ref.wav --candidate-audio gen.wav
+
+# Deterministic semantic CI fixture check
+svprpe ci-check examples/semantic_ci/pass_perfect/target_svp.json \
+  examples/semantic_ci/pass_perfect/observed_rpe.json
+svprpe ci-check examples/semantic_ci/repair_degraded/target_svp.json \
+  examples/semantic_ci/repair_degraded/observed_rpe.json --format markdown \
+  -o semantic_ci_report.md
+svprpe ci-check examples/semantic_ci/repair_degraded/target_svp.json \
+  examples/semantic_ci/repair_degraded/observed_rpe.json --threshold 0.6
 
 # Batch processing
 svprpe batch ./audio_files --svp-dir ./designs --mode compare --output-dir ./results
@@ -125,6 +135,7 @@ svprpe --help
 - [Architecture](docs/architecture.md) — Pipeline design and module overview
 - [Metrics](docs/metrics.md) — Physical metric definitions and Pro baseline
 - [CLI Reference](docs/cli.md) — Command usage
+- [Semantic CI Product V1](docs/semantic_ci_product_v1.md) — Target SVP → Expected RPE → Diff → Repair SVP core
 - [Roadmap](docs/roadmap.md) — PoC milestones (M0–M5) + Pre-prototype plan (P1–P5)
 - [Goal 1 Roadmap](docs/roadmap_goal1.md) — Quantitative observation completion plan (Q0–Q5)
 - [Code Semantic CI Design](docs/code_semantic_ci_design.md) — Code Edition v0.1 spec (3-state RPE, typed constraints, Python MVP plan)

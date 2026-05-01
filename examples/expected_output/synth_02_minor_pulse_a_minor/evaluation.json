@@ -1,12 +1,13 @@
 {
   "rpe_score": {
-    "schema_version": "1.0",
-    "rms_score": 0.7703,
-    "active_rate_score": 0.848,
-    "crest_factor_score": 0.6839,
-    "valley_score": 0.6287,
-    "thickness_score": 0.6603,
-    "overall": 0.7183
+    "schema_version": "1.1",
+    "baseline_profile": "pro",
+    "rms_score": 0.8633,
+    "active_rate_score": 0.87,
+    "crest_factor_score": 0.5608,
+    "valley_score": 0.9217,
+    "thickness_score": 0.5431,
+    "overall": 0.7518
   },
   "ugher_score": {
     "schema_version": "1.0",
@@ -19,8 +20,8 @@
   "integrated_score": {
     "schema_version": "1.0",
     "ugher_score": 0.7833,
-    "rpe_score": 0.7183,
-    "integrated_score": 0.7508,
+    "rpe_score": 0.7518,
+    "integrated_score": 0.7675,
     "ugher_weight": 0.5,
     "rpe_weight": 0.5
   }

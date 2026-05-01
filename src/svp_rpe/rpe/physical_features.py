@@ -8,10 +8,11 @@ from __future__ import annotations
 from typing import Optional
 
 import librosa
+from librosa.util.exceptions import ParameterError
 import numpy as np
 from scipy import signal as scipy_signal
 
-from svp_rpe.rpe.models import SpectralProfile, StereoProfile
+from svp_rpe.rpe.models import ChordEvent, MelodyContour, SpectralProfile, StereoProfile
 
 try:
     import pyloudnorm as pyln
@@ -224,6 +225,32 @@ def compute_loudness(
 BPM_CONFIDENCE_CV_SCALE = 5.0
 BPM_CONFIDENCE_AC_THRESHOLD = 0.7
 
+# Time signature calibration (Q1-2).
+# The detector reads beat-level onset strength periodicity. Triple meter is
+# emitted only when the 3-beat autocorrelation peak clearly beats nearby
+# duple/quadruple candidates; otherwise "4/4" remains the conservative
+# fallback instead of claiming weak evidence as a meter change.
+TS_MIN_BEATS = 12
+TS_WINSOR_PERCENTILE = 90.0
+TS_TRIPLE_AC_THRESHOLD = 0.30
+TS_TRIPLE_MARGIN_THRESHOLD = 0.15
+TS_COMPOUND_AC_THRESHOLD = 0.45
+TS_COMPOUND_MARGIN_THRESHOLD = 0.08
+TS_FOUR_FOUR_BASE_CONFIDENCE = 0.55
+TS_CONFIDENCE_GAIN = 1.5
+
+# Chord extraction calibration (Q2-2).
+CHORD_HOP_LENGTH = 2048
+CHORD_MIN_DURATION_SEC = 0.75
+CHORD_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+
+# Melody extraction calibration (Q2-3).
+PYIN_FMIN_HZ = 65.4064   # C2
+PYIN_FMAX_HZ = 2093.005  # C7
+PYIN_HOP_LENGTH = 2048
+PYIN_MIN_VOICING = 0.10
+PYIN_HIGHPASS_HZ = 300.0
+
 
 def compute_bpm(y: np.ndarray, sr: int) -> tuple[Optional[float], Optional[float]]:
     """Estimate BPM via librosa.beat.beat_track. Returns (bpm, confidence).
@@ -255,6 +282,341 @@ def compute_bpm(y: np.ndarray, sr: int) -> tuple[Optional[float], Optional[float
     cv = float(np.std(intervals) / mean_interval)
     confidence = _clamp(1.0 - BPM_CONFIDENCE_CV_SCALE * cv, 0.0, 1.0)
     return round(bpm, 2), round(confidence, 4)
+
+
+def _beat_strength_autocorrelation(
+    beat_strengths: np.ndarray,
+    *,
+    max_lag: int = 8,
+) -> dict[int, float]:
+    """Autocorrelation over beat-level onset strengths for meter inference."""
+    strengths = np.asarray(beat_strengths, dtype=float)
+    if strengths.size <= max_lag:
+        return {}
+
+    if not np.any(np.isfinite(strengths)):
+        return {}
+    strengths = np.nan_to_num(strengths, nan=0.0, posinf=0.0, neginf=0.0)
+    strengths = np.minimum(strengths, np.percentile(strengths, TS_WINSOR_PERCENTILE))
+    centered = strengths - float(np.mean(strengths))
+    denom = float(np.dot(centered, centered))
+    if denom <= 0.0:
+        return {}
+
+    correlations: dict[int, float] = {}
+    for lag in range(1, max_lag + 1):
+        if centered.size <= lag:
+            break
+        left = centered[:-lag]
+        right = centered[lag:]
+        lag_denom = float(np.sqrt(np.dot(left, left) * np.dot(right, right)))
+        if lag_denom <= 0.0:
+            correlations[lag] = 0.0
+        else:
+            correlations[lag] = float(np.dot(left, right) / lag_denom)
+    return correlations
+
+
+def _classify_time_signature_from_beat_strengths(
+    beat_strengths: np.ndarray,
+) -> tuple[str, float]:
+    """Classify meter from beat-level strength periodicity.
+
+    Returns one of "3/4", "4/4", "6/8". The fallback is "4/4" with a low
+    confidence when there is not enough beat evidence.
+    """
+    strengths = np.asarray(beat_strengths, dtype=float)
+    if strengths.size < TS_MIN_BEATS:
+        return "4/4", 0.0
+
+    ac = _beat_strength_autocorrelation(strengths)
+    if not ac:
+        return "4/4", 0.0
+
+    ac2 = ac.get(2, 0.0)
+    ac3 = ac.get(3, 0.0)
+    ac4 = ac.get(4, 0.0)
+    ac6 = ac.get(6, 0.0)
+    ac8 = ac.get(8, 0.0)
+
+    compound_margin = ac6 - ac3
+    if (
+        ac6 >= TS_COMPOUND_AC_THRESHOLD
+        and ac3 >= TS_TRIPLE_AC_THRESHOLD
+        and compound_margin >= TS_COMPOUND_MARGIN_THRESHOLD
+    ):
+        confidence = _clamp(
+            0.60 + TS_CONFIDENCE_GAIN * (ac6 - TS_COMPOUND_AC_THRESHOLD)
+            + compound_margin,
+        )
+        return "6/8", round(confidence, 4)
+
+    triple_margin = ac3 - max(ac2, ac4)
+    if ac3 >= TS_TRIPLE_AC_THRESHOLD and triple_margin >= TS_TRIPLE_MARGIN_THRESHOLD:
+        confidence = _clamp(
+            0.60 + TS_CONFIDENCE_GAIN * (ac3 - TS_TRIPLE_AC_THRESHOLD)
+            + triple_margin,
+        )
+        return "3/4", round(confidence, 4)
+
+    four_four_evidence = max(ac4, ac8, 0.0) - max(ac3, 0.0)
+    confidence = _clamp(TS_FOUR_FOUR_BASE_CONFIDENCE + max(0.0, four_four_evidence))
+    return "4/4", round(confidence, 4)
+
+
+def compute_time_signature(y: np.ndarray, sr: int) -> tuple[str, float]:
+    """Estimate time signature from beat-level onset strength periodicity.
+
+    The detector distinguishes the currently supported meters ("3/4", "4/4",
+    "6/8") without learned models. When beat evidence is insufficient, it
+    returns the conservative fallback ("4/4", 0.0).
+    """
+    if y.size == 0:
+        return "4/4", 0.0
+
+    _, beats = librosa.beat.beat_track(y=y, sr=sr)
+    beat_frames = np.asarray(beats, dtype=int)
+    if beat_frames.size < TS_MIN_BEATS:
+        return "4/4", 0.0
+
+    onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=512).astype(float)
+    if onset_env.size == 0 or float(np.max(onset_env)) <= 0.0:
+        return "4/4", 0.0
+    onset_env = onset_env / float(np.max(onset_env))
+
+    beat_strengths: list[float] = []
+    for frame in beat_frames:
+        lo = max(0, int(frame) - 1)
+        hi = min(onset_env.size, int(frame) + 2)
+        beat_strengths.append(float(np.max(onset_env[lo:hi])) if hi > lo else 0.0)
+
+    return _classify_time_signature_from_beat_strengths(np.asarray(beat_strengths))
+
+
+def _time_signature_numerator(time_signature: str) -> int:
+    """Parse the numerator from a time-signature string."""
+    try:
+        numerator = int(str(time_signature).split("/", 1)[0])
+    except (TypeError, ValueError):
+        return 4
+    if numerator <= 0:
+        return 4
+    return min(numerator, 16)
+
+
+def _beat_level_onset_strengths(
+    y: np.ndarray,
+    sr: int,
+    beat_frames: np.ndarray,
+) -> np.ndarray:
+    """Return normalized onset strength sampled around each beat frame."""
+    onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=512).astype(float)
+    if onset_env.size == 0 or float(np.max(onset_env)) <= 0.0:
+        return np.zeros(len(beat_frames), dtype=float)
+    onset_env = onset_env / float(np.max(onset_env))
+
+    beat_strengths: list[float] = []
+    for frame in beat_frames:
+        lo = max(0, int(frame) - 1)
+        hi = min(onset_env.size, int(frame) + 2)
+        beat_strengths.append(float(np.max(onset_env[lo:hi])) if hi > lo else 0.0)
+    return np.asarray(beat_strengths, dtype=float)
+
+
+def _select_downbeat_phase(beat_strengths: np.ndarray, beats_per_bar: int) -> int:
+    """Choose the strongest metrical phase as the downbeat phase."""
+    strengths = np.asarray(beat_strengths, dtype=float)
+    if strengths.size == 0 or beats_per_bar <= 1:
+        return 0
+
+    phase_count = min(beats_per_bar, strengths.size)
+    phase_means: list[float] = []
+    for phase in range(phase_count):
+        phase_values = strengths[phase::beats_per_bar]
+        phase_means.append(float(np.mean(phase_values)) if phase_values.size else 0.0)
+    return int(np.argmax(np.asarray(phase_means)))
+
+
+def compute_downbeat_times(y: np.ndarray, sr: int, time_signature: str) -> list[float]:
+    """Estimate downbeat times from deterministic beat tracking.
+
+    Q2-1 deliberately keeps this lightweight and dependency-free: madmom is the
+    roadmap target, but the current Python 3.11 environment cannot build it
+    without extra native/Cython setup. This detector reuses librosa beats, then
+    selects the strongest beat-strength phase within each bar.
+    """
+    if y.size == 0:
+        return []
+
+    beats_per_bar = _time_signature_numerator(time_signature)
+    if beats_per_bar <= 0:
+        return []
+
+    _, beats = librosa.beat.beat_track(y=y, sr=sr)
+    beat_frames = np.asarray(beats, dtype=int)
+    if beat_frames.size < max(2, beats_per_bar):
+        return []
+
+    beat_times = librosa.frames_to_time(beat_frames, sr=sr)
+    beat_strengths = _beat_level_onset_strengths(y, sr, beat_frames)
+    phase = _select_downbeat_phase(beat_strengths, beats_per_bar)
+
+    duration = len(y) / sr
+    downbeats = beat_times[phase::beats_per_bar]
+    return [
+        round(float(t), 4)
+        for t in downbeats
+        if 0.0 <= float(t) <= duration
+    ]
+
+
+def _chord_templates() -> list[tuple[str, str, np.ndarray]]:
+    """Return normalized major/minor triad templates."""
+    templates: list[tuple[str, str, np.ndarray]] = []
+    for root_index, root in enumerate(CHORD_NAMES):
+        for quality, intervals in (("major", (0, 4, 7)), ("minor", (0, 3, 7))):
+            vector = np.zeros(12, dtype=float)
+            for interval, weight in zip(intervals, (1.0, 0.85, 0.8)):
+                vector[(root_index + interval) % 12] = weight
+            norm = float(np.linalg.norm(vector))
+            if norm > 0.0:
+                vector = vector / norm
+            templates.append((root, quality, vector))
+    return templates
+
+
+def _classify_chroma_frame(
+    chroma_frame: np.ndarray,
+    templates: list[tuple[str, str, np.ndarray]],
+) -> tuple[str, str, str, float]:
+    """Classify one chroma frame as a major/minor triad."""
+    frame = np.asarray(chroma_frame, dtype=float)
+    norm = float(np.linalg.norm(frame))
+    if norm <= 0.0:
+        return "C major", "C", "major", 0.0
+    frame = frame / norm
+
+    scores = np.asarray([float(np.dot(frame, template)) for _, _, template in templates])
+    best_index = int(np.argmax(scores))
+    root, quality, _ = templates[best_index]
+    confidence = _clamp(float(scores[best_index]))
+    return f"{root} {quality}", root, quality, confidence
+
+
+def compute_chord_events(y: np.ndarray, sr: int) -> list[ChordEvent]:
+    """Estimate time-bounded major/minor chord events from chroma templates.
+
+    This is the lightweight Q2-2 baseline: deterministic, dependency-free, and
+    deliberately limited to major/minor triads. It is intended to recover the
+    main I/IV/V-style harmonic blocks in the synthetic validation set, not to
+    be a production chord recognizer.
+    """
+    if y.size == 0:
+        return []
+    if float(np.max(np.abs(y))) <= 1e-8:
+        return []
+
+    try:
+        chroma = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=CHORD_HOP_LENGTH)
+    except (ValueError, ParameterError):
+        return []
+    if chroma.size == 0 or chroma.shape[1] == 0:
+        return []
+
+    templates = _chord_templates()
+    labels: list[str] = []
+    roots: list[str] = []
+    qualities: list[str] = []
+    confidences: list[float] = []
+    for frame_index in range(chroma.shape[1]):
+        chord, root, quality, confidence = _classify_chroma_frame(
+            chroma[:, frame_index], templates,
+        )
+        labels.append(chord)
+        roots.append(root)
+        qualities.append(quality)
+        confidences.append(confidence)
+
+    frame_times = librosa.frames_to_time(
+        np.arange(chroma.shape[1] + 1),
+        sr=sr,
+        hop_length=CHORD_HOP_LENGTH,
+    )
+    duration = len(y) / sr
+    frame_times[-1] = min(float(frame_times[-1]), duration)
+
+    events: list[ChordEvent] = []
+    start_index = 0
+    for frame_index in range(1, len(labels) + 1):
+        if frame_index < len(labels) and labels[frame_index] == labels[start_index]:
+            continue
+
+        start_sec = float(frame_times[start_index])
+        end_sec = float(frame_times[frame_index])
+        if end_sec - start_sec >= CHORD_MIN_DURATION_SEC:
+            confidence = float(np.mean(confidences[start_index:frame_index]))
+            events.append(
+                ChordEvent(
+                    chord=labels[start_index],
+                    root=roots[start_index],
+                    quality=qualities[start_index],
+                    start_sec=round(start_sec, 4),
+                    end_sec=round(end_sec, 4),
+                    confidence=round(_clamp(confidence), 4),
+                )
+            )
+        start_index = frame_index
+
+    return events
+
+
+def compute_melody_contour(y: np.ndarray, sr: int) -> Optional[MelodyContour]:
+    """Estimate a monophonic melody contour using librosa.pyin."""
+    if y.size == 0:
+        return None
+    if float(np.max(np.abs(y))) <= 1e-8:
+        return None
+
+    y_melody = y
+    if sr > int(PYIN_HIGHPASS_HZ * 2) and y.size > 32:
+        sos = scipy_signal.butter(
+            4,
+            PYIN_HIGHPASS_HZ / (sr / 2.0),
+            btype="highpass",
+            output="sos",
+        )
+        try:
+            y_melody = scipy_signal.sosfiltfilt(sos, y)
+        except ValueError:
+            y_melody = y
+
+    try:
+        f0, voiced_flag, voiced_prob = librosa.pyin(
+            y_melody,
+            sr=sr,
+            fmin=PYIN_FMIN_HZ,
+            fmax=PYIN_FMAX_HZ,
+            hop_length=PYIN_HOP_LENGTH,
+        )
+    except (ValueError, ParameterError):
+        return None
+
+    if f0 is None or voiced_prob is None or len(f0) == 0:
+        return None
+
+    voiced = np.asarray(voiced_flag, dtype=bool)
+    voicing = np.nan_to_num(np.asarray(voiced_prob, dtype=float), nan=0.0)
+    if voicing.size == 0 or float(np.max(voicing)) < PYIN_MIN_VOICING:
+        return None
+
+    frequencies = np.where(voiced & np.isfinite(f0), f0, 0.0)
+    times = librosa.times_like(frequencies, sr=sr, hop_length=PYIN_HOP_LENGTH)
+
+    return MelodyContour(
+        times=[round(float(t), 4) for t in times],
+        frequencies_hz=[round(float(freq), 2) for freq in frequencies],
+        voicing=[round(_clamp(float(prob)), 4) for prob in voicing],
+    )
 
 
 def compute_key(y: np.ndarray, sr: int) -> tuple[Optional[str], Optional[str], Optional[float]]:

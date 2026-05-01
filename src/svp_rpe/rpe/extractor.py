@@ -15,14 +15,18 @@ from svp_rpe.rpe.models import PhysicalRPE, RPEBundle, SectionMarker
 from svp_rpe.rpe.physical_features import (
     compute_active_rate,
     compute_bpm,
+    compute_chord_events,
     compute_crest_factor,
     compute_key,
     compute_loudness,
+    compute_melody_contour,
     compute_onset_density,
     compute_rms_mean,
     compute_spectral_profile,
     compute_stereo_profile,
     compute_thickness,
+    compute_downbeat_times,
+    compute_time_signature,
 )
 from svp_rpe.rpe.section_features import extract_section_features
 from svp_rpe.rpe.semantic_rules import generate_semantic
@@ -94,6 +98,10 @@ def extract_physical(
     onset_density = compute_onset_density(y, sr)
 
     bpm, bpm_confidence = compute_bpm(y, sr)
+    time_signature, time_signature_confidence = compute_time_signature(y, sr)
+    downbeat_times = compute_downbeat_times(y, sr, time_signature)
+    chord_events = compute_chord_events(y, sr)
+    melody_contour = compute_melody_contour(y, sr)
     key, mode, key_confidence = compute_key(y, sr)
 
     # ITU-R BS.1770 loudness; uses stereo when available, else mono.
@@ -121,6 +129,11 @@ def extract_physical(
         key=key,
         mode=mode,
         key_confidence=key_confidence,
+        time_signature=time_signature,
+        time_signature_confidence=time_signature_confidence,
+        downbeat_times=downbeat_times,
+        chord_events=chord_events,
+        melody_contour=melody_contour,
         duration_sec=round(len(y) / sr, 4),
         sample_rate=sr,
         structure=structure,

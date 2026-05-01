@@ -1,0 +1,5 @@
+rms_mean_pro: 0.15
+active_rate_ideal: 0.75
+crest_factor_ideal: 8.0
+valley_depth_pro: 0.25
+thickness_pro: 1.5

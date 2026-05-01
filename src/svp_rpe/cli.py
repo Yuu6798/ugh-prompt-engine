@@ -5,6 +5,7 @@ Commands:
   svprpe generate <rpe>         → SVP YAML/TXT
   svprpe evaluate --audio <wav> → Evaluation JSON (self or with --svp)
   svprpe compare ...            → Reference vs candidate comparison
+  svprpe ci-check ...           → Deterministic semantic CI fixture check
   svprpe run <audio>            → Full pipeline
   svprpe batch <dir>            → Batch processing
 """
@@ -14,14 +15,19 @@ import json
 from pathlib import Path
 from typing import Optional
 
+import click
 import typer
 from rich.console import Console
+
+from svp_rpe.eval.scorer_rpe import BASELINE_CONFIGS
 
 app = typer.Typer(
     name="svprpe",
     help="SVP-RPE: Audio analysis → RPE extraction → SVP generation → Evaluation",
 )
 console = Console()
+BASELINE_PROFILE_CHOICE = click.Choice(sorted(BASELINE_CONFIGS))
+BASELINE_PROFILE_HELP = "RPE baseline profile used as scoring reference."
 
 
 @app.command()
@@ -86,6 +92,12 @@ def evaluate(
     output: Optional[str] = typer.Option(None, "-o", "--output", help="Output JSON path"),
     valley_method: str = typer.Option("hybrid", "--valley-method",
                                        help="Valley method: rms_percentile/section_ar/hybrid"),
+    baseline: str = typer.Option(
+        "pro",
+        "--baseline",
+        click_type=BASELINE_PROFILE_CHOICE,
+        help=BASELINE_PROFILE_HELP,
+    ),
 ) -> None:
     """Evaluate audio. With --svp: compare against external SVP. Without: self-evaluate."""
     from svp_rpe.eval.scorer_integrated import score_integrated
@@ -98,7 +110,7 @@ def evaluate(
     rpe_bundle = extract_rpe_from_file(audio, valley_method=valley_method)
     svp_bundle = generate_svp(rpe_bundle)
 
-    rpe_score = score_rpe(rpe_bundle.physical)
+    rpe_score = score_rpe(rpe_bundle.physical, baseline=baseline)
     ugher_score = score_ugher(rpe_bundle, svp_bundle)
     integrated = score_integrated(ugher_score, rpe_score)
 
@@ -197,6 +209,53 @@ def compare(
         console.print(result_json)
 
 
+@app.command("ci-check")
+def ci_check(
+    target_svp: str = typer.Argument(..., help="Path to TargetSVP JSON"),
+    observed_rpe: str = typer.Argument(..., help="Path to ObservedRPE fixture JSON"),
+    output: Optional[str] = typer.Option(None, "-o", "--output", help="Output path"),
+    output_format: str = typer.Option(
+        "json",
+        "--format",
+        click_type=click.Choice(["json", "markdown"]),
+        help="Output format: json | markdown",
+    ),
+    threshold: float = typer.Option(
+        0.0,
+        "--threshold",
+        click_type=click.FloatRange(0.0, 1.0),
+        help="Pass semantic CI when loss is less than or equal to this threshold.",
+    ),
+) -> None:
+    """Run deterministic semantic CI: TargetSVP → ExpectedRPE → Diff → RepairSVP."""
+    from svp_rpe.semantic_ci import ObservedRPE, TargetSVP, render_markdown, run_semantic_ci
+
+    target_data = json.loads(Path(target_svp).read_text(encoding="utf-8"))
+    observed_data = json.loads(Path(observed_rpe).read_text(encoding="utf-8"))
+    result = run_semantic_ci(
+        TargetSVP(**target_data),
+        ObservedRPE(**observed_data),
+        threshold=threshold,
+    )
+    content = (
+        render_markdown(result)
+        if output_format == "markdown"
+        else json.dumps(result.model_dump(mode="json"), ensure_ascii=False, indent=2)
+    )
+
+    if output:
+        Path(output).write_text(content, encoding="utf-8")
+        console.print(f"[green]Semantic CI result saved to {output}[/green]")
+    else:
+        if output_format == "markdown":
+            typer.echo(content, nl=False)
+        else:
+            typer.echo(content)
+
+    if result.semantic_diff.verdict == "repair":
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def run(
     audio: str = typer.Argument(..., help="Path to WAV/MP3 file"),
@@ -204,6 +263,12 @@ def run(
     no_save: bool = typer.Option(False, "--no-save", help="Print to stdout only"),
     valley_method: str = typer.Option("hybrid", "--valley-method",
                                        help="Valley method: rms_percentile/section_ar/hybrid"),
+    baseline: str = typer.Option(
+        "pro",
+        "--baseline",
+        click_type=BASELINE_PROFILE_CHOICE,
+        help=BASELINE_PROFILE_HELP,
+    ),
 ) -> None:
     """Run full pipeline: extract → generate → evaluate."""
     from svp_rpe.eval.scorer_integrated import score_integrated
@@ -221,7 +286,7 @@ def run(
     svp_bundle = generate_svp(rpe_bundle)
     console.print("[green]✓[/green] SVP generation complete")
 
-    rpe_score = score_rpe(rpe_bundle.physical)
+    rpe_score = score_rpe(rpe_bundle.physical, baseline=baseline)
     ugher_score = score_ugher(rpe_bundle, svp_bundle)
     integrated = score_integrated(ugher_score, rpe_score)
     console.print("[green]✓[/green] Evaluation complete")
@@ -264,6 +329,12 @@ def batch(
     svp_dir: Optional[str] = typer.Option(None, "--svp-dir", help="Directory with SVP candidates"),
     mode: str = typer.Option("evaluate", "--mode", help="Mode: evaluate | compare"),
     output_dir: Optional[str] = typer.Option(None, "--output-dir", help="Output directory"),
+    baseline: str = typer.Option(
+        "pro",
+        "--baseline",
+        click_type=BASELINE_PROFILE_CHOICE,
+        help=BASELINE_PROFILE_HELP,
+    ),
 ) -> None:
     """Batch process multiple audio files."""
     from svp_rpe.batch.runner import run_batch
@@ -274,6 +345,7 @@ def batch(
         svp_dir=svp_dir,
         mode=mode,
         output_dir=output_dir,
+        baseline=baseline,
     )
 
     console.print(f"\n[bold]Results: {summary['successful']}/{summary['total_files']} successful[/bold]")

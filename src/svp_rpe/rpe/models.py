@@ -35,6 +35,48 @@ class SectionMarker(BaseModel):
     rms_mean: Optional[float] = None
 
 
+class ChordEvent(BaseModel):
+    """Time-bounded chord estimate."""
+
+    schema_version: str = "1.0"
+    chord: str             # e.g. "C major", "A minor"
+    root: str              # e.g. "C", "F#"
+    quality: Literal["major", "minor"]
+    start_sec: float
+    end_sec: float
+    confidence: float
+
+    @field_validator("confidence")
+    @classmethod
+    def chord_confidence_in_range(cls, v: float) -> float:
+        if not 0.0 <= v <= 1.0:
+            raise ValueError("confidence must be between 0.0 and 1.0")
+        return v
+
+
+class MelodyContour(BaseModel):
+    """Frame-aligned melody pitch contour."""
+
+    schema_version: str = "1.0"
+    times: List[float] = Field(default_factory=list)
+    frequencies_hz: List[float] = Field(default_factory=list)
+    voicing: List[float] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def arrays_have_same_length(self) -> "MelodyContour":
+        lengths = {len(self.times), len(self.frequencies_hz), len(self.voicing)}
+        if len(lengths) != 1:
+            raise ValueError("times, frequencies_hz, and voicing must have the same length")
+        return self
+
+    @field_validator("voicing")
+    @classmethod
+    def voicing_in_range(cls, values: List[float]) -> List[float]:
+        if any(value < 0.0 or value > 1.0 for value in values):
+            raise ValueError("voicing values must be between 0.0 and 1.0")
+        return values
+
+
 class PhysicalRPE(BaseModel):
     """Physical audio features extracted from waveform."""
 
@@ -48,6 +90,9 @@ class PhysicalRPE(BaseModel):
     sample_rate: int
     time_signature: str = "4/4"
     time_signature_confidence: float = 0.3
+    downbeat_times: List[float] = Field(default_factory=list)
+    chord_events: List[ChordEvent] = Field(default_factory=list)
+    melody_contour: Optional[MelodyContour] = None
     structure: List[SectionMarker]
     rms_mean: float
     peak_amplitude: float
