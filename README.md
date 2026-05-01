@@ -8,7 +8,7 @@ SVP (Semantic Vector Prompt) + RPE (Reverse Prompt Engineering) — UGHer ecosys
 - **Not yet validated as production music quality evaluator**
 - Deterministic local pipeline, but score validity requires a validation dataset.
 
-See [Validation Status](docs/validation.md) for the current validation boundary and required ground truth.
+See [Validation Status](docs/validation.md) and [Measurement Coverage](docs/coverage.md) for the current validation boundary, measurement coverage, and required ground truth.
 
 ## Overview
 
@@ -132,6 +132,7 @@ svprpe --help
 ## Documentation
 
 - [Validation Status](docs/validation.md) — PoC label, unvalidated metrics, and required ground truth
+- [Measurement Coverage](docs/coverage.md) — What the pipeline can measure, partially measure, and cannot measure
 - [Architecture](docs/architecture.md) — Pipeline design and module overview
 - [Metrics](docs/metrics.md) — Physical metric definitions and Pro baseline
 - [CLI Reference](docs/cli.md) — Command usage

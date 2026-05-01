@@ -97,5 +97,6 @@ Known threshold misses:
 - Q1-3: fix or explicitly model the `synth_01` BPM octave error.
 - Q2 follow-up: replace downbeat fallback with a stronger tracker when the
   dependency story is stable.
-- Q3: add source separation and per-stem validation.
+- Q3 follow-up: add per-stem ground truth and residual validation for separated
+  stems.
 - Add CC0 real-audio samples for genre and production-style coverage.
