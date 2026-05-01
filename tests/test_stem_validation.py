@@ -171,6 +171,54 @@ def test_stem_sum_residual_fails_for_empty_source_with_nonempty_stems() -> None:
     assert result.residual_ratio == 1.0
 
 
+def test_silent_source_with_audible_stems_fails() -> None:
+    """Source RMS == 0 + non-zero summed stems must fail (no auto-pass)."""
+    _, bundle = _synthetic_stem_fixture()
+    silent_audio = AudioData(
+        metadata=AudioMetadata(
+            file_path="silent.wav",
+            duration_sec=bundle.duration_sec,
+            sample_rate=bundle.sample_rate,
+            channels=1,
+            format="synthetic",
+        ),
+        y_mono=np.zeros(bundle.stems["vocals"].size, dtype=np.float32),
+        y_stereo=None,
+        sr=bundle.sample_rate,
+    )
+
+    result = validate_stem_reconstruction(silent_audio, bundle)
+
+    assert not result.passed
+    assert result.residual_ratio == 1.0
+    assert result.source_rms == 0.0
+
+
+def test_stem_tail_loss_is_counted_in_residual() -> None:
+    """Truncating one stem's tail must surface as residual energy, not be dropped.
+
+    `sum_stems` zero-pads to the longest stem so the truncated stem's missing
+    tail becomes silence in the reconstruction. Source still has audible energy
+    in that region, so the residual ratio should exceed the Q3 threshold.
+    """
+    audio, bundle = _synthetic_stem_fixture()
+    full_length = audio.y_mono.size
+    truncated_length = full_length // 2
+    stems = dict(bundle.stems)
+    stems["other"] = stems["other"][:truncated_length].copy()
+    truncated = bundle.model_copy(update={"stems": stems})
+
+    baseline = validate_stem_reconstruction(audio, bundle)
+    result = validate_stem_reconstruction(audio, truncated)
+
+    assert baseline.passed
+    assert not result.passed
+    # The dropped half of "other" energy must reach the residual rather than
+    # being silently truncated; residual must exceed the same-length baseline.
+    assert result.residual_ratio > baseline.residual_ratio
+    assert result.residual_ratio > DEFAULT_STEM_RESIDUAL_THRESHOLD
+
+
 def test_stem_sum_residual_rejects_sample_rate_mismatch() -> None:
     audio, bundle = _synthetic_stem_fixture()
     mismatched_audio = audio.model_copy(update={"sr": audio.sr // 2})

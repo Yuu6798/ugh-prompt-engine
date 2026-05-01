@@ -52,15 +52,21 @@ def _rms(y: np.ndarray) -> float:
 
 
 def sum_stems(stem_bundle: StemBundle, stem_names: Iterable[str] = STEM_NAMES) -> np.ndarray:
-    """Return a mono waveform made by summing selected stems over common length."""
+    """Return a mono waveform by summing selected stems, padded to the longest stem.
+
+    Stems of unequal length are zero-padded to the longest length before summing
+    so that a missing tail in any one stem becomes part of the reconstruction
+    error rather than being silently truncated.
+    """
     names = tuple(stem_names)
     if not names:
         return np.zeros(0, dtype=np.float32)
 
-    common_length = min(len(stem_bundle.stems[name]) for name in names)
-    summed = np.zeros(common_length, dtype=np.float64)
+    target_length = max(len(stem_bundle.stems[name]) for name in names)
+    summed = np.zeros(target_length, dtype=np.float64)
     for name in names:
-        summed += stem_bundle.stems[name][:common_length].astype(np.float64, copy=False)
+        stem = stem_bundle.stems[name]
+        summed[: len(stem)] += stem.astype(np.float64, copy=False)
     return summed.astype(np.float32)
 
 
@@ -72,9 +78,15 @@ def validate_stem_reconstruction(
 ) -> StemReconstructionValidation:
     """Validate summed-stem reconstruction residual against the full mix.
 
-    The metric is `rms(source - sum(stems)) / rms(source)` over the common
-    sample range. This is a validation signal, not a guarantee that Demucs is
-    energy-conserving on real music.
+    The metric is `rms(source - sum(stems)) / rms(source)` evaluated over the
+    full union length: source and reconstructed signals are zero-padded to the
+    longer of the two so that any tail loss (in either direction) shows up as
+    residual energy. This is a validation signal, not a guarantee that Demucs
+    is energy-conserving on real music.
+
+    A silent source paired with non-empty reconstruction fails (ratio = 1.0)
+    because there is no truth signal to recover yet stems contribute audible
+    energy.
     """
     if int(audio.sr) != int(stem_bundle.sample_rate):
         raise ValueError(
@@ -84,27 +96,41 @@ def validate_stem_reconstruction(
 
     source = np.asarray(audio.y_mono, dtype=np.float32)
     reconstructed = sum_stems(stem_bundle)
-    compared_samples = min(source.size, reconstructed.size)
+    overlap_samples = min(source.size, reconstructed.size)
     length_delta = abs(int(source.size) - int(reconstructed.size))
+    target_length = max(source.size, reconstructed.size)
 
-    if compared_samples == 0:
-        source_rms = _rms(source)
-        reconstructed_rms = _rms(reconstructed)
-        residual_rms = max(source_rms, reconstructed_rms)
+    if target_length == 0:
+        return StemReconstructionValidation(
+            residual_ratio=0.0,
+            residual_rms=0.0,
+            source_rms=0.0,
+            threshold=threshold,
+            compared_samples=0,
+            length_delta_samples=0,
+            passed=True,
+        )
+
+    source_padded = np.zeros(target_length, dtype=np.float64)
+    source_padded[: source.size] = source
+    recon_padded = np.zeros(target_length, dtype=np.float64)
+    recon_padded[: reconstructed.size] = reconstructed
+
+    residual = source_padded - recon_padded
+    source_rms = _rms(source_padded)
+    residual_rms = _rms(residual)
+
+    if source_rms <= _EPSILON:
         residual_ratio = 0.0 if residual_rms <= _EPSILON else 1.0
     else:
-        source_common = source[:compared_samples]
-        residual = source_common - reconstructed[:compared_samples]
-        source_rms = _rms(source_common)
-        residual_rms = _rms(residual)
-        residual_ratio = 0.0 if source_rms <= _EPSILON else residual_rms / source_rms
+        residual_ratio = residual_rms / source_rms
 
     return StemReconstructionValidation(
         residual_ratio=round(float(residual_ratio), 6),
         residual_rms=round(float(residual_rms), 8),
         source_rms=round(float(source_rms), 8),
         threshold=threshold,
-        compared_samples=compared_samples,
+        compared_samples=overlap_samples,
         length_delta_samples=length_delta,
         passed=bool(residual_ratio <= threshold),
     )
@@ -116,7 +142,15 @@ def validate_stem_bpm_alignment(
     tolerance: float = DEFAULT_STEM_BPM_TOLERANCE,
     required_stems: Iterable[str] = REQUIRED_STEMS,
 ) -> StemBPMAlignmentValidation:
-    """Validate that each required stem BPM stays close to the full-mix BPM."""
+    """Validate that each required stem BPM stays close to the full-mix BPM.
+
+    The order in the resulting `stem_bpms` and `bpm_diffs` mirrors `STEM_NAMES`
+    for known stems (vocals/drums/bass/other), with any unknown stems passed
+    via `required_stems` appended in sorted order. Pass a custom iterable to
+    validate a subset (e.g. ``["vocals", "drums"]``) or to add new stems from a
+    multi-stem Demucs variant; missing stems land in `missing_stems` and force
+    `passed=False`.
+    """
     required_set = set(required_stems)
     if not required_set:
         raise ValueError("required_stems must not be empty")

@@ -43,7 +43,7 @@ These features exist, but their interpretation should stay conservative.
 
 | Area | Current status | Missing validation |
 |---|---|---|
-| Per-stem RPE | `--separate` opt-in Demucs adapter emits vocals, drums, bass, and other `PhysicalRPE` entries; synthetic summed-stem residual and BPM alignment are covered by `tests/test_stem_validation.py`; local `htdemucs` CPU smoke tests passed summed-stem residual on `synth_03` and an external real-audio 30s MP3 excerpt | No committed real-audio stem-level ground-truth corpus; per-stem BPM can be unstable on sparse Demucs stems; no per-stem key/brightness validation yet |
+| Per-stem RPE | `--separate` opt-in Demucs adapter emits vocals/drums/bass/other `PhysicalRPE` entries. **CI coverage**: synthetic summed-stem residual + BPM alignment via `tests/test_stem_validation.py` (no Demucs runtime). **Manual / non-CI**: local `htdemucs` CPU smoke via `scripts/validate_stem_separation.py` confirmed summed-stem residual on `synth_03` and an external real-audio 30s MP3 excerpt | No committed real-audio stem-level ground-truth corpus; per-stem BPM can be unstable on sparse Demucs stems; no per-stem key/brightness validation yet |
 | Per-stem scoring | `score_rpe()` emits nested `stem_scores` with vocal/drum/bass/other baseline mapping | Baseline values are initial anchors, not validated against separated real stems |
 | Genre baseline scoring | `pro`, `loud_pop`, `acoustic`, and `edm` profiles are selectable | Profile values are hand-calibrated anchors, not genre consensus truth |
 | External SVP comparison | `compare` and `evaluate --svp` compute semantic and physical diffs | Diff thresholds are heuristic and not calibrated against human review labels |
