@@ -43,7 +43,7 @@ These features exist, but their interpretation should stay conservative.
 
 | Area | Current status | Missing validation |
 |---|---|---|
-| Per-stem RPE | `--separate` opt-in Demucs adapter emits vocals, drums, bass, and other `PhysicalRPE` entries | No stem-level ground-truth corpus; no per-stem BPM/key/brightness validation yet |
+| Per-stem RPE | `--separate` opt-in Demucs adapter emits vocals/drums/bass/other `PhysicalRPE` entries. **CI coverage**: synthetic summed-stem residual + BPM alignment via `tests/test_stem_validation.py` (no Demucs runtime). **Manual / non-CI**: local `htdemucs` CPU smoke via `scripts/validate_stem_separation.py` confirmed summed-stem residual on `synth_03` and an external real-audio 30s MP3 excerpt | No committed real-audio stem-level ground-truth corpus; per-stem BPM can be unstable on sparse Demucs stems; no per-stem key/brightness validation yet |
 | Per-stem scoring | `score_rpe()` emits nested `stem_scores` with vocal/drum/bass/other baseline mapping | Baseline values are initial anchors, not validated against separated real stems |
 | Genre baseline scoring | `pro`, `loud_pop`, `acoustic`, and `edm` profiles are selectable | Profile values are hand-calibrated anchors, not genre consensus truth |
 | External SVP comparison | `compare` and `evaluate --svp` compute semantic and physical diffs | Diff thresholds are heuristic and not calibrated against human review labels |
@@ -99,4 +99,9 @@ Known failures are documented:
 - `synth_01_slow_pad_c_major`: BPM octave error
 - `synth_02_minor_pulse_a_minor`: downbeat phase drift
 
-Real-audio CC0 validation and stem-level ground truth remain future work.
+Real-audio CC0 validation and stem-level ground truth remain future work. Q3
+stem residual and BPM alignment have deterministic synthetic coverage plus the
+manual `scripts/validate_stem_separation.py` sign-off path for local Demucs
+runs. Local `htdemucs` CPU smoke tests confirm summed-stem residual below 5% on
+`synth_03` and an external real-audio 30s MP3 excerpt, but per-stem BPM is not
+a reliable standalone quality gate for sparse separated stems.

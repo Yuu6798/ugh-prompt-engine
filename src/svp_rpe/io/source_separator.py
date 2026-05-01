@@ -5,11 +5,17 @@ package install and CI path do not require torch/Demucs.
 """
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
 import warnings
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import soundfile as sf
 from pydantic import BaseModel, ConfigDict, field_validator
 
 try:
@@ -17,7 +23,12 @@ try:
 except ImportError:
     _DemucsAPI = None
 
-_HAS_DEMUCS = _DemucsAPI is not None
+try:
+    import demucs.separate as _DemucsSeparate  # pragma: no cover - optional dependency
+except ImportError:
+    _DemucsSeparate = None
+
+_HAS_DEMUCS = _DemucsAPI is not None or _DemucsSeparate is not None
 
 DEFAULT_MODEL = "htdemucs_ft"
 DEFAULT_SAMPLE_RATE = 44100
@@ -98,6 +109,15 @@ def _to_mono_float32(value: Any) -> np.ndarray:
     return np.asarray(arr, dtype=np.float32)
 
 
+def _audio_file_to_mono_float32(path: Path) -> tuple[np.ndarray, int]:
+    arr, sample_rate = sf.read(path, always_2d=False, dtype="float32")
+    if arr.ndim == 2:
+        arr = np.mean(arr, axis=1)
+    elif arr.ndim != 1:
+        raise ValueError(f"expected audio file with 1D or 2D shape, got {arr.shape}")
+    return np.asarray(arr, dtype=np.float32), int(sample_rate)
+
+
 def _get_demucs_separator_class() -> type[Any]:
     if not _HAS_DEMUCS or _DemucsAPI is None:
         raise SeparatorNotAvailableError(
@@ -122,14 +142,12 @@ def _separator_sample_rate(separator: Any) -> int:
     return sample_rate
 
 
-def separate_stems(
-    path: str | Path,
+def _separate_stems_with_api(
+    source_path: Path,
     *,
-    model: str = DEFAULT_MODEL,
-    device: str = "cpu",
+    model: str,
+    device: str,
 ) -> StemBundle:
-    """Separate an audio file into vocals, drums, bass, and other stems."""
-    source_path = Path(path)
     separator_cls = _get_demucs_separator_class()
     separator = separator_cls(model=model, device=device)
     _, separated = separator.separate_audio_file(source_path)
@@ -148,3 +166,102 @@ def separate_stems(
         duration_sec=round(n_samples / sample_rate, 4),
         stems=stems,
     )
+
+
+def _find_cli_stem_file(output_dir: Path, stem_name: str) -> Path:
+    matches = sorted(output_dir.rglob(f"{stem_name}.wav"))
+    if not matches:
+        raise ValueError(f"Demucs CLI did not produce {stem_name!r} stem")
+    return matches[0]
+
+
+def _demucs_subprocess_env() -> dict[str, str]:
+    env = os.environ.copy()
+    path = env.get("PATH")
+    missing = [tool for tool in ("ffmpeg", "ffprobe") if shutil.which(tool, path=path) is None]
+    if missing:
+        raise SeparatorNotAvailableError(
+            "Demucs CLI requires FFmpeg and FFprobe on PATH. Install a full/shared "
+            f"FFmpeg build and restart the shell. Missing: {', '.join(missing)}"
+        )
+    return env
+
+
+def _separate_stems_with_cli(
+    source_path: Path,
+    *,
+    model: str,
+    device: str,
+) -> StemBundle:
+    if not _HAS_DEMUCS or _DemucsSeparate is None:
+        raise SeparatorNotAvailableError(
+            "demucs is not installed. Install the optional extra with: "
+            "pip install 'svp-rpe[separate]'"
+        )
+
+    with tempfile.TemporaryDirectory(prefix="svp-rpe-demucs-") as tmp:
+        output_dir = Path(tmp)
+        command = [
+            sys.executable,
+            "-m",
+            "demucs",
+            "-n",
+            model,
+            "-d",
+            device,
+            "--float32",
+            "--filename",
+            "{stem}.{ext}",
+            "-o",
+            str(output_dir),
+            str(source_path),
+        ]
+        env = _demucs_subprocess_env()
+        try:
+            subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+        except subprocess.CalledProcessError as exc:
+            details = (exc.stderr or exc.stdout or "").strip()
+            message = "Demucs CLI separation failed"
+            if details:
+                message = f"{message}: {details}"
+            raise RuntimeError(message) from exc
+
+        stems: dict[str, np.ndarray] = {}
+        sample_rates: set[int] = set()
+        for stem_name in STEM_NAMES:
+            stem_path = _find_cli_stem_file(output_dir, stem_name)
+            stem, sample_rate = _audio_file_to_mono_float32(stem_path)
+            stems[stem_name] = stem
+            sample_rates.add(sample_rate)
+
+        if len(sample_rates) != 1:
+            raise ValueError(f"Demucs CLI produced inconsistent sample rates: {sample_rates}")
+        sample_rate = sample_rates.pop()
+        n_samples = max((len(stem) for stem in stems.values()), default=0)
+
+        return StemBundle(
+            source_path=str(source_path),
+            model_name=model,
+            sample_rate=sample_rate,
+            duration_sec=round(n_samples / sample_rate, 4),
+            stems=stems,
+        )
+
+
+def separate_stems(
+    path: str | Path,
+    *,
+    model: str = DEFAULT_MODEL,
+    device: str = "cpu",
+) -> StemBundle:
+    """Separate an audio file into vocals, drums, bass, and other stems."""
+    source_path = Path(path)
+    if _DemucsAPI is not None:
+        return _separate_stems_with_api(source_path, model=model, device=device)
+    return _separate_stems_with_cli(source_path, model=model, device=device)

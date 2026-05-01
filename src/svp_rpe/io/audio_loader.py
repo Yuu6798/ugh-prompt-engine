@@ -117,7 +117,7 @@ def load_audio(
     metadata = AudioMetadata(
         file_path=str(p),
         duration_sec=round(duration_sec, 4),
-        sample_rate=sr if target_sr else native_sr,
+        sample_rate=sr if target_sr is not None else native_sr,
         channels=channels,
         format=suffix,
     )

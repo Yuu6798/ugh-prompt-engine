@@ -92,11 +92,34 @@ Known threshold misses:
   genre coverage.
 - Real-world validity still requires a labeled validation dataset.
 
-## 6. Next Validation Work
+## 6. Per-Stem Validation
+
+Q3 source separation is implemented as an opt-in path because Demucs is too
+heavy for the default CI environment. Current validation is split accordingly:
+
+| Q3 criterion | Synthetic CI status | Real-audio / Demucs status |
+|---|---|---|
+| Summed-stem residual < 5% | Verified by `tests/test_stem_validation.py` using deterministic synthetic stems | Local Demucs smoke tests passed with `htdemucs` CPU: `synth_03` residual `0.034802`; external real-audio 30s MP3 excerpt residual `0.032082`; no committed real-audio stem corpus yet |
+| Per-stem BPM matches full mix | Verified by `tests/test_stem_validation.py` on a pulsed synthetic stem bundle | Local Demucs smoke test on `synth_03_mid_groove_g_major` failed: drums `24.15` BPM and vocals `129.20` BPM vs full mix `120.19`; sparse stems may not yield stable BPM |
+
+Manual real-audio check:
+
+```bash
+python scripts/validate_stem_separation.py track.wav
+python scripts/validate_stem_separation.py track.wav --check
+python scripts/validate_stem_separation.py track.wav --json
+```
+
+This script requires the optional Demucs dependency (`svp-rpe[separate]`) and
+system `ffmpeg` / `ffprobe` on `PATH`. On Windows with TorchAudio 2.9+, use a
+shared FFmpeg build so TorchCodec can load the FFmpeg DLLs. This manual check
+does not turn the score into a production music-quality label.
+
+## 7. Next Validation Work
 
 - Q1-3: fix or explicitly model the `synth_01` BPM octave error.
 - Q2 follow-up: replace downbeat fallback with a stronger tracker when the
   dependency story is stable.
-- Q3 follow-up: add per-stem ground truth and residual validation for separated
-  stems.
+- Q3 real-audio follow-up: add CC0 tracks with stem-level ground truth and
+  record manual `validate_stem_separation.py` outputs.
 - Add CC0 real-audio samples for genre and production-style coverage.

@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 
 import numpy as np
 import pytest
+import soundfile as sf
 
 import svp_rpe.io.source_separator as source_separator
 from svp_rpe.io.source_separator import (
@@ -102,9 +104,42 @@ def test_stem_bundle_rejects_non_float32_stems() -> None:
 def test_no_demucs_raises_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(source_separator, "_HAS_DEMUCS", False)
     monkeypatch.setattr(source_separator, "_DemucsAPI", None)
+    monkeypatch.setattr(source_separator, "_DemucsSeparate", None)
 
     with pytest.raises(SeparatorNotAvailableError, match="svp-rpe\\[separate\\]"):
         separate_stems(tmp_path / "fixture.wav")
+
+
+def test_separate_stems_with_cli_fallback(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    source = tmp_path / "fixture.wav"
+    sf.write(source, np.zeros(16, dtype=np.float32), 44100)
+
+    def fake_run(command, *, check, capture_output, text, env):
+        output_dir = Path(command[command.index("-o") + 1])
+        stem_dir = output_dir / "htdemucs_ft"
+        stem_dir.mkdir(parents=True)
+        stereo = np.column_stack([
+            np.ones(16, dtype=np.float32),
+            np.zeros(16, dtype=np.float32),
+        ])
+        for stem_name in STEM_NAMES:
+            sf.write(stem_dir / f"{stem_name}.wav", stereo, 44100, subtype="FLOAT")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(source_separator, "_HAS_DEMUCS", True)
+    monkeypatch.setattr(source_separator, "_DemucsAPI", None)
+    monkeypatch.setattr(source_separator, "_DemucsSeparate", object())
+    monkeypatch.setattr(source_separator, "_demucs_subprocess_env", lambda: {})
+    monkeypatch.setattr(source_separator.subprocess, "run", fake_run)
+
+    bundle = separate_stems(source, model="htdemucs_ft", device="cpu")
+
+    assert set(bundle.stems) == REQUIRED_STEMS
+    assert bundle.sample_rate == 44100
+    assert bundle.duration_sec == pytest.approx(16 / 44100, abs=1e-4)
+    for stem in bundle.stems.values():
+        assert stem.shape == (16,)
+        np.testing.assert_allclose(stem, np.full(16, 0.5, dtype=np.float32))
 
 
 def test_separate_stems_with_fake_demucs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
