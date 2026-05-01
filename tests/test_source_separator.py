@@ -52,6 +52,25 @@ def test_stem_bundle_requires_all_expected_stems() -> None:
         )
 
 
+def test_stem_bundle_accepts_extra_stems() -> None:
+    """6-stem Demucs variants (guitar/piano) should not be rejected."""
+    stems = _stems()
+    stems["guitar"] = np.linspace(-0.5, 0.5, 8, dtype=np.float32)
+    stems["piano"] = np.linspace(-0.5, 0.5, 8, dtype=np.float32)
+
+    bundle = StemBundle(
+        source_path="fixture.wav",
+        model_name="htdemucs_6s",
+        sample_rate=44100,
+        duration_sec=0.5,
+        stems=stems,
+    )
+
+    assert REQUIRED_STEMS.issubset(bundle.stems)
+    assert "guitar" in bundle.stems
+    assert "piano" in bundle.stems
+
+
 def test_stem_bundle_rejects_non_mono_stems() -> None:
     stems = _stems()
     stems["vocals"] = np.zeros((2, 8), dtype=np.float32)

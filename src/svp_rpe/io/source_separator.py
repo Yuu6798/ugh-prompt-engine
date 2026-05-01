@@ -61,11 +61,10 @@ class StemBundle(BaseModel):
         value: dict[str, np.ndarray],
     ) -> dict[str, np.ndarray]:
         keys = frozenset(value)
-        if keys != REQUIRED_STEMS:
+        if not REQUIRED_STEMS.issubset(keys):
             missing = sorted(REQUIRED_STEMS - keys)
-            extra = sorted(keys - REQUIRED_STEMS)
-            raise ValueError(f"stems must contain exactly {sorted(REQUIRED_STEMS)}; "
-                             f"missing={missing}, extra={extra}")
+            raise ValueError(f"stems must contain at least {sorted(REQUIRED_STEMS)}; "
+                             f"missing={missing}")
 
         for name, stem in value.items():
             if not isinstance(stem, np.ndarray):
