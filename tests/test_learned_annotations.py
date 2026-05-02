@@ -112,7 +112,7 @@ def _annotations(label_text: str = "music") -> LearnedAudioAnnotations:
                 category="audioset",
                 confidence=0.42,
                 source_model="panns_inference:Cnn14",
-                evidence=["top-k tag from AudioSet 527"],
+                notes=["top-k tag from AudioSet 527"],
             ),
         ],
         embedding=LearnedEmbedding(
@@ -145,7 +145,7 @@ class TestLearnedAudioLabel:
             source_model="panns_inference:Cnn14",
         )
         assert label.category == "other"
-        assert label.evidence == []
+        assert label.notes == []
 
     def test_confidence_below_zero_rejected(self):
         with pytest.raises(ValidationError, match="confidence"):
@@ -162,6 +162,25 @@ class TestLearnedAudioLabel:
                 category="moodish",  # type: ignore[arg-type]
                 confidence=0.5,
                 source_model="m",
+            )
+
+    def test_does_not_accept_evidence_field(self):
+        # Pin the rename: `evidence` belongs to SemanticLabel, not LearnedAudioLabel.
+        with pytest.raises(ValidationError):
+            LearnedAudioLabel.model_validate(
+                {
+                    "label": "x",
+                    "confidence": 0.5,
+                    "source_model": "m",
+                    "evidence": ["should not be accepted here"],
+                },
+                strict=False,
+                context={"forbid_extra": True},
+            ) if False else LearnedAudioLabel(
+                label="x",
+                confidence=0.5,
+                source_model="m",
+                evidence=["nope"],  # type: ignore[call-arg]
             )
 
 
@@ -218,9 +237,17 @@ class TestRPEBundleBackwardCompatibility:
         restored = RPEBundle.model_validate_json(original.model_dump_json())
         assert restored.learned_annotations is not None
         assert restored.learned_annotations.labels[0].label == "music"
+        assert restored.learned_annotations.labels[0].notes == [
+            "top-k tag from AudioSet 527"
+        ]
         assert restored.learned_annotations.embedding is not None
         assert restored.learned_annotations.embedding.dimensions == 3
         assert restored.learned_annotations.enabled_models[0].name == "panns_inference"
+        assert restored.learned_annotations.inference_config == {"top_k": 5}
+        assert (
+            restored.learned_annotations.license_metadata["panns_inference:Cnn14"]
+            == "research-only weights"
+        )
 
 
 class TestRPEBundleSerialization:
