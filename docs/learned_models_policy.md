@@ -34,6 +34,11 @@ delivered in Q4 (PR #8).
 A learned model's output is a tag with a confidence score and provenance.
 It is never ground truth, and it is never a music-quality label.
 
+To prevent surface-level confusion with the rule layer's
+`SemanticLabel.evidence` field (which carries epistemic weight),
+`LearnedAudioLabel` does NOT have a field called `evidence`. Free-form
+provenance hints from a learned model live in `LearnedAudioLabel.notes`.
+
 ## 3. Adoption Matrix
 
 ### 3.1 Adopt
@@ -112,9 +117,11 @@ dependencies, and weights license terms.
 - Model weights distributed by an upstream project must be inspected
   separately from the code license. A permissive code license does not
   imply permissive weights.
-- Each learned-annotation output record MUST carry `source_model`,
-  `source_version`, and a `license_metadata` map so downstream
-  consumers can audit provenance without reloading the model.
+- Each learned-annotation output record MUST carry `source_model`
+  (label-side) plus a matching `LearnedModelInfo` entry in
+  `enabled_models` that pins `name`, `version`, `license`, and
+  `weights_license`, so downstream consumers can audit provenance
+  without reloading the model.
 
 ## 5. Optional Dependency Policy
 
@@ -137,15 +144,47 @@ Learned annotations live in a single dedicated container, attached to
 `RPEBundle` as a sibling field — not as a sub-field of `PhysicalRPE` or
 `SemanticRPE`.
 
+The concrete schema lives in `src/svp_rpe/rpe/models.py`. Sketch:
+
 ```python
+class LearnedModelInfo(BaseModel):
+    name: str
+    version: str | None = None
+    provider: str | None = None
+    task: Literal["tagging", "beat_downbeat", "pitch", "embedding", "other"]
+    license: str | None = None
+    weights_license: str | None = None
+
+
+class LearnedAudioLabel(BaseModel):
+    label: str
+    category: Literal["audioset", "mood", "genre", "instrument", "other"] = "other"
+    confidence: float
+    source_model: str
+    # NOT named `evidence` — that field name belongs to SemanticLabel and
+    # carries rule-derived epistemic weight. `notes` is free-form model
+    # provenance hints with no equivalent guarantee.
+    notes: list[str] = Field(default_factory=list)
+
+
+class LearnedEmbedding(BaseModel):
+    source_model: str
+    vector: list[float]
+    dimensions: int  # validated to equal len(vector)
+
+
 class LearnedAudioAnnotations(BaseModel):
     schema_version: str = "1.0"
-    enabled_models: list[str]
-    labels: list[LearnedAudioLabel]
-    embedding: list[float] | None = None
-    inference_config: dict[str, Any]
-    license_metadata: dict[str, str]
-    estimation_disclaimer: str
+    enabled_models: list[LearnedModelInfo] = Field(default_factory=list)
+    labels: list[LearnedAudioLabel] = Field(default_factory=list)
+    embedding: LearnedEmbedding | None = None
+    inference_config: dict[str, Any] = Field(default_factory=dict)
+    license_metadata: dict[str, str] = Field(default_factory=dict)
+    estimation_disclaimer: str = (
+        "learned_annotations are model-derived estimates, "
+        "not ground-truth music quality labels"
+    )
+
 
 class RPEBundle(BaseModel):
     ...
@@ -155,12 +194,21 @@ class RPEBundle(BaseModel):
 Required metadata on every learned-annotation payload:
 
 - `schema_version`
-- `enabled_models` — which adapters were actually invoked for this run
-- `labels[].source_model` / `source_version`
+- `enabled_models[].name` / `.version` — which adapters were actually
+  invoked for this run, with their model versions
+- `labels[].source_model` — label-side back-reference; the matching
+  version lives on the corresponding `enabled_models` entry
+- `labels[].category` — one of `audioset` / `mood` / `genre` /
+  `instrument` / `other` (intentionally a closed Literal; new
+  categories require a schema PR and a docs update)
 - `inference_config` — model-specific knobs that affected the output
 - `license_metadata`
 - `estimation_disclaimer` — a static string asserting that the contents
   are model estimates, not production-quality truth labels
+
+`RPEBundle` uses an omit-None serializer for `learned_annotations`, so
+bundles produced before the learned layer is populated keep their
+pre-existing JSON shape (no `"learned_annotations": null` noise).
 
 ## 7. Non-Goals
 
