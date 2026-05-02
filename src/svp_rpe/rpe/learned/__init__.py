@@ -11,6 +11,7 @@ from svp_rpe.rpe.models import LearnedAudioAnnotations, RPEBundle
 
 __all__ = [
     "LearnedModelUnavailable",
+    "LearnedModelIncompatible",
     "attach_learned_annotations",
 ]
 
@@ -22,6 +23,22 @@ class LearnedModelUnavailable(RuntimeError):
     re-export this name from their own modules for caller convenience but
     they do NOT define their own copies — catching `LearnedModelUnavailable`
     must succeed regardless of which adapter raised it.
+    """
+
+
+class LearnedModelIncompatible(LearnedModelUnavailable):
+    """Raised when an optional dependency IS installed but its API does not match.
+
+    Subclass of `LearnedModelUnavailable` so callers that broadly catch the
+    parent for fallback purposes still catch this — but callers can also
+    catch this specifically to surface "upstream package shape changed,
+    please file a bug" rather than silently falling back to a deterministic
+    backend.
+
+    Examples of when an adapter should raise this instead of the parent:
+        - module imported successfully but a required attribute is missing
+        - upstream output shape disagrees with the recorded contract
+          (e.g. label-count mismatch)
     """
 
 
