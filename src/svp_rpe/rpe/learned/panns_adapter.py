@@ -18,6 +18,13 @@ License note:
     provenance and are downloaded lazily by upstream on first use; we do NOT
     assert a license for the weights here. `license_metadata` reflects this
     asymmetry rather than over-claiming.
+
+Performance note:
+    `AudioTagging(...)` loads ~80MB of weights on construction. This adapter
+    builds a fresh instance per call, which is fine for the spike but will
+    dominate latency on real workloads. A per-process cache or an explicit
+    `audio_tagging` parameter can be added later when this is wired into a
+    pipeline; the current shape is intentionally simple.
 """
 from __future__ import annotations
 
@@ -28,7 +35,7 @@ from typing import Any, Optional
 
 import numpy as np
 
-from svp_rpe.rpe.learned import LearnedModelUnavailable
+from svp_rpe.rpe.learned import LearnedModelIncompatible, LearnedModelUnavailable
 from svp_rpe.rpe.models import (
     LearnedAudioAnnotations,
     LearnedAudioLabel,
@@ -37,6 +44,7 @@ from svp_rpe.rpe.models import (
 
 __all__ = [
     "LearnedModelUnavailable",
+    "LearnedModelIncompatible",
     "extract_panns_annotations",
 ]
 
@@ -72,7 +80,8 @@ def _load_panns_labels() -> list[str]:
         raise LearnedModelUnavailable(_INSTALL_HINT) from exc
     labels = getattr(labels_module, "labels", None)
     if labels is None:
-        raise LearnedModelUnavailable(
+        # Module imported, attribute is gone — upstream API shifted.
+        raise LearnedModelIncompatible(
             "panns_inference.labels.labels not found; "
             "incompatible panns_inference version"
         )
@@ -96,12 +105,25 @@ def _detect_panns_version() -> Optional[str]:
         return None
 
 
+def _validate_top_k(top_k: object) -> None:
+    """Reject non-int / bool / non-positive `top_k` before loading the model.
+
+    `bool` is a subclass of `int` in Python, so a naive `isinstance(top_k, int)`
+    check accepts `top_k=True` as 1. We reject it explicitly because passing
+    a bool is almost certainly a caller bug, not a deliberate request for
+    top-1.
+    """
+    if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k <= 0:
+        raise ValueError(f"top_k must be a positive integer, got {top_k!r}")
+
+
 def extract_panns_annotations(
     audio: np.ndarray,
     sample_rate: int,
     *,
     top_k: int = 10,
     model_name: str = "Cnn14",
+    device: str = "cpu",
 ) -> LearnedAudioAnnotations:
     """Run panns_inference AudioTagging on `audio`, return top-k tags.
 
@@ -118,38 +140,47 @@ def extract_panns_annotations(
     Parameters
     ----------
     audio
-        1D mono or 2D (channels, samples) / (samples, channels) array.
-        Stereo input is downmixed to mono before inference.
+        1D mono or 2D stereo array. The 2D heuristic assumes
+        `samples >> channels` to pick the channel axis; this is true for
+        every realistic audio buffer (`channels` is 1 or 2, `samples` is
+        thousands). For pathological cases pass mono yourself.
     sample_rate
         Sampling rate of `audio`. Recorded as inference_config metadata
         only — panns_inference handles upstream resampling internally.
     top_k
-        Number of highest-confidence labels to return. Must be positive.
+        Number of highest-confidence labels to return. Must be a positive
+        non-bool int.
     model_name
         Identifier recorded in `source_model` and `inference_config` for
         provenance. Does not switch between checkpoints in this PR.
+    device
+        Forwarded to `AudioTagging(device=...)`. Defaults to "cpu" so CI
+        and laptops work out-of-the-box; pass "cuda" for GPU.
 
     Raises
     ------
     LearnedModelUnavailable
-        If `panns_inference` is not installed or the labels module is
-        missing / shaped differently from the expected upstream version.
+        If `panns_inference` is not installed.
+    LearnedModelIncompatible
+        If `panns_inference` is installed but its labels module / output
+        shape does not match the contract this adapter targets.
     ValueError
-        If `top_k` is not a positive integer.
+        If `top_k` is not a positive integer (bool is rejected too).
     """
-    if not isinstance(top_k, int) or top_k <= 0:
-        raise ValueError(f"top_k must be a positive integer, got {top_k!r}")
+    _validate_top_k(top_k)
 
     panns_root = _load_panns_root()
     labels_list = _load_panns_labels()
 
-    audio_tagging = panns_root.AudioTagging(checkpoint_path=None, device="cpu")
+    audio_tagging = panns_root.AudioTagging(checkpoint_path=None, device=device)
     batch = _ensure_batch_shape(audio)
     clipwise_output, _embedding = audio_tagging.inference(batch)
 
     posterior = np.asarray(clipwise_output, dtype=np.float64).reshape(-1)
     if posterior.shape[0] != len(labels_list):
-        raise LearnedModelUnavailable(
+        # Adapter targets the 527-label AudioSet contract. A mismatch is an
+        # API shift, not a missing install.
+        raise LearnedModelIncompatible(
             "panns_inference label count mismatch: "
             f"clipwise={posterior.shape[0]}, labels={len(labels_list)}"
         )
@@ -160,23 +191,29 @@ def extract_panns_annotations(
         top_k=top_k,
         model_name=model_name,
         sample_rate=sample_rate,
+        device=device,
         version=_detect_panns_version(),
     )
 
 
 def _ensure_batch_shape(audio: np.ndarray) -> np.ndarray:
-    """panns_inference expects (batch, samples). Coerce mono / stereo."""
+    """panns_inference expects (batch, samples). Coerce mono / stereo.
+
+    Heuristic: the channel axis is the smaller one. This works as long as
+    `samples >> channels`, which holds for every realistic audio buffer
+    (channels is 1 or 2, samples is in the thousands at minimum). It is
+    deliberately ambiguous on tiny shapes like (2, 2) or (2, 1) — those
+    are not legitimate audio inputs.
+    """
     array = np.asarray(audio, dtype=np.float32)
     if array.ndim == 1:
         return array.reshape(1, -1)
     if array.ndim == 2:
-        # Heuristic: the channel axis is the smaller one. Common shapes are
-        # either (channels, samples) (e.g. librosa.load multi-channel) or
-        # (samples, channels) (soundfile). Either way we reduce to mono
-        # before adding the batch axis.
         if array.shape[0] <= array.shape[1]:
+            # (channels, samples) with channels <= samples — typical librosa.
             mono = array.mean(axis=0)
         else:
+            # (samples, channels) — typical soundfile.
             mono = array.mean(axis=1)
         return mono.reshape(1, -1)
     raise ValueError(f"audio must be 1D or 2D, got shape {array.shape}")
@@ -206,6 +243,7 @@ def _build_annotations(
     top_k: int,
     model_name: str,
     sample_rate: int,
+    device: str,
     version: Optional[str],
 ) -> LearnedAudioAnnotations:
     source_model = f"{_PANNS_PACKAGE}:{model_name}"
@@ -234,6 +272,7 @@ def _build_annotations(
             "top_k": top_k,
             "model_name": model_name,
             "sample_rate": sample_rate,
+            "device": device,
             "source": _PANNS_PACKAGE,
         },
         license_metadata={
