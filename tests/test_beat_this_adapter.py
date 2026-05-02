@@ -1,0 +1,465 @@
+"""tests/test_beat_this_adapter.py — beat_this adapter tests.
+
+The real beat_this package is NOT required to run these tests. We monkeypatch
+`sys.modules["beat_this"]` and `sys.modules["beat_this.inference"]` with a fake
+backend so the adapter contract (Audio2Beats, dbn=False, time_events shape,
+isolation) can be pinned without any optional install.
+
+The fake mirrors beat_this >= 1.1's `Audio2Beats(checkpoint_path=..., dbn=...)`
+entry point, which takes an in-memory (signal, sample_rate) pair. The
+file-path variant `File2Beats` is intentionally not used by this adapter
+and not modeled in the fake.
+"""
+from __future__ import annotations
+
+import sys
+import types
+
+import numpy as np
+import pytest
+
+from svp_rpe.rpe.models import (
+    DeltaEProfile,
+    GrvAnchor,
+    LearnedAudioAnnotations,
+    LearnedTimeEvent,
+    PhysicalRPE,
+    RPEBundle,
+    SectionMarker,
+    SemanticLabel,
+    SemanticRPE,
+    SpectralProfile,
+)
+from svp_rpe.svp.generator import generate_svp
+
+
+# ---------------------------------------------------------------------------
+# Fake backend installation
+# ---------------------------------------------------------------------------
+
+
+def _install_fake_beat_this(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    beats: list[float],
+    downbeats: list[float],
+    version: str | None = None,
+) -> dict:
+    """Install a fake `beat_this.inference` module backed by FakeAudio2Beats.
+
+    Mirrors beat_this >= 1.1's `Audio2Beats` entry point. Returns a dict
+    that captures init kwargs and call args so tests can assert on what
+    the adapter actually sent to the upstream API.
+
+    `version` (when provided) is set as `beat_this.__version__` on the fake
+    root module so the adapter's version detection has something to read.
+    """
+    captured: dict = {}
+
+    class FakeAudio2Beats:
+        def __init__(self, **kwargs):
+            captured["init_kwargs"] = dict(kwargs)
+
+        def __call__(self, signal, sample_rate):
+            captured["call_args"] = {
+                "signal_shape": tuple(signal.shape),
+                "sample_rate": sample_rate,
+            }
+            return list(beats), list(downbeats)
+
+    fake_inference = types.ModuleType("beat_this.inference")
+    fake_inference.Audio2Beats = FakeAudio2Beats
+    fake_root = types.ModuleType("beat_this")
+    fake_root.inference = fake_inference
+    if version is not None:
+        fake_root.__version__ = version
+
+    monkeypatch.setitem(sys.modules, "beat_this", fake_root)
+    monkeypatch.setitem(sys.modules, "beat_this.inference", fake_inference)
+    return captured
+
+
+def _force_beat_this_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A None entry in sys.modules makes import_module raise ImportError per
+    # documented Python semantics.
+    monkeypatch.setitem(sys.modules, "beat_this", None)
+    monkeypatch.setitem(sys.modules, "beat_this.inference", None)
+
+
+# ---------------------------------------------------------------------------
+# Helpers for building a baseline RPEBundle
+# ---------------------------------------------------------------------------
+
+
+def _make_bundle() -> RPEBundle:
+    return RPEBundle(
+        physical=PhysicalRPE(
+            duration_sec=180.0,
+            sample_rate=44100,
+            structure=[SectionMarker(label="section_01", start_sec=0.0, end_sec=180.0)],
+            rms_mean=0.3,
+            peak_amplitude=0.9,
+            crest_factor=3.0,
+            active_rate=0.85,
+            valley_depth=0.2,
+            thickness=2.0,
+            spectral_centroid=3000.0,
+            spectral_profile=SpectralProfile(
+                centroid=3000.0,
+                low_ratio=0.3,
+                mid_ratio=0.5,
+                high_ratio=0.2,
+                brightness=0.28,
+            ),
+            onset_density=4.5,
+        ),
+        semantic=SemanticRPE(
+            por_core="bright track",
+            por_surface=[
+                SemanticLabel(
+                    label="bright",
+                    layer="perceptual",
+                    confidence=0.9,
+                    evidence=["brightness=0.28"],
+                    source_rule="perc.brightness",
+                )
+            ],
+            grv_anchor=GrvAnchor(primary="bass-heavy"),
+            delta_e_profile=DeltaEProfile(
+                transition_type="flat",
+                intensity=0.3,
+                description="steady",
+            ),
+            cultural_context=["electronic"],
+            instrumentation_summary="synths",
+            production_notes=["compressed"],
+            confidence_notes=["rule"],
+        ),
+        audio_file="test.wav",
+        audio_duration_sec=180.0,
+        audio_sample_rate=44100,
+        audio_channels=2,
+        audio_format="wav",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Adapter contract tests
+# ---------------------------------------------------------------------------
+
+
+class TestAdapterUnavailable:
+    def test_raises_with_install_hint_when_beat_this_missing(self, monkeypatch):
+        _force_beat_this_unavailable(monkeypatch)
+
+        from svp_rpe.rpe.learned.beat_this_adapter import (
+            LearnedModelUnavailable,
+            extract_beat_this_annotations,
+        )
+
+        with pytest.raises(LearnedModelUnavailable, match="beat_this"):
+            extract_beat_this_annotations(
+                np.zeros(1024, dtype=np.float32), 22050
+            )
+
+
+class TestAdapterEntryPoint:
+    def test_uses_audio2beats_not_file2beats(self, monkeypatch):
+        # Install a fake `beat_this.inference` that ONLY has Audio2Beats.
+        # If the adapter ever switches back to File2Beats, this test fails
+        # with AttributeError on the fake module.
+        captured = _install_fake_beat_this(monkeypatch, beats=[0.5], downbeats=[0.5])
+
+        from svp_rpe.rpe.learned.beat_this_adapter import extract_beat_this_annotations
+
+        signal = np.zeros(2048, dtype=np.float32)
+        extract_beat_this_annotations(signal, 22050)
+
+        # Audio2Beats was invoked with the in-memory signal + sample rate.
+        assert captured["call_args"]["signal_shape"] == (2048,)
+        assert captured["call_args"]["sample_rate"] == 22050
+
+    def test_file2beats_absence_does_not_break_adapter(self, monkeypatch):
+        # Defensive: if the upstream module ever drops File2Beats but keeps
+        # Audio2Beats, the adapter must still work.
+        captured: dict = {}
+
+        class FakeAudio2Beats:
+            def __init__(self, **kwargs):
+                captured["init_kwargs"] = kwargs
+
+            def __call__(self, signal, sample_rate):
+                return [], []
+
+        fake_inference = types.ModuleType("beat_this.inference")
+        fake_inference.Audio2Beats = FakeAudio2Beats
+        # Note: deliberately no File2Beats attribute on the fake.
+        fake_root = types.ModuleType("beat_this")
+        fake_root.inference = fake_inference
+        monkeypatch.setitem(sys.modules, "beat_this", fake_root)
+        monkeypatch.setitem(sys.modules, "beat_this.inference", fake_inference)
+
+        from svp_rpe.rpe.learned.beat_this_adapter import extract_beat_this_annotations
+
+        result = extract_beat_this_annotations(np.zeros(1024), 22050)
+        assert isinstance(result, LearnedAudioAnnotations)
+
+
+class TestAdapterDbnFalseEnforcement:
+    def test_dbn_false_is_passed_to_upstream(self, monkeypatch):
+        captured = _install_fake_beat_this(monkeypatch, beats=[0.5], downbeats=[0.5])
+
+        from svp_rpe.rpe.learned.beat_this_adapter import extract_beat_this_annotations
+
+        extract_beat_this_annotations(np.zeros(1024, dtype=np.float32), 22050)
+
+        assert captured["init_kwargs"]["dbn"] is False
+
+    def test_caller_cannot_override_dbn(self, monkeypatch):
+        captured = _install_fake_beat_this(monkeypatch, beats=[], downbeats=[])
+
+        from svp_rpe.rpe.learned.beat_this_adapter import extract_beat_this_annotations
+
+        # The adapter signature does not accept a dbn argument. Asserting the
+        # signature stays narrow protects against a future "convenience" kwarg
+        # that would let madmom DBN back in via the policy back door.
+        with pytest.raises(TypeError):
+            extract_beat_this_annotations(  # type: ignore[call-arg]
+                np.zeros(1024, dtype=np.float32),
+                22050,
+                dbn=True,
+            )
+        # Sanity: a normal call still pins dbn=False.
+        captured.clear()
+        extract_beat_this_annotations(np.zeros(1024, dtype=np.float32), 22050)
+        assert captured["init_kwargs"]["dbn"] is False
+
+
+class TestAdapterOutputShape:
+    def test_produces_expected_time_events(self, monkeypatch):
+        _install_fake_beat_this(
+            monkeypatch,
+            beats=[0.5, 1.0, 1.5, 2.0],
+            downbeats=[0.5, 2.0],
+        )
+
+        from svp_rpe.rpe.learned.beat_this_adapter import extract_beat_this_annotations
+
+        result = extract_beat_this_annotations(
+            np.zeros(1024, dtype=np.float32), 22050
+        )
+
+        assert isinstance(result, LearnedAudioAnnotations)
+        assert all(isinstance(e, LearnedTimeEvent) for e in result.time_events)
+
+        beat_times = [e.time_sec for e in result.time_events if e.event_type == "beat"]
+        downbeat_times = [
+            e.time_sec for e in result.time_events if e.event_type == "downbeat"
+        ]
+        assert beat_times == [0.5, 1.0, 1.5, 2.0]
+        assert downbeat_times == [0.5, 2.0]
+        assert all(e.source_model == "beat_this" for e in result.time_events)
+
+    def test_records_provenance(self, monkeypatch):
+        _install_fake_beat_this(
+            monkeypatch,
+            beats=[1.0],
+            downbeats=[1.0],
+            version="1.1.0",
+        )
+
+        from svp_rpe.rpe.learned.beat_this_adapter import extract_beat_this_annotations
+
+        result = extract_beat_this_annotations(
+            np.zeros(1024, dtype=np.float32), 22050
+        )
+
+        assert len(result.enabled_models) == 1
+        info = result.enabled_models[0]
+        assert info.name == "beat_this"
+        assert info.task == "beat_downbeat"
+        assert info.license == "MIT"
+        assert info.provider == "CPJKU/beat_this"
+        assert info.version == "1.1.0"
+        assert result.inference_config["dbn"] is False
+        assert result.inference_config["source"] == "beat_this"
+        assert result.inference_config["entry_point"] == "Audio2Beats"
+        assert result.license_metadata["beat_this"] == "MIT"
+
+    def test_empty_beats_produces_empty_events(self, monkeypatch):
+        _install_fake_beat_this(monkeypatch, beats=[], downbeats=[])
+
+        from svp_rpe.rpe.learned.beat_this_adapter import extract_beat_this_annotations
+
+        result = extract_beat_this_annotations(
+            np.zeros(1024, dtype=np.float32), 22050
+        )
+
+        assert result.time_events == []
+        # Provenance still set even with empty events.
+        assert len(result.enabled_models) == 1
+
+
+class TestAdapterVersionDetection:
+    """Pin that LearnedModelInfo.version reflects the actually loaded package."""
+
+    def test_version_from_module_attribute(self, monkeypatch):
+        _install_fake_beat_this(
+            monkeypatch,
+            beats=[],
+            downbeats=[],
+            version="1.1.0",
+        )
+
+        from svp_rpe.rpe.learned.beat_this_adapter import extract_beat_this_annotations
+
+        result = extract_beat_this_annotations(np.zeros(1024), 22050)
+        assert result.enabled_models[0].version == "1.1.0"
+
+    def test_version_none_when_unavailable(self, monkeypatch):
+        # No __version__ on fake; importlib.metadata won't find dist-info for
+        # the fake module, so the adapter should fall through to None rather
+        # than crashing.
+        _install_fake_beat_this(monkeypatch, beats=[], downbeats=[])
+
+        from svp_rpe.rpe.learned.beat_this_adapter import extract_beat_this_annotations
+
+        result = extract_beat_this_annotations(np.zeros(1024), 22050)
+        assert result.enabled_models[0].version is None
+        # Still has the rest of the provenance — only version is missing.
+        assert result.enabled_models[0].name == "beat_this"
+        assert result.enabled_models[0].provider == "CPJKU/beat_this"
+
+    def test_version_falls_back_to_pkg_metadata(self, monkeypatch):
+        # Install a fake module without __version__ but pretend the dist
+        # metadata reports a version. Simulates an install whose top-level
+        # package doesn't surface __version__ but whose wheel records it.
+        from svp_rpe.rpe.learned import beat_this_adapter as adapter_module
+
+        _install_fake_beat_this(monkeypatch, beats=[], downbeats=[])
+
+        def fake_version(pkg: str) -> str:
+            assert pkg == "beat_this"
+            return "9.9.9-from-metadata"
+
+        monkeypatch.setattr(adapter_module._pkg_metadata, "version", fake_version)
+
+        result = adapter_module.extract_beat_this_annotations(np.zeros(1024), 22050)
+        assert result.enabled_models[0].version == "9.9.9-from-metadata"
+
+
+# ---------------------------------------------------------------------------
+# Isolation tests: learned output stays out of rule-based RPE / SVP / scoring
+# ---------------------------------------------------------------------------
+
+
+class TestIsolation:
+    def test_attach_does_not_mutate_input_bundle(self, monkeypatch):
+        _install_fake_beat_this(monkeypatch, beats=[0.5], downbeats=[0.5])
+
+        from svp_rpe.rpe.learned import attach_learned_annotations
+        from svp_rpe.rpe.learned.beat_this_adapter import extract_beat_this_annotations
+
+        bundle = _make_bundle()
+        annotations = extract_beat_this_annotations(np.zeros(1024), 22050)
+        enriched = attach_learned_annotations(bundle, annotations)
+
+        assert bundle.learned_annotations is None
+        assert enriched.learned_annotations is not None
+        assert enriched is not bundle
+
+    def test_physical_rpe_unchanged_by_learned_attach(self, monkeypatch):
+        _install_fake_beat_this(
+            monkeypatch,
+            beats=[0.5, 1.0, 1.5],
+            downbeats=[0.5, 1.5],
+        )
+
+        from svp_rpe.rpe.learned import attach_learned_annotations
+        from svp_rpe.rpe.learned.beat_this_adapter import extract_beat_this_annotations
+
+        bundle = _make_bundle()
+        enriched = attach_learned_annotations(
+            bundle,
+            extract_beat_this_annotations(np.zeros(1024), 22050),
+        )
+
+        # The two PhysicalRPE fields the policy doc explicitly forbids merging:
+        assert enriched.physical.downbeat_times == bundle.physical.downbeat_times == []
+        assert enriched.physical.time_signature == "4/4"
+        # And the rest of physical is structurally identical.
+        assert enriched.physical.model_dump() == bundle.physical.model_dump()
+
+    def test_semantic_rpe_unchanged_by_learned_attach(self, monkeypatch):
+        _install_fake_beat_this(monkeypatch, beats=[0.5], downbeats=[0.5])
+
+        from svp_rpe.rpe.learned import attach_learned_annotations
+        from svp_rpe.rpe.learned.beat_this_adapter import extract_beat_this_annotations
+
+        bundle = _make_bundle()
+        enriched = attach_learned_annotations(
+            bundle,
+            extract_beat_this_annotations(np.zeros(1024), 22050),
+        )
+        assert enriched.semantic.model_dump() == bundle.semantic.model_dump()
+
+    def test_generate_svp_output_identical_with_and_without_learned(self, monkeypatch):
+        _install_fake_beat_this(
+            monkeypatch,
+            beats=[0.5, 1.0, 1.5],
+            downbeats=[0.5, 1.5],
+        )
+
+        from svp_rpe.rpe.learned import attach_learned_annotations
+        from svp_rpe.rpe.learned.beat_this_adapter import extract_beat_this_annotations
+
+        bundle = _make_bundle()
+        enriched = attach_learned_annotations(
+            bundle,
+            extract_beat_this_annotations(np.zeros(1024), 22050),
+        )
+
+        assert generate_svp(bundle).model_dump() == generate_svp(enriched).model_dump()
+
+    def test_learned_time_event_does_not_serialize_into_svp(self, monkeypatch):
+        # Use a sentinel timestamp that would never legitimately appear elsewhere.
+        sentinel = 987654321.0
+        _install_fake_beat_this(
+            monkeypatch,
+            beats=[sentinel],
+            downbeats=[sentinel],
+        )
+
+        from svp_rpe.rpe.learned import attach_learned_annotations
+        from svp_rpe.rpe.learned.beat_this_adapter import extract_beat_this_annotations
+
+        bundle = _make_bundle()
+        enriched = attach_learned_annotations(
+            bundle,
+            extract_beat_this_annotations(np.zeros(1024), 22050),
+        )
+        svp_json = generate_svp(enriched).model_dump_json()
+        assert str(sentinel) not in svp_json
+        assert repr(sentinel) not in svp_json
+
+
+class TestSerializerRegression:
+    def test_bundle_without_learned_annotations_still_omits_field_in_dump(self):
+        bundle = _make_bundle()
+        assert "learned_annotations" not in bundle.model_dump()
+
+    def test_bundle_with_time_events_includes_field_in_dump(self, monkeypatch):
+        _install_fake_beat_this(monkeypatch, beats=[0.5], downbeats=[0.5])
+
+        from svp_rpe.rpe.learned import attach_learned_annotations
+        from svp_rpe.rpe.learned.beat_this_adapter import extract_beat_this_annotations
+
+        bundle = _make_bundle()
+        enriched = attach_learned_annotations(
+            bundle,
+            extract_beat_this_annotations(np.zeros(1024), 22050),
+        )
+        dumped = enriched.model_dump()
+        assert "learned_annotations" in dumped
+        time_events = dumped["learned_annotations"]["time_events"]
+        assert {e["event_type"] for e in time_events} == {"beat", "downbeat"}

@@ -242,6 +242,36 @@ class LearnedEmbedding(BaseModel):
         return self
 
 
+class LearnedTimeEvent(BaseModel):
+    """A time-stamped event emitted by a learned model (beat, downbeat, ...).
+
+    Attached to LearnedAudioAnnotations.time_events. MUST NOT be folded into
+    PhysicalRPE.downbeat_times / time_signature — those fields are reserved
+    for the deterministic librosa-derived path.
+    """
+
+    time_sec: float
+    event_type: Literal["beat", "downbeat"]
+    confidence: Optional[float] = None
+    source_model: str
+
+    @field_validator("time_sec")
+    @classmethod
+    def time_non_negative(cls, v: float) -> float:
+        if v < 0.0:
+            raise ValueError("time_sec must be non-negative")
+        return v
+
+    @field_validator("confidence")
+    @classmethod
+    def confidence_in_range(cls, v: Optional[float]) -> Optional[float]:
+        if v is None:
+            return v
+        if not 0.0 <= v <= 1.0:
+            raise ValueError("confidence must be between 0.0 and 1.0")
+        return v
+
+
 class LearnedAudioAnnotations(BaseModel):
     """Container for learned-model output, isolated from rule-based RPE evidence.
 
@@ -253,6 +283,7 @@ class LearnedAudioAnnotations(BaseModel):
     enabled_models: List[LearnedModelInfo] = Field(default_factory=list)
     labels: List[LearnedAudioLabel] = Field(default_factory=list)
     embedding: Optional[LearnedEmbedding] = None
+    time_events: List[LearnedTimeEvent] = Field(default_factory=list)
     inference_config: dict[str, Any] = Field(default_factory=dict)
     license_metadata: dict[str, str] = Field(default_factory=dict)
     estimation_disclaimer: str = (
