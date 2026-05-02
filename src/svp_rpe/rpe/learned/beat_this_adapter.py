@@ -6,6 +6,11 @@ Optional via the `beat` extra. Output is isolated in
 does NOT chain a madmom DBN post-processor (which would re-introduce the
 madmom dependency the policy doc rejects).
 
+Upstream API note (beat_this >= 1.1):
+    `beat_this.inference` exposes two callables. `File2Beats` takes a
+    file path; `Audio2Beats` takes an in-memory signal + sample rate.
+    This adapter receives a `np.ndarray`, so it uses `Audio2Beats`.
+
 See docs/learned_models_policy.md for the full policy.
 """
 from __future__ import annotations
@@ -64,7 +69,13 @@ def extract_beat_this_annotations(
     *,
     checkpoint: str = "final0",
 ) -> LearnedAudioAnnotations:
-    """Run beat_this on `audio` and return a learned annotations payload.
+    """Run beat_this on an in-memory `audio` signal and return annotations.
+
+    Uses `beat_this.inference.Audio2Beats(checkpoint_path=..., dbn=False)`,
+    which is the in-memory entry point in beat_this >= 1.1. The file-path
+    counterpart `File2Beats` is intentionally NOT used here — we already
+    have the decoded signal, and `File2Beats` would force a re-decode
+    detour through disk.
 
     The result is intended to be attached to `RPEBundle.learned_annotations`
     via `svp_rpe.rpe.learned.attach_learned_annotations`. It MUST NOT be
@@ -78,8 +89,8 @@ def extract_beat_this_annotations(
         If `beat_this` is not installed.
     """
     module = _load_beat_this_inference()
-    file2beats = module.File2Beats(checkpoint_path=checkpoint, dbn=_HARD_DBN)
-    beats, downbeats = file2beats(audio, sample_rate)
+    audio2beats = module.Audio2Beats(checkpoint_path=checkpoint, dbn=_HARD_DBN)
+    beats, downbeats = audio2beats(audio, sample_rate)
     return _build_annotations(beats, downbeats, checkpoint=checkpoint)
 
 
@@ -119,6 +130,7 @@ def _build_annotations(
             "dbn": _HARD_DBN,
             "source": _MODEL_NAME,
             "checkpoint": checkpoint,
+            "entry_point": "Audio2Beats",
         },
         license_metadata={
             _MODEL_NAME: _MODEL_LICENSE,
