@@ -35,6 +35,11 @@ beat = ["beat_this"]
 # Pretrained weights are downloaded lazily by upstream on first use and
 # have their own provenance — do NOT widen this extra to bundle weights.
 learned-tags = ["panns-inference"]
+# basic-pitch (Spotify) — Apache-2.0 polyphonic note transcription. PyPI
+# distribution is "basic-pitch"; import name is "basic_pitch".
+# basic-pitch 0.4.0 advertises Python 3.8-3.11 and depends on
+# tensorflow<2.15.1, which has no Python 3.12 wheel in CI's Linux runtime.
+pitch = ["basic-pitch==0.4.0; python_version < '3.12'"]
 
 [project.scripts]
 svprpe = "svp_rpe.cli:app"

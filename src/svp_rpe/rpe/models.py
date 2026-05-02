@@ -272,6 +272,56 @@ class LearnedTimeEvent(BaseModel):
         return v
 
 
+class LearnedNoteEvent(BaseModel):
+    """A pitched note event emitted by a learned transcription model.
+
+    Attached to LearnedAudioAnnotations.note_events. MUST NOT be folded into
+    PhysicalRPE.melody_contour or PhysicalRPE.chord_events — those fields
+    stay reserved for the deterministic librosa- / pyin-derived path.
+
+    `pitch_midi` uses the standard MIDI note range [0, 127] (where 60 = C4,
+    69 = A4 / 440 Hz). `confidence` corresponds to upstream amplitude /
+    onset confidence depending on the model; we do not attempt to unify
+    semantics across models — consumers should consult `source_model` to
+    interpret it.
+    """
+
+    start_sec: float
+    end_sec: float
+    pitch_midi: int
+    confidence: float
+    source_model: str
+
+    @field_validator("start_sec")
+    @classmethod
+    def start_non_negative(cls, v: float) -> float:
+        if v < 0.0:
+            raise ValueError("start_sec must be non-negative")
+        return v
+
+    @field_validator("pitch_midi")
+    @classmethod
+    def midi_in_range(cls, v: int) -> int:
+        if not 0 <= v <= 127:
+            raise ValueError("pitch_midi must be in [0, 127]")
+        return v
+
+    @field_validator("confidence")
+    @classmethod
+    def confidence_in_range(cls, v: float) -> float:
+        if not 0.0 <= v <= 1.0:
+            raise ValueError("confidence must be between 0.0 and 1.0")
+        return v
+
+    @model_validator(mode="after")
+    def end_at_or_after_start(self) -> "LearnedNoteEvent":
+        if self.end_sec < self.start_sec:
+            raise ValueError(
+                f"end_sec ({self.end_sec}) must be >= start_sec ({self.start_sec})"
+            )
+        return self
+
+
 class LearnedAudioAnnotations(BaseModel):
     """Container for learned-model output, isolated from rule-based RPE evidence.
 
@@ -284,6 +334,7 @@ class LearnedAudioAnnotations(BaseModel):
     labels: List[LearnedAudioLabel] = Field(default_factory=list)
     embedding: Optional[LearnedEmbedding] = None
     time_events: List[LearnedTimeEvent] = Field(default_factory=list)
+    note_events: List[LearnedNoteEvent] = Field(default_factory=list)
     inference_config: dict[str, Any] = Field(default_factory=dict)
     license_metadata: dict[str, str] = Field(default_factory=dict)
     estimation_disclaimer: str = (
