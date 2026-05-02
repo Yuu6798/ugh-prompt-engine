@@ -165,9 +165,9 @@ class TestAdapterUnavailable:
                 np.zeros(32000, dtype=np.float32), 32000, top_k=5
             )
 
-    def test_raises_when_labels_module_missing(self, monkeypatch):
-        # Install AudioTagging but no labels submodule — simulates a future
-        # version that moves the labels list.
+    def test_raises_unavailable_when_labels_module_import_fails(self, monkeypatch):
+        # Install AudioTagging but make the labels submodule unimportable.
+        # This simulates a broken / partial install.
         class FakeAudioTagging:
             def __init__(self, **kwargs):
                 pass
@@ -186,12 +186,76 @@ class TestAdapterUnavailable:
         with pytest.raises(LearnedModelUnavailable):
             extract_panns_annotations(np.zeros(1024), 32000, top_k=3)
 
-    def test_unified_error_class_with_beat_this_adapter(self, monkeypatch):
-        # The error type is shared across adapters per learned/__init__.py.
-        # A caller catching `LearnedModelUnavailable` from one adapter must
-        # also catch it from the other.
-        _force_panns_unavailable(monkeypatch)
 
+class TestAdapterIncompatible:
+    """Pin that API-shape mismatches raise the more specific Incompatible error.
+
+    LearnedModelIncompatible is a subclass of LearnedModelUnavailable so any
+    existing broad catcher still works, but adapters use the child class to
+    distinguish "extra installed but upstream API moved" from "extra missing".
+    """
+
+    def test_raises_incompatible_when_labels_attribute_missing(self, monkeypatch):
+        # The labels submodule imports fine but doesn't expose `labels`.
+        class FakeAudioTagging:
+            def __init__(self, **kwargs):
+                pass
+
+            def inference(self, batch):
+                return np.zeros((1, 0)), np.zeros((1, 0))
+
+        fake_root = types.ModuleType("panns_inference")
+        fake_root.AudioTagging = FakeAudioTagging
+        # Note: deliberately no `labels` attribute on the labels submodule.
+        fake_labels = types.ModuleType("panns_inference.labels")
+        fake_root.labels = fake_labels
+        monkeypatch.setitem(sys.modules, "panns_inference", fake_root)
+        monkeypatch.setitem(sys.modules, "panns_inference.labels", fake_labels)
+
+        from svp_rpe.rpe.learned import (
+            LearnedModelIncompatible,
+            LearnedModelUnavailable,
+        )
+        from svp_rpe.rpe.learned.panns_adapter import extract_panns_annotations
+
+        with pytest.raises(LearnedModelIncompatible):
+            extract_panns_annotations(np.zeros(1024), 32000, top_k=3)
+        # Subclass relationship: a broad except still catches.
+        assert issubclass(LearnedModelIncompatible, LearnedModelUnavailable)
+
+    def test_raises_incompatible_when_label_count_mismatches_clipwise(
+        self, monkeypatch
+    ):
+        # Fake returns clipwise_output with 3 columns but only 2 label names.
+        # Adapter must surface this as Incompatible, not silently truncate.
+        captured: dict = {}
+
+        class FakeAudioTagging:
+            def __init__(self, **kwargs):
+                captured["init_kwargs"] = kwargs
+
+            def inference(self, batch):
+                return np.array([[0.1, 0.2, 0.3]]), np.zeros((1, 8))
+
+        fake_root = types.ModuleType("panns_inference")
+        fake_root.AudioTagging = FakeAudioTagging
+        fake_labels = types.ModuleType("panns_inference.labels")
+        fake_labels.labels = ["only_two", "labels"]  # 2, but clipwise has 3
+        fake_root.labels = fake_labels
+        monkeypatch.setitem(sys.modules, "panns_inference", fake_root)
+        monkeypatch.setitem(sys.modules, "panns_inference.labels", fake_labels)
+
+        from svp_rpe.rpe.learned import LearnedModelIncompatible
+        from svp_rpe.rpe.learned.panns_adapter import extract_panns_annotations
+
+        with pytest.raises(LearnedModelIncompatible, match="label count mismatch"):
+            extract_panns_annotations(np.zeros(1024), 32000, top_k=2)
+
+
+class TestErrorClassUnification:
+    """Pin that all adapters share one LearnedModelUnavailable class."""
+
+    def test_unified_error_class_with_beat_this_adapter(self):
         from svp_rpe.rpe.learned import LearnedModelUnavailable as Unified
         from svp_rpe.rpe.learned.beat_this_adapter import LearnedModelUnavailable as FromBeat
         from svp_rpe.rpe.learned.panns_adapter import LearnedModelUnavailable as FromPanns
@@ -283,6 +347,24 @@ class TestAdapterTopKDeterminism:
                 np.zeros(1024), 32000, top_k=1.5  # type: ignore[arg-type]
             )
 
+    @pytest.mark.parametrize("bad_top_k", [True, False])
+    def test_bool_top_k_rejected(self, bad_top_k, monkeypatch):
+        # bool is a subclass of int in Python — without an explicit guard,
+        # top_k=True would slip through as 1 and top_k=False as 0. Both are
+        # almost certainly caller bugs, not deliberate top-1 / disabled.
+        _install_fake_panns(
+            monkeypatch,
+            label_names=["a"],
+            posterior=[0.5],
+        )
+
+        from svp_rpe.rpe.learned.panns_adapter import extract_panns_annotations
+
+        with pytest.raises(ValueError, match="top_k"):
+            extract_panns_annotations(
+                np.zeros(1024), 32000, top_k=bad_top_k  # type: ignore[arg-type]
+            )
+
 
 class TestAdapterConfidenceValidation:
     def test_out_of_range_confidence_rejected_by_pydantic(self, monkeypatch):
@@ -360,6 +442,7 @@ class TestAdapterOutputShape:
         assert result.inference_config["top_k"] == 1
         assert result.inference_config["model_name"] == "Cnn14"
         assert result.inference_config["sample_rate"] == 32000
+        assert result.inference_config["device"] == "cpu"
         assert result.inference_config["source"] == "panns_inference"
 
         # License metadata captures the code/weights asymmetry without
@@ -368,7 +451,7 @@ class TestAdapterOutputShape:
         assert "MIT" in license_text
         assert "weights" in license_text.lower()
 
-    def test_audio2beats_batch_shape_for_mono(self, monkeypatch):
+    def test_mono_batch_shape(self, monkeypatch):
         # 1D mono signal must reach AudioTagging.inference as (1, samples).
         captured = _install_fake_panns(
             monkeypatch,
@@ -383,8 +466,8 @@ class TestAdapterOutputShape:
         )
         assert captured["batch_shape"] == (1, 2048)
 
-    def test_stereo_input_is_downmixed(self, monkeypatch):
-        # 2D (channels, samples) stereo: must reach inference as (1, samples).
+    def test_stereo_channels_first_is_downmixed(self, monkeypatch):
+        # 2D (channels, samples) — typical librosa multi-channel shape.
         captured = _install_fake_panns(
             monkeypatch,
             label_names=["a"],
@@ -396,6 +479,49 @@ class TestAdapterOutputShape:
         stereo = np.zeros((2, 2048), dtype=np.float32)
         extract_panns_annotations(stereo, 32000, top_k=1)
         assert captured["batch_shape"] == (1, 2048)
+
+    def test_stereo_samples_first_is_downmixed(self, monkeypatch):
+        # 2D (samples, channels) — typical soundfile shape. Heuristic picks
+        # the smaller axis as channels.
+        captured = _install_fake_panns(
+            monkeypatch,
+            label_names=["a"],
+            posterior=[0.5],
+        )
+
+        from svp_rpe.rpe.learned.panns_adapter import extract_panns_annotations
+
+        stereo = np.zeros((2048, 2), dtype=np.float32)
+        extract_panns_annotations(stereo, 32000, top_k=1)
+        assert captured["batch_shape"] == (1, 2048)
+
+    def test_device_kwarg_reaches_audio_tagging(self, monkeypatch):
+        captured = _install_fake_panns(
+            monkeypatch,
+            label_names=["a"],
+            posterior=[0.5],
+        )
+
+        from svp_rpe.rpe.learned.panns_adapter import extract_panns_annotations
+
+        result = extract_panns_annotations(
+            np.zeros(1024), 32000, top_k=1, device="cuda"
+        )
+        assert captured["init_kwargs"]["device"] == "cuda"
+        # And the device is recorded in inference_config for provenance.
+        assert result.inference_config["device"] == "cuda"
+
+    def test_device_default_is_cpu(self, monkeypatch):
+        captured = _install_fake_panns(
+            monkeypatch,
+            label_names=["a"],
+            posterior=[0.5],
+        )
+
+        from svp_rpe.rpe.learned.panns_adapter import extract_panns_annotations
+
+        extract_panns_annotations(np.zeros(1024), 32000, top_k=1)
+        assert captured["init_kwargs"]["device"] == "cpu"
 
 
 class TestAdapterVersionDetection:
