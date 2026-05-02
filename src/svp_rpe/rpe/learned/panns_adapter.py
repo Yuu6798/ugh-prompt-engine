@@ -10,8 +10,19 @@ Upstream API note (panns_inference >= 0.1):
     is the AudioSet-tagging entry point. Calling
     `at.inference(audio_batch)` with a `(batch, samples)` float32 array
     returns `(clipwise_output, embedding)` where `clipwise_output` has
-    shape `(batch, 527)` (AudioSet posterior probabilities). Class names
-    live in `panns_inference.labels.labels` (a list of 527 strings).
+    shape `(batch, 527)` (AudioSet posterior probabilities).
+
+    The 527-class label list lives in `panns_inference.config.labels` and
+    is re-exported on the package root as `panns_inference.labels` — note
+    that this is an *attribute* (a list), NOT a submodule. We read the
+    root attribute first and fall back to `panns_inference.config.labels`
+    if the re-export ever moves.
+
+    The Cnn14 backbone is hard-coded to expect 32 kHz mono input
+    (sample_rate=32000 is baked into the model construction; there is
+    no resampling inside `inference()`). This adapter resamples to
+    32 kHz before calling `inference` and records the target rate in
+    `inference_config.target_sample_rate` for provenance.
 
 License note:
     panns_inference code is MIT. Pretrained checkpoint files have their own
@@ -50,7 +61,7 @@ __all__ = [
 
 
 _PANNS_PACKAGE = "panns_inference"
-_PANNS_LABELS_MODULE = "panns_inference.labels"
+_PANNS_CONFIG_MODULE = "panns_inference.config"
 _MODEL_TASK = "tagging"
 _MODEL_PROVIDER = "qiuqiangkong/panns_inference"
 _CODE_LICENSE = "MIT"
@@ -58,6 +69,12 @@ _LICENSE_NOTE = (
     "MIT code; pretrained weights require upstream verification"
 )
 _LABEL_CATEGORY = "audioset"
+
+# Cnn14 (the default panns_inference checkpoint) is constructed with
+# sample_rate=32000 baked in and does NOT resample internally. This is
+# the rate we feed `AudioTagging.inference` regardless of the caller's
+# input rate; provenance is recorded so callers can audit the resample.
+_TARGET_SAMPLE_RATE: int = 32000
 
 _INSTALL_HINT = (
     "panns_inference is not installed. Install it via the optional "
@@ -73,17 +90,30 @@ def _load_panns_root() -> Any:
         raise LearnedModelUnavailable(_INSTALL_HINT) from exc
 
 
-def _load_panns_labels() -> list[str]:
-    try:
-        labels_module = importlib.import_module(_PANNS_LABELS_MODULE)
-    except ImportError as exc:
-        raise LearnedModelUnavailable(_INSTALL_HINT) from exc
-    labels = getattr(labels_module, "labels", None)
+def _load_panns_labels(panns_root: Any) -> list[str]:
+    """Load the AudioSet label list from the panns_inference root or config.
+
+    panns_inference >= 0.1 re-exports `labels` (a list, not a submodule)
+    on the package root via `from .config import labels`. We read the root
+    attribute first to match the documented public surface, then fall back
+    to importing `panns_inference.config` directly so a future re-export
+    change doesn't immediately break the adapter.
+    """
+    labels = getattr(panns_root, "labels", None)
     if labels is None:
-        # Module imported, attribute is gone — upstream API shifted.
+        try:
+            config = importlib.import_module(_PANNS_CONFIG_MODULE)
+        except ImportError as exc:
+            raise LearnedModelIncompatible(
+                "panns_inference.labels not at package root and "
+                "panns_inference.config not importable; "
+                "incompatible upstream version"
+            ) from exc
+        labels = getattr(config, "labels", None)
+    if labels is None:
         raise LearnedModelIncompatible(
-            "panns_inference.labels.labels not found; "
-            "incompatible panns_inference version"
+            "panns_inference labels not found at root or in config; "
+            "incompatible upstream version"
         )
     return list(labels)
 
@@ -127,6 +157,12 @@ def extract_panns_annotations(
 ) -> LearnedAudioAnnotations:
     """Run panns_inference AudioTagging on `audio`, return top-k tags.
 
+    Audio is downmixed to mono and resampled to 32 kHz (the rate the Cnn14
+    backbone was trained on) before reaching `AudioTagging.inference`. The
+    original `sample_rate` is recorded in `inference_config.sample_rate`
+    and the rate actually fed to the model is recorded in
+    `inference_config.target_sample_rate`.
+
     Selection is deterministic: confidence descending, then label string
     ascending as the tie-break. Out-of-range confidence (NaN, < 0, > 1)
     raises a Pydantic ValidationError on the underlying
@@ -145,8 +181,8 @@ def extract_panns_annotations(
         every realistic audio buffer (`channels` is 1 or 2, `samples` is
         thousands). For pathological cases pass mono yourself.
     sample_rate
-        Sampling rate of `audio`. Recorded as inference_config metadata
-        only — panns_inference handles upstream resampling internally.
+        Sampling rate of `audio`. Resampled to 32 kHz before inference;
+        recorded in `inference_config.sample_rate` for provenance.
     top_k
         Number of highest-confidence labels to return. Must be a positive
         non-bool int.
@@ -162,7 +198,7 @@ def extract_panns_annotations(
     LearnedModelUnavailable
         If `panns_inference` is not installed.
     LearnedModelIncompatible
-        If `panns_inference` is installed but its labels module / output
+        If `panns_inference` is installed but its labels list / output
         shape does not match the contract this adapter targets.
     ValueError
         If `top_k` is not a positive integer (bool is rejected too).
@@ -170,10 +206,21 @@ def extract_panns_annotations(
     _validate_top_k(top_k)
 
     panns_root = _load_panns_root()
-    labels_list = _load_panns_labels()
+    labels_list = _load_panns_labels(panns_root)
+
+    mono = _to_mono_1d(audio)
+    if sample_rate != _TARGET_SAMPLE_RATE:
+        # Lazy import to keep the no-op (sample_rate == 32000) path fast.
+        # librosa is already a hard runtime dep, so this never fails on
+        # default installs.
+        import librosa
+
+        mono = librosa.resample(
+            mono, orig_sr=sample_rate, target_sr=_TARGET_SAMPLE_RATE
+        )
+    batch = np.asarray(mono, dtype=np.float32).reshape(1, -1)
 
     audio_tagging = panns_root.AudioTagging(checkpoint_path=None, device=device)
-    batch = _ensure_batch_shape(audio)
     clipwise_output, _embedding = audio_tagging.inference(batch)
 
     posterior = np.asarray(clipwise_output, dtype=np.float64).reshape(-1)
@@ -191,13 +238,14 @@ def extract_panns_annotations(
         top_k=top_k,
         model_name=model_name,
         sample_rate=sample_rate,
+        target_sample_rate=_TARGET_SAMPLE_RATE,
         device=device,
         version=_detect_panns_version(),
     )
 
 
-def _ensure_batch_shape(audio: np.ndarray) -> np.ndarray:
-    """panns_inference expects (batch, samples). Coerce mono / stereo.
+def _to_mono_1d(audio: np.ndarray) -> np.ndarray:
+    """Coerce audio to a 1D float32 mono signal.
 
     Heuristic: the channel axis is the smaller one. This works as long as
     `samples >> channels`, which holds for every realistic audio buffer
@@ -207,15 +255,13 @@ def _ensure_batch_shape(audio: np.ndarray) -> np.ndarray:
     """
     array = np.asarray(audio, dtype=np.float32)
     if array.ndim == 1:
-        return array.reshape(1, -1)
+        return array
     if array.ndim == 2:
         if array.shape[0] <= array.shape[1]:
             # (channels, samples) with channels <= samples — typical librosa.
-            mono = array.mean(axis=0)
-        else:
-            # (samples, channels) — typical soundfile.
-            mono = array.mean(axis=1)
-        return mono.reshape(1, -1)
+            return array.mean(axis=0)
+        # (samples, channels) — typical soundfile.
+        return array.mean(axis=1)
     raise ValueError(f"audio must be 1D or 2D, got shape {array.shape}")
 
 
@@ -243,6 +289,7 @@ def _build_annotations(
     top_k: int,
     model_name: str,
     sample_rate: int,
+    target_sample_rate: int,
     device: str,
     version: Optional[str],
 ) -> LearnedAudioAnnotations:
@@ -272,6 +319,7 @@ def _build_annotations(
             "top_k": top_k,
             "model_name": model_name,
             "sample_rate": sample_rate,
+            "target_sample_rate": target_sample_rate,
             "device": device,
             "source": _PANNS_PACKAGE,
         },
