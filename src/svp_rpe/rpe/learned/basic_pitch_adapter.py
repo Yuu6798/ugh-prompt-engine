@@ -149,19 +149,30 @@ def _extract_note_events_field(result: Any) -> Iterable[Any]:
 
     basic-pitch >= 0.2 returns `(model_output, midi_data, note_events)`. We
     accept the third element of any tuple/list-shaped result. A more exotic
-    return shape (dict, custom object) is treated as incompatible rather
-    than guessed at.
+    return shape (dict, custom object) — or a third element that is not a
+    sequence (e.g. `({}, None, "garbage")`) — is treated as incompatible
+    rather than guessed at, so the error message points at the contract
+    violation instead of leaking through `_build_note_events` as a
+    per-character "unexpected shape".
     """
-    if isinstance(result, tuple) or isinstance(result, list):
-        if len(result) < 3:
-            raise LearnedModelIncompatible(
-                f"basic_pitch.predict returned a {len(result)}-tuple; "
-                "expected (model_output, midi_data, note_events)"
-            )
-        return result[2]
-    raise LearnedModelIncompatible(
-        f"basic_pitch.predict returned unexpected type: {type(result).__name__}"
-    )
+    if not isinstance(result, (tuple, list)):
+        raise LearnedModelIncompatible(
+            f"basic_pitch.predict returned unexpected type: "
+            f"{type(result).__name__} (expected tuple/list)"
+        )
+    if len(result) < 3:
+        raise LearnedModelIncompatible(
+            f"basic_pitch.predict returned a {len(result)}-element "
+            f"{type(result).__name__}; "
+            "expected (model_output, midi_data, note_events)"
+        )
+    note_events = result[2]
+    if not isinstance(note_events, (list, tuple)):
+        raise LearnedModelIncompatible(
+            "basic_pitch.predict note_events field has unexpected type: "
+            f"{type(note_events).__name__} (expected list/tuple)"
+        )
+    return note_events
 
 
 def _build_note_events(
