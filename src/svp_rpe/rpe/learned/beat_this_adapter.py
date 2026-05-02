@@ -22,6 +22,7 @@ from typing import Any, Iterable, Optional
 
 import numpy as np
 
+from svp_rpe.rpe.learned import LearnedModelUnavailable
 from svp_rpe.rpe.models import (
     LearnedAudioAnnotations,
     LearnedModelInfo,
@@ -32,14 +33,6 @@ __all__ = [
     "LearnedModelUnavailable",
     "extract_beat_this_annotations",
 ]
-
-
-class LearnedModelUnavailable(RuntimeError):
-    """Raised when a learned-model optional dependency is not installed.
-
-    Callers can catch this to fall back to the deterministic backend or
-    surface a structured "extra not installed" error to the user.
-    """
 
 
 _BEAT_THIS_PACKAGE = "beat_this"
