@@ -25,6 +25,11 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "ruff>=0.1", "mir_eval>=0.7"]
 separate = ["demucs>=4.0"]
+# beat_this (CPJKU) — MIT-licensed beat/downbeat detection. dbn=False is
+# enforced inside the adapter so madmom never enters the dependency tree.
+# Version range is provisional; tighten after PyPI / py3.11+ compatibility
+# verification (see docs/learned_models_policy.md).
+beat = ["beat_this"]
 
 [project.scripts]
 svprpe = "svp_rpe.cli:app"
