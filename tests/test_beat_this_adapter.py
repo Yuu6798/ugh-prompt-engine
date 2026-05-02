@@ -43,12 +43,16 @@ def _install_fake_beat_this(
     *,
     beats: list[float],
     downbeats: list[float],
+    version: str | None = None,
 ) -> dict:
     """Install a fake `beat_this.inference` module backed by FakeAudio2Beats.
 
     Mirrors beat_this >= 1.1's `Audio2Beats` entry point. Returns a dict
     that captures init kwargs and call args so tests can assert on what
     the adapter actually sent to the upstream API.
+
+    `version` (when provided) is set as `beat_this.__version__` on the fake
+    root module so the adapter's version detection has something to read.
     """
     captured: dict = {}
 
@@ -67,6 +71,8 @@ def _install_fake_beat_this(
     fake_inference.Audio2Beats = FakeAudio2Beats
     fake_root = types.ModuleType("beat_this")
     fake_root.inference = fake_inference
+    if version is not None:
+        fake_root.__version__ = version
 
     monkeypatch.setitem(sys.modules, "beat_this", fake_root)
     monkeypatch.setitem(sys.modules, "beat_this.inference", fake_inference)
@@ -255,7 +261,12 @@ class TestAdapterOutputShape:
         assert all(e.source_model == "beat_this" for e in result.time_events)
 
     def test_records_provenance(self, monkeypatch):
-        _install_fake_beat_this(monkeypatch, beats=[1.0], downbeats=[1.0])
+        _install_fake_beat_this(
+            monkeypatch,
+            beats=[1.0],
+            downbeats=[1.0],
+            version="1.1.0",
+        )
 
         from svp_rpe.rpe.learned.beat_this_adapter import extract_beat_this_annotations
 
@@ -268,6 +279,8 @@ class TestAdapterOutputShape:
         assert info.name == "beat_this"
         assert info.task == "beat_downbeat"
         assert info.license == "MIT"
+        assert info.provider == "CPJKU/beat_this"
+        assert info.version == "1.1.0"
         assert result.inference_config["dbn"] is False
         assert result.inference_config["source"] == "beat_this"
         assert result.inference_config["entry_point"] == "Audio2Beats"
@@ -285,6 +298,54 @@ class TestAdapterOutputShape:
         assert result.time_events == []
         # Provenance still set even with empty events.
         assert len(result.enabled_models) == 1
+
+
+class TestAdapterVersionDetection:
+    """Pin that LearnedModelInfo.version reflects the actually loaded package."""
+
+    def test_version_from_module_attribute(self, monkeypatch):
+        _install_fake_beat_this(
+            monkeypatch,
+            beats=[],
+            downbeats=[],
+            version="1.1.0",
+        )
+
+        from svp_rpe.rpe.learned.beat_this_adapter import extract_beat_this_annotations
+
+        result = extract_beat_this_annotations(np.zeros(1024), 22050)
+        assert result.enabled_models[0].version == "1.1.0"
+
+    def test_version_none_when_unavailable(self, monkeypatch):
+        # No __version__ on fake; importlib.metadata won't find dist-info for
+        # the fake module, so the adapter should fall through to None rather
+        # than crashing.
+        _install_fake_beat_this(monkeypatch, beats=[], downbeats=[])
+
+        from svp_rpe.rpe.learned.beat_this_adapter import extract_beat_this_annotations
+
+        result = extract_beat_this_annotations(np.zeros(1024), 22050)
+        assert result.enabled_models[0].version is None
+        # Still has the rest of the provenance — only version is missing.
+        assert result.enabled_models[0].name == "beat_this"
+        assert result.enabled_models[0].provider == "CPJKU/beat_this"
+
+    def test_version_falls_back_to_pkg_metadata(self, monkeypatch):
+        # Install a fake module without __version__ but pretend the dist
+        # metadata reports a version. Simulates an install whose top-level
+        # package doesn't surface __version__ but whose wheel records it.
+        from svp_rpe.rpe.learned import beat_this_adapter as adapter_module
+
+        _install_fake_beat_this(monkeypatch, beats=[], downbeats=[])
+
+        def fake_version(pkg: str) -> str:
+            assert pkg == "beat_this"
+            return "9.9.9-from-metadata"
+
+        monkeypatch.setattr(adapter_module._pkg_metadata, "version", fake_version)
+
+        result = adapter_module.extract_beat_this_annotations(np.zeros(1024), 22050)
+        assert result.enabled_models[0].version == "9.9.9-from-metadata"
 
 
 # ---------------------------------------------------------------------------
