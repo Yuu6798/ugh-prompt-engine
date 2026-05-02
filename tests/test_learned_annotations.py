@@ -223,6 +223,26 @@ class TestRPEBundleBackwardCompatibility:
         assert restored.learned_annotations.enabled_models[0].name == "panns_inference"
 
 
+class TestRPEBundleSerialization:
+    """Pin that the wire format stays identical for bundles without learned_annotations.
+
+    Without the omit-None serializer, every existing RPEBundle JSON dump gains
+    `"learned_annotations": null` after this PR — which would break byte-equal
+    snapshot tests and add noise to anything that diffs RPE JSON.
+    """
+
+    def test_bundle_without_learned_annotations_omits_field_in_dump(self):
+        bundle = _bundle()
+        assert "learned_annotations" not in bundle.model_dump()
+        assert "learned_annotations" not in json.loads(bundle.model_dump_json())
+
+    def test_bundle_with_learned_annotations_includes_field_in_dump(self):
+        bundle = _bundle(learned_annotations=_annotations())
+        dumped = bundle.model_dump()
+        assert "learned_annotations" in dumped
+        assert dumped["learned_annotations"]["labels"][0]["label"] == "music"
+
+
 class TestLearnedAnnotationsIsolation:
     """Pin that the existing SVP generator does not read learned_annotations.
 
@@ -255,6 +275,6 @@ class TestLearnedAnnotationsIsolation:
         sentinel = "__STYLE_LEAK__"
         bundle = _bundle(learned_annotations=_annotations(label_text=sentinel))
         svp = generate_svp(bundle)
-        assert sentinel not in svp.svp_for_generation.style_tags
-        assert sentinel not in svp.analysis_rpe.por_surface
+        assert all(sentinel not in tag for tag in svp.svp_for_generation.style_tags)
+        assert all(sentinel not in tag for tag in svp.analysis_rpe.por_surface)
         assert sentinel not in svp.svp_for_generation.prompt_text
