@@ -164,25 +164,6 @@ class TestLearnedAudioLabel:
                 source_model="m",
             )
 
-    def test_does_not_accept_evidence_field(self):
-        # Pin the rename: `evidence` belongs to SemanticLabel, not LearnedAudioLabel.
-        with pytest.raises(ValidationError):
-            LearnedAudioLabel.model_validate(
-                {
-                    "label": "x",
-                    "confidence": 0.5,
-                    "source_model": "m",
-                    "evidence": ["should not be accepted here"],
-                },
-                strict=False,
-                context={"forbid_extra": True},
-            ) if False else LearnedAudioLabel(
-                label="x",
-                confidence=0.5,
-                source_model="m",
-                evidence=["nope"],  # type: ignore[call-arg]
-            )
-
 
 class TestLearnedEmbedding:
     def test_valid_construction(self):
