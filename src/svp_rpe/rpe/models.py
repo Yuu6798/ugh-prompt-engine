@@ -267,3 +267,10 @@ class RPEBundle(BaseModel):
     audio_channels: int
     audio_format: str      # "wav" | "mp3"
     learned_annotations: Optional[LearnedAudioAnnotations] = None
+
+    @model_serializer(mode="wrap")
+    def omit_empty_learned_annotations(self, handler: Any) -> dict[str, Any]:
+        data = handler(self)
+        if self.learned_annotations is None:
+            data.pop("learned_annotations", None)
+        return data
