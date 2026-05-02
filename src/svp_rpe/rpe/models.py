@@ -183,6 +183,78 @@ class SemanticRPE(BaseModel):
         return data
 
 
+class LearnedModelInfo(BaseModel):
+    """Provenance metadata for a learned-model adapter that was actually invoked.
+
+    Attached to LearnedAudioAnnotations.enabled_models so downstream consumers
+    can audit which models contributed without reloading them.
+    """
+
+    name: str
+    version: Optional[str] = None
+    provider: Optional[str] = None
+    task: Literal["tagging", "beat_downbeat", "pitch", "embedding", "other"]
+    license: Optional[str] = None
+    weights_license: Optional[str] = None
+
+
+class LearnedAudioLabel(BaseModel):
+    """A single learned-model label with confidence and provenance.
+
+    These are model estimates, not rule-based evidence. They MUST NOT be
+    written into SemanticRPE.por_surface or any other rule-derived field.
+    See docs/learned_models_policy.md.
+    """
+
+    label: str
+    category: Literal["audioset", "mood", "genre", "instrument", "other"] = "other"
+    confidence: float
+    source_model: str
+    evidence: List[str] = Field(default_factory=list)
+
+    @field_validator("confidence")
+    @classmethod
+    def confidence_in_range(cls, v: float) -> float:
+        if not 0.0 <= v <= 1.0:
+            raise ValueError("confidence must be between 0.0 and 1.0")
+        return v
+
+
+class LearnedEmbedding(BaseModel):
+    """Vector embedding emitted by a learned model (e.g. PANNs Cnn14)."""
+
+    source_model: str
+    vector: List[float]
+    dimensions: int
+
+    @model_validator(mode="after")
+    def dimensions_match_vector(self) -> "LearnedEmbedding":
+        if self.dimensions != len(self.vector):
+            raise ValueError(
+                f"dimensions ({self.dimensions}) must match vector length ({len(self.vector)})"
+            )
+        return self
+
+
+class LearnedAudioAnnotations(BaseModel):
+    """Container for learned-model output, isolated from rule-based RPE evidence.
+
+    By design this MUST NOT be merged into PhysicalRPE / SemanticRPE.
+    Attached to RPEBundle as a sibling field. See docs/learned_models_policy.md.
+    """
+
+    schema_version: str = "1.0"
+    enabled_models: List[LearnedModelInfo] = Field(default_factory=list)
+    labels: List[LearnedAudioLabel] = Field(default_factory=list)
+    embedding: Optional[LearnedEmbedding] = None
+    inference_config: dict[str, Any] = Field(default_factory=dict)
+    license_metadata: dict[str, str] = Field(default_factory=dict)
+    estimation_disclaimer: str = (
+        "learned_annotations are model-derived estimates, "
+        "not ground-truth music quality labels"
+    )
+
+
 class RPEBundle(BaseModel):
     """Complete RPE output: physical + semantic + metadata."""
 
@@ -194,3 +266,4 @@ class RPEBundle(BaseModel):
     audio_sample_rate: int
     audio_channels: int
     audio_format: str      # "wav" | "mp3"
+    learned_annotations: Optional[LearnedAudioAnnotations] = None
