@@ -7,6 +7,10 @@
 各フェーズは Codex が独立で実装着手できる粒度に分解されている。
 Codex への引き渡しは [`AGENTS.md`](../AGENTS.md) の Task Brief フォーマットを使う。
 
+学習モデル（beat_this / panns_inference / basic-pitch 等）の採用・不採用・保留
+判断は [`learned_models_policy.md`](learned_models_policy.md) に集約されている。
+本ドキュメントの依存ライブラリ表記はそのポリシーに従う。
+
 ---
 
 ## 「目的1 完成」の定義
@@ -69,13 +73,18 @@ Codex への引き渡しは [`AGENTS.md`](../AGENTS.md) の Task Brief フォー
 
 | ID | 成果物 | 受け入れ条件 |
 |---|---|---|
-| Q2-1 | `madmom` 統合 → `downbeat_times: List[float]` を `PhysicalRPE` に追加 | 5 曲のうち 4 曲で downbeat 一致率 > 80% |
-| Q2-2 | コード進行抽出（`autochord` 推奨、軽量で依存少） → `ChordEvent` 配列 | 主要 3 コード（I/IV/V）が時刻付きで取得可能 |
+| Q2-1 | `beat_this`（`dbn=False` 固定、optional extra `beat`）統合 → `downbeat_times: List[float]` を `PhysicalRPE` に追加。未インストール時は librosa fallback。 | 5 曲のうち 4 曲で downbeat 一致率 > 80% |
+| Q2-2 | コード進行抽出 → `ChordEvent` 配列。バックエンド候補は要再評価（旧推奨の `autochord` は GPL-2.0 VAMP plugin 依存のため `learned_models_policy.md` で Hold） | 主要 3 コード（I/IV/V）が時刻付きで取得可能 |
 | Q2-3 | メロディ抽出（`pyin` 統合） → `MelodyContour`（時刻 + pitch + voicing） | ボーカル明瞭曲で ±50¢ 精度 |
 
 **完了基準**: 5 曲のうち 3 曲でコード進行が「主要 3 コード」を一致、メロディが
 pyin の voicing > 0.5 区間で ±50¢ 精度。
 **推定工数**: 5–7 日（コード進行が時間がかかる）
+
+> 旧版では Q2-1 を `madmom` で実装する想定だったが、Python 3.11+ 非互換と非商用
+> モデル license のため [`learned_models_policy.md`](learned_models_policy.md) で
+> Reject 判定。`beat_this` を採用した上で `dbn=False` 固定により madmom DBN を
+> 透過依存させない。
 
 ### Q3: 音源分離の前提化
 
@@ -131,21 +140,34 @@ per-stem BPM が full mix と一致。
 
 **Q4'（任意・将来検討）**: 学習済みモデル統合
 
+判断は [`learned_models_policy.md`](learned_models_policy.md) に集約。
+要点:
+
+- 採用方針: `beat_this` / `panns_inference` / `basic-pitch`（いずれも optional
+  extra 経由、MIT/Apache 系のみ）
+- 不採用: `Essentia` / `essentia-tensorflow`（AGPL・非商用 weights）、`madmom`、
+  `BeatNet`
+- 出力先は `RPEBundle.learned_annotations`（`LearnedAudioAnnotations`）に
+  隔離し、`SemanticRPE` / `PhysicalRPE` の evidence-bearing 層に直接混入させない
+
 | ID | 成果物 | 受け入れ条件 |
 |---|---|---|
-| Q4'-1 | 方針決定（`docs/learned_models_policy.md`） | 採用 / 見送りが明文化 |
-| Q4'-2 (採用時のみ) | Essentia 統合 → mood / danceability / aggressiveness を `SemanticRPE.descriptors` に | confidence 付きで取れる、決定論性が維持される |
+| Q4'-1 | `docs/learned_models_policy.md`（採用 / 不採用 / 保留が明文化） | ✅ 本ドキュメントとは別 PR で導入予定（PR1） |
+| Q4'-2 | `LearnedAudioAnnotations` schema + `RPEBundle.learned_annotations` 追加 | optional extras 未インストールでも既存 pipeline が green |
+| Q4'-3 | `beat_this` バックエンド spike（optional extra `beat`、`dbn=False`、librosa fallback） | fake backend test deterministic |
+| Q4'-4 | `panns_inference` バックエンド spike（optional extra `learned-tags`、top-k tags + embedding） | `SemanticRPE` への書き戻し無し |
+| Q4'-5 | `basic-pitch` バックエンド spike（optional extra `pitch`、note events 補強） | 既存 `pyin` melody contour を即置換しない |
 
-**判断ポイント**: README の「LLM 不要、API 不要、決定論」は Essentia の TF モデル
-（固定 weight で決定論）でも維持可能だが、「学習モデル不使用」という暗黙原則は
-緩むため **ユーザー判断を要する**。Q5 完了後に再評価する。（採用 / 見送り問わず）
+**判断ポイント**: README の「LLM 不要、API 不要、決定論」は前提に維持しつつ、
+学習モデル出力は **常に `LearnedAudioAnnotations` に隔離** され、ルール由来の
+evidence を汚染しない。Essentia / madmom 系の採用は本ポリシーで明示的に拒否。
 
 ### Q5: 配布・公開（既存 P3–P5 を縮約）
 
 | ID | 成果物 |
 |---|---|
 | Q5-1 | `docs/coverage.md` — 「何が測れて何が測れないか」一覧表（README からリンク） |
-| Q5-2 | `Dockerfile`（librosa + Demucs + madmom のビルド吸収） |
+| Q5-2 | `Dockerfile`（librosa + Demucs ベース。`beat_this` / その他 optional extras はビルドアーティファクト同梱可） |
 | Q5-3 | `CHANGELOG.md` |
 | Q5-4 | （任意）PyPI 公開 |
 
@@ -164,14 +186,16 @@ flowchart LR
     Q1 --> Q3[Q3 音源分離<br/>3-5d]
     Q2 --> Q3
     Q3 --> Q5[Q5 配布<br/>2-4d]
-    Q3 -.-> Q4prime[Q4' 学習モデル<br/>任意・要判断]
+    Q3 -.-> Q4prime[Q4' 学習モデル<br/>policy ベース・任意]
     Q4prime -.-> Q5
 ```
 
 - **クリティカルパス**: Q0 → Q1 → Q3 → Q5（最低 9–15 日）
 - **並列可能**: Q1 と Q2 は独立着手可（Q0 完了後）
 - **完了済**: Q4（Evidence-bearing Semantic Layer）は PR #8 で実装完了
-- **任意**: Q4'（学習モデル統合）はスキップ可。本ロードマップの完了定義に含めない
+- **任意**: Q4'（学習モデル統合）は `learned_models_policy.md` の方針に従い、
+  `LearnedAudioAnnotations` 経由で隔離的に追加。本ロードマップの完了定義には
+  含めない
 
 **合計工数**: 14–22 日（Q4 完了済を反映、Q4' を除外）
 
@@ -181,9 +205,9 @@ flowchart LR
 
 | リスク | 対策 |
 |---|---|
-| madmom がビルド困難（Cython, 古い numpy 依存） | Docker 同梱を Q5 より前倒し、または `chord-extractor` で代替検討 |
+| ~~madmom がビルド困難（Cython, 古い numpy 依存）~~ | 解消: `learned_models_policy.md` で Reject。Q2-1 は `beat_this`（`dbn=False`）で実施 |
 | Demucs が CPU で 30 秒以上 / 5 分曲 | `--separate` を opt-in に、batch 並列化は対象外 |
-| Q4'（学習モデル）の哲学トレードオフ | 完了定義から外し、Q5 後に再評価。現状 Q4 は Evidence-bearing で完了済 |
+| Q4'（学習モデル）の哲学トレードオフ | `learned_models_policy.md` で `LearnedAudioAnnotations` への隔離を強制し、ルール evidence と混在させない |
 | ジャンル別 baseline のジャンル定義が曖昧 | Q1-4 で「曲のメタデータから自動選択」ではなく「ユーザー明示指定」に倒す |
 
 ---
