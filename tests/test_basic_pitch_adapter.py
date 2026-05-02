@@ -209,6 +209,25 @@ class TestAdapterIncompatible:
         with pytest.raises(LearnedModelIncompatible, match="unexpected type"):
             extract_basic_pitch_annotations("test.wav")
 
+    def test_raises_incompatible_when_note_events_field_is_not_a_sequence(
+        self, monkeypatch
+    ):
+        # The 3-tuple is the right OUTER shape, but the third element is a
+        # string. Without the explicit type check, the adapter would iterate
+        # the string char-by-char and surface a per-character "unexpected
+        # shape" error, which points at the wrong level of the API contract.
+        _install_fake_basic_pitch(
+            monkeypatch, predict_result=({}, None, "not a list")
+        )
+
+        from svp_rpe.rpe.learned import LearnedModelIncompatible
+        from svp_rpe.rpe.learned.basic_pitch_adapter import (
+            extract_basic_pitch_annotations,
+        )
+
+        with pytest.raises(LearnedModelIncompatible, match="note_events"):
+            extract_basic_pitch_annotations("test.wav")
+
     def test_raises_incompatible_when_note_event_too_short(self, monkeypatch):
         # 3-element note event (no amplitude) — adapter requires 4+.
         _install_fake_basic_pitch(
