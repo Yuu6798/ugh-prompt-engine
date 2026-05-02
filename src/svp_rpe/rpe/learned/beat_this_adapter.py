@@ -16,7 +16,9 @@ See docs/learned_models_policy.md for the full policy.
 from __future__ import annotations
 
 import importlib
-from typing import Any, Iterable
+import importlib.metadata as _pkg_metadata
+import sys
+from typing import Any, Iterable, Optional
 
 import numpy as np
 
@@ -40,10 +42,12 @@ class LearnedModelUnavailable(RuntimeError):
     """
 
 
+_BEAT_THIS_PACKAGE = "beat_this"
 _BEAT_THIS_MODULE = "beat_this.inference"
 _MODEL_NAME = "beat_this"
 _MODEL_TASK = "beat_downbeat"
 _MODEL_LICENSE = "MIT"
+_MODEL_PROVIDER = "CPJKU/beat_this"
 
 # DBN post-processing is hard-fixed off. Enabling it would re-introduce a
 # madmom transitive dependency, which the policy rejects (Python 3.11+
@@ -61,6 +65,26 @@ def _load_beat_this_inference() -> Any:
         return importlib.import_module(_BEAT_THIS_MODULE)
     except ImportError as exc:
         raise LearnedModelUnavailable(_INSTALL_HINT) from exc
+
+
+def _detect_beat_this_version() -> Optional[str]:
+    """Best-effort detect the installed beat_this version.
+
+    Checks the imported package's `__version__` attribute first (cheap and
+    matches whatever code is actually running), then falls back to
+    `importlib.metadata` which reads dist-info from the install. Returns
+    None when neither path resolves — provenance is still emitted, just
+    without a version string.
+    """
+    root = sys.modules.get(_BEAT_THIS_PACKAGE)
+    if root is not None:
+        candidate = getattr(root, "__version__", None)
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    try:
+        return _pkg_metadata.version(_BEAT_THIS_PACKAGE)
+    except _pkg_metadata.PackageNotFoundError:
+        return None
 
 
 def extract_beat_this_annotations(
@@ -91,7 +115,12 @@ def extract_beat_this_annotations(
     module = _load_beat_this_inference()
     audio2beats = module.Audio2Beats(checkpoint_path=checkpoint, dbn=_HARD_DBN)
     beats, downbeats = audio2beats(audio, sample_rate)
-    return _build_annotations(beats, downbeats, checkpoint=checkpoint)
+    return _build_annotations(
+        beats,
+        downbeats,
+        checkpoint=checkpoint,
+        version=_detect_beat_this_version(),
+    )
 
 
 def _build_annotations(
@@ -99,6 +128,7 @@ def _build_annotations(
     downbeats: Iterable[float],
     *,
     checkpoint: str,
+    version: Optional[str],
 ) -> LearnedAudioAnnotations:
     time_events: list[LearnedTimeEvent] = []
     for t in beats:
@@ -121,6 +151,8 @@ def _build_annotations(
         enabled_models=[
             LearnedModelInfo(
                 name=_MODEL_NAME,
+                version=version,
+                provider=_MODEL_PROVIDER,
                 task=_MODEL_TASK,
                 license=_MODEL_LICENSE,
             )
