@@ -204,13 +204,19 @@ class LearnedAudioLabel(BaseModel):
     These are model estimates, not rule-based evidence. They MUST NOT be
     written into SemanticRPE.por_surface or any other rule-derived field.
     See docs/learned_models_policy.md.
+
+    `notes` is intentionally NOT named `evidence` — that name is reserved for
+    SemanticLabel.evidence, which carries rule-derived measured propositions
+    (e.g. "bpm=152 >= 140"). LearnedAudioLabel.notes holds free-form model
+    provenance hints (e.g. "top-k tag from AudioSet 527") and carries no
+    epistemic weight relative to rule-based evidence.
     """
 
     label: str
     category: Literal["audioset", "mood", "genre", "instrument", "other"] = "other"
     confidence: float
     source_model: str
-    evidence: List[str] = Field(default_factory=list)
+    notes: List[str] = Field(default_factory=list)
 
     @field_validator("confidence")
     @classmethod
