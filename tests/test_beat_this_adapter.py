@@ -2,8 +2,13 @@
 
 The real beat_this package is NOT required to run these tests. We monkeypatch
 `sys.modules["beat_this"]` and `sys.modules["beat_this.inference"]` with a fake
-backend so the adapter contract (dbn=False, time_events shape, isolation) can
-be pinned without any optional install.
+backend so the adapter contract (Audio2Beats, dbn=False, time_events shape,
+isolation) can be pinned without any optional install.
+
+The fake mirrors beat_this >= 1.1's `Audio2Beats(checkpoint_path=..., dbn=...)`
+entry point, which takes an in-memory (signal, sample_rate) pair. The
+file-path variant `File2Beats` is intentionally not used by this adapter
+and not modeled in the fake.
 """
 from __future__ import annotations
 
@@ -39,26 +44,27 @@ def _install_fake_beat_this(
     beats: list[float],
     downbeats: list[float],
 ) -> dict:
-    """Install a fake `beat_this.inference` module backed by FakeFile2Beats.
+    """Install a fake `beat_this.inference` module backed by FakeAudio2Beats.
 
-    Returns a dict that captures init kwargs and call args so tests can
-    assert on what the adapter actually sent to the upstream API.
+    Mirrors beat_this >= 1.1's `Audio2Beats` entry point. Returns a dict
+    that captures init kwargs and call args so tests can assert on what
+    the adapter actually sent to the upstream API.
     """
     captured: dict = {}
 
-    class FakeFile2Beats:
+    class FakeAudio2Beats:
         def __init__(self, **kwargs):
             captured["init_kwargs"] = dict(kwargs)
 
-        def __call__(self, audio, sample_rate):
+        def __call__(self, signal, sample_rate):
             captured["call_args"] = {
-                "audio_shape": tuple(audio.shape),
+                "signal_shape": tuple(signal.shape),
                 "sample_rate": sample_rate,
             }
             return list(beats), list(downbeats)
 
     fake_inference = types.ModuleType("beat_this.inference")
-    fake_inference.File2Beats = FakeFile2Beats
+    fake_inference.Audio2Beats = FakeAudio2Beats
     fake_root = types.ModuleType("beat_this")
     fake_root.inference = fake_inference
 
@@ -151,6 +157,48 @@ class TestAdapterUnavailable:
             )
 
 
+class TestAdapterEntryPoint:
+    def test_uses_audio2beats_not_file2beats(self, monkeypatch):
+        # Install a fake `beat_this.inference` that ONLY has Audio2Beats.
+        # If the adapter ever switches back to File2Beats, this test fails
+        # with AttributeError on the fake module.
+        captured = _install_fake_beat_this(monkeypatch, beats=[0.5], downbeats=[0.5])
+
+        from svp_rpe.rpe.learned.beat_this_adapter import extract_beat_this_annotations
+
+        signal = np.zeros(2048, dtype=np.float32)
+        extract_beat_this_annotations(signal, 22050)
+
+        # Audio2Beats was invoked with the in-memory signal + sample rate.
+        assert captured["call_args"]["signal_shape"] == (2048,)
+        assert captured["call_args"]["sample_rate"] == 22050
+
+    def test_file2beats_absence_does_not_break_adapter(self, monkeypatch):
+        # Defensive: if the upstream module ever drops File2Beats but keeps
+        # Audio2Beats, the adapter must still work.
+        captured: dict = {}
+
+        class FakeAudio2Beats:
+            def __init__(self, **kwargs):
+                captured["init_kwargs"] = kwargs
+
+            def __call__(self, signal, sample_rate):
+                return [], []
+
+        fake_inference = types.ModuleType("beat_this.inference")
+        fake_inference.Audio2Beats = FakeAudio2Beats
+        # Note: deliberately no File2Beats attribute on the fake.
+        fake_root = types.ModuleType("beat_this")
+        fake_root.inference = fake_inference
+        monkeypatch.setitem(sys.modules, "beat_this", fake_root)
+        monkeypatch.setitem(sys.modules, "beat_this.inference", fake_inference)
+
+        from svp_rpe.rpe.learned.beat_this_adapter import extract_beat_this_annotations
+
+        result = extract_beat_this_annotations(np.zeros(1024), 22050)
+        assert isinstance(result, LearnedAudioAnnotations)
+
+
 class TestAdapterDbnFalseEnforcement:
     def test_dbn_false_is_passed_to_upstream(self, monkeypatch):
         captured = _install_fake_beat_this(monkeypatch, beats=[0.5], downbeats=[0.5])
@@ -175,9 +223,7 @@ class TestAdapterDbnFalseEnforcement:
                 22050,
                 dbn=True,
             )
-        # Sanity: even after the failed call, the previously captured init
-        # kwargs (from the call earlier in this test, if any) are unaffected.
-        # And a normal call still pins dbn=False.
+        # Sanity: a normal call still pins dbn=False.
         captured.clear()
         extract_beat_this_annotations(np.zeros(1024, dtype=np.float32), 22050)
         assert captured["init_kwargs"]["dbn"] is False
@@ -224,6 +270,7 @@ class TestAdapterOutputShape:
         assert info.license == "MIT"
         assert result.inference_config["dbn"] is False
         assert result.inference_config["source"] == "beat_this"
+        assert result.inference_config["entry_point"] == "Audio2Beats"
         assert result.license_metadata["beat_this"] == "MIT"
 
     def test_empty_beats_produces_empty_events(self, monkeypatch):
