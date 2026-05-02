@@ -35,6 +35,12 @@ beat = ["beat_this"]
 # Pretrained weights are downloaded lazily by upstream on first use and
 # have their own provenance — do NOT widen this extra to bundle weights.
 learned-tags = ["panns-inference"]
+# basic-pitch (Spotify) — Apache-2.0 polyphonic note transcription. PyPI
+# distribution is "basic-pitch"; import name is "basic_pitch". The model
+# artifact is downloaded lazily by upstream on first use and has separate
+# provenance — license_metadata reflects this asymmetry; do NOT widen
+# this extra to bundle the model.
+pitch = ["basic-pitch"]
 
 [project.scripts]
 svprpe = "svp_rpe.cli:app"
