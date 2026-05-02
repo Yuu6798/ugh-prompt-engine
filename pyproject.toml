@@ -30,6 +30,11 @@ separate = ["demucs>=4.0"]
 # Version range is provisional; tighten after PyPI / py3.11+ compatibility
 # verification (see docs/learned_models_policy.md).
 beat = ["beat_this"]
+# panns_inference (qiuqiangkong) — AudioSet 527-class tagging. PyPI
+# distribution is "panns-inference"; import name is "panns_inference".
+# Pretrained weights are downloaded lazily by upstream on first use and
+# have their own provenance — do NOT widen this extra to bundle weights.
+learned-tags = ["panns-inference"]
 
 [project.scripts]
 svprpe = "svp_rpe.cli:app"
