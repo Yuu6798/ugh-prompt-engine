@@ -13,7 +13,9 @@ midi_data, note_events)` shape, where `note_events` is a list of tuples
 from __future__ import annotations
 
 import sys
+import tomllib
 import types
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -142,6 +144,15 @@ def _make_bundle() -> RPEBundle:
 # ---------------------------------------------------------------------------
 # Adapter contract tests
 # ---------------------------------------------------------------------------
+
+
+class TestOptionalDependencyMetadata:
+    def test_pitch_extra_is_limited_to_verified_python_runtime(self):
+        pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+
+        assert pyproject["project"]["optional-dependencies"]["pitch"] == [
+            "basic-pitch==0.4.0; python_version < '3.12'"
+        ]
 
 
 class TestAdapterUnavailable:
@@ -294,12 +305,28 @@ class TestAdapterOutputShape:
         ]
         assert all(n.source_model == "basic_pitch" for n in result.note_events)
 
+    def test_model_name_flows_to_note_source_model(self, monkeypatch):
+        _install_fake_basic_pitch(
+            monkeypatch,
+            note_events=[(0.0, 0.5, 60, 0.9, [])],
+        )
+
+        from svp_rpe.rpe.learned.basic_pitch_adapter import (
+            extract_basic_pitch_annotations,
+        )
+
+        result = extract_basic_pitch_annotations(
+            "song.wav",
+            model_name="basic_pitch:icassp_2022",
+        )
+
+        assert result.note_events[0].source_model == "basic_pitch:icassp_2022"
+        assert result.inference_config["model_name"] == "basic_pitch:icassp_2022"
+
     def test_predict_called_with_path_string(self, monkeypatch):
         captured = _install_fake_basic_pitch(
             monkeypatch, note_events=[(0.0, 0.5, 60, 0.9, [])]
         )
-
-        from pathlib import Path
 
         from svp_rpe.rpe.learned.basic_pitch_adapter import (
             extract_basic_pitch_annotations,

@@ -20,10 +20,9 @@ Upstream API note (basic-pitch >= 0.2):
     buffer. An in-memory variant can be added later if a use case appears.
 
 License note:
-    basic-pitch code is Apache-2.0. The model artifact is downloaded lazily
-    by upstream on first use and has its own provenance — we do NOT assert
-    a license for the artifact. `license_metadata` reflects this asymmetry
-    rather than over-claiming.
+    basic-pitch code is Apache-2.0. Upstream model artifacts have their own
+    provenance — we do NOT assert a license for the artifact.
+    `license_metadata` reflects this asymmetry rather than over-claiming.
 
 Performance note:
     `predict()` instantiates the TF / CoreML model on every call. This is
@@ -64,8 +63,11 @@ _LICENSE_NOTE = (
 )
 
 _INSTALL_HINT = (
-    "basic_pitch is not installed. Install it via the optional `pitch` extra:\n"
-    '    pip install -e ".[pitch]"'
+    "basic_pitch is not installed. Install it via the optional `pitch` extra "
+    "on Python 3.11:\n"
+    '    pip install -e ".[pitch]"\n'
+    "basic-pitch 0.4.0 is not enabled for Python >=3.12 because its "
+    "TensorFlow dependency is not compatible with that runtime."
 )
 
 
@@ -135,7 +137,7 @@ def extract_basic_pitch_annotations(
 
     result = predict_fn(str(audio_path))
     note_events_raw = _extract_note_events_field(result)
-    note_events = _build_note_events(note_events_raw, source_model=_MODEL_NAME)
+    note_events = _build_note_events(note_events_raw, source_model=model_name)
 
     return _build_annotations(
         note_events,
