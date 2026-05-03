@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from svp_rpe.rpe import extractor as extractor_module
 from svp_rpe.rpe.extractor import extract_physical, extract_physical_from_file
@@ -108,6 +109,12 @@ class TestExtractor:
         )
 
         assert bundle.audio_sample_rate == 22050
+
+    def test_extract_rpe_from_file_options_are_keyword_only(self, sine_wave_mono):
+        audio = load_audio(sine_wave_mono)
+
+        with pytest.raises(TypeError):
+            extractor_module.extract_rpe_from_file(sine_wave_mono, audio)
 
     def test_deterministic(self, sine_wave_mono):
         rpe1 = extract_physical_from_file(sine_wave_mono)
