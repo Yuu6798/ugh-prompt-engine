@@ -140,6 +140,7 @@ svprpe --help
 - [Roadmap](docs/roadmap.md) — PoC milestones (M0–M5) + Pre-prototype plan (P1–P5)
 - [Goal 1 Roadmap](docs/roadmap_goal1.md) — Quantitative observation completion plan (Q0–Q5)
 - [Code Semantic CI Design](docs/code_semantic_ci_design.md) — Code Edition v0.1 spec (3-state RPE, typed constraints, Python MVP plan)
+- [AI Music DAW Vision](docs/ai_music_daw_vision.md) — Extension track: SVP as "MIDI for AI music" standard, survivor性 framework, score-vs-performance separation, PoC (1) integration into Q0
 - [AGENTS.md](AGENTS.md) — Claude × Codex orchestration protocol (Task Brief / Completion Summary templates)
 
 ## License
