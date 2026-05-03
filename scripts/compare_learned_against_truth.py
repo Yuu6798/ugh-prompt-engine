@@ -451,12 +451,16 @@ def _merge_annotations(
     inference_config: dict[str, Any] = {}
     license_metadata: dict[str, str] = {}
 
-    for annotation in annotations:
+    for index, annotation in enumerate(annotations):
         enabled_models.extend(annotation.enabled_models)
         labels.extend(annotation.labels)
         time_events.extend(annotation.time_events)
         note_events.extend(annotation.note_events)
-        inference_config.update(annotation.inference_config)
+        model_names = [info.name for info in annotation.enabled_models]
+        if not model_names and annotation.inference_config:
+            model_names = [f"annotation_{index}"]
+        for model_name in model_names:
+            inference_config[model_name] = dict(annotation.inference_config)
         license_metadata.update(annotation.license_metadata)
 
     return LearnedAudioAnnotations(
