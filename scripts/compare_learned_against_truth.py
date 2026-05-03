@@ -7,6 +7,8 @@ compares deterministic fields (`PhysicalRPE.downbeat_times`,
 
 The script never writes learned output back into `PhysicalRPE` or `SemanticRPE`.
 Generated reports are development artifacts under `examples/learned_validation/`.
+`mean_abs_error_sec` is computed on the 0.35 s hit window, not the 70 ms
+F-measure window.
 """
 from __future__ import annotations
 
@@ -16,7 +18,7 @@ import sys
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal
 
 import mir_eval.beat
 import mir_eval.transcription
@@ -63,6 +65,8 @@ NOTE_OFFSET_RATIO = 0.2
 MIN_NOTE_DURATION_SEC = 0.1
 WIN_TIE_EPSILON = 0.01
 
+Winner = Literal["deterministic", "learned", "tie", "skipped"]
+
 
 @dataclass
 class TruthSong:
@@ -106,14 +110,14 @@ class NoteMetrics:
 class DownbeatComparison:
     deterministic: DownbeatMetrics
     learned: DownbeatMetrics
-    winner: str
+    winner: Winner
 
 
 @dataclass
 class NoteComparison:
     deterministic: NoteMetrics
     learned: NoteMetrics
-    winner: str
+    winner: Winner
 
 
 @dataclass
@@ -428,9 +432,9 @@ def _winner(
     learned_score: float,
     *,
     learned_skipped: bool,
-) -> str:
+) -> Winner:
     if learned_skipped:
-        return "deterministic"
+        return "skipped"
     diff = learned_score - deterministic_score
     if abs(diff) < WIN_TIE_EPSILON:
         return "tie"
@@ -452,8 +456,7 @@ def _merge_annotations(
         labels.extend(annotation.labels)
         time_events.extend(annotation.time_events)
         note_events.extend(annotation.note_events)
-        for info in annotation.enabled_models:
-            inference_config[info.name] = annotation.inference_config
+        inference_config.update(annotation.inference_config)
         license_metadata.update(annotation.license_metadata)
 
     return LearnedAudioAnnotations(
@@ -543,7 +546,7 @@ def evaluate_song(song: TruthSong) -> SongComparison:
 
 
 def _win_counts(results: list[SongComparison], area: str) -> dict[str, int]:
-    counts = {"deterministic": 0, "learned": 0, "tie": 0}
+    counts = {"deterministic": 0, "learned": 0, "tie": 0, "skipped": 0}
     for result in results:
         comparison = result.downbeat if area == "downbeat" else result.note
         counts[comparison.winner] += 1
