@@ -18,11 +18,13 @@ from svp_rpe.io.source_separator import (
     separate_stems as separate_audio_stems,
 )
 from svp_rpe.rpe.models import PhysicalRPE, RPEBundle, SectionMarker
+from svp_rpe.rpe.dynamics_summary import compute_dynamics_summary
 from svp_rpe.rpe.physical_features import (
     compute_active_rate,
     compute_bpm,
     compute_chord_events,
     compute_crest_factor,
+    compute_dynamic_range_db,
     compute_key,
     compute_loudness,
     compute_melody_contour,
@@ -41,13 +43,23 @@ from svp_rpe.rpe.structure_novelty import compute_novelty_curve, find_boundaries
 from svp_rpe.rpe.valley import compute_valley_depth
 
 
-def _detect_sections_v2(y: np.ndarray, sr: int) -> list[SectionMarker]:
-    """Improved section detection using multi-feature novelty."""
+def _detect_sections_v2(
+    y: np.ndarray, sr: int,
+) -> tuple[list[SectionMarker], Optional[np.ndarray]]:
+    """Improved section detection using multi-feature novelty.
+
+    Returns (sections, novelty_curve). novelty_curve is None for audio too
+    short to segment (≤5s), so callers can short-circuit aggregates that
+    depend on it.
+    """
     import librosa
 
     duration = len(y) / sr
     if duration <= 5.0:
-        return [SectionMarker(label="Full", start_sec=0.0, end_sec=round(duration, 4))]
+        return (
+            [SectionMarker(label="Full", start_sec=0.0, end_sec=round(duration, 4))],
+            None,
+        )
 
     novelty = compute_novelty_curve(y, sr)
     boundaries = find_boundaries(novelty, sr, duration)
@@ -78,7 +90,7 @@ def _detect_sections_v2(y: np.ndarray, sr: int) -> list[SectionMarker]:
     if not sections:
         sections = [SectionMarker(label="Full", start_sec=0.0, end_sec=round(duration, 4))]
 
-    return sections
+    return sections, novelty
 
 
 def _audio_from_stem(
@@ -172,12 +184,19 @@ def extract_physical(
     if audio.y_stereo is not None:
         stereo_profile = compute_stereo_profile(audio.y_stereo, sr)
 
-    # Improved structure detection
-    structure = _detect_sections_v2(y, sr)
+    # Improved structure detection (also returns the novelty curve so we can
+    # reuse it for the dynamics summary without recomputing).
+    structure, novelty = _detect_sections_v2(y, sr)
 
     # Valley depth with strategy pattern
     valley_depth, valley_diag = compute_valley_depth(
         y, sr, structure, method=valley_method,
+    )
+
+    # Track-level descriptive aggregates.
+    dynamic_range_db = compute_dynamic_range_db(y, sr)
+    dynamics_summary = (
+        compute_dynamics_summary(novelty) if novelty is not None else None
     )
 
     # Per-section features
@@ -215,6 +234,8 @@ def extract_physical(
         spectral_profile=spectral_profile,
         stereo_profile=stereo_profile,
         onset_density=onset_density,
+        dynamic_range_db=dynamic_range_db,
+        dynamics_summary=dynamics_summary,
         stem_rpe=stem_rpe,
     )
 

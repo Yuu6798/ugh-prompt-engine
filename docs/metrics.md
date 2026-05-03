@@ -9,6 +9,30 @@
 | Crest Factor | Peak-to-RMS ratio | `peak_amplitude / rms_mean` |
 | Valley Depth | Dynamic range (P90-P10 of RMS) | `P90(rms) - P10(rms)` |
 | Thickness | Sonic density composite | `w1*spectral_richness + w2*rms_norm + w3*(1-valley_norm)` |
+| Dynamic Range (dB) | Frame RMS P95/P10 ratio in dB | `20 * log10(P95(rms) / P10(rms))`, both floored at 1e-3 |
+
+`dynamic_range_db` is a lightweight cross-song descriptor of loudness
+variation. It is **not** EBU R128 LRA — proper LRA requires K-weighted
+short-term loudness with absolute and relative gating. The `_db` suffix is
+intentional to prevent confusion with LRA values.
+
+## Track-Level Dynamics Summary
+
+`PhysicalRPE.dynamics_summary` aggregates the multi-feature novelty curve
+(`compute_novelty_curve`: RMS + onset + spectral flux + chroma change) into
+five descriptive numbers suitable for cross-song comparison.
+
+| Field | Definition |
+|-------|-----------|
+| `peak_novelty` | Maximum value of the novelty curve |
+| `mean_novelty` | Mean across the curve |
+| `std_novelty` | Standard deviation across the curve |
+| `event_count` | Local maxima above `mean + 0.5*std` |
+| `temporal_balance` | First-half mean / whole-track mean. >1 = front-loaded, <1 = back-loaded, ≈1 = balanced |
+
+Returns `None` for tracks ≤5s (the novelty curve is not computed at that
+scale). The novelty curve itself is reused from the existing structure
+detection path, so the added cost is only the aggregation step.
 
 ## Spectral Metrics
 

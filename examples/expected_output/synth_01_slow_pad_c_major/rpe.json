@@ -1434,7 +1434,16 @@
       "brightness": 0.0
     },
     "stereo_profile": null,
-    "onset_density": 0.15
+    "onset_density": 0.15,
+    "dynamic_range_db": 16.27,
+    "dynamics_summary": {
+      "schema_version": "1.0",
+      "peak_novelty": 0.7506,
+      "mean_novelty": 0.0297,
+      "std_novelty": 0.0539,
+      "event_count": 9,
+      "temporal_balance": 0.957
+    }
   },
   "semantic": {
     "schema_version": "2.0",

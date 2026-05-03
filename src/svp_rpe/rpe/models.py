@@ -25,6 +25,23 @@ class StereoProfile(BaseModel):
     correlation: float     # L-R correlation [-1, 1]
 
 
+class DynamicsSummary(BaseModel):
+    """Track-level dynamics descriptor aggregated from the novelty curve.
+
+    Captures how much and where the song's energy/spectral content changes.
+    All values are derived deterministically from compute_novelty_curve output.
+    """
+
+    schema_version: str = "1.0"
+    peak_novelty: float                    # max novelty value [0, ~1]
+    mean_novelty: float                    # average novelty
+    std_novelty: float                     # variance of novelty
+    event_count: int                       # peaks above (mean + 0.5 * std)
+    # Front/back energy bias. Ratio of first-half mean novelty to whole-track
+    # mean. >1.0 = front-loaded, <1.0 = back-loaded, ≈1.0 = balanced.
+    temporal_balance: float
+
+
 class SectionMarker(BaseModel):
     """Audio segment marker."""
 
@@ -107,6 +124,10 @@ class PhysicalRPE(BaseModel):
     spectral_profile: SpectralProfile
     stereo_profile: Optional[StereoProfile] = None
     onset_density: float
+    # RMS-based dynamic range descriptor (P95/P10 frame RMS, in dB).
+    # NOT EBU R128 LRA — labelled `_db` to avoid being mistaken for it.
+    dynamic_range_db: Optional[float] = None
+    dynamics_summary: Optional[DynamicsSummary] = None
     stem_rpe: dict[str, "PhysicalRPE"] = Field(default_factory=dict)
 
     @field_validator("structure")
