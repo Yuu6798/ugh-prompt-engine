@@ -333,31 +333,6 @@ def evaluate_downbeat_times(
     )
 
 
-def _select_best_overlapping_predictions(
-    predictions: list[NoteEvent],
-    truth_notes: list[NoteEvent],
-) -> list[NoteEvent]:
-    selected: list[NoteEvent] = []
-    used_indices: set[int] = set()
-    for truth in truth_notes:
-        best_index: int | None = None
-        best_overlap = 0.0
-        for index, pred in enumerate(predictions):
-            if index in used_indices:
-                continue
-            overlap = max(
-                0.0,
-                min(truth.end_sec, pred.end_sec) - max(truth.start_sec, pred.start_sec),
-            )
-            if overlap > best_overlap:
-                best_index = index
-                best_overlap = overlap
-        if best_index is not None and best_overlap > 0.0:
-            used_indices.add(best_index)
-            selected.append(predictions[best_index])
-    return selected
-
-
 def _f_measure_transcription(
     truth_notes: list[NoteEvent],
     predicted_notes: list[NoteEvent],
@@ -521,10 +496,7 @@ def evaluate_song(song: TruthSong) -> SongComparison:
 
     truth_notes = _truth_notes_from_melody_events(song.melody_events)
     deterministic_notes = _bin_melody_contour_to_notes(bundle.physical.melody_contour)
-    learned_notes = _select_best_overlapping_predictions(
-        _learned_note_events_to_notes(learned.note_events),
-        truth_notes,
-    )
+    learned_notes = _learned_note_events_to_notes(learned.note_events)
     learned_downbeats = [
         event.time_sec
         for event in learned.time_events

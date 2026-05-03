@@ -209,7 +209,14 @@ def test_fake_learned_annotations_can_win_against_deterministic(monkeypatch):
                     pitch_midi=60,
                     confidence=0.9,
                     source_model="fake",
-                )
+                ),
+                LearnedNoteEvent(
+                    start_sec=1.3,
+                    end_sec=1.8,
+                    pitch_midi=64,
+                    confidence=0.7,
+                    source_model="fake",
+                ),
             ]
         ),
     )
@@ -220,7 +227,8 @@ def test_fake_learned_annotations_can_win_against_deterministic(monkeypatch):
     assert result.downbeat.learned.f_measure_70ms == 1.0
     assert result.downbeat.winner == "learned"
     assert result.note.deterministic.onset_pitch_f == 0.0
-    assert result.note.learned.onset_pitch_f == 1.0
+    assert result.note.learned.n_estimated == 2
+    assert result.note.learned.onset_pitch_f == 0.6667
     assert result.note.winner == "learned"
 
 
