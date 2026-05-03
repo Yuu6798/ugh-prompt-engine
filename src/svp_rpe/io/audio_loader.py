@@ -99,15 +99,18 @@ def load_audio(
         native_sr = info.samplerate
         duration_sec = info.duration
 
-        # Load mono via librosa (handles resampling)
-        y_mono, sr = librosa.load(str(p), sr=target_sr, mono=True)
-        y_mono = y_mono.astype(np.float32)
+        # Load once with mono=False, derive y_mono from y_stereo to avoid
+        # decoding + resampling the same file twice (the duplicate load was
+        # the dominant memory cost: ~170 MB/30 s for stereo input).
+        y_raw, sr = librosa.load(str(p), sr=target_sr, mono=False)
+        y_raw = y_raw.astype(np.float32, copy=False)
 
-        # Load stereo if multichannel
-        y_stereo = None
-        if channels >= 2:
-            y_raw, _ = librosa.load(str(p), sr=target_sr, mono=False)
-            y_stereo = y_raw.astype(np.float32)
+        if y_raw.ndim == 2 and y_raw.shape[0] >= 2:
+            y_stereo = y_raw
+            y_mono = np.mean(y_raw, axis=0, dtype=np.float32)
+        else:
+            y_stereo = None
+            y_mono = y_raw if y_raw.ndim == 1 else y_raw[0]
 
     except Exception as e:
         if isinstance(e, (FileNotFoundError, UnsupportedFormatError)):
