@@ -15,6 +15,7 @@ from svp_rpe.rpe.models import (
     DeltaEProfile,
     GrvAnchor,
     LearnedAudioAnnotations,
+    LearnedModelInfo,
     LearnedNoteEvent,
     LearnedTimeEvent,
     MelodyContour,
@@ -134,8 +135,8 @@ def test_unavailable_learned_models_emit_skipped_metrics(monkeypatch):
 
     assert result.downbeat.learned.skipped == "optional dependency missing"
     assert result.note.learned.skipped == "optional dependency missing"
-    assert result.downbeat.winner == "deterministic"
-    assert result.note.winner == "deterministic"
+    assert result.downbeat.winner == "skipped"
+    assert result.note.winner == "skipped"
 
 
 def test_cli_json_exits_zero_when_learned_models_are_unavailable(
@@ -174,6 +175,20 @@ def test_cli_json_exits_zero_when_learned_models_are_unavailable(
     assert payload["songs"][0]["note"]["learned"]["skipped"] == (
         "optional dependency missing"
     )
+    assert payload["songs"][0]["downbeat"]["winner"] == "skipped"
+    assert payload["songs"][0]["note"]["winner"] == "skipped"
+    assert payload["summary"]["downbeat_wins"] == {
+        "deterministic": 0,
+        "learned": 0,
+        "tie": 0,
+        "skipped": 1,
+    }
+    assert payload["summary"]["note_wins"] == {
+        "deterministic": 0,
+        "learned": 0,
+        "tie": 0,
+        "skipped": 1,
+    }
 
 
 def test_fake_learned_annotations_can_win_against_deterministic(monkeypatch):
@@ -252,3 +267,43 @@ def test_frame_level_melody_contour_is_binned_into_note_events():
         cl.NoteEvent(start_sec=0.0, end_sec=0.3, pitch_midi=60),
         cl.NoteEvent(start_sec=0.3, end_sec=0.5, pitch_midi=62),
     ]
+
+
+def test_winner_uses_tie_threshold_and_skipped_state():
+    assert cl._winner(0.5, 0.509, learned_skipped=False) == "tie"
+    assert cl._winner(0.5, 0.511, learned_skipped=False) == "learned"
+    assert cl._winner(0.5, 0.0, learned_skipped=True) == "skipped"
+
+
+def test_merge_annotations_namespaces_inference_config_by_model():
+    merged = cl._merge_annotations(
+        [
+            LearnedAudioAnnotations(
+                enabled_models=[
+                    LearnedModelInfo(name="beat_this", task="beat_downbeat")
+                ],
+                inference_config={
+                    "source": "beat_this",
+                    "entry_point": "Audio2Beats",
+                },
+            ),
+            LearnedAudioAnnotations(
+                enabled_models=[LearnedModelInfo(name="basic_pitch", task="pitch")],
+                inference_config={
+                    "source": "basic_pitch",
+                    "entry_point": "predict",
+                },
+            ),
+        ]
+    )
+
+    assert merged.inference_config == {
+        "beat_this": {
+            "source": "beat_this",
+            "entry_point": "Audio2Beats",
+        },
+        "basic_pitch": {
+            "source": "basic_pitch",
+            "entry_point": "predict",
+        },
+    }
