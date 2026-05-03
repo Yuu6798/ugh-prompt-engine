@@ -52,6 +52,12 @@ Codex への引き渡しは [`AGENTS.md`](../AGENTS.md) の Task Brief フォー
 **完了基準**: 5 曲で BPM 誤差 < 5 BPM, key 一致率 > 60%, snapshot CI green。
 **推定工数**: 2–3 日
 
+> **拡張トラック並行達成（[`ai_music_daw_vision.md`](ai_music_daw_vision.md) §9.1）**:
+> Q0-1 のサンプル選定で **survivor 候補（クラシック / 民謡 / 民族音楽の CC0 音源）
+> を含めて選ぶ** ことで、AI 音楽 DAW Vision の PoC (1)「survivor 抽出の妥当性検証」
+> を同時達成する。Q0-5 の `validation.md` に survivor 候補の抽出結果を pop と
+> 並べて記録する。追加工数はサンプル選定基準の拡張のみ。
+
 ### Q1: 測定の標準化（業界基準への引き上げ）
 
 **目的**: ad-hoc な measurement を ITU / MIR コミュニティ標準に置き換える。

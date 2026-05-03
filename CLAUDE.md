@@ -167,6 +167,7 @@ examples/                      # sample_input/ + expected_output/
 | [`docs/validation.md`](docs/validation.md) | Q0-5 baseline: 5 曲の対真値比較（BPM / key / segment）、Q0 完了基準のチェック、Coverage Matrix |
 | [`docs/coverage.md`](docs/coverage.md) | 計測可能 / 部分的 / 計測不可の三分割マトリクス、`rpe_score` / `ugher_score` の解釈ルール、validation データセット概要 |
 | [`docs/code_semantic_ci_design.md`](docs/code_semantic_ci_design.md) | Code Edition v0.1 設計仕様: 3-state RPE (Baseline/Expected/Observed)、Constraint type system (state/delta/repair)、Python MVP の P1–P5 計画 |
+| [`docs/ai_music_daw_vision.md`](docs/ai_music_daw_vision.md) | 拡張検証トラック: SVP を「AI 音楽の MIDI」標準として確立し DAW の核とする長期ビジョン、survivor 性概念、楽譜/演奏分離、PoC (1) の Q0 統合 |
 
 ## ドキュメント管理ポリシー
 
