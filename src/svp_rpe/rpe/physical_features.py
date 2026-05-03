@@ -159,6 +159,35 @@ def compute_onset_density(y: np.ndarray, sr: int) -> float:
     return round(len(onsets) / duration, 4)
 
 
+# RMS dynamic range floor: -60 dBFS guard against log(0) on near-silent frames.
+DYNAMIC_RANGE_RMS_FLOOR = 1e-3
+
+
+def compute_dynamic_range_db(y: np.ndarray, sr: int) -> Optional[float]:
+    """Frame RMS P95/P10 ratio, expressed in dB.
+
+    Lightweight descriptor of how much loudness varies across the track.
+    Larger values = more dynamic; smaller = more compressed. NOT EBU R128 LRA
+    (which requires K-weighted short-term loudness with gating); this is a
+    cheap RMS-based proxy intended for cross-song comparison.
+
+    Returns None for empty / degenerate input.
+    """
+    if y.size == 0:
+        return None
+    rms = librosa.feature.rms(y=y)[0]
+    if rms.size < 2:
+        return None
+    p95 = float(np.percentile(rms, 95))
+    p10 = float(np.percentile(rms, 10))
+    # Floor both percentiles so silent/near-silent passages do not produce
+    # absurdly large dB ratios; both clamped at the same floor preserves the
+    # invariant that a flat signal yields ~0 dB.
+    p95 = max(p95, DYNAMIC_RANGE_RMS_FLOOR)
+    p10 = max(p10, DYNAMIC_RANGE_RMS_FLOOR)
+    return round(20.0 * float(np.log10(p95 / p10)), 2)
+
+
 def compute_loudness(
     y: np.ndarray, sr: int
 ) -> tuple[Optional[float], Optional[float]]:
