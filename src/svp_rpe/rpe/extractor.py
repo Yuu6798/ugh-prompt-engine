@@ -297,9 +297,18 @@ def extract_rpe_from_file(
     include_stems: bool = False,
     separation_model: str = "htdemucs_ft",
     separation_device: str = "cpu",
+    preloaded_audio: AudioData | None = None,
 ) -> RPEBundle:
-    """Convenience: load audio file and extract full RPEBundle."""
-    audio = load_audio(path)
+    """Convenience: load audio file and extract full RPEBundle.
+
+    ``preloaded_audio`` lets callers reuse audio decoded from ``path`` when the
+    same waveform is also needed for optional learned-model adapters.
+    Callers are responsible for ensuring it was decoded from ``path``; the
+    extractor does not verify the match.
+    """
+    audio = preloaded_audio if preloaded_audio is not None else load_audio(path)
+    # Stem separation remains path-based because Demucs/fallback separation
+    # manages its own loading and output artifacts.
     stem_bundle = _maybe_separate_stems(
         path,
         include_stems=include_stems,

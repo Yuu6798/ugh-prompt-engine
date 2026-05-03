@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
+from svp_rpe.rpe import extractor as extractor_module
 from svp_rpe.rpe.extractor import extract_physical, extract_physical_from_file
 from svp_rpe.rpe.physical_features import (
     compute_active_rate,
@@ -92,6 +94,27 @@ class TestExtractor:
     def test_extract_from_file(self, sine_wave_mono):
         rpe = extract_physical_from_file(sine_wave_mono)
         assert rpe.sample_rate == 22050
+
+    def test_extract_rpe_from_file_reuses_preloaded_audio(self, monkeypatch, sine_wave_mono):
+        audio = load_audio(sine_wave_mono)
+
+        def fail_load_audio(path):
+            raise AssertionError(f"unexpected second audio load for {path}")
+
+        monkeypatch.setattr(extractor_module, "load_audio", fail_load_audio)
+
+        bundle = extractor_module.extract_rpe_from_file(
+            sine_wave_mono,
+            preloaded_audio=audio,
+        )
+
+        assert bundle.audio_sample_rate == 22050
+
+    def test_extract_rpe_from_file_options_are_keyword_only(self, sine_wave_mono):
+        audio = load_audio(sine_wave_mono)
+
+        with pytest.raises(TypeError):
+            extractor_module.extract_rpe_from_file(sine_wave_mono, audio)
 
     def test_deterministic(self, sine_wave_mono):
         rpe1 = extract_physical_from_file(sine_wave_mono)

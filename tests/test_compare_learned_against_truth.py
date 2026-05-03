@@ -119,11 +119,23 @@ def test_unavailable_learned_models_emit_skipped_metrics(monkeypatch):
         frequencies_hz=[261.6256, 261.6256, 261.6256, 261.6256],
         voicing=[1.0, 1.0, 1.0, 1.0],
     )
-    monkeypatch.setattr(cl, "extract_rpe_from_file", lambda *args, **kwargs: _make_bundle(
-        downbeats=[0.0, 1.0],
-        contour=contour,
-    ))
-    monkeypatch.setattr(cl, "load_audio", lambda *args, **kwargs: _fake_audio())
+    loaded_audio = _fake_audio()
+    load_calls = 0
+
+    def fake_load_audio(*args, **kwargs):
+        nonlocal load_calls
+        load_calls += 1
+        return loaded_audio
+
+    def fake_extract_rpe_from_file(*args, **kwargs):
+        assert kwargs["preloaded_audio"] is loaded_audio
+        return _make_bundle(
+            downbeats=[0.0, 1.0],
+            contour=contour,
+        )
+
+    monkeypatch.setattr(cl, "extract_rpe_from_file", fake_extract_rpe_from_file)
+    monkeypatch.setattr(cl, "load_audio", fake_load_audio)
 
     def raise_unavailable(*args, **kwargs):
         raise cl.LearnedModelUnavailable("optional dependency missing")
@@ -137,6 +149,7 @@ def test_unavailable_learned_models_emit_skipped_metrics(monkeypatch):
     assert result.note.learned.skipped == "optional dependency missing"
     assert result.downbeat.winner == "skipped"
     assert result.note.winner == "skipped"
+    assert load_calls == 1
 
 
 def test_cli_json_exits_zero_when_learned_models_are_unavailable(

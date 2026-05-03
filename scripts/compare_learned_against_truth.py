@@ -495,8 +495,12 @@ def _extract_learned_annotations(
 
 
 def evaluate_song(song: TruthSong) -> SongComparison:
-    bundle = extract_rpe_from_file(str(song.audio_path), valley_method=VALLEY_METHOD)
     audio = load_audio(song.audio_path)
+    bundle = extract_rpe_from_file(
+        str(song.audio_path),
+        valley_method=VALLEY_METHOD,
+        preloaded_audio=audio,
+    )
     learned_annotations, beat_skip, pitch_skip = _extract_learned_annotations(song, audio)
     bundle = attach_learned_annotations(bundle, learned_annotations)
     learned = bundle.learned_annotations or LearnedAudioAnnotations()
