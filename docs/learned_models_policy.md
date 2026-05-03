@@ -210,7 +210,27 @@ Required metadata on every learned-annotation payload:
 bundles produced before the learned layer is populated keep their
 pre-existing JSON shape (no `"learned_annotations": null` noise).
 
-## 7. Non-Goals
+## 7. Promotion Gates (deterministic → learned 置換条件)
+
+Learned output may be proposed for write-through into `PhysicalRPE` only in a
+separate promotion PR, and only after all gates below are satisfied:
+
+- **G1 (synth):** 5/5 synthetic songs show learned output beating the
+  deterministic field by at least +0.05 F-measure.
+- **G2 (synth tie-break):** learned mean absolute error is less than or equal
+  to deterministic mean absolute error, so there is no precision regression.
+- **G3 (real-audio):** a human-annotated real-audio dataset with at least 20
+  songs shows learned win-rate >= 70% or average F-measure improvement >= +0.03.
+- **G4 (license):** the model and model weights satisfy this policy's
+  permissive-license requirements.
+- **G5 (determinism):** identical input produces identical output; seeds are
+  fixed where applicable and CPU/GPU differences are measured.
+
+When only G1 and G2 are satisfied, learned output remains exposed through
+`RPEBundle.learned_annotations` only. After G3 is satisfied, a later PR may
+propose a `--prefer learned` path or explicit write-through behavior.
+
+## 8. Non-Goals
 
 - Replacing librosa beat tracking, `pyin` melody extraction, or any
   current deterministic backend in the same change set that introduces
@@ -218,7 +238,7 @@ pre-existing JSON shape (no `"learned_annotations": null` noise).
 - Using learned tags to score or gate semantic repair decisions.
 - Bundling pretrained weights inside this repository.
 
-## 8. Implementation Order
+## 9. Implementation Order
 
 The implementation is split into independent PRs so each step is small
 and reviewable:
@@ -235,8 +255,11 @@ and reviewable:
    `LearnedAudioAnnotations`. No write-through into `SemanticRPE`.
 5. **PR5 — `basic-pitch` backend spike.** Optional extra `pitch`,
    note-event output, additive next to the existing `pyin` contour.
+6. **PR6 — learned-output validation harness.** Compare `beat_this` and
+   `basic-pitch` outputs against the synthetic ground truth without writing
+   results back into `PhysicalRPE`.
 
-## 9. Acceptance Criteria
+## 10. Acceptance Criteria
 
 A change set in this track is acceptable only if all of the following
 hold:
@@ -253,7 +276,7 @@ hold:
 - This document is updated whenever the adopt / reject / hold lists
   change.
 
-## 10. Relationship To `roadmap_goal1.md`
+## 11. Relationship To `roadmap_goal1.md`
 
 - Q2-1 madmom dependency → replaced by `beat_this` (Adopt).
 - Q2-2 `autochord` recommendation → moved to Hold pending GPL VAMP

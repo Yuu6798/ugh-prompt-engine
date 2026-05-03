@@ -28,6 +28,8 @@ Thumbs.db
 # Generated output
 examples/expected_output/*
 examples/sample_input/*
+examples/learned_validation/summary.json
+examples/learned_validation/per_song/*.json
 !examples/**/.gitkeep
 
 # Claude Code local settings
