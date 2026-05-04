@@ -68,24 +68,28 @@ def _condition_key(raw_key: str) -> tuple[str, str]:
 
 def _condition_evidence(condition: Mapping[str, Any], phys: PhysicalRPE) -> Optional[list[str]]:
     """Return evidence strings when all conditions match, otherwise None."""
-    evidence: list[str] = []
-    for raw_key, expected in condition.items():
+    def matches(operator: str, actual: Any, expected: Any) -> bool:
+        if operator == ">=":
+            return isinstance(actual, (int, float)) and float(actual) >= float(expected)
+        if operator == "<=":
+            return isinstance(actual, (int, float)) and float(actual) <= float(expected)
+        if isinstance(actual, str) and isinstance(expected, str):
+            return actual.lower() == expected.lower()
+        return actual == expected
+
+    def evidence_for(raw_key: str, expected: Any) -> Optional[str]:
         feature_name, operator = _condition_key(raw_key)
         actual = _feature_value(feature_name, phys)
-        if actual is None:
+        if actual is None or not matches(operator, actual, expected):
             return None
-        if operator == ">=":
-            if not isinstance(actual, (int, float)) or float(actual) < float(expected):
-                return None
-        elif operator == "<=":
-            if not isinstance(actual, (int, float)) or float(actual) > float(expected):
-                return None
-        elif isinstance(actual, str) and isinstance(expected, str):
-            if actual.lower() != expected.lower():
-                return None
-        elif actual != expected:
+        return f"{feature_name}={_fmt(actual)} {operator} {_fmt(expected)}"
+
+    evidence: list[str] = []
+    for raw_key, expected in condition.items():
+        result = evidence_for(raw_key, expected)
+        if result is None:
             return None
-        evidence.append(f"{feature_name}={_fmt(actual)} {operator} {_fmt(expected)}")
+        evidence.append(result)
     return evidence
 
 
