@@ -143,38 +143,52 @@ class DomainProfile(ProfileModel):
         context: Mapping[str, Any],
         por_surface: Iterable[str | SemanticLabel],
     ) -> List[str]:
-        tags: List[str] = []
-        for source in self.style_tag_sources:
+        def tags_from_source(source: str) -> List[str]:
             if source == "por_surface":
-                tags.extend(_label_text(item) for item in por_surface)
-                continue
+                return [_label_text(item) for item in por_surface]
+
             value = _value_for(source, context)
             if isinstance(value, list):
-                tags.extend(str(item) for item in value)
-            elif value is not None:
-                tags.append(str(value))
+                return [str(item) for item in value]
+            if value is not None:
+                return [str(value)]
+            return []
+
+        tags: List[str] = []
+        for source in self.style_tag_sources:
+            tags.extend(tags_from_source(source))
         return _unique(tags)
 
     def format_structure_summary(self, context: Mapping[str, Any]) -> str:
+        def label_from_section(item: Any) -> Any:
+            if isinstance(item, Mapping):
+                return item.get("label") or item.get("name") or item.get("type")
+            return getattr(item, "label", item)
+
+        def labels_from_sections() -> List[str]:
+            sections = _value_for("sections", context) or _value_for("structure", context)
+            if not isinstance(sections, list):
+                return []
+            labels: List[str] = []
+            for item in sections:
+                label = label_from_section(item)
+                if label:
+                    labels.append(str(label))
+            return labels
+
+        def labels_from_section_count() -> List[str]:
+            section_count = _value_for("section_count", context)
+            if isinstance(section_count, int) and section_count > 0:
+                return self.section_label_vocab[:section_count]
+            return []
+
         existing = _value_for("structure_summary", context)
         if existing:
             return str(existing)
 
-        sections = _value_for("sections", context) or _value_for("structure", context)
-        labels: List[str] = []
-        if isinstance(sections, list):
-            for item in sections:
-                if isinstance(item, Mapping):
-                    label = item.get("label") or item.get("name") or item.get("type")
-                else:
-                    label = getattr(item, "label", item)
-                if label:
-                    labels.append(str(label))
-
+        labels = labels_from_sections()
         if not labels:
-            section_count = _value_for("section_count", context)
-            if isinstance(section_count, int) and section_count > 0:
-                labels = self.section_label_vocab[:section_count]
+            labels = labels_from_section_count()
 
         if labels:
             return f"{len(labels)} sections: {', '.join(labels)}"
