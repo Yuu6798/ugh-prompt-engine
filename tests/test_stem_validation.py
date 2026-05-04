@@ -310,3 +310,17 @@ def test_bpm_alignment_fails_when_diff_exceeds_tolerance() -> None:
     assert result.missing_stems == []
     assert result.bpm_diffs["drums"] == 10.0
     assert not result.passed
+
+
+def test_bpm_alignment_uses_raw_diff_for_tolerance_boundary() -> None:
+    physical = _minimal_physical()
+    physical.stem_rpe = {
+        stem: _minimal_physical().model_copy(update={"bpm": 120.0})
+        for stem in REQUIRED_STEMS
+    }
+    physical.stem_rpe["drums"] = _minimal_physical().model_copy(update={"bpm": 125.00004})
+
+    result = validate_stem_bpm_alignment(physical, tolerance=5.0)
+
+    assert result.bpm_diffs["drums"] == 5.0
+    assert not result.passed

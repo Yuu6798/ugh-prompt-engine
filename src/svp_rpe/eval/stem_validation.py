@@ -156,10 +156,17 @@ def _collect_stem_bpms(
     return stem_bpms
 
 
-def _stem_bpm_diff(full_bpm: float | None, stem_bpm: float | None) -> float | None:
+def _raw_stem_bpm_diff(full_bpm: float | None, stem_bpm: float | None) -> float | None:
     if full_bpm is None or stem_bpm is None:
         return None
-    return round(abs(float(stem_bpm) - float(full_bpm)), 4)
+    return abs(float(stem_bpm) - float(full_bpm))
+
+
+def _stem_bpm_diff(full_bpm: float | None, stem_bpm: float | None) -> float | None:
+    diff = _raw_stem_bpm_diff(full_bpm, stem_bpm)
+    if diff is None:
+        return None
+    return round(diff, 4)
 
 
 def _collect_bpm_diffs(
@@ -173,13 +180,17 @@ def _collect_bpm_diffs(
 
 def _bpm_alignment_passed(
     full_bpm: float | None,
-    bpm_diffs: dict[str, float | None],
+    stem_bpms: dict[str, float | None],
     missing_stems: list[str],
     tolerance: float,
 ) -> bool:
     if full_bpm is None or missing_stems:
         return False
-    return all(diff is not None and diff <= tolerance for diff in bpm_diffs.values())
+    return all(
+        (diff := _raw_stem_bpm_diff(full_bpm, stem_bpm)) is not None
+        and diff <= tolerance
+        for stem_bpm in stem_bpms.values()
+    )
 
 
 def validate_stem_bpm_alignment(
@@ -210,7 +221,7 @@ def validate_stem_bpm_alignment(
         missing_stems=missing,
         passed=_bpm_alignment_passed(
             physical.bpm,
-            bpm_diffs,
+            stem_bpms,
             missing,
             tolerance,
         ),
