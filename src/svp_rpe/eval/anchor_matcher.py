@@ -1,4 +1,4 @@
-"""eval/anchor_matcher.py — GRV anchor matching between RPE and SVP."""
+"""GRV anchor matching between RPE and SVP."""
 from __future__ import annotations
 
 from typing import List, Optional
@@ -26,46 +26,55 @@ def grv_anchor_match(
     Checks: primary match, BPM proximity, key match, duration proximity,
     and anchor term overlap.
     """
-    checks = 0
-    total = 0
+    def primary_score() -> float:
+        primary_a_l = primary_a.lower()
+        primary_b_l = primary_b.lower()
+        if primary_a_l == primary_b_l:
+            return 1.0
+        if primary_a_l in primary_b_l or primary_b_l in primary_a_l:
+            return 0.5
+        return 0.0
 
-    # Primary anchor match
-    total += 1
-    if primary_a.lower() == primary_b.lower():
-        checks += 1
-    elif primary_a.lower() in primary_b.lower() or primary_b.lower() in primary_a.lower():
-        checks += 0.5
+    def bpm_score() -> float | None:
+        if bpm_a is None or bpm_b is None:
+            return None
+        diff = abs(bpm_a - bpm_b)
+        if diff <= 10:
+            return 1.0
+        if diff <= 20:
+            return 0.5
+        return 0.0
 
-    # BPM proximity (within ±10)
-    if bpm_a is not None and bpm_b is not None:
-        total += 1
-        if abs(bpm_a - bpm_b) <= 10:
-            checks += 1
-        elif abs(bpm_a - bpm_b) <= 20:
-            checks += 0.5
+    def key_score() -> float | None:
+        if not key_a or not key_b:
+            return None
+        return 1.0 if key_a.lower() == key_b.lower() else 0.0
 
-    # Key match
-    if key_a and key_b:
-        total += 1
-        if key_a.lower() == key_b.lower():
-            checks += 1
-
-    # Duration proximity (within 10%)
-    if duration_a and duration_b and duration_a > 0:
-        total += 1
+    def duration_score() -> float | None:
+        if not duration_a or not duration_b or duration_a <= 0:
+            return None
         ratio = abs(duration_a - duration_b) / duration_a
         if ratio <= 0.1:
-            checks += 1
-        elif ratio <= 0.2:
-            checks += 0.5
+            return 1.0
+        if ratio <= 0.2:
+            return 0.5
+        return 0.0
 
-    # Anchor term overlap
-    if anchors_a and anchors_b:
-        total += 1
+    def anchor_overlap_score() -> float | None:
+        if not anchors_a or not anchors_b:
+            return None
         set_a = set(t.lower() for t in anchors_a)
         set_b = set(t.lower() for t in anchors_b)
-        if set_a and set_b:
-            overlap = len(set_a & set_b) / max(len(set_a), len(set_b))
-            checks += overlap
+        if not set_a or not set_b:
+            return 0.0
+        return len(set_a & set_b) / max(len(set_a), len(set_b))
 
-    return _clamp(checks / max(total, 1))
+    scores = [
+        primary_score(),
+        bpm_score(),
+        key_score(),
+        duration_score(),
+        anchor_overlap_score(),
+    ]
+    active_scores = [score for score in scores if score is not None]
+    return _clamp(sum(active_scores) / max(len(active_scores), 1))
