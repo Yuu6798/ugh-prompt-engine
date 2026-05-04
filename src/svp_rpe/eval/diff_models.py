@@ -6,6 +6,34 @@ from typing import Any, ClassVar, Dict, List, Optional
 from pydantic import BaseModel, Field, model_validator
 
 
+def _is_numeric_metric_value(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _derive_metric_diff(actual: Any, target: Any) -> Optional[float]:
+    if _is_numeric_metric_value(actual) and _is_numeric_metric_value(target):
+        return abs(float(actual) - float(target))
+    return None
+
+
+def _derive_metric_passed(
+    actual: Any,
+    target: Any,
+    *,
+    diff: Optional[float],
+    tolerance: Optional[float],
+) -> Optional[bool]:
+    if tolerance is not None and diff is not None:
+        return diff <= tolerance
+    if target is not None and not _both_numeric_metric_values(actual, target):
+        return actual == target
+    return None
+
+
+def _both_numeric_metric_values(actual: Any, target: Any) -> bool:
+    return _is_numeric_metric_value(actual) and _is_numeric_metric_value(target)
+
+
 class SemanticDiff(BaseModel):
     """Semantic layer difference between reference and candidate."""
 
@@ -31,21 +59,15 @@ class MetricDiff(BaseModel):
 
     @model_validator(mode="after")
     def derive_diff_and_passed(self) -> "MetricDiff":
-        actual_is_numeric = isinstance(self.actual, (int, float)) and not isinstance(
-            self.actual, bool
-        )
-        target_is_numeric = isinstance(self.target, (int, float)) and not isinstance(
-            self.target, bool
-        )
-        if self.diff is None and actual_is_numeric and target_is_numeric:
-            self.diff = abs(float(self.actual) - float(self.target))
+        if self.diff is None:
+            self.diff = _derive_metric_diff(self.actual, self.target)
         if self.passed is None:
-            if self.tolerance is not None and self.diff is not None:
-                self.passed = self.diff <= self.tolerance
-            elif self.target is not None and not (
-                actual_is_numeric and target_is_numeric
-            ):
-                self.passed = self.actual == self.target
+            self.passed = _derive_metric_passed(
+                self.actual,
+                self.target,
+                diff=self.diff,
+                tolerance=self.tolerance,
+            )
         return self
 
 

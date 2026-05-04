@@ -277,3 +277,36 @@ def test_bpm_alignment_rejects_empty_required_stems() -> None:
 
     with pytest.raises(ValueError, match="required_stems"):
         validate_stem_bpm_alignment(physical, required_stems=[])
+
+
+def test_bpm_alignment_reports_missing_stems_and_preserves_order() -> None:
+    physical = _minimal_physical()
+    physical.stem_rpe["custom"] = _minimal_physical().model_copy(update={"bpm": 120.0})
+    physical.stem_rpe["vocals"] = _minimal_physical().model_copy(update={"bpm": 122.34567})
+
+    result = validate_stem_bpm_alignment(
+        physical,
+        required_stems=["custom", "drums", "vocals"],
+    )
+
+    assert list(result.stem_bpms) == ["vocals", "drums", "custom"]
+    assert result.stem_bpms["drums"] is None
+    assert result.bpm_diffs["vocals"] == 2.3457
+    assert result.bpm_diffs["drums"] is None
+    assert result.missing_stems == ["drums"]
+    assert not result.passed
+
+
+def test_bpm_alignment_fails_when_diff_exceeds_tolerance() -> None:
+    physical = _minimal_physical()
+    physical.stem_rpe = {
+        stem: _minimal_physical().model_copy(update={"bpm": 120.0})
+        for stem in REQUIRED_STEMS
+    }
+    physical.stem_rpe["drums"] = _minimal_physical().model_copy(update={"bpm": 130.0})
+
+    result = validate_stem_bpm_alignment(physical, tolerance=5.0)
+
+    assert result.missing_stems == []
+    assert result.bpm_diffs["drums"] == 10.0
+    assert not result.passed

@@ -136,6 +136,52 @@ def validate_stem_reconstruction(
     )
 
 
+def _ordered_required_stems(required_stems: Iterable[str]) -> tuple[str, ...]:
+    required_set = set(required_stems)
+    if not required_set:
+        raise ValueError("required_stems must not be empty")
+
+    known_required = tuple(name for name in STEM_NAMES if name in required_set)
+    extra_required = tuple(sorted(required_set - set(STEM_NAMES)))
+    return known_required + extra_required
+
+
+def _collect_stem_bpms(
+    physical: PhysicalRPE, required: Iterable[str]
+) -> dict[str, float | None]:
+    stem_bpms: dict[str, float | None] = {}
+    for name in required:
+        stem_physical = physical.stem_rpe.get(name)
+        stem_bpms[name] = stem_physical.bpm if stem_physical is not None else None
+    return stem_bpms
+
+
+def _stem_bpm_diff(full_bpm: float | None, stem_bpm: float | None) -> float | None:
+    if full_bpm is None or stem_bpm is None:
+        return None
+    return round(abs(float(stem_bpm) - float(full_bpm)), 4)
+
+
+def _collect_bpm_diffs(
+    full_bpm: float | None, stem_bpms: dict[str, float | None]
+) -> dict[str, float | None]:
+    return {
+        name: _stem_bpm_diff(full_bpm, stem_bpm)
+        for name, stem_bpm in stem_bpms.items()
+    }
+
+
+def _bpm_alignment_passed(
+    full_bpm: float | None,
+    bpm_diffs: dict[str, float | None],
+    missing_stems: list[str],
+    tolerance: float,
+) -> bool:
+    if full_bpm is None or missing_stems:
+        return False
+    return all(diff is not None and diff <= tolerance for diff in bpm_diffs.values())
+
+
 def validate_stem_bpm_alignment(
     physical: PhysicalRPE,
     *,
@@ -151,33 +197,10 @@ def validate_stem_bpm_alignment(
     multi-stem Demucs variant; missing stems land in `missing_stems` and force
     `passed=False`.
     """
-    required_set = set(required_stems)
-    if not required_set:
-        raise ValueError("required_stems must not be empty")
-
-    known_required = tuple(name for name in STEM_NAMES if name in required_set)
-    extra_required = tuple(sorted(required_set - set(STEM_NAMES)))
-    required = known_required + extra_required
+    required = _ordered_required_stems(required_stems)
     missing = [name for name in required if name not in physical.stem_rpe]
-
-    stem_bpms: dict[str, float | None] = {}
-    bpm_diffs: dict[str, float | None] = {}
-    all_within_tolerance = physical.bpm is not None and not missing
-
-    for name in required:
-        stem_physical = physical.stem_rpe.get(name)
-        stem_bpm = stem_physical.bpm if stem_physical is not None else None
-        stem_bpms[name] = stem_bpm
-
-        if physical.bpm is None or stem_bpm is None:
-            bpm_diffs[name] = None
-            all_within_tolerance = False
-            continue
-
-        diff = abs(float(stem_bpm) - float(physical.bpm))
-        bpm_diffs[name] = round(diff, 4)
-        if diff > tolerance:
-            all_within_tolerance = False
+    stem_bpms = _collect_stem_bpms(physical, required)
+    bpm_diffs = _collect_bpm_diffs(physical.bpm, stem_bpms)
 
     return StemBPMAlignmentValidation(
         full_bpm=physical.bpm,
@@ -185,5 +208,10 @@ def validate_stem_bpm_alignment(
         bpm_diffs=bpm_diffs,
         tolerance=tolerance,
         missing_stems=missing,
-        passed=bool(all_within_tolerance),
+        passed=_bpm_alignment_passed(
+            physical.bpm,
+            bpm_diffs,
+            missing,
+            tolerance,
+        ),
     )
