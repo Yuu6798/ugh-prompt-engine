@@ -74,48 +74,55 @@ def find_boundaries(
     Returns list of boundary times in seconds, always starting with 0.0
     and ending with duration.
     """
+    def _smooth_curve() -> np.ndarray:
+        kernel_size = max(1, len(novelty) // 15)
+        if kernel_size <= 1:
+            return novelty
+        kernel = np.ones(kernel_size) / kernel_size
+        return np.convolve(novelty, kernel, mode="same")
+
+    def _peak_indices(smoothed: np.ndarray) -> list[int]:
+        min_frames = max(1, int(min_section_sec * sr / hop_length))
+        threshold = float(np.mean(smoothed) + 0.5 * np.std(smoothed))
+        peaks = []
+        for i in range(min_frames, len(smoothed) - min_frames):
+            if (
+                smoothed[i] > smoothed[i - 1]
+                and smoothed[i] > smoothed[i + 1]
+                and smoothed[i] > threshold
+            ):
+                peaks.append(i)
+        return peaks
+
+    def _filtered_boundaries(times: np.ndarray) -> list[float]:
+        boundaries = [0.0]
+        for t in times:
+            if (
+                t - boundaries[-1] >= min_section_sec
+                and t < duration - min_section_sec / 2
+            ):
+                boundaries.append(round(float(t), 4))
+        boundaries.append(round(duration, 4))
+        return boundaries
+
+    def _cap_boundaries(boundaries: list[float]) -> list[float]:
+        while len(boundaries) - 1 > max_sections:
+            gaps = [
+                (boundaries[i + 1] - boundaries[i], i)
+                for i in range(1, len(boundaries) - 1)
+            ]
+            if not gaps:
+                break
+            _, idx = min(gaps)
+            boundaries.pop(idx)
+        return boundaries
+
     if len(novelty) < 4:
         return [0.0, duration]
 
-    # Smooth the curve
-    kernel_size = max(1, len(novelty) // 15)
-    if kernel_size > 1:
-        kernel = np.ones(kernel_size) / kernel_size
-        smoothed = np.convolve(novelty, kernel, mode="same")
-    else:
-        smoothed = novelty
-
-    # Find peaks in novelty (section boundaries are high-novelty points)
-    min_frames = int(min_section_sec * sr / hop_length)
-    if min_frames < 1:
-        min_frames = 1
-
-    # Threshold: mean + 0.5 * std
-    threshold = float(np.mean(smoothed) + 0.5 * np.std(smoothed))
-
-    peaks = []
-    for i in range(min_frames, len(smoothed) - min_frames):
-        if (smoothed[i] > smoothed[i - 1] and smoothed[i] > smoothed[i + 1]
-                and smoothed[i] > threshold):
-            peaks.append(i)
+    smoothed = _smooth_curve()
+    peaks = _peak_indices(smoothed)
 
     # Convert to times
     times = librosa.frames_to_time(np.array(peaks), sr=sr, hop_length=hop_length)
-
-    # Filter minimum distance
-    boundaries = [0.0]
-    for t in times:
-        if t - boundaries[-1] >= min_section_sec and t < duration - min_section_sec / 2:
-            boundaries.append(round(float(t), 4))
-    boundaries.append(round(duration, 4))
-
-    # Cap at max_sections
-    while len(boundaries) - 1 > max_sections:
-        # Remove the boundary with smallest gap
-        gaps = [(boundaries[i + 1] - boundaries[i], i) for i in range(1, len(boundaries) - 1)]
-        if not gaps:
-            break
-        _, idx = min(gaps)
-        boundaries.pop(idx)
-
-    return boundaries
+    return _cap_boundaries(_filtered_boundaries(times))
