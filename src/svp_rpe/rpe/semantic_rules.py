@@ -23,33 +23,27 @@ HIGH_CONFIDENCE = 0.70
 
 def _feature_value(name: str, phys: PhysicalRPE) -> Any:
     """Return a comparable physical value by rule key."""
-    if name == "bpm":
-        return phys.bpm
-    if name == "brightness":
-        return phys.spectral_profile.brightness
-    if name == "active_rate":
-        return phys.active_rate
-    if name == "mode":
-        return phys.mode
-    if name == "spectral_centroid":
-        return phys.spectral_centroid
-    if name == "valley_depth":
-        return phys.valley_depth
-    if name == "stereo_width":
-        return phys.stereo_profile.width if phys.stereo_profile else None
-    if name == "low_ratio":
-        return phys.spectral_profile.low_ratio
-    if name == "mid_ratio":
-        return phys.spectral_profile.mid_ratio
-    if name == "high_ratio":
-        return phys.spectral_profile.high_ratio
-    if name == "crest_factor":
-        return phys.crest_factor
-    if name == "thickness":
-        return phys.thickness
-    if name == "onset_density":
-        return phys.onset_density
-    return getattr(phys, name, None)
+    getters = {
+        "bpm": lambda item: item.bpm,
+        "brightness": lambda item: item.spectral_profile.brightness,
+        "active_rate": lambda item: item.active_rate,
+        "mode": lambda item: item.mode,
+        "spectral_centroid": lambda item: item.spectral_centroid,
+        "valley_depth": lambda item: item.valley_depth,
+        "stereo_width": lambda item: item.stereo_profile.width
+        if item.stereo_profile
+        else None,
+        "low_ratio": lambda item: item.spectral_profile.low_ratio,
+        "mid_ratio": lambda item: item.spectral_profile.mid_ratio,
+        "high_ratio": lambda item: item.spectral_profile.high_ratio,
+        "crest_factor": lambda item: item.crest_factor,
+        "thickness": lambda item: item.thickness,
+        "onset_density": lambda item: item.onset_density,
+    }
+    getter = getters.get(name)
+    if getter is None:
+        return getattr(phys, name, None)
+    return getter(phys)
 
 
 def _fmt(value: Any) -> str:
