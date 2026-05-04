@@ -322,40 +322,56 @@ def _condition_evidence(
     condition: Mapping[str, Any],
     context: Mapping[str, Any],
 ) -> Optional[List[str]]:
+    def min_evidence(key: str, expected: Any) -> Optional[str]:
+        value = _value_for(key, context)
+        if not isinstance(value, (int, float)) or float(value) < float(expected):
+            return None
+        return f"{key}={_format_value(value)} >= {_format_value(expected)}"
+
+    def max_evidence(key: str, expected: Any) -> Optional[str]:
+        value = _value_for(key, context)
+        if not isinstance(value, (int, float)) or float(value) > float(expected):
+            return None
+        return f"{key}={_format_value(value)} <= {_format_value(expected)}"
+
+    def exists_evidence(key: str, expected: Any) -> Optional[str]:
+        exists = _value_for(key, context) is not None
+        if bool(expected) != exists:
+            return None
+        return f"{key}_exists={exists}"
+
+    def in_evidence(key: str, expected: Any) -> Optional[str]:
+        value = _value_for(key, context)
+        if value not in expected:
+            return None
+        return f"{key}={_format_value(value)} in {expected}"
+
+    def equality_evidence(key: str, expected: Any) -> Optional[str]:
+        value = _value_for(key, context)
+        if isinstance(value, str) and isinstance(expected, str):
+            if value.lower() != expected.lower():
+                return None
+        elif value != expected:
+            return None
+        return f"{key}={_format_value(value)} == {_format_value(expected)}"
+
+    def evaluate(raw_key: str, expected: Any) -> Optional[str]:
+        if raw_key.endswith("_min"):
+            return min_evidence(raw_key[: -len("_min")], expected)
+        if raw_key.endswith("_max"):
+            return max_evidence(raw_key[: -len("_max")], expected)
+        if raw_key.endswith("_exists"):
+            return exists_evidence(raw_key[: -len("_exists")], expected)
+        if raw_key.endswith("_in"):
+            return in_evidence(raw_key[: -len("_in")], expected)
+        return equality_evidence(raw_key, expected)
+
     evidence: List[str] = []
     for raw_key, expected in condition.items():
-        if raw_key.endswith("_min"):
-            key = raw_key[: -len("_min")]
-            value = _value_for(key, context)
-            if not isinstance(value, (int, float)) or float(value) < float(expected):
-                return None
-            evidence.append(f"{key}={_format_value(value)} >= {_format_value(expected)}")
-        elif raw_key.endswith("_max"):
-            key = raw_key[: -len("_max")]
-            value = _value_for(key, context)
-            if not isinstance(value, (int, float)) or float(value) > float(expected):
-                return None
-            evidence.append(f"{key}={_format_value(value)} <= {_format_value(expected)}")
-        elif raw_key.endswith("_exists"):
-            key = raw_key[: -len("_exists")]
-            exists = _value_for(key, context) is not None
-            if bool(expected) != exists:
-                return None
-            evidence.append(f"{key}_exists={exists}")
-        elif raw_key.endswith("_in"):
-            key = raw_key[: -len("_in")]
-            value = _value_for(key, context)
-            if value not in expected:
-                return None
-            evidence.append(f"{key}={_format_value(value)} in {expected}")
-        else:
-            value = _value_for(raw_key, context)
-            if isinstance(value, str) and isinstance(expected, str):
-                if value.lower() != expected.lower():
-                    return None
-            elif value != expected:
-                return None
-            evidence.append(f"{raw_key}={_format_value(value)} == {_format_value(expected)}")
+        result = evaluate(raw_key, expected)
+        if result is None:
+            return None
+        evidence.append(result)
     return evidence
 
 
