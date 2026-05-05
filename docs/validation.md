@@ -146,7 +146,50 @@ promotion candidates, not validation of real-world music analysis quality.
 Promotion still requires real-audio human ground truth before learned output
 can replace or write through to `PhysicalRPE`.
 
-## 8. Next Validation Work
+## 8. Real-Audio Measurement Harness
+
+**Measurement storage only; not yet real-audio accuracy validation.**
+
+Real-audio files are intentionally not committed to the repository. Use a local
+manifest to run the current deterministic pipeline over external WAV/MP3 files
+and store ignored development artifacts under
+`examples/real_audio_validation/runs/`.
+
+Manifest template:
+
+```yaml
+schema_version: "1.0"
+tracks:
+  - id: local_real_audio_example
+    path: "C:/path/to/your/audio.wav"
+    baseline: pro
+    notes: "local notes"
+```
+
+Manual command:
+
+```bash
+python scripts/measure_real_audio.py path/to/real_audio_manifest.yaml
+python scripts/measure_real_audio.py path/to/real_audio_manifest.yaml --json
+python scripts/measure_real_audio.py path/to/real_audio_manifest.yaml --learned
+python scripts/measure_real_audio.py path/to/real_audio_manifest.yaml --separate
+```
+
+For each track, the harness writes:
+
+- `rpe.json`
+- `svp.yaml`
+- `evaluation.json`
+- per-run `summary.json`
+- per-run `summary.md`
+
+The generated `rpe_score`, `ugher_score`, and `integrated_score` remain
+deterministic heuristic measurements. They must not be read as production
+music-quality truth. Real-audio validation still requires a separate
+human-annotated dataset with BPM/key/downbeat/chord/melody/section ground truth
+before accuracy claims can be made.
+
+## 9. Next Validation Work
 
 - Q1-3: fix or explicitly model the `synth_01` BPM octave error.
 - Q2 follow-up: replace downbeat fallback with a stronger tracker when the
