@@ -88,6 +88,23 @@ def _slug(value: str) -> str:
     return slug.strip("._-") or "track"
 
 
+def _track_output_dirs(tracks: list[TrackSpec]) -> dict[str, str]:
+    """Return {track_id: slug} and fail before writes if normalized IDs collide."""
+    slug_to_id: dict[str, str] = {}
+    track_dirs: dict[str, str] = {}
+    for track in tracks:
+        slug = _slug(track.track_id)
+        previous = slug_to_id.get(slug)
+        if previous is not None:
+            raise ValueError(
+                "track ids produce the same output directory "
+                f"`{slug}`: `{previous}` and `{track.track_id}`"
+            )
+        slug_to_id[slug] = track.track_id
+        track_dirs[track.track_id] = slug
+    return track_dirs
+
+
 def _resolve_audio_path(raw_path: str, manifest_path: Path) -> Path:
     path = Path(raw_path).expanduser()
     if not path.is_absolute():
@@ -266,8 +283,9 @@ def measure_tracks(
     include_learned: bool,
 ) -> list[TrackSummary]:
     summaries: list[TrackSummary] = []
+    track_dirs = _track_output_dirs(tracks)
     for track in tracks:
-        track_dir = run_dir / _slug(track.track_id)
+        track_dir = run_dir / track_dirs[track.track_id]
         try:
             outputs, summary = render_track_outputs(
                 track,
@@ -367,6 +385,7 @@ def run_manifest(
     include_learned: bool,
 ) -> dict[str, Any]:
     tracks = load_manifest(manifest_path, default_baseline=baseline)
+    _track_output_dirs(tracks)
     run_dir = output_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     summaries = measure_tracks(

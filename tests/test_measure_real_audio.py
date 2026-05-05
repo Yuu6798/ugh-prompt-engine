@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from scripts import measure_real_audio as script
 
 
@@ -118,3 +120,43 @@ def test_run_manifest_records_track_errors(
     assert report["summary"] == {"total": 1, "ok": 0, "error": 1}
     assert report["tracks"][0]["status"] == "error"
     assert "RuntimeError: decode failed" == report["tracks"][0]["error"]
+
+
+def test_run_manifest_rejects_colliding_output_slugs(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    audio_path = tmp_path / "track.wav"
+    audio_path.write_bytes(b"not decoded in this test")
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        """
+schema_version: "1.0"
+tracks:
+  - id: "song/a"
+    path: "track.wav"
+  - id: "song a"
+    path: "track.wav"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    def fail_if_called(_track: script.TrackSpec, **_kwargs):
+        raise AssertionError("renderer must not run when output slugs collide")
+
+    monkeypatch.setattr(script, "render_track_outputs", fail_if_called)
+
+    with pytest.raises(ValueError, match="same output directory `song_a`"):
+        script.run_manifest(
+            manifest,
+            output_dir=tmp_path / "runs",
+            run_id="fixed-run",
+            valley_method="hybrid",
+            baseline="pro",
+            include_stems=False,
+            separation_model="fake",
+            separation_device="cpu",
+            include_learned=False,
+        )
+
+    assert not (tmp_path / "runs" / "fixed-run").exists()
