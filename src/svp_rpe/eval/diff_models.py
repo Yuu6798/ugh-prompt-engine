@@ -97,34 +97,42 @@ class PhysicalDiff(BaseModel):
         "spectral_centroid_diff",
     )
 
+    def _legacy_metric_fields(self) -> tuple[str, ...]:
+        fields_set = set(self.LEGACY_METRIC_FIELDS) & self.model_fields_set
+        return tuple(
+            field_name
+            for field_name in self.LEGACY_METRIC_FIELDS
+            if field_name in fields_set
+        )
+
+    def _legacy_metric(self, field_name: str) -> Optional[MetricDiff]:
+        value = getattr(self, field_name)
+        if field_name == "bpm_diff" and value is None:
+            return None
+        if field_name.endswith("_match"):
+            return MetricDiff(
+                name=field_name,
+                actual=value,
+                target=True,
+                passed=bool(value),
+            )
+
+        signed = float(value)
+        return MetricDiff(
+            name=field_name,
+            actual=signed,
+            target=0.0,
+            diff=abs(signed),
+        )
+
     @model_validator(mode="after")
     def populate_generic_metrics(self) -> "PhysicalDiff":
         if self.metrics:
             return self
-        legacy_fields_set = set(self.LEGACY_METRIC_FIELDS) & self.model_fields_set
-        if not legacy_fields_set:
-            return self
-        for field_name in self.LEGACY_METRIC_FIELDS:
-            if field_name not in legacy_fields_set:
-                continue
-            value = getattr(self, field_name)
-            if field_name == "bpm_diff" and value is None:
-                continue
-            if field_name.endswith("_match"):
-                self.metrics[field_name] = MetricDiff(
-                    name=field_name,
-                    actual=value,
-                    target=True,
-                    passed=bool(value),
-                )
-            else:
-                signed = float(value)
-                self.metrics[field_name] = MetricDiff(
-                    name=field_name,
-                    actual=signed,
-                    target=0.0,
-                    diff=abs(signed),
-                )
+        for field_name in self._legacy_metric_fields():
+            metric = self._legacy_metric(field_name)
+            if metric is not None:
+                self.metrics[field_name] = metric
         return self
 
     def metric(self, name: str) -> Optional[MetricDiff]:

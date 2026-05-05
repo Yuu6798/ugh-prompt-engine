@@ -303,6 +303,20 @@ class TestComparison:
         assert any("valley" in h.lower() or "Bridge" in h for h in hints)
         assert any("bpm" in h.lower() or "key" in h.lower() for h in hints)
 
+    def test_action_hints_falls_back_when_diffs_are_small(self):
+        sem = SemanticDiff(
+            por_lexical_similarity=0.9,
+            grv_anchor_match=0.9,
+            delta_e_profile_alignment=0.9,
+            instrumentation_context_alignment=0.9,
+            overall=0.9,
+        )
+        phys = PhysicalDiff(key_match=True, overall=1.0)
+
+        hints = generate_action_hints(sem, phys)
+
+        assert hints == ["大きな差分なし — 現状維持または微調整"]
+
 
 # ---------------------------------------------------------------------------
 # Extractor v2 integration tests

@@ -6,7 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from svp_rpe.eval.comparison import compare_metric_values
-from svp_rpe.eval.diff_models import PhysicalDiff
+from svp_rpe.eval.diff_models import MetricDiff, PhysicalDiff
 from svp_rpe.rpe.models import (
     DeltaEProfile,
     GrvAnchor,
@@ -250,6 +250,27 @@ def test_physical_diff_keeps_legacy_fields_and_generic_metrics() -> None:
     assert generic.domain == "video"
     assert generic.metric("shot_rhythm").passed is True
     assert generic.metric("brightness").passed is True
+
+
+def test_physical_diff_keeps_explicit_metrics_without_legacy_backfill() -> None:
+    explicit = MetricDiff(name="brightness", actual=0.7, target=0.62, tolerance=0.1)
+
+    diff = PhysicalDiff(
+        bpm_diff=8.0,
+        key_match=True,
+        metrics={"brightness": explicit},
+    )
+
+    assert diff.metric("brightness") == explicit
+    assert diff.metric("bpm_diff") is None
+    assert diff.metric("key_match") is None
+
+
+def test_physical_diff_skips_none_bpm_legacy_metric() -> None:
+    diff = PhysicalDiff(bpm_diff=None, key_match=True)
+
+    assert diff.metric("bpm_diff") is None
+    assert diff.metric("key_match") is not None
 
 
 def test_numeric_metric_without_tolerance_uses_distance_score() -> None:
