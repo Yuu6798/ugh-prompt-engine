@@ -36,6 +36,16 @@ class TestLoadAudio:
         data = load_audio(sine_wave_mono)
         assert data.metadata.duration_sec > 0
 
+    def test_load_resamples_to_target_sr(self, sine_wave_mono):
+        data = load_audio(sine_wave_mono, target_sr=11025)
+        assert data.sr == 11025
+        assert data.metadata.sample_rate == 11025
+
+    def test_load_keeps_native_sr_when_target_sr_is_none(self, sine_wave_mono):
+        data = load_audio(sine_wave_mono, target_sr=None)
+        assert data.sr == 22050
+        assert data.metadata.sample_rate == 22050
+
     def test_file_not_found(self, tmp_path):
         with pytest.raises(FileNotFoundError):
             load_audio(tmp_path / "nonexistent.wav")
