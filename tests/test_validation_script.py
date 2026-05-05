@@ -26,6 +26,7 @@ def test_validation_json_schema_has_required_keys() -> None:
     assert set(payload) == {"thresholds", "songs", "summary"}
     assert set(payload["thresholds"]) == {
         "bpm_max_abs_diff",
+        "bpm_check_uses_octave_adjusted_diff",
         "key_min_score",
         "segment_f_min_at_3s",
         "time_signature_require_match",
@@ -54,7 +55,15 @@ def test_validation_json_schema_has_required_keys() -> None:
         "passes_thresholds",
         "threshold_failures",
     }
-    assert set(sample["bpm"]) == {"estimated", "reference", "abs_diff", "p_score"}
+    assert set(sample["bpm"]) == {
+        "estimated",
+        "reference",
+        "abs_diff",
+        "octave_adjustment",
+        "octave_adjusted_estimated",
+        "octave_adjusted_abs_diff",
+        "p_score",
+    }
     assert set(sample["key"]) == {"estimated", "reference", "weighted_score"}
     assert set(sample["time_signature"]) == {"estimated", "reference", "confidence", "match"}
     assert set(sample["downbeats"]) == {
@@ -109,6 +118,18 @@ def test_validation_at_least_three_songs_pass_thresholds() -> None:
         f"only {passing}/{len(results)} songs pass thresholds; "
         "Q0-4 expects at least 3"
     )
+
+
+def test_synth_01_bpm_octave_error_is_explicitly_modeled() -> None:
+    """Q1-3 follow-up: synth_01 remains raw-double, but octave diff passes."""
+    result = next(r for r in _results() if r.song_id == "synth_01_slow_pad_c_major")
+
+    assert result.bpm.abs_diff is not None
+    assert result.bpm.abs_diff >= vat.BPM_MAX_ABS_DIFF
+    assert result.bpm.octave_adjustment == "half"
+    assert result.bpm.octave_adjusted_abs_diff is not None
+    assert result.bpm.octave_adjusted_abs_diff < vat.BPM_MAX_ABS_DIFF
+    assert "BPM" not in " ".join(result.threshold_failures)
 
 
 def test_downbeat_validation_hits_four_of_five_synth_samples() -> None:

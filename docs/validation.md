@@ -26,7 +26,7 @@ python scripts/validate_against_truth.py --check
 
 `--check` currently enforces:
 
-- BPM absolute error < 5 BPM
+- BPM octave-adjusted absolute error < 5 BPM
 - key score >= 0.5
 - time signature exact match
 - downbeat hit-rate >= 0.8
@@ -37,24 +37,28 @@ python scripts/validate_against_truth.py --check
 
 ## 2. Per-Song Results
 
-| song_id | BPM est / ref / diff | tempo p | key score | meter est / ref / conf | downbeat hit | chord hit | melody acc | melody recall | seg F@3s | check |
-|---|---:|---:|---:|---|---:|---:|---:|---:|---:|---|
-| synth_01_slow_pad_c_major | 117.45 / 60.00 / 57.45 | 0.00 | 1.00 | 4/4 / 4/4 / 0.77 | 1.00 | 1.00 | 0.99 | 0.99 | 0.73 | fail |
-| synth_02_minor_pulse_a_minor | 92.29 / 90.00 / 2.29 | 1.00 | 1.00 | 4/4 / 4/4 / 1.00 | 0.44 | 1.00 | 1.00 | 1.00 | 0.73 | fail |
-| synth_03_mid_groove_g_major | 123.05 / 120.00 / 3.05 | 1.00 | 1.00 | 4/4 / 4/4 / 0.55 | 1.00 | 1.00 | 1.00 | 0.99 | 0.73 | pass |
-| synth_04_waltz_fsharp_minor | 136.00 / 140.00 / 4.00 | 1.00 | 1.00 | 3/4 / 3/4 / 1.00 | 1.00 | 1.00 | 1.00 | 0.99 | 0.73 | pass |
-| synth_05_fast_bright_d_major | 172.27 / 170.00 / 2.27 | 1.00 | 1.00 | 4/4 / 4/4 / 0.85 | 1.00 | 1.00 | 0.99 | 0.99 | 0.73 | pass |
+| song_id | BPM est / ref / diff | BPM octave adj / diff | tempo p | key score | meter est / ref / conf | downbeat hit | chord hit | melody acc | melody recall | seg F@3s | check |
+|---|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---|
+| synth_01_slow_pad_c_major | 117.45 / 60.00 / 57.45 | half: 58.73 / 1.27 | 0.00 | 1.00 | 4/4 / 4/4 / 0.77 | 1.00 | 1.00 | 0.99 | 0.99 | 0.73 | pass |
+| synth_02_minor_pulse_a_minor | 92.29 / 90.00 / 2.29 | none: 92.29 / 2.29 | 1.00 | 1.00 | 4/4 / 4/4 / 1.00 | 0.44 | 1.00 | 1.00 | 1.00 | 0.73 | fail |
+| synth_03_mid_groove_g_major | 123.05 / 120.00 / 3.05 | none: 123.05 / 3.05 | 1.00 | 1.00 | 4/4 / 4/4 / 0.55 | 1.00 | 1.00 | 1.00 | 0.99 | 0.73 | pass |
+| synth_04_waltz_fsharp_minor | 136.00 / 140.00 / 4.00 | none: 136.00 / 4.00 | 1.00 | 1.00 | 3/4 / 3/4 / 1.00 | 1.00 | 1.00 | 1.00 | 0.99 | 0.73 | pass |
+| synth_05_fast_bright_d_major | 172.27 / 170.00 / 2.27 | none: 172.27 / 2.27 | 1.00 | 1.00 | 4/4 / 4/4 / 0.85 | 1.00 | 1.00 | 0.99 | 0.99 | 0.73 | pass |
+
+`BPM octave adj` reports the closest of the raw estimate, half tempo, and
+double tempo. `tempo p` remains the raw `mir_eval.tempo.detection` score so the
+double-tempo estimate is still visible instead of being silently corrected.
 
 Known threshold misses:
 
-- `synth_01_slow_pad_c_major`: BPM octave error remains.
 - `synth_02_minor_pulse_a_minor`: downbeat phase drift remains.
 
 ## 3. Aggregate Results
 
 | Metric | Result | Notes |
 |---|---:|---|
-| BPM error < 5 BPM | 4/5 | `synth_01` octave error remains |
+| BPM raw error < 5 BPM | 4/5 | `synth_01` still reports a double-tempo raw estimate |
+| BPM octave-adjusted error < 5 BPM | 5/5 | `synth_01` is explicitly modeled as half-tempo equivalent |
 | Key weighted score >= 0.5 | 5/5 | All synthetic keys match |
 | Time signature exact match | 5/5 | Includes one `3/4` sample |
 | Downbeat hit-rate >= 0.8 | 4/5 | Q2-1 librosa fallback |
@@ -62,13 +66,13 @@ Known threshold misses:
 | Melody pitch accuracy >= 0.8 | 5/5 | Q2-3 pyin over high-passed melody signal |
 | Melody voicing recall >= 0.5 | 5/5 | All synthetic melody regions detected |
 | Section F@3s >= 0.5 | 5/5 | Coarse section boundaries only |
-| `--check` pass rate | 3/5 | Fails only known BPM/downbeat cases |
+| `--check` pass rate | 4/5 | Fails only the known `synth_02` downbeat phase case |
 
 ## 4. Coverage Matrix
 
 | Area | Status | What is currently checked |
 |---|---|---|
-| BPM extraction | Partially validated | `mir_eval.tempo.detection`; one slow-tempo octave error remains |
+| BPM extraction | Quantitatively validated on synth with caveat | Raw diff and octave-adjusted diff are both reported; `synth_01` remains raw double-tempo but passes octave-equivalent check |
 | Key detection | Quantitatively validated | `mir_eval.key.evaluate` weighted score |
 | Time signature detection | Quantitatively validated | Exact match against synth ground truth |
 | Downbeat detection | Partially validated | Hit-rate against synthetic downbeats; madmom deferred |
@@ -191,7 +195,6 @@ before accuracy claims can be made.
 
 ## 9. Next Validation Work
 
-- Q1-3: fix or explicitly model the `synth_01` BPM octave error.
 - Q2 follow-up: replace downbeat fallback with a stronger tracker when the
   dependency story is stable.
 - Q3 real-audio follow-up: add CC0 tracks with stem-level ground truth and

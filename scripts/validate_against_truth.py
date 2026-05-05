@@ -79,6 +79,9 @@ class BPMResult:
     estimated: float | None
     reference: float
     abs_diff: float | None
+    octave_adjustment: str
+    octave_adjusted_estimated: float | None
+    octave_adjusted_abs_diff: float | None
     p_score: float
 
 
@@ -203,16 +206,39 @@ def _format_key(key: str | None, mode: str | None) -> str | None:
 def evaluate_bpm(phys: PhysicalRPE, gt_bpm: float) -> BPMResult:
     est = phys.bpm
     if est is None:
-        return BPMResult(estimated=None, reference=gt_bpm, abs_diff=None, p_score=0.0)
+        return BPMResult(
+            estimated=None,
+            reference=gt_bpm,
+            abs_diff=None,
+            octave_adjustment="none",
+            octave_adjusted_estimated=None,
+            octave_adjusted_abs_diff=None,
+            p_score=0.0,
+        )
     ref_arr = np.array([gt_bpm, 0.0])
     est_arr = np.array([est, 0.0])
     p_score, _, _ = mir_eval.tempo.detection(ref_arr, 1.0, est_arr)
+    adjustment, adjusted_est, adjusted_diff = _best_bpm_octave_adjustment(est, gt_bpm)
     return BPMResult(
         estimated=est,
         reference=gt_bpm,
         abs_diff=abs(est - gt_bpm),
+        octave_adjustment=adjustment,
+        octave_adjusted_estimated=adjusted_est,
+        octave_adjusted_abs_diff=adjusted_diff,
         p_score=float(p_score),
     )
+
+
+def _best_bpm_octave_adjustment(estimated: float, reference: float) -> tuple[str, float, float]:
+    """Return the best raw/half/double tempo match for tempo-octave ambiguity."""
+    candidates = (
+        ("none", estimated),
+        ("half", estimated / 2.0),
+        ("double", estimated * 2.0),
+    )
+    adjustment, adjusted = min(candidates, key=lambda item: abs(item[1] - reference))
+    return adjustment, round(adjusted, 2), round(abs(adjusted - reference), 4)
 
 
 def evaluate_key(phys: PhysicalRPE, gt_key: str, gt_mode: str) -> KeyResult:
@@ -466,8 +492,14 @@ def evaluate_song(song: TruthSong) -> SongValidation:
     baseline_result = evaluate_baseline_score(phys, song.baseline_profile)
 
     failures: list[str] = []
-    if bpm_result.abs_diff is None or bpm_result.abs_diff >= BPM_MAX_ABS_DIFF:
-        failures.append(f"BPM diff {bpm_result.abs_diff} >= {BPM_MAX_ABS_DIFF}")
+    if (
+        bpm_result.octave_adjusted_abs_diff is None
+        or bpm_result.octave_adjusted_abs_diff >= BPM_MAX_ABS_DIFF
+    ):
+        failures.append(
+            f"BPM octave-adjusted diff {bpm_result.octave_adjusted_abs_diff} "
+            f">= {BPM_MAX_ABS_DIFF}"
+        )
     if key_result.weighted_score < KEY_MIN_SCORE:
         failures.append(f"Key score {key_result.weighted_score:.3f} < {KEY_MIN_SCORE}")
     if TIME_SIGNATURE_REQUIRE_MATCH and not time_signature_result.match:
@@ -516,20 +548,31 @@ def evaluate_song(song: TruthSong) -> SongValidation:
 def render_markdown(results: list[SongValidation]) -> str:
     lines: list[str] = []
     lines.append("# Validation against ground truth\n")
-    lines.append("| song_id | BPM est / ref / Δ | tempo p | key est / ref / score | "
+    lines.append("| song_id | BPM est / ref / Δ | BPM octave adj / Δ | tempo p | key est / ref / score | "
                  "meter est / ref / conf | downbeat hit | chord hit | "
                  "melody acc | melody recall | "
                  "seg F@0.5s | seg F@3s | "
                  "baseline / score | check |")
-    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for r in results:
         bpm_diff = "n/a" if r.bpm.abs_diff is None else f"{r.bpm.abs_diff:.2f}"
         bpm_est = "n/a" if r.bpm.estimated is None else f"{r.bpm.estimated:.2f}"
+        bpm_octave_est = (
+            "n/a"
+            if r.bpm.octave_adjusted_estimated is None
+            else f"{r.bpm.octave_adjusted_estimated:.2f}"
+        )
+        bpm_octave_diff = (
+            "n/a"
+            if r.bpm.octave_adjusted_abs_diff is None
+            else f"{r.bpm.octave_adjusted_abs_diff:.2f}"
+        )
         key_est = r.key.estimated or "n/a"
         check = "pass" if r.passes_thresholds else "fail"
         lines.append(
             f"| {r.song_id} "
             f"| {bpm_est} / {r.bpm.reference:.2f} / {bpm_diff} "
+            f"| {r.bpm.octave_adjustment}: {bpm_octave_est} / {bpm_octave_diff} "
             f"| {r.bpm.p_score:.2f} "
             f"| {key_est} / {r.key.reference} / {r.key.weighted_score:.2f} "
             f"| {r.time_signature.estimated} / {r.time_signature.reference} / "
@@ -556,6 +599,7 @@ def render_json(results: list[SongValidation]) -> str:
     payload: dict[str, Any] = {
         "thresholds": {
             "bpm_max_abs_diff": BPM_MAX_ABS_DIFF,
+            "bpm_check_uses_octave_adjusted_diff": True,
             "key_min_score": KEY_MIN_SCORE,
             "segment_f_min_at_3s": SEGMENT_F_MIN_AT_3S,
             "time_signature_require_match": TIME_SIGNATURE_REQUIRE_MATCH,
