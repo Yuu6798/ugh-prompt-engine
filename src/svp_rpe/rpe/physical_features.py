@@ -188,6 +188,51 @@ def compute_dynamic_range_db(y: np.ndarray, sr: int) -> Optional[float]:
     return round(20.0 * float(np.log10(p95 / p10)), 2)
 
 
+def _prepare_loudness_signal(y: np.ndarray) -> tuple[np.ndarray, int] | None:
+    if y.size == 0:
+        return None
+    if y.ndim == 1:
+        return y, y.shape[0]
+    if y.ndim == 2:
+        # Codebase uses channel-first (channels, samples); pyloudnorm wants
+        # samples-first (samples, channels).
+        signal = y.T
+        return signal, signal.shape[0]
+    return None
+
+
+def _has_min_loudness_duration(n_samples: int, sr: int) -> bool:
+    # pyloudnorm requires at least 0.4 s of audio for the gating block size.
+    return n_samples / sr >= 0.4
+
+
+def _integrated_loudness_lufs(signal: np.ndarray, sr: int) -> Optional[float]:
+    try:
+        meter = pyln.Meter(sr)
+        lufs = float(meter.integrated_loudness(signal))
+    except (ValueError, ZeroDivisionError):
+        return None
+    # Digital silence yields -inf; drop to None to avoid serialising inf.
+    if not np.isfinite(lufs):
+        return None
+    return round(lufs, 2)
+
+
+def _true_peak_dbfs(signal: np.ndarray) -> Optional[float]:
+    # True peak via 4x oversampling per ITU-R BS.1770-4 simplified path.
+    peak_abs = float(np.max(np.abs(signal)))
+    if peak_abs <= 0.0:
+        return None
+    try:
+        upsampled = scipy_signal.resample_poly(signal, 4, 1, axis=0)
+        true_peak_lin = float(np.max(np.abs(upsampled)))
+    except ValueError:
+        true_peak_lin = peak_abs
+    if true_peak_lin <= 0.0:
+        return None
+    return round(20.0 * float(np.log10(true_peak_lin)), 2)
+
+
 def compute_loudness(
     y: np.ndarray, sr: int
 ) -> tuple[Optional[float], Optional[float]]:
@@ -201,49 +246,20 @@ def compute_loudness(
     Returns (None, None) when pyloudnorm is unavailable, the audio is shorter
     than the minimum gating block length, or the signal is digital silence.
     """
-    if not _HAS_PYLOUDNORM or y.size == 0:
+    if not _HAS_PYLOUDNORM:
         return (None, None)
 
-    if y.ndim == 1:
-        signal = y
-        n_samples = signal.shape[0]
-    elif y.ndim == 2:
-        # Codebase uses channel-first (channels, samples); pyloudnorm wants
-        # samples-first (samples, channels).
-        signal = y.T
-        n_samples = signal.shape[0]
-    else:
+    prepared = _prepare_loudness_signal(y)
+    if prepared is None:
         return (None, None)
 
-    # pyloudnorm requires at least 0.4 s of audio for the gating block size.
-    if n_samples / sr < 0.4:
+    signal, n_samples = prepared
+    if not _has_min_loudness_duration(n_samples, sr):
         return (None, None)
 
-    try:
-        meter = pyln.Meter(sr)
-        lufs = float(meter.integrated_loudness(signal))
-    except (ValueError, ZeroDivisionError):
-        lufs = None
-    else:
-        # Digital silence yields -inf; drop to None to avoid serialising inf.
-        if not np.isfinite(lufs):
-            lufs = None
-        else:
-            lufs = round(lufs, 2)
-
-    # True peak via 4x oversampling per ITU-R BS.1770-4 simplified path.
-    peak_abs = float(np.max(np.abs(signal)))
-    if peak_abs <= 0.0:
-        return (lufs, None)
-    try:
-        upsampled = scipy_signal.resample_poly(signal, 4, 1, axis=0)
-        true_peak_lin = float(np.max(np.abs(upsampled)))
-    except ValueError:
-        true_peak_lin = peak_abs
-    if true_peak_lin <= 0.0:
-        return (lufs, None)
-    true_peak_dbfs = round(20.0 * float(np.log10(true_peak_lin)), 2)
-    return (lufs, true_peak_dbfs)
+    lufs = _integrated_loudness_lufs(signal, sr)
+    true_peak = _true_peak_dbfs(signal)
+    return (lufs, true_peak)
 
 
 # BPM confidence calibration (Q1-3).
