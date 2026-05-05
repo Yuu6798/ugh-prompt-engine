@@ -548,27 +548,24 @@ def _classify_chroma_frame(
     return f"{root} {quality}", root, quality, confidence
 
 
-def compute_chord_events(y: np.ndarray, sr: int) -> list[ChordEvent]:
-    """Estimate time-bounded major/minor chord events from chroma templates.
-
-    This is the lightweight Q2-2 baseline: deterministic, dependency-free, and
-    deliberately limited to major/minor triads. It is intended to recover the
-    main I/IV/V-style harmonic blocks in the synthetic validation set, not to
-    be a production chord recognizer.
-    """
+def _compute_chord_chroma(y: np.ndarray, sr: int) -> Optional[np.ndarray]:
     if y.size == 0:
-        return []
+        return None
     if float(np.max(np.abs(y))) <= 1e-8:
-        return []
-
+        return None
     try:
         chroma = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=CHORD_HOP_LENGTH)
     except (ValueError, ParameterError):
-        return []
+        return None
     if chroma.size == 0 or chroma.shape[1] == 0:
-        return []
+        return None
+    return chroma
 
-    templates = _chord_templates()
+
+def _classify_chroma_frames(
+    chroma: np.ndarray,
+    templates: list[tuple[str, str, np.ndarray]],
+) -> tuple[list[str], list[str], list[str], list[float]]:
     labels: list[str] = []
     roots: list[str] = []
     qualities: list[str] = []
@@ -581,38 +578,96 @@ def compute_chord_events(y: np.ndarray, sr: int) -> list[ChordEvent]:
         roots.append(root)
         qualities.append(quality)
         confidences.append(confidence)
+    return labels, roots, qualities, confidences
 
+
+def _chord_frame_times(frame_count: int, *, duration: float, sr: int) -> np.ndarray:
     frame_times = librosa.frames_to_time(
-        np.arange(chroma.shape[1] + 1),
+        np.arange(frame_count + 1),
         sr=sr,
         hop_length=CHORD_HOP_LENGTH,
     )
-    duration = len(y) / sr
     frame_times[-1] = min(float(frame_times[-1]), duration)
+    return frame_times
 
+
+def _build_chord_event(
+    *,
+    start_index: int,
+    end_index: int,
+    labels: list[str],
+    roots: list[str],
+    qualities: list[str],
+    confidences: list[float],
+    frame_times: np.ndarray,
+) -> ChordEvent | None:
+    start_sec = float(frame_times[start_index])
+    end_sec = float(frame_times[end_index])
+    if end_sec - start_sec < CHORD_MIN_DURATION_SEC:
+        return None
+    confidence = float(np.mean(confidences[start_index:end_index]))
+    return ChordEvent(
+        chord=labels[start_index],
+        root=roots[start_index],
+        quality=qualities[start_index],
+        start_sec=round(start_sec, 4),
+        end_sec=round(end_sec, 4),
+        confidence=round(_clamp(confidence), 4),
+    )
+
+
+def _merge_chord_frames(
+    *,
+    labels: list[str],
+    roots: list[str],
+    qualities: list[str],
+    confidences: list[float],
+    frame_times: np.ndarray,
+) -> list[ChordEvent]:
     events: list[ChordEvent] = []
     start_index = 0
     for frame_index in range(1, len(labels) + 1):
         if frame_index < len(labels) and labels[frame_index] == labels[start_index]:
             continue
-
-        start_sec = float(frame_times[start_index])
-        end_sec = float(frame_times[frame_index])
-        if end_sec - start_sec >= CHORD_MIN_DURATION_SEC:
-            confidence = float(np.mean(confidences[start_index:frame_index]))
-            events.append(
-                ChordEvent(
-                    chord=labels[start_index],
-                    root=roots[start_index],
-                    quality=qualities[start_index],
-                    start_sec=round(start_sec, 4),
-                    end_sec=round(end_sec, 4),
-                    confidence=round(_clamp(confidence), 4),
-                )
-            )
+        event = _build_chord_event(
+            start_index=start_index,
+            end_index=frame_index,
+            labels=labels,
+            roots=roots,
+            qualities=qualities,
+            confidences=confidences,
+            frame_times=frame_times,
+        )
+        if event is not None:
+            events.append(event)
         start_index = frame_index
-
     return events
+
+
+def compute_chord_events(y: np.ndarray, sr: int) -> list[ChordEvent]:
+    """Estimate time-bounded major/minor chord events from chroma templates.
+
+    This is the lightweight Q2-2 baseline: deterministic, dependency-free, and
+    deliberately limited to major/minor triads. It is intended to recover the
+    main I/IV/V-style harmonic blocks in the synthetic validation set, not to
+    be a production chord recognizer.
+    """
+    chroma = _compute_chord_chroma(y, sr)
+    if chroma is None:
+        return []
+
+    labels, roots, qualities, confidences = _classify_chroma_frames(
+        chroma,
+        _chord_templates(),
+    )
+    frame_times = _chord_frame_times(chroma.shape[1], duration=len(y) / sr, sr=sr)
+    return _merge_chord_frames(
+        labels=labels,
+        roots=roots,
+        qualities=qualities,
+        confidences=confidences,
+        frame_times=frame_times,
+    )
 
 
 def compute_melody_contour(y: np.ndarray, sr: int) -> Optional[MelodyContour]:
