@@ -1,0 +1,9 @@
+schema_version: "1.0"
+
+# This manifest is a template for local, uncommitted real-audio measurement.
+# Keep audio files outside the repository or in an ignored local directory.
+tracks:
+  - id: local_real_audio_example
+    path: "C:/path/to/your/audio.wav"
+    baseline: pro
+    notes: "Replace this with a local WAV/MP3 path before running."
