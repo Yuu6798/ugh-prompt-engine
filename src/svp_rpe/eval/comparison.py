@@ -202,47 +202,48 @@ def compare_metric_values(
 # ---------------------------------------------------------------------------
 
 
-def generate_action_hints(
-    semantic_diff: SemanticDiff,
-    physical_diff: PhysicalDiff,
-) -> List[str]:
-    """Generate actionable hints from comparison diffs."""
+def _physical_action_hints(physical_diff: PhysicalDiff) -> List[str]:
     hints: List[str] = []
 
-    # Valley too low
     if physical_diff.valley_diff < -0.05:
         hints.append("Bridge/Verse の低密度設計を強化 (valley_depth が低い)")
 
-    # AR_main high but no valleys
     if physical_diff.active_rate_diff > 0.05 and physical_diff.valley_diff < 0:
         hints.append("breakdown / silence bar を挿入 (AR高+valley不足)")
 
-    # BPM/Key mismatch
     if physical_diff.bpm_diff is not None and abs(physical_diff.bpm_diff) > 10:
         hints.append(f"grv anchor に bpm を明示 (差分: {physical_diff.bpm_diff:+.0f})")
     if not physical_diff.key_match:
         hints.append("grv anchor に key を明示 (key 不一致)")
 
-    # Delta-E alignment low
+    return hints
+
+
+def _semantic_action_hints(semantic_diff: SemanticDiff) -> List[str]:
+    hints: List[str] = []
+
     if semantic_diff.delta_e_profile_alignment < 0.5:
         hints.append("section role と ΔE profile を再記述 (alignment 低)")
 
-    # Instrumentation mismatch
     if semantic_diff.instrumentation_context_alignment < 0.3:
         hints.append("SVP の bass-heavy / wide / dense 記述を実測に合わせて調整")
 
-    # PoR divergence
     if semantic_diff.por_lexical_similarity < 0.3:
         hints.append("por_core の意味核を SVP に明示 (lexical similarity 低)")
 
-    # GRV anchor weak
     if semantic_diff.grv_anchor_match < 0.5:
         hints.append("grv anchor (bpm/key/length/theme) を SVP に反映")
 
-    if not hints:
-        hints.append("大きな差分なし — 現状維持または微調整")
-
     return hints
+
+
+def generate_action_hints(
+    semantic_diff: SemanticDiff,
+    physical_diff: PhysicalDiff,
+) -> List[str]:
+    """Generate actionable hints from comparison diffs."""
+    hints = _physical_action_hints(physical_diff) + _semantic_action_hints(semantic_diff)
+    return hints or ["大きな差分なし — 現状維持または微調整"]
 
 
 # ---------------------------------------------------------------------------
