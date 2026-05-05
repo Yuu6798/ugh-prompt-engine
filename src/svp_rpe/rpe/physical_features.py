@@ -670,29 +670,32 @@ def compute_chord_events(y: np.ndarray, sr: int) -> list[ChordEvent]:
     )
 
 
-def compute_melody_contour(y: np.ndarray, sr: int) -> Optional[MelodyContour]:
-    """Estimate a monophonic melody contour using librosa.pyin."""
-    if y.size == 0:
-        return None
-    if float(np.max(np.abs(y))) <= 1e-8:
-        return None
+def _has_melody_signal(y: np.ndarray) -> bool:
+    return y.size > 0 and float(np.max(np.abs(y))) > 1e-8
 
-    y_melody = y
-    if sr > int(PYIN_HIGHPASS_HZ * 2) and y.size > 32:
-        sos = scipy_signal.butter(
-            4,
-            PYIN_HIGHPASS_HZ / (sr / 2.0),
-            btype="highpass",
-            output="sos",
-        )
-        try:
-            y_melody = scipy_signal.sosfiltfilt(sos, y)
-        except ValueError:
-            y_melody = y
 
+def _highpass_melody_signal(y: np.ndarray, sr: int) -> np.ndarray:
+    if sr <= int(PYIN_HIGHPASS_HZ * 2) or y.size <= 32:
+        return y
+    sos = scipy_signal.butter(
+        4,
+        PYIN_HIGHPASS_HZ / (sr / 2.0),
+        btype="highpass",
+        output="sos",
+    )
+    try:
+        return scipy_signal.sosfiltfilt(sos, y)
+    except ValueError:
+        return y
+
+
+def _run_pyin(
+    y: np.ndarray,
+    sr: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
     try:
         f0, voiced_flag, voiced_prob = librosa.pyin(
-            y_melody,
+            y,
             sr=sr,
             fmin=PYIN_FMIN_HZ,
             fmax=PYIN_FMAX_HZ,
@@ -703,20 +706,51 @@ def compute_melody_contour(y: np.ndarray, sr: int) -> Optional[MelodyContour]:
 
     if f0 is None or voiced_prob is None or len(f0) == 0:
         return None
+    return f0, voiced_flag, voiced_prob
 
+
+def _prepare_voicing(
+    f0: np.ndarray,
+    voiced_flag: np.ndarray,
+    voiced_prob: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray] | None:
     voiced = np.asarray(voiced_flag, dtype=bool)
     voicing = np.nan_to_num(np.asarray(voiced_prob, dtype=float), nan=0.0)
     if voicing.size == 0 or float(np.max(voicing)) < PYIN_MIN_VOICING:
         return None
-
     frequencies = np.where(voiced & np.isfinite(f0), f0, 0.0)
-    times = librosa.times_like(frequencies, sr=sr, hop_length=PYIN_HOP_LENGTH)
+    return frequencies, voicing
 
+
+def _melody_contour_from_arrays(
+    frequencies: np.ndarray,
+    voicing: np.ndarray,
+    sr: int,
+) -> MelodyContour:
+    times = librosa.times_like(frequencies, sr=sr, hop_length=PYIN_HOP_LENGTH)
     return MelodyContour(
         times=[round(float(t), 4) for t in times],
         frequencies_hz=[round(float(freq), 2) for freq in frequencies],
         voicing=[round(_clamp(float(prob)), 4) for prob in voicing],
     )
+
+
+def compute_melody_contour(y: np.ndarray, sr: int) -> Optional[MelodyContour]:
+    """Estimate a monophonic melody contour using librosa.pyin."""
+    if not _has_melody_signal(y):
+        return None
+
+    pyin_result = _run_pyin(_highpass_melody_signal(y, sr), sr)
+    if pyin_result is None:
+        return None
+
+    f0, voiced_flag, voiced_prob = pyin_result
+    prepared = _prepare_voicing(f0, voiced_flag, voiced_prob)
+    if prepared is None:
+        return None
+
+    frequencies, voicing = prepared
+    return _melody_contour_from_arrays(frequencies, voicing, sr)
 
 
 def compute_key(y: np.ndarray, sr: int) -> tuple[Optional[str], Optional[str], Optional[float]]:
