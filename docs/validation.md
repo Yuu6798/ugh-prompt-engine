@@ -193,12 +193,48 @@ music-quality truth. Real-audio validation still requires a separate
 human-annotated dataset with BPM/key/downbeat/chord/melody/section ground truth
 before accuracy claims can be made.
 
-## 9. Next Validation Work
+## 9. Pseudo-label Consensus (real audio, Q4'-8)
+
+**Machine consensus only; not human ground truth.**
+
+The pseudo-label consensus harness compares deterministic RPE estimates with
+optional learned annotations on local real-audio files. It is intended to rank
+ambiguity and find candidate tracks for human annotation. It does not validate
+accuracy and does not promote learned output into `PhysicalRPE` or
+`SemanticRPE`.
+
+Manual command:
+
+```bash
+python scripts/build_pseudo_label_consensus.py path/to/real_audio_manifest.yaml
+python scripts/build_pseudo_label_consensus.py path/to/real_audio_manifest.yaml --json
+python scripts/build_pseudo_label_consensus.py path/to/real_audio_manifest.yaml --track local_real_audio_example
+```
+
+The harness writes ignored local reports to:
+
+- `examples/real_audio_validation/consensus/summary.json`
+- `examples/real_audio_validation/consensus/summary.md`
+- `examples/real_audio_validation/consensus/per_track/*.json`
+
+Reported fields:
+
+| area | deterministic source | learned source | interpretation |
+|---|---|---|---|
+| downbeat | `PhysicalRPE.downbeat_times` | `LearnedTimeEvent(event_type="downbeat")` | event-time agreement within 70 ms |
+| melody | binned `PhysicalRPE.melody_contour` | `LearnedNoteEvent` | onset + pitch agreement |
+| chord | `PhysicalRPE.chord_events` | chords inferred from learned note events | conservative pseudo-label agreement |
+
+If optional learned extras are not installed, the corresponding area is marked
+`skipped` and the script exits successfully. A high score means that two
+machine paths agree; it is not evidence that either path is correct.
+
+## 10. Next Validation Work
 
 - Q2 follow-up: replace downbeat fallback with a stronger tracker when the
   dependency story is stable.
 - Q3 real-audio follow-up: add CC0 tracks with stem-level ground truth and
   record manual `validate_stem_separation.py` outputs.
-- Q4'-7: evaluate learned wins against real-audio human annotations before
+- Q4' follow-up: evaluate learned wins against real-audio human annotations before
   proposing any promotion into `PhysicalRPE`.
 - Add CC0 real-audio samples for genre and production-style coverage.

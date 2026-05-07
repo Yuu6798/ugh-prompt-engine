@@ -31,6 +31,9 @@ examples/sample_input/*
 examples/learned_validation/summary.json
 examples/learned_validation/per_song/*.json
 examples/real_audio_validation/runs/
+examples/real_audio_validation/consensus/summary.json
+examples/real_audio_validation/consensus/summary.md
+examples/real_audio_validation/consensus/per_track/*.json
 !examples/**/.gitkeep
 
 # Claude Code local settings
