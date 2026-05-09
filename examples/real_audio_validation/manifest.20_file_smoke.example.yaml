@@ -1,0 +1,103 @@
+schema_version: "1.0"
+
+# Local 20-file smoke validation manifest.
+#
+# Audio files are not committed. Copy this file to a local manifest and replace
+# <DOWNLOADS_DIR> with the directory that contains the WAV/MP3 files.
+#
+# Example:
+#   <DOWNLOADS_DIR> -> C:/Users/you/Downloads
+#
+# Command:
+#   python scripts/measure_real_audio.py path/to/local_manifest.yaml --json
+
+tracks:
+  - id: abyss_accel_remix_wav
+    path: "<DOWNLOADS_DIR>/アビス・アクセル (Remix).wav"
+    baseline: pro
+    notes: "Q4 real-audio smoke validation: WAV"
+  - id: abyss_accel_remix_mp3
+    path: "<DOWNLOADS_DIR>/アビス・アクセル (Remix).mp3"
+    baseline: pro
+    notes: "Q4 real-audio smoke validation: MP3"
+
+  - id: shiden_no_inori_original_remix_wav
+    path: "<DOWNLOADS_DIR>/紫電の祈り （オリジナル） (Remix).wav"
+    baseline: pro
+    notes: "Q4 real-audio smoke validation: WAV"
+  - id: shiden_no_inori_original_remix_mp3
+    path: "<DOWNLOADS_DIR>/紫電の祈り （オリジナル） (Remix).mp3"
+    baseline: pro
+    notes: "Q4 real-audio smoke validation: MP3"
+
+  - id: yorozu_myth_world_remix_wav
+    path: "<DOWNLOADS_DIR>/八百万の神話の世界 (Remix）.wav"
+    baseline: pro
+    notes: "Q4 real-audio smoke validation: WAV"
+  - id: yorozu_myth_world_remix_mp3
+    path: "<DOWNLOADS_DIR>/八百万の神話の世界 (Remix）.mp3"
+    baseline: pro
+    notes: "Q4 real-audio smoke validation: MP3"
+
+  - id: celtic1_wav
+    path: "<DOWNLOADS_DIR>/ケルト1.wav"
+    baseline: pro
+    notes: "Q4 real-audio smoke validation: WAV"
+  - id: celtic1_mp3
+    path: "<DOWNLOADS_DIR>/ケルト1.mp3"
+    baseline: pro
+    notes: "Q4 real-audio smoke validation: MP3"
+
+  - id: hamori_remix_wav
+    path: "<DOWNLOADS_DIR>/ハモリ (Remix).wav"
+    baseline: pro
+    notes: "Q4 real-audio smoke validation: WAV"
+  - id: hamori_remix_mp3
+    path: "<DOWNLOADS_DIR>/ハモリ (Remix).mp3"
+    baseline: pro
+    notes: "Q4 real-audio smoke validation: MP3"
+
+  - id: neon_wav
+    path: "<DOWNLOADS_DIR>/ネオン.wav"
+    baseline: pro
+    notes: "Q4 real-audio smoke validation: WAV"
+  - id: neon_mp3
+    path: "<DOWNLOADS_DIR>/ネオン.mp3"
+    baseline: pro
+    notes: "Q4 real-audio smoke validation: MP3"
+
+  - id: requiem_wav
+    path: "<DOWNLOADS_DIR>/レクイエム.wav"
+    baseline: pro
+    notes: "Q4 real-audio smoke validation: WAV"
+  - id: requiem_mp3
+    path: "<DOWNLOADS_DIR>/レクイエム.mp3"
+    baseline: pro
+    notes: "Q4 real-audio smoke validation: MP3"
+
+  - id: sunshine_drive_remastered_wav
+    path: "<DOWNLOADS_DIR>/サンシャイン・ドライブ (Remastered).wav"
+    baseline: pro
+    notes: "Q4 real-audio smoke validation: WAV"
+  - id: sunshine_drive_remastered_mp3
+    path: "<DOWNLOADS_DIR>/サンシャイン・ドライブ (Remastered).mp3"
+    baseline: pro
+    notes: "Q4 real-audio smoke validation: MP3"
+
+  - id: symbiosis_resonance_remix_wav
+    path: "<DOWNLOADS_DIR>/Symbiosis（共鳴のうた） (Remix).wav"
+    baseline: pro
+    notes: "Q4 real-audio smoke validation: WAV"
+  - id: symbiosis_resonance_remix_mp3
+    path: "<DOWNLOADS_DIR>/Symbiosis（共鳴のうた） (Remix).mp3"
+    baseline: pro
+    notes: "Q4 real-audio smoke validation: MP3"
+
+  - id: tamayura_remix_wav
+    path: "<DOWNLOADS_DIR>/玉響_TAMAYURA (Remix).wav"
+    baseline: pro
+    notes: "Q4 real-audio smoke validation: WAV"
+  - id: tamayura_remix_mp3
+    path: "<DOWNLOADS_DIR>/玉響_TAMAYURA (Remix).mp3"
+    baseline: pro
+    notes: "Q4 real-audio smoke validation: MP3"
