@@ -193,7 +193,73 @@ music-quality truth. Real-audio validation still requires a separate
 human-annotated dataset with BPM/key/downbeat/chord/melody/section ground truth
 before accuracy claims can be made.
 
-## 9. Pseudo-label Consensus (real audio, Q4'-8)
+## 9. Real-Audio 20-File Smoke Validation
+
+**Local smoke validation only; not human ground truth.**
+
+On 2026-05-09, the deterministic real-audio harness was run over 10 local
+AI-generated songs, each supplied as both WAV and MP3. Audio files and generated
+reports remain ignored local artifacts; the committed manifest template is:
+
+- `examples/real_audio_validation/manifest.20_file_smoke.example.yaml`
+
+Local generated summaries:
+
+- `examples/real_audio_validation/runs/20260509_20_file_validation_summary.md`
+- `examples/real_audio_validation/runs/20260509_20_file_validation_summary.json`
+
+Scope:
+
+| item | result |
+|---|---:|
+| songs | 10 |
+| files | 20 |
+| successful measurements | 20 / 20 |
+| WAV/MP3 pairs | 10 |
+
+WAV/MP3 stability:
+
+| check | result |
+|---|---:|
+| same duration | 10 / 10 |
+| same BPM | 10 / 10 |
+| same key/mode | 10 / 10 |
+| same time signature | 10 / 10 |
+| MP3 LUFS shift | mean +1.145 LUFS, range +0.84 to +1.92 |
+| MP3 true-peak shift | mean +2.243 dB |
+| integrated score absolute diff | mean 0.0087, max 0.0243 |
+
+Per-song prompt-alignment observations:
+
+| label | measured WAV BPM | measured key/mode | prompt tempo observation | prompt key observation |
+|---|---:|---|---|---|
+| `abyss_accel_remix` | 112.35 | E minor | complex mismatch; detected a likely wrong beat layer for stated 168/200 sections | main key matched |
+| `shiden_no_inori_original_remix` | 86.13 | D major | half-time or ambiguous against the stated around-168 BPM prompt | final-lift direction partially matched |
+| `yorozu_myth_world_remix` | 95.7 | B minor | matched the stated 96 BPM target | no exact key target captured |
+| `celtic1` | 86.13 | D minor | measured only; original prompt not captured | measured only |
+| `hamori_remix` | 152.0 | A# major | measured only; prompt is mainly vocal-arrangement based | measured only |
+| `neon` | 112.35 | F# minor | mismatch against stated 166 BPM; stable but likely wrong beat layer or prompt miss | matched |
+| `requiem` | 78.3 | D minor | matched stated 78 BPM | matched |
+| `sunshine_drive_remastered` | 89.1 | E major | half-time detection against stated 175 BPM | matched |
+| `symbiosis_resonance_remix` | 136.0 | D# major | within stated 132->138 BPM range; final local window measured near 139.7 BPM | major direction supported |
+| `tamayura_remix` | 136.0 | E minor | mild mismatch / segment issue against stated 128 BPM drop | no exact key target captured |
+
+Interpretation:
+
+- WAV and MP3 agree on stable symbolic measurements: BPM, key/mode, and time
+  signature all matched across 10 / 10 pairs.
+- MP3 is consistently louder and hotter than WAV. Use WAV as the primary source
+  for loudness-sensitive measurements such as LUFS, true peak, RMS, and
+  score components derived from those values.
+- Several fast prompts expose a tempo-layer problem: `sunshine_drive_remastered`
+  is detected near half-time, while `neon` and `abyss_accel_remix` are detected
+  on another stable beat layer.
+- Vocal gender, choir staging, lyric triggers, instrumentation identity, and
+  prompt semantics are not validated by deterministic RPE. `hamori_remix` is a
+  clear example: the core requirement is four-part female vocal arrangement,
+  which requires human review or learned/pseudo-label annotation.
+
+## 10. Pseudo-label Consensus (real audio, Q4'-8)
 
 **Machine consensus only; not human ground truth.**
 
@@ -229,10 +295,12 @@ If optional learned extras are not installed, the corresponding area is marked
 `skipped` and the script exits successfully. A high score means that two
 machine paths agree; it is not evidence that either path is correct.
 
-## 10. Next Validation Work
+## 11. Next Validation Work
 
 - Q2 follow-up: replace downbeat fallback with a stronger tracker when the
   dependency story is stable.
+- Real-audio follow-up: add a human annotation sheet for the 10-song local smoke
+  set, especially tempo-layer, vocal arrangement, and instrumentation labels.
 - Q3 real-audio follow-up: add CC0 tracks with stem-level ground truth and
   record manual `validate_stem_separation.py` outputs.
 - Q4' follow-up: evaluate learned wins against real-audio human annotations before
