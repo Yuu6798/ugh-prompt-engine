@@ -2,25 +2,22 @@
 
 ## Phase
 
-Goal 1（定量観測完成）の Q0–Q1 を完了し、Q1-3（BPM 信頼度再設計）が実装途中で中断。
-Q4' 系（Learned Output Validation）は PR #33–#35 でマージ済み。
-音楽ドメインの野心的目標「物理層×意味層レイヤー作曲」に向けた開発フロー整備を開始。
+開発フロー移植完了。Composition PoC（物理層×意味層作曲）の C0–C4 計画を策定し、次セッションから C0/C1 並行着手可能。Q1-3（BPM 信頼度再設計）は中断状態のまま。
 
 ## Next-Issue Queue
 
 | ID | Title | Priority | Notes |
 |---|---|---|---|
-| Q1-3 | BPM 信頼度の再設計 (CV-based) | P1 | Claude 代行で実装中、中断状態 |
-| FLOW-1 | 開発フロー移植（semantic-ci-code → prompt-engine） | P1 | 本セッションで対応中 |
 | C0 | RPEBundle → ObservedRPE アダプタ | P1 | `docs/composition_poc_planning.md` Phase C0 |
 | C1 | Composition Score スキーマ設計 | P1 | `docs/composition_poc_planning.md` Phase C1 |
+| Q1-3 | BPM 信頼度の再設計 (CV-based) | P2 | Claude 代行で実装中、中断状態 |
 
 ## Recently Merged
 
 | PR | Title | Date | Phase |
 |---|---|---|---|
+| #55 | feat: 開発フロー移植 + Composition PoC プランニング | 2026-05-26 | FLOW-1 |
+| #53 | feat(validation): Q4'-8 pseudo-label consensus harness | 2026-05-26 | Q4'-8 |
 | #54 | docs(validation): record 20-file real-audio smoke run | 2026-05 | Q0-5+ |
 | #52 | feat(validation): model BPM octave ambiguity | 2026-05 | Q1-3 |
 | #51 | real-audio measurement harness | 2026-05 | Q1 |
-| #35 | fix: 二重デコード解消 | 2026-05-03 | Q4'-6 |
-| #34 | refactor: skipped 集計分離・L-1〜L-4 | 2026-05-03 | Q4'-6 |
