@@ -230,6 +230,17 @@ When only G1 and G2 are satisfied, learned output remains exposed through
 `RPEBundle.learned_annotations` only. After G3 is satisfied, a later PR may
 propose a `--prefer learned` path or explicit write-through behavior.
 
+### Pseudo-label consensus is not a promotion gate
+
+`scripts/build_pseudo_label_consensus.py` may compare deterministic RPE fields
+against learned annotations on local real-audio files. That report is useful
+for triage: it can identify tracks where independent machine paths agree or
+disagree, and it can help prioritize human annotation work.
+
+It does **not** satisfy G3. Machine-to-machine agreement is not human ground
+truth, and pseudo-label consensus must not be used to write learned output into
+`PhysicalRPE` / `SemanticRPE` or to claim real-audio accuracy.
+
 ## 8. Non-Goals
 
 - Replacing librosa beat tracking, `pyin` melody extraction, or any
@@ -258,6 +269,9 @@ and reviewable:
 6. **PR6 — learned-output validation harness.** Compare `beat_this` and
    `basic-pitch` outputs against the synthetic ground truth without writing
    results back into `PhysicalRPE`.
+7. **PR7 — pseudo-label consensus harness.** Compare deterministic real-audio
+   measurements with optional learned annotations as machine consensus only;
+   this does not satisfy the human-ground-truth promotion gate.
 
 ## 10. Acceptance Criteria
 
