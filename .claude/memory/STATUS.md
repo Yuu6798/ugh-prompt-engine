@@ -12,7 +12,8 @@ Q4' 系（Learned Output Validation）は PR #33–#35 でマージ済み。
 |---|---|---|---|
 | Q1-3 | BPM 信頼度の再設計 (CV-based) | P1 | Claude 代行で実装中、中断状態 |
 | FLOW-1 | 開発フロー移植（semantic-ci-code → prompt-engine） | P1 | 本セッションで対応中 |
-| MUSIC-COMP-1 | 物理層×意味層作曲スタイル — 宣言フォーマット設計 | P2 | 新規構想、FLOW-1 の後に着手 |
+| C0 | RPEBundle → ObservedRPE アダプタ | P1 | `docs/composition_poc_planning.md` Phase C0 |
+| C1 | Composition Score スキーマ設計 | P1 | `docs/composition_poc_planning.md` Phase C1 |
 
 ## Recently Merged
 
