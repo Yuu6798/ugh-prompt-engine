@@ -56,7 +56,7 @@ RPE/SVP を音楽の「ソースコード」として使えば、宣言的な作
 |---|---|---|
 | **G1**: RPEBundle → ObservedRPE アダプタ | 型階層が異なる。RPEBundle の物理/意味特徴を ObservedRPE の signals + metrics に変換する橋渡し | S |
 | **G2**: Composition Score スキーマ拡張 | TargetSVP に物理層制約（BPM, key, dynamics 等の metric_targets）とセクション構造を追加 | M |
-| **G3**: `svprpe compose` コマンド | Composition Score → AI 生成用自然言語プロンプト変換 | M |
+| **G3**: `svprpe compose` + 生成バックエンド | Score → プロンプト変換 + 3バックエンド（External/MusicGen/MIDI） | L |
 | **G4**: `svprpe audit` コマンド | Composition Score + 音源 → RPE 抽出 → ΔE レポートのワンショット実行 | S |
 
 ---
@@ -164,39 +164,92 @@ tolerances:
 
 ---
 
-### Phase C2: `svprpe compose` コマンド（G3）
+### Phase C2: `svprpe compose` コマンド + 生成バックエンド（G3）
 
-**Goal**: Composition Score → AI 音楽生成用の自然言語プロンプトを生成する。
+**Goal**: Composition Score → 音源生成。バックエンドを差し替え可能にして外部サービス障害に備える。
 
-**設計方針**:
-- テンプレートベースの決定論的変換（LLM 不使用）
-- 既存の `SVPForGeneration` モデルの `prompt_text` / `constraints` / `style_tags` を活用
-- 出力はプレーンテキスト + JSON の 2 形式
-- プロンプトは Suno / Udio の一般的なプロンプト慣習に合わせる
+**設計方針 — バックエンド抽象化**:
 
-**プロンプト生成の構造**:
+外部サービス（Suno, Udio）はプロンプト文字数制限・パラメータ制御の限界・サービス停止
+リスクがある。単一の生成手段に依存するとPoCが外部要因で頓挫するため、
+生成バックエンドを差し替え可能な構造にする。
+
+```
+CompositionScore
+    ↓
+PromptRenderer (共通インターフェース)
+    ├── ExternalPromptAdapter  → Suno/Udio 向け（文字数圧縮、タグ形式）
+    ├── MusicGenAdapter        → Meta MusicGen（transformers 直接、WAV 出力）
+    └── MidiAdapter            → pretty_midi + FluidSynth（完全制御、決定論的）
+```
+
+**3 バックエンドの使い分け**:
+
+| バックエンド | 品質 | 制御性 | 外部依存 | 用途 |
+|---|---|---|---|---|
+| External (Suno/Udio) | 高 | 低（プロンプト制約あり） | サービス依存 | 最終デモ |
+| MusicGen | 中 | 中（プロンプト自由） | GPU 推奨 | 自動ループ検証 |
+| MIDI + FluidSynth | 低 | 高（全パラメータ制御） | なし | CI / 回帰テスト / フォールバック |
+
+**ExternalPromptAdapter の設計**:
+
+Suno 等のプロンプト制約に対応する圧縮戦略：
+1. Score の要素を優先度順に並べる（core > grv > physical > surface > structure）
+2. 文字数上限に収まるまで低優先要素を切り落とす
+3. 切り落とした要素は `dropped_elements` として記録 → audit 時に「この要素は生成に伝達されていない」と報告可能
 
 ```
 [ジャンル/ムード] [テンポ/キー] [楽器/音色] [構成] [制約]
 
-例:
+例（フル）:
 "Deep house / ambient track. Introspective night drive atmosphere.
 128 BPM, C minor. Synth pad, sub bass, vinyl crackle with reverb.
 Gradual build from minimal intro to full chorus, then strip back.
 Duration: around 3:30."
+
+例（圧縮 — 200文字制限）:
+"Deep house ambient, introspective night drive. 128 BPM Cm.
+Synth pad, sub bass, vinyl crackle. Gradual build to full chorus."
+```
+
+**MusicGenAdapter の設計**:
+- `transformers` の `MusicgenForConditionalGeneration` を使用
+- プロンプト長制限なし、`max_new_tokens` で duration 制御
+- GPU がなければ CPU フォールバック（低速だが動作する）
+- オプショナル依存: `pip install svp-rpe[musicgen]`
+
+**MidiAdapter の設計**:
+- Score の physical 制約（BPM, key, time_signature）を直接 MIDI に反映
+- structure のセクション → MIDI トラックのリージョンにマッピング
+- surface の楽器名 → General MIDI プログラムに変換（best-effort）
+- 意味層は MIDI では表現不可 → audit 時に物理層のみ検証対象とし、意味層は skip
+
+**共通出力モデル**:
+
+```python
+class GeneratedPrompt(BaseModel):
+    text: str
+    tags: list[str]
+    negative_tags: list[str]
+    dropped_elements: list[str]  # 文字数制限で切り落とされた要素
+    backend: Literal["external", "musicgen", "midi"]
 ```
 
 **実装**:
-- `src/svp_rpe/compose/prompt_renderer.py` — `render_prompt(CompositionScore) -> GeneratedPrompt`
-- `GeneratedPrompt`: `text: str`, `tags: List[str]`, `negative_tags: List[str]`
-- CLI: `svprpe compose score.yaml [-o prompt.txt] [--format text|json]`
+- `src/svp_rpe/compose/prompt_renderer.py` — 共通インターフェース + ExternalPromptAdapter
+- `src/svp_rpe/compose/musicgen_adapter.py` — MusicGen 統合（オプショナル依存）
+- `src/svp_rpe/compose/midi_adapter.py` — MIDI + FluidSynth レンダリング
+- CLI: `svprpe compose score.yaml [-o prompt.txt] [--format text|json] [--backend external|musicgen|midi]`
 
 **Acceptance Criteria**:
-- [ ] サンプル Score から読みやすいプロンプトが生成される
-- [ ] 同一 Score → 同一プロンプト（決定論）
-- [ ] `--format json` で構造化出力（text + tags + negative_tags）
+- [ ] ExternalPromptAdapter: Score → 読みやすいプロンプト、文字数上限指定で圧縮動作
+- [ ] MusicGenAdapter: Score → WAV ファイル出力（GPU/CPU 両対応）
+- [ ] MidiAdapter: Score → MIDI → WAV 出力（FluidSynth）
+- [ ] 全バックエンド: 同一 Score → 同一出力（決定論。MusicGen は seed 固定時）
+- [ ] `--format json` で dropped_elements を含む構造化出力
+- [ ] バックエンド非可用時に明確なエラーメッセージ（「musicgen 未インストール」等）
 
-**推定規模**: 1 日
+**推定規模**: 2 日（ExternalPromptAdapter 0.5d + MusicGenAdapter 0.5d + MidiAdapter 0.5d + CLI統合 0.5d）
 
 ---
 
@@ -231,13 +284,32 @@ svprpe audit score.yaml generated_track.wav [-o report.md] [--threshold 0.3]
 
 **Goal**: 1 曲分のフルループを実行し、PoC 仮説を検証する。
 
+**バックエンドフォールバック戦略**:
+
+デモは最高品質のバックエンドから試し、失敗したら降格する。
+
+```
+1st: Suno/Udio（最高品質、ただしプロンプト制約あり）
+  ↓ プロンプトが制約に収まらない or 生成が意図と大きく乖離
+2nd: MusicGen（中品質、プロンプト自由、ループ自動化可能）
+  ↓ GPU 非可用 or 品質不足
+3rd: MIDI + FluidSynth（低品質、完全制御、全環境動作）
+```
+
+各バックエンドでの audit 結果を比較し、「生成品質」と「ΔE 精度」の関係も記録する。
+
 **手順**:
 1. サンプル Composition Score を作成（上記 "Midnight Signal" を使用）
-2. `svprpe compose` でプロンプト生成
-3. Suno / Udio / 手持ちの AI ツールで音源生成（手動ステップ）
-4. `svprpe audit` で監査レポート生成
+2. `svprpe compose` でプロンプト生成（全バックエンド）
+3. 各バックエンドで音源生成
+4. `svprpe audit` で各バックエンドの監査レポート生成
 5. レポートの RepairSVP に基づいて Score を修正
 6. 再生成 → 再監査で ΔE が改善することを確認
+7. 3 バックエンド間の audit 結果を比較分析
+
+**自動ループ検証**（MusicGen / MIDI バックエンド）:
+- Score → compose → generate → audit → repair → 再 Score のループを N 回自動実行
+- ΔE の収束曲線をプロット（仮説3の定量検証）
 
 **成果物**:
 - `examples/composition/midnight_signal/` に Score + プロンプト + レポートを格納
@@ -246,20 +318,21 @@ svprpe audit score.yaml generated_track.wav [-o report.md] [--threshold 0.3]
 **成功判定**:
 - [ ] 監査レポートが生成意図との乖離を具体的に指摘できる
 - [ ] Score 修正 → 再生成で ΔE が改善する（定量的な改善を確認）
+- [ ] 最低 1 つのバックエンドでフルループが完走する
 - [ ] フローが「バイブミュージックのソースコード」として機能する感触がある
 
-**推定規模**: 0.5 日（生成待ち時間除く）
+**推定規模**: 1 日（3 バックエンド比較 + 自動ループ検証込み）
 
 ---
 
 ## クリティカルパス
 
 ```
-C0 (adapter, 0.5d) ──→ C3 (audit, 1d) ──→ C4 (demo, 0.5d)
-C1 (schema, 1d) ──→ C2 (compose, 1d) ──→ C3
+C0 (adapter, 0.5d) ──────────────────→ C3 (audit, 1d) ──→ C4 (demo, 1d)
+C1 (schema, 1d) ──→ C2 (compose+gen, 2d) ──→ C3
 ```
 
-**最短所要時間**: C1 と C0 を並行で 1 日 → C2 で 1 日 → C3 で 1 日 → C4 で 0.5 日 = **3.5 日**
+**最短所要時間**: C1 と C0 を並行で 1 日 → C2 で 2 日 → C3 で 1 日 → C4 で 1 日 = **5 日**
 
 ## 設計判断ログ
 
@@ -302,6 +375,22 @@ C1 (schema, 1d) ──→ C2 (compose, 1d) ──→ C3
 - 作曲者にとって「BPM が 128 のつもりが 140 だった」は最も直感的なフィードバック
 - 既存の `compare_metric_values()` がそのまま使える
 
+### D5: 生成バックエンドを差し替え可能にするか、Suno 一本で行くか
+
+**採用**: 3 バックエンド差し替え可能（External / MusicGen / MIDI）
+
+**理由**:
+- Suno/Udio のプロンプト文字数制限・パラメータ制御の限界で PoC が外部要因で頓挫するリスクが高い
+- MusicGen を組み込めばループ全体がコード内で閉じ、自動ループ検証（仮説3）が可能になる
+- MIDI バックエンドは最終防衛線 + CI 回帰テストの基盤になる
+- バックエンド間の audit 結果比較自体が「生成品質と ΔE 精度の関係」という知見を生む
+
+**却下案**: Suno/Udio のみ
+- 却下理由: 外部サービスへの完全依存。プロンプト制約で情報欠落 → 仮説3 が検証不能になる最悪ケースに対処できない
+
+**トレードオフ**: C2 の工数が 1 日 → 2 日に増加。ただし各アダプタは独立しているため、
+ExternalPromptAdapter を先に作り、MusicGen / MIDI は後追いで追加可能。
+
 ---
 
 ## リスクと緩和策
@@ -310,7 +399,9 @@ C1 (schema, 1d) ──→ C2 (compose, 1d) ──→ C3
 |---|---|---|
 | AI 生成音源の品質が低く RPE 抽出が不安定 | audit 結果がノイジー | synth サンプルでの事前検証を C0 に含める |
 | metric_targets のマッピングが不完全 | 物理層 ΔE が不正確 | C1 で既存 PhysicalRPE フィールドとの対応表を明示的にテスト |
-| プロンプト変換が AI ツールの慣習と乖離 | 生成品質が低い | C2 で Suno / Udio のプロンプトガイドを参照し、実プロンプトとの A/B 検証を C4 に含める |
+| Suno/Udio のプロンプト文字数制限で Score の情報が欠落 | 生成が意図を反映しない | ExternalPromptAdapter の優先度付き圧縮 + dropped_elements 追跡で「何が伝わらなかったか」を可視化 |
+| Suno/Udio がプロンプトに忠実に従わない | 反復改善ループが機能しない | MusicGen / MIDI バックエンドにフォールバック。少なくとも 1 つのバックエンドでループ成立を確認 |
+| MusicGen の GPU 非可用 | 中品質バックエンドが使えない | CPU フォールバック（低速）+ MIDI バックエンドが最終防衛線 |
 | Composition Score の UX が作曲者に刺さらない | PoC 後の展開が困難 | C4 の成果物を基にユーザーフィードバックを収集 |
 
 ---
