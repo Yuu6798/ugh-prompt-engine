@@ -9,3 +9,4 @@
 - 2026-05-03 (Session 2): AI 音楽生成の理論的ブレインストーミング。平均回帰 → 楽譜と演奏の分離 → 意味ベクトル抽出 → survivor 性 → 共同体機能 → 評価関数 → 端の定義/状態、と階層を 10 段降ろされてリポジトリの設計仮説に到達。`docs/ai_music_daw_vision.md`（542 行）を拡張検証トラックとして新設、PoC (1) を Q0 に統合する形でロードマップ更新。コミット 221058a を `claude/music-brainstorm-WHoUx` に push 済み（PR 待ち）
 - 2026-05-03 (Session 3): Q4'-6 Learned Output Validation Harness — PR #33/#34/#35 マージ。downbeat F-measure + note onset+pitch F で note-domain 統一。昇格ゲート G1–G5 を `docs/learned_models_policy.md` に策定。Q4'-7 promotion は real-audio dataset 整備待ち
 - 2026-05-26: 開発フロー移植 + Composition PoC 計画策定。PR #55（フロー移植 + `docs/composition_poc_planning.md`）/ PR #53（Q4'-8 pseudo-label consensus コンフリクト解決）マージ。discipline テスト 6 件・STATUS.md・AGENTS.md §6-8 新設。CI の click 依存不足も修正
+- 2026-05-27: Composition Score プロダクトブリーフを上位文書として確立、PoC 計画を下流として刷新（8箇所の不整合解消）。壁打ちで理論的結論3点に到達（層間矛盾は表現、delta_e は仕様/structure は実装、PoC は全フィールド required）。次セッション: C1 タスクブリーフ発行 | [詳細](2026-05-27.md)
