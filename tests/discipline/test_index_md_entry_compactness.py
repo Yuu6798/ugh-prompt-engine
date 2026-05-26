@@ -13,11 +13,19 @@ MAX_ENTRY_CHARS = 500
 
 
 def _extract_entries(text: str) -> list[tuple[int, str]]:
-    entries = []
-    for i, line in enumerate(text.splitlines(), 1):
+    entries: list[tuple[int, str]] = []
+    lines = text.splitlines()
+    for i, line in enumerate(lines, 1):
         stripped = line.strip()
         if stripped.startswith("- 20"):
-            entries.append((i, stripped))
+            parts = [stripped]
+            for continuation in lines[i:]:
+                if continuation and not continuation[0].isspace() and not continuation.startswith("  "):
+                    break
+                if not continuation.strip():
+                    break
+                parts.append(continuation.strip())
+            entries.append((i, " ".join(parts)))
     return entries
 
 
