@@ -2,14 +2,14 @@
 
 ## Phase
 
-開発フロー移植完了。Composition PoC（物理層×意味層作曲）の C0–C4 計画を策定し、次セッションから C0/C1 並行着手可能。Q1-3（BPM 信頼度再設計）は中断状態のまま。
+Composition Score プロダクトブリーフを上位文書として確立。既存 PoC 計画をブリーフ下流として刷新完了。MVP（C1: スキーマ + C2: compose CLI + ExternalPromptAdapter）の着手準備が完了。
 
 ## Next-Issue Queue
 
 | ID | Title | Priority | Notes |
 |---|---|---|---|
-| C0 | RPEBundle → ObservedRPE アダプタ | P1 | `docs/composition_poc_planning.md` Phase C0 |
-| C1 | Composition Score スキーマ設計 | P1 | `docs/composition_poc_planning.md` Phase C1 |
+| C1 | CompositionScore スキーマ + TargetSVP 変換 | P1 | MVP: ブリーフ §6 正規スキーマの実装 |
+| C2 | `svprpe compose` + ExternalPromptAdapter | P1 | MVP: Score → Prompt 変換 + CLI |
 | Q1-3 | BPM 信頼度の再設計 (CV-based) | P2 | Claude 代行で実装中、中断状態 |
 
 ## Recently Merged
