@@ -140,6 +140,8 @@ svprpe --help
 - [Roadmap](docs/roadmap.md) — PoC milestones (M0–M5) + Pre-prototype plan (P1–P5)
 - [Goal 1 Roadmap](docs/roadmap_goal1.md) — Quantitative observation completion plan (Q0–Q5)
 - [AI Music DAW Vision](docs/ai_music_daw_vision.md) — Extension track: SVP as "MIDI for AI music" standard, survivor性 framework, score-vs-performance separation, PoC (1) integration into Q0
+- [Composition Score Product Brief](docs/composition_score_product_brief.md) — Composition Score product definition: three-layer composition language, canonical schema, MVP scope, PoC 1–5 roadmap
+- [Composition PoC Planning](docs/composition_poc_planning.md) — Implementation plan for Composition Score: C1–C6 phases, design decisions
 - [AGENTS.md](AGENTS.md) — Claude × Codex orchestration protocol (Task Brief / Completion Summary templates)
 
 ## License

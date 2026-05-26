@@ -1,35 +1,46 @@
-# Composition PoC Planning — 物理層×意味層レイヤー作曲
+# Composition PoC Planning — 実装計画
 
 **Status**: PLANNING  
 **Created**: 2026-05-26  
-**Relates to**: `docs/ai_music_daw_vision.md`, `docs/semantic_ci_product_v1.md`
+**Updated**: 2026-05-27 — プロダクトブリーフとの整合性改訂  
+**Upstream**: [`composition_score_product_brief.md`](composition_score_product_brief.md)（プロダクト定義）  
+**Relates to**: [`ai_music_daw_vision.md`](ai_music_daw_vision.md), [`semantic_ci_product_v1.md`](semantic_ci_product_v1.md)
 
-## 背景と目的
+---
 
-### 問題
+## 本ドキュメントの位置付け
 
-AI 音楽生成（Suno, Udio 等）は「テキストプロンプト → ブラックボックス → 音声」の
-パイプラインで動く。中間表現がないため：
+本ドキュメントは **実装計画** であり、プロダクトの「何を・なぜ作るか」は
+上位文書の [`composition_score_product_brief.md`](composition_score_product_brief.md) が定義する。
 
-- 生成結果の **検査・修正** ができない（再生成ガチャ）
-- 作曲意図と生成結果の **乖離を定量化** できない
-- 「バイブコーディング」のような **構造化されたバイブミュージック** が成立しない
+```text
+ai_music_daw_vision.md          — 最長期ビジョン（SVP as AI music MIDI）
+composition_score_product_brief.md — プロダクト定義（Composition Score とは何か）
+composition_poc_planning.md       — 実装計画（本文書: どう作るか）
+```
 
-### 仮説
+本計画のすべての設計判断は、ブリーフの以下の原則に従う:
 
-RPE/SVP を音楽の「ソースコード」として使えば、宣言的な作曲 → 生成 → 監査の
-フィードバックループが成立する。物理層（BPM, key, dynamics 等）と意味層
-（core, surface, grv, delta_e 等）の二軸で曲を定義する新しい作曲スタイル。
+1. **作曲言語が主役、監査は補助** — PoC の第一目標は Composition Score が作曲言語として成立すること
+2. **AIは演奏者** — 作品本体は Score 側にある
+3. **MVP は ExternalPromptAdapter のみ** — MusicGen/MIDI は後続フェーズ
+4. **三層構造の必須性** — 物理層 + 意味層 + 構造層が揃って初めて作曲になる
 
-### PoC のゴール
+---
 
-**1 曲分の Composition Score を書き、AI 生成し、監査レポートで乖離を定量化する。**
+## PoC ゴールの階層
 
-成功基準：
-- [ ] Composition Score (YAML) → 自然言語プロンプト変換が動作する
-- [ ] 生成された音源の RPE 抽出 → Composition Score との ΔE レポートが出力される
-- [ ] レポートから「何を直すべきか」が読み取れる（RepairSVP が機能する）
-- [ ] 上記が既存の決定論パイプライン上で完結する（LLM 不使用）
+ブリーフが定義する PoC 1–5 と、本計画の実装フェーズ C0–C4 の対応:
+
+```text
+Brief PoC 1 (Score が書ける)     ← C1 (schema) + example YAML
+Brief PoC 2 (Prompt に変換)      ← C2 (compose CLI + ExternalPromptAdapter)
+Brief PoC 3 (Layer Manipulation) ← C5 (将来)
+Brief PoC 4 (複数レンダラ)       ← C6 (将来: MusicGen/MIDI 追加)
+Brief PoC 5 (RPE Feedback)       ← C0 (adapter) + C3 (audit) + C4 (demo)
+```
+
+**MVP（最初の PR）の範囲**: PoC 1 + PoC 2 = C1 + C2
 
 ---
 
@@ -39,190 +50,186 @@ RPE/SVP を音楽の「ソースコード」として使えば、宣言的な作
 
 | 資産 | 用途 | ファイル |
 |---|---|---|
-| `TargetSVP` | Composition Score のベースモデル | `semantic_ci/models.py` |
-| `generate_expected_rpe()` | Score → 期待 RPE 導出 | `semantic_ci/core.py` |
-| `compare_expected_observed()` | 期待 vs 実測の diff | `semantic_ci/core.py` |
-| `generate_repair_svp()` | 差分 → 修復提案 | `semantic_ci/core.py` |
-| `run_semantic_ci()` | 全パイプラインオーケストレータ | `semantic_ci/core.py` |
-| `render_markdown()` | 監査レポート出力 | `semantic_ci/report.py` |
-| RPE 抽出パイプライン | 音源 → 物理特徴量 | `rpe/extractor.py` |
-| `SemanticRPE` 導出 | 物理 → 意味層マッピング | `rpe/semantic_rules.py` |
-| `SVPForGeneration` | プロンプトテキスト生成 | `svp/models.py` |
-| `ci-check` CLI | CI ゲート統合 | `cli.py` |
+| `TargetSVP` | CompositionScore からの変換先 | `semantic_ci/models.py` |
+| `generate_expected_rpe()` | Score → 期待 RPE 導出（将来の audit 用） | `semantic_ci/core.py` |
+| `compare_expected_observed()` | 期待 vs 実測の diff（将来の audit 用） | `semantic_ci/core.py` |
+| `generate_repair_svp()` | 差分 → 修復提案（将来の audit 用） | `semantic_ci/core.py` |
+| `run_semantic_ci()` | 全パイプラインオーケストレータ（将来の audit 用） | `semantic_ci/core.py` |
+| `render_markdown()` | 監査レポート出力（将来の audit 用） | `semantic_ci/report.py` |
+| RPE 抽出パイプライン | 音源 → 物理特徴量（将来の audit 用） | `rpe/extractor.py` |
+| `SemanticRPE` 導出 | 物理 → 意味層マッピング（将来の audit 用） | `rpe/semantic_rules.py` |
+| `SVPForGeneration` | プロンプトテキスト生成（参考） | `svp/models.py` |
 
 ### ギャップ（新規実装が必要）
 
+**MVP（C1 + C2）で必要:**
+
 | ギャップ | 内容 | 規模 |
 |---|---|---|
-| **G1**: RPEBundle → ObservedRPE アダプタ | 型階層が異なる。RPEBundle の物理/意味特徴を ObservedRPE の signals + metrics に変換する橋渡し | S |
-| **G2**: Composition Score スキーマ拡張 | TargetSVP に物理層制約（BPM, key, dynamics 等の metric_targets）とセクション構造を追加 | M |
-| **G3**: `svprpe compose` + 生成バックエンド | Score → プロンプト変換 + 3バックエンド（External/MusicGen/MIDI） | L |
-| **G4**: `svprpe audit` コマンド | Composition Score + 音源 → RPE 抽出 → ΔE レポートのワンショット実行 | S |
+| **G1**: CompositionScore スキーマ | 三層 + rendering 設定の Pydantic モデル | M |
+| **G2**: YAML ローダー | Score YAML の読み込みとバリデーション | S |
+| **G3**: TargetSVP 変換 | CompositionScore → TargetSVP（将来の semantic_ci 接続用） | S |
+| **G4**: ExternalPromptAdapter | Score → 生成器向けプロンプト変換 | M |
+| **G5**: `svprpe compose` CLI | compose コマンドの追加 | S |
+
+**後続フェーズで必要:**
+
+| ギャップ | 内容 | フェーズ |
+|---|---|---|
+| **G6**: RPEBundle → ObservedRPE アダプタ | 型階層の橋渡し | C0 → PoC 5 |
+| **G7**: `svprpe audit` コマンド | Score + 音源 → ΔE レポート | C3 → PoC 5 |
+| **G8**: MusicGen/MIDI バックエンド | 追加レンダラ | C6 → PoC 4 |
+| **G9**: Layer Manipulator | 層ごとの変奏機能 | C5 → PoC 3 |
+
+---
+
+## 正規スキーマ
+
+ブリーフ §6 のモデルを正規とする。既存計画からの主な変更点:
+
+| 項目 | 旧（初版計画） | 新（ブリーフ準拠） |
+|---|---|---|
+| 物理層の形式 | ネスト（`dynamics.range_db`, `spectral.brightness`） | フラット（`brightness`, `active_rate_target`） |
+| 構造層のフィールド | `note` | `role` + `physical` |
+| delta_e の表現 | `transition_type` + `intensity`（構造化） | `overall`（自由テキスト） |
+| rendering 設定 | なし | あり（`target_backend`, `prompt_max_chars`, `priority`） |
+| tolerances | スキーマ内 | 将来の audit 用（MVP では省略可） |
+
+正規 YAML:
+
+```yaml
+meta:
+  title: "Midnight Signal"
+  version: 0.1
+
+semantic:
+  core: "introspective night drive"
+  grv:
+    primary: "deep_house"
+    secondary: "ambient"
+  delta_e:
+    overall: "gradual build from solitude to release"
+  avoid:
+    - "bright festival EDM"
+    - "comic vocal delivery"
+
+physical:
+  bpm: 128
+  key: "C minor"
+  time_signature: "4/4"
+  active_rate_target: "0.90-0.93"
+  valley_depth_target: "0.15-0.25"
+  brightness: "dark"
+  stereo_width: "wide"
+
+structure:
+  - section: intro
+    bars: 8
+    role: "establish loneliness"
+    physical: "low density, sub bass only"
+
+  - section: verse
+    bars: 16
+    role: "restrained movement"
+    physical: "sparse drums, short phrases, clear rests"
+
+  - section: chorus
+    bars: 16
+    role: "emotional release"
+    physical: "full energy, wide stereo, focused layers"
+
+  - section: bridge
+    bars: 8
+    role: "near silence and reflection"
+    physical: "no kick, no bass, minimal texture"
+
+rendering:
+  target_backend: "external"
+  prompt_max_chars: 500
+  priority:
+    - semantic.core
+    - semantic.grv
+    - physical.bpm
+    - physical.key
+    - structure
+    - physical.optional
+```
 
 ---
 
 ## フェーズ設計
 
-### Phase C0: RPEBundle → ObservedRPE アダプタ（G1）
+### Phase C1: CompositionScore スキーマ + TargetSVP 変換（G1–G3）— MVP
 
-**Goal**: 音源から抽出した RPEBundle を semantic_ci パイプラインに接続する。
+**Goal**: ブリーフ §6 の正規スキーマを Pydantic モデルとして実装し、
+作曲者が書く YAML を機械が読めるようにする。
 
-**設計方針**:
-- `semantic_ci/adapter.py` に `rpebundle_to_observed_rpe(RPEBundle) -> ObservedRPE` を実装
-- PhysicalRPE の数値フィールド → `metrics` dict に変換
-- SemanticRPE の por_core / por_surface / grv / delta_e → `signals` list に変換
-- 変換ロジックは決定論的（同一 RPEBundle → 同一 ObservedRPE）
-
-**Acceptance Criteria**:
-- [ ] `rpebundle_to_observed_rpe()` が RPEBundle の全主要フィールドを変換
-- [ ] `run_semantic_ci(target_svp, observed_rpe)` に渡して SemanticCIRun が得られる
-- [ ] 往復テスト: synth サンプルの RPEBundle → ObservedRPE → semantic_ci 完走
-
-**推定規模**: 0.5 日
-
----
-
-### Phase C1: Composition Score スキーマ拡張（G2）
-
-**Goal**: 作曲者が「物理層 + 意味層で曲を宣言する」ためのスキーマを定義する。
-
-**設計方針**:
-
-TargetSVP を直接拡張するのではなく、`CompositionScore` を上位モデルとして新設し、
-内部で TargetSVP に変換する。理由：
-
-1. TargetSVP は semantic_ci の内部モデルで、作曲者向けの UX とは責務が異なる
-2. 物理層制約（BPM, key 等）は TargetSVP の `metric_targets` にマッピングできるが、
-   作曲者にはドメイン固有の語彙（「BPM: 128」「Key: Cm」）で書かせたい
-3. セクション構造（Intro → Verse → Chorus → ...）は TargetSVP にない概念
-
-```yaml
-# composition_score.yaml — 作曲者が書くファイル
-meta:
-  title: "Midnight Signal"
-  version: 1
-
-physical:
-  bpm: 128
-  key: Cm
-  time_signature: "4/4"
-  duration_target_sec: 210
-  dynamics:
-    range_db: ">12"
-    energy_curve: ascending     # ascending / descending / arc / flat
-  spectral:
-    centroid_tendency: low       # low / mid / high
-    brightness: dark             # dark / neutral / bright
-
-semantic:
-  core: "introspective night drive"
-  surface:
-    - synth_pad
-    - sub_bass
-    - vinyl_crackle
-    - reverb_tail
-  grv:
-    primary: deep_house
-    secondary: ambient
-  delta_e:
-    transition_type: gradual
-    intensity: moderate
-
-structure:
-  - section: intro
-    bars: 8
-    note: "minimal, sub bass only"
-  - section: verse
-    bars: 16
-    note: "add pad, keep sparse"
-  - section: chorus
-    bars: 16
-    note: "full energy, all elements"
-  - section: outro
-    bars: 8
-    note: "strip back to intro texture"
-
-tolerances:
-  bpm: 3.0
-  key: exact
-  duration_sec: 30.0
-  spectral_centroid: 500.0
-```
+**PoC 対応**: PoC 1 (Layered Composition Score)
 
 **実装**:
-- `src/svp_rpe/compose/models.py` — `CompositionScore` Pydantic モデル
+
+- `src/svp_rpe/compose/__init__.py`
+- `src/svp_rpe/compose/models.py` — `CompositionScore`, `Meta`, `SemanticLayer`, `PhysicalLayer`, `StructureSection`, `RenderingConfig`, `GeneratedPrompt`
+- `src/svp_rpe/compose/loader.py` — YAML 読み込み + Pydantic validation
 - `src/svp_rpe/compose/convert.py` — `composition_to_target_svp(CompositionScore) -> TargetSVP`
-- `src/svp_rpe/compose/loader.py` — YAML ファイル読み込み
+
+**フィールドマッピング（CompositionScore → TargetSVP）**:
+
+| CompositionScore | TargetSVP | 変換 |
+|---|---|---|
+| `semantic.core` | `core` | そのまま |
+| `semantic.grv.primary/secondary` | `grv` | リスト化 |
+| `semantic.delta_e.overall` | `delta_e_profile` | そのまま |
+| `semantic.avoid` | `avoid` | そのまま |
+| `physical.bpm` | `metric_targets["bpm"]` | 数値 |
+| `physical.key` | `metric_targets["key"]` | 文字列 |
+| `physical.*` (その他) | `metric_targets[key]` | 各フィールド |
+| `structure` | `notes` | セクション情報を notes に格納 |
 
 **Acceptance Criteria**:
-- [ ] 上記 YAML を `CompositionScore.model_validate()` でロードできる
+
+- [ ] ブリーフ §6 の正規 YAML を `CompositionScore.model_validate()` でロードできる
 - [ ] `composition_to_target_svp()` で有効な TargetSVP に変換できる
-- [ ] physical セクションの制約が `metric_targets` + `tolerances` に正しくマッピングされる
-- [ ] structure セクションがメタデータとして保持される
+- [ ] physical のフィールドが `metric_targets` に正しくマッピングされる
+- [ ] structure がメタデータとして保持される
+- [ ] rendering 設定がモデルに含まれる
 
 **推定規模**: 1 日
 
 ---
 
-### Phase C2: `svprpe compose` コマンド + 生成バックエンド（G3）
+### Phase C2: `svprpe compose` + ExternalPromptAdapter（G4–G5）— MVP
 
-**Goal**: Composition Score → 音源生成。バックエンドを差し替え可能にして外部サービス障害に備える。
+**Goal**: Composition Score → 生成器向けプロンプトを決定論的に変換する。
 
-**設計方針 — バックエンド抽象化**:
+**PoC 対応**: PoC 2 (Layer-to-Prompt Composition)
 
-外部サービス（Suno, Udio）はプロンプト文字数制限・パラメータ制御の限界・サービス停止
-リスクがある。単一の生成手段に依存するとPoCが外部要因で頓挫するため、
-生成バックエンドを差し替え可能な構造にする。
+**設計方針**:
 
-```
-CompositionScore
-    ↓
-PromptRenderer (共通インターフェース)
-    ├── ExternalPromptAdapter  → Suno/Udio 向け（文字数圧縮、タグ形式）
-    ├── MusicGenAdapter        → Meta MusicGen（transformers 直接、WAV 出力）
-    └── MidiAdapter            → pretty_midi + FluidSynth（完全制御、決定論的）
-```
+ブリーフ D3 に従い、MVP は ExternalPromptAdapter のみ。MusicGen / MIDI は
+PoC 4 (C6) で追加する。バックエンド差し替え可能な構造にはするが、
+最初の実装は 1 アダプタに限定する。
 
-**3 バックエンドの使い分け**:
+**ExternalPromptAdapter の圧縮戦略**:
 
-| バックエンド | 品質 | 制御性 | 外部依存 | 用途 |
-|---|---|---|---|---|
-| External (Suno/Udio) | 高 | 低（プロンプト制約あり） | サービス依存 | 最終デモ |
-| MusicGen | 中 | 中（プロンプト自由） | GPU 推奨 | 自動ループ検証 |
-| MIDI + FluidSynth | 低 | 高（全パラメータ制御） | なし | CI / 回帰テスト / フォールバック |
+1. Score の要素を `rendering.priority` 順に並べる
+2. `rendering.prompt_max_chars` に収まるまで低優先要素を切り落とす
+3. 切り落とした要素は `dropped_elements` として記録
 
-**ExternalPromptAdapter の設計**:
-
-Suno 等のプロンプト制約に対応する圧縮戦略：
-1. Score の要素を優先度順に並べる（core > grv > physical > surface > structure）
-2. 文字数上限に収まるまで低優先要素を切り落とす
-3. 切り落とした要素は `dropped_elements` として記録 → audit 時に「この要素は生成に伝達されていない」と報告可能
-
-```
+```text
 [ジャンル/ムード] [テンポ/キー] [楽器/音色] [構成] [制約]
 
 例（フル）:
 "Deep house / ambient track. Introspective night drive atmosphere.
-128 BPM, C minor. Synth pad, sub bass, vinyl crackle with reverb.
-Gradual build from minimal intro to full chorus, then strip back.
-Duration: around 3:30."
+128 BPM, C minor. Start with sparse sub bass and distant pads.
+Gradually increase density toward a wide, emotional chorus.
+Bridge should be near-silent with no kick and no bass.
+Avoid bright festival EDM or comic vocal delivery."
 
 例（圧縮 — 200文字制限）:
 "Deep house ambient, introspective night drive. 128 BPM Cm.
-Synth pad, sub bass, vinyl crackle. Gradual build to full chorus."
+Synth pad, sub bass. Gradual build to full chorus."
 ```
-
-**MusicGenAdapter の設計**:
-- `transformers` の `MusicgenForConditionalGeneration` を使用
-- プロンプト長制限なし、`max_new_tokens` で duration 制御
-- GPU がなければ CPU フォールバック（低速だが動作する）
-- オプショナル依存: `pip install svp-rpe[musicgen]`
-
-**MidiAdapter の設計**:
-- Score の physical 制約（BPM, key, time_signature）を直接 MIDI に反映
-- structure のセクション → MIDI トラックのリージョンにマッピング
-- surface の楽器名 → General MIDI プログラムに変換（best-effort）
-- 意味層は MIDI では表現不可 → audit 時に物理層のみ検証対象とし、意味層は skip
 
 **共通出力モデル**:
 
@@ -231,46 +238,72 @@ class GeneratedPrompt(BaseModel):
     text: str
     tags: list[str]
     negative_tags: list[str]
-    dropped_elements: list[str]  # 文字数制限で切り落とされた要素
+    dropped_elements: list[str]
     backend: Literal["external", "musicgen", "midi"]
 ```
 
 **実装**:
-- `src/svp_rpe/compose/prompt_renderer.py` — 共通インターフェース + ExternalPromptAdapter
-- `src/svp_rpe/compose/musicgen_adapter.py` — MusicGen 統合（オプショナル依存）
-- `src/svp_rpe/compose/midi_adapter.py` — MIDI + FluidSynth レンダリング
-- CLI: `svprpe compose score.yaml [-o prompt.txt] [--format text|json] [--backend external|musicgen|midi]`
+
+- `src/svp_rpe/compose/prompt_renderer.py` — `ExternalPromptAdapter`
+- CLI: `svprpe compose score.yaml [-o prompt.txt] [--format text|json] [--max-chars N]`
+- `examples/composition/midnight_signal/composition_score.yaml`
+- `examples/composition/midnight_signal/generated_prompt.txt`
 
 **Acceptance Criteria**:
-- [ ] ExternalPromptAdapter: Score → 読みやすいプロンプト、文字数上限指定で圧縮動作
-- [ ] MusicGenAdapter: Score → WAV ファイル出力（GPU/CPU 両対応）
-- [ ] MidiAdapter: Score → MIDI → WAV 出力（FluidSynth）
-- [ ] 全バックエンド: 同一 Score → 同一出力（決定論。MusicGen は seed 固定時）
-- [ ] `--format json` で dropped_elements を含む構造化出力
-- [ ] バックエンド非可用時に明確なエラーメッセージ（「musicgen 未インストール」等）
 
-**推定規模**: 2 日（ExternalPromptAdapter 0.5d + MusicGenAdapter 0.5d + MidiAdapter 0.5d + CLI統合 0.5d）
+- [ ] 同一 Score → 同一 Prompt（決定論的）
+- [ ] physical layer がテンポ・キー・密度指示へ変換される
+- [ ] semantic layer がムード・主題・grv へ変換される
+- [ ] structure が展開指示へ変換される
+- [ ] `--max-chars` で圧縮が動作し、`dropped_elements` が記録される
+- [ ] `--format json` で構造化出力
+
+**推定規模**: 1 日
 
 ---
 
-### Phase C3: `svprpe audit` コマンド（G4）
+### Phase C0: RPEBundle → ObservedRPE アダプタ（G6）— 後続
+
+**Goal**: 音源から抽出した RPEBundle を semantic_ci パイプラインに接続する。
+
+**PoC 対応**: PoC 5 (RPE Feedback / Audit) の前提
+
+**設計方針**:
+
+- `semantic_ci/adapter.py` に `rpebundle_to_observed_rpe(RPEBundle) -> ObservedRPE` を実装
+- PhysicalRPE の数値フィールド → `metrics` dict に変換
+- SemanticRPE の por_core / por_surface / grv / delta_e → `signals` list に変換
+- 変換ロジックは決定論的
+
+**Acceptance Criteria**:
+
+- [ ] `rpebundle_to_observed_rpe()` が RPEBundle の全主要フィールドを変換
+- [ ] `run_semantic_ci(target_svp, observed_rpe)` に渡して SemanticCIRun が得られる
+- [ ] 往復テスト: synth サンプルの RPEBundle → ObservedRPE → semantic_ci 完走
+
+**推定規模**: 0.5 日
+
+---
+
+### Phase C3: `svprpe audit` コマンド（G7）— 後続
 
 **Goal**: Composition Score + 生成音源 → ΔE 監査レポートをワンショットで出力。
 
+**PoC 対応**: PoC 5 (RPE Feedback / Audit)
+
+**前提**: C0 + C1 + C2 完了
+
 **設計方針**:
-- 既存パイプラインの組み合わせ（新規ロジック最小）
+
 - 内部フロー: Score → TargetSVP → ExpectedRPE / Audio → RPEBundle → ObservedRPE → SemanticDiff → RepairSVP → Report
+- 既存パイプラインの組み合わせ（新規ロジック最小）
 
 ```
 svprpe audit score.yaml generated_track.wav [-o report.md] [--threshold 0.3]
 ```
 
-**実装**:
-- `src/svp_rpe/compose/audit.py` — `audit_composition(CompositionScore, audio_path) -> SemanticCIRun`
-- CLI 追加: `svprpe audit`
-- レポートは既存の `render_markdown()` を拡張して物理層の差分も含める
-
 **Acceptance Criteria**:
+
 - [ ] Score + WAV/MP3 → Markdown レポート出力
 - [ ] レポートに Signal Diff（意味層）+ Metric Diff（物理層）+ Repair Plan が含まれる
 - [ ] `--threshold` で pass/repair 判定が切り替わる
@@ -280,116 +313,128 @@ svprpe audit score.yaml generated_track.wav [-o report.md] [--threshold 0.3]
 
 ---
 
-### Phase C4: エンドツーエンドデモ（統合検証）
+### Phase C4: エンドツーエンドデモ — 後続
 
 **Goal**: 1 曲分のフルループを実行し、PoC 仮説を検証する。
 
-**バックエンドフォールバック戦略**:
-
-デモは最高品質のバックエンドから試し、失敗したら降格する。
-
-```
-1st: Suno/Udio（最高品質、ただしプロンプト制約あり）
-  ↓ プロンプトが制約に収まらない or 生成が意図と大きく乖離
-2nd: MusicGen（中品質、プロンプト自由、ループ自動化可能）
-  ↓ GPU 非可用 or 品質不足
-3rd: MIDI + FluidSynth（低品質、完全制御、全環境動作）
-```
-
-各バックエンドでの audit 結果を比較し、「生成品質」と「ΔE 精度」の関係も記録する。
+**PoC 対応**: PoC 1–5 の統合検証
 
 **手順**:
-1. サンプル Composition Score を作成（上記 "Midnight Signal" を使用）
-2. `svprpe compose` でプロンプト生成（全バックエンド）
-3. 各バックエンドで音源生成
-4. `svprpe audit` で各バックエンドの監査レポート生成
+
+1. サンプル Composition Score を作成（Midnight Signal）
+2. `svprpe compose` でプロンプト生成
+3. Suno/Udio で音源生成（手動）
+4. `svprpe audit` で監査レポート生成
 5. レポートの RepairSVP に基づいて Score を修正
 6. 再生成 → 再監査で ΔE が改善することを確認
-7. 3 バックエンド間の audit 結果を比較分析
-
-**自動ループ検証**（MusicGen / MIDI バックエンド）:
-- Score → compose → generate → audit → repair → 再 Score のループを N 回自動実行
-- ΔE の収束曲線をプロット（仮説3の定量検証）
 
 **成果物**:
+
 - `examples/composition/midnight_signal/` に Score + プロンプト + レポートを格納
 - `docs/composition_poc_report.md` に結果と考察を記録
 
-**成功判定**:
-- [ ] 監査レポートが生成意図との乖離を具体的に指摘できる
-- [ ] Score 修正 → 再生成で ΔE が改善する（定量的な改善を確認）
-- [ ] 最低 1 つのバックエンドでフルループが完走する
-- [ ] フローが「バイブミュージックのソースコード」として機能する感触がある
+**推定規模**: 1 日
 
-**推定規模**: 1 日（3 バックエンド比較 + 自動ループ検証込み）
+---
+
+### Phase C5: Layer Manipulator — 将来
+
+**Goal**: 層を操作することで曲想の差分を作れることを示す。
+
+**PoC 対応**: PoC 3 (Layer Manipulation)
+
+**推定規模**: 1 日
+
+---
+
+### Phase C6: 追加レンダラ（MusicGen / MIDI）— 将来
+
+**Goal**: 同じ Score を複数レンダラに演奏させる。
+
+**PoC 対応**: PoC 4 (Renderer as Performer)
+
+**バックエンド**:
+
+| バックエンド | 品質 | 制御性 | 外部依存 | 用途 |
+|---|---|---|---|---|
+| External (Suno/Udio) | 高 | 低 | サービス依存 | 最終デモ |
+| MusicGen | 中 | 中 | GPU 推奨 | 自動ループ検証 |
+| MIDI + FluidSynth | 低 | 高 | なし | CI / 回帰テスト |
+
+**推定規模**: 2 日
 
 ---
 
 ## クリティカルパス
 
-```
-C0 (adapter, 0.5d) ──────────────────→ C3 (audit, 1d) ──→ C4 (demo, 1d)
-C1 (schema, 1d) ──→ C2 (compose+gen, 2d) ──→ C3
+```text
+MVP:
+  C1 (schema, 1d) → C2 (compose, 1d) → [MVP 完了: PoC 1+2]
+
+後続:
+  C0 (adapter, 0.5d) ─┐
+  C2 完了 ────────────┼→ C3 (audit, 1d) → C4 (demo, 1d) → [PoC 5]
+                       │
+                       └→ C5 (manipulator, 1d) → [PoC 3]
+                       └→ C6 (renderers, 2d)   → [PoC 4]
 ```
 
-**最短所要時間**: C1 と C0 を並行で 1 日 → C2 で 2 日 → C3 で 1 日 → C4 で 1 日 = **5 日**
+**MVP 最短所要時間**: 2 日（C1 + C2）
+
+**全 PoC 所要時間**: ~7.5 日
+
+---
 
 ## 設計判断ログ
 
-### D1: TargetSVP を直接拡張するか、CompositionScore を新設するか
+### D1: CompositionScore を新設する（TargetSVP を拡張しない）
 
 **採用**: CompositionScore 新設 + TargetSVP への変換レイヤー
 
-**理由**:
-- TargetSVP は semantic_ci の内部モデル。作曲者 UX とは責務が異なる
-- 物理層制約は `metric_targets` にマッピング可能だが、YAML の書き心地が悪い
-- 変換レイヤーがあれば、CompositionScore のスキーマを自由に進化させられる
-- TargetSVP 側への変更が不要 = semantic_ci の既存テストが壊れない
+**理由**: ブリーフ §13 D1。TargetSVP は semantic_ci 内部モデル、CompositionScore は作曲者向け UX。
 
-**却下案**: TargetSVP に physical フィールドを追加
-- 却下理由: semantic_ci の全テスト・全消費者への影響が大きすぎる
+### D2: 最初は監査を主役にしない
 
-### D2: プロンプト生成に LLM を使うか
+**採用**: MVP は compose のみ。audit は後続フェーズ。
 
-**採用**: テンプレートベース（LLM 不使用）
+**理由**: ブリーフ §8。「PoCの第一目標は監査CIではなく、Composition Scoreが
+『曲を書くための言語』として成立すること」
 
-**理由**:
-- プロジェクトの哲学原則（決定論 / LLM 不使用 / API キー不要）に準拠
-- PoC 段階では「構造的に正しいプロンプト」で十分
-- 将来 LLM 版を追加する場合はプラグイン拡張点を設ける
+**旧計画からの変更**: 旧 PoC ゴール「監査レポートで乖離を定量化する」を
+PoC 5 に後退。MVP の成功基準は「Score が読めて、Prompt に変換できる」に変更。
 
-### D3: セクション構造の粒度
+### D3: MVP は ExternalPromptAdapter のみ
 
-**採用**: セクション単位（bars + note テキスト）
+**採用**: 3 バックエンド構造は維持するが、実装は 1 つずつ。
 
-**理由**:
-- PoC ではセクションレベルの構造宣言で十分
-- ビート単位やフレーズ単位は Pre-prototype 以降で検討
-- 既存の `SectionMarker` モデルと対応させやすい
+**理由**: ブリーフ §13 D3。最短で「Score から曲を作る」体験を示せる。
 
-### D4: audit コマンドのレポートに物理層差分を含めるか
+**旧計画からの変更**: 旧 C2 は 3 バックエンドを 2 日で実装する計画だったが、
+MVP を ExternalPromptAdapter 1 つに限定。MusicGen/MIDI は C6 へ。
 
-**採用**: 含める（semantic_ci の Signal Diff に加えて Metric Diff を表示）
+### D4: 構造層を必ず入れる
 
-**理由**:
-- 作曲者にとって「BPM が 128 のつもりが 140 だった」は最も直感的なフィードバック
-- 既存の `compare_metric_values()` がそのまま使える
+**採用**: 構造層は MVP から必須。
 
-### D5: 生成バックエンドを差し替え可能にするか、Suno 一本で行くか
+**理由**: ブリーフ §13 D4。物理層だけでは音響スペック、意味層だけではプロンプト。
 
-**採用**: 3 バックエンド差し替え可能（External / MusicGen / MIDI）
+### D5: スキーマはブリーフ §6 を正規とする
 
-**理由**:
-- Suno/Udio のプロンプト文字数制限・パラメータ制御の限界で PoC が外部要因で頓挫するリスクが高い
-- MusicGen を組み込めばループ全体がコード内で閉じ、自動ループ検証（仮説3）が可能になる
-- MIDI バックエンドは最終防衛線 + CI 回帰テストの基盤になる
-- バックエンド間の audit 結果比較自体が「生成品質と ΔE 精度の関係」という知見を生む
+**採用**: フラットな物理層、`role` + `physical` の構造層、`rendering` 設定。
 
-**却下案**: Suno/Udio のみ
-- 却下理由: 外部サービスへの完全依存。プロンプト制約で情報欠落 → 仮説3 が検証不能になる最悪ケースに対処できない
+**理由**: ブリーフがプロダクト定義として上位にあるため、スキーマはブリーフに合わせる。
 
-**トレードオフ**: C2 の工数が 1 日 → 2 日に増加。ただし各アダプタは独立しているため、
-ExternalPromptAdapter を先に作り、MusicGen / MIDI は後追いで追加可能。
+**旧計画からの変更**:
+- 物理層: ネスト形式 → フラット形式
+- 構造層: `note` → `role` + `physical`
+- delta_e: `transition_type` + `intensity` → `overall`（自由テキスト）
+- rendering: 新設
+
+### D6: AIを作曲家ではなく演奏者として扱う
+
+**採用**: Score = 作品本体、AI生成 = 演奏。
+
+**理由**: ブリーフ §7。作者性が Score 側に戻り、生成器の確率性を演奏差として扱える。
 
 ---
 
@@ -397,17 +442,16 @@ ExternalPromptAdapter を先に作り、MusicGen / MIDI は後追いで追加可
 
 | リスク | 影響 | 緩和策 |
 |---|---|---|
-| AI 生成音源の品質が低く RPE 抽出が不安定 | audit 結果がノイジー | synth サンプルでの事前検証を C0 に含める |
-| metric_targets のマッピングが不完全 | 物理層 ΔE が不正確 | C1 で既存 PhysicalRPE フィールドとの対応表を明示的にテスト |
-| Suno/Udio のプロンプト文字数制限で Score の情報が欠落 | 生成が意図を反映しない | ExternalPromptAdapter の優先度付き圧縮 + dropped_elements 追跡で「何が伝わらなかったか」を可視化 |
-| Suno/Udio がプロンプトに忠実に従わない | 反復改善ループが機能しない | MusicGen / MIDI バックエンドにフォールバック。少なくとも 1 つのバックエンドでループ成立を確認 |
-| MusicGen の GPU 非可用 | 中品質バックエンドが使えない | CPU フォールバック（低速）+ MIDI バックエンドが最終防衛線 |
-| Composition Score の UX が作曲者に刺さらない | PoC 後の展開が困難 | C4 の成果物を基にユーザーフィードバックを収集 |
+| ExternalPromptAdapter の圧縮で情報が欠落しすぎる | 生成が意図を反映しない | `dropped_elements` 追跡 + 圧縮前後のプロンプト比較テスト |
+| Score のスキーマが作曲者に刺さらない | PoC 後の展開が困難 | Midnight Signal の実例で早期にフィードバック収集 |
+| TargetSVP への変換で情報損失 | audit が不正確になる | 変換テストで全フィールドのマッピングを検証 |
+| rendering.priority の順序が不適切 | 重要な要素が切り落とされる | priority はスキーマで明示化、テストで検証 |
 
 ---
 
 ## 関連ドキュメント
 
-- [`docs/ai_music_daw_vision.md`](ai_music_daw_vision.md) — 長期ビジョン（SVP as AI music MIDI）
-- [`docs/semantic_ci_product_v1.md`](semantic_ci_product_v1.md) — semantic CI V1 仕様
-- [`docs/roadmap_goal1.md`](roadmap_goal1.md) — Goal 1 定量観測ロードマップ
+- [`composition_score_product_brief.md`](composition_score_product_brief.md) — **上位文書**: プロダクト定義
+- [`ai_music_daw_vision.md`](ai_music_daw_vision.md) — 長期ビジョン（SVP as AI music MIDI）
+- [`semantic_ci_product_v1.md`](semantic_ci_product_v1.md) — semantic CI V1 仕様
+- [`roadmap_goal1.md`](roadmap_goal1.md) — Goal 1 定量観測ロードマップ

@@ -209,7 +209,8 @@ examples/                      # sample_input/ + expected_output/
 | [`docs/validation.md`](docs/validation.md) | Q0-5 baseline: 5 曲の対真値比較（BPM / key / segment）、Q0 完了基準のチェック、Coverage Matrix |
 | [`docs/coverage.md`](docs/coverage.md) | 計測可能 / 部分的 / 計測不可の三分割マトリクス、`rpe_score` / `ugher_score` の解釈ルール、validation データセット概要 |
 | [`docs/ai_music_daw_vision.md`](docs/ai_music_daw_vision.md) | 拡張検証トラック: SVP を「AI 音楽の MIDI」標準として確立し DAW の核とする長期ビジョン、survivor 性概念、楽譜/演奏分離、PoC (1) の Q0 統合 |
-| [`docs/composition_poc_planning.md`](docs/composition_poc_planning.md) | 物理層×意味層作曲 PoC: CompositionScore → compose → audit のフェーズ C0–C4 計画、設計判断ログ |
+| [`docs/composition_score_product_brief.md`](docs/composition_score_product_brief.md) | Composition Score プロダクト定義: 三層作曲言語の思想、正規スキーマ、MVP 範囲、PoC 1–5 ロードマップ |
+| [`docs/composition_poc_planning.md`](docs/composition_poc_planning.md) | Composition PoC 実装計画: C1–C6 フェーズ、ブリーフ下流の実装詳細・設計判断ログ |
 
 ## ドキュメント管理ポリシー
 
