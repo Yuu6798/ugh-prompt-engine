@@ -83,7 +83,7 @@ Claude が設計 / Codex が実装だったが、GitHub 移行タスクで Claud
 2. 直近 3 件のサマリーファイルは必要に応じて詳細を参照する
 3. 過去の設計判断に関する質問には、サマリーを確認してから回答する
 
-### 終了時ルール（自動トリガー）
+### 終了時ルール（自動トリガー — 8 ステッププロセス）
 
 ユーザーがセッション終了を示す発言をしたら、**確認なしで即座に `/wrap-up` を実行する**。
 
@@ -94,10 +94,52 @@ Claude が設計 / Codex が実装だったが、GitHub 移行タスクで Claud
 - 「done for today」「that's all」
 - 手動: `/wrap-up`
 
-**実行内容:**
-- 会話の振り返りサマリーを `.claude/memory/YYYY-MM-DD.md` に保存
-- `_index.md` に 1 行サマリーを追記
-- CLAUDE.md への更新候補があればユーザーに提案
+**8 ステップ実行内容:**
+
+1. **セッションサマリー保存** — `.claude/memory/YYYY-MM-DD.md` に保存（同日複数は "Session N" で追記）
+2. **`_index.md` に 1–2 行サマリー追記** — 形式: `Date | PR/commit | 1行成果 | 詳細`
+3. **30 日超のセッションログをアーカイブ** — `archive/YYYY-MM/` に移動、元テキスト保持（情報損失ゼロ）
+4. **STATUS.md next-issue queue スイープ** — 完了済み項目を削除し "recently merged" に移動。**ステップ 5 に先行すること**
+5. **STATUS.md "recently merged" コンパクション** — 最新 5 件のみ保持、溢れ分は `archive/STATUS_MERGED_LOG.md` に移動
+6. **STATUS.md Phase セクション確認** — 単一段落を維持。新しい段落を書く場合は古い段落を削除
+7. **CLAUDE.md / AGENTS.md への更新候補** — ワランティがあればユーザーに提案
+8. **discipline テスト実行** — `pytest tests/discipline/ -q --no-cov` を実行し全パスを確認してから main に push。失敗時は先に修正
+
+**セッションサマリーの記述フォーマット:**
+
+```markdown
+## Session Summary — YYYY-MM-DD [Session N]
+
+### Context
+<1–2 段落: セッションで扱ったトピック>
+
+### Design Decisions
+<なぜその選択をしたか>
+
+### Artifacts
+<マージした PR / 追加したファイル>
+
+### Handoff
+<次のセッションへの引き継ぎ事項>
+```
+
+### アーカイブポリシー（TTL）
+
+| 対象 | TTL | 移動先 |
+|---|---|---|
+| セッションログ (`YYYY-MM-DD.md`) | 30 日 | `archive/YYYY-MM/` |
+| `_index.md` エントリ | 30 日 | 1 行要約 + アーカイブパスに短縮 |
+| STATUS.md "recently merged" | 最新 5 件 | `archive/STATUS_MERGED_LOG.md` |
+| next-issue queue 完了項目 | マージ時即時 | "recently merged" に変換 |
+| Phase 段落 | 上書き時 | アーカイブ対象外（1 段落ルール） |
+
+### アンチパターン集
+
+- `_index.md` のエントリが長文エッセイ化する（500 文字上限を discipline テストで強制）
+- 完了済み項目を next-issue queue に放置する（次セッションで誤った優先順位を招く）
+- Phase セクションに古い段落を残す（現在の状況が不明確になる）
+- アーカイブ移動を後回しにする（`_index.md` が肥大化する）
+- discipline テスト未実行で main に直接 push する（衛生違反の検出漏れ）
 
 ## Architecture
 
@@ -166,8 +208,8 @@ examples/                      # sample_input/ + expected_output/
 | [`docs/roadmap_goal1.md`](docs/roadmap_goal1.md) | 目的1（定量観測）完成までのフェーズ Q0–Q5、完成定義、クリティカルパス |
 | [`docs/validation.md`](docs/validation.md) | Q0-5 baseline: 5 曲の対真値比較（BPM / key / segment）、Q0 完了基準のチェック、Coverage Matrix |
 | [`docs/coverage.md`](docs/coverage.md) | 計測可能 / 部分的 / 計測不可の三分割マトリクス、`rpe_score` / `ugher_score` の解釈ルール、validation データセット概要 |
-| [`docs/code_semantic_ci_design.md`](docs/code_semantic_ci_design.md) | Code Edition v0.1 設計仕様: 3-state RPE (Baseline/Expected/Observed)、Constraint type system (state/delta/repair)、Python MVP の P1–P5 計画 |
 | [`docs/ai_music_daw_vision.md`](docs/ai_music_daw_vision.md) | 拡張検証トラック: SVP を「AI 音楽の MIDI」標準として確立し DAW の核とする長期ビジョン、survivor 性概念、楽譜/演奏分離、PoC (1) の Q0 統合 |
+| [`docs/composition_poc_planning.md`](docs/composition_poc_planning.md) | 物理層×意味層作曲 PoC: CompositionScore → compose → audit のフェーズ C0–C4 計画、設計判断ログ |
 
 ## ドキュメント管理ポリシー
 
