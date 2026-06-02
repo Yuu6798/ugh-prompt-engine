@@ -52,4 +52,5 @@ rendering:
     - physical.bpm
     - physical.key
     - structure
+    - semantic.avoid
     - physical.optional

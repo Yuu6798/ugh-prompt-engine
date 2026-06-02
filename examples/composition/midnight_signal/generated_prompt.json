@@ -1,6 +1,6 @@
 {
   "backend": "external",
-  "text": "Dark, introspective night drive atmosphere. deep_house / ambient track. 128 BPM. C minor. intro: low density, sub bass only; role=establish loneliness. verse: sparse drums, short phrases, clear rests; role=restrained movement. chorus: full energy, wide stereo, focused layers; role=emotional release. bridge: no kick, no bass, minimal texture; role=near silence and reflection. Brightness dark; wide stereo; active rate 0.90-0.93; valley depth 0.15-0.25.",
+  "text": "Dark, introspective night drive atmosphere. deep_house / ambient track. 128 BPM. C minor. intro: low density, sub bass only; role=establish loneliness. verse: sparse drums, short phrases, clear rests; role=restrained movement. chorus: full energy, wide stereo, focused layers; role=emotional release. bridge: no kick, no bass, minimal texture; role=near silence and reflection. Avoid: bright festival EDM; comic vocal delivery.",
   "tags": [
     "deep_house",
     "ambient",
@@ -12,6 +12,6 @@
     "comic vocal delivery"
   ],
   "dropped_elements": [
-    "semantic.avoid"
+    "physical.optional"
   ]
 }

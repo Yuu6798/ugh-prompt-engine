@@ -43,7 +43,7 @@ def test_external_prompt_adapter_compresses_low_priority_segments_first() -> Non
     prompt = ExternalPromptAdapter().render(score, max_chars=180)
 
     assert len(prompt.text) <= 180
-    assert prompt.dropped_elements[:2] == ["semantic.avoid", "physical.optional"]
+    assert prompt.dropped_elements[:2] == ["physical.optional", "semantic.avoid"]
     assert "bright festival EDM" not in prompt.text
     assert "active rate" not in prompt.text
     assert prompt.tags == ["deep_house", "ambient", "dark", "wide_stereo"]
@@ -81,6 +81,7 @@ def test_compose_cli_outputs_text_by_default() -> None:
     assert result.exit_code == 0
     assert result.output.startswith("Dark, introspective night drive atmosphere.")
     assert "128 BPM." in result.output
+    assert "Avoid: bright festival EDM; comic vocal delivery." in result.output
     assert '"backend"' not in result.output
 
 
@@ -94,7 +95,7 @@ def test_compose_cli_outputs_json_and_max_chars_override() -> None:
     payload = json.loads(result.output)
     assert payload["backend"] == "external"
     assert len(payload["text"]) <= 180
-    assert payload["dropped_elements"][:2] == ["semantic.avoid", "physical.optional"]
+    assert payload["dropped_elements"][:2] == ["physical.optional", "semantic.avoid"]
     assert payload["tags"] == ["deep_house", "ambient", "dark", "wide_stereo"]
     assert payload["negative_tags"] == ["bright festival EDM", "comic vocal delivery"]
 
