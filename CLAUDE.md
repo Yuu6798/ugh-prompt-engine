@@ -34,7 +34,7 @@ API キー不要、LLM 不要、同一入力 → 同一出力の完全決定論�
 
 ## Advisor Strategy（モデル運用方針）
 
-- **メインエージェント**: Opus（実装・PR 作成・指摘対応・セルフレビュー・メモリ管理）
+- **メインエージェント**: Opus（設計メモ起案・PR レビュー・再レビュー・メモリ管理）
 - **サブエージェント**: Sonnet 固定（探索・読み取り中心の調査タスク）
 
 Agent ツールで spawn する際は必ず `model: "sonnet"` を指定すること。
@@ -49,28 +49,30 @@ Agent({"subagent_type": "Explore", "prompt": "..."})
 
 ## Workflow（Codex × Claude × User 分業オーケストレーション）
 
-このリポジトリは **設計レビューと実装を分業** する。**2026-05-02 改訂**: 旧フローでは
-Claude が設計 / Codex が実装だったが、GitHub 移行タスクで Claude が直接実装と
-レビュー対応を行った方が往復回数が減ることが確認できたため、役割を反転した。
+このリポジトリは **設計レビューと実装を分業** する。**2026-06-02 改訂**:
+通常開発の主フローを **Claude Code が設計、Codex が実装** に戻す。
+Claude Code は仕様整理とレビューに集中し、Codex がローカル実装・検証・PR 作成・
+指摘対応を担当する。
 
-- **Codex** — タスク Brief 起案、実装方針 / 受け入れ条件 / リスク / テスト観点の整理、PR レビュー、再レビュー
-- **Claude Code (Opus)** — 設計メモを受けて実装、PR 作成、レビュー指摘対応、セルフレビュー、メモリ管理
+- **Claude Code (Opus)** — タスク Brief 読解、Design Memo 起案、実装方針 / 受け入れ条件 / リスク / テスト観点の整理、PR レビュー、再レビュー、メモリ管理
+- **Codex** — Design Memo を受けて実装、PR 作成、レビュー指摘対応、セルフレビュー
 - **User** — エージェント間の橋渡し、最終マージ判断、ループのトリガー
 
 サイクル:
 
-1. Codex が `AGENTS.md` 規定の **Task Brief** を読み、**Design Memo**（実装方針 /
+1. Claude Code が `AGENTS.md` 規定の **Task Brief** を読み、**Design Memo**（実装方針 /
    受け入れ条件 / リスク / テスト観点）を起こす
-2. User が Design Memo を Claude に渡して実装依頼
-3. Claude が `claude/<topic>` ブランチで実装 → PR 作成（本文は **Completion Summary** 形式）
-4. User が PR URL を Codex に共有
-5. Codex が PR をレビュー → 指摘コメント
-6. Claude が指摘対応してコミット追加 → User が Codex に再レビュー依頼
-7. Codex が再レビュー（Approve または再指摘）
+2. User が Design Memo を Codex に渡して実装依頼
+3. Codex が `codex/<topic>` ブランチで実装 → PR 作成（本文は **Completion Summary** 形式）
+4. User が PR URL を Claude Code に共有
+5. Claude Code が PR をレビュー → 指摘コメント
+6. Codex が指摘対応してコミット追加 → User が Claude Code に再レビュー依頼
+7. Claude Code が再レビュー（Approve または再指摘）
 8. User がマージ → 次の Task Brief へ
 
-**Codex は本リポジトリでコードを書かない**（PR レビューコメント、Design Memo、
-設計仕様は可）。Claude は docs / CLAUDE.md / AGENTS.md / 設計仕様 / 実装すべて担当。
+**Claude Code は通常、本リポジトリで実装コードを書かない**（PR レビューコメント、
+Design Memo、設計仕様、メモリ管理は担当）。例外的な小規模 fix-up のみ `claude/<topic>`
+ブランチで行う。Codex は docs / AGENTS.md / 設計仕様 / 実装を担当できる。
 コミュニケーション・フォーマット規約の詳細: [`AGENTS.md`](AGENTS.md)
 
 ## Session Memory（永続記憶ワークフロー）
@@ -297,8 +299,8 @@ svprpe --help
 ### Branches
 
 - `main` — 安定版。直接 push しない（例外: `.claude/memory/` の運用ログは直接 commit 可）
-- `claude/*` — Claude Code が実装する作業ブランチ
 - `codex/*` — Codex が実装する作業ブランチ
+- `claude/*` — Claude Code が例外的に小規模 fix-up を行う作業ブランチ
 
 ### Commit Messages
 
@@ -309,7 +311,9 @@ svprpe --help
 
 **コード・ドキュメント変更は必ず Pull Request で実施する**。`main` への直接 push は
 原則禁止（唯一の例外は Branches 節に記載した `.claude/memory/` 運用ログ）。
-PR はリンク発行で作成する（`gh pr create` は使わない）。
+Claude Code が例外的に PR を作成する場合はリンク発行で作成する
+（`gh pr create` は使わない）。Codex が PR を作成する場合は `AGENTS.md` §2 の
+Completion Summary 規約に従い、利用可能な GitHub CLI / connector を使ってよい。
 
 ```bash
 # 1. ブランチを push
@@ -323,7 +327,7 @@ git push -u origin <branch-name>
 
 PR を作成するときは、**本文を必ず作成する**（リンクのみ提示で本文を空にしない）。
 GitHub MCP の `mcp__github__create_pull_request` で本文を渡すか、リンク経由で
-User が作成する場合も同等の本文を Claude が事前に提示する。
+User が作成する場合も同等の本文を担当エージェントが事前に提示する。
 
 本文に最低限含める要素:
 

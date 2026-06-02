@@ -1,13 +1,13 @@
 # AGENTS.md — Codex × Claude 連絡プロトコル
 
-このリポジトリは **設計レビューと実装を分業** する。Codex（Brief 読解 / 設計メモ
-起案 / PR レビュー担当）と Claude Code（実装 / PR 作成 / 指摘対応担当）が共有する
+このリポジトリは **設計レビューと実装を分業** する。Claude Code（Brief 読解 / 設計メモ
+起案 / PR レビュー担当）と Codex（実装 / PR 作成 / 指摘対応担当）が共有する
 メッセージ・フォーマット規約を本ファイルで定める。役割分担・運用ポリシーの詳細は
 [`CLAUDE.md`](CLAUDE.md) の Workflow 節を参照。
 
-**2026-05-02 改訂**: Claude が設計、Codex が実装の旧フローから役割を反転した。
-GitHub 移行タスク (PR #20–#23) で Claude が直接実装＋セルフレビュー＋指摘対応を
-行った方が往復回数が減ることが確認できたため。
+**2026-06-02 改訂**: ワークフローを **Claude Code が設計、Codex が実装** に戻す。
+GitHub 移行後の通常開発では、Claude Code が仕様整理・設計レビューを担当し、Codex が
+ローカル実装・検証・PR 作成・指摘対応を担当する方針にする。
 
 両エージェントとも作業開始時に本ファイルを読むこと。
 
@@ -19,25 +19,25 @@ GitHub 移行タスク (PR #20–#23) で Claude が直接実装＋セルフレ�
 Task Brief
   │
   ▼
-Codex ─[Design Memo]→ User ─[paste]→ Claude ─[実装 + PR]→ GitHub
+Claude Code ─[Design Memo]→ User ─[paste]→ Codex ─[実装 + PR]→ GitHub
                                                                 │
                                                                 ▼
-                                       Claude ←[再レビュー]── Codex ←[PR URL]─ User
+                                      Codex ←[再レビュー]── Claude Code ←[PR URL]─ User
                                           │
                                           ▼
-                                  指摘対応コミット ──→ Codex 再レビュー → User マージ
+                              指摘対応コミット ──→ Claude Code 再レビュー → User マージ
 ```
 
 ループは User がトリガーする。Codex/Claude は各々のフォーマットで出力を出すだけで、
-エージェント間で直接通信しない（Codex が PR レビューコメントを残す経路は GitHub
+エージェント間で直接通信しない（Claude Code が PR レビューコメントを残す経路は GitHub
 内なので User の橋渡し不要）。
 
 ---
 
-## 1. Design Memo（Codex → Claude）
+## 1. Design Memo（Claude Code → Codex）
 
-Codex が Task Brief を読んで Claude に渡す設計メモの固定フォーマット。
-コピー&ペーストで Claude に渡せる単位にすること（タスク粒度は 0.5–2 日で
+Claude Code が Task Brief を読んで Codex に渡す設計メモの固定フォーマット。
+コピー&ペーストで Codex に渡せる単位にすること（タスク粒度は 0.5–2 日で
 完結する範囲）。
 
 ````markdown
@@ -73,7 +73,7 @@ Codex が Task Brief を読んで Claude に渡す設計メモの固定フォー
 <記載がない場合、新規依存追加は escalation 対象>
 
 ## Required Outputs
-- ブランチ名: `claude/<topic>`
+- ブランチ名: `codex/<topic>`
 - PR タイトル: <Conventional Commits 形式>
 - 期待する変更ファイル: <列挙>
 
@@ -85,9 +85,9 @@ Codex が Task Brief を読んで Claude に渡す設計メモの固定フォー
 
 ---
 
-## 2. Completion Summary（Claude → Codex / User）
+## 2. Completion Summary（Codex → Claude Code / User）
 
-Claude が PR を作成する際、PR 本文の冒頭を以下フォーマットで記述する。
+Codex が PR を作成する際、PR 本文の冒頭を以下フォーマットで記述する。
 
 ````markdown
 # Completion Summary: <Task ID>
@@ -108,8 +108,8 @@ Claude が PR を作成する際、PR 本文の冒頭を以下フォーマット
 - 実行結果: <pass / fail / skip 件数>
 
 ## Self-Review
-<Claude 自身が実装後にチェックした観点 3–5 件。
- Codex レビューに先んじて defect を捕捉する目的>
+<Codex 自身が実装後にチェックした観点 3–5 件。
+ Claude Code レビューに先んじて defect を捕捉する目的>
 
 ## Files Changed
 <git diff --stat 相当>
@@ -118,17 +118,17 @@ Claude が PR を作成する際、PR 本文の冒頭を以下フォーマット
 <Design Memo から逸脱した点。なければ "None">
 
 ## Open Questions / Deferred
-<Codex / User が判断すべき事項、または次フェーズへの持ち越し>
+<Claude Code / User が判断すべき事項、または次フェーズへの持ち越し>
 
 ## Review Focus
-<Codex に重点的に見てほしい観点>
+<Claude Code に重点的に見てほしい観点>
 ````
 
 ---
 
-## 3. PR Review（Codex → Claude）
+## 3. PR Review（Claude Code → Codex）
 
-Codex は PR 本体の Completion Summary を読み、GitHub PR のレビュー機能で
+Claude Code は PR 本体の Completion Summary を読み、GitHub PR のレビュー機能で
 コメントを残す。レビューコメントの粒度は inline コメント（行指定）優先、
 全体総括が必要なら Review Summary を投稿。
 
@@ -141,14 +141,14 @@ Codex は PR 本体の Completion Summary を読み、GitHub PR のレビュー�
 4. **後方互換性 / 既存テストへの影響**
 5. **依存追加 / philosophy 抵触の有無**
 
-指摘の重要度 P1（致命）/ P2（重要）/ P3（minor）を明記し、Claude が対応優先順位を
+指摘の重要度 P1（致命）/ P2（重要）/ P3（minor）を明記し、Codex が対応優先順位を
 判断できるようにする。
 
 ---
 
 ## 4. エスカレーション
 
-Claude は以下のいずれかに該当したら **作業を停止し** Completion Summary 形式
+Codex は以下のいずれかに該当したら **作業を停止し** Completion Summary 形式
 （または draft PR の本文）で中断状態を報告すること:
 
 1. Acceptance Criteria が技術的に達成不可能と判明した
@@ -161,16 +161,16 @@ Claude は以下のいずれかに該当したら **作業を停止し** Complet
 
 > **依存追加の運用補足**: roadmap_goal1.md の各フェーズ（Q0-4: `mir_eval`、
 > Q1-1: `pyloudnorm`、Q2-1: `madmom`、Q3-1: `Demucs` 等）は新規依存を要する。
-> Codex は Design Memo 発行時に `Allowed Dependencies` を必ず明示し、Claude は
+> Claude Code は Design Memo 発行時に `Allowed Dependencies` を必ず明示し、Codex は
 > その範囲内であれば停止せず実装してよい。
 
 ---
 
 ## 5. ブランチ規約
 
-- Claude が実装するブランチ: `claude/<topic>`（タスクごとに新規）
-- Codex は基本ブランチを作らない（PR レビュー / Design Memo のみ）。例外的に
-  Codex が小規模な fix-up を出す場合は `codex/<topic>`
+- Codex が実装するブランチ: `codex/<topic>`（タスクごとに新規）
+- Claude Code は基本ブランチを作らない（PR レビュー / Design Memo のみ）。例外的に
+  Claude Code が小規模な fix-up を出す場合は `claude/<topic>`
 - main への直接 push は CLAUDE.md の例外条項（`.claude/memory/` の運用ログ等）
   に該当する場合のみ
 
