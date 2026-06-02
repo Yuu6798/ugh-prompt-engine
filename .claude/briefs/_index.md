@@ -25,3 +25,5 @@ Claude が起草し、User が Codex に渡す Task Brief を蓄積する。
 | Q0-5 | validation.md 初版（5 曲ベースライン） | `claude/q0-5-validation-doc` | merged: PR #14（Plan B 継続） |
 | Q1-1 | LUFS / true_peak (pyloudnorm) | `claude/q1-1-loudness-lufs` | merged: PR #15（Plan B 継続、Codex P1 stereo bug fix 込み） |
 | Q1-3 | BPM 信頼度の再設計 (CV-based) | `claude/q1-3-bpm-confidence` | Claude 代行で実装中（Plan B 継続） |
+| C1 | CompositionScore スキーマ + TargetSVP 変換 | `codex/c1-composition-score-schema` | merged: PR #57（新フロー: Claude 設計 / Codex 実装） |
+| C2 | `svprpe compose` + ExternalPromptAdapter | `codex/c2-compose-prompt-renderer` | merged: PR #59（新フロー継続） |

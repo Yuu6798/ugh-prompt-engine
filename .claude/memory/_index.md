@@ -4,9 +4,10 @@
 
 - 2026-04-25: CLAUDE.md 整備 — svp-video-pipeline から汎用ポリシー移植、Architecture 同期、設計ドキュメント索引追加。Codex 自動レビュー 2 件 (Python 構文 / push policy 矛盾) 対応
 - 2026-04-27: AGENTS.md / Workflow 節を新設し Claude × Codex × User 分業を明文化。roadmap_goal1.md (Q0–Q5) 策定。Q0-1 (合成 WAV 5 曲 + ground_truth + verify スクリプト, PR #9) 完了。Q4 Evidence-bearing Semantic Layer も PR #8 で実装完了（GPT-5.5pro 提案）。Codex P1 レビュー 2 件 (依存追加デッドロック / parser mojibake) 対応
-- 2026-05-02: GitHub 凍結解除に伴う Codeberg → GitHub 移行。重複 7 本 / 未移行 4 本に切り分け、Q3-1/Q3-2 (PR #20)、Q3-3/Q3-4 (#21)、Q5-1 (#22)、Q3 stem validation (#23) をスタック PR で順次マージ。`compare --separate` no-op 削除（自己発見）、Codex bot P1+P2 (silent source auto-pass / stem tail loss) と User 指摘の short-stem-bundle 回帰テスト追加対応
+- 2026-05-02: Codeberg → GitHub 移行、Q3/Q5 スタック PR (#20–#23) 順次マージ、stem 回帰テスト追加。[archive/2026-05/2026-05-02.md]
 - 2026-05-03: 長尺曲 OOM 問題の壁打ち → psutil 計測で `librosa.load` の二重呼び出しが原因と特定（PR #30 マージ）。提供アーカイブ `ugh_music_project_lite` の `DeltaECalculator` 移植前検証で「ΔE 用語衝突 / 0.85 下限クランプ飽和」を発見し移植不可と判定、現リポジトリの `compute_novelty_curve` を再活用する形で `dynamics_summary` + `dynamic_range_db` を新規実装（PR #31 マージ）。設計→実装→セルフレビュー→PR を Claude が直接担当する特例セッション
 - 2026-05-03 (Session 2): AI 音楽生成の理論的ブレインストーミング。平均回帰 → 楽譜と演奏の分離 → 意味ベクトル抽出 → survivor 性 → 共同体機能 → 評価関数 → 端の定義/状態、と階層を 10 段降ろされてリポジトリの設計仮説に到達。`docs/ai_music_daw_vision.md`（542 行）を拡張検証トラックとして新設、PoC (1) を Q0 に統合する形でロードマップ更新。コミット 221058a を `claude/music-brainstorm-WHoUx` に push 済み（PR 待ち）
 - 2026-05-03 (Session 3): Q4'-6 Learned Output Validation Harness — PR #33/#34/#35 マージ。downbeat F-measure + note onset+pitch F で note-domain 統一。昇格ゲート G1–G5 を `docs/learned_models_policy.md` に策定。Q4'-7 promotion は real-audio dataset 整備待ち
 - 2026-05-26: 開発フロー移植 + Composition PoC 計画策定。PR #55（フロー移植 + `docs/composition_poc_planning.md`）/ PR #53（Q4'-8 pseudo-label consensus コンフリクト解決）マージ。discipline テスト 6 件・STATUS.md・AGENTS.md §6-8 新設。CI の click 依存不足も修正
 - 2026-05-27: Composition Score プロダクトブリーフを上位文書として確立、PoC 計画を下流として刷新（8箇所の不整合解消）。壁打ちで理論的結論3点に到達（層間矛盾は表現、delta_e は仕様/structure は実装、PoC は全フィールド required）。次セッション: C1 タスクブリーフ発行 | [詳細](2026-05-27.md)
+- 2026-06-02: ワークフロー再反転（設計=Claude / 実装=Codex, PR #58）。Composition Score MVP 完成 — C1 スキーマ + TargetSVP 変換 (PR #57)・C2 `svprpe compose` + ExternalPromptAdapter (PR #59) を設計→実装→レビュー→マージで完走。C1 レビュー P3（TargetSVP 正規化で順序/case 喪失）を C2 で回避（renderer 入力を CompositionScore に固定）。次: C0 / C3（audit）。[詳細](2026-06-02.md)
