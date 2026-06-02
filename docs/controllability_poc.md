@@ -102,6 +102,14 @@ grip(k) = (mean(x_high) - mean(x_low)) / pooled_sd(x)
 MusicGen（安価・seed 再現）なら 3–5 水準のスイープに拡張して**応答勾配（slope）**
 も取れるが、最小方法実証（K0）では 2 水準コントラストに固定する。
 
+**連続ツマミとカテゴリツマミで grip 統計を分ける**。上の符号付き効果量は
+**連続観測**（bpm / brightness / active_rate_target / valley_depth）向け。
+`key` / `mode` のような**カテゴリツマミ**は効果量に乗らないので、
+「**要求ターゲットへの per-sample 一致スコア**」（`mir_eval.key.evaluate` 由来、
+∈[0,1]、[`validation.md`](validation.md) §2 と同方式）の平均＝**一致率**で grip を測る。
+`key_confidence`（検出自信度）は**使わない** — 自信満々に外した key を grip 成功と
+誤判定するため。一致率が偶然水準なら dead、高ければ tight。
+
 ---
 
 ## 4. 設計判断ログ
@@ -197,7 +205,7 @@ PoC が扱えるのは「観測チャネルを持つツマミ」のみ。
 |---|---|---|---|
 | `physical.bpm` | 観測 BPM（`PhysicalRPE`） | tight | K0 |
 | `physical.brightness` | `spectral_profile.brightness`（帯域比 high/(low+mid+high)） | loose | K0 |
-| `physical.key` / mode | key 検出スコア | tight | K1 |
+| `physical.key` / mode | 要求 key/mode への一致スコア（`mir_eval.key.evaluate`、∈[0,1]、validation §2 方式。`key_confidence` ではない） | tight（一致率） | K1 |
 | `physical.active_rate_target` | active rate（密度プロキシ） | medium | K1 |
 | `physical.valley_depth_target` | novelty valley depth | dead 予想 | K1 |
 | `physical.stereo_width` | stereo correlation / width | 未知 | K1 以降 |
