@@ -166,8 +166,10 @@ MusicGen（安価・seed 再現）なら 3–5 水準のスイープに拡張し
 
 **目的**: ツマミを ~5 個に広げ、tight/loose/dead のスペクトルを張る。
 
-候補ツマミ（§6 参照）: `bpm`, `key/mode`, `brightness`, `density_curve`,
-`valley_depth_target`。MusicGen 上で grip 表を初版化する。
+候補ツマミ（§6 参照、すべて現行 `PhysicalLayer` に存在するフィールド）:
+`bpm`, `key/mode`, `brightness`, `active_rate_target`, `valley_depth_target`。
+MusicGen 上で grip 表を初版化する。`density_curve` はスキーマ未定義のため
+K1 では扱わず、フィールド追加後（§8）の候補とする。
 
 **完了基準**: 5 ツマミの grip 分類が出揃い、「操作パネルに残すツマミ / 捨てる
 ツマミ / 表現を直すツマミ」の初版判断が docs に記録される。
@@ -196,10 +198,18 @@ PoC が扱えるのは「観測チャネルを持つツマミ」のみ。
 | `physical.bpm` | 観測 BPM（`PhysicalRPE`） | tight | K0 |
 | `physical.brightness` | spectral centroid | loose | K0 |
 | `physical.key` / mode | key 検出スコア | tight | K1 |
-| `physical.density_curve` | RMS / onset 密度の時間勾配 | medium | K1 |
+| `physical.active_rate_target` | active rate（密度プロキシ） | medium | K1 |
 | `physical.valley_depth_target` | novelty valley depth | dead 予想 | K1 |
 | `physical.stereo_width` | stereo correlation / width | 未知 | K1 以降 |
+| `physical.density_curve` | RMS / onset 密度の時間勾配 | medium | **要スキーマ追加**（K1 後） |
 | `semantic.core` | 対応観測なし | — | **対象外** |
+
+> **スキーマ制約**: K1 のツマミは現行 `PhysicalLayer`（`src/svp_rpe/compose/models.py`、
+> `extra="forbid"`）が定義するフィールドに限る — `bpm` / `key` / `time_signature` /
+> `active_rate_target` / `valley_depth_target` / `brightness` / `stereo_width`。
+> `density_curve` は**スキーマ未定義**のため、ツマミ化するには先に `PhysicalLayer` への
+> フィールド追加が必要（§8 参照）。それまで K1 の「密度」枠は既存の
+> `active_rate_target` を用いる。
 
 ---
 
@@ -264,7 +274,11 @@ MusicGen 出力に対し、Composition Score の物理ツマミ 2 個（bpm / br
 - **MusicGen 統合の実体**: K0 を fixture 駆動で逃がした後、K1 で生成を自動化する際の
   バックエンド設計（[`learned_models_policy.md`](learned_models_policy.md) の optional
   extra 隔離方針に従うか）
-- **density_curve のセンサー定義**: 時間勾配をどの窓・どの統計量で取るか（K1 前に確定）
+- **`density_curve` のスキーマ追加可否**: 現行 `PhysicalLayer` は `extra="forbid"` で
+  `density_curve` を持たない（ブリーフ §6 の example YAML とは乖離）。ツマミ化するなら
+  `PhysicalLayer` へのフィールド追加 + ブリーフ整合が前提。K1 は既存 `active_rate_target`
+  で密度枠を埋め、`density_curve` は本判断の決着後に回す
+- **density_curve のセンサー定義**: 時間勾配をどの窓・どの統計量で取るか（スキーマ追加後に確定）
 - **K2 の Suno 手動運用**: 生成バッチの記録様式（manifest テンプレート、何サンプルで
   転移を「確認」とみなすか）
 - **fixity 型の導入**: grip 地図が固まった後、CompositionScore にロック/アンロックの
