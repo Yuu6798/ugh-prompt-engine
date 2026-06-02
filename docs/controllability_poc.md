@@ -110,6 +110,19 @@ MusicGen（安価・seed 再現）なら 3–5 水準のスイープに拡張し
 `key_confidence`（検出自信度）は**使わない** — 自信満々に外した key を grip 成功と
 誤判定するため。一致率が偶然水準なら dead、高ければ tight。
 
+**ゼロ分散時の挙動（決定論のため明示）**。丸めにより群内分散が 0 になり
+`pooled_sd = 0` になりうる（例: low の全サンプルが同一 BPM、high も同一 BPM）。
+`inf` / `NaN` を避け snapshot を安定させるため、`ε = 1e-9` として次を規定する:
+
+| 条件 | 分類 | grip 値 |
+|---|---|---|
+| `pooled_sd < ε` かつ `\|mean_high − mean_low\| < ε` | **dead** | `0.0`（分離なし） |
+| `pooled_sd < ε` かつ `\|mean_high − mean_low\| ≥ ε` | **saturated tight** | 符号付き番兵値 `±GRIP_SATURATED`（固定定数、例 `999.0`） |
+| `pooled_sd ≥ ε` | §3 の効果量で分類 | `(mean_high − mean_low) / pooled_sd` |
+
+これにより出力は常に有限・決定論で、同 fixture → 同 grip が保証される。
+カテゴリツマミ（一致率）は除算が無いので本規則の対象外。
+
 ---
 
 ## 4. 設計判断ログ
@@ -263,6 +276,9 @@ MusicGen 出力に対し、Composition Score の物理ツマミ 2 個（bpm / br
 ## Test Strategy
 - 単体: `grip_effect_size` の既知入力（分離した 2 群／重なる 2 群）での値、
   `classify_grip` の閾値境界、符号逆ケースの dead 判定
+- 単体（ゼロ分散、§3 規則）: 群内分散 0 かつ平均一致 → dead (`0.0`)、
+  群内分散 0 かつ平均差あり → saturated tight (`±GRIP_SATURATED`)。`inf`/`NaN` を
+  返さず有限・決定論であることを assert
 - 回帰: 固定 fixture → 固定 grip 表の snapshot
 - 既存テストへの影響: なし（新規モジュール、既存 RPE/eval 不変）
 
