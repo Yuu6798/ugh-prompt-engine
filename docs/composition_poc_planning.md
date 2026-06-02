@@ -436,6 +436,17 @@ MVP を ExternalPromptAdapter 1 つに限定。MusicGen/MIDI は C6 へ。
 
 **理由**: ブリーフ §7。作者性が Score 側に戻り、生成器の確率性を演奏差として扱える。
 
+### D7: C1 は全フィールド required、層間整合性チェックなし、delta_e は semantic 層に保持
+
+**採用**: C1 の CompositionScore スキーマは全フィールド required とし、list
+フィールドはキー必須・空リスト可とする。`delta_e` は semantic 層の仕様として保持し、
+structure はその仕様を実装する曲構造として扱う。`composition_to_target_svp()` では
+physical と semantic の整合性検証を行わない。
+
+**理由**: C1 は「作曲者が書いた正規 YAML を機械が読める」ことを最優先する。BPM と
+意味ラベルの矛盾判定は作曲意図を過剰に弾く可能性があり、PoC 後の UX / lint / audit
+フェーズで扱う方が安全。
+
 ---
 
 ## リスクと緩和策

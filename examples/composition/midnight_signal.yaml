@@ -1,0 +1,55 @@
+meta:
+  title: "Midnight Signal"
+  version: 0.1
+
+semantic:
+  core: "introspective night drive"
+  grv:
+    primary: "deep_house"
+    secondary: "ambient"
+  delta_e:
+    overall: "gradual build from solitude to release"
+  avoid:
+    - "bright festival EDM"
+    - "comic vocal delivery"
+
+physical:
+  bpm: 128
+  key: "C minor"
+  time_signature: "4/4"
+  active_rate_target: "0.90-0.93"
+  valley_depth_target: "0.15-0.25"
+  brightness: "dark"
+  stereo_width: "wide"
+
+structure:
+  - section: intro
+    bars: 8
+    role: "establish loneliness"
+    physical: "low density, sub bass only"
+
+  - section: verse
+    bars: 16
+    role: "restrained movement"
+    physical: "sparse drums, short phrases, clear rests"
+
+  - section: chorus
+    bars: 16
+    role: "emotional release"
+    physical: "full energy, wide stereo, focused layers"
+
+  - section: bridge
+    bars: 8
+    role: "near silence and reflection"
+    physical: "no kick, no bass, minimal texture"
+
+rendering:
+  target_backend: "external"
+  prompt_max_chars: 500
+  priority:
+    - semantic.core
+    - semantic.grv
+    - physical.bpm
+    - physical.key
+    - structure
+    - physical.optional
