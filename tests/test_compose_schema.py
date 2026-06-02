@@ -15,7 +15,7 @@ from svp_rpe.compose import (
 from svp_rpe.semantic_ci import TargetSVP, stable_hash
 
 
-SAMPLE_PATH = Path("examples/composition/midnight_signal.yaml")
+SAMPLE_PATH = Path("examples/composition/midnight_signal/composition_score.yaml")
 
 
 def test_midnight_signal_yaml_model_validates() -> None:

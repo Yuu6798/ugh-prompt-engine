@@ -14,10 +14,12 @@ from svp_rpe.compose.models import (
     SemanticLayer,
     StructureSection,
 )
+from svp_rpe.compose.prompt_renderer import ExternalPromptAdapter
 
 __all__ = [
     "CompositionScore",
     "DeltaESpec",
+    "ExternalPromptAdapter",
     "GeneratedPrompt",
     "GrvSpec",
     "Meta",

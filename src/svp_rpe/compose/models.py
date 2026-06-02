@@ -1,7 +1,7 @@
 """Pydantic models for author-facing Composition Score YAML."""
 from __future__ import annotations
 
-from typing import List
+from typing import List, Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
@@ -70,6 +70,8 @@ class CompositionScore(CompositionModel):
 
 
 class GeneratedPrompt(CompositionModel):
+    backend: Literal["external", "musicgen", "midi"] = "external"
     text: str
-    char_count: int
+    tags: List[str]
+    negative_tags: List[str]
     dropped_elements: List[str]
