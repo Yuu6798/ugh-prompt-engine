@@ -151,7 +151,7 @@ MusicGen（安価・seed 再現）なら 3–5 水準のスイープに拡張し
 | ツマミ | `physical.bpm`（tight 予想） / `physical.brightness`（loose 予想）の 2 つ |
 | 水準 | 各 2 水準（例 bpm: 90 / 140、brightness: dark / bright） |
 | 反復 | 各水準 R=5（seed を変えて 5 サンプル） |
-| センサー | bpm → 観測 BPM、brightness → spectral centroid |
+| センサー | bpm → 観測 BPM、brightness → `spectral_profile.brightness`（帯域比） |
 | 成果物 | `scripts/measure_grip.py` / 数値 fixture / grip 表（2 ツマミ分） |
 
 **完了基準**:
@@ -196,7 +196,7 @@ PoC が扱えるのは「観測チャネルを持つツマミ」のみ。
 | ツマミ（Composition Score） | センサー（RPE 観測量） | grip 予想 | フェーズ |
 |---|---|---|---|
 | `physical.bpm` | 観測 BPM（`PhysicalRPE`） | tight | K0 |
-| `physical.brightness` | spectral centroid | loose | K0 |
+| `physical.brightness` | `spectral_profile.brightness`（帯域比 high/(low+mid+high)） | loose | K0 |
 | `physical.key` / mode | key 検出スコア | tight | K1 |
 | `physical.active_rate_target` | active rate（密度プロキシ） | medium | K1 |
 | `physical.valley_depth_target` | novelty valley depth | dead 予想 | K1 |
@@ -240,7 +240,9 @@ MusicGen 出力に対し、Composition Score の物理ツマミ 2 個（bpm / br
   Cohen's d 型）と `classify_grip(d: float, expected_sign: int) -> Literal["tight","loose","dead"]`
 - 生成（MusicGen 実行）と RPE 抽出は **ハーネス外の前段**とし、その出力を
   数値 fixture（`examples/control/k0/*.json`）として受け取る。grip 計算は fixture のみ依存
-- センサーは既存 RPE 抽出を再利用: bpm → 観測 BPM、brightness → spectral centroid
+- センサーは既存 RPE 抽出を再利用: bpm → 観測 BPM、brightness →
+  `spectral_profile.brightness`（帯域比。`spectral_centroid` ではない —
+  `semantic_rules.py` が brightness ラベルに使うのはこの帯域比フィールド）
 - 決定論契約は「fixture → grip」区間で担保（DD-A）
 
 ## Risks
