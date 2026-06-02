@@ -81,6 +81,7 @@ def test_compose_cli_outputs_text_by_default() -> None:
     assert result.exit_code == 0
     assert result.output.startswith("Dark, introspective night drive atmosphere.")
     assert "128 BPM." in result.output
+    assert "Brightness dark; wide stereo;" in result.output
     assert "Avoid: bright festival EDM; comic vocal delivery." in result.output
     assert '"backend"' not in result.output
 

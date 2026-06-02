@@ -27,7 +27,7 @@ def test_midnight_signal_yaml_model_validates() -> None:
     assert score.meta.version == "0.1"
     assert score.semantic.grv.primary == "deep_house"
     assert score.rendering.target_backend == "external"
-    assert score.rendering.prompt_max_chars == 500
+    assert score.rendering.prompt_max_chars == 650
     assert score.rendering.priority[-1] == "physical.optional"
 
 
