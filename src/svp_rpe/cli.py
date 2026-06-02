@@ -3,6 +3,7 @@
 Commands:
   svprpe extract <audio>        → RPE JSON
   svprpe generate <rpe>         → SVP YAML/TXT
+  svprpe compose <score>        → Composition Score prompt
   svprpe evaluate --audio <wav> → Evaluation JSON (self or with --svp)
   svprpe compare ...            → Reference vs candidate comparison
   svprpe ci-check ...           → Deterministic semantic CI fixture check
@@ -105,6 +106,41 @@ def generate(
         console.print(f"[green]SVP saved to {out_path}[/green]")
     else:
         console.print(content)
+
+
+@app.command()
+def compose(
+    score_yaml: str = typer.Argument(..., help="Path to Composition Score YAML"),
+    output: Optional[str] = typer.Option(None, "-o", "--output", help="Output file path"),
+    output_format: str = typer.Option(
+        "text",
+        "--format",
+        click_type=click.Choice(["text", "json"]),
+        help="Output format: text | json",
+    ),
+    max_chars: Optional[int] = typer.Option(
+        None,
+        "--max-chars",
+        help="Override rendering.prompt_max_chars",
+    ),
+) -> None:
+    """Render Composition Score into an external generator prompt."""
+    from svp_rpe.compose import ExternalPromptAdapter, load_composition_score
+
+    score = load_composition_score(score_yaml)
+    prompt = ExternalPromptAdapter().render(score, max_chars=max_chars)
+    content = (
+        prompt.text
+        if output_format == "text"
+        else json.dumps(prompt.model_dump(mode="json"), ensure_ascii=False, indent=2)
+    )
+
+    if output:
+        Path(output).parent.mkdir(parents=True, exist_ok=True)
+        Path(output).write_text(content, encoding="utf-8")
+        console.print(f"[green]Composition prompt saved to {output}[/green]")
+    else:
+        typer.echo(content)
 
 
 @app.command()

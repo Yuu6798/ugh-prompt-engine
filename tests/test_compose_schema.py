@@ -15,7 +15,7 @@ from svp_rpe.compose import (
 from svp_rpe.semantic_ci import TargetSVP, stable_hash
 
 
-SAMPLE_PATH = Path("examples/composition/midnight_signal.yaml")
+SAMPLE_PATH = Path("examples/composition/midnight_signal/composition_score.yaml")
 
 
 def test_midnight_signal_yaml_model_validates() -> None:
@@ -27,7 +27,7 @@ def test_midnight_signal_yaml_model_validates() -> None:
     assert score.meta.version == "0.1"
     assert score.semantic.grv.primary == "deep_house"
     assert score.rendering.target_backend == "external"
-    assert score.rendering.prompt_max_chars == 500
+    assert score.rendering.prompt_max_chars == 650
     assert score.rendering.priority[-1] == "physical.optional"
 
 

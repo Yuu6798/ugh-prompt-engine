@@ -45,11 +45,12 @@ structure:
 
 rendering:
   target_backend: "external"
-  prompt_max_chars: 500
+  prompt_max_chars: 650
   priority:
     - semantic.core
     - semantic.grv
     - physical.bpm
     - physical.key
     - structure
+    - semantic.avoid
     - physical.optional
