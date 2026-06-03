@@ -74,7 +74,9 @@ def test_rpe_bundle_to_observed_preserves_raw_metrics_and_source() -> None:
             "mode": "major",
             "time_signature": "4/4",
             "active_rate": 0.5,
+            "active_rate_target": 0.5,
             "valley_depth": 0.05,
+            "valley_depth_target": 0.05,
             "brightness": 0.1,
             "stereo_width": 0.8,
         },
@@ -131,8 +133,12 @@ def test_observed_key_matches_composition_target_key_metric() -> None:
     )
 
     diff = compare_expected_observed(expected, observed)
-    key_diff = next(metric for metric in diff.metric_diffs if metric.name == "key")
+    metric_diffs = {metric.name: metric for metric in diff.metric_diffs}
 
-    assert key_diff.expected == "C major"
-    assert key_diff.observed == "C major"
-    assert key_diff.passed is True
+    assert metric_diffs["key"].expected == "C major"
+    assert metric_diffs["key"].observed == "C major"
+    assert metric_diffs["key"].passed is True
+    assert metric_diffs["active_rate_target"].passed is True
+    assert metric_diffs["valley_depth_target"].passed is True
+    assert metric_diffs["brightness"].passed is True
+    assert metric_diffs["stereo_width"].passed is True

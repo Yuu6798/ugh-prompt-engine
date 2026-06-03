@@ -21,7 +21,9 @@ def rpe_bundle_to_observed(bundle: RPEBundle, *, id: str) -> ObservedRPE:
         "mode": physical.mode,
         "time_signature": physical.time_signature,
         "active_rate": float(physical.active_rate),
+        "active_rate_target": float(physical.active_rate),
         "valley_depth": float(physical.valley_depth),
+        "valley_depth_target": float(physical.valley_depth),
         "brightness": float(physical.spectral_profile.brightness),
         "stereo_width": (
             float(physical.stereo_profile.width) if physical.stereo_profile is not None else None
