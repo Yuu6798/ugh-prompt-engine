@@ -73,6 +73,42 @@ def test_target_svp_generates_expected_rpe_deterministically():
     assert expected_1.source_hash == stable_hash(target)
 
 
+def test_free_form_delta_e_target_canonicalizes_expected_signal():
+    target = TargetSVP(
+        id="target-freeform-delta-e",
+        domain="music",
+        core="solitary release",
+        delta_e_profile="gradual build from solitude to release",
+    )
+
+    expected = generate_expected_rpe(target)
+
+    assert "gradual build" in expected.required_signals
+    assert "gradual build from solitude to release" not in expected.required_signals
+    assert "gradual_build" in expected.allowed_signals
+
+
+def test_free_form_delta_e_target_matches_observed_canonical_signal():
+    target = TargetSVP(
+        id="target-freeform-delta-e",
+        domain="music",
+        core="solitary release",
+        delta_e_profile="gradual build from solitude to release",
+    )
+    observed = ObservedRPE(
+        id="observed-canonical-delta-e",
+        domain="music",
+        signals=["solitary release", "gradual_build", "gradual build"],
+        metrics={},
+    )
+
+    diff = compare_expected_observed(generate_expected_rpe(target), observed)
+
+    assert "gradual build" in diff.preserved
+    assert "gradual build from solitude to release" not in diff.missing
+    assert "gradual_build" not in diff.over_changed
+
+
 def test_matching_observed_rpe_has_zero_loss():
     result = run_semantic_ci(_target(), _matching_observed())
 

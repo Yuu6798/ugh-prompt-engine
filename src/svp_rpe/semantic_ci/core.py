@@ -8,6 +8,7 @@ from typing import Any, Mapping
 
 from pydantic import BaseModel
 
+from svp_rpe.eval.delta_e_alignment import TRANSITION_TYPES
 from svp_rpe.utils.config_loader import load_config
 from svp_rpe.semantic_ci.models import (
     ExpectedRPE,
@@ -64,16 +65,17 @@ def _is_number(value: Any) -> bool:
 def generate_expected_rpe(target_svp: TargetSVP) -> ExpectedRPE:
     """Generate Expected RPE deterministically from a Target SVP."""
 
+    delta_e_required, delta_e_allowed = _delta_e_signal_values(target_svp.delta_e_profile)
     required = normalize_signals(
         [
             target_svp.core,
-            target_svp.delta_e_profile,
+            *delta_e_required,
             *target_svp.surface,
             *target_svp.grv,
             *target_svp.preserve,
         ]
     )
-    allowed = normalize_signals([*required, *target_svp.lock])
+    allowed = normalize_signals([*required, *delta_e_allowed, *target_svp.lock])
     expected = ExpectedRPE(
         source_svp_id=target_svp.id,
         domain=target_svp.domain,
@@ -87,6 +89,26 @@ def generate_expected_rpe(target_svp: TargetSVP) -> ExpectedRPE:
         source_hash=stable_hash(target_svp),
     )
     return expected
+
+
+def _delta_e_signal_values(value: str) -> tuple[list[str], list[str]]:
+    if not value:
+        return [], []
+
+    canonical = _canonical_delta_e_transition(value)
+    if canonical is None:
+        return [value], [value]
+
+    display = canonical.replace("_", " ")
+    return [display], [display, canonical]
+
+
+def _canonical_delta_e_transition(value: str) -> str | None:
+    normalized = value.lower().replace("-", "_").replace(" ", "_")
+    for transition_type in sorted(TRANSITION_TYPES):
+        if transition_type in normalized:
+            return transition_type
+    return None
 
 
 def _compare_metric(name: str, expected: Any, observed: Any, tolerance: float | None) -> MetricDiff:
