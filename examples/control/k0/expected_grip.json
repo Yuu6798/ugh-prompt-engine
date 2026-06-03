@@ -1,0 +1,64 @@
+{
+  "schema_version": "1.0",
+  "fixture_id": "k0_musicgen_minimal_rpe_features",
+  "repetitions": 5,
+  "results": [
+    {
+      "knob": "bpm",
+      "sensor": "bpm",
+      "expected_sign": 1,
+      "low_level": "90",
+      "high_level": "140",
+      "repetitions": 5,
+      "low_values": [
+        89.8,
+        90.4,
+        91.1,
+        89.5,
+        90.2
+      ],
+      "high_values": [
+        139.2,
+        140.6,
+        141.0,
+        139.7,
+        140.3
+      ],
+      "low_mean": 90.2,
+      "high_mean": 140.16,
+      "grip": 74.977498,
+      "classification": "tight"
+    },
+    {
+      "knob": "brightness",
+      "sensor": "spectral_profile.brightness",
+      "expected_sign": 1,
+      "low_level": "dark",
+      "high_level": "bright",
+      "repetitions": 5,
+      "low_values": [
+        0.48,
+        0.49,
+        0.47,
+        0.5,
+        0.48
+      ],
+      "high_values": [
+        0.49,
+        0.47,
+        0.5,
+        0.48,
+        0.48
+      ],
+      "low_mean": 0.484,
+      "high_mean": 0.484,
+      "grip": 0.0,
+      "classification": "dead"
+    }
+  ],
+  "summary": {
+    "tight": 1,
+    "loose": 0,
+    "dead": 1
+  }
+}

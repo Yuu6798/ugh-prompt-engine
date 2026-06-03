@@ -1,0 +1,264 @@
+{
+  "schema_version": "1.0",
+  "fixture_id": "k0_musicgen_minimal_rpe_features",
+  "generator": "musicgen_fixture",
+  "repetitions": 5,
+  "knobs": [
+    {
+      "name": "bpm",
+      "sensor": "bpm",
+      "expected_sign": 1,
+      "low_level": "90",
+      "high_level": "140"
+    },
+    {
+      "name": "brightness",
+      "sensor": "spectral_profile.brightness",
+      "expected_sign": 1,
+      "low_level": "dark",
+      "high_level": "bright"
+    }
+  ],
+  "samples": [
+    {
+      "sample_id": "bpm_low_r01",
+      "knob": "bpm",
+      "level": "90",
+      "repeat": 1,
+      "features": {
+        "bpm": 89.8,
+        "spectral_profile": {
+          "brightness": 0.481
+        }
+      }
+    },
+    {
+      "sample_id": "bpm_low_r02",
+      "knob": "bpm",
+      "level": "90",
+      "repeat": 2,
+      "features": {
+        "bpm": 90.4,
+        "spectral_profile": {
+          "brightness": 0.477
+        }
+      }
+    },
+    {
+      "sample_id": "bpm_low_r03",
+      "knob": "bpm",
+      "level": "90",
+      "repeat": 3,
+      "features": {
+        "bpm": 91.1,
+        "spectral_profile": {
+          "brightness": 0.486
+        }
+      }
+    },
+    {
+      "sample_id": "bpm_low_r04",
+      "knob": "bpm",
+      "level": "90",
+      "repeat": 4,
+      "features": {
+        "bpm": 89.5,
+        "spectral_profile": {
+          "brightness": 0.479
+        }
+      }
+    },
+    {
+      "sample_id": "bpm_low_r05",
+      "knob": "bpm",
+      "level": "90",
+      "repeat": 5,
+      "features": {
+        "bpm": 90.2,
+        "spectral_profile": {
+          "brightness": 0.484
+        }
+      }
+    },
+    {
+      "sample_id": "bpm_high_r01",
+      "knob": "bpm",
+      "level": "140",
+      "repeat": 1,
+      "features": {
+        "bpm": 139.2,
+        "spectral_profile": {
+          "brightness": 0.486
+        }
+      }
+    },
+    {
+      "sample_id": "bpm_high_r02",
+      "knob": "bpm",
+      "level": "140",
+      "repeat": 2,
+      "features": {
+        "bpm": 140.6,
+        "spectral_profile": {
+          "brightness": 0.482
+        }
+      }
+    },
+    {
+      "sample_id": "bpm_high_r03",
+      "knob": "bpm",
+      "level": "140",
+      "repeat": 3,
+      "features": {
+        "bpm": 141.0,
+        "spectral_profile": {
+          "brightness": 0.488
+        }
+      }
+    },
+    {
+      "sample_id": "bpm_high_r04",
+      "knob": "bpm",
+      "level": "140",
+      "repeat": 4,
+      "features": {
+        "bpm": 139.7,
+        "spectral_profile": {
+          "brightness": 0.481
+        }
+      }
+    },
+    {
+      "sample_id": "bpm_high_r05",
+      "knob": "bpm",
+      "level": "140",
+      "repeat": 5,
+      "features": {
+        "bpm": 140.3,
+        "spectral_profile": {
+          "brightness": 0.485
+        }
+      }
+    },
+    {
+      "sample_id": "brightness_low_r01",
+      "knob": "brightness",
+      "level": "dark",
+      "repeat": 1,
+      "features": {
+        "bpm": 128.1,
+        "spectral_profile": {
+          "brightness": 0.48
+        }
+      }
+    },
+    {
+      "sample_id": "brightness_low_r02",
+      "knob": "brightness",
+      "level": "dark",
+      "repeat": 2,
+      "features": {
+        "bpm": 127.8,
+        "spectral_profile": {
+          "brightness": 0.49
+        }
+      }
+    },
+    {
+      "sample_id": "brightness_low_r03",
+      "knob": "brightness",
+      "level": "dark",
+      "repeat": 3,
+      "features": {
+        "bpm": 128.4,
+        "spectral_profile": {
+          "brightness": 0.47
+        }
+      }
+    },
+    {
+      "sample_id": "brightness_low_r04",
+      "knob": "brightness",
+      "level": "dark",
+      "repeat": 4,
+      "features": {
+        "bpm": 127.9,
+        "spectral_profile": {
+          "brightness": 0.5
+        }
+      }
+    },
+    {
+      "sample_id": "brightness_low_r05",
+      "knob": "brightness",
+      "level": "dark",
+      "repeat": 5,
+      "features": {
+        "bpm": 128.0,
+        "spectral_profile": {
+          "brightness": 0.48
+        }
+      }
+    },
+    {
+      "sample_id": "brightness_high_r01",
+      "knob": "brightness",
+      "level": "bright",
+      "repeat": 1,
+      "features": {
+        "bpm": 128.2,
+        "spectral_profile": {
+          "brightness": 0.49
+        }
+      }
+    },
+    {
+      "sample_id": "brightness_high_r02",
+      "knob": "brightness",
+      "level": "bright",
+      "repeat": 2,
+      "features": {
+        "bpm": 127.7,
+        "spectral_profile": {
+          "brightness": 0.47
+        }
+      }
+    },
+    {
+      "sample_id": "brightness_high_r03",
+      "knob": "brightness",
+      "level": "bright",
+      "repeat": 3,
+      "features": {
+        "bpm": 128.3,
+        "spectral_profile": {
+          "brightness": 0.5
+        }
+      }
+    },
+    {
+      "sample_id": "brightness_high_r04",
+      "knob": "brightness",
+      "level": "bright",
+      "repeat": 4,
+      "features": {
+        "bpm": 128.0,
+        "spectral_profile": {
+          "brightness": 0.48
+        }
+      }
+    },
+    {
+      "sample_id": "brightness_high_r05",
+      "knob": "brightness",
+      "level": "bright",
+      "repeat": 5,
+      "features": {
+        "bpm": 127.8,
+        "spectral_profile": {
+          "brightness": 0.48
+        }
+      }
+    }
+  ]
+}
