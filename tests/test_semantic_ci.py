@@ -253,6 +253,32 @@ def test_categorical_metric_diff_and_repaired_svp_mapping():
     assert "monochrome" in result.repaired_svp.lock
 
 
+def test_range_metric_miss_keeps_metric_loss_finite():
+    target = TargetSVP(
+        id="target-range",
+        domain="music",
+        core="steady",
+        metric_targets={"active_rate_target": "0.60-0.70"},
+    )
+    observed = ObservedRPE(
+        id="fixture-range-miss",
+        domain="music",
+        signals=["steady"],
+        metrics={"active_rate": 0.8},
+    )
+
+    diff = compare_expected_observed(generate_expected_rpe(target), observed)
+    metric = diff.metric_diffs[0]
+
+    assert metric.name == "active_rate_target"
+    assert metric.expected == "0.60-0.70"
+    assert metric.observed == 0.8
+    assert metric.diff == pytest.approx(0.1)
+    assert metric.passed is False
+    assert diff.loss > 0.0
+    assert diff.verdict == "repair"
+
+
 def test_roundtrip_log_records_state_transitions_and_hashes():
     result = run_semantic_ci(_target(), _matching_observed())
     log = result.roundtrip_log

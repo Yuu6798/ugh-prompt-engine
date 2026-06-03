@@ -267,7 +267,10 @@ def _metric_loss(metric_diffs: list[MetricDiff]) -> float:
             losses.append(0.0)
         elif metric.diff is not None:
             tolerance = metric.tolerance if metric.tolerance is not None else 0.0
-            denominator = max(abs(float(metric.expected or 0.0)), tolerance, 1.0)
+            baseline = _numeric_value(metric.expected)
+            if baseline is None:
+                baseline = _numeric_value(metric.observed)
+            denominator = max(abs(float(baseline or 0.0)), tolerance, 1.0)
             losses.append(min(1.0, metric.diff / denominator))
         else:
             losses.append(1.0)
