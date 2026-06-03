@@ -34,6 +34,7 @@ DEFAULT_SEPARATION_DEVICE = "cpu"
 SEPARATE_HELP = "Enable Demucs stem separation (opt-in). Requires demucs installed."
 SEPARATION_MODEL_HELP = "Demucs model name used when --separate is set."
 SEPARATION_DEVICE_HELP = "Demucs inference device used when --separate is set."
+AUDIO_INPUT_SUFFIXES = {".wav", ".mp3", ".flac", ".ogg"}
 
 SeparateOption = Annotated[bool, typer.Option("--separate", help=SEPARATE_HELP)]
 SeparationModelOption = Annotated[
@@ -444,6 +445,59 @@ def batch(
 
     if output_dir:
         console.print(f"\n[green]Reports saved to {output_dir}/[/green]")
+
+
+@app.command("audit")
+def audit(
+    composition_score: str = typer.Argument(..., help="Path to Composition Score YAML"),
+    rpe_or_audio: str = typer.Argument(
+        ...,
+        help="Path to extracted RPEBundle JSON or generated audio file",
+    ),
+    output_format: str = typer.Option(
+        "text",
+        "--format",
+        click_type=click.Choice(["text", "json"]),
+        help="Output format: text | json",
+    ),
+    valley_method: str = typer.Option(
+        "hybrid",
+        "--valley-method",
+        help="Valley method for audio input: rms_percentile/section_ar/hybrid",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output", help="Output file path"),
+) -> None:
+    """Render a composition control-panel audit from a score and RPE/audio input."""
+    from svp_rpe.compose import load_composition_score
+    from svp_rpe.rpe.models import RPEBundle
+    from svp_rpe.semantic_ci.audit import build_audit_report, render_audit_text
+
+    score = load_composition_score(composition_score)
+    input_path = Path(rpe_or_audio)
+    # JSON fixtures remain the deterministic DD-A test path. Audio inputs call
+    # the existing extractor as a convenience front-end for the one-shot workflow.
+    if input_path.suffix.lower() in AUDIO_INPUT_SUFFIXES:
+        from svp_rpe.rpe.extractor import extract_rpe_from_file
+
+        bundle = extract_rpe_from_file(str(input_path), valley_method=valley_method)
+    else:
+        data = json.loads(input_path.read_text(encoding="utf-8"))
+        bundle = RPEBundle(**data)
+    report = build_audit_report(score, bundle, observed_id=input_path.stem)
+
+    if output_format == "json":
+        content = json.dumps(
+            report.model_dump(mode="json"),
+            ensure_ascii=False,
+            indent=2,
+        )
+    else:
+        content = render_audit_text(report)
+
+    if output:
+        Path(output).write_text(content, encoding="utf-8")
+    else:
+        typer.echo(content)
 
 
 if __name__ == "__main__":

@@ -295,19 +295,21 @@ class GeneratedPrompt(BaseModel):
 
 **設計方針**:
 
-- 内部フロー: Score → TargetSVP → ExpectedRPE / Audio → RPEBundle → ObservedRPE → SemanticDiff → RepairSVP → Report
-- 既存パイプラインの組み合わせ（新規ロジック最小）
+- 内部フロー: Score → TargetSVP → Audio/RPEBundle → ObservedRPE → knob needles → Control Panel Report
+- audit は合否判定ではなく制御盤レポート。verdict / pass-fail / loss は出さず、終了コードは常に 0。
 
 ```
-svprpe audit score.yaml generated_track.wav [-o report.md] [--threshold 0.3]
+svprpe audit score.yaml generated_track.wav [-o report.md] [--format text|json]
 ```
+
+JSON fixture mode is also supported for deterministic tests: `svprpe audit score.yaml extracted_rpe.json --format json`.
 
 **Acceptance Criteria**:
 
-- [ ] Score + WAV/MP3 → Markdown レポート出力
-- [ ] レポートに Signal Diff（意味層）+ Metric Diff（物理層）+ Repair Plan が含まれる
-- [ ] `--threshold` で pass/repair 判定が切り替わる
-- [ ] 終了コード: pass=0, repair=1（CI 統合可能）
+- [ ] Score + WAV/MP3 → 制御盤レポート出力
+- [ ] レポートにツマミごとの target / observed / deviation / score が含まれる
+- [ ] `--format text|json` で表示形式が切り替わる
+- [ ] 終了コードは常に 0（verdict / pass-fail / loss は出さない）
 
 **推定規模**: 1 日
 

@@ -73,6 +73,56 @@ def test_target_svp_generates_expected_rpe_deterministically():
     assert expected_1.source_hash == stable_hash(target)
 
 
+def test_free_form_delta_e_target_canonicalizes_expected_signal():
+    target = TargetSVP(
+        id="target-freeform-delta-e",
+        domain="music",
+        core="solitary release",
+        delta_e_profile="gradual build from solitude to release",
+    )
+
+    expected = generate_expected_rpe(target)
+
+    assert "gradual build" in expected.required_signals
+    assert "gradual build from solitude to release" not in expected.required_signals
+    assert "gradual_build" in expected.allowed_signals
+
+
+def test_delta_e_canonicalization_keeps_decrescendo_distinct_from_crescendo():
+    target = TargetSVP(
+        id="target-decrescendo",
+        domain="music",
+        core="receding",
+        delta_e_profile="decrescendo",
+    )
+
+    expected = generate_expected_rpe(target)
+
+    assert "decrescendo" in expected.required_signals
+    assert "crescendo" not in expected.required_signals
+
+
+def test_free_form_delta_e_target_matches_observed_canonical_signal():
+    target = TargetSVP(
+        id="target-freeform-delta-e",
+        domain="music",
+        core="solitary release",
+        delta_e_profile="gradual build from solitude to release",
+    )
+    observed = ObservedRPE(
+        id="observed-canonical-delta-e",
+        domain="music",
+        signals=["solitary release", "gradual_build", "gradual build"],
+        metrics={},
+    )
+
+    diff = compare_expected_observed(generate_expected_rpe(target), observed)
+
+    assert "gradual build" in diff.preserved
+    assert "gradual build from solitude to release" not in diff.missing
+    assert "gradual_build" not in diff.over_changed
+
+
 def test_matching_observed_rpe_has_zero_loss():
     result = run_semantic_ci(_target(), _matching_observed())
 
@@ -251,6 +301,32 @@ def test_categorical_metric_diff_and_repaired_svp_mapping():
     assert "soft light" in result.repaired_svp.surface
     assert "neon background" in result.repaired_svp.avoid
     assert "monochrome" in result.repaired_svp.lock
+
+
+def test_range_metric_miss_keeps_metric_loss_finite():
+    target = TargetSVP(
+        id="target-range",
+        domain="music",
+        core="steady",
+        metric_targets={"active_rate_target": "0.60-0.70"},
+    )
+    observed = ObservedRPE(
+        id="fixture-range-miss",
+        domain="music",
+        signals=["steady"],
+        metrics={"active_rate": 0.8},
+    )
+
+    diff = compare_expected_observed(generate_expected_rpe(target), observed)
+    metric = diff.metric_diffs[0]
+
+    assert metric.name == "active_rate_target"
+    assert metric.expected == "0.60-0.70"
+    assert metric.observed == 0.8
+    assert metric.diff == pytest.approx(0.1)
+    assert metric.passed is False
+    assert diff.loss > 0.0
+    assert diff.verdict == "repair"
 
 
 def test_roundtrip_log_records_state_transitions_and_hashes():

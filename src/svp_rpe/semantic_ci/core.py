@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any, Mapping
 
 from pydantic import BaseModel
 
+from svp_rpe.eval.delta_e_alignment import TRANSITION_TYPES
+from svp_rpe.utils.config_loader import load_config
 from svp_rpe.semantic_ci.models import (
     ExpectedRPE,
     MetricDiff,
@@ -19,6 +22,10 @@ from svp_rpe.semantic_ci.models import (
     SemanticDiff,
     TargetSVP,
     normalize_signals,
+)
+
+RANGE_PATTERN = re.compile(
+    r"^\s*([+-]?\d+(?:\.\d+)?)\s*-\s*([+-]?\d+(?:\.\d+)?)\s*$"
 )
 
 
@@ -58,16 +65,17 @@ def _is_number(value: Any) -> bool:
 def generate_expected_rpe(target_svp: TargetSVP) -> ExpectedRPE:
     """Generate Expected RPE deterministically from a Target SVP."""
 
+    delta_e_required, delta_e_allowed = _delta_e_signal_values(target_svp.delta_e_profile)
     required = normalize_signals(
         [
             target_svp.core,
-            target_svp.delta_e_profile,
+            *delta_e_required,
             *target_svp.surface,
             *target_svp.grv,
             *target_svp.preserve,
         ]
     )
-    allowed = normalize_signals([*required, *target_svp.lock])
+    allowed = normalize_signals([*required, *delta_e_allowed, *target_svp.lock])
     expected = ExpectedRPE(
         source_svp_id=target_svp.id,
         domain=target_svp.domain,
@@ -83,6 +91,27 @@ def generate_expected_rpe(target_svp: TargetSVP) -> ExpectedRPE:
     return expected
 
 
+def _delta_e_signal_values(value: str) -> tuple[list[str], list[str]]:
+    if not value:
+        return [], []
+
+    canonical = _canonical_delta_e_transition(value)
+    if canonical is None:
+        return [value], [value]
+
+    display = canonical.replace("_", " ")
+    return [display], [display, canonical]
+
+
+def _canonical_delta_e_transition(value: str) -> str | None:
+    normalized = value.lower().replace("-", "_").replace(" ", "_")
+    for transition_type in sorted(TRANSITION_TYPES):
+        pattern = rf"(?:^|_){re.escape(transition_type)}(?:_|$)"
+        if re.search(pattern, normalized):
+            return transition_type
+    return None
+
+
 def _compare_metric(name: str, expected: Any, observed: Any, tolerance: float | None) -> MetricDiff:
     if _is_number(expected) and _is_number(observed):
         diff = abs(float(observed) - float(expected))
@@ -96,6 +125,20 @@ def _compare_metric(name: str, expected: Any, observed: Any, tolerance: float | 
             passed=passed,
         )
 
+    observed_number = _numeric_value(observed)
+    if isinstance(expected, str) and observed_number is not None:
+        bounds = _parse_numeric_range(expected) or _target_band_bounds(name, expected)
+        if bounds is not None:
+            diff = _range_distance(observed_number, *bounds)
+            return MetricDiff(
+                name=name,
+                expected=expected,
+                observed=observed,
+                tolerance=tolerance,
+                diff=round(diff, 6),
+                passed=diff <= (tolerance if tolerance is not None else 0.0),
+            )
+
     return MetricDiff(
         name=name,
         expected=expected,
@@ -104,6 +147,137 @@ def _compare_metric(name: str, expected: Any, observed: Any, tolerance: float | 
         diff=None,
         passed=observed == expected,
     )
+
+
+def _observed_metric_value(metrics: Mapping[str, Any], name: str) -> Any:
+    if name in metrics:
+        return metrics.get(name)
+    sensor_name = _sensor_metric_name(name)
+    return metrics.get(sensor_name)
+
+
+def _numeric_value(value: Any) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_numeric_range(value: str) -> tuple[float, float] | None:
+    match = RANGE_PATTERN.match(value)
+    if match is None:
+        return None
+    lower = float(match.group(1))
+    upper = float(match.group(2))
+    if lower > upper:
+        lower, upper = upper, lower
+    return lower, upper
+
+
+def _target_band_bounds(name: str, target: str) -> tuple[float | None, float | None] | None:
+    feature_name = _sensor_metric_name(name)
+    aliases = _label_aliases(_normalize_label(target))
+    for rule in _semantic_rules_for_feature(feature_name):
+        labels = {_normalize_label(label) for label in rule["labels"]}
+        if aliases.intersection(labels):
+            return rule["bounds"].get("min"), rule["bounds"].get("max")
+
+    if feature_name == "brightness" and "dark" in aliases:
+        for rule in _semantic_rules_for_feature(feature_name):
+            labels = {_normalize_label(label) for label in rule["labels"]}
+            lower = rule["bounds"].get("min")
+            if "bright" in labels and lower is not None:
+                return None, lower
+    return None
+
+
+def _range_distance(value: float, lower: float | None, upper: float | None) -> float:
+    if lower is not None and value < lower:
+        return lower - value
+    if upper is not None and value > upper:
+        return value - upper
+    return 0.0
+
+
+def _sensor_metric_name(name: str) -> str:
+    return name[: -len("_target")] if name.endswith("_target") else name
+
+
+def _semantic_rules_for_feature(feature_name: str) -> list[dict[str, Any]]:
+    try:
+        config = load_config("semantic_rules")
+    except FileNotFoundError:
+        return []
+
+    rules: list[dict[str, Any]] = []
+    for layer in ("perceptual", "structural", "semantic_hypothesis"):
+        for raw_rule in config.get(layer, []):
+            condition = raw_rule.get("condition", {})
+            bounds = _feature_bounds(feature_name, condition)
+            if bounds is None:
+                continue
+            rules.append({
+                "labels": _labels_from_rule(raw_rule),
+                "bounds": bounds,
+            })
+    return rules
+
+
+def _feature_bounds(feature_name: str, condition: Mapping[str, Any]) -> dict[str, float] | None:
+    bounds: dict[str, float] = {}
+    saw_feature = False
+    for raw_key, raw_value in condition.items():
+        condition_feature, operator = _condition_key(raw_key)
+        if condition_feature != feature_name:
+            continue
+        saw_feature = True
+        if operator == ">=":
+            bounds["min"] = float(raw_value)
+        elif operator == "<=":
+            bounds["max"] = float(raw_value)
+    return bounds if saw_feature else None
+
+
+def _labels_from_rule(rule: Mapping[str, Any]) -> list[str]:
+    labels: list[str] = []
+    for item in rule.get("labels", []):
+        if isinstance(item, str):
+            labels.append(item)
+        else:
+            label = item.get("label")
+            if label:
+                labels.append(str(label))
+    return labels
+
+
+def _condition_key(raw_key: str) -> tuple[str, str]:
+    if raw_key.endswith("_min"):
+        return raw_key[: -len("_min")], ">="
+    if raw_key.endswith("_max"):
+        return raw_key[: -len("_max")], "<="
+    return raw_key, "=="
+
+
+def _label_aliases(label: str) -> set[str]:
+    aliases = {label}
+    try:
+        config = load_config("synonym_map")
+    except FileNotFoundError:
+        return aliases
+
+    for group in config.get("groups", []):
+        normalized_group = {_normalize_label(str(item)) for item in group}
+        if label in normalized_group:
+            aliases.update(normalized_group)
+    return aliases
+
+
+def _normalize_label(value: str) -> str:
+    return value.strip().lower()
 
 
 def _metric_loss(metric_diffs: list[MetricDiff]) -> float:
@@ -116,7 +290,10 @@ def _metric_loss(metric_diffs: list[MetricDiff]) -> float:
             losses.append(0.0)
         elif metric.diff is not None:
             tolerance = metric.tolerance if metric.tolerance is not None else 0.0
-            denominator = max(abs(float(metric.expected or 0.0)), tolerance, 1.0)
+            baseline = _numeric_value(metric.expected)
+            if baseline is None:
+                baseline = _numeric_value(metric.observed)
+            denominator = max(abs(float(baseline or 0.0)), tolerance, 1.0)
             losses.append(min(1.0, metric.diff / denominator))
         else:
             losses.append(1.0)
@@ -145,7 +322,7 @@ def compare_expected_observed(
         _compare_metric(
             name,
             target,
-            observed.metrics.get(name),
+            _observed_metric_value(observed.metrics, name),
             expected.tolerances.get(name),
         )
         for name, target in sorted(expected.metric_targets.items())

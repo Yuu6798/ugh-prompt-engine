@@ -6,6 +6,7 @@ _TRANSITION_TYPES = {
     "flat", "sustained_energy", "gradual_build", "dramatic_contrast",
     "sudden_drop", "crescendo", "decrescendo",
 }
+TRANSITION_TYPES = frozenset(_TRANSITION_TYPES)
 
 _COMPATIBLE_PAIRS = {
     ("gradual_build", "crescendo"),

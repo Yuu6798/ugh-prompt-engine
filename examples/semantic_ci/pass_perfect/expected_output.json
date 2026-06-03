@@ -55,6 +55,7 @@
       "chorus lift",
       "energetic driving dense",
       "gradual build",
+      "gradual_build",
       "wide stereo"
     ],
     "prohibited_signals": [
@@ -276,7 +277,7 @@
   "roundtrip_log": {
     "schema_version": "1.0",
     "target_svp_hash": "af2925ebb32d01994773a6e49c2522bf5b1141a0863d865cf8f026b7265b8660",
-    "expected_rpe_hash": "4b6c2c2c170999f4e29aefe024f9b9efaf54c37a9b86d466fb7462c7ff077973",
+    "expected_rpe_hash": "1fc9736b8f26692095eb14605a8da7766e8275bf905a3f10f3ee23ab657d5e59",
     "observed_rpe_hash": "b77b3fb9f77805257c5332ca2c0d8f1be2745b335811bbf18dc4ab8920e9bb0d",
     "semantic_diff_hash": "fb058e0ff65b6fd773b40608469c032b86fef9ff1f4449e98a80b7258c7c22bf",
     "repair_svp_hash": "558443b328edaf67324dbf5d08188d380e2d203746c56e579728ac439eb6bdb8",
@@ -289,7 +290,7 @@
       {
         "name": "expected_rpe",
         "input_hash": "af2925ebb32d01994773a6e49c2522bf5b1141a0863d865cf8f026b7265b8660",
-        "output_hash": "4b6c2c2c170999f4e29aefe024f9b9efaf54c37a9b86d466fb7462c7ff077973"
+        "output_hash": "1fc9736b8f26692095eb14605a8da7766e8275bf905a3f10f3ee23ab657d5e59"
       },
       {
         "name": "observed_rpe",
@@ -298,7 +299,7 @@
       },
       {
         "name": "semantic_diff",
-        "input_hash": "4b6c2c2c170999f4e29aefe024f9b9efaf54c37a9b86d466fb7462c7ff077973:b77b3fb9f77805257c5332ca2c0d8f1be2745b335811bbf18dc4ab8920e9bb0d:a22a59d5ab6a852f77f917dcacf5e57906ede07134ccd5c5f469ccaf070ab5f3",
+        "input_hash": "1fc9736b8f26692095eb14605a8da7766e8275bf905a3f10f3ee23ab657d5e59:b77b3fb9f77805257c5332ca2c0d8f1be2745b335811bbf18dc4ab8920e9bb0d:a22a59d5ab6a852f77f917dcacf5e57906ede07134ccd5c5f469ccaf070ab5f3",
         "output_hash": "fb058e0ff65b6fd773b40608469c032b86fef9ff1f4449e98a80b7258c7c22bf"
       },
       {
@@ -307,6 +308,6 @@
         "output_hash": "558443b328edaf67324dbf5d08188d380e2d203746c56e579728ac439eb6bdb8"
       }
     ],
-    "final_hash": "23789d091c03fab88a62ec8a613ac642f8f1dfdccc9bffb84bf6e60590e293b2"
+    "final_hash": "f331b38813fcce4aeb0e368dd464995bea85b98a872f3698908714d6998969cd"
   }
 }
