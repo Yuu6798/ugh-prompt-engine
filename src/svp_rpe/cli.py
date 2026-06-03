@@ -446,5 +446,42 @@ def batch(
         console.print(f"\n[green]Reports saved to {output_dir}/[/green]")
 
 
+@app.command("audit")
+def audit(
+    composition_score: str = typer.Argument(..., help="Path to Composition Score YAML"),
+    rpe_json: str = typer.Argument(..., help="Path to extracted RPEBundle JSON"),
+    output_format: str = typer.Option(
+        "text",
+        "--format",
+        click_type=click.Choice(["text", "json"]),
+        help="Output format: text | json",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output", help="Output file path"),
+) -> None:
+    """Render a composition control-panel audit from a score and RPE JSON."""
+    from svp_rpe.compose import load_composition_score
+    from svp_rpe.rpe.models import RPEBundle
+    from svp_rpe.semantic_ci.audit import build_audit_report, render_audit_text
+
+    score = load_composition_score(composition_score)
+    data = json.loads(Path(rpe_json).read_text(encoding="utf-8"))
+    bundle = RPEBundle(**data)
+    report = build_audit_report(score, bundle, observed_id=Path(rpe_json).stem)
+
+    if output_format == "json":
+        content = json.dumps(
+            report.model_dump(mode="json"),
+            ensure_ascii=False,
+            indent=2,
+        )
+    else:
+        content = render_audit_text(report)
+
+    if output:
+        Path(output).write_text(content, encoding="utf-8")
+    else:
+        typer.echo(content)
+
+
 if __name__ == "__main__":
     app()
