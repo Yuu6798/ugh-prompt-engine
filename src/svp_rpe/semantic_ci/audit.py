@@ -233,7 +233,11 @@ def _key_needle(target: Any, observed: ObservedRPE) -> AuditNeedle:
     try:
         import mir_eval.key as mir_eval_key
     except ModuleNotFoundError:
-        score = 1.0 if target_key == observed_key else 0.0
+        score = (
+            1.0
+            if _normalize_key_for_exact_match(target_key) == _normalize_key_for_exact_match(observed_key)
+            else 0.0
+        )
         return AuditNeedle(
             name="key",
             layer="physical",
@@ -522,6 +526,10 @@ def _text_metric(value: Any) -> Optional[str]:
     if value is None:
         return None
     return str(value)
+
+
+def _normalize_key_for_exact_match(value: str) -> str:
+    return " ".join(value.casefold().split())
 
 
 def _numeric_metric(value: Any) -> Optional[float]:

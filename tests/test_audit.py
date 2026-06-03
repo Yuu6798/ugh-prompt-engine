@@ -228,10 +228,12 @@ def test_audit_key_needle_falls_back_without_mir_eval(monkeypatch: Any) -> None:
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
-    report = build_audit_report(_make_score(), _make_bundle(), observed_id="fixture-rpe")
+    score = _make_score()
+    score.physical.key = "C Major"
+    report = build_audit_report(score, _make_bundle(), observed_id="fixture-rpe")
     key = _needle(report, "physical", "key")
 
-    assert key.target == "C major"
+    assert key.target == "C Major"
     assert key.observed == "C major"
     assert key.score == 1.0
     assert key.deviation == 0.0
