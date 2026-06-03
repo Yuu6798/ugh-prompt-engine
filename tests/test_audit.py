@@ -138,7 +138,9 @@ def test_audit_report_returns_needles_without_outcome_keys() -> None:
     assert key.score == 1.0
     assert time_signature.score == 1.0
     assert active_rate.deviation == 0.1
+    assert active_rate.observed_band is None
     assert valley_depth.deviation == -0.05
+    assert valley_depth.observed_band is None
     assert brightness.target_band == "brightness >= 0.6"
     assert brightness.deviation == -0.1
     assert brightness.observed_band is None
@@ -168,8 +170,8 @@ def test_audit_text_snapshot_is_stable() -> None:
         "| bpm | 128 | 130 |  | 2 |  |  |\n"
         "| key | C major | C major |  | 0 | 1 |  |\n"
         "| time_signature | 4/4 | 4/4 |  | 0 | 1 |  |\n"
-        "| active_rate | 0.60-0.70 | 0.8 | continuous, wall-like | 0.1 |  |  |\n"
-        "| valley_depth | 0.10-0.20 | 0.05 | continuous, wall-like | -0.05 |  |  |\n"
+        "| active_rate | 0.60-0.70 | 0.8 |  | 0.1 |  |  |\n"
+        "| valley_depth | 0.10-0.20 | 0.05 |  | -0.05 |  |  |\n"
         "| brightness | bright | 0.5 |  | -0.1 |  |  |\n"
         "| stereo_width | wide |  |  |  |  | sensor missing |\n"
         "\n"

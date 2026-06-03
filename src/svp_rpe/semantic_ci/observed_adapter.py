@@ -4,14 +4,12 @@ from __future__ import annotations
 from typing import Any
 
 from svp_rpe.rpe.models import RPEBundle
-from svp_rpe.rpe.semantic_rules import generate_semantic
 from svp_rpe.semantic_ci.models import ObservedRPE
 
 
 def rpe_bundle_to_observed(bundle: RPEBundle, *, id: str) -> ObservedRPE:
     """Convert an extracted RPE bundle into an ObservedRPE sensor snapshot."""
     physical = bundle.physical
-    bucketed_semantic = generate_semantic(physical)
     semantic = bundle.semantic
 
     metrics: dict[str, Any] = {
@@ -33,7 +31,6 @@ def rpe_bundle_to_observed(bundle: RPEBundle, *, id: str) -> ObservedRPE:
         *semantic.grv_anchor.secondary,
         semantic.delta_e_profile.transition_type,
         semantic.delta_e_profile.transition_type.replace("_", " "),
-        *[label.label for label in bucketed_semantic.por_surface],
     ]
 
     return ObservedRPE(

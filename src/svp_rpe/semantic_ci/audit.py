@@ -12,7 +12,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from svp_rpe.eval.anchor_matcher import grv_anchor_match
 from svp_rpe.eval.delta_e_alignment import delta_e_profile_alignment
-from svp_rpe.eval.diff_models import MetricDiff as EvalMetricDiff
 from svp_rpe.eval.semantic_similarity import por_lexical_similarity
 from svp_rpe.rpe.models import RPEBundle
 from svp_rpe.semantic_ci.models import ObservedRPE
@@ -210,12 +209,7 @@ def _bpm_needle(target: Any, observed: ObservedRPE) -> AuditNeedle:
             note="sensor missing",
         )
 
-    diff = EvalMetricDiff(
-        name="bpm",
-        actual=observed_value,
-        target=target_value,
-        diff=observed_value - target_value,
-    ).diff
+    diff = observed_value - target_value
     return AuditNeedle(
         name="bpm",
         layer="physical",
@@ -408,6 +402,8 @@ def _inverse_target_band(feature_name: str, target_aliases: set[str]) -> Optiona
 def _observed_band(feature_name: str, metrics: Mapping[str, Any]) -> Optional[str]:
     labels: list[str] = []
     for rule in _semantic_rules_for_feature(feature_name):
+        if len(_condition_feature_names(rule["condition"])) != 1:
+            continue
         if not _condition_matches_observed(rule["condition"], metrics):
             continue
         for label in rule["labels"]:
@@ -481,6 +477,10 @@ def _condition_matches_observed(condition: Mapping[str, Any], metrics: Mapping[s
         elif actual != expected:
             return False
     return True
+
+
+def _condition_feature_names(condition: Mapping[str, Any]) -> set[str]:
+    return {_condition_key(raw_key)[0] for raw_key in condition}
 
 
 def _label_aliases(label: str) -> set[str]:
