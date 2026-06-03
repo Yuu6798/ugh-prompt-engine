@@ -1,6 +1,7 @@
 """Tests for composition audit control-panel reports."""
 from __future__ import annotations
 
+import builtins
 import json
 from pathlib import Path
 from typing import Any
@@ -215,6 +216,26 @@ def test_audit_reports_time_signature_mismatch_as_needle() -> None:
     assert time_signature.observed == "3/4"
     assert time_signature.score == 0.0
     assert time_signature.deviation == 1.0
+
+
+def test_audit_key_needle_falls_back_without_mir_eval(monkeypatch: Any) -> None:
+    real_import = builtins.__import__
+
+    def fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "mir_eval.key":
+            raise ModuleNotFoundError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    report = build_audit_report(_make_score(), _make_bundle(), observed_id="fixture-rpe")
+    key = _needle(report, "physical", "key")
+
+    assert key.target == "C major"
+    assert key.observed == "C major"
+    assert key.score == 1.0
+    assert key.deviation == 0.0
+    assert key.sensor == "exact_key_match"
 
 
 def test_audit_maps_dark_brightness_to_inverse_bright_rule() -> None:

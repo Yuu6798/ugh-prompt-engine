@@ -233,13 +233,16 @@ def _key_needle(target: Any, observed: ObservedRPE) -> AuditNeedle:
     try:
         import mir_eval.key as mir_eval_key
     except ModuleNotFoundError:
+        score = 1.0 if target_key == observed_key else 0.0
         return AuditNeedle(
             name="key",
             layer="physical",
             target=target_key,
             observed=observed_key,
-            sensor="mir_eval.key.evaluate",
-            note="mir_eval unavailable",
+            deviation=_round_score(1.0 - score),
+            score=score,
+            sensor="exact_key_match",
+            note="mir_eval unavailable; exact match fallback",
         )
     try:
         weighted = float(mir_eval_key.evaluate(target_key, observed_key)["Weighted Score"])
