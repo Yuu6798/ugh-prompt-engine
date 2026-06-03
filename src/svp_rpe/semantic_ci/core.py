@@ -106,7 +106,8 @@ def _delta_e_signal_values(value: str) -> tuple[list[str], list[str]]:
 def _canonical_delta_e_transition(value: str) -> str | None:
     normalized = value.lower().replace("-", "_").replace(" ", "_")
     for transition_type in sorted(TRANSITION_TYPES):
-        if transition_type in normalized:
+        pattern = rf"(?:^|_){re.escape(transition_type)}(?:_|$)"
+        if re.search(pattern, normalized):
             return transition_type
     return None
 

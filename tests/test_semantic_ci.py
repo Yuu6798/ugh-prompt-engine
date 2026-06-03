@@ -88,6 +88,20 @@ def test_free_form_delta_e_target_canonicalizes_expected_signal():
     assert "gradual_build" in expected.allowed_signals
 
 
+def test_delta_e_canonicalization_keeps_decrescendo_distinct_from_crescendo():
+    target = TargetSVP(
+        id="target-decrescendo",
+        domain="music",
+        core="receding",
+        delta_e_profile="decrescendo",
+    )
+
+    expected = generate_expected_rpe(target)
+
+    assert "decrescendo" in expected.required_signals
+    assert "crescendo" not in expected.required_signals
+
+
 def test_free_form_delta_e_target_matches_observed_canonical_signal():
     target = TargetSVP(
         id="target-freeform-delta-e",
