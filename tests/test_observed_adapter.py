@@ -9,7 +9,10 @@ from svp_rpe.rpe.models import (
     StereoProfile,
 )
 from svp_rpe.rpe.semantic_rules import generate_semantic
+from svp_rpe.compose.convert import composition_to_target_svp
+from svp_rpe.compose.models import CompositionScore
 from svp_rpe.semantic_ci import rpe_bundle_to_observed
+from svp_rpe.semantic_ci.core import compare_expected_observed, generate_expected_rpe
 
 
 def _make_bundle(*, stereo_profile: StereoProfile | None = None) -> RPEBundle:
@@ -67,7 +70,7 @@ def test_rpe_bundle_to_observed_preserves_raw_metrics_and_source() -> None:
         ],
         "metrics": {
             "bpm": 120.0,
-            "key": "C",
+            "key": "C major",
             "mode": "major",
             "time_signature": "4/4",
             "active_rate": 0.5,
@@ -85,3 +88,51 @@ def test_rpe_bundle_to_observed_allows_missing_stereo_sensor() -> None:
     assert observed.metrics["stereo_width"] is None
     assert "stereo_width" in observed.metrics
     assert observed.source == "rpe_extract"
+
+
+def test_observed_key_matches_composition_target_key_metric() -> None:
+    score = CompositionScore.model_validate(
+        {
+            "meta": {"title": "Key Match", "version": 0.1},
+            "semantic": {
+                "core": "mid-focused",
+                "grv": {"primary": "mid-focused", "secondary": ""},
+                "delta_e": {"overall": "flat"},
+                "avoid": [],
+            },
+            "physical": {
+                "bpm": 120,
+                "key": "C major",
+                "time_signature": "4/4",
+                "active_rate_target": "0.40-0.60",
+                "valley_depth_target": "0.00-0.10",
+                "brightness": "dark",
+                "stereo_width": "wide",
+            },
+            "structure": [
+                {
+                    "section": "full",
+                    "bars": 8,
+                    "role": "fixture",
+                    "physical": "steady",
+                }
+            ],
+            "rendering": {
+                "target_backend": "external",
+                "prompt_max_chars": 500,
+                "priority": [],
+            },
+        }
+    )
+    expected = generate_expected_rpe(composition_to_target_svp(score))
+    observed = rpe_bundle_to_observed(
+        _make_bundle(stereo_profile=StereoProfile(width=0.8, correlation=0.2)),
+        id="key-match",
+    )
+
+    diff = compare_expected_observed(expected, observed)
+    key_diff = next(metric for metric in diff.metric_diffs if metric.name == "key")
+
+    assert key_diff.expected == "C major"
+    assert key_diff.observed == "C major"
+    assert key_diff.passed is True

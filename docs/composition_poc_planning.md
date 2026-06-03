@@ -302,6 +302,8 @@ class GeneratedPrompt(BaseModel):
 svprpe audit score.yaml generated_track.wav [-o report.md] [--threshold 0.3]
 ```
 
+JSON fixture mode is also supported for deterministic tests: `svprpe audit score.yaml extracted_rpe.json --format json`.
+
 **Acceptance Criteria**:
 
 - [ ] Score + WAV/MP3 → Markdown レポート出力

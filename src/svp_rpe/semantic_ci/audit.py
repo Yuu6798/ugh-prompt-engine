@@ -115,10 +115,7 @@ def build_audit_report(
             bpm_a=float(score.physical.bpm),
             bpm_b=_numeric_metric(observed.metrics.get("bpm")),
             key_a=score.physical.key,
-            key_b=_format_key(
-                observed.metrics.get("key"),
-                observed.metrics.get("mode"),
-            ),
+            key_b=_text_metric(observed.metrics.get("key")),
             anchors_a=[item for item in [score.semantic.grv.secondary] if item],
             anchors_b=observed_grv.secondary,
         )
@@ -222,7 +219,7 @@ def _bpm_needle(target: Any, observed: ObservedRPE) -> AuditNeedle:
 
 
 def _key_needle(target: Any, observed: ObservedRPE) -> AuditNeedle:
-    observed_key = _format_key(observed.metrics.get("key"), observed.metrics.get("mode"))
+    observed_key = _text_metric(observed.metrics.get("key"))
     target_key = str(target) if target is not None else None
     if not target_key or not observed_key:
         return AuditNeedle(
@@ -518,10 +515,10 @@ def _parse_numeric_range(target: Any) -> Optional[tuple[float, float]]:
     return lower, upper
 
 
-def _format_key(key: Any, mode: Any) -> Optional[str]:
-    if not key or not mode:
+def _text_metric(value: Any) -> Optional[str]:
+    if value is None:
         return None
-    return f"{key} {mode}"
+    return str(value)
 
 
 def _numeric_metric(value: Any) -> Optional[float]:

@@ -11,10 +11,13 @@ def rpe_bundle_to_observed(bundle: RPEBundle, *, id: str) -> ObservedRPE:
     """Convert an extracted RPE bundle into an ObservedRPE sensor snapshot."""
     physical = bundle.physical
     semantic = bundle.semantic
+    combined_key = (
+        f"{physical.key} {physical.mode}" if physical.key and physical.mode else physical.key
+    )
 
     metrics: dict[str, Any] = {
         "bpm": float(physical.bpm) if physical.bpm is not None else None,
-        "key": physical.key,
+        "key": combined_key,
         "mode": physical.mode,
         "time_signature": physical.time_signature,
         "active_rate": float(physical.active_rate),

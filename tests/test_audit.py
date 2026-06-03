@@ -273,3 +273,48 @@ def test_audit_cli_json_exits_zero_and_has_no_outcome_keys(tmp_path: Path) -> No
     payload = json.loads(result.output)
     _assert_no_outcome_keys(payload)
     assert payload["physical"][0]["name"] == "bpm"
+
+
+def test_audit_cli_audio_input_uses_extractor(monkeypatch: Any, tmp_path: Path) -> None:
+    score_path = tmp_path / "composition_score.yaml"
+    audio_path = tmp_path / "generated.wav"
+    calls: dict[str, Any] = {}
+    score_path.write_text(
+        yaml.safe_dump(_make_score().model_dump(mode="json"), sort_keys=False),
+        encoding="utf-8",
+    )
+    audio_path.write_bytes(b"not real audio; extractor is monkeypatched")
+
+    def fake_extract_rpe_from_file(
+        path: str,
+        *,
+        valley_method: str = "hybrid",
+        **_: Any,
+    ) -> RPEBundle:
+        calls["path"] = path
+        calls["valley_method"] = valley_method
+        return _make_bundle()
+
+    monkeypatch.setattr(
+        "svp_rpe.rpe.extractor.extract_rpe_from_file",
+        fake_extract_rpe_from_file,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "audit",
+            str(score_path),
+            str(audio_path),
+            "--format",
+            "json",
+            "--valley-method",
+            "section_ar",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls == {"path": str(audio_path), "valley_method": "section_ar"}
+    payload = json.loads(result.output)
+    _assert_no_outcome_keys(payload)
+    assert payload["observed_id"] == "generated"
