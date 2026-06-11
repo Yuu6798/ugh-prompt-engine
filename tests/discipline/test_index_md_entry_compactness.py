@@ -6,9 +6,11 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+import pytest
 
-INDEX_PATH = Path(__file__).resolve().parents[2] / ".claude" / "memory" / "_index.md"
+from ._helpers import FIXTURES, REPO_ROOT
+
+INDEX_PATH = REPO_ROOT / ".claude" / "memory" / "_index.md"
 MAX_ENTRY_CHARS = 500
 
 
@@ -29,19 +31,33 @@ def _extract_entries(text: str) -> list[tuple[int, str]]:
     return entries
 
 
-def test_index_exists():
-    assert INDEX_PATH.exists(), f"{INDEX_PATH} が存在しない"
-
-
-def test_all_entries_are_compact():
-    text = INDEX_PATH.read_text(encoding="utf-8")
+def _assert_entries_are_compact(text: str, *, source: str) -> None:
     entries = _extract_entries(text)
+    assert entries, f"{source} に 1 件もエントリがない（compactness 不変条件が検証されない）"
     violations = [
         (lineno, len(entry), entry[:80] + "...")
         for lineno, entry in entries
         if len(entry) > MAX_ENTRY_CHARS
     ]
     assert not violations, (
-        f"_index.md に {MAX_ENTRY_CHARS} 文字を超えるエントリがある:\n"
+        f"{source} に {MAX_ENTRY_CHARS} 文字を超えるエントリがある:\n"
         + "\n".join(f"  L{ln}: {length}文字 — {preview}" for ln, length, preview in violations)
+        + "\n詳細は dated session log に移し、_index.md は 1–2 行要約に保つこと。"
     )
+
+
+def test_index_exists():
+    assert INDEX_PATH.exists(), f"{INDEX_PATH} が存在しない"
+
+
+def test_all_entries_are_compact():
+    _assert_entries_are_compact(
+        INDEX_PATH.read_text(encoding="utf-8"),
+        source=".claude/memory/_index.md",
+    )
+
+
+def test_parser_detects_essay_entry_fixture():
+    text = (FIXTURES / "index_md_essay_entry.md").read_text(encoding="utf-8")
+    with pytest.raises(AssertionError, match="文字を超えるエントリ"):
+        _assert_entries_are_compact(text, source="fixture")
