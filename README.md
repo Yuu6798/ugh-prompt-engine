@@ -144,6 +144,7 @@ svprpe --help
 - [Composition PoC Planning](docs/composition_poc_planning.md) — Implementation plan for Composition Score: C1–C6 phases, design decisions
 - [Composition PoC Report](docs/composition_poc_report.md) — C4 end-to-end demo results (deterministic path): synth performer, two-take needle comparison, sensor findings
 - [Controllability PoC Planning](docs/controllability_poc.md) — Control track PoC (K-series): parameters as control knobs not eval values, grip effect-size definition, K0 minimal method-proof → K2 Suno transfer
+- [Score-centric Planning](docs/score_centric_planning.md) — Score-first reorganization: bidirectional reproducibility principle, transcription track (T-series, T0–T2), Q-series redefined as instrument calibration, semantic-layer sensors as future scope
 - [AGENTS.md](AGENTS.md) — Claude × Codex orchestration protocol (Task Brief / Completion Summary templates)
 
 ## License
