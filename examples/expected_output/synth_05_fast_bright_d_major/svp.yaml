@@ -19,6 +19,7 @@ analysis_rpe:
   por_core: A high_tempo, dark, mid-focused sonic character
   por_surface:
   - high_tempo
+  - dark
   - mid-focused
   - evolving
   grv_primary: mid-focused
@@ -48,6 +49,7 @@ svp_for_generation:
   - 'Crest factor target: ~2.7'
   style_tags:
   - high_tempo
+  - dark
   - mid-focused
   - evolving
   tempo_range: 162-182

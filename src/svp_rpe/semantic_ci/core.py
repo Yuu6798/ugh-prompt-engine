@@ -150,22 +150,21 @@ def _compare_metric(name: str, expected: Any, observed: Any, tolerance: float | 
 
 
 def _observed_metric_value(metrics: Mapping[str, Any], name: str, target: Any = None) -> Any:
-    # センサー読み替え（brightness→spectral_centroid 等）を exact key より優先する。
-    # rpe_bundle_to_observed は legacy の band-ratio "brightness" も含むため、
-    # exact key を先にすると Hz 帯境界に対して 0.x 比率を比較してしまう
-    sensor_name = _sensor_metric_name(name)
-    if sensor_name in metrics:
-        return metrics.get(sensor_name)
     base = name[: -len("_target")] if name.endswith("_target") else name
     if base in SENSOR_METRIC_OVERRIDES:
-        # 正規センサー欠測。定性ターゲット（dark/bright 等）を legacy 値
-        # （別単位の帯域比）と比較すると誤判定するため、legacy 数値ターゲットの
-        # 場合のみ exact key に倒し、それ以外は欠測（None）として報告する
+        # 読み替え対象（brightness 等）はターゲット型でセンサーを選ぶ:
+        # - legacy 数値ターゲット（数値 or 数値レンジ文字列）は legacy 単位の
+        #   比較なので exact key（旧 band-ratio）を使う
+        # - 定性ターゲット（dark/bright 等）は正規センサーのみを使い、
+        #   欠測時は legacy 値（別単位）に倒さず None（欠測）として報告する
         if _is_number(target) or (
             isinstance(target, str) and _parse_numeric_range(target) is not None
         ):
             return metrics.get(name)
-        return None
+        return metrics.get(SENSOR_METRIC_OVERRIDES[base])
+    sensor_name = _sensor_metric_name(name)
+    if sensor_name in metrics:
+        return metrics.get(sensor_name)
     return metrics.get(name)
 
 

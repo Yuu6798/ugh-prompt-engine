@@ -251,3 +251,37 @@ def test_brightness_with_missing_centroid_reports_missing_sensor() -> None:
 
     assert metric_diffs["brightness"].observed is None
     assert metric_diffs["brightness"].passed is False
+
+
+def test_legacy_numeric_brightness_target_compares_against_band_ratio() -> None:
+    """legacy 数値レンジの brightness ターゲットは旧 band-ratio と比較される。
+
+    正規センサー（centroid）が同居していても、数値ターゲットは legacy 単位の
+    比較なので exact key を使う（PR #66 レビュー指摘の回帰ガード）。
+    """
+    from svp_rpe.semantic_ci.models import TargetSVP
+
+    target = TargetSVP(
+        id="legacy-numeric",
+        domain="music",
+        core="mid-focused",
+        grv=["mid-focused"],
+        delta_e_profile="flat",
+        metric_targets={"brightness": "0.0-0.2"},
+    )
+    expected = generate_expected_rpe(target)
+    observed = rpe_bundle_to_observed(
+        _make_bundle(
+            stereo_profile=StereoProfile(width=0.8, correlation=0.2),
+            spectral_centroid=2600.0,
+        ),
+        id="legacy-numeric-observed",
+    )
+    assert observed.metrics["brightness"] == 0.1
+    assert observed.metrics["spectral_centroid"] == 2600.0
+
+    diff = compare_expected_observed(expected, observed)
+    metric_diffs = {metric.name: metric for metric in diff.metric_diffs}
+
+    assert metric_diffs["brightness"].observed == 0.1
+    assert metric_diffs["brightness"].passed is True

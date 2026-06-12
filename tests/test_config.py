@@ -58,7 +58,7 @@ def test_load_nonexistent_raises():
         load_config("nonexistent_config")
 
 
-def test_packaged_semantic_rules_match_repo_config() -> None:
+def test_packaged_configs_match_repo_configs() -> None:
     """パッケージ同梱 config はリポジトリ config と同期していること。
 
     load_config はローカル checkout が無い環境でパッケージリソースへフォールバック
@@ -67,8 +67,9 @@ def test_packaged_semantic_rules_match_repo_config() -> None:
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
-    repo_copy = (root / "config" / "semantic_rules.yaml").read_text(encoding="utf-8")
-    packaged_copy = (
-        root / "src" / "svp_rpe" / "config" / "semantic_rules.yaml"
-    ).read_text(encoding="utf-8")
-    assert repo_copy == packaged_copy
+    for relative in ("semantic_rules.yaml", "domain_profiles/music.yaml"):
+        repo_copy = (root / "config" / relative).read_text(encoding="utf-8")
+        packaged_copy = (root / "src" / "svp_rpe" / "config" / relative).read_text(
+            encoding="utf-8"
+        )
+        assert repo_copy == packaged_copy, f"config drift: {relative}"
