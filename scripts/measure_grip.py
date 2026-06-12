@@ -21,7 +21,12 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from svp_rpe.control import classify_grip, grip_effect_size  # noqa: E402
+from svp_rpe.control import (  # noqa: E402
+    classify_grip,
+    classify_match_grip,
+    grip_effect_size,
+    match_rate,
+)
 
 SCHEMA_VERSION = "1.0"
 DEFAULT_FIXTURE = ROOT / "examples" / "control" / "k0" / "musicgen_rpe_fixture.json"
@@ -57,10 +62,14 @@ def analyze_fixture(raw: dict[str, Any], *, knob_filter: str | None = None) -> d
     knobs = list(raw["knobs"])
     samples = list(raw["samples"])
 
-    results: list[GripResult] = []
+    results: list[dict[str, Any]] = []
     for spec in knobs:
         knob_name = str(spec["name"])
         if knob_filter and knob_name != knob_filter:
+            continue
+        kind = str(spec.get("kind", "continuous"))
+        if kind == "categorical":
+            results.append(_analyze_categorical_knob(spec, samples, repetitions))
             continue
         low_level = str(spec["low_level"])
         high_level = str(spec["high_level"])
@@ -77,33 +86,79 @@ def analyze_fixture(raw: dict[str, Any], *, knob_filter: str | None = None) -> d
         grip = grip_effect_size(low_values, high_values)
         classification = classify_grip(grip, int(spec["expected_sign"]))
         results.append(
-            GripResult(
-                knob=knob_name,
-                sensor=sensor,
-                expected_sign=int(spec["expected_sign"]),
-                low_level=low_level,
-                high_level=high_level,
-                repetitions=repetitions,
-                low_values=_round_list(low_values),
-                high_values=_round_list(high_values),
-                low_mean=_round_float(float(np.mean(low_values))),
-                high_mean=_round_float(float(np.mean(high_values))),
-                grip=_round_float(grip),
-                classification=classification,
+            asdict(
+                GripResult(
+                    knob=knob_name,
+                    sensor=sensor,
+                    expected_sign=int(spec["expected_sign"]),
+                    low_level=low_level,
+                    high_level=high_level,
+                    repetitions=repetitions,
+                    low_values=_round_list(low_values),
+                    high_values=_round_list(high_values),
+                    low_mean=_round_float(float(np.mean(low_values))),
+                    high_mean=_round_float(float(np.mean(high_values))),
+                    grip=_round_float(grip),
+                    classification=classification,
+                )
             )
         )
 
-    summary = Counter(result.classification for result in results)
+    summary = Counter(result["classification"] for result in results)
     return {
         "schema_version": SCHEMA_VERSION,
         "fixture_id": fixture_id,
         "repetitions": repetitions,
-        "results": [asdict(result) for result in results],
+        "results": results,
         "summary": {
             "tight": int(summary["tight"]),
             "loose": int(summary["loose"]),
             "dead": int(summary["dead"]),
         },
+    }
+
+
+def _analyze_categorical_knob(
+    spec: dict[str, Any],
+    samples: list[dict[str, Any]],
+    repetitions: int,
+) -> dict[str, Any]:
+    """カテゴリツマミ: per-sample 一致スコアの平均（一致率）で grip を測る。
+
+    効果量（pooled SD）はカテゴリ観測に乗らないため、controllability_poc.md §3 の
+    規定どおり要求ターゲットへの一致率を grip 値として報告する。
+    """
+    knob_name = str(spec["name"])
+    low_level = str(spec["low_level"])
+    high_level = str(spec["high_level"])
+    sensor = str(spec["sensor"])
+
+    low_observed = _texts_for(samples, knob_name, low_level, sensor)
+    high_observed = _texts_for(samples, knob_name, high_level, sensor)
+    if len(low_observed) != repetitions or len(high_observed) != repetitions:
+        raise ValueError(
+            f"{knob_name} expects {repetitions} repetitions per level, "
+            f"got low={len(low_observed)} high={len(high_observed)}"
+        )
+
+    low_scores = [_key_match_score(low_level, observed) for observed in low_observed]
+    high_scores = [_key_match_score(high_level, observed) for observed in high_observed]
+    combined_rate = match_rate(low_scores + high_scores)
+    return {
+        "knob": knob_name,
+        "sensor": sensor,
+        "kind": "categorical",
+        "low_level": low_level,
+        "high_level": high_level,
+        "repetitions": repetitions,
+        "low_observed": low_observed,
+        "high_observed": high_observed,
+        "low_values": _round_list(low_scores),
+        "high_values": _round_list(high_scores),
+        "low_mean": _round_float(match_rate(low_scores)),
+        "high_mean": _round_float(match_rate(high_scores)),
+        "grip": _round_float(combined_rate),
+        "classification": classify_match_grip(combined_rate),
     }
 
 
@@ -168,13 +223,51 @@ def _values_for(
     return values
 
 
-def _feature_value(features: dict[str, Any], sensor: str) -> float:
+def _texts_for(
+    samples: list[dict[str, Any]],
+    knob_name: str,
+    level: str,
+    sensor: str,
+) -> list[str]:
+    texts: list[str] = []
+    for sample in samples:
+        if str(sample["knob"]) != knob_name or str(sample["level"]) != level:
+            continue
+        texts.append(str(_sensor_node(sample["features"], sensor)))
+    return texts
+
+
+def _key_match_score(target: str, observed: str) -> float:
+    """要求 key への per-sample 一致スコア（mir_eval 方式、∈[0,1]）。
+
+    mir_eval が無い環境では正規化済み完全一致のフォールバック
+    （semantic_ci/audit.py の key needle と同方針）。
+    """
+    try:
+        import mir_eval.key as mir_eval_key
+    except ModuleNotFoundError:
+        return 1.0 if _normalize_key(target) == _normalize_key(observed) else 0.0
+    try:
+        return float(mir_eval_key.evaluate(target, observed)["Weighted Score"])
+    except ValueError:
+        return 0.0
+
+
+def _normalize_key(value: str) -> str:
+    return " ".join(value.casefold().split())
+
+
+def _sensor_node(features: dict[str, Any], sensor: str) -> Any:
     current: Any = features
     for part in sensor.split("."):
         if not isinstance(current, dict) or part not in current:
             raise ValueError(f"missing sensor path {sensor!r}")
         current = current[part]
-    value = float(current)
+    return current
+
+
+def _feature_value(features: dict[str, Any], sensor: str) -> float:
+    value = float(_sensor_node(features, sensor))
     if not np.isfinite(value):
         raise ValueError(f"sensor path {sensor!r} is not finite")
     return value

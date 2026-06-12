@@ -1,0 +1,182 @@
+{
+  "schema_version": "1.0",
+  "fixture_id": "k1_synth_performer_rpe_features",
+  "repetitions": 5,
+  "results": [
+    {
+      "knob": "bpm",
+      "sensor": "bpm",
+      "expected_sign": 1,
+      "low_level": "90",
+      "high_level": "140",
+      "repetitions": 5,
+      "low_values": [
+        92.29,
+        89.1,
+        89.1,
+        92.29,
+        89.1
+      ],
+      "high_values": [
+        136.0,
+        143.55,
+        69.84,
+        143.55,
+        143.55
+      ],
+      "low_mean": 90.376,
+      "high_mean": 127.298,
+      "grip": 1.614922,
+      "classification": "tight"
+    },
+    {
+      "knob": "key",
+      "sensor": "key",
+      "kind": "categorical",
+      "low_level": "C major",
+      "high_level": "F# minor",
+      "repetitions": 5,
+      "low_observed": [
+        "C major",
+        "C major",
+        "C major",
+        "C major",
+        "C major"
+      ],
+      "high_observed": [
+        "F# minor",
+        "F# minor",
+        "F# minor",
+        "F# minor",
+        "F# minor"
+      ],
+      "low_values": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "high_values": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "low_mean": 1.0,
+      "high_mean": 1.0,
+      "grip": 1.0,
+      "classification": "tight"
+    },
+    {
+      "knob": "brightness",
+      "sensor": "spectral_profile.brightness",
+      "expected_sign": 1,
+      "low_level": "dark",
+      "high_level": "bright",
+      "repetitions": 5,
+      "low_values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "high_values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "low_mean": 0.0,
+      "high_mean": 0.0,
+      "grip": 0.0,
+      "classification": "dead"
+    },
+    {
+      "knob": "brightness_centroid",
+      "sensor": "spectral_centroid",
+      "expected_sign": 1,
+      "low_level": "dark",
+      "high_level": "bright",
+      "repetitions": 5,
+      "low_values": [
+        957.4,
+        957.82,
+        957.81,
+        957.58,
+        958.25
+      ],
+      "high_values": [
+        1235.08,
+        1236.09,
+        1236.82,
+        1239.45,
+        1235.46
+      ],
+      "low_mean": 957.772,
+      "high_mean": 1236.58,
+      "grip": 223.525437,
+      "classification": "tight"
+    },
+    {
+      "knob": "active_rate_target",
+      "sensor": "active_rate",
+      "expected_sign": 1,
+      "low_level": "0.80-0.85",
+      "high_level": "0.95-0.98",
+      "repetitions": 5,
+      "low_values": [
+        0.9299,
+        0.9309,
+        0.9309,
+        0.9316,
+        0.9308
+      ],
+      "high_values": [
+        0.9299,
+        0.9299,
+        0.931,
+        0.9304,
+        0.9296
+      ],
+      "low_mean": 0.93082,
+      "high_mean": 0.93016,
+      "grip": -1.140306,
+      "classification": "dead"
+    },
+    {
+      "knob": "valley_depth_target",
+      "sensor": "valley_depth",
+      "expected_sign": 1,
+      "low_level": "0.05-0.10",
+      "high_level": "0.30-0.40",
+      "repetitions": 5,
+      "low_values": [
+        0.1867,
+        0.181,
+        0.1961,
+        0.182,
+        0.1933
+      ],
+      "high_values": [
+        0.193,
+        0.1861,
+        0.1765,
+        0.2011,
+        0.1847
+      ],
+      "low_mean": 0.18782,
+      "high_mean": 0.18828,
+      "grip": 0.056881,
+      "classification": "dead"
+    }
+  ],
+  "summary": {
+    "tight": 3,
+    "loose": 0,
+    "dead": 3
+  }
+}

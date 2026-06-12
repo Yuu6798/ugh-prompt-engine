@@ -110,6 +110,11 @@ MusicGen（安価・seed 再現）なら 3–5 水準のスイープに拡張し
 `key_confidence`（検出自信度）は**使わない** — 自信満々に外した key を grip 成功と
 誤判定するため。一致率が偶然水準なら dead、高ければ tight。
 
+一致率の閾値（K1 で確定）: mir_eval weighted score のランダム期待値は 24 キー一様で
+約 0.08。チャンス水準の ~4 倍 **0.3 を loose 下限**、操作パネルに残せる **0.7 を
+tight 下限**とする（`src/svp_rpe/control/grip.py` の `MATCH_TIGHT_MIN` /
+`MATCH_LOOSE_MIN`）。
+
 **ゼロ分散時の挙動（決定論のため明示）**。丸めにより群内分散が 0 になり
 `pooled_sd = 0` になりうる（例: low の全サンプルが同一 BPM、high も同一 BPM）。
 `inf` / `NaN` を避け snapshot を安定させるため、`ε = 1e-9` として次を規定する:
@@ -185,15 +190,52 @@ MusicGen（安価・seed 再現）なら 3–5 水準のスイープに拡張し
 
 ### K1: 代表マップ初版 — 効くツマミの地図
 
+**Status**: DONE (2026-06-12, 決定論的演奏者リファレンス) — 結果は §5.1。
+MusicGen が重依存のため、参照生成器を C4 の決定論的シンセ演奏者
+（`scripts/compose_e2e_demo.perform` + seed 駆動 bpm ジッター）で代替した。
+MusicGen / Suno 実測での地図更新は K2 に引き継ぐ。
+
 **目的**: ツマミを ~5 個に広げ、tight/loose/dead のスペクトルを張る。
 
 候補ツマミ（§6 参照、すべて現行 `PhysicalLayer` に存在するフィールド）:
 `bpm`, `key/mode`, `brightness`, `active_rate_target`, `valley_depth_target`。
-MusicGen 上で grip 表を初版化する。`density_curve` はスキーマ未定義のため
-K1 では扱わず、フィールド追加後（§8）の候補とする。
+`density_curve` はスキーマ未定義のため K1 では扱わず、フィールド追加後（§8）の
+候補とする。
 
 **完了基準**: 5 ツマミの grip 分類が出揃い、「操作パネルに残すツマミ / 捨てる
 ツマミ / 表現を直すツマミ」の初版判断が docs に記録される。
+
+#### 5.1 K1 結果 — grip 代表マップ初版（決定論的演奏者、R=5、2026-06-12）
+
+再現: `python scripts/build_k1_fixture.py`（fixture 再生成、約 3 分）→
+`python scripts/measure_grip.py --fixture examples/control/k1/synth_performer_rpe_fixture.json`。
+コミット済み成果物は `examples/control/k1/`（fixture / `expected_grip.json` /
+`grip_map.md`）。fixture → grip は決定論で snapshot test 固定。
+
+| ツマミ | センサー | grip | 分類 | 初版判断 |
+|---|---|---|---:|---|
+| `bpm` | 観測 BPM | 1.61 | **tight** | **残す**。90→140 指定で観測 90.4→127.3 と動く（高水準の検出は低めに出る — センサー側の癖として記録） |
+| `key` | 要求 key 一致率 | 1.00 | **tight** | **残す**。C major / F# minor とも全サンプル一致 |
+| `brightness` | `spectral_profile.brightness`（帯域比） | 0.00 | **dead** | **センサーを直す**（下記） |
+| `brightness`（補助） | `spectral_centroid` | 223.5 | **tight** | 補助センサーでは明確に動く |
+| `active_rate_target` | active rate | −1.14 | **dead** | **接続する**。演奏者がこのフィールドを読まない=繋がっていないツマミの実例 |
+| `valley_depth_target` | novelty valley depth | 0.06 | **dead** | **接続する**。同上（§6 の dead 予想どおり） |
+
+主要な発見 — **dead には 2 種類ある**:
+
+1. **ツマミが死んでいる**（`active_rate_target` / `valley_depth_target`）: 生成側に
+   そのフィールドを読む経路が無い。grip 測定が「繋がっていないコックピット」を
+   正しく検出した（§2 の存在意義そのもの）。
+2. **センサーが盲目**（`brightness`）: 帯域比センサー（4kHz 以上のエネルギー比）は
+   0 のまま動かないが、**同一サンプル**を `spectral_centroid` で観測すると
+   957→1236 Hz と明確に動く（grip 223.5）。ツマミは生きており、センサーの観測帯が
+   合っていない。C4（`composition_poc_report.md` §4）の発見の追試にあたる。
+   → 対策候補: brightness の正規センサーを centroid 系へ変更、または
+   `semantic_rules.yaml` の帯域閾値の再校正。K2 前に決める。
+
+本マップは決定論的演奏者（接続が既知）に対する測定なので、tight/dead の正解が
+わかっている状態でハーネスが正しく分類できることの検証を兼ねる。確率的生成器
+（MusicGen / Suno）での実地図は K2 で取得する。
 
 ### K2: Suno 転移検証
 
@@ -295,8 +337,10 @@ MusicGen 出力に対し、Composition Score の物理ツマミ 2 個（bpm / br
 
 ## 8. 未解決の設計判断（次に詰める候補）
 
-- **grip 閾値の数値**: tight / loose / dead を分ける効果量の境界値（K0 の実データを
-  見てから確定。仮に \|d\|>0.8 tight / 0.2–0.8 loose / <0.2 dead）
+- ~~**grip 閾値の数値**~~ → **確定**: 連続ツマミは \|d\|≥0.8 tight / 0.2–0.8 loose /
+  <0.2 dead（K0 で `GRIP_TIGHT_MIN`/`GRIP_LOOSE_MIN` として実装済み）、カテゴリツマミは
+  一致率 ≥0.7 tight / 0.3–0.7 loose / <0.3 dead（K1、§3 参照）。確率的生成器の実データ
+  （K2）で再校正の余地あり
 - **MusicGen 統合の実体**: K0 を fixture 駆動で逃がした後、K1 で生成を自動化する際の
   バックエンド設計（[`learned_models_policy.md`](learned_models_policy.md) の optional
   extra 隔離方針に従うか）

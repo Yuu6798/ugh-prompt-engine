@@ -10,6 +10,12 @@ GRIP_SATURATED = 999.0
 GRIP_TIGHT_MIN = 0.8
 GRIP_LOOSE_MIN = 0.2
 
+# カテゴリツマミ（key 等）の一致率閾値。mir_eval weighted score のランダム期待値は
+# 24 キー一様で約 0.08 なので、0.3 はチャンス水準の ~4 倍を「ぼんやり効く」下限、
+# 0.7 を「操作パネルに残せる」下限とする（controllability_poc.md §3 / K1 決定）。
+MATCH_TIGHT_MIN = 0.7
+MATCH_LOOSE_MIN = 0.3
+
 GripClass = Literal["tight", "loose", "dead"]
 
 
@@ -51,6 +57,31 @@ def classify_grip(d: float, expected_sign: int) -> GripClass:
     if sign == expected_sign and magnitude >= GRIP_TIGHT_MIN:
         return "tight"
     if sign == expected_sign and magnitude >= GRIP_LOOSE_MIN:
+        return "loose"
+    return "dead"
+
+
+def match_rate(scores: Sequence[float]) -> float:
+    """カテゴリツマミの grip: per-sample 一致スコア（∈[0,1]）の平均。
+
+    効果量（pooled SD 除算）はカテゴリ観測に乗らないため、
+    controllability_poc.md §3 の規定どおり一致率で測る。
+    """
+
+    arr = _as_finite_array(scores, name="scores")
+    if np.any(arr < 0.0) or np.any(arr > 1.0):
+        raise ValueError("scores must be within [0, 1]")
+    return float(np.mean(arr))
+
+
+def classify_match_grip(rate: float) -> GripClass:
+    """一致率を tight / loose / dead に分類する。"""
+
+    if not np.isfinite(rate) or rate < 0.0 or rate > 1.0:
+        raise ValueError("rate must be a finite value within [0, 1]")
+    if rate >= MATCH_TIGHT_MIN:
+        return "tight"
+    if rate >= MATCH_LOOSE_MIN:
         return "loose"
     return "dead"
 
