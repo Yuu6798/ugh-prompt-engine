@@ -240,6 +240,9 @@ svprpe --help
 - **値のクランプ**: 正規化が必要な float 値は `max(lo, min(hi, value))` で範囲内に収める
 - **タイムスタンプ**: UTC, ISO 8601 形式で保存
 - **Optional + confidence pattern**: 不確実性のある値は Optional + confidence で表現
+- **config の二重コピー同期**: `config/*.yaml` を変更したら `src/svp_rpe/config/` の
+  パッケージ同梱コピーも同期する（インストール実行時はそちらへフォールバックする。
+  `tests/test_config.py` の同期テストが enforce）
 
 ### Error Handling
 
