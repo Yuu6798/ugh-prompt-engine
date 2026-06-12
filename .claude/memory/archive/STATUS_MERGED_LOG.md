@@ -10,3 +10,4 @@ STATUS.md "Recently Merged"（最新 5 件保持）から溢れたマージ済�
 | #53 | feat(validation): Q4'-8 pseudo-label consensus harness | 2026-05-26 | Q4'-8 |
 | #52 | feat(validation): model BPM octave ambiguity | 2026-05 | Q1-3 |
 | #51 | real-audio measurement harness | 2026-05 | Q1 |
+| #58 | docs: ワークフロー再反転（設計=Claude / 実装=Codex） | 2026-06-02 | FLOW-2 |

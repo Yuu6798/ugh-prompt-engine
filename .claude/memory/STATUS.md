@@ -16,8 +16,8 @@
 
 | PR | Title | Date | Phase |
 |---|---|---|---|
+| #63 | feat(discipline): セッション終了プロトコルを semantic-ci-code から移植 | 2026-06-12 | INFRA |
 | #62 | feat(audit): Composition audit control panel (C0+C3) | 2026-06-03 | C0+C3 |
 | #61 | feat(control): K0 grip measurement harness | 2026-06-03 | K0 |
 | #60 | docs: controllability_poc.md 制御トラック K 系列 新設 | 2026-06-02 | K-plan |
 | #59 | feat(compose): svprpe compose + ExternalPromptAdapter | 2026-06-02 | C2 |
-| #58 | docs: ワークフロー再反転（設計=Claude / 実装=Codex） | 2026-06-02 | FLOW-2 |
