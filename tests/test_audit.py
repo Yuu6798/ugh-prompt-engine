@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 from conftest import assert_no_outcome_keys as _assert_no_outcome_keys
 from typer.testing import CliRunner
@@ -333,3 +334,26 @@ def test_audit_cli_audio_input_uses_extractor(monkeypatch: Any, tmp_path: Path) 
     payload = json.loads(result.output)
     _assert_no_outcome_keys(payload)
     assert payload["observed_id"] == "generated"
+
+
+def test_audit_legacy_numeric_brightness_target_uses_band_ratio_sensor() -> None:
+    """legacy 数値レンジの brightness ターゲットは旧 band-ratio センサーと比較される。
+
+    centroid（Hz）に対して 0-1 レンジを解釈すると巨大な誤 deviation が出るため
+    （PR #66 レビュー指摘の回帰ガード。semantic_ci/core.py の比較側と同方針）。
+    """
+    score = _make_score()
+    score.physical.brightness = "0.0-0.2"
+
+    report = build_audit_report(
+        score,
+        _make_bundle(brightness=0.5),
+        observed_id="fixture-rpe",
+    )
+
+    brightness = _needle(report, "physical", "brightness")
+
+    assert brightness.sensor == "PhysicalRPE.brightness"
+    assert brightness.observed == 0.5
+    assert brightness.target_band == "0-0.2"
+    assert brightness.deviation == pytest.approx(0.3)

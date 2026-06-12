@@ -98,9 +98,7 @@ def build_audit_report(
             name="brightness",
             target=target.metric_targets.get("brightness"),
             observed=observed,
-            # 正規センサーは spectral_centroid（band-ratio は HF の乏しい素材で盲目。
-            # controllability_poc.md §5.1 / semantic_rules.yaml perc.dark/bright）
-            metric="spectral_centroid",
+            metric=_brightness_sensor_metric(target.metric_targets.get("brightness")),
         ),
         _metric_band_needle(
             name="stereo_width",
@@ -291,6 +289,23 @@ def _time_signature_needle(target: Any, observed: ObservedRPE) -> AuditNeedle:
         score=score,
         sensor="PhysicalRPE.time_signature",
     )
+
+
+def _brightness_sensor_metric(target: Any) -> str:
+    """brightness ツマミのセンサー選択（semantic_ci/core.py の比較側と同方針）。
+
+    legacy 数値ターゲット（数値 or 数値レンジ文字列、旧 band-ratio 単位）は
+    exact key の band-ratio と比較し、定性ターゲット（dark/bright 等）は
+    正規センサー spectral_centroid を使う（band-ratio は HF の乏しい素材で盲目。
+    controllability_poc.md §5.1 / semantic_rules.yaml perc.dark/bright）。
+    """
+    if isinstance(target, bool):
+        return "spectral_centroid"
+    if isinstance(target, (int, float)):
+        return "brightness"
+    if isinstance(target, str) and _parse_numeric_range(target) is not None:
+        return "brightness"
+    return "spectral_centroid"
 
 
 def _metric_band_needle(
