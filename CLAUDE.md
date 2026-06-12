@@ -85,63 +85,22 @@ Design Memo、設計仕様、メモリ管理は担当）。例外的な小規模
 2. 直近 3 件のサマリーファイルは必要に応じて詳細を参照する
 3. 過去の設計判断に関する質問には、サマリーを確認してから回答する
 
-### 終了時ルール（自動トリガー — 8 ステッププロセス）
+### 終了時ルール（自動トリガー）
 
-ユーザーがセッション終了を示す発言をしたら、**確認なしで即座に `/wrap-up` を実行する**。
+ユーザーがセッション終了を示す発言（「今日はここまで」「セッション終了」
+「また明日」「お疲れ様」「done for today」「that's all」）をしたら、または
+`/wrap-up` が実行されたら、**確認なしで wrap-up skill を実行する**。
 
-**トリガーフレーズ**（文脈付きの終了意図を検出。汎用トークン単体では発火しない）:
-- 「今日はここまで」「今日は終わり」「今日はおわり」
-- 「セッション終了」「セッション閉じて」
-- 「また明日」「また今度」「お疲れ様」「お疲れさま」
-- 「done for today」「that's all」
-- 手動: `/wrap-up`
+`.claude/skills/wrap-up/SKILL.md` が終了手順全体の **source of truth**
+（8 ステップ: reflection 保存 → `_index.md` 追記 → archive → STATUS.md
+sweep → discipline ゲート。アーカイブ TTL 表・サマリーフォーマット・
+アンチパターン集も skill 側に集約）。本ファイルと skill が乖離した場合は
+**skill が勝つ** — このポインタを直し、skill を古い CLAUDE.md に合わせて
+編集してはならない。
 
-**8 ステップ実行内容:**
-
-1. **セッションサマリー保存** — `.claude/memory/YYYY-MM-DD.md` に保存（同日複数は "Session N" で追記）
-2. **`_index.md` に 1–2 行サマリー追記** — 形式: `Date | PR/commit | 1行成果 | 詳細`
-3. **30 日超のセッションログをアーカイブ** — `archive/YYYY-MM/` に移動、元テキスト保持（情報損失ゼロ）
-4. **STATUS.md next-issue queue スイープ** — 完了済み項目を削除し "recently merged" に移動。**ステップ 5 に先行すること**
-5. **STATUS.md "recently merged" コンパクション** — 最新 5 件のみ保持、溢れ分は `archive/STATUS_MERGED_LOG.md` に移動
-6. **STATUS.md Phase セクション確認** — 単一段落を維持。新しい段落を書く場合は古い段落を削除
-7. **CLAUDE.md / AGENTS.md への更新候補** — ワランティがあればユーザーに提案
-8. **discipline テスト実行** — `pytest tests/discipline/ -q --no-cov` を実行し全パスを確認してから main に push。失敗時は先に修正
-
-**セッションサマリーの記述フォーマット:**
-
-```markdown
-## Session Summary — YYYY-MM-DD [Session N]
-
-### Context
-<1–2 段落: セッションで扱ったトピック>
-
-### Design Decisions
-<なぜその選択をしたか>
-
-### Artifacts
-<マージした PR / 追加したファイル>
-
-### Handoff
-<次のセッションへの引き継ぎ事項>
-```
-
-### アーカイブポリシー（TTL）
-
-| 対象 | TTL | 移動先 |
-|---|---|---|
-| セッションログ (`YYYY-MM-DD.md`) | 30 日 | `archive/YYYY-MM/` |
-| `_index.md` エントリ | 30 日 | 1 行要約 + アーカイブパスに短縮 |
-| STATUS.md "recently merged" | 最新 5 件 | `archive/STATUS_MERGED_LOG.md` |
-| next-issue queue 完了項目 | マージ時即時 | "recently merged" に変換 |
-| Phase 段落 | 上書き時 | アーカイブ対象外（1 段落ルール） |
-
-### アンチパターン集
-
-- `_index.md` のエントリが長文エッセイ化する（500 文字上限を discipline テストで強制）
-- 完了済み項目を next-issue queue に放置する（次セッションで誤った優先順位を招く）
-- Phase セクションに古い段落を残す（現在の状況が不明確になる）
-- アーカイブ移動を後回しにする（`_index.md` が肥大化する）
-- discipline テスト未実行で main に直接 push する（衛生違反の検出漏れ）
+discipline ゲート: `.claude/memory/` の直 main push の前に必ず
+`python -m pytest tests/discipline/ -q` を全パスさせる（例外は post-hoc
+検出のみのため、違反は main を直接赤くする）。
 
 ## Architecture
 
