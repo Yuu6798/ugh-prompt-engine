@@ -192,8 +192,11 @@ def perform(score: CompositionScore, style: PerformanceStyle) -> np.ndarray:
     beats_per_bar = int(score.physical.time_signature.split("/", 1)[0])
     bar_sec = beats_per_bar * 60.0 / bpm
 
-    dark_target = score.physical.brightness.strip().lower() == "dark"
-    if style.bright_voicing:
+    brightness_target = score.physical.brightness.strip().lower()
+    dark_target = brightness_target == "dark"
+    # Score 側の "bright" 指定も style の bright_voicing と同じボイシングに繋ぐ
+    # （brightness ツマミを演奏者に接続する。K1 grip 測定で使用）
+    if style.bright_voicing or brightness_target == "bright":
         harmonic_weights: tuple[float, ...] = (1.0, 0.55, 0.35, 0.20)
         base_octave_midi = 60  # C4 周辺
     elif dark_target:
