@@ -58,7 +58,25 @@ Codex への引き渡しは [`AGENTS.md`](../AGENTS.md) の Task Brief フォー
 
 既存 [`roadmap.md`](roadmap.md) の P1–P2 を Q0 に取り込み、その先を Q1–Q4 に拡張する。
 
-### Q0: 検証基盤の確立（既存 P1–P2 統合・拡張）
+### 棚卸し（2026-06-12 実装状況監査）
+
+[`score_centric_planning.md`](score_centric_planning.md) の Q 再定義に伴い、
+全フェーズをコード根拠で棚卸しした:
+
+| フェーズ | 状態 | 根拠 |
+|---|---|---|
+| Q0 | ✅ 完了 | `validation.md` baseline / `tests/test_snapshot.py` / `scripts/validate_against_truth.py` |
+| Q1 | ✅ 実装済み（校正記録に残） | Q1-1: `loudness_lufs_integrated` + `true_peak_dbfs`（pyloudnorm）。Q1-2: `compute_time_signature()`、validation 5/5 exact（3/4 含む）— 受け入れ条件「3 曲以上の 3/4 サンプル」は fixture 1 曲のみで未達。Q1-3: CV ベース confidence 実装済み（`compute_bpm` docstring が受け入れ条件を明記）— 対真値の系統的検証は未記録。Q1-4: `loud_pop` / `acoustic` / `edm` プロファイル + `--baseline` 切替 |
+| Q2 | ✅ 実装済み（精度検証に残） | `downbeat_times` / `chord_events` / `melody_contour` を extractor が算出 — 受け入れ条件（downbeat 一致率 / ±50¢）の対真値記録は未整備 |
+| Q3 | ✅ 完了 | `stem_rpe` + Demucs `--separate`（opt-in、PR #20–#23、stem 回帰テストあり） |
+| Q4 | ✅ 完了 | PR #8（下記の実装サマリ参照） |
+| Q5 | ⏳ 部分 | Q5-1 `coverage.md` ✅ / Q5-2 Dockerfile ❌ / Q5-3 CHANGELOG ❌ / Q5-4 任意 |
+
+残作業は「未実装の機能」ではなく「**未記録の校正**」に偏っている。再定義後の
+Q 系列（計器校正トラック）の作業はこの残（3/4 fixture 拡充、BPM confidence の
+対真値記録、Q2 精度検証）から拾う — T0 の校正メモがそのまま受け皿になる。
+
+### Q0: 検証基盤の確立（既存 P1–P2 統合・拡張）✅ **完了**
 
 **目的**: 「動く」から「測定の妥当性が検証できる」へ。
 **これが無いと Q1 以降の改善効果が定量比較できない。**
@@ -80,7 +98,7 @@ Codex への引き渡しは [`AGENTS.md`](../AGENTS.md) の Task Brief フォー
 > を同時達成する。Q0-5 の `validation.md` に survivor 候補の抽出結果を pop と
 > 並べて記録する。追加工数はサンプル選定基準の拡張のみ。
 
-### Q1: 測定の標準化（業界基準への引き上げ）
+### Q1: 測定の標準化（業界基準への引き上げ）✅ **実装済み（校正記録に残、棚卸しテーブル参照）**
 
 **目的**: ad-hoc な measurement を ITU / MIR コミュニティ標準に置き換える。
 
@@ -95,7 +113,7 @@ Codex への引き渡しは [`AGENTS.md`](../AGENTS.md) の Task Brief フォー
 混合行列、ジャンル別スコアの妥当性が記録されている。
 **推定工数**: 2–3 日
 
-### Q2: 時系列の深化（曲の中で何が起きているか）
+### Q2: 時系列の深化（曲の中で何が起きているか）✅ **実装済み（精度検証に残）**
 
 **目的**: 「曲全体の単一値」観測から「時間軸上の変化」観測へ。
 
@@ -114,7 +132,7 @@ pyin の voicing > 0.5 区間で ±50¢ 精度。
 > Reject 判定。`beat_this` を採用した上で `dbn=False` 固定により madmom DBN を
 > 透過依存させない。
 
-### Q3: 音源分離の前提化
+### Q3: 音源分離の前提化 ✅ **完了 (PR #20–#23, 2026-05-02)**
 
 **目的**: 混在波形での測定の限界（「ベースの BPM」「ボーカルの brightness」が
 取れない）を解消。
@@ -190,7 +208,7 @@ per-stem BPM が full mix と一致。
 学習モデル出力は **常に `LearnedAudioAnnotations` に隔離** され、ルール由来の
 evidence を汚染しない。Essentia / madmom 系の採用は本ポリシーで明示的に拒否。
 
-### Q5: 配布・公開（既存 P3–P5 を縮約）
+### Q5: 配布・公開（既存 P3–P5 を縮約）⏳ **部分完了（Q5-1 のみ）**
 
 | ID | 成果物 |
 |---|---|
@@ -218,14 +236,16 @@ flowchart LR
     Q4prime -.-> Q5
 ```
 
-- **クリティカルパス**: Q0 → Q1 → Q3 → Q5（最低 9–15 日）
+- **クリティカルパス**: Q0 → Q1 → Q3 → Q5（最低 9–15 日）— **実装は走破済み**
+  （2026-06-12 棚卸し。残は校正記録と Q5-2 / Q5-3）
 - **並列可能**: Q1 と Q2 は独立着手可（Q0 完了後）
-- **完了済**: Q4（Evidence-bearing Semantic Layer）は PR #8 で実装完了
+- **完了済**: Q0–Q4（フェーズ構成冒頭の棚卸しテーブル参照）
 - **任意**: Q4'（学習モデル統合）は `learned_models_policy.md` の方針に従い、
   `LearnedAudioAnnotations` 経由で隔離的に追加。本ロードマップの完了定義には
   含めない
 
-**合計工数**: 14–22 日（Q4 完了済を反映、Q4' を除外）
+**合計工数**: 14–22 日（Q4 完了済を反映、Q4' を除外）→ 2026-06-12 時点で
+実装は消化済み。残は校正記録の整備と Q5-2 / Q5-3。
 
 ---
 
