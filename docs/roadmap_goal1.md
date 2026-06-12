@@ -61,14 +61,16 @@ Codex への引き渡しは [`AGENTS.md`](../AGENTS.md) の Task Brief フォー
 ### 棚卸し（2026-06-12 実装状況監査）
 
 [`score_centric_planning.md`](score_centric_planning.md) の Q 再定義に伴い、
-全フェーズをコード根拠で棚卸しした:
+全フェーズをコード根拠で棚卸しした。**マーカーの意味: ✅ = 受け入れ条件まで達成 /
+⏳ = コードパスは実装済みだが受け入れ・校正ゲートに残あり**（「実装の有無」と
+「ゲート通過」を区別する — 計器校正トラックの読みでは後者が本体）:
 
 | フェーズ | 状態 | 根拠 |
 |---|---|---|
 | Q0 | ⏳ 部分完了（CC0 corpus に残） | 検証基盤（`validation.md` baseline / `tests/test_snapshot.py` / `scripts/validate_against_truth.py`）は完備。ただし corpus は合成サイン波 5 曲のみで、Q0-1 の「CC0 音源・ジャンル多様」と survivor 候補拡張（[`ai_music_daw_vision.md`](ai_music_daw_vision.md) §9.1 PoC (1)）が未達 — `validation.md` §10 も CC0 追加を follow-up として明記 |
-| Q1 | ✅ 実装済み（校正記録に残） | Q1-1: `loudness_lufs_integrated` + `true_peak_dbfs`（pyloudnorm）。Q1-2: `compute_time_signature()`、validation 5/5 exact（3/4 含む）— 受け入れ条件「3 曲以上の 3/4 サンプル」は fixture 1 曲のみで未達。Q1-3: CV ベース confidence 実装済み（`compute_bpm` docstring が受け入れ条件を明記）— 対真値の系統的検証は未記録。Q1-4: `loud_pop` / `acoustic` / `edm` プロファイル + `--baseline` 切替 |
-| Q2 | ✅ 実装済み（決定論パスのみ。Q2-1 は要再スコープ） | `downbeat_times` / `chord_events` / `melody_contour` を extractor が**決定論 librosa / pyin パス**で算出。Q2-1 が要求する `beat_this` の `PhysicalRPE` 統合は、後発の隔離方針（Q4' / [`learned_models_policy.md`](learned_models_policy.md): 学習出力は `learned_annotations` に隔離、`models.py` が「MUST NOT be folded into `PhysicalRPE.downbeat_times`」と明記）と矛盾するため未実施 — 仕様の再スコープが必要（librosa を正規センサーとするか、昇格基準を別途定義するか）。受け入れ条件（downbeat 一致率 / ±50¢）の対真値記録も未整備 |
-| Q3 | ✅ 実装済み（実音源検証に残） | `stem_rpe` + Demucs `--separate`（opt-in、PR #20–#23）。合成 stem は `tests/test_stem_validation.py` で検証済みだが、実 Demucs パスは per-stem BPM が完了基準未達（[`validation.md`](validation.md) §6: sparse stem で BPM 不安定、drums 24.15 vs full mix 120.19）、実音源 stem corpus も未コミット |
+| Q1 | ⏳ 実装済み・受け入れゲート未達 | **実装（全コードパス存在）**: Q1-1 `loudness_lufs_integrated` + `true_peak_dbfs`（pyloudnorm）/ Q1-2 `compute_time_signature()` / Q1-3 CV ベース confidence（`compute_bpm` docstring が受け入れ条件を明記）/ Q1-4 `loud_pop`・`acoustic`・`edm` プロファイル + `--baseline` 切替。**未達ゲート**: Q1-1 対 ITU リファレンス ±0.5 LU の記録なし / Q1-2「3 曲以上の 3/4 サンプル」は corpus に 3/4 が 1 曲のみ（validation 5/5 exact はその 1 曲を含む）/ Q1-3 対真値の系統的検証が未記録 |
+| Q2 | ⏳ 決定論パス実装済み・精度未検証（Q2-1 は要再スコープ） | `downbeat_times` / `chord_events` / `melody_contour` を extractor が**決定論 librosa / pyin パス**で算出。Q2-1 が要求する `beat_this` の `PhysicalRPE` 統合は、後発の隔離方針（Q4' / [`learned_models_policy.md`](learned_models_policy.md): 学習出力は `learned_annotations` に隔離、`models.py` が「MUST NOT be folded into `PhysicalRPE.downbeat_times`」と明記）と矛盾するため未実施 — 仕様の再スコープが必要（librosa を正規センサーとするか、昇格基準を別途定義するか）。受け入れ条件（downbeat 一致率 / ±50¢）の対真値記録も未整備 |
+| Q3 | ⏳ 実装済み・実音源検証未達 | `stem_rpe` + Demucs `--separate`（opt-in、PR #20–#23）。合成 stem は `tests/test_stem_validation.py` で検証済みだが、実 Demucs パスは per-stem BPM が完了基準未達（[`validation.md`](validation.md) §6: sparse stem で BPM 不安定、drums 24.15 vs full mix 120.19）、実音源 stem corpus も未コミット |
 | Q4 | ✅ 完了 | PR #8（下記の実装サマリ参照） |
 | Q5 | ⏳ 部分 | Q5-1 `coverage.md` ✅ / Q5-2 Dockerfile ❌ / Q5-3 CHANGELOG ❌ / Q5-4 任意 |
 
@@ -101,7 +103,7 @@ Q5-2 / Q5-3（配布物）は純粋な未実装、Q2-1 は仕様自体の再ス�
 > を同時達成する。Q0-5 の `validation.md` に survivor 候補の抽出結果を pop と
 > 並べて記録する。追加工数はサンプル選定基準の拡張のみ。
 
-### Q1: 測定の標準化（業界基準への引き上げ）✅ **実装済み（校正記録に残、棚卸しテーブル参照）**
+### Q1: 測定の標準化（業界基準への引き上げ）⏳ **実装済み・受け入れゲート未達（棚卸しテーブル参照）**
 
 **目的**: ad-hoc な measurement を ITU / MIR コミュニティ標準に置き換える。
 
@@ -116,7 +118,7 @@ Q5-2 / Q5-3（配布物）は純粋な未実装、Q2-1 は仕様自体の再ス�
 混合行列、ジャンル別スコアの妥当性が記録されている。
 **推定工数**: 2–3 日
 
-### Q2: 時系列の深化（曲の中で何が起きているか）✅ **実装済み（決定論パスのみ。Q2-1 は要再スコープ、棚卸しテーブル参照）**
+### Q2: 時系列の深化（曲の中で何が起きているか）⏳ **決定論パス実装済み・精度未検証（Q2-1 は要再スコープ、棚卸しテーブル参照）**
 
 **目的**: 「曲全体の単一値」観測から「時間軸上の変化」観測へ。
 
@@ -135,7 +137,7 @@ pyin の voicing > 0.5 区間で ±50¢ 精度。
 > Reject 判定。`beat_this` を採用した上で `dbn=False` 固定により madmom DBN を
 > 透過依存させない。
 
-### Q3: 音源分離の前提化 ✅ **実装済み（実音源検証に残、棚卸しテーブル参照）**
+### Q3: 音源分離の前提化 ⏳ **実装済み・実音源検証未達（棚卸しテーブル参照）**
 
 **目的**: 混在波形での測定の限界（「ベースの BPM」「ボーカルの brightness」が
 取れない）を解消。
