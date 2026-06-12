@@ -25,6 +25,7 @@ def rpe_bundle_to_observed(bundle: RPEBundle, *, id: str) -> ObservedRPE:
         "valley_depth": float(physical.valley_depth),
         "valley_depth_target": float(physical.valley_depth),
         "brightness": float(physical.spectral_profile.brightness),
+        "spectral_centroid": float(physical.spectral_centroid),
         "stereo_width": (
             float(physical.stereo_profile.width) if physical.stereo_profile is not None else None
         ),

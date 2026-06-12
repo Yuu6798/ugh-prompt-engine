@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 from conftest import assert_no_outcome_keys as _assert_no_outcome_keys
 from typer.testing import CliRunner
@@ -131,9 +132,10 @@ def test_audit_report_returns_needles_without_outcome_keys() -> None:
     assert active_rate.observed_band is None
     assert valley_depth.deviation == -0.05
     assert valley_depth.observed_band is None
-    assert brightness.target_band == "brightness >= 0.6"
-    assert brightness.deviation == -0.1
+    assert brightness.target_band == "spectral_centroid >= 2500"
+    assert brightness.deviation == -300.0
     assert brightness.observed_band is None
+    assert brightness.sensor == "PhysicalRPE.spectral_centroid"
     assert stereo_width.note == "sensor missing"
     assert _needle(report, "semantic", "delta_e").score is not None
 
@@ -151,7 +153,7 @@ def test_audit_text_snapshot_is_stable() -> None:
         "- observed_id: fixture-rpe\n"
         "- source: rpe_extract\n"
         "- observed_signals: "
-        "a continuous, wall-like sonic character, bright, continuous, flat, wall-like\n"
+        "a continuous, wall-like sonic character, continuous, flat, mid-focused, wall-like\n"
         "\n"
         "## Physical Needles\n"
         "\n"
@@ -162,7 +164,7 @@ def test_audit_text_snapshot_is_stable() -> None:
         "| time_signature | 4/4 | 4/4 |  | 0 | 1 |  |\n"
         "| active_rate | 0.60-0.70 | 0.8 |  | 0.1 |  |  |\n"
         "| valley_depth | 0.10-0.20 | 0.05 |  | -0.05 |  |  |\n"
-        "| brightness | bright | 0.5 |  | -0.1 |  |  |\n"
+        "| brightness | bright | 2200 |  | -300 |  |  |\n"
         "| stereo_width | wide |  |  |  |  | sensor missing |\n"
         "\n"
         "## Semantic Needles\n"
@@ -171,7 +173,7 @@ def test_audit_text_snapshot_is_stable() -> None:
         "|---|---:|---:|---|---:|---:|---|\n"
         "| core | mid focused steady pulse | "
         "A continuous, wall-like sonic character |  | 1 | 0 |  |\n"
-        "| grv | mid-focused, wide-field | bright |  | 0.3333 | 0.6667 |  |\n"
+        "| grv | mid-focused, wide-field | mid-focused |  | 0 | 1 |  |\n"
         "| delta_e | flat | flat |  | 0.09 | 0.91 |  |\n"
     )
 
@@ -229,7 +231,7 @@ def test_audit_key_needle_falls_back_without_mir_eval(monkeypatch: Any) -> None:
     assert key.sensor == "exact_key_match"
 
 
-def test_audit_maps_dark_brightness_to_inverse_bright_rule() -> None:
+def test_audit_maps_dark_brightness_to_explicit_dark_rule() -> None:
     score = _make_score()
     score.physical.brightness = "dark"
 
@@ -242,8 +244,10 @@ def test_audit_maps_dark_brightness_to_inverse_bright_rule() -> None:
     brightness = _needle(report, "physical", "brightness")
 
     assert brightness.target == "dark"
-    assert brightness.target_band == "brightness <= 0.6"
-    assert brightness.deviation == 0.0
+    # 正規センサーは spectral_centroid。perc.dark の明示帯（<= 1200）に対し、
+    # fixture の centroid 2200 は帯外 → 正の deviation が出る
+    assert brightness.target_band == "spectral_centroid <= 1200"
+    assert brightness.deviation == 1000.0
 
 
 def test_audit_canonicalizes_freeform_delta_e_target() -> None:
@@ -330,3 +334,26 @@ def test_audit_cli_audio_input_uses_extractor(monkeypatch: Any, tmp_path: Path) 
     payload = json.loads(result.output)
     _assert_no_outcome_keys(payload)
     assert payload["observed_id"] == "generated"
+
+
+def test_audit_legacy_numeric_brightness_target_uses_band_ratio_sensor() -> None:
+    """legacy 数値レンジの brightness ターゲットは旧 band-ratio センサーと比較される。
+
+    centroid（Hz）に対して 0-1 レンジを解釈すると巨大な誤 deviation が出るため
+    （PR #66 レビュー指摘の回帰ガード。semantic_ci/core.py の比較側と同方針）。
+    """
+    score = _make_score()
+    score.physical.brightness = "0.0-0.2"
+
+    report = build_audit_report(
+        score,
+        _make_bundle(brightness=0.5),
+        observed_id="fixture-rpe",
+    )
+
+    brightness = _needle(report, "physical", "brightness")
+
+    assert brightness.sensor == "PhysicalRPE.brightness"
+    assert brightness.observed == 0.5
+    assert brightness.target_band == "0-0.2"
+    assert brightness.deviation == pytest.approx(0.3)

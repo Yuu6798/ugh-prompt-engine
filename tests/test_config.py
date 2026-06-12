@@ -56,3 +56,20 @@ def test_empty_local_config_override_is_preserved(monkeypatch, tmp_path):
 def test_load_nonexistent_raises():
     with pytest.raises(FileNotFoundError):
         load_config("nonexistent_config")
+
+
+def test_packaged_configs_match_repo_configs() -> None:
+    """パッケージ同梱 config はリポジトリ config と同期していること。
+
+    load_config はローカル checkout が無い環境でパッケージリソースへフォールバック
+    するため、乖離するとインストール実行時のみ旧ルールで動く（PR #66 レビュー指摘）。
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    for relative in ("semantic_rules.yaml", "domain_profiles/music.yaml"):
+        repo_copy = (root / "config" / relative).read_text(encoding="utf-8")
+        packaged_copy = (root / "src" / "svp_rpe" / "config" / relative).read_text(
+            encoding="utf-8"
+        )
+        assert repo_copy == packaged_copy, f"config drift: {relative}"

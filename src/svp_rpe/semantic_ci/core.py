@@ -149,11 +149,23 @@ def _compare_metric(name: str, expected: Any, observed: Any, tolerance: float | 
     )
 
 
-def _observed_metric_value(metrics: Mapping[str, Any], name: str) -> Any:
-    if name in metrics:
-        return metrics.get(name)
+def _observed_metric_value(metrics: Mapping[str, Any], name: str, target: Any = None) -> Any:
+    base = name[: -len("_target")] if name.endswith("_target") else name
+    if base in SENSOR_METRIC_OVERRIDES:
+        # 読み替え対象（brightness 等）はターゲット型でセンサーを選ぶ:
+        # - legacy 数値ターゲット（数値 or 数値レンジ文字列）は legacy 単位の
+        #   比較なので exact key（旧 band-ratio）を使う
+        # - 定性ターゲット（dark/bright 等）は正規センサーのみを使い、
+        #   欠測時は legacy 値（別単位）に倒さず None（欠測）として報告する
+        if _is_number(target) or (
+            isinstance(target, str) and _parse_numeric_range(target) is not None
+        ):
+            return metrics.get(name)
+        return metrics.get(SENSOR_METRIC_OVERRIDES[base])
     sensor_name = _sensor_metric_name(name)
-    return metrics.get(sensor_name)
+    if sensor_name in metrics:
+        return metrics.get(sensor_name)
+    return metrics.get(name)
 
 
 def _numeric_value(value: Any) -> float | None:
@@ -186,12 +198,6 @@ def _target_band_bounds(name: str, target: str) -> tuple[float | None, float | N
         if aliases.intersection(labels):
             return rule["bounds"].get("min"), rule["bounds"].get("max")
 
-    if feature_name == "brightness" and "dark" in aliases:
-        for rule in _semantic_rules_for_feature(feature_name):
-            labels = {_normalize_label(label) for label in rule["labels"]}
-            lower = rule["bounds"].get("min")
-            if "bright" in labels and lower is not None:
-                return None, lower
     return None
 
 
@@ -203,8 +209,14 @@ def _range_distance(value: float, lower: float | None, upper: float | None) -> f
     return 0.0
 
 
+# 定性ツマミ → 観測センサーの読み替え。brightness の正規センサーは
+# spectral_centroid（band-ratio は HF の乏しい素材で盲目。controllability_poc.md §5.1）
+SENSOR_METRIC_OVERRIDES = {"brightness": "spectral_centroid"}
+
+
 def _sensor_metric_name(name: str) -> str:
-    return name[: -len("_target")] if name.endswith("_target") else name
+    base = name[: -len("_target")] if name.endswith("_target") else name
+    return SENSOR_METRIC_OVERRIDES.get(base, base)
 
 
 def _semantic_rules_for_feature(feature_name: str) -> list[dict[str, Any]]:
@@ -322,7 +334,7 @@ def compare_expected_observed(
         _compare_metric(
             name,
             target,
-            _observed_metric_value(observed.metrics, name),
+            _observed_metric_value(observed.metrics, name, target),
             expected.tolerances.get(name),
         )
         for name, target in sorted(expected.metric_targets.items())

@@ -121,10 +121,11 @@ def test_k1_fixture_snapshot_spans_tight_and_dead() -> None:
     assert by_knob["bpm"]["classification"] == "tight"
     assert by_knob["key"]["classification"] == "tight"
     assert by_knob["key"]["kind"] == "categorical"
-    # brightness は帯域比センサーでは dead だが、centroid 補助センサーでは tight。
-    # 「ツマミが死んでいる」のではなく「センサーが盲目」であることの判別。
-    assert by_knob["brightness"]["classification"] == "dead"
-    assert by_knob["brightness_centroid"]["classification"] == "tight"
+    # 正規センサー（spectral_centroid）では tight。legacy の帯域比センサーは
+    # HF の乏しい素材で盲目になり dead に見える — 「ツマミ死」と「センサー盲」の判別例
+    assert by_knob["brightness"]["classification"] == "tight"
+    assert by_knob["brightness"]["sensor"] == "spectral_centroid"
+    assert by_knob["brightness_band_ratio"]["classification"] == "dead"
     # 演奏者が読まないフィールド = 繋がっていないツマミは dead と検出される
     assert by_knob["active_rate_target"]["classification"] == "dead"
     assert by_knob["valley_depth_target"]["classification"] == "dead"

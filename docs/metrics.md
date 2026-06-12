@@ -38,11 +38,11 @@ detection path, so the added cost is only the aggregation step.
 
 | Metric | Definition |
 |--------|-----------|
-| Spectral Centroid | Center of spectral mass (Hz) |
+| Spectral Centroid | Center of spectral mass (Hz)。**dark/bright 定性ラベルの正規センサー**（`semantic_rules.yaml`: dark ≤ 1200 Hz / bright ≥ 2500 Hz、中間はニュートラル） |
 | Low Ratio | Energy below 300 Hz / total |
 | Mid Ratio | Energy 300-4000 Hz / total |
 | High Ratio | Energy above 4000 Hz / total |
-| Brightness | High / (low + mid + high) |
+| Brightness (band ratio) | High / (low + mid + high)。**legacy**: HF の乏しい素材で 0 に張り付き盲目になるため、dark/bright 判定には使わない（K1 grip 測定で確認、[`controllability_poc.md`](controllability_poc.md) §5.1） |
 
 ## Temporal Metrics
 

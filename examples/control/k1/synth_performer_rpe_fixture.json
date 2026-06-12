@@ -23,14 +23,14 @@
     },
     {
       "name": "brightness",
-      "sensor": "spectral_profile.brightness",
+      "sensor": "spectral_centroid",
       "low_level": "dark",
       "high_level": "bright",
       "expected_sign": 1
     },
     {
-      "name": "brightness_centroid",
-      "sensor": "spectral_centroid",
+      "name": "brightness_band_ratio",
+      "sensor": "spectral_profile.brightness",
       "low_level": "dark",
       "high_level": "bright",
       "expected_sign": 1
@@ -532,8 +532,8 @@
       }
     },
     {
-      "sample_id": "brightness_centroid_low_r01",
-      "knob": "brightness_centroid",
+      "sample_id": "brightness_band_ratio_low_r01",
+      "knob": "brightness_band_ratio",
       "level": "dark",
       "repeat": 1,
       "features": {
@@ -548,8 +548,8 @@
       }
     },
     {
-      "sample_id": "brightness_centroid_low_r02",
-      "knob": "brightness_centroid",
+      "sample_id": "brightness_band_ratio_low_r02",
+      "knob": "brightness_band_ratio",
       "level": "dark",
       "repeat": 2,
       "features": {
@@ -564,8 +564,8 @@
       }
     },
     {
-      "sample_id": "brightness_centroid_low_r03",
-      "knob": "brightness_centroid",
+      "sample_id": "brightness_band_ratio_low_r03",
+      "knob": "brightness_band_ratio",
       "level": "dark",
       "repeat": 3,
       "features": {
@@ -580,8 +580,8 @@
       }
     },
     {
-      "sample_id": "brightness_centroid_low_r04",
-      "knob": "brightness_centroid",
+      "sample_id": "brightness_band_ratio_low_r04",
+      "knob": "brightness_band_ratio",
       "level": "dark",
       "repeat": 4,
       "features": {
@@ -596,8 +596,8 @@
       }
     },
     {
-      "sample_id": "brightness_centroid_low_r05",
-      "knob": "brightness_centroid",
+      "sample_id": "brightness_band_ratio_low_r05",
+      "knob": "brightness_band_ratio",
       "level": "dark",
       "repeat": 5,
       "features": {
@@ -612,8 +612,8 @@
       }
     },
     {
-      "sample_id": "brightness_centroid_high_r01",
-      "knob": "brightness_centroid",
+      "sample_id": "brightness_band_ratio_high_r01",
+      "knob": "brightness_band_ratio",
       "level": "bright",
       "repeat": 1,
       "features": {
@@ -628,8 +628,8 @@
       }
     },
     {
-      "sample_id": "brightness_centroid_high_r02",
-      "knob": "brightness_centroid",
+      "sample_id": "brightness_band_ratio_high_r02",
+      "knob": "brightness_band_ratio",
       "level": "bright",
       "repeat": 2,
       "features": {
@@ -644,8 +644,8 @@
       }
     },
     {
-      "sample_id": "brightness_centroid_high_r03",
-      "knob": "brightness_centroid",
+      "sample_id": "brightness_band_ratio_high_r03",
+      "knob": "brightness_band_ratio",
       "level": "bright",
       "repeat": 3,
       "features": {
@@ -660,8 +660,8 @@
       }
     },
     {
-      "sample_id": "brightness_centroid_high_r04",
-      "knob": "brightness_centroid",
+      "sample_id": "brightness_band_ratio_high_r04",
+      "knob": "brightness_band_ratio",
       "level": "bright",
       "repeat": 4,
       "features": {
@@ -676,8 +676,8 @@
       }
     },
     {
-      "sample_id": "brightness_centroid_high_r05",
-      "knob": "brightness_centroid",
+      "sample_id": "brightness_band_ratio_high_r05",
+      "knob": "brightness_band_ratio",
       "level": "bright",
       "repeat": 5,
       "features": {

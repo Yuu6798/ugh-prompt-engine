@@ -130,6 +130,8 @@ def test_profile_defaults_are_applied_when_no_rule_matches() -> None:
     rpe.physical.spectral_profile.low_ratio = 0.1
     rpe.physical.spectral_profile.mid_ratio = 0.1
     rpe.physical.spectral_profile.brightness = 0.1
+    # ニュートラル帯（dark <= 1200 / bright >= 2500 のどちらにも入らない）
+    rpe.physical.spectral_centroid = 1800.0
     rpe.physical.active_rate = 0.5
     rpe.physical.valley_depth = 0.05
     svp = generate_svp(rpe)

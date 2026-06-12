@@ -20,11 +20,18 @@ por_surface_rules:
     condition: {bpm_min: 140}
     labels:
       - {label: high_tempo, confidence: 0.95}
+  # brightness の正規センサーは spectral_centroid（semantic_rules.yaml と同期、
+  # 目盛り: dark <= 1200 / bright >= 2500。controllability_poc.md §5.1）
   - id: perc.bright
     layer: perceptual
-    condition: {brightness_min: 0.6}
+    condition: {spectral_centroid_min: 2500}
     labels:
       - {label: bright, confidence: 0.90}
+  - id: perc.dark
+    layer: perceptual
+    condition: {spectral_centroid_max: 1200}
+    labels:
+      - {label: dark, confidence: 0.85}
   - id: perc.bass_heavy
     layer: perceptual
     condition: {low_ratio_min: 0.4}
@@ -66,7 +73,7 @@ por_surface_rules:
       - {label: introspective, confidence: 0.50}
   - id: hyp.energetic
     layer: semantic_hypothesis
-    condition: {bpm_min: 140, brightness_min: 0.6, active_rate_min: 0.8}
+    condition: {bpm_min: 140, spectral_centroid_min: 2500, active_rate_min: 0.8}
     labels:
       - {label: energetic, confidence: 0.68}
       - {label: driving, confidence: 0.65}
@@ -78,7 +85,7 @@ por_surface_rules:
 grv_primary_vocab:
   - condition: {low_ratio_min: 0.4}
     label: bass-heavy
-  - condition: {brightness_min: 0.6}
+  - condition: {spectral_centroid_min: 2500}
     label: bright
   - condition: {mid_ratio_min: 0.45}
     label: mid-focused

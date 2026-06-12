@@ -216,8 +216,8 @@ MusicGen / Suno 実測での地図更新は K2 に引き継ぐ。
 |---|---|---|---:|---|
 | `bpm` | 観測 BPM | 1.61 | **tight** | **残す**。90→140 指定で観測 90.4→127.3 と動く（高水準の検出は低めに出る — センサー側の癖として記録） |
 | `key` | 要求 key 一致率 | 1.00 | **tight** | **残す**。C major / F# minor とも全サンプル一致 |
-| `brightness` | `spectral_profile.brightness`（帯域比） | 0.00 | **dead** | **センサーを直す**（下記） |
-| `brightness`（補助） | `spectral_centroid` | 223.5 | **tight** | 補助センサーでは明確に動く |
+| `brightness` | `spectral_centroid`（正規センサー） | 223.5 | **tight** | **残す**。センサー再設計済み（下記） |
+| `brightness_band_ratio`（legacy） | `spectral_profile.brightness`（帯域比） | 0.00 | **dead** | 旧センサーの盲目の証拠として保持 |
 | `active_rate_target` | active rate | −1.14 | **dead** | **接続する**。演奏者がこのフィールドを読まない=繋がっていないツマミの実例 |
 | `valley_depth_target` | novelty valley depth | 0.06 | **dead** | **接続する**。同上（§6 の dead 予想どおり） |
 
@@ -226,12 +226,18 @@ MusicGen / Suno 実測での地図更新は K2 に引き継ぐ。
 1. **ツマミが死んでいる**（`active_rate_target` / `valley_depth_target`）: 生成側に
    そのフィールドを読む経路が無い。grip 測定が「繋がっていないコックピット」を
    正しく検出した（§2 の存在意義そのもの）。
-2. **センサーが盲目**（`brightness`）: 帯域比センサー（4kHz 以上のエネルギー比）は
-   0 のまま動かないが、**同一サンプル**を `spectral_centroid` で観測すると
-   957→1236 Hz と明確に動く（grip 223.5）。ツマミは生きており、センサーの観測帯が
-   合っていない。C4（`composition_poc_report.md` §4）の発見の追試にあたる。
-   → 対策候補: brightness の正規センサーを centroid 系へ変更、または
-   `semantic_rules.yaml` の帯域閾値の再校正。K2 前に決める。
+2. **センサーが盲目**（旧 `brightness` 帯域比）: 帯域比センサー（4kHz 以上の
+   エネルギー比）は 0 のまま動かないが、**同一サンプル**を `spectral_centroid` で
+   観測すると 957→1236 Hz と明確に動く（grip 223.5）。ツマミは生きており、
+   センサーの観測帯が合っていない。C4（`composition_poc_report.md` §4）の発見の
+   追試にあたる。
+   → **解決済み（2026-06-12 センサー再設計）**: brightness の正規センサーを
+   `spectral_centroid` へ変更し、`semantic_rules.yaml` に dark（≤1200 Hz）/
+   bright（≥2500 Hz）の明示帯を新設（既存 `hyp.melancholic` の centroid_max 2000
+   と無矛盾な絶対校正）。audit 針・semantic_ci compare・本地図の 3 消費者を
+   centroid に統一し、旧帯域比はフィールドとして残置（dark/bright 判定には不使用、
+   `docs/metrics.md` 参照）。合成 5 曲の por_surface には `dark` ラベルが付くように
+   なる — サイン波スタックは絶対値として dark のため妥当。
 
 本マップは決定論的演奏者（接続が既知）に対する測定なので、tight/dead の正解が
 わかっている状態でハーネスが正しく分類できることの検証を兼ねる。確率的生成器

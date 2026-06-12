@@ -16,8 +16,9 @@ data_lineage:
   generation_method: deterministic_rule_based
 analysis_rpe:
   schema_version: '1.0'
-  por_core: A mid-focused, evolving sonic character
+  por_core: A dark, mid-focused, evolving sonic character
   por_surface:
+  - dark
   - mid-focused
   - evolving
   - melancholic
@@ -36,7 +37,7 @@ analysis_rpe:
     spectral_centroid: 780.02
 svp_for_generation:
   schema_version: '1.0'
-  prompt_text: 'Core character: A mid-focused, evolving sonic character
+  prompt_text: 'Core character: A dark, mid-focused, evolving sonic character
 
     Gravity anchor: mid-focused
 
@@ -48,6 +49,7 @@ svp_for_generation:
   - 'Active rate target: 98%'
   - 'Crest factor target: ~2.8'
   style_tags:
+  - dark
   - mid-focused
   - evolving
   tempo_range: 82-102
@@ -76,7 +78,7 @@ svp_for_generation:
       source_rule: hyp.melancholic
 evaluation_criteria:
   schema_version: '1.0'
-  por_check: 'Maintains core character: A mid-focused, evolving sonic character'
+  por_check: 'Maintains core character: A dark, mid-focused, evolving sonic character'
   grv_check: 'Preserves gravity anchor: mid-focused'
   delta_e_check: Energy follows gradual_build pattern
   physical_checks:
@@ -96,7 +98,7 @@ evaluation_criteria:
     - spectral_centroid
 minimal_svp:
   schema_version: '1.0'
-  c: A mid-focused, evolving sonic character
+  c: A dark, mid-focused, evolving sonic character
   g:
   - bpm~92
   - key=A

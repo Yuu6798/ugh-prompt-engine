@@ -13,8 +13,8 @@
 | time_signature | physical | 4/4 | 4/4 | 4/4 | 0 | 0 | = flat |
 | active_rate | physical | 0.90-0.93 | 1 | 0.9301 | 0.07 | 0.0001 | → target |
 | valley_depth | physical | 0.15-0.25 | 0.0043 | 0.1593 | -0.1457 | 0 | → target |
-| brightness | physical | dark | 0 | 0 | 0 | 0 | = flat |
+| brightness | physical | dark | 787.2 | 950.8 | 0 | 0 | = flat |
 | stereo_width | physical | wide |  |  |  |  |  |
-| core | semantic | introspective night drive | A continuous, mid-focused, wall-like sonic character | A bass-heavy, grounded, evolving sonic character | 1 | 1 | = flat |
+| core | semantic | introspective night drive | A continuous, dark, mid-focused sonic character | A bass-heavy, dark, grounded sonic character | 1 | 1 | = flat |
 | grv | semantic | deep_house, ambient | mid-focused, dense | bass-heavy, dense | 1 | 0.5 | → target |
 | delta_e | semantic | gradual build from solitude to release | sustained_energy | gradual_build | 0.7 | 0.0544 | → target |

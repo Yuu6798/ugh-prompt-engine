@@ -16,9 +16,10 @@ data_lineage:
   generation_method: deterministic_rule_based
 analysis_rpe:
   schema_version: '1.0'
-  por_core: A high_tempo, mid-focused, evolving sonic character
+  por_core: A high_tempo, dark, mid-focused sonic character
   por_surface:
   - high_tempo
+  - dark
   - mid-focused
   - evolving
   grv_primary: mid-focused
@@ -35,7 +36,7 @@ analysis_rpe:
     spectral_centroid: 947.41
 svp_for_generation:
   schema_version: '1.0'
-  prompt_text: 'Core character: A high_tempo, mid-focused, evolving sonic character
+  prompt_text: 'Core character: A high_tempo, dark, mid-focused sonic character
 
     Gravity anchor: mid-focused
 
@@ -48,6 +49,7 @@ svp_for_generation:
   - 'Crest factor target: ~2.7'
   style_tags:
   - high_tempo
+  - dark
   - mid-focused
   - evolving
   tempo_range: 162-182
@@ -60,8 +62,7 @@ svp_for_generation:
     candidate_context: []
 evaluation_criteria:
   schema_version: '1.0'
-  por_check: 'Maintains core character: A high_tempo, mid-focused, evolving sonic
-    character'
+  por_check: 'Maintains core character: A high_tempo, dark, mid-focused sonic character'
   grv_check: 'Preserves gravity anchor: mid-focused'
   delta_e_check: Energy follows gradual_build pattern
   physical_checks:
@@ -81,7 +82,7 @@ evaluation_criteria:
     - spectral_centroid
 minimal_svp:
   schema_version: '1.0'
-  c: A high_tempo, mid-focused, evolving sonic character
+  c: A high_tempo, dark, mid-focused sonic character
   g:
   - bpm~172
   - key=D

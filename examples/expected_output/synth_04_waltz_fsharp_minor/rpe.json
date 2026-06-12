@@ -1640,8 +1640,17 @@
   },
   "semantic": {
     "schema_version": "2.0",
-    "por_core": "A mid-focused, evolving sonic character",
+    "por_core": "A dark, mid-focused, evolving sonic character",
     "por_surface": [
+      {
+        "label": "dark",
+        "layer": "perceptual",
+        "confidence": 0.85,
+        "evidence": [
+          "spectral_centroid=730.9 <= 1200"
+        ],
+        "source_rule": "perc.dark"
+      },
       {
         "label": "mid-focused",
         "layer": "perceptual",
@@ -1689,7 +1698,7 @@
       "secondary": [
         "dense"
       ],
-      "confidence": 0.7
+      "confidence": 0.8
     },
     "delta_e_profile": {
       "schema_version": "1.0",
@@ -1706,6 +1715,7 @@
       "Continuous energy, minimal silence"
     ],
     "confidence_notes": [
+      "rule matched: perc.dark -> ['dark']",
       "rule matched: perc.mid_focused -> ['mid-focused']",
       "rule matched: struct.gradual_motion -> ['evolving']",
       "rule matched: hyp.melancholic -> ['melancholic', 'introspective']"
