@@ -150,10 +150,13 @@ def _compare_metric(name: str, expected: Any, observed: Any, tolerance: float | 
 
 
 def _observed_metric_value(metrics: Mapping[str, Any], name: str) -> Any:
-    if name in metrics:
-        return metrics.get(name)
+    # センサー読み替え（brightness→spectral_centroid 等）を exact key より優先する。
+    # rpe_bundle_to_observed は legacy の band-ratio "brightness" も含むため、
+    # exact key を先にすると Hz 帯境界に対して 0.x 比率を比較してしまう
     sensor_name = _sensor_metric_name(name)
-    return metrics.get(sensor_name)
+    if sensor_name in metrics:
+        return metrics.get(sensor_name)
+    return metrics.get(name)
 
 
 def _numeric_value(value: Any) -> float | None:

@@ -5,10 +5,19 @@ perceptual:
     condition: {bpm_min: 140}
     labels:
       - {label: high_tempo, confidence: 0.95}
+  # brightness の正規センサーは spectral_centroid（Hz, 抽出 sr=22050）。
+  # 旧 band-ratio（high/(low+mid+high), >=4kHz）は HF エネルギーの乏しい素材で
+  # 0 に張り付き盲目になる（K1 grip 測定で確認、controllability_poc.md §5.1）。
+  # 目盛り: dark <= 1200 / neutral 1200-2500 / bright >= 2500。
+  # hyp.melancholic の spectral_centroid_max: 2000（非 bright の先例）と無矛盾。
   - id: perc.bright
-    condition: {brightness_min: 0.6}
+    condition: {spectral_centroid_min: 2500}
     labels:
       - {label: bright, confidence: 0.90}
+  - id: perc.dark
+    condition: {spectral_centroid_max: 1200}
+    labels:
+      - {label: dark, confidence: 0.85}
   - id: perc.bass_heavy
     condition: {low_ratio_min: 0.4}
     labels:
@@ -46,7 +55,7 @@ semantic_hypothesis:
       - {label: melancholic, confidence: 0.55}
       - {label: introspective, confidence: 0.50}
   - id: hyp.energetic
-    condition: {bpm_min: 140, brightness_min: 0.6, active_rate_min: 0.8}
+    condition: {bpm_min: 140, spectral_centroid_min: 2500, active_rate_min: 0.8}
     labels:
       - {label: energetic, confidence: 0.68}
       - {label: driving, confidence: 0.65}

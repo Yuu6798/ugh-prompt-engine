@@ -15,7 +15,11 @@ from svp_rpe.semantic_ci import rpe_bundle_to_observed
 from svp_rpe.semantic_ci.core import compare_expected_observed, generate_expected_rpe
 
 
-def _make_bundle(*, stereo_profile: StereoProfile | None = None) -> RPEBundle:
+def _make_bundle(
+    *,
+    stereo_profile: StereoProfile | None = None,
+    spectral_centroid: float = 900.0,
+) -> RPEBundle:
     physical = PhysicalRPE(
         bpm=120.0,
         key="C",
@@ -30,9 +34,9 @@ def _make_bundle(*, stereo_profile: StereoProfile | None = None) -> RPEBundle:
         active_rate=0.5,
         valley_depth=0.05,
         thickness=1.0,
-        spectral_centroid=900.0,
+        spectral_centroid=spectral_centroid,
         spectral_profile=SpectralProfile(
-            centroid=900.0,
+            centroid=spectral_centroid,
             low_ratio=0.2,
             mid_ratio=0.7,
             high_ratio=0.1,
@@ -144,3 +148,55 @@ def test_observed_key_matches_composition_target_key_metric() -> None:
     assert metric_diffs["valley_depth_target"].passed is True
     assert metric_diffs["brightness"].passed is True
     assert metric_diffs["stereo_width"].passed is True
+
+
+def test_brightness_target_prefers_centroid_sensor_over_band_ratio() -> None:
+    """bright ターゲットは band-ratio（0.x）でなく spectral_centroid と比較される。
+
+    rpe_bundle_to_observed の metrics は legacy "brightness"（帯域比）と
+    "spectral_centroid" の両方を含む。lookup が exact key を先に返すと
+    Hz 帯境界（>=2500）に対して 0.1 を比較して誤 fail する（回帰ガード）。
+    """
+    score = CompositionScore.model_validate(
+        {
+            "meta": {"title": "Bright Match", "version": 0.1},
+            "semantic": {
+                "core": "bright lead",
+                "grv": {"primary": "bright", "secondary": ""},
+                "delta_e": {"overall": "flat"},
+                "avoid": [],
+            },
+            "physical": {
+                "bpm": 120,
+                "key": "C major",
+                "time_signature": "4/4",
+                "active_rate_target": "0.40-0.60",
+                "valley_depth_target": "0.00-0.10",
+                "brightness": "bright",
+                "stereo_width": "wide",
+            },
+            "structure": [
+                {"section": "full", "bars": 8, "role": "fixture", "physical": "steady"}
+            ],
+            "rendering": {
+                "target_backend": "external",
+                "prompt_max_chars": 500,
+                "priority": [],
+            },
+        }
+    )
+    expected = generate_expected_rpe(composition_to_target_svp(score))
+    observed = rpe_bundle_to_observed(
+        _make_bundle(
+            stereo_profile=StereoProfile(width=0.8, correlation=0.2),
+            spectral_centroid=2600.0,
+        ),
+        id="bright-match",
+    )
+    assert observed.metrics["brightness"] == 0.1  # legacy 帯域比は低いまま
+
+    diff = compare_expected_observed(expected, observed)
+    metric_diffs = {metric.name: metric for metric in diff.metric_diffs}
+
+    assert metric_diffs["brightness"].observed == 2600.0
+    assert metric_diffs["brightness"].passed is True

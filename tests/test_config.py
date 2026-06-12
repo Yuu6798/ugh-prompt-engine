@@ -56,3 +56,19 @@ def test_empty_local_config_override_is_preserved(monkeypatch, tmp_path):
 def test_load_nonexistent_raises():
     with pytest.raises(FileNotFoundError):
         load_config("nonexistent_config")
+
+
+def test_packaged_semantic_rules_match_repo_config() -> None:
+    """パッケージ同梱 config はリポジトリ config と同期していること。
+
+    load_config はローカル checkout が無い環境でパッケージリソースへフォールバック
+    するため、乖離するとインストール実行時のみ旧ルールで動く（PR #66 レビュー指摘）。
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    repo_copy = (root / "config" / "semantic_rules.yaml").read_text(encoding="utf-8")
+    packaged_copy = (
+        root / "src" / "svp_rpe" / "config" / "semantic_rules.yaml"
+    ).read_text(encoding="utf-8")
+    assert repo_copy == packaged_copy
