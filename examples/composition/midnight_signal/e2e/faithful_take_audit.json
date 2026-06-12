@@ -1,0 +1,157 @@
+{
+  "schema_version": "1.0",
+  "score_id": "midnight-signal",
+  "observed_id": "faithful_take",
+  "source": "rpe_extract",
+  "observed_signals": [
+    "a bass-heavy, grounded, evolving sonic character",
+    "bass-heavy",
+    "dense",
+    "evolving",
+    "gradual build",
+    "gradual_build",
+    "grounded",
+    "introspective",
+    "melancholic"
+  ],
+  "physical": [
+    {
+      "name": "bpm",
+      "layer": "physical",
+      "target": 128,
+      "observed": 129.2,
+      "observed_band": null,
+      "target_band": null,
+      "deviation": 1.2,
+      "score": null,
+      "unit": "bpm",
+      "sensor": "PhysicalRPE.bpm",
+      "note": null
+    },
+    {
+      "name": "key",
+      "layer": "physical",
+      "target": "C minor",
+      "observed": "C minor",
+      "observed_band": null,
+      "target_band": null,
+      "deviation": 0.0,
+      "score": 1.0,
+      "unit": null,
+      "sensor": "mir_eval.key.evaluate",
+      "note": null
+    },
+    {
+      "name": "time_signature",
+      "layer": "physical",
+      "target": "4/4",
+      "observed": "4/4",
+      "observed_band": null,
+      "target_band": null,
+      "deviation": 0.0,
+      "score": 1.0,
+      "unit": null,
+      "sensor": "PhysicalRPE.time_signature",
+      "note": null
+    },
+    {
+      "name": "active_rate",
+      "layer": "physical",
+      "target": "0.90-0.93",
+      "observed": 0.9301,
+      "observed_band": null,
+      "target_band": "0.9-0.93",
+      "deviation": 0.0001,
+      "score": null,
+      "unit": null,
+      "sensor": "PhysicalRPE.active_rate",
+      "note": null
+    },
+    {
+      "name": "valley_depth",
+      "layer": "physical",
+      "target": "0.15-0.25",
+      "observed": 0.1593,
+      "observed_band": "evolving",
+      "target_band": "0.15-0.25",
+      "deviation": 0.0,
+      "score": null,
+      "unit": null,
+      "sensor": "PhysicalRPE.valley_depth",
+      "note": null
+    },
+    {
+      "name": "brightness",
+      "layer": "physical",
+      "target": "dark",
+      "observed": 0.0,
+      "observed_band": null,
+      "target_band": "brightness <= 0.6",
+      "deviation": 0.0,
+      "score": null,
+      "unit": null,
+      "sensor": "PhysicalRPE.brightness",
+      "note": null
+    },
+    {
+      "name": "stereo_width",
+      "layer": "physical",
+      "target": "wide",
+      "observed": null,
+      "observed_band": null,
+      "target_band": null,
+      "deviation": null,
+      "score": null,
+      "unit": null,
+      "sensor": "PhysicalRPE.stereo_width",
+      "note": "sensor missing"
+    }
+  ],
+  "semantic": [
+    {
+      "name": "core",
+      "layer": "semantic",
+      "target": "introspective night drive",
+      "observed": "A bass-heavy, grounded, evolving sonic character",
+      "observed_band": null,
+      "target_band": null,
+      "deviation": 1.0,
+      "score": 0.0,
+      "unit": null,
+      "sensor": "por_lexical_similarity",
+      "note": null
+    },
+    {
+      "name": "grv",
+      "layer": "semantic",
+      "target": [
+        "deep_house",
+        "ambient"
+      ],
+      "observed": [
+        "bass-heavy",
+        "dense"
+      ],
+      "observed_band": null,
+      "target_band": null,
+      "deviation": 0.5,
+      "score": 0.5,
+      "unit": null,
+      "sensor": "grv_anchor_match",
+      "note": null
+    },
+    {
+      "name": "delta_e",
+      "layer": "semantic",
+      "target": "gradual build from solitude to release",
+      "observed": "gradual_build",
+      "observed_band": null,
+      "target_band": null,
+      "deviation": 0.0544,
+      "score": 0.9456,
+      "unit": null,
+      "sensor": "delta_e_profile_alignment",
+      "note": "canonical target=gradual_build"
+    }
+  ]
+}

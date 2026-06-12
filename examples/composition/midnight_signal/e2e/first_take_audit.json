@@ -1,0 +1,155 @@
+{
+  "schema_version": "1.0",
+  "score_id": "midnight-signal",
+  "observed_id": "first_take",
+  "source": "rpe_extract",
+  "observed_signals": [
+    "a continuous, mid-focused, wall-like sonic character",
+    "continuous",
+    "dense",
+    "mid-focused",
+    "sustained energy",
+    "sustained_energy",
+    "wall-like"
+  ],
+  "physical": [
+    {
+      "name": "bpm",
+      "layer": "physical",
+      "target": 128,
+      "observed": 99.38,
+      "observed_band": null,
+      "target_band": null,
+      "deviation": -28.62,
+      "score": null,
+      "unit": "bpm",
+      "sensor": "PhysicalRPE.bpm",
+      "note": null
+    },
+    {
+      "name": "key",
+      "layer": "physical",
+      "target": "C minor",
+      "observed": "E minor",
+      "observed_band": null,
+      "target_band": null,
+      "deviation": 1.0,
+      "score": 0.0,
+      "unit": null,
+      "sensor": "mir_eval.key.evaluate",
+      "note": null
+    },
+    {
+      "name": "time_signature",
+      "layer": "physical",
+      "target": "4/4",
+      "observed": "4/4",
+      "observed_band": null,
+      "target_band": null,
+      "deviation": 0.0,
+      "score": 1.0,
+      "unit": null,
+      "sensor": "PhysicalRPE.time_signature",
+      "note": null
+    },
+    {
+      "name": "active_rate",
+      "layer": "physical",
+      "target": "0.90-0.93",
+      "observed": 1.0,
+      "observed_band": null,
+      "target_band": "0.9-0.93",
+      "deviation": 0.07,
+      "score": null,
+      "unit": null,
+      "sensor": "PhysicalRPE.active_rate",
+      "note": null
+    },
+    {
+      "name": "valley_depth",
+      "layer": "physical",
+      "target": "0.15-0.25",
+      "observed": 0.0043,
+      "observed_band": null,
+      "target_band": "0.15-0.25",
+      "deviation": -0.1457,
+      "score": null,
+      "unit": null,
+      "sensor": "PhysicalRPE.valley_depth",
+      "note": null
+    },
+    {
+      "name": "brightness",
+      "layer": "physical",
+      "target": "dark",
+      "observed": 0.0,
+      "observed_band": null,
+      "target_band": "brightness <= 0.6",
+      "deviation": 0.0,
+      "score": null,
+      "unit": null,
+      "sensor": "PhysicalRPE.brightness",
+      "note": null
+    },
+    {
+      "name": "stereo_width",
+      "layer": "physical",
+      "target": "wide",
+      "observed": null,
+      "observed_band": null,
+      "target_band": null,
+      "deviation": null,
+      "score": null,
+      "unit": null,
+      "sensor": "PhysicalRPE.stereo_width",
+      "note": "sensor missing"
+    }
+  ],
+  "semantic": [
+    {
+      "name": "core",
+      "layer": "semantic",
+      "target": "introspective night drive",
+      "observed": "A continuous, mid-focused, wall-like sonic character",
+      "observed_band": null,
+      "target_band": null,
+      "deviation": 1.0,
+      "score": 0.0,
+      "unit": null,
+      "sensor": "por_lexical_similarity",
+      "note": null
+    },
+    {
+      "name": "grv",
+      "layer": "semantic",
+      "target": [
+        "deep_house",
+        "ambient"
+      ],
+      "observed": [
+        "mid-focused",
+        "dense"
+      ],
+      "observed_band": null,
+      "target_band": null,
+      "deviation": 1.0,
+      "score": 0.0,
+      "unit": null,
+      "sensor": "grv_anchor_match",
+      "note": null
+    },
+    {
+      "name": "delta_e",
+      "layer": "semantic",
+      "target": "gradual build from solitude to release",
+      "observed": "sustained_energy",
+      "observed_band": null,
+      "target_band": null,
+      "deviation": 0.7,
+      "score": 0.3,
+      "unit": null,
+      "sensor": "delta_e_profile_alignment",
+      "note": "canonical target=gradual_build"
+    }
+  ]
+}

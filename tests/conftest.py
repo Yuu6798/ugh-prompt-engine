@@ -37,3 +37,16 @@ def sine_wave_stereo(tmp_path):
     path = tmp_path / "test_stereo.wav"
     sf.write(str(path), stereo, sr)
     return str(path)
+
+
+def assert_no_outcome_keys(value):
+    """audit 哲学の横断不変条件: verdict / passed / loss キーが存在しないこと。"""
+    if isinstance(value, dict):
+        assert "verdict" not in value
+        assert "passed" not in value
+        assert "loss" not in value
+        for item in value.values():
+            assert_no_outcome_keys(item)
+    elif isinstance(value, list):
+        for item in value:
+            assert_no_outcome_keys(item)

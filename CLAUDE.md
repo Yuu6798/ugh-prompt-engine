@@ -172,6 +172,7 @@ examples/                      # sample_input/ + expected_output/
 | [`docs/ai_music_daw_vision.md`](docs/ai_music_daw_vision.md) | 拡張検証トラック: SVP を「AI 音楽の MIDI」標準として確立し DAW の核とする長期ビジョン、survivor 性概念、楽譜/演奏分離、PoC (1) の Q0 統合 |
 | [`docs/composition_score_product_brief.md`](docs/composition_score_product_brief.md) | Composition Score プロダクト定義: 三層作曲言語の思想、正規スキーマ、MVP 範囲、PoC 1–5 ロードマップ |
 | [`docs/composition_poc_planning.md`](docs/composition_poc_planning.md) | Composition PoC 実装計画: C1–C6 フェーズ、ブリーフ下流の実装詳細・設計判断ログ |
+| [`docs/composition_poc_report.md`](docs/composition_poc_report.md) | C4 E2E デモ結果: 決定論的シンセ演奏者による 2 テイク針比較、センサー帯域の発見、PoC 5 の決定論パス実証 |
 | [`docs/controllability_poc.md`](docs/controllability_poc.md) | 制御トラック PoC 計画 (K 系列): パラメータ=効くツマミの読み替え、grip 効果量の定義、K0 最小方法実証〜K2 Suno 転移 |
 
 ## ドキュメント管理ポリシー

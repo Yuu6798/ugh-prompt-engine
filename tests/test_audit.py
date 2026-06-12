@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from conftest import assert_no_outcome_keys as _assert_no_outcome_keys
 from typer.testing import CliRunner
 
 from svp_rpe.cli import app
@@ -110,18 +111,6 @@ def _make_bundle(
 def _needle(report: Any, layer: str, name: str) -> Any:
     needles = getattr(report, layer)
     return next(item for item in needles if item.name == name)
-
-
-def _assert_no_outcome_keys(value: Any) -> None:
-    if isinstance(value, dict):
-        assert "verdict" not in value
-        assert "passed" not in value
-        assert "loss" not in value
-        for item in value.values():
-            _assert_no_outcome_keys(item)
-    elif isinstance(value, list):
-        for item in value:
-            _assert_no_outcome_keys(item)
 
 
 def test_audit_report_returns_needles_without_outcome_keys() -> None:

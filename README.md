@@ -142,6 +142,7 @@ svprpe --help
 - [AI Music DAW Vision](docs/ai_music_daw_vision.md) — Extension track: SVP as "MIDI for AI music" standard, survivor性 framework, score-vs-performance separation, PoC (1) integration into Q0
 - [Composition Score Product Brief](docs/composition_score_product_brief.md) — Composition Score product definition: three-layer composition language, canonical schema, MVP scope, PoC 1–5 roadmap
 - [Composition PoC Planning](docs/composition_poc_planning.md) — Implementation plan for Composition Score: C1–C6 phases, design decisions
+- [Composition PoC Report](docs/composition_poc_report.md) — C4 end-to-end demo results (deterministic path): synth performer, two-take needle comparison, sensor findings
 - [Controllability PoC Planning](docs/controllability_poc.md) — Control track PoC (K-series): parameters as control knobs not eval values, grip effect-size definition, K0 minimal method-proof → K2 Suno transfer
 - [AGENTS.md](AGENTS.md) — Claude × Codex orchestration protocol (Task Brief / Completion Summary templates)
 
