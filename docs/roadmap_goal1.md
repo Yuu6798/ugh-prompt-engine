@@ -68,13 +68,14 @@ Codex への引き渡しは [`AGENTS.md`](../AGENTS.md) の Task Brief フォー
 | Q0 | ✅ 完了 | `validation.md` baseline / `tests/test_snapshot.py` / `scripts/validate_against_truth.py` |
 | Q1 | ✅ 実装済み（校正記録に残） | Q1-1: `loudness_lufs_integrated` + `true_peak_dbfs`（pyloudnorm）。Q1-2: `compute_time_signature()`、validation 5/5 exact（3/4 含む）— 受け入れ条件「3 曲以上の 3/4 サンプル」は fixture 1 曲のみで未達。Q1-3: CV ベース confidence 実装済み（`compute_bpm` docstring が受け入れ条件を明記）— 対真値の系統的検証は未記録。Q1-4: `loud_pop` / `acoustic` / `edm` プロファイル + `--baseline` 切替 |
 | Q2 | ✅ 実装済み（精度検証に残） | `downbeat_times` / `chord_events` / `melody_contour` を extractor が算出 — 受け入れ条件（downbeat 一致率 / ±50¢）の対真値記録は未整備 |
-| Q3 | ✅ 完了 | `stem_rpe` + Demucs `--separate`（opt-in、PR #20–#23、stem 回帰テストあり） |
+| Q3 | ✅ 実装済み（実音源検証に残） | `stem_rpe` + Demucs `--separate`（opt-in、PR #20–#23）。合成 stem は `tests/test_stem_validation.py` で検証済みだが、実 Demucs パスは per-stem BPM が完了基準未達（[`validation.md`](validation.md) §6: sparse stem で BPM 不安定、drums 24.15 vs full mix 120.19）、実音源 stem corpus も未コミット |
 | Q4 | ✅ 完了 | PR #8（下記の実装サマリ参照） |
 | Q5 | ⏳ 部分 | Q5-1 `coverage.md` ✅ / Q5-2 Dockerfile ❌ / Q5-3 CHANGELOG ❌ / Q5-4 任意 |
 
-残作業は「未実装の機能」ではなく「**未記録の校正**」に偏っている。再定義後の
+残作業は「未実装の機能」ではなく「**未記録・未達の校正**」に偏っている。再定義後の
 Q 系列（計器校正トラック）の作業はこの残（3/4 fixture 拡充、BPM confidence の
-対真値記録、Q2 精度検証）から拾う — T0 の校正メモがそのまま受け皿になる。
+対真値記録、Q2 精度検証、Q3 実音源 per-stem 検証）から拾う — T0 の校正メモが
+そのまま受け皿になる。
 
 ### Q0: 検証基盤の確立（既存 P1–P2 統合・拡張）✅ **完了**
 
@@ -132,7 +133,7 @@ pyin の voicing > 0.5 区間で ±50¢ 精度。
 > Reject 判定。`beat_this` を採用した上で `dbn=False` 固定により madmom DBN を
 > 透過依存させない。
 
-### Q3: 音源分離の前提化 ✅ **完了 (PR #20–#23, 2026-05-02)**
+### Q3: 音源分離の前提化 ✅ **実装済み（実音源検証に残、棚卸しテーブル参照）**
 
 **目的**: 混在波形での測定の限界（「ベースの BPM」「ボーカルの brightness」が
 取れない）を解消。
@@ -239,7 +240,8 @@ flowchart LR
 - **クリティカルパス**: Q0 → Q1 → Q3 → Q5（最低 9–15 日）— **実装は走破済み**
   （2026-06-12 棚卸し。残は校正記録と Q5-2 / Q5-3）
 - **並列可能**: Q1 と Q2 は独立着手可（Q0 完了後）
-- **完了済**: Q0–Q4（フェーズ構成冒頭の棚卸しテーブル参照）
+- **完了済**: Q0 / Q4。Q1–Q3 は実装済みで校正・検証記録に残あり
+  （フェーズ構成冒頭の棚卸しテーブル参照）
 - **任意**: Q4'（学習モデル統合）は `learned_models_policy.md` の方針に従い、
   `LearnedAudioAnnotations` 経由で隔離的に追加。本ロードマップの完了定義には
   含めない
