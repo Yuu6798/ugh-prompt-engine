@@ -15,8 +15,8 @@ Composition E2E（C4, PR #64）と grip 代表マップ初版（K1, PR #65）が
 
 | PR | Title | Date | Phase |
 |---|---|---|---|
+| #67 | docs(policy): config 二重コピー同期の規約を Coding Conventions に追加 | 2026-06-12 | POLICY |
 | #66 | refactor(sensors): brightness の正規センサーを spectral_centroid へ再設計 | 2026-06-12 | K1-followup |
 | #65 | feat(control): K1 grip 代表マップ初版 — 5 ツマミ + 補助センサー | 2026-06-12 | K1 |
 | #64 | feat(compose): C4 Composition E2E デモ — 決定論的シンセ演奏者によるフルループ | 2026-06-12 | C4 |
 | #63 | feat(discipline): セッション終了プロトコルを semantic-ci-code から移植 | 2026-06-12 | INFRA |
-| #62 | feat(audit): Composition audit control panel (C0+C3) | 2026-06-03 | C0+C3 |

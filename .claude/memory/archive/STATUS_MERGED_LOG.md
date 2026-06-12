@@ -14,3 +14,4 @@ STATUS.md "Recently Merged"（最新 5 件保持）から溢れたマージ済�
 | #61 | feat(control): K0 grip measurement harness | 2026-06-03 | K0 |
 | #60 | docs: controllability_poc.md 制御トラック K 系列 新設 | 2026-06-02 | K-plan |
 | #59 | feat(compose): svprpe compose + ExternalPromptAdapter | 2026-06-02 | C2 |
+| #62 | feat(audit): Composition audit control panel (C0+C3) | 2026-06-03 | C0+C3 |
