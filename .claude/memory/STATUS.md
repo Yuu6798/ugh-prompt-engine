@@ -2,22 +2,21 @@
 
 ## Phase
 
-制御トラック K0（grip 測定ハーネス, PR #61）と Composition audit C0+C3（RPEBundle→ObservedRPE アダプタ + `svprpe audit` 制御盤コマンド, PR #62）が稼働。audit は「合否を出す裁判官」ではなく「ツマミの効きを返す計器（制御盤）」として確立し、verdict/pass-fail/loss を一切出さず `_assert_no_outcome_keys` 回帰テストで固定（ci-check の合否ゲートとは別物として並存）。定性ターゲットと数値観測の突き合わせは `semantic_rules.yaml` の閾値をゲージ目盛り（帯境界）に読み替えて解決し、audit=1 サンプルの針位置 / K0 grip=針の動きやすさ、で同一センサー層を共有。次は C4（Score→prompt→生成→audit の E2E デモ）または K1（grip 代表マップを ~5 ツマミに拡張）。
+Composition E2E（C4, PR #64）と grip 代表マップ初版（K1, PR #65）が決定論パスで完走し、PoC 5 の三層往復（Score の構造意図 → 物理演奏 → 意味層の再観測）を決定論的シンセ演奏者で実証。K1 で「dead には 2 種類ある」（ツマミ死 = 生成側が読まないフィールド / センサー盲 = 観測帯の不一致）を発見し、後者の実例だった brightness は正規センサーを `spectral_centroid` へ再設計（dark ≤ 1200 / bright ≥ 2500、PR #66）して全消費者（semantic ラベル / GRV アンカー / audit 針 / semantic_ci compare / domain profile / grip 地図）を単一情報源に統一済み。config の repo/packaged 二重コピーは同期テストで恒久ガード。次は K2（Suno/Udio 転移検証 — 手動生成バッチが必要、centroid センサーと grip 地図の前提は整備済み）。
 
 ## Next-Issue Queue
 
 | ID | Title | Priority | Notes |
 |---|---|---|---|
-| C4 | Composition E2E デモ | P1 | Score → prompt →（生成）→ audit の一気通貫例。audit が #62 で稼働したので次の本命 |
-| K1 | grip 代表マップ初版（~5 ツマミ） | P1 | bpm/key/brightness/active_rate/valley に拡張し tight/loose/dead スペクトルを張る。controllability_poc.md §5 |
-| Q1-3 | BPM 信頼度の再設計 (CV-based) | P2 | Claude 代行で着手し中断状態 |
+| K2 | Suno 転移検証 | P1 | K1 の tight/loose 判定が Suno/Udio 級で転移するか手動少数バッチで確認。manifest 様式は §8 未決。controllability_poc.md §5 |
+| Q1-3 | BPM 信頼度の再設計 (CV-based) | P2 | Claude 代行で着手し中断状態。K1 で観測した「高 BPM 指定の検出が低めに出る癖」と合流しうる |
 
 ## Recently Merged
 
 | PR | Title | Date | Phase |
 |---|---|---|---|
+| #66 | refactor(sensors): brightness の正規センサーを spectral_centroid へ再設計 | 2026-06-12 | K1-followup |
+| #65 | feat(control): K1 grip 代表マップ初版 — 5 ツマミ + 補助センサー | 2026-06-12 | K1 |
+| #64 | feat(compose): C4 Composition E2E デモ — 決定論的シンセ演奏者によるフルループ | 2026-06-12 | C4 |
 | #63 | feat(discipline): セッション終了プロトコルを semantic-ci-code から移植 | 2026-06-12 | INFRA |
 | #62 | feat(audit): Composition audit control panel (C0+C3) | 2026-06-03 | C0+C3 |
-| #61 | feat(control): K0 grip measurement harness | 2026-06-03 | K0 |
-| #60 | docs: controllability_poc.md 制御トラック K 系列 新設 | 2026-06-02 | K-plan |
-| #59 | feat(compose): svprpe compose + ExternalPromptAdapter | 2026-06-02 | C2 |
