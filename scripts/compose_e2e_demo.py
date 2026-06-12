@@ -375,10 +375,20 @@ def run_demo(
     """フルループを実行し、成果物一式を output_dir に書き出す。"""
     output_dir.mkdir(parents=True, exist_ok=True)
     # WAV / RPE / prompt は決定論的に再生成できる中間生成物なのでコミットしない。
-    # コミット対象は audit レポートと針比較表のみ。
-    (output_dir / ".gitignore").write_text(
-        "*.wav\n*_rpe.json\ngenerated_prompt.txt\n", encoding="utf-8"
+    # コミット対象は audit レポートと針比較表のみ。既存 .gitignore の無関係な
+    # ルールを消さないよう、不足パターンのみ追記する（idempotent）。
+    gitignore_path = output_dir / ".gitignore"
+    required_patterns = ("*.wav", "*_rpe.json", "generated_prompt.txt")
+    existing_lines = (
+        gitignore_path.read_text(encoding="utf-8").splitlines()
+        if gitignore_path.is_file()
+        else []
     )
+    missing_patterns = [item for item in required_patterns if item not in existing_lines]
+    if missing_patterns:
+        gitignore_path.write_text(
+            "\n".join([*existing_lines, *missing_patterns]) + "\n", encoding="utf-8"
+        )
 
     score = load_composition_score(str(score_path))
     prompt = ExternalPromptAdapter().render(score)
