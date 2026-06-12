@@ -200,3 +200,54 @@ def test_brightness_target_prefers_centroid_sensor_over_band_ratio() -> None:
 
     assert metric_diffs["brightness"].observed == 2600.0
     assert metric_diffs["brightness"].passed is True
+
+
+def test_brightness_with_missing_centroid_reports_missing_sensor() -> None:
+    """正規センサー（spectral_centroid）欠測時、定性ターゲットは legacy 比率に
+    フォールバックせず欠測（observed None / passed False）として報告される。
+
+    legacy 帯域比（0–1）を Hz 帯境界と比較すると dark ターゲットが常に pass して
+    しまうため（PR #66 レビュー指摘の回帰ガード）。
+    """
+    score = CompositionScore.model_validate(
+        {
+            "meta": {"title": "Legacy Observed", "version": 0.1},
+            "semantic": {
+                "core": "mid-focused",
+                "grv": {"primary": "mid-focused", "secondary": ""},
+                "delta_e": {"overall": "flat"},
+                "avoid": [],
+            },
+            "physical": {
+                "bpm": 120,
+                "key": "C major",
+                "time_signature": "4/4",
+                "active_rate_target": "0.40-0.60",
+                "valley_depth_target": "0.00-0.10",
+                "brightness": "dark",
+                "stereo_width": "wide",
+            },
+            "structure": [
+                {"section": "full", "bars": 8, "role": "fixture", "physical": "steady"}
+            ],
+            "rendering": {
+                "target_backend": "external",
+                "prompt_max_chars": 500,
+                "priority": [],
+            },
+        }
+    )
+    expected = generate_expected_rpe(composition_to_target_svp(score))
+    observed = rpe_bundle_to_observed(
+        _make_bundle(stereo_profile=StereoProfile(width=0.8, correlation=0.2)),
+        id="legacy-observed",
+    )
+    # 古い/手書きの ObservedRPE を模擬: 正規センサーを欠落させ legacy 比率のみ残す
+    observed.metrics.pop("spectral_centroid")
+    assert observed.metrics["brightness"] == 0.1
+
+    diff = compare_expected_observed(expected, observed)
+    metric_diffs = {metric.name: metric for metric in diff.metric_diffs}
+
+    assert metric_diffs["brightness"].observed is None
+    assert metric_diffs["brightness"].passed is False
