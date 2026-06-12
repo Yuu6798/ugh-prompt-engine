@@ -153,7 +153,7 @@ def test_audit_text_snapshot_is_stable() -> None:
         "- observed_id: fixture-rpe\n"
         "- source: rpe_extract\n"
         "- observed_signals: "
-        "a continuous, wall-like sonic character, bright, continuous, flat, wall-like\n"
+        "a continuous, wall-like sonic character, continuous, flat, mid-focused, wall-like\n"
         "\n"
         "## Physical Needles\n"
         "\n"
@@ -173,7 +173,7 @@ def test_audit_text_snapshot_is_stable() -> None:
         "|---|---:|---:|---|---:|---:|---|\n"
         "| core | mid focused steady pulse | "
         "A continuous, wall-like sonic character |  | 1 | 0 |  |\n"
-        "| grv | mid-focused, wide-field | bright |  | 0.3333 | 0.6667 |  |\n"
+        "| grv | mid-focused, wide-field | mid-focused |  | 0 | 1 |  |\n"
         "| delta_e | flat | flat |  | 0.09 | 0.91 |  |\n"
     )
 

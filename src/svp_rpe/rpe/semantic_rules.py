@@ -158,9 +158,14 @@ def _labels_from_rules(phys: PhysicalRPE, config: Mapping[str, Any]) -> tuple[li
 def _infer_grv_anchor(phys: PhysicalRPE, por_surface: List[SemanticLabel]) -> GrvAnchor:
     """Determine gravity anchor from physical features."""
     sp = phys.spectral_profile
+    # bright 判定は por_surface（semantic_rules.yaml の perc.bright =
+    # spectral_centroid >= 2500）を経由し、正規センサーと単一情報源を共有する。
+    # 旧 band-ratio 比較（high_ratio >= mid_ratio）は HF の乏しい素材で盲目
+    # （controllability_poc.md §5.1）
+    surface_labels = {label.label for label in por_surface}
     if sp.low_ratio >= sp.mid_ratio and sp.low_ratio >= sp.high_ratio:
         primary = "bass-heavy"
-    elif sp.high_ratio >= sp.mid_ratio:
+    elif "bright" in surface_labels:
         primary = "bright"
     else:
         primary = "mid-focused"
