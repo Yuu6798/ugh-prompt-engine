@@ -288,16 +288,16 @@ def run_take(
 
     report = build_audit_report(score, bundle, observed_id=style.name)
     report_payload = report.model_dump(mode="json")
+    report_md = render_audit_text(report)
     (output_dir / f"{style.name}_audit.json").write_text(
         json.dumps(report_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-    (output_dir / f"{style.name}_audit.md").write_text(
-        render_audit_text(report), encoding="utf-8"
-    )
+    (output_dir / f"{style.name}_audit.md").write_text(report_md, encoding="utf-8")
     return {
         "style": style.name,
         "wav_sha256": sha256_bytes(wav_data),
         "report": report_payload,
+        "report_md": report_md,
     }
 
 
@@ -407,6 +407,13 @@ def verify(output_dir: Path = DEFAULT_OUTPUT_DIR) -> int:
         committed_audit = json.loads(committed_path.read_text(encoding="utf-8"))
         if committed_audit != take["report"]:
             print(f"Audit report drift for {name}", file=sys.stderr)
+            ok = False
+        md_path = output_dir / f"{name}_audit.md"
+        if not md_path.is_file():
+            print(f"Missing artifact: {md_path}", file=sys.stderr)
+            ok = False
+        elif md_path.read_text(encoding="utf-8") != take["report_md"]:
+            print(f"Audit markdown drift for {name}", file=sys.stderr)
             ok = False
     summary_path = output_dir / "needle_comparison.md"
     if not summary_path.is_file():
