@@ -138,14 +138,16 @@ T2 でループが立った後は、フィールド追加の Design Memo に往�
 
 > **必須欄の網羅**: `PhysicalLayer`（`src/svp_rpe/compose/models.py`）は全欄
 > required（`extra="forbid"`）のため、T1 が loader-valid な draft を出すには
-> T0 が 7 欄すべての計測経路を持つ必要がある。`time_signature` の現行センサーは
-> 4/4 固定（[`roadmap_goal1.md`](roadmap_goal1.md) Q1-2 未着手）— 校正メモに
-> 「未校正の針」であることを必ず記録する（弱い針を隠さないのが校正トラックの流儀）。
+> T0 が 7 欄すべての計測経路を持つ必要がある。`time_signature` は既存の拍子検出器
+> `compute_time_signature()`（beat-strength ベース、`rpe/physical_features.py`）で
+> 観測する — [`validation.md`](validation.md) で 5/5 exact match（3/4 ワルツ含む）。
 > `stereo_width` は audit の `ObservedRPE.metrics["stereo_width"]` 経由で観測する。
+> 校正メモには針ごとの検証状態（validation 実績・既知の癖）を記録し、弱い針を
+> 隠さない — それが校正トラックの流儀。
 
 **完了基準**: 合成 5 曲に対して per-field 計測が決定論で走り、出力 JSON が
 snapshot test で固定される。校正メモに既知の癖（例: bpm 高水準の検出が低めに
-出る、time_signature は未校正）が field 単位で引用される。
+出る）が field 単位で引用される。
 
 ### T1: draft Score 採譜（`svprpe transcribe` 相当）
 
