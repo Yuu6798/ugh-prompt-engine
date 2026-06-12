@@ -265,7 +265,7 @@ PoC が扱えるのは「観測チャネルを持つツマミ」のみ。
 | ツマミ（Composition Score） | センサー（RPE 観測量） | grip 予想 | フェーズ |
 |---|---|---|---|
 | `physical.bpm` | 観測 BPM（`PhysicalRPE`） | tight | K0 |
-| `physical.brightness` | `spectral_profile.brightness`（帯域比 high/(low+mid+high)） | loose | K0 |
+| `physical.brightness` | `spectral_centroid`（**正規センサー**、dark ≤1200 / bright ≥2500 Hz。K0 当時の帯域比 `spectral_profile.brightness` はセンサー盲のため 2026-06-12 に再設計 — §5.1） | loose 予想 → tight 実測（§5.1） | K0 |
 | `physical.key` / mode | 要求 key/mode への一致スコア（`mir_eval.key.evaluate`、∈[0,1]、validation §2 方式。`key_confidence` ではない） | tight（一致率） | K1 |
 | `physical.active_rate_target` | active rate（密度プロキシ） | medium | K1 |
 | `physical.valley_depth_target` | novelty valley depth | dead 予想 | K1 |
@@ -283,6 +283,10 @@ PoC が扱えるのは「観測チャネルを持つツマミ」のみ。
 ---
 
 ## 7. Codex 向け Design Memo（K0、ペースト可）
+
+> **歴史的記録（K0 実施済み）**: 本 Memo 中の brightness センサー指定（帯域比）は
+> K0 当時のもの。その後センサー盲が判明し、正規センサーは `spectral_centroid` に
+> 再設計された（§5.1、2026-06-12）。新規実装は §6 の現行対応表に従うこと。
 
 ````markdown
 # Design Memo: K0 — grip 測定ハーネス最小実証
