@@ -317,6 +317,9 @@ JSON fixture mode is also supported for deterministic tests: `svprpe audit score
 
 ### Phase C4: エンドツーエンドデモ — 後続
 
+**Status**: DONE (2026-06-12) — 結果と考察は [`composition_poc_report.md`](composition_poc_report.md)。
+手順 3 の手動生成は決定論的シンセ演奏者（`scripts/compose_e2e_demo.py`）で代替した。
+
 **Goal**: 1 曲分のフルループを実行し、PoC 仮説を検証する。
 
 **PoC 対応**: PoC 1–5 の統合検証
