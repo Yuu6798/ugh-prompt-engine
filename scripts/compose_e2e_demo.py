@@ -390,12 +390,15 @@ def run_demo(
     return {"prompt": prompt.model_dump(mode="json"), "takes": takes, "summary": summary}
 
 
-def verify(output_dir: Path = DEFAULT_OUTPUT_DIR) -> int:
+def verify(
+    score_path: Path = SCORE_PATH,
+    output_dir: Path = DEFAULT_OUTPUT_DIR,
+) -> int:
     """成果物が現行コードからの再生成と一致するか検証する（WAV は再演奏して比較）。"""
     import tempfile
 
     with tempfile.TemporaryDirectory() as tmp:
-        regenerated = run_demo(output_dir=Path(tmp))
+        regenerated = run_demo(score_path=score_path, output_dir=Path(tmp))
     ok = True
     for take in regenerated["takes"]:
         name = take["style"]
@@ -439,7 +442,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     if args.verify:
-        return verify(args.output_dir)
+        return verify(score_path=args.score, output_dir=args.output_dir)
     result = run_demo(score_path=args.score, output_dir=args.output_dir)
     print(result["summary"])
     print(f"Artifacts written to {args.output_dir}")
