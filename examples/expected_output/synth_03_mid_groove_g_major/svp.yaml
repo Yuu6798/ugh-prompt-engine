@@ -16,7 +16,7 @@ data_lineage:
   generation_method: deterministic_rule_based
 analysis_rpe:
   schema_version: '1.0'
-  por_core: A mid-focused, evolving sonic character
+  por_core: A dark, mid-focused, evolving sonic character
   por_surface:
   - mid-focused
   - evolving
@@ -34,7 +34,7 @@ analysis_rpe:
     spectral_centroid: 719.95
 svp_for_generation:
   schema_version: '1.0'
-  prompt_text: 'Core character: A mid-focused, evolving sonic character
+  prompt_text: 'Core character: A dark, mid-focused, evolving sonic character
 
     Gravity anchor: mid-focused
 
@@ -58,7 +58,7 @@ svp_for_generation:
     candidate_context: []
 evaluation_criteria:
   schema_version: '1.0'
-  por_check: 'Maintains core character: A mid-focused, evolving sonic character'
+  por_check: 'Maintains core character: A dark, mid-focused, evolving sonic character'
   grv_check: 'Preserves gravity anchor: mid-focused'
   delta_e_check: Energy follows gradual_build pattern
   physical_checks:
@@ -78,7 +78,7 @@ evaluation_criteria:
     - spectral_centroid
 minimal_svp:
   schema_version: '1.0'
-  c: A mid-focused, evolving sonic character
+  c: A dark, mid-focused, evolving sonic character
   g:
   - bpm~123
   - key=G

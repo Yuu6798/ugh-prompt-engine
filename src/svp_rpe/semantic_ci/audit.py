@@ -98,6 +98,9 @@ def build_audit_report(
             name="brightness",
             target=target.metric_targets.get("brightness"),
             observed=observed,
+            # 正規センサーは spectral_centroid（band-ratio は HF の乏しい素材で盲目。
+            # controllability_poc.md §5.1 / semantic_rules.yaml perc.dark/bright）
+            metric="spectral_centroid",
         ),
         _metric_band_needle(
             name="stereo_width",
@@ -290,9 +293,16 @@ def _time_signature_needle(target: Any, observed: ObservedRPE) -> AuditNeedle:
     )
 
 
-def _metric_band_needle(name: str, target: Any, observed: ObservedRPE) -> AuditNeedle:
-    observed_value = _numeric_metric(observed.metrics.get(name))
-    observed_band = _observed_band(name, observed.metrics)
+def _metric_band_needle(
+    name: str,
+    target: Any,
+    observed: ObservedRPE,
+    metric: Optional[str] = None,
+) -> AuditNeedle:
+    """ツマミ名と観測メトリクス名が異なる場合は metric でセンサーを指定する。"""
+    metric_name = metric or name
+    observed_value = _numeric_metric(observed.metrics.get(metric_name))
+    observed_band = _observed_band(metric_name, observed.metrics)
     if observed_value is None:
         return AuditNeedle(
             name=name,
@@ -300,11 +310,11 @@ def _metric_band_needle(name: str, target: Any, observed: ObservedRPE) -> AuditN
             target=target,
             observed=None,
             observed_band=observed_band,
-            sensor=f"PhysicalRPE.{name}",
+            sensor=f"PhysicalRPE.{metric_name}",
             note="sensor missing",
         )
 
-    band = _target_band(name, target)
+    band = _target_band(metric_name, target)
     return AuditNeedle(
         name=name,
         layer="physical",
@@ -313,7 +323,7 @@ def _metric_band_needle(name: str, target: Any, observed: ObservedRPE) -> AuditN
         observed_band=observed_band,
         target_band=band.description if band else None,
         deviation=band.deviation(observed_value) if band else None,
-        sensor=f"PhysicalRPE.{name}",
+        sensor=f"PhysicalRPE.{metric_name}",
         note=None if band else "target band undefined; raw observation only",
     )
 
@@ -384,22 +394,6 @@ def _target_band(feature_name: str, target: Any) -> Optional[_Band]:
         else:
             description = str(target)
         return _Band(description, lower, upper)
-    inverse = _inverse_target_band(feature_name, target_aliases)
-    if inverse is not None:
-        return inverse
-    return None
-
-
-def _inverse_target_band(feature_name: str, target_aliases: set[str]) -> Optional[_Band]:
-    if feature_name != "brightness" or "dark" not in target_aliases:
-        return None
-    for rule in _semantic_rules_for_feature(feature_name):
-        labels = {_normalize_label(label) for label in rule["labels"]}
-        if "bright" not in labels:
-            continue
-        lower = rule["bounds"].get("min")
-        if lower is not None:
-            return _Band(f"{feature_name} <= {lower:g}", None, lower)
     return None
 
 

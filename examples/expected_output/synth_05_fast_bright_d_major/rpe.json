@@ -1516,7 +1516,7 @@
   },
   "semantic": {
     "schema_version": "2.0",
-    "por_core": "A high_tempo, mid-focused, evolving sonic character",
+    "por_core": "A high_tempo, dark, mid-focused sonic character",
     "por_surface": [
       {
         "label": "high_tempo",
@@ -1526,6 +1526,15 @@
           "bpm=172.3 >= 140"
         ],
         "source_rule": "perc.high_tempo"
+      },
+      {
+        "label": "dark",
+        "layer": "perceptual",
+        "confidence": 0.85,
+        "evidence": [
+          "spectral_centroid=947.4 <= 1200"
+        ],
+        "source_rule": "perc.dark"
       },
       {
         "label": "mid-focused",
@@ -1552,7 +1561,7 @@
       "secondary": [
         "dense"
       ],
-      "confidence": 0.6
+      "confidence": 0.7
     },
     "delta_e_profile": {
       "schema_version": "1.0",
@@ -1570,6 +1579,7 @@
     ],
     "confidence_notes": [
       "rule matched: perc.high_tempo -> ['high_tempo']",
+      "rule matched: perc.dark -> ['dark']",
       "rule matched: perc.mid_focused -> ['mid-focused']",
       "rule matched: struct.gradual_motion -> ['evolving']"
     ],

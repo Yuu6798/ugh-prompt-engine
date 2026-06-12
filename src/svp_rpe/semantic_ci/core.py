@@ -186,12 +186,6 @@ def _target_band_bounds(name: str, target: str) -> tuple[float | None, float | N
         if aliases.intersection(labels):
             return rule["bounds"].get("min"), rule["bounds"].get("max")
 
-    if feature_name == "brightness" and "dark" in aliases:
-        for rule in _semantic_rules_for_feature(feature_name):
-            labels = {_normalize_label(label) for label in rule["labels"]}
-            lower = rule["bounds"].get("min")
-            if "bright" in labels and lower is not None:
-                return None, lower
     return None
 
 
@@ -203,8 +197,14 @@ def _range_distance(value: float, lower: float | None, upper: float | None) -> f
     return 0.0
 
 
+# 定性ツマミ → 観測センサーの読み替え。brightness の正規センサーは
+# spectral_centroid（band-ratio は HF の乏しい素材で盲目。controllability_poc.md §5.1）
+SENSOR_METRIC_OVERRIDES = {"brightness": "spectral_centroid"}
+
+
 def _sensor_metric_name(name: str) -> str:
-    return name[: -len("_target")] if name.endswith("_target") else name
+    base = name[: -len("_target")] if name.endswith("_target") else name
+    return SENSOR_METRIC_OVERRIDES.get(base, base)
 
 
 def _semantic_rules_for_feature(feature_name: str) -> list[dict[str, Any]]:

@@ -71,21 +71,22 @@ KNOBS = (
         sensor="key",
         kind="categorical",
     ),
+    # 正規センサーは spectral_centroid（センサー再設計、semantic_rules.yaml perc.dark/bright）
     KnobSpec(
         name="brightness",
         field="brightness",
         low="dark",
         high="bright",
-        sensor="spectral_profile.brightness",
+        sensor="spectral_centroid",
     ),
-    # 補助センサー行: brightness と同一の演奏サンプルを spectral_centroid でも観測し、
-    # 「ツマミが死んでいる」のか「センサーが盲目」なのかを切り分ける（C4 の発見の追試）
+    # legacy 行: 旧 band-ratio センサーを同一演奏サンプルで観測し、HF の乏しい素材で
+    # 盲目になる（dead に見える）証拠を残す。「ツマミ死」と「センサー盲」の判別例
     KnobSpec(
-        name="brightness_centroid",
+        name="brightness_band_ratio",
         field="brightness",
         low="dark",
         high="bright",
-        sensor="spectral_centroid",
+        sensor="spectral_profile.brightness",
         samples_from="brightness",
     ),
     KnobSpec(

@@ -90,6 +90,9 @@ audit は verdict を出さない計器なので、「動かなかった針」�
 - **brightness**: 帯境界が `semantic_rules.yaml` の bright ≥ 0.6（4kHz 以上のエネルギー
   比率）に由来し、dark 帯が極端に広い。bright voicing の first_take ですら 0 のまま。
   → **K1（grip 代表マップ）で brightness の帯再校正が必要**という具体的な根拠が取れた。
+  **追記（2026-06-12）**: K1 での追試を経て正規センサーを `spectral_centroid` に
+  再設計済み（[`controllability_poc.md`](controllability_poc.md) §5.1）。現行の
+  針比較表（`needle_comparison.md`）は centroid 観測値を表示する。
 - **core**: `por_lexical_similarity` は作曲者の詩的言語（"introspective night drive"）と
   ルール由来の音響記述の間で常に 0。意味層の語彙ギャップそのものであり、
   センサーの感度限界として記録する（合否ではない）。

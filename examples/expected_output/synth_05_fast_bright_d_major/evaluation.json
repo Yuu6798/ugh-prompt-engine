@@ -11,17 +11,17 @@
   },
   "ugher_score": {
     "schema_version": "1.0",
-    "por_similarity": 0.3158,
+    "por_similarity": 0.3333,
     "grv_consistency": 1.0,
     "delta_e_assessment": 1.0,
     "physical_accuracy": 1.0,
-    "overall": 0.7947
+    "overall": 0.8
   },
   "integrated_score": {
     "schema_version": "1.0",
-    "ugher_score": 0.7947,
+    "ugher_score": 0.8,
     "rpe_score": 0.7597,
-    "integrated_score": 0.7772,
+    "integrated_score": 0.7799,
     "ugher_weight": 0.5,
     "rpe_weight": 0.5
   }

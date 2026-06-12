@@ -71,32 +71,6 @@
     },
     {
       "knob": "brightness",
-      "sensor": "spectral_profile.brightness",
-      "expected_sign": 1,
-      "low_level": "dark",
-      "high_level": "bright",
-      "repetitions": 5,
-      "low_values": [
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0
-      ],
-      "high_values": [
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0
-      ],
-      "low_mean": 0.0,
-      "high_mean": 0.0,
-      "grip": 0.0,
-      "classification": "dead"
-    },
-    {
-      "knob": "brightness_centroid",
       "sensor": "spectral_centroid",
       "expected_sign": 1,
       "low_level": "dark",
@@ -120,6 +94,32 @@
       "high_mean": 1236.58,
       "grip": 223.525437,
       "classification": "tight"
+    },
+    {
+      "knob": "brightness_band_ratio",
+      "sensor": "spectral_profile.brightness",
+      "expected_sign": 1,
+      "low_level": "dark",
+      "high_level": "bright",
+      "repetitions": 5,
+      "low_values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "high_values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "low_mean": 0.0,
+      "high_mean": 0.0,
+      "grip": 0.0,
+      "classification": "dead"
     },
     {
       "knob": "active_rate_target",
