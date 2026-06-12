@@ -42,8 +42,10 @@ composition_score.yaml
   → 2 テイクの針位置比較                          → needle_comparison.md
 ```
 
-成果物は `examples/composition/midnight_signal/e2e/` に格納
-（WAV は決定論的に再生成可能なため非コミット）。再現と検証:
+成果物は `examples/composition/midnight_signal/e2e/` に格納。コミットするのは
+audit レポート（`*_audit.{md,json}`）と針比較表（`needle_comparison.md`）のみで、
+WAV / 抽出 RPE / プロンプトは決定論的に再生成可能な中間生成物として非コミット
+（同ディレクトリの `.gitignore` 参照）。再現と検証:
 
 ```bash
 python scripts/compose_e2e_demo.py            # 成果物の再生成
@@ -57,6 +59,9 @@ pytest tests/test_composition_e2e.py -q       # 回帰テスト
 PoC 範囲の簡易解釈であり、汎用 NLU ではない。
 
 ## 3. 結果 — 針の移動
+
+（下表は実行時点のスナップショット。再生成される一次ソースは
+`examples/composition/midnight_signal/e2e/needle_comparison.md`）
 
 | knob | layer | target | first_take | faithful_take | dev (first) | dev (faithful) | 針の移動 |
 |---|---|---|---|---|---:|---:|---|
@@ -74,7 +79,9 @@ PoC 範囲の簡易解釈であり、汎用 NLU ではない。
 **6 本の針が target 方向へ移動**（bpm / key / active_rate / valley_depth / grv / delta_e）。
 特に delta_e は、faithful_take の構造演奏（intro 0.25 → verse 0.45 → chorus 0.85）から
 `gradual_build` がセンサー側で再検出された — **構造層の作曲意図が物理演奏を経由して
-意味層の観測に戻ってきた**ことを意味し、三層往復（PoC 5）の最初の実証になる。
+意味層の観測に戻ってきた**ことを意味し、三層往復の最初の観測になる。
+ただし演奏者は決定論的な代替であるため、これは **PoC 5 の決定論パスでの実証**
+であって、確率的な外部生成器に対する実証ではない（§6）。
 
 ## 4. 考察 — 動かなかった針はセンサーの発見である
 
@@ -102,7 +109,7 @@ audit は verdict を出さない計器なので、「動かなかった針」�
 | PoC 2 | Prompt に変換 | `generated_prompt.txt`（決定論的） |
 | PoC 3 | Layer Manipulation | 未実施（C5）。ただし style 分離が下準備になる |
 | PoC 4 | 複数レンダラ | 未実施（C6）。演奏者は事実上の最小ローカルレンダラ |
-| PoC 5 | RPE Feedback | **実証**: 針が演奏差を連続量で捉えた（§3） |
+| PoC 5 | RPE Feedback | **決定論パスで実証**: 針が演奏差を連続量で捉えた（§3）。確率的生成器での再現と Score 修正ループ（RepairScore）は未実施（§6 / C5） |
 
 ## 6. 制限と次のステップ
 

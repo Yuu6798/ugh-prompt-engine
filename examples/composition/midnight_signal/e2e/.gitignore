@@ -1,1 +1,3 @@
 *.wav
+*_rpe.json
+generated_prompt.txt

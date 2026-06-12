@@ -14,8 +14,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import hashlib
-import io
 import json
 import re
 import sys
@@ -24,13 +22,20 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from scipy.io import wavfile
 
-from svp_rpe.compose import ExternalPromptAdapter, load_composition_score
-from svp_rpe.compose.models import CompositionScore, StructureSection
-
-SAMPLE_RATE = 44100
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.generate_synth_samples import (  # noqa: E402
+    SAMPLE_RATE,
+    _adsr_envelope,
+    sha256_bytes,
+    wav_bytes,
+)
+from svp_rpe.compose import ExternalPromptAdapter, load_composition_score  # noqa: E402
+from svp_rpe.compose.models import CompositionScore, StructureSection  # noqa: E402
+
 SCORE_PATH = ROOT / "examples" / "composition" / "midnight_signal" / "composition_score.yaml"
 DEFAULT_OUTPUT_DIR = ROOT / "examples" / "composition" / "midnight_signal" / "e2e"
 
@@ -78,7 +83,7 @@ class _SectionProfile:
 
 def parse_key(text: str) -> tuple[int, str]:
     """"C minor" 形式のキー表記を (pitch class, mode) に分解する。"""
-    match = KEY_PATTERN.match(text)
+    match = KEY_PATTERN.match(text.replace("♯", "#").replace("♭", "b"))
     if match is None:
         raise ValueError(f"unsupported key spec: {text!r}")
     tonic = PITCH_CLASSES[match.group(1).upper()]
@@ -160,6 +165,8 @@ def _rest_gate_mask(length: int, bar_sec: float, beats_per_bar: int) -> np.ndarr
     """小節ごとに最終拍を無音化するマスク（短いフェードでクリックを防ぐ）。"""
     mask = np.ones(length, dtype=np.float64)
     bar_samples = int(round(bar_sec * SAMPLE_RATE))
+    if bar_samples <= 0:
+        return mask
     beat_samples = max(1, bar_samples // beats_per_bar)
     fade = min(beat_samples // 8, int(0.01 * SAMPLE_RATE))
     start = bar_samples - beat_samples
@@ -174,19 +181,10 @@ def _rest_gate_mask(length: int, bar_sec: float, beats_per_bar: int) -> np.ndarr
     return mask
 
 
-def _edge_envelope(length: int, attack_sec: float, release_sec: float) -> np.ndarray:
-    envelope = np.ones(length, dtype=np.float64)
-    attack = min(length, int(round(attack_sec * SAMPLE_RATE)))
-    release = min(length, int(round(release_sec * SAMPLE_RATE)))
-    if attack > 0:
-        envelope[:attack] *= np.linspace(0.0, 1.0, attack, endpoint=False)
-    if release > 0:
-        envelope[-release:] *= np.linspace(1.0, 0.0, release, endpoint=False)
-    return envelope
-
-
 def perform(score: CompositionScore, style: PerformanceStyle) -> np.ndarray:
     """Score を style の癖で「演奏」した int16 mono 波形を返す（決定論的）。"""
+    if not score.structure:
+        raise ValueError("perform() requires at least one structure section")
     tonic, mode = parse_key(score.physical.key)
     tonic = (tonic + style.transpose) % 12
     progression = MINOR_PROGRESSION if mode == "minor" else MAJOR_PROGRESSION
@@ -239,40 +237,33 @@ def perform(score: CompositionScore, style: PerformanceStyle) -> np.ndarray:
                     tonic, degree, triad, base_octave_midi=base_octave_midi + 12
                 )[0]
                 note = np.sin(2.0 * np.pi * freq * local_t)
-                note *= _edge_envelope(len(note), 0.03, 0.05)
+                note *= _adsr_envelope(len(note), 0.03, 0.05)
                 wave[start:end] += 0.5 * note
         if profile.rest_gate:
             wave *= _rest_gate_mask(section_len, bar_sec, beats_per_bar)
         wave *= profile.level
-        wave *= _edge_envelope(section_len, 0.05, 0.08)
+        wave *= _adsr_envelope(section_len, 0.05, 0.08)
         chunks.append(wave)
 
     signal = np.concatenate(chunks)
     signal = signal + rng.normal(0.0, 0.0015, size=signal.shape)
-    signal *= _edge_envelope(len(signal), 0.02, 0.02)
+    signal *= _adsr_envelope(len(signal), 0.02, 0.02)
     peak = float(np.max(np.abs(signal)))
     if peak:
         signal = signal / peak * 0.82
     return np.round(signal * 32767.0).astype(np.int16)
 
 
-def wav_bytes(samples: np.ndarray) -> bytes:
-    buffer = io.BytesIO()
-    wavfile.write(buffer, SAMPLE_RATE, samples)
-    return buffer.getvalue()
-
-
-def sha256_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
 def scaled_score(score: CompositionScore, *, bars_scale: float) -> CompositionScore:
-    """テスト高速化用に structure の bars を縮める（最低 1 小節は維持）。"""
-    sections = [
-        section.model_copy(update={"bars": max(1, int(round(section.bars * bars_scale)))})
-        for section in score.structure
-    ]
-    return score.model_copy(update={"structure": sections})
+    """テスト高速化用に structure の bars を縮める（最低 1 小節は維持）。
+
+    model_copy(update=) は再バリデーションしないため、model_validate を通して
+    extra="forbid" と型の保証を維持する。
+    """
+    data = score.model_dump()
+    for section in data["structure"]:
+        section["bars"] = max(1, int(round(section["bars"] * bars_scale)))
+    return CompositionScore.model_validate(data)
 
 
 def run_take(
@@ -383,9 +374,11 @@ def run_demo(
 ) -> dict[str, Any]:
     """フルループを実行し、成果物一式を output_dir に書き出す。"""
     output_dir.mkdir(parents=True, exist_ok=True)
-    gitignore = output_dir / ".gitignore"
-    if not gitignore.exists():
-        gitignore.write_text("*.wav\n", encoding="utf-8")
+    # WAV / RPE / prompt は決定論的に再生成できる中間生成物なのでコミットしない。
+    # コミット対象は audit レポートと針比較表のみ。
+    (output_dir / ".gitignore").write_text(
+        "*.wav\n*_rpe.json\ngenerated_prompt.txt\n", encoding="utf-8"
+    )
 
     score = load_composition_score(str(score_path))
     prompt = ExternalPromptAdapter().render(score)
@@ -406,20 +399,20 @@ def verify(output_dir: Path = DEFAULT_OUTPUT_DIR) -> int:
     ok = True
     for take in regenerated["takes"]:
         name = take["style"]
-        for suffix in ("_audit.json", "_rpe.json"):
-            committed_path = output_dir / f"{name}{suffix}"
-            if not committed_path.is_file():
-                print(f"Missing artifact: {committed_path}", file=sys.stderr)
-                ok = False
-                continue
-        committed_audit = json.loads(
-            (output_dir / f"{name}_audit.json").read_text(encoding="utf-8")
-        )
+        committed_path = output_dir / f"{name}_audit.json"
+        if not committed_path.is_file():
+            print(f"Missing artifact: {committed_path}", file=sys.stderr)
+            ok = False
+            continue
+        committed_audit = json.loads(committed_path.read_text(encoding="utf-8"))
         if committed_audit != take["report"]:
             print(f"Audit report drift for {name}", file=sys.stderr)
             ok = False
-    committed_summary = (output_dir / "needle_comparison.md").read_text(encoding="utf-8")
-    if committed_summary != regenerated["summary"]:
+    summary_path = output_dir / "needle_comparison.md"
+    if not summary_path.is_file():
+        print(f"Missing artifact: {summary_path}", file=sys.stderr)
+        ok = False
+    elif summary_path.read_text(encoding="utf-8") != regenerated["summary"]:
         print("needle_comparison.md drift", file=sys.stderr)
         ok = False
     if ok:

@@ -8,10 +8,12 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import assert_no_outcome_keys
 
 from scripts.compose_e2e_demo import (
     FAITHFUL_TAKE,
@@ -20,25 +22,13 @@ from scripts.compose_e2e_demo import (
     parse_key,
     perform,
     scaled_score,
-    wav_bytes,
 )
+from scripts.generate_synth_samples import wav_bytes
 from svp_rpe.compose import load_composition_score
 
-E2E_DIR = Path(__file__).resolve().parents[1] / "examples" / "composition" / (
-    "midnight_signal"
-) / "e2e"
-
-
-def _assert_no_outcome_keys(value: Any) -> None:
-    if isinstance(value, dict):
-        assert "verdict" not in value
-        assert "passed" not in value
-        assert "loss" not in value
-        for item in value.values():
-            _assert_no_outcome_keys(item)
-    elif isinstance(value, list):
-        for item in value:
-            _assert_no_outcome_keys(item)
+E2E_DIR = (
+    Path(__file__).resolve().parents[1] / "examples" / "composition" / "midnight_signal" / "e2e"
+)
 
 
 def _committed_audit(style_name: str) -> dict[str, Any]:
@@ -88,7 +78,7 @@ def test_e2e_loop_smoke_on_scaled_score(tmp_path: Path) -> None:
     report = build_audit_report(mini, bundle, observed_id="faithful_mini")
     payload = report.model_dump(mode="json")
 
-    _assert_no_outcome_keys(payload)
+    assert_no_outcome_keys(payload)
     assert payload["score_id"] == "midnight-signal"
     bpm = _needle(payload, "bpm")
     assert bpm["observed"] is not None
@@ -100,8 +90,8 @@ def test_committed_artifacts_show_needles_moving_toward_target() -> None:
     """faithful_take の針が first_take より target に近いことを成果物で固定する。"""
     first = _committed_audit("first_take")
     faithful = _committed_audit("faithful_take")
-    _assert_no_outcome_keys(first)
-    _assert_no_outcome_keys(faithful)
+    assert_no_outcome_keys(first)
+    assert_no_outcome_keys(faithful)
 
     for knob in ("bpm", "key", "active_rate", "valley_depth", "delta_e"):
         dev_first = _needle(first, knob)["deviation"]
@@ -120,5 +110,5 @@ def test_committed_summary_matches_audit_artifacts() -> None:
     faithful = _committed_audit("faithful_take")
     bpm = _needle(faithful, "bpm")
     assert f"{bpm['observed']:.4g}" in summary
-    assert "verdict" not in summary.lower()
-    assert "pass" not in summary.lower()
+    # 単語境界で判定する（"bypass" や "surpass" を誤検出しない）
+    assert re.search(r"\b(verdict|pass|passed|fail|failed)\b", summary, re.IGNORECASE) is None
