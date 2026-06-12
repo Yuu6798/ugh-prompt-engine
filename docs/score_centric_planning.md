@@ -134,11 +134,18 @@ T2 でループが立った後は、フィールド追加の Design Memo に往�
 | 入力 | 音源（WAV/MP3）+ 対象フィールド名のリスト |
 | 出力 | `{field: 計測値, sensor: 使用センサー, 校正メモ}` の JSON |
 | 変換表 | [`controllability_poc.md`](controllability_poc.md) §6 のセンサー対応表を**そのまま採譜変換表として再利用**（grip 測定と採譜は同じ写像の双対） |
-| 対象フィールド | 現行 `PhysicalLayer` のセンサー有りフィールド: `bpm` / `key` / `brightness`（centroid 正規センサー）/ `active_rate_target` / `valley_depth_target` |
+| 対象フィールド | 現行 `PhysicalLayer` の**全 7 必須フィールド**: `bpm` / `key` / `time_signature` / `brightness`（centroid 正規センサー）/ `active_rate_target` / `valley_depth_target` / `stereo_width` |
+
+> **必須欄の網羅**: `PhysicalLayer`（`src/svp_rpe/compose/models.py`）は全欄
+> required（`extra="forbid"`）のため、T1 が loader-valid な draft を出すには
+> T0 が 7 欄すべての計測経路を持つ必要がある。`time_signature` の現行センサーは
+> 4/4 固定（[`roadmap_goal1.md`](roadmap_goal1.md) Q1-2 未着手）— 校正メモに
+> 「未校正の針」であることを必ず記録する（弱い針を隠さないのが校正トラックの流儀）。
+> `stereo_width` は audit の `ObservedRPE.metrics["stereo_width"]` 経由で観測する。
 
 **完了基準**: 合成 5 曲に対して per-field 計測が決定論で走り、出力 JSON が
 snapshot test で固定される。校正メモに既知の癖（例: bpm 高水準の検出が低めに
-出る）が field 単位で引用される。
+出る、time_signature は未校正）が field 単位で引用される。
 
 ### T1: draft Score 採譜（`svprpe transcribe` 相当）
 
