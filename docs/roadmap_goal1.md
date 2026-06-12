@@ -67,7 +67,7 @@ Codex への引き渡しは [`AGENTS.md`](../AGENTS.md) の Task Brief フォー
 |---|---|---|
 | Q0 | ⏳ 部分完了（CC0 corpus に残） | 検証基盤（`validation.md` baseline / `tests/test_snapshot.py` / `scripts/validate_against_truth.py`）は完備。ただし corpus は合成サイン波 5 曲のみで、Q0-1 の「CC0 音源・ジャンル多様」と survivor 候補拡張（[`ai_music_daw_vision.md`](ai_music_daw_vision.md) §9.1 PoC (1)）が未達 — `validation.md` §10 も CC0 追加を follow-up として明記 |
 | Q1 | ✅ 実装済み（校正記録に残） | Q1-1: `loudness_lufs_integrated` + `true_peak_dbfs`（pyloudnorm）。Q1-2: `compute_time_signature()`、validation 5/5 exact（3/4 含む）— 受け入れ条件「3 曲以上の 3/4 サンプル」は fixture 1 曲のみで未達。Q1-3: CV ベース confidence 実装済み（`compute_bpm` docstring が受け入れ条件を明記）— 対真値の系統的検証は未記録。Q1-4: `loud_pop` / `acoustic` / `edm` プロファイル + `--baseline` 切替 |
-| Q2 | ✅ 実装済み（精度検証に残） | `downbeat_times` / `chord_events` / `melody_contour` を extractor が算出 — 受け入れ条件（downbeat 一致率 / ±50¢）の対真値記録は未整備 |
+| Q2 | ✅ 実装済み（決定論パスのみ。Q2-1 は要再スコープ） | `downbeat_times` / `chord_events` / `melody_contour` を extractor が**決定論 librosa / pyin パス**で算出。Q2-1 が要求する `beat_this` の `PhysicalRPE` 統合は、後発の隔離方針（Q4' / [`learned_models_policy.md`](learned_models_policy.md): 学習出力は `learned_annotations` に隔離、`models.py` が「MUST NOT be folded into `PhysicalRPE.downbeat_times`」と明記）と矛盾するため未実施 — 仕様の再スコープが必要（librosa を正規センサーとするか、昇格基準を別途定義するか）。受け入れ条件（downbeat 一致率 / ±50¢）の対真値記録も未整備 |
 | Q3 | ✅ 実装済み（実音源検証に残） | `stem_rpe` + Demucs `--separate`（opt-in、PR #20–#23）。合成 stem は `tests/test_stem_validation.py` で検証済みだが、実 Demucs パスは per-stem BPM が完了基準未達（[`validation.md`](validation.md) §6: sparse stem で BPM 不安定、drums 24.15 vs full mix 120.19）、実音源 stem corpus も未コミット |
 | Q4 | ✅ 完了 | PR #8（下記の実装サマリ参照） |
 | Q5 | ⏳ 部分 | Q5-1 `coverage.md` ✅ / Q5-2 Dockerfile ❌ / Q5-3 CHANGELOG ❌ / Q5-4 任意 |
@@ -75,8 +75,9 @@ Codex への引き渡しは [`AGENTS.md`](../AGENTS.md) の Task Brief フォー
 残作業は「未実装の機能」ではなく「**未記録・未達の校正と corpus**」に偏っている。
 再定義後の Q 系列（計器校正トラック）の作業はこの残（CC0 corpus + survivor 候補、
 3/4 fixture 拡充、BPM confidence の対真値記録、Q2 精度検証、Q3 実音源 per-stem
-検証）から拾う — T0 の校正メモがそのまま受け皿になる。Q5-2 / Q5-3（配布物）のみ
-校正と無関係の純粋な未実装。
+検証）から拾う — T0 の校正メモがそのまま受け皿になる。例外は 2 つ:
+Q5-2 / Q5-3（配布物）は純粋な未実装、Q2-1 は仕様自体の再スコープ
+（beat_this 隔離方針との矛盾解消）が必要。
 
 ### Q0: 検証基盤の確立（既存 P1–P2 統合・拡張）⏳ **部分完了（CC0 corpus に残、棚卸しテーブル参照）**
 
@@ -115,7 +116,7 @@ Codex への引き渡しは [`AGENTS.md`](../AGENTS.md) の Task Brief フォー
 混合行列、ジャンル別スコアの妥当性が記録されている。
 **推定工数**: 2–3 日
 
-### Q2: 時系列の深化（曲の中で何が起きているか）✅ **実装済み（精度検証に残）**
+### Q2: 時系列の深化（曲の中で何が起きているか）✅ **実装済み（決定論パスのみ。Q2-1 は要再スコープ、棚卸しテーブル参照）**
 
 **目的**: 「曲全体の単一値」観測から「時間軸上の変化」観測へ。
 
