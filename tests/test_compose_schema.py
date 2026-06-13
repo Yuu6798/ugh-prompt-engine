@@ -50,6 +50,24 @@ def test_numeric_bpm_string_normalizes_to_int() -> None:
     assert target.metric_targets["bpm"] == 128
 
 
+def test_transcribe_todo_bpm_sentinel_is_allowed() -> None:
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["physical"]["bpm"] = "TODO(transcribe): bpm undetected"
+
+    score = CompositionScore.model_validate(data)
+
+    assert score.physical.bpm == "TODO(transcribe): bpm undetected"
+
+
+@pytest.mark.parametrize("bpm", ["128 bpm", "fast", "TODO: bpm undetected"])
+def test_arbitrary_bpm_strings_are_rejected(bpm: str) -> None:
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["physical"]["bpm"] = bpm
+
+    with pytest.raises(ValidationError):
+        CompositionScore.model_validate(data)
+
+
 def test_composition_to_target_svp_maps_required_fields() -> None:
     target = composition_to_target_svp(load_composition_score(SAMPLE_PATH))
 
