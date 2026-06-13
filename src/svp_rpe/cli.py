@@ -14,13 +14,17 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import TYPE_CHECKING, Annotated, Optional
 
 import click
 import typer
 from rich.console import Console
+from rich.table import Table
 
 from svp_rpe.eval.scorer_rpe import BASELINE_CONFIGS
+
+if TYPE_CHECKING:
+    from svp_rpe.transcribe import MeasurementReport
 
 app = typer.Typer(
     name="svprpe",
@@ -142,6 +146,57 @@ def compose(
         console.print(f"[green]Composition prompt saved to {output}[/green]")
     else:
         typer.echo(content)
+
+
+@app.command()
+def measure(
+    audio: str = typer.Argument(..., help="Path to WAV/MP3 file"),
+    fields: Optional[str] = typer.Option(
+        None,
+        "--fields",
+        help="Comma-separated CompositionScore physical fields; default: all",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output", help="Output JSON path"),
+) -> None:
+    """Measure CompositionScore physical fields from one audio file."""
+    from svp_rpe.rpe.extractor import extract_rpe_from_file
+    from svp_rpe.transcribe import measure_fields, parse_field_filter, render_measurement_json
+
+    try:
+        requested_fields = parse_field_filter(fields)
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+
+    console.print(f"[bold]Measuring score fields from {audio}...[/bold]")
+    bundle = extract_rpe_from_file(audio)
+    report = measure_fields(bundle, requested_fields)
+    content = render_measurement_json(report)
+
+    if output:
+        Path(output).parent.mkdir(parents=True, exist_ok=True)
+        Path(output).write_text(content, encoding="utf-8")
+        console.print(f"[green]Measurement report saved to {output}[/green]")
+    else:
+        console.print(_measurement_table(report))
+
+
+def _measurement_table(report: MeasurementReport) -> Table:
+    table = Table(title=f"Measurement: {report.sample_id}")
+    table.add_column("score_field")
+    table.add_column("sensor")
+    table.add_column("raw_value")
+    table.add_column("unit")
+    table.add_column("score_value")
+    for item in report.measurements:
+        table.add_row(
+            item.score_field,
+            item.sensor,
+            "" if item.raw_value is None else str(item.raw_value),
+            "" if item.unit is None else item.unit,
+            "" if item.score_value is None else str(item.score_value),
+        )
+    return table
 
 
 @app.command()

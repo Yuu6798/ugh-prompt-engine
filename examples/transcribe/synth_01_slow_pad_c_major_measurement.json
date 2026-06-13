@@ -1,0 +1,78 @@
+{
+  "schema_version": "1.0",
+  "sample_id": "synth_01_slow_pad_c_major",
+  "duration_sec": 40.0,
+  "measurements": [
+    {
+      "score_field": "bpm",
+      "sensor": "physical.bpm",
+      "raw_value": 117.45,
+      "unit": "BPM",
+      "score_value": 117,
+      "calibration": [
+        "High-level tempo targets can measure low (K1: target 140 -> observed 127; docs/controllability_poc.md section 5.1).",
+        "Confidence is CV-based; systematic ground-truth validation is not recorded (docs/roadmap_goal1.md Q1-3 inventory)."
+      ]
+    },
+    {
+      "score_field": "key",
+      "sensor": "f\"{key} {mode}\"",
+      "raw_value": "C major",
+      "unit": null,
+      "score_value": "C major",
+      "calibration": [
+        "Validation matched 5/5 synthetic fixtures (docs/validation.md section 2)."
+      ]
+    },
+    {
+      "score_field": "time_signature",
+      "sensor": "physical.time_signature",
+      "raw_value": "4/4",
+      "unit": null,
+      "score_value": "4/4",
+      "calibration": [
+        "Validation is 5/5 exact, but the 3/4 fixture has only one sample and the acceptance gate remains incomplete (docs/roadmap_goal1.md Q1-2 inventory)."
+      ]
+    },
+    {
+      "score_field": "brightness",
+      "sensor": "physical.spectral_centroid",
+      "raw_value": 735.82,
+      "unit": "Hz",
+      "score_value": "dark",
+      "calibration": [
+        "Canonical sensor is spectral_centroid with dark <=1200 Hz and bright >=2500 Hz (PR #66); legacy band-ratio brightness is not used."
+      ]
+    },
+    {
+      "score_field": "active_rate_target",
+      "sensor": "physical.active_rate",
+      "raw_value": 0.9837,
+      "unit": "ratio",
+      "score_value": null,
+      "calibration": [
+        "Range-string conversion for score fields is intentionally deferred to T1."
+      ]
+    },
+    {
+      "score_field": "valley_depth_target",
+      "sensor": "physical.valley_depth",
+      "raw_value": 0.1802,
+      "unit": "ratio",
+      "score_value": null,
+      "calibration": [
+        "Range-string conversion for score fields is intentionally deferred to T1."
+      ]
+    },
+    {
+      "score_field": "stereo_width",
+      "sensor": "physical.stereo_profile.width",
+      "raw_value": null,
+      "unit": "ratio",
+      "score_value": null,
+      "calibration": [
+        "Label bands are undefined; missing stereo_profile is reported as null."
+      ]
+    }
+  ]
+}
