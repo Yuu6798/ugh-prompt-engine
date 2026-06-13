@@ -19,9 +19,9 @@ from svp_rpe.rpe.models import RPEBundle, SectionMarker
 from svp_rpe.transcribe.measure import SCORE_FIELDS, measure_fields
 from svp_rpe.transcribe.models import FieldMeasurement
 
-BPM_UNDETECTED_FALLBACK = 0
 TODO_SENTINEL_PREFIX = "TODO(transcribe):"
 TODO_AUTHOR_INPUT = f"{TODO_SENTINEL_PREFIX} author input required"
+TODO_BPM_UNDETECTED = f"{TODO_SENTINEL_PREFIX} bpm undetected"
 TODO_BRIGHTNESS_NEUTRAL = f"{TODO_SENTINEL_PREFIX} brightness neutral band"
 TODO_STEREO_BAND_UNDEFINED = f"{TODO_SENTINEL_PREFIX} stereo band undefined"
 TODO_STEREO_UNMEASURED = f"{TODO_SENTINEL_PREFIX} stereo unmeasured"
@@ -46,8 +46,9 @@ def draft_score(bundle: RPEBundle) -> CompositionScore:
 
     report = measure_fields(bundle, list(SCORE_FIELDS))
     measurements = {item.score_field: item for item in report.measurements}
+    bpm_measurement = measurements["bpm"]
     physical = PhysicalLayer(
-        bpm=_bpm_value(measurements["bpm"]),
+        bpm=_bpm_value(bpm_measurement),
         key=_required_str_score(measurements["key"]),
         time_signature=_required_str_score(measurements["time_signature"]),
         active_rate_target=_format_fixed_range(
@@ -68,7 +69,11 @@ def draft_score(bundle: RPEBundle) -> CompositionScore:
             avoid=[],
         ),
         physical=physical,
-        structure=_draft_structure(bundle, physical.bpm, physical.time_signature),
+        structure=_draft_structure(
+            bundle,
+            _bpm_for_structure(bpm_measurement),
+            physical.time_signature,
+        ),
         rendering=DEFAULT_RENDERING.model_copy(deep=True),
     )
 
@@ -92,7 +97,7 @@ def _format_fixed_range(raw_value: float) -> str:
 
 def _draft_structure(
     bundle: RPEBundle,
-    bpm: int,
+    bpm: int | None,
     time_signature: str,
 ) -> list[StructureSection]:
     return [
@@ -106,7 +111,9 @@ def _draft_structure(
     ]
 
 
-def _bars_for_section(marker: SectionMarker, bpm: int, time_signature: str) -> int:
+def _bars_for_section(marker: SectionMarker, bpm: int | None, time_signature: str) -> int:
+    if bpm is None:
+        return 1
     duration_sec = max(0.0, marker.end_sec - marker.start_sec)
     beats_per_bar = _beats_per_bar(time_signature)
     seconds_per_bar = (60.0 / max(1, bpm)) * beats_per_bar
@@ -133,9 +140,15 @@ def _brightness_value(measurement: FieldMeasurement) -> str:
     return str(measurement.score_value)
 
 
-def _bpm_value(measurement: FieldMeasurement) -> int:
+def _bpm_value(measurement: FieldMeasurement) -> int | str:
     if measurement.score_value is None:
-        return BPM_UNDETECTED_FALLBACK
+        return TODO_BPM_UNDETECTED
+    return _required_int_score(measurement)
+
+
+def _bpm_for_structure(measurement: FieldMeasurement) -> int | None:
+    if measurement.score_value is None:
+        return None
     return _required_int_score(measurement)
 
 

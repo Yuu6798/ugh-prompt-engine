@@ -113,7 +113,7 @@ def build_audit_report(
         grv_anchor_match(
             primary_a=score.semantic.grv.primary,
             primary_b=observed_grv.primary,
-            bpm_a=float(score.physical.bpm),
+            bpm_a=_numeric_metric(score.physical.bpm),
             bpm_b=_numeric_metric(observed.metrics.get("bpm")),
             key_a=score.physical.key,
             key_b=_text_metric(observed.metrics.get("key")),

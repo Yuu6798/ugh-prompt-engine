@@ -39,7 +39,7 @@ class SemanticLayer(CompositionModel):
 
 
 class PhysicalLayer(CompositionModel):
-    bpm: int
+    bpm: int | str
     key: str
     time_signature: str
     active_rate_target: str

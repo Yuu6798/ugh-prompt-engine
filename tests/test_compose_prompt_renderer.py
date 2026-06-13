@@ -61,6 +61,22 @@ def test_external_prompt_adapter_is_deterministic() -> None:
     assert first.model_dump(mode="json") == second.model_dump(mode="json")
 
 
+def test_external_prompt_adapter_does_not_render_todo_bpm_as_numeric_tempo() -> None:
+    score = load_composition_score(SAMPLE_PATH)
+    score = score.model_copy(
+        update={
+            "physical": score.physical.model_copy(
+                update={"bpm": "TODO(transcribe): bpm undetected"}
+            )
+        }
+    )
+
+    prompt = ExternalPromptAdapter().render(score, max_chars=1000)
+
+    assert "TODO(transcribe): bpm undetected." in prompt.text
+    assert "TODO(transcribe): bpm undetected BPM." not in prompt.text
+
+
 def test_generated_prompt_rejects_legacy_char_count_field() -> None:
     with pytest.raises(ValidationError):
         GeneratedPrompt.model_validate(
