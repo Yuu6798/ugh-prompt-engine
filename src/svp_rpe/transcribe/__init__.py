@@ -17,6 +17,7 @@ from .score_draft import (
     TODO_SENTINEL_PREFIX,
     TODO_STEREO_BAND_UNDEFINED,
     TODO_STEREO_UNMEASURED,
+    TODO_TIME_SIGNATURE_UNDETECTED,
     draft_score,
     render_draft_score_yaml,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "TODO_SENTINEL_PREFIX",
     "TODO_STEREO_BAND_UNDEFINED",
     "TODO_STEREO_UNMEASURED",
+    "TODO_TIME_SIGNATURE_UNDETECTED",
     "draft_score",
     "measure_fields",
     "parse_field_filter",

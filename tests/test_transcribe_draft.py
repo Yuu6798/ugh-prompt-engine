@@ -25,6 +25,7 @@ from svp_rpe.transcribe import (
     TODO_SENTINEL_PREFIX,
     TODO_STEREO_BAND_UNDEFINED,
     TODO_STEREO_UNMEASURED,
+    TODO_TIME_SIGNATURE_UNDETECTED,
     draft_score,
     render_draft_score_yaml,
 )
@@ -68,6 +69,7 @@ def test_todo_sentinel_constants_are_pinned() -> None:
     assert TODO_BRIGHTNESS_NEUTRAL == "TODO(transcribe): brightness neutral band"
     assert TODO_STEREO_BAND_UNDEFINED == "TODO(transcribe): stereo band undefined"
     assert TODO_STEREO_UNMEASURED == "TODO(transcribe): stereo unmeasured"
+    assert TODO_TIME_SIGNATURE_UNDETECTED == "TODO(transcribe): time signature undetected"
 
 
 def test_bars_for_section_uses_time_signature_numerator() -> None:
@@ -139,6 +141,39 @@ def test_draft_score_marks_missing_bpm_as_todo(tmp_path: Path) -> None:
     assert load_composition_score(score_path).physical.bpm == TODO_BPM_UNDETECTED
 
 
+def test_draft_score_marks_zero_confidence_bpm_as_todo(tmp_path: Path) -> None:
+    score = draft_score(_make_bundle(bpm=128.2, bpm_confidence=0.0))
+    yaml_text = render_draft_score_yaml(score)
+    score_path = tmp_path / "zero_confidence_bpm.yaml"
+    score_path.write_text(yaml_text, encoding="utf-8")
+
+    assert score.physical.bpm == TODO_BPM_UNDETECTED
+    assert [section.bars for section in score.structure] == [1]
+    assert load_composition_score(score_path).physical.bpm == TODO_BPM_UNDETECTED
+
+
+def test_draft_score_marks_zero_confidence_time_signature_as_todo(tmp_path: Path) -> None:
+    score = draft_score(
+        _make_bundle(
+            bpm=128.2,
+            bpm_confidence=0.9,
+            time_signature="4/4",
+            time_signature_confidence=0.0,
+        )
+    )
+    yaml_text = render_draft_score_yaml(score)
+    score_path = tmp_path / "zero_confidence_time_signature.yaml"
+    score_path.write_text(yaml_text, encoding="utf-8")
+
+    assert score.physical.bpm == 128
+    assert score.physical.time_signature == TODO_TIME_SIGNATURE_UNDETECTED
+    assert [section.bars for section in score.structure] == [1]
+    assert (
+        load_composition_score(score_path).physical.time_signature
+        == TODO_TIME_SIGNATURE_UNDETECTED
+    )
+
+
 def test_waltz_draft_uses_three_four_bars() -> None:
     score = draft_score(_extract_synth(Path("examples/sample_input/synth_04_waltz_fsharp_minor.wav")))
 
@@ -207,14 +242,19 @@ def _make_bundle(
     stereo_width: float | None = None,
     spectral_centroid: float = 900.0,
     bpm: float | None = 128.2,
+    bpm_confidence: float | None = None,
+    time_signature: str = "4/4",
+    time_signature_confidence: float = 0.3,
 ) -> RPEBundle:
     physical = PhysicalRPE(
         bpm=bpm,
+        bpm_confidence=bpm_confidence,
         key="C",
         mode="minor",
         duration_sec=8.0,
         sample_rate=44100,
-        time_signature="4/4",
+        time_signature=time_signature,
+        time_signature_confidence=time_signature_confidence,
         structure=[SectionMarker(label="full", start_sec=0.0, end_sec=8.0)],
         rms_mean=0.2,
         peak_amplitude=0.8,

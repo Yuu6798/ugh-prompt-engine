@@ -25,6 +25,7 @@ TODO_BPM_UNDETECTED = f"{TODO_SENTINEL_PREFIX} bpm undetected"
 TODO_BRIGHTNESS_NEUTRAL = f"{TODO_SENTINEL_PREFIX} brightness neutral band"
 TODO_STEREO_BAND_UNDEFINED = f"{TODO_SENTINEL_PREFIX} stereo band undefined"
 TODO_STEREO_UNMEASURED = f"{TODO_SENTINEL_PREFIX} stereo unmeasured"
+TODO_TIME_SIGNATURE_UNDETECTED = f"{TODO_SENTINEL_PREFIX} time signature undetected"
 
 DEFAULT_RENDERING = RenderingConfig(
     target_backend="external",
@@ -47,10 +48,11 @@ def draft_score(bundle: RPEBundle) -> CompositionScore:
     report = measure_fields(bundle, list(SCORE_FIELDS))
     measurements = {item.score_field: item for item in report.measurements}
     bpm_measurement = measurements["bpm"]
+    time_signature = _time_signature_value(measurements["time_signature"], bundle)
     physical = PhysicalLayer(
-        bpm=_bpm_value(bpm_measurement),
+        bpm=_bpm_value(bpm_measurement, bundle),
         key=_required_str_score(measurements["key"]),
-        time_signature=_required_str_score(measurements["time_signature"]),
+        time_signature=time_signature,
         active_rate_target=_format_fixed_range(
             _required_float_raw(measurements["active_rate_target"])
         ),
@@ -71,8 +73,8 @@ def draft_score(bundle: RPEBundle) -> CompositionScore:
         physical=physical,
         structure=_draft_structure(
             bundle,
-            _bpm_for_structure(bpm_measurement),
-            physical.time_signature,
+            _bpm_for_structure(bpm_measurement, bundle),
+            _time_signature_for_structure(time_signature),
         ),
         rendering=DEFAULT_RENDERING.model_copy(deep=True),
     )
@@ -98,7 +100,7 @@ def _format_fixed_range(raw_value: float) -> str:
 def _draft_structure(
     bundle: RPEBundle,
     bpm: int | None,
-    time_signature: str,
+    time_signature: str | None,
 ) -> list[StructureSection]:
     return [
         StructureSection(
@@ -111,8 +113,12 @@ def _draft_structure(
     ]
 
 
-def _bars_for_section(marker: SectionMarker, bpm: int | None, time_signature: str) -> int:
-    if bpm is None:
+def _bars_for_section(
+    marker: SectionMarker,
+    bpm: int | None,
+    time_signature: str | None,
+) -> int:
+    if bpm is None or time_signature is None:
         return 1
     duration_sec = max(0.0, marker.end_sec - marker.start_sec)
     beats_per_bar = _beats_per_bar(time_signature)
@@ -140,16 +146,38 @@ def _brightness_value(measurement: FieldMeasurement) -> str:
     return str(measurement.score_value)
 
 
-def _bpm_value(measurement: FieldMeasurement) -> int | str:
-    if measurement.score_value is None:
+def _bpm_value(measurement: FieldMeasurement, bundle: RPEBundle) -> int | str:
+    if measurement.score_value is None or _is_untrusted_confidence(
+        bundle.physical.bpm_confidence
+    ):
         return TODO_BPM_UNDETECTED
     return _required_int_score(measurement)
 
 
-def _bpm_for_structure(measurement: FieldMeasurement) -> int | None:
-    if measurement.score_value is None:
+def _bpm_for_structure(measurement: FieldMeasurement, bundle: RPEBundle) -> int | None:
+    if measurement.score_value is None or _is_untrusted_confidence(
+        bundle.physical.bpm_confidence
+    ):
         return None
     return _required_int_score(measurement)
+
+
+def _time_signature_value(measurement: FieldMeasurement, bundle: RPEBundle) -> str:
+    if measurement.score_value is None or _is_untrusted_confidence(
+        bundle.physical.time_signature_confidence
+    ):
+        return TODO_TIME_SIGNATURE_UNDETECTED
+    return _required_str_score(measurement)
+
+
+def _time_signature_for_structure(time_signature: str) -> str | None:
+    if time_signature.startswith(TODO_SENTINEL_PREFIX):
+        return None
+    return time_signature
+
+
+def _is_untrusted_confidence(confidence: float | None) -> bool:
+    return confidence is not None and confidence <= 0.0
 
 
 def _required_int_score(measurement: FieldMeasurement) -> int:
