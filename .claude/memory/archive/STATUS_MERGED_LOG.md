@@ -15,3 +15,6 @@ STATUS.md "Recently Merged"（最新 5 件保持）から溢れたマージ済�
 | #60 | docs: controllability_poc.md 制御トラック K 系列 新設 | 2026-06-02 | K-plan |
 | #59 | feat(compose): svprpe compose + ExternalPromptAdapter | 2026-06-02 | C2 |
 | #62 | feat(audit): Composition audit control panel (C0+C3) | 2026-06-03 | C0+C3 |
+| #63 | feat(discipline): セッション終了プロトコルを semantic-ci-code から移植 | 2026-06-12 | INFRA |
+| #64 | feat(compose): C4 Composition E2E デモ — 決定論的シンセ演奏者によるフルループ | 2026-06-12 | C4 |
+| #65 | feat(control): K1 grip 代表マップ初版 — 5 ツマミ + 補助センサー | 2026-06-12 | K1 |
