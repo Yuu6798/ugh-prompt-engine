@@ -23,10 +23,28 @@ from svp_rpe.transcribe.measure import render_measurement_json
 
 runner = CliRunner()
 
-SYNTH_01 = Path("examples/sample_input/synth_01_slow_pad_c_major.wav")
-SYNTH_04 = Path("examples/sample_input/synth_04_waltz_fsharp_minor.wav")
-EXPECTED_SYNTH_01 = Path("examples/transcribe/synth_01_slow_pad_c_major_measurement.json")
-EXPECTED_SYNTH_04 = Path("examples/transcribe/synth_04_waltz_fsharp_minor_measurement.json")
+SYNTH_MEASUREMENT_SNAPSHOTS = (
+    (
+        Path("examples/sample_input/synth_01_slow_pad_c_major.wav"),
+        Path("examples/transcribe/synth_01_slow_pad_c_major_measurement.json"),
+    ),
+    (
+        Path("examples/sample_input/synth_02_minor_pulse_a_minor.wav"),
+        Path("examples/transcribe/synth_02_minor_pulse_a_minor_measurement.json"),
+    ),
+    (
+        Path("examples/sample_input/synth_03_mid_groove_g_major.wav"),
+        Path("examples/transcribe/synth_03_mid_groove_g_major_measurement.json"),
+    ),
+    (
+        Path("examples/sample_input/synth_04_waltz_fsharp_minor.wav"),
+        Path("examples/transcribe/synth_04_waltz_fsharp_minor_measurement.json"),
+    ),
+    (
+        Path("examples/sample_input/synth_05_fast_bright_d_major.wav"),
+        Path("examples/transcribe/synth_05_fast_bright_d_major_measurement.json"),
+    ),
+)
 
 
 def _make_bundle(
@@ -168,15 +186,12 @@ def test_measure_cli_writes_json(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 
 
 def test_synth_measurement_snapshots_are_stable() -> None:
-    synth_01_bundle = extract_rpe_from_file(str(SYNTH_01))
-    synth_04_bundle = extract_rpe_from_file(str(SYNTH_04))
-    synth_01 = _measurement_json_for(synth_01_bundle)
-    synth_04 = _measurement_json_for(synth_04_bundle)
+    for audio_path, expected_path in SYNTH_MEASUREMENT_SNAPSHOTS:
+        bundle = extract_rpe_from_file(str(audio_path))
+        measurement_json = _measurement_json_for(bundle)
 
-    assert synth_01 == EXPECTED_SYNTH_01.read_text(encoding="utf-8")
-    assert synth_04 == EXPECTED_SYNTH_04.read_text(encoding="utf-8")
-    assert synth_01 == _measurement_json_for(synth_01_bundle)
-    assert synth_04 == _measurement_json_for(synth_04_bundle)
+        assert measurement_json == expected_path.read_text(encoding="utf-8")
+        assert measurement_json == _measurement_json_for(bundle)
 
 
 def _measurement_json_for(bundle: RPEBundle) -> str:
