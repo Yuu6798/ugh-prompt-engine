@@ -37,17 +37,39 @@
 
 ### プロンプト全文（再現用）
 
+省略なしの逐語コピー。音源は未コミットなので、再生成にはこの全文を用いる。
+
 - **C-orig 真値**: "Mystical Celtic RPG town theme, 86 BPM, D Dorian, 6/8. Low whistle,
   Celtic harp, uilleann pipes, soft fiddle, bodhrán, deep drone, airy choir, distant
-  bells, forest ambience. ... quiet verses, floating chorus. No cheerful tavern music,
-  no bright pop, no EDM, no rock drums."
-- **J-rock 真値**: "J-Pop with high-energy rock and electronic elements. Bright,
-  distorted electric guitars ... snare on 2 and 4 with rapid 16th-note hi-hat ...
-  175 BPM in the key of E Major. The bridge features a half-time feel ..."
+  bells, forest ambience. Ancient hidden town at twilight, foggy, sacred, magical,
+  nostalgic, slightly melancholic. Gentle vocal melody, quiet verses, floating chorus.
+  No cheerful tavern music, no bright pop, no EDM, no rock drums."
+- **C-gen（compose 出力）**: "Bright, Celtic folk arrangement with airy pads and a gentle
+  lilt atmosphere. wistful and pastoral / ancient, misty highland atmosphere track.
+  83 BPM. A# major. Intro: sparse, airy, single melodic line; role=lone tin whistle sets
+  the mood. Verse: add fiddle, low density; role=introduce fiddle motif. Bridge:
+  arpeggiated harp, mid density; role=harp transition. Verse2: fiddle plus bodhran pulse;
+  role=develop the melody. Chorus: whistle, fiddle, harp, bodhran together; bright and
+  wide; role=full ensemble peak. Verse3: ornamented fiddle, rolling rhythm; role=variation
+  with ornamentation. Chorus: full ensemble, brightest moment; role=final lift."
+- **J-rock 真値**: "J-Pop with high-energy rock and electronic elements. Bright, distorted
+  electric guitars play syncopated power chords and melodic lead lines. A driving drum kit
+  features a prominent snare on 2 and 4 with rapid 16th-note hi-hat patterns and frequent
+  crash cymbal accents. A thick, distorted synth bass follows the kick drum's rhythmic
+  patterns. Shimmering digital pads and staccato synth arpeggios provide harmonic texture.
+  The arrangement features a high-tenor male vocal with occasional double-tracking and
+  light reverb. The tempo is 175 BPM in the key of E Major. The bridge features a half-time
+  feel with prominent acoustic guitar strumming before returning to the original tempo for
+  the final chorus. The track ends with a clean electric guitar melody over a sustained
+  synth pad."
 - **J-ebm（compose 出力）**: "Bright, club-ready EBM / electronic body music for a dark
   warehouse floor atmosphere. pulsing, hypnotic, relentless / industrial, sweaty,
-  machine-driven track. 175 BPM. E major. ... Avoid: organic acoustic instruments;
-  soft ballad sections; clean pop vocals."
+  machine-driven track. 175 BPM. E major. Intro: filtered, rising energy; role=low-density
+  build. Verse: mid density, driving pulse; role=groove establishes. Chorus: full density,
+  brightest, widest; role=peak energy. Bridge: strip back, then rebuild; role=tension
+  break. Chorus: full density, relentless; role=final peak. Outro: fade density, sustained
+  texture; role=wind down. Avoid: organic acoustic instruments; soft ballad sections;
+  clean pop vocals."
 
 ---
 
