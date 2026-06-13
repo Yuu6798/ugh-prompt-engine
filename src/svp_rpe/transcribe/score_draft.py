@@ -19,6 +19,7 @@ from svp_rpe.rpe.models import RPEBundle, SectionMarker
 from svp_rpe.transcribe.measure import SCORE_FIELDS, measure_fields
 from svp_rpe.transcribe.models import FieldMeasurement
 
+BPM_UNDETECTED_FALLBACK = 0
 TODO_SENTINEL_PREFIX = "TODO(transcribe):"
 TODO_AUTHOR_INPUT = f"{TODO_SENTINEL_PREFIX} author input required"
 TODO_BRIGHTNESS_NEUTRAL = f"{TODO_SENTINEL_PREFIX} brightness neutral band"
@@ -46,7 +47,7 @@ def draft_score(bundle: RPEBundle) -> CompositionScore:
     report = measure_fields(bundle, list(SCORE_FIELDS))
     measurements = {item.score_field: item for item in report.measurements}
     physical = PhysicalLayer(
-        bpm=_required_int_score(measurements["bpm"]),
+        bpm=_bpm_value(measurements["bpm"]),
         key=_required_str_score(measurements["key"]),
         time_signature=_required_str_score(measurements["time_signature"]),
         active_rate_target=_format_fixed_range(
@@ -130,6 +131,12 @@ def _brightness_value(measurement: FieldMeasurement) -> str:
     if measurement.score_value is None:
         return TODO_BRIGHTNESS_NEUTRAL
     return str(measurement.score_value)
+
+
+def _bpm_value(measurement: FieldMeasurement) -> int:
+    if measurement.score_value is None:
+        return BPM_UNDETECTED_FALLBACK
+    return _required_int_score(measurement)
 
 
 def _required_int_score(measurement: FieldMeasurement) -> int:

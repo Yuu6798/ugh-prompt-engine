@@ -19,6 +19,7 @@ from svp_rpe.rpe.models import (
 from svp_rpe.rpe.semantic_rules import generate_semantic
 from svp_rpe.semantic_ci.audit import RANGE_PATTERN, _parse_numeric_range
 from svp_rpe.transcribe import (
+    BPM_UNDETECTED_FALLBACK,
     TODO_AUTHOR_INPUT,
     TODO_BRIGHTNESS_NEUTRAL,
     TODO_SENTINEL_PREFIX,
@@ -61,6 +62,7 @@ def test_fixed_range_format_round_trips_through_audit_parser() -> None:
 
 
 def test_todo_sentinel_constants_are_pinned() -> None:
+    assert BPM_UNDETECTED_FALLBACK == 0
     assert TODO_SENTINEL_PREFIX == "TODO(transcribe):"
     assert TODO_AUTHOR_INPUT == "TODO(transcribe): author input required"
     assert TODO_BRIGHTNESS_NEUTRAL == "TODO(transcribe): brightness neutral band"
@@ -124,6 +126,16 @@ def test_draft_score_marks_neutral_brightness_as_todo(tmp_path: Path) -> None:
 
     assert score.physical.brightness == TODO_BRIGHTNESS_NEUTRAL
     assert load_composition_score(score_path).physical.brightness == TODO_BRIGHTNESS_NEUTRAL
+
+
+def test_draft_score_marks_missing_bpm_with_numeric_fallback(tmp_path: Path) -> None:
+    score = draft_score(_make_bundle(bpm=None))
+    yaml_text = render_draft_score_yaml(score)
+    score_path = tmp_path / "missing_bpm.yaml"
+    score_path.write_text(yaml_text, encoding="utf-8")
+
+    assert score.physical.bpm == BPM_UNDETECTED_FALLBACK
+    assert load_composition_score(score_path).physical.bpm == BPM_UNDETECTED_FALLBACK
 
 
 def test_waltz_draft_uses_three_four_bars() -> None:
@@ -193,9 +205,10 @@ def _extract_synth(path: Path) -> RPEBundle:
 def _make_bundle(
     stereo_width: float | None = None,
     spectral_centroid: float = 900.0,
+    bpm: float | None = 128.2,
 ) -> RPEBundle:
     physical = PhysicalRPE(
-        bpm=128.2,
+        bpm=bpm,
         key="C",
         mode="minor",
         duration_sec=8.0,

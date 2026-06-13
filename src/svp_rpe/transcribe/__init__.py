@@ -10,6 +10,7 @@ from .measure import (
 )
 from .models import FieldMeasurement, MeasurementReport
 from .score_draft import (
+    BPM_UNDETECTED_FALLBACK,
     DEFAULT_RENDERING,
     TODO_AUTHOR_INPUT,
     TODO_BRIGHTNESS_NEUTRAL,
@@ -21,6 +22,7 @@ from .score_draft import (
 )
 
 __all__ = [
+    "BPM_UNDETECTED_FALLBACK",
     "CALIBRATION_NOTES",
     "DEFAULT_RENDERING",
     "SCORE_FIELDS",
