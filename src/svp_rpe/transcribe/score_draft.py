@@ -175,6 +175,7 @@ def _time_signature_value(measurement: FieldMeasurement, bundle: RPEBundle) -> s
     if measurement.score_value is None or _is_untrusted_confidence(
         bundle.physical.time_signature_confidence
     ):
+        # Downstream audit treats transcribe TODO targets as sensor-missing needles.
         return TODO_TIME_SIGNATURE_UNDETECTED
     return _required_str_score(measurement)
 
