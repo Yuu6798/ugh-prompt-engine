@@ -14,12 +14,14 @@ from svp_rpe.rpe.models import (
     RPEBundle,
     SectionMarker,
     SpectralProfile,
+    StereoProfile,
 )
 from svp_rpe.rpe.semantic_rules import generate_semantic
 from svp_rpe.semantic_ci.audit import RANGE_PATTERN, _parse_numeric_range
 from svp_rpe.transcribe import (
     TODO_AUTHOR_INPUT,
     TODO_SENTINEL_PREFIX,
+    TODO_STEREO_BAND_UNDEFINED,
     TODO_STEREO_UNMEASURED,
     draft_score,
     render_draft_score_yaml,
@@ -60,6 +62,7 @@ def test_fixed_range_format_round_trips_through_audit_parser() -> None:
 def test_todo_sentinel_constants_are_pinned() -> None:
     assert TODO_SENTINEL_PREFIX == "TODO(transcribe):"
     assert TODO_AUTHOR_INPUT == "TODO(transcribe): author input required"
+    assert TODO_STEREO_BAND_UNDEFINED == "TODO(transcribe): stereo band undefined"
     assert TODO_STEREO_UNMEASURED == "TODO(transcribe): stereo unmeasured"
 
 
@@ -103,6 +106,12 @@ def test_draft_score_maps_t0_measurements_to_physical_layer() -> None:
     assert score.physical.brightness == "dark"
     assert score.physical.active_rate_target == "0.96-1.00"
     assert score.physical.valley_depth_target == "0.16-0.20"
+
+
+def test_draft_score_marks_measured_stereo_as_band_undefined() -> None:
+    score = draft_score(_make_bundle(stereo_width=0.72))
+
+    assert score.physical.stereo_width == TODO_STEREO_BAND_UNDEFINED
 
 
 def test_waltz_draft_uses_three_four_bars() -> None:
@@ -169,7 +178,7 @@ def _extract_synth(path: Path) -> RPEBundle:
     return _BUNDLE_CACHE[path]
 
 
-def _make_bundle() -> RPEBundle:
+def _make_bundle(stereo_width: float | None = None) -> RPEBundle:
     physical = PhysicalRPE(
         bpm=128.2,
         key="C",
@@ -192,7 +201,11 @@ def _make_bundle() -> RPEBundle:
             high_ratio=0.1,
             brightness=0.1,
         ),
-        stereo_profile=None,
+        stereo_profile=(
+            None
+            if stereo_width is None
+            else StereoProfile(width=stereo_width, correlation=0.25)
+        ),
         onset_density=2.0,
     )
     return RPEBundle(

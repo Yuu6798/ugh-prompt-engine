@@ -21,6 +21,7 @@ from svp_rpe.transcribe.models import FieldMeasurement
 
 TODO_SENTINEL_PREFIX = "TODO(transcribe):"
 TODO_AUTHOR_INPUT = f"{TODO_SENTINEL_PREFIX} author input required"
+TODO_STEREO_BAND_UNDEFINED = f"{TODO_SENTINEL_PREFIX} stereo band undefined"
 TODO_STEREO_UNMEASURED = f"{TODO_SENTINEL_PREFIX} stereo unmeasured"
 
 DEFAULT_RENDERING = RenderingConfig(
@@ -92,9 +93,6 @@ def _draft_structure(
     bpm: int,
     time_signature: str,
 ) -> list[StructureSection]:
-    markers = bundle.physical.structure or [
-        SectionMarker(label="full", start_sec=0.0, end_sec=bundle.audio_duration_sec)
-    ]
     return [
         StructureSection(
             section=marker.label,
@@ -102,7 +100,7 @@ def _draft_structure(
             role=TODO_AUTHOR_INPUT,
             physical=TODO_AUTHOR_INPUT,
         )
-        for marker in markers
+        for marker in bundle.physical.structure
     ]
 
 
@@ -124,7 +122,7 @@ def _beats_per_bar(time_signature: str) -> int:
 def _stereo_width_value(measurement: FieldMeasurement) -> str:
     if measurement.raw_value is None:
         return TODO_STEREO_UNMEASURED
-    return TODO_AUTHOR_INPUT
+    return TODO_STEREO_BAND_UNDEFINED
 
 
 def _required_int_score(measurement: FieldMeasurement) -> int:
