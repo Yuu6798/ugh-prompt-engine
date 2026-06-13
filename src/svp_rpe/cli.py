@@ -200,6 +200,32 @@ def _measurement_table(report: MeasurementReport) -> Table:
 
 
 @app.command()
+def transcribe(
+    audio: str = typer.Argument(..., help="Path to WAV/MP3 file"),
+    output: Optional[str] = typer.Option(
+        None,
+        "-o",
+        "--output",
+        help="Output CompositionScore YAML path",
+    ),
+) -> None:
+    """Transcribe one audio file into a loader-valid draft CompositionScore YAML."""
+    from svp_rpe.rpe.extractor import extract_rpe_from_file
+    from svp_rpe.transcribe import draft_score, render_draft_score_yaml
+
+    bundle = extract_rpe_from_file(audio)
+    score = draft_score(bundle)
+    content = render_draft_score_yaml(score)
+
+    if output:
+        Path(output).parent.mkdir(parents=True, exist_ok=True)
+        Path(output).write_text(content, encoding="utf-8")
+        console.print(f"[green]Draft CompositionScore saved to {output}[/green]")
+    else:
+        typer.echo(content, nl=False)
+
+
+@app.command()
 def evaluate(
     audio: str = typer.Option(..., "--audio", help="Path to audio file"),
     svp: Optional[str] = typer.Option(None, "--svp", help="Path to external SVP file"),
