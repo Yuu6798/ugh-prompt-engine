@@ -176,6 +176,7 @@ examples/                      # sample_input/ + expected_output/
 | [`docs/composition_poc_report.md`](docs/composition_poc_report.md) | C4 E2E デモ結果: 決定論的シンセ演奏者による 2 テイク針比較、センサー帯域の発見、PoC 5 の決定論パス実証 |
 | [`docs/controllability_poc.md`](docs/controllability_poc.md) | 制御トラック PoC 計画 (K 系列): パラメータ=効くツマミの読み替え、grip 効果量の定義、K0 最小方法実証〜K2 Suno 転移 |
 | [`docs/score_centric_planning.md`](docs/score_centric_planning.md) | 楽譜中心の再編成: 双方向再現性の通底原理、採譜トラック (T 系列) T0–T2、Q 系列の計器校正への再定義、意味層センサーの将来枠 |
+| [`docs/roundtrip_case_studies.md`](docs/roundtrip_case_studies.md) | Suno 往復テストケース結果 (個別ログ): 計器の有効帯域、物理固定・意味差替の制御性 A/B、双方向性成功 (BPM 留保)、BPM 89.1 アトラクタ疑い |
 
 ## ドキュメント管理ポリシー
 
