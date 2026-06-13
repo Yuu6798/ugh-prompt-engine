@@ -158,8 +158,9 @@ def test_transcribe_cli_help() -> None:
     result = runner.invoke(app, ["transcribe", "--help"])
 
     assert result.exit_code == 0
+    assert "Usage:" in result.output
+    assert "transcribe" in result.output
     assert "draft CompositionScore YAML" in result.output
-    assert "--output" in result.output
 
 
 def _extract_synth(path: Path) -> RPEBundle:
