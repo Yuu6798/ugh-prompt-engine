@@ -179,6 +179,7 @@ def test_audit_report_treats_todo_key_target_as_sensor_missing() -> None:
     assert key.deviation is None
     assert key.score is None
     assert key.note == "sensor missing"
+    assert _needle(report, "semantic", "grv").score == 1.0
 
 
 def test_audit_report_treats_todo_time_signature_target_as_sensor_missing() -> None:

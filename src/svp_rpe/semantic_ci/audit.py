@@ -116,7 +116,7 @@ def build_audit_report(
             primary_b=observed_grv.primary,
             bpm_a=_numeric_metric(score.physical.bpm),
             bpm_b=_numeric_metric(observed.metrics.get("bpm")),
-            key_a=score.physical.key,
+            key_a=_text_metric_without_transcribe_todo(score.physical.key),
             key_b=_text_metric(observed.metrics.get("key")),
             anchors_a=[item for item in [score.semantic.grv.secondary] if item],
             anchors_b=observed_grv.secondary,
@@ -554,6 +554,12 @@ def _text_metric(value: Any) -> Optional[str]:
     if value is None:
         return None
     return str(value)
+
+
+def _text_metric_without_transcribe_todo(value: Any) -> Optional[str]:
+    if _is_transcribe_todo(value):
+        return None
+    return _text_metric(value)
 
 
 def _is_transcribe_todo(value: Any) -> bool:
