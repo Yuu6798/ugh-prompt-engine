@@ -153,6 +153,16 @@ def test_draft_score_marks_missing_key_as_todo(tmp_path: Path) -> None:
     assert load_composition_score(score_path).physical.key == TODO_KEY_UNDETECTED
 
 
+def test_draft_score_marks_zero_confidence_key_as_todo(tmp_path: Path) -> None:
+    score = draft_score(_make_bundle(key="C", mode="major", key_confidence=0.0))
+    yaml_text = render_draft_score_yaml(score)
+    score_path = tmp_path / "zero_confidence_key.yaml"
+    score_path.write_text(yaml_text, encoding="utf-8")
+
+    assert score.physical.key == TODO_KEY_UNDETECTED
+    assert load_composition_score(score_path).physical.key == TODO_KEY_UNDETECTED
+
+
 def test_draft_score_marks_zero_confidence_bpm_as_todo(tmp_path: Path) -> None:
     score = draft_score(_make_bundle(bpm=128.2, bpm_confidence=0.0))
     yaml_text = render_draft_score_yaml(score)
@@ -257,6 +267,7 @@ def _make_bundle(
     bpm_confidence: float | None = None,
     key: str | None = "C",
     mode: str | None = "minor",
+    key_confidence: float | None = None,
     time_signature: str = "4/4",
     time_signature_confidence: float = 0.3,
 ) -> RPEBundle:
@@ -265,6 +276,7 @@ def _make_bundle(
         bpm_confidence=bpm_confidence,
         key=key,
         mode=mode,
+        key_confidence=key_confidence,
         duration_sec=8.0,
         sample_rate=44100,
         time_signature=time_signature,

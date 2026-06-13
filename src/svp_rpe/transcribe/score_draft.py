@@ -52,7 +52,7 @@ def draft_score(bundle: RPEBundle) -> CompositionScore:
     time_signature = _time_signature_value(measurements["time_signature"], bundle)
     physical = PhysicalLayer(
         bpm=_bpm_value(bpm_measurement, bundle),
-        key=_key_value(measurements["key"]),
+        key=_key_value(measurements["key"], bundle),
         time_signature=time_signature,
         active_rate_target=_format_fixed_range(
             _required_float_raw(measurements["active_rate_target"])
@@ -147,8 +147,10 @@ def _brightness_value(measurement: FieldMeasurement) -> str:
     return str(measurement.score_value)
 
 
-def _key_value(measurement: FieldMeasurement) -> str:
-    if measurement.score_value is None:
+def _key_value(measurement: FieldMeasurement, bundle: RPEBundle) -> str:
+    if measurement.score_value is None or _is_untrusted_confidence(
+        bundle.physical.key_confidence
+    ):
         return TODO_KEY_UNDETECTED
     return _required_str_score(measurement)
 
