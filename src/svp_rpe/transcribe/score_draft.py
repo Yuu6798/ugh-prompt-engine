@@ -23,6 +23,7 @@ TODO_SENTINEL_PREFIX = "TODO(transcribe):"
 TODO_AUTHOR_INPUT = f"{TODO_SENTINEL_PREFIX} author input required"
 TODO_BPM_UNDETECTED = f"{TODO_SENTINEL_PREFIX} bpm undetected"
 TODO_BRIGHTNESS_NEUTRAL = f"{TODO_SENTINEL_PREFIX} brightness neutral band"
+TODO_KEY_UNDETECTED = f"{TODO_SENTINEL_PREFIX} key undetected"
 TODO_STEREO_BAND_UNDEFINED = f"{TODO_SENTINEL_PREFIX} stereo band undefined"
 TODO_STEREO_UNMEASURED = f"{TODO_SENTINEL_PREFIX} stereo unmeasured"
 TODO_TIME_SIGNATURE_UNDETECTED = f"{TODO_SENTINEL_PREFIX} time signature undetected"
@@ -51,7 +52,7 @@ def draft_score(bundle: RPEBundle) -> CompositionScore:
     time_signature = _time_signature_value(measurements["time_signature"], bundle)
     physical = PhysicalLayer(
         bpm=_bpm_value(bpm_measurement, bundle),
-        key=_required_str_score(measurements["key"]),
+        key=_key_value(measurements["key"]),
         time_signature=time_signature,
         active_rate_target=_format_fixed_range(
             _required_float_raw(measurements["active_rate_target"])
@@ -144,6 +145,12 @@ def _brightness_value(measurement: FieldMeasurement) -> str:
     if measurement.score_value is None:
         return TODO_BRIGHTNESS_NEUTRAL
     return str(measurement.score_value)
+
+
+def _key_value(measurement: FieldMeasurement) -> str:
+    if measurement.score_value is None:
+        return TODO_KEY_UNDETECTED
+    return _required_str_score(measurement)
 
 
 def _bpm_value(measurement: FieldMeasurement, bundle: RPEBundle) -> int | str:

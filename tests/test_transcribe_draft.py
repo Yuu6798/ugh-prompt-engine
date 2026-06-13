@@ -22,6 +22,7 @@ from svp_rpe.transcribe import (
     TODO_AUTHOR_INPUT,
     TODO_BPM_UNDETECTED,
     TODO_BRIGHTNESS_NEUTRAL,
+    TODO_KEY_UNDETECTED,
     TODO_SENTINEL_PREFIX,
     TODO_STEREO_BAND_UNDEFINED,
     TODO_STEREO_UNMEASURED,
@@ -67,6 +68,7 @@ def test_todo_sentinel_constants_are_pinned() -> None:
     assert TODO_AUTHOR_INPUT == "TODO(transcribe): author input required"
     assert TODO_BPM_UNDETECTED == "TODO(transcribe): bpm undetected"
     assert TODO_BRIGHTNESS_NEUTRAL == "TODO(transcribe): brightness neutral band"
+    assert TODO_KEY_UNDETECTED == "TODO(transcribe): key undetected"
     assert TODO_STEREO_BAND_UNDEFINED == "TODO(transcribe): stereo band undefined"
     assert TODO_STEREO_UNMEASURED == "TODO(transcribe): stereo unmeasured"
     assert TODO_TIME_SIGNATURE_UNDETECTED == "TODO(transcribe): time signature undetected"
@@ -139,6 +141,16 @@ def test_draft_score_marks_missing_bpm_as_todo(tmp_path: Path) -> None:
     assert score.physical.bpm == TODO_BPM_UNDETECTED
     assert [section.bars for section in score.structure] == [1]
     assert load_composition_score(score_path).physical.bpm == TODO_BPM_UNDETECTED
+
+
+def test_draft_score_marks_missing_key_as_todo(tmp_path: Path) -> None:
+    score = draft_score(_make_bundle(key=None, mode=None))
+    yaml_text = render_draft_score_yaml(score)
+    score_path = tmp_path / "missing_key.yaml"
+    score_path.write_text(yaml_text, encoding="utf-8")
+
+    assert score.physical.key == TODO_KEY_UNDETECTED
+    assert load_composition_score(score_path).physical.key == TODO_KEY_UNDETECTED
 
 
 def test_draft_score_marks_zero_confidence_bpm_as_todo(tmp_path: Path) -> None:
@@ -243,14 +255,16 @@ def _make_bundle(
     spectral_centroid: float = 900.0,
     bpm: float | None = 128.2,
     bpm_confidence: float | None = None,
+    key: str | None = "C",
+    mode: str | None = "minor",
     time_signature: str = "4/4",
     time_signature_confidence: float = 0.3,
 ) -> RPEBundle:
     physical = PhysicalRPE(
         bpm=bpm,
         bpm_confidence=bpm_confidence,
-        key="C",
-        mode="minor",
+        key=key,
+        mode=mode,
         duration_sec=8.0,
         sample_rate=44100,
         time_signature=time_signature,

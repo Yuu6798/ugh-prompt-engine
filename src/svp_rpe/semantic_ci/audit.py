@@ -33,6 +33,7 @@ DELTA_E_TRANSITION_TYPES = (
     "crescendo",
     "flat",
 )
+TRANSCRIBE_TODO_PREFIX = "TODO(transcribe):"
 
 
 class AuditNeedle(BaseModel):
@@ -222,6 +223,15 @@ def _bpm_needle(target: Any, observed: ObservedRPE) -> AuditNeedle:
 def _key_needle(target: Any, observed: ObservedRPE) -> AuditNeedle:
     observed_key = _text_metric(observed.metrics.get("key"))
     target_key = str(target) if target is not None else None
+    if _is_transcribe_todo(target_key):
+        return AuditNeedle(
+            name="key",
+            layer="physical",
+            target=target_key,
+            observed=observed_key,
+            sensor="mir_eval.key.evaluate",
+            note="sensor missing",
+        )
     if not target_key or not observed_key:
         return AuditNeedle(
             name="key",
@@ -269,6 +279,15 @@ def _time_signature_needle(target: Any, observed: ObservedRPE) -> AuditNeedle:
     observed_value = observed.metrics.get("time_signature")
     target_value = str(target) if target is not None else None
     observed_text = str(observed_value) if observed_value is not None else None
+    if _is_transcribe_todo(target_value):
+        return AuditNeedle(
+            name="time_signature",
+            layer="physical",
+            target=target_value,
+            observed=observed_text,
+            sensor="PhysicalRPE.time_signature",
+            note="sensor missing",
+        )
     if not target_value or not observed_text:
         return AuditNeedle(
             name="time_signature",
@@ -535,6 +554,10 @@ def _text_metric(value: Any) -> Optional[str]:
     if value is None:
         return None
     return str(value)
+
+
+def _is_transcribe_todo(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith(TRANSCRIBE_TODO_PREFIX)
 
 
 def _normalize_key_for_exact_match(value: str) -> str:
