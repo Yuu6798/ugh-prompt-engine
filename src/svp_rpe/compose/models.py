@@ -47,6 +47,16 @@ class PhysicalLayer(CompositionModel):
     brightness: str
     stereo_width: str
 
+    @field_validator("bpm", mode="before")
+    @classmethod
+    def normalize_bpm(cls, value: object) -> object:
+        if isinstance(value, str):
+            stripped = value.strip()
+            signless = stripped[1:] if stripped[:1] in {"+", "-"} else stripped
+            if signless.isdigit():
+                return int(stripped)
+        return value
+
 
 class StructureSection(CompositionModel):
     section: str

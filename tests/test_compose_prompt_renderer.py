@@ -9,7 +9,12 @@ from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from svp_rpe.cli import app
-from svp_rpe.compose import ExternalPromptAdapter, GeneratedPrompt, load_composition_score
+from svp_rpe.compose import (
+    CompositionScore,
+    ExternalPromptAdapter,
+    GeneratedPrompt,
+    load_composition_score,
+)
 
 
 SAMPLE_PATH = Path("examples/composition/midnight_signal/composition_score.yaml")
@@ -75,6 +80,18 @@ def test_external_prompt_adapter_does_not_render_todo_bpm_as_numeric_tempo() -> 
 
     assert "TODO(transcribe): bpm undetected." in prompt.text
     assert "TODO(transcribe): bpm undetected BPM." not in prompt.text
+
+
+def test_external_prompt_adapter_renders_numeric_bpm_string_as_tempo() -> None:
+    data = json.loads(load_composition_score(SAMPLE_PATH).model_dump_json())
+    data["physical"]["bpm"] = "128"
+    score = CompositionScore.model_validate(data)
+
+    prompt = ExternalPromptAdapter().render(score, max_chars=1000)
+
+    assert score.physical.bpm == 128
+    assert "128 BPM." in prompt.text
+    assert "128." not in prompt.text
 
 
 def test_generated_prompt_rejects_legacy_char_count_field() -> None:

@@ -39,6 +39,17 @@ def test_load_composition_score_reads_yaml() -> None:
     assert len(score.structure) == 4
 
 
+def test_numeric_bpm_string_normalizes_to_int() -> None:
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["physical"]["bpm"] = "128"
+
+    score = CompositionScore.model_validate(data)
+    target = composition_to_target_svp(score)
+
+    assert score.physical.bpm == 128
+    assert target.metric_targets["bpm"] == 128
+
+
 def test_composition_to_target_svp_maps_required_fields() -> None:
     target = composition_to_target_svp(load_composition_score(SAMPLE_PATH))
 
