@@ -20,6 +20,7 @@ from svp_rpe.rpe.semantic_rules import generate_semantic
 from svp_rpe.semantic_ci.audit import RANGE_PATTERN, _parse_numeric_range
 from svp_rpe.transcribe import (
     TODO_AUTHOR_INPUT,
+    TODO_BRIGHTNESS_NEUTRAL,
     TODO_SENTINEL_PREFIX,
     TODO_STEREO_BAND_UNDEFINED,
     TODO_STEREO_UNMEASURED,
@@ -62,6 +63,7 @@ def test_fixed_range_format_round_trips_through_audit_parser() -> None:
 def test_todo_sentinel_constants_are_pinned() -> None:
     assert TODO_SENTINEL_PREFIX == "TODO(transcribe):"
     assert TODO_AUTHOR_INPUT == "TODO(transcribe): author input required"
+    assert TODO_BRIGHTNESS_NEUTRAL == "TODO(transcribe): brightness neutral band"
     assert TODO_STEREO_BAND_UNDEFINED == "TODO(transcribe): stereo band undefined"
     assert TODO_STEREO_UNMEASURED == "TODO(transcribe): stereo unmeasured"
 
@@ -112,6 +114,16 @@ def test_draft_score_marks_measured_stereo_as_band_undefined() -> None:
     score = draft_score(_make_bundle(stereo_width=0.72))
 
     assert score.physical.stereo_width == TODO_STEREO_BAND_UNDEFINED
+
+
+def test_draft_score_marks_neutral_brightness_as_todo(tmp_path: Path) -> None:
+    score = draft_score(_make_bundle(spectral_centroid=1800.0))
+    yaml_text = render_draft_score_yaml(score)
+    score_path = tmp_path / "neutral_brightness.yaml"
+    score_path.write_text(yaml_text, encoding="utf-8")
+
+    assert score.physical.brightness == TODO_BRIGHTNESS_NEUTRAL
+    assert load_composition_score(score_path).physical.brightness == TODO_BRIGHTNESS_NEUTRAL
 
 
 def test_waltz_draft_uses_three_four_bars() -> None:
@@ -178,7 +190,10 @@ def _extract_synth(path: Path) -> RPEBundle:
     return _BUNDLE_CACHE[path]
 
 
-def _make_bundle(stereo_width: float | None = None) -> RPEBundle:
+def _make_bundle(
+    stereo_width: float | None = None,
+    spectral_centroid: float = 900.0,
+) -> RPEBundle:
     physical = PhysicalRPE(
         bpm=128.2,
         key="C",
@@ -193,9 +208,9 @@ def _make_bundle(stereo_width: float | None = None) -> RPEBundle:
         active_rate=0.73,
         valley_depth=0.18,
         thickness=1.0,
-        spectral_centroid=900.0,
+        spectral_centroid=spectral_centroid,
         spectral_profile=SpectralProfile(
-            centroid=900.0,
+            centroid=spectral_centroid,
             low_ratio=0.4,
             mid_ratio=0.5,
             high_ratio=0.1,

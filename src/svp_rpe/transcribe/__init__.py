@@ -12,6 +12,7 @@ from .models import FieldMeasurement, MeasurementReport
 from .score_draft import (
     DEFAULT_RENDERING,
     TODO_AUTHOR_INPUT,
+    TODO_BRIGHTNESS_NEUTRAL,
     TODO_SENTINEL_PREFIX,
     TODO_STEREO_BAND_UNDEFINED,
     TODO_STEREO_UNMEASURED,
@@ -26,6 +27,7 @@ __all__ = [
     "FieldMeasurement",
     "MeasurementReport",
     "TODO_AUTHOR_INPUT",
+    "TODO_BRIGHTNESS_NEUTRAL",
     "TODO_SENTINEL_PREFIX",
     "TODO_STEREO_BAND_UNDEFINED",
     "TODO_STEREO_UNMEASURED",

@@ -21,6 +21,7 @@ from svp_rpe.transcribe.models import FieldMeasurement
 
 TODO_SENTINEL_PREFIX = "TODO(transcribe):"
 TODO_AUTHOR_INPUT = f"{TODO_SENTINEL_PREFIX} author input required"
+TODO_BRIGHTNESS_NEUTRAL = f"{TODO_SENTINEL_PREFIX} brightness neutral band"
 TODO_STEREO_BAND_UNDEFINED = f"{TODO_SENTINEL_PREFIX} stereo band undefined"
 TODO_STEREO_UNMEASURED = f"{TODO_SENTINEL_PREFIX} stereo unmeasured"
 
@@ -54,7 +55,7 @@ def draft_score(bundle: RPEBundle) -> CompositionScore:
         valley_depth_target=_format_fixed_range(
             _required_float_raw(measurements["valley_depth_target"])
         ),
-        brightness=_required_str_score(measurements["brightness"]),
+        brightness=_brightness_value(measurements["brightness"]),
         stereo_width=_stereo_width_value(measurements["stereo_width"]),
     )
     return CompositionScore(
@@ -123,6 +124,12 @@ def _stereo_width_value(measurement: FieldMeasurement) -> str:
     if measurement.raw_value is None:
         return TODO_STEREO_UNMEASURED
     return TODO_STEREO_BAND_UNDEFINED
+
+
+def _brightness_value(measurement: FieldMeasurement) -> str:
+    if measurement.score_value is None:
+        return TODO_BRIGHTNESS_NEUTRAL
+    return str(measurement.score_value)
 
 
 def _required_int_score(measurement: FieldMeasurement) -> int:
