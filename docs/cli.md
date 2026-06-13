@@ -33,6 +33,21 @@ svprpe generate rpe.json --output-dir ./output --format yaml
 svprpe generate rpe.json --format text
 ```
 
+### `svprpe measure <audio>`
+
+Measure the seven required `CompositionScore.physical` fields from one audio file.
+Use this as a transcription aid: each output field includes the sensor name, raw
+measurement, score-facing value, unit, and calibration notes.
+
+```bash
+svprpe measure track.wav
+svprpe measure track.wav --fields bpm,key,brightness
+svprpe measure track.wav --output measurement.json
+```
+
+When `--output` is set, the command writes deterministic JSON. Without
+`--output`, it prints a compact Rich table for inspection.
+
 ### `svprpe evaluate --audio <audio> [--svp <svp.yaml>]`
 
 Evaluate audio. Without `--svp`: self-evaluate. With `--svp`: compare against external SVP.
@@ -123,6 +138,7 @@ Outputs: `ranking.json`, `summary.csv`, `summary.json`, `next_action.md`.
 |--------|-------------|
 | `--output` / `-o` | Output file path |
 | `--output-dir` | Output directory (creates if needed) |
+| `--fields` | Comma-separated `CompositionScore.physical` fields for `measure` |
 | `--format` | Output format. `generate`: `yaml` (default) or `text`; `ci-check`: `json` (default) or `markdown` |
 | `--threshold` | Semantic CI pass threshold from `0.0` to `1.0` (`ci-check` only) |
 | `--no-save` | Print output to stdout instead of saving |

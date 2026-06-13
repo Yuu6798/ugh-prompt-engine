@@ -137,6 +137,7 @@ src/svp_rpe/
 │   ├── diff_models.py         # diff データ構造
 │   └── semantic_similarity.py # 意味類似度
 ├── semantic_ci/                # Target SVP → Expected RPE → Diff → Repair SVP
+├── transcribe/                 # CompositionScore physical field measurement
 ├── batch/                     # バッチ処理
 │   ├── runner.py              # batch コマンド本体
 │   ├── discovery.py           # 入力ファイル発見
@@ -163,7 +164,7 @@ examples/                      # sample_input/ + expected_output/
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | パイプライン三層設計、モジュール責務、config 役割、v0.2 既知の制限 |
 | [`docs/metrics.md`](docs/metrics.md) | RPE 物理指標の定義式、Pro baseline 値、UGHer 4 成分スコアリング、valley 3 戦略 |
-| [`docs/cli.md`](docs/cli.md) | 7 コマンドのリファレンス: extract / generate / evaluate / compare / ci-check / run / batch |
+| [`docs/cli.md`](docs/cli.md) | 10 コマンドのリファレンス: extract / generate / compose / measure / evaluate / compare / ci-check / run / batch / audit |
 | [`docs/semantic_ci_product_v1.md`](docs/semantic_ci_product_v1.md) | semantic CI V1: Target SVP → Expected RPE → fixture比較 → Repair SVP |
 | [`docs/roadmap.md`](docs/roadmap.md) | PoC (達成済み) と Pre-prototype マイルストーン (P1–P5)、推奨実行順 |
 | [`docs/roadmap_goal1.md`](docs/roadmap_goal1.md) | 目的1（定量観測）完成までのフェーズ Q0–Q5、完成定義、クリティカルパス |
