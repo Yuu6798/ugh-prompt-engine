@@ -1,0 +1,55 @@
+meta:
+  title: synth_04_waltz_fsharp_minor
+  version: '0.1'
+semantic:
+  core: 'TODO(transcribe): author input required'
+  grv:
+    primary: 'TODO(transcribe): author input required'
+    secondary: 'TODO(transcribe): author input required'
+  delta_e:
+    overall: 'TODO(transcribe): author input required'
+  avoid: []
+physical:
+  bpm: 136
+  key: F# minor
+  time_signature: 3/4
+  active_rate_target: 0.96-1.00
+  valley_depth_target: 0.17-0.21
+  brightness: dark
+  stereo_width: 'TODO(transcribe): stereo unmeasured'
+structure:
+- section: Intro
+  bars: 5
+  role: 'TODO(transcribe): author input required'
+  physical: 'TODO(transcribe): author input required'
+- section: Bridge
+  bars: 6
+  role: 'TODO(transcribe): author input required'
+  physical: 'TODO(transcribe): author input required'
+- section: Chorus
+  bars: 6
+  role: 'TODO(transcribe): author input required'
+  physical: 'TODO(transcribe): author input required'
+- section: Verse
+  bars: 6
+  role: 'TODO(transcribe): author input required'
+  physical: 'TODO(transcribe): author input required'
+- section: Chorus
+  bars: 6
+  role: 'TODO(transcribe): author input required'
+  physical: 'TODO(transcribe): author input required'
+- section: Outro
+  bars: 5
+  role: 'TODO(transcribe): author input required'
+  physical: 'TODO(transcribe): author input required'
+rendering:
+  target_backend: external
+  prompt_max_chars: 650
+  priority:
+  - semantic.core
+  - semantic.grv
+  - physical.bpm
+  - physical.key
+  - structure
+  - semantic.avoid
+  - physical.optional

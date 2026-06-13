@@ -143,6 +143,64 @@ def test_audit_report_returns_needles_without_outcome_keys() -> None:
     _assert_no_outcome_keys(dumped)
 
 
+def test_audit_report_treats_todo_bpm_target_as_sensor_missing() -> None:
+    score = _make_score()
+    score = score.model_copy(
+        update={
+            "physical": score.physical.model_copy(
+                update={"bpm": "TODO(transcribe): bpm undetected"}
+            )
+        }
+    )
+    report = build_audit_report(score, _make_bundle(), observed_id="fixture-rpe")
+
+    bpm = _needle(report, "physical", "bpm")
+    assert bpm.target == "TODO(transcribe): bpm undetected"
+    assert bpm.observed == 130.0
+    assert bpm.deviation is None
+    assert bpm.note == "sensor missing"
+    assert _needle(report, "semantic", "grv").score is not None
+
+
+def test_audit_report_treats_todo_key_target_as_sensor_missing() -> None:
+    score = _make_score()
+    score = score.model_copy(
+        update={
+            "physical": score.physical.model_copy(
+                update={"key": "TODO(transcribe): key undetected"}
+            )
+        }
+    )
+    report = build_audit_report(score, _make_bundle(), observed_id="fixture-rpe")
+
+    key = _needle(report, "physical", "key")
+    assert key.target == "TODO(transcribe): key undetected"
+    assert key.observed == "C major"
+    assert key.deviation is None
+    assert key.score is None
+    assert key.note == "sensor missing"
+    assert _needle(report, "semantic", "grv").score == 1.0
+
+
+def test_audit_report_treats_todo_time_signature_target_as_sensor_missing() -> None:
+    score = _make_score()
+    score = score.model_copy(
+        update={
+            "physical": score.physical.model_copy(
+                update={"time_signature": "TODO(transcribe): time signature undetected"}
+            )
+        }
+    )
+    report = build_audit_report(score, _make_bundle(), observed_id="fixture-rpe")
+
+    time_signature = _needle(report, "physical", "time_signature")
+    assert time_signature.target == "TODO(transcribe): time signature undetected"
+    assert time_signature.observed == "4/4"
+    assert time_signature.deviation is None
+    assert time_signature.score is None
+    assert time_signature.note == "sensor missing"
+
+
 def test_audit_text_snapshot_is_stable() -> None:
     report = build_audit_report(_make_score(), _make_bundle(), observed_id="fixture-rpe")
 

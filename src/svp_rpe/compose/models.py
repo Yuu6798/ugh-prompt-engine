@@ -5,6 +5,8 @@ from typing import List, Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
+_TRANSCRIBE_TODO_PREFIX = "TODO(transcribe):"
+
 
 class CompositionModel(BaseModel):
     """Base model that rejects keys outside the canonical Composition Score schema."""
@@ -39,13 +41,32 @@ class SemanticLayer(CompositionModel):
 
 
 class PhysicalLayer(CompositionModel):
-    bpm: int
+    bpm: int | str
     key: str
     time_signature: str
     active_rate_target: str
     valley_depth_target: str
     brightness: str
     stereo_width: str
+
+    @field_validator("bpm", mode="before")
+    @classmethod
+    def normalize_bpm(cls, value: object) -> object:
+        if isinstance(value, str):
+            stripped = value.strip()
+            signless = stripped[1:] if stripped[:1] in {"+", "-"} else stripped
+            if signless.isdigit():
+                return int(stripped)
+        return value
+
+    @field_validator("bpm")
+    @classmethod
+    def reject_unknown_bpm_text(cls, value: int | str) -> int | str:
+        if isinstance(value, str) and not value.startswith(_TRANSCRIBE_TODO_PREFIX):
+            raise ValueError(
+                "bpm must be an integer, numeric string, or TODO(transcribe): sentinel"
+            )
+        return value
 
 
 class StructureSection(CompositionModel):

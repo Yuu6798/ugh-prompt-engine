@@ -50,7 +50,7 @@ def _segments_for(score: CompositionScore) -> list[_PromptSegment]:
         add("semantic.grv", f"{' / '.join(grv_values)} track.")
 
     add("semantic.core", f"{score.physical.brightness.capitalize()}, {score.semantic.core} atmosphere.")
-    add("physical.bpm", f"{score.physical.bpm} BPM.")
+    add("physical.bpm", _bpm_text(score.physical.bpm))
     add("physical.key", f"{score.physical.key}.")
 
     for section in score.structure:
@@ -100,6 +100,12 @@ def _lowest_priority_segment(
 
 def _join_segments(segments: list[_PromptSegment]) -> str:
     return " ".join(segment.text for segment in segments)
+
+
+def _bpm_text(bpm: int | str) -> str:
+    if isinstance(bpm, int) and not isinstance(bpm, bool):
+        return f"{bpm} BPM."
+    return f"{bpm}."
 
 
 def _tags_for(score: CompositionScore) -> list[str]:

@@ -48,6 +48,21 @@ svprpe measure track.wav --output measurement.json
 When `--output` is set, the command writes deterministic JSON. Without
 `--output`, it prints a compact Rich table for inspection.
 
+### `svprpe transcribe <audio>`
+
+Create a loader-valid draft `CompositionScore` YAML from one audio file. The
+physical layer is filled from `svprpe measure` sensors. Author-facing semantic
+and prose fields are intentionally left as `TODO(transcribe): ...` sentinels so
+they are easy to find and edit.
+
+```bash
+svprpe transcribe track.wav
+svprpe transcribe track.wav --output draft_score.yaml
+```
+
+The command is deterministic for the same extracted RPE. It is a drafting aid,
+not an automatic final composition brief.
+
 ### `svprpe evaluate --audio <audio> [--svp <svp.yaml>]`
 
 Evaluate audio. Without `--svp`: self-evaluate. With `--svp`: compare against external SVP.

@@ -151,6 +151,8 @@ snapshot test で固定される。校正メモに既知の癖（例: bpm 高水
 
 ### T1: draft Score 採譜（`svprpe transcribe` 相当）
 
+**Status**: IMPLEMENTED in `svprpe transcribe` (T1).
+
 **目的**: 音源 1 本から CompositionScore の**下書き**を YAML で出力する。
 
 - **物理層** — T0 の計測値で埋める
