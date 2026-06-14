@@ -135,10 +135,12 @@ svprpe --help
 - [Measurement Coverage](docs/coverage.md) — What the pipeline can measure, partially measure, and cannot measure
 - [Architecture](docs/architecture.md) — Pipeline design and module overview
 - [Metrics](docs/metrics.md) — Physical metric definitions and Pro baseline
+- [Migration Notes](docs/migration.md) — RPE schema migration: SemanticRPE 1.0→2.0 (por_surface to evidence-bearing SemanticLabel), fail-fast policy, regeneration steps
 - [CLI Reference](docs/cli.md) — Command usage
 - [Semantic CI Product V1](docs/semantic_ci_product_v1.md) — Target SVP → Expected RPE → Diff → Repair SVP core
 - [Roadmap](docs/roadmap.md) — PoC milestones (M0–M5) + Pre-prototype plan (P1–P5)
 - [Goal 1 Roadmap](docs/roadmap_goal1.md) — Quantitative observation completion plan (Q0–Q5)
+- [Learned Models Policy](docs/learned_models_policy.md) — Adopt/reject/hold policy for learned audio-annotation models (Q4'): isolation into LearnedAudioAnnotations, no mixing into rule evidence, OSS license constraints
 - [AI Music DAW Vision](docs/ai_music_daw_vision.md) — Extension track: SVP as "MIDI for AI music" standard, survivor性 framework, score-vs-performance separation, PoC (1) integration into Q0
 - [Composition Score Product Brief](docs/composition_score_product_brief.md) — Composition Score product definition: three-layer composition language, canonical schema, MVP scope, PoC 1–5 roadmap
 - [Composition PoC Planning](docs/composition_poc_planning.md) — Implementation plan for Composition Score: C1–C6 phases, design decisions
