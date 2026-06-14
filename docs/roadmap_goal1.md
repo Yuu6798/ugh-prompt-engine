@@ -110,9 +110,9 @@ Q5-2 / Q5-3（配布物）は純粋な未実装、Q2-1 は仕様自体の再ス�
 | ID | 成果物 | 受け入れ条件 |
 |---|---|---|
 | Q1-1 | `pyloudnorm` 統合 → `loudness_lufs_integrated`, `true_peak_dbfs` を `PhysicalRPE` に追加 | ITU-R BS.1770 リファレンス音源と ±0.5 LU 一致 |
-| Q1-2 | 拍子検出 — beat interval ヒストグラムから 3/4, 4/4, 6/8 を判別 | hardcode `"4/4"` の撤廃、3 曲以上の 3/4 サンプルで判別正解 |
+| Q1-2 | 拍子検出 — **beat 位置の onset strength 周期/アクセントパターン**から 3/4, 4/4, 6/8 を判別（実装済み: `compute_time_signature`, `rpe/physical_features.py`。beat-interval ヒストグラムではなく beat-level onset strength ベース） | hardcode `"4/4"` の撤廃、3 曲以上の 3/4 サンプルで判別正解 |
 | Q1-3 | BPM 信頼度の再設計 — `1 - abs(bpm-120)/120` の代わりに **CV（拍間隔の変動係数）ベース**（実装済み: `BPM_CONFIDENCE_CV_SCALE`, `rpe/physical_features.py`、`tests/test_bpm_confidence.py` が契約を pin）。半折り曖昧性の校正は目的2 [`roadmap_goal2.md`](roadmap_goal2.md) R2 で既存式に上乗せする（CV パスの書き換えではない） | 真値 ±5 BPM 以内のとき confidence > 0.7 |
-| Q1-4 | `pro_baseline.yaml` を「Pro / Loud Pop / Acoustic / EDM」の 4 セットに拡張 + ジャンル選択ロジック | scorer_rpe が `--baseline edm` 等で切替可能 |
+| Q1-4 | ジャンル別 baseline の拡張 — `pro` に加え `loud_pop` / `acoustic` / `edm` を **独立 baseline YAML** で定義（実装済み: `config/{loud_pop,acoustic,edm}_baseline.yaml`、`eval/scorer_rpe.py` の `BASELINE_CONFIGS` がプロファイル名→ファイルをマッピング。`pro_baseline.yaml` 単一ファイルの 4 セット化ではない）+ ジャンル選択ロジック | scorer_rpe が `--baseline edm` 等で切替可能 |
 
 **完了基準**: validation.md に LUFS の対 ITU 標準の差分、time_signature 推定の
 混合行列、ジャンル別スコアの妥当性が記録されている。
