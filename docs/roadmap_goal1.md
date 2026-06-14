@@ -111,7 +111,7 @@ Q5-2 / Q5-3（配布物）は純粋な未実装、Q2-1 は仕様自体の再ス�
 |---|---|---|
 | Q1-1 | `pyloudnorm` 統合 → `loudness_lufs_integrated`, `true_peak_dbfs` を `PhysicalRPE` に追加 | ITU-R BS.1770 リファレンス音源と ±0.5 LU 一致 |
 | Q1-2 | 拍子検出 — beat interval ヒストグラムから 3/4, 4/4, 6/8 を判別 | hardcode `"4/4"` の撤廃、3 曲以上の 3/4 サンプルで判別正解 |
-| Q1-3 | BPM 信頼度の再設計 — `1 - abs(bpm-120)/120` の代わりに tempo histogram の rank ベース | 真値 ±5 BPM 以内のとき confidence > 0.7 |
+| Q1-3 | BPM 信頼度の再設計 — `1 - abs(bpm-120)/120` の代わりに **CV（拍間隔の変動係数）ベース**（実装済み: `BPM_CONFIDENCE_CV_SCALE`, `rpe/physical_features.py`、`tests/test_bpm_confidence.py` が契約を pin）。半折り曖昧性の校正は目的2 [`roadmap_goal2.md`](roadmap_goal2.md) R2 で既存式に上乗せする（CV パスの書き換えではない） | 真値 ±5 BPM 以内のとき confidence > 0.7 |
 | Q1-4 | `pro_baseline.yaml` を「Pro / Loud Pop / Acoustic / EDM」の 4 セットに拡張 + ジャンル選択ロジック | scorer_rpe が `--baseline edm` 等で切替可能 |
 
 **完了基準**: validation.md に LUFS の対 ITU 標準の差分、time_signature 推定の
@@ -277,5 +277,6 @@ Q0–Q3 区間の実装は消化済み。残は CC0 corpus・校正記録の整�
 | P4: 足回り改善 | 本ロードマップでは扱わない（既存 P4 を別途参照） |
 | P5: 配布 | Q5 と統合 |
 
-目的2（再現実証）の専用ロードマップは別途 `docs/roadmap_goal2.md` として
-整備予定（未着手）。
+目的2（再現実証）の専用ロードマップは [`roadmap_goal2.md`](roadmap_goal2.md)
+（R 系列）に分離した。本書の Q1-3（BPM 信頼度）は目的2 の R2（復路誤差源の校正）
+として最優先で引かれる。
