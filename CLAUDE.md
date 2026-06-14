@@ -169,6 +169,7 @@ examples/                      # sample_input/ + expected_output/
 | [`docs/semantic_ci_product_v1.md`](docs/semantic_ci_product_v1.md) | semantic CI V1: Target SVP → Expected RPE → fixture比較 → Repair SVP |
 | [`docs/roadmap.md`](docs/roadmap.md) | PoC (達成済み) と Pre-prototype マイルストーン (P1–P5)、推奨実行順 |
 | [`docs/roadmap_goal1.md`](docs/roadmap_goal1.md) | 目的1（定量観測）完成までのフェーズ Q0–Q5、完成定義、クリティカルパス |
+| [`docs/roadmap_goal2.md`](docs/roadmap_goal2.md) | 目的2（再現実証）完成までのフェーズ R0–R5、双方向再現性の分解（grip×校正×採譜）、K/Q/T/C 各トラックを束ねる往復保存性の実証計画 |
 | [`docs/learned_models_policy.md`](docs/learned_models_policy.md) | 学習モデル音声アノテーション層の採用/不採用/保留ポリシー（Q4'）: `LearnedAudioAnnotations` への隔離原則、ルール evidence 非混入の規約、OSS ライセンス制約 |
 | [`docs/validation.md`](docs/validation.md) | Q0-5 baseline: 5 曲の対真値比較（BPM / key / segment）、Q0 完了基準のチェック、Coverage Matrix |
 | [`docs/coverage.md`](docs/coverage.md) | 計測可能 / 部分的 / 計測不可の三分割マトリクス、`rpe_score` / `ugher_score` の解釈ルール、validation データセット概要 |

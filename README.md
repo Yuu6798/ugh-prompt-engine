@@ -140,6 +140,7 @@ svprpe --help
 - [Semantic CI Product V1](docs/semantic_ci_product_v1.md) — Target SVP → Expected RPE → Diff → Repair SVP core
 - [Roadmap](docs/roadmap.md) — PoC milestones (M0–M5) + Pre-prototype plan (P1–P5)
 - [Goal 1 Roadmap](docs/roadmap_goal1.md) — Quantitative observation completion plan (Q0–Q5)
+- [Goal 2 Roadmap](docs/roadmap_goal2.md) — Reproduction-proof completion plan (R0–R5): bidirectional reproducibility decomposed (grip × calibration × transcription), round-trip preservation across the K/Q/T/C tracks
 - [Learned Models Policy](docs/learned_models_policy.md) — Adopt/reject/hold policy for learned audio-annotation models (Q4'): isolation into LearnedAudioAnnotations, no mixing into rule evidence, OSS license constraints
 - [AI Music DAW Vision](docs/ai_music_daw_vision.md) — Extension track: SVP as "MIDI for AI music" standard, survivor性 framework, score-vs-performance separation, PoC (1) integration into Q0
 - [Composition Score Product Brief](docs/composition_score_product_brief.md) — Composition Score product definition: three-layer composition language, canonical schema, MVP scope, PoC 1–5 roadmap
