@@ -7,12 +7,12 @@
       "field": "bpm",
       "source_value": 90,
       "transcribed_value": 89,
-      "diagnosis": "calibration_disagreement",
+      "diagnosis": "preserved",
       "grip": 1.614922,
       "grip_class": "tight",
       "sensor": "physical.bpm",
       "sensor_state": "working",
-      "note": "K1 grip is tight, but the working sensor disagrees."
+      "note": null
     },
     {
       "field": "key",

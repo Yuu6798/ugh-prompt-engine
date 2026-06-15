@@ -61,6 +61,8 @@ SENSOR_BLIND_SENTINELS = {
     TODO_TIME_SIGNATURE_UNDETECTED,
 }
 
+BPM_MATCH_TOLERANCE = 5.0
+
 
 @dataclass(frozen=True)
 class GripRecord:
@@ -178,7 +180,7 @@ def _values_match(field: str, source_value: Any, transcribed_value: Any) -> bool
         return (
             source_number is not None
             and transcribed_number is not None
-            and round(source_number) == round(transcribed_number)
+            and abs(source_number - transcribed_number) <= BPM_MATCH_TOLERANCE
         )
     if field in {"active_rate_target", "valley_depth_target"}:
         source_range = _parse_numeric_range(source_value)

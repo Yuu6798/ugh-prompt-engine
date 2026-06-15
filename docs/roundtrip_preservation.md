@@ -30,18 +30,20 @@ Snapshot fixtures live in `examples/roundtrip/*_roundtrip.json`.
 | source | preserved | sensor_blind | knob_dead | calibration_disagreement |
 |---|---|---|---|---|
 | `synth_01_roundtrip_source` | bpm, key, brightness | time_signature, stereo_width | active_rate_target, valley_depth_target | - |
-| `synth_02_roundtrip_source` | key, brightness | time_signature, stereo_width | active_rate_target, valley_depth_target | bpm |
-| `synth_03_roundtrip_source` | key, brightness | time_signature, stereo_width | active_rate_target, valley_depth_target | bpm |
+| `synth_02_roundtrip_source` | bpm, key, brightness | time_signature, stereo_width | active_rate_target, valley_depth_target | - |
+| `synth_03_roundtrip_source` | bpm, key, brightness | time_signature, stereo_width | active_rate_target, valley_depth_target | - |
 | `synth_04_roundtrip_source` | key | time_signature, stereo_width | active_rate_target, valley_depth_target | bpm, brightness |
-| `synth_05_roundtrip_source` | key | time_signature, stereo_width | active_rate_target, valley_depth_target | bpm, brightness |
+| `synth_05_roundtrip_source` | bpm, key | time_signature, stereo_width | active_rate_target, valley_depth_target | brightness |
 
 ## K1 Cross-Check
 
 - `key` is tight in K1 and is preserved in all five deterministic roundtrips.
-- `bpm` is tight in K1, but four roundtrips surface
-  `calibration_disagreement`. This matches the known tempo-calibration risk
-  tracked in Q1-3/R2: the harness can surface the mismatch, but should not tune
-  the BPM estimator inside R0.
+- `bpm` is tight in K1 and is preserved when the roundtrip delta is within the
+  Q1-3 tolerance (`|delta| <= 5 BPM`). `synth_04` still surfaces
+  `calibration_disagreement` because its measured delta is far outside that
+  tolerance. This is the known tempo-calibration risk tracked in Q1-3/R2: the
+  harness can surface the mismatch, but should not tune the BPM estimator inside
+  R0.
 - `brightness` uses the canonical spectral-centroid sensor. Dark targets are
   preserved in the first three examples; bright targets surface
   `calibration_disagreement` in the last two because the deterministic performer

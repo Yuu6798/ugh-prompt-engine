@@ -96,6 +96,24 @@ def test_diagnosis_uses_grip_map_data():
     assert _field(tight_report, "active_rate_target").diagnosis == "calibration_disagreement"
 
 
+def test_bpm_roundtrip_uses_five_bpm_tolerance():
+    source = _load_source()
+
+    within_tolerance = diagnose_roundtrip(
+        source,
+        _with_physical(source, bpm=source.physical.bpm + 5),
+        grip_map=_grips(),
+    )
+    beyond_tolerance = diagnose_roundtrip(
+        source,
+        _with_physical(source, bpm=source.physical.bpm + 6),
+        grip_map=_grips(),
+    )
+
+    assert _field(within_tolerance, "bpm").diagnosis == "preserved"
+    assert _field(beyond_tolerance, "bpm").diagnosis == "calibration_disagreement"
+
+
 def test_performer_roundtrip_source_is_byte_deterministic():
     score = _load_source()
 
