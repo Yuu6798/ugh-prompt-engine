@@ -1,9 +1,10 @@
 """Regression tests for deterministic Q0-1 synthetic sample audio."""
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 import sys
-import shutil
 from pathlib import Path
 
 import soundfile as sf
@@ -14,6 +15,12 @@ from svp_rpe.io.audio_loader import load_audio
 ROOT = Path(__file__).resolve().parents[1]
 SAMPLE_DIR = ROOT / "examples" / "sample_input"
 GENERATOR = ROOT / "scripts" / "generate_synth_samples.py"
+
+
+def _env_without_pythonpath() -> dict[str, str]:
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    return env
 
 
 def _ground_truth_rows() -> list[dict]:
@@ -70,6 +77,7 @@ def test_synth_sample_verify_command_passes() -> None:
     result = subprocess.run(
         [sys.executable, str(GENERATOR), "--verify"],
         cwd=ROOT,
+        env=_env_without_pythonpath(),
         text=True,
         capture_output=True,
         check=False,
@@ -93,6 +101,7 @@ def test_synth_sample_verify_rejects_metadata_mismatch(tmp_path: Path) -> None:
     result = subprocess.run(
         [sys.executable, str(GENERATOR), "--output-dir", str(tmp_path), "--verify"],
         cwd=ROOT,
+        env=_env_without_pythonpath(),
         text=True,
         capture_output=True,
         check=False,

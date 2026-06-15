@@ -11,8 +11,9 @@ import numpy as np
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+for import_root in (ROOT, ROOT / "src"):
+    if str(import_root) not in sys.path:
+        sys.path.insert(0, str(import_root))
 
 from svp_rpe.perform import SAMPLE_RATE, _adsr_envelope, sha256_bytes, wav_bytes  # noqa: E402
 
