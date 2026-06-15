@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from svp_rpe.compose.models import CompositionScore
+from svp_rpe.perform import parse_key
 from svp_rpe.roundtrip.models import RoundtripField, RoundtripReport
 from svp_rpe.transcribe import (
     TODO_BPM_UNDETECTED,
@@ -184,6 +185,8 @@ def _values_match(field: str, source_value: Any, transcribed_value: Any) -> bool
             and transcribed_number is not None
             and abs(source_number - transcribed_number) <= BPM_MATCH_TOLERANCE
         )
+    if field == "key":
+        return _keys_match(source_value, transcribed_value)
     if field in {"active_rate_target", "valley_depth_target"}:
         source_range = _parse_numeric_range(source_value)
         transcribed_range = _parse_numeric_range(transcribed_value)
@@ -238,6 +241,29 @@ def _number(value: Any) -> float | None:
     try:
         return float(value)
     except (TypeError, ValueError):
+        return None
+
+
+def _keys_match(source_value: Any, transcribed_value: Any) -> bool:
+    source_key = _parse_key_label(source_value)
+    transcribed_key = _parse_key_label(transcribed_value)
+    if source_key is not None and transcribed_key is not None:
+        return source_key == transcribed_key
+    return _normalize_label(source_value) == _normalize_label(transcribed_value)
+
+
+def _parse_key_label(value: Any) -> tuple[int, str] | None:
+    if not isinstance(value, str):
+        return None
+    normalized = (
+        value.strip()
+        .replace("\u266f", "#")
+        .replace("\uff03", "#")
+        .replace("\u266d", "b")
+    )
+    try:
+        return parse_key(normalized)
+    except ValueError:
         return None
 
 

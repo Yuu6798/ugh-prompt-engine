@@ -125,6 +125,21 @@ def test_bpm_roundtrip_uses_five_bpm_tolerance():
     assert _field(beyond_tolerance, "bpm").diagnosis == "calibration_disagreement"
 
 
+def test_key_roundtrip_normalizes_enharmonic_spellings():
+    source = _with_physical(_load_source(), key="Eb major")
+    transcribed = _with_physical(source, key="D# major")
+    unicode_source = _with_physical(_load_source(), key="F\u266f minor")
+    unicode_transcribed = _with_physical(unicode_source, key="F# minor")
+
+    flat_report = diagnose_roundtrip(source, transcribed, grip_map=_grips())
+    sharp_report = diagnose_roundtrip(
+        unicode_source, unicode_transcribed, grip_map=_grips()
+    )
+
+    assert _field(flat_report, "key").diagnosis == "preserved"
+    assert _field(sharp_report, "key").diagnosis == "preserved"
+
+
 def test_performer_roundtrip_source_is_byte_deterministic():
     score = _load_source()
 
