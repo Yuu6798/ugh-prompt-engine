@@ -71,6 +71,11 @@ grep-able assertion). Target task size ≈ 0.5–2 days. Branch name is
 `codex/<topic>`; Done When requires `ruff check .` + `pytest -q --tb=short`
 green and a Completion Summary PR body (`AGENTS.md §2`).
 
+**Output the entire memo inside a single fenced code block** so the user can
+copy-paste it verbatim into Codex (use an outer ```` ```` ```` fence when the
+memo itself contains ``` code fences). The memo body is the deliverable; keep
+prose outside the block to a minimum.
+
 ## 3. Closeout
 
 Hand the memo to the user (it is paste-ready for Codex). Note any §1a grep
