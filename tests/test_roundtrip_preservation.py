@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import json
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
 from svp_rpe.compose import load_composition_score
 from svp_rpe.compose.models import CompositionScore
 from svp_rpe.perform import FAITHFUL_TAKE, perform, wav_bytes
-from svp_rpe.roundtrip import GripRecord, diagnose_roundtrip, run_roundtrip
+from svp_rpe.roundtrip import GripRecord, diagnose_roundtrip, load_grip_map, run_roundtrip
 from svp_rpe.transcribe import TODO_BRIGHTNESS_NEUTRAL, TODO_STEREO_UNMEASURED
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -94,6 +95,16 @@ def test_diagnosis_uses_grip_map_data():
 
     assert _field(dead_report, "active_rate_target").diagnosis == "knob_dead"
     assert _field(tight_report, "active_rate_target").diagnosis == "calibration_disagreement"
+
+
+def test_default_grip_map_is_packaged_resource():
+    resource = files("svp_rpe.roundtrip.data").joinpath("expected_grip.json")
+
+    assert resource.is_file()
+    records = load_grip_map()
+
+    assert records["bpm"].classification == "tight"
+    assert records["active_rate_target"].classification == "dead"
 
 
 def test_bpm_roundtrip_uses_five_bpm_tolerance():

@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from importlib.resources import files
+from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -94,11 +96,11 @@ def diagnose_roundtrip(
     )
 
 
-def load_grip_map(path: Path | None = None) -> dict[str, GripRecord]:
+def load_grip_map(path: Path | Traversable | None = None) -> dict[str, GripRecord]:
     """Load the K1 grip map used as the control-track reference."""
 
-    fixture_path = path or _default_grip_path()
-    payload = json.loads(fixture_path.read_text(encoding="utf-8"))
+    fixture = path or _default_grip_resource()
+    payload = json.loads(fixture.read_text(encoding="utf-8"))
     records: dict[str, GripRecord] = {}
     for item in payload.get("results", []):
         knob = str(item["knob"])
@@ -251,5 +253,5 @@ def _score_id(score: CompositionScore) -> str:
     return _normalize_label(score.meta.title).replace(" ", "-") or "score"
 
 
-def _default_grip_path() -> Path:
-    return Path(__file__).resolve().parents[3] / "examples" / "control" / "k1" / "expected_grip.json"
+def _default_grip_resource() -> Traversable:
+    return files("svp_rpe.roundtrip.data").joinpath("expected_grip.json")
