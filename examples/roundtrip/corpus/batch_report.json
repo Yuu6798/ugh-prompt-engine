@@ -80,7 +80,8 @@
       ],
       "notes": [
         "Observation log from docs/roundtrip_case_studies.md section 1; original audio is not committed.",
-        "Composition prompt carried BPM/key/brightness as explicit rendered fields."
+        "Composition prompt carried BPM/key/brightness as explicit rendered fields.",
+        "R1 box-only scope: this BPM-problem case is not R2-calibratable until a saved audio artifact and hash are supplied."
       ]
     },
     {
@@ -119,7 +120,8 @@
       ],
       "notes": [
         "Observation log from docs/roundtrip_case_studies.md section 1; original audio is not committed.",
-        "175 BPM was observed around the 89.1 BPM attractor in the archived measurement."
+        "175 BPM was observed around the 89.1 BPM attractor in the archived measurement.",
+        "R1 box-only scope: this BPM-problem case is not R2-calibratable until a saved audio artifact and hash are supplied."
       ]
     },
     {

@@ -195,6 +195,9 @@ R1 で §1 / §3 の 4 ケースを
 [`examples/roundtrip/corpus/manifest.yaml`](../examples/roundtrip/corpus/manifest.yaml)
 へ構造化した。音源が未コミットのため、これらは `audio_locator` / `audio_hash` を持たない
 `observation_log` として保存し、バッチ実行では記録済み `measured` を転記する。
+特に J-rock / J-ebm の 175→89 BPM 問題ケースは、問題の観測ログとして残すだけで、
+R2 の alternate BPM estimator を再実行できる calibratable artifact ではない。R2-1 を
+進めるには、人間トラックで保存済み音源 + SHA-256 hash を追加する必要がある。
 
 同 manifest には、コミット済み CC0 synth 音源
 `examples/sample_input/synth_05_fast_bright_d_major.wav` を backing にした
