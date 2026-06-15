@@ -1,9 +1,15 @@
 """Pydantic models for author-facing Composition Score YAML."""
 from __future__ import annotations
 
-from typing import Any, List, Literal
+from typing import Any, List, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_serializer
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 _TRANSCRIBE_TODO_PREFIX = "TODO(transcribe):"
 FixityState = Literal["locked", "unlocked"]
@@ -113,6 +119,22 @@ class CompositionScore(CompositionModel):
             )
         return dict(value)
 
+    @model_validator(mode="after")
+    def validate_fixity_matches_physical_values(self) -> Self:
+        if self.fixity is None:
+            return self
+        mismatches = [
+            field
+            for field, state in self.fixity.items()
+            if state != _fixity_state_for_value(getattr(self.physical, field))
+        ]
+        if mismatches:
+            raise ValueError(
+                "fixity states must match physical TODO(transcribe): state; "
+                f"mismatched keys: {', '.join(sorted(mismatches))}"
+            )
+        return self
+
     @model_serializer(mode="wrap")
     def serialize_without_empty_fixity(self, handler: Any) -> dict[str, Any]:
         data = handler(self)
@@ -127,3 +149,11 @@ class GeneratedPrompt(CompositionModel):
     tags: List[str]
     negative_tags: List[str]
     dropped_elements: List[str]
+
+
+def _fixity_state_for_value(value: Any) -> FixityState:
+    return "unlocked" if _is_transcribe_todo(value) else "locked"
+
+
+def _is_transcribe_todo(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith(_TRANSCRIBE_TODO_PREFIX)

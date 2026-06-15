@@ -79,8 +79,8 @@ def test_valid_fixity_is_accepted() -> None:
         "time_signature": "locked",
         "active_rate_target": "locked",
         "valley_depth_target": "locked",
-        "brightness": "unlocked",
-        "stereo_width": "unlocked",
+        "brightness": "locked",
+        "stereo_width": "locked",
     }
 
     score = CompositionScore.model_validate(data)
@@ -111,6 +111,40 @@ def test_fixity_partial_map_is_rejected() -> None:
 
     with pytest.raises(ValidationError):
         CompositionScore.model_validate(data)
+
+
+def test_fixity_stale_state_is_rejected() -> None:
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["fixity"] = {
+        "bpm": "unlocked",
+        "key": "locked",
+        "time_signature": "locked",
+        "active_rate_target": "locked",
+        "valley_depth_target": "locked",
+        "brightness": "locked",
+        "stereo_width": "locked",
+    }
+
+    with pytest.raises(ValidationError):
+        CompositionScore.model_validate(data)
+
+
+def test_fixity_unlocked_matches_todo_state() -> None:
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["physical"]["bpm"] = "TODO(transcribe): bpm undetected"
+    data["fixity"] = {
+        "bpm": "unlocked",
+        "key": "locked",
+        "time_signature": "locked",
+        "active_rate_target": "locked",
+        "valley_depth_target": "locked",
+        "brightness": "locked",
+        "stereo_width": "locked",
+    }
+
+    score = CompositionScore.model_validate(data)
+
+    assert score.fixity["bpm"] == "unlocked"
 
 
 def test_field_fixity_derives_from_todo_sentinels_when_absent() -> None:
