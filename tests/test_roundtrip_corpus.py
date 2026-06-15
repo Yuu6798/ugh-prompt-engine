@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from svp_rpe.perform import sha256_bytes
 from svp_rpe.roundtrip import classify_take, load_manifest, run_corpus_batch
+from svp_rpe.roundtrip.compare import values_match
 from svp_rpe.roundtrip.manifest import RoundtripManifest, RoundtripTake, resolve_audio_path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -119,6 +120,12 @@ def test_resolver_rejects_programmatic_artifact_uri_locators():
 
     with pytest.raises(ValueError, match="artifact URI"):
         resolve_audio_path(take, repo_root=ROOT)
+
+
+def test_range_targets_match_raw_sensor_points():
+    assert values_match("active_rate_target", "0.97-1.00", 0.992)
+    assert values_match("valley_depth_target", 0.992, "0.97-1.00")
+    assert not values_match("active_rate_target", "0.97-1.00", 0.95)
 
 
 def test_classify_take_demotes_missing_or_hash_mismatched_audio():

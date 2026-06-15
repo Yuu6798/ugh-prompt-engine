@@ -31,9 +31,17 @@ def values_match(field: str, expected_value: Any, observed_value: Any) -> bool:
     if field in {"active_rate_target", "valley_depth_target"}:
         expected_range = parse_numeric_range(expected_value)
         observed_range = parse_numeric_range(observed_value)
-        if expected_range is None or observed_range is None:
-            return str(expected_value) == str(observed_value)
-        return ranges_overlap(expected_range, observed_range)
+        if expected_range is not None and observed_range is not None:
+            return ranges_overlap(expected_range, observed_range)
+        if expected_range is not None:
+            observed_point = number(observed_value)
+            if observed_point is not None:
+                return point_in_range(observed_point, expected_range)
+        if observed_range is not None:
+            expected_point = number(expected_value)
+            if expected_point is not None:
+                return point_in_range(expected_point, observed_range)
+        return str(expected_value) == str(observed_value)
     return normalize_label(expected_value) == normalize_label(observed_value)
 
 
@@ -56,6 +64,12 @@ def ranges_overlap(first: tuple[float, float], second: tuple[float, float]) -> b
     """Return whether two inclusive numeric ranges overlap."""
 
     return max(first[0], second[0]) <= min(first[1], second[1])
+
+
+def point_in_range(value: float, value_range: tuple[float, float]) -> bool:
+    """Return whether a numeric sensor point falls inside an inclusive range."""
+
+    return value_range[0] <= value <= value_range[1]
 
 
 def number(value: Any) -> float | None:
