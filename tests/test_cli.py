@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -318,11 +319,14 @@ def test_roundtrip_corpus_command_outputs_json(monkeypatch):
     import svp_rpe.roundtrip as roundtrip_module
 
     def fake_load_manifest(path):
-        assert path == "examples/roundtrip/corpus/manifest.yaml"
+        assert Path(path).as_posix().endswith(
+            "examples/roundtrip/corpus/manifest.yaml"
+        )
         return object()
 
-    def fake_run_corpus_batch(manifest):
+    def fake_run_corpus_batch(manifest, *, repo_root):
         assert manifest is not None
+        assert Path(repo_root).resolve() == Path.cwd().resolve()
         return CorpusBatchReport(
             takes=[
                 {

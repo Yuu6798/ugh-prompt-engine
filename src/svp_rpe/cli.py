@@ -633,8 +633,9 @@ def roundtrip_corpus(
         run_corpus_batch,
     )
 
-    corpus = load_manifest(manifest)
-    report = run_corpus_batch(corpus)
+    manifest_path = Path(manifest)
+    corpus = load_manifest(manifest_path)
+    report = run_corpus_batch(corpus, repo_root=_manifest_checkout_root(manifest_path))
     if output_format == "json":
         content = json.dumps(
             report.model_dump(mode="json"),
@@ -648,6 +649,17 @@ def roundtrip_corpus(
         Path(output).write_text(content, encoding="utf-8")
     else:
         typer.echo(content)
+
+
+def _manifest_checkout_root(manifest_path: str | Path) -> Path:
+    """Infer the checkout root for repo-relative locators in a manifest."""
+
+    resolved = Path(manifest_path).resolve()
+    start = resolved if resolved.is_dir() else resolved.parent
+    for candidate in (start, *start.parents):
+        if (candidate / ".git").exists() or (candidate / "pyproject.toml").is_file():
+            return candidate
+    return Path.cwd().resolve()
 
 
 if __name__ == "__main__":
