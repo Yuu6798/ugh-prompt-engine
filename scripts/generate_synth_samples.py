@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
-import io
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,10 +9,13 @@ from typing import Iterable
 
 import numpy as np
 import yaml
-from scipy.io import wavfile
 
-SAMPLE_RATE = 44100
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from svp_rpe.perform import SAMPLE_RATE, _adsr_envelope, sha256_bytes, wav_bytes  # noqa: E402
+
 DEFAULT_OUTPUT_DIR = ROOT / "examples" / "sample_input"
 
 NOTE_FREQUENCIES = {
@@ -293,17 +294,6 @@ def _time_axis(duration_sec: float) -> np.ndarray:
     return np.arange(int(round(duration_sec * SAMPLE_RATE)), dtype=np.float64) / SAMPLE_RATE
 
 
-def _adsr_envelope(length: int, attack_sec: float, release_sec: float) -> np.ndarray:
-    envelope = np.ones(length, dtype=np.float64)
-    attack = min(length, int(round(attack_sec * SAMPLE_RATE)))
-    release = min(length, int(round(release_sec * SAMPLE_RATE)))
-    if attack > 0:
-        envelope[:attack] *= np.linspace(0.0, 1.0, attack, endpoint=False)
-    if release > 0:
-        envelope[-release:] *= np.linspace(1.0, 0.0, release, endpoint=False)
-    return envelope
-
-
 def _chord_signal(
     t: np.ndarray,
     chord: Iterable[str],
@@ -374,16 +364,6 @@ def render_sample(spec: SampleSpec) -> np.ndarray:
     if peak:
         signal = signal / peak * 0.82
     return np.round(signal * 32767.0).astype(np.int16)
-
-
-def wav_bytes(samples: np.ndarray) -> bytes:
-    buffer = io.BytesIO()
-    wavfile.write(buffer, SAMPLE_RATE, samples)
-    return buffer.getvalue()
-
-
-def sha256_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
 
 
 def ground_truth_rows() -> list[dict]:

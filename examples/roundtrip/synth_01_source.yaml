@@ -1,0 +1,43 @@
+meta:
+  title: synth_01_roundtrip_source
+  version: "0.1"
+semantic:
+  core: calm dark pad
+  grv:
+    primary: acoustic
+    secondary: slow pad
+  delta_e:
+    overall: flat
+  avoid: []
+physical:
+  bpm: 60
+  key: C major
+  time_signature: 4/4
+  active_rate_target: 0.80-0.85
+  valley_depth_target: 0.30-0.40
+  brightness: dark
+  stereo_width: wide
+structure:
+  - section: intro
+    bars: 1
+    role: establish the tonic
+    physical: low density, dark pad
+  - section: body
+    bars: 1
+    role: hold the center
+    physical: sparse pulse, dark
+  - section: outro
+    bars: 1
+    role: fade out
+    physical: low density, silence tail
+rendering:
+  target_backend: external
+  prompt_max_chars: 650
+  priority:
+    - semantic.core
+    - semantic.grv
+    - physical.bpm
+    - physical.key
+    - structure
+    - semantic.avoid
+    - physical.optional

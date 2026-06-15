@@ -1,0 +1,43 @@
+meta:
+  title: synth_02_roundtrip_source
+  version: "0.1"
+semantic:
+  core: minor pulsing groove
+  grv:
+    primary: pro
+    secondary: minor pulse
+  delta_e:
+    overall: gradual_build
+  avoid: []
+physical:
+  bpm: 90
+  key: A minor
+  time_signature: 4/4
+  active_rate_target: 0.80-0.85
+  valley_depth_target: 0.30-0.40
+  brightness: dark
+  stereo_width: wide
+structure:
+  - section: intro
+    bars: 1
+    role: set the pulse
+    physical: sparse pulse, low density
+  - section: verse
+    bars: 1
+    role: develop the motif
+    physical: mid density, dark
+  - section: outro
+    bars: 1
+    role: release
+    physical: low density, silence tail
+rendering:
+  target_backend: external
+  prompt_max_chars: 650
+  priority:
+    - semantic.core
+    - semantic.grv
+    - physical.bpm
+    - physical.key
+    - structure
+    - semantic.avoid
+    - physical.optional

@@ -581,5 +581,38 @@ def audit(
         typer.echo(content)
 
 
+@app.command("roundtrip")
+def roundtrip(
+    composition_score: str = typer.Argument(..., help="Path to Composition Score YAML"),
+    output_format: str = typer.Option(
+        "text",
+        "--format",
+        click_type=click.Choice(["text", "json"]),
+        help="Output format: text | json",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output", help="Output file path"),
+) -> None:
+    """Run the deterministic R0 score -> audio -> draft score roundtrip."""
+
+    from svp_rpe.compose import load_composition_score
+    from svp_rpe.roundtrip import render_roundtrip_text, run_roundtrip
+
+    score = load_composition_score(composition_score)
+    report = run_roundtrip(score)
+    if output_format == "json":
+        content = json.dumps(
+            report.model_dump(mode="json"),
+            ensure_ascii=False,
+            indent=2,
+        )
+    else:
+        content = render_roundtrip_text(report)
+
+    if output:
+        Path(output).write_text(content, encoding="utf-8")
+    else:
+        typer.echo(content)
+
+
 if __name__ == "__main__":
     app()

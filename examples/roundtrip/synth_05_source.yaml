@@ -1,0 +1,43 @@
+meta:
+  title: synth_05_roundtrip_source
+  version: "0.1"
+semantic:
+  core: fast bright major drive
+  grv:
+    primary: edm
+    secondary: bright drive
+  delta_e:
+    overall: sudden_lift
+  avoid: []
+physical:
+  bpm: 170
+  key: D major
+  time_signature: 4/4
+  active_rate_target: 0.80-0.85
+  valley_depth_target: 0.30-0.40
+  brightness: bright
+  stereo_width: wide
+structure:
+  - section: intro
+    bars: 1
+    role: start fast
+    physical: sparse pulse, bright
+  - section: chorus
+    bars: 1
+    role: peak
+    physical: full energy, release
+  - section: outro
+    bars: 1
+    role: end cleanly
+    physical: low density, silence tail
+rendering:
+  target_backend: external
+  prompt_max_chars: 650
+  priority:
+    - semantic.core
+    - semantic.grv
+    - physical.bpm
+    - physical.key
+    - structure
+    - semantic.avoid
+    - physical.optional

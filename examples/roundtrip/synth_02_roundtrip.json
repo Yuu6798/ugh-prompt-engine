@@ -1,0 +1,84 @@
+{
+  "schema_version": "1.0",
+  "source_id": "synth_02_roundtrip_source",
+  "transcribed_id": "roundtrip",
+  "fields": [
+    {
+      "field": "bpm",
+      "source_value": 90,
+      "transcribed_value": 89,
+      "diagnosis": "calibration_disagreement",
+      "grip": 1.614922,
+      "grip_class": "tight",
+      "sensor": "physical.bpm",
+      "sensor_state": "working",
+      "note": "K1 grip is tight, but the working sensor disagrees."
+    },
+    {
+      "field": "key",
+      "source_value": "A minor",
+      "transcribed_value": "A minor",
+      "diagnosis": "preserved",
+      "grip": 1.0,
+      "grip_class": "tight",
+      "sensor": "f\"{key} {mode}\"",
+      "sensor_state": "working",
+      "note": null
+    },
+    {
+      "field": "time_signature",
+      "source_value": "4/4",
+      "transcribed_value": "TODO(transcribe): time signature undetected",
+      "diagnosis": "sensor_blind",
+      "grip": null,
+      "grip_class": null,
+      "sensor": "physical.time_signature",
+      "sensor_state": "blind",
+      "note": "TODO(transcribe): time signature undetected"
+    },
+    {
+      "field": "brightness",
+      "source_value": "dark",
+      "transcribed_value": "dark",
+      "diagnosis": "preserved",
+      "grip": 223.525437,
+      "grip_class": "tight",
+      "sensor": "physical.spectral_centroid",
+      "sensor_state": "working",
+      "note": null
+    },
+    {
+      "field": "active_rate_target",
+      "source_value": "0.80-0.85",
+      "transcribed_value": "0.98-1.00",
+      "diagnosis": "knob_dead",
+      "grip": -1.140306,
+      "grip_class": "dead",
+      "sensor": "physical.active_rate",
+      "sensor_state": "working",
+      "note": "K1 grip map classifies this control as dead."
+    },
+    {
+      "field": "valley_depth_target",
+      "source_value": "0.30-0.40",
+      "transcribed_value": "0.10-0.14",
+      "diagnosis": "knob_dead",
+      "grip": 0.056881,
+      "grip_class": "dead",
+      "sensor": "physical.valley_depth",
+      "sensor_state": "working",
+      "note": "K1 grip map classifies this control as dead."
+    },
+    {
+      "field": "stereo_width",
+      "source_value": "wide",
+      "transcribed_value": "TODO(transcribe): stereo unmeasured",
+      "diagnosis": "sensor_blind",
+      "grip": null,
+      "grip_class": null,
+      "sensor": "physical.stereo_profile.width",
+      "sensor_state": "blind",
+      "note": "stereo label bands are not calibrated for T1 drafts."
+    }
+  ]
+}

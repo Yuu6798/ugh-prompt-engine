@@ -145,6 +145,9 @@ src/svp_rpe/
 └── utils/
     └── config_loader.py       # YAML config loading
 
+|-- perform/                    # Deterministic CompositionScore performer
+|-- roundtrip/                  # R0 roundtrip preservation diagnostics
+
 config/
 ├── pro_baseline.yaml          # RPE Pro baseline values
 ├── semantic_rules.yaml        # physical → semantic mapping rules
@@ -165,7 +168,7 @@ examples/                      # sample_input/ + expected_output/
 | [`docs/architecture.md`](docs/architecture.md) | パイプライン三層設計、モジュール責務、config 役割、v0.2 既知の制限 |
 | [`docs/metrics.md`](docs/metrics.md) | RPE 物理指標の定義式、Pro baseline 値、UGHer 4 成分スコアリング、valley 3 戦略 |
 | [`docs/migration.md`](docs/migration.md) | RPE スキーマ移行ノート: SemanticRPE 1.0→2.0（`por_surface` を evidence-bearing `SemanticLabel` 化）、fail-fast 移行方針、RPE 再生成手順 |
-| [`docs/cli.md`](docs/cli.md) | 10 コマンドのリファレンス: extract / generate / compose / measure / evaluate / compare / ci-check / run / batch / audit |
+| [`docs/cli.md`](docs/cli.md) | CLI コマンドのリファレンス: extract / generate / compose / measure / transcribe / evaluate / compare / ci-check / run / batch / audit / roundtrip |
 | [`docs/semantic_ci_product_v1.md`](docs/semantic_ci_product_v1.md) | semantic CI V1: Target SVP → Expected RPE → fixture比較 → Repair SVP |
 | [`docs/roadmap.md`](docs/roadmap.md) | PoC (達成済み) と Pre-prototype マイルストーン (P1–P5)、推奨実行順 |
 | [`docs/roadmap_goal1.md`](docs/roadmap_goal1.md) | 目的1（定量観測）完成までのフェーズ Q0–Q5、完成定義、クリティカルパス |
@@ -180,6 +183,7 @@ examples/                      # sample_input/ + expected_output/
 | [`docs/controllability_poc.md`](docs/controllability_poc.md) | 制御トラック PoC 計画 (K 系列): パラメータ=効くツマミの読み替え、grip 効果量の定義、K0 最小方法実証〜K2 Suno 転移 |
 | [`docs/score_centric_planning.md`](docs/score_centric_planning.md) | 楽譜中心の再編成: 双方向再現性の通底原理、採譜トラック (T 系列) T0–T2、Q 系列の計器校正への再定義、意味層センサーの将来枠 |
 | [`docs/roundtrip_case_studies.md`](docs/roundtrip_case_studies.md) | Suno 往復テストケース結果 (個別ログ): 計器の有効帯域、物理固定・意味差替の制御性 A/B、双方向性成功 (BPM 留保)、BPM 89.1 アトラクタ疑い |
+| [`docs/roundtrip_preservation.md`](docs/roundtrip_preservation.md) | R0 deterministic roundtrip preservation: Score -> perform -> extract -> draft Score diagnostics and K1 cross-check |
 
 ## ドキュメント管理ポリシー
 
