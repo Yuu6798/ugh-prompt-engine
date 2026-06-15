@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from svp_rpe.compose import (
     CompositionScore,
     composition_to_target_svp,
+    field_fixity,
     load_composition_score,
 )
 from svp_rpe.semantic_ci import TargetSVP, stable_hash
@@ -35,6 +36,8 @@ def test_load_composition_score_reads_yaml() -> None:
     score = load_composition_score(SAMPLE_PATH)
 
     assert isinstance(score, CompositionScore)
+    assert score.fixity is None
+    assert "fixity" not in score.model_dump(mode="json")
     assert score.physical.bpm == 128
     assert len(score.structure) == 4
 
@@ -66,6 +69,52 @@ def test_arbitrary_bpm_strings_are_rejected(bpm: str) -> None:
 
     with pytest.raises(ValidationError):
         CompositionScore.model_validate(data)
+
+
+def test_valid_fixity_is_accepted() -> None:
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["fixity"] = {
+        "bpm": "locked",
+        "key": "locked",
+        "time_signature": "locked",
+        "active_rate_target": "locked",
+        "valley_depth_target": "locked",
+        "brightness": "unlocked",
+        "stereo_width": "unlocked",
+    }
+
+    score = CompositionScore.model_validate(data)
+
+    assert score.fixity == data["fixity"]
+    assert field_fixity(score) == data["fixity"]
+
+
+def test_fixity_unknown_key_is_rejected() -> None:
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["fixity"] = {"section": "locked"}
+
+    with pytest.raises(ValidationError):
+        CompositionScore.model_validate(data)
+
+
+def test_fixity_unknown_value_is_rejected() -> None:
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["fixity"] = {"bpm": "measured"}
+
+    with pytest.raises(ValidationError):
+        CompositionScore.model_validate(data)
+
+
+def test_field_fixity_derives_from_todo_sentinels_when_absent() -> None:
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["physical"]["bpm"] = "TODO(transcribe): bpm undetected"
+    data["physical"]["stereo_width"] = "TODO(transcribe): stereo unmeasured"
+
+    fixity = field_fixity(CompositionScore.model_validate(data))
+
+    assert fixity["bpm"] == "unlocked"
+    assert fixity["key"] == "locked"
+    assert fixity["stereo_width"] == "unlocked"
 
 
 def test_composition_to_target_svp_maps_required_fields() -> None:

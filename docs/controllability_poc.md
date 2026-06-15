@@ -361,8 +361,9 @@ MusicGen 出力に対し、Composition Score の物理ツマミ 2 個（bpm / br
 - **density_curve のセンサー定義**: 時間勾配をどの窓・どの統計量で取るか（スキーマ追加後に確定）
 - **K2 の Suno 手動運用**: 生成バッチの記録様式（manifest テンプレート、何サンプルで
   転移を「確認」とみなすか）
-- **fixity 型の導入**: grip 地図が固まった後、CompositionScore にロック/アンロックの
-  型（fixity）を持たせるスキーマ再設計（制御サーフェス化の本丸、本 PoC の下流）
+- ~~**fixity 型の導入**~~ → **実装済み（R5）**: `CompositionScore.fixity` と
+  `field_fixity(score)` で、物理欄ごとの locked/unlocked を表現する。新フィールド追加時は
+  `AGENTS.md` の Schema Admission 手順で fixity と往復一致の実測 or 実測計画を必須化する
 
 ---
 

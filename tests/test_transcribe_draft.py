@@ -7,7 +7,7 @@ import pytest
 from typer.testing import CliRunner
 
 from svp_rpe.cli import app
-from svp_rpe.compose import load_composition_score
+from svp_rpe.compose import field_fixity, load_composition_score
 from svp_rpe.rpe.extractor import extract_rpe_from_file
 from svp_rpe.rpe.models import (
     PhysicalRPE,
@@ -98,6 +98,9 @@ def test_all_synth_drafts_are_loader_valid(tmp_path: Path) -> None:
         assert loaded.semantic.avoid == []
         assert loaded.physical.brightness in {"dark", "bright"}
         assert loaded.physical.stereo_width == TODO_STEREO_UNMEASURED
+        assert loaded.fixity is not None
+        assert loaded.fixity["bpm"] == "locked"
+        assert loaded.fixity["stereo_width"] == "unlocked"
         assert _parse_numeric_range(loaded.physical.active_rate_target) is not None
         assert _parse_numeric_range(loaded.physical.valley_depth_target) is not None
         assert all(section.role == TODO_AUTHOR_INPUT for section in loaded.structure)
@@ -114,12 +117,22 @@ def test_draft_score_maps_t0_measurements_to_physical_layer() -> None:
     assert score.physical.brightness == "dark"
     assert score.physical.active_rate_target == "0.96-1.00"
     assert score.physical.valley_depth_target == "0.16-0.20"
+    assert field_fixity(score) == {
+        "bpm": "locked",
+        "key": "locked",
+        "time_signature": "locked",
+        "active_rate_target": "locked",
+        "valley_depth_target": "locked",
+        "brightness": "locked",
+        "stereo_width": "unlocked",
+    }
 
 
 def test_draft_score_marks_measured_stereo_as_band_undefined() -> None:
     score = draft_score(_make_bundle(stereo_width=0.72))
 
     assert score.physical.stereo_width == TODO_STEREO_BAND_UNDEFINED
+    assert field_fixity(score)["stereo_width"] == "unlocked"
 
 
 def test_draft_score_marks_neutral_brightness_as_todo(tmp_path: Path) -> None:
@@ -129,6 +142,8 @@ def test_draft_score_marks_neutral_brightness_as_todo(tmp_path: Path) -> None:
     score_path.write_text(yaml_text, encoding="utf-8")
 
     assert score.physical.brightness == TODO_BRIGHTNESS_NEUTRAL
+    assert field_fixity(score)["brightness"] == "unlocked"
+    assert field_fixity(score)["bpm"] == "locked"
     assert load_composition_score(score_path).physical.brightness == TODO_BRIGHTNESS_NEUTRAL
 
 
@@ -139,6 +154,7 @@ def test_draft_score_marks_missing_bpm_as_todo(tmp_path: Path) -> None:
     score_path.write_text(yaml_text, encoding="utf-8")
 
     assert score.physical.bpm == TODO_BPM_UNDETECTED
+    assert field_fixity(score)["bpm"] == "unlocked"
     assert [section.bars for section in score.structure] == [1]
     assert load_composition_score(score_path).physical.bpm == TODO_BPM_UNDETECTED
 
@@ -150,6 +166,7 @@ def test_draft_score_marks_missing_key_as_todo(tmp_path: Path) -> None:
     score_path.write_text(yaml_text, encoding="utf-8")
 
     assert score.physical.key == TODO_KEY_UNDETECTED
+    assert field_fixity(score)["key"] == "unlocked"
     assert load_composition_score(score_path).physical.key == TODO_KEY_UNDETECTED
 
 
@@ -232,6 +249,10 @@ def test_transcribe_cli_writes_loader_valid_yaml(
     assert loaded.meta.title == "fixture"
     assert loaded.physical.active_rate_target == "0.71-0.75"
     assert loaded.physical.valley_depth_target == "0.16-0.20"
+    assert loaded.fixity is not None
+    assert loaded.fixity["bpm"] == "locked"
+    assert loaded.fixity["stereo_width"] == "unlocked"
+    assert "fixity:" in output_path.read_text(encoding="utf-8")
 
 
 def test_transcribe_cli_stdout_is_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -242,6 +263,7 @@ def test_transcribe_cli_stdout_is_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.exit_code == 0
     assert result.output.startswith("meta:\n")
     assert "TODO(transcribe):" in result.output
+    assert "fixity:" in result.output
     assert "Draft CompositionScore saved" not in result.output
 
 

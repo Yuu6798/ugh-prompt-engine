@@ -1,11 +1,12 @@
 """Pydantic models for author-facing Composition Score YAML."""
 from __future__ import annotations
 
-from typing import List, Literal
+from typing import Any, List, Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_serializer
 
 _TRANSCRIBE_TODO_PREFIX = "TODO(transcribe):"
+FixityState = Literal["locked", "unlocked"]
 
 
 class CompositionModel(BaseModel):
@@ -88,6 +89,30 @@ class CompositionScore(CompositionModel):
     physical: PhysicalLayer
     structure: List[StructureSection]
     rendering: RenderingConfig
+    fixity: dict[str, FixityState] | None = None
+
+    @field_validator("fixity")
+    @classmethod
+    def validate_fixity_keys(
+        cls, value: dict[str, FixityState] | None
+    ) -> dict[str, FixityState] | None:
+        if value is None:
+            return None
+        allowed = set(PhysicalLayer.model_fields)
+        unknown = sorted(set(value) - allowed)
+        if unknown:
+            raise ValueError(
+                "fixity keys must be CompositionScore.physical fields; "
+                f"unknown keys: {', '.join(unknown)}"
+            )
+        return dict(value)
+
+    @model_serializer(mode="wrap")
+    def serialize_without_empty_fixity(self, handler: Any) -> dict[str, Any]:
+        data = handler(self)
+        if self.fixity is None:
+            data.pop("fixity", None)
+        return data
 
 
 class GeneratedPrompt(CompositionModel):

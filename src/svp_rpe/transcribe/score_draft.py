@@ -8,6 +8,7 @@ import yaml
 from svp_rpe.compose.models import (
     CompositionScore,
     DeltaESpec,
+    FixityState,
     GrvSpec,
     Meta,
     PhysicalLayer,
@@ -78,6 +79,7 @@ def draft_score(bundle: RPEBundle) -> CompositionScore:
             _time_signature_for_structure(time_signature),
         ),
         rendering=DEFAULT_RENDERING.model_copy(deep=True),
+        fixity=_draft_fixity(physical),
     )
 
 
@@ -184,6 +186,17 @@ def _time_signature_for_structure(time_signature: str) -> str | None:
     if time_signature.startswith(TODO_SENTINEL_PREFIX):
         return None
     return time_signature
+
+
+def _draft_fixity(physical: PhysicalLayer) -> dict[str, FixityState]:
+    return {
+        field: "unlocked" if _is_todo(getattr(physical, field)) else "locked"
+        for field in PhysicalLayer.model_fields
+    }
+
+
+def _is_todo(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith(TODO_SENTINEL_PREFIX)
 
 
 def _is_untrusted_confidence(confidence: float | None) -> bool:
