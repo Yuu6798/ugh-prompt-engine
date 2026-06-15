@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 from svp_rpe.perform import sha256_bytes
 from svp_rpe.roundtrip import classify_take, load_manifest, run_corpus_batch
-from svp_rpe.roundtrip.manifest import RoundtripManifest
+from svp_rpe.roundtrip.manifest import RoundtripManifest, RoundtripTake, resolve_audio_path
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = ROOT / "examples" / "roundtrip" / "corpus" / "manifest.yaml"
@@ -104,6 +104,21 @@ def test_manifest_rejects_artifact_uri_locators_until_resolver_exists():
 
     with pytest.raises(ValidationError, match="artifact URI"):
         RoundtripManifest.model_validate(data)
+
+
+def test_resolver_rejects_programmatic_artifact_uri_locators():
+    take = RoundtripTake.model_construct(
+        id="uri",
+        generator="suno",
+        prompt="fixture",
+        intent={},
+        audio_hash="0" * 64,
+        audio_locator="s3://bucket/generated.wav",
+        notes=[],
+    )
+
+    with pytest.raises(ValueError, match="artifact URI"):
+        resolve_audio_path(take, repo_root=ROOT)
 
 
 def test_classify_take_demotes_missing_or_hash_mismatched_audio():

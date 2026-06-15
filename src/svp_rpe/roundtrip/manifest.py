@@ -44,11 +44,8 @@ class RoundtripTake(BaseModel):
     @field_validator("audio_locator")
     @classmethod
     def reject_unsupported_artifact_uri(cls, value: str | None) -> str | None:
-        if value is not None and "://" in value:
-            raise ValueError(
-                "audio_locator currently supports only repository-relative local "
-                "paths; artifact URI resolution is not implemented"
-            )
+        if value is not None and _is_artifact_uri(value):
+            raise ValueError(_UNSUPPORTED_ARTIFACT_URI_MESSAGE)
         return value
 
     @field_validator("intent")
@@ -107,6 +104,8 @@ def resolve_audio_path(
 
     if not take.audio_locator:
         return None
+    if _is_artifact_uri(take.audio_locator):
+        raise ValueError(_UNSUPPORTED_ARTIFACT_URI_MESSAGE)
     locator = Path(take.audio_locator)
     if locator.is_absolute():
         return None
@@ -123,3 +122,13 @@ def resolve_audio_path(
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
+
+
+_UNSUPPORTED_ARTIFACT_URI_MESSAGE = (
+    "audio_locator currently supports only repository-relative local paths; "
+    "artifact URI resolution is not implemented"
+)
+
+
+def _is_artifact_uri(value: str) -> bool:
+    return "://" in value
