@@ -1,0 +1,43 @@
+meta:
+  title: synth_04_roundtrip_source
+  version: "0.1"
+semantic:
+  core: bright minor waltz
+  grv:
+    primary: acoustic
+    secondary: waltz
+  delta_e:
+    overall: sudden_drop
+  avoid: []
+physical:
+  bpm: 140
+  key: F# minor
+  time_signature: 3/4
+  active_rate_target: 0.80-0.85
+  valley_depth_target: 0.30-0.40
+  brightness: bright
+  stereo_width: wide
+structure:
+  - section: intro
+    bars: 1
+    role: state the waltz
+    physical: sparse pulse, bright
+  - section: bridge
+    bars: 1
+    role: lift
+    physical: full energy, release
+  - section: outro
+    bars: 1
+    role: fade
+    physical: low density, silence tail
+rendering:
+  target_backend: external
+  prompt_max_chars: 650
+  priority:
+    - semantic.core
+    - semantic.grv
+    - physical.bpm
+    - physical.key
+    - structure
+    - semantic.avoid
+    - physical.optional

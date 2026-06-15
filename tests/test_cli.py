@@ -1,6 +1,8 @@
 """tests/test_cli.py — CLI smoke tests."""
 from __future__ import annotations
 
+import json
+
 import pytest
 from typer.testing import CliRunner
 
@@ -17,6 +19,7 @@ from svp_rpe.rpe.models import (
     SemanticRPE,
     SpectralProfile,
 )
+from svp_rpe.roundtrip.models import RoundtripField, RoundtripReport
 
 runner = CliRunner()
 
@@ -273,3 +276,38 @@ def test_baseline_option_rejects_unknown_profile(args):
 def test_extract_missing_file():
     result = runner.invoke(app, ["extract", "nonexistent.wav"])
     assert result.exit_code != 0
+
+
+def test_roundtrip_command_outputs_json(monkeypatch):
+    import svp_rpe.roundtrip as roundtrip_module
+
+    def fake_run_roundtrip(score):
+        return RoundtripReport(
+            source_id=score.meta.title,
+            transcribed_id="fixture",
+            fields=[
+                RoundtripField(
+                    field="bpm",
+                    source_value=60,
+                    transcribed_value=60,
+                    diagnosis="preserved",
+                    grip=1.0,
+                    grip_class="tight",
+                    sensor="physical.bpm",
+                    sensor_state="working",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(roundtrip_module, "run_roundtrip", fake_run_roundtrip)
+
+    result = runner.invoke(
+        app,
+        ["roundtrip", "examples/roundtrip/synth_01_source.yaml", "--format", "json"],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["source_id"] == "synth_01_roundtrip_source"
+    assert payload["fields"][0]["diagnosis"] == "preserved"
+    assert "verdict" not in result.output

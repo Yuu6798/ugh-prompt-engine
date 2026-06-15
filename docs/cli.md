@@ -63,6 +63,24 @@ svprpe transcribe track.wav --output draft_score.yaml
 The command is deterministic for the same extracted RPE. It is a drafting aid,
 not an automatic final composition brief.
 
+### `svprpe roundtrip <composition_score.yaml>`
+
+Run the deterministic R0 preservation harness:
+
+```text
+CompositionScore -> perform(FAITHFUL_TAKE) -> RPE extraction -> draft score -> diagnosis
+```
+
+```bash
+svprpe roundtrip examples/roundtrip/synth_01_source.yaml
+svprpe roundtrip examples/roundtrip/synth_01_source.yaml --format json
+svprpe roundtrip examples/roundtrip/synth_01_source.yaml --format json -o roundtrip.json
+```
+
+The output is a field-by-field descriptive report: source value, transcribed
+value, diagnosis, grip, and sensor. It intentionally does not emit verdict,
+pass/fail, or loss keys.
+
 ### `svprpe evaluate --audio <audio> [--svp <svp.yaml>]`
 
 Evaluate audio. Without `--svp`: self-evaluate. With `--svp`: compare against external SVP.
@@ -154,7 +172,7 @@ Outputs: `ranking.json`, `summary.csv`, `summary.json`, `next_action.md`.
 | `--output` / `-o` | Output file path |
 | `--output-dir` | Output directory (creates if needed) |
 | `--fields` | Comma-separated `CompositionScore.physical` fields for `measure` |
-| `--format` | Output format. `generate`: `yaml` (default) or `text`; `ci-check`: `json` (default) or `markdown` |
+| `--format` | Output format. `generate`: `yaml` (default) or `text`; `ci-check`: `json` (default) or `markdown`; `roundtrip`: `text` (default) or `json` |
 | `--threshold` | Semantic CI pass threshold from `0.0` to `1.0` (`ci-check` only) |
 | `--no-save` | Print output to stdout instead of saving |
 | `--valley-method` | Valley depth method: `hybrid` (default), `rms_percentile`, `section_ar` |
