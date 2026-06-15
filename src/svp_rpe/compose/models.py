@@ -105,6 +105,12 @@ class CompositionScore(CompositionModel):
                 "fixity keys must be CompositionScore.physical fields; "
                 f"unknown keys: {', '.join(unknown)}"
             )
+        missing = sorted(allowed - set(value))
+        if missing:
+            raise ValueError(
+                "fixity must cover every CompositionScore.physical field; "
+                f"missing keys: {', '.join(missing)}"
+            )
         return dict(value)
 
     @model_serializer(mode="wrap")

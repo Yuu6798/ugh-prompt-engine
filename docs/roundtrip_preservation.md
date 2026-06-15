@@ -72,12 +72,13 @@ fixity:
   stereo_width: unlocked
 ```
 
-The map is limited to the seven `PhysicalLayer` fields. `locked` means the field
-was populated by a measured or authored value; `unlocked` means the field remains
-a `TODO(transcribe):` sentinel and needs human authoring or sensor calibration.
-T1 draft transcription writes this block explicitly. Authored scores may omit it;
-`field_fixity(score)` then derives the same shape from TODO sentinels, which makes
-older scores behave as locked unless they already contain transcribe TODO values.
+The explicit map is limited to the seven `PhysicalLayer` fields and must include
+all seven keys. `locked` means the field was populated by a measured or authored
+value; `unlocked` means the field remains a `TODO(transcribe):` sentinel and
+needs human authoring or sensor calibration. T1 draft transcription writes this
+block explicitly. Authored scores may omit it; `field_fixity(score)` then derives
+the same shape from TODO sentinels, which makes older scores behave as locked
+unless they already contain transcribe TODO values.
 
 This is separate from `semantic_ci.lock`: fixity describes measured physical
 fields in CompositionScore, while semantic CI locks describe repair constraints

@@ -105,6 +105,14 @@ def test_fixity_unknown_value_is_rejected() -> None:
         CompositionScore.model_validate(data)
 
 
+def test_fixity_partial_map_is_rejected() -> None:
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["fixity"] = {"bpm": "locked"}
+
+    with pytest.raises(ValidationError):
+        CompositionScore.model_validate(data)
+
+
 def test_field_fixity_derives_from_todo_sentinels_when_absent() -> None:
     data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
     data["physical"]["bpm"] = "TODO(transcribe): bpm undetected"
