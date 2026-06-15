@@ -81,6 +81,23 @@ The output is a field-by-field descriptive report: source value, transcribed
 value, diagnosis, grip, and sensor. It intentionally does not emit verdict,
 pass/fail, or loss keys.
 
+### `svprpe roundtrip-corpus <manifest.yaml>`
+
+Run or replay the R1 roundtrip corpus manifest. Records with a local
+repo-relative audio file and matching SHA-256 are regenerated through
+audio -> RPE -> draft Score. Records without resolvable audio are replayed as
+observation logs.
+
+```bash
+svprpe roundtrip-corpus examples/roundtrip/corpus/manifest.yaml
+svprpe roundtrip-corpus examples/roundtrip/corpus/manifest.yaml --format json
+svprpe roundtrip-corpus examples/roundtrip/corpus/manifest.yaml --format json -o corpus.json
+```
+
+The output compares only fields whose manifest `send_form` is `numeric_knob`.
+It is a descriptive corpus table and intentionally does not emit verdict,
+pass/fail, or loss keys.
+
 ### `svprpe evaluate --audio <audio> [--svp <svp.yaml>]`
 
 Evaluate audio. Without `--svp`: self-evaluate. With `--svp`: compare against external SVP.
@@ -172,7 +189,7 @@ Outputs: `ranking.json`, `summary.csv`, `summary.json`, `next_action.md`.
 | `--output` / `-o` | Output file path |
 | `--output-dir` | Output directory (creates if needed) |
 | `--fields` | Comma-separated `CompositionScore.physical` fields for `measure` |
-| `--format` | Output format. `generate`: `yaml` (default) or `text`; `ci-check`: `json` (default) or `markdown`; `roundtrip`: `text` (default) or `json` |
+| `--format` | Output format. `generate`: `yaml` (default) or `text`; `ci-check`: `json` (default) or `markdown`; `roundtrip` / `roundtrip-corpus`: `text` (default) or `json` |
 | `--threshold` | Semantic CI pass threshold from `0.0` to `1.0` (`ci-check` only) |
 | `--no-save` | Print output to stdout instead of saving |
 | `--valley-method` | Valley depth method: `hybrid` (default), `rms_percentile`, `section_ar` |

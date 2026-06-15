@@ -614,5 +614,41 @@ def roundtrip(
         typer.echo(content)
 
 
+@app.command("roundtrip-corpus")
+def roundtrip_corpus(
+    manifest: str = typer.Argument(..., help="Path to roundtrip corpus manifest YAML"),
+    output_format: str = typer.Option(
+        "text",
+        "--format",
+        click_type=click.Choice(["text", "json"]),
+        help="Output format: text | json",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output", help="Output file path"),
+) -> None:
+    """Run or replay a roundtrip corpus manifest."""
+
+    from svp_rpe.roundtrip import (
+        load_manifest,
+        render_corpus_batch_text,
+        run_corpus_batch,
+    )
+
+    corpus = load_manifest(manifest)
+    report = run_corpus_batch(corpus)
+    if output_format == "json":
+        content = json.dumps(
+            report.model_dump(mode="json"),
+            ensure_ascii=False,
+            indent=2,
+        )
+    else:
+        content = render_corpus_batch_text(report)
+
+    if output:
+        Path(output).write_text(content, encoding="utf-8")
+    else:
+        typer.echo(content)
+
+
 if __name__ == "__main__":
     app()

@@ -20,6 +20,7 @@ from svp_rpe.rpe.models import (
     SpectralProfile,
 )
 from svp_rpe.roundtrip.models import RoundtripField, RoundtripReport
+from svp_rpe.roundtrip.corpus_batch import CorpusBatchReport, CorpusFieldComparison
 
 runner = CliRunner()
 
@@ -310,4 +311,53 @@ def test_roundtrip_command_outputs_json(monkeypatch):
     payload = json.loads(result.output)
     assert payload["source_id"] == "synth_01_roundtrip_source"
     assert payload["fields"][0]["diagnosis"] == "preserved"
+    assert "verdict" not in result.output
+
+
+def test_roundtrip_corpus_command_outputs_json(monkeypatch):
+    import svp_rpe.roundtrip as roundtrip_module
+
+    def fake_load_manifest(path):
+        assert path == "examples/roundtrip/corpus/manifest.yaml"
+        return object()
+
+    def fake_run_corpus_batch(manifest):
+        assert manifest is not None
+        return CorpusBatchReport(
+            takes=[
+                {
+                    "id": "fixture",
+                    "layer": "observation_log",
+                    "regenerated": False,
+                    "comparisons": [
+                        CorpusFieldComparison(
+                            field="bpm",
+                            intent=120,
+                            measured=121,
+                            send_form="numeric_knob",
+                            match=True,
+                        )
+                    ],
+                    "notes": [],
+                }
+            ]
+        )
+
+    monkeypatch.setattr(roundtrip_module, "load_manifest", fake_load_manifest)
+    monkeypatch.setattr(roundtrip_module, "run_corpus_batch", fake_run_corpus_batch)
+
+    result = runner.invoke(
+        app,
+        [
+            "roundtrip-corpus",
+            "examples/roundtrip/corpus/manifest.yaml",
+            "--format",
+            "json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["takes"][0]["id"] == "fixture"
+    assert payload["takes"][0]["comparisons"][0]["field"] == "bpm"
     assert "verdict" not in result.output

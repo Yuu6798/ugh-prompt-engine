@@ -1,0 +1,158 @@
+{
+  "schema_version": "1.0",
+  "takes": [
+    {
+      "id": "C-gen",
+      "layer": "observation_log",
+      "regenerated": false,
+      "comparisons": [
+        {
+          "field": "bpm",
+          "intent": 83,
+          "measured": 89,
+          "send_form": "numeric_knob",
+          "match": false
+        },
+        {
+          "field": "key",
+          "intent": "A# major",
+          "measured": "A# major",
+          "send_form": "numeric_knob",
+          "match": true
+        }
+      ],
+      "notes": [
+        "Observation log from docs/roundtrip_case_studies.md section 1; original audio is not committed.",
+        "Generated from the C-orig transcription prompt; brightness was sent as a qualitative cue."
+      ]
+    },
+    {
+      "id": "C-orig",
+      "layer": "observation_log",
+      "regenerated": false,
+      "comparisons": [
+        {
+          "field": "bpm",
+          "intent": 86,
+          "measured": 83,
+          "send_form": "numeric_knob",
+          "match": true
+        },
+        {
+          "field": "time_signature",
+          "intent": "6/8",
+          "measured": "4/4",
+          "send_form": "numeric_knob",
+          "match": false
+        }
+      ],
+      "notes": [
+        "Observation log from docs/roundtrip_case_studies.md section 1; original audio is not committed.",
+        "Modal key and 6/8 were present in the prompt, but the archived measurement returned A# major and 4/4."
+      ]
+    },
+    {
+      "id": "J-ebm",
+      "layer": "observation_log",
+      "regenerated": false,
+      "comparisons": [
+        {
+          "field": "bpm",
+          "intent": 175,
+          "measured": 89,
+          "send_form": "numeric_knob",
+          "match": false
+        },
+        {
+          "field": "brightness",
+          "intent": "bright",
+          "measured": "bright",
+          "send_form": "numeric_knob",
+          "match": true
+        },
+        {
+          "field": "key",
+          "intent": "E major",
+          "measured": "E major",
+          "send_form": "numeric_knob",
+          "match": true
+        }
+      ],
+      "notes": [
+        "Observation log from docs/roundtrip_case_studies.md section 1; original audio is not committed.",
+        "Composition prompt carried BPM/key/brightness as explicit rendered fields."
+      ]
+    },
+    {
+      "id": "J-rock",
+      "layer": "observation_log",
+      "regenerated": false,
+      "comparisons": [
+        {
+          "field": "bpm",
+          "intent": 175,
+          "measured": 89,
+          "send_form": "numeric_knob",
+          "match": false
+        },
+        {
+          "field": "brightness",
+          "intent": "bright",
+          "measured": "bright",
+          "send_form": "numeric_knob",
+          "match": true
+        },
+        {
+          "field": "key",
+          "intent": "E major",
+          "measured": "E major",
+          "send_form": "numeric_knob",
+          "match": true
+        },
+        {
+          "field": "time_signature",
+          "intent": "4/4",
+          "measured": "4/4",
+          "send_form": "numeric_knob",
+          "match": true
+        }
+      ],
+      "notes": [
+        "Observation log from docs/roundtrip_case_studies.md section 1; original audio is not committed.",
+        "175 BPM was observed around the 89.1 BPM attractor in the archived measurement."
+      ]
+    },
+    {
+      "id": "synth-05-fast-bright-d-major",
+      "layer": "calibratable",
+      "regenerated": true,
+      "comparisons": [
+        {
+          "field": "bpm",
+          "intent": 170,
+          "measured": 172,
+          "send_form": "numeric_knob",
+          "match": true
+        },
+        {
+          "field": "key",
+          "intent": "D major",
+          "measured": "D major",
+          "send_form": "numeric_knob",
+          "match": true
+        },
+        {
+          "field": "time_signature",
+          "intent": "4/4",
+          "measured": "4/4",
+          "send_form": "numeric_knob",
+          "match": true
+        }
+      ],
+      "notes": [
+        "Calibratable in-repo record backed by examples/sample_input/ground_truth.yaml.",
+        "Brightness is retained as a qualitative fixture label because T0 canonical centroid maps this audio to dark."
+      ]
+    }
+  ]
+}
