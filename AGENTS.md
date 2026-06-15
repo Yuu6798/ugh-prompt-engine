@@ -68,6 +68,9 @@ Claude Code が Task Brief を読んで Codex に渡す設計メモの固定フ�
 - IN: <変更してよいファイル / モジュール>
 - OUT: <変更してはならないもの>
 
+## Schema Admission（該当時）
+<CompositionScore / PhysicalLayer に新フィールドを追加する場合、その欄の fixity（locked 可能か）と往復一致の実測 or 実測計画を記載>
+
 ## Allowed Dependencies (任意)
 <本タスクで pyproject.toml への追加を許可する依存。例: `mir_eval>=0.7`>
 <記載がない場合、新規依存追加は escalation 対象>
@@ -229,6 +232,9 @@ semantic-ci-code での 20 ラウンド以上の経験から蒸留した項目�
 6. **依存追加の有無を確認** — 新規依存が必要なら Allowed Dependencies に明記
 7. **タスク粒度が 0.5–2 日か確認** — 大きすぎる場合はフェーズ分割
 8. **レビュー回数の予測** — 0 回が理想。3 回以上かかりそうなら Brief の仕様が不足している
+9. **CompositionScore / PhysicalLayer 新フィールドの入場試験を確認** —
+   Design Memo には、その欄の **fixity（locked 可能か）** と
+   **往復一致の実測 or 実測計画**（[`docs/roundtrip_preservation.md`](docs/roundtrip_preservation.md) 参照）を必ず記載する
 
 ---
 

@@ -53,3 +53,11 @@ rendering:
   - structure
   - semantic.avoid
   - physical.optional
+fixity:
+  bpm: locked
+  key: locked
+  time_signature: locked
+  active_rate_target: locked
+  valley_depth_target: locked
+  brightness: locked
+  stereo_width: unlocked
