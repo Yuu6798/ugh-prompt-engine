@@ -84,6 +84,28 @@ def test_manifest_rejects_invalid_send_form():
         RoundtripManifest.model_validate(data)
 
 
+def test_manifest_rejects_artifact_uri_locators_until_resolver_exists():
+    data = {
+        "schema_version": "1.0",
+        "takes": [
+            {
+                "id": "bad",
+                "generator": "suno",
+                "prompt": "fixture",
+                "intent": {
+                    "bpm": {"value": 120, "send_form": "numeric_knob"},
+                },
+                "audio_hash": "0" * 64,
+                "audio_locator": "https://example.com/generated.wav",
+                "notes": [],
+            }
+        ],
+    }
+
+    with pytest.raises(ValidationError, match="artifact URI"):
+        RoundtripManifest.model_validate(data)
+
+
 def test_classify_take_demotes_missing_or_hash_mismatched_audio():
     manifest = load_manifest(MANIFEST_PATH)
     synth_take = manifest.takes[-1]

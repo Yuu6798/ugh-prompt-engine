@@ -204,6 +204,8 @@ R2 の alternate BPM estimator を再実行できる calibratable artifact で�
 `calibratable` レコードも 1 本含めた。こちらは SHA-256 照合後に
 audio → RPE → draft Score を再実行し、`send_form == "numeric_knob"` の intent 欄だけを
 比較する。
+R1 箱実装の locator は repo-relative local path のみを受け付ける。artifact URI
+（`https://...` / `s3://...` 等）は resolver 実装まで manifest load 時に reject する。
 
 再生成コマンド:
 

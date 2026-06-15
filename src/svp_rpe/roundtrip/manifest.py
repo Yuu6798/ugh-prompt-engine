@@ -41,6 +41,16 @@ class RoundtripTake(BaseModel):
     audio_locator: str | None = None
     notes: list[str] = Field(default_factory=list)
 
+    @field_validator("audio_locator")
+    @classmethod
+    def reject_unsupported_artifact_uri(cls, value: str | None) -> str | None:
+        if value is not None and "://" in value:
+            raise ValueError(
+                "audio_locator currently supports only repository-relative local "
+                "paths; artifact URI resolution is not implemented"
+            )
+        return value
+
     @field_validator("intent")
     @classmethod
     def validate_intent_keys(
