@@ -14,6 +14,7 @@ from svp_rpe.transcribe import TODO_BRIGHTNESS_NEUTRAL, TODO_STEREO_UNMEASURED
 
 ROOT = Path(__file__).resolve().parents[1]
 ROUNDTRIP_DIR = ROOT / "examples" / "roundtrip"
+K1_GRIP_FIXTURE = ROOT / "examples" / "control" / "k1" / "expected_grip.json"
 
 
 def _load_source(name: str = "synth_01_source.yaml") -> CompositionScore:
@@ -101,6 +102,9 @@ def test_default_grip_map_is_packaged_resource():
     resource = files("svp_rpe.roundtrip.data").joinpath("expected_grip.json")
 
     assert resource.is_file()
+    assert json.loads(resource.read_text(encoding="utf-8")) == json.loads(
+        K1_GRIP_FIXTURE.read_text(encoding="utf-8")
+    )
     records = load_grip_map()
 
     assert records["bpm"].classification == "tight"
