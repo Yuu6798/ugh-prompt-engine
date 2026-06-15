@@ -1,0 +1,189 @@
+schema_version: "1.0"
+takes:
+  - id: C-orig
+    generator: suno
+    prompt: >-
+      Mystical Celtic RPG town theme, 86 BPM, D Dorian, 6/8. Low whistle, Celtic
+      harp, uilleann pipes, soft fiddle, bodhrán, deep drone, airy choir,
+      distant bells, forest ambience. Ancient hidden town at twilight, foggy,
+      sacred, magical, nostalgic, slightly melancholic. Gentle vocal melody,
+      quiet verses, floating chorus. No cheerful tavern music, no bright pop, no
+      EDM, no rock drums.
+    intent:
+      bpm:
+        value: 86
+        send_form: numeric_knob
+      key:
+        value: D Dorian
+        send_form: qualitative_cue
+      time_signature:
+        value: 6/8
+        send_form: numeric_knob
+      brightness:
+        value: dark
+        send_form: qualitative_cue
+    measured:
+      bpm: 83
+      bpm_raw: 83.35
+      key: A# major
+      time_signature: 4/4
+      brightness: neutral
+      brightness_hz: 1235
+      active_rate_target: 0.972
+      valley_depth_target: 0.142
+      stereo_width: 0.551
+    audio_hash:
+    audio_locator:
+    notes:
+      - "Observation log from docs/roundtrip_case_studies.md section 1; original audio is not committed."
+      - "Modal key and 6/8 were present in the prompt, but the archived measurement returned A# major and 4/4."
+
+  - id: C-gen
+    generator: suno
+    prompt: >-
+      Bright, Celtic folk arrangement with airy pads and a gentle lilt
+      atmosphere. wistful and pastoral / ancient, misty highland atmosphere
+      track. 83 BPM. A# major. Intro: sparse, airy, single melodic line;
+      role=lone tin whistle sets the mood. Verse: add fiddle, low density;
+      role=introduce fiddle motif. Bridge: arpeggiated harp, mid density;
+      role=harp transition. Verse2: fiddle plus bodhran pulse; role=develop the
+      melody. Chorus: whistle, fiddle, harp, bodhran together; bright and wide;
+      role=full ensemble peak. Verse3: ornamented fiddle, rolling rhythm;
+      role=variation with ornamentation. Chorus: full ensemble, brightest
+      moment; role=final lift.
+    intent:
+      bpm:
+        value: 83
+        send_form: numeric_knob
+      key:
+        value: A# major
+        send_form: numeric_knob
+      brightness:
+        value: bright
+        send_form: qualitative_cue
+      stereo_width:
+        value: wide
+        send_form: qualitative_cue
+    measured:
+      bpm: 89
+      bpm_raw: 89.10
+      key: A# major
+      time_signature: 4/4
+      brightness: neutral
+      brightness_hz: 1430
+      active_rate_target: 0.993
+      valley_depth_target: 0.087
+      stereo_width: 0.422
+    audio_hash:
+    audio_locator:
+    notes:
+      - "Observation log from docs/roundtrip_case_studies.md section 1; original audio is not committed."
+      - "Generated from the C-orig transcription prompt; brightness was sent as a qualitative cue."
+
+  - id: J-rock
+    generator: suno
+    prompt: >-
+      J-Pop with high-energy rock and electronic elements. Bright, distorted
+      electric guitars play syncopated power chords and melodic lead lines. A
+      driving drum kit features a prominent snare on 2 and 4 with rapid
+      16th-note hi-hat patterns and frequent crash cymbal accents. A thick,
+      distorted synth bass follows the kick drum's rhythmic patterns.
+      Shimmering digital pads and staccato synth arpeggios provide harmonic
+      texture. The arrangement features a high-tenor male vocal with occasional
+      double-tracking and light reverb. The tempo is 175 BPM in the key of E
+      Major. The bridge features a half-time feel with prominent acoustic guitar
+      strumming before returning to the original tempo for the final chorus. The
+      track ends with a clean electric guitar melody over a sustained synth pad.
+    intent:
+      bpm:
+        value: 175
+        send_form: numeric_knob
+      key:
+        value: E major
+        send_form: numeric_knob
+      time_signature:
+        value: 4/4
+        send_form: numeric_knob
+      brightness:
+        value: bright
+        send_form: numeric_knob
+    measured:
+      bpm: 89
+      bpm_raw: 89.10
+      key: E major
+      time_signature: 4/4
+      brightness: bright
+      brightness_hz: 3696
+      active_rate_target: 0.992
+      valley_depth_target: 0.034
+      stereo_width: 0.398
+    audio_hash:
+    audio_locator:
+    notes:
+      - "Observation log from docs/roundtrip_case_studies.md section 1; original audio is not committed."
+      - "175 BPM was observed around the 89.1 BPM attractor in the archived measurement."
+      - "R1 box-only scope: this BPM-problem case is not R2-calibratable until a saved audio artifact and hash are supplied."
+
+  - id: J-ebm
+    generator: suno
+    prompt: >-
+      Bright, club-ready EBM / electronic body music for a dark warehouse floor
+      atmosphere. pulsing, hypnotic, relentless / industrial, sweaty,
+      machine-driven track. 175 BPM. E major. Intro: filtered, rising energy;
+      role=low-density build. Verse: mid density, driving pulse;
+      role=groove establishes. Chorus: full density, brightest, widest;
+      role=peak energy. Bridge: strip back, then rebuild; role=tension break.
+      Chorus: full density, relentless; role=final peak. Outro: fade density,
+      sustained texture; role=wind down. Avoid: organic acoustic instruments;
+      soft ballad sections; clean pop vocals.
+    intent:
+      bpm:
+        value: 175
+        send_form: numeric_knob
+      key:
+        value: E major
+        send_form: numeric_knob
+      brightness:
+        value: bright
+        send_form: numeric_knob
+    measured:
+      bpm: 89
+      bpm_raw: 89.10
+      key: E major
+      time_signature: 4/4
+      brightness: bright
+      brightness_hz: 3284
+      active_rate_target: 0.998
+      valley_depth_target: 0.045
+      stereo_width: 0.243
+    audio_hash:
+    audio_locator:
+    notes:
+      - "Observation log from docs/roundtrip_case_studies.md section 1; original audio is not committed."
+      - "Composition prompt carried BPM/key/brightness as explicit rendered fields."
+      - "R1 box-only scope: this BPM-problem case is not R2-calibratable until a saved audio artifact and hash are supplied."
+
+  - id: synth-05-fast-bright-d-major
+    generator: synth
+    prompt: >-
+      Deterministic in-repo CC0 synth fixture: fast D major 4/4 track with a
+      high-brightness fixture label.
+    intent:
+      bpm:
+        value: 170
+        send_form: numeric_knob
+      key:
+        value: D major
+        send_form: numeric_knob
+      time_signature:
+        value: 4/4
+        send_form: numeric_knob
+      brightness:
+        value: high
+        send_form: qualitative_cue
+    measured:
+    audio_hash: f25582c038abfe1e17a9f9a29c0a02783a0f5e24bc79c7a970b8e579e94bb763
+    audio_locator: examples/sample_input/synth_05_fast_bright_d_major.wav
+    notes:
+      - "Calibratable in-repo record backed by examples/sample_input/ground_truth.yaml."
+      - "Brightness is retained as a qualitative fixture label because T0 canonical centroid maps this audio to dark."

@@ -186,3 +186,33 @@ C4 決定論シンセでなく**実 Suno での往復**であり、T2 を越え�
 これらを校正データ化するには、音源 + 真値（プロンプト記載の BPM 等）+ manifest を
 別途リポジトリに保存して再実行可能にする前段タスクが要る。それまで本書は
 「問題が実在することの証拠」に留め、校正の入力とは扱わない。
+
+---
+
+## 7. R1 corpus manifest 化
+
+R1 で §1 / §3 の 4 ケースを
+[`examples/roundtrip/corpus/manifest.yaml`](../examples/roundtrip/corpus/manifest.yaml)
+へ構造化した。音源が未コミットのため、これらは `audio_locator` / `audio_hash` を持たない
+`observation_log` として保存し、バッチ実行では記録済み `measured` を転記する。
+特に J-rock / J-ebm の 175→89 BPM 問題ケースは、問題の観測ログとして残すだけで、
+R2 の alternate BPM estimator を再実行できる calibratable artifact ではない。R2-1 を
+進めるには、人間トラックで保存済み音源 + SHA-256 hash を追加する必要がある。
+
+同 manifest には、コミット済み CC0 synth 音源
+`examples/sample_input/synth_05_fast_bright_d_major.wav` を backing にした
+`calibratable` レコードも 1 本含めた。こちらは SHA-256 照合後に
+audio → RPE → draft Score を再実行し、`send_form == "numeric_knob"` の intent 欄だけを
+比較する。
+R1 箱実装の locator は repo-relative local path のみを受け付ける。artifact URI
+（`https://...` / `s3://...` 等）は resolver 実装まで manifest load 時に reject する。
+
+再生成コマンド:
+
+```bash
+svprpe roundtrip-corpus examples/roundtrip/corpus/manifest.yaml --format json
+```
+
+固定 snapshot:
+
+- [`examples/roundtrip/corpus/batch_report.json`](../examples/roundtrip/corpus/batch_report.json)

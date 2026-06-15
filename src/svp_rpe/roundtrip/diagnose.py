@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from importlib.resources import files
 from importlib.resources.abc import Traversable
@@ -10,7 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from svp_rpe.compose.models import CompositionScore
-from svp_rpe.perform import parse_key
+from svp_rpe.roundtrip.compare import normalize_label, values_match
 from svp_rpe.roundtrip.models import RoundtripField, RoundtripReport
 from svp_rpe.transcribe import (
     TODO_BPM_UNDETECTED,
@@ -20,10 +19,6 @@ from svp_rpe.transcribe import (
     TODO_STEREO_BAND_UNDEFINED,
     TODO_STEREO_UNMEASURED,
     TODO_TIME_SIGNATURE_UNDETECTED,
-)
-
-RANGE_PATTERN = re.compile(
-    r"^\s*([+-]?\d+(?:\.\d+)?)\s*-\s*([+-]?\d+(?:\.\d+)?)\s*$"
 )
 
 ROUNDTRIP_FIELDS = (
@@ -63,9 +58,6 @@ SENSOR_BLIND_SENTINELS = {
     TODO_STEREO_UNMEASURED,
     TODO_TIME_SIGNATURE_UNDETECTED,
 }
-
-BPM_MATCH_TOLERANCE = 5.0
-
 
 @dataclass(frozen=True)
 class GripRecord:
@@ -124,7 +116,7 @@ def _diagnose_field(
     transcribed_value = _physical_value(transcribed, field)
     grip = grip_map.get(GRIP_KEYS.get(field, field))
     sensor_blind = _is_sensor_blind(field, transcribed_value)
-    matched = _values_match(field, source_value, transcribed_value)
+    matched = values_match(field, source_value, transcribed_value)
 
     diagnosis = "preserved"
     note = None
@@ -174,28 +166,6 @@ def _physical_value(score: CompositionScore, field: str) -> Any:
     raise ValueError(f"unknown roundtrip field: {field}")
 
 
-def _values_match(field: str, source_value: Any, transcribed_value: Any) -> bool:
-    if _is_todo(source_value) or _is_todo(transcribed_value):
-        return False
-    if field == "bpm":
-        source_number = _number(source_value)
-        transcribed_number = _number(transcribed_value)
-        return (
-            source_number is not None
-            and transcribed_number is not None
-            and abs(source_number - transcribed_number) <= BPM_MATCH_TOLERANCE
-        )
-    if field == "key":
-        return _keys_match(source_value, transcribed_value)
-    if field in {"active_rate_target", "valley_depth_target"}:
-        source_range = _parse_numeric_range(source_value)
-        transcribed_range = _parse_numeric_range(transcribed_value)
-        if source_range is None or transcribed_range is None:
-            return str(source_value) == str(transcribed_value)
-        return _ranges_overlap(source_range, transcribed_range)
-    return _normalize_label(source_value) == _normalize_label(transcribed_value)
-
-
 def _is_sensor_blind(field: str, transcribed_value: Any) -> bool:
     if transcribed_value is None or _is_todo(transcribed_value):
         return True
@@ -218,65 +188,12 @@ def _sensor_blind_note(field: str, transcribed_value: Any) -> str:
     return "sensor value is missing."
 
 
-def _parse_numeric_range(value: Any) -> tuple[float, float] | None:
-    if not isinstance(value, str):
-        return None
-    match = RANGE_PATTERN.match(value)
-    if match is None:
-        return None
-    lower = float(match.group(1))
-    upper = float(match.group(2))
-    if lower > upper:
-        lower, upper = upper, lower
-    return lower, upper
-
-
-def _ranges_overlap(first: tuple[float, float], second: tuple[float, float]) -> bool:
-    return max(first[0], second[0]) <= min(first[1], second[1])
-
-
-def _number(value: Any) -> float | None:
-    if isinstance(value, bool) or value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _keys_match(source_value: Any, transcribed_value: Any) -> bool:
-    source_key = _parse_key_label(source_value)
-    transcribed_key = _parse_key_label(transcribed_value)
-    if source_key is not None and transcribed_key is not None:
-        return source_key == transcribed_key
-    return _normalize_label(source_value) == _normalize_label(transcribed_value)
-
-
-def _parse_key_label(value: Any) -> tuple[int, str] | None:
-    if not isinstance(value, str):
-        return None
-    normalized = (
-        value.strip()
-        .replace("\u266f", "#")
-        .replace("\uff03", "#")
-        .replace("\u266d", "b")
-    )
-    try:
-        return parse_key(normalized)
-    except ValueError:
-        return None
-
-
 def _is_todo(value: Any) -> bool:
     return isinstance(value, str) and value.startswith(TODO_SENTINEL_PREFIX)
 
 
-def _normalize_label(value: Any) -> str:
-    return " ".join(str(value).strip().lower().split())
-
-
 def _score_id(score: CompositionScore) -> str:
-    return _normalize_label(score.meta.title).replace(" ", "-") or "score"
+    return normalize_label(score.meta.title).replace(" ", "-") or "score"
 
 
 def _default_grip_resource() -> Traversable:
