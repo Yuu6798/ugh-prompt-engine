@@ -2,30 +2,33 @@
 
 ## Phase
 
-採譜トラック（T 系列）の往路が開通。T0 `svprpe measure`（音源 1 本から物理 7 欄を
-センサー/校正メモ付きで計測, PR #70）と T1 `svprpe transcribe`（loader-valid な draft
-CompositionScore YAML, 計測欄は埋め・意味層は TODO センチネルで人間欄を明示, PR #71）を
-設計→実装→レビュー→マージで完走。さらに実 Suno 生成 4 曲（Celtic 原曲/生成 + J-Pop
-rock/EBM）で双方向性・制御性を即興検証し `docs/roundtrip_case_studies.md`（PR #72）に保存。
-判明事項: 計器の有効帯域は西洋・長調/短調・4/4・明るい帯域（J-Pop で E major/4/4/bright 命中、
-Celtic の旋法/6/8 は盲目）、物理固定・意味層を rock→EBM 差替で「全く別物」生成＝意味層 grip
-有り（耳判定のみ・計器は盲目で T3 動機）、双方向性は実送出ノブ key/brightness のみ検証済み
-（bpm は raw 89.1 アトラクタと交絡し判定不能で Q1-3 入力）。2026-06-14: 目的2（再現実証）専用ロードマップ `docs/roadmap_goal2.md`（R0–R5）を起草し T2 を R0 受け入れゲートへ昇格、roadmap_goal1 の stale spec（Q1-2 拍子検出 / Q1-4 baseline）も実装実体へ整合済み。次は R0（=T2, 往復保存性の in-repo 実証）。
+目的2（再現実証）のクリティカルパス前半が開通。R0 往復保存性ループ（既存 Score→C4
+決定論演奏→T1 採譜→三値診断 保存/ツマミ死/センサー盲, `svprpe roundtrip`, PR #75）、
+R5 入場試験の制度化（optional `CompositionScore.fixity` 型 + `field_fixity` + AGENTS
+Schema Admission 手順, PR #76）、R1 再実行可能 corpus の箱（manifest スキーマ/ローダ/
+バッチ + `svprpe roundtrip-corpus` + 既存 4 Suno ケースの観測ログ化 + in-repo
+calibratable synth レコード, PR #77）を設計→実装→レビュー→マージで完走。R0 レビュー指摘
+（bpm 比較器 ±5 許容差 / grip 地図の package 同梱 + 等価性回帰テスト）は main へ反映済み。
+判明: send_form=numeric_knob 限定比較で盲目センサーの一致を制御証拠にしない設計を確立、
+calibratable synth で bpm 170→172 の保存を決定論実証。次は R2（bpm 89.1 アトラクタ校正 /
+Q1-3 連動）で、前段の R1 箱は完成済み・人間トラックで BPM 問題ケース音源を保存付き確保
+すれば calibratable レコードとして渡せる。
 
 ## Next-Issue Queue
 
 | ID | Title | Priority | Notes |
 |---|---|---|---|
-| T2 | 往復保存性の最小実証 | P1 | 既存Score→C4決定論演奏→T1採譜→元と比較。全工程決定論で in-repo 完結。実曲検証では送出ノブ key/brightness のみ検証済みなので検証欄を限定して引き継ぐ。score_centric_planning.md §3 |
-| K2 | Suno 転移検証 | P1 | K1 の tight/loose 判定が Suno/Udio 級で転移するか手動少数バッチで確認。物理固定・意味差替で「別物」生成を確認済み(意味層 grip 有り・耳)だが n=1。manifest 様式は §8 未決。controllability_poc.md §5 |
-| Q1-3 | BPM 半折り検出 + アトラクタ校正 (R2) | P2 | CV ベース信頼度は実装済み・pin 済み(`BPM_CONFIDENCE_CV_SCALE`/`test_bpm_confidence.py`)。残は半折り(×2/÷2)検出の上乗せ + 89.1 アトラクタ校正(roadmap_goal2.md R2)。前段に R1(再実行可能 corpus: 音源+真値+manifest, BPM 問題ケース保存)が必要 |
+| R1-audio | BPM 問題ケース音源の確保（人間トラック） | P1 | 89.1 アトラクタ / 175→89 半折りを示すテイクを保存付き新規生成（CC0 コミット or ハッシュ一致アーティファクト）。R1 箱(#77)の manifest に calibratable レコードとして追加すれば R2 へ渡る。保存できた範囲が R2 校正対象スコープを規定。roadmap_goal2.md R1 |
+| R2 / Q1-3 | BPM 89.1 アトラクタ校正 + 半折り検出 | P1 | R1 箱完成済み・前段は R1-audio のみ。CV 信頼度は pin 済(`BPM_CONFIDENCE_CV_SCALE`/`test_bpm_confidence.py`)。残は半折り(×2/÷2)検出 + アトラクタ校正。結論(bpm を再現対象に含む/明示除外)を完成定義 §4・R3 へ伝播。roadmap_goal2.md R2 |
+| K2 | Suno 転移検証 | P1 | K1 の tight/loose 判定が Suno/Udio 級で転移するか手動少数バッチ。物理固定・意味差替で「別物」生成を確認済(意味層 grip 有り・耳)だが n=1。律速は人間生成バッチ。controllability_poc.md §5 |
+| R4 | 作品同一性 — 事象レベル欄の往復 (stretch) | P2 | R0 後に並列着手可。旋律/コード進行センサー(learned_models_policy.md の optional extra 隔離)。§2.2 入場試験(R5 で制度化済)を事象欄に適用。roadmap_goal2.md R4 |
 
 ## Recently Merged
 
 | PR | Title | Date | Phase |
 |---|---|---|---|
+| #77 | feat(roundtrip): R1 再実行可能 corpus + manifest 箱 (svprpe roundtrip-corpus) | 2026-06-15 | R1 |
+| #76 | feat(compose): R5 fixity 型 + 入場試験制度化 | 2026-06-15 | R5 |
+| #75 | feat(roundtrip): R0 往復保存性 三値診断 + svprpe roundtrip | 2026-06-15 | R0/T2 |
 | #74 | docs: roadmap_goal1 stale spec 整合 (Q1-2/Q1-4) | 2026-06-14 | goal1-align |
 | #73 | docs: roadmap_goal2 起草 (R0–R5) + 索引同期 | 2026-06-14 | goal2 |
-| #72 | docs(test): Suno 往復/制御性テストケース結果を記録 | 2026-06-13 | T-validate |
-| #71 | feat(transcribe): T1 draft Score 採譜 (svprpe transcribe) | 2026-06-13 | T1 |
-| #70 | feat(transcribe): T0 per-field 計測ユーティリティ (svprpe measure) | 2026-06-13 | T0 |
