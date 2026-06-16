@@ -16,6 +16,7 @@ from svp_rpe.eval.semantic_similarity import por_lexical_similarity
 from svp_rpe.rpe.models import RPEBundle
 from svp_rpe.semantic_ci.models import ObservedRPE
 from svp_rpe.semantic_ci.observed_adapter import rpe_bundle_to_observed
+from svp_rpe.sentinels import is_todo_sentinel
 from svp_rpe.utils.config_loader import load_config
 
 if TYPE_CHECKING:
@@ -33,7 +34,6 @@ DELTA_E_TRANSITION_TYPES = (
     "crescendo",
     "flat",
 )
-TRANSCRIBE_TODO_PREFIX = "TODO(transcribe):"
 
 
 class AuditNeedle(BaseModel):
@@ -223,7 +223,7 @@ def _bpm_needle(target: Any, observed: ObservedRPE) -> AuditNeedle:
 def _key_needle(target: Any, observed: ObservedRPE) -> AuditNeedle:
     observed_key = _text_metric(observed.metrics.get("key"))
     target_key = str(target) if target is not None else None
-    if _is_transcribe_todo(target_key):
+    if is_todo_sentinel(target_key):
         return AuditNeedle(
             name="key",
             layer="physical",
@@ -279,7 +279,7 @@ def _time_signature_needle(target: Any, observed: ObservedRPE) -> AuditNeedle:
     observed_value = observed.metrics.get("time_signature")
     target_value = str(target) if target is not None else None
     observed_text = str(observed_value) if observed_value is not None else None
-    if _is_transcribe_todo(target_value):
+    if is_todo_sentinel(target_value):
         return AuditNeedle(
             name="time_signature",
             layer="physical",
@@ -557,13 +557,9 @@ def _text_metric(value: Any) -> Optional[str]:
 
 
 def _text_metric_without_transcribe_todo(value: Any) -> Optional[str]:
-    if _is_transcribe_todo(value):
+    if is_todo_sentinel(value):
         return None
     return _text_metric(value)
-
-
-def _is_transcribe_todo(value: Any) -> bool:
-    return isinstance(value, str) and value.startswith(TRANSCRIBE_TODO_PREFIX)
 
 
 def _normalize_key_for_exact_match(value: str) -> str:

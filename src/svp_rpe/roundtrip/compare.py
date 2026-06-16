@@ -5,18 +5,18 @@ import re
 from typing import Any
 
 from svp_rpe.perform import parse_key
+from svp_rpe.sentinels import is_todo_sentinel
 
 BPM_MATCH_TOLERANCE = 5.0
 RANGE_PATTERN = re.compile(
     r"^\s*([+-]?\d+(?:\.\d+)?)\s*-\s*([+-]?\d+(?:\.\d+)?)\s*$"
 )
-_TRANSCRIBE_TODO_PREFIX = "TODO(transcribe):"
 
 
 def values_match(field: str, expected_value: Any, observed_value: Any) -> bool:
     """Return whether two score-field values match under roundtrip calibration."""
 
-    if _is_todo(expected_value) or _is_todo(observed_value):
+    if is_todo_sentinel(expected_value) or is_todo_sentinel(observed_value):
         return False
     if field == "bpm":
         expected_number = number(expected_value)
@@ -114,7 +114,3 @@ def normalize_label(value: Any) -> str:
     """Normalize a label for stable string comparison and ids."""
 
     return " ".join(str(value).strip().lower().split())
-
-
-def _is_todo(value: Any) -> bool:
-    return isinstance(value, str) and value.startswith(_TRANSCRIBE_TODO_PREFIX)
