@@ -16,11 +16,11 @@ from svp_rpe.compose.models import (
     SemanticLayer,
     StructureSection,
 )
+from svp_rpe.sentinels import TODO_SENTINEL_PREFIX, is_todo_sentinel
 from svp_rpe.rpe.models import RPEBundle, SectionMarker
 from svp_rpe.transcribe.measure import SCORE_FIELDS, measure_fields
 from svp_rpe.transcribe.models import FieldMeasurement
 
-TODO_SENTINEL_PREFIX = "TODO(transcribe):"
 TODO_AUTHOR_INPUT = f"{TODO_SENTINEL_PREFIX} author input required"
 TODO_BPM_UNDETECTED = f"{TODO_SENTINEL_PREFIX} bpm undetected"
 TODO_BRIGHTNESS_NEUTRAL = f"{TODO_SENTINEL_PREFIX} brightness neutral band"
@@ -190,13 +190,9 @@ def _time_signature_for_structure(time_signature: str) -> str | None:
 
 def _draft_fixity(physical: PhysicalLayer) -> dict[str, FixityState]:
     return {
-        field: "unlocked" if _is_todo(getattr(physical, field)) else "locked"
+        field: "unlocked" if is_todo_sentinel(getattr(physical, field)) else "locked"
         for field in PhysicalLayer.model_fields
     }
-
-
-def _is_todo(value: Any) -> bool:
-    return isinstance(value, str) and value.startswith(TODO_SENTINEL_PREFIX)
 
 
 def _is_untrusted_confidence(confidence: float | None) -> bool:

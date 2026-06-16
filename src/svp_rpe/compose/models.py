@@ -11,7 +11,8 @@ from pydantic import (
     model_validator,
 )
 
-_TRANSCRIBE_TODO_PREFIX = "TODO(transcribe):"
+from svp_rpe.sentinels import TODO_SENTINEL_PREFIX, is_todo_sentinel
+
 FixityState = Literal["locked", "unlocked"]
 
 
@@ -69,7 +70,7 @@ class PhysicalLayer(CompositionModel):
     @field_validator("bpm")
     @classmethod
     def reject_unknown_bpm_text(cls, value: int | str) -> int | str:
-        if isinstance(value, str) and not value.startswith(_TRANSCRIBE_TODO_PREFIX):
+        if isinstance(value, str) and not value.startswith(TODO_SENTINEL_PREFIX):
             raise ValueError(
                 "bpm must be an integer, numeric string, or TODO(transcribe): sentinel"
             )
@@ -152,8 +153,4 @@ class GeneratedPrompt(CompositionModel):
 
 
 def _fixity_state_for_value(value: Any) -> FixityState:
-    return "unlocked" if _is_transcribe_todo(value) else "locked"
-
-
-def _is_transcribe_todo(value: Any) -> bool:
-    return isinstance(value, str) and value.startswith(_TRANSCRIBE_TODO_PREFIX)
+    return "unlocked" if is_todo_sentinel(value) else "locked"

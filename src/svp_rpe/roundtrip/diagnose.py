@@ -11,11 +11,11 @@ from typing import Any, Mapping
 from svp_rpe.compose.models import CompositionScore
 from svp_rpe.roundtrip.compare import normalize_label, values_match
 from svp_rpe.roundtrip.models import RoundtripField, RoundtripReport
+from svp_rpe.sentinels import is_todo_sentinel
 from svp_rpe.transcribe import (
     TODO_BPM_UNDETECTED,
     TODO_BRIGHTNESS_NEUTRAL,
     TODO_KEY_UNDETECTED,
-    TODO_SENTINEL_PREFIX,
     TODO_STEREO_BAND_UNDEFINED,
     TODO_STEREO_UNMEASURED,
     TODO_TIME_SIGNATURE_UNDETECTED,
@@ -167,7 +167,7 @@ def _physical_value(score: CompositionScore, field: str) -> Any:
 
 
 def _is_sensor_blind(field: str, transcribed_value: Any) -> bool:
-    if transcribed_value is None or _is_todo(transcribed_value):
+    if transcribed_value is None or is_todo_sentinel(transcribed_value):
         return True
     if field == "brightness" and transcribed_value == TODO_BRIGHTNESS_NEUTRAL:
         return True
@@ -183,13 +183,9 @@ def _sensor_blind_note(field: str, transcribed_value: Any) -> str:
         return "spectral centroid fell into the neutral calibration band."
     if field == "stereo_width":
         return "stereo label bands are not calibrated for T1 drafts."
-    if _is_todo(transcribed_value):
+    if is_todo_sentinel(transcribed_value):
         return str(transcribed_value)
     return "sensor value is missing."
-
-
-def _is_todo(value: Any) -> bool:
-    return isinstance(value, str) and value.startswith(TODO_SENTINEL_PREFIX)
 
 
 def _score_id(score: CompositionScore) -> str:

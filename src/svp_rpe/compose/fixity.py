@@ -4,8 +4,8 @@ from __future__ import annotations
 from typing import Any
 
 from svp_rpe.compose.models import CompositionScore, FixityState, PhysicalLayer
+from svp_rpe.sentinels import is_todo_sentinel
 
-TODO_SENTINEL_PREFIX = "TODO(transcribe):"
 PHYSICAL_FIXITY_FIELDS = tuple(PhysicalLayer.model_fields)
 
 
@@ -21,8 +21,4 @@ def field_fixity(score: CompositionScore) -> dict[str, FixityState]:
 
 
 def _derived_fixity(value: Any) -> FixityState:
-    return "unlocked" if _is_todo(value) else "locked"
-
-
-def _is_todo(value: Any) -> bool:
-    return isinstance(value, str) and value.startswith(TODO_SENTINEL_PREFIX)
+    return "unlocked" if is_todo_sentinel(value) else "locked"
