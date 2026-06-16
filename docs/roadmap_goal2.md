@@ -175,6 +175,7 @@ raw 89.10、J-rock は真値 175→89 の半折り）を塞ぐ。
 |---|---|---|
 | R2-1 | BPM 89.1 アトラクタの再現確認 — R1 corpus に現行推定器を当て、アトラクタ／半折りが再現するか記録 | 問題が「計器の癖」であってパイプラインのバグでないことが再実行可能な形で示される |
 | R2-2 | **既存の CV ベース BPM 信頼度を校正**（`BPM_CONFIDENCE_CV_SCALE`, `rpe/physical_features.py`）し、半折り（×2 / ÷2）曖昧性の検出を上乗せ。再設計でなく既存式の調整 + 半折り検出の追加とし、production コードと `tests/test_bpm_confidence.py` を同時更新 | `tests/test_bpm_confidence.py` の Q1-3 契約（真値 ±5 BPM 以内で confidence > 0.7）を割らず、半折り検出時は低 confidence + 候補列挙 |
+| R2-2a ✅ | **半折り（×2）検出** done — `detect_bpm_octave_ambiguity` + `PhysicalRPE.bpm_octave_ambiguous` / `bpm_candidates`、ambiguous 時に extractor が `bpm_confidence` を 0.5 cap（`tests/test_bpm_octave_ambiguity.py`、metrics.md「BPM Half-fold Detection」）。音源非依存スライス | Q1-3 fixture は誤検出されず（ratio ≤ 1.001 < 1.15）契約不変。×2 方向のみ；÷2 方向と CV scale 実校正は R1-audio 待ち |
 | R2-3 | 校正メモを T0 per-field 校正メモへ反映 | 「この針はどこまで信用して bpm を転記できるか」が往復ハーネスの三値診断に効く |
 
 **完了基準**: R1 corpus で BPM の校正前後の往復一致が比較でき、結論

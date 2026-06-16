@@ -5,6 +5,7 @@ Values are clamped to sensible ranges where applicable.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Optional
 
 import librosa
@@ -327,6 +328,102 @@ def compute_bpm(y: np.ndarray, sr: int) -> tuple[Optional[float], Optional[float
     cv = float(np.std(intervals) / mean_interval)
     confidence = _clamp(1.0 - BPM_CONFIDENCE_CV_SCALE * cv, 0.0, 1.0)
     return round(bpm, 2), round(confidence, 4)
+
+
+# BPM octave-ambiguity (half-fold) detection (R2-2, roadmap_goal2.md).
+# librosa's beat tracker reports a single tempo, but a true tempo of 2×bpm can
+# be reported at bpm (the classic halving error — e.g. roundtrip_case_studies.md
+# §4: true 175 BPM reported near 89). We compare the onset-strength
+# autocorrelation at the ×2 subdivision lag against the detected-tempo lag, each
+# normalized by its overlap count (see detect_bpm_octave_ambiguity).
+#
+# Normal music has subdivision onset energy too (eighth notes, note attacks), so
+# the subdivision autocorrelation is *comparable* (normalized ratio ≈ 1.0) even
+# when the reported tempo is correct — the 4 Q1-3 synth fixtures all sit at ≤
+# 1.0. A genuine halving error is different: the subdivision IS the real beat, so
+# its autocorrelation *dominates* the (super-period) reported tempo (normalized
+# ratio ≈ 1.2–1.3 in measured 170/175 halving cases). We therefore flag ambiguity
+# only when the subdivision is clearly stronger — ratio ≥
+# BPM_OCTAVE_RATIO_THRESHOLD (> 1.0) — which separates halving pathology from
+# ordinary subdivided music.
+#
+# Only the subdivision (×2, "reported too slow") direction is detected here.
+# The opposite ÷2 direction (reported too fast) is NOT recoverable from raw
+# autocorrelation magnitude: for a true period T the autocorrelation also peaks
+# at lag 2T (a harmonic), so "true X reported 2X" is indistinguishable from
+# "true 2X with strong half-beat energy". Detecting it would need beat-phase
+# strength analysis and is left out of this slice.
+BPM_OCTAVE_HOP_LENGTH = 512
+BPM_OCTAVE_RATIO_THRESHOLD = 1.15
+# When ambiguous, the extractor caps the recorded bpm_confidence AND sets the
+# bpm_octave_ambiguous flag; the transcribe trust gate
+# (score_draft._bpm_untrusted) treats that flag as sensor-blind, so a half-folded
+# BPM is not transcribed as a faithful, locked value. The cap alone is only a
+# recorded signal — the boolean flag is what enforces the trust decision.
+BPM_OCTAVE_AMBIGUOUS_CONFIDENCE_CAP = 0.5
+
+
+@dataclass(frozen=True)
+class BpmOctaveAmbiguity:
+    """Result of BPM octave (×2 subdivision) ambiguity detection."""
+
+    is_ambiguous: bool
+    candidates: tuple[float, ...]  # sorted plausible tempi incl. detected bpm; () if unambiguous
+    alt_strength_ratio: float      # subdivision/primary autocorrelation ratio (0.0 if none)
+
+
+def detect_bpm_octave_ambiguity(
+    y: np.ndarray,
+    sr: int,
+    bpm: Optional[float],
+    *,
+    hop_length: int = BPM_OCTAVE_HOP_LENGTH,
+) -> BpmOctaveAmbiguity:
+    """Detect whether `bpm` may be a halving error (true tempo could be 2×bpm).
+
+    Deterministic: compares the onset-strength autocorrelation at the ×2
+    subdivision lag against the detected-tempo lag. When the subdivision
+    autocorrelation *dominates* the reported tempo (ratio ≥
+    ``BPM_OCTAVE_RATIO_THRESHOLD``), the real beat is at the faster tempo and
+    ``2×bpm`` is returned as a candidate alongside ``bpm``.
+    """
+    if bpm is None or bpm <= 0:
+        return BpmOctaveAmbiguity(False, (), 0.0)
+
+    onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop_length)
+    if onset_env.size < 2 or not np.any(onset_env > 0):
+        return BpmOctaveAmbiguity(False, (), 0.0)
+
+    # autocorrelate returns one value per input frame, so ac.size == onset_env.size
+    # (≥ 2 here); the lag bounds below are the only size guard needed.
+    ac = librosa.autocorrelate(onset_env)
+    n = onset_env.size
+
+    def _lag(tempo: float) -> int:
+        return int(round((60.0 / tempo) * sr / hop_length))
+
+    primary_lag = _lag(bpm)
+    subdivision_tempo = bpm * 2.0
+    subdivision_lag = _lag(subdivision_tempo)
+    if not (0 < primary_lag < ac.size and 0 < subdivision_lag < ac.size):
+        return BpmOctaveAmbiguity(False, (), 0.0)
+
+    # `librosa.autocorrelate` is an unnormalized sum, so the smaller subdivision
+    # lag has more overlapping frames (n - lag terms) than the primary lag and is
+    # biased upward — on short clips this inflates the ratio purely from window
+    # length and would false-flag a correctly estimated tempo. Normalize each lag
+    # by its overlap count so the ratio reflects per-frame periodicity strength.
+    primary_strength = float(ac[primary_lag]) / (n - primary_lag)
+    if primary_strength <= 0.0:
+        return BpmOctaveAmbiguity(False, (), 0.0)
+
+    subdivision_strength = float(ac[subdivision_lag]) / (n - subdivision_lag)
+    ratio = subdivision_strength / primary_strength
+    if ratio < BPM_OCTAVE_RATIO_THRESHOLD:
+        return BpmOctaveAmbiguity(False, (), 0.0)
+
+    candidates = tuple(sorted({round(bpm, 2), round(subdivision_tempo, 2)}))
+    return BpmOctaveAmbiguity(True, candidates, round(ratio, 4))
 
 
 def _beat_strength_autocorrelation(

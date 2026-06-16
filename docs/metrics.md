@@ -48,13 +48,40 @@ detection path, so the added cost is only the aggregation step.
 
 | Metric | Definition |
 |--------|-----------|
-| BPM | Beats per minute (librosa beat_track) |
+| BPM | Beats per minute (librosa beat_track). Octave (×2) ambiguity is flagged in `PhysicalRPE.bpm_octave_ambiguous` / `bpm_candidates` — see below |
 | Time Signature | Beat-level onset strength autocorrelation over supported meters (`3/4`, `4/4`, `6/8`) |
 | Downbeat Times | Beat-strength phase pick over the inferred meter (`PhysicalRPE.downbeat_times`) |
 | Chord Events | Major/minor triad template match over chroma (`PhysicalRPE.chord_events`) |
 | Melody Contour | `librosa.pyin` monophonic pitch contour (`PhysicalRPE.melody_contour`) |
 | Key | Chroma → Krumhansl-Kessler template matching |
 | Onset Density | Onsets per second |
+
+### BPM Half-fold Detection (R2-2)
+
+`detect_bpm_octave_ambiguity()` flags the **halving error** where a true tempo of
+`2×bpm` is reported at `bpm` (roundtrip_case_studies.md §4: true 175 BPM reported
+near 89). It compares the onset-strength autocorrelation at the ×2 subdivision
+lag against the detected-tempo lag:
+
+- Ordinary subdivided music has comparable subdivision energy (overlap-normalized
+  ratio ≈ 1.0; the four Q1-3 synth fixtures sit at ≤ 1.0), so it is **not** flagged.
+  Each lag's autocorrelation is normalized by its overlap count so the ratio is
+  not biased upward on short clips.
+- A genuine halving error makes the subdivision the real beat, so its
+  autocorrelation **dominates** (ratio ≈ 1.1–1.3 in measured 170/175 cases).
+
+Ambiguity is flagged only when the subdivision dominates (ratio ≥
+`BPM_OCTAVE_RATIO_THRESHOLD` = 1.15). When flagged, `bpm_candidates` lists
+`[bpm, 2×bpm]` and the extractor caps `bpm_confidence` at
+`BPM_OCTAVE_AMBIGUOUS_CONFIDENCE_CAP` = 0.5. The transcribe trust gate
+(`score_draft._bpm_untrusted`) treats the `bpm_octave_ambiguous` flag as
+sensor-blind, so a half-folded BPM transcribes to `TODO(transcribe): bpm
+undetected` (unlocked) rather than being diagnosed as a faithful, locked value —
+the boolean flag, not the cap alone, is what enforces this. Scope: only the ×2
+("reported too slow")
+direction; the ÷2 direction is not recoverable from autocorrelation magnitude
+(every periodic signal peaks at its double period) and is deferred. The 89.1
+attractor *calibration* (R2-1) is a separate, audio-dependent task.
 
 ### Time Signature Detection (Q1-2)
 

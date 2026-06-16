@@ -20,6 +20,7 @@ from svp_rpe.io.source_separator import (
 from svp_rpe.rpe.models import PhysicalRPE, RPEBundle, SectionMarker
 from svp_rpe.rpe.dynamics_summary import compute_dynamics_summary
 from svp_rpe.rpe.physical_features import (
+    BPM_OCTAVE_AMBIGUOUS_CONFIDENCE_CAP,
     compute_active_rate,
     compute_bpm,
     compute_chord_events,
@@ -35,6 +36,7 @@ from svp_rpe.rpe.physical_features import (
     compute_thickness,
     compute_downbeat_times,
     compute_time_signature,
+    detect_bpm_octave_ambiguity,
 )
 from svp_rpe.rpe.section_features import extract_section_features
 from svp_rpe.rpe.semantic_rules import generate_semantic
@@ -170,6 +172,16 @@ def extract_physical(
     onset_density = compute_onset_density(y, sr)
 
     bpm, bpm_confidence = compute_bpm(y, sr)
+    # Half-fold (×2 subdivision) ambiguity is a distinct axis from beat
+    # regularity, so it is combined here rather than inside compute_bpm: when
+    # ambiguous we surface the candidate tempi, set the bpm_octave_ambiguous flag
+    # (which the transcribe trust gate treats as sensor-blind), and cap the
+    # recorded confidence.
+    bpm_octave = detect_bpm_octave_ambiguity(y, sr, bpm)
+    if bpm_octave.is_ambiguous and bpm_confidence is not None:
+        bpm_confidence = round(
+            min(bpm_confidence, BPM_OCTAVE_AMBIGUOUS_CONFIDENCE_CAP), 4
+        )
     time_signature, time_signature_confidence = compute_time_signature(y, sr)
     downbeat_times = compute_downbeat_times(y, sr, time_signature)
     chord_events = compute_chord_events(y, sr)
@@ -210,6 +222,8 @@ def extract_physical(
     phys = PhysicalRPE(
         bpm=bpm,
         bpm_confidence=bpm_confidence,
+        bpm_octave_ambiguous=bpm_octave.is_ambiguous,
+        bpm_candidates=bpm_octave.candidates,
         key=key,
         mode=mode,
         key_confidence=key_confidence,

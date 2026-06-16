@@ -157,18 +157,24 @@ def _key_value(measurement: FieldMeasurement, bundle: RPEBundle) -> str:
     return _required_str_score(measurement)
 
 
-def _bpm_value(measurement: FieldMeasurement, bundle: RPEBundle) -> int | str:
-    if measurement.score_value is None or _is_untrusted_confidence(
+def _bpm_untrusted(bundle: RPEBundle) -> bool:
+    # An octave-ambiguous (half-fold) BPM is treated as sensor-blind: the
+    # estimate may be ×2 off (roundtrip_case_studies.md §4), so transcribing it
+    # as a trusted, locked value would let a half-folded match be diagnosed as
+    # faithful. The CV-based confidence gate is the separate, regularity axis.
+    return bundle.physical.bpm_octave_ambiguous or _is_untrusted_confidence(
         bundle.physical.bpm_confidence
-    ):
+    )
+
+
+def _bpm_value(measurement: FieldMeasurement, bundle: RPEBundle) -> int | str:
+    if measurement.score_value is None or _bpm_untrusted(bundle):
         return TODO_BPM_UNDETECTED
     return _required_int_score(measurement)
 
 
 def _bpm_for_structure(measurement: FieldMeasurement, bundle: RPEBundle) -> int | None:
-    if measurement.score_value is None or _is_untrusted_confidence(
-        bundle.physical.bpm_confidence
-    ):
+    if measurement.score_value is None or _bpm_untrusted(bundle):
         return None
     return _required_int_score(measurement)
 
