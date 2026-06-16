@@ -107,9 +107,19 @@ def key_relation(
     return "off"
 
 
-def screen_song(song: dict[str, Any]) -> dict[str, Any]:
-    """1曲を抽出し指示値と突き合わせる。"""
-    phys = extract_physical_from_file(str(song["audio"]))
+def resolve_audio(raw: str, base_dir: Path | None) -> Path:
+    """manifest の audio パスを解決する。相対パスは ground-truth YAML の置かれた
+    `base_dir` を基準に解決し、manifest を可搬にする（cwd 依存を避ける）。
+    絶対パスはそのまま返す。"""
+    path = Path(raw)
+    if base_dir is not None and not path.is_absolute():
+        return base_dir / path
+    return path
+
+
+def screen_song(song: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
+    """1曲を抽出し指示値と突き合わせる。相対 audio パスは `base_dir` 基準で解決。"""
+    phys = extract_physical_from_file(str(resolve_audio(str(song["audio"]), base_dir)))
     stated_root, stated_mode = parse_key(song.get("key"), song.get("mode"))
     bpm = bpm_relation(float(song["bpm"]), phys.bpm) if song.get("bpm") else {"status": "no_intent"}
     key = key_relation(stated_root, stated_mode, phys.key, phys.mode)
@@ -157,9 +167,11 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def build_report(ground_truth_path: str | Path) -> dict[str, Any]:
-    data = yaml.safe_load(Path(ground_truth_path).read_text(encoding="utf-8"))
+    gt_path = Path(ground_truth_path)
+    data = yaml.safe_load(gt_path.read_text(encoding="utf-8"))
     songs = data["songs"] if isinstance(data, dict) else data
-    rows = [screen_song(song) for song in songs]
+    base_dir = gt_path.resolve().parent
+    rows = [screen_song(song, base_dir=base_dir) for song in songs]
     return {"rows": rows, "summary": aggregate(rows)}
 
 

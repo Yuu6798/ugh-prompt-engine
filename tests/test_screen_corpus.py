@@ -1,7 +1,20 @@
 """Unit tests for the R1 corpus screening comparison logic (pure, no extraction)."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import scripts.screen_corpus as sc
+
+
+def test_resolve_audio_anchors_relative_to_base_dir() -> None:
+    base = Path("/corpus/manifests")
+    # 相対パスは base_dir 基準で解決（cwd 非依存）
+    assert sc.resolve_audio("take.wav", base) == base / "take.wav"
+    assert sc.resolve_audio("audio/take.wav", base) == base / "audio/take.wav"
+    # 絶対パスはそのまま
+    assert sc.resolve_audio("/abs/take.wav", base) == Path("/abs/take.wav")
+    # base_dir 無指定なら生のパス
+    assert sc.resolve_audio("take.wav", None) == Path("take.wav")
 
 
 def test_parse_key_combined_and_split() -> None:
