@@ -203,13 +203,17 @@ def build_report(
     high_band_blind = all(row["high_ratio"] == 0.0 for row in bright_rows)
     tracked = [r for r in ratios if 0.9 <= r <= 1.1]
     bpm_tracks = bool(ratios) and len(tracked) == len(ratios)
-    # ratio が 0.45〜0.55 or 1.9〜2.1 近傍 = オクターブ誤検出。それが
-    # octave_ambiguous フラグで掴めているかを点検（R2-2a 検出器の実効力）。
+    # ratio が clean octave 窓（÷2: 0.45–0.55 / ×2: 1.8–2.2、screen_corpus と同一）に
+    # 入る = オクターブ誤検出。それが octave_ambiguous で掴めているか点検（R2-2a の実効力）。
+    # 窓外の gross 誤検出（例 70→172.3=2.46×）は octave でないので含めない。
+    def _is_octave_ratio(ratio: float) -> bool:
+        return 0.45 <= ratio <= 0.55 or 1.8 <= ratio <= 2.2
+
     unflagged_octave = [
         row
         for row in bpm_rows
         if row["ratio"] is not None
-        and (row["ratio"] >= 1.8 or row["ratio"] <= 0.6)
+        and _is_octave_ratio(row["ratio"])
         and not row["octave_ambiguous"]
     ]
 

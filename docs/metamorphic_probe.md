@@ -74,13 +74,14 @@ python -m pytest tests/test_metamorphic_probe.py    # プロパティ検証
 | 130 | 129.2 | 0.99 | False |
 | 160 | 161.5 | 1.01 | False |
 
-- 100/130/160 は±1%で良好追従するが、**70 BPM は 172 へオクターブ誤検出**。
+- 100/130/160 は±1%で良好追従するが、**70 BPM は 172.3 へ gross 誤検出**（ratio 2.46×）。
   合成器の bpm grip は不安定で、bpm 校正の絶対精度検証は実音源（R1-audio）が必須
   という既存結論（2026-06-16 メモ）を独立に再現。
-- **重要な新知見**: 70→172 のオクターブ誤検出を `octave_ambiguous`（R2-2a 半折り検出器）
-  が**フラグできていない**。R2-2a は onset 自己相関の「×2 subdivision lag」比に基づくため、
-  この合成ケース（基本周期そのものが倍に取られる型）はカバレッジ外。検出器の実効力は
-  この型では発火しない、という具体的限界が掃引で表面化した。
+- なお 2.46× は **clean な octave（÷2/×2）窓外**であり、しかも reported-too-fast 方向なので、
+  ×2（reported-too-slow）のみ対象の R2-2a 半折り検出器の射程外。本ケースは「R2-2a の見逃し」
+  ではなく**合成器 bpm ノブの校正失敗**として扱う（octave-miss 集計＝`unflagged_octave` は
+  clean octave 窓 0.45–0.55 / 1.8–2.2 に限定し、screen_corpus と判定を揃えている）。
+  R2-2a の実効力検証は実 Suno halving（`docs/roundtrip_corpus_screen.md`）で別途行う。
 
 ## 限界と次の一手
 
