@@ -14,6 +14,13 @@
           "match": false
         },
         {
+          "field": "brightness",
+          "intent": "bright",
+          "measured": "neutral",
+          "send_form": "numeric_knob",
+          "match": false
+        },
+        {
           "field": "key",
           "intent": "A# major",
           "measured": "A# major",
@@ -23,7 +30,8 @@
       ],
       "notes": [
         "Observation log from docs/roundtrip_case_studies.md section 1; original audio is not committed.",
-        "Generated from the C-orig transcription prompt; brightness was sent as a qualitative cue."
+        "Compose-rendered prompt: prompt_renderer emits locked brightness as a numeric knob (case study section 3), so brightness is send_form=numeric_knob like J-rock/J-ebm.",
+        "bright -> neutral is a non-preservation surfaced by the comparison; the neutral reading sits in the brightness sensor's blind band, so it conflates non-preservation with sensor blindness."
       ]
     },
     {

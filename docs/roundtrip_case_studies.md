@@ -207,6 +207,15 @@ audio → RPE → draft Score を再実行し、`send_form == "numeric_knob"` �
 R1 箱実装の locator は repo-relative local path のみを受け付ける。artifact URI
 （`https://...` / `s3://...` 等）は resolver 実装まで manifest load 時に reject する。
 
+**`send_form` 運用規約**（各 intent 欄が生成器へどう渡ったか）:
+`numeric_knob` = スキーマ物理欄として明示レンダリング・送出された値（`prompt_renderer`
+が locked PhysicalLayer を出す bpm / key / brightness 等）で**保存性比較の対象**。
+`qualitative_cue` = 構造プロンプトの散文・質的キューとしてのみ届いた値（density / width
+語等）で比較対象外。`not_sent` = プロンプトに一切現れない欄（renderer に segment 無し
+等）で比較対象外。盲目センサーの一致を制御証拠にしない（§3）原則は `numeric_knob` 欄の
+**一致**にのみ適用し、`numeric_knob` 欄の**不一致**（例: C-gen の bright→neutral）は
+非保存として表に残す。
+
 再生成コマンド:
 
 ```bash
