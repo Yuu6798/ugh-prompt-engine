@@ -64,7 +64,7 @@ near 89). It compares the onset-strength autocorrelation at the ×2 subdivision
 lag against the detected-tempo lag:
 
 - Ordinary subdivided music has comparable subdivision energy (ratio ≈ 1.0; the
-  four Q1-3 synth fixtures sit at ≤ 1.001), so it is **not** flagged.
+  four Q1-3 synth fixtures sit at ≤ 1.002), so it is **not** flagged.
 - A genuine halving error makes the subdivision the real beat, so its
   autocorrelation **dominates** (ratio ≈ 1.1–1.3 in measured 170/175 cases).
 

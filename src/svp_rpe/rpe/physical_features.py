@@ -338,7 +338,7 @@ def compute_bpm(y: np.ndarray, sr: int) -> tuple[Optional[float], Optional[float
 #
 # Normal music has subdivision onset energy too (eighth notes, note attacks), so
 # the subdivision autocorrelation is *comparable* (ratio ≈ 1.0) even when the
-# reported tempo is correct — the 4 Q1-3 synth fixtures all sit at ratio ≤ 1.001.
+# reported tempo is correct — the 4 Q1-3 synth fixtures all sit at ratio ≤ 1.002.
 # A genuine halving error is different: the subdivision IS the real beat, so its
 # autocorrelation *dominates* the (super-period) reported tempo (ratio ≈ 1.1–1.3
 # in measured 170/175 halving cases). We therefore flag ambiguity only when the
@@ -347,9 +347,10 @@ def compute_bpm(y: np.ndarray, sr: int) -> tuple[Optional[float], Optional[float
 #
 # Only the subdivision (×2, "reported too slow") direction is detected here.
 # The opposite ÷2 direction (reported too fast) is NOT recoverable from raw
-# autocorrelation magnitude — every periodic signal has a strong peak at its
-# double period — so detecting it would need beat-phase strength analysis and
-# is left out of this slice.
+# autocorrelation magnitude: for a true period T the autocorrelation also peaks
+# at lag 2T (a harmonic), so "true X reported 2X" is indistinguishable from
+# "true 2X with strong half-beat energy". Detecting it would need beat-phase
+# strength analysis and is left out of this slice.
 BPM_OCTAVE_HOP_LENGTH = 512
 BPM_OCTAVE_RATIO_THRESHOLD = 1.15
 # When ambiguous, the RPE-level bpm_confidence is capped (in the extractor) so
@@ -362,8 +363,8 @@ class BpmOctaveAmbiguity:
     """Result of BPM octave (×2 subdivision) ambiguity detection."""
 
     is_ambiguous: bool
-    candidates: list[float]    # sorted plausible tempi incl. detected bpm; [] if unambiguous
-    alt_strength_ratio: float  # subdivision/primary autocorrelation ratio (0.0 if none)
+    candidates: tuple[float, ...]  # sorted plausible tempi incl. detected bpm; () if unambiguous
+    alt_strength_ratio: float      # subdivision/primary autocorrelation ratio (0.0 if none)
 
 
 def detect_bpm_octave_ambiguity(
@@ -382,15 +383,15 @@ def detect_bpm_octave_ambiguity(
     ``2×bpm`` is returned as a candidate alongside ``bpm``.
     """
     if bpm is None or bpm <= 0:
-        return BpmOctaveAmbiguity(False, [], 0.0)
+        return BpmOctaveAmbiguity(False, (), 0.0)
 
     onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop_length)
     if onset_env.size < 2 or not np.any(onset_env > 0):
-        return BpmOctaveAmbiguity(False, [], 0.0)
+        return BpmOctaveAmbiguity(False, (), 0.0)
 
+    # autocorrelate returns one value per input frame, so ac.size == onset_env.size
+    # (≥ 2 here); the lag bounds below are the only size guard needed.
     ac = librosa.autocorrelate(onset_env)
-    if ac.size == 0:
-        return BpmOctaveAmbiguity(False, [], 0.0)
 
     def _lag(tempo: float) -> int:
         return int(round((60.0 / tempo) * sr / hop_length))
@@ -399,17 +400,17 @@ def detect_bpm_octave_ambiguity(
     subdivision_tempo = bpm * 2.0
     subdivision_lag = _lag(subdivision_tempo)
     if not (0 < primary_lag < ac.size and 0 < subdivision_lag < ac.size):
-        return BpmOctaveAmbiguity(False, [], 0.0)
+        return BpmOctaveAmbiguity(False, (), 0.0)
 
     primary_strength = float(ac[primary_lag])
     if primary_strength <= 0.0:
-        return BpmOctaveAmbiguity(False, [], 0.0)
+        return BpmOctaveAmbiguity(False, (), 0.0)
 
     ratio = float(ac[subdivision_lag]) / primary_strength
     if ratio < BPM_OCTAVE_RATIO_THRESHOLD:
-        return BpmOctaveAmbiguity(False, [], 0.0)
+        return BpmOctaveAmbiguity(False, (), 0.0)
 
-    candidates = sorted({round(bpm, 2), round(subdivision_tempo, 2)})
+    candidates = tuple(sorted({round(bpm, 2), round(subdivision_tempo, 2)}))
     return BpmOctaveAmbiguity(True, candidates, round(ratio, 4))
 
 

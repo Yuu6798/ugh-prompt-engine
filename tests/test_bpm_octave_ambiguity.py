@@ -15,8 +15,10 @@ import pytest
 
 from svp_rpe.io.audio_loader import load_audio
 from svp_rpe.rpe.extractor import extract_rpe
+from svp_rpe.rpe import extractor as extractor_mod
 from svp_rpe.rpe.physical_features import (
     BPM_OCTAVE_AMBIGUOUS_CONFIDENCE_CAP,
+    BpmOctaveAmbiguity,
     compute_bpm,
     detect_bpm_octave_ambiguity,
 )
@@ -59,18 +61,18 @@ def test_halving_error_is_flagged_with_both_candidates(true_bpm: float) -> None:
     result = detect_bpm_octave_ambiguity(y, SR, reported)
 
     assert result.is_ambiguous is True
-    assert result.candidates == sorted({reported, round(true_bpm, 2)})
+    assert result.candidates == tuple(sorted({reported, round(true_bpm, 2)}))
     assert result.alt_strength_ratio >= 1.15
 
 
-def test_correct_tempo_is_not_flagged() -> None:
+@pytest.mark.parametrize("bpm", [120.0, 170.0])
+def test_correct_tempo_is_not_flagged(bpm: float) -> None:
     """When the reported tempo matches the beat period, the ×2 subdivision lag
     falls between beats → weak autocorrelation → not ambiguous."""
-    for bpm in (120.0, 170.0):
-        y = _impulse_train(bpm)
-        result = detect_bpm_octave_ambiguity(y, SR, bpm)
-        assert result.is_ambiguous is False
-        assert result.candidates == []
+    y = _impulse_train(bpm)
+    result = detect_bpm_octave_ambiguity(y, SR, bpm)
+    assert result.is_ambiguous is False
+    assert result.candidates == ()
 
 
 def test_none_or_nonpositive_bpm_is_not_flagged() -> None:
@@ -83,7 +85,7 @@ def test_silence_is_not_flagged() -> None:
     silent = np.zeros(SR * 4, dtype=np.float32)
     result = detect_bpm_octave_ambiguity(silent, SR, 120.0)
     assert result.is_ambiguous is False
-    assert result.candidates == []
+    assert result.candidates == ()
 
 
 @pytest.mark.parametrize("filename", Q1_3_FIXTURES)
@@ -114,3 +116,26 @@ def test_extractor_unflagged_fixture_preserves_confidence() -> None:
     # Sanity: this fixture is genuinely above the cap, so an erroneous penalty
     # would be observable.
     assert raw_conf > BPM_OCTAVE_AMBIGUOUS_CONFIDENCE_CAP
+
+
+def test_extractor_ambiguous_fixture_caps_confidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When detection flags ambiguity, the extractor caps bpm_confidence and
+    surfaces the candidate tempi. Forced via monkeypatch so the cap branch is
+    exercised deterministically regardless of the fixture's true tempo."""
+    audio = load_audio(str(SAMPLE_DIR / "synth_03_mid_groove_g_major.wav"))
+    raw_bpm, raw_conf = compute_bpm(audio.y_mono, audio.sr)
+    # Precondition: raw confidence is above the cap, so the cap is observable.
+    assert raw_conf > BPM_OCTAVE_AMBIGUOUS_CONFIDENCE_CAP
+
+    def fake_detect(y, sr, bpm, **kwargs):  # noqa: ANN001
+        candidates = tuple(sorted({round(bpm, 2), round(bpm * 2.0, 2)}))
+        return BpmOctaveAmbiguity(True, candidates, 1.3)
+
+    monkeypatch.setattr(extractor_mod, "detect_bpm_octave_ambiguity", fake_detect)
+    phys = extract_rpe(audio).physical
+
+    assert phys.bpm_octave_ambiguous is True
+    assert phys.bpm_candidates == [round(raw_bpm, 2), round(raw_bpm * 2.0, 2)]
+    assert phys.bpm_confidence == BPM_OCTAVE_AMBIGUOUS_CONFIDENCE_CAP
