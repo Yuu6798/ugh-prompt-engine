@@ -4,6 +4,8 @@
     "schema_version": "1.0",
     "bpm": 136.0,
     "bpm_confidence": 0.8488,
+    "bpm_octave_ambiguous": false,
+    "bpm_candidates": [],
     "key": "F#",
     "mode": "minor",
     "key_confidence": 0.9608,
