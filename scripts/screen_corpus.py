@@ -15,6 +15,7 @@ metamorphic_probe（合成音で配線テスト）に対し、本ツールは実
         bpm: 168
         key: D minor          # "D minor" or split key:/mode:
         time_signature: 4/4   # optional
+        audio_sha256: <hex>   # optional provenance pin; mismatch -> untrusted
 
 使い方:
 
@@ -35,6 +36,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from svp_rpe.perform import sha256_bytes  # noqa: E402
 from svp_rpe.rpe.extractor import extract_physical_from_file  # noqa: E402
 
 _PITCH_CLASS = {
@@ -117,9 +119,40 @@ def resolve_audio(raw: str, base_dir: Path | None) -> Path:
     return path
 
 
+def audio_hash_ok(path: Path, expected: str | None) -> bool:
+    """provenance pin の検証。`expected` が無ければ常に True（pin 任意）。
+    pin がある場合はファイルが実在し sha256 が一致したときのみ True。"""
+    if not expected:
+        return True
+    if not path.is_file():
+        return False
+    return sha256_bytes(path.read_bytes()) == expected
+
+
+def _untrusted_row(song: dict[str, Any], reason: str) -> dict[str, Any]:
+    """provenance 不一致の行。抽出せず保存率からも除外される（untrusted）。"""
+    stated_root, stated_mode = parse_key(song.get("key"), song.get("mode"))
+    return {
+        "id": song.get("id", Path(str(song["audio"])).stem),
+        "provenance": reason,
+        "stated": {
+            "bpm": song.get("bpm"),
+            "key": f"{stated_root} {stated_mode}" if stated_root else None,
+            "time_signature": song.get("time_signature"),
+        },
+        "detected": None,
+        "bpm_relation": {"status": "untrusted"},
+        "key_relation": "untrusted",
+    }
+
+
 def screen_song(song: dict[str, Any], base_dir: Path | None = None) -> dict[str, Any]:
-    """1曲を抽出し指示値と突き合わせる。相対 audio パスは `base_dir` 基準で解決。"""
-    phys = extract_physical_from_file(str(resolve_audio(str(song["audio"]), base_dir)))
+    """1曲を抽出し指示値と突き合わせる。相対 audio パスは `base_dir` 基準で解決。
+    `audio_sha256` pin がある行はバイト一致を検証し、不一致なら抽出せず untrusted。"""
+    audio_path = resolve_audio(str(song["audio"]), base_dir)
+    if not audio_hash_ok(audio_path, song.get("audio_sha256")):
+        return _untrusted_row(song, reason="sha256_mismatch")
+    phys = extract_physical_from_file(str(audio_path))
     stated_root, stated_mode = parse_key(song.get("key"), song.get("mode"))
     bpm = bpm_relation(float(song["bpm"]), phys.bpm) if song.get("bpm") else {"status": "no_intent"}
     key = key_relation(stated_root, stated_mode, phys.key, phys.mode)
@@ -146,7 +179,7 @@ def screen_song(song: dict[str, Any], base_dir: Path | None = None) -> dict[str,
 def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """保存率の base rate を集計。"""
     bpm_status = [r["bpm_relation"]["status"] for r in rows if "ratio" in r["bpm_relation"]]
-    key_status = [r["key_relation"] for r in rows if r["key_relation"] != "unknown"]
+    key_status = [r["key_relation"] for r in rows if r["key_relation"] not in {"unknown", "untrusted"}]
     n_bpm = len(bpm_status) or 1
     n_key = len(key_status) or 1
     # 非保存 bpm 誤差（off/octave_half/octave_double）のうち octave_ambiguous フラグが
@@ -159,8 +192,10 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
         if r["bpm_relation"].get("status") in {"off", "octave_half", "octave_double"}
         and not r["detected"]["bpm_octave_ambiguous"]
     ]
+    untrusted = [r["id"] for r in rows if r.get("provenance")]
     return {
         "n_songs": len(rows),
+        "untrusted": untrusted,
         "bpm_preservation_rate": round(bpm_status.count("preserved") / n_bpm, 3),
         "bpm_status_counts": {s: bpm_status.count(s) for s in sorted(set(bpm_status))},
         "key_preservation_rate": round(key_status.count("preserved") / n_key, 3),
@@ -184,6 +219,12 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines.append("|---|---|---|---|---|---|---|---|")
     for r in report["rows"]:
         s, d = r["stated"], r["detected"]
+        if d is None:  # untrusted (provenance mismatch): 抽出していない
+            lines.append(
+                f"| {r['id']} | {s['bpm']} | — | {r['bpm_relation']['status']} | "
+                f"{s['key']} | — | {r['key_relation']} | — |"
+            )
+            continue
         lines.append(
             f"| {r['id']} | {s['bpm']} | {d['bpm']} | {r['bpm_relation']['status']} | "
             f"{s['key']} | {d['key']} | {r['key_relation']} | {d['high_ratio']} |"
@@ -193,7 +234,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         "## Base rates",
         "",
-        f"- songs: {sm['n_songs']}",
+        f"- songs: {sm['n_songs']}  (untrusted: {sm['untrusted']})",
         f"- bpm preservation: {sm['bpm_preservation_rate']}  {sm['bpm_status_counts']}",
         f"- key preservation: {sm['key_preservation_rate']}  {sm['key_status_counts']}",
         f"- bpm errors unflagged (octave_ambiguous=False): {sm['bpm_errors_unflagged']}",

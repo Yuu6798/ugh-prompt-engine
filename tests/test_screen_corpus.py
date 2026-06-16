@@ -78,3 +78,32 @@ def test_aggregate_base_rates_and_unflagged() -> None:
     assert summary["key_preservation_rate"] == 0.5
     # 非保存 bpm 誤差で octave_ambiguous=False のものが surfaced（"off" も含む総称）
     assert summary["bpm_errors_unflagged"] == ["bad"]
+
+
+def test_audio_hash_ok(tmp_path: Path) -> None:
+    from svp_rpe.perform import sha256_bytes
+
+    f = tmp_path / "take.wav"
+    f.write_bytes(b"abc123")
+    digest = sha256_bytes(b"abc123")
+    assert sc.audio_hash_ok(f, None) is True            # pin 無し = 常に許容
+    assert sc.audio_hash_ok(f, digest) is True          # 一致
+    assert sc.audio_hash_ok(f, "deadbeef") is False     # 不一致
+    assert sc.audio_hash_ok(tmp_path / "missing.wav", digest) is False  # 欠損
+
+
+def test_screen_song_marks_hash_mismatch_untrusted_without_extraction(tmp_path: Path) -> None:
+    # 不一致 hash の行は抽出せず untrusted（早期 return が extract を回避）。
+    f = tmp_path / "take.wav"
+    f.write_bytes(b"not the pinned bytes")
+    song = {"id": "stale", "audio": str(f), "bpm": 120, "key": "C major",
+            "audio_sha256": "0" * 64}
+    row = sc.screen_song(song)
+    assert row["provenance"] == "sha256_mismatch"
+    assert row["detected"] is None
+    assert row["bpm_relation"]["status"] == "untrusted"
+    # untrusted 行は保存率の母数から除外される
+    summary = sc.aggregate([row])
+    assert summary["untrusted"] == ["stale"]
+    assert summary["bpm_preservation_rate"] == 0.0
+    assert summary["key_preservation_rate"] == 0.0
