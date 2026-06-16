@@ -76,5 +76,5 @@ def test_aggregate_base_rates_and_unflagged() -> None:
     assert summary["n_songs"] == 2
     assert summary["bpm_preservation_rate"] == 0.5
     assert summary["key_preservation_rate"] == 0.5
-    # "off" bpm error on a take the octave detector did not flag is surfaced
-    assert summary["bpm_errors_unflagged_by_octave_detector"] == ["bad"]
+    # 非保存 bpm 誤差で octave_ambiguous=False のものが surfaced（"off" も含む総称）
+    assert summary["bpm_errors_unflagged"] == ["bad"]

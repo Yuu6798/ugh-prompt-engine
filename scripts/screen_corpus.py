@@ -149,8 +149,11 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
     key_status = [r["key_relation"] for r in rows if r["key_relation"] != "unknown"]
     n_bpm = len(bpm_status) or 1
     n_key = len(key_status) or 1
-    # bpm が off（非オクターブ誤検出）なのに octave_ambiguous フラグが立っていない例
-    unflagged_off = [
+    # 非保存 bpm 誤差（off/octave_half/octave_double）のうち octave_ambiguous フラグが
+    # 立っていないもの全般。R2-2a の ×2 契約外の "off"（例 172→117.45=0.68× の subharmonic
+    # collapse）も含むため「octave detector のミス」とは名乗らず「未フラグ誤差」と総称する
+    # （これらを掴むのが R2-2b の動機）。
+    unflagged_errors = [
         r["id"]
         for r in rows
         if r["bpm_relation"].get("status") in {"off", "octave_half", "octave_double"}
@@ -162,7 +165,7 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "bpm_status_counts": {s: bpm_status.count(s) for s in sorted(set(bpm_status))},
         "key_preservation_rate": round(key_status.count("preserved") / n_key, 3),
         "key_status_counts": {s: key_status.count(s) for s in sorted(set(key_status))},
-        "bpm_errors_unflagged_by_octave_detector": unflagged_off,
+        "bpm_errors_unflagged": unflagged_errors,
     }
 
 
@@ -193,7 +196,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- songs: {sm['n_songs']}",
         f"- bpm preservation: {sm['bpm_preservation_rate']}  {sm['bpm_status_counts']}",
         f"- key preservation: {sm['key_preservation_rate']}  {sm['key_status_counts']}",
-        f"- bpm errors unflagged by octave detector: {sm['bpm_errors_unflagged_by_octave_detector']}",
+        f"- bpm errors unflagged (octave_ambiguous=False): {sm['bpm_errors_unflagged']}",
         "",
     ]
     return "\n".join(lines)
