@@ -184,6 +184,7 @@ examples/                      # sample_input/ + expected_output/
 | [`docs/score_centric_planning.md`](docs/score_centric_planning.md) | 楽譜中心の再編成: 双方向再現性の通底原理、採譜トラック (T 系列) T0–T2、Q 系列の計器校正への再定義、意味層センサーの将来枠 |
 | [`docs/roundtrip_case_studies.md`](docs/roundtrip_case_studies.md) | Suno 往復テストケース結果 (個別ログ) と R1 corpus manifest の入口: 計器の有効帯域、物理固定・意味差替の制御性 A/B、双方向性成功 (BPM 留保)、BPM 89.1 アトラクタ疑い |
 | [`docs/roundtrip_preservation.md`](docs/roundtrip_preservation.md) | R0 deterministic roundtrip preservation: Score -> perform -> extract -> draft Score diagnostics and K1 cross-check |
+| [`docs/metamorphic_probe.md`](docs/metamorphic_probe.md) | メタモルフィック計器: render_sample×実extract を掃引し grip/校正/直交性/決定論を Hypothesis で自動検証。centroid=tight grip / 高域 brightness=センサー盲 / bpm オクターブ誤検出が R2-2a 未フラグ を計測 |
 
 ## ドキュメント管理ポリシー
 

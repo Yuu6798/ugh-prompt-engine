@@ -153,6 +153,7 @@ svprpe --help
 - [Score-centric Planning](docs/score_centric_planning.md) — Score-first reorganization: bidirectional reproducibility principle, transcription track (T-series, T0–T2), Q-series redefined as instrument calibration, semantic-layer sensors as future scope
 - [Round-trip Case Studies](docs/roundtrip_case_studies.md) — Real-Suno round-trip/controllability results log and R1 corpus manifest path: instrument effective-band, physical-fixed/semantic-swapped A/B, bidirectional test success (BPM caveat), BPM 89.1 attractor suspicion
 - [Roundtrip Preservation](docs/roundtrip_preservation.md) - R0 deterministic score -> performance -> transcription preservation diagnostics and K1 cross-check
+- [Metamorphic Probe](docs/metamorphic_probe.md) — Sweeps render_sample × real extract to auto-verify grip/calibration/orthogonality/determinism (Hypothesis): centroid=tight grip, high-band brightness=blind sensor, bpm octave error unflagged by R2-2a
 - [AGENTS.md](AGENTS.md) — Claude × Codex orchestration protocol (Task Brief / Completion Summary templates)
 
 - [Roundtrip Preservation](docs/roundtrip_preservation.md) - R0 deterministic score -> performance -> transcription preservation diagnostics and K1 cross-check
