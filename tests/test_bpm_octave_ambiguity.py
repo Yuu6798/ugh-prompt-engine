@@ -88,6 +88,21 @@ def test_silence_is_not_flagged() -> None:
     assert result.candidates == ()
 
 
+def test_short_clip_correct_tempo_is_not_flagged() -> None:
+    """Regression: the raw autocorrelation sum is length-biased (the smaller
+    subdivision lag has more overlapping terms), which on a short clip inflated
+    the ratio and false-flagged a correctly estimated tempo. The overlap
+    normalization must keep a 3s correct-tempo clip below the threshold."""
+    audio = load_audio(str(SAMPLE_DIR / "synth_03_mid_groove_g_major.wav"))
+    bpm, _ = compute_bpm(audio.y_mono, audio.sr)
+    short = audio.y_mono[: audio.sr * 3]
+    result = detect_bpm_octave_ambiguity(short, audio.sr, bpm)
+    assert result.is_ambiguous is False, (
+        f"short clip (bpm={bpm}) false-flagged (ratio={result.alt_strength_ratio}); "
+        "overlap normalization regressed."
+    )
+
+
 @pytest.mark.parametrize("filename", Q1_3_FIXTURES)
 def test_q1_3_fixtures_are_not_flagged(filename: str) -> None:
     """Correctly-estimated fixtures must not be flagged — otherwise the
