@@ -71,8 +71,12 @@ lag against the detected-tempo lag:
 Ambiguity is flagged only when the subdivision dominates (ratio ≥
 `BPM_OCTAVE_RATIO_THRESHOLD` = 1.15). When flagged, `bpm_candidates` lists
 `[bpm, 2×bpm]` and the extractor caps `bpm_confidence` at
-`BPM_OCTAVE_AMBIGUOUS_CONFIDENCE_CAP` = 0.5 so roundtrip diagnosis does not treat
-a half-folded match as faithful. Scope: only the ×2 ("reported too slow")
+`BPM_OCTAVE_AMBIGUOUS_CONFIDENCE_CAP` = 0.5. The transcribe trust gate
+(`score_draft._bpm_untrusted`) treats the `bpm_octave_ambiguous` flag as
+sensor-blind, so a half-folded BPM transcribes to `TODO(transcribe): bpm
+undetected` (unlocked) rather than being diagnosed as a faithful, locked value —
+the boolean flag, not the cap alone, is what enforces this. Scope: only the ×2
+("reported too slow")
 direction; the ÷2 direction is not recoverable from autocorrelation magnitude
 (every periodic signal peaks at its double period) and is deferred. The 89.1
 attractor *calibration* (R2-1) is a separate, audio-dependent task.

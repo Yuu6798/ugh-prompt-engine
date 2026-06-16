@@ -353,8 +353,11 @@ def compute_bpm(y: np.ndarray, sr: int) -> tuple[Optional[float], Optional[float
 # strength analysis and is left out of this slice.
 BPM_OCTAVE_HOP_LENGTH = 512
 BPM_OCTAVE_RATIO_THRESHOLD = 1.15
-# When ambiguous, the RPE-level bpm_confidence is capped (in the extractor) so
-# roundtrip diagnosis does not treat a half-folded BPM match as faithful.
+# When ambiguous, the extractor caps the recorded bpm_confidence AND sets the
+# bpm_octave_ambiguous flag; the transcribe trust gate
+# (score_draft._bpm_untrusted) treats that flag as sensor-blind, so a half-folded
+# BPM is not transcribed as a faithful, locked value. The cap alone is only a
+# recorded signal — the boolean flag is what enforces the trust decision.
 BPM_OCTAVE_AMBIGUOUS_CONFIDENCE_CAP = 0.5
 
 

@@ -174,7 +174,9 @@ def extract_physical(
     bpm, bpm_confidence = compute_bpm(y, sr)
     # Half-fold (×2 subdivision) ambiguity is a distinct axis from beat
     # regularity, so it is combined here rather than inside compute_bpm: when
-    # ambiguous we cap the stored confidence and surface the candidate tempi.
+    # ambiguous we surface the candidate tempi, set the bpm_octave_ambiguous flag
+    # (which the transcribe trust gate treats as sensor-blind), and cap the
+    # recorded confidence.
     bpm_octave = detect_bpm_octave_ambiguity(y, sr, bpm)
     if bpm_octave.is_ambiguous and bpm_confidence is not None:
         bpm_confidence = round(

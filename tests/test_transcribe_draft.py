@@ -159,6 +159,22 @@ def test_draft_score_marks_missing_bpm_as_todo(tmp_path: Path) -> None:
     assert load_composition_score(score_path).physical.bpm == TODO_BPM_UNDETECTED
 
 
+def test_draft_score_marks_octave_ambiguous_bpm_as_todo(tmp_path: Path) -> None:
+    # A half-fold (×2) ambiguous BPM must not be transcribed as a trusted,
+    # locked value even with high CV confidence — otherwise a half-folded match
+    # could be diagnosed as faithful (roundtrip_case_studies.md §4).
+    score = draft_score(
+        _make_bundle(bpm=89.0, bpm_confidence=0.88, bpm_octave_ambiguous=True)
+    )
+    yaml_text = render_draft_score_yaml(score)
+    score_path = tmp_path / "octave_ambiguous_bpm.yaml"
+    score_path.write_text(yaml_text, encoding="utf-8")
+
+    assert score.physical.bpm == TODO_BPM_UNDETECTED
+    assert field_fixity(score)["bpm"] == "unlocked"
+    assert load_composition_score(score_path).physical.bpm == TODO_BPM_UNDETECTED
+
+
 def test_draft_score_marks_missing_key_as_todo(tmp_path: Path) -> None:
     score = draft_score(_make_bundle(key=None, mode=None))
     yaml_text = render_draft_score_yaml(score)
@@ -287,6 +303,7 @@ def _make_bundle(
     spectral_centroid: float = 900.0,
     bpm: float | None = 128.2,
     bpm_confidence: float | None = None,
+    bpm_octave_ambiguous: bool = False,
     key: str | None = "C",
     mode: str | None = "minor",
     key_confidence: float | None = None,
@@ -296,6 +313,7 @@ def _make_bundle(
     physical = PhysicalRPE(
         bpm=bpm,
         bpm_confidence=bpm_confidence,
+        bpm_octave_ambiguous=bpm_octave_ambiguous,
         key=key,
         mode=mode,
         key_confidence=key_confidence,
