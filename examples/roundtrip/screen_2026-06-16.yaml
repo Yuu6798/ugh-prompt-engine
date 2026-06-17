@@ -1,0 +1,119 @@
+# R1 corpus screen snapshot — 2026-06-16
+#
+# Real Suno generations screened with `scripts/screen_corpus.py` (stated prompt
+# values vs extractor detections). Audio binaries are NOT committed
+# (licensing / size); `audio_sha256` pins the exact bytes so a future
+# calibratable upgrade can verify provenance. File→song mapping was confirmed
+# by feature self-identification (detected bpm / key matched the prompt), not by
+# filename, to avoid the provenance mix-up seen in the discarded first take.
+#
+# Findings narrative: docs/roundtrip_corpus_screen.md
+schema_version: "1.0"
+screened_at: "2026-06-16"
+generator: suno
+songs:
+  - id: yaoyorozu_shinwa
+    title: 八百万の神話の世界
+    stated: {bpm: 96, key: null, time_signature: 4/4}
+    rhythm: acoustic-traditional, sparse, much silence
+    measured:
+      bpm: 95.7
+      key: B minor
+      centroid: 3099.2
+      high_ratio: 0.0533
+      bpm_octave_ambiguous: false
+    bpm_relation: preserved   # ratio 0.997
+    key_relation: unknown     # no key stated in prompt
+    audio_sha256: ce7a92402b06acff7da6aa89d77928005cb7648256cd3c9e5ee655245c82a725
+
+  - id: shiden_no_inori
+    title: 紫電の祈り
+    stated: {bpm: 168, key: D minor, time_signature: 4/4}
+    rhythm: wafu rock, tight and driving (non-breakbeat)
+    measured:
+      bpm: 172.27
+      key: D minor
+      centroid: 3350.7
+      high_ratio: 0.0615
+      bpm_octave_ambiguous: false
+    bpm_relation: preserved   # ratio 1.025
+    key_relation: preserved
+    audio_sha256: 2d59fa17e5788c6b22fe1a7dd2e22785b72a5f786a572ff27dcc620f2ba7fd30
+
+  - id: so_what_run
+    title: SO WHAT RUN
+    stated: {bpm: 172, key: null, time_signature: 4/4}
+    rhythm: jungle / breakbeat, snare-forward
+    measured:
+      bpm: 117.45
+      key: F# minor
+      centroid: 3404.8
+      high_ratio: 0.0647
+      bpm_octave_ambiguous: false
+    bpm_relation: off         # ratio 0.683 — non-octave collapse
+    key_relation: unknown
+    audio_sha256: 76ef60e437f0a2145bc33fc438b4bd53b47c805b78f4f7ba9eb6f660247722f4
+
+  - id: wafu_jungle_174
+    title: (wafu rock × jungle breakbeat remix)
+    stated: {bpm: 174, key: D minor, time_signature: 4/4}
+    rhythm: jungle breakbeat, "no tempo changes" (groove-only control)
+    measured:
+      bpm: 117.45
+      key: D minor
+      centroid: 3731.0
+      high_ratio: 0.0905
+      bpm_octave_ambiguous: false
+    bpm_relation: off         # ratio 0.675 — non-octave collapse
+    key_relation: preserved
+    audio_sha256: 131fc9ce585506ffbf679dafdd546a5d8ba251e3046cd5c37dc199912f305e03
+
+  - id: astral_trigger
+    title: アストラルトリガー
+    stated: {bpm: 175, key: F# major, time_signature: 4/4}
+    rhythm: J-rock/J-pop, busy hi-hats, double-time final, half-beat fake stop
+    measured:
+      bpm: 117.45
+      key: F# major
+      centroid: 3411.1
+      high_ratio: 0.0692
+      bpm_octave_ambiguous: false
+    bpm_relation: off         # ratio 0.671 — extractor halving (true ~172 in audio)
+    key_relation: preserved
+    audio_sha256: b4307243b408deaf2c45f307477d56c314b95694d4b18ecf61b32c40777f2186
+
+# High-prior recovery diagnostic (librosa start_bpm=180): the fast tracks all
+# recover ~172.3, proving the low default readings are EXTRACTOR halving, not
+# Suno infidelity (the true tempo is present in the audio).
+bpm_recovery_start180:
+  shiden_no_inori: 172.3      # default 172.3 (already preserved)
+  so_what_run: 172.3          # default 117.5 -> recovered
+  wafu_jungle_174: 172.3      # default 117.5 -> recovered
+  astral_trigger: 172.3       # default 117.5 -> recovered
+  yaoyorozu_shinwa: 198.8     # slow track: default 95.7 was correct, high prior overshoots
+
+# Controlled A/B/C experiment (key=Dm, 4/4, sparse electronic, no tempo changes;
+# only BPM + drum pattern vary). Falsified the breakbeat hypothesis: the breakbeat
+# track (B) preserved while the simple four-on-floor tracks (A, C) collapsed.
+abc_experiment:
+  - id: expA_fast176_simple
+    stated: {bpm: 176, key: D minor, time_signature: 4/4}
+    pattern: four-on-the-floor, simple
+    measured: {bpm: 89.1, key: G major, high_ratio: 0.0244, bpm_octave_ambiguous: false}
+    bpm_relation: octave_half   # true 176 recovers at start_bpm=180 -> 172.3
+    key_relation: "off"
+    audio_sha256: 0664ec1f0c10294fa065b5d866206c186af85c65860fb549e29939edd3800744
+  - id: expB_mid130_breakbeat
+    stated: {bpm: 130, key: D minor, time_signature: 4/4}
+    pattern: jungle breakbeat
+    measured: {bpm: 129.2, key: D minor, high_ratio: 0.0439, bpm_octave_ambiguous: false}
+    bpm_relation: preserved
+    key_relation: preserved
+    audio_sha256: 2a915f15f886c34cf15f4e8079f86451b0d019b2e7ad00a58c0fdb347c3fb052
+  - id: expC_mid130_simple_anchor
+    stated: {bpm: 130, key: D minor, time_signature: 4/4}
+    pattern: four-on-the-floor, simple
+    measured: {bpm: 89.1, key: D minor, high_ratio: 0.0263, bpm_octave_ambiguous: false}
+    bpm_relation: "off"
+    key_relation: preserved
+    audio_sha256: 854578aa2dd55f4a4efd1a0f77c8d84e1e88d3c484dda703c53c31a918887b05
