@@ -71,6 +71,27 @@ def test_in_range_song_has_confidence_above_0_7(filename: str, gt_bpm: float) ->
     )
 
 
+def test_start_bpm_default_preserves_behavior() -> None:
+    """`start_bpm=120.0` is librosa's own default, so passing it explicitly must
+    return exactly what omitting it does — the high-prior recovery check (R2,
+    screen_corpus) relies on the default path being untouched."""
+    audio = load_audio(str(SAMPLE_DIR / "synth_03_mid_groove_g_major.wav"))
+    default = compute_bpm(audio.y_mono, audio.sr)
+    explicit = compute_bpm(audio.y_mono, audio.sr, start_bpm=120.0)
+    assert explicit == default
+
+
+def test_high_start_bpm_is_accepted_and_returns_a_tempo() -> None:
+    """A high prior (180) is forwarded to beat_track without error and yields a
+    usable estimate. The actual collapse→recovery flip only manifests on the
+    ambiguous tempograms of real generator audio (clean synth fixtures lock onto
+    their true tempo at any prior), so it is exercised on the R1 corpus, not here."""
+    audio = load_audio(str(SAMPLE_DIR / "synth_05_fast_bright_d_major.wav"))
+    bpm, confidence = compute_bpm(audio.y_mono, audio.sr, start_bpm=180.0)
+    assert bpm is not None and bpm > 0
+    assert confidence is not None
+
+
 def test_silence_returns_zero_confidence() -> None:
     """Pure silence has no detectable beats → confidence must be 0."""
     sr = 22050
@@ -101,7 +122,7 @@ def test_two_beat_scenario_does_not_yield_false_certainty(monkeypatch: pytest.Mo
 
     # Stub librosa.beat.beat_track to return exactly 2 beats. The actual
     # waveform is irrelevant once we override the tracker.
-    def fake_beat_track(*, y, sr):
+    def fake_beat_track(*, y, sr, start_bpm=120.0):
         return 120.0, np.array([0, sr // 2])  # 2 beat frames
 
     monkeypatch.setattr(physical_features.librosa.beat, "beat_track", fake_beat_track)
@@ -120,7 +141,7 @@ def test_three_beat_scenario_can_compute_confidence(monkeypatch: pytest.MonkeyPa
     which is now mathematically meaningful (std is over 2 samples)."""
     from svp_rpe.rpe import physical_features
 
-    def fake_beat_track(*, y, sr):
+    def fake_beat_track(*, y, sr, start_bpm=120.0):
         return 120.0, np.array([0, sr // 2, sr])
 
     monkeypatch.setattr(physical_features.librosa.beat, "beat_track", fake_beat_track)

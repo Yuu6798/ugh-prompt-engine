@@ -54,6 +54,14 @@ key=D minor / 4/4 / 疎な電子パレット / テンポ変化なしを固定し
 高速 4 曲すべて start_bpm=180 で 172.3 を回復 → **真テンポは音源に在り、Suno は ~172 で
 正しく生成**している。崩壊させたのは抽出器側。
 
+> **計器化済み**: この手作業診断は `scripts/screen_corpus.py` に内蔵された。`compute_bpm`
+> が `start_bpm` 引数を取り（既定 120.0＝librosa 既定で挙動不変）、screener が各曲を
+> 既定 prior と高 prior(`HIGH_PRIOR_START_BPM=180`) で二択推定し、「既定で崩壊・高 prior で
+> stated 回復」を `bpm_prior_recovery="recovered"` として分類、`bpm_halving_prior_recoverable`
+> に集計する。これで BPM 非保存を *抽出器 halving* と *生成器不忠実* に自動弁別する。
+> ※ 純合成インパルス列は prior 非感受（真テンポにロック）のため、回復の flip は実生成器の
+> 曖昧な tempogram でのみ顕在化する。分類ロジック自体は注入値で単体テスト済。
+
 ## 確定した知見
 
 ### 1. 「崩壊」は抽出器 BPM halving であって Suno 不忠実ではない

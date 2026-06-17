@@ -45,6 +45,35 @@ def test_bpm_relation_classes() -> None:
     assert sc.bpm_relation(168.0, None)["status"] == "no_detection"
 
 
+def test_prior_recovery_classes() -> None:
+    # 既定 prior で既に保存 → 回復の余地なし
+    assert sc.prior_recovery("preserved", "preserved") == "n/a"
+    assert sc.prior_recovery("preserved", "off") == "n/a"
+    # 既定は崩壊だが高 prior で保存 → 抽出器 halving（真テンポは音源に在る）
+    assert sc.prior_recovery("off", "preserved") == "recovered"
+    assert sc.prior_recovery("octave_half", "preserved") == "recovered"
+    # 高 prior でも非保存 → prior 偏向では説明できない（生成器不忠実 or 別要因）
+    assert sc.prior_recovery("off", "off") == "not_recovered"
+    assert sc.prior_recovery("octave_half", "octave_double") == "not_recovered"
+
+
+def test_classify_prior_recovery_uses_raw_default_not_corrected() -> None:
+    """Codex P2 (PR #85): recovery は補正前の *生* 既定 prior 推定で判定する。
+
+    真 172 が既定 prior で 117.45 へ崩壊（subharmonic）し高 prior で 172.3 を回復する
+    R2-2c/2d シナリオ: 生の default(117.45)=off・high(172.3)=preserved → "recovered"。
+    もし default 側に R2-2c 補正後の 172.3 を渡すと preserved→"n/a" になり、まさに
+    surface すべき halving が母数から漏れる。raw default を渡せば正しく拾えることを pin。
+    """
+    assert sc.classify_prior_recovery(172.0, 117.45, 172.3) == "recovered"
+    # 補正後の値（172.3）を default 側に渡す回帰バグ: "n/a" になってしまう
+    assert sc.classify_prior_recovery(172.0, 172.3, 172.3) == "n/a"
+    # 遅い曲は既定 prior で既に正解 → 回復の余地なし
+    assert sc.classify_prior_recovery(96.0, 95.7, 198.8) == "n/a"
+    # 高 prior でも回復しない（octave double のまま）
+    assert sc.classify_prior_recovery(172.0, 117.45, 86.0) == "not_recovered"
+
+
 def test_key_relation_classes() -> None:
     assert sc.key_relation("D", "minor", "D", "minor") == "preserved"
     # J-rock: E major stated, D major detected = off (whole step, not a clean relation)
@@ -63,12 +92,14 @@ def test_aggregate_base_rates_and_unflagged() -> None:
             "id": "ok",
             "detected": {"bpm_octave_ambiguous": False},
             "bpm_relation": {"status": "preserved", "ratio": 1.0},
+            "bpm_prior_recovery": "n/a",
             "key_relation": "preserved",
         },
         {
             "id": "bad",
             "detected": {"bpm_octave_ambiguous": False},
             "bpm_relation": {"status": "off", "ratio": 0.78},
+            "bpm_prior_recovery": "recovered",
             "key_relation": "off",
         },
     ]
@@ -78,6 +109,8 @@ def test_aggregate_base_rates_and_unflagged() -> None:
     assert summary["key_preservation_rate"] == 0.5
     # 非保存 bpm 誤差で octave_ambiguous=False のものが surfaced（"off" も含む総称）
     assert summary["bpm_errors_unflagged"] == ["bad"]
+    # 高 prior で回復した崩壊（抽出器 halving）が母数として分離される
+    assert summary["bpm_halving_prior_recoverable"] == ["bad"]
 
 
 def test_audio_hash_ok(tmp_path: Path) -> None:

@@ -7,6 +7,11 @@
 metamorphic_probe（合成音で配線テスト）に対し、本ツールは実音源で「指示が生成器を
 通って保存されるか」を測る往復保存(目的2)のスクリーナ。pass/fail でなく計測。
 
+各曲を既定 prior(~120) と高 prior(180) の二択で推定し、「既定 prior で崩壊したが
+高 prior で stated を回復する」行を `bpm_prior_recovery="recovered"` として分離する
+（roundtrip_corpus_screen.md「高 prior 診断」のコード化）。これにより BPM 非保存を
+*抽出器の prior 偏向（halving、真テンポは音源に在る）* と *生成器の不忠実* に弁別する。
+
 入力 ground-truth YAML:
 
     songs:
@@ -36,8 +41,10 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from svp_rpe.io.audio_loader import load_audio  # noqa: E402
 from svp_rpe.perform import sha256_bytes  # noqa: E402
 from svp_rpe.rpe.extractor import extract_physical_from_file  # noqa: E402
+from svp_rpe.rpe.physical_features import compute_bpm  # noqa: E402
 
 _PITCH_CLASS = {
     "C": 0, "C#": 1, "DB": 1, "D": 2, "D#": 3, "EB": 3, "E": 4, "FB": 4,
@@ -47,6 +54,43 @@ _PITCH_CLASS = {
 
 # bpm 保存判定の許容（±%）。これ以内なら preserved。
 BPM_TOLERANCE = 0.04
+
+# 高 prior 回復チェックの tempo prior。既定 prior(~120) は高速曲の真テンポを
+# 89/117.45 のグリッド点へ降格させる（roundtrip_corpus_screen.md「高 prior 診断」）。
+# 実 Suno 6 テイクで start_bpm=180 が全件 172.3 を回復した実測値を採用。
+HIGH_PRIOR_START_BPM = 180.0
+
+
+def prior_recovery(default_status: str, high_prior_status: str) -> str:
+    """既定 prior と高 prior の bpm 保存判定から「崩壊が抽出器 prior 由来か」を分類。
+
+    - "n/a": 既定 prior で既に preserved（回復の余地がない）。
+    - "recovered": 既定は非保存だが高 prior で preserved に転じる
+      → 崩壊は抽出器の prior 偏向（halving）で、真テンポは音源に在る。
+    - "not_recovered": 高 prior でも非保存 → prior 偏向では説明できない
+      （生成器の不忠実、または別の誤差源）。
+    """
+    if default_status == "preserved":
+        return "n/a"
+    if high_prior_status == "preserved":
+        return "recovered"
+    return "not_recovered"
+
+
+def classify_prior_recovery(
+    stated_bpm: float, raw_default_bpm: float | None, high_prior_bpm: float | None
+) -> str:
+    """stated に対する *生の* 既定 prior 推定と高 prior 推定から回復を分類。
+
+    **default 側は補正前の生 `compute_bpm`（start_bpm=120）を渡すこと。**
+    R2-2c/2d 以降 `extract_physical_from_file` は崩壊を検出すると `phys.bpm` を
+    回復テンポへ補正して返すため、補正後の値を default 側に使うと崩壊が preserved に
+    見え、まさに検出器が捕まえた halving が "n/a" となって recovered 母数から漏れる
+    （Codex P2, PR #85）。生の二択推定（同一コードパス・prior のみ差）で比較する。
+    """
+    default_status = bpm_relation(stated_bpm, raw_default_bpm)["status"]
+    high_status = bpm_relation(stated_bpm, high_prior_bpm)["status"]
+    return prior_recovery(default_status, high_status)
 
 
 def pitch_class(root: str) -> int | None:
@@ -156,6 +200,21 @@ def screen_song(song: dict[str, Any], base_dir: Path | None = None) -> dict[str,
     stated_root, stated_mode = parse_key(song.get("key"), song.get("mode"))
     bpm = bpm_relation(float(song["bpm"]), phys.bpm) if song.get("bpm") else {"status": "no_intent"}
     key = key_relation(stated_root, stated_mode, phys.key, phys.mode)
+
+    # 高 prior 回復チェック: 同じ音源を既定 prior(生) と高 prior で *補正前* の生値で
+    # 二択推定し、既定 prior の崩壊が「抽出器 prior 由来（halving）」か「生成器の
+    # 不忠実」かを切り分ける。default 側は phys.bpm（R2-2c/2d 補正済み）でなく生の
+    # compute_bpm を使う（補正後だと崩壊が preserved に見え recovered が漏れる）。
+    # 音源は extract が内部で読むため二重ロードになるが、breadth 計器なので可読性優先。
+    audio = load_audio(str(audio_path))
+    bpm_default_raw, _ = compute_bpm(audio.y_mono, audio.sr)
+    bpm_hp, _ = compute_bpm(audio.y_mono, audio.sr, start_bpm=HIGH_PRIOR_START_BPM)
+    recovery = (
+        classify_prior_recovery(float(song["bpm"]), bpm_default_raw, bpm_hp)
+        if song.get("bpm")
+        else "n/a"
+    )
+
     return {
         "id": song.get("id", Path(str(song["audio"])).stem),
         "stated": {
@@ -165,6 +224,8 @@ def screen_song(song: dict[str, Any], base_dir: Path | None = None) -> dict[str,
         },
         "detected": {
             "bpm": phys.bpm,
+            "bpm_default_raw": bpm_default_raw,
+            "bpm_high_prior": bpm_hp,
             "bpm_octave_ambiguous": phys.bpm_octave_ambiguous,
             "key": f"{phys.key} {phys.mode}" if phys.key else None,
             "time_signature": phys.time_signature,
@@ -172,6 +233,7 @@ def screen_song(song: dict[str, Any], base_dir: Path | None = None) -> dict[str,
             "high_ratio": round(phys.spectral_profile.high_ratio, 4),
         },
         "bpm_relation": bpm,
+        "bpm_prior_recovery": recovery,
         "key_relation": key,
     }
 
@@ -192,6 +254,10 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
         if r["bpm_relation"].get("status") in {"off", "octave_half", "octave_double"}
         and not r["detected"]["bpm_octave_ambiguous"]
     ]
+    # 既定 prior で崩壊したが高 prior(180) で stated を回復した行＝抽出器 halving。
+    # 真テンポは音源に在り、生成器の不忠実ではないと診断できる母数（roundtrip_
+    # corpus_screen.md「高 prior 診断」のコード化）。
+    prior_recoverable = [r["id"] for r in rows if r.get("bpm_prior_recovery") == "recovered"]
     untrusted = [r["id"] for r in rows if r.get("provenance")]
     return {
         "n_songs": len(rows),
@@ -201,6 +267,7 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "key_preservation_rate": round(key_status.count("preserved") / n_key, 3),
         "key_status_counts": {s: key_status.count(s) for s in sorted(set(key_status))},
         "bpm_errors_unflagged": unflagged_errors,
+        "bpm_halving_prior_recoverable": prior_recoverable,
     }
 
 
@@ -215,18 +282,23 @@ def build_report(ground_truth_path: str | Path) -> dict[str, Any]:
 
 def render_markdown(report: dict[str, Any]) -> str:
     lines = ["# R1 Corpus Screen", ""]
-    lines.append("| id | stated bpm | det bpm | bpm | stated key | det key | key | high_ratio |")
-    lines.append("|---|---|---|---|---|---|---|---|")
+    lines.append(
+        "| id | stated bpm | det bpm | raw bpm | hi-prior bpm | bpm | recovery | "
+        "stated key | det key | key | high_ratio |"
+    )
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
     for r in report["rows"]:
         s, d = r["stated"], r["detected"]
         if d is None:  # untrusted (provenance mismatch): 抽出していない
             lines.append(
-                f"| {r['id']} | {s['bpm']} | — | {r['bpm_relation']['status']} | "
+                f"| {r['id']} | {s['bpm']} | — | — | — | {r['bpm_relation']['status']} | — | "
                 f"{s['key']} | — | {r['key_relation']} | — |"
             )
             continue
         lines.append(
-            f"| {r['id']} | {s['bpm']} | {d['bpm']} | {r['bpm_relation']['status']} | "
+            f"| {r['id']} | {s['bpm']} | {d['bpm']} | {d['bpm_default_raw']} | "
+            f"{d['bpm_high_prior']} | {r['bpm_relation']['status']} | "
+            f"{r['bpm_prior_recovery']} | "
             f"{s['key']} | {d['key']} | {r['key_relation']} | {d['high_ratio']} |"
         )
     sm = report["summary"]
@@ -238,6 +310,8 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- bpm preservation: {sm['bpm_preservation_rate']}  {sm['bpm_status_counts']}",
         f"- key preservation: {sm['key_preservation_rate']}  {sm['key_status_counts']}",
         f"- bpm errors unflagged (octave_ambiguous=False): {sm['bpm_errors_unflagged']}",
+        f"- bpm halving prior-recoverable (start_bpm={HIGH_PRIOR_START_BPM:g}): "
+        f"{sm['bpm_halving_prior_recoverable']}",
         "",
     ]
     return "\n".join(lines)
