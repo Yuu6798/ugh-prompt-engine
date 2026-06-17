@@ -298,7 +298,9 @@ PYIN_MIN_VOICING = 0.10
 PYIN_HIGHPASS_HZ = 300.0
 
 
-def compute_bpm(y: np.ndarray, sr: int) -> tuple[Optional[float], Optional[float]]:
+def compute_bpm(
+    y: np.ndarray, sr: int, *, start_bpm: float = 120.0
+) -> tuple[Optional[float], Optional[float]]:
     """Estimate BPM via librosa.beat.beat_track. Returns (bpm, confidence).
 
     `confidence` reflects the **regularity of detected beats** rather than
@@ -306,8 +308,16 @@ def compute_bpm(y: np.ndarray, sr: int) -> tuple[Optional[float], Optional[float
     high confidence. See BPM_CONFIDENCE_CV_SCALE for calibration notes; the
     Q1-3 acceptance criterion is confidence > BPM_CONFIDENCE_AC_THRESHOLD
     (0.7) when the estimate is within ±5 BPM of truth.
+
+    `start_bpm` is the tempo prior forwarded to ``librosa.beat.beat_track``.
+    The default 120.0 is librosa's own default, so omitting it preserves
+    behavior exactly. Raising it (e.g. 180) lets a high-prior re-estimate
+    recover a true fast tempo that the default ~120 prior collapses to a
+    slower BPM-grid point (the 89/117.45 attractor — see
+    roundtrip_corpus_screen.md). The corpus screener uses this to tell an
+    extractor prior artifact apart from genuine non-preservation.
     """
-    tempo, beats = librosa.beat.beat_track(y=y, sr=sr)
+    tempo, beats = librosa.beat.beat_track(y=y, sr=sr, start_bpm=start_bpm)
     bpm = float(np.atleast_1d(tempo)[0])
     if bpm <= 0:
         return None, 0.0
