@@ -77,6 +77,22 @@ def prior_recovery(default_status: str, high_prior_status: str) -> str:
     return "not_recovered"
 
 
+def classify_prior_recovery(
+    stated_bpm: float, raw_default_bpm: float | None, high_prior_bpm: float | None
+) -> str:
+    """stated に対する *生の* 既定 prior 推定と高 prior 推定から回復を分類。
+
+    **default 側は補正前の生 `compute_bpm`（start_bpm=120）を渡すこと。**
+    R2-2c/2d 以降 `extract_physical_from_file` は崩壊を検出すると `phys.bpm` を
+    回復テンポへ補正して返すため、補正後の値を default 側に使うと崩壊が preserved に
+    見え、まさに検出器が捕まえた halving が "n/a" となって recovered 母数から漏れる
+    （Codex P2, PR #85）。生の二択推定（同一コードパス・prior のみ差）で比較する。
+    """
+    default_status = bpm_relation(stated_bpm, raw_default_bpm)["status"]
+    high_status = bpm_relation(stated_bpm, high_prior_bpm)["status"]
+    return prior_recovery(default_status, high_status)
+
+
 def pitch_class(root: str) -> int | None:
     """音名 → ピッチクラス [0,11]。未知は None。"""
     return _PITCH_CLASS.get(root.strip().upper())
@@ -185,17 +201,19 @@ def screen_song(song: dict[str, Any], base_dir: Path | None = None) -> dict[str,
     bpm = bpm_relation(float(song["bpm"]), phys.bpm) if song.get("bpm") else {"status": "no_intent"}
     key = key_relation(stated_root, stated_mode, phys.key, phys.mode)
 
-    # 高 prior 回復チェック: 同じ音源を高 prior で再推定し、既定 prior の崩壊が
-    # 「抽出器 prior 由来（halving）」か「生成器の不忠実」かを切り分ける。音源は
-    # extract が内部で読むため二重ロードになるが、breadth 計器なので可読性を優先。
+    # 高 prior 回復チェック: 同じ音源を既定 prior(生) と高 prior で *補正前* の生値で
+    # 二択推定し、既定 prior の崩壊が「抽出器 prior 由来（halving）」か「生成器の
+    # 不忠実」かを切り分ける。default 側は phys.bpm（R2-2c/2d 補正済み）でなく生の
+    # compute_bpm を使う（補正後だと崩壊が preserved に見え recovered が漏れる）。
+    # 音源は extract が内部で読むため二重ロードになるが、breadth 計器なので可読性優先。
     audio = load_audio(str(audio_path))
+    bpm_default_raw, _ = compute_bpm(audio.y_mono, audio.sr)
     bpm_hp, _ = compute_bpm(audio.y_mono, audio.sr, start_bpm=HIGH_PRIOR_START_BPM)
-    if song.get("bpm"):
-        bpm_hp_rel = bpm_relation(float(song["bpm"]), bpm_hp)
-        recovery = prior_recovery(bpm["status"], bpm_hp_rel["status"])
-    else:
-        bpm_hp_rel = {"status": "no_intent"}
-        recovery = "n/a"
+    recovery = (
+        classify_prior_recovery(float(song["bpm"]), bpm_default_raw, bpm_hp)
+        if song.get("bpm")
+        else "n/a"
+    )
 
     return {
         "id": song.get("id", Path(str(song["audio"])).stem),
@@ -206,6 +224,7 @@ def screen_song(song: dict[str, Any], base_dir: Path | None = None) -> dict[str,
         },
         "detected": {
             "bpm": phys.bpm,
+            "bpm_default_raw": bpm_default_raw,
             "bpm_high_prior": bpm_hp,
             "bpm_octave_ambiguous": phys.bpm_octave_ambiguous,
             "key": f"{phys.key} {phys.mode}" if phys.key else None,
@@ -214,7 +233,6 @@ def screen_song(song: dict[str, Any], base_dir: Path | None = None) -> dict[str,
             "high_ratio": round(phys.spectral_profile.high_ratio, 4),
         },
         "bpm_relation": bpm,
-        "bpm_relation_high_prior": bpm_hp_rel,
         "bpm_prior_recovery": recovery,
         "key_relation": key,
     }
@@ -265,21 +283,22 @@ def build_report(ground_truth_path: str | Path) -> dict[str, Any]:
 def render_markdown(report: dict[str, Any]) -> str:
     lines = ["# R1 Corpus Screen", ""]
     lines.append(
-        "| id | stated bpm | det bpm | hi-prior bpm | bpm | recovery | "
+        "| id | stated bpm | det bpm | raw bpm | hi-prior bpm | bpm | recovery | "
         "stated key | det key | key | high_ratio |"
     )
-    lines.append("|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
     for r in report["rows"]:
         s, d = r["stated"], r["detected"]
         if d is None:  # untrusted (provenance mismatch): 抽出していない
             lines.append(
-                f"| {r['id']} | {s['bpm']} | — | — | {r['bpm_relation']['status']} | — | "
+                f"| {r['id']} | {s['bpm']} | — | — | — | {r['bpm_relation']['status']} | — | "
                 f"{s['key']} | — | {r['key_relation']} | — |"
             )
             continue
         lines.append(
-            f"| {r['id']} | {s['bpm']} | {d['bpm']} | {d['bpm_high_prior']} | "
-            f"{r['bpm_relation']['status']} | {r['bpm_prior_recovery']} | "
+            f"| {r['id']} | {s['bpm']} | {d['bpm']} | {d['bpm_default_raw']} | "
+            f"{d['bpm_high_prior']} | {r['bpm_relation']['status']} | "
+            f"{r['bpm_prior_recovery']} | "
             f"{s['key']} | {d['key']} | {r['key_relation']} | {d['high_ratio']} |"
         )
     sm = report["summary"]
