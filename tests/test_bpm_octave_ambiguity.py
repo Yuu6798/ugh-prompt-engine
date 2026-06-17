@@ -209,16 +209,20 @@ def test_extractor_unflagged_fixture_preserves_confidence() -> None:
     assert raw_conf > BPM_OCTAVE_AMBIGUOUS_CONFIDENCE_CAP
 
 
-def test_extractor_ambiguous_fixture_caps_confidence(
+def test_extractor_ambiguous_fixture_corrects_bpm_and_caps_confidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When detection flags ambiguity, the extractor caps bpm_confidence and
-    surfaces the candidate tempi. Forced via monkeypatch so the cap branch is
-    exercised deterministically regardless of the fixture's true tempo."""
+    """When detection flags ambiguity (R2-2c), the extractor corrects the reported
+    bpm to the recovered faster tempo (max candidate), caps bpm_confidence, and
+    keeps both tempi in bpm_candidates with the original halved reading as the
+    minimum. Forced via monkeypatch so the branch is exercised deterministically
+    regardless of the fixture's true tempo."""
     audio = load_audio(str(SAMPLE_DIR / "synth_03_mid_groove_g_major.wav"))
     raw_bpm, raw_conf = compute_bpm(audio.y_mono, audio.sr)
     # Precondition: raw confidence is above the cap, so the cap is observable.
     assert raw_conf > BPM_OCTAVE_AMBIGUOUS_CONFIDENCE_CAP
+
+    recovered = round(raw_bpm * 2.0, 2)
 
     def fake_detect(y, sr, bpm, **kwargs):  # noqa: ANN001
         candidates = tuple(sorted({round(bpm, 2), round(bpm * 2.0, 2)}))
@@ -228,5 +232,10 @@ def test_extractor_ambiguous_fixture_caps_confidence(
     phys = extract_rpe(audio).physical
 
     assert phys.bpm_octave_ambiguous is True
-    assert phys.bpm_candidates == [round(raw_bpm, 2), round(raw_bpm * 2.0, 2)]
+    # Reported bpm is corrected to the faster recovered tempo (max candidate)…
+    assert phys.bpm == recovered
+    assert phys.bpm == max(phys.bpm_candidates)
+    # …while the original halved reading survives as the minimum candidate.
+    assert min(phys.bpm_candidates) == round(raw_bpm, 2)
+    assert phys.bpm_candidates == [round(raw_bpm, 2), recovered]
     assert phys.bpm_confidence == BPM_OCTAVE_AMBIGUOUS_CONFIDENCE_CAP
