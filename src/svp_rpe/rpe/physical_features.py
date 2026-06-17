@@ -347,6 +347,16 @@ def compute_bpm(y: np.ndarray, sr: int) -> tuple[Optional[float], Optional[float
 # BPM_OCTAVE_RATIO_THRESHOLD (> 1.0) — which separates halving pathology from
 # ordinary subdivided music.
 #
+# The subdivision is NOT assumed to sit at exactly 2×bpm. librosa's tempo
+# estimate is quantized to a BPM grid (a tempo prior over a discrete grid), so a
+# true pulse can land at e.g. 1.93×bpm rather than a clean 2.0× (R1 corpus screen:
+# detected 89.1 / real pulse 172.3 = 1.93×; see roundtrip_corpus_screen.md). A
+# single ×2 lag would fall in a different autocorrelation bin and miss it. We
+# therefore scan a faster-side lag *neighborhood* spanning BPM_OCTAVE_NEIGHBORHOOD
+# (1.8×–2.2×) and take the dominant (overlap-normalized) peak as the subdivision.
+# The window stays narrow so ordinary subdivided music (whose subdivision is
+# comparable, not dominant) is not false-flagged.
+#
 # Only the subdivision (×2, "reported too slow") direction is detected here.
 # The opposite ÷2 direction (reported too fast) is NOT recoverable from raw
 # autocorrelation magnitude: for a true period T the autocorrelation also peaks
@@ -355,6 +365,12 @@ def compute_bpm(y: np.ndarray, sr: int) -> tuple[Optional[float], Optional[float
 # strength analysis and is left out of this slice.
 BPM_OCTAVE_HOP_LENGTH = 512
 BPM_OCTAVE_RATIO_THRESHOLD = 1.15
+# Faster-side lag neighborhood (as a multiple of bpm) scanned for the dominant
+# subdivision peak. 1.8–2.2 brackets both a clean 2.0× halving and the grid-
+# quantized 1.93× real case while staying narrow enough not to admit unrelated
+# subdivision energy. lag is inversely proportional to tempo, so 2.2× maps to the
+# smallest lag and 1.8× to the largest.
+BPM_OCTAVE_NEIGHBORHOOD = (1.8, 2.2)
 # When ambiguous, the extractor caps the recorded bpm_confidence AND sets the
 # bpm_octave_ambiguous flag; the transcribe trust gate
 # (score_draft._bpm_untrusted) treats that flag as sensor-blind, so a half-folded
@@ -381,11 +397,13 @@ def detect_bpm_octave_ambiguity(
 ) -> BpmOctaveAmbiguity:
     """Detect whether `bpm` may be a halving error (true tempo could be 2×bpm).
 
-    Deterministic: compares the onset-strength autocorrelation at the ×2
-    subdivision lag against the detected-tempo lag. When the subdivision
-    autocorrelation *dominates* the reported tempo (ratio ≥
-    ``BPM_OCTAVE_RATIO_THRESHOLD``), the real beat is at the faster tempo and
-    ``2×bpm`` is returned as a candidate alongside ``bpm``.
+    Deterministic: scans the onset-strength autocorrelation across the faster-side
+    lag neighborhood (``BPM_OCTAVE_NEIGHBORHOOD`` × ``bpm``) for the dominant
+    overlap-normalized peak and compares it against the detected-tempo lag. When
+    that subdivision autocorrelation *dominates* the reported tempo (ratio ≥
+    ``BPM_OCTAVE_RATIO_THRESHOLD``), the real beat is at the faster tempo and the
+    recovered tempo (from the dominant lag, not assumed 2×bpm) is returned as a
+    candidate alongside ``bpm``.
     """
     if bpm is None or bpm <= 0:
         return BpmOctaveAmbiguity(False, (), 0.0)
@@ -403,26 +421,42 @@ def detect_bpm_octave_ambiguity(
         return int(round((60.0 / tempo) * sr / hop_length))
 
     primary_lag = _lag(bpm)
-    subdivision_tempo = bpm * 2.0
-    subdivision_lag = _lag(subdivision_tempo)
-    if not (0 < primary_lag < ac.size and 0 < subdivision_lag < ac.size):
+    if not (0 < primary_lag < ac.size):
         return BpmOctaveAmbiguity(False, (), 0.0)
 
-    # `librosa.autocorrelate` is an unnormalized sum, so the smaller subdivision
-    # lag has more overlapping frames (n - lag terms) than the primary lag and is
-    # biased upward — on short clips this inflates the ratio purely from window
-    # length and would false-flag a correctly estimated tempo. Normalize each lag
-    # by its overlap count so the ratio reflects per-frame periodicity strength.
-    primary_strength = float(ac[primary_lag]) / (n - primary_lag)
+    # `librosa.autocorrelate` is an unnormalized sum, so a smaller lag has more
+    # overlapping frames (n - lag terms) than a larger lag and is biased upward —
+    # on short clips this inflates the ratio purely from window length and would
+    # false-flag a correctly estimated tempo. Normalize each lag by its overlap
+    # count so the comparison reflects per-frame periodicity strength.
+    def _strength(lag: int) -> float:
+        return float(ac[lag]) / (n - lag)
+
+    primary_strength = _strength(primary_lag)
     if primary_strength <= 0.0:
         return BpmOctaveAmbiguity(False, (), 0.0)
 
-    subdivision_strength = float(ac[subdivision_lag]) / (n - subdivision_lag)
+    # Scan the faster-side lag neighborhood (2.2× = smallest lag .. 1.8× = largest)
+    # for the dominant overlap-normalized peak. The subdivision is not assumed at
+    # exactly 2×bpm: the BPM-grid-quantized real pulse can land off the clean
+    # octave (e.g. 1.93×), in a different autocorrelation bin a single ×2 lag would
+    # miss. lo/hi are clamped into (primary_lag, ac.size) so the window never
+    # reaches the primary lag or runs past the signal.
+    lo = max(1, _lag(bpm * BPM_OCTAVE_NEIGHBORHOOD[1]))
+    hi = min(ac.size - 1, _lag(bpm * BPM_OCTAVE_NEIGHBORHOOD[0]), primary_lag - 1)
+    if lo > hi:
+        return BpmOctaveAmbiguity(False, (), 0.0)
+
+    best_lag = lo + int(np.argmax([_strength(lag) for lag in range(lo, hi + 1)]))
+    subdivision_strength = _strength(best_lag)
     ratio = subdivision_strength / primary_strength
     if ratio < BPM_OCTAVE_RATIO_THRESHOLD:
         return BpmOctaveAmbiguity(False, (), 0.0)
 
-    candidates = tuple(sorted({round(bpm, 2), round(subdivision_tempo, 2)}))
+    # Recover the faster tempo from the dominant lag rather than assuming 2×bpm,
+    # so the surfaced candidate reflects the actual subdivision period found.
+    recovered_tempo = (60.0 * sr) / (hop_length * best_lag)
+    candidates = tuple(sorted({round(bpm, 2), round(recovered_tempo, 2)}))
     return BpmOctaveAmbiguity(True, candidates, round(ratio, 4))
 
 
