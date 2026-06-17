@@ -101,10 +101,14 @@ class PhysicalRPE(BaseModel):
     bpm: Optional[float] = None
     bpm_confidence: Optional[float] = None
     # BPM octave (half-fold) ambiguity (R2-2). When the onset autocorrelation
-    # carries comparable energy at the ×2 subdivision, the detected tempo may be
-    # a halving error (true tempo could be 2×bpm). `bpm_candidates` lists the
-    # plausible tempi (sorted, incl. the detected bpm) when ambiguous; empty
-    # otherwise. See physical_features.detect_bpm_octave_ambiguity.
+    # carries dominant energy at a faster subdivision, the detected tempo is a
+    # halving error (the real beat is faster). R2-2c: on ambiguity `bpm` is
+    # corrected to the recovered faster tempo (the dominant subdivision lag);
+    # `bpm_candidates` lists the plausible tempi (sorted) — the recovered tempo is
+    # max(candidates) and the original halved reading survives as min(candidates).
+    # Empty when unambiguous. The flag still stays set (bpm_confidence is capped
+    # and the transcribe trust gate treats the corrected value as sensor-blind).
+    # See physical_features.detect_bpm_octave_ambiguity.
     bpm_octave_ambiguous: bool = False
     bpm_candidates: List[float] = Field(default_factory=list)
     key: Optional[str] = None

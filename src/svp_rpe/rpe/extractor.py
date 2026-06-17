@@ -177,11 +177,22 @@ def extract_physical(
     # ambiguous we surface the candidate tempi, set the bpm_octave_ambiguous flag
     # (which the transcribe trust gate treats as sensor-blind), and cap the
     # recorded confidence.
+    #
+    # R2-2c: when ambiguous we also correct the reported bpm to the recovered
+    # (faster) tempo — the dominant subdivision lag, i.e. max(candidates) — rather
+    # than leaving a known half-folded value. This makes phys.bpm the detector's
+    # best tempo estimate (roundtrip screen preservation reflects it directly). The
+    # original halved reading is not lost: it stays in bpm_candidates as
+    # min(candidates). The flag and confidence cap are deliberately kept, so the
+    # transcribe trust gate (_bpm_untrusted) still treats a corrected octave as
+    # sensor-blind rather than over-trusting an uncertain correction.
     bpm_octave = detect_bpm_octave_ambiguity(y, sr, bpm)
-    if bpm_octave.is_ambiguous and bpm_confidence is not None:
-        bpm_confidence = round(
-            min(bpm_confidence, BPM_OCTAVE_AMBIGUOUS_CONFIDENCE_CAP), 4
-        )
+    if bpm_octave.is_ambiguous:
+        bpm = max(bpm_octave.candidates)
+        if bpm_confidence is not None:
+            bpm_confidence = round(
+                min(bpm_confidence, BPM_OCTAVE_AMBIGUOUS_CONFIDENCE_CAP), 4
+            )
     time_signature, time_signature_confidence = compute_time_signature(y, sr)
     downbeat_times = compute_downbeat_times(y, sr, time_signature)
     chord_events = compute_chord_events(y, sr)
