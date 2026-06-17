@@ -27,3 +27,5 @@ Claude が起草し、User が Codex に渡す Task Brief を蓄積する。
 | Q1-3 | BPM 信頼度の再設計 (CV-based) | `claude/q1-3-bpm-confidence` | Claude 代行で実装中（Plan B 継続） |
 | C1 | CompositionScore スキーマ + TargetSVP 変換 | `codex/c1-composition-score-schema` | merged: PR #57（新フロー: Claude 設計 / Codex 実装） |
 | C2 | `svprpe compose` + ExternalPromptAdapter | `codex/c2-compose-prompt-renderer` | merged: PR #59（新フロー継続） |
+| R2-2b | BPM octave 検出の近傍探索一般化 | `claude/codex-unavailability-b7rhxw` | merged: PR #82（Codex 不在・Claude 単独） |
+| R2-2d | BPM subharmonic (3:2) collapse 検出窓統合 | `claude/codex-unavailability-b7rhxw` | Claude 単独実装（Codex 不在） |

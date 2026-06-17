@@ -330,12 +330,14 @@ def compute_bpm(y: np.ndarray, sr: int) -> tuple[Optional[float], Optional[float
     return round(bpm, 2), round(confidence, 4)
 
 
-# BPM octave-ambiguity (half-fold) detection (R2-2, roadmap_goal2.md).
-# librosa's beat tracker reports a single tempo, but a true tempo of 2×bpm can
-# be reported at bpm (the classic halving error — e.g. roundtrip_case_studies.md
-# §4: true 175 BPM reported near 89). We compare the onset-strength
-# autocorrelation at the ×2 subdivision lag against the detected-tempo lag, each
-# normalized by its overlap count (see detect_bpm_octave_ambiguity).
+# BPM faster-tempo collapse detection (R2-2, roadmap_goal2.md). Despite the
+# `octave` naming kept for schema stability, this covers both a 2× octave halving
+# AND a 3:2 sub-octave collapse (R2-2d).
+# librosa's beat tracker reports a single tempo, but a faster true tempo can be
+# reported slower (e.g. roundtrip_case_studies.md §4: true 175 BPM reported near
+# 89; R1 screen: true ~172 reported at 117.45). We compare the onset-strength
+# autocorrelation at the dominant faster-side lag against the detected-tempo lag,
+# each normalized by its overlap count (see detect_bpm_octave_ambiguity).
 #
 # Normal music has subdivision onset energy too (eighth notes, note attacks), so
 # the subdivision autocorrelation is *comparable* (normalized ratio ≈ 1.0) even
@@ -349,16 +351,24 @@ def compute_bpm(y: np.ndarray, sr: int) -> tuple[Optional[float], Optional[float
 #
 # The subdivision is NOT assumed to sit at exactly 2×bpm. librosa's tempo
 # estimate is quantized to a BPM grid (a tempo prior over a discrete grid), so a
-# true pulse can land at e.g. 1.93×bpm rather than a clean 2.0× (R1 corpus screen:
-# detected 89.1 / real pulse 172.3 = 1.93×; see roundtrip_corpus_screen.md). A
-# single ×2 lag would fall in a different autocorrelation bin and miss it. We
-# therefore scan a faster-side lag *neighborhood* spanning BPM_OCTAVE_NEIGHBORHOOD
-# (1.8×–2.2×) and take the dominant (overlap-normalized) peak as the subdivision.
-# The window stays narrow so ordinary subdivided music (whose subdivision is
-# comparable, not dominant) is not false-flagged.
+# true pulse can land off a clean octave. Two grid-quantized collapse families
+# are observed (R1 corpus screen; see roundtrip_corpus_screen.md):
+#   - octave halving: detected 89.1 / real pulse 172.3 = 1.93× (≈ 2×), and
+#   - sub-octave (3:2) collapse: detected 117.45 / real pulse 172.3 = 1.47×, the
+#     "117.45 attractor" — the prior (centred ~120) picks the nearer grid point so
+#     the true 172 grid loses. This is NOT a clean ÷2, so an exactly-2× model
+#     cannot recover it.
+# A single fixed lag would fall in a different autocorrelation bin and miss both.
+# We therefore scan a faster-side lag *neighborhood* spanning BPM_OCTAVE_NEIGHBORHOOD
+# (1.4×–2.2×, covering both the 1.47× sub-octave and the 2× octave collapse) and
+# take the dominant (overlap-normalized) peak as the faster tempo. The threshold
+# keeps the window from admitting ordinary subdivided music (whose subdivision is
+# comparable, not dominant) — a genuinely correct tempo that merely sits at an
+# attractor value (e.g. a real 117.5 BPM track) has ratio ≈ 1.0 and stays
+# unflagged, which is what discriminates a real tempo from a collapsed one.
 #
-# Only the subdivision (×2, "reported too slow") direction is detected here.
-# The opposite ÷2 direction (reported too fast) is NOT recoverable from raw
+# Only the faster ("reported too slow") direction is detected here. The opposite
+# ÷2 / divide direction (reported too fast) is NOT recoverable from raw
 # autocorrelation magnitude: for a true period T the autocorrelation also peaks
 # at lag 2T (a harmonic), so "true X reported 2X" is indistinguishable from
 # "true 2X with strong half-beat energy". Detecting it would need beat-phase
@@ -366,11 +376,11 @@ def compute_bpm(y: np.ndarray, sr: int) -> tuple[Optional[float], Optional[float
 BPM_OCTAVE_HOP_LENGTH = 512
 BPM_OCTAVE_RATIO_THRESHOLD = 1.15
 # Faster-side lag neighborhood (as a multiple of bpm) scanned for the dominant
-# subdivision peak. 1.8–2.2 brackets both a clean 2.0× halving and the grid-
-# quantized 1.93× real case while staying narrow enough not to admit unrelated
-# subdivision energy. lag is inversely proportional to tempo, so 2.2× maps to the
-# smallest lag and 1.8× to the largest.
-BPM_OCTAVE_NEIGHBORHOOD = (1.8, 2.2)
+# faster-tempo peak. 1.4–2.2 brackets both the 3:2 sub-octave collapse (~1.47×,
+# the 117.45 attractor) and a clean/grid-quantized 2× halving (1.93×–2.0×), while
+# the ratio threshold keeps ordinary subdivided music out. lag is inversely
+# proportional to tempo, so 2.2× maps to the smallest lag and 1.4× to the largest.
+BPM_OCTAVE_NEIGHBORHOOD = (1.4, 2.2)
 # When ambiguous, the extractor caps the recorded bpm_confidence AND sets the
 # bpm_octave_ambiguous flag; the transcribe trust gate
 # (score_draft._bpm_untrusted) treats that flag as sensor-blind, so a half-folded
@@ -395,7 +405,10 @@ def detect_bpm_octave_ambiguity(
     *,
     hop_length: int = BPM_OCTAVE_HOP_LENGTH,
 ) -> BpmOctaveAmbiguity:
-    """Detect whether `bpm` may be a halving error (true tempo could be 2×bpm).
+    """Detect whether `bpm` is a faster-tempo collapse (true tempo is faster).
+
+    Covers both a 2× octave halving and a 3:2 sub-octave collapse (the 117.45
+    attractor) — the ``octave`` naming is kept only for schema stability.
 
     Deterministic: scans the onset-strength autocorrelation across the faster-side
     lag neighborhood (``BPM_OCTAVE_NEIGHBORHOOD`` × ``bpm``) for the dominant
