@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import librosa
 import numpy as np
 import pytest
 
@@ -18,6 +19,9 @@ from svp_rpe.rpe.extractor import extract_rpe
 from svp_rpe.rpe import extractor as extractor_mod
 from svp_rpe.rpe.physical_features import (
     BPM_OCTAVE_AMBIGUOUS_CONFIDENCE_CAP,
+    BPM_OCTAVE_HOP_LENGTH,
+    BPM_OCTAVE_NEIGHBORHOOD,
+    BPM_OCTAVE_RATIO_THRESHOLD,
     BpmOctaveAmbiguity,
     compute_bpm,
     detect_bpm_octave_ambiguity,
@@ -51,18 +55,90 @@ def _impulse_train(bpm: float, *, sr: int = SR, dur: float = 10.0) -> np.ndarray
     return y
 
 
+def _old_exact_double_ratio(y: np.ndarray, reported: float) -> float:
+    """Reproduce the pre-R2-2b detector's single exactly-2×bpm lag ratio.
+
+    The old implementation looked only at ``_lag(reported * 2.0)``. This helper
+    recomputes that one-lag ratio so a test can pin the grid-quantization bug:
+    when the real pulse is quantized off a clean octave, that single lag misses it
+    (ratio < BPM_OCTAVE_RATIO_THRESHOLD) while the neighborhood scan catches it.
+    """
+    hop = BPM_OCTAVE_HOP_LENGTH
+    onset_env = librosa.onset.onset_strength(y=y, sr=SR, hop_length=hop)
+    ac = librosa.autocorrelate(onset_env)
+    n = onset_env.size
+
+    def _lag(tempo: float) -> int:
+        return int(round((60.0 / tempo) * SR / hop))
+
+    primary_lag = _lag(reported)
+    subdivision_lag = _lag(reported * 2.0)
+    primary_strength = float(ac[primary_lag]) / (n - primary_lag)
+    subdivision_strength = float(ac[subdivision_lag]) / (n - subdivision_lag)
+    return subdivision_strength / primary_strength
+
+
 @pytest.mark.parametrize("true_bpm", [170.0, 175.0])
 def test_halving_error_is_flagged_with_both_candidates(true_bpm: float) -> None:
     """A signal whose beats are at `true_bpm`, reported at true_bpm/2, must be
-    flagged ambiguous and enumerate both the reported and the ×2 candidate."""
+    flagged ambiguous and enumerate the reported tempo plus a faster candidate in
+    the subdivision neighborhood. The faster candidate is the *recovered* tempo
+    from the dominant lag (lag-quantized), not necessarily exactly `true_bpm`."""
     y = _impulse_train(true_bpm)
     reported = round(true_bpm / 2.0, 2)
+    lo, hi = BPM_OCTAVE_NEIGHBORHOOD
 
     result = detect_bpm_octave_ambiguity(y, SR, reported)
 
     assert result.is_ambiguous is True
-    assert result.candidates == tuple(sorted({reported, round(true_bpm, 2)}))
-    assert result.alt_strength_ratio >= 1.15
+    assert len(result.candidates) == 2
+    assert reported in result.candidates
+    faster = max(result.candidates)
+    assert lo * reported <= faster <= hi * reported
+    assert result.alt_strength_ratio >= BPM_OCTAVE_RATIO_THRESHOLD
+
+
+def test_grid_quantized_halving_is_flagged() -> None:
+    """R2-2b headline case (roundtrip_corpus_screen.md): a true ~172 BPM pulse
+    reported at 89.1 is a 1.93× halving — off a clean 2.0× octave because the BPM
+    estimate is grid-quantized. The neighborhood scan must still flag it and
+    recover a candidate near the true ~172 tempo."""
+    y = _impulse_train(172.3)
+    result = detect_bpm_octave_ambiguity(y, SR, 89.1)
+
+    assert result.is_ambiguous is True
+    assert 89.1 in result.candidates
+    faster = max(result.candidates)
+    assert faster == pytest.approx(172.0, abs=3.0)
+
+
+def test_neighborhood_catches_what_exact_double_misses() -> None:
+    """The bug R2-2b fixes: when the real pulse is quantized off a clean octave so
+    its lag bin differs from _lag(reported×2), the old single-lag-at-2× detector
+    returns a sub-threshold ratio (miss) while the neighborhood scan flags it.
+
+    reported=45.5, true pulse=89.18 (1.96×): the exactly-2× lag (28) is between
+    pulses (ratio < threshold) but the true pulse lands at lag 29."""
+    reported, true_bpm = 45.5, 89.18
+    y = _impulse_train(true_bpm)
+
+    # Old behavior (pinned): the single exactly-2× lag misses the off-octave pulse.
+    assert _old_exact_double_ratio(y, reported) < BPM_OCTAVE_RATIO_THRESHOLD
+
+    # New behavior: the neighborhood scan catches it.
+    result = detect_bpm_octave_ambiguity(y, SR, reported)
+    assert result.is_ambiguous is True
+    assert reported in result.candidates
+
+
+def test_peak_outside_neighborhood_is_not_flagged() -> None:
+    """A faster pulse below the 1.8× window edge (here 1.6×) is not a halving of
+    the reported tempo and must not be flagged — the window stays narrow."""
+    reported = 45.5
+    y = _impulse_train(round(reported * 1.6, 2))
+    result = detect_bpm_octave_ambiguity(y, SR, reported)
+    assert result.is_ambiguous is False
+    assert result.candidates == ()
 
 
 @pytest.mark.parametrize("bpm", [120.0, 170.0])
