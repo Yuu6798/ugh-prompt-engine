@@ -79,10 +79,11 @@ clean octave, e.g. 1.93×), and compares it against the detected-tempo lag:
   Each lag's autocorrelation is normalized by its overlap count so the ratio is
   not biased upward on short clips.
 - A genuine collapse makes the faster tempo the real beat, so its autocorrelation
-  **dominates** (ratio ≥ `BPM_OCTAVE_RATIO_THRESHOLD` = 1.15). A real tempo that
-  merely *coincides* with an attractor value (e.g. a genuine 117.5 BPM track,
-  `synth_01`) still has ratio ≈ 1.0 and stays unflagged — this discriminates a
-  real tempo from a collapsed one.
+  **dominates** (ratio ≥ `BPM_OCTAVE_RATIO_THRESHOLD` = 1.15). The ratio threshold
+  is what discriminates a collapse (faster beat dominates) from a correctly
+  detected tempo whose subdivisions are merely *comparable* — the Q1-3 fixtures,
+  including the 3/4 waltz `synth_04`, stay ≈ 1.0 and unflagged under the widened
+  window.
 
 When flagged, `bpm_candidates` lists the plausible tempi (sorted) and the
 extractor (R2-2c) **corrects** the reported `bpm` to the recovered faster tempo =

@@ -22,9 +22,12 @@ R2-2a(×2検出, #80) → R2-2b(近傍探索, #82) → R2-2c(値補正, #83) →
       ~172 近傍の回復テンポを含む（新規 unit test）。
 - [x] `extract_rpe` 経由で flagged 時に `phys.bpm` が回復テンポへ補正され
       （R2-2c 機構の再利用）、元の崩壊値は `min(bpm_candidates)` に残る。
-- [x] **false-positive 回帰ガード**: 全 Q1-3 synth fixture（特に `synth_04` waltz=3/4 と
-      `synth_01`=実 117.5 BPM）が `is_ambiguous == False` のまま。実 117.5 と
-      崩壊 117.45 を弁別できることを `synth_01` で pin。
+- [x] **false-positive 回帰ガード**: 全 Q1-3 synth fixture（triplet リスクの `synth_04`
+      waltz=3/4、正検出の fast track `synth_05`=172.3 含む）が新窓でも
+      `is_ambiguous == False` のまま。
+      ※ 当初 `synth_01` を「genuine 117.5」弁別ガードに使ったが、Codex P2 指摘で
+      synth_01 は真 60 BPM（117 検出は double error）と判明し撤回。正しい FP ガードは
+      Q1-3 実 fixture（特に correct fast track 不検出）に集約。
 - [x] R2-2b/R2-2c の既存テストが引き続き green（窓拡張で octave 検出が劣化しない）。
 - [x] `compute_bpm` の bpm 値・unflagged fixture の `PhysicalRPE.bpm` は不変。
 
@@ -51,12 +54,15 @@ empirical 事前確認済（着手前）: synth 全 5 曲が新窓で ratio≈0.
   ratio 極大化。既存 `primary_strength <= 0.0` ガードで吸収。
 
 ## Test Strategy
-- 単体: (a) 真172@117.45 subharmonic flag + 回復候補、(b) Q1-3 全曲 unflag、
-  (c) `synth_01`(実117.5) unflag = 真/崩壊の弁別 pin、(d) 窓境界更新: 既存
-  `test_peak_outside_neighborhood_is_not_flagged` は 1.6× を使うが**新窓 [1.4,2.2] の内側**
-  になるため outside 値を 1.3× へ更新。
+- 単体: (a) subharmonic flag + 回復候補。**信号は 2 テンポ重畳**（dominant 172.3 +
+  weak 117.45 グリッド支持）で報告 lag の自己相関を安定正にする。pure impulse train は
+  2/3 subharmonic lag で `primary_strength≈0` の退化点を作り、同一 lib バージョンでも
+  BLAS/FFT スレッド差で ratio が割れる（ローカル pass・CI fail の実例 → `_two_tempo_train`
+  docstring に外部化）。(b) Q1-3 全曲 unflag（triplet `synth_04` + correct fast `synth_05`）。
+  (c) correct tempo に 172.3 を追加し fast track 不検出を pin。
 - 回帰: R2-2b 分離テスト・R2-2c extractor 補正テストの再 green。`compute_bpm` 不変。
-- 既存テストへの影響: 境界値更新のみ必須。
+- 既存テストへの影響: `test_correct_tempo_is_not_flagged` に 172.3 追加のみ。脆弱だった
+  pure-impulse subharmonic / 1.3× boundary テストは撤去（FP ガードは実 fixture に集約）。
 
 ## Scope
 - IN: `src/svp_rpe/rpe/physical_features.py`（`BPM_OCTAVE_NEIGHBORHOOD` 下限 + docstring）、

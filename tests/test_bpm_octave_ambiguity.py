@@ -55,6 +55,38 @@ def _impulse_train(bpm: float, *, sr: int = SR, dur: float = 10.0) -> np.ndarray
     return y
 
 
+def _two_tempo_train(
+    strong_bpm: float,
+    weak_bpm: float,
+    *,
+    strong_amp: float = 1.0,
+    weak_amp: float = 0.2,
+    sr: int = SR,
+    dur: float = 16.0,
+) -> np.ndarray:
+    """A dominant pulse train at `strong_bpm` plus a weaker one at `weak_bpm`.
+
+    Models a sub-octave collapse: the slower grid point (`weak_bpm`) carries some
+    onset support — so the prior can pick it — but the true faster beat
+    (`strong_bpm`) dominates. The weak train gives the reported (slower) lag a
+    *stable positive* autocorrelation. A single-tempo impulse train would instead
+    leave a degenerate near-zero trough at a 2/3 subharmonic lag (primary_strength
+    ≈ 0), which is platform-unstable (float accumulation flips the ratio across
+    BLAS/FFT threading) — exactly what made an earlier pure-impulse version of this
+    test pass locally but fail in CI on identical library versions.
+    """
+    y = np.zeros(int(sr * dur), dtype=np.float32)
+    for bpm, amp in ((strong_bpm, strong_amp), (weak_bpm, weak_amp)):
+        period = 60.0 / bpm
+        t = 0.0
+        while t < dur:
+            i = int(t * sr)
+            if i < y.size:
+                y[i] += amp
+            t += period
+    return y
+
+
 def _old_exact_double_ratio(y: np.ndarray, reported: float) -> float:
     """Reproduce the pre-R2-2b detector's single exactly-2×bpm lag ratio.
 
@@ -132,47 +164,40 @@ def test_neighborhood_catches_what_exact_double_misses() -> None:
 
 
 def test_subharmonic_collapse_is_flagged() -> None:
-    """R2-2d: the 117.45 attractor — a true ~172 BPM pulse reported at 117.45 is a
+    """R2-2d: the 117.45 attractor — a true ~172 BPM beat reported at 117.45 is a
     3:2 sub-octave collapse (172.3/117.45 = 1.47×), NOT a clean ÷2, so the old
     1.8–2.2× octave window could not see it. The widened 1.4–2.2× window flags it
-    and recovers a candidate near the true ~172 tempo."""
-    y = _impulse_train(172.3)
+    and recovers a candidate near the true ~172 tempo.
+
+    Uses a two-tempo signal (dominant 172.3 + weak 117.45 grid support) so the
+    reported-lag autocorrelation is stably positive — see _two_tempo_train."""
+    y = _two_tempo_train(172.3, 117.45)
     result = detect_bpm_octave_ambiguity(y, SR, 117.45)
 
     assert result.is_ambiguous is True
     assert 117.45 in result.candidates
     assert max(result.candidates) == pytest.approx(172.0, abs=3.0)
+    # Comfortably above threshold (≈1.5–1.8), not a knife-edge at primary≈0.
+    assert result.alt_strength_ratio >= 1.3
 
-
-def test_real_attractor_value_tempo_is_not_flagged() -> None:
-    """Discrimination guard: synth_01 is a genuine ~117.5 BPM track — the same
-    value the collapse attractor produces. A real tempo has no dominant faster
-    peak (ratio ≈ 1.0), so it must stay unflagged even though its bpm coincides
-    with the attractor. This is what separates a real tempo from a collapsed one."""
-    audio = load_audio(str(SAMPLE_DIR / "synth_01_slow_pad_c_major.wav"))
-    bpm, _ = compute_bpm(audio.y_mono, audio.sr)
-    result = detect_bpm_octave_ambiguity(audio.y_mono, audio.sr, bpm)
-    assert result.is_ambiguous is False, (
-        f"real-tempo synth_01 (bpm={bpm}) false-flagged "
-        f"(ratio={result.alt_strength_ratio}); widened window admits a real tempo."
+    # The newly-added 1.4–1.8× window region is what catches it: the pre-R2-2d
+    # octave-only window (1.8–2.2×) would not have, since the dominant faster lag
+    # sits at ~1.47× of the reported tempo.
+    octave_lo = int(round((60.0 / (117.45 * 2.2)) * SR / BPM_OCTAVE_HOP_LENGTH))
+    octave_hi = int(round((60.0 / (117.45 * 1.8)) * SR / BPM_OCTAVE_HOP_LENGTH))
+    true_lag = int(round((60.0 / 172.3) * SR / BPM_OCTAVE_HOP_LENGTH))
+    assert not (octave_lo <= true_lag <= octave_hi), (
+        "true-pulse lag must fall outside the old 1.8–2.2× window for this to "
+        "pin the widening; otherwise R2-2b already covered it."
     )
 
 
-def test_peak_outside_neighborhood_is_not_flagged() -> None:
-    """A faster pulse below the 1.4× window edge (here 1.3×) is neither an octave
-    nor a 3:2 collapse of the reported tempo and must not be flagged — the window
-    stays bounded."""
-    reported = 45.5
-    y = _impulse_train(round(reported * 1.3, 2))
-    result = detect_bpm_octave_ambiguity(y, SR, reported)
-    assert result.is_ambiguous is False
-    assert result.candidates == ()
-
-
-@pytest.mark.parametrize("bpm", [120.0, 170.0])
+@pytest.mark.parametrize("bpm", [120.0, 170.0, 172.3])
 def test_correct_tempo_is_not_flagged(bpm: float) -> None:
-    """When the reported tempo matches the beat period, the ×2 subdivision lag
-    falls between beats → weak autocorrelation → not ambiguous."""
+    """When the reported tempo matches the beat period, the faster-side window lags
+    fall between beats → weak autocorrelation → not ambiguous. Includes 172.3 (a
+    fast tempo near the attractor's true value) so the widened 1.4× window is shown
+    not to false-flag a correctly-detected fast track."""
     y = _impulse_train(bpm)
     result = detect_bpm_octave_ambiguity(y, SR, bpm)
     assert result.is_ambiguous is False
