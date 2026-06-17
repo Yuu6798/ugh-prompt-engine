@@ -131,11 +131,39 @@ def test_neighborhood_catches_what_exact_double_misses() -> None:
     assert reported in result.candidates
 
 
+def test_subharmonic_collapse_is_flagged() -> None:
+    """R2-2d: the 117.45 attractor — a true ~172 BPM pulse reported at 117.45 is a
+    3:2 sub-octave collapse (172.3/117.45 = 1.47×), NOT a clean ÷2, so the old
+    1.8–2.2× octave window could not see it. The widened 1.4–2.2× window flags it
+    and recovers a candidate near the true ~172 tempo."""
+    y = _impulse_train(172.3)
+    result = detect_bpm_octave_ambiguity(y, SR, 117.45)
+
+    assert result.is_ambiguous is True
+    assert 117.45 in result.candidates
+    assert max(result.candidates) == pytest.approx(172.0, abs=3.0)
+
+
+def test_real_attractor_value_tempo_is_not_flagged() -> None:
+    """Discrimination guard: synth_01 is a genuine ~117.5 BPM track — the same
+    value the collapse attractor produces. A real tempo has no dominant faster
+    peak (ratio ≈ 1.0), so it must stay unflagged even though its bpm coincides
+    with the attractor. This is what separates a real tempo from a collapsed one."""
+    audio = load_audio(str(SAMPLE_DIR / "synth_01_slow_pad_c_major.wav"))
+    bpm, _ = compute_bpm(audio.y_mono, audio.sr)
+    result = detect_bpm_octave_ambiguity(audio.y_mono, audio.sr, bpm)
+    assert result.is_ambiguous is False, (
+        f"real-tempo synth_01 (bpm={bpm}) false-flagged "
+        f"(ratio={result.alt_strength_ratio}); widened window admits a real tempo."
+    )
+
+
 def test_peak_outside_neighborhood_is_not_flagged() -> None:
-    """A faster pulse below the 1.8× window edge (here 1.6×) is not a halving of
-    the reported tempo and must not be flagged — the window stays narrow."""
+    """A faster pulse below the 1.4× window edge (here 1.3×) is neither an octave
+    nor a 3:2 collapse of the reported tempo and must not be flagged — the window
+    stays bounded."""
     reported = 45.5
-    y = _impulse_train(round(reported * 1.6, 2))
+    y = _impulse_train(round(reported * 1.3, 2))
     result = detect_bpm_octave_ambiguity(y, SR, reported)
     assert result.is_ambiguous is False
     assert result.candidates == ()

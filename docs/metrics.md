@@ -48,7 +48,7 @@ detection path, so the added cost is only the aggregation step.
 
 | Metric | Definition |
 |--------|-----------|
-| BPM | Beats per minute (librosa beat_track). Octave (×2) ambiguity is flagged in `PhysicalRPE.bpm_octave_ambiguous` / `bpm_candidates` — see below |
+| BPM | Beats per minute (librosa beat_track). Faster-tempo collapse (×2 octave + 3:2 sub-octave) is flagged in `PhysicalRPE.bpm_octave_ambiguous` / `bpm_candidates` and corrected to the recovered tempo — see below |
 | Time Signature | Beat-level onset strength autocorrelation over supported meters (`3/4`, `4/4`, `6/8`) |
 | Downbeat Times | Beat-strength phase pick over the inferred meter (`PhysicalRPE.downbeat_times`) |
 | Chord Events | Major/minor triad template match over chroma (`PhysicalRPE.chord_events`) |
@@ -56,32 +56,48 @@ detection path, so the added cost is only the aggregation step.
 | Key | Chroma → Krumhansl-Kessler template matching |
 | Onset Density | Onsets per second |
 
-### BPM Half-fold Detection (R2-2)
+### BPM Faster-tempo Collapse Detection (R2-2)
 
-`detect_bpm_octave_ambiguity()` flags the **halving error** where a true tempo of
-`2×bpm` is reported at `bpm` (roundtrip_case_studies.md §4: true 175 BPM reported
-near 89). It compares the onset-strength autocorrelation at the ×2 subdivision
-lag against the detected-tempo lag:
+`detect_bpm_octave_ambiguity()` flags the **faster-tempo collapse** where a faster
+true tempo is reported slower. The `octave` naming is kept for schema stability,
+but two collapse families are covered:
+
+- **octave halving** (R2-2a/2b): true `~2×bpm` reported at `bpm`
+  (roundtrip_case_studies.md §4: true 175 BPM near 89).
+- **3:2 sub-octave collapse** (R2-2d): true `~1.47×bpm` reported at `bpm` — the
+  "117.45 attractor" (R1 screen: true ~172 reported at 117.45). librosa's tempo
+  prior (centred ~120) picks the nearer BPM-grid point, so the true 172 grid loses.
+  This is *not* a clean ÷2, so an exactly-2× model cannot recover it.
+
+It scans the onset-strength autocorrelation across a faster-side lag neighborhood
+`BPM_OCTAVE_NEIGHBORHOOD` = (1.4, 2.2)× `bpm` for the dominant overlap-normalized
+peak (not a single fixed ×2 lag — grid quantization lands the real pulse off a
+clean octave, e.g. 1.93×), and compares it against the detected-tempo lag:
 
 - Ordinary subdivided music has comparable subdivision energy (overlap-normalized
-  ratio ≈ 1.0; the four Q1-3 synth fixtures sit at ≤ 1.0), so it is **not** flagged.
+  ratio ≈ 1.0; the Q1-3 synth fixtures sit at ≤ 1.0), so it is **not** flagged.
   Each lag's autocorrelation is normalized by its overlap count so the ratio is
   not biased upward on short clips.
-- A genuine halving error makes the subdivision the real beat, so its
-  autocorrelation **dominates** (ratio ≈ 1.1–1.3 in measured 170/175 cases).
+- A genuine collapse makes the faster tempo the real beat, so its autocorrelation
+  **dominates** (ratio ≥ `BPM_OCTAVE_RATIO_THRESHOLD` = 1.15). A real tempo that
+  merely *coincides* with an attractor value (e.g. a genuine 117.5 BPM track,
+  `synth_01`) still has ratio ≈ 1.0 and stays unflagged — this discriminates a
+  real tempo from a collapsed one.
 
-Ambiguity is flagged only when the subdivision dominates (ratio ≥
-`BPM_OCTAVE_RATIO_THRESHOLD` = 1.15). When flagged, `bpm_candidates` lists
-`[bpm, 2×bpm]` and the extractor caps `bpm_confidence` at
-`BPM_OCTAVE_AMBIGUOUS_CONFIDENCE_CAP` = 0.5. The transcribe trust gate
-(`score_draft._bpm_untrusted`) treats the `bpm_octave_ambiguous` flag as
-sensor-blind, so a half-folded BPM transcribes to `TODO(transcribe): bpm
-undetected` (unlocked) rather than being diagnosed as a faithful, locked value —
-the boolean flag, not the cap alone, is what enforces this. Scope: only the ×2
-("reported too slow")
-direction; the ÷2 direction is not recoverable from autocorrelation magnitude
-(every periodic signal peaks at its double period) and is deferred. The 89.1
-attractor *calibration* (R2-1) is a separate, audio-dependent task.
+When flagged, `bpm_candidates` lists the plausible tempi (sorted) and the
+extractor (R2-2c) **corrects** the reported `bpm` to the recovered faster tempo =
+`max(candidates)`; the original collapsed reading survives as `min(candidates)`.
+`bpm_confidence` is still capped at `BPM_OCTAVE_AMBIGUOUS_CONFIDENCE_CAP` = 0.5 and
+the flag stays set, so the transcribe trust gate (`score_draft._bpm_untrusted`)
+treats the corrected value as sensor-blind — it transcribes to `TODO(transcribe):
+bpm undetected` (unlocked) rather than a faithful, locked value. The boolean flag,
+not the cap alone, is what enforces this.
+
+Scope: only the faster ("reported too slow") direction; the ÷2 direction is not
+recoverable from autocorrelation magnitude (every periodic signal peaks at its
+double period) and is deferred. The post-hoc detector is a *partial mitigation* —
+the principled fix for the attractor is the tempo prior itself (adaptive / higher
+`start_bpm`), a separate higher-regression task (roundtrip_corpus_screen.md).
 
 ### Time Signature Detection (Q1-2)
 
