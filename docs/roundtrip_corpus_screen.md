@@ -62,6 +62,38 @@ key=D minor / 4/4 / 疎な電子パレット / テンポ変化なしを固定し
 > ※ 純合成インパルス列は prior 非感受（真テンポにロック）のため、回復の flip は実生成器の
 > 曖昧な tempogram でのみ顕在化する。分類ロジック自体は注入値で単体テスト済。
 
+## 低 prior 診断（÷2 は extractor で補正しない）
+
+反対方向、つまり **reported-too-fast / doubling**（例: stated 60 が既定 prior で 117.45
+に上がる）は `scripts/screen_corpus.py` の screener 診断に限定して扱う。`LOW_PRIOR_START_BPM=50`
+で再推定し、「既定で非保存・低 prior で stated 回復」を
+`bpm_doubling_prior_recovery="recovered"`、summary では
+`bpm_doubling_prior_recoverable` として分離する。
+
+この経路は **stated 真値を持つ screener でのみ成立**する。低 prior 単体を extractor に
+載せると、正しく推定できている音源まで低速側へ引きずるため自己検証できない。実測では
+sample fixture の `synth_01_slow_pad_c_major`（stated 60）は default 117.45 → low prior
+60.09 へ回復する一方、`synth_03_mid_groove_g_major`（stated 120）は default 123.05 で
+既に保存されているのに low prior で 60.09 へ崩壊する。screener は `prior_recovery` の
+「default が preserved なら n/a」ガードにより後者を補正対象にしないが、extractor には
+その stated 比較が無い。
+
+検討した extractor 側 ÷2 補正は、以下の負の結果により採用しない。
+
+1. **AC 振幅では分離不能**: 周期 T を持つ信号は lag 2T にも必ずピークを持つ。reported
+   tempo が速すぎるのか、単に小節/拍の上位周期を含む正しい音楽なのかを、自己相関振幅だけ
+   では決められない。
+2. **beat-phase 交替は反証された**: pad の正検出候補 `synth_01` は weak/strong≈0.82 で
+   交替が最弱に近い。逆に正検出扱いにしたい `synth_02` / `synth_05` の方が強い交替を示し、
+   「交替が強いなら ÷2 補正」という規則は誤検出側へ倒れる。
+3. **単独低 prior は自己検証不能**: 低 prior は `synth_01` の stated 60 を回復するが、
+   stated 120 の `synth_03` も 60 へ崩壊させる。stated 真値との比較なしに「回復」か
+   「破壊」かを判定できない。
+
+したがって R2-2e の境界は明確に **screener 限定**とする。`PhysicalRPE` / extractor の
+`bpm_octave_ambiguous` と `bpm_candidates` は faster-side（reported-too-slow）専用のまま
+維持し、÷2 自動補正や新フィールドは追加しない。
+
 ## 確定した知見
 
 ### 1. 「崩壊」は抽出器 BPM halving であって Suno 不忠実ではない
@@ -101,7 +133,8 @@ busy-electronic(0.069) < dense(0.091) と編成の明るさ/密度順に並び�
 ## 限界と次の一手
 
 - **計測規律**: 保存率を測るとき、抽出器 halving と生成器不忠実を必ず分離する。
-  `screen_corpus` に「高 prior 真テンポ回復チェック」を組み込めば保存率が正しく出る。
+  `screen_corpus` の高 prior / 低 prior 回復チェックで、抽出器 halving / doubling と
+  生成器不忠実を分けてから保存率を読む。
 - **最優先の実装課題**: 既定 tempo prior の見直し（適応 prior or octave 補正）と R2-2a の
   近傍探索化。Design Memo 化して Codex 実装に渡す候補。
 - calibratable 化（audio 同梱 + hash 一致）は licensing 確認後。現状 observation_log 相当。
