@@ -30,3 +30,4 @@ STATUS.md "Recently Merged"（最新 5 件保持）から溢れたマージ済�
 | #79 | refactor+fix: TODO センチネル集約 + C-gen send_form 整合 | 2026-06-16 | P3-followup |
 | #77 | feat(roundtrip): R1 再実行可能 corpus + manifest 箱 (svprpe roundtrip-corpus) | 2026-06-15 | R1 |
 | #76 | feat(compose): R5 fixity 型 + 入場試験制度化 | 2026-06-15 | R5 |
+| #81 | feat(tooling): メタモルフィック計器 + R1 corpus スクリーナ（抽出器 BPM halving 発見） | 2026-06-16 | R1/R2 |
