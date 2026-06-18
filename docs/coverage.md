@@ -20,7 +20,7 @@ or deterministic regression coverage.
 |---|---|---|---|
 | Audio loading metadata | `librosa` / `soundfile` load path | WAV/MP3 loader tests and sample fixture tests | Unsupported decode errors still depend on backend behavior |
 | Duration / sample rate / channels | Loader metadata | Ground-truth sample metadata tests | Resampling behavior follows loader configuration |
-| BPM / tempo | `librosa.beat.beat_track` plus confidence calibration | 4/5 synth samples within 5 BPM | `synth_01` slow-pad octave error remains |
+| BPM / tempo | `librosa.beat.beat_track` plus confidence calibration | 4/5 synth samples within 5 BPM | `synth_01` slow-pad ÷2 octave error remains; the extractor cannot recover it (screener-only via low-prior, #86). bpm is excluded from the R3 trusted reproduction knobs — see roadmap_goal2.md §4 / roundtrip_preservation.md (R2-3) |
 | Key / mode | Chroma against Krumhansl-Kessler templates | 5/5 synth samples pass weighted key score | Enharmonic spelling and modulation are not modeled |
 | Time signature | Beat-strength autocorrelation for `3/4`, `4/4`, `6/8` | 5/5 synth samples for `3/4` and `4/4`; `6/8` unit-tested | `6/8` has no audio-level fixture yet |
 | Downbeat times | Deterministic beat-strength phase fallback | 4/5 synth samples meet hit-rate threshold | `synth_02` phase drift remains; madmom is deferred |
