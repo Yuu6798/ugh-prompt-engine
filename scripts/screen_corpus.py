@@ -103,12 +103,17 @@ def classify_doubling_recovery(
     """stated に対する *生の* 既定 prior 推定と低 prior 推定から回復を分類。
 
     reported-too-fast / doubling（真テンポは低いが既定 prior が速い側を選ぶ）を、低 prior
-    再推定で stated に戻るかだけで診断する。分類規則は direction-agnostic な
-    `prior_recovery` をそのまま使い、extractor 側の補正や新規検出ロジックは追加しない。
+    再推定で stated に戻るかで診断する。回復分類は direction-agnostic な `prior_recovery`
+    を使いつつ、doubling 診断なので既定生 BPM が stated より速い側にあることだけを要求する。
     """
     default_status = bpm_relation(stated_bpm, raw_default_bpm)["status"]
     low_status = bpm_relation(stated_bpm, low_prior_bpm)["status"]
-    return prior_recovery(default_status, low_status)
+    recovery = prior_recovery(default_status, low_status)
+    if recovery != "recovered":
+        return recovery
+    if raw_default_bpm is None or raw_default_bpm <= stated_bpm * (1.0 + BPM_TOLERANCE):
+        return "not_recovered"
+    return recovery
 
 
 def pitch_class(root: str) -> int | None:

@@ -89,6 +89,8 @@ def test_classify_doubling_recovery_uses_low_prior_with_same_recovery_rule() -> 
     assert sc.classify_doubling_recovery(60.0, 117.45, 118.0) == "not_recovered"
     # halving ケースを doubling と取り違えない
     assert sc.classify_doubling_recovery(172.0, 89.1, 86.0) == "not_recovered"
+    # 低 prior で stated を回復しても、既定が遅い側なら doubling ではない
+    assert sc.classify_doubling_recovery(172.0, 89.1, 172.3) == "not_recovered"
 
 
 def test_key_relation_classes() -> None:
