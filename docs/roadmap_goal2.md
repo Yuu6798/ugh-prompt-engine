@@ -220,7 +220,10 @@ confidence を精緻化するだけの**非ブロッキング follow-up**（R1-a
 転移の確認（K2）はコンセプトの土台に関わる
 （[`score_centric_planning.md`](score_centric_planning.md) §6 急所2）。
 
-**依存**: R1（再実行可能 corpus）/ R2（bpm 校正）/ K2。
+**依存**: R1（再実行可能 corpus の **key / brightness 部分**）/ K2。
+**R2 はブロッカーではない** — R2 closeout（2026-06-18, bpm を R3 信頼ノブから除外確定）
+の scope 決定を入力として受けるのみで、bpm 校正の完了を待たない（残 CV-scale 校正は
+非ブロッキング follow-up）。
 
 | ID | 成果物 | 受け入れ条件 |
 |---|---|---|
