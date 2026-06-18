@@ -7,8 +7,8 @@
 metamorphic_probe（合成音で配線テスト）に対し、本ツールは実音源で「指示が生成器を
 通って保存されるか」を測る往復保存(目的2)のスクリーナ。pass/fail でなく計測。
 
-各曲を既定 prior(~120) と高 prior(180) / 低 prior(50) の二択で推定し、「既定 prior で
-崩壊したが prior を変えると stated を回復する」行を prior recovery として分離する
+各曲を既定 prior(~120) に対して高 prior(180) / 低 prior(50) でも再推定し、「既定 prior で
+崩壊したが別 prior で stated を回復する」行を prior recovery として分離する
 （roundtrip_corpus_screen.md「prior 診断」のコード化）。これにより BPM 非保存を
 *抽出器の prior 偏向（真テンポは音源に在る）* と *生成器の不忠実* に弁別する。
 
@@ -286,6 +286,7 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
     # 真テンポは音源に在り、生成器の不忠実ではないと診断できる母数（roundtrip_
     # corpus_screen.md「高 prior 診断」のコード化）。
     prior_recoverable = [r["id"] for r in rows if r.get("bpm_prior_recovery") == "recovered"]
+    # 既定 prior で倍速側へ崩壊したが低 prior(50) で stated を回復した行＝抽出器 doubling。
     doubling_prior_recoverable = [
         r["id"] for r in rows if r.get("bpm_doubling_prior_recovery") == "recovered"
     ]
