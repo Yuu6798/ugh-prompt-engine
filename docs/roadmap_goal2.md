@@ -89,13 +89,18 @@
 コード根拠で棚卸しする。**マーカー: ✅ = 受け入れまで達成 / ⏳ = 実装済みだが
 往復実証の受け入れに残あり / ❌ = 未着手**。
 
+> **更新（2026-06-18）**: **R2 / Q1-3（BPM 校正）は closeout 済** — bpm を確率的経路
+> (R3) の信頼再現ノブから明示除外で確定（§R2 / 完成定義 §4）。下表・残作業の
+> R2・bpm 関連セルはこの除外確定で上書きされ、残るのは非ブロッキングな
+> `BPM_CONFIDENCE_CV_SCALE` follow-up（R1-audio licensing 待ち）のみ。
+
 | トラック | 目的2 への寄与 | 状態 |
 |---|---|---|
 | C 系列（作曲＝行き道） | Score → TargetSVP → プロンプト / 決定論シンセ演奏者 | ✅ C1–C4 完了（[`composition_poc_report.md`](composition_poc_report.md)）。C4 が決定論演奏者として往復の行き道を提供 |
 | T 系列（採譜＝帰り道） | 演奏 → 計測 → draft Score | ⏳ T0（per-field 計測）/ T1（`svprpe transcribe`）実装済み（PR #70/#71）。**T2（往復保存性の最小実証）が未着手** |
 | K 系列（grip） | フィールドごとの「効き」地図 | ⏳ K0/K1 完了（決定論演奏者、PR #61/#65、dead 2 分類確立）。**K2（Suno 転移）未** |
-| Q 系列（校正） | 復路の計器の目盛り付け | ⏳ 計器は実装済み。**Q1-3（BPM 信頼度再設計）が未記録 — 復路の誤差源として最優先** |
-| 実生成器先取り | 実 Suno での往復 n=1 | ⏳ [`roundtrip_case_studies.md`](roundtrip_case_studies.md): key/brightness で往復成功・bpm 判定不能・音源未コミットで**再実行不可** |
+| Q 系列（校正） | 復路の計器の目盛り付け | ✅ Q1-3（BPM 校正）closeout 済（2026-06-18, #82–#86）— bpm を R3 信頼ノブから除外確定。残 `BPM_CONFIDENCE_CV_SCALE` 実校正は非ブロッキング follow-up（R1-audio licensing 待ち） |
+| 実生成器先取り | 実 Suno での往復 n=1 | ⏳ [`roundtrip_case_studies.md`](roundtrip_case_studies.md): key/brightness で往復成功・bpm は除外確定（closeout）・音源未コミットで**再実行不可**（R1 で解消予定） |
 
 **目的2 固有の残作業**（既存トラックの成果物を束ねる接着剤）は次の 4 点に偏る:
 
@@ -103,7 +108,8 @@
    ゲートへ昇格させる（R0）
 2. **再実行可能 corpus + manifest** — roundtrip 検証が n=1・再測不可に留まる根因。
    音源 + 真値 + manifest の保存基盤（R1）
-3. **復路誤差源（bpm アトラクタ）の校正** — Q1-3 連動（R2）
+3. ~~**復路誤差源（bpm アトラクタ）の校正** — Q1-3 連動（R2）~~ **✅ closeout 済
+   （2026-06-18）** — bpm を R3 信頼ノブから除外確定。残 CV-scale 校正は非ブロッキング
 4. **意味層 grip の機械確認** — 事象レベル欄（T3 / 急所1）が無いため、
    現状 rock↔EBM の差は耳でしか判定できない（R4）
 
