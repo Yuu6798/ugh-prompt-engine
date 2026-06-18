@@ -45,6 +45,19 @@ Snapshot fixtures live in `examples/roundtrip/*_roundtrip.json`.
   tolerance. This is the known tempo-calibration risk tracked in Q1-3/R2: the
   harness can surface the mismatch, but should not tune the BPM estimator inside
   R0.
+  **Per-field bpm trust (R2-3 closeout, 2026-06-18):** bpm is *excluded* from the
+  trusted reproduction knobs on the probabilistic (R3) path. The R2 detector
+  series (#82–#86) only partially mitigates the faster-side (reported-too-slow)
+  collapse post-hoc, and the ÷2 (reported-too-fast / doubling) direction is
+  unrecoverable inside the extractor — it passes at high confidence and
+  `bpm_octave_ambiguous=False` (e.g. the original `synth_01` sample WAV: true 60,
+  detected 117.45, confidence 0.877). Only the corpus screener, which has stated
+  truth, diagnoses ÷2 via low-prior recovery. So bpm is honest-but-untrusted: in
+  R0 it is still measured and surfaces `preserved` / `calibration_disagreement`
+  as above, but it is **not claimed as a faithful, locked reproduction target**.
+  The transcribe trust gate already encodes this by emitting
+  `TODO(transcribe): bpm undetected` (unlocked) whenever the half-fold flag fires.
+  See roadmap_goal2.md 完成定義 §4.
 - `brightness` uses the canonical spectral-centroid sensor. Dark targets are
   preserved in the first three examples; bright targets surface
   `calibration_disagreement` in the last two because the deterministic performer
@@ -98,5 +111,11 @@ before becoming canonical. The Design Memo must state:
 ## Follow-Up Routing
 
 - R2/Q1-3: tempo estimator calibration, including low/half-tempo attractors.
+  **R2 closed (2026-06-18):** bpm is excluded from the R3 trusted reproduction
+  knobs (faster-side mitigation is post-hoc; the ÷2 doubling direction is
+  extractor-unrecoverable, screener-only). The remaining
+  `BPM_CONFIDENCE_CV_SCALE` real-audio calibration waits on R1-audio (licensing)
+  and only refines confidence — it does not reopen the exclusion. See
+  roadmap_goal2.md 完成定義 §4 / R2-3.
 - R4: brightness performer/sensor calibration for the bright band.
 - T-series calibration: time-signature confidence and stereo-width banding.

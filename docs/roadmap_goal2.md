@@ -41,7 +41,19 @@
    （条件 3 の「計器が信頼できる物理ノブ」）に届かない場合は、**bpm を再現対象
    から明示的に除外し理由を記録する** — どちらの結論でも R2 から本定義・R3 の
    スコープへ伝播させ、矛盾を残さない（フォールバックは「未確定」ではなく
-   「除外確定」）
+   「除外確定」）。
+   **【確定: 2026-06-18, R2 closeout（PR #82–#86）】** bpm は **確率的経路（R3）の
+   信頼再現ノブから明示除外** する。理由: faster-side（reported-too-slow / halving）は
+   post-hoc な部分緩和（検出＋補正＋ confidence cap）に留まり principled fix（tempo
+   prior 適応化）は別の高回帰タスクで OUT、**÷2 方向（reported-too-fast / doubling）は
+   extractor では原理的に分離不能で高 confidence のまま素通りする**（#86 で AC 振幅 /
+   beat-phase 交替 / 単独低 prior の 3 手法を実測反証）。よって bpm は「送出かつ計器が
+   信頼できる物理ノブ」（条件 3 = key / brightness）に **含めない**。bpm は除外後も
+   (a) **決定論経路（R0）の三値診断**では計測・`calibration_disagreement` として正直に
+   surface し、(b) **corpus screener の prior 回復診断**（halving=高 prior / doubling=
+   低 prior、stated 真値必須）で「抽出器要因 vs 生成器不忠実」を弁別する観測対象として
+   残置する。詳細は [`roundtrip_preservation.md`](roundtrip_preservation.md) の
+   per-field bpm trust（R2-3）。
 5. **作品同一性が事象レベルで一周している（stretch）** — 旋律 / コード進行 /
    フックなど **作品を「その曲」たらしめる事象欄** の往復が示され、
    [`ai_music_daw_vision.md`](ai_music_daw_vision.md) §7 の「作品 = 楽譜」同一性
@@ -176,12 +188,18 @@ raw 89.10、J-rock は真値 175→89 の半折り）を塞ぐ。
 | R2-1 | BPM 89.1 アトラクタの再現確認 — R1 corpus に現行推定器を当て、アトラクタ／半折りが再現するか記録 | 問題が「計器の癖」であってパイプラインのバグでないことが再実行可能な形で示される |
 | R2-2 | **既存の CV ベース BPM 信頼度を校正**（`BPM_CONFIDENCE_CV_SCALE`, `rpe/physical_features.py`）し、半折り（×2 / ÷2）曖昧性の検出を上乗せ。再設計でなく既存式の調整 + 半折り検出の追加とし、production コードと `tests/test_bpm_confidence.py` を同時更新 | `tests/test_bpm_confidence.py` の Q1-3 契約（真値 ±5 BPM 以内で confidence > 0.7）を割らず、半折り検出時は低 confidence + 候補列挙 |
 | R2-2a ✅ | **半折り（×2）検出** done — `detect_bpm_octave_ambiguity` + `PhysicalRPE.bpm_octave_ambiguous` / `bpm_candidates`、ambiguous 時に extractor が `bpm_confidence` を 0.5 cap（`tests/test_bpm_octave_ambiguity.py`、metrics.md「BPM Half-fold Detection」）。音源非依存スライス | Q1-3 fixture は誤検出されず（ratio ≤ 1.001 < 1.15）契約不変。×2 方向のみ；÷2 方向と CV scale 実校正は R1-audio 待ち |
-| R2-3 | 校正メモを T0 per-field 校正メモへ反映 | 「この針はどこまで信用して bpm を転記できるか」が往復ハーネスの三値診断に効く |
+| R2-2b/2c/2d ✅ | **検出器の一般化** done — 固定 2×lag→近傍探索（1.4–2.2×, #82/#84）でグリッド量子化 halving と 3:2 subharmonic「117.45 アトラクタ」を包摂、ambiguous 時に reported bpm を回復テンポへ補正（#83、transcribe trust gate は flag で sensor-blind 維持） | faster-side（reported-too-slow）の post-hoc 緩和。principled fix（tempo prior 適応化）は別の高回帰タスクで OUT |
+| R2-2e ✅ | **÷2 方向（reported-too-fast / doubling）の決着** done（#86）— extractor では AC 振幅 / beat-phase 交替 / 単独低 prior の 3 手法いずれも分離不能と実測反証。screener 限定の低 prior（`LOW_PRIOR_START_BPM=50`）診断で「抽出器 doubling vs 生成器不忠実」を弁別 | extractor は ÷2 を高 confidence で素通り（synth_01 真60→117.45, conf 0.877, 非フラグ）。`bpm_doubling_prior_recovery`、負の結果は roundtrip_corpus_screen.md に外部化 |
+| R2-3 ✅ | 校正メモを T0 per-field 校正メモへ反映 done — bpm trust を [`roundtrip_preservation.md`](roundtrip_preservation.md) の K1 Cross-Check / Follow-Up Routing に明記 | 「この針はどこまで信用して bpm を転記できるか」が往復ハーネスの三値診断に効く |
 
-**完了基準**: R1 corpus で BPM の校正前後の往復一致が比較でき、結論
-（**bpm を R0 / R3 の再現対象に含める**、または**含めるに足る校正に届かず
-明示除外**）が根拠付きで確定し、完成定義 §4 と R3 のスコープへ伝播される。
-**推定工数**: 3–4 日
+**完了基準** ✅（2026-06-18, R2 closeout）: 検出器系列（#82–#86）と corpus screener
+診断で BPM の保存性が field 単位で読め、結論が **bpm を確率的経路（R3）の信頼再現ノブ
+から明示除外**（理由 = faster-side は post-hoc 部分緩和・÷2 は extractor 分離不能）と
+**根拠付きで確定**し、完成定義 §4 と R3 のスコープ（R3-2 は元から key / brightness 限定）
+へ伝播済み。bpm は決定論経路（R0）の三値診断と screener の prior 回復診断に観測対象として
+残置する。残る `BPM_CONFIDENCE_CV_SCALE` 実校正は R1-audio calibratable 化（licensing
+判断＝人間タスク）待ちで、除外結論を変えない上乗せ精度。
+**推定工数**: 3–4 日（実績: 検出器系列 + closeout）
 
 > **注意**: 再採譜を連鎖させると BPM だけがテンポ半分へドリフト伝播する
 > （同上 §4）。往復を複数周回す実験では bpm のドリフトを監視対象にする。
