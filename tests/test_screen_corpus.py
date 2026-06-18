@@ -3,7 +3,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
+
 import scripts.screen_corpus as sc
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SAMPLE_DIR = ROOT / "examples" / "sample_input"
 
 
 def test_resolve_audio_anchors_relative_to_base_dir() -> None:
@@ -74,6 +80,17 @@ def test_classify_prior_recovery_uses_raw_default_not_corrected() -> None:
     assert sc.classify_prior_recovery(172.0, 117.45, 86.0) == "not_recovered"
 
 
+def test_classify_doubling_recovery_uses_low_prior_with_same_recovery_rule() -> None:
+    # 既定 prior が倍速側を選ぶが低 prior で stated を回復 → 抽出器 doubling
+    assert sc.classify_doubling_recovery(60.0, 117.45, 60.09) == "recovered"
+    # 既定 prior で既に保存 → 低 prior が崩れても回復余地なし
+    assert sc.classify_doubling_recovery(120.0, 123.05, 60.09) == "n/a"
+    # 低 prior でも stated を保存しない → not_recovered
+    assert sc.classify_doubling_recovery(60.0, 117.45, 118.0) == "not_recovered"
+    # halving ケースを doubling と取り違えない
+    assert sc.classify_doubling_recovery(172.0, 89.1, 86.0) == "not_recovered"
+
+
 def test_key_relation_classes() -> None:
     assert sc.key_relation("D", "minor", "D", "minor") == "preserved"
     # J-rock: E major stated, D major detected = off (whole step, not a clean relation)
@@ -93,6 +110,7 @@ def test_aggregate_base_rates_and_unflagged() -> None:
             "detected": {"bpm_octave_ambiguous": False},
             "bpm_relation": {"status": "preserved", "ratio": 1.0},
             "bpm_prior_recovery": "n/a",
+            "bpm_doubling_prior_recovery": "n/a",
             "key_relation": "preserved",
         },
         {
@@ -100,6 +118,7 @@ def test_aggregate_base_rates_and_unflagged() -> None:
             "detected": {"bpm_octave_ambiguous": False},
             "bpm_relation": {"status": "off", "ratio": 0.78},
             "bpm_prior_recovery": "recovered",
+            "bpm_doubling_prior_recovery": "recovered",
             "key_relation": "off",
         },
     ]
@@ -111,6 +130,47 @@ def test_aggregate_base_rates_and_unflagged() -> None:
     assert summary["bpm_errors_unflagged"] == ["bad"]
     # 高 prior で回復した崩壊（抽出器 halving）が母数として分離される
     assert summary["bpm_halving_prior_recoverable"] == ["bad"]
+    # 低 prior で回復した崩壊（抽出器 doubling）も追加キーで分離される
+    assert summary["bpm_doubling_prior_recoverable"] == ["bad"]
+
+
+def test_build_report_marks_only_slow_pad_as_doubling_prior_recovered(tmp_path: Path) -> None:
+    source_rows = yaml.safe_load((SAMPLE_DIR / "ground_truth.yaml").read_text(encoding="utf-8"))
+    songs = [
+        {
+            "id": row["id"],
+            "audio": str(SAMPLE_DIR / row["filename"]),
+            "bpm": row["bpm"],
+            "key": row["key"],
+            "mode": row["mode"],
+            "time_signature": row["time_signature"],
+        }
+        for row in source_rows
+    ]
+    manifest = tmp_path / "screen_ground_truth.yaml"
+    manifest.write_text(yaml.safe_dump({"songs": songs}, sort_keys=False), encoding="utf-8")
+
+    report = sc.build_report(manifest)
+    rows = {row["id"]: row for row in report["rows"]}
+
+    assert (
+        rows["synth_01_slow_pad_c_major"]["bpm_doubling_prior_recovery"] == "recovered"
+    )
+    for sample_id in [
+        "synth_02_minor_pulse_a_minor",
+        "synth_03_mid_groove_g_major",
+        "synth_04_waltz_fsharp_minor",
+        "synth_05_fast_bright_d_major",
+    ]:
+        assert rows[sample_id]["bpm_doubling_prior_recovery"] == "n/a"
+    assert rows["synth_01_slow_pad_c_major"]["detected"]["bpm_low_prior"] is not None
+    assert report["summary"]["bpm_doubling_prior_recoverable"] == [
+        "synth_01_slow_pad_c_major"
+    ]
+
+    markdown = sc.render_markdown(report)
+    assert "lp bpm" in markdown
+    assert "dbl-recov" in markdown
 
 
 def test_audio_hash_ok(tmp_path: Path) -> None:

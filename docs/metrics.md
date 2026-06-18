@@ -94,11 +94,18 @@ treats the corrected value as sensor-blind — it transcribes to `TODO(transcrib
 bpm undetected` (unlocked) rather than a faithful, locked value. The boolean flag,
 not the cap alone, is what enforces this.
 
-Scope: only the faster ("reported too slow") direction; the ÷2 direction is not
-recoverable from autocorrelation magnitude (every periodic signal peaks at its
-double period) and is deferred. The post-hoc detector is a *partial mitigation* —
-the principled fix for the attractor is the tempo prior itself (adaptive / higher
-`start_bpm`), a separate higher-regression task (roundtrip_corpus_screen.md).
+Scope: only the faster ("reported too slow") direction. The opposite ÷2
+("reported too fast") direction is **not** added to the extractor: autocorrelation
+magnitude cannot separate a true doubled report from ordinary double-period
+support, beat-phase alternation produced false evidence on the synth fixtures, and
+a low prior alone also collapses correctly detected tracks. R2-2e therefore handles
+÷2 only in the corpus screener, where stated truth is available:
+`bpm_doubling_prior_recovery` / `bpm_doubling_prior_recoverable` compare the raw
+default BPM against a low-prior (`start_bpm=50`) re-estimate to distinguish
+extractor doubling from generator unfaithfulness. The post-hoc detector remains a
+*partial mitigation* for faster-side collapse; the principled fix for the attractor
+is the tempo prior itself (adaptive / higher `start_bpm`), a separate
+higher-regression task (roundtrip_corpus_screen.md).
 
 ### Time Signature Detection (Q1-2)
 
