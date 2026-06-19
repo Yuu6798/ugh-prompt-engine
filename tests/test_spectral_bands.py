@@ -115,6 +115,19 @@ def test_brilliance_band_is_clipped_to_nyquist() -> None:
     assert _band_sum(bands) == pytest.approx(1.0, abs=0.02)
 
 
+def test_spectral_band_denominator_excludes_unreported_bins() -> None:
+    sr = 44100
+    audible_bin = 46 * sr / 2048
+    out_of_band_bin = 1000 * sr / 2048
+    y = _tone(audible_bin, sr=sr) + _tone(out_of_band_bin, sr=sr, amp=0.8)
+
+    bands = compute_spectral_bands(y, sr)
+
+    assert _band_sum(bands) == pytest.approx(1.0, abs=0.02)
+    assert bands.mid > 0.95
+    assert bands.brilliance < 0.05
+
+
 def test_tempo_stability_click_track_is_finite_and_low() -> None:
     stability = compute_tempo_stability(_click_track(), SR)
 

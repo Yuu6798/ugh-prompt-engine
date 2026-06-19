@@ -53,18 +53,20 @@ unchanged for backward compatibility with semantic rules and historical reports.
 
 | Field | Band (Hz) | Weighting |
 |---|---:|---|
-| `sub_bass` | 20-60 | `sum(|S| in band) / sum(|S|)` |
-| `bass` | 60-250 | `sum(|S| in band) / sum(|S|)` |
-| `low_mid` | 250-500 | `sum(|S| in band) / sum(|S|)` |
-| `mid` | 500-2000 | `sum(|S| in band) / sum(|S|)` |
-| `high_mid` | 2000-4000 | `sum(|S| in band) / sum(|S|)` |
-| `presence` | 4000-6000 | `sum(|S| in band) / sum(|S|)` |
-| `brilliance` | 6000-20000 | `sum(|S| in band) / sum(|S|)` |
+| `sub_bass` | 20-60 | `sum(|S| in band) / sum(|S| in reported bands)` |
+| `bass` | 60-250 | `sum(|S| in band) / sum(|S| in reported bands)` |
+| `low_mid` | 250-500 | `sum(|S| in band) / sum(|S| in reported bands)` |
+| `mid` | 500-2000 | `sum(|S| in band) / sum(|S| in reported bands)` |
+| `high_mid` | 2000-4000 | `sum(|S| in band) / sum(|S| in reported bands)` |
+| `presence` | 4000-6000 | `sum(|S| in band) / sum(|S| in reported bands)` |
+| `brilliance` | 6000-20000 | `sum(|S| in band) / sum(|S| in reported bands)` |
 
 Band upper bounds are clipped to the input Nyquist frequency. With the current
 default loader target sample rate of 22050 Hz, `brilliance` therefore reports
 6000-11025 Hz; callers that need the full 11-20 kHz region must extract from
-audio loaded at a sufficient sample rate.
+audio loaded at a sufficient sample rate. The denominator is the union of the
+reported/clipped band masks, so magnitude below 20 Hz or above 20 kHz does not
+dilute the seven serialized ratios.
 
 Why this is separate: the legacy three-band profile accumulates power
 (`|S|^2`). That makes it stable for existing rule thresholds but can overweight

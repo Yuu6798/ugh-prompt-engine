@@ -1565,8 +1565,8 @@
     "spectral_bands": {
       "schema_version": "1.0",
       "sub_bass": 0.0002,
-      "bass": 0.1408,
-      "low_mid": 0.4798,
+      "bass": 0.1409,
+      "low_mid": 0.4799,
       "mid": 0.3544,
       "high_mid": 0.0059,
       "presence": 0.0057,

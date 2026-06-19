@@ -163,20 +163,26 @@ def compute_spectral_bands(y: np.ndarray, sr: int) -> SpectralBands:
     if y.size == 0:
         return _zero_spectral_bands()
 
-    S = np.abs(librosa.stft(y))
-    total_magnitude = float(np.sum(S))
-    if total_magnitude <= 0.0:
-        return _zero_spectral_bands()
-
     freqs = librosa.fft_frequencies(sr=sr)
     nyquist = sr / 2.0
-    values: dict[str, float] = {}
+    band_masks: dict[str, np.ndarray] = {}
+    reported_mask = np.zeros_like(freqs, dtype=bool)
     for name, lo, hi in SPECTRAL_BAND_LIMITS:
         hi = min(hi, nyquist)
         if hi <= lo:
-            values[name] = 0.0
+            band_masks[name] = np.zeros_like(freqs, dtype=bool)
             continue
         mask = (freqs >= lo) & (freqs < hi)
+        band_masks[name] = mask
+        reported_mask |= mask
+
+    S = np.abs(librosa.stft(y))
+    total_magnitude = float(np.sum(S[reported_mask]))
+    if total_magnitude <= 0.0:
+        return _zero_spectral_bands()
+
+    values: dict[str, float] = {}
+    for name, mask in band_masks.items():
         band_magnitude = float(np.sum(S[mask]))
         values[name] = round(band_magnitude / total_magnitude, 4)
     return SpectralBands(**values)
