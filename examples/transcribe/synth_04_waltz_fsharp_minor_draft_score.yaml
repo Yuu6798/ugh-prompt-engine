@@ -53,6 +53,20 @@ rendering:
   - structure
   - semantic.avoid
   - physical.optional
+events:
+  chord_progression:
+  - root: F#
+    quality: minor
+  - root: F#
+    quality: minor
+  - root: F#
+    quality: minor
+  - root: D
+    quality: major
+  - root: C#
+    quality: minor
+  - root: F#
+    quality: minor
 fixity:
   bpm: locked
   key: locked
@@ -61,3 +75,4 @@ fixity:
   valley_depth_target: locked
   brightness: locked
   stereo_width: unlocked
+  chord_progression: locked

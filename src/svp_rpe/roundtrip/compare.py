@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Sequence
 
 from svp_rpe.perform import parse_key
 from svp_rpe.sentinels import is_todo_sentinel
@@ -43,6 +43,25 @@ def values_match(field: str, expected_value: Any, observed_value: Any) -> bool:
                 return point_in_range(expected_point, observed_range)
         return str(expected_value) == str(observed_value)
     return normalize_label(expected_value) == normalize_label(observed_value)
+
+
+def chord_sequence_match_rate(
+    source: Sequence[tuple[str, str]],
+    transcribed: Sequence[tuple[str, str]],
+) -> float:
+    """Return position-aligned match rate for ``(root, quality)`` chord sequences."""
+
+    if not source and not transcribed:
+        return 1.0
+    denominator = max(len(source), len(transcribed))
+    if denominator == 0:
+        return 1.0
+    matches = sum(
+        1
+        for source_chord, transcribed_chord in zip(source, transcribed)
+        if source_chord == transcribed_chord
+    )
+    return matches / denominator
 
 
 def parse_numeric_range(value: Any) -> tuple[float, float] | None:

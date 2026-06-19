@@ -16,6 +16,7 @@ from svp_rpe.rpe.physical_features import CHORD_NAMES
 from svp_rpe.sentinels import TODO_SENTINEL_PREFIX, is_todo_sentinel
 
 FixityState = Literal["locked", "unlocked"]
+EVENT_FIXITY_FIELDS = frozenset({"chord_progression"})
 
 
 class CompositionModel(BaseModel):
@@ -125,14 +126,16 @@ class CompositionScore(CompositionModel):
     ) -> dict[str, FixityState] | None:
         if value is None:
             return None
-        allowed = set(PhysicalLayer.model_fields)
+        physical_fields = set(PhysicalLayer.model_fields)
+        allowed = physical_fields | EVENT_FIXITY_FIELDS
         unknown = sorted(set(value) - allowed)
         if unknown:
             raise ValueError(
-                "fixity keys must be CompositionScore.physical fields; "
+                "fixity keys must be CompositionScore.physical fields "
+                "or supported event fields; "
                 f"unknown keys: {', '.join(unknown)}"
             )
-        missing = sorted(allowed - set(value))
+        missing = sorted(physical_fields - set(value))
         if missing:
             raise ValueError(
                 "fixity must cover every CompositionScore.physical field; "
@@ -144,14 +147,19 @@ class CompositionScore(CompositionModel):
     def validate_fixity_matches_physical_values(self) -> Self:
         if self.fixity is None:
             return self
-        mismatches = [
-            field
-            for field, state in self.fixity.items()
-            if state != _fixity_state_for_value(getattr(self.physical, field))
-        ]
+        mismatches: list[str] = []
+        for field, state in self.fixity.items():
+            if field in PhysicalLayer.model_fields:
+                expected = _fixity_state_for_value(getattr(self.physical, field))
+            elif field == "chord_progression":
+                expected = _fixity_state_for_chord_progression(self.events)
+            else:
+                continue
+            if state != expected:
+                mismatches.append(field)
         if mismatches:
             raise ValueError(
-                "fixity states must match physical TODO(transcribe): state; "
+                "fixity states must match score field state; "
                 f"mismatched keys: {', '.join(sorted(mismatches))}"
             )
         return self
@@ -176,3 +184,9 @@ class GeneratedPrompt(CompositionModel):
 
 def _fixity_state_for_value(value: Any) -> FixityState:
     return "unlocked" if is_todo_sentinel(value) else "locked"
+
+
+def _fixity_state_for_chord_progression(events: EventLayer | None) -> FixityState:
+    if events is not None and events.chord_progression:
+        return "locked"
+    return "unlocked"

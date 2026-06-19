@@ -1,4 +1,4 @@
-"""Three-state roundtrip preservation diagnosis."""
+"""Roundtrip preservation diagnosis."""
 from __future__ import annotations
 
 import json
@@ -9,7 +9,11 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from svp_rpe.compose.models import CompositionScore
-from svp_rpe.roundtrip.compare import normalize_label, values_match
+from svp_rpe.roundtrip.compare import (
+    chord_sequence_match_rate,
+    normalize_label,
+    values_match,
+)
 from svp_rpe.roundtrip.models import RoundtripField, RoundtripReport
 from svp_rpe.sentinels import is_todo_sentinel
 from svp_rpe.transcribe import (
@@ -30,6 +34,8 @@ ROUNDTRIP_FIELDS = (
     "valley_depth_target",
     "stereo_width",
 )
+CHORD_PROGRESSION_FIELD = "chord_progression"
+CHORD_MATCH_THRESHOLD = 0.75
 
 FIELD_SENSORS = {
     "bpm": "physical.bpm",
@@ -82,6 +88,8 @@ def diagnose_roundtrip(
         _diagnose_field(field, source, transcribed, grips)
         for field in ROUNDTRIP_FIELDS
     ]
+    if _has_chord_progression(source):
+        fields.append(_diagnose_chord_progression(source, transcribed, grips))
     return RoundtripReport(
         source_id=_score_id(source),
         transcribed_id=_score_id(transcribed),
@@ -145,6 +153,54 @@ def _diagnose_field(
         sensor_state="blind" if sensor_blind else "working",
         note=note,
     )
+
+
+def _diagnose_chord_progression(
+    source: CompositionScore,
+    transcribed: CompositionScore,
+    grip_map: Mapping[str, GripRecord],
+) -> RoundtripField:
+    source_sequence = _chord_sequence(source)
+    transcribed_sequence = _chord_sequence(transcribed)
+    source_value = _chord_value(source_sequence)
+    transcribed_value = _chord_value(transcribed_sequence)
+    rate = chord_sequence_match_rate(source_sequence, transcribed_sequence)
+    grip = grip_map.get(CHORD_PROGRESSION_FIELD)
+    sensor_blind = len(transcribed_sequence) == 0
+
+    diagnosis = "preserved"
+    if sensor_blind:
+        diagnosis = "sensor_blind"
+    elif grip is not None and grip.classification == "dead":
+        diagnosis = "knob_dead"
+    elif rate < CHORD_MATCH_THRESHOLD:
+        diagnosis = "calibration_disagreement"
+
+    return RoundtripField(
+        field=CHORD_PROGRESSION_FIELD,
+        source_value=source_value,
+        transcribed_value=transcribed_value,
+        diagnosis=diagnosis,
+        grip=round(grip.grip, 6) if grip is not None else None,
+        grip_class=grip.classification if grip is not None else None,
+        sensor="compute_chord_events",
+        sensor_state="blind" if sensor_blind else "working",
+        note=f"chord sequence match rate={round(rate, 3)} threshold={CHORD_MATCH_THRESHOLD}",
+    )
+
+
+def _has_chord_progression(score: CompositionScore) -> bool:
+    return bool(score.events is not None and score.events.chord_progression)
+
+
+def _chord_sequence(score: CompositionScore) -> list[tuple[str, str]]:
+    if score.events is None:
+        return []
+    return [(chord.root, chord.quality) for chord in score.events.chord_progression]
+
+
+def _chord_value(sequence: list[tuple[str, str]]) -> list[dict[str, str]]:
+    return [{"root": root, "quality": quality} for root, quality in sequence]
 
 
 def _physical_value(score: CompositionScore, field: str) -> Any:

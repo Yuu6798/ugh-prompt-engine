@@ -6,8 +6,10 @@ from typing import Any
 import yaml
 
 from svp_rpe.compose.models import (
+    ChordSpec,
     CompositionScore,
     DeltaESpec,
+    EventLayer,
     FixityState,
     GrvSpec,
     Meta,
@@ -64,6 +66,7 @@ def draft_score(bundle: RPEBundle) -> CompositionScore:
         brightness=_brightness_value(measurements["brightness"]),
         stereo_width=_stereo_width_value(measurements["stereo_width"]),
     )
+    events = _draft_events(bundle)
     return CompositionScore(
         meta=Meta(title=report.sample_id, version="0.1"),
         semantic=SemanticLayer(
@@ -78,8 +81,9 @@ def draft_score(bundle: RPEBundle) -> CompositionScore:
             _bpm_for_structure(bpm_measurement, bundle),
             _time_signature_for_structure(time_signature),
         ),
+        events=events,
         rendering=DEFAULT_RENDERING.model_copy(deep=True),
-        fixity=_draft_fixity(physical),
+        fixity=_draft_fixity(physical, events),
     )
 
 
@@ -194,11 +198,28 @@ def _time_signature_for_structure(time_signature: str) -> str | None:
     return time_signature
 
 
-def _draft_fixity(physical: PhysicalLayer) -> dict[str, FixityState]:
-    return {
+def _draft_events(bundle: RPEBundle) -> EventLayer | None:
+    if not bundle.physical.chord_events:
+        return None
+    return EventLayer(
+        chord_progression=[
+            ChordSpec(root=event.root, quality=event.quality)
+            for event in bundle.physical.chord_events
+        ]
+    )
+
+
+def _draft_fixity(
+    physical: PhysicalLayer,
+    events: EventLayer | None = None,
+) -> dict[str, FixityState]:
+    fixity: dict[str, FixityState] = {
         field: "unlocked" if is_todo_sentinel(getattr(physical, field)) else "locked"
         for field in PhysicalLayer.model_fields
     }
+    if events is not None and events.chord_progression:
+        fixity["chord_progression"] = "locked"
+    return fixity
 
 
 def _is_untrusted_confidence(confidence: float | None) -> bool:
