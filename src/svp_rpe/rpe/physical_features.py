@@ -135,7 +135,7 @@ SPECTRAL_BAND_LIMITS: tuple[tuple[str, float, float], ...] = (
     ("mid", 500.0, 2000.0),
     ("high_mid", 2000.0, 4000.0),
     ("presence", 4000.0, 6000.0),
-    ("brilliance", 6000.0, 20000.0),
+    ("brilliance", 6000.0, 20000.0),  # Upper bound is clipped to input Nyquist.
 )
 
 
