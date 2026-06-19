@@ -64,6 +64,38 @@ def chord_sequence_match_rate(
     return matches / denominator
 
 
+def repeated_chord_sequence_match_rate(
+    source_pattern: Sequence[tuple[str, str]],
+    transcribed: Sequence[tuple[str, str]],
+) -> float:
+    """Match a detected chord stream against repeated authored progression cycles.
+
+    The deterministic performer plays ``events.chord_progression`` once per
+    non-drone section. The chord sensor then returns a full event stream and may
+    merge adjacent identical chords across section boundaries, so compare the
+    detected stream against collapsed repetitions of the authored pattern.
+    """
+
+    if not source_pattern or not transcribed:
+        return chord_sequence_match_rate(source_pattern, transcribed)
+    best = chord_sequence_match_rate(source_pattern, transcribed)
+    max_cycles = max(1, (len(transcribed) // len(source_pattern)) + 2)
+    for cycles in range(1, max_cycles + 1):
+        expected = _collapse_adjacent_chords(list(source_pattern) * cycles)
+        best = max(best, chord_sequence_match_rate(expected, transcribed))
+    return best
+
+
+def _collapse_adjacent_chords(
+    sequence: Sequence[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    collapsed: list[tuple[str, str]] = []
+    for chord in sequence:
+        if not collapsed or collapsed[-1] != chord:
+            collapsed.append(chord)
+    return collapsed
+
+
 def parse_numeric_range(value: Any) -> tuple[float, float] | None:
     """Parse an inclusive numeric range string such as ``0.80-0.85``."""
 

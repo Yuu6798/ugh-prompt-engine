@@ -9,7 +9,10 @@ from pydantic import ValidationError
 
 from svp_rpe.compose.models import CompositionScore, PhysicalLayer
 from svp_rpe.roundtrip import GripRecord, run_roundtrip
-from svp_rpe.roundtrip.compare import chord_sequence_match_rate
+from svp_rpe.roundtrip.compare import (
+    chord_sequence_match_rate,
+    repeated_chord_sequence_match_rate,
+)
 from svp_rpe.roundtrip.diagnose import (
     CHORD_MATCH_THRESHOLD,
     _diagnose_chord_progression,
@@ -58,6 +61,20 @@ def _score(progression: list[tuple[str, str]] | None) -> CompositionScore:
     return CompositionScore.model_validate(data)
 
 
+def _with_structure_sections(score: CompositionScore, count: int) -> CompositionScore:
+    data = score.model_dump(mode="json")
+    data["structure"] = [
+        {
+            "section": f"section_{index + 1}",
+            "bars": 16,
+            "role": "sparse chord bed",
+            "physical": "sparse drums, steady chord blocks",
+        }
+        for index in range(count)
+    ]
+    return CompositionScore.model_validate(data)
+
+
 def _physical_fixity() -> dict[str, str]:
     return {field: "locked" for field in PhysicalLayer.model_fields}
 
@@ -71,6 +88,24 @@ def test_chord_sequence_match_rate() -> None:
     assert chord_sequence_match_rate([], []) == 1.0
     assert chord_sequence_match_rate(PROGRESSION, []) == 0.0
     assert chord_sequence_match_rate([], PROGRESSION) == 0.0
+
+
+def test_repeated_chord_sequence_match_rate_handles_section_repeats() -> None:
+    repeated_with_merged_boundary = [
+        ("C", "major"),
+        ("F", "major"),
+        ("G", "major"),
+        ("C", "major"),
+        ("F", "major"),
+        ("G", "major"),
+        ("C", "major"),
+    ]
+
+    assert chord_sequence_match_rate(PROGRESSION, repeated_with_merged_boundary) < 0.75
+    assert repeated_chord_sequence_match_rate(
+        PROGRESSION,
+        repeated_with_merged_boundary,
+    ) == 1.0
 
 
 def test_diagnose_chord_progression_branches() -> None:
@@ -114,6 +149,26 @@ def test_diagnose_chord_progression_branches() -> None:
     assert dead.diagnosis == "knob_dead"
     assert dead.grip == 0.0
     assert dead.grip_class == "dead"
+
+
+def test_diagnose_chord_progression_preserves_repeated_sections() -> None:
+    source = _with_structure_sections(_score(PROGRESSION), 2)
+    transcribed = _score(
+        [
+            ("C", "major"),
+            ("F", "major"),
+            ("G", "major"),
+            ("C", "major"),
+            ("F", "major"),
+            ("G", "major"),
+            ("C", "major"),
+        ]
+    )
+
+    field = _diagnose_chord_progression(source, transcribed, {})
+
+    assert field.diagnosis == "preserved"
+    assert "match rate=1.0" in str(field.note)
 
 
 def test_run_roundtrip_reports_preserved_chord_progression() -> None:

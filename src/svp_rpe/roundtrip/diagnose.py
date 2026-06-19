@@ -10,8 +10,8 @@ from typing import Any, Mapping
 
 from svp_rpe.compose.models import CompositionScore
 from svp_rpe.roundtrip.compare import (
-    chord_sequence_match_rate,
     normalize_label,
+    repeated_chord_sequence_match_rate,
     values_match,
 )
 from svp_rpe.roundtrip.models import RoundtripField, RoundtripReport
@@ -164,7 +164,7 @@ def _diagnose_chord_progression(
     transcribed_sequence = _chord_sequence(transcribed)
     source_value = _chord_value(source_sequence)
     transcribed_value = _chord_value(transcribed_sequence)
-    rate = chord_sequence_match_rate(source_sequence, transcribed_sequence)
+    rate = repeated_chord_sequence_match_rate(source_sequence, transcribed_sequence)
     grip = grip_map.get(CHORD_PROGRESSION_FIELD)
     sensor_blind = len(transcribed_sequence) == 0
 
