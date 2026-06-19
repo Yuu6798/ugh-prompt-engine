@@ -141,6 +141,11 @@ def test_tempo_stability_short_or_empty_input_is_none() -> None:
     assert compute_tempo_stability(np.zeros(16, dtype=np.float32), SR) is None
 
 
+def test_tempo_stability_without_onset_evidence_is_none() -> None:
+    assert compute_tempo_stability(np.zeros(int(SR * 8), dtype=np.float32), SR) is None
+    assert compute_tempo_stability(_tone(440.0, duration=8.0), SR) is None
+
+
 def test_hpss_ratios_sum_to_one_and_pure_tone_is_harmonic() -> None:
     harmonic_ratio, percussive_ratio = compute_hpss_ratio(_tone(440.0))
 

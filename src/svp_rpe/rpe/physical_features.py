@@ -188,20 +188,39 @@ def compute_spectral_bands(y: np.ndarray, sr: int) -> SpectralBands:
     return SpectralBands(**values)
 
 
-def _librosa_frame_tempo(y: np.ndarray, sr: int) -> np.ndarray:
+TEMPO_STABILITY_MIN_ONSETS = 3
+
+
+def _librosa_frame_tempo(
+    y: np.ndarray,
+    sr: int,
+    *,
+    onset_envelope: np.ndarray | None = None,
+) -> np.ndarray:
     rhythm = getattr(librosa.feature, "rhythm", None)
     tempo_fn = getattr(rhythm, "tempo", None) if rhythm is not None else None
     if tempo_fn is None:
         tempo_fn = librosa.feature.tempo
-    return np.asarray(tempo_fn(y=y, sr=sr, aggregate=None), dtype=float)
+    kwargs: dict[str, object] = {"sr": sr, "aggregate": None}
+    if onset_envelope is None:
+        kwargs["y"] = y
+    else:
+        kwargs["onset_envelope"] = onset_envelope
+    return np.asarray(tempo_fn(**kwargs), dtype=float)
 
 
 def compute_tempo_stability(y: np.ndarray, sr: int) -> Optional[float]:
     """Standard deviation of frame-wise tempo estimates."""
     if y.size < 2048 or (y.size / sr) < 5.0:
         return None
+    onset_env = librosa.onset.onset_strength(y=y, sr=sr).astype(float)
+    if onset_env.size == 0 or float(np.max(onset_env)) <= 0.0:
+        return None
+    onsets = librosa.onset.onset_detect(onset_envelope=onset_env, sr=sr)
+    if len(onsets) < TEMPO_STABILITY_MIN_ONSETS:
+        return None
     try:
-        tempos = _librosa_frame_tempo(y, sr).ravel()
+        tempos = _librosa_frame_tempo(y, sr, onset_envelope=onset_env).ravel()
     except (ValueError, ParameterError):
         return None
     tempos = tempos[np.isfinite(tempos)]
