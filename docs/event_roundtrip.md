@@ -5,6 +5,12 @@ R4 は、bpm / key / brightness のような制作パラメータではなく、
 DD-D（どの欄に、どの観測量を、どの校正基準で対応付けるか）の解除条件だけを文書化する。
 `CompositionScore` への欄追加、performer grip、比較実装は R4-2/R4-3 で行う。
 
+R4-3 で `CompositionScore.events.chord_progression` は、performer grip（R4-2）、
+`compute_chord_events` からの draft 復元、系列一致率による `RoundtripField`
+4 値診断、`fixity.chord_progression` の locked 対応まで実装済みになった。
+実測ガードは `tests/test_event_chord_roundtrip.py::test_run_roundtrip_reports_preserved_chord_progression`
+が担う。
+
 ## 三つ組テーブル
 
 | 事象フィールド | 観測量（センサー） | 校正基準 | 有効帯域 |
@@ -102,6 +108,9 @@ key と chord の誤差源が分離できなくなる。
 
 `sensor` には `compute_chord_events`、`sensor_state` には帯域内なら `working`、帯域外なら
 `blind` を入れる。`grip` / `grip_class` は R4-2 の performer grip 測定で埋める。
+R4-3 の実装では、source 側に `events.chord_progression` がある時だけ
+`field="chord_progression"` の `RoundtripField` を追加し、既存の物理 7 欄だけの
+source では report 形状を変えない。
 
 数値物理ノブの近さとは異なり、コード進行は系列値である。`roundtrip_preservation.md` の
 bpm trust のように許容差を直接 `abs(delta)` で書くのではなく、系列一致率を目盛りにする。

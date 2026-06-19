@@ -101,6 +101,7 @@ def test_all_synth_drafts_are_loader_valid(tmp_path: Path) -> None:
         assert loaded.fixity is not None
         assert loaded.fixity["bpm"] == "locked"
         assert loaded.fixity["stereo_width"] == "unlocked"
+        assert loaded.fixity["chord_progression"] == "locked"
         assert _parse_numeric_range(loaded.physical.active_rate_target) is not None
         assert _parse_numeric_range(loaded.physical.valley_depth_target) is not None
         assert all(section.role == TODO_AUTHOR_INPUT for section in loaded.structure)
@@ -125,6 +126,7 @@ def test_draft_score_maps_t0_measurements_to_physical_layer() -> None:
         "valley_depth_target": "locked",
         "brightness": "locked",
         "stereo_width": "unlocked",
+        "chord_progression": "locked",
     }
 
 

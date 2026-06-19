@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Sequence
 
 from svp_rpe.perform import parse_key
 from svp_rpe.sentinels import is_todo_sentinel
@@ -43,6 +43,60 @@ def values_match(field: str, expected_value: Any, observed_value: Any) -> bool:
                 return point_in_range(expected_point, observed_range)
         return str(expected_value) == str(observed_value)
     return normalize_label(expected_value) == normalize_label(observed_value)
+
+
+def chord_sequence_match_rate(
+    source: Sequence[tuple[str, str]],
+    transcribed: Sequence[tuple[str, str]],
+) -> float:
+    """Return position-aligned match rate for ``(root, quality)`` chord sequences."""
+
+    if not source and not transcribed:
+        return 1.0
+    denominator = max(len(source), len(transcribed))
+    if denominator == 0:
+        return 1.0
+    matches = sum(
+        1
+        for source_chord, transcribed_chord in zip(source, transcribed)
+        if source_chord == transcribed_chord
+    )
+    return matches / denominator
+
+
+def repeated_chord_sequence_match_rate(
+    source_pattern: Sequence[tuple[str, str]],
+    transcribed: Sequence[tuple[str, str]],
+    *,
+    cycles: int = 1,
+) -> float:
+    """Match a detected chord stream against repeated authored progression cycles.
+
+    The deterministic performer plays ``events.chord_progression`` once per
+    non-drone section. The chord sensor then returns a full event stream and may
+    merge adjacent identical chords across section boundaries, so compare the
+    detected stream against collapsed repetitions of the authored pattern after
+    applying the same adjacent-duplicate normalization to both sides.
+    """
+
+    if not source_pattern or not transcribed:
+        return chord_sequence_match_rate(source_pattern, transcribed)
+    cycle_count = max(1, cycles)
+    expected = _collapse_adjacent_chords(list(source_pattern) * cycle_count)
+    observed = _collapse_adjacent_chords(transcribed)
+    if len(expected) != len(observed):
+        return 0.0
+    return chord_sequence_match_rate(expected, observed)
+
+
+def _collapse_adjacent_chords(
+    sequence: Sequence[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    collapsed: list[tuple[str, str]] = []
+    for chord in sequence:
+        if not collapsed or collapsed[-1] != chord:
+            collapsed.append(chord)
+    return collapsed
 
 
 def parse_numeric_range(value: Any) -> tuple[float, float] | None:
