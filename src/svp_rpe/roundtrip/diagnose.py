@@ -164,7 +164,11 @@ def _diagnose_chord_progression(
     transcribed_sequence = _chord_sequence(transcribed)
     source_value = _chord_value(source_sequence)
     transcribed_value = _chord_value(transcribed_sequence)
-    rate = repeated_chord_sequence_match_rate(source_sequence, transcribed_sequence)
+    rate = repeated_chord_sequence_match_rate(
+        source_sequence,
+        transcribed_sequence,
+        max_cycles=_source_chord_cycle_count(source),
+    )
     grip = grip_map.get(CHORD_PROGRESSION_FIELD)
     sensor_blind = len(transcribed_sequence) == 0
 
@@ -201,6 +205,20 @@ def _chord_sequence(score: CompositionScore) -> list[tuple[str, str]]:
 
 def _chord_value(sequence: list[tuple[str, str]]) -> list[dict[str, str]]:
     return [{"root": root, "quality": quality} for root, quality in sequence]
+
+
+def _source_chord_cycle_count(score: CompositionScore) -> int:
+    playable_sections = sum(1 for section in score.structure if _section_plays_chords(section))
+    return max(1, playable_sections)
+
+
+def _section_plays_chords(section: Any) -> bool:
+    hint = f"{section.physical} {section.role}".lower()
+    if "silence" in hint or "no kick" in hint:
+        return False
+    if "low density" in hint or "sub bass" in hint:
+        return False
+    return True
 
 
 def _physical_value(score: CompositionScore, field: str) -> Any:

@@ -105,6 +105,11 @@ def test_repeated_chord_sequence_match_rate_handles_section_repeats() -> None:
     assert repeated_chord_sequence_match_rate(
         PROGRESSION,
         repeated_with_merged_boundary,
+    ) < 0.75
+    assert repeated_chord_sequence_match_rate(
+        PROGRESSION,
+        repeated_with_merged_boundary,
+        max_cycles=2,
     ) == 1.0
 
 
@@ -149,6 +154,25 @@ def test_diagnose_chord_progression_branches() -> None:
     assert dead.diagnosis == "knob_dead"
     assert dead.grip == 0.0
     assert dead.grip_class == "dead"
+
+
+def test_diagnose_chord_progression_rejects_unrequested_extra_repeat() -> None:
+    source = _score(PROGRESSION)
+    transcribed = _score(
+        [
+            ("C", "major"),
+            ("F", "major"),
+            ("G", "major"),
+            ("C", "major"),
+            ("F", "major"),
+            ("G", "major"),
+            ("C", "major"),
+        ]
+    )
+
+    field = _diagnose_chord_progression(source, transcribed, {})
+
+    assert field.diagnosis == "calibration_disagreement"
 
 
 def test_diagnose_chord_progression_preserves_repeated_sections() -> None:
