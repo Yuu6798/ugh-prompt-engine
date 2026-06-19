@@ -27,7 +27,7 @@ class SpectralBands(BaseModel):
     mid: float             # 500-2000 Hz
     high_mid: float        # 2000-4000 Hz
     presence: float        # 4000-6000 Hz
-    brilliance: float      # 6000-20000 Hz
+    brilliance: float      # 6000-20000 Hz, clipped at Nyquist
 
 
 class StereoProfile(BaseModel):

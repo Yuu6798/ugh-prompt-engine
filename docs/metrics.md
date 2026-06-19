@@ -61,6 +61,11 @@ unchanged for backward compatibility with semantic rules and historical reports.
 | `presence` | 4000-6000 | `sum(|S| in band) / sum(|S|)` |
 | `brilliance` | 6000-20000 | `sum(|S| in band) / sum(|S|)` |
 
+Band upper bounds are clipped to the input Nyquist frequency. With the current
+default loader target sample rate of 22050 Hz, `brilliance` therefore reports
+6000-11025 Hz; callers that need the full 11-20 kHz region must extract from
+audio loaded at a sufficient sample rate.
+
 Why this is separate: the legacy three-band profile accumulates power
 (`|S|^2`). That makes it stable for existing rule thresholds but can overweight
 low-frequency fundamentals and under-report broadband high-frequency content.

@@ -17,8 +17,14 @@ from svp_rpe.rpe.physical_features import (
 SR = 22050
 
 
-def _tone(freq: float, *, duration: float = 3.0, amp: float = 0.5) -> np.ndarray:
-    t = np.linspace(0.0, duration, int(SR * duration), endpoint=False)
+def _tone(
+    freq: float,
+    *,
+    duration: float = 3.0,
+    amp: float = 0.5,
+    sr: int = SR,
+) -> np.ndarray:
+    t = np.linspace(0.0, duration, int(sr * duration), endpoint=False)
     return (amp * np.sin(2.0 * np.pi * freq * t)).astype(np.float32)
 
 
@@ -98,6 +104,15 @@ def test_magnitude_high_frequency_exceeds_legacy_power_high_ratio() -> None:
 
     assert magnitude_high > legacy_power.high_ratio + 0.2
     assert magnitude_high > legacy_power.high_ratio * 2.0
+
+
+def test_brilliance_band_is_clipped_to_nyquist() -> None:
+    sr = 12000
+    bands = compute_spectral_bands(_tone(5500.0, sr=sr), sr)
+
+    assert bands.presence > 0.9
+    assert bands.brilliance == 0.0
+    assert _band_sum(bands) == pytest.approx(1.0, abs=0.02)
 
 
 def test_tempo_stability_click_track_is_finite_and_low() -> None:

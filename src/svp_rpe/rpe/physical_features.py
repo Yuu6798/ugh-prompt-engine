@@ -156,7 +156,9 @@ def compute_spectral_bands(y: np.ndarray, sr: int) -> SpectralBands:
 
     This intentionally uses ``|S|`` magnitude accumulation. The legacy
     ``compute_spectral_profile`` three-band profile remains power-weighted
-    (``|S| ** 2``) for backward compatibility.
+    (``|S| ** 2``) for backward compatibility. Band upper bounds are clipped
+    to the input Nyquist frequency; unavailable high-end content is not
+    fabricated after resampling.
     """
     if y.size == 0:
         return _zero_spectral_bands()
@@ -167,8 +169,13 @@ def compute_spectral_bands(y: np.ndarray, sr: int) -> SpectralBands:
         return _zero_spectral_bands()
 
     freqs = librosa.fft_frequencies(sr=sr)
+    nyquist = sr / 2.0
     values: dict[str, float] = {}
     for name, lo, hi in SPECTRAL_BAND_LIMITS:
+        hi = min(hi, nyquist)
+        if hi <= lo:
+            values[name] = 0.0
+            continue
         mask = (freqs >= lo) & (freqs < hi)
         band_magnitude = float(np.sum(S[mask]))
         values[name] = round(band_magnitude / total_magnitude, 4)
