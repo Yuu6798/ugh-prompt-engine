@@ -109,8 +109,9 @@ def test_repeated_chord_sequence_match_rate_handles_section_repeats() -> None:
     assert repeated_chord_sequence_match_rate(
         PROGRESSION,
         repeated_with_merged_boundary,
-        max_cycles=2,
+        cycles=2,
     ) == 1.0
+    assert repeated_chord_sequence_match_rate(PROGRESSION, PROGRESSION, cycles=2) < 0.75
 
 
 def test_diagnose_chord_progression_branches() -> None:
@@ -169,6 +170,15 @@ def test_diagnose_chord_progression_rejects_unrequested_extra_repeat() -> None:
             ("C", "major"),
         ]
     )
+
+    field = _diagnose_chord_progression(source, transcribed, {})
+
+    assert field.diagnosis == "calibration_disagreement"
+
+
+def test_diagnose_chord_progression_rejects_missing_repeat_cycle() -> None:
+    source = _with_structure_sections(_score(PROGRESSION), 2)
+    transcribed = _score(PROGRESSION)
 
     field = _diagnose_chord_progression(source, transcribed, {})
 

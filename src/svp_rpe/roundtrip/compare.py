@@ -68,7 +68,7 @@ def repeated_chord_sequence_match_rate(
     source_pattern: Sequence[tuple[str, str]],
     transcribed: Sequence[tuple[str, str]],
     *,
-    max_cycles: int = 1,
+    cycles: int = 1,
 ) -> float:
     """Match a detected chord stream against repeated authored progression cycles.
 
@@ -80,12 +80,9 @@ def repeated_chord_sequence_match_rate(
 
     if not source_pattern or not transcribed:
         return chord_sequence_match_rate(source_pattern, transcribed)
-    best = chord_sequence_match_rate(source_pattern, transcribed)
-    cycle_limit = max(1, max_cycles)
-    for cycles in range(1, cycle_limit + 1):
-        expected = _collapse_adjacent_chords(list(source_pattern) * cycles)
-        best = max(best, chord_sequence_match_rate(expected, transcribed))
-    return best
+    cycle_count = max(1, cycles)
+    expected = _collapse_adjacent_chords(list(source_pattern) * cycle_count)
+    return chord_sequence_match_rate(expected, transcribed)
 
 
 def _collapse_adjacent_chords(

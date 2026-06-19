@@ -167,7 +167,7 @@ def _diagnose_chord_progression(
     rate = repeated_chord_sequence_match_rate(
         source_sequence,
         transcribed_sequence,
-        max_cycles=_source_chord_cycle_count(source),
+        cycles=_source_chord_cycle_count(source),
     )
     grip = grip_map.get(CHORD_PROGRESSION_FIELD)
     sensor_blind = len(transcribed_sequence) == 0
