@@ -84,6 +84,8 @@ def repeated_chord_sequence_match_rate(
     cycle_count = max(1, cycles)
     expected = _collapse_adjacent_chords(list(source_pattern) * cycle_count)
     observed = _collapse_adjacent_chords(transcribed)
+    if len(expected) != len(observed):
+        return 0.0
     return chord_sequence_match_rate(expected, observed)
 
 

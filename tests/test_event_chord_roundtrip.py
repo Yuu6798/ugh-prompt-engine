@@ -127,6 +127,11 @@ def test_repeated_chord_sequence_match_rate_collapses_duplicates_symmetrically()
     assert repeated_chord_sequence_match_rate(progression, progression) == 1.0
 
 
+def test_repeated_chord_sequence_match_rate_rejects_cycle_count_mismatches() -> None:
+    assert repeated_chord_sequence_match_rate(PROGRESSION, PROGRESSION * 3, cycles=4) == 0.0
+    assert repeated_chord_sequence_match_rate(PROGRESSION, PROGRESSION * 5, cycles=4) == 0.0
+
+
 def test_diagnose_chord_progression_branches() -> None:
     source = _score(PROGRESSION)
     preserved = _diagnose_chord_progression(source, _score(PROGRESSION), {})
@@ -210,6 +215,16 @@ def test_diagnose_chord_progression_rejects_missing_repeat_cycle() -> None:
     field = _diagnose_chord_progression(source, transcribed, {})
 
     assert field.diagnosis == "calibration_disagreement"
+
+
+def test_diagnose_chord_progression_rejects_full_cycle_count_mismatch() -> None:
+    source = _with_structure_sections(_score(PROGRESSION), 4)
+
+    short = _diagnose_chord_progression(source, _score(PROGRESSION * 3), {})
+    long = _diagnose_chord_progression(source, _score(PROGRESSION * 5), {})
+
+    assert short.diagnosis == "calibration_disagreement"
+    assert long.diagnosis == "calibration_disagreement"
 
 
 def test_diagnose_chord_progression_preserves_repeated_sections() -> None:
