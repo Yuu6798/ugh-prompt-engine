@@ -75,14 +75,16 @@ def repeated_chord_sequence_match_rate(
     The deterministic performer plays ``events.chord_progression`` once per
     non-drone section. The chord sensor then returns a full event stream and may
     merge adjacent identical chords across section boundaries, so compare the
-    detected stream against collapsed repetitions of the authored pattern.
+    detected stream against collapsed repetitions of the authored pattern after
+    applying the same adjacent-duplicate normalization to both sides.
     """
 
     if not source_pattern or not transcribed:
         return chord_sequence_match_rate(source_pattern, transcribed)
     cycle_count = max(1, cycles)
     expected = _collapse_adjacent_chords(list(source_pattern) * cycle_count)
-    return chord_sequence_match_rate(expected, transcribed)
+    observed = _collapse_adjacent_chords(transcribed)
+    return chord_sequence_match_rate(expected, observed)
 
 
 def _collapse_adjacent_chords(

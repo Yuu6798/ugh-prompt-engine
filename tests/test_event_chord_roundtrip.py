@@ -114,6 +114,19 @@ def test_repeated_chord_sequence_match_rate_handles_section_repeats() -> None:
     assert repeated_chord_sequence_match_rate(PROGRESSION, PROGRESSION, cycles=2) < 0.75
 
 
+def test_repeated_chord_sequence_match_rate_collapses_duplicates_symmetrically() -> None:
+    progression = [
+        ("F#", "minor"),
+        ("F#", "minor"),
+        ("F#", "minor"),
+        ("D", "major"),
+        ("C#", "minor"),
+        ("F#", "minor"),
+    ]
+
+    assert repeated_chord_sequence_match_rate(progression, progression) == 1.0
+
+
 def test_diagnose_chord_progression_branches() -> None:
     source = _score(PROGRESSION)
     preserved = _diagnose_chord_progression(source, _score(PROGRESSION), {})
