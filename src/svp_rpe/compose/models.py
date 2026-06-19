@@ -6,11 +6,13 @@ from typing import Any, List, Literal, Self
 from pydantic import (
     BaseModel,
     ConfigDict,
+    Field,
     field_validator,
     model_serializer,
     model_validator,
 )
 
+from svp_rpe.rpe.physical_features import CHORD_NAMES
 from svp_rpe.sentinels import TODO_SENTINEL_PREFIX, is_todo_sentinel
 
 FixityState = Literal["locked", "unlocked"]
@@ -90,12 +92,30 @@ class RenderingConfig(CompositionModel):
     priority: List[str]
 
 
+class ChordSpec(CompositionModel):
+    root: str
+    quality: Literal["major", "minor"]
+
+    @field_validator("root")
+    @classmethod
+    def validate_root(cls, value: str) -> str:
+        if value not in CHORD_NAMES:
+            allowed = ", ".join(CHORD_NAMES)
+            raise ValueError(f"root must be one of CHORD_NAMES: {allowed}")
+        return value
+
+
+class EventLayer(CompositionModel):
+    chord_progression: List[ChordSpec] = Field(default_factory=list)
+
+
 class CompositionScore(CompositionModel):
     meta: Meta
     semantic: SemanticLayer
     physical: PhysicalLayer
     structure: List[StructureSection]
     rendering: RenderingConfig
+    events: EventLayer | None = None
     fixity: dict[str, FixityState] | None = None
 
     @field_validator("fixity")
@@ -139,6 +159,8 @@ class CompositionScore(CompositionModel):
     @model_serializer(mode="wrap")
     def serialize_without_empty_fixity(self, handler: Any) -> dict[str, Any]:
         data = handler(self)
+        if self.events is None:
+            data.pop("events", None)
         if self.fixity is None:
             data.pop("fixity", None)
         return data

@@ -10,11 +10,35 @@ from svp_rpe.compose.models import CompositionScore, StructureSection
 from svp_rpe.perform.synth import SAMPLE_RATE, _adsr_envelope
 
 KEY_PATTERN = re.compile(r"^\s*([A-Ga-g])\s*([#b]?)\s*(major|minor)\s*$", re.IGNORECASE)
-PITCH_CLASSES = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
+PITCH_CLASSES = {
+    "C": 0,
+    "C#": 1,
+    "D": 2,
+    "D#": 3,
+    "E": 4,
+    "F": 5,
+    "F#": 6,
+    "G": 7,
+    "G#": 8,
+    "A": 9,
+    "A#": 10,
+    "B": 11,
+}
 MINOR_TRIAD = (0, 3, 7)
 MAJOR_TRIAD = (0, 4, 7)
-MINOR_PROGRESSION = ((0, MINOR_TRIAD), (8, MAJOR_TRIAD), (10, MAJOR_TRIAD), (0, MINOR_TRIAD))
-MAJOR_PROGRESSION = ((0, MAJOR_TRIAD), (5, MAJOR_TRIAD), (7, MAJOR_TRIAD), (0, MAJOR_TRIAD))
+Progression = tuple[tuple[int, tuple[int, ...]], ...]
+MINOR_PROGRESSION: Progression = (
+    (0, MINOR_TRIAD),
+    (8, MAJOR_TRIAD),
+    (10, MAJOR_TRIAD),
+    (0, MINOR_TRIAD),
+)
+MAJOR_PROGRESSION: Progression = (
+    (0, MAJOR_TRIAD),
+    (5, MAJOR_TRIAD),
+    (7, MAJOR_TRIAD),
+    (0, MAJOR_TRIAD),
+)
 
 
 @dataclass(frozen=True)
@@ -100,6 +124,18 @@ def _triad_frequencies(
     return [midi_to_freq(root + interval) for interval in triad]
 
 
+def _resolve_progression(score: CompositionScore, tonic_key: int, mode: str) -> Progression:
+    if score.events is not None and score.events.chord_progression:
+        return tuple(
+            (
+                (PITCH_CLASSES[chord.root] - tonic_key) % 12,
+                MAJOR_TRIAD if chord.quality == "major" else MINOR_TRIAD,
+            )
+            for chord in score.events.chord_progression
+        )
+    return MINOR_PROGRESSION if mode == "minor" else MAJOR_PROGRESSION
+
+
 def _chord_wave(
     t: np.ndarray,
     frequencies: list[float],
@@ -151,8 +187,8 @@ def perform(score: CompositionScore, style: PerformanceStyle) -> np.ndarray:
     if not score.structure:
         raise ValueError("perform() requires at least one structure section")
     tonic, mode = parse_key(score.physical.key)
+    progression = _resolve_progression(score, tonic, mode)
     tonic = (tonic + style.transpose) % 12
-    progression = MINOR_PROGRESSION if mode == "minor" else MAJOR_PROGRESSION
     bpm = float(score.physical.bpm) + style.bpm_bias
     beats_per_bar = int(score.physical.time_signature.split("/", 1)[0])
     bar_sec = beats_per_bar * 60.0 / bpm
@@ -193,7 +229,7 @@ def perform(score: CompositionScore, style: PerformanceStyle) -> np.ndarray:
             pulse = _pulse_train(t, bpm, beats_per_bar)
             wave *= 0.55 + 0.45 * pulse
         if profile.melody:
-            melody_degrees = (progression[0], progression[1], progression[2], progression[0])
+            melody_degrees = tuple(progression[index % len(progression)] for index in range(4))
             block = max(1, section_len // len(melody_degrees))
             for note_index, (degree, triad) in enumerate(melody_degrees):
                 start = note_index * block
