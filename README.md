@@ -151,6 +151,7 @@ svprpe --help
 - [Composition PoC Report](docs/composition_poc_report.md) — C4 end-to-end demo results (deterministic path): synth performer, two-take needle comparison, sensor findings
 - [Controllability PoC Planning](docs/controllability_poc.md) — Control track PoC (K-series): parameters as control knobs not eval values, grip effect-size definition, K0 minimal method-proof → K2 Suno transfer
 - [Score-centric Planning](docs/score_centric_planning.md) — Score-first reorganization: bidirectional reproducibility principle, transcription track (T-series, T0–T2), Q-series redefined as instrument calibration, semantic-layer sensors as future scope
+- [Event Roundtrip](docs/event_roundtrip.md) — R4 event-level roundtrip admission plan for chord progression: `chord_progression` × `compute_chord_events` × chord-series match rate
 - [Round-trip Case Studies](docs/roundtrip_case_studies.md) — Real-Suno round-trip/controllability results log and R1 corpus manifest path: instrument effective-band, physical-fixed/semantic-swapped A/B, bidirectional test success (BPM caveat), BPM 89.1 attractor suspicion
 - [Roundtrip Preservation](docs/roundtrip_preservation.md) - R0 deterministic score -> performance -> transcription preservation diagnostics and K1 cross-check
 - [Metamorphic Probe](docs/metamorphic_probe.md) — Sweeps render_sample × real extract to auto-verify grip/calibration/orthogonality/determinism (Hypothesis): centroid=tight grip, high-band brightness=blind sensor, bpm octave error unflagged by R2-2a

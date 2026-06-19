@@ -252,14 +252,15 @@ confidence を精緻化するだけの**非ブロッキング follow-up**（R1-a
 （[`score_centric_planning.md`](score_centric_planning.md) §6 急所1）。
 
 **依存**: R0（往復ループ確立 = §2.2 入場試験の試験台）/
-[`learned_models_policy.md`](learned_models_policy.md)（事象センサーは学習モデルを
-要する可能性が高く、optional extra 隔離方針の管轄）。
+[`event_roundtrip.md`](event_roundtrip.md)（R4-1: コード進行の DD-D 解除条件）。
+コード進行は決定論センサー `compute_chord_events` が既存のため、学習モデル隔離は
+コード経路のクリティカルパスではなく、将来の精度 upgrade として扱う。
 
 | ID | 成果物 | 受け入れ条件 |
 |---|---|---|
-| R4-1 | 事象レベル欄の選定 + センサー対応（旋律 / コード進行から）— DD-D の解除条件を先に文書化 | どの事象フィールドに、どの観測量を、どの校正基準で対応付けるかが文書化される |
-| R4-2 | 事象センサーの隔離実装（basic-pitch / chord recognition 等、optional extra） | 学習出力は `LearnedAudioAnnotations` に隔離、ルール evidence を汚染しない |
-| R4-3 | 事象欄の往復一致（§2.2 入場試験の適用） | 新事象欄が grip × 校正 × 採譜 の往復を生き残ることを示して正規スキーマに入る |
+| R4-1 ✅ | [事象レベル欄の選定 + センサー対応](event_roundtrip.md) — コード進行を先行欄にし、決定論センサー先行で DD-D の解除条件を文書化 | `chord_progression`（将来欄）← `compute_chord_events` / `PhysicalRPE.chord_events` ← コード系列一致率、fixity/4値診断への適用が文書化される |
+| R4-2 | score 欄追加 + performer grip — `CompositionScore` にコード進行の事象欄を追加し、決定論 performer が key 由来の固定進行ではなく欄を読む | コード進行欄を変えると `perform` 出力の `chord_events` が変わる。必要なら `fixity` バリデータ拡張計画を実装する |
+| R4-3 | 事象欄の比較指標 + 往復一致（§2.2 入場試験の適用） | コード系列一致率を `RoundtripField` の 4値診断へ落とし、新事象欄が grip × 校正 × 採譜 の往復を生き残ることを示して正規スキーマに入る |
 
 **完了基準**: 少なくとも 1 つの事象レベル欄（旋律 or コード進行）が往復を
 一周し、入場試験を通過して正規スキーマに昇格する。
