@@ -5,8 +5,10 @@ from svp_rpe.compose.convert import composition_to_target_svp
 from svp_rpe.compose.fixity import field_fixity
 from svp_rpe.compose.loader import load_composition_score
 from svp_rpe.compose.models import (
+    ChordSpec,
     CompositionScore,
     DeltaESpec,
+    EventLayer,
     FixityState,
     GeneratedPrompt,
     GrvSpec,
@@ -19,8 +21,10 @@ from svp_rpe.compose.models import (
 from svp_rpe.compose.prompt_renderer import ExternalPromptAdapter
 
 __all__ = [
+    "ChordSpec",
     "CompositionScore",
     "DeltaESpec",
+    "EventLayer",
     "ExternalPromptAdapter",
     "FixityState",
     "GeneratedPrompt",
