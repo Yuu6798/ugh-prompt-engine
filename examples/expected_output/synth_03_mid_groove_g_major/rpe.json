@@ -1562,6 +1562,19 @@
       "high_ratio": 0.0,
       "brightness": 0.0
     },
+    "spectral_bands": {
+      "schema_version": "1.0",
+      "sub_bass": 0.0002,
+      "bass": 0.1408,
+      "low_mid": 0.4798,
+      "mid": 0.3544,
+      "high_mid": 0.0059,
+      "presence": 0.0057,
+      "brilliance": 0.013
+    },
+    "tempo_stability_std": 5.14,
+    "harmonic_ratio": 0.9997,
+    "percussive_ratio": 0.0003,
     "stereo_profile": null,
     "onset_density": 0.1136,
     "dynamic_range_db": 16.42,

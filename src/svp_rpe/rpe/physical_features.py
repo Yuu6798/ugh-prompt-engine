@@ -13,7 +13,13 @@ from librosa.util.exceptions import ParameterError
 import numpy as np
 from scipy import signal as scipy_signal
 
-from svp_rpe.rpe.models import ChordEvent, MelodyContour, SpectralProfile, StereoProfile
+from svp_rpe.rpe.models import (
+    ChordEvent,
+    MelodyContour,
+    SpectralBands,
+    SpectralProfile,
+    StereoProfile,
+)
 
 try:
     import pyloudnorm as pyln
@@ -120,6 +126,96 @@ def compute_spectral_profile(y: np.ndarray, sr: int) -> SpectralProfile:
         high_ratio=high_ratio,
         brightness=brightness,
     )
+
+
+SPECTRAL_BAND_LIMITS: tuple[tuple[str, float, float], ...] = (
+    ("sub_bass", 20.0, 60.0),
+    ("bass", 60.0, 250.0),
+    ("low_mid", 250.0, 500.0),
+    ("mid", 500.0, 2000.0),
+    ("high_mid", 2000.0, 4000.0),
+    ("presence", 4000.0, 6000.0),
+    ("brilliance", 6000.0, 20000.0),
+)
+
+
+def _zero_spectral_bands() -> SpectralBands:
+    return SpectralBands(
+        sub_bass=0.0,
+        bass=0.0,
+        low_mid=0.0,
+        mid=0.0,
+        high_mid=0.0,
+        presence=0.0,
+        brilliance=0.0,
+    )
+
+
+def compute_spectral_bands(y: np.ndarray, sr: int) -> SpectralBands:
+    """Magnitude-weighted seven-band spectral distribution.
+
+    This intentionally uses ``|S|`` magnitude accumulation. The legacy
+    ``compute_spectral_profile`` three-band profile remains power-weighted
+    (``|S| ** 2``) for backward compatibility.
+    """
+    if y.size == 0:
+        return _zero_spectral_bands()
+
+    S = np.abs(librosa.stft(y))
+    total_magnitude = float(np.sum(S))
+    if total_magnitude <= 0.0:
+        return _zero_spectral_bands()
+
+    freqs = librosa.fft_frequencies(sr=sr)
+    values: dict[str, float] = {}
+    for name, lo, hi in SPECTRAL_BAND_LIMITS:
+        mask = (freqs >= lo) & (freqs < hi)
+        band_magnitude = float(np.sum(S[mask]))
+        values[name] = round(band_magnitude / total_magnitude, 4)
+    return SpectralBands(**values)
+
+
+def _librosa_frame_tempo(y: np.ndarray, sr: int) -> np.ndarray:
+    rhythm = getattr(librosa.feature, "rhythm", None)
+    tempo_fn = getattr(rhythm, "tempo", None) if rhythm is not None else None
+    if tempo_fn is None:
+        tempo_fn = librosa.feature.tempo
+    return np.asarray(tempo_fn(y=y, sr=sr, aggregate=None), dtype=float)
+
+
+def compute_tempo_stability(y: np.ndarray, sr: int) -> Optional[float]:
+    """Standard deviation of frame-wise tempo estimates."""
+    if y.size < 2048 or (y.size / sr) < 5.0:
+        return None
+    try:
+        tempos = _librosa_frame_tempo(y, sr).ravel()
+    except (ValueError, ParameterError):
+        return None
+    tempos = tempos[np.isfinite(tempos)]
+    if tempos.size <= 1:
+        return None
+    return round(float(np.std(tempos)), 2)
+
+
+def compute_hpss_ratio(y: np.ndarray) -> tuple[Optional[float], Optional[float]]:
+    """Return harmonic/percussive energy ratios from deterministic HPSS."""
+    if y.size == 0:
+        return (None, None)
+    try:
+        S = np.abs(librosa.stft(y))
+        harmonic, percussive = librosa.decompose.hpss(S)
+    except (ValueError, ParameterError):
+        return (None, None)
+
+    harmonic_energy = float(np.sum(harmonic ** 2))
+    percussive_energy = float(np.sum(percussive ** 2))
+    total_energy = harmonic_energy + percussive_energy
+    if total_energy <= 0.0:
+        return (None, None)
+
+    harmonic_ratio = round(harmonic_energy / total_energy, 4)
+    percussive_ratio = round(1.0 - harmonic_ratio, 4)
+    return (harmonic_ratio, percussive_ratio)
 
 
 def compute_stereo_profile(y_stereo: np.ndarray, sr: int) -> Optional[StereoProfile]:

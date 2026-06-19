@@ -17,6 +17,19 @@ class SpectralProfile(BaseModel):
     brightness: float      # high / (low + mid + high)
 
 
+class SpectralBands(BaseModel):
+    """Magnitude-weighted seven-band spectral distribution."""
+
+    schema_version: str = "1.0"
+    sub_bass: float        # 20-60 Hz
+    bass: float            # 60-250 Hz
+    low_mid: float         # 250-500 Hz
+    mid: float             # 500-2000 Hz
+    high_mid: float        # 2000-4000 Hz
+    presence: float        # 4000-6000 Hz
+    brilliance: float      # 6000-20000 Hz
+
+
 class StereoProfile(BaseModel):
     """Stereo field analysis."""
 
@@ -133,6 +146,10 @@ class PhysicalRPE(BaseModel):
     thickness: float
     spectral_centroid: float
     spectral_profile: SpectralProfile
+    spectral_bands: Optional[SpectralBands] = None
+    tempo_stability_std: Optional[float] = None
+    harmonic_ratio: Optional[float] = None
+    percussive_ratio: Optional[float] = None
     stereo_profile: Optional[StereoProfile] = None
     onset_density: float
     # RMS-based dynamic range descriptor (P95/P10 frame RMS, in dB).
