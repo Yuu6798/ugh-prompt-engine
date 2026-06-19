@@ -26,13 +26,16 @@ from svp_rpe.rpe.physical_features import (
     compute_chord_events,
     compute_crest_factor,
     compute_dynamic_range_db,
+    compute_hpss_ratio,
     compute_key,
     compute_loudness,
     compute_melody_contour,
     compute_onset_density,
     compute_rms_mean,
+    compute_spectral_bands,
     compute_spectral_profile,
     compute_stereo_profile,
+    compute_tempo_stability,
     compute_thickness,
     compute_downbeat_times,
     compute_time_signature,
@@ -169,6 +172,9 @@ def extract_physical(
     active_rate = compute_active_rate(y, sr)
     thickness = compute_thickness(y, sr)
     spectral_profile = compute_spectral_profile(y, sr)
+    spectral_bands = compute_spectral_bands(y, sr)
+    tempo_stability_std = compute_tempo_stability(y, sr)
+    harmonic_ratio, percussive_ratio = compute_hpss_ratio(y)
     onset_density = compute_onset_density(y, sr)
 
     bpm, bpm_confidence = compute_bpm(y, sr)
@@ -257,6 +263,10 @@ def extract_physical(
         thickness=thickness,
         spectral_centroid=spectral_profile.centroid,
         spectral_profile=spectral_profile,
+        spectral_bands=spectral_bands,
+        tempo_stability_std=tempo_stability_std,
+        harmonic_ratio=harmonic_ratio,
+        percussive_ratio=percussive_ratio,
         stereo_profile=stereo_profile,
         onset_density=onset_density,
         dynamic_range_db=dynamic_range_db,

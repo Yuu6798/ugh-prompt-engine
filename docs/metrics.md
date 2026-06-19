@@ -44,17 +44,61 @@ detection path, so the added cost is only the aggregation step.
 | High Ratio | Energy above 4000 Hz / total |
 | Brightness (band ratio) | High / (low + mid + high)。**legacy**: HF の乏しい素材で 0 に張り付き盲目になるため、dark/bright 判定には使わない（K1 grip 測定で確認、[`controllability_poc.md`](controllability_poc.md) §5.1） |
 
+### Magnitude Spectral Bands (Q1-5)
+
+`PhysicalRPE.spectral_bands` is an additive seven-band spectrum computed from
+STFT magnitude `|S|`, not power `|S|^2`. The existing
+`PhysicalRPE.spectral_profile.low_ratio/mid_ratio/high_ratio` is intentionally
+unchanged for backward compatibility with semantic rules and historical reports.
+
+| Field | Band (Hz) | Weighting |
+|---|---:|---|
+| `sub_bass` | 20-60 | `sum(|S| in band) / sum(|S| in reported bands)` |
+| `bass` | 60-250 | `sum(|S| in band) / sum(|S| in reported bands)` |
+| `low_mid` | 250-500 | `sum(|S| in band) / sum(|S| in reported bands)` |
+| `mid` | 500-2000 | `sum(|S| in band) / sum(|S| in reported bands)` |
+| `high_mid` | 2000-4000 | `sum(|S| in band) / sum(|S| in reported bands)` |
+| `presence` | 4000-6000 | `sum(|S| in band) / sum(|S| in reported bands)` |
+| `brilliance` | 6000-20000 | `sum(|S| in band) / sum(|S| in reported bands)` |
+
+Band upper bounds are clipped to the input Nyquist frequency. With the current
+default loader target sample rate of 22050 Hz, `brilliance` therefore reports
+6000-11025 Hz; callers that need the full 11-20 kHz region must extract from
+audio loaded at a sufficient sample rate. The denominator is the union of the
+reported/clipped band masks, so magnitude below 20 Hz or above 20 kHz does not
+dilute the seven serialized ratios.
+
+Why this is separate: the legacy three-band profile accumulates power
+(`|S|^2`). That makes it stable for existing rule thresholds but can overweight
+low-frequency fundamentals and under-report broadband high-frequency content.
+The magnitude seven-band profile tracks the same weighting family as spectral
+centroid, so it is the preferred descriptive spectrum when inspecting brightness
+distribution. Do not reinterpret legacy `high_ratio` as a brightness sensor;
+centroid remains the semantic dark/bright sensor, and `spectral_bands` is the
+additive diagnostic distribution.
+
 ## Temporal Metrics
 
 | Metric | Definition |
 |--------|-----------|
 | BPM | Beats per minute (librosa beat_track). Faster-tempo collapse (×2 octave + 3:2 sub-octave) is flagged in `PhysicalRPE.bpm_octave_ambiguous` / `bpm_candidates` and corrected to the recovered tempo — see below |
+| Tempo Stability Std | Standard deviation of frame-wise tempo estimates (`librosa.feature.rhythm.tempo(..., aggregate=None)`) |
 | Time Signature | Beat-level onset strength autocorrelation over supported meters (`3/4`, `4/4`, `6/8`) |
 | Downbeat Times | Beat-strength phase pick over the inferred meter (`PhysicalRPE.downbeat_times`) |
 | Chord Events | Major/minor triad template match over chroma (`PhysicalRPE.chord_events`) |
 | Melody Contour | `librosa.pyin` monophonic pitch contour (`PhysicalRPE.melody_contour`) |
 | Key | Chroma → Krumhansl-Kessler template matching |
 | Onset Density | Onsets per second |
+
+## HPSS Metrics
+
+`PhysicalRPE.harmonic_ratio` and `PhysicalRPE.percussive_ratio` are additive
+descriptors derived from deterministic librosa HPSS
+(`librosa.decompose.hpss` over STFT magnitude, avoiding waveform reconstruction).
+Each component is measured by spectrogram energy after separation and normalized
+so the pair sums to approximately 1.0. Pure sustained tones should be
+harmonic-dominant; transient-heavy material should increase the percussive share.
+These fields do not alter semantic rules or scoring thresholds in Q1-5.
 
 ### BPM Faster-tempo Collapse Detection (R2-2)
 
