@@ -175,10 +175,11 @@ def _diagnose_chord_progression(
     diagnosis = "preserved"
     if sensor_blind:
         diagnosis = "sensor_blind"
-    elif grip is not None and grip.classification == "dead":
-        diagnosis = "knob_dead"
     elif rate < CHORD_MATCH_THRESHOLD:
-        diagnosis = "calibration_disagreement"
+        if grip is not None and grip.classification == "dead":
+            diagnosis = "knob_dead"
+        else:
+            diagnosis = "calibration_disagreement"
 
     return RoundtripField(
         field=CHORD_PROGRESSION_FIELD,

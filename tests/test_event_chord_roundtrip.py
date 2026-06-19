@@ -153,9 +153,23 @@ def test_diagnose_chord_progression_branches() -> None:
     assert blind.diagnosis == "sensor_blind"
     assert blind.sensor_state == "blind"
 
-    dead = _diagnose_chord_progression(
+    preserved_with_dead_grip = _diagnose_chord_progression(
         source,
         _score(PROGRESSION),
+        {
+            "chord_progression": GripRecord(
+                knob="chord_progression",
+                sensor="compute_chord_events",
+                grip=0.0,
+                classification="dead",
+            )
+        },
+    )
+    assert preserved_with_dead_grip.diagnosis == "preserved"
+
+    dead = _diagnose_chord_progression(
+        source,
+        _score([("A", "minor"), ("D", "minor"), ("E", "minor"), ("A", "minor")]),
         {
             "chord_progression": GripRecord(
                 knob="chord_progression",
