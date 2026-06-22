@@ -200,3 +200,10 @@ materialize し、`compute_bpm` の confidence と含意 CV（`= (1 - confidence
 決定論注記: 各 det bpm / key / high_ratio は `screen_2026-06-16.yaml` の `measured`
 記録と完全一致し、materialize したバイトが screened バイト本体であること（sha256
 content-address の正しさ）と抽出器の環境非依存な決定性を裏づけた。
+
+再現性注記（重要）: この 7 本のうち `drive_file_id` で fresh checkout から再取得できるのは
+3 本（shiden / yaoyorozu / so_what）のみ。`astral_trigger` + abc 実験 3 本は upload-only
+hash で durable resolver を持たないため、これら 4 本を含む全 7 本の screen を別環境で
+再現するには 4 本の Drive アップロード + `drive_file_id` 付与（R1 artifact follow-up）が要る。
+**CV-scale 結論（5.0 確定）は Drive 解決可能な 3 本（preserved 2 + halved 1）だけで成立する**
+ため follow-up を待たず closeout できるが、7 本フル screen の再現はこの artifact 作業に依存する。

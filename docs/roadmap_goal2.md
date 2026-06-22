@@ -99,14 +99,20 @@
 > を据え置きで確定（preserved 3 本＝真値±5BPM の confidence 0.83–0.90 が Q1-3 契約
 > >0.7 を**実音源で初実証**、実 CV∈[0.020,0.040]）。halved 4 本も conf 0.80–0.85 と
 > 高く、CV-confidence が regularity-only で halving を検出しない＝bpm 除外を実データで
-> 再確証。licensing 待ちは Drive 非同梱（content-address 解決）で解消。
+> 再確証。licensing **懸念**（公開 repo への著作権物同梱）は Drive 非同梱（content-address
+> 解決）で回避。**ただし corpus の完全再現性は別問題で未達**: 7 本中 `drive_file_id` を持つ
+> 3 本（shiden / yaoyorozu / so_what）のみ fresh checkout で再 materialize 可能、`astral_trigger`
+> + abc 実験 3 本は upload-only hash（resolver 無し）。CV-scale 結論（5.0）は **Drive 解決可能な
+> 3 本だけで成立**（preserved: shiden 0.901 / yaoyorozu 0.831 が >0.7、halved: so_what 0.798 が
+> regularity-only を示す）ため closeout は維持するが、**upload-only 4 本の Drive 化 + `drive_file_id`
+> 付与は reproducible corpus の follow-up として open**（R1 artifact 作業、§R1）。
 
 | トラック | 目的2 への寄与 | 状態 |
 |---|---|---|
 | C 系列（作曲＝行き道） | Score → TargetSVP → プロンプト / 決定論シンセ演奏者 | ✅ C1–C4 完了（[`composition_poc_report.md`](composition_poc_report.md)）。C4 が決定論演奏者として往復の行き道を提供 |
 | T 系列（採譜＝帰り道） | 演奏 → 計測 → draft Score | ⏳ T0（per-field 計測）/ T1（`svprpe transcribe`）実装済み（PR #70/#71）。**T2（往復保存性の最小実証）が未着手** |
 | K 系列（grip） | フィールドごとの「効き」地図 | ⏳ K0/K1 完了（決定論演奏者、PR #61/#65、dead 2 分類確立）。**K2（Suno 転移）未** |
-| Q 系列（校正） | 復路の計器の目盛り付け | ✅ Q1-3（BPM 校正）closeout 済（2026-06-18, #82–#86）— bpm を R3 信頼ノブから除外確定。残 `BPM_CONFIDENCE_CV_SCALE` 実校正も closeout 済（2026-06-22, #92 経由で実音源校正・`CV_SCALE=5.0` 据え置き確定） |
+| Q 系列（校正） | 復路の計器の目盛り付け | ✅ Q1-3（BPM 校正）closeout 済（2026-06-18, #82–#86）— bpm を R3 信頼ノブから除外確定。残 `BPM_CONFIDENCE_CV_SCALE` 実校正も closeout 済（2026-06-22 #92/#93・`CV_SCALE=5.0` 確定、Drive 解決可能 3 本で成立）。**upload-only 4 本の Drive 化は reproducible corpus の R1 follow-up として残**（§R1） |
 | 実生成器先取り | 実 Suno での往復 n=1 | ⏳ [`roundtrip_case_studies.md`](roundtrip_case_studies.md): key/brightness で往復成功・bpm は除外確定（closeout）・音源未コミットで**再実行不可**（R1 で解消予定） |
 
 **目的2 固有の残作業**（既存トラックの成果物を束ねる接着剤）は次の 4 点に偏る:
@@ -188,10 +194,14 @@ R 系列は目的2 固有のフェーズ ID。各 R フェーズは T / K / Q �
 これは R2 CV-scale follow-up の入力としてのみ確保すればよく（保存できた範囲が CV 校正の
 対象スコープを規定する）、R3 をブロックしない。
 
-> **closeout（2026-06-22）**: この follow-up は完了。R1 Drive-backed loader（#92）で
-> BPM 問題ケース（so_what 172→117 / astral 175→117 / expA 176→89 等）を含む実音源 7 本を
+> **CV-scale follow-up は closeout（2026-06-22）**: R1 Drive-backed loader（#92）で
+> BPM 問題ケース（so_what 172→117 / astral 175→117 / expA 176→89 等）を含む実音源を
 > materialize し、`compute_bpm` の confidence/CV を実測。`CV_SCALE=5.0` を据え置きで確定
 > （実 CV∈[0.020,0.040]、preserved 3 本で Q1-3 契約 >0.7 を実音源実証）。コード変更なし。
+> **ただし reproducible corpus 自体は未完**: 校正に使った 7 本中、durable resolver
+> （`drive_file_id`）を持つのは 3 本のみで、`astral_trigger` + abc 実験 3 本は upload-only
+> hash（fresh checkout で再取得不能）。**この 4 本を Drive へ上げて `drive_file_id` を付与する
+> artifact 作業が R1 の残タスクとして open**（CV-scale 結論自体は Drive 解決可能な 3 本で成立）。
 **推定工数**: 3–5 日（key / brightness corpus 確保・ライセンス確認を含む。BPM ケース確保は
 follow-up 側）
 
