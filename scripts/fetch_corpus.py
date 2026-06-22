@@ -204,6 +204,9 @@ def resolve_manifest(
         source = by_sha.get(expected_sha)
         if source is None:
             candidate = find_locator_candidate(record, source_dir, by_name)
+            if candidate is not None and candidate.sha256 == expected_sha:
+                source = candidate
+        if source is None:
             reason = "sha256_mismatch" if candidate is not None else "not_found"
             row: dict[str, Any] = {
                 "id": rid,

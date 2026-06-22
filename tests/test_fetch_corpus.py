@@ -88,6 +88,34 @@ def test_sha_mismatch_is_reported_without_resolving(tmp_path: Path) -> None:
     assert resolved["status"][0]["source_sha256"] == sha256_bytes(b"wrong bytes")
 
 
+def test_matching_locator_outside_source_dir_is_resolved(tmp_path: Path) -> None:
+    source_dir = tmp_path / "empty-drop"
+    source_dir.mkdir()
+    external = tmp_path / "already_resolved.wav"
+    external.write_bytes(b"already materialized")
+    digest = sha256_bytes(b"already materialized")
+    manifest = tmp_path / "manifest.yaml"
+    write_yaml(
+        manifest,
+        {
+            "songs": [
+                {
+                    "id": "external",
+                    "audio": str(external),
+                    "stated": {"bpm": 100},
+                    "audio_sha256": digest,
+                }
+            ]
+        },
+    )
+
+    resolved = fc.resolve_manifest(manifest, source_dir, tmp_path / "cache")
+
+    assert resolved["status"][0]["resolved"] is True
+    assert resolved["songs"][0]["id"] == "external"
+    assert Path(resolved["songs"][0]["audio"]).read_bytes() == b"already materialized"
+
+
 def test_missing_sha_is_not_found_and_excluded(tmp_path: Path) -> None:
     source_dir = tmp_path / "missing-drop"
     digest = sha256_bytes(b"not present")
