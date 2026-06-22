@@ -76,6 +76,17 @@ def media_type_for(record: dict[str, Any]) -> str:
     return str(record.get("media_type") or "audio")
 
 
+def is_excluded(record: dict[str, Any]) -> bool:
+    """`excluded: true` を立てた record は materialization 対象から外す。
+
+    バイト未取得で取得予定もないテイク（例: corpus から落とした 8 本目）を、
+    `not_found` として unresolved に計上し続けないための明示マーカー。record 自体は
+    screen 実測値・sha256 の記録として manifest に残し、status では `reason: excluded`
+    として透明に分類する（silent drop しない）。
+    """
+    return bool(record.get("excluded"))
+
+
 def value_from_intent(record: dict[str, Any], key: str) -> Any:
     intent = record.get("intent")
     if not isinstance(intent, dict):
@@ -189,6 +200,18 @@ def resolve_manifest(
     status: list[dict[str, Any]] = []
     for record in records:
         rid = record_id(record)
+        if is_excluded(record):
+            row: dict[str, Any] = {
+                "id": rid,
+                "resolved": False,
+                "reason": "excluded",
+                "media_type": media_type_for(record),
+            }
+            pin = pin_for(record)
+            if pin:
+                row["audio_sha256"] = pin
+            status.append(row)
+            continue
         expected_sha = pin_for(record)
         if not expected_sha:
             status.append(
@@ -250,9 +273,11 @@ def dump_yaml(data: dict[str, Any]) -> str:
 def status_report(data: dict[str, Any]) -> dict[str, Any]:
     status = data["status"]
     resolved = sum(1 for row in status if row.get("resolved"))
+    excluded = sum(1 for row in status if row.get("reason") == "excluded")
     return {
         "resolved": resolved,
-        "unresolved": len(status) - resolved,
+        "excluded": excluded,
+        "unresolved": len(status) - resolved - excluded,
         "status": status,
     }
 

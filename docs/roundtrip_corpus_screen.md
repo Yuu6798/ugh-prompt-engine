@@ -210,7 +210,9 @@ sha256 照合する。よって素の checkout / CI（手動 DL 無し）では 
 `drive_file_id`（在処ポインタ）を持ち、Drive アクセスを持つ人が手動 DL して `--source-dir` に
 置けば **フル 7 本 screen を再現できる**。8 本目の `wafu_jungle_174` は **2026-06-22 に corpus
 から除外**（manifest `excluded: true`・バイト入手予定なし）したため、R1 Drive corpus は screen
-対象 7/7 で完結し未解決の artifact 作業は残らない。
+対象 7/7 で完結し未解決の artifact 作業は残らない。`fetch_corpus.py` は `excluded: true` の row を
+`reason: excluded` として分類し **unresolved カウントから除外**する（status report に `excluded`
+件数を別計上）ので、「7/7 完結」は loader レベルで裏づけられる（除外行を silent drop せず記録は保持）。
 **CV-scale 結論（5.0 確定）** は preserved 2 本（shiden 0.901 / yaoyorozu 0.831）が
 `±5BPM で conf>0.7` 契約を満たし、so_what（`bpm_relation: off`・117.45/172、conf 0.798）が
 「**誤 BPM でも beat が規則的なら高 conf**」＝CV は regularity-only を示すことで成立する。
