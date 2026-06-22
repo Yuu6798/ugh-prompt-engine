@@ -167,3 +167,52 @@ Private Google Drive の共有状態、ファイル名、取得方法は再現�
 根拠は `audio_sha256` と materialized bytes の一致であり、`drive_file_id` 欠落の
 upload-only take も同じ source-dir 解決で扱う。`examples/roundtrip/cache/` は gitignore
 対象で、licensing 未確定の実音源バイトを commit しないための境界である。
+
+### CV-scale 実音源校正（2026-06-22, R2-2f）
+
+上記 loader で実音源 7 本（`wafu_jungle_174` のバイトは未取得で `not_found`）を
+materialize し、`compute_bpm` の confidence と含意 CV（`= (1 - confidence) / CV_SCALE`）を
+実測した。`BPM_CONFIDENCE_CV_SCALE` は合成音の CV∈[0.024, 0.035] から暫定設定された
+`5.0` を、実音源で初めて検証する目的。
+
+| id | det bpm | 真値±5 | confidence | implied CV |
+|---|---|---|---|---|
+| shiden_no_inori | 172.27 | ✅ preserved | 0.901 | 0.0198 |
+| expB_mid130_breakbeat | 129.20 | ✅ preserved | 0.871 | 0.0258 |
+| yaoyorozu_shinwa | 95.70 | ✅ preserved | 0.831 | 0.0339 |
+| expA_fast176_simple | 89.10 | ❌ octave_half(true 176) | 0.852 | 0.0296 |
+| astral_trigger | 117.45 | ❌ off(true 175) | 0.813 | 0.0375 |
+| expC_mid130_simple_anchor | 89.10 | ❌ off(true 130) | 0.800 | 0.0400 |
+| so_what_run | 117.45 | ❌ off(true 172) | 0.798 | 0.0404 |
+
+**結論（R2-2f closeout）**:
+
+1. **`CV_SCALE=5.0` は実音源で妥当 → 据え置き確定**。真値±5BPM 内の preserved 3 本は
+   confidence 0.83–0.90 で Q1-3 契約（>0.7）を満たし、契約を**実音源で初実証**した
+   （従来は合成のみ）。実 CV∈[0.020, 0.040] は合成想定 [0.024, 0.035] よりやや広いが
+   契約は割れない。production コード変更なし。
+2. **CV-confidence は regularity-only で誤 BPM を検出しない**。BPM が誤った 4 本
+   （octave_half 1 = expA / off 3 = astral・so_what・expC）も confidence 0.80–0.85 と高い
+   （誤検出した拍グリッドも規則的なため）。
+   これは R2 closeout の「bpm を R3 信頼ノブから除外」判断を**実データで再確証**する。
+   正しさの surfacing は `bpm_octave_ambiguous` フラグ + prior 回復診断の役割であり、
+   CV-scale の調整事項ではない。
+
+決定論注記: 各 det bpm / key / high_ratio は `screen_2026-06-16.yaml` の `measured`
+記録と完全一致し、materialize したバイトが screened バイト本体であること（sha256
+content-address の正しさ）と抽出器の環境非依存な決定性を裏づけた。
+
+再現性注記（重要）: `fetch_corpus.py` は **Drive を叩かず** `--source-dir` 内のバイトだけを
+sha256 照合する。よって素の checkout / CI（手動 DL 無し）では **7 本すべて `not_found`**。
+`drive_file_id` を持つ 3 本（shiden / yaoyorozu / so_what）は「Drive アクセスを持つ人が手動 DL
+して source-dir に置けば解決できる」在処ポインタにすぎず、loader が自動取得することはない。
+`astral_trigger` + abc 実験 3 本はその在処ポインタすら無い upload-only hash。フル再現には
+**3 本の手動 DL（要 Drive アクセス）+ 4 本の Drive アップロード&`drive_file_id` 付与**
+（R1 artifact follow-up）が要る。
+**CV-scale 結論（5.0 確定）は Drive アクセス下で手動取得できる 3 本（preserved 2 +
+incorrect-BPM 1）だけで成立する**ため follow-up を待たず closeout できる。内訳: preserved 2 本（shiden 0.901 /
+yaoyorozu 0.831）が `±5BPM で conf>0.7` 契約を満たし、so_what（`bpm_relation: off`・117.45/172、
+conf 0.798）が「**誤 BPM でも beat が規則的なら高 conf**」＝CV は regularity-only を示す。なお
+so_what は非octave の off であって halving（octave_half）ではない — halving 固有の例（expA
+octave_half 89/176）は upload-only 側にあり、halving 限定の主張はこの 3 本では成立せず R1
+artifact follow-up に依存する。7 本フル screen の再現も同 artifact 作業に依存する。

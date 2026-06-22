@@ -92,14 +92,32 @@
 > **更新（2026-06-18）**: **R2 / Q1-3（BPM 校正）は closeout 済** — bpm を確率的経路
 > (R3) の信頼再現ノブから明示除外で確定（§R2 / 完成定義 §4）。下表・残作業の
 > R2・bpm 関連セルはこの除外確定で上書きされ、残るのは非ブロッキングな
-> `BPM_CONFIDENCE_CV_SCALE` follow-up（R1-audio licensing 待ち）のみ。
+> `BPM_CONFIDENCE_CV_SCALE` follow-up のみ。
+>
+> **更新（2026-06-22）**: その `BPM_CONFIDENCE_CV_SCALE` follow-up も **closeout** —
+> content-addressed loader（#92, Drive 非接続）で実音源 7 本を local source-dir から
+> materialize し実測校正。`CV_SCALE=5.0`
+> を据え置きで確定（preserved 3 本＝真値±5BPM の confidence 0.83–0.90 が Q1-3 契約
+> >0.7 を**実音源で初実証**、実 CV∈[0.020,0.040]）。誤 BPM 4 本（octave_half 1 + off 3）も
+> conf 0.80–0.85 と高く、CV-confidence が regularity-only で誤 BPM を検出しない＝bpm 除外を実データで
+> 再確証。licensing **懸念**（公開 repo への著作権物同梱）は Drive 非同梱（content-address
+> 解決）で回避。**ただし corpus の完全再現性は別問題で未達**: 7 本中 `drive_file_id` を持つ
+> 3 本（shiden / yaoyorozu / so_what）が Drive 在処ポインタを持つ。ただし `fetch_corpus.py` は
+> **Drive 非接続**で source-dir のバイトのみ照合するため、素の CI/checkout（手動 DL 無し）では
+> 3 本含め 7 本とも `not_found`；3 本は Drive アクセス下で手動 DL すれば解決できる。`astral_trigger`
+> + abc 実験 3 本はその在処ポインタすら無い upload-only hash。CV-scale 結論（5.0）は **Drive アクセス下で手動取得できる
+> 3 本だけで成立**（preserved: shiden 0.901 / yaoyorozu 0.831 が >0.7、incorrect-BPM(off):
+> so_what 0.798=誤 BPM でも高 conf で CV の regularity-only を示す。so_what は非octave の off で
+> あり halving ではない — halving 固有例は upload-only 側）ため closeout は維持するが、**upload-only
+> 4 本の Drive 化 + `drive_file_id`
+> 付与は reproducible corpus の follow-up として open**（R1 artifact 作業、§R1）。
 
 | トラック | 目的2 への寄与 | 状態 |
 |---|---|---|
 | C 系列（作曲＝行き道） | Score → TargetSVP → プロンプト / 決定論シンセ演奏者 | ✅ C1–C4 完了（[`composition_poc_report.md`](composition_poc_report.md)）。C4 が決定論演奏者として往復の行き道を提供 |
 | T 系列（採譜＝帰り道） | 演奏 → 計測 → draft Score | ⏳ T0（per-field 計測）/ T1（`svprpe transcribe`）実装済み（PR #70/#71）。**T2（往復保存性の最小実証）が未着手** |
 | K 系列（grip） | フィールドごとの「効き」地図 | ⏳ K0/K1 完了（決定論演奏者、PR #61/#65、dead 2 分類確立）。**K2（Suno 転移）未** |
-| Q 系列（校正） | 復路の計器の目盛り付け | ✅ Q1-3（BPM 校正）closeout 済（2026-06-18, #82–#86）— bpm を R3 信頼ノブから除外確定。残 `BPM_CONFIDENCE_CV_SCALE` 実校正は非ブロッキング follow-up（R1-audio licensing 待ち） |
+| Q 系列（校正） | 復路の計器の目盛り付け | ✅ Q1-3（BPM 校正）closeout 済（2026-06-18, #82–#86）— bpm を R3 信頼ノブから除外確定。残 `BPM_CONFIDENCE_CV_SCALE` 実校正も closeout 済（2026-06-22 #92/#93・`CV_SCALE=5.0` 確定、Drive 解決可能 3 本で成立）。**upload-only 4 本の Drive 化は reproducible corpus の R1 follow-up として残**（§R1） |
 | 実生成器先取り | 実 Suno での往復 n=1 | ⏳ [`roundtrip_case_studies.md`](roundtrip_case_studies.md): key/brightness で往復成功・bpm は除外確定（closeout）・音源未コミットで**再実行不可**（R1 で解消予定） |
 
 **目的2 固有の残作業**（既存トラックの成果物を束ねる接着剤）は次の 4 点に偏る:
@@ -109,7 +127,8 @@
 2. **再実行可能 corpus + manifest** — roundtrip 検証が n=1・再測不可に留まる根因。
    音源 + 真値 + manifest の保存基盤（R1）
 3. ~~**復路誤差源（bpm アトラクタ）の校正** — Q1-3 連動（R2）~~ **✅ closeout 済
-   （2026-06-18）** — bpm を R3 信頼ノブから除外確定。残 CV-scale 校正は非ブロッキング
+   （2026-06-18）** — bpm を R3 信頼ノブから除外確定。残 CV-scale 校正も 2026-06-22 に
+   実音源で closeout（#92 経由・`CV_SCALE=5.0` 確定）
 4. **意味層 grip の機械確認** — 事象レベル欄（T3 / 急所1）が無いため、
    現状 rock↔EBM の差は耳でしか判定できない（R4）
 
@@ -179,13 +198,24 @@ R 系列は目的2 固有のフェーズ ID。各 R フェーズは T / K / Q �
 保存音源**は、**R2 closeout（bpm を R3 信頼ノブから除外）により R1→R3 のゲートから外す**。
 これは R2 CV-scale follow-up の入力としてのみ確保すればよく（保存できた範囲が CV 校正の
 対象スコープを規定する）、R3 をブロックしない。
+
+> **CV-scale follow-up は closeout（2026-06-22）**: content-addressed loader（#92, Drive 非接続）で
+> BPM 問題ケース（so_what 172→117 / astral 175→117 / expA 176→89 等）を含む実音源を
+> materialize し、`compute_bpm` の confidence/CV を実測。`CV_SCALE=5.0` を据え置きで確定
+> （実 CV∈[0.020,0.040]、preserved 3 本で Q1-3 契約 >0.7 を実音源実証）。コード変更なし。
+> **ただし reproducible corpus 自体は未完**: `fetch_corpus.py` は Drive 非接続で source-dir の
+> バイトのみ照合するため、素の CI/checkout では 7 本とも `not_found`。校正に使った 7 本中、
+> Drive 在処ポインタ（`drive_file_id`・手動 DL 前提）を持つのは 3 本のみで、`astral_trigger` +
+> abc 実験 3 本はそのポインタすら無い upload-only hash。**3 本の手動 DL（要 Drive アクセス）+
+> この 4 本を Drive へ上げて `drive_file_id` を付与する artifact 作業が R1 の残タスクとして
+> open**（CV-scale 結論自体は Drive アクセス下で手動取得できる 3 本で成立）。
 **推定工数**: 3–5 日（key / brightness corpus 確保・ライセンス確認を含む。BPM ケース確保は
 follow-up 側）
 
 > **補足**: 確率的生成器は n=1 では効果量を主張できない（同上 §6）ため、
 > manifest は **少数バッチ反復**を前提に複数テイクを束ねられる形にする。
 
-### R2: 復路誤差源の校正 — BPM アトラクタ ✅ **closeout 済（2026-06-18, #82–#86）— bpm を確率的経路(R3)の信頼再現ノブから明示除外で確定。残 `BPM_CONFIDENCE_CV_SCALE` 実校正は R1-audio licensing 待ちで除外結論を変えない**
+### R2: 復路誤差源の校正 — BPM アトラクタ ✅ **closeout 済（2026-06-18, #82–#86）— bpm を確率的経路(R3)の信頼再現ノブから明示除外で確定。残 `BPM_CONFIDENCE_CV_SCALE` 実校正も 2026-06-22 に実音源で closeout（#92 経由・`CV_SCALE=5.0` 据え置き確定）**
 
 **目的**: 採譜（音 → 楽譜）の復路で **BPM だけが誤差を注入する漏れ穴**
 （[`roundtrip_case_studies.md`](roundtrip_case_studies.md) §4: 生成 3 曲が全て
@@ -195,16 +225,18 @@ raw 89.10、J-rock は真値 175→89 の半折り）を塞ぐ。
 **R2 closeout により R3 をブロックしない**。closeout の結論（bpm を R3 信頼ノブから
 除外）は full R1-audio 校正を要さず、検出器系列（#82–#86）+ screener 診断で確定した。
 残る `BPM_CONFIDENCE_CV_SCALE` 実校正のみが R1（**BPM 問題ケースを含む** 再実行可能
-corpus）/ [`roadmap_goal1.md`](roadmap_goal1.md) **Q1-3** に依存するが、これは bpm
-confidence を精緻化するだけの**非ブロッキング follow-up**（R1-audio licensing 待ち）。
+corpus）/ [`roadmap_goal1.md`](roadmap_goal1.md) **Q1-3** に依存していたが、これは bpm
+confidence を精緻化するだけの**非ブロッキング follow-up** で、**2026-06-22 に実音源
+（#92 で materialize した 7 本）で校正実施・`CV_SCALE=5.0` 据え置き確定して closeout**。
 
 | ID | 成果物 | 受け入れ条件 |
 |---|---|---|
 | R2-1 | BPM 89.1 アトラクタの再現確認 — R1 corpus に現行推定器を当て、アトラクタ／半折りが再現するか記録 | 問題が「計器の癖」であってパイプラインのバグでないことが再実行可能な形で示される |
 | R2-2 | **既存の CV ベース BPM 信頼度を校正**（`BPM_CONFIDENCE_CV_SCALE`, `rpe/physical_features.py`）し、半折り（×2 / ÷2）曖昧性の検出を上乗せ。再設計でなく既存式の調整 + 半折り検出の追加とし、production コードと `tests/test_bpm_confidence.py` を同時更新 | `tests/test_bpm_confidence.py` の Q1-3 契約（真値 ±5 BPM 以内で confidence > 0.7）を割らず、半折り検出時は低 confidence + 候補列挙 |
-| R2-2a ✅ | **半折り（×2）検出** done — `detect_bpm_octave_ambiguity` + `PhysicalRPE.bpm_octave_ambiguous` / `bpm_candidates`、ambiguous 時に extractor が `bpm_confidence` を 0.5 cap（`tests/test_bpm_octave_ambiguity.py`、metrics.md「BPM Half-fold Detection」）。音源非依存スライス | Q1-3 fixture は誤検出されず（ratio ≤ 1.001 < 1.15）契約不変。×2 方向のみ；÷2 方向と CV scale 実校正は R1-audio 待ち |
+| R2-2a ✅ | **半折り（×2）検出** done — `detect_bpm_octave_ambiguity` + `PhysicalRPE.bpm_octave_ambiguous` / `bpm_candidates`、ambiguous 時に extractor が `bpm_confidence` を 0.5 cap（`tests/test_bpm_octave_ambiguity.py`、metrics.md「BPM Half-fold Detection」）。音源非依存スライス | Q1-3 fixture は誤検出されず（ratio ≤ 1.001 < 1.15）契約不変。×2 方向のみ（÷2 方向は #86 で決着、CV scale 実校正は #92/#93 で実音源 closeout＝R2-2f） |
 | R2-2b/2c/2d ✅ | **検出器の一般化** done — 固定 2×lag→近傍探索（1.4–2.2×, #82/#84）でグリッド量子化 halving と 3:2 subharmonic「117.45 アトラクタ」を包摂、ambiguous 時に reported bpm を回復テンポへ補正（#83、transcribe trust gate は flag で sensor-blind 維持） | faster-side（reported-too-slow）の post-hoc 緩和。principled fix（tempo prior 適応化）は別の高回帰タスクで OUT |
 | R2-2e ✅ | **÷2 方向（reported-too-fast / doubling）の決着** done（#86）— extractor では AC 振幅 / beat-phase 交替 / 単独低 prior の 3 手法いずれも分離不能と実測反証。screener 限定の低 prior（`LOW_PRIOR_START_BPM=50`）診断で「抽出器 doubling vs 生成器不忠実」を弁別 | extractor は ÷2 を高 confidence で素通り（synth_01 真60→117.45, conf 0.877, 非フラグ）。`bpm_doubling_prior_recovery`、負の結果は roundtrip_corpus_screen.md に外部化 |
+| R2-2f ✅ | **CV-scale 実音源校正** done（2026-06-22, #92/#93）— content-addressed loader（Drive 非接続）で実音源 7 本を local source-dir から materialize し `compute_bpm` の confidence/CV を実測（素 CI/checkout では 7 本とも not_found・Drive ポインタは 3 本のみ）。`CV_SCALE=5.0` 据え置きで Q1-3 契約（preserved 3 本 conf 0.83–0.90 > 0.7）を**実音源で実証**、実 CV∈[0.020,0.040] | 誤 BPM 4 本（octave_half 1 + off 3）も conf 0.80–0.85（CV は regularity-only で誤 BPM 不検出）→ bpm 除外を実データ再確証。production コード変更なし（5.0 妥当性確認）。データ: [`roundtrip_corpus_screen.md`](roundtrip_corpus_screen.md) |
 | R2-3 ✅ | 校正メモを T0 per-field 校正メモへ反映 done — bpm trust を [`roundtrip_preservation.md`](roundtrip_preservation.md) の K1 Cross-Check / Follow-Up Routing に明記 | 「この針はどこまで信用して bpm を転記できるか」が往復ハーネスの三値診断に効く |
 
 **完了基準** ✅（2026-06-18, R2 closeout）: 検出器系列（#82–#86）と corpus screener
@@ -212,8 +244,8 @@ confidence を精緻化するだけの**非ブロッキング follow-up**（R1-a
 から明示除外**（理由 = faster-side は post-hoc 部分緩和・÷2 は extractor 分離不能）と
 **根拠付きで確定**し、完成定義 §4 と R3 のスコープ（R3-2 は元から key / brightness 限定）
 へ伝播済み。bpm は決定論経路（R0）の三値診断と screener の prior 回復診断に観測対象として
-残置する。残る `BPM_CONFIDENCE_CV_SCALE` 実校正は R1-audio calibratable 化（licensing
-判断＝人間タスク）待ちで、除外結論を変えない上乗せ精度。
+残置する。残っていた `BPM_CONFIDENCE_CV_SCALE` 実校正も **2026-06-22 に closeout**
+（#92 の実音源 materialize で `CV_SCALE=5.0` 据え置き確定）。除外結論は不変。
 **推定工数**: 3–4 日（実績: 検出器系列 + closeout）
 
 > **注意**: 再採譜を連鎖させると BPM だけがテンポ半分へドリフト伝播する
@@ -228,8 +260,8 @@ confidence を精緻化するだけの**非ブロッキング follow-up**（R1-a
 
 **依存**: R1（再実行可能 corpus の **key / brightness 部分**）/ K2。
 **R2 はブロッカーではない** — R2 closeout（2026-06-18, bpm を R3 信頼ノブから除外確定）
-の scope 決定を入力として受けるのみで、bpm 校正の完了を待たない（残 CV-scale 校正は
-非ブロッキング follow-up）。
+の scope 決定を入力として受けるのみで、bpm 校正の完了を待たない（CV-scale 校正も
+2026-06-22 に実音源で closeout 済・#92/#93、R3 への影響なし）。
 
 | ID | 成果物 | 受け入れ条件 |
 |---|---|---|
@@ -298,7 +330,7 @@ flowchart LR
     K1[K0/K1 ✅ grip 地図] -.-> R0
     R0[R0 往復メトリクス<br/>+ 決定論実証<br/>3-4d] --> R1[R1 再実行可能<br/>corpus+manifest<br/>3-5d]
     R1 --> R3[R3 確率的往復<br/>K2 連動<br/>5-7d]
-    R2[R2 ✅ closeout 済<br/>bpm を R3 信頼ノブから除外<br/>残 CV校正=非ブロッキング] -.->|信頼ノブ scope を確定| R3
+    R2[R2 ✅ closeout 済<br/>bpm を R3 信頼ノブから除外<br/>CV校正も closeout 6-22] -.->|信頼ノブ scope を確定| R3
     R0 --> R4[R4 作品同一性<br/>事象欄 T3<br/>7-10d]
     R0 --> R5[R5 入場試験<br/>制度化 2-3d]
 ```
@@ -310,11 +342,14 @@ flowchart LR
   R3 の手動生成バッチは律速が人間作業時間のため、R1 完了後いつでも先行収集可
 - **完了済の前提**: C4 / T0 / T1 / K0 / K1 は実装済み（棚卸しテーブル参照）。
   **R2 も closeout 済**
-- **非ブロッキング follow-up**: R2 の残作業 `BPM_CONFIDENCE_CV_SCALE` 実校正は
-  bpm confidence を精緻化するのみで R3 をブロックしない（R1-audio licensing 待ち）
-- **目的1 との結合点**: R2 は目的1 の Q1-3（BPM 信頼度）と同一作業だったが、
-  R2 closeout で復路スコープからは決着済（bpm 除外）。残る Q1-3 の CV-scale 校正のみが
-  非ブロッキング follow-up として残る
+- **follow-up も closeout（2026-06-22）**: R2 の残作業 `BPM_CONFIDENCE_CV_SCALE`
+  実校正は #92 の実音源 materialize で実施・`CV_SCALE=5.0` 据え置き確定。残作業なし
+- **目的1 との結合点（スコープ注意）**: 本 closeout は **R2 の CV-scale follow-up
+  に限定**。R2 は目的1 の Q1-3（BPM 信頼度）と同一作業だったが、復路スコープからは
+  R2 closeout で決着済（bpm 除外）。CV-scale 実音源校正（#92/#93）は Q1-3 契約
+  `±5BPM で confidence>0.7` の**初の実音源エビデンス**を与えるが、**目的1 の Q1
+  受け入れゲート（Q1-3 対真値の系統的検証 = `validation.md` baseline）は別物で未達のまま**。
+  この PR で Q1 ゲートは閉じない（[`roadmap_goal1.md`](roadmap_goal1.md) Q1 行参照）。
 
 **合計工数**: 11–16 日（R2 closeout 済・R4 stretch・R5 運用を除くクリティカルパス）。
 R4 を含めると 18–26 日。
