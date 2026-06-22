@@ -167,3 +167,36 @@ Private Google Drive の共有状態、ファイル名、取得方法は再現�
 根拠は `audio_sha256` と materialized bytes の一致であり、`drive_file_id` 欠落の
 upload-only take も同じ source-dir 解決で扱う。`examples/roundtrip/cache/` は gitignore
 対象で、licensing 未確定の実音源バイトを commit しないための境界である。
+
+### CV-scale 実音源校正（2026-06-22, R2-2f）
+
+上記 loader で実音源 7 本（`wafu_jungle_174` のバイトは未取得で `not_found`）を
+materialize し、`compute_bpm` の confidence と含意 CV（`= (1 - confidence) / CV_SCALE`）を
+実測した。`BPM_CONFIDENCE_CV_SCALE` は合成音の CV∈[0.024, 0.035] から暫定設定された
+`5.0` を、実音源で初めて検証する目的。
+
+| id | det bpm | 真値±5 | confidence | implied CV |
+|---|---|---|---|---|
+| shiden_no_inori | 172.27 | ✅ preserved | 0.901 | 0.0198 |
+| expB_mid130_breakbeat | 129.20 | ✅ preserved | 0.871 | 0.0258 |
+| yaoyorozu_shinwa | 95.70 | ✅ preserved | 0.831 | 0.0339 |
+| expA_fast176_simple | 89.10 | ❌ halved(true 176) | 0.852 | 0.0296 |
+| astral_trigger | 117.45 | ❌ halved(true 175) | 0.813 | 0.0375 |
+| expC_mid130_simple_anchor | 89.10 | ❌ off(true 130) | 0.800 | 0.0400 |
+| so_what_run | 117.45 | ❌ off(true 172) | 0.798 | 0.0404 |
+
+**結論（R2-2f closeout）**:
+
+1. **`CV_SCALE=5.0` は実音源で妥当 → 据え置き確定**。真値±5BPM 内の preserved 3 本は
+   confidence 0.83–0.90 で Q1-3 契約（>0.7）を満たし、契約を**実音源で初実証**した
+   （従来は合成のみ）。実 CV∈[0.020, 0.040] は合成想定 [0.024, 0.035] よりやや広いが
+   契約は割れない。production コード変更なし。
+2. **CV-confidence は regularity-only で halving を検出しない**。BPM が octave/非octave で
+   誤った halved 4 本も confidence 0.80–0.85 と高い（halved グリッドも規則的なため）。
+   これは R2 closeout の「bpm を R3 信頼ノブから除外」判断を**実データで再確証**する。
+   正しさの surfacing は `bpm_octave_ambiguous` フラグ + prior 回復診断の役割であり、
+   CV-scale の調整事項ではない。
+
+決定論注記: 各 det bpm / key / high_ratio は `screen_2026-06-16.yaml` の `measured`
+記録と完全一致し、materialize したバイトが screened バイト本体であること（sha256
+content-address の正しさ）と抽出器の環境非依存な決定性を裏づけた。

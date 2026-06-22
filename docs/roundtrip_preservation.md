@@ -114,8 +114,11 @@ before becoming canonical. The Design Memo must state:
   **R2 closed (2026-06-18):** bpm is excluded from the R3 trusted reproduction
   knobs (faster-side mitigation is post-hoc; the ÷2 doubling direction is
   extractor-unrecoverable, screener-only). The remaining
-  `BPM_CONFIDENCE_CV_SCALE` real-audio calibration waits on R1-audio (licensing)
-  and only refines confidence — it does not reopen the exclusion. See
+  `BPM_CONFIDENCE_CV_SCALE` real-audio calibration is **closed (2026-06-22, #92):**
+  the Drive-backed loader materialized 7 real tracks and confirmed `CV_SCALE=5.0`
+  unchanged — the 3 within-±5BPM tracks hold the Q1-3 contract (confidence
+  0.83–0.90 > 0.7) on real audio, while halved tracks still read 0.80–0.85
+  (regularity-only), reaffirming the exclusion rather than reopening it. See
   roadmap_goal2.md 完成定義 §4 / R2-3.
 - R4: brightness performer/sensor calibration for the bright band.
 - T-series calibration: time-signature confidence and stereo-width banding.
