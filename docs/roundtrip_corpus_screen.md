@@ -205,5 +205,10 @@ content-address の正しさ）と抽出器の環境非依存な決定性を裏�
 3 本（shiden / yaoyorozu / so_what）のみ。`astral_trigger` + abc 実験 3 本は upload-only
 hash で durable resolver を持たないため、これら 4 本を含む全 7 本の screen を別環境で
 再現するには 4 本の Drive アップロード + `drive_file_id` 付与（R1 artifact follow-up）が要る。
-**CV-scale 結論（5.0 確定）は Drive 解決可能な 3 本（preserved 2 + halved 1）だけで成立する**
-ため follow-up を待たず closeout できるが、7 本フル screen の再現はこの artifact 作業に依存する。
+**CV-scale 結論（5.0 確定）は Drive 解決可能な 3 本（preserved 2 + incorrect-BPM 1）だけで
+成立する**ため follow-up を待たず closeout できる。内訳: preserved 2 本（shiden 0.901 /
+yaoyorozu 0.831）が `±5BPM で conf>0.7` 契約を満たし、so_what（`bpm_relation: off`・117.45/172、
+conf 0.798）が「**誤 BPM でも beat が規則的なら高 conf**」＝CV は regularity-only を示す。なお
+so_what は非octave の off であって halving（octave_half）ではない — halving 固有の例（expA
+octave_half 89/176）は upload-only 側にあり、halving 限定の主張はこの 3 本では成立せず R1
+artifact follow-up に依存する。7 本フル screen の再現も同 artifact 作業に依存する。

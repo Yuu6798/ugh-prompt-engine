@@ -103,8 +103,10 @@
 > 解決）で回避。**ただし corpus の完全再現性は別問題で未達**: 7 本中 `drive_file_id` を持つ
 > 3 本（shiden / yaoyorozu / so_what）のみ fresh checkout で再 materialize 可能、`astral_trigger`
 > + abc 実験 3 本は upload-only hash（resolver 無し）。CV-scale 結論（5.0）は **Drive 解決可能な
-> 3 本だけで成立**（preserved: shiden 0.901 / yaoyorozu 0.831 が >0.7、halved: so_what 0.798 が
-> regularity-only を示す）ため closeout は維持するが、**upload-only 4 本の Drive 化 + `drive_file_id`
+> 3 本だけで成立**（preserved: shiden 0.901 / yaoyorozu 0.831 が >0.7、incorrect-BPM(off):
+> so_what 0.798=誤 BPM でも高 conf で CV の regularity-only を示す。so_what は非octave の off で
+> あり halving ではない — halving 固有例は upload-only 側）ため closeout は維持するが、**upload-only
+> 4 本の Drive 化 + `drive_file_id`
 > 付与は reproducible corpus の follow-up として open**（R1 artifact 作業、§R1）。
 
 | トラック | 目的2 への寄与 | 状態 |
