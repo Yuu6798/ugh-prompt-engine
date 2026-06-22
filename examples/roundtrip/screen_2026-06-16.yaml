@@ -69,7 +69,10 @@ songs:
       bpm_octave_ambiguous: false
     bpm_relation: off         # ratio 0.675 — non-octave collapse
     key_relation: preserved
-    # UNRESOLVED: bytes not yet acquired; no confirmed Drive title candidate.
+    # EXCLUDED (2026-06-22): dropped from the resolvable corpus — bytes were never
+    # acquired and acquisition is not planned. The screen finding above is retained
+    # for the record but this take is NOT part of the materializable 7-track set.
+    excluded: true
     audio_sha256: 131fc9ce585506ffbf679dafdd546a5d8ba251e3046cd5c37dc199912f305e03
 
   - id: astral_trigger
@@ -84,8 +87,8 @@ songs:
       bpm_octave_ambiguous: false
     bpm_relation: off         # ratio 0.671 — extractor halving (true ~172 in audio)
     key_relation: preserved
-    # upload-only: byte-verified locally, no confirmed Drive file_id.
     audio_sha256: b4307243b408deaf2c45f307477d56c314b95694d4b18ecf61b32c40777f2186
+    drive_file_id: "1oRzU5ZMtha-fg9SD8j7x9GD6jYrpdOgc"   # uploaded 2026-06-22; byte-size verified (4063878)
 
 # High-prior recovery diagnostic (librosa start_bpm=180): the fast tracks all
 # recover ~172.3, proving the low default readings are EXTRACTOR halving, not
@@ -107,21 +110,21 @@ abc_experiment:
     measured: {bpm: 89.1, key: G major, high_ratio: 0.0244, bpm_octave_ambiguous: false}
     bpm_relation: octave_half   # true 176 recovers at start_bpm=180 -> 172.3
     key_relation: "off"
-    # upload-only: byte-verified locally, no confirmed Drive file_id.
     audio_sha256: 0664ec1f0c10294fa065b5d866206c186af85c65860fb549e29939edd3800744
+    drive_file_id: "1PhOSskuRmc_jZvXEqWkOgWKQmx855EV0"   # uploaded 2026-06-22; byte-size verified (4756782)
   - id: expB_mid130_breakbeat
     stated: {bpm: 130, key: D minor, time_signature: 4/4}
     pattern: jungle breakbeat
     measured: {bpm: 129.2, key: D minor, high_ratio: 0.0439, bpm_octave_ambiguous: false}
     bpm_relation: preserved
     key_relation: preserved
-    # upload-only: byte-verified locally, no confirmed Drive file_id.
     audio_sha256: 2a915f15f886c34cf15f4e8079f86451b0d019b2e7ad00a58c0fdb347c3fb052
+    drive_file_id: "1JU5N-pV_uR1g9xrXRy51eQLY3vaIsvLB"   # uploaded 2026-06-22; byte-size verified (3698838)
   - id: expC_mid130_simple_anchor
     stated: {bpm: 130, key: D minor, time_signature: 4/4}
     pattern: four-on-the-floor, simple
     measured: {bpm: 89.1, key: D minor, high_ratio: 0.0263, bpm_octave_ambiguous: false}
     bpm_relation: "off"
     key_relation: preserved
-    # upload-only: byte-verified locally, no confirmed Drive file_id.
     audio_sha256: 854578aa2dd55f4a4efd1a0f77c8d84e1e88d3c484dda703c53c31a918887b05
+    drive_file_id: "1MmuFbPkKjt8fQz4YvEZoib5smAEnUH1d"   # uploaded 2026-06-22; byte-size verified (3826494)

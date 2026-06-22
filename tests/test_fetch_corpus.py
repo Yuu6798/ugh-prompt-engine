@@ -145,6 +145,53 @@ def test_missing_sha_is_not_found_and_excluded(tmp_path: Path) -> None:
     }
 
 
+def test_excluded_record_is_classified_and_not_counted_unresolved(tmp_path: Path) -> None:
+    source_dir = tmp_path / "drop"
+    source_dir.mkdir()
+    present = source_dir / "keep.wav"
+    present.write_bytes(b"kept bytes")
+    kept_digest = sha256_bytes(b"kept bytes")
+    dropped_digest = sha256_bytes(b"never acquired")
+    manifest = tmp_path / "manifest.yaml"
+    write_yaml(
+        manifest,
+        {
+            "songs": [
+                {"id": "keep", "stated": {"bpm": 120}, "audio_sha256": kept_digest},
+                {
+                    "id": "dropped",
+                    "excluded": True,
+                    "stated": {"bpm": 174},
+                    "audio_sha256": dropped_digest,
+                },
+            ]
+        },
+    )
+
+    resolved = fc.resolve_manifest(manifest, source_dir, tmp_path / "cache")
+
+    # excluded row never materializes and never resolves against source bytes.
+    assert [song["id"] for song in resolved["songs"]] == ["keep"]
+    dropped_status = next(row for row in resolved["status"] if row["id"] == "dropped")
+    assert dropped_status == {
+        "id": "dropped",
+        "resolved": False,
+        "reason": "excluded",
+        "audio_sha256": dropped_digest,
+        "media_type": "audio",
+    }
+
+    # excluded rows are not counted as unresolved — the corpus is "complete" once
+    # every non-excluded record resolves.
+    report = fc.status_report(resolved)
+    assert report == {
+        "resolved": 1,
+        "excluded": 1,
+        "unresolved": 0,
+        "status": resolved["status"],
+    }
+
+
 def test_takes_container_and_audio_hash_are_normalized(tmp_path: Path) -> None:
     source_dir = tmp_path / "drop"
     source_dir.mkdir()
