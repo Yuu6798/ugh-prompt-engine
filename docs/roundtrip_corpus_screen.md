@@ -138,3 +138,32 @@ busy-electronic(0.069) < dense(0.091) と編成の明るさ/密度順に並び�
 - **最優先の実装課題**: 既定 tempo prior の見直し（適応 prior or octave 補正）と R2-2a の
   近傍探索化。Design Memo 化して Codex 実装に渡す候補。
 - calibratable 化（audio 同梱 + hash 一致）は licensing 確認後。現状 observation_log 相当。
+
+## Drive-backed materialization (R1-CORPUS-DRIVE)
+
+R1 corpus の実音源は repo に入れない。`examples/roundtrip/screen_2026-06-16.yaml`
+は `audio_sha256` を content pin とし、確認済みの一部 song だけに `drive_file_id`
+を取得ポインタとして持つ。`drive_file_id` は provenance metadata であり、loader の
+採用判定には使わない。ローカルにダウンロード済み、アップロード済み、または別経路で
+受け取ったファイルを `--source-dir` に置き、sha256 が pin と一致したものだけを
+gitignore cache に materialize する。
+
+```bash
+python scripts/fetch_corpus.py examples/roundtrip/screen_2026-06-16.yaml \
+  --source-dir /path/to/downloaded-audio \
+  --out examples/roundtrip/cache/resolved_screen.yaml
+python scripts/screen_corpus.py examples/roundtrip/cache/resolved_screen.yaml
+```
+
+`scripts/fetch_corpus.py` は `--source-dir` を一度走査して sha256 を計算し、一致した
+source を `examples/roundtrip/cache/<id>.<ext>` へコピーする。出力 YAML の `songs` は
+`screen_corpus.py` がそのまま読める `audio` / `audio_sha256` / `bpm` / `key` /
+`time_signature` 形式へ正規化される。不一致の locator がある場合は
+`status.reason=sha256_mismatch`、該当 sha256 が見つからない場合は `status.reason=not_found`
+として記録し、未解決 song は `songs` から除外する。これにより CI や reviewer 環境で
+private 音源が無くても loader は graceful に空または部分解決の YAML を出力できる。
+
+Private Google Drive の共有状態、ファイル名、取得方法は再現性の根拠にしない。再現性の
+根拠は `audio_sha256` と materialized bytes の一致であり、`drive_file_id` 欠落の
+upload-only take も同じ source-dir 解決で扱う。`examples/roundtrip/cache/` は gitignore
+対象で、licensing 未確定の実音源バイトを commit しないための境界である。

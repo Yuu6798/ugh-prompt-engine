@@ -25,6 +25,7 @@ songs:
     bpm_relation: preserved   # ratio 0.997
     key_relation: unknown     # no key stated in prompt
     audio_sha256: ce7a92402b06acff7da6aa89d77928005cb7648256cd3c9e5ee655245c82a725
+    drive_file_id: "1q67-xtqFlPI76__hSJ9HZqifFAKhNsrG"
 
   - id: shiden_no_inori
     title: 紫電の祈り
@@ -39,6 +40,7 @@ songs:
     bpm_relation: preserved   # ratio 1.025
     key_relation: preserved
     audio_sha256: 2d59fa17e5788c6b22fe1a7dd2e22785b72a5f786a572ff27dcc620f2ba7fd30
+    drive_file_id: "11HU23cfmHf_OdnhUcMWp5VL75PxKn3Jg"
 
   - id: so_what_run
     title: SO WHAT RUN
@@ -53,6 +55,7 @@ songs:
     bpm_relation: off         # ratio 0.683 — non-octave collapse
     key_relation: unknown
     audio_sha256: 76ef60e437f0a2145bc33fc438b4bd53b47c805b78f4f7ba9eb6f660247722f4
+    drive_file_id: "1sZKLtaNgXly0bK0fOPVA2WNoecNFb0Kh"
 
   - id: wafu_jungle_174
     title: (wafu rock × jungle breakbeat remix)
@@ -66,6 +69,7 @@ songs:
       bpm_octave_ambiguous: false
     bpm_relation: off         # ratio 0.675 — non-octave collapse
     key_relation: preserved
+    # UNRESOLVED: bytes not yet acquired; no confirmed Drive title candidate.
     audio_sha256: 131fc9ce585506ffbf679dafdd546a5d8ba251e3046cd5c37dc199912f305e03
 
   - id: astral_trigger
@@ -80,6 +84,7 @@ songs:
       bpm_octave_ambiguous: false
     bpm_relation: off         # ratio 0.671 — extractor halving (true ~172 in audio)
     key_relation: preserved
+    # upload-only: byte-verified locally, no confirmed Drive file_id.
     audio_sha256: b4307243b408deaf2c45f307477d56c314b95694d4b18ecf61b32c40777f2186
 
 # High-prior recovery diagnostic (librosa start_bpm=180): the fast tracks all
@@ -102,6 +107,7 @@ abc_experiment:
     measured: {bpm: 89.1, key: G major, high_ratio: 0.0244, bpm_octave_ambiguous: false}
     bpm_relation: octave_half   # true 176 recovers at start_bpm=180 -> 172.3
     key_relation: "off"
+    # upload-only: byte-verified locally, no confirmed Drive file_id.
     audio_sha256: 0664ec1f0c10294fa065b5d866206c186af85c65860fb549e29939edd3800744
   - id: expB_mid130_breakbeat
     stated: {bpm: 130, key: D minor, time_signature: 4/4}
@@ -109,6 +115,7 @@ abc_experiment:
     measured: {bpm: 129.2, key: D minor, high_ratio: 0.0439, bpm_octave_ambiguous: false}
     bpm_relation: preserved
     key_relation: preserved
+    # upload-only: byte-verified locally, no confirmed Drive file_id.
     audio_sha256: 2a915f15f886c34cf15f4e8079f86451b0d019b2e7ad00a58c0fdb347c3fb052
   - id: expC_mid130_simple_anchor
     stated: {bpm: 130, key: D minor, time_signature: 4/4}
@@ -116,4 +123,5 @@ abc_experiment:
     measured: {bpm: 89.1, key: D minor, high_ratio: 0.0263, bpm_octave_ambiguous: false}
     bpm_relation: "off"
     key_relation: preserved
+    # upload-only: byte-verified locally, no confirmed Drive file_id.
     audio_sha256: 854578aa2dd55f4a4efd1a0f77c8d84e1e88d3c484dda703c53c31a918887b05
