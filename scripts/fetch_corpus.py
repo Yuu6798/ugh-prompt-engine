@@ -142,9 +142,16 @@ def find_locator_candidate(
 def materialize(source: SourceFile, record_name: str, expected_sha: str, cache_dir: Path) -> Path:
     cache_dir.mkdir(parents=True, exist_ok=True)
     suffix = source.path.suffix or ".bin"
-    target = cache_dir / f"{safe_filename_stem(record_name)}{suffix}"
-    if target.is_file() and sha256_file(target) == expected_sha:
-        return target
+    stem = safe_filename_stem(record_name)
+    target = cache_dir / f"{stem}{suffix}"
+    if target.is_file():
+        if sha256_file(target) == expected_sha:
+            return target
+        target = cache_dir / f"{stem}-{expected_sha[:12]}{suffix}"
+        if target.is_file() and sha256_file(target) == expected_sha:
+            return target
+        if target.is_file():
+            target = cache_dir / f"{stem}-{expected_sha}{suffix}"
     shutil.copy2(source.path, target)
     return target
 

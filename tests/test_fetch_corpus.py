@@ -174,6 +174,37 @@ def test_materialization_is_idempotent(tmp_path: Path) -> None:
     assert (cache_dir / "same.mp3").read_bytes() == b"same bytes"
 
 
+def test_cache_filename_collision_uses_hash_suffix(tmp_path: Path) -> None:
+    source_dir = tmp_path / "drop"
+    source_dir.mkdir()
+    first_source = source_dir / "first.wav"
+    second_source = source_dir / "second.wav"
+    first_source.write_bytes(b"first bytes")
+    second_source.write_bytes(b"second bytes")
+    first_hash = sha256_bytes(b"first bytes")
+    second_hash = sha256_bytes(b"second bytes")
+    manifest = tmp_path / "manifest.yaml"
+    write_yaml(
+        manifest,
+        {
+            "songs": [
+                {"id": "duplicate", "stated": {"bpm": 90}, "audio_sha256": first_hash},
+                {"id": "duplicate", "stated": {"bpm": 120}, "audio_sha256": second_hash},
+            ]
+        },
+    )
+
+    resolved = fc.resolve_manifest(manifest, source_dir, tmp_path / "cache")
+
+    first_audio = Path(resolved["songs"][0]["audio"])
+    second_audio = Path(resolved["songs"][1]["audio"])
+    assert first_audio.name == "duplicate.wav"
+    assert second_audio.name == f"duplicate-{second_hash[:12]}.wav"
+    assert first_audio != second_audio
+    assert sha256_bytes(first_audio.read_bytes()) == first_hash
+    assert sha256_bytes(second_audio.read_bytes()) == second_hash
+
+
 def test_json_status_can_be_printed_with_out_file(tmp_path: Path, capsys) -> None:
     source_dir = tmp_path / "drop"
     source_dir.mkdir()
