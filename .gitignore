@@ -34,6 +34,7 @@ examples/real_audio_validation/runs/
 examples/real_audio_validation/consensus/summary.json
 examples/real_audio_validation/consensus/summary.md
 examples/real_audio_validation/consensus/per_track/*.json
+examples/roundtrip/cache/
 !examples/**/.gitkeep
 
 # Claude Code local settings
