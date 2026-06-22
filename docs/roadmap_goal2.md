@@ -101,8 +101,10 @@
 > 高く、CV-confidence が regularity-only で halving を検出しない＝bpm 除外を実データで
 > 再確証。licensing **懸念**（公開 repo への著作権物同梱）は Drive 非同梱（content-address
 > 解決）で回避。**ただし corpus の完全再現性は別問題で未達**: 7 本中 `drive_file_id` を持つ
-> 3 本（shiden / yaoyorozu / so_what）のみ fresh checkout で再 materialize 可能、`astral_trigger`
-> + abc 実験 3 本は upload-only hash（resolver 無し）。CV-scale 結論（5.0）は **Drive 解決可能な
+> 3 本（shiden / yaoyorozu / so_what）が Drive 在処ポインタを持つ。ただし `fetch_corpus.py` は
+> **Drive 非接続**で source-dir のバイトのみ照合するため、素の CI/checkout（手動 DL 無し）では
+> 3 本含め 7 本とも `not_found`；3 本は Drive アクセス下で手動 DL すれば解決できる。`astral_trigger`
+> + abc 実験 3 本はその在処ポインタすら無い upload-only hash。CV-scale 結論（5.0）は **Drive アクセス下で手動取得できる
 > 3 本だけで成立**（preserved: shiden 0.901 / yaoyorozu 0.831 が >0.7、incorrect-BPM(off):
 > so_what 0.798=誤 BPM でも高 conf で CV の regularity-only を示す。so_what は非octave の off で
 > あり halving ではない — halving 固有例は upload-only 側）ため closeout は維持するが、**upload-only
@@ -200,10 +202,12 @@ R 系列は目的2 固有のフェーズ ID。各 R フェーズは T / K / Q �
 > BPM 問題ケース（so_what 172→117 / astral 175→117 / expA 176→89 等）を含む実音源を
 > materialize し、`compute_bpm` の confidence/CV を実測。`CV_SCALE=5.0` を据え置きで確定
 > （実 CV∈[0.020,0.040]、preserved 3 本で Q1-3 契約 >0.7 を実音源実証）。コード変更なし。
-> **ただし reproducible corpus 自体は未完**: 校正に使った 7 本中、durable resolver
-> （`drive_file_id`）を持つのは 3 本のみで、`astral_trigger` + abc 実験 3 本は upload-only
-> hash（fresh checkout で再取得不能）。**この 4 本を Drive へ上げて `drive_file_id` を付与する
-> artifact 作業が R1 の残タスクとして open**（CV-scale 結論自体は Drive 解決可能な 3 本で成立）。
+> **ただし reproducible corpus 自体は未完**: `fetch_corpus.py` は Drive 非接続で source-dir の
+> バイトのみ照合するため、素の CI/checkout では 7 本とも `not_found`。校正に使った 7 本中、
+> Drive 在処ポインタ（`drive_file_id`・手動 DL 前提）を持つのは 3 本のみで、`astral_trigger` +
+> abc 実験 3 本はそのポインタすら無い upload-only hash。**3 本の手動 DL（要 Drive アクセス）+
+> この 4 本を Drive へ上げて `drive_file_id` を付与する artifact 作業が R1 の残タスクとして
+> open**（CV-scale 結論自体は Drive アクセス下で手動取得できる 3 本で成立）。
 **推定工数**: 3–5 日（key / brightness corpus 確保・ライセンス確認を含む。BPM ケース確保は
 follow-up 側）
 

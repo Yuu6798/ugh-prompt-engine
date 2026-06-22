@@ -201,12 +201,15 @@ materialize し、`compute_bpm` の confidence と含意 CV（`= (1 - confidence
 記録と完全一致し、materialize したバイトが screened バイト本体であること（sha256
 content-address の正しさ）と抽出器の環境非依存な決定性を裏づけた。
 
-再現性注記（重要）: この 7 本のうち `drive_file_id` で fresh checkout から再取得できるのは
-3 本（shiden / yaoyorozu / so_what）のみ。`astral_trigger` + abc 実験 3 本は upload-only
-hash で durable resolver を持たないため、これら 4 本を含む全 7 本の screen を別環境で
-再現するには 4 本の Drive アップロード + `drive_file_id` 付与（R1 artifact follow-up）が要る。
-**CV-scale 結論（5.0 確定）は Drive 解決可能な 3 本（preserved 2 + incorrect-BPM 1）だけで
-成立する**ため follow-up を待たず closeout できる。内訳: preserved 2 本（shiden 0.901 /
+再現性注記（重要）: `fetch_corpus.py` は **Drive を叩かず** `--source-dir` 内のバイトだけを
+sha256 照合する。よって素の checkout / CI（手動 DL 無し）では **7 本すべて `not_found`**。
+`drive_file_id` を持つ 3 本（shiden / yaoyorozu / so_what）は「Drive アクセスを持つ人が手動 DL
+して source-dir に置けば解決できる」在処ポインタにすぎず、loader が自動取得することはない。
+`astral_trigger` + abc 実験 3 本はその在処ポインタすら無い upload-only hash。フル再現には
+**3 本の手動 DL（要 Drive アクセス）+ 4 本の Drive アップロード&`drive_file_id` 付与**
+（R1 artifact follow-up）が要る。
+**CV-scale 結論（5.0 確定）は Drive アクセス下で手動取得できる 3 本（preserved 2 +
+incorrect-BPM 1）だけで成立する**ため follow-up を待たず closeout できる。内訳: preserved 2 本（shiden 0.901 /
 yaoyorozu 0.831）が `±5BPM で conf>0.7` 契約を満たし、so_what（`bpm_relation: off`・117.45/172、
 conf 0.798）が「**誤 BPM でも beat が規則的なら高 conf**」＝CV は regularity-only を示す。なお
 so_what は非octave の off であって halving（octave_half）ではない — halving 固有の例（expA
