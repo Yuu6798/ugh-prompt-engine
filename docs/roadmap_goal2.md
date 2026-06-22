@@ -109,8 +109,9 @@
 > 解決でき、**フル 7 本 screen が再現可能**になった。CV-scale 結論（5.0）は preserved 2 本
 > （shiden 0.901 / yaoyorozu 0.831 が >0.7）+ incorrect-BPM(off) の so_what 0.798（誤 BPM でも
 > 高 conf で CV の regularity-only を示す。so_what は非octave の off で halving ではない）で成立し、
-> halving 固有例（expA octave_half 89/176）も Drive 取得可能になった。**残る R1 artifact は
-> screen 対象外の `wafu_jungle_174`（バイト未取得）のみ**（§R1）。
+> halving 固有例（expA octave_half 89/176）も Drive 取得可能になった。8 本目の
+> `wafu_jungle_174` は **2026-06-22 に corpus から除外**（manifest `excluded: true`・バイト
+> 入手予定なし）し、**R1 Drive corpus は screen 対象 7/7 で完結**（§R1）。
 
 | トラック | 目的2 への寄与 | 状態 |
 |---|---|---|
@@ -207,8 +208,9 @@ R 系列は目的2 固有のフェーズ ID。各 R フェーズは T / K / Q �
 > のバイトのみ照合するため素の CI/checkout では `not_found` だが、従来 upload-only だった 4 本
 > （astral_trigger / expA / expB / expC）を Drive へアップロードし `drive_file_id` 付与済み
 > （byte-size 一致で provenance 確認）。これで **screen 対象 7 本すべてが Drive ポインタを持ち**、
-> Drive アクセス下で手動 DL すればフル 7 本 screen を再現できる。**R1 の残タスクは screen 対象外の
-> `wafu_jungle_174`（バイト未取得・ポインタ無し）のみ**。
+> Drive アクセス下で手動 DL すればフル 7 本 screen を再現できる。8 本目の `wafu_jungle_174` は
+> **2026-06-22 に corpus から除外**（manifest `excluded: true`・バイト入手予定なし）し、
+> **R1 Drive corpus は screen 対象 7/7 で完結**。
 **推定工数**: 3–5 日（key / brightness corpus 確保・ライセンス確認を含む。BPM ケース確保は
 follow-up 側）
 

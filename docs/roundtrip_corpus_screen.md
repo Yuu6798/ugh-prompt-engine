@@ -170,7 +170,7 @@ upload-only take も同じ source-dir 解決で扱う。`examples/roundtrip/cach
 
 ### CV-scale 実音源校正（2026-06-22, R2-2f）
 
-上記 loader で実音源 7 本（`wafu_jungle_174` のバイトは未取得で `not_found`）を
+上記 loader で実音源 7 本（`wafu_jungle_174` は corpus から除外＝`excluded`・対象外）を
 materialize し、`compute_bpm` の confidence と含意 CV（`= (1 - confidence) / CV_SCALE`）を
 実測した。`BPM_CONFIDENCE_CV_SCALE` は合成音の CV∈[0.024, 0.035] から暫定設定された
 `5.0` を、実音源で初めて検証する目的。
@@ -208,8 +208,9 @@ sha256 照合する。よって素の checkout / CI（手動 DL 無し）では 
 だった 4 本（astral_trigger / expA / expB / expC）を Drive へアップロードし `drive_file_id` を
 付与済み**（byte-size 一致で provenance 確認、manifest 反映）。これで screen 対象 7 本すべてが
 `drive_file_id`（在処ポインタ）を持ち、Drive アクセスを持つ人が手動 DL して `--source-dir` に
-置けば **フル 7 本 screen を再現できる**。残る未解決は screen 対象外の `wafu_jungle_174`
-（バイト未取得・`drive_file_id` 無し・`not_found`）のみで、これが R1 の最後の artifact 作業。
+置けば **フル 7 本 screen を再現できる**。8 本目の `wafu_jungle_174` は **2026-06-22 に corpus
+から除外**（manifest `excluded: true`・バイト入手予定なし）したため、R1 Drive corpus は screen
+対象 7/7 で完結し未解決の artifact 作業は残らない。
 **CV-scale 結論（5.0 確定）** は preserved 2 本（shiden 0.901 / yaoyorozu 0.831）が
 `±5BPM で conf>0.7` 契約を満たし、so_what（`bpm_relation: off`・117.45/172、conf 0.798）が
 「**誤 BPM でも beat が規則的なら高 conf**」＝CV は regularity-only を示すことで成立する。

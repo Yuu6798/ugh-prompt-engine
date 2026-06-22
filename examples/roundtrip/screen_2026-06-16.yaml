@@ -69,7 +69,10 @@ songs:
       bpm_octave_ambiguous: false
     bpm_relation: off         # ratio 0.675 — non-octave collapse
     key_relation: preserved
-    # UNRESOLVED: bytes not yet acquired; no confirmed Drive title candidate.
+    # EXCLUDED (2026-06-22): dropped from the resolvable corpus — bytes were never
+    # acquired and acquisition is not planned. The screen finding above is retained
+    # for the record but this take is NOT part of the materializable 7-track set.
+    excluded: true
     audio_sha256: 131fc9ce585506ffbf679dafdd546a5d8ba251e3046cd5c37dc199912f305e03
 
   - id: astral_trigger

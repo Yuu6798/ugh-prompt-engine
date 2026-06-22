@@ -119,8 +119,10 @@ before becoming canonical. The Design Memo must state:
   (it does not contact Drive; as of 2026-06-22 all 7 screened tracks carry
   `drive_file_id` pointers for manual re-download — the 4 formerly upload-only tracks
   (astral_trigger / expA / expB / expC) were uploaded to Drive, so the full 7-track
-  screen is reproducible by anyone with Drive access; the only remaining R1 artifact
-  is the screen-external `wafu_jungle_174`, whose bytes are not yet acquired) and confirmed `CV_SCALE=5.0`
+  screen is reproducible by anyone with Drive access; the screen-external
+  `wafu_jungle_174` was excluded from the corpus on 2026-06-22 (manifest
+  `excluded: true`, bytes will not be acquired), so the R1 Drive corpus is complete
+  at 7/7 screened tracks) and confirmed `CV_SCALE=5.0`
   unchanged — the 3 within-±5BPM tracks hold the Q1-3 contract (confidence
   0.83–0.90 > 0.7) on real audio, while the 4 incorrect-BPM tracks (1 octave-half +
   3 off) still read 0.80–0.85 (regularity-only), reaffirming the exclusion rather
