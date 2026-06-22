@@ -117,8 +117,9 @@ before becoming canonical. The Design Memo must state:
   `BPM_CONFIDENCE_CV_SCALE` real-audio calibration is **closed (2026-06-22, #92):**
   the Drive-backed loader materialized 7 real tracks and confirmed `CV_SCALE=5.0`
   unchanged — the 3 within-±5BPM tracks hold the Q1-3 contract (confidence
-  0.83–0.90 > 0.7) on real audio, while halved tracks still read 0.80–0.85
-  (regularity-only), reaffirming the exclusion rather than reopening it. See
+  0.83–0.90 > 0.7) on real audio, while the 4 incorrect-BPM tracks (1 octave-half +
+  3 off) still read 0.80–0.85 (regularity-only), reaffirming the exclusion rather
+  than reopening it. See
   roadmap_goal2.md 完成定義 §4 / R2-3.
 - R4: brightness performer/sensor calibration for the bright band.
 - T-series calibration: time-signature confidence and stereo-width banding.

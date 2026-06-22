@@ -97,8 +97,8 @@
 > **更新（2026-06-22）**: その `BPM_CONFIDENCE_CV_SCALE` follow-up も **closeout** —
 > R1 Drive-backed loader（#92）で実音源 7 本を materialize し実測校正。`CV_SCALE=5.0`
 > を据え置きで確定（preserved 3 本＝真値±5BPM の confidence 0.83–0.90 が Q1-3 契約
-> >0.7 を**実音源で初実証**、実 CV∈[0.020,0.040]）。halved 4 本も conf 0.80–0.85 と
-> 高く、CV-confidence が regularity-only で halving を検出しない＝bpm 除外を実データで
+> >0.7 を**実音源で初実証**、実 CV∈[0.020,0.040]）。誤 BPM 4 本（octave_half 1 + off 3）も
+> conf 0.80–0.85 と高く、CV-confidence が regularity-only で誤 BPM を検出しない＝bpm 除外を実データで
 > 再確証。licensing **懸念**（公開 repo への著作権物同梱）は Drive 非同梱（content-address
 > 解決）で回避。**ただし corpus の完全再現性は別問題で未達**: 7 本中 `drive_file_id` を持つ
 > 3 本（shiden / yaoyorozu / so_what）が Drive 在処ポインタを持つ。ただし `fetch_corpus.py` は
@@ -235,7 +235,7 @@ confidence を精緻化するだけの**非ブロッキング follow-up** で、
 | R2-2a ✅ | **半折り（×2）検出** done — `detect_bpm_octave_ambiguity` + `PhysicalRPE.bpm_octave_ambiguous` / `bpm_candidates`、ambiguous 時に extractor が `bpm_confidence` を 0.5 cap（`tests/test_bpm_octave_ambiguity.py`、metrics.md「BPM Half-fold Detection」）。音源非依存スライス | Q1-3 fixture は誤検出されず（ratio ≤ 1.001 < 1.15）契約不変。×2 方向のみ（÷2 方向は #86 で決着、CV scale 実校正は #92/#93 で実音源 closeout＝R2-2f） |
 | R2-2b/2c/2d ✅ | **検出器の一般化** done — 固定 2×lag→近傍探索（1.4–2.2×, #82/#84）でグリッド量子化 halving と 3:2 subharmonic「117.45 アトラクタ」を包摂、ambiguous 時に reported bpm を回復テンポへ補正（#83、transcribe trust gate は flag で sensor-blind 維持） | faster-side（reported-too-slow）の post-hoc 緩和。principled fix（tempo prior 適応化）は別の高回帰タスクで OUT |
 | R2-2e ✅ | **÷2 方向（reported-too-fast / doubling）の決着** done（#86）— extractor では AC 振幅 / beat-phase 交替 / 単独低 prior の 3 手法いずれも分離不能と実測反証。screener 限定の低 prior（`LOW_PRIOR_START_BPM=50`）診断で「抽出器 doubling vs 生成器不忠実」を弁別 | extractor は ÷2 を高 confidence で素通り（synth_01 真60→117.45, conf 0.877, 非フラグ）。`bpm_doubling_prior_recovery`、負の結果は roundtrip_corpus_screen.md に外部化 |
-| R2-2f ✅ | **CV-scale 実音源校正** done（2026-06-22, #92 経由）— Drive-backed loader で実音源 7 本を materialize し `compute_bpm` の confidence/CV を実測。`CV_SCALE=5.0` 据え置きで Q1-3 契約（preserved 3 本 conf 0.83–0.90 > 0.7）を**実音源で実証**、実 CV∈[0.020,0.040] | halved 4 本も conf 0.80–0.85（CV は regularity-only で halving 不検出）→ bpm 除外を実データ再確証。production コード変更なし（5.0 妥当性確認）。データ: [`roundtrip_corpus_screen.md`](roundtrip_corpus_screen.md) |
+| R2-2f ✅ | **CV-scale 実音源校正** done（2026-06-22, #92 経由）— Drive-backed loader で実音源 7 本を materialize し `compute_bpm` の confidence/CV を実測。`CV_SCALE=5.0` 据え置きで Q1-3 契約（preserved 3 本 conf 0.83–0.90 > 0.7）を**実音源で実証**、実 CV∈[0.020,0.040] | 誤 BPM 4 本（octave_half 1 + off 3）も conf 0.80–0.85（CV は regularity-only で誤 BPM 不検出）→ bpm 除外を実データ再確証。production コード変更なし（5.0 妥当性確認）。データ: [`roundtrip_corpus_screen.md`](roundtrip_corpus_screen.md) |
 | R2-3 ✅ | 校正メモを T0 per-field 校正メモへ反映 done — bpm trust を [`roundtrip_preservation.md`](roundtrip_preservation.md) の K1 Cross-Check / Follow-Up Routing に明記 | 「この針はどこまで信用して bpm を転記できるか」が往復ハーネスの三値診断に効く |
 
 **完了基準** ✅（2026-06-18, R2 closeout）: 検出器系列（#82–#86）と corpus screener

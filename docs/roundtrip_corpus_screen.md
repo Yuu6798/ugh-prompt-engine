@@ -180,8 +180,8 @@ materialize し、`compute_bpm` の confidence と含意 CV（`= (1 - confidence
 | shiden_no_inori | 172.27 | ✅ preserved | 0.901 | 0.0198 |
 | expB_mid130_breakbeat | 129.20 | ✅ preserved | 0.871 | 0.0258 |
 | yaoyorozu_shinwa | 95.70 | ✅ preserved | 0.831 | 0.0339 |
-| expA_fast176_simple | 89.10 | ❌ halved(true 176) | 0.852 | 0.0296 |
-| astral_trigger | 117.45 | ❌ halved(true 175) | 0.813 | 0.0375 |
+| expA_fast176_simple | 89.10 | ❌ octave_half(true 176) | 0.852 | 0.0296 |
+| astral_trigger | 117.45 | ❌ off(true 175) | 0.813 | 0.0375 |
 | expC_mid130_simple_anchor | 89.10 | ❌ off(true 130) | 0.800 | 0.0400 |
 | so_what_run | 117.45 | ❌ off(true 172) | 0.798 | 0.0404 |
 
@@ -191,8 +191,9 @@ materialize し、`compute_bpm` の confidence と含意 CV（`= (1 - confidence
    confidence 0.83–0.90 で Q1-3 契約（>0.7）を満たし、契約を**実音源で初実証**した
    （従来は合成のみ）。実 CV∈[0.020, 0.040] は合成想定 [0.024, 0.035] よりやや広いが
    契約は割れない。production コード変更なし。
-2. **CV-confidence は regularity-only で halving を検出しない**。BPM が octave/非octave で
-   誤った halved 4 本も confidence 0.80–0.85 と高い（halved グリッドも規則的なため）。
+2. **CV-confidence は regularity-only で誤 BPM を検出しない**。BPM が誤った 4 本
+   （octave_half 1 = expA / off 3 = astral・so_what・expC）も confidence 0.80–0.85 と高い
+   （誤検出した拍グリッドも規則的なため）。
    これは R2 closeout の「bpm を R3 信頼ノブから除外」判断を**実データで再確証**する。
    正しさの surfacing は `bpm_octave_ambiguous` フラグ + prior 回復診断の役割であり、
    CV-scale の調整事項ではない。
