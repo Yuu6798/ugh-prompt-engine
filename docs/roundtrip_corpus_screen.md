@@ -203,16 +203,16 @@ materialize し、`compute_bpm` の confidence と含意 CV（`= (1 - confidence
 content-address の正しさ）と抽出器の環境非依存な決定性を裏づけた。
 
 再現性注記（重要）: `fetch_corpus.py` は **Drive を叩かず** `--source-dir` 内のバイトだけを
-sha256 照合する。よって素の checkout / CI（手動 DL 無し）では **7 本すべて `not_found`**。
-`drive_file_id` を持つ 3 本（shiden / yaoyorozu / so_what）は「Drive アクセスを持つ人が手動 DL
-して source-dir に置けば解決できる」在処ポインタにすぎず、loader が自動取得することはない。
-`astral_trigger` + abc 実験 3 本はその在処ポインタすら無い upload-only hash。フル再現には
-**3 本の手動 DL（要 Drive アクセス）+ 4 本の Drive アップロード&`drive_file_id` 付与**
-（R1 artifact follow-up）が要る。
-**CV-scale 結論（5.0 確定）は Drive アクセス下で手動取得できる 3 本（preserved 2 +
-incorrect-BPM 1）だけで成立する**ため follow-up を待たず closeout できる。内訳: preserved 2 本（shiden 0.901 /
-yaoyorozu 0.831）が `±5BPM で conf>0.7` 契約を満たし、so_what（`bpm_relation: off`・117.45/172、
-conf 0.798）が「**誤 BPM でも beat が規則的なら高 conf**」＝CV は regularity-only を示す。なお
-so_what は非octave の off であって halving（octave_half）ではない — halving 固有の例（expA
-octave_half 89/176）は upload-only 側にあり、halving 限定の主張はこの 3 本では成立せず R1
-artifact follow-up に依存する。7 本フル screen の再現も同 artifact 作業に依存する。
+sha256 照合する。よって素の checkout / CI（手動 DL 無し）では **materialize 対象 7 本すべて
+`not_found`**（loader が Drive を自動取得することはない）。ただし **2026-06-22 に upload-only
+だった 4 本（astral_trigger / expA / expB / expC）を Drive へアップロードし `drive_file_id` を
+付与済み**（byte-size 一致で provenance 確認、manifest 反映）。これで screen 対象 7 本すべてが
+`drive_file_id`（在処ポインタ）を持ち、Drive アクセスを持つ人が手動 DL して `--source-dir` に
+置けば **フル 7 本 screen を再現できる**。残る未解決は screen 対象外の `wafu_jungle_174`
+（バイト未取得・`drive_file_id` 無し・`not_found`）のみで、これが R1 の最後の artifact 作業。
+**CV-scale 結論（5.0 確定）** は preserved 2 本（shiden 0.901 / yaoyorozu 0.831）が
+`±5BPM で conf>0.7` 契約を満たし、so_what（`bpm_relation: off`・117.45/172、conf 0.798）が
+「**誤 BPM でも beat が規則的なら高 conf**」＝CV は regularity-only を示すことで成立する。
+so_what は非octave の off であって halving（octave_half）ではない。halving 固有の例（expA
+octave_half 89/176）も 2026-06-22 アップロードで `drive_file_id` 付きとなり、Drive アクセス下で
+取得できる（従来の upload-only 制約は解消）。

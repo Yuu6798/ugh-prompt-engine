@@ -15,8 +15,8 @@ chord record を捏造せず knob_dead は既存 grip_map 経路を温存（knob
 移調不変形レポートと chord grip 実測 fixture は follow-up に defer。R4 で人間非依存タスクは出切り、
 残キュー（R1-audio / K2 Suno 転移）は人間タスク律速。**R2 `BPM_CONFIDENCE_CV_SCALE` 校正は
 #93 で closeout**（#92 loader で実音源 7 本を materialize し `CV_SCALE=5.0` 据え置き確定・
-content-address で licensing 回避）。R1-audio も loader は #92 マージ済で、残は upload-only
-4 本（astral + abc×3）の Drive 化 + `wafu_jungle_174` バイト入手のみ。並行して Q1-5（spectral 計器拡張）を closeout：外部 audio-analyzer
+content-address で licensing 回避）。R1-audio も loader は #92 マージ済で、**2026-06-22 に upload-only 4 本（astral + abc×3）を Drive 化
+（screen 対象 7 本すべてが drive_file_id 保有）**、残は `wafu_jungle_174` バイト入手のみ。並行して Q1-5（spectral 計器拡張）を closeout：外部 audio-analyzer
 との実測差分比較で重複コアの同等性を実証しつつ `spectral_profile` の power/magnitude 不整合を発見し、magnitude
 基準 7帯域 `spectral_bands` + `tempo_stability_std` + harmonic/percussive 比を additive 追加（#91、マージ後 A/B/C で
 外部 magnitude 7帯域との一致を実測確認）。次の actionable は Phase 2（既存 power 3帯域の是正と semantic_rules/config
@@ -26,7 +26,7 @@ content-address で licensing 回避）。R1-audio も loader は #92 マージ�
 
 | ID | Title | Priority | Notes |
 |---|---|---|---|
-| R1-audio | 実 Suno 音源の corpus 登録 | P1 | sha256 固定済（#81）+ **Drive-backed content-address loader `scripts/fetch_corpus.py` マージ済（#92）**。licensing は Drive 非同梱で回避済。loader は Drive 非接続（source-dir のバイトのみ sha256 照合）なので素の CI/checkout では 7 本とも not_found。残: `drive_file_id`（Drive 在処ポインタ・手動 DL 前提）付きは 3/7（shiden/yaoyorozu/so_what）で要 Drive アクセス手動 DL、**upload-only 4 本（astral + abc×3）の Drive アップロード + `drive_file_id` 付与**、`wafu_jungle_174` バイト入手で 8/8、R1 箱(#77) manifest への calibratable レコード追加。roadmap_goal2.md R1 |
+| R1-audio | 実 Suno 音源の corpus 登録 | P1 | sha256 固定済（#81）+ **Drive-backed content-address loader `scripts/fetch_corpus.py` マージ済（#92）**。licensing は Drive 非同梱で回避済。loader は Drive 非接続（source-dir のバイトのみ sha256 照合）なので素の CI/checkout では not_found。**2026-06-22: upload-only 4 本（astral + abc×3）を Drive アップロード + `drive_file_id` 付与済（byte-size 一致で provenance 確認）→ screen 対象 7 本すべてが Drive ポインタ保有・フル 7 本 screen 再現可能**。残: **`wafu_jungle_174` バイト入手で 8/8**、R1 箱(#77) manifest への calibratable レコード追加。roadmap_goal2.md R1 |
 | ~~R2 CV校正~~ ✅ | `BPM_CONFIDENCE_CV_SCALE` 実校正 | — | **closeout（2026-06-22, #93）** — #92 loader で実音源 7 本を materialize し `CV_SCALE=5.0` 据え置き確定（preserved 3 本で Q1-3 契約 >0.7 を実音源実証、CV∈[0.020,0.040]）。結論は Drive 解決可能 3 本で成立。残る reproducible corpus（upload-only 4 本の Drive 化）は上の R1-audio 行へ集約。roadmap_goal2.md R2-2f |
 | K2 | Suno 転移検証 | P1 | K1 の tight/loose 判定が Suno/Udio 級で転移するか手動少数バッチ。物理固定・意味差替で「別物」生成を確認済(意味層 grip 有り・耳)だが n=1。律速は人間生成バッチ。controllability_poc.md §5 |
 | Q1-5 Ph2 | spectral 帯域 magnitude 再校正 | P2 | 既存 power 3帯域(`low/mid/high_ratio`)の是正 + `semantic_rules.py`/config 閾値(`low_ratio_min:0.4`/`mid_ratio_min:0.45`/`high_ratio>0.3`)を検証済 magnitude `spectral_bands` 基準へ移行 + `screen_2026-06-16.yaml` 再採取 + `test_metamorphic_probe.py` の `high_ratio==0.0` 前提見直し。閾値再導出の校正コーパスが R1-audio 同様 licensing 律速。Phase 1=#91 マージ済 |
