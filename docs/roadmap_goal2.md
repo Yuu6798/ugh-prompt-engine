@@ -116,22 +116,26 @@
 | トラック | 目的2 への寄与 | 状態 |
 |---|---|---|
 | C 系列（作曲＝行き道） | Score → TargetSVP → プロンプト / 決定論シンセ演奏者 | ✅ C1–C4 完了（[`composition_poc_report.md`](composition_poc_report.md)）。C4 が決定論演奏者として往復の行き道を提供 |
-| T 系列（採譜＝帰り道） | 演奏 → 計測 → draft Score | ⏳ T0（per-field 計測）/ T1（`svprpe transcribe`）実装済み（PR #70/#71）。**T2（往復保存性の最小実証）が未着手** |
+| T 系列（採譜＝帰り道） | 演奏 → 計測 → draft Score | ⏳ T0（per-field 計測）/ T1（`svprpe transcribe`）実装済み（PR #70/#71）。**T2（往復保存性の最小実証）= R0 として実装済み・受け入れ確認は残**（§R0） |
 | K 系列（grip） | フィールドごとの「効き」地図 | ⏳ K0/K1 完了（決定論演奏者、PR #61/#65、dead 2 分類確立）。**K2（Suno 転移）未** |
 | Q 系列（校正） | 復路の計器の目盛り付け | ✅ Q1-3（BPM 校正）closeout 済（2026-06-18, #82–#86）— bpm を R3 信頼ノブから除外確定。残 `BPM_CONFIDENCE_CV_SCALE` 実校正も closeout 済（2026-06-22 #92/#93・`CV_SCALE=5.0` 確定、Drive 解決可能 3 本で成立）。**upload-only 4 本の Drive 化は 2026-06-22 完了（screen 対象 7 本すべて `drive_file_id` 保有）。R1 残は screen 対象外の `wafu_jungle_174` バイト入手のみ**（§R1） |
 | 実生成器先取り | 実 Suno での往復 n=1 | ⏳ [`roundtrip_case_studies.md`](roundtrip_case_studies.md): key/brightness で往復成功・bpm は除外確定（closeout）・音源未コミットで**再実行不可**（R1 で解消予定） |
 
-**目的2 固有の残作業**（既存トラックの成果物を束ねる接着剤）は次の 4 点に偏る:
+**目的2 固有の残作業**（既存トラックの成果物を束ねる接着剤）は次の 4 点。
+**1 / 2 / 4 はコード実装済み（⏳）で、残るのは受け入れ確認・運用定着**（各 R セクション参照）:
 
 1. **往復保存性の正式メトリクス定義 + in-repo テスト** — T2 を目的2 の受け入れ
-   ゲートへ昇格させる（R0）
+   ゲートへ昇格させる（R0）。**⏳ 実装済み**（`roundtrip/diagnose.py` / `harness.py` /
+   snapshot test）、受け入れ確認が残
 2. **再実行可能 corpus + manifest** — roundtrip 検証が n=1・再測不可に留まる根因。
-   音源 + 真値 + manifest の保存基盤（R1）
+   音源 + 真値 + manifest の保存基盤（R1）。**⏳ 実装済み**（`roundtrip/manifest.py` /
+   `corpus_batch.py`、Drive corpus 7/7）、受け入れ確認が残
 3. ~~**復路誤差源（bpm アトラクタ）の校正** — Q1-3 連動（R2）~~ **✅ closeout 済
    （2026-06-18）** — bpm を R3 信頼ノブから除外確定。残 CV-scale 校正も 2026-06-22 に
    実音源で closeout（#92 経由・`CV_SCALE=5.0` 確定）
-4. **意味層 grip の機械確認** — 事象レベル欄（T3 / 急所1）が無いため、
-   現状 rock↔EBM の差は耳でしか判定できない（R4）
+4. **意味層 grip の機械確認** — 事象レベル欄（コード進行）の往復（R4）。
+   **⏳ 実装済み**（`EventLayer` / chord 4 値診断 / `test_event_chord_roundtrip.py`）、
+   受け入れ確認が残
 
 ---
 
