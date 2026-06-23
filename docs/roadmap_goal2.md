@@ -116,22 +116,26 @@
 | トラック | 目的2 への寄与 | 状態 |
 |---|---|---|
 | C 系列（作曲＝行き道） | Score → TargetSVP → プロンプト / 決定論シンセ演奏者 | ✅ C1–C4 完了（[`composition_poc_report.md`](composition_poc_report.md)）。C4 が決定論演奏者として往復の行き道を提供 |
-| T 系列（採譜＝帰り道） | 演奏 → 計測 → draft Score | ⏳ T0（per-field 計測）/ T1（`svprpe transcribe`）実装済み（PR #70/#71）。**T2（往復保存性の最小実証）が未着手** |
+| T 系列（採譜＝帰り道） | 演奏 → 計測 → draft Score | ⏳ T0（per-field 計測）/ T1（`svprpe transcribe`）実装済み（PR #70/#71）。**T2（往復保存性の最小実証）= R0 として実装済み・受け入れ確認は残**（§R0） |
 | K 系列（grip） | フィールドごとの「効き」地図 | ⏳ K0/K1 完了（決定論演奏者、PR #61/#65、dead 2 分類確立）。**K2（Suno 転移）未** |
 | Q 系列（校正） | 復路の計器の目盛り付け | ✅ Q1-3（BPM 校正）closeout 済（2026-06-18, #82–#86）— bpm を R3 信頼ノブから除外確定。残 `BPM_CONFIDENCE_CV_SCALE` 実校正も closeout 済（2026-06-22 #92/#93・`CV_SCALE=5.0` 確定、Drive 解決可能 3 本で成立）。**upload-only 4 本の Drive 化は 2026-06-22 完了（screen 対象 7 本すべて `drive_file_id` 保有）。R1 残は screen 対象外の `wafu_jungle_174` バイト入手のみ**（§R1） |
 | 実生成器先取り | 実 Suno での往復 n=1 | ⏳ [`roundtrip_case_studies.md`](roundtrip_case_studies.md): key/brightness で往復成功・bpm は除外確定（closeout）・音源未コミットで**再実行不可**（R1 で解消予定） |
 
-**目的2 固有の残作業**（既存トラックの成果物を束ねる接着剤）は次の 4 点に偏る:
+**目的2 固有の残作業**（既存トラックの成果物を束ねる接着剤）は次の 4 点。
+**1 / 2 / 4 はコード実装済み（⏳）で、残るのは受け入れ確認・運用定着**（各 R セクション参照）:
 
 1. **往復保存性の正式メトリクス定義 + in-repo テスト** — T2 を目的2 の受け入れ
-   ゲートへ昇格させる（R0）
+   ゲートへ昇格させる（R0）。**⏳ 実装済み**（`roundtrip/diagnose.py` / `harness.py` /
+   snapshot test）、受け入れ確認が残
 2. **再実行可能 corpus + manifest** — roundtrip 検証が n=1・再測不可に留まる根因。
-   音源 + 真値 + manifest の保存基盤（R1）
+   音源 + 真値 + manifest の保存基盤（R1）。**⏳ 実装済み**（`roundtrip/manifest.py` /
+   `corpus_batch.py`、Drive corpus 7/7）、受け入れ確認が残
 3. ~~**復路誤差源（bpm アトラクタ）の校正** — Q1-3 連動（R2）~~ **✅ closeout 済
    （2026-06-18）** — bpm を R3 信頼ノブから除外確定。残 CV-scale 校正も 2026-06-22 に
    実音源で closeout（#92 経由・`CV_SCALE=5.0` 確定）
-4. **意味層 grip の機械確認** — 事象レベル欄（T3 / 急所1）が無いため、
-   現状 rock↔EBM の差は耳でしか判定できない（R4）
+4. **意味層 grip の機械確認** — 事象レベル欄（コード進行）の往復（R4）。
+   **⏳ 実装済み**（`EventLayer` / chord 4 値診断 / `test_event_chord_roundtrip.py`）、
+   受け入れ確認が残
 
 ---
 
@@ -140,7 +144,12 @@
 R 系列は目的2 固有のフェーズ ID。各 R フェーズは T / K / Q の成果物を **依存入力**
 として明示し、目的2 = 再現実証 の受け入れゲートを定義する。
 
-### R0: 往復保存性メトリクスの確立 + 決定論実証 ❌ **未着手（T2 を昇格）**
+### R0: 往復保存性メトリクスの確立 + 決定論実証 ⏳ **実装済み（受け入れ確認は残）**
+
+> **実装ポインタ**: 三値診断 `roundtrip/diagnose.py`（`RoundtripField` / `diagnose_roundtrip`）、
+> 決定論ハーネス `roundtrip/harness.py`（`run_roundtrip`）、`svprpe roundtrip` CLI、
+> snapshot `examples/roundtrip/synth_0N_roundtrip.json`、`tests/test_roundtrip_preservation.py`
+> が実在。K1 grip 地図との相互検証 closeout は [`roundtrip_preservation.md`](roundtrip_preservation.md) 参照。
 
 **目的**: §2 の双方向再現性を初めて数値にする。全区間決定論（演奏者 = C4
 シンセ、採譜 = T1）で in-repo 完結する。
@@ -159,7 +168,12 @@ R 系列は目的2 固有のフェーズ ID。各 R フェーズは T / K / Q �
 これが「ハーネスが正しく測れている」ことの相互検証になる。
 **推定工数**: 3–4 日
 
-### R1: 再実行可能 corpus + manifest ❌ **未着手**
+### R1: 再実行可能 corpus + manifest ⏳ **実装済み（受け入れ確認は残）**
+
+> **実装ポインタ**: manifest スキーマ `roundtrip/manifest.py`、バッチランナー
+> `roundtrip/corpus_batch.py`、`examples/roundtrip/corpus/manifest.yaml`、
+> `svprpe roundtrip-corpus` CLI、`tests/test_roundtrip_corpus.py` が実在。
+> Drive corpus は screen 対象 7/7 で完結（下記 closeout ノート参照）。
 
 **目的**: 確率的経路の往復検証を **n=1・再測不可** から **再実行可能** へ。
 [`roundtrip_case_studies.md`](roundtrip_case_studies.md) §6 が「校正の入力に
@@ -277,7 +291,11 @@ confidence を精緻化するだけの**非ブロッキング follow-up** で、
 **推定工数**: 5–7 日（律速は手動生成バッチ＝人間の作業時間。Claude/Codex
 サイクルとは競合しない）
 
-### R4: 作品同一性 — 事象レベル欄の往復 ❌ **未着手（T3 / 急所1）**
+### R4: 作品同一性 — 事象レベル欄の往復 ⏳ **実装済み（受け入れ確認は残）**
+
+> **実装ポインタ**: R4-1〜R4-3 とも実装済み。`CompositionScore.events`（`EventLayer.chord_progression`）、
+> performer の chord 進行読み取り、`diagnose.py` のコード進行 4 値診断、`fixity.chord_progression`
+> locked 対応、`tests/test_event_chord_roundtrip.py` が実在（[`event_roundtrip.md`](event_roundtrip.md)）。
 
 **目的**: 制作パラメータ（bpm/key/brightness/密度）の往復が綺麗に回っても、
 それは **注文票（スタイルシート）の往復** に過ぎない。曲を「その曲」たらしめる
@@ -293,8 +311,8 @@ confidence を精緻化するだけの**非ブロッキング follow-up** で、
 | ID | 成果物 | 受け入れ条件 |
 |---|---|---|
 | R4-1 ✅ | [事象レベル欄の選定 + センサー対応](event_roundtrip.md) — コード進行を先行欄にし、決定論センサー先行で DD-D の解除条件を文書化 | `chord_progression`（将来欄）← `compute_chord_events` / `PhysicalRPE.chord_events` ← コード系列一致率、fixity/4値診断への適用が文書化される |
-| R4-2 | score 欄追加 + performer grip — `CompositionScore` にコード進行の事象欄を追加し、決定論 performer が key 由来の固定進行ではなく欄を読む | コード進行欄を変えると `perform` 出力の `chord_events` が変わる。必要なら `fixity` バリデータ拡張計画を実装する |
-| R4-3 | 事象欄の比較指標 + 往復一致（§2.2 入場試験の適用） | コード系列一致率を `RoundtripField` の 4値診断へ落とし、新事象欄が grip × 校正 × 採譜 の往復を生き残ることを示して正規スキーマに入る |
+| R4-2 ✅ | score 欄追加 + performer grip — `CompositionScore` にコード進行の事象欄を追加し、決定論 performer が key 由来の固定進行ではなく欄を読む | コード進行欄を変えると `perform` 出力の `chord_events` が変わる。必要なら `fixity` バリデータ拡張計画を実装する |
+| R4-3 ✅ | 事象欄の比較指標 + 往復一致（§2.2 入場試験の適用） | コード系列一致率を `RoundtripField` の 4値診断へ落とし、新事象欄が grip × 校正 × 採譜 の往復を生き残ることを示して正規スキーマに入る |
 
 **完了基準**: 少なくとも 1 つの事象レベル欄（旋律 or コード進行）が往復を
 一周し、入場試験を通過して正規スキーマに昇格する。
@@ -304,7 +322,12 @@ confidence を精緻化するだけの**非ブロッキング follow-up** で、
 > 作品同一性が成立しないまま完成を宣言する誘惑がある。**ループの成功自体が
 > 欄の不足を隠す**（同上 §6 急所1）。R4 を「stretch だが省略不可」と位置づける。
 
-### R5: 入場試験の制度化 ❌ **未着手（運用フェーズ）**
+### R5: 入場試験の制度化 ⏳ **実装済み（運用定着は継続）**
+
+> **実装ポインタ**: R5-1 は [`AGENTS.md`](../AGENTS.md)（フィールド追加時に fixity と
+> 往復一致の実測/実測計画を必須記載）に反映済み。R5-2 fixity 型は
+> `compose/models.py` の `CompositionScore.fixity: dict[str, FixityState] | None` で実装済み。
+> 「新フィールド追加が必ず入場試験を経る」運用の定着は継続フェーズ。
 
 **目的**: 往復保存性を検証指標から **スキーマ運用ルール** へ昇格させ、
 「あったら良さそう」でフィールドが増殖するスキーマ腐敗を防ぐ
@@ -330,11 +353,11 @@ flowchart LR
     C4[C4 ✅ 決定論演奏者] -.-> R0
     T1[T0/T1 ✅ 採譜] -.-> R0
     K1[K0/K1 ✅ grip 地図] -.-> R0
-    R0[R0 往復メトリクス<br/>+ 決定論実証<br/>3-4d] --> R1[R1 再実行可能<br/>corpus+manifest<br/>3-5d]
+    R0[R0 ⏳ 往復メトリクス<br/>+ 決定論実証<br/>実装済] --> R1[R1 ⏳ 再実行可能<br/>corpus+manifest<br/>実装済]
     R1 --> R3[R3 確率的往復<br/>K2 連動<br/>5-7d]
     R2[R2 ✅ closeout 済<br/>bpm を R3 信頼ノブから除外<br/>CV校正も closeout 6-22] -.->|信頼ノブ scope を確定| R3
-    R0 --> R4[R4 作品同一性<br/>事象欄 T3<br/>7-10d]
-    R0 --> R5[R5 入場試験<br/>制度化 2-3d]
+    R0 --> R4[R4 ⏳ 作品同一性<br/>事象欄 実装済]
+    R0 --> R5[R5 ⏳ 入場試験<br/>制度化 実装済]
 ```
 
 - **クリティカルパス**: R0 → R1 → R3（最低 11–16 日）。**R2（bpm 校正）は
@@ -344,6 +367,9 @@ flowchart LR
   R3 の手動生成バッチは律速が人間作業時間のため、R1 完了後いつでも先行収集可
 - **完了済の前提**: C4 / T0 / T1 / K0 / K1 は実装済み（棚卸しテーブル参照）。
   **R2 も closeout 済**
+- **実装状況の補足（2026-06-23）**: R0 / R1 / R4 / R5 は ⏳ = コード実装済み
+  （各セクションの実装ポインタ参照）。残るのは「受け入れ確認 / 運用定着」であり、
+  上の依存矢印（R0→R1→R3 等）は受け入れゲートの順序として読む
 - **follow-up も closeout（2026-06-22）**: R2 の残作業 `BPM_CONFIDENCE_CV_SCALE`
   実校正は #92 の実音源 materialize で実施・`CV_SCALE=5.0` 据え置き確定。残作業なし
 - **目的1 との結合点（スコープ注意）**: 本 closeout は **R2 の CV-scale follow-up

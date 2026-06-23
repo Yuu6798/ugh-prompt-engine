@@ -63,7 +63,7 @@ flowchart TD
     M4 --> M5
 
     subgraph M5[M5: 品質保証]
-        M5a[pytest 79件]
+        M5a[pytest 600+ 件]
         M5b[ruff clean]
         M5c[CI matrix 3.11/3.12]
         M5d[docs: architecture/cli/metrics]
@@ -180,7 +180,7 @@ flowchart TD
 | P1-01 | `examples/sample_input/*.wav` 3-5点 | 合成サイン波 or CC0 音源、ジャンル多様 |
 | P1-02 | `examples/expected_output/*.json` | 各サンプルに対する RPE/SVP/score |
 | P1-03 | `tests/test_snapshot.py` | hash 比較で出力の一致を CI 検証 |
-| P1-04 | `scripts/regenerate_snapshots.py` | 期待値更新スクリプト |
+| P1-04 | `scripts/regenerate_expected.py` | 期待値更新スクリプト（CI fixture は `scripts/regenerate_ci_fixtures.py`） |
 
 **推定工数**: 0.5 日
 
@@ -202,7 +202,7 @@ flowchart TD
 
 | ID | 成果物 | 受け入れ条件 |
 |---|---|---|
-| P3-01 | `batch/report.py` 実装 | CSV + Markdown 出力、ランキング/統計込み |
+| P3-01 | `src/svp_rpe/batch/report.py` 実装 | CSV + Markdown 出力、ランキング/統計込み |
 | P3-02 | `svprpe batch --report md` | CLI オプション追加 |
 | P3-03 | `CHANGELOG.md` | v0.1 / v0.2 / v0.3 の差分明記 |
 

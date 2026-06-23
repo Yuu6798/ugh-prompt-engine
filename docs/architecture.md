@@ -4,7 +4,7 @@
 
 ```
 Audio (WAV/MP3) → RPE Extraction → SVP Generation → Evaluation
-                  ├── Physical     ├── 5 blocks      ├── RPE Score
+                  ├── Physical     ├── 4 blocks      ├── RPE Score
                   ├── Semantic     └── Minimal SVP    ├── UGHer Score (4-component)
                   └── Structure                       ├── Integrated
                                                       └── Comparison (vs external SVP)
@@ -52,7 +52,8 @@ Audio (WAV/MP3) → RPE Extraction → SVP Generation → Evaluation
 - Integrates physical + semantic + structure v2 + valley strategy → RPEBundle
 
 ### svp/generator.py
-- RPEBundle → SVPBundle (5 blocks + MinimalSVP)
+- RPEBundle → SVPBundle (4 blocks + MinimalSVP = 5 content fields:
+  data_lineage / analysis_rpe / svp_for_generation / evaluation_criteria / minimal_svp)
 - Deterministic transformation
 
 ### svp/parser.py (v0.2)
@@ -61,7 +62,7 @@ Audio (WAV/MP3) → RPE Extraction → SVP Generation → Evaluation
 
 ### eval/scorer_*.py
 - RPE: physical quality vs Pro baseline
-- UGHer: semantic consistency (4-component: por/grv/delta_e/instrumentation)
+- UGHer: semantic consistency (4-component: por_similarity / grv_consistency / delta_e_assessment / physical_accuracy)
 - Integrated: weighted combination
 
 ### eval/comparison.py (v0.2)
