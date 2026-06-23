@@ -25,6 +25,9 @@ from scripts.regenerate_expected import (
     sha256_text,
 )
 
+# 各 synth 曲でフルパイプラインを回す snapshot 検証（module 単位で重い）。`-m "not slow"` で除外可。
+pytestmark = pytest.mark.slow
+
 
 def _song_artefact_pairs() -> list[tuple[str, str]]:
     if not SAMPLE_DIR.is_dir() or not (SAMPLE_DIR / "ground_truth.yaml").is_file():

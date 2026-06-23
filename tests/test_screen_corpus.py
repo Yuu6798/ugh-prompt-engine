@@ -3,9 +3,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 import scripts.screen_corpus as sc
+
+# build_report 経路は実 corpus screen（抽出込み）を回す重いテスト。`-m "not slow"` で除外可。
+pytestmark = pytest.mark.slow
 
 
 ROOT = Path(__file__).resolve().parents[1]

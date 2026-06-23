@@ -21,6 +21,9 @@ from svp_rpe.rpe.semantic_rules import generate_semantic
 from svp_rpe.transcribe import SCORE_FIELDS, measure_fields, parse_field_filter
 from svp_rpe.transcribe.measure import render_measurement_json
 
+# 各 synth 曲で抽出 + 計測スナップショットを回す重いテスト群。`-m "not slow"` で除外可。
+pytestmark = pytest.mark.slow
+
 runner = CliRunner()
 
 SYNTH_MEASUREMENT_SNAPSHOTS = (

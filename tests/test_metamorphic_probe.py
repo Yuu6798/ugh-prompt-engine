@@ -18,6 +18,9 @@ from hypothesis import strategies as st
 
 import scripts.metamorphic_probe as mp
 
+# 実 extractor を Hypothesis で掃引する重いテスト群。`-m "not slow"` で除外可。
+pytestmark = pytest.mark.slow
+
 # 実抽出を伴う Hypothesis テストの共通設定。deadline 無効化（抽出は遅い）、
 # derandomize で決定論化、max_examples は総実行時間の予算から逆算して小さく。
 EXTRACT_SETTINGS = settings(

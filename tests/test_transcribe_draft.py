@@ -32,6 +32,9 @@ from svp_rpe.transcribe import (
 )
 from svp_rpe.transcribe.score_draft import _bars_for_section, _format_fixed_range
 
+# 各 synth 曲で抽出 + draft 生成を回す重いテスト群。`-m "not slow"` で除外可。
+pytestmark = pytest.mark.slow
+
 runner = CliRunner()
 
 SYNTH_AUDIO = (

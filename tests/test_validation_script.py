@@ -9,6 +9,9 @@ pytest.importorskip("mir_eval")
 
 from scripts import validate_against_truth as vat  # noqa: E402
 
+# 全 synth 曲を mir_eval で対真値検証する重いテスト群。`-m "not slow"` で除外可。
+pytestmark = pytest.mark.slow
+
 _RESULTS: list[vat.SongValidation] | None = None
 
 

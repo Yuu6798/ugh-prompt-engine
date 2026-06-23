@@ -238,7 +238,8 @@ README の運用ルール:
 ```bash
 pip install -e ".[dev]"
 ruff check .
-pytest -q --tb=short
+pytest -q --tb=short              # 全件（音声合成+抽出を含むため数分）
+pytest -m "not slow" -q           # 日常の反復用の高速サブセット（重い統合/コーパス/property を除外）
 svprpe --help
 ```
 
@@ -276,6 +277,11 @@ svprpe --help
 - `tmp_path` でファイルシステムを分離
 - ヘルパーファクトリでオブジェクト生成（モック不使用を推奨）
 - `pytest.approx()` で float 比較
+- **`slow` マーカー**: 音声合成 + 実抽出を回す重い統合 / コーパス / property
+  テスト（`test_metamorphic_probe` / `test_screen_corpus` / `test_snapshot` /
+  `test_transcribe_measure` / `test_transcribe_draft` / `test_validation_script`）は
+  module 単位で `pytestmark = pytest.mark.slow`。日常は `pytest -m "not slow"` で
+  除外し、CI と push 前は全件実行する（CI が `slow` を skip しないこと）
 
 ## Git Workflow
 
