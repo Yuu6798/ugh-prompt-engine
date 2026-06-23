@@ -25,9 +25,6 @@ from scripts.regenerate_expected import (
     sha256_text,
 )
 
-# 各 synth 曲でフルパイプラインを回す snapshot 検証（module 単位で重い）。`-m "not slow"` で除外可。
-pytestmark = pytest.mark.slow
-
 
 def _song_artefact_pairs() -> list[tuple[str, str]]:
     if not SAMPLE_DIR.is_dir() or not (SAMPLE_DIR / "ground_truth.yaml").is_file():
@@ -69,6 +66,9 @@ def expected_hashes() -> dict[str, str]:
     return hashes
 
 
+# pipeline_outputs fixture が曲ごとにフルパイプラインを回す重いテスト群。
+# ハッシュ整合チェック（test_no_extra_files / test_expected_output_dir）は高速のため除外しない。
+@pytest.mark.slow
 @pytest.mark.parametrize(
     ("song_id", "filename"),
     SONG_ARTEFACT_PAIRS,

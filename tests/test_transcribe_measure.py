@@ -21,9 +21,6 @@ from svp_rpe.rpe.semantic_rules import generate_semantic
 from svp_rpe.transcribe import SCORE_FIELDS, measure_fields, parse_field_filter
 from svp_rpe.transcribe.measure import render_measurement_json
 
-# 各 synth 曲で抽出 + 計測スナップショットを回す重いテスト群。`-m "not slow"` で除外可。
-pytestmark = pytest.mark.slow
-
 runner = CliRunner()
 
 SYNTH_MEASUREMENT_SNAPSHOTS = (
@@ -188,6 +185,8 @@ def test_measure_cli_writes_json(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     assert [item["score_field"] for item in payload["measurements"]] == ["bpm", "key"]
 
 
+# 各 synth 曲で実抽出を回す唯一の重いテスト。他は合成 bundle / monkeypatch で高速。
+@pytest.mark.slow
 def test_synth_measurement_snapshots_are_stable() -> None:
     for audio_path, expected_path in SYNTH_MEASUREMENT_SNAPSHOTS:
         bundle = extract_rpe_from_file(str(audio_path))

@@ -18,9 +18,6 @@ from hypothesis import strategies as st
 
 import scripts.metamorphic_probe as mp
 
-# 実 extractor を Hypothesis で掃引する重いテスト群。`-m "not slow"` で除外可。
-pytestmark = pytest.mark.slow
-
 # 実抽出を伴う Hypothesis テストの共通設定。deadline 無効化（抽出は遅い）、
 # derandomize で決定論化、max_examples は総実行時間の予算から逆算して小さく。
 EXTRACT_SETTINGS = settings(
@@ -88,6 +85,7 @@ def test_build_spec_applies_knobs() -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @EXTRACT_SETTINGS
 @given(key=key_strategy, bpm=bpm_strategy)
 def test_centroid_grip_and_key_orthogonality(key: tuple[str, str], bpm: float) -> None:
@@ -116,6 +114,7 @@ def test_centroid_grip_and_key_orthogonality(key: tuple[str, str], bpm: float) -
     assert len(detected_keys) == 1, f"brightness leaked into key: {detected_keys}"
 
 
+@pytest.mark.slow
 @EXTRACT_SETTINGS
 @given(key=key_strategy, level=level_strategy)
 def test_centroid_orthogonal_to_bpm(key: tuple[str, str], level: float) -> None:
@@ -132,6 +131,7 @@ def test_centroid_orthogonal_to_bpm(key: tuple[str, str], level: float) -> None:
     assert abs(slow.spectral_centroid - fast.spectral_centroid) < 50.0
 
 
+@pytest.mark.slow
 @settings(
     max_examples=3,
     deadline=None,
@@ -158,6 +158,7 @@ def test_extraction_is_deterministic(key: tuple[str, str], bpm: float, level: fl
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_brightness_high_band_is_blind_for_synth() -> None:
     """計測知見: 合成器の基音は <4kHz に留まるため高域比 brightness センサーは
     倍音を増やしても 0 のまま（センサー盲）。一方で centroid は動く（live sensor）。

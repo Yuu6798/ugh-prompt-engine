@@ -8,9 +8,6 @@ import yaml
 
 import scripts.screen_corpus as sc
 
-# build_report 経路は実 corpus screen（抽出込み）を回す重いテスト。`-m "not slow"` で除外可。
-pytestmark = pytest.mark.slow
-
 
 ROOT = Path(__file__).resolve().parents[1]
 SAMPLE_DIR = ROOT / "examples" / "sample_input"
@@ -140,6 +137,8 @@ def test_aggregate_base_rates_and_unflagged() -> None:
     assert summary["bpm_doubling_prior_recoverable"] == ["bad"]
 
 
+# 唯一 build_report → 実 corpus screen（抽出込み）を回す重いテスト。他は純ロジックで高速。
+@pytest.mark.slow
 def test_build_report_marks_only_slow_pad_as_doubling_prior_recovered(tmp_path: Path) -> None:
     source_rows = yaml.safe_load((SAMPLE_DIR / "ground_truth.yaml").read_text(encoding="utf-8"))
     songs = [

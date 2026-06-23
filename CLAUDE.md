@@ -277,11 +277,13 @@ svprpe --help
 - `tmp_path` でファイルシステムを分離
 - ヘルパーファクトリでオブジェクト生成（モック不使用を推奨）
 - `pytest.approx()` で float 比較
-- **`slow` マーカー**: 音声合成 + 実抽出を回す重い統合 / コーパス / property
-  テスト（`test_metamorphic_probe` / `test_screen_corpus` / `test_snapshot` /
-  `test_transcribe_measure` / `test_transcribe_draft` / `test_validation_script`）は
-  module 単位で `pytestmark = pytest.mark.slow`。日常は `pytest -m "not slow"` で
-  除外し、CI と push 前は全件実行する（CI が `slow` を skip しないこと）
+- **`slow` マーカー**: 音声合成 + 実抽出を回す重いテストに `@pytest.mark.slow` を付け、
+  日常は `pytest -m "not slow"` で除外（CI と push 前は全件実行。CI が `slow` を
+  skip しないこと）。**抽出を伴うテスト単位**で付けるのが原則で、純ロジック / 合成
+  bundle / monkeypatch の安価なテストは同じファイル内でも高速ループに残す
+  （`test_metamorphic_probe` / `test_screen_corpus` / `test_snapshot` /
+  `test_transcribe_measure` / `test_transcribe_draft` は per-test 指定）。例外は
+  `test_validation_script`: 全テストが共有の重い `_results()` に依存するため module 単位
 
 ## Git Workflow
 
