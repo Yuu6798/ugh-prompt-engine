@@ -118,7 +118,8 @@ src/svp_rpe/
 │   ├── structure_labels.py    # セクションラベル付与
 │   ├── structure_novelty.py   # novelty 検出
 │   ├── section_features.py    # セクション粒度特徴
-│   └── valley.py              # valley 検出 (--valley-method)
+│   ├── valley.py              # valley 検出 (--valley-method)
+│   └── learned/               # 学習モデルアダプタ (basic_pitch / beat_this / panns)
 ├── svp/                       # SVP 生成層
 │   ├── models.py              # SVPBundle, MinimalSVP
 │   ├── generator.py           # RPE → SVP 変換
@@ -136,8 +137,12 @@ src/svp_rpe/
 │   ├── delta_e_alignment.py   # ΔE 整列
 │   ├── diff_models.py         # diff データ構造
 │   └── semantic_similarity.py # 意味類似度
+├── compose/                   # CompositionScore: models/loader/convert/fixity/renderer
 ├── semantic_ci/                # Target SVP → Expected RPE → Diff → Repair SVP
 ├── transcribe/                 # CompositionScore physical field measurement
+├── perform/                    # 決定論的 CompositionScore 演奏者 (synth + performer)
+├── roundtrip/                  # R0 往復保存性診断 (harness / compare / corpus_batch)
+├── control/                    # grip 効果量 (制御トラック K 系列)
 ├── batch/                     # バッチ処理
 │   ├── runner.py              # batch コマンド本体
 │   ├── discovery.py           # 入力ファイル発見
@@ -145,14 +150,15 @@ src/svp_rpe/
 └── utils/
     └── config_loader.py       # YAML config loading
 
-|-- perform/                    # Deterministic CompositionScore performer
-|-- roundtrip/                  # R0 roundtrip preservation diagnostics
-
-config/
+config/                        # リポジトリ直下 + src/svp_rpe/config/ に同梱コピー (同期)
 ├── pro_baseline.yaml          # RPE Pro baseline values
+├── acoustic_baseline.yaml     # ドメイン別 baseline (acoustic)
+├── edm_baseline.yaml          # ドメイン別 baseline (EDM)
+├── loud_pop_baseline.yaml     # ドメイン別 baseline (loud pop)
 ├── semantic_rules.yaml        # physical → semantic mapping rules
 ├── svp_templates.yaml         # SVP generation templates
-└── synonym_map.yaml           # 同義語マップ (UGHer scorer 用)
+├── synonym_map.yaml           # 同義語マップ (UGHer scorer 用)
+└── domain_profiles/music.yaml # ドメインプロファイル (music)
 
 tests/                         # pytest
 docs/                          # design documents
