@@ -185,6 +185,8 @@ def test_measure_cli_writes_json(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     assert [item["score_field"] for item in payload["measurements"]] == ["bpm", "key"]
 
 
+# 各 synth 曲で実抽出を回す唯一の重いテスト。他は合成 bundle / monkeypatch で高速。
+@pytest.mark.slow
 def test_synth_measurement_snapshots_are_stable() -> None:
     for audio_path, expected_path in SYNTH_MEASUREMENT_SNAPSHOTS:
         bundle = extract_rpe_from_file(str(audio_path))

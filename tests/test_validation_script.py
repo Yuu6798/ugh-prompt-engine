@@ -9,6 +9,11 @@ pytest.importorskip("mir_eval")
 
 from scripts import validate_against_truth as vat  # noqa: E402
 
+# このファイルの全テストは共有の `_results()`（全 synth 曲を mir_eval で対真値検証、
+# module グローバルにキャッシュ）に依存し、どれを単独で回しても初回に全抽出コストを
+# 払う。安価に走らせられるテストが無いため module 単位で slow とする。`-m "not slow"` で除外可。
+pytestmark = pytest.mark.slow
+
 _RESULTS: list[vat.SongValidation] | None = None
 
 

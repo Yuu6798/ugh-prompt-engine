@@ -81,6 +81,7 @@ def test_bars_for_section_uses_time_signature_numerator() -> None:
     assert _bars_for_section(marker, bpm=60, time_signature="4/4") == 3
 
 
+@pytest.mark.slow
 def test_all_synth_drafts_are_loader_valid(tmp_path: Path) -> None:
     for audio_path in SYNTH_AUDIO:
         score = draft_score(_extract_synth(audio_path))
@@ -109,6 +110,7 @@ def test_all_synth_drafts_are_loader_valid(tmp_path: Path) -> None:
         assert TODO_SENTINEL_PREFIX in yaml_text
 
 
+@pytest.mark.slow
 def test_draft_score_maps_t0_measurements_to_physical_layer() -> None:
     score = draft_score(_extract_synth(SYNTH_AUDIO[0]))
 
@@ -231,6 +233,7 @@ def test_draft_score_marks_zero_confidence_time_signature_as_todo(tmp_path: Path
     )
 
 
+@pytest.mark.slow
 def test_waltz_draft_uses_three_four_bars() -> None:
     score = draft_score(_extract_synth(Path("examples/sample_input/synth_04_waltz_fsharp_minor.wav")))
 
@@ -238,6 +241,7 @@ def test_waltz_draft_uses_three_four_bars() -> None:
     assert [section.bars for section in score.structure] == [5, 6, 6, 6, 6, 5]
 
 
+@pytest.mark.slow
 def test_draft_score_snapshots_are_stable() -> None:
     for audio_path, expected_path in SYNTH_DRAFT_SNAPSHOTS:
         score = draft_score(_extract_synth(audio_path))

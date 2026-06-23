@@ -56,6 +56,9 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", "."]
+markers = [
+    "slow: 重い統合 / コーパス / property テスト（音声合成 + 抽出が長い）。日常の反復では `pytest -m \"not slow\"` で除外できる（CI は全件実行）",
+]
 
 [tool.ruff]
 line-length = 100

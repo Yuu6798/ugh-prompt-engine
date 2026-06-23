@@ -66,6 +66,9 @@ def expected_hashes() -> dict[str, str]:
     return hashes
 
 
+# pipeline_outputs fixture が曲ごとにフルパイプラインを回す重いテスト群。
+# ハッシュ整合チェック（test_no_extra_files / test_expected_output_dir）は高速のため除外しない。
+@pytest.mark.slow
 @pytest.mark.parametrize(
     ("song_id", "filename"),
     SONG_ARTEFACT_PAIRS,
