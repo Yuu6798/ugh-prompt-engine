@@ -203,11 +203,11 @@ per-stem BPM が full mix と一致。
 
 | ID | 成果物 | 受け入れ条件 |
 |---|---|---|
-| Q4'-1 | `docs/learned_models_policy.md`（採用 / 不採用 / 保留が明文化） | ✅ 本ドキュメントとは別 PR で導入予定（PR1） |
-| Q4'-2 | `LearnedAudioAnnotations` schema + `RPEBundle.learned_annotations` 追加 | optional extras 未インストールでも既存 pipeline が green |
-| Q4'-3 | `beat_this` バックエンド spike（optional extra `beat`、`dbn=False`、librosa fallback） | fake backend test deterministic |
-| Q4'-4 | `panns_inference` バックエンド spike（optional extra `learned-tags`、top-k tags + embedding） | `SemanticRPE` への書き戻し無し |
-| Q4'-5 | `basic-pitch` バックエンド spike（optional extra `pitch`、note events 補強） | 既存 `pyin` melody contour を即置換しない |
+| Q4'-1 ✅ | `docs/learned_models_policy.md`（採用 / 不採用 / 保留が明文化） | `docs/learned_models_policy.md` 導入済み |
+| Q4'-2 ✅ | `LearnedAudioAnnotations` schema + `RPEBundle.learned_annotations` 追加 | `rpe/models.py` に実装済み。optional extras 未インストールでも既存 pipeline が green |
+| Q4'-3 ✅ | `beat_this` バックエンド spike（optional extra `beat`、`dbn=False`、librosa fallback） | `rpe/learned/beat_this_adapter.py` 実装済み。fake backend test deterministic |
+| Q4'-4 ✅ | `panns_inference` バックエンド spike（optional extra `learned-tags`、top-k tags + embedding） | `rpe/learned/panns_adapter.py` 実装済み。`SemanticRPE` への書き戻し無し |
+| Q4'-5 ✅ | `basic-pitch` バックエンド spike（optional extra `pitch`、note events 補強） | `rpe/learned/basic_pitch_adapter.py` 実装済み。既存 `pyin` melody contour を即置換しない |
 
 **判断ポイント**: README の「LLM 不要、API 不要、決定論」は前提に維持しつつ、
 学習モデル出力は **常に `LearnedAudioAnnotations` に隔離** され、ルール由来の

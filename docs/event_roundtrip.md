@@ -45,16 +45,20 @@ performer は key から導出した固定進行を鳴らしており、独立�
 したがって R4 の実作業は、単にセンサーを探すことではなく、`CompositionScore` に
 コード進行欄を追加し、performer がその欄を読む grip を作ることにある。
 
-### score 欄と fixity は未対応
+### score 欄と fixity（R4-2/R4-3 で実装済み）
+
+> 以下は R4-1 執筆時点では「未対応」だった項目で、R4-2/R4-3 で実装済みになった。
+> 計画当時の差分が分かるよう、現状を反映して更新している。
 
 `src/svp_rpe/compose/models.py::CompositionScore` は `semantic` / `physical` /
-`structure` / `rendering` / `fixity` を持つが、事象層を持たない。`PhysicalLayer` にも
-コード進行欄は無い。
+`structure` / `rendering` / `fixity` に加え、事象層 `events: EventLayer | None` を持つ。
+`EventLayer.chord_progression` がコード進行欄にあたる。
 
-同じファイルの `validate_fixity_keys()` は `allowed = set(PhysicalLayer.model_fields)` を
-使い、`fixity` のキーを `CompositionScore.physical` のフィールドだけに限定する。
-`validate_fixity_matches_physical_values()` も `getattr(self.physical, field)` を見るため、
-現状の fixity は物理層専用で、将来の事象欄をそのまま locked にできない。
+同じファイルの `validate_fixity_keys()` は `allowed = physical_fields | EVENT_FIXITY_FIELDS`
+（`EVENT_FIXITY_FIELDS = frozenset({"chord_progression"})`）を使い、物理層フィールドに加えて
+事象欄キーも `fixity` に許可する。`validate_fixity_matches_physical_values()` も
+`field == "chord_progression"` 分岐で事象欄の locked 照合に対応しており、コード進行欄を
+そのまま locked にできる。
 
 ## 校正基準
 

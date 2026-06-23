@@ -178,6 +178,8 @@ class LearnedAudioAnnotations(BaseModel):
     enabled_models: list[LearnedModelInfo] = Field(default_factory=list)
     labels: list[LearnedAudioLabel] = Field(default_factory=list)
     embedding: LearnedEmbedding | None = None
+    time_events: list[LearnedTimeEvent] = Field(default_factory=list)  # beat/downbeat 等
+    note_events: list[LearnedNoteEvent] = Field(default_factory=list)  # pitch/onset 等
     inference_config: dict[str, Any] = Field(default_factory=dict)
     license_metadata: dict[str, str] = Field(default_factory=dict)
     estimation_disclaimer: str = (

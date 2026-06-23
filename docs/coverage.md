@@ -93,11 +93,16 @@ sine-wave-based WAV files in `examples/sample_input/`:
 - Time signatures: four `4/4` samples and one `3/4` sample
 - Ground truth: `examples/sample_input/ground_truth.yaml`
 
-As of the current validation report, 3/5 samples pass all enforced thresholds.
-Known failures are documented:
+As of the current validation report, 4/5 samples pass all enforced thresholds
+(`scripts/validate_against_truth.py --check`; see validation.md §3). The enforced
+BPM gate is the octave-adjusted error, so `synth_01` passes. The single known
+failure is:
 
-- `synth_01_slow_pad_c_major`: BPM octave error
 - `synth_02_minor_pulse_a_minor`: downbeat phase drift
+
+`synth_01_slow_pad_c_major` still reports a raw double-tempo BPM estimate (octave
+error), but that is a documented limitation, not an enforced-threshold failure —
+the extractor cannot recover it (screener-only via low-prior, #86).
 
 Real-audio CC0 validation and stem-level ground truth remain future work. Q3
 stem residual and BPM alignment have deterministic synthetic coverage plus the

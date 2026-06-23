@@ -270,7 +270,7 @@ class GeneratedPrompt(BaseModel):
 
 **設計方針**:
 
-- `semantic_ci/adapter.py` に `rpebundle_to_observed_rpe(RPEBundle) -> ObservedRPE` を実装
+- `semantic_ci/observed_adapter.py` に `rpe_bundle_to_observed(bundle, *, id) -> ObservedRPE` を実装
 - PhysicalRPE の数値フィールド → `metrics` dict に変換
 - SemanticRPE の por_core / por_surface / grv / delta_e → `signals` list に変換
 - 変換ロジックは決定論的
@@ -285,7 +285,11 @@ class GeneratedPrompt(BaseModel):
 
 ---
 
-### Phase C3: `svprpe audit` コマンド（G7）— 後続
+### Phase C3: `svprpe audit` コマンド（G7）
+
+**Status**: IMPLEMENTED — `svprpe audit`（`cli.py`）、`semantic_ci/audit.py` の
+`build_audit_report` / `render_audit_text`、`semantic_ci/observed_adapter.py` で実装済み。
+（運用フェーズでの実曲検証は別途。）
 
 **Goal**: Composition Score + 生成音源 → ΔE 監査レポートをワンショットで出力。
 

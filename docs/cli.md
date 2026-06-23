@@ -33,6 +33,19 @@ svprpe generate rpe.json --output-dir ./output --format yaml
 svprpe generate rpe.json --format text
 ```
 
+### `svprpe compose <composition_score.yaml>`
+
+Render a Composition Score YAML into a prompt for an external generator.
+
+```bash
+svprpe compose score.yaml
+svprpe compose score.yaml --format json -o prompt.json
+svprpe compose score.yaml --max-chars 2000
+```
+
+`--max-chars` overrides `rendering.prompt_max_chars`. Default `--format` is
+`text`; `json` emits the structured `ExternalPromptAdapter` payload.
+
 ### `svprpe measure <audio>`
 
 Measure the seven required `CompositionScore.physical` fields from one audio file.
@@ -154,6 +167,23 @@ signal diff, metric diff, repair plan, and hash trail. The command exits with co
 `1` when the final verdict is `repair`, so it can be used as a CI gate. Use
 `--threshold` to treat loss values less than or equal to the threshold as `pass`.
 
+### `svprpe audit <composition_score.yaml> <rpe_or_audio>`
+
+Render a composition control-panel audit from a Composition Score and an
+extracted `RPEBundle` JSON or an audio file. JSON fixtures are the deterministic
+test path; an audio input runs the extractor as a one-shot convenience
+front-end.
+
+```bash
+svprpe audit score.yaml observed_rpe.json
+svprpe audit score.yaml track.wav --valley-method hybrid
+svprpe audit score.yaml observed_rpe.json --format json -o audit.json
+```
+
+Default `--format` is `text`; `json` emits the structured audit report. The
+report is descriptive and intentionally does not emit verdict, pass/fail, or
+loss keys.
+
 ### `svprpe run <audio>`
 
 Run full pipeline: extract → generate → evaluate.
@@ -189,7 +219,8 @@ Outputs: `ranking.json`, `summary.csv`, `summary.json`, `next_action.md`.
 | `--output` / `-o` | Output file path |
 | `--output-dir` | Output directory (creates if needed) |
 | `--fields` | Comma-separated `CompositionScore.physical` fields for `measure` |
-| `--format` | Output format. `generate`: `yaml` (default) or `text`; `ci-check`: `json` (default) or `markdown`; `roundtrip` / `roundtrip-corpus`: `text` (default) or `json` |
+| `--format` | Output format. `generate`: `yaml` (default) or `text`; `ci-check`: `json` (default) or `markdown`; `roundtrip` / `roundtrip-corpus` / `compose` / `audit`: `text` (default) or `json` |
+| `--max-chars` | Override `rendering.prompt_max_chars` (`compose` only) |
 | `--threshold` | Semantic CI pass threshold from `0.0` to `1.0` (`ci-check` only) |
 | `--no-save` | Print output to stdout instead of saving |
 | `--valley-method` | Valley depth method: `hybrid` (default), `rms_percentile`, `section_ar` |

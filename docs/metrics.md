@@ -244,11 +244,11 @@ Select explicitly via `score_rpe(phys, baseline="edm")` or CLI `--baseline edm`.
 
 RPE Score: proximity to Pro baseline, each metric [0,1], averaged.
 
-UGHer Score (4-component, v0.2):
-- `por_lexical_similarity`: token + synonym overlap of por_core (config/synonym_map.yaml)
-- `grv_anchor_match`: BPM/key/duration/primary anchor alignment
-- `delta_e_profile_alignment`: transition type + intensity match
-- `instrumentation_context_alignment`: production notes token overlap
+UGHer Score (`UGHerScore`, 4-component, weighted; see `eval/scorer_ugher.py`):
+- `por_similarity` (weight 0.3): token overlap between `por_core` and the SVP prompt
+- `grv_consistency` (weight 0.3): primary anchor / BPM / key reflected in the SVP
+- `delta_e_assessment` (weight 0.2): transition type preserved in `evaluation_criteria`
+- `physical_accuracy` (weight 0.2): generated `physical_checks` count / 4 (clamped to [0,1])
 
 Integrated: `w_ugher * ugher + w_rpe * rpe` (default 50/50).
 
@@ -265,5 +265,5 @@ ValleyDiagnostics output: rms_p90, rms_p10, ar_main, ar_min, chorus_sections, lo
 ## Comparison Metrics (v0.2)
 
 SemanticDiff: por_lexical_similarity, grv_anchor_match, delta_e_profile_alignment, instrumentation_context_alignment.
-PhysicalDiff: bpm_diff, key_match, rms_diff, valley_diff, active_rate_diff, thickness_diff.
+PhysicalDiff: bpm_diff, key_match, rms_diff, valley_diff, active_rate_diff, thickness_diff, spectral_centroid_diff.
 action_hints: auto-generated improvement suggestions based on diffs.

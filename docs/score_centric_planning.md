@@ -48,9 +48,10 @@ T 系列 (本文書)            — 演奏から「楽譜に採る」    : 採�
 > 正しさ・合致性は本質ではない。**
 
 これにより RPE の主用途が「演奏後の検証（下流）」から「**作曲前のパラメータ
-取得（上流）**」へ反転する。現状のコードは楽譜→演奏の方向
-（`compose/`: Score → TargetSVP → プロンプト）しか持たず、
-**逆方向（audio → RPE → draft Score = 採譜）が未実装** — これが T 系列の対象。
+取得（上流）**」へ反転する。本書執筆時点では逆方向（audio → RPE → draft Score
+= 採譜）が未実装で、これが T 系列の対象だった。**現在は T0/T1 が実装済み**
+（`transcribe/measure.py` の `measure_fields` / `transcribe/score_draft.py` の
+`draft_score` / `svprpe transcribe`、§3 T1 の Status: IMPLEMENTED 参照）。
 
 ### 1.1 「正しさは本質でない」の正確な読み方
 

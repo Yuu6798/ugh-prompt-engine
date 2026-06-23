@@ -629,7 +629,7 @@ Layer Manipulator
 
 ---
 
-## 12. 実装ファイル案
+## 12. 実装ファイル（実装済み構成）
 
 ```text
 src/svp_rpe/compose/
@@ -637,17 +637,20 @@ src/svp_rpe/compose/
   models.py
   loader.py
   convert.py
+  fixity.py
   prompt_renderer.py
 
 examples/composition/
   midnight_signal/
     composition_score.yaml
     generated_prompt.txt
-    target_svp.json
+    generated_prompt.json
+    e2e/
 
 tests/
-  test_composition_score.py
+  test_compose_schema.py
   test_compose_prompt_renderer.py
+  test_composition_e2e.py
 ```
 
 CLI:
