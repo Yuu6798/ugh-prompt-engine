@@ -12,9 +12,10 @@ from svp_rpe.rpe.models import (
     RPEBundle,
     SectionMarker,
     SemanticRPE,
+    SpectralBands,
     SpectralProfile,
 )
-from svp_rpe.rpe.semantic_rules import generate_semantic
+from svp_rpe.rpe.semantic_rules import _feature_value, generate_semantic
 from svp_rpe.svp.generator import generate_svp
 from svp_rpe.utils.config_loader import load_config
 
@@ -281,3 +282,44 @@ def test_genre_rules_preserve_strict_boundaries() -> None:
         )
     )
     assert just_below_ambient.cultural_context == ["general"]
+
+
+def test_feature_value_resolves_spectral_bands_dot_keys() -> None:
+    phys = _make_physical()
+    phys.spectral_bands = SpectralBands(
+        sub_bass=0.01,
+        bass=0.02,
+        low_mid=0.03,
+        mid=0.04,
+        high_mid=0.05,
+        presence=0.06,
+        brilliance=0.07,
+    )
+
+    assert _feature_value("spectral_bands.presence", phys) == 0.06
+    assert _feature_value("spectral_bands.brilliance", phys) == 0.07
+    assert _feature_value("spectral_bands.bogus", phys) is None
+
+
+def test_feature_value_missing_spectral_bands_is_none() -> None:
+    phys = _make_physical()
+
+    assert phys.spectral_bands is None
+    assert _feature_value("spectral_bands.presence", phys) is None
+
+
+def test_feature_value_scalar_keys_are_unchanged() -> None:
+    phys = _make_physical_genre(
+        harmonic_ratio=0.71,
+        spectral_centroid=3735.0,
+        low_ratio=0.42,
+        mid_ratio=0.25,
+        high_ratio=0.33,
+        bpm=129.0,
+        active_rate=0.98,
+        valley_depth=0.07,
+    )
+
+    assert _feature_value("harmonic_ratio", phys) == 0.71
+    assert _feature_value("low_ratio", phys) == 0.42
+    assert _feature_value("bpm", phys) == 129.0
