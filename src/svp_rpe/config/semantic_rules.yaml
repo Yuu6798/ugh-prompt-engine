@@ -63,3 +63,52 @@ semantic_hypothesis:
     condition: {valley_depth_min: 0.3, stereo_width_min: 0.7}
     labels:
       - {label: cinematic, confidence: 0.60}
+
+# --- ジャンル/楽器セクション（旧 semantic_rules.py ハードコードから config 化） ---
+# 評価方式: cultural_context は全マッチを収集（dedup・順序保持）、default は no-match 時のみ。
+# instrumentation は first-match-wins（旧 elif チェーンを温存。順序が意味を持つ）。
+# 注意: 条件演算子は _min(>=)/_max(<=)/==。旧コードの厳密 >/< は >= / <= に丸めた
+# （float の境界一致は稀のため挙動差は無視できる）。
+#
+# orchestral 系ルールは Phase A の **暫定閾値**。harmonic_ratio>=0.78 かつ
+# spectral_centroid<=2500 は手元 2 曲（Portals 管弦 harmonic=0.81/centroid=1588 と
+# UZA 電子 harmonic=0.71、UZA 生成 harmonic=0.82/centroid=3447=bright で除外）由来。
+# defensible な閾値再導出は Phase B（ジャンル校正コーパス）に defer。
+# 参照: docs/genre_calibration_planning.md
+cultural_context:
+  default: general
+  rules:
+    - id: ctx.electronic_dance
+      condition: {bpm_min: 140, active_rate_min: 0.8}
+      context: electronic/dance
+    - id: ctx.ambient_downtempo
+      condition: {bpm_max: 90}
+      context: ambient/downtempo
+    - id: ctx.bass_music
+      condition: {low_ratio_min: 0.4}
+      context: bass-music
+    - id: ctx.cinematic_dynamic
+      condition: {valley_depth_min: 0.3}
+      context: cinematic/orchestral
+    # Phase A 暫定: 倍音優位かつ非 bright な素材を orchestral として捕捉
+    # （旧ロジックでは bass-music に丸められ orchestral を取りこぼした）
+    - id: ctx.orchestral_harmonic
+      condition: {harmonic_ratio_min: 0.78, spectral_centroid_max: 2500}
+      context: cinematic/orchestral
+
+instrumentation:
+  default: Unknown instrumentation
+  rules:
+    # Phase A 暫定: orchestral を bass-heavy より先に判定（first-match-wins）
+    - id: instr.orchestral
+      condition: {harmonic_ratio_min: 0.78, spectral_centroid_max: 2500}
+      summary: Orchestral/acoustic instrumentation with harmonic richness
+    - id: instr.bass_heavy
+      condition: {low_ratio_min: 0.35}
+      summary: Bass-heavy production with prominent low-end
+    - id: instr.bright
+      condition: {high_ratio_min: 0.3}
+      summary: Bright production with emphasis on highs
+    - id: instr.mid_focused
+      condition: {mid_ratio_min: 0.5}
+      summary: Mid-focused production

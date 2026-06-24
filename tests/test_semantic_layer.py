@@ -128,3 +128,113 @@ def test_legacy_semantic_schema_fails_fast() -> None:
                 "confidence_notes": ["legacy"],
             }
         )
+
+
+def _make_physical_genre(
+    *,
+    harmonic_ratio,
+    spectral_centroid,
+    low_ratio,
+    mid_ratio,
+    high_ratio,
+    bpm,
+    active_rate,
+    valley_depth,
+) -> PhysicalRPE:
+    return PhysicalRPE(
+        bpm=bpm,
+        key="C",
+        mode="major",
+        duration_sec=90.0,
+        sample_rate=44100,
+        structure=[SectionMarker(label="Full", start_sec=0.0, end_sec=90.0)],
+        rms_mean=0.3,
+        peak_amplitude=0.9,
+        crest_factor=3.0,
+        active_rate=active_rate,
+        valley_depth=valley_depth,
+        thickness=2.0,
+        spectral_centroid=spectral_centroid,
+        spectral_profile=SpectralProfile(
+            centroid=spectral_centroid,
+            low_ratio=low_ratio,
+            mid_ratio=mid_ratio,
+            high_ratio=high_ratio,
+            brightness=high_ratio,
+        ),
+        onset_density=4.5,
+        harmonic_ratio=harmonic_ratio,
+    )
+
+
+def test_orchestral_material_gets_cinematic_context_and_instrumentation() -> None:
+    # Portals 相当（フルオーケストラ）: 倍音優位かつ非 bright。
+    # 旧ロジックは bass-music に丸めて orchestral を取りこぼした（回帰防止）。
+    semantic = generate_semantic(
+        _make_physical_genre(
+            harmonic_ratio=0.81,
+            spectral_centroid=1588.0,
+            low_ratio=0.44,
+            mid_ratio=0.30,
+            high_ratio=0.26,
+            bpm=89.0,
+            active_rate=0.92,
+            valley_depth=0.16,
+        )
+    )
+    assert "cinematic/orchestral" in semantic.cultural_context
+    assert "Orchestral" in semantic.instrumentation_summary
+
+
+def test_bright_electronic_material_excluded_from_orchestral() -> None:
+    # UZA 相当（エレクトロ）: harmonic が閾値未満 → orchestral を付けない。
+    semantic = generate_semantic(
+        _make_physical_genre(
+            harmonic_ratio=0.71,
+            spectral_centroid=3735.0,
+            low_ratio=0.42,
+            mid_ratio=0.25,
+            high_ratio=0.33,
+            bpm=129.0,
+            active_rate=0.98,
+            valley_depth=0.07,
+        )
+    )
+    assert "cinematic/orchestral" not in semantic.cultural_context
+    assert "bass-music" in semantic.cultural_context
+    assert semantic.instrumentation_summary == "Bass-heavy production with prominent low-end"
+
+
+def test_genre_inference_backward_compatible_without_harmonic_ratio() -> None:
+    # harmonic_ratio 欠落（旧 RPE）でも orchestral ルールは不発、レガシー経路を温存。
+    semantic = generate_semantic(
+        _make_physical_genre(
+            harmonic_ratio=None,
+            spectral_centroid=3200.0,
+            low_ratio=0.10,
+            mid_ratio=0.18,
+            high_ratio=0.72,
+            bpm=152.0,
+            active_rate=0.85,
+            valley_depth=0.05,
+        )
+    )
+    assert semantic.cultural_context == ["electronic/dance"]
+    assert "Orchestral" not in semantic.instrumentation_summary
+
+
+def test_cultural_context_falls_back_to_default() -> None:
+    # どのルールにも当たらない素材は default(general) に落ちる。
+    semantic = generate_semantic(
+        _make_physical_genre(
+            harmonic_ratio=0.5,
+            spectral_centroid=1800.0,
+            low_ratio=0.20,
+            mid_ratio=0.30,
+            high_ratio=0.20,
+            bpm=110.0,
+            active_rate=0.5,
+            valley_depth=0.12,
+        )
+    )
+    assert semantic.cultural_context == ["general"]
