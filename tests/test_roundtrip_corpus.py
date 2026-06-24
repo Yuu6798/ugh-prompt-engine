@@ -40,9 +40,67 @@ def test_manifest_loads_observation_logs_and_calibratable_take():
         "J-rock",
         "J-ebm",
         "synth-05-fast-bright-d-major",
+        "yaoyorozu_shinwa",
+        "shiden_no_inori",
+        "so_what_run",
+        "astral_trigger",
+        "expA_fast176_simple",
+        "expB_mid130_breakbeat",
+        "expC_mid130_simple_anchor",
+        "wafu_jungle_174",
     ]
-    assert classify_take(manifest.takes[-1], repo_root=ROOT) == "calibratable"
+    synth = next(t for t in manifest.takes if t.id == "synth-05-fast-bright-d-major")
+    assert classify_take(synth, repo_root=ROOT) == "calibratable"
     assert classify_take(manifest.takes[0], repo_root=ROOT) == "observation_log"
+
+
+def test_manifest_carries_screen_derived_real_audio_provenance():
+    """The R1 box holds the resolvable screener corpus: every real-audio Suno take
+    is sha256-pinned with a drive_file_id (or marked excluded), and stays
+    observation_log because its bytes are not committed."""
+    manifest = load_manifest(MANIFEST_PATH)
+    by_id = {take.id: take for take in manifest.takes}
+
+    drive_backed = [
+        "yaoyorozu_shinwa",
+        "shiden_no_inori",
+        "so_what_run",
+        "astral_trigger",
+        "expA_fast176_simple",
+        "expB_mid130_breakbeat",
+        "expC_mid130_simple_anchor",
+    ]
+    for take_id in drive_backed:
+        take = by_id[take_id]
+        assert take.audio_hash and len(take.audio_hash) == 64
+        assert take.drive_file_id
+        assert not take.excluded
+        # bytes are not committed, so the box replays the archived measurement
+        assert classify_take(take, repo_root=ROOT) == "observation_log"
+
+    wafu = by_id["wafu_jungle_174"]
+    assert wafu.excluded is True
+    assert wafu.drive_file_id is None
+    assert wafu.audio_hash and len(wafu.audio_hash) == 64
+
+
+def test_take_accepts_provenance_fields_and_still_forbids_unknown():
+    base = {
+        "id": "prov",
+        "generator": "suno",
+        "prompt": "fixture",
+        "intent": {"bpm": {"value": 120, "send_form": "numeric_knob"}},
+        "audio_hash": "0" * 64,
+        "drive_file_id": "drive-xyz",
+        "excluded": True,
+        "notes": [],
+    }
+    take = RoundtripTake.model_validate(base)
+    assert take.drive_file_id == "drive-xyz"
+    assert take.excluded is True
+
+    with pytest.raises(ValidationError):
+        RoundtripTake.model_validate({**base, "unknown_field": 1})
 
 
 def test_manifest_rejects_unknown_intent_field():

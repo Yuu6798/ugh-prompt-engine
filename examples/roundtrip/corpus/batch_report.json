@@ -133,6 +133,149 @@
       ]
     },
     {
+      "id": "astral_trigger",
+      "layer": "observation_log",
+      "regenerated": false,
+      "comparisons": [
+        {
+          "field": "bpm",
+          "intent": 175,
+          "measured": 117.45,
+          "send_form": "numeric_knob",
+          "match": false
+        },
+        {
+          "field": "key",
+          "intent": "F# major",
+          "measured": "F# major",
+          "send_form": "numeric_knob",
+          "match": true
+        }
+      ],
+      "notes": [
+        "R1 corpus screen snapshot (2026-06-16); audio is not committed. Findings: docs/roundtrip_corpus_screen.md.",
+        "bpm 175 -> 117.45 (ratio 0.671) is extractor halving (true ~172 in audio); high prior recovers ~172.3."
+      ]
+    },
+    {
+      "id": "expA_fast176_simple",
+      "layer": "observation_log",
+      "regenerated": false,
+      "comparisons": [
+        {
+          "field": "bpm",
+          "intent": 176,
+          "measured": 89.1,
+          "send_form": "numeric_knob",
+          "match": false
+        },
+        {
+          "field": "key",
+          "intent": "D minor",
+          "measured": "G major",
+          "send_form": "numeric_knob",
+          "match": false
+        }
+      ],
+      "notes": [
+        "R1 corpus screen snapshot (2026-06-16) A/B/C experiment; audio is not committed. Findings: docs/roundtrip_corpus_screen.md.",
+        "true 176 recovers at start_bpm=180 -> 172.3 (extractor halving)."
+      ]
+    },
+    {
+      "id": "expB_mid130_breakbeat",
+      "layer": "observation_log",
+      "regenerated": false,
+      "comparisons": [
+        {
+          "field": "bpm",
+          "intent": 130,
+          "measured": 129.2,
+          "send_form": "numeric_knob",
+          "match": true
+        },
+        {
+          "field": "key",
+          "intent": "D minor",
+          "measured": "D minor",
+          "send_form": "numeric_knob",
+          "match": true
+        }
+      ],
+      "notes": [
+        "R1 corpus screen snapshot (2026-06-16) A/B/C experiment; audio is not committed. Findings: docs/roundtrip_corpus_screen.md.",
+        "Breakbeat track preserved (ratio ~0.994) while the simple four-on-floor A/C collapsed — falsifies the breakbeat hypothesis."
+      ]
+    },
+    {
+      "id": "expC_mid130_simple_anchor",
+      "layer": "observation_log",
+      "regenerated": false,
+      "comparisons": [
+        {
+          "field": "bpm",
+          "intent": 130,
+          "measured": 89.1,
+          "send_form": "numeric_knob",
+          "match": false
+        },
+        {
+          "field": "key",
+          "intent": "D minor",
+          "measured": "D minor",
+          "send_form": "numeric_knob",
+          "match": true
+        }
+      ],
+      "notes": [
+        "R1 corpus screen snapshot (2026-06-16) A/B/C experiment; audio is not committed. Findings: docs/roundtrip_corpus_screen.md.",
+        "Simple four-on-floor anchor collapsed to 89.1 (ratio 0.685) — same control as expA, different from breakbeat expB."
+      ]
+    },
+    {
+      "id": "shiden_no_inori",
+      "layer": "observation_log",
+      "regenerated": false,
+      "comparisons": [
+        {
+          "field": "bpm",
+          "intent": 168,
+          "measured": 172.27,
+          "send_form": "numeric_knob",
+          "match": true
+        },
+        {
+          "field": "key",
+          "intent": "D minor",
+          "measured": "D minor",
+          "send_form": "numeric_knob",
+          "match": true
+        }
+      ],
+      "notes": [
+        "R1 corpus screen snapshot (2026-06-16); audio is not committed. Findings: docs/roundtrip_corpus_screen.md.",
+        "bpm 168 -> 172.27 is within tolerance (ratio 1.025), so the screen marked it preserved."
+      ]
+    },
+    {
+      "id": "so_what_run",
+      "layer": "observation_log",
+      "regenerated": false,
+      "comparisons": [
+        {
+          "field": "bpm",
+          "intent": 172,
+          "measured": 117.45,
+          "send_form": "numeric_knob",
+          "match": false
+        }
+      ],
+      "notes": [
+        "R1 corpus screen snapshot (2026-06-16); audio is not committed. Findings: docs/roundtrip_corpus_screen.md.",
+        "bpm 172 -> 117.45 (ratio 0.683) is a non-octave collapse; high prior (start_bpm=180) recovers ~172.3."
+      ]
+    },
+    {
       "id": "synth-05-fast-bright-d-major",
       "layer": "calibratable",
       "regenerated": true,
@@ -162,6 +305,50 @@
       "notes": [
         "Calibratable in-repo record backed by examples/sample_input/ground_truth.yaml.",
         "Brightness is retained as a qualitative fixture label because T0 canonical centroid maps this audio to dark."
+      ]
+    },
+    {
+      "id": "wafu_jungle_174",
+      "layer": "observation_log",
+      "regenerated": false,
+      "comparisons": [
+        {
+          "field": "bpm",
+          "intent": 174,
+          "measured": 117.45,
+          "send_form": "numeric_knob",
+          "match": false
+        },
+        {
+          "field": "key",
+          "intent": "D minor",
+          "measured": "D minor",
+          "send_form": "numeric_knob",
+          "match": true
+        }
+      ],
+      "notes": [
+        "EXCLUDED (2026-06-22): bytes were never acquired and acquisition is not planned, so this take is not part of the materializable 7-track set.",
+        "Screen finding retained for the record (R1 corpus screen snapshot 2026-06-16). Findings: docs/roundtrip_corpus_screen.md.",
+        "No drive_file_id: the byte source is unresolved; the screener path classifies this row as `excluded`, not `not_found`."
+      ]
+    },
+    {
+      "id": "yaoyorozu_shinwa",
+      "layer": "observation_log",
+      "regenerated": false,
+      "comparisons": [
+        {
+          "field": "bpm",
+          "intent": 96,
+          "measured": 95.7,
+          "send_form": "numeric_knob",
+          "match": true
+        }
+      ],
+      "notes": [
+        "R1 corpus screen snapshot (2026-06-16); audio is not committed. Findings: docs/roundtrip_corpus_screen.md.",
+        "Stated 4/4 was sent but the screen did not record a measured time_signature, so it is omitted from intent."
       ]
     }
   ]

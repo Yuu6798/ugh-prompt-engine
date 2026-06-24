@@ -9,6 +9,9 @@ import scripts.fetch_corpus as fc
 import scripts.screen_corpus as sc
 from svp_rpe.perform import sha256_bytes
 
+ROOT = Path(__file__).resolve().parents[1]
+BOX_MANIFEST = ROOT / "examples" / "roundtrip" / "corpus" / "manifest.yaml"
+
 
 def write_yaml(path: Path, data: object) -> None:
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
@@ -295,6 +298,41 @@ def test_json_status_can_be_printed_with_out_file(tmp_path: Path, capsys) -> Non
     assert printed["unresolved"] == 1
     assert printed["status"][0]["reason"] == "not_found"
     assert load_yaml(out)["songs"] == []
+
+
+def test_r1_box_manifest_is_screener_ready(tmp_path: Path) -> None:
+    """fetch_corpus reads the R1 box `takes` directly: the seven Drive-backed
+    real-audio takes are sha256-pinned (-> not_found without local bytes, ready to
+    resolve once dropped), wafu is classified excluded (not counted unresolved),
+    and the observation-log Suno takes lack a hash (missing_hash)."""
+    empty_drop = tmp_path / "drop"
+    empty_drop.mkdir()
+
+    resolved = fc.resolve_manifest(BOX_MANIFEST, empty_drop, tmp_path / "cache")
+    status = {row["id"]: row["reason"] for row in resolved["status"]}
+
+    drive_backed = [
+        "yaoyorozu_shinwa",
+        "shiden_no_inori",
+        "so_what_run",
+        "astral_trigger",
+        "expA_fast176_simple",
+        "expB_mid130_breakbeat",
+        "expC_mid130_simple_anchor",
+    ]
+    # hash-pinned but bytes not present locally -> resolvable once a human drops them
+    for take_id in drive_backed:
+        assert status[take_id] == "not_found"
+
+    assert status["wafu_jungle_174"] == "excluded"
+    # observation-log Suno records carry no hash and stay out of the screener path
+    for take_id in ("C-orig", "C-gen", "J-rock", "J-ebm"):
+        assert status[take_id] == "missing_hash"
+
+    report = fc.status_report(resolved)
+    assert report["excluded"] == 1
+    # excluded never inflates unresolved
+    assert report["unresolved"] == len(resolved["status"]) - report["excluded"]
 
 
 def test_resolved_yaml_is_accepted_by_screen_song_hash_gate(
