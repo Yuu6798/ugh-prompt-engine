@@ -156,6 +156,7 @@ svprpe --help
 - [Roundtrip Preservation](docs/roundtrip_preservation.md) - R0 deterministic score -> performance -> transcription preservation diagnostics and K1 cross-check
 - [Metamorphic Probe](docs/metamorphic_probe.md) — Sweeps render_sample × real extract to auto-verify grip/calibration/orthogonality/determinism (Hypothesis): centroid=tight grip, high-band brightness=blind sensor, bpm octave error unflagged by R2-2a
 - [R1 Corpus Screen](docs/roundtrip_corpus_screen.md) — Real Suno screen + A/B/C control experiment: fast tracks' low BPM is extractor halving, not Suno infidelity (start_bpm=180 recovers ~172); the "attractor" is prior × BPM-grid selection; breakbeat hypothesis falsified; R2-2a misses grid-quantized 1.93× halvings
+- [Genre Calibration Planning](docs/genre_calibration_planning.md) — Semantic genre/instrument vocabulary expansion: config-ize the hardcoded `cultural_context` mislabel (orchestral→bass-music), build a Suno-generated auto-labeled corpus to bypass the licensing bottleneck (correct generator bias with real anchors), split into Phase A (config-ization) / B (corpus) / C (verification)
 - [AGENTS.md](AGENTS.md) — Claude × Codex orchestration protocol (Task Brief / Completion Summary templates)
 
 ## License
