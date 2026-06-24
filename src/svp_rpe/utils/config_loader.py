@@ -39,6 +39,15 @@ def _load_config_file(path: Path) -> dict[str, Any]:
     return data
 
 
+def load_packaged_config(name: str) -> Optional[dict[str, Any]]:
+    """Load only the packaged config resource, ignoring local config/.
+
+    Used to backfill sections that a stale or partial local config omits,
+    avoiding silent regressions when local config wins over packaged.
+    """
+    return _load_packaged_config(name)
+
+
 def _load_packaged_config(name: str) -> Optional[dict[str, Any]]:
     try:
         resource = files("svp_rpe.config").joinpath(f"{name}.yaml")

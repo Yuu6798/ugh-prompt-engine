@@ -10,7 +10,11 @@ from svp_rpe.rpe.models import (
     SemanticLabel,
     SemanticRPE,
 )
-from svp_rpe.utils.config_loader import load_config
+from svp_rpe.utils.config_loader import load_config, load_packaged_config
+
+# config 化したジャンル/楽器セクション。stale な local config が packaged より
+# 優先解決されてこれらを欠く場合、packaged から補完して silent な退行を防ぐ。
+_GENRE_SECTIONS: tuple[str, ...] = ("cultural_context", "instrumentation")
 
 SemanticLayer = Literal["perceptual", "structural", "semantic_hypothesis"]
 SEMANTIC_LAYERS: tuple[SemanticLayer, ...] = (
@@ -57,6 +61,11 @@ def _condition_key(raw_key: str) -> tuple[str, str]:
         return raw_key[: -len("_min")], ">="
     if raw_key.endswith("_max"):
         return raw_key[: -len("_max")], "<="
+    # 厳密境界（旧ハードコードの > / <）を温存するための演算子
+    if raw_key.endswith("_gt"):
+        return raw_key[: -len("_gt")], ">"
+    if raw_key.endswith("_lt"):
+        return raw_key[: -len("_lt")], "<"
     return raw_key, "=="
 
 
@@ -67,6 +76,10 @@ def _condition_evidence(condition: Mapping[str, Any], phys: PhysicalRPE) -> Opti
             return isinstance(actual, (int, float)) and float(actual) >= float(expected)
         if operator == "<=":
             return isinstance(actual, (int, float)) and float(actual) <= float(expected)
+        if operator == ">":
+            return isinstance(actual, (int, float)) and float(actual) > float(expected)
+        if operator == "<":
+            return isinstance(actual, (int, float)) and float(actual) < float(expected)
         if isinstance(actual, str) and isinstance(expected, str):
             return actual.lower() == expected.lower()
         return actual == expected
@@ -227,20 +240,54 @@ def _build_por_core(por_surface: List[SemanticLabel], phys: PhysicalRPE) -> str:
     return f"A {', '.join(label.label for label in high_conf_labels)} sonic character"
 
 
-def _infer_cultural_context(phys: PhysicalRPE) -> List[str]:
-    """Infer cultural/genre context from features."""
-    contexts = []
-    if phys.bpm and phys.bpm > 140 and phys.active_rate > 0.8:
-        contexts.append("electronic/dance")
-    if phys.bpm and phys.bpm < 90:
-        contexts.append("ambient/downtempo")
-    if phys.spectral_profile.low_ratio > 0.4:
-        contexts.append("bass-music")
-    if phys.valley_depth > 0.3:
-        contexts.append("cinematic/orchestral")
+def _matches_condition(condition: Mapping[str, Any], phys: PhysicalRPE) -> bool:
+    """True when every condition entry matches (reuses evidence matcher)."""
+    return _condition_evidence(condition, phys) is not None
+
+
+def _infer_cultural_context(phys: PhysicalRPE, config: Mapping[str, Any]) -> List[str]:
+    """Infer cultural/genre context from config rules (collect all matches)."""
+    section = config.get("cultural_context") or {}
+    default = str(section.get("default", "general"))
+    contexts: list[str] = []
+    for rule in section.get("rules", []):
+        if not _matches_condition(rule.get("condition", {}), phys):
+            continue
+        context = rule.get("context")
+        if context and context not in contexts:
+            contexts.append(str(context))
     if not contexts:
-        contexts.append("general")
+        contexts.append(default)
     return contexts
+
+
+def _backfill_genre_sections(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Backfill genre/instrumentation sections from packaged config when absent.
+
+    `load_config` prefers a local `config/` over packaged resources, so a stale
+    or partial local config can omit the newly added genre sections. Rather than
+    silently degrading every input to `general`/`Unknown`, pull the missing
+    sections from the packaged copy (which always ships them).
+    """
+    merged = dict(config)
+    missing = [s for s in _GENRE_SECTIONS if s not in merged]
+    if not missing:
+        return merged
+    packaged = load_packaged_config("semantic_rules") or {}
+    for section in missing:
+        if section in packaged:
+            merged[section] = packaged[section]
+    return merged
+
+
+def _infer_instrumentation(phys: PhysicalRPE, config: Mapping[str, Any]) -> str:
+    """Infer instrumentation summary from config rules (first match wins)."""
+    section = config.get("instrumentation") or {}
+    default = str(section.get("default", "Unknown instrumentation"))
+    for rule in section.get("rules", []):
+        if _matches_condition(rule.get("condition", {}), phys):
+            return str(rule.get("summary", default))
+    return default
 
 
 def generate_semantic(phys: PhysicalRPE) -> SemanticRPE:
@@ -249,20 +296,14 @@ def generate_semantic(phys: PhysicalRPE) -> SemanticRPE:
         config = load_config("semantic_rules")
     except FileNotFoundError:
         config = {}
+    config = _backfill_genre_sections(config)
 
     por_surface, confidence_notes = _labels_from_rules(phys, config)
     por_core = _build_por_core(por_surface, phys)
     grv_anchor = _infer_grv_anchor(phys, por_surface)
     delta_e_profile = _infer_delta_e_profile(phys)
-    cultural_context = _infer_cultural_context(phys)
-
-    instrumentation = "Unknown instrumentation"
-    if phys.spectral_profile.low_ratio > 0.35:
-        instrumentation = "Bass-heavy production with prominent low-end"
-    elif phys.spectral_profile.high_ratio > 0.3:
-        instrumentation = "Bright production with emphasis on highs"
-    elif phys.spectral_profile.mid_ratio > 0.5:
-        instrumentation = "Mid-focused production"
+    cultural_context = _infer_cultural_context(phys, config)
+    instrumentation = _infer_instrumentation(phys, config)
 
     production_notes = []
     if phys.crest_factor < 3:
