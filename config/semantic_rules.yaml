@@ -69,8 +69,8 @@ semantic_hypothesis:
 # ルールへ移管しただけで、出力は変えていない（snapshot 不変）。
 # 評価方式: cultural_context は全マッチを収集（dedup・順序保持）、default は no-match 時のみ。
 # instrumentation は first-match-wins（旧 elif チェーンを温存。順序が意味を持つ）。
-# 注意: 条件演算子は _min(>=)/_max(<=)/==。旧コードの厳密 >/< は >= / <= に丸めた
-# （float の境界一致は稀のため挙動差は無視できる）。
+# 条件演算子: _min(>=)/_max(<=)/_gt(>)/_lt(<)/==。旧ハードコードは厳密 >/< だったため
+# _gt/_lt で**境界まで完全に等価**に温存する（bpm==140 等の knob 値でも挙動不変）。
 #
 # orchestral 検出ルールは Phase B に defer。手元データで harmonic_ratio が
 # orchestral の判別子として不十分と判明したため（純合成音=1.000 > 本物管弦 Portals=0.813、
@@ -80,27 +80,27 @@ cultural_context:
   default: general
   rules:
     - id: ctx.electronic_dance
-      condition: {bpm_min: 140, active_rate_min: 0.8}
+      condition: {bpm_gt: 140, active_rate_gt: 0.8}
       context: electronic/dance
     - id: ctx.ambient_downtempo
-      condition: {bpm_max: 90}
+      condition: {bpm_lt: 90}
       context: ambient/downtempo
     - id: ctx.bass_music
-      condition: {low_ratio_min: 0.4}
+      condition: {low_ratio_gt: 0.4}
       context: bass-music
     - id: ctx.cinematic_dynamic
-      condition: {valley_depth_min: 0.3}
+      condition: {valley_depth_gt: 0.3}
       context: cinematic/orchestral
 
 instrumentation:
   default: Unknown instrumentation
   rules:
     - id: instr.bass_heavy
-      condition: {low_ratio_min: 0.35}
+      condition: {low_ratio_gt: 0.35}
       summary: Bass-heavy production with prominent low-end
     - id: instr.bright
-      condition: {high_ratio_min: 0.3}
+      condition: {high_ratio_gt: 0.3}
       summary: Bright production with emphasis on highs
     - id: instr.mid_focused
-      condition: {mid_ratio_min: 0.5}
+      condition: {mid_ratio_gt: 0.5}
       summary: Mid-focused production

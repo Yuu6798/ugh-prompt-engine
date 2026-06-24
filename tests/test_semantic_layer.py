@@ -249,3 +249,35 @@ def test_genre_sections_backfilled_from_packaged_when_local_partial(monkeypatch)
     semantic = sr.generate_semantic(_make_physical())  # bpm152/active_rate0.85
     assert semantic.cultural_context == ["electronic/dance"]
     assert semantic.instrumentation_summary != "Unknown instrumentation"
+
+
+def test_genre_rules_preserve_strict_boundaries() -> None:
+    # 旧ハードコードは厳密 > / <。knob 値ちょうど（bpm==140, active_rate==0.8, bpm==90,
+    # low_ratio==0.4）では発火しないことを確認（_gt/_lt で境界等価を担保, Codex P2 #99）。
+    boundary = generate_semantic(
+        _make_physical_genre(
+            harmonic_ratio=None,
+            spectral_centroid=2000.0,
+            low_ratio=0.40,   # ちょうど 0.4 -> bass-music(>0.4) は発火しない
+            mid_ratio=0.30,
+            high_ratio=0.20,
+            bpm=140.0,        # ちょうど 140 -> electronic/dance(>140) は発火しない
+            active_rate=0.80,  # ちょうど 0.8
+            valley_depth=0.30,  # ちょうど 0.3 -> cinematic(>0.3) は発火しない
+        )
+    )
+    assert boundary.cultural_context == ["general"]
+
+    just_below_ambient = generate_semantic(
+        _make_physical_genre(
+            harmonic_ratio=None,
+            spectral_centroid=2000.0,
+            low_ratio=0.20,
+            mid_ratio=0.30,
+            high_ratio=0.20,
+            bpm=90.0,         # ちょうど 90 -> ambient/downtempo(<90) は発火しない
+            active_rate=0.5,
+            valley_depth=0.10,
+        )
+    )
+    assert just_below_ambient.cultural_context == ["general"]

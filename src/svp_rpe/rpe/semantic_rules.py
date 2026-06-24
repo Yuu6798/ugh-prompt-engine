@@ -61,6 +61,11 @@ def _condition_key(raw_key: str) -> tuple[str, str]:
         return raw_key[: -len("_min")], ">="
     if raw_key.endswith("_max"):
         return raw_key[: -len("_max")], "<="
+    # 厳密境界（旧ハードコードの > / <）を温存するための演算子
+    if raw_key.endswith("_gt"):
+        return raw_key[: -len("_gt")], ">"
+    if raw_key.endswith("_lt"):
+        return raw_key[: -len("_lt")], "<"
     return raw_key, "=="
 
 
@@ -71,6 +76,10 @@ def _condition_evidence(condition: Mapping[str, Any], phys: PhysicalRPE) -> Opti
             return isinstance(actual, (int, float)) and float(actual) >= float(expected)
         if operator == "<=":
             return isinstance(actual, (int, float)) and float(actual) <= float(expected)
+        if operator == ">":
+            return isinstance(actual, (int, float)) and float(actual) > float(expected)
+        if operator == "<":
+            return isinstance(actual, (int, float)) and float(actual) < float(expected)
         if isinstance(actual, str) and isinstance(expected, str):
             return actual.lower() == expected.lower()
         return actual == expected
