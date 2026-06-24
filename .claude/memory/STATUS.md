@@ -29,7 +29,7 @@ unresolved 非計上へ修正、R1 Drive corpus は screen 対象 7/7 で完結�
 
 | ID | Title | Priority | Notes |
 |---|---|---|---|
-| R1-audio | R1 箱 calibratable レコード追加 | P2 | **2026-06-23 取り込み完了**: screen 対象 7 本（+ 除外 wafu）の calibratable レコードを `screen_2026-06-16.yaml` から R1 箱 `examples/roundtrip/corpus/manifest.yaml` の `takes` へ移植。`RoundtripTake` に `drive_file_id`/`excluded` 追加（`extra="forbid"` 整合）。`fetch_corpus.py`→`screen_corpus.py` 経路が箱から直接回せる（素 checkout=7本 `not_found`(hash-pin)/wafu `excluded`/観測ログ4本 `missing_hash`、Drive バイト投入で sha256 解決）。`corpus_batch` は observation_log で archived measured replay。残=実バイト授受の運用（人間が Drive→source-dir）と `screen_2026-06-16.yaml` の将来的な箱への一本化判断。roadmap_goal2.md R1 |
+| R1-audio | R1 箱 calibratable レコード追加 | P2 (PR #97 レビュー中) | screen 対象 7 本（+ 除外 wafu）の calibratable レコードを `screen_2026-06-16.yaml` から R1 箱 `examples/roundtrip/corpus/manifest.yaml` の `takes` へ移植する実装を PR #97 に投入（`RoundtripTake` に `drive_file_id`/`excluded` 追加・`extra=forbid` 整合、`fetch_corpus.py`→`screen_corpus.py` が箱から回せる：コミット済 synth は repo 相対 locator で解決、Drive 7 本は sha256-pin、wafu は excluded）。`corpus_batch` は observation_log で archived measured replay。マージ後に本行を queue から外し下の実績節へ移すこと。残=実バイト授受の運用（人間が Drive→source-dir）と `screen_2026-06-16.yaml` の将来的な箱への一本化判断。roadmap_goal2.md R1 |
 | K2 | Suno 転移検証 | P1 | K1 の tight/loose 判定が Suno/Udio 級で転移するか手動少数バッチ。物理固定・意味差替で「別物」生成を確認済(意味層 grip 有り・耳)だが n=1。律速は人間生成バッチ。controllability_poc.md §5 |
 | Q1-5 Ph2 | spectral 帯域 magnitude 再校正 | P2 | 既存 power 3帯域(`low/mid/high_ratio`)の是正 + `semantic_rules.py`/config 閾値(`low_ratio_min:0.4`/`mid_ratio_min:0.45`/`high_ratio>0.3`)を検証済 magnitude `spectral_bands` 基準へ移行 + `screen_2026-06-16.yaml` 再採取 + `test_metamorphic_probe.py` の `high_ratio==0.0` 前提見直し。閾値再導出の校正コーパスが R1-audio 同様 licensing 律速。Phase 1=#91 マージ済 |
 

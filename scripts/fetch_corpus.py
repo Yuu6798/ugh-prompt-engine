@@ -1,8 +1,12 @@
 """Materialize a content-addressed corpus manifest into screener input.
 
 This loader intentionally does not talk to Google Drive.  `drive_file_id` is
-provenance metadata for humans or remote jobs; local resolution is only by the
-manifest's sha256 pin against files already present in `--source-dir`.
+provenance metadata for humans or remote jobs; local resolution is by the
+manifest's sha256 pin against files already present in `--source-dir`, with a
+fallback to a record's `audio_locator` resolved against either an absolute path,
+the `--source-dir`, or the repository root (so committed CC0 fixtures whose
+locator is repo-relative, e.g. the synth take in the R1 box, resolve without a
+manual drop).  The sha256 pin is always re-verified after locator resolution.
 """
 from __future__ import annotations
 
@@ -143,7 +147,11 @@ def find_locator_candidate(
     if not raw:
         return None
     path = Path(raw)
-    candidates = [path] if path.is_absolute() else [source_dir / path]
+    # Relative locators resolve against --source-dir first (uploaded drops) and
+    # then the repo root (committed CC0 fixtures such as the synth take). The
+    # sha256 pin is re-checked by the caller, so a repo-root hit is not trusted
+    # blindly.
+    candidates = [path] if path.is_absolute() else [source_dir / path, ROOT / path]
     for candidate in candidates:
         if candidate.is_file():
             return SourceFile(path=candidate, sha256=sha256_file(candidate))
