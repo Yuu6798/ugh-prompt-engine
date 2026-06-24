@@ -167,27 +167,25 @@ def _make_physical_genre(
     )
 
 
-def test_orchestral_material_gets_cinematic_context_and_instrumentation() -> None:
-    # Portals 相当（フルオーケストラ）: 倍音優位かつ非 bright。
-    # 旧ロジックは bass-music に丸めて orchestral を取りこぼした（回帰防止）。
+def test_high_valley_material_gets_cinematic_context() -> None:
+    # 旧ハードコード valley_depth>0.3 -> cinematic/orchestral を config 化後も温存。
     semantic = generate_semantic(
         _make_physical_genre(
-            harmonic_ratio=0.81,
+            harmonic_ratio=None,
             spectral_centroid=1588.0,
-            low_ratio=0.44,
+            low_ratio=0.20,
             mid_ratio=0.30,
-            high_ratio=0.26,
-            bpm=89.0,
-            active_rate=0.92,
-            valley_depth=0.16,
+            high_ratio=0.20,
+            bpm=100.0,
+            active_rate=0.6,
+            valley_depth=0.4,
         )
     )
     assert "cinematic/orchestral" in semantic.cultural_context
-    assert "Orchestral" in semantic.instrumentation_summary
 
 
-def test_bright_electronic_material_excluded_from_orchestral() -> None:
-    # UZA 相当（エレクトロ）: harmonic が閾値未満 → orchestral を付けない。
+def test_bass_music_genre_inference() -> None:
+    # low_ratio>0.4 -> bass-music を config 化後も温存（旧ハードコード等価）。
     semantic = generate_semantic(
         _make_physical_genre(
             harmonic_ratio=0.71,
@@ -200,13 +198,12 @@ def test_bright_electronic_material_excluded_from_orchestral() -> None:
             valley_depth=0.07,
         )
     )
-    assert "cinematic/orchestral" not in semantic.cultural_context
-    assert "bass-music" in semantic.cultural_context
+    assert semantic.cultural_context == ["bass-music"]
     assert semantic.instrumentation_summary == "Bass-heavy production with prominent low-end"
 
 
 def test_genre_inference_backward_compatible_without_harmonic_ratio() -> None:
-    # harmonic_ratio 欠落（旧 RPE）でも orchestral ルールは不発、レガシー経路を温存。
+    # harmonic_ratio 欠落（旧 RPE）でもレガシー経路を温存（electronic/dance）。
     semantic = generate_semantic(
         _make_physical_genre(
             harmonic_ratio=None,
@@ -220,7 +217,7 @@ def test_genre_inference_backward_compatible_without_harmonic_ratio() -> None:
         )
     )
     assert semantic.cultural_context == ["electronic/dance"]
-    assert "Orchestral" not in semantic.instrumentation_summary
+    assert semantic.instrumentation_summary == "Bright production with emphasis on highs"
 
 
 def test_cultural_context_falls_back_to_default() -> None:
@@ -238,3 +235,17 @@ def test_cultural_context_falls_back_to_default() -> None:
         )
     )
     assert semantic.cultural_context == ["general"]
+
+
+def test_genre_sections_backfilled_from_packaged_when_local_partial(monkeypatch) -> None:
+    # stale/partial な local config が新セクションを欠いても、packaged 補完で
+    # genre 推定が silent 退行しないこと（Codex P2 #99）。
+    import svp_rpe.rpe.semantic_rules as sr
+
+    full = load_config("semantic_rules")
+    partial = {k: v for k, v in full.items() if k not in ("cultural_context", "instrumentation")}
+    monkeypatch.setattr(sr, "load_config", lambda name: partial)
+
+    semantic = sr.generate_semantic(_make_physical())  # bpm152/active_rate0.85
+    assert semantic.cultural_context == ["electronic/dance"]
+    assert semantic.instrumentation_summary != "Unknown instrumentation"

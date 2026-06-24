@@ -141,10 +141,18 @@ Phase C: 本物アンカーでの bias 検証 + follow-up 補正
 - config 二重コピー同期（`config/` ↔ `src/svp_rpe/config/`）
 - `tests/test_semantic_layer.py` に orchestral/electronic 判定の回帰テスト追加
 
-**受け入れ条件**: Portals 相当の特徴（harmonic 高・centroid 中低）が
-`bass-music` 単独でなく orchestral/cinematic を含むようになる。既存テスト全 pass。
+**実績（2026-06-24, PR #99）**: config 化は **振る舞い保存**で着手（旧出力を変えず
+snapshot 不変）。当初の暫定 orchestral ルール（`harmonic_ratio>=0.78`）は **Phase B に defer**。
+理由は実装中の検証で **harmonic_ratio が orchestral の判別子として不十分**と判明したため:
+純合成テスト音は `harmonic_ratio=1.000`（本物管弦 Portals=0.813 を上回る）で、test corpus
+synth 5 本すべてを誤って orchestral 判定した。倍音性だけでは「管弦」と「整数次倍音の
+合成音」を分離できない。→ Phase B の閾値導出は harmonic 単独でなく多特徴（centroid 帯域・
+percussive 比・dynamics 等）の組合せを校正データ上で検討する。
 
 ### Phase B — ジャンル校正コーパス構築
+
+- **Phase A の知見を入力とする**: harmonic_ratio 単独は orchestral 判別に不十分
+  （純合成=1.0）。多特徴の組合せと、本物アンカー（実 orchestral 録音）が必須
 
 - 集めるジャンル（最小セット案）: orchestral / electronic-dance / rock / acoustic /
   hiphop / ambient — 各 N 曲（N は Phase A の暫定線の不確実性を見て決定、目安 5–10）

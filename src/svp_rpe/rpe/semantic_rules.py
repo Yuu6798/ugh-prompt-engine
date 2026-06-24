@@ -10,7 +10,11 @@ from svp_rpe.rpe.models import (
     SemanticLabel,
     SemanticRPE,
 )
-from svp_rpe.utils.config_loader import load_config
+from svp_rpe.utils.config_loader import load_config, load_packaged_config
+
+# config 化したジャンル/楽器セクション。stale な local config が packaged より
+# 優先解決されてこれらを欠く場合、packaged から補完して silent な退行を防ぐ。
+_GENRE_SECTIONS: tuple[str, ...] = ("cultural_context", "instrumentation")
 
 SemanticLayer = Literal["perceptual", "structural", "semantic_hypothesis"]
 SEMANTIC_LAYERS: tuple[SemanticLayer, ...] = (
@@ -248,6 +252,25 @@ def _infer_cultural_context(phys: PhysicalRPE, config: Mapping[str, Any]) -> Lis
     return contexts
 
 
+def _backfill_genre_sections(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Backfill genre/instrumentation sections from packaged config when absent.
+
+    `load_config` prefers a local `config/` over packaged resources, so a stale
+    or partial local config can omit the newly added genre sections. Rather than
+    silently degrading every input to `general`/`Unknown`, pull the missing
+    sections from the packaged copy (which always ships them).
+    """
+    merged = dict(config)
+    missing = [s for s in _GENRE_SECTIONS if s not in merged]
+    if not missing:
+        return merged
+    packaged = load_packaged_config("semantic_rules") or {}
+    for section in missing:
+        if section in packaged:
+            merged[section] = packaged[section]
+    return merged
+
+
 def _infer_instrumentation(phys: PhysicalRPE, config: Mapping[str, Any]) -> str:
     """Infer instrumentation summary from config rules (first match wins)."""
     section = config.get("instrumentation") or {}
@@ -264,6 +287,7 @@ def generate_semantic(phys: PhysicalRPE) -> SemanticRPE:
         config = load_config("semantic_rules")
     except FileNotFoundError:
         config = {}
+    config = _backfill_genre_sections(config)
 
     por_surface, confidence_notes = _labels_from_rules(phys, config)
     por_core = _build_por_core(por_surface, phys)
