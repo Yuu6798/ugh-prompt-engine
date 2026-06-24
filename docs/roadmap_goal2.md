@@ -225,6 +225,18 @@ R 系列は目的2 固有のフェーズ ID。各 R フェーズは T / K / Q �
 > Drive アクセス下で手動 DL すればフル 7 本 screen を再現できる。8 本目の `wafu_jungle_174` は
 > **2026-06-22 に corpus から除外**（manifest `excluded: true`・バイト入手予定なし）し、
 > **R1 Drive corpus は screen 対象 7/7 で完結**。
+>
+> **R1 箱への取り込み（2026-06-23）**: それまで screen 対象 7 本（+ 除外 wafu）の calibratable
+> レコードは ad-hoc な `examples/roundtrip/screen_2026-06-16.yaml` にしか無く、**正規の R1 箱
+> `examples/roundtrip/corpus/manifest.yaml`（pydantic `RoundtripManifest` 検証・`svprpe
+> roundtrip-corpus`）には不在**だった。これを箱の `takes` に移植し、`RoundtripTake` に
+> `drive_file_id` / `excluded` を追加（`extra="forbid"` 整合）。これで **`fetch_corpus.py` →
+> `screen_corpus.py` 経路が箱から直接回せる**（素のチェックアウトでは 7 本 hash-pin の
+> `not_found`、wafu は `excluded`、観測ログ 4 本は `missing_hash`。Drive バイトを source-dir に
+> 落とせば sha256 解決）。`corpus_batch` は committed audio_locator が無いこれらを従来どおり
+> observation_log で archived `measured` を replay（`drive_file_id`/`excluded` は screener 経路
+> 専用メタデータで classify_take 非依存）。`prompt` は snapshot に verbatim 生成プロンプトが
+> 無いため screen 由来サマリと明記（捏造回避）、`measured` は screen が実測した値のみ移植。
 **推定工数**: 3–5 日（key / brightness corpus 確保・ライセンス確認を含む。BPM ケース確保は
 follow-up 側）
 

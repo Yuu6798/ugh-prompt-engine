@@ -9,6 +9,9 @@ import scripts.fetch_corpus as fc
 import scripts.screen_corpus as sc
 from svp_rpe.perform import sha256_bytes
 
+ROOT = Path(__file__).resolve().parents[1]
+BOX_MANIFEST = ROOT / "examples" / "roundtrip" / "corpus" / "manifest.yaml"
+
 
 def write_yaml(path: Path, data: object) -> None:
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
@@ -295,6 +298,101 @@ def test_json_status_can_be_printed_with_out_file(tmp_path: Path, capsys) -> Non
     assert printed["unresolved"] == 1
     assert printed["status"][0]["reason"] == "not_found"
     assert load_yaml(out)["songs"] == []
+
+
+def test_r1_box_manifest_is_screener_ready(tmp_path: Path) -> None:
+    """fetch_corpus reads the R1 box `takes` directly. With an empty drop dir:
+    the committed CC0 synth take resolves from its repo-relative locator (so the
+    screener path is runnable out of the box for the one fully reproducible row),
+    the seven Drive-backed real-audio takes are sha256-pinned (-> not_found until
+    bytes are dropped), wafu is classified excluded (not counted unresolved), and
+    the observation-log Suno takes lack a hash (missing_hash)."""
+    empty_drop = tmp_path / "drop"
+    empty_drop.mkdir()
+
+    resolved = fc.resolve_manifest(BOX_MANIFEST, empty_drop, tmp_path / "cache")
+    status = {row["id"]: row["reason"] for row in resolved["status"]}
+
+    # committed CC0 fixture: repo-relative locator resolves against the repo root
+    # even though the drop dir is empty (Codex P2: do not omit the one row whose
+    # bytes are committed).
+    assert status["synth-05-fast-bright-d-major"] == "resolved"
+    assert "synth-05-fast-bright-d-major" in {song["id"] for song in resolved["songs"]}
+
+    drive_backed = [
+        "yaoyorozu_shinwa",
+        "shiden_no_inori",
+        "so_what_run",
+        "astral_trigger",
+        "expA_fast176_simple",
+        "expB_mid130_breakbeat",
+        "expC_mid130_simple_anchor",
+    ]
+    # hash-pinned but bytes not present locally -> resolvable once a human drops them
+    for take_id in drive_backed:
+        assert status[take_id] == "not_found"
+
+    assert status["wafu_jungle_174"] == "excluded"
+    # observation-log Suno records carry no hash and stay out of the screener path
+    for take_id in ("C-orig", "C-gen", "J-rock", "J-ebm"):
+        assert status[take_id] == "missing_hash"
+
+    report = fc.status_report(resolved)
+    assert report["resolved"] == 1  # the committed synth take
+    assert report["excluded"] == 1
+    # excluded never inflates unresolved
+    assert report["unresolved"] == len(resolved["status"]) - report["excluded"] - report["resolved"]
+
+
+def test_repo_relative_locator_resolves_against_root(tmp_path: Path, monkeypatch) -> None:
+    """A committed fixture whose locator is repo-relative resolves against the repo
+    root even when the drop dir is empty; the sha256 pin is still enforced."""
+    repo = tmp_path / "repo"
+    (repo / "assets").mkdir(parents=True)
+    committed = repo / "assets" / "fixture.wav"
+    committed.write_bytes(b"committed cc0 bytes")
+    digest = sha256_bytes(b"committed cc0 bytes")
+    monkeypatch.setattr(fc, "ROOT", repo)
+
+    empty_drop = tmp_path / "drop"
+    empty_drop.mkdir()
+    manifest = tmp_path / "manifest.yaml"
+    write_yaml(
+        manifest,
+        {
+            "takes": [
+                {
+                    "id": "committed",
+                    "audio_hash": digest,
+                    "audio_locator": "assets/fixture.wav",
+                    "intent": {"bpm": {"value": 120}},
+                }
+            ]
+        },
+    )
+
+    resolved = fc.resolve_manifest(manifest, empty_drop, tmp_path / "cache")
+    assert resolved["status"][0]["resolved"] is True
+    assert Path(resolved["songs"][0]["audio"]).read_bytes() == b"committed cc0 bytes"
+
+    # a repo-root hit with the wrong hash is still rejected (pin re-verified)
+    bad_manifest = tmp_path / "bad.yaml"
+    write_yaml(
+        bad_manifest,
+        {
+            "takes": [
+                {
+                    "id": "committed",
+                    "audio_hash": sha256_bytes(b"different bytes"),
+                    "audio_locator": "assets/fixture.wav",
+                    "intent": {"bpm": {"value": 120}},
+                }
+            ]
+        },
+    )
+    bad = fc.resolve_manifest(bad_manifest, empty_drop, tmp_path / "cache2")
+    assert bad["status"][0]["resolved"] is False
+    assert bad["status"][0]["reason"] == "sha256_mismatch"
 
 
 def test_resolved_yaml_is_accepted_by_screen_song_hash_gate(

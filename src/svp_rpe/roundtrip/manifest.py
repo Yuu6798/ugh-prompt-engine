@@ -28,6 +28,16 @@ class RoundtripTake(BaseModel):
 
     ``intent`` is intentionally partial: real generator prompts often specify
     only a subset of the seven physical CompositionScore fields.
+
+    ``drive_file_id`` / ``excluded`` are provenance metadata for the
+    content-addressed screener path (``scripts/fetch_corpus.py`` ->
+    ``scripts/screen_corpus.py``). ``drive_file_id`` records where the pinned
+    bytes live for a human/remote job to fetch; ``excluded`` marks a take whose
+    bytes were never acquired and are not planned, so the resolver classifies it
+    transparently instead of counting it as unresolved. Neither field is used by
+    ``classify_take``/``corpus_batch``: a take with no locally committed
+    ``audio_locator`` stays ``observation_log`` (archived ``measured``) until its
+    bytes are materialized.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -39,6 +49,8 @@ class RoundtripTake(BaseModel):
     measured: dict[str, Any] | None = None
     audio_hash: str | None = None
     audio_locator: str | None = None
+    drive_file_id: str | None = None
+    excluded: bool = False
     notes: list[str] = Field(default_factory=list)
 
     @field_validator("audio_locator")
