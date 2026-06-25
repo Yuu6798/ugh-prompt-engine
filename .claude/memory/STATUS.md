@@ -2,35 +2,22 @@
 
 ## Phase
 
-目的2（再現実証）の R4「作品同一性 — 事象レベル欄の往復」を 2026-06-19 に closeout。コード進行を
-最初の事象欄に選び、R4-1（#88, DD-D 解除条件 docs）→ R4-2（#89, `CompositionScore.events.chord_progression`
-構造化欄 + performer grip）→ R4-3（#90, 系列一致率 `chord_sequence_match_rate` を既存 roundtrip
-ハーネスに統合 + draft `chord_events`→`events` 復元 + fixity 事象層対応）で、authored コード進行が
-score→perform→extract→draft→系列一致率→RoundtripField 4値診断の往復を生き残ることを実測根拠付きで
-正規スキーマに入れた。設計判断: degree を **pre-transpose tonic 基準**で算出し `style.transpose` を
-take 摂動として温存（FAITHFUL_TAKE で絶対 root 厳密復元・FIRST_TAKE で進行ごと移調）、閾値
-`CHORD_MATCH_THRESHOLD=0.75` は比較器側に置き Pydantic model に非埋込、chord 欄は source events
-非空時のみ report に追加して既存物理 7 欄の形状を不変に保つ。honesty 規律として grip fixture に
-chord record を捏造せず knob_dead は既存 grip_map 経路を温存（knob 生存の根拠は R4-2 grip テスト）、
-移調不変形レポートと chord grip 実測 fixture は follow-up に defer。R4 で人間非依存タスクは出切り、
-残キュー（K2 Suno 転移 / Q1-5 Ph2）は外部律速（人間生成バッチ / 校正コーパス licensing）。**R2 `BPM_CONFIDENCE_CV_SCALE` 校正は
-#93 で closeout**（#92 loader で実音源 7 本を materialize し `CV_SCALE=5.0` 据え置き確定・
-content-address で licensing 回避）。R1-audio も loader は #92 マージ済で、**2026-06-22 に upload-only 4 本（astral + abc×3）を Drive 化し
-manifest に drive_file_id 付与（#94、Drive `create_file` は MB 級 base64 転送不能のため SendUserFile
-返送→ユーザー Drive→search で id 回収・byte-size 照合の橋渡し、screen 対象 7 本すべて保有）**。
-`wafu_jungle_174`（8 本目）はバイト未取得で `excluded: true` 除外し `fetch_corpus.py` を excluded＝
-unresolved 非計上へ修正、R1 Drive corpus は screen 対象 7/7 で完結。**R1-audio は #97 で closeout**：screen の実音源
-calibratable レコードを R1 箱 `corpus/manifest.yaml` の `takes` へ取り込み（`RoundtripTake` に `drive_file_id`/`excluded`
-追加・screener 専用で corpus_batch 非依存）、箱を `fetch_corpus.py`→`screen_corpus.py` 経路の canonical corpus 化
-（Codex P2 で repo-root 相対 locator を解決＝コミット済 synth も空 drop で resolved、Drive 7 本は sha256-pin）。並行して Q1-5（spectral 計器拡張）を closeout：外部 audio-analyzer
-との実測差分比較で重複コアの同等性を実証しつつ `spectral_profile` の power/magnitude 不整合を発見し、magnitude
-基準 7帯域 `spectral_bands` + `tempo_stability_std` + harmonic/percussive 比を additive 追加（#91、マージ後 A/B/C で
-外部 magnitude 7帯域との一致を実測確認）。次の actionable は Phase 2（既存 power 3帯域の是正と semantic_rules/config
-閾値の magnitude 再校正、校正コーパスの licensing が律速）。並行して**意味層ジャンル語彙拡張**スレッドを開始：
-実音源体験（Portals 管弦を `bass-music` 誤判定）で意味層のオーケストラ語彙欠落が露呈し、`docs/genre_calibration_planning.md`（#98）で
-Tier1/2/3 と Suno 生成校正コーパス方針（プロンプト=ラベル・licensing 回避・本物アンカーで bias 補正）を策定。Phase A（#99）で
-`cultural_context`/`instrumentation` 推定を `semantic_rules.yaml` の宣言ルールへ config 化（条件エンジンに厳密 `_gt`/`_lt` 追加・
-packaged 補完で stale config の silent 退行防止・厳密振る舞い保存）。暫定 orchestral ルールは棄却し Phase B へ defer（純合成 harmonic=1.000>本物管弦 0.813 で倍音性単独では分離不能と実証）。
+現行アクティブスレッドは**意味層ジャンル語彙拡張（Genre Calibration）**。実音源体験で意味層が管弦を
+`bass-music` 誤判定する限界が露呈し、planning（#98）→ Phase A config 化（#99, `cultural_context`/
+`instrumentation` を `semantic_rules.yaml` 宣言ルール化・厳密 `_gt`/`_lt`・packaged 補完）で着手済。
+2026-06-25 に Phase B-1 を実装まで前進：B-1 校正ハーネス（#100, `src/svp_rpe/calibration/` に genre
+ラベル付き manifest + ジャンル別 feature 分布 + ペア分離度/閾値候補レポート + `n<3` を `insufficient`
+とする honesty ゲート + `_feature_value` の `spectral_bands.*` ドット key 解決）と misfire 監査（#101,
+現行ルールを校正コーパスに適用し `genre_label×予測` 混同表を出す計器、verdict なし）をどちらも
+Design Memo→Codex 実装→マージで完走。**初の分離線を実データで実証**：Suno 生成 orchestral n=5（+本物
+Portals）と electronic-dance n=5 を `extract`→`genre-calibrate` し、**brightness 軸で綺麗に分離**
+（brilliance d=6.99 / spectral_centroid 閾値≈2234 / presence / high_ratio が non-overlap）、一方
+**harmonic_ratio と low_ratio は overlap**＝(1) harmonic 単独不可が本物 Portals=0.81 を入れた瞬間に
+EDM 帯へ食い込み再現、(2) `low_ratio` は両ジャンルとも 0.4 超で区別不能＝現行 `bass-music` 誤判定の
+真因を statistically 確定。dynamics は Suno 生成バイアス（広ダイナミクス再現不可）で overlap。次手は
+B-2（brightness ベースの orchestral 判定ルールを `semantic_rules.yaml` へ導出反映）+ seed manifest 確定
++ 本物アンカー増強（Phase C）。標準コンテキスト: 目的2（再現実証）R0–R5・R1-audio・Q1-5 Ph1 は
+closeout 済、外部律速の残キューは K2（人間生成バッチ）/ Q1-5 Ph2（校正コーパス licensing）。
 
 ## Next-Issue Queue
 
@@ -38,14 +25,16 @@ packaged 補完で stale config の silent 退行防止・厳密振る舞い保�
 |---|---|---|---|
 | K2 | Suno 転移検証 | P1 | K1 の tight/loose 判定が Suno/Udio 級で転移するか手動少数バッチ。物理固定・意味差替で「別物」生成を確認済(意味層 grip 有り・耳)だが n=1。律速は人間生成バッチ。controllability_poc.md §5 |
 | Q1-5 Ph2 | spectral 帯域 magnitude 再校正 | P2 | 既存 power 3帯域(`low/mid/high_ratio`)の是正 + `semantic_rules.py`/config 閾値(`low_ratio_min:0.4`/`mid_ratio_min:0.45`/`high_ratio>0.3`)を検証済 magnitude `spectral_bands` 基準へ移行 + `screen_2026-06-16.yaml` 再採取 + `test_metamorphic_probe.py` の `high_ratio==0.0` 前提見直し。閾値再導出の校正コーパスが R1-audio 同様 licensing 律速。Phase 1=#91 マージ済 |
-| Genre Calib Phase B | ジャンル校正コーパス構築 | P2 | Phase A(#99)で config 化済。Suno 生成ジャンル別コーパス(プロンプト=ラベル)+本物アンカーで orchestral 等の閾値導出。入力知見=harmonic 単独不可(純合成=1.000)で多特徴組合せ必須。Design Memo 起案が次手。`docs/genre_calibration_planning.md` Phase B/C |
+| Genre Calib B-2 | brightness ルールを `semantic_rules.yaml` へ導出反映 | P1 | 2026-06-25 の分離線実測で処方箋確定: `bass-music` の `low_ratio>0.4` 判定をやめ／補強し、orchestral を**低 brightness**(`spectral_bands.brilliance<≈0.15` or `spectral_centroid<≈2234` or `high_ratio<≈0.017`)で判定。harmonic / low_ratio は overlap で不可。閾値は candidate（Suno×Suno+本物1点）なので暫定明記。Design Memo 起案が次手。before/after は #101 misfire 監査で対比 |
+| Genre Calib seed 確定 | orchestral+EDM 実測を seed manifest 化 | P2 | 2026-06-25 抽出済(orchestral n=5 sha256+drive_id・EDM n=5 sha256のみ/Drive 未up)を `examples/calibration/genre/manifest.yaml` へ取り込み(現状 Portals/UZA 2点 stub)。measured 値は 2026-06-25 dated log に記録済。EDM の Drive 化 + `prompt:` 本文転記が要 |
+| Genre Calib Phase C | 本物アンカー増強 + bias 検証 | P2 | 分離線は Suno 生成中心(本物 Portals 1点)。実 orchestral/EDM 録音を各数本 content-address 登録し閾値の generator bias(特に dynamics)を測定・補正。律速=本物音源 licensing。`docs/genre_calibration_planning.md` Phase C |
 
 ## Recently Merged
 
 | PR | Title | Date | Phase |
 |---|---|---|---|
+| #101 | feat(calibration): genre misfire 監査（現行ルールを校正コーパスに適用し混同表を出す計器・verdict なし） | 2026-06-25 | Genre Calib B-1b |
+| #100 | feat(calibration): ジャンル校正ハーネス（genre manifest + 分離度/閾値候補レポート + `insufficient` ゲート + `spectral_bands.*` ドット key 解決） | 2026-06-25 | Genre Calib B-1 |
 | #99 | refactor(semantic): ジャンル/楽器推定の config 化（Phase A・厳密振る舞い保存・条件エンジンに `_gt`/`_lt` 追加・packaged 補完・Codex P2×2 解決） | 2026-06-24 | Genre Calib Phase A |
 | #98 | docs(genre-calibration): 意味層ジャンル語彙拡張の planning doc（Tier1/2/3・Suno 校正コーパス方針） | 2026-06-24 | Genre Calib |
 | #97 | feat(R1): screen 由来の実音源 calibratable レコードを R1 箱 manifest に取り込み（箱を screener 経路 canonical 化 + Codex P2 で repo-root locator 解決） | 2026-06-24 | R1 |
-| #96 | test: slow マーカーを per-test 化し日常テストループを高速化（6.5→3.4分、slow 31件に厳選） | 2026-06-23 | infra |
-| #95 | docs: ドキュメント整合性リファクタ（Architecture ツリー同期 + 鮮度監査ドリフト13件修正） | 2026-06-23 | infra |
