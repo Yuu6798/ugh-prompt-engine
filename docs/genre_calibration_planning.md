@@ -189,9 +189,26 @@ Portals 型 misfire（orchestral seed が `low_ratio > 0.4` により `bass-musi
 を B-2 前に固定する。`mismatch` は期待 context との交差がない sample を探すための
 記述マーカーに留め、正解率や合否集計は出さない。
 
-**B-2 残課題**: Suno 生成バッチで各ジャンル n>=3 を満たす校正 corpus を作り、非重なり
-feature から出た候補をレビューして `semantic_rules.yaml` へ反映する。B-1 seed の
-`insufficient` は期待状態であり、閾値確定を急がないための honesty gate とする。
+#### Phase B-2 実績 — brightness split for orchestral / bass-music（2026-06-25）
+
+B-2 では B-1/B-1b の箱を使って、`low_ratio > 0.4` 単独で Portals 型の管弦素材が
+`bass-music` に吸われる誤判定を是正する。実測上、orchestral は低域が厚いが暗く
+（`high_ratio` 0.0001-0.0121）、electronic-dance は低域が厚く明るい
+（`high_ratio` 0.0219-0.0494）。その中点として暫定 `high_ratio=0.017` を採用し、
+厚い素材だけを明暗で二分する。
+
+- `bass-music`: `{low_ratio_gt: 0.4, high_ratio_gt: 0.017}`
+- `cinematic/orchestral`: `{low_ratio_gt: 0.4, high_ratio_lt: 0.017}`
+- 既存の `valley_depth > 0.3` による `cinematic/orchestral` 経路は温存する。
+
+この閾値は暫定であり、Q1-5 Ph2 で rule 族を power 比
+（`spectral_profile.low_ratio/mid_ratio/high_ratio`）から magnitude 7 帯域
+（特に `spectral_bands.brilliance`）へ移すときに再校正する。B-2 では
+`high_ratio` が必須欄で後方互換性が高いことを優先し、Optional な `spectral_bands` には
+まだ依存しない。
+
+**残課題**: Phase C で本物アンカーを増やし、B-2 の 0.017 暫定線が real anchor でも
+通用するかを検証する。Q1-5 Ph2 では magnitude ベースの brightness 指標へ移行する。
 
 ### Phase C — 本物アンカー検証
 
@@ -206,7 +223,7 @@ feature から出た候補をレビューして `semantic_rules.yaml` へ反映�
 |---|---|
 | 生成器バイアス（Suno≠本物） | 本物アンカーで bias を測定・補正（Phase C）。AI 音楽分析が目的なら許容 |
 | Suno のラベル不準拠（key/genre 流れ） | 採用前の耳チェックを手順化 |
-| 暫定閾値の過信 | Phase A の閾値は「暫定」と明記、回帰テストは方向性のみ固定（精密値は固定しない） |
+| 暫定閾値の過信 | Phase A/B-2 の閾値は「暫定」と明記、回帰テストは方向性のみ固定（精密値は固定しない） |
 | 学習モデルへの誘惑 | Tier 3 は `learned_models_policy.md` の隔離原則厳守。rule evidence に混入させない |
 | ルールベースの原理的限界 | `estimation_disclaimer`（意味層は真値でない）を維持。本計画は解像度向上であり意味理解ではない |
 

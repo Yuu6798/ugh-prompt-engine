@@ -45,7 +45,7 @@ def _assert_no_outcome_keys(value: Any) -> None:
             _assert_no_outcome_keys(child)
 
 
-def test_orchestral_seed_misfires_as_bass_music() -> None:
+def test_bright_low_heavy_orchestral_label_is_reported_as_mismatch() -> None:
     report = run_genre_misfire_audit(
         _manifest(
             [
@@ -71,12 +71,12 @@ def test_orchestral_seed_misfires_as_bass_music() -> None:
     assert prediction.mismatch is True
 
 
-def test_seed_manifest_pins_portals_before_baseline() -> None:
+def test_seed_manifest_uses_current_brightness_split() -> None:
     report = run_genre_misfire_audit(load_genre_manifest(SEED_MANIFEST), repo_root=ROOT)
 
     portals = next(item for item in report.predictions if item.id == "portals")
-    assert "bass-music" in portals.predicted_cultural_context
-    assert report.confusion["orchestral"]["bass-music"] == 1
+    assert portals.predicted_cultural_context == ["cinematic/orchestral"]
+    assert report.confusion["orchestral"]["cinematic/orchestral"] == 1
 
 
 def test_audit_uses_backfilled_production_genre_sections(monkeypatch) -> None:
@@ -88,14 +88,14 @@ def test_audit_uses_backfilled_production_genre_sections(monkeypatch) -> None:
                 _sample(
                     "orch-low-heavy",
                     "orchestral",
-                    {"low_ratio": 0.45, "valley_depth": 0.10},
+                    {"low_ratio": 0.45, "high_ratio": 0.005, "valley_depth": 0.10},
                 )
             ]
         ),
         repo_root=ROOT,
     )
 
-    assert report.confusion["orchestral"]["bass-music"] == 1
+    assert report.confusion["orchestral"]["cinematic/orchestral"] == 1
 
 
 def test_electronic_seed_uses_current_dance_rule_without_mismatch() -> None:
@@ -199,7 +199,11 @@ def test_cli_text_and_json_smoke(tmp_path: Path) -> None:
                         "genre_label": "orchestral",
                         "generator": "fixture",
                         "prompt": "fixture",
-                        "measured": {"low_ratio": 0.45, "valley_depth": 0.1},
+                        "measured": {
+                            "low_ratio": 0.45,
+                            "high_ratio": 0.005,
+                            "valley_depth": 0.1,
+                        },
                     }
                 ],
             },
@@ -212,7 +216,7 @@ def test_cli_text_and_json_smoke(tmp_path: Path) -> None:
     text_result = runner.invoke(app, ["genre-audit", str(manifest_path)])
     assert text_result.exit_code == 0
     assert "Genre Misfire Audit" in text_result.output
-    assert "bass-music" in text_result.output
+    assert "cinematic/orchestral" in text_result.output
 
     out = tmp_path / "audit.json"
     json_result = runner.invoke(
@@ -221,5 +225,5 @@ def test_cli_text_and_json_smoke(tmp_path: Path) -> None:
     )
     assert json_result.exit_code == 0
     payload = json.loads(out.read_text(encoding="utf-8"))
-    assert payload["confusion"]["orchestral"]["bass-music"] == 1
+    assert payload["confusion"]["orchestral"]["cinematic/orchestral"] == 1
     _assert_no_outcome_keys(payload)
