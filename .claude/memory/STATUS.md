@@ -26,8 +26,12 @@ electronic-dance n=5（measured + sha256 prefix + orchestral の drive_id）を 
 B-2 brightness split が実 seed で orchestral→cinematic/orchestral 6/6・EDM→bass-music 5/5・誤判定 0 を
 恒久ガード化（honesty: full sha256/Suno prompt 本文は未保全のため prefix/PENDING に分離、EDM の Drive 化は
 follow-up）。**重要な副産物：seed が実 magnitude `spectral_bands` を repo 内に保有したことで Q1-5 Ph2 の
-brightness ルール magnitude 移行が新規音源なしで部分着手可能になった**（次アクション B-3）。
-残るは解像度向上系（B-3 brightness magnitude 移行 / Phase C 本物アンカー増強 / 3ジャンル目以降）。標準コンテキスト:
+brightness ルール magnitude 移行が新規音源なしで部分着手可能になった**。続けて **B-3（#104）で
+brightness 判定を magnitude `brilliance` へ移行 closeout**：collect-all エンジンに feature 不在を条件化する
+`_absent` 演算子を新設し、`spectral_bands` あり→`brilliance`(thr≈0.1537) 一次判定 / 欠落→既存 power
+`high_ratio` 経路へ fallback の相互排他を実現（bands-absent 既存回帰テストは無改変で green、二重発火なし、
+snapshot 不変、seed confusion 6/5 維持）。post-merge 検証で ruff + 66 tests green を確認。
+残るは解像度向上系（Phase C 本物アンカー増強 / Q1-5 Ph2 残帯域 / 3ジャンル目以降）。標準コンテキスト:
 目的2（再現実証）R0–R5・R1-audio・Q1-5 Ph1 は closeout 済、外部律速の残キューは K2（人間生成バッチ）/
 Q1-5 Ph2 の最終校正コーパス breadth（licensing）。
 
@@ -35,7 +39,6 @@ Q1-5 Ph2 の最終校正コーパス breadth（licensing）。
 
 | ID | Title | Priority | Notes |
 |---|---|---|---|
-| Genre Calib B-3 | brightness ルールを magnitude `brilliance` へ移行 | P1 | B-2 の暫定 power `high_ratio>0.017` を最強判別子 `spectral_bands.brilliance`(d=6.99 / thr≈0.1537)ベースへ置換。#103 seed が実 magnitude 帯域を repo 内に保有したため新規音源なしで着手可。要設計: `spectral_bands` Optional の後方互換(欠落時は既存 power 経路へ fallback)・回帰は方向性のみ固定・misfire audit で before/after 対比。Design Memo 起案済(本セッション) |
 | K2 | Suno 転移検証 | P1 | K1 の tight/loose 判定が Suno/Udio 級で転移するか手動少数バッチ。物理固定・意味差替で「別物」生成を確認済(意味層 grip 有り・耳)だが n=1。律速は人間生成バッチ。controllability_poc.md §5 |
 | Q1-5 Ph2 | spectral 帯域 magnitude 再校正(残) | P2 | B-3 で brightness 系は magnitude 移行。残=他 power 帯域(`low/mid_ratio`)是正 + `screen_2026-06-16.yaml` 再採取 + `test_metamorphic_probe.py` の `high_ratio==0.0` 前提見直し + 校正コーパス breadth(licensing 律速)。Phase 1=#91 マージ済 |
 | Genre Calib Phase C | 本物アンカー増強 + bias 検証 | P2 | 分離線は Suno 生成中心(本物 Portals 1点)。実 orchestral/EDM 録音を各数本 content-address 登録し閾値の generator bias(特に dynamics)を測定・補正。律速=本物音源 licensing。`docs/genre_calibration_planning.md` Phase C |
@@ -46,6 +49,7 @@ Q1-5 Ph2 の最終校正コーパス breadth（licensing）。
 
 | PR | Title | Date | Phase |
 |---|---|---|---|
+| #104 | feat(semantic): brightness split を magnitude brilliance へ移行（B-3・`_absent` 演算子新設で bands あり→brilliance 一次/欠落→power high_ratio fallback の相互排他・回帰無改変 green・二重発火なし） | 2026-06-25 | Genre Calib B-3 |
 | #103 | feat(calibration): genre seed manifest を実 Suno 実測 10 本で確定（orchestral n=5 + electronic-dance n=5 を measured インライン保全・2 点 stub→n=12・B-2 split の誤判定 0 を恒久ガード化） | 2026-06-25 | Genre Calib seed |
 | #102 | feat(semantic): brightness で orchestral/bass-music を分離（B-2・`low_ratio>0.4` を `high_ratio` 0.017 で明暗二分・管弦の bass-music 誤判定を是正・synth 不変） | 2026-06-25 | Genre Calib B-2 |
 | #101 | feat(calibration): genre misfire 監査（現行ルールを校正コーパスに適用し混同表を出す計器・verdict なし） | 2026-06-25 | Genre Calib B-1b |
