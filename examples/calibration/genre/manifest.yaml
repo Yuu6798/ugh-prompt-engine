@@ -1,4 +1,19 @@
 schema_version: "1.0"
+# Genre calibration seed corpus.
+#
+# Provenance / honesty notes:
+# - portals / uza は本物アンカーの暫定 stub（spectral_bands 未計測・観測ログ由来）。
+# - orchestral_* / electronic_dance_* は 2026-06-25 セッションで実 Suno 音源を
+#   `extract` した measured 値（小数4桁）。container は ephemeral で音源は session
+#   添付（既に消失）。再取得コスト回避のため measured を本 manifest にインライン保全。
+#   analyze は `sample.measured` があればそれを直接使う（audio_hash/locator は
+#   provenance 専用で解析には不要）。
+# - audio_hash: 2026-06-25 dated log には sha256 の先頭 8 桁のみ保全（full hash は
+#   ephemeral extract で消失）。検証用フィールドとして full hash がないため
+#   audio_hash は未設定とし、prefix は notes に provenance として記録する。
+# - drive_file_id: orchestral 5 本は Drive アップロード済（既知 ID）。EDM 5 本は
+#   Drive 未アップロード（follow-up: Drive 化 → drive_file_id 回収）。
+# - prompt: Suno 生成プロンプト本文は未転記（follow-up）。捏造を避け PENDING を明記。
 samples:
   - id: portals
     genre_label: orchestral
@@ -28,3 +43,268 @@ samples:
       dynamic_range_db: 3.98
     notes:
       - "暫定 seed。spectral_bands 未計測。Suno 量産と Phase C 本物アンカーで再校正。"
+
+  - id: orchestral_01
+    genre_label: orchestral
+    generator: suno
+    prompt: "PENDING: Suno prompt 本文未転記（2026-06-25 ephemeral extract）"
+    audio_locator: drive
+    drive_file_id: 1lYiyuHYEB701OXSUT_kSwGb0CFecEmBp
+    measured:
+      harmonic_ratio: 0.9545
+      percussive_ratio: 0.0455
+      spectral_centroid: 1615.20
+      dynamic_range_db: 10.22
+      valley_depth: 0.0944
+      low_ratio: 0.5742
+      mid_ratio: 0.4193
+      high_ratio: 0.0066
+      spectral_bands:
+        sub_bass: 0.0687
+        bass: 0.1936
+        low_mid: 0.1341
+        mid: 0.2820
+        high_mid: 0.1798
+        presence: 0.0621
+        brilliance: 0.0797
+    notes:
+      - "sha256 prefix a33cce85 (full hash は 2026-06-25 ephemeral extract で消失、音源は Drive)。ear-checked。"
+
+  - id: orchestral_02
+    genre_label: orchestral
+    generator: suno
+    prompt: "PENDING: Suno prompt 本文未転記（2026-06-25 ephemeral extract）"
+    audio_locator: drive
+    drive_file_id: 16nMGUghWfLmrsmQkeZg8hLoe2qhuXnw0
+    measured:
+      harmonic_ratio: 0.9868
+      percussive_ratio: 0.0132
+      spectral_centroid: 643.49
+      dynamic_range_db: 14.19
+      valley_depth: 0.1028
+      low_ratio: 0.7096
+      mid_ratio: 0.2903
+      high_ratio: 0.0001
+      spectral_bands:
+        sub_bass: 0.0271
+        bass: 0.4235
+        low_mid: 0.2515
+        mid: 0.2261
+        high_mid: 0.0499
+        presence: 0.0085
+        brilliance: 0.0134
+    notes:
+      - "sha256 prefix 2364b98b (full hash は 2026-06-25 ephemeral extract で消失、音源は Drive)。ear-checked。"
+
+  - id: orchestral_03
+    genre_label: orchestral
+    generator: suno
+    prompt: "PENDING: Suno prompt 本文未転記（2026-06-25 ephemeral extract）"
+    audio_locator: drive
+    drive_file_id: 1Knbqjn4MXs8-j0r3FJX2ACd9wp1v7-IC
+    measured:
+      harmonic_ratio: 0.9250
+      percussive_ratio: 0.0750
+      spectral_centroid: 1994.63
+      dynamic_range_db: 4.84
+      valley_depth: 0.0658
+      low_ratio: 0.5509
+      mid_ratio: 0.4370
+      high_ratio: 0.0121
+      spectral_bands:
+        sub_bass: 0.0285
+        bass: 0.2113
+        low_mid: 0.1057
+        mid: 0.2763
+        high_mid: 0.2085
+        presence: 0.0743
+        brilliance: 0.0954
+    notes:
+      - "sha256 prefix 9684d781 (full hash は 2026-06-25 ephemeral extract で消失、音源は Drive)。ear-checked。"
+
+  - id: orchestral_04
+    genre_label: orchestral
+    generator: suno
+    prompt: "PENDING: Suno prompt 本文未転記（2026-06-25 ephemeral extract）"
+    audio_locator: drive
+    drive_file_id: 1WBliwbC9BwbxRNl2MVw_u3xB0UHlQrxe
+    measured:
+      harmonic_ratio: 0.9515
+      percussive_ratio: 0.0485
+      spectral_centroid: 981.29
+      dynamic_range_db: 9.82
+      valley_depth: 0.0898
+      low_ratio: 0.7747
+      mid_ratio: 0.2238
+      high_ratio: 0.0015
+      spectral_bands:
+        sub_bass: 0.0731
+        bass: 0.3320
+        low_mid: 0.1623
+        mid: 0.2398
+        high_mid: 0.1266
+        presence: 0.0346
+        brilliance: 0.0316
+    notes:
+      - "sha256 prefix 298879c1 (full hash は 2026-06-25 ephemeral extract で消失、音源は Drive)。ear-checked。"
+
+  - id: orchestral_05
+    genre_label: orchestral
+    generator: suno
+    prompt: "PENDING: Suno prompt 本文未転記（2026-06-25 ephemeral extract）"
+    audio_locator: drive
+    drive_file_id: 1ejz_OVIOAeHEdRGEoovccTe9s-A13INN
+    measured:
+      harmonic_ratio: 0.9878
+      percussive_ratio: 0.0122
+      spectral_centroid: 1085.87
+      dynamic_range_db: 13.83
+      valley_depth: 0.0929
+      low_ratio: 0.6745
+      mid_ratio: 0.3246
+      high_ratio: 0.0009
+      spectral_bands:
+        sub_bass: 0.0541
+        bass: 0.2842
+        low_mid: 0.1739
+        mid: 0.3214
+        high_mid: 0.1068
+        presence: 0.0287
+        brilliance: 0.0309
+    notes:
+      - "sha256 prefix adcc4357 (full hash は 2026-06-25 ephemeral extract で消失、音源は Drive)。ear-checked。"
+
+  - id: electronic_dance_01
+    genre_label: electronic-dance
+    generator: suno
+    prompt: "PENDING: Suno prompt 本文未転記（2026-06-25 ephemeral extract）"
+    audio_locator: pending
+    drive_file_id: null
+    measured:
+      harmonic_ratio: 0.8476
+      percussive_ratio: 0.1524
+      spectral_centroid: 3358.43
+      dynamic_range_db: 9.04
+      valley_depth: 0.1062
+      low_ratio: 0.8109
+      mid_ratio: 0.1471
+      high_ratio: 0.0420
+      spectral_bands:
+        sub_bass: 0.0593
+        bass: 0.1519
+        low_mid: 0.0526
+        mid: 0.1790
+        high_mid: 0.1790
+        presence: 0.1274
+        brilliance: 0.2508
+    notes:
+      - "sha256 prefix dbcfde17 (full hash は 2026-06-25 ephemeral extract で消失)。ear-checked。"
+      - "follow-up: Drive アップロード → drive_file_id 回収。"
+
+  - id: electronic_dance_02
+    genre_label: electronic-dance
+    generator: suno
+    prompt: "PENDING: Suno prompt 本文未転記（2026-06-25 ephemeral extract）"
+    audio_locator: pending
+    drive_file_id: null
+    measured:
+      harmonic_ratio: 0.8479
+      percussive_ratio: 0.1521
+      spectral_centroid: 2764.83
+      dynamic_range_db: 12.23
+      valley_depth: 0.1499
+      low_ratio: 0.8325
+      mid_ratio: 0.1412
+      high_ratio: 0.0263
+      spectral_bands:
+        sub_bass: 0.1036
+        bass: 0.1499
+        low_mid: 0.0646
+        mid: 0.1895
+        high_mid: 0.1679
+        presence: 0.1126
+        brilliance: 0.2119
+    notes:
+      - "sha256 prefix 471b1cdc (full hash は 2026-06-25 ephemeral extract で消失)。ear-checked。"
+      - "follow-up: Drive アップロード → drive_file_id 回収。"
+
+  - id: electronic_dance_03
+    genre_label: electronic-dance
+    generator: suno
+    prompt: "PENDING: Suno prompt 本文未転記（2026-06-25 ephemeral extract）"
+    audio_locator: pending
+    drive_file_id: null
+    measured:
+      harmonic_ratio: 0.8232
+      percussive_ratio: 0.1768
+      spectral_centroid: 2472.86
+      dynamic_range_db: 11.62
+      valley_depth: 0.1368
+      low_ratio: 0.8984
+      mid_ratio: 0.0797
+      high_ratio: 0.0219
+      spectral_bands:
+        sub_bass: 0.1000
+        bass: 0.2432
+        low_mid: 0.0755
+        mid: 0.1346
+        high_mid: 0.1362
+        presence: 0.0984
+        brilliance: 0.2122
+    notes:
+      - "sha256 prefix 151e90da (full hash は 2026-06-25 ephemeral extract で消失)。ear-checked。"
+      - "follow-up: Drive アップロード → drive_file_id 回収。"
+
+  - id: electronic_dance_04
+    genre_label: electronic-dance
+    generator: suno
+    prompt: "PENDING: Suno prompt 本文未転記（2026-06-25 ephemeral extract）"
+    audio_locator: pending
+    drive_file_id: null
+    measured:
+      harmonic_ratio: 0.8240
+      percussive_ratio: 0.1760
+      spectral_centroid: 3143.55
+      dynamic_range_db: 6.10
+      valley_depth: 0.0519
+      low_ratio: 0.7073
+      mid_ratio: 0.2433
+      high_ratio: 0.0494
+      spectral_bands:
+        sub_bass: 0.0570
+        bass: 0.1308
+        low_mid: 0.0406
+        mid: 0.1847
+        high_mid: 0.2408
+        presence: 0.1317
+        brilliance: 0.2143
+    notes:
+      - "sha256 prefix c8a51ec1 (full hash は 2026-06-25 ephemeral extract で消失)。ear-checked。"
+      - "follow-up: Drive アップロード → drive_file_id 回収。"
+
+  - id: electronic_dance_05
+    genre_label: electronic-dance
+    generator: suno
+    prompt: "PENDING: Suno prompt 本文未転記（2026-06-25 ephemeral extract）"
+    audio_locator: pending
+    drive_file_id: null
+    measured:
+      harmonic_ratio: 0.8804
+      percussive_ratio: 0.1196
+      spectral_centroid: 3253.36
+      dynamic_range_db: 8.20
+      valley_depth: 0.1212
+      low_ratio: 0.7920
+      mid_ratio: 0.1698
+      high_ratio: 0.0382
+      spectral_bands:
+        sub_bass: 0.0569
+        bass: 0.1625
+        low_mid: 0.0541
+        mid: 0.1914
+        high_mid: 0.1721
+        presence: 0.1230
+        brilliance: 0.2399
+    notes:
+      - "sha256 prefix 38fe6b88 (full hash は 2026-06-25 ephemeral extract で消失)。ear-checked。"
+      - "follow-up: Drive アップロード → drive_file_id 回収。"
