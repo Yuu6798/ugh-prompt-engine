@@ -688,6 +688,43 @@ def genre_calibrate(
         typer.echo(content)
 
 
+@app.command("genre-audit")
+def genre_audit(
+    manifest: str = typer.Argument(..., help="Path to genre calibration manifest YAML"),
+    output_format: str = typer.Option(
+        "text",
+        "--format",
+        click_type=click.Choice(["text", "json"]),
+        help="Output format: text | json",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output", help="Output file path"),
+) -> None:
+    """Audit current genre rules against a labeled calibration manifest."""
+
+    from svp_rpe.calibration import (
+        load_genre_manifest,
+        render_misfire_audit_text,
+        run_genre_misfire_audit,
+    )
+
+    manifest_path = Path(manifest)
+    corpus = load_genre_manifest(manifest_path)
+    report = run_genre_misfire_audit(corpus, repo_root=_manifest_checkout_root(manifest_path))
+    if output_format == "json":
+        content = json.dumps(
+            report.model_dump(mode="json"),
+            ensure_ascii=False,
+            indent=2,
+        )
+    else:
+        content = render_misfire_audit_text(report)
+
+    if output:
+        Path(output).write_text(content, encoding="utf-8")
+    else:
+        typer.echo(content)
+
+
 def _manifest_checkout_root(manifest_path: str | Path) -> Path:
     """Infer the checkout root for repo-relative locators in a manifest."""
 

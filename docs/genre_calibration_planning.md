@@ -176,6 +176,19 @@ R1-audio の content-addressed box-first 方針と同じく、データ量産や
 - `spectral_bands.<band>` を semantic rule condition key として解決可能にし、B-2 で
   magnitude 7 帯域を rule 条件へ使える入口を作る。既存 scalar key の挙動は不変。
 
+#### Phase B-1b 実績 — misfire audit（2026-06-25）
+
+B-1b では閾値を直さず、現行 `semantic_rules.yaml` の `cultural_context` /
+`instrumentation` が校正 manifest をどう分類するかだけを計測する before ベースラインを
+追加する。`svprpe genre-audit <manifest> --format text|json` は production と同じ
+`load_config("semantic_rules")` + `_backfill_genre_sections` 経路でルールを適用し、
+`genre_label` × predicted `cultural_context` の混同表と per-sample 予測を出す。
+
+この audit は計器であって裁判官ではない。pass/fail や verdict は出さず、既知の
+Portals 型 misfire（orchestral seed が `low_ratio > 0.4` により `bass-music` へ吸われる）
+を B-2 前に固定する。`mismatch` は期待 context との交差がない sample を探すための
+記述マーカーに留め、正解率や合否集計は出さない。
+
 **B-2 残課題**: Suno 生成バッチで各ジャンル n>=3 を満たす校正 corpus を作り、非重なり
 feature から出た候補をレビューして `semantic_rules.yaml` へ反映する。B-1 seed の
 `insufficient` は期待状態であり、閾値確定を急がないための honesty gate とする。

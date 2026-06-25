@@ -10,6 +10,8 @@ samples:
       percussive_ratio: 0.19
       spectral_centroid: 1588
       dynamic_range_db: 18.9
+      low_ratio: 0.45
+      valley_depth: 0.16
     notes:
       - "暫定 seed。spectral_bands 未計測。閾値確定は B-2 の Suno 量産後。"
 
