@@ -67,6 +67,8 @@ def _fmt(value: Any) -> str:
 
 
 def _condition_key(raw_key: str) -> tuple[str, str]:
+    if raw_key.endswith("_absent"):
+        return raw_key[: -len("_absent")], "absent"
     if raw_key.endswith("_min"):
         return raw_key[: -len("_min")], ">="
     if raw_key.endswith("_max"):
@@ -97,6 +99,10 @@ def _condition_evidence(condition: Mapping[str, Any], phys: PhysicalRPE) -> Opti
     def evidence_for(raw_key: str, expected: Any) -> Optional[str]:
         feature_name, operator = _condition_key(raw_key)
         actual = _feature_value(feature_name, phys)
+        if operator == "absent":
+            if bool(expected) and actual is None:
+                return f"{feature_name} absent"
+            return None
         if actual is None or not matches(operator, actual, expected):
             return None
         return f"{feature_name}={_fmt(actual)} {operator} {_fmt(expected)}"

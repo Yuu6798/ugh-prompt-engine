@@ -168,6 +168,19 @@ def _make_physical_genre(
     )
 
 
+def _with_brilliance(phys: PhysicalRPE, brilliance: float) -> PhysicalRPE:
+    phys.spectral_bands = SpectralBands(
+        sub_bass=0.05,
+        bass=0.10,
+        low_mid=0.10,
+        mid=0.20,
+        high_mid=0.20,
+        presence=0.15,
+        brilliance=brilliance,
+    )
+    return phys
+
+
 def test_high_valley_material_gets_cinematic_context() -> None:
     # 旧ハードコード valley_depth>0.3 -> cinematic/orchestral を config 化後も温存。
     semantic = generate_semantic(
@@ -252,6 +265,67 @@ def test_thin_dark_synth_material_does_not_fire_genre_split() -> None:
             valley_depth=0.10,
         )
     )
+
+    assert "bass-music" not in semantic.cultural_context
+    assert "cinematic/orchestral" not in semantic.cultural_context
+
+
+def test_bands_present_bright_brilliance_uses_bass_music_without_power_double_fire() -> None:
+    phys = _with_brilliance(
+        _make_physical_genre(
+            harmonic_ratio=0.71,
+            spectral_centroid=3735.0,
+            low_ratio=0.80,
+            mid_ratio=0.195,
+            high_ratio=0.005,  # power fallback would be dark if it were allowed
+            bpm=129.0,
+            active_rate=0.98,
+            valley_depth=0.07,
+        ),
+        brilliance=0.25,
+    )
+
+    semantic = generate_semantic(phys)
+
+    assert semantic.cultural_context == ["bass-music"]
+
+
+def test_bands_present_dark_brilliance_uses_orchestral_without_power_double_fire() -> None:
+    phys = _with_brilliance(
+        _make_physical_genre(
+            harmonic_ratio=0.81,
+            spectral_centroid=1588.0,
+            low_ratio=0.65,
+            mid_ratio=0.315,
+            high_ratio=0.035,  # power fallback would be bright if it were allowed
+            bpm=100.0,
+            active_rate=0.6,
+            valley_depth=0.10,
+        ),
+        brilliance=0.05,
+    )
+
+    semantic = generate_semantic(phys)
+
+    assert semantic.cultural_context == ["cinematic/orchestral"]
+
+
+def test_bands_present_brightness_split_still_requires_low_heavy_material() -> None:
+    phys = _with_brilliance(
+        _make_physical_genre(
+            harmonic_ratio=1.0,
+            spectral_centroid=3200.0,
+            low_ratio=0.12,
+            mid_ratio=0.38,
+            high_ratio=0.50,
+            bpm=120.0,
+            active_rate=0.5,
+            valley_depth=0.10,
+        ),
+        brilliance=0.25,
+    )
+
+    semantic = generate_semantic(phys)
 
     assert "bass-music" not in semantic.cultural_context
     assert "cinematic/orchestral" not in semantic.cultural_context
