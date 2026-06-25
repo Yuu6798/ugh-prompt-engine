@@ -11,11 +11,13 @@ import svp_rpe.calibration.audit as audit_module
 from svp_rpe.calibration import (
     GenreCorpusManifest,
     GenreSample,
+    load_genre_manifest,
     run_genre_misfire_audit,
 )
 from svp_rpe.cli import app
 
 ROOT = Path(__file__).resolve().parents[1]
+SEED_MANIFEST = ROOT / "examples" / "calibration" / "genre" / "manifest.yaml"
 
 
 def _sample(sample_id: str, genre: str, measured: dict[str, Any]) -> GenreSample:
@@ -67,6 +69,14 @@ def test_orchestral_seed_misfires_as_bass_music() -> None:
     assert "cinematic/orchestral" not in prediction.predicted_cultural_context
     assert report.confusion["orchestral"]["bass-music"] >= 1
     assert prediction.mismatch is True
+
+
+def test_seed_manifest_pins_portals_before_baseline() -> None:
+    report = run_genre_misfire_audit(load_genre_manifest(SEED_MANIFEST), repo_root=ROOT)
+
+    portals = next(item for item in report.predictions if item.id == "portals")
+    assert "bass-music" in portals.predicted_cultural_context
+    assert report.confusion["orchestral"]["bass-music"] == 1
 
 
 def test_audit_uses_backfilled_production_genre_sections(monkeypatch) -> None:
