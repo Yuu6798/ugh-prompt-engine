@@ -203,6 +203,60 @@ def test_bass_music_genre_inference() -> None:
     assert semantic.instrumentation_summary == "Bass-heavy production with prominent low-end"
 
 
+def test_dark_low_heavy_material_gets_orchestral_context_not_bass_music() -> None:
+    semantic = generate_semantic(
+        _make_physical_genre(
+            harmonic_ratio=0.81,
+            spectral_centroid=1588.0,
+            low_ratio=0.65,
+            mid_ratio=0.345,
+            high_ratio=0.005,
+            bpm=100.0,
+            active_rate=0.6,
+            valley_depth=0.10,
+        )
+    )
+
+    assert semantic.cultural_context == ["cinematic/orchestral"]
+    assert "bass-music" not in semantic.cultural_context
+
+
+def test_bright_low_heavy_material_keeps_bass_music_context() -> None:
+    semantic = generate_semantic(
+        _make_physical_genre(
+            harmonic_ratio=0.71,
+            spectral_centroid=3735.0,
+            low_ratio=0.80,
+            mid_ratio=0.165,
+            high_ratio=0.035,
+            bpm=129.0,
+            active_rate=0.98,
+            valley_depth=0.07,
+        )
+    )
+
+    assert "bass-music" in semantic.cultural_context
+    assert "cinematic/orchestral" not in semantic.cultural_context
+
+
+def test_thin_dark_synth_material_does_not_fire_genre_split() -> None:
+    semantic = generate_semantic(
+        _make_physical_genre(
+            harmonic_ratio=1.0,
+            spectral_centroid=700.0,
+            low_ratio=0.12,
+            mid_ratio=0.88,
+            high_ratio=0.0,
+            bpm=120.0,
+            active_rate=0.5,
+            valley_depth=0.10,
+        )
+    )
+
+    assert "bass-music" not in semantic.cultural_context
+    assert "cinematic/orchestral" not in semantic.cultural_context
+
+
 def test_genre_inference_backward_compatible_without_harmonic_ratio() -> None:
     # harmonic_ratio 欠落（旧 RPE）でもレガシー経路を温存（electronic/dance）。
     semantic = generate_semantic(
@@ -268,6 +322,20 @@ def test_genre_rules_preserve_strict_boundaries() -> None:
         )
     )
     assert boundary.cultural_context == ["general"]
+
+    brightness_split_boundary = generate_semantic(
+        _make_physical_genre(
+            harmonic_ratio=None,
+            spectral_centroid=2000.0,
+            low_ratio=0.65,
+            mid_ratio=0.333,
+            high_ratio=0.017,  # exact boundary -> neither _gt nor _lt branch fires
+            bpm=120.0,
+            active_rate=0.5,
+            valley_depth=0.10,
+        )
+    )
+    assert brightness_split_boundary.cultural_context == ["general"]
 
     just_below_ambient = generate_semantic(
         _make_physical_genre(

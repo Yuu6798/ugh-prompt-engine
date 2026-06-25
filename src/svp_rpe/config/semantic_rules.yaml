@@ -72,10 +72,10 @@ semantic_hypothesis:
 # 条件演算子: _min(>=)/_max(<=)/_gt(>)/_lt(<)/==。旧ハードコードは厳密 >/< だったため
 # _gt/_lt で**境界まで完全に等価**に温存する（bpm==140 等の knob 値でも挙動不変）。
 #
-# orchestral 検出ルールは Phase B に defer。手元データで harmonic_ratio が
-# orchestral の判別子として不十分と判明したため（純合成音=1.000 > 本物管弦 Portals=0.813、
-# 電子 UZA=0.705。倍音性だけでは「管弦」と「整数次倍音の合成音」を分離できない）。
-# 校正コーパスでの閾値導出は docs/genre_calibration_planning.md Phase B 参照。
+# orchestral/bass-music の low-heavy 分離は Phase B-2 の暫定線。
+# harmonic_ratio 単独は orchestral の判別子として不十分だったため、同じ power 比族の
+# high_ratio=0.017 で厚い素材を暗い管弦 / 明るい bass-music に分ける。
+# Q1-5 Ph2 で spectral_bands.brilliance 等の magnitude 7 帯域へ再校正する。
 cultural_context:
   default: general
   rules:
@@ -86,8 +86,11 @@ cultural_context:
       condition: {bpm_lt: 90}
       context: ambient/downtempo
     - id: ctx.bass_music
-      condition: {low_ratio_gt: 0.4}
+      condition: {low_ratio_gt: 0.4, high_ratio_gt: 0.017}
       context: bass-music
+    - id: ctx.orchestral
+      condition: {low_ratio_gt: 0.4, high_ratio_lt: 0.017}
+      context: cinematic/orchestral
     - id: ctx.cinematic_dynamic
       condition: {valley_depth_gt: 0.3}
       context: cinematic/orchestral

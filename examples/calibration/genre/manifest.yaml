@@ -11,9 +11,10 @@ samples:
       spectral_centroid: 1588
       dynamic_range_db: 18.9
       low_ratio: 0.45
+      high_ratio: 0.005
       valley_depth: 0.16
     notes:
-      - "暫定 seed。spectral_bands 未計測。閾値確定は B-2 の Suno 量産後。"
+      - "暫定 seed。spectral_bands 未計測。B-2 は power high_ratio 暫定線、Q1-5 Ph2 で再校正。"
 
   - id: uza
     genre_label: electronic
@@ -26,4 +27,4 @@ samples:
       spectral_centroid: 3735
       dynamic_range_db: 3.98
     notes:
-      - "暫定 seed。spectral_bands 未計測。閾値確定は B-2 の Suno 量産後。"
+      - "暫定 seed。spectral_bands 未計測。Suno 量産と Phase C 本物アンカーで再校正。"
