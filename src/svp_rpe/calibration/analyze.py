@@ -174,15 +174,15 @@ def _sample_measured(
     *,
     repo_root: Path,
 ) -> dict[str, Any] | None:
+    audio_path = _resolve_audio_path(sample, repo_root=repo_root)
+    if audio_path is not None:
+        from svp_rpe.rpe.extractor import extract_rpe_from_file
+
+        bundle = extract_rpe_from_file(str(audio_path))
+        return bundle.physical.model_dump(mode="json")
     if sample.measured is not None:
         return dict(sample.measured)
-    audio_path = _resolve_audio_path(sample, repo_root=repo_root)
-    if audio_path is None:
-        return None
-    from svp_rpe.rpe.extractor import extract_rpe_from_file
-
-    bundle = extract_rpe_from_file(str(audio_path))
-    return bundle.physical.model_dump(mode="json")
+    return None
 
 
 def _resolve_audio_path(sample: GenreSample, *, repo_root: Path) -> Path | None:

@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
 from pydantic import ValidationError
 from typer.testing import CliRunner
 
+import svp_rpe.rpe.extractor as extractor
 from svp_rpe.calibration import (
     MIN_SAMPLES_PER_GENRE,
     GenreCorpusManifest,
@@ -252,6 +254,47 @@ def test_locator_backed_audio_requires_hash_and_checkout_root(tmp_path: Path) ->
     assert report.genres["electronic"].sample_count == 0
     assert report.genres["orchestral"].sample_count == 0
     assert {item.reason for item in report.excluded_samples} == {"no_measured_or_audio"}
+
+
+def test_verified_audio_preferred_over_cached_measured(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audio = tmp_path / "take.wav"
+    audio.write_bytes(b"verified")
+    from svp_rpe.perform import sha256_bytes
+
+    calls: list[str] = []
+
+    def fake_extract(path: str):
+        calls.append(path)
+        return SimpleNamespace(
+            physical=SimpleNamespace(
+                model_dump=lambda mode="json": {"spectral_centroid": 4321.0}
+            )
+        )
+
+    monkeypatch.setattr(extractor, "extract_rpe_from_file", fake_extract)
+
+    report = run_genre_calibration(
+        _manifest(
+            [
+                GenreSample(
+                    id="verified",
+                    genre_label="electronic",
+                    generator="fixture",
+                    prompt="fixture",
+                    measured={"spectral_centroid": 1000.0},
+                    audio_locator="take.wav",
+                    audio_hash=sha256_bytes(b"verified"),
+                )
+            ]
+        ),
+        repo_root=tmp_path,
+    )
+
+    assert calls == [str(audio)]
+    assert report.genres["electronic"].features["spectral_centroid"].mean == 4321.0
 
 
 def test_cli_text_and_json_smoke_on_seed_manifest(tmp_path: Path) -> None:
