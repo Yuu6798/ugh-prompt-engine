@@ -72,10 +72,9 @@ semantic_hypothesis:
 # 条件演算子: _min(>=)/_max(<=)/_gt(>)/_lt(<)/==。旧ハードコードは厳密 >/< だったため
 # _gt/_lt で**境界まで完全に等価**に温存する（bpm==140 等の knob 値でも挙動不変）。
 #
-# orchestral/bass-music の low-heavy 分離は Phase B-2 の暫定線。
-# harmonic_ratio 単独は orchestral の判別子として不十分だったため、同じ power 比族の
-# high_ratio=0.017 で厚い素材を暗い管弦 / 明るい bass-music に分ける。
-# Q1-5 Ph2 で spectral_bands.brilliance 等の magnitude 7 帯域へ再校正する。
+# orchestral/bass-music の low-heavy 分離は Phase B-3 で magnitude brilliance を優先。
+# spectral_bands.brilliance=0.1537 は暫定線。bands 欠落時のみ B-2 の power high_ratio
+# split へ fallback する（後方互換）。Phase C / Q1-5 Ph2 で再校正する。
 cultural_context:
   default: general
   rules:
@@ -85,11 +84,17 @@ cultural_context:
     - id: ctx.ambient_downtempo
       condition: {bpm_lt: 90}
       context: ambient/downtempo
+    - id: ctx.bass_music_brilliance
+      condition: {low_ratio_gt: 0.4, spectral_bands.brilliance_gt: 0.1537}
+      context: bass-music
+    - id: ctx.orchestral_brilliance
+      condition: {low_ratio_gt: 0.4, spectral_bands.brilliance_lt: 0.1537}
+      context: cinematic/orchestral
     - id: ctx.bass_music
-      condition: {low_ratio_gt: 0.4, high_ratio_gt: 0.017}
+      condition: {low_ratio_gt: 0.4, high_ratio_gt: 0.017, spectral_bands.brilliance_absent: true}
       context: bass-music
     - id: ctx.orchestral
-      condition: {low_ratio_gt: 0.4, high_ratio_lt: 0.017}
+      condition: {low_ratio_gt: 0.4, high_ratio_lt: 0.017, spectral_bands.brilliance_absent: true}
       context: cinematic/orchestral
     - id: ctx.cinematic_dynamic
       condition: {valley_depth_gt: 0.3}
