@@ -183,6 +183,77 @@ def test_excluded_samples_are_reported_not_analyzed() -> None:
     assert [item.id for item in report.excluded_samples] == ["drop"]
 
 
+def test_unresolved_genre_labels_remain_visible_as_insufficient() -> None:
+    report = run_genre_calibration(
+        _manifest(
+            [
+                GenreSample(
+                    id="missing-rock",
+                    genre_label="rock",
+                    generator="fixture",
+                    prompt="fixture",
+                    audio_locator="missing.wav",
+                    audio_hash="0" * 64,
+                ),
+                GenreSample(
+                    id="excluded-rock",
+                    genre_label="rock",
+                    generator="fixture",
+                    prompt="fixture",
+                    measured={"spectral_centroid": 2500},
+                    excluded=True,
+                ),
+            ]
+        ),
+        repo_root=ROOT,
+    )
+
+    assert report.genres["rock"].sample_count == 0
+    assert report.genres["rock"].status == "insufficient"
+    assert {item.id for item in report.excluded_samples} == {
+        "missing-rock",
+        "excluded-rock",
+    }
+
+
+def test_locator_backed_audio_requires_hash_and_checkout_root(tmp_path: Path) -> None:
+    root_file = tmp_path / "inside.wav"
+    root_file.write_bytes(b"fixture")
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    outside_file = outside_dir / "outside.wav"
+    outside_file.write_bytes(b"fixture")
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+
+    report = run_genre_calibration(
+        _manifest(
+            [
+                GenreSample(
+                    id="no-hash",
+                    genre_label="electronic",
+                    generator="fixture",
+                    prompt="fixture",
+                    audio_locator=str(root_file),
+                ),
+                GenreSample(
+                    id="outside-root",
+                    genre_label="orchestral",
+                    generator="fixture",
+                    prompt="fixture",
+                    audio_locator=str(outside_file),
+                    audio_hash="0" * 64,
+                ),
+            ]
+        ),
+        repo_root=repo_root,
+    )
+
+    assert report.genres["electronic"].sample_count == 0
+    assert report.genres["orchestral"].sample_count == 0
+    assert {item.reason for item in report.excluded_samples} == {"no_measured_or_audio"}
+
+
 def test_cli_text_and_json_smoke_on_seed_manifest(tmp_path: Path) -> None:
     runner = CliRunner()
     text_result = runner.invoke(app, ["genre-calibrate", str(SEED_MANIFEST)])

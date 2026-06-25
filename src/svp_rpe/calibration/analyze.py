@@ -126,7 +126,9 @@ def run_genre_calibration(
 ) -> GenreCalibrationReport:
     """Analyze a genre-labeled manifest without producing any verdict."""
 
-    samples_by_genre: dict[str, list[dict[str, float | None]]] = {}
+    samples_by_genre: dict[str, list[dict[str, float | None]]] = {
+        genre: [] for genre in sorted({sample.genre_label for sample in manifest.samples})
+    }
     excluded: list[ExcludedSample] = []
     root = Path(repo_root) if repo_root is not None else _repo_root()
 
@@ -184,13 +186,17 @@ def _sample_measured(
 
 
 def _resolve_audio_path(sample: GenreSample, *, repo_root: Path) -> Path | None:
-    if not sample.audio_locator:
+    if not sample.audio_locator or not sample.audio_hash:
         return None
     locator = Path(sample.audio_locator)
     candidate = locator if locator.is_absolute() else (repo_root / locator).resolve()
+    try:
+        candidate.resolve().relative_to(repo_root.resolve())
+    except ValueError:
+        return None
     if not candidate.is_file():
         return None
-    if sample.audio_hash and sha256_bytes(candidate.read_bytes()) != sample.audio_hash:
+    if sha256_bytes(candidate.read_bytes()) != sample.audio_hash:
         return None
     return candidate
 
