@@ -1,0 +1,27 @@
+schema_version: "1.0"
+samples:
+  - id: portals
+    genre_label: orchestral
+    generator: real
+    prompt: "Portals reference anchor"
+    audio_locator: observation_log
+    measured:
+      harmonic_ratio: 0.81
+      percussive_ratio: 0.19
+      spectral_centroid: 1588
+      dynamic_range_db: 18.9
+    notes:
+      - "暫定 seed。spectral_bands 未計測。閾値確定は B-2 の Suno 量産後。"
+
+  - id: uza
+    genre_label: electronic
+    generator: real
+    prompt: "UZA reference anchor"
+    audio_locator: observation_log
+    measured:
+      harmonic_ratio: 0.71
+      percussive_ratio: 0.29
+      spectral_centroid: 3735
+      dynamic_range_db: 3.98
+    notes:
+      - "暫定 seed。spectral_bands 未計測。閾値確定は B-2 の Suno 量産後。"

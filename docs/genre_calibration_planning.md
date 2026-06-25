@@ -162,6 +162,24 @@ percussive 比・dynamics 等）の組合せを校正データ上で検討する
 
 **律速**: Suno 生成バッチ（人間作業）。ただし「今日の延長」で集まる軽さ。
 
+#### Phase B-1 実績 — box-first harness（2026-06-25）
+
+B-1 では閾値を確定せず、ジャンル校正コーパスを食う箱と分析器を先に実装する。
+R1-audio の content-addressed box-first 方針と同じく、データ量産や Drive 取得は後続に
+残し、manifest / replay / report の契約を固定する。
+
+- `examples/calibration/genre/manifest.yaml` を seed とし、Portals/UZA の real anchor 2 本を
+  measured-only で登録する。両ジャンルとも n=1 なので report は `insufficient` を出し、
+  閾値候補は出さない。
+- `svprpe genre-calibrate <manifest> --format text|json` が、ジャンル別 feature 統計と
+  pair separability / threshold candidate を決定論的に出力する。
+- `spectral_bands.<band>` を semantic rule condition key として解決可能にし、B-2 で
+  magnitude 7 帯域を rule 条件へ使える入口を作る。既存 scalar key の挙動は不変。
+
+**B-2 残課題**: Suno 生成バッチで各ジャンル n>=3 を満たす校正 corpus を作り、非重なり
+feature から出た候補をレビューして `semantic_rules.yaml` へ反映する。B-1 seed の
+`insufficient` は期待状態であり、閾値確定を急がないための honesty gate とする。
+
 ### Phase C — 本物アンカー検証
 
 - 実曲を各ジャンル数曲、検証専用アンカーとして content-addressed 登録

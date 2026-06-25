@@ -27,6 +27,13 @@ HIGH_CONFIDENCE = 0.70
 
 def _feature_value(name: str, phys: PhysicalRPE) -> Any:
     """Return a comparable physical value by rule key."""
+    if "." in name:
+        head, _, tail = name.partition(".")
+        if head == "spectral_bands":
+            bands = getattr(phys, "spectral_bands", None)
+            return getattr(bands, tail, None) if bands is not None else None
+        return None
+
     getters = {
         "bpm": lambda item: item.bpm,
         "brightness": lambda item: item.spectral_profile.brightness,
@@ -47,7 +54,10 @@ def _feature_value(name: str, phys: PhysicalRPE) -> Any:
     getter = getters.get(name)
     if getter is None:
         return getattr(phys, name, None)
-    return getter(phys)
+    try:
+        return getter(phys)
+    except AttributeError:
+        return None
 
 
 def _fmt(value: Any) -> str:
