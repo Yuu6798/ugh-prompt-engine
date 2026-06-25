@@ -45,8 +45,15 @@ def test_manifest_loads_seed_and_forbids_unknown_fields() -> None:
     manifest = load_genre_manifest(SEED_MANIFEST)
 
     assert manifest.schema_version == "1.0"
-    assert [sample.id for sample in manifest.samples] == ["portals", "uza"]
+    ids = [sample.id for sample in manifest.samples]
+    # 本物アンカー stub（先頭）+ 2026-06-25 実 Suno 実測 seed（orchestral/EDM 各 5 本）。
+    assert ids[:2] == ["portals", "uza"]
     assert manifest.samples[0].genre_label == "orchestral"
+    by_label: dict[str, int] = {}
+    for sample in manifest.samples:
+        by_label[sample.genre_label] = by_label.get(sample.genre_label, 0) + 1
+    assert by_label["orchestral"] == 6  # portals + orchestral_01..05
+    assert by_label["electronic-dance"] == 5
 
     with pytest.raises(ValidationError):
         GenreSample.model_validate(
@@ -157,10 +164,12 @@ def test_insufficient_genres_do_not_emit_threshold_candidates() -> None:
 def test_missing_measured_features_are_excluded_from_that_feature_stats() -> None:
     report = run_genre_calibration(load_genre_manifest(SEED_MANIFEST), repo_root=ROOT)
 
-    assert report.genres["orchestral"].features["harmonic_ratio"].count == 1
-    assert report.genres["orchestral"].features["spectral_bands.presence"].count == 0
+    # orchestral seed 6 本全てに harmonic_ratio があり count=6。
+    assert report.genres["orchestral"].features["harmonic_ratio"].count == 6
+    # spectral_bands 未計測の portals stub は presence の count から除外される（5 本のみ）。
+    assert report.genres["orchestral"].features["spectral_bands.presence"].count == 5
+    # uza stub は bands 未計測なので electronic の brilliance は None のまま。
     assert report.genres["electronic"].features["spectral_bands.brilliance"].mean is None
-    assert report.threshold_candidates == []
 
 
 def test_excluded_samples_are_reported_not_analyzed() -> None:
@@ -311,8 +320,11 @@ def test_cli_text_and_json_smoke_on_seed_manifest(tmp_path: Path) -> None:
     )
     assert json_result.exit_code == 0
     payload = json.loads(out.read_text(encoding="utf-8"))
-    assert payload["genres"]["orchestral"]["status"] == "insufficient"
-    assert payload["threshold_candidates"] == []
+    # 実 Suno seed で orchestral/electronic-dance は sufficient、uza stub の
+    # electronic は n=1 で insufficient。
+    assert payload["genres"]["orchestral"]["status"] == "sufficient"
+    assert payload["genres"]["electronic"]["status"] == "insufficient"
+    assert payload["threshold_candidates"] != []
 
 
 def test_manifest_yaml_round_trip_shape(tmp_path: Path) -> None:

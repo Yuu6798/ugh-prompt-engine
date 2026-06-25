@@ -76,7 +76,12 @@ def test_seed_manifest_uses_current_brightness_split() -> None:
 
     portals = next(item for item in report.predictions if item.id == "portals")
     assert portals.predicted_cultural_context == ["cinematic/orchestral"]
-    assert report.confusion["orchestral"]["cinematic/orchestral"] == 1
+    # 2026-06-25 実 Suno seed（orchestral 5 本 + portals）は全て B-2 brightness split で
+    # cinematic/orchestral に着地し bass-music へ誤判定しない（旧 low_ratio>0.4 の誤診を是正）。
+    assert report.confusion["orchestral"]["cinematic/orchestral"] == 6
+    assert report.confusion["orchestral"].get("bass-music", 0) == 0
+    # electronic-dance seed 5 本は bass-music に着地。
+    assert report.confusion["electronic-dance"]["bass-music"] == 5
 
 
 def test_audit_uses_backfilled_production_genre_sections(monkeypatch) -> None:
