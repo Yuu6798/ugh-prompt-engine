@@ -308,3 +308,160 @@ samples:
     notes:
       - "sha256 prefix 38fe6b88 (full hash は 2026-06-25 ephemeral extract で消失)。ear-checked。"
       - "follow-up: Drive アップロード → drive_file_id 回収。"
+
+
+  - id: rock_01_classic
+    genre_label: rock
+    generator: suno
+    prompt: "Classic rock band, 120 BPM, key of E major. Warm overdriven electric rhythm guitar playing mid-forward power chords and a melodic lead line, live drum kit with steady backbeat snare on 2 and 4, electric bass locked to the kick, occasional Hammond organ pad. Verse: sparse, guitar and bass only, low density. Chorus: full density, layered guitars and crash cymbals, wide. Bridge: stripped-back clean guitar before final chorus. Mid-bright tone, analog warmth, not harsh. Avoid: EDM synth bass and drops; orchestral strings; hip-hop beats; auto-tuned vocals."
+    audio_locator: session_attachment
+    audio_hash: eebd943565bf57e769923aa7a1346d4e8ce432c4a5d916988f584557f73221df
+    drive_file_id: null
+    measured:
+      harmonic_ratio: 0.7868
+      percussive_ratio: 0.2132
+      spectral_centroid: 2933.99
+      bpm: 123.05
+      key: E
+      mode: major
+      dynamic_range_db: 6.64
+      valley_depth: 0.1442
+      low_ratio: 0.7047
+      mid_ratio: 0.2529
+      high_ratio: 0.0424
+      spectral_bands:
+        sub_bass: 0.0384
+        bass: 0.1736
+        low_mid: 0.0669
+        mid: 0.197
+        high_mid: 0.2036
+        presence: 0.1242
+        brilliance: 0.1964
+    notes:
+      - "sha256 full (今回 session 添付から算出、prefix-only 問題解消)。prompt 本文記録済 (PENDING 解消)。ear-checked: バンド編成。"
+      - "follow-up: Drive アップロード → drive_file_id 回収。"
+
+  - id: rock_02_hard
+    genre_label: rock
+    generator: suno
+    prompt: "Hard rock band, 150 BPM, key of A minor. Thick distorted electric guitars playing palm-muted power chords with a screaming lead, punchy live drum kit with double-kick fills and bright crash/ride cymbals, driving distorted bass following the kick. Intro: building energy, drums and riff. Chorus: full density, anthemic stacked guitars, brightest and widest. Bright aggressive tone, fizzy high-end from cymbals and distortion. Avoid: clean pop production; orchestral pads; trap hi-hats; soft ballad sections."
+    audio_locator: session_attachment
+    audio_hash: 1735a04dd918788e18d0e8f8876a9adc1ad4391293db5fa113a0071b7574a1ef
+    drive_file_id: null
+    measured:
+      harmonic_ratio: 0.7908
+      percussive_ratio: 0.2092
+      spectral_centroid: 2941.64
+      bpm: 152.0
+      key: A
+      mode: minor
+      dynamic_range_db: 6.45
+      valley_depth: 0.1361
+      low_ratio: 0.7328
+      mid_ratio: 0.2302
+      high_ratio: 0.037
+      spectral_bands:
+        sub_bass: 0.0459
+        bass: 0.1659
+        low_mid: 0.0311
+        mid: 0.1969
+        high_mid: 0.2647
+        presence: 0.1338
+        brilliance: 0.1617
+    notes:
+      - "sha256 full (今回 session 添付から算出、prefix-only 問題解消)。prompt 本文記録済 (PENDING 解消)。ear-checked: バンド編成。"
+      - "follow-up: Drive アップロード → drive_file_id 回収。"
+
+  - id: rock_03_indie
+    genre_label: rock
+    generator: suno
+    prompt: "Alternative indie rock band, 110 BPM, key of C major. Jangly clean-to-crunch electric guitars with chorus effect, steady live drums with a relaxed groove, melodic bass guitar, subtle tambourine. Verse: low density, single clean guitar and bass. Chorus: mid density, second guitar enters with light crunch, warm and open. Neutral-to-mid brightness, organic and unpolished. Avoid: heavy metal distortion; EDM synths; electronic drums; orchestral instruments."
+    audio_locator: session_attachment
+    audio_hash: c15ca7c89730dec4d2af0828408dda005887a30ae350fde9f47229134c60ec37
+    drive_file_id: null
+    measured:
+      harmonic_ratio: 0.796
+      percussive_ratio: 0.204
+      spectral_centroid: 2263.46
+      bpm: 112.35
+      key: C
+      mode: major
+      dynamic_range_db: 7.52
+      valley_depth: 0.0937
+      low_ratio: 0.8159
+      mid_ratio: 0.1663
+      high_ratio: 0.0177
+      spectral_bands:
+        sub_bass: 0.0479
+        bass: 0.2417
+        low_mid: 0.0867
+        mid: 0.1796
+        high_mid: 0.199
+        presence: 0.0959
+        brilliance: 0.1493
+    notes:
+      - "sha256 full (今回 session 添付から算出、prefix-only 問題解消)。prompt 本文記録済 (PENDING 解消)。ear-checked: バンド編成。"
+      - "follow-up: Drive アップロード → drive_file_id 回収。"
+
+  - id: rock_04_blues
+    genre_label: rock
+    generator: suno
+    prompt: "Blues rock band, 95 BPM, key of E minor. Expressive lead electric guitar with bends and vibrato over a shuffle drum groove, warm rounded electric bass, occasional rhythm guitar and electric piano. Highly dynamic: quiet verses with sparse guitar licks, loud climactic chorus with full band hits. Darker, warm tone, dominant low-mid guitar body, restrained high-end. Wide dynamic range, breathing between phrases. Avoid: bright EDM synths; compressed loud mastering; orchestral strings; programmed drums."
+    audio_locator: session_attachment
+    audio_hash: eb7df932cf4b2e2f071515991f8d371be9d8832a529c785785d868b59e68e8dd
+    drive_file_id: null
+    measured:
+      harmonic_ratio: 0.7754
+      percussive_ratio: 0.2246
+      spectral_centroid: 2478.43
+      bpm: 95.7
+      key: E
+      mode: minor
+      dynamic_range_db: 11.0
+      valley_depth: 0.1235
+      low_ratio: 0.7622
+      mid_ratio: 0.2134
+      high_ratio: 0.0244
+      spectral_bands:
+        sub_bass: 0.0407
+        bass: 0.2345
+        low_mid: 0.0981
+        mid: 0.1582
+        high_mid: 0.1828
+        presence: 0.1095
+        brilliance: 0.1762
+    notes:
+      - "sha256 full (今回 session 添付から算出、prefix-only 問題解消)。prompt 本文記録済 (PENDING 解消)。ear-checked: バンド編成。"
+      - "follow-up: Drive アップロード → drive_file_id 回収。"
+
+  - id: rock_05_punk
+    genre_label: rock
+    generator: suno
+    prompt: "Garage punk rock band, 175 BPM, key of D major. Raw fast overdriven electric guitars strumming relentless eighth-note power chords, frantic live drums with fast snare and crash, gritty distorted bass. Continuous full-energy density throughout, almost no dynamic variation, lo-fi band-in-a-room recording. Bright, trebly, abrasive tone. Avoid: clean studio polish; synths; slow breakdowns; orchestral or acoustic instruments."
+    audio_locator: session_attachment
+    audio_hash: a5e21083bb1e3cf10dcf22e3ce0144aeab79539e4aa59f357706a787df373994
+    drive_file_id: null
+    measured:
+      harmonic_ratio: 0.7083
+      percussive_ratio: 0.2917
+      spectral_centroid: 2757.97
+      bpm: 123.05
+      key: D
+      mode: major
+      dynamic_range_db: 4.66
+      valley_depth: 0.1123
+      low_ratio: 0.6525
+      mid_ratio: 0.3139
+      high_ratio: 0.0336
+      spectral_bands:
+        sub_bass: 0.0142
+        bass: 0.1635
+        low_mid: 0.0539
+        mid: 0.2349
+        high_mid: 0.2742
+        presence: 0.1203
+        brilliance: 0.139
+    notes:
+      - "sha256 full (今回 session 添付から算出、prefix-only 問題解消)。prompt 本文記録済 (PENDING 解消)。ear-checked: バンド編成。"
+      - "BPM: extract=123.05 だが真値≈181 (生 librosa beat_track start_bpm120/160/180 すべて 181.45、Suno は prompt 175 を忠実再現)。extractor のグリッド過小報告、かつ bpm_octave_ambiguous=False で 1.42× を取りこぼし (R2-2 検出近傍 1.4-2.2× の miss 事例)。"
+      - "follow-up: Drive アップロード → drive_file_id 回収。"
