@@ -331,6 +331,56 @@ def test_bands_present_brightness_split_still_requires_low_heavy_material() -> N
     assert "cinematic/orchestral" not in semantic.cultural_context
 
 
+def test_bands_present_mid_brilliance_uses_rock_context() -> None:
+    # Phase B-3-rock: brilliance 中域 [0.117, 0.204) は rock バンド。
+    # 単一ラベル（bass-music / cinematic にも漏れない）であることを確認。
+    phys = _with_brilliance(
+        _make_physical_genre(
+            harmonic_ratio=0.79,
+            spectral_centroid=2940.0,
+            low_ratio=0.73,
+            mid_ratio=0.23,
+            high_ratio=0.037,
+            bpm=120.0,
+            active_rate=0.5,
+            valley_depth=0.14,
+        ),
+        brilliance=0.16,
+    )
+
+    semantic = generate_semantic(phys)
+
+    assert semantic.cultural_context == ["rock"]
+
+
+def test_brilliance_band_edges_separate_rock_from_neighbours() -> None:
+    # gap 中点 0.117 / 0.204 の上下で rock バンドが orchestral / bass-music と
+    # 排他になることを境界近傍で固定する。
+    def context_for(brilliance: float) -> list[str]:
+        phys = _with_brilliance(
+            _make_physical_genre(
+                harmonic_ratio=0.8,
+                spectral_centroid=2500.0,
+                low_ratio=0.7,
+                mid_ratio=0.26,
+                high_ratio=0.03,
+                bpm=120.0,
+                active_rate=0.5,
+                valley_depth=0.12,
+            ),
+            brilliance=brilliance,
+        )
+        return generate_semantic(phys).cultural_context
+
+    assert context_for(0.10) == ["cinematic/orchestral"]  # rock バンド下限未満
+    assert context_for(0.16) == ["rock"]  # バンド中央
+    assert context_for(0.21) == ["bass-music"]  # rock バンド上限超
+    # cut point ちょうど（compute_spectral_bands は 4 桁丸めなので実在し得る）。
+    # 下限 inclusive で穴を作らない: 0.117 -> rock, 0.204 -> bass-music。
+    assert context_for(0.117) == ["rock"]
+    assert context_for(0.204) == ["bass-music"]
+
+
 def test_genre_inference_backward_compatible_without_harmonic_ratio() -> None:
     # harmonic_ratio 欠落（旧 RPE）でもレガシー経路を温存（electronic/dance）。
     semantic = generate_semantic(

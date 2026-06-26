@@ -72,9 +72,17 @@ semantic_hypothesis:
 # 条件演算子: _min(>=)/_max(<=)/_gt(>)/_lt(<)/==。旧ハードコードは厳密 >/< だったため
 # _gt/_lt で**境界まで完全に等価**に温存する（bpm==140 等の knob 値でも挙動不変）。
 #
-# orchestral/bass-music の low-heavy 分離は Phase B-3 で magnitude brilliance を優先。
-# spectral_bands.brilliance=0.1537 は暫定線。bands 欠落時のみ B-2 の power high_ratio
-# split へ fallback する（後方互換）。Phase C / Q1-5 Ph2 で再校正する。
+# orchestral/rock/bass-music の low-heavy 分離は magnitude brilliance を優先。
+# Phase B-3-rock (2026-06-26): rock 5 サンプル追加で brilliance が 3 ジャンルを
+# 重なりゼロの 3 バンドに分離することを確認（orchestral ≤0.0954 | rock 0.139-0.196
+# | EDM ≥0.2119）。旧単一閾値 0.1537 は rock クラスタ中央を貫き classic/hard/blues→
+# bass-music、indie/punk→orchestral に裂いていた。gap 中点で 2 線に置換:
+#   brilliance < 0.117 -> cinematic/orchestral
+#   0.117 <= brilliance < 0.204 -> rock
+#   brilliance >= 0.204 -> bass-music
+# 閾値根拠は docs/genre_calibration_planning.md。bands 欠落時のみ B-2 の power
+# high_ratio split へ fallback（後方互換、rock/EDM は high_ratio が重なるため
+# fallback は 2 値据え置き＝rock 判定は bands 必須）。Phase C / Q1-5 Ph2 で再校正。
 cultural_context:
   default: general
   rules:
@@ -85,10 +93,13 @@ cultural_context:
       condition: {bpm_lt: 90}
       context: ambient/downtempo
     - id: ctx.bass_music_brilliance
-      condition: {low_ratio_gt: 0.4, spectral_bands.brilliance_gt: 0.1537}
+      condition: {low_ratio_gt: 0.4, spectral_bands.brilliance_min: 0.204}
       context: bass-music
+    - id: ctx.rock_brilliance
+      condition: {low_ratio_gt: 0.4, spectral_bands.brilliance_min: 0.117, spectral_bands.brilliance_lt: 0.204}
+      context: rock
     - id: ctx.orchestral_brilliance
-      condition: {low_ratio_gt: 0.4, spectral_bands.brilliance_lt: 0.1537}
+      condition: {low_ratio_gt: 0.4, spectral_bands.brilliance_lt: 0.117}
       context: cinematic/orchestral
     - id: ctx.bass_music
       condition: {low_ratio_gt: 0.4, high_ratio_gt: 0.017, spectral_bands.brilliance_absent: true}

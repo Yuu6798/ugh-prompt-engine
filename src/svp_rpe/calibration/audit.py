@@ -27,6 +27,7 @@ GENRE_CONTEXT_EXPECTATIONS: dict[str, set[str]] = {
     "orchestral": {"cinematic/orchestral"},
     "electronic": {"bass-music", "electronic/dance", "high-energy-electronic"},
     "electronic-dance": {"bass-music", "electronic/dance", "high-energy-electronic"},
+    "rock": {"rock"},
 }
 
 

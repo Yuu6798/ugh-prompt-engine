@@ -82,6 +82,13 @@ def test_seed_manifest_uses_current_brightness_split() -> None:
     assert report.confusion["orchestral"].get("bass-music", 0) == 0
     # electronic-dance seed 5 本は bass-music に着地。
     assert report.confusion["electronic-dance"]["bass-music"] == 5
+    # Phase B-3-rock: rock seed 5 本は brilliance 中域バンドで rock に着地し、
+    # bass-music / cinematic へ裂けない（旧単一閾値 0.1537 の誤分割を是正）。
+    assert report.confusion["rock"]["rock"] == 5
+    assert report.confusion["rock"].get("bass-music", 0) == 0
+    assert report.confusion["rock"].get("cinematic/orchestral", 0) == 0
+    rock_preds = [item for item in report.predictions if item.genre_label == "rock"]
+    assert all(item.mismatch is False for item in rock_preds)
 
 
 def test_audit_uses_backfilled_production_genre_sections(monkeypatch) -> None:
