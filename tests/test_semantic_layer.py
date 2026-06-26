@@ -375,6 +375,10 @@ def test_brilliance_band_edges_separate_rock_from_neighbours() -> None:
     assert context_for(0.10) == ["cinematic/orchestral"]  # rock バンド下限未満
     assert context_for(0.16) == ["rock"]  # バンド中央
     assert context_for(0.21) == ["bass-music"]  # rock バンド上限超
+    # cut point ちょうど（compute_spectral_bands は 4 桁丸めなので実在し得る）。
+    # 下限 inclusive で穴を作らない: 0.117 -> rock, 0.204 -> bass-music。
+    assert context_for(0.117) == ["rock"]
+    assert context_for(0.204) == ["bass-music"]
 
 
 def test_genre_inference_backward_compatible_without_harmonic_ratio() -> None:
