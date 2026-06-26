@@ -210,6 +210,52 @@ B-2 では B-1/B-1b の箱を使って、`low_ratio > 0.4` 単独で Portals 型
 **残課題**: Phase C で本物アンカーを増やし、B-2 の 0.017 暫定線が real anchor でも
 通用するかを検証する。Q1-5 Ph2 では magnitude ベースの brightness 指標へ移行する。
 
+#### Phase B-3-rock 実績 — brilliance 3-way banding で rock を分離（2026-06-26）
+
+3 ジャンル目として rock を追加（Suno 生成 5 本: classic/hard/indie/blues/punk、
+耳チェック済、`examples/calibration/genre/manifest.yaml`）。今回は full sha256 と
+prompt 本文を記録し、orchestral/EDM の prefix-only / PENDING 積み残しと同型の欠落を
+rock では作らない方針とした。
+
+**生成忠実度の所見**: key は 5/5 完全保存（E major / A minor / C major / E minor /
+D major）、BPM は 4/5 正確。punk のみ extract=123.05（真値≈181、生 librosa
+`beat_track` で start_bpm 120/160/180 すべて 181.45 を回復）で、Suno は prompt の
+175 を忠実再現するが extractor がグリッド過小報告。しかも `bpm_octave_ambiguous=False`
+で 1.42× を取りこぼした（R2-2 検出近傍 1.4-2.2× 内の miss 事例、要 follow-up）。
+
+**分離の核心**: `spectral_bands.brilliance` 単独で 3 ジャンルが**重なりゼロの 3 バンド**に
+分かれる。
+
+| ジャンル | brilliance 実測レンジ | gap |
+|---|---|---|
+| cinematic/orchestral | 0.0134 – 0.0954 | |
+| | | 0.0954 → 0.139 |
+| **rock** | **0.139 – 0.1964** | |
+| | | 0.1964 → 0.2119 |
+| bass-music (EDM) | 0.2119 – 0.2508 | |
+
+旧 B-3 の単一閾値 `brilliance=0.1537` は rock クラスタ中央を貫き、
+classic/hard/blues（>0.1537）→ bass-music、indie/punk（<0.1537）→ orchestral に
+**裂いていた**（audit で実証。`genre_label=rock` に expectation が無く mismatch すら
+立たない死角も同時に発覚）。gap 中点で 2 線に置換（`genre-calibrate` の閾値候補
+0.1172 / 0.204 と一致）:
+
+- `cinematic/orchestral`: `{low_ratio_gt: 0.4, spectral_bands.brilliance_lt: 0.117}`
+- `rock`（新規）: `{low_ratio_gt: 0.4, spectral_bands.brilliance_gt: 0.117, spectral_bands.brilliance_lt: 0.204}`
+- `bass-music`: `{low_ratio_gt: 0.4, spectral_bands.brilliance_gt: 0.204}`
+- `src/svp_rpe/calibration/audit.py` の `GENRE_CONTEXT_EXPECTATIONS` に `"rock": {"rock"}` を追加。
+
+**回帰ゼロ**: orchestral 6 本は全て brilliance ≤0.0954（<0.117）、EDM 5 本は全て
+≥0.2119（>0.204）でバンド内に残り、audit confusion は orchestral 6 / EDM 5 のまま
+不変。rock 5 本は新バンドで rock に着地（mismatch=False）。
+
+**補助軸と留保**: harmonic_ratio も rock（0.708-0.796）が orchestral（0.925-0.988）/
+EDM（0.823-0.880）双方より低く（d=2.7-3.4）分離を補強するが、実アンカー uza(0.71)
+と衝突するため**主軸は brilliance、harmonic は補助**とした。bands 欠落時の power
+fallback（high_ratio）は rock/EDM の high_ratio が重なる（rock 0.018-0.042 vs EDM
+0.022-0.049）ため 3-way 不可で 2 値据え置き＝**rock 判定は `spectral_bands` 必須**。
+Phase C で本物 rock アンカーを足し、0.117/0.204 暫定線の generator バイアスを検証する。
+
 ### Phase C — 本物アンカー検証
 
 - 実曲を各ジャンル数曲、検証専用アンカーとして content-addressed 登録
