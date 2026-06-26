@@ -463,5 +463,5 @@ samples:
         brilliance: 0.139
     notes:
       - "sha256 full (今回 session 添付から算出、prefix-only 問題解消)。prompt 本文記録済 (PENDING 解消)。ear-checked: バンド編成。"
-      - "BPM: extract=123.05 だが真値≈181 (生 librosa beat_track start_bpm120/160/180 すべて 181.45、Suno は prompt 175 を忠実再現)。extractor のグリッド過小報告、かつ bpm_octave_ambiguous=False で 1.42× を取りこぼし (R2-2 検出近傍 1.4-2.2× の miss 事例)。"
+      - "BPM: extract=123.05 だが真値≈181 (Suno は prompt 175 を忠実再現)。原因は load_audio の 22050 リサンプル×start_bpm=120 prior の halving で、native 48k では compute_bpm が 181.45 を回復 (sr×prior 固有の相互作用)。bpm_octave_ambiguous=False は検出器の near-miss でなく構造的: 内部 ratio=1.057 が BPM 正検出の rock_03_indie=1.098 を下回り autocorrelation-ratio 信号では分離不能。sr/閾値の単一ノブ修正は回帰する (docs/roundtrip_corpus_screen.md finding #6)。"
       - "follow-up: Drive アップロード → drive_file_id 回収。"
