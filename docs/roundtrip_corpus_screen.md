@@ -130,13 +130,37 @@ key 保存は実曲で 6/7（off は A のみ＝疎な synth 和声で G major �
 グローバル key に潰れる設計限界）。high_ratio は acoustic(0.053) < wafu-rock(0.062) <
 busy-electronic(0.069) < dense(0.091) と編成の明るさ/密度順に並びセンサー健全。
 
+### 6. sr 変更も閾値変更も大域的修正にならない（2026-06-26, rock コーパスで実証）
+
+Genre Calibration の rock 追加（`rock_05_punk`）で 175→123.05 の halving が再発。R2-2a の
+「近傍探索化」は #4 で既に実装済（`detect_bpm_octave_ambiguity` は 1.4–2.2× を走査）だが、
+punk は依然 `is_ambiguous=False`。診断で 2 つの大域的修正案がいずれも回帰すると確定:
+
+- **閾値（`BPM_OCTAVE_RATIO_THRESHOLD=1.15`）を下げる案 → 回帰**。punk の内部 ratio は
+  **1.057**、しかし BPM を**正検出**した `rock_03_indie` の内部 ratio は **1.098**
+  （correct-tempo synth fixtures は 0.99–1.007）。正検出曲の方が ratio が高く、
+  autocorrelation-ratio 信号では 3:2 sub-octave の halving を「正しい高速曲」と原理的に
+  分離不能。閾値をどこに置いても誤検出する。
+- **抽出器 sr を上げる案（native/44100）→ 回帰**。BPM 推定は `load_audio` の 22050 で
+  行われ、ここで punk が 123 に潰れる（native 48k は 181 を回復）。だが sr sweep で
+  octave 調整後の総誤差は **22050=12.9（最小）/ 44100=17.5 / native=17.5** と 22050 が
+  最良。native は punk(175) を直す代わりに `synth_05`(真値170) を **84.7 に半化**して壊す。
+  halving/doubling は librosa の sr×prior×内容の固有相互作用で、単一 sr に普遍解はない。
+
+→ **結論**: prior/sr/閾値の単一ノブ調整に大域的修正は存在しない。安全な per-track 手段は
+既存の `start_bpm=180` 再抽出のみ。自動化するなら multi-prior/multi-sr の ensemble +
+octave 整合の tie-break が要るが、素朴な 2-prior 不一致判定も正検出曲（synth_01/02・indie・
+blues）が高 prior で 2× にずれて誤検出するため、**検証付きの設計（Design Memo）が前提**。
+
 ## 限界と次の一手
 
 - **計測規律**: 保存率を測るとき、抽出器 halving と生成器不忠実を必ず分離する。
   `screen_corpus` の高 prior / 低 prior 回復チェックで、抽出器 halving / doubling と
   生成器不忠実を分けてから保存率を読む。
-- **最優先の実装課題**: 既定 tempo prior の見直し（適応 prior or octave 補正）と R2-2a の
-  近傍探索化。Design Memo 化して Codex 実装に渡す候補。
+- **実装課題（更新 2026-06-26）**: 単一ノブ（prior/sr/閾値）調整は finding #6 で大域的
+  回帰が確定。残る現実解は (a) `start_bpm=180` 再抽出を fast 系で手順化、または
+  (b) multi-prior/multi-sr ensemble + octave 整合 tie-break を**全 fixture 回帰検証付きで**
+  設計。いずれも Design Memo 化して Codex 実装に渡す候補。素朴な閾値/sr 変更は入れない。
 - calibratable 化（audio 同梱 + hash 一致）は licensing 確認後。現状 observation_log 相当。
 
 ## Drive-backed materialization (R1-CORPUS-DRIVE)
