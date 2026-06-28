@@ -358,6 +358,45 @@ EDM 閾値の bias 証拠でもある。(b) **既存 3 ジャンル（orchestral
 ない）。(c) brilliance の loudness 正規化と、本物コーパスでの閾値再校正が次の作業。
 回帰固定: `tests/test_genre_calibration.py::test_real_jpop_anchors_below_suno_edm_brightness`。
 
+#### Phase C matched-pair — 本物 J-POP × Suno J-POP で generator bias を genre-controlled 実証（2026-06-28）
+
+#109 の「本物 J-POP vs Suno EDM」はジャンル交絡があり、brilliance 差が bias かジャンル差か
+切り分けられなかった。これを潰すため、本物 3 本に**同ジャンル・同キー・同 BPM を狙った Suno**
+を 1 本ずつ生成し（プロンプトから実在人物名 "Tetsuya Komuro" / レゲエ奏法語 "skank" を
+Suno のアーティスト名フィルタ回避で除去）、`genre_label: j-pop-suno`・`generator: suno` で登録。
+matched-pair なら残差は **real vs Suno の純粋な生成器指紋**。
+
+**制御の成立**: key/mode 3/3 一致（G minor / G major / D# major）、BPM 2/3 一致（99 / 136、
+SPEED のみ 123→129）＝ジャンル・キー・テンポは揃った。
+
+**本物→Suno の系統差（3 ペア全て同方向）**:
+
+| 指標 | 安室 Δ | SPEED Δ | バブル Δ | 向き |
+|---|---|---|---|---|
+| **brilliance** | +0.092 | +0.111 | +0.059 | Suno が明るい ⬆️ |
+| spectral_centroid | +990 | +829 | +268 | Suno が明るい ⬆️ |
+| low_ratio | +0.104 | +0.116 | +0.369 | Suno が低域厚い ⬆️ |
+| mid_ratio | −0.134 | −0.148 | −0.363 | Suno が中域薄い ⬇️ |
+
+**結論**:
+1. **over-brightening を genre-controlled で確定** — 同じ J-POP・同キーなのに Suno は brilliance を
+   +0.06〜0.11 押し上げる。本物 j-pop（brilliance mean 0.162, max 0.174＝rock 帯）と
+   j-pop-suno（mean 0.250, min 0.209＝EDM 帯）は **`genre-calibrate` で candidate 分離
+   （d=3.76, 重なりゼロ）**。#109 の「Suno は EDM を明るく描く」が、ジャンル統制下で
+   「Suno はジャンルを問わず明るく描く＝生成器全般の指紋」と強化された。
+2. **スペクトル形状の指紋＝スマイリー EQ** — Suno は一貫して 低域↑・中域↓・高域↑（low_ratio +,
+   mid_ratio −, brilliance/centroid +）。本物の中域のある自然なバランスをドンシャリに誇張する。
+   4 軸すべて同方向＝強い系統バイアス。
+3. **方向の定まらない軸**（harmonic_ratio / dynamic_range_db）はマスタリング・楽曲依存。特に
+   dynamics は本物の音圧戦争（ブリックウォール）を Suno が一貫再現しない（loudness 交絡と整合）。
+
+**含意**: (a) Suno 由来の brilliance 閾値（B-3 の 0.117/0.204）は **+0.06〜0.11 の系統オフセット**を
+含む可能性が高く、本物校正では下方補正が要る。(b) 校正コーパスを Suno で量産する戦略（Tier 2）は
+**この指紋を bias として明示計上**しないと閾値が Suno 方向へ系統的にずれる。(c) 次は本物
+orchestral/rock/EDM でも同じ matched-pair を取り、指紋がジャンル横断で一定か（補正係数化できるか）
+検証する。回帰固定:
+`tests/test_genre_calibration.py::test_suno_jpop_overbrightens_vs_real_matched_pair`。
+
 ---
 
 ## 5. リスクと留意点
