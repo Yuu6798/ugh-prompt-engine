@@ -480,6 +480,52 @@ def test_suno_jpop_overbrightens_vs_real_matched_pair() -> None:
     assert real.features["mid_ratio"].mean > suno.features["mid_ratio"].mean
 
 
+def test_cross_genre_suno_fingerprint_not_constant() -> None:
+    """Phase C cross-genre: 本物 orchestral/rock/EDM 各 1 本 vs Suno コホートで指紋の一定性を検定。
+
+    「Suno 指紋＝一定オフセット → 単一補正係数」仮説を検証する。n=1/ジャンルの方向シグナル。
+    1. brilliance bias は符号反転（rock は Suno が明るい=帯外、orchestral/EDM は一致=帯内）
+       ＝**一定でない**。単一 brilliance 補正係数は不可。
+    2. 一方、全ジャンルで方向一定の指紋が 2 つ:
+       - mid_ratio: 本物 > Suno（Suno は中域を一貫して削る）
+       - harmonic_ratio: 本物 < Suno（Suno は一貫してトーナル/脱パンチ）
+    3. ゲートの一般化限界: 本物 orchestral の low_ratio < 0.4 で `low_ratio>0.4` ゲートを通らない
+       （Suno orchestral の人工的低域厚に依存していた）。
+    """
+    report = run_genre_calibration(load_genre_manifest(SEED_MANIFEST), repo_root=ROOT)
+    pairs = {  # real label -> suno cohort label
+        "orchestral-real": "orchestral",
+        "rock-real": "rock",
+        "edm-real": "electronic-dance",
+    }
+
+    def real_mean(label: str, feat: str) -> float:
+        v = report.genres[label].features[feat].mean
+        assert v is not None, (label, feat)
+        return v
+
+    def suno_stat(label: str, feat: str):
+        return report.genres[label].features[feat]
+
+    # (1) brilliance bias は一定でない: rock は Suno 帯より暗い（帯外）、orchestral/EDM は帯内
+    rock_b = real_mean("rock-real", "spectral_bands.brilliance")
+    suno_rock_b = suno_stat("rock", "spectral_bands.brilliance")
+    assert rock_b < suno_rock_b.min  # Suno が rock を over-brighten（本物が帯下）
+    for real_lab, suno_lab in [("orchestral-real", "orchestral"), ("edm-real", "electronic-dance")]:
+        rb = real_mean(real_lab, "spectral_bands.brilliance")
+        sb = suno_stat(suno_lab, "spectral_bands.brilliance")
+        assert sb.min <= rb <= sb.max  # 帯内（一致）
+    # = brilliance bias の符号がジャンルで反転（単一係数不可）
+
+    # (2) 方向一定の指紋: 全ジャンルで mid_ratio 本物>Suno かつ harmonic_ratio 本物<Suno
+    for real_lab, suno_lab in pairs.items():
+        assert real_mean(real_lab, "mid_ratio") > suno_stat(suno_lab, "mid_ratio").mean, real_lab
+        assert real_mean(real_lab, "harmonic_ratio") < suno_stat(suno_lab, "harmonic_ratio").mean, real_lab
+
+    # (3) ゲートの一般化限界: 本物 orchestral は low_ratio<0.4 でゲートを通らない
+    assert real_mean("orchestral-real", "low_ratio") < 0.4
+
+
 def test_manifest_yaml_round_trip_shape(tmp_path: Path) -> None:
     path = tmp_path / "manifest.yaml"
     path.write_text(
