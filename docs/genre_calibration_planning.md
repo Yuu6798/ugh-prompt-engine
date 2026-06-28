@@ -260,8 +260,23 @@ Phase C で本物 rock アンカーを足し、0.117/0.204 暫定線の generato
 #### Q1-5 Ph2 実測 — `low_ratio` ゲートは power 据え置き closeout、`mid_ratio` は評価不能で繰越（2026-06-28）
 
 B-2/B-3 の `// Q1-5 Ph2 で再校正` 注記（rule 族を power 比から magnitude 7 帯域へ移す）
-のうち、**残っていた low/mid_ratio** を seed corpus（orchestral n=6 / rock n=5 /
-electronic-dance n=5）で `genre-calibrate` し、pair separability を実測した。
+のうち、**残っていた low/mid_ratio** を seed corpus で `genre-calibrate` し、pair separability
+を実測した。
+
+**特徴量ごとの実効サンプル数（重要）**: `genre-calibrate` は非 null 値のみで比較する。
+唯一の実アンカー `portals`（real orchestral）は `low_ratio`/`high_ratio` 等の scalar しか持たず
+`mid_ratio` も `spectral_bands.*` も未計測のため、特徴量で n が異なる:
+
+| 特徴量 | orchestral | rock | electronic-dance | 実アンカー grounding |
+|---|---|---|---|---|
+| `low_ratio`（power） | **n=6**（portals 含む） | n=5 | n=5 | あり（portals） |
+| `mid_ratio`（power） | n=5（Suno のみ） | n=5 | n=5 | **なし（全 Suno）** |
+| `spectral_bands.*`（mag） | n=5（Suno のみ） | n=5 | n=5 | **なし（全 Suno）** |
+
+⚠️ **`low_ratio` ゲート所見だけが実アンカーで裏打ちされ、magnitude 判別軸
+（`brilliance`/`low_mid`/`sub_bass`）と `mid_ratio` の所見は全ジャンル Suno 生成のみ**
+（実アンカー grounding ゼロ）。後者は generator bias に対し未検証で、Phase C の実アンカー
+投入は「ゲート境界の拡張」だけでなく **magnitude 判別軸の bias 検証**にも必須。
 
 | 特徴量 | 3 低域厚ジャンル間 | Cohen's d | 役割 |
 |---|---|---|---|

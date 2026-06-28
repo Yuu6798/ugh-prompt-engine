@@ -411,6 +411,16 @@ def test_low_mid_power_bands_stay_power_q1_5_ph2() -> None:
         assert row.status == "candidate", (genre_a, genre_b)
         assert row.d is not None and row.d > 3.0, (genre_a, genre_b)
 
+    # (5) 実アンカー grounding の区別（Codex #108 P2-5）。唯一の実アンカー portals は
+    # scalar `low_ratio` のみ持ち mid_ratio/spectral_bands を欠く（非 null のみ比較）ため、
+    # `low_ratio` 所見だけが実アンカー裏打ち（orchestral n=6）で、mid_ratio と magnitude 判別軸は
+    # Suno のみ（n=5）＝generator bias 未検証。この実効件数差を回帰固定する（過大評価防止）。
+    orch = report.genres["orchestral"].features
+    assert orch["low_ratio"].count == 6  # portals（実アンカー）含む
+    assert orch["mid_ratio"].count == 5  # Suno のみ
+    assert orch["spectral_bands.brilliance"].count == 5  # Suno のみ
+    assert orch["spectral_bands.low_mid"].count == 5  # Suno のみ
+
 
 def test_manifest_yaml_round_trip_shape(tmp_path: Path) -> None:
     path = tmp_path / "manifest.yaml"
