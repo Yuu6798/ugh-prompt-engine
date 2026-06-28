@@ -335,24 +335,28 @@ def _pair_row(report, feature: str, genre_a: str, genre_b: str):
 
 
 def test_low_mid_power_bands_stay_power_q1_5_ph2() -> None:
-    """Q1-5 Ph2: low/mid_ratio の power→magnitude 移行は seed 実測で「不要かつ不可」と判明。
+    """Q1-5 Ph2: `low_ratio` ゲートは power 据え置き closeout、`mid_ratio` は seed 未発火で繰越。
 
     高域 brightness（power high_ratio）は #91 で power が defective と分かり B-3 で
-    magnitude `brilliance` へ移行した。残る low/mid_ratio についても seed corpus
-    （orchestral/rock/electronic-dance）で測ると:
+    magnitude `brilliance` へ移行した。残る low/mid を seed corpus（orchestral/rock/
+    electronic-dance）で測ると、両者は性質が異なる:
 
     1. power `low_ratio` は 3 低域厚ジャンルを全て admit（min>0.4）＝**判別器でなくゲート**。
-       ジャンル間は全ペア overlap で discriminate しない。`mid_ratio` も同様に overlap。
+       ジャンル間は全ペア overlap で discriminate しない。is sound として power 据え置き。
     2. magnitude 低域は **3 ペア全てを分離する単独バンドが無い**: `bass` は全ペア overlap、
        `sub_bass` は rock↔EDM のみ、`low_mid` は orchestral を rock/EDM から分けるが
        rock↔EDM は overlap、と**いずれも部分的**（捨てずに Phase C 補助軸候補として残す）。
     3. 一方 `spectral_bands.brilliance` は全ペア candidate（分離可、d>3）＝**全ペア判別軸は
        既に B-3 で magnitude 化済み**。
+    4. `mid_ratio` は **本 seed では評価対象に乗らない**（評価不能、closeout に含めない）。
+       低域厚 seed の mid_ratio は production の mid-focused 閾値（`mid_ratio_min:0.45`/
+       `mid_ratio_gt:0.5`）に届かず（全ジャンル max<0.45）mid-focused パスが一度も発火しない。
+       よって mid_ratio の power/magnitude 是非は測れず、mid-focused/general アンカー待ちで繰越。
 
-    結論: low/mid の power 帯は健全なゲートで、移行の是正動機が無い。ゲート境界
-    （低域厚 vs 非低域厚 general）の magnitude 再導出には general アンカーが要るが seed に
-    不在のため Phase C 待ち。本テストはこの「low/mid は power 据え置き」決定と、低域 magnitude
-    バンドの**部分的**分離パターン（過剰な全 overlap 主張を防ぐ）を回帰固定する。
+    結論: closeout できるのは `low_ratio` ゲート（sound・境界は general アンカー待ち）のみ。
+    `mid_ratio` は据え置くが「評価不能のため繰越」（migration の是非は未判断）。本テストは
+    この区別（low ゲート据え置き / 低域 magnitude の**部分的**分離 / mid-focused ルール未発火）を
+    回帰固定し、mid を closeout 済みに見せる過剰主張と低域の全 overlap 過剰主張を防ぐ。
     """
     report = run_genre_calibration(load_genre_manifest(SEED_MANIFEST), repo_root=ROOT)
     low_heavy = ("orchestral", "rock", "electronic-dance")
