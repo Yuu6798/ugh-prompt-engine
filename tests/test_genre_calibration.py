@@ -327,6 +327,60 @@ def test_cli_text_and_json_smoke_on_seed_manifest(tmp_path: Path) -> None:
     assert payload["threshold_candidates"] != []
 
 
+def _pair_row(report, feature: str, genre_a: str, genre_b: str):
+    for row in report.pair_separability:
+        if row.feature == feature and {row.genre_a, row.genre_b} == {genre_a, genre_b}:
+            return row
+    raise AssertionError(f"no pair row for {feature} {genre_a}/{genre_b}")
+
+
+def test_low_mid_power_bands_stay_power_q1_5_ph2() -> None:
+    """Q1-5 Ph2: low/mid_ratio の power→magnitude 移行は seed 実測で「不要かつ不可」と判明。
+
+    高域 brightness（power high_ratio）は #91 で power が defective と分かり B-3 で
+    magnitude `brilliance` へ移行した。残る low/mid_ratio についても seed corpus
+    （orchestral/rock/electronic-dance）で測ると:
+
+    1. power `low_ratio` は 3 低域厚ジャンルを全て admit（min>0.4）＝**判別器でなくゲート**。
+       ジャンル間は全ペア overlap で discriminate しない。`mid_ratio` も同様に overlap。
+    2. magnitude 低域 `spectral_bands.bass` も全ペア overlap＝magnitude にしてもゲートとして
+       power より優れない（高域 brilliance のような分離は低域には無い）。
+    3. 一方 `spectral_bands.brilliance` は全ペア candidate（分離可、d>3）＝**判別器は既に
+       B-3 で magnitude 化済み**。
+
+    結論: low/mid の power 帯は健全なゲートで、移行の是正動機が無い。ゲート境界
+    （低域厚 vs 非低域厚 general）の magnitude 再導出には general アンカーが要るが seed に
+    不在のため Phase C 待ち。本テストはこの「low/mid は power 据え置き」決定を回帰固定する。
+    """
+    report = run_genre_calibration(load_genre_manifest(SEED_MANIFEST), repo_root=ROOT)
+    low_heavy = ("orchestral", "rock", "electronic-dance")
+    pairs = (
+        ("orchestral", "electronic-dance"),
+        ("rock", "electronic-dance"),
+        ("orchestral", "rock"),
+    )
+
+    # (1) power low_ratio ゲートは 3 低域厚ジャンルを全て admit（>0.4）
+    for genre in low_heavy:
+        low_stats = report.genres[genre].features["low_ratio"]
+        assert low_stats.min is not None and low_stats.min > 0.4, genre
+
+    # (1)(2) power low/mid_ratio と magnitude 低域 bass は判別器にならない（全ペア overlap）
+    for feature in ("low_ratio", "mid_ratio", "spectral_bands.bass"):
+        for genre_a, genre_b in pairs:
+            assert _pair_row(report, feature, genre_a, genre_b).status == "overlap", (
+                feature,
+                genre_a,
+                genre_b,
+            )
+
+    # (3) 判別器は magnitude brilliance（全ペア分離可）＝高域のみ magnitude 化が必要だった
+    for genre_a, genre_b in pairs:
+        row = _pair_row(report, "spectral_bands.brilliance", genre_a, genre_b)
+        assert row.status == "candidate", (genre_a, genre_b)
+        assert row.d is not None and row.d > 3.0, (genre_a, genre_b)
+
+
 def test_manifest_yaml_round_trip_shape(tmp_path: Path) -> None:
     path = tmp_path / "manifest.yaml"
     path.write_text(

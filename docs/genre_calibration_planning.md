@@ -201,14 +201,15 @@ B-2 では B-1/B-1b の箱を使って、`low_ratio > 0.4` 単独で Portals 型
 - `cinematic/orchestral`: `{low_ratio_gt: 0.4, high_ratio_lt: 0.017}`
 - 既存の `valley_depth > 0.3` による `cinematic/orchestral` 経路は温存する。
 
-この閾値は暫定であり、Q1-5 Ph2 で rule 族を power 比
-（`spectral_profile.low_ratio/mid_ratio/high_ratio`）から magnitude 7 帯域
-（特に `spectral_bands.brilliance`）へ移すときに再校正する。B-2 では
-`high_ratio` が必須欄で後方互換性が高いことを優先し、Optional な `spectral_bands` には
-まだ依存しない。
+この閾値は暫定であり、Q1-5 Ph2 で rule 族の **判別軸**（高域 brightness）を power 比
+（`spectral_profile.high_ratio`）から magnitude `spectral_bands.brilliance` へ移すときに
+再校正する。B-2 では `high_ratio` が必須欄で後方互換性が高いことを優先し、Optional な
+`spectral_bands` にはまだ依存しない（B-3 で brilliance を主軸化、後述 Q1-5 Ph2 実測で
+low/mid は power 据え置きと確定）。
 
 **残課題**: Phase C で本物アンカーを増やし、B-2 の 0.017 暫定線が real anchor でも
-通用するかを検証する。Q1-5 Ph2 では magnitude ベースの brightness 指標へ移行する。
+通用するかを検証する。Q1-5 Ph2 では magnitude ベースの brightness 指標（brilliance）へ
+移行する（low/mid_ratio は判別器でなくゲートのため power 据え置き、後述実測参照）。
 
 #### Phase B-3-rock 実績 — brilliance 3-way banding で rock を分離（2026-06-26）
 
@@ -255,6 +256,38 @@ EDM（0.823-0.880）双方より低く（d=2.7-3.4）分離を補強するが、
 fallback（high_ratio）は rock/EDM の high_ratio が重なる（rock 0.018-0.042 vs EDM
 0.022-0.049）ため 3-way 不可で 2 値据え置き＝**rock 判定は `spectral_bands` 必須**。
 Phase C で本物 rock アンカーを足し、0.117/0.204 暫定線の generator バイアスを検証する。
+
+#### Q1-5 Ph2 実測 — low/mid_ratio は power 据え置き、移行は「不要かつ不可」（2026-06-28）
+
+B-2/B-3 の `// Q1-5 Ph2 で再校正` 注記（rule 族を power 比から magnitude 7 帯域へ移す）
+のうち、**残っていた low/mid_ratio** を seed corpus（orchestral n=6 / rock n=5 /
+electronic-dance n=5）で `genre-calibrate` し、pair separability を実測した。
+
+| 特徴量 | 3 低域厚ジャンル間 | Cohen's d | 役割 |
+|---|---|---|---|
+| `low_ratio`（power, <300Hz） | 全ペア **overlap** | 1.3–2.1 | **ゲート**（全 >0.4 で admit、判別しない） |
+| `mid_ratio`（power, 300-4kHz） | 全ペア **overlap** | 1.6–2.7 | 補助、判別器でない |
+| `spectral_bands.bass`（mag, 60-250Hz） | 全ペア **overlap** | 0.8–1.9 | magnitude 低域も判別器でない |
+| `spectral_bands.brilliance`（mag, 6-20kHz） | 全ペア **candidate** | 3.3–7.0 | **唯一の判別器**（B-3 で magnitude 化済） |
+
+**結論（Q1-5 Ph2 の low/mid を closeout）**: 高域 brightness は #91 で power が defective
+（power high_ratio 2-5% が magnitude 30-36% と矛盾）と判明し B-3 で magnitude `brilliance`
+へ移行が**必須**だった。一方 low/mid は性質が違う:
+
+1. power `low_ratio` は 3 低域厚ジャンルを全て admit（min>0.4）する**ゲート**であって
+   判別器ではない（ジャンル間は overlap）。`mid_ratio` も overlap で判別に寄与しない。
+2. magnitude 低域（`bass`/`sub_bass`/`low_mid`）に替えても overlap のままで、高域
+   `brilliance` のような分離は低域に**存在しない**＝magnitude 化の是正動機が無い。
+3. ゲートの本質は「低域厚 vs 非低域厚（general）」の境界だが、その境界を magnitude で
+   再導出するには **general/非低域アンカー**が要る。現 seed は低域厚ジャンルのみで
+   非低域素材を欠くため、`low_ratio>0.4` に対応する magnitude 閾値を校正できない。
+
+よって **low/mid_ratio は power 据え置き**とし、Q1-5 Ph2 の magnitude 移行は高域判別器
+（B-3 完了）で実質完了。残るのは「Phase C で general/非低域アンカーを足し、ゲート境界
+（低域厚 vs general）の magnitude 化が割に合うか」の検証であり、power→magnitude の
+機械的な書き換えではない。回帰固定: `tests/test_genre_calibration.py::
+test_low_mid_power_bands_stay_power_q1_5_ph2`。#106 と同型の「測って変更不要/ブロックと
+判明」型 finding（単一ノブ修正の見送りを docs に保全）。
 
 ### Phase C — 本物アンカー検証
 
