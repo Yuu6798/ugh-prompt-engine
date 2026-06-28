@@ -47,23 +47,33 @@ python -m pytest tests/test_metamorphic_probe.py    # プロパティ検証
 2. **centroid ⊥ bpm** — tempo を 90→140 に振っても centroid のずれは grip 幅より遥かに小。
 3. **determinism** — 同一 spec → 同一 centroid/bpm/key/brightness。
 4. **不変条件** — brightness∈[0,1]、各帯域比∈[0,1]、centroid>0、各 confidence∈[0,1]。
-5. **回帰ガード（計測知見）** — `test_brightness_high_band_is_blind_for_synth`。
+5. **回帰ガード（計測知見）** — `test_brightness_high_band_is_blind_for_synth`（power 盲）
+   + `test_brightness_magnitude_brilliance_is_blind_for_synth`（magnitude も盲、Q1-5 Ph2）。
 
 ## 計測された設計知見（G major, 2026-06-16）
 
 ### brightness 掃引（ノブ＝倍音 richness）
 
-| level | centroid(Hz) | brightness | high_ratio | mid_ratio |
+| level | centroid(Hz) | high_ratio(power) | mid_ratio | brilliance(mag) |
 |---|---|---|---|---|
-| 0.0 | 839.4 | 0.0 | 0.0 | 0.838 |
-| 0.5 | 917.0 | 0.0 | 0.0 | 0.891 |
-| 1.0 | 961.3 | 0.0 | 0.0 | 0.910 |
+| 0.0 | 839.4 | 0.0 | 0.838 | 0.018 |
+| 0.5 | 917.0 | 0.0 | 0.891 | 0.018 |
+| 1.0 | 961.3 | 0.0 | 0.910 | 0.018 |
 
 - **`spectral_centroid` は tight grip**（span≈122Hz, 単調）。
 - **高域比 `brightness` センサーは合成器レンジで盲**（high_ratio≡0）。合成器の基音は
   <4kHz に留まり >4kHz 帯を駆動できないため。**「ツマミ死」ではなく「センサー盲」**
   — 同一ノブに対し centroid は応答し brightness は応答しない、という判別が一掃引で出る
   （K1 で個別発見した区別を一般化して再現）。
+- **magnitude `spectral_bands.brilliance`（6-20kHz）も合成器レンジで盲**（Q1-5 Ph2 で
+  `high_ratio==0.0` 前提を再点検）。B-3 で brightness/ジャンル判別器は power `high_ratio`
+  から magnitude `brilliance` へ移ったが、別センサーに替えても合成器では叩けない。
+  ただし power（≡0）と違い magnitude は **非ゼロ floor≈0.018**（スペクトル漏れ/ノイズ床を
+  拾う）を持ち、grip は **span≈9e-4 で平坦**＝dead。ノブのエネルギーは magnitude `mid`
+  帯（500-2kHz, 0.26→0.43）へ流れ込み、`brilliance` には届かない。
+  **含意**: ジャンル brightness 校正（orchestral/rock/EDM 分離）は合成器では検証不能で
+  実 Suno 音源（R1-audio）が必須、という genre calibration の前提を計器側から裏付ける。
+  回帰ガード: `test_brightness_magnitude_brilliance_is_blind_for_synth`。
 
 ### bpm 掃引（ノブ＝tempo, 36s）
 
@@ -85,8 +95,9 @@ python -m pytest tests/test_metamorphic_probe.py    # プロパティ検証
 
 ## 限界と次の一手
 
-- **合成器が叩けないノブは計測不能**: 高域 brightness（>4kHz）・実 bpm 病理（Suno の
-  89.1 アトラクタ）は合成では再現不可（2026-06-16 で実証済み）。これらは R1-audio 待ち。
+- **合成器が叩けないノブは計測不能**: 高域 brightness（power high_ratio >4kHz も magnitude
+  brilliance 6-20kHz も盲）・実 bpm 病理（Suno の 89.1 アトラクタ）は合成では再現不可
+  （2026-06-16 で実証、brilliance 盲は Q1-5 Ph2 で追検）。これらは R1-audio 待ち。
   本計器は「合成器で叩けるノブ」の grip/直交性に有効、と帯域を自覚して使う。
 - **拡張候補**: (a) brightness センサーを centroid 基準に正規化済みなので、高い基音
   テンプレを足せば高域帯も掃引可能。(b) R2-2a 検出器のカバレッジ外ケース
