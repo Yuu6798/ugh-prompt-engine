@@ -133,7 +133,12 @@ def sweep_brightness(
     levels: Sequence[float],
     duration_sec: float = PROBE_DURATION_SEC,
 ) -> list[dict]:
-    """brightness_level を掃引し centroid / brightness / 帯域比を記録。"""
+    """brightness_level を掃引し centroid / brightness / 帯域比を記録。
+
+    power 系（`high_ratio` ≥4kHz）に加え、B-3 でジャンル brightness 判別器に昇格した
+    magnitude `spectral_bands.brilliance`（6-20kHz）も併記する。両センサーの grip を
+    同一掃引で並べることで「power 盲（≡0）／magnitude も平坦か」を判別できる。
+    """
     rows: list[dict] = []
     for lvl in levels:
         phys = synth_extract(
@@ -142,6 +147,7 @@ def sweep_brightness(
             )
         )
         sp = phys.spectral_profile
+        sb = phys.spectral_bands
         rows.append(
             {
                 "level": round(float(lvl), 3),
@@ -149,6 +155,8 @@ def sweep_brightness(
                 "brightness": round(sp.brightness, 4),
                 "high_ratio": round(sp.high_ratio, 4),
                 "mid_ratio": round(sp.mid_ratio, 4),
+                "brilliance": round(sb.brilliance, 4) if sb is not None else None,
+                "presence": round(sb.presence, 4) if sb is not None else None,
                 "key": phys.key,
                 "mode": phys.mode,
             }
@@ -201,6 +209,18 @@ def build_report(
 
     centroid_grip = grip_summary(centroids)
     high_band_blind = all(row["high_ratio"] == 0.0 for row in bright_rows)
+    # magnitude brilliance（B-3 のジャンル brightness 判別器）の grip。power high_ratio が
+    # ≡0 で盲でも、magnitude が応答すれば「センサーを替えれば叩ける」ことになる。実測では
+    # 非ゼロ floor（≈0.02）を持つが span は ~1e-3 で平坦＝magnitude でも合成器では dead。
+    brilliances = [row["brilliance"] for row in bright_rows if row["brilliance"] is not None]
+    brilliance_grip = (
+        grip_summary(brilliances)
+        if brilliances
+        else {"span": 0.0, "monotone_nondecreasing": True}
+    )
+    # 平坦判定の閾値: 実測 span ~7e-4。lib 版差を吸収しつつ centroid の tight grip
+    # （>5Hz 相当の比率変化）とは桁違いに小さいことを示す保守的な 0.01。
+    brilliance_blind = bool(brilliances) and brilliance_grip["span"] < 0.01
     tracked = [r for r in ratios if 0.9 <= r <= 1.1]
     bpm_tracks = bool(ratios) and len(tracked) == len(ratios)
     # ratio が clean octave 窓（÷2: 0.45–0.55 / ×2: 1.8–2.2、screen_corpus と同一）に
@@ -229,6 +249,13 @@ def build_report(
             else "高域比 brightness センサーが応答（合成器が >4kHz を駆動）"
         ),
         (
+            "magnitude brilliance（B-3 のジャンル brightness 判別器）も合成器レンジで盲"
+            f"（grip span={brilliance_grip['span']}, 非ゼロ floor で平坦）— power 盲を替えても"
+            "ジャンル校正は実音源(R1-audio)が必須"
+            if brilliance_blind
+            else f"magnitude brilliance が応答（grip span={brilliance_grip['span']}）"
+        ),
+        (
             f"bpm 校正は {len(tracked)}/{len(ratios)} 点が±10%内で追従"
             if bpm_tracks
             else f"bpm 校正は {len(tracked)}/{len(ratios)} 点のみ追従 — 合成器の bpm grip は不安定"
@@ -252,6 +279,8 @@ def build_report(
             "rows": bright_rows,
             "centroid_grip": centroid_grip,
             "high_band_blind": high_band_blind,
+            "brilliance_grip": brilliance_grip,
+            "brilliance_blind": brilliance_blind,
         },
         "bpm_sweep": {
             "rows": bpm_rows,
@@ -269,19 +298,27 @@ def render_markdown(report: dict) -> str:
     lines.append("")
     lines.append("## Brightness sweep (knob: harmonic richness)")
     lines.append("")
-    lines.append("| level | centroid(Hz) | brightness | high_ratio | mid_ratio | key |")
-    lines.append("|---|---|---|---|---|---|")
+    lines.append(
+        "| level | centroid(Hz) | brightness | high_ratio | mid_ratio | brilliance(mag) | key |"
+    )
+    lines.append("|---|---|---|---|---|---|---|")
     for row in report["brightness_sweep"]["rows"]:
         lines.append(
             f"| {row['level']} | {row['centroid']} | {row['brightness']} | "
-            f"{row['high_ratio']} | {row['mid_ratio']} | {row['key']} {row['mode']} |"
+            f"{row['high_ratio']} | {row['mid_ratio']} | {row['brilliance']} | "
+            f"{row['key']} {row['mode']} |"
         )
     grip = report["brightness_sweep"]["centroid_grip"]
+    brilliance_grip = report["brightness_sweep"]["brilliance_grip"]
     lines.append("")
     lines.append(
         f"- centroid grip: span={grip['span']} Hz, monotone={grip['monotone_nondecreasing']}"
     )
-    lines.append(f"- high-band blind: {report['brightness_sweep']['high_band_blind']}")
+    lines.append(f"- high-band blind (power high_ratio): {report['brightness_sweep']['high_band_blind']}")
+    lines.append(
+        f"- brilliance blind (magnitude): {report['brightness_sweep']['brilliance_blind']} "
+        f"(grip span={brilliance_grip['span']})"
+    )
     lines.append("")
     lines.append("## BPM sweep (knob: tempo)")
     lines.append("")

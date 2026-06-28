@@ -170,3 +170,28 @@ def test_brightness_high_band_is_blind_for_synth() -> None:
     assert bright.spectral_profile.high_ratio == 0.0
     # しかし centroid センサーは tight grip で応答する
     assert bright.spectral_centroid > dark.spectral_centroid + 5.0
+
+
+@pytest.mark.slow
+def test_brightness_magnitude_brilliance_is_blind_for_synth() -> None:
+    """`high_ratio==0.0` 前提の再点検（Q1-5 Ph2）。
+
+    B-3 で brightness/ジャンル判別器は power `high_ratio` から magnitude
+    `spectral_bands.brilliance`（6-20kHz）へ移った。power 盲を別センサーで救えるかを
+    確かめると、magnitude brilliance は power と違い **非ゼロ floor**（≈0.02、magnitude は
+    スペクトル漏れ/ノイズ床を拾う）を持つが、brightness ノブには **平坦＝grip 死**。
+    つまり「power 盲を magnitude に替えてもジャンル brightness は合成器で叩けない」を固定し、
+    合成器の倍音は magnitude `mid`（500-2kHz）へ流れ込む（centroid だけが live sensor）。"""
+    dark = mp.synth_extract(mp.build_spec(brightness_level=0.0, duration_sec=20.0))
+    bright = mp.synth_extract(mp.build_spec(brightness_level=1.0, duration_sec=20.0))
+    assert dark.spectral_bands is not None
+    assert bright.spectral_bands is not None
+    # power high_ratio とは違い magnitude brilliance は非ゼロ floor を持つ
+    assert dark.spectral_bands.brilliance > 0.0
+    assert bright.spectral_bands.brilliance > 0.0
+    # だが grip は死んでいる: ノブ両端で brilliance はほぼ不変（実測 span~7e-4 << 0.01）
+    assert abs(bright.spectral_bands.brilliance - dark.spectral_bands.brilliance) < 0.01
+    # ノブのエネルギーは brilliance ではなく magnitude mid 帯（500-2kHz）へ流れる
+    assert bright.spectral_bands.mid > dark.spectral_bands.mid + 0.02
+    # centroid は依然 live sensor（同一ノブで応答）
+    assert bright.spectral_centroid > dark.spectral_centroid + 5.0
