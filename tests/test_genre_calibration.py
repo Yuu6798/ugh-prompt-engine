@@ -327,6 +327,101 @@ def test_cli_text_and_json_smoke_on_seed_manifest(tmp_path: Path) -> None:
     assert payload["threshold_candidates"] != []
 
 
+def _pair_row(report, feature: str, genre_a: str, genre_b: str):
+    for row in report.pair_separability:
+        if row.feature == feature and {row.genre_a, row.genre_b} == {genre_a, genre_b}:
+            return row
+    raise AssertionError(f"no pair row for {feature} {genre_a}/{genre_b}")
+
+
+def test_low_mid_power_bands_stay_power_q1_5_ph2() -> None:
+    """Q1-5 Ph2: `low_ratio` ゲートは power 据え置き closeout、`mid_ratio` は seed 未発火で繰越。
+
+    高域 brightness（power high_ratio）は #91 で power が defective と分かり B-3 で
+    magnitude `brilliance` へ移行した。残る low/mid を seed corpus（orchestral/rock/
+    electronic-dance）で測ると、両者は性質が異なる:
+
+    1. power `low_ratio` は 3 低域厚ジャンルを全て admit（min>0.4）＝**判別器でなくゲート**。
+       ジャンル間は全ペア overlap で discriminate しない。is sound として power 据え置き。
+    2. magnitude 低域は **3 ペア全てを分離する単独バンドが無い**: `bass` は全ペア overlap、
+       `sub_bass` は rock↔EDM のみ、`low_mid` は orchestral を rock/EDM から分けるが
+       rock↔EDM は overlap、と**いずれも部分的**（捨てずに Phase C 補助軸候補として残す）。
+    3. 一方 `spectral_bands.brilliance` は全ペア candidate（分離可、d>3）＝**全ペア判別軸は
+       既に B-3 で magnitude 化済み**。
+    4. `mid_ratio` は **本 seed では評価対象に乗らない**（評価不能、closeout に含めない）。
+       低域厚 seed の mid_ratio は production の mid-focused 閾値（`mid_ratio_min:0.45`/
+       `mid_ratio_gt:0.5`）に届かず（全ジャンル max<0.45）mid-focused パスが一度も発火しない。
+       よって mid_ratio の power/magnitude 是非は測れず、mid-focused/general アンカー待ちで繰越。
+
+    結論: closeout できるのは `low_ratio` ゲート（sound・境界は general アンカー待ち）のみ。
+    `mid_ratio` は据え置くが「評価不能のため繰越」（migration の是非は未判断）。本テストは
+    この区別（low ゲート据え置き / 低域 magnitude の**部分的**分離 / mid-focused ルール未発火）を
+    回帰固定し、mid を closeout 済みに見せる過剰主張と低域の全 overlap 過剰主張を防ぐ。
+    """
+    report = run_genre_calibration(load_genre_manifest(SEED_MANIFEST), repo_root=ROOT)
+    low_heavy = ("orchestral", "rock", "electronic-dance")
+    pairs = (
+        ("orchestral", "electronic-dance"),
+        ("rock", "electronic-dance"),
+        ("orchestral", "rock"),
+    )
+
+    # (1) power low_ratio ゲートは 3 低域厚ジャンルを全て admit（>0.4）
+    for genre in low_heavy:
+        low_stats = report.genres[genre].features["low_ratio"]
+        assert low_stats.min is not None and low_stats.min > 0.4, genre
+
+    # (4) `mid_ratio` は本 seed では評価不能（mid-focused ルール未発火・Codex #108 P2-2）。
+    # production の `perc.mid_focused`(mid_ratio_min:0.45) / `instr.mid_focused`(mid_ratio_gt:0.5)
+    # に対し、低域厚 seed の mid_ratio は最大でも 0.45 未満で一度も発火しない＝この seed で
+    # mid_ratio の power/magnitude 是非は測れない（closeout は low_ratio ゲートのみ）。
+    for genre in low_heavy:
+        mid_stats = report.genres[genre].features["mid_ratio"]
+        assert mid_stats.max is not None and mid_stats.max < 0.45, genre
+
+    # (1)(2) power low/mid_ratio と magnitude 低域 bass は判別器にならない（全ペア overlap）
+    for feature in ("low_ratio", "mid_ratio", "spectral_bands.bass"):
+        for genre_a, genre_b in pairs:
+            assert _pair_row(report, feature, genre_a, genre_b).status == "overlap", (
+                feature,
+                genre_a,
+                genre_b,
+            )
+
+    # (2) low_mid/sub_bass は **部分的**分離（全 overlap ではない: Codex #108 P2 の修正）。
+    # low_mid: orchestral を rock/EDM から分けるが rock↔EDM は overlap。
+    assert _pair_row(report, "spectral_bands.low_mid", "orchestral", "rock").status == "candidate"
+    assert (
+        _pair_row(report, "spectral_bands.low_mid", "orchestral", "electronic-dance").status
+        == "candidate"
+    )
+    assert (
+        _pair_row(report, "spectral_bands.low_mid", "rock", "electronic-dance").status == "overlap"
+    )
+    # sub_bass: rock↔EDM のみ分離、orchestral は両者と overlap。
+    assert (
+        _pair_row(report, "spectral_bands.sub_bass", "rock", "electronic-dance").status
+        == "candidate"
+    )
+    assert _pair_row(report, "spectral_bands.sub_bass", "orchestral", "rock").status == "overlap"
+
+    # (3) 全ペアを単独で分離するのは magnitude brilliance のみ＝高域のみ magnitude 化が必要だった
+    for genre_a, genre_b in pairs:
+        row = _pair_row(report, "spectral_bands.brilliance", genre_a, genre_b)
+        assert row.status == "candidate", (genre_a, genre_b)
+        assert row.d is not None and row.d > 3.0, (genre_a, genre_b)
+
+    # (5) 実アンカー grounding の区別（Codex #108 P2-5）。唯一の実アンカー portals は
+    # scalar `low_ratio` のみ持ち mid_ratio/spectral_bands を欠く（非 null のみ比較）ため、
+    # `low_ratio` 所見だけが実アンカー裏打ち（orchestral n=6）で、mid_ratio と magnitude 判別軸は
+    # Suno のみ（n=5）＝generator bias 未検証。この実効件数差を回帰固定する（過大評価防止）。
+    orch = report.genres["orchestral"].features
+    assert orch["low_ratio"].count == 6  # portals（実アンカー）含む
+    assert orch["mid_ratio"].count == 5  # Suno のみ
+    assert orch["spectral_bands.brilliance"].count == 5  # Suno のみ
+    assert orch["spectral_bands.low_mid"].count == 5  # Suno のみ
+
+
 def test_manifest_yaml_round_trip_shape(tmp_path: Path) -> None:
     path = tmp_path / "manifest.yaml"
     path.write_text(

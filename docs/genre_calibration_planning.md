@@ -201,14 +201,15 @@ B-2 では B-1/B-1b の箱を使って、`low_ratio > 0.4` 単独で Portals 型
 - `cinematic/orchestral`: `{low_ratio_gt: 0.4, high_ratio_lt: 0.017}`
 - 既存の `valley_depth > 0.3` による `cinematic/orchestral` 経路は温存する。
 
-この閾値は暫定であり、Q1-5 Ph2 で rule 族を power 比
-（`spectral_profile.low_ratio/mid_ratio/high_ratio`）から magnitude 7 帯域
-（特に `spectral_bands.brilliance`）へ移すときに再校正する。B-2 では
-`high_ratio` が必須欄で後方互換性が高いことを優先し、Optional な `spectral_bands` には
-まだ依存しない。
+この閾値は暫定であり、Q1-5 Ph2 で rule 族の **判別軸**（高域 brightness）を power 比
+（`spectral_profile.high_ratio`）から magnitude `spectral_bands.brilliance` へ移すときに
+再校正する。B-2 では `high_ratio` が必須欄で後方互換性が高いことを優先し、Optional な
+`spectral_bands` にはまだ依存しない（B-3 で brilliance を主軸化、後述 Q1-5 Ph2 実測で
+`low_ratio` ゲートは power 据え置き・`mid_ratio` は seed 未発火で繰越と確定）。
 
 **残課題**: Phase C で本物アンカーを増やし、B-2 の 0.017 暫定線が real anchor でも
-通用するかを検証する。Q1-5 Ph2 では magnitude ベースの brightness 指標へ移行する。
+通用するかを検証する。Q1-5 Ph2 では magnitude ベースの brightness 指標（brilliance）へ
+移行する（`low_ratio` ゲートは power 据え置き、`mid_ratio` は seed 未発火で繰越、後述実測参照）。
 
 #### Phase B-3-rock 実績 — brilliance 3-way banding で rock を分離（2026-06-26）
 
@@ -255,6 +256,70 @@ EDM（0.823-0.880）双方より低く（d=2.7-3.4）分離を補強するが、
 fallback（high_ratio）は rock/EDM の high_ratio が重なる（rock 0.018-0.042 vs EDM
 0.022-0.049）ため 3-way 不可で 2 値据え置き＝**rock 判定は `spectral_bands` 必須**。
 Phase C で本物 rock アンカーを足し、0.117/0.204 暫定線の generator バイアスを検証する。
+
+#### Q1-5 Ph2 実測 — `low_ratio` ゲートは power 据え置き closeout、`mid_ratio` は評価不能で繰越（2026-06-28）
+
+B-2/B-3 の `// Q1-5 Ph2 で再校正` 注記（rule 族を power 比から magnitude 7 帯域へ移す）
+のうち、**残っていた low/mid_ratio** を seed corpus で `genre-calibrate` し、pair separability
+を実測した。
+
+**特徴量ごとの実効サンプル数（重要）**: `genre-calibrate` は非 null 値のみで比較する。
+唯一の実アンカー `portals`（real orchestral）は `low_ratio`/`high_ratio` 等の scalar しか持たず
+`mid_ratio` も `spectral_bands.*` も未計測のため、特徴量で n が異なる:
+
+| 特徴量 | orchestral | rock | electronic-dance | 実アンカー grounding |
+|---|---|---|---|---|
+| `low_ratio`（power） | **n=6**（portals 含む） | n=5 | n=5 | あり（portals） |
+| `mid_ratio`（power） | n=5（Suno のみ） | n=5 | n=5 | **なし（全 Suno）** |
+| `spectral_bands.*`（mag） | n=5（Suno のみ） | n=5 | n=5 | **なし（全 Suno）** |
+
+⚠️ **`low_ratio` ゲート所見だけが実アンカーで裏打ちされ、magnitude 判別軸
+（`brilliance`/`low_mid`/`sub_bass`）と `mid_ratio` の所見は全ジャンル Suno 生成のみ**
+（実アンカー grounding ゼロ）。後者は generator bias に対し未検証で、Phase C の実アンカー
+投入は「ゲート境界の拡張」だけでなく **magnitude 判別軸の bias 検証**にも必須。
+
+| 特徴量 | 3 低域厚ジャンル間 | Cohen's d | 役割 |
+|---|---|---|---|
+| `low_ratio`（power, <300Hz） | 全ペア **overlap** | 1.3–2.1 | **ゲート**（全 >0.4 で admit、判別しない） |
+| `mid_ratio`（power, 300-4kHz） | 全ペア **overlap** | 1.6–2.7 | 補助、判別器でない |
+| `spectral_bands.bass`（mag, 60-250Hz） | 全ペア **overlap** | 0.8–1.9 | magnitude 低域でも判別器でない |
+| `spectral_bands.sub_bass`（mag, 20-60Hz） | rock/EDM のみ candidate、他 overlap | 0.8–2.2 | **部分的**（rock↔EDM のみ分離） |
+| `spectral_bands.low_mid`（mag, 250-500Hz） | orchestral 対 rock/EDM が candidate、rock/EDM は overlap | 0.5–3.0 | **部分的**（orchestral を分離、rock↔EDM は不可） |
+| `spectral_bands.brilliance`（mag, 6-20kHz） | 全ペア **candidate** | 3.3–7.0 | **唯一の全ペア判別器**（B-3 で magnitude 化済） |
+
+**結論（Q1-5 Ph2: `low_ratio` ゲートは closeout、`mid_ratio` は評価不能で繰越）**:
+高域 brightness は #91 で power が defective（power high_ratio 2-5% が magnitude 30-36% と
+矛盾）と判明し B-3 で magnitude `brilliance` へ移行が**必須**だった。一方 low は性質が違う
+（mid は後述の通り本 seed では評価対象に乗らない）:
+
+1. power `low_ratio` は 3 低域厚ジャンルを全て admit（min>0.4）する**ゲート**であって
+   判別器ではない（ジャンル間は overlap）。`mid_ratio` も判別軸としては overlap。
+2. magnitude 低域に替えても、**3 ペア全てを分離する低域バンドは無い**。`bass` は全ペア
+   overlap、`sub_bass` は rock↔EDM のみ、`low_mid` は orchestral を rock/EDM から分けるが
+   rock↔EDM は overlap、と**いずれも部分的**。全 3 ペアを単独で分離するのは高域
+   `brilliance`（d 最大 7）のみで、これは B-3 で既に判別軸として採用済み。
+3. ゲートの本質は「低域厚 vs 非低域厚（general）」の境界だが、その境界を magnitude で
+   再導出するには **general/非低域アンカー**が要る。現 seed は低域厚ジャンルのみで
+   非低域素材を欠くため、`low_ratio>0.4` に対応する magnitude 閾値を校正できない。
+4. **`mid_ratio` は本 seed では評価対象に乗らない**（評価不能であって「不要」ではない）。
+   production の mid ルール（`perc.mid_focused` = `mid_ratio_min: 0.45`、`instr.mid_focused`
+   = `mid_ratio_gt: 0.5`）に対し、seed の `mid_ratio` 実測は orchestral 0.224-0.437 /
+   rock 0.166-0.314 / EDM 0.080-0.243 で**全て閾値 0.45/0.5 未満**＝mid-focused パスは
+   一度も発火しない。低域厚ジャンルだけの seed では mid-focused/general 素材を欠くため、
+   `mid_ratio` の power/magnitude 是非はそもそも測れない。
+
+よって閉じられるのは **`low_ratio` ゲートの closeout のみ**（power 据え置き + ゲート境界の
+magnitude 化は general アンカー待ち）。`mid_ratio` は **据え置くが「評価不能のため繰越」**
+と明示する（mid-focused/general アンカーが入るまで migration の是非を判断しない）。
+Q1-5 Ph2 の全ペア判別軸は `brilliance`（B-3 完了）で実質完了。**ただし** `low_mid`/`sub_bass`
+が部分的な genre signal を持つことは実データで確認できたので、これらは「捨てる」のではなく
+**Phase C の補助軸候補**として残す（brilliance を主軸に、rock↔EDM など overlap が残る
+ペアの補強に使えるか、本物アンカーで検証する）。残課題は「Phase C で general/非低域
+（および mid-focused）アンカーを足し、ゲート境界の magnitude 化・`mid_ratio` 是非・補助軸の
+採否を検証」であり、現 seed での power→magnitude の機械的な書き換えではない。回帰固定:
+`tests/test_genre_calibration.py::test_low_mid_power_bands_stay_power_q1_5_ph2`（`mid_ratio` が
+seed で production 閾値 0.45 に届かない＝未発火も assert）。#106 と同型の「測って変更不要/
+評価不能と判明」型 finding。
 
 ### Phase C — 本物アンカー検証
 
