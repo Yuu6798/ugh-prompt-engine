@@ -343,14 +343,16 @@ def test_low_mid_power_bands_stay_power_q1_5_ph2() -> None:
 
     1. power `low_ratio` は 3 低域厚ジャンルを全て admit（min>0.4）＝**判別器でなくゲート**。
        ジャンル間は全ペア overlap で discriminate しない。`mid_ratio` も同様に overlap。
-    2. magnitude 低域 `spectral_bands.bass` も全ペア overlap＝magnitude にしてもゲートとして
-       power より優れない（高域 brilliance のような分離は低域には無い）。
-    3. 一方 `spectral_bands.brilliance` は全ペア candidate（分離可、d>3）＝**判別器は既に
-       B-3 で magnitude 化済み**。
+    2. magnitude 低域は **3 ペア全てを分離する単独バンドが無い**: `bass` は全ペア overlap、
+       `sub_bass` は rock↔EDM のみ、`low_mid` は orchestral を rock/EDM から分けるが
+       rock↔EDM は overlap、と**いずれも部分的**（捨てずに Phase C 補助軸候補として残す）。
+    3. 一方 `spectral_bands.brilliance` は全ペア candidate（分離可、d>3）＝**全ペア判別軸は
+       既に B-3 で magnitude 化済み**。
 
     結論: low/mid の power 帯は健全なゲートで、移行の是正動機が無い。ゲート境界
     （低域厚 vs 非低域厚 general）の magnitude 再導出には general アンカーが要るが seed に
-    不在のため Phase C 待ち。本テストはこの「low/mid は power 据え置き」決定を回帰固定する。
+    不在のため Phase C 待ち。本テストはこの「low/mid は power 据え置き」決定と、低域 magnitude
+    バンドの**部分的**分離パターン（過剰な全 overlap 主張を防ぐ）を回帰固定する。
     """
     report = run_genre_calibration(load_genre_manifest(SEED_MANIFEST), repo_root=ROOT)
     low_heavy = ("orchestral", "rock", "electronic-dance")
@@ -374,7 +376,24 @@ def test_low_mid_power_bands_stay_power_q1_5_ph2() -> None:
                 genre_b,
             )
 
-    # (3) 判別器は magnitude brilliance（全ペア分離可）＝高域のみ magnitude 化が必要だった
+    # (2) low_mid/sub_bass は **部分的**分離（全 overlap ではない: Codex #108 P2 の修正）。
+    # low_mid: orchestral を rock/EDM から分けるが rock↔EDM は overlap。
+    assert _pair_row(report, "spectral_bands.low_mid", "orchestral", "rock").status == "candidate"
+    assert (
+        _pair_row(report, "spectral_bands.low_mid", "orchestral", "electronic-dance").status
+        == "candidate"
+    )
+    assert (
+        _pair_row(report, "spectral_bands.low_mid", "rock", "electronic-dance").status == "overlap"
+    )
+    # sub_bass: rock↔EDM のみ分離、orchestral は両者と overlap。
+    assert (
+        _pair_row(report, "spectral_bands.sub_bass", "rock", "electronic-dance").status
+        == "candidate"
+    )
+    assert _pair_row(report, "spectral_bands.sub_bass", "orchestral", "rock").status == "overlap"
+
+    # (3) 全ペアを単独で分離するのは magnitude brilliance のみ＝高域のみ magnitude 化が必要だった
     for genre_a, genre_b in pairs:
         row = _pair_row(report, "spectral_bands.brilliance", genre_a, genre_b)
         assert row.status == "candidate", (genre_a, genre_b)
