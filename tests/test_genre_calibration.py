@@ -449,6 +449,37 @@ def test_real_jpop_anchors_below_suno_edm_brightness() -> None:
     assert jpop_bril.max < edm_bril.min  # 本物 dance-pop は Suno EDM より厳密に暗い（bias）
 
 
+def test_suno_jpop_overbrightens_vs_real_matched_pair() -> None:
+    """Phase C matched-pair: 本物 J-POP × Suno J-POP（同ジャンル/キー/BPM）で生成器バイアス固定。
+
+    #109 の本物 J-POP vs Suno EDM はジャンル交絡があった。本物 3 本に同ジャンル・同キー・
+    同 BPM を狙った Suno を対で生成（`j-pop-suno`）し、残差を純粋な real→Suno 指紋として測る。
+    所見を回帰固定:
+    1. brilliance: 本物 j-pop（rock 帯, mean≈0.162）< Suno j-pop（EDM 帯, mean≈0.250）で
+       `genre-calibrate` が candidate 分離（重なりゼロ）＝over-brightening が genre-controlled で確定。
+    2. mid_ratio: Suno が一貫して中域薄い（本物 > Suno）＝スマイリー EQ 指紋の一部。
+    """
+    report = run_genre_calibration(load_genre_manifest(SEED_MANIFEST), repo_root=ROOT)
+    real = report.genres["j-pop"]
+    suno = report.genres["j-pop-suno"]
+    assert real.status == "sufficient" and real.sample_count == 3
+    assert suno.status == "sufficient" and suno.sample_count == 3
+
+    # (1) brilliance: 本物 < Suno で重なりゼロ分離（over-brightening）
+    real_bril = real.features["spectral_bands.brilliance"]
+    suno_bril = suno.features["spectral_bands.brilliance"]
+    assert real_bril.max is not None and suno_bril.min is not None
+    assert real_bril.max < suno_bril.min  # 重なりゼロ（本物 max < Suno min）
+    pair = _pair_row(report, "spectral_bands.brilliance", "j-pop", "j-pop-suno")
+    assert pair.status == "candidate"
+    assert pair.d is not None and pair.d > 3.0
+
+    # (2) mid_ratio: Suno が中域薄い（本物 mean > Suno mean）＝スマイリー EQ 指紋
+    assert real.features["mid_ratio"].mean is not None
+    assert suno.features["mid_ratio"].mean is not None
+    assert real.features["mid_ratio"].mean > suno.features["mid_ratio"].mean
+
+
 def test_manifest_yaml_round_trip_shape(tmp_path: Path) -> None:
     path = tmp_path / "manifest.yaml"
     path.write_text(

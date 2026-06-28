@@ -552,3 +552,90 @@ samples:
         brilliance: 0.1498
     notes:
       - "本物 real anchor。M4A/AAC-LC 320kbps/44.1kHz/stereo。Integrated loudness ≈ -5.7 LUFS (3 本中最ラウド・現代ブリックウォール)。種別は耳で J-reggae/dancehall pop 確認。audio は session 添付で repo 外。key は extractor 値 (手動推定 D# minor 寄りとは mode 相違)。"
+  - id: jpop_suno_01_amuro
+    genre_label: j-pop-suno
+    generator: suno
+    prompt: "Matched-pair Suno for jpop_01_dontwannacry (安室 Don't wanna cry)。90s Japanese dance-pop, late-90s synth-producer sound, 99 BPM, G minor。bias 測定用 (同ジャンル/キー対)。"
+    audio_locator: session_attachment
+    audio_hash: 1e1fc96ca442716cd950a0152aa56ba98ed645cffb20c26e1f5a8d08943be652
+    drive_file_id: null
+    measured:
+      harmonic_ratio: 0.6907
+      percussive_ratio: 0.3093
+      spectral_centroid: 3634.64
+      bpm: 99.38
+      key: G
+      mode: minor
+      dynamic_range_db: 9.24
+      valley_depth: 0.0958
+      low_ratio: 0.7064
+      mid_ratio: 0.2167
+      high_ratio: 0.0769
+      spectral_bands:
+        sub_bass: 0.0399
+        bass: 0.1328
+        low_mid: 0.0314
+        mid: 0.1724
+        high_mid: 0.2205
+        presence: 0.1485
+        brilliance: 0.2545
+    notes:
+      - "Matched-pair bias 測定用 Suno (↔ jpop_01 本物)。同 BPM/key 再現。brilliance 0.162→0.255 (本物比 +0.092)。audio は session 添付で repo 外 (sha256 で provenance)。"
+  - id: jpop_suno_02_speed
+    genre_label: j-pop-suno
+    generator: suno
+    prompt: "Matched-pair Suno for jpop_02_bodyandsoul (SPEED Body & Soul)。90s dance/teen pop, eurobeat energy, 123 BPM target, G major。bias 測定用。"
+    audio_locator: session_attachment
+    audio_hash: 41c76769f4dcf10a10682b77f59279f126f6834dab1f3857b7cd136f510c9092
+    drive_file_id: null
+    measured:
+      harmonic_ratio: 0.8007
+      percussive_ratio: 0.1993
+      spectral_centroid: 3835.84
+      bpm: 129.2
+      key: G
+      mode: major
+      dynamic_range_db: 4.76
+      valley_depth: 0.1006
+      low_ratio: 0.6007
+      mid_ratio: 0.3045
+      high_ratio: 0.0948
+      spectral_bands:
+        sub_bass: 0.0285
+        bass: 0.1245
+        low_mid: 0.0369
+        mid: 0.1871
+        high_mid: 0.2007
+        presence: 0.137
+        brilliance: 0.2852
+    notes:
+      - "Matched-pair bias 測定用 Suno (↔ jpop_02 本物)。BPM 123→129 (近接)、key G major 一致。brilliance 0.174→0.285 (本物比 +0.111)。audio は session 添付で repo 外。"
+  - id: jpop_suno_03_bubble
+    genre_label: j-pop-suno
+    generator: suno
+    prompt: "Matched-pair Suno for jpop_03_bubble (湘南乃風 バブル)。Japanese reggae/dancehall party pop, 136 BPM, D#/Eb。skank/artist 語は除去して再生成。bias 測定用。"
+    audio_locator: session_attachment
+    audio_hash: e26531c93b8ec2e765b6d703331671f954ab38e6d61daf5ce9dfc1bfc59e691b
+    drive_file_id: null
+    measured:
+      harmonic_ratio: 0.7384
+      percussive_ratio: 0.2616
+      spectral_centroid: 2981.61
+      bpm: 136.0
+      key: D#
+      mode: major
+      dynamic_range_db: 11.87
+      valley_depth: 0.109
+      low_ratio: 0.838
+      mid_ratio: 0.1292
+      high_ratio: 0.0329
+      spectral_bands:
+        sub_bass: 0.0846
+        bass: 0.1404
+        low_mid: 0.0476
+        mid: 0.181
+        high_mid: 0.2066
+        presence: 0.1306
+        brilliance: 0.2091
+    notes:
+      - "Matched-pair bias 測定用 Suno (↔ jpop_03 本物)。同 BPM/key 再現。brilliance 0.150→0.209 (本物比 +0.059)。audio は session 添付で repo 外。"
