@@ -39,16 +39,25 @@ gap 中点 0.117/0.204 の 3way へ是正（audit に rock 期待値・既存 or
 さらに **R2-2 BPM halving を調査（#106）**：punk 175→123 は `load_audio` 22050 リサンプル×
 start_bpm=120 prior 起因（native 48k は 181 回復）で、閾値低下（ratio punk1.057<BPM 正検出
 indie1.098）も sr 上げ（native は synth_05 を半化）も大域回帰と実測確定し、単一ノブ修正を見送って
-診断を docs finding #6 に保全。残るは解像度向上系（Phase C 本物アンカー増強 / Q1-5 Ph2 残帯域 / 4 ジャンル目 acoustic）。標準コンテキスト:
-目的2（再現実証）R0–R5・R1-audio・Q1-5 Ph1 は closeout 済、外部律速の残キューは K2（人間生成バッチ）/
-Q1-5 Ph2 の最終校正コーパス breadth（licensing）。
+診断を docs finding #6 に保全。**2026-06-28 に Q1-5 Ph2 を 2 PR で実質クローズ**：#107 で
+metamorphic probe の `high_ratio==0.0` 前提を再点検し magnitude `brilliance` も合成器では盲
+（grip span≈9e-4・非ゼロ floor で平坦）を回帰ガード化、#108 で low/mid_ratio を seed pair
+separability 実測し **`low_ratio` はゲートで健全（全 >0.4・全ペア overlap）・magnitude 低域は
+部分分離（全ペア単独判別は brilliance のみ）・general アンカー欠如でゲート境界の magnitude
+再導出不能** と確定して `low_ratio` は power 据え置き closeout・`mid_ratio` は production 閾値
+未発火で評価不能・繰越とした（production rule 不変）。重要な honesty caveat：magnitude 判別軸と
+mid_ratio の所見は実アンカー portals が当該欄を欠くため**全ジャンル Suno のみ（実 grounding
+ゼロ）**で、Phase C はゲート境界拡張だけでなく magnitude 軸の generator bias 検証にも必須。
+残るは解像度向上系（Phase C 本物アンカー増強 / 4 ジャンル目 acoustic / Q1-5 Ph2 の
+screen_2026-06-16 再採取）。標準コンテキスト: 目的2（再現実証）R0–R5・R1-audio・Q1-5 Ph1/Ph2 は
+closeout 済、外部律速の残キューは K2（人間生成バッチ）/ Phase C 校正コーパス breadth（licensing）。
 
 ## Next-Issue Queue
 
 | ID | Title | Priority | Notes |
 |---|---|---|---|
 | K2 | Suno 転移検証 | P1 | K1 の tight/loose 判定が Suno/Udio 級で転移するか手動少数バッチ。物理固定・意味差替で「別物」生成を確認済(意味層 grip 有り・耳)だが n=1。律速は人間生成バッチ。controllability_poc.md §5 |
-| Q1-5 Ph2 | spectral 帯域 magnitude 再校正(残) | P2 | B-3 で brightness 系は magnitude 移行。残=他 power 帯域(`low/mid_ratio`)是正 + `screen_2026-06-16.yaml` 再採取 + `test_metamorphic_probe.py` の `high_ratio==0.0` 前提見直し + 校正コーパス breadth(licensing 律速)。Phase 1=#91 マージ済。**BPM**: #106 で sr/閾値の単一ノブ修正は大域回帰と確定(finding #6)。自動化は `start_bpm=180` 再抽出手順化か multi-prior/sr ensemble+octave tie-break を全 fixture 回帰検証付き Design Memo 化 |
+| Q1-5 Ph2 | spectral 帯域 magnitude 再校正(残) | P3 | **大半 closeout 済**: brightness=B-3 / `high_ratio==0.0` 前提見直し=#107 / low/mid_ratio 据え置き finding=#108(low はゲートで健全・mid は未発火で繰越・general アンカー欠如)。残=`screen_2026-06-16.yaml` 再採取 + mid_ratio/magnitude 軸の bias 検証(Phase C と統合・licensing 律速)。**BPM**: #106 で sr/閾値の単一ノブ修正は大域回帰と確定(finding #6)。自動化は multi-prior/sr ensemble+octave tie-break を全 fixture 回帰検証付き Design Memo 化 |
 | Genre Calib Phase C | 本物アンカー増強 + bias 検証 | P2 | 分離線は Suno 生成中心(本物 Portals 1点)。実 orchestral/EDM 録音を各数本 content-address 登録し閾値の generator bias(特に dynamics)を測定・補正。律速=本物音源 licensing。`docs/genre_calibration_planning.md` Phase C |
 | Genre Calib seed follow-up | EDM 5本の Drive 化 + Suno prompt 転記 | P3 | #103 で measured はインライン保全済。残=`electronic_dance_*` の Drive アップロード→`drive_file_id` 回収 + `prompt:` 本文の PENDING 解消。律速=人間作業 |
 | Genre Calib 4th genre | acoustic へ域拡張 | P3 | acoustic(low_ratio<0.4 の general 落ち領域を突く coverage 拡張型)を rock(#105)と同じ協働フロー(物理層明示プロンプト→user 生成→抽出→分離分析→ルール反映)で追加。律速=人間生成バッチ |
@@ -57,8 +66,8 @@ Q1-5 Ph2 の最終校正コーパス breadth（licensing）。
 
 | PR | Title | Date | Phase |
 |---|---|---|---|
+| #108 | docs(genre): low/mid_ratio は power 据え置き＝Q1-5 Ph2 移行は不要/評価不能と実測（`low_ratio` ゲート健全・magnitude 低域は部分分離で全ペア判別は brilliance のみ・mid は production 閾値未発火で繰越・magnitude 軸は Suno-only grounding を caveat 化・Codex 5 ラウンド・rule 不変） | 2026-06-28 | Q1-5 Ph2 |
+| #107 | test(probe): magnitude brilliance も合成器では盲を計器/回帰ガード化（`high_ratio==0.0` 前提再点検・power≡0/magnitude 非ゼロ floor で平坦 grip≈9e-4・ノブ energy は mid 帯へ・centroid のみ live sensor・rule 不変） | 2026-06-28 | Q1-5 Ph2 |
 | #106 | docs(bpm): R2-2 halving は sr/閾値の単一ノブでは直せないと実証（finding #6・punk ratio1.057<正検出indie1.098 で分離不能・native は synth_05 を半化・コード変更なし） | 2026-06-26 | Q1-5 Ph2 / R2-2 |
 | #105 | feat(genre): brilliance 3-way banding で rock 分離（B-3-rock・旧単一閾値0.1537の rock 裂きを gap 中点0.117/0.204 へ・audit に rock 期待値・回帰ゼロ・Codex P2 境界穴を `_min` 化） | 2026-06-26 | Genre Calib B-3-rock |
 | #104 | feat(semantic): brightness split を magnitude brilliance へ移行（B-3・`_absent` 演算子新設で bands あり→brilliance 一次/欠落→power high_ratio fallback の相互排他・回帰無改変 green・二重発火なし） | 2026-06-25 | Genre Calib B-3 |
-| #103 | feat(calibration): genre seed manifest を実 Suno 実測 10 本で確定（orchestral n=5 + electronic-dance n=5 を measured インライン保全・2 点 stub→n=12・B-2 split の誤判定 0 を恒久ガード化） | 2026-06-25 | Genre Calib seed |
-| #102 | feat(semantic): brightness で orchestral/bass-music を分離（B-2・`low_ratio>0.4` を `high_ratio` 0.017 で明暗二分・管弦の bass-music 誤判定を是正・synth 不変） | 2026-06-25 | Genre Calib B-2 |
