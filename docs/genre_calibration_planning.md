@@ -402,7 +402,8 @@ orchestral/rock/EDM でも同じ matched-pair を取り、指紋がジャンル�
 J-POP matched-pair は「Suno は over-brighten する」を示したが、それが**ジャンル横断で一定
 （＝単一補正係数化できる）か**は未検証だった。ユーザーが推奨曲を lossless 購入（Drive→
 90 秒 FLAC クリップ添付、Drive 直 DL は egress policy で 403・MCP base64 は MB 級不可のため
-クリップ経由）。本物 1 曲ずつを各 Suno コホート（seed n=5）と対比:
+クリップ経由）。本物 1 曲ずつを各**純 Suno コホート**（`generator == "suno"` のみ、各 n=5。orchestral の real
+stub `portals` は baseline から除外し real+Suno 混合平均を避ける）と対比:
 
 - orchestral: John Williams「Star Wars Main Title」
 - rock: Nirvana「Heart-Shaped Box」(Albini mix)
@@ -425,7 +426,7 @@ J-POP matched-pair は「Suno は over-brighten する」を示したが、そ�
 | 指紋 | orch | rock | EDM | 解釈 |
 |---|---|---|---|---|
 | **mid_ratio**（本物 > Suno） | +0.25 | +0.09 | +0.07 | Suno は中域を一貫して削る（スマイリー EQ の中央へこみ） |
-| **harmonic_ratio**（本物 < Suno） | −0.07 | −0.03 | **−0.43** | Suno は一貫してトーナル/クリーン（本物の打楽器/歪み/フィルタノイズを生成しきれない・EDM 最大） |
+| **harmonic_ratio**（本物 < 純Suno） | −0.10 | −0.03 | **−0.43** | Suno は一貫してトーナル/クリーン（本物の打楽器/歪み/フィルタノイズを生成しきれない・EDM 最大） |
 
 **ボーナス（ゲートの一般化限界）**: 本物 Star Wars の `low_ratio = 0.388 < 0.4` で
 `low_ratio>0.4` ゲートを通らず "general" 落ち（本物映画音楽は中域主役 mid=0.593 で低域厚でない）。

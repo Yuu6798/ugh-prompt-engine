@@ -492,7 +492,8 @@ def test_cross_genre_suno_fingerprint_not_constant() -> None:
     3. ゲートの一般化限界: 本物 orchestral の low_ratio < 0.4 で `low_ratio>0.4` ゲートを通らない
        （Suno orchestral の人工的低域厚に依存していた）。
     """
-    report = run_genre_calibration(load_genre_manifest(SEED_MANIFEST), repo_root=ROOT)
+    manifest = load_genre_manifest(SEED_MANIFEST)
+    report = run_genre_calibration(manifest, repo_root=ROOT)
     pairs = {  # real label -> suno cohort label
         "orchestral-real": "orchestral",
         "rock-real": "rock",
@@ -504,23 +505,42 @@ def test_cross_genre_suno_fingerprint_not_constant() -> None:
         assert v is not None, (label, feat)
         return v
 
-    def suno_stat(label: str, feat: str):
-        return report.genres[label].features[feat]
+    def _feat_value(measured: dict, feat: str):
+        if "." in feat:
+            _, _, band = feat.partition(".")
+            return (measured.get("spectral_bands") or {}).get(band)
+        return measured.get(feat)
+
+    def suno_cohort(label: str, feat: str) -> list[float]:
+        """純 Suno baseline（`generator == "suno"` のみ）。`orchestral` には real stub
+        `portals` が混ざるため、report の genre stats でなく manifest を generator で
+        フィルタして混合平均を避ける（#111 Codex P2）。"""
+        vals = [
+            float(_feat_value(s.measured, feat))
+            for s in manifest.samples
+            if s.genre_label == label
+            and s.generator == "suno"
+            and s.measured
+            and isinstance(_feat_value(s.measured, feat), (int, float))
+        ]
+        assert len(vals) >= MIN_SAMPLES_PER_GENRE, (label, feat, len(vals))
+        return vals
 
     # (1) brilliance bias は一定でない: rock は Suno 帯より暗い（帯外）、orchestral/EDM は帯内
-    rock_b = real_mean("rock-real", "spectral_bands.brilliance")
-    suno_rock_b = suno_stat("rock", "spectral_bands.brilliance")
-    assert rock_b < suno_rock_b.min  # Suno が rock を over-brighten（本物が帯下）
+    rock_suno_b = suno_cohort("rock", "spectral_bands.brilliance")
+    assert real_mean("rock-real", "spectral_bands.brilliance") < min(rock_suno_b)  # over-brighten
     for real_lab, suno_lab in [("orchestral-real", "orchestral"), ("edm-real", "electronic-dance")]:
         rb = real_mean(real_lab, "spectral_bands.brilliance")
-        sb = suno_stat(suno_lab, "spectral_bands.brilliance")
-        assert sb.min <= rb <= sb.max  # 帯内（一致）
+        sb = suno_cohort(suno_lab, "spectral_bands.brilliance")
+        assert min(sb) <= rb <= max(sb)  # 帯内（一致）
     # = brilliance bias の符号がジャンルで反転（単一係数不可）
 
-    # (2) 方向一定の指紋: 全ジャンルで mid_ratio 本物>Suno かつ harmonic_ratio 本物<Suno
+    # (2) 方向一定の指紋: 全ジャンルで mid_ratio 本物>純Suno かつ harmonic_ratio 本物<純Suno
     for real_lab, suno_lab in pairs.items():
-        assert real_mean(real_lab, "mid_ratio") > suno_stat(suno_lab, "mid_ratio").mean, real_lab
-        assert real_mean(real_lab, "harmonic_ratio") < suno_stat(suno_lab, "harmonic_ratio").mean, real_lab
+        suno_mid = suno_cohort(suno_lab, "mid_ratio")
+        suno_harm = suno_cohort(suno_lab, "harmonic_ratio")
+        assert real_mean(real_lab, "mid_ratio") > sum(suno_mid) / len(suno_mid), real_lab
+        assert real_mean(real_lab, "harmonic_ratio") < sum(suno_harm) / len(suno_harm), real_lab
 
     # (3) ゲートの一般化限界: 本物 orchestral は low_ratio<0.4 でゲートを通らない
     assert real_mean("orchestral-real", "low_ratio") < 0.4
