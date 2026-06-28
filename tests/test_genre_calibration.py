@@ -367,6 +367,14 @@ def test_low_mid_power_bands_stay_power_q1_5_ph2() -> None:
         low_stats = report.genres[genre].features["low_ratio"]
         assert low_stats.min is not None and low_stats.min > 0.4, genre
 
+    # (4) `mid_ratio` は本 seed では評価不能（mid-focused ルール未発火・Codex #108 P2-2）。
+    # production の `perc.mid_focused`(mid_ratio_min:0.45) / `instr.mid_focused`(mid_ratio_gt:0.5)
+    # に対し、低域厚 seed の mid_ratio は最大でも 0.45 未満で一度も発火しない＝この seed で
+    # mid_ratio の power/magnitude 是非は測れない（closeout は low_ratio ゲートのみ）。
+    for genre in low_heavy:
+        mid_stats = report.genres[genre].features["mid_ratio"]
+        assert mid_stats.max is not None and mid_stats.max < 0.45, genre
+
     # (1)(2) power low/mid_ratio と magnitude 低域 bass は判別器にならない（全ペア overlap）
     for feature in ("low_ratio", "mid_ratio", "spectral_bands.bass"):
         for genre_a, genre_b in pairs:
