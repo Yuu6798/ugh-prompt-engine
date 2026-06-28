@@ -422,6 +422,33 @@ def test_low_mid_power_bands_stay_power_q1_5_ph2() -> None:
     assert orch["spectral_bands.low_mid"].count == 5  # Suno のみ
 
 
+def test_real_jpop_anchors_below_suno_edm_brightness() -> None:
+    """Phase C 着手: 実 J-POP 3 本（repo 初の実 grounding spectral_bands）で generator bias を固定。
+
+    ユーザー提供の実録音（安室/SPEED/湘南乃風、`generator: real`・`j-pop`）を seed に登録した。
+    所見を回帰固定する:
+    1. `low_ratio>0.4` ゲートは本物でも通用（3 本とも >0.4）＝#108 のゲート closeout を裏付け。
+    2. 本物 dance-pop の brilliance は Suno rock 帯（0.117–0.204）に着地し、**Suno EDM 帯
+       （≥0.2119）に届かない**（j-pop max < Suno EDM min、重なりゼロ）＝Suno が EDM を本物の
+       ダンス曲より明るく描く over-brightening の実証。現行ルールは本物 dance-pop を rock に誤分類。
+    """
+    report = run_genre_calibration(load_genre_manifest(SEED_MANIFEST), repo_root=ROOT)
+    jpop = report.genres["j-pop"]
+    assert jpop.status == "sufficient" and jpop.sample_count == 3
+
+    # (1) ゲートは本物でも通用
+    jpop_low = jpop.features["low_ratio"]
+    assert jpop_low.min is not None and jpop_low.min > 0.4
+
+    # (2) 本物 j-pop の brilliance は Suno rock 帯に入り、Suno EDM 帯（≥0.2119）に届かない
+    jpop_bril = jpop.features["spectral_bands.brilliance"]
+    edm_bril = report.genres["electronic-dance"].features["spectral_bands.brilliance"]
+    assert jpop_bril.min is not None and jpop_bril.max is not None
+    assert edm_bril.min is not None
+    assert 0.117 <= jpop_bril.min and jpop_bril.max < 0.204  # Suno rock 帯
+    assert jpop_bril.max < edm_bril.min  # 本物 dance-pop は Suno EDM より厳密に暗い（bias）
+
+
 def test_manifest_yaml_round_trip_shape(tmp_path: Path) -> None:
     path = tmp_path / "manifest.yaml"
     path.write_text(

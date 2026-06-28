@@ -465,3 +465,90 @@ samples:
       - "sha256 full (今回 session 添付から算出、prefix-only 問題解消)。prompt 本文記録済 (PENDING 解消)。ear-checked: バンド編成。"
       - "BPM: extract=123.05 だが真値≈181 (Suno は prompt 175 を忠実再現)。原因は load_audio の 22050 リサンプル×start_bpm=120 prior の halving で、native 48k では compute_bpm が 181.45 を回復 (sr×prior 固有の相互作用)。bpm_octave_ambiguous=False は検出器の near-miss でなく構造的: 内部 ratio=1.057 が BPM 正検出の rock_03_indie=1.098 を下回り autocorrelation-ratio 信号では分離不能。sr/閾値の単一ノブ修正は回帰する (docs/roundtrip_corpus_screen.md finding #6)。"
       - "follow-up: Drive アップロード → drive_file_id 回収。"
+  - id: jpop_01_dontwannacry
+    genre_label: j-pop
+    generator: real
+    prompt: "安室奈美恵 — Don't wanna cry (Radio Edit)。J-POP (90s dance-pop / TK pop / R&B-pop)。本物録音 (Suno でない)。"
+    audio_locator: session_attachment
+    audio_hash: 2a76d79c23936a72db986d769a87ffd239bb7cfca43a810b08cd695df3b993a1
+    drive_file_id: null
+    measured:
+      harmonic_ratio: 0.6823
+      percussive_ratio: 0.3177
+      spectral_centroid: 2644.82
+      bpm: 99.38
+      key: G
+      mode: minor
+      dynamic_range_db: 6.97
+      valley_depth: 0.0971
+      low_ratio: 0.6025
+      mid_ratio: 0.3506
+      high_ratio: 0.0469
+      spectral_bands:
+        sub_bass: 0.0331
+        bass: 0.1724
+        low_mid: 0.0935
+        mid: 0.2486
+        high_mid: 0.169
+        presence: 0.121
+        brilliance: 0.1624
+    notes:
+      - "本物 real anchor。M4A/AAC-LC 320kbps/44.1kHz/stereo。Integrated loudness ≈ -11.0 LUFS (3 本中最も控えめ・90s マスター)。種別はメタ/耳で J-POP dance-pop 確認。audio は session 添付で repo 外 (sha256 で provenance・measured が解析源)。key は extractor 値 (手動推定とは mode が一部相違)。"
+  - id: jpop_02_bodyandsoul
+    genre_label: j-pop
+    generator: real
+    prompt: "SPEED — Body & Soul。J-POP (90s dance-pop / teen pop / eurobeat 寄り)。本物録音 (Suno でない)。"
+    audio_locator: session_attachment
+    audio_hash: ac1869f1205b3aaea50c18d664a0e0665541c294c149c5618be271761e19aa5e
+    drive_file_id: null
+    measured:
+      harmonic_ratio: 0.6277
+      percussive_ratio: 0.3723
+      spectral_centroid: 3006.96
+      bpm: 123.05
+      key: G
+      mode: major
+      dynamic_range_db: 8.32
+      valley_depth: 0.1661
+      low_ratio: 0.4849
+      mid_ratio: 0.4526
+      high_ratio: 0.0625
+      spectral_bands:
+        sub_bass: 0.0326
+        bass: 0.1252
+        low_mid: 0.0688
+        mid: 0.2523
+        high_mid: 0.2078
+        presence: 0.139
+        brilliance: 0.1744
+    notes:
+      - "本物 real anchor。M4A/AAC-LC 320kbps/44.1kHz/stereo。Integrated loudness ≈ -6.1 LUFS (ラウド・true peak +側でデコード時クリップ気味)。種別は耳で J-POP dance-pop 確認。audio は session 添付で repo 外。key は extractor 値 (手動推定とは相違)。"
+  - id: jpop_03_bubble
+    genre_label: j-pop
+    generator: real
+    prompt: "湘南乃風 — バブル。J-POP (J-reggae / dancehall pop / party pop)。本物録音 (Suno でない)。"
+    audio_locator: session_attachment
+    audio_hash: 0f67c3ce6629079db937b5312ff0352b942591b7cb8804ed7ff463eeb9995b1b
+    drive_file_id: null
+    measured:
+      harmonic_ratio: 0.7165
+      percussive_ratio: 0.2835
+      spectral_centroid: 2713.89
+      bpm: 136.0
+      key: D#
+      mode: major
+      dynamic_range_db: 6.86
+      valley_depth: 0.1671
+      low_ratio: 0.4686
+      mid_ratio: 0.4925
+      high_ratio: 0.0389
+      spectral_bands:
+        sub_bass: 0.0215
+        bass: 0.1246
+        low_mid: 0.0525
+        mid: 0.2718
+        high_mid: 0.2748
+        presence: 0.105
+        brilliance: 0.1498
+    notes:
+      - "本物 real anchor。M4A/AAC-LC 320kbps/44.1kHz/stereo。Integrated loudness ≈ -5.7 LUFS (3 本中最ラウド・現代ブリックウォール)。種別は耳で J-reggae/dancehall pop 確認。audio は session 添付で repo 外。key は extractor 値 (手動推定 D# minor 寄りとは mode 相違)。"

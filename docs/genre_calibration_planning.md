@@ -326,6 +326,38 @@ seed で production 閾値 0.45 に届かない＝未発火も assert）。#106 
 - 実曲を各ジャンル数曲、検証専用アンカーとして content-addressed 登録
 - Suno で引いた閾値が本物アンカーで通用するか測定、bias の大きい指標（例: dynamics）を補正
 
+#### Phase C 着手 — 実 J-POP 3 本で generator bias を初観測（2026-06-28）
+
+repo 初の**実 grounding を持つ `spectral_bands` アンカー**を取得（それ以前は magnitude 軸が
+全て Suno 由来＝Q1-5 Ph2 の Suno-only caveat）。ユーザー提供の実録音 3 本（J-POP dance-pop:
+安室奈美恵 / SPEED / 湘南乃風、M4A→WAV→`extract`）を `genre_label: j-pop`・`generator: real`
+で manifest に登録（measured + full sha256、audio は repo 外＝再配布なしで licensing 非該当）。
+
+| 曲 | 実サブジャンル | low_ratio | brilliance | dyn_range_db | LUFS |
+|---|---|---|---|---|---|
+| 安室 Don't wanna cry | 90s dance-pop/TK | 0.603 | 0.162 | 6.97 | -11.0 |
+| SPEED Body & Soul | dance/teen pop | 0.485 | 0.174 | 8.32 | -6.1 |
+| 湘南乃風 バブル | reggae/dancehall pop | 0.469 | 0.150 | 6.86 | -5.7 |
+
+**所見**:
+1. **`low_ratio>0.4` ゲートは本物で通用** — 3 本とも >0.4。#108 の「ゲートは power で健全」
+   closeout を本物データが裏付け。
+2. **本物 dance-pop は全部「rock」帯に着地＝Suno EDM の over-brightening を実証** — j-pop の
+   brilliance は 0.150–0.174 で Suno rock 帯（0.117–0.204）に入り、**Suno EDM 帯（≥0.2119）に
+   届かない**（j-pop max 0.174 < Suno EDM min 0.212、重なりゼロ）。ダンス系の実曲なのに Suno EDM
+   の明度に達しない＝**Suno は EDM を本物のダンス曲より明るく描く**。現行ルールは本物 dance-pop を
+   `rock` に誤分類する。これは Portals が harmonic 軸を崩したのと同型の、brilliance 軸での
+   generator-bias 実証（B-3 の閾値は Suno スプレッド依存）。
+3. **交絡: マスタリング音圧** — brilliance はジャンルだけでなく LUFS（-5.7〜-11.0）と
+   マスタリング世代を混ぜて測る。本物 orchestral/classical（静か・広ダイナミクス）は別挙動の
+   はずで、校正に loudness 正規化を入れるべきかという方法論的論点が浮上（要 follow-up）。
+
+**含意（Phase C への引き継ぎ）**: (a) これは新ジャンル `j-pop` の seed であると同時に、
+EDM 閾値の bias 証拠でもある。(b) **既存 3 ジャンル（orchestral/rock/EDM）の閾値を本物で
+検証するには、それぞれの本物録音が別途必要**（この 3 本は J-POP で、3 ジャンルの直接検証では
+ない）。(c) brilliance の loudness 正規化と、本物コーパスでの閾値再校正が次の作業。
+回帰固定: `tests/test_genre_calibration.py::test_real_jpop_anchors_below_suno_edm_brightness`。
+
 ---
 
 ## 5. リスクと留意点
