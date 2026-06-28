@@ -91,6 +91,31 @@ def test_seed_manifest_uses_current_brightness_split() -> None:
     assert all(item.mismatch is False for item in rock_preds)
 
 
+def test_real_anchors_are_visible_in_audit() -> None:
+    """Phase C 本物アンカー（`*-real`）が audit に expectation 配線され死角化しない（#111 Codex P2）。
+
+    `GENRE_CONTEXT_EXPECTATIONS` に `*-real` を足したので、本物が現行ルールから外れて落ちるのが
+    mismatch として可視化される（未知ラベルで `_mismatch` が常に False になる死角を解消）:
+    - orchestral-real (Star Wars): low_ratio<0.4 で general 落ち → mismatch（ゲート一般化限界）
+    - rock-real (Nirvana): brilliance 0.108<0.117 で orchestral 落ち → mismatch（brilliance bias）
+    - edm-real (Daft Punk): brilliance≥0.204 で bass-music → match
+    """
+    report = run_genre_misfire_audit(load_genre_manifest(SEED_MANIFEST), repo_root=ROOT)
+    by_id = {item.id: item for item in report.predictions}
+
+    orch = by_id["orchestral_real_01_starwars"]
+    assert orch.predicted_cultural_context == ["general"]
+    assert orch.mismatch is True
+
+    rock = by_id["rock_real_01_heartshapedbox"]
+    assert rock.predicted_cultural_context == ["cinematic/orchestral"]
+    assert rock.mismatch is True
+
+    edm = by_id["edm_real_01_onemoretime"]
+    assert edm.predicted_cultural_context == ["bass-music"]
+    assert edm.mismatch is False
+
+
 def test_audit_uses_backfilled_production_genre_sections(monkeypatch) -> None:
     monkeypatch.setattr(audit_module, "load_config", lambda name: {})
 

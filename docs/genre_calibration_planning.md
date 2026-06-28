@@ -437,7 +437,11 @@ Suno orchestral は人工的に低域厚（0.45–0.77）だった＝#108 で "�
 適用範囲は Suno 低域厚バイアスに依存しており、本物 orchestral では破れる。
 ⚠️ **n=1/ジャンルの留保**: 各 1 曲（特に Star Wars は明るい金管ファンファーレで orchestral の
 一例）。方向シグナルであり分布ではない。robust 化には各ジャンル本物 ≥3 が必要。
-回帰固定: `tests/test_genre_calibration.py::test_cross_genre_suno_fingerprint_not_constant`。
+これらの本物アンカーは `GENRE_CONTEXT_EXPECTATIONS` に `*-real` を配線済みで、現行ルールから
+外れて落ちる（orchestral-real→general / rock-real→orchestral）のが `genre-audit` の mismatch
+として可視化される（未知ラベルが死角化する #105 型バグを回避）。回帰固定:
+`tests/test_genre_calibration.py::test_cross_genre_suno_fingerprint_not_constant` /
+`tests/test_genre_misfire_audit.py::test_real_anchors_are_visible_in_audit`。
 
 ---
 

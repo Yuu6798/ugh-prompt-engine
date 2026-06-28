@@ -28,6 +28,13 @@ GENRE_CONTEXT_EXPECTATIONS: dict[str, set[str]] = {
     "electronic": {"bass-music", "electronic/dance", "high-energy-electronic"},
     "electronic-dance": {"bass-music", "electronic/dance", "high-energy-electronic"},
     "rock": {"rock"},
+    # Phase C 本物アンカー（`*-real`）も Suno コホートと同じ期待 context を持つ。
+    # これを欠くと `_mismatch()` が未知ラベルで常に False を返し、本物が現行ルールから
+    # 外れて落ちる（例: 本物 orchestral が low_ratio<0.4 で general、本物 rock が
+    # brilliance<0.117 で orchestral）のが audit の死角になる（#111 cross-genre finding）。
+    "orchestral-real": {"cinematic/orchestral"},
+    "rock-real": {"rock"},
+    "edm-real": {"bass-music", "electronic/dance", "high-energy-electronic"},
 }
 
 
