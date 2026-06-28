@@ -205,7 +205,7 @@ B-2 では B-1/B-1b の箱を使って、`low_ratio > 0.4` 単独で Portals 型
 （`spectral_profile.high_ratio`）から magnitude `spectral_bands.brilliance` へ移すときに
 再校正する。B-2 では `high_ratio` が必須欄で後方互換性が高いことを優先し、Optional な
 `spectral_bands` にはまだ依存しない（B-3 で brilliance を主軸化、後述 Q1-5 Ph2 実測で
-low/mid は power 据え置きと確定）。
+`low_ratio` ゲートは power 据え置き・`mid_ratio` は seed 未発火で繰越と確定）。
 
 **残課題**: Phase C で本物アンカーを増やし、B-2 の 0.017 暫定線が real anchor でも
 通用するかを検証する。Q1-5 Ph2 では magnitude ベースの brightness 指標（brilliance）へ
