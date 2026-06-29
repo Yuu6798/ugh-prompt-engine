@@ -138,10 +138,17 @@
   暗黙に "suno" 化するのを防ぐ（seam を名前で引く・改訂方針 3）。
 
 **スコープ（out）**: 時系列条件付けへのコンパイル（melody contour / 制御曲線 → MusicGen
-melody 条件付け等）。これは引き続き M5 forward work。プロファイルの自動学習。
+melody 条件付け等）。これは引き続き M5 forward work。プロファイルの自動学習。**実 2 本目の
+生成器（MusicGen 等）の採用・grip 実験**（Suno ルート確立後・改訂方針 3。本 PR は合成
+descriptor で generator-awareness のみ検証し、実 backend は Suno に閉じる）。
 
 **受け入れ条件**:
-- 同一楽譜が control_profile（生成器別）に応じて異なるプロンプトへコンパイルされる。
+- **実 backend は Suno のみ**: 楽譜が Suno の control_profile に従い tight/loose/dead を
+  尊重してコンパイルされる（実プロファイルデータは K2 の bpm/brightness）。
+- 生成器横断の仕組み（control_profile キーで同一楽譜が別プロンプトへ分岐すること）は
+  **合成 descriptor/profile fixture** で検証する＝実 2 本目の生成器（MusicGen 等）は引き続き
+  out of scope（Suno ルート確立後・改訂方針 3）。スキーマが生成器キー駆動であることだけを
+  toy fixture で固定し、実 backend を 2 本目に増やさない。
 - セグメント／`dropped_elements` が **`PhysicalLayer` フィールド粒度**で、tight な
   brightness を残しつつ loose な valley_depth を落とす等の**独立した keep/drop が検証できる**
   （粗トークン 1 個に束ねない）。
@@ -191,7 +198,9 @@ dead 先落ち / backend descriptor 分離 / コンパイル決定論 snapshot�
 
 **テスト**: 楽譜準拠判定 / 隔離境界 / CLAP オプショナル依存フォールバック。
 
-**依存**: PR1（どのフィールドを検証するかは control_profile が示す・緩い依存）。CLAP 依存追加。
+**依存**: PR1（どのフィールドを検証するかは control_profile が示す）+ **PR1.5（楽譜準拠テストが
+検証する「実コンパイル経路」は PR1.5 が立てる＝必須依存。これが無いと compiled score→adapter
+経路が存在せず本スコープを満たせない）**。CLAP 依存追加。
 
 **マージする研究**: MIR（ルールセンサー・既存）+ music captioning 埋め込み（CLAP/MuLan/CLAMP3）。
 
