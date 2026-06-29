@@ -20,6 +20,8 @@ FIXTURE_PATH = Path("examples/control/k0/musicgen_rpe_fixture.json")
 EXPECTED_PATH = Path("examples/control/k0/expected_grip.json")
 K1_FIXTURE_PATH = Path("examples/control/k1/synth_performer_rpe_fixture.json")
 K1_EXPECTED_PATH = Path("examples/control/k1/expected_grip.json")
+K2_FIXTURE_PATH = Path("examples/control/k2/suno_rpe_fixture.json")
+K2_EXPECTED_PATH = Path("examples/control/k2/expected_grip.json")
 
 
 def test_grip_effect_size_uses_pooled_sd() -> None:
@@ -129,3 +131,23 @@ def test_k1_fixture_snapshot_spans_tight_and_dead() -> None:
     # 演奏者が読まないフィールド = 繋がっていないツマミは dead と検出される
     assert by_knob["active_rate_target"]["classification"] == "dead"
     assert by_knob["valley_depth_target"]["classification"] == "dead"
+
+
+def test_k2_suno_fixture_snapshot_bpm_and_brightness_transfer() -> None:
+    """K2 転移検証: K1 で tight だった bpm/brightness が本物 Suno でも tight に転移。
+
+    fixture は Suno 生成 16 曲（bpm/brightness × 2 水準 × 4 反復）の抽出特徴量。
+    bpm は素朴な製品センサー（既定 prior 120）でも tight（d≈1.61、真テンポでは
+    さらに大きいが prior アトラクタが分離を圧縮 — docs §5.2）。brightness は
+    spectral_centroid で borderline tight（d≈0.86、Suno は「明」は守るが「暗」は
+    絶対 dark 帯まで落ちない非対称）。
+    """
+    report = analyze_fixture(load_fixture(K2_FIXTURE_PATH))
+    expected = json.loads(K2_EXPECTED_PATH.read_text(encoding="utf-8"))
+
+    assert report == expected
+    by_knob = {result["knob"]: result for result in report["results"]}
+    assert by_knob["bpm"]["classification"] == "tight"
+    assert by_knob["bpm"]["grip"] > 0.8
+    assert by_knob["brightness"]["sensor"] == "spectral_centroid"
+    assert by_knob["brightness"]["classification"] == "tight"

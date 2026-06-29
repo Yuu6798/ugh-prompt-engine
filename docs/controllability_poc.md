@@ -251,6 +251,43 @@ grip 分類が転移するかを確認する。
 **完了基準**: 少なくとも 2 ツマミについて MusicGen の grip 分類と Suno 級の
 観測が一致 / 不一致を表で記録。製品の本命生成器での grip 妥当性メモを残す。
 
+#### 5.2 K2 結果 — 本物 Suno での bpm/brightness grip（2026-06-29）
+
+再現: `python scripts/measure_grip.py --fixture examples/control/k2/suno_rpe_fixture.json`。
+コミット済み成果物は `examples/control/k2/`（`suno_rpe_fixture.json` /
+`expected_grip.json` / `README.md`）。fixture → grip は決定論で
+`tests/test_grip.py::test_k2_suno_fixture_snapshot_bpm_and_brightness_transfer` が固定。
+音源は Suno 生成 16 曲（2 ツマミ × 2 水準 × 4 反復、`audio_sha256` で provenance、repo 外）。
+
+| ツマミ | センサー | mean low | mean high | grip | 分類 | K1（玩具）|
+|---|---|---:|---:|---:|---|---|
+| `bpm` | 観測 BPM | 117.8 | 138.4 | **1.61** | **tight** | 1.61 tight |
+| `brightness` | `spectral_centroid` | 2320.7 | 2686.7 | **0.86** | **tight** | 223.5 tight |
+
+**転移の結論**: K1 で tight だった 2 ツマミは**本物 Suno でも tight に転移**。製品級の
+ゆるい確率的生成器でも、bpm/brightness は「回すと出力が動く」効くツマミであることを確認。
+
+**手触りで見えた 2 つの計器・生成器の癖**:
+
+1. **bpm は素朴センサーでも tight だが、prior アトラクタが grip を圧縮している**。
+   「90 BPM」指定の low クリップは真テンポ ~90–95 だが、抽出器の既定 prior(120) が
+   3/4 を ~123–125 に引き上げ（`start_bpm=90` で ~93.75 に回復＝
+   `roundtrip_corpus_screen.md` の 117/125 アトラクタの再現）。「140 BPM」も 1/4
+   （high_04）が ~123 に落ちた。素朴センサーの d=1.61 に対し、prior 補正した真テンポでは
+   d≈6.4 で、**アトラクタが真の分離を圧縮するが tight 閾値は割らない**。K1 の brightness
+   帯域比センサーが完全 dead だったのとは違い、bpm 素朴センサーは「鈍るが死なない」。
+2. **brightness は borderline tight（d=0.86）で非対称**。Suno は「bright」をよく守る
+   （3/4 が絶対 bright 帯 ≥2500 Hz に到達）が、「dark」では centroid を ~2000–2800 までしか
+   下げず**絶対 dark 帯（≤1200 Hz）に 0/4**。grip を立てているのは主に bright 側で、
+   bright_04 のように「bright 指定で逆に最暗（1967 Hz）」の取りこぼしもある。
+   なお legacy 帯域比センサーも本物素材では d≈0.80（K1 では合成 HF 欠落で dead だったが、
+   実音源には HF があり盲目が解ける＝**センサー盲は素材依存だった**という K1→K2 の補足）。
+
+**留保**: n=4/水準の小規模方法実証。key は brightness 群で全て A minor だが bpm 群で
+ドリフト（C/D major 混在）＝ツマミ非対象のノイズ。直交性（bpm が centroid を動かすか等）は
+K3。製品転移の「効果量の絶対水準」までは主張せず、**分類（tight/loose/dead）の転移**を確認する
+段階。
+
 ### K3（follow-up）: 直交性行列
 
 ツマミ i が観測 j を動かさないか（レイヤー独立性）を N×N で測る。

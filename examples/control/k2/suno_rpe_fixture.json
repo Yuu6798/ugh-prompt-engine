@@ -1,0 +1,280 @@
+{
+  "schema_version": "1.1",
+  "fixture_id": "k2_suno_rpe_features",
+  "generator": "suno",
+  "repetitions": 4,
+  "knobs": [
+    {
+      "name": "bpm",
+      "sensor": "bpm",
+      "low_level": "90",
+      "high_level": "140",
+      "expected_sign": 1
+    },
+    {
+      "name": "brightness",
+      "sensor": "spectral_centroid",
+      "low_level": "dark",
+      "high_level": "bright",
+      "expected_sign": 1
+    }
+  ],
+  "samples": [
+    {
+      "sample_id": "k2_bpm_low_01",
+      "knob": "bpm",
+      "level": "90",
+      "audio_sha256": "8c6d4bde0c5e224e379bf559b5994fae0437b7822503d65e2f6b001d239457c5",
+      "features": {
+        "bpm": 95.7,
+        "key": "C major",
+        "spectral_centroid": 1707.57,
+        "spectral_profile": {
+          "brightness": 0.0105
+        },
+        "active_rate": 0.9811,
+        "valley_depth": 0.1044
+      }
+    },
+    {
+      "sample_id": "k2_bpm_low_02",
+      "knob": "bpm",
+      "level": "90",
+      "audio_sha256": "4f2403c818bb059c8ed4b9769d6a3af1d796bd1425029363774eb81e43a7e6f4",
+      "features": {
+        "bpm": 123.05,
+        "key": "D major",
+        "spectral_centroid": 2401.91,
+        "spectral_profile": {
+          "brightness": 0.0291
+        },
+        "active_rate": 0.9809,
+        "valley_depth": 0.1961
+      }
+    },
+    {
+      "sample_id": "k2_bpm_low_03",
+      "knob": "bpm",
+      "level": "90",
+      "audio_sha256": "76c8969a330409404af1fa879126cbabb841880cc6c496e80b48a2cf4631cb22",
+      "features": {
+        "bpm": 123.05,
+        "key": "A minor",
+        "spectral_centroid": 2186.23,
+        "spectral_profile": {
+          "brightness": 0.0268
+        },
+        "active_rate": 0.9921,
+        "valley_depth": 0.1115
+      }
+    },
+    {
+      "sample_id": "k2_bpm_low_04",
+      "knob": "bpm",
+      "level": "90",
+      "audio_sha256": "6ed752070162909a0fadcd4ae0d9a74cfd6117553bcfc31ae6b0010b2df4cbdb",
+      "features": {
+        "bpm": 129.2,
+        "key": "A minor",
+        "spectral_centroid": 2610.03,
+        "spectral_profile": {
+          "brightness": 0.0396
+        },
+        "active_rate": 0.9937,
+        "valley_depth": 0.1092
+      }
+    },
+    {
+      "sample_id": "k2_bpm_high_01",
+      "knob": "bpm",
+      "level": "140",
+      "audio_sha256": "d0521dd9929632a726f67ff3d881172746850a0add9f2c969c240e7db2e8db14",
+      "features": {
+        "bpm": 143.55,
+        "key": "A major",
+        "spectral_centroid": 2728.46,
+        "spectral_profile": {
+          "brightness": 0.0434
+        },
+        "active_rate": 0.9265,
+        "valley_depth": 0.1578
+      }
+    },
+    {
+      "sample_id": "k2_bpm_high_02",
+      "knob": "bpm",
+      "level": "140",
+      "audio_sha256": "49bfa2ac6d9faf593d26f51f49ae05702ac35a79af053164986a42a7f6471bbb",
+      "features": {
+        "bpm": 143.55,
+        "key": "A minor",
+        "spectral_centroid": 2998.0,
+        "spectral_profile": {
+          "brightness": 0.044
+        },
+        "active_rate": 0.9346,
+        "valley_depth": 0.1508
+      }
+    },
+    {
+      "sample_id": "k2_bpm_high_03",
+      "knob": "bpm",
+      "level": "140",
+      "audio_sha256": "eecc7cf3a4ae01705c321f26ab430007cef0780809338a02fbb0fc227c442268",
+      "features": {
+        "bpm": 143.55,
+        "key": "A minor",
+        "spectral_centroid": 2871.22,
+        "spectral_profile": {
+          "brightness": 0.0339
+        },
+        "active_rate": 0.9994,
+        "valley_depth": 0.0698
+      }
+    },
+    {
+      "sample_id": "k2_bpm_high_04",
+      "knob": "bpm",
+      "level": "140",
+      "audio_sha256": "58e35b4d047e416bbcc1702b36c1aa7686deb09c8d80afb3a9fdc5c56b3938b7",
+      "features": {
+        "bpm": 123.05,
+        "key": "A minor",
+        "spectral_centroid": 3274.14,
+        "spectral_profile": {
+          "brightness": 0.0411
+        },
+        "active_rate": 0.9864,
+        "valley_depth": 0.1219
+      }
+    },
+    {
+      "sample_id": "k2_bright_dark_01",
+      "knob": "brightness",
+      "level": "dark",
+      "audio_sha256": "c648617485a22fca47ef36ac3dac915e04b3aba0571d65135e7dad8689b0f7cb",
+      "features": {
+        "bpm": 103.36,
+        "key": "A minor",
+        "spectral_centroid": 1973.69,
+        "spectral_profile": {
+          "brightness": 0.0134
+        },
+        "active_rate": 0.9836,
+        "valley_depth": 0.1253
+      }
+    },
+    {
+      "sample_id": "k2_bright_dark_02",
+      "knob": "brightness",
+      "level": "dark",
+      "audio_sha256": "2b6c2e6077410f21763e81d8cff9ba2174403f9ef4fb204a31f64358faeec669",
+      "features": {
+        "bpm": 136.0,
+        "key": "A minor",
+        "spectral_centroid": 2773.61,
+        "spectral_profile": {
+          "brightness": 0.0328
+        },
+        "active_rate": 0.9922,
+        "valley_depth": 0.1023
+      }
+    },
+    {
+      "sample_id": "k2_bright_dark_03",
+      "knob": "brightness",
+      "level": "dark",
+      "audio_sha256": "6f52ae15f56a64e95f01edd79bf8f9426ffacbad600eae872b73018d1551928f",
+      "features": {
+        "bpm": 107.67,
+        "key": "A minor",
+        "spectral_centroid": 2136.25,
+        "spectral_profile": {
+          "brightness": 0.0153
+        },
+        "active_rate": 0.9773,
+        "valley_depth": 0.1464
+      }
+    },
+    {
+      "sample_id": "k2_bright_dark_04",
+      "knob": "brightness",
+      "level": "dark",
+      "audio_sha256": "9769caf31d04ce4c969ebce124f65520f405a3867cc3bbdffb476b84c4b37aa9",
+      "features": {
+        "bpm": 107.67,
+        "key": "A minor",
+        "spectral_centroid": 2399.3,
+        "spectral_profile": {
+          "brightness": 0.0229
+        },
+        "active_rate": 0.9904,
+        "valley_depth": 0.0982
+      }
+    },
+    {
+      "sample_id": "k2_bright_bright_01",
+      "knob": "brightness",
+      "level": "bright",
+      "audio_sha256": "581fc11104f9e744cc559f3b04aaca08e9d3149d0a0fcaabdf6ce3d8cc575331",
+      "features": {
+        "bpm": 112.35,
+        "key": "A minor",
+        "spectral_centroid": 3005.13,
+        "spectral_profile": {
+          "brightness": 0.0374
+        },
+        "active_rate": 0.9426,
+        "valley_depth": 0.1951
+      }
+    },
+    {
+      "sample_id": "k2_bright_bright_02",
+      "knob": "brightness",
+      "level": "bright",
+      "audio_sha256": "50e40097df236d85a8395f17de80b9d1d5c163be24355fe8e367cdbffaad9fa4",
+      "features": {
+        "bpm": 112.35,
+        "key": "A minor",
+        "spectral_centroid": 2970.13,
+        "spectral_profile": {
+          "brightness": 0.0285
+        },
+        "active_rate": 0.9766,
+        "valley_depth": 0.1457
+      }
+    },
+    {
+      "sample_id": "k2_bright_bright_03",
+      "knob": "brightness",
+      "level": "bright",
+      "audio_sha256": "f640231e61f03261f4501aa503818cb9317c3987d6ba902ca82fd648bf04b0a5",
+      "features": {
+        "bpm": 107.67,
+        "key": "A minor",
+        "spectral_centroid": 2804.72,
+        "spectral_profile": {
+          "brightness": 0.0358
+        },
+        "active_rate": 0.951,
+        "valley_depth": 0.1463
+      }
+    },
+    {
+      "sample_id": "k2_bright_bright_04",
+      "knob": "brightness",
+      "level": "bright",
+      "audio_sha256": "5b684983d905ae7b51ce80630333fc1ccfdeb3c20b0e7ed0031f68ca36a7ce4f",
+      "features": {
+        "bpm": 107.67,
+        "key": "A minor",
+        "spectral_centroid": 1966.75,
+        "spectral_profile": {
+          "brightness": 0.0141
+        },
+        "active_rate": 0.9869,
+        "valley_depth": 0.1177
+      }
+    }
+  ]
+}

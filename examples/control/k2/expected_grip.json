@@ -1,0 +1,60 @@
+{
+  "schema_version": "1.0",
+  "fixture_id": "k2_suno_rpe_features",
+  "repetitions": 4,
+  "results": [
+    {
+      "knob": "bpm",
+      "sensor": "bpm",
+      "expected_sign": 1,
+      "low_level": "90",
+      "high_level": "140",
+      "repetitions": 4,
+      "low_values": [
+        95.7,
+        123.05,
+        123.05,
+        129.2
+      ],
+      "high_values": [
+        143.55,
+        143.55,
+        143.55,
+        123.05
+      ],
+      "low_mean": 117.75,
+      "high_mean": 138.425,
+      "grip": 1.610627,
+      "classification": "tight"
+    },
+    {
+      "knob": "brightness",
+      "sensor": "spectral_centroid",
+      "expected_sign": 1,
+      "low_level": "dark",
+      "high_level": "bright",
+      "repetitions": 4,
+      "low_values": [
+        1973.69,
+        2773.61,
+        2136.25,
+        2399.3
+      ],
+      "high_values": [
+        3005.13,
+        2970.13,
+        2804.72,
+        1966.75
+      ],
+      "low_mean": 2320.7125,
+      "high_mean": 2686.6825,
+      "grip": 0.862707,
+      "classification": "tight"
+    }
+  ],
+  "summary": {
+    "tight": 2,
+    "loose": 0,
+    "dead": 0
+  }
+}
