@@ -152,6 +152,18 @@
 - Suno 固有の機械的制約（Style 欄字数・Exclude＝negative チャネル・欄レイアウト）を
   **薄い backend descriptor** に隔離。`ExternalPromptAdapter.backend = "external"` が
   暗黙に "suno" 化するのを防ぐ（seam を名前で引く・改訂方針 3）。
+- **フィールド分割に伴う 2 つの移行も前提作業に含める**（分割の帰結として既存契約を壊さない）:
+  - **backend selector**: 既存 Score は `rendering.target_backend: external` を選ぶ一方、
+    profile は `control_profile.suno` に入る。`backend = "external"` を暗黙 Suno にしない方針と
+    整合させるため、**`target_backend` → control_profile キーの明示セレクタ**（`external`→`suno`
+    エイリアス or 移行）を設け、アダプタが決定論的に `suno` descriptor／profile を選ぶ。これが
+    無いと real-Suno 受け入れが「未プロファイルの external render」として黙って通る。
+  - **priority エイリアス／移行マップ**: 既存 `rendering.priority`（`RenderingConfig.priority:
+    List[str]`）は旧セグメントトークン（`physical.optional` / `physical.bpm` / `physical.key` 等）
+    で書かれている。フィールド分割後は drop トークンが field ID（`brightness` / `stereo_width` /
+    `bpm` / `key` 等）になるため、**旧セグメントトークン → field トークンのエイリアスマップ**を
+    用意し、未プロファイル物理フィールドの fallback 順位が既存 priority 契約どおりに付く
+    （実装順に落ちない）ようにする。
 
 **スコープ（out）**: 時系列条件付けへのコンパイル（melody contour / 制御曲線 → MusicGen
 melody 条件付け等）。これは引き続き M5 forward work。プロファイルの自動学習。**実 2 本目の
@@ -161,6 +173,10 @@ descriptor で generator-awareness のみ検証し、実 backend は Suno に閉
 **受け入れ条件**:
 - **実 backend は Suno のみ**: 楽譜が Suno の control_profile に従い tight/loose/dead を
   尊重してコンパイルされる（実プロファイルデータは K2 の bpm/brightness）。
+- **backend selector が決定論的に `control_profile.suno` を解決する**＝既存の
+  `target_backend: external` Score が「未プロファイルの external render」に黙って落ちない。
+- **priority エイリアスマップで、分割後も未プロファイル物理フィールドの drop 順位が既存
+  `rendering.priority` 契約どおり**（実装順に落ちない）を snapshot で固定。
 - 生成器横断の仕組み（control_profile キーで同一楽譜が別プロンプトへ分岐すること）は
   **合成 descriptor/profile fixture** で検証する＝実 2 本目の生成器（MusicGen 等）は引き続き
   out of scope（Suno ルート確立後・改訂方針 3）。スキーマが生成器キー駆動であることだけを
