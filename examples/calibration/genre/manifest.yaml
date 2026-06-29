@@ -842,3 +842,61 @@ samples:
         brilliance: 0.2343
     notes:
       - "本物 real anchor (lossless FLAC 90s クリップ、Drive→clip 添付経由)。cross-genre bias n=1。audio は session 添付で repo 外 (sha256 で provenance)。key は extractor 値。"
+  - id: edm_real_02_strobe
+    genre_label: edm-real
+    generator: real
+    prompt: "deadmau5 — Strobe。Real EDM anchor (メロディック/プログレッシブ・ハウス・インスト・長尺ビルド)。hi-res FLAC クリップ。 Phase C edm real n を増やし mid/harmonic 補正係数を分布化する用 (Suno edm コホートと対比)。歌なし純電子・広低域の点。"
+    audio_locator: session_attachment
+    audio_hash: 39e75c31e86b1da22f0de6cbf68c5ce05a57b81a25cca4640eb7c339042072c2
+    drive_file_id: null
+    measured:
+      harmonic_ratio: 0.7831
+      percussive_ratio: 0.2169
+      spectral_centroid: 2328.16
+      bpm: 129.2
+      key: G#
+      mode: minor
+      dynamic_range_db: 12.56
+      valley_depth: 0.1042
+      low_ratio: 0.8046
+      mid_ratio: 0.1755
+      high_ratio: 0.0199
+      spectral_bands:
+        sub_bass: 0.0897
+        bass: 0.1827
+        low_mid: 0.081
+        mid: 0.2394
+        high_mid: 0.1605
+        presence: 0.1008
+        brilliance: 0.1459
+    notes:
+      - "本物 real anchor (mora hi-res FLAC、session 添付で repo 外・sha256 で provenance)。Phase C edm real n=2。harmonic 0.783 はメロディック・プログレ系で意外にトーナル(Daft Punk 0.416 と対照)＝EDM サブスタイル差が大きい証左。key は extractor 値。"
+  - id: edm_real_03_levels
+    genre_label: edm-real
+    generator: real
+    prompt: "Avicii — Levels。Real EDM anchor (ビッグルーム/プログレッシブ・ハウス・フェス系・4つ打ち)。hi-res FLAC クリップ。 Phase C edm real n を増やし mid/harmonic 補正係数を分布化する用 (Suno edm コホートと対比)。明るい極 brilliance 0.202 の点。"
+    audio_locator: session_attachment
+    audio_hash: 69eff42f092eae3026b1bc853eafaa7cac08ec717c216bcfa7a41449d832dfdc
+    drive_file_id: null
+    measured:
+      harmonic_ratio: 0.7376
+      percussive_ratio: 0.2624
+      spectral_centroid: 2876.83
+      bpm: 123.05
+      key: E
+      mode: major
+      dynamic_range_db: 11.63
+      valley_depth: 0.1502
+      low_ratio: 0.7304
+      mid_ratio: 0.2277
+      high_ratio: 0.0419
+      spectral_bands:
+        sub_bass: 0.0552
+        bass: 0.1121
+        low_mid: 0.0745
+        mid: 0.2458
+        high_mid: 0.1712
+        presence: 0.1395
+        brilliance: 0.2017
+    notes:
+      - "本物 real anchor (mora hi-res FLAC、session 添付で repo 外・sha256 で provenance)。Phase C edm real n=3。brilliance 0.202 で Suno edm 帯(0.21–0.25)直下＝明るいフェス系でも本物は僅かに暗い側。key は extractor 値。"
