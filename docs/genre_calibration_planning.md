@@ -454,15 +454,19 @@ hi-res FLAC を追加購入し、orchestral 本物を **n=1→n=3** に増強（
 n=3 として明度・ダイナミクスのレンジを張った。`genre-calibrate` で `orchestral-real` が
 `insufficient`→`sufficient` に昇格。
 
-**本物 orchestral(n=3) vs 純 Suno orchestral(n=6) の Δ（real − suno_mean）**:
+**本物 orchestral(n=3) vs 純 Suno orchestral(n=5) の Δ（real − suno_mean）**
+（#111 同様、`genre_label: orchestral` バケットから real stub `portals` を除外し
+`generator == "suno"` のみで baseline を取る。混合バケット n=6 を使うと portals が
+suno 平均へ漏れ Δ を過小評価する）:
 
 | 特徴量 | real mean | suno mean | Δ | #111 仮説との整合 |
 |---|---|---|---|---|
 | **mid_ratio** | 0.702 | 0.339 | **+0.363** | mid削り = 方向一致・**最大軸**（Suno がスマイリー EQ で中域をへこませる） |
-| **low_ratio** | 0.289 | 0.622 | **−0.334** | Suno 低域厚（人工的）を裏付け・全 3 本 < 0.4 |
-| dynamic_range_db | 17.41 | 11.97 | +5.44 | Suno はダイナミクス圧縮（広 DR を再現しきれない） |
-| harmonic_ratio | 0.890 | 0.936 | −0.046 | 脱トーナル化 = 方向一致（量は小） |
+| **low_ratio** | 0.289 | 0.657 | **−0.368** | Suno 低域厚（人工的）を裏付け・全 3 本 < 0.4 |
+| dynamic_range_db | 17.41 | 10.58 | +6.83 | Suno はダイナミクス圧縮（広 DR を再現しきれない） |
+| harmonic_ratio | 0.890 | 0.961 | −0.071 | 脱トーナル化 = 方向一致 |
 | brilliance | 0.043 | 0.050 | −0.007 | ほぼ平坦＝#111 の「orchestral は帯内（明度一致）」を n=3 で再確認 |
+| spectral_centroid | 1276.2 | 1264.1 | +12.1 | ほぼ平坦（混合バケットでは portals=1588 が suno 平均を押し上げ符号が反転して見える罠） |
 
 **結論**: (a) #111 の 2 つの方向不変指紋（**mid削り + 脱トーナル化**）は orchestral n=3 で
 **確認**、特に mid_ratio が支配軸（Δ+0.36）。(b) 第三の頑健軸として **low_ratio（Suno 人工低域厚）**
