@@ -481,12 +481,16 @@ def test_suno_jpop_overbrightens_vs_real_matched_pair() -> None:
 
 
 def test_cross_genre_suno_fingerprint_not_constant() -> None:
-    """Phase C cross-genre: 本物 orchestral/rock/EDM 各 1 本 vs Suno コホートで指紋の一定性を検定。
+    """Phase C cross-genre: 本物 orchestral/rock/EDM 各 n=3 vs 純 Suno コホートで指紋の一定性を検定。
 
-    「Suno 指紋＝一定オフセット → 単一補正係数」仮説を検証する。n=1/ジャンルの方向シグナル。
-    1. brilliance bias は符号反転（rock は Suno が明るい=帯外、orchestral/EDM は一致=帯内）
-       ＝**一定でない**。単一 brilliance 補正係数は不可。
-    2. 一方、全ジャンルで方向一定の指紋が 2 つ:
+    「Suno 指紋＝一定オフセット → 単一補正係数」仮説を検証する。3 ジャンル real n=3 の分布。
+    1. brilliance 補正係数（= real 平均 − Suno 平均）はジャンルで一定でない→単一補正係数は不可。
+       全ジャンルで real↓ or 平坦だが量が割れる（orchestral≈-0.007 最小 / rock≈-0.026 / edm≈-0.032
+       最大）。band membership は Suno spread に依存し係数差を測れないため、delta 同士を直接
+       比較する（#114 Codex P2）。検定対象は **平均シフト**であり band 分離ではない（real/Suno の
+       分布は overlap し個別 anchor は Suno 帯に残りうる: 例 edm_real_01_onemoretime=0.2343 ∈
+       EDM 帯 0.2119–0.2508）。（#111 の n=1 では「edm は帯内」だったが n=3 で edm 平均は real↓ へ収束。）
+    2. 一方、全ジャンルで方向一定の指紋が 2 つ（real n=3 で確定）:
        - mid_ratio: 本物 > Suno（Suno は中域を一貫して削る）
        - harmonic_ratio: 本物 < Suno（Suno は一貫してトーナル/脱パンチ）
     3. ゲートの一般化限界: 本物 orchestral の low_ratio < 0.4 で `low_ratio>0.4` ゲートを通らない
@@ -526,14 +530,22 @@ def test_cross_genre_suno_fingerprint_not_constant() -> None:
         assert len(vals) >= MIN_SAMPLES_PER_GENRE, (label, feat, len(vals))
         return vals
 
-    # (1) brilliance bias は一定でない: rock は Suno 帯より暗い（帯外）、orchestral/EDM は帯内
-    rock_suno_b = suno_cohort("rock", "spectral_bands.brilliance")
-    assert real_mean("rock-real", "spectral_bands.brilliance") < min(rock_suno_b)  # over-brighten
-    for real_lab, suno_lab in [("orchestral-real", "orchestral"), ("edm-real", "electronic-dance")]:
-        rb = real_mean(real_lab, "spectral_bands.brilliance")
+    # (1) brilliance 補正係数（= real 平均 − Suno 平均）はジャンルで一定でない＝単一係数不可。
+    #     band membership は Suno spread に依存し係数差を測れない（同 delta でも spread 次第で
+    #     一方が帯内/他方が帯外になる）ので、delta 同士を直接比較する（#114 Codex P2 再）。
+    #     注: 検定対象は平均シフトであり band 分離ではない（分布は overlap し個別 anchor は
+    #     Suno 帯に残りうる: 例 edm_real_01_onemoretime=0.2343 ∈ EDM 帯）。
+    def brilliance_delta(real_lab: str, suno_lab: str) -> float:
         sb = suno_cohort(suno_lab, "spectral_bands.brilliance")
-        assert min(sb) <= rb <= max(sb)  # 帯内（一致）
-    # = brilliance bias の符号がジャンルで反転（単一係数不可）
+        return real_mean(real_lab, "spectral_bands.brilliance") - sum(sb) / len(sb)
+
+    deltas = {real_lab: brilliance_delta(real_lab, suno_lab) for real_lab, suno_lab in pairs.items()}
+    assert all(d <= 0.0 for d in deltas.values()), deltas  # 全ジャンル real↓ or 平坦
+    # rock/edm は明確に暗い（係数 < -0.01）が orchestral は暗化最小（≈平坦）＝係数がジャンル一定でない
+    assert deltas["rock-real"] < -0.01 and deltas["edm-real"] < -0.01, deltas
+    assert abs(deltas["orchestral-real"]) < abs(deltas["edm-real"]), deltas
+    # 係数の幅（最大暗化 − 最小暗化）が tolerance 超＝単一定数では説明不能
+    assert max(deltas.values()) - min(deltas.values()) > 0.01, deltas
 
     # (2) 方向一定の指紋: 全ジャンルで mid_ratio 本物>純Suno かつ harmonic_ratio 本物<純Suno
     for real_lab, suno_lab in pairs.items():

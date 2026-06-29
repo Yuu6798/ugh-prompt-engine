@@ -524,6 +524,51 @@ n=3 で判明した境界バイアス。
 brightness 単軸でなく harmonic/percussive（脱トーナル軸 Δ−0.19 が rock で最も鋭い）を補助軸に足す
 3-way 再設計を orchestral の「中域主役」Memo と統合して検討する。
 
+#### Phase C edm n=3 — 3 ジャンル目の実 grounding 完了・方向不変指紋を全ジャンルで確定（2026-06-29）
+
+edm 本物を **n=1→n=3** に増強（既存 Daft Punk「One More Time」(French house) に
+**deadmau5「Strobe」**(メロディック/プログレ・インスト・広低域) と
+**Avicii「Levels」**(ビッグルーム・フェス系・明) を追加）。`edm-real` が `insufficient→sufficient`。
+これで **orchestral / rock / edm の 3 ジャンル全てが real n≥3（sufficient）** に到達。
+electronic-dance バケットは real stub 混入なし＝baseline は純 Suno n=5。
+
+**本物 edm(n=3) vs 純 Suno edm(n=5) の Δ（real − suno_mean）**:
+
+| 特徴量 | real mean | suno mean | Δ | 解釈 |
+|---|---|---|---|---|
+| **harmonic_ratio** | 0.646 | 0.845 | **−0.199** | 脱トーナル化 = 方向一致。ただし #111 の n=1（Daft Punk −0.43）は外れ値で、real edm の harmonic は **0.42–0.78 と広い**（Suno は 0.82–0.88 と tight）＝Suno は edm を一様にクリーン/トーナルに生成し、ザラついた/フィルタ系の裾を欠く |
+| mid_ratio | 0.209 | 0.156 | +0.053 | mid削り = 方向一致だが **3 ジャンルで最小**（edm は real/Suno とも本来中域スクープなので gap が小さい） |
+| low_ratio | 0.756 | 0.808 | −0.052 | Suno 低域厚 = 方向一致だが最小（edm は real も本来低域厚） |
+| dynamic_range_db | 13.01 | 9.44 | +3.58 | Suno コンプ気味（gap は orch/rock より小） |
+| brilliance | 0.194 | 0.226 | −0.032 | real が僅かに暗い |
+
+**3 ジャンル横断シンセシス（全 real n=3 / 純 Suno n=5 baseline）**:
+
+| 指紋 | orchestral | rock | edm | 不変性 |
+|---|---|---|---|---|
+| **harmonic_ratio Δ（脱トーナル化）** | −0.07 | −0.19 | −0.20 | **全 real↓**＝最も頑健な方向不変指紋。打楽器/歪み/フィルタが濃いジャンルほど鋭い |
+| **mid_ratio Δ（mid削り）** | +0.36 | +0.15 | +0.05 | **全 real↑**。量はジャンルが本来 mid-forward なほど大（管弦最大・edm 最小） |
+| brilliance Δ | −0.01 | −0.03 | −0.03 | **全 real≤suno（real が暗いか平坦）**。#111 の n=1 符号反転（rock のみ Suno 明）は n=3 で解消し「real は明るくならない」に収束。ただし量は小で単一補正軸には弱い |
+| dynamic_range Δ | +6.8 | +5.9 | +3.6 | 全 real↑（Suno コンプ） |
+
+→ **方向不変な 2 大指紋（脱トーナル化 real↓ + mid削り real↑）が 3 ジャンルの実 grounding で確定**。
+これが Phase C の中核成果＝「Suno→本物 補正の方向」は単発でなく分布で頑健。量はジャンル依存
+（per-genre 係数）だが符号は普遍。
+
+**ゲート汎化の系統バイアス（3 ジャンル audit）**: orchestral 0/3（low ゲート失敗で general 落ち）・
+rock 2/3（最暗 grunge が orch へ）・edm 1/3（One More Time のみ bass-music 正答、Strobe/Levels は
+brilliance<0.204 で rock 帯へ漏れ）。**統一的解釈**: brilliance/low の閾値は Suno コホート fit で、
+Suno は全ジャンルで over-bright + over-low-thick のため、実音源は系統的に **1 段暗い/中域寄りの隣接
+ジャンル帯へ漏れる**。閾値を実アンカー側へ下げる単純対応はジャンル間で衝突する（rock 下限↓は
+orch 上限と、edm 下限↓は rock 上限と競合）ため、**brightness 単軸を脱し脱トーナル軸（harmonic/
+percussive, Δ が全ジャンルで最頑健）を第二判別軸に足す**のが筋。
+
+⚠️ **留保**: 各 n=3 はなお小標本・Δ は分布平均の一次近似。production rule は本セッションで不変
+（measured を manifest へインライン保全・`genre-audit` mismatch で限界可視化）。
+**次の手（統合 Design Memo）**: (1) orchestral=「中域主役」基準、(2) rock/edm=brightness+脱トーナル
+2 軸判別、を 1 本の rule 再設計 Memo に統合し、全 real アンカーで mismatch→match に転じ且つ
+既存 Suno コホート回帰ゼロを AC とする → Codex 実装。
+
 ---
 
 ## 5. リスクと留意点
