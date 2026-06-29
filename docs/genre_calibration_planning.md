@@ -569,6 +569,36 @@ percussive, Δ が全ジャンルで最頑健）を第二判別軸に足す**の
 2 軸判別、を 1 本の rule 再設計 Memo に統合し、全 real アンカーで mismatch→match に転じ且つ
 既存 Suno コホート回帰ゼロを AC とする → Codex 実装。
 
+#### Phase D — ルール再設計: rock/edm を本物対応へ closeout・orchestral は限界を確定（2026-06-29）
+
+Phase C 知見を `config/semantic_rules.yaml` の `cultural_context` ルールへ反映（エンジン無改変・
+config 宣言のみ）。collect-all + 緩い intersection match のため追加は Suno の match を壊さず、
+真の回帰面は extract 出力 context を pin する `tests/test_semantic_layer.py` の厳密等価。
+
+**rock / edm は closeout（実測 gap でクリーン分離）**:
+- `ctx.rock_brilliance` の下限 0.117→**0.105**（本物 grunge Heart-Shaped Box 0.108 を捕捉。
+  Suno orchestral ≤0.095 で無影響、brilliance 境界テストも 0.10→orch/0.117→rock を維持）。
+- `ctx.edm_sub_bass` を新設（`low_ratio>0.4 ∧ sub_bass≥0.052 ∧ brilliance≥0.105`）。本物 EDM は
+  brilliance が rock 帯に重なる（Strobe 0.146 / Levels 0.202）が **sub_bass で分離**
+  （rock real/suno ≤0.048 vs edm ≥0.055）。rock 側に `sub_bass_lt 0.052` を足し EDM の二重ラベル化を防止。
+  brilliance 下限は orchestral 上限 0.105 に揃え、`sub_bass≥0.052` 域でも brilliance 分割を
+  exhaustive に保つ（`[0.105,0.12)` が general に抜ける穴を回避・Codex #115 P2。Suno orch は
+  brilliance≤0.095<0.105 で除外維持）。回帰固定: `test_brilliance_split_exhaustive_with_sub_bass_gate`。
+- 結果: `genre-audit` で **rock-real 3/3・edm-real 3/3 が match（単一クリーンラベル）**、Suno 回帰ゼロ、
+  `test_semantic_layer` 既存アサーション無改変で green。
+
+**orchestral は実装を見送り＝既知限界として確定（重要）**: 本物管弦は `low_ratio<0.4` の
+**中域主役**（mid_ratio 0.59–0.87）だが、この領域は **thin dark synth と特徴空間で分離不能**。
+特に「あの夏へ」(low 0.132 / mid 0.868 / harmonic 0.969 / centroid 795) は synth ガード fixture
+(`test_thin_dark_synth_material_does_not_fire_genre_split`: low 0.12 / mid 0.88 / harmonic 1.0 /
+centroid 700) とほぼ同一で、`mid_ratio>0.55 ∧ low_ratio<0.4` 型の rule は synth を orchestral と
+誤判定する（**Phase A 罠の再来**＝「倍音性単独では分離不能」#24 の構造的限界）。よって
+orchestral ルールは追加せず、`genre-audit` に mismatch として残し可視化を維持
+（`test_real_anchors_are_visible_in_audit` が orchestral-real 3/3 mismatch を pin）。
+**解決には特徴空間の拡張が必須**: 採譜層（旋律/和声で管弦↔synth を分ける）、テクスチャ/
+realness センサー、または学習モデル器楽推定（`learned_models_policy.md` の隔離原則下）。
+SW(low 0.388)/Holst(low 0.346) のみ多重境界 rule で拾う案は ano を取り逃し overfit のため不採用。
+
 ---
 
 ## 5. リスクと留意点

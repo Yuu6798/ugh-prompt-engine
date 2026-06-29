@@ -381,6 +381,42 @@ def test_brilliance_band_edges_separate_rock_from_neighbours() -> None:
     assert context_for(0.204) == ["bass-music"]
 
 
+def test_brilliance_split_exhaustive_with_sub_bass_gate() -> None:
+    # Phase D / Codex #115 P2: rock に sub_bass_lt 0.052 を足し edm_sub_bass を新設したことで
+    # 「sub_bass≥0.052 ∧ brilliance∈[0.105,0.12)」が general に抜ける穴が出ないこと（exhaustive）を pin。
+    # edm_sub_bass の brilliance 下限を orchestral 上限 0.105 に揃えて穴を塞いだ。
+    def context_for(*, brilliance: float, sub_bass: float, low_ratio: float = 0.5) -> list[str]:
+        phys = _make_physical_genre(
+            harmonic_ratio=0.8,
+            spectral_centroid=2500.0,
+            low_ratio=low_ratio,
+            mid_ratio=0.3,
+            high_ratio=0.05,
+            bpm=120.0,
+            active_rate=0.5,
+            valley_depth=0.12,
+        )
+        phys.spectral_bands = SpectralBands(
+            sub_bass=sub_bass,
+            bass=0.20,
+            low_mid=0.10,
+            mid=0.20,
+            high_mid=0.20,
+            presence=0.10,
+            brilliance=brilliance,
+        )
+        return generate_semantic(phys).cultural_context
+
+    # かつての穴（sub-heavy ∧ brilliance 0.105–0.12）は general でなく bass-music に塞がる
+    assert context_for(brilliance=0.11, sub_bass=0.06) == ["bass-music"]
+    assert context_for(brilliance=0.105, sub_bass=0.052) == ["bass-music"]
+    # 境界の両側は従来どおり: 0.105 未満は orchestral、sub-light の中域は rock
+    assert context_for(brilliance=0.104, sub_bass=0.06) == ["cinematic/orchestral"]
+    assert context_for(brilliance=0.16, sub_bass=0.03) == ["rock"]
+    # 深 sub_bass の EDM（brilliance が rock 帯でも）は bass-music 単独
+    assert context_for(brilliance=0.16, sub_bass=0.09) == ["bass-music"]
+
+
 def test_genre_inference_backward_compatible_without_harmonic_ratio() -> None:
     # harmonic_ratio 欠落（旧 RPE）でもレガシー経路を温存（electronic/dance）。
     semantic = generate_semantic(
