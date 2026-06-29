@@ -123,9 +123,12 @@
 - アダプタの優先度を **`control_profile` の grip_class で駆動**（control_profile が覆う
   `PhysicalLayer` フィールドのみ）。tight（保証）フィールドを落とさない芯として優先描画し、
   loose/dead は助言＝真っ先の削減候補に格下げ（限られたプロンプト枠を効くツマミに配分）。
-  **control_profile 外の非物理セグメント（`semantic.grv` / `semantic.core` / `structure` /
-  `semantic.avoid`）は従来どおり `score.rendering.priority` を fallback／tie-breaker として
-  順位付けする**（grip_class を全面置換にせず、既存の prompt-order／drop 挙動を回帰させない）。
+  **grip_class を持たないセグメントは従来どおり `score.rendering.priority` を fallback／
+  tie-breaker として順位付けする**＝control_profile 外の非物理セグメント（`semantic.grv` /
+  `semantic.core` / `structure` / `semantic.avoid`）に加え、**control_profile 未掲載の物理
+  フィールド**（実 Suno profile は K2 の bpm/brightness のみのため `physical.key` /
+  `stereo_width` / `active_rate_target` / `valley_depth_target` 等は未プロファイル）も同じ
+  fallback に乗せる（grip_class を全面置換にせず、既存の prompt-order／drop 挙動を回帰させない）。
 - **前提: セグメント／`dropped_elements` を `PhysicalLayer` フィールド粒度へ分解する**。
   現行 `ExternalPromptAdapter` は粗いセグメントでしか drop できず、特に `physical.optional`
   が **brightness / stereo_width / active_rate_target / valley_depth_target を 1 トークンに
@@ -234,7 +237,10 @@ dead 先落ち / backend descriptor 分離 / コンパイル決定論 snapshot�
 
 **テスト**: 直交性行列の決定論 snapshot / DCI・MIG 計算 / デバイスプロファイル スキーマ。
 
-**依存**: PR1（profile 構造）。K3 は追加の A/B 生成バッチ（人手律速）。calibration データ。
+**依存**: PR1（profile 構造）+ **PR1.5（device-profile ヒントが接続する compile seam＝
+backend descriptor／control_profile-aware adapter は PR1.5 が立てる。これが無いと device
+profile に取り付ける compile seam が存在しない）**。K3 は追加の A/B 生成バッチ（人手律速）。
+calibration データ。
 
 **マージする研究**: disentanglement（DCI/MIG）+ EPR（楽譜/演奏分離）+ distribution shift
 （device profiling）。
