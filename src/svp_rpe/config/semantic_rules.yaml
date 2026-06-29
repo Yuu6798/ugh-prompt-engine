@@ -98,7 +98,10 @@ cultural_context:
     - id: ctx.edm_sub_bass
       # Phase D: 本物 EDM は brilliance が rock 帯に重なる(Strobe 0.146 / Levels 0.202)が
       # sub_bass で分離(rock real/suno ≤0.048 vs edm ≥0.055)。深い sub_bass + 非暗で bass-music。
-      condition: {low_ratio_gt: 0.4, spectral_bands.sub_bass_min: 0.052, spectral_bands.brilliance_min: 0.12}
+      # brilliance 下限は orchestral 上限(0.105)に揃える＝sub_bass≥0.052 域で
+      # brilliance 分割を exhaustive に保ち穴を作らない(<0.105 は orchestral が拾う, Codex #115 P2)。
+      # Suno orchestral は brilliance≤0.095<0.105 で除外維持。
+      condition: {low_ratio_gt: 0.4, spectral_bands.sub_bass_min: 0.052, spectral_bands.brilliance_min: 0.105}
       context: bass-music
     - id: ctx.rock_brilliance
       # Phase D: 下限 0.117→0.105(本物 grunge HSB=0.108 を捕捉、Suno orch ≤0.095 で無影響)。

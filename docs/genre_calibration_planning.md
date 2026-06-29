@@ -578,9 +578,12 @@ config 宣言のみ）。collect-all + 緩い intersection match のため追加
 **rock / edm は closeout（実測 gap でクリーン分離）**:
 - `ctx.rock_brilliance` の下限 0.117→**0.105**（本物 grunge Heart-Shaped Box 0.108 を捕捉。
   Suno orchestral ≤0.095 で無影響、brilliance 境界テストも 0.10→orch/0.117→rock を維持）。
-- `ctx.edm_sub_bass` を新設（`low_ratio>0.4 ∧ sub_bass≥0.052 ∧ brilliance≥0.12`）。本物 EDM は
+- `ctx.edm_sub_bass` を新設（`low_ratio>0.4 ∧ sub_bass≥0.052 ∧ brilliance≥0.105`）。本物 EDM は
   brilliance が rock 帯に重なる（Strobe 0.146 / Levels 0.202）が **sub_bass で分離**
   （rock real/suno ≤0.048 vs edm ≥0.055）。rock 側に `sub_bass_lt 0.052` を足し EDM の二重ラベル化を防止。
+  brilliance 下限は orchestral 上限 0.105 に揃え、`sub_bass≥0.052` 域でも brilliance 分割を
+  exhaustive に保つ（`[0.105,0.12)` が general に抜ける穴を回避・Codex #115 P2。Suno orch は
+  brilliance≤0.095<0.105 で除外維持）。回帰固定: `test_brilliance_split_exhaustive_with_sub_bass_gate`。
 - 結果: `genre-audit` で **rock-real 3/3・edm-real 3/3 が match（単一クリーンラベル）**、Suno 回帰ゼロ、
   `test_semantic_layer` 既存アサーション無改変で green。
 
