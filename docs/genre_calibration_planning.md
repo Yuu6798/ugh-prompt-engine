@@ -628,9 +628,16 @@ context: cinematic/orchestral
 - `onset_density>=1.0` は synth 上限の約 6 倍・管弦下限の半分以下で広いマージン
   （busy synth の偽発火耐性）。
 - `harmonic_ratio` は synth(≈1.0)≈管弦(0.84–0.97) で**非分離のため判別に不使用**。
-- collect-all + dedup なので Suno / rock / edm の既存 match を壊さない（`low_ratio<0.4` 域は
-  従来どの genre ルールにも掛からなかった＝純粋に general からの救済）。`test_semantic_layer`
-  既存アサーション無改変で green。
+- **`cinematic/orchestral` ラベルは加算のみ**: `cultural_context` は collect-all（全マッチを
+  収集・dedup）設計なので、本ルールは既存ラベルを上書き・除去しない。`low_ratio`-heavy 系
+  （bass-music / rock / Suno orchestral_brilliance）は `low_ratio<0.4` で本ルールと領域が
+  重ならず無影響。一方 **bpm/valley ベースの既存ルール（`electronic/dance`=bpm>140∧active>0.8 /
+  `ambient/downtempo`=bpm<90 / `cinematic_dynamic`=valley>0.3）は `low_ratio` を見ないため
+  共起しうる**＝意図的な multi-label（例: 本物 Holst は bpm 78 で `ambient/downtempo` を併発し
+  `[ambient/downtempo, cinematic/orchestral]` になる。意味層は verdict でなく HINT で、正しい
+  orchestral タグを「足す」だけ）。この加算挙動は
+  `test_orchestral_onset_label_is_additive_under_collect_all` で pin。`test_semantic_layer`
+  の既存アサーションは無改変で green。
 
 **結果（`genre-audit`）**:
 - orchestral-real: **Star Wars / Holst / あの夏へ → 3/3 match**（3 本とも実測 onset_density を

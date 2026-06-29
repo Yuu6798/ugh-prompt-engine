@@ -299,6 +299,30 @@ def test_mid_dominant_high_onset_material_gets_orchestral_context() -> None:
     assert "bass-music" not in semantic.cultural_context
 
 
+def test_orchestral_onset_label_is_additive_under_collect_all() -> None:
+    # Phase E（Codex #116 P2 への回答）: cultural_context は collect-all（全マッチ収集）設計で、
+    # orchestral onset ルールは既存ラベルを上書きせず「加算」する。bpm/valley ベースの既存
+    # ルールは low_ratio を見ないため、mid-dominant・high-onset なら共起しうる＝意図的 multi-label。
+    # ここでは fast(bpm>140)・dense(active>0.8)・mid-dominant・high-onset の点で
+    # electronic/dance と cinematic/orchestral が両立することを pin する（HINT であり verdict ではない）。
+    semantic = generate_semantic(
+        _make_physical_genre(
+            harmonic_ratio=0.85,
+            spectral_centroid=1800.0,
+            low_ratio=0.30,
+            mid_ratio=0.60,
+            high_ratio=0.10,
+            bpm=150.0,
+            active_rate=0.9,
+            valley_depth=0.10,
+            onset_density=2.0,
+        )
+    )
+
+    assert "electronic/dance" in semantic.cultural_context
+    assert "cinematic/orchestral" in semantic.cultural_context
+
+
 def test_bands_present_bright_brilliance_uses_bass_music_without_power_double_fire() -> None:
     phys = _with_brilliance(
         _make_physical_genre(
