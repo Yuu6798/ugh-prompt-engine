@@ -444,6 +444,49 @@ Suno orchestral は人工的に低域厚（0.45–0.77）だった＝#108 で "�
 `tests/test_genre_calibration.py::test_cross_genre_suno_fingerprint_not_constant` /
 `tests/test_genre_misfire_audit.py::test_real_anchors_are_visible_in_audit`。
 
+#### Phase C orchestral n=3 — 本物管弦を分布化し補正係数を方向確定（2026-06-29）
+
+#111 の cross-genre は各ジャンル本物 n=1 の「方向シグナル」だった。ユーザーが mora で
+hi-res FLAC を追加購入し、orchestral 本物を **n=1→n=3** に増強（既存 Star Wars に
+**Holst「火星」**（コンサートホール録音・暗・低音金管+打楽器・DR 27.83）と
+**久石譲「あの夏へ」**（叙情 film-score・弦+ピアノ前面・高度にトーナル）を追加）。
+3 本は サブスタイル（ハリウッド金管 / 英プログラム音楽 / 邦叙情 film-score）に散らし、
+n=3 として明度・ダイナミクスのレンジを張った。`genre-calibrate` で `orchestral-real` が
+`insufficient`→`sufficient` に昇格。
+
+**本物 orchestral(n=3) vs 純 Suno orchestral(n=5) の Δ（real − suno_mean）**
+（#111 同様、`genre_label: orchestral` バケットから real stub `portals` を除外し
+`generator == "suno"` のみで baseline を取る。混合バケット n=6 を使うと portals が
+suno 平均へ漏れ Δ を過小評価する）:
+
+| 特徴量 | real mean | suno mean | Δ | #111 仮説との整合 |
+|---|---|---|---|---|
+| **mid_ratio** | 0.702 | 0.339 | **+0.363** | mid削り = 方向一致・**最大軸**（Suno がスマイリー EQ で中域をへこませる） |
+| **low_ratio** | 0.289 | 0.657 | **−0.368** | Suno 低域厚（人工的）を裏付け・全 3 本 < 0.4 |
+| dynamic_range_db | 17.41 | 10.58 | +6.83 | Suno はダイナミクス圧縮（広 DR を再現しきれない） |
+| harmonic_ratio | 0.890 | 0.961 | −0.071 | 脱トーナル化 = 方向一致 |
+| brilliance | 0.043 | 0.050 | −0.007 | ほぼ平坦＝#111 の「orchestral は帯内（明度一致）」を n=3 で再確認 |
+| spectral_centroid | 1276.2 | 1264.1 | +12.1 | ほぼ平坦（混合バケットでは portals=1588 が suno 平均を押し上げ符号が反転して見える罠） |
+
+**結論**: (a) #111 の 2 つの方向不変指紋（**mid削り + 脱トーナル化**）は orchestral n=3 で
+**確認**、特に mid_ratio が支配軸（Δ+0.36）。(b) 第三の頑健軸として **low_ratio（Suno 人工低域厚）**
+と **DR 圧縮** が浮上。Suno orchestral 指紋 ≒ スマイリー EQ（低↑中↓）+ コンプ + クリーン化。
+(c) brilliance は orchestral では補正不要（per-genre の #111 結論を補強）。
+
+**ゲート一般化限界の n=3 確定**: 本物 3 本全て `low_ratio < 0.4`（SW 0.388 / Holst 0.346 /
+あの夏へ 0.132、平均 0.289）で、現行 `low_ratio>0.4` の orchestral ルールを通らず
+`genre-audit` で **3/3 mismatch**（SW→general / Holst→ambient-downtempo / あの夏へ→general）。
+#108 で「健全」とした low ゲートは **Suno の低域厚バイアスで学習され本物管弦に汎化しない**ことが
+n=1→n=3 で統計的に確定。本物 orchestral の正体は **中域主役（mid_ratio 0.59–0.87, 平均 0.70）**
+であって低域厚ではない。
+
+⚠️ **留保**: n=3（real）はなお小標本で std は大きい（low_ratio 0.112 / mid_ratio 0.119 /
+DR 7.55）。Δ は分布平均の一次近似（回帰 fit でない）。補正係数の精密化には各ジャンル本物を
+さらに増やす必要がある。production rule は本セッションでは不変（real anchor の measured を
+manifest へインライン保全し、`genre-audit` の mismatch で限界を可視化するに留める）。
+**次の手**: orchestral ルールを Suno 低域厚依存から「中域主役」基準へ再設計する Design Memo
+（low ゲートと衝突せず general/他ジャンルを巻き込まない条件設計が必須）→ Codex 実装。
+
 ---
 
 ## 5. リスクと留意点

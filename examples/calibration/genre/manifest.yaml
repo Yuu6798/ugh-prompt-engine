@@ -668,6 +668,64 @@ samples:
         brilliance: 0.0844
     notes:
       - "本物 real anchor (lossless FLAC 90s クリップ、Drive→clip 添付経由)。cross-genre bias n=1。audio は session 添付で repo 外 (sha256 で provenance)。key は extractor 値。"
+  - id: orchestral_real_02_holst_mars
+    genre_label: orchestral-real
+    generator: real
+    prompt: "Gustav Holst — The Planets, Op.32: Mars, the Bringer of War。Real symphony-orchestra anchor (concert-hall recording)。hi-res FLAC クリップ。 Phase C orchestral real n を増やし mid/harmonic 補正係数を分布化する用 (Suno orchestral コホートと対比)。暗・低音金管+打楽器・広ダイナミクスで Star Wars(明・金管前面)と対極の点。"
+    audio_locator: session_attachment
+    audio_hash: 314f3999ea058260d07db5c9251a2df0d103154fcae0322536a6f4d2f2fe9e0a
+    drive_file_id: null
+    measured:
+      harmonic_ratio: 0.8362
+      percussive_ratio: 0.1638
+      spectral_centroid: 1128.73
+      bpm: 78.3
+      key: G
+      mode: major
+      dynamic_range_db: 27.83
+      valley_depth: 0.192
+      low_ratio: 0.3463
+      mid_ratio: 0.6456
+      high_ratio: 0.008
+      spectral_bands:
+        sub_bass: 0.0107
+        bass: 0.1614
+        low_mid: 0.1563
+        mid: 0.4283
+        high_mid: 0.154
+        presence: 0.0467
+        brilliance: 0.0424
+    notes:
+      - "本物 real anchor (mora hi-res FLAC、session 添付で repo 外・sha256 で provenance)。Phase C orchestral real n=2。DR 27.83 は本物管弦の広ダイナミクスの典型。key は extractor 値。"
+  - id: orchestral_real_03_ano_natsu_e
+    genre_label: orchestral-real
+    generator: real
+    prompt: "久石譲 — あの夏へ (千と千尋の神隠し OST)。Real symphony-orchestra anchor (叙情系 film-score, 弦+ピアノ前面)。mora hi-res FLAC クリップ。 Phase C orchestral real n を増やし mid/harmonic 補正係数を分布化する用 (Suno orchestral コホートと対比)。暗・高度にトーナル・mid 厚の叙情管弦の点。"
+    audio_locator: session_attachment
+    audio_hash: 6e2ee4da07b3559eef8d546148d8af80789ce75aca8493e5bc5867481e6fdbfc
+    drive_file_id: null
+    measured:
+      harmonic_ratio: 0.9688
+      percussive_ratio: 0.0312
+      spectral_centroid: 795.83
+      bpm: 161.5
+      key: C
+      mode: major
+      dynamic_range_db: 14.2
+      valley_depth: 0.05
+      low_ratio: 0.1322
+      mid_ratio: 0.8675
+      high_ratio: 0.0003
+      spectral_bands:
+        sub_bass: 0.0093
+        bass: 0.1337
+        low_mid: 0.2947
+        mid: 0.477
+        high_mid: 0.0714
+        presence: 0.0104
+        brilliance: 0.0034
+    notes:
+      - "本物 real anchor (mora hi-res FLAC、session 添付で repo 外・sha256 で provenance)。Phase C orchestral real n=3。harmonic 0.969 は高度にトーナルな叙情管弦の典型。bpm 161.5 は octave 疑い (叙情曲で速すぎ)・解析欄として保全。key は extractor 値。"
   - id: rock_real_01_heartshapedbox
     genre_label: rock-real
     generator: real
