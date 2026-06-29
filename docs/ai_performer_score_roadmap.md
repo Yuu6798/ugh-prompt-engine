@@ -123,8 +123,16 @@
 - アダプタの優先度を **静的 `score.rendering.priority` から `control_profile` の grip_class
   駆動へ**。tight（保証）フィールドを落とさない芯として優先描画し、loose/dead は助言＝
   真っ先の削減候補に格下げ（限られたプロンプト枠を効くツマミに配分）。
-- 落とした助言フィールドは既存 `GeneratedPrompt.dropped_elements` で返し、「何を保証し
-  何を助言に落としたか」を可視化する。
+- **前提: セグメント／`dropped_elements` を `PhysicalLayer` フィールド粒度へ分解する**。
+  現行 `ExternalPromptAdapter` は粗いセグメントでしか drop できず、特に `physical.optional`
+  が **brightness / stereo_width / active_rate / valley_depth を 1 トークンに束ねている**
+  （`compose/prompt_renderer.py`）。このままでは tight な brightness と loose な valley_depth を
+  独立に keep/drop できず、`dropped_elements` も不透明な 1 トークンを返すため、下記の
+  tight-last / dead-first が**検証不能**になる。よって PR1.5 はまず粗セグメントをフィールド
+  単位へ割り（brightness が `semantic.core` と `physical.optional` に重複している点も整理）、
+  drop 単位とトークンをフィールド粒度に揃えることを前提作業に含める。
+- 落とした助言フィールドは（フィールド粒度の）`GeneratedPrompt.dropped_elements` で返し、
+  「どのフィールドを保証し、どれを助言に落としたか」をフィールド単位で可視化する。
 - Suno 固有の機械的制約（Style 欄字数・Exclude＝negative チャネル・欄レイアウト）を
   **薄い backend descriptor** に隔離。`ExternalPromptAdapter.backend = "external"` が
   暗黙に "suno" 化するのを防ぐ（seam を名前で引く・改訂方針 3）。
@@ -134,7 +142,11 @@ melody 条件付け等）。これは引き続き M5 forward work。プロファ
 
 **受け入れ条件**:
 - 同一楽譜が control_profile（生成器別）に応じて異なるプロンプトへコンパイルされる。
-- tight フィールドは max_chars 削減で**最後まで残る**。dead/loose が先に落ちる。
+- セグメント／`dropped_elements` が **`PhysicalLayer` フィールド粒度**で、tight な
+  brightness を残しつつ loose な valley_depth を落とす等の**独立した keep/drop が検証できる**
+  （粗トークン 1 個に束ねない）。
+- tight フィールドは max_chars 削減で**最後まで残る**。dead/loose が先に落ちる（フィールド
+  単位の単体テストで tight-last・dead-first を確認）。
 - backend 固有の制約が descriptor 側に分離され、アダプタ core から Suno 直書きが消える。
 - 既存 example Score のコンパイルが決定論で snapshot 固定。
 
@@ -143,8 +155,8 @@ melody 条件付け等）。これは引き続き M5 forward work。プロファ
 後から厚くなり、その都度コード変更なしに助言→保証へ昇格する（コンパイラが今後の全 grip
 証拠の現金化点になる）。
 
-**テスト**: control_profile 駆動の優先度 / tight 残存・dead 先落ち / backend descriptor 分離 /
-コンパイル決定論 snapshot。
+**テスト**: フィールド粒度の drop accounting / control_profile 駆動の優先度 / tight 残存・
+dead 先落ち / backend descriptor 分離 / コンパイル決定論 snapshot。
 
 **依存**: PR1（control_profile スキーマ）。**PR2 の前に置く**＝PR2 の楽譜準拠テストが
 手書きプロンプトでなく**実コンパイル経路**を検証できるようになる。
