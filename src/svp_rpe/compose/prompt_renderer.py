@@ -25,6 +25,7 @@ from svp_rpe.compose.models import (
 _PRIORITY_ALIAS: dict[str, list[str]] = {
     "physical.bpm": ["bpm"],
     "physical.key": ["key"],
+    "physical.time_signature": ["time_signature"],
     "physical.optional": [
         "brightness",
         "stereo_width",
@@ -123,9 +124,13 @@ def _segments_for(score: CompositionScore) -> list[_PromptSegment]:
 
     # brightness は専用フィールドトークンが単独所有する（独立 keep/drop を成立させるため、
     # semantic.core の形容詞重複は除去。PR1.5 の duplication 整理）。
-    add("semantic.core", f"{score.semantic.core.capitalize()} atmosphere.")
+    # casing は先頭1文字のみ大文字化し、acronym/固有名（例 "AI EDM"）の意図的な casing を保つ。
+    add("semantic.core", f"{_sentence_case(score.semantic.core)} atmosphere.")
     add("bpm", _bpm_text(score.physical.bpm))
     add("key", f"{score.physical.key}.")
+    # time_signature も control_profile が tight 宣言しうる保証チャネルなのでフィールド粒度で描画
+    # （宣言したのに描画/保持されない穴を塞ぐ）。
+    add("time_signature", f"{score.physical.time_signature} time.")
 
     for section in score.structure:
         add(
@@ -135,7 +140,7 @@ def _segments_for(score: CompositionScore) -> list[_PromptSegment]:
 
     # 旧 physical.optional 束をフィールド粒度トークンへ分解（各々独立に keep/drop 可能）。
     add("brightness", f"Brightness {score.physical.brightness}.")
-    add("stereo_width", f"{score.physical.stereo_width.capitalize()} stereo.")
+    add("stereo_width", f"{_sentence_case(score.physical.stereo_width)} stereo.")
     add("active_rate_target", f"Active rate {score.physical.active_rate_target}.")
     add("valley_depth_target", f"Valley depth {score.physical.valley_depth_target}.")
 
@@ -182,6 +187,13 @@ def _rank_key_factory(
         return (tier, priority_index.get(segment.token, unlisted_index), segment.order)
 
     return rank
+
+
+def _sentence_case(text: str) -> str:
+    """先頭1文字だけ大文字化する（`str.capitalize` と違い 2 文字目以降の意図的な
+    casing＝acronym/固有名/ジャンル表記 "AI EDM" 等を保つ）。"""
+
+    return text[:1].upper() + text[1:]
 
 
 def _join_segments(segments: list[_PromptSegment]) -> str:

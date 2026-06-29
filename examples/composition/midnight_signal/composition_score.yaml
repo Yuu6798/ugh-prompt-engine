@@ -51,6 +51,7 @@ rendering:
     - semantic.grv
     - physical.bpm
     - physical.key
+    - physical.time_signature
     - structure
     - semantic.avoid
     - physical.optional

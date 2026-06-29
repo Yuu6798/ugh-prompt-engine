@@ -281,6 +281,38 @@ def test_unprofiled_score_falls_back_to_priority_order() -> None:
     assert "Valley depth" not in prompt.text
 
 
+def test_semantic_core_preserves_intentional_casing() -> None:
+    """acronym/固有名の casing を保つ（Codex P2: .capitalize() 退行の修正）。"""
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["semantic"]["core"] = "AI EDM energy"
+    score = CompositionScore.model_validate(data)
+
+    prompt = ExternalPromptAdapter().render(score, max_chars=1000)
+
+    assert "AI EDM energy atmosphere." in prompt.text
+    assert "Ai edm" not in prompt.text
+
+
+def test_tight_time_signature_is_rendered_and_preserved() -> None:
+    """control_profile が tight 宣言した time_signature が描画され保持される
+    （Codex P2: 宣言したのに honor されない穴の修正）。"""
+    score = _score_with_profile(
+        {
+            "suno": {
+                "bpm": {"grip_class": "tight"},
+                "time_signature": {"grip_class": "tight"},
+            }
+        }
+    )
+
+    full = ExternalPromptAdapter().render(score, max_chars=1000)
+    assert "4/4 time." in full.text
+
+    squeezed = ExternalPromptAdapter().render(score, max_chars=40)
+    assert "4/4 time." in squeezed.text
+    assert "time_signature" not in squeezed.dropped_elements
+
+
 def test_compile_is_deterministic_with_control_profile() -> None:
     score = load_composition_score(SAMPLE_PATH)
     adapter = ExternalPromptAdapter()
