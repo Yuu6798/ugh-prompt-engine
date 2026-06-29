@@ -5,15 +5,18 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from svp_rpe.cli import app
 from svp_rpe.compose import (
+    BackendDescriptor,
     CompositionScore,
     ExternalPromptAdapter,
     GeneratedPrompt,
     load_composition_score,
+    resolve_backend_descriptor,
 )
 
 
@@ -31,12 +34,18 @@ def test_external_prompt_adapter_renders_score_layers_in_order() -> None:
     assert prompt.tags == ["deep_house", "ambient", "dark", "wide_stereo"]
     assert prompt.negative_tags == ["bright festival EDM", "comic vocal delivery"]
     assert prompt.dropped_elements == []
-    assert "Dark, introspective night drive atmosphere." in prompt.text
+    assert "Introspective night drive atmosphere." in prompt.text
     assert "deep_house / ambient track." in prompt.text
     assert "128 BPM." in prompt.text
     assert "C minor." in prompt.text
-    assert "Brightness dark; wide stereo;" in prompt.text
+    # physical.optional 束はフィールド粒度の独立した文へ分解される。
+    assert "Brightness dark." in prompt.text
+    assert "Wide stereo." in prompt.text
+    assert "Active rate 0.90-0.93." in prompt.text
+    assert "Valley depth 0.15-0.25." in prompt.text
     assert "Avoid: bright festival EDM; comic vocal delivery." in prompt.text
+    # tight な bpm / brightness は芯として先頭へ昇格する。
+    assert prompt.text.startswith("128 BPM. Brightness dark.")
     assert prompt.text.index("intro:") < prompt.text.index("verse:")
     assert prompt.text.index("verse:") < prompt.text.index("chorus:")
     assert prompt.text.index("chorus:") < prompt.text.index("bridge:")
@@ -48,9 +57,19 @@ def test_external_prompt_adapter_compresses_low_priority_segments_first() -> Non
     prompt = ExternalPromptAdapter().render(score, max_chars=180)
 
     assert len(prompt.text) <= 180
-    assert prompt.dropped_elements[:2] == ["physical.optional", "semantic.avoid"]
+    # 未プロファイルの advisory 物理フィールドが priority 順（低優先＝高 index）で先に落ちる。
+    assert prompt.dropped_elements[:3] == [
+        "valley_depth_target",
+        "active_rate_target",
+        "stereo_width",
+    ]
+    # tight な bpm / brightness は最後まで残る。
+    assert "bpm" not in prompt.dropped_elements
+    assert "brightness" not in prompt.dropped_elements
+    assert "128 BPM." in prompt.text
+    assert "Brightness dark." in prompt.text
     assert "bright festival EDM" not in prompt.text
-    assert "active rate" not in prompt.text
+    assert "Active rate" not in prompt.text
     assert prompt.tags == ["deep_house", "ambient", "dark", "wide_stereo"]
     assert prompt.negative_tags == ["bright festival EDM", "comic vocal delivery"]
 
@@ -112,9 +131,9 @@ def test_compose_cli_outputs_text_by_default() -> None:
     result = CliRunner().invoke(app, ["compose", str(SAMPLE_PATH)])
 
     assert result.exit_code == 0
-    assert result.output.startswith("Dark, introspective night drive atmosphere.")
-    assert "128 BPM." in result.output
-    assert "Brightness dark; wide stereo;" in result.output
+    assert result.output.startswith("128 BPM. Brightness dark.")
+    assert "Brightness dark." in result.output
+    assert "Wide stereo." in result.output
     assert "Avoid: bright festival EDM; comic vocal delivery." in result.output
     assert '"backend"' not in result.output
 
@@ -129,7 +148,11 @@ def test_compose_cli_outputs_json_and_max_chars_override() -> None:
     payload = json.loads(result.output)
     assert payload["backend"] == "external"
     assert len(payload["text"]) <= 180
-    assert payload["dropped_elements"][:2] == ["physical.optional", "semantic.avoid"]
+    assert payload["dropped_elements"][:3] == [
+        "valley_depth_target",
+        "active_rate_target",
+        "stereo_width",
+    ]
     assert payload["tags"] == ["deep_house", "ambient", "dark", "wide_stereo"]
     assert payload["negative_tags"] == ["bright festival EDM", "comic vocal delivery"]
 
@@ -145,7 +168,7 @@ def test_compose_cli_writes_output_file(tmp_path: Path) -> None:
     assert result.exit_code == 0
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert payload["backend"] == "external"
-    assert payload["text"].startswith("Dark, introspective night drive atmosphere.")
+    assert payload["text"].startswith("128 BPM. Brightness dark.")
     assert "Composition prompt saved" in result.output
 
 
@@ -156,3 +179,113 @@ def test_generated_prompt_examples_match_renderer() -> None:
     assert json.loads(GENERATED_JSON_PATH.read_text(encoding="utf-8")) == prompt.model_dump(
         mode="json"
     )
+
+
+# --- PR1.5: control_profile-aware compile ------------------------------------
+
+
+def _score_with_profile(profile: dict[str, dict[str, dict[str, object]]]) -> CompositionScore:
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["control_profile"] = profile
+    return CompositionScore.model_validate(data)
+
+
+def test_backend_selector_resolves_external_to_suno() -> None:
+    """`target_backend: external` が control_profile.suno を決定論的に引く。"""
+    assert resolve_backend_descriptor("external") == BackendDescriptor(profile_key="suno")
+    assert resolve_backend_descriptor("suno").profile_key == "suno"
+    # 未知 backend は素の descriptor（未プロファイル render として正当に通る）。
+    assert resolve_backend_descriptor("udio").profile_key == "udio"
+
+
+def test_external_backend_uses_suno_profile_for_grip() -> None:
+    """external Score が suno プロファイルの grip_class でコンパイルされる。"""
+    score = load_composition_score(SAMPLE_PATH)  # target_backend: external
+    assert score.rendering.target_backend == "external"
+
+    prompt = ExternalPromptAdapter().render(score, max_chars=120)
+
+    # suno で tight の bpm/brightness が芯として残る。
+    assert "128 BPM." in prompt.text
+    assert "Brightness dark." in prompt.text
+    assert "bpm" not in prompt.dropped_elements
+    assert "brightness" not in prompt.dropped_elements
+
+
+def test_dead_field_drops_before_advisory_and_tight() -> None:
+    """dead 宣言フィールドが真っ先に落ちる＝control_profile が drop 順を駆動する。"""
+    score = _score_with_profile(
+        {
+            "suno": {
+                "bpm": {"grip_class": "tight"},
+                "brightness": {"grip_class": "dead"},
+            }
+        }
+    )
+
+    prompt = ExternalPromptAdapter().render(score, max_chars=180)
+
+    assert prompt.dropped_elements[0] == "brightness"
+    assert "Brightness dark." not in prompt.text
+    # tight な bpm は残る。
+    assert "128 BPM." in prompt.text
+    assert "bpm" not in prompt.dropped_elements
+
+
+def test_tight_field_survives_aggressive_truncation() -> None:
+    """tight フィールドは max_chars を強く絞っても最後まで残る（dead/loose が先）。"""
+    score = _score_with_profile({"suno": {"bpm": {"grip_class": "tight"}}})
+
+    prompt = ExternalPromptAdapter().render(score, max_chars=12)
+
+    assert "128 BPM." in prompt.text
+    assert "bpm" not in prompt.dropped_elements
+
+
+def test_control_profile_drives_per_generator_divergence() -> None:
+    """生成器キーで同一楽譜が別プロンプトへ分岐する（スキーマが生成器キー駆動）。"""
+    profile = {
+        "suno": {"brightness": {"grip_class": "tight"}},
+        "musicgen": {"brightness": {"grip_class": "dead"}},
+    }
+    suno_score = _score_with_profile(profile)
+    musicgen_data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    musicgen_data["control_profile"] = profile
+    musicgen_data["rendering"]["target_backend"] = "musicgen"
+    musicgen_score = CompositionScore.model_validate(musicgen_data)
+
+    suno_prompt = ExternalPromptAdapter().render(suno_score, max_chars=180)
+    musicgen_prompt = ExternalPromptAdapter().render(musicgen_score, max_chars=180)
+
+    # suno は brightness を tight で守り、musicgen は dead で真っ先に落とす。
+    assert "Brightness dark." in suno_prompt.text
+    assert musicgen_prompt.dropped_elements[0] == "brightness"
+    assert suno_prompt.text != musicgen_prompt.text
+
+
+def test_unprofiled_score_falls_back_to_priority_order() -> None:
+    """control_profile 不在でも分割は効き、drop 順は rendering.priority に従う。"""
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data.pop("control_profile", None)
+    score = CompositionScore.model_validate(data)
+
+    prompt = ExternalPromptAdapter().render(score, max_chars=180)
+
+    # priority 末尾 physical.optional が field 展開され、低優先フィールドから落ちる。
+    assert prompt.dropped_elements[:3] == [
+        "valley_depth_target",
+        "active_rate_target",
+        "stereo_width",
+    ]
+    # フィールド粒度の独立文へ分割されている。
+    assert "Valley depth" not in prompt.text
+
+
+def test_compile_is_deterministic_with_control_profile() -> None:
+    score = load_composition_score(SAMPLE_PATH)
+    adapter = ExternalPromptAdapter()
+
+    first = adapter.render(score, max_chars=200)
+    second = adapter.render(score, max_chars=200)
+
+    assert first == second

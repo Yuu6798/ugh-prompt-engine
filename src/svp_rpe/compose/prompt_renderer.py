@@ -1,16 +1,81 @@
-"""Deterministic prompt rendering for Composition Score documents."""
+"""Deterministic prompt rendering for Composition Score documents.
+
+PR1.5 で `control_profile` 駆動のフィールド粒度コンパイルに刷新:
+- 粗い `physical.optional` 束を PhysicalLayer フィールド粒度トークンへ分解
+  （`brightness` / `stereo_width` / `active_rate_target` / `valley_depth_target`）。
+- `control_profile` が覆う tight フィールドを「芯」として先頭へ昇格し drop で最後まで残す。
+  loose/dead は真っ先の削減候補へ格下げ。control_profile 外のセグメントは
+  `rendering.priority`（エイリアス正規化済み）を fallback／tie-breaker に使う。
+- backend 固有の制約を薄い `BackendDescriptor` に隔離し、`target_backend` →
+  control_profile キーを決定論的に解決（`external`→`suno`）。
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from svp_rpe.compose.models import CompositionScore, GeneratedPrompt
+from svp_rpe.compose.models import (
+    CompositionScore,
+    ControlGrip,
+    GeneratedPrompt,
+    PhysicalLayer,
+)
+
+# 旧セグメントトークン → フィールド粒度トークンのエイリアス／移行マップ。
+# 既存 `rendering.priority`（旧トークンで記述）の drop 順位契約を分割後も保つ。
+_PRIORITY_ALIAS: dict[str, list[str]] = {
+    "physical.bpm": ["bpm"],
+    "physical.key": ["key"],
+    "physical.optional": [
+        "brightness",
+        "stereo_width",
+        "active_rate_target",
+        "valley_depth_target",
+    ],
+}
+
+# control_profile が覆う物理フィールドの描画ティア（小さいほど先頭・drop で後）。
+_TIER_TIGHT = 0  # 保証チャネル: 芯として先頭描画・最後まで残す
+_TIER_FALLBACK = 1  # 未プロファイル: rendering.priority 順
+_TIER_ADVISORY = 2  # loose/dead: 助言・真っ先の削減候補
 
 
 @dataclass(frozen=True)
 class _PromptSegment:
-    token: str
+    token: str  # 物理フィールドは PhysicalLayer.model_fields 正式名、他は semantic.*/structure
     text: str
     order: int
+
+
+@dataclass(frozen=True)
+class BackendDescriptor:
+    """生成器固有の機械的制約を隔離する薄い記述子（seam を名前で引く）。
+
+    `ExternalPromptAdapter.backend = "external"` が暗黙に Suno 化するのを防ぐ。
+    """
+
+    profile_key: str  # control_profile のキー（"suno" / "musicgen" / ...）
+    negative_channel: str = "exclude_styles"  # 否定指定を流す欄（Suno=Exclude Styles）
+
+
+# target_backend → BackendDescriptor。`external` は Suno ルートのエイリアス。
+_BACKEND_DESCRIPTORS: dict[str, BackendDescriptor] = {
+    "external": BackendDescriptor(profile_key="suno"),
+    "suno": BackendDescriptor(profile_key="suno"),
+    "musicgen": BackendDescriptor(profile_key="musicgen", negative_channel="negative_prompt"),
+}
+
+
+def resolve_backend_descriptor(target_backend: str) -> BackendDescriptor:
+    """`target_backend` を control_profile キー付き descriptor へ決定論的に解決。
+
+    未知 backend は profile_key=backend 名の素の descriptor へフォールバック
+    （未プロファイルの render として正当に通る）。`external` は明示的に `suno` を引く
+    ため「未プロファイルの external render」へ黙って落ちない。
+    """
+
+    return _BACKEND_DESCRIPTORS.get(
+        target_backend, BackendDescriptor(profile_key=target_backend)
+    )
 
 
 class ExternalPromptAdapter:
@@ -20,12 +85,17 @@ class ExternalPromptAdapter:
 
     def render(self, score: CompositionScore, max_chars: int | None = None) -> GeneratedPrompt:
         limit = max(0, score.rendering.prompt_max_chars if max_chars is None else max_chars)
-        segments = _segments_for(score)
+        descriptor = resolve_backend_descriptor(score.rendering.target_backend)
+        profile = (score.control_profile or {}).get(descriptor.profile_key)
+        rank = _rank_key_factory(score.rendering.priority, profile)
+
+        segments = sorted(_segments_for(score), key=rank)
         kept = list(segments)
         dropped_elements: list[str] = []
 
         while _join_segments(kept) and len(_join_segments(kept)) > limit:
-            segment = _lowest_priority_segment(kept, score.rendering.priority)
+            # ランク最大（advisory → 低優先 fallback → tight の順）を先に落とす。
+            segment = max(kept, key=rank)
             kept.remove(segment)
             dropped_elements.append(segment.token)
 
@@ -45,13 +115,17 @@ def _segments_for(score: CompositionScore) -> list[_PromptSegment]:
         if text:
             segments.append(_PromptSegment(token=token, text=text, order=len(segments)))
 
-    grv_values = [value for value in [score.semantic.grv.primary, score.semantic.grv.secondary] if value]
+    grv_values = [
+        value for value in [score.semantic.grv.primary, score.semantic.grv.secondary] if value
+    ]
     if grv_values:
         add("semantic.grv", f"{' / '.join(grv_values)} track.")
 
-    add("semantic.core", f"{score.physical.brightness.capitalize()}, {score.semantic.core} atmosphere.")
-    add("physical.bpm", _bpm_text(score.physical.bpm))
-    add("physical.key", f"{score.physical.key}.")
+    # brightness は専用フィールドトークンが単独所有する（独立 keep/drop を成立させるため、
+    # semantic.core の形容詞重複は除去。PR1.5 の duplication 整理）。
+    add("semantic.core", f"{score.semantic.core.capitalize()} atmosphere.")
+    add("bpm", _bpm_text(score.physical.bpm))
+    add("key", f"{score.physical.key}.")
 
     for section in score.structure:
         add(
@@ -59,43 +133,55 @@ def _segments_for(score: CompositionScore) -> list[_PromptSegment]:
             f"{section.section}: {section.physical}; role={section.role}.",
         )
 
-    add(
-        "physical.optional",
-        (
-            f"Brightness {score.physical.brightness}; {score.physical.stereo_width} stereo; "
-            f"active rate {score.physical.active_rate_target}; "
-            f"valley depth {score.physical.valley_depth_target}."
-        ),
-    )
+    # 旧 physical.optional 束をフィールド粒度トークンへ分解（各々独立に keep/drop 可能）。
+    add("brightness", f"Brightness {score.physical.brightness}.")
+    add("stereo_width", f"{score.physical.stereo_width.capitalize()} stereo.")
+    add("active_rate_target", f"Active rate {score.physical.active_rate_target}.")
+    add("valley_depth_target", f"Valley depth {score.physical.valley_depth_target}.")
 
     if score.semantic.avoid:
         add("semantic.avoid", f"Avoid: {'; '.join(score.semantic.avoid)}.")
 
-    return _ordered_segments(segments, score.rendering.priority)
+    return segments
 
 
-def _ordered_segments(
-    segments: list[_PromptSegment],
+def _normalize_priority(priority: list[str]) -> list[str]:
+    """旧セグメントトークンをフィールド粒度トークンへ展開（順序保存）。"""
+
+    normalized: list[str] = []
+    for token in priority:
+        normalized.extend(_PRIORITY_ALIAS.get(token, [token]))
+    return normalized
+
+
+_PHYSICAL_FIELDS = frozenset(PhysicalLayer.model_fields)
+
+
+def _rank_key_factory(
     priority: list[str],
-) -> list[_PromptSegment]:
-    priority_index = {token: index for index, token in enumerate(priority)}
-    unlisted_index = len(priority)
-    return sorted(
-        segments,
-        key=lambda segment: (priority_index.get(segment.token, unlisted_index), segment.order),
-    )
+    profile: dict[str, ControlGrip] | None,
+):
+    """セグメント → (tier, priority_index, order) のランクキーを返すクロージャ。
 
+    昇順ソート = 描画順、最大 = 最初に落とす drop 対象。tight=先頭/drop最後、
+    loose/dead=末尾/drop最初、未プロファイルは正規化 priority 順。
+    """
 
-def _lowest_priority_segment(
-    segments: list[_PromptSegment],
-    priority: list[str],
-) -> _PromptSegment:
-    priority_index = {token: index for index, token in enumerate(priority)}
-    unlisted_index = len(priority)
-    return max(
-        segments,
-        key=lambda segment: (priority_index.get(segment.token, unlisted_index), segment.order),
-    )
+    normalized = _normalize_priority(priority)
+    priority_index = {token: index for index, token in enumerate(normalized)}
+    unlisted_index = len(normalized)
+
+    def rank(segment: _PromptSegment) -> tuple[int, int, int]:
+        grip = profile.get(segment.token) if profile and segment.token in _PHYSICAL_FIELDS else None
+        if grip is None:
+            tier = _TIER_FALLBACK
+        elif grip.grip_class == "tight":
+            tier = _TIER_TIGHT
+        else:  # loose / dead
+            tier = _TIER_ADVISORY
+        return (tier, priority_index.get(segment.token, unlisted_index), segment.order)
+
+    return rank
 
 
 def _join_segments(segments: list[_PromptSegment]) -> str:

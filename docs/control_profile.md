@@ -4,8 +4,9 @@
 （`grip_class`）を楽譜自身に持たせるための optional ブロック。これにより楽譜は
 **自己記述的**になり、「AI が演奏できる楽譜」の核心的差別化点となる。
 
-本ドキュメントは PR1（スキーマ + 初期データ）の範囲を記す。実コンパイル
-（`control_profile` を `ExternalPromptAdapter` の優先度に配線する）は PR1.5 の範囲。
+本ドキュメントは PR1（スキーマ + 初期データ）と PR1.5（`control_profile` を
+`ExternalPromptAdapter` の優先度に配線する実コンパイル）の範囲を記す。時系列条件付け
+への実コンパイル（M5）は引き続き forward work。
 ロードマップ全体は [`ai_performer_score_roadmap.md`](ai_performer_score_roadmap.md) を参照。
 
 ## スキーマ
@@ -63,6 +64,42 @@ control_profile:                      # key = 生成器名（"suno" / "musicgen"
 > **正直な限界**: 2026-06 時点で Suno の tight は `bpm` / `brightness` の 2 本のみ。
 > 残りは grip 未実証で、PR1.5 では助言（fallback）に格下げされる。芯は K 系列 grip の
 > 拡張で後から厚くなり、その都度コード変更なしに助言→保証へ昇格する。
+
+## PR1.5: control_profile-aware compile
+
+`ExternalPromptAdapter` が `control_profile` を見て、保証チャネルを守って演奏プロンプトへ
+コンパイルする（`compose/prompt_renderer.py`）。
+
+**backend selector**: `rendering.target_backend` → `BackendDescriptor`（`resolve_backend_descriptor`）。
+`external` / `suno` は `profile_key="suno"` を引き、`control_profile.suno` を決定論的に
+解決する。これにより `target_backend: external` の Score が「未プロファイルの external
+render」へ黙って落ちない。未知 backend は素の descriptor（`profile_key=backend 名`）へ
+フォールバック。Suno 固有の制約（Style 字数・Exclude 欄＝`negative_channel`）は薄い
+descriptor に隔離し、アダプタ core から生成器直書きを排除する。
+
+**フィールド粒度の drop accounting**: 旧 `physical.optional` 束（brightness / stereo_width /
+active_rate_target / valley_depth_target を 1 トークンに束ねていた）をフィールド粒度の
+独立した文へ分解。トークン ID は `PhysicalLayer.model_fields` 正式名に一致し、`dropped_elements`
+もフィールド単位で返る。これにより tight な brightness を残しつつ loose な valley_depth_target
+を落とす**独立した keep/drop** が検証可能になる。
+
+**grip_class 駆動の優先度**: control_profile が覆う物理フィールドを 3 ティアで順位付け。
+
+| tier | 対象 | 描画 | drop |
+|---|---|---|---|
+| tight | 保証チャネル | 芯として**先頭へ昇格** | 最後まで残す |
+| (fallback) | 未プロファイル（semantic.* / structure / 未掲載物理フィールド）| `rendering.priority` 順 | priority 低優先から |
+| loose / dead | 助言チャネル | 末尾 | **真っ先に落とす** |
+
+**priority エイリアスマップ**: 既存 `rendering.priority` は旧セグメントトークン
+（`physical.bpm` / `physical.key` / `physical.optional`）で記述されている。分割後も drop 順位
+契約を保つため、`physical.bpm`→`bpm` / `physical.key`→`key` / `physical.optional`→
+`[brightness, stereo_width, active_rate_target, valley_depth_target]`（順序保存展開）で
+field トークンへ正規化する。
+
+**正直な限界**: 現状 Suno の tight は bpm/brightness の 2 本のみ。PR1.5 はこの薄さを正直に
+可視化するだけで、フィールドを grip させはしない。芯は K 系列 grip の拡張で後から厚くなり、
+その都度コード変更なしに助言→保証へ昇格する。
 
 ## 初期データの出所
 
