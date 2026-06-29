@@ -487,6 +487,43 @@ manifest へインライン保全し、`genre-audit` の mismatch で限界を�
 **次の手**: orchestral ルールを Suno 低域厚依存から「中域主役」基準へ再設計する Design Memo
 （low ゲートと衝突せず general/他ジャンルを巻き込まない条件設計が必須）→ Codex 実装。
 
+#### Phase C rock n=3 — 本物バンドを分布化し方向不変指紋を 2 ジャンル目で確認（2026-06-29）
+
+orchestral に続き rock 本物を **n=1→n=3** に増強（既存 Nirvana「Heart-Shaped Box」(Albini, raw grunge) に
+**AC/DC「Back in Black」**(純ギター/ベース/ドラム・乾いたミックス・DR 23.0) と
+**Queen「Don't Stop Me Now」**(70s アリーナ・層状ギター+ピアノ+ボーカル・明) を追加）。
+グランジ / ハードロック / アリーナの 3 サブスタイルに散らした。`rock-real` が `insufficient→sufficient`。
+rock バケットは real stub 混入なし（`rock_01..05` 全て `generator: suno`）なので baseline はそのまま純 Suno n=5。
+
+**本物 rock(n=3) vs 純 Suno rock(n=5) の Δ（real − suno_mean）**:
+
+| 特徴量 | real mean | suno mean | Δ | 解釈 |
+|---|---|---|---|---|
+| **harmonic_ratio** | 0.582 | 0.772 | **−0.189** | 脱トーナル化 = 方向一致・**rock で最強**（本物バンドはドラム+歪みギターで Suno のクリーン rock より遥かに非トーナル） |
+| **mid_ratio** | 0.380 | 0.235 | **+0.145** | mid削り = 方向一致（Suno のスマイリー EQ） |
+| low_ratio | 0.588 | 0.734 | −0.145 | Suno 低域厚（orchestral と同方向） |
+| dynamic_range_db | 13.17 | 7.25 | +5.92 | Suno はコンプ気味 |
+| brilliance | 0.139 | 0.165 | −0.026 | **real が暗い**＝#111「rock は Suno が明るすぎ（符号反転）」を n=3 で確認（orchestral の平坦と対照） |
+
+**2 ジャンル目の実 grounding で #111 の方向不変指紋を補強**: real n=3 を得た orchestral と rock の両方で
+**mid削り（real↑: orch +0.36 / rock +0.15）+ 脱トーナル化（real↓: orch −0.07 / rock −0.19）** が方向一致。
+量はジャンル依存（rock の脱トーナル化が支配的・orchestral の mid削りが支配的）だが符号は不変＝
+「補正の方向手がかり」が単発 n=1 でなく分布で確認された。一方 **brilliance は符号がジャンルで割れる**
+（orchestral ≈平坦 / rock は real が暗い）＝#111 の「単一 brilliance 補正係数は不可」を再確認。
+
+**ゲート一般化は orchestral より良好（2/3 正解）**: `genre-audit` で Back in Black・Don't Stop Me Now は
+`rock` 正答、最も暗い Heart-Shaped Box(brilliance 0.108) のみ rock 下限 0.117 を割って
+`cinematic/orchestral` へ漏れる（mismatch）。real rock の brilliance 範囲 0.108–0.180 は Suno rock 帯
+0.139–0.196 の下側に食い込み＝real rock は Suno rock より暗い側に広いことの表れ。rock の brightness 帯は
+orchestral（3/3 全滅）と違い概ね汎化するが、**暗い grunge の裾が Suno 由来の下限 0.117 を僅かに割る**のが
+n=3 で判明した境界バイアス。
+
+⚠️ **留保**: n=3（real）はなお小標本。Δ は分布平均の一次近似。production rule は本セッションで不変
+（measured を manifest へインライン保全・`genre-audit` mismatch で境界限界を可視化）。
+**次の手**: rock 下限を実 rock の暗裾（≈0.108）まで下げると orchestral 上限と衝突しうるため、
+brightness 単軸でなく harmonic/percussive（脱トーナル軸 Δ−0.19 が rock で最も鋭い）を補助軸に足す
+3-way 再設計を orchestral の「中域主役」Memo と統合して検討する。
+
 ---
 
 ## 5. リスクと留意点
