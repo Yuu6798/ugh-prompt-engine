@@ -95,11 +95,18 @@ cultural_context:
     - id: ctx.bass_music_brilliance
       condition: {low_ratio_gt: 0.4, spectral_bands.brilliance_min: 0.204}
       context: bass-music
+    - id: ctx.edm_sub_bass
+      # Phase D: 本物 EDM は brilliance が rock 帯に重なる(Strobe 0.146 / Levels 0.202)が
+      # sub_bass で分離(rock real/suno ≤0.048 vs edm ≥0.055)。深い sub_bass + 非暗で bass-music。
+      condition: {low_ratio_gt: 0.4, spectral_bands.sub_bass_min: 0.052, spectral_bands.brilliance_min: 0.12}
+      context: bass-music
     - id: ctx.rock_brilliance
-      condition: {low_ratio_gt: 0.4, spectral_bands.brilliance_min: 0.117, spectral_bands.brilliance_lt: 0.204}
+      # Phase D: 下限 0.117→0.105(本物 grunge HSB=0.108 を捕捉、Suno orch ≤0.095 で無影響)。
+      # sub_bass_lt 0.052 で深 sub_bass の EDM を除外し rock 単独ラベルを保つ。
+      condition: {low_ratio_gt: 0.4, spectral_bands.brilliance_min: 0.105, spectral_bands.brilliance_lt: 0.204, spectral_bands.sub_bass_lt: 0.052}
       context: rock
     - id: ctx.orchestral_brilliance
-      condition: {low_ratio_gt: 0.4, spectral_bands.brilliance_lt: 0.117}
+      condition: {low_ratio_gt: 0.4, spectral_bands.brilliance_lt: 0.105}
       context: cinematic/orchestral
     - id: ctx.bass_music
       condition: {low_ratio_gt: 0.4, high_ratio_gt: 0.017, spectral_bands.brilliance_absent: true}
