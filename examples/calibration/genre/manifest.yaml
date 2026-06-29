@@ -755,6 +755,64 @@ samples:
         brilliance: 0.1081
     notes:
       - "本物 real anchor (lossless FLAC 90s クリップ、Drive→clip 添付経由)。cross-genre bias n=1。audio は session 添付で repo 外 (sha256 で provenance)。key は extractor 値。"
+  - id: rock_real_02_backinblack
+    genre_label: rock-real
+    generator: real
+    prompt: "AC/DC — Back in Black。Real rock band anchor (純ギター/ベース/ドラムのハードロック・乾いたミックス)。hi-res FLAC クリップ。 Phase C rock real n を増やし mid/harmonic 補正係数を分布化する用 (Suno rock コホートと対比)。リフ駆動・歪みギター・広ダイナミクス(DR 23.0)の点。"
+    audio_locator: session_attachment
+    audio_hash: 773446feb8cc53e0ec613c2c423cf58767e8fca956506400574a40e2d780d59b
+    drive_file_id: null
+    measured:
+      harmonic_ratio: 0.4176
+      percussive_ratio: 0.5824
+      spectral_centroid: 2854.98
+      bpm: 92.29
+      key: A
+      mode: major
+      dynamic_range_db: 23.0
+      valley_depth: 0.2326
+      low_ratio: 0.4433
+      mid_ratio: 0.5245
+      high_ratio: 0.0322
+      spectral_bands:
+        sub_bass: 0.0136
+        bass: 0.1087
+        low_mid: 0.0637
+        mid: 0.3125
+        high_mid: 0.2792
+        presence: 0.0931
+        brilliance: 0.1293
+    notes:
+      - "本物 real anchor (mora hi-res FLAC、session 添付で repo 外・sha256 で provenance)。Phase C rock real n=2。harmonic 0.418 は歪みギター+ドラムで強く脱トーナル化した本物バンドの典型。key は extractor 値。"
+  - id: rock_real_03_dontstopmenow
+    genre_label: rock-real
+    generator: real
+    prompt: "Queen — Don't Stop Me Now。Real rock band anchor (70s 磨かれたアリーナロック・層状ギター+ピアノ+ボーカル)。hi-res FLAC クリップ。 Phase C rock real n を増やし mid/harmonic 補正係数を分布化する用 (Suno rock コホートと対比)。明るい極・Nirvana の raw 対極の点。"
+    audio_locator: session_attachment
+    audio_hash: 4a78341b696974929eecb85bf1f8b0da21eb0a3ad5645f5b2a0407e223999993
+    drive_file_id: null
+    measured:
+      harmonic_ratio: 0.5822
+      percussive_ratio: 0.4178
+      spectral_centroid: 2884.18
+      bpm: 152.0
+      key: G
+      mode: minor
+      dynamic_range_db: 8.01
+      valley_depth: 0.0744
+      low_ratio: 0.6582
+      mid_ratio: 0.2958
+      high_ratio: 0.046
+      spectral_bands:
+        sub_bass: 0.0338
+        bass: 0.1677
+        low_mid: 0.0577
+        mid: 0.2248
+        high_mid: 0.2217
+        presence: 0.1149
+        brilliance: 0.1795
+    notes:
+      - "本物 real anchor (mora hi-res FLAC、session 添付で repo 外・sha256 で provenance)。Phase C rock real n=3。bpm 152 は octave 疑い・解析欄として保全。key は extractor 値。"
   - id: edm_real_01_onemoretime
     genre_label: edm-real
     generator: real
