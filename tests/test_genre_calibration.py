@@ -484,10 +484,13 @@ def test_cross_genre_suno_fingerprint_not_constant() -> None:
     """Phase C cross-genre: 本物 orchestral/rock/EDM 各 n=3 vs 純 Suno コホートで指紋の一定性を検定。
 
     「Suno 指紋＝一定オフセット → 単一補正係数」仮説を検証する。3 ジャンル real n=3 の分布。
-    1. brilliance bias は一定でない: orchestral は Suno 帯内（≈平坦）だが rock/edm は Suno 帯より
-       暗い（帯外・real↓）＝ジャンルで挙動が割れる→単一 brilliance 補正係数は不可。
-       （#111 の n=1 では「edm は帯内」だったが n=3 で edm も rock 側＝real↓へ収束。挙動が
-       ジャンルで一定でない結論は不変。）
+    1. brilliance bias は一定でない（暗化の量がジャンルで異なる）: 全ジャンルで real 平均 ≤ Suno
+       平均（real は暗いか平坦）だが、量は orchestral=Suno 帯内（≈平坦・暗化最小）に対し
+       edm=Suno 帯下限を下回る（暗化最大）と割れる→単一 brilliance 補正係数は不可。
+       注意: 検定対象は **平均シフト**であり band 分離ではない。real/Suno の分布は overlap し
+       個別 anchor は Suno 帯に残りうる（例 edm_real_01_onemoretime=0.2343 ∈ EDM 帯 0.2119–0.2508）
+       ため、mean を min と比べる非対称検定で「分離」を主張しない（#114 Codex P2）。
+       （#111 の n=1 では「edm は帯内」だったが n=3 で edm 平均は real↓ へ収束。）
     2. 一方、全ジャンルで方向一定の指紋が 2 つ（real n=3 で確定）:
        - mid_ratio: 本物 > Suno（Suno は中域を一貫して削る）
        - harmonic_ratio: 本物 < Suno（Suno は一貫してトーナル/脱パンチ）
@@ -528,14 +531,20 @@ def test_cross_genre_suno_fingerprint_not_constant() -> None:
         assert len(vals) >= MIN_SAMPLES_PER_GENRE, (label, feat, len(vals))
         return vals
 
-    # (1) brilliance bias は一定でない: rock/edm は Suno 帯より暗い（帯外・real↓）、
-    #     orchestral は帯内（≈平坦）。挙動がジャンルで割れる＝単一補正係数不可。
-    for real_lab, suno_lab in [("rock-real", "rock"), ("edm-real", "electronic-dance")]:
+    # (1) brilliance bias は一定でない（暗化の量がジャンルで異なる）。検定は平均シフトであり
+    #     band 分離ではない: 分布は overlap し個別 anchor は Suno 帯に残りうる
+    #     （例 edm_real_01_onemoretime=0.2343 ∈ EDM 帯）。#114 Codex P2。
+    # (1a) 全ジャンル: real 平均 ≤ Suno 平均（real は暗いか平坦）
+    for real_lab, suno_lab in pairs.items():
         sb = suno_cohort(suno_lab, "spectral_bands.brilliance")
-        assert real_mean(real_lab, "spectral_bands.brilliance") < min(sb), real_lab  # real が Suno 帯より暗い
+        assert real_mean(real_lab, "spectral_bands.brilliance") <= sum(sb) / len(sb), real_lab
+    # (1b) 量はジャンル一定でない: orchestral 平均は Suno 帯内（≈平坦・暗化最小）だが
+    #      edm 平均は Suno 帯下限を下回る（暗化最大）＝挙動が割れる→単一補正係数不可
     orch_b = real_mean("orchestral-real", "spectral_bands.brilliance")
     orch_suno_b = suno_cohort("orchestral", "spectral_bands.brilliance")
     assert min(orch_suno_b) <= orch_b <= max(orch_suno_b)  # orchestral は帯内（≈平坦）
+    edm_suno_b = suno_cohort("electronic-dance", "spectral_bands.brilliance")
+    assert real_mean("edm-real", "spectral_bands.brilliance") < min(edm_suno_b)  # edm 平均は帯下限未満
 
     # (2) 方向一定の指紋: 全ジャンルで mid_ratio 本物>純Suno かつ harmonic_ratio 本物<純Suno
     for real_lab, suno_lab in pairs.items():
