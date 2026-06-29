@@ -141,6 +141,7 @@ def _make_physical_genre(
     bpm,
     active_rate,
     valley_depth,
+    onset_density=4.5,
 ) -> PhysicalRPE:
     return PhysicalRPE(
         bpm=bpm,
@@ -163,7 +164,7 @@ def _make_physical_genre(
             high_ratio=high_ratio,
             brightness=high_ratio,
         ),
-        onset_density=4.5,
+        onset_density=onset_density,
         harmonic_ratio=harmonic_ratio,
     )
 
@@ -253,6 +254,10 @@ def test_bright_low_heavy_material_keeps_bass_music_context() -> None:
 
 
 def test_thin_dark_synth_material_does_not_fire_genre_split() -> None:
+    # thin dark synth は mid-dominant(low<0.4, mid 0.88)で本物管弦「あの夏へ」と
+    # スペクトル(low/mid/harmonic/centroid)が分離不能だが、onset_density で分離する。
+    # repo synth fixtures の実測値 0.133–0.167 を反映（旧 4.5 は非現実的なプレースホルダ）。
+    # Phase E の onset gate(>=1.0)より下なので orchestral ルールは発火しない。
     semantic = generate_semantic(
         _make_physical_genre(
             harmonic_ratio=1.0,
@@ -263,11 +268,35 @@ def test_thin_dark_synth_material_does_not_fire_genre_split() -> None:
             bpm=120.0,
             active_rate=0.5,
             valley_depth=0.10,
+            onset_density=0.15,
         )
     )
 
     assert "bass-music" not in semantic.cultural_context
     assert "cinematic/orchestral" not in semantic.cultural_context
+
+
+def test_mid_dominant_high_onset_material_gets_orchestral_context() -> None:
+    # Phase E: 本物管弦は mid-dominant(low<0.4, mid>=0.5)で thin dark synth と
+    # スペクトル上重なるが、onset_density(管弦 2.34/3.93 vs synth 0.13–0.17)で分離。
+    # 「あの夏へ」(real_03: low 0.13, mid 0.87, harmonic 0.97, centroid 796, onset 2.34)
+    # を模した点。従来は low_ratio<0.4 でどの genre ルールにも掛からず general へ落ちていた。
+    semantic = generate_semantic(
+        _make_physical_genre(
+            harmonic_ratio=0.97,
+            spectral_centroid=796.0,
+            low_ratio=0.13,
+            mid_ratio=0.87,
+            high_ratio=0.0,
+            bpm=100.0,
+            active_rate=0.6,
+            valley_depth=0.05,
+            onset_density=2.34,
+        )
+    )
+
+    assert "cinematic/orchestral" in semantic.cultural_context
+    assert "bass-music" not in semantic.cultural_context
 
 
 def test_bands_present_bright_brilliance_uses_bass_music_without_power_double_fire() -> None:

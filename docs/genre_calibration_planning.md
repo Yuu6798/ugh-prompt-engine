@@ -587,17 +587,67 @@ config 宣言のみ）。collect-all + 緩い intersection match のため追加
 - 結果: `genre-audit` で **rock-real 3/3・edm-real 3/3 が match（単一クリーンラベル）**、Suno 回帰ゼロ、
   `test_semantic_layer` 既存アサーション無改変で green。
 
-**orchestral は実装を見送り＝既知限界として確定（重要）**: 本物管弦は `low_ratio<0.4` の
-**中域主役**（mid_ratio 0.59–0.87）だが、この領域は **thin dark synth と特徴空間で分離不能**。
-特に「あの夏へ」(low 0.132 / mid 0.868 / harmonic 0.969 / centroid 795) は synth ガード fixture
+**orchestral は Phase D 時点では実装を見送り＝既知限界として確定していた**（→ Phase E で解消）:
+本物管弦は `low_ratio<0.4` の **中域主役**（mid_ratio 0.59–0.87）だが、この領域は
+**thin dark synth とスペクトル特徴空間で分離不能**。特に「あの夏へ」(low 0.132 / mid 0.868 /
+harmonic 0.969 / centroid 795) は synth ガード fixture
 (`test_thin_dark_synth_material_does_not_fire_genre_split`: low 0.12 / mid 0.88 / harmonic 1.0 /
 centroid 700) とほぼ同一で、`mid_ratio>0.55 ∧ low_ratio<0.4` 型の rule は synth を orchestral と
-誤判定する（**Phase A 罠の再来**＝「倍音性単独では分離不能」#24 の構造的限界）。よって
-orchestral ルールは追加せず、`genre-audit` に mismatch として残し可視化を維持
-（`test_real_anchors_are_visible_in_audit` が orchestral-real 3/3 mismatch を pin）。
-**解決には特徴空間の拡張が必須**: 採譜層（旋律/和声で管弦↔synth を分ける）、テクスチャ/
-realness センサー、または学習モデル器楽推定（`learned_models_policy.md` の隔離原則下）。
-SW(low 0.388)/Holst(low 0.346) のみ多重境界 rule で拾う案は ano を取り逃し overfit のため不採用。
+誤判定する（**Phase A 罠の再来**＝「倍音性単独では分離不能」#24 の構造的限界）。当時の結論は
+**「スペクトル軸だけでは特徴空間の拡張が必須」**だった（採譜層 / テクスチャ・realness センサー /
+学習モデル器楽推定）。SW(low 0.388)/Holst(low 0.346) のみ多重境界 rule で拾う案は ano を
+取り逃し overfit のため不採用。**→ Phase E でこの「特徴空間拡張」を `onset_density`（既存の
+決定論フィールド・学習モデル不要）で実現した。**
+
+---
+
+## 4.5 Phase E — orchestral を onset_density 第二軸で捕捉（2026-06-29）
+
+**結論**: Phase D で「分離不能」とした mid-dominant orchestral vs thin dark synth は、
+スペクトル軸（low/mid/harmonic/centroid）では確かに重なるが、**`onset_density`（既存の
+決定論物理フィールド）で明瞭に分離する**。学習モデルも採譜層も不要だった。
+
+**実測グラウンディング**:
+
+| グループ | onset_density | 出所 |
+|---|---|---|
+| repo synth n=5（slow_pad / minor_pulse / mid_groove / waltz / **fast_bright**）| **0.133–0.167** | `examples/sample_input/synth_0*.wav` を本セッションで実 extract |
+| 本物管弦 Holst Mars | **3.93** | 2026-06-29 プローブ（音源 ephemeral・sha256 で provenance）|
+| 本物管弦「あの夏へ」（最難点・synth とスペクトル同一）| **2.34** | 同上 |
+
+synth 上限 0.167 と管弦下限 2.34 の間に **約 14× のギャップ**。決定論 synth は `fast_bright`
+ですら onset 0.143 で、ラベル上「速い」でも onset は上がらない（単純なコード変化のため）。
+
+**ルール（`ctx.orchestral_mid_dominant`）**:
+```yaml
+condition: {low_ratio_lt: 0.4, mid_ratio_min: 0.5, onset_density_min: 1.0}
+context: cinematic/orchestral
+```
+- `onset_density>=1.0` は synth 上限の約 6 倍・管弦下限の半分以下で広いマージン
+  （busy synth の偽発火耐性）。
+- `harmonic_ratio` は synth(≈1.0)≈管弦(0.84–0.97) で**非分離のため判別に不使用**。
+- collect-all + dedup なので Suno / rock / edm の既存 match を壊さない（`low_ratio<0.4` 域は
+  従来どの genre ルールにも掛からなかった＝純粋に general からの救済）。`test_semantic_layer`
+  既存アサーション無改変で green。
+
+**結果（`genre-audit`）**:
+- orchestral-real: **Holst / あの夏へ → match**（manifest に probe onset_density を保全）。
+- Star Wars は **onset_density 未測定（PENDING）** で general へ落ち mismatch のまま
+  ＝音源 re-attach→再測定で n=3 化すれば解消する既知の保留（可視化を維持）。
+- 回帰固定: `test_mid_dominant_high_onset_material_gets_orchestral_context`（positive）/
+  `test_thin_dark_synth_material_does_not_fire_genre_split`（negative・synth onset を実測 0.15 に更新）/
+  `test_real_anchors_are_visible_in_audit`（holst/ano match・SW pending mismatch を pin）。
+
+**留保**:
+- 本物管弦の onset グラウンディングは **n=2**（Holst / あの夏へ）。SW を含む n=3 化は音源
+  re-attach 待ち。`chord` 活動数（管弦 11–29 変化 vs synth 3）も第二の分離軸だがスカラー
+  フィールド化が必要で本 Phase は onset_density 単独に限定。
+- synth fixtures は単一 pad/pulse の「おもちゃ」で、本物の busy synth（アルペジオ密多）は
+  onset が上がりうる。ただし gate 1.0 のマージンと mid-dominant 条件で実用上は安全側。
+- 密な mid-dominant tonal（solo piano 等）も拾いうる＝意味層は **genre HINT であり verdict
+  ではない**（`estimation_disclaimer` 維持）。
+- `CALIB_FEATURES` への `onset_density` 追加（`genre-calibrate` の分離度レポート化）は
+  follow-up（calibration analyzer のテスト安定性を優先し本 Phase では未着手）。
 
 ---
 

@@ -92,16 +92,21 @@ def test_seed_manifest_uses_current_brightness_split() -> None:
 
 
 def test_real_anchors_are_visible_in_audit() -> None:
-    """Phase D ルール再設計後の本物アンカー（`*-real`）の audit 状態を pin する。
+    """Phase E ルール追加後の本物アンカー（`*-real`）の audit 状態を pin する。
 
     Phase C で `GENRE_CONTEXT_EXPECTATIONS` に `*-real` を配線し死角を解消（#111 Codex P2）、
     Phase D で rock/edm を本物対応へ再設計した結果:
     - rock-real 3/3 → match（brilliance 下限 0.117→0.105 で grunge HSB 0.108 を捕捉）。
     - edm-real 3/3 → match（sub_bass で rock と分離。Strobe/Levels が brilliance 帯重なりでも bass-music）。
-    - orchestral-real は **依然 mismatch（既知の未解決限界）**: 本物管弦は low_ratio<0.4 の中域主役だが、
-      その領域は thin dark synth と特徴空間で重なり分離不能（Phase A 罠の再来。
-      `test_thin_dark_synth_material_does_not_fire_genre_split` が synth 側を pin している）。
-      audit に mismatch として残し可視化を維持する（docs/genre_calibration_planning.md Phase D）。
+
+    Phase E で orchestral の中域主役域を onset_density 第二軸で捕捉:
+    - 本物管弦は low_ratio<0.4 の mid-dominant でスペクトル(low/mid/harmonic/centroid)は
+      thin dark synth と分離不能（Phase A 罠）だが、onset_density が分離する
+      （repo synth 0.133–0.167 vs 管弦 holst 3.93 / ano 2.34）。gate>=1.0 を追加。
+    - holst/ano は 2026-06-29 プローブ実測 onset_density を manifest に保全したので **match**。
+    - star wars は onset_density **PENDING（未測定）** で audit 上 general へ落ち mismatch のまま。
+      音源 re-attach→再測定で n=3 化すれば解消する（既知の保留・可視化を維持）。
+      synth 側は `test_thin_dark_synth_material_does_not_fire_genre_split` が pin している。
     """
     report = run_genre_misfire_audit(load_genre_manifest(SEED_MANIFEST), repo_root=ROOT)
     by_id = {item.id: item for item in report.predictions}
@@ -116,12 +121,17 @@ def test_real_anchors_are_visible_in_audit() -> None:
     assert by_id["rock_real_01_heartshapedbox"].predicted_cultural_context == ["rock"]
     assert by_id["edm_real_02_strobe"].predicted_cultural_context == ["bass-music"]
 
-    # orchestral 本物は依然 mismatch（synth と分離不能の既知限界・可視化を維持）
-    orch_preds = [item for item in report.predictions if item.genre_label == "orchestral-real"]
-    assert len(orch_preds) == 3
-    assert all(item.mismatch is True for item in orch_preds), [
-        (p.id, p.predicted_cultural_context, p.mismatch) for p in orch_preds
-    ]
+    # orchestral 本物: onset_density 実測済の holst/ano は match、未測定の star wars は mismatch。
+    assert by_id["orchestral_real_01_starwars"].mismatch is True
+    assert "cinematic/orchestral" not in (
+        by_id["orchestral_real_01_starwars"].predicted_cultural_context
+    )
+    for grounded in ("orchestral_real_02_holst_mars", "orchestral_real_03_ano_natsu_e"):
+        assert by_id[grounded].mismatch is False, (
+            grounded,
+            by_id[grounded].predicted_cultural_context,
+        )
+        assert "cinematic/orchestral" in by_id[grounded].predicted_cultural_context
 
 
 def test_audit_uses_backfilled_production_genre_sections(monkeypatch) -> None:
