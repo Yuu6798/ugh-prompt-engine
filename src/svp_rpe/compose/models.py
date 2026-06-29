@@ -18,6 +18,10 @@ from svp_rpe.sentinels import TODO_SENTINEL_PREFIX, is_todo_sentinel
 FixityState = Literal["locked", "unlocked"]
 EVENT_FIXITY_FIELDS = frozenset({"chord_progression"})
 
+# grip_class: 楽譜フィールドが当該生成器でどれだけ「効く」かの実証ラベル。
+# tight=保証チャネル / loose=助言（弱い grip）/ dead=無効（センサー盲 or ツマミ死）。
+GripClass = Literal["tight", "loose", "dead"]
+
 
 class CompositionModel(BaseModel):
     """Base model that rejects keys outside the canonical Composition Score schema."""
@@ -80,6 +84,27 @@ class PhysicalLayer(CompositionModel):
         return value
 
 
+class ControlGrip(CompositionModel):
+    """単一生成器における 1 物理フィールドの制御信頼度（K 系列 grip 由来）。"""
+
+    grip_class: GripClass
+    grip: float | None = None  # 効果量 d（K 系列 measure_grip 出力）
+    sensor: str | None = None  # 観測センサー名（例: spectral_centroid）
+    evidence: str | None = None  # 出所参照（例: examples/control/k2/expected_grip.json）
+
+    @model_serializer(mode="wrap")
+    def serialize_without_empty_optionals(self, handler: Any) -> dict[str, Any]:
+        data = handler(self)
+        for field in ("grip", "sensor", "evidence"):
+            if getattr(self, field) is None:
+                data.pop(field, None)
+        return data
+
+
+# GeneratorProfile = dict[field_name -> ControlGrip]。field_name は PhysicalLayer のキー。
+GeneratorProfile = dict[str, ControlGrip]
+
+
 class StructureSection(CompositionModel):
     section: str
     bars: int
@@ -118,6 +143,28 @@ class CompositionScore(CompositionModel):
     rendering: RenderingConfig
     events: EventLayer | None = None
     fixity: dict[str, FixityState] | None = None
+    # key = 生成器名（"suno" / "musicgen" / ...）。値 = PhysicalLayer フィールド粒度の grip。
+    control_profile: dict[str, GeneratorProfile] | None = None
+
+    @field_validator("control_profile")
+    @classmethod
+    def validate_control_profile_keys(
+        cls, value: dict[str, GeneratorProfile] | None
+    ) -> dict[str, GeneratorProfile] | None:
+        if value is None:
+            return None
+        physical_fields = set(PhysicalLayer.model_fields)
+        for generator, profile in value.items():
+            unknown = sorted(set(profile) - physical_fields)
+            if unknown:
+                raise ValueError(
+                    "control_profile field keys must be CompositionScore.physical "
+                    f"fields; unknown keys for generator '{generator}': "
+                    f"{', '.join(unknown)}"
+                )
+        # fixity と異なり「全 physical フィールド網羅必須」は引き継がない＝疎を許容する
+        # （K2 由来の Suno profile は bpm/brightness のみ）。
+        return value
 
     @field_validator("fixity")
     @classmethod
@@ -165,12 +212,14 @@ class CompositionScore(CompositionModel):
         return self
 
     @model_serializer(mode="wrap")
-    def serialize_without_empty_fixity(self, handler: Any) -> dict[str, Any]:
+    def serialize_without_empty_optionals(self, handler: Any) -> dict[str, Any]:
         data = handler(self)
         if self.events is None:
             data.pop("events", None)
         if self.fixity is None:
             data.pop("fixity", None)
+        if self.control_profile is None:
+            data.pop("control_profile", None)
         return data
 
 
