@@ -24,7 +24,9 @@ controllability の次は **K3（直交性）** または K2 の他ツマミ拡�
 
 | ID | Title | Priority | Notes |
 |---|---|---|---|
-| K3 | 直交性行列（レイヤー独立性） | P2 | controllability の次手。ツマミ i が観測 j を動かさないか(bpm が centroid を動かす等)を N×N で測る。K2(#117)で対角 grip(bpm/brightness tight 転移)が立証されたので着手可能。または K2 を他ツマミ(key 等)へ拡張。controllability_poc.md §5 K3 |
+| 楽譜マージ PR1 | control_profile スキーマ（楽譜が効くチャネルを知る）| P1 | **現アクティブプランの起点**。`docs/ai_performer_score_roadmap.md`（PR #118 レビュー中）で 3 PR に固めたマージロードマップの第1歩。`CompositionScore` に optional `control_profile`（生成器→フィールド→grip_class）を既存 `fixity` パターン踏襲で追加、K2(#117) 実測(suno: bpm/brightness=tight)を初期データに。依存ゼロ・即着手可。着手時に Design Memo 展開 |
+| 楽譜マージ PR2/PR3 | 楽譜準拠テスト+CLAP / K3 直交性(DCI/MIG)+機種プロファイル | P2 | ロードマップ PR2=roundtrip を楽譜準拠テスト化+CLAP 学習センサー(learned_models_policy 隔離下)、PR3=K3 直交性を DCI/MIG で定式化+generator デバイスプロファイル。PR1 の control_profile が土台。`docs/ai_performer_score_roadmap.md` |
+| K3 | 直交性行列（レイヤー独立性） | P2 | **↑楽譜マージ PR3 に統合**。ツマミ i が観測 j を動かさないか(bpm が centroid を動かす等)を N×N で測り DCI/MIG で定式化。K2(#117)で対角 grip(bpm/brightness tight 転移)が立証済。または K2 を他ツマミ(key/stereo_width/valley_depth)へ拡張。controllability_poc.md §5 K3 |
 | Q1-5 Ph2 | spectral 帯域 magnitude 再校正(残) | P3 | **大半 closeout 済**: brightness=B-3 / `high_ratio==0.0` 前提見直し=#107 / low/mid_ratio 据え置き finding=#108(low はゲートで健全・mid は未発火で繰越・general アンカー欠如)。残=`screen_2026-06-16.yaml` 再採取 + mid_ratio/magnitude 軸の bias 検証(Phase C と統合・licensing 律速)。**BPM**: #106 で sr/閾値の単一ノブ修正は大域回帰と確定(finding #6)。自動化は multi-prior/sr ensemble+octave tie-break を全 fixture 回帰検証付き Design Memo 化(K2 #117 でも bpm 素朴センサーの prior アトラクタが grip を圧縮することを再確認) |
 | Genre Calib seed follow-up | EDM 5本の Drive 化 + Suno prompt 転記 | P3 | #103 で measured はインライン保全済。残=`electronic_dance_*` の Drive アップロード→`drive_file_id` 回収 + `prompt:` 本文の PENDING 解消。律速=人間作業 |
 | Genre Calib 4th genre | acoustic へ域拡張 | P3 | acoustic(low_ratio<0.4 の general 落ち領域を突く coverage 拡張型)を rock(#105)と同じ協働フロー(物理層明示プロンプト→user 生成→抽出→分離分析→ルール反映)で追加。律速=人間生成バッチ |
