@@ -21,9 +21,14 @@ from svp_rpe.compose.models import (
     SemanticLayer,
     StructureSection,
 )
-from svp_rpe.compose.prompt_renderer import ExternalPromptAdapter
+from svp_rpe.compose.prompt_renderer import (
+    BackendDescriptor,
+    ExternalPromptAdapter,
+    resolve_backend_descriptor,
+)
 
 __all__ = [
+    "BackendDescriptor",
     "ChordSpec",
     "CompositionScore",
     "ControlGrip",
@@ -43,4 +48,5 @@ __all__ = [
     "composition_to_target_svp",
     "field_fixity",
     "load_composition_score",
+    "resolve_backend_descriptor",
 ]
