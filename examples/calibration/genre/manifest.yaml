@@ -658,6 +658,7 @@ samples:
       low_ratio: 0.3877
       mid_ratio: 0.5932
       high_ratio: 0.0191
+      onset_density: 3.8667
       spectral_bands:
         sub_bass: 0.0161
         bass: 0.1621
@@ -668,6 +669,7 @@ samples:
         brilliance: 0.0844
     notes:
       - "本物 real anchor (lossless FLAC 90s クリップ、Drive→clip 添付経由)。cross-genre bias n=1。audio は session 添付で repo 外 (sha256 で provenance)。key は extractor 値。"
+      - "onset_density 3.8667 は 2026-06-29 にユーザー再添付の FLAC を実 extract した値（sha256=36a356ef… が本 manifest 記録値と一致＝provenance 確認済）。Phase E の mid-dominant orchestral 判別を n=3 に完成（synth 0.133–0.167 と明確分離・gate 1.0 を明確超過）。"
   - id: orchestral_real_02_holst_mars
     genre_label: orchestral-real
     generator: real
@@ -687,6 +689,7 @@ samples:
       low_ratio: 0.3463
       mid_ratio: 0.6456
       high_ratio: 0.008
+      onset_density: 3.93
       spectral_bands:
         sub_bass: 0.0107
         bass: 0.1614
@@ -697,6 +700,7 @@ samples:
         brilliance: 0.0424
     notes:
       - "本物 real anchor (mora hi-res FLAC、session 添付で repo 外・sha256 で provenance)。Phase C orchestral real n=2。DR 27.83 は本物管弦の広ダイナミクスの典型。key は extractor 値。"
+      - "onset_density 3.93 は 2026-06-29 プローブ実測値（音源は ephemeral で消失・sha256 で provenance 保全）。Phase E の mid-dominant orchestral 判別軸（synth 0.133–0.167 と 14× 分離）。"
   - id: orchestral_real_03_ano_natsu_e
     genre_label: orchestral-real
     generator: real
@@ -716,6 +720,7 @@ samples:
       low_ratio: 0.1322
       mid_ratio: 0.8675
       high_ratio: 0.0003
+      onset_density: 2.34
       spectral_bands:
         sub_bass: 0.0093
         bass: 0.1337
@@ -726,6 +731,7 @@ samples:
         brilliance: 0.0034
     notes:
       - "本物 real anchor (mora hi-res FLAC、session 添付で repo 外・sha256 で provenance)。Phase C orchestral real n=3。harmonic 0.969 は高度にトーナルな叙情管弦の典型。bpm 161.5 は octave 疑い (叙情曲で速すぎ)・解析欄として保全。key は extractor 値。"
+      - "onset_density 2.34 は 2026-06-29 プローブ実測値（音源は ephemeral で消失・sha256 で provenance 保全）。Phase E の mid-dominant orchestral 判別軸の最難点（synth ガード fixture とスペクトル分離不能だが onset で分離）。"
   - id: rock_real_01_heartshapedbox
     genre_label: rock-real
     generator: real

@@ -111,6 +111,18 @@ cultural_context:
     - id: ctx.orchestral_brilliance
       condition: {low_ratio_gt: 0.4, spectral_bands.brilliance_lt: 0.105}
       context: cinematic/orchestral
+    - id: ctx.orchestral_mid_dominant
+      # Phase E (2026-06-29): 本物管弦は mid-dominant(low_ratio<0.4, mid_ratio>=0.5)で、
+      # 従来の low_ratio_gt:0.4 系ルールに掛からず general へ落ちていた(audit 3/3 mismatch)。
+      # この中域主役域は thin dark synth とスペクトル(low/mid/harmonic/centroid)で分離不能
+      # ＝Phase A 罠（synth ガード fixture「あの夏へ」がこの域に重なる）。唯一分離する軸が
+      # onset_density: repo synth n=5 実測 0.133–0.167(fast_bright 含む) vs 本物管弦
+      # holst 3.93 / ano 2.34(probe n=2)。gate 1.0 は synth 上限(0.167)の約6倍・管弦下限
+      # (2.34)の半分以下で広いマージン（busy synth の偽発火耐性）。harmonic は synth≈管弦
+      # で非分離のため判別に不使用。留保: 密な mid-dominant tonal(solo piano 等)も拾いうる
+      # ＝genre HINT であり verdict ではない。詳細: docs/genre_calibration_planning.md Phase E。
+      condition: {low_ratio_lt: 0.4, mid_ratio_min: 0.5, onset_density_min: 1.0}
+      context: cinematic/orchestral
     - id: ctx.bass_music
       condition: {low_ratio_gt: 0.4, high_ratio_gt: 0.017, spectral_bands.brilliance_absent: true}
       context: bass-music
