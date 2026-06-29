@@ -195,6 +195,7 @@ examples/                      # sample_input/ + expected_output/
 | [`docs/roundtrip_corpus_screen.md`](docs/roundtrip_corpus_screen.md) | R1 corpus screen + 対照実験 A/B/C: 高速曲の低 BPM は **Suno 不忠実でなく抽出器 halving**(start_bpm=180 で 172.3 回復)。「アトラクタ」の正体は prior×BPM グリッド選択。breakbeat 仮説は反証。R2-2a は 2×固定 lag でグリッド量子化(1.93×)を外す。データ: examples/roundtrip/screen_2026-06-16.yaml |
 | [`docs/genre_calibration_planning.md`](docs/genre_calibration_planning.md) | 意味層のジャンル/楽器語彙拡張計画: `cultural_context` ハードコード誤判定(管弦→bass-music)を config 化で是正する Tier 2、Suno 生成のラベル自動付きコーパスで licensing 律速を回避(生成器バイアスは本物アンカーで補正)、Phase A(config 化)/B(コーパス)/C(検証)分割 |
 | [`docs/ai_performer_score_roadmap.md`](docs/ai_performer_score_roadmap.md) | 「AI が演奏者として使う楽譜」マージロードマップ(PR 4 本, 2026-06-29 壁打ちで PR1.5 新設): 既存研究(MIR/CLAP/DCI-MIG/制御性評価/EPR)と蓄積知見(K 系列 grip/roundtrip fixity/genre bias)をマージ。PR1=control_profile スキーマ(楽譜が効くチャネルを知る・fixity 前例踏襲・K2 初期データ)、PR1.5=control_profile-aware compile(既存 ExternalPromptAdapter 配線で楽譜→演奏ループを Suno で閉じる・実用物の核)、PR2=楽譜準拠テスト+CLAP(意味層読解器)、PR3=K3 直交性(DCI/MIG)+機種デバイスプロファイル。決定論=物理層保証/非決定論=意味層助言の層分離、多生成器は Suno ルート確立後 |
+| [`docs/control_profile.md`](docs/control_profile.md) | PR1 実装: `CompositionScore.control_profile`(生成器→物理フィールド→grip_class の自己記述)スキーマ・検証(未知キー fail-fast だが fixity と違い疎を許容)・フィールド→backend 条件付けチャネル対応表・K2(#117)由来の Suno 初期データ(bpm/brightness tight) |
 
 ## ドキュメント管理ポリシー
 

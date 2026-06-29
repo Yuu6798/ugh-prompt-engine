@@ -54,3 +54,19 @@ rendering:
     - structure
     - semantic.avoid
     - physical.optional
+
+# どの生成器でどの物理フィールドが「効く」かの自己記述（grip_class）。
+# K2（#117）の実測 grip を初期データとして投入。Suno で tight が実証された
+# bpm / brightness のみの疎なプロファイル（網羅必須は引き継がない）。
+control_profile:
+  suno:
+    bpm:
+      grip_class: "tight"
+      grip: 1.61
+      sensor: "bpm"
+      evidence: "examples/control/k2/expected_grip.json"
+    brightness:
+      grip_class: "tight"
+      grip: 0.86
+      sensor: "spectral_centroid"
+      evidence: "examples/control/k2/expected_grip.json"

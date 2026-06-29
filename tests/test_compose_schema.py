@@ -214,3 +214,113 @@ def test_same_yaml_produces_same_target_svp() -> None:
 
     assert first == second
     assert stable_hash(first) == stable_hash(second)
+
+
+# --- control_profile (PR1) ---------------------------------------------------
+
+_SUNO_PROFILE = {
+    "suno": {
+        "bpm": {
+            "grip_class": "tight",
+            "grip": 1.61,
+            "sensor": "bpm",
+            "evidence": "examples/control/k2/expected_grip.json",
+        },
+        "brightness": {
+            "grip_class": "tight",
+            "grip": 0.86,
+            "sensor": "spectral_centroid",
+            "evidence": "examples/control/k2/expected_grip.json",
+        },
+    }
+}
+
+
+def test_sample_score_carries_k2_suno_control_profile() -> None:
+    """初期データ: example Score に K2 由来の suno プロファイルが載り参照が解決可能。"""
+    score = load_composition_score(SAMPLE_PATH)
+
+    assert score.control_profile is not None
+    suno = score.control_profile["suno"]
+    assert set(suno) == {"bpm", "brightness"}
+    assert suno["bpm"].grip_class == "tight"
+    assert suno["bpm"].grip == pytest.approx(1.61)
+    assert suno["brightness"].sensor == "spectral_centroid"
+    # evidence 参照が実在ファイルを指す（解決可能）。
+    assert Path(suno["bpm"].evidence).exists()
+
+
+def test_control_profile_roundtrips_invariant() -> None:
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["control_profile"] = _SUNO_PROFILE
+
+    score = CompositionScore.model_validate(data)
+    dumped = score.model_dump(mode="json")
+
+    # load -> serialize -> load が不変。
+    assert CompositionScore.model_validate(dumped).model_dump(mode="json") == dumped
+    assert dumped["control_profile"] == _SUNO_PROFILE
+
+
+def test_control_profile_sparse_map_is_accepted() -> None:
+    """疎なプロファイル（bpm のみ）が受理される＝fixity の網羅必須を引き継がない。"""
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["control_profile"] = {"suno": {"bpm": {"grip_class": "tight"}}}
+
+    score = CompositionScore.model_validate(data)
+
+    assert set(score.control_profile["suno"]) == {"bpm"}
+    grip = score.control_profile["suno"]["bpm"]
+    assert grip.grip_class == "tight"
+    # 未指定の optional は serialize から除外される（空なら非 serialize）。
+    assert grip.model_dump(mode="json") == {"grip_class": "tight"}
+
+
+def test_control_profile_unknown_field_is_rejected() -> None:
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["control_profile"] = {"suno": {"tempo": {"grip_class": "tight"}}}
+
+    with pytest.raises(ValidationError):
+        CompositionScore.model_validate(data)
+
+
+def test_control_profile_invalid_grip_class_is_rejected() -> None:
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["control_profile"] = {"suno": {"bpm": {"grip_class": "strong"}}}
+
+    with pytest.raises(ValidationError):
+        CompositionScore.model_validate(data)
+
+
+def test_control_profile_unknown_grip_subkey_is_rejected() -> None:
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["control_profile"] = {
+        "suno": {"bpm": {"grip_class": "tight", "confidence": 0.9}}
+    }
+
+    with pytest.raises(ValidationError):
+        CompositionScore.model_validate(data)
+
+
+def test_control_profile_absent_is_not_serialized() -> None:
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data.pop("control_profile", None)
+
+    score = CompositionScore.model_validate(data)
+
+    assert score.control_profile is None
+    assert "control_profile" not in score.model_dump(mode="json")
+
+
+def test_control_profile_allows_multiple_generators() -> None:
+    """生成器キー駆動（同一楽譜が複数生成器プロファイルを持てる）。"""
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["control_profile"] = {
+        "suno": {"bpm": {"grip_class": "tight"}},
+        "musicgen": {"brightness": {"grip_class": "loose"}},
+    }
+
+    score = CompositionScore.model_validate(data)
+
+    assert set(score.control_profile) == {"suno", "musicgen"}
+    assert score.control_profile["musicgen"]["brightness"].grip_class == "loose"
