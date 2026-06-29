@@ -612,11 +612,13 @@ centroid 700) とほぼ同一で、`mid_ratio>0.55 ∧ low_ratio<0.4` 型の rul
 | グループ | onset_density | 出所 |
 |---|---|---|
 | repo synth n=5（slow_pad / minor_pulse / mid_groove / waltz / **fast_bright**）| **0.133–0.167** | `examples/sample_input/synth_0*.wav` を本セッションで実 extract |
+| 本物管弦 Star Wars Main Title | **3.8667** | 2026-06-29 にユーザー再添付の FLAC を実 extract（sha256 が manifest 記録値と一致）|
 | 本物管弦 Holst Mars | **3.93** | 2026-06-29 プローブ（音源 ephemeral・sha256 で provenance）|
 | 本物管弦「あの夏へ」（最難点・synth とスペクトル同一）| **2.34** | 同上 |
 
 synth 上限 0.167 と管弦下限 2.34 の間に **約 14× のギャップ**。決定論 synth は `fast_bright`
 ですら onset 0.143 で、ラベル上「速い」でも onset は上がらない（単純なコード変化のため）。
+**本物管弦は n=3（2.34–3.93）が全て gate 1.0 を明確に超過**。
 
 **ルール（`ctx.orchestral_mid_dominant`）**:
 ```yaml
@@ -631,17 +633,16 @@ context: cinematic/orchestral
   既存アサーション無改変で green。
 
 **結果（`genre-audit`）**:
-- orchestral-real: **Holst / あの夏へ → match**（manifest に probe onset_density を保全）。
-- Star Wars は **onset_density 未測定（PENDING）** で general へ落ち mismatch のまま
-  ＝音源 re-attach→再測定で n=3 化すれば解消する既知の保留（可視化を維持）。
+- orchestral-real: **Star Wars / Holst / あの夏へ → 3/3 match**（3 本とも実測 onset_density を
+  manifest に保全。Star Wars は sha256 一致の FLAC 再添付で n=3 化が完了し Phase D の
+  既知限界を解消）。
 - 回帰固定: `test_mid_dominant_high_onset_material_gets_orchestral_context`（positive）/
   `test_thin_dark_synth_material_does_not_fire_genre_split`（negative・synth onset を実測 0.15 に更新）/
-  `test_real_anchors_are_visible_in_audit`（holst/ano match・SW pending mismatch を pin）。
+  `test_real_anchors_are_visible_in_audit`（orchestral-real 3/3 match を pin）。
 
 **留保**:
-- 本物管弦の onset グラウンディングは **n=2**（Holst / あの夏へ）。SW を含む n=3 化は音源
-  re-attach 待ち。`chord` 活動数（管弦 11–29 変化 vs synth 3）も第二の分離軸だがスカラー
-  フィールド化が必要で本 Phase は onset_density 単独に限定。
+- `chord` 活動数（管弦 star wars 11 / holst 11 / ano 29 変化 vs synth 一律 3）も第二の分離軸
+  だがスカラーフィールド化が必要で本 Phase は onset_density 単独に限定。
 - synth fixtures は単一 pad/pulse の「おもちゃ」で、本物の busy synth（アルペジオ密多）は
   onset が上がりうる。ただし gate 1.0 のマージンと mid-dominant 条件で実用上は安全側。
 - 密な mid-dominant tonal（solo piano 等）も拾いうる＝意味層は **genre HINT であり verdict

@@ -658,6 +658,7 @@ samples:
       low_ratio: 0.3877
       mid_ratio: 0.5932
       high_ratio: 0.0191
+      onset_density: 3.8667
       spectral_bands:
         sub_bass: 0.0161
         bass: 0.1621
@@ -668,7 +669,7 @@ samples:
         brilliance: 0.0844
     notes:
       - "本物 real anchor (lossless FLAC 90s クリップ、Drive→clip 添付経由)。cross-genre bias n=1。audio は session 添付で repo 外 (sha256 で provenance)。key は extractor 値。"
-      - "onset_density は PENDING（2026-06-29 プローブは holst/ano の n=2 のみ実測・本曲は未測定）。音源 re-attach で再測定すれば Phase E mid-dominant orchestral 判別が n=3 になる。現状は onset 欠落で audit 上 general へ落ち mismatch（可視化を維持）。"
+      - "onset_density 3.8667 は 2026-06-29 にユーザー再添付の FLAC を実 extract した値（sha256=36a356ef… が本 manifest 記録値と一致＝provenance 確認済）。Phase E の mid-dominant orchestral 判別を n=3 に完成（synth 0.133–0.167 と明確分離・gate 1.0 を明確超過）。"
   - id: orchestral_real_02_holst_mars
     genre_label: orchestral-real
     generator: real
