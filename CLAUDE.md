@@ -194,7 +194,7 @@ examples/                      # sample_input/ + expected_output/
 | [`docs/metamorphic_probe.md`](docs/metamorphic_probe.md) | メタモルフィック計器: render_sample×実extract を掃引し grip/校正/直交性/決定論を Hypothesis で自動検証。centroid=tight grip / 高域 brightness=センサー盲 / bpm オクターブ誤検出が R2-2a 未フラグ を計測 |
 | [`docs/roundtrip_corpus_screen.md`](docs/roundtrip_corpus_screen.md) | R1 corpus screen + 対照実験 A/B/C: 高速曲の低 BPM は **Suno 不忠実でなく抽出器 halving**(start_bpm=180 で 172.3 回復)。「アトラクタ」の正体は prior×BPM グリッド選択。breakbeat 仮説は反証。R2-2a は 2×固定 lag でグリッド量子化(1.93×)を外す。データ: examples/roundtrip/screen_2026-06-16.yaml |
 | [`docs/genre_calibration_planning.md`](docs/genre_calibration_planning.md) | 意味層のジャンル/楽器語彙拡張計画: `cultural_context` ハードコード誤判定(管弦→bass-music)を config 化で是正する Tier 2、Suno 生成のラベル自動付きコーパスで licensing 律速を回避(生成器バイアスは本物アンカーで補正)、Phase A(config 化)/B(コーパス)/C(検証)分割 |
-| [`docs/ai_performer_score_roadmap.md`](docs/ai_performer_score_roadmap.md) | 「AI が演奏者として使う楽譜」マージロードマップ(PR 3 本): 既存研究(MIR/CLAP/DCI-MIG/制御性評価/EPR)と蓄積知見(K 系列 grip/roundtrip fixity/genre bias)をマージ。PR1=control_profile スキーマ(楽譜が効くチャネルを知る・fixity 前例踏襲・K2 初期データ)、PR2=楽譜準拠テスト+CLAP 学習センサー、PR3=K3 直交性(DCI/MIG)+機種デバイスプロファイル |
+| [`docs/ai_performer_score_roadmap.md`](docs/ai_performer_score_roadmap.md) | 「AI が演奏者として使う楽譜」マージロードマップ(PR 4 本, 2026-06-29 壁打ちで PR1.5 新設): 既存研究(MIR/CLAP/DCI-MIG/制御性評価/EPR)と蓄積知見(K 系列 grip/roundtrip fixity/genre bias)をマージ。PR1=control_profile スキーマ(楽譜が効くチャネルを知る・fixity 前例踏襲・K2 初期データ)、PR1.5=control_profile-aware compile(既存 ExternalPromptAdapter 配線で楽譜→演奏ループを Suno で閉じる・実用物の核)、PR2=楽譜準拠テスト+CLAP(意味層読解器)、PR3=K3 直交性(DCI/MIG)+機種デバイスプロファイル。決定論=物理層保証/非決定論=意味層助言の層分離、多生成器は Suno ルート確立後 |
 
 ## ドキュメント管理ポリシー
 

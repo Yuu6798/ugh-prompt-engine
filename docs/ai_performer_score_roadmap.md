@@ -5,8 +5,8 @@
 目的は**独自理論の構築ではなく、「AI が演奏者として使う楽譜」という実用物**を作ること。
 そのために、これまでの蓄積（特に K 系列 grip・roundtrip fixity・genre calibration）と
 **既存研究の道具を遠慮なくマージする**。本ロードマップは、壁打ちで策定したマージマップを
-**実装可能な 3 つの PR** に固めたもの。各 PR は着手時に個別の Design Memo（AGENTS.md §1）へ
-展開する。
+**実装可能な PR 群（PR1 → PR1.5 → PR2 → PR3）** に固めたもの（2026-06-29 壁打ちで PR1.5 を
+新設。下記「改訂方針」を参照）。各 PR は着手時に個別の Design Memo（AGENTS.md §1）へ展開する。
 
 組織化する 1 原則:
 
@@ -18,6 +18,34 @@
 - **roundtrip / fixity** = 演奏が楽譜を保ったかの検証層
 - **genre calibration / generator bias** = 生成器ごとの癖 = デバイスプロファイル
 - **RPE / SVP / Composition Score** = 楽譜本体とその抽出器
+
+## 改訂方針（2026-06-29 壁打ちで確定）
+
+本ロードマップは当初 PR 3 本だったが、壁打ちで以下を確定し **PR 1.5 を新設**した。
+
+**1. 本命は実用物（楽譜）であって測定器ではない。** 当初 3 本は PR2/PR3 が検証・計測寄りで、
+「楽譜→演奏」のコンパイルループが forward work（M5）に追い出されていた。だが調査で
+**コンパイル脚は既に二本ある**ことが判明:
+
+- `compose/prompt_renderer.py` の `ExternalPromptAdapter` = 楽譜 → 外部生成器プロンプト（Suno 等）
+- `perform/performer.py` の決定論 performer = 楽譜 → 音声（C4/R0 ハーネス）
+
+足りないのは `ExternalPromptAdapter` が `control_profile` を見ていない点だけ。よって
+コンパイルループを閉じる作業は M5 ではなく PR1 の隣接作業（**PR 1.5**）として昇格させ、
+測定器寄りの PR2/PR3 より前に**楽譜を「演奏を出せる実用物」として一度立てる**。
+
+**2. 決定論 vs 非決定論は「緊張」ではなく「層」。** 物理層（PhysicalRPE）＝保証チャネル＝
+決定論で grip 実証する領域（今固める段階）。意味層（SemanticRPE）＝助言チャネル＝ルールで
+読み切れず**非決定論の探索（CLAP / LLM 読解）を要する**領域。「保証 vs 助言」の線が
+「決定論 vs 探索的非決定論」の線と重なる。したがって PR2 の CLAP は「測定精度向上の補助」
+ではなく **「意味層の読解器」** と位置づける（何のために入れるかをブレさせない）。
+
+**3. 多生成器は Suno ルート確立後。ただしスキーマの形は今から保つ。** 生成器の抽象化は
+机上では設計できず、1 本（Suno）を端から端まで通して初めて seam の引き方が分かる。よって
+**2 本目の作業（grip 実験・生成バッチ）は遅らせる**が、**control_profile の生成器キー構造は
+今から維持**し、PR1.5 では Suno 固有の癖（Style 欄字数・Exclude 欄・欄レイアウト）を
+アダプタ本体に直書きせず**薄い backend descriptor の裏に隔離**する（seam を名前で引く）。
+豊かな generator-bias プロファイルは PR3 まで待つ。
 
 ## マージする既存研究（部品取りの倉庫）
 
@@ -77,15 +105,59 @@
 
 ---
 
+## PR 1.5 — コンパイルループを閉じる: control_profile-aware compile
+
+**目的**: PR1 の `control_profile` を `ExternalPromptAdapter` に配線し、**楽譜を「保証
+チャネルを守って演奏に変換できる実用物」として一度立てる**。新規実装はほぼ無く、既存
+アダプタ（`compose/prompt_renderer.py`）への配線が中心。これが「測定器でなく楽譜」を
+最短で形にする一手（改訂方針 1）。
+
+**スコープ（in）**:
+- アダプタの優先度を **静的 `score.rendering.priority` から `control_profile` の grip_class
+  駆動へ**。tight（保証）フィールドを落とさない芯として優先描画し、loose/dead は助言＝
+  真っ先の削減候補に格下げ（限られたプロンプト枠を効くツマミに配分）。
+- 落とした助言フィールドは既存 `GeneratedPrompt.dropped_elements` で返し、「何を保証し
+  何を助言に落としたか」を可視化する。
+- Suno 固有の機械的制約（Style 欄字数・Exclude＝negative チャネル・欄レイアウト）を
+  **薄い backend descriptor** に隔離。`ExternalPromptAdapter.backend = "external"` が
+  暗黙に "suno" 化するのを防ぐ（seam を名前で引く・改訂方針 3）。
+
+**スコープ（out）**: 時系列条件付けへのコンパイル（melody contour / 制御曲線 → MusicGen
+melody 条件付け等）。これは引き続き M5 forward work。プロファイルの自動学習。
+
+**受け入れ条件**:
+- 同一楽譜が control_profile（生成器別）に応じて異なるプロンプトへコンパイルされる。
+- tight フィールドは max_chars 削減で**最後まで残る**。dead/loose が先に落ちる。
+- backend 固有の制約が descriptor 側に分離され、アダプタ core から Suno 直書きが消える。
+- 既存 example Score のコンパイルが決定論で snapshot 固定。
+
+**正直な限界**: 現状 Suno の tight は bpm/brightness の 2 本のみ。PR1.5 はこの薄さを
+**正直に可視化する**だけで、フィールドを grip させはしない。芯は K 系列 grip の拡張で
+後から厚くなり、その都度コード変更なしに助言→保証へ昇格する（コンパイラが今後の全 grip
+証拠の現金化点になる）。
+
+**テスト**: control_profile 駆動の優先度 / tight 残存・dead 先落ち / backend descriptor 分離 /
+コンパイル決定論 snapshot。
+
+**依存**: PR1（control_profile スキーマ）。**PR2 の前に置く**＝PR2 の楽譜準拠テストが
+手書きプロンプトでなく**実コンパイル経路**を検証できるようになる。
+
+**マージする研究**: なし（既存資産の配線）。実用物としての楽譜の核。
+
+---
+
 ## PR 2 — 検証層: 楽譜準拠テスト + 学習センサー（CLAP）
 
 **目的**: 「AI の演奏が楽譜を守ったか」を測る検証ループを製品化する。ルールセンサー（MIR・
-既存）で測れない timbre/genre 忠実度の穴を、学習センサー（CLAP）で埋める。
+既存）で測れない timbre/genre 忠実度の穴を、学習センサー（CLAP）で埋める。CLAP は
+「測定精度の補助」ではなく **意味層（SemanticRPE）の読解器** と位置づける（決定論で読み切れ
+ない助言チャネルを非決定論で探索する。改訂方針 2）。
 
 **スコープ（in）**:
 - 既存の roundtrip ハーネス（`src/svp_rpe/roundtrip/`）を「**楽譜準拠テスト**」として再定義:
   Score → 演奏（生成）→ extract → Score と比較し、`control_profile` が tight と宣言した
-  フィールドが実際に保たれたかを判定。
+  フィールドが実際に保たれたかを判定。**PR1.5 の実コンパイル経路**（楽譜→アダプタ→生成器→
+  extract→比較）を検証対象にする（手書きプロンプトの proxy でなく）。
 - **CLAP（または MuLan/CLAMP3）を learned 補助センサーとして配線**。
   `docs/learned_models_policy.md` の**隔離原則を厳守**（`LearnedAudioAnnotations` へ隔離、
   ルール evidence に混入させない、OSS ライセンス確認）。prompt↔audio / score↔audio の
@@ -138,13 +210,20 @@
 
 ```
 PR1（基盤・依存ゼロ・即着手可）
-  └─> PR2（検証層・CLAP 依存追加）
-  └─> PR3（制御品質・生成バッチ人手律速）
+  └─> PR1.5（コンパイルループを閉じる・既存資産の配線・新規実装ほぼ無し）
+        └─> PR2（検証層・PR1.5 の実コンパイル経路を検証・CLAP=意味層読解器）
+        └─> PR3（制御品質・生成バッチ人手律速）
 ```
 
-- **PR1 が最優先**: K2 の実測がそのまま初期データになり、依存ゼロで「楽譜が効くチャネルを
-  知る」状態を立てられる。
-- PR2/PR3 は PR1 の `control_profile` を土台に並走可（PR2=学習依存、PR3=生成バッチ律速）。
+- **PR1 → PR1.5 を最優先**: K2 の実測がそのまま PR1 の初期データになり、PR1.5 で楽譜が
+  「演奏を出せる実用物」として一度立つ（測定器の副産物にしない）。
+- PR2/PR3 は PR1.5 のコンパイル経路を土台に並走可（PR2=学習依存、PR3=生成バッチ律速）。
+- **多生成器（MusicGen 等）は Suno ルート確立後**。スキーマの生成器キー構造は今から保ち、
+  2 本目は backend descriptor + その control_profile の追加（additive）で入る（改訂方針 3）。
+- **人手生成の律速を束ねる**: acoustic 4th genre / K3 の A/B バッチ等は生成が人手律速。
+  2 本以上が同時に design-ready になったら 1 回のユーザーセッションへ束ねる（Genre Calib
+  「1 ジャンルまとめて n=3」の一段上）。現時点は acoustic 単独で束ねる相手が無いため、
+  K3 が design-ready になるまで頭の片隅メモに留める。
 
 ## 本ロードマップで「先行研究が薄い＝独自貢献」な点（記録）
 
@@ -153,9 +232,10 @@ PR1（基盤・依存ゼロ・即着手可）
 - **「センサー盲（測れてない）」と「死んだツマミ（効いてない）」の弁別**（K1→K2 で素材依存と判明）。
 - **roundtrip の fixity / 4 値診断**。
 
-## Forward work（3 PR の外）
+## Forward work（PR の外）
 
-- M5 相当: 楽譜フィールド → 条件付けチャネル（MusicGen melody / Music ControlNet 曲線）への
-  実コンパイラ。
+- **M5 = 時系列条件付けコンパイラ**: 楽譜フィールド → 条件付けチャネル（MusicGen melody /
+  Music ControlNet 曲線）への実コンパイラ。**テキストプロンプトへのコンパイルは PR1.5 で
+  完了**するため、ここに残るのは条件付け信号への脚のみ。
 - EPR の performance-parameter を使った「楽譜=不変 / 演奏=テイク差」の線引き精緻化。
 - デバイスプロファイルの機種拡張（udio 等）。
