@@ -397,6 +397,53 @@ orchestral/rock/EDM でも同じ matched-pair を取り、指紋がジャンル�
 検証する。回帰固定:
 `tests/test_genre_calibration.py::test_suno_jpop_overbrightens_vs_real_matched_pair`。
 
+#### Phase C cross-genre — 本物 orchestral/rock/EDM で「Suno 指紋は一定か」を検定（2026-06-28）
+
+J-POP matched-pair は「Suno は over-brighten する」を示したが、それが**ジャンル横断で一定
+（＝単一補正係数化できる）か**は未検証だった。ユーザーが推奨曲を lossless 購入（Drive→
+90 秒 FLAC クリップ添付、Drive 直 DL は egress policy で 403・MCP base64 は MB 級不可のため
+クリップ経由）。本物 1 曲ずつを各**純 Suno コホート**（`generator == "suno"` のみ、各 n=5。orchestral の real
+stub `portals` は baseline から除外し real+Suno 混合平均を避ける）と対比:
+
+- orchestral: John Williams「Star Wars Main Title」
+- rock: Nirvana「Heart-Shaped Box」(Albini mix)
+- EDM: Daft Punk「One More Time」
+
+**brilliance bias（本物 − Suno_mean）はジャンルで符号反転＝一定でない**:
+
+| ジャンル | 本物 brilliance | Suno 帯 | bias | 判定 |
+|---|---|---|---|---|
+| orchestral | 0.084 | 0.013–0.095 | +0.03 | 帯内（一致） |
+| rock | 0.108 | 0.139–0.196 | **−0.06** | 帯外（Suno が明るい） |
+| EDM | 0.234 | 0.212–0.251 | +0.01 | 帯内（一致） |
+| (J-POP, matched) | 0.16 | 0.25 | **−0.09** | Suno が明るい |
+
+→ **「Suno 指紋＝一定オフセット → 単一 brilliance 補正係数」仮説は反証**。明暗の両極ジャンル
+（orchestral 暗 / EDM 明）は Suno が正しく描き、中間ジャンル（rock / J-POP）で Suno が明るすぎる。
+
+**一方、方向が全ジャンル一定な指紋が 2 つある**（量はジャンル依存だが符号は不変）:
+
+| 指紋 | orch | rock | EDM | 解釈 |
+|---|---|---|---|---|
+| **mid_ratio**（本物 > Suno） | +0.25 | +0.09 | +0.07 | Suno は中域を一貫して削る（スマイリー EQ の中央へこみ） |
+| **harmonic_ratio**（本物 < 純Suno） | −0.10 | −0.03 | **−0.43** | Suno は一貫してトーナル/クリーン（本物の打楽器/歪み/フィルタノイズを生成しきれない・EDM 最大） |
+
+**ボーナス（ゲートの一般化限界）**: 本物 Star Wars の `low_ratio = 0.388 < 0.4` で
+`low_ratio>0.4` ゲートを通らず "general" 落ち（本物映画音楽は中域主役 mid=0.593 で低域厚でない）。
+Suno orchestral は人工的に低域厚（0.45–0.77）だった＝#108 で "健全" とした low ゲートは
+**Suno が低域厚に描いただけで本物 orchestral には一般化しない**。
+
+**結論**: (a) brilliance 補正は単一係数不可・per-genre。(b) より頑健な Suno 指紋は
+**中域削り + トーナル化（脱パンチ）**で、これは補正の方向手がかりになる。(c) low ゲートの
+適用範囲は Suno 低域厚バイアスに依存しており、本物 orchestral では破れる。
+⚠️ **n=1/ジャンルの留保**: 各 1 曲（特に Star Wars は明るい金管ファンファーレで orchestral の
+一例）。方向シグナルであり分布ではない。robust 化には各ジャンル本物 ≥3 が必要。
+これらの本物アンカーは `GENRE_CONTEXT_EXPECTATIONS` に `*-real` を配線済みで、現行ルールから
+外れて落ちる（orchestral-real→general / rock-real→orchestral）のが `genre-audit` の mismatch
+として可視化される（未知ラベルが死角化する #105 型バグを回避）。回帰固定:
+`tests/test_genre_calibration.py::test_cross_genre_suno_fingerprint_not_constant` /
+`tests/test_genre_misfire_audit.py::test_real_anchors_are_visible_in_audit`。
+
 ---
 
 ## 5. リスクと留意点

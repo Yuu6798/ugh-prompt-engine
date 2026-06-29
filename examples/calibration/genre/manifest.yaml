@@ -639,3 +639,90 @@ samples:
         brilliance: 0.2091
     notes:
       - "Matched-pair bias 測定用 Suno (↔ jpop_03 本物)。同 BPM/key 再現。brilliance 0.150→0.209 (本物比 +0.059)。audio は session 添付で repo 外。"
+  - id: orchestral_real_01_starwars
+    genre_label: orchestral-real
+    generator: real
+    prompt: "John Williams — Star Wars Main Title (A New Hope)。Real orchestral/film-score anchor。90s lossless FLAC クリップ。 cross-genre bias 測定用 (Suno orchestral コホートと対比)。"
+    audio_locator: session_attachment
+    audio_hash: 36a356efe049336b9dadf3a21f846850806c9c4115aa9e3c307823814ec973f9
+    drive_file_id: null
+    measured:
+      harmonic_ratio: 0.8657
+      percussive_ratio: 0.1343
+      spectral_centroid: 1904.11
+      bpm: 99.38
+      key: A#
+      mode: minor
+      dynamic_range_db: 10.2
+      valley_depth: 0.0886
+      low_ratio: 0.3877
+      mid_ratio: 0.5932
+      high_ratio: 0.0191
+      spectral_bands:
+        sub_bass: 0.0161
+        bass: 0.1621
+        low_mid: 0.1279
+        mid: 0.3579
+        high_mid: 0.1729
+        presence: 0.0786
+        brilliance: 0.0844
+    notes:
+      - "本物 real anchor (lossless FLAC 90s クリップ、Drive→clip 添付経由)。cross-genre bias n=1。audio は session 添付で repo 外 (sha256 で provenance)。key は extractor 値。"
+  - id: rock_real_01_heartshapedbox
+    genre_label: rock-real
+    generator: real
+    prompt: "Nirvana — Heart-Shaped Box (Steve Albini 1993 mix)。Real rock band anchor。90s lossless FLAC クリップ。 cross-genre bias 測定用 (Suno rock コホートと対比)。"
+    audio_locator: session_attachment
+    audio_hash: aa89bf0325298fa53a7517ea116cf1ee4c29e4389629e31d1cc71083546facf8
+    drive_file_id: null
+    measured:
+      harmonic_ratio: 0.7463
+      percussive_ratio: 0.2537
+      spectral_centroid: 1855.26
+      bpm: 99.38
+      key: C#
+      mode: major
+      dynamic_range_db: 8.51
+      valley_depth: 0.064
+      low_ratio: 0.6634
+      mid_ratio: 0.3203
+      high_ratio: 0.0163
+      spectral_bands:
+        sub_bass: 0.018
+        bass: 0.2316
+        low_mid: 0.1072
+        mid: 0.2677
+        high_mid: 0.1892
+        presence: 0.0782
+        brilliance: 0.1081
+    notes:
+      - "本物 real anchor (lossless FLAC 90s クリップ、Drive→clip 添付経由)。cross-genre bias n=1。audio は session 添付で repo 外 (sha256 で provenance)。key は extractor 値。"
+  - id: edm_real_01_onemoretime
+    genre_label: edm-real
+    generator: real
+    prompt: "Daft Punk — One More Time (chorus)。Real EDM/house anchor。90s lossless FLAC クリップ。 cross-genre bias 測定用 (Suno edm コホートと対比)。"
+    audio_locator: session_attachment
+    audio_hash: 509c283743a32bcdef56bb4a8013a5eff180a10ef1b382865e38fd97a9cb4a70
+    drive_file_id: null
+    measured:
+      harmonic_ratio: 0.4162
+      percussive_ratio: 0.5838
+      spectral_centroid: 3365.61
+      bpm: 123.05
+      key: G
+      mode: major
+      dynamic_range_db: 14.85
+      valley_depth: 0.1269
+      low_ratio: 0.7327
+      mid_ratio: 0.2236
+      high_ratio: 0.0437
+      spectral_bands:
+        sub_bass: 0.0577
+        bass: 0.1351
+        low_mid: 0.0586
+        mid: 0.2158
+        high_mid: 0.175
+        presence: 0.1234
+        brilliance: 0.2343
+    notes:
+      - "本物 real anchor (lossless FLAC 90s クリップ、Drive→clip 添付経由)。cross-genre bias n=1。audio は session 添付で repo 外 (sha256 で provenance)。key は extractor 値。"
