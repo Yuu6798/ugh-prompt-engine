@@ -120,17 +120,24 @@
 最短で形にする一手（改訂方針 1）。
 
 **スコープ（in）**:
-- アダプタの優先度を **静的 `score.rendering.priority` から `control_profile` の grip_class
-  駆動へ**。tight（保証）フィールドを落とさない芯として優先描画し、loose/dead は助言＝
-  真っ先の削減候補に格下げ（限られたプロンプト枠を効くツマミに配分）。
+- アダプタの優先度を **`control_profile` の grip_class で駆動**（control_profile が覆う
+  `PhysicalLayer` フィールドのみ）。tight（保証）フィールドを落とさない芯として優先描画し、
+  loose/dead は助言＝真っ先の削減候補に格下げ（限られたプロンプト枠を効くツマミに配分）。
+  **control_profile 外の非物理セグメント（`semantic.grv` / `semantic.core` / `structure` /
+  `semantic.avoid`）は従来どおり `score.rendering.priority` を fallback／tie-breaker として
+  順位付けする**（grip_class を全面置換にせず、既存の prompt-order／drop 挙動を回帰させない）。
 - **前提: セグメント／`dropped_elements` を `PhysicalLayer` フィールド粒度へ分解する**。
   現行 `ExternalPromptAdapter` は粗いセグメントでしか drop できず、特に `physical.optional`
-  が **brightness / stereo_width / active_rate / valley_depth を 1 トークンに束ねている**
-  （`compose/prompt_renderer.py`）。このままでは tight な brightness と loose な valley_depth を
+  が **brightness / stereo_width / active_rate_target / valley_depth_target を 1 トークンに
+  束ねている**（`compose/prompt_renderer.py`）。このままでは tight な brightness と loose な
+  valley_depth_target を
   独立に keep/drop できず、`dropped_elements` も不透明な 1 トークンを返すため、下記の
   tight-last / dead-first が**検証不能**になる。よって PR1.5 はまず粗セグメントをフィールド
   単位へ割り（brightness が `semantic.core` と `physical.optional` に重複している点も整理）、
-  drop 単位とトークンをフィールド粒度に揃えることを前提作業に含める。
+  drop 単位とトークンをフィールド粒度に揃えることを前提作業に含める。**フィールド ID は
+  `PhysicalLayer.model_fields` の正式名（`active_rate_target` / `valley_depth_target` 等、短縮形
+  不可）に一致させる**＝PR1 の未知フィールド fail-fast と control_profile／fixture／
+  `dropped_elements` テストを齟齬なく接続する。
 - 落とした助言フィールドは（フィールド粒度の）`GeneratedPrompt.dropped_elements` で返し、
   「どのフィールドを保証し、どれを助言に落としたか」をフィールド単位で可視化する。
 - Suno 固有の機械的制約（Style 欄字数・Exclude＝negative チャネル・欄レイアウト）を
@@ -150,7 +157,7 @@ descriptor で generator-awareness のみ検証し、実 backend は Suno に閉
   out of scope（Suno ルート確立後・改訂方針 3）。スキーマが生成器キー駆動であることだけを
   toy fixture で固定し、実 backend を 2 本目に増やさない。
 - セグメント／`dropped_elements` が **`PhysicalLayer` フィールド粒度**で、tight な
-  brightness を残しつつ loose な valley_depth を落とす等の**独立した keep/drop が検証できる**
+  brightness を残しつつ loose な valley_depth_target を落とす等の**独立した keep/drop が検証できる**
   （粗トークン 1 個に束ねない）。
 - tight フィールドは max_chars 削減で**最後まで残る**。dead/loose が先に落ちる（フィールド
   単位の単体テストで tight-last・dead-first を確認）。
