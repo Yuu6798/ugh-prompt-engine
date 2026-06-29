@@ -24,7 +24,7 @@ controllability の次は **K3（直交性）** または K2 の他ツマミ拡�
 
 | ID | Title | Priority | Notes |
 |---|---|---|---|
-| 楽譜マージ PR1 | control_profile スキーマ（楽譜が効くチャネルを知る）| P1 | **現アクティブプランの起点**。`docs/ai_performer_score_roadmap.md`（PR #118 レビュー中）で 3 PR に固めたマージロードマップの第1歩。`CompositionScore` に optional `control_profile`（生成器→フィールド→grip_class）を既存 `fixity` パターン踏襲で追加、K2(#117) 実測(suno: bpm/brightness=tight)を初期データに。依存ゼロ・即着手可。着手時に Design Memo 展開 |
+| 楽譜マージ PR1 | control_profile スキーマ（楽譜が効くチャネルを知る）| P1 | **現アクティブプランの起点**。`docs/ai_performer_score_roadmap.md`（#118）で 3 PR に固めたマージロードマップの第1歩。`CompositionScore` に optional `control_profile`（生成器→フィールド→grip_class）を既存 `fixity` パターン踏襲で追加、K2(#117) 実測(suno: bpm/brightness=tight)を初期データに。依存ゼロ・即着手可。着手時に Design Memo 展開 |
 | 楽譜マージ PR2/PR3 | 楽譜準拠テスト+CLAP / K3 直交性(DCI/MIG)+機種プロファイル | P2 | ロードマップ PR2=roundtrip を楽譜準拠テスト化+CLAP 学習センサー(learned_models_policy 隔離下)、PR3=K3 直交性を DCI/MIG で定式化+generator デバイスプロファイル。PR1 の control_profile が土台。`docs/ai_performer_score_roadmap.md` |
 | K3 | 直交性行列（レイヤー独立性） | P2 | **↑楽譜マージ PR3 に統合**。ツマミ i が観測 j を動かさないか(bpm が centroid を動かす等)を N×N で測り DCI/MIG で定式化。K2(#117)で対角 grip(bpm/brightness tight 転移)が立証済。または K2 を他ツマミ(key/stereo_width/valley_depth)へ拡張。controllability_poc.md §5 K3 |
 | Q1-5 Ph2 | spectral 帯域 magnitude 再校正(残) | P3 | **大半 closeout 済**: brightness=B-3 / `high_ratio==0.0` 前提見直し=#107 / low/mid_ratio 据え置き finding=#108(low はゲートで健全・mid は未発火で繰越・general アンカー欠如)。残=`screen_2026-06-16.yaml` 再採取 + mid_ratio/magnitude 軸の bias 検証(Phase C と統合・licensing 律速)。**BPM**: #106 で sr/閾値の単一ノブ修正は大域回帰と確定(finding #6)。自動化は multi-prior/sr ensemble+octave tie-break を全 fixture 回帰検証付き Design Memo 化(K2 #117 でも bpm 素朴センサーの prior アトラクタが grip を圧縮することを再確認) |
@@ -35,8 +35,8 @@ controllability の次は **K3（直交性）** または K2 の他ツマミ拡�
 
 | PR | Title | Date | Phase |
 |---|---|---|---|
+| #118 | docs: AI 演奏者のための楽譜 マージロードマップ（3 PR 構成）＝既存研究(MIR/CLAP/DCI-MIG/制御性評価/EPR)と蓄積知見(K 系列 grip/roundtrip fixity/genre bias)をマージ。PR1=control_profile スキーマ(fixity 踏襲・K2 初期データ)/PR2=楽譜準拠テスト+CLAP(隔離下)/PR3=K3 直交性(DCI/MIG)+機種プロファイル。索引2箇所同期 | 2026-06-29 | AI-Performer Score Roadmap |
 | #117 | feat(control): K2 — 本物 Suno で bpm/brightness の grip 転移を確認（K1 玩具で tight だった 2 ツマミが Suno でも tight: bpm d=1.61 / brightness d=0.86・16 曲 fixture-driven・sha256 provenance・fixture→grip snapshot 固定・bpm 素朴センサーの prior アトラクタ圧縮/Suno は明得意暗苦手/センサー盲は素材依存の3知見） | 2026-06-29 | Controllability K2 |
 | #116 | feat(genre): orchestral を onset_density 第二軸で捕捉（Phase E）＝Phase D 既知限界を closeout（mid-dominant 管弦と thin synth はスペクトル分離不能だが onset で ~14×分離・Star Wars 再添付 sha256 一致で n=3 完成・audit orchestral-real 3/3 match・collect-all で加算のみ・Codex P2=加算挙動を doc 訂正+test pin） | 2026-06-29 | Genre Calib Phase E |
 | #115 | feat(genre): rock/edm を本物アンカー対応へルール再設計、orchestral 限界を確定（Phase D・rock 下限 0.117→0.105 で grunge 捕捉・edm を新軸 sub_bass で rock と分離・collect-all で Suno 回帰ゼロ・test_semantic_layer 無改変・orchestral は synth と分離不能で見送り mismatch 維持・Codex P2=カバレッジホール塞ぎ） | 2026-06-29 | Genre Calib Phase D |
 | #114 | feat(calibration): edm 本物アンカーを n=3 に増強＝3 ジャンル実 grounding 完了（横断 Δ で脱トーナル化+mid削りが方向一定を分布確定・brilliance は量がジャンルで割れ単一補正不可・Codex P2×2=brilliance 検定を平均シフト/delta 直接比較へ・rule 不変） | 2026-06-29 | Genre Calib Phase C |
-| #113 | feat(calibration): rock 本物アンカーを n=3 に増強し方向不変指紋を 2 ジャンル目で確認（AC/DC・Queen 追加・脱トーナル化 -0.189 が rock で最強・sub_bass で edm と分離可能を示唆・rule 不変） | 2026-06-29 | Genre Calib Phase C |

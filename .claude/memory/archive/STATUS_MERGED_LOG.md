@@ -61,3 +61,4 @@ STATUS.md "Recently Merged"（最新 5 件保持）から溢れたマージ済�
 | #110 | feat(calibration): 本物×Suno matched-pair で generator bias を genre-controlled 実証（同ジャンル/キー対・brilliance candidate d=3.76・スマイリーEQ=低↑中↓高↑・key3/3 BPM2/3 一致・rule 不変） | 2026-06-28 | Genre Calib Phase C |
 | #111 | feat(calibration): cross-genre で Suno 指紋の一定性を検定＝単一補正係数は反証（本物 orch/rock/EDM 各1本 vs 純Suno・brilliance bias 符号反転=非一定・mid削り+脱トーナル化は方向一定・low ゲートは Suno 低域厚バイアス依存・Codex P2×2=audit 配線/純Suno baseline・rule 不変） | 2026-06-28 | Genre Calib Phase C |
 | #112 | feat(calibration): orchestral 本物アンカーを n=3 に増強し補正係数を方向確定（Holst・久石譲 追加・mid削り +0.363 支配軸・low ゲートは Suno バイアスで本物に汎化せず audit 3/3 mismatch・Codex P2=純Suno baseline・rule 不変） | 2026-06-29 | Genre Calib Phase C |
+| #113 | feat(calibration): rock 本物アンカーを n=3 に増強し方向不変指紋を 2 ジャンル目で確認（AC/DC・Queen 追加・脱トーナル化 -0.189 が rock で最強・sub_bass で edm と分離可能を示唆・rule 不変） | 2026-06-29 | Genre Calib Phase C |
