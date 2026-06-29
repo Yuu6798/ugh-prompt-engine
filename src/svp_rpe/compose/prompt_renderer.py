@@ -101,7 +101,7 @@ class ExternalPromptAdapter:
             dropped_elements.append(segment.token)
 
         return GeneratedPrompt(
-            backend="external",
+            backend=_generated_backend(score.rendering.target_backend),
             text=_join_segments(kept),
             tags=_tags_for(score),
             negative_tags=list(score.semantic.avoid),
@@ -187,6 +187,18 @@ def _rank_key_factory(
         return (tier, priority_index.get(segment.token, unlisted_index), segment.order)
 
     return rank
+
+
+# GeneratedPrompt.backend は出力チャネルの種別（Literal）。target_backend が
+# musicgen/midi ならそれを反映し、external/suno 等の外部テキスト系は "external" に正規化する
+# （非 external render を external と誤ラベルしない）。
+_NON_EXTERNAL_GENERATED_BACKENDS = frozenset({"musicgen", "midi"})
+
+
+def _generated_backend(target_backend: str) -> str:
+    if target_backend in _NON_EXTERNAL_GENERATED_BACKENDS:
+        return target_backend
+    return "external"
 
 
 def _sentence_case(text: str) -> str:

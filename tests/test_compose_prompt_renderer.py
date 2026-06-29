@@ -261,6 +261,9 @@ def test_control_profile_drives_per_generator_divergence() -> None:
     assert "Brightness dark." in suno_prompt.text
     assert musicgen_prompt.dropped_elements[0] == "brightness"
     assert suno_prompt.text != musicgen_prompt.text
+    # 構造化 backend フィールドが選択 backend を反映する（誤ラベルしない）。
+    assert suno_prompt.backend == "external"
+    assert musicgen_prompt.backend == "musicgen"
 
 
 def test_unprofiled_score_falls_back_to_priority_order() -> None:
