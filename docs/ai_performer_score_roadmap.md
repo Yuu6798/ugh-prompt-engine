@@ -30,9 +30,12 @@
 - `compose/prompt_renderer.py` の `ExternalPromptAdapter` = 楽譜 → 外部生成器プロンプト（Suno 等）
 - `perform/performer.py` の決定論 performer = 楽譜 → 音声（C4/R0 ハーネス）
 
-足りないのは `ExternalPromptAdapter` が `control_profile` を見ていない点だけ。よって
-コンパイルループを閉じる作業は M5 ではなく PR1 の隣接作業（**PR 1.5**）として昇格させ、
-測定器寄りの PR2/PR3 より前に**楽譜を「演奏を出せる実用物」として一度立てる**。
+足りないのは `ExternalPromptAdapter` が `control_profile` を見ていない配線に加え、それを
+**検証可能にする前提移行**（フィールド粒度の segment/drop accounting・backend selector・
+priority エイリアス。詳細は PR1.5 節）。いずれも既存アダプタ近傍の改修で M5（時系列条件付け
+コンパイラ）には踏み込まない。よってコンパイルループを閉じる作業は M5 ではなく PR1 の隣接
+作業（**PR 1.5**）として昇格させ、測定器寄りの PR2/PR3 より前に**楽譜を「演奏を出せる実用物」
+として一度立てる**。
 
 **2. 決定論 vs 非決定論は「緊張」ではなく「層」。** 物理層（PhysicalRPE）＝保証チャネル＝
 決定論で grip 実証する領域（今固める段階）。意味層（SemanticRPE）＝助言チャネル＝ルールで
@@ -121,9 +124,16 @@
 ## PR 1.5 — コンパイルループを閉じる: control_profile-aware compile
 
 **目的**: PR1 の `control_profile` を `ExternalPromptAdapter` に配線し、**楽譜を「保証
-チャネルを守って演奏に変換できる実用物」として一度立てる**。新規実装はほぼ無く、既存
-アダプタ（`compose/prompt_renderer.py`）への配線が中心。これが「測定器でなく楽譜」を
-最短で形にする一手（改訂方針 1）。
+チャネルを守って演奏に変換できる実用物」として一度立てる**。中心は既存アダプタ
+（`compose/prompt_renderer.py`）への配線だが、**それを検証可能にする前提移行を伴う**
+（下記スコープ in のフィールド粒度 segment/drop accounting・backend selector・priority
+エイリアス）＝wiring-only ではない。M5（時系列条件付けコンパイラ）には踏み込まない範囲で、
+「測定器でなく楽譜」を最短で形にする一手（改訂方針 1）。
+
+> **本節の粒度**: ロードマップは PR1.5 の**設計意図と既知の前提**を記す。selector の
+> エイリアス規則・token 移行マップの具体・validator 差異の実装など**厳密な実装契約は
+> PR1.5 着手時の Design Memo（AGENTS.md §1）で確定**する。下記スコープは Design Memo の
+> 入力であり、実装の完全仕様ではない。
 
 **スコープ（in）**:
 - アダプタの優先度を **`control_profile` の grip_class で駆動**（control_profile が覆う
