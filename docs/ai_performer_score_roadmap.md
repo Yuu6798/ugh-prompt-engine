@@ -89,8 +89,12 @@
     sensor: str | None       # 観測センサー名
     evidence: str | None     # 出所参照（例 examples/control/k2/expected_grip.json）
   ```
-- `field_name` は `PhysicalLayer` のキーに対して検証（fixity の検証ロジックを流用、未知キー/
-  欠落を fail-fast）。
+- `field_name` は `PhysicalLayer` のキーに対して検証。**fixity からは「未知キー fail-fast」
+  のみ流用し、fixity の「全 physical フィールド網羅必須」ルール（`models.py` の
+  validate_fixity_keys 後段）は引き継がない**＝`control_profile` は **疎（sparse）を許容**する。
+  未知キーは fail-fast、欠落フィールドは「未プロファイル」として正当（PR1.5 で
+  `rendering.priority` フォールバックに回る）。K2 由来の Suno プロファイルは bpm/brightness の
+  みの疎な dict であり、網羅必須だと初期データ自体が弾かれるため、この差異は必須。
 - **初期データ投入**: 既存の `examples/composition/*/composition_score.yaml` に
   `control_profile.suno = {bpm: tight(d=1.61), brightness: tight(d=0.86)}` を K2（#117）から。
 - フィールド→backend 条件付けチャネルの**対応表**を docs に記述（score field → text prompt /
@@ -101,6 +105,8 @@
 **受け入れ条件**:
 - `control_profile` を持つ Score がラウンドトリップ load/serialize で不変。
 - 未知 field / 不正 grip_class が fail-fast。
+- **疎なプロファイル（例: `suno = {bpm, brightness}` のみ）が受理される**＝欠落フィールドで
+  fail-fast しない（fixity の網羅必須を引き継がない）。
 - K2 由来の suno プロファイルが少なくとも 1 つの example Score に載り、参照が解決可能。
 
 **テスト**: スキーマ検証 / PhysicalLayer キー整合 / serialize-without-empty / snapshot。
