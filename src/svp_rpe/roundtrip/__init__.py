@@ -1,6 +1,13 @@
 """Roundtrip preservation diagnostics."""
 from __future__ import annotations
 
+from .adherence import (
+    ScoreAdherenceReport,
+    TightFieldAdherence,
+    render_score_adherence_text,
+    run_score_adherence,
+    score_adherence,
+)
 from .corpus_batch import (
     CorpusBatchReport,
     CorpusFieldComparison,
@@ -30,12 +37,17 @@ __all__ = [
     "RoundtripTake",
     "RoundtripField",
     "RoundtripReport",
+    "ScoreAdherenceReport",
+    "TightFieldAdherence",
     "classify_take",
     "diagnose_roundtrip",
     "load_grip_map",
     "load_manifest",
     "render_corpus_batch_text",
     "render_roundtrip_text",
+    "render_score_adherence_text",
     "run_corpus_batch",
     "run_roundtrip",
+    "run_score_adherence",
+    "score_adherence",
 ]

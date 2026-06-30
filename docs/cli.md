@@ -94,6 +94,26 @@ The output is a field-by-field descriptive report: source value, transcribed
 value, diagnosis, grip, and sensor. It intentionally does not emit verdict,
 pass/fail, or loss keys.
 
+### `svprpe score-adherence <composition_score.yaml>`
+
+Judge whether the score's `control_profile`-**tight** fields are honored, both at
+compile time (PR1.5: tight fields are not dropped from the prompt) and through the
+deterministic roundtrip (preserved vs. not):
+
+```text
+tight fields (per resolved backend) -> compile (ExternalPromptAdapter) + roundtrip diagnosis
+```
+
+```bash
+svprpe score-adherence examples/composition/midnight_signal/composition_score.yaml
+svprpe score-adherence examples/composition/midnight_signal/composition_score.yaml --format json
+```
+
+The output is a per-field table (`compiled_kept`, `roundtrip` diagnosis, `preserved`)
+plus tight/kept/preserved counts. Like `roundtrip`, it is a descriptive instrument and
+intentionally does not emit a global verdict or pass/fail key. See
+[`control_profile.md`](control_profile.md).
+
 ### `svprpe roundtrip-corpus <manifest.yaml>`
 
 Run or replay the R1 roundtrip corpus manifest. Records with a local
@@ -219,7 +239,7 @@ Outputs: `ranking.json`, `summary.csv`, `summary.json`, `next_action.md`.
 | `--output` / `-o` | Output file path |
 | `--output-dir` | Output directory (creates if needed) |
 | `--fields` | Comma-separated `CompositionScore.physical` fields for `measure` |
-| `--format` | Output format. `generate`: `yaml` (default) or `text`; `ci-check`: `json` (default) or `markdown`; `roundtrip` / `roundtrip-corpus` / `compose` / `audit`: `text` (default) or `json` |
+| `--format` | Output format. `generate`: `yaml` (default) or `text`; `ci-check`: `json` (default) or `markdown`; `roundtrip` / `roundtrip-corpus` / `compose` / `audit` / `score-adherence`: `text` (default) or `json` |
 | `--max-chars` | Override `rendering.prompt_max_chars` (`compose` only) |
 | `--threshold` | Semantic CI pass threshold from `0.0` to `1.0` (`ci-check` only) |
 | `--no-save` | Print output to stdout instead of saving |
