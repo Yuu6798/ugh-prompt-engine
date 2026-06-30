@@ -614,6 +614,35 @@ def roundtrip(
         typer.echo(content)
 
 
+@app.command("score-adherence")
+def score_adherence_cmd(
+    composition_score: str = typer.Argument(..., help="Path to Composition Score YAML"),
+    output_format: str = typer.Option(
+        "text",
+        "--format",
+        click_type=click.Choice(["text", "json"]),
+        help="Output format: text | json",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output", help="Output file path"),
+) -> None:
+    """Judge whether control_profile-tight fields are kept through compile + roundtrip."""
+
+    from svp_rpe.compose import load_composition_score
+    from svp_rpe.roundtrip import render_score_adherence_text, run_score_adherence
+
+    score = load_composition_score(composition_score)
+    report = run_score_adherence(score)
+    if output_format == "json":
+        content = json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2)
+    else:
+        content = render_score_adherence_text(report)
+
+    if output:
+        Path(output).write_text(content, encoding="utf-8")
+    else:
+        typer.echo(content)
+
+
 @app.command("roundtrip-corpus")
 def roundtrip_corpus(
     manifest: str = typer.Argument(..., help="Path to roundtrip corpus manifest YAML"),

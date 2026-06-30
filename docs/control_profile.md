@@ -101,6 +101,26 @@ field トークンへ正規化する。
 可視化するだけで、フィールドを grip させはしない。芯は K 系列 grip の拡張で後から厚くなり、
 その都度コード変更なしに助言→保証へ昇格する。
 
+## PR2: 楽譜準拠テスト（score-adherence）
+
+`control_profile` が tight と宣言したフィールドが実際に守られたかを判定する計器
+（`src/svp_rpe/roundtrip/adherence.py`、CLI `svprpe score-adherence`）。tight 宣言を
+2 つの側面で照合する:
+
+1. **コンパイル側**: `ExternalPromptAdapter` が tight フィールドをプロンプトへ保持したか
+   （PR1.5 の保証＝tight は drop されない）を `dropped_elements` で検証 → `compiled_kept`。
+2. **演奏側**: 楽譜→演奏→抽出→draft のラウンドトリップ 4 値診断が `preserved` か
+   → `roundtrip_diagnosis` / `preserved`。
+
+生成側 backend は PR1.5 の backend selector を共有して解決し、`RoundtripReport` は決定論
+performer 由来でも実 Suno corpus take 由来でもよい（path 非依存）。`RoundtripReport` と
+同様に**計器であって verdict ではない**＝グローバルな pass/fail は出さず、フィールド単位の
+保持/非保持と件数（`compiled_kept_count` / `preserved_count` / `total_tight`）のみを返す。
+
+> **正直な限界**: 決定論 performer の roundtrip は実コンパイル経路（楽譜→アダプタ→Suno→
+> extract）の自動代理であり、実 Suno 経路の準拠判定は corpus take（人手生成）を渡して同じ
+> 判定器にかける。学習センサー（CLAP）による意味層読解は PR2b（依存・licensing 律速）。
+
 ## 初期データの出所
 
 `examples/composition/midnight_signal/composition_score.yaml` の
