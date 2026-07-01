@@ -27,8 +27,9 @@
 #     基準では Rock のみ条件差(0.021)>スプレッド(0.016)でノイズ超え、EDM は条件差(0.004)
 #     <スプレッド(0.005)で directional のみ。昇格は instrumental alt 込み n≥2×2 セル要件。
 #   - bpm: EDM=129 に精密ロック(誤アトラクタ) / Rock=108±5 で揺れ(正確だが不精密)。
-#   - key/sharp4_family_frac: ♯4(E major / C# minor)ファミリーは6/7で保存(転調なし)、
-#     rock_inst のみ 0.61 で逸脱。トニック重心(top_chord)はテイク毎に散る。
+#   - key/sharp4_family_frac: 生成器の key 保存は生成6テイクで判定(orig は基準・分母外)。
+#     生成6中5が ♯4(E major / C# minor)ファミリー保存(転調なし)、rock_inst のみ 0.61 で
+#     逸脱。トニック重心(top_chord)はテイク毎に散る。
 schema_version: '1.0'
 takes:
 - id: orig
