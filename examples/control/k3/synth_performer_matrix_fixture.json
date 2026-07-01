@@ -1,0 +1,836 @@
+{
+  "schema_version": "1.0",
+  "fixture_id": "k3_synth_performer_matrix_rpe_features",
+  "generator": "synth_performer_c4",
+  "base_score": "examples/composition/midnight_signal/composition_score.yaml",
+  "bars_scale": 0.25,
+  "bpm_jitter_sd": 0.01,
+  "baseline_key": "C minor",
+  "repetitions": 5,
+  "knobs": [
+    {
+      "name": "bpm",
+      "field": "bpm",
+      "low_level": "90",
+      "high_level": "140",
+      "diagonal_sensor": "bpm",
+      "expected_sign": 1
+    },
+    {
+      "name": "key",
+      "field": "key",
+      "low_level": "C minor",
+      "high_level": "F# minor",
+      "diagonal_sensor": "key_match_baseline",
+      "expected_sign": -1
+    },
+    {
+      "name": "brightness",
+      "field": "brightness",
+      "low_level": "dark",
+      "high_level": "bright",
+      "diagonal_sensor": "spectral_centroid",
+      "expected_sign": 1
+    },
+    {
+      "name": "active_rate_target",
+      "field": "active_rate_target",
+      "low_level": "0.80-0.85",
+      "high_level": "0.95-0.98",
+      "diagonal_sensor": "active_rate",
+      "expected_sign": 1
+    },
+    {
+      "name": "valley_depth_target",
+      "field": "valley_depth_target",
+      "low_level": "0.05-0.10",
+      "high_level": "0.30-0.40",
+      "diagonal_sensor": "valley_depth",
+      "expected_sign": 1
+    }
+  ],
+  "sensors": [
+    {
+      "name": "bpm",
+      "path": "bpm",
+      "kind": "core"
+    },
+    {
+      "name": "key_match_baseline",
+      "path": "key_match_baseline",
+      "kind": "core"
+    },
+    {
+      "name": "spectral_centroid",
+      "path": "spectral_centroid",
+      "kind": "core"
+    },
+    {
+      "name": "active_rate",
+      "path": "active_rate",
+      "kind": "core"
+    },
+    {
+      "name": "valley_depth",
+      "path": "valley_depth",
+      "kind": "core"
+    },
+    {
+      "name": "onset_density",
+      "path": "onset_density",
+      "kind": "extended"
+    }
+  ],
+  "samples": [
+    {
+      "sample_id": "bpm_low_r01",
+      "knob": "bpm",
+      "level": "90",
+      "repeat": 1,
+      "features": {
+        "bpm": 92.29,
+        "spectral_centroid": 968.24,
+        "active_rate": 0.9263,
+        "valley_depth": 0.1921,
+        "onset_density": 0.3142,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "bpm_low_r02",
+      "knob": "bpm",
+      "level": "90",
+      "repeat": 2,
+      "features": {
+        "bpm": 89.1,
+        "spectral_centroid": 969.26,
+        "active_rate": 0.9259,
+        "valley_depth": 0.193,
+        "onset_density": 0.2817,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "bpm_low_r03",
+      "knob": "bpm",
+      "level": "90",
+      "repeat": 3,
+      "features": {
+        "bpm": 89.1,
+        "spectral_centroid": 968.37,
+        "active_rate": 0.9267,
+        "valley_depth": 0.1916,
+        "onset_density": 0.3406,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "bpm_low_r04",
+      "knob": "bpm",
+      "level": "90",
+      "repeat": 4,
+      "features": {
+        "bpm": 89.1,
+        "spectral_centroid": 967.35,
+        "active_rate": 0.9253,
+        "valley_depth": 0.1986,
+        "onset_density": 0.3404,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "bpm_low_r05",
+      "knob": "bpm",
+      "level": "90",
+      "repeat": 5,
+      "features": {
+        "bpm": 89.1,
+        "spectral_centroid": 967.28,
+        "active_rate": 0.9257,
+        "valley_depth": 0.1894,
+        "onset_density": 0.3076,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "bpm_high_r01",
+      "knob": "bpm",
+      "level": "140",
+      "repeat": 1,
+      "features": {
+        "bpm": 136.0,
+        "spectral_centroid": 951.89,
+        "active_rate": 0.9315,
+        "valley_depth": 0.1935,
+        "onset_density": 0.5323,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "bpm_high_r02",
+      "knob": "bpm",
+      "level": "140",
+      "repeat": 2,
+      "features": {
+        "bpm": 143.55,
+        "spectral_centroid": 953.71,
+        "active_rate": 0.933,
+        "valley_depth": 0.1868,
+        "onset_density": 0.4894,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "bpm_high_r03",
+      "knob": "bpm",
+      "level": "140",
+      "repeat": 3,
+      "features": {
+        "bpm": 136.0,
+        "spectral_centroid": 951.16,
+        "active_rate": 0.9301,
+        "valley_depth": 0.1845,
+        "onset_density": 0.6313,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "bpm_high_r04",
+      "knob": "bpm",
+      "level": "140",
+      "repeat": 4,
+      "features": {
+        "bpm": 143.55,
+        "spectral_centroid": 955.06,
+        "active_rate": 0.933,
+        "valley_depth": 0.1837,
+        "onset_density": 0.489,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "bpm_high_r05",
+      "knob": "bpm",
+      "level": "140",
+      "repeat": 5,
+      "features": {
+        "bpm": 143.55,
+        "spectral_centroid": 951.3,
+        "active_rate": 0.9295,
+        "valley_depth": 0.1861,
+        "onset_density": 0.441,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "key_low_r01",
+      "knob": "key",
+      "level": "C minor",
+      "repeat": 1,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 959.64,
+        "active_rate": 0.9298,
+        "valley_depth": 0.1851,
+        "onset_density": 0.4449,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "key_low_r02",
+      "knob": "key",
+      "level": "C minor",
+      "repeat": 2,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 955.61,
+        "active_rate": 0.9292,
+        "valley_depth": 0.1968,
+        "onset_density": 0.359,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "key_low_r03",
+      "knob": "key",
+      "level": "C minor",
+      "repeat": 3,
+      "features": {
+        "bpm": 136.0,
+        "spectral_centroid": 956.12,
+        "active_rate": 0.9316,
+        "valley_depth": 0.179,
+        "onset_density": 0.4084,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "key_low_r04",
+      "knob": "key",
+      "level": "C minor",
+      "repeat": 4,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 954.92,
+        "active_rate": 0.9313,
+        "valley_depth": 0.19,
+        "onset_density": 0.5011,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "key_low_r05",
+      "knob": "key",
+      "level": "C minor",
+      "repeat": 5,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 958.79,
+        "active_rate": 0.9289,
+        "valley_depth": 0.1983,
+        "onset_density": 0.355,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "key_high_r01",
+      "knob": "key",
+      "level": "F# minor",
+      "repeat": 1,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 956.35,
+        "active_rate": 0.9303,
+        "valley_depth": 0.1999,
+        "onset_density": 0.3972,
+        "observed_key": "F# minor",
+        "key_match_baseline": 0.0
+      }
+    },
+    {
+      "sample_id": "key_high_r02",
+      "knob": "key",
+      "level": "F# minor",
+      "repeat": 2,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 954.22,
+        "active_rate": 0.9307,
+        "valley_depth": 0.1944,
+        "onset_density": 0.527,
+        "observed_key": "F# minor",
+        "key_match_baseline": 0.0
+      }
+    },
+    {
+      "sample_id": "key_high_r03",
+      "knob": "key",
+      "level": "F# minor",
+      "repeat": 3,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 952.7,
+        "active_rate": 0.9306,
+        "valley_depth": 0.1926,
+        "onset_density": 0.4019,
+        "observed_key": "F# minor",
+        "key_match_baseline": 0.0
+      }
+    },
+    {
+      "sample_id": "key_high_r04",
+      "knob": "key",
+      "level": "F# minor",
+      "repeat": 4,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 952.66,
+        "active_rate": 0.9306,
+        "valley_depth": 0.191,
+        "onset_density": 0.446,
+        "observed_key": "F# minor",
+        "key_match_baseline": 0.0
+      }
+    },
+    {
+      "sample_id": "key_high_r05",
+      "knob": "key",
+      "level": "F# minor",
+      "repeat": 5,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 952.76,
+        "active_rate": 0.9316,
+        "valley_depth": 0.1976,
+        "onset_density": 0.4082,
+        "observed_key": "F# minor",
+        "key_match_baseline": 0.0
+      }
+    },
+    {
+      "sample_id": "brightness_low_r01",
+      "knob": "brightness",
+      "level": "dark",
+      "repeat": 1,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 957.68,
+        "active_rate": 0.9305,
+        "valley_depth": 0.1822,
+        "onset_density": 0.4021,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "brightness_low_r02",
+      "knob": "brightness",
+      "level": "dark",
+      "repeat": 2,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 957.84,
+        "active_rate": 0.9298,
+        "valley_depth": 0.1848,
+        "onset_density": 0.4449,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "brightness_low_r03",
+      "knob": "brightness",
+      "level": "dark",
+      "repeat": 3,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 955.67,
+        "active_rate": 0.9299,
+        "valley_depth": 0.1951,
+        "onset_density": 0.4887,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "brightness_low_r04",
+      "knob": "brightness",
+      "level": "dark",
+      "repeat": 4,
+      "features": {
+        "bpm": 123.05,
+        "spectral_centroid": 956.49,
+        "active_rate": 0.9284,
+        "valley_depth": 0.2016,
+        "onset_density": 0.4345,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "brightness_low_r05",
+      "knob": "brightness",
+      "level": "dark",
+      "repeat": 5,
+      "features": {
+        "bpm": 123.05,
+        "spectral_centroid": 956.73,
+        "active_rate": 0.9297,
+        "valley_depth": 0.201,
+        "onset_density": 0.5273,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "brightness_high_r01",
+      "knob": "brightness",
+      "level": "bright",
+      "repeat": 1,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 1240.04,
+        "active_rate": 0.9322,
+        "valley_depth": 0.1918,
+        "onset_density": 0.5841,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "brightness_high_r02",
+      "knob": "brightness",
+      "level": "bright",
+      "repeat": 2,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 1233.76,
+        "active_rate": 0.9304,
+        "valley_depth": 0.2061,
+        "onset_density": 0.5734,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "brightness_high_r03",
+      "knob": "brightness",
+      "level": "bright",
+      "repeat": 3,
+      "features": {
+        "bpm": 123.05,
+        "spectral_centroid": 1235.87,
+        "active_rate": 0.9305,
+        "valley_depth": 0.202,
+        "onset_density": 0.5719,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "brightness_high_r04",
+      "knob": "brightness",
+      "level": "bright",
+      "repeat": 4,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 1235.84,
+        "active_rate": 0.9317,
+        "valley_depth": 0.1949,
+        "onset_density": 0.5795,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "brightness_high_r05",
+      "knob": "brightness",
+      "level": "bright",
+      "repeat": 5,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 1236.98,
+        "active_rate": 0.9303,
+        "valley_depth": 0.2046,
+        "onset_density": 0.5747,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "active_rate_target_low_r01",
+      "knob": "active_rate_target",
+      "level": "0.80-0.85",
+      "repeat": 1,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 959.18,
+        "active_rate": 0.9302,
+        "valley_depth": 0.1923,
+        "onset_density": 0.4362,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "active_rate_target_low_r02",
+      "knob": "active_rate_target",
+      "level": "0.80-0.85",
+      "repeat": 2,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 959.61,
+        "active_rate": 0.93,
+        "valley_depth": 0.1966,
+        "onset_density": 0.355,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "active_rate_target_low_r03",
+      "knob": "active_rate_target",
+      "level": "0.80-0.85",
+      "repeat": 3,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 955.39,
+        "active_rate": 0.9299,
+        "valley_depth": 0.1869,
+        "onset_density": 0.4958,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "active_rate_target_low_r04",
+      "knob": "active_rate_target",
+      "level": "0.80-0.85",
+      "repeat": 4,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 954.96,
+        "active_rate": 0.9283,
+        "valley_depth": 0.1864,
+        "onset_density": 0.4473,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "active_rate_target_low_r05",
+      "knob": "active_rate_target",
+      "level": "0.80-0.85",
+      "repeat": 5,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 955.82,
+        "active_rate": 0.9318,
+        "valley_depth": 0.1852,
+        "onset_density": 0.4521,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "active_rate_target_high_r01",
+      "knob": "active_rate_target",
+      "level": "0.95-0.98",
+      "repeat": 1,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 959.36,
+        "active_rate": 0.9302,
+        "valley_depth": 0.1954,
+        "onset_density": 0.4041,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "active_rate_target_high_r02",
+      "knob": "active_rate_target",
+      "level": "0.95-0.98",
+      "repeat": 2,
+      "features": {
+        "bpm": 123.05,
+        "spectral_centroid": 955.89,
+        "active_rate": 0.9304,
+        "valley_depth": 0.1872,
+        "onset_density": 0.3971,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "active_rate_target_high_r03",
+      "knob": "active_rate_target",
+      "level": "0.95-0.98",
+      "repeat": 3,
+      "features": {
+        "bpm": 123.05,
+        "spectral_centroid": 955.21,
+        "active_rate": 0.931,
+        "valley_depth": 0.1958,
+        "onset_density": 0.4811,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "active_rate_target_high_r04",
+      "knob": "active_rate_target",
+      "level": "0.95-0.98",
+      "repeat": 4,
+      "features": {
+        "bpm": 123.05,
+        "spectral_centroid": 960.19,
+        "active_rate": 0.9299,
+        "valley_depth": 0.1926,
+        "onset_density": 0.3996,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "active_rate_target_high_r05",
+      "knob": "active_rate_target",
+      "level": "0.95-0.98",
+      "repeat": 5,
+      "features": {
+        "bpm": 123.05,
+        "spectral_centroid": 955.33,
+        "active_rate": 0.9314,
+        "valley_depth": 0.1858,
+        "onset_density": 0.397,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "valley_depth_target_low_r01",
+      "knob": "valley_depth_target",
+      "level": "0.05-0.10",
+      "repeat": 1,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 955.76,
+        "active_rate": 0.9305,
+        "valley_depth": 0.1948,
+        "onset_density": 0.434,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "valley_depth_target_low_r02",
+      "knob": "valley_depth_target",
+      "level": "0.05-0.10",
+      "repeat": 2,
+      "features": {
+        "bpm": 123.05,
+        "spectral_centroid": 954.89,
+        "active_rate": 0.9304,
+        "valley_depth": 0.2011,
+        "onset_density": 0.3969,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "valley_depth_target_low_r03",
+      "knob": "valley_depth_target",
+      "level": "0.05-0.10",
+      "repeat": 3,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 958.5,
+        "active_rate": 0.9292,
+        "valley_depth": 0.1968,
+        "onset_density": 0.359,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "valley_depth_target_low_r04",
+      "knob": "valley_depth_target",
+      "level": "0.05-0.10",
+      "repeat": 4,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 960.57,
+        "active_rate": 0.9278,
+        "valley_depth": 0.2025,
+        "onset_density": 0.4381,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "valley_depth_target_low_r05",
+      "knob": "valley_depth_target",
+      "level": "0.05-0.10",
+      "repeat": 5,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 960.27,
+        "active_rate": 0.9286,
+        "valley_depth": 0.1803,
+        "onset_density": 0.4899,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "valley_depth_target_high_r01",
+      "knob": "valley_depth_target",
+      "level": "0.30-0.40",
+      "repeat": 1,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 961.19,
+        "active_rate": 0.9286,
+        "valley_depth": 0.1822,
+        "onset_density": 0.4016,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "valley_depth_target_high_r02",
+      "knob": "valley_depth_target",
+      "level": "0.30-0.40",
+      "repeat": 2,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 958.45,
+        "active_rate": 0.9308,
+        "valley_depth": 0.185,
+        "onset_density": 0.445,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "valley_depth_target_high_r03",
+      "knob": "valley_depth_target",
+      "level": "0.30-0.40",
+      "repeat": 3,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 955.65,
+        "active_rate": 0.9304,
+        "valley_depth": 0.2011,
+        "onset_density": 0.3969,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "valley_depth_target_high_r04",
+      "knob": "valley_depth_target",
+      "level": "0.30-0.40",
+      "repeat": 4,
+      "features": {
+        "bpm": 129.2,
+        "spectral_centroid": 956.35,
+        "active_rate": 0.9299,
+        "valley_depth": 0.1764,
+        "onset_density": 0.4508,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    },
+    {
+      "sample_id": "valley_depth_target_high_r05",
+      "knob": "valley_depth_target",
+      "level": "0.30-0.40",
+      "repeat": 5,
+      "features": {
+        "bpm": 123.05,
+        "spectral_centroid": 959.14,
+        "active_rate": 0.9314,
+        "valley_depth": 0.1845,
+        "onset_density": 0.397,
+        "observed_key": "C minor",
+        "key_match_baseline": 1.0
+      }
+    }
+  ]
+}

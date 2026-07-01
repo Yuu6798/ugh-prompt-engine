@@ -374,7 +374,50 @@ bpm を上げれば onset が密になる（bpm → onset_density）ような**�
 コミット済み成果物は `examples/control/k3/`（fixture / `expected_orthogonality.json` /
 `orthogonality_map.md`）。fixture → 行列 は決定論で snapshot test 固定。
 
-<!-- K3_RESULTS_PLACEHOLDER -->
+効果量行列（行=ツマミ、列=センサー、対角=**太字**、strong 干渉=⚠、†=extended 列）:
+
+| knob \ sensor | bpm | key_match_baseline | spectral_centroid | active_rate | valley_depth | onset_density† |
+|---|---|---|---|---|---|---|
+| bpm | **16.4** | 0 | -11.6 ⚠ | 4.52 ⚠ | -1.64 ⚠ | 3.72 ⚠ |
+| key | -0.632 | **-999** | -1.77 ⚠ | 0.642 | 0.841 ⚠ | 0.386 |
+| brightness | 0.4 | 0 | **160** | 1.66 ⚠ | 0.894 ⚠ | 3.37 ⚠ |
+| active_rate_target | -2.53 ⚠ | 0 | 0.0885 | **0.552** | 0.398 | -0.483 |
+| valley_depth_target | 0 | 0 | 0.0655 | 0.828 ⚠ | **-1.03** | -0.134 |
+
+DCI: overall disentanglement **0.375** / overall completeness **0.485** /
+mean effect_size_gap **0.551**。列単位では `key_match_baseline` の completeness が
+**1.0**（key ノブだけが動かす＝完全にクリーンな独占チャネル）、`valley_depth` が
+**0.055**（全ツマミが同程度に揺らす＝最悪。ただし後述のノイズ天井内）。
+
+主要な発見 — 4 点:
+
+1. **干渉にも 2 種類ある**（K1「dead の 2 分類」の行列版）。
+   - **生成側の構造的結合**: bpm → active_rate (4.52) / onset_density (3.72) は
+     「テンポを上げれば音が密になる」音楽の物理であり、操作盤の欠陥ではない。
+     bpm → spectral_centroid (**-11.6**) も玩具で実在する強結合（テンポ上昇で
+     centroid が下がる — pulse/chord の時間比が変わりスペクトル重心が動く）。
+   - **センサー側の結合**: brightness → onset_density (3.37) は、演奏される音符列
+     （密度）が不変なのに onset 検出器がスペクトル内容に反応して読みを変える。
+     ツマミは汚していない、センサーが混線している。K3 行列はこの 2 つを区別する
+     読みの装置になる（どちらも「非対角が立つ」が、原因層が違う）。
+2. **既知 dead 行が経験的ヌル分布をくれる**。synth が読まない `active_rate_target`
+   行に最大 |d| = **2.53**（bpm 列）が立った。生成器の確率性が seed 駆動 bpm
+   ジッターだけでも、R=5 の群平均差はここまで偽干渉を作る。よって本 fixture の
+   読みでは **|d| ≲ 2.5 の非対角セルは seed ノイズと分離不能**（ノイズ天井）。
+   `IMPORTANCE_FLOOR` 0.2 は grip 分類の閾値であって干渉の有意性閾値ではない —
+   行列は計器であり verdict を出さない（audit と同じ規律）。同じ理由で
+   `active_rate_target` の対角 0.552（loose 表示）も spurious であり、**K1 の
+   dead 判定が正**（配線が無いことはコードで既知）。
+3. **cap=10 の副作用が gap に出る**。spectral_centroid 列は brightness (160) と
+   bpm (-11.6) が両方 cap=10 に張り付き effect_size_gap = 0（同率支配と表示）。
+   実際は桁違いに brightness が強い。gap は cap 感度を持つ指標として読むこと
+   （cap を外すと saturated センチネルが正規化を支配するトレードオフの選択）。
+4. **「操作盤としての質」が初めて数値になった**。overall disentanglement 0.375 —
+   接続が既知の決定論的演奏者ですら、bpm ノブが 4 センサーを同時に動かす
+   「汚れた操作盤」である。MIDI が楽譜たり得たのはチャネル直交性が構造で保証
+   されていたからで、生成系の楽譜は直交性を**測って**主張する必要がある — その
+   計器が本行列。Suno 実測（K3-2）では生成器の確率ノイズが大きいぶんノイズ天井が
+   さらに上がるはずで、R の増員か水準差の拡大が必要になる見込み。
 
 ---
 
