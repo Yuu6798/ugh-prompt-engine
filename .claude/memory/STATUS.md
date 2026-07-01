@@ -8,11 +8,15 @@
 アレンジ**を EDM/ロック/J-pop で実演（BPM は原曲に matched・halving は高 prior で真値回復＝実音源
 でも再現する抽出器の癖）。**核心発見**: 「同一 EDM アレンジ × 歌詞あり/なし」対照 2 曲から
 **歌詞=意味層のアンカー**を観測——歌詞が付与する「メリハリ(曲らしさ)」は物理 `dynamic_range` に
-写らない（むしろ逆相関）＝**計器の盲点＝意味層、現状は耳が唯一のセンサー**。中域 `mid_ratio` は
-ボーカル検出に堅い。**honesty ゲート実例**: n=1 で綺麗に見えた「ボーカル=主音の錨」を n=2 の方向
-反転で棄却・BPM halving もボーカル法則でなく非法則化（**法則化は n≥3 まで保留**）。発見は
+写らない＝**計器の盲点＝意味層、現状は耳が唯一のセンサー**。**honesty ゲート実例**: n=1 で綺麗に
+見えた「ボーカル=主音の錨」を n=2 の方向反転で棄却・BPM halving もボーカル法則でなく非法則化。発見は
 `docs/lyrics_semantic_anchor.md` に保全し **PR #123 で main マージ完了**（付随記録: genre ルールの
-pop 帯欠落/低 sub EDM 誤判定/実音源 halving/m4a 非対応）。**次の本命は意味層トラック新設**
+pop 帯欠落/低 sub EDM 誤判定/実音源 halving/m4a 非対応）。**さらに n=3 追試（実音源 StartinA を
+EDM/Rock 再キャスト、#124 レビュー中）で二つの旧主張を修正**: (1) 「歌詞→`dynamic_range` 逆相関」は
+**棄却**（EDM 限定・Rock で反転かつ再生成ノイズ未満＝proxy に使えない）、(2) `mid_ratio` は
+ボーカル最有力検出子だが **noise 超えは Rock のみ・EDM は directional**（instrumental alt 未取得＝
+「堅い」断定を撤回・昇格は各ジャンル instrumental alt 込み n≥2×2 セル要件）。付随: BPM grip=確度×精度
+2軸・調号は grip/進行は非再現。**次の本命は意味層トラック新設**
 （検証デザイン B/C＝歌詞条件の分離実走・`control_profile` への `lyrics_presence` ノブ Design Memo）
 で、CLAP=PR2b の導入動機が本セッションの実データ×主観の乖離で裏付いた。既存キュー
 （PR2b/PR3-K3/Q1-5 Ph2/Genre Calib follow-up）は不変。
@@ -26,13 +30,13 @@ pop 帯欠落/低 sub EDM 誤判定/実音源 halving/m4a 非対応）。**次�
 | Q1-5 Ph2 | spectral 帯域 magnitude 再校正(残) | P3 | **大半 closeout 済**: brightness=B-3 / `high_ratio==0.0` 前提見直し=#107 / low/mid_ratio 据え置き finding=#108(low はゲートで健全・mid は未発火で繰越・general アンカー欠如)。残=`screen_2026-06-16.yaml` 再採取 + mid_ratio/magnitude 軸の bias 検証(Phase C と統合・licensing 律速)。**BPM**: #106 で sr/閾値の単一ノブ修正は大域回帰と確定(finding #6)。自動化は multi-prior/sr ensemble+octave tie-break を全 fixture 回帰検証付き Design Memo 化(K2 #117 でも bpm 素朴センサーの prior アトラクタが grip を圧縮することを再確認) |
 | Genre Calib seed follow-up | EDM 5本の Drive 化 + Suno prompt 転記 | P3 | #103 で measured はインライン保全済。残=`electronic_dance_*` の Drive アップロード→`drive_file_id` 回収 + `prompt:` 本文の PENDING 解消。律速=人間作業 |
 | Genre Calib 4th genre | acoustic へ域拡張 | P3 | acoustic(low_ratio<0.4 の general 落ち領域を突く coverage 拡張型)を rock(#105)と同じ協働フロー(物理層明示プロンプト→user 生成→抽出→分離分析→ルール反映)で追加。律速=人間生成バッチ |
-| 意味層トラック lyrics | 歌詞=意味層アンカー仮説の n≥3 検証 + control_profile lyrics ノブ | P2 | **2026-07-01 発見**(`docs/lyrics_semantic_anchor.md`/#123)。(a) 検証デザイン B/C=同一アレンジ×【歌詞なし/原曲無関係歌詞/原曲由来歌詞】3 条件を生成し「曲らしさ・原曲寄り度」を人間評価×物理乖離(`dynamic_range` が主観メリハリと逆相関するか再検証)。(b) `control_profile` に意味層ノブ `lyrics_presence` を足す Design Memo。**n=1「ボーカル=主音の錨」は n=2 で棄却済=法則化 n≥3 保留**。中域 `mid_ratio` はボーカル検出に堅い。CLAP=PR2b の導入動機と接続。律速=人間生成バッチ+主観評価 |
+| 意味層トラック lyrics | 歌詞=意味層アンカー仮説の検証続行 + control_profile lyrics ノブ | P2 | **2026-07-01 発見**(`docs/lyrics_semantic_anchor.md`/#123)＋**n=3 追試(S2/#124)**。追試で確定: **`dynamic_range`=歌詞アンカー説は棄却**(EDM 限定・Rock で反転かつ再生成ノイズ未満)＝もう「dynamic_range 逆相関を再検証」しない。`mid_ratio` は最有力検出子だが **noise 超えは Rock のみ・EDM は directional(instrumental alt 未取得)**＝「堅い」と断定せず**昇格は各ジャンル instrumental alt 込みの n≥2×2 セル要件**。残る未検証: (a) 検証デザイン B/C=同一アレンジ×【歌詞なし/原曲無関係歌詞/原曲由来歌詞】で「原曲寄り度」を人間評価×物理乖離(dynamic_range は棄却済につき別指標を探す)。(b) `control_profile` に `lyrics_presence` ノブ Design Memo。**n=1「ボーカル=主音の錨」は n=2 で棄却済**。CLAP=PR2b の導入動機と接続。律速=人間生成バッチ+主観評価 |
 
 ## Recently Merged
 
 | PR | Title | Date | Phase |
 |---|---|---|---|
-| #123 | docs: 歌詞=意味層アンカー仮説（アレンジ・デモ発見の保全）＝実 Suno＋実音源の「同一 EDM アレンジ × 歌詞あり/なし」2 曲対照から**歌詞は意味層のアンカー**（付与する「メリハリ」は物理 dynamic_range に写らずむしろ逆＝計器の盲点・耳が唯一のセンサー）。honesty: n=1「ボーカル=主音の錨」を n=2 方向反転で棄却・halving 非法則化（n≥3 保留）。中域 mid_ratio はボーカル検出に堅い。付随=genre pop 帯欠落/低 sub EDM 誤判定/実音源 halving/m4a 非対応。n≥3 検証デザイン明記・索引2箇所同期 | 2026-07-01 | 意味層トラック（新設） |
+| #123 | docs: 歌詞=意味層アンカー仮説（アレンジ・デモ発見の保全）＝実 Suno＋実音源の「同一 EDM アレンジ × 歌詞あり/なし」2 曲対照から**歌詞は意味層のアンカー**（付与する「メリハリ」は物理 dynamic_range に写らずむしろ逆＝計器の盲点・耳が唯一のセンサー）。honesty: n=1「ボーカル=主音の錨」を n=2 方向反転で棄却・halving 非法則化（n≥3 保留）。中域 mid_ratio はボーカル検出に堅い。付随=genre pop 帯欠落/低 sub EDM 誤判定/実音源 halving/m4a 非対応。n≥3 検証デザイン明記・索引2箇所同期。**※ n=3 追試 #124（レビュー中）で dynamic_range 逆相関を proxy 棄却・mid_ratio を Rock 限定に更新（この行の旧主張は superseded）** | 2026-07-01 | 意味層トラック（新設） |
 | #122 | feat(roundtrip): score-adherence test（PR2）＝control_profile-tight 保証の準拠判定計器（`svprpe score-adherence`: compiled_kept(PR1.5 の drop されない保証)+preserved(roundtrip 4 値診断) をフィールド単位判定・backend selector 共有で path 非依存・**計器であって verdict ではない**=グローバル pass/fail なし。CLAP は torch+2GB 重み・policy adopt 外で PR2b へ分離） | 2026-06-30 | AI-Performer Score Roadmap |
 | #121 | feat(compose): control_profile-aware compile（PR1.5）＝コンパイルループを Suno で閉じる（ExternalPromptAdapter を control_profile 駆動のフィールド粒度コンパイルへ刷新・**tight 先頭昇格**(ユーザー確認)・physical.optional 束を 4 フィールド独立文へ分解・backend selector external→suno・priority エイリアス・backend descriptor 隔離。Codex P2×3=casing 退行/time_signature 未描画/backend 誤ラベル全対応） | 2026-06-30 | AI-Performer Score Roadmap |
 | #120 | feat(compose): control_profile スキーマ（PR1）＝楽譜が効くチャネルを自己記述（生成器→物理フィールド→grip_class・`fixity` と違い**疎を許容**(K2 の Suno は bpm/brightness のみ)・未知 field fail-fast・ControlGrip(grip_class 必須/grip・sensor・evidence optional)・K2(#117) 初期データ投入・docs/control_profile.md 新規） | 2026-06-30 | AI-Performer Score Roadmap |

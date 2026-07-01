@@ -1,0 +1,188 @@
+# 歌詞アレンジ・デモ計測ログ — 2026-07-01 (Session 2)
+#
+# 実音源 StartinA_COMPLETE を identity(調号/コア進行) 固定で EDM / Rock へ
+# 再キャストし、各アレンジで「歌詞あり(present) / 歌詞なし(absent)」と再生成別取り
+# (別取り=alt, 同一条件2テイク目=再生成ノイズのベースライン) を Suno で生成。
+# 全テイクを `svprpe extract`(physical) + `svprpe transcribe`(chord) で計測した
+# measured 値(小数3桁)。docs/lyrics_semantic_anchor.md の n=3 検証に対応。
+#
+# provenance / 再現手順:
+#   - 音源はリポジトリに非コミット。各テイクの canonical 原ファイル(mp3/m4a)の
+#     `audio_sha256`(+ source_format / byte_size) を pin し bytes を照合可能にする。
+#   - 計測パイプライン: 原ファイル → ffmpeg で 44100Hz / stereo wav へ変換
+#     (`ffmpeg -i <src> -ac 2 -ar 44100 <dst>.wav`) → `svprpe extract` / `transcribe`。
+#     wav は再現可能な派生物のため非 pin(sha256 は原ファイル基準)。
+#
+# honesty:
+#   - 歌詞あり/なしは Suno 出力ファイルの byte_size で弁別(大=歌詞あり)。
+#   - alt(別取り)は **歌詞(present)条件のみ**取得。instrumental(absent)は両ジャンル
+#     とも 1 テイクで absent 側の再生成スプレッドは未測 = 完全な n≥2×2 セルではない。
+#   - top_chord / sharp4_family_frac はコード推定器由来で、歪みギター instrumental
+#     では不安定(rock_inst の調号外 A#m/Fm 混入は推定器ノイズ疑い・n=1 断定せず)。
+#
+# 主要指標の読み(詳細は docs 側の結論1-3):
+#   - dynamic_range_db: Rock で歌詞あり/なしが反転かつ再生成ノイズ未満 → 歌詞アンカー
+#     proxy として棄却。EDM は方向は残るが absent alt 未取得で directional 保留。
+#   - mid_ratio: 歌詞ありテイク4本すべてが各 instrumental より高(方向一致)。同じ noise
+#     基準では Rock のみ条件差(0.021)>スプレッド(0.016)でノイズ超え、EDM は条件差(0.004)
+#     <スプレッド(0.005)で directional のみ。昇格は instrumental alt 込み n≥2×2 セル要件。
+#   - bpm: EDM=129 に精密ロック(誤アトラクタ) / Rock=108±5 で揺れ(正確だが不精密)。
+#   - key/sharp4_family_frac: 生成器の key 保存は生成6テイクで判定(orig は基準・分母外)。
+#     生成6中5が ♯4(E major / C# minor)ファミリー保存(転調なし)、rock_inst のみ 0.61 で
+#     逸脱。トニック重心(top_chord)はテイク毎に散る。
+schema_version: '1.0'
+takes:
+- id: orig
+  arrange: (source)
+  lyrics: n/a
+  source_format: m4a
+  byte_size: 10741895
+  audio_sha256: cccd71de39acd48602a2278d78f2fb0e4a0cba6b3054703c4f76d9170101c8d0
+  provenance: StartinA_COMPLETE, user-provided real audio
+  bpm: 107.67
+  key: C#
+  mode: major
+  key_confidence: 0.8
+  spectral_centroid: 3158.07
+  mid_ratio: 0.215
+  dynamic_range_db: 7.52
+  harmonic_ratio: 0.663
+  percussive_ratio: 0.337
+  onset_density: 1.175
+  brilliance: 0.177
+  sub_bass: 0.02
+  loudness_lufs: -6.32
+  top_chord: C#m
+  sharp4_family_frac: 0.947
+- id: edm_lyrics
+  arrange: EDM
+  lyrics: present
+  source_format: mp3
+  byte_size: 4726254
+  audio_sha256: 9ef088ed259064f26fc3085155918ac64da8e508523ee328af057ddce88b34e5
+  provenance: Suno take, lyrics (larger file)
+  bpm: 129.2
+  key: E
+  mode: major
+  key_confidence: 0.894
+  spectral_centroid: 3500.34
+  mid_ratio: 0.226
+  dynamic_range_db: 7.43
+  harmonic_ratio: 0.84
+  percussive_ratio: 0.16
+  onset_density: 4.832
+  brilliance: 0.235
+  sub_bass: 0.039
+  loudness_lufs: -13.72
+  top_chord: B
+  sharp4_family_frac: 1.0
+- id: edm_lyrics_alt
+  arrange: EDM
+  lyrics: present
+  source_format: mp3
+  byte_size: 4201974
+  audio_sha256: ad3e5e6d7c9744b615d05c30379eaa0b3132c9f3d27219929bb167ff2e03259c
+  provenance: Suno regeneration (別取り), lyrics
+  bpm: 129.2
+  key: E
+  mode: major
+  key_confidence: 0.865
+  spectral_centroid: 3378.67
+  mid_ratio: 0.221
+  dynamic_range_db: 7.55
+  harmonic_ratio: 0.826
+  percussive_ratio: 0.174
+  onset_density: 4.934
+  brilliance: 0.219
+  sub_bass: 0.043
+  loudness_lufs: -13.98
+  top_chord: E
+  sharp4_family_frac: 1.0
+- id: edm_inst
+  arrange: EDM
+  lyrics: absent
+  source_format: mp3
+  byte_size: 3538950
+  audio_sha256: 24f81b653b1c1a6fa13d4483bd1573c9e16a7a8f14d045f3031fd319dd1968a4
+  provenance: Suno take, instrumental (smaller file)
+  bpm: 129.2
+  key: E
+  mode: major
+  key_confidence: 0.963
+  spectral_centroid: 3150.66
+  mid_ratio: 0.217
+  dynamic_range_db: 8.23
+  harmonic_ratio: 0.888
+  percussive_ratio: 0.112
+  onset_density: 5.319
+  brilliance: 0.207
+  sub_bass: 0.057
+  loudness_lufs: -14.08
+  top_chord: E
+  sharp4_family_frac: 1.0
+- id: rock_lyrics
+  arrange: Rock
+  lyrics: present
+  source_format: mp3
+  byte_size: 4461054
+  audio_sha256: 7273fb6db21e1daab2b15d447f0c45325f4e65ca63fa2d52e697647de47caaf6
+  provenance: Suno take, lyrics (larger file)
+  bpm: 107.67
+  key: E
+  mode: major
+  key_confidence: 0.871
+  spectral_centroid: 3321.22
+  mid_ratio: 0.245
+  dynamic_range_db: 6.7
+  harmonic_ratio: 0.776
+  percussive_ratio: 0.224
+  onset_density: 3.909
+  brilliance: 0.206
+  sub_bass: 0.023
+  loudness_lufs: -13.49
+  top_chord: B
+  sharp4_family_frac: 0.926
+- id: rock_lyrics_alt
+  arrange: Rock
+  lyrics: present
+  source_format: mp3
+  byte_size: 4224630
+  audio_sha256: 8d5a7471033672770c8b7be2907b97f441b14e1252dc21c466cf9bd9c4f36005
+  provenance: Suno regeneration (別取り), lyrics
+  bpm: 103.36
+  key: E
+  mode: major
+  key_confidence: 0.841
+  spectral_centroid: 3283.98
+  mid_ratio: 0.229
+  dynamic_range_db: 5.61
+  harmonic_ratio: 0.745
+  percussive_ratio: 0.255
+  onset_density: 3.575
+  brilliance: 0.203
+  sub_bass: 0.031
+  loudness_lufs: -13.21
+  top_chord: Em
+  sharp4_family_frac: 1.0
+- id: rock_inst
+  arrange: Rock
+  lyrics: absent
+  source_format: mp3
+  byte_size: 2764278
+  audio_sha256: 479c873b8039fd991e84f57a16e5382f8b1256c60639c2c6e797cfeddba9e2f5
+  provenance: Suno take, instrumental (smaller file)
+  bpm: 112.35
+  key: C#
+  mode: major
+  key_confidence: 0.94
+  spectral_centroid: 2730.65
+  mid_ratio: 0.208
+  dynamic_range_db: 5.75
+  harmonic_ratio: 0.816
+  percussive_ratio: 0.184
+  onset_density: 3.535
+  brilliance: 0.152
+  sub_bass: 0.021
+  loudness_lufs: -13.35
+  top_chord: C#
+  sharp4_family_frac: 0.611
