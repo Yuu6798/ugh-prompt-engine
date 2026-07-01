@@ -14,6 +14,20 @@ from .grip import (
     grip_effect_size,
     match_rate,
 )
+from .orthogonality import (
+    IMPORTANCE_CAP,
+    IMPORTANCE_FLOOR,
+    INTERFERENCE_STRONG_MIN,
+    INTERFERENCE_WEAK_MIN,
+    InterferenceClass,
+    classify_interference,
+    completeness_scores,
+    disentanglement_scores,
+    effect_size_gap,
+    importance_matrix,
+    mass_weighted_overall,
+    normalized_entropy,
+)
 
 __all__ = [
     "GRIP_EPSILON",
@@ -27,4 +41,16 @@ __all__ = [
     "classify_match_grip",
     "grip_effect_size",
     "match_rate",
+    "IMPORTANCE_CAP",
+    "IMPORTANCE_FLOOR",
+    "INTERFERENCE_STRONG_MIN",
+    "INTERFERENCE_WEAK_MIN",
+    "InterferenceClass",
+    "classify_interference",
+    "completeness_scores",
+    "disentanglement_scores",
+    "effect_size_gap",
+    "importance_matrix",
+    "mass_weighted_overall",
+    "normalized_entropy",
 ]
