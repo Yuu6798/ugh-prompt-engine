@@ -1,23 +1,31 @@
 # 歌詞アレンジ・デモ計測ログ — 2026-07-01 (Session 2)
 #
-# 実音源 StartinA_COMPLETE(m4a) を identity(調号/コア進行) 固定で EDM / Rock へ
+# 実音源 StartinA_COMPLETE を identity(調号/コア進行) 固定で EDM / Rock へ
 # 再キャストし、各アレンジで「歌詞あり(present) / 歌詞なし(absent)」と再生成別取り
 # (別取り=alt, 同一条件2テイク目=再生成ノイズのベースライン) を Suno で生成。
 # 全テイクを `svprpe extract`(physical) + `svprpe transcribe`(chord) で計測した
 # measured 値(小数3桁)。docs/lyrics_semantic_anchor.md の n=3 検証に対応。
 #
+# provenance / 再現手順:
+#   - 音源はリポジトリに非コミット。各テイクの canonical 原ファイル(mp3/m4a)の
+#     `audio_sha256`(+ source_format / byte_size) を pin し bytes を照合可能にする。
+#   - 計測パイプライン: 原ファイル → ffmpeg で 44100Hz / stereo wav へ変換
+#     (`ffmpeg -i <src> -ac 2 -ar 44100 <dst>.wav`) → `svprpe extract` / `transcribe`。
+#     wav は再現可能な派生物のため非 pin(sha256 は原ファイル基準)。
+#
 # honesty:
 #   - 歌詞あり/なしは Suno 出力ファイルの byte_size で弁別(大=歌詞あり)。
+#   - alt(別取り)は **歌詞(present)条件のみ**取得。instrumental(absent)は両ジャンル
+#     とも 1 テイクで absent 側の再生成スプレッドは未測 = 完全な n≥2×2 セルではない。
 #   - top_chord / sharp4_family_frac はコード推定器由来で、歪みギター instrumental
 #     では不安定(rock_inst の調号外 A#m/Fm 混入は推定器ノイズ疑い・n=1 断定せず)。
-#   - 音源はリポジトリに非コミット(byte_size を provenance として記録)。
 #
-# 主要指標の読み:
-#   - dynamic_range_db: EDM は歌詞あり<なしだが Rock では逆転かつ再生成ノイズ未満
-#     → 「歌詞→dynamic_range 低下」は法則でない(棄却)。
-#   - mid_ratio: 歌詞ありテイク4本すべてが各 instrumental より高(方向一致)。ただし同じ
-#     noise 基準では Rock のみ条件差(0.021)>スプレッド(0.016)でノイズ超え、EDM は
-#     条件差(0.004)<スプレッド(0.005)で directional のみ(instrumental alt 未取得)。
+# 主要指標の読み(詳細は docs 側の結論1-3):
+#   - dynamic_range_db: Rock で歌詞あり/なしが反転かつ再生成ノイズ未満 → 歌詞アンカー
+#     proxy として棄却。EDM は方向は残るが absent alt 未取得で directional 保留。
+#   - mid_ratio: 歌詞ありテイク4本すべてが各 instrumental より高(方向一致)。同じ noise
+#     基準では Rock のみ条件差(0.021)>スプレッド(0.016)でノイズ超え、EDM は条件差(0.004)
+#     <スプレッド(0.005)で directional のみ。昇格は instrumental alt 込み n≥2×2 セル要件。
 #   - bpm: EDM=129 に精密ロック(誤アトラクタ) / Rock=108±5 で揺れ(正確だが不精密)。
 #   - key/sharp4_family_frac: ♯4(E major / C# minor)ファミリーは6/7で保存(転調なし)、
 #     rock_inst のみ 0.61 で逸脱。トニック重心(top_chord)はテイク毎に散る。
@@ -26,8 +34,10 @@ takes:
 - id: orig
   arrange: (source)
   lyrics: n/a
+  source_format: m4a
   byte_size: 10741895
-  provenance: StartinA_COMPLETE m4a, user-provided real audio
+  audio_sha256: cccd71de39acd48602a2278d78f2fb0e4a0cba6b3054703c4f76d9170101c8d0
+  provenance: StartinA_COMPLETE, user-provided real audio
   bpm: 107.67
   key: C#
   mode: major
@@ -46,7 +56,9 @@ takes:
 - id: edm_lyrics
   arrange: EDM
   lyrics: present
+  source_format: mp3
   byte_size: 4726254
+  audio_sha256: 9ef088ed259064f26fc3085155918ac64da8e508523ee328af057ddce88b34e5
   provenance: Suno take, lyrics (larger file)
   bpm: 129.2
   key: E
@@ -66,7 +78,9 @@ takes:
 - id: edm_lyrics_alt
   arrange: EDM
   lyrics: present
+  source_format: mp3
   byte_size: 4201974
+  audio_sha256: ad3e5e6d7c9744b615d05c30379eaa0b3132c9f3d27219929bb167ff2e03259c
   provenance: Suno regeneration (別取り), lyrics
   bpm: 129.2
   key: E
@@ -86,7 +100,9 @@ takes:
 - id: edm_inst
   arrange: EDM
   lyrics: absent
+  source_format: mp3
   byte_size: 3538950
+  audio_sha256: 24f81b653b1c1a6fa13d4483bd1573c9e16a7a8f14d045f3031fd319dd1968a4
   provenance: Suno take, instrumental (smaller file)
   bpm: 129.2
   key: E
@@ -106,7 +122,9 @@ takes:
 - id: rock_lyrics
   arrange: Rock
   lyrics: present
+  source_format: mp3
   byte_size: 4461054
+  audio_sha256: 7273fb6db21e1daab2b15d447f0c45325f4e65ca63fa2d52e697647de47caaf6
   provenance: Suno take, lyrics (larger file)
   bpm: 107.67
   key: E
@@ -126,7 +144,9 @@ takes:
 - id: rock_lyrics_alt
   arrange: Rock
   lyrics: present
+  source_format: mp3
   byte_size: 4224630
+  audio_sha256: 8d5a7471033672770c8b7be2907b97f441b14e1252dc21c466cf9bd9c4f36005
   provenance: Suno regeneration (別取り), lyrics
   bpm: 103.36
   key: E
@@ -146,7 +166,9 @@ takes:
 - id: rock_inst
   arrange: Rock
   lyrics: absent
+  source_format: mp3
   byte_size: 2764278
+  audio_sha256: 479c873b8039fd991e84f57a16e5382f8b1256c60639c2c6e797cfeddba9e2f5
   provenance: Suno take, instrumental (smaller file)
   bpm: 112.35
   key: C#
@@ -163,4 +185,3 @@ takes:
   loudness_lufs: -13.35
   top_chord: C#
   sharp4_family_frac: 0.611
-

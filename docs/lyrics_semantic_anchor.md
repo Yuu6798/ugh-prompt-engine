@@ -133,9 +133,12 @@ TOUGH BOY: 歌あり 6.03 < 歌なし 9.89）。つまり：
 ## n=3 追試（2026-07-01 Session 2）：dynamic_range 説の棄却 + mid_ratio は Rock 限定
 
 同一手法を **実音源 StartinA_COMPLETE(m4a)** に適用し、identity(調号/コア進行)を
-固定して **EDM / Rock** へ再キャスト。各アレンジで歌詞あり/なしに加え、**同一条件の
-「別取り」(alt=再生成2テイク目)** を取り、初めて**再生成ノイズのベースライン**を得た。
-measured 値の全量は [`examples/real_audio_validation/lyrics_arrange_demo_2026-07-01.yaml`](../examples/real_audio_validation/lyrics_arrange_demo_2026-07-01.yaml)。
+固定して **EDM / Rock** へ再キャスト。各アレンジで歌詞あり/なしを生成し、加えて
+**歌詞あり(present)条件については「別取り」(alt=再生成2テイク目)** を取った。これで
+**歌詞側の再生成ノイズのベースライン**が得られる。**ただし instrumental(absent)条件は
+両ジャンルとも 1 テイクのみで、absent 側の再生成スプレッドは未測**＝本デモは完全な
+n≥2×2 セルではない（後述の結論はこの非対称を前提に読むこと）。measured 値の全量は
+[`examples/real_audio_validation/lyrics_arrange_demo_2026-07-01.yaml`](../examples/real_audio_validation/lyrics_arrange_demo_2026-07-01.yaml)。
 
 原曲 identity: tonal center C#(短調寄り, C#m ペダル) / BPM 107.7 / 4/4 /
 コア進行 C#m→D→C#m→C#→C#m→G#→C#。
