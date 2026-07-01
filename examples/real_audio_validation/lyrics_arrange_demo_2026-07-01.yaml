@@ -15,7 +15,9 @@
 # 主要指標の読み:
 #   - dynamic_range_db: EDM は歌詞あり<なしだが Rock では逆転かつ再生成ノイズ未満
 #     → 「歌詞→dynamic_range 低下」は法則でない(棄却)。
-#   - mid_ratio: 歌詞ありテイク4本すべてが各 instrumental より高 → ボーカル検出に堅い。
+#   - mid_ratio: 歌詞ありテイク4本すべてが各 instrumental より高(方向一致)。ただし同じ
+#     noise 基準では Rock のみ条件差(0.021)>スプレッド(0.016)でノイズ超え、EDM は
+#     条件差(0.004)<スプレッド(0.005)で directional のみ(instrumental alt 未取得)。
 #   - bpm: EDM=129 に精密ロック(誤アトラクタ) / Rock=108±5 で揺れ(正確だが不精密)。
 #   - key/sharp4_family_frac: ♯4(E major / C# minor)ファミリーは6/7で保存(転調なし)、
 #     rock_inst のみ 0.61 で逸脱。トニック重心(top_chord)はテイク毎に散る。
