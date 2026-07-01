@@ -146,6 +146,8 @@ tight 下限**とする（`src/svp_rpe/control/grip.py` の `MATCH_TIGHT_MIN` /
 
 **DD-C 対角のみ** — PoC は「ツマミ i → 観測 i」の grip だけ測る。直交性
 （ツマミ i が観測 j を動かさないか、N×N クロス行列）は K3（follow-up）。
+→ **K3-1 で解消**（2026-07-01、§5.3: DCI/MIG の効果量再定式化 +
+決定論的演奏者リファレンス実測。Suno 実測は K3-2）。
 
 **DD-D センサーのあるツマミに限定** — 観測チャネルを持つツマミのみ対象。
 `semantic.core`（"introspective night drive" 等）のように対応する RPE 観測量が
@@ -288,10 +290,91 @@ grip 分類が転移するかを確認する。
 K3。製品転移の「効果量の絶対水準」までは主張せず、**分類（tight/loose/dead）の転移**を確認する
 段階。
 
-### K3（follow-up）: 直交性行列
+### K3: 直交性行列 — DCI/MIG の効果量再定式化
 
-ツマミ i が観測 j を動かさないか（レイヤー独立性）を N×N で測る。
-PoC の対角 grip が立証されてから着手。
+**Status**: K3-1 DONE（2026-07-01、決定論的演奏者リファレンス — 結果は §5.3）。
+Suno 実測での行列取得は K3-2（follow-up、生成バッチ人手律速）。
+
+ツマミ i が観測 j を動かさないか（レイヤー独立性）を N×N で測る。K0–K2 が立証した
+対角 grip（ツマミ i → センサー i）を非対角へ一般化し、「楽譜が操作盤として成立して
+いるか」を disentanglement 指標で定式化する
+（[`ai_performer_score_roadmap.md`](ai_performer_score_roadmap.md) PR3 前半）。
+
+#### 統計の定義 — 1 セル = §3 の効果量そのまま
+
+行列セル `M[i,j]` は **ツマミ i の A/B コントラストがセンサー j に立てる符号付き
+効果量**（§3 と同一の Cohen's d、ゼロ分散センチネル規則含む）。対角だけ特別な統計を
+使わず全セルを d で統一する。この選択には筋の良い性質がある:
+
+- **ランダムドリフトは干渉に立たない**。K2 で観測された「bpm 群での key ドリフト
+  （C/D major 混在）」のような群内の揺れは pooled SD（分母）に吸収され、
+  low/high 群間で**系統的に**動くものだけが非対角に立つ。干渉＝系統的横効果、
+  ノイズ＝群内分散、が統計の形で分離される。
+- **カテゴリセンサーの連続化**: key は「**ベースライン key への per-sample 一致
+  スコア**」（`key_match_baseline`、mir_eval weighted score ∈[0,1]）を連続センサーに
+  する。key ノブの low 水準をベースライン key に一致させると、対角セルは
+  「key を離すと一致スコアが下がる」の d（`expected_sign = −1`）になる。
+  K1 の categorical 一致率（要求ターゲットへの accuracy）は対角の informativeness
+  指標として温存し、K3 行列はこれを**置き換えない**（統計が違う 2 つの読みとして併記）。
+
+対角セルは従来どおり tight/loose/dead（`classify_grip`）、非対角セルは符号不問の
+干渉 3 分類とする（閾値は §8 の grip 閾値を流用）:
+
+| \|d\| | 非対角の分類 | 意味 |
+|---|---|---|
+| < 0.2 | **clean** | 干渉なし（dead 閾値未満＝ノイズフロア） |
+| 0.2–0.8 | **weak** | 弱い横効果 |
+| ≥ 0.8 | **strong** | 強い干渉。ツマミ i はセンサー j を系統的に汚す |
+
+#### DCI の効果量再定義
+
+DCI（Eastwood & Williams 2018）は regressor の feature importance 行列上に
+disentanglement / completeness / informativeness を定義する。K3 は importance を
+**効果量絶対値**で置き換える:
+
+```text
+importance R[i,j] = clip(floor(|M[i,j]|), cap)
+  floor: |d| < 0.2 → 0（dead 閾値をノイズフロアとして流用。小標本の d の揺れが
+         エントロピーを偽って持ち上げるのを防ぐ）
+  cap:   |d| > 10 → 10（ゼロ分散センチネル ±999 と巨大 d が正規化を支配しないため。
+         「10 pooled SD を超えたら決定的」と読む）
+
+disentanglement D_i = 1 − H_norm(R[i,·])   # 行: ツマミ i は単一センサーだけを動かすか
+completeness    C_j = 1 − H_norm(R[·,j])   # 列: センサー j は単一ツマミにのみ支配されるか
+overall         = 質量重み付き平均（ρ_i = ΣR[i,·] / ΣΣR、DCI 論文の重みに対応）
+informativeness = 対角の tight/loose/dead（既存 grip 分類の離散化として位置づけ）
+```
+
+行和 0 のツマミは **matrix-dead**（D_i = None、集計から除外）。配線が既知の決定論的
+演奏者では、synth が読まないツマミ（`active_rate_target` / `valley_depth_target`）の
+行が全ゼロになること自体が**ハーネスの検証**になる（K1 の「繋がっていない
+コックピット検出」の行列版）。
+
+**MIG は「効果量ギャップ」として実装する**（正直な命名 — 相互情報量そのものではない）:
+
+```text
+effect_size_gap EG_j = (top1_j − top2_j) / top1_j ∈ [0,1]
+```
+
+センサー j を動かす最強ツマミが 2 位をどれだけ独走しているか。1.0 = 単独支配、
+0.0 = 2 ツマミが同率で動かす（干渉の最悪形）。
+
+#### 設計上の注意 — 非対角 ≠ 常に悪
+
+bpm を上げれば onset が密になる（bpm → onset_density）ような**構造的結合**は音楽の
+物理であって操作盤の欠陥ではない。同一潜在因子を別の角度から読むセンサー
+（onset_density は bpm のエイリアス）を DCI の正方コアに入れると disentanglement が
+偽って下がるため、**コア行列はツマミと 1:1 対応する正方 5×5 に限定**し、エイリアス
+候補は **extended 列**（行列と干渉分類には出すが DCI 集計から除外）として観測する。
+
+#### 5.3 K3-1 結果 — 決定論的演奏者の直交性行列（R=5、2026-07-01）
+
+再現: `python scripts/build_k3_fixture.py`（fixture 再生成、約 5 分）→
+`python scripts/measure_orthogonality.py --fixture examples/control/k3/synth_performer_matrix_fixture.json`。
+コミット済み成果物は `examples/control/k3/`（fixture / `expected_orthogonality.json` /
+`orthogonality_map.md`）。fixture → 行列 は決定論で snapshot test 固定。
+
+<!-- K3_RESULTS_PLACEHOLDER -->
 
 ---
 

@@ -252,6 +252,11 @@ dead 先落ち / backend descriptor 分離 / コンパイル決定論 snapshot�
 
 **目的**: ツマミ同士の独立性（操作盤としての質）と、生成器ごとの癖補正を入れる。
 
+> **進捗（2026-07-01）**: 前半の K3 直交性は **K3-1 として実装済み**（DCI/MIG の
+> 効果量再定式化 + 決定論的演奏者リファレンス実測、
+> [`controllability_poc.md`](controllability_poc.md) §5.3）。残り = Suno 実測行列
+> （K3-2、生成バッチ人手律速）とデバイスプロファイル。
+
 **スコープ（in）**:
 - **K3 直交性を DCI / MIG で定式化**。grip ハーネス（`src/svp_rpe/control/`）を N×N の
   importance matrix へ拡張（ツマミ i が観測 j をどれだけ動かすか）。対角 = grip（既存）、
