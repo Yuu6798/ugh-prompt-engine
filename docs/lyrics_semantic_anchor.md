@@ -153,8 +153,12 @@ measured 値の全量は [`examples/real_audio_validation/lyrics_arrange_demo_20
 
 前節の「歌詞あり版は dynamic_range が小さい」を n=3 で検証し、**棄却**した。
 
-- **EDM では効果が生きる**：歌詞あり {7.43, 7.55} は歌詞なし 8.23 より明確に低く、
-  効果(0.74) > 同一条件の揺れ(0.12)。
+- **EDM では方向は残るが validation は保留**：歌詞あり {7.43, 7.55} は歌詞なし 8.23
+  より低く、条件差(0.74)は**歌詞側**スプレッド(0.12)を上回る。ただし **instrumental は
+  1 テイクのみで absent 側の再生成スプレッドは未測**＝absent 側ノイズを排除できていない
+  （mid_ratio に instrumental alt を要求したのと同じ非対称）。よって EDM の効果も
+  **directional 止まり・instrumental alt 取得まで保留**とし、「生きた EDM proxy」とは
+  断定しない。
 - **Rock では反転かつノイズ未満**：歌詞あり {6.70, **5.61**} と歌詞なし 5.75 で、
   2 本目の歌詞ありテイクが instrumental より低い。効果はテイク間の揺れ幅(1.09)に埋もれる。
 - したがって「歌詞→dynamic_range 低下」は **EDM 限定の交絡であり一般法則ではない**。
@@ -226,8 +230,9 @@ instrumental alt を含む n≥2×2 セルで昇格）と、未探索の意味�
 - **法則化保留**：歌詞→意味層アンカーは n=2 の主観で支持されるが、物理計器で
   定量化できていないため law とはしない。「ボーカル＝主音の錨」「ボーカル＝halving
   誘発」は n=1 の過剰一般化として**明示的に棄却**する。
-- **`dynamic_range`→歌詞 の棄却（n=3 で確定）**：EDM 限定で成立するが Rock で反転し、
-  かつ Rock では再生成ノイズ未満（2026-07-01 Session 2）。dynamic_range を歌詞アンカーの
+- **`dynamic_range`→歌詞 の棄却（n=3 で確定）**：EDM で方向は残るが Rock で反転し、
+  かつ Rock では再生成ノイズ未満（2026-07-01 Session 2）。EDM の方向も absent 側
+  instrumental alt 未取得で directional 止まり（結論 1）。dynamic_range を歌詞アンカーの
   物理代理指標にはできない。ボーカルの最有力検出子は **mid_ratio** だが、同じノイズ基準では
   **Rock でのみ noise 超え・EDM は directional のみ**（instrumental alt 未取得）＝
   「唯一の頑健センサー」とは断定せず、n≥2×2 セルでの昇格を要件とする（結論 2）。
