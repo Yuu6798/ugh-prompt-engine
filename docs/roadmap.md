@@ -203,7 +203,7 @@ flowchart TD
 | ID | 成果物 | 受け入れ条件 | Status |
 |---|---|---|---|
 | P3-01 | `src/svp_rpe/batch/report.py` 実装 | CSV + Markdown 出力、ランキング/統計込み | ⏳実装済み — 実体は `src/svp_rpe/batch/runner.py` の `render_summary_csv`/`write_batch_outputs`、`--output-dir` 経由で CSV/MD 出力。`batch/report.py` は空スタブ |
-| P3-02 | `svprpe batch --report md` | CLI オプション追加 | ⏳実装済み — 出力自体は `--output-dir` 経由で可能だが `--report md` オプションは未実装 |
+| P3-02 | `svprpe batch --report md` | CLI オプション追加 | ⏳部分 — CSV/MD 出力の機能自体は `--output-dir` 経由で提供済み（完了基準「batch 結果が CSV/MD で共有できる」はこれで充足）。成果物として書かれた `--report md` オプションは未実装 — フラグを追加するか `--output-dir` を正式成果物として本行を再定義するかは未決 |
 | P3-03 | `CHANGELOG.md` | v0.1 / v0.2 / v0.3 の差分明記 | ❌未着手（`CHANGELOG.md` なし） |
 
 **推定工数**: 0.5–1 日
