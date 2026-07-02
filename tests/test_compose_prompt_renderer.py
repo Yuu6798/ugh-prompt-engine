@@ -324,3 +324,85 @@ def test_compile_is_deterministic_with_control_profile() -> None:
     second = adapter.render(score, max_chars=200)
 
     assert first == second
+
+
+# --- SEM-1: lyrics_presence semantic control channel -------------------------
+
+
+def _score_with_lyrics_presence(value: str) -> CompositionScore:
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["semantic"]["lyrics_presence"] = value
+    return CompositionScore.model_validate(data)
+
+
+def test_lyrics_presence_absent_renders_instrumental_segment_and_tag() -> None:
+    score = _score_with_lyrics_presence("absent")
+
+    prompt = ExternalPromptAdapter().render(score, max_chars=1000)
+
+    assert "Instrumental, no vocals." in prompt.text
+    assert prompt.tags == ["deep_house", "ambient", "dark", "wide_stereo", "instrumental"]
+
+
+def test_lyrics_presence_present_renders_vocals_segment_without_instrumental_tag() -> None:
+    score = _score_with_lyrics_presence("present")
+
+    prompt = ExternalPromptAdapter().render(score, max_chars=1000)
+
+    assert "With vocals." in prompt.text
+    assert "instrumental" not in prompt.tags
+
+
+def test_lyrics_presence_segment_is_inserted_after_valley_depth_in_source_order() -> None:
+    """`_segments_for` の挿入順（valley_depth_target の直後・semantic.avoid の直前）を
+    tie-break（同 tier・同 priority_index 時の `order`）で確認する。tier/priority が
+    異なる場合は rank が優先するため、最終描画順は tier テストで別途検証する。"""
+    from svp_rpe.compose.prompt_renderer import _segments_for
+
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["semantic"]["lyrics_presence"] = "absent"
+    data.pop("control_profile", None)
+    score = CompositionScore.model_validate(data)
+
+    tokens = [segment.token for segment in _segments_for(score)]
+    valley_index = tokens.index("valley_depth_target")
+    avoid_index = tokens.index("semantic.avoid")
+    lyrics_index = tokens.index("lyrics_presence")
+
+    assert valley_index < lyrics_index < avoid_index
+
+
+def test_lyrics_presence_unset_renders_no_segment_and_no_tag() -> None:
+    score = load_composition_score(SAMPLE_PATH)
+    assert score.semantic.lyrics_presence is None
+
+    prompt = ExternalPromptAdapter().render(score, max_chars=1000)
+
+    assert "vocals" not in prompt.text.lower()
+    assert "instrumental" not in prompt.tags
+
+
+def test_lyrics_presence_loose_profile_drops_before_advisory_fallback() -> None:
+    """loose 宣言の lyrics_presence は真っ先の削減候補（advisory tier）へ回る。"""
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["semantic"]["lyrics_presence"] = "absent"
+    data["control_profile"] = {"suno": {"lyrics_presence": {"grip_class": "loose"}}}
+    score = CompositionScore.model_validate(data)
+
+    prompt = ExternalPromptAdapter().render(score, max_chars=200)
+
+    assert prompt.dropped_elements[0] == "lyrics_presence"
+    assert "Instrumental, no vocals." not in prompt.text
+
+
+def test_lyrics_presence_tight_profile_survives_aggressive_truncation() -> None:
+    """tight 宣言の lyrics_presence は max_chars を強く絞っても最後まで残る。"""
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["semantic"]["lyrics_presence"] = "absent"
+    data["control_profile"] = {"suno": {"lyrics_presence": {"grip_class": "tight"}}}
+    score = CompositionScore.model_validate(data)
+
+    prompt = ExternalPromptAdapter().render(score, max_chars=30)
+
+    assert "Instrumental, no vocals." in prompt.text
+    assert "lyrics_presence" not in prompt.dropped_elements

@@ -133,3 +133,36 @@ performer 由来でも実 Suno corpus take 由来でもよい（path 非依存�
 
 詳細・留保（BPM prior アトラクタ／brightness の非対称）は
 [`controllability_poc.md`](controllability_poc.md) §5.2 を参照。
+
+## SEM-1: 意味層の制御チャネル（`lyrics_presence`）
+
+`control_profile` が自己記述するノブは PhysicalLayer フィールドに限らない。楽譜が
+「歌詞の有無」という**意味層**の制御チャネルを持てるよう、`SemanticLayer.lyrics_presence`
+（`"present"` / `"absent"` / 未指定）を追加した。
+
+- **DD-1（配置）**: `PhysicalLayer` ではなく `SemanticLayer` に置く。`fixity` は
+  PhysicalLayer の全網羅制約を持つため（本ドキュメント上表参照）、意味層フィールドを
+  fixity 対象に混ぜると網羅制約が壊れる。`lyrics_presence` は fixity キーとして
+  受理されない（従来どおり `ValueError`）。
+- **DD-2（許可キー）**: `SEMANTIC_CONTROL_FIELDS = frozenset({"lyrics_presence"})`
+  を `compose/models.py` に定義し、`control_profile` の許可キー集合を
+  `set(PhysicalLayer.model_fields) | SEMANTIC_CONTROL_FIELDS` へ拡張。未知キー
+  fail-fast と疎許容（網羅必須なし）は不変。
+- **DD-3（初期データ）**: `examples/composition/midnight_signal/composition_score.yaml`
+  の `control_profile.suno.lyrics_presence` は `grip_class: loose`（`sensor: mid_ratio`,
+  `grip` は未算出のため省略）。出所は
+  [`lyrics_semantic_anchor.md`](lyrics_semantic_anchor.md) n=3 追試と
+  `examples/real_audio_validation/lyrics_arrange_demo_2026-07-01.yaml`。**tight は
+  主張しない**（下記昇格ゲート未達）。
+- **コンパイル**: `ExternalPromptAdapter` は `lyrics_presence` 設定時のみセグメントを
+  描画する（`present`→"With vocals."、`absent`→"Instrumental, no vocals."）。`absent`
+  のとき `GeneratedPrompt.tags` 末尾へ `"instrumental"` を追加する。`_rank_key_factory`
+  は物理フィールドと同じ grip_class 駆動の 3 ティア（tight/fallback/loose・dead）で
+  `lyrics_presence` トークンを扱う。
+- **DD-4（tight 昇格ゲート・doc 記載のみ、未実装）**: 以下の両方を満たすまで
+  `lyrics_presence` を tight に昇格しない。
+  1. 各ジャンルで instrumental の alt（別取り）込み **n≥2×2 セル**で効果が
+     再生成ノイズを上回ること。
+  2. K3 直交性（[`controllability_poc.md`](controllability_poc.md) §5.3）の語彙で
+     ジャンル干渉と分離できること（`mid_ratio` はジャンルでも動く: Rock 0.208–0.245 /
+     EDM 0.217–0.226 — [`lyrics_semantic_anchor.md`](lyrics_semantic_anchor.md) 結論2）。

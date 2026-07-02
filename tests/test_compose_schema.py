@@ -242,12 +242,23 @@ def test_sample_score_carries_k2_suno_control_profile() -> None:
 
     assert score.control_profile is not None
     suno = score.control_profile["suno"]
-    assert set(suno) == {"bpm", "brightness"}
+    assert set(suno) == {"bpm", "brightness", "lyrics_presence"}
     assert suno["bpm"].grip_class == "tight"
     assert suno["bpm"].grip == pytest.approx(1.61)
     assert suno["brightness"].sensor == "spectral_centroid"
     # evidence 参照が実在ファイルを指す（解決可能）。
     assert Path(suno["bpm"].evidence).exists()
+
+
+def test_sample_score_carries_sem1_lyrics_presence_loose_profile() -> None:
+    """SEM-1: 意味層ノブ lyrics_presence は grip 証拠が loose 段階（tight を主張しない）。"""
+    score = load_composition_score(SAMPLE_PATH)
+
+    lyrics_grip = score.control_profile["suno"]["lyrics_presence"]
+    assert lyrics_grip.grip_class == "loose"
+    assert lyrics_grip.sensor == "mid_ratio"
+    assert lyrics_grip.grip is None
+    assert lyrics_grip.evidence is not None
 
 
 def test_control_profile_roundtrips_invariant() -> None:
@@ -324,3 +335,84 @@ def test_control_profile_allows_multiple_generators() -> None:
 
     assert set(score.control_profile) == {"suno", "musicgen"}
     assert score.control_profile["musicgen"]["brightness"].grip_class == "loose"
+
+
+# --- lyrics_presence semantic control channel (SEM-1) ------------------------
+
+
+def test_lyrics_presence_defaults_to_none_and_existing_yaml_still_validates() -> None:
+    """既存 YAML（lyrics_presence 未指定）がそのまま validate を通る。"""
+    score = load_composition_score(SAMPLE_PATH)
+
+    assert score.semantic.lyrics_presence is None
+
+
+@pytest.mark.parametrize("value", ["present", "absent"])
+def test_lyrics_presence_accepts_present_and_absent(value: str) -> None:
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["semantic"]["lyrics_presence"] = value
+
+    score = CompositionScore.model_validate(data)
+
+    assert score.semantic.lyrics_presence == value
+
+
+def test_lyrics_presence_rejects_arbitrary_value() -> None:
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["semantic"]["lyrics_presence"] = "unknown"
+
+    with pytest.raises(ValidationError):
+        CompositionScore.model_validate(data)
+
+
+def test_lyrics_presence_none_is_not_serialized() -> None:
+    score = load_composition_score(SAMPLE_PATH)
+
+    assert score.semantic.lyrics_presence is None
+    assert "lyrics_presence" not in score.model_dump(mode="json")["semantic"]
+
+
+def test_lyrics_presence_set_is_serialized() -> None:
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["semantic"]["lyrics_presence"] = "absent"
+
+    score = CompositionScore.model_validate(data)
+
+    assert score.model_dump(mode="json")["semantic"]["lyrics_presence"] == "absent"
+
+
+def test_control_profile_accepts_lyrics_presence_semantic_key() -> None:
+    """control_profile が意味層制御フィールド lyrics_presence を許可する。"""
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["control_profile"] = {"suno": {"lyrics_presence": {"grip_class": "loose"}}}
+
+    score = CompositionScore.model_validate(data)
+
+    assert score.control_profile["suno"]["lyrics_presence"].grip_class == "loose"
+
+
+def test_control_profile_rejects_non_physical_non_semantic_key() -> None:
+    """physical でも SEMANTIC_CONTROL_FIELDS でもないキー（例 lyrics_theme）は従来どおり拒否。"""
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["control_profile"] = {"suno": {"lyrics_theme": {"grip_class": "loose"}}}
+
+    with pytest.raises(ValidationError):
+        CompositionScore.model_validate(data)
+
+
+def test_fixity_rejects_lyrics_presence_key() -> None:
+    """fixity スキーマは不変: 意味層フィールドを fixity に入れると従来どおり拒否される。"""
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["fixity"] = {
+        "bpm": "locked",
+        "key": "locked",
+        "time_signature": "locked",
+        "active_rate_target": "locked",
+        "valley_depth_target": "locked",
+        "brightness": "locked",
+        "stereo_width": "locked",
+        "lyrics_presence": "locked",
+    }
+
+    with pytest.raises(ValidationError):
+        CompositionScore.model_validate(data)

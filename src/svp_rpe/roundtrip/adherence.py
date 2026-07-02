@@ -18,7 +18,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from svp_rpe.compose.models import CompositionScore
+from svp_rpe.compose.models import CompositionScore, PhysicalLayer
 from svp_rpe.compose.prompt_renderer import (
     ExternalPromptAdapter,
     resolve_backend_descriptor,
@@ -52,6 +52,9 @@ class ScoreAdherenceReport(BaseModel):
     backend: str  # 解決された control_profile キー（"suno" 等）
     source_id: str
     tight_fields: list[TightFieldAdherence] = Field(default_factory=list)
+    # tight 宣言された意味層制御フィールド（例 lyrics_presence）。物理 fixity/roundtrip の
+    # 対象外のため tight_fields には計上しないが、黙って落とさず件数を残す（計器の原則）。
+    skipped_semantic_fields: list[str] = Field(default_factory=list)
     compiled_kept_count: int
     preserved_count: int
     total_tight: int
@@ -72,8 +75,18 @@ def score_adherence(
 
     descriptor = resolve_backend_descriptor(score.rendering.target_backend)
     profile = (score.control_profile or {}).get(descriptor.profile_key) or {}
+    physical_fields = set(PhysicalLayer.model_fields)
     tight_field_names = sorted(
-        field for field, grip in profile.items() if grip.grip_class == "tight"
+        field
+        for field, grip in profile.items()
+        if grip.grip_class == "tight" and field in physical_fields
+    )
+    # 意味層 tight 宣言（例 lyrics_presence）は物理 fixity/roundtrip の計器対象外。
+    # フィールド単位保証の埒外だが黙って落とさず件数だけ計上する。
+    skipped_semantic_fields = sorted(
+        field
+        for field, grip in profile.items()
+        if grip.grip_class == "tight" and field not in physical_fields
     )
 
     prompt = ExternalPromptAdapter().render(score, max_chars=prompt_max_chars)
@@ -103,6 +116,7 @@ def score_adherence(
         backend=descriptor.profile_key,
         source_id=report.source_id,
         tight_fields=rows,
+        skipped_semantic_fields=skipped_semantic_fields,
         compiled_kept_count=sum(row.compiled_kept for row in rows),
         preserved_count=sum(row.preserved for row in rows),
         total_tight=len(rows),
@@ -131,10 +145,20 @@ def render_score_adherence_text(report: ScoreAdherenceReport) -> str:
             f"compiled-kept: {report.compiled_kept_count}/{report.total_tight} | "
             f"preserved: {report.preserved_count}/{report.total_tight}"
         ),
-        "",
-        "| field | grip | sensor | compiled_kept | roundtrip | preserved | note |",
-        "|---|---:|---|---|---|---|---|",
     ]
+    if report.skipped_semantic_fields:
+        # 意味層 tight 宣言は物理 fixity/roundtrip の計器対象外。黙って落とさず明示する。
+        lines.append(
+            "skipped semantic tight fields (not physical fixity/roundtrip-eligible): "
+            + ", ".join(report.skipped_semantic_fields)
+        )
+    lines.extend(
+        [
+            "",
+            "| field | grip | sensor | compiled_kept | roundtrip | preserved | note |",
+            "|---|---:|---|---|---|---|---|",
+        ]
+    )
     for row in report.tight_fields:
         lines.append(
             "| "

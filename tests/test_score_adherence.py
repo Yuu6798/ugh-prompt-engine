@@ -152,6 +152,62 @@ def test_render_score_adherence_text_has_table() -> None:
     assert "| brightness |" in text
 
 
+def test_semantic_tight_field_is_skipped_not_crashed() -> None:
+    """tight 宣言された意味層フィールド（lyrics_presence）は tight_fields から除外され、
+    skipped_semantic_fields に計上される（クラッシュしない・黙って落とさない）。"""
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["semantic"]["lyrics_presence"] = "absent"
+    data["control_profile"] = {
+        "suno": {
+            "bpm": {"grip_class": "tight"},
+            "lyrics_presence": {"grip_class": "tight"},
+        }
+    }
+    score = CompositionScore.model_validate(data)
+    report = _report(bpm="preserved")
+
+    adherence = score_adherence(score, report)
+
+    assert [row.field for row in adherence.tight_fields] == ["bpm"]
+    assert adherence.skipped_semantic_fields == ["lyrics_presence"]
+    assert adherence.total_tight == 1
+
+
+def test_no_skipped_semantic_fields_when_none_declared_tight() -> None:
+    score = load_composition_score(SAMPLE_PATH)  # lyrics_presence is loose, not tight
+
+    adherence = score_adherence(score, _report(bpm="preserved", brightness="preserved"))
+
+    assert adherence.skipped_semantic_fields == []
+
+
+def test_render_score_adherence_text_shows_skipped_semantic_fields() -> None:
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["semantic"]["lyrics_presence"] = "absent"
+    data["control_profile"] = {
+        "suno": {
+            "bpm": {"grip_class": "tight"},
+            "lyrics_presence": {"grip_class": "tight"},
+        }
+    }
+    score = CompositionScore.model_validate(data)
+    report = _report(bpm="preserved")
+
+    text = render_score_adherence_text(score_adherence(score, report))
+
+    assert "lyrics_presence" in text
+    assert "skipped semantic tight fields" in text
+
+
+def test_render_score_adherence_text_omits_skipped_line_when_empty() -> None:
+    score = load_composition_score(SAMPLE_PATH)
+    report = _report(bpm="preserved", brightness="preserved")
+
+    text = render_score_adherence_text(score_adherence(score, report))
+
+    assert "skipped semantic tight fields" not in text
+
+
 @pytest.mark.slow
 def test_run_score_adherence_on_example_is_deterministic() -> None:
     score = load_composition_score(SAMPLE_PATH)

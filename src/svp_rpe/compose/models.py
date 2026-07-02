@@ -18,6 +18,10 @@ from svp_rpe.sentinels import TODO_SENTINEL_PREFIX, is_todo_sentinel
 FixityState = Literal["locked", "unlocked"]
 EVENT_FIXITY_FIELDS = frozenset({"chord_progression"})
 
+# SEM-1: control_profile が許可する意味層の制御チャネル。PhysicalLayer フィールドと違い
+# fixity 対象外（意味層は fixity の全網羅制約に含めない — docs/control_profile.md 参照）。
+SEMANTIC_CONTROL_FIELDS = frozenset({"lyrics_presence"})
+
 # grip_class: 楽譜フィールドが当該生成器でどれだけ「効く」かの実証ラベル。
 # tight=保証チャネル / loose=助言（弱い grip）/ dead=無効（センサー盲 or ツマミ死）。
 GripClass = Literal["tight", "loose", "dead"]
@@ -53,6 +57,16 @@ class SemanticLayer(CompositionModel):
     grv: GrvSpec
     delta_e: DeltaESpec
     avoid: List[str]
+    # SEM-1: 歌詞の有無を意味層の制御チャネルとして自己記述する（control_profile 許可キー）。
+    # grip 証拠は現状 loose（docs/lyrics_semantic_anchor.md n=3 追試）— tight は主張しない。
+    lyrics_presence: Literal["present", "absent"] | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_without_empty_optionals(self, handler: Any) -> dict[str, Any]:
+        data = handler(self)
+        if self.lyrics_presence is None:
+            data.pop("lyrics_presence", None)
+        return data
 
 
 class PhysicalLayer(CompositionModel):
@@ -153,14 +167,14 @@ class CompositionScore(CompositionModel):
     ) -> dict[str, GeneratorProfile] | None:
         if value is None:
             return None
-        physical_fields = set(PhysicalLayer.model_fields)
+        allowed_fields = set(PhysicalLayer.model_fields) | SEMANTIC_CONTROL_FIELDS
         for generator, profile in value.items():
-            unknown = sorted(set(profile) - physical_fields)
+            unknown = sorted(set(profile) - allowed_fields)
             if unknown:
                 raise ValueError(
                     "control_profile field keys must be CompositionScore.physical "
-                    f"fields; unknown keys for generator '{generator}': "
-                    f"{', '.join(unknown)}"
+                    f"fields or semantic control fields; unknown keys for generator "
+                    f"'{generator}': {', '.join(unknown)}"
                 )
         # fixity と異なり「全 physical フィールド網羅必須」は引き継がない＝疎を許容する
         # （K2 由来の Suno profile は bpm/brightness のみ）。

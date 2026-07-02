@@ -71,3 +71,10 @@ control_profile:
       grip: 0.86
       sensor: "spectral_centroid"
       evidence: "examples/control/k2/expected_grip.json"
+    # SEM-1: 歌詞の有無（意味層ノブ）。docs/lyrics_semantic_anchor.md n=3 追試で
+    # mid_ratio が最有力候補だが Rock でのみ再生成ノイズ超え・EDM は directional のみ
+    # ＝tight を主張できる証拠水準ではない。昇格ゲートは docs/control_profile.md 参照。
+    lyrics_presence:
+      grip_class: "loose"
+      sensor: "mid_ratio"
+      evidence: "docs/lyrics_semantic_anchor.md n=3追試 / examples/real_audio_validation/lyrics_arrange_demo_2026-07-01.yaml"
