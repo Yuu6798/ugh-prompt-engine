@@ -95,7 +95,11 @@ provenance hints from a learned model live in `LearnedAudioLabel.notes`.
     追加のライセンス文は見当たらない（verified 2026-07-02, PR2b-2）。
 - Constraints:
   - torch と ~2GB の重みは optional extra `semantic-embed` に限定する。
-    デフォルトインストールは変えない。
+    デフォルトインストールは変えない。laion-clap 1.1.7 は torch /
+    torchvision を install_requires に宣言しない（上流メタデータ不備、
+    PR2b-2 実採取で手動インストールが必要だったことから確認）ため、
+    extra 側で明示的に同梱する — `pip install -e ".[semantic-embed]"`
+    だけで採取環境が立つことが runbook の契約。
   - cosine 適合度は A/B コントラスト（`contrast_fit`）で読む — grip と同じ
     哲学で verdict を出さない。
   - fixture 駆動（`scripts/collect_clap_fixture.py`）で決定論区間を担保
