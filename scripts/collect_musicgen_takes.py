@@ -134,6 +134,17 @@ def sample_seed(knob_index: int, level_index: int, repeat: int) -> int:
     return 1000 + knob_index * 100 + level_index * 50 + repeat
 
 
+def generator_label(model_id: str) -> str:
+    """model_id から generator ラベルを導出する（例: facebook/musicgen-medium → musicgen-medium）。
+
+    `perform` の takes manifest はこのラベルを `generator` に記録し、
+    `svprpe roundtrip-rep` がそのままレポートへ転記する。model_id と乖離した
+    固定ラベルは機種間比較（device profile / grip の帰属）を汚すため、
+    必ず要求されたモデルから導出する。
+    """
+    return model_id.rsplit("/", 1)[-1]
+
+
 def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -319,7 +330,7 @@ def perform_takes(
     return {
         "schema_version": SCHEMA_VERSION,
         "fixture_id": slug,
-        "generator": "musicgen-small",
+        "generator": generator_label(model_id),
         "score_path": str(score_path),
         "prompt": prompt_text,
         "model_id": model_id,

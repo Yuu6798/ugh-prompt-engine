@@ -30,6 +30,14 @@ from svp_rpe.roundtrip.diagnose import GripRecord, diagnose_roundtrip
 from svp_rpe.rpe.extractor import extract_rpe_from_file
 from svp_rpe.transcribe import draft_score
 
+#: R3 の rejection sampling が既定で数える「信頼できる送出ノブ」。
+#: roadmap_goal2.md R3 の完了基準（送出かつ計器が信頼できる物理ノブ =
+#: 最低 key / brightness）に従う。bpm は R2 closeout（2026-06-18）で
+#: R3 信頼ノブから明示除外されているため既定に含めない。計測
+#: （FieldRepetitionSummary）は全フィールドを報告し続ける — スコープは
+#: 選択の基準にのみ適用される。
+R3_SELECTION_FIELDS: tuple[str, ...] = ("key", "brightness")
+
 
 class TakeFieldObservation(BaseModel):
     """One field's roundtrip diagnosis for a single take."""
@@ -68,7 +76,13 @@ class FieldRepetitionSummary(BaseModel):
 
 
 class RepetitionRankingEntry(BaseModel):
-    """One take's rank within the rejection-sampling ranking (R3-3)."""
+    """One take's rank within the rejection-sampling ranking (R3-3).
+
+    ``preserved_count`` counts preserved fields **within the selection
+    scope** (``SelectionResult.selection_fields``), not across every
+    diagnosed field — untrusted or auxiliary sensors must not dominate the
+    rejection-sampling pick.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -79,15 +93,18 @@ class RepetitionRankingEntry(BaseModel):
 class SelectionResult(BaseModel):
     """Mechanical "closest take to the score" pick (R3-3).
 
-    ``basis`` names the mechanism; ``ranking`` is sorted descending by
-    ``preserved_count`` with ties broken by ascending ``take_id`` for
-    determinism. ``selected_take_id`` is the first ranking entry. This is a
-    take *identification* mechanism, not a quality judgment.
+    ``basis`` names the mechanism; ``selection_fields`` names the exact
+    field scope the count ran over (default: ``R3_SELECTION_FIELDS``);
+    ``ranking`` is sorted descending by ``preserved_count`` with ties broken
+    by ascending ``take_id`` for determinism. ``selected_take_id`` is the
+    first ranking entry. This is a take *identification* mechanism, not a
+    quality judgment.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     basis: str = "preserved_field_count"
+    selection_fields: list[str] = Field(default_factory=list)
     ranking: list[RepetitionRankingEntry] = Field(default_factory=list)
     selected_take_id: str
 
@@ -113,6 +130,7 @@ def run_repetition_batch(
     generator: str,
     score_ref: str,
     grip_map: Mapping[str, GripRecord] | None = None,
+    selection_fields: Sequence[str] | None = None,
 ) -> RepetitionReport:
     """Measure roundtrip preservation across a batch of stochastic takes.
 
@@ -126,8 +144,15 @@ def run_repetition_batch(
     ``calibration_disagreement`` instead. Pass an explicit ``grip_map`` once
     a generator-specific grip fixture exists (e.g. a future MusicGen grip
     fixture) — the parameter is kept for that purpose.
+
+    ``selection_fields`` scopes the rejection-sampling count (R3-3). The
+    default ``None`` resolves to ``R3_SELECTION_FIELDS`` (key / brightness —
+    the R3 trusted send-knobs; bpm is excluded per the R2 closeout). Field
+    summaries (R3-2) always report every diagnosed field regardless of this
+    scope.
     """
 
+    effective_selection = tuple(selection_fields) if selection_fields else R3_SELECTION_FIELDS
     take_results = [_run_take(take_id, audio_path, score, grip_map) for take_id, audio_path in takes]
     return RepetitionReport(
         score_ref=score_ref,
@@ -135,7 +160,7 @@ def run_repetition_batch(
         n_takes=len(take_results),
         fields=_summarize_fields(take_results),
         takes=take_results,
-        selection=_select(take_results),
+        selection=_select(take_results, effective_selection),
     )
 
 
@@ -181,6 +206,7 @@ def render_repetition_text(report: RepetitionReport) -> str:
         "",
         f"generator: {report.generator}  n_takes: {report.n_takes}  "
         f"selection_basis: {report.selection.basis}  "
+        f"selection_fields: {', '.join(report.selection.selection_fields)}  "
         f"selected_take_id: {report.selection.selected_take_id}",
         "",
         "## Field summary",
@@ -290,13 +316,28 @@ def _summarize_fields(takes: list[RepetitionTakeResult]) -> list[FieldRepetition
     return summaries
 
 
-def _select(takes: list[RepetitionTakeResult]) -> SelectionResult:
+def _select(
+    takes: list[RepetitionTakeResult], selection_fields: Sequence[str]
+) -> SelectionResult:
+    scope = set(selection_fields)
     ranking = sorted(
-        (RepetitionRankingEntry(take_id=t.take_id, preserved_count=t.preserved_count) for t in takes),
+        (
+            RepetitionRankingEntry(
+                take_id=take.take_id,
+                preserved_count=sum(
+                    1 for item in take.fields if item.field in scope and item.preserved
+                ),
+            )
+            for take in takes
+        ),
         key=lambda entry: (-entry.preserved_count, entry.take_id),
     )
     selected_take_id = ranking[0].take_id if ranking else ""
-    return SelectionResult(ranking=ranking, selected_take_id=selected_take_id)
+    return SelectionResult(
+        selection_fields=list(selection_fields),
+        ranking=ranking,
+        selected_take_id=selected_take_id,
+    )
 
 
 def _round_value(value: Any) -> Any:

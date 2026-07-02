@@ -28,7 +28,7 @@ from svp_rpe.roundtrip import (
     render_repetition_text,
     run_repetition_batch,
 )
-from svp_rpe.roundtrip.repetition import _select, _summarize_fields
+from svp_rpe.roundtrip.repetition import R3_SELECTION_FIELDS, _select, _summarize_fields
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_SCORE = ROOT / "examples" / "roundtrip" / "synth_01_source.yaml"
@@ -100,18 +100,52 @@ def test_field_summary_aggregates_counts_and_preserved_rate():
 
 def test_selection_ranks_by_preserved_count_descending_with_take_id_tiebreak():
     takes = [
-        _take("b", {"bpm": "preserved", "key": "preserved"}),
-        _take("a", {"bpm": "preserved", "key": "preserved"}),
-        _take("c", {"bpm": "sensor_blind", "key": "sensor_blind"}),
+        _take("b", {"brightness": "preserved", "key": "preserved"}),
+        _take("a", {"brightness": "preserved", "key": "preserved"}),
+        _take("c", {"brightness": "sensor_blind", "key": "sensor_blind"}),
     ]
 
-    selection = _select(takes)
+    selection = _select(takes, R3_SELECTION_FIELDS)
 
     assert selection.basis == "preserved_field_count"
+    assert selection.selection_fields == ["key", "brightness"]
     assert [entry.take_id for entry in selection.ranking] == ["a", "b", "c"]
     assert [entry.preserved_count for entry in selection.ranking] == [2, 2, 0]
     # tie between "a" and "b" (both preserved_count=2) breaks on take_id ascending
     assert selection.selected_take_id == "a"
+
+
+def test_selection_scope_excludes_untrusted_fields_from_the_count():
+    # Codex #135 P2: bpm/time_signature/active_rate を大量に保存するテイクが、
+    # R3 の信頼ノブ（key/brightness）を保存するテイクより上位に来てはならない。
+    takes = [
+        _take(
+            "aux_heavy",
+            {
+                "bpm": "preserved",
+                "time_signature": "preserved",
+                "active_rate_target": "preserved",
+                "key": "calibration_disagreement",
+                "brightness": "calibration_disagreement",
+            },
+        ),
+        _take(
+            "trusted",
+            {
+                "bpm": "calibration_disagreement",
+                "time_signature": "calibration_disagreement",
+                "active_rate_target": "calibration_disagreement",
+                "key": "preserved",
+                "brightness": "preserved",
+            },
+        ),
+    ]
+
+    selection = _select(takes, R3_SELECTION_FIELDS)
+
+    assert selection.selected_take_id == "trusted"
+    counts = {entry.take_id: entry.preserved_count for entry in selection.ranking}
+    assert counts == {"trusted": 2, "aux_heavy": 0}
 
 
 def test_render_repetition_text_and_json_carry_no_outcome_keys():

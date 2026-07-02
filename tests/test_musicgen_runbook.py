@@ -24,6 +24,7 @@ from pydantic import ValidationError
 from scripts.collect_musicgen_takes import (
     GenerationPlan,
     extract_fixture,
+    generator_label,
     load_plan,
     load_takes_manifest,
     main,
@@ -33,6 +34,19 @@ from scripts.collect_musicgen_takes import (
 
 PLAN_PATH = Path("examples/control/k2_musicgen/plan.yaml")
 SCORE_PATH = Path("examples/roundtrip/synth_01_source.yaml")
+
+
+def test_generator_label_follows_requested_model_id() -> None:
+    """Codex #135 P2: manifest の generator ラベルは要求モデルから導出する。
+
+    medium/large の反復バッチが `musicgen-small` 名義でレポートされると
+    機種間比較（device profile / grip の帰属）が汚れる。
+    """
+    assert generator_label("facebook/musicgen-small") == "musicgen-small"
+    assert generator_label("facebook/musicgen-medium") == "musicgen-medium"
+    assert generator_label("facebook/musicgen-large") == "musicgen-large"
+    # 名前空間なしの model_id はそのままラベルになる
+    assert generator_label("musicgen-stereo-small") == "musicgen-stereo-small"
 
 
 def test_module_imports_without_torch() -> None:
