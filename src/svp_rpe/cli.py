@@ -139,6 +139,11 @@ def compose(
         if output_format == "text"
         else json.dumps(prompt.model_dump(mode="json"), ensure_ascii=False, indent=2)
     )
+    # PR3 後半: デバイスプロファイルの advisory（プロンプト本文・tags は変えない・警告のみ）。
+    # JSON 出力は model_dump に advisories が自然に乗るため、text 出力側だけ節を追記する。
+    if output_format == "text" and prompt.advisories:
+        advisories_block = "\n".join(f"- {advisory}" for advisory in prompt.advisories)
+        content = f"{content}\n\nAdvisories:\n{advisories_block}"
 
     if output:
         Path(output).parent.mkdir(parents=True, exist_ok=True)

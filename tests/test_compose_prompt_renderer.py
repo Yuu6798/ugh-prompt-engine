@@ -396,10 +396,22 @@ def test_lyrics_presence_loose_profile_drops_before_advisory_fallback() -> None:
 
 
 def test_lyrics_presence_tight_profile_survives_aggressive_truncation() -> None:
-    """tight 宣言の lyrics_presence は max_chars を強く絞っても最後まで残る。"""
+    """tight 宣言の lyrics_presence は max_chars を強く絞っても最後まで残る。
+
+    PR3 後半（device_profile）以降 suno backend は bpm/brightness の device
+    control_defaults（tight）を持つため、lyrics_presence を単独の tight フィールドとして
+    分離検証するには両方を明示的に score 側で dead 宣言する（score が device defaults に
+    常に勝つことも同時に確認する）。
+    """
     data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
     data["semantic"]["lyrics_presence"] = "absent"
-    data["control_profile"] = {"suno": {"lyrics_presence": {"grip_class": "tight"}}}
+    data["control_profile"] = {
+        "suno": {
+            "bpm": {"grip_class": "dead"},
+            "brightness": {"grip_class": "dead"},
+            "lyrics_presence": {"grip_class": "tight"},
+        }
+    }
     score = CompositionScore.model_validate(data)
 
     prompt = ExternalPromptAdapter().render(score, max_chars=30)
@@ -426,10 +438,17 @@ def test_lyrics_presence_dotted_priority_token_survives_truncation_unprofiled() 
     """Codex P2 fix: `semantic.lyrics_presence` in `rendering.priority` was a silent
     no-op (only physical dotted tokens were aliased). It must now normalize via
     `_PRIORITY_ALIAS` so listing it early actually protects the segment under
-    truncation, on the unprofiled path (no control_profile entry for the backend)."""
+    truncation, on the unprofiled path (no control_profile entry for the backend).
+
+    PR3 後半（device_profile）以降 `suno`（`external` の解決先）は device
+    control_defaults を持つため、"unprofiled" を再現するには device profile が
+    存在しない backend（`musicgen`）へ切り替える（`bpm`/`brightness` を device 既定で
+    勝手に tight 昇格させず、`rendering.priority` フォールバックだけを見る）。
+    """
     data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
     data.pop("control_profile", None)
     data["semantic"]["lyrics_presence"] = "absent"
+    data["rendering"]["target_backend"] = "musicgen"
     data["rendering"]["priority"] = _priority_with_lyrics_token_first("semantic.lyrics_presence")
     score = CompositionScore.model_validate(data)
 

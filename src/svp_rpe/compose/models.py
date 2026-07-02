@@ -243,6 +243,9 @@ class GeneratedPrompt(CompositionModel):
     tags: List[str]
     negative_tags: List[str]
     dropped_elements: List[str]
+    # PR3 後半: デバイスプロファイル知見が発火した警告（compose/device_profile.py）。
+    # プロンプト本文 / tags には一切反映しない（自動補正しない・advisory のみ）。
+    advisories: List[str] = Field(default_factory=list)
 
 
 def _fixity_state_for_value(value: Any) -> FixityState:

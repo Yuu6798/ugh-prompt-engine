@@ -67,7 +67,11 @@ def test_packaged_configs_match_repo_configs() -> None:
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
-    for relative in ("semantic_rules.yaml", "domain_profiles/music.yaml"):
+    for relative in (
+        "semantic_rules.yaml",
+        "domain_profiles/music.yaml",
+        "device_profiles/suno.yaml",
+    ):
         repo_copy = (root / "config" / relative).read_text(encoding="utf-8")
         packaged_copy = (root / "src" / "svp_rpe" / "config" / relative).read_text(
             encoding="utf-8"

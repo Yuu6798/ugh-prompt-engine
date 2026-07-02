@@ -166,3 +166,71 @@ performer 由来でも実 Suno corpus take 由来でもよい（path 非依存�
   2. K3 直交性（[`controllability_poc.md`](controllability_poc.md) §5.3）の語彙で
      ジャンル干渉と分離できること（`mid_ratio` はジャンルでも動く: Rock 0.208–0.245 /
      EDM 0.217–0.226 — [`lyrics_semantic_anchor.md`](lyrics_semantic_anchor.md) 結論2）。
+
+## デバイスプロファイル（PR3 後半）
+
+`control_profile` は「楽譜が効くチャネルを知る」ための自己記述だが、K3-2a
+（[`controllability_poc.md`](controllability_poc.md) §5.4）で
+**bpm→spectral_centroid の非対角クロス結合が生成器で符号反転する**ことが実測され、
+「機種ごとの癖は普遍則ではない」という実証的動機が生まれた。`compose/device_profile.py`
+の `DeviceProfile`（`config/device_profiles/<generator>.yaml`）は、K2 grip（tight
+既定値）/ K3-2a 非対角クロス効果（未解決記録）/ genre calibration バイアス（方向所見）を
+1 生成器 = 1 YAML にまとめ、コンパイルへ 2 経路で接続する。
+
+### スキーマ
+
+```yaml
+schema_version: "1.0"
+generator: "suno"
+control_defaults:                # GeneratorProfile と同型（field -> ControlGrip）
+  bpm: {grip_class: tight, grip: 1.61, sensor: bpm, evidence: ...}
+  brightness: {grip_class: tight, grip: 0.86, sensor: spectral_centroid, evidence: ...}
+  lyrics_presence: {grip_class: loose, sensor: mid_ratio, evidence: ...}
+knob_quirks:                     # advisory 発火条件（発火してもプロンプト本文は変えない）
+  - field: bpm
+    status: observed
+    applies_below: 100
+    advisory: "Suno は低 bpm 指定を prior アトラクタへ引き上げる実績（K2）。..."
+    description: "低 bpm の prior アトラクタ圧縮"
+    evidence: "docs/controllability_poc.md §5.2"
+cross_couplings:                 # K3-2a §5.4 の非対角記録。advisory は出さない
+  - {knob: bpm, sensor: spectral_centroid, effect: 2.33, status: unresolved, evidence: ...}
+spectral_biases:                 # genre calibration（Phase C）由来の方向所見
+  - {name: over_brightening, description: "...", direction: "...", status: directional, evidence: ...}
+notes: "生成器バイアスの方向・量はジャンルで割れるため単一補正係数化はしない。"
+```
+
+- **`status`**: `observed`（K2/K3 grip で直接実証）/ `directional`（方向は一定だが量は
+  ジャンル依存・genre calib）/ `unresolved`（記録のみで解釈が確定していない・K3-2a 非対角）。
+- **`load_device_profile(generator)`**: `config_loader` の local→packaged パターンで
+  `device_profiles/<generator>.yaml` を読む。ファイルが無ければ `None`（フォールバック
+  チェーン。未知生成器は正当に「プロファイル無し」）。スキーマ違反は fail-fast。
+
+### merge semantics（score 宣言が device 既定に勝つ）
+
+`ExternalPromptAdapter.render` は backend descriptor 解決後に `load_device_profile` を呼び、
+`device.control_defaults` を `dict()` コピーしてから `score.control_profile[profile_key]`
+で上書きする。**score が同一フィールドを宣言していれば常に score が勝つ**。score が
+未宣言のフィールド（または `control_profile` ブロック自体が無い score）は device defaults
+だけで tight/loose/dead ティアが決まる。K2 由来の suno device defaults は `bpm` /
+`brightness` が tight のため、**`control_profile` を書かない score でも suno backend では
+この 2 フィールドが芯として先頭に昇格する**（PR1.5 の 3 ティア優先度は不変、詳細は上記
+「PR1.5」節）。
+
+### advisory 規則（自動補正はしない）
+
+`knob_quirks` を quirk 定義順に走査し、`advisory` が非 `null` かつ発火条件（`applies_to_values`
+への `str(score 値)` の完全一致、または `applies_below`/`applies_above` の数値閾値。数値比較は
+int 値のときのみ行い `TODO(transcribe):` センチネル文字列は自然にスキップされる）を満たせば
+`GeneratedPrompt.advisories` へ文言を追加する。**プロンプト text / tags / negative_tags /
+dropped_elements は advisory によって一切変わらない** — 計器であって補正器ではない。
+`cross_couplings` は `status: unresolved`（R=4・dead 行なしでセル単位の解釈が未確定）のため
+advisory を出さない設計とし、誤って「補正済み」の印象を与えない。
+
+### adherence との非対称（follow-up）
+
+[`score-adherence`](#pr2-楽譜準拠テストscore-adherence)（PR2）は **score が明示的に宣言した
+tight フィールド**の保持/非保持のみを判定する。device defaults 由来の tight（score が
+黙っているフィールド）は adherence の判定対象**外**——「device が黙って埋めた保証」を
+「楽譜が主張した保証」と同列に検証してよいかは未決の設計判断であり、対象化する場合は
+別途 follow-up とする。

@@ -1,0 +1,101 @@
+schema_version: "1.0"
+generator: "suno"
+
+# K2（#117）実測 grip を control_profile 未宣言フィールドの既定値として投入する。
+# score 側の control_profile が同一キーを宣言していれば常にそちらが勝つ
+# （このブロックは「score が黙っているときだけ効く」補完・docs/control_profile.md 参照）。
+control_defaults:
+  bpm:
+    grip_class: tight
+    grip: 1.61
+    sensor: bpm
+    evidence: examples/control/k2/expected_grip.json
+  brightness:
+    grip_class: tight
+    grip: 0.86
+    sensor: spectral_centroid
+    evidence: examples/control/k2/expected_grip.json
+  lyrics_presence:
+    grip_class: loose
+    sensor: mid_ratio
+    evidence: "docs/lyrics_semantic_anchor.md n=3追試 / examples/real_audio_validation/lyrics_arrange_demo_2026-07-01.yaml"
+
+# 既知の癖。advisory が非 null のもののみ GeneratedPrompt.advisories を発火する
+# （プロンプト本文・tags は変えない＝自動補正しない）。
+knob_quirks:
+  - field: bpm
+    status: observed
+    applies_below: 100
+    advisory: "Suno は低 bpm 指定を prior アトラクタへ引き上げる実績（90 指定→観測 ~123-125、K2）。低テンポが要件なら生成後の実測確認を推奨。"
+    description: "低 bpm の prior アトラクタ圧縮"
+    evidence: "docs/controllability_poc.md §5.2 / docs/roundtrip_corpus_screen.md"
+  - field: brightness
+    status: observed
+    applies_to_values: ["dark"]
+    advisory: "Suno は dark 指定で絶対 dark 帯（centroid ≤1200Hz）に到達した実績なし（K2: 0/4）。暗さが要件なら生成後の centroid 確認を推奨。"
+    description: "brightness 非対称（bright 得意/dark 苦手）"
+    evidence: "docs/controllability_poc.md §5.2"
+  - field: key
+    status: observed
+    advisory: null
+    description: "調号は grip（生成6中5が調号ファミリー保存）だがコード進行は非再現（毎回リハーモナイズ）"
+    evidence: "docs/lyrics_semantic_anchor.md 結論3 (#124)"
+
+# K3-2a §5.4 の非対角クロス効果（R=4・dead 行なし＝セル単位ではまだ未解決）。
+# 記録専用で advisory は出さない（誤って補正扱いしないため status は全て unresolved）。
+cross_couplings:
+  - knob: bpm
+    sensor: spectral_centroid
+    effect: 2.33
+    status: unresolved
+    evidence: "examples/control/k3/expected_orthogonality_suno_mini.json (docs/controllability_poc.md §5.4)"
+  - knob: bpm
+    sensor: active_rate
+    effect: -0.959
+    status: unresolved
+    evidence: "examples/control/k3/expected_orthogonality_suno_mini.json (docs/controllability_poc.md §5.4)"
+  - knob: brightness
+    sensor: active_rate
+    effect: -1.39
+    status: unresolved
+    evidence: "examples/control/k3/expected_orthogonality_suno_mini.json (docs/controllability_poc.md §5.4)"
+  - knob: brightness
+    sensor: valley_depth
+    effect: 1.2
+    status: unresolved
+    evidence: "examples/control/k3/expected_orthogonality_suno_mini.json (docs/controllability_poc.md §5.4)"
+  - knob: brightness
+    sensor: bpm
+    effect: -0.34
+    status: unresolved
+    evidence: "examples/control/k3/expected_orthogonality_suno_mini.json (docs/controllability_poc.md §5.4)"
+  - knob: bpm
+    sensor: valley_depth
+    effect: -0.124
+    status: unresolved
+    evidence: "examples/control/k3/expected_orthogonality_suno_mini.json (docs/controllability_poc.md §5.4)"
+
+# genre calibration（Phase C）由来の方向所見。量はジャンルで割れるため単一補正係数化しない。
+spectral_biases:
+  - name: over_brightening
+    description: "同ジャンル・同キーの本物より Suno の方が明るく焼く（matched-pair d=3.76, 重なりゼロ）"
+    direction: "suno brilliance/centroid > real"
+    status: directional
+    evidence: "docs/genre_calibration_planning.md Phase C (#110)"
+  - name: detonalization
+    description: "harmonic_ratio が real より高く一様（脱トーナル化・ジャンル横断で方向一致）"
+    direction: "suno harmonic_ratio > real"
+    status: directional
+    evidence: "docs/genre_calibration_planning.md Phase C #111-#114 横断Δ"
+  - name: mid_cut
+    description: "mid_ratio は real の方が高い（本物の方が中域が厚い）"
+    direction: "suno mid_ratio < real"
+    status: directional
+    evidence: "docs/genre_calibration_planning.md Phase C #111-#114 横断Δ"
+  - name: low_thickness
+    description: "Suno は低域（low_ratio/sub_bass）を厚く焼く"
+    direction: "suno low_ratio/sub_bass > real"
+    status: directional
+    evidence: "docs/genre_calibration_planning.md Phase C #111"
+
+notes: "生成器バイアスの方向・量はジャンルで割れるため単一補正係数化はしない（#111: brilliance 符号反転）。本プロファイルは計器の記録であり自動補正はしない。"

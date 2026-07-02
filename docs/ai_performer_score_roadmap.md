@@ -257,8 +257,15 @@ dead 先落ち / backend descriptor 分離 / コンパイル決定論 snapshot�
 > [`controllability_poc.md`](controllability_poc.md) §5.3）、**K3-2a 実測済み**
 > （K2 fixture 再利用の本物 Suno ミニ行列 — 対角 tight でも直交性は玩具の 1/7、
 > bpm→centroid 結合の符号が生成器で反転＝デバイスプロファイルの実証的動機、同 §5.4）。
-> 残り = フル Suno 行列（K3-2b: dead 行同梱 + R≥8、生成バッチ人手律速）と
-> デバイスプロファイル本体。
+> 後半の**デバイスプロファイル本体も実装済み**（`compose/device_profile.py`
+> `DeviceProfile` + `config/device_profiles/suno.yaml`。K2 grip を `control_defaults`
+> として PR1.5 の compile へ補完接続（score 宣言が常に勝つ）、K3-2a 非対角クロス効果は
+> `cross_couplings`（`status: unresolved`・記録専用で advisory 非発火）、genre calibration
+> バイアス（over-brightening / detonalization / mid_cut / low_thickness）は
+> `spectral_biases` として構造化。既知の癖（`knob_quirks`）は `GeneratedPrompt.advisories`
+> を発火するが、プロンプト本文・tags は一切変えない＝自動補正はしない。詳細は
+> [`control_profile.md`](control_profile.md) 「デバイスプロファイル（PR3 後半）」節）。
+> 残り = フル Suno 行列（K3-2b: dead 行同梱 + R≥8、生成バッチ人手律速）のみ。
 
 **スコープ（in）**:
 - **K3 直交性を DCI / MIG で定式化**。grip ハーネス（`src/svp_rpe/control/`）を N×N の

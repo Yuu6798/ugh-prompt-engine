@@ -12,11 +12,18 @@ PR1.5 で `control_profile` 駆動のフィールド粒度コンパイルに刷�
 SEM-1 で `semantic.lyrics_presence`（歌詞の有無）を意味層の制御チャネルとして追加。
 物理フィールドと同じ `control_profile` grip_class ランキングに乗るが、fixity 対象外
 （docs/control_profile.md 参照）。
+
+PR3 後半で generator device profile（`compose/device_profile.py`）を 2 経路で配線:
+`control_profile` のフィールド欠落を `control_defaults` で補完（score 宣言が常に勝つ）、
+score の値が既知の癖（`knob_quirks`）に当たったら `GeneratedPrompt.advisories` へ警告を
+出す（プロンプト本文 / tags は一切変えない＝自動補正しない）。
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, Optional
 
+from svp_rpe.compose.device_profile import DeviceProfile, KnobQuirk, load_device_profile
 from svp_rpe.compose.models import (
     SEMANTIC_CONTROL_FIELDS,
     CompositionScore,
@@ -98,8 +105,16 @@ class ExternalPromptAdapter:
     def render(self, score: CompositionScore, max_chars: int | None = None) -> GeneratedPrompt:
         limit = max(0, score.rendering.prompt_max_chars if max_chars is None else max_chars)
         descriptor = resolve_backend_descriptor(score.rendering.target_backend)
-        profile = (score.control_profile or {}).get(descriptor.profile_key)
-        rank = _rank_key_factory(score.rendering.priority, profile)
+        device = load_device_profile(descriptor.profile_key)
+        score_profile = (score.control_profile or {}).get(descriptor.profile_key)
+        # device の control_defaults を score 宣言で上書き merge（score が常に勝つ）。
+        # score 側が未宣言の backend / フィールドでも device defaults だけで成立する。
+        effective_profile: dict[str, ControlGrip] = (
+            dict(device.control_defaults) if device is not None else {}
+        )
+        if score_profile:
+            effective_profile.update(score_profile)
+        rank = _rank_key_factory(score.rendering.priority, effective_profile)
 
         segments = sorted(_segments_for(score), key=rank)
         kept = list(segments)
@@ -117,7 +132,57 @@ class ExternalPromptAdapter:
             tags=_tags_for(score),
             negative_tags=list(score.semantic.avoid),
             dropped_elements=dropped_elements,
+            advisories=_advisories_for(score, device),
         )
+
+
+def _field_value_for_quirk(score: CompositionScore, field: str) -> Any:
+    """`KnobQuirk.field` に対応するスコア上の現在値を取得する（無ければ None）。"""
+
+    if field in SEMANTIC_CONTROL_FIELDS:
+        return getattr(score.semantic, field, None)
+    if field in PhysicalLayer.model_fields:
+        return getattr(score.physical, field)
+    return None
+
+
+def _quirk_matches(quirk: KnobQuirk, value: Any) -> bool:
+    """発火条件（値の完全一致 or 数値閾値）を満たすか判定する。
+
+    数値比較は int（bpm 等）のときのみ行う。TODO(transcribe) センチネル文字列は
+    isinstance(value, int) が False になるため自然にスキップされる。
+    """
+
+    if value is None:
+        return False
+    if quirk.applies_to_values and str(value) in quirk.applies_to_values:
+        return True
+    if quirk.applies_below is not None or quirk.applies_above is not None:
+        if isinstance(value, int) and not isinstance(value, bool):
+            if quirk.applies_below is not None and value < quirk.applies_below:
+                return True
+            if quirk.applies_above is not None and value > quirk.applies_above:
+                return True
+    return False
+
+
+def _advisories_for(score: CompositionScore, device: Optional[DeviceProfile]) -> list[str]:
+    """デバイスプロファイルの knob_quirks を走査し、発火した advisory 文言を集める。
+
+    プロンプト text / tags / negative_tags / dropped_elements には一切影響しない
+    （自動補正しない・quirk 定義順で決定論）。
+    """
+
+    if device is None:
+        return []
+    advisories: list[str] = []
+    for quirk in device.knob_quirks:
+        if quirk.advisory is None:
+            continue
+        value = _field_value_for_quirk(score, quirk.field)
+        if _quirk_matches(quirk, value):
+            advisories.append(quirk.advisory)
+    return advisories
 
 
 def _segments_for(score: CompositionScore) -> list[_PromptSegment]:
