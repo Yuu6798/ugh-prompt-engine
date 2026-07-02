@@ -60,6 +60,7 @@ class KnobSpec:
     high: Any
     diagonal_sensor: str
     expected_sign: int
+    known_dead: bool = False
 
 
 KNOBS = (
@@ -82,6 +83,9 @@ KNOBS = (
         diagonal_sensor="spectral_centroid",
         expected_sign=1,
     ),
+    # 決定論 performer はこの 2 フィールドを読まない（コード検査で既知、
+    # controllability_poc.md §5.1 K1「ツマミ死」）＝この行の全セルは純粋な
+    # seed ノイズ＝経験的ヌル分布の供給源（K3-1b, §5.3 発見2）。
     KnobSpec(
         name="active_rate_target",
         field="active_rate_target",
@@ -89,6 +93,7 @@ KNOBS = (
         high="0.95-0.98",
         diagonal_sensor="active_rate",
         expected_sign=1,
+        known_dead=True,
     ),
     KnobSpec(
         name="valley_depth_target",
@@ -97,6 +102,7 @@ KNOBS = (
         high="0.30-0.40",
         diagonal_sensor="valley_depth",
         expected_sign=1,
+        known_dead=True,
     ),
 )
 
@@ -216,6 +222,7 @@ def build_fixture(repetitions: int = REPETITIONS) -> dict[str, Any]:
             "high_level": str(knob.high),
             "diagonal_sensor": knob.diagonal_sensor,
             "expected_sign": knob.expected_sign,
+            **({"known_dead": True} if knob.known_dead else {}),
         }
         for knob in KNOBS
     ]

@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "fixture_id": "k3_synth_performer_matrix_rpe_features",
   "generator": "synth_performer_c4",
   "repetitions": 5,
@@ -20,8 +20,11 @@
       "high_mean": 140.53,
       "effect": 16.420451,
       "interference_class": "strong",
+      "is_null_source": false,
       "expected_sign": 1,
-      "diagonal_classification": "tight"
+      "diagonal_classification": "tight",
+      "noise_margin": 6.490753,
+      "exceeds_noise_ceiling": true
     },
     {
       "knob": "bpm",
@@ -31,7 +34,10 @@
       "low_mean": 1.0,
       "high_mean": 1.0,
       "effect": 0.0,
-      "interference_class": "clean"
+      "interference_class": "clean",
+      "is_null_source": false,
+      "noise_margin": 0.0,
+      "exceeds_noise_ceiling": false
     },
     {
       "knob": "bpm",
@@ -41,7 +47,10 @@
       "low_mean": 968.1,
       "high_mean": 952.624,
       "effect": -11.607287,
-      "interference_class": "strong"
+      "interference_class": "strong",
+      "is_null_source": false,
+      "noise_margin": 4.588183,
+      "exceeds_noise_ceiling": true
     },
     {
       "knob": "bpm",
@@ -51,7 +60,10 @@
       "low_mean": 0.92598,
       "high_mean": 0.93142,
       "effect": 4.518453,
-      "interference_class": "strong"
+      "interference_class": "strong",
+      "is_null_source": false,
+      "noise_margin": 1.786075,
+      "exceeds_noise_ceiling": true
     },
     {
       "knob": "bpm",
@@ -61,7 +73,10 @@
       "low_mean": 0.19294,
       "high_mean": 0.18692,
       "effect": -1.643925,
-      "interference_class": "strong"
+      "interference_class": "strong",
+      "is_null_source": false,
+      "noise_margin": 0.649819,
+      "exceeds_noise_ceiling": false
     },
     {
       "knob": "bpm",
@@ -71,7 +86,10 @@
       "low_mean": 0.3169,
       "high_mean": 0.5166,
       "effect": 3.719068,
-      "interference_class": "strong"
+      "interference_class": "strong",
+      "is_null_source": false,
+      "noise_margin": 1.470091,
+      "exceeds_noise_ceiling": true
     },
     {
       "knob": "key",
@@ -81,7 +99,10 @@
       "low_mean": 130.56,
       "high_mean": 129.2,
       "effect": -0.632456,
-      "interference_class": "weak"
+      "interference_class": "weak",
+      "is_null_source": false,
+      "noise_margin": 0.25,
+      "exceeds_noise_ceiling": false
     },
     {
       "knob": "key",
@@ -92,8 +113,11 @@
       "high_mean": 0.0,
       "effect": -999.0,
       "interference_class": "strong",
+      "is_null_source": false,
       "expected_sign": -1,
-      "diagonal_classification": "tight"
+      "diagonal_classification": "tight",
+      "noise_margin": 394.889423,
+      "exceeds_noise_ceiling": true
     },
     {
       "knob": "key",
@@ -103,7 +127,10 @@
       "low_mean": 957.016,
       "high_mean": 953.738,
       "effect": -1.769431,
-      "interference_class": "strong"
+      "interference_class": "strong",
+      "is_null_source": false,
+      "noise_margin": 0.699429,
+      "exceeds_noise_ceiling": false
     },
     {
       "knob": "key",
@@ -113,7 +140,10 @@
       "low_mean": 0.93016,
       "high_mean": 0.93076,
       "effect": 0.642161,
-      "interference_class": "weak"
+      "interference_class": "weak",
+      "is_null_source": false,
+      "noise_margin": 0.253837,
+      "exceeds_noise_ceiling": false
     },
     {
       "knob": "key",
@@ -123,7 +153,10 @@
       "low_mean": 0.18984,
       "high_mean": 0.1951,
       "effect": 0.841126,
-      "interference_class": "strong"
+      "interference_class": "strong",
+      "is_null_source": false,
+      "noise_margin": 0.332484,
+      "exceeds_noise_ceiling": false
     },
     {
       "knob": "key",
@@ -133,7 +166,10 @@
       "low_mean": 0.41368,
       "high_mean": 0.43606,
       "effect": 0.385947,
-      "interference_class": "weak"
+      "interference_class": "weak",
+      "is_null_source": false,
+      "noise_margin": 0.152559,
+      "exceeds_noise_ceiling": false
     },
     {
       "knob": "brightness",
@@ -143,7 +179,10 @@
       "low_mean": 126.74,
       "high_mean": 127.97,
       "effect": 0.4,
-      "interference_class": "weak"
+      "interference_class": "weak",
+      "is_null_source": false,
+      "noise_margin": 0.158114,
+      "exceeds_noise_ceiling": false
     },
     {
       "knob": "brightness",
@@ -153,7 +192,10 @@
       "low_mean": 1.0,
       "high_mean": 1.0,
       "effect": 0.0,
-      "interference_class": "clean"
+      "interference_class": "clean",
+      "is_null_source": false,
+      "noise_margin": 0.0,
+      "exceeds_noise_ceiling": false
     },
     {
       "knob": "brightness",
@@ -164,8 +206,11 @@
       "high_mean": 1236.498,
       "effect": 160.428967,
       "interference_class": "strong",
+      "is_null_source": false,
       "expected_sign": 1,
-      "diagonal_classification": "tight"
+      "diagonal_classification": "tight",
+      "noise_margin": 63.415117,
+      "exceeds_noise_ceiling": true
     },
     {
       "knob": "brightness",
@@ -175,7 +220,10 @@
       "low_mean": 0.92966,
       "high_mean": 0.93102,
       "effect": 1.655339,
-      "interference_class": "strong"
+      "interference_class": "strong",
+      "is_null_source": false,
+      "noise_margin": 0.65433,
+      "exceeds_noise_ceiling": false
     },
     {
       "knob": "brightness",
@@ -185,7 +233,10 @@
       "low_mean": 0.19294,
       "high_mean": 0.19988,
       "effect": 0.894294,
-      "interference_class": "strong"
+      "interference_class": "strong",
+      "is_null_source": false,
+      "noise_margin": 0.353501,
+      "exceeds_noise_ceiling": false
     },
     {
       "knob": "brightness",
@@ -195,7 +246,10 @@
       "low_mean": 0.4595,
       "high_mean": 0.57672,
       "effect": 3.369329,
-      "interference_class": "strong"
+      "interference_class": "strong",
+      "is_null_source": false,
+      "noise_margin": 1.331844,
+      "exceeds_noise_ceiling": true
     },
     {
       "knob": "active_rate_target",
@@ -205,7 +259,10 @@
       "low_mean": 129.2,
       "high_mean": 124.28,
       "effect": -2.529822,
-      "interference_class": "strong"
+      "interference_class": "strong",
+      "is_null_source": true,
+      "noise_margin": null,
+      "exceeds_noise_ceiling": null
     },
     {
       "knob": "active_rate_target",
@@ -215,7 +272,10 @@
       "low_mean": 1.0,
       "high_mean": 1.0,
       "effect": 0.0,
-      "interference_class": "clean"
+      "interference_class": "clean",
+      "is_null_source": true,
+      "noise_margin": null,
+      "exceeds_noise_ceiling": null
     },
     {
       "knob": "active_rate_target",
@@ -225,7 +285,10 @@
       "low_mean": 956.992,
       "high_mean": 957.196,
       "effect": 0.088519,
-      "interference_class": "clean"
+      "interference_class": "clean",
+      "is_null_source": true,
+      "noise_margin": null,
+      "exceeds_noise_ceiling": null
     },
     {
       "knob": "active_rate_target",
@@ -236,8 +299,11 @@
       "high_mean": 0.93058,
       "effect": 0.551854,
       "interference_class": "weak",
+      "is_null_source": true,
       "expected_sign": 1,
-      "diagonal_classification": "loose"
+      "diagonal_classification": "loose",
+      "noise_margin": null,
+      "exceeds_noise_ceiling": null
     },
     {
       "knob": "active_rate_target",
@@ -247,7 +313,10 @@
       "low_mean": 0.18948,
       "high_mean": 0.19136,
       "effect": 0.397555,
-      "interference_class": "weak"
+      "interference_class": "weak",
+      "is_null_source": true,
+      "noise_margin": null,
+      "exceeds_noise_ceiling": null
     },
     {
       "knob": "active_rate_target",
@@ -257,7 +326,10 @@
       "low_mean": 0.43728,
       "high_mean": 0.41578,
       "effect": -0.482532,
-      "interference_class": "weak"
+      "interference_class": "weak",
+      "is_null_source": true,
+      "noise_margin": null,
+      "exceeds_noise_ceiling": null
     },
     {
       "knob": "valley_depth_target",
@@ -267,7 +339,10 @@
       "low_mean": 127.97,
       "high_mean": 127.97,
       "effect": 0.0,
-      "interference_class": "clean"
+      "interference_class": "clean",
+      "is_null_source": true,
+      "noise_margin": null,
+      "exceeds_noise_ceiling": null
     },
     {
       "knob": "valley_depth_target",
@@ -277,7 +352,10 @@
       "low_mean": 1.0,
       "high_mean": 1.0,
       "effect": 0.0,
-      "interference_class": "clean"
+      "interference_class": "clean",
+      "is_null_source": true,
+      "noise_margin": null,
+      "exceeds_noise_ceiling": null
     },
     {
       "knob": "valley_depth_target",
@@ -287,7 +365,10 @@
       "low_mean": 957.998,
       "high_mean": 958.156,
       "effect": 0.065536,
-      "interference_class": "clean"
+      "interference_class": "clean",
+      "is_null_source": true,
+      "noise_margin": null,
+      "exceeds_noise_ceiling": null
     },
     {
       "knob": "valley_depth_target",
@@ -297,7 +378,10 @@
       "low_mean": 0.9293,
       "high_mean": 0.93022,
       "effect": 0.82752,
-      "interference_class": "strong"
+      "interference_class": "strong",
+      "is_null_source": true,
+      "noise_margin": null,
+      "exceeds_noise_ceiling": null
     },
     {
       "knob": "valley_depth_target",
@@ -308,8 +392,11 @@
       "high_mean": 0.18584,
       "effect": -1.0269,
       "interference_class": "strong",
+      "is_null_source": true,
       "expected_sign": 1,
-      "diagonal_classification": "dead"
+      "diagonal_classification": "dead",
+      "noise_margin": null,
+      "exceeds_noise_ceiling": null
     },
     {
       "knob": "valley_depth_target",
@@ -319,7 +406,10 @@
       "low_mean": 0.42358,
       "high_mean": 0.41826,
       "effect": -0.134266,
-      "interference_class": "clean"
+      "interference_class": "clean",
+      "is_null_source": true,
+      "noise_margin": null,
+      "exceeds_noise_ceiling": null
     }
   ],
   "matrix": {
@@ -459,6 +549,28 @@
       "mean": 0.551201
     }
   },
+  "noise": {
+    "known_dead_knobs": [
+      "active_rate_target",
+      "valley_depth_target"
+    ],
+    "null_cell_count": 12,
+    "ceiling": 2.529822,
+    "null_values": [
+      -2.529822,
+      0.0,
+      0.088519,
+      0.551854,
+      0.397555,
+      -0.482532,
+      0.0,
+      0.0,
+      0.065536,
+      0.82752,
+      -1.0269,
+      -0.134266
+    ]
+  },
   "diagonal_summary": {
     "tight": 3,
     "loose": 1,
@@ -468,6 +580,11 @@
     "clean": 8,
     "weak": 6,
     "strong": 11
+  },
+  "resolution_summary": {
+    "resolved": 7,
+    "unresolved": 11,
+    "no_ceiling": 0
   },
   "dead_knobs": [],
   "untouched_sensors": []

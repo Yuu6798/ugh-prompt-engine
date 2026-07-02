@@ -11,6 +11,8 @@
 | bpm | **1.61** | 2.33 ⚠ | -0.959 ⚠ | -0.124 | 1.55 ⚠ |
 | brightness | -0.34 | **0.863** | -1.39 ⚠ | 1.2 ⚠ | 0.804 ⚠ |
 
+* = ノイズ天井超え（既知 dead 行の経験的ヌル分布 max |d| を上回る）
+
 ## DCI
 
 ### Disentanglement (per knob)
@@ -32,9 +34,20 @@
 - overall completeness: 0.2242
 - mean effect_size_gap: 0.7091
 
+## Noise ceiling
+
+- ceiling: none — 既知 dead 行なし＝全セル unresolved（計器は有意性を主張できない）
+- known dead knobs: none
+- null cell count: 0
+
+### Resolved cells
+
+(none)
+
 ## Summary
 
 - diagonal: tight=2 loose=0 dead=0
 - interference (off-diagonal): clean=1 weak=1 strong=6
+- resolution: resolved=0 unresolved=0 no_ceiling=10
 - dead knobs: none
 - untouched sensors: none

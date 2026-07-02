@@ -26,6 +26,8 @@ from .orthogonality import (
     effect_size_gap,
     importance_matrix,
     mass_weighted_overall,
+    noise_ceiling,
+    noise_margin,
     normalized_entropy,
 )
 
@@ -52,5 +54,7 @@ __all__ = [
     "effect_size_gap",
     "importance_matrix",
     "mass_weighted_overall",
+    "noise_ceiling",
+    "noise_margin",
     "normalized_entropy",
 ]
