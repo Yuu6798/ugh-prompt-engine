@@ -13,6 +13,7 @@ import hashlib
 import importlib
 import json
 import runpy
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -25,10 +26,13 @@ from scripts.collect_musicgen_takes import (
     extract_fixture,
     load_plan,
     load_takes_manifest,
+    main,
+    resolve_perform_target,
     sample_seed,
 )
 
 PLAN_PATH = Path("examples/control/k2_musicgen/plan.yaml")
+SCORE_PATH = Path("examples/roundtrip/synth_01_source.yaml")
 
 
 def test_module_imports_without_torch() -> None:
@@ -303,3 +307,65 @@ def test_load_takes_manifest_round_trips(tmp_path: Path) -> None:
 
     assert loaded["fixture_id"] == "k2_musicgen_mini"
     assert len(loaded["samples"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# `perform` subcommand (R3 repetition harness takes generator)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_perform_target_renders_prompt_and_slug_from_score() -> None:
+    """torch 不要の経路: score のロード + ExternalPromptAdapter レンダリングのみ。
+
+    generate_takes 相当のユニットとして manifest に入る `prompt` /
+    `score_path` の元になる値を検証する（モック不使用）。
+    """
+    from svp_rpe.compose import load_composition_score
+    from svp_rpe.compose.prompt_renderer import ExternalPromptAdapter
+
+    score, prompt_text, slug = resolve_perform_target(SCORE_PATH)
+
+    expected_score = load_composition_score(SCORE_PATH)
+    expected_prompt = ExternalPromptAdapter().render(expected_score).text
+
+    assert prompt_text == expected_prompt
+    assert slug == "synth_01_roundtrip_source"
+    assert score.meta.title == expected_score.meta.title
+
+
+def test_resolve_perform_target_honors_explicit_fixture_id() -> None:
+    _, _, slug = resolve_perform_target(SCORE_PATH, fixture_id="custom_rep_id")
+
+    assert slug == "custom_rep_id"
+
+
+def test_perform_subcommand_reaches_import_error_without_torch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Without torch/transformers, `perform` must parse args, load the score
+    (torch-free), and fail with an install-hint ImportError — not a traceback.
+    """
+    monkeypatch.setitem(sys.modules, "torch", None)
+    monkeypatch.setitem(sys.modules, "transformers", None)
+
+    output_dir = tmp_path / "out"
+    manifest_out = output_dir / "takes_manifest.json"
+
+    exit_code = main(
+        [
+            "perform",
+            "--score",
+            str(SCORE_PATH),
+            "--repetitions",
+            "1",
+            "--output-dir",
+            str(output_dir),
+            "--manifest-out",
+            str(manifest_out),
+        ]
+    )
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "musicgen" in captured.err
+    assert not manifest_out.exists()

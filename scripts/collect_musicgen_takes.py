@@ -43,6 +43,18 @@ Usage:
         --manifest /tmp/musicgen_takes/takes_manifest.json \\
         --audio-dir /tmp/musicgen_takes \\
         --fixture-out /tmp/musicgen_takes/fixture.json
+
+    # 3) R3 repetition harness 向け: 1 スコアから N テイク生成（手動・torch 必須）
+    python scripts/collect_musicgen_takes.py perform \\
+        --score examples/roundtrip/synth_01_source.yaml \\
+        --repetitions 5 \\
+        --output-dir /tmp/musicgen_takes/rep \\
+        --manifest-out /tmp/musicgen_takes/rep/takes_manifest.json
+
+    # takes manifest を svprpe roundtrip-rep に渡すと R3-1/2/3 の計器で測定できる
+    # （torch 不要）:
+    #   svprpe roundtrip-rep examples/roundtrip/synth_01_source.yaml \\
+    #       /tmp/musicgen_takes/rep/takes_manifest.json
 """
 from __future__ import annotations
 
@@ -221,6 +233,101 @@ def generate_takes(plan: GenerationPlan, *, output_dir: Path) -> dict[str, Any]:
     }
 
 
+def resolve_perform_target(
+    score_path: Path, *, fixture_id: Optional[str] = None
+) -> tuple[Any, str, str]:
+    """スコアをロードし prompt / fixture slug を解決する（torch 不要）。
+
+    `perform` サブコマンドのうち torch を必要としない部分（score のロードと
+    `ExternalPromptAdapter` によるプロンプトレンダリング）を独立させ、torch
+    なし環境でも単体テストできるようにする。backend override はしない —
+    `score.rendering.target_backend` にそのまま従う（楽譜が語る）。
+    """
+    from svp_rpe.compose.loader import load_composition_score
+    from svp_rpe.compose.prompt_renderer import ExternalPromptAdapter
+    from svp_rpe.roundtrip.compare import normalize_label
+
+    score = load_composition_score(score_path)
+    prompt_text = ExternalPromptAdapter().render(score).text
+    slug = fixture_id or (normalize_label(score.meta.title).replace(" ", "-") or "score")
+    return score, prompt_text, slug
+
+
+def perform_takes(
+    score_path: Path,
+    *,
+    repetitions: int,
+    output_dir: Path,
+    seed_base: int = 5000,
+    duration_seconds: float = 12.0,
+    guidance_scale: float = 3.0,
+    fixture_id: Optional[str] = None,
+    model_id: str = "facebook/musicgen-small",
+    model_revision: Optional[str] = None,
+) -> dict[str, Any]:
+    """`score_path` のプロンプトから MusicGen で `repetitions` テイクを生成する。
+
+    R3（`docs/roadmap_goal2.md`）確率的往復ハーネス向けの takes manifest を
+    書き出す。`generate_takes` (K2 plan.yaml 経路) と異なり、ノブの
+    low/high 水準ではなく単一スコアの単一プロンプトを繰り返し生成する
+    （反復間で変わるのは `seed` のみ）。音声は `output_dir` に WAV として
+    書き出すのみでコミット対象にはしない。manifest の `audio_sha256` は
+    書き出したバイト列から必ず計算する（`collect_clap_fixture.py` と同じ規約）。
+    """
+    _, prompt_text, slug = resolve_perform_target(score_path, fixture_id=fixture_id)
+
+    torch, AutoProcessor, MusicgenForConditionalGeneration = _import_musicgen_stack()
+    from scipy.io import wavfile
+
+    processor = AutoProcessor.from_pretrained(model_id, revision=model_revision)
+    model = MusicgenForConditionalGeneration.from_pretrained(model_id, revision=model_revision)
+    model.eval()
+    sampling_rate = int(model.config.audio_encoder.sampling_rate)
+    resolved_revision = getattr(model.config, "_commit_hash", None) or model_revision
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    max_new_tokens = int(duration_seconds * 50)
+
+    samples: list[dict[str, Any]] = []
+    for repeat in range(repetitions):
+        seed = seed_base + repeat
+        torch.manual_seed(seed)
+        inputs = processor(text=[prompt_text], padding=True, return_tensors="pt")
+        audio_values = model.generate(
+            **inputs,
+            do_sample=True,
+            guidance_scale=guidance_scale,
+            max_new_tokens=max_new_tokens,
+        )
+        waveform = audio_values[0, 0].detach().cpu().numpy()
+        sample_id = f"{slug}_{repeat:02d}"
+        audio_path = output_dir / f"{sample_id}.wav"
+        wavfile.write(str(audio_path), sampling_rate, waveform)
+        audio_sha256 = _sha256_file(audio_path)
+        samples.append(
+            {
+                "sample_id": sample_id,
+                "repeat": repeat,
+                "seed": seed,
+                "audio_path": audio_path.name,
+                "audio_sha256": audio_sha256,
+                "duration_seconds": duration_seconds,
+                "guidance_scale": guidance_scale,
+            }
+        )
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "fixture_id": slug,
+        "generator": "musicgen-small",
+        "score_path": str(score_path),
+        "prompt": prompt_text,
+        "model_id": model_id,
+        "model_revision": resolved_revision,
+        "samples": samples,
+    }
+
+
 def load_takes_manifest(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as f:
         raw = json.load(f)
@@ -309,6 +416,31 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_perform(args: argparse.Namespace) -> int:
+    try:
+        manifest = perform_takes(
+            args.score,
+            repetitions=args.repetitions,
+            output_dir=args.output_dir,
+            seed_base=args.seed_base,
+            duration_seconds=args.duration_seconds,
+            guidance_scale=args.guidance_scale,
+            fixture_id=args.fixture_id,
+            model_id=args.model_id,
+            model_revision=args.model_revision,
+        )
+    except ImportError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    args.manifest_out.parent.mkdir(parents=True, exist_ok=True)
+    args.manifest_out.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    print(f"wrote {len(manifest['samples'])} takes to {args.output_dir}")
+    print(f"wrote manifest to {args.manifest_out}")
+    return 0
+
+
 def _cmd_extract(args: argparse.Namespace) -> int:
     manifest = load_takes_manifest(args.manifest)
     fixture = extract_fixture(manifest, audio_dir=args.audio_dir)
@@ -352,6 +484,48 @@ def main(argv: list[str] | None = None) -> int:
         "--fixture-out", type=Path, required=True, help="fixture JSON の出力先"
     )
     extract_parser.set_defaults(func=_cmd_extract)
+
+    perform_parser = subparsers.add_parser(
+        "perform",
+        help=(
+            "スコアのプロンプトから MusicGen で N テイクを生成する"
+            "（torch 必須・手動実行のみ・R3 repetition harness 向け）"
+        ),
+    )
+    perform_parser.add_argument(
+        "--score", type=Path, required=True, help="Composition Score YAML path"
+    )
+    perform_parser.add_argument(
+        "--repetitions", type=int, required=True, help="生成するテイク数 N"
+    )
+    perform_parser.add_argument(
+        "--output-dir", type=Path, required=True, help="生成 WAV の書き出し先"
+    )
+    perform_parser.add_argument(
+        "--manifest-out", type=Path, required=True, help="takes manifest JSON の出力先"
+    )
+    perform_parser.add_argument(
+        "--seed-base", type=int, default=5000, help="seed = seed_base + repeat (既定 5000)"
+    )
+    perform_parser.add_argument(
+        "--duration-seconds", type=float, default=12.0, help="生成長 [秒]（既定 12.0）"
+    )
+    perform_parser.add_argument(
+        "--guidance-scale", type=float, default=3.0, help="classifier-free guidance scale（既定 3.0）"
+    )
+    perform_parser.add_argument(
+        "--fixture-id",
+        type=str,
+        default=None,
+        help="省略時は score.meta.title から slug を導出する",
+    )
+    perform_parser.add_argument(
+        "--model-id", type=str, default="facebook/musicgen-small", help="HuggingFace model id"
+    )
+    perform_parser.add_argument(
+        "--model-revision", type=str, default=None, help="pin する revision（省略可）"
+    )
+    perform_parser.set_defaults(func=_cmd_perform)
 
     args = parser.parse_args(argv)
     return int(args.func(args))

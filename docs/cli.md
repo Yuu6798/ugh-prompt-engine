@@ -131,6 +131,37 @@ The output compares only fields whose manifest `send_form` is `numeric_knob`.
 It is a descriptive corpus table and intentionally does not emit verdict,
 pass/fail, or loss keys.
 
+### `svprpe roundtrip-rep <composition_score.yaml> <takes_manifest.json>`
+
+Run the R3 stochastic performer repetition harness (R3-1/R3-2/R3-3,
+[`roadmap_goal2.md`](roadmap_goal2.md)): measure roundtrip preservation across
+a batch of `n` independently generated takes of the same score.
+
+```text
+CompositionScore + N takes -> per-take RPE extraction -> draft score -> diagnosis
+  -> per-field repetition rate (R3-2) -> "closest take" selection (R3-3)
+```
+
+```bash
+svprpe roundtrip-rep examples/roundtrip/synth_01_source.yaml takes_manifest.json
+svprpe roundtrip-rep examples/roundtrip/synth_01_source.yaml takes_manifest.json --format json
+svprpe roundtrip-rep examples/roundtrip/synth_01_source.yaml takes_manifest.json --audio-dir ./takes
+```
+
+`takes_manifest.json` follows the schema written by
+`scripts/collect_musicgen_takes.py perform` (`samples[]` with `audio_path` /
+`audio_sha256`); `--audio-dir` defaults to the manifest's parent directory.
+Each sample's audio is re-hashed and checked against the manifest's pinned
+`audio_sha256` (fail-fast on mismatch); samples marked `excluded` are
+skipped. The output reports, per field, how many of the `n` takes preserved
+the authored value (`preserved_rate`, `diagnosis_counts`) and a mechanical
+`selection` of the take that matches the most fields
+(`basis="preserved_field_count"`). Like `roundtrip` / `roundtrip-corpus`, this
+is a descriptive instrument — `selected_take_id` identifies the closest take
+to the score, not a quality judgment, and the output intentionally does not
+emit verdict, pass/fail, or loss keys. See
+[`musicgen_backend.md`](musicgen_backend.md) §6.
+
 ### `svprpe evaluate --audio <audio> [--svp <svp.yaml>]`
 
 Evaluate audio. Without `--svp`: self-evaluate. With `--svp`: compare against external SVP.
@@ -239,7 +270,7 @@ Outputs: `ranking.json`, `summary.csv`, `summary.json`, `next_action.md`.
 | `--output` / `-o` | Output file path |
 | `--output-dir` | Output directory (creates if needed) |
 | `--fields` | Comma-separated `CompositionScore.physical` fields for `measure` |
-| `--format` | Output format. `generate`: `yaml` (default) or `text`; `ci-check`: `json` (default) or `markdown`; `roundtrip` / `roundtrip-corpus` / `compose` / `audit` / `score-adherence`: `text` (default) or `json` |
+| `--format` | Output format. `generate`: `yaml` (default) or `text`; `ci-check`: `json` (default) or `markdown`; `roundtrip` / `roundtrip-corpus` / `roundtrip-rep` / `compose` / `audit` / `score-adherence`: `text` (default) or `json` |
 | `--max-chars` | Override `rendering.prompt_max_chars` (`compose` only) |
 | `--threshold` | Semantic CI pass threshold from `0.0` to `1.0` (`ci-check` only) |
 | `--no-save` | Print output to stdout instead of saving |

@@ -688,6 +688,59 @@ def roundtrip_corpus(
         typer.echo(content)
 
 
+@app.command("roundtrip-rep")
+def roundtrip_rep(
+    composition_score: str = typer.Argument(..., help="Path to Composition Score YAML"),
+    takes_manifest: str = typer.Argument(..., help="Path to takes manifest JSON"),
+    audio_dir: Optional[str] = typer.Option(
+        None,
+        "--audio-dir",
+        help="Directory containing take audio (default: takes manifest's parent directory)",
+    ),
+    output_format: str = typer.Option(
+        "text",
+        "--format",
+        click_type=click.Choice(["text", "json"]),
+        help="Output format: text | json",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output", help="Output file path"),
+) -> None:
+    """Run the R3 stochastic performer repetition roundtrip (R3-1/R3-2/R3-3)."""
+
+    from svp_rpe.compose import load_composition_score
+    from svp_rpe.roundtrip import (
+        load_takes_for_repetition,
+        render_repetition_text,
+        run_repetition_batch,
+    )
+
+    manifest_path = Path(takes_manifest)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    resolved_audio_dir = Path(audio_dir) if audio_dir else manifest_path.parent
+
+    score = load_composition_score(composition_score)
+    takes = load_takes_for_repetition(manifest, audio_dir=resolved_audio_dir)
+    report = run_repetition_batch(
+        score,
+        takes,
+        generator=str(manifest.get("generator", "unknown")),
+        score_ref=str(manifest.get("score_path", composition_score)),
+    )
+    if output_format == "json":
+        content = json.dumps(
+            report.model_dump(mode="json"),
+            ensure_ascii=False,
+            indent=2,
+        )
+    else:
+        content = render_repetition_text(report)
+
+    if output:
+        Path(output).write_text(content, encoding="utf-8")
+    else:
+        typer.echo(content)
+
+
 @app.command("genre-calibrate")
 def genre_calibrate(
     manifest: str = typer.Argument(..., help="Path to genre calibration manifest YAML"),
