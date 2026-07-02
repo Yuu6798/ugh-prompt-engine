@@ -22,6 +22,9 @@ from svp_rpe.control import (
 K3_FIXTURE_PATH = Path("examples/control/k3/synth_performer_matrix_fixture.json")
 K3_EXPECTED_PATH = Path("examples/control/k3/expected_orthogonality.json")
 
+K3_SUNO_MINI_FIXTURE_PATH = Path("examples/control/k3/suno_mini_matrix_fixture.json")
+K3_SUNO_MINI_EXPECTED_PATH = Path("examples/control/k3/expected_orthogonality_suno_mini.json")
+
 
 # --------------------------------------------------------------------------
 # classify_interference
@@ -289,6 +292,39 @@ def test_k3_fixture_snapshot() -> None:
     expected = json.loads(K3_EXPECTED_PATH.read_text(encoding="utf-8"))
 
     assert report == expected
+
+
+# --------------------------------------------------------------------------
+# K3-2a: K2 Suno fixture -> K3 orthogonality fixture converter (pure JSON reshape)
+# --------------------------------------------------------------------------
+
+
+def test_k3_suno_mini_converter_determinism() -> None:
+    from scripts.build_k3_suno_mini_fixture import convert, load_source, render_fixture
+
+    regenerated = render_fixture(convert(load_source()))
+    committed = K3_SUNO_MINI_FIXTURE_PATH.read_text(encoding="utf-8")
+
+    assert regenerated == committed
+
+
+def test_k3_suno_mini_fixture_snapshot() -> None:
+    from scripts.measure_grip import load_fixture
+
+    report = analyze_orthogonality(load_fixture(K3_SUNO_MINI_FIXTURE_PATH))
+    expected = json.loads(K3_SUNO_MINI_EXPECTED_PATH.read_text(encoding="utf-8"))
+
+    assert report == expected
+
+
+def test_k3_suno_mini_converter_rejects_unexpected_source() -> None:
+    from scripts.build_k3_suno_mini_fixture import convert, load_source
+
+    raw = load_source()
+    raw["knobs"][0]["name"] = "tempo"  # should be "bpm"
+
+    with pytest.raises(ValueError):
+        convert(raw)
 
 
 # --------------------------------------------------------------------------
