@@ -50,13 +50,11 @@ verbatim verification with URLs):
     `License :: OSI Approved :: Apache Software License`. Both are
     permissive; the discrepancy itself is recorded here rather than
     resolved.
-    Weights: unstated. The README's "Pretrained Models" section
-    (`https://github.com/LAION-AI/CLAP#pretrained-models`) links
-    checkpoints such as `music_audioset_epoch_15_esc_90.14.pt` to
-    `https://huggingface.co/lukewys/laion_clap/tree/main` without a
-    license statement; the Hugging Face model card was not reachable
-    from this environment to cross-check. Re-verify at PR2b-2 when real
-    weights are fetched (gate G4, docs/learned_models_policy.md Section 7).
+    Weights: the Hugging Face repository-level license badge at
+    `https://huggingface.co/lukewys/laion_clap` is `cc0-1.0`; the model
+    card body is empty, with no additional checkpoint-specific license
+    text for `music_audioset_epoch_15_esc_90.14.pt` (verified
+    2026-07-02, PR2b-2).
 """
 from __future__ import annotations
 
@@ -99,13 +97,15 @@ _CODE_LICENSE = (
     "(inconsistent upstream metadata, see docs/learned_models_policy.md 3.1)"
 )
 _WEIGHTS_LICENSE = (
-    "要確認: no explicit checkpoint license found in README or linked "
-    "Hugging Face repo (unreachable for cross-check); re-verify at PR2b-2"
+    "Hugging Face repository-level license badge: cc0-1.0; "
+    "no additional checkpoint-specific license text found in the empty model card "
+    "(verified 2026-07-02, PR2b-2)"
 )
 _LICENSE_NOTE = (
     "laion-clap code license metadata is internally inconsistent upstream "
     "(CC0-1.0 LICENSE file vs Apache Software License PyPI classifier); "
-    "checkpoint weights license is unstated. See "
+    "Hugging Face repository-level weights license badge is cc0-1.0, with no "
+    "additional checkpoint-specific license text in the empty model card. See "
     "docs/learned_models_policy.md 3.1 for the verbatim findings."
 )
 

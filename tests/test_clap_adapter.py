@@ -382,7 +382,11 @@ class TestEmbedAudioFile:
         assert info.task == "embedding"
         assert info.provider == "LAION-AI/CLAP"
         assert info.license is not None
-        assert info.weights_license is not None
+        assert info.weights_license == (
+            "Hugging Face repository-level license badge: cc0-1.0; "
+            "no additional checkpoint-specific license text found in the empty model card "
+            "(verified 2026-07-02, PR2b-2)"
+        )
 
         assert result.inference_config["checkpoint"] == "ckpt.pt"
         assert result.inference_config["amodel"] is None

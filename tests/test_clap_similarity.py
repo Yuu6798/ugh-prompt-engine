@@ -5,6 +5,10 @@ plain float lists and must pass with neither dependency installed.
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
+from statistics import mean
+
 import pytest
 
 from svp_rpe.rpe.learned.similarity import (
@@ -72,3 +76,47 @@ class TestContrastFit:
         first = contrast_fit(audio, positives, negatives)
         second = contrast_fit(audio, positives, negatives)
         assert first == second
+
+
+def test_real_clap_fixture_cosines_and_contrast_are_self_consistent():
+    fixture_path = (
+        Path(__file__).resolve().parents[1]
+        / "examples"
+        / "learned"
+        / "clap"
+        / "lyrics_vocal_contrast_fixture.json"
+    )
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+    assert fixture["schema_version"] == "1.0"
+    assert fixture["model"]["name"] == "laion_clap"
+    assert fixture["manifest"] == "examples/learned/clap/lyrics_vocal_contrast_manifest.yaml"
+    assert fixture["model"]["checkpoint"] == "music_audioset_epoch_15_esc_90.14.pt"
+    checkpoint_sha256 = fixture["model"]["checkpoint_sha256"]
+    assert len(checkpoint_sha256) == 64
+    int(checkpoint_sha256, 16)
+    assert (
+        fixture["model"]["info"][0]["weights_license"]
+        == "Hugging Face repository-level license badge: cc0-1.0; "
+        "no additional checkpoint-specific license text found in the empty model card "
+        "(verified 2026-07-02, PR2b-2)"
+    )
+    assert "C:\\Users\\" not in fixture_path.read_text(encoding="utf-8")
+    assert len(fixture["samples"]) == 6
+
+    for sample in fixture["samples"]:
+        assert sample["audio_embedding"]
+        assert sample["audio_path"] == (
+            f"../../roundtrip/cache/pr2b-2-clap/{sample['sample_id']}.mp3"
+        )
+        groups = sample["prompt_groups"]
+        cosines = sample["cosines"]
+        assert set(groups) == {"positive", "negative"}
+
+        for score in cosines.values():
+            assert -1.0 <= score <= 1.0
+
+        pos = [cosines[prompt] for prompt in groups["positive"]]
+        neg = [cosines[prompt] for prompt in groups["negative"]]
+        expected_contrast = round(mean(pos) - mean(neg), 6)
+        assert sample["contrast_fit"] == pytest.approx(expected_contrast, abs=2e-6)

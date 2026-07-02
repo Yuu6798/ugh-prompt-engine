@@ -48,7 +48,9 @@ pitch = ["basic-pitch==0.4.0; python_version < '3.12'"]
 # first `load_ckpt()` call. Code/weights license verification is recorded
 # in docs/learned_models_policy.md Section 3.1 — do NOT widen this extra
 # to bundle weights.
-semantic-embed = ["laion-clap"]
+# laion-clap 1.1.7 は torch 系を install_requires に宣言しない（上流メタデータ不備、
+# PR2b-2 実採取で確認）ため、torch 境界を extra が実際に運ぶよう明示する。
+semantic-embed = ["laion-clap", "torch", "torchvision"]
 
 [project.scripts]
 svprpe = "svp_rpe.cli:app"

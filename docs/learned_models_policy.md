@@ -88,17 +88,18 @@ provenance hints from a learned model live in `LearnedAudioLabel.notes`.
     `License :: OSI Approved :: Apache Software License` を宣言しており、
     `license` フィールドと矛盾する。どちらも許諾的ライセンスではあるが、
     この矛盾自体を発明せず記録する。
-  - weights: 要確認。`music_audioset_epoch_15_esc_90.14.pt` 等のチェックポ
-    イントは README
-    （`https://github.com/LAION-AI/CLAP#pretrained-models`）から
-    Hugging Face（`https://huggingface.co/lukewys/laion_clap/tree/main`）
-    配布へリンクされるのみで、チェックポイント自体のライセンス表記は
-    README 上に見当たらない。Hugging Face 側のモデルカードは本調査環境
-    からアクセス不可（HTTP 403）のため未確認。G4（Section 7）の最終確認は
-    実重み取得時 = PR2b-2 で行う。
+  - weights: Hugging Face
+    （`https://huggingface.co/lukewys/laion_clap`）の repository-level
+    license badge は `cc0-1.0`。ただし model card 本文は空で、
+    `music_audioset_epoch_15_esc_90.14.pt` 等の個別 checkpoint について
+    追加のライセンス文は見当たらない（verified 2026-07-02, PR2b-2）。
 - Constraints:
   - torch と ~2GB の重みは optional extra `semantic-embed` に限定する。
-    デフォルトインストールは変えない。
+    デフォルトインストールは変えない。laion-clap 1.1.7 は torch /
+    torchvision を install_requires に宣言しない（上流メタデータ不備、
+    PR2b-2 実採取で手動インストールが必要だったことから確認）ため、
+    extra 側で明示的に同梱する — `pip install -e ".[semantic-embed]"`
+    だけで採取環境が立つことが runbook の契約。
   - cosine 適合度は A/B コントラスト（`contrast_fit`）で読む — grip と同じ
     哲学で verdict を出さない。
   - fixture 駆動（`scripts/collect_clap_fixture.py`）で決定論区間を担保

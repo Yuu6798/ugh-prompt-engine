@@ -1,0 +1,143 @@
+# PR2b-2 CLAP vocal-contrast manifest — 実音源は repo 外（DD-A: 音源非コミット）
+#
+# clean checkout からの再現手順（materialize）:
+#   1. mkdir -p examples/roundtrip/cache/pr2b-2-clap/  （.gitignore 対象の作業キャッシュ）
+#   2. 各サンプルの drive_file_id が指す Drive 上のファイル（所有者アカウント）を、
+#      audio_path のファイル名どおりに同ディレクトリへダウンロードする
+#   3. scripts/collect_clap_fixture.py を実行 — collector が manifest の audio_sha256
+#      pin を自動照合し、バイト列不一致は fail-fast する（integrity gate はコード化済み）
+#
+# 音源は所有者の Drive にのみ存在するため、再現可能性はデータアクセスに律速される。
+# これは R1 corpus と同じ方針: manifest が drive_file_id（所在）+ audio_sha256（同一性）
+# を運び、音源バイトはコミットしない。
+- sample_id: edm_lyrics
+  audio_path: ../../roundtrip/cache/pr2b-2-clap/edm_lyrics.mp3
+  audio_sha256: 9ef088ed259064f26fc3085155918ac64da8e508523ee328af057ddce88b34e5
+  drive_file_id: 1rteqEfHDGM_rbz4mfH180C7LYEa6xSJA
+  prompts:
+    positive:
+      - a song with lead vocals
+      - singing with lyrics
+    negative:
+      - an instrumental track with no vocals
+      - instrumental music
+  prompt_groups:
+    positive:
+      - a song with lead vocals
+      - singing with lyrics
+    negative:
+      - an instrumental track with no vocals
+      - instrumental music
+  condition:
+    genre: edm
+    lyrics: present
+
+- sample_id: edm_lyrics_alt
+  audio_path: ../../roundtrip/cache/pr2b-2-clap/edm_lyrics_alt.mp3
+  audio_sha256: ad3e5e6d7c9744b615d05c30379eaa0b3132c9f3d27219929bb167ff2e03259c
+  drive_file_id: 1fWd1OJTv8R3mF3wI8QYKxCP_RHKrnee9
+  prompts:
+    positive:
+      - a song with lead vocals
+      - singing with lyrics
+    negative:
+      - an instrumental track with no vocals
+      - instrumental music
+  prompt_groups:
+    positive:
+      - a song with lead vocals
+      - singing with lyrics
+    negative:
+      - an instrumental track with no vocals
+      - instrumental music
+  condition:
+    genre: edm
+    lyrics: present_alt
+
+- sample_id: edm_inst
+  audio_path: ../../roundtrip/cache/pr2b-2-clap/edm_inst.mp3
+  audio_sha256: 24f81b653b1c1a6fa13d4483bd1573c9e16a7a8f14d045f3031fd319dd1968a4
+  drive_file_id: 1x9FkdPrrpReugWhbtfvKY2miklxG4Y-j
+  prompts:
+    positive:
+      - a song with lead vocals
+      - singing with lyrics
+    negative:
+      - an instrumental track with no vocals
+      - instrumental music
+  prompt_groups:
+    positive:
+      - a song with lead vocals
+      - singing with lyrics
+    negative:
+      - an instrumental track with no vocals
+      - instrumental music
+  condition:
+    genre: edm
+    lyrics: absent
+
+- sample_id: rock_lyrics
+  audio_path: ../../roundtrip/cache/pr2b-2-clap/rock_lyrics.mp3
+  audio_sha256: 7273fb6db21e1daab2b15d447f0c45325f4e65ca63fa2d52e697647de47caaf6
+  drive_file_id: 10X9myrFEyWvWw_41LE28cZspFvBtdXil
+  prompts:
+    positive:
+      - a song with lead vocals
+      - singing with lyrics
+    negative:
+      - an instrumental track with no vocals
+      - instrumental music
+  prompt_groups:
+    positive:
+      - a song with lead vocals
+      - singing with lyrics
+    negative:
+      - an instrumental track with no vocals
+      - instrumental music
+  condition:
+    genre: rock
+    lyrics: present
+
+- sample_id: rock_lyrics_alt
+  audio_path: ../../roundtrip/cache/pr2b-2-clap/rock_lyrics_alt.mp3
+  audio_sha256: 8d5a7471033672770c8b7be2907b97f441b14e1252dc21c466cf9bd9c4f36005
+  drive_file_id: 1FlHK8sMcfgTsiM3Dq84ZrX2yCnxMbXTL
+  prompts:
+    positive:
+      - a song with lead vocals
+      - singing with lyrics
+    negative:
+      - an instrumental track with no vocals
+      - instrumental music
+  prompt_groups:
+    positive:
+      - a song with lead vocals
+      - singing with lyrics
+    negative:
+      - an instrumental track with no vocals
+      - instrumental music
+  condition:
+    genre: rock
+    lyrics: present_alt
+
+- sample_id: rock_inst
+  audio_path: ../../roundtrip/cache/pr2b-2-clap/rock_inst.mp3
+  audio_sha256: 479c873b8039fd991e84f57a16e5382f8b1256c60639c2c6e797cfeddba9e2f5
+  drive_file_id: 1HbSWiS1N17eSCbblxEI1Q4v2ZIwIX4n-
+  prompts:
+    positive:
+      - a song with lead vocals
+      - singing with lyrics
+    negative:
+      - an instrumental track with no vocals
+      - instrumental music
+  prompt_groups:
+    positive:
+      - a song with lead vocals
+      - singing with lyrics
+    negative:
+      - an instrumental track with no vocals
+      - instrumental music
+  condition:
+    genre: rock
+    lyrics: absent

@@ -209,6 +209,9 @@ directional のみ**と限定する。昇格には **各ジャンルで instrume
 - **意味層センサー導入の実データ根拠**：「物理計器に写らないが人間の耳は捉える差」を
   実データ × 主観の食い違いで裏付けた。CLAP 等の意味層読解器（`ai_performer_score_roadmap.md`
   の PR2b、現状 policy 外）を入れる動機がここにある。
+- **PR2b-2 実 fixture**：`examples/learned/clap/lyrics_vocal_contrast_fixture.json`
+  に、StartinA EDM/Rock の歌詞あり・歌詞なし 6 テイクで CLAP vocal contrast を採取した。
+  小標本の方向観測であり、verdict ではない。
 - **control_profile への lyrics チャネル案**：楽譜が「歌詞の有無で効き方が変わる」ことを
   自己記述できるよう、`control_profile` に意味層ノブ（例 `lyrics_presence`）を足す議論の入口。
   → SEM-1 で実装済み（[`control_profile.md`](control_profile.md) 参照）。
