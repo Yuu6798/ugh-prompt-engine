@@ -353,6 +353,35 @@ def test_resolve_perform_target_honors_explicit_fixture_id() -> None:
     assert slug == "custom_rep_id"
 
 
+def test_filename_safe_slug_sanitizes_path_separators_and_edges() -> None:
+    """Codex #135 P2: `meta.title` 由来 slug の `/` 等がネストパス書き込みに
+    化けて高コストな生成後に落ちないよう、単一ファイル名コンポーネントへ正規化。"""
+    from scripts.collect_musicgen_takes import _filename_safe_slug
+
+    assert _filename_safe_slug("edm/rock") == "edm-rock"
+    assert _filename_safe_slug("a\\b:c*d") == "a-b-c-d"
+    assert _filename_safe_slug("--weird--..") == "weird"
+    assert _filename_safe_slug("///") == "score"
+    assert _filename_safe_slug("already_safe-1.2") == "already_safe-1.2"
+    # 明示 --fixture-id も同じ正規化を通る
+    _, _, slug = resolve_perform_target(SCORE_PATH, fixture_id="custom/rep id")
+    assert slug == "custom-rep-id"
+
+
+def test_perform_takes_rejects_repetitions_below_two() -> None:
+    """Codex #135 P2: n<2 は roundtrip-rep で拒否されるため、モデルロード・
+    生成前（torch 不要のまま）に fail-fast する。"""
+    from scripts.collect_musicgen_takes import perform_takes
+
+    for repetitions in (0, 1):
+        with pytest.raises(ValueError, match="repetitions"):
+            perform_takes(
+                SCORE_PATH,
+                repetitions=repetitions,
+                output_dir=Path("/nonexistent-unused"),
+            )
+
+
 def test_perform_subcommand_reaches_import_error_without_torch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

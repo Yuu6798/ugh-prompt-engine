@@ -61,6 +61,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Optional
@@ -260,8 +261,23 @@ def resolve_perform_target(
 
     score = load_composition_score(score_path)
     prompt_text = ExternalPromptAdapter().render(score).text
-    slug = fixture_id or (normalize_label(score.meta.title).replace(" ", "-") or "score")
+    slug = _filename_safe_slug(
+        fixture_id or normalize_label(score.meta.title).replace(" ", "-")
+    )
     return score, prompt_text, slug
+
+
+def _filename_safe_slug(raw: str) -> str:
+    """slug を単一のファイル名コンポーネントとして安全な形に正規化する。
+
+    `meta.title` 由来の既定 slug は `EDM/Rock` のようにパス区切りを含みうる。
+    そのまま `sample_id` / `audio_path` に使うと `output_dir` 直下でない
+    ネストしたパスへの書き込みになり、**高コストな生成の後に** WAV 書き出しで
+    落ちる。英数字と `._-` 以外は `-` へ置換し、連続・端の `-`/`.` を刈り込む。
+    """
+    sanitized = re.sub(r"[^A-Za-z0-9._-]+", "-", raw)
+    sanitized = re.sub(r"-{2,}", "-", sanitized).strip("-.")
+    return sanitized or "score"
 
 
 def perform_takes(
@@ -284,7 +300,17 @@ def perform_takes(
     （反復間で変わるのは `seed` のみ）。音声は `output_dir` に WAV として
     書き出すのみでコミット対象にはしない。manifest の `audio_sha256` は
     書き出したバイト列から必ず計算する（`collect_clap_fixture.py` と同じ規約）。
+
+    `repetitions < 2` は**モデルロード・生成前に** fail-fast する — R3 反復
+    レポート（`svprpe roundtrip-rep`）は n>1 でのみ成立するため、無効な
+    手動バッチに生成時間を消費させてから解析側で落とすことを避ける。
     """
+    if repetitions < 2:
+        raise ValueError(
+            f"R3 perform batch requires --repetitions >= 2; got {repetitions}. "
+            "`svprpe roundtrip-rep` rejects n<2 batches, so generating them "
+            "would only waste MusicGen inference time."
+        )
     _, prompt_text, slug = resolve_perform_target(score_path, fixture_id=fixture_id)
 
     torch, AutoProcessor, MusicgenForConditionalGeneration = _import_musicgen_stack()
