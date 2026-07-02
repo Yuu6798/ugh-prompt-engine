@@ -294,6 +294,7 @@ K3。製品転移の「効果量の絶対水準」までは主張せず、**分�
 
 **Status**: K3-1 DONE（2026-07-01、決定論的演奏者リファレンス — 結果は §5.3）。
 K3-2a DONE（2026-07-02、K2 既存 fixture からの本物 Suno ミニ行列 — 結果は §5.4）。
+K3-1b DONE（2026-07-02、有意性の計器化）。
 フル Suno 行列（5 ツマミ + dead 行 + R 増員）は K3-2b（follow-up、生成バッチ人手律速）。
 
 ツマミ i が観測 j を動かさないか（レイヤー独立性）を N×N で測る。K0–K2 が立証した
@@ -408,7 +409,10 @@ mean effect_size_gap **0.551**。列単位では `key_match_baseline` の comple
    `IMPORTANCE_FLOOR` 0.2 は grip 分類の閾値であって干渉の有意性閾値ではない —
    行列は計器であり verdict を出さない（audit と同じ規律）。同じ理由で
    `active_rate_target` の対角 0.552（loose 表示）も spurious であり、**K1 の
-   dead 判定が正**（配線が無いことはコードで既知）。
+   dead 判定が正**（配線が無いことはコードで既知）。本判断は K3-1b で計器出力へ
+   昇格した（`known_dead` 宣言行からヌル分布を自動計算し、各セルに noise_margin /
+   天井超えフラグを付与。resolved と機械判定されたのは bpm→centroid/active_rate/
+   onset_density と brightness→onset_density — 散文の読みと一致）。
 3. **cap=10 の副作用が gap に出る**。spectral_centroid 列は brightness (160) と
    bpm (-11.6) が両方 cap=10 に張り付き effect_size_gap = 0（同率支配と表示）。
    実際は桁違いに brightness が強い。gap は cap 感度を持つ指標として読むこと
@@ -453,7 +457,10 @@ mean effect_size_gap 0.709。非対角 8 セル中 **6 が strong**。
    2.33 も天井内。確度の高い主張は (a) 対角の K2 再現、(b) **集計パターン** —
    非対角の大半が strong 側に立ち disentanglement が玩具の 1/7 に落ちる＝
    「本物 Suno は tight な対角を持ちながら直交性は玩具より大幅に悪い」まで。
-   セル単位の結合の確定は K3-2b（dead 行の同梱 + R≥8）で行う。
+   セル単位の結合の確定は K3-2b（dead 行の同梱 + R≥8）で行う。K3-1b で計器は
+   この但し書きをそのまま自己申告する — 本ミニ行列は `known_dead` 行を持たず
+   `noise.ceiling = None` となり、全セルが `exceeds_noise_ceiling = None`
+   （no_ceiling）で unresolved 表示になる（散文の但し書きが出力になった）。
 4. **legacy 帯域比センサー（K1 で dead）は実音源で両ツマミに反応**（1.55 / 0.804）。
    K2 の「センサー盲は素材依存」の補足が干渉列としても再確認された。
 

@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "fixture_id": "k3_2a_suno_mini_matrix_rpe_features",
   "generator": "suno",
   "repetitions": 4,
@@ -17,8 +17,11 @@
       "high_mean": 138.425,
       "effect": 1.610627,
       "interference_class": "strong",
+      "is_null_source": false,
       "expected_sign": 1,
-      "diagonal_classification": "tight"
+      "diagonal_classification": "tight",
+      "noise_margin": null,
+      "exceeds_noise_ceiling": null
     },
     {
       "knob": "bpm",
@@ -28,7 +31,10 @@
       "low_mean": 2226.435,
       "high_mean": 2967.955,
       "effect": 2.325323,
-      "interference_class": "strong"
+      "interference_class": "strong",
+      "is_null_source": false,
+      "noise_margin": null,
+      "exceeds_noise_ceiling": null
     },
     {
       "knob": "bpm",
@@ -38,7 +44,10 @@
       "low_mean": 0.98695,
       "high_mean": 0.961725,
       "effect": -0.959403,
-      "interference_class": "strong"
+      "interference_class": "strong",
+      "is_null_source": false,
+      "noise_margin": null,
+      "exceeds_noise_ceiling": null
     },
     {
       "knob": "bpm",
@@ -48,7 +57,10 @@
       "low_mean": 0.1303,
       "high_mean": 0.125075,
       "effect": -0.124327,
-      "interference_class": "clean"
+      "interference_class": "clean",
+      "is_null_source": false,
+      "noise_margin": null,
+      "exceeds_noise_ceiling": null
     },
     {
       "knob": "bpm",
@@ -58,7 +70,10 @@
       "low_mean": 0.0265,
       "high_mean": 0.0406,
       "effect": 1.546125,
-      "interference_class": "strong"
+      "interference_class": "strong",
+      "is_null_source": false,
+      "noise_margin": null,
+      "exceeds_noise_ceiling": null
     },
     {
       "knob": "brightness",
@@ -68,7 +83,10 @@
       "low_mean": 113.675,
       "high_mean": 110.01,
       "effect": -0.339598,
-      "interference_class": "weak"
+      "interference_class": "weak",
+      "is_null_source": false,
+      "noise_margin": null,
+      "exceeds_noise_ceiling": null
     },
     {
       "knob": "brightness",
@@ -79,8 +97,11 @@
       "high_mean": 2686.6825,
       "effect": 0.862707,
       "interference_class": "strong",
+      "is_null_source": false,
       "expected_sign": 1,
-      "diagonal_classification": "tight"
+      "diagonal_classification": "tight",
+      "noise_margin": null,
+      "exceeds_noise_ceiling": null
     },
     {
       "knob": "brightness",
@@ -90,7 +111,10 @@
       "low_mean": 0.985875,
       "high_mean": 0.964275,
       "effect": -1.38993,
-      "interference_class": "strong"
+      "interference_class": "strong",
+      "is_null_source": false,
+      "noise_margin": null,
+      "exceeds_noise_ceiling": null
     },
     {
       "knob": "brightness",
@@ -100,7 +124,10 @@
       "low_mean": 0.11805,
       "high_mean": 0.1512,
       "effect": 1.196965,
-      "interference_class": "strong"
+      "interference_class": "strong",
+      "is_null_source": false,
+      "noise_margin": null,
+      "exceeds_noise_ceiling": null
     },
     {
       "knob": "brightness",
@@ -110,7 +137,10 @@
       "low_mean": 0.0211,
       "high_mean": 0.02895,
       "effect": 0.803906,
-      "interference_class": "strong"
+      "interference_class": "strong",
+      "is_null_source": false,
+      "noise_margin": null,
+      "exceeds_noise_ceiling": null
     }
   ],
   "matrix": {
@@ -181,6 +211,12 @@
       "mean": 0.709073
     }
   },
+  "noise": {
+    "known_dead_knobs": [],
+    "null_cell_count": 0,
+    "ceiling": null,
+    "null_values": []
+  },
   "diagonal_summary": {
     "tight": 2,
     "loose": 0,
@@ -190,6 +226,11 @@
     "clean": 1,
     "weak": 1,
     "strong": 6
+  },
+  "resolution_summary": {
+    "resolved": 0,
+    "unresolved": 0,
+    "no_ceiling": 10
   },
   "dead_knobs": [],
   "untouched_sensors": []

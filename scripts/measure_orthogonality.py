@@ -43,9 +43,11 @@ from svp_rpe.control import (  # noqa: E402
     grip_effect_size,
     importance_matrix,
     mass_weighted_overall,
+    noise_ceiling,
+    noise_margin,
 )
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
 DEFAULT_FIXTURE = ROOT / "examples" / "control" / "k3" / "synth_performer_matrix_fixture.json"
 
 
@@ -93,14 +95,20 @@ def analyze_orthogonality(raw: dict[str, Any]) -> dict[str, Any]:
     extended_names = [str(s["name"]) for s in extended_sensors]
 
     cells: list[dict[str, Any]] = []
+    cell_raw_effects: list[float] = []
     effects_core_raw: list[list[float]] = []
     effects_extended_raw: list[list[float]] = []
+    null_pool: list[float] = []
+    known_dead_knobs: list[str] = []
 
     for knob in knobs:
         knob_name = str(knob["name"])
         low_level = str(knob["low_level"])
         high_level = str(knob["high_level"])
         expected_sign = int(knob["expected_sign"])
+        is_null_source_row = bool(knob.get("known_dead", False))
+        if is_null_source_row:
+            known_dead_knobs.append(knob_name)
 
         core_row: list[float] = []
         extended_row: list[float] = []
@@ -120,6 +128,9 @@ def analyze_orthogonality(raw: dict[str, Any]) -> dict[str, Any]:
             effect = grip_effect_size(low_values, high_values)
             is_diagonal = sensor_kind == "core" and sensor_name == str(knob["diagonal_sensor"])
 
+            if is_null_source_row:
+                null_pool.append(effect)
+
             cell: dict[str, Any] = {
                 "knob": knob_name,
                 "sensor": sensor_name,
@@ -129,11 +140,13 @@ def analyze_orthogonality(raw: dict[str, Any]) -> dict[str, Any]:
                 "high_mean": _round_float(float(np.mean(high_values))),
                 "effect": _round_float(effect),
                 "interference_class": classify_interference(effect),
+                "is_null_source": is_null_source_row,
             }
             if is_diagonal:
                 cell["expected_sign"] = expected_sign
                 cell["diagonal_classification"] = classify_grip(effect, expected_sign)
             cells.append(cell)
+            cell_raw_effects.append(effect)
 
             if sensor_kind == "core":
                 core_row.append(effect)
@@ -142,6 +155,26 @@ def analyze_orthogonality(raw: dict[str, Any]) -> dict[str, Any]:
 
         effects_core_raw.append(core_row)
         effects_extended_raw.append(extended_row)
+
+    # 有意性の計器化（K3-1b）: known_dead 行は配線が無いことがコードで既知＝
+    # 全セル（対角含む）が seed ノイズのみの経験的ヌル分布を供給する。
+    ceiling = noise_ceiling(null_pool)
+    resolution_counts: Counter[str] = Counter()
+    for cell, raw_effect in zip(cells, cell_raw_effects):
+        if cell["is_null_source"]:
+            cell["noise_margin"] = None
+            cell["exceeds_noise_ceiling"] = None
+            continue
+        margin = noise_margin(raw_effect, ceiling)
+        if margin is None:
+            cell["noise_margin"] = None
+            cell["exceeds_noise_ceiling"] = None
+            resolution_counts["no_ceiling"] += 1
+        else:
+            exceeds = margin > 1.0
+            cell["noise_margin"] = _round_float(margin)
+            cell["exceeds_noise_ceiling"] = bool(exceeds)
+            resolution_counts["resolved" if exceeds else "unresolved"] += 1
 
     importance = importance_matrix(effects_core_raw)
     row_masses = importance.sum(axis=1).tolist()
@@ -209,6 +242,13 @@ def analyze_orthogonality(raw: dict[str, Any]) -> dict[str, Any]:
         "importance_core": [_round_list(row.tolist()) for row in importance],
     }
 
+    noise = {
+        "known_dead_knobs": known_dead_knobs,
+        "null_cell_count": len(null_pool),
+        "ceiling": _round_float(ceiling) if ceiling is not None else None,
+        "null_values": _round_list(null_pool),
+    }
+
     return {
         "schema_version": SCHEMA_VERSION,
         "fixture_id": fixture_id,
@@ -218,6 +258,7 @@ def analyze_orthogonality(raw: dict[str, Any]) -> dict[str, Any]:
         "cells": cells,
         "matrix": matrix,
         "dci": dci,
+        "noise": noise,
         "diagonal_summary": {
             "tight": int(diagonal_summary["tight"]),
             "loose": int(diagonal_summary["loose"]),
@@ -227,6 +268,11 @@ def analyze_orthogonality(raw: dict[str, Any]) -> dict[str, Any]:
             "clean": int(interference_summary["clean"]),
             "weak": int(interference_summary["weak"]),
             "strong": int(interference_summary["strong"]),
+        },
+        "resolution_summary": {
+            "resolved": int(resolution_counts["resolved"]),
+            "unresolved": int(resolution_counts["unresolved"]),
+            "no_ceiling": int(resolution_counts["no_ceiling"]),
         },
         "dead_knobs": dead_knobs,
         "untouched_sensors": untouched_sensors,
@@ -274,8 +320,12 @@ def render_markdown(report: dict[str, Any]) -> str:
                 text = f"**{text}**"
             elif cell["interference_class"] == "strong":
                 text = f"{text} ⚠"
+            if cell.get("exceeds_noise_ceiling") is True:
+                text = f"{text} *"
             row.append(text)
         lines.append("| " + " | ".join(row) + " |")
+    lines.append("")
+    lines.append("* = ノイズ天井超え（既知 dead 行の経験的ヌル分布 max |d| を上回る）")
     lines.append("")
 
     dci = report["dci"]
@@ -301,15 +351,52 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines.append(f"- mean effect_size_gap: {_fmt(dci['effect_size_gap']['mean'], '.4g')}")
     lines.append("")
 
+    noise = report["noise"]
+    lines.append("## Noise ceiling\n")
+    if noise["ceiling"] is None:
+        lines.append(
+            "- ceiling: none — 既知 dead 行なし＝全セル unresolved"
+            "（計器は有意性を主張できない）"
+        )
+    else:
+        lines.append(f"- ceiling: {_fmt(noise['ceiling'], '.4g')}")
+    known_dead = noise["known_dead_knobs"]
+    lines.append(f"- known dead knobs: {', '.join(known_dead) if known_dead else 'none'}")
+    lines.append(f"- null cell count: {noise['null_cell_count']}")
+    lines.append("")
+
+    resolved_cells = sorted(
+        (c for c in report["cells"] if c.get("exceeds_noise_ceiling") is True),
+        key=lambda c: c["noise_margin"],
+        reverse=True,
+    )
+    lines.append("### Resolved cells\n")
+    if resolved_cells:
+        lines.append("| knob | sensor | effect | margin |")
+        lines.append("|---|---|---:|---:|")
+        for cell in resolved_cells:
+            lines.append(
+                f"| {cell['knob']} | {cell['sensor']} "
+                f"| {_fmt(cell['effect'])} | {_fmt(cell['noise_margin'], '.4g')} |"
+            )
+    else:
+        lines.append("(none)")
+    lines.append("")
+
     lines.append("## Summary\n")
     ds = report["diagonal_summary"]
     is_ = report["interference_summary"]
+    rs = report["resolution_summary"]
     lines.append(
         f"- diagonal: tight={ds['tight']} loose={ds['loose']} dead={ds['dead']}"
     )
     lines.append(
         f"- interference (off-diagonal): clean={is_['clean']} weak={is_['weak']} "
         f"strong={is_['strong']}"
+    )
+    lines.append(
+        f"- resolution: resolved={rs['resolved']} unresolved={rs['unresolved']} "
+        f"no_ceiling={rs['no_ceiling']}"
     )
     dead_knobs = report["dead_knobs"]
     lines.append(f"- dead knobs: {', '.join(dead_knobs) if dead_knobs else 'none'}")

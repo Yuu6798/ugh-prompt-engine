@@ -16,6 +16,8 @@ from svp_rpe.control import (
     effect_size_gap,
     importance_matrix,
     mass_weighted_overall,
+    noise_ceiling,
+    noise_margin,
     normalized_entropy,
 )
 
@@ -183,6 +185,37 @@ def test_effect_size_gap_single_row_is_one() -> None:
 
 
 # --------------------------------------------------------------------------
+# noise_ceiling / noise_margin
+# --------------------------------------------------------------------------
+
+
+def test_noise_ceiling_empty_is_none() -> None:
+    assert noise_ceiling([]) is None
+
+
+def test_noise_ceiling_mixed_signs_is_max_abs() -> None:
+    assert noise_ceiling([-2.53, 0.0, 0.4, -0.1]) == pytest.approx(2.53)
+
+
+def test_noise_ceiling_sentinel_dominates() -> None:
+    """dead 行にセンチネル ±999 が紛れると天井が 999 に張り付く（fail-safe）。"""
+    assert noise_ceiling([0.5, -999.0, 0.2]) == pytest.approx(999.0)
+
+
+def test_noise_margin_none_ceiling_is_none() -> None:
+    assert noise_margin(5.0, None) is None
+
+
+def test_noise_margin_zero_ceiling_is_none() -> None:
+    assert noise_margin(5.0, 0.0) is None
+
+
+def test_noise_margin_ratio() -> None:
+    assert noise_margin(-5.06, 2.53) == pytest.approx(2.0)
+    assert noise_margin(1.265, 2.53) == pytest.approx(0.5)
+
+
+# --------------------------------------------------------------------------
 # analyze_orthogonality on a small synthetic in-memory fixture
 # --------------------------------------------------------------------------
 
@@ -281,6 +314,129 @@ def test_analyze_orthogonality_short_repetitions_raises() -> None:
 
 
 # --------------------------------------------------------------------------
+# K3-1b: noise-ceiling instrumentation on analyze_orthogonality
+# --------------------------------------------------------------------------
+
+
+def test_analyze_orthogonality_no_dead_rows_has_no_ceiling() -> None:
+    """既知 dead 行が無い fixture では有意性を主張できない（計器の自己申告）。"""
+    report = analyze_orthogonality(_synthetic_raw())
+
+    assert report["noise"] == {
+        "known_dead_knobs": [],
+        "null_cell_count": 0,
+        "ceiling": None,
+        "null_values": [],
+    }
+    non_null_cells = [c for c in report["cells"] if not c["is_null_source"]]
+    assert len(non_null_cells) == len(report["cells"])
+    for cell in non_null_cells:
+        assert cell["noise_margin"] is None
+        assert cell["exceeds_noise_ceiling"] is None
+    assert report["resolution_summary"] == {
+        "resolved": 0,
+        "unresolved": 0,
+        "no_ceiling": len(report["cells"]),
+    }
+
+
+def _synthetic_raw_with_known_dead() -> dict:
+    """k1/k2 は診断センサーだけを動かす clean な設計、k3 は既知 dead 行（ノイズ源）。"""
+    knobs = [
+        {"name": "k1", "low_level": "lo", "high_level": "hi", "diagonal_sensor": "s1",
+         "expected_sign": 1},
+        {"name": "k2", "low_level": "lo", "high_level": "hi", "diagonal_sensor": "s2",
+         "expected_sign": 1},
+        {"name": "k3", "low_level": "lo", "high_level": "hi", "diagonal_sensor": "s3",
+         "expected_sign": 1, "known_dead": True},
+    ]
+    sensors = [
+        {"name": "s1", "path": "s1", "kind": "core"},
+        {"name": "s2", "path": "s2", "kind": "core"},
+        {"name": "s3", "path": "s3", "kind": "core"},
+    ]
+    samples = [
+        # k1: large, clean effect on its own diagonal s1; s2/s3 untouched.
+        {"sample_id": "k1_lo_r01", "knob": "k1", "level": "lo", "repeat": 1,
+         "features": {"s1": 0.0, "s2": 1.0, "s3": 0.0}},
+        {"sample_id": "k1_lo_r02", "knob": "k1", "level": "lo", "repeat": 2,
+         "features": {"s1": 0.1, "s2": 1.0, "s3": 0.0}},
+        {"sample_id": "k1_hi_r01", "knob": "k1", "level": "hi", "repeat": 1,
+         "features": {"s1": 3.0, "s2": 1.0, "s3": 0.0}},
+        {"sample_id": "k1_hi_r02", "knob": "k1", "level": "hi", "repeat": 2,
+         "features": {"s1": 3.1, "s2": 1.0, "s3": 0.0}},
+        # k2: large, clean effect on its own diagonal s2; s1/s3 untouched.
+        {"sample_id": "k2_lo_r01", "knob": "k2", "level": "lo", "repeat": 1,
+         "features": {"s1": 1.0, "s2": 0.0, "s3": 0.0}},
+        {"sample_id": "k2_lo_r02", "knob": "k2", "level": "lo", "repeat": 2,
+         "features": {"s1": 1.0, "s2": 0.1, "s3": 0.0}},
+        {"sample_id": "k2_hi_r01", "knob": "k2", "level": "hi", "repeat": 1,
+         "features": {"s1": 1.0, "s2": 3.0, "s3": 0.0}},
+        {"sample_id": "k2_hi_r02", "knob": "k2", "level": "hi", "repeat": 2,
+         "features": {"s1": 1.0, "s2": 3.1, "s3": 0.0}},
+        # k3 (known_dead): seed-noise-only wobble on every sensor, including its
+        # own "diagonal" s3 -- nothing here is a real signal.
+        {"sample_id": "k3_lo_r01", "knob": "k3", "level": "lo", "repeat": 1,
+         "features": {"s1": 0.0, "s2": 0.0, "s3": 0.0}},
+        {"sample_id": "k3_lo_r02", "knob": "k3", "level": "lo", "repeat": 2,
+         "features": {"s1": 0.05, "s2": 0.05, "s3": 0.05}},
+        {"sample_id": "k3_hi_r01", "knob": "k3", "level": "hi", "repeat": 1,
+         "features": {"s1": 0.1, "s2": 0.1, "s3": 0.2}},
+        {"sample_id": "k3_hi_r02", "knob": "k3", "level": "hi", "repeat": 2,
+         "features": {"s1": 0.15, "s2": 0.15, "s3": 0.25}},
+    ]
+    return {
+        "fixture_id": "synthetic_test_fixture_known_dead",
+        "generator": "synthetic",
+        "repetitions": 2,
+        "knobs": knobs,
+        "sensors": sensors,
+        "samples": samples,
+    }
+
+
+def test_analyze_orthogonality_known_dead_row_supplies_null_pool() -> None:
+    report = analyze_orthogonality(_synthetic_raw_with_known_dead())
+
+    null_source_cells = [c for c in report["cells"] if c["is_null_source"]]
+    assert {c["knob"] for c in null_source_cells} == {"k3"}
+    # all 3 sensors of the known_dead row, including its own diagonal.
+    assert len(null_source_cells) == 3
+    for cell in null_source_cells:
+        assert cell["noise_margin"] is None
+        assert cell["exceeds_noise_ceiling"] is None
+
+    assert report["noise"]["known_dead_knobs"] == ["k3"]
+    assert report["noise"]["null_cell_count"] == 3
+    assert report["noise"]["ceiling"] == pytest.approx(5.656854)
+    assert report["noise"]["null_values"] == [
+        pytest.approx(2.828427),
+        pytest.approx(2.828427),
+        pytest.approx(5.656854),
+    ]
+
+
+def test_analyze_orthogonality_known_dead_row_classifies_live_cells() -> None:
+    report = analyze_orthogonality(_synthetic_raw_with_known_dead())
+
+    by_knob_sensor = {(c["knob"], c["sensor"]): c for c in report["cells"]}
+
+    resolved = by_knob_sensor[("k1", "s1")]
+    assert resolved["exceeds_noise_ceiling"] is True
+    assert resolved["noise_margin"] == pytest.approx(7.5)
+
+    resolved2 = by_knob_sensor[("k2", "s2")]
+    assert resolved2["exceeds_noise_ceiling"] is True
+
+    unresolved = by_knob_sensor[("k1", "s2")]
+    assert unresolved["effect"] == pytest.approx(0.0)
+    assert unresolved["exceeds_noise_ceiling"] is False
+    assert unresolved["noise_margin"] == pytest.approx(0.0)
+
+    assert report["resolution_summary"] == {"resolved": 2, "unresolved": 4, "no_ceiling": 0}
+
+
+# --------------------------------------------------------------------------
 # Snapshot test (fixture generated by scripts/build_k3_fixture.py)
 # --------------------------------------------------------------------------
 
@@ -363,3 +519,19 @@ def test_render_markdown_contains_matrix_header() -> None:
     markdown = render_markdown(report)
     assert "# K3 orthogonality matrix" in markdown
     assert "## Effect-size matrix" in markdown
+
+
+def test_render_markdown_no_ceiling_shows_none_phrasing() -> None:
+    report = analyze_orthogonality(_synthetic_raw())
+    markdown = render_markdown(report)
+    assert "## Noise ceiling" in markdown
+    assert "none — 既知 dead 行なし＝全セル unresolved（計器は有意性を主張できない）" in markdown
+
+
+def test_render_markdown_with_ceiling_shows_legend_and_resolved_table() -> None:
+    report = analyze_orthogonality(_synthetic_raw_with_known_dead())
+    markdown = render_markdown(report)
+    assert "## Noise ceiling" in markdown
+    assert "* = ノイズ天井超え（既知 dead 行の経験的ヌル分布 max |d| を上回る）" in markdown
+    assert "### Resolved cells" in markdown
+    assert "| k1 | s1 |" in markdown

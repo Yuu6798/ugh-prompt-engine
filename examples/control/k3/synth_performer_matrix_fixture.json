@@ -38,7 +38,8 @@
       "low_level": "0.80-0.85",
       "high_level": "0.95-0.98",
       "diagonal_sensor": "active_rate",
-      "expected_sign": 1
+      "expected_sign": 1,
+      "known_dead": true
     },
     {
       "name": "valley_depth_target",
@@ -46,7 +47,8 @@
       "low_level": "0.05-0.10",
       "high_level": "0.30-0.40",
       "diagonal_sensor": "valley_depth",
-      "expected_sign": 1
+      "expected_sign": 1,
+      "known_dead": true
     }
   ],
   "sensors": [

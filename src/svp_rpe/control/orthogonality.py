@@ -155,3 +155,34 @@ def effect_size_gap(importance: np.ndarray) -> list[float | None]:
             continue
         gaps.append(float((top1 - top2) / top1))
     return gaps
+
+
+def noise_ceiling(null_values: Sequence[float]) -> float | None:
+    """既知 dead 行（=配線が無いことがコードで既知のツマミ）から集めた効果量の
+    経験的ヌル分布の天井 = |d| の最大値。
+
+    ``null_values`` は生の効果量（符号付き d）をそのまま渡す — floor/cap 済みの
+    importance ではない。空なら ``None``（既知 dead 行がない fixture では有意性を
+    主張できない、というハーネスの誠実な自己申告）。
+
+    センチネル ±999（ゼロ分散飽和）が dead 行に紛れ込むと天井が 999 に張り付き、
+    以降の全セルが unresolved 判定になる。これはバグではなく fail-safe な挙動と
+    位置づける（誤って「有意」と主張するより、判定不能と申告する方が安全）。
+    """
+
+    values = [abs(float(v)) for v in null_values]
+    if not values:
+        return None
+    return max(values)
+
+
+def noise_margin(effect: float, ceiling: float | None) -> float | None:
+    """効果量とノイズ天井の比 |effect| / ceiling。
+
+    天井が ``None``（既知 dead 行がない）、または ``GRIP_EPSILON`` 未満（実質ゼロ）
+    なら比較が定義できないため ``None``。
+    """
+
+    if ceiling is None or ceiling < GRIP_EPSILON:
+        return None
+    return float(abs(float(effect)) / ceiling)
