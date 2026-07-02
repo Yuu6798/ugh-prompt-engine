@@ -148,9 +148,9 @@ flowchart TD
 
 ### Pre-prototype 完了基準
 
-- [ ] 外部レビュアーが自前のサンプル音源でパイプラインを実行・比較できる
+- [x] 外部レビュアーが自前のサンプル音源でパイプラインを実行・比較できる
 - [ ] スコアが人手評価と一致する根拠が少なくとも1件示されている
-- [ ] batch 結果が CSV/MD で共有できる
+- [x] batch 結果が CSV/MD で共有できる
 - [ ] インストール失敗率が低い (Docker or PyPI)
 - [ ] エラー発生時に raw traceback が出ない
 - [ ] 実音源1曲あたりの処理時間が文書化されている
@@ -175,12 +175,12 @@ flowchart TD
 
 **目的**: 「動く」から「検証できる」へ。
 
-| ID | 成果物 | 受け入れ条件 |
-|---|---|---|
-| P1-01 | `examples/sample_input/*.wav` 3-5点 | 合成サイン波 or CC0 音源、ジャンル多様 |
-| P1-02 | `examples/expected_output/*.json` | 各サンプルに対する RPE/SVP/score |
-| P1-03 | `tests/test_snapshot.py` | hash 比較で出力の一致を CI 検証 |
-| P1-04 | `scripts/regenerate_expected.py` | 期待値更新スクリプト（CI fixture は `scripts/regenerate_ci_fixtures.py`） |
+| ID | 成果物 | 受け入れ条件 | Status |
+|---|---|---|---|
+| P1-01 | `examples/sample_input/*.wav` 3-5点 | 合成サイン波 or CC0 音源、ジャンル多様 | ✅実装済み — `examples/sample_input/synth_01`–`synth_05` + `ground_truth.yaml` |
+| P1-02 | `examples/expected_output/*.json` | 各サンプルに対する RPE/SVP/score | ✅実装済み — `examples/expected_output/` + `hashes.txt` |
+| P1-03 | `tests/test_snapshot.py` | hash 比較で出力の一致を CI 検証 | ✅実装済み — `tests/test_snapshot.py`（sha256 比較・slow marker） |
+| P1-04 | `scripts/regenerate_expected.py` | 期待値更新スクリプト（CI fixture は `scripts/regenerate_ci_fixtures.py`） | ✅実装済み — `scripts/regenerate_expected.py` |
 
 **推定工数**: 0.5 日
 
@@ -188,11 +188,11 @@ flowchart TD
 
 **目的**: 「このスコアは信じていいのか」に答える。
 
-| ID | 成果物 | 受け入れ条件 |
-|---|---|---|
-| P2-01 | `docs/validation.md` | 実音源 5-10曲に対するスコアと人手評価の比較表 |
-| P2-02 | ゴールデンデータセット定義 | ジャンル / 曲長 / BPM 分布が偏らない選定 |
-| P2-03 | `config/baselines/` | ジャンル別 Pro baseline (or 単一 baseline の妥当性検証) |
+| ID | 成果物 | 受け入れ条件 | Status |
+|---|---|---|---|
+| P2-01 | `docs/validation.md` | 実音源 5-10曲に対するスコアと人手評価の比較表 | ⏳部分 — `docs/validation.md` は存在（合成5曲定量 + 実音源スモーク）だが人手評価比較は未 |
+| P2-02 | ゴールデンデータセット定義 | ジャンル / 曲長 / BPM 分布が偏らない選定 | ❌未着手 |
+| P2-03 | `config/baselines/` | ジャンル別 Pro baseline (or 単一 baseline の妥当性検証) | ⏳ — `config/acoustic_baseline.yaml`, `edm_baseline.yaml`, `loud_pop_baseline.yaml` がフラット配置で実装済み（本表記載の `config/baselines/` ディレクトリ形式とは異なる）・妥当性根拠は薄い |
 
 **推定工数**: 2–3 日 (人手アノテーション含む)
 
@@ -200,11 +200,11 @@ flowchart TD
 
 **目的**: 結果を他人に渡せる形にする。
 
-| ID | 成果物 | 受け入れ条件 |
-|---|---|---|
-| P3-01 | `src/svp_rpe/batch/report.py` 実装 | CSV + Markdown 出力、ランキング/統計込み |
-| P3-02 | `svprpe batch --report md` | CLI オプション追加 |
-| P3-03 | `CHANGELOG.md` | v0.1 / v0.2 / v0.3 の差分明記 |
+| ID | 成果物 | 受け入れ条件 | Status |
+|---|---|---|---|
+| P3-01 | `src/svp_rpe/batch/report.py` 実装 | CSV + Markdown 出力、ランキング/統計込み | ⏳実装済み — 実体は `src/svp_rpe/batch/runner.py` の `render_summary_csv`/`write_batch_outputs`、`--output-dir` 経由で CSV/MD 出力。`batch/report.py` は空スタブ |
+| P3-02 | `svprpe batch --report md` | CLI オプション追加 | ⏳部分 — CSV/MD 出力の機能自体は `--output-dir` 経由で提供済み（完了基準「batch 結果が CSV/MD で共有できる」はこれで充足）。成果物として書かれた `--report md` オプションは未実装 — フラグを追加するか `--output-dir` を正式成果物として本行を再定義するかは未決 |
+| P3-03 | `CHANGELOG.md` | v0.1 / v0.2 / v0.3 の差分明記 | ❌未着手（`CHANGELOG.md` なし） |
 
 **推定工数**: 0.5–1 日
 
@@ -212,12 +212,12 @@ flowchart TD
 
 **目的**: エラー時と長時間実行時の体験を改善する。
 
-| ID | 成果物 | 受け入れ条件 |
-|---|---|---|
-| P4-01 | `--verbose` / `--debug` フラグ | 中間特徴量・処理時間ログ出力 |
-| P4-02 | CLI エラーハンドリング | typer.BadParameter + rich panel で traceback 抑制 |
-| P4-03 | ベンチマーク記載 | README に "5分曲で約Xs" 等 |
-| P4-04 | `docs/migration.md` | schema_version 変更時の方針 |
+| ID | 成果物 | 受け入れ条件 | Status |
+|---|---|---|---|
+| P4-01 | `--verbose` / `--debug` フラグ | 中間特徴量・処理時間ログ出力 | ❌未着手 |
+| P4-02 | CLI エラーハンドリング | typer.BadParameter + rich panel で traceback 抑制 | ❌未着手 |
+| P4-03 | ベンチマーク記載 | README に "5分曲で約Xs" 等 | ❌未着手 |
+| P4-04 | `docs/migration.md` | schema_version 変更時の方針 | ✅実装済み — `docs/migration.md` |
 
 **推定工数**: 1 日
 
@@ -225,12 +225,12 @@ flowchart TD
 
 **目的**: インストール障壁を下げる。
 
-| ID | 成果物 | 受け入れ条件 |
-|---|---|---|
-| P5-01 | `Dockerfile` + `docker-compose.yml` | `docker run` で svprpe が動く |
-| P5-02 | PyPI 公開 (任意) | `pip install svp-rpe` |
-| P5-03 | CI に Python 3.10 追加 | CLAUDE.md 宣言との整合 |
-| P5-04 | `docs/usecases.md` | 想定ユーザ・シナリオ 3 件以上 |
+| ID | 成果物 | 受け入れ条件 | Status |
+|---|---|---|---|
+| P5-01 | `Dockerfile` + `docker-compose.yml` | `docker run` で svprpe が動く | ❌未着手 |
+| P5-02 | PyPI 公開 (任意) | `pip install svp-rpe` | ❌未着手 |
+| P5-03 | CI に Python 3.10 追加 | CI へ 3.10 を追加するか、対応しない方針を確定する（現状 CLAUDE.md は 3.11/3.12 に修正済み） | ❌未着手 |
+| P5-04 | `docs/usecases.md` | 想定ユーザ・シナリオ 3 件以上 | ❌未着手 |
 
 **推定工数**: 1–2 日
 

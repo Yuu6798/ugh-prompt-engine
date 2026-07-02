@@ -127,6 +127,8 @@ T2 でループが立った後は、フィールド追加の Design Memo に往�
 
 ### T0: per-field 計測ユーティリティ
 
+**Status**: IMPLEMENTED（PR #70）
+
 **目的**: 音源 1 本から、CompositionScore の指定フィールドに転記可能な計測値を
 取得する最小ユーティリティ。
 
@@ -169,6 +171,8 @@ snapshot test で固定される。校正メモに既知の癖（例: bpm 高水
 形式で表現されている。
 
 ### T2: 往復保存性の最小実証
+
+**Status**: R0 として実装済み（[`docs/roadmap_goal2.md`](roadmap_goal2.md) R0 参照）
 
 **目的**: §2 の双方向再現性を初めて数値にする。
 

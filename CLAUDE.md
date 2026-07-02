@@ -25,7 +25,7 @@ API キー不要、LLM 不要、同一入力 → 同一出力の完全決定論�
 - **Build**: setuptools (pyproject.toml, src layout)
 - **Lint**: ruff (line-length=100, target py311)
 - **Test**: pytest
-- **CI**: GitHub Actions (Python 3.10/3.11/3.12)
+- **CI**: GitHub Actions (Python 3.11/3.12)
 - **Audio**: librosa + soundfile
 - **Models**: Pydantic v2
 - **CLI**: typer + rich
@@ -34,18 +34,29 @@ API キー不要、LLM 不要、同一入力 → 同一出力の完全決定論�
 
 ## Advisor Strategy（モデル運用方針）
 
-- **メインエージェント**: Opus（設計メモ起案・PR レビュー・再レビュー・メモリ管理）
-- **サブエージェント**: Sonnet 固定（探索・読み取り中心の調査タスク）
+**2026-07-02 改訂**（Fable 5 主導体制、#125–#132 で実運用実証済み）:
 
-Agent ツールで spawn する際は必ず `model: "sonnet"` を指定すること。
+- **メインエージェント**: Fable 5（設計判定・Design Memo 起草・PR レビュー / 再レビュー・
+  結果解釈・メモリ管理）。Fable 非稼働セッションでは Opus が代行
+- **実装・探索サブエージェント**: Sonnet 固定（実装、探索・読み取り中心の調査タスク）
+- **非設計分析サブエージェント**: Opus（設計判断を伴わないレビュー指摘の分析・トリアージ）
+
+Agent ツールで spawn する際は必ず `model` を明示すること。
 
 ```python
-# 正しい例
+# 正しい例（実装・探索は Sonnet 固定）
 Agent({"model": "sonnet", "subagent_type": "Explore", "prompt": "..."})
 
-# NG — model 省略すると Opus で動き、コスト効率が下がる
+# NG — model 省略するとメインと同モデルで動き、コスト効率が下がる
 Agent({"subagent_type": "Explore", "prompt": "..."})
 ```
+
+### レビュー対応の振り分けルール（2026-07-02 新設、#131 で初運用）
+
+- **マシン非依存**（コード・テスト・docs・fixture メタデータ）= **Fable が直接対応**。
+  `codex/*` ブランチへの push 可、対応内容をレビュースレッドに明記する
+- **マシン依存**（実音源・実重みハッシュ・Suno 生成・G4 ライセンス目視）= **Codex / User**
+- 判断が割れたら Fable が設計判定を先に出して振り分ける
 
 ## Workflow（Codex × Claude × User 分業オーケストレーション）
 
@@ -54,7 +65,7 @@ Agent({"subagent_type": "Explore", "prompt": "..."})
 Claude Code は仕様整理とレビューに集中し、Codex がローカル実装・検証・PR 作成・
 指摘対応を担当する。
 
-- **Claude Code (Opus)** — タスク Brief 読解、Design Memo 起案、実装方針 / 受け入れ条件 / リスク / テスト観点の整理、PR レビュー、再レビュー、メモリ管理
+- **Claude Code (Fable 5 / 非稼働時 Opus)** — タスク Brief 読解、Design Memo 起案、実装方針 / 受け入れ条件 / リスク / テスト観点の整理、PR レビュー、再レビュー、メモリ管理
 - **Codex** — Design Memo を受けて実装、PR 作成、レビュー指摘対応、セルフレビュー
 - **User** — エージェント間の橋渡し、最終マージ判断、ループのトリガー
 
@@ -186,7 +197,7 @@ examples/                      # sample_input/ + expected_output/
 | [`docs/composition_score_product_brief.md`](docs/composition_score_product_brief.md) | Composition Score プロダクト定義: 三層作曲言語の思想、正規スキーマ、MVP 範囲、PoC 1–5 ロードマップ |
 | [`docs/composition_poc_planning.md`](docs/composition_poc_planning.md) | Composition PoC 実装計画: C1–C6 フェーズ、ブリーフ下流の実装詳細・設計判断ログ |
 | [`docs/composition_poc_report.md`](docs/composition_poc_report.md) | C4 E2E デモ結果: 決定論的シンセ演奏者による 2 テイク針比較、センサー帯域の発見、PoC 5 の決定論パス実証 |
-| [`docs/controllability_poc.md`](docs/controllability_poc.md) | 制御トラック PoC 計画 (K 系列): パラメータ=効くツマミの読み替え、grip 効果量の定義、K0 最小方法実証〜K2 Suno 転移 |
+| [`docs/controllability_poc.md`](docs/controllability_poc.md) | 制御トラック PoC 計画 (K 系列): パラメータ=効くツマミの読み替え、grip 効果量の定義、K0〜K2 Suno 転移、K3 直交性行列（DCI/MIG 効果量再定式化・実 Suno ミニ行列・機種結合の符号反転発見） |
 | [`docs/score_centric_planning.md`](docs/score_centric_planning.md) | 楽譜中心の再編成: 双方向再現性の通底原理、採譜トラック (T 系列) T0–T2、Q 系列の計器校正への再定義、意味層センサーの将来枠 |
 | [`docs/event_roundtrip.md`](docs/event_roundtrip.md) | R4 事象レベル欄（コード進行）の往復入場計画: `chord_progression` × `compute_chord_events` × コード系列一致率、fixity/4値診断への適用 |
 | [`docs/roundtrip_case_studies.md`](docs/roundtrip_case_studies.md) | Suno 往復テストケース結果 (個別ログ) と R1 corpus manifest の入口: 計器の有効帯域、物理固定・意味差替の制御性 A/B、双方向性成功 (BPM 留保)、BPM 89.1 アトラクタ疑い |

@@ -47,6 +47,16 @@ inventing context (documented recurring failure mode).
 7. **タスク粒度が 0.5–2 日か確認** — 大きすぎる場合はフェーズ分割。
 8. **レビュー回数の予測** — 0 回が理想。3 回以上かかりそうなら memo の仕様
    が不足している。
+9. **CompositionScore / PhysicalLayer 新フィールドの入場試験を確認** — memo に
+   その欄の **fixity（locked 可能か）** と **往復一致の実測 or 実測計画**
+   （`docs/roundtrip_preservation.md` 参照）を必ず記載する。詳細は
+   `AGENTS.md §7` item 9。
+10. **locked file と未検出フィールドを初手で縛る** — Scope OUT の「変更禁止
+    ファイル」（特に共有スキーマ `compose/models.py` 等）は edge case 対応でも
+    破ってよくないと明記する。あわせて計測値が未検出/低信頼になりうるフィールドの
+    扱い（素直に欠落 / sentinel / schema は触らない）を memo 段階で確定する。
+    未確定だと実装者が locked schema を広げて吸収し、自動レビュアーの連鎖 P2
+    （PR #71 で 10+ ラウンド churn）を誘発する。詳細は `AGENTS.md §7` item 10。
 
 ### 1a. Schema grounding  ⚠️ highest-yield
 
@@ -64,7 +74,9 @@ memory. Canonical surfaces to grep:
 
 Use the Design Memo template verbatim from `AGENTS.md §1`:
 `Phase / Goal / Acceptance Criteria / Implementation Approach / Risks /
-Test Strategy / Scope / Allowed Dependencies / Required Outputs / Done When`.
+Test Strategy / Scope / Schema Admission（該当時） / Allowed Dependencies /
+Required Outputs / Done When`. Schema Admission is mandatory whenever the
+brief adds/changes a CompositionScore / PhysicalLayer field (checklist item 9).
 
 Make every Acceptance Criterion **verifiable** (a command, a test, or a
 grep-able assertion). Target task size ≈ 0.5–2 days. Branch name is

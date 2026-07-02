@@ -117,7 +117,7 @@
 |---|---|---|
 | C 系列（作曲＝行き道） | Score → TargetSVP → プロンプト / 決定論シンセ演奏者 | ✅ C1–C4 完了（[`composition_poc_report.md`](composition_poc_report.md)）。C4 が決定論演奏者として往復の行き道を提供 |
 | T 系列（採譜＝帰り道） | 演奏 → 計測 → draft Score | ⏳ T0（per-field 計測）/ T1（`svprpe transcribe`）実装済み（PR #70/#71）。**T2（往復保存性の最小実証）= R0 として実装済み・受け入れ確認は残**（§R0） |
-| K 系列（grip） | フィールドごとの「効き」地図 | ⏳ K0/K1 完了（決定論演奏者、PR #61/#65、dead 2 分類確立）。**K2（Suno 転移）未** |
+| K 系列（grip） | フィールドごとの「効き」地図 | ✅ K0/K1/K2 完了（決定論演奏者、PR #61/#65、dead 2 分類確立。K2 は Suno 転移実測 — #117, 2026-06-29, [`controllability_poc.md`](controllability_poc.md) §5.2） |
 | Q 系列（校正） | 復路の計器の目盛り付け | ✅ Q1-3（BPM 校正）closeout 済（2026-06-18, #82–#86）— bpm を R3 信頼ノブから除外確定。残 `BPM_CONFIDENCE_CV_SCALE` 実校正も closeout 済（2026-06-22 #92/#93・`CV_SCALE=5.0` 確定、Drive 解決可能 3 本で成立）。**upload-only 4 本の Drive 化は 2026-06-22 完了（screen 対象 7 本すべて `drive_file_id` 保有）。R1 残は screen 対象外の `wafu_jungle_174` バイト入手のみ**（§R1） |
 | 実生成器先取り | 実 Suno での往復 n=1 | ⏳ [`roundtrip_case_studies.md`](roundtrip_case_studies.md): key/brightness で往復成功・bpm は除外確定（closeout）・音源未コミットで**再実行不可**（R1 で解消予定） |
 
@@ -279,14 +279,20 @@ confidence を精緻化するだけの**非ブロッキング follow-up** で、
 > **注意**: 再採譜を連鎖させると BPM だけがテンポ半分へドリフト伝播する
 > （同上 §4）。往復を複数周回す実験では bpm のドリフトを監視対象にする。
 
-### R3: 確率的演奏者での往復実証 ❌ **未着手（K2 連動）**
+> **後続知見（2026-06-26, #106）**: closeout 後に rock corpus（#106）で単一ノブ
+> （prior/sr/閾値）調整では大域的修正が存在しないことを再実証し、bpm 除外の
+> 結論を補強した（詳細: [`roundtrip_corpus_screen.md`](roundtrip_corpus_screen.md) finding #6）。
+
+### R3: 確率的演奏者での往復実証 ❌ **未着手（前提だった K2 は完了済み。R3-1〜R3-3 自体が未着手で、残律速は Suno 生成バッチ（人手）のみ）**
 
 **目的**: 決定論（R0）で立った往復を、本命の **確率的演奏者（Suno 級）** で
 実証する。K1 grip 地図が「配線既知の決定論演奏者」での測定だったのに対し、
 転移の確認（K2）はコンセプトの土台に関わる
-（[`score_centric_planning.md`](score_centric_planning.md) §6 急所2）。
+（[`score_centric_planning.md`](score_centric_planning.md) §6 急所2）。K2 自体は
+#117（2026-06-29, [`controllability_poc.md`](controllability_poc.md) §5.2）で
+完了済み — 残るのは R3-1〜R3-3（本セクション）の未着手分。
 
-**依存**: R1（再実行可能 corpus の **key / brightness 部分**）/ K2。
+**依存**: R1（再実行可能 corpus の **key / brightness 部分**）/ K2（✅ 完了済み、#117）。
 **R2 はブロッカーではない** — R2 closeout（2026-06-18, bpm を R3 信頼ノブから除外確定）
 の scope 決定を入力として受けるのみで、bpm 校正の完了を待たない（CV-scale 校正も
 2026-06-22 に実音源で closeout 済・#92/#93、R3 への影響なし）。
@@ -303,7 +309,7 @@ confidence を精緻化するだけの**非ブロッキング follow-up** で、
 **推定工数**: 5–7 日（律速は手動生成バッチ＝人間の作業時間。Claude/Codex
 サイクルとは競合しない）
 
-### R4: 作品同一性 — 事象レベル欄の往復 ⏳ **実装済み（受け入れ確認は残）**
+### R4: 作品同一性 — 事象レベル欄の往復 ✅ **closeout（2026-06-19, #89/#90）**
 
 > **実装ポインタ**: R4-1〜R4-3 とも実装済み。`CompositionScore.events`（`EventLayer.chord_progression`）、
 > performer の chord 進行読み取り、`diagnose.py` のコード進行 4 値診断、`fixity.chord_progression`
