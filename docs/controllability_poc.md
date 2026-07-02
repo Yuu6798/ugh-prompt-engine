@@ -293,7 +293,8 @@ K3。製品転移の「効果量の絶対水準」までは主張せず、**分�
 ### K3: 直交性行列 — DCI/MIG の効果量再定式化
 
 **Status**: K3-1 DONE（2026-07-01、決定論的演奏者リファレンス — 結果は §5.3）。
-Suno 実測での行列取得は K3-2（follow-up、生成バッチ人手律速）。
+K3-2a DONE（2026-07-02、K2 既存 fixture からの本物 Suno ミニ行列 — 結果は §5.4）。
+フル Suno 行列（5 ツマミ + dead 行 + R 増員）は K3-2b（follow-up、生成バッチ人手律速）。
 
 ツマミ i が観測 j を動かさないか（レイヤー独立性）を N×N で測る。K0–K2 が立証した
 対角 grip（ツマミ i → センサー i）を非対角へ一般化し、「楽譜が操作盤として成立して
@@ -418,6 +419,48 @@ mean effect_size_gap **0.551**。列単位では `key_match_baseline` の comple
    されていたからで、生成系の楽譜は直交性を**測って**主張する必要がある — その
    計器が本行列。Suno 実測（K3-2）では生成器の確率ノイズが大きいぶんノイズ天井が
    さらに上がるはずで、R の増員か水準差の拡大が必要になる見込み。
+
+#### 5.4 K3-2a 結果 — 本物 Suno のミニ直交性行列（K2 fixture 再利用、R=4、2026-07-02）
+
+K2(#117) の committed fixture は全サンプルに複数センサーを記録済みだったため、
+**新規生成ゼロ**で本物 Suno の 2×2 コア + extended 3 列を測れる。再現:
+`python scripts/build_k3_suno_mini_fixture.py`（K2 fixture の決定論変換、音声処理なし）→
+`python scripts/measure_orthogonality.py --fixture examples/control/k3/suno_mini_matrix_fixture.json`。
+成果物は `examples/control/k3/`（`suno_mini_matrix_fixture.json` /
+`expected_orthogonality_suno_mini.json` / `orthogonality_map_suno_mini.md`）。
+key は K2 バッチにベースライン key の宣言が無いためセンサー化しない（honesty）。
+
+| knob \ sensor | bpm | spectral_centroid | active_rate† | valley_depth† | brightness_band_ratio† |
+|---|---|---|---|---|---|
+| bpm | **1.61** | 2.33 ⚠ | -0.959 ⚠ | -0.124 | 1.55 ⚠ |
+| brightness | -0.34 | **0.863** | -1.39 ⚠ | 1.2 ⚠ | 0.804 ⚠ |
+
+DCI: overall disentanglement **0.051**（玩具 0.375）/ overall completeness 0.224 /
+mean effect_size_gap 0.709。非対角 8 セル中 **6 が strong**。
+
+読み（確度の階層を明示する）:
+
+1. **対角は K2 公表値を正確に再現**（bpm 1.61 / brightness 0.863 = §5.2 の
+   1.61 / 0.86）。行列は対角 grip を特殊ケースとして含む — 変換の忠実性の検証を兼ねる。
+2. **bpm→centroid 結合は本物 Suno にも見えるが、符号が玩具と逆**（玩具 −11.6 =
+   速いほど暗い / Suno +2.33 = 速い指定ほど明るいミックス）。結合の**向きが生成器
+   固有**であることは、干渉補正が普遍則でなく**機種デバイスプロファイル**
+   （[`ai_performer_score_roadmap.md`](ai_performer_score_roadmap.md) PR3 後半）で
+   持つべき知識であることの実証的動機になる。
+3. **ただし個々の非対角セルは R=4 では未解決**。本ミニ行列には dead ツマミ行
+   （内部ヌル分布）が無く、K3-1 の経験的ノイズ天井（seed ジッターのみで
+   |d| ≲ 2.5、§5.3 発見 2）を本物生成器の R=4 に当てはめると、最大の非対角
+   2.33 も天井内。確度の高い主張は (a) 対角の K2 再現、(b) **集計パターン** —
+   非対角の大半が strong 側に立ち disentanglement が玩具の 1/7 に落ちる＝
+   「本物 Suno は tight な対角を持ちながら直交性は玩具より大幅に悪い」まで。
+   セル単位の結合の確定は K3-2b（dead 行の同梱 + R≥8）で行う。
+4. **legacy 帯域比センサー（K1 で dead）は実音源で両ツマミに反応**（1.55 / 0.804）。
+   K2 の「センサー盲は素材依存」の補足が干渉列としても再確認された。
+
+**K3-2b への設計指示（本ミニ行列からの教訓）**: フル Suno 行列には (a) 生成器が
+読まないことが既知の dead ツマミ（例 `valley_depth_target`）を**内部ヌル行として
+必ず同梱**する（ノイズ天井を同一バッチ内で実測するため）、(b) R≥8、(c) ベースライン
+key の宣言（key センサー化のため）。
 
 ---
 

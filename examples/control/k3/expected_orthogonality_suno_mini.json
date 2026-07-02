@@ -1,0 +1,196 @@
+{
+  "schema_version": "1.0",
+  "fixture_id": "k3_2a_suno_mini_matrix_rpe_features",
+  "generator": "suno",
+  "repetitions": 4,
+  "knobs": [
+    "bpm",
+    "brightness"
+  ],
+  "cells": [
+    {
+      "knob": "bpm",
+      "sensor": "bpm",
+      "sensor_kind": "core",
+      "is_diagonal": true,
+      "low_mean": 117.75,
+      "high_mean": 138.425,
+      "effect": 1.610627,
+      "interference_class": "strong",
+      "expected_sign": 1,
+      "diagonal_classification": "tight"
+    },
+    {
+      "knob": "bpm",
+      "sensor": "spectral_centroid",
+      "sensor_kind": "core",
+      "is_diagonal": false,
+      "low_mean": 2226.435,
+      "high_mean": 2967.955,
+      "effect": 2.325323,
+      "interference_class": "strong"
+    },
+    {
+      "knob": "bpm",
+      "sensor": "active_rate",
+      "sensor_kind": "extended",
+      "is_diagonal": false,
+      "low_mean": 0.98695,
+      "high_mean": 0.961725,
+      "effect": -0.959403,
+      "interference_class": "strong"
+    },
+    {
+      "knob": "bpm",
+      "sensor": "valley_depth",
+      "sensor_kind": "extended",
+      "is_diagonal": false,
+      "low_mean": 0.1303,
+      "high_mean": 0.125075,
+      "effect": -0.124327,
+      "interference_class": "clean"
+    },
+    {
+      "knob": "bpm",
+      "sensor": "brightness_band_ratio",
+      "sensor_kind": "extended",
+      "is_diagonal": false,
+      "low_mean": 0.0265,
+      "high_mean": 0.0406,
+      "effect": 1.546125,
+      "interference_class": "strong"
+    },
+    {
+      "knob": "brightness",
+      "sensor": "bpm",
+      "sensor_kind": "core",
+      "is_diagonal": false,
+      "low_mean": 113.675,
+      "high_mean": 110.01,
+      "effect": -0.339598,
+      "interference_class": "weak"
+    },
+    {
+      "knob": "brightness",
+      "sensor": "spectral_centroid",
+      "sensor_kind": "core",
+      "is_diagonal": true,
+      "low_mean": 2320.7125,
+      "high_mean": 2686.6825,
+      "effect": 0.862707,
+      "interference_class": "strong",
+      "expected_sign": 1,
+      "diagonal_classification": "tight"
+    },
+    {
+      "knob": "brightness",
+      "sensor": "active_rate",
+      "sensor_kind": "extended",
+      "is_diagonal": false,
+      "low_mean": 0.985875,
+      "high_mean": 0.964275,
+      "effect": -1.38993,
+      "interference_class": "strong"
+    },
+    {
+      "knob": "brightness",
+      "sensor": "valley_depth",
+      "sensor_kind": "extended",
+      "is_diagonal": false,
+      "low_mean": 0.11805,
+      "high_mean": 0.1512,
+      "effect": 1.196965,
+      "interference_class": "strong"
+    },
+    {
+      "knob": "brightness",
+      "sensor": "brightness_band_ratio",
+      "sensor_kind": "extended",
+      "is_diagonal": false,
+      "low_mean": 0.0211,
+      "high_mean": 0.02895,
+      "effect": 0.803906,
+      "interference_class": "strong"
+    }
+  ],
+  "matrix": {
+    "sensors_core": [
+      "bpm",
+      "spectral_centroid"
+    ],
+    "sensors_extended": [
+      "active_rate",
+      "valley_depth",
+      "brightness_band_ratio"
+    ],
+    "effects_core": [
+      [
+        1.610627,
+        2.325323
+      ],
+      [
+        -0.339598,
+        0.862707
+      ]
+    ],
+    "effects_extended": [
+      [
+        -0.959403,
+        -0.124327,
+        1.546125
+      ],
+      [
+        -1.38993,
+        1.196965,
+        0.803906
+      ]
+    ],
+    "importance_core": [
+      [
+        1.610627,
+        2.325323
+      ],
+      [
+        0.339598,
+        0.862707
+      ]
+    ]
+  },
+  "dci": {
+    "importance_floor": 0.2,
+    "importance_cap": 10.0,
+    "disentanglement": {
+      "per_knob": {
+        "bpm": 0.023917,
+        "brightness": 0.141225
+      },
+      "overall": 0.051366
+    },
+    "completeness": {
+      "per_sensor": {
+        "bpm": 0.332928,
+        "spectral_centroid": 0.157664
+      },
+      "overall": 0.224185
+    },
+    "effect_size_gap": {
+      "per_sensor": {
+        "bpm": 0.789152,
+        "spectral_centroid": 0.628995
+      },
+      "mean": 0.709073
+    }
+  },
+  "diagonal_summary": {
+    "tight": 2,
+    "loose": 0,
+    "dead": 0
+  },
+  "interference_summary": {
+    "clean": 1,
+    "weak": 1,
+    "strong": 6
+  },
+  "dead_knobs": [],
+  "untouched_sensors": []
+}
