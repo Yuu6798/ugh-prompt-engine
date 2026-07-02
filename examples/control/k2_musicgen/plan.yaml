@@ -1,0 +1,36 @@
+# K2 (第二機種) MusicGen 生成計画 — scripts/collect_musicgen_takes.py が読む。
+#
+# K2 の設計思想 (docs/controllability_poc.md) を踏襲: A/B はノブ語だけを
+# 差し替え、他の語は固定する。bpm ノブは数値語のみ、brightness ノブは
+# timbre 形容語のみを入れ替える。
+schema_version: "1.0"
+fixture_id: k2_musicgen_mini
+generator: musicgen-small
+model_id: facebook/musicgen-small
+model_revision: null
+duration_seconds: 12.0
+guidance_scale: 3.0
+repetitions: 8
+knobs:
+  - name: bpm
+    sensor: bpm
+    low_level: "90"
+    high_level: "170"
+    expected_sign: 1
+    prompt_low: >-
+      instrumental electronic music, steady four-on-the-floor drum beat,
+      at 90 beats per minute
+    prompt_high: >-
+      instrumental electronic music, steady four-on-the-floor drum beat,
+      at 170 beats per minute
+  - name: brightness
+    sensor: spectral_centroid
+    low_level: dark
+    high_level: bright
+    expected_sign: 1
+    prompt_low: >-
+      instrumental electronic music, steady four-on-the-floor drum beat,
+      at 120 beats per minute, dark warm bass-heavy mellow timbre
+    prompt_high: >-
+      instrumental electronic music, steady four-on-the-floor drum beat,
+      at 120 beats per minute, bright shimmering sparkling high-register timbre
