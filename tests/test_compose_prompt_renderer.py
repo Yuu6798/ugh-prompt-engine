@@ -131,11 +131,14 @@ def test_compose_cli_outputs_text_by_default() -> None:
     result = CliRunner().invoke(app, ["compose", str(SAMPLE_PATH)])
 
     assert result.exit_code == 0
-    assert result.output.startswith("128 BPM. Brightness dark.")
-    assert "Brightness dark." in result.output
-    assert "Wide stereo." in result.output
-    assert "Avoid: bright festival EDM; comic vocal delivery." in result.output
-    assert '"backend"' not in result.output
+    assert result.stdout.startswith("128 BPM. Brightness dark.")
+    assert "Brightness dark." in result.stdout
+    assert "Wide stereo." in result.stdout
+    assert "Avoid: bright festival EDM; comic vocal delivery." in result.stdout
+    assert '"backend"' not in result.stdout
+    # advisory はコピペ成果物である stdout を汚染してはならない。stderr にのみ出す。
+    assert "Advisories" not in result.stdout
+    assert "Advisories" in result.stderr
 
 
 def test_compose_cli_outputs_json_and_max_chars_override() -> None:
@@ -145,7 +148,7 @@ def test_compose_cli_outputs_json_and_max_chars_override() -> None:
     )
 
     assert result.exit_code == 0
-    payload = json.loads(result.output)
+    payload = json.loads(result.stdout)
     assert payload["backend"] == "external"
     assert len(payload["text"]) <= 180
     assert payload["dropped_elements"][:3] == [
@@ -155,6 +158,9 @@ def test_compose_cli_outputs_json_and_max_chars_override() -> None:
     ]
     assert payload["tags"] == ["deep_house", "ambient", "dark", "wide_stereo"]
     assert payload["negative_tags"] == ["bright festival EDM", "comic vocal delivery"]
+    # JSON モードは構造化データなので advisories はフィールドとして保持したまま。
+    assert payload["advisories"] != []
+    assert result.stderr == ""
 
 
 def test_compose_cli_writes_output_file(tmp_path: Path) -> None:
@@ -169,7 +175,23 @@ def test_compose_cli_writes_output_file(tmp_path: Path) -> None:
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert payload["backend"] == "external"
     assert payload["text"].startswith("128 BPM. Brightness dark.")
-    assert "Composition prompt saved" in result.output
+    assert "Composition prompt saved" in result.stdout
+
+
+def test_compose_cli_text_output_file_excludes_advisories(tmp_path: Path) -> None:
+    """text 出力の -o ファイルはコピペ成果物なので advisories を含んではならない。"""
+    output_path = tmp_path / "generated_prompt.txt"
+
+    result = CliRunner().invoke(
+        app,
+        ["compose", str(SAMPLE_PATH), "--format", "text", "-o", str(output_path)],
+    )
+
+    assert result.exit_code == 0
+    file_content = output_path.read_text(encoding="utf-8")
+    assert file_content.startswith("128 BPM. Brightness dark.")
+    assert "Advisories" not in file_content
+    assert "Advisories" in result.stderr
 
 
 def test_generated_prompt_examples_match_renderer() -> None:

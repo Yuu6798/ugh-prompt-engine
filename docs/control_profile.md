@@ -226,6 +226,9 @@ int 値のときのみ行い `TODO(transcribe):` センチネル文字列は自�
 dropped_elements は advisory によって一切変わらない** — 計器であって補正器ではない。
 `cross_couplings` は `status: unresolved`（R=4・dead 行なしでセル単位の解釈が未確定）のため
 advisory を出さない設計とし、誤って「補正済み」の印象を与えない。
+CLI (`svprpe compose`) の text 出力モードでは advisory を stderr にのみ出す
+（stdout / `-o` ファイルは Suno 等へそのまま貼り付けるプロンプト成果物のため純粋なまま保つ）。
+JSON 出力モードでは `GeneratedPrompt.advisories` フィールドとして構造化データに保持する。
 
 ### adherence との非対称（follow-up）
 
