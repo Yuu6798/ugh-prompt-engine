@@ -400,7 +400,7 @@ def test_perform_subcommand_reaches_import_error_without_torch(
             "--score",
             str(SCORE_PATH),
             "--repetitions",
-            "1",
+            "2",
             "--output-dir",
             str(output_dir),
             "--manifest-out",
