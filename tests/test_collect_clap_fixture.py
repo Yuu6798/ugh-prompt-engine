@@ -1,7 +1,10 @@
 """tests/test_collect_clap_fixture.py — collect_clap_fixture.py smoke test.
 
 Fake `laion_clap` module only via `sys.modules` monkeypatch; no real
-learned-model dependency needed.
+learned-model dependency needed. `embed_audio_file` decodes audio for
+real via `librosa.load` (see `clap_adapter`'s determinism-by-construction
+docstring), so the manifest's `audio_path` must point at a real (tiny)
+WAV file rather than placeholder bytes.
 """
 from __future__ import annotations
 
@@ -12,8 +15,16 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import soundfile as sf
 
 from scripts.collect_clap_fixture import collect_fixture, main
+
+
+def _write_wav(path: Path, *, seconds: float = 0.05, sample_rate: int = 48000) -> None:
+    n_samples = max(1, int(round(seconds * sample_rate)))
+    t = np.linspace(0, seconds, n_samples, endpoint=False)
+    y = (0.2 * np.sin(2 * np.pi * 220.0 * t)).astype(np.float32)
+    sf.write(str(path), y, sample_rate)
 
 
 def _install_fake_clap(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -24,8 +35,11 @@ def _install_fake_clap(monkeypatch: pytest.MonkeyPatch) -> None:
         def load_ckpt(self, checkpoint=None):
             pass
 
-        def get_audio_embedding_from_filelist(self, paths, use_tensor=False):
-            return np.asarray([[3.0, 4.0]], dtype=np.float64)
+        def get_audio_embedding_from_data(self, x, use_tensor=False):
+            # One row per chunk; a short fixture file is always a single
+            # chunk, so this reduces to the fixed [3.0, 4.0] row the
+            # existing assertions expect.
+            return np.asarray([[3.0, 4.0] for _ in x], dtype=np.float64)
 
         def get_text_embedding(self, texts, use_tensor=False):
             vectors = {"bright": [1.0, 0.0], "dark": [0.0, 1.0]}
@@ -39,8 +53,7 @@ def _install_fake_clap(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "laion_clap", fake_root)
 
 
-def _write_manifest(tmp_path: Path, audio_path: Path) -> Path:
-    manifest_path = tmp_path / "manifest.json"
+def _write_manifest(manifest_path: Path, audio_path: Path | str) -> Path:
     manifest_path.write_text(
         json.dumps(
             [
@@ -60,8 +73,8 @@ def _write_manifest(tmp_path: Path, audio_path: Path) -> Path:
 def test_collect_fixture_writes_expected_keys(monkeypatch, tmp_path):
     _install_fake_clap(monkeypatch)
     audio_path = tmp_path / "a.wav"
-    audio_path.write_bytes(b"fake-audio-bytes")
-    manifest_path = _write_manifest(tmp_path, audio_path)
+    _write_wav(audio_path)
+    manifest_path = _write_manifest(tmp_path / "manifest.json", audio_path)
 
     fixture = collect_fixture(manifest_path)
 
@@ -85,8 +98,8 @@ def test_collect_fixture_writes_expected_keys(monkeypatch, tmp_path):
 def test_main_writes_output_file(monkeypatch, tmp_path):
     _install_fake_clap(monkeypatch)
     audio_path = tmp_path / "a.wav"
-    audio_path.write_bytes(b"fake-audio-bytes")
-    manifest_path = _write_manifest(tmp_path, audio_path)
+    _write_wav(audio_path)
+    manifest_path = _write_manifest(tmp_path / "manifest.json", audio_path)
     output_path = tmp_path / "fixture.json"
 
     exit_code = main(["--manifest", str(manifest_path), "--output", str(output_path)])
@@ -99,8 +112,8 @@ def test_main_writes_output_file(monkeypatch, tmp_path):
 def test_main_reports_install_hint_when_unavailable(monkeypatch, tmp_path, capsys):
     monkeypatch.setitem(sys.modules, "laion_clap", None)
     audio_path = tmp_path / "a.wav"
-    audio_path.write_bytes(b"fake-audio-bytes")
-    manifest_path = _write_manifest(tmp_path, audio_path)
+    _write_wav(audio_path)
+    manifest_path = _write_manifest(tmp_path / "manifest.json", audio_path)
     output_path = tmp_path / "fixture.json"
 
     exit_code = main(["--manifest", str(manifest_path), "--output", str(output_path)])
@@ -109,3 +122,40 @@ def test_main_reports_install_hint_when_unavailable(monkeypatch, tmp_path, capsy
     captured = capsys.readouterr()
     assert "semantic-embed" in captured.err
     assert not output_path.exists()
+
+
+def test_relative_audio_path_resolves_against_manifest_directory(monkeypatch, tmp_path):
+    """A relative `audio_path` must resolve against the manifest file's
+    own directory, not the process CWD — the manifest and its audio can
+    live in a subdirectory invoked from anywhere.
+    """
+    _install_fake_clap(monkeypatch)
+
+    manifest_subdir = tmp_path / "corpus" / "sub"
+    manifest_subdir.mkdir(parents=True)
+    audio_path = manifest_subdir / "a.wav"
+    _write_wav(audio_path)
+    # Bare filename, relative to the manifest's own directory.
+    manifest_path = _write_manifest(manifest_subdir / "manifest.json", "a.wav")
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    fixture = collect_fixture(manifest_path)
+
+    sample = fixture["samples"][0]
+    assert sample["audio_path"] == str(audio_path.resolve())
+    assert sample["audio_embedding"] == pytest.approx([0.6, 0.8])
+
+
+def test_absolute_audio_path_passes_through_unchanged(monkeypatch, tmp_path):
+    _install_fake_clap(monkeypatch)
+
+    audio_path = (tmp_path / "a.wav").resolve()
+    _write_wav(audio_path)
+    manifest_path = _write_manifest(tmp_path / "manifest.json", audio_path)
+
+    fixture = collect_fixture(manifest_path)
+
+    assert fixture["samples"][0]["audio_path"] == str(audio_path)

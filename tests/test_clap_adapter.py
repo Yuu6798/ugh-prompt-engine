@@ -5,10 +5,19 @@ monkeypatch `sys.modules["laion_clap"]` with a fake module mirroring the
 real wheel's surface area:
 
 - `laion_clap.CLAP_Module(enable_fusion=False).load_ckpt(checkpoint)`
-- `.get_audio_embedding_from_filelist(paths, use_tensor=False)` ->
-  `(1, dim)` numpy array
+- `.get_audio_embedding_from_data(x=[chunk, ...], use_tensor=False)` ->
+  `(n_chunks, dim)` numpy array, one row per input chunk
 - `.get_text_embedding(texts, use_tensor=False)` -> `(len(texts), dim)`
   numpy array
+
+`embed_audio_file` now decodes audio itself via `librosa.load` (see the
+module's determinism-by-construction docstring) rather than delegating
+decoding to laion_clap, so most tests here write small REAL WAV files
+via `soundfile` — `librosa.load` cannot decode placeholder bytes.
+`sys.modules["laion_clap"]` is still faked; only the audio decode is
+real. Tests that only exercise "missing method" / "unavailable"
+branches (which raise before `librosa.load` is ever reached) may keep
+using a placeholder path/bytes.
 """
 from __future__ import annotations
 
@@ -17,6 +26,7 @@ import types
 
 import numpy as np
 import pytest
+import soundfile as sf
 
 from svp_rpe.rpe.models import (
     DeltaEProfile,
@@ -30,6 +40,23 @@ from svp_rpe.rpe.models import (
     SpectralProfile,
 )
 from svp_rpe.svp.generator import generate_svp
+
+# ---------------------------------------------------------------------------
+# WAV fixture helper
+# ---------------------------------------------------------------------------
+
+
+def _write_wav(path, *, seconds: float, sample_rate: int = 48000) -> None:
+    """Write a tiny real mono WAV file that `librosa.load` can decode.
+
+    A short sine burst rather than silence, so accidental all-zero
+    handling elsewhere can't mask a bug.
+    """
+    n_samples = max(1, int(round(seconds * sample_rate)))
+    t = np.linspace(0, seconds, n_samples, endpoint=False)
+    y = (0.2 * np.sin(2 * np.pi * 220.0 * t)).astype(np.float32)
+    sf.write(str(path), y, sample_rate)
+
 
 # ---------------------------------------------------------------------------
 # Fake backend installation
@@ -49,7 +76,16 @@ def _install_fake_clap(
     has_audio_method: bool = True,
     has_text_method: bool = True,
 ) -> dict:
-    """Install a fake `laion_clap` module mirroring the real >=1.1 wheel."""
+    """Install a fake `laion_clap` module mirroring the real >=1.1 wheel.
+
+    `get_audio_embedding_from_data` returns one row per input chunk: row
+    `i` is `resolved_audio_vector * (i + 1)`. A single-chunk call
+    therefore reproduces the exact vector callers pass in via
+    `audio_vector` (keeping single-chunk assertions simple / backward
+    compatible with the pre-chunking adapter), while multi-chunk calls
+    get distinct, predictable rows whose mean-pooled result is easy to
+    compute in assertions.
+    """
     captured: dict = {}
     resolved_audio_vector = audio_vector if audio_vector is not None else [3.0, 4.0]
 
@@ -60,12 +96,16 @@ def _install_fake_clap(
         def load_ckpt(self, checkpoint=None):
             captured["checkpoint"] = checkpoint
 
-        def get_audio_embedding_from_filelist(self, paths, use_tensor=False):
-            captured["audio_paths"] = list(paths)
+        def get_audio_embedding_from_data(self, x, use_tensor=False):
+            chunks = list(x)
+            captured["audio_chunks"] = chunks
+            captured["audio_chunk_count"] = len(chunks)
             captured["audio_use_tensor"] = use_tensor
             if audio_embedding_shape is not None:
                 return np.zeros(audio_embedding_shape, dtype=np.float64)
-            return np.asarray([resolved_audio_vector], dtype=np.float64)
+            base = np.asarray(resolved_audio_vector, dtype=np.float64)
+            rows = [base * (index + 1) for index in range(len(chunks))]
+            return np.asarray(rows, dtype=np.float64)
 
         def get_text_embedding(self, texts, use_tensor=False):
             captured["texts"] = list(texts)
@@ -80,7 +120,7 @@ def _install_fake_clap(
     if not has_load_ckpt:
         del FakeCLAPModule.load_ckpt
     if not has_audio_method:
-        del FakeCLAPModule.get_audio_embedding_from_filelist
+        del FakeCLAPModule.get_audio_embedding_from_data
     if not has_text_method:
         del FakeCLAPModule.get_text_embedding
 
@@ -96,6 +136,19 @@ def _install_fake_clap(
 
 def _force_clap_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "laion_clap", None)
+
+
+def _patch_tiny_clap_constants(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Scale CLAP's window/sample-rate/min-partial constants down by 1/10
+    time (1/48 sample rate, 1/480 window samples), preserving the real
+    480000:48000:1 window:sample-rate:min-partial ratio so chunk-count
+    math stays representative while WAV fixtures stay tiny and fast.
+    """
+    import svp_rpe.rpe.learned.clap_adapter as clap_adapter
+
+    monkeypatch.setattr(clap_adapter, "_CLAP_SAMPLE_RATE", 1000)
+    monkeypatch.setattr(clap_adapter, "_CLAP_WINDOW_SAMPLES", 1000)
+    monkeypatch.setattr(clap_adapter, "_CLAP_MIN_PARTIAL_SAMPLES", 100)
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +229,8 @@ class TestAdapterUnavailable:
         from svp_rpe.rpe.learned import LearnedModelUnavailable
         from svp_rpe.rpe.learned.clap_adapter import embed_audio_file
 
+        # laion_clap is unavailable, so load_clap_model raises before
+        # librosa.load is ever reached — placeholder bytes are fine.
         audio = tmp_path / "a.wav"
         audio.write_bytes(b"fake-audio")
         with pytest.raises(LearnedModelUnavailable, match="semantic-embed"):
@@ -219,6 +274,9 @@ class TestAdapterIncompatible:
         from svp_rpe.rpe.learned import LearnedModelIncompatible
         from svp_rpe.rpe.learned.clap_adapter import embed_audio_file
 
+        # `get_audio_embedding_from_data` is missing, so the hasattr
+        # check raises before librosa.load is reached — the path need
+        # not exist.
         with pytest.raises(LearnedModelIncompatible):
             embed_audio_file("audio.wav")
 
@@ -232,23 +290,28 @@ class TestAdapterIncompatible:
         with pytest.raises(LearnedModelIncompatible):
             embed_texts(["a"], model=model)
 
-    def test_audio_embedding_wrong_ndim_rejected(self, monkeypatch):
+    def test_audio_embedding_wrong_ndim_rejected(self, monkeypatch, tmp_path):
         _install_fake_clap(monkeypatch, audio_embedding_shape=(4,))
 
         from svp_rpe.rpe.learned import LearnedModelIncompatible
         from svp_rpe.rpe.learned.clap_adapter import embed_audio_file
 
+        audio = tmp_path / "a.wav"
+        _write_wav(audio, seconds=0.05)
         with pytest.raises(LearnedModelIncompatible):
-            embed_audio_file("audio.wav")
+            embed_audio_file(str(audio))
 
-    def test_audio_embedding_wrong_row_count_rejected(self, monkeypatch):
+    def test_audio_embedding_wrong_row_count_rejected(self, monkeypatch, tmp_path):
+        # A single short chunk expects exactly 1 row back; 2 is wrong.
         _install_fake_clap(monkeypatch, audio_embedding_shape=(2, 4))
 
         from svp_rpe.rpe.learned import LearnedModelIncompatible
         from svp_rpe.rpe.learned.clap_adapter import embed_audio_file
 
+        audio = tmp_path / "a.wav"
+        _write_wav(audio, seconds=0.05)
         with pytest.raises(LearnedModelIncompatible):
-            embed_audio_file("audio.wav")
+            embed_audio_file(str(audio))
 
     def test_text_embedding_wrong_row_count_rejected(self, monkeypatch):
         _install_fake_clap(monkeypatch, text_embedding_row_count=1)
@@ -280,7 +343,7 @@ class TestVersionDetection:
         from svp_rpe.rpe.learned.clap_adapter import embed_audio_file
 
         audio = tmp_path / "a.wav"
-        audio.write_bytes(b"fake-audio")
+        _write_wav(audio, seconds=0.05)
         result = embed_audio_file(str(audio))
         assert result.enabled_models[0].version == "1.1.7"
 
@@ -290,7 +353,7 @@ class TestVersionDetection:
         from svp_rpe.rpe.learned.clap_adapter import embed_audio_file
 
         audio = tmp_path / "a.wav"
-        audio.write_bytes(b"fake-audio")
+        _write_wav(audio, seconds=0.05)
         result = embed_audio_file(str(audio))
         assert result.enabled_models[0].version is None
         assert result.enabled_models[0].name == "laion_clap"
@@ -303,13 +366,13 @@ class TestEmbedAudioFile:
         from svp_rpe.rpe.learned.clap_adapter import embed_audio_file
 
         audio = tmp_path / "a.wav"
-        audio.write_bytes(b"fake-audio")
+        _write_wav(audio, seconds=0.05)  # well under the 10s CLAP window -> 1 chunk
         result = embed_audio_file(str(audio), checkpoint="ckpt.pt")
 
         assert isinstance(result, LearnedAudioAnnotations)
         assert result.embedding is not None
         assert result.embedding.dimensions == 2
-        # L2-normalized: [3, 4] / 5 = [0.6, 0.8]
+        # single chunk -> mean == that chunk; L2-normalized: [3,4]/5 = [0.6,0.8]
         assert result.embedding.vector == pytest.approx([0.6, 0.8])
         assert result.embedding.source_model == "laion_clap:CLAP_Module"
 
@@ -324,6 +387,10 @@ class TestEmbedAudioFile:
         assert result.inference_config["checkpoint"] == "ckpt.pt"
         assert result.inference_config["enable_fusion"] is False
         assert result.inference_config["source"] == "laion_clap"
+        assert result.inference_config["sample_rate"] == 48000
+        assert result.inference_config["window_samples"] == 480000
+        assert result.inference_config["chunking"] == "consecutive_mean"
+        assert result.inference_config["n_chunks"] == 1
         assert "laion_clap" in result.license_metadata
 
     def test_reuses_provided_model_without_reloading(self, monkeypatch, tmp_path):
@@ -335,7 +402,7 @@ class TestEmbedAudioFile:
         captured.pop("checkpoint", None)
 
         audio = tmp_path / "a.wav"
-        audio.write_bytes(b"fake-audio")
+        _write_wav(audio, seconds=0.05)
         embed_audio_file(str(audio), model=model)
         # embed_audio_file(model=...) must not re-trigger load_ckpt.
         assert "checkpoint" not in captured
@@ -346,9 +413,59 @@ class TestEmbedAudioFile:
         from svp_rpe.rpe.learned.clap_adapter import embed_audio_file
 
         audio = tmp_path / "a.wav"
-        audio.write_bytes(b"fake-audio")
+        _write_wav(audio, seconds=0.05)
         result = embed_audio_file(str(audio))
         assert result.embedding.vector == [0.0, 0.0]
+
+
+class TestDeterministicChunking:
+    """Chunk-count math for `_chunk_waveform`, exercised end-to-end
+    through `embed_audio_file` (real `librosa.load` decode, not
+    monkeypatched) against tiny real WAV fixtures. See
+    `_patch_tiny_clap_constants` for the scaling rationale.
+    """
+
+    def test_full_windows_plus_kept_partial(self, monkeypatch, tmp_path):
+        _patch_tiny_clap_constants(monkeypatch)
+        _install_fake_clap(monkeypatch)
+
+        from svp_rpe.rpe.learned.clap_adapter import embed_audio_file
+
+        audio = tmp_path / "a.wav"
+        # 2.5s @ 1000Hz (scaled 10s CLAP window -> 1000 samples) ->
+        # windows of 1000 + 1000 + 500 samples; 500 >= min-partial (100)
+        # so the trailing partial window is kept -> 3 chunks.
+        _write_wav(audio, seconds=2.5, sample_rate=1000)
+        result = embed_audio_file(str(audio))
+        assert result.inference_config["n_chunks"] == 3
+
+    def test_short_trailing_partial_is_dropped(self, monkeypatch, tmp_path):
+        _patch_tiny_clap_constants(monkeypatch)
+        _install_fake_clap(monkeypatch)
+
+        from svp_rpe.rpe.learned.clap_adapter import embed_audio_file
+
+        audio = tmp_path / "a.wav"
+        # 1.05s @ 1000Hz -> windows of 1000 + 50 samples; 50 < the
+        # min-partial (100) threshold and there is a preceding full
+        # chunk, so the trailing partial is dropped -> 1 chunk.
+        _write_wav(audio, seconds=1.05, sample_rate=1000)
+        result = embed_audio_file(str(audio))
+        assert result.inference_config["n_chunks"] == 1
+
+    def test_lone_short_chunk_is_kept(self, monkeypatch, tmp_path):
+        # Default (unscaled) constants: a track far shorter than the
+        # CLAP window is still embedded as a single chunk — the
+        # "drop if short" rule only applies to a TRAILING partial
+        # window that follows at least one full window.
+        _install_fake_clap(monkeypatch)
+
+        from svp_rpe.rpe.learned.clap_adapter import embed_audio_file
+
+        audio = tmp_path / "a.wav"
+        _write_wav(audio, seconds=0.6)
+        result = embed_audio_file(str(audio))
+        assert result.inference_config["n_chunks"] == 1
 
 
 class TestEmbedTexts:
@@ -386,7 +503,7 @@ class TestSerializerRegression:
         from svp_rpe.rpe.learned.clap_adapter import embed_audio_file
 
         audio = tmp_path / "a.wav"
-        audio.write_bytes(b"fake-audio")
+        _write_wav(audio, seconds=0.05)
         annotations = embed_audio_file(str(audio))
         bundle = attach_learned_annotations(_make_bundle(), annotations)
         dumped = bundle.model_dump()
@@ -407,7 +524,7 @@ class TestIsolation:
         from svp_rpe.rpe.learned.clap_adapter import embed_audio_file
 
         audio = tmp_path / "a.wav"
-        audio.write_bytes(b"fake-audio")
+        _write_wav(audio, seconds=0.05)
         bundle = _make_bundle()
         annotations = embed_audio_file(str(audio))
         enriched = attach_learned_annotations(bundle, annotations)
@@ -423,7 +540,7 @@ class TestIsolation:
         from svp_rpe.rpe.learned.clap_adapter import embed_audio_file
 
         audio = tmp_path / "a.wav"
-        audio.write_bytes(b"fake-audio")
+        _write_wav(audio, seconds=0.05)
         bundle = _make_bundle()
         enriched = attach_learned_annotations(bundle, embed_audio_file(str(audio)))
         assert enriched.semantic.model_dump() == bundle.semantic.model_dump()
@@ -438,7 +555,7 @@ class TestIsolation:
         from svp_rpe.rpe.learned.clap_adapter import embed_audio_file
 
         audio = tmp_path / "a.wav"
-        audio.write_bytes(b"fake-audio")
+        _write_wav(audio, seconds=0.05)
         bundle = _make_bundle()
         enriched = attach_learned_annotations(bundle, embed_audio_file(str(audio)))
         assert generate_svp(bundle).model_dump() == generate_svp(enriched).model_dump()
@@ -453,7 +570,7 @@ class TestIsolation:
         from svp_rpe.rpe.learned.clap_adapter import embed_audio_file
 
         audio = tmp_path / "a.wav"
-        audio.write_bytes(b"fake-audio")
+        _write_wav(audio, seconds=0.05)
         bundle = _make_bundle()
         enriched = attach_learned_annotations(
             bundle, embed_audio_file(str(audio), checkpoint=sentinel)
@@ -471,7 +588,7 @@ class TestIsolation:
         from svp_rpe.rpe.learned.clap_adapter import embed_audio_file
 
         audio = tmp_path / "a.wav"
-        audio.write_bytes(b"fake-audio")
+        _write_wav(audio, seconds=0.05)
         bundle = _make_bundle()
         enriched = attach_learned_annotations(
             bundle, embed_audio_file(str(audio), checkpoint=sentinel)

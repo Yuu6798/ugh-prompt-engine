@@ -17,6 +17,11 @@ Manifest format (YAML or JSON), a list of samples:
         negative: ["a dark somber song"]
       condition: {level: "high", knob: "brightness"}   # passthrough, optional
 
+A relative `audio_path` is resolved against the manifest file's own
+directory (not the process CWD), so manifests stay portable and can be
+run from anywhere — see `_resolve_audio_path`. Absolute `audio_path`
+entries pass through unchanged.
+
 `condition` (and any other extra keys) are passed through to the sample's
 row in the output fixture untouched. Output fixture JSON keeps only
 numeric / string data — no audio bytes, only a `audio_sha256` provenance
@@ -78,10 +83,24 @@ def _round_vector(vector: list[float], digits: int = 6) -> list[float]:
     return [round(float(value), digits) for value in vector]
 
 
+def _resolve_audio_path(audio_path: Path, *, manifest_dir: Path) -> Path:
+    """Resolve a manifest `audio_path` entry against the manifest's own directory.
+
+    Absolute paths pass through unchanged; relative paths are resolved
+    against `manifest_dir` (the directory containing the manifest file)
+    rather than the process CWD, mirroring the precedent in
+    `svp_rpe.calibration.analyze._resolve_audio_path` /
+    `svp_rpe.roundtrip.manifest.resolve_audio_path`: manifests are meant
+    to be portable and runnable from any working directory.
+    """
+    return audio_path if audio_path.is_absolute() else (manifest_dir / audio_path).resolve()
+
+
 def collect_sample(
     sample: dict[str, Any],
     *,
     model: Any,
+    manifest_dir: Path,
 ) -> tuple[dict[str, Any], LearnedAudioAnnotations]:
     """1 サンプルを処理し、(fixture 行, annotations) を返す。
 
@@ -89,7 +108,7 @@ def collect_sample(
     manifest フィールドの受け渡しと丸めのみを担当する薄いラッパー。
     """
     sample_id = str(sample["sample_id"])
-    audio_path = Path(str(sample["audio_path"]))
+    audio_path = _resolve_audio_path(Path(str(sample["audio_path"])), manifest_dir=manifest_dir)
     prompts = sample.get("prompts", {})
     positive_texts = list(prompts.get("positive", []))
     negative_texts = list(prompts.get("negative", []))
@@ -131,11 +150,12 @@ def collect_sample(
 def collect_fixture(manifest_path: Path, *, checkpoint: str | None = None) -> dict[str, Any]:
     samples = load_manifest(manifest_path)
     model = load_clap_model(checkpoint)
+    manifest_dir = manifest_path.resolve().parent
 
     rows: list[dict[str, Any]] = []
     model_info: list[dict[str, Any]] = []
     for index, sample in enumerate(samples):
-        row, annotations = collect_sample(sample, model=model)
+        row, annotations = collect_sample(sample, model=model, manifest_dir=manifest_dir)
         rows.append(row)
         if index == 0:
             model_info = [info.model_dump() for info in annotations.enabled_models]
