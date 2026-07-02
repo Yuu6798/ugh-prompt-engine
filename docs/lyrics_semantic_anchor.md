@@ -204,6 +204,48 @@ directional のみ**と限定する。昇格には **各ジャンルで instrume
   最弱という仮説にはなるが、**歪みギター instrumental のクロマ推定ノイズの可能性が大きく
   n=1 では断定しない**（Phase A の罠を踏まない）。
 
+## 相互検証①: CLAP vocal contrast × mid_ratio（2026-07-02、committed データのみ）
+
+PR2b の設計意図「学習版 grip をルール版と相互検証する（置き換えない）」の第一段。
+**新規生成・新規推論ゼロ** — #131 の CLAP fixture
+（`examples/learned/clap/lyrics_vocal_contrast_fixture.json`）と本書 n=3 追試の計測ログ
+（`examples/real_audio_validation/lyrics_arrange_demo_2026-07-01.yaml`）を
+**audio_sha256 で突き合わせ**（6/6 テイク完全リンク＝同一バイト列を 2 系統のセンサーで
+測った比較であることが暗号学的に保証される）。
+
+| take | 条件 | mid_ratio | CLAP contrast_fit |
+|---|---|---:|---:|
+| edm_lyrics | present | 0.226 | +0.2475 |
+| edm_lyrics_alt | present_alt | 0.221 | +0.2550 |
+| edm_inst | absent | 0.217 | +0.1341 |
+| rock_lyrics | present | 0.245 | +0.2581 |
+| rock_lyrics_alt | present_alt | 0.229 | +0.2324 |
+| rock_inst | absent | 0.208 | −0.0487 |
+
+**一致（consistency）**: 条件レベルの方向は両センサーで完全一致 — 2 ジャンルとも
+present > absent、6 テイクの並びでも inst 2 本を両者が最下位に置く。
+**2 本の独立なセンサーが同じ現実（ボーカルの有無という潜在因子）を指している**ことの確認。
+
+**感度差（sensitivity）**: 「効果 > 再生成ノイズ」を n=3 追試と同じ保守的規約
+（条件差 = present 2 値の小さい方 − absent、ノイズ = present 2 値のスプレッド）で計算:
+
+| | mid_ratio 効果/ノイズ | CLAP 効果/ノイズ |
+|---|---|---|
+| EDM | 0.004 / 0.005 = **0.8×（基準未達）** | 0.113 / 0.008 = **15.1×** |
+| Rock | 0.021 / 0.016 = **1.3×（辛勝）** | 0.281 / 0.026 = **10.9×** |
+
+読み: mid_ratio が「方向は合うが EDM でノイズに埋もれる」センサーだったのに対し、
+CLAP は両ジャンルで基準を大差で満たす。**意味層の読解はルール物理量の間接プロキシ
+より学習センサーの直接読みが桁で有利**、が committed データだけで言えた。
+
+**honesty / 限界**: (a) n=6・absent 側 alt 未取得の非対称は両センサー共通の留保
+（完全対称化は Suno 追加生成＝人手律速）。(b) within-condition の順序（present と
+present_alt のどちらが高いか）は両センサーで**一致しない** — ノイズ帯域内の順序に
+意味はなく、主張は条件レベルの方向までに限定する。(c) 相関係数などの統計量は n=6 では
+主張しない（方向の一致確認であって statistical validation ではない）。
+本一致は `tests/test_clap_similarity.py` の cross-consistency テストで pin し、
+どちらかの committed データが変わったら再検証を強制する。
+
 ## プロジェクトへの含意
 
 - **意味層センサー導入の実データ根拠**：「物理計器に写らないが人間の耳は捉える差」を

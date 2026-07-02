@@ -308,9 +308,13 @@ PR1（基盤・依存ゼロ・即着手可）
 - PR2/PR3 は PR1.5 のコンパイル経路を土台に並走可（PR2=学習依存、PR3=生成バッチ律速）。
 - **多生成器（MusicGen 等）は Suno ルート確立後**。スキーマの生成器キー構造は今から保ち、
   2 本目は backend descriptor + その control_profile の追加（additive）で入る（改訂方針 3）。
-- **PR2b-1 進捗**: CLAP 隔離配線済み（`clap_adapter.py` + fixture 駆動 `similarity.py` +
-  `scripts/collect_clap_fixture.py` runbook、実推論なし）。実推論・実 fixture 採取と
-  学習版/ルール版 grip 相互検証は PR2b-2（`docs/learned_models_policy.md` §9）。
+- **PR2b 進捗**: PR2b-1（#130）で CLAP 隔離配線、PR2b-2（#131）で実 fixture 採取
+  （StartinA 6 テイク・checkpoint sha256 pin・G4 確認）済み。**相互検証①も完了**:
+  CLAP vocal contrast × mid_ratio を audio_sha256 突き合わせで比較し、条件レベルの
+  方向は完全一致・「効果>再生成ノイズ」は CLAP のみ両ジャンルで満たす（EDM 15.1× /
+  Rock 10.9× vs mid_ratio 0.8× / 1.3× — `lyrics_semantic_anchor.md` §相互検証①、
+  cross-consistency テストで pin）。残 = ②既存コーパス（K2 等）への拡張（軽い
+  Codex ローカル推論）/ ③absent 側 alt の完全対称化（Suno 人手生成）。
 - **人手生成の律速を束ねる**: acoustic 4th genre / K3 の A/B バッチ等は生成が人手律速。
   2 本以上が同時に design-ready になったら 1 回のユーザーセッションへ束ねる（Genre Calib
   「1 ジャンルまとめて n=3」の一段上）。現時点は acoustic 単独で束ねる相手が無いため、
