@@ -1,6 +1,6 @@
 # Genre Calibration & Semantic Vocabulary Expansion — Planning
 
-**Status**: PLANNING
+**Status**: Phase A–E 完走（orchestral/rock/edm を real n≥3 で実証・ルール反映済み）— 残: mid_ratio 汎化・acoustic 拡張等
 **Created**: 2026-06-24
 **Upstream**: [`learned_models_policy.md`](learned_models_policy.md)（学習モデル隔離ポリシー）, [`ai_music_daw_vision.md`](ai_music_daw_vision.md)（SVP = AI 音楽の MIDI ビジョン）
 **Relates to**: [`roadmap_goal1.md`](roadmap_goal1.md)（Q1-5 spectral 計器拡張）, [`metrics.md`](metrics.md)（意味層スコアリング）, [`roundtrip_corpus_screen.md`](roundtrip_corpus_screen.md)（content-addressed corpus 方式の先例）

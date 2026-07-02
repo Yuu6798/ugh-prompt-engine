@@ -47,6 +47,12 @@ inventing context (documented recurring failure mode).
 7. **タスク粒度が 0.5–2 日か確認** — 大きすぎる場合はフェーズ分割。
 8. **レビュー回数の予測** — 0 回が理想。3 回以上かかりそうなら memo の仕様
    が不足している。
+9. **locked file と未検出フィールドを初手で縛る** — Scope OUT の「変更禁止
+   ファイル」（特に共有スキーマ `compose/models.py` 等）は edge case 対応でも
+   破ってよくないと明記する。あわせて計測値が未検出/低信頼になりうるフィールドの
+   扱い（素直に欠落 / sentinel / schema は触らない）を memo 段階で確定する。
+   未確定だと実装者が locked schema を広げて吸収し、自動レビュアーの連鎖 P2
+   （PR #71 で 10+ ラウンド churn）を誘発する。詳細は `AGENTS.md §7` item 10。
 
 ### 1a. Schema grounding  ⚠️ highest-yield
 

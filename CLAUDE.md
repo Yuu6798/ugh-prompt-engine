@@ -25,7 +25,7 @@ API キー不要、LLM 不要、同一入力 → 同一出力の完全決定論�
 - **Build**: setuptools (pyproject.toml, src layout)
 - **Lint**: ruff (line-length=100, target py311)
 - **Test**: pytest
-- **CI**: GitHub Actions (Python 3.10/3.11/3.12)
+- **CI**: GitHub Actions (Python 3.11/3.12)
 - **Audio**: librosa + soundfile
 - **Models**: Pydantic v2
 - **CLI**: typer + rich
@@ -197,7 +197,7 @@ examples/                      # sample_input/ + expected_output/
 | [`docs/composition_score_product_brief.md`](docs/composition_score_product_brief.md) | Composition Score プロダクト定義: 三層作曲言語の思想、正規スキーマ、MVP 範囲、PoC 1–5 ロードマップ |
 | [`docs/composition_poc_planning.md`](docs/composition_poc_planning.md) | Composition PoC 実装計画: C1–C6 フェーズ、ブリーフ下流の実装詳細・設計判断ログ |
 | [`docs/composition_poc_report.md`](docs/composition_poc_report.md) | C4 E2E デモ結果: 決定論的シンセ演奏者による 2 テイク針比較、センサー帯域の発見、PoC 5 の決定論パス実証 |
-| [`docs/controllability_poc.md`](docs/controllability_poc.md) | 制御トラック PoC 計画 (K 系列): パラメータ=効くツマミの読み替え、grip 効果量の定義、K0 最小方法実証〜K2 Suno 転移 |
+| [`docs/controllability_poc.md`](docs/controllability_poc.md) | 制御トラック PoC 計画 (K 系列): パラメータ=効くツマミの読み替え、grip 効果量の定義、K0〜K2 Suno 転移、K3 直交性行列（DCI/MIG 効果量再定式化・実 Suno ミニ行列・機種結合の符号反転発見） |
 | [`docs/score_centric_planning.md`](docs/score_centric_planning.md) | 楽譜中心の再編成: 双方向再現性の通底原理、採譜トラック (T 系列) T0–T2、Q 系列の計器校正への再定義、意味層センサーの将来枠 |
 | [`docs/event_roundtrip.md`](docs/event_roundtrip.md) | R4 事象レベル欄（コード進行）の往復入場計画: `chord_progression` × `compute_chord_events` × コード系列一致率、fixity/4値診断への適用 |
 | [`docs/roundtrip_case_studies.md`](docs/roundtrip_case_studies.md) | Suno 往復テストケース結果 (個別ログ) と R1 corpus manifest の入口: 計器の有効帯域、物理固定・意味差替の制御性 A/B、双方向性成功 (BPM 留保)、BPM 89.1 アトラクタ疑い |

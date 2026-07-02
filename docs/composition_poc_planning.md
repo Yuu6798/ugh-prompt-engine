@@ -1,6 +1,6 @@
 # Composition PoC Planning — 実装計画
 
-**Status**: PLANNING  
+**Status**: C0–C4 完了（MVP 完走）— C5/C6 は将来枠  
 **Created**: 2026-05-26  
 **Updated**: 2026-05-27 — プロダクトブリーフとの整合性改訂  
 **Upstream**: [`composition_score_product_brief.md`](composition_score_product_brief.md)（プロダクト定義）  

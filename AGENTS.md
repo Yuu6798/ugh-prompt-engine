@@ -235,6 +235,18 @@ semantic-ci-code での 20 ラウンド以上の経験から蒸留した項目�
 9. **CompositionScore / PhysicalLayer 新フィールドの入場試験を確認** —
    Design Memo には、その欄の **fixity（locked 可能か）** と
    **往復一致の実測 or 実測計画**（[`docs/roundtrip_preservation.md`](docs/roundtrip_preservation.md) 参照）を必ず記載する
+10. **locked file と未検出フィールドを初手で縛る** — Scope OUT に挙げた「変更禁止
+    ファイル」（特に共有スキーマ: `compose/models.py` 等）は実装者が edge case 対応で
+    破ってよいものではないと明記する。あわせて、**計測値が未検出/低信頼になりうる
+    フィールドの扱い**（素直に欠落させる / sentinel を置く / schema は触らない、の
+    いずれか）を Brief 段階で確定しておく。未確定のまま実装に渡すと、実装者が locked
+    schema を広げて吸収し、それが自動レビュアーの連鎖指摘（P2 スパイラル）を誘発する
+    — PR #71（T1）で 10+ ラウンドの churn を生んだ実例。
+
+> **PR #71 教訓**: `compose/models.py` を Scope OUT に書いていたが、未検出
+> フィールドの扱いを Brief で決めていなかったため、実装が `bpm: int → int|str` と
+> schema を拡張して吸収。物理層 sentinel が audit/render/compare への横断契約を
+> 発生させ、自動レビュアーが confidence-gating 系 P2 を連鎖発行した。
 
 ---
 
