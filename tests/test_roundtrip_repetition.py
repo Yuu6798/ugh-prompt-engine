@@ -389,3 +389,25 @@ def test_roundtrip_rep_cli_emits_schema_version_json(tmp_path: Path):
     assert payload["schema_version"] == "1.0"
     assert payload["n_takes"] == 3
     _assert_no_outcome_keys(payload)
+
+
+@pytest.mark.slow
+def test_roundtrip_rep_cli_score_ref_follows_diagnosed_score_not_manifest(tmp_path: Path):
+    """Codex #135 P2: manifest の stale な score_path が別の楽譜名義で
+    保存率を記録しないよう、score_ref は診断に使った CLI スコアで固定する。"""
+    score = load_composition_score(SOURCE_SCORE)
+    manifest = _build_takes_manifest(tmp_path, score)
+    manifest["score_path"] = "somewhere/else/stale_score.yaml"
+    manifest_path = tmp_path / "takes_manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    # advisory note は stderr へ分離される（本文不変の規律）— stdout の JSON を検証
+    result = runner.invoke(
+        app,
+        ["roundtrip-rep", str(SOURCE_SCORE), str(manifest_path), "--format", "json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["score_ref"] == str(SOURCE_SCORE)
+    assert "differs from the diagnosed score" in result.stderr

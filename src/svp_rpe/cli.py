@@ -720,11 +720,22 @@ def roundtrip_rep(
 
     score = load_composition_score(composition_score)
     takes = load_takes_for_repetition(manifest, audio_dir=resolved_audio_dir)
+    # score_ref は診断に実際に使った CLI のスコアで固定する。manifest 側の
+    # score_path が異なる場合（マシン間移動などで stale）にそちらを転記すると、
+    # 別の楽譜名義で保存率が記録され R3 実験ログを汚す。不一致は stderr へ
+    # advisory として通知する（レポート本文は不変・#128 の規律）。
+    manifest_score_path = manifest.get("score_path")
+    if manifest_score_path is not None and str(manifest_score_path) != composition_score:
+        typer.echo(
+            f"note: takes manifest score_path ({manifest_score_path}) differs from the "
+            f"diagnosed score ({composition_score}); score_ref records the diagnosed score",
+            err=True,
+        )
     report = run_repetition_batch(
         score,
         takes,
         generator=str(manifest.get("generator", "unknown")),
-        score_ref=str(manifest.get("score_path", composition_score)),
+        score_ref=composition_score,
     )
     if output_format == "json":
         content = json.dumps(
