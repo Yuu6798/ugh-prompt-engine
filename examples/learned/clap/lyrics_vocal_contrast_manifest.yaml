@@ -1,3 +1,15 @@
+# PR2b-2 CLAP vocal-contrast manifest — 実音源は repo 外（DD-A: 音源非コミット）
+#
+# clean checkout からの再現手順（materialize）:
+#   1. mkdir -p examples/roundtrip/cache/pr2b-2-clap/  （.gitignore 対象の作業キャッシュ）
+#   2. 各サンプルの drive_file_id が指す Drive 上のファイル（所有者アカウント）を、
+#      audio_path のファイル名どおりに同ディレクトリへダウンロードする
+#   3. scripts/collect_clap_fixture.py を実行 — collector が manifest の audio_sha256
+#      pin を自動照合し、バイト列不一致は fail-fast する（integrity gate はコード化済み）
+#
+# 音源は所有者の Drive にのみ存在するため、再現可能性はデータアクセスに律速される。
+# これは R1 corpus と同じ方針: manifest が drive_file_id（所在）+ audio_sha256（同一性）
+# を運び、音源バイトはコミットしない。
 - sample_id: edm_lyrics
   audio_path: ../../roundtrip/cache/pr2b-2-clap/edm_lyrics.mp3
   audio_sha256: 9ef088ed259064f26fc3085155918ac64da8e508523ee328af057ddce88b34e5
