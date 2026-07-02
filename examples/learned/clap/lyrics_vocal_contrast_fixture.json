@@ -5,6 +5,7 @@
   "model": {
     "name": "laion_clap",
     "checkpoint": "music_audioset_epoch_15_esc_90.14.pt",
+    "checkpoint_sha256": "fae3e9c087f2909c28a09dc31c8dfcdacbc42ba44c70e972b58c1bd1caf6dedd",
     "amodel": "HTSAT-base",
     "info": [
       {

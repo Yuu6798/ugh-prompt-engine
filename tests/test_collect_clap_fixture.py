@@ -8,6 +8,7 @@ WAV file rather than placeholder bytes.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import types
@@ -95,6 +96,7 @@ def test_collect_fixture_writes_expected_keys(monkeypatch, tmp_path):
     assert sample["contrast_fit"] is not None
 
     assert fixture["model"]["name"] == "laion_clap"
+    assert fixture["model"]["checkpoint_sha256"] is None
     assert fixture["model"]["info"][0]["name"] == "laion_clap"
     assert fixture["model"]["info"][0]["version"] == "0.0.0-fake"
 
@@ -106,6 +108,7 @@ def test_collect_fixture_forwards_amodel_and_records_it(monkeypatch, tmp_path):
     manifest_path = _write_manifest(tmp_path / "manifest.json", audio_path)
 
     checkpoint_path = tmp_path / "music_audioset_epoch_15_esc_90.14.pt"
+    checkpoint_path.write_bytes(b"fake-checkpoint")
     fixture = collect_fixture(
         manifest_path, checkpoint=str(checkpoint_path), amodel="HTSAT-base"
     )
@@ -113,6 +116,23 @@ def test_collect_fixture_forwards_amodel_and_records_it(monkeypatch, tmp_path):
     assert captured["init_kwargs"] == {"enable_fusion": False, "amodel": "HTSAT-base"}
     assert fixture["model"]["amodel"] == "HTSAT-base"
     assert fixture["model"]["checkpoint"] == "music_audioset_epoch_15_esc_90.14.pt"
+    assert fixture["model"]["checkpoint_sha256"] == hashlib.sha256(
+        b"fake-checkpoint"
+    ).hexdigest()
+
+
+def test_collect_fixture_records_null_checkpoint_hash_for_auto_download(
+    monkeypatch, tmp_path
+):
+    _install_fake_clap(monkeypatch)
+    audio_path = tmp_path / "a.wav"
+    _write_wav(audio_path)
+    manifest_path = _write_manifest(tmp_path / "manifest.json", audio_path)
+
+    fixture = collect_fixture(manifest_path)
+
+    assert fixture["model"]["checkpoint"] is None
+    assert fixture["model"]["checkpoint_sha256"] is None
 
 
 def test_main_amodel_cli_arg_reaches_model_info_block(monkeypatch, tmp_path):

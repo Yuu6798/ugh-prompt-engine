@@ -37,6 +37,13 @@ Usage:
     python scripts/collect_clap_fixture.py \\
         --manifest manifest.yaml --output fixture.json \\
         --checkpoint music_audioset_epoch_15_esc_90.14.pt --amodel HTSAT-base
+
+For reproducible fixture collection, pass a local `--checkpoint` file.
+When the checkpoint path exists locally, the fixture records both its
+basename and `checkpoint_sha256`. With `--checkpoint` omitted (upstream
+auto-download) or a non-file checkpoint id, the fixture records
+`checkpoint_sha256: null` because the weight bytes cannot be pinned by
+this runbook.
 """
 from __future__ import annotations
 
@@ -134,6 +141,15 @@ def _recorded_checkpoint(checkpoint: str | None) -> str | None:
     return candidate.name or checkpoint
 
 
+def _checkpoint_sha256(checkpoint: str | None) -> str | None:
+    if checkpoint is None:
+        return None
+    checkpoint_path = Path(checkpoint)
+    if not checkpoint_path.is_file():
+        return None
+    return _sha256_file(checkpoint_path)
+
+
 def collect_sample(
     sample: dict[str, Any],
     *,
@@ -224,6 +240,7 @@ def collect_fixture(
         "model": {
             "name": "laion_clap",
             "checkpoint": _recorded_checkpoint(checkpoint),
+            "checkpoint_sha256": _checkpoint_sha256(checkpoint),
             "amodel": amodel,
             "info": model_info,
         },

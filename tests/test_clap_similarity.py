@@ -92,6 +92,9 @@ def test_real_clap_fixture_cosines_and_contrast_are_self_consistent():
     assert fixture["model"]["name"] == "laion_clap"
     assert fixture["manifest"] == "examples/learned/clap/lyrics_vocal_contrast_manifest.yaml"
     assert fixture["model"]["checkpoint"] == "music_audioset_epoch_15_esc_90.14.pt"
+    checkpoint_sha256 = fixture["model"]["checkpoint_sha256"]
+    assert len(checkpoint_sha256) == 64
+    int(checkpoint_sha256, 16)
     assert (
         fixture["model"]["info"][0]["weights_license"]
         == "Hugging Face repository-level license badge: cc0-1.0; "
