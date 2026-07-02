@@ -152,6 +152,12 @@ def run_repetition_batch(
     scope.
     """
 
+    if len(takes) < 2:
+        raise ValueError(
+            f"R3 repetition batch requires n>1 takes; got {len(takes)} usable take(s) "
+            "(after `excluded` filtering). A single take cannot support the R3-2 "
+            "repetition rate or the R3-3 rejection-sampling ranking."
+        )
     effective_selection = tuple(selection_fields) if selection_fields else R3_SELECTION_FIELDS
     take_results = [_run_take(take_id, audio_path, score, grip_map) for take_id, audio_path in takes]
     return RepetitionReport(

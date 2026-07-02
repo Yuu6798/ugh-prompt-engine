@@ -115,6 +115,22 @@ def test_selection_ranks_by_preserved_count_descending_with_take_id_tiebreak():
     assert selection.selected_take_id == "a"
 
 
+def test_run_repetition_batch_rejects_underpowered_batches(tmp_path: Path):
+    # Codex #135 P2: R3-2/R3-3 は n>1 の計器。n=0/1 のバッチはレポートを
+    # 作らず fail-fast する（音声に触る前に落ちる = 実在しないパスで検証）。
+    score = load_composition_score(SOURCE_SCORE)
+    missing = tmp_path / "does_not_exist.wav"
+
+    for takes in ([], [("only_take", missing)]):
+        with pytest.raises(ValueError, match="n>1"):
+            run_repetition_batch(
+                score,
+                takes,
+                generator="musicgen-small",
+                score_ref=str(SOURCE_SCORE),
+            )
+
+
 def test_selection_scope_excludes_untrusted_fields_from_the_count():
     # Codex #135 P2: bpm/time_signature/active_rate を大量に保存するテイクが、
     # R3 の信頼ノブ（key/brightness）を保存するテイクより上位に来てはならない。
