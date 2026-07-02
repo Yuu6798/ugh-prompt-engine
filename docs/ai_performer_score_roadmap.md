@@ -308,6 +308,9 @@ PR1（基盤・依存ゼロ・即着手可）
 - PR2/PR3 は PR1.5 のコンパイル経路を土台に並走可（PR2=学習依存、PR3=生成バッチ律速）。
 - **多生成器（MusicGen 等）は Suno ルート確立後**。スキーマの生成器キー構造は今から保ち、
   2 本目は backend descriptor + その control_profile の追加（additive）で入る（改訂方針 3）。
+- **PR2b-1 進捗**: CLAP 隔離配線済み（`clap_adapter.py` + fixture 駆動 `similarity.py` +
+  `scripts/collect_clap_fixture.py` runbook、実推論なし）。実推論・実 fixture 採取と
+  学習版/ルール版 grip 相互検証は PR2b-2（`docs/learned_models_policy.md` §9）。
 - **人手生成の律速を束ねる**: acoustic 4th genre / K3 の A/B バッチ等は生成が人手律速。
   2 本以上が同時に design-ready になったら 1 回のユーザーセッションへ束ねる（Genre Calib
   「1 ジャンルまとめて n=3」の一段上）。現時点は acoustic 単独で束ねる相手が無いため、

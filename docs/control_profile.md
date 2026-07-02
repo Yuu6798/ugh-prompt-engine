@@ -120,6 +120,8 @@ performer 由来でも実 Suno corpus take 由来でもよい（path 非依存�
 > **正直な限界**: 決定論 performer の roundtrip は実コンパイル経路（楽譜→アダプタ→Suno→
 > extract）の自動代理であり、実 Suno 経路の準拠判定は corpus take（人手生成）を渡して同じ
 > 判定器にかける。学習センサー（CLAP）による意味層読解は PR2b（依存・licensing 律速）。
+> 配線（隔離アダプタ + fixture 駆動 similarity、実推論なし）は PR2b-1 で実装済み
+> （`docs/learned_models_policy.md` §3.1 / §9）。
 
 ## 初期データの出所
 
