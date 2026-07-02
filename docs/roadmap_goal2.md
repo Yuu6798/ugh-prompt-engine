@@ -283,7 +283,7 @@ confidence を精緻化するだけの**非ブロッキング follow-up** で、
 > （prior/sr/閾値）調整では大域的修正が存在しないことを再実証し、bpm 除外の
 > 結論を補強した（詳細: [`roundtrip_corpus_screen.md`](roundtrip_corpus_screen.md) finding #6）。
 
-### R3: 確率的演奏者での往復実証 ❌ **未着手（前提だった K2 は完了済み。R3-1〜R3-3 自体が未着手で、残律速は Suno 生成バッチ（人手）のみ）**
+### R3: 確率的演奏者での往復実証 ⏳ **計器実装済み（PR C）— 実測（MusicGen/Suno バッチ）待ち**
 
 **目的**: 決定論（R0）で立った往復を、本命の **確率的演奏者（Suno 級）** で
 実証する。K1 grip 地図が「配線既知の決定論演奏者」での測定だったのに対し、
@@ -297,17 +297,29 @@ confidence を精緻化するだけの**非ブロッキング follow-up** で、
 の scope 決定を入力として受けるのみで、bpm 校正の完了を待たない（CV-scale 校正も
 2026-06-22 に実音源で closeout 済・#92/#93、R3 への影響なし）。
 
-| ID | 成果物 | 受け入れ条件 |
-|---|---|---|
-| R3-1 | 物理固定・意味差替の A/B バッチ（roundtrip §3 の手法を反復化） | 同一物理ノブで意味層のみ差し替えたテイク群を manifest で束ねる |
-| R3-2 | 送出ノブの往復一致率（少数バッチ、n>1） | key / brightness の往復一致が n>1 で再現（効果量の最初の点推定） |
-| R3-3 | 「選択 = 制御」フォールバックの実証（rejection sampling）— N テイク生成 → 計器で測定 → 楽譜に最も近いテイク採用 | grip が弱いノブでも、センサーのみで制御チャネルが回復することを示す（同上 §6 急所2 の保険） |
+| ID | 成果物 | 受け入れ条件 | 実装ポインタ |
+|---|---|---|---|
+| R3-1 | 物理固定・意味差替の A/B バッチ（roundtrip §3 の手法を反復化） | 同一物理ノブで意味層のみ差し替えたテイク群を manifest で束ねる | `run_repetition_batch`（`src/svp_rpe/roundtrip/repetition.py`）が任意の takes manifest（`load_takes_for_repetition`）を束ねて 1 スコア vs N テイクの診断バッチを生成 |
+| R3-2 | 送出ノブの往復一致率（少数バッチ、n>1） | key / brightness の往復一致が n>1 で再現（効果量の最初の点推定） | `FieldRepetitionSummary`（`preserved_rate` / `diagnosis_counts` / `observed_values`、フィールド別 n>1 集計） |
+| R3-3 | 「選択 = 制御」フォールバックの実証（rejection sampling）— N テイク生成 → 計器で測定 → 楽譜に最も近いテイク採用 | grip が弱いノブでも、センサーのみで制御チャネルが回復することを示す（同上 §6 急所2 の保険） | `SelectionResult`（`basis="preserved_field_count"`、`svprpe roundtrip-rep` CLI）。テイク生成は `scripts/collect_musicgen_takes.py perform` サブコマンド |
 
 **完了基準**: 送出かつ計器が信頼できる物理ノブ（最低 key / brightness）で
 往復一致が n>1 で示され、grip が弱い欄については rejection sampling で制御が
 回復することが示される。
 **推定工数**: 5–7 日（律速は手動生成バッチ＝人間の作業時間。Claude/Codex
 サイクルとは競合しない）
+
+> **実装ポインタ（PR C, 2026-07-02）**: R3-1/2/3 の計器は実装済み——
+> `src/svp_rpe/roundtrip/repetition.py`（`run_repetition_batch` /
+> `load_takes_for_repetition` / `render_repetition_text`）、CLI
+> `svprpe roundtrip-rep`、テイク生成は
+> `scripts/collect_musicgen_takes.py perform`（1 スコアのプロンプトから N
+> テイクを生成し takes manifest を書き出す）。全出力は計器であって verdict
+> なし（`SelectionResult` の `selected_take_id` も品質判定ではなく「楽譜に
+> 最も近いテイクの機械的特定」）。**実測（MusicGen ローカルバッチ or Suno
+> 手動バッチ）はまだ実行しておらず、「実証完了」ではない** — 上記の完了基準
+> （n>1 での往復一致・rejection sampling の実効性）は次の実測ラウンドで
+> 埋める。
 
 ### R4: 作品同一性 — 事象レベル欄の往復 ✅ **closeout（2026-06-19, #89/#90）**
 

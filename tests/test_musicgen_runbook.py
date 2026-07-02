@@ -13,6 +13,7 @@ import hashlib
 import importlib
 import json
 import runpy
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -23,12 +24,29 @@ from pydantic import ValidationError
 from scripts.collect_musicgen_takes import (
     GenerationPlan,
     extract_fixture,
+    generator_label,
     load_plan,
     load_takes_manifest,
+    main,
+    resolve_perform_target,
     sample_seed,
 )
 
 PLAN_PATH = Path("examples/control/k2_musicgen/plan.yaml")
+SCORE_PATH = Path("examples/roundtrip/synth_01_source.yaml")
+
+
+def test_generator_label_follows_requested_model_id() -> None:
+    """Codex #135 P2: manifest の generator ラベルは要求モデルから導出する。
+
+    medium/large の反復バッチが `musicgen-small` 名義でレポートされると
+    機種間比較（device profile / grip の帰属）が汚れる。
+    """
+    assert generator_label("facebook/musicgen-small") == "musicgen-small"
+    assert generator_label("facebook/musicgen-medium") == "musicgen-medium"
+    assert generator_label("facebook/musicgen-large") == "musicgen-large"
+    # 名前空間なしの model_id はそのままラベルになる
+    assert generator_label("musicgen-stereo-small") == "musicgen-stereo-small"
 
 
 def test_module_imports_without_torch() -> None:
@@ -303,3 +321,94 @@ def test_load_takes_manifest_round_trips(tmp_path: Path) -> None:
 
     assert loaded["fixture_id"] == "k2_musicgen_mini"
     assert len(loaded["samples"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# `perform` subcommand (R3 repetition harness takes generator)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_perform_target_renders_prompt_and_slug_from_score() -> None:
+    """torch 不要の経路: score のロード + ExternalPromptAdapter レンダリングのみ。
+
+    generate_takes 相当のユニットとして manifest に入る `prompt` /
+    `score_path` の元になる値を検証する（モック不使用）。
+    """
+    from svp_rpe.compose import load_composition_score
+    from svp_rpe.compose.prompt_renderer import ExternalPromptAdapter
+
+    score, prompt_text, slug = resolve_perform_target(SCORE_PATH)
+
+    expected_score = load_composition_score(SCORE_PATH)
+    expected_prompt = ExternalPromptAdapter().render(expected_score).text
+
+    assert prompt_text == expected_prompt
+    assert slug == "synth_01_roundtrip_source"
+    assert score.meta.title == expected_score.meta.title
+
+
+def test_resolve_perform_target_honors_explicit_fixture_id() -> None:
+    _, _, slug = resolve_perform_target(SCORE_PATH, fixture_id="custom_rep_id")
+
+    assert slug == "custom_rep_id"
+
+
+def test_filename_safe_slug_sanitizes_path_separators_and_edges() -> None:
+    """Codex #135 P2: `meta.title` 由来 slug の `/` 等がネストパス書き込みに
+    化けて高コストな生成後に落ちないよう、単一ファイル名コンポーネントへ正規化。"""
+    from scripts.collect_musicgen_takes import _filename_safe_slug
+
+    assert _filename_safe_slug("edm/rock") == "edm-rock"
+    assert _filename_safe_slug("a\\b:c*d") == "a-b-c-d"
+    assert _filename_safe_slug("--weird--..") == "weird"
+    assert _filename_safe_slug("///") == "score"
+    assert _filename_safe_slug("already_safe-1.2") == "already_safe-1.2"
+    # 明示 --fixture-id も同じ正規化を通る
+    _, _, slug = resolve_perform_target(SCORE_PATH, fixture_id="custom/rep id")
+    assert slug == "custom-rep-id"
+
+
+def test_perform_takes_rejects_repetitions_below_two() -> None:
+    """Codex #135 P2: n<2 は roundtrip-rep で拒否されるため、モデルロード・
+    生成前（torch 不要のまま）に fail-fast する。"""
+    from scripts.collect_musicgen_takes import perform_takes
+
+    for repetitions in (0, 1):
+        with pytest.raises(ValueError, match="repetitions"):
+            perform_takes(
+                SCORE_PATH,
+                repetitions=repetitions,
+                output_dir=Path("/nonexistent-unused"),
+            )
+
+
+def test_perform_subcommand_reaches_import_error_without_torch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Without torch/transformers, `perform` must parse args, load the score
+    (torch-free), and fail with an install-hint ImportError — not a traceback.
+    """
+    monkeypatch.setitem(sys.modules, "torch", None)
+    monkeypatch.setitem(sys.modules, "transformers", None)
+
+    output_dir = tmp_path / "out"
+    manifest_out = output_dir / "takes_manifest.json"
+
+    exit_code = main(
+        [
+            "perform",
+            "--score",
+            str(SCORE_PATH),
+            "--repetitions",
+            "2",
+            "--output-dir",
+            str(output_dir),
+            "--manifest-out",
+            str(manifest_out),
+        ]
+    )
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "musicgen" in captured.err
+    assert not manifest_out.exists()
