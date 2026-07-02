@@ -211,6 +211,7 @@ directional のみ**と限定する。昇格には **各ジャンルで instrume
   の PR2b、現状 policy 外）を入れる動機がここにある。
 - **control_profile への lyrics チャネル案**：楽譜が「歌詞の有無で効き方が変わる」ことを
   自己記述できるよう、`control_profile` に意味層ノブ（例 `lyrics_presence`）を足す議論の入口。
+  → SEM-1 で実装済み（[`control_profile.md`](control_profile.md) 参照）。
 - **比較実験の統制項目**：BPM に加え**歌詞条件も matched-pair の統制対象**に加える。
 
 ## 仮説の検証デザイン（n≥3 への昇格計画）

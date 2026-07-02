@@ -8,12 +8,17 @@ PR1.5 で `control_profile` 駆動のフィールド粒度コンパイルに刷�
   `rendering.priority`（エイリアス正規化済み）を fallback／tie-breaker に使う。
 - backend 固有の制約を薄い `BackendDescriptor` に隔離し、`target_backend` →
   control_profile キーを決定論的に解決（`external`→`suno`）。
+
+SEM-1 で `semantic.lyrics_presence`（歌詞の有無）を意味層の制御チャネルとして追加。
+物理フィールドと同じ `control_profile` grip_class ランキングに乗るが、fixity 対象外
+（docs/control_profile.md 参照）。
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 from svp_rpe.compose.models import (
+    SEMANTIC_CONTROL_FIELDS,
     CompositionScore,
     ControlGrip,
     GeneratedPrompt,
@@ -22,6 +27,8 @@ from svp_rpe.compose.models import (
 
 # 旧セグメントトークン → フィールド粒度トークンのエイリアス／移行マップ。
 # 既存 `rendering.priority`（旧トークンで記述）の drop 順位契約を分割後も保つ。
+# SEM-1: 意味層制御フィールドのドット表記（`semantic.lyrics_presence`）も
+# フィールド粒度トークン（`lyrics_presence`）へ正規化する（bare 表記と等価に扱う）。
 _PRIORITY_ALIAS: dict[str, list[str]] = {
     "physical.bpm": ["bpm"],
     "physical.key": ["key"],
@@ -32,6 +39,7 @@ _PRIORITY_ALIAS: dict[str, list[str]] = {
         "active_rate_target",
         "valley_depth_target",
     ],
+    "semantic.lyrics_presence": ["lyrics_presence"],
 }
 
 # control_profile が覆う物理フィールドの描画ティア（小さいほど先頭・drop で後）。
@@ -42,7 +50,10 @@ _TIER_ADVISORY = 2  # loose/dead: 助言・真っ先の削減候補
 
 @dataclass(frozen=True)
 class _PromptSegment:
-    token: str  # 物理フィールドは PhysicalLayer.model_fields 正式名、他は semantic.*/structure
+    # 物理フィールドは PhysicalLayer.model_fields 正式名、意味層制御フィールドは
+    # SEMANTIC_CONTROL_FIELDS のフィールド名そのまま（例 "lyrics_presence"）、他は
+    # semantic.*/structure
+    token: str
     text: str
     order: int
 
@@ -144,6 +155,12 @@ def _segments_for(score: CompositionScore) -> list[_PromptSegment]:
     add("active_rate_target", f"Active rate {score.physical.active_rate_target}.")
     add("valley_depth_target", f"Valley depth {score.physical.valley_depth_target}.")
 
+    # SEM-1: 歌詞の有無（意味層の制御チャネル）。未指定なら描画しない。
+    if score.semantic.lyrics_presence == "present":
+        add("lyrics_presence", "With vocals.")
+    elif score.semantic.lyrics_presence == "absent":
+        add("lyrics_presence", "Instrumental, no vocals.")
+
     if score.semantic.avoid:
         add("semantic.avoid", f"Avoid: {'; '.join(score.semantic.avoid)}.")
 
@@ -160,6 +177,8 @@ def _normalize_priority(priority: list[str]) -> list[str]:
 
 
 _PHYSICAL_FIELDS = frozenset(PhysicalLayer.model_fields)
+# control_profile がグリップを引ける全トークン（物理フィールド + 意味層制御フィールド）。
+_CONTROL_PROFILE_FIELDS = _PHYSICAL_FIELDS | SEMANTIC_CONTROL_FIELDS
 
 
 def _rank_key_factory(
@@ -177,7 +196,11 @@ def _rank_key_factory(
     unlisted_index = len(normalized)
 
     def rank(segment: _PromptSegment) -> tuple[int, int, int]:
-        grip = profile.get(segment.token) if profile and segment.token in _PHYSICAL_FIELDS else None
+        grip = (
+            profile.get(segment.token)
+            if profile and segment.token in _CONTROL_PROFILE_FIELDS
+            else None
+        )
         if grip is None:
             tier = _TIER_FALLBACK
         elif grip.grip_class == "tight":
@@ -219,9 +242,12 @@ def _bpm_text(bpm: int | str) -> str:
 
 
 def _tags_for(score: CompositionScore) -> list[str]:
-    return [
+    tags = [
         score.semantic.grv.primary,
         score.semantic.grv.secondary,
         score.physical.brightness,
         f"{score.physical.stereo_width}_stereo",
     ]
+    if score.semantic.lyrics_presence == "absent":
+        tags.append("instrumental")
+    return tags

@@ -18,6 +18,7 @@ from svp_rpe.compose.models import (
     Meta,
     PhysicalLayer,
     RenderingConfig,
+    SEMANTIC_CONTROL_FIELDS,
     SemanticLayer,
     StructureSection,
 )
@@ -43,6 +44,7 @@ __all__ = [
     "Meta",
     "PhysicalLayer",
     "RenderingConfig",
+    "SEMANTIC_CONTROL_FIELDS",
     "SemanticLayer",
     "StructureSection",
     "composition_to_target_svp",
