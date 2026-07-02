@@ -19,6 +19,13 @@ path. Learned-model output is isolated in a separate
 `LearnedAudioAnnotations` container attached to `RPEBundle`, and is
 never folded back into rule-derived evidence fields.
 
+Generator-side (performer) models — e.g. MusicGen — are out of scope for
+this policy's annotation isolation principle: they produce audio, not
+annotations, and their output only ever reaches `RPEBundle` through the
+same rule-based extraction path as any other audio source. License
+recording for generator-side models lives in
+[`docs/musicgen_backend.md`](musicgen_backend.md).
+
 ## 2. Core Principle
 
 Learned-model output MUST NOT be written into `SemanticRPE.por_surface`,
