@@ -141,11 +141,22 @@ def collect_sample(
         key: value for key, value in sample.items() if key not in _PASSTHROUGH_EXCLUDE
     }
 
+    # provenance は「実際に埋め込んだバイト列」から必ず計算する。manifest 側に
+    # audio_sha256 pin があれば照合し、不一致は fail-fast（stale な pin を fixture が
+    # 主張してしまう事故を防ぐ — 計算値が passthrough に上書きされない順序も担保）。
+    computed_sha256 = _sha256_file(audio_path)
+    manifest_pin = passthrough.pop("audio_sha256", None)
+    if manifest_pin is not None and str(manifest_pin) != computed_sha256:
+        raise ValueError(
+            f"sample {sample_id!r}: manifest audio_sha256 pin does not match the "
+            f"embedded file (pin={manifest_pin}, computed={computed_sha256})"
+        )
+
     row = {
+        **passthrough,
         "sample_id": sample_id,
         "audio_path": str(audio_path),
-        "audio_sha256": _sha256_file(audio_path),
-        **passthrough,
+        "audio_sha256": computed_sha256,
         "audio_embedding": _round_vector(audio_embedding),
         "cosines": cosines,
         "contrast_fit": contrast,

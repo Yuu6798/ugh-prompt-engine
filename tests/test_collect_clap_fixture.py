@@ -198,3 +198,73 @@ def test_absolute_audio_path_passes_through_unchanged(monkeypatch, tmp_path):
     fixture = collect_fixture(manifest_path)
 
     assert fixture["samples"][0]["audio_path"] == str(audio_path)
+
+
+def _write_manifest_with_extras(
+    manifest_path: Path, audio_path: Path, extras: dict
+) -> Path:
+    manifest_path.write_text(
+        json.dumps(
+            [
+                {
+                    "sample_id": "s1",
+                    "audio_path": str(audio_path),
+                    "prompts": {"positive": ["bright"], "negative": ["dark"]},
+                    **extras,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return manifest_path
+
+
+def test_manifest_sha256_pin_matching_passes(monkeypatch, tmp_path):
+    """manifest の audio_sha256 pin が実ファイルと一致すれば照合を通り、
+    出力には計算値が載る。"""
+    import hashlib
+
+    _install_fake_clap(monkeypatch)
+    audio_path = tmp_path / "a.wav"
+    _write_wav(audio_path)
+    true_sha = hashlib.sha256(audio_path.read_bytes()).hexdigest()
+    manifest_path = _write_manifest_with_extras(
+        tmp_path / "manifest.json", audio_path, {"audio_sha256": true_sha}
+    )
+
+    fixture = collect_fixture(manifest_path)
+
+    assert fixture["samples"][0]["audio_sha256"] == true_sha
+
+
+def test_manifest_sha256_pin_mismatch_raises(monkeypatch, tmp_path):
+    """stale な pin は「埋め込んだバイト列と違うハッシュを fixture が主張する」
+    事故の兆候なので fail-fast する。"""
+    _install_fake_clap(monkeypatch)
+    audio_path = tmp_path / "a.wav"
+    _write_wav(audio_path)
+    manifest_path = _write_manifest_with_extras(
+        tmp_path / "manifest.json", audio_path, {"audio_sha256": "deadbeef" * 8}
+    )
+
+    with pytest.raises(ValueError, match="audio_sha256 pin does not match"):
+        collect_fixture(manifest_path)
+
+
+def test_passthrough_cannot_override_reserved_output_keys(monkeypatch, tmp_path):
+    """manifest の余剰キーが計算済みの予約キー（cosines / audio_embedding 等）を
+    上書きできないこと（passthrough を先に展開し計算値が常に勝つ順序）。"""
+    _install_fake_clap(monkeypatch)
+    audio_path = tmp_path / "a.wav"
+    _write_wav(audio_path)
+    manifest_path = _write_manifest_with_extras(
+        tmp_path / "manifest.json",
+        audio_path,
+        {"cosines": "stale-garbage", "audio_embedding": "stale-garbage"},
+    )
+
+    fixture = collect_fixture(manifest_path)
+
+    sample = fixture["samples"][0]
+    assert sample["audio_embedding"] == pytest.approx([0.6, 0.8])
+    assert isinstance(sample["cosines"], dict)
