@@ -74,7 +74,9 @@ memory. Canonical surfaces to grep:
 
 Use the Design Memo template verbatim from `AGENTS.md §1`:
 `Phase / Goal / Acceptance Criteria / Implementation Approach / Risks /
-Test Strategy / Scope / Allowed Dependencies / Required Outputs / Done When`.
+Test Strategy / Scope / Schema Admission（該当時） / Allowed Dependencies /
+Required Outputs / Done When`. Schema Admission is mandatory whenever the
+brief adds/changes a CompositionScore / PhysicalLayer field (checklist item 9).
 
 Make every Acceptance Criterion **verifiable** (a command, a test, or a
 grep-able assertion). Target task size ≈ 0.5–2 days. Branch name is
