@@ -1,10 +1,10 @@
 {
   "schema_version": "1.0",
   "generator": "collect_clap_fixture.py",
-  "manifest": "C:\\Users\\kamosida\\Documents\\Codex\\2026-06-18\\design-memo-r2-2e-bpm-doubling\\examples\\learned\\clap\\lyrics_vocal_contrast_manifest.yaml",
+  "manifest": "examples/learned/clap/lyrics_vocal_contrast_manifest.yaml",
   "model": {
     "name": "laion_clap",
-    "checkpoint": "C:\\Users\\kamosida\\.cache\\svp-rpe\\clap\\music_audioset_epoch_15_esc_90.14.pt",
+    "checkpoint": "music_audioset_epoch_15_esc_90.14.pt",
     "amodel": "HTSAT-base",
     "info": [
       {
@@ -13,7 +13,7 @@
         "provider": "LAION-AI/CLAP",
         "task": "embedding",
         "license": "CC0-1.0 (upstream LICENSE); PyPI trove classifier says Apache-2.0 (inconsistent upstream metadata, see docs/learned_models_policy.md 3.1)",
-        "weights_license": "要確認: no explicit checkpoint license found in README or linked Hugging Face repo (unreachable for cross-check); re-verify at PR2b-2"
+        "weights_license": "Hugging Face repository-level license badge: cc0-1.0; no additional checkpoint-specific license text found in the empty model card (verified 2026-07-02, PR2b-2)"
       }
     ]
   },
@@ -35,7 +35,7 @@
         "lyrics": "present"
       },
       "sample_id": "edm_lyrics",
-      "audio_path": "C:\\Users\\kamosida\\Documents\\Codex\\2026-06-18\\design-memo-r2-2e-bpm-doubling\\examples\\roundtrip\\cache\\pr2b-2-clap\\edm_lyrics.mp3",
+      "audio_path": "../../roundtrip/cache/pr2b-2-clap/edm_lyrics.mp3",
       "audio_sha256": "9ef088ed259064f26fc3085155918ac64da8e508523ee328af057ddce88b34e5",
       "audio_embedding": [
         0.016858,
@@ -576,7 +576,7 @@
         "lyrics": "present_alt"
       },
       "sample_id": "edm_lyrics_alt",
-      "audio_path": "C:\\Users\\kamosida\\Documents\\Codex\\2026-06-18\\design-memo-r2-2e-bpm-doubling\\examples\\roundtrip\\cache\\pr2b-2-clap\\edm_lyrics_alt.mp3",
+      "audio_path": "../../roundtrip/cache/pr2b-2-clap/edm_lyrics_alt.mp3",
       "audio_sha256": "ad3e5e6d7c9744b615d05c30379eaa0b3132c9f3d27219929bb167ff2e03259c",
       "audio_embedding": [
         0.022517,
@@ -1117,7 +1117,7 @@
         "lyrics": "absent"
       },
       "sample_id": "edm_inst",
-      "audio_path": "C:\\Users\\kamosida\\Documents\\Codex\\2026-06-18\\design-memo-r2-2e-bpm-doubling\\examples\\roundtrip\\cache\\pr2b-2-clap\\edm_inst.mp3",
+      "audio_path": "../../roundtrip/cache/pr2b-2-clap/edm_inst.mp3",
       "audio_sha256": "24f81b653b1c1a6fa13d4483bd1573c9e16a7a8f14d045f3031fd319dd1968a4",
       "audio_embedding": [
         -0.011911,
@@ -1658,7 +1658,7 @@
         "lyrics": "present"
       },
       "sample_id": "rock_lyrics",
-      "audio_path": "C:\\Users\\kamosida\\Documents\\Codex\\2026-06-18\\design-memo-r2-2e-bpm-doubling\\examples\\roundtrip\\cache\\pr2b-2-clap\\rock_lyrics.mp3",
+      "audio_path": "../../roundtrip/cache/pr2b-2-clap/rock_lyrics.mp3",
       "audio_sha256": "7273fb6db21e1daab2b15d447f0c45325f4e65ca63fa2d52e697647de47caaf6",
       "audio_embedding": [
         0.012161,
@@ -2199,7 +2199,7 @@
         "lyrics": "present_alt"
       },
       "sample_id": "rock_lyrics_alt",
-      "audio_path": "C:\\Users\\kamosida\\Documents\\Codex\\2026-06-18\\design-memo-r2-2e-bpm-doubling\\examples\\roundtrip\\cache\\pr2b-2-clap\\rock_lyrics_alt.mp3",
+      "audio_path": "../../roundtrip/cache/pr2b-2-clap/rock_lyrics_alt.mp3",
       "audio_sha256": "8d5a7471033672770c8b7be2907b97f441b14e1252dc21c466cf9bd9c4f36005",
       "audio_embedding": [
         0.018154,
@@ -2740,7 +2740,7 @@
         "lyrics": "absent"
       },
       "sample_id": "rock_inst",
-      "audio_path": "C:\\Users\\kamosida\\Documents\\Codex\\2026-06-18\\design-memo-r2-2e-bpm-doubling\\examples\\roundtrip\\cache\\pr2b-2-clap\\rock_inst.mp3",
+      "audio_path": "../../roundtrip/cache/pr2b-2-clap/rock_inst.mp3",
       "audio_sha256": "479c873b8039fd991e84f57a16e5382f8b1256c60639c2c6e797cfeddba9e2f5",
       "audio_embedding": [
         -0.029352,

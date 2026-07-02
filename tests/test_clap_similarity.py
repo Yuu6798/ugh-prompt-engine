@@ -90,10 +90,22 @@ def test_real_clap_fixture_cosines_and_contrast_are_self_consistent():
 
     assert fixture["schema_version"] == "1.0"
     assert fixture["model"]["name"] == "laion_clap"
+    assert fixture["manifest"] == "examples/learned/clap/lyrics_vocal_contrast_manifest.yaml"
+    assert fixture["model"]["checkpoint"] == "music_audioset_epoch_15_esc_90.14.pt"
+    assert (
+        fixture["model"]["info"][0]["weights_license"]
+        == "Hugging Face repository-level license badge: cc0-1.0; "
+        "no additional checkpoint-specific license text found in the empty model card "
+        "(verified 2026-07-02, PR2b-2)"
+    )
+    assert "C:\\Users\\" not in fixture_path.read_text(encoding="utf-8")
     assert len(fixture["samples"]) == 6
 
     for sample in fixture["samples"]:
         assert sample["audio_embedding"]
+        assert sample["audio_path"] == (
+            f"../../roundtrip/cache/pr2b-2-clap/{sample['sample_id']}.mp3"
+        )
         groups = sample["prompt_groups"]
         cosines = sample["cosines"]
         assert set(groups) == {"positive", "negative"}
