@@ -20,7 +20,10 @@ Manifest format (YAML or JSON), a list of samples:
 A relative `audio_path` is resolved against the manifest file's own
 directory (not the process CWD), so manifests stay portable and can be
 run from anywhere — see `_resolve_audio_path`. Absolute `audio_path`
-entries pass through unchanged.
+entries pass through unchanged for embedding, but the output fixture
+records portable provenance: relative manifest values are kept as
+written, and absolute paths are reduced to a repo-relative path when
+possible or a basename otherwise.
 
 `condition` (and any other extra keys) are passed through to the sample's
 row in the output fixture untouched. Output fixture JSON keeps only
@@ -101,6 +104,36 @@ def _resolve_audio_path(audio_path: Path, *, manifest_dir: Path) -> Path:
     return audio_path if audio_path.is_absolute() else (manifest_dir / audio_path).resolve()
 
 
+def _portable_path(path: Path, *, base: Path = ROOT) -> str:
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(base.resolve()).as_posix()
+    except ValueError:
+        return resolved.name
+
+
+def _recorded_audio_path(
+    raw_audio_path: str, *, resolved_audio_path: Path, manifest_dir: Path
+) -> str:
+    raw_path = Path(raw_audio_path)
+    if not raw_path.is_absolute():
+        return raw_path.as_posix()
+    try:
+        return resolved_audio_path.resolve().relative_to(ROOT.resolve()).as_posix()
+    except ValueError:
+        try:
+            return resolved_audio_path.resolve().relative_to(manifest_dir.resolve()).as_posix()
+        except ValueError:
+            return resolved_audio_path.name
+
+
+def _recorded_checkpoint(checkpoint: str | None) -> str | None:
+    if checkpoint is None:
+        return None
+    candidate = Path(checkpoint)
+    return candidate.name or checkpoint
+
+
 def collect_sample(
     sample: dict[str, Any],
     *,
@@ -114,7 +147,8 @@ def collect_sample(
     manifest フィールドの受け渡しと丸めのみを担当する薄いラッパー。
     """
     sample_id = str(sample["sample_id"])
-    audio_path = _resolve_audio_path(Path(str(sample["audio_path"])), manifest_dir=manifest_dir)
+    raw_audio_path = str(sample["audio_path"])
+    audio_path = _resolve_audio_path(Path(raw_audio_path), manifest_dir=manifest_dir)
     prompts = sample.get("prompts", {})
     positive_texts = list(prompts.get("positive", []))
     negative_texts = list(prompts.get("negative", []))
@@ -155,7 +189,9 @@ def collect_sample(
     row = {
         **passthrough,
         "sample_id": sample_id,
-        "audio_path": str(audio_path),
+        "audio_path": _recorded_audio_path(
+            raw_audio_path, resolved_audio_path=audio_path, manifest_dir=manifest_dir
+        ),
         "audio_sha256": computed_sha256,
         "audio_embedding": _round_vector(audio_embedding),
         "cosines": cosines,
@@ -184,10 +220,10 @@ def collect_fixture(
     return {
         "schema_version": SCHEMA_VERSION,
         "generator": GENERATOR,
-        "manifest": str(manifest_path),
+        "manifest": _portable_path(manifest_path),
         "model": {
             "name": "laion_clap",
-            "checkpoint": checkpoint,
+            "checkpoint": _recorded_checkpoint(checkpoint),
             "amodel": amodel,
             "info": model_info,
         },

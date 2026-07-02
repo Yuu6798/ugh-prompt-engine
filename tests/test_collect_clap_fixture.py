@@ -83,6 +83,7 @@ def test_collect_fixture_writes_expected_keys(monkeypatch, tmp_path):
 
     assert fixture["schema_version"] == "1.0"
     assert fixture["generator"] == "collect_clap_fixture.py"
+    assert fixture["manifest"] == "manifest.json"
     assert len(fixture["samples"]) == 1
 
     sample = fixture["samples"][0]
@@ -104,10 +105,14 @@ def test_collect_fixture_forwards_amodel_and_records_it(monkeypatch, tmp_path):
     _write_wav(audio_path)
     manifest_path = _write_manifest(tmp_path / "manifest.json", audio_path)
 
-    fixture = collect_fixture(manifest_path, amodel="HTSAT-base")
+    checkpoint_path = tmp_path / "music_audioset_epoch_15_esc_90.14.pt"
+    fixture = collect_fixture(
+        manifest_path, checkpoint=str(checkpoint_path), amodel="HTSAT-base"
+    )
 
     assert captured["init_kwargs"] == {"enable_fusion": False, "amodel": "HTSAT-base"}
     assert fixture["model"]["amodel"] == "HTSAT-base"
+    assert fixture["model"]["checkpoint"] == "music_audioset_epoch_15_esc_90.14.pt"
 
 
 def test_main_amodel_cli_arg_reaches_model_info_block(monkeypatch, tmp_path):
@@ -184,11 +189,11 @@ def test_relative_audio_path_resolves_against_manifest_directory(monkeypatch, tm
     fixture = collect_fixture(manifest_path)
 
     sample = fixture["samples"][0]
-    assert sample["audio_path"] == str(audio_path.resolve())
+    assert sample["audio_path"] == "a.wav"
     assert sample["audio_embedding"] == pytest.approx([0.6, 0.8])
 
 
-def test_absolute_audio_path_passes_through_unchanged(monkeypatch, tmp_path):
+def test_absolute_audio_path_records_portable_identifier(monkeypatch, tmp_path):
     _install_fake_clap(monkeypatch)
 
     audio_path = (tmp_path / "a.wav").resolve()
@@ -197,7 +202,7 @@ def test_absolute_audio_path_passes_through_unchanged(monkeypatch, tmp_path):
 
     fixture = collect_fixture(manifest_path)
 
-    assert fixture["samples"][0]["audio_path"] == str(audio_path)
+    assert fixture["samples"][0]["audio_path"] == "a.wav"
 
 
 def _write_manifest_with_extras(
