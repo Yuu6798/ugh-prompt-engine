@@ -140,12 +140,24 @@ def _detect_clap_version() -> Optional[str]:
         return None
 
 
-def load_clap_model(checkpoint: Optional[str] = None) -> Any:
+def load_clap_model(checkpoint: Optional[str] = None, amodel: Optional[str] = None) -> Any:
     """Instantiate a `laion_clap.CLAP_Module` and load its checkpoint.
 
     `enable_fusion=False` is hard-coded — the fusion variant is a separate
     checkpoint family this adapter does not target. `checkpoint=None`
     defers to upstream's default checkpoint download behavior.
+
+    `amodel` selects the audio-encoder architecture and MUST match the
+    checkpoint family being loaded. Per the upstream README
+    (`https://github.com/LAION-AI/CLAP#pretrained-models`), the
+    `music_audioset_epoch_15_esc_90.14.pt` family (and the other
+    `music_*` checkpoints this adapter's docs target — see
+    `docs/learned_models_policy.md`) require `amodel="HTSAT-base"`;
+    loading them with the constructor's default `amodel` raises a shape
+    mismatch inside `load_ckpt`. `amodel=None` (the default here) leaves
+    upstream's own default encoder in place (the non-music /
+    general-purpose `HTSAT-tiny`-family checkpoints) — this function does
+    not fabricate an encoder name when the caller does not supply one.
 
     Raises
     ------
@@ -160,7 +172,10 @@ def load_clap_model(checkpoint: Optional[str] = None) -> Any:
         raise LearnedModelIncompatible(
             "laion_clap.CLAP_Module not found; incompatible upstream version"
         )
-    model = clap_root.CLAP_Module(enable_fusion=False)
+    if amodel is None:
+        model = clap_root.CLAP_Module(enable_fusion=False)
+    else:
+        model = clap_root.CLAP_Module(enable_fusion=False, amodel=amodel)
     if not hasattr(model, "load_ckpt"):
         raise LearnedModelIncompatible(
             "laion_clap.CLAP_Module has no load_ckpt method; incompatible upstream version"
@@ -207,6 +222,7 @@ def embed_audio_file(
     path: str,
     model: Optional[Any] = None,
     checkpoint: Optional[str] = None,
+    amodel: Optional[str] = None,
 ) -> LearnedAudioAnnotations:
     """Embed a single audio file with CLAP, isolated in `LearnedAudioAnnotations`.
 
@@ -236,13 +252,22 @@ def embed_audio_file(
         Path to a local audio file, decoded via `librosa.load`.
     model
         A model already returned by `load_clap_model`. If omitted, a
-        fresh model is loaded via `load_clap_model(checkpoint)` — callers
-        processing many files should load once and pass `model` to avoid
-        reloading the checkpoint per call.
+        fresh model is loaded via `load_clap_model(checkpoint, amodel)` —
+        callers processing many files should load once and pass `model`
+        to avoid reloading the checkpoint per call.
     checkpoint
         Forwarded to `load_clap_model` when `model` is not supplied.
         Recorded in `inference_config.checkpoint` for provenance
         regardless of whether it triggered a fresh load.
+    amodel
+        Forwarded to `load_clap_model` when `model` is not supplied (the
+        `music_*` checkpoint family requires `"HTSAT-base"`; see
+        `load_clap_model`'s docstring and
+        `docs/learned_models_policy.md`). Recorded verbatim (including
+        `None`) in `inference_config.amodel` for provenance regardless of
+        whether it triggered a fresh load — a caller-supplied `model`
+        with a mismatched `amodel` value is not detectable here, so this
+        field documents intent, not the model's actual encoder.
 
     Raises
     ------
@@ -253,7 +278,7 @@ def embed_audio_file(
         missing or returns an unexpected shape (expected: one row per
         chunk).
     """
-    clap_module = model if model is not None else load_clap_model(checkpoint)
+    clap_module = model if model is not None else load_clap_model(checkpoint, amodel)
     if not hasattr(clap_module, "get_audio_embedding_from_data"):
         raise LearnedModelIncompatible(
             "laion_clap model has no get_audio_embedding_from_data method; "
@@ -287,6 +312,7 @@ def embed_audio_file(
         ),
         inference_config={
             "checkpoint": checkpoint,
+            "amodel": amodel,
             "enable_fusion": False,
             "source": _MODULE_NAME,
             "audio_path": path,

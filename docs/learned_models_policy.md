@@ -103,6 +103,14 @@ provenance hints from a learned model live in `LearnedAudioLabel.notes`.
     哲学で verdict を出さない。
   - fixture 駆動（`scripts/collect_clap_fixture.py`）で決定論区間を担保
     する。実推論は CI に持ち込まない。
+  - music 系 checkpoint（`music_audioset_epoch_15_esc_90.14.pt` /
+    `music_speech_*` 等）は上流 README
+    （`https://github.com/LAION-AI/CLAP#pretrained-models`）が明記する通り
+    `amodel="HTSAT-base"` の指定が必須（デフォルトの audio encoder
+    とは形状が一致せず `load_ckpt` が shape mismatch で失敗する）。runbook
+    例: `python scripts/collect_clap_fixture.py --checkpoint
+    music_audioset_epoch_15_esc_90.14.pt --amodel HTSAT-base --manifest
+    manifest.yaml --output fixture.json`。PR2b-2 の実行手順の一部。
 
 ### 3.2 Reject
 

@@ -29,6 +29,11 @@ hash.
 
 Usage:
     python scripts/collect_clap_fixture.py --manifest manifest.yaml --output fixture.json
+
+    # music_* checkpoints require --amodel HTSAT-base (upstream README):
+    python scripts/collect_clap_fixture.py \\
+        --manifest manifest.yaml --output fixture.json \\
+        --checkpoint music_audioset_epoch_15_esc_90.14.pt --amodel HTSAT-base
 """
 from __future__ import annotations
 
@@ -101,6 +106,7 @@ def collect_sample(
     *,
     model: Any,
     manifest_dir: Path,
+    amodel: str | None = None,
 ) -> tuple[dict[str, Any], LearnedAudioAnnotations]:
     """1 サンプルを処理し、(fixture 行, annotations) を返す。
 
@@ -113,7 +119,7 @@ def collect_sample(
     positive_texts = list(prompts.get("positive", []))
     negative_texts = list(prompts.get("negative", []))
 
-    annotations = embed_audio_file(str(audio_path), model=model)
+    annotations = embed_audio_file(str(audio_path), model=model, amodel=amodel)
     audio_embedding = annotations.embedding.vector if annotations.embedding else []
 
     cosines: dict[str, float] = {}
@@ -147,15 +153,19 @@ def collect_sample(
     return row, annotations
 
 
-def collect_fixture(manifest_path: Path, *, checkpoint: str | None = None) -> dict[str, Any]:
+def collect_fixture(
+    manifest_path: Path, *, checkpoint: str | None = None, amodel: str | None = None
+) -> dict[str, Any]:
     samples = load_manifest(manifest_path)
-    model = load_clap_model(checkpoint)
+    model = load_clap_model(checkpoint, amodel)
     manifest_dir = manifest_path.resolve().parent
 
     rows: list[dict[str, Any]] = []
     model_info: list[dict[str, Any]] = []
     for index, sample in enumerate(samples):
-        row, annotations = collect_sample(sample, model=model, manifest_dir=manifest_dir)
+        row, annotations = collect_sample(
+            sample, model=model, manifest_dir=manifest_dir, amodel=amodel
+        )
         rows.append(row)
         if index == 0:
             model_info = [info.model_dump() for info in annotations.enabled_models]
@@ -167,6 +177,7 @@ def collect_fixture(manifest_path: Path, *, checkpoint: str | None = None) -> di
         "model": {
             "name": "laion_clap",
             "checkpoint": checkpoint,
+            "amodel": amodel,
             "info": model_info,
         },
         "samples": rows,
@@ -187,10 +198,21 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="CLAP checkpoint path/id (default: upstream default checkpoint)",
     )
+    parser.add_argument(
+        "--amodel",
+        default=None,
+        help=(
+            "CLAP audio-encoder architecture id, e.g. 'HTSAT-base'. Required for "
+            "music_* checkpoints (music_audioset_epoch_15_esc_90.14.pt and similar) per "
+            "the upstream README; default: upstream default encoder (HTSAT-tiny family)."
+        ),
+    )
     args = parser.parse_args(argv)
 
     try:
-        fixture = collect_fixture(args.manifest.resolve(), checkpoint=args.checkpoint)
+        fixture = collect_fixture(
+            args.manifest.resolve(), checkpoint=args.checkpoint, amodel=args.amodel
+        )
     except LearnedModelUnavailable as exc:
         print(str(exc), file=sys.stderr)
         return 1

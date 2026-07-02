@@ -385,6 +385,7 @@ class TestEmbedAudioFile:
         assert info.weights_license is not None
 
         assert result.inference_config["checkpoint"] == "ckpt.pt"
+        assert result.inference_config["amodel"] is None
         assert result.inference_config["enable_fusion"] is False
         assert result.inference_config["source"] == "laion_clap"
         assert result.inference_config["sample_rate"] == 48000
@@ -416,6 +417,65 @@ class TestEmbedAudioFile:
         _write_wav(audio, seconds=0.05)
         result = embed_audio_file(str(audio))
         assert result.embedding.vector == [0.0, 0.0]
+
+
+class TestAmodel:
+    """`amodel` selects the audio-encoder architecture; the `music_*`
+    checkpoint family (e.g. `music_audioset_epoch_15_esc_90.14.pt`)
+    requires `amodel="HTSAT-base"` per the upstream README — see
+    `docs/learned_models_policy.md`.
+    """
+
+    def test_load_clap_model_default_omits_amodel_kwarg(self, monkeypatch):
+        captured = _install_fake_clap(monkeypatch)
+
+        from svp_rpe.rpe.learned.clap_adapter import load_clap_model
+
+        load_clap_model()
+        assert captured["init_kwargs"] == {"enable_fusion": False}
+        assert "amodel" not in captured["init_kwargs"]
+
+    def test_load_clap_model_forwards_amodel(self, monkeypatch):
+        captured = _install_fake_clap(monkeypatch)
+
+        from svp_rpe.rpe.learned.clap_adapter import load_clap_model
+
+        load_clap_model(amodel="HTSAT-base")
+        assert captured["init_kwargs"] == {"enable_fusion": False, "amodel": "HTSAT-base"}
+
+    def test_embed_audio_file_records_none_amodel_by_default(self, monkeypatch, tmp_path):
+        _install_fake_clap(monkeypatch)
+
+        from svp_rpe.rpe.learned.clap_adapter import embed_audio_file
+
+        audio = tmp_path / "a.wav"
+        _write_wav(audio, seconds=0.05)
+        result = embed_audio_file(str(audio))
+        assert result.inference_config["amodel"] is None
+
+    def test_embed_audio_file_forwards_and_records_amodel(self, monkeypatch, tmp_path):
+        captured = _install_fake_clap(monkeypatch)
+
+        from svp_rpe.rpe.learned.clap_adapter import embed_audio_file
+
+        audio = tmp_path / "a.wav"
+        _write_wav(audio, seconds=0.05)
+        result = embed_audio_file(str(audio), amodel="HTSAT-base")
+        assert captured["init_kwargs"] == {"enable_fusion": False, "amodel": "HTSAT-base"}
+        assert result.inference_config["amodel"] == "HTSAT-base"
+
+    def test_embed_audio_file_records_amodel_when_model_provided(self, monkeypatch, tmp_path):
+        _install_fake_clap(monkeypatch)
+
+        from svp_rpe.rpe.learned.clap_adapter import embed_audio_file, load_clap_model
+
+        model = load_clap_model(amodel="HTSAT-base")
+        audio = tmp_path / "a.wav"
+        _write_wav(audio, seconds=0.05)
+        # amodel is recorded for provenance even though `model` is
+        # already constructed and no fresh load_clap_model call happens.
+        result = embed_audio_file(str(audio), model=model, amodel="HTSAT-base")
+        assert result.inference_config["amodel"] == "HTSAT-base"
 
 
 class TestDeterministicChunking:

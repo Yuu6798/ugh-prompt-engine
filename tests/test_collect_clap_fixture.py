@@ -27,10 +27,12 @@ def _write_wav(path: Path, *, seconds: float = 0.05, sample_rate: int = 48000) -
     sf.write(str(path), y, sample_rate)
 
 
-def _install_fake_clap(monkeypatch: pytest.MonkeyPatch) -> None:
+def _install_fake_clap(monkeypatch: pytest.MonkeyPatch) -> dict:
+    captured: dict = {}
+
     class FakeCLAPModule:
         def __init__(self, **kwargs):
-            pass
+            captured["init_kwargs"] = dict(kwargs)
 
         def load_ckpt(self, checkpoint=None):
             pass
@@ -51,6 +53,7 @@ def _install_fake_clap(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_root.CLAP_Module = FakeCLAPModule
     fake_root.__version__ = "0.0.0-fake"
     monkeypatch.setitem(sys.modules, "laion_clap", fake_root)
+    return captured
 
 
 def _write_manifest(manifest_path: Path, audio_path: Path | str) -> Path:
@@ -93,6 +96,42 @@ def test_collect_fixture_writes_expected_keys(monkeypatch, tmp_path):
     assert fixture["model"]["name"] == "laion_clap"
     assert fixture["model"]["info"][0]["name"] == "laion_clap"
     assert fixture["model"]["info"][0]["version"] == "0.0.0-fake"
+
+
+def test_collect_fixture_forwards_amodel_and_records_it(monkeypatch, tmp_path):
+    captured = _install_fake_clap(monkeypatch)
+    audio_path = tmp_path / "a.wav"
+    _write_wav(audio_path)
+    manifest_path = _write_manifest(tmp_path / "manifest.json", audio_path)
+
+    fixture = collect_fixture(manifest_path, amodel="HTSAT-base")
+
+    assert captured["init_kwargs"] == {"enable_fusion": False, "amodel": "HTSAT-base"}
+    assert fixture["model"]["amodel"] == "HTSAT-base"
+
+
+def test_main_amodel_cli_arg_reaches_model_info_block(monkeypatch, tmp_path):
+    captured = _install_fake_clap(monkeypatch)
+    audio_path = tmp_path / "a.wav"
+    _write_wav(audio_path)
+    manifest_path = _write_manifest(tmp_path / "manifest.json", audio_path)
+    output_path = tmp_path / "fixture.json"
+
+    exit_code = main(
+        [
+            "--manifest",
+            str(manifest_path),
+            "--output",
+            str(output_path),
+            "--amodel",
+            "HTSAT-base",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["init_kwargs"] == {"enable_fusion": False, "amodel": "HTSAT-base"}
+    written = json.loads(output_path.read_text(encoding="utf-8"))
+    assert written["model"]["amodel"] == "HTSAT-base"
 
 
 def test_main_writes_output_file(monkeypatch, tmp_path):
