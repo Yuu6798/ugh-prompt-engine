@@ -27,6 +27,8 @@ from svp_rpe.compose.models import (
 
 # 旧セグメントトークン → フィールド粒度トークンのエイリアス／移行マップ。
 # 既存 `rendering.priority`（旧トークンで記述）の drop 順位契約を分割後も保つ。
+# SEM-1: 意味層制御フィールドのドット表記（`semantic.lyrics_presence`）も
+# フィールド粒度トークン（`lyrics_presence`）へ正規化する（bare 表記と等価に扱う）。
 _PRIORITY_ALIAS: dict[str, list[str]] = {
     "physical.bpm": ["bpm"],
     "physical.key": ["key"],
@@ -37,6 +39,7 @@ _PRIORITY_ALIAS: dict[str, list[str]] = {
         "active_rate_target",
         "valley_depth_target",
     ],
+    "semantic.lyrics_presence": ["lyrics_presence"],
 }
 
 # control_profile が覆う物理フィールドの描画ティア（小さいほど先頭・drop で後）。

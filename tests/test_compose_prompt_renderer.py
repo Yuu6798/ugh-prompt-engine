@@ -406,3 +406,54 @@ def test_lyrics_presence_tight_profile_survives_aggressive_truncation() -> None:
 
     assert "Instrumental, no vocals." in prompt.text
     assert "lyrics_presence" not in prompt.dropped_elements
+
+
+def _priority_with_lyrics_token_first(priority_token: str) -> list[str]:
+    return [
+        priority_token,
+        "semantic.core",
+        "semantic.grv",
+        "physical.bpm",
+        "physical.key",
+        "physical.time_signature",
+        "structure",
+        "semantic.avoid",
+        "physical.optional",
+    ]
+
+
+def test_lyrics_presence_dotted_priority_token_survives_truncation_unprofiled() -> None:
+    """Codex P2 fix: `semantic.lyrics_presence` in `rendering.priority` was a silent
+    no-op (only physical dotted tokens were aliased). It must now normalize via
+    `_PRIORITY_ALIAS` so listing it early actually protects the segment under
+    truncation, on the unprofiled path (no control_profile entry for the backend)."""
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data.pop("control_profile", None)
+    data["semantic"]["lyrics_presence"] = "absent"
+    data["rendering"]["priority"] = _priority_with_lyrics_token_first("semantic.lyrics_presence")
+    score = CompositionScore.model_validate(data)
+
+    prompt = ExternalPromptAdapter().render(score, max_chars=180)
+
+    assert "Instrumental, no vocals." in prompt.text
+    assert "lyrics_presence" not in prompt.dropped_elements
+    # a later-priority segment is dropped instead under the tight truncation.
+    assert "valley_depth_target" in prompt.dropped_elements
+
+
+def test_lyrics_presence_bare_and_dotted_priority_tokens_normalize_identically() -> None:
+    """The bare `lyrics_presence` spelling must behave identically to the dotted
+    `semantic.lyrics_presence` spelling — both normalize to the same field token."""
+
+    def _score(priority_token: str) -> CompositionScore:
+        data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+        data.pop("control_profile", None)
+        data["semantic"]["lyrics_presence"] = "absent"
+        data["rendering"]["priority"] = _priority_with_lyrics_token_first(priority_token)
+        return CompositionScore.model_validate(data)
+
+    dotted = ExternalPromptAdapter().render(_score("semantic.lyrics_presence"), max_chars=180)
+    bare = ExternalPromptAdapter().render(_score("lyrics_presence"), max_chars=180)
+
+    assert dotted.text == bare.text
+    assert dotted.dropped_elements == bare.dropped_elements
