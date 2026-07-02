@@ -34,18 +34,29 @@ API キー不要、LLM 不要、同一入力 → 同一出力の完全決定論�
 
 ## Advisor Strategy（モデル運用方針）
 
-- **メインエージェント**: Opus（設計メモ起案・PR レビュー・再レビュー・メモリ管理）
-- **サブエージェント**: Sonnet 固定（探索・読み取り中心の調査タスク）
+**2026-07-02 改訂**（Fable 5 主導体制、#125–#132 で実運用実証済み）:
 
-Agent ツールで spawn する際は必ず `model: "sonnet"` を指定すること。
+- **メインエージェント**: Fable 5（設計判定・Design Memo 起草・PR レビュー / 再レビュー・
+  結果解釈・メモリ管理）。Fable 非稼働セッションでは Opus が代行
+- **実装・探索サブエージェント**: Sonnet 固定（実装、探索・読み取り中心の調査タスク）
+- **非設計分析サブエージェント**: Opus（設計判断を伴わないレビュー指摘の分析・トリアージ）
+
+Agent ツールで spawn する際は必ず `model` を明示すること。
 
 ```python
-# 正しい例
+# 正しい例（実装・探索は Sonnet 固定）
 Agent({"model": "sonnet", "subagent_type": "Explore", "prompt": "..."})
 
-# NG — model 省略すると Opus で動き、コスト効率が下がる
+# NG — model 省略するとメインと同モデルで動き、コスト効率が下がる
 Agent({"subagent_type": "Explore", "prompt": "..."})
 ```
+
+### レビュー対応の振り分けルール（2026-07-02 新設、#131 で初運用）
+
+- **マシン非依存**（コード・テスト・docs・fixture メタデータ）= **Fable が直接対応**。
+  `codex/*` ブランチへの push 可、対応内容をレビュースレッドに明記する
+- **マシン依存**（実音源・実重みハッシュ・Suno 生成・G4 ライセンス目視）= **Codex / User**
+- 判断が割れたら Fable が設計判定を先に出して振り分ける
 
 ## Workflow（Codex × Claude × User 分業オーケストレーション）
 
@@ -54,7 +65,7 @@ Agent({"subagent_type": "Explore", "prompt": "..."})
 Claude Code は仕様整理とレビューに集中し、Codex がローカル実装・検証・PR 作成・
 指摘対応を担当する。
 
-- **Claude Code (Opus)** — タスク Brief 読解、Design Memo 起案、実装方針 / 受け入れ条件 / リスク / テスト観点の整理、PR レビュー、再レビュー、メモリ管理
+- **Claude Code (Fable 5 / 非稼働時 Opus)** — タスク Brief 読解、Design Memo 起案、実装方針 / 受け入れ条件 / リスク / テスト観点の整理、PR レビュー、再レビュー、メモリ管理
 - **Codex** — Design Memo を受けて実装、PR 作成、レビュー指摘対応、セルフレビュー
 - **User** — エージェント間の橋渡し、最終マージ判断、ループのトリガー
 
