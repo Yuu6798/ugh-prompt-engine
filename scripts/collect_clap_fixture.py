@@ -1,0 +1,187 @@
+"""scripts/collect_clap_fixture.py — CLAP fixture-collection runbook.
+
+Requires the `semantic-embed` extra (`pip install -e ".[semantic-embed]"`)
+at runtime. This script is NEVER run in CI — it is a manual runbook for
+collecting real CLAP embeddings + cosine-similarity fixtures from local
+audio, mirroring the K-series fixture-driven DD-A pattern
+(`scripts/measure_grip.py`): audio + inference happen here, once, and the
+resulting numeric fixture is what tests / `similarity.py` consumers run
+against deterministically afterward.
+
+Manifest format (YAML or JSON), a list of samples:
+
+    - sample_id: "sample_01"
+      audio_path: "path/to/audio.wav"
+      prompts:
+        positive: ["a bright uplifting song"]
+        negative: ["a dark somber song"]
+      condition: {level: "high", knob: "brightness"}   # passthrough, optional
+
+`condition` (and any other extra keys) are passed through to the sample's
+row in the output fixture untouched. Output fixture JSON keeps only
+numeric / string data — no audio bytes, only a `audio_sha256` provenance
+hash.
+
+Usage:
+    python scripts/collect_clap_fixture.py --manifest manifest.yaml --output fixture.json
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from svp_rpe.rpe.learned import LearnedModelUnavailable  # noqa: E402
+from svp_rpe.rpe.learned.clap_adapter import (  # noqa: E402
+    embed_audio_file,
+    embed_texts,
+    load_clap_model,
+)
+from svp_rpe.rpe.learned.similarity import contrast_fit, prompt_audio_fit  # noqa: E402
+from svp_rpe.rpe.models import LearnedAudioAnnotations  # noqa: E402
+
+SCHEMA_VERSION = "1.0"
+GENERATOR = "collect_clap_fixture.py"
+_PASSTHROUGH_EXCLUDE = {"sample_id", "audio_path", "prompts"}
+
+
+def load_manifest(path: Path) -> list[dict[str, Any]]:
+    text = path.read_text(encoding="utf-8")
+    if path.suffix.lower() in {".yaml", ".yml"}:
+        import yaml
+
+        raw = yaml.safe_load(text)
+    else:
+        raw = json.loads(text)
+    if not isinstance(raw, list):
+        raise ValueError(f"manifest must be a JSON/YAML list of samples: {path}")
+    return raw
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _round_vector(vector: list[float], digits: int = 6) -> list[float]:
+    return [round(float(value), digits) for value in vector]
+
+
+def collect_sample(
+    sample: dict[str, Any],
+    *,
+    model: Any,
+) -> tuple[dict[str, Any], LearnedAudioAnnotations]:
+    """1 サンプルを処理し、(fixture 行, annotations) を返す。
+
+    重い処理はすべて `clap_adapter` / `similarity` に委譲する — ここは
+    manifest フィールドの受け渡しと丸めのみを担当する薄いラッパー。
+    """
+    sample_id = str(sample["sample_id"])
+    audio_path = Path(str(sample["audio_path"]))
+    prompts = sample.get("prompts", {})
+    positive_texts = list(prompts.get("positive", []))
+    negative_texts = list(prompts.get("negative", []))
+
+    annotations = embed_audio_file(str(audio_path), model=model)
+    audio_embedding = annotations.embedding.vector if annotations.embedding else []
+
+    cosines: dict[str, float] = {}
+    if positive_texts or negative_texts:
+        all_texts = positive_texts + negative_texts
+        all_embeddings = embed_texts(all_texts, model=model)
+        fits = prompt_audio_fit(audio_embedding, all_embeddings)
+        cosines = {text: round(fit, 6) for text, fit in zip(all_texts, fits, strict=True)}
+
+    contrast: float | None = None
+    if positive_texts and negative_texts:
+        positive_embeddings = embed_texts(positive_texts, model=model)
+        negative_embeddings = embed_texts(negative_texts, model=model)
+        contrast = round(
+            contrast_fit(audio_embedding, positive_embeddings, negative_embeddings), 6
+        )
+
+    passthrough = {
+        key: value for key, value in sample.items() if key not in _PASSTHROUGH_EXCLUDE
+    }
+
+    row = {
+        "sample_id": sample_id,
+        "audio_path": str(audio_path),
+        "audio_sha256": _sha256_file(audio_path),
+        **passthrough,
+        "audio_embedding": _round_vector(audio_embedding),
+        "cosines": cosines,
+        "contrast_fit": contrast,
+    }
+    return row, annotations
+
+
+def collect_fixture(manifest_path: Path, *, checkpoint: str | None = None) -> dict[str, Any]:
+    samples = load_manifest(manifest_path)
+    model = load_clap_model(checkpoint)
+
+    rows: list[dict[str, Any]] = []
+    model_info: list[dict[str, Any]] = []
+    for index, sample in enumerate(samples):
+        row, annotations = collect_sample(sample, model=model)
+        rows.append(row)
+        if index == 0:
+            model_info = [info.model_dump() for info in annotations.enabled_models]
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "generator": GENERATOR,
+        "manifest": str(manifest_path),
+        "model": {
+            "name": "laion_clap",
+            "checkpoint": checkpoint,
+            "info": model_info,
+        },
+        "samples": rows,
+    }
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Collect real CLAP audio/text embeddings + cosine similarity fixtures. "
+            "Requires the `semantic-embed` extra; never run in CI."
+        ),
+    )
+    parser.add_argument("--manifest", type=Path, required=True, help="YAML/JSON sample manifest")
+    parser.add_argument("--output", type=Path, required=True, help="output fixture JSON path")
+    parser.add_argument(
+        "--checkpoint",
+        default=None,
+        help="CLAP checkpoint path/id (default: upstream default checkpoint)",
+    )
+    args = parser.parse_args(argv)
+
+    try:
+        fixture = collect_fixture(args.manifest.resolve(), checkpoint=args.checkpoint)
+    except LearnedModelUnavailable as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(
+        json.dumps(fixture, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    print(f"wrote {args.output}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

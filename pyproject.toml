@@ -41,6 +41,14 @@ learned-tags = ["panns-inference"]
 # basic-pitch 0.4.0 advertises Python 3.8-3.11 and depends on
 # tensorflow<2.15.1, which has no Python 3.12 wheel in CI's Linux runtime.
 pitch = ["basic-pitch==0.4.0; python_version < '3.12'"]
+# laion-clap (LAION-AI) — CLAP audio/text embedding model, the learned
+# semantic-similarity sensor (prompt<->audio / score<->audio cosine fit).
+# PyPI distribution and import name are both "laion-clap" / "laion_clap".
+# Pulls in torch and a ~2GB checkpoint downloaded lazily by upstream on
+# first `load_ckpt()` call. Code/weights license verification is recorded
+# in docs/learned_models_policy.md Section 3.1 — do NOT widen this extra
+# to bundle weights.
+semantic-embed = ["laion-clap"]
 
 [project.scripts]
 svprpe = "svp_rpe.cli:app"

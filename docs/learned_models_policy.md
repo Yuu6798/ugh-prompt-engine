@@ -72,6 +72,38 @@ provenance hints from a learned model live in `LearnedAudioLabel.notes`.
     replaced in the same change set.
   - Ship behind an `optional` extra.
 
+#### `laion-clap` (CLAP)
+
+- Use case: 意味層読解の補助センサー — prompt<->audio / score<->audio の
+  cosine 適合度（学習版 grip）を計測する。`SemanticRPE` のルール版意味付けと
+  相互検証するためのものであり、置き換えない。`LearnedAudioAnnotations.
+  embedding` を初めて populate するアダプタ（`panns_inference` は embedding
+  を受け取るが破棄している — `panns_adapter.py` 参照）。
+- License（verbatim findings, verified 2026-07-02）:
+  - code: PyPI 配布物のメタデータに内部矛盾あり。
+    `https://pypi.org/pypi/laion-clap/json` の `info.license` フィールドは
+    CC0 1.0 Universal の全文をそのまま格納しており、GitHub 上の `LICENSE`
+    ファイル（`https://raw.githubusercontent.com/LAION-AI/CLAP/main/LICENSE`）
+    と一致する。一方で同 JSON の `classifiers` は
+    `License :: OSI Approved :: Apache Software License` を宣言しており、
+    `license` フィールドと矛盾する。どちらも許諾的ライセンスではあるが、
+    この矛盾自体を発明せず記録する。
+  - weights: 要確認。`music_audioset_epoch_15_esc_90.14.pt` 等のチェックポ
+    イントは README
+    （`https://github.com/LAION-AI/CLAP#pretrained-models`）から
+    Hugging Face（`https://huggingface.co/lukewys/laion_clap/tree/main`）
+    配布へリンクされるのみで、チェックポイント自体のライセンス表記は
+    README 上に見当たらない。Hugging Face 側のモデルカードは本調査環境
+    からアクセス不可（HTTP 403）のため未確認。G4（Section 7）の最終確認は
+    実重み取得時 = PR2b-2 で行う。
+- Constraints:
+  - torch と ~2GB の重みは optional extra `semantic-embed` に限定する。
+    デフォルトインストールは変えない。
+  - cosine 適合度は A/B コントラスト（`contrast_fit`）で読む — grip と同じ
+    哲学で verdict を出さない。
+  - fixture 駆動（`scripts/collect_clap_fixture.py`）で決定論区間を担保
+    する。実推論は CI に持ち込まない。
+
 ### 3.2 Reject
 
 #### `Essentia` / `essentia-tensorflow`
@@ -128,11 +160,12 @@ dependencies, and weights license terms.
 All learned-model backends are gated behind opt-in `pyproject.toml`
 extras:
 
-| Extra          | Pulls in            |
-|----------------|---------------------|
-| `beat`         | `beat_this`         |
-| `learned-tags` | `panns_inference`   |
-| `pitch`        | `basic-pitch`       |
+| Extra            | Pulls in            |
+|------------------|----------------------|
+| `beat`           | `beat_this`         |
+| `learned-tags`   | `panns_inference`   |
+| `pitch`          | `basic-pitch`       |
+| `semantic-embed` | `laion-clap`        |
 
 The default install MUST remain green without any of these extras. Each
 backend module performs a guarded import and falls back gracefully (or
@@ -274,6 +307,18 @@ and reviewable:
 7. **PR7 — pseudo-label consensus harness.** Compare deterministic real-audio
    measurements with optional learned annotations as machine consensus only;
    this does not satisfy the human-ground-truth promotion gate.
+8. **PR2b-1 — CLAP isolated wiring + fixture-driven similarity harness.**
+   Optional extra `semantic-embed`, `clap_adapter.py`
+   (`embed_audio_file` / `embed_texts`), `similarity.py` (`cosine_similarity`
+   / `prompt_audio_fit` / `contrast_fit`, numpy only), and the
+   `scripts/collect_clap_fixture.py` runbook. No real inference in this PR —
+   fake-backend tests only. First adapter to populate
+   `LearnedAudioAnnotations.embedding`.
+9. **PR2b-2 — CLAP real inference + real fixture collection + learned/rule
+   grip cross-validation.** Final G4 license confirmation against the
+   actually-fetched weights, real-audio fixture collection via
+   `scripts/collect_clap_fixture.py`, and a cross-validation experiment
+   against the rule-based `SemanticRPE` layer.
 
 ## 10. Acceptance Criteria
 
