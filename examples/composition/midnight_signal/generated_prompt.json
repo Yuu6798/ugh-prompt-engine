@@ -11,5 +11,8 @@
     "bright festival EDM",
     "comic vocal delivery"
   ],
-  "dropped_elements": []
+  "dropped_elements": [],
+  "advisories": [
+    "Suno は dark 指定で絶対 dark 帯（centroid ≤1200Hz）に到達した実績なし（K2: 0/4）。暗さが要件なら生成後の centroid 確認を推奨。"
+  ]
 }

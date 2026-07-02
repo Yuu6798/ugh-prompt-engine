@@ -147,6 +147,14 @@ def compose(
     else:
         typer.echo(content)
 
+    # PR3 後半: デバイスプロファイルの advisory（プロンプト本文・tags は変えない・警告のみ）。
+    # text 出力は Suno などへそのまま貼り付ける成果物のため、stdout / -o ファイルへは
+    # 一切混ぜず stderr にのみ出す。JSON 出力は model_dump に advisories が自然に乗るため
+    # 追加処理不要。
+    if output_format == "text" and prompt.advisories:
+        advisories_block = "\n".join(f"- {advisory}" for advisory in prompt.advisories)
+        typer.echo(f"Advisories:\n{advisories_block}", err=True)
+
 
 @app.command()
 def measure(

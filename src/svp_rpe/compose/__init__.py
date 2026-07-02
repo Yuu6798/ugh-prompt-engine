@@ -2,6 +2,14 @@
 from __future__ import annotations
 
 from svp_rpe.compose.convert import composition_to_target_svp
+from svp_rpe.compose.device_profile import (
+    CrossCoupling,
+    DeviceProfile,
+    KnobQuirk,
+    QuirkStatus,
+    SpectralBias,
+    load_device_profile,
+)
 from svp_rpe.compose.fixity import field_fixity
 from svp_rpe.compose.loader import load_composition_score
 from svp_rpe.compose.models import (
@@ -33,7 +41,9 @@ __all__ = [
     "ChordSpec",
     "CompositionScore",
     "ControlGrip",
+    "CrossCoupling",
     "DeltaESpec",
+    "DeviceProfile",
     "EventLayer",
     "ExternalPromptAdapter",
     "FixityState",
@@ -41,14 +51,18 @@ __all__ = [
     "GeneratorProfile",
     "GripClass",
     "GrvSpec",
+    "KnobQuirk",
     "Meta",
     "PhysicalLayer",
+    "QuirkStatus",
     "RenderingConfig",
     "SEMANTIC_CONTROL_FIELDS",
     "SemanticLayer",
+    "SpectralBias",
     "StructureSection",
     "composition_to_target_svp",
     "field_fixity",
     "load_composition_score",
+    "load_device_profile",
     "resolve_backend_descriptor",
 ]

@@ -131,11 +131,14 @@ def test_compose_cli_outputs_text_by_default() -> None:
     result = CliRunner().invoke(app, ["compose", str(SAMPLE_PATH)])
 
     assert result.exit_code == 0
-    assert result.output.startswith("128 BPM. Brightness dark.")
-    assert "Brightness dark." in result.output
-    assert "Wide stereo." in result.output
-    assert "Avoid: bright festival EDM; comic vocal delivery." in result.output
-    assert '"backend"' not in result.output
+    assert result.stdout.startswith("128 BPM. Brightness dark.")
+    assert "Brightness dark." in result.stdout
+    assert "Wide stereo." in result.stdout
+    assert "Avoid: bright festival EDM; comic vocal delivery." in result.stdout
+    assert '"backend"' not in result.stdout
+    # advisory はコピペ成果物である stdout を汚染してはならない。stderr にのみ出す。
+    assert "Advisories" not in result.stdout
+    assert "Advisories" in result.stderr
 
 
 def test_compose_cli_outputs_json_and_max_chars_override() -> None:
@@ -145,7 +148,7 @@ def test_compose_cli_outputs_json_and_max_chars_override() -> None:
     )
 
     assert result.exit_code == 0
-    payload = json.loads(result.output)
+    payload = json.loads(result.stdout)
     assert payload["backend"] == "external"
     assert len(payload["text"]) <= 180
     assert payload["dropped_elements"][:3] == [
@@ -155,6 +158,9 @@ def test_compose_cli_outputs_json_and_max_chars_override() -> None:
     ]
     assert payload["tags"] == ["deep_house", "ambient", "dark", "wide_stereo"]
     assert payload["negative_tags"] == ["bright festival EDM", "comic vocal delivery"]
+    # JSON モードは構造化データなので advisories はフィールドとして保持したまま。
+    assert payload["advisories"] != []
+    assert result.stderr == ""
 
 
 def test_compose_cli_writes_output_file(tmp_path: Path) -> None:
@@ -169,7 +175,23 @@ def test_compose_cli_writes_output_file(tmp_path: Path) -> None:
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert payload["backend"] == "external"
     assert payload["text"].startswith("128 BPM. Brightness dark.")
-    assert "Composition prompt saved" in result.output
+    assert "Composition prompt saved" in result.stdout
+
+
+def test_compose_cli_text_output_file_excludes_advisories(tmp_path: Path) -> None:
+    """text 出力の -o ファイルはコピペ成果物なので advisories を含んではならない。"""
+    output_path = tmp_path / "generated_prompt.txt"
+
+    result = CliRunner().invoke(
+        app,
+        ["compose", str(SAMPLE_PATH), "--format", "text", "-o", str(output_path)],
+    )
+
+    assert result.exit_code == 0
+    file_content = output_path.read_text(encoding="utf-8")
+    assert file_content.startswith("128 BPM. Brightness dark.")
+    assert "Advisories" not in file_content
+    assert "Advisories" in result.stderr
 
 
 def test_generated_prompt_examples_match_renderer() -> None:
@@ -396,10 +418,22 @@ def test_lyrics_presence_loose_profile_drops_before_advisory_fallback() -> None:
 
 
 def test_lyrics_presence_tight_profile_survives_aggressive_truncation() -> None:
-    """tight 宣言の lyrics_presence は max_chars を強く絞っても最後まで残る。"""
+    """tight 宣言の lyrics_presence は max_chars を強く絞っても最後まで残る。
+
+    PR3 後半（device_profile）以降 suno backend は bpm/brightness の device
+    control_defaults（tight）を持つため、lyrics_presence を単独の tight フィールドとして
+    分離検証するには両方を明示的に score 側で dead 宣言する（score が device defaults に
+    常に勝つことも同時に確認する）。
+    """
     data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
     data["semantic"]["lyrics_presence"] = "absent"
-    data["control_profile"] = {"suno": {"lyrics_presence": {"grip_class": "tight"}}}
+    data["control_profile"] = {
+        "suno": {
+            "bpm": {"grip_class": "dead"},
+            "brightness": {"grip_class": "dead"},
+            "lyrics_presence": {"grip_class": "tight"},
+        }
+    }
     score = CompositionScore.model_validate(data)
 
     prompt = ExternalPromptAdapter().render(score, max_chars=30)
@@ -426,10 +460,17 @@ def test_lyrics_presence_dotted_priority_token_survives_truncation_unprofiled() 
     """Codex P2 fix: `semantic.lyrics_presence` in `rendering.priority` was a silent
     no-op (only physical dotted tokens were aliased). It must now normalize via
     `_PRIORITY_ALIAS` so listing it early actually protects the segment under
-    truncation, on the unprofiled path (no control_profile entry for the backend)."""
+    truncation, on the unprofiled path (no control_profile entry for the backend).
+
+    PR3 後半（device_profile）以降 `suno`（`external` の解決先）は device
+    control_defaults を持つため、"unprofiled" を再現するには device profile が
+    存在しない backend（`musicgen`）へ切り替える（`bpm`/`brightness` を device 既定で
+    勝手に tight 昇格させず、`rendering.priority` フォールバックだけを見る）。
+    """
     data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
     data.pop("control_profile", None)
     data["semantic"]["lyrics_presence"] = "absent"
+    data["rendering"]["target_backend"] = "musicgen"
     data["rendering"]["priority"] = _priority_with_lyrics_token_first("semantic.lyrics_presence")
     score = CompositionScore.model_validate(data)
 
