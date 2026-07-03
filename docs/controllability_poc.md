@@ -502,9 +502,13 @@ DCI: overall disentanglement **0.323** / completeness 0.355 / mean effect_size_g
 1. **ノイズ天井計器（K3-1b）が実生成器で初稼働し、over-reading を実際に防いだ**。
    dead 行が生む見かけの効果は最大 |d|=0.848（active_rate_target→key_match）に
    達する — R=8 の生成ノイズはこの規模。天井を超えて解像したのは
-   **対角 2（bpm 0.851 / brightness 1.26）+ brightness→band_ratio 1 の計 3 セル**のみで、
-   残る非対角 15 セル（K3-2a で strong に見えた種類の結合を含む）は
-   すべて unresolved に抑制された。
+   **対角 2（bpm 0.851 / brightness 1.26）+ 非対角 1（brightness→band_ratio
+   0.849）の計 3 セル**。live 行の非対角 15 セルのうち解像はこの 1 つだけで、
+   残る 14 セル（K3-2a で strong に見えた種類の異種チャネル間結合を含む）は
+   すべて unresolved に抑制された。なお唯一解像した非対角は brightness ノブを
+   legacy 帯域比センサー（同じ明るさ次元の第二センサー）が拾ったもので、
+   行列位置上はクロスだが異種チャネル間の干渉ではない — **K3-2a 型の
+   異種チャネル間結合で天井を超えたものはゼロ**。
 2. **K3-2a の bpm→centroid 符号反転問題は MusicGen では裁定不能（unresolved）**:
    +0.127 は天井のはるか内側。「機種ごとに符号が違う」仮説はフル Suno 行列
    （follow-up）か R 増員を待つ — 計器がこの保留を自己申告できるようになったことが
