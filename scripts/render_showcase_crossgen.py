@@ -121,16 +121,12 @@ def transcribe_score(bundle: RPEBundle) -> CompositionScore:
         # TODO 欄を実値で埋めたので fixity 入場試験の整合をとる（TODO=unlocked / 実値=locked）
         score.fixity["brightness"] = "locked"
         score.fixity["stereo_width"] = "locked"
+    # 構成の役割文は転写では得られない。TODO をプロンプトへ漏らさず、転写が実測した
+    # 情報（セクション名・小節数）だけで埋める。
+    for section in score.structure:
+        section.role = section.section.lower()
+        section.physical = f"{section.bars} bars"
     score.rendering.target_backend = "musicgen"
-    score.rendering.priority = [
-        "semantic.core",
-        "semantic.grv",
-        "physical.bpm",
-        "physical.key",
-        "physical.time_signature",
-        "semantic.avoid",
-        "physical.optional",
-    ]
     return score
 
 
@@ -295,6 +291,15 @@ def _waveform_svg(points: list[float], *, width: int = 480, height: int = 46) ->
 def _format_observed(value: Any) -> str:
     if isinstance(value, float):
         return f"{value:g}"
+    if isinstance(value, list):
+        # chord_progression の observed は chord dict のリスト
+        if not value:
+            return "（聴き取れず）"
+        if isinstance(value[0], dict) and "root" in value[0]:
+            names = [
+                f"{c['root']}{'m' if c.get('quality') == 'minor' else ''}" for c in value[:4]
+            ]
+            return " ".join(names) + (" …" if len(value) > 4 else "")
     text = str(value)
     return text if len(text) <= 24 else text[:22] + "…"
 
@@ -385,6 +390,21 @@ def render_html(data: dict[str, Any]) -> str:
     def bucket(items: list[str]) -> str:
         return "、".join(items) if items else "なし"
 
+    # 明るさ ✗ のうち「中立帯に着地したが draft が TODO を返すため一致扱いにならない」
+    # 件数（計器側の目盛り事情）をデータから数える。
+    brightness_summary = next((f for f in report.fields if f.field == "brightness"), None)
+    neutral_landings = (
+        sum(1 for v in brightness_summary.observed_values if str(v).startswith("TODO"))
+        if brightness_summary is not None
+        else 0
+    )
+    sensor_note = (
+        f"「明るさ」は {neutral_landings}/{report.n_takes} テイクが目標と同じ中立帯に"
+        "着地していたが、draft 側の目盛りが中立帯を TODO と表記するため一致に数えられない。"
+        if neutral_landings
+        else ""
+    )
+
     template = Template(_PAGE_TEMPLATE)
     return template.substitute(
         source_bpm=f"{source['measured']['bpm']:g}",
@@ -405,6 +425,7 @@ def render_html(data: dict[str, Any]) -> str:
         carried=_esc(bucket(carried)),
         partial=_esc(bucket(partial)),
         lost=_esc(bucket(lost)),
+        sensor_note=_esc(sensor_note),
         model_id=_esc(PROFILE_MEASURED_MODEL_ID),
     )
 
@@ -539,10 +560,10 @@ td.measured{color:var(--measured)}
     <div class="card-title" style="margin-top:10px">聴き取った曲の構成</div>
     <p style="margin:.2em 0" class="small">$structure_line</p>
   </div>
-  <p class="small dim">正直な注記: stereo_width はラベル帯未校正のため中立値、
-  構成の役割文は転写では得られないためプロンプトから除外（drop として記録）。
-  この楽譜を MusicGen 向けにコンパイルしたプロンプトが下記 — 機種の取説により
-  brightness（tight）が文頭に昇格しています。</p>
+  <p class="small dim">正直な注記: stereo_width はラベル帯未校正のため中立値。
+  構成の役割文は転写では得られないため、実測できたセクション名と小節数のみを
+  プロンプトへ渡す。この楽譜を MusicGen 向けにコンパイルしたプロンプトが下記 —
+  機種の取説により brightness（tight）が文頭に昇格しています。</p>
   <pre>$prompt_text</pre>
 </section>
 
@@ -570,6 +591,10 @@ td.measured{color:var(--measured)}
     <div class="bucket mid"><b>△ ときどき運べた</b>$partial</div>
     <div class="bucket bad"><b>✗ 運べなかった</b>$lost</div>
   </div>
+  <p class="small dim">脚注: ✗ の一部は生成器でなく計器側の目盛り事情を含む。$sensor_note
+  「音の広がり」はセンサー未校正（第一幕から一貫して自己申告）。つまり ✗ には
+  「機種が運べない」と「計器がまだ読めない」の両方が混ざり、その区別まで含めて
+  次の改善対象の座標になる。</p>
 </section>
 
 <section class="why">
