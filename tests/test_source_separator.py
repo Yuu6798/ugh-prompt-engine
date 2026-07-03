@@ -130,7 +130,7 @@ def test_separate_stems_with_cli_fallback(monkeypatch: pytest.MonkeyPatch, tmp_p
     monkeypatch.setattr(source_separator, "_DemucsAPI", None)
     monkeypatch.setattr(source_separator, "_DemucsSeparate", object())
     monkeypatch.setattr(source_separator, "_demucs_subprocess_env", lambda: {})
-    monkeypatch.setattr(source_separator.subprocess, "run", fake_run)
+    monkeypatch.setattr(source_separator, "_subprocess_run", fake_run)
 
     bundle = separate_stems(source, model="htdemucs_ft", device="cpu")
 

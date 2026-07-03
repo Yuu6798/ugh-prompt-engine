@@ -30,6 +30,12 @@ except ImportError:
 
 _HAS_DEMUCS = _DemucsAPI is not None or _DemucsSeparate is not None
 
+# Module-local indirection so tests can stub out the Demucs CLI invocation
+# without monkeypatching the process-wide `subprocess.run` (which collides
+# with numpy's lazy `numpy.testing` import doing its own `lscpu` subprocess
+# call — see tests/test_source_separator.py).
+_subprocess_run = subprocess.run
+
 DEFAULT_MODEL = "htdemucs_ft"
 DEFAULT_SAMPLE_RATE = 44100
 STEM_NAMES = ("vocals", "drums", "bass", "other")
@@ -218,7 +224,7 @@ def _separate_stems_with_cli(
         ]
         env = _demucs_subprocess_env()
         try:
-            subprocess.run(
+            _subprocess_run(
                 command,
                 check=True,
                 capture_output=True,

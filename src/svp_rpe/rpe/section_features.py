@@ -1,6 +1,7 @@
 """rpe/section_features.py — Per-section feature extraction."""
 from __future__ import annotations
 
+import logging
 from typing import List
 
 import librosa
@@ -8,6 +9,8 @@ import numpy as np
 
 from svp_rpe.eval.diff_models import SectionFeature
 from svp_rpe.rpe.models import SectionMarker
+
+logger = logging.getLogger(__name__)
 
 
 def extract_section_features(
@@ -41,7 +44,8 @@ def extract_section_features(
                 y=y_sec, sr=sr, hop_length=hop_length,
             )[0]
             return float(np.mean(sc))
-        except Exception:
+        except Exception as exc:
+            logger.warning("_spectral_centroid failed, falling back to 0.0: %s", exc)
             return 0.0
 
     def _onset_density(y_sec: np.ndarray, sec: SectionMarker) -> float:
@@ -49,7 +53,8 @@ def extract_section_features(
             onsets = librosa.onset.onset_detect(y=y_sec, sr=sr, units="time")
             sec_duration = sec.end_sec - sec.start_sec
             return len(onsets) / max(sec_duration, 0.01)
-        except Exception:
+        except Exception as exc:
+            logger.warning("_onset_density failed, falling back to 0.0: %s", exc)
             return 0.0
 
     def _spectral_flux_mean(y_sec: np.ndarray) -> float:
@@ -59,7 +64,8 @@ def extract_section_features(
                 return 0.0
             flux = np.sqrt(np.sum(np.diff(S, axis=1) ** 2, axis=0))
             return float(np.mean(flux))
-        except Exception:
+        except Exception as exc:
+            logger.warning("_spectral_flux_mean failed, falling back to 0.0: %s", exc)
             return 0.0
 
     def _chroma_change(y_sec: np.ndarray) -> float:
@@ -69,7 +75,8 @@ def extract_section_features(
                 return 0.0
             chroma_diff = np.sum(np.abs(np.diff(chroma, axis=1)))
             return float(chroma_diff / max(chroma.shape[1] - 1, 1))
-        except Exception:
+        except Exception as exc:
+            logger.warning("_chroma_change failed, falling back to 0.0: %s", exc)
             return 0.0
 
     def _feature_for_section(sec: SectionMarker) -> SectionFeature:

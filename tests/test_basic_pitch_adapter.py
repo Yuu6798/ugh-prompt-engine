@@ -76,6 +76,17 @@ def _install_fake_basic_pitch(
 
     monkeypatch.setitem(sys.modules, "basic_pitch", fake_root)
     monkeypatch.setitem(sys.modules, "basic_pitch.inference", fake_inference)
+
+    # 実環境に basic-pitch が pip 導入済みでもテストを密閉に保つ:
+    # _detect_version の importlib.metadata フォールバックが実配布物の
+    # バージョンを拾うと、fake モジュール前提の version 期待値が環境依存で
+    # 割れる（learned-models extra 導入済みセッションで顕在化）。
+    from svp_rpe.rpe.learned import basic_pitch_adapter
+
+    def _package_not_found(name: str) -> str:
+        raise basic_pitch_adapter._pkg_metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(basic_pitch_adapter._pkg_metadata, "version", _package_not_found)
     return captured
 
 

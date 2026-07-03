@@ -63,18 +63,39 @@ def test_packaged_configs_match_repo_configs() -> None:
 
     load_config はローカル checkout が無い環境でパッケージリソースへフォールバック
     するため、乖離するとインストール実行時のみ旧ルールで動く（PR #66 レビュー指摘）。
+
+    `config/` 直下と `config/domain_profiles/` `config/device_profiles/` の全 YAML
+    を動的に列挙して比較する（固定ファイル名の列挙だと新規追加分がすり抜ける —
+    負債監査指摘）。両側のファイル集合の一致も assert し、片側にしか無いファイルを
+    検出する。
     """
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
-    for relative in (
-        "semantic_rules.yaml",
-        "domain_profiles/music.yaml",
-        "device_profiles/suno.yaml",
-        "device_profiles/musicgen.yaml",
-    ):
-        repo_copy = (root / "config" / relative).read_text(encoding="utf-8")
-        packaged_copy = (root / "src" / "svp_rpe" / "config" / relative).read_text(
-            encoding="utf-8"
-        )
+    repo_config_root = root / "config"
+    packaged_config_root = root / "src" / "svp_rpe" / "config"
+
+    subdirs = ("", "domain_profiles", "device_profiles")
+
+    repo_relatives: set[str] = set()
+    for subdir in subdirs:
+        repo_dir = repo_config_root / subdir if subdir else repo_config_root
+        for path in sorted(repo_dir.glob("*.yaml")):
+            repo_relatives.add(str((Path(subdir) / path.name)) if subdir else path.name)
+
+    packaged_relatives: set[str] = set()
+    for subdir in subdirs:
+        packaged_dir = packaged_config_root / subdir if subdir else packaged_config_root
+        for path in sorted(packaged_dir.glob("*.yaml")):
+            packaged_relatives.add(str((Path(subdir) / path.name)) if subdir else path.name)
+
+    assert repo_relatives == packaged_relatives, (
+        f"config file set mismatch: repo-only={repo_relatives - packaged_relatives}, "
+        f"packaged-only={packaged_relatives - repo_relatives}"
+    )
+    assert repo_relatives, "expected at least one config YAML to compare"
+
+    for relative in sorted(repo_relatives):
+        repo_copy = (repo_config_root / relative).read_text(encoding="utf-8")
+        packaged_copy = (packaged_config_root / relative).read_text(encoding="utf-8")
         assert repo_copy == packaged_copy, f"config drift: {relative}"

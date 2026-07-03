@@ -37,9 +37,37 @@ from scripts.compose_e2e_demo import (  # noqa: E402
     scaled_score,
     wav_bytes,
 )
-from scripts.measure_grip import _key_match_score  # noqa: E402
 from svp_rpe.compose import load_composition_score  # noqa: E402
 from svp_rpe.compose.models import CompositionScore  # noqa: E402
+
+
+def _weighted_key_score(target: str, observed: str) -> float:
+    """mir_eval 加重の key 一致スコア（∈[0,1]）。mir_eval 欠如は fail-fast。
+
+    `scripts/measure_grip.py` の `_key_match_score` は mir_eval 欠如時に
+    正規化完全一致へ**黙って**フォールバックするが、本 fixture ビルダーでは
+    使えない — コミット済み fixture の `key_match_baseline` は加重スコアで
+    pin されており、フォールバックで再変換すると別の数値を静かに再生成して
+    `--verify` の決定論が optional 依存の有無に左右されてしまう
+    （`scripts/build_k3_musicgen_fixture.py` と同じ方針、Codex #137 P2）。
+    加重スコアが計算できないなら黙って違う目盛りに切り替えるのではなく、
+    dev extra の導入を要求して止まる。
+    """
+    try:
+        import mir_eval.key as mir_eval_key
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "build_k3_fixture requires mir_eval for weighted key scoring: "
+            "the committed fixture pins mir_eval-weighted key_match_baseline values, "
+            "and the exact-match fallback would silently regenerate different numbers. "
+            "Install the dev extra first: pip install -e '.[dev]'"
+        ) from exc
+    try:
+        return float(mir_eval_key.evaluate(target, observed)["Weighted Score"])
+    except ValueError:
+        # 観測 key が "unknown" 等で mir_eval が解釈できない場合は 0.0
+        # （measure_grip._key_match_score と同じ規約）。
+        return 0.0
 
 FIXTURE_SCHEMA_VERSION = "1.0"
 FIXTURE_ID = "k3_synth_performer_matrix_rpe_features"
@@ -171,7 +199,7 @@ def extract_features(
         "valley_depth": physical.valley_depth,
         "onset_density": physical.onset_density,
         "observed_key": observed_key,
-        "key_match_baseline": _key_match_score(baseline, observed_key),
+        "key_match_baseline": _weighted_key_score(baseline, observed_key),
     }
     for key, value in features.items():
         if key == "observed_key":
