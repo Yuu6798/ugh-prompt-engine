@@ -131,6 +131,17 @@ def _install_fake_clap(
         fake_root.__version__ = version
 
     monkeypatch.setitem(sys.modules, "laion_clap", fake_root)
+
+    # 実環境に laion-clap が pip 導入済みでもテストを密閉に保つ:
+    # _detect_clap_version の importlib.metadata フォールバックが実配布物の
+    # バージョン（例 1.1.7）を拾うと、fake モジュール前提の version 期待値が
+    # 環境依存で割れる（semantic-embed extra 導入済みセッションで顕在化）。
+    from svp_rpe.rpe.learned import clap_adapter
+
+    def _package_not_found(name: str) -> str:
+        raise clap_adapter._pkg_metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(clap_adapter._pkg_metadata, "version", _package_not_found)
     return captured
 
 
