@@ -39,6 +39,7 @@ def test_synth_samples_match_ground_truth_time_signature(row: dict) -> None:
     assert 0.0 <= confidence <= 1.0
 
 
+@pytest.mark.slow
 def test_extractor_populates_time_signature_from_detector() -> None:
     """Regression guard: PhysicalRPE must not rely on the model default "4/4"."""
     audio = load_audio(str(SAMPLE_DIR / "synth_04_waltz_fsharp_minor.wav"))

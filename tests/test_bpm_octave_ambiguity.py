@@ -245,6 +245,7 @@ def test_q1_3_fixtures_are_not_flagged(filename: str) -> None:
     )
 
 
+@pytest.mark.slow
 def test_extractor_unflagged_fixture_preserves_confidence() -> None:
     """An unflagged fixture keeps empty candidates and the raw compute_bpm
     confidence (no penalty applied)."""
@@ -262,6 +263,7 @@ def test_extractor_unflagged_fixture_preserves_confidence() -> None:
     assert raw_conf > BPM_OCTAVE_AMBIGUOUS_CONFIDENCE_CAP
 
 
+@pytest.mark.slow
 def test_extractor_ambiguous_fixture_corrects_bpm_and_caps_confidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
