@@ -1,0 +1,191 @@
+{
+  "schema_version": "1.0",
+  "fixture_id": "musicgen_r3_source",
+  "generator": "musicgen-small",
+  "score_path": "examples/roundtrip/musicgen_r3_source.yaml",
+  "prompt": "Brightness bright. Bright energetic electronic dance atmosphere. electronic / four-on-the-floor track. C major. intro: driving pulse, bright leads; role=establish the beat. body: steady four-on-the-floor, bright; role=hold the energy. outro: steady pulse to the end; role=ride out. Normal stereo. Active rate 0.90-0.95. Valley depth 0.10-0.20. 4/4 time. 120 BPM.",
+  "model_id": "facebook/musicgen-small",
+  "model_revision": "4c8334b02c6ec4e8664a91979669a501ec497792",
+  "samples": [
+    {
+      "sample_id": "musicgen_r3_source_00",
+      "repeat": 0,
+      "seed": 5000,
+      "audio_path": "musicgen_r3_source_00.wav",
+      "audio_sha256": "defd83e6281114ae9046c85a026e2c7ec6e4ba07cbec7e5ec7ea826f5ac68f49",
+      "duration_seconds": 12.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "musicgen_r3_source_01",
+      "repeat": 1,
+      "seed": 5001,
+      "audio_path": "musicgen_r3_source_01.wav",
+      "audio_sha256": "1f4d2c6d4080734a7513a4d36470345055ab35efc7a3819d1a6f0c4914817763",
+      "duration_seconds": 12.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "musicgen_r3_source_02",
+      "repeat": 2,
+      "seed": 5002,
+      "audio_path": "musicgen_r3_source_02.wav",
+      "audio_sha256": "10247b52d50b54018b2d9e5a511a46c6a23dbeff789202d1ede7bff79a63a59a",
+      "duration_seconds": 12.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "musicgen_r3_source_03",
+      "repeat": 3,
+      "seed": 5003,
+      "audio_path": "musicgen_r3_source_03.wav",
+      "audio_sha256": "4262526886de8468658071d5ccbcf972ea34635d6c7049df06181dfe05feb490",
+      "duration_seconds": 12.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "musicgen_r3_source_04",
+      "repeat": 4,
+      "seed": 5004,
+      "audio_path": "musicgen_r3_source_04.wav",
+      "audio_sha256": "51361f3755328b7dd955adb356c0fd794da801d455b2014c6afc00101fa11af7",
+      "duration_seconds": 12.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "musicgen_r3_source_05",
+      "repeat": 5,
+      "seed": 5005,
+      "audio_path": "musicgen_r3_source_05.wav",
+      "audio_sha256": "25bd2b04105c38215a888c49bbf69f256e98caf4ee04d0ccdf01b01315935716",
+      "duration_seconds": 12.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "musicgen_r3_source_06",
+      "repeat": 6,
+      "seed": 5006,
+      "audio_path": "musicgen_r3_source_06.wav",
+      "audio_sha256": "6e81ec6f39582c670abc641ec6ebafad16287eb6a6d305b25643751bbda20e55",
+      "duration_seconds": 12.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "musicgen_r3_source_07",
+      "repeat": 7,
+      "seed": 5007,
+      "audio_path": "musicgen_r3_source_07.wav",
+      "audio_sha256": "43db9e792adba5c7f28c65366ae1f878c935adddbe2a3de1f162226bad23fa51",
+      "duration_seconds": 12.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "musicgen_r3_source_08",
+      "repeat": 8,
+      "seed": 5008,
+      "audio_path": "musicgen_r3_source_08.wav",
+      "audio_sha256": "3214b00986d00d39914c582b2e03092a6c225550c524f6ee0c5ed85a4570356c",
+      "duration_seconds": 12.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "musicgen_r3_source_09",
+      "repeat": 9,
+      "seed": 5009,
+      "audio_path": "musicgen_r3_source_09.wav",
+      "audio_sha256": "c631ea16461491e0779246f0d1bd77973ab23530439dd6cdec7d2766fc98c86a",
+      "duration_seconds": 12.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "musicgen_r3_source_10",
+      "repeat": 10,
+      "seed": 5010,
+      "audio_path": "musicgen_r3_source_10.wav",
+      "audio_sha256": "b727f7ec42c5a555db7475ddb81ffe0fe713648a83ae5a7c65dea222bcee3f7f",
+      "duration_seconds": 12.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "musicgen_r3_source_11",
+      "repeat": 11,
+      "seed": 5011,
+      "audio_path": "musicgen_r3_source_11.wav",
+      "audio_sha256": "d12c6b599351c3ce238fef036c5a45edefbf817e8f03208ef200b1b1fa739ebf",
+      "duration_seconds": 12.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "musicgen_r3_source_12",
+      "repeat": 12,
+      "seed": 5012,
+      "audio_path": "musicgen_r3_source_12.wav",
+      "audio_sha256": "9305a727827fda0166611d5c4ed97fade07f782c2bfc214291b162964fc6fb43",
+      "duration_seconds": 12.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "musicgen_r3_source_13",
+      "repeat": 13,
+      "seed": 5013,
+      "audio_path": "musicgen_r3_source_13.wav",
+      "audio_sha256": "56750d55fe05b3e607a4ff5e1011699c4e5c1c8346cd61ad25f55c62e54345a1",
+      "duration_seconds": 12.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "musicgen_r3_source_14",
+      "repeat": 14,
+      "seed": 5014,
+      "audio_path": "musicgen_r3_source_14.wav",
+      "audio_sha256": "c212b709c526db1be7dc1610dabcf978d73ae369cd7c22966280a34df8e9155a",
+      "duration_seconds": 12.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "musicgen_r3_source_15",
+      "repeat": 15,
+      "seed": 5015,
+      "audio_path": "musicgen_r3_source_15.wav",
+      "audio_sha256": "b2c6cfa12c534d04b94d536305313cf5efc61d24cd65ffaaa7825e70d2ce0c6c",
+      "duration_seconds": 12.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "musicgen_r3_source_16",
+      "repeat": 16,
+      "seed": 5016,
+      "audio_path": "musicgen_r3_source_16.wav",
+      "audio_sha256": "1989870be655cacb07c6dd17b5c8e2aa900efacc42fb47b7ff03ed076332d4cc",
+      "duration_seconds": 12.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "musicgen_r3_source_17",
+      "repeat": 17,
+      "seed": 5017,
+      "audio_path": "musicgen_r3_source_17.wav",
+      "audio_sha256": "e8f3bc21d0fd189ac860c38bc701dcc1662a086ffac84a96b966422bc41199aa",
+      "duration_seconds": 12.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "musicgen_r3_source_18",
+      "repeat": 18,
+      "seed": 5018,
+      "audio_path": "musicgen_r3_source_18.wav",
+      "audio_sha256": "5039e002e23396ea9d3c0b870cc78dc682f0a408bcc43a0f4218543204024490",
+      "duration_seconds": 12.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "musicgen_r3_source_19",
+      "repeat": 19,
+      "seed": 5019,
+      "audio_path": "musicgen_r3_source_19.wav",
+      "audio_sha256": "2a3d44d9d0701951ee60980273282d55e2f6f2c7259d209d4e2f5a543425745a",
+      "duration_seconds": 12.0,
+      "guidance_scale": 3.0
+    }
+  ]
+}

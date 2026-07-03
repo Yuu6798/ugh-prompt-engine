@@ -1,0 +1,1445 @@
+{
+  "schema_version": "1.0",
+  "score_ref": "examples/roundtrip/musicgen_r3_source.yaml",
+  "generator": "musicgen-small",
+  "n_takes": 20,
+  "fields": [
+    {
+      "field": "bpm",
+      "n": 20,
+      "preserved_count": 14,
+      "preserved_rate": 0.7,
+      "diagnosis_counts": {
+        "preserved": 14,
+        "calibration_disagreement": 5,
+        "sensor_blind": 1
+      },
+      "observed_values": [
+        117,
+        162,
+        "TODO(transcribe): bpm undetected",
+        117,
+        117,
+        162,
+        123,
+        117,
+        117,
+        117,
+        123,
+        117,
+        117,
+        117,
+        60,
+        162,
+        117,
+        81,
+        117,
+        117
+      ]
+    },
+    {
+      "field": "key",
+      "n": 20,
+      "preserved_count": 3,
+      "preserved_rate": 0.15,
+      "diagnosis_counts": {
+        "calibration_disagreement": 17,
+        "preserved": 3
+      },
+      "observed_values": [
+        "F# minor",
+        "F minor",
+        "F minor",
+        "F# minor",
+        "A minor",
+        "G minor",
+        "G major",
+        "A minor",
+        "C minor",
+        "G# minor",
+        "C minor",
+        "C major",
+        "F# minor",
+        "C major",
+        "A minor",
+        "A minor",
+        "A minor",
+        "F minor",
+        "C major",
+        "C minor"
+      ]
+    },
+    {
+      "field": "time_signature",
+      "n": 20,
+      "preserved_count": 19,
+      "preserved_rate": 0.95,
+      "diagnosis_counts": {
+        "preserved": 19,
+        "sensor_blind": 1
+      },
+      "observed_values": [
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4",
+        "TODO(transcribe): time signature undetected",
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4"
+      ]
+    },
+    {
+      "field": "brightness",
+      "n": 20,
+      "preserved_count": 14,
+      "preserved_rate": 0.7,
+      "diagnosis_counts": {
+        "preserved": 14,
+        "sensor_blind": 5,
+        "calibration_disagreement": 1
+      },
+      "observed_values": [
+        "bright",
+        "bright",
+        "bright",
+        "bright",
+        "TODO(transcribe): brightness neutral band",
+        "bright",
+        "TODO(transcribe): brightness neutral band",
+        "bright",
+        "dark",
+        "bright",
+        "bright",
+        "bright",
+        "TODO(transcribe): brightness neutral band",
+        "bright",
+        "bright",
+        "bright",
+        "bright",
+        "bright",
+        "TODO(transcribe): brightness neutral band",
+        "TODO(transcribe): brightness neutral band"
+      ]
+    },
+    {
+      "field": "active_rate_target",
+      "n": 20,
+      "preserved_count": 2,
+      "preserved_rate": 0.1,
+      "diagnosis_counts": {
+        "calibration_disagreement": 18,
+        "preserved": 2
+      },
+      "observed_values": [
+        "0.96-1.00",
+        "0.98-1.00",
+        "0.96-1.00",
+        "0.98-1.00",
+        "0.98-1.00",
+        "0.95-0.99",
+        "0.98-1.00",
+        "0.97-1.00",
+        "0.98-1.00",
+        "0.72-0.76",
+        "0.90-0.94",
+        "0.98-1.00",
+        "0.98-1.00",
+        "0.98-1.00",
+        "0.98-1.00",
+        "0.98-1.00",
+        "0.98-1.00",
+        "0.98-1.00",
+        "0.98-1.00",
+        "0.98-1.00"
+      ]
+    },
+    {
+      "field": "valley_depth_target",
+      "n": 20,
+      "preserved_count": 14,
+      "preserved_rate": 0.7,
+      "diagnosis_counts": {
+        "calibration_disagreement": 6,
+        "preserved": 14
+      },
+      "observed_values": [
+        "0.23-0.27",
+        "0.09-0.13",
+        "0.17-0.21",
+        "0.04-0.08",
+        "0.10-0.14",
+        "0.09-0.13",
+        "0.08-0.12",
+        "0.12-0.16",
+        "0.07-0.11",
+        "0.09-0.13",
+        "0.05-0.09",
+        "0.11-0.15",
+        "0.13-0.17",
+        "0.14-0.18",
+        "0.01-0.05",
+        "0.08-0.12",
+        "0.09-0.13",
+        "0.05-0.09",
+        "0.12-0.16",
+        "0.03-0.07"
+      ]
+    },
+    {
+      "field": "stereo_width",
+      "n": 20,
+      "preserved_count": 0,
+      "preserved_rate": 0.0,
+      "diagnosis_counts": {
+        "sensor_blind": 20
+      },
+      "observed_values": [
+        "TODO(transcribe): stereo unmeasured",
+        "TODO(transcribe): stereo unmeasured",
+        "TODO(transcribe): stereo unmeasured",
+        "TODO(transcribe): stereo unmeasured",
+        "TODO(transcribe): stereo unmeasured",
+        "TODO(transcribe): stereo unmeasured",
+        "TODO(transcribe): stereo unmeasured",
+        "TODO(transcribe): stereo unmeasured",
+        "TODO(transcribe): stereo unmeasured",
+        "TODO(transcribe): stereo unmeasured",
+        "TODO(transcribe): stereo unmeasured",
+        "TODO(transcribe): stereo unmeasured",
+        "TODO(transcribe): stereo unmeasured",
+        "TODO(transcribe): stereo unmeasured",
+        "TODO(transcribe): stereo unmeasured",
+        "TODO(transcribe): stereo unmeasured",
+        "TODO(transcribe): stereo unmeasured",
+        "TODO(transcribe): stereo unmeasured",
+        "TODO(transcribe): stereo unmeasured",
+        "TODO(transcribe): stereo unmeasured"
+      ]
+    }
+  ],
+  "takes": [
+    {
+      "take_id": "musicgen_r3_source_00",
+      "audio_sha256": "defd83e6281114ae9046c85a026e2c7ec6e4ba07cbec7e5ec7ea826f5ac68f49",
+      "fields": [
+        {
+          "field": "bpm",
+          "expected_value": 120,
+          "observed_value": 117,
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "key",
+          "expected_value": "C major",
+          "observed_value": "F# minor",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "time_signature",
+          "expected_value": "4/4",
+          "observed_value": "4/4",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "brightness",
+          "expected_value": "bright",
+          "observed_value": "bright",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "active_rate_target",
+          "expected_value": "0.90-0.95",
+          "observed_value": "0.96-1.00",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "valley_depth_target",
+          "expected_value": "0.10-0.20",
+          "observed_value": "0.23-0.27",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "stereo_width",
+          "expected_value": "normal",
+          "observed_value": "TODO(transcribe): stereo unmeasured",
+          "diagnosis": "sensor_blind",
+          "preserved": false
+        }
+      ],
+      "preserved_count": 3
+    },
+    {
+      "take_id": "musicgen_r3_source_01",
+      "audio_sha256": "1f4d2c6d4080734a7513a4d36470345055ab35efc7a3819d1a6f0c4914817763",
+      "fields": [
+        {
+          "field": "bpm",
+          "expected_value": 120,
+          "observed_value": 162,
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "key",
+          "expected_value": "C major",
+          "observed_value": "F minor",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "time_signature",
+          "expected_value": "4/4",
+          "observed_value": "4/4",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "brightness",
+          "expected_value": "bright",
+          "observed_value": "bright",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "active_rate_target",
+          "expected_value": "0.90-0.95",
+          "observed_value": "0.98-1.00",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "valley_depth_target",
+          "expected_value": "0.10-0.20",
+          "observed_value": "0.09-0.13",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "stereo_width",
+          "expected_value": "normal",
+          "observed_value": "TODO(transcribe): stereo unmeasured",
+          "diagnosis": "sensor_blind",
+          "preserved": false
+        }
+      ],
+      "preserved_count": 3
+    },
+    {
+      "take_id": "musicgen_r3_source_02",
+      "audio_sha256": "10247b52d50b54018b2d9e5a511a46c6a23dbeff789202d1ede7bff79a63a59a",
+      "fields": [
+        {
+          "field": "bpm",
+          "expected_value": 120,
+          "observed_value": "TODO(transcribe): bpm undetected",
+          "diagnosis": "sensor_blind",
+          "preserved": false
+        },
+        {
+          "field": "key",
+          "expected_value": "C major",
+          "observed_value": "F minor",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "time_signature",
+          "expected_value": "4/4",
+          "observed_value": "4/4",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "brightness",
+          "expected_value": "bright",
+          "observed_value": "bright",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "active_rate_target",
+          "expected_value": "0.90-0.95",
+          "observed_value": "0.96-1.00",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "valley_depth_target",
+          "expected_value": "0.10-0.20",
+          "observed_value": "0.17-0.21",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "stereo_width",
+          "expected_value": "normal",
+          "observed_value": "TODO(transcribe): stereo unmeasured",
+          "diagnosis": "sensor_blind",
+          "preserved": false
+        }
+      ],
+      "preserved_count": 3
+    },
+    {
+      "take_id": "musicgen_r3_source_03",
+      "audio_sha256": "4262526886de8468658071d5ccbcf972ea34635d6c7049df06181dfe05feb490",
+      "fields": [
+        {
+          "field": "bpm",
+          "expected_value": 120,
+          "observed_value": 117,
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "key",
+          "expected_value": "C major",
+          "observed_value": "F# minor",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "time_signature",
+          "expected_value": "4/4",
+          "observed_value": "4/4",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "brightness",
+          "expected_value": "bright",
+          "observed_value": "bright",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "active_rate_target",
+          "expected_value": "0.90-0.95",
+          "observed_value": "0.98-1.00",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "valley_depth_target",
+          "expected_value": "0.10-0.20",
+          "observed_value": "0.04-0.08",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "stereo_width",
+          "expected_value": "normal",
+          "observed_value": "TODO(transcribe): stereo unmeasured",
+          "diagnosis": "sensor_blind",
+          "preserved": false
+        }
+      ],
+      "preserved_count": 3
+    },
+    {
+      "take_id": "musicgen_r3_source_04",
+      "audio_sha256": "51361f3755328b7dd955adb356c0fd794da801d455b2014c6afc00101fa11af7",
+      "fields": [
+        {
+          "field": "bpm",
+          "expected_value": 120,
+          "observed_value": 117,
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "key",
+          "expected_value": "C major",
+          "observed_value": "A minor",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "time_signature",
+          "expected_value": "4/4",
+          "observed_value": "4/4",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "brightness",
+          "expected_value": "bright",
+          "observed_value": "TODO(transcribe): brightness neutral band",
+          "diagnosis": "sensor_blind",
+          "preserved": false
+        },
+        {
+          "field": "active_rate_target",
+          "expected_value": "0.90-0.95",
+          "observed_value": "0.98-1.00",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "valley_depth_target",
+          "expected_value": "0.10-0.20",
+          "observed_value": "0.10-0.14",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "stereo_width",
+          "expected_value": "normal",
+          "observed_value": "TODO(transcribe): stereo unmeasured",
+          "diagnosis": "sensor_blind",
+          "preserved": false
+        }
+      ],
+      "preserved_count": 3
+    },
+    {
+      "take_id": "musicgen_r3_source_05",
+      "audio_sha256": "25bd2b04105c38215a888c49bbf69f256e98caf4ee04d0ccdf01b01315935716",
+      "fields": [
+        {
+          "field": "bpm",
+          "expected_value": 120,
+          "observed_value": 162,
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "key",
+          "expected_value": "C major",
+          "observed_value": "G minor",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "time_signature",
+          "expected_value": "4/4",
+          "observed_value": "4/4",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "brightness",
+          "expected_value": "bright",
+          "observed_value": "bright",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "active_rate_target",
+          "expected_value": "0.90-0.95",
+          "observed_value": "0.95-0.99",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "valley_depth_target",
+          "expected_value": "0.10-0.20",
+          "observed_value": "0.09-0.13",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "stereo_width",
+          "expected_value": "normal",
+          "observed_value": "TODO(transcribe): stereo unmeasured",
+          "diagnosis": "sensor_blind",
+          "preserved": false
+        }
+      ],
+      "preserved_count": 4
+    },
+    {
+      "take_id": "musicgen_r3_source_06",
+      "audio_sha256": "6e81ec6f39582c670abc641ec6ebafad16287eb6a6d305b25643751bbda20e55",
+      "fields": [
+        {
+          "field": "bpm",
+          "expected_value": 120,
+          "observed_value": 123,
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "key",
+          "expected_value": "C major",
+          "observed_value": "G major",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "time_signature",
+          "expected_value": "4/4",
+          "observed_value": "4/4",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "brightness",
+          "expected_value": "bright",
+          "observed_value": "TODO(transcribe): brightness neutral band",
+          "diagnosis": "sensor_blind",
+          "preserved": false
+        },
+        {
+          "field": "active_rate_target",
+          "expected_value": "0.90-0.95",
+          "observed_value": "0.98-1.00",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "valley_depth_target",
+          "expected_value": "0.10-0.20",
+          "observed_value": "0.08-0.12",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "stereo_width",
+          "expected_value": "normal",
+          "observed_value": "TODO(transcribe): stereo unmeasured",
+          "diagnosis": "sensor_blind",
+          "preserved": false
+        }
+      ],
+      "preserved_count": 3
+    },
+    {
+      "take_id": "musicgen_r3_source_07",
+      "audio_sha256": "43db9e792adba5c7f28c65366ae1f878c935adddbe2a3de1f162226bad23fa51",
+      "fields": [
+        {
+          "field": "bpm",
+          "expected_value": 120,
+          "observed_value": 117,
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "key",
+          "expected_value": "C major",
+          "observed_value": "A minor",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "time_signature",
+          "expected_value": "4/4",
+          "observed_value": "4/4",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "brightness",
+          "expected_value": "bright",
+          "observed_value": "bright",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "active_rate_target",
+          "expected_value": "0.90-0.95",
+          "observed_value": "0.97-1.00",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "valley_depth_target",
+          "expected_value": "0.10-0.20",
+          "observed_value": "0.12-0.16",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "stereo_width",
+          "expected_value": "normal",
+          "observed_value": "TODO(transcribe): stereo unmeasured",
+          "diagnosis": "sensor_blind",
+          "preserved": false
+        }
+      ],
+      "preserved_count": 4
+    },
+    {
+      "take_id": "musicgen_r3_source_08",
+      "audio_sha256": "3214b00986d00d39914c582b2e03092a6c225550c524f6ee0c5ed85a4570356c",
+      "fields": [
+        {
+          "field": "bpm",
+          "expected_value": 120,
+          "observed_value": 117,
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "key",
+          "expected_value": "C major",
+          "observed_value": "C minor",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "time_signature",
+          "expected_value": "4/4",
+          "observed_value": "4/4",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "brightness",
+          "expected_value": "bright",
+          "observed_value": "dark",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "active_rate_target",
+          "expected_value": "0.90-0.95",
+          "observed_value": "0.98-1.00",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "valley_depth_target",
+          "expected_value": "0.10-0.20",
+          "observed_value": "0.07-0.11",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "stereo_width",
+          "expected_value": "normal",
+          "observed_value": "TODO(transcribe): stereo unmeasured",
+          "diagnosis": "sensor_blind",
+          "preserved": false
+        }
+      ],
+      "preserved_count": 3
+    },
+    {
+      "take_id": "musicgen_r3_source_09",
+      "audio_sha256": "c631ea16461491e0779246f0d1bd77973ab23530439dd6cdec7d2766fc98c86a",
+      "fields": [
+        {
+          "field": "bpm",
+          "expected_value": 120,
+          "observed_value": 117,
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "key",
+          "expected_value": "C major",
+          "observed_value": "G# minor",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "time_signature",
+          "expected_value": "4/4",
+          "observed_value": "4/4",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "brightness",
+          "expected_value": "bright",
+          "observed_value": "bright",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "active_rate_target",
+          "expected_value": "0.90-0.95",
+          "observed_value": "0.72-0.76",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "valley_depth_target",
+          "expected_value": "0.10-0.20",
+          "observed_value": "0.09-0.13",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "stereo_width",
+          "expected_value": "normal",
+          "observed_value": "TODO(transcribe): stereo unmeasured",
+          "diagnosis": "sensor_blind",
+          "preserved": false
+        }
+      ],
+      "preserved_count": 4
+    },
+    {
+      "take_id": "musicgen_r3_source_10",
+      "audio_sha256": "b727f7ec42c5a555db7475ddb81ffe0fe713648a83ae5a7c65dea222bcee3f7f",
+      "fields": [
+        {
+          "field": "bpm",
+          "expected_value": 120,
+          "observed_value": 123,
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "key",
+          "expected_value": "C major",
+          "observed_value": "C minor",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "time_signature",
+          "expected_value": "4/4",
+          "observed_value": "4/4",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "brightness",
+          "expected_value": "bright",
+          "observed_value": "bright",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "active_rate_target",
+          "expected_value": "0.90-0.95",
+          "observed_value": "0.90-0.94",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "valley_depth_target",
+          "expected_value": "0.10-0.20",
+          "observed_value": "0.05-0.09",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "stereo_width",
+          "expected_value": "normal",
+          "observed_value": "TODO(transcribe): stereo unmeasured",
+          "diagnosis": "sensor_blind",
+          "preserved": false
+        }
+      ],
+      "preserved_count": 4
+    },
+    {
+      "take_id": "musicgen_r3_source_11",
+      "audio_sha256": "d12c6b599351c3ce238fef036c5a45edefbf817e8f03208ef200b1b1fa739ebf",
+      "fields": [
+        {
+          "field": "bpm",
+          "expected_value": 120,
+          "observed_value": 117,
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "key",
+          "expected_value": "C major",
+          "observed_value": "C major",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "time_signature",
+          "expected_value": "4/4",
+          "observed_value": "4/4",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "brightness",
+          "expected_value": "bright",
+          "observed_value": "bright",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "active_rate_target",
+          "expected_value": "0.90-0.95",
+          "observed_value": "0.98-1.00",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "valley_depth_target",
+          "expected_value": "0.10-0.20",
+          "observed_value": "0.11-0.15",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "stereo_width",
+          "expected_value": "normal",
+          "observed_value": "TODO(transcribe): stereo unmeasured",
+          "diagnosis": "sensor_blind",
+          "preserved": false
+        }
+      ],
+      "preserved_count": 5
+    },
+    {
+      "take_id": "musicgen_r3_source_12",
+      "audio_sha256": "9305a727827fda0166611d5c4ed97fade07f782c2bfc214291b162964fc6fb43",
+      "fields": [
+        {
+          "field": "bpm",
+          "expected_value": 120,
+          "observed_value": 117,
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "key",
+          "expected_value": "C major",
+          "observed_value": "F# minor",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "time_signature",
+          "expected_value": "4/4",
+          "observed_value": "4/4",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "brightness",
+          "expected_value": "bright",
+          "observed_value": "TODO(transcribe): brightness neutral band",
+          "diagnosis": "sensor_blind",
+          "preserved": false
+        },
+        {
+          "field": "active_rate_target",
+          "expected_value": "0.90-0.95",
+          "observed_value": "0.98-1.00",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "valley_depth_target",
+          "expected_value": "0.10-0.20",
+          "observed_value": "0.13-0.17",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "stereo_width",
+          "expected_value": "normal",
+          "observed_value": "TODO(transcribe): stereo unmeasured",
+          "diagnosis": "sensor_blind",
+          "preserved": false
+        }
+      ],
+      "preserved_count": 3
+    },
+    {
+      "take_id": "musicgen_r3_source_13",
+      "audio_sha256": "56750d55fe05b3e607a4ff5e1011699c4e5c1c8346cd61ad25f55c62e54345a1",
+      "fields": [
+        {
+          "field": "bpm",
+          "expected_value": 120,
+          "observed_value": 117,
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "key",
+          "expected_value": "C major",
+          "observed_value": "C major",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "time_signature",
+          "expected_value": "4/4",
+          "observed_value": "4/4",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "brightness",
+          "expected_value": "bright",
+          "observed_value": "bright",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "active_rate_target",
+          "expected_value": "0.90-0.95",
+          "observed_value": "0.98-1.00",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "valley_depth_target",
+          "expected_value": "0.10-0.20",
+          "observed_value": "0.14-0.18",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "stereo_width",
+          "expected_value": "normal",
+          "observed_value": "TODO(transcribe): stereo unmeasured",
+          "diagnosis": "sensor_blind",
+          "preserved": false
+        }
+      ],
+      "preserved_count": 5
+    },
+    {
+      "take_id": "musicgen_r3_source_14",
+      "audio_sha256": "c212b709c526db1be7dc1610dabcf978d73ae369cd7c22966280a34df8e9155a",
+      "fields": [
+        {
+          "field": "bpm",
+          "expected_value": 120,
+          "observed_value": 60,
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "key",
+          "expected_value": "C major",
+          "observed_value": "A minor",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "time_signature",
+          "expected_value": "4/4",
+          "observed_value": "TODO(transcribe): time signature undetected",
+          "diagnosis": "sensor_blind",
+          "preserved": false
+        },
+        {
+          "field": "brightness",
+          "expected_value": "bright",
+          "observed_value": "bright",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "active_rate_target",
+          "expected_value": "0.90-0.95",
+          "observed_value": "0.98-1.00",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "valley_depth_target",
+          "expected_value": "0.10-0.20",
+          "observed_value": "0.01-0.05",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "stereo_width",
+          "expected_value": "normal",
+          "observed_value": "TODO(transcribe): stereo unmeasured",
+          "diagnosis": "sensor_blind",
+          "preserved": false
+        }
+      ],
+      "preserved_count": 1
+    },
+    {
+      "take_id": "musicgen_r3_source_15",
+      "audio_sha256": "b2c6cfa12c534d04b94d536305313cf5efc61d24cd65ffaaa7825e70d2ce0c6c",
+      "fields": [
+        {
+          "field": "bpm",
+          "expected_value": 120,
+          "observed_value": 162,
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "key",
+          "expected_value": "C major",
+          "observed_value": "A minor",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "time_signature",
+          "expected_value": "4/4",
+          "observed_value": "4/4",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "brightness",
+          "expected_value": "bright",
+          "observed_value": "bright",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "active_rate_target",
+          "expected_value": "0.90-0.95",
+          "observed_value": "0.98-1.00",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "valley_depth_target",
+          "expected_value": "0.10-0.20",
+          "observed_value": "0.08-0.12",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "stereo_width",
+          "expected_value": "normal",
+          "observed_value": "TODO(transcribe): stereo unmeasured",
+          "diagnosis": "sensor_blind",
+          "preserved": false
+        }
+      ],
+      "preserved_count": 3
+    },
+    {
+      "take_id": "musicgen_r3_source_16",
+      "audio_sha256": "1989870be655cacb07c6dd17b5c8e2aa900efacc42fb47b7ff03ed076332d4cc",
+      "fields": [
+        {
+          "field": "bpm",
+          "expected_value": 120,
+          "observed_value": 117,
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "key",
+          "expected_value": "C major",
+          "observed_value": "A minor",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "time_signature",
+          "expected_value": "4/4",
+          "observed_value": "4/4",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "brightness",
+          "expected_value": "bright",
+          "observed_value": "bright",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "active_rate_target",
+          "expected_value": "0.90-0.95",
+          "observed_value": "0.98-1.00",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "valley_depth_target",
+          "expected_value": "0.10-0.20",
+          "observed_value": "0.09-0.13",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "stereo_width",
+          "expected_value": "normal",
+          "observed_value": "TODO(transcribe): stereo unmeasured",
+          "diagnosis": "sensor_blind",
+          "preserved": false
+        }
+      ],
+      "preserved_count": 4
+    },
+    {
+      "take_id": "musicgen_r3_source_17",
+      "audio_sha256": "e8f3bc21d0fd189ac860c38bc701dcc1662a086ffac84a96b966422bc41199aa",
+      "fields": [
+        {
+          "field": "bpm",
+          "expected_value": 120,
+          "observed_value": 81,
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "key",
+          "expected_value": "C major",
+          "observed_value": "F minor",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "time_signature",
+          "expected_value": "4/4",
+          "observed_value": "4/4",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "brightness",
+          "expected_value": "bright",
+          "observed_value": "bright",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "active_rate_target",
+          "expected_value": "0.90-0.95",
+          "observed_value": "0.98-1.00",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "valley_depth_target",
+          "expected_value": "0.10-0.20",
+          "observed_value": "0.05-0.09",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "stereo_width",
+          "expected_value": "normal",
+          "observed_value": "TODO(transcribe): stereo unmeasured",
+          "diagnosis": "sensor_blind",
+          "preserved": false
+        }
+      ],
+      "preserved_count": 2
+    },
+    {
+      "take_id": "musicgen_r3_source_18",
+      "audio_sha256": "5039e002e23396ea9d3c0b870cc78dc682f0a408bcc43a0f4218543204024490",
+      "fields": [
+        {
+          "field": "bpm",
+          "expected_value": 120,
+          "observed_value": 117,
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "key",
+          "expected_value": "C major",
+          "observed_value": "C major",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "time_signature",
+          "expected_value": "4/4",
+          "observed_value": "4/4",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "brightness",
+          "expected_value": "bright",
+          "observed_value": "TODO(transcribe): brightness neutral band",
+          "diagnosis": "sensor_blind",
+          "preserved": false
+        },
+        {
+          "field": "active_rate_target",
+          "expected_value": "0.90-0.95",
+          "observed_value": "0.98-1.00",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "valley_depth_target",
+          "expected_value": "0.10-0.20",
+          "observed_value": "0.12-0.16",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "stereo_width",
+          "expected_value": "normal",
+          "observed_value": "TODO(transcribe): stereo unmeasured",
+          "diagnosis": "sensor_blind",
+          "preserved": false
+        }
+      ],
+      "preserved_count": 4
+    },
+    {
+      "take_id": "musicgen_r3_source_19",
+      "audio_sha256": "2a3d44d9d0701951ee60980273282d55e2f6f2c7259d209d4e2f5a543425745a",
+      "fields": [
+        {
+          "field": "bpm",
+          "expected_value": 120,
+          "observed_value": 117,
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "key",
+          "expected_value": "C major",
+          "observed_value": "C minor",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "time_signature",
+          "expected_value": "4/4",
+          "observed_value": "4/4",
+          "diagnosis": "preserved",
+          "preserved": true
+        },
+        {
+          "field": "brightness",
+          "expected_value": "bright",
+          "observed_value": "TODO(transcribe): brightness neutral band",
+          "diagnosis": "sensor_blind",
+          "preserved": false
+        },
+        {
+          "field": "active_rate_target",
+          "expected_value": "0.90-0.95",
+          "observed_value": "0.98-1.00",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "valley_depth_target",
+          "expected_value": "0.10-0.20",
+          "observed_value": "0.03-0.07",
+          "diagnosis": "calibration_disagreement",
+          "preserved": false
+        },
+        {
+          "field": "stereo_width",
+          "expected_value": "normal",
+          "observed_value": "TODO(transcribe): stereo unmeasured",
+          "diagnosis": "sensor_blind",
+          "preserved": false
+        }
+      ],
+      "preserved_count": 2
+    }
+  ],
+  "selection": {
+    "basis": "preserved_field_count",
+    "selection_fields": [
+      "key",
+      "brightness"
+    ],
+    "ranking": [
+      {
+        "take_id": "musicgen_r3_source_11",
+        "preserved_count": 2
+      },
+      {
+        "take_id": "musicgen_r3_source_13",
+        "preserved_count": 2
+      },
+      {
+        "take_id": "musicgen_r3_source_00",
+        "preserved_count": 1
+      },
+      {
+        "take_id": "musicgen_r3_source_01",
+        "preserved_count": 1
+      },
+      {
+        "take_id": "musicgen_r3_source_02",
+        "preserved_count": 1
+      },
+      {
+        "take_id": "musicgen_r3_source_03",
+        "preserved_count": 1
+      },
+      {
+        "take_id": "musicgen_r3_source_05",
+        "preserved_count": 1
+      },
+      {
+        "take_id": "musicgen_r3_source_07",
+        "preserved_count": 1
+      },
+      {
+        "take_id": "musicgen_r3_source_09",
+        "preserved_count": 1
+      },
+      {
+        "take_id": "musicgen_r3_source_10",
+        "preserved_count": 1
+      },
+      {
+        "take_id": "musicgen_r3_source_14",
+        "preserved_count": 1
+      },
+      {
+        "take_id": "musicgen_r3_source_15",
+        "preserved_count": 1
+      },
+      {
+        "take_id": "musicgen_r3_source_16",
+        "preserved_count": 1
+      },
+      {
+        "take_id": "musicgen_r3_source_17",
+        "preserved_count": 1
+      },
+      {
+        "take_id": "musicgen_r3_source_18",
+        "preserved_count": 1
+      },
+      {
+        "take_id": "musicgen_r3_source_04",
+        "preserved_count": 0
+      },
+      {
+        "take_id": "musicgen_r3_source_06",
+        "preserved_count": 0
+      },
+      {
+        "take_id": "musicgen_r3_source_08",
+        "preserved_count": 0
+      },
+      {
+        "take_id": "musicgen_r3_source_12",
+        "preserved_count": 0
+      },
+      {
+        "take_id": "musicgen_r3_source_19",
+        "preserved_count": 0
+      }
+    ],
+    "selected_take_id": "musicgen_r3_source_11"
+  }
+}
