@@ -295,7 +295,9 @@ K3。製品転移の「効果量の絶対水準」までは主張せず、**分�
 **Status**: K3-1 DONE（2026-07-01、決定論的演奏者リファレンス — 結果は §5.3）。
 K3-2a DONE（2026-07-02、K2 既存 fixture からの本物 Suno ミニ行列 — 結果は §5.4）。
 K3-1b DONE（2026-07-02、有意性の計器化）。
-フル Suno 行列（5 ツマミ + dead 行 + R 増員）は K3-2b（follow-up、生成バッチ人手律速）。
+K3-2b の設計指示 (a)(b)(c) は **MusicGen フル行列で実現済み**（2026-07-03、
+5 ツマミ + dead 2 行 + R=8 の自動生成バッチ — 結果は §5.5）。フル **Suno** 行列は
+follow-up のまま（生成バッチ人手律速）。
 
 ツマミ i が観測 j を動かさないか（レイヤー独立性）を N×N で測る。K0–K2 が立証した
 対角 grip（ツマミ i → センサー i）を非対角へ一般化し、「楽譜が操作盤として成立して
@@ -468,6 +470,54 @@ mean effect_size_gap 0.709。非対角 8 セル中 **6 が strong**。
 読まないことが既知の dead ツマミ（例 `valley_depth_target`）を**内部ヌル行として
 必ず同梱**する（ノイズ天井を同一バッチ内で実測するため）、(b) R≥8、(c) ベースライン
 key の宣言（key センサー化のため）。
+
+#### 5.5 K3-2b 結果 — MusicGen フル直交性行列（自動生成バッチ、R=8、2026-07-03）
+
+設計指示 (a)(b)(c) を第二生成器 MusicGen（`facebook/musicgen-small`、ローカル
+CPU バッチ・人手ゼロ）で初めて充足した。5 ツマミ × 2 水準 × R=8 = 80 クリップ。
+全行が同一ベーステンプレート（120bpm / C major / neutral timbre / active・valley
+数値トークン）を共有し、各行は自ノブのトークンのみ A/B 差し替え。dead 2 行は
+`active rate target 0.90-0.95` 等の **MIR 内部指標の数値レンジ文字列**（テキスト
+条件付けの語彙外という K3-1b 型宣言）。再現: `examples/control/k3/
+musicgen_matrix_plan.yaml` → runbook `generate`/`extract` →
+`python scripts/build_k3_musicgen_fixture.py` → `python scripts/
+measure_orthogonality.py --fixture examples/control/k3/musicgen_matrix_fixture.json`。
+成果物は `examples/control/k3/`（`musicgen_matrix_extract.json` /
+`musicgen_matrix_fixture.json` / `expected_orthogonality_musicgen.json` /
+`orthogonality_map_musicgen.md`）。
+
+| knob \ sensor | bpm | key_match | centroid | active_rate | valley_depth | band_ratio† |
+|---|---|---|---|---|---|---|
+| bpm | **0.851** * | -0.096 | 0.127 | 0.085 | 0.242 | -0.334 |
+| key | 0.307 | **0.14** | 0.441 | 0.024 | -0.2 | 0.431 |
+| brightness | -0.234 | 0.178 | **1.26** * | -0.764 | 0.596 | 0.849 * |
+| active_rate_target (dead) | -0.614 | -0.848 | -0.215 | **0.15** | 0.721 | -0.556 |
+| valley_depth_target (dead) | 0.063 | 0.028 | 0.44 | -0.656 | **0.499** | -0.413 |
+
+DCI: overall disentanglement **0.323** / completeness 0.355 / mean effect_size_gap
+0.449。ノイズ天井（12 ヌルセルの max |d|）= **0.848**。`*` = 天井超え。
+
+読み（確度の階層を明示する）:
+
+1. **ノイズ天井計器（K3-1b）が実生成器で初稼働し、over-reading を実際に防いだ**。
+   dead 行が生む見かけの効果は最大 |d|=0.848（active_rate_target→key_match）に
+   達する — R=8 の生成ノイズはこの規模。天井を超えて解像したのは
+   **対角 2（bpm 0.851 / brightness 1.26）+ brightness→band_ratio 1 の計 3 セル**のみで、
+   残る非対角 15 セル（K3-2a で strong に見えた種類の結合を含む）は
+   すべて unresolved に抑制された。
+2. **K3-2a の bpm→centroid 符号反転問題は MusicGen では裁定不能（unresolved）**:
+   +0.127 は天井のはるか内側。「機種ごとに符号が違う」仮説はフル Suno 行列
+   （follow-up）か R 増員を待つ — 計器がこの保留を自己申告できるようになったことが
+   K3-2a からの前進。
+3. **key 対角 0.14 = dead**: "in the key of F sharp major" トークンを MusicGen は
+   ほぼ読まない。R3 の key 保存率 0.15（`musicgen_backend.md` §7.3）と独立経路で
+   整合 — key は MusicGen では送出不能ノブであり、制御は選抜（R3-3）頼みになる。
+4. **dead 宣言の内部整合**: active_rate_target 対角 0.15（宣言どおり不発）。
+   valley_depth_target 対角は 0.499（loose 帯）だが自バッチ天井 0.848 以下 =
+   ノイズと弁別不能で宣言と矛盾しない。
+5. **MusicGen は Suno mini より直交的に見える**（disentanglement 0.323 vs 0.051）が、
+   センサー集合・ノブ数・R が異なるため数値の直接比較は要注意 — 確度の高い主張は
+   「MusicGen の非対角はノイズ天井を超えない」まで。
 
 ---
 

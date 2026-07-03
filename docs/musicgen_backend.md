@@ -213,6 +213,16 @@ profile 済みプロンプトで n=20（seed 5000–5019）を実測
   **5/5 が byte 単位で同一 WAV（sha256 一致）** — DD-A の「ベストエフォート
   seed pin」は同一マシン・同一環境では完全再現に達する（環境間の一致は
   引き続き未保証）。
+
+### 7.4 K3-2b フル直交性行列（2026-07-03）
+
+PR B が開いた「バッチ自動生成」の最初の応用として、K3-2b の設計指示
+（dead 行同梱 / R≥8 / key センサー化）を MusicGen 80 クリップで充足した。
+結果と読みは [`controllability_poc.md`](controllability_poc.md) §5.5:
+ノイズ天井計器の初稼働（天井 |d|=0.848・解像 3 セルのみ）、key 対角 dead
+（§7.3 の R3 key 保存率 0.15 と独立整合）、K3-2a 符号反転問題は MusicGen では
+unresolved。成果物は `examples/control/k3/musicgen_matrix_*` +
+`expected_orthogonality_musicgen.json` + `orthogonality_map_musicgen.md`。
 - 付随観測: MusicGen 出力はモノラル（`stereo_width` はセンサー盲）、
   `active_rate_target` は常に上限貼り付き（0.90–0.95 指定に対し 0.96–1.00）。
   楽譜からの MusicGen 演奏では両欄は現状制御不能として扱うのが妥当。

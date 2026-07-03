@@ -26,6 +26,8 @@ K3_EXPECTED_PATH = Path("examples/control/k3/expected_orthogonality.json")
 
 K3_SUNO_MINI_FIXTURE_PATH = Path("examples/control/k3/suno_mini_matrix_fixture.json")
 K3_SUNO_MINI_EXPECTED_PATH = Path("examples/control/k3/expected_orthogonality_suno_mini.json")
+K3_MUSICGEN_FIXTURE_PATH = Path("examples/control/k3/musicgen_matrix_fixture.json")
+K3_MUSICGEN_EXPECTED_PATH = Path("examples/control/k3/expected_orthogonality_musicgen.json")
 
 
 # --------------------------------------------------------------------------
@@ -471,6 +473,41 @@ def test_k3_suno_mini_fixture_snapshot() -> None:
     expected = json.loads(K3_SUNO_MINI_EXPECTED_PATH.read_text(encoding="utf-8"))
 
     assert report == expected
+
+
+def test_k3_musicgen_converter_verify_matches_committed_fixture() -> None:
+    """K3-2b: コミット済み MusicGen 行列 fixture は extract fixture からの再変換と一致。"""
+    from scripts.build_k3_musicgen_fixture import convert, load_source, render_fixture
+
+    regenerated = render_fixture(convert(load_source()))
+    committed = K3_MUSICGEN_FIXTURE_PATH.read_text(encoding="utf-8")
+
+    assert regenerated == committed
+
+
+def test_k3_musicgen_fixture_snapshot() -> None:
+    """K3-2b MusicGen フル行列（R=8・dead 2 行・key センサー化 = 設計指示 a/b/c）の
+    スナップショット。ノイズ天井計器（K3-1b）が実生成器で初稼働した測定:
+    天井 |d|=0.848（ヌル 12 セル）を超えて解像するのは対角 2 + brightness の
+    帯域比クロス 1 の計 3 セルのみで、他のクロス結合はすべて未解決に抑制される。"""
+    from scripts.measure_grip import load_fixture
+
+    report = analyze_orthogonality(load_fixture(K3_MUSICGEN_FIXTURE_PATH))
+    expected = json.loads(K3_MUSICGEN_EXPECTED_PATH.read_text(encoding="utf-8"))
+
+    assert report == expected
+    diagonal = {
+        cell["knob"]: cell["diagonal_classification"]
+        for cell in report["cells"]
+        if cell["is_diagonal"]
+    }
+    assert diagonal["bpm"] == "tight"
+    assert diagonal["brightness"] == "tight"
+    # "in the key of ..." トークンを MusicGen はほぼ読まない（R3 の key 保存率 0.15 と整合）
+    assert diagonal["key"] == "dead"
+    assert report["noise"]["known_dead_knobs"] == ["active_rate_target", "valley_depth_target"]
+    assert report["noise"]["null_cell_count"] == 12
+    assert report["resolution_summary"]["resolved"] == 3
 
 
 def test_k3_suno_mini_converter_rejects_unexpected_source() -> None:
