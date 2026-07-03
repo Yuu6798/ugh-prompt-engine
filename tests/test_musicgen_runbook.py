@@ -347,7 +347,6 @@ def test_extract_fixture_is_readable_by_measure_grip(tmp_path: Path) -> None:
     assert report["results"][0]["knob"] == "bpm"
 
 
-@pytest.mark.slow
 def test_extract_fixture_fails_fast_on_sha256_mismatch(tmp_path: Path) -> None:
     manifest = _build_takes_manifest(tmp_path)
     manifest["samples"][0]["audio_sha256"] = "0" * 64

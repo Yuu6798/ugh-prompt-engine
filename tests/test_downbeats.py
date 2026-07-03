@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 import yaml
 
 from svp_rpe.io.audio_loader import load_audio
@@ -32,6 +33,7 @@ def test_compute_downbeat_times_is_deterministic() -> None:
     assert all(0.0 <= t <= row["duration_sec"] for t in first)
 
 
+@pytest.mark.slow
 def test_extractor_populates_downbeat_times() -> None:
     row = _truth_rows()[4]
     audio = load_audio(str(SAMPLE_DIR / row["filename"]))

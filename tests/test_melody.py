@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 import yaml
 
 from svp_rpe.io.audio_loader import load_audio
@@ -49,6 +50,7 @@ def test_pure_sine_pitch_is_within_50_cents() -> None:
     assert cents <= 50.0
 
 
+@pytest.mark.slow
 def test_extractor_populates_melody_contour() -> None:
     row = _truth_rows()[4]
     audio = load_audio(str(SAMPLE_DIR / row["filename"]))

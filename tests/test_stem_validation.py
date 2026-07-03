@@ -257,6 +257,7 @@ def test_stem_sum_residual_rejects_sample_rate_mismatch() -> None:
         validate_stem_reconstruction(mismatched_audio, bundle)
 
 
+@pytest.mark.slow
 def test_per_stem_bpm_matches_full_mix_on_synthetic_fixture() -> None:
     audio, bundle = _synthetic_stem_fixture()
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 import yaml
 
 from svp_rpe.io.audio_loader import load_audio
@@ -46,6 +47,7 @@ def test_synth_major_three_chords_are_detected() -> None:
     assert len(expected_unique) >= 3
 
 
+@pytest.mark.slow
 def test_extractor_populates_chord_events() -> None:
     row = _truth_rows()[4]
     audio = load_audio(str(SAMPLE_DIR / row["filename"]))

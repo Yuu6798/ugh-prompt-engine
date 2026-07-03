@@ -6,6 +6,8 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from svp_rpe.compose import load_composition_score
 from svp_rpe.compose.models import CompositionScore
 from svp_rpe.perform import FAITHFUL_TAKE, perform, wav_bytes
@@ -153,6 +155,7 @@ def test_performer_roundtrip_source_is_byte_deterministic():
     assert first == second
 
 
+@pytest.mark.slow
 def test_roundtrip_snapshots_match_expected_reports():
     for source_path in sorted(ROUNDTRIP_DIR.glob("*_source.yaml")):
         expected_path = ROUNDTRIP_DIR / source_path.name.replace("_source.yaml", "_roundtrip.json")

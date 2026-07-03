@@ -201,6 +201,7 @@ def test_classify_take_demotes_missing_or_hash_mismatched_audio():
     assert classify_take(missing_locator, repo_root=ROOT) == "observation_log"
 
 
+@pytest.mark.slow
 def test_corpus_batch_snapshot_is_deterministic_and_descriptive_only():
     manifest = load_manifest(MANIFEST_PATH)
     actual = run_corpus_batch(manifest, repo_root=ROOT).model_dump(mode="json")

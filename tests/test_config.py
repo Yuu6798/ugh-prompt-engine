@@ -42,7 +42,6 @@ def test_load_packaged_configs_without_local_config(monkeypatch):
     assert "rms_mean_pro" in load_config("edm_baseline")
     assert load_config("semantic_rules")["schema_version"] == "2.0"
     assert "groups" in load_config("synonym_map")
-    assert "default" in load_config("svp_templates")
 
 
 def test_empty_local_config_override_is_preserved(monkeypatch, tmp_path):

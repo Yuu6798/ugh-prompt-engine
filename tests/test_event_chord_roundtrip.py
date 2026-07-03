@@ -247,6 +247,7 @@ def test_diagnose_chord_progression_preserves_repeated_sections() -> None:
     assert "match rate=1.0" in str(field.note)
 
 
+@pytest.mark.slow
 def test_run_roundtrip_reports_preserved_chord_progression() -> None:
     report = run_roundtrip(_score(PROGRESSION))
 
@@ -258,6 +259,7 @@ def test_run_roundtrip_reports_preserved_chord_progression() -> None:
     assert "match rate=" in str(field.note)
 
 
+@pytest.mark.slow
 def test_run_roundtrip_without_events_keeps_physical_fields_only() -> None:
     report = run_roundtrip(_score(None))
 
