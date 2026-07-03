@@ -1,0 +1,42 @@
+schema_version: "1.0"
+generator: "musicgen"
+
+# MusicGen PR B（2026-07-03）の実測 K2 型 grip を control_profile 未宣言フィールドの
+# 既定値として投入する。score 側の control_profile が同一キーを宣言していれば常に
+# そちらが勝つ（docs/control_profile.md 参照）。
+# 実測条件: facebook/musicgen-small (revision 4c8334b0…)・CPU・12s×R=8・
+# examples/control/k2_musicgen/plan.yaml。
+# lyrics_presence は MusicGen では未計測のため記録しない（suno.yaml との差は honesty）。
+control_defaults:
+  bpm:
+    grip_class: loose
+    grip: 0.21
+    sensor: bpm
+    evidence: examples/control/k2_musicgen/expected_grip.json
+  brightness:
+    grip_class: tight
+    grip: 2.25
+    sensor: spectral_centroid
+    evidence: examples/control/k2_musicgen/expected_grip.json
+
+# 既知の癖。advisory が非 null のもののみ GeneratedPrompt.advisories を発火する
+# （プロンプト本文・tags は変えない＝自動補正しない）。
+knob_quirks:
+  - field: bpm
+    status: observed
+    applies_above: 160
+    advisory: "MusicGen の高テンポ指定は素朴 bpm センサーが半折り/subharmonic 読みしやすい（170 指定→既定 prior で 86.13×4 / 117.45×2 / 172.27×1、start_bpm=180 の高 prior 再推定では 7/8 が 172.27 に回復、K2-musicgen 2026-07-03）。生成後は R2-2 系診断（高 prior 再推定）での実測確認を推奨。"
+    description: "高テンポの抽出器 halving 交絡（loose 判定は knob_dead でなくセンサー半折りが支配的）"
+    evidence: "examples/control/k2_musicgen/expected_grip.json / docs/musicgen_backend.md PR B 実測"
+  - field: brightness
+    status: observed
+    advisory: null
+    description: "dark 指定で絶対 dark 帯（centroid ≤1200Hz）へ到達可能（3/8、Suno は 0/4 不到達）。ただし分散大（dark 指定で 4517Hz の外れ値 1 本）"
+    evidence: "examples/control/k2_musicgen/fixture.json / docs/musicgen_backend.md PR B 実測"
+
+# K3 直交性行列は MusicGen ではまだ実測していないため cross_couplings は記録しない。
+# genre calibration（spectral_biases）も MusicGen 生成コーパス未取得のため記録しない。
+cross_couplings: []
+spectral_biases: []
+
+notes: "PR B 実測（R=8）に基づく初期プロファイル。bpm loose は素朴センサー読み（R2 closeout の規律: faster-side 回復は post-hoc 緩和でありコンパイル時保証には使わない）。brightness は Suno（0.86）より強い tight（2.25）で dark 到達も可能。K3 直交性・genre bias は未計測。"

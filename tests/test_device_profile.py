@@ -99,11 +99,12 @@ def test_knob_quirk_and_cross_coupling_and_spectral_bias_construct() -> None:
 # --- config sync (packaged copy) ------------------------------------------
 
 
-def test_device_profiles_packaged_copy_matches_repo_copy() -> None:
+@pytest.mark.parametrize("profile_name", ["suno.yaml", "musicgen.yaml"])
+def test_device_profiles_packaged_copy_matches_repo_copy(profile_name: str) -> None:
     root = Path(__file__).resolve().parents[1]
-    repo_copy = (root / "config" / "device_profiles" / "suno.yaml").read_text(encoding="utf-8")
+    repo_copy = (root / "config" / "device_profiles" / profile_name).read_text(encoding="utf-8")
     packaged_copy = (
-        root / "src" / "svp_rpe" / "config" / "device_profiles" / "suno.yaml"
+        root / "src" / "svp_rpe" / "config" / "device_profiles" / profile_name
     ).read_text(encoding="utf-8")
     assert repo_copy == packaged_copy
 

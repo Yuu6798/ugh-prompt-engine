@@ -1,0 +1,76 @@
+{
+  "schema_version": "1.0",
+  "fixture_id": "k2_musicgen_mini",
+  "repetitions": 8,
+  "results": [
+    {
+      "knob": "bpm",
+      "sensor": "bpm",
+      "expected_sign": 1,
+      "low_level": "90",
+      "high_level": "170",
+      "repetitions": 8,
+      "low_values": [
+        89.1,
+        89.1,
+        89.1,
+        89.1,
+        89.1,
+        92.29,
+        89.1,
+        184.57
+      ],
+      "high_values": [
+        117.45,
+        86.13,
+        86.13,
+        117.45,
+        86.13,
+        112.35,
+        172.27,
+        86.13
+      ],
+      "low_mean": 101.4325,
+      "high_mean": 108.005,
+      "grip": 0.206741,
+      "classification": "loose"
+    },
+    {
+      "knob": "brightness",
+      "sensor": "spectral_centroid",
+      "expected_sign": 1,
+      "low_level": "dark",
+      "high_level": "bright",
+      "repetitions": 8,
+      "low_values": [
+        4517.27,
+        615.4,
+        2453.79,
+        1067.41,
+        1438.11,
+        1368.01,
+        398.54,
+        1311.65
+      ],
+      "high_values": [
+        5244.43,
+        4280.4,
+        4602.96,
+        3738.39,
+        2521.71,
+        3425.16,
+        5179.28,
+        4768.31
+      ],
+      "low_mean": 1646.2725,
+      "high_mean": 4220.08,
+      "grip": 2.254247,
+      "classification": "tight"
+    }
+  ],
+  "summary": {
+    "tight": 1,
+    "loose": 1,
+    "dead": 0
+  }
+}
