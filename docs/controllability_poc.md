@@ -1,6 +1,7 @@
 # Controllability PoC Planning — 制御トラックの概念実証計画
 
-**Status**: K0–K2 / K3-1 / K3-1b / K3-2a 完了 — 残 K3-2b（フル Suno 行列、生成バッチ人手律速）
+**Status**: K0–K2 / K3-1 / K3-1b / K3-2a 完了 — K3-2b の設計指示は MusicGen で充足済み
+（§5.5、`musicgen_backend.md` §7.4）。残はフル **Suno** 行列のみ（生成バッチ人手律速）
 **Created**: 2026-06-02
 **Upstream**: [`composition_score_product_brief.md`](composition_score_product_brief.md)（プロダクト定義）
 **Relates to**: [`ai_music_daw_vision.md`](ai_music_daw_vision.md), [`roadmap_goal1.md`](roadmap_goal1.md)（観測トラック）, [`validation.md`](validation.md)

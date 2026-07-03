@@ -1,6 +1,8 @@
 # MusicGen ローカル生成トラック — 設計 doc
 
-Status: PR A / PR B / PR C 実装完了（PR B 実測 2026-07-03、§7）
+Status: PR A / PR B / PR C 実装完了（PR B 実測 2026-07-03、§7）。§7.3 で R3 n=20
+スケールアップ（key 保存率 0.15 確定）、§7.4 で K3-2b フル直交性行列、§7.5 で CLAP
+相互検証②（MusicGen バッチへの学習版 grip 拡張）を追加実測済み
 Scope: `facebook/musicgen-*`（transformers 経路）を第二生成器として組み込む計画
 
 ## 1. 目的と位置づけ

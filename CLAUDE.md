@@ -135,7 +135,6 @@ src/svp_rpe/
 │   ├── models.py              # SVPBundle, MinimalSVP
 │   ├── generator.py           # RPE → SVP 変換
 │   ├── parser.py              # 既存 SVP の読み込み (compare 用)
-│   ├── templates.py           # テンプレート定義
 │   ├── render_yaml.py         # YAML 出力
 │   └── render_text.py         # Markdown/TXT 出力
 ├── eval/                      # 評価層
@@ -154,10 +153,10 @@ src/svp_rpe/
 ├── perform/                    # 決定論的 CompositionScore 演奏者 (synth + performer)
 ├── roundtrip/                  # R0 往復保存性診断 (harness / compare / corpus_batch)
 ├── control/                    # grip 効果量 (制御トラック K 系列)
+├── calibration/                # ジャンル/楽器語彙コーパス校正 (genre-calibrate / genre-audit)
 ├── batch/                     # バッチ処理
 │   ├── runner.py              # batch コマンド本体
-│   ├── discovery.py           # 入力ファイル発見
-│   └── report.py              # レポート出力
+│   └── discovery.py           # 入力ファイル発見
 └── utils/
     └── config_loader.py       # YAML config loading
 
@@ -167,9 +166,9 @@ config/                        # リポジトリ直下 + src/svp_rpe/config/ に
 ├── edm_baseline.yaml          # ドメイン別 baseline (EDM)
 ├── loud_pop_baseline.yaml     # ドメイン別 baseline (loud pop)
 ├── semantic_rules.yaml        # physical → semantic mapping rules
-├── svp_templates.yaml         # SVP generation templates
 ├── synonym_map.yaml           # 同義語マップ (UGHer scorer 用)
-└── domain_profiles/music.yaml # ドメインプロファイル (music)
+├── domain_profiles/music.yaml # ドメインプロファイル (music)
+└── device_profiles/           # 生成器別 control_profile 初期値 (suno.yaml / musicgen.yaml)
 
 tests/                         # pytest
 docs/                          # design documents
@@ -185,7 +184,7 @@ examples/                      # sample_input/ + expected_output/
 | [`docs/architecture.md`](docs/architecture.md) | パイプライン三層設計、モジュール責務、config 役割、v0.2 既知の制限 |
 | [`docs/metrics.md`](docs/metrics.md) | RPE 物理指標の定義式、Pro baseline 値、UGHer 4 成分スコアリング、valley 3 戦略 |
 | [`docs/migration.md`](docs/migration.md) | RPE スキーマ移行ノート: SemanticRPE 1.0→2.0（`por_surface` を evidence-bearing `SemanticLabel` 化）、fail-fast 移行方針、RPE 再生成手順 |
-| [`docs/cli.md`](docs/cli.md) | CLI コマンドのリファレンス: extract / generate / compose / measure / transcribe / evaluate / compare / ci-check / run / batch / audit / roundtrip / roundtrip-corpus |
+| [`docs/cli.md`](docs/cli.md) | CLI コマンドのリファレンス: extract / generate / compose / measure / transcribe / evaluate / compare / ci-check / run / batch / audit / roundtrip / roundtrip-corpus / roundtrip-rep / score-adherence / genre-calibrate / genre-audit |
 | [`docs/semantic_ci_product_v1.md`](docs/semantic_ci_product_v1.md) | semantic CI V1: Target SVP → Expected RPE → fixture比較 → Repair SVP |
 | [`docs/roadmap.md`](docs/roadmap.md) | PoC (達成済み) と Pre-prototype マイルストーン (P1–P5)、推奨実行順 |
 | [`docs/roadmap_goal1.md`](docs/roadmap_goal1.md) | 目的1（定量観測）完成までのフェーズ Q0–Q5、完成定義、クリティカルパス |
