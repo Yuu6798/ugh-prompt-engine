@@ -1,0 +1,312 @@
+# CLAP 相互検証② — MusicGen K2 バッチ (32 takes) への学習版センサー適用 manifest
+#
+# 実音源は repo 外（DD-A: 音源非コミット）。ただし PR2b-2 (Drive 律速) と異なり、
+# 本バッチは同一環境なら決定論再生成できる（PR #137 §7.3 で sha256 完全再現を実証済み）:
+#   1. mkdir -p examples/roundtrip/cache/k2-musicgen/
+#   2. python scripts/collect_musicgen_takes.py generate \
+#        --plan examples/control/k2_musicgen/plan.yaml \
+#        --output-dir examples/roundtrip/cache/k2-musicgen \
+#        --manifest-out /tmp/k2_musicgen_takes_manifest.json
+#      （musicgen extra + HF アクセス必須。revision は plan が pin）
+#   3. scripts/collect_clap_fixture.py が manifest の audio_sha256 pin を自動照合し、
+#      バイト列不一致は fail-fast する
+#
+# audio_sha256 は examples/control/k2_musicgen/fixture.json (PR #136) と同一の pin。
+# prompts は生成語彙と同一トークン（brightness）/ fast-slow 対比（bpm — 素朴 bpm
+# センサーの半折り交絡に対する第三の独立検証角、docs/musicgen_backend.md §7.5）。
+- sample_id: bpm_low_00
+  audio_path: ../../roundtrip/cache/k2-musicgen/bpm_low_00.wav
+  audio_sha256: 0723d531a68e056d548337496ce5cebcc537550c6c602a4f940c49378035119f
+  prompts: &id001
+    positive:
+    - fast tempo electronic music at 170 beats per minute
+    negative:
+    - slow tempo electronic music at 90 beats per minute
+  prompt_groups: *id001
+  condition:
+    knob: bpm
+    level: '90'
+    seed: 1000
+- sample_id: bpm_low_01
+  audio_path: ../../roundtrip/cache/k2-musicgen/bpm_low_01.wav
+  audio_sha256: dd600b436ac1177c953de243cbf93220a4c0b953a2ec6ec130521567ebe65bdb
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: bpm
+    level: '90'
+    seed: 1001
+- sample_id: bpm_low_02
+  audio_path: ../../roundtrip/cache/k2-musicgen/bpm_low_02.wav
+  audio_sha256: aa0c3a786ef26ed5fd0a0ca49cf0a9a61b7c8dc811c905b87e2ce0b5a7018363
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: bpm
+    level: '90'
+    seed: 1002
+- sample_id: bpm_low_03
+  audio_path: ../../roundtrip/cache/k2-musicgen/bpm_low_03.wav
+  audio_sha256: 603606fca617cc1eaa6207ece3aafa55985a47b166865ee004104479dee1c76c
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: bpm
+    level: '90'
+    seed: 1003
+- sample_id: bpm_low_04
+  audio_path: ../../roundtrip/cache/k2-musicgen/bpm_low_04.wav
+  audio_sha256: 01360c96c2e595b3fb2de3db59ffd2646ac1b168e92ee4cfe79f050a6f4df631
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: bpm
+    level: '90'
+    seed: 1004
+- sample_id: bpm_low_05
+  audio_path: ../../roundtrip/cache/k2-musicgen/bpm_low_05.wav
+  audio_sha256: 1298e9fcf280120150c53e50fdb3d9afad70c02c752bd120121dcaaa318fe738
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: bpm
+    level: '90'
+    seed: 1005
+- sample_id: bpm_low_06
+  audio_path: ../../roundtrip/cache/k2-musicgen/bpm_low_06.wav
+  audio_sha256: b22972017cbb1c1cb758fde71ec3c57d1d5affa302ed34d54c5dc1c870b7b67b
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: bpm
+    level: '90'
+    seed: 1006
+- sample_id: bpm_low_07
+  audio_path: ../../roundtrip/cache/k2-musicgen/bpm_low_07.wav
+  audio_sha256: 778e4fa351095f77ec34e76291430a8916a48c39f11b62973f00d858e9081b8d
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: bpm
+    level: '90'
+    seed: 1007
+- sample_id: bpm_high_00
+  audio_path: ../../roundtrip/cache/k2-musicgen/bpm_high_00.wav
+  audio_sha256: cdf503082b68652ed79ecb63fbc55f1b296c75ffb07e0bd10217587c688379b6
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: bpm
+    level: '170'
+    seed: 1050
+- sample_id: bpm_high_01
+  audio_path: ../../roundtrip/cache/k2-musicgen/bpm_high_01.wav
+  audio_sha256: 8eeef6c36cdf08d93193990efe5b6ae0231d0dd90db0a183f8a82f5734109f79
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: bpm
+    level: '170'
+    seed: 1051
+- sample_id: bpm_high_02
+  audio_path: ../../roundtrip/cache/k2-musicgen/bpm_high_02.wav
+  audio_sha256: 811b531d070e327580520ebe2dbd3879a48935887eb42dd758cea627e52e2a56
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: bpm
+    level: '170'
+    seed: 1052
+- sample_id: bpm_high_03
+  audio_path: ../../roundtrip/cache/k2-musicgen/bpm_high_03.wav
+  audio_sha256: 79a5c04ea5dd571402a06026ff9696e497f82d17284c3161a8b07f096534f78f
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: bpm
+    level: '170'
+    seed: 1053
+- sample_id: bpm_high_04
+  audio_path: ../../roundtrip/cache/k2-musicgen/bpm_high_04.wav
+  audio_sha256: 0dd68a52bcec60935582ac45133e221f887c94ff89716acbd0bf0fb3c90a6faa
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: bpm
+    level: '170'
+    seed: 1054
+- sample_id: bpm_high_05
+  audio_path: ../../roundtrip/cache/k2-musicgen/bpm_high_05.wav
+  audio_sha256: 38d06bea660a6dde585c105d9bb603a41cc67fd8abc19fe75c0135e17466b405
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: bpm
+    level: '170'
+    seed: 1055
+- sample_id: bpm_high_06
+  audio_path: ../../roundtrip/cache/k2-musicgen/bpm_high_06.wav
+  audio_sha256: 0bdcb7848aad5c17571360ab7028cb097835d668493cfb5c5e9cecf3f26aa296
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: bpm
+    level: '170'
+    seed: 1056
+- sample_id: bpm_high_07
+  audio_path: ../../roundtrip/cache/k2-musicgen/bpm_high_07.wav
+  audio_sha256: 8c00ed14738a017a9df13c2ea9c6545a7843eb91c9c47ec8c74aecd3ff5b5d85
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: bpm
+    level: '170'
+    seed: 1057
+- sample_id: brightness_low_00
+  audio_path: ../../roundtrip/cache/k2-musicgen/brightness_low_00.wav
+  audio_sha256: 39252c8b85ff66a544e5157e90f3028f5659613c39bebac03f32a019b4a468e6
+  prompts: &id002
+    positive:
+    - bright shimmering sparkling high-register timbre
+    negative:
+    - dark warm bass-heavy mellow timbre
+  prompt_groups: *id002
+  condition:
+    knob: brightness
+    level: dark
+    seed: 1100
+- sample_id: brightness_low_01
+  audio_path: ../../roundtrip/cache/k2-musicgen/brightness_low_01.wav
+  audio_sha256: a82844b00db6f82b41ef2736a6ed750cdb14e9d0fb695b0d47670df6fe2d9e84
+  prompts: *id002
+  prompt_groups: *id002
+  condition:
+    knob: brightness
+    level: dark
+    seed: 1101
+- sample_id: brightness_low_02
+  audio_path: ../../roundtrip/cache/k2-musicgen/brightness_low_02.wav
+  audio_sha256: 6d9d06b32cdd963fe3a28f5fda8b5a4ab0a5bceda7b60781f68d2bcf9228a473
+  prompts: *id002
+  prompt_groups: *id002
+  condition:
+    knob: brightness
+    level: dark
+    seed: 1102
+- sample_id: brightness_low_03
+  audio_path: ../../roundtrip/cache/k2-musicgen/brightness_low_03.wav
+  audio_sha256: c2f84ff2aa9e771a70c378a4999622533a53f999815fb9e57fe28ef9ed59de16
+  prompts: *id002
+  prompt_groups: *id002
+  condition:
+    knob: brightness
+    level: dark
+    seed: 1103
+- sample_id: brightness_low_04
+  audio_path: ../../roundtrip/cache/k2-musicgen/brightness_low_04.wav
+  audio_sha256: ff83748a61686e25f66f8e9e94178eb775f840d88c89fe067e3c0c4b37ff1d93
+  prompts: *id002
+  prompt_groups: *id002
+  condition:
+    knob: brightness
+    level: dark
+    seed: 1104
+- sample_id: brightness_low_05
+  audio_path: ../../roundtrip/cache/k2-musicgen/brightness_low_05.wav
+  audio_sha256: 68cfef73e0ee8d29c822d3bc7ba0ce6c60d6e97975356b3ace1eaf19c4af1255
+  prompts: *id002
+  prompt_groups: *id002
+  condition:
+    knob: brightness
+    level: dark
+    seed: 1105
+- sample_id: brightness_low_06
+  audio_path: ../../roundtrip/cache/k2-musicgen/brightness_low_06.wav
+  audio_sha256: 74a632c07f27de242fe07327a61f4af76a44ffda23fe3d193553af7f9d603fb5
+  prompts: *id002
+  prompt_groups: *id002
+  condition:
+    knob: brightness
+    level: dark
+    seed: 1106
+- sample_id: brightness_low_07
+  audio_path: ../../roundtrip/cache/k2-musicgen/brightness_low_07.wav
+  audio_sha256: afc35ce4d3f352a5c874608f5d619f0c7b68e2a086b237976a5c5cfe515c1254
+  prompts: *id002
+  prompt_groups: *id002
+  condition:
+    knob: brightness
+    level: dark
+    seed: 1107
+- sample_id: brightness_high_00
+  audio_path: ../../roundtrip/cache/k2-musicgen/brightness_high_00.wav
+  audio_sha256: 0c33b91172d7846ee6ebb3f1866aa9f09427d07aaaa9f3eef472b1b4b1aa031d
+  prompts: *id002
+  prompt_groups: *id002
+  condition:
+    knob: brightness
+    level: bright
+    seed: 1150
+- sample_id: brightness_high_01
+  audio_path: ../../roundtrip/cache/k2-musicgen/brightness_high_01.wav
+  audio_sha256: 8350050705107664ed77f66b01887bb5b57b5adb2963fbefc80f89eda12231d7
+  prompts: *id002
+  prompt_groups: *id002
+  condition:
+    knob: brightness
+    level: bright
+    seed: 1151
+- sample_id: brightness_high_02
+  audio_path: ../../roundtrip/cache/k2-musicgen/brightness_high_02.wav
+  audio_sha256: 555beeebdfc7e77c58649aa53f50440650a56e852029b4071b8964bde2b49767
+  prompts: *id002
+  prompt_groups: *id002
+  condition:
+    knob: brightness
+    level: bright
+    seed: 1152
+- sample_id: brightness_high_03
+  audio_path: ../../roundtrip/cache/k2-musicgen/brightness_high_03.wav
+  audio_sha256: 1e7a68ed303368be7b999256300aeac5329ec8a43be7fbf5c1f45d7b68c436e6
+  prompts: *id002
+  prompt_groups: *id002
+  condition:
+    knob: brightness
+    level: bright
+    seed: 1153
+- sample_id: brightness_high_04
+  audio_path: ../../roundtrip/cache/k2-musicgen/brightness_high_04.wav
+  audio_sha256: b9ab336418b13ae693c6a632d3b9eb853ac56858a7131de6f233e22a280092a6
+  prompts: *id002
+  prompt_groups: *id002
+  condition:
+    knob: brightness
+    level: bright
+    seed: 1154
+- sample_id: brightness_high_05
+  audio_path: ../../roundtrip/cache/k2-musicgen/brightness_high_05.wav
+  audio_sha256: 52c19f2aa3b5369b6e267f2301ad11a08a8ef6bb410242f740adf1b7d33cc30a
+  prompts: *id002
+  prompt_groups: *id002
+  condition:
+    knob: brightness
+    level: bright
+    seed: 1155
+- sample_id: brightness_high_06
+  audio_path: ../../roundtrip/cache/k2-musicgen/brightness_high_06.wav
+  audio_sha256: b6d0e5f7a8740479bdf6e7825812e7170c050ec494948fc5bc3290823e4528a3
+  prompts: *id002
+  prompt_groups: *id002
+  condition:
+    knob: brightness
+    level: bright
+    seed: 1156
+- sample_id: brightness_high_07
+  audio_path: ../../roundtrip/cache/k2-musicgen/brightness_high_07.wav
+  audio_sha256: c16fa0137dfbf00d3af37509fd49d79b0df00b10fed883a2995dec4a34391eeb
+  prompts: *id002
+  prompt_groups: *id002
+  condition:
+    knob: brightness
+    level: bright
+    seed: 1157

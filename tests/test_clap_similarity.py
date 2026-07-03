@@ -197,3 +197,60 @@ def test_cross_validation_clap_and_mid_ratio_agree_on_direction():
                 f"{genre}/{name}: present > absent の方向が崩れた — "
                 "committed データが変わったなら docs の相互検証①を再検証すること"
             )
+
+
+def test_musicgen_k2_clap_fixture_learned_grip_direction_and_magnitude():
+    """CLAP 相互検証② — MusicGen K2 バッチ (32 takes) の学習版 grip を pin する。
+
+    docs/musicgen_backend.md §7.5: 学習版センサー（CLAP contrast_fit）は
+    - bpm ノブを d≈2.60 の tight で分離（素朴 bpm センサーは halving 交絡で
+      d=0.21 loose）— 「生成は効いていた・センサーが折った」の第三の独立証拠
+    - brightness ノブを d≈1.50 の tight で分離（ルール版 centroid d=2.25 と方向一致・
+      病理のない物理欄では物理センサーが優位）
+    committed fixture が変われば数値 pin が落ち、docs §7.5 の再検証を強制する。
+    """
+    fixture_path = (
+        Path(__file__).resolve().parents[1]
+        / "examples"
+        / "learned"
+        / "clap"
+        / "musicgen_k2_contrast_fixture.json"
+    )
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+    assert fixture["schema_version"] == "1.0"
+    assert fixture["model"]["checkpoint"] == "music_audioset_epoch_15_esc_90.14.pt"
+    # #131 と同一 checkpoint（G4 済み cc0-1.0）に pin されていること
+    assert fixture["model"]["checkpoint_sha256"] == (
+        "fae3e9c087f2909c28a09dc31c8dfcdacbc42ba44c70e972b58c1bd1caf6dedd"
+    )
+
+    from svp_rpe.control import classify_grip, grip_effect_size
+
+    by_condition: dict[tuple[str, str], list[float]] = {}
+    for sample in fixture["samples"]:
+        condition = sample["condition"]
+        key = (condition["knob"], condition["level"])
+        by_condition.setdefault(key, []).append(sample["contrast_fit"])
+        # contrast_fit の自己整合（mean(pos) - mean(neg) の 6 桁丸め）
+        pos = [sample["cosines"][p] for p in sample["prompt_groups"]["positive"]]
+        neg = [sample["cosines"][p] for p in sample["prompt_groups"]["negative"]]
+        expected_contrast = round(
+            sum(pos) / len(pos) - sum(neg) / len(neg), 6
+        )
+        # cosines は 6 桁丸め後の値のため、丸め順序差で末桁が 1 ULP ずれうる
+        assert sample["contrast_fit"] == pytest.approx(expected_contrast, abs=5e-6)
+
+    assert all(len(values) == 8 for values in by_condition.values())
+
+    bpm_grip = grip_effect_size(by_condition[("bpm", "90")], by_condition[("bpm", "170")])
+    brightness_grip = grip_effect_size(
+        by_condition[("brightness", "dark")], by_condition[("brightness", "bright")]
+    )
+
+    assert classify_grip(bpm_grip, 1) == "tight"
+    assert classify_grip(brightness_grip, 1) == "tight"
+    assert bpm_grip == pytest.approx(2.603, abs=0.01)
+    assert brightness_grip == pytest.approx(1.501, abs=0.01)
+    # bpm: 学習版は分布の重なりゼロ（低水準の最大 < 高水準の最小）
+    assert max(by_condition[("bpm", "90")]) < min(by_condition[("bpm", "170")])

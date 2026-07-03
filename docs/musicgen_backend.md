@@ -227,6 +227,31 @@ unresolved。成果物は `examples/control/k3/musicgen_matrix_*` +
   `active_rate_target` は常に上限貼り付き（0.90–0.95 指定に対し 0.96–1.00）。
   楽譜からの MusicGen 演奏では両欄は現状制御不能として扱うのが妥当。
 
+### 7.5 CLAP 相互検証② — 学習版 grip の第二生成器拡張（2026-07-03）
+
+PR2b の CLAP 学習センサー（`contrast_fit`、#131/#132 と同一 checkpoint
+`music_audioset_epoch_15_esc_90.14.pt`・sha256 pin 一致・G4 済み cc0-1.0）を
+§7.1 の K2 バッチ 32 テイクへ適用した（manifest / fixture は
+`examples/learned/clap/musicgen_k2_contrast_*`。音源は cache materialize —
+本バッチは同一環境で決定論再生成可能な点が PR2b-2 の Drive 律速と異なる）。
+
+| knob | ルール版 grip | CLAP 学習版 grip | 読み |
+|---|---|---|---|
+| bpm | 0.21 loose（halving 交絡・§7.1） | **2.60 tight・分布重なりゼロ** | fast/slow テキスト対比が 90/170 を完全分離 |
+| brightness | 2.25 tight（centroid） | 1.50 tight（方向一致） | 病理のない物理欄では物理センサー優位 |
+
+- **bpm halving 交絡の第三の独立証拠**: 素朴 bpm センサー（d=0.21）・高 prior
+  再推定（7/8 回復・§7.1）・K3 対角（0.851・§7.4）に加え、CLAP は 170bpm
+  テイク群を「速い」と読み分布重なりゼロで分離した。「生成は効いていた・
+  素朴センサーが半折りした」の証拠系が 3 経路で揃った。
+- **相互検証①（#132）への重要なニュアンス**: 意味層（vocal contrast）では
+  CLAP が桁で有利だったが、物理層では**センサーは階層でなく相補** —
+  ルール版に既知の病理がある欄（bpm）では学習版が解像し、クリーンな欄
+  （brightness/centroid）では物理センサーが勝つ。学習センサーは「ルール版の
+  病理帯域を埋める補助計器」として位置づくのが実測的に正確。
+- 数値は `tests/test_clap_similarity.py` の学習版 grip pin テストで固定
+  （fixture が変われば docs 再検証を強制）。
+
 ## 8. 関連ドキュメント
 
 - [`controllability_poc.md`](controllability_poc.md) — DD-A、K0-K3 の grip
