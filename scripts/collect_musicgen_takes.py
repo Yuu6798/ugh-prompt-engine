@@ -77,6 +77,32 @@ SCHEMA_VERSION = "1.0"
 GENERATOR = "collect_musicgen_takes.py"
 _INSTALL_HINT = "pip install -e '.[musicgen]'"
 
+# コミット済みの device profile / grip fixture が実測したモデル（PR B, 2026-07-03）。
+# `device_profiles/musicgen.yaml` は backend seam（target_backend: musicgen）で
+# キーされるため、コンパイル側は演奏モデルの粒度を知らない。モデル id を知る
+# 唯一の場所である runbook が、実測スコープ外モデルへの適用を advisory する。
+PROFILE_MEASURED_MODEL_ID = "facebook/musicgen-small"
+
+
+def profile_scope_advisory(model_id: str) -> Optional[str]:
+    """実測スコープ外の MusicGen バリアントに対する注意喚起文を返す。
+
+    `device_profiles/musicgen.yaml` の control_defaults / knob_quirks と
+    `examples/control/k2_musicgen/*` の grip は ``PROFILE_MEASURED_MODEL_ID``
+    （small・R=8）のみの実測に基づく。medium / large 等の未計測バリアントで
+    生成する場合、コンパイル時の tight/loose 既定や高テンポ halving advisory が
+    転移する保証はない — stderr にのみ知らせ、生成やプロンプト本文は変えない
+    （#128 の本文不変規律）。一致時は ``None``。
+    """
+    if model_id == PROFILE_MEASURED_MODEL_ID:
+        return None
+    return (
+        f"note: device_profiles/musicgen.yaml and examples/control/k2_musicgen/* are "
+        f"measured on {PROFILE_MEASURED_MODEL_ID} only; {model_id} is unmeasured, so "
+        "compile-time grip defaults / advisories may not transfer "
+        "(docs/musicgen_backend.md §7.1)."
+    )
+
 
 class KnobPlan(BaseModel):
     """plan.yaml の 1 ノブ定義。未知キーは fail-fast で拒否する。"""
@@ -439,6 +465,9 @@ def extract_fixture(manifest: dict[str, Any], *, audio_dir: Path) -> dict[str, A
 
 def _cmd_generate(args: argparse.Namespace) -> int:
     plan = load_plan(args.plan)
+    advisory = profile_scope_advisory(plan.model_id)
+    if advisory is not None:
+        print(advisory, file=sys.stderr)
     try:
         manifest = generate_takes(plan, output_dir=args.output_dir)
     except ImportError as exc:
@@ -454,6 +483,9 @@ def _cmd_generate(args: argparse.Namespace) -> int:
 
 
 def _cmd_perform(args: argparse.Namespace) -> int:
+    advisory = profile_scope_advisory(args.model_id)
+    if advisory is not None:
+        print(advisory, file=sys.stderr)
     try:
         manifest = perform_takes(
             args.score,

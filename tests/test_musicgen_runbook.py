@@ -28,12 +28,32 @@ from scripts.collect_musicgen_takes import (
     load_plan,
     load_takes_manifest,
     main,
+    profile_scope_advisory,
     resolve_perform_target,
     sample_seed,
 )
 
 PLAN_PATH = Path("examples/control/k2_musicgen/plan.yaml")
 SCORE_PATH = Path("examples/roundtrip/synth_01_source.yaml")
+
+
+def test_profile_scope_advisory_none_for_measured_model() -> None:
+    """実測済みモデル（musicgen-small）では advisory を出さない。"""
+    assert profile_scope_advisory("facebook/musicgen-small") is None
+
+
+def test_profile_scope_advisory_fires_for_unmeasured_variant() -> None:
+    """未計測バリアントでは device profile / grip の実測スコープ外を知らせる。
+
+    Codex #136 P2: `device_profiles/musicgen.yaml` は backend seam でキーされ、
+    コンパイル側は演奏モデルの粒度を知らない。モデル id を知る唯一の場所である
+    runbook が stderr 向け文言を返す（生成・プロンプト本文は不変）。
+    """
+    advisory = profile_scope_advisory("facebook/musicgen-medium")
+    assert advisory is not None
+    assert "facebook/musicgen-small" in advisory
+    assert "facebook/musicgen-medium" in advisory
+    assert "device_profiles/musicgen.yaml" in advisory
 
 
 def test_generator_label_follows_requested_model_id() -> None:

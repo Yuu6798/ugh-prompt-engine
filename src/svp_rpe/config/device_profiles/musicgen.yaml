@@ -39,4 +39,4 @@ knob_quirks:
 cross_couplings: []
 spectral_biases: []
 
-notes: "PR B 実測（R=8）に基づく初期プロファイル。bpm loose は素朴センサー読み（R2 closeout の規律: faster-side 回復は post-hoc 緩和でありコンパイル時保証には使わない）。brightness は Suno（0.86）より強い tight（2.25）で dark 到達も可能。K3 直交性・genre bias は未計測。"
+notes: "PR B 実測（R=8）に基づく初期プロファイル。bpm loose は素朴センサー読み（R2 closeout の規律: faster-side 回復は post-hoc 緩和でありコンパイル時保証には使わない）。brightness は Suno（0.86）より強い tight（2.25）で dark 到達も可能。K3 直交性・genre bias は未計測。実測スコープは facebook/musicgen-small のみ — medium/large 等の未計測バリアントには本 defaults の転移保証がない（backend seam の粒度上コンパイル側はモデル id を知らないため、runbook 側の profile_scope_advisory が stderr で注意喚起する。docs/musicgen_backend.md §7.1）。"

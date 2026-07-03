@@ -145,6 +145,15 @@ R3（確率的往復、`docs/roadmap_goal2.md`）の計器は実装済み:
   ただし分散は大きい（dark 指定で 4517Hz の外れ値 1 本）。
 - K3 直交性（非対角クロス効果）と genre bias（spectral_biases）は未計測のため
   device profile に記録していない（空リスト＝honesty）。
+- **実測スコープは `facebook/musicgen-small` のみ**（Codex #136 P2）。
+  `device_profiles/musicgen.yaml` は backend seam（`target_backend: musicgen`）で
+  キーされ、コンパイル側は演奏モデルの粒度を知らない（Suno のバージョン粗さと
+  同じ受容済みの粒度）。medium / large 等の未計測バリアントへの defaults 転移は
+  保証しないため、モデル id を知る唯一の場所である runbook が
+  `profile_scope_advisory`（`scripts/collect_musicgen_takes.py`）で
+  `--model-id` ≠ small のとき stderr に注意喚起する（プロンプト本文・生成は
+  不変 — #128 の本文不変規律）。バリアントを実測したら、その時点で
+  プロファイルのモデル別分割を再検討する。
 
 ### 7.2 R3 初実測（`examples/roundtrip/musicgen_r3_rep_2026-07-03.json`）
 
