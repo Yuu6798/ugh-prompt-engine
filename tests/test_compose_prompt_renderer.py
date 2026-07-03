@@ -464,13 +464,16 @@ def test_lyrics_presence_dotted_priority_token_survives_truncation_unprofiled() 
 
     PR3 後半（device_profile）以降 `suno`（`external` の解決先）は device
     control_defaults を持つため、"unprofiled" を再現するには device profile が
-    存在しない backend（`musicgen`）へ切り替える（`bpm`/`brightness` を device 既定で
+    存在しない backend へ切り替える（`bpm`/`brightness` を device 既定で
     勝手に tight 昇格させず、`rendering.priority` フォールバックだけを見る）。
+    MusicGen PR B で `musicgen` も profiled になったため、profile を持たない
+    `udio` を使う（未知 backend は profile_key=backend 名の素の descriptor に
+    フォールバックする — `resolve_backend_descriptor` 参照）。
     """
     data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
     data.pop("control_profile", None)
     data["semantic"]["lyrics_presence"] = "absent"
-    data["rendering"]["target_backend"] = "musicgen"
+    data["rendering"]["target_backend"] = "udio"
     data["rendering"]["priority"] = _priority_with_lyrics_token_first("semantic.lyrics_presence")
     score = CompositionScore.model_validate(data)
 

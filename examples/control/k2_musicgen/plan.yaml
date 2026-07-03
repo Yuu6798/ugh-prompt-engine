@@ -7,7 +7,8 @@ schema_version: "1.0"
 fixture_id: k2_musicgen_mini
 generator: musicgen-small
 model_id: facebook/musicgen-small
-model_revision: null
+# G4 目視確認（2026-07-03, docs/musicgen_backend.md §5）時点の HF repo revision に pin。
+model_revision: 4c8334b02c6ec4e8664a91979669a501ec497792
 duration_seconds: 12.0
 guidance_scale: 3.0
 repetitions: 8

@@ -63,16 +63,22 @@ RPE の evidence 層に MusicGen 由来のラベルが直接書き込まれる�
 - **Code**: transformers（Apache-2.0）経由の MusicGen パイプライン
   （`MusicgenForConditionalGeneration`）を採用する。`audiocraft`
   （Meta 公式リファレンス実装、MIT だが依存が重い）には依存しない。
-- **Weights**: `facebook/musicgen-small` は **VERIFY PENDING**——PR B 着手前に
-  Hugging Face モデルカード（`https://huggingface.co/facebook/musicgen-small`）
-  のライセンスバッジを目視確認し、`docs/learned_models_policy.md` §3.1 の
-  laion-clap エントリと同様の verbatim 記録（URL 付き）をここに追記すること。
-  期待値は **CC-BY-NC-4.0**（非商用条項）。もし目視確認でこの期待どおりなら、
-  MusicGen の重みは**研究計器限定**の扱いとなり、プロダクト同梱（学習済み
-  重みのリポジトリ同梱や商用配布物への組み込み）は不可。ローカル runbook で
-  HuggingFace から実行時取得するだけの現行の使い方（重みを一切同梱しない）
-  はこの制約下でも問題ない。
-- G4 確認が完了するまで、PR B（実バッチ生成 → fixture コミット）には着手しない。
+- **Weights**: `facebook/musicgen-small` — **VERIFIED**（verbatim findings,
+  verified 2026-07-03, PR B）:
+  - Hugging Face モデルカード（`https://huggingface.co/facebook/musicgen-small`）
+    の repository-level license badge は `cc-by-nc-4.0`。モデルカード本文の
+    ライセンス文は "Code is released under MIT, model weights are released
+    under CC-BY-NC 4.0."（HF API `cardData.license` も `cc-by-nc-4.0` で一致）。
+  - 確認時点のモデル repo revision:
+    `4c8334b02c6ec4e8664a91979669a501ec497792`（PR B の生成バッチはこの
+    revision に pin して実行した）。
+  - 期待値どおり **CC-BY-NC-4.0**（非商用条項）につき、MusicGen の重みは
+    **研究計器限定**の扱い——プロダクト同梱（学習済み重みのリポジトリ同梱や
+    商用配布物への組み込み）は不可。ローカル runbook で HuggingFace から
+    実行時取得するだけの現行の使い方（重みを一切同梱しない）はこの制約下でも
+    問題ない。
+- G4 確認完了（上記）により PR B（実バッチ生成 → fixture コミット）の前提条件は
+  充足済み。
 
 ## 6. R3 接続 — 実装（PR C）
 
