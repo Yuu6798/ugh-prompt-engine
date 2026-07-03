@@ -76,6 +76,17 @@ def _install_fake_beat_this(
 
     monkeypatch.setitem(sys.modules, "beat_this", fake_root)
     monkeypatch.setitem(sys.modules, "beat_this.inference", fake_inference)
+
+    # 実環境に beat_this が pip 導入済みでもテストを密閉に保つ:
+    # _detect_version の importlib.metadata フォールバックが実配布物の
+    # バージョンを拾うと、fake モジュール前提の version 期待値が環境依存で
+    # 割れる（learned-models extra 導入済みセッションで顕在化）。
+    from svp_rpe.rpe.learned import beat_this_adapter as _adapter_module
+
+    def _package_not_found(name: str) -> str:
+        raise _adapter_module._pkg_metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(_adapter_module._pkg_metadata, "version", _package_not_found)
     return captured
 
 
