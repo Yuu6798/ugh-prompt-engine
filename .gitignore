@@ -38,3 +38,6 @@ examples/roundtrip/cache/
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Claude Code エージェントの一時 worktree（セッション内並行作業用・コミット禁止）
+.claude/worktrees/
