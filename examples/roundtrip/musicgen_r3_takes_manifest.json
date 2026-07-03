@@ -3,7 +3,7 @@
   "fixture_id": "musicgen_r3_source",
   "generator": "musicgen-small",
   "score_path": "examples/roundtrip/musicgen_r3_source.yaml",
-  "prompt": "Bright energetic electronic dance atmosphere. electronic / four-on-the-floor track. 120 BPM. C major. intro: driving pulse, bright leads; role=establish the beat. body: steady four-on-the-floor, bright; role=hold the energy. outro: steady pulse to the end; role=ride out. Brightness bright. Normal stereo. Active rate 0.90-0.95. Valley depth 0.10-0.20. 4/4 time.",
+  "prompt": "Brightness bright. Bright energetic electronic dance atmosphere. electronic / four-on-the-floor track. C major. intro: driving pulse, bright leads; role=establish the beat. body: steady four-on-the-floor, bright; role=hold the energy. outro: steady pulse to the end; role=ride out. Normal stereo. Active rate 0.90-0.95. Valley depth 0.10-0.20. 4/4 time. 120 BPM.",
   "model_id": "facebook/musicgen-small",
   "model_revision": "4c8334b02c6ec4e8664a91979669a501ec497792",
   "samples": [
@@ -12,7 +12,7 @@
       "repeat": 0,
       "seed": 5000,
       "audio_path": "musicgen_r3_source_00.wav",
-      "audio_sha256": "e423e38e6d49399b13b23b50a7b414a4e8f3299511aad959804c2dff3916dabe",
+      "audio_sha256": "defd83e6281114ae9046c85a026e2c7ec6e4ba07cbec7e5ec7ea826f5ac68f49",
       "duration_seconds": 12.0,
       "guidance_scale": 3.0
     },
@@ -21,7 +21,7 @@
       "repeat": 1,
       "seed": 5001,
       "audio_path": "musicgen_r3_source_01.wav",
-      "audio_sha256": "fda0a7c6d548f205d992fa06c6921b94d13c270a3274a29036d7472cd7528c0a",
+      "audio_sha256": "1f4d2c6d4080734a7513a4d36470345055ab35efc7a3819d1a6f0c4914817763",
       "duration_seconds": 12.0,
       "guidance_scale": 3.0
     },
@@ -30,7 +30,7 @@
       "repeat": 2,
       "seed": 5002,
       "audio_path": "musicgen_r3_source_02.wav",
-      "audio_sha256": "8964c2db3d8ffc5577d4973d90d7f54ca50c1bebf62dcb82415942f65ef484dd",
+      "audio_sha256": "10247b52d50b54018b2d9e5a511a46c6a23dbeff789202d1ede7bff79a63a59a",
       "duration_seconds": 12.0,
       "guidance_scale": 3.0
     },
@@ -39,7 +39,7 @@
       "repeat": 3,
       "seed": 5003,
       "audio_path": "musicgen_r3_source_03.wav",
-      "audio_sha256": "04f76931e36d9c440cde250ae6b10e831d0e7954dbbf9fe7cf27fb3429d33707",
+      "audio_sha256": "4262526886de8468658071d5ccbcf972ea34635d6c7049df06181dfe05feb490",
       "duration_seconds": 12.0,
       "guidance_scale": 3.0
     },
@@ -48,7 +48,7 @@
       "repeat": 4,
       "seed": 5004,
       "audio_path": "musicgen_r3_source_04.wav",
-      "audio_sha256": "914872e8f3b3811491f6fd4f77d4d45364afb6258fa70bba7f23bde32abb79e8",
+      "audio_sha256": "51361f3755328b7dd955adb356c0fd794da801d455b2014c6afc00101fa11af7",
       "duration_seconds": 12.0,
       "guidance_scale": 3.0
     }

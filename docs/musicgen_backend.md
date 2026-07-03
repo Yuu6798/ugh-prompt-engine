@@ -162,25 +162,32 @@ R3（確率的往復、`docs/roadmap_goal2.md`）の計器は実装済み:
 `examples/roundtrip/musicgen_r3_source.yaml`（C major / bright / 120bpm・
 `target_backend: musicgen`）から `perform` で n=5 テイクを生成し、
 `svprpe roundtrip-rep` で R3-1/2/3 を初実測（takes manifest は
-`examples/roundtrip/musicgen_r3_takes_manifest.json`、音声はローカルのみ）:
+`examples/roundtrip/musicgen_r3_takes_manifest.json`、音声はローカルのみ）。
+コミット済み artifacts は **musicgen device profile 込みのコンパイル経路**
+（brightness が tight 先頭昇格・bpm が loose 末尾）で生成した本バッチ
+（Codex #136 P2 指摘により profile 導入前プロンプトの初回バッチから再生成）:
 
 | field | preserved | rate | 備考 |
 |---|---:|---:|---|
-| key | 2/5 | 0.4 | 外れは E minor / F minor×2（calibration_disagreement） |
-| brightness | 3/5 | 0.6 | 1 本 neutral band（sensor_blind）・1 本 dark |
-| bpm | 2/5 | 0.4 | 117≈120 で保存 2、96×2、undetected 1（R3 選抜からは除外済みのノブ） |
+| key | 0/5 | 0.0 | 全て calibration_disagreement（F minor×2 / F♯ minor×2 / A minor） |
+| brightness | 4/5 | 0.8 | 1 本 neutral band（sensor_blind） |
+| bpm | 3/5 | 0.6 | 117≈120×3、162×1、undetected×1（R3 選抜からは除外済みのノブ） |
 | time_signature | 5/5 | 1.0 | 4/4 |
-| active_rate_target | 0/5 | 0.0 | 全テイク 0.98–1.00 — MusicGen は壁一面の密度で鳴らす |
+| active_rate_target | 0/5 | 0.0 | 全テイク 0.96–1.00 — MusicGen は壁一面の密度で鳴らす |
 | stereo_width | 0/5 | 0.0 | **MusicGen small はモノラル出力**＝5/5 sensor_blind |
 
-- **R3-3（rejection sampling = 「選択 = 制御」）が実データで初めて機能**:
-  `selected_take_id = musicgen_r3_source_04`（選抜フィールド key / brightness の
-  両方を保存する唯一のテイク）が `preserved_field_count` 基準で機械的に特定された。
-  単発生成では key 保存率 0.4 だが、n=5 生成 + 計器選抜で楽譜に最も近いテイクを
-  決定論的に拾える——grip が弱いノブでもセンサーのみで制御チャネルが回復する、
-  という R3-3 の設計仮説の最初の実証点（verdict ではなく計器の読みの記録）。
+- **R3-3（rejection sampling = 「選択 = 制御」）の初実測**: `preserved_field_count`
+  （選抜フィールド key / brightness）は 1/1/1/1/0 で並び、`take_id` 昇順の決定論
+  タイブレークで `selected_take_id = musicgen_r3_source_00` が機械特定された。
+  同時に**選抜の限界も初観測**: 本バッチは key を保存するテイクが 1 本も存在せず
+  （0/5）、rejection sampling は「存在するものから最良を拾う」保険であって、
+  生成分布が届かない欄は救えない（verdict ではなく計器の読みの記録）。
+- **バッチ間の揺れ（記録）**: profile 導入前プロンプト（bpm 先頭・brightness 後方）の
+  初回バッチでは key 2/5・brightness 3/5 で、両フィールドを保存する唯一のテイクが
+  特定されていた。プロンプト序列の因果か生成ノイズかは n=5 では分離不能——
+  n=5 点推定はバッチ間でこの程度揺れる、という R3 の分散感の最初のデータ点。
 - 付随観測: MusicGen 出力はモノラル（`stereo_width` はセンサー盲）、
-  `active_rate_target` は常に上限貼り付き（0.90–0.95 指定に対し 0.98–1.00）。
+  `active_rate_target` は常に上限貼り付き（0.90–0.95 指定に対し 0.96–1.00）。
   楽譜からの MusicGen 演奏では両欄は現状制御不能として扱うのが妥当。
 
 ## 8. 関連ドキュメント

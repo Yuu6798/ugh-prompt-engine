@@ -320,13 +320,15 @@ confidence を精緻化するだけの**非ブロッキング follow-up** で、
 >
 > **初実測（MusicGen PR B, 2026-07-03）**: `musicgen_r3_source.yaml`
 > （C major / bright / 120bpm）× `facebook/musicgen-small` n=5 で
-> key 2/5・brightness 3/5 の n>1 点推定を取得し、**rejection sampling は
-> 選抜フィールド（key / brightness）両方を保存する唯一のテイクを機械特定**
-> （「選択 = 制御」の最初の実証点）。数値は
-> `examples/roundtrip/musicgen_r3_rep_2026-07-03.json`、解説は
-> [`musicgen_backend.md`](musicgen_backend.md) §7.2。**単一スコア・単一生成器・
-> n=5 の点推定であり「実証完了」ではない** — Suno バッチ / 複数スコアでの
-> 一般化が残り。
+> key 0/5・brightness 4/5 の n>1 点推定を取得（device profile 込みコンパイル
+> 経路の再生成バッチ）。**rejection sampling は決定論タイブレークで最良テイクを
+> 機械特定**したが、key はバッチ内に保存テイクが存在せず「選抜は存在するものから
+> しか拾えない」限界も同時に初観測。profile 導入前の初回バッチ（key 2/5・
+> brightness 3/5・両フィールド保存テイクあり）との揺れは n=5 点推定の分散感の
+> 最初のデータ点。数値は `examples/roundtrip/musicgen_r3_rep_2026-07-03.json`、
+> 解説は [`musicgen_backend.md`](musicgen_backend.md) §7.2。**単一スコア・
+> 単一生成器・n=5 の点推定であり「実証完了」ではない** — Suno バッチ / 複数
+> スコアでの一般化が残り。
 
 ### R4: 作品同一性 — 事象レベル欄の往復 ✅ **closeout（2026-06-19, #89/#90）**
 
