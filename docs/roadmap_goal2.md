@@ -283,7 +283,7 @@ confidence を精緻化するだけの**非ブロッキング follow-up** で、
 > （prior/sr/閾値）調整では大域的修正が存在しないことを再実証し、bpm 除外の
 > 結論を補強した（詳細: [`roundtrip_corpus_screen.md`](roundtrip_corpus_screen.md) finding #6）。
 
-### R3: 確率的演奏者での往復実証 ⏳ **計器実装済み（PR C）— 実測（MusicGen/Suno バッチ）待ち**
+### R3: 確率的演奏者での往復実証 ⏳ **計器実装済み（PR C）+ MusicGen 初実測済み（PR B, 2026-07-03）— Suno バッチ / 複数スコアでの一般化待ち**
 
 **目的**: 決定論（R0）で立った往復を、本命の **確率的演奏者（Suno 級）** で
 実証する。K1 grip 地図が「配線既知の決定論演奏者」での測定だったのに対し、
@@ -316,10 +316,17 @@ confidence を精緻化するだけの**非ブロッキング follow-up** で、
 > `scripts/collect_musicgen_takes.py perform`（1 スコアのプロンプトから N
 > テイクを生成し takes manifest を書き出す）。全出力は計器であって verdict
 > なし（`SelectionResult` の `selected_take_id` も品質判定ではなく「楽譜に
-> 最も近いテイクの機械的特定」）。**実測（MusicGen ローカルバッチ or Suno
-> 手動バッチ）はまだ実行しておらず、「実証完了」ではない** — 上記の完了基準
-> （n>1 での往復一致・rejection sampling の実効性）は次の実測ラウンドで
-> 埋める。
+> 最も近いテイクの機械的特定」）。
+>
+> **初実測（MusicGen PR B, 2026-07-03）**: `musicgen_r3_source.yaml`
+> （C major / bright / 120bpm）× `facebook/musicgen-small` n=5 で
+> key 2/5・brightness 3/5 の n>1 点推定を取得し、**rejection sampling は
+> 選抜フィールド（key / brightness）両方を保存する唯一のテイクを機械特定**
+> （「選択 = 制御」の最初の実証点）。数値は
+> `examples/roundtrip/musicgen_r3_rep_2026-07-03.json`、解説は
+> [`musicgen_backend.md`](musicgen_backend.md) §7.2。**単一スコア・単一生成器・
+> n=5 の点推定であり「実証完了」ではない** — Suno バッチ / 複数スコアでの
+> 一般化が残り。
 
 ### R4: 作品同一性 — 事象レベル欄の往復 ✅ **closeout（2026-06-19, #89/#90）**
 

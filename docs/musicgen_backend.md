@@ -1,6 +1,6 @@
 # MusicGen ローカル生成トラック — 設計 doc
 
-Status: PR A / PR C 実装完了、PR B 未着手
+Status: PR A / PR B / PR C 実装完了（PR B 実測 2026-07-03、§7）
 Scope: `facebook/musicgen-*`（transformers 経路）を第二生成器として組み込む計画
 
 ## 1. 目的と位置づけ
@@ -51,11 +51,12 @@ RPE の evidence 層に MusicGen 由来のラベルが直接書き込まれる�
 
 - **PR A（実装済み）**: runbook（`scripts/collect_musicgen_takes.py`）+
   `musicgen` extra + 本 doc。実推論は行わない・CI 安全な「器」のみ。
-- **PR B（未着手）**: `scripts/collect_musicgen_takes.py generate` の実バッチ実行 →
-  K2 型 fixture（`examples/control/k2_musicgen/fixture.json` 等）+
-  `expected_grip.json` + `config/device_profiles/musicgen.yaml`
-  （`docs/control_profile.md` の device profile 形式）。**§5 の G4
-  ライセンス目視確認完了が前提条件**。
+- **PR B（実装完了・2026-07-03 実測）**: `scripts/collect_musicgen_takes.py
+  generate` の実バッチ実行 → K2 型 fixture
+  （`examples/control/k2_musicgen/fixture.json`）+ `expected_grip.json` +
+  `config/device_profiles/musicgen.yaml`（`docs/control_profile.md` の device
+  profile 形式）。前提条件だった §5 の G4 ライセンス目視確認も完了済み。
+  実測結果は §7。
 - **PR C（実装済み・実測待ち）**: R3-1/2/3 ハーネス（§6 参照）。
 
 ## 5. License
@@ -112,11 +113,66 @@ R3（確率的往復、`docs/roadmap_goal2.md`）の計器は実装済み:
   `seed = seed_base + i` で N テイクを生成する。
 - CLI: `svprpe roundtrip-rep <composition_score.yaml> <takes_manifest.json>`
   （`docs/cli.md` 参照）。
-- **未実施**: 実バッチ生成・実測（MusicGen ローカル or Suno 手動）は本 PR の
+- ~~**未実施**: 実バッチ生成・実測（MusicGen ローカル or Suno 手動）は本 PR の
   範囲外。計器の検証はテストの決定論シンセ演奏者による合成テイクで行った
-  （honesty 維持・MusicGen 不要）。
+  （honesty 維持・MusicGen 不要）。~~ → **PR B（2026-07-03）で実測完了、§7.2**。
 
-## 7. 関連ドキュメント
+## 7. PR B 実測結果（2026-07-03）
+
+実測条件: `facebook/musicgen-small`（revision `4c8334b0…` に pin・§5）、CPU、
+12 秒クリップ、`guidance_scale=3.0`、seed は `sample_seed` / `seed_base+i` の
+決定論導出（DD-A ベストエフォート pin — 環境間の完全一致は保証しない）。
+音声はコミットせず、fixture / manifest / レポート（数値）のみコミット。
+
+### 7.1 K2 型 grip（`examples/control/k2_musicgen/expected_grip.json`）
+
+| knob | sensor | low/high | grip | class | Suno 比（#117） |
+|---|---|---|---:|---|---|
+| bpm | bpm | 90 / 170 | 0.21 | **loose** | Suno は tight 1.61（水準 90/140） |
+| brightness | spectral_centroid | dark / bright | 2.25 | **tight** | Suno は 0.86 — MusicGen の方が強い |
+
+- **bpm loose は knob_dead ではなく抽出器 halving の交絡が支配的**: low(90) 側は
+  8 本中 7 本が ~89.1（ほぼ的中）。high(170) 側は既定 prior で 86.13×4
+  （≈172.27 の半折り）/ 117.45×2（3:2 subharmonic アトラクタ）/ 172.27×1 の読みに
+  割れるが、**高 prior 再推定（`start_bpm=180`）では 8 本中 7 本が 172.27 に回復**。
+  R2（`roundtrip_corpus_screen.md`）の「高速曲の低 BPM は生成器不忠実でなく抽出器
+  halving」が**第二生成器でも再現**した。device profile には R2 closeout の規律
+  （faster-side 回復は post-hoc 緩和でありコンパイル時保証に使わない）に従い
+  素朴センサー読みの loose で記録し、halving 診断は `knob_quirks` の advisory に
+  格納した（`config/device_profiles/musicgen.yaml`）。
+- **brightness は Suno より強い tight で、絶対 dark 帯にも到達可能**: dark 指定で
+  centroid ≤1200Hz へ 3/8 到達（615.4 / 1067.4 / 398.5Hz。Suno は 0/4 で不到達）。
+  ただし分散は大きい（dark 指定で 4517Hz の外れ値 1 本）。
+- K3 直交性（非対角クロス効果）と genre bias（spectral_biases）は未計測のため
+  device profile に記録していない（空リスト＝honesty）。
+
+### 7.2 R3 初実測（`examples/roundtrip/musicgen_r3_rep_2026-07-03.json`）
+
+`examples/roundtrip/musicgen_r3_source.yaml`（C major / bright / 120bpm・
+`target_backend: musicgen`）から `perform` で n=5 テイクを生成し、
+`svprpe roundtrip-rep` で R3-1/2/3 を初実測（takes manifest は
+`examples/roundtrip/musicgen_r3_takes_manifest.json`、音声はローカルのみ）:
+
+| field | preserved | rate | 備考 |
+|---|---:|---:|---|
+| key | 2/5 | 0.4 | 外れは E minor / F minor×2（calibration_disagreement） |
+| brightness | 3/5 | 0.6 | 1 本 neutral band（sensor_blind）・1 本 dark |
+| bpm | 2/5 | 0.4 | 117≈120 で保存 2、96×2、undetected 1（R3 選抜からは除外済みのノブ） |
+| time_signature | 5/5 | 1.0 | 4/4 |
+| active_rate_target | 0/5 | 0.0 | 全テイク 0.98–1.00 — MusicGen は壁一面の密度で鳴らす |
+| stereo_width | 0/5 | 0.0 | **MusicGen small はモノラル出力**＝5/5 sensor_blind |
+
+- **R3-3（rejection sampling = 「選択 = 制御」）が実データで初めて機能**:
+  `selected_take_id = musicgen_r3_source_04`（選抜フィールド key / brightness の
+  両方を保存する唯一のテイク）が `preserved_field_count` 基準で機械的に特定された。
+  単発生成では key 保存率 0.4 だが、n=5 生成 + 計器選抜で楽譜に最も近いテイクを
+  決定論的に拾える——grip が弱いノブでもセンサーのみで制御チャネルが回復する、
+  という R3-3 の設計仮説の最初の実証点（verdict ではなく計器の読みの記録）。
+- 付随観測: MusicGen 出力はモノラル（`stereo_width` はセンサー盲）、
+  `active_rate_target` は常に上限貼り付き（0.90–0.95 指定に対し 0.98–1.00）。
+  楽譜からの MusicGen 演奏では両欄は現状制御不能として扱うのが妥当。
+
+## 8. 関連ドキュメント
 
 - [`controllability_poc.md`](controllability_poc.md) — DD-A、K0-K3 の grip
   計測パターン全般

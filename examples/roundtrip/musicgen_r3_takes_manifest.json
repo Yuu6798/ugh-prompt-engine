@@ -1,0 +1,56 @@
+{
+  "schema_version": "1.0",
+  "fixture_id": "musicgen_r3_source",
+  "generator": "musicgen-small",
+  "score_path": "examples/roundtrip/musicgen_r3_source.yaml",
+  "prompt": "Bright energetic electronic dance atmosphere. electronic / four-on-the-floor track. 120 BPM. C major. intro: driving pulse, bright leads; role=establish the beat. body: steady four-on-the-floor, bright; role=hold the energy. outro: steady pulse to the end; role=ride out. Brightness bright. Normal stereo. Active rate 0.90-0.95. Valley depth 0.10-0.20. 4/4 time.",
+  "model_id": "facebook/musicgen-small",
+  "model_revision": "4c8334b02c6ec4e8664a91979669a501ec497792",
+  "samples": [
+    {
+      "sample_id": "musicgen_r3_source_00",
+      "repeat": 0,
+      "seed": 5000,
+      "audio_path": "musicgen_r3_source_00.wav",
+      "audio_sha256": "e423e38e6d49399b13b23b50a7b414a4e8f3299511aad959804c2dff3916dabe",
+      "duration_seconds": 12.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "musicgen_r3_source_01",
+      "repeat": 1,
+      "seed": 5001,
+      "audio_path": "musicgen_r3_source_01.wav",
+      "audio_sha256": "fda0a7c6d548f205d992fa06c6921b94d13c270a3274a29036d7472cd7528c0a",
+      "duration_seconds": 12.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "musicgen_r3_source_02",
+      "repeat": 2,
+      "seed": 5002,
+      "audio_path": "musicgen_r3_source_02.wav",
+      "audio_sha256": "8964c2db3d8ffc5577d4973d90d7f54ca50c1bebf62dcb82415942f65ef484dd",
+      "duration_seconds": 12.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "musicgen_r3_source_03",
+      "repeat": 3,
+      "seed": 5003,
+      "audio_path": "musicgen_r3_source_03.wav",
+      "audio_sha256": "04f76931e36d9c440cde250ae6b10e831d0e7954dbbf9fe7cf27fb3429d33707",
+      "duration_seconds": 12.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "musicgen_r3_source_04",
+      "repeat": 4,
+      "seed": 5004,
+      "audio_path": "musicgen_r3_source_04.wav",
+      "audio_sha256": "914872e8f3b3811491f6fd4f77d4d45364afb6258fa70bba7f23bde32abb79e8",
+      "duration_seconds": 12.0,
+      "guidance_scale": 3.0
+    }
+  ]
+}
