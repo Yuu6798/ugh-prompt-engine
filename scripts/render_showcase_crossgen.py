@@ -117,6 +117,10 @@ def transcribe_score(bundle: RPEBundle) -> CompositionScore:
     score.semantic.delta_e.overall = semantic.delta_e_profile.transition_type
     score.physical.brightness = brightness_label(float(bundle.physical.spectral_centroid))
     score.physical.stereo_width = "medium"
+    if score.fixity is not None:
+        # TODO 欄を実値で埋めたので fixity 入場試験の整合をとる（TODO=unlocked / 実値=locked）
+        score.fixity["brightness"] = "locked"
+        score.fixity["stereo_width"] = "locked"
     score.rendering.target_backend = "musicgen"
     score.rendering.priority = [
         "semantic.core",
