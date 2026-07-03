@@ -1,4 +1,4 @@
-# AI 演奏者のための楽譜 — マージロードマップ（PR 3 本構成）
+# AI 演奏者のための楽譜 — マージロードマップ（PR 4 本構成）
 
 ## North Star
 
@@ -313,8 +313,10 @@ PR1（基盤・依存ゼロ・即着手可）
   CLAP vocal contrast × mid_ratio を audio_sha256 突き合わせで比較し、条件レベルの
   方向は完全一致・「効果>再生成ノイズ」は CLAP のみ両ジャンルで満たす（EDM 15.1× /
   Rock 10.9× vs mid_ratio 0.8× / 1.3× — `lyrics_semantic_anchor.md` §相互検証①、
-  cross-consistency テストで pin）。残 = ②既存コーパス（K2 等）への拡張（軽い
-  Codex ローカル推論）/ ③absent 側 alt の完全対称化（Suno 人手生成）。
+  cross-consistency テストで pin）。**②は #138 で完了**（CLAP 学習版 grip を MusicGen
+  K2 バッチ 32 テイクへ拡張、bpm halving 交絡の第三独立証拠を取得 —
+  [`musicgen_backend.md`](musicgen_backend.md) §7.5）。残 = ③absent 側 alt の
+  完全対称化（Suno 人手生成）のみ。
 - **人手生成の律速を束ねる**: acoustic 4th genre / K3 の A/B バッチ等は生成が人手律速。
   2 本以上が同時に design-ready になったら 1 回のユーザーセッションへ束ねる（Genre Calib
   「1 ジャンルまとめて n=3」の一段上）。現時点は acoustic 単独で束ねる相手が無いため、

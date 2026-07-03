@@ -263,6 +263,33 @@ svprpe batch ./audio_files --svp-dir ./svp_candidates --mode compare --output-di
 
 Outputs: `ranking.json`, `summary.csv`, `summary.json`, `next_action.md`.
 
+### `svprpe genre-calibrate <manifest.yaml>`
+
+Analyze a genre-labeled calibration corpus manifest (`examples/calibration/genre/manifest.yaml`
+shape) and report per-genre feature statistics, pair separability, and threshold candidates.
+Deterministic; emits no verdict.
+
+```bash
+svprpe genre-calibrate examples/calibration/genre/manifest.yaml
+svprpe genre-calibrate examples/calibration/genre/manifest.yaml --format json -o report.json
+```
+
+Samples with `excluded: true` or unresolvable audio/measured data are reported under
+`excluded_samples` with a reason instead of silently dropped. See
+[`genre_calibration_planning.md`](genre_calibration_planning.md).
+
+### `svprpe genre-audit <manifest.yaml>`
+
+Apply the current production genre rules (`semantic_rules.yaml` `cultural_context` /
+`instrumentation`) to a labeled manifest and report a confusion table plus per-sample
+predictions. This is a descriptive audit, not a scorer: it does not compute accuracy or
+pass/fail, only a `mismatch` marker against known expected-context pairs.
+
+```bash
+svprpe genre-audit examples/calibration/genre/manifest.yaml
+svprpe genre-audit examples/calibration/genre/manifest.yaml --format json -o audit.json
+```
+
 ## Global Options
 
 | Option | Description |
@@ -270,7 +297,7 @@ Outputs: `ranking.json`, `summary.csv`, `summary.json`, `next_action.md`.
 | `--output` / `-o` | Output file path |
 | `--output-dir` | Output directory (creates if needed) |
 | `--fields` | Comma-separated `CompositionScore.physical` fields for `measure` |
-| `--format` | Output format. `generate`: `yaml` (default) or `text`; `ci-check`: `json` (default) or `markdown`; `roundtrip` / `roundtrip-corpus` / `roundtrip-rep` / `compose` / `audit` / `score-adherence`: `text` (default) or `json` |
+| `--format` | Output format. `generate`: `yaml` (default) or `text`; `ci-check`: `json` (default) or `markdown`; `roundtrip` / `roundtrip-corpus` / `roundtrip-rep` / `compose` / `audit` / `score-adherence` / `genre-calibrate` / `genre-audit`: `text` (default) or `json` |
 | `--max-chars` | Override `rendering.prompt_max_chars` (`compose` only) |
 | `--threshold` | Semantic CI pass threshold from `0.0` to `1.0` (`ci-check` only) |
 | `--no-save` | Print output to stdout instead of saving |

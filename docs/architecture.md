@@ -1,5 +1,10 @@
 # Architecture
 
+**Status**: 計測三層（v0.2 由来: RPE 抽出 / SVP 生成 / 評価）は実装済み。楽譜トラック
+（compose / transcribe / perform / roundtrip / control / calibration）は
+`docs/score_centric_planning.md` / `docs/ai_performer_score_roadmap.md` 由来で
+同じく実装済み — 本ドキュメントは両方をカバーする二部構成（計測三層 + 楽譜トラック）。
+
 ## Pipeline
 
 ```
@@ -89,6 +94,42 @@ Audio (WAV/MP3) → RPE Extraction → SVP Generation → Evaluation
 ### batch/runner.py (v0.2)
 - Multi-file batch processing
 - Ranking, summary CSV/JSON, next_action.md generation
+
+## Modules — Score Track (楽譜トラック)
+
+Composition Score を "楽譜"、外部生成器を "演奏者" とみなす往復ループ
+(`compose` → 演奏 → `measure`/`transcribe` → 診断) を実装するモジュール群。
+詳細は [`score_centric_planning.md`](score_centric_planning.md) /
+[`ai_performer_score_roadmap.md`](ai_performer_score_roadmap.md) を参照。
+
+### compose/
+- `models.py` / `loader.py`: `CompositionScore` 正規スキーマ + fail-fast loader
+- `convert.py` / `fixity.py`: RPE 相互変換 + フィールド保存性チェック
+- `device_profile.py`: 生成器別 `control_profile`（grip_class 自己記述、PR1）
+- `prompt_renderer.py`: `ExternalPromptAdapter`（楽譜 → 外部生成器プロンプト、PR1.5）
+
+### transcribe/
+- `measure.py`: 音声から `CompositionScore.physical` 必須7フィールドを計測（センサー名・
+  raw 値・単位・校正ノートつき）
+- `score_draft.py`: loader-valid な draft Score YAML を生成（意味/散文欄は TODO sentinel）
+
+### perform/
+- `synth.py` / `performer.py`: 決定論的 `CompositionScore` 演奏者（R0 の往路）
+
+### roundtrip/
+- `harness.py` / `compare.py`: R0 往復保存性診断（Score → perform → extract → draft）
+- `corpus_batch.py` / `manifest.py`: R1 再実行可能 corpus
+- `repetition.py`: R3 確率的演奏者の n>1 反復バッチ + rejection sampling 選抜
+- `adherence.py`: `control_profile`-tight フィールドのコンパイル保持 + roundtrip 保存判定（PR2）
+
+### control/
+- `grip.py`: K 系列の grip 効果量（操作可能パラメータの効き具合）
+- `orthogonality.py`: K3 直交性行列（DCI/MIG 効果量）
+
+### calibration/
+- `manifest.py`: ジャンル/楽器語彙のラベル付きコーパス manifest
+- `analyze.py` / `render.py`: `genre-calibrate`（ジャンル別特徴統計 + pair separability）
+- `audit.py`: `genre-audit`（現行ルールの misfire 計測、verdict なし）
 
 ## Config Files
 

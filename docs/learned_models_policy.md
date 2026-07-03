@@ -1,6 +1,7 @@
 # Learned Audio Annotation Layer Policy
 
-Status: design / pre-implementation
+Status: 実装済み — 4 adapter 採用（`beat_this` / `panns_inference` / `basic-pitch` /
+`laion-clap` CLAP）。CLAP は PR2b-1（隔離配線）→ PR2b-2（実推論・実 fixture 採取）まで closeout 済み
 Scope: audio annotation models considered for `svp_rpe`
 Audience: contributors adding learned-model backends
 

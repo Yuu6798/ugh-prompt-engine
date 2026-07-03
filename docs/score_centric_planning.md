@@ -1,6 +1,7 @@
 # Score-centric Planning — 楽譜中心の再編成と採譜トラック（T 系列）
 
-**Status**: PLANNING
+**Status**: T0–T2 実装済み（本文記載の採譜トラック・Q 系列再定義は反映済み。継続項目は各節の
+「実装ポインタ」を参照）
 **Created**: 2026-06-12
 **Upstream**: [`composition_score_product_brief.md`](composition_score_product_brief.md)（プロダクト定義）
 **Relates to**: [`controllability_poc.md`](controllability_poc.md)（K 系列）,
