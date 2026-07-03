@@ -634,6 +634,25 @@ def test_k3_musicgen_converter_computes_key_match_baseline() -> None:
     assert key_low_sample["features"]["key_match_baseline"] == pytest.approx(1.0)
 
 
+def test_k3_musicgen_converter_fails_fast_without_mir_eval(monkeypatch) -> None:
+    """Codex #137 P2: mir_eval 欠如時に完全一致フォールバックへ黙って落ちない。
+
+    コミット済み fixture の key_match_baseline は mir_eval 加重値で pin されており、
+    フォールバック再変換は別の数値を静かに再生成して --verify の決定論を壊す。
+    変換器は dev extra の導入を要求して止まる。
+    """
+    import sys
+
+    from scripts.build_k3_musicgen_fixture import convert
+
+    # sys.modules に None を差すと import 時 ImportError（ModuleNotFoundError）になる
+    monkeypatch.setitem(sys.modules, "mir_eval", None)
+    monkeypatch.setitem(sys.modules, "mir_eval.key", None)
+
+    with pytest.raises(RuntimeError, match=r"\[dev\]"):
+        convert(_musicgen_extract_synthetic_raw())
+
+
 def test_k3_musicgen_converter_known_dead_only_on_target_knobs() -> None:
     from scripts.build_k3_musicgen_fixture import convert
 

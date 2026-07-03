@@ -11,9 +11,11 @@ K3-2b — `scripts/collect_musicgen_takes.py extract` が書き出す K2 スキ�
 新規の数値計算は key センサー化（`key_match_baseline`）以外に一切行わない
 （`scripts/build_k3_suno_mini_fixture.py` と同じ Pure JSON reshaping 原則）。
 
-key センサー化: `scripts/build_k3_fixture.py` の `key_match_baseline`
-（= `scripts/measure_grip.py` の `_key_match_score(baseline, observed)`）と同じ
-規約を踏襲する。ソースの生 `key` 観測値と `BASELINE_KEY`（"C major" —
+key センサー化: `scripts/build_k3_fixture.py` の `key_match_baseline` と同じ
+規約（mir_eval 加重スコア）を踏襲するが、mir_eval 欠如時は
+`measure_grip._key_match_score` の完全一致フォールバックへ**黙って落ちず**
+fail-fast する（`_weighted_key_score` 参照 — コミット済み fixture の決定論を
+optional 依存の有無から切り離すため。Codex #137 P2）。ソースの生 `key` 観測値と `BASELINE_KEY`（"C major" —
 `musicgen_matrix_plan.yaml` の全プロンプトが共有するベースライン）から
 per-sample に計算し、`features.key_match_baseline` として追記する。fixture
 トップレベルにも `baseline_key` を記録する（`build_k3_fixture.py` の規約）。
@@ -43,7 +45,32 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.measure_grip import _key_match_score  # noqa: E402
+def _weighted_key_score(target: str, observed: str) -> float:
+    """mir_eval 加重の key 一致スコア（∈[0,1]）。mir_eval 欠如は fail-fast。
+
+    `scripts/measure_grip.py` の `_key_match_score` は mir_eval 欠如時に
+    正規化完全一致へ**黙って**フォールバックするが、本変換器では使えない —
+    コミット済み fixture の `key_match_baseline` は加重スコア（0.5/0.3/0.2 等）で
+    pin されており、フォールバックで再変換すると別の数値を静かに再生成して
+    `--verify` の決定論が optional 依存の有無に左右されてしまう（Codex #137 P2）。
+    加重スコアが計算できないなら黙って違う目盛りに切り替えるのではなく、
+    dev extra の導入を要求して止まる。
+    """
+    try:
+        import mir_eval.key as mir_eval_key
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "build_k3_musicgen_fixture requires mir_eval for weighted key scoring: "
+            "the committed fixture pins mir_eval-weighted key_match_baseline values, "
+            "and the exact-match fallback would silently regenerate different numbers. "
+            "Install the dev extra first: pip install -e '.[dev]'"
+        ) from exc
+    try:
+        return float(mir_eval_key.evaluate(target, observed)["Weighted Score"])
+    except ValueError:
+        # 観測 key が "unknown" 等で mir_eval が解釈できない場合は 0.0
+        # （measure_grip._key_match_score と同じ規約）。
+        return 0.0
 
 SOURCE_FIXTURE = ROOT / "examples" / "control" / "k3" / "musicgen_matrix_extract.json"
 SOURCE_FIXTURE_REL = "examples/control/k3/musicgen_matrix_extract.json"
@@ -130,7 +157,7 @@ def _with_key_match_baseline(features: dict[str, Any]) -> dict[str, Any]:
     """features に `key_match_baseline` を追記した新しい dict を返す。"""
     observed_key = str(features["key"])
     updated = dict(features)
-    updated["key_match_baseline"] = _key_match_score(BASELINE_KEY, observed_key)
+    updated["key_match_baseline"] = _weighted_key_score(BASELINE_KEY, observed_key)
     return updated
 
 
