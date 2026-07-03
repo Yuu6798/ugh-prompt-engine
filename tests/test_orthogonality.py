@@ -26,6 +26,8 @@ K3_EXPECTED_PATH = Path("examples/control/k3/expected_orthogonality.json")
 
 K3_SUNO_MINI_FIXTURE_PATH = Path("examples/control/k3/suno_mini_matrix_fixture.json")
 K3_SUNO_MINI_EXPECTED_PATH = Path("examples/control/k3/expected_orthogonality_suno_mini.json")
+K3_MUSICGEN_FIXTURE_PATH = Path("examples/control/k3/musicgen_matrix_fixture.json")
+K3_MUSICGEN_EXPECTED_PATH = Path("examples/control/k3/expected_orthogonality_musicgen.json")
 
 
 # --------------------------------------------------------------------------
@@ -473,11 +475,239 @@ def test_k3_suno_mini_fixture_snapshot() -> None:
     assert report == expected
 
 
+def test_k3_musicgen_converter_verify_matches_committed_fixture() -> None:
+    """K3-2b: コミット済み MusicGen 行列 fixture は extract fixture からの再変換と一致。"""
+    from scripts.build_k3_musicgen_fixture import convert, load_source, render_fixture
+
+    regenerated = render_fixture(convert(load_source()))
+    committed = K3_MUSICGEN_FIXTURE_PATH.read_text(encoding="utf-8")
+
+    assert regenerated == committed
+
+
+def test_k3_musicgen_fixture_snapshot() -> None:
+    """K3-2b MusicGen フル行列（R=8・dead 2 行・key センサー化 = 設計指示 a/b/c）の
+    スナップショット。ノイズ天井計器（K3-1b）が実生成器で初稼働した測定:
+    天井 |d|=0.848（ヌル 12 セル）を超えて解像するのは対角 2 + brightness の
+    帯域比クロス 1 の計 3 セルのみで、他のクロス結合はすべて未解決に抑制される。"""
+    from scripts.measure_grip import load_fixture
+
+    report = analyze_orthogonality(load_fixture(K3_MUSICGEN_FIXTURE_PATH))
+    expected = json.loads(K3_MUSICGEN_EXPECTED_PATH.read_text(encoding="utf-8"))
+
+    assert report == expected
+    diagonal = {
+        cell["knob"]: cell["diagonal_classification"]
+        for cell in report["cells"]
+        if cell["is_diagonal"]
+    }
+    assert diagonal["bpm"] == "tight"
+    assert diagonal["brightness"] == "tight"
+    # "in the key of ..." トークンを MusicGen はほぼ読まない（R3 の key 保存率 0.15 と整合）
+    assert diagonal["key"] == "dead"
+    assert report["noise"]["known_dead_knobs"] == ["active_rate_target", "valley_depth_target"]
+    assert report["noise"]["null_cell_count"] == 12
+    assert report["resolution_summary"]["resolved"] == 3
+
+
 def test_k3_suno_mini_converter_rejects_unexpected_source() -> None:
     from scripts.build_k3_suno_mini_fixture import convert, load_source
 
     raw = load_source()
     raw["knobs"][0]["name"] = "tempo"  # should be "bpm"
+
+    with pytest.raises(ValueError):
+        convert(raw)
+
+
+# --------------------------------------------------------------------------
+# K3-2b: K2-schema MusicGen extract fixture -> K3 orthogonality fixture
+# converter (5-knob full matrix, synthetic in-memory source only -- the real
+# committed extract fixture does not exist yet, so no snapshot test here).
+# --------------------------------------------------------------------------
+
+
+def _musicgen_extract_synthetic_raw() -> dict:
+    def feat(
+        bpm: float,
+        key: str,
+        centroid: float,
+        brightness: float,
+        active: float,
+        valley: float,
+    ) -> dict:
+        return {
+            "bpm": bpm,
+            "key": key,
+            "spectral_centroid": centroid,
+            "spectral_profile": {"brightness": brightness},
+            "active_rate": active,
+            "valley_depth": valley,
+        }
+
+    knobs = [
+        {"name": "bpm", "sensor": "bpm", "low_level": "90", "high_level": "170",
+         "expected_sign": 1},
+        {"name": "key", "sensor": "key", "low_level": "C major",
+         "high_level": "F sharp major", "expected_sign": -1},
+        {"name": "brightness", "sensor": "spectral_centroid", "low_level": "dark",
+         "high_level": "bright", "expected_sign": 1},
+        {"name": "active_rate_target", "sensor": "active_rate", "low_level": "0.80-0.85",
+         "high_level": "0.90-0.95", "expected_sign": 1},
+        {"name": "valley_depth_target", "sensor": "valley_depth", "low_level": "0.10-0.20",
+         "high_level": "0.30-0.40", "expected_sign": 1},
+    ]
+    samples = [
+        {"sample_id": "bpm_low_00", "knob": "bpm", "level": "90",
+         "features": feat(90.0, "C major", 2000.0, 0.1, 0.9, 0.15)},
+        {"sample_id": "bpm_low_01", "knob": "bpm", "level": "90",
+         "features": feat(91.0, "C major", 2000.0, 0.1, 0.9, 0.15)},
+        {"sample_id": "bpm_high_00", "knob": "bpm", "level": "170",
+         "features": feat(168.0, "C major", 2000.0, 0.1, 0.9, 0.15)},
+        {"sample_id": "bpm_high_01", "knob": "bpm", "level": "170",
+         "features": feat(169.0, "C major", 2000.0, 0.1, 0.9, 0.15)},
+        {"sample_id": "key_low_00", "knob": "key", "level": "C major",
+         "features": feat(120.0, "C major", 2000.0, 0.1, 0.9, 0.15)},
+        {"sample_id": "key_low_01", "knob": "key", "level": "C major",
+         "features": feat(120.0, "C major", 2000.0, 0.1, 0.9, 0.15)},
+        {"sample_id": "key_high_00", "knob": "key", "level": "F sharp major",
+         "features": feat(120.0, "F# major", 2000.0, 0.1, 0.9, 0.15)},
+        {"sample_id": "key_high_01", "knob": "key", "level": "F sharp major",
+         "features": feat(120.0, "F# major", 2000.0, 0.1, 0.9, 0.15)},
+        {"sample_id": "brightness_low_00", "knob": "brightness", "level": "dark",
+         "features": feat(120.0, "C major", 500.0, 0.01, 0.9, 0.15)},
+        {"sample_id": "brightness_low_01", "knob": "brightness", "level": "dark",
+         "features": feat(120.0, "C major", 520.0, 0.01, 0.9, 0.15)},
+        {"sample_id": "brightness_high_00", "knob": "brightness", "level": "bright",
+         "features": feat(120.0, "C major", 5000.0, 0.5, 0.9, 0.15)},
+        {"sample_id": "brightness_high_01", "knob": "brightness", "level": "bright",
+         "features": feat(120.0, "C major", 5200.0, 0.5, 0.9, 0.15)},
+        {"sample_id": "active_rate_target_low_00", "knob": "active_rate_target",
+         "level": "0.80-0.85", "features": feat(120.0, "C major", 2000.0, 0.1, 0.82, 0.15)},
+        {"sample_id": "active_rate_target_low_01", "knob": "active_rate_target",
+         "level": "0.80-0.85", "features": feat(120.0, "C major", 2000.0, 0.1, 0.84, 0.15)},
+        {"sample_id": "active_rate_target_high_00", "knob": "active_rate_target",
+         "level": "0.90-0.95", "features": feat(120.0, "C major", 2000.0, 0.1, 0.83, 0.15)},
+        {"sample_id": "active_rate_target_high_01", "knob": "active_rate_target",
+         "level": "0.90-0.95", "features": feat(120.0, "C major", 2000.0, 0.1, 0.85, 0.15)},
+        {"sample_id": "valley_depth_target_low_00", "knob": "valley_depth_target",
+         "level": "0.10-0.20", "features": feat(120.0, "C major", 2000.0, 0.1, 0.9, 0.15)},
+        {"sample_id": "valley_depth_target_low_01", "knob": "valley_depth_target",
+         "level": "0.10-0.20", "features": feat(120.0, "C major", 2000.0, 0.1, 0.9, 0.16)},
+        {"sample_id": "valley_depth_target_high_00", "knob": "valley_depth_target",
+         "level": "0.30-0.40", "features": feat(120.0, "C major", 2000.0, 0.1, 0.9, 0.17)},
+        {"sample_id": "valley_depth_target_high_01", "knob": "valley_depth_target",
+         "level": "0.30-0.40", "features": feat(120.0, "C major", 2000.0, 0.1, 0.9, 0.18)},
+    ]
+    return {
+        "schema_version": "1.0",
+        "fixture_id": "musicgen_matrix_synthetic_test",
+        "generator": "musicgen-small-test",
+        "repetitions": 2,
+        "knobs": knobs,
+        "samples": samples,
+    }
+
+
+def test_k3_musicgen_converter_is_deterministic() -> None:
+    from scripts.build_k3_musicgen_fixture import convert
+
+    raw = _musicgen_extract_synthetic_raw()
+    assert convert(raw) == convert(raw)
+
+
+def test_k3_musicgen_converter_computes_key_match_baseline() -> None:
+    from scripts.build_k3_musicgen_fixture import BASELINE_KEY, convert
+    from scripts.measure_grip import _key_match_score
+
+    fixture = convert(_musicgen_extract_synthetic_raw())
+
+    assert fixture["baseline_key"] == BASELINE_KEY
+    for sample in fixture["samples"]:
+        observed_key = sample["features"]["key"]
+        expected = _key_match_score(BASELINE_KEY, observed_key)
+        assert sample["features"]["key_match_baseline"] == pytest.approx(expected)
+    # same-as-baseline samples must score a perfect match regardless of whether
+    # mir_eval is installed (mir_eval path and the normalized-equality fallback
+    # both return 1.0 for an exact match, per _key_match_score's docstring).
+    key_low_sample = next(s for s in fixture["samples"] if s["sample_id"] == "key_low_00")
+    assert key_low_sample["features"]["key_match_baseline"] == pytest.approx(1.0)
+
+
+def test_k3_musicgen_converter_fails_fast_without_mir_eval(monkeypatch) -> None:
+    """Codex #137 P2: mir_eval 欠如時に完全一致フォールバックへ黙って落ちない。
+
+    コミット済み fixture の key_match_baseline は mir_eval 加重値で pin されており、
+    フォールバック再変換は別の数値を静かに再生成して --verify の決定論を壊す。
+    変換器は dev extra の導入を要求して止まる。
+    """
+    import sys
+
+    from scripts.build_k3_musicgen_fixture import convert
+
+    # sys.modules に None を差すと import 時 ImportError（ModuleNotFoundError）になる
+    monkeypatch.setitem(sys.modules, "mir_eval", None)
+    monkeypatch.setitem(sys.modules, "mir_eval.key", None)
+
+    with pytest.raises(RuntimeError, match=r"\[dev\]"):
+        convert(_musicgen_extract_synthetic_raw())
+
+
+def test_k3_musicgen_converter_known_dead_only_on_target_knobs() -> None:
+    from scripts.build_k3_musicgen_fixture import convert
+
+    fixture = convert(_musicgen_extract_synthetic_raw())
+    specs_by_name = {spec["name"]: spec for spec in fixture["knobs"]}
+
+    assert specs_by_name["active_rate_target"].get("known_dead") is True
+    assert specs_by_name["valley_depth_target"].get("known_dead") is True
+    for name in ("bpm", "key", "brightness"):
+        assert "known_dead" not in specs_by_name[name]
+
+
+def test_k3_musicgen_converter_output_feeds_analyze_orthogonality() -> None:
+    from scripts.build_k3_musicgen_fixture import convert
+
+    fixture = convert(_musicgen_extract_synthetic_raw())
+    report = analyze_orthogonality(fixture)
+
+    assert report["knobs"] == [
+        "bpm", "key", "brightness", "active_rate_target", "valley_depth_target",
+    ]
+    assert report["matrix"]["sensors_core"] == [
+        "bpm", "key_match_baseline", "spectral_centroid", "active_rate", "valley_depth",
+    ]
+    assert report["matrix"]["sensors_extended"] == ["brightness_band_ratio"]
+    assert set(report["noise"]["known_dead_knobs"]) == {
+        "active_rate_target", "valley_depth_target",
+    }
+
+
+def test_k3_musicgen_converter_rejects_unexpected_source_knob_name() -> None:
+    from scripts.build_k3_musicgen_fixture import convert
+
+    raw = _musicgen_extract_synthetic_raw()
+    raw["knobs"][0]["name"] = "tempo"  # should be "bpm"
+
+    with pytest.raises(ValueError):
+        convert(raw)
+
+
+def test_k3_musicgen_converter_rejects_unexpected_source_sensor() -> None:
+    from scripts.build_k3_musicgen_fixture import convert
+
+    raw = _musicgen_extract_synthetic_raw()
+    raw["knobs"][1]["sensor"] = "observed_key"  # should be "key"
+
+    with pytest.raises(ValueError):
+        convert(raw)
+
+
+def test_k3_musicgen_converter_rejects_unexpected_expected_sign() -> None:
+    from scripts.build_k3_musicgen_fixture import convert
+
+    raw = _musicgen_extract_synthetic_raw()
+    raw["knobs"][1]["expected_sign"] = 1  # key knob should declare -1
 
     with pytest.raises(ValueError):
         convert(raw)

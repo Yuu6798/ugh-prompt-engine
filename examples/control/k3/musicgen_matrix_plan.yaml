@@ -1,0 +1,91 @@
+# K3-2b（フル行列・MusicGen 実現）生成計画 — scripts/collect_musicgen_takes.py generate が読む。
+#
+# docs/controllability_poc.md §5.4「K3-2b への設計指示」の 3 条件を実装する:
+#   (a) known-dead ノブ行の同梱（内部ヌル分布）: active_rate_target / valley_depth_target を
+#       MIR 内部指標の数値レンジ文字列としてプロンプトに埋める。これらのトークンは
+#       テキスト条件付け生成器の可読語彙外（自然言語の密度/静寂表現とは異なる）である、
+#       という宣言（K3-1b 規約）に基づき、変換器が known_dead=true を付与する。
+#   (b) R >= 8（8 反復）
+#   (c) ベースライン key の宣言: 全プロンプトが "in the key of C major" を共有し、
+#       key 行のみ high 水準で F sharp major（三全音 = mir_eval 加重スコアの最遠帯）へ差し替え。
+#
+# 直交性計測の要件として、全ノブ行は同一のベーステンプレートを共有し、
+# 各行は**自ノブのトークンだけ**を A/B 差し替えする（他ノブは base 値で固定 —
+# クロス効果セルが「このノブを回すと他センサーがどう動くか」を意味するための前提）。
+# base: 120 bpm / C major / neutral balanced timbre / active rate 0.90-0.95 / valley 0.10-0.20
+schema_version: "1.0"
+fixture_id: k3_2b_musicgen_matrix
+generator: musicgen-small
+model_id: facebook/musicgen-small
+# G4 目視確認（2026-07-03, docs/musicgen_backend.md §5）時点の HF repo revision に pin。
+model_revision: 4c8334b02c6ec4e8664a91979669a501ec497792
+duration_seconds: 12.0
+guidance_scale: 3.0
+repetitions: 8
+knobs:
+  - name: bpm
+    sensor: bpm
+    low_level: "90"
+    high_level: "170"
+    expected_sign: 1
+    prompt_low: >-
+      instrumental electronic music, steady four-on-the-floor drum beat,
+      at 90 beats per minute, in the key of C major, neutral balanced timbre,
+      active rate target 0.90-0.95, valley depth target 0.10-0.20
+    prompt_high: >-
+      instrumental electronic music, steady four-on-the-floor drum beat,
+      at 170 beats per minute, in the key of C major, neutral balanced timbre,
+      active rate target 0.90-0.95, valley depth target 0.10-0.20
+  - name: key
+    sensor: key
+    low_level: "C major"
+    high_level: "F sharp major"
+    expected_sign: -1
+    prompt_low: >-
+      instrumental electronic music, steady four-on-the-floor drum beat,
+      at 120 beats per minute, in the key of C major, neutral balanced timbre,
+      active rate target 0.90-0.95, valley depth target 0.10-0.20
+    prompt_high: >-
+      instrumental electronic music, steady four-on-the-floor drum beat,
+      at 120 beats per minute, in the key of F sharp major, neutral balanced timbre,
+      active rate target 0.90-0.95, valley depth target 0.10-0.20
+  - name: brightness
+    sensor: spectral_centroid
+    low_level: dark
+    high_level: bright
+    expected_sign: 1
+    prompt_low: >-
+      instrumental electronic music, steady four-on-the-floor drum beat,
+      at 120 beats per minute, in the key of C major, dark warm bass-heavy mellow timbre,
+      active rate target 0.90-0.95, valley depth target 0.10-0.20
+    prompt_high: >-
+      instrumental electronic music, steady four-on-the-floor drum beat,
+      at 120 beats per minute, in the key of C major,
+      bright shimmering sparkling high-register timbre,
+      active rate target 0.90-0.95, valley depth target 0.10-0.20
+  - name: active_rate_target
+    sensor: active_rate
+    low_level: "0.80-0.85"
+    high_level: "0.90-0.95"
+    expected_sign: 1
+    prompt_low: >-
+      instrumental electronic music, steady four-on-the-floor drum beat,
+      at 120 beats per minute, in the key of C major, neutral balanced timbre,
+      active rate target 0.80-0.85, valley depth target 0.10-0.20
+    prompt_high: >-
+      instrumental electronic music, steady four-on-the-floor drum beat,
+      at 120 beats per minute, in the key of C major, neutral balanced timbre,
+      active rate target 0.90-0.95, valley depth target 0.10-0.20
+  - name: valley_depth_target
+    sensor: valley_depth
+    low_level: "0.10-0.20"
+    high_level: "0.30-0.40"
+    expected_sign: 1
+    prompt_low: >-
+      instrumental electronic music, steady four-on-the-floor drum beat,
+      at 120 beats per minute, in the key of C major, neutral balanced timbre,
+      active rate target 0.90-0.95, valley depth target 0.10-0.20
+    prompt_high: >-
+      instrumental electronic music, steady four-on-the-floor drum beat,
+      at 120 beats per minute, in the key of C major, neutral balanced timbre,
+      active rate target 0.90-0.95, valley depth target 0.30-0.40
