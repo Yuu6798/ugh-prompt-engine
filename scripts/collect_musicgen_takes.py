@@ -77,31 +77,48 @@ SCHEMA_VERSION = "1.0"
 GENERATOR = "collect_musicgen_takes.py"
 _INSTALL_HINT = "pip install -e '.[musicgen]'"
 
-# コミット済みの device profile / grip fixture が実測したモデル（PR B, 2026-07-03）。
+# コミット済みの device profile / grip fixture が実測したモデルと revision
+# （PR B, 2026-07-03、docs/musicgen_backend.md §5 の G4 目視確認と同一 pin）。
 # `device_profiles/musicgen.yaml` は backend seam（target_backend: musicgen）で
-# キーされるため、コンパイル側は演奏モデルの粒度を知らない。モデル id を知る
-# 唯一の場所である runbook が、実測スコープ外モデルへの適用を advisory する。
+# キーされるため、コンパイル側は演奏モデルの粒度を知らない。モデル id /
+# revision を知る唯一の場所である runbook が、実測スコープ外への適用を advisory する。
 PROFILE_MEASURED_MODEL_ID = "facebook/musicgen-small"
+PROFILE_MEASURED_MODEL_REVISION = "4c8334b02c6ec4e8664a91979669a501ec497792"
 
 
-def profile_scope_advisory(model_id: str) -> Optional[str]:
-    """実測スコープ外の MusicGen バリアントに対する注意喚起文を返す。
+def profile_scope_advisory(model_id: str, model_revision: Optional[str] = None) -> Optional[str]:
+    """実測スコープ外の MusicGen モデル / revision に対する注意喚起文を返す。
 
     `device_profiles/musicgen.yaml` の control_defaults / knob_quirks と
     `examples/control/k2_musicgen/*` の grip は ``PROFILE_MEASURED_MODEL_ID``
-    （small・R=8）のみの実測に基づく。medium / large 等の未計測バリアントで
+    の ``PROFILE_MEASURED_MODEL_REVISION``（small・R=8）のみの実測に基づく。
+    medium / large 等の未計測バリアント、または未 pin（``None``）/ 別 revision で
     生成する場合、コンパイル時の tight/loose 既定や高テンポ halving advisory が
     転移する保証はない — stderr にのみ知らせ、生成やプロンプト本文は変えない
-    （#128 の本文不変規律）。一致時は ``None``。
+    （#128 の本文不変規律）。model id と revision が両方一致するときのみ ``None``。
     """
-    if model_id == PROFILE_MEASURED_MODEL_ID:
-        return None
-    return (
-        f"note: device_profiles/musicgen.yaml and examples/control/k2_musicgen/* are "
-        f"measured on {PROFILE_MEASURED_MODEL_ID} only; {model_id} is unmeasured, so "
-        "compile-time grip defaults / advisories may not transfer "
-        "(docs/musicgen_backend.md §7.1)."
+    scope = (
+        f"device_profiles/musicgen.yaml and examples/control/k2_musicgen/* are measured on "
+        f"{PROFILE_MEASURED_MODEL_ID} @ {PROFILE_MEASURED_MODEL_REVISION[:8]} only"
     )
+    if model_id != PROFILE_MEASURED_MODEL_ID:
+        return (
+            f"note: {scope}; {model_id} is unmeasured, so compile-time grip defaults / "
+            "advisories may not transfer (docs/musicgen_backend.md §7.1)."
+        )
+    if model_revision is None:
+        return (
+            f"note: {scope}; running without --model-revision resolves to the current HF "
+            "head, which may have advanced past the measured revision — pin "
+            f"--model-revision {PROFILE_MEASURED_MODEL_REVISION} to stay in measured scope "
+            "(docs/musicgen_backend.md §7.1)."
+        )
+    if model_revision != PROFILE_MEASURED_MODEL_REVISION:
+        return (
+            f"note: {scope}; revision {model_revision} is unmeasured, so compile-time grip "
+            "defaults / advisories may not transfer (docs/musicgen_backend.md §7.1)."
+        )
+    return None
 
 
 class KnobPlan(BaseModel):
@@ -465,7 +482,7 @@ def extract_fixture(manifest: dict[str, Any], *, audio_dir: Path) -> dict[str, A
 
 def _cmd_generate(args: argparse.Namespace) -> int:
     plan = load_plan(args.plan)
-    advisory = profile_scope_advisory(plan.model_id)
+    advisory = profile_scope_advisory(plan.model_id, plan.model_revision)
     if advisory is not None:
         print(advisory, file=sys.stderr)
     try:
@@ -483,7 +500,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
 
 
 def _cmd_perform(args: argparse.Namespace) -> int:
-    advisory = profile_scope_advisory(args.model_id)
+    advisory = profile_scope_advisory(args.model_id, args.model_revision)
     if advisory is not None:
         print(advisory, file=sys.stderr)
     try:
