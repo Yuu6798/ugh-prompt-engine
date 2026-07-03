@@ -28,9 +28,11 @@
 
 - **Current status: PoC**
 - 楽譜ループは **Suno** と **MusicGen** の 2 生成器で「楽譜→演奏→測定→楽譜」の往復が
-  閉じている（`compose` → 生成器 → `measure`/`transcribe` → `roundtrip-rep` /
-  `score-adherence`）。MusicGen はローカル API のためバッチ実測が可能（n=20 まで実施済み）、
-  Suno は人手 UI 生成が律速で反復数が少ない
+  閉じている（`compose` → 生成器 → `measure`/`transcribe` → `roundtrip-rep`）。
+  MusicGen はローカル API のためバッチ実測が可能（n=20 まで実施済み）、
+  Suno は人手 UI 生成が律速で反復数が少ない。`score-adherence` CLI は
+  **決定論演奏者経路**のコンパイル保持 + 往復保存チェック（外部生成テイクの
+  検査は `roundtrip-rep` が担当）
 - 旧来の RPE/SVP 評価スコアは **本番の音楽品質評価器として未検証**
 - 各トラックの実測範囲・既知の限界は [`docs/roadmap_goal2.md`](docs/roadmap_goal2.md)（再現実証）、
   [`docs/controllability_poc.md`](docs/controllability_poc.md)（制御性 grip）、
@@ -59,10 +61,10 @@ svprpe compose examples/composition/midnight_signal/composition_score.yaml
 svprpe measure track.wav
 svprpe transcribe track.wav --output draft_score.yaml
 
-# 楽譜が宣言した tight フィールドが演奏で保たれたかを診断
+# 楽譜が宣言した tight フィールドの準拠診断（決定論演奏者経路 — 外部テイクは対象外）
 svprpe score-adherence examples/composition/midnight_signal/composition_score.yaml
 
-# 決定論演奏者での往復保存性診断 (R0) / 複数テイクの反復診断 (R3)
+# 決定論演奏者での往復保存性診断 (R0) / 外部生成テイク群の反復診断 (R3)
 svprpe roundtrip examples/roundtrip/synth_01_source.yaml
 svprpe roundtrip-rep examples/roundtrip/synth_01_source.yaml takes_manifest.json
 ```
