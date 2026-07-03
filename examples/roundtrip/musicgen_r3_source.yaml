@@ -1,0 +1,47 @@
+# R3 確率的往復の初実測用スコア（MusicGen ローカル生成、docs/musicgen_backend.md §6）。
+# R3-3 rejection sampling の既定選抜フィールドは key / brightness
+# （bpm は R2 closeout で信頼再現ノブから除外済み）のため、両欄を明示宣言する。
+# target_backend は musicgen — PR B の device profile 経由でコンパイルされる。
+meta:
+  title: musicgen_r3_source
+  version: "0.1"
+semantic:
+  core: bright energetic electronic dance
+  grv:
+    primary: electronic
+    secondary: four-on-the-floor
+  delta_e:
+    overall: flat
+  avoid: []
+physical:
+  bpm: 120
+  key: C major
+  time_signature: 4/4
+  active_rate_target: 0.90-0.95
+  valley_depth_target: 0.10-0.20
+  brightness: bright
+  stereo_width: normal
+structure:
+  - section: intro
+    bars: 1
+    role: establish the beat
+    physical: driving pulse, bright leads
+  - section: body
+    bars: 1
+    role: hold the energy
+    physical: steady four-on-the-floor, bright
+  - section: outro
+    bars: 1
+    role: ride out
+    physical: steady pulse to the end
+rendering:
+  target_backend: musicgen
+  prompt_max_chars: 650
+  priority:
+    - semantic.core
+    - semantic.grv
+    - physical.bpm
+    - physical.key
+    - structure
+    - semantic.avoid
+    - physical.optional

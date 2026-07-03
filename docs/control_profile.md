@@ -217,7 +217,8 @@ notes: "生成器バイアスの方向・量はジャンルで割れるため単
 だけで tight/loose/dead ティアが決まる。K2 由来の suno device defaults は `bpm` /
 `brightness` が tight のため、**`control_profile` を書かない score でも suno backend では
 この 2 フィールドが芯として先頭に昇格する**（PR1.5 の 3 ティア優先度は不変、詳細は上記
-「PR1.5」節）。
+「PR1.5」節）。第二機種プロファイルは `device_profiles/musicgen.yaml`
+（MusicGen PR B の実測 K2 型 grip 由来 — [`musicgen_backend.md`](musicgen_backend.md)）。
 
 ### advisory 規則（自動補正はしない）
 

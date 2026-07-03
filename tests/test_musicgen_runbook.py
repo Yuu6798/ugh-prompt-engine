@@ -28,12 +28,56 @@ from scripts.collect_musicgen_takes import (
     load_plan,
     load_takes_manifest,
     main,
+    profile_scope_advisory,
     resolve_perform_target,
     sample_seed,
 )
 
 PLAN_PATH = Path("examples/control/k2_musicgen/plan.yaml")
 SCORE_PATH = Path("examples/roundtrip/synth_01_source.yaml")
+
+
+def test_profile_scope_advisory_none_for_measured_model_and_revision() -> None:
+    """実測済みモデル + 実測 revision の組でのみ advisory を出さない。"""
+    assert (
+        profile_scope_advisory(
+            "facebook/musicgen-small", "4c8334b02c6ec4e8664a91979669a501ec497792"
+        )
+        is None
+    )
+
+
+def test_profile_scope_advisory_fires_for_unmeasured_variant() -> None:
+    """未計測バリアントでは device profile / grip の実測スコープ外を知らせる。
+
+    Codex #136 P2: `device_profiles/musicgen.yaml` は backend seam でキーされ、
+    コンパイル側は演奏モデルの粒度を知らない。モデル id を知る唯一の場所である
+    runbook が stderr 向け文言を返す（生成・プロンプト本文は不変）。
+    """
+    advisory = profile_scope_advisory("facebook/musicgen-medium", None)
+    assert advisory is not None
+    assert "facebook/musicgen-small" in advisory
+    assert "facebook/musicgen-medium" in advisory
+    assert "device_profiles/musicgen.yaml" in advisory
+
+
+def test_profile_scope_advisory_fires_for_unpinned_revision() -> None:
+    """model id が一致しても revision 未 pin（None）は HF head ドリフトを知らせる。
+
+    Codex #136 P2（第2ラウンド）: fixture / profile は revision 4c8334b0… の実測。
+    未 pin 実行は現行 head に解決され実測スコープを外れうるため、pin を促す。
+    """
+    advisory = profile_scope_advisory("facebook/musicgen-small", None)
+    assert advisory is not None
+    assert "--model-revision 4c8334b02c6ec4e8664a91979669a501ec497792" in advisory
+
+
+def test_profile_scope_advisory_fires_for_different_revision() -> None:
+    """model id が一致しても別 revision は実測スコープ外として知らせる。"""
+    advisory = profile_scope_advisory("facebook/musicgen-small", "deadbeef")
+    assert advisory is not None
+    assert "deadbeef" in advisory
+    assert "4c8334b0" in advisory
 
 
 def test_generator_label_follows_requested_model_id() -> None:

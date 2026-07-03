@@ -71,6 +71,7 @@ def test_packaged_configs_match_repo_configs() -> None:
         "semantic_rules.yaml",
         "domain_profiles/music.yaml",
         "device_profiles/suno.yaml",
+        "device_profiles/musicgen.yaml",
     ):
         repo_copy = (root / "config" / relative).read_text(encoding="utf-8")
         packaged_copy = (root / "src" / "svp_rpe" / "config" / relative).read_text(

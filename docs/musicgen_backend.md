@@ -1,6 +1,6 @@
 # MusicGen ローカル生成トラック — 設計 doc
 
-Status: PR A / PR C 実装完了、PR B 未着手
+Status: PR A / PR B / PR C 実装完了（PR B 実測 2026-07-03、§7）
 Scope: `facebook/musicgen-*`（transformers 経路）を第二生成器として組み込む計画
 
 ## 1. 目的と位置づけ
@@ -51,11 +51,12 @@ RPE の evidence 層に MusicGen 由来のラベルが直接書き込まれる�
 
 - **PR A（実装済み）**: runbook（`scripts/collect_musicgen_takes.py`）+
   `musicgen` extra + 本 doc。実推論は行わない・CI 安全な「器」のみ。
-- **PR B（未着手）**: `scripts/collect_musicgen_takes.py generate` の実バッチ実行 →
-  K2 型 fixture（`examples/control/k2_musicgen/fixture.json` 等）+
-  `expected_grip.json` + `config/device_profiles/musicgen.yaml`
-  （`docs/control_profile.md` の device profile 形式）。**§5 の G4
-  ライセンス目視確認完了が前提条件**。
+- **PR B（実装完了・2026-07-03 実測）**: `scripts/collect_musicgen_takes.py
+  generate` の実バッチ実行 → K2 型 fixture
+  （`examples/control/k2_musicgen/fixture.json`）+ `expected_grip.json` +
+  `config/device_profiles/musicgen.yaml`（`docs/control_profile.md` の device
+  profile 形式）。前提条件だった §5 の G4 ライセンス目視確認も完了済み。
+  実測結果は §7。
 - **PR C（実装済み・実測待ち）**: R3-1/2/3 ハーネス（§6 参照）。
 
 ## 5. License
@@ -63,16 +64,22 @@ RPE の evidence 層に MusicGen 由来のラベルが直接書き込まれる�
 - **Code**: transformers（Apache-2.0）経由の MusicGen パイプライン
   （`MusicgenForConditionalGeneration`）を採用する。`audiocraft`
   （Meta 公式リファレンス実装、MIT だが依存が重い）には依存しない。
-- **Weights**: `facebook/musicgen-small` は **VERIFY PENDING**——PR B 着手前に
-  Hugging Face モデルカード（`https://huggingface.co/facebook/musicgen-small`）
-  のライセンスバッジを目視確認し、`docs/learned_models_policy.md` §3.1 の
-  laion-clap エントリと同様の verbatim 記録（URL 付き）をここに追記すること。
-  期待値は **CC-BY-NC-4.0**（非商用条項）。もし目視確認でこの期待どおりなら、
-  MusicGen の重みは**研究計器限定**の扱いとなり、プロダクト同梱（学習済み
-  重みのリポジトリ同梱や商用配布物への組み込み）は不可。ローカル runbook で
-  HuggingFace から実行時取得するだけの現行の使い方（重みを一切同梱しない）
-  はこの制約下でも問題ない。
-- G4 確認が完了するまで、PR B（実バッチ生成 → fixture コミット）には着手しない。
+- **Weights**: `facebook/musicgen-small` — **VERIFIED**（verbatim findings,
+  verified 2026-07-03, PR B）:
+  - Hugging Face モデルカード（`https://huggingface.co/facebook/musicgen-small`）
+    の repository-level license badge は `cc-by-nc-4.0`。モデルカード本文の
+    ライセンス文は "Code is released under MIT, model weights are released
+    under CC-BY-NC 4.0."（HF API `cardData.license` も `cc-by-nc-4.0` で一致）。
+  - 確認時点のモデル repo revision:
+    `4c8334b02c6ec4e8664a91979669a501ec497792`（PR B の生成バッチはこの
+    revision に pin して実行した）。
+  - 期待値どおり **CC-BY-NC-4.0**（非商用条項）につき、MusicGen の重みは
+    **研究計器限定**の扱い——プロダクト同梱（学習済み重みのリポジトリ同梱や
+    商用配布物への組み込み）は不可。ローカル runbook で HuggingFace から
+    実行時取得するだけの現行の使い方（重みを一切同梱しない）はこの制約下でも
+    問題ない。
+- G4 確認完了（上記）により PR B（実バッチ生成 → fixture コミット）の前提条件は
+  充足済み。
 
 ## 6. R3 接続 — 実装（PR C）
 
@@ -106,11 +113,84 @@ R3（確率的往復、`docs/roadmap_goal2.md`）の計器は実装済み:
   `seed = seed_base + i` で N テイクを生成する。
 - CLI: `svprpe roundtrip-rep <composition_score.yaml> <takes_manifest.json>`
   （`docs/cli.md` 参照）。
-- **未実施**: 実バッチ生成・実測（MusicGen ローカル or Suno 手動）は本 PR の
+- ~~**未実施**: 実バッチ生成・実測（MusicGen ローカル or Suno 手動）は本 PR の
   範囲外。計器の検証はテストの決定論シンセ演奏者による合成テイクで行った
-  （honesty 維持・MusicGen 不要）。
+  （honesty 維持・MusicGen 不要）。~~ → **PR B（2026-07-03）で実測完了、§7.2**。
 
-## 7. 関連ドキュメント
+## 7. PR B 実測結果（2026-07-03）
+
+実測条件: `facebook/musicgen-small`（revision `4c8334b0…` に pin・§5）、CPU、
+12 秒クリップ、`guidance_scale=3.0`、seed は `sample_seed` / `seed_base+i` の
+決定論導出（DD-A ベストエフォート pin — 環境間の完全一致は保証しない）。
+音声はコミットせず、fixture / manifest / レポート（数値）のみコミット。
+
+### 7.1 K2 型 grip（`examples/control/k2_musicgen/expected_grip.json`）
+
+| knob | sensor | low/high | grip | class | Suno 比（#117） |
+|---|---|---|---:|---|---|
+| bpm | bpm | 90 / 170 | 0.21 | **loose** | Suno は tight 1.61（水準 90/140） |
+| brightness | spectral_centroid | dark / bright | 2.25 | **tight** | Suno は 0.86 — MusicGen の方が強い |
+
+- **bpm loose は knob_dead ではなく抽出器 halving の交絡が支配的**: low(90) 側は
+  8 本中 7 本が ~89.1（ほぼ的中）。high(170) 側は既定 prior で 86.13×4
+  （≈172.27 の半折り）/ 117.45×2（3:2 subharmonic アトラクタ）/ 172.27×1 の読みに
+  割れるが、**高 prior 再推定（`start_bpm=180`）では 8 本中 7 本が 172.27 に回復**。
+  R2（`roundtrip_corpus_screen.md`）の「高速曲の低 BPM は生成器不忠実でなく抽出器
+  halving」が**第二生成器でも再現**した。device profile には R2 closeout の規律
+  （faster-side 回復は post-hoc 緩和でありコンパイル時保証に使わない）に従い
+  素朴センサー読みの loose で記録し、halving 診断は `knob_quirks` の advisory に
+  格納した（`config/device_profiles/musicgen.yaml`）。
+- **brightness は Suno より強い tight で、絶対 dark 帯にも到達可能**: dark 指定で
+  centroid ≤1200Hz へ 3/8 到達（615.4 / 1067.4 / 398.5Hz。Suno は 0/4 で不到達）。
+  ただし分散は大きい（dark 指定で 4517Hz の外れ値 1 本）。
+- K3 直交性（非対角クロス効果）と genre bias（spectral_biases）は未計測のため
+  device profile に記録していない（空リスト＝honesty）。
+- **実測スコープは `facebook/musicgen-small` のみ**（Codex #136 P2）。
+  `device_profiles/musicgen.yaml` は backend seam（`target_backend: musicgen`）で
+  キーされ、コンパイル側は演奏モデルの粒度を知らない（Suno のバージョン粗さと
+  同じ受容済みの粒度）。medium / large 等の未計測バリアントへの defaults 転移は
+  保証しないため、モデル id / revision を知る唯一の場所である runbook が
+  `profile_scope_advisory`（`scripts/collect_musicgen_takes.py`）で
+  `--model-id` ≠ small・revision 未 pin（HF head ドリフトの可能性）・
+  別 revision のいずれでも stderr に注意喚起する（プロンプト本文・生成は
+  不変 — #128 の本文不変規律）。実測スコープ内は
+  `facebook/musicgen-small @ 4c8334b0…` の組のみ。バリアントを実測したら、
+  その時点でプロファイルのモデル別分割を再検討する。
+
+### 7.2 R3 初実測（`examples/roundtrip/musicgen_r3_rep_2026-07-03.json`）
+
+`examples/roundtrip/musicgen_r3_source.yaml`（C major / bright / 120bpm・
+`target_backend: musicgen`）から `perform` で n=5 テイクを生成し、
+`svprpe roundtrip-rep` で R3-1/2/3 を初実測（takes manifest は
+`examples/roundtrip/musicgen_r3_takes_manifest.json`、音声はローカルのみ）。
+コミット済み artifacts は **musicgen device profile 込みのコンパイル経路**
+（brightness が tight 先頭昇格・bpm が loose 末尾）で生成した本バッチ
+（Codex #136 P2 指摘により profile 導入前プロンプトの初回バッチから再生成）:
+
+| field | preserved | rate | 備考 |
+|---|---:|---:|---|
+| key | 0/5 | 0.0 | 全て calibration_disagreement（F minor×2 / F♯ minor×2 / A minor） |
+| brightness | 4/5 | 0.8 | 1 本 neutral band（sensor_blind） |
+| bpm | 3/5 | 0.6 | 117≈120×3、162×1、undetected×1（R3 選抜からは除外済みのノブ） |
+| time_signature | 5/5 | 1.0 | 4/4 |
+| active_rate_target | 0/5 | 0.0 | 全テイク 0.96–1.00 — MusicGen は壁一面の密度で鳴らす |
+| stereo_width | 0/5 | 0.0 | **MusicGen small はモノラル出力**＝5/5 sensor_blind |
+
+- **R3-3（rejection sampling = 「選択 = 制御」）の初実測**: `preserved_field_count`
+  （選抜フィールド key / brightness）は 1/1/1/1/0 で並び、`take_id` 昇順の決定論
+  タイブレークで `selected_take_id = musicgen_r3_source_00` が機械特定された。
+  同時に**選抜の限界も初観測**: 本バッチは key を保存するテイクが 1 本も存在せず
+  （0/5）、rejection sampling は「存在するものから最良を拾う」保険であって、
+  生成分布が届かない欄は救えない（verdict ではなく計器の読みの記録）。
+- **バッチ間の揺れ（記録）**: profile 導入前プロンプト（bpm 先頭・brightness 後方）の
+  初回バッチでは key 2/5・brightness 3/5 で、両フィールドを保存する唯一のテイクが
+  特定されていた。プロンプト序列の因果か生成ノイズかは n=5 では分離不能——
+  n=5 点推定はバッチ間でこの程度揺れる、という R3 の分散感の最初のデータ点。
+- 付随観測: MusicGen 出力はモノラル（`stereo_width` はセンサー盲）、
+  `active_rate_target` は常に上限貼り付き（0.90–0.95 指定に対し 0.96–1.00）。
+  楽譜からの MusicGen 演奏では両欄は現状制御不能として扱うのが妥当。
+
+## 8. 関連ドキュメント
 
 - [`controllability_poc.md`](controllability_poc.md) — DD-A、K0-K3 の grip
   計測パターン全般

@@ -151,3 +151,27 @@ def test_k2_suno_fixture_snapshot_bpm_and_brightness_transfer() -> None:
     assert by_knob["bpm"]["grip"] > 0.8
     assert by_knob["brightness"]["sensor"] == "spectral_centroid"
     assert by_knob["brightness"]["classification"] == "tight"
+
+
+K2_MUSICGEN_FIXTURE_PATH = Path("examples/control/k2_musicgen/fixture.json")
+K2_MUSICGEN_EXPECTED_PATH = Path("examples/control/k2_musicgen/expected_grip.json")
+
+
+def test_k2_musicgen_fixture_snapshot_brightness_tight_bpm_loose() -> None:
+    """K2 第二機種（MusicGen PR B, 2026-07-03 実測）: fixture→grip の決定論スナップショット。
+
+    fixture は facebook/musicgen-small ローカル生成 32 本（bpm 90/170・brightness
+    dark/bright × R=8）の抽出特徴量。brightness は Suno（0.86）より強い tight
+    （d≈2.25、絶対 dark 帯 ≤1200Hz へも 3/8 到達＝Suno 0/4 と対照的）。bpm は素朴
+    センサーで loose（d≈0.21）だが、高 prior 再推定（start_bpm=180）で high 側
+    7/8 が 172.27 に回復＝R2 の抽出器 halving が第二生成器でも再現（knob_dead では
+    ない — docs/musicgen_backend.md PR B 実測）。
+    """
+    report = analyze_fixture(load_fixture(K2_MUSICGEN_FIXTURE_PATH))
+    expected = json.loads(K2_MUSICGEN_EXPECTED_PATH.read_text(encoding="utf-8"))
+
+    assert report == expected
+    by_knob = {result["knob"]: result for result in report["results"]}
+    assert by_knob["bpm"]["classification"] == "loose"
+    assert by_knob["brightness"]["classification"] == "tight"
+    assert by_knob["brightness"]["grip"] > 2.0
