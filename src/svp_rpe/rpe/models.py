@@ -392,6 +392,22 @@ class LearnedSemanticAxis(BaseModel):
     source_model: str
 
 
+class LearnedSemanticSection(BaseModel):
+    """Per-section CLAP semantic-axis readings (the 'emotional arc').
+
+    Emitted at extraction time by the section-level CLAP sensor
+    (rpe/learned/semantic_axes.py, `svprpe extract --clap-sections`): the same
+    axis battery as `semantic_axes`, but computed against each structural
+    section's audio slice. Isolated in LearnedAudioAnnotations; MUST NOT be
+    written into SemanticRPE / PhysicalRPE — see docs/learned_models_policy.md.
+    """
+
+    section: str
+    start_sec: float
+    end_sec: float
+    axes: List[LearnedSemanticAxis]
+
+
 class LearnedAudioAnnotations(BaseModel):
     """Container for learned-model output, isolated from rule-based RPE evidence.
 
@@ -402,6 +418,10 @@ class LearnedAudioAnnotations(BaseModel):
     sensor (rpe/learned/semantic_axes.py, `svprpe extract --clap-semantic`):
     per-axis A/B `contrast_fit` readings of the source audio against a
     fixed battery of named semantic axes (config/semantic_probe_axes.yaml).
+
+    `semantic_axis_sections` is populated by the section-level counterpart
+    (`svprpe extract --clap-sections`): the same axis battery read per
+    structural section (the "emotional arc"), superset of `semantic_axes`.
     """
 
     schema_version: str = "1.1"
@@ -409,6 +429,7 @@ class LearnedAudioAnnotations(BaseModel):
     labels: List[LearnedAudioLabel] = Field(default_factory=list)
     embedding: Optional[LearnedEmbedding] = None
     semantic_axes: List[LearnedSemanticAxis] = Field(default_factory=list)
+    semantic_axis_sections: List[LearnedSemanticSection] = Field(default_factory=list)
     time_events: List[LearnedTimeEvent] = Field(default_factory=list)
     note_events: List[LearnedNoteEvent] = Field(default_factory=list)
     inference_config: dict[str, Any] = Field(default_factory=dict)
