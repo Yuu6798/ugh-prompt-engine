@@ -42,8 +42,14 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from svp_rpe.keys import weighted_key_score  # noqa: E402
+
 
 def _weighted_key_score(target: str, observed: str) -> float:
     """mir_eval 加重の key 一致スコア（∈[0,1]）。mir_eval 欠如は fail-fast。
@@ -56,21 +62,7 @@ def _weighted_key_score(target: str, observed: str) -> float:
     加重スコアが計算できないなら黙って違う目盛りに切り替えるのではなく、
     dev extra の導入を要求して止まる。
     """
-    try:
-        import mir_eval.key as mir_eval_key
-    except ModuleNotFoundError as exc:
-        raise RuntimeError(
-            "build_k3_musicgen_fixture requires mir_eval for weighted key scoring: "
-            "the committed fixture pins mir_eval-weighted key_match_baseline values, "
-            "and the exact-match fallback would silently regenerate different numbers. "
-            "Install the dev extra first: pip install -e '.[dev]'"
-        ) from exc
-    try:
-        return float(mir_eval_key.evaluate(target, observed)["Weighted Score"])
-    except ValueError:
-        # 観測 key が "unknown" 等で mir_eval が解釈できない場合は 0.0
-        # （measure_grip._key_match_score と同じ規約）。
-        return 0.0
+    return weighted_key_score(target, observed, require_mir_eval=True).score
 
 SOURCE_FIXTURE = ROOT / "examples" / "control" / "k3" / "musicgen_matrix_extract.json"
 SOURCE_FIXTURE_REL = "examples/control/k3/musicgen_matrix_extract.json"

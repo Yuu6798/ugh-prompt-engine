@@ -27,6 +27,7 @@ from svp_rpe.control import (  # noqa: E402
     grip_effect_size,
     match_rate,
 )
+from svp_rpe.keys import weighted_key_score  # noqa: E402
 
 SCHEMA_VERSION = "1.0"
 DEFAULT_FIXTURE = ROOT / "examples" / "control" / "k0" / "musicgen_rpe_fixture.json"
@@ -243,18 +244,7 @@ def _key_match_score(target: str, observed: str) -> float:
     mir_eval が無い環境では正規化済み完全一致のフォールバック
     （semantic_ci/audit.py の key needle と同方針）。
     """
-    try:
-        import mir_eval.key as mir_eval_key
-    except ModuleNotFoundError:
-        return 1.0 if _normalize_key(target) == _normalize_key(observed) else 0.0
-    try:
-        return float(mir_eval_key.evaluate(target, observed)["Weighted Score"])
-    except ValueError:
-        return 0.0
-
-
-def _normalize_key(value: str) -> str:
-    return " ".join(value.casefold().split())
+    return weighted_key_score(target, observed).score
 
 
 def _sensor_node(features: dict[str, Any], sensor: str) -> Any:
