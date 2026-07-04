@@ -339,6 +339,14 @@ def test_sidecar_path_for_replaces_json_suffix_with_embeddings_json():
     assert sidecar_path_for(Path("dir/bar.json")) == Path("dir/bar.embeddings.json")
 
 
+def test_split_fixture_rejects_duplicate_sample_ids():
+    fixture = _sample_fixture()
+    fixture["samples"][1]["sample_id"] = "s1"  # duplicate id
+
+    with pytest.raises(ValueError, match="duplicate sample_id"):
+        split_fixture(fixture, "foo.embeddings.json")
+
+
 def test_split_fixture_removes_embeddings_and_adds_sidecar_pointer():
     fixture = _sample_fixture()
 

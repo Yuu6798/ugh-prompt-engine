@@ -262,11 +262,21 @@ def split_fixture(fixture: dict[str, Any], sidecar_name: str) -> tuple[dict[str,
 
     `merge_fixture(*split_fixture(fixture, sidecar_name))` reconstructs the
     original logical `fixture` exactly (round-trip identity).
+
+    The sidecar is keyed by `sample_id`, so duplicate ids would silently collapse
+    provenance (every duplicate row would reattach the last embedding on merge).
+    Fail fast instead.
     """
     main = copy.deepcopy(fixture)
     embeddings: dict[str, Any] = {}
     for sample in main.get("samples", []):
-        embeddings[sample["sample_id"]] = sample.pop("audio_embedding")
+        sample_id = sample["sample_id"]
+        if sample_id in embeddings:
+            raise ValueError(
+                f"duplicate sample_id {sample_id!r}: the embedding sidecar is keyed by "
+                "sample_id and duplicates would silently collapse provenance"
+            )
+        embeddings[sample_id] = sample.pop("audio_embedding")
     main["embeddings_sidecar"] = sidecar_name
 
     sidecar = {
