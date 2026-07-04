@@ -47,16 +47,29 @@ _SOURCE_MODEL = "laion_clap:CLAP_Module"
 
 def _validated_axes(axes: list[dict]) -> list[dict]:
     for axis in axes:
-        if not axis.get("name"):
+        name = axis.get("name")
+        if not name:
             raise ValueError(f"semantic_probe_axes entry missing non-empty 'name': {axis!r}")
-        if not axis.get("positive"):
-            raise ValueError(
-                f"semantic_probe_axes entry {axis.get('name')!r} missing non-empty 'positive'"
-            )
-        if not axis.get("negative"):
-            raise ValueError(
-                f"semantic_probe_axes entry {axis.get('name')!r} missing non-empty 'negative'"
-            )
+        for side in ("positive", "negative"):
+            probes = axis.get(side)
+            # A bare string is truthy but `list("a bright song")` char-splits it
+            # into meaningless single-character CLAP prompts — require an
+            # explicit non-empty list/tuple of non-empty strings so a malformed
+            # battery fails loudly instead of silently corrupting readings.
+            if isinstance(probes, str) or not isinstance(probes, (list, tuple)):
+                raise ValueError(
+                    f"semantic_probe_axes entry {name!r}: {side!r} must be a list of "
+                    f"strings, got {type(probes).__name__}"
+                )
+            if not probes:
+                raise ValueError(
+                    f"semantic_probe_axes entry {name!r} missing non-empty {side!r}"
+                )
+            if not all(isinstance(probe, str) and probe for probe in probes):
+                raise ValueError(
+                    f"semantic_probe_axes entry {name!r}: {side!r} must contain only "
+                    "non-empty strings"
+                )
     return axes
 
 
@@ -109,8 +122,9 @@ def extract_clap_semantic_axes(
     audio_vec = annotations.embedding.vector
 
     axes_config = load_config("semantic_probe_axes")
-    if axes is None:
-        axes = _validated_axes(axes_config.get("axes", []))
+    # Validate both the default battery AND caller-supplied custom axes, so the
+    # char-split footgun (scalar probe strings) can't reach embedding either way.
+    axes = _validated_axes(axes if axes is not None else axes_config.get("axes", []))
 
     semantic_axes: list[LearnedSemanticAxis] = []
     for axis in axes:
