@@ -184,9 +184,13 @@ fixture）に対し、battery の probe テキストだけを埋め込み直し�
   最大乖離はどちらも **1e-6**（6 桁丸めの 1 ulp）。→ 決定論契約は
   **同一環境内**で読むもの。マシン間差 ≤1e-6 は計測対象の効果
   （~1e-1）より 4 桁小さく、計器の用途には影響しない。
-- チェックポイント整合: 読む前に sha256 が fixture の
-  `model.checkpoint_sha256` と一致することを確認する
-  （CLI は `--clap-checkpoint` / `--clap-amodel` でピンできる）。
+- チェックポイント整合: `scripts/calibrate_semantic_axes.py` が
+  fixture の `model.checkpoint_sha256` / `model.amodel` ピンと
+  `--checkpoint` / `--amodel` を自動照合し、不一致・未指定は
+  モデルロード前に fail-fast する（テキスト probe と保存済み audio
+  embedding が同一埋め込み空間であることの強制）。CLI 側（抽出時の
+  意味層センサー）は従来どおり `--clap-checkpoint` / `--clap-amodel`
+  でピンする。
 
 ### 有効帯域（素材依存性）
 

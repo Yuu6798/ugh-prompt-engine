@@ -19,6 +19,18 @@ import scripts.calibrate_semantic_axes as calibrate
 
 _EMBED_DIM = 512
 
+# The real fixtures under examples/learned/clap/ are pinned to this
+# checkpoint sha256 / amodel (see model.checkpoint_sha256 / model.amodel in
+# {lyrics_vocal_contrast,musicgen_k2_contrast}_fixture.json). Tests that
+# exercise the happy path must satisfy this pin, so `_checkpoint_sha256` is
+# monkeypatched to return it for the fake checkpoint path used below.
+_PINNED_SHA256 = "fae3e9c087f2909c28a09dc31c8dfcdacbc42ba44c70e972b58c1bd1caf6dedd"
+_PINNED_AMODEL = "HTSAT-base"
+
+
+def _fake_checkpoint_sha256(checkpoint: Optional[str]) -> Optional[str]:
+    return _PINNED_SHA256 if checkpoint else None
+
 
 def _hash_vector(text: str, dim: int = _EMBED_DIM) -> list[float]:
     """Deterministic, distinct-per-text unit vector derived from a SHA-256 hash.
@@ -55,6 +67,7 @@ def _fake_load_clap_model(checkpoint: Optional[str] = None, amodel: Optional[str
 def _install_fake_clap_calls(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(calibrate, "load_clap_model", _fake_load_clap_model)
     monkeypatch.setattr(calibrate, "embed_texts", _fake_embed_texts)
+    monkeypatch.setattr(calibrate, "_checkpoint_sha256", _fake_checkpoint_sha256)
 
 
 AXIS_NAMES = {"vocal_presence", "brightness", "energy", "acousticness", "warmth"}
@@ -202,9 +215,19 @@ def test_main_reports_install_hint_when_laion_clap_unavailable(monkeypatch, tmp_
         raise calibrate.LearnedModelUnavailable("laion_clap is not installed")
 
     monkeypatch.setattr(calibrate, "load_clap_model", _raise_unavailable)
+    monkeypatch.setattr(calibrate, "_checkpoint_sha256", _fake_checkpoint_sha256)
     output_path = tmp_path / "calibration.yaml"
 
-    exit_code = calibrate.main(["--output", str(output_path)])
+    exit_code = calibrate.main(
+        [
+            "--checkpoint",
+            "music_audioset_epoch_15_esc_90.14.pt",
+            "--amodel",
+            _PINNED_AMODEL,
+            "--output",
+            str(output_path),
+        ]
+    )
 
     assert exit_code == 1
     assert "laion_clap" in capsys.readouterr().err
@@ -214,7 +237,84 @@ def test_main_reports_install_hint_when_laion_clap_unavailable(monkeypatch, tmp_
 def test_build_calibration_axes_config_version_matches_real_config(monkeypatch, tmp_path):
     _install_fake_clap_calls(monkeypatch)
 
-    payload = calibrate.build_calibration(checkpoint=None, amodel=None)
+    payload = calibrate.build_calibration(
+        checkpoint="music_audioset_epoch_15_esc_90.14.pt", amodel=_PINNED_AMODEL
+    )
 
     assert payload["axes_config_version"] == "1.0"
-    assert "checkpoint" not in payload["model"] or payload["model"]["checkpoint"] is None
+    assert payload["model"]["checkpoint"] == "music_audioset_epoch_15_esc_90.14.pt"
+
+
+def test_build_calibration_rejects_mismatched_checkpoint_sha(monkeypatch):
+    monkeypatch.setattr(calibrate, "load_clap_model", _fake_load_clap_model)
+    monkeypatch.setattr(calibrate, "embed_texts", _fake_embed_texts)
+    monkeypatch.setattr(calibrate, "_checkpoint_sha256", lambda checkpoint: "deadbeef" * 8)
+
+    with pytest.raises(ValueError, match="embedding-space mismatch"):
+        calibrate.build_calibration(checkpoint="other_checkpoint.pt", amodel=_PINNED_AMODEL)
+
+
+def test_main_rejects_mismatched_checkpoint_sha(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(calibrate, "load_clap_model", _fake_load_clap_model)
+    monkeypatch.setattr(calibrate, "embed_texts", _fake_embed_texts)
+    monkeypatch.setattr(calibrate, "_checkpoint_sha256", lambda checkpoint: "deadbeef" * 8)
+    output_path = tmp_path / "calibration.yaml"
+
+    exit_code = calibrate.main(
+        [
+            "--checkpoint",
+            "other_checkpoint.pt",
+            "--amodel",
+            _PINNED_AMODEL,
+            "--output",
+            str(output_path),
+        ]
+    )
+
+    assert exit_code == 1
+    stderr = capsys.readouterr().err
+    assert "embedding-space mismatch" in stderr
+    assert _PINNED_SHA256 in stderr
+    assert not output_path.exists()
+
+
+def test_main_rejects_omitted_checkpoint(monkeypatch, tmp_path, capsys):
+    _install_fake_clap_calls(monkeypatch)
+    output_path = tmp_path / "calibration.yaml"
+
+    exit_code = calibrate.main(
+        [
+            "--amodel",
+            _PINNED_AMODEL,
+            "--output",
+            str(output_path),
+        ]
+    )
+
+    assert exit_code == 1
+    stderr = capsys.readouterr().err
+    assert "embedding-space mismatch" in stderr
+    assert _PINNED_SHA256 in stderr
+    assert not output_path.exists()
+
+
+def test_main_rejects_mismatched_amodel(monkeypatch, tmp_path, capsys):
+    _install_fake_clap_calls(monkeypatch)
+    output_path = tmp_path / "calibration.yaml"
+
+    exit_code = calibrate.main(
+        [
+            "--checkpoint",
+            "music_audioset_epoch_15_esc_90.14.pt",
+            "--amodel",
+            "HTSAT-tiny",
+            "--output",
+            str(output_path),
+        ]
+    )
+
+    assert exit_code == 1
+    stderr = capsys.readouterr().err
+    assert "embedding-space mismatch" in stderr
+    assert _PINNED_AMODEL in stderr
+    assert not output_path.exists()

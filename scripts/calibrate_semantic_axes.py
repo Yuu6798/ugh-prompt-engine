@@ -19,6 +19,13 @@ cheap to re-run. `laion_clap` is only imported inside `load_clap_model`
 (via `clap_adapter`), never at this module's import time, so importing
 this script (e.g. from tests) never requires the `semantic-embed` extra.
 
+Text probes and stored audio embeddings must share the same embedding
+space: before loading the CLAP model, `build_calibration` fails fast
+(`ValueError`) unless `--checkpoint`/`--amodel` match every loaded
+fixture's pinned `model.checkpoint_sha256` / `model.amodel` exactly — a
+rerun with a different or omitted checkpoint refuses to silently write
+mixed-embedding-space calibration values.
+
 What it measures:
 
 1. `probe_determinism_same_run` — embedding every axis's probe texts
@@ -116,6 +123,38 @@ def _package_version(name: str) -> Optional[str]:
         return _pkg_metadata.version(name)
     except _pkg_metadata.PackageNotFoundError:
         return None
+
+
+def _validate_embedding_space_pin(
+    fixtures: dict[str, dict[str, Any]], *, checkpoint: Optional[str], amodel: Optional[str]
+) -> str:
+    """Fail fast unless `checkpoint`/`amodel` match every fixture's model pin.
+
+    Text probes and stored audio embeddings must live in the same embedding
+    space, so calibration refuses to run cross-model. Returns the computed
+    checkpoint sha256 (already validated) so callers can reuse it without
+    hashing the checkpoint file a second time.
+
+    Raises
+    ------
+    ValueError
+        If `checkpoint` is missing/not a local file, or its sha256 or
+        `amodel` does not match a fixture's pinned `model` block.
+    """
+    computed_sha256 = _checkpoint_sha256(checkpoint)
+    for name, fixture in fixtures.items():
+        expected_sha256 = fixture["model"]["checkpoint_sha256"]
+        expected_amodel = fixture["model"]["amodel"]
+        if computed_sha256 != expected_sha256 or amodel != expected_amodel:
+            raise ValueError(
+                f"embedding-space mismatch for fixture {name!r}: text probes must be "
+                f"embedded in the same embedding space as the stored audio embeddings, "
+                f"so calibration refuses to run cross-model. Fixture is pinned to "
+                f"checkpoint_sha256={expected_sha256!r} amodel={expected_amodel!r}; "
+                f"got --checkpoint={checkpoint!r} (sha256={computed_sha256!r}) "
+                f"--amodel={amodel!r}. Pass the matching --checkpoint/--amodel."
+            )
+    return computed_sha256
 
 
 def load_fixtures() -> dict[str, dict[str, Any]]:
@@ -332,6 +371,10 @@ def build_calibration(
 
     Raises
     ------
+    ValueError
+        If `checkpoint`/`amodel` do not match every fixture's pinned
+        `model` block (embedding-space mismatch; see
+        `_validate_embedding_space_pin`).
     LearnedModelUnavailable
         If `laion_clap` is not installed (propagated from `load_clap_model`).
     """
@@ -340,6 +383,7 @@ def build_calibration(
     axes_config = load_config("semantic_probe_axes")
 
     fixtures = load_fixtures()
+    checkpoint_sha256 = _validate_embedding_space_pin(fixtures, checkpoint=checkpoint, amodel=amodel)
     model = load_clap_model(checkpoint, amodel)
 
     axis_embeddings, probe_determinism = embed_axis_battery(axes, model)
@@ -357,7 +401,7 @@ def build_calibration(
     payload["model"] = {
         "name": "laion_clap",
         "checkpoint": Path(checkpoint).name if checkpoint else None,
-        "checkpoint_sha256": _checkpoint_sha256(checkpoint),
+        "checkpoint_sha256": checkpoint_sha256,
         "amodel": amodel,
         "laion_clap_version": _package_version("laion_clap"),
         "torch_version": _package_version("torch"),
@@ -431,7 +475,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         payload = build_calibration(
             checkpoint=args.checkpoint, amodel=args.amodel, run_date=args.run_date
         )
-    except LearnedModelUnavailable as exc:
+    except (ValueError, LearnedModelUnavailable) as exc:
         print(str(exc), file=sys.stderr)
         return 1
 
