@@ -1,0 +1,53 @@
+name: Nightly (extras)
+
+# 通常 CI（ci.yml）は DD-A 契約に従い torch なし・`.[dev]` のみで回す（毎 push を軽く
+# 速く保つため）。その結果、optional extra を入れたときだけ有効になる「本物の adapter
+# コード経路」は通常 CI では一度も実行されない — adapter テストは fake backend
+# （`sys.modules[...]` monkeypatch）で密閉されており、実重み DL も実推論もしないが、
+# 本物パッケージが *入っている* と version/metadata が fake テストへ漏れて割れる型の
+# 回帰が過去に発生した（#138 CLAP / #139 basic_pitch・panns・beat_this ×3、いずれも
+# 事後にローカルで踏んで修正）。
+#
+# この nightly ジョブは同じテストスイートを *重い extra を入れた状態で* 1 日 1 回回し、
+# その環境依存回帰を誰かが踏む前にプロアクティブに検出する安全網。install-only
+# （重み DL・実推論なし）— テストは fake backend なので extra を入れるだけで実行される。
+# push はブロックしない（nightly の性質上できない）。失敗は Actions タブで可視化する。
+
+on:
+  schedule:
+    - cron: "0 18 * * *"  # 03:00 JST 毎日（低負荷帯）
+  workflow_dispatch: {}
+
+concurrency:
+  group: nightly-extras
+  cancel-in-progress: true
+
+jobs:
+  test-extras:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      # 重い extra を全部入れる。`pitch`(basic-pitch) は pyproject の
+      # `python_version < '3.12'` マーカーにより 3.12 では自動的に skip される
+      # （3.12 でもエラーにならず、単に basic-pitch が入らない）。
+      - name: Install dependencies with heavy extras
+        run: pip install -e ".[dev,semantic-embed,beat,learned-tags,pitch,musicgen]"
+
+      - name: Lint
+        run: ruff check .
+
+      # 通常 CI と同一コマンド（slow 含む全件）を、extra 導入環境で回す。
+      - name: Test (extras installed)
+        run: pytest -q --tb=short
