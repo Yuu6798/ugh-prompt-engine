@@ -39,6 +39,7 @@ from scripts.compose_e2e_demo import (  # noqa: E402
 )
 from svp_rpe.compose import load_composition_score  # noqa: E402
 from svp_rpe.compose.models import CompositionScore  # noqa: E402
+from svp_rpe.keys import weighted_key_score  # noqa: E402
 
 
 def _weighted_key_score(target: str, observed: str) -> float:
@@ -53,21 +54,7 @@ def _weighted_key_score(target: str, observed: str) -> float:
     加重スコアが計算できないなら黙って違う目盛りに切り替えるのではなく、
     dev extra の導入を要求して止まる。
     """
-    try:
-        import mir_eval.key as mir_eval_key
-    except ModuleNotFoundError as exc:
-        raise RuntimeError(
-            "build_k3_fixture requires mir_eval for weighted key scoring: "
-            "the committed fixture pins mir_eval-weighted key_match_baseline values, "
-            "and the exact-match fallback would silently regenerate different numbers. "
-            "Install the dev extra first: pip install -e '.[dev]'"
-        ) from exc
-    try:
-        return float(mir_eval_key.evaluate(target, observed)["Weighted Score"])
-    except ValueError:
-        # 観測 key が "unknown" 等で mir_eval が解釈できない場合は 0.0
-        # （measure_grip._key_match_score と同じ規約）。
-        return 0.0
+    return weighted_key_score(target, observed, require_mir_eval=True).score
 
 FIXTURE_SCHEMA_VERSION = "1.0"
 FIXTURE_ID = "k3_synth_performer_matrix_rpe_features"

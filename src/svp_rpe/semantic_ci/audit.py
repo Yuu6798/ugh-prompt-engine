@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from svp_rpe.eval.anchor_matcher import grv_anchor_match
 from svp_rpe.eval.delta_e_alignment import delta_e_profile_alignment
 from svp_rpe.eval.semantic_similarity import por_lexical_similarity
+from svp_rpe.keys import weighted_key_score
 from svp_rpe.rpe.models import RPEBundle
 from svp_rpe.semantic_ci.models import ObservedRPE
 from svp_rpe.semantic_ci.observed_adapter import rpe_bundle_to_observed
@@ -241,29 +242,9 @@ def _key_needle(target: Any, observed: ObservedRPE) -> AuditNeedle:
             sensor="mir_eval.key.evaluate",
             note="sensor missing",
         )
-    try:
-        import mir_eval.key as mir_eval_key
-    except ModuleNotFoundError:
-        score = (
-            1.0
-            if _normalize_key_for_exact_match(target_key) == _normalize_key_for_exact_match(observed_key)
-            else 0.0
-        )
-        return AuditNeedle(
-            name="key",
-            layer="physical",
-            target=target_key,
-            observed=observed_key,
-            deviation=_round_score(1.0 - score),
-            score=score,
-            sensor="exact_key_match",
-            note="mir_eval unavailable; exact match fallback",
-        )
-    try:
-        weighted = float(mir_eval_key.evaluate(target_key, observed_key)["Weighted Score"])
-    except ValueError:
-        weighted = 0.0
-    score = _round_score(weighted)
+    result = weighted_key_score(target_key, observed_key)
+    score = _round_score(result.score)
+    note = "mir_eval unavailable; exact match fallback" if result.sensor == "exact_key_match" else None
     return AuditNeedle(
         name="key",
         layer="physical",
@@ -271,7 +252,8 @@ def _key_needle(target: Any, observed: ObservedRPE) -> AuditNeedle:
         observed=observed_key,
         deviation=_round_score(1.0 - score),
         score=score,
-        sensor="mir_eval.key.evaluate",
+        sensor=result.sensor,
+        note=note,
     )
 
 
@@ -560,10 +542,6 @@ def _text_metric_without_transcribe_todo(value: Any) -> Optional[str]:
     if is_todo_sentinel(value):
         return None
     return _text_metric(value)
-
-
-def _normalize_key_for_exact_match(value: str) -> str:
-    return " ".join(value.casefold().split())
 
 
 def _numeric_metric(value: Any) -> Optional[float]:
