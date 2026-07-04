@@ -68,10 +68,20 @@ def _validated_axes(axes: list[dict]) -> list[dict]:
             "semantic_probe_axes must define a non-empty 'axes' list "
             f"(got {type(axes).__name__})"
         )
+    seen_names: set[str] = set()
     for axis in axes:
         name = axis.get("name")
         if not name:
             raise ValueError(f"semantic_probe_axes entry missing non-empty 'name': {axis!r}")
+        # Duplicate axis names are ambiguous: the section sensor keys probe
+        # embeddings by name (a duplicate would clobber the earlier entry's
+        # probes), and the whole-track sensor would emit two identically-named
+        # LearnedSemanticAxis rows. Reject at validation so both sensors are safe.
+        if name in seen_names:
+            raise ValueError(
+                f"semantic_probe_axes has a duplicate axis name {name!r}; names must be unique"
+            )
+        seen_names.add(name)
         for side in ("positive", "negative"):
             probes = axis.get(side)
             # A bare string is truthy but `list("a bright song")` char-splits it
