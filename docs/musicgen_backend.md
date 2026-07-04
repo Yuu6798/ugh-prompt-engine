@@ -236,6 +236,8 @@ PR2b の CLAP 学習センサー（`contrast_fit`、#131/#132 と同一 checkpoi
 §7.1 の K2 バッチ 32 テイクへ適用した（manifest / fixture は
 `examples/learned/clap/musicgen_k2_contrast_*`。音源は cache materialize —
 本バッチは同一環境で決定論再生成可能な点が PR2b-2 の Drive 律速と異なる）。
+サンプルごとの 512 次元 `audio_embedding` は `musicgen_k2_contrast_fixture.embeddings.json`
+サイドカーに退避済み（provenance 保持、`cosines`/`contrast_fit` は本体 fixture に pin）。
 
 | knob | ルール版 grip | CLAP 学習版 grip | 読み |
 |---|---|---|---|

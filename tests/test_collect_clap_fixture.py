@@ -18,7 +18,15 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from scripts.collect_clap_fixture import collect_fixture, main
+from scripts.collect_clap_fixture import (
+    collect_fixture,
+    load_fixture,
+    main,
+    merge_fixture,
+    sidecar_path_for,
+    split_fixture,
+    write_fixture,
+)
 
 
 def _write_wav(path: Path, *, seconds: float = 0.05, sample_rate: int = 48000) -> None:
@@ -82,7 +90,7 @@ def test_collect_fixture_writes_expected_keys(monkeypatch, tmp_path):
 
     fixture = collect_fixture(manifest_path)
 
-    assert fixture["schema_version"] == "1.0"
+    assert fixture["schema_version"] == "1.1"
     assert fixture["generator"] == "collect_clap_fixture.py"
     assert fixture["manifest"] == "manifest.json"
     assert len(fixture["samples"]) == 1
@@ -157,6 +165,9 @@ def test_main_amodel_cli_arg_reaches_model_info_block(monkeypatch, tmp_path):
     assert captured["init_kwargs"] == {"enable_fusion": False, "amodel": "HTSAT-base"}
     written = json.loads(output_path.read_text(encoding="utf-8"))
     assert written["model"]["amodel"] == "HTSAT-base"
+    assert "audio_embedding" not in written["samples"][0]
+    assert sidecar_path_for(output_path).exists()
+    assert load_fixture(output_path)["model"]["amodel"] == "HTSAT-base"
 
 
 def test_main_writes_output_file(monkeypatch, tmp_path):
@@ -171,6 +182,16 @@ def test_main_writes_output_file(monkeypatch, tmp_path):
     assert exit_code == 0
     written = json.loads(output_path.read_text(encoding="utf-8"))
     assert written["samples"][0]["sample_id"] == "s1"
+    assert "audio_embedding" not in written["samples"][0]
+    assert written["embeddings_sidecar"] == sidecar_path_for(output_path).name
+
+    sidecar_path = sidecar_path_for(output_path)
+    assert sidecar_path.exists()
+    sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    assert sidecar["embeddings"]["s1"] == pytest.approx([0.6, 0.8])
+
+    reloaded = load_fixture(output_path)
+    assert reloaded["samples"][0]["audio_embedding"] == pytest.approx([0.6, 0.8])
 
 
 def test_main_reports_install_hint_when_unavailable(monkeypatch, tmp_path, capsys):
@@ -293,3 +314,83 @@ def test_passthrough_cannot_override_reserved_output_keys(monkeypatch, tmp_path)
     sample = fixture["samples"][0]
     assert sample["audio_embedding"] == pytest.approx([0.6, 0.8])
     assert isinstance(sample["cosines"], dict)
+
+
+# ---------------------------------------------------------------------------
+# CLAP embedding sidecar: split/merge round-trip + file IO
+# ---------------------------------------------------------------------------
+
+
+def _sample_fixture() -> dict:
+    return {
+        "schema_version": "1.1",
+        "generator": "collect_clap_fixture.py",
+        "manifest": "manifest.json",
+        "model": {"name": "laion_clap", "checkpoint": None, "checkpoint_sha256": None},
+        "samples": [
+            {"sample_id": "s1", "audio_embedding": [0.6, 0.8], "cosines": {"bright": 0.6}},
+            {"sample_id": "s2", "audio_embedding": [0.0, 1.0], "cosines": {"bright": 0.0}},
+        ],
+    }
+
+
+def test_sidecar_path_for_replaces_json_suffix_with_embeddings_json():
+    assert sidecar_path_for(Path("foo.json")) == Path("foo.embeddings.json")
+    assert sidecar_path_for(Path("dir/bar.json")) == Path("dir/bar.embeddings.json")
+
+
+def test_split_fixture_rejects_duplicate_sample_ids():
+    fixture = _sample_fixture()
+    fixture["samples"][1]["sample_id"] = "s1"  # duplicate id
+
+    with pytest.raises(ValueError, match="duplicate sample_id"):
+        split_fixture(fixture, "foo.embeddings.json")
+
+
+def test_split_fixture_removes_embeddings_and_adds_sidecar_pointer():
+    fixture = _sample_fixture()
+
+    main_fixture, sidecar = split_fixture(fixture, "foo.embeddings.json")
+
+    assert "audio_embedding" not in main_fixture["samples"][0]
+    assert "audio_embedding" not in main_fixture["samples"][1]
+    assert main_fixture["embeddings_sidecar"] == "foo.embeddings.json"
+    assert sidecar["schema_version"] == "1.0"
+    assert sidecar["embeddings"] == {"s1": [0.6, 0.8], "s2": [0.0, 1.0]}
+    # split_fixture is pure and does not mutate its input.
+    assert "audio_embedding" in fixture["samples"][0]
+
+
+def test_merge_fixture_is_the_inverse_of_split_fixture():
+    fixture = _sample_fixture()
+
+    main_fixture, sidecar = split_fixture(fixture, "foo.embeddings.json")
+    merged = merge_fixture(main_fixture, sidecar)
+
+    assert merged == fixture
+
+
+def test_write_fixture_and_load_fixture_round_trip(tmp_path):
+    fixture = _sample_fixture()
+    main_path = tmp_path / "foo.json"
+
+    write_fixture(fixture, main_path)
+
+    assert main_path.exists()
+    sidecar_path = sidecar_path_for(main_path)
+    assert sidecar_path.exists()
+    assert sidecar_path.name == "foo.embeddings.json"
+
+    written_main = json.loads(main_path.read_text(encoding="utf-8"))
+    assert "audio_embedding" not in written_main["samples"][0]
+    assert written_main["embeddings_sidecar"] == "foo.embeddings.json"
+    # Formatting matches the repo's existing convention: indent=2 + trailing newline.
+    assert main_path.read_text(encoding="utf-8").endswith("}\n")
+    assert sidecar_path.read_text(encoding="utf-8").endswith("}\n")
+
+    written_sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    assert written_sidecar["of_fixture"] == "foo.json"
+    assert written_sidecar["embeddings"]["s1"] == pytest.approx([0.6, 0.8])
+
+    loaded = load_fixture(main_path)
+    assert loaded == fixture
