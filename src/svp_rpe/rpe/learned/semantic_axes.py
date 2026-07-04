@@ -46,6 +46,15 @@ _SOURCE_MODEL = "laion_clap:CLAP_Module"
 
 
 def _validated_axes(axes: list[dict]) -> list[dict]:
+    # An empty / missing / non-list battery (config omits `axes` or sets
+    # `axes: []`/`axes:`) would otherwise pass silently and produce zero
+    # LearnedSemanticAxis readings (`n_semantic_axes=0`) — a useless CLAP
+    # sensor output that corrupts experiments. Fail loudly instead.
+    if not isinstance(axes, (list, tuple)) or not axes:
+        raise ValueError(
+            "semantic_probe_axes must define a non-empty 'axes' list "
+            f"(got {type(axes).__name__})"
+        )
     for axis in axes:
         name = axis.get("name")
         if not name:
@@ -115,16 +124,18 @@ def extract_clap_semantic_axes(
         If `laion_clap` is installed but its API does not match the
         expected contract.
     """
+    axes_config = load_config("semantic_probe_axes")
+    # Resolve + validate the axis battery BEFORE loading the model / embedding
+    # audio, so a malformed battery (scalar probe strings, empty/missing
+    # `axes`) fails fast instead of after expensive inference. Validates both
+    # the default battery AND caller-supplied custom axes.
+    axes = _validated_axes(axes if axes is not None else axes_config.get("axes", []))
+
     clap_model = model if model is not None else load_clap_model(checkpoint, amodel)
     annotations = embed_audio_file(
         audio_path, model=clap_model, checkpoint=checkpoint, amodel=amodel
     )
     audio_vec = annotations.embedding.vector
-
-    axes_config = load_config("semantic_probe_axes")
-    # Validate both the default battery AND caller-supplied custom axes, so the
-    # char-split footgun (scalar probe strings) can't reach embedding either way.
-    axes = _validated_axes(axes if axes is not None else axes_config.get("axes", []))
 
     semantic_axes: list[LearnedSemanticAxis] = []
     for axis in axes:

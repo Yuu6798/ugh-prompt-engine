@@ -118,6 +118,18 @@ class TestExtractClapSemanticAxes:
                 axes=[{"name": "x", "positive": "scalar string", "negative": ["y"]}],
             )
 
+    def test_empty_custom_axes_rejected_before_inference(self, monkeypatch, tmp_path):
+        # An empty battery fails fast (before model load / audio embed), so no
+        # fake CLAP is needed here — validation happens first (Codex P2).
+        _force_clap_unavailable(monkeypatch)
+
+        from svp_rpe.rpe.learned.semantic_axes import extract_clap_semantic_axes
+
+        audio = tmp_path / "a.wav"
+        _write_wav(audio, seconds=0.05)
+        with pytest.raises(ValueError, match="non-empty 'axes'"):
+            extract_clap_semantic_axes(str(audio), axes=[])
+
     def test_inference_config_augmented_with_axes_metadata(self, monkeypatch, tmp_path):
         _install_fake_clap(monkeypatch, audio_vector=[3.0, 4.0], text_vectors=_VOCAL_TEXT_VECTORS)
 
@@ -187,6 +199,16 @@ class TestLoadSemanticAxes:
             lambda name: {"axes": [{"name": "x", "positive": ["ok", 3], "negative": ["dark"]}]},
         )
         with pytest.raises(ValueError, match="positive"):
+            semantic_axes_module.load_semantic_axes()
+
+    @pytest.mark.parametrize("config", [{"axes": []}, {}, {"axes": None}])
+    def test_rejects_empty_or_missing_battery(self, monkeypatch, config):
+        # A config that omits `axes` or sets it empty/null must fail loudly
+        # rather than produce a zero-axis (useless) CLAP sensor output (Codex P2).
+        import svp_rpe.rpe.learned.semantic_axes as semantic_axes_module
+
+        monkeypatch.setattr(semantic_axes_module, "load_config", lambda name: config)
+        with pytest.raises(ValueError, match="non-empty 'axes'"):
             semantic_axes_module.load_semantic_axes()
 
 
