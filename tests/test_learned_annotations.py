@@ -178,10 +178,11 @@ class TestLearnedEmbedding:
 class TestLearnedAudioAnnotations:
     def test_default_empty_construction(self):
         ann = LearnedAudioAnnotations()
-        assert ann.schema_version == "1.0"
+        assert ann.schema_version == "1.1"
         assert ann.enabled_models == []
         assert ann.labels == []
         assert ann.embedding is None
+        assert ann.semantic_axes == []
         assert ann.inference_config == {}
         assert ann.license_metadata == {}
         assert "estimates" in ann.estimation_disclaimer

@@ -58,6 +58,15 @@ def extract(
     separate: SeparateOption = False,
     separation_model: SeparationModelOption = DEFAULT_SEPARATION_MODEL,
     separation_device: SeparationDeviceOption = DEFAULT_SEPARATION_DEVICE,
+    clap_semantic: bool = typer.Option(
+        False,
+        "--clap-semantic",
+        help=(
+            "Read source audio's semantic axes with CLAP at extraction "
+            "(requires the semantic-embed extra); attaches isolated "
+            "LearnedAudioAnnotations.semantic_axes."
+        ),
+    ),
 ) -> None:
     """Extract RPE from audio file."""
     from svp_rpe.rpe.extractor import extract_rpe_from_file
@@ -70,6 +79,16 @@ def extract(
         separation_model=separation_model,
         separation_device=separation_device,
     )
+    if clap_semantic:
+        from svp_rpe.rpe.learned import LearnedModelUnavailable, attach_learned_annotations
+        from svp_rpe.rpe.learned.semantic_axes import extract_clap_semantic_axes
+
+        try:
+            annotations = extract_clap_semantic_axes(audio)
+        except LearnedModelUnavailable as exc:
+            console.print(f"[yellow]{exc}[/yellow]")
+            raise typer.Exit(code=1)
+        bundle = attach_learned_annotations(bundle, annotations)
     result = bundle.model_dump()
     result_json = json.dumps(result, ensure_ascii=False, indent=2)
 
