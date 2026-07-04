@@ -39,11 +39,22 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
 
-      # 重い extra を全部入れる。`pitch`(basic-pitch) は pyproject の
-      # `python_version < '3.12'` マーカーにより 3.12 では自動的に skip される
-      # （3.12 でもエラーにならず、単に basic-pitch が入らない）。
-      - name: Install dependencies with heavy extras
-        run: pip install -e ".[dev,semantic-embed,beat,learned-tags,pitch,musicgen]"
+      # コア extra（install が安定しているもの）は fatal で入れる。
+      # `pitch`(basic-pitch) は pyproject の `python_version < '3.12'` マーカーにより
+      # 3.12 では自動的に skip される（3.12 でもエラーにならず basic-pitch が入らない）。
+      - name: Install dependencies with core extras
+        run: pip install -e ".[dev,beat,learned-tags,pitch,musicgen]"
+
+      # semantic-embed(laion-clap) は best-effort。過去に py3.11 で progressbar/wget の
+      # ビルドに失敗した記録があり（.claude/memory/2026-07-03.md）、ここで fatal にすると
+      # 安全網が永久に赤くなり信号として無視されてしまう。continue-on-error でジョブ全体は
+      # 緑を保ちつつ、この install の成否は Actions UI 上でステップ単位で可視化する
+      # （失敗時 CLAP adapter テストは fake backend にフォールバックするだけで誤緑は出ない）。
+      # clean runner で安定 install できることを初回 run のログで確認できたら上の fatal
+      # ステップへ昇格する。
+      - name: Install semantic-embed extra (CLAP, best-effort)
+        continue-on-error: true
+        run: pip install -e ".[semantic-embed]"
 
       - name: Lint
         run: ruff check .
