@@ -11,6 +11,7 @@ from statistics import mean
 
 import pytest
 
+from scripts.collect_clap_fixture import load_fixture
 from svp_rpe.rpe.learned.similarity import (
     contrast_fit,
     cosine_similarity,
@@ -86,9 +87,9 @@ def test_real_clap_fixture_cosines_and_contrast_are_self_consistent():
         / "clap"
         / "lyrics_vocal_contrast_fixture.json"
     )
-    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    fixture = load_fixture(fixture_path)
 
-    assert fixture["schema_version"] == "1.0"
+    assert fixture["schema_version"] == "1.1"
     assert fixture["model"]["name"] == "laion_clap"
     assert fixture["manifest"] == "examples/learned/clap/lyrics_vocal_contrast_manifest.yaml"
     assert fixture["model"]["checkpoint"] == "music_audioset_epoch_15_esc_90.14.pt"
@@ -218,7 +219,7 @@ def test_musicgen_k2_clap_fixture_learned_grip_direction_and_magnitude():
     )
     fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
 
-    assert fixture["schema_version"] == "1.0"
+    assert fixture["schema_version"] == "1.1"
     assert fixture["model"]["checkpoint"] == "music_audioset_epoch_15_esc_90.14.pt"
     # #131 と同一 checkpoint（G4 済み cc0-1.0）に pin されていること
     assert fixture["model"]["checkpoint_sha256"] == (
