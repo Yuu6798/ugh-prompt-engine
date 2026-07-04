@@ -90,6 +90,35 @@ class TestTranscribeCli:
         assert score.semantic.grv.primary == TODO_AUTHOR_INPUT
         assert score.semantic.delta_e.overall == TODO_AUTHOR_INPUT
 
+    def test_clap_semantic_flag_forwards_checkpoint_and_amodel(self, monkeypatch, tmp_path):
+        captured = _install_fake_clap(monkeypatch, text_vectors=_VOCAL_TEXT_VECTORS)
+        monkeypatch.setattr(
+            extractor, "extract_rpe_from_file", lambda path, **kwargs: _make_bundle()
+        )
+
+        audio = tmp_path / "a.wav"
+        _write_wav(audio, seconds=0.05)
+        output = tmp_path / "score.yaml"
+
+        result = runner.invoke(
+            app,
+            [
+                "transcribe",
+                str(audio),
+                "--clap-semantic",
+                "--clap-checkpoint",
+                "ckpt.pt",
+                "--clap-amodel",
+                "HTSAT-base",
+                "-o",
+                str(output),
+            ],
+        )
+
+        assert result.exit_code == 0, result.stdout
+        assert captured["checkpoint"] == "ckpt.pt"
+        assert captured["init_kwargs"] == {"enable_fusion": False, "amodel": "HTSAT-base"}
+
     def test_without_flag_has_no_advisory(self, monkeypatch, tmp_path):
         monkeypatch.setattr(
             extractor, "extract_rpe_from_file", lambda path, **kwargs: _make_bundle()

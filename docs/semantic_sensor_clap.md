@@ -147,6 +147,75 @@ random-crop パスを回避）。`semantic_axes.py` はその上に numpy の
 導入しない。`contrast_fit` は小数点 6 桁に丸める
 （`scripts/collect_clap_fixture.py` の採取スクリプトと同じ慣習）。
 
+## 軸校正（2026-07-04 実測）
+
+fixture provenance のピン済みチェックポイント
+（`music_audioset_epoch_15_esc_90.14.pt`, sha256 `fae3e9c0…`,
+`amodel=HTSAT-base`, laion-clap 1.1.7）で 5 軸バッテリーの初回実推論校正を
+実施した。方法は **embedding 空間校正**: 音源そのものではなく、
+`examples/learned/clap/` のサイドカー（#143）に保存済みの**実音源 CLAP
+埋め込み**（実 Suno 6 本 = lyrics fixture / 実 MusicGen 32 本 = musicgen_k2
+fixture）に対し、battery の probe テキストだけを埋め込み直して
+`contrast_fit` を計測する。音源の再取得も再生成も不要で、
+`scripts/calibrate_semantic_axes.py` として再実行可能。結果ログ:
+`examples/learned/clap/semantic_axes_calibration_2026-07-04.yaml`。
+
+### 軸ごとの結果（規律「効果 > 再生成ノイズ」を一様適用）
+
+| 軸 | 意図した真値コントラスト | 結果 | 位置づけ |
+|---|---|---|---|
+| `vocal_presence` | lyrics vs inst（実 Suno・ジャンル内） | effect/regen-noise = **15.7×**(EDM) / **11.4×**(Rock) | **実証済み**（PR2b-2 #131 の再現） |
+| `energy` | MusicGen bpm ノブ（n=8×2） | **d=+2.57**、brightness ノブには d=+0.18 | **実証済み・バッテリー最良の選択性**（自ノブに強く他ノブに鈍い） |
+| `brightness` | MusicGen brightness ノブ（n=8×2） | 自ノブ d=+1.52（方向正）、**bpm 干渉 d=+2.37 が自ノブより強い** | 方向は本物だが **bpm 交絡**（K3-2b の bpm→centroid 結合と整合）。単独読み不可・bpm と併読 |
+| `acousticness` | （強い真値なし）全 38 本＝電子系制作物 | 負符号は 19/38 のみ。ノブ応答 d≈−1.6×2（速く/明るく → 非アコースティック寄り＝方向妥当） | **探索扱い**。相対変化は読めるが**絶対符号は verdict にならない**（隔離ポリシーの実測裏付け） |
+| `warmth` | （真値なし） | brightness 軸と **r=−0.827**（n=38） | **探索扱い・冗長候補**（このプールでは実質 anti-brightness。warmth 固有のコントラストが出る素材が現れるまで保留） |
+
+補助所見: 歌詞あり/なしコントラスト（実 Suno）は 5 軸すべてで再生成ノイズ超え
+（4.5×–16.2×）。これは各軸の妥当性でなく「ボーカルの有無はミックス全体を
+動かす」ことの表れ＝軸間クロストークの注意材料。
+
+### 再現性（決定論契約の実測境界）
+
+- **同一マシン内**: probe 埋め込み 2 回とも完全一致
+  （`probe_determinism_same_run: true`）。校正スクリプト 2 回実行で
+  出力 YAML バイト一致。synth 5 曲の抽出側読みも 2 回とも 6 桁一致。
+- **マシン間**: fixture 保存値（別マシン採取）との突き合わせで
+  lyrics 6 本中 3 本 / musicgen 32 本中 21 本が 6 桁 exact、
+  最大乖離はどちらも **1e-6**（6 桁丸めの 1 ulp）。→ 決定論契約は
+  **同一環境内**で読むもの。マシン間差 ≤1e-6 は計測対象の効果
+  （~1e-1）より 4 桁小さく、計器の用途には影響しない。
+- チェックポイント整合: `scripts/calibrate_semantic_axes.py` が
+  fixture の `model.checkpoint_sha256` / `model.amodel` ピンと
+  `--checkpoint` / `--amodel` を自動照合し、不一致・未指定は
+  モデルロード前に fail-fast する（テキスト probe と保存済み audio
+  embedding が同一埋め込み空間であることの強制）。CLI 側（抽出時の
+  意味層センサー）は従来どおり `--clap-checkpoint` / `--clap-amodel`
+  でピンする。
+
+### 有効帯域（素材依存性）
+
+純合成トーン（`examples/sample_input/synth_0*.wav`、centroid 720–947 Hz）
+では `energy` は bpm 順位と無相関（Spearman 0.3, n=5）・`brightness` は
+レンジ圧縮（−0.19〜−0.13、唯一明確に明るい synth_05 だけ最上位に来る）と、
+**実制作音源で成立する目盛りが合成素材では床に張り付く**。K1/K2 の
+「センサー盲は素材依存」と同型で、本計器の有効帯域は**実制作音楽**。
+合成 fixture で軸を校正してはならない。再現コマンド:
+
+```bash
+svprpe extract examples/sample_input/synth_05_fast_bright_d_major.wav \
+  --clap-semantic \
+  --clap-checkpoint <path>/music_audioset_epoch_15_esc_90.14.pt \
+  --clap-amodel HTSAT-base -o out.json
+```
+
+### インストール補足（Debian 系環境）
+
+Debian 系 patched setuptools 環境では `laion-clap` の依存
+（`wget`/`progressbar` の legacy sdist）が `install_layout`
+AttributeError でビルド失敗することがある。`pip install -U setuptools`
+で解消（2026-07-04 実測。従来「リモート env で py3.11 ビルド不能」と
+記録していた事象の真因で、proxy は無関係）。
+
 ## CI スタンス
 
 実推論（本物の `laion_clap` + 重みロード）は CI に持ち込まない。

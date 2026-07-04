@@ -4,21 +4,30 @@ schema_version: "1.0"
 # mean negative-probe cosine) against the source audio's CLAP embedding.
 # Signed reading, a learned grip, never a verdict. Isolated in
 # LearnedAudioAnnotations.semantic_axes per docs/learned_models_policy.md.
+#
+# Calibration status (2026-07-04, real inference against stored real-audio
+# embeddings; see docs/semantic_sensor_clap.md and
+# examples/learned/clap/semantic_axes_calibration_2026-07-04.yaml):
+# valid band is real produced music — pure synthetic tones sit at the
+# instrument floor. Do not calibrate axes against synth fixtures.
 axes:
   - name: vocal_presence
     positive: ["a song with lead vocals", "singing with lyrics"]
     negative: ["an instrumental track with no vocals", "instrumental music"]
-    notes: "proven axis; CLAP vocal contrast is 10-15x more robust than the mid_ratio proxy (docs/lyrics_semantic_anchor.md). Probes match examples/learned/clap/lyrics_vocal_contrast_manifest.yaml for continuity."
+    notes: "proven axis; CLAP vocal contrast is 10-15x more robust than the mid_ratio proxy (docs/lyrics_semantic_anchor.md). Probes match examples/learned/clap/lyrics_vocal_contrast_manifest.yaml for continuity. Calibrated 2026-07-04: effect/regen-noise 15.7x (EDM) / 11.4x (Rock), reproduces the PR2b-2 (#131) readings."
   - name: brightness
     positive: ["a bright brilliant song", "crisp airy high-frequency sound"]
     negative: ["a dark muffled song", "warm bass-heavy low-frequency sound"]
-    notes: "cross-checks the physical spectral_centroid brightness sensor"
+    notes: "cross-checks the physical spectral_centroid brightness sensor. Calibrated 2026-07-04: correct direction on the MusicGen brightness knob (d=+1.52) but the bpm knob interferes MORE strongly (d=+2.37) — read alongside bpm, never alone."
   - name: energy
     positive: ["an energetic driving intense track", "high-energy powerful music"]
     negative: ["a calm relaxed gentle track", "low-energy soft ambient music"]
+    notes: "Calibrated 2026-07-04: best selectivity of the battery — strong on its own proxy knob (MusicGen bpm d=+2.57), near-flat on the brightness knob (d=+0.18). Blind on pure synthetic tones."
   - name: acousticness
     positive: ["an acoustic organic recording", "natural unprocessed instruments"]
     negative: ["an electronic synthetic production", "digital synthesized sound"]
+    notes: "exploratory. Calibrated 2026-07-04: relative movement is plausible (faster/brighter reads less acoustic, d~-1.6) but the absolute sign is unreliable (only 19/38 negative on an all-electronic pool) — never read the sign as a verdict."
   - name: warmth
     positive: ["a warm lush full analog sound", "rich smooth mellow texture"]
     negative: ["a cold harsh thin sound", "brittle sharp digital texture"]
+    notes: "exploratory, redundancy candidate. Calibrated 2026-07-04: r=-0.827 with the brightness axis across the 38-sample calibration pool — largely an anti-brightness reading there; keep only if a warmth-specific contrast emerges on richer material."
