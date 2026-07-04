@@ -229,3 +229,22 @@ class TestCli:
         assert result.exit_code == 0, result.stdout
         dumped = json.loads(output.read_text(encoding="utf-8"))
         assert "learned_annotations" not in dumped
+
+    def test_extract_clap_semantic_unavailable_preserves_install_hint(
+        self, monkeypatch, tmp_path
+    ):
+        # Rich would parse `.[semantic-embed]` in the install hint as a markup
+        # tag and drop the extra name; markup=False must keep it intact on the
+        # missing-dependency path (Codex P2).
+        _force_clap_unavailable(monkeypatch)
+        monkeypatch.setattr(
+            extractor, "extract_rpe_from_file", lambda path, **kwargs: _make_bundle()
+        )
+
+        audio = tmp_path / "a.wav"
+        _write_wav(audio, seconds=0.05)
+
+        result = runner.invoke(app, ["extract", str(audio), "--clap-semantic"])
+
+        assert result.exit_code == 1
+        assert '.[semantic-embed]' in result.stdout

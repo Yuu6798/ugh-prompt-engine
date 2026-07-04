@@ -86,8 +86,11 @@ def extract(
         try:
             annotations = extract_clap_semantic_axes(audio)
         except LearnedModelUnavailable as exc:
-            console.print(f"[yellow]{exc}[/yellow]")
-            raise typer.Exit(code=1)
+            # markup=False: the install hint contains `.[semantic-embed]`, which
+            # Rich would otherwise parse as a markup tag and drop from the shown
+            # recovery command — exactly on the missing-dependency path.
+            console.print(str(exc), style="yellow", markup=False)
+            raise typer.Exit(code=1) from exc
         bundle = attach_learned_annotations(bundle, annotations)
     result = bundle.model_dump()
     result_json = json.dumps(result, ensure_ascii=False, indent=2)
