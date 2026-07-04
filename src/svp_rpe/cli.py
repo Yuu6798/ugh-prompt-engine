@@ -58,9 +58,36 @@ def extract(
     separate: SeparateOption = False,
     separation_model: SeparationModelOption = DEFAULT_SEPARATION_MODEL,
     separation_device: SeparationDeviceOption = DEFAULT_SEPARATION_DEVICE,
+    clap_semantic: bool = typer.Option(
+        False,
+        "--clap-semantic",
+        help=(
+            "Read source audio's semantic axes with CLAP at extraction "
+            "(requires the semantic-embed extra); attaches isolated "
+            "LearnedAudioAnnotations.semantic_axes."
+        ),
+    ),
 ) -> None:
     """Extract RPE from audio file."""
     from svp_rpe.rpe.extractor import extract_rpe_from_file
+
+    if clap_semantic:
+        # Fail fast on the missing optional dependency BEFORE the (possibly
+        # slow) base extraction + Demucs separation, so `--clap-semantic`
+        # without the semantic-embed extra doesn't waste that time only to
+        # exit 1 with the install hint (probe imports the module; no weight
+        # download).
+        from svp_rpe.rpe.learned import LearnedModelUnavailable
+        from svp_rpe.rpe.learned.clap_adapter import ensure_clap_available
+
+        try:
+            ensure_clap_available()
+        except LearnedModelUnavailable as exc:
+            # markup=False: the install hint contains `.[semantic-embed]`, which
+            # Rich would otherwise parse as a markup tag and drop from the shown
+            # recovery command — exactly on the missing-dependency path.
+            console.print(str(exc), style="yellow", markup=False)
+            raise typer.Exit(code=1) from exc
 
     console.print(f"[bold]Extracting RPE from {audio}...[/bold]")
     bundle = extract_rpe_from_file(
@@ -70,6 +97,16 @@ def extract(
         separation_model=separation_model,
         separation_device=separation_device,
     )
+    if clap_semantic:
+        from svp_rpe.rpe.learned import LearnedModelUnavailable, attach_learned_annotations
+        from svp_rpe.rpe.learned.semantic_axes import extract_clap_semantic_axes
+
+        try:
+            annotations = extract_clap_semantic_axes(audio)
+        except LearnedModelUnavailable as exc:
+            console.print(str(exc), style="yellow", markup=False)
+            raise typer.Exit(code=1) from exc
+        bundle = attach_learned_annotations(bundle, annotations)
     result = bundle.model_dump()
     result_json = json.dumps(result, ensure_ascii=False, indent=2)
 

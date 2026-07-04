@@ -1,0 +1,24 @@
+schema_version: "1.0"
+# CLAP semantic-axis battery for extraction-stage semantic sensing.
+# Each axis is read as an A/B contrast_fit (mean positive-probe cosine minus
+# mean negative-probe cosine) against the source audio's CLAP embedding.
+# Signed reading, a learned grip, never a verdict. Isolated in
+# LearnedAudioAnnotations.semantic_axes per docs/learned_models_policy.md.
+axes:
+  - name: vocal_presence
+    positive: ["a song with lead vocals", "singing with lyrics"]
+    negative: ["an instrumental track with no vocals", "instrumental music"]
+    notes: "proven axis; CLAP vocal contrast is 10-15x more robust than the mid_ratio proxy (docs/lyrics_semantic_anchor.md). Probes match examples/learned/clap/lyrics_vocal_contrast_manifest.yaml for continuity."
+  - name: brightness
+    positive: ["a bright brilliant song", "crisp airy high-frequency sound"]
+    negative: ["a dark muffled song", "warm bass-heavy low-frequency sound"]
+    notes: "cross-checks the physical spectral_centroid brightness sensor"
+  - name: energy
+    positive: ["an energetic driving intense track", "high-energy powerful music"]
+    negative: ["a calm relaxed gentle track", "low-energy soft ambient music"]
+  - name: acousticness
+    positive: ["an acoustic organic recording", "natural unprocessed instruments"]
+    negative: ["an electronic synthetic production", "digital synthesized sound"]
+  - name: warmth
+    positive: ["a warm lush full analog sound", "rich smooth mellow texture"]
+    negative: ["a cold harsh thin sound", "brittle sharp digital texture"]

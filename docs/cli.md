@@ -18,11 +18,19 @@ Extract RPE (physical + semantic) from an audio file.
 svprpe extract track.wav -o rpe.json
 svprpe extract track.wav --valley-method rms_percentile -o rpe.json
 svprpe extract track.wav --separate --separation-model htdemucs_ft -o rpe.json
+svprpe extract track.wav --clap-semantic -o rpe.json
 ```
 
 `--separate` is opt-in because Demucs is slow and requires the optional
 `svp-rpe[separate]` dependency. When enabled, the emitted RPE includes
 `physical.stem_rpe` for vocals, drums, bass, and other.
+
+`--clap-semantic` is opt-in and requires the optional `svp-rpe[semantic-embed]`
+dependency. It reads the source audio's semantic content with CLAP against a
+fixed battery of named semantic axes (`config/semantic_probe_axes.yaml`) and
+attaches per-axis `contrast_fit` readings to `learned_annotations.semantic_axes`
+— isolated from `PhysicalRPE` / `SemanticRPE`. See
+[Semantic Sensor: CLAP](semantic_sensor_clap.md).
 
 ### `svprpe generate <rpe.json>`
 

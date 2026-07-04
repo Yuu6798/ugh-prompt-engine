@@ -49,7 +49,10 @@ def attach_learned_annotations(
     """Return a copy of `bundle` with `learned_annotations` set.
 
     Internal helper for backends to populate `RPEBundle.learned_annotations`
-    cleanly. Does not mutate the input. Public CLI integration (e.g. a
-    `--learned` flag on `extract_rpe_from_file`) is deferred to a later PR.
+    cleanly. Does not mutate the input. `svprpe extract --clap-semantic` now
+    uses this to attach CLAP semantic-axis annotations
+    (`rpe/learned/semantic_axes.py`) — public CLI integration for the other
+    adapters (`beat_this` / `panns_inference` / `basic-pitch`) is still
+    deferred to a later PR.
     """
     return bundle.model_copy(update={"learned_annotations": annotations})

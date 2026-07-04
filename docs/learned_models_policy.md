@@ -86,7 +86,11 @@ provenance hints from a learned model live in `LearnedAudioLabel.notes`.
   cosine 適合度（学習版 grip）を計測する。`SemanticRPE` のルール版意味付けと
   相互検証するためのものであり、置き換えない。`LearnedAudioAnnotations.
   embedding` を初めて populate するアダプタ（`panns_inference` は embedding
-  を受け取るが破棄している — `panns_adapter.py` 参照）。
+  を受け取るが破棄している — `panns_adapter.py` 参照）。`svprpe extract
+  --clap-semantic` から `rpe/learned/semantic_axes.py` 経由で SOURCE 音声を
+  抽出段階で読み、固定の意味軸バッテリー（`config/semantic_probe_axes.yaml`）
+  に対する `LearnedAudioAnnotations.semantic_axes` を populate する
+  （詳細は [`docs/semantic_sensor_clap.md`](semantic_sensor_clap.md)）。
 - License（verbatim findings, verified 2026-07-02）:
   - code: PyPI 配布物のメタデータに内部矛盾あり。
     `https://pypi.org/pypi/laion-clap/json` の `info.license` フィールドは
@@ -223,11 +227,20 @@ class LearnedEmbedding(BaseModel):
     dimensions: int  # validated to equal len(vector)
 
 
+class LearnedSemanticAxis(BaseModel):
+    axis: str
+    contrast_fit: float  # signed A/B contrast, read as grip — not a [0,1] confidence
+    positive_probes: list[str] = Field(default_factory=list)
+    negative_probes: list[str] = Field(default_factory=list)
+    source_model: str
+
+
 class LearnedAudioAnnotations(BaseModel):
-    schema_version: str = "1.0"
+    schema_version: str = "1.1"
     enabled_models: list[LearnedModelInfo] = Field(default_factory=list)
     labels: list[LearnedAudioLabel] = Field(default_factory=list)
     embedding: LearnedEmbedding | None = None
+    semantic_axes: list[LearnedSemanticAxis] = Field(default_factory=list)
     time_events: list[LearnedTimeEvent] = Field(default_factory=list)  # beat/downbeat 等
     note_events: list[LearnedNoteEvent] = Field(default_factory=list)  # pitch/onset 等
     inference_config: dict[str, Any] = Field(default_factory=dict)
@@ -242,6 +255,9 @@ class RPEBundle(BaseModel):
     ...
     learned_annotations: LearnedAudioAnnotations | None = None
 ```
+
+`schema_version` is now `"1.1"` (bumped from `"1.0"` when `semantic_axes`
+was added — see [`docs/semantic_sensor_clap.md`](semantic_sensor_clap.md)).
 
 Required metadata on every learned-annotation payload:
 

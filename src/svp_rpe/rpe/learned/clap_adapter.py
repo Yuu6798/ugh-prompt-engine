@@ -72,6 +72,7 @@ from svp_rpe.rpe.models import LearnedAudioAnnotations, LearnedEmbedding, Learne
 __all__ = [
     "LearnedModelUnavailable",
     "LearnedModelIncompatible",
+    "ensure_clap_available",
     "load_clap_model",
     "embed_audio_file",
     "embed_texts",
@@ -121,6 +122,18 @@ def _load_clap_module() -> Any:
         return importlib.import_module(_MODULE_NAME)
     except ImportError as exc:
         raise LearnedModelUnavailable(_INSTALL_HINT) from exc
+
+
+def ensure_clap_available() -> None:
+    """Probe that `laion_clap` is importable, raising `LearnedModelUnavailable`
+    (with the `semantic-embed` install hint) if it is not.
+
+    This only attempts the module import — it does NOT construct a model or
+    load a checkpoint, so it triggers no weight download. Callers use it to
+    fail fast on the missing optional dependency BEFORE spending time on
+    unrelated work (e.g. base RPE extraction / Demucs separation).
+    """
+    _load_clap_module()
 
 
 def _detect_clap_version() -> Optional[str]:

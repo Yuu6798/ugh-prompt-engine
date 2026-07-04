@@ -371,17 +371,44 @@ class LearnedNoteEvent(BaseModel):
         return self
 
 
+class LearnedSemanticAxis(BaseModel):
+    """A single learned-model semantic-axis reading (A/B contrast_fit).
+
+    Emitted at extraction time by the CLAP semantic sensor
+    (rpe/learned/semantic_axes.py). Like every LearnedAudio* payload this is
+    isolated in LearnedAudioAnnotations and MUST NOT be written into
+    SemanticRPE.por_surface / PhysicalRPE / SVPForGeneration.style_tags — see
+    docs/learned_models_policy.md.
+
+    `contrast_fit` is a SIGNED A/B contrast (mean positive-probe cosine minus
+    mean negative-probe cosine), read as a learned grip, never as a verdict.
+    It is NOT a [0, 1] confidence — do not clamp or reinterpret it as one.
+    """
+
+    axis: str
+    contrast_fit: float
+    positive_probes: List[str] = Field(default_factory=list)
+    negative_probes: List[str] = Field(default_factory=list)
+    source_model: str
+
+
 class LearnedAudioAnnotations(BaseModel):
     """Container for learned-model output, isolated from rule-based RPE evidence.
 
     By design this MUST NOT be merged into PhysicalRPE / SemanticRPE.
     Attached to RPEBundle as a sibling field. See docs/learned_models_policy.md.
+
+    `semantic_axes` is populated by the CLAP extraction-stage semantic
+    sensor (rpe/learned/semantic_axes.py, `svprpe extract --clap-semantic`):
+    per-axis A/B `contrast_fit` readings of the source audio against a
+    fixed battery of named semantic axes (config/semantic_probe_axes.yaml).
     """
 
-    schema_version: str = "1.0"
+    schema_version: str = "1.1"
     enabled_models: List[LearnedModelInfo] = Field(default_factory=list)
     labels: List[LearnedAudioLabel] = Field(default_factory=list)
     embedding: Optional[LearnedEmbedding] = None
+    semantic_axes: List[LearnedSemanticAxis] = Field(default_factory=list)
     time_events: List[LearnedTimeEvent] = Field(default_factory=list)
     note_events: List[LearnedNoteEvent] = Field(default_factory=list)
     inference_config: dict[str, Any] = Field(default_factory=dict)
