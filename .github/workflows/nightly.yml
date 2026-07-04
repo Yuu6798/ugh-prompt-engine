@@ -8,10 +8,20 @@ name: Nightly (extras)
 # 回帰が過去に発生した（#138 CLAP / #139 basic_pitch・panns・beat_this ×3、いずれも
 # 事後にローカルで踏んで修正）。
 #
-# この nightly ジョブは同じテストスイートを *重い extra を入れた状態で* 1 日 1 回回し、
-# その環境依存回帰を誰かが踏む前にプロアクティブに検出する安全網。install-only
-# （重み DL・実推論なし）— テストは fake backend なので extra を入れるだけで実行される。
-# push はブロックしない（nightly の性質上できない）。失敗は Actions タブで可視化する。
+# この nightly は同じテストスイートを *重い extra を入れた状態で* 1 日 1 回回し、その
+# 環境依存回帰を誰かが踏む前にプロアクティブに検出する安全網。install-only（重み DL・
+# 実推論なし）— テストは fake backend なので extra を入れるだけで実行される。push は
+# ブロックしない（nightly の性質上できない）。失敗は Actions タブで可視化する。
+#
+# ジョブは 2 系統に分離する:
+#   - test-extras … 安定して入る extra（beat/learned-tags/pitch/musicgen）。必ず緑。
+#   - test-clap-extra … semantic-embed(laion-clap)。py3.11 で install に失敗した記録が
+#     あり（.claude/memory/2026-07-03.md、ただし proxy 遮断のリモート env での friction で
+#     clean runner の挙動は未実測）。ここを core と混ぜて continue-on-error にすると
+#     「install 失敗→サイレント緑→CLAP 回帰が未検証」になってしまうため、独立ジョブに
+#     切り出して *scoped に fail* させる。CLAP install が落ちれば clap ジョブだけ赤=
+#     actionable な可視シグナル（core net は緑のまま）。install できれば CLAP 回帰も検証。
+#     初回 run で clean runner の実挙動が判明する（緑→確定 / 赤→workaround か除外を実測で判断）。
 
 on:
   schedule:
@@ -24,6 +34,7 @@ concurrency:
 
 jobs:
   test-extras:
+    name: core extras
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -39,26 +50,47 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
 
-      # コア extra（install が安定しているもの）は fatal で入れる。
-      # `pitch`(basic-pitch) は pyproject の `python_version < '3.12'` マーカーにより
-      # 3.12 では自動的に skip される（3.12 でもエラーにならず basic-pitch が入らない）。
+      # 安定して入る extra のみ fatal で導入。`pitch`(basic-pitch) は pyproject の
+      # `python_version < '3.12'` マーカーにより 3.12 では自動的に skip される
+      # （3.12 でもエラーにならず、単に basic-pitch が入らない）。
       - name: Install dependencies with core extras
         run: pip install -e ".[dev,beat,learned-tags,pitch,musicgen]"
-
-      # semantic-embed(laion-clap) は best-effort。過去に py3.11 で progressbar/wget の
-      # ビルドに失敗した記録があり（.claude/memory/2026-07-03.md）、ここで fatal にすると
-      # 安全網が永久に赤くなり信号として無視されてしまう。continue-on-error でジョブ全体は
-      # 緑を保ちつつ、この install の成否は Actions UI 上でステップ単位で可視化する
-      # （失敗時 CLAP adapter テストは fake backend にフォールバックするだけで誤緑は出ない）。
-      # clean runner で安定 install できることを初回 run のログで確認できたら上の fatal
-      # ステップへ昇格する。
-      - name: Install semantic-embed extra (CLAP, best-effort)
-        continue-on-error: true
-        run: pip install -e ".[semantic-embed]"
 
       - name: Lint
         run: ruff check .
 
       # 通常 CI と同一コマンド（slow 含む全件）を、extra 導入環境で回す。
-      - name: Test (extras installed)
+      - name: Test (core extras installed)
         run: pytest -q --tb=short
+
+  test-clap-extra:
+    name: clap extra
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      # semantic-embed(laion-clap) を fatal で導入。落ちればこの clap ジョブだけ赤=
+      # スコープされた actionable シグナル（core net は独立に緑）。continue-on-error に
+      # しないのは、install 失敗を握りつぶすと CLAP 回帰クラスが未検証のまま緑になり
+      # 安全網の意味を失うため（Codex #144 P2）。
+      - name: Install dependencies with CLAP extra
+        run: pip install -e ".[dev,semantic-embed]"
+
+      # 本物の laion_clap を入れた状態で CLAP adapter 経路を回す（#138 の回帰クラス）。
+      - name: Test CLAP adapter paths (real laion_clap installed)
+        run: >-
+          pytest -q --tb=short
+          tests/test_clap_adapter.py
+          tests/test_clap_similarity.py
+          tests/test_collect_clap_fixture.py
