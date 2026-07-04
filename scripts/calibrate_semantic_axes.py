@@ -26,6 +26,12 @@ fixture's pinned `model.checkpoint_sha256` / `model.amodel` exactly — a
 rerun with a different or omitted checkpoint refuses to silently write
 mixed-embedding-space calibration values.
 
+The checkpoint pin alone does not guarantee a trustworthy run: `build_calibration`
+also fails fast if `probe_determinism_same_run` is `False` (nondeterministic text
+tower) or if any fixture's `reproduction_check.max_abs_deviation` exceeds
+`_REPRODUCTION_TOLERANCE` (drifted CLAP/tokenizer behavior) — see those checks
+below for the tolerance rationale.
+
 What it measures:
 
 1. `probe_determinism_same_run` — embedding every axis's probe texts
@@ -88,6 +94,14 @@ FIXTURE_DIR = ROOT / "examples" / "learned" / "clap"
 FIXTURE_NAMES = ["lyrics_vocal_contrast", "musicgen_k2_contrast"]
 
 _ROUND_DIGITS = 6
+
+# Measured cross-machine max deviation is 1e-6 (1 ulp of the 6-decimal
+# rounding; see examples/learned/clap/semantic_axes_calibration_2026-07-04.yaml
+# reproduction_check). 1e-5 gives a 10x margin above that noise floor while
+# still catching library/tokenizer drift (typically >=1e-3). A legitimate
+# re-calibration after a deliberate CLAP upgrade must re-collect the fixtures
+# under new provenance instead of overriding this gate.
+_REPRODUCTION_TOLERANCE = 1e-5
 
 # MusicGen K2 sample_id prefixes: `<knob>_<level>_NN`, n=8 per cell.
 _MUSICGEN_KNOBS = ("bpm", "brightness")
@@ -374,7 +388,13 @@ def build_calibration(
     ValueError
         If `checkpoint`/`amodel` do not match every fixture's pinned
         `model` block (embedding-space mismatch; see
-        `_validate_embedding_space_pin`).
+        `_validate_embedding_space_pin`); if `probe_determinism_same_run`
+        is `False` (text tower nondeterministic within a single run); or
+        if any fixture's `reproduction_check.max_abs_deviation` exceeds
+        `_REPRODUCTION_TOLERANCE` (reproduction drift against the stored
+        fixture `contrast_fit`). The checkpoint pin alone does not
+        guarantee a trustworthy run, so these instrument sanity signals
+        are enforced as gates rather than merely recorded.
     LearnedModelUnavailable
         If `laion_clap` is not installed (propagated from `load_clap_model`).
     """
@@ -389,6 +409,21 @@ def build_calibration(
     axis_embeddings, probe_determinism = embed_axis_battery(axes, model)
     readings = compute_readings(fixtures, axis_embeddings)
     reproduction_check = compute_reproduction_check(fixtures, model)
+
+    if not probe_determinism:
+        raise ValueError(
+            "text tower nondeterministic within a single run; instrument broken, "
+            "refusing to write calibration"
+        )
+    for fixture_name, info in reproduction_check.items():
+        deviation = info["max_abs_deviation"]
+        if deviation > _REPRODUCTION_TOLERANCE:
+            raise ValueError(
+                f"reproduction drift against stored fixture {fixture_name!r} contrast_fit "
+                f"exceeds tolerance: max_abs_deviation={deviation!r} > "
+                f"tolerance={_REPRODUCTION_TOLERANCE!r}; readings not comparable to fixture "
+                f"provenance, refusing to write"
+            )
 
     cross_stats = compute_cross_axis_stats(readings)
 

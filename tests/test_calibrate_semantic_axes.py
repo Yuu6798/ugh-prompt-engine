@@ -65,10 +65,68 @@ def _fake_load_clap_model(checkpoint: Optional[str] = None, amodel: Optional[str
     return {"checkpoint": checkpoint, "amodel": amodel}
 
 
+def _doctor_fixture_contrast_fit(fixtures: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Rewrite each sample's stored `contrast_fit` to the value the fake
+    hash-seeded embedder recomputes from that sample's own `prompt_groups`.
+
+    The real fixtures' stored `contrast_fit` values were computed by the
+    real CLAP model, so under `_fake_embed_texts` the new reproduction-check
+    gate (see `_REPRODUCTION_TOLERANCE`) would correctly flag drift between
+    the fake-recomputed value and the real stored one. Doctoring the
+    fixtures in memory to match what the fake backend recomputes keeps the
+    gate exercised end-to-end (same `compute_reproduction_check` code path)
+    while making the happy-path fakes internally consistent — monkeypatching
+    `compute_reproduction_check` itself would bypass the gate instead.
+    """
+    doctored: dict[str, dict[str, Any]] = {}
+    for fixture_name, fixture in fixtures.items():
+        samples_copy = []
+        for sample in fixture["samples"]:
+            positive = list(sample["prompt_groups"]["positive"])
+            negative = list(sample["prompt_groups"]["negative"])
+            pos_emb = _fake_embed_texts(positive)
+            neg_emb = _fake_embed_texts(negative)
+            recomputed = calibrate.contrast_fit(sample["audio_embedding"], pos_emb, neg_emb)
+            sample_copy = dict(sample)
+            sample_copy["contrast_fit"] = calibrate._round(recomputed)
+            samples_copy.append(sample_copy)
+        fixture_copy = dict(fixture)
+        fixture_copy["samples"] = samples_copy
+        doctored[fixture_name] = fixture_copy
+    return doctored
+
+
+def _shift_stored_contrast_fit(
+    fixtures: dict[str, dict[str, Any]], delta: float
+) -> dict[str, dict[str, Any]]:
+    """Shift every sample's stored `contrast_fit` by `delta` — simulates
+    reproduction drift (e.g. a drifted CLAP/tokenizer) against otherwise
+    reproducible fixtures.
+    """
+    shifted: dict[str, dict[str, Any]] = {}
+    for fixture_name, fixture in fixtures.items():
+        samples_copy = []
+        for sample in fixture["samples"]:
+            sample_copy = dict(sample)
+            sample_copy["contrast_fit"] = sample["contrast_fit"] + delta
+            samples_copy.append(sample_copy)
+        fixture_copy = dict(fixture)
+        fixture_copy["samples"] = samples_copy
+        shifted[fixture_name] = fixture_copy
+    return shifted
+
+
 def _install_fake_clap_calls(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(calibrate, "load_clap_model", _fake_load_clap_model)
     monkeypatch.setattr(calibrate, "embed_texts", _fake_embed_texts)
     monkeypatch.setattr(calibrate, "_checkpoint_sha256", _fake_checkpoint_sha256)
+    # The real fixtures' stored `contrast_fit` was computed by the real CLAP
+    # model, not `_fake_embed_texts` — doctor it so the new reproduction-check
+    # gate (see `_REPRODUCTION_TOLERANCE`) passes for these deliberately-fake
+    # happy-path tests without bypassing the gate itself.
+    real_fixtures = calibrate.load_fixtures()
+    doctored_fixtures = _doctor_fixture_contrast_fit(real_fixtures)
+    monkeypatch.setattr(calibrate, "load_fixtures", lambda: doctored_fixtures)
 
 
 AXIS_NAMES = {"vocal_presence", "brightness", "energy", "acousticness", "warmth"}
@@ -379,4 +437,91 @@ def test_main_rejects_mismatched_amodel(monkeypatch, tmp_path, capsys):
     stderr = capsys.readouterr().err
     assert "embedding-space mismatch" in stderr
     assert _PINNED_AMODEL in stderr
+    assert not output_path.exists()
+
+
+def _flaky_embed_texts_factory() -> Any:
+    """A fake `embed_texts` that returns a different vector on each call, so
+    `probe_determinism_same_run` reads `False` (the text tower would be
+    nondeterministic within a single run).
+    """
+    counter = {"n": 0}
+
+    def _flaky_embed_texts(texts: list[str], model: Optional[Any] = None) -> list[list[float]]:
+        counter["n"] += 1
+        return [_hash_vector(f"{counter['n']}:{text}") for text in texts]
+
+    return _flaky_embed_texts
+
+
+def test_build_calibration_rejects_nondeterministic_probe_embedding(monkeypatch):
+    monkeypatch.setattr(calibrate, "load_clap_model", _fake_load_clap_model)
+    monkeypatch.setattr(calibrate, "embed_texts", _flaky_embed_texts_factory())
+    monkeypatch.setattr(calibrate, "_checkpoint_sha256", _fake_checkpoint_sha256)
+
+    with pytest.raises(ValueError, match="nondeterministic"):
+        calibrate.build_calibration(
+            checkpoint="music_audioset_epoch_15_esc_90.14.pt", amodel=_PINNED_AMODEL
+        )
+
+
+def test_main_rejects_nondeterministic_probe_embedding(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(calibrate, "load_clap_model", _fake_load_clap_model)
+    monkeypatch.setattr(calibrate, "embed_texts", _flaky_embed_texts_factory())
+    monkeypatch.setattr(calibrate, "_checkpoint_sha256", _fake_checkpoint_sha256)
+    output_path = tmp_path / "calibration.yaml"
+
+    exit_code = calibrate.main(
+        [
+            "--checkpoint",
+            "music_audioset_epoch_15_esc_90.14.pt",
+            "--amodel",
+            _PINNED_AMODEL,
+            "--output",
+            str(output_path),
+        ]
+    )
+
+    assert exit_code == 1
+    stderr = capsys.readouterr().err
+    assert "nondeterministic" in stderr
+    assert not output_path.exists()
+
+
+def test_build_calibration_rejects_reproduction_drift(monkeypatch):
+    _install_fake_clap_calls(monkeypatch)
+    doctored_fixtures = calibrate.load_fixtures()  # already the doctored dict via monkeypatch
+    drifted_fixtures = _shift_stored_contrast_fit(doctored_fixtures, 0.001)
+    monkeypatch.setattr(calibrate, "load_fixtures", lambda: drifted_fixtures)
+
+    with pytest.raises(ValueError, match="reproduction drift"):
+        calibrate.build_calibration(
+            checkpoint="music_audioset_epoch_15_esc_90.14.pt", amodel=_PINNED_AMODEL
+        )
+
+
+def test_main_rejects_reproduction_drift(monkeypatch, tmp_path, capsys):
+    _install_fake_clap_calls(monkeypatch)
+    doctored_fixtures = calibrate.load_fixtures()  # already the doctored dict via monkeypatch
+    drifted_fixtures = _shift_stored_contrast_fit(doctored_fixtures, 0.001)
+    monkeypatch.setattr(calibrate, "load_fixtures", lambda: drifted_fixtures)
+    output_path = tmp_path / "calibration.yaml"
+
+    exit_code = calibrate.main(
+        [
+            "--checkpoint",
+            "music_audioset_epoch_15_esc_90.14.pt",
+            "--amodel",
+            _PINNED_AMODEL,
+            "--output",
+            str(output_path),
+        ]
+    )
+
+    assert exit_code == 1
+    stderr = capsys.readouterr().err
+    assert "reproduction drift" in stderr
+    # names the (first) offending fixture and the tolerance.
+    assert "lyrics_vocal_contrast" in stderr
+    assert repr(calibrate._REPRODUCTION_TOLERANCE) in stderr
     assert not output_path.exists()
