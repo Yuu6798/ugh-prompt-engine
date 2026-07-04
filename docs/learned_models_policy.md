@@ -235,12 +235,21 @@ class LearnedSemanticAxis(BaseModel):
     source_model: str
 
 
+class LearnedSemanticSection(BaseModel):
+    # per-section counterpart to LearnedSemanticAxis (the "emotional arc")
+    section: str
+    start_sec: float
+    end_sec: float
+    axes: list[LearnedSemanticAxis]
+
+
 class LearnedAudioAnnotations(BaseModel):
     schema_version: str = "1.1"
     enabled_models: list[LearnedModelInfo] = Field(default_factory=list)
     labels: list[LearnedAudioLabel] = Field(default_factory=list)
     embedding: LearnedEmbedding | None = None
     semantic_axes: list[LearnedSemanticAxis] = Field(default_factory=list)
+    semantic_axis_sections: list[LearnedSemanticSection] = Field(default_factory=list)
     time_events: list[LearnedTimeEvent] = Field(default_factory=list)  # beat/downbeat 等
     note_events: list[LearnedNoteEvent] = Field(default_factory=list)  # pitch/onset 等
     inference_config: dict[str, Any] = Field(default_factory=dict)

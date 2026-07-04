@@ -201,6 +201,24 @@ class TestLoadSemanticAxes:
         with pytest.raises(ValueError, match="positive"):
             semantic_axes_module.load_semantic_axes()
 
+    def test_rejects_duplicate_axis_names(self, monkeypatch):
+        # Duplicate names clobber the section sensor's name-keyed probe dict
+        # and emit ambiguous whole-track rows — reject at validation (Codex P2).
+        import svp_rpe.rpe.learned.semantic_axes as semantic_axes_module
+
+        monkeypatch.setattr(
+            semantic_axes_module,
+            "load_config",
+            lambda name: {
+                "axes": [
+                    {"name": "dup", "positive": ["a"], "negative": ["b"]},
+                    {"name": "dup", "positive": ["c"], "negative": ["d"]},
+                ]
+            },
+        )
+        with pytest.raises(ValueError, match="duplicate axis name"):
+            semantic_axes_module.load_semantic_axes()
+
     @pytest.mark.parametrize("config", [{"axes": []}, {}, {"axes": None}])
     def test_rejects_empty_or_missing_battery(self, monkeypatch, config):
         # A config that omits `axes` or sets it empty/null must fail loudly

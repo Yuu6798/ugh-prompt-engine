@@ -73,6 +73,35 @@ svprpe extract track.wav --clap-semantic -o rpe.json
 `embed_audio_file` 由来の既存キー（`checkpoint` / `amodel` / `n_chunks`
 等）に追加される。
 
+## セクション別読み（emotional arc）
+
+```bash
+svprpe extract track.wav --clap-sections -o rpe.json
+```
+
+`--clap-sections` は同じ意味軸バッテリーを **構造セクション単位**
+（`PhysicalRPE.structure` の各 `SectionMarker`）で読む。intro → verse →
+chorus のように `vocal_presence` / `energy` / `brightness` などがどう
+推移するか（emotional arc）を見るための計器で、`--clap-semantic`
+（曲全体 1 読み）の **superset** — `--clap-sections` を付けると
+曲全体の `semantic_axes` と各セクションの `semantic_axis_sections` の
+両方が populate される。両フラグを同時指定した場合は `--clap-sections`
+側のパスが優先される。
+
+出力は `learned_annotations.semantic_axis_sections`
+（`LearnedSemanticSection` のリスト、各要素が
+`{section, start_sec, end_sec, axes: [LearnedSemanticAxis, ...]}`）に
+隔離され、`SemanticRPE.por_surface` / `PhysicalRPE.*` への書き込みパスは
+存在しない（`semantic_axes` と同じ隔離ポリシー、§「隔離ポリシー」参照）。
+決定論性・CI スタンス・opt-in extra 要件も `--clap-semantic` と同じ
+（`rpe/learned/clap_adapter.py` の `embed_audio_segments` は
+`librosa.load` を 1 回だけ呼び、区間ごとに決定論的にスライスするだけで
+RNG は導入しない）。
+
+本センサーは「セクション単位で読める」という計器面の土台であり、
+2026-07-03 の emotional-arc 方向の議論（メモリ参照）の第一歩の位置づけ:
+読み値の解釈・傾向の校正・下流での利用方法は今後の検証課題として残る。
+
 ## 採譜（transcribe）での advisory 利用
 
 ```bash

@@ -67,16 +67,26 @@ def extract(
             "LearnedAudioAnnotations.semantic_axes."
         ),
     ),
+    clap_sections: bool = typer.Option(
+        False,
+        "--clap-sections",
+        help=(
+            "Read CLAP semantic axes per structural section (the emotional "
+            "arc; superset of --clap-semantic). Requires the semantic-embed "
+            "extra; attaches isolated "
+            "LearnedAudioAnnotations.semantic_axis_sections."
+        ),
+    ),
 ) -> None:
     """Extract RPE from audio file."""
     from svp_rpe.rpe.extractor import extract_rpe_from_file
 
-    if clap_semantic:
+    if clap_semantic or clap_sections:
         # Fail fast on the missing optional dependency BEFORE the (possibly
-        # slow) base extraction + Demucs separation, so `--clap-semantic`
-        # without the semantic-embed extra doesn't waste that time only to
-        # exit 1 with the install hint (probe imports the module; no weight
-        # download).
+        # slow) base extraction + Demucs separation, so `--clap-semantic` /
+        # `--clap-sections` without the semantic-embed extra doesn't waste
+        # that time only to exit 1 with the install hint (probe imports the
+        # module; no weight download).
         from svp_rpe.rpe.learned import LearnedModelUnavailable
         from svp_rpe.rpe.learned.clap_adapter import ensure_clap_available
 
@@ -97,7 +107,21 @@ def extract(
         separation_model=separation_model,
         separation_device=separation_device,
     )
-    if clap_semantic:
+    if clap_sections:
+        from svp_rpe.rpe.learned import LearnedModelUnavailable, attach_learned_annotations
+        from svp_rpe.rpe.learned.semantic_axes import extract_clap_semantic_section_axes
+
+        sections = [
+            {"section": marker.label, "start_sec": marker.start_sec, "end_sec": marker.end_sec}
+            for marker in bundle.physical.structure
+        ]
+        try:
+            annotations = extract_clap_semantic_section_axes(audio, sections)
+        except LearnedModelUnavailable as exc:
+            console.print(str(exc), style="yellow", markup=False)
+            raise typer.Exit(code=1) from exc
+        bundle = attach_learned_annotations(bundle, annotations)
+    elif clap_semantic:
         from svp_rpe.rpe.learned import LearnedModelUnavailable, attach_learned_annotations
         from svp_rpe.rpe.learned.semantic_axes import extract_clap_semantic_axes
 

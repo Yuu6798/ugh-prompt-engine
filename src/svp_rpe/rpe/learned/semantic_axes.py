@@ -13,6 +13,13 @@ into `SemanticRPE.por_surface`, `PhysicalRPE.*`, or
 `SVPForGeneration.style_tags`. `contrast_fit` is read as a learned grip — a
 signed A/B contrast, never a [0, 1] confidence or a verdict.
 
+`extract_clap_semantic_section_axes` (`svprpe extract --clap-sections`)
+reads the same axis battery PER structural section instead of once for the
+whole track — the "emotional arc" (e.g. how `vocal_presence` / `energy`
+evolve intro -> verse -> chorus). Its output is isolated in
+`LearnedAudioAnnotations.semantic_axis_sections` and is a superset of the
+whole-track `extract_clap_semantic_axes` result (both fields populated).
+
 Gated behind the `semantic-embed` extra (torch + laion-clap), exactly like
 `clap_adapter.py`. `LearnedModelUnavailable` / `LearnedModelIncompatible`
 propagate unchanged from the underlying adapter calls; both are re-exported
@@ -30,9 +37,14 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from svp_rpe.rpe.learned import LearnedModelIncompatible, LearnedModelUnavailable
-from svp_rpe.rpe.learned.clap_adapter import embed_audio_file, embed_texts, load_clap_model
+from svp_rpe.rpe.learned.clap_adapter import (
+    embed_audio_file,
+    embed_audio_segments,
+    embed_texts,
+    load_clap_model,
+)
 from svp_rpe.rpe.learned.similarity import contrast_fit
-from svp_rpe.rpe.models import LearnedAudioAnnotations, LearnedSemanticAxis
+from svp_rpe.rpe.models import LearnedAudioAnnotations, LearnedSemanticAxis, LearnedSemanticSection
 from svp_rpe.utils.config_loader import load_config
 
 __all__ = [
@@ -40,6 +52,7 @@ __all__ = [
     "LearnedModelIncompatible",
     "load_semantic_axes",
     "extract_clap_semantic_axes",
+    "extract_clap_semantic_section_axes",
 ]
 
 _SOURCE_MODEL = "laion_clap:CLAP_Module"
@@ -55,10 +68,20 @@ def _validated_axes(axes: list[dict]) -> list[dict]:
             "semantic_probe_axes must define a non-empty 'axes' list "
             f"(got {type(axes).__name__})"
         )
+    seen_names: set[str] = set()
     for axis in axes:
         name = axis.get("name")
         if not name:
             raise ValueError(f"semantic_probe_axes entry missing non-empty 'name': {axis!r}")
+        # Duplicate axis names are ambiguous: the section sensor keys probe
+        # embeddings by name (a duplicate would clobber the earlier entry's
+        # probes), and the whole-track sensor would emit two identically-named
+        # LearnedSemanticAxis rows. Reject at validation so both sensors are safe.
+        if name in seen_names:
+            raise ValueError(
+                f"semantic_probe_axes has a duplicate axis name {name!r}; names must be unique"
+            )
+        seen_names.add(name)
         for side in ("positive", "negative"):
             probes = axis.get(side)
             # A bare string is truthy but `list("a bright song")` char-splits it
@@ -161,6 +184,122 @@ def extract_clap_semantic_axes(
                 **annotations.inference_config,
                 "semantic_axes_config_version": axes_config.get("schema_version"),
                 "n_semantic_axes": len(axes),
+            },
+        }
+    )
+
+
+def extract_clap_semantic_section_axes(
+    audio_path: str,
+    sections: list[dict],
+    *,
+    axes: Optional[list[dict]] = None,
+    model: Optional[Any] = None,
+    checkpoint: Optional[str] = None,
+    amodel: Optional[str] = None,
+) -> LearnedAudioAnnotations:
+    """Read CLAP's semantic axes PER structural section (the "emotional arc").
+
+    Section-level counterpart to `extract_clap_semantic_axes`: the same
+    axis battery, but computed against each structural section's audio
+    slice instead of the whole track, so downstream consumers can see how
+    e.g. `vocal_presence` / `energy` / `brightness` evolve across
+    intro -> verse -> chorus. Isolated in
+    `LearnedAudioAnnotations.semantic_axis_sections` — MUST NOT be folded
+    into `SemanticRPE.por_surface`, `PhysicalRPE.*`, or
+    `SVPForGeneration.style_tags` — see `docs/learned_models_policy.md`.
+
+    This is a SUPERSET of `extract_clap_semantic_axes`: the returned
+    annotations carry both the whole-track `.embedding` / `.semantic_axes`
+    (computed once via a nested `extract_clap_semantic_axes` call) AND the
+    new per-section `.semantic_axis_sections`.
+
+    Each axis's positive/negative probe texts are embedded ONCE (not
+    per-section) and reused across every section's `contrast_fit`
+    computation, matching `extract_clap_semantic_axes`'s per-axis
+    embedding cost regardless of section count.
+
+    Determinism: `embed_audio_segments` decodes the audio once and slices
+    it deterministically (see its docstring); everything downstream here
+    is pure numpy `contrast_fit` arithmetic — no RNG.
+
+    Parameters
+    ----------
+    audio_path
+        Path to a local audio file.
+    sections
+        `{"section": str, "start_sec": float, "end_sec": float}` dicts, in
+        the order to embed — typically `PhysicalRPE.structure` (a list of
+        `SectionMarker`).
+    axes
+        Custom axis battery override; default `load_semantic_axes()`
+        (validated the same way as `extract_clap_semantic_axes`).
+    model, checkpoint, amodel
+        Same as `extract_clap_semantic_axes` / `embed_audio_file`.
+
+    Raises
+    ------
+    LearnedModelUnavailable
+        If `laion_clap` is not installed.
+    LearnedModelIncompatible
+        If `laion_clap` is installed but its API does not match the
+        expected contract.
+    """
+    axes_config = load_config("semantic_probe_axes")
+    axes = _validated_axes(axes if axes is not None else axes_config.get("axes", []))
+
+    clap_model = model if model is not None else load_clap_model(checkpoint, amodel)
+    base = extract_clap_semantic_axes(
+        audio_path, axes=axes, model=clap_model, checkpoint=checkpoint, amodel=amodel
+    )
+
+    # Embed every axis's probe texts ONCE; reused across all sections below.
+    axis_probe_embeddings: dict[str, tuple[list[str], list, list[str], list]] = {}
+    for axis in axes:
+        positive_probes = list(axis["positive"])
+        negative_probes = list(axis["negative"])
+        pos_emb = embed_texts(positive_probes, model=clap_model)
+        neg_emb = embed_texts(negative_probes, model=clap_model)
+        axis_probe_embeddings[axis["name"]] = (positive_probes, pos_emb, negative_probes, neg_emb)
+
+    section_vectors = embed_audio_segments(
+        audio_path,
+        [(section["start_sec"], section["end_sec"]) for section in sections],
+        model=clap_model,
+    )
+
+    semantic_axis_sections: list[LearnedSemanticSection] = []
+    for section, vector in zip(sections, section_vectors):
+        section_axes: list[LearnedSemanticAxis] = []
+        for axis in axes:
+            positive_probes, pos_emb, negative_probes, neg_emb = axis_probe_embeddings[
+                axis["name"]
+            ]
+            fit = contrast_fit(vector, pos_emb, neg_emb)
+            section_axes.append(
+                LearnedSemanticAxis(
+                    axis=axis["name"],
+                    contrast_fit=round(fit, 6),
+                    positive_probes=positive_probes,
+                    negative_probes=negative_probes,
+                    source_model=_SOURCE_MODEL,
+                )
+            )
+        semantic_axis_sections.append(
+            LearnedSemanticSection(
+                section=section["section"],
+                start_sec=section["start_sec"],
+                end_sec=section["end_sec"],
+                axes=section_axes,
+            )
+        )
+
+    return base.model_copy(
+        update={
+            "semantic_axis_sections": semantic_axis_sections,
+            "inference_config": {
+                **base.inference_config,
+                "n_semantic_axis_sections": len(sections),
             },
         }
     )
