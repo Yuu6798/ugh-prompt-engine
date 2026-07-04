@@ -230,16 +230,20 @@ class TestCli:
         dumped = json.loads(output.read_text(encoding="utf-8"))
         assert "learned_annotations" not in dumped
 
-    def test_extract_clap_semantic_unavailable_preserves_install_hint(
+    def test_extract_clap_semantic_unavailable_fails_fast_before_extraction(
         self, monkeypatch, tmp_path
     ):
-        # Rich would parse `.[semantic-embed]` in the install hint as a markup
-        # tag and drop the extra name; markup=False must keep it intact on the
-        # missing-dependency path (Codex P2).
+        # When the semantic-embed extra is absent, --clap-semantic must fail
+        # fast BEFORE the base extraction runs (Codex P2), and the install hint
+        # must survive Rich markup (`.[semantic-embed]` is not parsed as a tag).
         _force_clap_unavailable(monkeypatch)
-        monkeypatch.setattr(
-            extractor, "extract_rpe_from_file", lambda path, **kwargs: _make_bundle()
-        )
+        calls: list[str] = []
+
+        def _recording_extract(path, **kwargs):
+            calls.append(path)
+            return _make_bundle()
+
+        monkeypatch.setattr(extractor, "extract_rpe_from_file", _recording_extract)
 
         audio = tmp_path / "a.wav"
         _write_wav(audio, seconds=0.05)
@@ -247,4 +251,5 @@ class TestCli:
         result = runner.invoke(app, ["extract", str(audio), "--clap-semantic"])
 
         assert result.exit_code == 1
+        assert calls == []  # base extraction never ran
         assert '.[semantic-embed]' in result.stdout
