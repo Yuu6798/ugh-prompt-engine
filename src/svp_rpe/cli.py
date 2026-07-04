@@ -77,6 +77,24 @@ def extract(
             "LearnedAudioAnnotations.semantic_axis_sections."
         ),
     ),
+    clap_checkpoint: Optional[str] = typer.Option(
+        None,
+        "--clap-checkpoint",
+        help=(
+            "Local path to a CLAP checkpoint to pin (e.g. the "
+            "fixture-provenance music_audioset_epoch_15_esc_90.14.pt). "
+            "Default None keeps upstream's default checkpoint download."
+        ),
+    ),
+    clap_amodel: Optional[str] = typer.Option(
+        None,
+        "--clap-amodel",
+        help=(
+            "Audio-tower architecture matching the checkpoint family (the "
+            "music_* checkpoints require HTSAT-base). Default None = "
+            "upstream default HTSAT-tiny family."
+        ),
+    ),
 ) -> None:
     """Extract RPE from audio file."""
     from svp_rpe.rpe.extractor import extract_rpe_from_file
@@ -116,7 +134,9 @@ def extract(
             for marker in bundle.physical.structure
         ]
         try:
-            annotations = extract_clap_semantic_section_axes(audio, sections)
+            annotations = extract_clap_semantic_section_axes(
+                audio, sections, checkpoint=clap_checkpoint, amodel=clap_amodel
+            )
         except LearnedModelUnavailable as exc:
             console.print(str(exc), style="yellow", markup=False)
             raise typer.Exit(code=1) from exc
@@ -126,7 +146,9 @@ def extract(
         from svp_rpe.rpe.learned.semantic_axes import extract_clap_semantic_axes
 
         try:
-            annotations = extract_clap_semantic_axes(audio)
+            annotations = extract_clap_semantic_axes(
+                audio, checkpoint=clap_checkpoint, amodel=clap_amodel
+            )
         except LearnedModelUnavailable as exc:
             console.print(str(exc), style="yellow", markup=False)
             raise typer.Exit(code=1) from exc
@@ -286,6 +308,24 @@ def transcribe(
             "Advisory only — does not fill the authored semantic.* fields (DD-D)."
         ),
     ),
+    clap_checkpoint: Optional[str] = typer.Option(
+        None,
+        "--clap-checkpoint",
+        help=(
+            "Local path to a CLAP checkpoint to pin (e.g. the "
+            "fixture-provenance music_audioset_epoch_15_esc_90.14.pt). "
+            "Default None keeps upstream's default checkpoint download."
+        ),
+    ),
+    clap_amodel: Optional[str] = typer.Option(
+        None,
+        "--clap-amodel",
+        help=(
+            "Audio-tower architecture matching the checkpoint family (the "
+            "music_* checkpoints require HTSAT-base). Default None = "
+            "upstream default HTSAT-tiny family."
+        ),
+    ),
 ) -> None:
     """Transcribe one audio file into a loader-valid draft CompositionScore YAML."""
     from svp_rpe.rpe.extractor import extract_rpe_from_file
@@ -313,7 +353,9 @@ def transcribe(
         from svp_rpe.transcribe import render_semantic_axes_advisory
 
         try:
-            annotations = extract_clap_semantic_axes(audio)
+            annotations = extract_clap_semantic_axes(
+                audio, checkpoint=clap_checkpoint, amodel=clap_amodel
+            )
         except LearnedModelUnavailable as exc:
             console.print(str(exc), style="yellow", markup=False)
             raise typer.Exit(code=1) from exc

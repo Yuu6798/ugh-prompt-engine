@@ -311,6 +311,62 @@ class TestCli:
         dumped = json.loads(output.read_text(encoding="utf-8"))
         assert "learned_annotations" not in dumped
 
+    def test_extract_clap_semantic_flag_forwards_checkpoint_and_amodel(
+        self, monkeypatch, tmp_path
+    ):
+        captured = _install_fake_clap(
+            monkeypatch, audio_vector=[3.0, 4.0], text_vectors=_VOCAL_TEXT_VECTORS
+        )
+        monkeypatch.setattr(extractor, "extract_rpe_from_file", lambda path, **kwargs: _make_bundle())
+
+        audio = tmp_path / "a.wav"
+        _write_wav(audio, seconds=0.05)
+
+        result = runner.invoke(
+            app,
+            [
+                "extract",
+                str(audio),
+                "--clap-semantic",
+                "--clap-checkpoint",
+                "ckpt.pt",
+                "--clap-amodel",
+                "HTSAT-base",
+            ],
+        )
+
+        assert result.exit_code == 0, result.stdout
+        assert captured["checkpoint"] == "ckpt.pt"
+        assert captured["init_kwargs"] == {"enable_fusion": False, "amodel": "HTSAT-base"}
+
+    def test_extract_clap_sections_flag_forwards_checkpoint_and_amodel(
+        self, monkeypatch, tmp_path
+    ):
+        captured = _install_fake_clap(
+            monkeypatch, audio_vector=[3.0, 4.0], text_vectors=_VOCAL_TEXT_VECTORS
+        )
+        monkeypatch.setattr(extractor, "extract_rpe_from_file", lambda path, **kwargs: _make_bundle())
+
+        audio = tmp_path / "a.wav"
+        _write_wav(audio, seconds=0.05)
+
+        result = runner.invoke(
+            app,
+            [
+                "extract",
+                str(audio),
+                "--clap-sections",
+                "--clap-checkpoint",
+                "ckpt.pt",
+                "--clap-amodel",
+                "HTSAT-base",
+            ],
+        )
+
+        assert result.exit_code == 0, result.stdout
+        assert captured["checkpoint"] == "ckpt.pt"
+        assert captured["init_kwargs"] == {"enable_fusion": False, "amodel": "HTSAT-base"}
+
     def test_extract_clap_semantic_unavailable_fails_fast_before_extraction(
         self, monkeypatch, tmp_path
     ):
