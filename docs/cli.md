@@ -79,10 +79,18 @@ they are easy to find and edit.
 ```bash
 svprpe transcribe track.wav
 svprpe transcribe track.wav --output draft_score.yaml
+svprpe transcribe track.wav --clap-semantic --output draft_score.yaml
 ```
 
 The command is deterministic for the same extracted RPE. It is a drafting aid,
 not an automatic final composition brief.
+
+`--clap-semantic` (opt-in, requires the `svp-rpe[semantic-embed]` extra) prepends
+the CLAP semantic-axis readings of the source audio as a YAML comment block above
+the draft. It is **advisory instrument context for authoring** the blank
+`semantic.*` fields — it does not fill them (those stay `TODO(transcribe): ...`
+per DD-D). The comment block keeps the draft loader-valid. See
+[Semantic Sensor: CLAP](semantic_sensor_clap.md).
 
 ### `svprpe roundtrip <composition_score.yaml>`
 

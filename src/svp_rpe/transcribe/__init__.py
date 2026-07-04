@@ -21,6 +21,7 @@ from .score_draft import (
     TODO_TIME_SIGNATURE_UNDETECTED,
     draft_score,
     render_draft_score_yaml,
+    render_semantic_axes_advisory,
 )
 
 __all__ = [
@@ -42,4 +43,5 @@ __all__ = [
     "parse_field_filter",
     "render_draft_score_yaml",
     "render_measurement_json",
+    "render_semantic_axes_advisory",
 ]

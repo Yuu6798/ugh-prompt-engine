@@ -253,14 +253,49 @@ def transcribe(
         "--output",
         help="Output CompositionScore YAML path",
     ),
+    clap_semantic: bool = typer.Option(
+        False,
+        "--clap-semantic",
+        help=(
+            "Prepend advisory CLAP semantic-axis readings of the source audio "
+            "as a YAML comment block (requires the semantic-embed extra). "
+            "Advisory only — does not fill the authored semantic.* fields (DD-D)."
+        ),
+    ),
 ) -> None:
     """Transcribe one audio file into a loader-valid draft CompositionScore YAML."""
     from svp_rpe.rpe.extractor import extract_rpe_from_file
     from svp_rpe.transcribe import draft_score, render_draft_score_yaml
 
+    if clap_semantic:
+        # Fail fast on the missing optional dependency before the base
+        # extraction (probe imports the module; no weight download).
+        from svp_rpe.rpe.learned import LearnedModelUnavailable
+        from svp_rpe.rpe.learned.clap_adapter import ensure_clap_available
+
+        try:
+            ensure_clap_available()
+        except LearnedModelUnavailable as exc:
+            console.print(str(exc), style="yellow", markup=False)
+            raise typer.Exit(code=1) from exc
+
     bundle = extract_rpe_from_file(audio)
     score = draft_score(bundle)
-    content = render_draft_score_yaml(score)
+
+    advisory = ""
+    if clap_semantic:
+        from svp_rpe.rpe.learned import LearnedModelUnavailable
+        from svp_rpe.rpe.learned.semantic_axes import extract_clap_semantic_axes
+        from svp_rpe.transcribe import render_semantic_axes_advisory
+
+        try:
+            annotations = extract_clap_semantic_axes(audio)
+        except LearnedModelUnavailable as exc:
+            console.print(str(exc), style="yellow", markup=False)
+            raise typer.Exit(code=1) from exc
+        advisory = render_semantic_axes_advisory(annotations)
+
+    content = advisory + render_draft_score_yaml(score)
 
     if output:
         Path(output).parent.mkdir(parents=True, exist_ok=True)
