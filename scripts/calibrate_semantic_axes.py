@@ -261,7 +261,11 @@ def compute_lyrics_effect_vs_regen_noise(
 
     `effect = mean(reading[f"{g}_lyrics"], reading[f"{g}_lyrics_alt"]) - reading[f"{g}_inst"]`,
     `regen_noise = |reading[f"{g}_lyrics"] - reading[f"{g}_lyrics_alt"]|`,
-    `ratio = |effect| / regen_noise` (null when `regen_noise` is ~0).
+    `ratio = |effect| / regen_noise` (null when `regen_noise` is ~0, to avoid a
+    division by ~zero). `exceeds_noise = |effect| > regen_noise` is computed
+    directly (not via `ratio`) so the gate still applies when `ratio` is null —
+    a zero (or near-zero) noise floor with a nonzero effect is the strongest
+    possible pass, not a failure.
     """
     lyrics_readings = readings["lyrics_vocal_contrast"]
     stats: dict[str, dict[str, Any]] = {}
@@ -273,12 +277,8 @@ def compute_lyrics_effect_vs_regen_noise(
             inst_v = lyrics_readings[f"{genre}_inst"][axis_name]
             effect = (lyrics_v + alt_v) / 2.0 - inst_v
             regen_noise = abs(lyrics_v - alt_v)
-            if regen_noise > 1e-12:
-                ratio: Optional[float] = abs(effect) / regen_noise
-                exceeds_noise = ratio > 1.0
-            else:
-                ratio = None
-                exceeds_noise = False
+            ratio: Optional[float] = abs(effect) / regen_noise if regen_noise > 1e-12 else None
+            exceeds_noise = abs(effect) > regen_noise
             stats[axis_name][genre] = {
                 "effect": _round(effect),
                 "regen_noise": _round(regen_noise),

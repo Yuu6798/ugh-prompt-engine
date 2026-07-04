@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+from pathlib import Path
 from typing import Any, Optional
 
 import pytest
@@ -166,6 +167,67 @@ def test_main_writes_structurally_complete_calibration(monkeypatch, tmp_path):
     census = stats["acousticness_sign_census"]
     assert census["total"] == 38
     assert 0 <= census["negative"] <= 38
+
+
+def test_lyrics_effect_vs_regen_noise_zero_noise_is_strongest_pass():
+    """Regression for the P2 fix: when `lyrics` and `lyrics_alt` are identical
+    (regen_noise == 0) but the effect is nonzero, the gate `|effect| >
+    regen_noise` trivially holds — this is the strongest possible pass, not a
+    failure — even though `ratio` stays null (division by ~zero avoided).
+
+    Also covers the degenerate all-equal case (effect == 0, regen_noise == 0),
+    which must stay `exceeds_noise=False` (0 > 0 is false).
+    """
+    axis_names = ["vocal_presence"]
+    readings = {
+        "lyrics_vocal_contrast": {
+            # edm: lyrics == lyrics_alt (regen_noise == 0), inst differs -> nonzero effect.
+            "edm_lyrics": {"vocal_presence": 0.5},
+            "edm_lyrics_alt": {"vocal_presence": 0.5},
+            "edm_inst": {"vocal_presence": 0.2},
+            # rock: fully degenerate, everything equal -> effect == 0, regen_noise == 0.
+            "rock_lyrics": {"vocal_presence": 0.3},
+            "rock_lyrics_alt": {"vocal_presence": 0.3},
+            "rock_inst": {"vocal_presence": 0.3},
+        }
+    }
+
+    stats = calibrate.compute_lyrics_effect_vs_regen_noise(readings, axis_names)
+
+    edm_row = stats["vocal_presence"]["edm"]
+    assert edm_row["regen_noise"] == 0.0
+    assert edm_row["ratio"] is None
+    assert edm_row["exceeds_noise"] is True
+
+    rock_row = stats["vocal_presence"]["rock"]
+    assert rock_row["effect"] == 0.0
+    assert rock_row["regen_noise"] == 0.0
+    assert rock_row["ratio"] is None
+    assert rock_row["exceeds_noise"] is False
+
+
+def test_committed_calibration_yaml_exceeds_noise_matches_gate():
+    """Regression guard: the committed real calibration YAML has all
+    regen_noise values > 0, so this P2 fix must not change any of its
+    `exceeds_noise` verdicts — reverify the gate directly from the file.
+    """
+    calibration_path = (
+        Path(__file__).resolve().parent.parent
+        / "examples"
+        / "learned"
+        / "clap"
+        / "semantic_axes_calibration_2026-07-04.yaml"
+    )
+    payload = yaml.safe_load(calibration_path.read_text(encoding="utf-8"))
+    lyrics_stats = payload["stats"]["lyrics_effect_vs_regen_noise"]
+
+    checked = 0
+    for per_genre in lyrics_stats.values():
+        for row in per_genre.values():
+            assert row["regen_noise"] > 0.0
+            assert row["exceeds_noise"] == (abs(row["effect"]) > row["regen_noise"])
+            checked += 1
+    assert checked == 10  # 5 axes x 2 genres
 
 
 def test_run_date_omitted_when_not_given(monkeypatch, tmp_path):
