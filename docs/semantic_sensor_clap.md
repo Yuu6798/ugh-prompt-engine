@@ -73,6 +73,41 @@ svprpe extract track.wav --clap-semantic -o rpe.json
 `embed_audio_file` 由来の既存キー（`checkpoint` / `amodel` / `n_chunks`
 等）に追加される。
 
+## 採譜（transcribe）での advisory 利用
+
+```bash
+svprpe transcribe track.wav --clap-semantic -o draft_score.yaml
+```
+
+`svprpe transcribe` は音源から draft `CompositionScore` を起こすが、意味層
+（`semantic.core` / `grv` / `delta_e`）は **人間が書く欄**として
+`TODO(transcribe): ...` プレースホルダのまま残す（DD-D、
+[`docs/score_centric_planning.md`](score_centric_planning.md) §5）。
+`--clap-semantic` を付けると、CLAP 意味軸の読みを **YAML コメントブロック**として
+draft の先頭に添える:
+
+```yaml
+# ---- CLAP semantic sensor (advisory) ----
+# Learned A/B contrast_fit readings of the SOURCE audio (signed grip,
+# not a verdict). Instrument context for authoring the semantic.*
+# fields below — they are NOT auto-filled: semantic.core / grv /
+# delta_e stay TODO for the author (DD-D). See docs/semantic_sensor_clap.md.
+#   vocal_presence : +0.2475
+#   brightness     : -0.0300
+#   ...
+# source_model: laion_clap:CLAP_Module
+# ------------------------------------------
+meta:
+  ...
+```
+
+全行が YAML コメントのため draft は loader-valid のまま
+（`load_composition_score` はコメントを無視する）。意味層フィールドを
+**自動で埋めない**点が肝心で、「計器 = 作曲前のパラメータ取得道具」
+（score_centric §1）の役割に忠実に、作者が空欄を書くための計器読みとして
+横に添えるにとどめる。DD-D の解除（意味フィールドへの write-through）は
+別途 promotion gate と校正基準の文書化を要する将来課題。
+
 ## 決定論
 
 `rpe/learned/clap_adapter.py` の `embed_audio_file` / `embed_texts` は

@@ -19,7 +19,7 @@ from svp_rpe.compose.models import (
     StructureSection,
 )
 from svp_rpe.sentinels import TODO_SENTINEL_PREFIX, is_todo_sentinel
-from svp_rpe.rpe.models import RPEBundle, SectionMarker
+from svp_rpe.rpe.models import LearnedAudioAnnotations, RPEBundle, SectionMarker
 from svp_rpe.transcribe.measure import SCORE_FIELDS, measure_fields
 from svp_rpe.transcribe.models import FieldMeasurement
 
@@ -95,6 +95,40 @@ def render_draft_score_yaml(score: CompositionScore) -> str:
         sort_keys=False,
         allow_unicode=True,
     )
+
+
+def render_semantic_axes_advisory(annotations: LearnedAudioAnnotations) -> str:
+    """Render CLAP semantic-axis readings as a YAML comment block.
+
+    Returns a `#`-commented advisory header (empty string when there are no
+    `semantic_axes`) meant to be prepended to a draft-score YAML. Every line
+    is a comment, so the combined document stays loader-valid
+    (`yaml.safe_load` / `load_composition_score` ignore comments).
+
+    This deliberately does NOT write into `SemanticLayer.core` / `grv` /
+    `delta_e`: those remain the author's fields (DD-D,
+    docs/score_centric_planning.md §5). The readings are surfaced next to the
+    blank fields as instrument context for authoring — the "計器 = 作曲前の
+    パラメータ取得道具" use — never as auto-filled values. `contrast_fit` is a
+    signed learned grip, not a verdict (docs/semantic_sensor_clap.md).
+    """
+    axes = annotations.semantic_axes
+    if not axes:
+        return ""
+    width = max(len(axis.axis) for axis in axes)
+    lines = [
+        "# ---- CLAP semantic sensor (advisory) ----",
+        "# Learned A/B contrast_fit readings of the SOURCE audio (signed grip,",
+        "# not a verdict). Instrument context for authoring the semantic.*",
+        "# fields below — they are NOT auto-filled: semantic.core / grv /",
+        "# delta_e stay TODO for the author (DD-D). See docs/semantic_sensor_clap.md.",
+    ]
+    lines.extend(
+        f"#   {axis.axis:<{width}} : {axis.contrast_fit:+.4f}" for axis in axes
+    )
+    lines.append(f"# source_model: {axes[0].source_model}")
+    lines.append("# ------------------------------------------")
+    return "\n".join(lines) + "\n"
 
 
 def _format_fixed_range(raw_value: float) -> str:
