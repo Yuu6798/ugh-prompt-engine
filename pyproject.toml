@@ -66,7 +66,11 @@ musicgen = ["transformers", "torch", "scipy", "sentencepiece"]
 # Weights (e.g. Systran/faster-whisper-small) are downloaded lazily by
 # upstream on first `WhisperModel(...)` construction; do NOT widen this
 # extra to bundle weights. See docs/learned_models_policy.md.
-lyrics = ["faster-whisper>=1.0"]
+# demucs is bundled because the DEFAULT documented paths (`extract --lyrics`
+# / `lyrics-adherence`) isolate the vocals stem first — `pip install -e
+# ".[lyrics]"` alone must stand up the default (separation-included) path;
+# `--lyrics-no-separate` remains the demucs-free runtime opt-out.
+lyrics = ["faster-whisper>=1.0", "demucs>=4.0"]
 
 [project.scripts]
 svprpe = "svp_rpe.cli:app"

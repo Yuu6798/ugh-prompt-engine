@@ -6,6 +6,9 @@
 pip install -e ".[dev]"
 # Include Demucs when using --separate:
 pip install -e ".[dev,separate]"
+# Lyrics transcription (--lyrics / lyrics-adherence; bundles Demucs for the
+# default vocals-separation path):
+pip install -e ".[dev,lyrics]"
 ```
 
 ## Commands
@@ -38,9 +41,12 @@ axis battery per structural section instead (the "emotional arc"; superset of
 [Semantic Sensor: CLAP](semantic_sensor_clap.md).
 
 `--lyrics` is opt-in and requires the optional `svp-rpe[lyrics]` dependency
-(faster-whisper). It transcribes the source audio's lyrics — isolating vocals
-via Demucs first by default (`--lyrics-no-separate` transcribes the full mix
-instead) — and attaches the result to `learned_annotations.lyrics_transcription`.
+(faster-whisper + demucs — the extra bundles Demucs because the default path
+isolates vocals first, so `pip install -e ".[lyrics]"` alone stands up the
+default separation-included path). It transcribes the source audio's lyrics —
+isolating vocals via Demucs first by default (`--lyrics-no-separate`
+transcribes the full mix instead, the demucs-free opt-out) — and attaches the
+result to `learned_annotations.lyrics_transcription`.
 Combine with `--clap-semantic` / `--clap-sections` to populate both sensors on
 the same `learned_annotations` record. See
 [Lyrics Transcription Sensor](lyrics_transcription_sensor.md).

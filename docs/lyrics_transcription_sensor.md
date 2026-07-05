@@ -81,10 +81,15 @@ Section 2 を参照。
 
 ## 6. 依存関係
 
-- `pip install -e ".[lyrics]"` — faster-whisper（重みは初回 `WhisperModel(...)`
-  構築時に遅延ダウンロード）
-- vocals 分離を使う場合（デフォルト）は `.[separate]`（Demucs）の併用を推奨。
-  `--lyrics-no-separate` でフルミックスを直接転写すればこの依存を回避できる。
+- `pip install -e ".[lyrics]"` — faster-whisper + demucs（Whisper 重みは初回
+  `WhisperModel(...)` 構築時に遅延ダウンロード）。
+- デフォルト経路（`extract --lyrics` / `lyrics-adherence`）は vocals 分離を
+  先に行うため、`lyrics` extra は demucs を同梱する —
+  **`pip install -e ".[lyrics]"` だけでデフォルト経路（vocals 分離込み）が
+  立つことが契約**（`semantic-embed` extra が torch を明示同梱するのと同じ
+  精神。[`docs/learned_models_policy.md`](learned_models_policy.md) 参照）。
+- `--lyrics-no-separate` は demucs 不要のランタイム opt-out として残る
+  （フルミックスを直接転写。demucs が import されない経路）。
 
 ## 7. 既知の限界
 

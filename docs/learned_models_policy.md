@@ -151,10 +151,13 @@ provenance hints from a learned model live in `LearnedAudioLabel.notes`.
     （`lyrics_adapter._resolve_weights_identifier`）。
 - Constraints:
   - 重み（CTranslate2 変換済みモデル）は optional extra `lyrics` に限定する。
-    デフォルトインストールは変えない。
+    デフォルトインストールは変えない。`lyrics` extra は demucs を同梱する —
+    デフォルト経路が vocals 分離込みのため、`pip install -e ".[lyrics]"`
+    だけで分離込みのデフォルト経路が単独で立つことが契約
+    （`semantic-embed` が torch を明示同梱するのと同じ精神）。
   - デフォルトで Demucs vocals stem 分離を先に行う（`--lyrics-no-separate`
-    でフルミックス直接転写に切り替え可能）— フルミックスでの歌詞認識は
-    精度が大幅に落ちるため。
+    でフルミックス直接転写に切り替え可能 — demucs 不要のランタイム
+    opt-out）— フルミックスでの歌詞認識は精度が大幅に落ちるため。
   - 決定論は `temperature=0.0` + `condition_on_previous_text=False` による
     同一マシン契約（CLAP と同じ位置付け。CTranslate2 のカーネル選択は
     ハードウェア/ビルド依存でクロスマシンのビット完全性は保証しない）。
@@ -224,7 +227,7 @@ extras:
 | `learned-tags`   | `panns_inference`   |
 | `pitch`          | `basic-pitch`       |
 | `semantic-embed` | `laion-clap`        |
-| `lyrics`         | `faster-whisper`    |
+| `lyrics`         | `faster-whisper` + `demucs` (デフォルト経路が vocals 分離込みのため) |
 
 The default install MUST remain green without any of these extras. Each
 backend module performs a guarded import and falls back gracefully (or
