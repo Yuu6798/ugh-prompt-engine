@@ -51,6 +51,7 @@ __all__ = [
     "LearnedModelUnavailable",
     "LearnedModelIncompatible",
     "load_semantic_axes",
+    "validate_axes_battery",
     "extract_clap_semantic_axes",
     "extract_clap_semantic_section_axes",
 ]
@@ -58,7 +59,23 @@ __all__ = [
 _SOURCE_MODEL = "laion_clap:CLAP_Module"
 
 
-def _validated_axes(axes: list[dict]) -> list[dict]:
+def validate_axes_battery(axes: list[dict]) -> list[dict]:
+    """Validate a semantic-axis battery (a list of `{name, positive, negative}`
+    dicts) and return it unchanged.
+
+    Public so callers loading an alternate battery (e.g. a variant-sweep
+    config via `scripts/calibrate_semantic_axes.py --axes-config`) can reuse
+    the exact same fail-fast rules as the canonical
+    `config/semantic_probe_axes.yaml` loader (`load_semantic_axes`) instead
+    of duplicating them.
+
+    Raises
+    ------
+    ValueError
+        If `axes` is empty/not a list, or any entry is missing a non-empty
+        `name`, has a duplicate `name`, or has a non-empty-list-of-strings
+        `positive`/`negative`.
+    """
     # An empty / missing / non-list battery (config omits `axes` or sets
     # `axes: []`/`axes:`) would otherwise pass silently and produce zero
     # LearnedSemanticAxis readings (`n_semantic_axes=0`) — a useless CLAP
@@ -115,7 +132,7 @@ def load_semantic_axes() -> list[dict]:
         `negative`.
     """
     config = load_config("semantic_probe_axes")
-    return _validated_axes(config.get("axes", []))
+    return validate_axes_battery(config.get("axes", []))
 
 
 def extract_clap_semantic_axes(
@@ -152,7 +169,7 @@ def extract_clap_semantic_axes(
     # audio, so a malformed battery (scalar probe strings, empty/missing
     # `axes`) fails fast instead of after expensive inference. Validates both
     # the default battery AND caller-supplied custom axes.
-    axes = _validated_axes(axes if axes is not None else axes_config.get("axes", []))
+    axes = validate_axes_battery(axes if axes is not None else axes_config.get("axes", []))
 
     clap_model = model if model is not None else load_clap_model(checkpoint, amodel)
     annotations = embed_audio_file(
@@ -246,7 +263,7 @@ def extract_clap_semantic_section_axes(
         expected contract.
     """
     axes_config = load_config("semantic_probe_axes")
-    axes = _validated_axes(axes if axes is not None else axes_config.get("axes", []))
+    axes = validate_axes_battery(axes if axes is not None else axes_config.get("axes", []))
 
     clap_model = model if model is not None else load_clap_model(checkpoint, amodel)
     base = extract_clap_semantic_axes(

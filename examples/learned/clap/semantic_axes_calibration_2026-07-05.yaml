@@ -1,0 +1,585 @@
+schema_version: '1.1'
+kind: semantic_axes_calibration
+run_date: '2026-07-05'
+model:
+  name: laion_clap
+  checkpoint: music_audioset_epoch_15_esc_90.14.pt
+  checkpoint_sha256: fae3e9c087f2909c28a09dc31c8dfcdacbc42ba44c70e972b58c1bd1caf6dedd
+  amodel: HTSAT-base
+  laion_clap_version: 1.1.7
+  torch_version: 2.12.1
+axes_config_version: '1.1'
+probe_determinism_same_run: true
+readings:
+  lyrics_vocal_contrast:
+    edm_lyrics:
+      vocal_presence: 0.247549
+      brightness: 0.130191
+      energy: 0.42512
+      acousticness: -0.202161
+      warmth: -0.131569
+      valence: 0.163475
+      electronic_production: 0.352268
+    edm_lyrics_alt:
+      vocal_presence: 0.254999
+      brightness: 0.13462
+      energy: 0.432989
+      acousticness: -0.191565
+      warmth: -0.12087
+      valence: 0.167091
+      electronic_production: 0.335538
+    edm_inst:
+      vocal_presence: 0.134078
+      brightness: 0.113726
+      energy: 0.354573
+      acousticness: -0.142447
+      warmth: -0.119511
+      valence: 0.141067
+      electronic_production: 0.342284
+    rock_lyrics:
+      vocal_presence: 0.258098
+      brightness: 0.147607
+      energy: 0.367601
+      acousticness: -0.124282
+      warmth: -0.139683
+      valence: 0.189958
+      electronic_production: 0.037972
+    rock_lyrics_alt:
+      vocal_presence: 0.232403
+      brightness: 0.130475
+      energy: 0.383402
+      acousticness: -0.097035
+      warmth: -0.142481
+      valence: 0.207702
+      electronic_production: -0.014008
+    rock_inst:
+      vocal_presence: -0.048689
+      brightness: 0.05209
+      energy: 0.201152
+      acousticness: 0.026982
+      warmth: -0.045254
+      valence: 0.156429
+      electronic_production: -0.088913
+  musicgen_k2_contrast:
+    bpm_low_00:
+      vocal_presence: -0.125091
+      brightness: -0.016512
+      energy: -0.101399
+      acousticness: 0.132304
+      warmth: -0.139974
+      valence: -0.028373
+      electronic_production: 0.033223
+    bpm_low_01:
+      vocal_presence: -0.180992
+      brightness: -0.061823
+      energy: -0.109985
+      acousticness: 0.000488
+      warmth: 0.049485
+      valence: -0.088913
+      electronic_production: 0.025035
+    bpm_low_02:
+      vocal_presence: -0.164964
+      brightness: -0.014997
+      energy: -0.110715
+      acousticness: 0.043535
+      warmth: -0.054188
+      valence: -0.111834
+      electronic_production: 0.004247
+    bpm_low_03:
+      vocal_presence: -0.098141
+      brightness: 0.003721
+      energy: -0.177047
+      acousticness: 0.034539
+      warmth: 0.008934
+      valence: 0.073554
+      electronic_production: -0.022989
+    bpm_low_04:
+      vocal_presence: -0.093486
+      brightness: -0.063403
+      energy: -0.069113
+      acousticness: 0.101615
+      warmth: -0.121607
+      valence: -0.045988
+      electronic_production: -0.079451
+    bpm_low_05:
+      vocal_presence: -0.157417
+      brightness: -0.102975
+      energy: -0.108156
+      acousticness: 0.079884
+      warmth: -0.165461
+      valence: -0.167509
+      electronic_production: 0.00029
+    bpm_low_06:
+      vocal_presence: -0.025684
+      brightness: -0.097058
+      energy: -0.012019
+      acousticness: 0.030045
+      warmth: -0.029223
+      valence: -0.263558
+      electronic_production: 0.035105
+    bpm_low_07:
+      vocal_presence: -0.090168
+      brightness: -0.08387
+      energy: -0.068417
+      acousticness: -0.0631
+      warmth: -0.032689
+      valence: -0.136997
+      electronic_production: 0.07759
+    bpm_high_00:
+      vocal_presence: -0.09253
+      brightness: -0.100331
+      energy: 0.09159
+      acousticness: -0.017007
+      warmth: -0.076444
+      valence: -0.041033
+      electronic_production: 0.047578
+    bpm_high_01:
+      vocal_presence: -0.080708
+      brightness: -0.075702
+      energy: 0.159893
+      acousticness: -0.140383
+      warmth: -0.027766
+      valence: 0.066838
+      electronic_production: 0.090152
+    bpm_high_02:
+      vocal_presence: -0.071795
+      brightness: -0.002603
+      energy: 0.049735
+      acousticness: -0.017728
+      warmth: -0.041733
+      valence: 0.049558
+      electronic_production: 0.032826
+    bpm_high_03:
+      vocal_presence: -0.027371
+      brightness: 0.00915
+      energy: 0.027339
+      acousticness: -0.009693
+      warmth: -0.141974
+      valence: -0.07221
+      electronic_production: 0.132249
+    bpm_high_04:
+      vocal_presence: -0.067586
+      brightness: -0.039351
+      energy: 0.054089
+      acousticness: -0.043046
+      warmth: -0.165589
+      valence: 0.038234
+      electronic_production: 0.092952
+    bpm_high_05:
+      vocal_presence: -0.028226
+      brightness: -0.036676
+      energy: 0.032835
+      acousticness: -0.018522
+      warmth: -0.126907
+      valence: 0.025225
+      electronic_production: 0.022678
+    bpm_high_06:
+      vocal_presence: -0.051127
+      brightness: -0.01996
+      energy: 0.140647
+      acousticness: -0.052944
+      warmth: -0.225492
+      valence: 0.038531
+      electronic_production: 0.144901
+    bpm_high_07:
+      vocal_presence: -0.059105
+      brightness: -0.009857
+      energy: -0.068058
+      acousticness: -0.029125
+      warmth: -0.095207
+      valence: 0.017564
+      electronic_production: 0.054434
+    brightness_low_00:
+      vocal_presence: 0.024722
+      brightness: 0.044769
+      energy: -0.060995
+      acousticness: -0.032541
+      warmth: -0.016802
+      valence: 0.247678
+      electronic_production: -0.092635
+    brightness_low_01:
+      vocal_presence: -0.094224
+      brightness: -0.065289
+      energy: -0.09328
+      acousticness: 0.117932
+      warmth: -0.090078
+      valence: -0.198731
+      electronic_production: 0.058084
+    brightness_low_02:
+      vocal_presence: -0.056219
+      brightness: -0.04724
+      energy: 0.047207
+      acousticness: 0.047862
+      warmth: -0.119067
+      valence: 0.021007
+      electronic_production: 0.042673
+    brightness_low_03:
+      vocal_presence: -0.092528
+      brightness: -0.001247
+      energy: -0.075273
+      acousticness: 0.07325
+      warmth: -0.012766
+      valence: -0.116215
+      electronic_production: 0.038601
+    brightness_low_04:
+      vocal_presence: -0.152386
+      brightness: -0.101682
+      energy: -0.061051
+      acousticness: 0.0722
+      warmth: -0.032543
+      valence: -0.048034
+      electronic_production: -0.017225
+    brightness_low_05:
+      vocal_presence: -0.083027
+      brightness: -0.053022
+      energy: 0.003909
+      acousticness: 0.042241
+      warmth: -0.04865
+      valence: -0.143441
+      electronic_production: 0.033849
+    brightness_low_06:
+      vocal_presence: -0.086367
+      brightness: -0.123978
+      energy: 0.086303
+      acousticness: 0.035745
+      warmth: -0.032401
+      valence: -0.20749
+      electronic_production: 0.100252
+    brightness_low_07:
+      vocal_presence: -0.142219
+      brightness: -0.119362
+      energy: -0.053505
+      acousticness: 0.078245
+      warmth: -0.049306
+      valence: -0.147168
+      electronic_production: 0.046916
+    brightness_high_00:
+      vocal_presence: -0.02198
+      brightness: 0.086346
+      energy: 0.043016
+      acousticness: -0.114178
+      warmth: -0.031623
+      valence: 0.072734
+      electronic_production: 0.246536
+    brightness_high_01:
+      vocal_presence: -0.062198
+      brightness: -0.043497
+      energy: -0.062586
+      acousticness: 0.006645
+      warmth: -0.085789
+      valence: -0.010319
+      electronic_production: -0.008673
+    brightness_high_02:
+      vocal_presence: -0.006864
+      brightness: 0.027949
+      energy: -0.080242
+      acousticness: 0.071233
+      warmth: -0.058418
+      valence: 0.093716
+      electronic_production: -0.066477
+    brightness_high_03:
+      vocal_presence: -0.057078
+      brightness: -0.002832
+      energy: -0.071174
+      acousticness: 0.003638
+      warmth: -0.068795
+      valence: 0.065429
+      electronic_production: 0.028962
+    brightness_high_04:
+      vocal_presence: -0.134305
+      brightness: -0.021162
+      energy: 0.032471
+      acousticness: 0.004215
+      warmth: -0.053785
+      valence: 0.033577
+      electronic_production: 0.086583
+    brightness_high_05:
+      vocal_presence: -0.066472
+      brightness: -0.016774
+      energy: 0.043137
+      acousticness: -0.053606
+      warmth: -0.10837
+      valence: 0.011332
+      electronic_production: 0.023849
+    brightness_high_06:
+      vocal_presence: 0.053025
+      brightness: 0.044307
+      energy: -0.05508
+      acousticness: -0.1084
+      warmth: -0.009617
+      valence: 0.2759
+      electronic_production: 0.023781
+    brightness_high_07:
+      vocal_presence: -0.012874
+      brightness: 0.018926
+      energy: 0.028521
+      acousticness: -0.049408
+      warmth: -0.069093
+      valence: 0.088712
+      electronic_production: 0.018685
+reproduction_check:
+  lyrics_vocal_contrast:
+    n_samples: 6
+    n_exact_6dp: 3
+    max_abs_deviation: 1.0e-06
+  musicgen_k2_contrast:
+    n_samples: 32
+    n_exact_6dp: 21
+    max_abs_deviation: 1.0e-06
+stats:
+  lyrics_effect_vs_regen_noise:
+    vocal_presence:
+      edm:
+        effect: 0.117196
+        regen_noise: 0.00745
+        ratio: 15.731007
+        exceeds_noise: true
+      rock:
+        effect: 0.293939
+        regen_noise: 0.025695
+        ratio: 11.43956
+        exceeds_noise: true
+    brightness:
+      edm:
+        effect: 0.01868
+        regen_noise: 0.004429
+        ratio: 4.217543
+        exceeds_noise: true
+      rock:
+        effect: 0.086951
+        regen_noise: 0.017132
+        ratio: 5.075356
+        exceeds_noise: true
+    energy:
+      edm:
+        effect: 0.074481
+        regen_noise: 0.007869
+        ratio: 9.46518
+        exceeds_noise: true
+      rock:
+        effect: 0.17435
+        regen_noise: 0.015801
+        ratio: 11.03408
+        exceeds_noise: true
+    acousticness:
+      edm:
+        effect: -0.054416
+        regen_noise: 0.010596
+        ratio: 5.135523
+        exceeds_noise: true
+      rock:
+        effect: -0.13764
+        regen_noise: 0.027247
+        ratio: 5.051584
+        exceeds_noise: true
+    warmth:
+      edm:
+        effect: -0.006708
+        regen_noise: 0.010699
+        ratio: 0.627021
+        exceeds_noise: false
+      rock:
+        effect: -0.095828
+        regen_noise: 0.002798
+        ratio: 34.248749
+        exceeds_noise: true
+    valence:
+      edm:
+        effect: 0.024216
+        regen_noise: 0.003616
+        ratio: 6.696903
+        exceeds_noise: true
+      rock:
+        effect: 0.042401
+        regen_noise: 0.017744
+        ratio: 2.389596
+        exceeds_noise: true
+    electronic_production:
+      edm:
+        effect: 0.001619
+        regen_noise: 0.01673
+        ratio: 0.096772
+        exceeds_noise: false
+      rock:
+        effect: 0.100895
+        regen_noise: 0.05198
+        ratio: 1.941035
+        exceeds_noise: true
+  musicgen_knob_cells:
+    vocal_presence:
+      bpm:
+        low_mean: -0.116993
+        low_stdev: 0.050796
+        high_mean: -0.059806
+        high_stdev: 0.023413
+        cohens_d: 1.445939
+      brightness:
+        low_mean: -0.085281
+        low_stdev: 0.054549
+        high_mean: -0.038593
+        high_stdev: 0.055
+        cohens_d: 0.852357
+    brightness:
+      bpm:
+        low_mean: -0.054615
+        low_stdev: 0.04062
+        high_mean: -0.034416
+        high_stdev: 0.037418
+        cohens_d: 0.51722
+      brightness:
+        low_mean: -0.058381
+        low_stdev: 0.058556
+        high_mean: 0.011658
+        high_stdev: 0.041576
+        cohens_d: 1.379251
+    energy:
+      bpm:
+        low_mean: -0.094606
+        low_stdev: 0.047327
+        high_mean: 0.061009
+        high_stdev: 0.07153
+        cohens_d: 2.565866
+      brightness:
+        low_mean: -0.025836
+        low_stdev: 0.064398
+        high_mean: -0.015242
+        high_stdev: 0.056285
+        cohens_d: 0.175164
+    acousticness:
+      bpm:
+        low_mean: 0.044914
+        low_stdev: 0.060999
+        high_mean: -0.041056
+        high_stdev: 0.042707
+        cohens_d: -1.632741
+      brightness:
+        low_mean: 0.054367
+        low_stdev: 0.043711
+        high_mean: -0.029983
+        high_stdev: 0.063313
+        cohens_d: -1.550486
+    warmth:
+      bpm:
+        low_mean: -0.06059
+        low_stdev: 0.075381
+        high_mean: -0.112639
+        high_stdev: 0.065953
+        cohens_d: -0.734899
+      brightness:
+        low_mean: -0.050202
+        low_stdev: 0.036803
+        high_mean: -0.060686
+        high_stdev: 0.03058
+        cohens_d: -0.309876
+    valence:
+      bpm:
+        low_mean: -0.096202
+        low_stdev: 0.100707
+        high_mean: 0.015338
+        high_stdev: 0.047555
+        cohens_d: 1.41637
+      brightness:
+        low_mean: -0.074049
+        low_stdev: 0.150481
+        high_mean: 0.078885
+        high_stdev: 0.087769
+        cohens_d: 1.241523
+    electronic_production:
+      bpm:
+        low_mean: 0.009131
+        low_stdev: 0.04656
+        high_mean: 0.077221
+        high_stdev: 0.045304
+        cohens_d: 1.482263
+      brightness:
+        low_mean: 0.026314
+        low_stdev: 0.057843
+        high_mean: 0.044156
+        high_stdev: 0.092192
+        cohens_d: 0.231832
+  genre_effect_vs_regen_noise:
+    vocal_presence:
+      effect: 0.064938
+      regen_noise: 0.025695
+      ratio: 2.527262
+      exceeds_noise: true
+    brightness:
+      effect: 0.016122
+      regen_noise: 0.017132
+      ratio: 0.941027
+      exceeds_noise: false
+    energy:
+      effect: 0.086842
+      regen_noise: 0.015801
+      ratio: 5.496002
+      exceeds_noise: true
+    acousticness:
+      effect: -0.113946
+      regen_noise: 0.027247
+      ratio: 4.181965
+      exceeds_noise: true
+    warmth:
+      effect: -0.014844
+      regen_noise: 0.010699
+      ratio: 1.387419
+      exceeds_noise: true
+    valence:
+      effect: -0.027485
+      regen_noise: 0.017744
+      ratio: 1.548993
+      exceeds_noise: true
+    electronic_production:
+      effect: 0.365013
+      regen_noise: 0.05198
+      ratio: 7.022182
+      exceeds_noise: true
+  axis_correlation_matrix:
+    vocal_presence:
+      brightness: 0.840428
+      energy: 0.83386
+      acousticness: -0.74222
+      warmth: -0.343645
+      valence: 0.6624
+      electronic_production: 0.478605
+    brightness:
+      energy: 0.660723
+      acousticness: -0.652596
+      warmth: -0.221763
+      valence: 0.794981
+      electronic_production: 0.398899
+    energy:
+      acousticness: -0.747524
+      warmth: -0.421525
+      valence: 0.511011
+      electronic_production: 0.605891
+    acousticness:
+      warmth: 0.14865
+      valence: -0.638817
+      electronic_production: -0.650213
+    warmth:
+      valence: -0.127451
+      electronic_production: -0.281602
+    valence:
+      electronic_production: 0.132398
+  sign_census:
+    vocal_presence:
+      negative: 31
+      total: 38
+    brightness:
+      negative: 25
+      total: 38
+    energy:
+      negative: 18
+      total: 38
+    acousticness:
+      negative: 19
+      total: 38
+    warmth:
+      negative: 36
+      total: 38
+    valence:
+      negative: 16
+      total: 38
+    electronic_production:
+      negative: 8
+      total: 38

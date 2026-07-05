@@ -736,7 +736,7 @@ class TestCliExtractLyrics:
 
         dumped = json.loads(output.read_text(encoding="utf-8"))
         annotations = dumped["learned_annotations"]
-        assert len(annotations["semantic_axes"]) == 5
+        assert len(annotations["semantic_axes"]) == 7
         assert annotations["lyrics_transcription"]["text"] == "hello world\nsecond line"
         model_names = {m["name"] for m in annotations["enabled_models"]}
         assert model_names == {"laion_clap", "faster_whisper"}

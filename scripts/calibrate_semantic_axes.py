@@ -43,22 +43,43 @@ What it measures:
    probes (the axis the fixture was originally collected against) and
    compares the recomputed `contrast_fit` to the fixture's stored value,
    evidence that a fresh run reproduces the original collection.
-4. `stats` — four calibration reads used to annotate
+4. `stats` — calibration reads used to annotate
    `config/semantic_probe_axes.yaml`'s per-axis `notes`:
    - `lyrics_effect_vs_regen_noise`: does the lyrics-vs-instrumental
      effect exceed the regen-to-regen (lyrics vs lyrics_alt) noise floor?
    - `musicgen_knob_cells`: Cohen's d of each axis against the MusicGen
      bpm / brightness knobs (grip cross-talk check).
-   - `warmth_brightness_pearson_r`: redundancy check between the warmth
-     and brightness axes.
-   - `acousticness_sign_census`: how often the acousticness axis reads
-     negative across the full 38-sample pool.
+   - `genre_effect_vs_regen_noise`: per-axis EDM-vs-Rock matched-pair
+     contrast (same underlying song, `lyrics_vocal_contrast` fixture) vs.
+     the lyrics/lyrics_alt regeneration-noise floor — a genre-axis
+     ground-truth check generalized from the same discipline as
+     `lyrics_effect_vs_regen_noise`.
+   - `axis_correlation_matrix`: Pearson r for every axis pair, pooled over
+     the full 38-sample readings (generalizes the old
+     `warmth_brightness_pearson_r` redundancy check to any axis pair).
+   - `sign_census`: per-axis negative/total sign counts across the full
+     38-sample pool (generalizes the old `acousticness_sign_census` to
+     every axis).
+
+This script also accepts `--axes-config PATH` to calibrate an alternate
+axis battery (e.g. a variant-sweep YAML under a scratchpad) instead of the
+canonical `config/semantic_probe_axes.yaml` — used to A/B candidate probe
+wordings without touching the canonical config. The alternate battery is
+validated with the exact same fail-fast rules
+(`svp_rpe.rpe.learned.semantic_axes.validate_axes_battery`) as the
+canonical loader.
 
 Usage:
     python scripts/calibrate_semantic_axes.py \\
         --checkpoint music_audioset_epoch_15_esc_90.14.pt --amodel HTSAT-base \\
         --output examples/learned/clap/semantic_axes_calibration_2026-07-04.yaml \\
         --run-date 2026-07-04
+
+    # variant sweep against an alternate battery, canonical config untouched:
+    python scripts/calibrate_semantic_axes.py \\
+        --checkpoint music_audioset_epoch_15_esc_90.14.pt --amodel HTSAT-base \\
+        --axes-config /path/to/sweep_battery.yaml \\
+        --output /path/to/sweep_calibration.yaml
 """
 from __future__ import annotations
 
@@ -83,11 +104,11 @@ if str(SRC) not in sys.path:
 from scripts.collect_clap_fixture import load_fixture  # noqa: E402
 from svp_rpe.rpe.learned import LearnedModelUnavailable  # noqa: E402
 from svp_rpe.rpe.learned.clap_adapter import embed_texts, load_clap_model  # noqa: E402
-from svp_rpe.rpe.learned.semantic_axes import load_semantic_axes  # noqa: E402
+from svp_rpe.rpe.learned.semantic_axes import validate_axes_battery  # noqa: E402
 from svp_rpe.rpe.learned.similarity import contrast_fit  # noqa: E402
 from svp_rpe.utils.config_loader import load_config  # noqa: E402
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
 KIND = "semantic_axes_calibration"
 
 FIXTURE_DIR = ROOT / "examples" / "learned" / "clap"
@@ -109,6 +130,11 @@ _MUSICGEN_LEVELS = ("low", "high")
 _MUSICGEN_CELL_SIZE = 8
 
 _LYRICS_GENRES = ("edm", "rock")
+
+# `genre_effect_vs_regen_noise` matched-pair variants: the lyrics_vocal_contrast
+# fixture's edm_* / rock_* samples are the SAME underlying song (StartinA) in
+# 3 variants, so each variant gives one edm-vs-rock genre-contrast reading.
+_GENRE_VARIANTS = ("lyrics", "lyrics_alt", "inst")
 
 
 def _round(value: float) -> float:
@@ -169,6 +195,24 @@ def _validate_embedding_space_pin(
                 f"--amodel={amodel!r}. Pass the matching --checkpoint/--amodel."
             )
     return computed_sha256
+
+
+def load_axes_config(axes_config_path: Optional[Path]) -> dict[str, Any]:
+    """Load the axis-battery config dict: `axes_config_path` if given, else
+    the canonical `config/semantic_probe_axes.yaml` (via `load_config`,
+    which prefers the local `config/` copy over the packaged one).
+
+    Only reads the raw dict (`schema_version` / `axes`) — callers must
+    still validate `axes` themselves via `validate_axes_battery` before
+    trusting it (this function does not validate).
+    """
+    if axes_config_path is None:
+        return load_config("semantic_probe_axes")
+    with axes_config_path.open(encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    if not isinstance(data, dict):
+        raise ValueError(f"axes config must be a mapping: {axes_config_path}")
+    return data
 
 
 def load_fixtures() -> dict[str, dict[str, Any]]:
@@ -354,43 +398,136 @@ def compute_musicgen_knob_cells(
     return stats
 
 
-def compute_cross_axis_stats(
-    readings: dict[str, dict[str, dict[str, float]]],
-) -> dict[str, Any]:
-    """`warmth_brightness_pearson_r` and `acousticness_sign_census` over ALL samples."""
-    brightness_vals: list[float] = []
-    warmth_vals: list[float] = []
-    acousticness_vals: list[float] = []
+def _pooled_axis_values(
+    readings: dict[str, dict[str, dict[str, float]]], axis_names: list[str]
+) -> dict[str, list[float]]:
+    """Every axis's readings pooled across both fixtures' samples (38 total)."""
+    values: dict[str, list[float]] = {name: [] for name in axis_names}
     for fixture_readings in readings.values():
         for row in fixture_readings.values():
-            brightness_vals.append(row["brightness"])
-            warmth_vals.append(row["warmth"])
-            acousticness_vals.append(row["acousticness"])
+            for name in axis_names:
+                values[name].append(row[name])
+    return values
 
-    pearson_r = statistics.correlation(brightness_vals, warmth_vals)
-    negative = sum(1 for value in acousticness_vals if value < 0)
+
+def axis_correlation_matrix(
+    readings: dict[str, dict[str, dict[str, float]]], axis_names: list[str]
+) -> dict[str, dict[str, Optional[float]]]:
+    """Pearson r for every axis pair, pooled over the full readings pool.
+
+    Generalizes the old hardcoded `warmth_brightness_pearson_r` redundancy
+    check to any axis pair in the config. Output is `{axis_a: {axis_b: r}}`
+    keyed in config axis order — each unordered pair appears exactly once
+    (`axis_a` always precedes `axis_b` in `axis_names`), the diagonal is
+    omitted, and `r` is rounded to 6 digits.
+    Pearson r is undefined when either series has zero variance (e.g. a
+    degenerate constant axis): such pairs get `r: None` (YAML null), same
+    convention as `cohens_d: None` when the pooled stdev is 0.
+    """
+    values = _pooled_axis_values(readings, axis_names)
+    constant = {
+        name: all(abs(v - series[0]) < 1e-12 for v in series)
+        for name, series in values.items()
+    }
+    matrix: dict[str, dict[str, Optional[float]]] = {}
+    for i, axis_a in enumerate(axis_names):
+        for axis_b in axis_names[i + 1 :]:
+            if constant[axis_a] or constant[axis_b]:
+                r: Optional[float] = None
+            else:
+                r = _round(statistics.correlation(values[axis_a], values[axis_b]))
+            matrix.setdefault(axis_a, {})[axis_b] = r
+    return matrix
+
+
+def sign_census(
+    readings: dict[str, dict[str, dict[str, float]]], axis_names: list[str]
+) -> dict[str, dict[str, int]]:
+    """Per-axis negative/total sign counts across the full readings pool.
+
+    Generalizes the old hardcoded `acousticness_sign_census` (sign-reading
+    reliability check) to every axis in the config.
+    """
+    values = _pooled_axis_values(readings, axis_names)
     return {
-        "warmth_brightness_pearson_r": _round(pearson_r),
-        "acousticness_sign_census": {
-            "negative": negative,
-            "total": len(acousticness_vals),
-        },
+        name: {
+            "negative": sum(1 for value in axis_values if value < 0),
+            "total": len(axis_values),
+        }
+        for name, axis_values in values.items()
     }
 
 
+def compute_genre_effect_vs_regen_noise(
+    readings: dict[str, dict[str, dict[str, float]]], axis_names: list[str]
+) -> dict[str, dict[str, Any]]:
+    """Per axis: does the EDM-vs-Rock matched-pair genre contrast exceed the
+    lyrics/lyrics_alt regeneration-noise floor?
+
+    The `lyrics_vocal_contrast` fixture's edm_* / rock_* samples are a
+    MATCHED PAIR (the same underlying song, StartinA, in 3 variants), so —
+    unlike the vocal-presence-focused `lyrics_effect_vs_regen_noise` — this
+    reads the pair as a genre-axis ground-truth contrast:
+
+    `pair_diff_v = reading[f"edm_{v}"] - reading[f"rock_{v}"]` for each
+    variant `v` in `{lyrics, lyrics_alt, inst}`; `effect = mean(pair_diff_v)`.
+    `regen_noise = max(|edm_lyrics - edm_lyrics_alt|, |rock_lyrics -
+    rock_lyrics_alt|)` (worst-case regeneration noise across both genres).
+    `ratio = |effect| / regen_noise` (null when `regen_noise` is ~0, same
+    division-by-~zero guard as `lyrics_effect_vs_regen_noise`).
+    `exceeds_noise = |effect| > regen_noise` is computed directly (not via
+    `ratio`) so the gate still applies when `ratio` is null.
+    """
+    lyrics_readings = readings["lyrics_vocal_contrast"]
+    stats: dict[str, dict[str, Any]] = {}
+    for axis_name in axis_names:
+        edm_vals = {v: lyrics_readings[f"edm_{v}"][axis_name] for v in _GENRE_VARIANTS}
+        rock_vals = {v: lyrics_readings[f"rock_{v}"][axis_name] for v in _GENRE_VARIANTS}
+        pair_diffs = [edm_vals[v] - rock_vals[v] for v in _GENRE_VARIANTS]
+        effect = statistics.mean(pair_diffs)
+        regen_noise = max(
+            abs(edm_vals["lyrics"] - edm_vals["lyrics_alt"]),
+            abs(rock_vals["lyrics"] - rock_vals["lyrics_alt"]),
+        )
+        ratio: Optional[float] = abs(effect) / regen_noise if regen_noise > 1e-12 else None
+        exceeds_noise = abs(effect) > regen_noise
+        stats[axis_name] = {
+            "effect": _round(effect),
+            "regen_noise": _round(regen_noise),
+            "ratio": _round(ratio) if ratio is not None else None,
+            "exceeds_noise": exceeds_noise,
+        }
+    return stats
+
+
 def build_calibration(
-    *, checkpoint: Optional[str], amodel: Optional[str], run_date: Optional[str] = None
+    *,
+    checkpoint: Optional[str],
+    amodel: Optional[str],
+    run_date: Optional[str] = None,
+    axes_config_path: Optional[Path] = None,
 ) -> dict[str, Any]:
     """Run the full calibration and return the loader-ready payload dict.
+
+    Parameters
+    ----------
+    axes_config_path
+        Optional path to an alternate axis-battery YAML (e.g. a
+        variant-sweep config). Validated with the same
+        `validate_axes_battery` fail-fast rules as the canonical
+        `config/semantic_probe_axes.yaml`. Default (`None`): the canonical
+        config, matching prior behavior exactly.
 
     Raises
     ------
     ValueError
         If `checkpoint`/`amodel` do not match every fixture's pinned
         `model` block (embedding-space mismatch; see
-        `_validate_embedding_space_pin`); if `probe_determinism_same_run`
-        is `False` (text tower nondeterministic within a single run); or
-        if any fixture's `reproduction_check.max_abs_deviation` exceeds
+        `_validate_embedding_space_pin`); if the axis battery (canonical or
+        `axes_config_path`) fails `validate_axes_battery`; if
+        `probe_determinism_same_run` is `False` (text tower nondeterministic
+        within a single run); or if any fixture's
+        `reproduction_check.max_abs_deviation` exceeds
         `_REPRODUCTION_TOLERANCE` (reproduction drift against the stored
         fixture `contrast_fit`). The checkpoint pin alone does not
         guarantee a trustworthy run, so these instrument sanity signals
@@ -398,9 +535,9 @@ def build_calibration(
     LearnedModelUnavailable
         If `laion_clap` is not installed (propagated from `load_clap_model`).
     """
-    axes = load_semantic_axes()
+    axes_config = load_axes_config(axes_config_path)
+    axes = validate_axes_battery(axes_config.get("axes", []))
     axis_names = [axis["name"] for axis in axes]
-    axes_config = load_config("semantic_probe_axes")
 
     fixtures = load_fixtures()
     checkpoint_sha256 = _validate_embedding_space_pin(fixtures, checkpoint=checkpoint, amodel=amodel)
@@ -425,8 +562,6 @@ def build_calibration(
                 f"provenance, refusing to write"
             )
 
-    cross_stats = compute_cross_axis_stats(readings)
-
     payload: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "kind": KIND,
@@ -448,8 +583,9 @@ def build_calibration(
     payload["stats"] = {
         "lyrics_effect_vs_regen_noise": compute_lyrics_effect_vs_regen_noise(readings, axis_names),
         "musicgen_knob_cells": compute_musicgen_knob_cells(readings, axis_names),
-        "warmth_brightness_pearson_r": cross_stats["warmth_brightness_pearson_r"],
-        "acousticness_sign_census": cross_stats["acousticness_sign_census"],
+        "genre_effect_vs_regen_noise": compute_genre_effect_vs_regen_noise(readings, axis_names),
+        "axis_correlation_matrix": axis_correlation_matrix(readings, axis_names),
+        "sign_census": sign_census(readings, axis_names),
     }
     return payload
 
@@ -471,9 +607,22 @@ def _print_summary(payload: dict[str, Any]) -> None:
     for axis_name, per_knob in stats["musicgen_knob_cells"].items():
         ds = {knob: row["cohens_d"] for knob, row in per_knob.items()}
         print(f"  {axis_name}: {ds}")
-    print(f"warmth_brightness_pearson_r: {stats['warmth_brightness_pearson_r']}")
-    census = stats["acousticness_sign_census"]
-    print(f"acousticness_sign_census: {census['negative']}/{census['total']} negative")
+    print("genre_effect_vs_regen_noise (exceeds_noise):")
+    for axis_name, row in stats["genre_effect_vs_regen_noise"].items():
+        print(f"  {axis_name}: exceeds_noise={row['exceeds_noise']} ratio={row['ratio']}")
+    print("axis_correlation_matrix (top 5 |r| pairs):")
+    pairs: list[tuple[str, str, float]] = [
+        (axis_a, axis_b, r)
+        for axis_a, row in stats["axis_correlation_matrix"].items()
+        for axis_b, r in row.items()
+        if r is not None  # zero-variance pairs (r: null) are unrankable
+    ]
+    pairs.sort(key=lambda item: abs(item[2]), reverse=True)
+    for axis_a, axis_b, r in pairs[:5]:
+        print(f"  {axis_a} x {axis_b}: {r}")
+    print("sign_census:")
+    for axis_name, census in stats["sign_census"].items():
+        print(f"  {axis_name}: {census['negative']}/{census['total']} negative")
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -504,11 +653,24 @@ def main(argv: Optional[list[str]] = None) -> int:
         default=None,
         help="optional explicit run date (e.g. 2026-07-04) recorded verbatim; omitted if unset",
     )
+    parser.add_argument(
+        "--axes-config",
+        type=Path,
+        default=None,
+        help=(
+            "path to an alternate axis-battery YAML (e.g. a variant-sweep config) "
+            "to calibrate instead of the canonical config/semantic_probe_axes.yaml; "
+            "validated with the same fail-fast rules as the canonical loader"
+        ),
+    )
     args = parser.parse_args(argv)
 
     try:
         payload = build_calibration(
-            checkpoint=args.checkpoint, amodel=args.amodel, run_date=args.run_date
+            checkpoint=args.checkpoint,
+            amodel=args.amodel,
+            run_date=args.run_date,
+            axes_config_path=args.axes_config,
         )
     except (ValueError, LearnedModelUnavailable) as exc:
         print(str(exc), file=sys.stderr)
