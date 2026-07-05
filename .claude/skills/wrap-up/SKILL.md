@@ -41,6 +41,12 @@ append a new `## Session N` section instead of overwriting.
 Use the conventional section layout (see the Summary layout appendix below):
 **Context / Design Decisions / Artifacts / Handoff**.
 
+**Fable 直接実行監査**（CLAUDE.md § Advisor Strategy 運用細則の事後監査）:
+Fable 稼働セッションでは、Artifacts か Handoff に「Fable が直接実行した
+手を動かす作業」（マイクロ操作例外＝1–2 ツールコールを超えた実装・実行・
+検証・調査）を 1–2 行で明記する。委譲すべきだった項目はそのまま次
+セッションへの改善引き継ぎになる。該当なしならその旨 1 語で足りる。
+
 ### 2. Append the index entry
 Add **one 1–2 line bullet** to `.claude/memory/_index.md` using the existing
 list form: `- YYYY-MM-DD: <1行成果>。[詳細](YYYY-MM-DD.md)` (同日複数は
