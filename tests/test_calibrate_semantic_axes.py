@@ -129,7 +129,15 @@ def _install_fake_clap_calls(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(calibrate, "load_fixtures", lambda: doctored_fixtures)
 
 
-AXIS_NAMES = {"vocal_presence", "brightness", "energy", "acousticness", "warmth"}
+AXIS_NAMES = {
+    "vocal_presence",
+    "brightness",
+    "energy",
+    "acousticness",
+    "warmth",
+    "valence",
+    "electronic_production",
+}
 
 
 def test_main_writes_structurally_complete_calibration(monkeypatch, tmp_path):
@@ -176,7 +184,7 @@ def test_main_writes_structurally_complete_calibration(monkeypatch, tmp_path):
     assert model["checkpoint"] == "music_audioset_epoch_15_esc_90.14.pt"
     assert model["amodel"] == "HTSAT-base"
 
-    # readings: 6 + 32 sample_ids x 5 axes.
+    # readings: 6 + 32 sample_ids x 7 axes.
     readings = payload["readings"]
     assert set(readings.keys()) == {"lyrics_vocal_contrast", "musicgen_k2_contrast"}
     assert len(readings["lyrics_vocal_contrast"]) == 6
@@ -197,7 +205,7 @@ def test_main_writes_structurally_complete_calibration(monkeypatch, tmp_path):
     stats = payload["stats"]
     lyrics_stats = stats["lyrics_effect_vs_regen_noise"]
     lyrics_rows = sum(len(per_genre) for per_genre in lyrics_stats.values())
-    assert lyrics_rows == 10  # 5 axes x 2 genres
+    assert lyrics_rows == 14  # 7 axes x 2 genres
     assert set(lyrics_stats.keys()) == AXIS_NAMES
     for per_genre in lyrics_stats.values():
         assert set(per_genre.keys()) == {"edm", "rock"}
@@ -206,7 +214,7 @@ def test_main_writes_structurally_complete_calibration(monkeypatch, tmp_path):
 
     musicgen_stats = stats["musicgen_knob_cells"]
     musicgen_rows = sum(len(per_knob) for per_knob in musicgen_stats.values())
-    assert musicgen_rows == 10  # 5 axes x 2 knobs
+    assert musicgen_rows == 14  # 7 axes x 2 knobs
     assert set(musicgen_stats.keys()) == AXIS_NAMES
     for per_knob in musicgen_stats.values():
         assert set(per_knob.keys()) == {"bpm", "brightness"}
@@ -225,10 +233,10 @@ def test_main_writes_structurally_complete_calibration(monkeypatch, tmp_path):
         assert set(row.keys()) == {"effect", "regen_noise", "ratio", "exceeds_noise"}
 
     correlation_matrix = stats["axis_correlation_matrix"]
-    # C(5, 2) = 10 unordered pairs over the 5-axis canonical battery, keyed
+    # C(7, 2) = 21 unordered pairs over the 7-axis canonical battery, keyed
     # in config order (axis_a always precedes axis_b), diagonal omitted.
     n_pairs = sum(len(row) for row in correlation_matrix.values())
-    assert n_pairs == 10
+    assert n_pairs == 21
     for row in correlation_matrix.values():
         for r in row.values():
             assert -1.0 <= r <= 1.0
@@ -490,7 +498,7 @@ def test_build_calibration_axes_config_version_matches_real_config(monkeypatch, 
         checkpoint="music_audioset_epoch_15_esc_90.14.pt", amodel=_PINNED_AMODEL
     )
 
-    assert payload["axes_config_version"] == "1.0"
+    assert payload["axes_config_version"] == "1.1"
     assert payload["model"]["checkpoint"] == "music_audioset_epoch_15_esc_90.14.pt"
 
 

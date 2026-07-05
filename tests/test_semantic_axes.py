@@ -31,7 +31,7 @@ _VOCAL_TEXT_VECTORS = {
 
 
 class TestExtractClapSemanticAxes:
-    def test_default_battery_returns_five_axes(self, monkeypatch, tmp_path):
+    def test_default_battery_returns_seven_axes(self, monkeypatch, tmp_path):
         _install_fake_clap(monkeypatch, audio_vector=[3.0, 4.0], text_vectors=_VOCAL_TEXT_VECTORS)
 
         from svp_rpe.rpe.learned.semantic_axes import extract_clap_semantic_axes
@@ -41,9 +41,17 @@ class TestExtractClapSemanticAxes:
         result = extract_clap_semantic_axes(str(audio))
 
         assert result.embedding is not None
-        assert len(result.semantic_axes) == 5
+        assert len(result.semantic_axes) == 7
         names = {axis.axis for axis in result.semantic_axes}
-        assert names == {"vocal_presence", "brightness", "energy", "acousticness", "warmth"}
+        assert names == {
+            "vocal_presence",
+            "brightness",
+            "energy",
+            "acousticness",
+            "warmth",
+            "valence",
+            "electronic_production",
+        }
         for axis in result.semantic_axes:
             assert isinstance(axis, LearnedSemanticAxis)
             assert isinstance(axis.contrast_fit, float)
@@ -139,8 +147,8 @@ class TestExtractClapSemanticAxes:
         _write_wav(audio, seconds=0.05)
         result = extract_clap_semantic_axes(str(audio))
 
-        assert result.inference_config["n_semantic_axes"] == 5
-        assert result.inference_config["semantic_axes_config_version"] == "1.0"
+        assert result.inference_config["n_semantic_axes"] == 7
+        assert result.inference_config["semantic_axes_config_version"] == "1.1"
         # original embed_audio_file inference_config keys must survive the augmentation
         assert result.inference_config["source"] == "laion_clap"
 
@@ -154,11 +162,11 @@ class TestExtractClapSemanticAxes:
 
 
 class TestLoadSemanticAxes:
-    def test_returns_five_axes_with_required_keys(self):
+    def test_returns_seven_axes_with_required_keys(self):
         from svp_rpe.rpe.learned.semantic_axes import load_semantic_axes
 
         axes = load_semantic_axes()
-        assert len(axes) == 5
+        assert len(axes) == 7
         for axis in axes:
             assert axis["name"]
             assert axis["positive"]
@@ -273,7 +281,7 @@ class TestSerializer:
 
         assert "learned_annotations" in dumped
         assert dumped["learned_annotations"]["semantic_axes"][0]["axis"]
-        assert dumped["learned_annotations"]["inference_config"]["n_semantic_axes"] == 5
+        assert dumped["learned_annotations"]["inference_config"]["n_semantic_axes"] == 7
 
 
 class TestCli:
@@ -294,7 +302,7 @@ class TestCli:
         assert result.exit_code == 0, result.stdout
         dumped = json.loads(output.read_text(encoding="utf-8"))
         assert "learned_annotations" in dumped
-        assert len(dumped["learned_annotations"]["semantic_axes"]) == 5
+        assert len(dumped["learned_annotations"]["semantic_axes"]) == 7
 
     def test_extract_without_clap_semantic_flag_omits_learned_annotations(
         self, monkeypatch, tmp_path

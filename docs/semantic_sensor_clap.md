@@ -16,7 +16,7 @@
 ## 軸バッテリー
 
 `config/semantic_probe_axes.yaml`（`src/svp_rpe/config/` に同期コピー）に
-5 軸を定義:
+7 軸を定義:
 
 - `vocal_presence` — ボーカル有無。`docs/lyrics_semantic_anchor.md` で
   `mid_ratio` プロキシより 10-15 倍頑健と判明した実証済み軸。probe 文言は
@@ -27,6 +27,8 @@
 - `energy` — 高エネルギー/低エネルギーの対比。
 - `acousticness` — アコースティック/エレクトロニックの対比。
 - `warmth` — 暖色/寒色的な質感の対比。
+- `valence` — ポジティブ/ネガティブな感情価の対比。
+- `electronic_production` — エレクトロニック制作とロックバンド編成の対比。
 
 各軸は `{name, positive: [...], negative: [...], notes?}` の形。
 `notes` は任意の注釈で、`rpe/learned/semantic_axes.py` の検証は
@@ -39,6 +41,12 @@
 追記する（`tests/test_config.py::test_packaged_configs_match_repo_configs`
 がバイト一致を enforce する）。`positive` / `negative` は 1 件以上の
 プロンプト文字列のリストであればよい。
+
+probe 文言のチューニングや新軸の採否は、`scripts/calibrate_semantic_axes.py
+--axes-config` で variant バッテリー（canonical config は触らない）を同一
+保存埋め込みに対して sweep し、事前登録した採択規則で判定してから
+canonical config に反映し、校正ログを再生成する手順を踏む（実例は
+「軸バッテリー v1.1」節を参照）。
 
 ## 隔離ポリシー
 
@@ -149,6 +157,8 @@ random-crop パスを回避）。`semantic_axes.py` はその上に numpy の
 
 ## 軸校正（2026-07-04 実測）
 
+v1.0 バッテリー（当時）の記録。現行 v1.1 の校正は次節。
+
 fixture provenance のピン済みチェックポイント
 （`music_audioset_epoch_15_esc_90.14.pt`, sha256 `fae3e9c0…`,
 `amodel=HTSAT-base`, laion-clap 1.1.7）で 5 軸バッテリーの初回実推論校正を
@@ -216,6 +226,36 @@ AttributeError でビルド失敗することがある。`pip install -U setupto
 で解消（2026-07-04 実測。従来「リモート env で py3.11 ビルド不能」と
 記録していた事象の真因で、proxy は無関係）。
 
+## 軸バッテリー v1.1（2026-07-05 実測・probe チューニング）
+
+方法: 一般化ハーネス（`--axes-config`）で現行 5 軸 + brightness variant×2 +
+warmth variant×1 + 新 3 軸の計 11 軸を同一保存埋め込み 38 本に対して 1 回の
+sweep で実測した。採択規則は**事前登録**（brightness: selectivity
+S = d_self − |d_bpm| 最大かつ d_self>0 / warmth: |r(brightness)| ≤ 0.6 かつ
+応答残存、失敗時は撤去 / 新軸: 真値ある軸は効果>再生成ノイズで判定）。
+
+結果表（軸 × 判定）:
+
+| 軸 | 実測 | 裁定 |
+|---|---|---|
+| `brightness` | B0 S=−0.84（bpm d=+2.37 > self d=+1.52）/ B1 S=+0.84 / B2 S=+0.86 | **B2 採用**（counter-stereotype テンポ中和 probe。bpm 干渉 +2.37→+0.52、自ノブ +1.38 が干渉を初めて上回る） |
+| `warmth` | W1 で r(brightness)=−0.827→−0.22・r(acousticness)=+0.15・rock 歌詞 34×/ジャンル 1.4× 応答残存 | **W1 採用**（撤去回避） |
+| `electronic_production` | matched-pair ジャンル効果 +0.365=7.0× | **採用（真値付きジャンル軸第一号）**。bpm 交絡 d=+1.48 併記 |
+| `valence` | 真値なし・r(brightness)≈+0.80・両ノブに乗る | **採用（探索・単独読み不可）** |
+| `tension` | energy と r=+0.969 で実質重複 | **不採用**（負の結果として記録。warmth を r=−0.83 で手術した規律と同一基準） |
+
+補助所見:
+
+- B1（語彙除去のみ）でも bpm 干渉は 0.55 まで落ちる＝交絡の主因は probe
+  語彙で、counter-stereotype 追加はさらに僅差で上回る。
+- genre 読みでは brightness_b0 の 10.1× が b2 で 0.94× に落ちる＝v1.0
+  brightness の「ジャンル分離力」はテンポ・制作様式の交絡だった可能性が
+  高い（brightness にジャンル読みをさせない、が正しい役割分担）。
+
+校正ログ参照: `examples/learned/clap/semantic_axes_calibration_2026-07-05.yaml`
+（schema 1.1・stats は correlation matrix / sign census / genre effect に
+一般化）。sweep の生データはセッション scratchpad（コミット対象外）。
+
 ## CI スタンス
 
 実推論（本物の `laion_clap` + 重みロード）は CI に持ち込まない。
@@ -233,9 +273,10 @@ fake バックエンド（`_install_fake_clap` / `_write_wav` / `_make_bundle`�
 - 実推論は環境依存（torch のインストール状態、CLAP チェックポイントの
   可用性、CPU/GPU 差異）であり、`docs/learned_models_policy.md` の
   G5（決定論）検証はモデルロード自体の再現性までは保証しない。
-- 5 軸バッテリーは開始点であり網羅的ではない。他ジャンル・他属性の
+- 7 軸バッテリーは開始点であり網羅的ではない。他ジャンル・他属性の
   軸は今後の拡張候補（config 追記のみで対応可能）。
 - CLAP のテキストエンコーダは短い自然言語プロンプトを前提としており、
   各軸の positive/negative probe セットの語彙選択が `contrast_fit` の
-  感度に直接影響する（`docs/lyrics_semantic_anchor.md` の知見と同様、
-  probe 文言のチューニングは継続課題）。
+  感度に直接影響する（`docs/lyrics_semantic_anchor.md` の知見と同様）。
+  probe 文言のチューニングは v1.1 で第一巡を実施（brightness/warmth 改訂・
+  tension 棄却）。今後の軸追加も同手順。

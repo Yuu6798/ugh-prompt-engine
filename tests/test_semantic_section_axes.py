@@ -172,7 +172,7 @@ class TestExtractClapSemanticSectionAxes:
         result = extract_clap_semantic_section_axes(str(audio), sections)
 
         assert result.embedding is not None
-        assert len(result.semantic_axes) == 5  # whole-track superset
+        assert len(result.semantic_axes) == 7  # whole-track superset
         assert len(result.semantic_axis_sections) == 2
 
         for section_result, expected in zip(result.semantic_axis_sections, sections):
@@ -180,7 +180,7 @@ class TestExtractClapSemanticSectionAxes:
             assert section_result.section == expected["section"]
             assert section_result.start_sec == expected["start_sec"]
             assert section_result.end_sec == expected["end_sec"]
-            assert len(section_result.axes) == 5
+            assert len(section_result.axes) == 7
             for axis in section_result.axes:
                 assert isinstance(axis, LearnedSemanticAxis)
                 assert isinstance(axis.contrast_fit, float)
@@ -217,7 +217,7 @@ class TestExtractClapSemanticSectionAxes:
         assert result.semantic_axis_sections == []
         assert result.inference_config["n_semantic_axis_sections"] == 0
         # whole-track axes are still populated (superset semantics hold at n=0).
-        assert len(result.semantic_axes) == 5
+        assert len(result.semantic_axes) == 7
 
     def test_unavailable_raises_with_semantic_embed_hint(self, monkeypatch):
         _force_clap_unavailable(monkeypatch)
@@ -325,7 +325,7 @@ class TestCli:
         dumped = json.loads(output.read_text(encoding="utf-8"))
         assert "learned_annotations" in dumped
         assert len(dumped["learned_annotations"]["semantic_axis_sections"]) == 2
-        assert len(dumped["learned_annotations"]["semantic_axes"]) == 5
+        assert len(dumped["learned_annotations"]["semantic_axes"]) == 7
 
     def test_extract_with_both_flags_takes_the_sections_path(self, monkeypatch, tmp_path):
         _install_fake_clap(monkeypatch, audio_vector=[3.0, 4.0])
