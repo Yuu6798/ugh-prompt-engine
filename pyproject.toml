@@ -60,6 +60,17 @@ semantic-embed = ["laion-clap", "torch", "torchvision"]
 # the full test suite MUST pass without it (guarded import inside
 # `collect_musicgen_takes.py generate`, never at module import time).
 musicgen = ["transformers", "torch", "scipy", "sentencepiece"]
+# faster-whisper (SYSTRAN) — CTranslate2-backed Whisper inference, the
+# symbolic lyrics-content sensor (rpe/learned/lyrics_adapter.py). PyPI
+# distribution and import name are both "faster-whisper" / "faster_whisper".
+# Weights (e.g. Systran/faster-whisper-small) are downloaded lazily by
+# upstream on first `WhisperModel(...)` construction; do NOT widen this
+# extra to bundle weights. See docs/learned_models_policy.md.
+# demucs is bundled because the DEFAULT documented paths (`extract --lyrics`
+# / `lyrics-adherence`) isolate the vocals stem first — `pip install -e
+# ".[lyrics]"` alone must stand up the default (separation-included) path;
+# `--lyrics-no-separate` remains the demucs-free runtime opt-out.
+lyrics = ["faster-whisper>=1.0", "demucs>=4.0"]
 
 [project.scripts]
 svprpe = "svp_rpe.cli:app"

@@ -178,14 +178,34 @@ class TestLearnedEmbedding:
 class TestLearnedAudioAnnotations:
     def test_default_empty_construction(self):
         ann = LearnedAudioAnnotations()
-        assert ann.schema_version == "1.1"
+        assert ann.schema_version == "1.2"
         assert ann.enabled_models == []
         assert ann.labels == []
         assert ann.embedding is None
         assert ann.semantic_axes == []
+        assert ann.lyrics_transcription is None
         assert ann.inference_config == {}
         assert ann.license_metadata == {}
         assert "estimates" in ann.estimation_disclaimer
+
+    def test_legacy_1_1_payload_without_lyrics_transcription_still_validates(self):
+        # 1.1 -> 1.2 is a default-None field addition (same shape as the prior
+        # 1.0 -> 1.1 semantic_axes bump) — a payload predating lyrics_transcription
+        # must still parse, with the new field defaulting to None.
+        legacy_payload = {
+            "schema_version": "1.1",
+            "enabled_models": [],
+            "labels": [],
+            "embedding": None,
+            "semantic_axes": [],
+            "semantic_axis_sections": [],
+            "time_events": [],
+            "note_events": [],
+            "inference_config": {},
+            "license_metadata": {},
+        }
+        ann = LearnedAudioAnnotations(**legacy_payload)
+        assert ann.lyrics_transcription is None
 
     def test_default_collections_independent_per_instance(self):
         a = LearnedAudioAnnotations()

@@ -54,7 +54,7 @@ jobs:
       # `python_version < '3.12'` マーカーにより 3.12 では自動的に skip される
       # （3.12 でもエラーにならず、単に basic-pitch が入らない）。
       - name: Install dependencies with core extras
-        run: pip install -e ".[dev,beat,learned-tags,pitch,musicgen]"
+        run: pip install -e ".[dev,beat,learned-tags,pitch,musicgen,lyrics]"
 
       - name: Lint
         run: ruff check .

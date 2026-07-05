@@ -408,6 +408,73 @@ class LearnedSemanticSection(BaseModel):
     axes: List[LearnedSemanticAxis]
 
 
+class LearnedLyricsSegment(BaseModel):
+    """One faster-whisper transcript segment (symbolic lyrics-content reading).
+
+    Attached only via `LearnedLyricsTranscription.segments` — never folded
+    into `PhysicalRPE` / `SemanticRPE`. `avg_logprob` is the upstream
+    per-segment log-probability (unbounded, typically negative — NOT a
+    [0, 1] confidence); `no_speech_prob` is upstream's [0, 1] estimate that
+    the segment is silence/non-speech, recorded so a hallucinated segment
+    over an instrumental passage can be flagged downstream. See
+    `docs/learned_models_policy.md` Section 2.
+    """
+
+    start_sec: float
+    end_sec: float
+    text: str
+    avg_logprob: Optional[float] = None
+    no_speech_prob: Optional[float] = None
+
+    @field_validator("no_speech_prob")
+    @classmethod
+    def no_speech_prob_in_range(cls, v: Optional[float]) -> Optional[float]:
+        if v is None:
+            return v
+        if not 0.0 <= v <= 1.0:
+            raise ValueError("no_speech_prob must be between 0.0 and 1.0")
+        return v
+
+    @model_validator(mode="after")
+    def end_at_or_after_start(self) -> "LearnedLyricsSegment":
+        if self.end_sec < self.start_sec:
+            raise ValueError(
+                f"end_sec ({self.end_sec}) must be >= start_sec ({self.start_sec})"
+            )
+        return self
+
+
+class LearnedLyricsTranscription(BaseModel):
+    """Symbolic lyrics-content sensor output (faster-whisper on the SOURCE audio).
+
+    Emitted at extraction time by `rpe/learned/lyrics_adapter.py`
+    (`svprpe extract --lyrics`) and read back on the output side by
+    `svprpe lyrics-adherence` as the ordered-symbol-sequence instrument
+    complementary to the CLAP continuous-grip sensor. Isolated in
+    `LearnedAudioAnnotations.lyrics_transcription` — MUST NOT be written
+    into `SemanticRPE.por_surface`, `PhysicalRPE.*`, or
+    `SVPForGeneration.style_tags`. See `docs/learned_models_policy.md`
+    Section 2 and `docs/lyrics_transcription_sensor.md`.
+    """
+
+    schema_version: str = "1.0"
+    language: Optional[str] = None
+    language_probability: Optional[float] = None
+    text: str
+    segments: List[LearnedLyricsSegment] = Field(default_factory=list)
+    source_model: str
+    inference_config: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("language_probability")
+    @classmethod
+    def language_probability_in_range(cls, v: Optional[float]) -> Optional[float]:
+        if v is None:
+            return v
+        if not 0.0 <= v <= 1.0:
+            raise ValueError("language_probability must be between 0.0 and 1.0")
+        return v
+
+
 class LearnedAudioAnnotations(BaseModel):
     """Container for learned-model output, isolated from rule-based RPE evidence.
 
@@ -422,9 +489,14 @@ class LearnedAudioAnnotations(BaseModel):
     `semantic_axis_sections` is populated by the section-level counterpart
     (`svprpe extract --clap-sections`): the same axis battery read per
     structural section (the "emotional arc"), superset of `semantic_axes`.
+
+    `lyrics_transcription` is populated by the faster-whisper symbolic
+    lyrics-content sensor (rpe/learned/lyrics_adapter.py, `svprpe extract
+    --lyrics`): the ordered lyric text/segments read off the SOURCE audio,
+    complementary to CLAP's continuous semantic grips.
     """
 
-    schema_version: str = "1.1"
+    schema_version: str = "1.2"
     enabled_models: List[LearnedModelInfo] = Field(default_factory=list)
     labels: List[LearnedAudioLabel] = Field(default_factory=list)
     embedding: Optional[LearnedEmbedding] = None
@@ -432,6 +504,7 @@ class LearnedAudioAnnotations(BaseModel):
     semantic_axis_sections: List[LearnedSemanticSection] = Field(default_factory=list)
     time_events: List[LearnedTimeEvent] = Field(default_factory=list)
     note_events: List[LearnedNoteEvent] = Field(default_factory=list)
+    lyrics_transcription: Optional[LearnedLyricsTranscription] = None
     inference_config: dict[str, Any] = Field(default_factory=dict)
     license_metadata: dict[str, str] = Field(default_factory=dict)
     estimation_disclaimer: str = (
