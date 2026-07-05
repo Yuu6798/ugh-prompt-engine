@@ -174,6 +174,55 @@ class TestAdapterUnavailable:
             transcribe_lyrics(str(audio), separate_vocals=False)
 
 
+class TestLyricsModelInfo:
+    """`lyrics_model_info(model_size)` must audit the weights that actually ran.
+
+    Codex P2 (#149): a hard-coded `Systran/faster-whisper-small` in the
+    provenance record made `--lyrics-model medium` audit as if small was
+    used. Plain sizes derive `Systran/faster-whisper-{size}`; anything else
+    (HF repo id / local path) is recorded verbatim — never a fabricated
+    repo name.
+    """
+
+    def test_default_small_resolves_systran_repo(self, monkeypatch):
+        _install_fake_faster_whisper(monkeypatch)
+
+        from svp_rpe.rpe.learned.lyrics_adapter import lyrics_model_info
+
+        info = lyrics_model_info()
+        assert "Systran/faster-whisper-small" in info.weights_license
+        assert "2026-07-05" in info.weights_license
+
+    def test_medium_resolves_systran_medium_repo(self, monkeypatch):
+        _install_fake_faster_whisper(monkeypatch)
+
+        from svp_rpe.rpe.learned.lyrics_adapter import lyrics_model_info
+
+        info = lyrics_model_info("medium")
+        assert "Systran/faster-whisper-medium" in info.weights_license
+        assert "faster-whisper-small verified" in info.weights_license
+
+    def test_custom_hf_repo_id_recorded_verbatim(self, monkeypatch):
+        _install_fake_faster_whisper(monkeypatch)
+
+        from svp_rpe.rpe.learned.lyrics_adapter import lyrics_model_info
+
+        info = lyrics_model_info("some-org/custom-model")
+        assert "some-org/custom-model" in info.weights_license
+        assert "recorded verbatim" in info.weights_license
+        # Never fabricate a Systran repo name from an unresolved identifier.
+        assert "Systran/faster-whisper-some-org" not in info.weights_license
+
+    def test_local_path_recorded_verbatim(self, monkeypatch):
+        _install_fake_faster_whisper(monkeypatch)
+
+        from svp_rpe.rpe.learned.lyrics_adapter import lyrics_model_info
+
+        info = lyrics_model_info("/models/whisper-ct2")
+        assert "/models/whisper-ct2" in info.weights_license
+        assert "recorded verbatim" in info.weights_license
+
+
 class TestAdapterIncompatible:
     def test_missing_whisper_model_class(self, monkeypatch):
         _install_fake_faster_whisper(monkeypatch, has_whisper_model=False)
@@ -445,6 +494,45 @@ class TestCliExtractLyrics:
 
         assert result.exit_code == 0, result.stdout
         assert captured["model_size"] == "medium"
+
+    def test_lyrics_model_choice_reflected_in_enabled_models_provenance(
+        self, monkeypatch, tmp_path
+    ):
+        # Codex P2 (#149): `--lyrics-model medium` must audit as medium —
+        # the enabled_models weights identifier follows the selected size.
+        _install_fake_faster_whisper(monkeypatch)
+        monkeypatch.setattr(
+            extractor, "extract_rpe_from_file", lambda path, **kwargs: _make_bundle()
+        )
+
+        audio = tmp_path / "a.wav"
+        _write_wav(audio, seconds=0.05, sample_rate=16000)
+        output = tmp_path / "out.json"
+
+        result = runner.invoke(
+            app,
+            [
+                "extract",
+                str(audio),
+                "--lyrics",
+                "--lyrics-no-separate",
+                "--lyrics-model",
+                "medium",
+                "-o",
+                str(output),
+            ],
+        )
+
+        assert result.exit_code == 0, result.stdout
+        import json
+
+        dumped = json.loads(output.read_text(encoding="utf-8"))
+        model_info = dumped["learned_annotations"]["enabled_models"][0]
+        assert model_info["name"] == "faster_whisper"
+        assert "Systran/faster-whisper-medium" in model_info["weights_license"]
+        assert "Systran/faster-whisper-small (Hugging Face)" not in (
+            model_info["weights_license"]
+        )
 
     def test_combined_clap_semantic_and_lyrics_both_populated(self, monkeypatch, tmp_path):
         from tests.test_semantic_axes import _VOCAL_TEXT_VECTORS

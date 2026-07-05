@@ -2,8 +2,9 @@
 
 Status: 実装済み — 5 adapter 採用（`beat_this` / `panns_inference` / `basic-pitch` /
 `laion-clap` CLAP / `faster-whisper`）。CLAP は PR2b-1（隔離配線）→ PR2b-2（実推論・実
-fixture 採取）まで closeout 済み。`faster-whisper` は fake-backend 配線のみ、実推論は
-未実施（`docs/lyrics_transcription_sensor.md` §7）
+fixture 採取）まで closeout 済み。`faster-whisper` は配線 + 実推論スモーク済み
+（スピーチ/器楽・フルミックス経路のみ。vocals 分離込み実 E2E と歌入り実音源は
+実音源律速、`docs/lyrics_transcription_sensor.md` §8）
 Scope: audio annotation models considered for `svp_rpe`
 Audience: contributors adding learned-model backends
 
@@ -142,6 +143,12 @@ provenance hints from a learned model live in `LearnedAudioLabel.notes`.
   - weights: `Systran/faster-whisper-small`（Hugging Face）— license: MIT
     （HF リポジトリの license バッジ "mit" を実確認、verified 2026-07-05。
     `openai/whisper-small`（MIT）の CTranslate2 変換で上流も MIT）。
+    provenance 記録のスコープ: plain size（`_KNOWN_MODEL_SIZES`）は
+    `Systran/faster-whisper-{size}` に解決して記録するが、個別検証済みは
+    small のみ（他サイズはファミリーバッジの下の未検証メンバーとして
+    記録）。カスタム HF repo id / ローカルパスは **verbatim 記録**のみで
+    ライセンス主張なし — 未解決の repo 名を捏造しない
+    （`lyrics_adapter._resolve_weights_identifier`）。
 - Constraints:
   - 重み（CTranslate2 変換済みモデル）は optional extra `lyrics` に限定する。
     デフォルトインストールは変えない。

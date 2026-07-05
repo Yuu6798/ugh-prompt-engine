@@ -217,7 +217,7 @@ def extract(
                             "lyrics_transcription": transcription,
                             "enabled_models": [
                                 *existing.enabled_models,
-                                lyrics_model_info(),
+                                lyrics_model_info(lyrics_model),
                             ],
                         }
                     )
@@ -227,7 +227,7 @@ def extract(
             bundle = attach_learned_annotations(
                 bundle,
                 LearnedAudioAnnotations(
-                    enabled_models=[lyrics_model_info()],
+                    enabled_models=[lyrics_model_info(lyrics_model)],
                     lyrics_transcription=transcription,
                 ),
             )

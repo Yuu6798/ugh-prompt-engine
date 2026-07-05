@@ -92,14 +92,29 @@ _TARGET_SAMPLE_RATE = 16000
 
 # License note: package-level verification only (see
 # docs/learned_models_policy.md's adopt entry for the verbatim record).
-# Weights license is intentionally left as VERIFY PENDING until a real
-# checkpoint download confirms the model-card text.
 _CODE_LICENSE = (
     "MIT (faster-whisper + ctranslate2, pip show verified 2026-07-05)"
 )
-_WEIGHTS_LICENSE = (
-    "Systran/faster-whisper-small (Hugging Face): license: MIT "
-    "(VERIFY PENDING — 実ダウンロード時に model card 確認)"
+
+# faster-whisper's documented plain model-size convention (the
+# `WhisperModel(model_size_or_path)` shorthand set). A `model_size` in this
+# tuple resolves to the upstream-converted `Systran/faster-whisper-{size}`
+# Hugging Face repo; anything else (an HF repo id containing "/", or a
+# local path) is recorded VERBATIM — never fabricate a repo name we did
+# not resolve.
+_KNOWN_MODEL_SIZES = (
+    "tiny",
+    "tiny.en",
+    "base",
+    "base.en",
+    "small",
+    "small.en",
+    "medium",
+    "medium.en",
+    "large-v1",
+    "large-v2",
+    "large-v3",
+    "large",
 )
 
 _INSTALL_HINT = (
@@ -147,7 +162,43 @@ def _detect_lyrics_version() -> Optional[str]:
         return None
 
 
-def lyrics_model_info() -> LearnedModelInfo:
+def _resolve_weights_identifier(model_size: str) -> str:
+    """Resolve `model_size` to the weights identifier recorded in provenance.
+
+    A plain size from `_KNOWN_MODEL_SIZES` derives the upstream-converted
+    `Systran/faster-whisper-{size}` Hugging Face repo. Anything else (an HF
+    repo id containing "/", or a local path) is returned verbatim — this
+    function never fabricates a repo name it did not resolve.
+    """
+    if model_size in _KNOWN_MODEL_SIZES:
+        return f"Systran/faster-whisper-{model_size}"
+    return model_size
+
+
+def _weights_license_note(model_size: str) -> str:
+    """Honest per-identifier weights-license text for `LearnedModelInfo`.
+
+    Only `Systran/faster-whisper-small`'s model card was actually checked
+    (2026-07-05); other plain sizes share the Systran family badge but are
+    recorded as unverified family members, and verbatim identifiers (custom
+    HF repos / local paths) carry no license claim at all — mirroring how
+    docs/learned_models_policy.md scopes the verification.
+    """
+    identifier = _resolve_weights_identifier(model_size)
+    if model_size in _KNOWN_MODEL_SIZES:
+        return (
+            f"{identifier} (Hugging Face): Systran faster-whisper family "
+            "license badge MIT; Systran/faster-whisper-small verified "
+            "2026-07-05, other sizes recorded as family members without "
+            "per-repo verification"
+        )
+    return (
+        f"{identifier} (recorded verbatim — custom repo id or local path; "
+        "weights license not verified, Systran family badge does not apply)"
+    )
+
+
+def lyrics_model_info(model_size: str = "small") -> LearnedModelInfo:
     """Provenance entry for `LearnedAudioAnnotations.enabled_models`.
 
     `transcribe_lyrics` returns the narrower `LearnedLyricsTranscription`
@@ -156,6 +207,12 @@ def lyrics_model_info() -> LearnedModelInfo:
     provenance record alongside it — the same role `clap_adapter`'s
     internal `_model_info()` plays when it builds `embed_audio_file`'s
     `LearnedAudioAnnotations` directly.
+
+    `model_size` MUST be the same value passed to `transcribe_lyrics` /
+    `load_lyrics_model` so the audited weights identifier matches what
+    actually ran (a plain size resolves to its `Systran/faster-whisper-*`
+    repo; custom repo ids / local paths are recorded verbatim — see
+    `_resolve_weights_identifier`).
     """
     return LearnedModelInfo(
         name=_MODULE_NAME,
@@ -163,7 +220,7 @@ def lyrics_model_info() -> LearnedModelInfo:
         provider=_MODEL_PROVIDER,
         task=_MODEL_TASK,
         license=_CODE_LICENSE,
-        weights_license=_WEIGHTS_LICENSE,
+        weights_license=_weights_license_note(model_size),
     )
 
 
