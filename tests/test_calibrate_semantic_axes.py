@@ -380,6 +380,29 @@ def test_axis_correlation_matrix_known_values():
     assert matrix["b"]["c"] == pytest.approx(-1.0)
 
 
+def test_axis_correlation_matrix_constant_axis_is_null():
+    """A degenerate constant axis (zero variance, e.g. a positive/negative
+    probe pair that collapses to identical readings — `validate_axes_battery`
+    does not reject this) makes Pearson r undefined for every pair it
+    participates in: those pairs must come back `None` instead of raising
+    `statistics.StatisticsError`. Non-degenerate pairs are unaffected.
+    """
+    axis_names = ["a", "const", "b"]
+    readings = {
+        "fixture1": {
+            "s1": {"a": 1.0, "const": 0.5, "b": 2.0},
+            "s2": {"a": 2.0, "const": 0.5, "b": 4.0},
+            "s3": {"a": 3.0, "const": 0.5, "b": 6.0},
+        }
+    }
+
+    matrix = calibrate.axis_correlation_matrix(readings, axis_names)
+
+    assert matrix["a"]["const"] is None
+    assert matrix["const"]["b"] is None
+    assert matrix["a"]["b"] == pytest.approx(1.0)
+
+
 def test_sign_census_counts_negative_and_total_pooled_across_fixtures():
     axis_names = ["a", "b"]
     readings = {

@@ -412,7 +412,7 @@ def _pooled_axis_values(
 
 def axis_correlation_matrix(
     readings: dict[str, dict[str, dict[str, float]]], axis_names: list[str]
-) -> dict[str, dict[str, float]]:
+) -> dict[str, dict[str, Optional[float]]]:
     """Pearson r for every axis pair, pooled over the full readings pool.
 
     Generalizes the old hardcoded `warmth_brightness_pearson_r` redundancy
@@ -420,13 +420,23 @@ def axis_correlation_matrix(
     keyed in config axis order — each unordered pair appears exactly once
     (`axis_a` always precedes `axis_b` in `axis_names`), the diagonal is
     omitted, and `r` is rounded to 6 digits.
+    Pearson r is undefined when either series has zero variance (e.g. a
+    degenerate constant axis): such pairs get `r: None` (YAML null), same
+    convention as `cohens_d: None` when the pooled stdev is 0.
     """
     values = _pooled_axis_values(readings, axis_names)
-    matrix: dict[str, dict[str, float]] = {}
+    constant = {
+        name: all(abs(v - series[0]) < 1e-12 for v in series)
+        for name, series in values.items()
+    }
+    matrix: dict[str, dict[str, Optional[float]]] = {}
     for i, axis_a in enumerate(axis_names):
         for axis_b in axis_names[i + 1 :]:
-            r = statistics.correlation(values[axis_a], values[axis_b])
-            matrix.setdefault(axis_a, {})[axis_b] = _round(r)
+            if constant[axis_a] or constant[axis_b]:
+                r: Optional[float] = None
+            else:
+                r = _round(statistics.correlation(values[axis_a], values[axis_b]))
+            matrix.setdefault(axis_a, {})[axis_b] = r
     return matrix
 
 
@@ -605,6 +615,7 @@ def _print_summary(payload: dict[str, Any]) -> None:
         (axis_a, axis_b, r)
         for axis_a, row in stats["axis_correlation_matrix"].items()
         for axis_b, r in row.items()
+        if r is not None  # zero-variance pairs (r: null) are unrankable
     ]
     pairs.sort(key=lambda item: abs(item[2]), reverse=True)
     for axis_a, axis_b, r in pairs[:5]:
