@@ -143,12 +143,17 @@ provenance hints from a learned model live in `LearnedAudioLabel.notes`.
   - weights: `Systran/faster-whisper-small`（Hugging Face）— license: MIT
     （HF リポジトリの license バッジ "mit" を実確認、verified 2026-07-05。
     `openai/whisper-small`（MIT）の CTranslate2 変換で上流も MIT）。
-    provenance 記録のスコープ: plain size（`_KNOWN_MODEL_SIZES`）は
-    `Systran/faster-whisper-{size}` に解決して記録するが、個別検証済みは
-    small のみ（他サイズはファミリーバッジの下の未検証メンバーとして
-    記録）。カスタム HF repo id / ローカルパスは **verbatim 記録**のみで
-    ライセンス主張なし — 未解決の repo 名を捏造しない
-    （`lyrics_adapter._resolve_weights_identifier`）。
+    provenance 記録のスコープ（`lyrics_adapter._resolve_weights_identifier`
+    の 3 段解決）: ① `/` を含む repo id / ローカルパスは **verbatim 記録**
+    （マッピング不参照）→ ② インストール済み `faster_whisper.utils._MODELS`
+    （private API を防御的に参照・形状検証つき）で shorthand を実ダウンロード
+    先 repo に解決（`turbo` / `distil-*` 等は Systran 外 repo）→ ③ 静的
+    `Systran/faster-whisper-{size}` 規約にフォールバック。未解決の repo 名は
+    捏造しない。ライセンス文言は**解決後の repo** から導出: 個別検証済みは
+    small のみ、他の Systran repo はファミリーバッジ下の未検証メンバー、
+    それ以外（Systran 外 / verbatim）は「ライセンス未確認・採取時に実確認」
+    でライセンス主張なし。解決経路（verbatim / upstream mapping / static）も
+    note に記録する。
 - Constraints:
   - 重み（CTranslate2 変換済みモデル）は optional extra `lyrics` に限定する。
     デフォルトインストールは変えない。`lyrics` extra は demucs を同梱する —

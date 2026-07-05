@@ -96,12 +96,15 @@ _CODE_LICENSE = (
     "MIT (faster-whisper + ctranslate2, pip show verified 2026-07-05)"
 )
 
-# faster-whisper's documented plain model-size convention (the
-# `WhisperModel(model_size_or_path)` shorthand set). A `model_size` in this
-# tuple resolves to the upstream-converted `Systran/faster-whisper-{size}`
-# Hugging Face repo; anything else (an HF repo id containing "/", or a
-# local path) is recorded VERBATIM — never fabricate a repo name we did
-# not resolve.
+# faster-whisper's classic plain model-size convention: the shorthand
+# subset that maps 1:1 to the upstream-converted
+# `Systran/faster-whisper-{size}` Hugging Face repos. This is the STATIC
+# FALLBACK tier of `_resolve_weights_identifier` — the installed
+# upstream mapping (`faster_whisper.utils._MODELS`), when readable, is
+# consulted first because newer shorthands (`turbo`,
+# `large-v3-turbo`, `distil-large-v3`, ...) resolve to repos OUTSIDE the
+# Systran org (e.g. mobiuslabsgmbh/faster-whisper-large-v3-turbo) that a
+# static table here would misrecord.
 _KNOWN_MODEL_SIZES = (
     "tiny",
     "tiny.en",
@@ -116,6 +119,13 @@ _KNOWN_MODEL_SIZES = (
     "large-v3",
     "large",
 )
+
+# Resolution-source markers recorded inside the weights-license note so an
+# audit can tell HOW the repo name was obtained (see
+# `_resolve_weights_identifier`).
+_RES_VERBATIM = "recorded verbatim"
+_RES_UPSTREAM = "resolved via installed faster_whisper.utils._MODELS"
+_RES_STATIC = "static family convention"
 
 _INSTALL_HINT = (
     "faster_whisper is not installed. Install it via the optional "
@@ -162,39 +172,100 @@ def _detect_lyrics_version() -> Optional[str]:
         return None
 
 
-def _resolve_weights_identifier(model_size: str) -> str:
-    """Resolve `model_size` to the weights identifier recorded in provenance.
+def _upstream_model_mapping() -> Optional[dict[str, str]]:
+    """Best-effort read of the installed `faster_whisper.utils._MODELS` table.
 
-    A plain size from `_KNOWN_MODEL_SIZES` derives the upstream-converted
-    `Systran/faster-whisper-{size}` Hugging Face repo. Anything else (an HF
-    repo id containing "/", or a local path) is returned verbatim — this
-    function never fabricates a repo name it did not resolve.
+    `_MODELS` is a PRIVATE upstream API mapping documented shorthands
+    (`"turbo"`, `"distil-large-v3"`, ...) to the HF repos actually
+    downloaded by `WhisperModel(...)` — the ground truth for provenance on
+    the installed version. Because it is private it is consulted
+    OPPORTUNISTICALLY, never trusted blindly: the import is guarded, the
+    shape is validated (a dict of str -> str), and ANY surprise (missing
+    module, missing attribute, changed shape) returns `None` so
+    `_resolve_weights_identifier` falls through to the static
+    `_KNOWN_MODEL_SIZES` convention instead of raising.
     """
+    try:
+        root = importlib.import_module(_MODULE_NAME)
+    except Exception:
+        return None
+    utils_mod = getattr(root, "utils", None)
+    if utils_mod is None:
+        try:
+            utils_mod = importlib.import_module(f"{_MODULE_NAME}.utils")
+        except Exception:
+            return None
+    mapping = getattr(utils_mod, "_MODELS", None)
+    if not isinstance(mapping, dict):
+        return None
+    if not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in mapping.items()
+    ):
+        return None
+    return mapping
+
+
+def _resolve_weights_identifier(model_size: str) -> tuple[str, str]:
+    """Resolve `model_size` to `(weights identifier, resolution source)`.
+
+    Three tiers, in order:
+
+    1. **Verbatim** — the value contains a path separator or looks like a
+       filesystem path (explicit HF repo id or local checkpoint dir): the
+       caller named the exact weights, so it is recorded as-is and the
+       upstream mapping is never consulted.
+    2. **Installed upstream mapping** — `faster_whisper.utils._MODELS`
+       (see `_upstream_model_mapping`): a documented shorthand resolves to
+       the repo the installed version actually downloads, including
+       non-Systran repos (`turbo` -> mobiuslabsgmbh/..., `distil-*` ->
+       distil-whisper/...).
+    3. **Static fallback** — `_KNOWN_MODEL_SIZES` ->
+       `Systran/faster-whisper-{size}` (covers fake-backend tests and any
+       upstream shape change that makes tier 2 unreadable).
+
+    Anything that matches no tier is recorded verbatim — this function
+    never fabricates a repo name it did not resolve.
+    """
+    if "/" in model_size or "\\" in model_size or model_size.startswith("."):
+        return model_size, _RES_VERBATIM
+    mapping = _upstream_model_mapping()
+    if mapping is not None and model_size in mapping:
+        return mapping[model_size], _RES_UPSTREAM
     if model_size in _KNOWN_MODEL_SIZES:
-        return f"Systran/faster-whisper-{model_size}"
-    return model_size
+        return f"Systran/faster-whisper-{model_size}", _RES_STATIC
+    return model_size, _RES_VERBATIM
 
 
 def _weights_license_note(model_size: str) -> str:
-    """Honest per-identifier weights-license text for `LearnedModelInfo`.
+    """Honest weights-license text for `LearnedModelInfo`, from the RESOLVED repo.
 
-    Only `Systran/faster-whisper-small`'s model card was actually checked
-    (2026-07-05); other plain sizes share the Systran family badge but are
-    recorded as unverified family members, and verbatim identifiers (custom
-    HF repos / local paths) carry no license claim at all — mirroring how
-    docs/learned_models_policy.md scopes the verification.
+    The license claim derives from the RESOLVED identifier, not the input
+    shorthand: only `Systran/faster-whisper-small`'s model card was
+    actually checked (2026-07-05); other `Systran/faster-whisper-*` repos
+    share the family badge but are recorded as unverified members; any
+    other resolved identifier (mobiuslabsgmbh / distil-whisper / verbatim
+    custom repo / local path) carries NO license claim at all — mirroring
+    how docs/learned_models_policy.md scopes the verification. The
+    resolution source (`recorded verbatim` / upstream mapping / static
+    convention) is embedded so audits can tell how the repo name was
+    obtained.
     """
-    identifier = _resolve_weights_identifier(model_size)
-    if model_size in _KNOWN_MODEL_SIZES:
+    identifier, resolution = _resolve_weights_identifier(model_size)
+    if identifier == "Systran/faster-whisper-small":
+        return (
+            f"{identifier} (Hugging Face): license badge MIT, model card "
+            f"verified 2026-07-05 ({resolution})"
+        )
+    if identifier.startswith("Systran/faster-whisper-"):
         return (
             f"{identifier} (Hugging Face): Systran faster-whisper family "
             "license badge MIT; Systran/faster-whisper-small verified "
-            "2026-07-05, other sizes recorded as family members without "
-            "per-repo verification"
+            "2026-07-05, this repo recorded as a family member without "
+            f"per-repo verification ({resolution})"
         )
     return (
-        f"{identifier} (recorded verbatim — custom repo id or local path; "
-        "weights license not verified, Systran family badge does not apply)"
+        f"{identifier}: ライセンス未確認・採取時に実確認 — no license claim "
+        f"({resolution})"
     )
 
 
@@ -210,8 +281,9 @@ def lyrics_model_info(model_size: str = "small") -> LearnedModelInfo:
 
     `model_size` MUST be the same value passed to `transcribe_lyrics` /
     `load_lyrics_model` so the audited weights identifier matches what
-    actually ran (a plain size resolves to its `Systran/faster-whisper-*`
-    repo; custom repo ids / local paths are recorded verbatim — see
+    actually ran (3-tier resolution: explicit repo id / path verbatim ->
+    installed `faster_whisper.utils._MODELS` -> static
+    `Systran/faster-whisper-{size}` convention — see
     `_resolve_weights_identifier`).
     """
     return LearnedModelInfo(

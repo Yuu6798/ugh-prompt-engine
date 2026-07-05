@@ -62,6 +62,8 @@ def _install_fake_faster_whisper(
     version=None,
     has_whisper_model=True,
     has_transcribe=True,
+    utils_models=None,
+    utils_models_malformed=False,
 ) -> dict:
     captured: dict = {}
     resolved_segments = segments if segments is not None else _DEFAULT_SEGMENTS
@@ -85,6 +87,22 @@ def _install_fake_faster_whisper(
         fake_root.WhisperModel = FakeWhisperModel
     if version is not None:
         fake_root.__version__ = version
+
+    # Mirror the real wheel's `faster_whisper.utils` surface when requested
+    # (its private `_MODELS` shorthand->repo table feeds the tier-2
+    # provenance resolution). Always pin `sys.modules["faster_whisper.utils"]`
+    # — even to None — so a REAL installed faster-whisper can never leak its
+    # mapping into a fake-backend test (hermeticity, same rationale as the
+    # metadata pin below).
+    if utils_models is not None or utils_models_malformed:
+        fake_utils = types.ModuleType("faster_whisper.utils")
+        fake_utils._MODELS = (
+            "not-a-dict" if utils_models_malformed else dict(utils_models)
+        )
+        fake_root.utils = fake_utils
+        monkeypatch.setitem(sys.modules, "faster_whisper.utils", fake_utils)
+    else:
+        monkeypatch.setitem(sys.modules, "faster_whisper.utils", None)
 
     monkeypatch.setitem(sys.modules, "faster_whisper", fake_root)
 
@@ -221,6 +239,67 @@ class TestLyricsModelInfo:
         info = lyrics_model_info("/models/whisper-ct2")
         assert "/models/whisper-ct2" in info.weights_license
         assert "recorded verbatim" in info.weights_license
+
+    # -- tier 2: installed upstream mapping (faster_whisper.utils._MODELS) --
+
+    _FAKE_UPSTREAM_MODELS = {
+        "turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+        "distil-large-v3": "distil-whisper/distil-large-v3-ct2",
+    }
+
+    def test_upstream_shorthand_resolves_via_installed_mapping(self, monkeypatch):
+        # `turbo` is absent from the static _KNOWN_MODEL_SIZES table but
+        # present in the installed mapping — the mapped (non-Systran) repo
+        # must be recorded, with no license claim, and the note must say
+        # the name came from the upstream mapping. (Fake mapping values:
+        # we assert the mapping is USED, not that its contents are true.)
+        _install_fake_faster_whisper(monkeypatch, utils_models=self._FAKE_UPSTREAM_MODELS)
+
+        from svp_rpe.rpe.learned.lyrics_adapter import lyrics_model_info
+
+        info = lyrics_model_info("turbo")
+        assert "mobiuslabsgmbh/faster-whisper-large-v3-turbo" in info.weights_license
+        assert "ライセンス未確認" in info.weights_license
+        assert "no license claim" in info.weights_license
+        assert "faster_whisper.utils._MODELS" in info.weights_license
+
+    def test_static_fallback_when_mapping_absent(self, monkeypatch):
+        # Fake without a utils module (the default): tier 2 is unreadable,
+        # so "medium" resolves via the static family convention and the
+        # note records that source.
+        _install_fake_faster_whisper(monkeypatch)
+
+        from svp_rpe.rpe.learned.lyrics_adapter import lyrics_model_info
+
+        info = lyrics_model_info("medium")
+        assert "Systran/faster-whisper-medium" in info.weights_license
+        assert "static family convention" in info.weights_license
+
+    def test_explicit_repo_id_never_consults_mapping(self, monkeypatch):
+        # A "/"-containing identifier is the caller naming exact weights —
+        # verbatim even when the installed mapping happens to have the key.
+        _install_fake_faster_whisper(
+            monkeypatch,
+            utils_models={"some-org/custom-model": "elsewhere/other-repo"},
+        )
+
+        from svp_rpe.rpe.learned.lyrics_adapter import lyrics_model_info
+
+        info = lyrics_model_info("some-org/custom-model")
+        assert "some-org/custom-model" in info.weights_license
+        assert "elsewhere/other-repo" not in info.weights_license
+        assert "recorded verbatim" in info.weights_license
+
+    def test_malformed_upstream_mapping_falls_back_to_static(self, monkeypatch):
+        # `_MODELS` with an unexpected shape (private API drifted) must not
+        # raise — tier 2 is skipped and the static convention applies.
+        _install_fake_faster_whisper(monkeypatch, utils_models_malformed=True)
+
+        from svp_rpe.rpe.learned.lyrics_adapter import lyrics_model_info
+
+        info = lyrics_model_info("medium")
+        assert "Systran/faster-whisper-medium" in info.weights_license
+        assert "static family convention" in info.weights_license
 
 
 class TestAdapterIncompatible:
