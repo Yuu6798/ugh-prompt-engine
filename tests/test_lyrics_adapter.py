@@ -839,6 +839,58 @@ class TestCliLyricsAdherence:
         assert "verdict" not in payload
         assert "pass" not in payload
 
+    def test_reversed_order_visible_in_terminal_output(self, monkeypatch, tmp_path):
+        # Codex P2 (#149, round 7): without -o, the order diagnostics must
+        # be visible interactively — a reversed transcript previously
+        # rendered indistinguishably from a fully in-order one.
+        _install_fake_faster_whisper(monkeypatch)
+
+        audio = tmp_path / "a.wav"
+        _write_wav(audio, seconds=0.05, sample_rate=16000)
+        # Fake transcript is "hello world\nsecond line"; expecting the
+        # lines in the OPPOSITE order regresses the offset cursor on the
+        # second expected row.
+        expected_file = self._write_expected(tmp_path, ["second line", "hello world"])
+
+        result = runner.invoke(
+            app,
+            [
+                "lyrics-adherence",
+                str(audio),
+                "--expected",
+                str(expected_file),
+                "--lyrics-no-separate",
+            ],
+        )
+
+        assert result.exit_code == 0, result.stdout
+        assert "order_ratio: 0.0000" in result.stdout
+        # The regressed row carries the textual out_of_order marker.
+        assert "yes" in result.stdout
+
+    def test_in_order_run_prints_order_ratio_without_markers(self, monkeypatch, tmp_path):
+        _install_fake_faster_whisper(monkeypatch)
+
+        audio = tmp_path / "a.wav"
+        _write_wav(audio, seconds=0.05, sample_rate=16000)
+        expected_file = self._write_expected(tmp_path, ["hello world", "second line"])
+
+        result = runner.invoke(
+            app,
+            [
+                "lyrics-adherence",
+                str(audio),
+                "--expected",
+                str(expected_file),
+                "--lyrics-no-separate",
+            ],
+        )
+
+        assert result.exit_code == 0, result.stdout
+        assert "order_ratio: 1.0000" in result.stdout
+        # In-order rows keep the out_of_order column quiet.
+        assert "yes" not in result.stdout
+
     def test_probe_unavailable_fails_fast_exit_1(self, monkeypatch, tmp_path):
         _force_lyrics_unavailable(monkeypatch)
 

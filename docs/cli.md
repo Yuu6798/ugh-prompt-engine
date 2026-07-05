@@ -163,8 +163,11 @@ svprpe lyrics-adherence generated_track.wav --expected lyrics.txt --lyrics-no-se
 Transcribes `audio` with faster-whisper (requires the `svp-rpe[lyrics]` extra) and
 reports, per expected line (one per line in the `--expected` text file), the best
 char-level similarity ratio against the transcription plus an `overall_similarity`.
-Like `roundtrip` / `score-adherence` / `audit`, this is a descriptive instrument and
-intentionally does not emit a pass/fail verdict. See
+The terminal table also carries an `out_of_order` column (a textual `yes` marker on
+lines whose char-offset cursor regressed), and `order_ratio` is printed alongside
+`overall_similarity` — so order problems are visible interactively, not only in the
+`-o` YAML report. Like `roundtrip` / `score-adherence` / `audit`, this is a
+descriptive instrument and intentionally does not emit a pass/fail verdict. See
 [Lyrics Transcription Sensor](lyrics_transcription_sensor.md).
 
 ### `svprpe roundtrip-corpus <manifest.yaml>`

@@ -929,12 +929,21 @@ def lyrics_adherence_cmd(
     table.add_column("expected")
     table.add_column("best_ratio")
     table.add_column("best_match")
+    table.add_column("out_of_order")
     for line in report["lines"]:
         best_match = line["best_match"]
         truncated = best_match if len(best_match) <= 60 else f"{best_match[:57]}..."
-        table.add_row(line["expected"], f"{line['best_ratio']:.4f}", truncated)
+        table.add_row(
+            line["expected"],
+            f"{line['best_ratio']:.4f}",
+            truncated,
+            # Text marker, not a color-only signal; blank keeps in-order
+            # rows quiet so the regressed rows stand out.
+            "yes" if line["out_of_order"] else "",
+        )
     console.print(table)
     console.print(f"overall_similarity: {report['overall_similarity']:.4f}")
+    console.print(f"order_ratio: {report['order_ratio']:.4f}")
 
     if output:
         import yaml
