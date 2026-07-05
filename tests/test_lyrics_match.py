@@ -36,7 +36,9 @@ class TestMatchLyrics:
         assert report["params"] == {
             "normalization": "nfkc_casefold_nopunct_nospace",
             "matcher": "difflib.SequenceMatcher+partial",
-            "order_stats": "index_cursor (best_match_index over the candidate list)",
+            "order_stats": (
+                "char_offset_cursor (best window start in normalized full transcript)"
+            ),
         }
 
     def test_exact_match_japanese(self):
@@ -134,10 +136,32 @@ class TestMatchLyrics:
 
 
 class TestMatchLyricsOrder:
-    """Order read (Codex P2 #149): per-line best_ratio stays order-free
-    (presence); ordering is reported via best_match_index / out_of_order /
-    matched_index_sequence / order_ratio — still no verdict.
+    """Order read (Codex P2 #149, round 6): per-line best_ratio stays
+    order-free (presence); ordering is reported via the CHAR-OFFSET cursor
+    (match_offset / out_of_order / matched_offset_sequence / order_ratio)
+    within the normalized full transcript — segment-boundary independent.
+    best_match_index / matched_index_sequence remain as diagnostics.
+    Still no verdict.
     """
+
+    def test_reversed_lines_in_single_segment_flag_out_of_order(self):
+        # THE key case for the offset cursor: whisper returned ONE segment
+        # containing both lines, reversed. Candidate-index granularity
+        # would tie (same candidate) and miss the reversal; character
+        # offsets separate them.
+        expected = ["hello", "world"]
+        transcribed = "world hello"
+        report = match_lyrics(expected, transcribed)
+
+        assert report["lines"][0]["best_ratio"] == 1.0
+        assert report["lines"][1]["best_ratio"] == 1.0
+        # Normalized full transcript is "worldhello": hello @5, world @0.
+        assert report["lines"][0]["match_offset"] == 5
+        assert report["lines"][1]["match_offset"] == 0
+        assert report["lines"][0]["out_of_order"] is False
+        assert report["lines"][1]["out_of_order"] is True
+        assert report["matched_offset_sequence"] == [5, 0]
+        assert report["order_ratio"] == 0.0
 
     def test_reversed_transcript_flags_out_of_order(self):
         expected = ["hello", "world"]
@@ -147,12 +171,15 @@ class TestMatchLyricsOrder:
         # Presence read stays order-free: both lines exist somewhere.
         assert report["lines"][0]["best_ratio"] == 1.0
         assert report["lines"][1]["best_ratio"] == 1.0
-        # Order read: "hello" matched candidate 1, then "world" regressed
-        # the cursor to candidate 0.
+        # Order read (offset cursor): "hello" sits at offset 5 of the
+        # normalized full transcript "worldhello", then "world" regresses
+        # the cursor to offset 0.
         assert report["lines"][0]["out_of_order"] is False
         assert report["lines"][1]["out_of_order"] is True
-        assert report["matched_index_sequence"] == [1, 0]
+        assert report["matched_offset_sequence"] == [5, 0]
         assert report["order_ratio"] == 0.0
+        # Index diagnostics still reflect the per-candidate view.
+        assert report["matched_index_sequence"] == [1, 0]
         # The concatenation ratio also reflects the reversal.
         assert report["overall_similarity"] < 1.0
 
@@ -162,35 +189,63 @@ class TestMatchLyricsOrder:
         report = match_lyrics(expected, transcribed)
 
         assert all(line["out_of_order"] is False for line in report["lines"])
+        assert report["matched_offset_sequence"] == [0, 10]
         assert report["matched_index_sequence"] == [0, 1]
+        assert report["order_ratio"] == 1.0
+
+    def test_correct_order_within_single_segment(self):
+        expected = ["hello world", "second line"]
+        transcribed = "hello world second line"
+        report = match_lyrics(expected, transcribed)
+
+        assert all(line["out_of_order"] is False for line in report["lines"])
+        assert report["matched_offset_sequence"] == [0, 10]
         assert report["order_ratio"] == 1.0
 
     def test_single_line_degenerates_to_order_ratio_one(self):
         report = match_lyrics(["hello world"], "hello world")
 
         assert report["lines"][0]["best_match_index"] == 0
+        assert report["lines"][0]["match_offset"] == 0
         assert report["lines"][0]["out_of_order"] is False
-        assert report["matched_index_sequence"] == [0]
+        assert report["matched_offset_sequence"] == [0]
         # Documented degenerate case: <= 1 match has no adjacent pairs.
         assert report["order_ratio"] == 1.0
 
-    def test_no_match_yields_null_index_and_degenerate_order_ratio(self):
+    def test_no_match_yields_null_offsets_and_degenerate_order_ratio(self):
         report = match_lyrics(["hello world"], "")
 
         assert report["lines"][0]["best_match_index"] is None
+        assert report["lines"][0]["match_offset"] is None
         assert report["lines"][0]["out_of_order"] is False
         assert report["matched_index_sequence"] == []
+        assert report["matched_offset_sequence"] == []
+        assert report["order_ratio"] == 1.0
+
+    def test_repeated_identical_lines_tie_at_same_offset(self):
+        # Known limitation (documented): identical repeated lines greedily
+        # match the SAME best window (earliest offset wins on ties), so a
+        # repeated chorus ties at one offset — a tie is not a regression
+        # and order stats cannot distinguish the repetitions.
+        expected = ["hello", "hello"]
+        transcribed = "hello hello"
+        report = match_lyrics(expected, transcribed)
+
+        offsets = [line["match_offset"] for line in report["lines"]]
+        assert offsets[0] == offsets[1] == 0
+        assert all(line["out_of_order"] is False for line in report["lines"])
         assert report["order_ratio"] == 1.0
 
     def test_ties_on_same_candidate_are_not_regressions(self):
-        # Two expected lines whose best match is the SAME candidate (the
-        # appended full text) keep a flat cursor — a tie is not a
-        # regression.
+        # Two overlapping expected lines matching the same candidate: the
+        # index diagnostics tie, while the offset cursor advances (0 -> 5)
+        # — neither is a regression.
         expected = ["hello world second", "world second line"]
         transcribed = "hello world second line"
         report = match_lyrics(expected, transcribed)
 
         indexes = [line["best_match_index"] for line in report["lines"]]
         assert indexes[0] == indexes[1]
+        assert report["matched_offset_sequence"] == [0, 5]
         assert all(line["out_of_order"] is False for line in report["lines"])
         assert report["order_ratio"] == 1.0

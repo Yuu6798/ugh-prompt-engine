@@ -62,12 +62,18 @@ svprpe lyrics-adherence generated_track.wav --expected lyrics.txt -o report.yaml
 閾値判定は一切出力しない — 計器であって verdict ではない。
 
 読みは 2 系統で相補的: 行ごとの `best_ratio` は**順序不問の存在読み**
-（「この行はどこかで歌われたか」）、順序は行ごとの `best_match_index` /
-`out_of_order` と report 全体の `matched_index_sequence` / `order_ratio`
-（インデックスカーソル方式: 前行の一致位置より厳密に手前へ戻ったら
-`out_of_order`）+ 元々順序敏感な `overall_similarity` が担う。
-`-o` の YAML レポートには転写の `inference_config` に加えて解決済み
-weights/license の `model` レコードも記録される（provenance 監査用）。
+（「この行はどこかで歌われたか」）、順序は行ごとの `match_offset` /
+`out_of_order` と report 全体の `matched_offset_sequence` / `order_ratio`
+が担う（**文字オフセットカーソル方式**: 正規化済み全文トランスクリプト内の
+最良ウィンドウ開始位置を追い、前行より厳密に手前へ戻ったら `out_of_order`。
+セグメント境界はデコーダのアーティファクトなので、1 セグメント内で逆順に
+歌われたケースもオフセットで検出できる=セグメント境界非依存）+ 元々順序
+敏感な `overall_similarity`。既知の限界: 同一歌詞の繰り返し（コーラス等）は
+最初の出現オフセットにタイし、タイは非後退扱いのため順序統計では繰り返しを
+区別できない。`best_match_index` / `matched_index_sequence` は存在読みの
+デバッグ診断として残る。`-o` の YAML レポートには転写の `inference_config`
+に加えて解決済み weights/license の `model` レコードも記録される
+（provenance 監査用）。
 
 ## 4. 隔離ポリシー
 
