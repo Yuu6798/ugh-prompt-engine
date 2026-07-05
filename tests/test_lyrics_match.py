@@ -36,6 +36,7 @@ class TestMatchLyrics:
         assert report["params"] == {
             "normalization": "nfkc_casefold_nopunct_nospace",
             "matcher": "difflib.SequenceMatcher+partial",
+            "order_stats": "index_cursor (best_match_index over the candidate list)",
         }
 
     def test_exact_match_japanese(self):
@@ -130,3 +131,66 @@ class TestMatchLyrics:
         assert report["lines"] == []
         assert report["n_skipped_empty_lines"] == 2
         assert report["n_expected_lines"] == 2
+
+
+class TestMatchLyricsOrder:
+    """Order read (Codex P2 #149): per-line best_ratio stays order-free
+    (presence); ordering is reported via best_match_index / out_of_order /
+    matched_index_sequence / order_ratio — still no verdict.
+    """
+
+    def test_reversed_transcript_flags_out_of_order(self):
+        expected = ["hello", "world"]
+        transcribed = "world\nhello"
+        report = match_lyrics(expected, transcribed)
+
+        # Presence read stays order-free: both lines exist somewhere.
+        assert report["lines"][0]["best_ratio"] == 1.0
+        assert report["lines"][1]["best_ratio"] == 1.0
+        # Order read: "hello" matched candidate 1, then "world" regressed
+        # the cursor to candidate 0.
+        assert report["lines"][0]["out_of_order"] is False
+        assert report["lines"][1]["out_of_order"] is True
+        assert report["matched_index_sequence"] == [1, 0]
+        assert report["order_ratio"] == 0.0
+        # The concatenation ratio also reflects the reversal.
+        assert report["overall_similarity"] < 1.0
+
+    def test_correct_order_reports_order_ratio_one(self):
+        expected = ["hello world", "second line"]
+        transcribed = "hello world\nsecond line"
+        report = match_lyrics(expected, transcribed)
+
+        assert all(line["out_of_order"] is False for line in report["lines"])
+        assert report["matched_index_sequence"] == [0, 1]
+        assert report["order_ratio"] == 1.0
+
+    def test_single_line_degenerates_to_order_ratio_one(self):
+        report = match_lyrics(["hello world"], "hello world")
+
+        assert report["lines"][0]["best_match_index"] == 0
+        assert report["lines"][0]["out_of_order"] is False
+        assert report["matched_index_sequence"] == [0]
+        # Documented degenerate case: <= 1 match has no adjacent pairs.
+        assert report["order_ratio"] == 1.0
+
+    def test_no_match_yields_null_index_and_degenerate_order_ratio(self):
+        report = match_lyrics(["hello world"], "")
+
+        assert report["lines"][0]["best_match_index"] is None
+        assert report["lines"][0]["out_of_order"] is False
+        assert report["matched_index_sequence"] == []
+        assert report["order_ratio"] == 1.0
+
+    def test_ties_on_same_candidate_are_not_regressions(self):
+        # Two expected lines whose best match is the SAME candidate (the
+        # appended full text) keep a flat cursor — a tie is not a
+        # regression.
+        expected = ["hello world second", "world second line"]
+        transcribed = "hello world second line"
+        report = match_lyrics(expected, transcribed)
+
+        indexes = [line["best_match_index"] for line in report["lines"]]
+        assert indexes[0] == indexes[1]
+        assert all(line["out_of_order"] is False for line in report["lines"])
+        assert report["order_ratio"] == 1.0

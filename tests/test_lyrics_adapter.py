@@ -780,3 +780,76 @@ class TestCliExtractLyrics:
         import json
 
         assert sentinel not in json.dumps(dumped, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# CLI: svprpe lyrics-adherence
+# ---------------------------------------------------------------------------
+
+
+class TestCliLyricsAdherence:
+    def _write_expected(self, tmp_path, lines):
+        expected_file = tmp_path / "expected.txt"
+        expected_file.write_text("\n".join(lines), encoding="utf-8")
+        return expected_file
+
+    def test_happy_path_writes_yaml_report_with_model_provenance(
+        self, monkeypatch, tmp_path
+    ):
+        # Codex P2 (#149): the saved report must carry the resolved
+        # weights/license record (`model` section), not only
+        # inference_config — otherwise audits cannot tell what a shorthand
+        # actually resolved to.
+        captured = _install_fake_faster_whisper(monkeypatch)
+
+        audio = tmp_path / "a.wav"
+        _write_wav(audio, seconds=0.05, sample_rate=16000)
+        expected_file = self._write_expected(tmp_path, ["hello world", "second line"])
+        report_path = tmp_path / "report.yaml"
+
+        result = runner.invoke(
+            app,
+            [
+                "lyrics-adherence",
+                str(audio),
+                "--expected",
+                str(expected_file),
+                "--lyrics-no-separate",
+                "--lyrics-model",
+                "medium",
+                "-o",
+                str(report_path),
+            ],
+        )
+
+        assert result.exit_code == 0, result.stdout
+        assert captured["model_size"] == "medium"
+
+        import yaml
+
+        payload = yaml.safe_load(report_path.read_text(encoding="utf-8"))
+        assert payload["overall_similarity"] == 1.0
+        assert len(payload["lines"]) == 2
+        # Transcription provenance...
+        assert payload["inference_config"]["model_size"] == "medium"
+        # ...AND the resolved weights/license record.
+        assert payload["model"]["name"] == "faster_whisper"
+        assert "Systran/faster-whisper-medium" in payload["model"]["weights_license"]
+        # 計器: no verdict keys in the saved report.
+        assert "verdict" not in payload
+        assert "pass" not in payload
+
+    def test_probe_unavailable_fails_fast_exit_1(self, monkeypatch, tmp_path):
+        _force_lyrics_unavailable(monkeypatch)
+
+        audio = tmp_path / "a.wav"
+        _write_wav(audio, seconds=0.05, sample_rate=16000)
+        expected_file = self._write_expected(tmp_path, ["hello world"])
+
+        result = runner.invoke(
+            app,
+            ["lyrics-adherence", str(audio), "--expected", str(expected_file)],
+        )
+
+        assert result.exit_code == 1
+        assert '.[lyrics]' in result.stdout

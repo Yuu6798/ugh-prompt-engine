@@ -897,7 +897,11 @@ def lyrics_adherence_cmd(
     from svp_rpe.eval.lyrics_match import match_lyrics
     from svp_rpe.io.source_separator import SeparatorNotAvailableError
     from svp_rpe.rpe.learned import LearnedModelUnavailable
-    from svp_rpe.rpe.learned.lyrics_adapter import ensure_lyrics_available, transcribe_lyrics
+    from svp_rpe.rpe.learned.lyrics_adapter import (
+        ensure_lyrics_available,
+        lyrics_model_info,
+        transcribe_lyrics,
+    )
 
     try:
         ensure_lyrics_available()
@@ -935,7 +939,15 @@ def lyrics_adherence_cmd(
     if output:
         import yaml
 
-        payload = {**report, "inference_config": transcription.inference_config}
+        # `model` = the resolved weights/license provenance record
+        # (lyrics_model_info resolves shorthands like `turbo` to the repo
+        # actually downloaded), so the saved report is auditable on its
+        # own — inference_config alone does not carry the resolved repo.
+        payload = {
+            **report,
+            "model": lyrics_model_info(lyrics_model).model_dump(mode="json"),
+            "inference_config": transcription.inference_config,
+        }
         Path(output).write_text(
             yaml.safe_dump(payload, sort_keys=False, allow_unicode=True),
             encoding="utf-8",

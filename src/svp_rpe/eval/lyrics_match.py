@@ -31,6 +31,13 @@ is longer than the expected line, the best ratio over equal-length sliding
 windows of the candidate is used. `overall_similarity` intentionally stays
 the plain full-concatenation ratio: it measures global agreement, not
 containment.
+
+Because per-line scoring is therefore order-free by design (a presence
+read), order is reported separately: per-line `best_match_index` /
+`out_of_order` and the report-level `matched_index_sequence` /
+`order_ratio` (index-cursor based) carry the ordered-lyrics read,
+alongside the inherently order-sensitive `overall_similarity`. Still no
+verdict — all of it is descriptive.
 """
 from __future__ import annotations
 
@@ -103,6 +110,21 @@ def match_lyrics(expected_lines: list[str], transcribed_text: str) -> dict[str, 
     `expected_lines` and the full normalized `transcribed_text` — it
     measures global agreement, not containment.
 
+    Two complementary reads (the instrument's purpose is ORDERED lyrics):
+
+    - `best_ratio` / `best_match` are deliberately ORDER-FREE — "does this
+      line exist somewhere in the transcript?" A reversed transcript still
+      scores every line 1.0 here.
+    - Order is read from `out_of_order` / `order_ratio` (index-cursor
+      based: each line's `best_match_index` — its position in the
+      candidate list — is compared against the previous non-null matched
+      index; a strict regression flags `out_of_order`) together with
+      `overall_similarity` (concatenation ratio, inherently
+      order-sensitive). `order_ratio` is the fraction of adjacent pairs in
+      `matched_index_sequence` that are non-decreasing; with 0 or 1
+      matched lines there are no adjacent pairs, so it degenerates to 1.0
+      (documented, not a claim of correct order).
+
     This is a descriptive instrument, not a verdict — no threshold, no
     pass/fail, no aggregate judgment beyond the reported ratios.
 
@@ -120,11 +142,16 @@ def match_lyrics(expected_lines: list[str], transcribed_text: str) -> dict[str, 
     Returns
     -------
     dict with keys:
-        lines: list of {expected, best_ratio (4dp), best_match}
+        lines: list of {expected, best_ratio (4dp), best_match,
+            best_match_index (int | None; None when nothing scored > 0),
+            out_of_order (bool)}
         overall_similarity: float (4dp)
+        matched_index_sequence: list of non-null best_match_index values,
+            in expected-line order
+        order_ratio: float (4dp; 1.0 degenerate when <= 1 match)
         n_expected_lines: int (len(expected_lines), including skipped)
         n_skipped_empty_lines: int
-        params: {normalization, matcher}
+        params: {normalization, matcher, order_stats}
     """
     transcribed_candidates: list[str] = [
         line for line in transcribed_text.splitlines() if _char_level(line)
@@ -138,6 +165,12 @@ def match_lyrics(expected_lines: list[str], transcribed_text: str) -> dict[str, 
 
     lines: list[dict[str, Any]] = []
     skipped_empty = 0
+    # Index cursor for the order read: the previous line's non-null
+    # best_match_index. A strict regression of the cursor marks the
+    # current line `out_of_order`. Ties (two lines matching the same
+    # candidate, e.g. both matching the appended full text) are NOT
+    # regressions.
+    previous_matched_index: int | None = None
     for expected in expected_lines:
         norm_expected = _char_level(expected)
         if not norm_expected:
@@ -146,7 +179,8 @@ def match_lyrics(expected_lines: list[str], transcribed_text: str) -> dict[str, 
 
         best_ratio = 0.0
         best_match = ""
-        for candidate in candidates:
+        best_match_index: int | None = None
+        for candidate_index, candidate in enumerate(candidates):
             norm_candidate = _char_level(candidate)
             if not norm_candidate:
                 continue
@@ -154,13 +188,36 @@ def match_lyrics(expected_lines: list[str], transcribed_text: str) -> dict[str, 
             if ratio > best_ratio:
                 best_ratio = ratio
                 best_match = candidate
+                best_match_index = candidate_index
+
+        out_of_order = (
+            best_match_index is not None
+            and previous_matched_index is not None
+            and best_match_index < previous_matched_index
+        )
+        if best_match_index is not None:
+            previous_matched_index = best_match_index
+
         lines.append(
             {
                 "expected": expected,
                 "best_ratio": round(best_ratio, 4),
                 "best_match": best_match,
+                "best_match_index": best_match_index,
+                "out_of_order": out_of_order,
             }
         )
+
+    matched_index_sequence = [
+        line["best_match_index"] for line in lines if line["best_match_index"] is not None
+    ]
+    adjacent_pairs = list(zip(matched_index_sequence, matched_index_sequence[1:]))
+    if adjacent_pairs:
+        order_ratio = sum(1 for a, b in adjacent_pairs if b >= a) / len(adjacent_pairs)
+    else:
+        # Degenerate: 0 or 1 matched lines have no adjacent pairs to
+        # disagree — 1.0 by definition, not a claim of verified order.
+        order_ratio = 1.0
 
     expected_norm_concat = _char_level("\n".join(expected_lines))
     overall_similarity = round(
@@ -171,10 +228,13 @@ def match_lyrics(expected_lines: list[str], transcribed_text: str) -> dict[str, 
     return {
         "lines": lines,
         "overall_similarity": overall_similarity,
+        "matched_index_sequence": matched_index_sequence,
+        "order_ratio": round(order_ratio, 4),
         "n_expected_lines": len(expected_lines),
         "n_skipped_empty_lines": skipped_empty,
         "params": {
             "normalization": "nfkc_casefold_nopunct_nospace",
             "matcher": "difflib.SequenceMatcher+partial",
+            "order_stats": "index_cursor (best_match_index over the candidate list)",
         },
     }

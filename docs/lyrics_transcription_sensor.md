@@ -61,6 +61,14 @@ svprpe lyrics-adherence generated_track.wav --expected lyrics.txt -o report.yaml
 `roundtrip` / `score-adherence` / `audit` と同じ方針で、pass/fail や
 閾値判定は一切出力しない — 計器であって verdict ではない。
 
+読みは 2 系統で相補的: 行ごとの `best_ratio` は**順序不問の存在読み**
+（「この行はどこかで歌われたか」）、順序は行ごとの `best_match_index` /
+`out_of_order` と report 全体の `matched_index_sequence` / `order_ratio`
+（インデックスカーソル方式: 前行の一致位置より厳密に手前へ戻ったら
+`out_of_order`）+ 元々順序敏感な `overall_similarity` が担う。
+`-o` の YAML レポートには転写の `inference_config` に加えて解決済み
+weights/license の `model` レコードも記録される（provenance 監査用）。
+
 ## 4. 隔離ポリシー
 
 `LearnedLyricsTranscription` の内容は `SemanticRPE.por_surface` /
