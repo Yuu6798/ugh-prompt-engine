@@ -95,6 +95,29 @@ def extract(
             "upstream default HTSAT-tiny family."
         ),
     ),
+    lyrics: bool = typer.Option(
+        False,
+        "--lyrics",
+        help=(
+            "Read the source audio's lyrics with faster-whisper at "
+            "extraction (requires the lyrics extra); attaches isolated "
+            "LearnedAudioAnnotations.lyrics_transcription. Isolates vocals "
+            "via Demucs first by default — see --lyrics-no-separate."
+        ),
+    ),
+    lyrics_model: str = typer.Option(
+        "small",
+        "--lyrics-model",
+        help="faster-whisper model size used when --lyrics is set (e.g. small, medium).",
+    ),
+    lyrics_no_separate: bool = typer.Option(
+        False,
+        "--lyrics-no-separate",
+        help=(
+            "Transcribe the full mix instead of isolating vocals via Demucs "
+            "first (skips the separate extra dependency on this path)."
+        ),
+    ),
 ) -> None:
     """Extract RPE from audio file."""
     from svp_rpe.rpe.extractor import extract_rpe_from_file
@@ -114,6 +137,18 @@ def extract(
             # markup=False: the install hint contains `.[semantic-embed]`, which
             # Rich would otherwise parse as a markup tag and drop from the shown
             # recovery command — exactly on the missing-dependency path.
+            console.print(str(exc), style="yellow", markup=False)
+            raise typer.Exit(code=1) from exc
+
+    if lyrics:
+        # Same fail-fast rationale as the CLAP probe above, for the
+        # `lyrics` extra (faster_whisper import only; no weight download).
+        from svp_rpe.rpe.learned import LearnedModelUnavailable
+        from svp_rpe.rpe.learned.lyrics_adapter import ensure_lyrics_available
+
+        try:
+            ensure_lyrics_available()
+        except LearnedModelUnavailable as exc:
             console.print(str(exc), style="yellow", markup=False)
             raise typer.Exit(code=1) from exc
 
@@ -153,6 +188,49 @@ def extract(
             console.print(str(exc), style="yellow", markup=False)
             raise typer.Exit(code=1) from exc
         bundle = attach_learned_annotations(bundle, annotations)
+    if lyrics:
+        from svp_rpe.io.source_separator import SeparatorNotAvailableError
+        from svp_rpe.rpe.learned import attach_learned_annotations
+        from svp_rpe.rpe.learned.lyrics_adapter import lyrics_model_info, transcribe_lyrics
+        from svp_rpe.rpe.models import LearnedAudioAnnotations
+
+        try:
+            transcription = transcribe_lyrics(
+                audio,
+                separate_vocals=not lyrics_no_separate,
+                separation_model=separation_model,
+                separation_device=separation_device,
+                model_size=lyrics_model,
+            )
+        except SeparatorNotAvailableError as exc:
+            console.print(str(exc), style="yellow", markup=False)
+            raise typer.Exit(code=1) from exc
+
+        if bundle.learned_annotations is not None:
+            # CLAP annotations were computed first (above); extend the same
+            # LearnedAudioAnnotations record rather than overwriting it.
+            existing = bundle.learned_annotations
+            bundle = bundle.model_copy(
+                update={
+                    "learned_annotations": existing.model_copy(
+                        update={
+                            "lyrics_transcription": transcription,
+                            "enabled_models": [
+                                *existing.enabled_models,
+                                lyrics_model_info(),
+                            ],
+                        }
+                    )
+                }
+            )
+        else:
+            bundle = attach_learned_annotations(
+                bundle,
+                LearnedAudioAnnotations(
+                    enabled_models=[lyrics_model_info()],
+                    lyrics_transcription=transcription,
+                ),
+            )
     result = bundle.model_dump()
     result_json = json.dumps(result, ensure_ascii=False, indent=2)
 
@@ -787,6 +865,82 @@ def score_adherence_cmd(
         Path(output).write_text(content, encoding="utf-8")
     else:
         typer.echo(content)
+
+
+@app.command("lyrics-adherence")
+def lyrics_adherence_cmd(
+    audio: str = typer.Argument(..., help="Path to WAV/MP3 file"),
+    expected: str = typer.Option(
+        ..., "--expected", help="Path to a text file of expected lyric lines (one per line)"
+    ),
+    lyrics_model: str = typer.Option(
+        "small", "--lyrics-model", help="faster-whisper model size (e.g. small, medium)."
+    ),
+    lyrics_no_separate: bool = typer.Option(
+        False,
+        "--lyrics-no-separate",
+        help="Transcribe the full mix instead of isolating vocals via Demucs first.",
+    ),
+    separation_model: SeparationModelOption = DEFAULT_SEPARATION_MODEL,
+    separation_device: SeparationDeviceOption = DEFAULT_SEPARATION_DEVICE,
+    output: Optional[str] = typer.Option(None, "-o", "--output", help="Output YAML report path"),
+) -> None:
+    """Check whether audio sings the ordered expected lyrics (instrument, no verdict).
+
+    Transcribes `audio` with faster-whisper (requires the `lyrics` extra;
+    isolates vocals via Demucs first by default) and reports, per expected
+    line, the best char-level similarity against the transcription — see
+    `eval/lyrics_match.match_lyrics`. Like `roundtrip` / `score-adherence` /
+    `audit`, this is a descriptive instrument and intentionally does not
+    emit a pass/fail verdict.
+    """
+    from svp_rpe.eval.lyrics_match import match_lyrics
+    from svp_rpe.io.source_separator import SeparatorNotAvailableError
+    from svp_rpe.rpe.learned import LearnedModelUnavailable
+    from svp_rpe.rpe.learned.lyrics_adapter import ensure_lyrics_available, transcribe_lyrics
+
+    try:
+        ensure_lyrics_available()
+    except LearnedModelUnavailable as exc:
+        console.print(str(exc), style="yellow", markup=False)
+        raise typer.Exit(code=1) from exc
+
+    expected_lines = Path(expected).read_text(encoding="utf-8").splitlines()
+
+    try:
+        transcription = transcribe_lyrics(
+            audio,
+            separate_vocals=not lyrics_no_separate,
+            separation_model=separation_model,
+            separation_device=separation_device,
+            model_size=lyrics_model,
+        )
+    except SeparatorNotAvailableError as exc:
+        console.print(str(exc), style="yellow", markup=False)
+        raise typer.Exit(code=1) from exc
+
+    report = match_lyrics(expected_lines, transcription.text)
+
+    table = Table(title=f"Lyrics adherence: {audio}")
+    table.add_column("expected")
+    table.add_column("best_ratio")
+    table.add_column("best_match")
+    for line in report["lines"]:
+        best_match = line["best_match"]
+        truncated = best_match if len(best_match) <= 60 else f"{best_match[:57]}..."
+        table.add_row(line["expected"], f"{line['best_ratio']:.4f}", truncated)
+    console.print(table)
+    console.print(f"overall_similarity: {report['overall_similarity']:.4f}")
+
+    if output:
+        import yaml
+
+        payload = {**report, "inference_config": transcription.inference_config}
+        Path(output).write_text(
+            yaml.safe_dump(payload, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+        console.print(f"[green]Report saved to {output}[/green]")
 
 
 @app.command("roundtrip-corpus")

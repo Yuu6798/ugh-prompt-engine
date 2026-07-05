@@ -20,6 +20,8 @@ svprpe extract track.wav --valley-method rms_percentile -o rpe.json
 svprpe extract track.wav --separate --separation-model htdemucs_ft -o rpe.json
 svprpe extract track.wav --clap-semantic -o rpe.json
 svprpe extract track.wav --clap-sections -o rpe.json
+svprpe extract track.wav --lyrics -o rpe.json
+svprpe extract track.wav --lyrics --lyrics-no-separate -o rpe.json
 ```
 
 `--separate` is opt-in because Demucs is slow and requires the optional
@@ -34,6 +36,14 @@ attaches per-axis `contrast_fit` readings to `learned_annotations.semantic_axes`
 axis battery per structural section instead (the "emotional arc"; superset of
 `--clap-semantic`), attaching `learned_annotations.semantic_axis_sections`. See
 [Semantic Sensor: CLAP](semantic_sensor_clap.md).
+
+`--lyrics` is opt-in and requires the optional `svp-rpe[lyrics]` dependency
+(faster-whisper). It transcribes the source audio's lyrics — isolating vocals
+via Demucs first by default (`--lyrics-no-separate` transcribes the full mix
+instead) — and attaches the result to `learned_annotations.lyrics_transcription`.
+Combine with `--clap-semantic` / `--clap-sections` to populate both sensors on
+the same `learned_annotations` record. See
+[Lyrics Transcription Sensor](lyrics_transcription_sensor.md).
 
 ### `svprpe generate <rpe.json>`
 
@@ -132,6 +142,24 @@ The output is a per-field table (`compiled_kept`, `roundtrip` diagnosis, `preser
 plus tight/kept/preserved counts. Like `roundtrip`, it is a descriptive instrument and
 intentionally does not emit a global verdict or pass/fail key. See
 [`control_profile.md`](control_profile.md).
+
+### `svprpe lyrics-adherence <audio> --expected <lyrics.txt>`
+
+Check whether generated audio sings the ordered expected lyrics — the output-side
+counterpart to `extract --lyrics`:
+
+```bash
+svprpe lyrics-adherence generated_track.wav --expected lyrics.txt
+svprpe lyrics-adherence generated_track.wav --expected lyrics.txt -o report.yaml
+svprpe lyrics-adherence generated_track.wav --expected lyrics.txt --lyrics-no-separate
+```
+
+Transcribes `audio` with faster-whisper (requires the `svp-rpe[lyrics]` extra) and
+reports, per expected line (one per line in the `--expected` text file), the best
+char-level similarity ratio against the transcription plus an `overall_similarity`.
+Like `roundtrip` / `score-adherence` / `audit`, this is a descriptive instrument and
+intentionally does not emit a pass/fail verdict. See
+[Lyrics Transcription Sensor](lyrics_transcription_sensor.md).
 
 ### `svprpe roundtrip-corpus <manifest.yaml>`
 
@@ -323,8 +351,12 @@ svprpe genre-audit examples/calibration/genre/manifest.yaml --format json -o aud
 | `--valley-method` | Valley depth method: `hybrid` (default), `rms_percentile`, `section_ar` |
 | `--baseline` | RPE baseline profile: `pro`, `loud_pop`, `acoustic`, or `edm` |
 | `--separate` | Enable opt-in Demucs source separation (`extract` / `evaluate` / `run` / `batch` only — not `compare`) |
-| `--separation-model` | Demucs model name used with `--separate` (default: `htdemucs_ft`) |
-| `--separation-device` | Demucs inference device used with `--separate` (default: `cpu`) |
+| `--separation-model` | Demucs model name used with `--separate` / `--lyrics` (default: `htdemucs_ft`) |
+| `--separation-device` | Demucs inference device used with `--separate` / `--lyrics` (default: `cpu`) |
+| `--lyrics` | Enable opt-in faster-whisper lyrics transcription (`extract` only; requires `svp-rpe[lyrics]`) |
+| `--lyrics-model` | faster-whisper model size used with `--lyrics` / `lyrics-adherence` (default: `small`) |
+| `--lyrics-no-separate` | Transcribe the full mix instead of isolating vocals via Demucs first |
+| `--expected` | Path to a text file of expected lyric lines, one per line (`lyrics-adherence` only) |
 | `--svp` | External SVP file for comparison |
 | `--svp-dir` | Directory with SVP candidates (batch mode) |
 | `--mode` | Batch mode: `evaluate` (default) or `compare` |

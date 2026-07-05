@@ -130,7 +130,7 @@ src/svp_rpe/
 │   ├── structure_novelty.py   # novelty 検出
 │   ├── section_features.py    # セクション粒度特徴
 │   ├── valley.py              # valley 検出 (--valley-method)
-│   └── learned/               # 学習モデルアダプタ (basic_pitch / beat_this / panns)
+│   └── learned/               # 学習モデルアダプタ (basic_pitch / beat_this / panns / lyrics_adapter)
 ├── svp/                       # SVP 生成層
 │   ├── models.py              # SVPBundle, MinimalSVP
 │   ├── generator.py           # RPE → SVP 変換
@@ -146,7 +146,8 @@ src/svp_rpe/
 │   ├── comparison.py          # compare コマンド本体
 │   ├── delta_e_alignment.py   # ΔE 整列
 │   ├── diff_models.py         # diff データ構造
-│   └── semantic_similarity.py # 意味類似度
+│   ├── semantic_similarity.py # 意味類似度
+│   └── lyrics_match.py        # 歌詞転写照合計器 (lyrics-adherence, verdict なし)
 ├── compose/                   # CompositionScore: models/loader/convert/fixity/renderer
 ├── semantic_ci/                # Target SVP → Expected RPE → Diff → Repair SVP
 ├── transcribe/                 # CompositionScore physical field measurement
@@ -209,6 +210,7 @@ examples/                      # sample_input/ + expected_output/
 | [`docs/lyrics_semantic_anchor.md`](docs/lyrics_semantic_anchor.md) | 2026-07-01 アレンジ・デモ発見: ボーカル/歌詞が key/BPM 読みを揺らす(交絡は実在するが方向不定＝n=1「ボーカル＝主音の錨」を n=2 で棄却・halving も非法則化)。歌詞が付与する「メリハリ(曲らしさ)」は物理 dynamic_range に写らない(むしろ逆)＝歌詞は**意味層**のアンカーで現状は耳が唯一のセンサー。**n=3 追試(07-01 S2/#124)で `dynamic_range`=歌詞アンカー説は棄却**(EDM 限定・Rock で反転かつ再生成ノイズ未満)、`mid_ratio` は最有力だが noise 超えは Rock のみ・EDM は directional(instrumental alt 未取得)＝昇格は n≥2×2 セル要件。BPM grip=確度×精度2軸・調号は grip/進行は非再現。genre pop 帯欠落/低sub EDM 誤判定も付随記録 |
 | [`docs/musicgen_backend.md`](docs/musicgen_backend.md) | MusicGen ローカル生成トラック: PR A(runbook+`musicgen` extra・実推論なし・CI 安全) / PR B(実バッチ→K2 型 fixture+`device_profiles/musicgen.yaml`+R3 初実測) / PR C(R3 ハーネス)。DD-A 決定論契約(fixture→grip のみ CI 対象)、annotation 隔離原則は対象外(生成側)、weights ライセンスは CC-BY-NC-4.0 実確認済(研究計器限定・重み非同梱) |
 | [`docs/semantic_sensor_clap.md`](docs/semantic_sensor_clap.md) | CLAP を抽出段階の意味層センサーとして配線(`svprpe extract --clap-semantic`): SOURCE 音声を固定の意味軸バッテリー(`config/semantic_probe_axes.yaml`)に対し A/B `contrast_fit` で計測、`LearnedAudioAnnotations.semantic_axes`(schema_version 1.1)に隔離、post-hoc fixture 比較(生成物対象)からの拡張として抽出時 SOURCE 音声を読む真の意味層センシングを実現。軸校正(2026-07-04 実推論・`scripts/calibrate_semantic_axes.py`): vocal/energy 実証・brightness は bpm 交絡・acousticness/warmth 探索扱い、有効帯域=実制作音楽 |
+| [`docs/lyrics_transcription_sensor.md`](docs/lyrics_transcription_sensor.md) | 歌詞転写センサー: faster-whisper + 既存 Demucs vocals stem で歌詞を機械化(CLAP の連続値 grip と相補的な記号列センサー)。入力側`svprpe extract --lyrics`→`LearnedAudioAnnotations.lyrics_transcription`(schema_version 1.2)、出力側`svprpe lyrics-adherence`(`eval/lyrics_match.py`, learned import なし・計器であって verdict なし)。fake-backend のみ、実推論は未計測 |
 
 ## ドキュメント管理ポリシー
 
