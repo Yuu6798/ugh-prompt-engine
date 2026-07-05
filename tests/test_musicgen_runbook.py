@@ -34,7 +34,14 @@ from scripts.collect_musicgen_takes import (
 )
 
 PLAN_PATH = Path("examples/control/k2_musicgen/plan.yaml")
+SEGMENTS_PLAN_PATH = Path("examples/control/k2_musicgen_segments/plan.yaml")
 SCORE_PATH = Path("examples/roundtrip/synth_01_source.yaml")
+
+# K2-seg 全セル共通のベース文言（compose の結合様式 ". " でセグメントを追記する）
+_SEGMENTS_BASE = (
+    "instrumental electronic music, steady four-on-the-floor drum beat, "
+    "at 120 beats per minute"
+)
 
 
 def test_profile_scope_advisory_none_for_measured_model_and_revision() -> None:
@@ -116,6 +123,64 @@ def test_plan_yaml_loads() -> None:
     assert len(plan.knobs) == 2
     names = {knob.name for knob in plan.knobs}
     assert names == {"bpm", "brightness"}
+
+
+def test_plan_knob_kind_defaults_to_effect_size() -> None:
+    """K2 既存 plan（kind 記載なし）のノブは既定 kind="effect_size" にフォールバック。"""
+    plan = load_plan(PLAN_PATH)
+    assert all(knob.kind == "effect_size" for knob in plan.knobs)
+
+
+def test_k2_segments_plan_yaml_loads_with_verbatim_prompts() -> None:
+    """K2-seg plan: 5 ノブ・pin 済み revision・compose 文言 verbatim（設計メモのノブ表）。"""
+    plan = load_plan(SEGMENTS_PLAN_PATH)
+    assert plan.fixture_id == "k2_musicgen_segments"
+    assert plan.model_id == "facebook/musicgen-small"
+    assert plan.model_revision == "4c8334b02c6ec4e8664a91979669a501ec497792"
+    assert plan.duration_seconds == 12.0
+    assert plan.guidance_scale == 3.0
+    assert plan.repetitions == 8
+
+    by_name = {knob.name: knob for knob in plan.knobs}
+    assert set(by_name) == {
+        "active_rate_target",
+        "valley_depth_target",
+        "semantic_avoid",
+        "semantic_core",
+        "time_signature",
+    }
+
+    # categorical は time_signature のみ、他は既定 effect_size
+    assert by_name["time_signature"].kind == "categorical"
+    for name in ("active_rate_target", "valley_depth_target", "semantic_avoid", "semantic_core"):
+        assert by_name[name].kind == "effect_size"
+
+    # 文言 verbatim: ベース + ". " 区切りのセグメント追記（folded scalar の
+    # 改行アーティファクトや二重スペースが混入していないことを全文一致で確認）
+    assert by_name["active_rate_target"].prompt_low == f"{_SEGMENTS_BASE}. Active rate 0.55."
+    assert by_name["active_rate_target"].prompt_high == f"{_SEGMENTS_BASE}. Active rate 0.92."
+    assert by_name["valley_depth_target"].prompt_low == f"{_SEGMENTS_BASE}. Valley depth 0.15."
+    assert by_name["valley_depth_target"].prompt_high == f"{_SEGMENTS_BASE}. Valley depth 0.70."
+    # semantic_avoid の low は「ベースのみ」（存在 A/B）
+    assert by_name["semantic_avoid"].prompt_low == _SEGMENTS_BASE
+    assert (
+        by_name["semantic_avoid"].prompt_high
+        == f"{_SEGMENTS_BASE}. Avoid: bright shimmering sparkling highs."
+    )
+    assert by_name["semantic_avoid"].expected_sign == -1
+    assert (
+        by_name["semantic_core"].prompt_low
+        == f"{_SEGMENTS_BASE}. Calm introspective melancholic night atmosphere."
+    )
+    assert (
+        by_name["semantic_core"].prompt_high
+        == f"{_SEGMENTS_BASE}. Euphoric energetic festival atmosphere."
+    )
+    assert by_name["semantic_core"].sensor == "onset_density"
+    assert by_name["time_signature"].prompt_low == f"{_SEGMENTS_BASE}. 4/4 time."
+    assert by_name["time_signature"].prompt_high == f"{_SEGMENTS_BASE}. 3/4 time."
+    assert by_name["time_signature"].low_level == "4/4"
+    assert by_name["time_signature"].high_level == "3/4"
 
 
 def test_plan_missing_required_key_fails_fast(tmp_path: Path) -> None:
@@ -324,8 +389,16 @@ def test_extract_fixture_matches_k2_schema(tmp_path: Path) -> None:
             "spectral_profile",
             "active_rate",
             "valley_depth",
+            # K2-seg: compose プロンプト欄 grip スクリーン用の追加 3 キー
+            "onset_density",
+            "time_signature",
+            "time_signature_confidence",
         }
         assert "brightness" in features["spectral_profile"]
+        assert isinstance(features["onset_density"], float)
+        assert isinstance(features["time_signature"], str)
+        assert "/" in features["time_signature"]
+        assert 0.0 <= features["time_signature_confidence"] <= 1.0
 
 
 @pytest.mark.slow
@@ -345,6 +418,72 @@ def test_extract_fixture_is_readable_by_measure_grip(tmp_path: Path) -> None:
     assert report["fixture_id"] == "k2_musicgen_mini"
     assert len(report["results"]) == 1
     assert report["results"][0]["knob"] == "bpm"
+
+
+def test_extract_fixture_propagates_categorical_kind() -> None:
+    """plan の knob に kind があれば fixture の knob spec へ透過し、無ければ付与しない。
+
+    samples を空にすると音声抽出を伴わず knob spec の組み立てだけを検証できる
+    （高速ループ）。既存 K2 系 manifest（kind 記載なし）の fixture スキーマが
+    従来どおり 5 キーのままであることも同時に固定する。
+    """
+    manifest = {
+        "schema_version": "1.0",
+        "fixture_id": "kind_passthrough",
+        "generator": "musicgen-small",
+        "plan": {
+            "schema_version": "1.0",
+            "fixture_id": "kind_passthrough",
+            "generator": "musicgen-small",
+            "model_id": "facebook/musicgen-small",
+            "model_revision": None,
+            "duration_seconds": 12.0,
+            "guidance_scale": 3.0,
+            "repetitions": 8,
+            "knobs": [
+                {
+                    "name": "time_signature",
+                    "sensor": "time_signature",
+                    "kind": "categorical",
+                    "low_level": "4/4",
+                    "high_level": "3/4",
+                    "expected_sign": 0,
+                    "prompt_low": "a",
+                    "prompt_high": "b",
+                },
+                {
+                    "name": "bpm",
+                    "sensor": "bpm",
+                    "low_level": "90",
+                    "high_level": "170",
+                    "expected_sign": 1,
+                    "prompt_low": "a",
+                    "prompt_high": "b",
+                },
+            ],
+        },
+        "samples": [],
+    }
+
+    fixture = extract_fixture(manifest, audio_dir=Path("/nonexistent-unused"))
+
+    assert fixture["knobs"] == [
+        {
+            "name": "time_signature",
+            "sensor": "time_signature",
+            "low_level": "4/4",
+            "high_level": "3/4",
+            "expected_sign": 0,
+            "kind": "categorical",
+        },
+        {
+            "name": "bpm",
+            "sensor": "bpm",
+            "low_level": "90",
+            "high_level": "170",
+            "expected_sign": 1,
+        },
+    ]
 
 
 def test_extract_fixture_fails_fast_on_sha256_mismatch(tmp_path: Path) -> None:
