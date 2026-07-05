@@ -127,6 +127,23 @@ _RES_VERBATIM = "recorded verbatim"
 _RES_UPSTREAM = "resolved via installed faster_whisper.utils._MODELS"
 _RES_STATIC = "static family convention"
 
+# Documented load-parameter defaults, applied ONLY when this module itself
+# loads the model. A caller-supplied preloaded model resolves its
+# provenance from the `load_lyrics_model` stamp (or explicit kwargs)
+# instead — the defaults are NEVER silently recorded for a model this
+# call did not load (see `transcribe_lyrics`).
+_DEFAULT_MODEL_SIZE = "small"
+_DEFAULT_DEVICE = "cpu"
+_DEFAULT_COMPUTE_TYPE = "int8"
+
+# Attribute stamped by `load_lyrics_model` onto the returned model so a
+# reused model carries the ground truth of what was actually loaded.
+_LOAD_PARAMS_ATTR = "_svp_rpe_load_params"
+
+# Honest provenance marker for a preloaded model whose load params cannot
+# be determined (no stamp, no explicit kwargs).
+_UNKNOWN_PROVENANCE = "unknown (preloaded model without provenance)"
+
 _INSTALL_HINT = (
     "faster_whisper is not installed. Install it via the optional "
     "`lyrics` extra:\n"
@@ -303,6 +320,11 @@ def load_lyrics_model(
 ) -> Any:
     """Instantiate a `faster_whisper.WhisperModel`.
 
+    The actual load parameters are stamped onto the returned object
+    (`_svp_rpe_load_params`) so `transcribe_lyrics(model=...)` can record
+    the ground truth of what was loaded instead of guessing — see its
+    docstring's provenance-resolution note.
+
     Raises
     ------
     LearnedModelUnavailable
@@ -316,7 +338,21 @@ def load_lyrics_model(
         raise LearnedModelIncompatible(
             "faster_whisper.WhisperModel not found; incompatible upstream version"
         )
-    return module.WhisperModel(model_size, device=device, compute_type=compute_type)
+    model = module.WhisperModel(model_size, device=device, compute_type=compute_type)
+    try:
+        setattr(
+            model,
+            _LOAD_PARAMS_ATTR,
+            {"model_size": model_size, "device": device, "compute_type": compute_type},
+        )
+    except Exception:
+        # Stamping is provenance sugar, not a load requirement — attribute
+        # assignment can fail on exotic objects (__slots__, frozen
+        # wrappers); the model itself is still perfectly usable and
+        # `transcribe_lyrics` falls back to explicit kwargs / the honest
+        # unknown marker.
+        pass
+    return model
 
 
 def _load_waveform(
@@ -366,9 +402,9 @@ def transcribe_lyrics(
     separation_model: str = "htdemucs_ft",
     separation_device: str = "cpu",
     model: Optional[Any] = None,
-    model_size: str = "small",
-    device: str = "cpu",
-    compute_type: str = "int8",
+    model_size: Optional[str] = None,
+    device: Optional[str] = None,
+    compute_type: Optional[str] = None,
     language: Optional[str] = None,
     beam_size: int = 5,
 ) -> LearnedLyricsTranscription:
@@ -400,13 +436,24 @@ def transcribe_lyrics(
         Forwarded to `separate_stems` when `separate_vocals` is True.
     model
         A model already returned by `load_lyrics_model`. If omitted, a
-        fresh model is loaded via `load_lyrics_model(model_size, device,
-        compute_type)` — callers processing many files should load once
-        and pass `model` to avoid reloading per call.
+        fresh model is loaded via `load_lyrics_model(...)` — callers
+        processing many files should load once and pass `model` to avoid
+        reloading per call. Models from `load_lyrics_model` carry their
+        load parameters automatically (the `_svp_rpe_load_params` stamp);
+        a FOREIGN preloaded model should pass `model_size` / `device` /
+        `compute_type` explicitly, otherwise those provenance fields are
+        recorded as `"unknown (preloaded model without provenance)"`.
     model_size, device, compute_type
-        Forwarded to `load_lyrics_model` when `model` is not supplied.
-        Recorded in `inference_config` for provenance regardless of
-        whether they triggered a fresh load.
+        `None` sentinels; provenance resolution per field:
+
+        - `model` is None (this call loads): the explicit value, or its
+          documented default (`"small"` / `"cpu"` / `"int8"`), is used for
+          the load AND recorded in `inference_config`.
+        - `model` supplied: the `load_lyrics_model` stamp — the ground
+          truth of what was actually loaded — wins over kwargs; else an
+          explicit non-None kwarg is recorded; else the honest unknown
+          marker. The defaults are NEVER silently recorded for a model
+          this call did not load.
     language
         BCP-47-ish language hint forwarded to `.transcribe` (`None` lets
         faster-whisper auto-detect). Recorded verbatim in
@@ -425,6 +472,33 @@ def transcribe_lyrics(
         If `separate_vocals` is True and Demucs is not installed
         (propagated unchanged from `separate_stems`).
     """
+    # Provenance resolution (see the parameter docs above): when this call
+    # loads the model, explicit values / documented defaults are both used
+    # and recorded; when the model is preloaded, the load stamp wins, then
+    # explicit kwargs, then the honest unknown marker — the defaults are
+    # never silently recorded for a model this call did not load.
+    if model is None:
+        recorded_model_size = model_size if model_size is not None else _DEFAULT_MODEL_SIZE
+        recorded_device = device if device is not None else _DEFAULT_DEVICE
+        recorded_compute_type = (
+            compute_type if compute_type is not None else _DEFAULT_COMPUTE_TYPE
+        )
+    else:
+        stamp = getattr(model, _LOAD_PARAMS_ATTR, None)
+        stamp = stamp if isinstance(stamp, dict) else {}
+
+        def _provenance(field: str, explicit: Optional[str]) -> str:
+            stamped = stamp.get(field)
+            if isinstance(stamped, str):
+                return stamped
+            if explicit is not None:
+                return explicit
+            return _UNKNOWN_PROVENANCE
+
+        recorded_model_size = _provenance("model_size", model_size)
+        recorded_device = _provenance("device", device)
+        recorded_compute_type = _provenance("compute_type", compute_type)
+
     waveform, source_sample_rate = _load_waveform(
         audio_path,
         separate_vocals=separate_vocals,
@@ -434,7 +508,7 @@ def transcribe_lyrics(
     waveform = _resample_to_target(waveform, source_sample_rate)
 
     whisper_model = model if model is not None else load_lyrics_model(
-        model_size, device, compute_type
+        recorded_model_size, recorded_device, recorded_compute_type
     )
     if not hasattr(whisper_model, "transcribe"):
         raise LearnedModelIncompatible(
@@ -470,9 +544,9 @@ def transcribe_lyrics(
 
     language_probability = getattr(info, "language_probability", None)
     inference_config: dict[str, Any] = {
-        "model_size": model_size,
-        "device": device,
-        "compute_type": compute_type,
+        "model_size": recorded_model_size,
+        "device": recorded_device,
+        "compute_type": recorded_compute_type,
         "beam_size": beam_size,
         "temperature": 0.0,
         "condition_on_previous_text": False,

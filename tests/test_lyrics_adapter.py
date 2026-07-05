@@ -410,6 +410,98 @@ class TestTranscribeLyricsFullMix:
         assert result.segments == []
 
 
+class TestPreloadedModelProvenance:
+    """Reused-model runs must audit what was ACTUALLY loaded (Codex P2 #149).
+
+    `load_lyrics_model` stamps its load params onto the returned model;
+    `transcribe_lyrics(model=...)` records stamp > explicit kwargs >
+    honest unknown marker — never the silent defaults.
+    """
+
+    _UNKNOWN = "unknown (preloaded model without provenance)"
+
+    class _ForeignModel:
+        """A preloaded model NOT from load_lyrics_model (no stamp)."""
+
+        def transcribe(self, audio, **kwargs):
+            return iter(_DEFAULT_SEGMENTS), _FakeInfo()
+
+    def test_load_lyrics_model_stamps_load_params(self, monkeypatch):
+        _install_fake_faster_whisper(monkeypatch)
+
+        from svp_rpe.rpe.learned.lyrics_adapter import load_lyrics_model
+
+        model = load_lyrics_model("medium", device="cuda", compute_type="float16")
+        assert model._svp_rpe_load_params == {
+            "model_size": "medium",
+            "device": "cuda",
+            "compute_type": "float16",
+        }
+
+    def test_stamped_model_records_actual_load_params(self, monkeypatch, tmp_path):
+        _install_fake_faster_whisper(monkeypatch)
+
+        from svp_rpe.rpe.learned.lyrics_adapter import load_lyrics_model, transcribe_lyrics
+
+        model = load_lyrics_model("medium")
+        audio = tmp_path / "a.wav"
+        _write_wav(audio, seconds=0.05, sample_rate=16000)
+        result = transcribe_lyrics(str(audio), separate_vocals=False, model=model)
+
+        assert result.inference_config["model_size"] == "medium"
+        assert result.inference_config["device"] == "cpu"
+        assert result.inference_config["compute_type"] == "int8"
+
+    def test_unstamped_foreign_model_records_unknown_not_defaults(self, tmp_path):
+        # No fake faster_whisper install needed: a supplied model skips
+        # load_lyrics_model entirely.
+        from svp_rpe.rpe.learned.lyrics_adapter import transcribe_lyrics
+
+        audio = tmp_path / "a.wav"
+        _write_wav(audio, seconds=0.05, sample_rate=16000)
+        result = transcribe_lyrics(
+            str(audio), separate_vocals=False, model=self._ForeignModel()
+        )
+
+        for field in ("model_size", "device", "compute_type"):
+            assert result.inference_config[field] == self._UNKNOWN
+            assert result.inference_config[field] != "small"
+
+    def test_unstamped_model_with_explicit_kwargs_records_kwargs(self, tmp_path):
+        from svp_rpe.rpe.learned.lyrics_adapter import transcribe_lyrics
+
+        audio = tmp_path / "a.wav"
+        _write_wav(audio, seconds=0.05, sample_rate=16000)
+        result = transcribe_lyrics(
+            str(audio),
+            separate_vocals=False,
+            model=self._ForeignModel(),
+            model_size="large-v3",
+            device="cuda",
+        )
+
+        assert result.inference_config["model_size"] == "large-v3"
+        assert result.inference_config["device"] == "cuda"
+        # compute_type was neither stamped nor passed — honest unknown.
+        assert result.inference_config["compute_type"] == self._UNKNOWN
+
+    def test_stamp_wins_over_contradicting_kwargs(self, monkeypatch, tmp_path):
+        _install_fake_faster_whisper(monkeypatch)
+
+        from svp_rpe.rpe.learned.lyrics_adapter import load_lyrics_model, transcribe_lyrics
+
+        model = load_lyrics_model("medium")
+        audio = tmp_path / "a.wav"
+        _write_wav(audio, seconds=0.05, sample_rate=16000)
+        # The stamp is the ground truth of what was loaded; a contradicting
+        # kwarg must not overwrite it.
+        result = transcribe_lyrics(
+            str(audio), separate_vocals=False, model=model, model_size="large-v3"
+        )
+
+        assert result.inference_config["model_size"] == "medium"
+
+
 # ---------------------------------------------------------------------------
 # transcribe_lyrics — vocal separation path
 # ---------------------------------------------------------------------------
