@@ -193,6 +193,41 @@ def measure_takes(manifest: dict, config_dir: Path) -> list[dict[str, Any]]:
     return takes
 
 
+def _check_model_provenance(manifests: dict[str, dict[str, Any]]) -> tuple[str, str]:
+    """全 config manifest の model_id/model_revision を検証し、単一の provenance を返す。
+
+    ``--skip-generate`` 再利用時は計測対象が cached takes manifest の WAV なので、
+    JSON provenance とページ表示に出す model_id/model_revision も
+    ``PROFILE_MEASURED_MODEL_*`` 定数ではなく実際にそのテイクを焼いた manifest
+    記録値を使う（修正 17 の cached prompt と同じ規律）。欄が無い旧形式 manifest
+    （このゲート導入前に生成されたもの）と、config 間（base/bright/slow）で
+    記録 model が食い違う混成計測は、どちらも fail-fast する
+    （``render_showcase_crossgen.py`` の ``_check_cache_provenance`` と同じ様式）。
+    """
+
+    provenance: dict[str, tuple[Any, Any]] = {}
+    for name, manifest in manifests.items():
+        cached_model_id = manifest.get("model_id")
+        cached_model_revision = manifest.get("model_revision")
+        if cached_model_id is None or cached_model_revision is None:
+            raise ValueError(
+                f"config {name!r}: cached manifest is missing model_id/model_revision "
+                "provenance (old-format manifest, generated before the provenance gate); "
+                "score/prompt/source が変わっています。"
+                "--skip-generate を外してフル実行してください"
+            )
+        provenance[name] = (cached_model_id, cached_model_revision)
+
+    distinct = set(provenance.values())
+    if len(distinct) > 1:
+        detail = ", ".join(f"{name}={pair!r}" for name, pair in provenance.items())
+        raise ValueError(
+            f"manifests disagree on model_id/model_revision across configs ({detail}); "
+            "mixed-model measurement is not allowed — regenerate all configs together"
+        )
+    return next(iter(distinct))
+
+
 def separation(
     base_values: list[float],
     variant_values: list[float],
@@ -241,10 +276,17 @@ def gather(output_dir: Path, *, skip_generate: bool) -> dict[str, Any]:
     prompt = ExternalPromptAdapter().render(score)
 
     configs = []
+    manifests_by_name: dict[str, dict[str, Any]] = {}
     for spec in CONFIGS:
         manifest = ensure_takes(spec, output_dir, skip_generate=skip_generate)
+        manifests_by_name[spec["name"]] = manifest
         takes = measure_takes(manifest, output_dir / spec["name"])
         configs.append({**spec, "prompt": manifest["prompt"], "takes": takes})
+
+    # JSON provenance とページ表示の model_id/model_revision は、cached/フル実行
+    # いずれも manifest 記録値（実際にそのテイクを焼いた model）から導出する。
+    # 旧形式 manifest の欠落や config 間の食い違いはここで fail-fast する。
+    model_id, model_revision = _check_model_provenance(manifests_by_name)
 
     by_name = {c["name"]: c for c in configs}
 
@@ -282,8 +324,8 @@ def gather(output_dir: Path, *, skip_generate: bool) -> dict[str, Any]:
         "prompt_text": prompt_text,
         "configs": configs,
         "stats": stats,
-        "model_id": PROFILE_MEASURED_MODEL_ID,
-        "model_revision": PROFILE_MEASURED_MODEL_REVISION,
+        "model_id": model_id,
+        "model_revision": model_revision,
     }
 
 
