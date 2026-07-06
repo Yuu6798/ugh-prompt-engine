@@ -201,13 +201,16 @@ def gather(source_path: Path, output_dir: Path, *, skip_generate: bool) -> dict[
     prompt = ExternalPromptAdapter().render(score)
 
     manifest_path = output_dir / "takes_manifest.json"
-    if manifest_path.is_file():
+    if skip_generate:
+        # --skip-generate 時のみ既存 manifest を再利用する（決定論な再採点・再描画用）。
+        if not manifest_path.is_file():
+            raise FileNotFoundError(
+                f"--skip-generate but no manifest at {manifest_path}; run without the flag first"
+            )
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    elif skip_generate:
-        raise FileNotFoundError(
-            f"--skip-generate but no manifest at {manifest_path}; run without the flag first"
-        )
     else:
+        # フル実行は既存 manifest の有無に関わらず takes を再生成する
+        # （provenance 比較ゲートは実装しない: デモスクリプトには過剰）。
         manifest = perform_takes(
             score_path,
             repetitions=REPETITIONS,
@@ -226,7 +229,7 @@ def gather(source_path: Path, output_dir: Path, *, skip_generate: bool) -> dict[
         score,
         takes,
         generator=manifest.get("generator", "musicgen-small"),
-        score_ref=str(score_path.relative_to(ROOT)),
+        score_ref=_display_path(score_path),
     )
 
     take_media = []
