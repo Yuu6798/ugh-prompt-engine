@@ -313,6 +313,94 @@ def test_cross_couplings_never_produce_advisories() -> None:
     assert prompt.advisories == []
 
 
+def test_musicgen_nonempty_avoid_fires_attractor_advisory() -> None:
+    """musicgen backend + 非空 `semantic.avoid` は Avoid=attractor 警告を発火する。
+
+    Codex P2 指摘（#152）: `semantic.avoid` quirk は制約（`applies_to_values` /
+    数値閾値）を持たないため従来の `_quirk_matches` は常に不成立、加えて
+    `_field_value_for_quirk` の `getattr(score.semantic, "semantic.avoid", None)`
+    もドット付きフィールド名を解決できず None 固定だった＝二重の理由で一度も
+    発火しなかった。両方を fix したことをここで pin する。
+    """
+
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data.pop("control_profile", None)
+    data["rendering"]["target_backend"] = "musicgen"
+    assert data["semantic"]["avoid"]  # サンプルは非空 avoid を持つ前提
+    score = CompositionScore.model_validate(data)
+
+    prompt = ExternalPromptAdapter().render(score)
+
+    assert any("引き寄せる" in advisory for advisory in prompt.advisories)
+    assert any("Avoid" in advisory for advisory in prompt.advisories)
+    # 既存契約: advisory の発火は本文 / tags / negative_tags を変えない（自動補正しない）。
+    # text 側の "Avoid: ..." セグメントは semantic.avoid 自体の描画（既存契約・不変）で、
+    # advisories フィールドとは独立に計算される。
+    assert "Avoid: bright festival EDM; comic vocal delivery." in prompt.text
+    assert prompt.negative_tags == data["semantic"]["avoid"]
+    assert prompt.tags == ["deep_house", "ambient", "dark", "wide_stereo"]
+
+
+def test_musicgen_empty_avoid_does_not_fire_attractor_advisory() -> None:
+    """`semantic.avoid` が空なら musicgen の Avoid=attractor 警告は発火しない。"""
+
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data.pop("control_profile", None)
+    data["semantic"]["avoid"] = []
+    data["rendering"]["target_backend"] = "musicgen"
+    score = CompositionScore.model_validate(data)
+
+    prompt = ExternalPromptAdapter().render(score)
+
+    assert not any("引き寄せる" in advisory for advisory in prompt.advisories)
+    assert "Avoid:" not in prompt.text
+    assert prompt.negative_tags == []
+
+
+def test_musicgen_avoid_advisory_fix_does_not_alter_suno_bpm_brightness_advisories() -> None:
+    """suno backend の既存 advisory 挙動（bpm applies_below / brightness
+    applies_to_values）は今回の quirk-matching 拡張で不変（回帰ゼロ）。"""
+
+    score = load_composition_score(SAMPLE_PATH)  # target_backend: external -> suno
+    prompt = ExternalPromptAdapter().render(score)
+
+    assert any("dark" in advisory for advisory in prompt.advisories)
+
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["physical"]["bpm"] = 90
+    data["physical"]["brightness"] = "bright"
+    low_bpm_score = CompositionScore.model_validate(data)
+    low_bpm_prompt = ExternalPromptAdapter().render(low_bpm_score)
+    assert any(
+        "低 bpm" in advisory or "prior" in advisory for advisory in low_bpm_prompt.advisories
+    )
+
+
+def test_advisory_null_constraintless_quirk_never_fires() -> None:
+    """advisory が null の制約なし quirk（例: musicgen `time_signature`）は、解決値が
+    非空でも発火しない（advisory 非 null が新分岐の前提条件であることを固定）。"""
+
+    profile = load_device_profile("musicgen")
+    assert profile is not None
+    time_signature_quirk = next(q for q in profile.knob_quirks if q.field == "time_signature")
+    assert time_signature_quirk.advisory is None
+    assert not time_signature_quirk.applies_to_values
+    assert time_signature_quirk.applies_below is None
+    assert time_signature_quirk.applies_above is None
+
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data.pop("control_profile", None)
+    data["rendering"]["target_backend"] = "musicgen"
+    score = CompositionScore.model_validate(data)
+
+    prompt = ExternalPromptAdapter().render(score)
+
+    assert not any(
+        "4/4" in advisory or "拍子" in advisory or "抽出器の 4/4 バイアス" in advisory
+        for advisory in prompt.advisories
+    )
+
+
 def test_generated_prompt_advisories_default_empty_list() -> None:
     from svp_rpe.compose import GeneratedPrompt
 

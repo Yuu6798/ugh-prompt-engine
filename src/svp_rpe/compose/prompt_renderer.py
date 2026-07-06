@@ -137,32 +137,51 @@ class ExternalPromptAdapter:
 
 
 def _field_value_for_quirk(score: CompositionScore, field: str) -> Any:
-    """`KnobQuirk.field` に対応するスコア上の現在値を取得する（無ければ None）。"""
+    """`KnobQuirk.field` に対応するスコア上の現在値を取得する（無ければ None）。
+
+    `SEMANTIC_CONTROL_FIELDS` はドット付き表記（`semantic.avoid` / `semantic.core`）と
+    bare 表記（`lyrics_presence`）が混在するが、`score.semantic` の実属性名は常に
+    bare（`avoid` / `core` / `lyrics_presence`）。ドット付きはプレフィクスを剥がして
+    解決する（さもないと `getattr(score.semantic, "semantic.avoid", None)` は属性名に
+    `.` を含むため常に存在せず None フォールバックに落ちる＝quirk が発火しない）。
+    """
 
     if field in SEMANTIC_CONTROL_FIELDS:
-        return getattr(score.semantic, field, None)
+        attr = field.rsplit(".", 1)[-1] if field.startswith("semantic.") else field
+        return getattr(score.semantic, attr, None)
     if field in PhysicalLayer.model_fields:
         return getattr(score.physical, field)
     return None
 
 
 def _quirk_matches(quirk: KnobQuirk, value: Any) -> bool:
-    """発火条件（値の完全一致 or 数値閾値）を満たすか判定する。
+    """発火条件を満たすか判定する。
 
-    数値比較は int（bpm 等）のときのみ行う。TODO(transcribe) センチネル文字列は
-    isinstance(value, int) が False になるため自然にスキップされる。
+    3 通りの発火経路:
+    - `applies_to_values`: 値の完全一致（str() 比較）
+    - `applies_below` / `applies_above`: 数値閾値（int のみ。TODO(transcribe) センチネル
+      文字列は isinstance(value, int) が False になるため自然にスキップされる）
+    - 制約なし（`applies_to_values` 空 かつ 閾値未設定）× advisory 非 null: 値が
+      「使われている」（None でない、list/str なら非空）だけで発火する
+      （例: musicgen `semantic.avoid` — 一致すべき固定値も閾値も存在しない癖）。
     """
 
     if value is None:
         return False
     if quirk.applies_to_values and str(value) in quirk.applies_to_values:
         return True
-    if quirk.applies_below is not None or quirk.applies_above is not None:
+    has_threshold = quirk.applies_below is not None or quirk.applies_above is not None
+    if has_threshold:
         if isinstance(value, int) and not isinstance(value, bool):
             if quirk.applies_below is not None and value < quirk.applies_below:
                 return True
             if quirk.applies_above is not None and value > quirk.applies_above:
                 return True
+        return False
+    if not quirk.applies_to_values and quirk.advisory is not None:
+        if isinstance(value, (list, str)):
+            return bool(value)
+        return True
     return False
 
 
