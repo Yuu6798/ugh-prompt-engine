@@ -53,6 +53,9 @@ EXCERPT_START_BAR = 20
 EXCERPT_SEC = 22.0
 EXCERPT_SR = 11025
 
+BRIGHT_ABSOLUTE_HZ = 2500.0  # semantic_rules の絶対 bright 帯下限
+BPM_TOLERANCE = 2.0  # 決定論演奏者でも抽出器のビート検出には ~1 BPM 程度のノイズがある
+
 
 # ---------------------------------------------------------------------------
 # 変奏の定義
@@ -277,32 +280,63 @@ def _audio(b64: str) -> str:
 
 
 def _meter_row(variant: dict[str, Any], baseline: dict[str, Any]) -> str:
-    """変奏カードの「計器の読み」行を作る。"""
+    """変奏カードの「計器の読み」行を作る。
+
+    verdict は「書いた値」（variant["diff"] の after 側）と実測値を比較した結果
+    から導出する（決定論演奏者でも抽出器の誤検出はありうるため、固定の成功文で
+    決め打ちしない）。CSS クラスも文言と同じ判定から選ぶ。
+    """
 
     kind = variant["meter"]
     before = baseline["measured"]
     after = variant["measured"]
+    target = variant["diff"][1].split(":", 1)[1].strip()
     if kind == "bpm":
         reading = (
             f'<b class="measured">{before["bpm"]:g} BPM</b> → '
             f'<b class="measured">{after["bpm"]:g} BPM</b>'
         )
-        verdict = "✓ 書いた 80 に着地"
+        target_bpm = float(target)
+        # 抽出器のビート検出には決定論演奏者でも ~1 BPM 程度のノイズがある
+        # （変更していない変奏でも authored 128 に対し実測 129 台になる）ため、
+        # 半折り等の大外れとは区別しつつ許容誤差を持たせる。
+        if after["bpm"] is not None and abs(after["bpm"] - target_bpm) <= BPM_TOLERANCE:
+            verdict = f"✓ 書いた {target_bpm:g} に着地"
+            verdict_ok = True
+        else:
+            verdict = f"✗ 書いた {target_bpm:g} と乖離（実測 {after['bpm']}）"
+            verdict_ok = False
     elif kind == "key":
         reading = (
             f'<b class="measured">{_esc(before["key"])}</b> → '
             f'<b class="measured">{_esc(after["key"])}</b>'
         )
-        verdict = "✓ 長調と聴き当てた"
+        target_mode = target.split()[-1]
+        detected_mode = after["key"].split()[-1] if after["key"] else None
+        if detected_mode == target_mode:
+            verdict = f"✓ {'長調' if target_mode == 'major' else target_mode}と聴き当てた"
+            verdict_ok = True
+        else:
+            verdict = f"✗ 書いた調と食い違う（実測 {_esc(after['key'])}）"
+            verdict_ok = False
     else:
         reading = (
             f'<b class="measured">{before["centroid"]:g} Hz</b> → '
             f'<b class="measured">{after["centroid"]:g} Hz</b>'
         )
-        verdict = "✓ 針が明るい方へ動いた"
+        if after["centroid"] > before["centroid"]:
+            verdict = "✓ 針が明るい方へ動いた"
+            verdict_ok = True
+        else:
+            verdict = (
+                f"✗ 針は明るい方へ動かず（{before['centroid']:g} → "
+                f"{after['centroid']:g} Hz）"
+            )
+            verdict_ok = False
+    verdict_class = "meter-verdict" if verdict_ok else "meter-verdict-bad"
     return (
         '<div class="meter"><span class="meter-label">計器の読み</span>'
-        f"{reading}<span class='meter-verdict'>{verdict}</span></div>"
+        f"{reading}<span class='{verdict_class}'>{verdict}</span></div>"
     )
 
 
@@ -386,6 +420,31 @@ def render_html(data: dict[str, Any]) -> str:
     )
     contexts = "、".join(semantic.cultural_context) or "—"
 
+    # 3 枚目（brightness 変奏）の補足も実測値から導出する（固定文だと、演奏者の
+    # 音色設計が変わって絶対基準に届いた/動かなかった場合に実測と食い違うため）。
+    bright_variant = next(v for v in data["variants"] if v["meter"] == "centroid")
+    bright_before = original["measured"]["centroid"]
+    bright_after = bright_variant["measured"]["centroid"]
+    bright_moved_up = bright_after > bright_before
+    bright_reached_threshold = bright_after >= BRIGHT_ABSOLUTE_HZ
+    if bright_moved_up and not bright_reached_threshold:
+        bright_note = (
+            "3 枚目の補足: 針は確かに明るい方へ動きますが、この演奏者の音色では"
+            f"「bright」の絶対基準（{BRIGHT_ABSOLUTE_HZ:g} Hz 以上）には届きません。"
+            "計器は動いた事実と届かない事実を両方そのまま報告します — "
+            "忖度しないのが、この計器の設計です。"
+        )
+    elif bright_moved_up and bright_reached_threshold:
+        bright_note = (
+            "3 枚目の補足: 針は明るい方へ動き、"
+            f"「bright」の絶対基準（{BRIGHT_ABSOLUTE_HZ:g} Hz 以上）にも届きました。"
+        )
+    else:
+        bright_note = (
+            f"3 枚目の補足: 針は明るい方へ動きませんでした（{bright_before:g} → "
+            f"{bright_after:g} Hz）— この演奏者ではこの変奏は効きませんでした。"
+        )
+
     template = Template(_PAGE_TEMPLATE)
     return template.substitute(
         title=_esc(score.meta.title),
@@ -394,6 +453,7 @@ def render_html(data: dict[str, Any]) -> str:
         hero_audio=_audio(original["excerpt_b64"]),
         hero_wave=_waveform_svg(original["waveform"]),
         variant_cards="".join(variant_cards),
+        bright_note=_esc(bright_note),
         preserved_count=str(preserved_count),
         field_count=str(len(roundtrip.fields)),
         unread_count=str(len(roundtrip.fields) - preserved_count),
@@ -485,6 +545,7 @@ audio{width:100%;margin:2px 0 4px}
   text-transform:uppercase}
 .meter .measured{color:var(--measured)}
 .meter-verdict{color:var(--ok);font-weight:700}
+.meter-verdict-bad{color:var(--del);font-weight:700}
 table{border-collapse:collapse;width:100%;font-size:14px;font-variant-numeric:tabular-nums}
 .tablewrap{overflow-x:auto}
 th{text-align:left;font-size:11px;letter-spacing:.08em;text-transform:uppercase;
@@ -571,9 +632,7 @@ details .inner{margin-top:12px}
   <span class="legend-inline"><i style="background:var(--authored)"></i>書いた値
   <i style="background:var(--measured)"></i>音から測った値</span></p>
   $variant_cards
-  <p class="small dim">3 枚目の補足: 針は確かに明るい方へ動きますが、この演奏者の音色では
-  「bright」の絶対基準（2500 Hz 以上）には届きません。計器は動いた事実と届かない事実を
-  両方そのまま報告します — 忖度しないのが、この計器の設計です。</p>
+  <p class="small dim">$bright_note</p>
 </section>
 
 <section>

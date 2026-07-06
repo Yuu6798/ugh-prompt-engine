@@ -314,6 +314,47 @@ def render_html(data: dict[str, Any]) -> str:
         )
         bri_verdict_class = "verdict-bad"
 
+    # BPM 見出し/リード文は bpm_verdict と同じ条件（halving_flagged /
+    # bpm_high_val > bpm_low_val）から導出する（固定文だと verdict と矛盾しうる）。
+    if halving_flagged:
+        bpm_heading = "テンポの注文は届いたか、半折り疑いにつき判定保留"
+        bpm_lede = (
+            f"低テンポ指定と高テンポ指定で生成された 2 曲。計器の読みは "
+            f"{bpm_low_val:g} BPM と {bpm_high_val:g} BPM でしたが、半折り疑いが"
+            "あるため割れたと断定できません。"
+        )
+    elif bpm_high_val > bpm_low_val:
+        bpm_heading = "テンポの注文は、実用機の針に届く"
+        bpm_lede = (
+            "低テンポ指定と高テンポ指定で生成された 2 曲。耳でも明確に違い、"
+            f"計器の読みは {bpm_low_val:g} BPM と {bpm_high_val:g} BPM に割れました。"
+        )
+    else:
+        bpm_heading = "テンポの注文は、実用機の針に届かず"
+        bpm_lede = (
+            f"低テンポ指定と高テンポ指定で生成された 2 曲。計器の読みは "
+            f"{bpm_low_val:g} BPM と {bpm_high_val:g} BPM でしたが、指定どおりには"
+            "割れませんでした。"
+        )
+
+    # brightness 見出し/リード文も bri_verdict と同じ条件から導出する
+    # （成功/不成立の 2 分岐。「取説の予言」は prophecy_heading 側で独立に判定済み
+    # なので見出しからは分離し、方向が成立したときだけ的中の含みを残す）。
+    if bright_centroid > dark_centroid:
+        bri_heading = "明るさも方向どおり — そして「取説の予言」が当たる"
+        bri_lede = (
+            f"dark 指定と bright 指定のペア。針は {dark_centroid:g} Hz → "
+            f"{bright_centroid:g} Hz と方向どおりに動きました。ここで面白いのは"
+            "動いたことより、<b>dark 側の着地点</b>です。"
+        )
+    else:
+        bri_heading = "明るさは方向どおりに動かず"
+        bri_lede = (
+            f"dark 指定と bright 指定のペア。針は {dark_centroid:g} Hz → "
+            f"{bright_centroid:g} Hz と動きましたが、期待した方向とは逆または"
+            "同値でした。それでも面白いのは、<b>dark 側の着地点</b>です。"
+        )
+
     template = Template(_PAGE_TEMPLATE)
     return template.substitute(
         bpm_low_card=_track_card(bpm_low),
@@ -322,10 +363,10 @@ def render_html(data: dict[str, Any]) -> str:
         bright_card=_track_card(bright),
         bpm_strip=bpm_strip,
         centroid_strip=centroid_strip,
-        bpm_low_val=f"{bpm_low_val:g}",
-        bpm_high_val=f"{bpm_high_val:g}",
-        dark_val=f"{dark_centroid:g}",
-        bright_val=f"{bright_centroid:g}",
+        bpm_heading=_esc(bpm_heading),
+        bpm_lede=bpm_lede,
+        bri_heading=_esc(bri_heading),
+        bri_lede=bri_lede,
         prophecy_heading=_esc(prophecy_heading),
         prophecy=_esc(prophecy),
         halving_note=_esc(halving_note),
@@ -429,9 +470,8 @@ audio{width:100%;margin:0 0 4px}
 
 <section>
   <div class="chap">第 1 章</div>
-  <h2>テンポの注文は、実用機の針に届く</h2>
-  <p class="sub">低テンポ指定と高テンポ指定で生成された 2 曲。耳でも明確に違い、
-  計器の読みは $bpm_low_val BPM と $bpm_high_val BPM に割れました。
+  <h2>$bpm_heading</h2>
+  <p class="sub">$bpm_lede
   $halving_note</p>
   <div class="card">
     $bpm_low_card
@@ -446,9 +486,8 @@ audio{width:100%;margin:0 0 4px}
 
 <section>
   <div class="chap">第 2 章</div>
-  <h2>明るさも方向どおり — そして「取説の予言」が当たる</h2>
-  <p class="sub">dark 指定と bright 指定のペア。針は $dark_val Hz → $bright_val Hz と
-  方向どおりに動きました。ここで面白いのは動いたことより、<b>dark 側の着地点</b>です。</p>
+  <h2>$bri_heading</h2>
+  <p class="sub">$bri_lede</p>
   <div class="card">
     $dark_card
     $bright_card

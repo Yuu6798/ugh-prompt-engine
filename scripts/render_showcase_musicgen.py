@@ -270,8 +270,16 @@ def gather(output_dir: Path, *, skip_generate: bool) -> dict[str, Any]:
             ],
         },
     }
+    # --skip-generate 時は計測対象が cached takes manifest の WAV なので、表示・
+    # provenance の prompt もその manifest に実際使われた prompt（base config の
+    # manifest["prompt"]）を使う。現行コードで再レンダリングした prompt.text は
+    # manifest 生成時点のコードと乖離しうる — 「計測は古いテイクなのに表示は
+    # 現行コード由来」という provenance の不一致を避ける。フル実行時は
+    # 生成に使った prompt（=prompt.text）とそのまま一致するので従来通り。
+    prompt_text = by_name["base"]["prompt"] if skip_generate else prompt.text
     return {
         "prompt": prompt,
+        "prompt_text": prompt_text,
         "configs": configs,
         "stats": stats,
         "model_id": PROFILE_MEASURED_MODEL_ID,
@@ -280,11 +288,17 @@ def gather(output_dir: Path, *, skip_generate: bool) -> dict[str, Any]:
 
 
 def as_json_payload(data: dict[str, Any]) -> dict[str, Any]:
+    # prompt.text は現行コードの再レンダリングそのものなので、--skip-generate 時は
+    # data["prompt_text"]（cached manifest 由来）で上書きし、計測対象と provenance
+    # の text を一致させる（tags 等の他フィールドは manifest に保存されておらず
+    # 再構築不能なため現行コード由来のまま — text のみが計測との対応点）。
+    prompt_payload = data["prompt"].model_dump(mode="json")
+    prompt_payload["text"] = data["prompt_text"]
     return {
         "schema_version": "1.0",
         "model_id": data["model_id"],
         "model_revision": data["model_revision"],
-        "prompt": data["prompt"].model_dump(mode="json"),
+        "prompt": prompt_payload,
         "configs": [
             {
                 "name": c["name"],
@@ -460,7 +474,7 @@ def render_html(data: dict[str, Any]) -> str:
 
     template = Template(_PAGE_TEMPLATE)
     return template.substitute(
-        prompt_text=_esc(data["prompt"].text),
+        prompt_text=_esc(data["prompt_text"]),
         base_rows=base_rows,
         bright_rows=bright_rows,
         slow_rows=slow_rows,
