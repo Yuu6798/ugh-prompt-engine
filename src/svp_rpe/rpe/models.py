@@ -124,6 +124,15 @@ class PhysicalRPE(BaseModel):
     # See physical_features.detect_bpm_octave_ambiguity.
     bpm_octave_ambiguous: bool = False
     bpm_candidates: List[float] = Field(default_factory=list)
+    # BPM prior-disagreement (R2-2f). Provenance flag distinguishing which
+    # detector flagged/corrected the tempo: True when the high-tempo-prior
+    # re-estimate (start_bpm=180) disagreed with the default-prior bpm within
+    # the observed 3:2 sub-octave band (see
+    # physical_features.detect_bpm_prior_disagreement). When True,
+    # `bpm_octave_ambiguous` is also set (shared trust-gate semantics — the
+    # transcribe trust gate keys off `bpm_octave_ambiguous`, not this flag).
+    # Default False preserves existing JSON without migration.
+    bpm_prior_disagreement: bool = False
     key: Optional[str] = None
     mode: Optional[str] = None          # "major" | "minor" | None
     key_confidence: Optional[float] = None
