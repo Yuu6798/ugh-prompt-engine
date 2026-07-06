@@ -1,0 +1,472 @@
+{
+  "schema_version": "1.1",
+  "generator": "collect_clap_fixture.py",
+  "manifest": "examples/learned/clap/musicgen_segments_semantic_core_contrast_manifest.yaml",
+  "model": {
+    "name": "laion_clap",
+    "checkpoint": "music_audioset_epoch_15_esc_90.14.pt",
+    "checkpoint_sha256": "fae3e9c087f2909c28a09dc31c8dfcdacbc42ba44c70e972b58c1bd1caf6dedd",
+    "amodel": "HTSAT-base",
+    "info": [
+      {
+        "name": "laion_clap",
+        "version": "1.1.7",
+        "provider": "LAION-AI/CLAP",
+        "task": "embedding",
+        "license": "CC0-1.0 (upstream LICENSE); PyPI trove classifier says Apache-2.0 (inconsistent upstream metadata, see docs/learned_models_policy.md 3.1)",
+        "weights_license": "Hugging Face repository-level license badge: cc0-1.0; no additional checkpoint-specific license text found in the empty model card (verified 2026-07-02, PR2b-2)"
+      }
+    ]
+  },
+  "samples": [
+    {
+      "prompt_groups": {
+        "positive": [
+          "an energetic driving intense track",
+          "high-energy powerful music"
+        ],
+        "negative": [
+          "a calm relaxed gentle track",
+          "low-energy soft ambient music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "calm",
+        "seed": 1300,
+        "axis": "energy"
+      },
+      "sample_id": "semantic_core_low_00",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_low_00.wav",
+      "audio_sha256": "ca624ea5e42b67817bc055c41137441b2ea08b20ca289bb61116c64e747c57e7",
+      "cosines": {
+        "an energetic driving intense track": -0.094616,
+        "high-energy powerful music": 0.051436,
+        "a calm relaxed gentle track": 0.280484,
+        "low-energy soft ambient music": 0.219005
+      },
+      "contrast_fit": -0.271335
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "an energetic driving intense track",
+          "high-energy powerful music"
+        ],
+        "negative": [
+          "a calm relaxed gentle track",
+          "low-energy soft ambient music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "calm",
+        "seed": 1301,
+        "axis": "energy"
+      },
+      "sample_id": "semantic_core_low_01",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_low_01.wav",
+      "audio_sha256": "42930258713ed12f2e29e3955c271a412d1f4eea5c609036bafbd5a3246ab696",
+      "cosines": {
+        "an energetic driving intense track": 0.104588,
+        "high-energy powerful music": 0.145718,
+        "a calm relaxed gentle track": 0.176183,
+        "low-energy soft ambient music": 0.055889
+      },
+      "contrast_fit": 0.009117
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "an energetic driving intense track",
+          "high-energy powerful music"
+        ],
+        "negative": [
+          "a calm relaxed gentle track",
+          "low-energy soft ambient music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "calm",
+        "seed": 1302,
+        "axis": "energy"
+      },
+      "sample_id": "semantic_core_low_02",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_low_02.wav",
+      "audio_sha256": "eb233a20923e1a63393367fa29405ed325abbd26937c3adac7a41f37c4958c0d",
+      "cosines": {
+        "an energetic driving intense track": 0.01509,
+        "high-energy powerful music": 0.143267,
+        "a calm relaxed gentle track": 0.2071,
+        "low-energy soft ambient music": 0.044814
+      },
+      "contrast_fit": -0.046778
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "an energetic driving intense track",
+          "high-energy powerful music"
+        ],
+        "negative": [
+          "a calm relaxed gentle track",
+          "low-energy soft ambient music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "calm",
+        "seed": 1303,
+        "axis": "energy"
+      },
+      "sample_id": "semantic_core_low_03",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_low_03.wav",
+      "audio_sha256": "d625464fa6f927b7f83b8f6832b63855969372498c780cc8e5e935e690f32136",
+      "cosines": {
+        "an energetic driving intense track": -0.075511,
+        "high-energy powerful music": 0.020302,
+        "a calm relaxed gentle track": 0.139975,
+        "low-energy soft ambient music": -0.061003
+      },
+      "contrast_fit": -0.067091
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "an energetic driving intense track",
+          "high-energy powerful music"
+        ],
+        "negative": [
+          "a calm relaxed gentle track",
+          "low-energy soft ambient music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "calm",
+        "seed": 1304,
+        "axis": "energy"
+      },
+      "sample_id": "semantic_core_low_04",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_low_04.wav",
+      "audio_sha256": "458f66e2fd209b427c5666e24352a5591f2f13b1a0b156e7cf8e2a013909429b",
+      "cosines": {
+        "an energetic driving intense track": 0.01751,
+        "high-energy powerful music": 0.158338,
+        "a calm relaxed gentle track": 0.28069,
+        "low-energy soft ambient music": 0.139962
+      },
+      "contrast_fit": -0.122402
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "an energetic driving intense track",
+          "high-energy powerful music"
+        ],
+        "negative": [
+          "a calm relaxed gentle track",
+          "low-energy soft ambient music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "calm",
+        "seed": 1305,
+        "axis": "energy"
+      },
+      "sample_id": "semantic_core_low_05",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_low_05.wav",
+      "audio_sha256": "95cd104862f9dbebe124c07636dbac4b11ca043c1a14f187e1a9ad8d2a33a918",
+      "cosines": {
+        "an energetic driving intense track": 0.072568,
+        "high-energy powerful music": 0.138501,
+        "a calm relaxed gentle track": 0.192543,
+        "low-energy soft ambient music": 0.121051
+      },
+      "contrast_fit": -0.051262
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "an energetic driving intense track",
+          "high-energy powerful music"
+        ],
+        "negative": [
+          "a calm relaxed gentle track",
+          "low-energy soft ambient music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "calm",
+        "seed": 1306,
+        "axis": "energy"
+      },
+      "sample_id": "semantic_core_low_06",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_low_06.wav",
+      "audio_sha256": "a1ff77580826aaab3659b44157129ded1f2cddf1c230717a2cbfea7914567a63",
+      "cosines": {
+        "an energetic driving intense track": 0.113333,
+        "high-energy powerful music": 0.146105,
+        "a calm relaxed gentle track": 0.173746,
+        "low-energy soft ambient music": 0.093041
+      },
+      "contrast_fit": -0.003675
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "an energetic driving intense track",
+          "high-energy powerful music"
+        ],
+        "negative": [
+          "a calm relaxed gentle track",
+          "low-energy soft ambient music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "calm",
+        "seed": 1307,
+        "axis": "energy"
+      },
+      "sample_id": "semantic_core_low_07",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_low_07.wav",
+      "audio_sha256": "e4cddbc63118dbddee4bd3d4d4410bf8fb594b1c43327e31498c4c39607d78ca",
+      "cosines": {
+        "an energetic driving intense track": 0.053887,
+        "high-energy powerful music": 0.029423,
+        "a calm relaxed gentle track": 0.093348,
+        "low-energy soft ambient music": -0.058054
+      },
+      "contrast_fit": 0.024008
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "an energetic driving intense track",
+          "high-energy powerful music"
+        ],
+        "negative": [
+          "a calm relaxed gentle track",
+          "low-energy soft ambient music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "euphoric",
+        "seed": 1350,
+        "axis": "energy"
+      },
+      "sample_id": "semantic_core_high_00",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_high_00.wav",
+      "audio_sha256": "a1062692dd7105b18dfc3b1825f5f64fdd361cc9bab067b26093ba184d803944",
+      "cosines": {
+        "an energetic driving intense track": 0.101358,
+        "high-energy powerful music": 0.239535,
+        "a calm relaxed gentle track": 0.148926,
+        "low-energy soft ambient music": -0.007436
+      },
+      "contrast_fit": 0.099701
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "an energetic driving intense track",
+          "high-energy powerful music"
+        ],
+        "negative": [
+          "a calm relaxed gentle track",
+          "low-energy soft ambient music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "euphoric",
+        "seed": 1351,
+        "axis": "energy"
+      },
+      "sample_id": "semantic_core_high_01",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_high_01.wav",
+      "audio_sha256": "673f8e7aeb95bb7de872f21264360207ba46c175f15fa6d2b369bebcd5e60e8b",
+      "cosines": {
+        "an energetic driving intense track": 0.104576,
+        "high-energy powerful music": 0.152417,
+        "a calm relaxed gentle track": 0.091598,
+        "low-energy soft ambient music": -0.017501
+      },
+      "contrast_fit": 0.091448
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "an energetic driving intense track",
+          "high-energy powerful music"
+        ],
+        "negative": [
+          "a calm relaxed gentle track",
+          "low-energy soft ambient music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "euphoric",
+        "seed": 1352,
+        "axis": "energy"
+      },
+      "sample_id": "semantic_core_high_02",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_high_02.wav",
+      "audio_sha256": "24122d3ccedace80b054739ad1ddd9639df4d477977815a9807ac70968437fe7",
+      "cosines": {
+        "an energetic driving intense track": 0.04647,
+        "high-energy powerful music": 0.157264,
+        "a calm relaxed gentle track": 0.143545,
+        "low-energy soft ambient music": 0.003088
+      },
+      "contrast_fit": 0.028551
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "an energetic driving intense track",
+          "high-energy powerful music"
+        ],
+        "negative": [
+          "a calm relaxed gentle track",
+          "low-energy soft ambient music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "euphoric",
+        "seed": 1353,
+        "axis": "energy"
+      },
+      "sample_id": "semantic_core_high_03",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_high_03.wav",
+      "audio_sha256": "39407a9f19772103779592d0a0f7bf5c1e94e878b9f1008eeff7f7e3b354f82b",
+      "cosines": {
+        "an energetic driving intense track": 0.041506,
+        "high-energy powerful music": 0.105359,
+        "a calm relaxed gentle track": -0.00861,
+        "low-energy soft ambient music": -0.080695
+      },
+      "contrast_fit": 0.118085
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "an energetic driving intense track",
+          "high-energy powerful music"
+        ],
+        "negative": [
+          "a calm relaxed gentle track",
+          "low-energy soft ambient music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "euphoric",
+        "seed": 1354,
+        "axis": "energy"
+      },
+      "sample_id": "semantic_core_high_04",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_high_04.wav",
+      "audio_sha256": "bc60304068b8c2850dd1d49c2feee29985dfc66f70ee99546bc51ea926e9626b",
+      "cosines": {
+        "an energetic driving intense track": -0.046653,
+        "high-energy powerful music": 0.076412,
+        "a calm relaxed gentle track": 0.123411,
+        "low-energy soft ambient music": -0.099784
+      },
+      "contrast_fit": 0.003066
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "an energetic driving intense track",
+          "high-energy powerful music"
+        ],
+        "negative": [
+          "a calm relaxed gentle track",
+          "low-energy soft ambient music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "euphoric",
+        "seed": 1355,
+        "axis": "energy"
+      },
+      "sample_id": "semantic_core_high_05",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_high_05.wav",
+      "audio_sha256": "d77d313c5c08db10768c18b814c501a4936c61ffe90fe64975de30e82c9ec5e4",
+      "cosines": {
+        "an energetic driving intense track": 0.084367,
+        "high-energy powerful music": 0.130053,
+        "a calm relaxed gentle track": 0.10441,
+        "low-energy soft ambient music": 0.019735
+      },
+      "contrast_fit": 0.045138
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "an energetic driving intense track",
+          "high-energy powerful music"
+        ],
+        "negative": [
+          "a calm relaxed gentle track",
+          "low-energy soft ambient music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "euphoric",
+        "seed": 1356,
+        "axis": "energy"
+      },
+      "sample_id": "semantic_core_high_06",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_high_06.wav",
+      "audio_sha256": "50b1db15bf6c42b86aaf6ae4b467e89a680e6550de9bcb7dff324d6c83af04c1",
+      "cosines": {
+        "an energetic driving intense track": 0.043311,
+        "high-energy powerful music": 0.155764,
+        "a calm relaxed gentle track": 0.045391,
+        "low-energy soft ambient music": -0.012983
+      },
+      "contrast_fit": 0.083333
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "an energetic driving intense track",
+          "high-energy powerful music"
+        ],
+        "negative": [
+          "a calm relaxed gentle track",
+          "low-energy soft ambient music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "euphoric",
+        "seed": 1357,
+        "axis": "energy"
+      },
+      "sample_id": "semantic_core_high_07",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_high_07.wav",
+      "audio_sha256": "968179cd4ec564e34cf23ffd8eb17621459a9edf1f192d472f240de934c185f0",
+      "cosines": {
+        "an energetic driving intense track": 0.097841,
+        "high-energy powerful music": 0.159864,
+        "a calm relaxed gentle track": 0.068489,
+        "low-energy soft ambient music": -0.074699
+      },
+      "contrast_fit": 0.131958
+    }
+  ],
+  "embeddings_sidecar": "musicgen_segments_semantic_core_contrast_fixture.embeddings.json"
+}

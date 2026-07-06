@@ -20,7 +20,13 @@ EVENT_FIXITY_FIELDS = frozenset({"chord_progression"})
 
 # SEM-1: control_profile が許可する意味層の制御チャネル。PhysicalLayer フィールドと違い
 # fixity 対象外（意味層は fixity の全網羅制約に含めない — docs/control_profile.md 参照）。
-SEMANTIC_CONTROL_FIELDS = frozenset({"lyrics_presence"})
+# K2-seg（2026-07-05）: `_segments_for` が実際に描画するセグメントトークンと一致させるため
+# `semantic.avoid` / `semantic.core`（ドット表記のまま）を追加。これにより
+# `_rank_key_factory` の `profile.get(segment.token)` がこの 2 トークンについても
+# device control_defaults / score control_profile の grip_class を引けるようになる
+# （lyrics_presence の参照実装踏襲。`_field_value_for_quirk` の getattr 経路は
+# 属性名がドット付きのため一致せず None を返す＝quirk 値マッチングは対象外のまま）。
+SEMANTIC_CONTROL_FIELDS = frozenset({"lyrics_presence", "semantic.avoid", "semantic.core"})
 
 # grip_class: 楽譜フィールドが当該生成器でどれだけ「効く」かの実証ラベル。
 # tight=保証チャネル / loose=助言（弱い grip）/ dead=無効（センサー盲 or ツマミ死）。

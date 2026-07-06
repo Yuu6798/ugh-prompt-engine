@@ -142,8 +142,9 @@ def _analyze_categorical_knob(
             f"got low={len(low_observed)} high={len(high_observed)}"
         )
 
-    low_scores = [_key_match_score(low_level, observed) for observed in low_observed]
-    high_scores = [_key_match_score(high_level, observed) for observed in high_observed]
+    score_fn = _key_match_score if sensor == "key" else _exact_match_score
+    low_scores = [score_fn(low_level, observed) for observed in low_observed]
+    high_scores = [score_fn(high_level, observed) for observed in high_observed]
     combined_rate = match_rate(low_scores + high_scores)
     return {
         "knob": knob_name,
@@ -245,6 +246,20 @@ def _key_match_score(target: str, observed: str) -> float:
     （semantic_ci/audit.py の key needle と同方針）。
     """
     return weighted_key_score(target, observed).score
+
+
+def _exact_match_score(target: str, observed: str) -> float:
+    """key 以外の categorical センサー向けの汎用一致スコア（casefold + 空白正規化の完全一致）。
+
+    `_key_match_score`（mir_eval 経由の音楽 key 専用ファジーマッチ）は
+    "4/4"/"3/4" のような非 key 文字列に対しては意味を持たない
+    （最良でも exact-match フォールバックに落ちるだけで、近縁調のような
+    段階採点は原理的に成立しない）。sensor が "key" でない categorical ノブは
+    この関数で採点する — mir_eval には一切ルーティングしない。
+    """
+    target_norm = " ".join(str(target).casefold().split())
+    observed_norm = " ".join(str(observed).casefold().split())
+    return 1.0 if target_norm == observed_norm else 0.0
 
 
 def _sensor_node(features: dict[str, Any], sensor: str) -> Any:

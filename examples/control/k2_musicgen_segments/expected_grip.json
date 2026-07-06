@@ -1,0 +1,192 @@
+{
+  "schema_version": "1.0",
+  "fixture_id": "k2_musicgen_segments",
+  "repetitions": 8,
+  "results": [
+    {
+      "knob": "active_rate_target",
+      "sensor": "active_rate",
+      "expected_sign": 1,
+      "low_level": "0.55",
+      "high_level": "0.92",
+      "repetitions": 8,
+      "low_values": [
+        0.9903,
+        1.0,
+        0.9709,
+        0.9942,
+        0.7922,
+        0.9903,
+        1.0,
+        1.0
+      ],
+      "high_values": [
+        0.9748,
+        0.9961,
+        0.9359,
+        1.0,
+        1.0,
+        0.9981,
+        1.0,
+        1.0
+      ],
+      "low_mean": 0.967237,
+      "high_mean": 0.988112,
+      "grip": 0.394025,
+      "classification": "loose"
+    },
+    {
+      "knob": "valley_depth_target",
+      "sensor": "valley_depth",
+      "expected_sign": 1,
+      "low_level": "0.15",
+      "high_level": "0.70",
+      "repetitions": 8,
+      "low_values": [
+        0.0802,
+        0.0546,
+        0.0712,
+        0.0657,
+        0.0919,
+        0.1006,
+        0.0835,
+        0.0788
+      ],
+      "high_values": [
+        0.0663,
+        0.0842,
+        0.033,
+        0.0883,
+        0.0624,
+        0.1106,
+        0.0498,
+        0.1709
+      ],
+      "low_mean": 0.078313,
+      "high_mean": 0.083187,
+      "grip": 0.152499,
+      "classification": "dead"
+    },
+    {
+      "knob": "semantic_avoid",
+      "sensor": "spectral_centroid",
+      "expected_sign": -1,
+      "low_level": "none",
+      "high_level": "avoid_bright_highs",
+      "repetitions": 8,
+      "low_values": [
+        3107.55,
+        3352.73,
+        2485.64,
+        3375.09,
+        3164.76,
+        2924.93,
+        860.19,
+        3266.23
+      ],
+      "high_values": [
+        3764.34,
+        4356.72,
+        3993.87,
+        3407.6,
+        2496.35,
+        4469.54,
+        4499.14,
+        2712.14
+      ],
+      "low_mean": 2817.14,
+      "high_mean": 3712.4625,
+      "grip": 1.103399,
+      "classification": "dead"
+    },
+    {
+      "knob": "semantic_core",
+      "sensor": "onset_density",
+      "expected_sign": 1,
+      "low_level": "calm",
+      "high_level": "euphoric",
+      "repetitions": 8,
+      "low_values": [
+        4.8576,
+        7.6214,
+        6.2814,
+        6.5327,
+        4.8576,
+        7.6214,
+        6.5327,
+        6.7002
+      ],
+      "high_values": [
+        7.8727,
+        4.8576,
+        6.1977,
+        4.6901,
+        6.1139,
+        7.1189,
+        3.0988,
+        2.4288
+      ],
+      "low_mean": 6.375625,
+      "high_mean": 5.297313,
+      "grip": -0.703109,
+      "classification": "dead"
+    },
+    {
+      "knob": "time_signature",
+      "sensor": "time_signature",
+      "kind": "categorical",
+      "low_level": "4/4",
+      "high_level": "3/4",
+      "repetitions": 8,
+      "low_observed": [
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4"
+      ],
+      "high_observed": [
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4"
+      ],
+      "low_values": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "high_values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "low_mean": 1.0,
+      "high_mean": 0.0,
+      "grip": 0.5,
+      "classification": "loose"
+    }
+  ],
+  "summary": {
+    "tight": 0,
+    "loose": 2,
+    "dead": 3
+  }
+}

@@ -1,0 +1,78 @@
+# K2-seg: compose プロンプト欄 grip スクリーン生成計画 — scripts/collect_musicgen_takes.py が読む。
+#
+# K2 (examples/control/k2_musicgen/plan.yaml) の踏襲: A/B は compose
+# (`prompt_renderer.py::_segments_for`) が実際に出す検証セグメントのみを追記し、
+# 他の語は固定する。ベース文言は全セル共通:
+# "instrumental electronic music, steady four-on-the-floor drum beat,
+#  at 120 beats per minute" に、compose の結合様式 ". " でセグメントを追記する
+# （例: "...at 120 beats per minute. Active rate 0.92."）。
+# 「もっと効く文言」の探索はしない — 今エンジンが出す文言が効くかだけを問う。
+# semantic_avoid の low セルはベース文言のみ（セグメント無し・存在 A/B）。
+# time_signature は categorical（measure_grip.py の match_rate 経路。
+# expected_sign は一致率経路では未使用のため中立プレースホルダ 0）。
+schema_version: "1.0"
+fixture_id: k2_musicgen_segments
+generator: musicgen-small
+model_id: facebook/musicgen-small
+# G4 目視確認済み revision に pin（examples/control/k2_musicgen/plan.yaml と同一）。
+model_revision: 4c8334b02c6ec4e8664a91979669a501ec497792
+duration_seconds: 12.0
+guidance_scale: 3.0
+repetitions: 8
+knobs:
+  - name: active_rate_target
+    sensor: active_rate
+    low_level: "0.55"
+    high_level: "0.92"
+    expected_sign: 1
+    prompt_low: >-
+      instrumental electronic music, steady four-on-the-floor drum beat,
+      at 120 beats per minute. Active rate 0.55.
+    prompt_high: >-
+      instrumental electronic music, steady four-on-the-floor drum beat,
+      at 120 beats per minute. Active rate 0.92.
+  - name: valley_depth_target
+    sensor: valley_depth
+    low_level: "0.15"
+    high_level: "0.70"
+    expected_sign: 1
+    prompt_low: >-
+      instrumental electronic music, steady four-on-the-floor drum beat,
+      at 120 beats per minute. Valley depth 0.15.
+    prompt_high: >-
+      instrumental electronic music, steady four-on-the-floor drum beat,
+      at 120 beats per minute. Valley depth 0.70.
+  - name: semantic_avoid
+    sensor: spectral_centroid
+    low_level: "none"
+    high_level: "avoid_bright_highs"
+    expected_sign: -1
+    prompt_low: >-
+      instrumental electronic music, steady four-on-the-floor drum beat,
+      at 120 beats per minute
+    prompt_high: >-
+      instrumental electronic music, steady four-on-the-floor drum beat,
+      at 120 beats per minute. Avoid: bright shimmering sparkling highs.
+  - name: semantic_core
+    sensor: onset_density
+    low_level: "calm"
+    high_level: "euphoric"
+    expected_sign: 1
+    prompt_low: >-
+      instrumental electronic music, steady four-on-the-floor drum beat,
+      at 120 beats per minute. Calm introspective melancholic night atmosphere.
+    prompt_high: >-
+      instrumental electronic music, steady four-on-the-floor drum beat,
+      at 120 beats per minute. Euphoric energetic festival atmosphere.
+  - name: time_signature
+    sensor: time_signature
+    kind: categorical
+    low_level: "4/4"
+    high_level: "3/4"
+    expected_sign: 0
+    prompt_low: >-
+      instrumental electronic music, steady four-on-the-floor drum beat,
+      at 120 beats per minute. 4/4 time.
+    prompt_high: >-
+      instrumental electronic music, steady four-on-the-floor drum beat,
+      at 120 beats per minute. 3/4 time.

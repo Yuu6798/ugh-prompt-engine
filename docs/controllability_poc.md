@@ -291,6 +291,12 @@ grip 分類が転移するかを確認する。
 K3。製品転移の「効果量の絶対水準」までは主張せず、**分類（tight/loose/dead）の転移**を確認する
 段階。
 
+**K2-seg（2026-07-05、follow-up）**: compose が実際に送出する未計測プロンプト欄
+（active rate / valley depth / Avoid / semantic.core / time signature）を MusicGen
+ローカルバッチで一次スクリーニング（tight 0 / loose 2 / dead 3、Avoid の符号反転
+attractor が headline finding）。詳細は
+[`musicgen_backend.md`](musicgen_backend.md) §7.6。
+
 ### K3: 直交性行列 — DCI/MIG の効果量再定式化
 
 **Status**: K3-1 DONE（2026-07-01、決定論的演奏者リファレンス — 結果は §5.3）。
