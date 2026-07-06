@@ -44,6 +44,36 @@ def test_load_device_profile_suno_schema() -> None:
     assert profile.notes is not None
 
 
+def test_load_device_profile_musicgen_schema() -> None:
+    """K2-seg（2026-07-05）: 5 欄追記後の musicgen device profile スキーマ固定。"""
+    profile = load_device_profile("musicgen")
+
+    assert profile is not None
+    assert profile.schema_version == "1.0"
+    assert profile.generator == "musicgen"
+    assert set(profile.control_defaults) == {
+        "bpm",
+        "brightness",
+        "active_rate_target",
+        "valley_depth_target",
+        "semantic.avoid",
+        "semantic.core",
+        "time_signature",
+    }
+    assert profile.control_defaults["active_rate_target"].grip_class == "loose"
+    assert profile.control_defaults["valley_depth_target"].grip_class == "dead"
+    assert profile.control_defaults["semantic.avoid"].grip_class == "dead"
+    # semantic_avoid の d=+1.10 は符号逆（Avoid が意図と逆方向に効く）のため grip キーには
+    # 入れない honesty ルール（quirk 側にのみ記録）。
+    assert profile.control_defaults["semantic.avoid"].grip is None
+    assert profile.control_defaults["semantic.core"].grip_class == "loose"
+    assert profile.control_defaults["semantic.core"].sensor == "clap:energy"
+    assert profile.control_defaults["time_signature"].grip_class == "dead"
+    assert len(profile.knob_quirks) == 6
+    assert len(profile.cross_couplings) == 0
+    assert len(profile.spectral_biases) == 0
+
+
 def test_load_device_profile_missing_generator_returns_none() -> None:
     assert load_device_profile("nonexistent_generator_xyz") is None
 
@@ -159,6 +189,32 @@ def test_unknown_backend_has_no_device_profile_and_falls_back_as_before() -> Non
         "stereo_width",
     ]
     assert prompt.advisories == []
+
+
+def test_musicgen_k2_seg_defaults_demote_time_signature_and_semantic_core() -> None:
+    """K2-seg（2026-07-05）: musicgen device defaults に `time_signature`（dead）/
+    `semantic.core`（loose）が加わったことで、この 2 セグメントは
+    unprofiled fallback tier から advisory tier（loose/dead 同待遇）へ格下げされる。
+
+    サンプル score・max_chars=180 では、この 2 セグメントは K2-seg 追記**前**は
+    truncation を生き残っていたが（fallback tier で priority 順が有利だった）、
+    追記**後**は真っ先に落ちる側へ回る — dead/loose 追加が実際に drop 順を
+    変える（意図どおりの挙動変化、docs/musicgen_backend.md §7.6 参照）。
+    """
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data.pop("control_profile", None)
+    data["rendering"]["target_backend"] = "musicgen"
+    score = CompositionScore.model_validate(data)
+
+    prompt = ExternalPromptAdapter().render(score, max_chars=180)
+
+    assert "time_signature" in prompt.dropped_elements
+    assert "semantic.core" in prompt.dropped_elements
+    assert "4/4 time." not in prompt.text
+    assert "atmosphere." not in prompt.text
+    # tight な brightness は K2-seg 追記後も不変で先頭へ昇格し続ける。
+    assert "Brightness dark." in prompt.text
+    assert "brightness" not in prompt.dropped_elements
 
 
 # --- advisories -------------------------------------------------------------

@@ -400,6 +400,24 @@ def test_control_profile_rejects_non_physical_non_semantic_key() -> None:
         CompositionScore.model_validate(data)
 
 
+def test_control_profile_accepts_semantic_avoid_and_core_dotted_keys() -> None:
+    """K2-seg: `semantic.avoid` / `semantic.core`（`_segments_for` の実描画トークンと
+    一致するドット表記）も SEMANTIC_CONTROL_FIELDS 経由で許可される
+    （lyrics_presence の参照実装踏襲、docs/musicgen_backend.md §7.6）。"""
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["control_profile"] = {
+        "musicgen": {
+            "semantic.avoid": {"grip_class": "dead"},
+            "semantic.core": {"grip_class": "loose", "grip": 1.9},
+        }
+    }
+
+    score = CompositionScore.model_validate(data)
+
+    assert score.control_profile["musicgen"]["semantic.avoid"].grip_class == "dead"
+    assert score.control_profile["musicgen"]["semantic.core"].grip_class == "loose"
+
+
 def test_fixity_rejects_lyrics_presence_key() -> None:
     """fixity スキーマは不変: 意味層フィールドを fixity に入れると従来どおり拒否される。"""
     data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))

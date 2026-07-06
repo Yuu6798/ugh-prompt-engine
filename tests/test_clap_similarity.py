@@ -255,3 +255,54 @@ def test_musicgen_k2_clap_fixture_learned_grip_direction_and_magnitude():
     assert brightness_grip == pytest.approx(1.501, abs=0.01)
     # bpm: 学習版は分布の重なりゼロ（低水準の最大 < 高水準の最小）
     assert max(by_condition[("bpm", "90")]) < min(by_condition[("bpm", "170")])
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "expected_d", "expected_classification"),
+    [
+        ("musicgen_segments_semantic_core_contrast_fixture.json", 1.895555, "tight"),
+        # valence 軸は方向は正だが energy より弱く loose 域（v1.1 の初実地読み・探索位置づけ）。
+        ("musicgen_segments_semantic_core_valence_contrast_fixture.json", 0.600649, "loose"),
+    ],
+)
+def test_k2_seg_semantic_core_clap_fixture_schema_and_self_consistency(
+    fixture_name: str, expected_d: float, expected_classification: str
+) -> None:
+    """K2-seg（2026-07-05）CLAP 第二センサー fixture（energy / valence 軸）のスキーマ
+    妥当性 + 自己整合（`docs/musicgen_backend.md` §7.6・`scratchpad/k2seg_full/
+    clap_semantic_core_stats.yaml` 転記元）。既存 §7.5 (`musicgen_k2_contrast_fixture.json`)
+    のテスト様式を踏襲する。
+    """
+    fixture_path = (
+        Path(__file__).resolve().parents[1] / "examples" / "learned" / "clap" / fixture_name
+    )
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+    assert fixture["schema_version"] == "1.1"
+    assert fixture["model"]["checkpoint"] == "music_audioset_epoch_15_esc_90.14.pt"
+    assert fixture["model"]["checkpoint_sha256"] == (
+        "fae3e9c087f2909c28a09dc31c8dfcdacbc42ba44c70e972b58c1bd1caf6dedd"
+    )
+    assert len(fixture["samples"]) == 16
+
+    from svp_rpe.control import classify_grip, grip_effect_size
+
+    by_level: dict[str, list[float]] = {}
+    for sample in fixture["samples"]:
+        condition = sample["condition"]
+        assert condition["knob"] == "semantic_core"
+        by_level.setdefault(condition["level"], []).append(sample["contrast_fit"])
+        groups = sample["prompt_groups"]
+        cosines = sample["cosines"]
+        assert set(groups) == {"positive", "negative"}
+        pos = [cosines[prompt] for prompt in groups["positive"]]
+        neg = [cosines[prompt] for prompt in groups["negative"]]
+        expected_contrast = round(sum(pos) / len(pos) - sum(neg) / len(neg), 6)
+        assert sample["contrast_fit"] == pytest.approx(expected_contrast, abs=5e-6)
+
+    assert set(by_level) == {"calm", "euphoric"}
+    assert all(len(values) == 8 for values in by_level.values())
+
+    d = grip_effect_size(by_level["calm"], by_level["euphoric"])
+    assert d == pytest.approx(expected_d, abs=1e-5)
+    assert classify_grip(d, 1) == expected_classification

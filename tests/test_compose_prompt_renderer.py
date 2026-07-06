@@ -279,9 +279,15 @@ def test_control_profile_drives_per_generator_divergence() -> None:
     suno_prompt = ExternalPromptAdapter().render(suno_score, max_chars=180)
     musicgen_prompt = ExternalPromptAdapter().render(musicgen_score, max_chars=180)
 
-    # suno は brightness を tight で守り、musicgen は dead で真っ先に落とす。
+    # suno は brightness を tight で守り、musicgen は dead で落とす。
+    # K2-seg（2026-07-05）で musicgen device defaults に active_rate_target /
+    # valley_depth_target が loose/dead として加わったため、それらも同じ advisory
+    # tier で brightness と drop 順を争うようになった（dropped_elements[0] が
+    # brightness と断定できなくなった＝意図どおりの挙動変化、docs/musicgen_backend.md
+    # §7.6）。brightness が drop される事実自体は不変なので `in` で検証する。
     assert "Brightness dark." in suno_prompt.text
-    assert musicgen_prompt.dropped_elements[0] == "brightness"
+    assert "brightness" in musicgen_prompt.dropped_elements
+    assert "Brightness dark." not in musicgen_prompt.text
     assert suno_prompt.text != musicgen_prompt.text
     # 構造化 backend フィールドが選択 backend を反映する（誤ラベルしない）。
     assert suno_prompt.backend == "external"

@@ -276,3 +276,29 @@ def test_k2_musicgen_fixture_snapshot_brightness_tight_bpm_loose() -> None:
     assert by_knob["bpm"]["classification"] == "loose"
     assert by_knob["brightness"]["classification"] == "tight"
     assert by_knob["brightness"]["grip"] > 2.0
+
+
+K2_MUSICGEN_SEGMENTS_FIXTURE_PATH = Path("examples/control/k2_musicgen_segments/fixture.json")
+K2_MUSICGEN_SEGMENTS_EXPECTED_PATH = Path("examples/control/k2_musicgen_segments/expected_grip.json")
+
+
+def test_k2_seg_musicgen_segments_fixture_snapshot() -> None:
+    """K2-seg（2026-07-05）: compose が送出する未計測プロンプト欄 5 本
+    （active rate / valley depth / Avoid / semantic.core / time signature）の
+    fixture→grip 決定論スナップショット。tight 0 / loose 2 / dead 3
+    （docs/musicgen_backend.md §7.6・config/device_profiles/musicgen.yaml 実測欄）。
+    """
+    report = analyze_fixture(load_fixture(K2_MUSICGEN_SEGMENTS_FIXTURE_PATH))
+    expected = json.loads(K2_MUSICGEN_SEGMENTS_EXPECTED_PATH.read_text(encoding="utf-8"))
+
+    assert report == expected
+    by_knob = {result["knob"]: result for result in report["results"]}
+    assert by_knob["active_rate_target"]["classification"] == "loose"
+    assert by_knob["valley_depth_target"]["classification"] == "dead"
+    # semantic_avoid: expected_sign=-1（Avoid が効くなら centroid 低下）だが実測は
+    # d=+1.10（符号逆・意図と逆方向の attractor）で dead。
+    assert by_knob["semantic_avoid"]["classification"] == "dead"
+    assert by_knob["semantic_avoid"]["grip"] > 0
+    assert by_knob["semantic_core"]["classification"] == "dead"
+    assert by_knob["time_signature"]["kind"] == "categorical"
+    assert report["summary"] == {"tight": 0, "loose": 2, "dead": 3}

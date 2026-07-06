@@ -7,6 +7,15 @@ generator: "musicgen"
 # 実測条件: facebook/musicgen-small (revision 4c8334b0…)・CPU・12s×R=8・
 # examples/control/k2_musicgen/plan.yaml。
 # lyrics_presence は MusicGen では未計測のため記録しない（suno.yaml との差は honesty）。
+#
+# K2-seg（2026-07-05）: compose が送出する未計測プロンプト欄（active rate / valley
+# depth / Avoid / semantic.core / time signature）を同一条件（12s×R=8・同一
+# model/revision pin）で追加実測し、5 欄を control_defaults に追記した
+# （examples/control/k2_musicgen_segments/plan.yaml・expected_grip.json、実測結果は
+# docs/musicgen_backend.md §7.6）。`semantic.avoid` / `semantic.core` はドット付き
+# のまま `SEMANTIC_CONTROL_FIELDS`（`compose/models.py`）に登録し、
+# `_segments_for` の実描画トークンと一致させている（compile 経路が実際に
+# grip_class を引けることを確認済み）。
 control_defaults:
   bpm:
     grip_class: loose
@@ -18,6 +27,29 @@ control_defaults:
     grip: 2.25
     sensor: spectral_centroid
     evidence: examples/control/k2_musicgen/expected_grip.json
+  active_rate_target:
+    grip_class: loose
+    grip: 0.39
+    sensor: active_rate
+    evidence: examples/control/k2_musicgen_segments/expected_grip.json
+  valley_depth_target:
+    grip_class: dead
+    grip: 0.15
+    sensor: valley_depth
+    evidence: examples/control/k2_musicgen_segments/expected_grip.json
+  semantic.avoid:
+    grip_class: dead
+    sensor: spectral_centroid
+    evidence: examples/control/k2_musicgen_segments/expected_grip.json
+  semantic.core:
+    grip_class: loose
+    grip: 1.9
+    sensor: "clap:energy"
+    evidence: examples/learned/clap/musicgen_segments_semantic_core_contrast_fixture.json
+  time_signature:
+    grip_class: dead
+    sensor: time_signature
+    evidence: examples/control/k2_musicgen_segments/expected_grip.json
 
 # 既知の癖。advisory が非 null のもののみ GeneratedPrompt.advisories を発火する
 # （プロンプト本文・tags は変えない＝自動補正しない）。
@@ -33,10 +65,30 @@ knob_quirks:
     advisory: null
     description: "dark 指定で絶対 dark 帯（centroid ≤1200Hz）へ到達可能（3/8、Suno は 0/4 不到達）。ただし分散大（dark 指定で 4517Hz の外れ値 1 本）"
     evidence: "examples/control/k2_musicgen/fixture.json / docs/musicgen_backend.md PR B 実測"
+  - field: semantic.avoid
+    status: observed
+    advisory: "本文の 'Avoid: X' 文言は X を正方向に引き寄せる実測（bright 系 Avoid で centroid d=+1.10 上昇、K2-seg 2026-07-05）。MusicGen では本文 Avoid を制御として使わないこと。負方向制御が要件なら生成後実測で確認を。"
+    description: "否定語無視・内容語 attractor 化"
+    evidence: "examples/control/k2_musicgen_segments/expected_grip.json"
+  - field: active_rate_target
+    status: observed
+    advisory: null
+    description: "ベース素材で low セル既に 0.967、headroom 0.033 での loose 判定＝有効帯域注意"
+    evidence: "examples/control/k2_musicgen_segments/expected_grip.json"
+  - field: valley_depth_target
+    status: observed
+    advisory: null
+    description: "12s 定常ビート素材では valley 床（0.078）＝ツマミ死と素材制約の分離未解決"
+    evidence: "examples/control/k2_musicgen_segments/expected_grip.json"
+  - field: time_signature
+    status: observed
+    advisory: null
+    description: "3/4 指定 0/8 不達（全観測 4/4）。抽出器の 4/4 バイアス（観測 confidence 中央値 0.94-0.97）と分離未解決。combined match 0.5 は 4/4 セル由来で loose 表記は誤読注意"
+    evidence: "examples/control/k2_musicgen_segments/expected_grip.json"
 
 # K3 直交性行列は MusicGen ではまだ実測していないため cross_couplings は記録しない。
 # genre calibration（spectral_biases）も MusicGen 生成コーパス未取得のため記録しない。
 cross_couplings: []
 spectral_biases: []
 
-notes: "PR B 実測（R=8）に基づく初期プロファイル。bpm loose は素朴センサー読み（R2 closeout の規律: faster-side 回復は post-hoc 緩和でありコンパイル時保証には使わない）。brightness は Suno（0.86）より強い tight（2.25）で dark 到達も可能。K3 直交性・genre bias は未計測。実測スコープは facebook/musicgen-small のみ — medium/large 等の未計測バリアントには本 defaults の転移保証がない（backend seam の粒度上コンパイル側はモデル id を知らないため、runbook 側の profile_scope_advisory が stderr で注意喚起する。docs/musicgen_backend.md §7.1）。"
+notes: "PR B 実測（R=8）に基づく初期プロファイル。bpm loose は素朴センサー読み（R2 closeout の規律: faster-side 回復は post-hoc 緩和でありコンパイル時保証には使わない）。brightness は Suno（0.86）より強い tight（2.25）で dark 到達も可能。K3 直交性・genre bias は未計測。実測スコープは facebook/musicgen-small のみ — medium/large 等の未計測バリアントには本 defaults の転移保証がない（backend seam の粒度上コンパイル側はモデル id を知らないため、runbook 側の profile_scope_advisory が stderr で注意喚起する。docs/musicgen_backend.md §7.1）。K2-seg（2026-07-05）: compose 送出プロンプト欄 5 本を同条件で追加実測（tight 0 / loose 2 / dead 3）。semantic.avoid は符号逆転（意図と逆方向に効く attractor）で dead、semantic.core は CLAP energy d=+1.90 と tight 域だが学習センサー由来ノブの昇格ゲート（#126）に従い loose に honesty 固定（docs/musicgen_backend.md §7.6）。"

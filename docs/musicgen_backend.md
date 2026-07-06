@@ -2,7 +2,8 @@
 
 Status: PR A / PR B / PR C 実装完了（PR B 実測 2026-07-03、§7）。§7.3 で R3 n=20
 スケールアップ（key 保存率 0.15 確定）、§7.4 で K3-2b フル直交性行列、§7.5 で CLAP
-相互検証②（MusicGen バッチへの学習版 grip 拡張）を追加実測済み
+相互検証②（MusicGen バッチへの学習版 grip 拡張）、§7.6 で K2-seg（compose プロンプト欄
+grip スクリーン）を追加実測済み
 Scope: `facebook/musicgen-*`（transformers 経路）を第二生成器として組み込む計画
 
 ## 1. 目的と位置づけ
@@ -255,6 +256,89 @@ PR2b の CLAP 学習センサー（`contrast_fit`、#131/#132 と同一 checkpoi
   病理帯域を埋める補助計器」として位置づくのが実測的に正確。
 - 数値は `tests/test_clap_similarity.py` の学習版 grip pin テストで固定
   （fixture が変われば docs 再検証を強制）。
+
+### 7.6 K2-seg: compose プロンプト欄 grip スクリーン（2026-07-05）
+
+**目的**: compose（`prompt_renderer.py::_segments_for`）が実際に送出しているのに
+grip 未計測だったプロンプト欄（active rate / valley depth / Avoid / semantic.core /
+time signature）が「そもそも効いているのか」を一次スクリーニングする。「もっと効く
+文言」の探索はしない — 問いは「今エンジンが出しているプロンプトが効くか」のみ。
+
+**条件**: `facebook/musicgen-small`（revision `4c8334b0…`、§5 実測スコープに pin
+踏襲）、12 秒クリップ、`guidance_scale=3.0`、5 ノブ × 2 セル × R=8 = 80 クリップ。
+ベース文言（全セル共通）は `instrumental electronic music, steady four-on-the-floor
+drum beat, at 120 beats per minute` に、compose の結合様式 `". "` で検証セグメントを
+追記した（`examples/control/k2_musicgen_segments/plan.yaml`）。音声はコミットせず、
+fixture / manifest / expected_grip のみコミット（DD-A 踏襲、§2）。
+
+#### 結果表（`expected_grip.json` verbatim）
+
+| knob | sensor | low/high | grip | class | 読み |
+|---|---|---|---:|---|---|
+| `active_rate_target` | `active_rate` | 0.55 / 0.92 | 0.39 | **loose** | ベース素材で low セル既に 0.967（headroom 0.033）— 有効帯域の天井効果 |
+| `valley_depth_target` | `valley_depth` | 0.15 / 0.70 | 0.15 | **dead** | 12s 定常ビート素材では valley 床（0.078）— ツマミ死と素材制約の分離未解決 |
+| `semantic_avoid`（本文 "Avoid: …"）| `spectral_centroid` | none / avoid_bright_highs | +1.10（符号逆）| **dead** | 下記 headline finding 参照 |
+| `semantic_core`（物理センサー）| `onset_density` | calm / euphoric | −0.70 | **dead** | 物理センサー盲。CLAP 第二センサー参照 |
+| `time_signature` | `time_signature`（categorical・match_rate） | 4/4 / 3/4 | 0.5（combined） | **dead**（honesty 判定） | 3/4 指定 0/8 不達（全観測 4/4）。combined match 0.5 は 4/4 セルの一致率が押し上げただけで loose 表記は誤読注意 |
+
+`summary`: tight 0 / loose 2 / dead 3（`config/device_profiles/musicgen.yaml`
+`control_defaults` に反映済み）。
+
+#### semantic_core の 2 センサー所見
+
+物理センサー（`onset_density`, d=−0.70・dead）と CLAP 第二センサー（`semantic_core`
+16 テイクの `contrast_fit`、`examples/learned/clap/musicgen_segments_semantic_core_contrast_fixture.json`
+/ `..._valence_contrast_fixture.json`）を並べると:
+
+| 軸 | mean(calm) | mean(euphoric) | Cohen's d | 分類 |
+|---|---:|---:|---:|---|
+| energy | −0.0662 | 0.0752 | **+1.90** | tight 域 |
+| valence（v1.1 初実地読み） | 0.0361 | 0.0916 | +0.60 | loose 域・方向正 |
+
+（生データ: `scratchpad/k2seg_full/clap_semantic_core_stats.yaml`。checkpoint
+`music_audioset_epoch_15_esc_90.14.pt`、sha256 `fae3e9c0…`、#131/§7.5 と同一 pin。）
+
+**「物理 dead × 意味層センサー生存 = センサー盲診断の実例」**: calm/euphoric の
+テキスト指定は onset_density（打点の粗密）には現れないが、CLAP の意味軸（energy/
+valence）は方向どおりに分離する。ツマミ自体は死んでおらず、物理センサーが盲目
+だっただけ。ただし CLAP energy の d=+1.90 は数値上 tight 域だが、**学習センサー
+由来の意味層ノブの tight 昇格は SEM-1 の昇格ゲート制度（`control_profile.md` DD-4、
+#126）に従い loose 固定 honesty を踏襲する**（`config/device_profiles/musicgen.yaml`
+`semantic.core` は `grip_class: loose`）。valence 軸は v1.1 バッテリーの初の実地読みで
+方向は正だが energy より弱く、探索位置づけのまま。
+
+#### semantic_avoid の attractor 所見（本 PR の headline finding）
+
+本文中の `Avoid: bright shimmering sparkling highs.` を追記したセルは、Avoid *なし*
+のセルより **spectral_centroid が上昇**した（low_mean 2817.1Hz → high_mean 3712.5Hz、
+d=+1.10）。expected_sign は −1（Avoid が効くなら centroid は低下するはず）のため、
+**実測は符号が完全に逆** — MusicGen は否定語（"Avoid"）を無視し、後続の内容語
+（"bright shimmering sparkling highs"）をそのまま attractor として正方向に引き寄せる。
+`knob_quirks.semantic.avoid` に advisory として記録済み（`config/device_profiles/musicgen.yaml`）:
+本文 Avoid を負方向の制御として使わないこと、負方向制御が要件なら生成後実測での
+確認を推奨する。grip 値の符号逆転はミスリードを避けるため `control_defaults` の
+`grip` キーには入れず、quirk の advisory/description にのみ記録した（honesty judgement）。
+
+#### スコープ外（構造的理由）
+
+- **`stereo_width`**: MusicGen small はモノラル出力＝sensor_blind が既に実証済み
+  （§7.2 R3 初実測、0/5・0/20）。本スクリーンでは生成せず既知限界として記録するのみ。
+- **structure セクション記述**（intro/verse/chorus）: 12 秒クリップに曲構造は現れない。
+  長尺生成器（Suno 人手トラック）向けの課題として繰越記録する。
+
+#### 運用ノート
+
+初回バッチ生成中に孤児プロセスが残り kill → resume する運用事故があったが、
+`sample_seed`/`seed_base+i` の決定論導出（DD-A ベストエフォート pin）のおかげで
+再生成した manifest がコミット済み manifest と **diff ゼロ**だった。per-sample seed
+設計が生成パイプラインの障害に対して復旧耐性を持つことの実地実証になった。
+
+#### 機種依存の注意
+
+MusicGen small の dead は Suno の dead と同一ではない（K3-2a §5.4 の非対角クロス
+効果符号反転が前例）。本スクリーンの dead 判定（valley_depth_target / semantic_avoid /
+semantic_core[物理] / time_signature）を Suno へそのまま転移させてよいかは未検証 —
+Suno 側での再実測（人手バッチ）は今後の課題として残す。
 
 ## 8. 関連ドキュメント
 
