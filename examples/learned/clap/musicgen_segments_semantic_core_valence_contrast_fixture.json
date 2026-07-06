@@ -1,0 +1,472 @@
+{
+  "schema_version": "1.1",
+  "generator": "collect_clap_fixture.py",
+  "manifest": "examples/learned/clap/musicgen_segments_semantic_core_valence_contrast_manifest.yaml",
+  "model": {
+    "name": "laion_clap",
+    "checkpoint": "music_audioset_epoch_15_esc_90.14.pt",
+    "checkpoint_sha256": "fae3e9c087f2909c28a09dc31c8dfcdacbc42ba44c70e972b58c1bd1caf6dedd",
+    "amodel": "HTSAT-base",
+    "info": [
+      {
+        "name": "laion_clap",
+        "version": "1.1.7",
+        "provider": "LAION-AI/CLAP",
+        "task": "embedding",
+        "license": "CC0-1.0 (upstream LICENSE); PyPI trove classifier says Apache-2.0 (inconsistent upstream metadata, see docs/learned_models_policy.md 3.1)",
+        "weights_license": "Hugging Face repository-level license badge: cc0-1.0; no additional checkpoint-specific license text found in the empty model card (verified 2026-07-02, PR2b-2)"
+      }
+    ]
+  },
+  "samples": [
+    {
+      "prompt_groups": {
+        "positive": [
+          "a happy uplifting cheerful song",
+          "joyful positive feel-good music"
+        ],
+        "negative": [
+          "a sad melancholic sorrowful song",
+          "gloomy depressing mournful music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "calm",
+        "seed": 1300,
+        "axis": "valence"
+      },
+      "sample_id": "semantic_core_low_00",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_low_00.wav",
+      "audio_sha256": "ca624ea5e42b67817bc055c41137441b2ea08b20ca289bb61116c64e747c57e7",
+      "cosines": {
+        "a happy uplifting cheerful song": -0.003971,
+        "joyful positive feel-good music": 0.042144,
+        "a sad melancholic sorrowful song": 0.07171,
+        "gloomy depressing mournful music": 0.086742
+      },
+      "contrast_fit": -0.06014
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "a happy uplifting cheerful song",
+          "joyful positive feel-good music"
+        ],
+        "negative": [
+          "a sad melancholic sorrowful song",
+          "gloomy depressing mournful music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "calm",
+        "seed": 1301,
+        "axis": "valence"
+      },
+      "sample_id": "semantic_core_low_01",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_low_01.wav",
+      "audio_sha256": "42930258713ed12f2e29e3955c271a412d1f4eea5c609036bafbd5a3246ab696",
+      "cosines": {
+        "a happy uplifting cheerful song": -0.023167,
+        "joyful positive feel-good music": 0.045944,
+        "a sad melancholic sorrowful song": -0.032095,
+        "gloomy depressing mournful music": 0.018112
+      },
+      "contrast_fit": 0.01838
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "a happy uplifting cheerful song",
+          "joyful positive feel-good music"
+        ],
+        "negative": [
+          "a sad melancholic sorrowful song",
+          "gloomy depressing mournful music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "calm",
+        "seed": 1302,
+        "axis": "valence"
+      },
+      "sample_id": "semantic_core_low_02",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_low_02.wav",
+      "audio_sha256": "eb233a20923e1a63393367fa29405ed325abbd26937c3adac7a41f37c4958c0d",
+      "cosines": {
+        "a happy uplifting cheerful song": 0.073274,
+        "joyful positive feel-good music": 0.129373,
+        "a sad melancholic sorrowful song": -0.000127,
+        "gloomy depressing mournful music": 0.023119
+      },
+      "contrast_fit": 0.089828
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "a happy uplifting cheerful song",
+          "joyful positive feel-good music"
+        ],
+        "negative": [
+          "a sad melancholic sorrowful song",
+          "gloomy depressing mournful music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "calm",
+        "seed": 1303,
+        "axis": "valence"
+      },
+      "sample_id": "semantic_core_low_03",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_low_03.wav",
+      "audio_sha256": "d625464fa6f927b7f83b8f6832b63855969372498c780cc8e5e935e690f32136",
+      "cosines": {
+        "a happy uplifting cheerful song": 0.046594,
+        "joyful positive feel-good music": 0.085706,
+        "a sad melancholic sorrowful song": -0.03368,
+        "gloomy depressing mournful music": -0.076617
+      },
+      "contrast_fit": 0.121298
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "a happy uplifting cheerful song",
+          "joyful positive feel-good music"
+        ],
+        "negative": [
+          "a sad melancholic sorrowful song",
+          "gloomy depressing mournful music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "calm",
+        "seed": 1304,
+        "axis": "valence"
+      },
+      "sample_id": "semantic_core_low_04",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_low_04.wav",
+      "audio_sha256": "458f66e2fd209b427c5666e24352a5591f2f13b1a0b156e7cf8e2a013909429b",
+      "cosines": {
+        "a happy uplifting cheerful song": 0.108717,
+        "joyful positive feel-good music": 0.185491,
+        "a sad melancholic sorrowful song": 0.072311,
+        "gloomy depressing mournful music": 0.079399
+      },
+      "contrast_fit": 0.071249
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "a happy uplifting cheerful song",
+          "joyful positive feel-good music"
+        ],
+        "negative": [
+          "a sad melancholic sorrowful song",
+          "gloomy depressing mournful music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "calm",
+        "seed": 1305,
+        "axis": "valence"
+      },
+      "sample_id": "semantic_core_low_05",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_low_05.wav",
+      "audio_sha256": "95cd104862f9dbebe124c07636dbac4b11ca043c1a14f187e1a9ad8d2a33a918",
+      "cosines": {
+        "a happy uplifting cheerful song": 0.001065,
+        "joyful positive feel-good music": 0.083907,
+        "a sad melancholic sorrowful song": -0.015011,
+        "gloomy depressing mournful music": 0.01112
+      },
+      "contrast_fit": 0.044431
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "a happy uplifting cheerful song",
+          "joyful positive feel-good music"
+        ],
+        "negative": [
+          "a sad melancholic sorrowful song",
+          "gloomy depressing mournful music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "calm",
+        "seed": 1306,
+        "axis": "valence"
+      },
+      "sample_id": "semantic_core_low_06",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_low_06.wav",
+      "audio_sha256": "a1ff77580826aaab3659b44157129ded1f2cddf1c230717a2cbfea7914567a63",
+      "cosines": {
+        "a happy uplifting cheerful song": -0.039976,
+        "joyful positive feel-good music": 0.017607,
+        "a sad melancholic sorrowful song": 0.035202,
+        "gloomy depressing mournful music": 0.091311
+      },
+      "contrast_fit": -0.074441
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "a happy uplifting cheerful song",
+          "joyful positive feel-good music"
+        ],
+        "negative": [
+          "a sad melancholic sorrowful song",
+          "gloomy depressing mournful music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "calm",
+        "seed": 1307,
+        "axis": "valence"
+      },
+      "sample_id": "semantic_core_low_07",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_low_07.wav",
+      "audio_sha256": "e4cddbc63118dbddee4bd3d4d4410bf8fb594b1c43327e31498c4c39607d78ca",
+      "cosines": {
+        "a happy uplifting cheerful song": -0.042516,
+        "joyful positive feel-good music": 0.011794,
+        "a sad melancholic sorrowful song": -0.110972,
+        "gloomy depressing mournful music": -0.076822
+      },
+      "contrast_fit": 0.078536
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "a happy uplifting cheerful song",
+          "joyful positive feel-good music"
+        ],
+        "negative": [
+          "a sad melancholic sorrowful song",
+          "gloomy depressing mournful music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "euphoric",
+        "seed": 1350,
+        "axis": "valence"
+      },
+      "sample_id": "semantic_core_high_00",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_high_00.wav",
+      "audio_sha256": "a1062692dd7105b18dfc3b1825f5f64fdd361cc9bab067b26093ba184d803944",
+      "cosines": {
+        "a happy uplifting cheerful song": 0.098134,
+        "joyful positive feel-good music": 0.160389,
+        "a sad melancholic sorrowful song": -0.011707,
+        "gloomy depressing mournful music": -0.023588
+      },
+      "contrast_fit": 0.146909
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "a happy uplifting cheerful song",
+          "joyful positive feel-good music"
+        ],
+        "negative": [
+          "a sad melancholic sorrowful song",
+          "gloomy depressing mournful music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "euphoric",
+        "seed": 1351,
+        "axis": "valence"
+      },
+      "sample_id": "semantic_core_high_01",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_high_01.wav",
+      "audio_sha256": "673f8e7aeb95bb7de872f21264360207ba46c175f15fa6d2b369bebcd5e60e8b",
+      "cosines": {
+        "a happy uplifting cheerful song": 0.080528,
+        "joyful positive feel-good music": 0.144591,
+        "a sad melancholic sorrowful song": -0.013425,
+        "gloomy depressing mournful music": -0.04058
+      },
+      "contrast_fit": 0.139562
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "a happy uplifting cheerful song",
+          "joyful positive feel-good music"
+        ],
+        "negative": [
+          "a sad melancholic sorrowful song",
+          "gloomy depressing mournful music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "euphoric",
+        "seed": 1352,
+        "axis": "valence"
+      },
+      "sample_id": "semantic_core_high_02",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_high_02.wav",
+      "audio_sha256": "24122d3ccedace80b054739ad1ddd9639df4d477977815a9807ac70968437fe7",
+      "cosines": {
+        "a happy uplifting cheerful song": 0.053197,
+        "joyful positive feel-good music": 0.15898,
+        "a sad melancholic sorrowful song": -0.070239,
+        "gloomy depressing mournful music": -0.051331
+      },
+      "contrast_fit": 0.166873
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "a happy uplifting cheerful song",
+          "joyful positive feel-good music"
+        ],
+        "negative": [
+          "a sad melancholic sorrowful song",
+          "gloomy depressing mournful music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "euphoric",
+        "seed": 1353,
+        "axis": "valence"
+      },
+      "sample_id": "semantic_core_high_03",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_high_03.wav",
+      "audio_sha256": "39407a9f19772103779592d0a0f7bf5c1e94e878b9f1008eeff7f7e3b354f82b",
+      "cosines": {
+        "a happy uplifting cheerful song": -0.085517,
+        "joyful positive feel-good music": 0.010889,
+        "a sad melancholic sorrowful song": -0.164241,
+        "gloomy depressing mournful music": -0.086043
+      },
+      "contrast_fit": 0.087828
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "a happy uplifting cheerful song",
+          "joyful positive feel-good music"
+        ],
+        "negative": [
+          "a sad melancholic sorrowful song",
+          "gloomy depressing mournful music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "euphoric",
+        "seed": 1354,
+        "axis": "valence"
+      },
+      "sample_id": "semantic_core_high_04",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_high_04.wav",
+      "audio_sha256": "bc60304068b8c2850dd1d49c2feee29985dfc66f70ee99546bc51ea926e9626b",
+      "cosines": {
+        "a happy uplifting cheerful song": 0.124459,
+        "joyful positive feel-good music": 0.20752,
+        "a sad melancholic sorrowful song": -0.037781,
+        "gloomy depressing mournful music": -0.11171
+      },
+      "contrast_fit": 0.240735
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "a happy uplifting cheerful song",
+          "joyful positive feel-good music"
+        ],
+        "negative": [
+          "a sad melancholic sorrowful song",
+          "gloomy depressing mournful music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "euphoric",
+        "seed": 1355,
+        "axis": "valence"
+      },
+      "sample_id": "semantic_core_high_05",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_high_05.wav",
+      "audio_sha256": "d77d313c5c08db10768c18b814c501a4936c61ffe90fe64975de30e82c9ec5e4",
+      "cosines": {
+        "a happy uplifting cheerful song": -0.052715,
+        "joyful positive feel-good music": 0.051037,
+        "a sad melancholic sorrowful song": -0.024696,
+        "gloomy depressing mournful music": 0.005688
+      },
+      "contrast_fit": 0.008665
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "a happy uplifting cheerful song",
+          "joyful positive feel-good music"
+        ],
+        "negative": [
+          "a sad melancholic sorrowful song",
+          "gloomy depressing mournful music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "euphoric",
+        "seed": 1356,
+        "axis": "valence"
+      },
+      "sample_id": "semantic_core_high_06",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_high_06.wav",
+      "audio_sha256": "50b1db15bf6c42b86aaf6ae4b467e89a680e6550de9bcb7dff324d6c83af04c1",
+      "cosines": {
+        "a happy uplifting cheerful song": -0.014088,
+        "joyful positive feel-good music": -0.052416,
+        "a sad melancholic sorrowful song": 0.055788,
+        "gloomy depressing mournful music": 0.108103
+      },
+      "contrast_fit": -0.115197
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "a happy uplifting cheerful song",
+          "joyful positive feel-good music"
+        ],
+        "negative": [
+          "a sad melancholic sorrowful song",
+          "gloomy depressing mournful music"
+        ]
+      },
+      "condition": {
+        "knob": "semantic_core",
+        "level": "euphoric",
+        "seed": 1357,
+        "axis": "valence"
+      },
+      "sample_id": "semantic_core_high_07",
+      "audio_path": "../../roundtrip/cache/k2-musicgen-segments/semantic_core_high_07.wav",
+      "audio_sha256": "968179cd4ec564e34cf23ffd8eb17621459a9edf1f192d472f240de934c185f0",
+      "cosines": {
+        "a happy uplifting cheerful song": -0.005448,
+        "joyful positive feel-good music": 0.043113,
+        "a sad melancholic sorrowful song": -0.031074,
+        "gloomy depressing mournful music": -0.04543
+      },
+      "contrast_fit": 0.057084
+    }
+  ],
+  "embeddings_sidecar": "musicgen_segments_semantic_core_valence_contrast_fixture.embeddings.json"
+}
