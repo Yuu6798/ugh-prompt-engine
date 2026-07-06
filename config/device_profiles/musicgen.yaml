@@ -16,6 +16,11 @@ generator: "musicgen"
 # のまま `SEMANTIC_CONTROL_FIELDS`（`compose/models.py`）に登録し、
 # `_segments_for` の実描画トークンと一致させている（compile 経路が実際に
 # grip_class を引けることを確認済み）。
+#
+# K2-seg 後始末（2026-07-06、#152 フォローアップ）: 上記 semantic.avoid の attractor 実測
+# を受け、musicgen backend は本文 "Avoid: X" セグメントの送出自体を停止する（送出側の
+# ルーティング是正・BackendDescriptor.omit_body_negative）。negative_tags への記録は
+# 従来どおり維持（楽譜の意図保全）。suno/external は不変（実測は musicgen 限定・横展開しない）。
 control_defaults:
   bpm:
     grip_class: loose
@@ -67,8 +72,8 @@ knob_quirks:
     evidence: "examples/control/k2_musicgen/fixture.json / docs/musicgen_backend.md PR B 実測"
   - field: semantic.avoid
     status: observed
-    advisory: "本文の 'Avoid: X' 文言は X を正方向に引き寄せる実測（bright 系 Avoid で centroid d=+1.10 上昇、K2-seg 2026-07-05）。MusicGen では本文 Avoid を制御として使わないこと。負方向制御が要件なら生成後実測で確認を。"
-    description: "否定語無視・内容語 attractor 化"
+    advisory: "K2-seg 実測（本文 'Avoid: X' が X を正方向に引き寄せる attractor、bright 系 Avoid で centroid d=+1.10 上昇、2026-07-05）に基づき、musicgen backend は本文へ Avoid を送出しない（compose/prompt_renderer.py の BackendDescriptor.omit_body_negative によるルーティング是正・後始末 #152 フォローアップ）。avoid は negative_tags には引き続き保持されるが、MusicGen はネイティブの negative conditioning を持たないため実質 unenforceable — 排除要件は生成後の実測確認を推奨。"
+    description: "否定語無視・内容語 attractor 化（本文送出はルーティングで停止・negative_tags 記録は維持）"
     evidence: "examples/control/k2_musicgen_segments/expected_grip.json"
   - field: active_rate_target
     status: observed
