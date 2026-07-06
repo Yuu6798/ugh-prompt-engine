@@ -390,6 +390,12 @@ def render_html(data: dict[str, Any]) -> str:
         "埋まっている — この機種でこのツマミは（この書き方では）効かない"
     )
 
+    # 結論文も verdict と同じく separated の真偽から機械的に組み立てる
+    # （固定文だと実測と矛盾し得るため、bri/bpm の分離判定に従わせる）。
+    bri_word = "効く" if bri["separated"] else "効かない"
+    bpm_word = "効く" if bpm["separated"] else "効かない"
+    summary_line = f"brightness は{bri_word}、bpm は{bpm_word}"
+
     template = Template(_PAGE_TEMPLATE)
     return template.substitute(
         prompt_text=_esc(data["prompt"].text),
@@ -400,6 +406,7 @@ def render_html(data: dict[str, Any]) -> str:
         bpm_strip=bpm_strip,
         bri_verdict=_esc(bri_verdict),
         bpm_verdict=_esc(bpm_verdict),
+        summary_line=_esc(summary_line),
         model_id=_esc(data["model_id"]),
         model_revision=_esc(data["model_revision"][:12]),
         duration=f"{DURATION_SEC:g}",
@@ -543,10 +550,12 @@ audio{width:100%;margin:0 0 4px}
 <section class="why">
   <div class="chap">第 4 章</div>
   <h2>これが「機種の取扱説明書」になる</h2>
-  <p>いま見た実測——<b>brightness は効く、bpm は効かない</b>——は、そのまま
+  <p>いま見た実測——<b>$summary_line</b>——は、そのまま
   この機種（MusicGen small）の<b>取扱説明書</b>としてリポジトリに保存されています
-  （<code>device_profiles/musicgen.yaml</code>）。Suno には Suno の実測プロファイルが
-  あり、同じ楽譜でも機種ごとに効くツマミが違うことまで分かっています。</p>
+  （<code>device_profiles/musicgen.yaml</code>）。</p>
+  <p>事前の device-profile 知見では、Suno には Suno の実測プロファイルがあり、
+  同じ楽譜でも機種ごとに効くツマミが違うことが分かっています（これは今回の
+  MusicGen 実測とは別に蓄積された期待値で、両者を混同しないための注記です）。</p>
   <p>楽譜をコンパイルするとき、コンパイラはこの取説を読んで
   「この機種でその指定は届かない実績があります」と<b>機種メモ</b>を添えます。
   ガチャは消せません。でも、<b>ガチャのまま科学にする</b>ことはできる——

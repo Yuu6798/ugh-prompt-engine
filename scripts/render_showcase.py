@@ -389,6 +389,7 @@ def render_html(data: dict[str, Any]) -> str:
         variant_cards="".join(variant_cards),
         preserved_count=str(preserved_count),
         field_count=str(len(roundtrip.fields)),
+        unread_count=str(len(roundtrip.fields) - preserved_count),
         roundtrip_rows="".join(roundtrip_rows),
         prompt_text=_esc(prompt.text),
         advisories=advisories,
@@ -574,8 +575,8 @@ details .inner{margin-top:12px}
   <p class="sub">原曲の音声ファイル<b>だけ</b>を計器に渡し、楽譜を復元させました。
   楽譜の 7 項目のうち——</p>
   <div class="bigstat">
-    <div class="value">6<span style="font-size:.5em;color:var(--muted)">/7</span></div>
-    <div class="label">が、音だけから正しく読み戻せた。読めなかった 1 項目は
+    <div class="value">$preserved_count<span style="font-size:.5em;color:var(--muted)">/$field_count</span></div>
+    <div class="label">が、音だけから正しく読み戻せた。読めなかった $unread_count 項目は
     「読めない」と自己申告する。</div>
   </div>
   <div class="panel"><div class="tablewrap"><table>
