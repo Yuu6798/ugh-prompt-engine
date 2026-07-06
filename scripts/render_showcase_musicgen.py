@@ -95,17 +95,20 @@ def build_score(name: str) -> CompositionScore:
 
 
 def ensure_takes(config: dict[str, Any], output_dir: Path, *, skip_generate: bool) -> dict:
-    """config のテイクを生成（済みなら manifest を再利用）して manifest を返す。"""
+    """config のテイクを生成（--skip-generate 時のみ既存 manifest を再利用）して manifest を返す。"""
 
     config_dir = output_dir / config["name"]
     manifest_path = config_dir / "takes_manifest.json"
-    if manifest_path.is_file():
-        return json.loads(manifest_path.read_text(encoding="utf-8"))
     if skip_generate:
-        raise FileNotFoundError(
-            f"--skip-generate but no manifest at {manifest_path}; run without the flag first"
-        )
+        # --skip-generate 時のみ既存 manifest を再利用する（決定論な再採点・再描画用）。
+        if not manifest_path.is_file():
+            raise FileNotFoundError(
+                f"--skip-generate but no manifest at {manifest_path}; run without the flag first"
+            )
+        return json.loads(manifest_path.read_text(encoding="utf-8"))
 
+    # フル実行は既存 manifest の有無に関わらず takes を再生成する
+    # （provenance 比較ゲートは実装しない: デモスクリプトには過剰）。
     score = build_score(config["name"])
     score_path = config_dir / "score.yaml"
     config_dir.mkdir(parents=True, exist_ok=True)

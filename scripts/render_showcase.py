@@ -21,6 +21,7 @@ import base64
 import html
 import io
 import json
+import os
 import sys
 from pathlib import Path
 from string import Template
@@ -154,6 +155,23 @@ def render_and_measure(
     }
 
 
+def _display_path(path: Path) -> str:
+    """表示専用のパス文字列を作る。
+
+    ``--score`` は repo 外の楽譜（他所に置かれた composition_score.yaml）を
+    指すのも正常系なので、``relative_to(ROOT)`` が使えない場合は
+    ``os.path.relpath`` へ、それも不適切なら絶対パス文字列へフォールバックする。
+    """
+
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        try:
+            return os.path.relpath(path, ROOT)
+        except ValueError:
+            return str(path)
+
+
 def gather(score_path: Path, output_dir: Path) -> dict[str, Any]:
     """原曲 + 3 変奏を演奏・計測し、原曲は往復診断まで回す。"""
 
@@ -179,7 +197,7 @@ def gather(score_path: Path, output_dir: Path) -> dict[str, Any]:
 
     return {
         "score": score,
-        "score_path": str(score_path.relative_to(ROOT)),
+        "score_path": _display_path(score_path),
         "prompt": prompt,
         "original": original,
         "variants": variants,
@@ -662,7 +680,9 @@ def main() -> int:
     parser.add_argument("--score", type=Path, default=SCORE_PATH)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     args = parser.parse_args()
-    payload = run(args.score, args.output_dir)
+    score_path = args.score.resolve()
+    output_dir = args.output_dir.resolve()
+    payload = run(score_path, output_dir)
     roundtrip = payload["roundtrip"]
     preserved = sum(1 for f in roundtrip["fields"] if f["diagnosis"] == "preserved")
     print(f"roundtrip: {preserved}/{len(roundtrip['fields'])} preserved")
@@ -672,7 +692,7 @@ def main() -> int:
             f"variant {variant['name']}: bpm={measured['bpm']} key={measured['key']} "
             f"centroid={measured['centroid']}"
         )
-    print(f"artifacts written to {args.output_dir}")
+    print(f"artifacts written to {output_dir}")
     return 0
 
 
