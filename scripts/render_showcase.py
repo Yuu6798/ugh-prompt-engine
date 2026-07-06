@@ -75,6 +75,27 @@ def _set_bright(score: CompositionScore) -> None:
     score.physical.brightness = "bright"
 
 
+def _bpm_is_noop(score: CompositionScore) -> bool:
+    """変奏前の bpm が既に変異先の値（80）と数値一致するか。"""
+
+    try:
+        return float(score.physical.bpm) == 80.0
+    except (TypeError, ValueError):
+        return False
+
+
+def _key_is_noop(score: CompositionScore) -> bool:
+    """変奏前の key が既に変異先の値（C major）と異名同音等価か。"""
+
+    return keys_enharmonically_equal(score.physical.key, "C major")
+
+
+def _bright_is_noop(score: CompositionScore) -> bool:
+    """変奏前の brightness が既に変異先の値（bright）と文字列一致するか。"""
+
+    return score.physical.brightness == "bright"
+
+
 VARIANTS: list[dict[str, Any]] = [
     {
         "name": "slow",
@@ -82,6 +103,7 @@ VARIANTS: list[dict[str, Any]] = [
         "diff_field": "bpm",
         "diff_after": "bpm: 80",
         "mutate": _set_bpm,
+        "check_noop": _bpm_is_noop,
         "meter": "bpm",
     },
     {
@@ -90,6 +112,7 @@ VARIANTS: list[dict[str, Any]] = [
         "diff_field": "key",
         "diff_after": "key: C major",
         "mutate": _set_major,
+        "check_noop": _key_is_noop,
         "meter": "key",
     },
     {
@@ -98,6 +121,7 @@ VARIANTS: list[dict[str, Any]] = [
         "diff_field": "brightness",
         "diff_after": "brightness: bright",
         "mutate": _set_bright,
+        "check_noop": _bright_is_noop,
         "meter": "centroid",
     },
 ]
@@ -190,6 +214,8 @@ def gather(score_path: Path, output_dir: Path) -> dict[str, Any]:
     for spec in VARIANTS:
         mutated = score.model_copy(deep=True)
         mutate: Callable[[CompositionScore], None] = spec["mutate"]
+        check_noop: Callable[[CompositionScore], bool] = spec["check_noop"]
+        is_noop = check_noop(score)
         mutate(mutated)
         result = render_and_measure(mutated, output_dir, spec["name"])
         field = spec["diff_field"]
@@ -198,6 +224,7 @@ def gather(score_path: Path, output_dir: Path) -> dict[str, Any]:
             title=spec["title"],
             diff=(before_label, spec["diff_after"]),
             meter=spec["meter"],
+            is_noop=is_noop,
         )
         variants.append(result)
 
@@ -288,6 +315,15 @@ def _meter_row(variant: dict[str, Any], baseline: dict[str, Any]) -> str:
     決め打ちしない）。CSS クラスも文言と同じ判定から選ぶ。
     """
 
+    if variant.get("is_noop"):
+        # 元の楽譜が既に変奏先の値と一致しており、この変奏は実質的に無変更
+        # （no-op）。編集を検証したと主張しないよう、成功 verdict は出さず
+        # 判定保留のラベルに切り替える。
+        return (
+            '<div class="meter"><span class="meter-label">計器の読み</span>'
+            '<span class="meter-noop">変更なし（元の楽譜が既にこの値のため、'
+            "この変奏は編集になっていません）</span></div>"
+        )
     kind = variant["meter"]
     before = baseline["measured"]
     after = variant["measured"]
@@ -549,6 +585,7 @@ audio{width:100%;margin:2px 0 4px}
 .meter .measured{color:var(--measured)}
 .meter-verdict{color:var(--ok);font-weight:700}
 .meter-verdict-bad{color:var(--del);font-weight:700}
+.meter-noop{color:var(--muted);font-style:italic}
 table{border-collapse:collapse;width:100%;font-size:14px;font-variant-numeric:tabular-nums}
 .tablewrap{overflow-x:auto}
 th{text-align:left;font-size:11px;letter-spacing:.08em;text-transform:uppercase;
