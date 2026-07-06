@@ -99,7 +99,7 @@ def _bright_is_noop(score: CompositionScore) -> bool:
 VARIANTS: list[dict[str, Any]] = [
     {
         "name": "slow",
-        "title": "テンポを落とす",
+        "title": "bpm を 80 に指定する",
         "diff_field": "bpm",
         "diff_after": "bpm: 80",
         "mutate": _set_bpm,
@@ -108,7 +108,7 @@ VARIANTS: list[dict[str, Any]] = [
     },
     {
         "name": "major",
-        "title": "悲しい調を、明るい調に",
+        "title": "key を C major に指定する",
         "diff_field": "key",
         "diff_after": "key: C major",
         "mutate": _set_major,
@@ -117,7 +117,7 @@ VARIANTS: list[dict[str, Any]] = [
     },
     {
         "name": "bright",
-        "title": "音色を明るくする",
+        "title": "brightness を bright に指定する",
         "diff_field": "brightness",
         "diff_after": "brightness: bright",
         "mutate": _set_bright,
@@ -462,27 +462,36 @@ def render_html(data: dict[str, Any]) -> str:
     # 3 枚目（brightness 変奏）の補足も実測値から導出する（固定文だと、演奏者の
     # 音色設計が変わって絶対基準に届いた/動かなかった場合に実測と食い違うため）。
     bright_variant = next(v for v in data["variants"] if v["meter"] == "centroid")
-    bright_before = original["measured"]["centroid"]
-    bright_after = bright_variant["measured"]["centroid"]
-    bright_moved_up = bright_after > bright_before
-    bright_reached_threshold = bright_after >= BRIGHT_ABSOLUTE_HZ
-    if bright_moved_up and not bright_reached_threshold:
+    if bright_variant.get("is_noop"):
+        # 元の楽譜が既に brightness: bright のため、この変奏は no-op（無変更）。
+        # centroid が実質同値のまま「効かなかった」と読めてしまわないよう、
+        # 効き目判定そのものを行わず中立文に切り替える。
         bright_note = (
-            "3 枚目の補足: 針は確かに明るい方へ動きますが、この演奏者の音色では"
-            f"「bright」の絶対基準（{BRIGHT_ABSOLUTE_HZ:g} Hz 以上）には届きません。"
-            "計器は動いた事実と届かない事実を両方そのまま報告します — "
-            "忖度しないのが、この計器の設計です。"
-        )
-    elif bright_moved_up and bright_reached_threshold:
-        bright_note = (
-            "3 枚目の補足: 針は明るい方へ動き、"
-            f"「bright」の絶対基準（{BRIGHT_ABSOLUTE_HZ:g} Hz 以上）にも届きました。"
+            "3 枚目の補足: 元の楽譜が既に「bright」指定のため、この変奏は無変更"
+            "（no-op）です。効き目の判定は対象外です。"
         )
     else:
-        bright_note = (
-            f"3 枚目の補足: 針は明るい方へ動きませんでした（{bright_before:g} → "
-            f"{bright_after:g} Hz）— この演奏者ではこの変奏は効きませんでした。"
-        )
+        bright_before = original["measured"]["centroid"]
+        bright_after = bright_variant["measured"]["centroid"]
+        bright_moved_up = bright_after > bright_before
+        bright_reached_threshold = bright_after >= BRIGHT_ABSOLUTE_HZ
+        if bright_moved_up and not bright_reached_threshold:
+            bright_note = (
+                "3 枚目の補足: 針は確かに明るい方へ動きますが、この演奏者の音色では"
+                f"「bright」の絶対基準（{BRIGHT_ABSOLUTE_HZ:g} Hz 以上）には届きません。"
+                "計器は動いた事実と届かない事実を両方そのまま報告します — "
+                "忖度しないのが、この計器の設計です。"
+            )
+        elif bright_moved_up and bright_reached_threshold:
+            bright_note = (
+                "3 枚目の補足: 針は明るい方へ動き、"
+                f"「bright」の絶対基準（{BRIGHT_ABSOLUTE_HZ:g} Hz 以上）にも届きました。"
+            )
+        else:
+            bright_note = (
+                f"3 枚目の補足: 針は明るい方へ動きませんでした（{bright_before:g} → "
+                f"{bright_after:g} Hz）— この演奏者ではこの変奏は効きませんでした。"
+            )
 
     template = Template(_PAGE_TEMPLATE)
     return template.substitute(
