@@ -355,8 +355,28 @@ def render_html(data: dict[str, Any]) -> str:
             "同値でした。それでも面白いのは、<b>dark 側の着地点</b>です。"
         )
 
+    # 終幕（第三幕まとめ）も各章と同一の条件から組み立てる（固定文だと BPM 半折り
+    # 疑い/brightness 逆方向/dark 帯到達のいずれかが起きたとき矛盾するため）。
+    bpm_ok = not halving_flagged and bpm_high_val > bpm_low_val
+    bri_ok = bright_centroid > dark_centroid
+    if bpm_ok and bri_ok:
+        needle_clause = "同じ針が同じ向きに動き"
+    elif bpm_ok or bri_ok:
+        matched, unmatched = ("テンポ", "明るさ") if bpm_ok else ("明るさ", "テンポ")
+        needle_clause = f"針は{matched}では同じ向きに動いたが{unmatched}では動かず"
+    else:
+        needle_clause = "針は両方とも同じ向きには動かず"
+
+    if not dark_in_band:
+        quirk_clause = "機種の癖（dark 未到達）まで取説どおり"
+    else:
+        quirk_clause = "ただし今回は dark 帯に到達し、機種の癖（過去実績 0/4）は更新候補"
+
+    act3_body = f"Suno の本物の楽曲でも{needle_clause}、{quirk_clause}"
+
     template = Template(_PAGE_TEMPLATE)
     return template.substitute(
+        act3_body=_esc(act3_body),
         bpm_low_card=_track_card(bpm_low),
         bpm_high_card=_track_card(bpm_high),
         dark_card=_track_card(dark),
@@ -512,8 +532,7 @@ audio{width:100%;margin:0 0 4px}
     一周することを証明（7 項目中 6 項目が往復保存）<span class="dim">音は習作、論理は厳密</span></div>
     <div class="act"><b>第二幕 — 統計</b>MusicGen のガチャを分布で測り、効くツマミ
     （brightness）と効かないツマミ（bpm）を判別<span class="dim">音は音楽、判定は分布</span></div>
-    <div class="act"><b>第三幕 — 実用機</b>Suno の本物の楽曲でも同じ針が同じ向きに動き、
-    機種の癖（dark 未到達）まで取説どおり<span class="dim">音は作品、計器は共通</span></div>
+    <div class="act"><b>第三幕 — 実用機</b>$act3_body<span class="dim">音は作品、計器は共通</span></div>
   </div>
   <p>楽譜という共通言語で書き、機種を問わず同じ計器で測る——「AI 音楽の MIDI」への
   道筋を、音色の違う 3 種類の演奏者がひとつのループで実証した、というのが

@@ -27,7 +27,7 @@ import os
 import sys
 from pathlib import Path
 from string import Template
-from typing import Any
+from typing import Any, Mapping
 
 import librosa
 import numpy as np
@@ -193,24 +193,66 @@ def _waveform_points(audio_path: Path, *, buckets: int = 480) -> list[float]:
 # ---------------------------------------------------------------------------
 
 
+def _check_cache_provenance(
+    manifest: Mapping[str, Any],
+    *,
+    prompt_text: str,
+    source_sha256: str,
+) -> None:
+    """``--skip-generate`` 時、キャッシュ済み manifest の provenance を検証する。
+
+    manifest は現行 ``--source`` から再構築した score/prompt に対して stale な
+    テイクを採点してしまわないよう、生成時に使った prompt テキストと source
+    音声の sha256 を現行実行のものと突き合わせる。不一致、または旧形式
+    manifest でこれらの欄が欠落している場合は fail-fast する
+    （``load_takes_for_repetition`` の sha256 不一致ゲートと同じ様式）。
+    """
+
+    cached_prompt = manifest.get("prompt")
+    cached_source_sha256 = manifest.get("source_sha256")
+    if cached_prompt is None or cached_source_sha256 is None:
+        raise ValueError(
+            "cached manifest is missing prompt/source_sha256 provenance fields "
+            "(old-format manifest, generated before the provenance gate); "
+            "score/prompt/source が変わっています。"
+            "--skip-generate を外してフル実行してください"
+        )
+    if cached_prompt != prompt_text or cached_source_sha256 != source_sha256:
+        raise ValueError(
+            "cached manifest provenance does not match the current run "
+            f"(manifest prompt={cached_prompt!r} vs current prompt={prompt_text!r}; "
+            f"manifest source_sha256={cached_source_sha256!r} vs "
+            f"current source_sha256={source_sha256!r}); "
+            "score/prompt/source が変わっています。"
+            "--skip-generate を外してフル実行してください"
+        )
+
+
 def gather(source_path: Path, output_dir: Path, *, skip_generate: bool) -> dict[str, Any]:
     bundle = extract_rpe_from_file(str(source_path))
     score = transcribe_score(bundle)
     score_path = output_dir / "transcribed_score.yaml"
     score_path.write_text(render_draft_score_yaml(score), encoding="utf-8")
     prompt = ExternalPromptAdapter().render(score)
+    source_sha256 = _sha256_file(source_path)
 
     manifest_path = output_dir / "takes_manifest.json"
     if skip_generate:
         # --skip-generate 時のみ既存 manifest を再利用する（決定論な再採点・再描画用）。
+        # 現行 --source から再構築した prompt/source と manifest の provenance が
+        # 食い違う（旧テイクを新楽譜で採点する）stale 混合を fail-fast で防ぐ。
         if not manifest_path.is_file():
             raise FileNotFoundError(
                 f"--skip-generate but no manifest at {manifest_path}; run without the flag first"
             )
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        _check_cache_provenance(
+            manifest, prompt_text=prompt.text, source_sha256=source_sha256
+        )
     else:
-        # フル実行は既存 manifest の有無に関わらず takes を再生成する
-        # （provenance 比較ゲートは実装しない: デモスクリプトには過剰）。
+        # フル実行は既存 manifest の有無に関わらず takes を再生成し、次回以降の
+        # --skip-generate が照合できるよう prompt（perform_takes が既に保存）に
+        # 加えて source_sha256 を manifest に刻む。
         manifest = perform_takes(
             score_path,
             repetitions=REPETITIONS,
@@ -220,6 +262,7 @@ def gather(source_path: Path, output_dir: Path, *, skip_generate: bool) -> dict[
             model_id=PROFILE_MEASURED_MODEL_ID,
             model_revision=PROFILE_MEASURED_MODEL_REVISION,
         )
+        manifest["source_sha256"] = source_sha256
         manifest_path.write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
@@ -245,7 +288,7 @@ def gather(source_path: Path, output_dir: Path, *, skip_generate: bool) -> dict[
     physical = bundle.physical
     source = {
         "path": _display_path(source_path),
-        "sha256": _sha256_file(source_path),
+        "sha256": source_sha256,
         "duration_sec": round(float(physical.duration_sec), 1),
         "measured": {
             "bpm": round(float(physical.bpm), 1) if physical.bpm else None,

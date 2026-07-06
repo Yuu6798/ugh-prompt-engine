@@ -466,6 +466,27 @@ def render_html(data: dict[str, Any]) -> str:
     bpm_word = _word(bpm)
     summary_line = f"brightness は{bri_word}、bpm は{bpm_word}"
 
+    # 第 3 章の見出し/リード文も bpm_verdict と同じ separated/inverted 分岐から
+    # 導出する（「効かないノブ」固定文だと実測が効いた/逆方向のときに矛盾する）。
+    if bpm["separated"]:
+        bpm_chapter_title = "このツマミも、計器で効くと分かる"
+        bpm_chapter_lede = (
+            '同じことを <span class="diff-add">bpm: 80</span> でも試します。'
+            "今度は耳でも針でも、分布がはっきり動きます。"
+        )
+    elif bpm["inverted"]:
+        bpm_chapter_title = "逆方向に効くツマミも、計器なら見抜ける"
+        bpm_chapter_lede = (
+            '同じことを <span class="diff-add">bpm: 80</span> でも試します。'
+            "分布は動きますが、期待と逆方向です。"
+        )
+    else:
+        bpm_chapter_title = "効かないツマミも、計器なら分かる"
+        bpm_chapter_lede = (
+            '同じことを <span class="diff-add">bpm: 80</span> でも試します。'
+            "耳ではどうでしょう。針ではどうでしょう。"
+        )
+
     # CSS クラスも文言と同じ判定から導出する（視覚と文言の不一致防止）。
     # inverted は「効く」の緑ではないが「効かない」の警告とも異なるため、
     # 既存の警告色（verdict-bad）を流用して区別を促す。
@@ -484,6 +505,8 @@ def render_html(data: dict[str, Any]) -> str:
         bpm_verdict=_esc(bpm_verdict),
         bri_verdict_class=bri_verdict_class,
         bpm_verdict_class=bpm_verdict_class,
+        bpm_chapter_title=_esc(bpm_chapter_title),
+        bpm_chapter_lede=bpm_chapter_lede,
         summary_line=_esc(summary_line),
         model_id=_esc(data["model_id"]),
         model_revision=_esc(data["model_revision"][:12]),
@@ -611,9 +634,8 @@ audio{width:100%;margin:0 0 4px}
 
 <section>
   <div class="chap">第 3 章</div>
-  <h2>効かないツマミも、計器なら分かる</h2>
-  <p class="sub">同じことを <span class="diff-add">bpm: 80</span> でも試します。
-  耳ではどうでしょう。針ではどうでしょう。</p>
+  <h2>$bpm_chapter_title</h2>
+  <p class="sub">$bpm_chapter_lede</p>
   <div class="card">
     <div class="card-title">bpm 80 に変更 × 3 テイク</div>
     $slow_rows
