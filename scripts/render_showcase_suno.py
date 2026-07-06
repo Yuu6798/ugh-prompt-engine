@@ -338,10 +338,11 @@ def render_html(data: dict[str, Any]) -> str:
         )
 
     # brightness 見出し/リード文も bri_verdict と同じ条件から導出する
-    # （成功/不成立の 2 分岐。「取説の予言」は prophecy_heading 側で独立に判定済み
-    # なので見出しからは分離し、方向が成立したときだけ的中の含みを残す）。
+    # （成功/不成立の 2 分岐。的中/反証の判定は prophecy_heading / dark_in_band
+    # 側の専用 callout が single source of truth なので、見出しは方向判定
+    # （bright_centroid > dark_centroid）のみを反映し予言の当否には触れない）。
     if bright_centroid > dark_centroid:
-        bri_heading = "明るさも方向どおり — そして「取説の予言」が当たる"
+        bri_heading = "明るさも方向どおりに動く"
         bri_lede = (
             f"dark 指定と bright 指定のペア。針は {dark_centroid:g} Hz → "
             f"{bright_centroid:g} Hz と方向どおりに動きました。ここで面白いのは"

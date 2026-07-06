@@ -423,10 +423,28 @@ def render_html(data: dict[str, Any]) -> str:
     take_cards = []
     by_take = {t.take_id: t for t in report.takes}
     selected = report.selection.selected_take_id
+    # 選抜基準（selection_fields）はデフォルトで key/brightness のみを見るが、
+    # カード表示は preserved_count（全診断フィールド対象）で総数の多い別テイクと
+    # 矛盾しうる。バッジに選抜スコープを明示し、スコープ内の保存数も併記する
+    # （report.selection.ranking が選抜スコープ内 preserved_count の実データ）。
+    selection_fields = report.selection.selection_fields
+    selection_fields_ja = (
+        "/".join(FIELD_JA.get(f, f) for f in selection_fields) if selection_fields else "-"
+    )
+    selection_scoped_count = next(
+        (r.preserved_count for r in report.selection.ranking if r.take_id == selected),
+        None,
+    )
+    scoped_note = (
+        f"・選抜内 {selection_scoped_count}/{len(selection_fields)} 項目保存"
+        if selection_scoped_count is not None
+        else ""
+    )
     for media in data["take_media"]:
         take = by_take[media["take_id"]]
         badge = (
-            '<span class="chip chip-pick">★ 計器が選んだ最忠実テイク</span>'
+            '<span class="chip chip-pick">★ 計器が選んだ最忠実テイク'
+            f"（選抜基準: {_esc(selection_fields_ja)}{_esc(scoped_note)}）</span>"
             if media["take_id"] == selected
             else ""
         )
