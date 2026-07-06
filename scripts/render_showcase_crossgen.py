@@ -23,6 +23,7 @@ import hashlib
 import html
 import io
 import json
+import os
 import sys
 from pathlib import Path
 from string import Template
@@ -143,6 +144,23 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _display_path(path: Path) -> str:
+    """表示専用のパス文字列を作る。
+
+    ``--source`` はリポジトリ外の音源（例: Downloads の Suno 生成 MP3）を
+    指すのが正常系なので、``relative_to(ROOT)`` が使えない場合は
+    ``os.path.relpath`` へ、それも不適切なら絶対パス文字列へフォールバックする。
+    """
+
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        try:
+            return os.path.relpath(path, ROOT)
+        except ValueError:
+            return str(path)
+
+
 def _embed_wav_b64(audio_path: Path, *, offset_sec: float = 0.0, max_sec: float) -> str:
     floats, sr = librosa.load(str(audio_path), sr=None, mono=True)
     start = int(offset_sec * sr)
@@ -223,7 +241,7 @@ def gather(source_path: Path, output_dir: Path, *, skip_generate: bool) -> dict[
 
     physical = bundle.physical
     source = {
-        "path": str(source_path.relative_to(ROOT)),
+        "path": _display_path(source_path),
         "sha256": _sha256_file(source_path),
         "duration_sec": round(float(physical.duration_sec), 1),
         "measured": {

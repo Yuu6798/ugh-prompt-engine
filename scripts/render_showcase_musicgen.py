@@ -46,6 +46,7 @@ from scripts.collect_musicgen_takes import (  # noqa: E402
 )
 from svp_rpe.compose import ExternalPromptAdapter, load_composition_score  # noqa: E402
 from svp_rpe.compose.models import CompositionScore  # noqa: E402
+from svp_rpe.perform import sha256_bytes  # noqa: E402
 from svp_rpe.rpe.extractor import extract_physical_from_file  # noqa: E402
 
 SCORE_PATH = ROOT / "examples" / "composition" / "midnight_signal" / "composition_score.yaml"
@@ -161,12 +162,20 @@ def measure_takes(manifest: dict, config_dir: Path) -> list[dict[str, Any]]:
     takes = []
     for sample in manifest["samples"]:
         audio_path = config_dir / sample["audio_path"]
+        computed_sha256 = sha256_bytes(audio_path.read_bytes())
+        manifest_sha256 = str(sample["audio_sha256"])
+        if computed_sha256 != manifest_sha256:
+            raise ValueError(
+                f"sample {sample['sample_id']!r}: manifest audio_sha256 does not match "
+                f"the audio file at {audio_path} "
+                f"(manifest={manifest_sha256}, computed={computed_sha256})"
+            )
         physical = extract_physical_from_file(str(audio_path))
         takes.append(
             {
                 "sample_id": sample["sample_id"],
                 "seed": sample["seed"],
-                "audio_sha256": sample["audio_sha256"],
+                "audio_sha256": computed_sha256,
                 "measured": {
                     "bpm": round(float(physical.bpm), 1) if physical.bpm else None,
                     "centroid": round(float(physical.spectral_centroid), 0),
