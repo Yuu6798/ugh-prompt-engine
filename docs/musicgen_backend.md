@@ -319,6 +319,17 @@ d=+1.10）。expected_sign は −1（Avoid が効くなら centroid は低下�
 確認を推奨する。grip 値の符号逆転はミスリードを避けるため `control_defaults` の
 `grip` キーには入れず、quirk の advisory/description にのみ記録した（honesty judgement）。
 
+**後始末（#152 フォローアップ、2026-07-06）**: 実測された害（attractor 化）を計器が記録
+するだけで放置せず、送出側を是正した。`compose/prompt_renderer.py` の `BackendDescriptor`
+に `omit_body_negative: bool` を追加し musicgen backend のみ True にすることで、
+`ExternalPromptAdapter` は musicgen 向け compile で本文 `semantic.avoid`
+（`Avoid: X.`）セグメントを送出しない。`GeneratedPrompt.negative_tags` には引き続き
+avoid を記録する（楽譜の意図の保全・消費可否は下流の責務）。送出停止は字数超過の
+`dropped_elements` とは区別されるルーティング判断（監査可能性は本 quirk advisory の
+改訂文言と descriptor 単体テストで担保）。suno / external の compile 出力は本追記による
+影響を受けない（実測は musicgen 限定・機種依存の効きを証拠なしに横展開しない — 下記
+「機種依存の注意」参照）。
+
 #### スコープ外（構造的理由）
 
 - **`stereo_width`**: MusicGen small はモノラル出力＝sensor_blind が既に実証済み
@@ -338,7 +349,10 @@ d=+1.10）。expected_sign は −1（Avoid が効くなら centroid は低下�
 MusicGen small の dead は Suno の dead と同一ではない（K3-2a §5.4 の非対角クロス
 効果符号反転が前例）。本スクリーンの dead 判定（valley_depth_target / semantic_avoid /
 semantic_core[物理] / time_signature）を Suno へそのまま転移させてよいかは未検証 —
-Suno 側での再実測（人手バッチ）は今後の課題として残す。
+Suno 側での再実測（人手バッチ）は今後の課題として残す。**Suno 本文 Avoid の効き**
+（Exclude Styles チャネルとの重複込み）も同様に未検証・人手検証キュー入りとする
+— musicgen の attractor 実測を根拠に suno 側の送出も止める判断は行わない
+（#152 フォローアップ、2026-07-06）。
 
 ## 8. 関連ドキュメント
 

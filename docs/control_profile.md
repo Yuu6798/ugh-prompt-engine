@@ -77,6 +77,14 @@ render」へ黙って落ちない。未知 backend は素の descriptor（`profi
 フォールバック。Suno 固有の制約（Style 字数・Exclude 欄＝`negative_channel`）は薄い
 descriptor に隔離し、アダプタ core から生成器直書きを排除する。
 
+**backend 別ルーティング（K2-seg 後始末、#152 フォローアップ、2026-07-06）**: `BackendDescriptor`
+に `omit_body_negative: bool` を追加し、musicgen backend のみ True。K2-seg 実測（本文
+"Avoid: X" が X の attractor になる・centroid d=+1.10）を受けて、musicgen は本文
+`semantic.avoid` セグメントの送出自体を止める（`negative_tags` は従来どおり保持し楽譜の
+意図は失わない）。分岐は descriptor 参照のみで backend 名の直書きは増やさない。suno /
+external は不変 — 効きは機種依存のため実測なき横展開はしない（Suno 本文 Avoid の効きは
+Exclude Styles チャネルとの重複込みで人手検証キュー、docs/musicgen_backend.md §7.6 参照）。
+
 **フィールド粒度の drop accounting**: 旧 `physical.optional` 束（brightness / stereo_width /
 active_rate_target / valley_depth_target を 1 トークンに束ねていた）をフィールド粒度の
 独立した文へ分解。トークン ID は `PhysicalLayer.model_fields` 正式名に一致し、`dropped_elements`

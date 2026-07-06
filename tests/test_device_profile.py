@@ -321,6 +321,12 @@ def test_musicgen_nonempty_avoid_fires_attractor_advisory() -> None:
     `_field_value_for_quirk` の `getattr(score.semantic, "semantic.avoid", None)`
     もドット付きフィールド名を解決できず None 固定だった＝二重の理由で一度も
     発火しなかった。両方を fix したことをここで pin する。
+
+    K2-seg 後始末（#152 フォローアップ、2026-07-06）: attractor 実測を受けて musicgen
+    backend は本文 "Avoid: X" セグメントの送出自体を停止するようになった
+    （BackendDescriptor.omit_body_negative）。よってこのテストは advisory 発火の
+    pin を維持しつつ、本文からは "Avoid:" が消え、negative_tags には引き続き
+    保持されることを検証する内容へ更新する。
     """
 
     data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
@@ -334,9 +340,10 @@ def test_musicgen_nonempty_avoid_fires_attractor_advisory() -> None:
     assert any("引き寄せる" in advisory for advisory in prompt.advisories)
     assert any("Avoid" in advisory for advisory in prompt.advisories)
     # 既存契約: advisory の発火は本文 / tags / negative_tags を変えない（自動補正しない）。
-    # text 側の "Avoid: ..." セグメントは semantic.avoid 自体の描画（既存契約・不変）で、
-    # advisories フィールドとは独立に計算される。
-    assert "Avoid: bright festival EDM; comic vocal delivery." in prompt.text
+    # ただし musicgen backend は本文セグメント自体の送出をルーティングで止めるため、
+    # "Avoid: ..." は本文に現れない（negative_tags には保持される）。
+    assert "Avoid:" not in prompt.text
+    assert "semantic.avoid" not in prompt.dropped_elements
     assert prompt.negative_tags == data["semantic"]["avoid"]
     assert prompt.tags == ["deep_house", "ambient", "dark", "wide_stereo"]
 
