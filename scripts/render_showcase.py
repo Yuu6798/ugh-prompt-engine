@@ -38,6 +38,7 @@ if str(ROOT) not in sys.path:
 
 from svp_rpe.compose import ExternalPromptAdapter, load_composition_score  # noqa: E402
 from svp_rpe.compose.models import CompositionScore  # noqa: E402
+from svp_rpe.keys import keys_enharmonically_equal  # noqa: E402
 from svp_rpe.perform import FAITHFUL_TAKE, perform, sha256_bytes, wav_bytes  # noqa: E402
 from svp_rpe.perform.synth import SAMPLE_RATE  # noqa: E402
 from svp_rpe.roundtrip.adherence import score_adherence  # noqa: E402
@@ -312,8 +313,10 @@ def _meter_row(variant: dict[str, Any], baseline: dict[str, Any]) -> str:
             f'<b class="measured">{_esc(after["key"])}</b>'
         )
         target_mode = target.split()[-1]
-        detected_mode = after["key"].split()[-1] if after["key"] else None
-        if detected_mode == target_mode:
+        # mode サフィックスだけでなく根音も含むフル key（異名同音は等価）で
+        # authored target と実測を比較する（#142 集約の keys.py ヘルパーに委譲、
+        # 独自の一致判定を再実装しない）。
+        if keys_enharmonically_equal(target, after["key"]):
             verdict = f"✓ {'長調' if target_mode == 'major' else target_mode}と聴き当てた"
             verdict_ok = True
         else:

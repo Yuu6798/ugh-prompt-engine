@@ -198,32 +198,54 @@ def _check_cache_provenance(
     *,
     prompt_text: str,
     source_sha256: str,
+    model_id: str,
+    model_revision: str,
 ) -> None:
     """``--skip-generate`` 時、キャッシュ済み manifest の provenance を検証する。
 
     manifest は現行 ``--source`` から再構築した score/prompt に対して stale な
     テイクを採点してしまわないよう、生成時に使った prompt テキストと source
-    音声の sha256 を現行実行のものと突き合わせる。不一致、または旧形式
-    manifest でこれらの欄が欠落している場合は fail-fast する
-    （``load_takes_for_repetition`` の sha256 不一致ゲートと同じ様式）。
+    音声の sha256 を現行実行のものと突き合わせる。model_id/model_revision も
+    同じ様式で、現行実行が使う ``PROFILE_MEASURED_MODEL_*``（フル実行時に
+    実際そのまま渡す値）と cached manifest の記録値を突き合わせる ——
+    「別モデルで焼いたテイクを現行モデルの実測として採点・表示する」stale
+    混合を防ぐ（``render_showcase_musicgen.py`` の ``_check_model_provenance``
+    と同じ規律）。不一致、または旧形式 manifest でこれらの欄が欠落している
+    場合は fail-fast する（``load_takes_for_repetition`` の sha256 不一致
+    ゲートと同じ様式）。
     """
 
     cached_prompt = manifest.get("prompt")
     cached_source_sha256 = manifest.get("source_sha256")
-    if cached_prompt is None or cached_source_sha256 is None:
+    cached_model_id = manifest.get("model_id")
+    cached_model_revision = manifest.get("model_revision")
+    if (
+        cached_prompt is None
+        or cached_source_sha256 is None
+        or cached_model_id is None
+        or cached_model_revision is None
+    ):
         raise ValueError(
-            "cached manifest is missing prompt/source_sha256 provenance fields "
-            "(old-format manifest, generated before the provenance gate); "
-            "score/prompt/source が変わっています。"
+            "cached manifest is missing prompt/source_sha256/model_id/model_revision "
+            "provenance fields (old-format manifest, generated before the provenance "
+            "gate); score/prompt/source/model が変わっています。"
             "--skip-generate を外してフル実行してください"
         )
-    if cached_prompt != prompt_text or cached_source_sha256 != source_sha256:
+    if (
+        cached_prompt != prompt_text
+        or cached_source_sha256 != source_sha256
+        or cached_model_id != model_id
+        or cached_model_revision != model_revision
+    ):
         raise ValueError(
             "cached manifest provenance does not match the current run "
             f"(manifest prompt={cached_prompt!r} vs current prompt={prompt_text!r}; "
             f"manifest source_sha256={cached_source_sha256!r} vs "
-            f"current source_sha256={source_sha256!r}); "
-            "score/prompt/source が変わっています。"
+            f"current source_sha256={source_sha256!r}; "
+            f"manifest model_id={cached_model_id!r} vs current model_id={model_id!r}; "
+            f"manifest model_revision={cached_model_revision!r} vs "
+            f"current model_revision={model_revision!r}); "
+            "score/prompt/source/model が変わっています。"
             "--skip-generate を外してフル実行してください"
         )
 
@@ -247,7 +269,11 @@ def gather(source_path: Path, output_dir: Path, *, skip_generate: bool) -> dict[
             )
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         _check_cache_provenance(
-            manifest, prompt_text=prompt.text, source_sha256=source_sha256
+            manifest,
+            prompt_text=prompt.text,
+            source_sha256=source_sha256,
+            model_id=PROFILE_MEASURED_MODEL_ID,
+            model_revision=PROFILE_MEASURED_MODEL_REVISION,
         )
     else:
         # フル実行は既存 manifest の有無に関わらず takes を再生成し、次回以降の
@@ -309,6 +335,11 @@ def gather(source_path: Path, output_dir: Path, *, skip_generate: bool) -> dict[
         "prompt": prompt,
         "report": report,
         "take_media": take_media,
+        # ページ/JSON の model 表示は PROFILE_MEASURED_MODEL_* 定数決め打ちではなく
+        # manifest 記録値（実際にそのテイクを焼いた model）から導出する（cached/フル
+        # 実行いずれも同じ由来にする — render_showcase_musicgen.py と同じ規律）。
+        "model_id": manifest["model_id"],
+        "model_revision": manifest["model_revision"],
     }
 
 
@@ -320,6 +351,8 @@ def as_json_payload(data: dict[str, Any]) -> dict[str, Any]:
             "原曲はユーザーが Suno で生成し 2026-07-03 に提供（コミットしない・sha256 pin）。"
             "楽譜は計器の転写のみで人間の作曲判断ゼロ。"
         ),
+        "model_id": data["model_id"],
+        "model_revision": data["model_revision"],
         "source": source,
         "prompt": data["prompt"].model_dump(mode="json"),
         "repetition_report": data["report"].model_dump(mode="json"),
@@ -499,7 +532,7 @@ def render_html(data: dict[str, Any]) -> str:
         partial=_esc(bucket(partial)),
         lost=_esc(bucket(lost)),
         sensor_note=_esc(sensor_note),
-        model_id=_esc(PROFILE_MEASURED_MODEL_ID),
+        model_id=_esc(data["model_id"]),
     )
 
 
