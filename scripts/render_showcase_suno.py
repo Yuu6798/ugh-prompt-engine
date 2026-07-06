@@ -277,6 +277,43 @@ def render_html(data: dict[str, Any]) -> str:
             "再確認が必要です。"
         )
 
+    # BPM verdict は実測順序 + 半折りフラグから導出する（固定の成功文だと
+    # 逆転・同値・半折り疑いの回でも緑の「成功」表記のまま残ってしまうため）。
+    # halving_flagged と整合させ、半折り疑いがあれば順序の成否より先に保留とする。
+    bpm_low_val = bpm_low["measured"]["bpm"]
+    bpm_high_val = bpm_high["measured"]["bpm"]
+    if halving_flagged:
+        bpm_verdict = (
+            f"⚠ 半折り疑いにつき判定保留（{bpm_low_val:g} → {bpm_high_val:g} BPM）— "
+            "高 prior 再推定で再確認するまで分離の成否は判定できません"
+        )
+        bpm_verdict_class = "verdict-bad"
+    elif bpm_high_val > bpm_low_val:
+        bpm_verdict = (
+            f"✓ 指定どおりに割れた（{bpm_low_val:g} → {bpm_high_val:g} BPM）— "
+            "K2 実測（本物 Suno 16 曲・効果量 d=1.61）の追試としても整合"
+        )
+        bpm_verdict_class = "verdict-ok"
+    else:
+        bpm_verdict = (
+            f"✗ 指定どおりに割れなかった（{bpm_low_val:g} → {bpm_high_val:g} BPM）— "
+            "逆転または同値のため不成立"
+        )
+        bpm_verdict_class = "verdict-bad"
+
+    # brightness verdict も実測値の方向から導出する（prophecy の dark_in_band
+    # 判定とは独立 — dark 帯到達の有無と A/B の方向は別の問い）。
+    bright_centroid = bright["measured"]["centroid"]
+    if bright_centroid > dark_centroid:
+        bri_verdict = f"✓ 方向どおりに動いた（{dark_centroid:g} → {bright_centroid:g} Hz）"
+        bri_verdict_class = "verdict-ok"
+    else:
+        bri_verdict = (
+            f"✗ 方向どおりに動かなかった（{dark_centroid:g} → {bright_centroid:g} Hz）— "
+            "逆方向または同値のため不成立"
+        )
+        bri_verdict_class = "verdict-bad"
+
     template = Template(_PAGE_TEMPLATE)
     return template.substitute(
         bpm_low_card=_track_card(bpm_low),
@@ -285,13 +322,17 @@ def render_html(data: dict[str, Any]) -> str:
         bright_card=_track_card(bright),
         bpm_strip=bpm_strip,
         centroid_strip=centroid_strip,
-        bpm_low_val=f"{bpm_low['measured']['bpm']:g}",
-        bpm_high_val=f"{bpm_high['measured']['bpm']:g}",
+        bpm_low_val=f"{bpm_low_val:g}",
+        bpm_high_val=f"{bpm_high_val:g}",
         dark_val=f"{dark_centroid:g}",
-        bright_val=f"{bright['measured']['centroid']:g}",
+        bright_val=f"{bright_centroid:g}",
         prophecy_heading=_esc(prophecy_heading),
         prophecy=_esc(prophecy),
         halving_note=_esc(halving_note),
+        bpm_verdict=_esc(bpm_verdict),
+        bpm_verdict_class=bpm_verdict_class,
+        bri_verdict=_esc(bri_verdict),
+        bri_verdict_class=bri_verdict_class,
     )
 
 
@@ -360,6 +401,7 @@ audio{width:100%;margin:0 0 4px}
 .strip .dot{fill:var(--measured);stroke:var(--surface);stroke-width:2}
 .verdict{border-radius:10px;padding:12px 16px;font-weight:700;margin:10px 0}
 .verdict-ok{background:var(--ok-bg);color:var(--ok)}
+.verdict-bad{background:var(--warn-bg);color:var(--authored)}
 .callout{background:var(--warn-bg);border-radius:10px;padding:12px 16px;margin:12px 0;
   font-size:14.5px}
 .callout b{color:var(--authored)}
@@ -398,9 +440,7 @@ audio{width:100%;margin:0 0 4px}
   <div class="card">
     <div class="card-title">テンポの針 — 2 曲を同じ物差しに</div>
     $bpm_strip
-    <div class="verdict verdict-ok">✓ 指定どおりに割れた（$bpm_low_val →
-    $bpm_high_val BPM）— K2 実測（本物 Suno 16 曲・効果量 d=1.61）の追試として
-    も整合</div>
+    <div class="verdict $bpm_verdict_class">$bpm_verdict</div>
   </div>
 </section>
 
@@ -416,7 +456,7 @@ audio{width:100%;margin:0 0 4px}
   <div class="card">
     <div class="card-title">明るさの針（spectral centroid）— 2 曲を同じ物差しに</div>
     $centroid_strip
-    <div class="verdict verdict-ok">✓ 方向どおりに動いた（$dark_val → $bright_val Hz）</div>
+    <div class="verdict $bri_verdict_class">$bri_verdict</div>
   </div>
   <div class="callout"><b>$prophecy_heading</b> このリポジトリの Suno 取扱説明書
   （device_profiles/suno.yaml・過去実測 0/4）には「Suno は dark 指定で絶対 dark 帯
