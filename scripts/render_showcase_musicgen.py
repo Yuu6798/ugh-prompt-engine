@@ -193,21 +193,46 @@ def measure_takes(manifest: dict, config_dir: Path) -> list[dict[str, Any]]:
     return takes
 
 
-def separation(base_values: list[float], variant_values: list[float]) -> dict[str, Any]:
-    """2 群のテイク値の分離を記述する（判定文の材料。verdict ではない）。"""
+def separation(
+    base_values: list[float],
+    variant_values: list[float],
+    *,
+    expected_direction: str,
+) -> dict[str, Any]:
+    """2 群のテイク値の分離を記述する（判定文の材料。verdict ではない）。
+
+    範囲非重複だけでなく期待方向も判定に含める（K 系列の grip=方向込み効果量の
+    規律に合わせる）。逆方向に非重複な場合は ``separated=False`` かつ
+    ``inverted=True`` とし、呼び出し側で「分離はあるが期待と逆方向」と
+    正直に区別表記できるようにする。
+
+    Args:
+        expected_direction: variant 群が base 群に対して期待される方向。
+            ``"higher"`` — variant の平均が base より高いことを期待
+            （例: brightness ノブ）。
+            ``"lower"`` — variant の平均が base より低いことを期待
+            （例: bpm 80 指定 = slow）。
+    """
+    if expected_direction not in ("higher", "lower"):
+        raise ValueError(
+            f"expected_direction must be 'higher' or 'lower', got {expected_direction!r}"
+        )
 
     lo_a, hi_a = min(base_values), max(base_values)
     lo_b, hi_b = min(variant_values), max(variant_values)
     mean_a = sum(base_values) / len(base_values)
     mean_b = sum(variant_values) / len(variant_values)
     overlap = not (hi_a < lo_b or hi_b < lo_a)
+    non_overlap = not overlap
+    matches_direction = (mean_b > mean_a) if expected_direction == "higher" else (mean_b < mean_a)
     return {
         "mean_base": round(mean_a, 1),
         "mean_variant": round(mean_b, 1),
         "range_base": [lo_a, hi_a],
         "range_variant": [lo_b, hi_b],
         "shift": round(mean_b - mean_a, 1),
-        "separated": not overlap,
+        "separated": non_overlap and matches_direction,
+        "inverted": non_overlap and not matches_direction,
     }
 
 
@@ -227,8 +252,16 @@ def gather(output_dir: Path, *, skip_generate: bool) -> dict[str, Any]:
         return [t["measured"][field] for t in by_name[name]["takes"]]
 
     stats = {
-        "brightness": separation(values("base", "centroid"), values("bright", "centroid")),
-        "bpm": separation(values("base", "bpm"), values("slow", "bpm")),
+        "brightness": separation(
+            values("base", "centroid"),
+            values("bright", "centroid"),
+            expected_direction="higher",
+        ),
+        "bpm": separation(
+            values("base", "bpm"),
+            values("slow", "bpm"),
+            expected_direction="lower",
+        ),
         "noise": {
             "bpm_range": [min(values("base", "bpm")), max(values("base", "bpm"))],
             "centroid_range": [
@@ -376,27 +409,52 @@ def render_html(data: dict[str, Any]) -> str:
 
     bri = stats["brightness"]
     bpm = stats["bpm"]
-    bri_verdict = (
-        f"✓ 分布ごと動いた（平均 {bri['mean_base']:g} → {bri['mean_variant']:g} Hz、"
-        "3 テイクの範囲が重ならない）— このツマミは効く"
-        if bri["separated"]
-        else f"△ 平均は {bri['mean_base']:g} → {bri['mean_variant']:g} Hz と動いたが、"
-        "テイクのばらつきと重なる — 効き目はノイズと区別できない"
-    )
-    bpm_verdict = (
-        f"✓ 分布ごと動いた（平均 {bpm['mean_base']:g} → {bpm['mean_variant']:g}）"
-        if bpm["separated"]
-        else f"✗ 平均 {bpm['mean_base']:g} → {bpm['mean_variant']:g}。テイクのばらつきに"
-        "埋まっている — この機種でこのツマミは（この書き方では）効かない"
-    )
+    if bri["separated"]:
+        bri_verdict = (
+            f"✓ 分布ごと動いた（平均 {bri['mean_base']:g} → {bri['mean_variant']:g} Hz、"
+            "3 テイクの範囲が重ならない）— このツマミは効く"
+        )
+    elif bri["inverted"]:
+        bri_verdict = (
+            f"△ 分布ごと動いたが期待と逆方向（平均 {bri['mean_base']:g} → "
+            f"{bri['mean_variant']:g} Hz、bright 指定なのに明るさの針が下がった）— "
+            "inverted。分離はあるが向きが逆で、そのままでは使えない"
+        )
+    else:
+        bri_verdict = (
+            f"△ 平均は {bri['mean_base']:g} → {bri['mean_variant']:g} Hz と動いたが、"
+            "テイクのばらつきと重なる — 効き目はノイズと区別できない"
+        )
+    if bpm["separated"]:
+        bpm_verdict = f"✓ 分布ごと動いた（平均 {bpm['mean_base']:g} → {bpm['mean_variant']:g}）"
+    elif bpm["inverted"]:
+        bpm_verdict = (
+            f"△ 分布ごと動いたが期待と逆方向（平均 {bpm['mean_base']:g} → "
+            f"{bpm['mean_variant']:g}、bpm 80 指定なのにテンポが上がった）— "
+            "inverted。分離はあるが向きが逆で、そのままでは使えない"
+        )
+    else:
+        bpm_verdict = (
+            f"✗ 平均 {bpm['mean_base']:g} → {bpm['mean_variant']:g}。テイクのばらつきに"
+            "埋まっている — この機種でこのツマミは（この書き方では）効かない"
+        )
 
-    # 結論文も verdict と同じく separated の真偽から機械的に組み立てる
+    # 結論文も verdict と同じく separated/inverted の状態から機械的に組み立てる
     # （固定文だと実測と矛盾し得るため、bri/bpm の分離判定に従わせる）。
-    bri_word = "効く" if bri["separated"] else "効かない"
-    bpm_word = "効く" if bpm["separated"] else "効かない"
+    def _word(stat: dict[str, Any]) -> str:
+        if stat["separated"]:
+            return "効く"
+        if stat["inverted"]:
+            return "逆方向"
+        return "効かない"
+
+    bri_word = _word(bri)
+    bpm_word = _word(bpm)
     summary_line = f"brightness は{bri_word}、bpm は{bpm_word}"
 
-    # CSS クラスも文言と同じ separated 判定から導出する（視覚と文言の不一致防止）。
+    # CSS クラスも文言と同じ判定から導出する（視覚と文言の不一致防止）。
+    # inverted は「効く」の緑ではないが「効かない」の警告とも異なるため、
+    # 既存の警告色（verdict-bad）を流用して区別を促す。
     bri_verdict_class = "verdict-ok" if bri["separated"] else "verdict-bad"
     bpm_verdict_class = "verdict-ok" if bpm["separated"] else "verdict-bad"
 
@@ -609,7 +667,8 @@ def main() -> int:
         stat = payload["stats"][name]
         print(
             f"{name}: mean {stat['mean_base']} -> {stat['mean_variant']} "
-            f"(shift {stat['shift']}, separated={stat['separated']})"
+            f"(shift {stat['shift']}, separated={stat['separated']}, "
+            f"inverted={stat['inverted']})"
         )
     print(f"artifacts written to {args.output_dir}")
     return 0

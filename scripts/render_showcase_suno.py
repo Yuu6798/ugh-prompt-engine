@@ -243,13 +243,39 @@ def render_html(data: dict[str, Any]) -> str:
 
     dark_centroid = dark["measured"]["centroid"]
     dark_in_band = dark_centroid <= DARK_BAND_HZ
-    prophecy = (
-        f"今回の dark 指定は {dark_centroid:g} Hz — 帯の外です。取説の予言どおり、"
-        "Suno は「dark 風に明るい」音を返しました。"
-        if not dark_in_band
-        else f"今回の dark 指定は {dark_centroid:g} Hz で帯に入りました — 既知実績"
-        "（0/4）を上回る挙動で、取説の更新候補です。"
-    )
+    # 見出し・callout 文言はどちらも同じ dark_in_band から導出する
+    # （的中/反例=更新候補の固定文が実測と食い違わないようにする）。
+    if not dark_in_band:
+        prophecy_heading = "取説の予言、的中。"
+        prophecy = (
+            f"今回の dark 指定は {dark_centroid:g} Hz — 帯の外です。取説の予言どおり、"
+            "Suno は「dark 風に明るい」音を返しました。"
+        )
+    else:
+        prophecy_heading = "取説の予言、反証——更新候補。"
+        prophecy = (
+            f"今回の dark 指定は {dark_centroid:g} Hz で帯に入りました — 既知実績"
+            "（0/4）を上回る挙動で、取説の更新候補です。"
+        )
+
+    # 半折り注記も両 BPM トラックの実測フラグから組み立てる
+    # （片方でも bpm_octave_ambiguous なら固定文「警告なし」と矛盾するため）。
+    halving_flagged = [
+        label
+        for label, track in (("低テンポ指定", bpm_low), ("高テンポ指定", bpm_high))
+        if track["measured"]["bpm_octave_ambiguous"]
+    ]
+    if not halving_flagged:
+        halving_note = (
+            "高速側で起きがちな「半折り」（テンポを半分に読み違える計器側の持病）の"
+            "警告も出ていません。"
+        )
+    else:
+        halving_note = (
+            "高速側で起きがちな「半折り」（テンポを半分に読み違える計器側の持病）の"
+            f"警告が{'・'.join(halving_flagged)}で出ています — 半折り疑いとして"
+            "再確認が必要です。"
+        )
 
     template = Template(_PAGE_TEMPLATE)
     return template.substitute(
@@ -263,7 +289,9 @@ def render_html(data: dict[str, Any]) -> str:
         bpm_high_val=f"{bpm_high['measured']['bpm']:g}",
         dark_val=f"{dark_centroid:g}",
         bright_val=f"{bright['measured']['centroid']:g}",
+        prophecy_heading=_esc(prophecy_heading),
         prophecy=_esc(prophecy),
+        halving_note=_esc(halving_note),
     )
 
 
@@ -362,8 +390,7 @@ audio{width:100%;margin:0 0 4px}
   <h2>テンポの注文は、実用機の針に届く</h2>
   <p class="sub">低テンポ指定と高テンポ指定で生成された 2 曲。耳でも明確に違い、
   計器の読みは $bpm_low_val BPM と $bpm_high_val BPM に割れました。
-  高速側で起きがちな「半折り」（テンポを半分に読み違える計器側の持病）の
-  警告も出ていません。</p>
+  $halving_note</p>
   <div class="card">
     $bpm_low_card
     $bpm_high_card
@@ -391,7 +418,7 @@ audio{width:100%;margin:0 0 4px}
     $centroid_strip
     <div class="verdict verdict-ok">✓ 方向どおりに動いた（$dark_val → $bright_val Hz）</div>
   </div>
-  <div class="callout"><b>取説の予言、的中。</b> このリポジトリの Suno 取扱説明書
+  <div class="callout"><b>$prophecy_heading</b> このリポジトリの Suno 取扱説明書
   （device_profiles/suno.yaml・過去実測 0/4）には「Suno は dark 指定で絶対 dark 帯
   （centroid ≤1200 Hz）に到達した実績なし」と記録されており、楽譜のコンパイル時には
   機種メモとして事前警告されます。$prophecy ちなみに前ページの MusicGen は
