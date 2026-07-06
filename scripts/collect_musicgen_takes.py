@@ -30,6 +30,10 @@ plan.yaml スキーマ:
         expected_sign: 1
         prompt_low: "..."
         prompt_high: "..."
+        # kind は optional（既定 "effect_size"）。"categorical" にすると fixture の
+        # knob spec へ透過され、measure_grip.py が一致率（match_rate）経路で解析する
+        # （K1 key 前例。一致率経路では expected_sign は未使用 — 中立の 0 を推奨）。
+        kind: categorical
 
 Usage:
     # 1) 生成（手動・torch 必須。実推論なので毎回時間がかかる）
@@ -133,6 +137,7 @@ class KnobPlan(BaseModel):
     expected_sign: int
     prompt_low: str
     prompt_high: str
+    kind: str = "effect_size"
 
 
 class GenerationPlan(BaseModel):
@@ -426,16 +431,18 @@ def extract_fixture(manifest: dict[str, Any], *, audio_dir: Path) -> dict[str, A
     from svp_rpe.rpe.extractor import extract_physical_from_file
 
     plan_raw = dict(manifest["plan"])
-    knob_specs = [
-        {
+    knob_specs = []
+    for knob in plan_raw["knobs"]:
+        spec = {
             "name": knob["name"],
             "sensor": knob["sensor"],
             "low_level": knob["low_level"],
             "high_level": knob["high_level"],
             "expected_sign": knob["expected_sign"],
         }
-        for knob in plan_raw["knobs"]
-    ]
+        if "kind" in knob:
+            spec["kind"] = knob["kind"]
+        knob_specs.append(spec)
 
     samples: list[dict[str, Any]] = []
     for take in manifest["samples"]:
@@ -466,6 +473,9 @@ def extract_fixture(manifest: dict[str, Any], *, audio_dir: Path) -> dict[str, A
                     "spectral_profile": {"brightness": physical.spectral_profile.brightness},
                     "active_rate": physical.active_rate,
                     "valley_depth": physical.valley_depth,
+                    "onset_density": physical.onset_density,
+                    "time_signature": physical.time_signature,
+                    "time_signature_confidence": physical.time_signature_confidence,
                 },
             }
         )

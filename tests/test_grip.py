@@ -7,7 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from scripts.measure_grip import _key_match_score, analyze_fixture, load_fixture, main
+from scripts.measure_grip import (
+    _exact_match_score,
+    _key_match_score,
+    analyze_fixture,
+    load_fixture,
+    main,
+)
 from svp_rpe.control import (
     GRIP_SATURATED,
     classify_grip,
@@ -113,6 +119,101 @@ def test_key_match_score_known_relations() -> None:
     assert _key_match_score("C major", "F# minor") == 0.0
 
 
+def test_exact_match_score_is_literal_and_normalized() -> None:
+    """非 key categorical センサー用の汎用一致スコア: casefold + 空白正規化の完全一致のみ。"""
+    assert _exact_match_score("4/4", "4/4") == 1.0
+    assert _exact_match_score("4/4", "3/4") == 0.0
+    assert _exact_match_score("3/4", " 3/4 ") == 1.0
+    assert _exact_match_score("C Major", "c  major") == 1.0
+    # key ファジーマッチなら部分点 0.3 が付く近縁調も、汎用スコアでは文字列不一致 = 0.0
+    assert _key_match_score("C major", "A minor") == pytest.approx(0.3)
+    assert _exact_match_score("C major", "A minor") == 0.0
+
+
+def test_categorical_non_key_sensor_uses_exact_match_not_key_fuzzy() -> None:
+    """sensor != "key" の categorical ノブは mir_eval key 経路を通らず完全一致率で採点。
+
+    K2-seg time_signature ノブの経路: "4/4"/"3/4" を `_key_match_score` に流すと
+    音楽 key として解釈されて意味を持たない。observed に「key として読めば部分点が
+    付く」文字列（A minor vs C major = 0.3）を混ぜ、exact match の 0.0 として
+    数えられることまで確認する。
+    """
+    fixture = {
+        "fixture_id": "categorical_dispatch_probe",
+        "repetitions": 2,
+        "knobs": [
+            {
+                "name": "time_signature",
+                "sensor": "time_signature",
+                "kind": "categorical",
+                "low_level": "4/4",
+                "high_level": "3/4",
+                "expected_sign": 0,
+            }
+        ],
+        "samples": [
+            {
+                "knob": "time_signature",
+                "level": "4/4",
+                "features": {"time_signature": "4/4"},
+            },
+            {
+                "knob": "time_signature",
+                "level": "4/4",
+                "features": {"time_signature": "3/4"},
+            },
+            {
+                "knob": "time_signature",
+                "level": "3/4",
+                "features": {"time_signature": "3/4"},
+            },
+            {
+                "knob": "time_signature",
+                "level": "3/4",
+                "features": {"time_signature": "4/4"},
+            },
+        ],
+    }
+
+    report = analyze_fixture(fixture)
+
+    assert len(report["results"]) == 1
+    result = report["results"][0]
+    assert result["kind"] == "categorical"
+    assert result["low_values"] == [1.0, 0.0]
+    assert result["high_values"] == [1.0, 0.0]
+    assert result["low_mean"] == 0.5
+    assert result["high_mean"] == 0.5
+    assert result["grip"] == 0.5
+    assert result["classification"] == "loose"
+
+    # key として読めば部分点 0.3 の近縁調（C major vs A minor）が、非 key センサー
+    # では 0.0 になる = mir_eval key ファジーが混入していないことの直接証明
+    fuzzy_probe = {
+        "fixture_id": "categorical_dispatch_probe_2",
+        "repetitions": 1,
+        "knobs": [
+            {
+                "name": "mode_label",
+                "sensor": "mode_label",
+                "kind": "categorical",
+                "low_level": "C major",
+                "high_level": "A minor",
+                "expected_sign": 0,
+            }
+        ],
+        "samples": [
+            {"knob": "mode_label", "level": "C major", "features": {"mode_label": "A minor"}},
+            {"knob": "mode_label", "level": "A minor", "features": {"mode_label": "A minor"}},
+        ],
+    }
+    fuzzy_report = analyze_fixture(fuzzy_probe)
+    fuzzy_result = fuzzy_report["results"][0]
+    assert fuzzy_result["low_values"] == [0.0]  # key ファジーなら 0.3 になるところ
+    assert fuzzy_result["high_values"] == [1.0]
+    assert fuzzy_result["grip"] == 0.5
+
+
 def test_k1_fixture_snapshot_spans_tight_and_dead() -> None:
     """K1 代表マップ: 決定論的演奏者に対する 5 ツマミ + 補助センサーの grip 固定。"""
     report = analyze_fixture(load_fixture(K1_FIXTURE_PATH))
@@ -175,3 +276,29 @@ def test_k2_musicgen_fixture_snapshot_brightness_tight_bpm_loose() -> None:
     assert by_knob["bpm"]["classification"] == "loose"
     assert by_knob["brightness"]["classification"] == "tight"
     assert by_knob["brightness"]["grip"] > 2.0
+
+
+K2_MUSICGEN_SEGMENTS_FIXTURE_PATH = Path("examples/control/k2_musicgen_segments/fixture.json")
+K2_MUSICGEN_SEGMENTS_EXPECTED_PATH = Path("examples/control/k2_musicgen_segments/expected_grip.json")
+
+
+def test_k2_seg_musicgen_segments_fixture_snapshot() -> None:
+    """K2-seg（2026-07-05）: compose が送出する未計測プロンプト欄 5 本
+    （active rate / valley depth / Avoid / semantic.core / time signature）の
+    fixture→grip 決定論スナップショット。tight 0 / loose 2 / dead 3
+    （docs/musicgen_backend.md §7.6・config/device_profiles/musicgen.yaml 実測欄）。
+    """
+    report = analyze_fixture(load_fixture(K2_MUSICGEN_SEGMENTS_FIXTURE_PATH))
+    expected = json.loads(K2_MUSICGEN_SEGMENTS_EXPECTED_PATH.read_text(encoding="utf-8"))
+
+    assert report == expected
+    by_knob = {result["knob"]: result for result in report["results"]}
+    assert by_knob["active_rate_target"]["classification"] == "loose"
+    assert by_knob["valley_depth_target"]["classification"] == "dead"
+    # semantic_avoid: expected_sign=-1（Avoid が効くなら centroid 低下）だが実測は
+    # d=+1.10（符号逆・意図と逆方向の attractor）で dead。
+    assert by_knob["semantic_avoid"]["classification"] == "dead"
+    assert by_knob["semantic_avoid"]["grip"] > 0
+    assert by_knob["semantic_core"]["classification"] == "dead"
+    assert by_knob["time_signature"]["kind"] == "categorical"
+    assert report["summary"] == {"tight": 0, "loose": 2, "dead": 3}

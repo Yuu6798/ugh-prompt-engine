@@ -1,0 +1,181 @@
+# CLAP 第二センサー — K2-seg semantic_core ノブ (16 takes) への valence 軸適用 manifest
+#
+# 実音源は repo 外（DD-A: 音源非コミット）。同一環境なら決定論再生成できる:
+#   1. mkdir -p examples/roundtrip/cache/k2-musicgen-segments/
+#   2. python scripts/collect_musicgen_takes.py generate \
+#        --plan examples/control/k2_musicgen_segments/plan.yaml \
+#        --output-dir examples/roundtrip/cache/k2-musicgen-segments \
+#        --manifest-out /tmp/k2_musicgen_segments_takes_manifest.json
+#      （musicgen extra + HF アクセス必須。revision は plan が pin）
+#   3. scripts/collect_clap_fixture.py が manifest の audio_sha256 pin を自動照合し、
+#      バイト列不一致は fail-fast する
+#
+# audio_sha256 は examples/control/k2_musicgen_segments/fixture.json と同一の pin。
+# prompts は config/semantic_probe_axes.yaml (v1.1) の valence 軸 probe をそのまま使用
+# （§7.5 musicgen_k2_contrast_manifest.yaml の前例踏襲）。
+- sample_id: semantic_core_low_00
+  audio_path: ../../roundtrip/cache/k2-musicgen-segments/semantic_core_low_00.wav
+  audio_sha256: ca624ea5e42b67817bc055c41137441b2ea08b20ca289bb61116c64e747c57e7
+  prompts: &id001
+    positive:
+    - a happy uplifting cheerful song
+    - joyful positive feel-good music
+    negative:
+    - a sad melancholic sorrowful song
+    - gloomy depressing mournful music
+  prompt_groups: *id001
+  condition:
+    knob: semantic_core
+    level: calm
+    seed: 1300
+    axis: valence
+- sample_id: semantic_core_low_01
+  audio_path: ../../roundtrip/cache/k2-musicgen-segments/semantic_core_low_01.wav
+  audio_sha256: 42930258713ed12f2e29e3955c271a412d1f4eea5c609036bafbd5a3246ab696
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: semantic_core
+    level: calm
+    seed: 1301
+    axis: valence
+- sample_id: semantic_core_low_02
+  audio_path: ../../roundtrip/cache/k2-musicgen-segments/semantic_core_low_02.wav
+  audio_sha256: eb233a20923e1a63393367fa29405ed325abbd26937c3adac7a41f37c4958c0d
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: semantic_core
+    level: calm
+    seed: 1302
+    axis: valence
+- sample_id: semantic_core_low_03
+  audio_path: ../../roundtrip/cache/k2-musicgen-segments/semantic_core_low_03.wav
+  audio_sha256: d625464fa6f927b7f83b8f6832b63855969372498c780cc8e5e935e690f32136
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: semantic_core
+    level: calm
+    seed: 1303
+    axis: valence
+- sample_id: semantic_core_low_04
+  audio_path: ../../roundtrip/cache/k2-musicgen-segments/semantic_core_low_04.wav
+  audio_sha256: 458f66e2fd209b427c5666e24352a5591f2f13b1a0b156e7cf8e2a013909429b
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: semantic_core
+    level: calm
+    seed: 1304
+    axis: valence
+- sample_id: semantic_core_low_05
+  audio_path: ../../roundtrip/cache/k2-musicgen-segments/semantic_core_low_05.wav
+  audio_sha256: 95cd104862f9dbebe124c07636dbac4b11ca043c1a14f187e1a9ad8d2a33a918
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: semantic_core
+    level: calm
+    seed: 1305
+    axis: valence
+- sample_id: semantic_core_low_06
+  audio_path: ../../roundtrip/cache/k2-musicgen-segments/semantic_core_low_06.wav
+  audio_sha256: a1ff77580826aaab3659b44157129ded1f2cddf1c230717a2cbfea7914567a63
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: semantic_core
+    level: calm
+    seed: 1306
+    axis: valence
+- sample_id: semantic_core_low_07
+  audio_path: ../../roundtrip/cache/k2-musicgen-segments/semantic_core_low_07.wav
+  audio_sha256: e4cddbc63118dbddee4bd3d4d4410bf8fb594b1c43327e31498c4c39607d78ca
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: semantic_core
+    level: calm
+    seed: 1307
+    axis: valence
+- sample_id: semantic_core_high_00
+  audio_path: ../../roundtrip/cache/k2-musicgen-segments/semantic_core_high_00.wav
+  audio_sha256: a1062692dd7105b18dfc3b1825f5f64fdd361cc9bab067b26093ba184d803944
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: semantic_core
+    level: euphoric
+    seed: 1350
+    axis: valence
+- sample_id: semantic_core_high_01
+  audio_path: ../../roundtrip/cache/k2-musicgen-segments/semantic_core_high_01.wav
+  audio_sha256: 673f8e7aeb95bb7de872f21264360207ba46c175f15fa6d2b369bebcd5e60e8b
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: semantic_core
+    level: euphoric
+    seed: 1351
+    axis: valence
+- sample_id: semantic_core_high_02
+  audio_path: ../../roundtrip/cache/k2-musicgen-segments/semantic_core_high_02.wav
+  audio_sha256: 24122d3ccedace80b054739ad1ddd9639df4d477977815a9807ac70968437fe7
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: semantic_core
+    level: euphoric
+    seed: 1352
+    axis: valence
+- sample_id: semantic_core_high_03
+  audio_path: ../../roundtrip/cache/k2-musicgen-segments/semantic_core_high_03.wav
+  audio_sha256: 39407a9f19772103779592d0a0f7bf5c1e94e878b9f1008eeff7f7e3b354f82b
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: semantic_core
+    level: euphoric
+    seed: 1353
+    axis: valence
+- sample_id: semantic_core_high_04
+  audio_path: ../../roundtrip/cache/k2-musicgen-segments/semantic_core_high_04.wav
+  audio_sha256: bc60304068b8c2850dd1d49c2feee29985dfc66f70ee99546bc51ea926e9626b
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: semantic_core
+    level: euphoric
+    seed: 1354
+    axis: valence
+- sample_id: semantic_core_high_05
+  audio_path: ../../roundtrip/cache/k2-musicgen-segments/semantic_core_high_05.wav
+  audio_sha256: d77d313c5c08db10768c18b814c501a4936c61ffe90fe64975de30e82c9ec5e4
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: semantic_core
+    level: euphoric
+    seed: 1355
+    axis: valence
+- sample_id: semantic_core_high_06
+  audio_path: ../../roundtrip/cache/k2-musicgen-segments/semantic_core_high_06.wav
+  audio_sha256: 50b1db15bf6c42b86aaf6ae4b467e89a680e6550de9bcb7dff324d6c83af04c1
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: semantic_core
+    level: euphoric
+    seed: 1356
+    axis: valence
+- sample_id: semantic_core_high_07
+  audio_path: ../../roundtrip/cache/k2-musicgen-segments/semantic_core_high_07.wav
+  audio_sha256: 968179cd4ec564e34cf23ffd8eb17621459a9edf1f192d472f240de934c185f0
+  prompts: *id001
+  prompt_groups: *id001
+  condition:
+    knob: semantic_core
+    level: euphoric
+    seed: 1357
+    axis: valence

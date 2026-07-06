@@ -1,7 +1,10 @@
 # Learned Audio Annotation Layer Policy
 
-Status: 実装済み — 4 adapter 採用（`beat_this` / `panns_inference` / `basic-pitch` /
-`laion-clap` CLAP）。CLAP は PR2b-1（隔離配線）→ PR2b-2（実推論・実 fixture 採取）まで closeout 済み
+Status: 実装済み — 5 adapter 採用（`beat_this` / `panns_inference` / `basic-pitch` /
+`laion-clap` CLAP / `faster-whisper`）。CLAP は PR2b-1（隔離配線）→ PR2b-2（実推論・実
+fixture 採取）まで closeout 済み。`faster-whisper` は配線 + 実推論スモーク済み
+（スピーチ/器楽・フルミックス経路のみ。vocals 分離込み実 E2E と歌入り実音源は
+実音源律速、`docs/lyrics_transcription_sensor.md` §8）
 Scope: audio annotation models considered for `svp_rpe`
 Audience: contributors adding learned-model backends
 
@@ -86,7 +89,11 @@ provenance hints from a learned model live in `LearnedAudioLabel.notes`.
   cosine 適合度（学習版 grip）を計測する。`SemanticRPE` のルール版意味付けと
   相互検証するためのものであり、置き換えない。`LearnedAudioAnnotations.
   embedding` を初めて populate するアダプタ（`panns_inference` は embedding
-  を受け取るが破棄している — `panns_adapter.py` 参照）。
+  を受け取るが破棄している — `panns_adapter.py` 参照）。`svprpe extract
+  --clap-semantic` から `rpe/learned/semantic_axes.py` 経由で SOURCE 音声を
+  抽出段階で読み、固定の意味軸バッテリー（`config/semantic_probe_axes.yaml`）
+  に対する `LearnedAudioAnnotations.semantic_axes` を populate する
+  （詳細は [`docs/semantic_sensor_clap.md`](semantic_sensor_clap.md)）。
 - License（verbatim findings, verified 2026-07-02）:
   - code: PyPI 配布物のメタデータに内部矛盾あり。
     `https://pypi.org/pypi/laion-clap/json` の `info.license` フィールドは
@@ -120,6 +127,48 @@ provenance hints from a learned model live in `LearnedAudioLabel.notes`.
     例: `python scripts/collect_clap_fixture.py --checkpoint
     music_audioset_epoch_15_esc_90.14.pt --amodel HTSAT-base --manifest
     manifest.yaml --output fixture.json`。PR2b-2 の実行手順の一部。
+
+#### `faster-whisper` (SYSTRAN)
+
+- Use case: 歌詞の記号列内容を読む相補的な意味層センサー — CLAP が読む
+  連続値 grip（`vocal_presence` 等）に対し、こちらは順序付き歌詞テキストを
+  読む。`svprpe extract --lyrics` から `rpe/learned/lyrics_adapter.py` 経由で
+  既存の Demucs vocals stem を転写し、`LearnedAudioAnnotations.
+  lyrics_transcription` を populate する。出力側の検収計器
+  （`svprpe lyrics-adherence`）は `eval/lyrics_match.py`（learned import なし）
+  が担う。詳細は [`docs/lyrics_transcription_sensor.md`](lyrics_transcription_sensor.md)。
+- License:
+  - code: faster-whisper / ctranslate2 は MIT（`pip show` で確認済み、
+    verified 2026-07-05）。
+  - weights: `Systran/faster-whisper-small`（Hugging Face）— license: MIT
+    （HF リポジトリの license バッジ "mit" を実確認、verified 2026-07-05。
+    `openai/whisper-small`（MIT）の CTranslate2 変換で上流も MIT）。
+    provenance 記録のスコープ（`lyrics_adapter._resolve_weights_identifier`
+    の 3 段解決）: ① `/` を含む repo id / ローカルパスは **verbatim 記録**
+    （マッピング不参照）→ ② インストール済み `faster_whisper.utils._MODELS`
+    （private API を防御的に参照・形状検証つき）で shorthand を実ダウンロード
+    先 repo に解決（`turbo` / `distil-*` 等は Systran 外 repo）→ ③ 静的
+    `Systran/faster-whisper-{size}` 規約にフォールバック。未解決の repo 名は
+    捏造しない。ライセンス文言は**解決後の repo** から導出: 個別検証済みは
+    small のみ、他の Systran repo はファミリーバッジ下の未検証メンバー、
+    それ以外（Systran 外 / verbatim）は「ライセンス未確認・採取時に実確認」
+    でライセンス主張なし。解決経路（verbatim / upstream mapping / static）も
+    note に記録する。
+- Constraints:
+  - 重み（CTranslate2 変換済みモデル）は optional extra `lyrics` に限定する。
+    デフォルトインストールは変えない。`lyrics` extra は demucs を同梱する —
+    デフォルト経路が vocals 分離込みのため、`pip install -e ".[lyrics]"`
+    だけで分離込みのデフォルト経路が単独で立つことが契約
+    （`semantic-embed` が torch を明示同梱するのと同じ精神）。
+  - デフォルトで Demucs vocals stem 分離を先に行う（`--lyrics-no-separate`
+    でフルミックス直接転写に切り替え可能 — demucs 不要のランタイム
+    opt-out）— フルミックスでの歌詞認識は精度が大幅に落ちるため。
+  - 決定論は `temperature=0.0` + `condition_on_previous_text=False` による
+    同一マシン契約（CLAP と同じ位置付け。CTranslate2 のカーネル選択は
+    ハードウェア/ビルド依存でクロスマシンのビット完全性は保証しない）。
+  - `LearnedLyricsTranscription` は `SemanticRPE` / `PhysicalRPE` /
+    `SVPForGeneration.style_tags` に一切書き込まれない
+    （`LearnedAudioAnnotations.lyrics_transcription` に隔離）。
 
 ### 3.2 Reject
 
@@ -183,6 +232,7 @@ extras:
 | `learned-tags`   | `panns_inference`   |
 | `pitch`          | `basic-pitch`       |
 | `semantic-embed` | `laion-clap`        |
+| `lyrics`         | `faster-whisper` + `demucs` (デフォルト経路が vocals 分離込みのため) |
 
 The default install MUST remain green without any of these extras. Each
 backend module performs a guarded import and falls back gracefully (or
@@ -223,13 +273,32 @@ class LearnedEmbedding(BaseModel):
     dimensions: int  # validated to equal len(vector)
 
 
+class LearnedSemanticAxis(BaseModel):
+    axis: str
+    contrast_fit: float  # signed A/B contrast, read as grip — not a [0,1] confidence
+    positive_probes: list[str] = Field(default_factory=list)
+    negative_probes: list[str] = Field(default_factory=list)
+    source_model: str
+
+
+class LearnedSemanticSection(BaseModel):
+    # per-section counterpart to LearnedSemanticAxis (the "emotional arc")
+    section: str
+    start_sec: float
+    end_sec: float
+    axes: list[LearnedSemanticAxis]
+
+
 class LearnedAudioAnnotations(BaseModel):
-    schema_version: str = "1.0"
+    schema_version: str = "1.2"
     enabled_models: list[LearnedModelInfo] = Field(default_factory=list)
     labels: list[LearnedAudioLabel] = Field(default_factory=list)
     embedding: LearnedEmbedding | None = None
+    semantic_axes: list[LearnedSemanticAxis] = Field(default_factory=list)
+    semantic_axis_sections: list[LearnedSemanticSection] = Field(default_factory=list)
     time_events: list[LearnedTimeEvent] = Field(default_factory=list)  # beat/downbeat 等
     note_events: list[LearnedNoteEvent] = Field(default_factory=list)  # pitch/onset 等
+    lyrics_transcription: LearnedLyricsTranscription | None = None  # 歌詞転写センサー出力
     inference_config: dict[str, Any] = Field(default_factory=dict)
     license_metadata: dict[str, str] = Field(default_factory=dict)
     estimation_disclaimer: str = (
@@ -242,6 +311,13 @@ class RPEBundle(BaseModel):
     ...
     learned_annotations: LearnedAudioAnnotations | None = None
 ```
+
+`schema_version` is now `"1.2"` (bumped from `"1.1"` when
+`lyrics_transcription` was added — see
+[`docs/lyrics_transcription_sensor.md`](lyrics_transcription_sensor.md) —
+which itself bumped from `"1.0"` when `semantic_axes` was added, see
+[`docs/semantic_sensor_clap.md`](semantic_sensor_clap.md)). Each bump is a
+default-`None`/empty field addition, so older payloads still validate.
 
 Required metadata on every learned-annotation payload:
 
@@ -336,6 +412,12 @@ and reviewable:
    actually-fetched weights, real-audio fixture collection via
    `scripts/collect_clap_fixture.py`, and a cross-validation experiment
    against the rule-based `SemanticRPE` layer.
+10. **PR-lyrics — faster-whisper symbolic lyrics-content sensor.** Optional
+    extra `lyrics`, `lyrics_adapter.py` (`transcribe_lyrics`, isolated in
+    `LearnedAudioAnnotations.lyrics_transcription`), `eval/lyrics_match.py`
+    output-side instrument (`svprpe lyrics-adherence`, no learned imports).
+    Fake-backend tests only; real inference / real-audio fixtures pending
+    (see `docs/lyrics_transcription_sensor.md` §7).
 
 ## 10. Acceptance Criteria
 

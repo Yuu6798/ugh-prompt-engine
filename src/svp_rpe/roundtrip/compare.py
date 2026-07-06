@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from typing import Any, Sequence
 
-from svp_rpe.perform import parse_key
+from svp_rpe.keys import keys_enharmonically_equal
 from svp_rpe.sentinels import is_todo_sentinel
 
 BPM_MATCH_TOLERANCE = 5.0
@@ -140,28 +140,7 @@ def number(value: Any) -> float | None:
 def keys_match(expected_value: Any, observed_value: Any) -> bool:
     """Compare key labels with enharmonic parsing when possible."""
 
-    expected_key = parse_key_label(expected_value)
-    observed_key = parse_key_label(observed_value)
-    if expected_key is not None and observed_key is not None:
-        return expected_key == observed_key
-    return normalize_label(expected_value) == normalize_label(observed_value)
-
-
-def parse_key_label(value: Any) -> tuple[int, str] | None:
-    """Parse a key label using the deterministic performer key parser."""
-
-    if not isinstance(value, str):
-        return None
-    normalized = (
-        value.strip()
-        .replace("\u266f", "#")
-        .replace("\uff03", "#")
-        .replace("\u266d", "b")
-    )
-    try:
-        return parse_key(normalized)
-    except ValueError:
-        return None
+    return keys_enharmonically_equal(expected_value, observed_value)
 
 
 def normalize_label(value: Any) -> str:

@@ -34,12 +34,29 @@ API キー不要、LLM 不要、同一入力 → 同一出力の完全決定論�
 
 ## Advisor Strategy（モデル運用方針）
 
-**2026-07-02 改訂**（Fable 5 主導体制、#125–#132 で実運用実証済み）:
+**2026-07-05 改訂**（Fable=設計専任化。高価な Fable を設計判断に最大集中させる措置）:
 
-- **メインエージェント**: Fable 5（設計判定・Design Memo 起草・PR レビュー / 再レビュー・
-  結果解釈・メモリ管理）。Fable 非稼働セッションでは Opus が代行
+開発フローは **2 本柱**: Claude→Codex ルート（Workflow 節）と **Claude 完結ルート**
+（Codex 非経由で in-session 完走）。Claude 完結実装の本ルートは
+**「Fable 設計 → Opus/Sonnet 実装・実行・検証 → Fable 判定」**。
+
+- **メインエージェント**: Fable 5 — **設計・設計判断のみ**（Design Memo 起草、
+  レビュー指摘の採否判定と対応方針の設計、結果解釈・数値判読、メモリ管理）。
+  **実装・実行・検証など実際に手を動かす作業はサブエージェントに委譲し、
+  Fable 自身は行わない**。Fable 非稼働セッションでは Opus が代行
 - **実装・探索サブエージェント**: Sonnet 固定（実装、探索・読み取り中心の調査タスク）
-- **非設計分析サブエージェント**: Opus（設計判断を伴わないレビュー指摘の分析・トリアージ）
+- **実行・検証・非設計分析サブエージェント**: Opus または Sonnet（実測検証・
+  E2E/スモーク実行、設計判断を伴わないレビュー指摘の分析・トリアージ）
+
+運用細則（委譲固定費の逆ザヤ防止。Web ツール含む全ツールに適用）:
+
+- **マイクロ操作例外**: 単発の状態確認・git 操作・メモリ読み書き・質問など **1–2
+  コールかつ結果ペイロードが軽い操作のみ** Fable 直接可。実装・実行・検証・探索・
+  複数ソース Web 調査に加え、**レビュースレッド取得/返信投稿など結果が重い操作は
+  コール数によらず委譲**（#149 実測: diff_hunk 同梱の戻り値が主燃焼源）
+- **生データ様式**: 検証・計測の委譲時は生データをファイル保存させ Fable が直接
+  Read して判読する（要約経由の判断劣化防止。判読=設計判断で Fable の職務）
+- **事後監査**: wrap-up で「Fable が直接実行した作業」を振り返りに明記（skill 参照）
 
 Agent ツールで spawn する際は必ず `model` を明示すること。
 
@@ -51,9 +68,10 @@ Agent({"model": "sonnet", "subagent_type": "Explore", "prompt": "..."})
 Agent({"subagent_type": "Explore", "prompt": "..."})
 ```
 
-### レビュー対応の振り分けルール（2026-07-02 新設、#131 で初運用）
+### レビュー対応の振り分けルール（2026-07-02 新設、2026-07-05 改訂）
 
-- **マシン非依存**（コード・テスト・docs・fixture メタデータ）= **Fable が直接対応**。
+- **マシン非依存**（コード・テスト・docs・fixture メタデータ）= **Claude 側で対応**
+  （採否判定・方針設計=Fable / 修正の実装・検証=Sonnet/Opus 委譲）。
   `codex/*` ブランチへの push 可、対応内容をレビュースレッドに明記する
 - **マシン依存**（実音源・実重みハッシュ・Suno 生成・G4 ライセンス目視）= **Codex / User**
 - 判断が割れたら Fable が設計判定を先に出して振り分ける
@@ -130,7 +148,7 @@ src/svp_rpe/
 │   ├── structure_novelty.py   # novelty 検出
 │   ├── section_features.py    # セクション粒度特徴
 │   ├── valley.py              # valley 検出 (--valley-method)
-│   └── learned/               # 学習モデルアダプタ (basic_pitch / beat_this / panns)
+│   └── learned/               # 学習モデルアダプタ (basic_pitch / beat_this / panns / lyrics_adapter)
 ├── svp/                       # SVP 生成層
 │   ├── models.py              # SVPBundle, MinimalSVP
 │   ├── generator.py           # RPE → SVP 変換
@@ -146,7 +164,8 @@ src/svp_rpe/
 │   ├── comparison.py          # compare コマンド本体
 │   ├── delta_e_alignment.py   # ΔE 整列
 │   ├── diff_models.py         # diff データ構造
-│   └── semantic_similarity.py # 意味類似度
+│   ├── semantic_similarity.py # 意味類似度
+│   └── lyrics_match.py        # 歌詞転写照合計器 (lyrics-adherence, verdict なし)
 ├── compose/                   # CompositionScore: models/loader/convert/fixity/renderer
 ├── semantic_ci/                # Target SVP → Expected RPE → Diff → Repair SVP
 ├── transcribe/                 # CompositionScore physical field measurement
@@ -208,6 +227,8 @@ examples/                      # sample_input/ + expected_output/
 | [`docs/control_profile.md`](docs/control_profile.md) | PR1/PR1.5 実装: `CompositionScore.control_profile`(生成器→物理フィールド→grip_class の自己記述)スキーマ・検証(未知キー fail-fast だが fixity と違い疎を許容)・K2(#117)由来の Suno 初期データ(bpm/brightness tight)。PR1.5=control_profile-aware compile(backend selector external→suno・フィールド粒度 drop accounting・grip_class 駆動の3ティア優先度で tight 先頭昇格/drop最後・priority エイリアス・backend descriptor 隔離)。PR2=楽譜準拠テスト(`svprpe score-adherence`: tight 宣言フィールドのコンパイル保持+roundtrip 保存をフィールド単位で判定・計器であって verdict なし・path 非依存・CLAP=PR2b は依存律速) |
 | [`docs/lyrics_semantic_anchor.md`](docs/lyrics_semantic_anchor.md) | 2026-07-01 アレンジ・デモ発見: ボーカル/歌詞が key/BPM 読みを揺らす(交絡は実在するが方向不定＝n=1「ボーカル＝主音の錨」を n=2 で棄却・halving も非法則化)。歌詞が付与する「メリハリ(曲らしさ)」は物理 dynamic_range に写らない(むしろ逆)＝歌詞は**意味層**のアンカーで現状は耳が唯一のセンサー。**n=3 追試(07-01 S2/#124)で `dynamic_range`=歌詞アンカー説は棄却**(EDM 限定・Rock で反転かつ再生成ノイズ未満)、`mid_ratio` は最有力だが noise 超えは Rock のみ・EDM は directional(instrumental alt 未取得)＝昇格は n≥2×2 セル要件。BPM grip=確度×精度2軸・調号は grip/進行は非再現。genre pop 帯欠落/低sub EDM 誤判定も付随記録 |
 | [`docs/musicgen_backend.md`](docs/musicgen_backend.md) | MusicGen ローカル生成トラック: PR A(runbook+`musicgen` extra・実推論なし・CI 安全) / PR B(実バッチ→K2 型 fixture+`device_profiles/musicgen.yaml`+R3 初実測) / PR C(R3 ハーネス)。DD-A 決定論契約(fixture→grip のみ CI 対象)、annotation 隔離原則は対象外(生成側)、weights ライセンスは CC-BY-NC-4.0 実確認済(研究計器限定・重み非同梱) |
+| [`docs/semantic_sensor_clap.md`](docs/semantic_sensor_clap.md) | CLAP を抽出段階の意味層センサーとして配線(`svprpe extract --clap-semantic`): SOURCE 音声を固定の意味軸バッテリー(`config/semantic_probe_axes.yaml`)に対し A/B `contrast_fit` で計測、`LearnedAudioAnnotations.semantic_axes`(schema_version 1.1)に隔離、post-hoc fixture 比較(生成物対象)からの拡張として抽出時 SOURCE 音声を読む真の意味層センシングを実現。軸校正(2026-07-04 実推論・`scripts/calibrate_semantic_axes.py`): vocal/energy 実証・brightness は bpm 交絡・acousticness/warmth 探索扱い、有効帯域=実制作音楽 |
+| [`docs/lyrics_transcription_sensor.md`](docs/lyrics_transcription_sensor.md) | 歌詞転写センサー: faster-whisper + 既存 Demucs vocals stem で歌詞を機械化(CLAP の連続値 grip と相補的な記号列センサー)。入力側`svprpe extract --lyrics`→`LearnedAudioAnnotations.lyrics_transcription`(schema_version 1.2)、出力側`svprpe lyrics-adherence`(`eval/lyrics_match.py`, learned import なし・計器であって verdict なし)。fake-backend のみ、実推論は未計測 |
 
 ## ドキュメント管理ポリシー
 

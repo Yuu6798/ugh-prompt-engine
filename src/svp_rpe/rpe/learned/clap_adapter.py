@@ -72,8 +72,10 @@ from svp_rpe.rpe.models import LearnedAudioAnnotations, LearnedEmbedding, Learne
 __all__ = [
     "LearnedModelUnavailable",
     "LearnedModelIncompatible",
+    "ensure_clap_available",
     "load_clap_model",
     "embed_audio_file",
+    "embed_audio_segments",
     "embed_texts",
 ]
 
@@ -121,6 +123,18 @@ def _load_clap_module() -> Any:
         return importlib.import_module(_MODULE_NAME)
     except ImportError as exc:
         raise LearnedModelUnavailable(_INSTALL_HINT) from exc
+
+
+def ensure_clap_available() -> None:
+    """Probe that `laion_clap` is importable, raising `LearnedModelUnavailable`
+    (with the `semantic-embed` install hint) if it is not.
+
+    This only attempts the module import — it does NOT construct a model or
+    load a checkpoint, so it triggers no weight download. Callers use it to
+    fail fast on the missing optional dependency BEFORE spending time on
+    unrelated work (e.g. base RPE extraction / Demucs separation).
+    """
+    _load_clap_module()
 
 
 def _detect_clap_version() -> Optional[str]:
@@ -218,6 +232,33 @@ def _chunk_waveform(waveform: np.ndarray) -> list[np.ndarray]:
     return chunks
 
 
+def _embed_waveform_vector(waveform: np.ndarray, model: Any) -> np.ndarray:
+    """Embed an already-decoded waveform with `model`, mean-pooled and L2-normalized.
+
+    Shared core of `embed_audio_file` / `embed_audio_segments`: splits
+    `waveform` into deterministic CLAP windows via `_chunk_waveform`, embeds
+    every chunk in one `get_audio_embedding_from_data` call, mean-pools the
+    per-chunk rows, and L2-normalizes the result. Callers are responsible
+    for the `hasattr(model, "get_audio_embedding_from_data")` capability
+    check (done once, before any waveform is decoded/sliced) — this helper
+    assumes the method exists.
+
+    Raises
+    ------
+    LearnedModelIncompatible
+        If the audio-embedding call returns an unexpected shape (expected:
+        one row per chunk).
+    """
+    chunks = _chunk_waveform(waveform)
+    raw = model.get_audio_embedding_from_data(x=chunks, use_tensor=False)
+    array = np.asarray(raw, dtype=np.float64)
+    if array.ndim != 2 or array.shape[0] != len(chunks):
+        raise LearnedModelIncompatible(
+            f"expected a ({len(chunks)}, dim) audio embedding, got shape {array.shape}"
+        )
+    return _l2_normalize(array.mean(axis=0))
+
+
 def embed_audio_file(
     path: str,
     model: Optional[Any] = None,
@@ -286,13 +327,7 @@ def embed_audio_file(
         )
     waveform, _ = librosa.load(path, sr=_CLAP_SAMPLE_RATE, mono=True)
     chunks = _chunk_waveform(waveform)
-    raw = clap_module.get_audio_embedding_from_data(x=chunks, use_tensor=False)
-    array = np.asarray(raw, dtype=np.float64)
-    if array.ndim != 2 or array.shape[0] != len(chunks):
-        raise LearnedModelIncompatible(
-            f"expected a ({len(chunks)}, dim) audio embedding, got shape {array.shape}"
-        )
-    vector = _l2_normalize(array.mean(axis=0))
+    vector = _embed_waveform_vector(waveform, clap_module)
 
     return LearnedAudioAnnotations(
         enabled_models=[
@@ -323,6 +358,85 @@ def embed_audio_file(
         },
         license_metadata={_MODULE_NAME: _LICENSE_NOTE},
     )
+
+
+def embed_audio_segments(
+    path: str,
+    segments: list[tuple[float, float]],
+    *,
+    model: Optional[Any] = None,
+    checkpoint: Optional[str] = None,
+    amodel: Optional[str] = None,
+) -> list[list[float]]:
+    """Embed time-bounded slices of `path` with CLAP, one vector per segment.
+
+    The section-level counterpart to `embed_audio_file`, feeding
+    `rpe/learned/semantic_axes.py`'s section sensor (the "emotional arc":
+    `svprpe extract --clap-sections`). Decodes `path` ONCE via
+    `librosa.load(path, sr=48000, mono=True)`, then for each
+    `(start_sec, end_sec)` in `segments` slices the shared waveform and
+    embeds it through `_embed_waveform_vector` — the same chunking /
+    mean-pool / L2-normalize contract as `embed_audio_file`, so a segment
+    spanning the whole track reproduces the exact same vector.
+
+    Determinism: no RNG is introduced anywhere in this path — a single
+    `librosa.load` decode, fixed arithmetic slicing, and the same
+    deterministic chunking as `embed_audio_file` (see its docstring's
+    determinism-by-construction note). Re-running with the same `path` and
+    `segments` always yields the same vectors, in the same order.
+
+    Parameters
+    ----------
+    path
+        Path to a local audio file, decoded via `librosa.load`.
+    segments
+        `(start_sec, end_sec)` tuples, in the order to embed. A degenerate
+        slice (`end_sec <= start_sec`, or bounds entirely outside the
+        track) falls back to a 1-sample slice so `_chunk_waveform` still
+        yields a lone chunk — this never raises on a malformed section
+        boundary.
+    model
+        A model already returned by `load_clap_model`. If omitted, a
+        fresh model is loaded via `load_clap_model(checkpoint, amodel)` —
+        callers processing many segments from the same file should load
+        once and pass `model` to avoid reloading the checkpoint per call.
+    checkpoint
+        Forwarded to `load_clap_model` when `model` is not supplied.
+    amodel
+        Forwarded to `load_clap_model` when `model` is not supplied.
+
+    Raises
+    ------
+    LearnedModelUnavailable
+        If `laion_clap` is not installed.
+    LearnedModelIncompatible
+        If `laion_clap` is installed but its audio-embedding method is
+        missing or returns an unexpected shape (expected: one row per
+        chunk, per segment).
+    """
+    clap_module = model if model is not None else load_clap_model(checkpoint, amodel)
+    if not hasattr(clap_module, "get_audio_embedding_from_data"):
+        raise LearnedModelIncompatible(
+            "laion_clap model has no get_audio_embedding_from_data method; "
+            "incompatible upstream version"
+        )
+    waveform, sr = librosa.load(path, sr=_CLAP_SAMPLE_RATE, mono=True)
+    total_samples = waveform.shape[0]
+
+    vectors: list[list[float]] = []
+    for start_sec, end_sec in segments:
+        start_idx = max(0, round(start_sec * sr))
+        end_idx = min(total_samples, round(end_sec * sr))
+        segment_waveform = waveform[start_idx:end_idx]
+        if segment_waveform.shape[0] == 0:
+            # Degenerate/out-of-range boundary: fall back to a 1-sample
+            # slice (clamped into range) rather than handing
+            # `_chunk_waveform` a genuinely empty array.
+            fallback_idx = min(max(0, start_idx), max(0, total_samples - 1))
+            segment_waveform = waveform[fallback_idx : fallback_idx + 1]
+        vector = _embed_waveform_vector(segment_waveform, clap_module)
+        vectors.append(vector.tolist())
+    return vectors
 
 
 def embed_texts(texts: list[str], model: Optional[Any] = None) -> list[list[float]]:

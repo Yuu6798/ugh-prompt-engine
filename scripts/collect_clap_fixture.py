@@ -48,6 +48,7 @@ this runbook.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import sys
@@ -68,7 +69,8 @@ from svp_rpe.rpe.learned.clap_adapter import (  # noqa: E402
 from svp_rpe.rpe.learned.similarity import contrast_fit, prompt_audio_fit  # noqa: E402
 from svp_rpe.rpe.models import LearnedAudioAnnotations  # noqa: E402
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
+SIDECAR_SCHEMA_VERSION = "1.0"
 GENERATOR = "collect_clap_fixture.py"
 _PASSTHROUGH_EXCLUDE = {"sample_id", "audio_path", "prompts"}
 
@@ -248,6 +250,87 @@ def collect_fixture(
     }
 
 
+def sidecar_path_for(main_path: Path) -> Path:
+    """`<stem>.json` -> `<stem>.embeddings.json`, beside `main_path`."""
+    return main_path.with_suffix("").with_suffix(".embeddings.json")
+
+
+def split_fixture(fixture: dict[str, Any], sidecar_name: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Split a logical fixture (inline `audio_embedding` per sample) into a slim
+    main fixture (no embeddings, `embeddings_sidecar` pointer) + a sidecar
+    fixture (`sample_id -> audio_embedding`). Pure — no file IO.
+
+    `merge_fixture(*split_fixture(fixture, sidecar_name))` reconstructs the
+    original logical `fixture` exactly (round-trip identity).
+
+    The sidecar is keyed by `sample_id`, so duplicate ids would silently collapse
+    provenance (every duplicate row would reattach the last embedding on merge).
+    Fail fast instead.
+    """
+    main = copy.deepcopy(fixture)
+    embeddings: dict[str, Any] = {}
+    for sample in main.get("samples", []):
+        sample_id = sample["sample_id"]
+        if sample_id in embeddings:
+            raise ValueError(
+                f"duplicate sample_id {sample_id!r}: the embedding sidecar is keyed by "
+                "sample_id and duplicates would silently collapse provenance"
+            )
+        embeddings[sample_id] = sample.pop("audio_embedding")
+    main["embeddings_sidecar"] = sidecar_name
+
+    sidecar = {
+        "schema_version": SIDECAR_SCHEMA_VERSION,
+        # `split_fixture` only knows the sidecar's own name, not the main
+        # fixture's filename — callers with that context (e.g. `write_fixture`)
+        # should set this explicitly. `None` when unknown.
+        "of_fixture": None,
+        "embeddings": embeddings,
+    }
+    return main, sidecar
+
+
+def merge_fixture(main: dict[str, Any], sidecar: dict[str, Any]) -> dict[str, Any]:
+    """Inverse of `split_fixture`: re-attach each sample's `audio_embedding`
+    from `sidecar["embeddings"]` (keyed by `sample_id`), dropping the
+    `embeddings_sidecar` pointer. Pure — no file IO.
+    """
+    fixture = copy.deepcopy(main)
+    fixture.pop("embeddings_sidecar", None)
+    embeddings = sidecar["embeddings"]
+    for sample in fixture.get("samples", []):
+        sample["audio_embedding"] = copy.deepcopy(embeddings[sample["sample_id"]])
+    return fixture
+
+
+def _dump_json(payload: dict[str, Any]) -> str:
+    return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+
+
+def write_fixture(fixture: dict[str, Any], main_path: Path) -> None:
+    """Split `fixture` and write both the slim main fixture and its
+    `*.embeddings.json` sidecar beside it, using the repo's existing
+    JSON formatting (indent=2, ensure_ascii=False, trailing newline).
+    """
+    sidecar_path = sidecar_path_for(main_path)
+    main, sidecar = split_fixture(fixture, sidecar_path.name)
+    sidecar["of_fixture"] = main_path.name
+    main_path.parent.mkdir(parents=True, exist_ok=True)
+    main_path.write_text(_dump_json(main), encoding="utf-8")
+    sidecar_path.write_text(_dump_json(sidecar), encoding="utf-8")
+
+
+def load_fixture(main_path: Path) -> dict[str, Any]:
+    """Read a main fixture + its `embeddings_sidecar` file and merge them
+    back into the full logical fixture (inline `audio_embedding` per sample).
+    """
+    main = json.loads(main_path.read_text(encoding="utf-8"))
+    sidecar_name = main["embeddings_sidecar"]
+    sidecar_path = main_path.parent / sidecar_name
+    sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    return merge_fixture(main, sidecar)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -281,11 +364,9 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc), file=sys.stderr)
         return 1
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(
-        json.dumps(fixture, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    write_fixture(fixture, args.output)
     print(f"wrote {args.output}")
+    print(f"wrote {sidecar_path_for(args.output)}")
     return 0
 
 

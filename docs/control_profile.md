@@ -77,6 +77,14 @@ render」へ黙って落ちない。未知 backend は素の descriptor（`profi
 フォールバック。Suno 固有の制約（Style 字数・Exclude 欄＝`negative_channel`）は薄い
 descriptor に隔離し、アダプタ core から生成器直書きを排除する。
 
+**backend 別ルーティング（K2-seg 後始末、#152 フォローアップ、2026-07-06）**: `BackendDescriptor`
+に `omit_body_negative: bool` を追加し、musicgen backend のみ True。K2-seg 実測（本文
+"Avoid: X" が X の attractor になる・centroid d=+1.10）を受けて、musicgen は本文
+`semantic.avoid` セグメントの送出自体を止める（`negative_tags` は従来どおり保持し楽譜の
+意図は失わない）。分岐は descriptor 参照のみで backend 名の直書きは増やさない。suno /
+external は不変 — 効きは機種依存のため実測なき横展開はしない（Suno 本文 Avoid の効きは
+Exclude Styles チャネルとの重複込みで人手検証キュー、docs/musicgen_backend.md §7.6 参照）。
+
 **フィールド粒度の drop accounting**: 旧 `physical.optional` 束（brightness / stereo_width /
 active_rate_target / valley_depth_target を 1 トークンに束ねていた）をフィールド粒度の
 独立した文へ分解。トークン ID は `PhysicalLayer.model_fields` 正式名に一致し、`dropped_elements`
@@ -147,10 +155,13 @@ performer 由来でも実 Suno corpus take 由来でもよい（path 非依存�
   PhysicalLayer の全網羅制約を持つため（本ドキュメント上表参照）、意味層フィールドを
   fixity 対象に混ぜると網羅制約が壊れる。`lyrics_presence` は fixity キーとして
   受理されない（従来どおり `ValueError`）。
-- **DD-2（許可キー）**: `SEMANTIC_CONTROL_FIELDS = frozenset({"lyrics_presence"})`
-  を `compose/models.py` に定義し、`control_profile` の許可キー集合を
-  `set(PhysicalLayer.model_fields) | SEMANTIC_CONTROL_FIELDS` へ拡張。未知キー
-  fail-fast と疎許容（網羅必須なし）は不変。
+- **DD-2（許可キー）**: `SEMANTIC_CONTROL_FIELDS` を `compose/models.py` に定義し、
+  `control_profile` の許可キー集合を `set(PhysicalLayer.model_fields) |
+  SEMANTIC_CONTROL_FIELDS` へ拡張。未知キー fail-fast と疎許容（網羅必須なし）は不変。
+  当初は `{"lyrics_presence"}` のみだったが、K2-seg（2026-07-05）で `_segments_for` の
+  実描画トークンと一致する `semantic.avoid` / `semantic.core`（ドット表記のまま）を
+  追加し、`{"lyrics_presence", "semantic.avoid", "semantic.core"}` へ拡張した
+  （下記「デバイスプロファイル」節参照）。
 - **DD-3（初期データ）**: `examples/composition/midnight_signal/composition_score.yaml`
   の `control_profile.suno.lyrics_presence` は `grip_class: loose`（`sensor: mid_ratio`,
   `grip` は未算出のため省略）。出所は
@@ -220,6 +231,13 @@ notes: "生成器バイアスの方向・量はジャンルで割れるため単
 この 2 フィールドが芯として先頭に昇格する**（PR1.5 の 3 ティア優先度は不変、詳細は上記
 「PR1.5」節）。第二機種プロファイルは `device_profiles/musicgen.yaml`
 （MusicGen PR B の実測 K2 型 grip 由来 — [`musicgen_backend.md`](musicgen_backend.md)）。
+
+**K2-seg（2026-07-05）**: `device_profiles/musicgen.yaml` の `control_defaults` に
+compose プロンプト欄 5 本（active rate / valley depth / Avoid / semantic.core /
+time signature）の実測 defaults を追記した（tight 0 / loose 2 / dead 3）。`Avoid: X`
+文言は X を正方向に引き寄せる符号反転が実測され（`semantic.avoid` quirk、advisory
+非 null）、MusicGen で本文 Avoid を負方向制御として使わないよう明記した。詳細は
+[`musicgen_backend.md`](musicgen_backend.md) §7.6。
 
 ### advisory 規則（自動補正はしない）
 

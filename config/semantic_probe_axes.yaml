@@ -1,0 +1,56 @@
+schema_version: "1.1"
+# CLAP semantic-axis battery for extraction-stage semantic sensing.
+# Each axis is read as an A/B contrast_fit (mean positive-probe cosine minus
+# mean negative-probe cosine) against the source audio's CLAP embedding.
+# Signed reading, a learned grip, never a verdict. Isolated in
+# LearnedAudioAnnotations.semantic_axes per docs/learned_models_policy.md.
+#
+# Calibration status (2026-07-04, real inference against stored real-audio
+# embeddings; see docs/semantic_sensor_clap.md and
+# examples/learned/clap/semantic_axes_calibration_2026-07-04.yaml):
+# valid band is real produced music — pure synthetic tones sit at the
+# instrument floor. Do not calibrate axes against synth fixtures.
+#
+# v1.1 battery (2026-07-05): probes retuned via an 11-axis variant sweep
+# against the same stored embeddings; see
+# semantic_axes_calibration_2026-07-05.yaml. Valid band remains real
+# produced music.
+axes:
+  - name: vocal_presence
+    positive: ["a song with lead vocals", "singing with lyrics"]
+    negative: ["an instrumental track with no vocals", "instrumental music"]
+    notes: "proven axis; CLAP vocal contrast is 10-15x more robust than the mid_ratio proxy (docs/lyrics_semantic_anchor.md). Probes match examples/learned/clap/lyrics_vocal_contrast_manifest.yaml for continuity. Calibrated 2026-07-04: effect/regen-noise 15.7x (EDM) / 11.4x (Rock), reproduces the PR2b-2 (#131) readings."
+  - name: brightness
+    positive:
+      - "a bright brilliant song"
+      - "crisp airy high-frequency sound"
+      - "a slow gentle ballad with bright shimmering highs"
+    negative:
+      - "a dark muffled song"
+      - "warm bass-heavy low-frequency sound"
+      - "a fast pounding track with dark muddy lows"
+    notes: "cross-checks the physical spectral_centroid brightness sensor. v1.1 probes (2026-07-05) add counter-stereotype tempo-neutralizing prompts: on the MusicGen knob cells the bpm interference drops d=+2.37 (v1.0) -> +0.52 while the self knob stays d=+1.38, so the self knob now dominates the strongest interferer (selectivity d_self-|d_bpm| = -0.84 -> +0.86). Residual bpm coupling remains — on tempo-extreme material still read alongside bpm."
+  - name: energy
+    positive: ["an energetic driving intense track", "high-energy powerful music"]
+    negative: ["a calm relaxed gentle track", "low-energy soft ambient music"]
+    notes: "Calibrated 2026-07-04: best selectivity of the battery — strong on its own proxy knob (MusicGen bpm d=+2.57), near-flat on the brightness knob (d=+0.18). Blind on pure synthetic tones."
+  - name: acousticness
+    positive: ["an acoustic organic recording", "natural unprocessed instruments"]
+    negative: ["an electronic synthetic production", "digital synthesized sound"]
+    notes: "exploratory. Calibrated 2026-07-04: relative movement is plausible (faster/brighter reads less acoustic, d~-1.6) but the absolute sign is unreliable (only 19/38 negative on an all-electronic pool) — never read the sign as a verdict."
+  - name: warmth
+    positive:
+      - "a warm analog recording with tape saturation"
+      - "vintage analog production with soft rounded texture"
+    negative:
+      - "a clean sterile digital production"
+      - "a modern clinical digitally-processed sound"
+    notes: "exploratory. v1.1 probes (2026-07-05) retarget analog/digital production texture: brightness redundancy r=-0.827 (v1.0) -> -0.22, independent of acousticness (r=+0.15), while real responses remain (rock lyrics contrast 34x regen noise, genre contrast 1.4x). Sign census is heavily negative (36/38) on the all-electronic calibration pool — never read the absolute sign as a verdict."
+  - name: valence
+    positive: ["a happy uplifting cheerful song", "joyful positive feel-good music"]
+    negative: ["a sad melancholic sorrowful song", "gloomy depressing mournful music"]
+    notes: "exploratory first emotion axis, aimed at section-level emotional-arc reading (--clap-sections). Calibrated 2026-07-05: no ground-truth contrast in the pool; strongly correlated with the brightness axis there (r~+0.80) and rides both knobs (bpm d=+1.42, brightness d=+1.24) — never read standalone; a genuine valence contrast needs richer material and section-level validation."
+  - name: electronic_production
+    positive: ["electronic dance music with synthesizers", "a produced electronic club track"]
+    negative: ["a rock song played by a live band", "guitar-driven rock band music"]
+    notes: "first genre axis with a ground-truth contrast: on the StartinA EDM-vs-Rock matched-pair arrangements (3 variants) the genre effect is +0.365 = 7.0x regen noise, and the all-electronic MusicGen pool reads 30/38 positive. Caveats: n=3 matched pairs; bpm knob couples d=+1.48 (faster reads more electronic); rock readings shift with vocals (lyrics contrast 1.9x)."

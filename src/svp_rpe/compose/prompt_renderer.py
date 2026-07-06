@@ -74,13 +74,23 @@ class BackendDescriptor:
 
     profile_key: str  # control_profile のキー（"suno" / "musicgen" / ...）
     negative_channel: str = "exclude_styles"  # 否定指定を流す欄（Suno=Exclude Styles）
+    # K2-seg（#152）実測: musicgen は本文 "Avoid: X" が X の attractor になる
+    # （bright 系 Avoid で centroid d=+1.10・否定語無視）。True の backend は
+    # `semantic.avoid` 本文セグメントの送出を止める（negative_tags は従来どおり保持）。
+    # 実測なき横展開はしない — 効果が実測された backend のみ True にする
+    # （docs/musicgen_backend.md §7.6 / docs/control_profile.md 参照）。
+    omit_body_negative: bool = False
 
 
 # target_backend → BackendDescriptor。`external` は Suno ルートのエイリアス。
 _BACKEND_DESCRIPTORS: dict[str, BackendDescriptor] = {
     "external": BackendDescriptor(profile_key="suno"),
     "suno": BackendDescriptor(profile_key="suno"),
-    "musicgen": BackendDescriptor(profile_key="musicgen", negative_channel="negative_prompt"),
+    "musicgen": BackendDescriptor(
+        profile_key="musicgen",
+        negative_channel="negative_prompt",
+        omit_body_negative=True,
+    ),
 }
 
 
@@ -116,7 +126,9 @@ class ExternalPromptAdapter:
             effective_profile.update(score_profile)
         rank = _rank_key_factory(score.rendering.priority, effective_profile)
 
-        segments = sorted(_segments_for(score), key=rank)
+        segments = sorted(
+            _segments_for(score, omit_avoid_segment=descriptor.omit_body_negative), key=rank
+        )
         kept = list(segments)
         dropped_elements: list[str] = []
 
@@ -137,32 +149,51 @@ class ExternalPromptAdapter:
 
 
 def _field_value_for_quirk(score: CompositionScore, field: str) -> Any:
-    """`KnobQuirk.field` に対応するスコア上の現在値を取得する（無ければ None）。"""
+    """`KnobQuirk.field` に対応するスコア上の現在値を取得する（無ければ None）。
+
+    `SEMANTIC_CONTROL_FIELDS` はドット付き表記（`semantic.avoid` / `semantic.core`）と
+    bare 表記（`lyrics_presence`）が混在するが、`score.semantic` の実属性名は常に
+    bare（`avoid` / `core` / `lyrics_presence`）。ドット付きはプレフィクスを剥がして
+    解決する（さもないと `getattr(score.semantic, "semantic.avoid", None)` は属性名に
+    `.` を含むため常に存在せず None フォールバックに落ちる＝quirk が発火しない）。
+    """
 
     if field in SEMANTIC_CONTROL_FIELDS:
-        return getattr(score.semantic, field, None)
+        attr = field.rsplit(".", 1)[-1] if field.startswith("semantic.") else field
+        return getattr(score.semantic, attr, None)
     if field in PhysicalLayer.model_fields:
         return getattr(score.physical, field)
     return None
 
 
 def _quirk_matches(quirk: KnobQuirk, value: Any) -> bool:
-    """発火条件（値の完全一致 or 数値閾値）を満たすか判定する。
+    """発火条件を満たすか判定する。
 
-    数値比較は int（bpm 等）のときのみ行う。TODO(transcribe) センチネル文字列は
-    isinstance(value, int) が False になるため自然にスキップされる。
+    3 通りの発火経路:
+    - `applies_to_values`: 値の完全一致（str() 比較）
+    - `applies_below` / `applies_above`: 数値閾値（int のみ。TODO(transcribe) センチネル
+      文字列は isinstance(value, int) が False になるため自然にスキップされる）
+    - 制約なし（`applies_to_values` 空 かつ 閾値未設定）× advisory 非 null: 値が
+      「使われている」（None でない、list/str なら非空）だけで発火する
+      （例: musicgen `semantic.avoid` — 一致すべき固定値も閾値も存在しない癖）。
     """
 
     if value is None:
         return False
     if quirk.applies_to_values and str(value) in quirk.applies_to_values:
         return True
-    if quirk.applies_below is not None or quirk.applies_above is not None:
+    has_threshold = quirk.applies_below is not None or quirk.applies_above is not None
+    if has_threshold:
         if isinstance(value, int) and not isinstance(value, bool):
             if quirk.applies_below is not None and value < quirk.applies_below:
                 return True
             if quirk.applies_above is not None and value > quirk.applies_above:
                 return True
+        return False
+    if not quirk.applies_to_values and quirk.advisory is not None:
+        if isinstance(value, (list, str)):
+            return bool(value)
+        return True
     return False
 
 
@@ -185,7 +216,9 @@ def _advisories_for(score: CompositionScore, device: Optional[DeviceProfile]) ->
     return advisories
 
 
-def _segments_for(score: CompositionScore) -> list[_PromptSegment]:
+def _segments_for(
+    score: CompositionScore, *, omit_avoid_segment: bool = False
+) -> list[_PromptSegment]:
     segments: list[_PromptSegment] = []
 
     def add(token: str, text: str) -> None:
@@ -226,7 +259,13 @@ def _segments_for(score: CompositionScore) -> list[_PromptSegment]:
     elif score.semantic.lyrics_presence == "absent":
         add("lyrics_presence", "Instrumental, no vocals.")
 
-    if score.semantic.avoid:
+    # K2-seg（#152）実測: musicgen は本文 Avoid が attractor 化するため、当該 backend
+    # の descriptor（`omit_body_negative=True`）は本文セグメントの送出自体を止める。
+    # `negative_tags`（GeneratedPrompt 側）は render() 側で従来どおり保持するため、
+    # 楽譜の意図（避けたい要素の記録）は失われない。「字数超過 drop」とは区別し、
+    # ここで候補にすら入れないことで `dropped_elements` にも現れない
+    # （drop accounting との混同を避ける — Design Memo 判断 4）。
+    if score.semantic.avoid and not omit_avoid_segment:
         add("semantic.avoid", f"Avoid: {'; '.join(score.semantic.avoid)}.")
 
     return segments
