@@ -151,6 +151,52 @@ extractor doubling from generator unfaithfulness. The post-hoc detector remains 
 is the tempo prior itself (adaptive / higher `start_bpm`), a separate
 higher-regression task (roundtrip_corpus_screen.md).
 
+#### BPM prior-disagreement detection (R2-2f)
+
+`detect_bpm_prior_disagreement()` automates the corpus screener's high-prior
+diagnostic (`scripts/screen_corpus.py`, `start_bpm=180`) as an extractor-level
+detector, closing the gap R2-2's autocorrelation scan leaves for the 3:2
+sub-octave family: the halving cases (detected ~117.45 / true ~172.3) do not
+clear `BPM_OCTAVE_RATIO_THRESHOLD`, so `detect_bpm_octave_ambiguity` stays
+unflagged for them (roundtrip_corpus_screen.md finding #6).
+
+It re-runs `compute_bpm(y, sr, start_bpm=BPM_PRIOR_PROBE_START_BPM)` (180.0,
+same as the screener's `HIGH_PRIOR_START_BPM`) to get a high-prior estimate H,
+and compares it against the already-detected default-prior `bpm` D via the
+ratio `r = H/D`:
+
+- `r` within `BPM_PRIOR_AGREEMENT_TOLERANCE` (0.04) of 1.0 → the prior agrees,
+  not a disagreement.
+- `r` inside `BPM_PRIOR_DISAGREEMENT_WINDOW` = (1.35, 1.6) → fires. This is a
+  deliberately narrow band: `scratchpad/bpm_prior_decision_table.yaml`
+  (mechanically extracted repo records) shows the recoverable 3:2 halving
+  family clustering tightly at r ≈ 1.467-1.475 (so_what_run / wafu_jungle_174 /
+  astral_trigger / rock_05_punk), while every recorded correctly-detected track
+  either agrees (r ≈ 1.0) or overshoots into the doubling-artifact band
+  (r ≈ 2.0, e.g. yaoyorozu_shinwa 2.0773 — a correct slow track that a naive
+  high-prior tie-break would falsely double). No correctly-detected track in
+  the repo's records falls inside (1.35, 1.6).
+- Any other ratio (≈ 2.0 doubling-artifact band, r < 1, or the unobserved
+  1.6-2.0 gap) → does not fire. The window is not generalized beyond the
+  observed cluster.
+
+The probe runs **only when R2-2 (`detect_bpm_octave_ambiguity`) did not already
+flag ambiguity** — the two detectors never fire on the same track, so there is
+no double correction. When R2-2f fires, the extractor corrects `bpm` to
+`max(candidates)` (same precedent as R2-2c), caps `bpm_confidence` at
+`BPM_OCTAVE_AMBIGUOUS_CONFIDENCE_CAP`, and sets **both**
+`bpm_octave_ambiguous=True` (shared trust-gate semantics — the transcribe trust
+gate `score_draft._bpm_untrusted` keys off this flag, so it closes with zero
+extra wiring) and `bpm_prior_disagreement=True` (provenance: which detector
+fired). `bpm_candidates` is populated the same way as R2-2c.
+
+Scope: this detector only automates the observed 3:2 band. It does not attempt
+an sr ensemble, a low-prior doubling auto-correction, or flag-only handling of
+unobserved ratio bands (1.6-1.8 etc.) — see roundtrip_corpus_screen.md finding
+#6 for the reasoning. The screener (`scripts/screen_corpus.py`) still calls the
+raw `compute_bpm` directly for its own diagnostics and is unaffected by this
+detector.
+
 ### Time Signature Detection (Q1-2)
 
 `compute_time_signature()` estimates meter without learned models:

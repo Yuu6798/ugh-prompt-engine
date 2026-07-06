@@ -40,6 +40,7 @@ from svp_rpe.rpe.physical_features import (
     compute_downbeat_times,
     compute_time_signature,
     detect_bpm_octave_ambiguity,
+    detect_bpm_prior_disagreement,
 )
 from svp_rpe.rpe.section_features import extract_section_features
 from svp_rpe.rpe.semantic_rules import generate_semantic
@@ -193,12 +194,27 @@ def extract_physical(
     # transcribe trust gate (_bpm_untrusted) still treats a corrected octave as
     # sensor-blind rather than over-trusting an uncertain correction.
     bpm_octave = detect_bpm_octave_ambiguity(y, sr, bpm)
+    bpm_prior_disagreement = False
+    bpm_candidates = bpm_octave.candidates
     if bpm_octave.is_ambiguous:
         bpm = max(bpm_octave.candidates)
         if bpm_confidence is not None:
             bpm_confidence = round(
                 min(bpm_confidence, BPM_OCTAVE_AMBIGUOUS_CONFIDENCE_CAP), 4
             )
+    else:
+        # R2-2f: only probe when R2-2 (octave/sub-octave autocorrelation scan)
+        # did not already flag ambiguity, so a track is never double-corrected
+        # by both detectors. See physical_features.detect_bpm_prior_disagreement.
+        prior = detect_bpm_prior_disagreement(y, sr, bpm)
+        if prior.is_disagreement:
+            bpm = max(prior.candidates)
+            bpm_candidates = prior.candidates
+            bpm_prior_disagreement = True
+            if bpm_confidence is not None:
+                bpm_confidence = round(
+                    min(bpm_confidence, BPM_OCTAVE_AMBIGUOUS_CONFIDENCE_CAP), 4
+                )
     time_signature, time_signature_confidence = compute_time_signature(y, sr)
     downbeat_times = compute_downbeat_times(y, sr, time_signature)
     chord_events = compute_chord_events(y, sr)
@@ -239,8 +255,9 @@ def extract_physical(
     phys = PhysicalRPE(
         bpm=bpm,
         bpm_confidence=bpm_confidence,
-        bpm_octave_ambiguous=bpm_octave.is_ambiguous,
-        bpm_candidates=bpm_octave.candidates,
+        bpm_octave_ambiguous=bpm_octave.is_ambiguous or bpm_prior_disagreement,
+        bpm_candidates=bpm_candidates,
+        bpm_prior_disagreement=bpm_prior_disagreement,
         key=key,
         mode=mode,
         key_confidence=key_confidence,

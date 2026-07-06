@@ -152,6 +152,12 @@ punk は依然 `is_ambiguous=False`。診断で 2 つの大域的修正案がい
 octave 整合の tie-break が要るが、素朴な 2-prior 不一致判定も正検出曲（synth_01/02・indie・
 blues）が高 prior で 2× にずれて誤検出するため、**検証付きの設計（Design Memo）が前提**。
 
+**(2026-07-06) 追記**: 3:2 帯 (1.35,1.6) 限定の prior-disagreement 検出として R2-2f
+（`detect_bpm_prior_disagreement`, `physical_features.py`）で自動化した。1.6–2.2 帯は
+R2-2b（`detect_bpm_octave_ambiguity`）が担当、未観測帯（1.6–2.0 の doubling アーティファクト
+境界を除く隙間等）は非自動化のまま（scratchpad/bpm_prior_decision_table.yaml の実測範囲外
+への横展開はしない設計）。
+
 ## 限界と次の一手
 
 - **計測規律**: 保存率を測るとき、抽出器 halving と生成器不忠実を必ず分離する。

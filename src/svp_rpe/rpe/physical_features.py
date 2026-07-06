@@ -611,6 +611,85 @@ def detect_bpm_octave_ambiguity(
     return BpmOctaveAmbiguity(True, candidates, round(ratio, 4))
 
 
+# BPM prior-disagreement detection (R2-2f, roundtrip_corpus_screen.md finding #6).
+# R2-2's autocorrelation scan (BPM_OCTAVE_NEIGHBORHOOD = 1.4-2.2×) catches the
+# clean/grid-quantized 2× halving family but misses the 3:2 sub-octave collapse
+# (detected ~117.45 / true ~172.3 = 1.467×, the "117.45 attractor"): the
+# subdivision autocorrelation ratio for that family does not clear
+# BPM_OCTAVE_RATIO_THRESHOLD, so `detect_bpm_octave_ambiguity` stays unflagged
+# (docs/roundtrip_corpus_screen.md finding #6). The screener script
+# (scripts/screen_corpus.py) worked around this by re-running compute_bpm with a
+# high tempo prior (start_bpm=180) as an offline diagnostic; this detector wires
+# the same idea into the extractor.
+#
+# The tempo prior forwarded to librosa.beat.beat_track pulls the estimate toward
+# a BPM-grid point near the prior. A high prior (180) recovers the true fast
+# tempo for halved tracks, but would just as happily push an already-correct
+# slow track toward 2× its real tempo (e.g. yaoyorozu_shinwa: correct default
+# 95.7 → high-prior 198.8, a false doubling). So the raw high-prior estimate H
+# cannot be trusted on its own — only the *ratio* r = H/D (D = default-prior bpm)
+# carries signal, and only within a narrow band.
+#
+# scratchpad/bpm_prior_decision_table.yaml (mechanically extracted from repo
+# records, no analysis) shows the recoverable halving family clustering tightly
+# at r ≈ 1.467-1.475 (so_what_run / wafu_jungle_174 / astral_trigger /
+# rock_05_punk), while every recorded correctly-detected track either agrees
+# (r ≈ 1.0, e.g. shiden_no_inori 1.0002) or overshoots into the doubling
+# artifact band (r ≈ 2.0, e.g. yaoyorozu_shinwa 2.0773). No correctly-detected
+# track in the repo's records falls inside (1.35, 1.6). This detector therefore
+# only fires within that narrow, observed band — it deliberately does NOT
+# generalize to the 1.6-2.0 (doubling-artifact) or unobserved ranges, matching
+# the "no un-evidenced generalization" constraint in the design memo.
+BPM_PRIOR_PROBE_START_BPM = 180.0        # same value as the screener's HIGH_PRIOR_START_BPM
+BPM_PRIOR_AGREEMENT_TOLERANCE = 0.04     # same value as the screener's BPM_TOLERANCE
+BPM_PRIOR_DISAGREEMENT_WINDOW = (1.35, 1.6)  # 3:2 sub-harmonic band; observed r ∈ [1.467, 1.475]
+
+
+@dataclass(frozen=True)
+class BpmPriorDisagreement:
+    """Result of BPM high-prior tie-break disagreement detection (R2-2f)."""
+
+    is_disagreement: bool
+    candidates: tuple[float, ...]   # sorted (default, high-prior); () when not firing
+    prior_ratio: Optional[float]    # high-prior / default bpm; None when the probe fails
+
+
+def detect_bpm_prior_disagreement(
+    y: np.ndarray,
+    sr: int,
+    bpm: Optional[float],
+    *,
+    probe_start_bpm: float = BPM_PRIOR_PROBE_START_BPM,
+) -> BpmPriorDisagreement:
+    """Detect a 3:2 sub-octave BPM collapse via a high-tempo-prior re-estimate.
+
+    Re-runs `compute_bpm` with a high tempo prior (`probe_start_bpm`, default
+    180) and compares it against the already-detected `bpm` (the default-prior
+    estimate, D). Fires only when the ratio r = H/D lands inside
+    `BPM_PRIOR_DISAGREEMENT_WINDOW` — the narrow (1.35, 1.6) band observed for
+    recoverable 3:2 halving in scratchpad/bpm_prior_decision_table.yaml. Ratios
+    near 1.0 (prior agrees) or near 2.0 (high prior would falsely double an
+    already-correct track) do not fire — see module-level notes above.
+    """
+    if bpm is None or bpm <= 0:
+        return BpmPriorDisagreement(False, (), None)
+
+    high_bpm, _ = compute_bpm(y, sr, start_bpm=probe_start_bpm)
+    if high_bpm is None or high_bpm <= 0:
+        return BpmPriorDisagreement(False, (), None)
+
+    ratio = high_bpm / bpm
+    if abs(ratio - 1.0) <= BPM_PRIOR_AGREEMENT_TOLERANCE:
+        return BpmPriorDisagreement(False, (), round(ratio, 4))
+
+    lo, hi = BPM_PRIOR_DISAGREEMENT_WINDOW
+    if not (lo < ratio < hi):
+        return BpmPriorDisagreement(False, (), round(ratio, 4))
+
+    candidates = tuple(sorted({round(bpm, 2), round(high_bpm, 2)}))
+    return BpmPriorDisagreement(True, candidates, round(ratio, 4))
+
+
 def _beat_strength_autocorrelation(
     beat_strengths: np.ndarray,
     *,
