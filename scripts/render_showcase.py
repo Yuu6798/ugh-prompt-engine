@@ -75,21 +75,24 @@ VARIANTS: list[dict[str, Any]] = [
     {
         "name": "slow",
         "title": "テンポを落とす",
-        "diff": ("bpm: 128", "bpm: 80"),
+        "diff_field": "bpm",
+        "diff_after": "bpm: 80",
         "mutate": _set_bpm,
         "meter": "bpm",
     },
     {
         "name": "major",
         "title": "悲しい調を、明るい調に",
-        "diff": ("key: C minor", "key: C major"),
+        "diff_field": "key",
+        "diff_after": "key: C major",
         "mutate": _set_major,
         "meter": "key",
     },
     {
         "name": "bright",
         "title": "音色を明るくする",
-        "diff": ("brightness: dark", "brightness: bright"),
+        "diff_field": "brightness",
+        "diff_after": "brightness: bright",
         "mutate": _set_bright,
         "meter": "centroid",
     },
@@ -185,8 +188,12 @@ def gather(score_path: Path, output_dir: Path) -> dict[str, Any]:
         mutate: Callable[[CompositionScore], None] = spec["mutate"]
         mutate(mutated)
         result = render_and_measure(mutated, output_dir, spec["name"])
+        field = spec["diff_field"]
+        before_label = f"{field}: {getattr(score.physical, field)}"
         result.update(
-            title=spec["title"], diff=spec["diff"], meter=spec["meter"]
+            title=spec["title"],
+            diff=(before_label, spec["diff_after"]),
+            meter=spec["meter"],
         )
         variants.append(result)
 

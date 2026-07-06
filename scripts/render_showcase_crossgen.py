@@ -411,20 +411,29 @@ def render_html(data: dict[str, Any]) -> str:
     def bucket(items: list[str]) -> str:
         return "、".join(items) if items else "なし"
 
-    # 明るさ ✗ のうち「中立帯に着地したが draft が TODO を返すため一致扱いにならない」
-    # 件数（計器側の目盛り事情）をデータから数える。
+    # 明るさ ✗ のうち「draft が TODO（中立帯）を返すため一致扱いにならない」件数
+    # （計器側の目盛り事情）をデータから数える。ただし目標 brightness が
+    # 実際に中立帯でない場合、これは「同じ中立帯への着地」ではなく明るさの
+    # 不一致（喪失）なので、目標値を見て表記を分岐する。
     brightness_summary = next((f for f in report.fields if f.field == "brightness"), None)
     neutral_landings = (
         sum(1 for v in brightness_summary.observed_values if str(v).startswith("TODO"))
         if brightness_summary is not None
         else 0
     )
-    sensor_note = (
-        f"「明るさ」は {neutral_landings}/{report.n_takes} テイクが目標と同じ中立帯に"
-        "着地していたが、draft 側の目盛りが中立帯を TODO と表記するため一致に数えられない。"
-        if neutral_landings
-        else ""
-    )
+    if not neutral_landings:
+        sensor_note = ""
+    elif score.physical.brightness == "neutral":
+        sensor_note = (
+            f"「明るさ」は {neutral_landings}/{report.n_takes} テイクが目標と同じ中立帯に"
+            "着地していたが、draft 側の目盛りが中立帯を TODO と表記するため一致に数えられない。"
+        )
+    else:
+        sensor_note = (
+            f"「明るさ」は {neutral_landings}/{report.n_takes} テイクで draft 側の目盛りが"
+            f"中立帯（TODO）を示したが、目標は「{score.physical.brightness}」で中立帯ではない"
+            "ため、実際には明るさの不一致（喪失）。"
+        )
 
     template = Template(_PAGE_TEMPLATE)
     return template.substitute(

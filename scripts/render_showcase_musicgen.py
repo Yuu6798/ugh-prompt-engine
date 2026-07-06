@@ -396,6 +396,10 @@ def render_html(data: dict[str, Any]) -> str:
     bpm_word = "効く" if bpm["separated"] else "効かない"
     summary_line = f"brightness は{bri_word}、bpm は{bpm_word}"
 
+    # CSS クラスも文言と同じ separated 判定から導出する（視覚と文言の不一致防止）。
+    bri_verdict_class = "verdict-ok" if bri["separated"] else "verdict-bad"
+    bpm_verdict_class = "verdict-ok" if bpm["separated"] else "verdict-bad"
+
     template = Template(_PAGE_TEMPLATE)
     return template.substitute(
         prompt_text=_esc(data["prompt"].text),
@@ -406,6 +410,8 @@ def render_html(data: dict[str, Any]) -> str:
         bpm_strip=bpm_strip,
         bri_verdict=_esc(bri_verdict),
         bpm_verdict=_esc(bpm_verdict),
+        bri_verdict_class=bri_verdict_class,
+        bpm_verdict_class=bpm_verdict_class,
         summary_line=_esc(summary_line),
         model_id=_esc(data["model_id"]),
         model_revision=_esc(data["model_revision"][:12]),
@@ -527,7 +533,7 @@ audio{width:100%;margin:0 0 4px}
   <div class="card">
     <div class="card-title">明るさの針（spectral centroid）— 6 テイクを同じ物差しに</div>
     $centroid_strip
-    <div class="verdict verdict-ok">$bri_verdict</div>
+    <div class="verdict $bri_verdict_class">$bri_verdict</div>
   </div>
 </section>
 
@@ -543,7 +549,7 @@ audio{width:100%;margin:0 0 4px}
   <div class="card">
     <div class="card-title">テンポの針（BPM）— 6 テイクを同じ物差しに</div>
     $bpm_strip
-    <div class="verdict verdict-bad">$bpm_verdict</div>
+    <div class="verdict $bpm_verdict_class">$bpm_verdict</div>
   </div>
 </section>
 
