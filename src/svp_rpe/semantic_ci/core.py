@@ -127,9 +127,26 @@ def _compare_metric(name: str, expected: Any, observed: Any, tolerance: float | 
 
     observed_number = _numeric_value(observed)
     if isinstance(expected, str) and observed_number is not None:
-        bounds = _parse_numeric_range(expected) or _target_band_bounds(name, expected)
-        if bounds is not None:
-            diff = _range_distance(observed_number, *bounds)
+        resolved = _resolve_band(name, expected)
+        if resolved is not None:
+            lower, upper, exclusive = resolved
+            if exclusive and _is_exclusive_boundary(observed_number, lower, upper):
+                # neutral 帯のみ排他境界（PR #156 P3）: ちょうど帯端の観測は
+                # transcribe 側で dark/bright と判定される値と同一のため、
+                # neutral の連続距離（境界上は真の距離=0）としてではなく、
+                # aspect="square" 等の非数値カテゴリ不一致と同じ diff=None 経路
+                # で「範疇不一致」を報告する（0.0 diff は「帯内」と区別できず
+                # deviation の意味論を歪めてしまうため、diff=None + passed=False
+                # で表現し _metric_loss を確実に repair 側へ倒す）。
+                return MetricDiff(
+                    name=name,
+                    expected=expected,
+                    observed=observed,
+                    tolerance=tolerance,
+                    diff=None,
+                    passed=False,
+                )
+            diff = _range_distance(observed_number, lower, upper)
             return MetricDiff(
                 name=name,
                 expected=expected,
@@ -147,6 +164,23 @@ def _compare_metric(name: str, expected: Any, observed: Any, tolerance: float | 
         diff=None,
         passed=observed == expected,
     )
+
+
+def _resolve_band(name: str, expected: str) -> tuple[float | None, float | None, bool] | None:
+    """expected ラベル/数値レンジ文字列を (lower, upper, exclusive) の帯へ解決する。
+
+    数値レンジ文字列（例: "0.60-0.70"）は従来通り閉区間（exclusive=False）。
+    ラベル解決は ``_target_band_bounds`` に委譲し、neutral のみ排他境界になる。
+    """
+    numeric_range = _parse_numeric_range(expected)
+    if numeric_range is not None:
+        lower, upper = numeric_range
+        return lower, upper, False
+    return _target_band_bounds(name, expected)
+
+
+def _is_exclusive_boundary(value: float, lower: float | None, upper: float | None) -> bool:
+    return (lower is not None and value == lower) or (upper is not None and value == upper)
 
 
 def _observed_metric_value(metrics: Mapping[str, Any], name: str, target: Any = None) -> Any:
@@ -190,15 +224,60 @@ def _parse_numeric_range(value: str) -> tuple[float, float] | None:
     return lower, upper
 
 
-def _target_band_bounds(name: str, target: str) -> tuple[float | None, float | None] | None:
+def _target_band_bounds(
+    name: str, target: str
+) -> tuple[float | None, float | None, bool] | None:
+    """target ラベルの帯を (lower, upper, exclusive) で返す。
+
+    ``neutral`` は ``semantic_rules.yaml`` に専用ラベルが無いため
+    ``neutral_band_bounds`` で dark/bright ルールの間隙から導出し、
+    exclusive=True（帯端そのものは帯外）を返す。dark/bright など明示ラベルの
+    帯は測定側の閉区間包含と整合済みのため exclusive=False のまま変更しない。
+    """
     feature_name = _sensor_metric_name(name)
-    aliases = _label_aliases(_normalize_label(target))
-    for rule in _semantic_rules_for_feature(feature_name):
+    normalized_target = _normalize_label(target)
+    rules = _semantic_rules_for_feature(feature_name)
+
+    if normalized_target == "neutral":
+        bounds = neutral_band_bounds(rules)
+        if bounds is None:
+            return None
+        lower, upper = bounds
+        return lower, upper, True
+
+    aliases = _label_aliases(normalized_target)
+    for rule in rules:
         labels = {_normalize_label(label) for label in rule["labels"]}
         if aliases.intersection(labels):
-            return rule["bounds"].get("min"), rule["bounds"].get("max")
+            return rule["bounds"].get("min"), rule["bounds"].get("max"), False
 
     return None
+
+
+def neutral_band_bounds(rules: list[Mapping[str, Any]]) -> tuple[float, float] | None:
+    """dark/bright ルールの間隙 (dark の max, bright の min) から neutral 帯を導出する。
+
+    ``semantic_rules.yaml`` に "neutral" ラベルは存在しない（perc.dark /
+    perc.bright の目盛りコメント通り、dark <= X / bright >= Y の間隙が暗黙の
+    neutral 帯）。1200/2500 をハードコードする代わりに rule から読んで組み立てる
+    （再校正時に自動追従する）。``semantic_ci/audit.py`` の ``_neutral_band`` と
+    共有するヘルパー（PR #156 P2 是正、#142 keys.py 集約と同じ規律 —
+    rule dict のリストという共通の入力契約を持つ導出ロジックのみを集約し、
+    rule 抽出自体（``_semantic_rules_for_feature``）は各モジュールの既存実装を
+    そのまま使う）。どちらかのラベルが rules に無ければ None
+    （呼び出し側は従来挙動へフォールバックする）。
+    """
+    dark_max: float | None = None
+    bright_min: float | None = None
+    for rule in rules:
+        labels = {_normalize_label(str(label)) for label in rule["labels"]}
+        if dark_max is None and "dark" in labels:
+            dark_max = rule["bounds"].get("max")
+        if bright_min is None and "bright" in labels:
+            bright_min = rule["bounds"].get("min")
+    if dark_max is None or bright_min is None:
+        return None
+    return dark_max, bright_min
 
 
 def _range_distance(value: float, lower: float | None, upper: float | None) -> float:

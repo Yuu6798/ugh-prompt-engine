@@ -15,6 +15,7 @@ from svp_rpe.eval.delta_e_alignment import delta_e_profile_alignment
 from svp_rpe.eval.semantic_similarity import por_lexical_similarity
 from svp_rpe.keys import weighted_key_score
 from svp_rpe.rpe.models import RPEBundle
+from svp_rpe.semantic_ci.core import neutral_band_bounds
 from svp_rpe.semantic_ci.models import ObservedRPE
 from svp_rpe.semantic_ci.observed_adapter import rpe_bundle_to_observed
 from svp_rpe.sentinels import is_todo_sentinel
@@ -331,6 +332,19 @@ def _metric_band_needle(
         )
 
     band = _target_band(metric_name, target)
+    note: Optional[str] = None
+    if band is None:
+        note = "target band undefined; raw observation only"
+    elif band.is_boundary_excluded(observed_value):
+        # neutral 帯は開区間なので、ちょうど帯端の観測は非保存として報告する。
+        # transcribe（measure 層）は同じ値を dark/bright と draft するため、
+        # ここでの「非保存」は測定層との不整合ではなく整合（PR #156 P3）。
+        # deviation 自体は真の距離（境界上=0.0）のまま変えない。
+        note = (
+            f"{metric_name}={_round_float(observed_value):g} sits exactly on the neutral "
+            "band edge; excluded from neutral (open interval, matches transcribe's "
+            "dark/bright inclusive edge) -> not preserved"
+        )
     return AuditNeedle(
         name=name,
         layer="physical",
@@ -340,7 +354,7 @@ def _metric_band_needle(
         target_band=band.description if band else None,
         deviation=band.deviation(observed_value) if band else None,
         sensor=f"PhysicalRPE.{metric_name}",
-        note=None if band else "target band undefined; raw observation only",
+        note=note,
     )
 
 
@@ -372,10 +386,22 @@ def _delta_e_needle(score: "CompositionScore", bundle: RPEBundle) -> AuditNeedle
 
 
 class _Band:
-    def __init__(self, description: str, lower: Optional[float], upper: Optional[float]) -> None:
+    def __init__(
+        self,
+        description: str,
+        lower: Optional[float],
+        upper: Optional[float],
+        *,
+        exclusive: bool = False,
+    ) -> None:
         self.description = description
         self.lower = lower
         self.upper = upper
+        # exclusive=True: 帯端そのものは帯外として扱う（neutral 帯のみ。measure
+        # 側の dark<=X / bright>=Y と揃えるための special-case。PR #156 P3）。
+        # dark/bright など明示ラベルの帯は測定側の閉区間包含と整合済みのため
+        # exclusive=False のまま（既存挙動、無回帰）。
+        self.exclusive = exclusive
 
     def deviation(self, value: float) -> float:
         if self.lower is not None and value < self.lower:
@@ -383,6 +409,18 @@ class _Band:
         if self.upper is not None and value > self.upper:
             return _round_float(value - self.upper)
         return 0.0
+
+    def is_boundary_excluded(self, value: float) -> bool:
+        """exclusive 帯で、value がちょうど帯端に乗っているか。
+
+        真の距離（``deviation``）は境界上で 0.0 のまま変えない（意味論を歪めない
+        ため）。「非保存」の一貫報告はこのフラグ経由で note に反映する。
+        """
+        if not self.exclusive:
+            return False
+        return (self.lower is not None and value == self.lower) or (
+            self.upper is not None and value == self.upper
+        )
 
 
 def _target_band(feature_name: str, target: Any) -> Optional[_Band]:
@@ -422,20 +460,22 @@ def _neutral_band(feature_name: str) -> Optional[_Band]:
     perc.bright の目盛りコメント通り、dark <= 1200 / bright >= 2500 の間隙が
     暗黙の neutral 帯）。1200/2500 をここへハードコードする代わりに、既存の
     perc.dark の ``spectral_centroid_max`` と perc.bright の
-    ``spectral_centroid_min`` を rule から読んで帯を組み立てる（再校正時に
-    自動追従する）。どちらかが rule から取れなければ従来通り undefined。
+    ``spectral_centroid_min`` から帯を組み立てる導出ロジックは
+    ``semantic_ci.core.neutral_band_bounds`` と共有する（rule 抽出自体は
+    audit.py 固有の ``_semantic_rules_for_feature`` を使う）。どちらかが rule
+    から取れなければ従来通り undefined。measure 側の neutral は開区間
+    （dark/bright は帯端を含む）なので exclusive=True で返す（PR #156 P3）。
     """
-    dark_max: Optional[float] = None
-    bright_min: Optional[float] = None
-    for rule in _semantic_rules_for_feature(feature_name):
-        labels = {_normalize_label(label) for label in rule["labels"]}
-        if dark_max is None and "dark" in labels:
-            dark_max = rule["bounds"].get("max")
-        if bright_min is None and "bright" in labels:
-            bright_min = rule["bounds"].get("min")
-    if dark_max is None or bright_min is None:
+    bounds = neutral_band_bounds(_semantic_rules_for_feature(feature_name))
+    if bounds is None:
         return None
-    return _Band(f"{feature_name} {dark_max:g}-{bright_min:g}", dark_max, bright_min)
+    dark_max, bright_min = bounds
+    return _Band(
+        f"{feature_name} {dark_max:g}-{bright_min:g}",
+        dark_max,
+        bright_min,
+        exclusive=True,
+    )
 
 
 def _observed_band(feature_name: str, metrics: Mapping[str, Any]) -> Optional[str]:

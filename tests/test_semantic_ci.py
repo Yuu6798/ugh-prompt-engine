@@ -329,6 +329,89 @@ def test_range_metric_miss_keeps_metric_loss_finite():
     assert diff.verdict == "repair"
 
 
+def test_neutral_brightness_metric_passes_within_dark_bright_gap_band():
+    """PR #156 P2: draft 由来の brightness="neutral" は semantic_rules.yaml に
+    専用ラベルが無いため、従来は literal 比較（str vs float）に落ちて in-band
+    でも failed metric/repair を報告していた。perc.dark(max=1200)/perc.bright
+    (min=2500) の間隙から neutral 帯を導出し、帯内観測は pass になることを pin。
+    """
+    target = TargetSVP(
+        id="target-neutral-brightness-in-band",
+        domain="music",
+        core="steady",
+        metric_targets={"brightness": "neutral"},
+    )
+    observed = ObservedRPE(
+        id="fixture-neutral-in-band",
+        domain="music",
+        signals=["steady"],
+        metrics={"spectral_centroid": 1800.0},
+    )
+
+    diff = compare_expected_observed(generate_expected_rpe(target), observed)
+    metric = diff.metric_diffs[0]
+
+    assert metric.name == "brightness"
+    assert metric.expected == "neutral"
+    assert metric.observed == 1800.0
+    assert metric.diff == 0.0
+    assert metric.passed is True
+    assert diff.loss == 0.0
+    assert diff.verdict == "pass"
+
+
+def test_neutral_brightness_metric_fails_outside_dark_bright_gap_band():
+    target = TargetSVP(
+        id="target-neutral-brightness-oob",
+        domain="music",
+        core="steady",
+        metric_targets={"brightness": "neutral"},
+    )
+    observed = ObservedRPE(
+        id="fixture-neutral-out-of-band",
+        domain="music",
+        signals=["steady"],
+        metrics={"spectral_centroid": 2900.0},
+    )
+
+    diff = compare_expected_observed(generate_expected_rpe(target), observed)
+    metric = diff.metric_diffs[0]
+
+    assert metric.passed is False
+    assert metric.diff == pytest.approx(400.0)
+    assert diff.verdict == "repair"
+
+
+def test_neutral_brightness_boundary_observation_is_not_preserved():
+    """PR #156 P3: measure 層 (transcribe) は dark<=1200 / bright>=2500 / neutral
+    はその間の開区間、という境界意味論を持つ。ちょうど 1200.0 / 2500.0 は
+    transcribe なら dark/bright と draft される値であり、neutral 帯としては
+    排他境界（帯外・非保存）として一貫報告されるべき — comparator 側にも
+    audit 側と同じ境界意味論を適用する（#156 P1 是正で共有した
+    ``neutral_band_bounds`` の帯を、continuous distance ではなく
+    aspect="square" 等と同じ範疇不一致(diff=None)経路で扱う）。
+    """
+    target = TargetSVP(
+        id="target-neutral-boundary",
+        domain="music",
+        core="steady",
+        metric_targets={"brightness": "neutral"},
+    )
+    for boundary in (1200.0, 2500.0):
+        observed = ObservedRPE(
+            id=f"fixture-neutral-boundary-{boundary}",
+            domain="music",
+            signals=["steady"],
+            metrics={"spectral_centroid": boundary},
+        )
+        diff = compare_expected_observed(generate_expected_rpe(target), observed)
+        metric = diff.metric_diffs[0]
+
+        assert metric.passed is False, boundary
+        assert metric.diff is None, boundary
+        assert diff.verdict == "repair", boundary
+
+
 def test_roundtrip_log_records_state_transitions_and_hashes():
     result = run_semantic_ci(_target(), _matching_observed())
     log = result.roundtrip_log

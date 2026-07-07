@@ -345,6 +345,32 @@ def test_audit_neutral_brightness_flags_out_of_band_observation() -> None:
     assert brightness.deviation == 400.0
 
 
+@pytest.mark.parametrize("boundary", [1200.0, 2500.0])
+def test_audit_neutral_brightness_boundary_is_reported_not_preserved(boundary: float) -> None:
+    """PR #156 P3: measure 層 (transcribe) の境界意味論は dark<=1200 / bright>=2500
+    / neutral はその間の開区間。ちょうど 1200.0 / 2500.0 は transcribe なら
+    dark/bright と draft される値であり、audit の neutral 帯は排他境界
+    （帯端そのものは帯外）でなければ draft との整合が崩れる。deviation は真の
+    距離のまま (0.0) 歪めず、note で「非保存」を一貫報告する（dark/bright の
+    既存閉区間包含は測定側と整合済みのため変更しない — Fable 裁定）。
+    """
+    score = _make_score()
+    score.physical.brightness = "neutral"
+
+    bundle = _make_bundle(brightness=0.5)
+    bundle.physical.spectral_centroid = boundary
+
+    report = build_audit_report(score, bundle, observed_id="fixture-rpe")
+    brightness = _needle(report, "physical", "brightness")
+
+    assert brightness.target_band == "spectral_centroid 1200-2500"
+    assert brightness.observed == boundary
+    assert brightness.deviation == 0.0
+    assert brightness.note is not None
+    assert "neutral" in brightness.note
+    assert "not preserved" in brightness.note
+
+
 def test_audit_canonicalizes_freeform_delta_e_target() -> None:
     score = _make_score()
     score.semantic.delta_e.overall = "gradual build from solitude to release"
