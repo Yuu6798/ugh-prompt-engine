@@ -57,15 +57,16 @@ API キー不要、LLM 不要、同一入力 → 同一出力の完全決定論�
 - **生データ様式**: 検証・計測の委譲時は生データをファイル保存させ Fable が直接
   Read して判読する（要約経由の判断劣化防止。判読=設計判断で Fable の職務）
 - **事後監査**: wrap-up で「Fable が直接実行した作業」を振り返りに明記（skill 参照）
+- **長時間検証の同期実行固定文言**: pytest 等の長時間検証を委譲するプロンプトには
+  「①フォアグラウンド実行 ②timeout 明示（例: 600000ms）③run_in_background / `&` /
+  nohup 禁止」の 3 点を必ず含める（07-07 事故×2 の再発防止: バックグラウンド化は
+  委譲エージェント停止時に検証ごと死亡する）
 
 Agent ツールで spawn する際は必ず `model` を明示すること。
 
 ```python
-# 正しい例（実装・探索は Sonnet 固定）
-Agent({"model": "sonnet", "subagent_type": "Explore", "prompt": "..."})
-
-# NG — model 省略するとメインと同モデルで動き、コスト効率が下がる
-Agent({"subagent_type": "Explore", "prompt": "..."})
+Agent({"model": "sonnet", "subagent_type": "Explore", "prompt": "..."})  # 実装・探索は Sonnet 固定
+# NG: model 省略 — メインと同モデルで動きコスト効率が下がる
 ```
 
 ### レビュー対応の振り分けルール（2026-07-02 新設、2026-07-05 改訂）
