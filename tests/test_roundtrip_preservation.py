@@ -12,7 +12,7 @@ from svp_rpe.compose import load_composition_score
 from svp_rpe.compose.models import CompositionScore
 from svp_rpe.perform import FAITHFUL_TAKE, perform, wav_bytes
 from svp_rpe.roundtrip import GripRecord, diagnose_roundtrip, load_grip_map, run_roundtrip
-from svp_rpe.transcribe import TODO_BRIGHTNESS_NEUTRAL, TODO_STEREO_UNMEASURED
+from svp_rpe.transcribe import TODO_BRIGHTNESS_MISSING, TODO_STEREO_UNMEASURED
 
 ROOT = Path(__file__).resolve().parents[1]
 ROUNDTRIP_DIR = ROOT / "examples" / "roundtrip"
@@ -64,7 +64,7 @@ def test_diagnose_roundtrip_branches_are_descriptive_only():
     transcribed = _with_physical(
         source,
         key="D major",
-        brightness=TODO_BRIGHTNESS_NEUTRAL,
+        brightness=TODO_BRIGHTNESS_MISSING,
         active_rate_target="0.98-1.00",
         valley_depth_target="0.30-0.40",
         stereo_width=TODO_STEREO_UNMEASURED,

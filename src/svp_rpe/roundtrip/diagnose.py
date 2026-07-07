@@ -18,7 +18,7 @@ from svp_rpe.roundtrip.models import RoundtripField, RoundtripReport
 from svp_rpe.sentinels import is_todo_sentinel
 from svp_rpe.transcribe import (
     TODO_BPM_UNDETECTED,
-    TODO_BRIGHTNESS_NEUTRAL,
+    TODO_BRIGHTNESS_MISSING,
     TODO_KEY_UNDETECTED,
     TODO_STEREO_BAND_UNDEFINED,
     TODO_STEREO_UNMEASURED,
@@ -58,7 +58,7 @@ GRIP_KEYS = {
 
 SENSOR_BLIND_SENTINELS = {
     TODO_BPM_UNDETECTED,
-    TODO_BRIGHTNESS_NEUTRAL,
+    TODO_BRIGHTNESS_MISSING,
     TODO_KEY_UNDETECTED,
     TODO_STEREO_BAND_UNDEFINED,
     TODO_STEREO_UNMEASURED,
@@ -244,8 +244,6 @@ def _physical_value(score: CompositionScore, field: str) -> Any:
 def _is_sensor_blind(field: str, transcribed_value: Any) -> bool:
     if transcribed_value is None or is_todo_sentinel(transcribed_value):
         return True
-    if field == "brightness" and transcribed_value == TODO_BRIGHTNESS_NEUTRAL:
-        return True
     if field == "stereo_width":
         # T1 intentionally leaves stereo labels undefined even when the width is
         # measured; this is a blind sensor until a stereo band map exists.
@@ -254,8 +252,8 @@ def _is_sensor_blind(field: str, transcribed_value: Any) -> bool:
 
 
 def _sensor_blind_note(field: str, transcribed_value: Any) -> str:
-    if field == "brightness" and transcribed_value == TODO_BRIGHTNESS_NEUTRAL:
-        return "spectral centroid fell into the neutral calibration band."
+    if field == "brightness" and transcribed_value == TODO_BRIGHTNESS_MISSING:
+        return "spectral centroid was unavailable."
     if field == "stereo_width":
         return "stereo label bands are not calibrated for T1 drafts."
     if is_todo_sentinel(transcribed_value):

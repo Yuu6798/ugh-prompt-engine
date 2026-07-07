@@ -25,7 +25,7 @@ from svp_rpe.transcribe.models import FieldMeasurement
 
 TODO_AUTHOR_INPUT = f"{TODO_SENTINEL_PREFIX} author input required"
 TODO_BPM_UNDETECTED = f"{TODO_SENTINEL_PREFIX} bpm undetected"
-TODO_BRIGHTNESS_NEUTRAL = f"{TODO_SENTINEL_PREFIX} brightness neutral band"
+TODO_BRIGHTNESS_MISSING = f"{TODO_SENTINEL_PREFIX} brightness sensor unavailable"
 TODO_KEY_UNDETECTED = f"{TODO_SENTINEL_PREFIX} key undetected"
 TODO_STEREO_BAND_UNDEFINED = f"{TODO_SENTINEL_PREFIX} stereo band undefined"
 TODO_STEREO_UNMEASURED = f"{TODO_SENTINEL_PREFIX} stereo unmeasured"
@@ -183,7 +183,7 @@ def _stereo_width_value(measurement: FieldMeasurement) -> str:
 
 def _brightness_value(measurement: FieldMeasurement) -> str:
     if measurement.score_value is None:
-        return TODO_BRIGHTNESS_NEUTRAL
+        return TODO_BRIGHTNESS_MISSING
     return str(measurement.score_value)
 
 
