@@ -72,9 +72,6 @@ EMBED_SR = 11025
 SOURCE_EMBED_OFFSET_SEC = 30.0
 SOURCE_EMBED_SEC = 30.0
 
-DARK_BAND_HZ = 1200.0
-BRIGHT_BAND_HZ = 2500.0
-
 FIELD_JA = {
     "bpm": "テンポ",
     "key": "調",
@@ -92,21 +89,15 @@ FIELD_JA = {
 # ---------------------------------------------------------------------------
 
 
-def brightness_label(centroid: float) -> str:
-    if centroid <= DARK_BAND_HZ:
-        return "dark"
-    if centroid >= BRIGHT_BAND_HZ:
-        return "bright"
-    return "neutral"
-
-
 def transcribe_score(bundle: RPEBundle) -> CompositionScore:
     """draft 楽譜の TODO 欄を転写バンドルの意味層で機械補完し、musicgen へ向ける。
 
     人間の作曲判断は入れない: core/grv/delta_e はルールベース意味層の出力、
-    brightness は centroid のラベル帯、stereo_width のみラベル帯未校正のため
-    中立値 "medium" を置く（ページ側で開示する）。structure の役割文は転写では
-    得られないため、プロンプト priority から structure を外して drop を明示する。
+    brightness は draft_score が measure 層のラベル帯（dark/neutral/bright）を
+    そのまま返す（中立帯も第一級ラベルなので上書き不要）。stereo_width のみ
+    ラベル帯未校正のため中立値 "medium" を置く（ページ側で開示する）。
+    structure の役割文は転写では得られないため、プロンプト priority から
+    structure を外して drop を明示する。
     """
 
     score = draft_score(bundle)
@@ -116,11 +107,11 @@ def transcribe_score(bundle: RPEBundle) -> CompositionScore:
     secondary = semantic.grv_anchor.secondary or semantic.cultural_context
     score.semantic.grv.secondary = secondary[0] if secondary else "unclassified"
     score.semantic.delta_e.overall = semantic.delta_e_profile.transition_type
-    score.physical.brightness = brightness_label(float(bundle.physical.spectral_centroid))
     score.physical.stereo_width = "medium"
     if score.fixity is not None:
-        # TODO 欄を実値で埋めたので fixity 入場試験の整合をとる（TODO=unlocked / 実値=locked）
-        score.fixity["brightness"] = "locked"
+        # TODO 欄を実値で埋めたので fixity 入場試験の整合をとる（TODO=unlocked / 実値=locked）。
+        # brightness は draft_score 自身が dark/neutral/bright いずれも locked にするため
+        # ここでの上書きは不要（stereo_width のみ draft 側が常に TODO を返す）。
         score.fixity["stereo_width"] = "locked"
     # 構成の役割文は転写では得られない。TODO をプロンプトへ漏らさず、転写が実測した
     # 情報（セクション名・小節数）だけで埋める。
@@ -505,30 +496,6 @@ def render_html(data: dict[str, Any]) -> str:
     def bucket(items: list[str]) -> str:
         return "、".join(items) if items else "なし"
 
-    # 明るさ ✗ のうち「draft が TODO（中立帯）を返すため一致扱いにならない」件数
-    # （計器側の目盛り事情）をデータから数える。ただし目標 brightness が
-    # 実際に中立帯でない場合、これは「同じ中立帯への着地」ではなく明るさの
-    # 不一致（喪失）なので、目標値を見て表記を分岐する。
-    brightness_summary = next((f for f in report.fields if f.field == "brightness"), None)
-    neutral_landings = (
-        sum(1 for v in brightness_summary.observed_values if str(v).startswith("TODO"))
-        if brightness_summary is not None
-        else 0
-    )
-    if not neutral_landings:
-        sensor_note = ""
-    elif score.physical.brightness == "neutral":
-        sensor_note = (
-            f"「明るさ」は {neutral_landings}/{report.n_takes} テイクが目標と同じ中立帯に"
-            "着地していたが、draft 側の目盛りが中立帯を TODO と表記するため一致に数えられない。"
-        )
-    else:
-        sensor_note = (
-            f"「明るさ」は {neutral_landings}/{report.n_takes} テイクで draft 側の目盛りが"
-            f"中立帯（TODO）を示したが、目標は「{score.physical.brightness}」で中立帯ではない"
-            "ため、実際には明るさの不一致（喪失）。"
-        )
-
     template = Template(_PAGE_TEMPLATE)
     return template.substitute(
         source_bpm=f"{source['measured']['bpm']:g}",
@@ -549,7 +516,6 @@ def render_html(data: dict[str, Any]) -> str:
         carried=_esc(bucket(carried)),
         partial=_esc(bucket(partial)),
         lost=_esc(bucket(lost)),
-        sensor_note=_esc(sensor_note),
         model_id=_esc(data["model_id"]),
     )
 
@@ -715,7 +681,7 @@ td.measured{color:var(--measured)}
     <div class="bucket mid"><b>△ ときどき運べた</b>$partial</div>
     <div class="bucket bad"><b>✗ 運べなかった</b>$lost</div>
   </div>
-  <p class="small dim">脚注: ✗ の一部は生成器でなく計器側の目盛り事情を含む。$sensor_note
+  <p class="small dim">脚注: ✗ の一部は生成器でなく計器側の目盛り事情を含む。
   「音の広がり」はセンサー未校正（第一幕から一貫して自己申告）。つまり ✗ には
   「機種が運べない」と「計器がまだ読めない」の両方が混ざり、その区別まで含めて
   次の改善対象の座標になる。</p>

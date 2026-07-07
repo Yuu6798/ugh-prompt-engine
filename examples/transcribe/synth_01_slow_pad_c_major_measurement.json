@@ -41,7 +41,8 @@
       "unit": "Hz",
       "score_value": "dark",
       "calibration": [
-        "Canonical sensor is spectral_centroid with dark <=1200 Hz and bright >=2500 Hz (PR #66); legacy band-ratio brightness is not used."
+        "Canonical sensor is spectral_centroid with dark <=1200 Hz and bright >=2500 Hz (PR #66); legacy band-ratio brightness is not used.",
+        "The interior band (1200, 2500) is reported as the first-class label 'neutral'."
       ]
     },
     {

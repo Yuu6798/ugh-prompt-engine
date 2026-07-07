@@ -37,6 +37,7 @@ CALIBRATION_NOTES: dict[str, list[str]] = {
     "brightness": [
         "Canonical sensor is spectral_centroid with dark <=1200 Hz and bright >=2500 Hz "
         "(PR #66); legacy band-ratio brightness is not used.",
+        "The interior band (1200, 2500) is reported as the first-class label 'neutral'.",
     ],
     "active_rate_target": [
         "Range-string conversion for score fields is intentionally deferred to T1.",
@@ -172,7 +173,7 @@ def _brightness_score_value(raw_value: float | None) -> str | None:
         return "dark"
     if raw_value >= 2500.0:
         return "bright"
-    return None
+    return "neutral"
 
 
 def _sample_id(bundle: RPEBundle) -> str:

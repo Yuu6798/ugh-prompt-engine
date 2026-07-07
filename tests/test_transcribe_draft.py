@@ -21,7 +21,7 @@ from svp_rpe.semantic_ci.audit import RANGE_PATTERN, _parse_numeric_range
 from svp_rpe.transcribe import (
     TODO_AUTHOR_INPUT,
     TODO_BPM_UNDETECTED,
-    TODO_BRIGHTNESS_NEUTRAL,
+    TODO_BRIGHTNESS_MISSING,
     TODO_KEY_UNDETECTED,
     TODO_SENTINEL_PREFIX,
     TODO_STEREO_BAND_UNDEFINED,
@@ -30,7 +30,14 @@ from svp_rpe.transcribe import (
     draft_score,
     render_draft_score_yaml,
 )
-from svp_rpe.transcribe.score_draft import _bars_for_section, _format_fixed_range
+from svp_rpe.compose.models import PhysicalLayer
+from svp_rpe.transcribe.models import FieldMeasurement
+from svp_rpe.transcribe.score_draft import (
+    _bars_for_section,
+    _brightness_value,
+    _draft_fixity,
+    _format_fixed_range,
+)
 
 runner = CliRunner()
 
@@ -67,7 +74,7 @@ def test_todo_sentinel_constants_are_pinned() -> None:
     assert TODO_SENTINEL_PREFIX == "TODO(transcribe):"
     assert TODO_AUTHOR_INPUT == "TODO(transcribe): author input required"
     assert TODO_BPM_UNDETECTED == "TODO(transcribe): bpm undetected"
-    assert TODO_BRIGHTNESS_NEUTRAL == "TODO(transcribe): brightness neutral band"
+    assert TODO_BRIGHTNESS_MISSING == "TODO(transcribe): brightness sensor unavailable"
     assert TODO_KEY_UNDETECTED == "TODO(transcribe): key undetected"
     assert TODO_STEREO_BAND_UNDEFINED == "TODO(transcribe): stereo band undefined"
     assert TODO_STEREO_UNMEASURED == "TODO(transcribe): stereo unmeasured"
@@ -97,7 +104,7 @@ def test_all_synth_drafts_are_loader_valid(tmp_path: Path) -> None:
         assert loaded.semantic.grv.secondary == TODO_AUTHOR_INPUT
         assert loaded.semantic.delta_e.overall == TODO_AUTHOR_INPUT
         assert loaded.semantic.avoid == []
-        assert loaded.physical.brightness in {"dark", "bright"}
+        assert loaded.physical.brightness in {"dark", "neutral", "bright"}
         assert loaded.physical.stereo_width == TODO_STEREO_UNMEASURED
         assert loaded.fixity is not None
         assert loaded.fixity["bpm"] == "locked"
@@ -139,16 +146,51 @@ def test_draft_score_marks_measured_stereo_as_band_undefined() -> None:
     assert field_fixity(score)["stereo_width"] == "unlocked"
 
 
-def test_draft_score_marks_neutral_brightness_as_todo(tmp_path: Path) -> None:
+def test_draft_score_labels_neutral_band_brightness(tmp_path: Path) -> None:
     score = draft_score(_make_bundle(spectral_centroid=1800.0))
     yaml_text = render_draft_score_yaml(score)
     score_path = tmp_path / "neutral_brightness.yaml"
     score_path.write_text(yaml_text, encoding="utf-8")
 
-    assert score.physical.brightness == TODO_BRIGHTNESS_NEUTRAL
-    assert field_fixity(score)["brightness"] == "unlocked"
+    assert score.physical.brightness == "neutral"
+    assert field_fixity(score)["brightness"] == "locked"
     assert field_fixity(score)["bpm"] == "locked"
-    assert load_composition_score(score_path).physical.brightness == TODO_BRIGHTNESS_NEUTRAL
+    assert load_composition_score(score_path).physical.brightness == "neutral"
+
+
+def test_brightness_value_marks_missing_centroid_as_todo() -> None:
+    # spectral_centroid is a required (non-Optional) float on PhysicalRPE, so a
+    # missing raw_value can only be exercised at the FieldMeasurement level
+    # (e.g. a future sensor that legitimately fails to report). This pins the
+    # sentinel that is now reserved exclusively for centroid unavailability,
+    # since the interior band no longer maps to score_value=None.
+    measurement = FieldMeasurement(
+        score_field="brightness",
+        sensor="physical.spectral_centroid",
+        raw_value=None,
+        unit="Hz",
+        score_value=None,
+        calibration=[],
+    )
+
+    assert _brightness_value(measurement) == TODO_BRIGHTNESS_MISSING
+
+
+def test_draft_fixity_marks_missing_brightness_as_unlocked() -> None:
+    physical = PhysicalLayer(
+        bpm=120,
+        key="C major",
+        time_signature="4/4",
+        active_rate_target="0.70-0.75",
+        valley_depth_target="0.15-0.20",
+        brightness=TODO_BRIGHTNESS_MISSING,
+        stereo_width=TODO_STEREO_UNMEASURED,
+    )
+
+    fixity = _draft_fixity(physical)
+
+    assert fixity["brightness"] == "unlocked"
+    assert fixity["bpm"] == "locked"
 
 
 def test_draft_score_marks_missing_bpm_as_todo(tmp_path: Path) -> None:

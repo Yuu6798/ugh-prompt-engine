@@ -128,8 +128,8 @@ def test_brightness_reads_spectral_centroid_not_legacy_band_ratio() -> None:
     ("centroid", "expected"),
     [
         (1200.0, "dark"),
-        (1200.1, None),
-        (2499.9, None),
+        (1200.1, "neutral"),
+        (2499.9, "neutral"),
         (2500.0, "bright"),
     ],
 )
