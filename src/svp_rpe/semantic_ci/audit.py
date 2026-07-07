@@ -394,6 +394,8 @@ def _target_band(feature_name: str, target: Any) -> Optional[_Band]:
     if target is None:
         return None
     target_label = _normalize_label(str(target))
+    if target_label == "neutral":
+        return _neutral_band(feature_name)
     target_aliases = _label_aliases(target_label)
     for rule in _semantic_rules_for_feature(feature_name):
         labels = {_normalize_label(label) for label in rule["labels"]}
@@ -411,6 +413,29 @@ def _target_band(feature_name: str, target: Any) -> Optional[_Band]:
             description = str(target)
         return _Band(description, lower, upper)
     return None
+
+
+def _neutral_band(feature_name: str) -> Optional[_Band]:
+    """dark/bright ルールの間隙から neutral 帯を導出する。
+
+    ``semantic_rules.yaml`` に "neutral" ラベルは存在しない（perc.dark /
+    perc.bright の目盛りコメント通り、dark <= 1200 / bright >= 2500 の間隙が
+    暗黙の neutral 帯）。1200/2500 をここへハードコードする代わりに、既存の
+    perc.dark の ``spectral_centroid_max`` と perc.bright の
+    ``spectral_centroid_min`` を rule から読んで帯を組み立てる（再校正時に
+    自動追従する）。どちらかが rule から取れなければ従来通り undefined。
+    """
+    dark_max: Optional[float] = None
+    bright_min: Optional[float] = None
+    for rule in _semantic_rules_for_feature(feature_name):
+        labels = {_normalize_label(label) for label in rule["labels"]}
+        if dark_max is None and "dark" in labels:
+            dark_max = rule["bounds"].get("max")
+        if bright_min is None and "bright" in labels:
+            bright_min = rule["bounds"].get("min")
+    if dark_max is None or bright_min is None:
+        return None
+    return _Band(f"{feature_name} {dark_max:g}-{bright_min:g}", dark_max, bright_min)
 
 
 def _observed_band(feature_name: str, metrics: Mapping[str, Any]) -> Optional[str]:
