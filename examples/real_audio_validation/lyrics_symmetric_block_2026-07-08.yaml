@@ -1,0 +1,257 @@
+# 歌詞対称ブロック — CLAP ③ closeout (2026-07-08)
+#
+# 1. ブロック定義: 本ブロックは docs/lyrics_semantic_anchor.md の n=3 追試
+#    (#124, examples/real_audio_validation/lyrics_arrange_demo_2026-07-01.yaml) とは
+#    **別プロンプトの独立ブロック (v2)**。ジャンル内で Style / Exclude Styles を完全共通化し、
+#    差は Instrumental トグルと歌詞欄のみ（matched-pair 設計）。各条件は 2 テイク
+#    （1 本目 + 再生成 alt）で、EDM/Rock × 歌詞 present/absent の 2x2 セルを
+#    instrumental 側も含めて対称に埋める（#124 で欠けていた instrumental alt を取得）。
+#
+# 2. プロンプト pin（ユーザー確認済み・発行文面のまま使用）:
+#    EDM Style: "Melodic EDM, 129 BPM, E major, four-on-the-floor kick, bright supersaw
+#      leads, sidechained sub bass, energetic drop, steady tempo, no key change"
+#    EDM Exclude Styles: "orchestral, acoustic, rock guitar, tempo change"
+#    Rock Style: "Anthemic rock, 108 BPM, E major, driving electric guitars, live drums,
+#      punchy bass, verse-chorus dynamics, steady tempo, no key change"
+#    Rock Exclude Styles: "EDM, electronic dance, orchestral, tempo change"
+#    歌詞: StartinA の歌詞を present 4 テイク（edm_lyrics_v2 / edm_lyrics_v2_alt /
+#      rock_lyrics_v2 / rock_lyrics_v2_alt）に同一貼付。モデルは 8 本同一
+#      （バージョン名は未記録）。採用規則: 発注書指定の「各条件 1 本目機械採用」。
+#
+# 3. 再現手順: 原 mp3（uploads 原ファイル基準で audio_sha256 を pin）→ ffmpeg 6.1.1
+#    (6.1.1-3ubuntu5) で 44100Hz / stereo wav へ変換
+#    (`ffmpeg -i <src> -ac 2 -ar 44100 <dst>.wav`) → `svprpe extract` / `svprpe transcribe`。
+#    wav は再現可能な派生物のため非 pin（sha256 は原 mp3 基準）。
+#
+# 4. honesty:
+#    (a) byte_size 弁別は実効ビットレート (effective_bitrate_kbps 列) がほぼ一定のため
+#        **実質 duration 弁別**であり、present/absent 割り当ての確定根拠は byte_size では
+#        なく CLAP vocal contrast の完全分離（present 0.246–0.285 vs absent 0.009–0.117、
+#        examples/learned/clap/lyrics_vocal_contrast_v2_fixture.json）である。
+#    (b) Rock の instrumental 2 本 (rock_inst_v2 69.28s / rock_inst_v2_alt 30.16s) は
+#        歌詞側 (~183s) より大幅に短く、duration 交絡は残置（本ブロックでは未解消）。
+#    (c) edm_inst_v2_alt の bpm=89.1 は他 3 本 (136.0) に対し比 1.526 で
+#        R2-2f (docs/roundtrip_corpus_screen.md) の 3:2 窓 (1.35, 1.6) 内だが、抽出時の
+#        `bpm_prior_disagreement` は false（非発火）— halving か真に遅い生成かは
+#        未裁定。R2 live E2E の副次観測として記録するのみで本ブロックの判定には使わない。
+#    (d) 事前登録規約（効果 = 条件間の最近差 = min(present) − max(absent) / ノイズ =
+#        max(present スプレッド, absent スプレッド)）と判定値:
+#          - mid_ratio: EDM 効果 0.010 < ノイズ 0.025 ✗ / Rock 効果 0.017 < ノイズ 0.019 ✗
+#            → 昇格棄却
+#          - CLAP vocal contrast: EDM 0.136 > 0.064 ✓ (2.1×) / Rock 0.155 > 0.083 ✓ (1.9×)
+#            → 両ジャンル充足
+#        判定・叙述の詳細は docs/lyrics_semantic_anchor.md 「2026-07-08 対称ブロック」節
+#        および docs/control_profile.md DD-4 を参照。本ファイルは measured 値のみを保持する。
+#
+# 5. Drive 未アップロード: 本ブロックの音源は genre calibration コーパス
+#    (docs/genre_calibration_planning.md) の precedent と同じく、drive_file_id が
+#    確定するまで捏造しない。Drive アップロード完了後に追記する（follow-up）。
+#
+# provenance / 計測パイプライン詳細（生データ由来）:
+#   - mid_ratio / brilliance / sub_bass = extract RPE の spectral_bands 系。
+#   - top_chord / sharp4_family_frac = transcribe draft chord_progression 由来
+#     (♯4 ファミリー = E major / C# minor diatonic 三和音の比率)。コード推定器由来で
+#     instrumental / 歪みギターでは不安定になりうる（先例 fixture の honesty 注記と同様）。
+#   - 解釈・効果判定はこのファイルでは行わない（設計側判断は docs 側）。
+schema_version: '1.0'
+takes:
+- id: edm_lyrics_v2
+  arrange: EDM
+  lyrics: present
+  source_file: d95ded66-________EDM__________X_.mp3
+  source_format: mp3
+  byte_size: 4466382
+  audio_sha256: b4a4d3d381cc9d9c6fe7449d941b8d8331184498334ed87295119417847e7f80
+  duration_sec: 198.36
+  effective_bitrate_kbps: 180.132
+  bpm: 136.0
+  key: B
+  mode: major
+  key_confidence: 0.827
+  spectral_centroid: 3494.74
+  mid_ratio: 0.233
+  dynamic_range_db: 5.93
+  harmonic_ratio: 0.833
+  percussive_ratio: 0.167
+  onset_density: 5.107
+  brilliance: 0.237
+  sub_bass: 0.047
+  loudness_lufs: -13.12
+  top_chord: B
+  sharp4_family_frac: 0.609
+  chord_event_count: 23
+- id: edm_lyrics_v2_alt
+  arrange: EDM
+  lyrics: present
+  source_file: 5b156234-________EDM__________Y.mp3
+  source_format: mp3
+  byte_size: 4733382
+  audio_sha256: ffaed2ba16ddee983e684cae5a78ff8ae78fd2e9b7faf4578202e71db3d36a93
+  duration_sec: 207.72
+  effective_bitrate_kbps: 182.299
+  bpm: 136.0
+  key: E
+  mode: major
+  key_confidence: 0.797
+  spectral_centroid: 3449.58
+  mid_ratio: 0.224
+  dynamic_range_db: 6.01
+  harmonic_ratio: 0.834
+  percussive_ratio: 0.166
+  onset_density: 5.108
+  brilliance: 0.236
+  sub_bass: 0.041
+  loudness_lufs: -13.55
+  top_chord: B
+  sharp4_family_frac: 0.394
+  chord_event_count: 33
+- id: edm_inst_v2
+  arrange: EDM
+  lyrics: absent
+  source_file: 6894d7f7-________EDM__________A_.mp3
+  source_format: mp3
+  byte_size: 4069398
+  audio_sha256: 943a71396c05286f1cfcc6fcfae28c9a1224ebcb405df6dad6294437dcf04177
+  duration_sec: 179.04
+  effective_bitrate_kbps: 181.832
+  bpm: 136.0
+  key: E
+  mode: major
+  key_confidence: 0.854
+  spectral_centroid: 3384.6
+  mid_ratio: 0.214
+  dynamic_range_db: 6.87
+  harmonic_ratio: 0.845
+  percussive_ratio: 0.155
+  onset_density: 5.345
+  brilliance: 0.24
+  sub_bass: 0.053
+  loudness_lufs: -13.57
+  top_chord: Em
+  sharp4_family_frac: 0.6
+  chord_event_count: 20
+- id: edm_inst_v2_alt
+  arrange: EDM
+  lyrics: absent
+  source_file: 8e43d864-________EDM__________B.mp3
+  source_format: mp3
+  byte_size: 2852694
+  audio_sha256: dae21f670005d0210937392a2e3da93f5c3808e6cb171cbad7fa79584bff42c4
+  duration_sec: 121.04
+  effective_bitrate_kbps: 188.546
+  bpm: 89.1
+  key: C#
+  mode: minor
+  key_confidence: 0.804
+  spectral_centroid: 3439.72
+  mid_ratio: 0.189
+  dynamic_range_db: 6.96
+  harmonic_ratio: 0.836
+  percussive_ratio: 0.164
+  onset_density: 6.213
+  brilliance: 0.248
+  sub_bass: 0.044
+  loudness_lufs: -13.8
+  top_chord: C#m
+  sharp4_family_frac: 0.727
+  chord_event_count: 11
+- id: rock_lyrics_v2
+  arrange: Rock
+  lyrics: present
+  source_file: 691cd7bd-_____________________.mp3
+  source_format: mp3
+  byte_size: 4147638
+  audio_sha256: e06fcc8bd542aafc4047e68f0403630fd6bf74bf64fdc97fbc3113e79fed8893
+  duration_sec: 183.72
+  effective_bitrate_kbps: 180.607
+  bpm: 107.67
+  key: A
+  mode: major
+  key_confidence: 0.93
+  spectral_centroid: 3412.8
+  mid_ratio: 0.247
+  dynamic_range_db: 5.93
+  harmonic_ratio: 0.742
+  percussive_ratio: 0.258
+  onset_density: 4.719
+  brilliance: 0.21
+  sub_bass: 0.019
+  loudness_lufs: -13.98
+  top_chord: E
+  sharp4_family_frac: 0.808
+  chord_event_count: 26
+- id: rock_lyrics_v2_alt
+  arrange: Rock
+  lyrics: present_alt
+  source_file: d27d80cd-______________________1.mp3
+  source_format: mp3
+  byte_size: 4134774
+  audio_sha256: 08ca6410bac6f412599b3fdf7d982bd71e7f51e6e55eeab057e8b94003c00cce
+  duration_sec: 182.8
+  effective_bitrate_kbps: 180.953
+  bpm: 107.67
+  key: E
+  mode: major
+  key_confidence: 0.901
+  spectral_centroid: 3244.96
+  mid_ratio: 0.249
+  dynamic_range_db: 4.91
+  harmonic_ratio: 0.802
+  percussive_ratio: 0.198
+  onset_density: 4.573
+  brilliance: 0.187
+  sub_bass: 0.021
+  loudness_lufs: -13.4
+  top_chord: E
+  sharp4_family_frac: 1.0
+  chord_event_count: 17
+- id: rock_inst_v2
+  arrange: Rock
+  lyrics: absent
+  source_file: d9a0de15-_____________________.mp3
+  source_format: mp3
+  byte_size: 1679334
+  audio_sha256: a5d351d8cb743dc0014f3c73575bc8fc3bc44136fce0f9be6cba32ab65b6e5ab
+  duration_sec: 69.28
+  effective_bitrate_kbps: 193.918
+  bpm: 103.36
+  key: E
+  mode: major
+  key_confidence: 0.82
+  spectral_centroid: 2954.76
+  mid_ratio: 0.211
+  dynamic_range_db: 4.25
+  harmonic_ratio: 0.811
+  percussive_ratio: 0.189
+  onset_density: 4.388
+  brilliance: 0.155
+  sub_bass: 0.031
+  loudness_lufs: -14.5
+  top_chord: C#
+  sharp4_family_frac: 0.6
+  chord_event_count: 10
+- id: rock_inst_v2_alt
+  arrange: Rock
+  lyrics: absent_alt
+  source_file: 42561884-______________________1.mp3
+  source_format: mp3
+  byte_size: 726486
+  audio_sha256: 3271c83b4dae6be542c15f831434e822d048db58839a5d3224b2e34ce9d55689
+  duration_sec: 30.16
+  effective_bitrate_kbps: 192.702
+  bpm: 107.67
+  key: E
+  mode: major
+  key_confidence: 0.943
+  spectral_centroid: 3075.04
+  mid_ratio: 0.23
+  dynamic_range_db: 4.65
+  harmonic_ratio: 0.805
+  percussive_ratio: 0.195
+  onset_density: 4.774
+  brilliance: 0.164
+  sub_bass: 0.028
+  loudness_lufs: -13.51
+  top_chord: C#
+  sharp4_family_frac: 0.5
+  chord_event_count: 8

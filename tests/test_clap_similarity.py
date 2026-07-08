@@ -306,3 +306,71 @@ def test_k2_seg_semantic_core_clap_fixture_schema_and_self_consistency(
     d = grip_effect_size(by_level["calm"], by_level["euphoric"])
     assert d == pytest.approx(expected_d, abs=1e-5)
     assert classify_grip(d, 1) == expected_classification
+
+
+def test_v2_symmetric_block_clap_fixture_links_to_physical_measurements_and_pins_direction():
+    """CLAP ③ closeout（2026-07-08 対称ブロック）の整合性テスト。
+
+    `test_cross_validation_clap_and_mid_ratio_agree_on_direction` と同じ pattern を
+    v2 データ（instrumental alt 込み n≥2×2 セル）に適用する:
+
+    1. CLAP v2 fixture（examples/learned/clap/lyrics_vocal_contrast_v2_fixture.json）と
+       物理 measured ログ（examples/real_audio_validation/
+       lyrics_symmetric_block_2026-07-08.yaml）を同一 sample_id 間で audio_sha256 が
+       一致することを検証する（2 系統のデータが同一バイト列を計測している保証）。
+    2. 各ジャンルで min(present の contrast_fit) > max(absent の contrast_fit) を pin する
+       （docs/lyrics_semantic_anchor.md「2026-07-08 対称ブロック」節: CLAP vocal contrast
+       は両ジャンルで完全分離＝mid_ratio 棄却に対し充足したセンサー）。
+
+    committed データが変わったらこのテストが落ち、docs の再検証を強制する。
+    """
+    import yaml
+
+    root = Path(__file__).resolve().parents[1]
+    fixture = json.loads(
+        (root / "examples" / "learned" / "clap" / "lyrics_vocal_contrast_v2_fixture.json")
+        .read_text(encoding="utf-8")
+    )
+    physical_log = yaml.safe_load(
+        (
+            root
+            / "examples"
+            / "real_audio_validation"
+            / "lyrics_symmetric_block_2026-07-08.yaml"
+        ).read_text(encoding="utf-8")
+    )
+
+    physical_by_id = {take["id"]: take for take in physical_log["takes"]}
+    assert len(fixture["samples"]) == 8
+
+    by_genre: dict[str, dict[str, list[float]]] = {}
+    for sample in fixture["samples"]:
+        sample_id = sample["sample_id"]
+        take = physical_by_id.get(sample_id)
+        assert take is not None, (
+            f"sample {sample_id}: 物理 measured ログ側に同一 id が見つからない"
+            "（2 系統のデータのリンクが切れた＝整合性の前提が崩れている）"
+        )
+        assert sample["audio_sha256"] == take["audio_sha256"], (
+            f"sample {sample_id}: CLAP fixture と物理ログの audio_sha256 が不一致"
+        )
+
+        genre = str(sample["condition"]["genre"])
+        lyrics = str(sample["condition"]["lyrics"])
+        bucket = "present" if lyrics.startswith("present") else "absent"
+        by_genre.setdefault(genre, {}).setdefault(bucket, []).append(
+            float(sample["contrast_fit"])
+        )
+
+    assert set(by_genre) == {"EDM", "Rock"}
+    for genre, buckets in by_genre.items():
+        assert set(buckets) == {"present", "absent"}, f"{genre}: 条件セル欠落"
+        assert len(buckets["present"]) == 2 and len(buckets["absent"]) == 2, (
+            f"{genre}: n≥2×2 セルが崩れている"
+        )
+        present_min = min(buckets["present"])
+        absent_max = max(buckets["absent"])
+        assert present_min > absent_max, (
+            f"{genre}: CLAP vocal contrast の present > absent 完全分離が崩れた — "
+            "committed データが変わったなら docs の 2026-07-08 節を再検証すること"
+        )

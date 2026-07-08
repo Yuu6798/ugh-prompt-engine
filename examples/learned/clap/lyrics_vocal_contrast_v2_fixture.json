@@ -1,0 +1,232 @@
+{
+  "schema_version": "1.1",
+  "generator": "collect_clap_fixture.py",
+  "manifest": "examples/learned/clap/lyrics_vocal_contrast_v2_manifest.yaml",
+  "model": {
+    "name": "laion_clap",
+    "checkpoint": "music_audioset_epoch_15_esc_90.14.pt",
+    "checkpoint_sha256": "fae3e9c087f2909c28a09dc31c8dfcdacbc42ba44c70e972b58c1bd1caf6dedd",
+    "amodel": "HTSAT-base",
+    "info": [
+      {
+        "name": "laion_clap",
+        "version": "1.1.7",
+        "provider": "LAION-AI/CLAP",
+        "task": "embedding",
+        "license": "CC0-1.0 (upstream LICENSE); PyPI trove classifier says Apache-2.0 (inconsistent upstream metadata, see docs/learned_models_policy.md 3.1)",
+        "weights_license": "Hugging Face repository-level license badge: cc0-1.0; no additional checkpoint-specific license text found in the empty model card (verified 2026-07-02, PR2b-2)"
+      }
+    ]
+  },
+  "samples": [
+    {
+      "prompt_groups": {
+        "positive": [
+          "a song with lead vocals",
+          "singing with lyrics"
+        ],
+        "negative": [
+          "an instrumental track with no vocals",
+          "instrumental music"
+        ]
+      },
+      "condition": {
+        "genre": "EDM",
+        "lyrics": "present"
+      },
+      "sample_id": "edm_lyrics_v2",
+      "audio_path": "../../roundtrip/cache/pr2b-2-clap/edm_lyrics_v2.mp3",
+      "audio_sha256": "b4a4d3d381cc9d9c6fe7449d941b8d8331184498334ed87295119417847e7f80",
+      "cosines": {
+        "a song with lead vocals": 0.399104,
+        "singing with lyrics": 0.254118,
+        "an instrumental track with no vocals": 0.037412,
+        "instrumental music": 0.04679
+      },
+      "contrast_fit": 0.28451
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "a song with lead vocals",
+          "singing with lyrics"
+        ],
+        "negative": [
+          "an instrumental track with no vocals",
+          "instrumental music"
+        ]
+      },
+      "condition": {
+        "genre": "EDM",
+        "lyrics": "present_alt"
+      },
+      "sample_id": "edm_lyrics_v2_alt",
+      "audio_path": "../../roundtrip/cache/pr2b-2-clap/edm_lyrics_v2_alt.mp3",
+      "audio_sha256": "ffaed2ba16ddee983e684cae5a78ff8ae78fd2e9b7faf4578202e71db3d36a93",
+      "cosines": {
+        "a song with lead vocals": 0.403462,
+        "singing with lyrics": 0.258492,
+        "an instrumental track with no vocals": 0.073404,
+        "instrumental music": 0.083594
+      },
+      "contrast_fit": 0.252478
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "a song with lead vocals",
+          "singing with lyrics"
+        ],
+        "negative": [
+          "an instrumental track with no vocals",
+          "instrumental music"
+        ]
+      },
+      "condition": {
+        "genre": "EDM",
+        "lyrics": "absent"
+      },
+      "sample_id": "edm_inst_v2",
+      "audio_path": "../../roundtrip/cache/pr2b-2-clap/edm_inst_v2.mp3",
+      "audio_sha256": "943a71396c05286f1cfcc6fcfae28c9a1224ebcb405df6dad6294437dcf04177",
+      "cosines": {
+        "a song with lead vocals": 0.438925,
+        "singing with lyrics": 0.171559,
+        "an instrumental track with no vocals": 0.185978,
+        "instrumental music": 0.19145
+      },
+      "contrast_fit": 0.116528
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "a song with lead vocals",
+          "singing with lyrics"
+        ],
+        "negative": [
+          "an instrumental track with no vocals",
+          "instrumental music"
+        ]
+      },
+      "condition": {
+        "genre": "EDM",
+        "lyrics": "absent_alt"
+      },
+      "sample_id": "edm_inst_v2_alt",
+      "audio_path": "../../roundtrip/cache/pr2b-2-clap/edm_inst_v2_alt.mp3",
+      "audio_sha256": "dae21f670005d0210937392a2e3da93f5c3808e6cb171cbad7fa79584bff42c4",
+      "cosines": {
+        "a song with lead vocals": 0.421379,
+        "singing with lyrics": 0.119643,
+        "an instrumental track with no vocals": 0.214219,
+        "instrumental music": 0.221627
+      },
+      "contrast_fit": 0.052588
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "a song with lead vocals",
+          "singing with lyrics"
+        ],
+        "negative": [
+          "an instrumental track with no vocals",
+          "instrumental music"
+        ]
+      },
+      "condition": {
+        "genre": "Rock",
+        "lyrics": "present"
+      },
+      "sample_id": "rock_lyrics_v2",
+      "audio_path": "../../roundtrip/cache/pr2b-2-clap/rock_lyrics_v2.mp3",
+      "audio_sha256": "e06fcc8bd542aafc4047e68f0403630fd6bf74bf64fdc97fbc3113e79fed8893",
+      "cosines": {
+        "a song with lead vocals": 0.342404,
+        "singing with lyrics": 0.309429,
+        "an instrumental track with no vocals": 0.045568,
+        "instrumental music": 0.08175
+      },
+      "contrast_fit": 0.262258
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "a song with lead vocals",
+          "singing with lyrics"
+        ],
+        "negative": [
+          "an instrumental track with no vocals",
+          "instrumental music"
+        ]
+      },
+      "condition": {
+        "genre": "Rock",
+        "lyrics": "present_alt"
+      },
+      "sample_id": "rock_lyrics_v2_alt",
+      "audio_path": "../../roundtrip/cache/pr2b-2-clap/rock_lyrics_v2_alt.mp3",
+      "audio_sha256": "08ca6410bac6f412599b3fdf7d982bd71e7f51e6e55eeab057e8b94003c00cce",
+      "cosines": {
+        "a song with lead vocals": 0.344957,
+        "singing with lyrics": 0.314623,
+        "an instrumental track with no vocals": 0.067611,
+        "instrumental music": 0.099425
+      },
+      "contrast_fit": 0.246272
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "a song with lead vocals",
+          "singing with lyrics"
+        ],
+        "negative": [
+          "an instrumental track with no vocals",
+          "instrumental music"
+        ]
+      },
+      "condition": {
+        "genre": "Rock",
+        "lyrics": "absent"
+      },
+      "sample_id": "rock_inst_v2",
+      "audio_path": "../../roundtrip/cache/pr2b-2-clap/rock_inst_v2.mp3",
+      "audio_sha256": "a5d351d8cb743dc0014f3c73575bc8fc3bc44136fce0f9be6cba32ab65b6e5ab",
+      "cosines": {
+        "a song with lead vocals": 0.324624,
+        "singing with lyrics": 0.188134,
+        "an instrumental track with no vocals": 0.223319,
+        "instrumental music": 0.271594
+      },
+      "contrast_fit": 0.008923
+    },
+    {
+      "prompt_groups": {
+        "positive": [
+          "a song with lead vocals",
+          "singing with lyrics"
+        ],
+        "negative": [
+          "an instrumental track with no vocals",
+          "instrumental music"
+        ]
+      },
+      "condition": {
+        "genre": "Rock",
+        "lyrics": "absent_alt"
+      },
+      "sample_id": "rock_inst_v2_alt",
+      "audio_path": "../../roundtrip/cache/pr2b-2-clap/rock_inst_v2_alt.mp3",
+      "audio_sha256": "3271c83b4dae6be542c15f831434e822d048db58839a5d3224b2e34ce9d55689",
+      "cosines": {
+        "a song with lead vocals": 0.323183,
+        "singing with lyrics": 0.220614,
+        "an instrumental track with no vocals": 0.163269,
+        "instrumental music": 0.197423
+      },
+      "contrast_fit": 0.091552
+    }
+  ],
+  "embeddings_sidecar": "lyrics_vocal_contrast_v2_fixture.embeddings.json"
+}

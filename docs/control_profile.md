@@ -181,6 +181,23 @@ performer 由来でも実 Suno corpus take 由来でもよい（path 非依存�
      ジャンル干渉と分離できること（`mid_ratio` はジャンルでも動く: Rock 0.208–0.245 /
      EDM 0.217–0.226 — [`lyrics_semantic_anchor.md`](lyrics_semantic_anchor.md) 結論2）。
 
+  **2026-07-08 判定（CLAP ③ closeout）**: 条件 1 は n≥2×2 セル（EDM/Rock 各
+  instrumental alt 込み、
+  [`lyrics_semantic_anchor.md`](lyrics_semantic_anchor.md) 「2026-07-08 対称ブロック」節）
+  で再検証し、**mid_ratio では両ジャンルとも棄却**（EDM 効果 0.010 < ノイズ 0.025、
+  Rock 効果 0.017 < ノイズ 0.019）が確定した一方、**CLAP vocal contrast では両ジャンル
+  とも充足**（EDM 0.136 > 0.064 = 2.1×、Rock 0.155 > 0.083 = 1.9×）。よって条件 1 の
+  ゲートセンサー定義を `mid_ratio` から **CLAP vocal contrast**
+  （`svprpe extract --clap-semantic` の vocal_presence 軸 / #131 と同じ
+  `contrast_fit` 方式、[`semantic_sensor_clap.md`](semantic_sensor_clap.md)）へ改訂する
+  設計判断をここに明文化する。ただし **tight 昇格の config 反映は未実施** — 条件 2
+  （K3 直交性の formal 評価）と、grip_class 変更がコンパイル優先順位（`_rank_key_factory`
+  の 3 ティア）に波及するための回帰確認が follow-up として残る。
+  `config/device_profiles/suno.yaml` および
+  `examples/composition/midnight_signal/composition_score.yaml` の
+  `control_profile.suno.lyrics_presence`（現状 `grip_class: loose`）は本節では
+  変更しない。
+
 ## デバイスプロファイル（PR3 後半）
 
 `control_profile` は「楽譜が効くチャネルを知る」ための自己記述だが、K3-2a
