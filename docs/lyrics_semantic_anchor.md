@@ -188,6 +188,8 @@ robustness が言えるのは **Rock だけ**である：
 `dynamic_range` を棄却したのと同じ規律で、mid_ratio も **Rock で noise 超え / EDM は
 directional のみ**と限定する。昇格には **各ジャンルで instrumental の alt を含む n≥2×2
 セル**を揃える必要がある（次回の生成バッチで instrumental も別取りする）。
+（superseded: 2026-07-08 節参照 — instrumental alt 込み n≥2×2 セルで再検証した結果、
+mid_ratio の昇格は両ジャンルとも棄却に確定した。）
 
 ### 結論 3（副次）：grip はチャネルで崩れ方が違う
 
@@ -295,3 +297,79 @@ instrumental alt を含む n≥2×2 セルで昇格）と、未探索の意味�
   測れない。意味層センサー導入まで主観記録で保全する。
 - **原曲寄り度の交絡未分離**：歌詞内容とアレンジ距離を分離する対照（検証デザイン
   B/C）が未実施。
+
+## 2026-07-08 対称ブロック（CLAP ③ closeout）
+
+結論 2（mid_ratio 昇格は Rock のみノイズ超え）の未解決課題だった
+「各ジャンルで instrumental の alt を含む n≥2×2 セル」を、#124 とは**別プロンプトの
+独立ブロック（v2）**で埋めた。本節でこの追試を確定させ、`lyrics_presence` 昇格判定を
+closeout する。
+
+### ブロック設計
+
+- EDM/Rock 各ジャンル内で Style / Exclude Styles を完全共通化し、差は Instrumental
+  トグルと歌詞欄のみ（matched-pair）。各条件（歌詞 present / absent）は 2 テイク
+  （1 本目 + 再生成 alt）＝ instrumental 側も alt を初取得し、n≥2×2 セルを充足。
+- プロンプト pin（発行文面のまま）：
+  - EDM Style: "Melodic EDM, 129 BPM, E major, four-on-the-floor kick, bright supersaw
+    leads, sidechained sub bass, energetic drop, steady tempo, no key change" /
+    Exclude: "orchestral, acoustic, rock guitar, tempo change"
+  - Rock Style: "Anthemic rock, 108 BPM, E major, driving electric guitars, live drums,
+    punchy bass, verse-chorus dynamics, steady tempo, no key change" /
+    Exclude: "EDM, electronic dance, orchestral, tempo change"
+  - 歌詞: StartinA の歌詞を present 4 テイクに同一貼付。採用規則: 各条件 1 本目機械採用。
+- measured 値の全量は
+  [`examples/real_audio_validation/lyrics_symmetric_block_2026-07-08.yaml`](../examples/real_audio_validation/lyrics_symmetric_block_2026-07-08.yaml)、
+  CLAP fixture は
+  [`examples/learned/clap/lyrics_vocal_contrast_v2_fixture.json`](../examples/learned/clap/lyrics_vocal_contrast_v2_fixture.json)。
+
+### 事前登録規約
+
+法則化の恣意的な閾値選びを避けるため、計測前に判定規約を固定した:
+
+- **効果** = 条件間の最近差 = min(present 側の値) − max(absent 側の値)
+- **ノイズ** = max(present スプレッド, absent スプレッド)
+- 効果 > ノイズ のときのみ「昇格」とする（n=3 追試・相互検証①と同じ保守的規約の踏襲）。
+
+### 判定表
+
+| センサー | ジャンル | 効果 | ノイズ | 判定 |
+|---|---|---:|---:|---|
+| `mid_ratio` | EDM | 0.010 | 0.025 | ✗ 棄却 |
+| `mid_ratio` | Rock | 0.017 | 0.019 | ✗ 棄却 |
+| CLAP vocal contrast | EDM | 0.136 | 0.064 | ✓ 充足（2.1×） |
+| CLAP vocal contrast | Rock | 0.155 | 0.083 | ✓ 充足（1.9×） |
+
+### mid_ratio 昇格は棄却で確定
+
+n=3 追試（#124）で「Rock のみノイズ超え（辛勝 1.3×）」としていた判定は、**instrumental
+側の再生成スプレッドを未計測のまま absent 側ノイズをゼロ扱いした過大評価**だった。
+本ブロックで absent 側 alt を取得し実測した結果、Rock の absent スプレッド
+（|0.230 − 0.211| = 0.019）が効果（0.017）を上回り、**Rock も含め両ジャンルで
+mid_ratio の昇格は棄却**に確定する。EDM も同様に棄却（効果 0.010 < ノイズ 0.025）。
+`mid_ratio` はボーカル有無の**方向一致（4/4 present > absent）**は保つが、
+再生成ノイズを安定して超える頑健センサーではない、という #124 の限定的な結論が
+n≥2×2 セルでも覆らなかった。
+
+### CLAP vocal contrast は両ジャンルで充足を確定
+
+CLAP vocal contrast は本ブロック（v2, 4本×2ジャンル）でも #131 の初期観測
+（`lyrics_vocal_contrast_fixture.json`）と同方向・同オーダーで効果がノイズを
+大きく上回った。present 側の contrast_fit は新旧・両ジャンル横断で
+**0.23–0.29**（精密には 0.232–0.285）に安定して収まり、absent 側は本ブロックで
+0.009–0.117 まで広く分布するが、present の最小値が absent の最大値を常に上回る
+（完全分離）。これにより、`docs/control_profile.md` DD-4 のセンサー定義を
+CLAP vocal contrast へ改訂する（後述）。
+
+### honesty
+
+- byte_size 弁別は実効ビットレートがほぼ一定のため実質 duration 弁別であり、
+  present/absent 割り当ての確定根拠は byte_size ではなく CLAP vocal contrast の
+  完全分離である。
+- Rock の instrumental 2 本（69.28s / 30.16s）は歌詞側（~183s）より大幅に短く、
+  duration 交絡は本ブロックでも残置（解消していない）。
+- `edm_inst_v2_alt` の bpm=89.1 は他 3 本（136.0）に対し比 1.526 で R2-2f
+  （[`roundtrip_corpus_screen.md`](roundtrip_corpus_screen.md)）の 3:2 窓内だが、
+  `bpm_prior_disagreement` は非発火（false）— halving か真に遅い生成かは未裁定。
+  本判定には使わない副次観測として記録する。
+- 事前登録規約と判定値は上記のとおり転記であり、本節で再計算・改変していない。

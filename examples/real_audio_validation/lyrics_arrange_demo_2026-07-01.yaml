@@ -17,6 +17,8 @@
 #   - 歌詞あり/なしは Suno 出力ファイルの byte_size で弁別(大=歌詞あり)。
 #   - alt(別取り)は **歌詞(present)条件のみ**取得。instrumental(absent)は両ジャンル
 #     とも 1 テイクで absent 側の再生成スプレッドは未測 = 完全な n≥2×2 セルではない。
+#     → 2026-07-08 の独立 v2 ブロック（lyrics_symmetric_block_2026-07-08.yaml）で対称化
+#     closeout（別プロンプトのため本ブロックの measured には非追記）。
 #   - top_chord / sharp4_family_frac はコード推定器由来で、歪みギター instrumental
 #     では不安定(rock_inst の調号外 A#m/Fm 混入は推定器ノイズ疑い・n=1 断定せず)。
 #

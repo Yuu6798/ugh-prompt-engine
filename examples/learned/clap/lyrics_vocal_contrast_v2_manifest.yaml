@@ -1,0 +1,190 @@
+# CLAP vocal-contrast manifest v2 — CLAP ③ 対称ブロック統合版 (2026-07-08)
+#
+# lyrics_vocal_contrast_manifest.yaml (#131, 6 サンプル) の後継ではなく別ブロックの
+# 統合版。2026-07-08 に新規生成した EDM/Rock × 歌詞 present/absent 各2テイク (8本)
+# を examples/real_audio_validation/lyrics_symmetric_block_2026-07-08.yaml の
+# 対称ブロックとして同一方式（scripts/collect_clap_fixture.py, prompts/prompt_groups
+# は既存 vocal 対をそのまま流用）で採取する。
+#
+# 実音源は repo 外（DD-A: 音源非コミット方針を踏襲）。clean checkout からの再現手順
+# (materialize) は #131 と同じ cache 規約に従う:
+#   1. mkdir -p examples/roundtrip/cache/pr2b-2-clap/  （.gitignore 対象の作業キャッシュ）
+#   2. 各サンプルの音源ファイルを audio_path のファイル名どおりに同ディレクトリへ配置する
+#      （本ブロックはユーザーからの直接アップロードで drive_file_id 未取得 — follow-up
+#      で Drive アップロード後に追記する）
+#   3. scripts/collect_clap_fixture.py --manifest lyrics_vocal_contrast_v2_manifest.yaml
+#      --output lyrics_vocal_contrast_v2_fixture.json --checkpoint
+#      music_audioset_epoch_15_esc_90.14.pt --amodel HTSAT-base を実行 — collector が
+#      manifest の audio_sha256 pin を自動照合し、バイト列不一致は fail-fast する
+#
+# condition.genre / lyrics は
+# examples/real_audio_validation/lyrics_symmetric_block_2026-07-08.yaml の
+# take id / lyrics 表記と揃える（present_alt / absent_alt = 同条件の再生成2テイク目）。
+
+- sample_id: edm_lyrics_v2
+  audio_path: ../../roundtrip/cache/pr2b-2-clap/edm_lyrics_v2.mp3
+  audio_sha256: b4a4d3d381cc9d9c6fe7449d941b8d8331184498334ed87295119417847e7f80
+  prompts:
+    positive:
+      - a song with lead vocals
+      - singing with lyrics
+    negative:
+      - an instrumental track with no vocals
+      - instrumental music
+  prompt_groups:
+    positive:
+      - a song with lead vocals
+      - singing with lyrics
+    negative:
+      - an instrumental track with no vocals
+      - instrumental music
+  condition:
+    genre: EDM
+    lyrics: present
+
+- sample_id: edm_lyrics_v2_alt
+  audio_path: ../../roundtrip/cache/pr2b-2-clap/edm_lyrics_v2_alt.mp3
+  audio_sha256: ffaed2ba16ddee983e684cae5a78ff8ae78fd2e9b7faf4578202e71db3d36a93
+  prompts:
+    positive:
+      - a song with lead vocals
+      - singing with lyrics
+    negative:
+      - an instrumental track with no vocals
+      - instrumental music
+  prompt_groups:
+    positive:
+      - a song with lead vocals
+      - singing with lyrics
+    negative:
+      - an instrumental track with no vocals
+      - instrumental music
+  condition:
+    genre: EDM
+    lyrics: present_alt
+
+- sample_id: edm_inst_v2
+  audio_path: ../../roundtrip/cache/pr2b-2-clap/edm_inst_v2.mp3
+  audio_sha256: 943a71396c05286f1cfcc6fcfae28c9a1224ebcb405df6dad6294437dcf04177
+  prompts:
+    positive:
+      - a song with lead vocals
+      - singing with lyrics
+    negative:
+      - an instrumental track with no vocals
+      - instrumental music
+  prompt_groups:
+    positive:
+      - a song with lead vocals
+      - singing with lyrics
+    negative:
+      - an instrumental track with no vocals
+      - instrumental music
+  condition:
+    genre: EDM
+    lyrics: absent
+
+- sample_id: edm_inst_v2_alt
+  audio_path: ../../roundtrip/cache/pr2b-2-clap/edm_inst_v2_alt.mp3
+  audio_sha256: dae21f670005d0210937392a2e3da93f5c3808e6cb171cbad7fa79584bff42c4
+  prompts:
+    positive:
+      - a song with lead vocals
+      - singing with lyrics
+    negative:
+      - an instrumental track with no vocals
+      - instrumental music
+  prompt_groups:
+    positive:
+      - a song with lead vocals
+      - singing with lyrics
+    negative:
+      - an instrumental track with no vocals
+      - instrumental music
+  condition:
+    genre: EDM
+    lyrics: absent_alt
+
+- sample_id: rock_lyrics_v2
+  audio_path: ../../roundtrip/cache/pr2b-2-clap/rock_lyrics_v2.mp3
+  audio_sha256: e06fcc8bd542aafc4047e68f0403630fd6bf74bf64fdc97fbc3113e79fed8893
+  prompts:
+    positive:
+      - a song with lead vocals
+      - singing with lyrics
+    negative:
+      - an instrumental track with no vocals
+      - instrumental music
+  prompt_groups:
+    positive:
+      - a song with lead vocals
+      - singing with lyrics
+    negative:
+      - an instrumental track with no vocals
+      - instrumental music
+  condition:
+    genre: Rock
+    lyrics: present
+
+- sample_id: rock_lyrics_v2_alt
+  audio_path: ../../roundtrip/cache/pr2b-2-clap/rock_lyrics_v2_alt.mp3
+  audio_sha256: 08ca6410bac6f412599b3fdf7d982bd71e7f51e6e55eeab057e8b94003c00cce
+  prompts:
+    positive:
+      - a song with lead vocals
+      - singing with lyrics
+    negative:
+      - an instrumental track with no vocals
+      - instrumental music
+  prompt_groups:
+    positive:
+      - a song with lead vocals
+      - singing with lyrics
+    negative:
+      - an instrumental track with no vocals
+      - instrumental music
+  condition:
+    genre: Rock
+    lyrics: present_alt
+
+- sample_id: rock_inst_v2
+  audio_path: ../../roundtrip/cache/pr2b-2-clap/rock_inst_v2.mp3
+  audio_sha256: a5d351d8cb743dc0014f3c73575bc8fc3bc44136fce0f9be6cba32ab65b6e5ab
+  prompts:
+    positive:
+      - a song with lead vocals
+      - singing with lyrics
+    negative:
+      - an instrumental track with no vocals
+      - instrumental music
+  prompt_groups:
+    positive:
+      - a song with lead vocals
+      - singing with lyrics
+    negative:
+      - an instrumental track with no vocals
+      - instrumental music
+  condition:
+    genre: Rock
+    lyrics: absent
+
+- sample_id: rock_inst_v2_alt
+  audio_path: ../../roundtrip/cache/pr2b-2-clap/rock_inst_v2_alt.mp3
+  audio_sha256: 3271c83b4dae6be542c15f831434e822d048db58839a5d3224b2e34ce9d55689
+  prompts:
+    positive:
+      - a song with lead vocals
+      - singing with lyrics
+    negative:
+      - an instrumental track with no vocals
+      - instrumental music
+  prompt_groups:
+    positive:
+      - a song with lead vocals
+      - singing with lyrics
+    negative:
+      - an instrumental track with no vocals
+      - instrumental music
+  condition:
+    genre: Rock
+    lyrics: absent_alt
