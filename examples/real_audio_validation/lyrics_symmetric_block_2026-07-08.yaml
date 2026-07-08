@@ -82,7 +82,7 @@ takes:
   chord_event_count: 23
 - id: edm_lyrics_v2_alt
   arrange: EDM
-  lyrics: present
+  lyrics: present_alt
   source_file: 5b156234-________EDM__________Y.mp3
   source_format: mp3
   byte_size: 4733382
@@ -132,7 +132,7 @@ takes:
   chord_event_count: 20
 - id: edm_inst_v2_alt
   arrange: EDM
-  lyrics: absent
+  lyrics: absent_alt
   source_file: 8e43d864-________EDM__________B.mp3
   source_format: mp3
   byte_size: 2852694
