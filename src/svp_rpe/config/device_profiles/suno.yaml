@@ -16,9 +16,9 @@ control_defaults:
     sensor: spectral_centroid
     evidence: examples/control/k2/expected_grip.json
   lyrics_presence:
-    grip_class: loose
-    sensor: mid_ratio
-    evidence: "docs/lyrics_semantic_anchor.md n=3追試 / examples/real_audio_validation/lyrics_arrange_demo_2026-07-01.yaml"
+    grip_class: tight
+    sensor: clap_vocal_contrast
+    evidence: "examples/learned/clap/lyrics_vocal_contrast_v2_fixture.json (#159: 効果>ノイズ EDM 2.1×/Rock 1.9×・条件2 ジャンル干渉分離成立 — docs/control_profile.md DD-4 2026-07-08)"
 
 # 既知の癖。advisory が非 null のもののみ GeneratedPrompt.advisories を発火する
 # （プロンプト本文・tags は変えない＝自動補正しない）。

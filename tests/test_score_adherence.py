@@ -174,11 +174,26 @@ def test_semantic_tight_field_is_skipped_not_crashed() -> None:
 
 
 def test_no_skipped_semantic_fields_when_none_declared_tight() -> None:
-    score = load_composition_score(SAMPLE_PATH)  # lyrics_presence is loose, not tight
+    # 2026-07-08 昇格でサンプル score の lyrics_presence は tight 宣言になったため、
+    # 「意味層 tight 宣言なし」ケースは宣言を外して構成する（テスト意図は不変）。
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    del data["control_profile"]["suno"]["lyrics_presence"]
+    score = CompositionScore.model_validate(data)
 
     adherence = score_adherence(score, _report(bpm="preserved", brightness="preserved"))
 
     assert adherence.skipped_semantic_fields == []
+
+
+def test_sample_score_tight_lyrics_presence_is_counted_as_skipped_semantic() -> None:
+    """2026-07-08 昇格後のサンプル score そのもの: 意味層 tight 宣言（lyrics_presence）は
+    物理 fixity/roundtrip の対象外のため tight_fields に入らず、skipped に計上される。"""
+    score = load_composition_score(SAMPLE_PATH)
+
+    adherence = score_adherence(score, _report(bpm="preserved", brightness="preserved"))
+
+    assert adherence.skipped_semantic_fields == ["lyrics_presence"]
+    assert [row.field for row in adherence.tight_fields] == ["bpm", "brightness"]
 
 
 def test_render_score_adherence_text_shows_skipped_semantic_fields() -> None:
@@ -200,7 +215,11 @@ def test_render_score_adherence_text_shows_skipped_semantic_fields() -> None:
 
 
 def test_render_score_adherence_text_omits_skipped_line_when_empty() -> None:
-    score = load_composition_score(SAMPLE_PATH)
+    # 2026-07-08 昇格でサンプル score は lyrics_presence を tight 宣言するため、
+    # skipped 行が空になるケースは宣言を外して構成する（テスト意図は不変）。
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    del data["control_profile"]["suno"]["lyrics_presence"]
+    score = CompositionScore.model_validate(data)
     report = _report(bpm="preserved", brightness="preserved")
 
     text = render_score_adherence_text(score_adherence(score, report))

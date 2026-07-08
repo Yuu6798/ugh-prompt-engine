@@ -373,3 +373,8 @@ CLAP vocal contrast へ改訂する（後述）。
   `bpm_prior_disagreement` は非発火（false）— halving か真に遅い生成かは未裁定。
   本判定には使わない副次観測として記録する。
 - 事前登録規約と判定値は上記のとおり転記であり、本節で再計算・改変していない。
+
+**昇格実施（2026-07-08 追記）**: 昇格ゲート条件 2（K3 ジャンル干渉分離）の formal 判定も
+CLAP vocal contrast で充足（両歌詞条件で干渉 < ノイズ・歌詞効果 > 干渉。計算値と事前登録
+規約は [`control_profile.md`](control_profile.md) DD-4）。両条件充足により
+`lyrics_presence` の loose→tight 昇格を config（suno device profile / midnight_signal）へ反映した。

@@ -37,7 +37,9 @@ def test_load_device_profile_suno_schema() -> None:
     assert set(profile.control_defaults) == {"bpm", "brightness", "lyrics_presence"}
     assert profile.control_defaults["bpm"].grip_class == "tight"
     assert profile.control_defaults["brightness"].grip_class == "tight"
-    assert profile.control_defaults["lyrics_presence"].grip_class == "loose"
+    # 2026-07-08: DD-4 両条件充足（#159）で loose→tight 昇格・センサーは CLAP vocal contrast
+    assert profile.control_defaults["lyrics_presence"].grip_class == "tight"
+    assert profile.control_defaults["lyrics_presence"].sensor == "clap_vocal_contrast"
     assert len(profile.knob_quirks) == 3
     assert len(profile.cross_couplings) == 6
     assert len(profile.spectral_biases) == 4

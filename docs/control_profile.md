@@ -163,11 +163,14 @@ performer 由来でも実 Suno corpus take 由来でもよい（path 非依存�
   追加し、`{"lyrics_presence", "semantic.avoid", "semantic.core"}` へ拡張した
   （下記「デバイスプロファイル」節参照）。
 - **DD-3（初期データ）**: `examples/composition/midnight_signal/composition_score.yaml`
-  の `control_profile.suno.lyrics_presence` は `grip_class: loose`（`sensor: mid_ratio`,
-  `grip` は未算出のため省略）。出所は
+  の `control_profile.suno.lyrics_presence` は当初 `grip_class: loose`（`sensor: mid_ratio`,
+  `grip` は未算出のため省略）で投入した。出所は
   [`lyrics_semantic_anchor.md`](lyrics_semantic_anchor.md) n=3 追試と
-  `examples/real_audio_validation/lyrics_arrange_demo_2026-07-01.yaml`。**tight は
-  主張しない**（下記昇格ゲート未達）。
+  `examples/real_audio_validation/lyrics_arrange_demo_2026-07-01.yaml`（当時の証拠水準
+  では tight を主張しない＝下記昇格ゲート未達）。**2026-07-08 更新**: DD-4 の両条件
+  充足を受けて `grip_class: tight` / `sensor: clap_vocal_contrast` へ昇格済み
+  （`config/device_profiles/suno.yaml` の `control_defaults` もパッケージ同梱コピー込みで
+  同期。判定の経緯は下記 DD-4 の 2026-07-08 判定を参照）。
 - **コンパイル**: `ExternalPromptAdapter` は `lyrics_presence` 設定時のみセグメントを
   描画する（`present`→"With vocals."、`absent`→"Instrumental, no vocals."）。`absent`
   のとき `GeneratedPrompt.tags` 末尾へ `"instrumental"` を追加する。`_rank_key_factory`
@@ -195,8 +198,40 @@ performer 由来でも実 Suno corpus take 由来でもよい（path 非依存�
   の 3 ティア）に波及するための回帰確認が follow-up として残る。
   `config/device_profiles/suno.yaml` および
   `examples/composition/midnight_signal/composition_score.yaml` の
-  `control_profile.suno.lyrics_presence`（現状 `grip_class: loose`）は本節では
-  変更しない。
+  `control_profile.suno.lyrics_presence`（当時 `grip_class: loose`）は上記判定の
+  時点では変更しなかった。
+
+  **2026-07-08 条件 2 formal 判定（K3 干渉分離）**: 条件 2 は以下の規約を計算前に
+  固定した（**事前登録**。グルーピング・丸めの後決めを排除する）:
+
+  - **ジャンル干渉** = 同一歌詞条件内の |mean(EDM セル) − mean(Rock セル)|
+  - **ノイズ** = その条件内の max(EDM セル内スプレッド, Rock セル内スプレッド)
+  - **分離成立** = 両条件で「干渉 < ノイズ」かつ「歌詞効果（条件 1 の判定値）> 干渉」
+
+  データは `examples/learned/clap/lyrics_vocal_contrast_v2_fixture.json`（CLAP vocal
+  contrast `contrast_fit`、8 サンプル）と
+  `examples/real_audio_validation/lyrics_symmetric_block_2026-07-08.yaml`（対照
+  `mid_ratio`）。数値は厳密計算し最終表示のみ 3–4 桁へ丸める。計算値:
+
+  | センサー | 歌詞条件 | 干渉 | ノイズ | 干渉<ノイズ | 歌詞効果 (EDM/Rock) | 効果>干渉（倍率） |
+  |---|---|---:|---:|---|---|---|
+  | CLAP vocal contrast | present | 0.0142 | 0.0320 | ✓ | 0.136 / 0.155 | ✓（9.6× / 10.9×） |
+  | CLAP vocal contrast | absent | 0.0343 | 0.0826 | ✓ | 0.136 / 0.155 | ✓（4.0× / 4.5×） |
+  | `mid_ratio`（対照） | present | 0.0195 | — | — | 0.010 / 0.017 | ✗（効果 ≤ 干渉） |
+
+  CLAP vocal contrast は present / absent の両条件で「干渉 < ノイズ」かつ
+  「歌詞効果 > 干渉」を満たし、**条件 2 の分離成立**。対照の `mid_ratio` は present
+  条件のジャンル干渉（≈0.0195）が歌詞効果（EDM 0.010 / Rock 0.017）以上で分離不成立
+  — 条件 1 での `mid_ratio` 棄却が条件 2 でも裏付けられた。
+
+  **条件 1・条件 2 の両充足につき `lyrics_presence` の tight 昇格を実施**（2026-07-08、
+  本 PR で config 反映）: `config/device_profiles/suno.yaml`（+ `src/svp_rpe/config/`
+  同梱コピー）の `control_defaults.lyrics_presence` と
+  `examples/composition/midnight_signal/composition_score.yaml` の
+  `control_profile.suno.lyrics_presence` を `grip_class: tight` /
+  `sensor: clap_vocal_contrast` へ更新した（`grip` は効果量 d 未算出のため引き続き
+  省略）。grip_class 変更が `_rank_key_factory` の 3 ティア優先順位（tight 先頭昇格）
+  へ波及する回帰は全件 pytest で確認した。
 
 ## デバイスプロファイル（PR3 後半）
 
