@@ -250,14 +250,15 @@ def test_sample_score_carries_k2_suno_control_profile() -> None:
     assert Path(suno["bpm"].evidence).exists()
 
 
-def test_sample_score_carries_sem1_lyrics_presence_loose_profile() -> None:
-    """SEM-1: 意味層ノブ lyrics_presence は grip 証拠が loose 段階（tight を主張しない）。"""
+def test_sample_score_carries_sem1_lyrics_presence_tight_profile() -> None:
+    """SEM-1: 意味層ノブ lyrics_presence は DD-4 両条件充足（#159, 2026-07-08）で
+    tight へ昇格済み。センサーは CLAP vocal contrast（docs/control_profile.md DD-4）。"""
     score = load_composition_score(SAMPLE_PATH)
 
     lyrics_grip = score.control_profile["suno"]["lyrics_presence"]
-    assert lyrics_grip.grip_class == "loose"
-    assert lyrics_grip.sensor == "mid_ratio"
-    assert lyrics_grip.grip is None
+    assert lyrics_grip.grip_class == "tight"
+    assert lyrics_grip.sensor == "clap_vocal_contrast"
+    assert lyrics_grip.grip is None  # 効果量 d は未算出のため引き続き省略
     assert lyrics_grip.evidence is not None
 
 
