@@ -176,7 +176,7 @@ Codex #164 P2）**: 本 PR 後の follow-up で一度 loose として config 反
 | 比較 | 対象セル A (low) | 対象セル B (high) | mean A | mean B | grip d | 判定 |
 |---|---|---|---:|---:|---:|---|
 | 比較1（Exclude 欄チャネルの grip） | `calm_avoid` | `calm_avoid_excl` | 3079.3925 | 2794.315 | **-1.656645** | tight・負方向=期待どおりの値だが**交絡あり・未確定**（honesty (f) 参照） |
-| 比較2（正味効果） | `calm` | `calm_avoid_excl` | 2438.0075 | 2794.315 | **+1.642929** | dead・事前登録極性（成功なら負方向）に対し符号反転（正味では打ち消せず、まだ明るい） |
+| 比較2（正味効果） | `calm` | `calm_avoid_excl` | 2438.0075 | 2794.315 | **+1.642929** | dead・事前登録極性（成功なら負方向）に対し符号反転（正味では打ち消せず、まだ明るい）。ただしこの解釈も**交絡あり・未確定**（honesty (f) 参照）— excl セルと `calm`（バッチ 1 流用）が異なる生成条件を跨ぐため、この符号反転自体が Exclude 欄の効果と generator/model の変化のどちらに由来するか分離できない。`omit_body_negative`（#163）の妥当性は本文 Avoid=attractor のバッチ 1 内実測（d=+4.03、同一モデル）に立つため、本比較の結果には依存しない |
 
 d 値は `scripts/measure_grip.py`（canonical 経路）実測であり、
 `scratchpad/excl_extract/summary.json` の事前算出値（-1.6566449476718548 /

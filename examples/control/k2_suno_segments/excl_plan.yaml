@@ -89,7 +89,12 @@ knobs:
       「正味で打ち消せなかった」という定性的結論（本 plan 冒頭・README 参照）は
       維持しつつ、classify_grip の機械語彙上もその失敗を非 tight（dead）として
       顕在化させる。判読記録の d=+1.64 と canonical 実測が一致することを
-      確認する。
+      確認する。ただし本比較も confound_honesty のとおり excl セル（モデル未検証）と
+      batch-1 baseline（`calm`）を跨ぐ非隔離設計のため、「正味で打ち消せなかった」
+      という解釈自体が交絡あり・未確定である（Exclude 欄の効果と generator/model
+      変化を分離できていない）。omit_body_negative（#163）の妥当性は本文
+      Avoid=attractor のバッチ 1 内実測（d=+4.03、同一モデル）に立つため、本比較の
+      確定を待たずに成立する。
 
 # 副次観測（自動記録・判定対象外、詳細は README.md 追試節）:
 # - R2-2f prior_disagreement が excl_04 で live 発火（2 例目、バッチ1 calm_04 と

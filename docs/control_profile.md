@@ -98,10 +98,13 @@ d=+1.10 #152・suno centroid d=+4.03 #162、事前登録規約の attractor 確�
 （`calm_avoid_excl` vs `calm_avoid`: grip d=-1.66・tight 域）は Exclude 欄が
 チャネルとして効くことを**示唆**するが、excl セルと baseline の生成モデル/フロー
 同一性が未確認で交絡しており確定はしていない（[`controllability_poc.md`](controllability_poc.md)
-「K2-seg Exclude 欄併用追試（2026-07-09・バッチ 1 増補セル）」節の交絡 caveat 参照）。ただし
-Exclude 併用でも本文 Avoid の attractor（#162: d=+4.03）を正味では打ち消しきれない
-（同追試の正味効果比較: d=+1.64）ため、`omit_body_negative`（#163）で本文 Avoid の
-送出自体を止める方針が優先される。
+「K2-seg Exclude 欄併用追試（2026-07-09・バッチ 1 増補セル）」節の交絡 caveat 参照）。
+`omit_body_negative`（#163）で本文 Avoid の送出自体を止める方針の主根拠は、この
+Exclude 併用追試ではなく**バッチ 1 内実測**（`calm` vs `calm_avoid`、同一モデル・
+d=+4.03、本文 Avoid=attractor）であり、Exclude grip の確定を待たずに成立する。
+Exclude 併用でも正味で打ち消せなかったという観測（同追試の正味効果比較: d=+1.64）は
+同方向の傍証ではあるが、excl セルとバッチ 1 baseline を跨ぐ交絡測定であるため
+主根拠には用いない。
 
 以下は **negative チャネルが本当に存在しない経路での一般 fallback 指針**として
 スコープを狭めて残す: そのような経路では `semantic.avoid` は配送先ゼロ — 本文
