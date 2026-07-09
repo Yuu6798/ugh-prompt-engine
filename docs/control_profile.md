@@ -87,6 +87,13 @@ d=+1.10 #152・suno centroid d=+4.03 #162、事前登録規約の attractor 確�
 へは実測なき横展開をしない（#153 と同じ規律。Suno 本文 Avoid の Exclude Styles チャネルとの
 重複込みの効きは依然人手検証キュー、docs/musicgen_backend.md §7.6 参照）。
 
+**negative チャネル欠落経路での avoid の扱い**: 生成経路によっては Exclude 欄
+（negative チャネル）自体が UI に存在しない（実測例: Suno カスタムモデルの生成フロー、
+2026-07-09 ユーザー申告）。この場合 `semantic.avoid` は配送先ゼロ — 本文 Avoid は
+attractor（#162: d=+4.03）・Exclude 欄は不在 — であり、除外要求は**肯定形への
+リフレーズでのみ表現可能**（例: 「bright highs を避ける」でなく "dark warm muffled
+tone, soft rounded highs" と書く。K2 brightness dark セルが実測で効いた書式）。
+
 **フィールド粒度の drop accounting**: 旧 `physical.optional` 束（brightness / stereo_width /
 active_rate_target / valley_depth_target を 1 トークンに束ねていた）をフィールド粒度の
 独立した文へ分解。トークン ID は `PhysicalLayer.model_fields` 正式名に一致し、`dropped_elements`
