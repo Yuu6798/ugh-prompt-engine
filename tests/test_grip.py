@@ -356,3 +356,36 @@ def test_k2_seg_suno_segments_clap_energy_axis_pins_semantic_core_grip() -> None
     d = grip_effect_size(by_level["calm"], by_level["euph"])
     assert d == pytest.approx(2.446820, abs=1e-4)
     assert classify_grip(d, 1) == "tight"
+
+
+K2_SUNO_SEGMENTS_EXCL_FIXTURE_PATH = Path("examples/control/k2_suno_segments/excl_rpe_fixture.json")
+K2_SUNO_SEGMENTS_EXCL_EXPECTED_PATH = Path(
+    "examples/control/k2_suno_segments/excl_expected_grip.json"
+)
+
+
+def test_k2_seg_suno_segments_excl_fixture_snapshot() -> None:
+    """K2-seg Suno Exclude 欄併用追試（2026-07-09・バッチ 1 増補セル `calm_avoid_excl`）:
+    fixture->grip 決定論スナップショット。ユーザー再アップロードの実音源 4 本を
+    再抽出し、前セッションの事前登録比較 2 本の判読値と完全一致を確認した後の
+    fixture 収載（`examples/control/k2_suno_segments/README.md` 追試節）。
+
+    - `exclude_channel_grip`（low=`calm_avoid`, high=`calm_avoid_excl`）:
+      d=-1.656645、tight・負方向=期待どおり。Exclude 欄はチャネルとして実際に効く。
+    - `exclude_net_effect`（low=`calm`, high=`calm_avoid_excl`）: d=+1.642929、
+      tight・正方向。Exclude 併用でも本文 Avoid の attractor（#162: d=+4.03）を
+      正味では打ち消しきれない。
+    - 両 d 値は `scratchpad/excl_extract/summary.json` の事前算出値
+      （-1.6566449476718548 / 1.642929272618472）と一致する（抽出を伴わない純
+      fixture 解析なので slow マーカー不要）。
+    """
+    report = analyze_fixture(load_fixture(K2_SUNO_SEGMENTS_EXCL_FIXTURE_PATH))
+    expected = json.loads(K2_SUNO_SEGMENTS_EXCL_EXPECTED_PATH.read_text(encoding="utf-8"))
+
+    assert report == expected
+    by_knob = {result["knob"]: result for result in report["results"]}
+    assert by_knob["exclude_channel_grip"]["grip"] == pytest.approx(-1.656645, abs=1e-4)
+    assert by_knob["exclude_channel_grip"]["classification"] == "tight"
+    assert by_knob["exclude_net_effect"]["grip"] == pytest.approx(1.642929, abs=1e-4)
+    assert by_knob["exclude_net_effect"]["classification"] == "tight"
+    assert report["summary"] == {"tight": 2, "loose": 0, "dead": 0}

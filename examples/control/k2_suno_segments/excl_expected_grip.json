@@ -1,0 +1,60 @@
+{
+  "schema_version": "1.0",
+  "fixture_id": "k2seg_suno_excl",
+  "repetitions": 4,
+  "results": [
+    {
+      "knob": "exclude_channel_grip",
+      "sensor": "spectral_centroid",
+      "expected_sign": -1,
+      "low_level": "calm_avoid",
+      "high_level": "calm_avoid_excl",
+      "repetitions": 4,
+      "low_values": [
+        2960.73,
+        3166.85,
+        3067.4,
+        3122.59
+      ],
+      "high_values": [
+        2641.1,
+        3027.54,
+        2563.44,
+        2945.18
+      ],
+      "low_mean": 3079.3925,
+      "high_mean": 2794.315,
+      "grip": -1.656645,
+      "classification": "tight"
+    },
+    {
+      "knob": "exclude_net_effect",
+      "sensor": "spectral_centroid",
+      "expected_sign": 1,
+      "low_level": "calm",
+      "high_level": "calm_avoid_excl",
+      "repetitions": 4,
+      "low_values": [
+        2712.54,
+        2472.46,
+        2328.13,
+        2238.9
+      ],
+      "high_values": [
+        2641.1,
+        3027.54,
+        2563.44,
+        2945.18
+      ],
+      "low_mean": 2438.0075,
+      "high_mean": 2794.315,
+      "grip": 1.642929,
+      "classification": "tight"
+    }
+  ],
+  "summary": {
+    "tight": 2,
+    "loose": 0,
+    "dead": 0
+  }
+}

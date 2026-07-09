@@ -1,0 +1,551 @@
+{
+  "schema_version": "1.0",
+  "fixture_id": "k2seg_suno_excl",
+  "generator": "suno",
+  "repetitions": 4,
+  "knobs": [
+    {
+      "name": "exclude_channel_grip",
+      "sensor": "spectral_centroid",
+      "low_level": "calm_avoid",
+      "high_level": "calm_avoid_excl",
+      "expected_sign": -1
+    },
+    {
+      "name": "exclude_net_effect",
+      "sensor": "spectral_centroid",
+      "low_level": "calm",
+      "high_level": "calm_avoid_excl",
+      "expected_sign": 1
+    }
+  ],
+  "samples": [
+    {
+      "sample_id": "exclude_channel_grip_low_k2seg_suno_calm_avoid_01",
+      "knob": "exclude_channel_grip",
+      "level": "calm_avoid",
+      "canonical_id": "k2seg_suno_calm_avoid_01",
+      "audio_sha256": "c3a51c12e3fbcf45b1337478abb5da071f9858705eefc5e411bb791b4ea9dadf",
+      "features": {
+        "bpm": 123.05,
+        "bpm_confidence": 0.6963,
+        "bpm_candidates": [],
+        "bpm_octave_ambiguous": false,
+        "bpm_prior_disagreement": false,
+        "key": "A major",
+        "key_confidence": 0.9319,
+        "duration_sec": 34.52,
+        "spectral_centroid": 2960.73,
+        "onset_density": 3.4762,
+        "active_rate": 0.9993,
+        "valley_depth": 0.0507,
+        "valley_depth_method": "hybrid",
+        "dynamic_range_db": 7.33,
+        "spectral_bands": {
+          "sub_bass": 0.0509,
+          "bass": 0.1642,
+          "low_mid": 0.0766,
+          "mid": 0.219,
+          "high_mid": 0.1547,
+          "presence": 0.1201,
+          "brilliance": 0.2146
+        }
+      }
+    },
+    {
+      "sample_id": "exclude_channel_grip_low_k2seg_suno_calm_avoid_02",
+      "knob": "exclude_channel_grip",
+      "level": "calm_avoid",
+      "canonical_id": "k2seg_suno_calm_avoid_02",
+      "audio_sha256": "141fde5daa23d8b2c7ab8b557b2a162a2c46858ffd6810ccc039335516f708ce",
+      "features": {
+        "bpm": 123.05,
+        "bpm_confidence": 0.8934,
+        "bpm_candidates": [],
+        "bpm_octave_ambiguous": false,
+        "bpm_prior_disagreement": false,
+        "key": "E major",
+        "key_confidence": 0.9225,
+        "duration_sec": 72.28,
+        "spectral_centroid": 3166.85,
+        "onset_density": 5.202,
+        "active_rate": 0.9916,
+        "valley_depth": 0.0588,
+        "valley_depth_method": "hybrid",
+        "dynamic_range_db": 7.41,
+        "spectral_bands": {
+          "sub_bass": 0.0486,
+          "bass": 0.1642,
+          "low_mid": 0.0533,
+          "mid": 0.205,
+          "high_mid": 0.1603,
+          "presence": 0.1191,
+          "brilliance": 0.2494
+        }
+      }
+    },
+    {
+      "sample_id": "exclude_channel_grip_low_k2seg_suno_calm_avoid_03",
+      "knob": "exclude_channel_grip",
+      "level": "calm_avoid",
+      "canonical_id": "k2seg_suno_calm_avoid_03",
+      "audio_sha256": "b3eb48e98dcf8421178f51e43622855fccd88cd9b0b08883d833ce1aa7055f10",
+      "features": {
+        "bpm": 123.05,
+        "bpm_confidence": 0.9082,
+        "bpm_candidates": [],
+        "bpm_octave_ambiguous": false,
+        "bpm_prior_disagreement": false,
+        "key": "A minor",
+        "key_confidence": 0.8254,
+        "duration_sec": 68.52,
+        "spectral_centroid": 3067.4,
+        "onset_density": 6.7717,
+        "active_rate": 0.9902,
+        "valley_depth": 0.0897,
+        "valley_depth_method": "hybrid",
+        "dynamic_range_db": 6.43,
+        "spectral_bands": {
+          "sub_bass": 0.0493,
+          "bass": 0.1467,
+          "low_mid": 0.0514,
+          "mid": 0.2342,
+          "high_mid": 0.1787,
+          "presence": 0.1233,
+          "brilliance": 0.2164
+        }
+      }
+    },
+    {
+      "sample_id": "exclude_channel_grip_low_k2seg_suno_calm_avoid_04",
+      "knob": "exclude_channel_grip",
+      "level": "calm_avoid",
+      "canonical_id": "k2seg_suno_calm_avoid_04",
+      "audio_sha256": "0b41fb9100a1b320ce5e3b299143f1434648c7027cda46844931e99e560a8414",
+      "features": {
+        "bpm": 123.05,
+        "bpm_confidence": 0.8457,
+        "bpm_candidates": [],
+        "bpm_octave_ambiguous": false,
+        "bpm_prior_disagreement": false,
+        "key": "A minor",
+        "key_confidence": 0.8735,
+        "duration_sec": 117.08,
+        "spectral_centroid": 3122.59,
+        "onset_density": 6.1411,
+        "active_rate": 0.996,
+        "valley_depth": 0.0907,
+        "valley_depth_method": "hybrid",
+        "dynamic_range_db": 8.87,
+        "spectral_bands": {
+          "sub_bass": 0.0433,
+          "bass": 0.1656,
+          "low_mid": 0.0566,
+          "mid": 0.208,
+          "high_mid": 0.1847,
+          "presence": 0.1121,
+          "brilliance": 0.2297
+        }
+      }
+    },
+    {
+      "sample_id": "exclude_channel_grip_high_k2seg_suno_excl_01",
+      "knob": "exclude_channel_grip",
+      "level": "calm_avoid_excl",
+      "canonical_id": "k2seg_suno_excl_01",
+      "audio_sha256": "ed844399e80973b8ab1deee676145ad13b2872679349efedf5acccb38b32f557",
+      "features": {
+        "bpm": 123.05,
+        "bpm_confidence": 0.9033,
+        "bpm_candidates": [],
+        "bpm_octave_ambiguous": false,
+        "bpm_prior_disagreement": false,
+        "key": "F# minor",
+        "key_confidence": 0.8818,
+        "duration_sec": 19.16,
+        "spectral_centroid": 2641.1,
+        "onset_density": 6.785,
+        "active_rate": 0.9855,
+        "valley_depth": 0.0742,
+        "valley_depth_method": "hybrid",
+        "dynamic_range_db": 9.17,
+        "spectral_bands": {
+          "sub_bass": 0.0677,
+          "bass": 0.1707,
+          "low_mid": 0.0725,
+          "mid": 0.2251,
+          "high_mid": 0.1652,
+          "presence": 0.1107,
+          "brilliance": 0.1881
+        }
+      }
+    },
+    {
+      "sample_id": "exclude_channel_grip_high_k2seg_suno_excl_02",
+      "knob": "exclude_channel_grip",
+      "level": "calm_avoid_excl",
+      "canonical_id": "k2seg_suno_excl_02",
+      "audio_sha256": "821d9dbdde65a6ee01b7be45ddba524faedd31c77a30f7c8d00f4d502fb7e982",
+      "features": {
+        "bpm": 123.05,
+        "bpm_confidence": 0.909,
+        "bpm_candidates": [],
+        "bpm_octave_ambiguous": false,
+        "bpm_prior_disagreement": false,
+        "key": "F# minor",
+        "key_confidence": 0.9111,
+        "duration_sec": 34.8,
+        "spectral_centroid": 3027.54,
+        "onset_density": 5.8908,
+        "active_rate": 0.964,
+        "valley_depth": 0.118,
+        "valley_depth_method": "hybrid",
+        "dynamic_range_db": 7.61,
+        "spectral_bands": {
+          "sub_bass": 0.0386,
+          "bass": 0.1531,
+          "low_mid": 0.0589,
+          "mid": 0.2236,
+          "high_mid": 0.1838,
+          "presence": 0.1389,
+          "brilliance": 0.2031
+        }
+      }
+    },
+    {
+      "sample_id": "exclude_channel_grip_high_k2seg_suno_excl_03",
+      "knob": "exclude_channel_grip",
+      "level": "calm_avoid_excl",
+      "canonical_id": "k2seg_suno_excl_03",
+      "audio_sha256": "e1f455208acd210344be8e03457923ddcc6e0f1dfaa7d2b5eb39bc7c203a3b2d",
+      "features": {
+        "bpm": 234.91,
+        "bpm_confidence": 0.5,
+        "bpm_candidates": [
+          123.05,
+          234.91
+        ],
+        "bpm_octave_ambiguous": true,
+        "bpm_prior_disagreement": false,
+        "key": "A minor",
+        "key_confidence": 0.8539,
+        "duration_sec": 20.0,
+        "spectral_centroid": 2563.44,
+        "onset_density": 6.75,
+        "active_rate": 0.9988,
+        "valley_depth": 0.0703,
+        "valley_depth_method": "hybrid",
+        "dynamic_range_db": 8.95,
+        "spectral_bands": {
+          "sub_bass": 0.0567,
+          "bass": 0.1729,
+          "low_mid": 0.0618,
+          "mid": 0.2474,
+          "high_mid": 0.1792,
+          "presence": 0.1096,
+          "brilliance": 0.1724
+        }
+      }
+    },
+    {
+      "sample_id": "exclude_channel_grip_high_k2seg_suno_excl_04",
+      "knob": "exclude_channel_grip",
+      "level": "calm_avoid_excl",
+      "canonical_id": "k2seg_suno_excl_04",
+      "audio_sha256": "aa7cf9adda0ee7b9bdda4e4a1bc732c9e007ef53c326709fdf39d151e68cc9ac",
+      "features": {
+        "bpm": 234.91,
+        "bpm_confidence": 0.5,
+        "bpm_candidates": [
+          161.5,
+          234.91
+        ],
+        "bpm_octave_ambiguous": true,
+        "bpm_prior_disagreement": true,
+        "key": "A minor",
+        "key_confidence": 0.9083,
+        "duration_sec": 23.88,
+        "spectral_centroid": 2945.18,
+        "onset_density": 7.4539,
+        "active_rate": 0.9708,
+        "valley_depth": 0.0982,
+        "valley_depth_method": "hybrid",
+        "dynamic_range_db": 11.62,
+        "spectral_bands": {
+          "sub_bass": 0.0693,
+          "bass": 0.1715,
+          "low_mid": 0.0562,
+          "mid": 0.1904,
+          "high_mid": 0.1934,
+          "presence": 0.1261,
+          "brilliance": 0.1929
+        }
+      }
+    },
+    {
+      "sample_id": "exclude_net_effect_low_k2seg_suno_calm_01",
+      "knob": "exclude_net_effect",
+      "level": "calm",
+      "canonical_id": "k2seg_suno_calm_01",
+      "audio_sha256": "3ca8f6240758ebac3ad283a86249b146dffd57745872970c2a38b8e16cadd5e2",
+      "features": {
+        "bpm": 123.05,
+        "bpm_confidence": 0.7484,
+        "bpm_candidates": [],
+        "bpm_octave_ambiguous": false,
+        "bpm_prior_disagreement": false,
+        "key": "C major",
+        "key_confidence": 0.801,
+        "duration_sec": 43.52,
+        "spectral_centroid": 2712.54,
+        "onset_density": 5.5836,
+        "active_rate": 0.9808,
+        "valley_depth": 0.1132,
+        "valley_depth_method": "hybrid",
+        "dynamic_range_db": 10.06,
+        "spectral_bands": {
+          "sub_bass": 0.0735,
+          "bass": 0.1461,
+          "low_mid": 0.0673,
+          "mid": 0.233,
+          "high_mid": 0.1797,
+          "presence": 0.1219,
+          "brilliance": 0.1785
+        }
+      }
+    },
+    {
+      "sample_id": "exclude_net_effect_low_k2seg_suno_calm_02",
+      "knob": "exclude_net_effect",
+      "level": "calm",
+      "canonical_id": "k2seg_suno_calm_02",
+      "audio_sha256": "728b61c55c6176ac586fde4c8fb4c5281773c68622232ee361d30610edf35667",
+      "features": {
+        "bpm": 161.5,
+        "bpm_confidence": 0.8158,
+        "bpm_candidates": [],
+        "bpm_octave_ambiguous": false,
+        "bpm_prior_disagreement": false,
+        "key": "A minor",
+        "key_confidence": 0.8798,
+        "duration_sec": 39.44,
+        "spectral_centroid": 2472.46,
+        "onset_density": 6.4148,
+        "active_rate": 0.9665,
+        "valley_depth": 0.1662,
+        "valley_depth_method": "hybrid",
+        "dynamic_range_db": 11.59,
+        "spectral_bands": {
+          "sub_bass": 0.0768,
+          "bass": 0.1883,
+          "low_mid": 0.062,
+          "mid": 0.2273,
+          "high_mid": 0.1824,
+          "presence": 0.1045,
+          "brilliance": 0.1587
+        }
+      }
+    },
+    {
+      "sample_id": "exclude_net_effect_low_k2seg_suno_calm_03",
+      "knob": "exclude_net_effect",
+      "level": "calm",
+      "canonical_id": "k2seg_suno_calm_03",
+      "audio_sha256": "075481f6ee6a16d83efd24b9eedde73a730433030349fe9e0cb461a1437086df",
+      "features": {
+        "bpm": 123.05,
+        "bpm_confidence": 0.8927,
+        "bpm_candidates": [],
+        "bpm_octave_ambiguous": false,
+        "bpm_prior_disagreement": false,
+        "key": "C major",
+        "key_confidence": 0.9713,
+        "duration_sec": 21.72,
+        "spectral_centroid": 2328.13,
+        "onset_density": 4.4659,
+        "active_rate": 0.9776,
+        "valley_depth": 0.0741,
+        "valley_depth_method": "hybrid",
+        "dynamic_range_db": 10.42,
+        "spectral_bands": {
+          "sub_bass": 0.0711,
+          "bass": 0.1691,
+          "low_mid": 0.0874,
+          "mid": 0.2116,
+          "high_mid": 0.171,
+          "presence": 0.1112,
+          "brilliance": 0.1786
+        }
+      }
+    },
+    {
+      "sample_id": "exclude_net_effect_low_k2seg_suno_calm_04",
+      "knob": "exclude_net_effect",
+      "level": "calm",
+      "canonical_id": "k2seg_suno_calm_04",
+      "audio_sha256": "c12bce3b58c2135275b4e1e1790f201c6647b75eff33c377319686e8097a234c",
+      "features": {
+        "bpm": 234.91,
+        "bpm_confidence": 0.5,
+        "bpm_candidates": [
+          161.5,
+          234.91
+        ],
+        "bpm_octave_ambiguous": true,
+        "bpm_prior_disagreement": true,
+        "key": "C major",
+        "key_confidence": 0.8986,
+        "duration_sec": 23.44,
+        "spectral_centroid": 2238.9,
+        "onset_density": 5.2474,
+        "active_rate": 1.0,
+        "valley_depth": 0.0612,
+        "valley_depth_method": "hybrid",
+        "dynamic_range_db": 9.18,
+        "spectral_bands": {
+          "sub_bass": 0.0693,
+          "bass": 0.1853,
+          "low_mid": 0.071,
+          "mid": 0.2245,
+          "high_mid": 0.1674,
+          "presence": 0.1063,
+          "brilliance": 0.1761
+        }
+      }
+    },
+    {
+      "sample_id": "exclude_net_effect_high_k2seg_suno_excl_01",
+      "knob": "exclude_net_effect",
+      "level": "calm_avoid_excl",
+      "canonical_id": "k2seg_suno_excl_01",
+      "audio_sha256": "ed844399e80973b8ab1deee676145ad13b2872679349efedf5acccb38b32f557",
+      "features": {
+        "bpm": 123.05,
+        "bpm_confidence": 0.9033,
+        "bpm_candidates": [],
+        "bpm_octave_ambiguous": false,
+        "bpm_prior_disagreement": false,
+        "key": "F# minor",
+        "key_confidence": 0.8818,
+        "duration_sec": 19.16,
+        "spectral_centroid": 2641.1,
+        "onset_density": 6.785,
+        "active_rate": 0.9855,
+        "valley_depth": 0.0742,
+        "valley_depth_method": "hybrid",
+        "dynamic_range_db": 9.17,
+        "spectral_bands": {
+          "sub_bass": 0.0677,
+          "bass": 0.1707,
+          "low_mid": 0.0725,
+          "mid": 0.2251,
+          "high_mid": 0.1652,
+          "presence": 0.1107,
+          "brilliance": 0.1881
+        }
+      }
+    },
+    {
+      "sample_id": "exclude_net_effect_high_k2seg_suno_excl_02",
+      "knob": "exclude_net_effect",
+      "level": "calm_avoid_excl",
+      "canonical_id": "k2seg_suno_excl_02",
+      "audio_sha256": "821d9dbdde65a6ee01b7be45ddba524faedd31c77a30f7c8d00f4d502fb7e982",
+      "features": {
+        "bpm": 123.05,
+        "bpm_confidence": 0.909,
+        "bpm_candidates": [],
+        "bpm_octave_ambiguous": false,
+        "bpm_prior_disagreement": false,
+        "key": "F# minor",
+        "key_confidence": 0.9111,
+        "duration_sec": 34.8,
+        "spectral_centroid": 3027.54,
+        "onset_density": 5.8908,
+        "active_rate": 0.964,
+        "valley_depth": 0.118,
+        "valley_depth_method": "hybrid",
+        "dynamic_range_db": 7.61,
+        "spectral_bands": {
+          "sub_bass": 0.0386,
+          "bass": 0.1531,
+          "low_mid": 0.0589,
+          "mid": 0.2236,
+          "high_mid": 0.1838,
+          "presence": 0.1389,
+          "brilliance": 0.2031
+        }
+      }
+    },
+    {
+      "sample_id": "exclude_net_effect_high_k2seg_suno_excl_03",
+      "knob": "exclude_net_effect",
+      "level": "calm_avoid_excl",
+      "canonical_id": "k2seg_suno_excl_03",
+      "audio_sha256": "e1f455208acd210344be8e03457923ddcc6e0f1dfaa7d2b5eb39bc7c203a3b2d",
+      "features": {
+        "bpm": 234.91,
+        "bpm_confidence": 0.5,
+        "bpm_candidates": [
+          123.05,
+          234.91
+        ],
+        "bpm_octave_ambiguous": true,
+        "bpm_prior_disagreement": false,
+        "key": "A minor",
+        "key_confidence": 0.8539,
+        "duration_sec": 20.0,
+        "spectral_centroid": 2563.44,
+        "onset_density": 6.75,
+        "active_rate": 0.9988,
+        "valley_depth": 0.0703,
+        "valley_depth_method": "hybrid",
+        "dynamic_range_db": 8.95,
+        "spectral_bands": {
+          "sub_bass": 0.0567,
+          "bass": 0.1729,
+          "low_mid": 0.0618,
+          "mid": 0.2474,
+          "high_mid": 0.1792,
+          "presence": 0.1096,
+          "brilliance": 0.1724
+        }
+      }
+    },
+    {
+      "sample_id": "exclude_net_effect_high_k2seg_suno_excl_04",
+      "knob": "exclude_net_effect",
+      "level": "calm_avoid_excl",
+      "canonical_id": "k2seg_suno_excl_04",
+      "audio_sha256": "aa7cf9adda0ee7b9bdda4e4a1bc732c9e007ef53c326709fdf39d151e68cc9ac",
+      "features": {
+        "bpm": 234.91,
+        "bpm_confidence": 0.5,
+        "bpm_candidates": [
+          161.5,
+          234.91
+        ],
+        "bpm_octave_ambiguous": true,
+        "bpm_prior_disagreement": true,
+        "key": "A minor",
+        "key_confidence": 0.9083,
+        "duration_sec": 23.88,
+        "spectral_centroid": 2945.18,
+        "onset_density": 7.4539,
+        "active_rate": 0.9708,
+        "valley_depth": 0.0982,
+        "valley_depth_method": "hybrid",
+        "dynamic_range_db": 11.62,
+        "spectral_bands": {
+          "sub_bass": 0.0693,
+          "bass": 0.1715,
+          "low_mid": 0.0562,
+          "mid": 0.1904,
+          "high_mid": 0.1934,
+          "presence": 0.1261,
+          "brilliance": 0.1929
+        }
+      }
+    }
+  ]
+}

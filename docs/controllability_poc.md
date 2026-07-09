@@ -339,10 +339,16 @@ C major 優勢）、`euph` セルの `spectral_centroid`（3176–3312）が `ca
 
 #### K2-seg Exclude 欄併用追試（2026-07-09・バッチ 1 増補セル）
 
-**honesty 注記**: 本節はセッション環境消失により per-sample 生特徴量・audio
-sha256・発注書 verbatim が未収載（リポジトリ・Drive とも復旧不能を確認済み）。
-fixture（`examples/control/k2_suno_segments/`）への増補は生データ再取得後に実施し、
-本節の数値は事前登録済み比較 2 本の判読記録由来である。
+**honesty 注記**: 実音源 4 本のユーザー再アップロード（2026-07-09）による再抽出で、
+本節の数値（事前登録済み比較 2 本の判読記録）と完全一致を確認した。fixture 収載済み
+（`examples/control/k2_suno_segments/excl_rpe_fixture.json` / `excl_expected_grip.json`
+/ `excl_plan.yaml`、`tests/test_grip.py::test_k2_seg_suno_segments_excl_fixture_snapshot`
+で回帰固定）。残る未収載は発注書 verbatim のみ（セッション環境消失により復旧不能、
+`excl_plan.yaml` は判読記録からの再登録）。
+
+副次観測の精密化: bpm octave 曖昧フラグは `excl_03`/`excl_04` の 2 本
+（うち R2-2f `bpm_prior_disagreement` が live 発火したのは `excl_04` のみ）。
+key は F# minor 2/4（excl_01/excl_02）・A minor 2/4（excl_03/excl_04）。
 
 条件: バッチ 1 の `calm_avoid` と同一 score・本文 Avoid 送出ありに加え、Suno の
 Exclude Styles 欄にも avoid 語彙を入力した「重複込み」条件（セル `calm_avoid_excl`、

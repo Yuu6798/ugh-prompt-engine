@@ -368,8 +368,9 @@ MusicGen より強い形（d=+4.03 vs +1.10）で再現することを確認し�
 最適であることの裏付けとなった。詳細は
 [`controllability_poc.md`](controllability_poc.md) 「K2-seg Exclude 欄併用追試
 （2026-07-09・バッチ 1 増補セル）」節を参照。なお標準モデルへの一般化（honesty (g)）は
-本追試でも未検証のまま残る。per-sample 生データはセッション環境消失により未収載 —
-fixture 増補は生データ再取得待ち（同節 honesty 注記）。
+本追試でも未検証のまま残る。再アップロード音源の再抽出で fixture 収載済み
+（`examples/control/k2_suno_segments/excl_rpe_fixture.json`）— 残る未収載は
+発注書 verbatim のみ（セッション環境消失により復旧不能、同節 honesty 注記）。
 `valley_depth_target` / `time_signature` はバッチ 2 へ繰越（未検証のまま）。
 本文 Avoid については、当初の方針（musicgen の attractor 実測のみを根拠に suno 側の
 送出を止めることはしない・#152 フォローアップ、2026-07-06）を、Suno 自身の実測

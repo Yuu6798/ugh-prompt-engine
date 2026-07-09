@@ -138,7 +138,71 @@ Suno = 物理 loose × CLAP tight（物理センサーも方向どおり弱く�
   `spectral_centroid`（`semantic_avoid` ノブの計測対象センサー）にも副作用として
   効いている疑い。機種依存の直交性欠如の追加観測として記録（K3 系列の関心事）。
 
+## 追試: Exclude 欄併用（バッチ 1 増補セル calm_avoid_excl、2026-07-09）
+
+`docs/musicgen_backend.md` §7.6 で残っていた「Exclude Styles チャネルとの重複込み
+条件は未検証」の留保を解消する追試。バッチ 1 の `calm_avoid`（本文 `Avoid:` のみ）
+に対し、Suno の Exclude Styles 欄にも avoid 語彙を追加投入した「重複込み」セル
+`calm_avoid_excl`（R=4）を新規計測し、`calm` / `calm_avoid`（いずれもバッチ 1 と
+同一の canonical_id・audio_sha256・features を再利用）との 2 本の事前登録比較を
+測る。fixture は `excl_rpe_fixture.json`（新規）、expected grip は
+`excl_expected_grip.json`（新規）、判定規約は `excl_plan.yaml`（新規）、
+回帰スナップショットは `tests/test_grip.py` に追加。
+
+### Provenance
+
+- ユーザーが実音源 mp3 4 本をセッションへ再アップロード（2026-07-09）。
+  `svprpe extract`（`--separate` / `--clap-semantic` / `--clap-sections` /
+  `--lyrics` なしの物理センサーのみパス、バッチ 1 と同一計測条件）で再抽出し、
+  前セッションの事前登録比較の判読値（d=-1.66 / d=+1.64）と完全一致を確認した。
+- 音源 mp3 はリポジトリに非同梱（content-addressed、sha256 のみ fixture に
+  インライン保全）。
+
+### per-file 表
+
+| canonical_id | file_id | spectral_centroid | bpm | bpm_candidates | フラグ | key |
+|---|---|---:|---:|---|---|---|
+| `k2seg_suno_excl_01` | file01 | 2641.10 | 123.05 | `[]` | なし | F# minor |
+| `k2seg_suno_excl_02` | file03 | 3027.54 | 123.05 | `[]` | なし | F# minor |
+| `k2seg_suno_excl_03` | file04 | 2563.44 | 234.91 | `[123.05, 234.91]` | `bpm_octave_ambiguous` | A minor |
+| `k2seg_suno_excl_04` | file02 | 2945.18 | 234.91 | `[161.5, 234.91]` | `bpm_octave_ambiguous` + `bpm_prior_disagreement`（R2-2f） | A minor |
+
+### 判定結果（事前登録比較 2 本、canonical 実測）
+
+| 比較 | 対象セル A (low) | 対象セル B (high) | mean A | mean B | grip d | 判定 |
+|---|---|---|---:|---:|---:|---|
+| 比較1（Exclude 欄チャネルの grip） | `calm_avoid` | `calm_avoid_excl` | 3079.3925 | 2794.315 | **-1.656645** | tight・負方向=期待どおり |
+| 比較2（正味効果） | `calm` | `calm_avoid_excl` | 2438.0075 | 2794.315 | **+1.642929** | tight・正方向（正味では打ち消せず、まだ明るい） |
+
+d 値は `scripts/measure_grip.py`（canonical 経路）実測であり、
+`scratchpad/excl_extract/summary.json` の事前算出値（-1.6566449476718548 /
+1.642929272618472）と一致する。
+
+### honesty 注記
+
+- **(a) 発注書 verbatim 消失**: 元の発注書は本追試のセッション環境消失により
+  失われている。本追試の比較設計・判定規約は `docs/controllability_poc.md`
+  K2-seg 節に残っていた判読記録からの再登録（`excl_plan.yaml`、2026-07-09）で
+  あり、原本の完全な再現ではない。
+- **(b) excl_01/excl_02 の take 順は便宜的割当**: フラグ署名（bpm 候補・
+  octave 曖昧・prior_disagreement）で確定できるのは excl_03（file04）/
+  excl_04（file02）のみ。excl_01/excl_02（file01/file03、いずれもフラグなし・
+  F# minor）はどちらが先録りかフラグ署名から再構成不能なため、
+  `summary.json` のファイルリスト順による便宜的割当を採用した。
+- **(c) octave 曖昧フラグは excl_03/excl_04 の 2 本**: `bpm_octave_ambiguous=true`
+  は excl_03（file04）・excl_04（file02）の 2/4。うち R2-2f
+  `bpm_prior_disagreement` が実際に発火したのは excl_04（file02）のみ
+  （候補比 1.4546、バッチ 1 `calm_04` と同一の候補対 161.5/234.91 が別セルで
+  再出現）。
+- **(d) key は F#m 2/4・Am 2/4**: excl_01/excl_02 は F# minor、excl_03/excl_04 は
+  A minor。指定 key（A minor、バッチ 1 と同じ処方）に対し F# minor という
+  新しいドリフト先が観測された（`docs/lyrics_semantic_anchor.md` 系の key grip
+  論点と同種、相対調ではない乖離）。
+- **(e) CLAP 軸は未計測**: 本追試は物理センサーのみで、`suno_rpe_fixture.json`
+  の `clap_semantic_axes` 節に相当するデータは `excl_rpe_fixture.json` に
+  含めていない。
+
 ## 関連
 
-- `docs/controllability_poc.md` K2-seg 節（Suno 転移結果表）
-- `docs/musicgen_backend.md` §7.6（キュー解消の起点）
+- `docs/controllability_poc.md` K2-seg 節（Suno 転移結果表、追試節）
+- `docs/musicgen_backend.md` §7.6（キュー解消の起点、追試による留保解消）

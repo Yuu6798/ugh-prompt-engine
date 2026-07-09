@@ -1,0 +1,77 @@
+# K2-seg Suno Exclude 欄併用追試（バッチ 1 増補セル calm_avoid_excl）
+#
+# バッチ 1（plan.yaml）の `calm_avoid`（本文 Avoid: セグメントのみ）に対し、
+# Suno の Exclude Styles 欄にも avoid 語彙を追加投入した「重複込み」条件を
+# 追試するバッチ 1 の増補セル。calm / calm_avoid の 2 セル（R=4 ずつ、計 8 本）は
+# バッチ 1 fixture から canonical_id・audio_sha256・features を一字一句変えず
+# 再利用し、新規 excl セル（R=4）と組み合わせて 2 本の事前登録比較を測る。
+#
+# honesty: 元の発注書 verbatim はセッション環境消失により失われている。本 plan は
+# `docs/controllability_poc.md` K2-seg 節に残っていた事前登録比較 2 本・判定規約の
+# 判読記録からの**再登録**（2026-07-09）であり、原本の完全な再現ではない。
+schema_version: "1.0"
+fixture_id: k2seg_suno_excl
+generator: suno
+model: >-
+  未検証（バッチ 1 は user-custom 申告済みだが、本追試はブラウザ版 UI の
+  Exclude Styles 欄を使用して生成しており〔バッチ 1 生成フローでは同欄が
+  見えなかったとの申告があった〕、生成フロー・モデル同一性の申告確認は
+  取れていない。標準モデル一般化の留保〔honesty (g)〕は本追試にも適用）
+repetitions: 4
+preregistered_date: "2026-07-09"  # 判読記録からの再登録日（発注書 verbatim の原本発行日は不明）
+reregistration_honesty: >-
+  発注書 verbatim 消失のため、本 plan は docs/controllability_poc.md の判読記録
+  （比較 1 / 比較 2 の対象セル・grip 定義・判定規約）から再構成した。数値は
+  すべて scratchpad/excl_extract/summary.json および file01-04.json の生値からのみ
+  転記しており、本 plan 自体は捏造防止のための記録層（新規の数値算出は行わない）。
+
+cells:
+  - name: calm
+    role: "バッチ 1 再利用 low セル（exclude_net_effect ノブの low）"
+    reused_from: examples/control/k2_suno_segments/suno_rpe_fixture.json
+  - name: calm_avoid
+    role: "バッチ 1 再利用 low セル（exclude_channel_grip ノブの low、本文 Avoid: のみ）"
+    reused_from: examples/control/k2_suno_segments/suno_rpe_fixture.json
+  - name: calm_avoid_excl
+    role: "新規 high セル（本文 Avoid: + Exclude Styles 欄併用、R=4: excl_01-04）"
+    canonical_ids:
+      - k2seg_suno_excl_01  # file01: centroid 2641.10 / F# minor / フラグなし
+      - k2seg_suno_excl_02  # file03: centroid 3027.54 / F# minor / フラグなし
+      - k2seg_suno_excl_03  # file04: octave 曖昧のみ / candidates [123.05, 234.91]
+      - k2seg_suno_excl_04  # file02: R2-2f prior_disagreement 発火 / candidates [161.5, 234.91]
+    canonical_id_mapping_honesty: >-
+      excl_01/excl_02 の take 順（file01/file03 のどちらが先録りか）はフラグ署名から
+      再構成不能なため、summary.json のファイルリスト順による便宜的割当。
+      excl_03/excl_04 はフラグ署名（octave 曖昧のみ vs prior_disagreement 発火）で
+      file04/file02 に確定できる。
+
+knobs:
+  - name: exclude_channel_grip
+    sensor: spectral_centroid
+    low_level: calm_avoid
+    high_level: calm_avoid_excl
+    expected_sign: -1
+    decision_rule: >-
+      事前登録比較 1（Exclude 欄チャネル単独の grip）。d<=-0.8 は Exclude 欄が
+      チャネルとして負方向に効くことを示す tight 判定。判読記録の d=-1.66 と
+      canonical 実測が一致することを確認する（tests/test_grip.py で pin）。
+  - name: exclude_net_effect
+    sensor: spectral_centroid
+    low_level: calm
+    high_level: calm_avoid_excl
+    expected_sign: 1
+    decision_rule: >-
+      事前登録比較 2（正味効果: Exclude 併用でも本文 Avoid の attractor
+      〔#162: d=+4.03〕を正味で打ち消せるか）。expected_sign は事前登録の問い
+      そのもの（打ち消せるなら負）ではなく、判読記録に残る観測方向（正）を採用
+      している — 「calm_avoid_excl は結局 calm より明るい」という観測結果を
+      classify_grip の tight/dead 語彙で機械的に記述するための選択であり、
+      「正味で打ち消せなかった」という定性的結論（本 plan 冒頭・README 参照）を
+      変えるものではない。判読記録の d=+1.64 と canonical 実測が一致することを
+      確認する。
+
+# 副次観測（自動記録・判定対象外、詳細は README.md 追試節）:
+# - R2-2f prior_disagreement が excl_04 で live 発火（2 例目、バッチ1 calm_04 と
+#   同一候補対 161.5/234.91・比 1.4546 が別セルで再出現）
+# - excl_03 も bpm_octave_ambiguous 発火（candidates [123.05, 234.91]）
+# - key: F# minor 2/4（excl_01, excl_02）、A minor 2/4（excl_03, excl_04）
