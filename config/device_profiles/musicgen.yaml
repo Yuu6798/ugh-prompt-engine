@@ -20,7 +20,9 @@ generator: "musicgen"
 # K2-seg 後始末（2026-07-06、#152 フォローアップ）: 上記 semantic.avoid の attractor 実測
 # を受け、musicgen backend は本文 "Avoid: X" セグメントの送出自体を停止する（送出側の
 # ルーティング是正・BackendDescriptor.omit_body_negative）。negative_tags への記録は
-# 従来どおり維持（楽譜の意図保全）。suno/external は不変（実測は musicgen 限定・横展開しない）。
+# 従来どおり維持（楽譜の意図保全）。suno は K2-seg Suno 転移バッチ 1（#162, 2026-07-09）
+# の同種実測（d=+4.03）を受けて同様に停止済み。external は不変（実測は Suno 生成に
+# 対するもので汎用 external への横展開はしない — #153 と同じ規律）。
 control_defaults:
   bpm:
     grip_class: loose

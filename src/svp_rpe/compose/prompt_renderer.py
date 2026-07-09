@@ -74,18 +74,21 @@ class BackendDescriptor:
 
     profile_key: str  # control_profile のキー（"suno" / "musicgen" / ...）
     negative_channel: str = "exclude_styles"  # 否定指定を流す欄（Suno=Exclude Styles）
-    # K2-seg（#152）実測: musicgen は本文 "Avoid: X" が X の attractor になる
-    # （bright 系 Avoid で centroid d=+1.10・否定語無視）。True の backend は
-    # `semantic.avoid` 本文セグメントの送出を止める（negative_tags は従来どおり保持）。
-    # 実測なき横展開はしない — 効果が実測された backend のみ True にする
-    # （docs/musicgen_backend.md §7.6 / docs/control_profile.md 参照）。
+    # K2-seg（#152, #162）実測: musicgen / suno はともに本文 "Avoid: X" が X の attractor
+    # になる（musicgen: bright 系 Avoid で centroid d=+1.10・#152 / suno: K2-seg Suno
+    # 転移バッチ1で d=+4.03・事前登録規約の attractor 確定閾値 d>=+0.8 該当・#162）。
+    # True の backend は `semantic.avoid` 本文セグメントの送出を止める（negative_tags
+    # は従来どおり保持）。実測なき横展開はしない — 効果が実測された backend のみ
+    # True にする（docs/musicgen_backend.md §7.6 / docs/control_profile.md 参照）。
+    # `external` は Suno ルートのエイリアスだが実測は Suno 生成そのものに対するもの
+    # であり汎用 external への横展開はしない（#153 と同じ規律）ため不変（False）。
     omit_body_negative: bool = False
 
 
 # target_backend → BackendDescriptor。`external` は Suno ルートのエイリアス。
 _BACKEND_DESCRIPTORS: dict[str, BackendDescriptor] = {
     "external": BackendDescriptor(profile_key="suno"),
-    "suno": BackendDescriptor(profile_key="suno"),
+    "suno": BackendDescriptor(profile_key="suno", omit_body_negative=True),
     "musicgen": BackendDescriptor(
         profile_key="musicgen",
         negative_channel="negative_prompt",
@@ -259,8 +262,9 @@ def _segments_for(
     elif score.semantic.lyrics_presence == "absent":
         add("lyrics_presence", "Instrumental, no vocals.")
 
-    # K2-seg（#152）実測: musicgen は本文 Avoid が attractor 化するため、当該 backend
-    # の descriptor（`omit_body_negative=True`）は本文セグメントの送出自体を止める。
+    # K2-seg（#152 musicgen, #162 suno）実測: musicgen / suno は本文 Avoid が attractor
+    # 化するため、当該 backend の descriptor（`omit_body_negative=True`）は本文
+    # セグメントの送出自体を止める。
     # `negative_tags`（GeneratedPrompt 側）は render() 側で従来どおり保持するため、
     # 楽譜の意図（避けたい要素の記録）は失われない。「字数超過 drop」とは区別し、
     # ここで候補にすら入れないことで `dropped_elements` にも現れない
