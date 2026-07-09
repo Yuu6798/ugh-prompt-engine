@@ -291,7 +291,11 @@ def compose(
     ),
 ) -> None:
     """Render Composition Score into an external generator prompt."""
-    from svp_rpe.compose import ExternalPromptAdapter, load_composition_score
+    from svp_rpe.compose import (
+        ExternalPromptAdapter,
+        load_composition_score,
+        resolve_backend_descriptor,
+    )
 
     score = load_composition_score(score_yaml)
     prompt = ExternalPromptAdapter().render(score, max_chars=max_chars)
@@ -315,6 +319,18 @@ def compose(
     if output_format == "text" and prompt.advisories:
         advisories_block = "\n".join(f"- {advisory}" for advisory in prompt.advisories)
         typer.echo(f"Advisories:\n{advisories_block}", err=True)
+
+    # #163 Codex P2: omit_body_negative backend（suno / musicgen）では本文に "Avoid:" が
+    # 出ないため、text 出力だけを見るユーザーには除外要求が silent に失われて見える。
+    # advisory と同じ経路（stdout / -o ファイルは不変・stderr のみ）で negative_tags を
+    # 1 行可視化する。JSON 出力は model_dump に negative_tags が乗るため追加処理不要。
+    if output_format == "text" and prompt.negative_tags:
+        descriptor = resolve_backend_descriptor(score.rendering.target_backend)
+        typer.echo(
+            f"Negative tags (paste into the generator's {descriptor.negative_channel} field): "
+            + "; ".join(prompt.negative_tags),
+            err=True,
+        )
 
 
 @app.command()

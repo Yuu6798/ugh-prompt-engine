@@ -194,6 +194,82 @@ def test_compose_cli_text_output_file_excludes_advisories(tmp_path: Path) -> Non
     assert "Advisories" in result.stderr
 
 
+# --- #163 Codex P2: compose text 出力の negative_tags stderr 可視化 -----------
+
+
+def _write_sample_with_backend(
+    tmp_path: Path, target_backend: str, *, avoid: list[str] | None = None
+) -> Path:
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["rendering"]["target_backend"] = target_backend
+    if avoid is not None:
+        data["semantic"]["avoid"] = avoid
+    path = tmp_path / "score.yaml"
+    path.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
+    return path
+
+
+def test_compose_cli_suno_text_surfaces_negative_tags_on_stderr(tmp_path: Path) -> None:
+    """suno（omit_body_negative=True）の text 出力では本文に "Avoid:" が出ないため、
+    除外要求が silent に失われないよう negative_tags を stderr に 1 行可視化する
+    （#163 Codex P2）。stdout（コピペ成果物）は不変。"""
+    score_path = _write_sample_with_backend(tmp_path, "suno")
+
+    result = CliRunner().invoke(app, ["compose", str(score_path)])
+
+    assert result.exit_code == 0
+    # stdout 純度: 本文にも可視化行にも汚染されない（Style 貼り付け用の契約）。
+    assert "Avoid:" not in result.stdout
+    assert "Negative tags" not in result.stdout
+    assert "bright festival EDM" not in result.stdout
+    # stderr に negative_channel 名（suno=exclude_styles）付きで 1 行出る。
+    assert (
+        "Negative tags (paste into the generator's exclude_styles field): "
+        "bright festival EDM; comic vocal delivery" in result.stderr
+    )
+
+
+def test_compose_cli_musicgen_text_surfaces_negative_tags_with_backend_channel(
+    tmp_path: Path,
+) -> None:
+    """musicgen でも同様に stderr 可視化される。ラベルの欄名は backend の
+    negative_channel（musicgen=negative_prompt）に応じる。"""
+    score_path = _write_sample_with_backend(tmp_path, "musicgen")
+
+    result = CliRunner().invoke(app, ["compose", str(score_path)])
+
+    assert result.exit_code == 0
+    assert "Avoid:" not in result.stdout
+    assert "Negative tags" not in result.stdout
+    assert (
+        "Negative tags (paste into the generator's negative_prompt field): "
+        "bright festival EDM; comic vocal delivery" in result.stderr
+    )
+
+
+def test_compose_cli_empty_avoid_emits_no_negative_tags_line(tmp_path: Path) -> None:
+    """`semantic.avoid` が空なら negative_tags 可視化行は出ない。"""
+    score_path = _write_sample_with_backend(tmp_path, "suno", avoid=[])
+
+    result = CliRunner().invoke(app, ["compose", str(score_path)])
+
+    assert result.exit_code == 0
+    assert "Negative tags" not in result.stdout
+    assert "Negative tags" not in result.stderr
+
+
+def test_compose_cli_json_format_has_no_negative_tags_stderr_line(tmp_path: Path) -> None:
+    """JSON format は不変（negative_tags 同梱が canonical）— stderr 可視化行は出ない。"""
+    score_path = _write_sample_with_backend(tmp_path, "suno")
+
+    result = CliRunner().invoke(app, ["compose", str(score_path), "--format", "json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["negative_tags"] == ["bright festival EDM", "comic vocal delivery"]
+    assert result.stderr == ""
+
+
 def test_generated_prompt_examples_match_renderer() -> None:
     prompt = ExternalPromptAdapter().render(load_composition_score(SAMPLE_PATH))
 

@@ -73,6 +73,13 @@ svprpe compose score.yaml --max-chars 2000
 `--max-chars` overrides `rendering.prompt_max_chars`. Default `--format` is
 `text`; `json` emits the structured `ExternalPromptAdapter` payload.
 
+`text` format keeps stdout as pure paste-ready prompt text; non-empty
+`negative_tags` are surfaced on **stderr** as one line labelled with the
+backend's negative channel (suno/external = `exclude_styles`, musicgen =
+`negative_prompt`) so exclusions are never silently lost on
+`omit_body_negative` backends. Machine consumers should use `--format json`
+(canonical; carries `negative_tags` in the payload).
+
 ### `svprpe measure <audio>`
 
 Measure the seven required `CompositionScore.physical` fields from one audio file.
