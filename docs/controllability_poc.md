@@ -318,7 +318,10 @@ expected_sign は −1（Avoid が効けば centroid は低下するはず）だ
 highs"）へ引き寄せられた。事前登録の attractor 専用ルーブリック（発注書 verbatim）
 では d≥+0.8 は「attractor 確定」— **suno backend への `omit_body_negative=True`
 波及を提案**する（#153 の Suno 波及裁定。本 PR ではコード変更しない、docs 記録の
-みで follow-up PR に回す）。
+みで follow-up PR に回す）。留保: 生成は Suno のユーザーオリジナル・カスタムモデル
+（ユーザー申告 2026-07-09、標準 stock モデルではない）での実測であり、標準モデル
+への一般化追試は follow-up（fixture README honesty (g)。ただし MusicGen でも同符号
+の attractor が実測済みで、否定語盲は生成器横断の機序である可能性が高い）。
 
 **core は機種間で物理センサー生存が異なる**: MusicGen は物理 dead（onset_density
 盲）× CLAP tight の「センサー盲」構図だったが、Suno は物理 loose（弱いが方向どおり

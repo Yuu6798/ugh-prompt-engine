@@ -11,10 +11,14 @@
 schema_version: "1.0"
 fixture_id: k2seg_suno_batch1
 generator: suno
-model_revision: "PENDING"  # honesty (b): Suno モデルバージョンは受領時に未申告（README 参照）
+# Suno のユーザーオリジナル・カスタムモデルで生成（ユーザー申告 2026-07-09。
+# 標準 stock モデルではない）。一般化の留保は README honesty (g) 参照。
+model: "user-custom (Suno カスタムモデル・ユーザー申告 2026-07-09)"
 repetitions: 4
 preregistered_date: "2026-07-08"  # 発注書発行日 = 判定規約の事前登録日
-exclude_styles: ""  # honesty (c): 全セル同一・空生成（ユーザー申告） — Exclude 自体の効果は未測定
+# honesty (c): Exclude Styles 空で生成（ユーザー申告）＝測ったのは本文 Avoid 単独効果。
+# §7.6 の「Exclude 重複込み」条件は未検証のまま（README 参照）。
+exclude_styles: ""
 
 cells:
   - name: calm

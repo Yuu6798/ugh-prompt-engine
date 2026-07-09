@@ -31,9 +31,9 @@ calm セルが `semantic_avoid` ノブと `semantic_core` ノブ両方の low �
 | `calm_avoid` | `semantic_avoid` high | `120 BPM. Instrumental, no vocals. Brightness balanced. Calm atmosphere. synthwave track. A minor. Avoid: bright shimmering sparkling highs. 4/4 time. Wide stereo. Active rate 0.8. Valley depth 0.3.` |
 | `euph` | `semantic_core` high | `120 BPM. Instrumental, no vocals. Brightness balanced. Euphoric energetic festival atmosphere. synthwave track. A minor. 4/4 time. Wide stereo. Active rate 0.8. Valley depth 0.3.` |
 
-Exclude Styles 欄は全セル同一固定（`vocals, orchestral, acoustic guitar, tempo
-change, bright shimmering sparkling highs`）で空生成ではない点に注意
-— honesty (c) 参照。
+Exclude Styles 欄は発注書では全セル同一固定を指定していたが、**実際の生成は
+Exclude Styles 空**（ユーザー申告）— 測ったのは本文 Avoid の単独効果である
+（honesty (c) 参照）。
 
 ## 検算照合ゲート（実測）
 
@@ -93,11 +93,10 @@ Suno = 物理 loose × CLAP tight（物理センサーも方向どおり弱く�
   `Wide stereo.` / `Active rate 0.8.` / `Valley depth 0.3.` は omit 不可欄の固定値で
   全セル共通。特に "Brightness balanced." は centroid センサーと同軸の語であり
   avoid 効果の感度を下げうる（交絡ではないが減衰要因として記録）。
-- **(c) Exclude Styles は空生成ではない**: 全セル同一固定
-  （`vocals, orchestral, acoustic guitar, tempo change, bright shimmering
-  sparkling highs`）で生成された（ユーザー申告）。測ったのは「Exclude 稼働下での
-  本文 Avoid の限界効果」— §7.6 の「Exclude 重複込み」条件そのものだが、
-  **Exclude 単独の効果や Exclude なし条件は本バッチでは測っていない**。
+- **(c) Exclude Styles 空で生成（ユーザー申告）**: 発注書は全セル同一の Exclude
+  固定を指定していたが、実際の生成は Exclude Styles 欄が空だった。したがって
+  **測ったのは本文 Avoid の単独効果**であり、§7.6 の「Exclude Styles チャネルとの
+  重複込み」条件は本バッチでも未検証のまま残る。
 - **(d)** `grv.secondary=""` の空文字ワークアラウンド使用（`GrvSpec.secondary` は
   スキーマ上必須のためキー省略不可。tags 配列に空要素 1 個が残るが Style 本文には
   無影響、`final_prompt_*.txt` の raw JSON 参照）。
@@ -105,12 +104,16 @@ Suno = 物理 loose × CLAP tight（物理センサーも方向どおり弱く�
   `plan.yaml`/`suno_rpe_fixture.json` の `features.duration_sec` に生値を保全。
 - **(f) 音源は repo 非コミット**: mp3 実体は session 添付のみ・sha256 で
   provenance を保全（`suno_rpe_fixture.json` の `audio_sha256` 全 12 本インライン）。
+- **(g) 生成モデルはユーザーのカスタムモデル**: 本判定（特に avoid=attractor
+  d=+4.03）は当該カスタムモデル下の実測であり、Suno 標準モデルへの一般化は未検証。
+  ただし MusicGen でも同符号の attractor（d=+1.10, #152）が実測済みで、否定語盲は
+  生成器横断の機序である可能性が高い。
 
 ## Provenance
 
-- **生成器**: Suno（製品級・確率的・リポジトリ外）。**モデルバージョンは
-  受領時に未申告 = PENDING**（発注書で報告を依頼していたが実際の受領物に
-  記載がなかった。正直に記録する — 虚偽の pin をしない）。
+- **生成器**: Suno（製品級・確率的・リポジトリ外）。**Suno のユーザーオリジナル・
+  カスタムモデルで生成（ユーザー申告 2026-07-09。標準 stock モデルではない）**。
+  一般化の留保は honesty (g) 参照。
 - **CLAP チェックポイント**: `music_audioset_epoch_15_esc_90.14.pt`、
   sha256 `fae3e9c087f2909c28a09dc31c8dfcdacbc42ba44c70e972b58c1bd1caf6dedd`。
   `docs/musicgen_backend.md` §7.5 / `docs/semantic_sensor_clap.md` の校正ログと
