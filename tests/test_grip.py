@@ -371,15 +371,25 @@ def test_k2_seg_suno_segments_excl_fixture_snapshot() -> None:
     fixture 収載（`examples/control/k2_suno_segments/README.md` 追試節）。
 
     - `exclude_channel_grip`（low=`calm_avoid`, high=`calm_avoid_excl`）:
-      d=-1.656645、tight・負方向=期待どおり。Exclude 欄はチャネルとして実際に効く。
+      d=-1.656645、tight・負方向=期待どおりの機械的分類。ただし本比較は excl セル
+      （モデル/生成フロー未確認のブラウザ生成）と `calm_avoid`（バッチ 1・
+      user-custom 流用）を跨ぐ cross-batch 交絡であり、Exclude-channel 単独 grip
+      の確定エビデンスではない（confounded・未確定。詳細は
+      `examples/control/k2_suno_segments/excl_plan.yaml` の
+      `exclude_channel_grip.decision_rule` / `confound_honesty` 参照）。
     - `exclude_net_effect`（low=`calm`, high=`calm_avoid_excl`）: d=+1.642929。
       事前登録の問いは「Exclude 併用で本文 Avoid の attractor（#162: d=+4.03）を
       打ち消し、calm より暗くできるか」であり、成功なら負方向 —
       `expected_sign=-1` を保持する（Codex P2 レビュー指摘、バッチ 1
       `semantic_avoid` と同型の規約）。観測は正方向で符号反転しており、
       `classify_grip` は expected_sign と逆符号かつ |d|>=GRIP_LOOSE_MIN のケースを
-      "dead" と分類するため、Exclude 併用は正味では attractor を打ち消せて
-      いない「非 tight（dead）」として顕在化する。
+      "dead" と分類するため、機械的分類は「非 tight（dead）」として記録される。
+      ただしこの比較も `calm`（バッチ 1・user-custom 流用）と excl セル（モデル/
+      生成フロー未確認のブラウザ生成）を跨ぐ cross-batch 交絡であり、「正味では
+      attractor を打ち消せなかった」という解釈自体は isolated な結論ではなく
+      confounded・未確定（詳細は `excl_plan.yaml` の `exclude_net_effect.decision_rule`
+      / `confound_honesty` 参照）。omit_body_negative（#163）の妥当性はこの比較の
+      確定を待たず、本文 Avoid=attractor のバッチ 1 内実測（d=+4.03、同一モデル）に立つ。
     - 両 d 値は `scratchpad/excl_extract/summary.json` の事前算出値
       （-1.6566449476718548 / 1.642929272618472）と一致する（抽出を伴わない純
       fixture 解析なので slow マーカー不要）。
