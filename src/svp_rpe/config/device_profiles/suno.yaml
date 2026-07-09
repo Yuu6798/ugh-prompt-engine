@@ -19,6 +19,11 @@ control_defaults:
     grip_class: tight
     sensor: clap_vocal_contrast
     evidence: "examples/learned/clap/lyrics_vocal_contrast_v2_fixture.json (#159: 効果>ノイズ EDM 2.1×/Rock 1.9×・条件2 ジャンル干渉分離成立 — docs/control_profile.md DD-4 2026-07-08)"
+  # semantic.core は K2-seg Suno 転移バッチ 1（#162）で実測済み（onset_density
+  # d=+0.230909・CLAP energy d=+2.446820）だが、生成器がユーザーのカスタムモデル
+  # （examples/control/k2_suno_segments/README.md honesty (g)）由来で標準 stock
+  # モデルへの一般化が未検証のため、config 反映は撤回・保留する
+  # （Codex #164 P2。stock 検証または model-scope 機構の新設まで）。
 
 # 既知の癖。advisory が非 null のもののみ GeneratedPrompt.advisories を発火する
 # （プロンプト本文・tags は変えない＝自動補正しない）。

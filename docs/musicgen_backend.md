@@ -354,12 +354,32 @@ semantic_core[物理] / time_signature）を Suno へそのまま転移させて
 **バッチ 1（2026-07-09）で semantic_avoid / semantic_core の 2 欄について再実測済み**
 （`examples/control/k2_suno_segments/`、`docs/controllability_poc.md` K2-seg 節）。
 **Suno 本文 Avoid の効き**は本文 Avoid 単独効果として再実測し、attractor が
-MusicGen より強い形（d=+4.03 vs +1.10）で再現することを確認した。ただし
+MusicGen より強い形（d=+4.03 vs +1.10）で再現することを確認した。
 **Exclude Styles チャネルとの重複込み条件は本バッチでも未検証のまま**
 （Exclude Styles 空で生成＝測ったのは本文 Avoid 単独効果 —
 `examples/control/k2_suno_segments/README.md` honesty (c) 参照。また生成は Suno の
 ユーザーオリジナル・カスタムモデルでの実測であり標準モデルへの一般化は未検証 —
-同 honesty (g)）。
+同 honesty (g)）→ **追試を試みたが同一モデル隔離が取れず未確定のまま**
+（2026-07-09、Codex #164 P2 レビュー指摘で訂正）: Exclude 欄併用追試（セル
+`calm_avoid_excl`、R=4）で比較 1（Exclude 欄チャネルの grip: `calm_avoid_excl`
+2794.3 vs `calm_avoid` 3079.4 → d=-1.66・tight 域）・比較 2（正味効果:
+`calm_avoid_excl` vs `calm` 2438.0 → d=+1.64）を判読した。**部分的前進だが交絡に
+より未確定（同一モデル isolated データ待ち）**: excl セルはモデル/生成フロー
+未確認のブラウザフロー生成（`excl_plan.yaml` の `model:` 欄に自ら「未検証」と
+記録済み）である一方、比較対象の `calm_avoid`/`calm` はバッチ 1（user-custom
+モデル）からの再利用であり、両比較（d=-1.66 / d=+1.64）はいずれも excl セルと
+batch-1 baseline という異なりうる生成条件を跨ぐ。したがってこの差分は Exclude
+Styles 欄の効果ではなく generator/model の変化でも説明できてしまい（交絡・
+非隔離）、「Exclude 欄はチャネルとして実際に効く」という因果断定は示唆にとどまる
+（confounded）。ただし `omit_body_negative`（#163）の妥当性自体は、本文
+Avoid = attractor というバッチ内実測（#162, d=+4.03）から独立に成立する別論拠で
+立つため、この実装判断（本文 Avoid を止め Exclude 欄のみ使う）は Exclude grip の
+確定を待たずに維持できる。詳細は
+[`controllability_poc.md`](controllability_poc.md) 「K2-seg Exclude 欄併用追試
+（2026-07-09・バッチ 1 増補セル）」節を参照。なお標準モデルへの一般化（honesty (g)）は
+本追試でも未検証のまま残る。再アップロード音源の再抽出で fixture 収載済み
+（`examples/control/k2_suno_segments/excl_rpe_fixture.json`）— 残る未収載は
+発注書 verbatim のみ（セッション環境消失により復旧不能、同節 honesty 注記）。
 `valley_depth_target` / `time_signature` はバッチ 2 へ繰越（未検証のまま）。
 本文 Avoid については、当初の方針（musicgen の attractor 実測のみを根拠に suno 側の
 送出を止めることはしない・#152 フォローアップ、2026-07-06）を、Suno 自身の実測

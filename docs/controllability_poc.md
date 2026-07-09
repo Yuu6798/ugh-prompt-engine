@@ -329,13 +329,110 @@ highs"）へ引き寄せられた。事前登録の attractor 専用ルーブリ
 盲）× CLAP tight の「センサー盲」構図だったが、Suno は物理 loose（弱いが方向どおり
 生存）× CLAP tight 域で、物理センサーの感度そのものが機種依存であることを示す。
 config 反映（`device_profiles/suno.yaml` への `semantic.core` 追記）は SEM-1
-昇格ゲート（#126）準拠で本 PR ではしない。
+昇格ゲート（#126）準拠で本 PR ではしない。**追記（2026-07-09 follow-up →
+撤回、Codex #164 P2）**: 本 PR 後の follow-up で一度 loose として config 反映した
+が、生成器がユーザーのカスタムモデル（fixture README honesty (g)）由来で標準
+stock モデルへの一般化が未検証のため撤回・保留した。測定値（本節の d 値）自体は
+事実として保持する。詳細は
+[`control_profile.md`](control_profile.md) の該当節を参照。
 
 **副次観測**（詳細は fixture README）: R2-2f `bpm_prior_disagreement` の live 初発火
 （`calm_04`: 候補 161.5/234.91、比 1.4546）、key の相対調ドリフト（A minor 指定に
 C major 優勢）、`euph` セルの `spectral_centroid`（3176–3312）が `calm_avoid`
 （2960–3167）より高い域に出た `semantic.core`→centroid 交差結合疑い（K3 機種依存
 文脈への追加観測）。
+
+#### K2-seg Exclude 欄併用追試（2026-07-09・バッチ 1 増補セル）
+
+**honesty 注記**: 実音源 4 本のユーザー再アップロード（2026-07-09）による再抽出で、
+本節の数値（事前登録済み比較 2 本の判読記録）と完全一致を確認した。fixture 収載済み
+（`examples/control/k2_suno_segments/excl_rpe_fixture.json` / `excl_expected_grip.json`
+/ `excl_plan.yaml`、`tests/test_grip.py::test_k2_seg_suno_segments_excl_fixture_snapshot`
+で回帰固定）。残る未収載は発注書 verbatim のみ（セッション環境消失により復旧不能、
+`excl_plan.yaml` は判読記録からの再登録）。
+
+副次観測の精密化: bpm octave 曖昧フラグは `excl_03`/`excl_04` の 2 本
+（うち R2-2f `bpm_prior_disagreement` が live 発火したのは `excl_04` のみ）。
+key は F# minor 2/4（excl_01/excl_02）・A minor 2/4（excl_03/excl_04）。
+
+条件: バッチ 1 の `calm_avoid` と同一 score・本文 Avoid 送出ありに加え、Suno の
+Exclude Styles 欄にも avoid 語彙を入力した「重複込み」条件（セル `calm_avoid_excl`、
+R=4: excl_01–04）。
+
+| 比較 | 対象セル A | 対象セル B | mean A | mean B | grip d | 判定 |
+|---|---|---|---:|---:|---:|---|
+| 比較1（Exclude 欄チャネルの grip） | `calm_avoid_excl` | `calm_avoid`（バッチ 1） | 2794.3 | 3079.4 | **-1.66** | 負方向=期待どおり・tight 域の値だが**交絡あり・未確定**（下記 caveat 参照）。**示唆にとどまる**（confounded） |
+| 比較2（正味効果） | `calm_avoid_excl` | `calm`（バッチ 1） | 2794.3 | 2438.0 | **+1.64** | 事前登録極性（成功なら負方向）に対し観測は正方向 = 符号反転で機械的分類は **dead**（expected_sign に対する分類なので記録はする）。ただし net-effect の失敗という**解釈は交絡あり・未確定**: この +1.64 の明化自体が excl セル（未確認ブラウザ/モデルフロー）と `calm`（バッチ 1 流用）の generator/model 変化でも説明でき、「Exclude 併用でも attractor を打ち消せず明るいまま」という結論を隔離された結論として扱うことはできない（**測定済みだが confounded**。omit_body_negative の妥当性は本文 Avoid=attractor のバッチ 1 内実測 d=+4.03 に立つので別途無傷） |
+
+（d = (calm_avoid_excl − 比較対象)/pooled SD）
+
+**交絡 caveat（Codex #164 P2 レビュー指摘・採用）**: 両比較（d=-1.66 / d=+1.64）は
+いずれも `calm_avoid_excl`（excl セル）と `calm_avoid`/`calm`（バッチ 1 baseline）
+を跨ぐ。excl セルはモデル/生成フロー同一性が未確認のブラウザフローで生成された
+（`excl_plan.yaml` の `model:` 欄に「未検証」と自ら記録済み）のに対し、baseline
+はバッチ 1（user-custom モデル）からの再利用であり、両者の生成条件が同一である
+保証がない。したがってこの差分は Exclude Styles 欄の効果ではなく generator/model
+の変化でも説明でき、比較 1 を「Exclude 欄はチャネルとして実際に効く」証拠として
+確定的に扱うことはできない（非隔離・confounded）。同一モデルで excl と baseline
+を揃えた isolated 追試が取れるまで、Exclude-channel 単独 grip としては未確定の
+ままとする。
+
+**解釈**: 「本文 Avoid をやめて Exclude 欄だけ使う」（= #163 の
+`omit_body_negative` 実装形）が最適であるという実装判断は、本追試の交絡とは独立に
+成立する — 根拠は本文 Avoid = attractor というバッチ内実測（#162, d=+4.03）で
+あり、Exclude grip の確定に依存しない。[`musicgen_backend.md`](musicgen_backend.md)
+§7.6 の「重複込み未検証」留保は、本追試により**部分的前進はあったが解消はしていない**
+（同一モデル isolated データ待ちのまま）。
+
+**副次観測**: R2-2f `bpm_prior_disagreement` が `excl_04` で live 発火（2 例目。
+候補対 161.5/234.91・比 1.4546 — バッチ 1 `calm_04` と**同一の候補対が別セルで
+再出現**した点が注目に値する）。`excl_03` も bpm octave 曖昧フラグが発火。key に
+F# minor という新しいドリフトも観測された。R2-2f 候補対の一致は excl セルと
+`calm_04` が同一生成器由来であることの**弱い**示唆にはなり得るが、生成フロー/
+モデル同一性を確定させる証拠ではなく、これをもって上記の交絡が解消されたとは
+言えない（過剰解釈しない）。
+
+**UI 発見**: Suno **ブラウザ版 UI には Exclude Styles 欄が存在する**ことを確認
+（2026-07-09）。同日の「カスタムモデル生成フローに Exclude 欄が存在しない」という
+ユーザー申告ベースの記述はこれにより修正が必要（詳細は
+[`control_profile.md`](control_profile.md) 該当節）。
+
+#### K2-seg バッチ 2: structure 欄センサー設計（2026-07-09 事前設計）
+
+問い: compose が送出する structure セクション記述（"intro: ...; role=..."）は Suno の
+実生成で「構造」として実現されるか。12 秒クリップの MusicGen では原理的に測定不能
+（#152 スコープ外）だった Suno 専用ノブ。バッチ 2 発注書の前提となる計器設計を
+事前登録する（発注書で verbatim 固定してから生成する）。
+
+- **主センサー: 区間エネルギー・パターン一致率（categorical）**。処方: 対照的な
+  3 区間（例: quiet–loud–quiet）を role 付きで指定。計測: トラックを処方区間数で
+  **比例分割**（絶対秒でなく相対位置 — 曲長が Suno 依存で統制不能なため）し、
+  各区間 RMS の high/low 符号パターンを処方パターンと突き合わせ、time_signature と
+  同じ match_rate 規約（≥0.7 tight / 0.3–0.7 loose / <0.3 dead）で判定
+- **副センサー: novelty 境界数の d**（structure 指定で検出境界数が増えるか。K 系列
+  d 閾値）
+- 既存計器の再利用: dynamics_summary / section_features / structure_novelty。新規
+  実装は「比例分割 RMS 符号パターン」の薄い比較器のみ
+- **セル設計（隔離設計・primary）**: low セル（structure: []）と high セル
+  （structure 3 区間）を**同一バッチで両方新規生成**する — **追加生成は 8 曲**。
+  理由（cross-batch 交絡の設計段階回避）: バッチ 1 の calm（structure: []）を low
+  セルに再利用し high セルのみ新規生成する案は、上記「K2-seg Exclude 欄併用追試」
+  節の交絡 caveat（`calm_avoid_excl` vs バッチ 1 `calm_avoid`/`calm`）と**同型**——
+  low=バッチ 1 / high=新バッチという跨バッチ比較になり、RMS/novelty 差が structure
+  欄の効果か generator/model/batch drift かを事後に切り分けられない。Exclude 追試は
+  この交絡により比較 1・2 とも「測定済みだが confounded」に格下げされた前例であり、
+  structure grip は同じ轍を事前登録の段階で避ける（Codex #164 P2 採用）
+- **経済化オプション（非 primary）**: batch-1 `calm`（structure: []・実測済み 4 本）
+  を low セルに再利用し high セルのみ新規生成すれば追加生成は 4 曲に圧縮できる。
+  ただしこの場合 low=バッチ 1 / high=新バッチの cross-batch 比較となり交絡するため、
+  **採用するなら比較を最初から confounded と pre-mark し、isolated な structure
+  grip の確定には使わない**（「事後の疑いが生じたときにのみ low セルを再生成して
+  追試する」という判断方式は、Exclude 追試の教訓（交絡は生成前の設計に起因し、
+  事後の再測定だけでは遡って解消できない）により明示的に不採用とする）
+- 既知リスク（事前申告）: (a) structure セグメントは長く Style 欄 200 字を超え
+  やすい — 発注書段階で compose 実出力の文字数検証を必須とし、超過時は区間
+  physical 記述を最短化 (b) 曲長 18–117s のばらつきは比例分割で吸収するが、構造が
+  物理的に展開し得ない極端な短尺（目安 <30s）の除外規則を生成前に事前登録する
 
 ### K3: 直交性行列 — DCI/MIG の効果量再定式化
 

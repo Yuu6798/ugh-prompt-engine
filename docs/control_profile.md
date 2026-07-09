@@ -85,7 +85,33 @@ d=+1.10 #152・suno centroid d=+4.03 #162、事前登録規約の attractor 確�
 は従来どおり保持し楽譜の意図は失わない）。分岐は descriptor 参照のみで backend 名の直書きは
 増やさない。`external` は不変 — 実測は Suno 生成そのものに対するものであり、汎用 external
 へは実測なき横展開をしない（#153 と同じ規律。Suno 本文 Avoid の Exclude Styles チャネルとの
-重複込みの効きは依然人手検証キュー、docs/musicgen_backend.md §7.6 参照）。
+重複込みの効きは 2026-07-09 の Exclude 欄併用追試で計測を試みたが、excl セルがモデル/フロー
+未確認のブラウザ生成・baseline がバッチ 1 流用で交絡しており**未確定** — docs/musicgen_backend.md
+§7.6 の留保は未解消のまま・後述の「negative チャネル欠落経路での avoid の扱い」参照）。
+
+**negative チャネル欠落経路での avoid の扱い**: 生成経路によっては Exclude 欄
+（negative チャネル）自体が UI に存在しない（実測例: Suno カスタムモデルの生成フロー、
+2026-07-09 ユーザー申告）——との申告が当初あったが、同日中のブラウザ版 UI 確認で
+**Suno には Exclude Styles 欄が存在する**ことが判明し、上記申告は経路/表示の
+見落としだったと訂正する。したがって Suno
+では `semantic.avoid` の配送先は Exclude 欄で確保される。Exclude 欄併用追試
+（`calm_avoid_excl` vs `calm_avoid`: grip d=-1.66・tight 域）は Exclude 欄が
+チャネルとして効くことを**示唆**するが、excl セルと baseline の生成モデル/フロー
+同一性が未確認で交絡しており確定はしていない（[`controllability_poc.md`](controllability_poc.md)
+「K2-seg Exclude 欄併用追試（2026-07-09・バッチ 1 増補セル）」節の交絡 caveat 参照）。
+`omit_body_negative`（#163）で本文 Avoid の送出自体を止める方針の主根拠は、この
+Exclude 併用追試ではなく**バッチ 1 内実測**（`calm` vs `calm_avoid`、同一モデル・
+d=+4.03、本文 Avoid=attractor）であり、Exclude grip の確定を待たずに成立する。
+Exclude 併用でも正味で打ち消せなかったという観測（同追試の正味効果比較: d=+1.64）は
+同方向の傍証ではあるが、excl セルとバッチ 1 baseline を跨ぐ交絡測定であるため
+主根拠には用いない。
+
+以下は **negative チャネルが本当に存在しない経路での一般 fallback 指針**として
+スコープを狭めて残す: そのような経路では `semantic.avoid` は配送先ゼロ — 本文
+Avoid は attractor（#162: d=+4.03）・Exclude 欄は不在 — であり、除外要求は
+**肯定形へのリフレーズでのみ表現可能**（例: 「bright highs を避ける」でなく
+"dark warm muffled tone, soft rounded highs" と書く。K2 brightness dark セルが
+実測で効いた書式）。
 
 **フィールド粒度の drop accounting**: 旧 `physical.optional` 束（brightness / stereo_width /
 active_rate_target / valley_depth_target を 1 トークンに束ねていた）をフィールド粒度の
@@ -292,6 +318,17 @@ time signature）の実測 defaults を追記した（tight 0 / loose 2 / dead 3
 文言は X を正方向に引き寄せる符号反転が実測され（`semantic.avoid` quirk、advisory
 非 null）、MusicGen で本文 Avoid を負方向制御として使わないよう明記した。詳細は
 [`musicgen_backend.md`](musicgen_backend.md) §7.6。
+
+**K2-seg Suno 転移バッチ 1（#162, 2026-07-09）→ 撤回（Codex #164 P2）**: `semantic.core`
+は測定自体は達成した（物理 onset_density d=+0.230909・CLAP energy d=+2.446820、判定は
+[`examples/control/k2_suno_segments/README.md`](../examples/control/k2_suno_segments/README.md)）
+が、生成器がユーザーのカスタムモデル（同 README honesty (g)）由来で標準 stock モデルへの
+一般化が未検証のため、`device_profiles/suno.yaml` の `control_defaults` への反映は
+撤回・保留した（一度 loose で入場させたが Codex #164 P2 レビューで撤回）。stock 検証、
+または実測の generator scope（custom vs. stock）を区別する model-scope 機構の新設まで
+保留する。CLAP は tight 域の値だが、そもそも SEM-1 ゲート（学習センサー由来ノブの自動
+tight 昇格禁止）に従えば grip_class は loose 止まりであり、tight 昇格には DD-4 条件 2
+相当の formal な充足確認が別途必要という点も変わらない。
 
 ### advisory 規則（自動補正はしない）
 
