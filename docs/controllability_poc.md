@@ -362,7 +362,7 @@ R=4: excl_01–04）。
 | 比較 | 対象セル A | 対象セル B | mean A | mean B | grip d | 判定 |
 |---|---|---|---:|---:|---:|---|
 | 比較1（Exclude 欄チャネルの grip） | `calm_avoid_excl` | `calm_avoid`（バッチ 1） | 2794.3 | 3079.4 | **-1.66** | 負方向=期待どおり・tight 域の値だが**交絡あり・未確定**（下記 caveat 参照）。**示唆にとどまる**（confounded） |
-| 比較2（正味効果） | `calm_avoid_excl` | `calm`（バッチ 1） | 2794.3 | 2438.0 | **+1.64** | 事前登録極性（成功なら負方向）に対し観測は正方向 = 符号反転。**dead**（Exclude 併用でも本文 Avoid の attractor（#162: d=+4.03）を打ち消しきれず、正味ではまだ明るい。この判定自体は交絡の影響を受けない — dead 方向へのバイアスなら generator/model 変化でも説明できてしまうため） |
+| 比較2（正味効果） | `calm_avoid_excl` | `calm`（バッチ 1） | 2794.3 | 2438.0 | **+1.64** | 事前登録極性（成功なら負方向）に対し観測は正方向 = 符号反転で機械的分類は **dead**（expected_sign に対する分類なので記録はする）。ただし net-effect の失敗という**解釈は交絡あり・未確定**: この +1.64 の明化自体が excl セル（未確認ブラウザ/モデルフロー）と `calm`（バッチ 1 流用）の generator/model 変化でも説明でき、「Exclude 併用でも attractor を打ち消せず明るいまま」という結論を隔離された結論として扱うことはできない（**測定済みだが confounded**。omit_body_negative の妥当性は本文 Avoid=attractor のバッチ 1 内実測 d=+4.03 に立つので別途無傷） |
 
 （d = (calm_avoid_excl − 比較対象)/pooled SD）
 
