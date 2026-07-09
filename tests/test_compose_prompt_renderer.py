@@ -52,13 +52,21 @@ def test_external_prompt_adapter_renders_score_layers_in_order() -> None:
 
 
 def test_external_prompt_adapter_compresses_low_priority_segments_first() -> None:
+    """K2-seg Suno follow-up（#162 config 反映, 2026-07-09）: `semantic.core` が suno
+    device defaults へ loose 入場したことで、`semantic.core` は「未プロファイル
+    fallback（rendering.priority 順）」から advisory tier へ昇格し、真っ先の削減候補
+    へ回る（musicgen の同種変化は
+    `test_device_profile.py::test_musicgen_k2_seg_defaults_demote_time_signature_and_semantic_core`
+    と同型）。"""
     score = load_composition_score(SAMPLE_PATH)
 
     prompt = ExternalPromptAdapter().render(score, max_chars=180)
 
     assert len(prompt.text) <= 180
-    # 未プロファイルの advisory 物理フィールドが priority 順（低優先＝高 index）で先に落ちる。
-    assert prompt.dropped_elements[:3] == [
+    # semantic.core（loose, NEW）が advisory tier で最初に落ち、続いて未プロファイルの
+    # advisory 物理フィールドが priority 順（低優先＝高 index）で落ちる。
+    assert prompt.dropped_elements[:4] == [
+        "semantic.core",
         "valley_depth_target",
         "active_rate_target",
         "stereo_width",
@@ -70,6 +78,7 @@ def test_external_prompt_adapter_compresses_low_priority_segments_first() -> Non
     assert "Brightness dark." in prompt.text
     assert "bright festival EDM" not in prompt.text
     assert "Active rate" not in prompt.text
+    assert "atmosphere." not in prompt.text
     assert prompt.tags == ["deep_house", "ambient", "dark", "wide_stereo"]
     assert prompt.negative_tags == ["bright festival EDM", "comic vocal delivery"]
 
@@ -151,7 +160,11 @@ def test_compose_cli_outputs_json_and_max_chars_override() -> None:
     payload = json.loads(result.stdout)
     assert payload["backend"] == "external"
     assert len(payload["text"]) <= 180
-    assert payload["dropped_elements"][:3] == [
+    # K2-seg Suno follow-up（#162 config 反映）: semantic.core（loose, NEW）が
+    # advisory tier で最初に落ちる（test_external_prompt_adapter_compresses_
+    # low_priority_segments_first 参照）。
+    assert payload["dropped_elements"][:4] == [
+        "semantic.core",
         "valley_depth_target",
         "active_rate_target",
         "stereo_width",
@@ -371,15 +384,25 @@ def test_control_profile_drives_per_generator_divergence() -> None:
 
 
 def test_unprofiled_score_falls_back_to_priority_order() -> None:
-    """control_profile 不在でも分割は効き、drop 順は rendering.priority に従う。"""
+    """control_profile 不在でも分割は効き、drop 順は rendering.priority に従う。
+
+    target_backend は "external"（suno device profile を引く）のままなので、score が
+    黙っていても device control_defaults（bpm/brightness/lyrics_presence tight,
+    semantic.core loose — #162 follow-up）は生き続ける。`semantic.core` は device
+    default の loose により advisory tier へ回り、真っ先に落ちる（真の
+    "unprofiled" fallback を見たい場合は device profile を持たない backend
+    （`udio` 等）を使う — 他テスト参照）。
+    """
     data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
     data.pop("control_profile", None)
     score = CompositionScore.model_validate(data)
 
     prompt = ExternalPromptAdapter().render(score, max_chars=180)
 
-    # priority 末尾 physical.optional が field 展開され、低優先フィールドから落ちる。
-    assert prompt.dropped_elements[:3] == [
+    # semantic.core（device default loose, NEW）が最初に落ち、続いて priority 末尾
+    # physical.optional が field 展開された低優先フィールドが落ちる。
+    assert prompt.dropped_elements[:4] == [
+        "semantic.core",
         "valley_depth_target",
         "active_rate_target",
         "stereo_width",

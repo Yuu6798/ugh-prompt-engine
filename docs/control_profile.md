@@ -293,6 +293,14 @@ time signature）の実測 defaults を追記した（tight 0 / loose 2 / dead 3
 非 null）、MusicGen で本文 Avoid を負方向制御として使わないよう明記した。詳細は
 [`musicgen_backend.md`](musicgen_backend.md) §7.6。
 
+**K2-seg Suno 転移バッチ 1 follow-up（#162, 2026-07-09）**: `device_profiles/suno.yaml`
+の `control_defaults` に `semantic.core` を loose で入場させた（物理 onset_density
+d=+0.230909・CLAP energy d=+2.446820、判定は
+[`examples/control/k2_suno_segments/README.md`](../examples/control/k2_suno_segments/README.md)）。
+CLAP は tight 域だが SEM-1 ゲート（学習センサー由来ノブの自動 tight 昇格禁止）により
+grip_class は loose に honesty 固定した。tight 昇格には DD-4 条件 2 相当の formal な
+充足確認が別途必要。
+
 ### advisory 規則（自動補正はしない）
 
 `knob_quirks` を quirk 定義順に走査し、`advisory` が非 `null` かつ発火条件（`applies_to_values`
