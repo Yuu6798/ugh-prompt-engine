@@ -329,7 +329,12 @@ highs"）へ引き寄せられた。事前登録の attractor 専用ルーブリ
 盲）× CLAP tight の「センサー盲」構図だったが、Suno は物理 loose（弱いが方向どおり
 生存）× CLAP tight 域で、物理センサーの感度そのものが機種依存であることを示す。
 config 反映（`device_profiles/suno.yaml` への `semantic.core` 追記）は SEM-1
-昇格ゲート（#126）準拠で本 PR ではしない。
+昇格ゲート（#126）準拠で本 PR ではしない。**追記（2026-07-09 follow-up →
+撤回、Codex #164 P2）**: 本 PR 後の follow-up で一度 loose として config 反映した
+が、生成器がユーザーのカスタムモデル（fixture README honesty (g)）由来で標準
+stock モデルへの一般化が未検証のため撤回・保留した。測定値（本節の d 値）自体は
+事実として保持する。詳細は
+[`control_profile.md`](control_profile.md) の該当節を参照。
 
 **副次観測**（詳細は fixture README）: R2-2f `bpm_prior_disagreement` の live 初発火
 （`calm_04`: 候補 161.5/234.91、比 1.4546）、key の相対調ドリフト（A minor 指定に

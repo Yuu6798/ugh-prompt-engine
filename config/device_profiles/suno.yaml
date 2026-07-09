@@ -19,23 +19,11 @@ control_defaults:
     grip_class: tight
     sensor: clap_vocal_contrast
     evidence: "examples/learned/clap/lyrics_vocal_contrast_v2_fixture.json (#159: 効果>ノイズ EDM 2.1×/Rock 1.9×・条件2 ジャンル干渉分離成立 — docs/control_profile.md DD-4 2026-07-08)"
-  # K2-seg Suno 転移バッチ 1（#162, 2026-07-09）の semantic.core follow-up 反映。
-  # config 反映自体は #162 本体では見送られており
-  # （examples/control/k2_suno_segments/README.md 判定結果節「config 反映は SEM-1
-  # 昇格ゲート準拠で本 PR ではしない」）、この follow-up で実施する。物理センサー
-  # onset_density は d=+0.230909（loose・正方向 — MusicGen の同フィールド dead とは
-  # 対照的に生存）。CLAP 第二センサー（energy 軸, contrast_fit）は d=+2.446820 と
-  # tight 域だが、SEM-1 昇格ゲート（#126・docs/control_profile.md DD-4）に従い学習
-  # センサー由来の自動 tight 昇格はしない — grip_class は loose に honesty 固定する
-  # （musicgen.yaml の同フィールドと同じ様式）。tight 昇格には DD-4 条件 2 相当の
-  # formal な充足確認が follow-up として要る。生成器はユーザーのカスタムモデル
-  # （examples/control/k2_suno_segments/README.md honesty (g)）のため標準 stock
-  # モデルへの一般化は未検証。
-  semantic.core:
-    grip_class: loose
-    grip: 2.45
-    sensor: "clap:energy"
-    evidence: examples/control/k2_suno_segments/suno_rpe_fixture.json
+  # semantic.core は K2-seg Suno 転移バッチ 1（#162）で実測済み（onset_density
+  # d=+0.230909・CLAP energy d=+2.446820）だが、生成器がユーザーのカスタムモデル
+  # （examples/control/k2_suno_segments/README.md honesty (g)）由来で標準 stock
+  # モデルへの一般化が未検証のため、config 反映は撤回・保留する
+  # （Codex #164 P2。stock 検証または model-scope 機構の新設まで）。
 
 # 既知の癖。advisory が非 null のもののみ GeneratedPrompt.advisories を発火する
 # （プロンプト本文・tags は変えない＝自動補正しない）。
@@ -115,4 +103,4 @@ spectral_biases:
     status: directional
     evidence: "docs/genre_calibration_planning.md Phase C #111"
 
-notes: "生成器バイアスの方向・量はジャンルで割れるため単一補正係数化はしない（#111: brilliance 符号反転）。本プロファイルは計器の記録であり自動補正はしない。K2-seg Suno 転移バッチ 1（2026-07-09, #162）follow-up: semantic.core は物理 onset_density loose(+0.23) × CLAP energy tight 域(+2.45) の 2 センサー所見（MusicGen は物理 dead(-0.70) × CLAP tight(+1.90) — dead は機種間で外挿不可）。SEM-1 昇格ゲートに従い grip_class は loose に honesty 固定（examples/control/k2_suno_segments/README.md 判定結果節）。"
+notes: "生成器バイアスの方向・量はジャンルで割れるため単一補正係数化はしない（#111: brilliance 符号反転）。本プロファイルは計器の記録であり自動補正はしない。"

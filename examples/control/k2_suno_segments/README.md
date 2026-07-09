@@ -79,7 +79,10 @@ Suno = 物理 loose × CLAP tight（物理センサーも方向どおり弱く�
 `semantic.core` の効き方そのものは両機種で正方向に生きているが、物理センサーの
 感度が機種依存で異なる。config 反映（`device_profiles/suno.yaml` への
 `semantic.core` 追記）は SEM-1 昇格ゲート（#126）準拠で本 PR ではしない
-（CLAP のみ生存 → loose 固定から）。
+（CLAP のみ生存 → loose 固定から）。**追記（2026-07-09 follow-up → 撤回、
+Codex #164 P2）**: 本 PR 後の follow-up で一度 loose として config 反映したが、
+生成器が (g) の通りユーザーのカスタムモデルで標準 stock モデルへの一般化が
+未検証のため撤回・保留した。測定値（本節の d 値）自体は事実として保持する。
 
 ## honesty 事前申告
 

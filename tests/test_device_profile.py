@@ -34,22 +34,12 @@ def test_load_device_profile_suno_schema() -> None:
     assert profile is not None
     assert profile.schema_version == "1.0"
     assert profile.generator == "suno"
-    assert set(profile.control_defaults) == {
-        "bpm",
-        "brightness",
-        "lyrics_presence",
-        "semantic.core",
-    }
+    assert set(profile.control_defaults) == {"bpm", "brightness", "lyrics_presence"}
     assert profile.control_defaults["bpm"].grip_class == "tight"
     assert profile.control_defaults["brightness"].grip_class == "tight"
     # 2026-07-08: DD-4 両条件充足（#159）で loose→tight 昇格・センサーは CLAP vocal contrast
     assert profile.control_defaults["lyrics_presence"].grip_class == "tight"
     assert profile.control_defaults["lyrics_presence"].sensor == "clap_vocal_contrast"
-    # K2-seg Suno 転移バッチ 1 follow-up（#162, 2026-07-09）: CLAP energy d=+2.45 は
-    # tight 域だが SEM-1 昇格ゲート（#126）に従い loose に honesty 固定
-    # （musicgen.yaml の同フィールドと同じ様式）。
-    assert profile.control_defaults["semantic.core"].grip_class == "loose"
-    assert profile.control_defaults["semantic.core"].sensor == "clap:energy"
     assert len(profile.knob_quirks) == 3
     assert len(profile.cross_couplings) == 6
     assert len(profile.spectral_biases) == 4
@@ -226,34 +216,6 @@ def test_musicgen_k2_seg_defaults_demote_time_signature_and_semantic_core() -> N
     assert "atmosphere." not in prompt.text
     # tight な brightness は K2-seg 追記後も不変で先頭へ昇格し続ける。
     assert "Brightness dark." in prompt.text
-    assert "brightness" not in prompt.dropped_elements
-
-
-def test_suno_k2_seg_semantic_core_default_demotes_from_fallback_to_advisory_tier() -> None:
-    """K2-seg Suno 転移バッチ 1 follow-up（#162, 2026-07-09）: suno device defaults に
-    `semantic.core`（loose、SEM-1 昇格ゲートにより CLAP tight 域 d=+2.45 でも honesty
-    固定）が加わったことで、`semantic.core` は unprofiled fallback tier から advisory
-    tier（loose/dead 同待遇）へ格下げされる（musicgen の同種変化を扱う
-    `test_musicgen_k2_seg_defaults_demote_time_signature_and_semantic_core` と同型）。
-
-    サンプル score・max_chars=180 では、`semantic.core` は config 反映**前**は
-    truncation を生き残っていたが（fallback tier で priority 順が有利だった。
-    "Introspective night drive atmosphere." が旧 `examples/composition/midnight_signal/
-    generated_prompt.txt` の "Brightness dark." 直後に出ていた）、反映**後**は真っ先に
-    落ちる側へ回る — loose 追加が実際に drop 順を変える（意図どおりの挙動変化）。
-    """
-    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
-    data.pop("control_profile", None)
-    score = CompositionScore.model_validate(data)  # target_backend: external -> suno
-
-    prompt = ExternalPromptAdapter().render(score, max_chars=180)
-
-    assert prompt.dropped_elements[0] == "semantic.core"
-    assert "atmosphere." not in prompt.text
-    # tight な bpm / brightness は device defaults 由来で不変のまま先頭へ昇格し続ける。
-    assert "128 BPM." in prompt.text
-    assert "Brightness dark." in prompt.text
-    assert "bpm" not in prompt.dropped_elements
     assert "brightness" not in prompt.dropped_elements
 
 
