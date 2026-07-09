@@ -144,7 +144,8 @@ Codex #164 P2）**: 本 PR 後の follow-up で一度 loose として config 反
 ## 追試: Exclude 欄併用（バッチ 1 増補セル calm_avoid_excl、2026-07-09）
 
 `docs/musicgen_backend.md` §7.6 で残っていた「Exclude Styles チャネルとの重複込み
-条件は未検証」の留保を解消する追試。バッチ 1 の `calm_avoid`（本文 `Avoid:` のみ）
+条件は未検証」の留保の解消を試みた追試（結果は交絡により未確定 — honesty (f) 参照）。
+バッチ 1 の `calm_avoid`（本文 `Avoid:` のみ）
 に対し、Suno の Exclude Styles 欄にも avoid 語彙を追加投入した「重複込み」セル
 `calm_avoid_excl`（R=4）を新規計測し、`calm` / `calm_avoid`（いずれもバッチ 1 と
 同一の canonical_id・audio_sha256・features を再利用）との 2 本の事前登録比較を
@@ -174,7 +175,7 @@ Codex #164 P2）**: 本 PR 後の follow-up で一度 loose として config 反
 
 | 比較 | 対象セル A (low) | 対象セル B (high) | mean A | mean B | grip d | 判定 |
 |---|---|---|---:|---:|---:|---|
-| 比較1（Exclude 欄チャネルの grip） | `calm_avoid` | `calm_avoid_excl` | 3079.3925 | 2794.315 | **-1.656645** | tight・負方向=期待どおり |
+| 比較1（Exclude 欄チャネルの grip） | `calm_avoid` | `calm_avoid_excl` | 3079.3925 | 2794.315 | **-1.656645** | tight・負方向=期待どおりの値だが**交絡あり・未確定**（honesty (f) 参照） |
 | 比較2（正味効果） | `calm` | `calm_avoid_excl` | 2438.0075 | 2794.315 | **+1.642929** | dead・事前登録極性（成功なら負方向）に対し符号反転（正味では打ち消せず、まだ明るい） |
 
 d 値は `scripts/measure_grip.py`（canonical 経路）実測であり、
@@ -204,8 +205,22 @@ d 値は `scripts/measure_grip.py`（canonical 経路）実測であり、
 - **(e) CLAP 軸は未計測**: 本追試は物理センサーのみで、`suno_rpe_fixture.json`
   の `clap_semantic_axes` 節に相当するデータは `excl_rpe_fixture.json` に
   含めていない。
+- **(f) excl セルと baseline のモデル/フロー同一性が未確認（交絡・confounded、
+  Codex #164 P2 レビュー指摘・採用）**: `calm_avoid_excl`（excl セル）はモデル/
+  生成フロー同一性が未確認のブラウザフローで生成された（`excl_plan.yaml` の
+  `model:` 欄に「未検証」と自ら記録済み）のに対し、比較対象の `calm_avoid`/
+  `calm` はバッチ 1（user-custom モデル）からの再利用である。したがって上表の
+  比較 1（d=-1.66）・比較 2（d=+1.64）はいずれも excl セルと batch-1 baseline
+  という異なりうる生成条件を跨いでおり、観測差分は Exclude Styles 欄の効果と
+  generator/model の変化を分離できていない（非隔離）。「Exclude 欄はチャネルと
+  して実際に効く」という因果帰属は示唆にとどまり、Exclude-channel 単独 grip の
+  確定には同一モデルで excl と baseline を揃えた isolated 追試が必要。なお
+  R2-2f 候補対（161.5/234.91）が excl_04 とバッチ 1 `calm_04` で同一だった点
+  （honesty (c) 参照）は同一生成器の**弱い**示唆にはなるが、これをもって
+  交絡が解消されたとは言えない（過剰解釈しない）。
 
 ## 関連
 
 - `docs/controllability_poc.md` K2-seg 節（Suno 転移結果表、追試節）
-- `docs/musicgen_backend.md` §7.6（キュー解消の起点、追試による留保解消）
+- `docs/musicgen_backend.md` §7.6（キュー解消の起点、追試は交絡により未確定
+  — honesty (f) 参照）

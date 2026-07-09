@@ -24,6 +24,17 @@ reregistration_honesty: >-
   （比較 1 / 比較 2 の対象セル・grip 定義・判定規約）から再構成した。数値は
   すべて scratchpad/excl_extract/summary.json および file01-04.json の生値からのみ
   転記しており、本 plan 自体は捏造防止のための記録層（新規の数値算出は行わない）。
+confound_honesty: >-
+  Codex #164 P2 レビュー指摘（採用）: 本 plan が定義する 2 本の比較は、いずれも
+  `calm_avoid_excl`（excl セル、上記 model 欄のとおりモデル/生成フロー同一性
+  未確認のブラウザフロー生成）と `calm_avoid`/`calm`（バッチ 1・user-custom
+  モデルから再利用した baseline）を跨ぐ非隔離設計である。したがって観測された
+  grip（比較 1 d=-1.66・比較 2 d=+1.64）は Exclude Styles 欄の効果と
+  generator/model の変化を分離できておらず、Exclude-channel 単独 grip の
+  因果帰属は未確定のまま。本 fixture（excl_rpe_fixture.json /
+  excl_expected_grip.json）は測定記録として保全するが、Exclude-channel grip の
+  確定エビデンスとしては扱わない。確定には同一モデルで excl セルと baseline を
+  揃えた isolated 追試が必要。
 
 cells:
   - name: calm
@@ -55,6 +66,10 @@ knobs:
       事前登録比較 1（Exclude 欄チャネル単独の grip）。d<=-0.8 は Exclude 欄が
       チャネルとして負方向に効くことを示す tight 判定。判読記録の d=-1.66 と
       canonical 実測が一致することを確認する（tests/test_grip.py で pin）。
+      ただし本比較は confound_honesty のとおり excl セル（モデル未検証）と
+      batch-1 baseline を跨ぐ非隔離設計のため、tight 判定は「Exclude 欄の
+      分離された効果」を確定させるものではなく、generator/model 変化との
+      交絡を含んだ観測値である（未確定）。
   - name: exclude_net_effect
     sensor: spectral_centroid
     low_level: calm

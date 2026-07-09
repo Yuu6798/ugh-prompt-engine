@@ -361,20 +361,36 @@ R=4: excl_01–04）。
 
 | 比較 | 対象セル A | 対象セル B | mean A | mean B | grip d | 判定 |
 |---|---|---|---:|---:|---:|---|
-| 比較1（Exclude 欄チャネルの grip） | `calm_avoid_excl` | `calm_avoid`（バッチ 1） | 2794.3 | 3079.4 | **-1.66** | 負方向=期待どおり・tight 域。**Exclude 欄はチャネルとして実際に効く** |
-| 比較2（正味効果） | `calm_avoid_excl` | `calm`（バッチ 1） | 2794.3 | 2438.0 | **+1.64** | 事前登録極性（成功なら負方向）に対し観測は正方向 = 符号反転。**dead**（Exclude 併用でも本文 Avoid の attractor（#162: d=+4.03）を打ち消しきれず、正味ではまだ明るい） |
+| 比較1（Exclude 欄チャネルの grip） | `calm_avoid_excl` | `calm_avoid`（バッチ 1） | 2794.3 | 3079.4 | **-1.66** | 負方向=期待どおり・tight 域の値だが**交絡あり・未確定**（下記 caveat 参照）。**示唆にとどまる**（confounded） |
+| 比較2（正味効果） | `calm_avoid_excl` | `calm`（バッチ 1） | 2794.3 | 2438.0 | **+1.64** | 事前登録極性（成功なら負方向）に対し観測は正方向 = 符号反転。**dead**（Exclude 併用でも本文 Avoid の attractor（#162: d=+4.03）を打ち消しきれず、正味ではまだ明るい。この判定自体は交絡の影響を受けない — dead 方向へのバイアスなら generator/model 変化でも説明できてしまうため） |
 
 （d = (calm_avoid_excl − 比較対象)/pooled SD）
 
+**交絡 caveat（Codex #164 P2 レビュー指摘・採用）**: 両比較（d=-1.66 / d=+1.64）は
+いずれも `calm_avoid_excl`（excl セル）と `calm_avoid`/`calm`（バッチ 1 baseline）
+を跨ぐ。excl セルはモデル/生成フロー同一性が未確認のブラウザフローで生成された
+（`excl_plan.yaml` の `model:` 欄に「未検証」と自ら記録済み）のに対し、baseline
+はバッチ 1（user-custom モデル）からの再利用であり、両者の生成条件が同一である
+保証がない。したがってこの差分は Exclude Styles 欄の効果ではなく generator/model
+の変化でも説明でき、比較 1 を「Exclude 欄はチャネルとして実際に効く」証拠として
+確定的に扱うことはできない（非隔離・confounded）。同一モデルで excl と baseline
+を揃えた isolated 追試が取れるまで、Exclude-channel 単独 grip としては未確定の
+ままとする。
+
 **解釈**: 「本文 Avoid をやめて Exclude 欄だけ使う」（= #163 の
-`omit_body_negative` 実装形）が最適であることを、Exclude 併用条件の実測でも
-裏付けた。[`musicgen_backend.md`](musicgen_backend.md) §7.6 の「重複込み未検証」
-留保はこれにより解消。
+`omit_body_negative` 実装形）が最適であるという実装判断は、本追試の交絡とは独立に
+成立する — 根拠は本文 Avoid = attractor というバッチ内実測（#162, d=+4.03）で
+あり、Exclude grip の確定に依存しない。[`musicgen_backend.md`](musicgen_backend.md)
+§7.6 の「重複込み未検証」留保は、本追試により**部分的前進はあったが解消はしていない**
+（同一モデル isolated データ待ちのまま）。
 
 **副次観測**: R2-2f `bpm_prior_disagreement` が `excl_04` で live 発火（2 例目。
 候補対 161.5/234.91・比 1.4546 — バッチ 1 `calm_04` と**同一の候補対が別セルで
 再出現**した点が注目に値する）。`excl_03` も bpm octave 曖昧フラグが発火。key に
-F# minor という新しいドリフトも観測された。
+F# minor という新しいドリフトも観測された。R2-2f 候補対の一致は excl セルと
+`calm_04` が同一生成器由来であることの**弱い**示唆にはなり得るが、生成フロー/
+モデル同一性を確定させる証拠ではなく、これをもって上記の交絡が解消されたとは
+言えない（過剰解釈しない）。
 
 **UI 発見**: Suno **ブラウザ版 UI には Exclude Styles 欄が存在する**ことを確認
 （2026-07-09）。同日の「カスタムモデル生成フローに Exclude 欄が存在しない」という
