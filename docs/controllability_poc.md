@@ -413,14 +413,26 @@ F# minor という新しいドリフトも観測された。R2-2f 候補対の�
   d 閾値）
 - 既存計器の再利用: dynamics_summary / section_features / structure_novelty。新規
   実装は「比例分割 RMS 符号パターン」の薄い比較器のみ
-- セル設計（経済化）: low セル=バッチ 1 の calm（structure: []・実測済み 4 本を
-  再利用）、high セル=同一 score に structure 3 区間のみ追加 → **追加生成は 4 曲**
+- **セル設計（隔離設計・primary）**: low セル（structure: []）と high セル
+  （structure 3 区間）を**同一バッチで両方新規生成**する — **追加生成は 8 曲**。
+  理由（cross-batch 交絡の設計段階回避）: バッチ 1 の calm（structure: []）を low
+  セルに再利用し high セルのみ新規生成する案は、上記「K2-seg Exclude 欄併用追試」
+  節の交絡 caveat（`calm_avoid_excl` vs バッチ 1 `calm_avoid`/`calm`）と**同型**——
+  low=バッチ 1 / high=新バッチという跨バッチ比較になり、RMS/novelty 差が structure
+  欄の効果か generator/model/batch drift かを事後に切り分けられない。Exclude 追試は
+  この交絡により比較 1・2 とも「測定済みだが confounded」に格下げされた前例であり、
+  structure grip は同じ轍を事前登録の段階で避ける（Codex #164 P2 採用）
+- **経済化オプション（非 primary）**: batch-1 `calm`（structure: []・実測済み 4 本）
+  を low セルに再利用し high セルのみ新規生成すれば追加生成は 4 曲に圧縮できる。
+  ただしこの場合 low=バッチ 1 / high=新バッチの cross-batch 比較となり交絡するため、
+  **採用するなら比較を最初から confounded と pre-mark し、isolated な structure
+  grip の確定には使わない**（「事後の疑いが生じたときにのみ low セルを再生成して
+  追試する」という判断方式は、Exclude 追試の教訓（交絡は生成前の設計に起因し、
+  事後の再測定だけでは遡って解消できない）により明示的に不採用とする）
 - 既知リスク（事前申告）: (a) structure セグメントは長く Style 欄 200 字を超え
   やすい — 発注書段階で compose 実出力の文字数検証を必須とし、超過時は区間
   physical 記述を最短化 (b) 曲長 18–117s のばらつきは比例分割で吸収するが、構造が
   物理的に展開し得ない極端な短尺（目安 <30s）の除外規則を生成前に事前登録する
-  (c) low セル再利用はバッチ間の生成世代差という交絡を持つ — 世代差が疑われる
-  結果のときのみ low セル 4 本を再生成して追試
 
 ### K3: 直交性行列 — DCI/MIG の効果量再定式化
 
