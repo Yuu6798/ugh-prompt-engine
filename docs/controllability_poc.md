@@ -297,6 +297,44 @@ K3。製品転移の「効果量の絶対水準」までは主張せず、**分�
 attractor が headline finding）。詳細は
 [`musicgen_backend.md`](musicgen_backend.md) §7.6。
 
+#### K2-seg Suno 転移バッチ 1（2026-07-09）
+
+MusicGen スクリーン（§7.6）で裁定価値が最も高かった 2 欄（本文 `Avoid:` セグメント /
+`semantic.core`）を、実測 Suno 12 曲（3 セル `calm`/`calm_avoid`/`euph` × R=4、
+`calm` が両ノブの low セルを共有）へ転移した。fixture・grip・honesty は
+[`examples/control/k2_suno_segments/README.md`](../examples/control/k2_suno_segments/README.md)、
+再現は `python scripts/measure_grip.py --fixture examples/control/k2_suno_segments/suno_rpe_fixture.json`
+（`tests/test_grip.py::test_k2_seg_suno_segments_fixture_snapshot` が固定）。
+
+| ノブ | センサー | mean low | mean high | grip d | 機械分類 | MusicGen 対照 |
+|---|---|---:|---:|---:|---|---|
+| `semantic_avoid` | `spectral_centroid` | 2438.01 | 3079.39 | **+4.03** | dead（符号逆） | +1.10（同方向・約 1/3.7 の強さ） |
+| `semantic_core`（物理） | `onset_density` | 5.428 | 5.607 | **+0.23** | loose（正方向） | −0.70（dead・物理センサー盲） |
+| `semantic_core`（CLAP energy） | `contrast_fit` | 0.0485 | 0.2351 | **+2.45** | tight 域 | +1.90（tight 域） |
+
+**本文 Avoid=attractor が Suno でも再現・d=+4.03 は MusicGen +1.10 より強い**:
+expected_sign は −1（Avoid が効けば centroid は低下するはず）だが実測は符号が
+完全に逆で、MusicGen よりも約 3.7 倍強く内容語（"bright shimmering sparkling
+highs"）へ引き寄せられた。事前登録の attractor 専用ルーブリック（発注書 verbatim）
+では d≥+0.8 は「attractor 確定」— **suno backend への `omit_body_negative=True`
+波及を提案**する（#153 の Suno 波及裁定。本 PR ではコード変更しない、docs 記録の
+みで follow-up PR に回す）。留保: 生成は Suno のユーザーオリジナル・カスタムモデル
+（ユーザー申告 2026-07-09、標準 stock モデルではない）での実測であり、標準モデル
+への一般化追試は follow-up（fixture README honesty (g)。ただし MusicGen でも同符号
+の attractor が実測済みで、否定語盲は生成器横断の機序である可能性が高い）。
+
+**core は機種間で物理センサー生存が異なる**: MusicGen は物理 dead（onset_density
+盲）× CLAP tight の「センサー盲」構図だったが、Suno は物理 loose（弱いが方向どおり
+生存）× CLAP tight 域で、物理センサーの感度そのものが機種依存であることを示す。
+config 反映（`device_profiles/suno.yaml` への `semantic.core` 追記）は SEM-1
+昇格ゲート（#126）準拠で本 PR ではしない。
+
+**副次観測**（詳細は fixture README）: R2-2f `bpm_prior_disagreement` の live 初発火
+（`calm_04`: 候補 161.5/234.91、比 1.4546）、key の相対調ドリフト（A minor 指定に
+C major 優勢）、`euph` セルの `spectral_centroid`（3176–3312）が `calm_avoid`
+（2960–3167）より高い域に出た `semantic.core`→centroid 交差結合疑い（K3 機種依存
+文脈への追加観測）。
+
 ### K3: 直交性行列 — DCI/MIG の効果量再定式化
 
 **Status**: K3-1 DONE（2026-07-01、決定論的演奏者リファレンス — 結果は §5.3）。

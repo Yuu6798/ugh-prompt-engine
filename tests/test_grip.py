@@ -302,3 +302,57 @@ def test_k2_seg_musicgen_segments_fixture_snapshot() -> None:
     assert by_knob["semantic_core"]["classification"] == "dead"
     assert by_knob["time_signature"]["kind"] == "categorical"
     assert report["summary"] == {"tight": 0, "loose": 2, "dead": 3}
+
+
+K2_SUNO_SEGMENTS_FIXTURE_PATH = Path("examples/control/k2_suno_segments/suno_rpe_fixture.json")
+K2_SUNO_SEGMENTS_EXPECTED_PATH = Path("examples/control/k2_suno_segments/expected_grip.json")
+
+
+def test_k2_seg_suno_segments_fixture_snapshot() -> None:
+    """K2-seg Suno 転移バッチ 1（2026-07-09）: MusicGen スクリーン（§7.6）で裁定価値が
+    最も高かった 2 欄（本文 `Avoid:` / `semantic.core`）を実測 Suno 12 曲へ転移した
+    fixture→grip 決定論スナップショット（`examples/control/k2_suno_segments/README.md`）。
+
+    - `semantic_avoid`: expected_sign=-1（Avoid が効くなら centroid 低下）だが実測は
+      d=+4.03（符号逆・MusicGen の d=+1.10 より約 3.7 倍強い attractor）で
+      `classify_grip` は機械的に dead 判定。事前登録の attractor 専用ルーブリック
+      （発注書 verbatim、README 参照）では d>=+0.8 は「attractor 確定」で別扱い。
+    - `semantic_core`（物理センサー `onset_density`）: d=+0.23 loose・正方向。
+      MusicGen の同ノブ（d=-0.70・dead/物理センサー盲）と対照的に Suno では
+      物理センサーも弱く生存している。
+    """
+    report = analyze_fixture(load_fixture(K2_SUNO_SEGMENTS_FIXTURE_PATH))
+    expected = json.loads(K2_SUNO_SEGMENTS_EXPECTED_PATH.read_text(encoding="utf-8"))
+
+    assert report == expected
+    by_knob = {result["knob"]: result for result in report["results"]}
+    assert by_knob["semantic_avoid"]["grip"] == pytest.approx(4.029548, abs=1e-4)
+    assert by_knob["semantic_avoid"]["classification"] == "dead"
+    assert by_knob["semantic_core"]["grip"] == pytest.approx(0.230909, abs=1e-4)
+    assert by_knob["semantic_core"]["classification"] == "loose"
+    assert report["summary"] == {"tight": 0, "loose": 1, "dead": 1}
+
+
+def test_k2_seg_suno_segments_clap_energy_axis_pins_semantic_core_grip() -> None:
+    """K2-seg Suno バッチ 1: `semantic_core` CLAP 第二センサー（energy 軸）の grip を
+    pin する。canonical 経路（`scripts/measure_grip.py`）は物理センサー専用のため、
+    fixture 直下の `clap_semantic_axes` 節から直接 `grip_effect_size` を呼ぶ
+    （物理と同一の pooled-SD 式、svp_rpe.control）。MusicGen の同軸（d=+1.90 tight、
+    docs/musicgen_backend.md §7.6）よりさらに強い tight 域（d=+2.45）。
+    """
+    fixture = load_fixture(K2_SUNO_SEGMENTS_FIXTURE_PATH)
+    clap = fixture["clap_semantic_axes"]
+    assert clap["axis"] == "energy"
+    assert clap["provenance"]["checkpoint_sha256"] == (
+        "fae3e9c087f2909c28a09dc31c8dfcdacbc42ba44c70e972b58c1bd1caf6dedd"
+    )
+
+    by_level: dict[str, list[float]] = {}
+    for sample in clap["samples"]:
+        by_level.setdefault(str(sample["level"]), []).append(float(sample["contrast_fit"]))
+    assert set(by_level) == {"calm", "euph"}
+    assert all(len(values) == 4 for values in by_level.values())
+
+    d = grip_effect_size(by_level["calm"], by_level["euph"])
+    assert d == pytest.approx(2.446820, abs=1e-4)
+    assert classify_grip(d, 1) == "tight"

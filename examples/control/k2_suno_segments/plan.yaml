@@ -1,0 +1,77 @@
+# K2-seg Suno 転移バッチ 1: compose プロンプト欄 grip 転移計画
+# （本文 Avoid: セグメント + semantic.core）。
+#
+# examples/control/k2_musicgen_segments/plan.yaml（K2-seg MusicGen スクリーン）の
+# Suno 転移版。プロンプトは手組みでなく `svprpe compose`（suno/external descriptor）の
+# 実出力を final_prompt_{calm,calm_avoid,euph}.txt から verbatim pin した。
+# 3 セル × R=4 = 12 曲。calm セルが semantic_avoid ノブと semantic_core ノブ両方の
+# low セルを兼ねる（honesty (a): #152 の非共有 80 クリップと異なり経済化 — 人手生成
+# のため計測点を最小化した screening 設計）。
+# 発注書: order_sheet_k2seg_suno_batch1.md（本 PR には非同梱、scratchpad 由来）。
+schema_version: "1.0"
+fixture_id: k2seg_suno_batch1
+generator: suno
+# Suno のユーザーオリジナル・カスタムモデルで生成（ユーザー申告 2026-07-09。
+# 標準 stock モデルではない）。一般化の留保は README honesty (g) 参照。
+model: "user-custom (Suno カスタムモデル・ユーザー申告 2026-07-09)"
+repetitions: 4
+preregistered_date: "2026-07-08"  # 発注書発行日 = 判定規約の事前登録日
+# honesty (c): Exclude Styles 空で生成（ユーザー申告）＝測ったのは本文 Avoid 単独効果。
+# §7.6 の「Exclude 重複込み」条件は未検証のまま（README 参照）。
+exclude_styles: ""
+
+cells:
+  - name: calm
+    role: "shared low cell（semantic_avoid ノブの low + semantic_core ノブの low）"
+    prompt: >-
+      120 BPM. Instrumental, no vocals. Brightness balanced. Calm atmosphere.
+      synthwave track. A minor. 4/4 time. Wide stereo. Active rate 0.8.
+      Valley depth 0.3.
+    prompt_source: final_prompt_calm.txt
+  - name: calm_avoid
+    role: "semantic_avoid ノブの high セル（本文 Avoid: セグメント追記）"
+    prompt: >-
+      120 BPM. Instrumental, no vocals. Brightness balanced. Calm atmosphere.
+      synthwave track. A minor. Avoid: bright shimmering sparkling highs.
+      4/4 time. Wide stereo. Active rate 0.8. Valley depth 0.3.
+    prompt_source: final_prompt_calm_avoid.txt
+  - name: euph
+    role: "semantic_core ノブの high セル"
+    prompt: >-
+      120 BPM. Instrumental, no vocals. Brightness balanced. Euphoric
+      energetic festival atmosphere. synthwave track. A minor. 4/4 time.
+      Wide stereo. Active rate 0.8. Valley depth 0.3.
+    prompt_source: final_prompt_euph.txt
+
+knobs:
+  - name: semantic_avoid
+    sensor: spectral_centroid
+    low_level: calm
+    high_level: calm_avoid
+    expected_sign: -1
+    decision_rule: >-
+      d<=-0.8 tight負方向(有効)/ -0.8<d<=-0.2 loose有効方向/ |d|<0.2 dead(無害)/
+      +0.2<=d<+0.8 attractor疑い(判定保留)/ d>=+0.8 attractor確定
+      （omit_body_negative=True を suno backend へ提案）。order_sheet verbatim。
+  - name: semantic_core
+    sensor: onset_density
+    low_level: calm
+    high_level: euph
+    expected_sign: 1
+    decision_rule: "K系列既定閾値（|d|>=0.8 tight / 0.2-0.8 loose / <0.2 dead）"
+  - name: semantic_core_clap
+    sensor: clap_semantic_axes.energy
+    low_level: calm
+    high_level: euph
+    expected_sign: 1
+    decision_rule: "K系列既定閾値。tight でも SEM-1 昇格ゲート（#126）準拠で config 反映は loose 固定から。"
+    note: >-
+      CLAP 第二センサー（v1.1 battery, energy 軸）。canonical 経路
+      （scripts/measure_grip.py の analyze_fixture）は features 配下の物理数値
+      センサーのみを走査するため、この knob は suno_rpe_fixture.json 直下の
+      `clap_semantic_axes` 節から grip_effect_size（svp_rpe.control、物理と同一の
+      pooled-SD 式）を直接呼び出して d を求める。expected_grip.json には含めない
+      （canonical 出力の対象は物理 2 ノブのみ、tests/test_grip.py で pin）。
+
+# バッチ2繰越（本発注書のスコープ外）: active_rate_target / valley_depth_target /
+# time_signature / structure（Suno 長尺でのみ可測）
