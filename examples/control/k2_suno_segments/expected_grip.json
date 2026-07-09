@@ -1,0 +1,60 @@
+{
+  "schema_version": "1.0",
+  "fixture_id": "k2seg_suno_batch1",
+  "repetitions": 4,
+  "results": [
+    {
+      "knob": "semantic_avoid",
+      "sensor": "spectral_centroid",
+      "expected_sign": -1,
+      "low_level": "calm",
+      "high_level": "calm_avoid",
+      "repetitions": 4,
+      "low_values": [
+        2712.54,
+        2472.46,
+        2328.13,
+        2238.9
+      ],
+      "high_values": [
+        2960.73,
+        3166.85,
+        3067.4,
+        3122.59
+      ],
+      "low_mean": 2438.0075,
+      "high_mean": 3079.3925,
+      "grip": 4.029548,
+      "classification": "dead"
+    },
+    {
+      "knob": "semantic_core",
+      "sensor": "onset_density",
+      "expected_sign": 1,
+      "low_level": "calm",
+      "high_level": "euph",
+      "repetitions": 4,
+      "low_values": [
+        5.5836,
+        6.4148,
+        4.4659,
+        5.2474
+      ],
+      "high_values": [
+        6.0638,
+        5.0485,
+        4.9059,
+        6.4103
+      ],
+      "low_mean": 5.427925,
+      "high_mean": 5.607125,
+      "grip": 0.230909,
+      "classification": "loose"
+    }
+  ],
+  "summary": {
+    "tight": 0,
+    "loose": 1,
+    "dead": 1
+  }
+}

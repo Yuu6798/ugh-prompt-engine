@@ -348,9 +348,15 @@ avoid を記録する（楽譜の意図の保全・消費可否は下流の責�
 
 MusicGen small の dead は Suno の dead と同一ではない（K3-2a §5.4 の非対角クロス
 効果符号反転が前例）。本スクリーンの dead 判定（valley_depth_target / semantic_avoid /
-semantic_core[物理] / time_signature）を Suno へそのまま転移させてよいかは未検証 —
-Suno 側での再実測（人手バッチ）は今後の課題として残す。**Suno 本文 Avoid の効き**
-（Exclude Styles チャネルとの重複込み）も同様に未検証・人手検証キュー入りとする
+semantic_core[物理] / time_signature）を Suno へそのまま転移させてよいかは
+**バッチ 1（2026-07-09）で semantic_avoid / semantic_core の 2 欄について再実測済み**
+（`examples/control/k2_suno_segments/`、`docs/controllability_poc.md` K2-seg 節）。
+**Suno 本文 Avoid の効き**は本文 Avoid 単独効果として再実測し、attractor が
+MusicGen より強い形（d=+4.03 vs +1.10）で再現することを確認した。ただし
+**Exclude Styles チャネルとの重複込み条件は本バッチでも未検証のまま**
+（全セル同一の Exclude 固定下で生成しており、Exclude 単独効果や Exclude なし条件は
+測っていない — `examples/control/k2_suno_segments/README.md` honesty (c) 参照）。
+`valley_depth_target` / `time_signature` はバッチ 2 へ繰越（未検証のまま）
 — musicgen の attractor 実測を根拠に suno 側の送出も止める判断は行わない
 （#152 フォローアップ、2026-07-06）。
 
