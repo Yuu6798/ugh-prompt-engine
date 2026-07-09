@@ -357,7 +357,7 @@ R=4: excl_01–04）。
 | 比較 | 対象セル A | 対象セル B | mean A | mean B | grip d | 判定 |
 |---|---|---|---:|---:|---:|---|
 | 比較1（Exclude 欄チャネルの grip） | `calm_avoid_excl` | `calm_avoid`（バッチ 1） | 2794.3 | 3079.4 | **-1.66** | 負方向=期待どおり・tight 域。**Exclude 欄はチャネルとして実際に効く** |
-| 比較2（正味効果） | `calm_avoid_excl` | `calm`（バッチ 1） | 2794.3 | 2438.0 | **+1.64** | Exclude 併用でも本文 Avoid の attractor（#162: d=+4.03）を打ち消しきれず、正味ではまだ明るい |
+| 比較2（正味効果） | `calm_avoid_excl` | `calm`（バッチ 1） | 2794.3 | 2438.0 | **+1.64** | 事前登録極性（成功なら負方向）に対し観測は正方向 = 符号反転。**dead**（Exclude 併用でも本文 Avoid の attractor（#162: d=+4.03）を打ち消しきれず、正味ではまだ明るい） |
 
 （d = (calm_avoid_excl − 比較対象)/pooled SD）
 

@@ -30,7 +30,7 @@
     {
       "knob": "exclude_net_effect",
       "sensor": "spectral_centroid",
-      "expected_sign": 1,
+      "expected_sign": -1,
       "low_level": "calm",
       "high_level": "calm_avoid_excl",
       "repetitions": 4,
@@ -49,12 +49,12 @@
       "low_mean": 2438.0075,
       "high_mean": 2794.315,
       "grip": 1.642929,
-      "classification": "tight"
+      "classification": "dead"
     }
   ],
   "summary": {
-    "tight": 2,
+    "tight": 1,
     "loose": 0,
-    "dead": 0
+    "dead": 1
   }
 }

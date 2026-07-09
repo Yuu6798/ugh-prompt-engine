@@ -16,7 +16,7 @@
       "sensor": "spectral_centroid",
       "low_level": "calm",
       "high_level": "calm_avoid_excl",
-      "expected_sign": 1
+      "expected_sign": -1
     }
   ],
   "samples": [

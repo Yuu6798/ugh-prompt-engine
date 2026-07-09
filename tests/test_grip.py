@@ -372,9 +372,14 @@ def test_k2_seg_suno_segments_excl_fixture_snapshot() -> None:
 
     - `exclude_channel_grip`（low=`calm_avoid`, high=`calm_avoid_excl`）:
       d=-1.656645、tight・負方向=期待どおり。Exclude 欄はチャネルとして実際に効く。
-    - `exclude_net_effect`（low=`calm`, high=`calm_avoid_excl`）: d=+1.642929、
-      tight・正方向。Exclude 併用でも本文 Avoid の attractor（#162: d=+4.03）を
-      正味では打ち消しきれない。
+    - `exclude_net_effect`（low=`calm`, high=`calm_avoid_excl`）: d=+1.642929。
+      事前登録の問いは「Exclude 併用で本文 Avoid の attractor（#162: d=+4.03）を
+      打ち消し、calm より暗くできるか」であり、成功なら負方向 —
+      `expected_sign=-1` を保持する（Codex P2 レビュー指摘、バッチ 1
+      `semantic_avoid` と同型の規約）。観測は正方向で符号反転しており、
+      `classify_grip` は expected_sign と逆符号かつ |d|>=GRIP_LOOSE_MIN のケースを
+      "dead" と分類するため、Exclude 併用は正味では attractor を打ち消せて
+      いない「非 tight（dead）」として顕在化する。
     - 両 d 値は `scratchpad/excl_extract/summary.json` の事前算出値
       （-1.6566449476718548 / 1.642929272618472）と一致する（抽出を伴わない純
       fixture 解析なので slow マーカー不要）。
@@ -387,5 +392,5 @@ def test_k2_seg_suno_segments_excl_fixture_snapshot() -> None:
     assert by_knob["exclude_channel_grip"]["grip"] == pytest.approx(-1.656645, abs=1e-4)
     assert by_knob["exclude_channel_grip"]["classification"] == "tight"
     assert by_knob["exclude_net_effect"]["grip"] == pytest.approx(1.642929, abs=1e-4)
-    assert by_knob["exclude_net_effect"]["classification"] == "tight"
-    assert report["summary"] == {"tight": 2, "loose": 0, "dead": 0}
+    assert by_knob["exclude_net_effect"]["classification"] == "dead"
+    assert report["summary"] == {"tight": 1, "loose": 0, "dead": 1}

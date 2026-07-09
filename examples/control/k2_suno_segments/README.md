@@ -172,7 +172,7 @@ Suno = 物理 loose × CLAP tight（物理センサーも方向どおり弱く�
 | 比較 | 対象セル A (low) | 対象セル B (high) | mean A | mean B | grip d | 判定 |
 |---|---|---|---:|---:|---:|---|
 | 比較1（Exclude 欄チャネルの grip） | `calm_avoid` | `calm_avoid_excl` | 3079.3925 | 2794.315 | **-1.656645** | tight・負方向=期待どおり |
-| 比較2（正味効果） | `calm` | `calm_avoid_excl` | 2438.0075 | 2794.315 | **+1.642929** | tight・正方向（正味では打ち消せず、まだ明るい） |
+| 比較2（正味効果） | `calm` | `calm_avoid_excl` | 2438.0075 | 2794.315 | **+1.642929** | dead・事前登録極性（成功なら負方向）に対し符号反転（正味では打ち消せず、まだ明るい） |
 
 d 値は `scripts/measure_grip.py`（canonical 経路）実測であり、
 `scratchpad/excl_extract/summary.json` の事前算出値（-1.6566449476718548 /
