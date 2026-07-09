@@ -491,24 +491,30 @@ def test_lyrics_presence_dotted_priority_token_survives_truncation_unprofiled() 
     assert "valley_depth_target" in prompt.dropped_elements
 
 
-# --- K2-seg 後始末 (#152 フォローアップ): musicgen semantic.avoid body routing -----
+# --- K2-seg 後始末 (#152 musicgen フォローアップ, #162 suno フォローアップ):
+# musicgen / suno semantic.avoid body routing -----------------------------------
 
 
 def test_backend_descriptor_omit_body_negative_flags() -> None:
-    """`omit_body_negative` は musicgen backend のみ True（実測が musicgen 限定のため）。"""
+    """`omit_body_negative` は musicgen / suno backend で True（K2-seg 実測が両方に
+    対して確定した — musicgen: d=+1.10 #152 / suno: d=+4.03 #162）。`external` は
+    Suno ルートのエイリアスだが実測は Suno 生成そのものへの実測であり汎用 external
+    へ横展開はしない（#153 と同じ規律）ため False のまま。"""
     assert resolve_backend_descriptor("musicgen").omit_body_negative is True
-    assert resolve_backend_descriptor("suno").omit_body_negative is False
+    assert resolve_backend_descriptor("suno").omit_body_negative is True
     assert resolve_backend_descriptor("external").omit_body_negative is False
     # 未知 backend は素の descriptor（デフォルト False）へフォールバックする。
     assert resolve_backend_descriptor("udio").omit_body_negative is False
 
 
-def test_musicgen_omits_avoid_body_segment_but_keeps_negative_tags() -> None:
-    """K2-seg 実測（本文 Avoid=attractor, d=+1.10）に基づき、musicgen backend は
-    本文へ "Avoid: ..." を送出しない。`negative_tags`（楽譜の意図の記録）は不変。"""
+@pytest.mark.parametrize("target_backend", ["musicgen", "suno"])
+def test_omits_avoid_body_segment_but_keeps_negative_tags(target_backend: str) -> None:
+    """K2-seg 実測（本文 Avoid=attractor、musicgen d=+1.10 #152 / suno d=+4.03 #162）
+    に基づき、musicgen / suno backend は本文へ "Avoid: ..." を送出しない。
+    `negative_tags`（楽譜の意図の記録）は不変。"""
     data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
     data.pop("control_profile", None)
-    data["rendering"]["target_backend"] = "musicgen"
+    data["rendering"]["target_backend"] = target_backend
     assert data["semantic"]["avoid"]  # サンプルは非空 avoid を持つ前提
 
     score = CompositionScore.model_validate(data)
@@ -521,12 +527,13 @@ def test_musicgen_omits_avoid_body_segment_but_keeps_negative_tags() -> None:
     assert "semantic.avoid" not in prompt.dropped_elements
 
 
-def test_musicgen_avoid_never_counted_as_dropped_under_aggressive_truncation() -> None:
-    """字数を強く絞っても musicgen の semantic.avoid は候補にすら入らないため
+@pytest.mark.parametrize("target_backend", ["musicgen", "suno"])
+def test_avoid_never_counted_as_dropped_under_aggressive_truncation(target_backend: str) -> None:
+    """字数を強く絞っても musicgen / suno の semantic.avoid は候補にすら入らないため
     `dropped_elements` に現れない（他フィールドの drop 順位には無関係）。"""
     data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
     data.pop("control_profile", None)
-    data["rendering"]["target_backend"] = "musicgen"
+    data["rendering"]["target_backend"] = target_backend
 
     score = CompositionScore.model_validate(data)
     prompt = ExternalPromptAdapter().render(score, max_chars=20)
@@ -536,10 +543,11 @@ def test_musicgen_avoid_never_counted_as_dropped_under_aggressive_truncation() -
     assert prompt.negative_tags == data["semantic"]["avoid"]
 
 
-def test_suno_and_external_avoid_body_segment_is_unchanged() -> None:
-    """suno / external backend は不変（実測は musicgen 限定・横展開しない — Design Memo
-    判断 2）。本文の "Avoid: ..." セグメントは従来どおり描画される。"""
-    score = load_composition_score(SAMPLE_PATH)  # target_backend: external -> suno
+def test_external_avoid_body_segment_is_unchanged() -> None:
+    """external backend は不変（実測は Suno 生成そのものに対するものであり、汎用
+    external へ横展開はしない — #153 と同じ規律）。本文の "Avoid: ..." セグメントは
+    従来どおり描画される。"""
+    score = load_composition_score(SAMPLE_PATH)  # target_backend: external (unchanged)
     assert score.rendering.target_backend == "external"
 
     prompt = ExternalPromptAdapter().render(score, max_chars=1000)
@@ -547,12 +555,17 @@ def test_suno_and_external_avoid_body_segment_is_unchanged() -> None:
     assert "Avoid: bright festival EDM; comic vocal delivery." in prompt.text
     assert prompt.negative_tags == ["bright festival EDM", "comic vocal delivery"]
 
+
+def test_suno_avoid_body_segment_is_now_omitted() -> None:
+    """#162 判定（K2-seg Suno バッチ 1 実測 attractor d=+4.03、事前登録規約の
+    attractor 確定閾値 d>=+0.8 該当）を受け、suno backend は本文 "Avoid: ..." を
+    もう送出しない。`negative_tags`（Exclude チャネル相当の記録）は従来どおり保持。"""
     data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
     data["rendering"]["target_backend"] = "suno"
     suno_score = CompositionScore.model_validate(data)
     suno_prompt = ExternalPromptAdapter().render(suno_score, max_chars=1000)
 
-    assert "Avoid: bright festival EDM; comic vocal delivery." in suno_prompt.text
+    assert "Avoid:" not in suno_prompt.text
     assert suno_prompt.negative_tags == ["bright festival EDM", "comic vocal delivery"]
 
 

@@ -326,9 +326,11 @@ d=+1.10）。expected_sign は −1（Avoid が効くなら centroid は低下�
 （`Avoid: X.`）セグメントを送出しない。`GeneratedPrompt.negative_tags` には引き続き
 avoid を記録する（楽譜の意図の保全・消費可否は下流の責務）。送出停止は字数超過の
 `dropped_elements` とは区別されるルーティング判断（監査可能性は本 quirk advisory の
-改訂文言と descriptor 単体テストで担保）。suno / external の compile 出力は本追記による
-影響を受けない（実測は musicgen 限定・機種依存の効きを証拠なしに横展開しない — 下記
-「機種依存の注意」参照）。
+改訂文言と descriptor 単体テストで担保）。本追記の時点（2026-07-06）では suno /
+external の compile 出力は影響を受けなかった（実測は musicgen 限定・機種依存の効きを
+証拠なしに横展開しない）。**その後 suno 自身の実測が確定し（#162, 2026-07-09）、
+suno も同様に本文 Avoid 送出を停止した — `external` のみ不変のまま。詳細は下記
+「機種依存の注意」参照。**
 
 #### スコープ外（構造的理由）
 
@@ -358,9 +360,15 @@ MusicGen より強い形（d=+4.03 vs +1.10）で再現することを確認し�
 `examples/control/k2_suno_segments/README.md` honesty (c) 参照。また生成は Suno の
 ユーザーオリジナル・カスタムモデルでの実測であり標準モデルへの一般化は未検証 —
 同 honesty (g)）。
-`valley_depth_target` / `time_signature` はバッチ 2 へ繰越（未検証のまま）
-— musicgen の attractor 実測を根拠に suno 側の送出も止める判断は行わない
-（#152 フォローアップ、2026-07-06）。
+`valley_depth_target` / `time_signature` はバッチ 2 へ繰越（未検証のまま）。
+本文 Avoid については、当初の方針（musicgen の attractor 実測のみを根拠に suno 側の
+送出を止めることはしない・#152 フォローアップ、2026-07-06）を、Suno 自身の実測
+（#162 K2-seg Suno バッチ 1・d=+4.03・事前登録規約の attractor 確定閾値 d>=+0.8 該当）
+を根拠として停止する判断に更新した。`compose/prompt_renderer.py` の
+`_BACKEND_DESCRIPTORS["suno"].omit_body_negative` を True にし、suno backend は本文
+"Avoid: X" セグメントの送出を止める（`negative_tags` は従来どおり保持）。musicgen と
+同じ規律で、suno 実測が確定した欄のみを是正しており、`valley_depth_target` /
+`time_signature` へは横展開していない。
 
 ## 8. 関連ドキュメント
 
