@@ -85,18 +85,20 @@ d=+1.10 #152・suno centroid d=+4.03 #162、事前登録規約の attractor 確�
 は従来どおり保持し楽譜の意図は失わない）。分岐は descriptor 参照のみで backend 名の直書きは
 増やさない。`external` は不変 — 実測は Suno 生成そのものに対するものであり、汎用 external
 へは実測なき横展開をしない（#153 と同じ規律。Suno 本文 Avoid の Exclude Styles チャネルとの
-重複込みの効きは 2026-07-09 の Exclude 欄併用追試で実測済み — docs/musicgen_backend.md §7.6
-の留保解消と後述の「negative チャネル欠落経路での avoid の扱い」参照）。
+重複込みの効きは 2026-07-09 の Exclude 欄併用追試で計測を試みたが、excl セルがモデル/フロー
+未確認のブラウザ生成・baseline がバッチ 1 流用で交絡しており**未確定** — docs/musicgen_backend.md
+§7.6 の留保は未解消のまま・後述の「negative チャネル欠落経路での avoid の扱い」参照）。
 
 **negative チャネル欠落経路での avoid の扱い**: 生成経路によっては Exclude 欄
 （negative チャネル）自体が UI に存在しない（実測例: Suno カスタムモデルの生成フロー、
 2026-07-09 ユーザー申告）——との申告が当初あったが、同日中のブラウザ版 UI 確認で
 **Suno には Exclude Styles 欄が存在する**ことが判明し、上記申告は経路/表示の
 見落としだったと訂正する。したがって Suno
-では `semantic.avoid` の配送先は Exclude 欄で確保され、Exclude 欄併用追試の実測
-（`calm_avoid_excl` vs `calm_avoid`: grip d=-1.66・tight 域）で Exclude 欄が
-チャネルとして実際に効くことも確認済み（[`controllability_poc.md`](controllability_poc.md)
-「K2-seg Exclude 欄併用追試（2026-07-09・バッチ 1 増補セル）」節参照）。ただし
+では `semantic.avoid` の配送先は Exclude 欄で確保される。Exclude 欄併用追試
+（`calm_avoid_excl` vs `calm_avoid`: grip d=-1.66・tight 域）は Exclude 欄が
+チャネルとして効くことを**示唆**するが、excl セルと baseline の生成モデル/フロー
+同一性が未確認で交絡しており確定はしていない（[`controllability_poc.md`](controllability_poc.md)
+「K2-seg Exclude 欄併用追試（2026-07-09・バッチ 1 増補セル）」節の交絡 caveat 参照）。ただし
 Exclude 併用でも本文 Avoid の attractor（#162: d=+4.03）を正味では打ち消しきれない
 （同追試の正味効果比較: d=+1.64）ため、`omit_body_negative`（#163）で本文 Avoid の
 送出自体を止める方針が優先される。
