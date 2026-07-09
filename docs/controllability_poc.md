@@ -337,6 +337,39 @@ C major 優勢）、`euph` セルの `spectral_centroid`（3176–3312）が `ca
 （2960–3167）より高い域に出た `semantic.core`→centroid 交差結合疑い（K3 機種依存
 文脈への追加観測）。
 
+#### K2-seg Exclude 欄併用追試（2026-07-09・バッチ 1 増補セル）
+
+**honesty 注記**: 本節はセッション環境消失により per-sample 生特徴量・audio
+sha256・発注書 verbatim が未収載（リポジトリ・Drive とも復旧不能を確認済み）。
+fixture（`examples/control/k2_suno_segments/`）への増補は生データ再取得後に実施し、
+本節の数値は事前登録済み比較 2 本の判読記録由来である。
+
+条件: バッチ 1 の `calm_avoid` と同一 score・本文 Avoid 送出ありに加え、Suno の
+Exclude Styles 欄にも avoid 語彙を入力した「重複込み」条件（セル `calm_avoid_excl`、
+R=4: excl_01–04）。
+
+| 比較 | 対象セル A | 対象セル B | mean A | mean B | grip d | 判定 |
+|---|---|---|---:|---:|---:|---|
+| 比較1（Exclude 欄チャネルの grip） | `calm_avoid_excl` | `calm_avoid`（バッチ 1） | 2794.3 | 3079.4 | **-1.66** | 負方向=期待どおり・tight 域。**Exclude 欄はチャネルとして実際に効く** |
+| 比較2（正味効果） | `calm_avoid_excl` | `calm`（バッチ 1） | 2794.3 | 2438.0 | **+1.64** | Exclude 併用でも本文 Avoid の attractor（#162: d=+4.03）を打ち消しきれず、正味ではまだ明るい |
+
+（d = (calm_avoid_excl − 比較対象)/pooled SD）
+
+**解釈**: 「本文 Avoid をやめて Exclude 欄だけ使う」（= #163 の
+`omit_body_negative` 実装形）が最適であることを、Exclude 併用条件の実測でも
+裏付けた。[`musicgen_backend.md`](musicgen_backend.md) §7.6 の「重複込み未検証」
+留保はこれにより解消。
+
+**副次観測**: R2-2f `bpm_prior_disagreement` が `excl_04` で live 発火（2 例目。
+候補対 161.5/234.91・比 1.4546 — バッチ 1 `calm_04` と**同一の候補対が別セルで
+再出現**した点が注目に値する）。`excl_03` も bpm octave 曖昧フラグが発火。key に
+F# minor という新しいドリフトも観測された。
+
+**UI 発見**: Suno **ブラウザ版 UI には Exclude Styles 欄が存在する**ことを確認
+（2026-07-09）。同日の「カスタムモデル生成フローに Exclude 欄が存在しない」という
+ユーザー申告ベースの記述はこれにより修正が必要（詳細は
+[`control_profile.md`](control_profile.md) 該当節）。
+
 #### K2-seg バッチ 2: structure 欄センサー設計（2026-07-09 事前設計）
 
 問い: compose が送出する structure セクション記述（"intro: ...; role=..."）は Suno の
