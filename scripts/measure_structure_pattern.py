@@ -41,8 +41,10 @@ if str(SRC) not in sys.path:
 
 from svp_rpe.control import grip_effect_size  # noqa: E402
 from svp_rpe.control.structure_pattern import (  # noqa: E402
+    KNIFE_EDGE_MARGIN,
     pattern_match_rate,
     rms_to_db,
+    section_margins,
     sign_pattern,
     split_section_rms,
 )
@@ -71,6 +73,10 @@ class SongMeasurement:
     sign_pattern: list[str]
     match_rate: float
     novelty_boundary_count: int
+    # K2-seg バッチ 3 発注書（2026-07-10 事前登録）: knife-edge 実測（#166）を受けて
+    # margin を計器要件に追加。annotation 専用 — match/aggregate の計算には使わない。
+    section_margins: list[float]
+    knife_edge_sections: list[int]
 
 
 def _novelty_boundary_count(y: np.ndarray, sr: int) -> int:
@@ -101,6 +107,12 @@ def measure_song(path: Path, prescribed: list[str] | None = None) -> SongMeasure
     match = round(pattern_match_rate(observed_pattern, prescribed_pattern), 6)
     novelty_boundary_count = _novelty_boundary_count(y, sr)
 
+    # batch-3 事前登録: margin 併記（annotation 専用・match/aggregate は不変更）。
+    margins = [round(value, 6) for value in section_margins(section_rms)]
+    knife_edge_indices = [
+        index for index, margin in enumerate(margins) if abs(margin) < KNIFE_EDGE_MARGIN
+    ]
+
     return SongMeasurement(
         path=str(path),
         duration_sec=duration_sec,
@@ -108,6 +120,8 @@ def measure_song(path: Path, prescribed: list[str] | None = None) -> SongMeasure
         sign_pattern=observed_pattern,
         match_rate=match,
         novelty_boundary_count=novelty_boundary_count,
+        section_margins=margins,
+        knife_edge_sections=knife_edge_indices,
     )
 
 
