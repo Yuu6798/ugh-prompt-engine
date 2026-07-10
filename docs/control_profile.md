@@ -330,21 +330,24 @@ time signature）の実測 defaults を追記した（tight 0 / loose 2 / dead 3
 tight 昇格禁止）に従えば grip_class は loose 止まりであり、tight 昇格には DD-4 条件 2
 相当の formal な充足確認が別途必要という点も変わらない。
 
-**K2-seg Suno バッチ 2（2026-07-10）→ バッチ 3（2026-07-10）で dead・canonical
-確定**: `structure` 欄は当初バッチ 2 で主センサー match_rate（canonical 22050
-計測で low 0.666667 / high 0.666667）に事前登録のヌル格下げ規則が境界一致で
-発火（機械適用の結果 dead）したが、生成順の残留順序非対称（採用テイク位置平均
-low 4.5 vs high 7.0）を排除できず **primary_verdict は confounded・未確定**に
-据え置かれた（#164 Exclude 追試と同じ棚。判定履歴 3 段は #166/#168 参照）。
-確定追試のバッチ 3（ABBA カウンターバランス生成順 + 直交処方
-loud–quiet–loud + タイムスタンプ記録 + 均衡ゲート B=0.0625≤0.1）で
+**K2-seg Suno バッチ 2（2026-07-10）→ バッチ 3（2026-07-10）で dead 再現
+（canonical 保留・復元条件付き）**: `structure` 欄は当初バッチ 2 で主センサー
+match_rate（canonical 22050 計測で low 0.666667 / high 0.666667）に事前登録の
+ヌル格下げ規則が境界一致で発火（機械適用の結果 dead）したが、生成順の残留順序
+非対称（採用テイク位置平均 low 4.5 vs high 7.0）を排除できず **primary_verdict
+は confounded・未確定**に据え置かれた（#164 Exclude 追試と同じ棚。判定履歴
+3 段は #166/#168 参照）。確定追試のバッチ 3（ABBA カウンターバランス生成順 +
+直交処方 loud–quiet–loud + タイムスタンプ記録）で
 match_rate_high_cell=0.333333（解析的 chance floor 1/3 と正確一致）・
-match_rate_low_cell=0.416667・ヌル格下げ規則発火・canonical 条件 4 点
-（ABBA 順/補充ゼロ/タイムスタンプ記録/均衡ゲート）全 PASS により、
-**primary_verdict=dead（canonical・線形ドリフト保護下限定）**として確定した。
-当該 user-custom モデル限定の実測であり stock モデルへの一般化は未検証。
-`device_profiles/suno.yaml` への `control_profile` 反映は行わない（dead
-確定ノブは config 非掲載の既定方針どおり）。詳細と evidence は
+match_rate_low_cell=0.416667・ヌル格下げ規則発火により **primary_verdict=dead**
+が同方向に再現されたが、**canonical は保留**（Codex #169 P2 採用）: 唯一の時刻
+証跡が分単位のダウンロード時刻のため、均衡ゲートは点推定 B=0.0625 ≤ 0.1 でも
+粒度最悪ケース（joint 0.19 / 独立上界 ~0.21）が閾値を超え **B ≤ 0.1 の充足を
+検証不能** — ゲート未充足扱い。復元条件は秒単位（または分解能 ≤ バッチ全長/40）
+の時刻証跡の追加提出のみ（他 3 条件は充足済み・音源再生成は不要）。復元時も
+線形ドリフト保護下限定。当該 user-custom モデル限定の実測であり stock モデル
+への一般化は未検証。`device_profiles/suno.yaml` への `control_profile` 反映は
+行わない（dead ノブは config 非掲載の既定方針どおり）。詳細と evidence は
 [`examples/control/k2_suno_segments/README.md`](../examples/control/k2_suno_segments/README.md)
 バッチ 2 / バッチ 3 節 / [`controllability_poc.md`](controllability_poc.md)
 K2-seg バッチ 2 / バッチ 3 実測結果小節を参照。

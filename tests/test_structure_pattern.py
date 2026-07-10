@@ -248,7 +248,8 @@ def test_excluded_takes_are_recorded_with_reason() -> None:
 # fixture snapshot test（`structure3_results_fixture.json` /
 # `structure3_expected_grip.json` の canonical 値: match_rate 0.416667 (low) /
 # 0.333333 (high)、novelty_d 0.707107、null_gate_fired 発火・primary_verdict=dead・
-# verdict_canonical=true）をデータ内部の整合性として pin する。バッチ 2 と同じく
+# verdict_canonical=false — 時刻粒度により均衡ゲート検証不能で canonical 保留、
+# PR #169 P2 採用）をデータ内部の整合性として pin する。バッチ 2 と同じく
 # 測定値そのものの再解釈はしない — 判定は structure3_plan.yaml / order_sheet の
 # 事前登録規約が担う。
 # ---------------------------------------------------------------------------
@@ -307,9 +308,9 @@ def test_batch3_novelty_d_recomputes_with_grip_effect_size() -> None:
 
 def test_batch3_null_gate_fired_derives_from_high_le_low_match_rate() -> None:
     """ヌル格下げ規則の機械適用（preregistered_rule_outcome=dead）と、canonical
-    条件（ABBA + 均衡ゲート + タイムスタンプ + 補充ゼロ）を全充足したことによる
-    primary_verdict=dead・verdict_canonical=true を pin する（structure grip の
-    初の canonical 判定）。
+    保留（PR #169 P2 採用: ABBA・補充ゼロ・タイムスタンプ記録の 3 条件は充足したが、
+    分単位の時刻証跡では均衡ゲート B<=0.1 の充足を検証不能 → ゲート未充足扱い）
+    による primary_verdict=dead・verdict_canonical=false を pin する。
     """
     fixture = _load_batch3_fixture()
     expected = _load_batch3_expected_grip()
@@ -321,10 +322,16 @@ def test_batch3_null_gate_fired_derives_from_high_le_low_match_rate() -> None:
     assert expected["null_gate_fired"] is True
     assert expected["preregistered_rule_outcome"] == "dead"
     assert expected["primary_verdict"] == "dead"
-    assert expected["verdict_canonical"] is True
+    # canonical は保留（PR #169 P2 採用: 分単位の時刻証跡では均衡ゲート B<=0.1 の
+    # 充足を検証不能 — 粒度最悪ケース joint 0.19 / 独立上界 ~0.21 が閾値超過）。
+    assert expected["verdict_canonical"] is False
+    assert "timestamp granularity" in expected["canonical_blocked_by"]
+    assert "canonical_restoration_condition" in expected
+    assert "時刻証跡" in expected["canonical_restoration_condition"]
     assert expected["protection_scope"] == "linear-drift only"
 
-    # canonical 条件 4 点が全 PASS で記録されていること。
+    # canonical 条件 4 点のうち、均衡ゲートのみ検証不能（未充足扱い）で
+    # 残り 3 点は充足として記録されていること。
     conditions = expected["canonical_conditions"]["conditions"]
     condition_ids = {c["id"] for c in conditions}
     assert condition_ids == {
@@ -334,11 +341,16 @@ def test_batch3_null_gate_fired_derives_from_high_le_low_match_rate() -> None:
         "balance_gate",
     }
     for condition in conditions:
-        assert condition["satisfied"] is True
+        if condition["id"] == "balance_gate":
+            assert condition["satisfied"] is False
+        else:
+            assert condition["satisfied"] is True
 
     balance_gate = next(c for c in conditions if c["id"] == "balance_gate")
+    # 点推定は閾値内だが、粒度により充足を検証できない（UNVERIFIABLE 扱い）。
     assert balance_gate["value"] == pytest.approx(0.0625, abs=1e-6)
     assert balance_gate["value"] <= balance_gate["threshold"]
+    assert "UNVERIFIABLE" in balance_gate["result"]
 
 
 def test_batch3_analytic_floor_check_matches_high_cell_exactly() -> None:

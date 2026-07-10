@@ -40,12 +40,16 @@ generation_order:
     computation: "t=[0,3,6,8]分 -> B = |9-8| / 16 = 0.0625"
     B: 0.0625
     threshold: 0.1
-    result: "PASS（canonical 資格）"
+    result: "UNVERIFIABLE（点推定 PASS / 粒度により検証不能 → ゲート未充足扱い・PR #169 P2 採用）"
     granularity_caveat: >-
-      分単位粒度による最悪ケース検討: 各時刻 ±0.5 分で分子誤差最大 ±2 分・
-      B ∈ [0, 0.19]。点推定 0.0625 は閾値内だが、粒度起因の上限は 0.1 を超え得る。
-      判定は事前登録どおり提供時刻の額面値（点推定 B=0.0625）で行い、粒度 caveat
-      は honesty 注記として併記する（order_sheet §1-2 verbatim）。
+      分単位粒度による最悪ケース検討: 各時刻 ±0.5 分で、順序制約込みの joint
+      最悪化は B = 3/16 = 0.1875 ≈ 0.19、分子（最大 3 分）/分母（最小 14 分）を
+      独立に最悪化した保守上界は 3/14 ≈ 0.21。点推定 0.0625 は閾値内だが、
+      粒度起因の上限が 0.1 を超えるため B ≤ 0.1 の充足を現証跡では検証できない。
+      当初の額面値判定（PASS・caveat 併記）は PR #169 P2 採用により撤回し、
+      ゲート未充足扱いへ改訂 — verdict_canonical は false（canonical 保留・
+      時刻証跡のみで復元可、structure3_expected_grip.json の canonical_blocked_by /
+      canonical_restoration_condition 参照）。
   replenishment: "ゼロ（全 4 run・8 テイクが 30s 以上 — part1/part2 とも検収済み）"
 
 cells:
@@ -136,7 +140,8 @@ knobs:
       区間に knife_edge フラグを付す（honesty 注記のみ・match 計算は不変更、
       #167 で計器凍結済み）。
 
-# バッチ 2 との関係: 同方向（confounded だった dead が canonical で再現）。
-# バッチ 2 の verdict（confounded・非 canonical）は本 fixture では変更しない
-# — 本バッチが確定を与える立場（structure3_expected_grip.json 参照）。
-batch2_relationship: "same-direction reproduction under canonical protocol (batch2 stays confounded/non-canonical)"
+# バッチ 2 との関係: 同方向（confounded だった dead が、順序交絡を排した本バッチ
+# で保留付き dead として再現）。バッチ 2 の verdict（confounded・非 canonical）は
+# 本 fixture では変更しない。本バッチ自身も時刻粒度により canonical 保留
+# （PR #169 P2 採用、structure3_expected_grip.json の canonical_blocked_by 参照）。
+batch2_relationship: "same-direction reproduction under order-controlled protocol (canonical suspended by timestamp granularity; batch2 stays confounded/non-canonical)"

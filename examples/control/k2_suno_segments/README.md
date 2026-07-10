@@ -378,7 +378,7 @@ within-cell 差（match_rate・主要物理値）— 曲線ドリフト実在の
   `low_2_2`（37.3s）を生成し R=4 を充足した（`structure_results_fixture.json`
   の `excluded` 節に sha256 とともに記録）。
 
-## バッチ 3: structure 欄 grip 確定追試（2026-07-10、ABBA カウンターバランス・初の canonical 判定）
+## バッチ 3: structure 欄 grip 確定追試（2026-07-10、ABBA カウンターバランス — dead・canonical 保留）
 
 バッチ 2（#166/#168）で「測定済みだが confounded・未確定」に据え置かれた
 structure 欄 grip を、順序交絡を排した設計で確定させる追試。バッチ 2 レビューで
@@ -395,27 +395,37 @@ aggregate）、`structure3_expected_grip.json`（判定結果・canonical 条件
 `structure3_batch_metadata_2026-07-10.yaml`（scratchpad 一次記録をそのまま収載
 — #166 P2-3 の教訓）。
 
-### 判定結果（canonical・初確定）
+### 判定結果（dead・canonical 保留 — 時刻粒度により均衡ゲート検証不能・復元条件付き）
 
 **主センサー**: high セル match_rate=**0.333333**、low セル match_rate=**0.416667**。
 事前登録済みの経験的ヌル格下げ規則（high セル match_rate ≤ low セル match_rate）が
 **発火**（0.333333 ≤ 0.416667）し、機械適用の結果は **dead**
-（`preregistered_rule_outcome`）。バッチ 2 と異なり、本バッチは **primary_verdict
-も dead・verdict_canonical: true** ── structure grip の **初の canonical 判定**。
+（`preregistered_rule_outcome`）。**primary_verdict は dead・verdict_canonical:
+false（canonical 保留）** ── canonical 4 条件のうち 3 条件は充足したが、均衡
+ゲートが時刻粒度により検証不能（下記 4・Codex #169 P2 採用）。
 
-**canonical 条件の充足記録（4 点、全 PASS）**:
+**canonical 条件の充足記録（3 点充足・1 点検証不能）**:
 
-1. **ABBA 順**: run1 low → run2 high → run3 high → run4 low。端末ダウンロード
-   一覧スクリーンショット（1000004931.png・順序一致）+ 各 run のダウンロード
-   時刻（生成直後ダウンロード規約による代理証跡）。
-2. **補充ゼロ**: 全 4 run・8 テイクが 30 秒以上（52.24s–148.2s）で除外・補充なし。
-3. **タイムスタンプ記録**: run1 23:31 / run2 23:34 / run3 23:37 / run4 23:39
-   （JST）。
-4. **均衡ゲート**: B = |(t2+t3) − (t1+t4)| / (2·(t4−t1)) = |9−8| / 16 =
-   **0.0625 ≤ 0.1 → PASS**。**粒度 caveat**: 分単位粒度の丸め誤差 ±0.5 分で
-   最悪 B ∈ [0, 0.19]（0.1 を超え得る）。判定は事前登録どおり提供時刻の額面値
-   （点推定 B=0.0625）で行い、粒度 caveat は honesty として併記する
-   （`structure3_batch_metadata_2026-07-10.yaml` 参照）。
+1. **ABBA 順（充足）**: run1 low → run2 high → run3 high → run4 low。端末
+   ダウンロード一覧スクリーンショット（1000004931.png・順序一致）+ 各 run の
+   ダウンロード時刻（生成直後ダウンロード規約による代理証跡）。
+2. **補充ゼロ（充足）**: 全 4 run・8 テイクが 30 秒以上（52.24s–148.2s）で
+   除外・補充なし。
+3. **タイムスタンプ記録（充足）**: run1 23:31 / run2 23:34 / run3 23:37 /
+   run4 23:39（JST）。
+4. **均衡ゲート（検証不能 → 未充足扱い・Codex #169 P2 採用）**:
+   B = |(t2+t3) − (t1+t4)| / (2·(t4−t1)) = |9−8| / 16 = **0.0625（点推定）** は
+   閾値 0.1 内だが、唯一の時刻証跡が**分単位**のダウンロード時刻であるため、
+   粒度誤差の最悪ケース（各時刻 ±0.5 分・順序制約込みの joint 最悪化で
+   B = 3/16 = 0.1875 ≈ 0.19、分子/分母を独立に最悪化した保守上界で
+   3/14 ≈ 0.21）が閾値を超え、**B ≤ 0.1 の充足を現証跡では検証できない**。
+   点推定の額面値通過を canonical 根拠にしたのは誤り（当初判定を撤回）──
+   ゲート未充足扱いとし、verdict_canonical は false。
+   **canonical 復元条件**: B ≤ 0.1 を検証可能にする精度の時刻証跡（秒単位、
+   または分解能 ≤ バッチ全長/40 ≈ 12 秒）の追加提出。他 3 条件は充足済みの
+   ため、**時刻証跡のみで復元可**（音源の再生成は不要。
+   `structure3_expected_grip.json` の `canonical_blocked_by` /
+   `canonical_restoration_condition` 参照）。
 
 **解析的 floor 照合**: high セル観測値 0.333333 は処方 `[high,low,high]` と
 デフォルト形状 `[low,high,high]` の解析的一致率（chance floor = 1/3）と
@@ -445,10 +455,11 @@ high 94.7s と対照的）── 発注書ドラフト時の見積り「77.75s�
 これは示唆に留まる（閾値なし）。
 
 **バッチ 2 との関係**: 同方向 ── バッチ 2 で「測定済みだが confounded・未確定」
-だった dead 判定が、順序交絡を排した本バッチの canonical 条件下で再現され
-**確定**した。**バッチ 2 の primary_verdict（confounded・非 canonical）は
-本バッチによって遡って変更しない**（`structure_expected_grip.json` は不変）
-── 本バッチが確定を与える立場として新規 fixture に記録する。
+だった dead 判定が、順序交絡を排した本バッチで**保留付き dead** として再現された。
+**バッチ 2 の primary_verdict（confounded・非 canonical）は本バッチによって
+遡って変更しない**（`structure_expected_grip.json` は不変）。本バッチ自身も
+時刻粒度により canonical 保留のため、structure grip の canonical 確定は
+時刻証跡の追加提出（復元条件）または次バッチ待ち。
 
 **config 反映**: `device_profiles/suno.yaml` への反映は行わない（dead ノブは
 config 非掲載の既定方針どおり、`config_reflected: false`）。
@@ -462,10 +473,12 @@ config 非掲載の既定方針どおり、`config_reflected: false`）。
   運用規約により、生成時刻そのものでなくダウンロード時刻を代理証跡として用いる
   （`structure3_batch_metadata_2026-07-10.yaml` provenance_notes 参照）。独立の
   UI タイムスタンプ取得ではなく、model 申告と同格の attestation-tier。
-- **均衡ゲートの分単位粒度 caveat**: B の点推定 0.0625 は閾値 0.1 内だが、
-  タイムスタンプが分単位粒度のため ±0.5 分の丸め誤差を考慮すると最悪ケースで
-  B ∈ [0, 0.19] と閾値を超え得る。判定は事前登録どおり額面値で行い、
-  この caveat は honesty として記録するに留める。
+- **均衡ゲートは時刻粒度により検証不能（Codex #169 P2 採用・当初判定を撤回）**:
+  B の点推定 0.0625 は閾値 0.1 内だが、タイムスタンプが分単位粒度のため最悪
+  ケース（joint 0.19 / 独立上界 ~0.21）が閾値を超え、B ≤ 0.1 の充足を現証跡では
+  検証できない。当初 PR #169 は額面値判定（PASS・caveat 併記）で
+  verdict_canonical: true としていたが、レビュー指摘の採用によりゲート未充足
+  扱い・canonical 保留（false）へ改訂した。復元条件は「判定結果」節 4 参照。
 - **stock モデルへの一般化は未検証**（上記モデル申告と表裏）。
 - **記述的数値 2 点の訂正**: 発注書ドラフト時点の見積り「デフォルト形状一致
   8 本中 6 本」「high セル平均曲長 77.75s」は、fixture 収載時の再集計で

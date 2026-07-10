@@ -4,6 +4,10 @@
 # audio/batch3_metadata_2026-07-10.yaml をそのまま収載する（内容の書き換え・
 # 要約はしない）。ABBA 順・タイムスタンプ証跡・均衡ゲート計算・provenance の
 # 一次記録。
+#
+# 注: 末尾の review_ruling は PR #169 レビュー採用による事後追記（一次記録の
+# balance_gate.result「PASS」判定は受領時点の額面値判定として原文保全し、
+# 現行の裁定は review_ruling が上書きする）。
 batch_id: k2seg_suno_batch3_structure
 recorded: "2026-07-10"
 generator: suno
@@ -29,3 +33,16 @@ provenance_notes:
   - "スクショ最下部の low 2 (2).mp3 は過去のダウンロードで本バッチと無関係（ユーザー確認 2026-07-10）"
   - "ファイル名の (N) サフィックスは端末ダウンロードの重複連番（過去の同名ファイルとの衝突による）"
   - "タイムスタンプは生成時刻でなくダウンロード時刻（各 run 生成直後にダウンロードする規約で代理・発注書合意）"
+review_ruling:
+  date: "2026-07-10"
+  source: "PR #169 Codex P2（README.md:468）採用"
+  ruling: >-
+    分単位のダウンロード時刻では均衡ゲート B ≤ 0.1 の充足を検証できない —
+    粒度最悪ケースは順序制約込みの joint 最悪化で B = 3/16 = 0.1875 ≈ 0.19、
+    分子/分母を独立に最悪化した保守上界で 3/14 ≈ 0.21（一次記録 note の
+    「B ∈ [0, 0.19]」は joint 最悪化と同値）。上記 balance_gate.result の
+    「PASS（canonical 資格）」は点推定の額面値判定であり撤回 — ゲート未充足扱い
+    とし、verdict_canonical は false（canonical 保留）。復元条件: B ≤ 0.1 を
+    検証可能にする精度の時刻証跡（秒単位、または分解能 ≤ バッチ全長/40 ≈ 12 秒）
+    の追加提出。他 3 条件（ABBA 順・補充ゼロ・タイムスタンプ記録）は充足済みの
+    ため時刻証跡のみで復元可（structure3_expected_grip.json 参照）。

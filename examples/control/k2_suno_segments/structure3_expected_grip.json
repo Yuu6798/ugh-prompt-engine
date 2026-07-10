@@ -14,10 +14,12 @@
   "null_gate_condition": "match_rate_high_cell <= match_rate_low_cell",
   "preregistered_rule_outcome": "dead",
   "primary_verdict": "dead",
-  "verdict_canonical": true,
+  "verdict_canonical": false,
+  "canonical_blocked_by": "timestamp granularity — 分単位のダウンロード時刻では均衡ゲート B <= 0.1 の充足を検証不能（点推定 0.0625・粒度最悪ケース: 順序制約込みの joint 最悪化で 0.1875 ≈ 0.19、分子/分母を独立に最悪化した保守上界で ~0.21 — いずれも閾値 0.1 を超過し得る）。点推定の額面値通過を canonical 根拠にしたのは誤り（PR #169 P2 採用）。",
+  "canonical_restoration_condition": "B <= 0.1 を検証可能にする精度の時刻証跡（秒単位、または分解能 <= バッチ全長/40 ≈ 12 秒）の追加提出。他 3 条件（ABBA 順・補充ゼロ・タイムスタンプ記録）は充足済みのため、時刻証跡のみで canonical 復元可（音源の再生成は不要）。",
   "protection_scope": "linear-drift only",
   "canonical_conditions": {
-    "summary": "ABBA 順・補充ゼロ・タイムスタンプ記録・均衡ゲート B<=0.1 の 4 条件を全充足したため、本バッチは structure grip の canonical 判定に初めて到達した（バッチ 2 の #164 型棚上げから確定へ）。",
+    "summary": "ABBA 順・補充ゼロ・タイムスタンプ記録の 3 条件は充足。第 4 条件（均衡ゲート B<=0.1）は点推定 0.0625 で通過するが、時刻証跡が分単位粒度のため粒度最悪ケース（0.19〜0.21）が閾値を超え得て充足を検証不能 — ゲート未充足扱いとし、verdict_canonical は false（canonical 保留・時刻証跡のみで復元可、PR #169 P2 採用）。",
     "conditions": [
       {
         "id": "abba_order",
@@ -36,13 +38,13 @@
       },
       {
         "id": "balance_gate",
-        "satisfied": true,
+        "satisfied": false,
         "formula": "B = |(t2+t3) - (t1+t4)| / (2*(t4-t1))",
         "computation": "t=[0,3,6,8]分 -> B = |9-8| / 16 = 0.0625",
         "value": 0.0625,
         "threshold": 0.1,
-        "result": "PASS",
-        "granularity_caveat": "分単位粒度による最悪ケース検討: 各時刻 ±0.5 分で分子誤差最大 ±2 分・B ∈ [0, 0.19]。点推定 0.0625 は閾値内だが、粒度起因の上限は 0.1 を超え得る。判定は事前登録どおり提供時刻の額面値（点推定 B=0.0625）で行う。"
+        "result": "UNVERIFIABLE（点推定 PASS / 粒度により検証不能 → ゲート未充足扱い）",
+        "granularity_caveat": "分単位粒度による最悪ケース検討: 各時刻 ±0.5 分で、順序制約込みの joint 最悪化は B = 3/16 = 0.1875 ≈ 0.19、分子（最大 3 分）/分母（最小 14 分）を独立に最悪化した保守上界は 3/14 ≈ 0.21。点推定 0.0625 は閾値内だが、粒度起因の上限が 0.1 を超えるため充足を現証跡では検証できない。当初の額面値判定（PASS・caveat 併記）は PR #169 P2 採用により撤回 — ゲート未充足扱いへ改訂。"
       }
     ]
   },
@@ -83,7 +85,7 @@
     "decision_rule": "K 系列既定閾値 |d|>=0.8 tight / 0.2-0.8 loose / <0.2 dead・expected_sign +1（order_sheet §4 verbatim）。",
     "duration_confound_caveat": "セル平均曲長 low 80.5s vs high 77.77s（発注書ドラフト時の見積り『77.75s』から実測再集計で訂正）— バッチ 2（low 54.5s vs high 94.7s）と異なり本バッチはセル間曲長がほぼ等値で、曲長交絡は実質不在。ただし d=0.707107 は K 系列 tight 閾値 (|d|>=0.8) 未満のため loose 止まりであり、確定的な grip 証拠として昇格はしない（記述的・確定なし）。"
   },
-  "interpretation": "canonical 条件（ABBA + 均衡ゲート + タイムスタンプ + 補充ゼロ）を全充足した初のバッチ。主センサーは high セル match_rate=0.333333 が chance floor（1/3）と正確一致し、ヌル格下げ規則（high<=low: 0.333333<=0.416667）も発火 — 機械適用・primary verdict とも dead で一致する。バッチ 2 で『測定済みだが confounded・未確定』だった dead 判定が、順序交絡を排した設計で同方向に再現され、canonical verdict として確定した。ただし canonical verdict は「線形ドリフト保護下」の限定付き（4 run 設計は曲線ドリフトを同定できない）。副センサー novelty d=+0.707107 は expected_sign と同方向の loose（tight 未満）で、本バッチはセル平均曲長がほぼ等値（曲長交絡が実質不在）という点でバッチ2と異なるが、これも確定的な grip 証拠には昇格しない。",
-  "batch2_relationship": "同方向（バッチ 2 で confounded だった dead が本バッチの canonical 条件下で再現された）。バッチ 2 の primary_verdict（confounded・非 canonical）は本バッチによって遡って変更しない — 本バッチが確定を与える立場（structure_expected_grip.json は変更不可）。",
+  "interpretation": "主センサーは high セル match_rate=0.333333 が chance floor（1/3）と正確一致し、ヌル格下げ規則（high<=low: 0.333333<=0.416667）も発火 — 機械適用・primary verdict とも dead で一致する。canonical 4 条件のうち ABBA 順・補充ゼロ・タイムスタンプ記録の 3 条件は充足したが、均衡ゲートは時刻証跡の分単位粒度により B <= 0.1 の充足を検証不能（粒度最悪ケース 0.19〜0.21 > 0.1）— よって verdict は dead（canonical 保留・復元条件付き、canonical_blocked_by / canonical_restoration_condition 参照）。仮に canonical が復元されても「線形ドリフト保護下」の限定付き（4 run 設計は曲線ドリフトを同定できない）。副センサー novelty d=+0.707107 は expected_sign と同方向の loose（tight 未満）で、本バッチはセル平均曲長がほぼ等値（曲長交絡が実質不在）という点でバッチ2と異なるが、これも確定的な grip 証拠には昇格しない。",
+  "batch2_relationship": "同方向（バッチ 2 で confounded だった dead が、順序交絡を排した本バッチで保留付き dead として再現された）。バッチ 2 の primary_verdict（confounded・非 canonical）は本バッチによって遡って変更しない（structure_expected_grip.json は変更不可）。本バッチも時刻粒度により canonical 保留のため、structure grip の canonical 確定は時刻証跡の追加提出または次バッチ待ち。",
   "config_reflected": false
 }
