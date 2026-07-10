@@ -332,13 +332,15 @@ tight 昇格禁止）に従えば grip_class は loose 止まりであり、tigh
 
 **K2-seg Suno バッチ 2（2026-07-10）**: `structure` 欄の実測は主センサー match_rate
 （canonical 22050 計測で low 0.666667 / high 0.666667）に事前登録のヌル格下げ規則が
-境界一致で発火し **dead（canonical）**（当該 user-custom モデル限定の実測）。
-判定履歴: #166 では納品順からの順序共線「推定」で一度 confounded・未確定へ格下げ
-したが、生成者証言（2026-07-10 追確認）で生成順は run 単位の厳密交互と確定し、
-格下げの根拠消滅により事前登録規則の機械適用（dead）を canonical へ復元
-（order provenance は証言ベースの attestation-tier）。処方非実現の記述的証拠
+境界一致で発火（機械適用の結果 dead は `preregistered_rule_outcome` として記録保全）
+したが、**「測定済みだが confounded・未確定」**（#164 Exclude 追試と同じ棚。当該
+user-custom モデル限定の実測）。判定履歴（3 段）: #166 で順序共線推定により
+confounded 格下げ → 生成者証言（run 単位交互）で完全共線推定を訂正 → canonicity
+復元を試みたが run 交互は drift-balanced でない（採用テイク位置平均 low 4.5 vs
+high 7.0 の残留非対称）ため撤回（Codex #168 P2 採用）。確定は ABBA カウンター
+バランス + タイムスタンプ証跡の追試待ち。処方非実現の記述的証拠
 （outro 静音化 0/4）は順序非依存の観測として併記。`device_profiles/suno.yaml` への
-`control_profile` 反映は行わない（dead ノブは config に載せない）。詳細と evidence は
+`control_profile` 反映は行わない（未確定ノブは config に載せない）。詳細と evidence は
 [`examples/control/k2_suno_segments/README.md`](../examples/control/k2_suno_segments/README.md)
 バッチ 2 節 / [`controllability_poc.md`](controllability_poc.md) K2-seg バッチ 2
 実測結果小節を参照。
