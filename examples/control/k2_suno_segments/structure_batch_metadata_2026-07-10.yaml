@@ -4,10 +4,10 @@ recorded: "2026-07-10"
 generator: suno
 model: "user-custom (Suno カスタムモデル・ユーザー申告 2026-07-10)"
 generation_flow: "ユーザー申告: 発注書 §2 の生成条件を遵守（同一モデル・同一フロー・Exclude Styles 空・Instrumental・Style 欄 verbatim 貼付）。UI 経路の個別確認は取得せず包括申告として記録"
-same_batch_isolation: "low / high とも本バッチ新規生成・同一カスタムモデル（申告）= #164 型の cross-batch 再利用交絡を回避（同一バッチ・同一モデル申告）。生成順共線の caveat は honesty 参照"
+same_batch_isolation: "low / high とも本バッチ新規生成・同一カスタムモデル（申告）= #164 型の cross-batch 再利用交絡を回避（同一バッチ・同一モデル申告）。加えて run 交互生成（証言ベース、honesty 参照）により順序ドリフトも両セルへ対称化"
 honesty:
   - "モデル・生成条件はユーザー申告ベース（batch-1 honesty (g) と同型）。カスタムモデル実測につき stock モデルへの一般化は未検証"
-  - "発注書 §2-4 の low/high 交互生成順は納品順から未実施とみられる（high 4 本→low 4 本の順に納品）。同日・同モデル申告のため同一バッチ性は維持、逸脱として記録"
+  - "生成順はユーザー証言（2026-07-10 追確認）で run 単位の厳密交互（low run→high run→low run→high run・各 run 2 テイク・補充 2 本は末尾）と確定。納品順（high 4 本→low 4 本）からの当初推定『交互未実施』は誤りであったと訂正（#166 マージ後訂正）。証言は生成後の追確認であり独立証跡（UI タイムスタンプ）は未取得 — model 申告と同格の attestation-tier として記録"
   - "除外発火: high_1_1 (18.5s) / low_2 (29.0s) が <30s 規則に該当。補充テイク high_2_2 (94.1s) / low_2_2 (37.3s) を同日受領し R=4 充足（発注書 §4 の同日追加生成規定どおり）"
 cells:
   high:

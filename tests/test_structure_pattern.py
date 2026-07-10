@@ -204,8 +204,9 @@ def test_novelty_d_recomputes_with_grip_effect_size() -> None:
 
 
 def test_null_gate_fired_derives_from_high_le_low_match_rate() -> None:
-    """ヌル格下げ規則の機械適用（preregistered_rule_outcome=dead）と、生成順共線に
-    よる primary verdict の confounded 格下げ（PR#166 P2 第 4 ラウンド採用）を pin。
+    """ヌル格下げ規則の機械適用（preregistered_rule_outcome=dead）と、#166 判定の
+    訂正（生成順 run 交互の生成者証言により confounded 格下げを撤回、事前登録 dead
+    を canonical へ復元・order_provenance に証言と訂正経緯を記録）を pin。
     """
     fixture = _load_fixture()
     expected = _load_expected_grip()
@@ -215,12 +216,16 @@ def test_null_gate_fired_derives_from_high_le_low_match_rate() -> None:
 
     assert expected["null_gate_fired"] == (high <= low)
     assert expected["null_gate_fired"] is True
-    # 事前登録規約の機械適用は dead（記録保全）だが、cross-cell 比較が生成順共線と
-    # 分離不能のため primary verdict は confounded・非 canonical。
+    # 事前登録規約の機械適用 = dead。#166 の confounded 格下げは順序共線「推定」に
+    # 立脚していたが、生成者証言（run 交互）で根拠消滅し dead を canonical へ復元。
     assert expected["preregistered_rule_outcome"] == "dead"
-    assert expected["primary_verdict"] == "confounded"
-    assert expected["verdict_canonical"] is False
+    assert expected["primary_verdict"] == "dead"
+    assert expected["verdict_canonical"] is True
     assert expected["high_cell_only_reading"] == "loose"
+    # 訂正の provenance 記録（証言・attestation-tier・訂正経緯）が存在すること。
+    assert "run 単位の厳密交互" in expected["order_provenance"]
+    assert "attestation-tier" in expected["order_provenance"]
+    assert "canonical へ復元" in expected["demotion_reversal_note"]
 
 
 def test_excluded_takes_are_recorded_with_reason() -> None:

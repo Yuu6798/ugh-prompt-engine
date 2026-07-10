@@ -23,16 +23,18 @@ repetitions: 4
 preregistered_date: "2026-07-10"  # 発注書発行日 = 判定規約の事前登録日（同日生成）
 # 発注書 §2-2: Exclude Styles 欄は全セル空で統一（ユーザー申告）。
 exclude_styles: ""
-# honesty（順序共線）: 発注書 §2-4 の low/high 交互生成順は未実施（納品順は high
-# 全件 → low 全件）。生成順が cell と完全共線のため、セル間比較（ヌル格下げ）は
-# バッチ内時間ドリフトと分離不能（README バッチ 2 節・
-# structure_expected_grip.json の order_collinearity_caveat / confound_note 参照）。
+# honesty（順序 provenance・訂正済み）: 納品順（high 全件 → low 全件）からの当初
+# 推定「交互生成順は未実施＝順序が cell と完全共線」は、生成者本人への追確認
+# （2026-07-10）で誤りと確定。実際の生成順は run 単位の厳密交互
+# （low run→high run→low run→high run・各 run 2 テイク・補充 2 本は末尾）。
+# 詳細は structure_expected_grip.json の order_provenance / demotion_reversal_note。
 order_collinearity_honesty: >-
-  交互生成順（事前登録）逸脱により生成順と cell が完全共線。ヌル格下げ比較（cross-cell）
-  は時間ドリフトと分離不能のため primary verdict は confounded・未確定
-  （機械適用の結果 dead は preregistered_rule_outcome として記録保全）。
-  処方非実現の記述的証拠（high セル outro 静音化 0/4、順序非依存）は保持するが、
-  verdict にする規則は事前登録外につき確定判定には用いない。
+  生成順はユーザー証言（2026-07-10 追確認）で run 単位の厳密交互と確定し、
+  納品順からの当初推定「交互未実施＝順序共線」は誤りであったと訂正（#166 マージ後訂正）。
+  セル×生成時刻の完全共線は存在せず時間ドリフトは両セルへ対称分散していたため、
+  ヌル格下げ比較（cross-cell）の交絡根拠は消滅し、事前登録規則の機械適用（dead）を
+  canonical へ復元。証言は生成後の追確認・独立証跡（UI タイムスタンプ）未取得の
+  attestation-tier（model 申告と同格）。
 
 cells:
   - name: low
