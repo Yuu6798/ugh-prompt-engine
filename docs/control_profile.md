@@ -330,20 +330,27 @@ time signature）の実測 defaults を追記した（tight 0 / loose 2 / dead 3
 tight 昇格禁止）に従えば grip_class は loose 止まりであり、tight 昇格には DD-4 条件 2
 相当の formal な充足確認が別途必要という点も変わらない。
 
-**K2-seg Suno バッチ 2（2026-07-10）**: `structure` 欄の実測は主センサー match_rate
-（canonical 22050 計測で low 0.666667 / high 0.666667）に事前登録のヌル格下げ規則が
-境界一致で発火（機械適用の結果 dead は `preregistered_rule_outcome` として記録保全）
-したが、**「測定済みだが confounded・未確定」**（#164 Exclude 追試と同じ棚。当該
-user-custom モデル限定の実測）。判定履歴（3 段）: #166 で順序共線推定により
-confounded 格下げ → 生成者証言（run 単位交互）で完全共線推定を訂正 → canonicity
-復元を試みたが run 交互は drift-balanced でない（採用テイク位置平均 low 4.5 vs
-high 7.0 の残留非対称）ため撤回（Codex #168 P2 採用）。確定は ABBA カウンター
-バランス + タイムスタンプ証跡の追試待ち。処方非実現の記述的証拠
-（outro 静音化 0/4）は順序非依存の観測として併記。`device_profiles/suno.yaml` への
-`control_profile` 反映は行わない（未確定ノブは config に載せない）。詳細と evidence は
+**K2-seg Suno バッチ 2（2026-07-10）→ バッチ 3（2026-07-10）で dead 再現
+（canonical 保留・復元条件付き）**: `structure` 欄は当初バッチ 2 で主センサー
+match_rate（canonical 22050 計測で low 0.666667 / high 0.666667）に事前登録の
+ヌル格下げ規則が境界一致で発火（機械適用の結果 dead）したが、生成順の残留順序
+非対称（採用テイク位置平均 low 4.5 vs high 7.0）を排除できず **primary_verdict
+は confounded・未確定**に据え置かれた（#164 Exclude 追試と同じ棚。判定履歴
+3 段は #166/#168 参照）。確定追試のバッチ 3（ABBA カウンターバランス生成順 +
+直交処方 loud–quiet–loud + タイムスタンプ記録）で
+match_rate_high_cell=0.333333（解析的 chance floor 1/3 と正確一致）・
+match_rate_low_cell=0.416667・ヌル格下げ規則発火により **primary_verdict=dead**
+が同方向に再現されたが、**canonical は保留**（Codex #169 P2 採用）: 唯一の時刻
+証跡が分単位のダウンロード時刻のため、均衡ゲートは点推定 B=0.0625 ≤ 0.1 でも
+粒度最悪ケース（joint 0.19 / 独立上界 ~0.21）が閾値を超え **B ≤ 0.1 の充足を
+検証不能** — ゲート未充足扱い。復元条件は秒単位（または分解能 ≤ バッチ全長/40）
+の時刻証跡の追加提出のみ（他 3 条件は充足済み・音源再生成は不要）。復元時も
+線形ドリフト保護下限定。当該 user-custom モデル限定の実測であり stock モデル
+への一般化は未検証。`device_profiles/suno.yaml` への `control_profile` 反映は
+行わない（dead ノブは config 非掲載の既定方針どおり）。詳細と evidence は
 [`examples/control/k2_suno_segments/README.md`](../examples/control/k2_suno_segments/README.md)
-バッチ 2 節 / [`controllability_poc.md`](controllability_poc.md) K2-seg バッチ 2
-実測結果小節を参照。
+バッチ 2 / バッチ 3 節 / [`controllability_poc.md`](controllability_poc.md)
+K2-seg バッチ 2 / バッチ 3 実測結果小節を参照。
 
 ### advisory 規則（自動補正はしない）
 

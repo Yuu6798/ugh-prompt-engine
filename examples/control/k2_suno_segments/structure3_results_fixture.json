@@ -1,0 +1,206 @@
+{
+  "schema_version": "1.0",
+  "fixture_id": "k2seg_suno_batch3_structure",
+  "prescribed_pattern": [
+    "high",
+    "low",
+    "high"
+  ],
+  "songs": {
+    "low": [
+      {
+        "path": "low_1_2.mp3",
+        "sha256": "5936b3c2891f0a54bd0e7801430657a5489c9c3c84329ee0edfd14880433f77c",
+        "duration_sec": 62.16,
+        "section_rms_db": [
+          -17.4565,
+          -15.403,
+          -15.0762
+        ],
+        "sign_pattern": [
+          "low",
+          "high",
+          "high"
+        ],
+        "match_rate": 0.333333,
+        "novelty_boundary_count": 7,
+        "section_margins": [
+          -0.162476,
+          0.060903,
+          0.101574
+        ],
+        "knife_edge_sections": []
+      },
+      {
+        "path": "low_1_3.mp3",
+        "sha256": "d37f150ccbd71c5152ad4d272dd7c405ff1940c8180ac99a17f568cbb828f3d1",
+        "duration_sec": 52.24,
+        "section_rms_db": [
+          -17.0183,
+          -15.9,
+          -15.7745
+        ],
+        "sign_pattern": [
+          "low",
+          "high",
+          "high"
+        ],
+        "match_rate": 0.333333,
+        "novelty_boundary_count": 4,
+        "section_margins": [
+          -0.088526,
+          0.036714,
+          0.051812
+        ],
+        "knife_edge_sections": []
+      },
+      {
+        "path": "low_2_3.mp3",
+        "sha256": "a7fa77df39ece47f0932b2960f640e5e2266b8c289e3936d3e5d35feb2a1f52b",
+        "duration_sec": 59.4,
+        "section_rms_db": [
+          -16.9177,
+          -16.4501,
+          -15.839
+        ],
+        "sign_pattern": [
+          "low",
+          "low",
+          "high"
+        ],
+        "match_rate": 0.666667,
+        "novelty_boundary_count": 4,
+        "section_margins": [
+          -0.058835,
+          -0.006783,
+          0.065618
+        ],
+        "knife_edge_sections": []
+      },
+      {
+        "path": "low_2_4.mp3",
+        "sha256": "d8e678fd59d2bdf1ec4ddde8a1dc2f1c1f7e7dc1f45a8e5b79463989c4edad64",
+        "duration_sec": 148.2,
+        "section_rms_db": [
+          -16.9039,
+          -14.3001,
+          -14.9149
+        ],
+        "sign_pattern": [
+          "low",
+          "high",
+          "high"
+        ],
+        "match_rate": 0.333333,
+        "novelty_boundary_count": 7,
+        "section_margins": [
+          -0.168253,
+          0.122478,
+          0.045775
+        ],
+        "knife_edge_sections": []
+      }
+    ],
+    "high": [
+      {
+        "path": "high_1_3.mp3",
+        "sha256": "f05c0e3c65009623935c2c215236659501653d43d1697ee1651baaea4c8b7b35",
+        "duration_sec": 78.84,
+        "section_rms_db": [
+          -17.5162,
+          -15.6189,
+          -15.9218
+        ],
+        "sign_pattern": [
+          "low",
+          "high",
+          "high"
+        ],
+        "match_rate": 0.333333,
+        "novelty_boundary_count": 7,
+        "section_margins": [
+          -0.129329,
+          0.083223,
+          0.046106
+        ],
+        "knife_edge_sections": []
+      },
+      {
+        "path": "high_1_4.mp3",
+        "sha256": "2c3eb6df7771454afe01eed58aa3d5c8227baca177ac24639279d882c5a89d7a",
+        "duration_sec": 57.2,
+        "section_rms_db": [
+          -17.4784,
+          -16.2019,
+          -15.5401
+        ],
+        "sign_pattern": [
+          "low",
+          "high",
+          "high"
+        ],
+        "match_rate": 0.333333,
+        "novelty_boundary_count": 5,
+        "section_margins": [
+          -0.119804,
+          0.019541,
+          0.100263
+        ],
+        "knife_edge_sections": []
+      },
+      {
+        "path": "high_2_3.mp3",
+        "sha256": "242fa92caba42e9a99884528236d456d0417fdff93234556b6a465513013b8f0",
+        "duration_sec": 78.12,
+        "section_rms_db": [
+          -17.5724,
+          -15.7877,
+          -14.1145
+        ],
+        "sign_pattern": [
+          "low",
+          "low",
+          "high"
+        ],
+        "match_rate": 0.666667,
+        "novelty_boundary_count": 7,
+        "section_margins": [
+          -0.19292,
+          -0.008821,
+          0.201741
+        ],
+        "knife_edge_sections": []
+      },
+      {
+        "path": "high_2_4.mp3",
+        "sha256": "b23fb3832feaf6cb35c16da41713d12a5f1623298a9bf8ea973b6f21bf05bd4e",
+        "duration_sec": 96.92,
+        "section_rms_db": [
+          -17.2906,
+          -15.023,
+          -16.264
+        ],
+        "sign_pattern": [
+          "low",
+          "high",
+          "low"
+        ],
+        "match_rate": 0.0,
+        "novelty_boundary_count": 7,
+        "section_margins": [
+          -0.123775,
+          0.137614,
+          -0.013839
+        ],
+        "knife_edge_sections": []
+      }
+    ]
+  },
+  "aggregate": {
+    "match_rate_low_cell": 0.416667,
+    "match_rate_high_cell": 0.333333,
+    "novelty_d": 0.707107
+  },
+  "excluded": [],
+  "measurement_note": "全計測（主センサー RMS 符号パターン・margin・novelty とも）は canonical RPE 経路（svp_rpe.io.audio_loader.load_audio、extract_physical_from_file と同一の 22050 リサンプル）で実施。生値は scratchpad results_structure_batch3_2026-07-10.yaml に保全。"
+}

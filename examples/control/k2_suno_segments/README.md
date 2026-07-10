@@ -378,9 +378,117 @@ within-cell 差（match_rate・主要物理値）— 曲線ドリフト実在の
   `low_2_2`（37.3s）を生成し R=4 を充足した（`structure_results_fixture.json`
   の `excluded` 節に sha256 とともに記録）。
 
+## バッチ 3: structure 欄 grip 確定追試（2026-07-10、ABBA カウンターバランス — dead・canonical 保留）
+
+バッチ 2（#166/#168）で「測定済みだが confounded・未確定」に据え置かれた
+structure 欄 grip を、順序交絡を排した設計で確定させる追試。バッチ 2 レビューで
+確定した設計変更 3 点を適用: (1) **ABBA カウンターバランス生成順**
+（run1 low → run2 high → run3 high → run4 low・単純交互では片セルの平均生成
+時刻が系統的に遅れるため不十分と #168 レビューで確定）、(2) **処方の直交化**
+（quiet–loud–quiet → **loud–quiet–loud**・生成器デフォルト形状 `[low,high,high]`
+との一致が 2/3 → 1/3 に落ち判別ヘッドルームが 2 倍）、(3) **margin 併記**
+（knife-edge 検出、#167 で計器凍結済み）。
+
+fixture は `structure3_plan.yaml`（判定規約・プロンプト verbatim・canonical
+条件の 4 点定義）、`structure3_results_fixture.json`（per-song 計測値 + margin +
+aggregate）、`structure3_expected_grip.json`（判定結果・canonical 条件充足記録）、
+`structure3_batch_metadata_2026-07-10.yaml`（scratchpad 一次記録をそのまま収載
+— #166 P2-3 の教訓）。
+
+### 判定結果（dead・canonical 保留 — 時刻粒度により均衡ゲート検証不能・復元条件付き）
+
+**主センサー**: high セル match_rate=**0.333333**、low セル match_rate=**0.416667**。
+事前登録済みの経験的ヌル格下げ規則（high セル match_rate ≤ low セル match_rate）が
+**発火**（0.333333 ≤ 0.416667）し、機械適用の結果は **dead**
+（`preregistered_rule_outcome`）。**primary_verdict は dead・verdict_canonical:
+false（canonical 保留）** ── canonical 4 条件のうち 3 条件は充足したが、均衡
+ゲートが時刻粒度により検証不能（下記 4・Codex #169 P2 採用）。
+
+**canonical 条件の充足記録（3 点充足・1 点検証不能）**:
+
+1. **ABBA 順（充足）**: run1 low → run2 high → run3 high → run4 low。端末
+   ダウンロード一覧スクリーンショット（1000004931.png・順序一致）+ 各 run の
+   ダウンロード時刻（生成直後ダウンロード規約による代理証跡）。
+2. **補充ゼロ（充足）**: 全 4 run・8 テイクが 30 秒以上（52.24s–148.2s）で
+   除外・補充なし。
+3. **タイムスタンプ記録（充足）**: run1 23:31 / run2 23:34 / run3 23:37 /
+   run4 23:39（JST）。
+4. **均衡ゲート（検証不能 → 未充足扱い・Codex #169 P2 採用）**:
+   B = |(t2+t3) − (t1+t4)| / (2·(t4−t1)) = |9−8| / 16 = **0.0625（点推定）** は
+   閾値 0.1 内だが、唯一の時刻証跡が**分単位**のダウンロード時刻であるため、
+   粒度誤差の最悪ケース（各時刻 ±0.5 分・順序制約込みの joint 最悪化で
+   B = 3/16 = 0.1875 ≈ 0.19、分子/分母を独立に最悪化した保守上界で
+   3/14 ≈ 0.21）が閾値を超え、**B ≤ 0.1 の充足を現証跡では検証できない**。
+   点推定の額面値通過を canonical 根拠にしたのは誤り（当初判定を撤回）──
+   ゲート未充足扱いとし、verdict_canonical は false。
+   **canonical 復元条件**: B ≤ 0.1 を検証可能にする精度の時刻証跡（秒単位、
+   または分解能 ≤ バッチ全長/40 ≈ 12 秒）の追加提出。他 3 条件は充足済みの
+   ため、**時刻証跡のみで復元可**（音源の再生成は不要。
+   `structure3_expected_grip.json` の `canonical_blocked_by` /
+   `canonical_restoration_condition` 参照）。
+
+**解析的 floor 照合**: high セル観測値 0.333333 は処方 `[high,low,high]` と
+デフォルト形状 `[low,high,high]` の解析的一致率（chance floor = 1/3）と
+**正確に一致** ── 直交処方の high セルが解析的ヌル以上の grip を示さなかった
+ことの直接証拠。low セル観測値 0.416667 も order_sheet §4 の事前予測
+（≈0.33）と整合方向。
+
+**記述的核心**: 処方「loud イントロ」の実現は high セル **0/4**（全 4 曲とも
+第 1 区間 margin が負）。8 本中 **5 本**が生成器デフォルト形状
+`[low, high, high]` と完全一致し、残り 3 本もデフォルト形状に近い変種
+（第 1 区間はいずれも low）── 発注書ドラフト時の見積り「6 本」は fixture
+再集計により 5 本へ訂正した。knife_edge フラグは全 8 曲・全区間でゼロ
+（最小 |margin| = 0.006783 > KNIFE_EDGE_MARGIN 0.005）。
+
+**副センサー（novelty 境界数の d）**: low=[7,4,4,7]（mean 5.5）、
+high=[7,5,7,7]（mean 6.5）、pooled-SD Cohen's d = **+0.707107**（loose 帯・
+tight 閾値 0.8 未満、expected_sign +1 と同方向）。**曲長交絡は実質不在**:
+セル平均曲長 low 80.5s vs high 77.77s とほぼ等値（バッチ 2 の low 54.5s vs
+high 94.7s と対照的）── 発注書ドラフト時の見積り「77.75s」は fixture
+再集計により 77.77s へ訂正した。ただし d は tight 閾値未満のため loose 止まりで
+あり、確定的な grip 証拠としての昇格はしない（記述的・確定なし）。
+
+**定常性の記述的注記（規則 5・線形ドリフト保護スコープの限定）**: low run1
+（`low_1_2` / `low_1_3`、match_rate ともに 0.333333）vs low run4
+（`low_2_3` / `low_2_4`、match_rate 0.666667 / 0.333333）── RMS 水準含め
+顕著なドリフトの兆候はない。4 run 設計は曲率同定の自由度を持たないため、
+これは示唆に留まる（閾値なし）。
+
+**バッチ 2 との関係**: 同方向 ── バッチ 2 で「測定済みだが confounded・未確定」
+だった dead 判定が、順序交絡を排した本バッチで**保留付き dead** として再現された。
+**バッチ 2 の primary_verdict（confounded・非 canonical）は本バッチによって
+遡って変更しない**（`structure_expected_grip.json` は不変）。本バッチ自身も
+時刻粒度により canonical 保留のため、structure grip の canonical 確定は
+時刻証跡の追加提出（復元条件）または次バッチ待ち。
+
+**config 反映**: `device_profiles/suno.yaml` への反映は行わない（dead ノブは
+config 非掲載の既定方針どおり、`config_reflected: false`）。
+
+### honesty 事前申告
+
+- **モデル/生成条件はユーザー申告**（バッチ 1 honesty (g) / バッチ 2 honesty (1)
+  と同型）。当該カスタムモデル限定の実測であり Suno 標準モデルへの一般化は
+  未検証。
+- **タイムスタンプはダウンロード時刻の代理**: 各 run 生成直後にダウンロードする
+  運用規約により、生成時刻そのものでなくダウンロード時刻を代理証跡として用いる
+  （`structure3_batch_metadata_2026-07-10.yaml` provenance_notes 参照）。独立の
+  UI タイムスタンプ取得ではなく、model 申告と同格の attestation-tier。
+- **均衡ゲートは時刻粒度により検証不能（Codex #169 P2 採用・当初判定を撤回）**:
+  B の点推定 0.0625 は閾値 0.1 内だが、タイムスタンプが分単位粒度のため最悪
+  ケース（joint 0.19 / 独立上界 ~0.21）が閾値を超え、B ≤ 0.1 の充足を現証跡では
+  検証できない。当初 PR #169 は額面値判定（PASS・caveat 併記）で
+  verdict_canonical: true としていたが、レビュー指摘の採用によりゲート未充足
+  扱い・canonical 保留（false）へ改訂した。復元条件は「判定結果」節 4 参照。
+- **stock モデルへの一般化は未検証**（上記モデル申告と表裏）。
+- **記述的数値 2 点の訂正**: 発注書ドラフト時点の見積り「デフォルト形状一致
+  8 本中 6 本」「high セル平均曲長 77.75s」は、fixture 収載時の再集計で
+  それぞれ「5 本」「77.77s」に訂正した（`structure3_results_fixture.json` /
+  `structure3_expected_grip.json` の実測値が正）。
+
 ## 関連
 
-- `docs/controllability_poc.md` K2-seg 節（Suno 転移結果表、バッチ 2 実測結果小節）
+- `docs/controllability_poc.md` K2-seg 節（Suno 転移結果表、バッチ 2 / バッチ 3
+  実測結果小節）
 - `docs/musicgen_backend.md` §7.6（キュー解消の起点、追試は交絡により未確定
   — honesty (f) 参照）
 - `docs/control_profile.md`（structure 欄の測定記録と config 非反映の方針）
