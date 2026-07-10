@@ -402,6 +402,34 @@ def test_measure_song_degenerate_constant_amplitude_margins_near_zero_and_all_kn
     assert measurement.knife_edge_sections == [0, 1, 2]
 
 
+def test_knife_edge_detection_uses_raw_margins_not_rounded(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """knife-edge 判定は丸め**前**の生 margin ベース（PR#167 P2 採用を pin）。
+
+    合成 RMS [1.0049996, 1.5, 0.4950004]（算術平均 1.0）→ 第 1 区間の生 margin は
+    0.0049996 < 0.005 でフラグ対象だが、6 桁丸め後は 0.005000 となり丸め値で
+    判定するとフラグ漏れする。YAML 表示値は丸めのまま 0.005 であることも固定。
+    """
+    import scripts.measure_structure_pattern as msp
+
+    wav = _write_wav(tmp_path / "boundary.wav", 10.0)
+    synthetic_rms = [1.0049996, 1.5, 0.4950004]
+    monkeypatch.setattr(msp, "split_section_rms", lambda y, n: list(synthetic_rms))
+
+    measurement = msp.measure_song(wav)
+
+    # 生 margin 0.0049996 の第 1 区間がフラグされる（丸め値 0.005000 なら漏れる）。
+    assert measurement.knife_edge_sections == [0]
+    # 表示用の section_margins は 6 桁丸めのまま（0.0049996 → 0.005）。
+    assert measurement.section_margins[0] == pytest.approx(0.005, abs=1e-9)
+    # 生値ベースであることのクロスチェック: 丸め後の値で判定すると空になる。
+    rounded_based = [
+        i for i, m in enumerate(measurement.section_margins) if abs(m) < KNIFE_EDGE_MARGIN
+    ]
+    assert rounded_based == []
+
+
 def test_build_report_yaml_includes_margin_fields_without_altering_existing(
     tmp_path: Path,
 ) -> None:

@@ -108,9 +108,13 @@ def measure_song(path: Path, prescribed: list[str] | None = None) -> SongMeasure
     novelty_boundary_count = _novelty_boundary_count(y, sr)
 
     # batch-3 事前登録: margin 併記（annotation 専用・match/aggregate は不変更）。
-    margins = [round(value, 6) for value in section_margins(section_rms)]
+    # knife-edge 判定は丸め**前**の生 margin に対して行う — 丸め後の値で比較すると
+    # 境界近傍（例 0.0049996 → 丸めで 0.005000）がフラグ漏れする（PR#167 P2 採用:
+    # 表示=6 桁丸め / 判定=生値 の分離）。
+    raw_margins = section_margins(section_rms)
+    margins = [round(value, 6) for value in raw_margins]
     knife_edge_indices = [
-        index for index, margin in enumerate(margins) if abs(margin) < KNIFE_EDGE_MARGIN
+        index for index, margin in enumerate(raw_margins) if abs(margin) < KNIFE_EDGE_MARGIN
     ]
 
     return SongMeasurement(
