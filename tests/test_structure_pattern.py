@@ -204,8 +204,10 @@ def test_novelty_d_recomputes_with_grip_effect_size() -> None:
 
 
 def test_null_gate_fired_derives_from_high_le_low_match_rate() -> None:
-    """ヌル格下げ規則の機械適用（preregistered_rule_outcome=dead）と、生成順共線に
-    よる primary verdict の confounded 格下げ（PR#166 P2 第 4 ラウンド採用）を pin。
+    """ヌル格下げ規則の機械適用（preregistered_rule_outcome=dead）と、primary
+    verdict の confounded 維持（PR#168 P2 採用: run 交互は drift-balanced でない —
+    採用テイク位置平均 low 4.5 vs high 7.0 の残留順序非対称。canonicity 復元は
+    撤回され provenance 訂正のみに縮小、correction_history に 3 段の履歴を記録）を pin。
     """
     fixture = _load_fixture()
     expected = _load_expected_grip()
@@ -215,12 +217,19 @@ def test_null_gate_fired_derives_from_high_le_low_match_rate() -> None:
 
     assert expected["null_gate_fired"] == (high <= low)
     assert expected["null_gate_fired"] is True
-    # 事前登録規約の機械適用は dead（記録保全）だが、cross-cell 比較が生成順共線と
-    # 分離不能のため primary verdict は confounded・非 canonical。
+    # 事前登録規約の機械適用 = dead（記録保全）。ただし run 交互下でも残留順序
+    # 非対称（位置平均 low 4.5 vs high 7.0）が単調ドリフトと分離不能のため、
+    # primary verdict は confounded・非 canonical を維持。
     assert expected["preregistered_rule_outcome"] == "dead"
     assert expected["primary_verdict"] == "confounded"
     assert expected["verdict_canonical"] is False
     assert expected["high_cell_only_reading"] == "loose"
+    # provenance 記録（証言・attestation-tier・強度格付け）と 3 段の訂正履歴。
+    assert "run 単位の厳密交互" in expected["order_provenance"]
+    assert "attestation-tier" in expected["order_provenance"]
+    assert "drift-balanced ではない" in expected["order_provenance"]
+    assert "correction_history" in expected
+    assert "confounded を維持" in expected["correction_history"]
 
 
 def test_excluded_takes_are_recorded_with_reason() -> None:
