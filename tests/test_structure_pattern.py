@@ -1,0 +1,150 @@
+"""K2-seg バッチ 2 — structure 欄 grip 計器 (`svp_rpe.control.structure_pattern`) のテスト。
+
+1. 純ロジック unit test — `scratchpad/k2seg_batch2/selftest_measure.py` の 3 ケースを
+   合成 numpy 配列（決定論・音声合成なし）で再現する。
+2. fixture snapshot test — `examples/control/k2_suno_segments/structure_results_fixture.json`
+   / `structure_expected_grip.json` の canonical 値（match_rate 0.75 / 0.666667、
+   novelty_d 0.585540、null_gate_fired）をデータ内部の整合性として pin する
+   （測定値そのものの再解釈はしない — 判定は plan.yaml / order_sheet の事前登録
+   規約が担う）。
+
+音声合成・実抽出は使わないため slow マーカーは不要。
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from svp_rpe.control import grip_effect_size
+from svp_rpe.control.structure_pattern import (
+    pattern_match_rate,
+    sign_pattern,
+    split_section_rms,
+)
+
+PRESCRIBED_PATTERN = ["low", "high", "low"]
+
+FIXTURE_PATH = Path("examples/control/k2_suno_segments/structure_results_fixture.json")
+EXPECTED_GRIP_PATH = Path("examples/control/k2_suno_segments/structure_expected_grip.json")
+
+
+def _load_fixture() -> dict:
+    return json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+
+
+def _load_expected_grip() -> dict:
+    return json.loads(EXPECTED_GRIP_PATH.read_text(encoding="utf-8"))
+
+
+def _synth_track(amplitudes: list[float], n_per_section: int = 1000) -> np.ndarray:
+    """区間ごとに定振幅の決定論配列を連結する（selftest のホワイトノイズ合成の代わり
+    に、乱数を排した最小構成で同じ quiet/loud 対比を再現する）。
+    """
+    parts = [np.full(n_per_section, amp, dtype=np.float64) for amp in amplitudes]
+    return np.concatenate(parts)
+
+
+# ---------------------------------------------------------------------------
+# 純ロジック unit test（selftest_measure.py の 3 ケース）
+# ---------------------------------------------------------------------------
+
+
+def test_case_a_quiet_loud_quiet_is_full_match() -> None:
+    y = _synth_track([0.1, 0.8, 0.1])
+    section_rms_db = split_section_rms(y, 3)
+    observed = sign_pattern(section_rms_db)
+
+    assert observed == ["low", "high", "low"]
+    assert pattern_match_rate(observed, PRESCRIBED_PATTERN) == pytest.approx(1.0)
+
+
+def test_case_b_constant_amplitude_is_degenerate_not_full_match() -> None:
+    y = _synth_track([0.4, 0.4, 0.4])
+    section_rms_db = split_section_rms(y, 3)
+    observed = sign_pattern(section_rms_db)
+
+    # 縮退ケース: 値そのものは規定しないが、1.0（完全一致）にはならないことのみ確認する。
+    assert pattern_match_rate(observed, PRESCRIBED_PATTERN) != pytest.approx(1.0)
+
+
+def test_case_c_loud_quiet_loud_is_zero_match() -> None:
+    y = _synth_track([0.8, 0.1, 0.8])
+    section_rms_db = split_section_rms(y, 3)
+    observed = sign_pattern(section_rms_db)
+
+    assert observed == ["high", "low", "high"]
+    assert pattern_match_rate(observed, PRESCRIBED_PATTERN) == pytest.approx(0.0)
+
+
+def test_pattern_match_rate_rejects_length_mismatch() -> None:
+    with pytest.raises(ValueError):
+        pattern_match_rate(["low", "high"], PRESCRIBED_PATTERN)
+
+
+# ---------------------------------------------------------------------------
+# fixture snapshot test（K2-seg バッチ 2 実測 fixture のデータ内部整合性）
+# ---------------------------------------------------------------------------
+
+
+def test_fixture_prescribed_pattern_matches_order_sheet() -> None:
+    fixture = _load_fixture()
+    assert fixture["prescribed_pattern"] == PRESCRIBED_PATTERN
+
+
+def test_per_song_match_rate_recomputes_from_sign_pattern() -> None:
+    fixture = _load_fixture()
+    for cell in ("low", "high"):
+        for song in fixture["songs"][cell]:
+            recomputed = pattern_match_rate(song["sign_pattern"], PRESCRIBED_PATTERN)
+            assert recomputed == pytest.approx(song["match_rate"], abs=1e-6), song["path"]
+
+
+def test_aggregate_match_rate_equals_per_song_average() -> None:
+    fixture = _load_fixture()
+    cell_to_key = {"low": "match_rate_low_cell", "high": "match_rate_high_cell"}
+    for cell, key in cell_to_key.items():
+        songs = fixture["songs"][cell]
+        mean = sum(song["match_rate"] for song in songs) / len(songs)
+        assert fixture["aggregate"][key] == pytest.approx(mean, abs=1e-6)
+
+    # canonical 値（設計側事前計算との照合ゲート）。
+    assert fixture["aggregate"]["match_rate_low_cell"] == pytest.approx(0.75, abs=1e-6)
+    assert fixture["aggregate"]["match_rate_high_cell"] == pytest.approx(0.666667, abs=1e-6)
+
+
+def test_novelty_d_recomputes_with_grip_effect_size() -> None:
+    fixture = _load_fixture()
+    low_counts = [song["novelty_boundary_count"] for song in fixture["songs"]["low"]]
+    high_counts = [song["novelty_boundary_count"] for song in fixture["songs"]["high"]]
+
+    d = grip_effect_size(low_counts, high_counts)
+
+    assert d == pytest.approx(fixture["aggregate"]["novelty_d"], abs=1e-4)
+    # canonical 値（設計側事前計算との照合ゲート）。
+    assert d == pytest.approx(0.585540, abs=1e-4)
+
+
+def test_null_gate_fired_derives_from_high_le_low_match_rate() -> None:
+    fixture = _load_fixture()
+    expected = _load_expected_grip()
+
+    high = fixture["aggregate"]["match_rate_high_cell"]
+    low = fixture["aggregate"]["match_rate_low_cell"]
+
+    assert expected["null_gate_fired"] == (high <= low)
+    assert expected["null_gate_fired"] is True
+    assert expected["primary_verdict"] == "dead"
+
+
+def test_excluded_takes_are_recorded_with_reason() -> None:
+    fixture = _load_fixture()
+    excluded = fixture["excluded"]
+
+    assert {item["path"] for item in excluded} == {"high_1_1.mp3", "low_2.mp3"}
+    for item in excluded:
+        assert item["excluded"] is True
+        assert item["duration_sec"] < 30.0
+        assert "preregistered" in item["reason"]

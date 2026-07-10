@@ -1,0 +1,44 @@
+{
+  "schema_version": "1.0",
+  "fixture_id": "k2seg_suno_batch2_structure",
+  "knob": "structure",
+  "generator": "suno",
+  "model": "user-custom (Suno カスタムモデル・ユーザー申告 2026-07-10)",
+  "repetitions": 4,
+  "sensor": "rms_section_pattern",
+  "prescribed_pattern": [
+    "low",
+    "high",
+    "low"
+  ],
+  "match_rate_low_cell": 0.75,
+  "match_rate_high_cell": 0.666667,
+  "decision_rule": ">=0.7 tight / 0.3-0.7 loose / <0.3 dead（time_signature の match_rate 規約を流用、order_sheet §5 verbatim）。経験的ヌル格下げ規則: high セル match_rate <= low セル match_rate の場合は分類によらず dead へ格下げ（K3-1b の known-dead ヌル天井と同型）。",
+  "null_gate_fired": true,
+  "null_gate_condition": "match_rate_high_cell <= match_rate_low_cell",
+  "primary_verdict": "dead",
+  "secondary": {
+    "sensor": "novelty_boundaries",
+    "expected_sign": 1,
+    "low_counts": [
+      4,
+      4,
+      7,
+      4
+    ],
+    "high_counts": [
+      3,
+      6,
+      7,
+      7
+    ],
+    "low_mean": 4.75,
+    "high_mean": 5.75,
+    "novelty_d": 0.58554,
+    "classification": "loose",
+    "decision_rule": "K 系列既定閾値 |d|>=0.8 tight / 0.2-0.8 loose / <0.2 dead・expected_sign +1（order_sheet §5 verbatim）。",
+    "duration_confound_caveat": "セル平均曲長 low 54.5s vs high 94.7s・境界数は曲長連動・事前登録外につき確定不能（docs/controllability_poc.md バッチ2実測結果節 参照）。"
+  },
+  "interpretation": "8 本中 7 本がセル無関係に [low, high, high] = 生成器デフォルト形状。high セルの outro 静音化 0/4。唯一の完全一致は low セル low_2_1（ヌルの実在）。",
+  "config_reflected": false
+}

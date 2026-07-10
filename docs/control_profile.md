@@ -330,6 +330,14 @@ time signature）の実測 defaults を追記した（tight 0 / loose 2 / dead 3
 tight 昇格禁止）に従えば grip_class は loose 止まりであり、tight 昇格には DD-4 条件 2
 相当の formal な充足確認が別途必要という点も変わらない。
 
+**K2-seg Suno バッチ 2（2026-07-10）**: `structure` 欄の実測は主センサー match_rate
+（low 0.75 / high 0.666667）が事前登録のヌル格下げ規則で **dead** に確定した
+（当該 user-custom モデル限定の実測）。`device_profiles/suno.yaml` への
+`control_profile` 反映は行わない（dead ノブは config に載せない）。詳細と evidence は
+[`examples/control/k2_suno_segments/README.md`](../examples/control/k2_suno_segments/README.md)
+バッチ 2 節 / [`controllability_poc.md`](controllability_poc.md) K2-seg バッチ 2
+実測結果小節を参照。
+
 ### advisory 規則（自動補正はしない）
 
 `knob_quirks` を quirk 定義順に走査し、`advisory` が非 `null` かつ発火条件（`applies_to_values`

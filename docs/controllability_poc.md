@@ -434,6 +434,33 @@ F# minor という新しいドリフトも観測された。R2-2f 候補対の�
   physical 記述を最短化 (b) 曲長 18–117s のばらつきは比例分割で吸収するが、構造が
   物理的に展開し得ない極端な短尺（目安 <30s）の除外規則を生成前に事前登録する
 
+#### バッチ 2 実測結果（2026-07-10）
+
+low（`structure: []`）/ high（3 区間）とも本バッチで新規生成した 8 曲を実測。
+fixture・判定結果の全詳細は
+[`examples/control/k2_suno_segments/README.md`](../examples/control/k2_suno_segments/README.md)
+「バッチ 2」節、生値は `structure_results_fixture.json` / `structure_expected_grip.json`。
+
+- **主センサー**: match_rate_low_cell=0.75 / match_rate_high_cell=0.666667。
+  規約上は 0.3–0.7 の loose 帯だが、事前登録済みの経験的ヌル格下げ規則
+  （high ≤ low → dead）が**初発動**し、**verdict: dead**。
+- **副センサー**: novelty 境界数 d=+0.5855（loose・expected_sign 同方向）。ただし
+  セル平均曲長が low 54.5s vs high 94.7s と大きく異なり境界数は曲長と連動するため、
+  **曲長交絡により structure 由来か曲長由来か確定不能**（事前登録外の caveat）。
+- **生成器デフォルト形状の発見**: 8 本中 7 本がセル無関係に `[low, high, high]`
+  （末尾に向けてエネルギーが上がる）を示し、high セルで意図した outro 静音化が
+  実現したテイクは 0/4。唯一の完全一致 `[low, high, low]` は low セルの
+  `low_2_1`（processed pattern への chance 一致 = 「ヌルの実在」を裏付ける）。
+- **同一バッチ隔離設計の初適用**: 経済化のためバッチ 1 `calm` を low セルへ
+  再利用する案は「K2-seg Exclude 欄併用追試」節と同型の cross-batch 交絡を招く
+  ため設計段階で不採用にし、low/high とも新規生成した（AGENTS.md §8）。この
+  結果、交絡ゼロのまま dead 判定を確定でき、Exclude 追試のような事後の
+  confounded 格下げが不要になった。
+- **計器知見**: 3 区間・処方 `[low, high, low]` は match_rate が
+  `{0, 0.333, 0.667, 1.0}` の 4 値しか取れず分解能が粗い（本バッチは 8/8 が
+  0.667 or 1.0）。次バッチは loud–quiet–loud 等、生成器デフォルト形状と正面から
+  対立する直交処方の方が判別力が高い可能性がある。
+
 ### K3: 直交性行列 — DCI/MIG の効果量再定式化
 
 **Status**: K3-1 DONE（2026-07-01、決定論的演奏者リファレンス — 結果は §5.3）。

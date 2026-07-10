@@ -219,8 +219,85 @@ d 値は `scripts/measure_grip.py`（canonical 経路）実測であり、
   （honesty (c) 参照）は同一生成器の**弱い**示唆にはなるが、これをもって
   交絡が解消されたとは言えない（過剰解釈しない）。
 
+## バッチ 2: structure 欄 grip（2026-07-10、同一バッチ隔離設計の初適用）
+
+`docs/controllability_poc.md` §「K2-seg バッチ 2: structure 欄センサー設計
+（2026-07-09 事前設計）」の実測 closeout。compose が送出する structure セクション
+記述（`intro: ...; role=...`）が Suno の実生成で「構造」（quiet–loud–quiet の
+区間エネルギー・パターン）として実現されるかを、low（`structure: []`）/ high
+（3 区間）とも本バッチで新規生成した同一バッチ・同一モデル比較で測る。
+AGENTS.md §8「計測比較の交絡隔離規律」（#165）の初適用 — バッチ 1 の `calm` を
+low セルに再利用する経済化案は「追試: Exclude 欄併用」節と同型の cross-batch
+交絡を招くため設計段階で不採用にし、low/high とも 4 本ずつ新規生成した
+（追加生成 8 曲）。
+
+fixture は `structure_plan.yaml`（判定規約・プロンプト verbatim）、
+`structure_results_fixture.json`（per-song 計測値 + aggregate + 除外テイク記録）、
+`structure_expected_grip.json`（判定結果）。比較器本体（比例分割 RMS 符号パターン）は
+`src/svp_rpe/control/structure_pattern.py` に repo 昇格し、
+`tests/test_structure_pattern.py` が fixture→判定の内部整合をスナップショット
+固定する。
+
+### 判定結果（事前登録規約の機械適用）
+
+**主センサー（比例分割 RMS 符号パターン一致率）**: low セル match_rate=**0.75**、
+high セル match_rate=**0.666667**。規約上は 0.3–0.7 で loose 帯だが、
+事前登録済みの経験的ヌル格下げ規則（high セル match_rate ≤ low セル match_rate）
+が発火し、**verdict: dead**。
+
+**副センサー（novelty 境界数の d）**: low=[4, 4, 7, 4]（mean 4.75）、
+high=[3, 6, 7, 7]（mean 5.75）、pooled-SD Cohen's d = **+0.5855**（loose 帯、
+expected_sign +1 と同方向）。ただし **曲長交絡 caveat**: セル平均曲長は
+low 54.5s vs high 94.7s と大きく異なり、境界数は曲長と連動するため、
+この d が structure 欄由来か曲長由来かは事前登録外につき確定不能。
+
+**解釈**: 8 本中 7 本がセル無関係に `[low, high, high]` = 生成器デフォルト形状
+（曲は末尾に向けてエネルギーが上がる傾向を持ち、structure 指定の有無を問わない）。
+high セルで意図した outro 静音化が実現したテイクは **0/4**。唯一の完全一致
+（match_rate=1.0）は low セルの `low_2_1` — low セルであるにもかかわらず処方
+`[low, high, low]` に一致しており、structure 欄の効果ではなく「ヌルの実在」
+（chance 水準でも processed pattern に一致し得ること）を裏付ける。この 1 例が
+なければ low セルの match_rate はさらに低かった（0.667 相当）。
+
+### 同一バッチ隔離設計の効果（対比）
+
+「追試: Exclude 欄併用」節（バッチ 1 増補）は excl セルとバッチ 1 baseline を
+跨ぐ cross-batch 交絡により、観測された d が両方とも「測定済みだが confounded」
+に格下げされた。本バッチ 2 は low/high を同一日・同一モデルで新規生成した
+ことで交絡ゼロのまま dead 判定を確定できており、事前の設計段階での交絡回避が
+事後の格下げ処理を不要にした対比として記録する。
+
+### 計器知見（次バッチへの申し送り）
+
+- **3 区間 match_rate の離散粗さ**: 3 区間・処方 `[low, high, low]` は
+  取り得る match_rate が `{0, 0.333, 0.667, 1.0}` の 4 値しかなく、0.3–0.7
+  loose 帯にほぼ全テイクが機械的に落ちる（本バッチ 8/8 が 0.667 or 1.0 のいずれか）。
+  分解能の粗さがヌル格下げ規則を実質的な主判定にしている。
+- 次バッチでは **loud–quiet–loud** 等、生成器デフォルト形状
+  （`[low, high, high]`、末尾でエネルギーが上がる傾向）と処方パターンが
+  正面から対立する直交処方の方が判別力が高い可能性がある。
+
+### honesty 事前申告
+
+- **(1) モデル/生成条件はユーザー申告**: バッチ 1 honesty (g) と同型。当該
+  カスタムモデル下の実測であり、Suno 標準モデルへの一般化は未検証
+  （`audio/batch_metadata_2026-07-10.yaml` honesty 節参照）。
+- **(2) stock モデルへの一般化は未検証**（(1) と表裏）。
+- **(3) low/high 交互生成順は未実施**: order_sheet §2-4 は
+  `low_01 → high_01 → low_02 → ...` の交互生成を指定していたが、納品順は
+  high 4 本 → low 4 本だった（同日・同モデル申告のため同一バッチ性は維持、
+  逸脱として記録）。
+- **(4) 発注書は同日事前登録**: 発行日 = 生成日 = 2026-07-10。規約は生成前に
+  固定されている。
+- **(5) novelty d は曲長交絡で確定不能**: 上記「判定結果」節の caveat 参照。
+- **除外テイク**: `high_1_1`（18.5s）/ `low_2`（29.0s）が事前登録の <30s
+  除外規則に該当し除外。同日・同モデルで補充テイク `high_2_2`（94.1s）/
+  `low_2_2`（37.3s）を生成し R=4 を充足した（`structure_results_fixture.json`
+  の `excluded` 節に sha256 とともに記録）。
+
 ## 関連
 
-- `docs/controllability_poc.md` K2-seg 節（Suno 転移結果表、追試節）
+- `docs/controllability_poc.md` K2-seg 節（Suno 転移結果表、バッチ 2 実測結果小節）
 - `docs/musicgen_backend.md` §7.6（キュー解消の起点、追試は交絡により未確定
   — honesty (f) 参照）
+- `docs/control_profile.md`（structure 欄 dead 判定の反映方針）
