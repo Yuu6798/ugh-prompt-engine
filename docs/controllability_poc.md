@@ -524,6 +524,41 @@ fixture・判定結果の全詳細は
   ラウンド採用）で canonical 値へ全面差し替え済み（旧値は git 履歴・scratchpad
   に保全）。
 
+#### バッチ 3 実測結果（2026-07-10）— 初の canonical 判定
+
+バッチ 2 の要求どおり **ABBA カウンターバランス生成順**（run1 low → run2 high →
+run3 high → run4 low）+ **直交処方**（quiet–loud–quiet → loud–quiet–loud）+
+**生成タイムスタンプ記録** + **margin 併記**を適用した確定追試。fixture・
+判定結果の全詳細は
+[`examples/control/k2_suno_segments/README.md`](../examples/control/k2_suno_segments/README.md)
+「バッチ 3」節、生値は `structure3_results_fixture.json` / `structure3_expected_grip.json`。
+
+- **判定**: 主センサー match_rate_high_cell=**0.333333** / match_rate_low_cell=
+  **0.416667**。事前登録済みの経験的ヌル格下げ規則（high ≤ low）が発火し、
+  機械適用の結果は **dead**。バッチ 2 と異なり、**canonical 条件（ABBA 順・
+  補充ゼロ・タイムスタンプ記録・均衡ゲート B=0.0625≤0.1）を全 4 点 PASS**で
+  充足したため、**primary_verdict=dead・verdict_canonical=true** ── structure
+  grip の初の canonical 判定（線形ドリフト保護下の限定付き）。
+- **解析的 floor 照合**: high セル観測値 0.333333 は処方
+  `[high,low,high]` とデフォルト形状 `[low,high,high]` の解析的一致率
+  （chance floor = 1/3）と**正確一致**。low セル観測値 0.416667 も事前予測
+  （≈0.33）と整合方向 ── デフォルト形状仮説の確証。
+- **記述的核心**: 処方「loud イントロ」の実現は high セル **0/4**（全曲第 1
+  区間 margin が負）。8 本中 **5 本**が生成器デフォルト形状 `[low,high,high]`
+  と完全一致。knife_edge フラグ発火はゼロ（最小 |margin| 0.0068 > 0.005）。
+- **副センサー**: novelty 境界数 d=**+0.707107**（loose・expected_sign 同方向、
+  tight 閾値 0.8 未満）。バッチ 2（low 54.5s vs high 94.7s）と異なり、本バッチは
+  セル平均曲長がほぼ等値（low 80.5s vs high 77.77s）で**曲長交絡が実質不在**
+  ── ただし d は tight 未満のため確定的な grip 証拠への昇格はしない（記述的・
+  確定なし）。
+- **定常性**: low run1 vs low run4 の match_rate 水準は同等（RMS 水準含め
+  ドリフトの兆候なし）── 4 run 設計の曲率同定限界の範囲内での確認。
+- **プロトコル 4 条件が一発で全通過**: バッチ 2 レビュー（#166/#168）で確定した
+  ABBA 順・補充ゼロ・タイムスタンプ記録・均衡ゲートの 4 条件を、追加ラウンドの
+  手戻りなく初回生成で全充足した。バッチ 2 の primary_verdict（confounded・
+  非 canonical）は本バッチによって遡って変更しない ── 本バッチが確定を与える
+  立場として新規 fixture に記録する。
+
 ### K3: 直交性行列 — DCI/MIG の効果量再定式化
 
 **Status**: K3-1 DONE（2026-07-01、決定論的演奏者リファレンス — 結果は §5.3）。

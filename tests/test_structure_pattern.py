@@ -244,6 +244,146 @@ def test_excluded_takes_are_recorded_with_reason() -> None:
 
 
 # ---------------------------------------------------------------------------
+# K2-seg バッチ 3 — structure grip 確定追試（ABBA カウンターバランス・直交処方）
+# fixture snapshot test（`structure3_results_fixture.json` /
+# `structure3_expected_grip.json` の canonical 値: match_rate 0.416667 (low) /
+# 0.333333 (high)、novelty_d 0.707107、null_gate_fired 発火・primary_verdict=dead・
+# verdict_canonical=true）をデータ内部の整合性として pin する。バッチ 2 と同じく
+# 測定値そのものの再解釈はしない — 判定は structure3_plan.yaml / order_sheet の
+# 事前登録規約が担う。
+# ---------------------------------------------------------------------------
+
+BATCH3_PRESCRIBED_PATTERN = ["high", "low", "high"]
+
+BATCH3_FIXTURE_PATH = Path("examples/control/k2_suno_segments/structure3_results_fixture.json")
+BATCH3_EXPECTED_GRIP_PATH = Path("examples/control/k2_suno_segments/structure3_expected_grip.json")
+
+
+def _load_batch3_fixture() -> dict:
+    return json.loads(BATCH3_FIXTURE_PATH.read_text(encoding="utf-8"))
+
+
+def _load_batch3_expected_grip() -> dict:
+    return json.loads(BATCH3_EXPECTED_GRIP_PATH.read_text(encoding="utf-8"))
+
+
+def test_batch3_fixture_prescribed_pattern_matches_order_sheet() -> None:
+    fixture = _load_batch3_fixture()
+    assert fixture["prescribed_pattern"] == BATCH3_PRESCRIBED_PATTERN
+
+
+def test_batch3_per_song_match_rate_recomputes_from_sign_pattern() -> None:
+    fixture = _load_batch3_fixture()
+    for cell in ("low", "high"):
+        for song in fixture["songs"][cell]:
+            recomputed = pattern_match_rate(song["sign_pattern"], BATCH3_PRESCRIBED_PATTERN)
+            assert recomputed == pytest.approx(song["match_rate"], abs=1e-6), song["path"]
+
+
+def test_batch3_aggregate_match_rate_equals_per_song_average() -> None:
+    fixture = _load_batch3_fixture()
+    cell_to_key = {"low": "match_rate_low_cell", "high": "match_rate_high_cell"}
+    for cell, key in cell_to_key.items():
+        songs = fixture["songs"][cell]
+        mean = sum(song["match_rate"] for song in songs) / len(songs)
+        assert fixture["aggregate"][key] == pytest.approx(mean, abs=1e-6)
+
+    # canonical 値（canonical 22050 計測・設計側事前計算との照合ゲート）。
+    assert fixture["aggregate"]["match_rate_low_cell"] == pytest.approx(0.416667, abs=1e-6)
+    assert fixture["aggregate"]["match_rate_high_cell"] == pytest.approx(0.333333, abs=1e-6)
+
+
+def test_batch3_novelty_d_recomputes_with_grip_effect_size() -> None:
+    fixture = _load_batch3_fixture()
+    low_counts = [song["novelty_boundary_count"] for song in fixture["songs"]["low"]]
+    high_counts = [song["novelty_boundary_count"] for song in fixture["songs"]["high"]]
+
+    d = grip_effect_size(low_counts, high_counts)
+
+    assert d == pytest.approx(fixture["aggregate"]["novelty_d"], abs=1e-4)
+    # canonical 値（canonical 22050 計測・設計側検算 1.0 / 1.4142 = 0.707107 と照合）。
+    assert d == pytest.approx(0.707107, abs=1e-4)
+
+
+def test_batch3_null_gate_fired_derives_from_high_le_low_match_rate() -> None:
+    """ヌル格下げ規則の機械適用（preregistered_rule_outcome=dead）と、canonical
+    条件（ABBA + 均衡ゲート + タイムスタンプ + 補充ゼロ）を全充足したことによる
+    primary_verdict=dead・verdict_canonical=true を pin する（structure grip の
+    初の canonical 判定）。
+    """
+    fixture = _load_batch3_fixture()
+    expected = _load_batch3_expected_grip()
+
+    high = fixture["aggregate"]["match_rate_high_cell"]
+    low = fixture["aggregate"]["match_rate_low_cell"]
+
+    assert expected["null_gate_fired"] == (high <= low)
+    assert expected["null_gate_fired"] is True
+    assert expected["preregistered_rule_outcome"] == "dead"
+    assert expected["primary_verdict"] == "dead"
+    assert expected["verdict_canonical"] is True
+    assert expected["protection_scope"] == "linear-drift only"
+
+    # canonical 条件 4 点が全 PASS で記録されていること。
+    conditions = expected["canonical_conditions"]["conditions"]
+    condition_ids = {c["id"] for c in conditions}
+    assert condition_ids == {
+        "abba_order",
+        "zero_replenishment",
+        "timestamps_recorded",
+        "balance_gate",
+    }
+    for condition in conditions:
+        assert condition["satisfied"] is True
+
+    balance_gate = next(c for c in conditions if c["id"] == "balance_gate")
+    assert balance_gate["value"] == pytest.approx(0.0625, abs=1e-6)
+    assert balance_gate["value"] <= balance_gate["threshold"]
+
+
+def test_batch3_analytic_floor_check_matches_high_cell_exactly() -> None:
+    """high セル match_rate は解析的 chance floor (1/3) と正確一致することを pin。"""
+    fixture = _load_batch3_fixture()
+    expected = _load_batch3_expected_grip()
+
+    high = fixture["aggregate"]["match_rate_high_cell"]
+    floor_check = expected["analytic_floor_check"]["high_cell"]
+
+    assert floor_check["observed"] == pytest.approx(high, abs=1e-6)
+    assert floor_check["observed"] == pytest.approx(1.0 / 3.0, abs=1e-6)
+    assert floor_check["chance_floor"] == pytest.approx(1.0 / 3.0, abs=1e-6)
+
+
+def test_batch3_no_knife_edge_sections_recorded() -> None:
+    """全 8 曲・全区間で knife_edge フラグ発火ゼロ（margin 最小絶対値 > 0.005）を pin。"""
+    fixture = _load_batch3_fixture()
+    all_margins: list[float] = []
+    for cell in ("low", "high"):
+        for song in fixture["songs"][cell]:
+            assert song["knife_edge_sections"] == []
+            all_margins.extend(song["section_margins"])
+
+    assert min(abs(m) for m in all_margins) > KNIFE_EDGE_MARGIN
+
+
+def test_batch3_no_excluded_takes() -> None:
+    """補充ゼロで完走 — canonical 条件 (b) の裏付け。"""
+    fixture = _load_batch3_fixture()
+    assert fixture["excluded"] == []
+
+
+def test_batch3_relationship_to_batch2_is_recorded_without_mutating_batch2() -> None:
+    """バッチ 3 は同方向再現で確定を与えるが、バッチ 2 fixture の verdict
+    （confounded・非 canonical）は変更しないことを pin する。"""
+    expected_batch3 = _load_batch3_expected_grip()
+    expected_batch2 = _load_expected_grip()
+
+    assert "同方向" in expected_batch3["batch2_relationship"]
+    assert expected_batch2["primary_verdict"] == "confounded"
+    assert expected_batch2["verdict_canonical"] is False
+
+
+# ---------------------------------------------------------------------------
 # CLI の事前登録カットオフ執行（scripts/measure_structure_pattern.py）
 # ---------------------------------------------------------------------------
 

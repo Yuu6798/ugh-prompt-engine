@@ -1,0 +1,89 @@
+{
+  "schema_version": "1.0",
+  "fixture_id": "k2seg_suno_batch3_structure",
+  "knob": "structure",
+  "generator": "suno",
+  "model": "user-custom (Suno カスタムモデル・ユーザー申告 2026-07-10、バッチ 2 と同一系)",
+  "repetitions": 4,
+  "sensor": "rms_section_pattern",
+  "prescribed_pattern": ["high", "low", "high"],
+  "match_rate_low_cell": 0.416667,
+  "match_rate_high_cell": 0.333333,
+  "decision_rule": ">=0.7 tight / 0.3-0.7 loose / <0.3 dead（time_signature の match_rate 規約を流用、order_sheet §4 verbatim）。経験的ヌル格下げ規則: high セル match_rate <= low セル match_rate の場合は分類によらず dead へ格下げ（K3-1b の known-dead ヌル天井と同型）。",
+  "null_gate_fired": true,
+  "null_gate_condition": "match_rate_high_cell <= match_rate_low_cell",
+  "preregistered_rule_outcome": "dead",
+  "primary_verdict": "dead",
+  "verdict_canonical": true,
+  "protection_scope": "linear-drift only",
+  "canonical_conditions": {
+    "summary": "ABBA 順・補充ゼロ・タイムスタンプ記録・均衡ゲート B<=0.1 の 4 条件を全充足したため、本バッチは structure grip の canonical 判定に初めて到達した（バッチ 2 の #164 型棚上げから確定へ）。",
+    "conditions": [
+      {
+        "id": "abba_order",
+        "satisfied": true,
+        "evidence": "run1 low -> run2 high -> run3 high -> run4 low の ABBA 順。端末ダウンロード一覧スクリーンショット（1000004931.png・順序一致）+ 各 run のダウンロード時刻（生成直後ダウンロード規約による代理証跡）。structure3_batch_metadata_2026-07-10.yaml generation_order 参照。"
+      },
+      {
+        "id": "zero_replenishment",
+        "satisfied": true,
+        "evidence": "全 4 run・8 テイクが 30 秒以上（52.24s-148.2s）で除外・補充なし。part1/part2 とも検収済み。"
+      },
+      {
+        "id": "timestamps_recorded",
+        "satisfied": true,
+        "evidence": "run1 23:31 / run2 23:34 / run3 23:37 / run4 23:39 (JST)。証言でなく生成直後ダウンロード時刻の証跡（honesty (2) 参照、attestation-tier）。"
+      },
+      {
+        "id": "balance_gate",
+        "satisfied": true,
+        "formula": "B = |(t2+t3) - (t1+t4)| / (2*(t4-t1))",
+        "computation": "t=[0,3,6,8]分 -> B = |9-8| / 16 = 0.0625",
+        "value": 0.0625,
+        "threshold": 0.1,
+        "result": "PASS",
+        "granularity_caveat": "分単位粒度による最悪ケース検討: 各時刻 ±0.5 分で分子誤差最大 ±2 分・B ∈ [0, 0.19]。点推定 0.0625 は閾値内だが、粒度起因の上限は 0.1 を超え得る。判定は事前登録どおり提供時刻の額面値（点推定 B=0.0625）で行う。"
+      }
+    ]
+  },
+  "analytic_floor_check": {
+    "high_cell": {
+      "observed": 0.333333,
+      "chance_floor": 0.333333,
+      "floor_fraction": "1/3",
+      "note": "処方 [high, low, high] とデフォルト形状 [low, high, high] の一致率（chance floor）と観測値が正確に一致 — 直交処方の高セルが解析的ヌル以上の grip を示さなかったことの直接証拠。"
+    },
+    "low_cell": {
+      "observed": 0.416667,
+      "predicted": 0.333333,
+      "note": "order_sheet §4 の事前予測（デフォルト形状仮説から low セル ≈0.33）と整合方向（大きくは外れていない）。低セルの偏差は少数サンプル（R=4）の分散として妥当域。"
+    }
+  },
+  "descriptive_evidence": {
+    "loud_intro_realization": "処方「loud イントロ」の実現は high セル 0/4（全 4 曲とも第 1 区間 margin が負 = 相対的に静か）。イントロを実際にうるさく始められたテイクはゼロ。",
+    "default_shape_prevalence": "8 本中 5 本が生成器デフォルト形状 [low, high, high]（末尾に向けてエネルギーが上がる傾向・structure 指定の有無を問わない）と完全一致。残り 3 本（low_2_3 / high_2_3 = [low, low, high]、high_2_4 = [low, high, low]）もデフォルト形状に近い変種で、いずれも第1区間は low。counted directly from structure3_results_fixture.json sign_pattern（発注書ドラフト時の見積り『6 本』から、実測 fixture 再集計で 5 本へ訂正）。",
+    "knife_edge_sections": "全 8 曲・全区間で knife_edge フラグ発火ゼロ（最小 |margin| = 0.006783 > KNIFE_EDGE_MARGIN 0.005・margin 計器改善が閾値割れを防いだ）。"
+  },
+  "order_provenance": "生成順は ABBA（run1 low -> run2 high -> run3 high -> run4 low）。端末ダウンロード一覧スクリーンショット（1000004931.png・順序一致）+ 各 run のダウンロード時刻（生成直後ダウンロード規約による代理証跡、独立の UI タイムスタンプではなくダウンロード時刻代理 — attestation-tier、model 申告と同格）。structure3_batch_metadata_2026-07-10.yaml 参照。",
+  "steadiness_note": {
+    "description": "定常性の記述的注記（規則(5)・線形ドリフト保護スコープの限定を裏付ける within-cell 比較）: low run1（low_1_2, low_1_3）vs low run4（low_2_3, low_2_4）の match_rate 水準。",
+    "low_run1_match_rates": [0.333333, 0.333333],
+    "low_run4_match_rates": [0.666667, 0.333333],
+    "interpretation": "run1 と run4 で match_rate 水準は同等（RMS 水準含め顕著なドリフトの兆候なし）。曲線ドリフト実在を積極的に示す証拠はないが、4 run 設計では曲率同定の自由度がないため、これは示唆に留まる（閾値なし・記述的 annotation）。"
+  },
+  "secondary": {
+    "sensor": "novelty_boundaries",
+    "expected_sign": 1,
+    "low_counts": [7, 4, 4, 7],
+    "high_counts": [7, 5, 7, 7],
+    "low_mean": 5.5,
+    "high_mean": 6.5,
+    "novelty_d": 0.707107,
+    "classification": "loose",
+    "decision_rule": "K 系列既定閾値 |d|>=0.8 tight / 0.2-0.8 loose / <0.2 dead・expected_sign +1（order_sheet §4 verbatim）。",
+    "duration_confound_caveat": "セル平均曲長 low 80.5s vs high 77.77s（発注書ドラフト時の見積り『77.75s』から実測再集計で訂正）— バッチ 2（low 54.5s vs high 94.7s）と異なり本バッチはセル間曲長がほぼ等値で、曲長交絡は実質不在。ただし d=0.707107 は K 系列 tight 閾値 (|d|>=0.8) 未満のため loose 止まりであり、確定的な grip 証拠として昇格はしない（記述的・確定なし）。"
+  },
+  "interpretation": "canonical 条件（ABBA + 均衡ゲート + タイムスタンプ + 補充ゼロ）を全充足した初のバッチ。主センサーは high セル match_rate=0.333333 が chance floor（1/3）と正確一致し、ヌル格下げ規則（high<=low: 0.333333<=0.416667）も発火 — 機械適用・primary verdict とも dead で一致する。バッチ 2 で『測定済みだが confounded・未確定』だった dead 判定が、順序交絡を排した設計で同方向に再現され、canonical verdict として確定した。ただし canonical verdict は「線形ドリフト保護下」の限定付き（4 run 設計は曲線ドリフトを同定できない）。副センサー novelty d=+0.707107 は expected_sign と同方向の loose（tight 未満）で、本バッチはセル平均曲長がほぼ等値（曲長交絡が実質不在）という点でバッチ2と異なるが、これも確定的な grip 証拠には昇格しない。",
+  "batch2_relationship": "同方向（バッチ 2 で confounded だった dead が本バッチの canonical 条件下で再現された）。バッチ 2 の primary_verdict（confounded・非 canonical）は本バッチによって遡って変更しない — 本バッチが確定を与える立場（structure_expected_grip.json は変更不可）。",
+  "config_reflected": false
+}
