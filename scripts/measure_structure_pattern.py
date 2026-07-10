@@ -9,6 +9,11 @@
 判定ラベル（tight/loose/dead）はこのスクリプトの責務外 — 生成した数値に対して
 plan.yaml / order_sheet の事前登録規約を設計側が適用する。
 
+音声読み込みは canonical RPE 経路（`svp_rpe.io.audio_loader.load_audio`、
+`extract_physical_from_file` と同一条件 = 22050 リサンプル）で行う。novelty
+計器はサンプルレート感応であり、native SR（Suno mp3 の 44.1/48 kHz）のまま
+測ると extractor 系計測と別波形になるため（Codex #166 P2 第 3 ラウンド採用）。
+
 事前登録の短尺カットオフ（order_sheet §4: 曲長 30 秒未満は除外）は本 CLI が
 集計**前**に執行する（`--min-duration`、既定 30.0）。除外テイクは出力 YAML の
 `excluded:` 節に明示記録し、セルの受入が 0 本になったら fail-fast する
@@ -41,6 +46,7 @@ from svp_rpe.control.structure_pattern import (  # noqa: E402
     sign_pattern,
     split_section_rms,
 )
+from svp_rpe.io.audio_loader import load_audio  # noqa: E402
 from svp_rpe.rpe.structure_novelty import compute_novelty_curve, find_boundaries  # noqa: E402
 
 SCHEMA_VERSION = "1.0"
@@ -81,7 +87,11 @@ def _novelty_boundary_count(y: np.ndarray, sr: int) -> int:
 
 def measure_song(path: Path, prescribed: list[str] | None = None) -> SongMeasurement:
     prescribed_pattern = prescribed if prescribed is not None else PRESCRIBED_PATTERN
-    y, sr = librosa.load(str(path), sr=None, mono=True)
+    # canonical RPE 経路と同一の 22050 リサンプル波形で計測する
+    # （extract_physical_from_file と同じ load_audio 既定。Codex #166 P2 対応）。
+    audio = load_audio(path)
+    y = audio.y_mono
+    sr = audio.sr
     duration_sec = round(float(len(y) / sr), 4) if sr else 0.0
 
     # 事前登録規約: 符号化は線形 RMS の算術平均比較（dB は出力 YAML の表示用のみ）。

@@ -331,7 +331,8 @@ tight 昇格禁止）に従えば grip_class は loose 止まりであり、tigh
 相当の formal な充足確認が別途必要という点も変わらない。
 
 **K2-seg Suno バッチ 2（2026-07-10）**: `structure` 欄の実測は主センサー match_rate
-（low 0.75 / high 0.666667）が事前登録のヌル格下げ規則で **dead** に確定した
+（canonical 22050 計測で low 0.666667 / high 0.666667）が事前登録のヌル格下げ規則
+（境界一致で発火）により **dead** に確定した
 （当該 user-custom モデル限定の実測）。`device_profiles/suno.yaml` への
 `control_profile` 反映は行わない（dead ノブは config に載せない）。詳細と evidence は
 [`examples/control/k2_suno_segments/README.md`](../examples/control/k2_suno_segments/README.md)

@@ -441,19 +441,20 @@ fixture・判定結果の全詳細は
 [`examples/control/k2_suno_segments/README.md`](../examples/control/k2_suno_segments/README.md)
 「バッチ 2」節、生値は `structure_results_fixture.json` / `structure_expected_grip.json`。
 
-- **主センサー**: match_rate_low_cell=0.75 / match_rate_high_cell=0.666667。
+- **主センサー**: match_rate_low_cell=0.666667 / match_rate_high_cell=0.666667。
   規約上は 0.3–0.7 の loose 帯だが、事前登録済みの経験的ヌル格下げ規則
-  （high ≤ low → dead）が**初発動**し、**verdict: dead**。ヌル格下げ比較
-  （low > high）は order caveat 付き — 納品順（high 全件 → low 全件）が cell と
-  完全共線でバッチ内時間ドリフトと分離不能。dead 判定の核は順序に依存しない
-  high セル内の観測（処方 outro 静音化 0/4、下記）。
-- **副センサー**: novelty 境界数 d=+0.5855（loose・expected_sign 同方向）。ただし
+  （high ≤ low → dead）が**境界一致（0.666667 ≤ 0.666667）で初発動**し、
+  **verdict: dead** — high セルはヌル（low セル）に対する優位ゼロ。ヌル格下げ
+  比較は order caveat 付き — 納品順（high 全件 → low 全件）が cell と完全共線で
+  バッチ内時間ドリフトと分離不能。dead 判定の核は順序に依存しない high セル内の
+  観測（処方 outro 静音化 0/4、下記）。
+- **副センサー**: novelty 境界数 d=+0.4489（loose・expected_sign 同方向）。ただし
   セル平均曲長が low 54.5s vs high 94.7s と大きく異なり境界数は曲長と連動するため、
   **曲長交絡により structure 由来か曲長由来か確定不能**（事前登録外の caveat）。
-- **生成器デフォルト形状の発見**: 8 本中 7 本がセル無関係に `[low, high, high]`
-  （末尾に向けてエネルギーが上がる）を示し、high セルで意図した outro 静音化が
-  実現したテイクは 0/4。唯一の完全一致 `[low, high, low]` は low セルの
-  `low_2_1`（processed pattern への chance 一致 = 「ヌルの実在」を裏付ける）。
+- **生成器デフォルト形状の発見**: canonical 条件では完全一致ゼロ — 受入 8 本
+  全てが match_rate 2/3。第 1〜2 区間はセル無関係のデフォルト形状
+  `[low, high, ...]`（末尾に向けてエネルギーが上がる）で自動一致し、high セルで
+  意図した outro 静音化が実現したテイクは 0/4。
 - **同一バッチ隔離設計の初適用（限定付き）**: 経済化のためバッチ 1 `calm` を low
   セルへ再利用する案は「K2-seg Exclude 欄併用追試」節と同型の cross-batch 交絡を
   招くため設計段階で不採用にし、low/high とも新規生成した（AGENTS.md §8）。これに
@@ -462,12 +463,21 @@ fixture・判定結果の全詳細は
   逸脱により生成順が cell と完全共線で、セル間比較はバッチ内時間ドリフトと分離
   不能。次バッチ要件 = 交互生成順の遵守。
 - **計器知見**: 3 区間・処方 `[low, high, low]` は match_rate が
-  `{0, 0.333, 0.667, 1.0}` の 4 値しか取れず分解能が粗い（本バッチは 8/8 が
-  0.667 or 1.0）。次バッチは loud–quiet–loud 等、生成器デフォルト形状と正面から
-  対立する直交処方の方が判別力が高い可能性がある。
+  `{0, 0.333, 0.667, 1.0}` の 4 値しか取れず分解能が粗い（本バッチ canonical
+  計測は 8/8 が 0.667）。次バッチは loud–quiet–loud 等、生成器デフォルト形状と
+  正面から対立する直交処方の方が判別力が高い可能性がある。
+- **計器知見（knife-edge）**: 符号量子化は平均近傍で不安定 — `low_2_1` の
+  第 1 区間線形 RMS は 3 区間平均の ±0.06% 境界上にあり、リサンプル条件で符号
+  反転した（canonical 22050: 0.15277 vs 平均 0.15268 → high / native 48kHz:
+  0.153414 vs 平均 0.153506 → low）。margin（|RMS−mean|/mean）の併記が次バッチの
+  計器改善候補。
 - **計器定義（canonical）**: 符号化は**線形 RMS の算術平均**比較（発注書 §5
   verbatim）。dB 域での平均比較は線形域の幾何平均に相当する別統計であり採用しない
-  （`svp_rpe.control.structure_pattern`、dB は表示用のみ）。
+  （`svp_rpe.control.structure_pattern`、dB は表示用のみ）。計測波形は canonical
+  RPE 経路（`load_audio` の 22050 リサンプル）— 初回の native 48kHz 計測値
+  （match_rate_low_cell=0.75 / novelty_d=0.5855）は SR 是正（Codex #166 P2 第 3
+  ラウンド採用）で canonical 値へ全面差し替え済み（旧値は git 履歴・scratchpad
+  に保全）。
 
 ### K3: 直交性行列 — DCI/MIG の効果量再定式化
 

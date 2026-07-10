@@ -11,18 +11,19 @@
     "high",
     "low"
   ],
-  "match_rate_low_cell": 0.75,
+  "match_rate_low_cell": 0.666667,
   "match_rate_high_cell": 0.666667,
   "decision_rule": ">=0.7 tight / 0.3-0.7 loose / <0.3 dead（time_signature の match_rate 規約を流用、order_sheet §5 verbatim）。経験的ヌル格下げ規則: high セル match_rate <= low セル match_rate の場合は分類によらず dead へ格下げ（K3-1b の known-dead ヌル天井と同型）。",
   "null_gate_fired": true,
   "null_gate_condition": "match_rate_high_cell <= match_rate_low_cell",
   "primary_verdict": "dead",
-  "order_collinearity_caveat": "生成順（high 全件 → low 全件）が cell と完全共線（交互生成順の事前登録逸脱）のため、ヌル格下げ比較（low 0.75 > high 0.666667）はバッチ内時間ドリフトと分離不能。dead 判定の核は high セル内の観測（処方 outro 静音化の実現 0/4）で順序非依存（Codex #166 P2 指摘・採用。README バッチ 2 節参照）。",
+  "order_collinearity_caveat": "生成順（high 全件 → low 全件）が cell と完全共線（交互生成順の事前登録逸脱）のため、ヌル格下げ比較（low 0.666667 と high 0.666667 の境界一致）はバッチ内時間ドリフトと分離不能。dead 判定の核は high セル内の観測（処方 outro 静音化の実現 0/4）で順序非依存（Codex #166 P2 指摘・採用。README バッチ 2 節参照）。",
+  "measurement_note": "全計測（主センサー・novelty とも）は canonical 22050（svp_rpe.io.audio_loader.load_audio、extract_physical_from_file と同一条件）で実施。初回計測は native 48kHz で match_rate_low_cell=0.75（low_2_1 = [low,high,low] 1.0）・novelty_d=0.58554 だったが、SR 是正（Codex #166 P2 第 3 ラウンド採用）に伴い主センサー含め canonical 値へ全面差し替えた（低セル 0.75→0.666667・low_2_1 1.0→0.666667。旧値は git 履歴・scratchpad results_structure_2026-07-10.yaml に保全）。ヌル格下げは境界一致 0.666667 <= 0.666667 で発火し、verdict dead は不変。",
   "secondary": {
     "sensor": "novelty_boundaries",
     "expected_sign": 1,
     "low_counts": [
-      4,
+      5,
       4,
       7,
       4
@@ -33,13 +34,13 @@
       7,
       7
     ],
-    "low_mean": 4.75,
+    "low_mean": 5.0,
     "high_mean": 5.75,
-    "novelty_d": 0.58554,
+    "novelty_d": 0.448879,
     "classification": "loose",
     "decision_rule": "K 系列既定閾値 |d|>=0.8 tight / 0.2-0.8 loose / <0.2 dead・expected_sign +1（order_sheet §5 verbatim）。",
     "duration_confound_caveat": "セル平均曲長 low 54.5s vs high 94.7s・境界数は曲長連動・事前登録外につき確定不能（docs/controllability_poc.md バッチ2実測結果節 参照）。"
   },
-  "interpretation": "8 本中 7 本がセル無関係に [low, high, high] = 生成器デフォルト形状。high セルの outro 静音化 0/4。唯一の完全一致は low セル low_2_1（ヌルの実在）。",
+  "interpretation": "canonical 条件では完全一致ゼロ — 受入 8 本全てが match_rate 2/3（第 1〜2 区間は生成器デフォルト形状 [low, high, ...] で自動一致、outro 静音化は high セル 0/4）。high セルはヌル（low セル）に対する優位ゼロ。",
   "config_reflected": false
 }

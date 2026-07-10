@@ -3,10 +3,11 @@
 1. 純ロジック unit test — `scratchpad/k2seg_batch2/selftest_measure.py` の 3 ケースを
    合成 numpy 配列（決定論・音声合成なし）で再現する。
 2. fixture snapshot test — `examples/control/k2_suno_segments/structure_results_fixture.json`
-   / `structure_expected_grip.json` の canonical 値（match_rate 0.75 / 0.666667、
-   novelty_d 0.585540、null_gate_fired）をデータ内部の整合性として pin する
-   （測定値そのものの再解釈はしない — 判定は plan.yaml / order_sheet の事前登録
-   規約が担う）。
+   / `structure_expected_grip.json` の canonical 値（canonical 22050 計測:
+   match_rate 0.666667 / 0.666667、novelty_d 0.448879、null_gate_fired=境界一致
+   発火）をデータ内部の整合性として pin する（測定値そのものの再解釈はしない —
+   判定は plan.yaml / order_sheet の事前登録規約が担う。初回 native 48kHz 計測値
+   からの差し替え経緯は fixture measurement_note 参照）。
 
 音声合成・実抽出は使わないため slow マーカーは不要。
 """
@@ -140,8 +141,10 @@ def test_aggregate_match_rate_equals_per_song_average() -> None:
         mean = sum(song["match_rate"] for song in songs) / len(songs)
         assert fixture["aggregate"][key] == pytest.approx(mean, abs=1e-6)
 
-    # canonical 値（設計側事前計算との照合ゲート）。
-    assert fixture["aggregate"]["match_rate_low_cell"] == pytest.approx(0.75, abs=1e-6)
+    # canonical 値（canonical 22050 計測・設計側事前計算との照合ゲート）。
+    # 初回 native 48kHz 計測は low 0.75 だったが SR 是正で差し替え済み
+    # （fixture measurement_note 参照）。
+    assert fixture["aggregate"]["match_rate_low_cell"] == pytest.approx(0.666667, abs=1e-6)
     assert fixture["aggregate"]["match_rate_high_cell"] == pytest.approx(0.666667, abs=1e-6)
 
 
@@ -153,8 +156,9 @@ def test_novelty_d_recomputes_with_grip_effect_size() -> None:
     d = grip_effect_size(low_counts, high_counts)
 
     assert d == pytest.approx(fixture["aggregate"]["novelty_d"], abs=1e-4)
-    # canonical 値（設計側事前計算との照合ゲート）。
-    assert d == pytest.approx(0.585540, abs=1e-4)
+    # canonical 値（canonical 22050 計測・設計側検算 0.75 / 1.6708 = 0.4489 と照合）。
+    # 初回 native 48kHz 計測は 0.585540 だったが SR 是正で差し替え済み。
+    assert d == pytest.approx(0.448879, abs=1e-4)
 
 
 def test_null_gate_fired_derives_from_high_le_low_match_rate() -> None:
@@ -302,3 +306,26 @@ def test_cli_expected_per_cell_zero_disables_gate(tmp_path: Path) -> None:
     assert len(report["songs"]["low"]) == 1
     assert len(report["songs"]["high"]) == 1
     assert report["aggregate"]["match_rate_low_cell"] is not None
+
+
+def test_measure_song_resamples_to_canonical_rate(tmp_path: Path, monkeypatch) -> None:
+    """計測は canonical RPE 経路（load_audio の 22050 リサンプル）で行われる —
+    native SR（例 44100）の波形のまま novelty を測らないことを pin する。"""
+    import scripts.measure_structure_pattern as msp
+
+    wav = _write_wav(tmp_path / "native_44100.wav", 3.0, sr=44100)
+
+    loaded_srs: list[int] = []
+    real_load_audio = msp.load_audio
+
+    def spy(path, **kwargs):
+        audio = real_load_audio(path, **kwargs)
+        loaded_srs.append(audio.sr)
+        return audio
+
+    monkeypatch.setattr(msp, "load_audio", spy)
+    measurement = msp.measure_song(wav)
+
+    # 計測波形は canonical 22050 にリサンプルされている（native 44100 ではない）。
+    assert loaded_srs == [22050]
+    assert measurement.duration_sec == pytest.approx(3.0, abs=0.01)
