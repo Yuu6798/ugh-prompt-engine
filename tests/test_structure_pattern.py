@@ -212,7 +212,9 @@ def test_cli_min_duration_excludes_short_takes_before_aggregation(tmp_path: Path
     long_low = _write_wav(tmp_path / "long_low.wav", 10.0)
     long_high = _write_wav(tmp_path / "long_high.wav", 10.0)
 
-    report = build_report([short, long_low], [long_high], min_duration_sec=5.0)
+    report = build_report(
+        [short, long_low], [long_high], min_duration_sec=5.0, expected_per_cell=1
+    )
 
     # 短尺テイクは集計から外れ、excluded: 節に明示記録される。
     assert [song["path"] for song in report["songs"]["low"]] == [str(long_low)]
@@ -230,7 +232,7 @@ def test_cli_min_duration_zero_disables_cutoff(tmp_path: Path) -> None:
     short_low = _write_wav(tmp_path / "short_low.wav", 3.0)
     short_high = _write_wav(tmp_path / "short_high.wav", 3.0)
 
-    report = build_report([short_low], [short_high], min_duration_sec=0.0)
+    report = build_report([short_low], [short_high], min_duration_sec=0.0, expected_per_cell=1)
 
     assert [song["path"] for song in report["songs"]["low"]] == [str(short_low)]
     assert report["excluded"] == []
@@ -260,3 +262,43 @@ def test_cli_default_cutoff_applies_without_flag(tmp_path: Path) -> None:
     exit_code = main(["--low", str(short_low), "--high", str(short_high)])
 
     assert exit_code == 2
+
+
+def test_cli_default_expected_per_cell_is_preregistered_repetitions() -> None:
+    """batch-2 事前登録 repetitions（structure_plan.yaml: repetitions: 4）が CLI 既定値。"""
+    from scripts.measure_structure_pattern import DEFAULT_EXPECTED_PER_CELL
+
+    assert DEFAULT_EXPECTED_PER_CELL == 4
+
+
+def test_cli_fails_fast_on_expected_per_cell_mismatch(tmp_path: Path) -> None:
+    """カットオフ後の受入数が expected と不一致（n=1 vs expected 2）なら fail-fast。"""
+    from scripts.measure_structure_pattern import main
+
+    low = _write_wav(tmp_path / "low.wav", 10.0)
+    high = _write_wav(tmp_path / "high.wav", 10.0)
+
+    exit_code = main(
+        [
+            "--low", str(low),
+            "--high", str(high),
+            "--min-duration", "0",
+            "--expected-per-cell", "2",
+        ]
+    )
+
+    assert exit_code == 2
+
+
+def test_cli_expected_per_cell_zero_disables_gate(tmp_path: Path) -> None:
+    """--expected-per-cell 0 で明示無効化 — n=1 でも集計まで通る。"""
+    from scripts.measure_structure_pattern import build_report
+
+    low = _write_wav(tmp_path / "low.wav", 10.0)
+    high = _write_wav(tmp_path / "high.wav", 10.0)
+
+    report = build_report([low], [high], min_duration_sec=0.0, expected_per_cell=0)
+
+    assert len(report["songs"]["low"]) == 1
+    assert len(report["songs"]["high"]) == 1
+    assert report["aggregate"]["match_rate_low_cell"] is not None

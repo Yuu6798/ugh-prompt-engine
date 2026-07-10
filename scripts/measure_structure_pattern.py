@@ -12,7 +12,10 @@ plan.yaml / order_sheet の事前登録規約を設計側が適用する。
 事前登録の短尺カットオフ（order_sheet §4: 曲長 30 秒未満は除外）は本 CLI が
 集計**前**に執行する（`--min-duration`、既定 30.0）。除外テイクは出力 YAML の
 `excluded:` 節に明示記録し、セルの受入が 0 本になったら fail-fast する
-（silent corruption 防止、Codex #166 P2 採用）。
+（silent corruption 防止、Codex #166 P2 採用）。さらにカットオフ適用後の各セル
+受入数が事前登録 repetitions（`--expected-per-cell`、既定 4 =
+structure_plan.yaml）と不一致の場合も fail-fast し、n=3 や不揃い n の不完全
+バッチから schema-valid な集計値を黙って出さない（Codex #166 P2 第 2 ラウンド採用）。
 """
 from __future__ import annotations
 
@@ -46,6 +49,12 @@ PRESCRIBED_PATTERN: list[str] = ["low", "high", "low"]
 # batch-2 事前登録カットオフ（order_sheet §4: 構造が物理的に展開し得ない極端な
 # 短尺として曲長 30 秒未満のテイクを除外する）。--min-duration 0 で明示無効化可。
 DEFAULT_MIN_DURATION_SEC = 30.0
+
+# batch-2 事前登録 repetitions（structure_plan.yaml: repetitions: 4。除外発火時は
+# 同セル補充で R=4 を充足する規定）。カットオフ適用後の各セル受入数がこれと
+# 不一致なら fail-fast — n=3 や不揃い n の不完全バッチから schema-valid な
+# match_rate / novelty_d を黙って出さない。--expected-per-cell 0 で明示無効化可。
+DEFAULT_EXPECTED_PER_CELL = 4
 
 
 @dataclass(frozen=True)
@@ -133,17 +142,44 @@ def _apply_duration_cutoff(
     return accepted, excluded
 
 
+def _enforce_expected_per_cell(
+    cells: dict[str, list[Path]],
+    expected_per_cell: int,
+) -> None:
+    """カットオフ適用後の各セル受入数が事前登録 repetitions と一致するか検査する。
+
+    不一致セルがあれば ValueError で fail-fast（どのセルが n いくつかを明示）。
+    `expected_per_cell <= 0` は無効化。
+    """
+    if expected_per_cell <= 0:
+        return
+
+    mismatches = [
+        f"{cell} cell has {len(accepted)} accepted takes"
+        for cell, accepted in cells.items()
+        if len(accepted) != expected_per_cell
+    ]
+    if mismatches:
+        raise ValueError(
+            f"{'; '.join(mismatches)} after cutoff, expected {expected_per_cell} per cell "
+            "(preregistered repetitions — supply same-cell replacement takes, "
+            "or pass --expected-per-cell 0 to disable this gate)"
+        )
+
+
 def build_report(
     low_paths: list[Path],
     high_paths: list[Path],
     *,
     prescribed: list[str] | None = None,
     min_duration_sec: float = DEFAULT_MIN_DURATION_SEC,
+    expected_per_cell: int = DEFAULT_EXPECTED_PER_CELL,
 ) -> dict[str, Any]:
     prescribed_pattern = prescribed if prescribed is not None else PRESCRIBED_PATTERN
 
     low_accepted, low_excluded = _apply_duration_cutoff(low_paths, "low", min_duration_sec)
     high_accepted, high_excluded = _apply_duration_cutoff(high_paths, "high", min_duration_sec)
+    _enforce_expected_per_cell({"low": low_accepted, "high": high_accepted}, expected_per_cell)
 
     low_songs = measure_cell(low_accepted, prescribed_pattern)
     high_songs = measure_cell(high_accepted, prescribed_pattern)
@@ -223,6 +259,18 @@ def main(argv: list[str] | None = None) -> int:
             "0 で明示無効化）"
         ),
     )
+    parser.add_argument(
+        "--expected-per-cell",
+        type=int,
+        # batch-2 事前登録 repetitions（structure_plan.yaml: repetitions: 4）
+        default=DEFAULT_EXPECTED_PER_CELL,
+        metavar="N",
+        help=(
+            "カットオフ適用後の各セル受入数の要求値。不一致は fail-fast"
+            f"（既定: {DEFAULT_EXPECTED_PER_CELL} = structure_plan.yaml の"
+            "事前登録 repetitions。0 で明示無効化）"
+        ),
+    )
     args = parser.parse_args(argv)
 
     prescribed = [token.strip() for token in args.pattern.split(",")]
@@ -232,6 +280,7 @@ def main(argv: list[str] | None = None) -> int:
             args.high,
             prescribed=prescribed,
             min_duration_sec=args.min_duration,
+            expected_per_cell=args.expected_per_cell,
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)

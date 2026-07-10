@@ -233,7 +233,9 @@ low セルに再利用する経済化案は「追試: Exclude 欄併用」節と
 
 fixture は `structure_plan.yaml`（判定規約・プロンプト verbatim）、
 `structure_results_fixture.json`（per-song 計測値 + aggregate + 除外テイク記録）、
-`structure_expected_grip.json`（判定結果）。比較器本体（比例分割 RMS 符号パターン）は
+`structure_expected_grip.json`（判定結果）、
+`structure_batch_metadata_2026-07-10.yaml`（ユーザー申告の生成メタデータ一次記録）。
+比較器本体（比例分割 RMS 符号パターン）は
 `src/svp_rpe/control/structure_pattern.py` に repo 昇格し、
 `tests/test_structure_pattern.py` が fixture→判定の内部整合をスナップショット
 固定する。
@@ -290,7 +292,8 @@ high セルで意図した outro 静音化が実現したテイクは **0/4**。
 
 - **(1) モデル/生成条件はユーザー申告**: バッチ 1 honesty (g) と同型。当該
   カスタムモデル下の実測であり、Suno 標準モデルへの一般化は未検証
-  （`audio/batch_metadata_2026-07-10.yaml` honesty 節参照）。
+  （ユーザー申告の一次記録は本ディレクトリの
+  `structure_batch_metadata_2026-07-10.yaml` honesty 節参照）。
 - **(2) stock モデルへの一般化は未検証**（(1) と表裏）。
 - **(3) low/high 交互生成順は未実施（順序が cell と完全共線）**: order_sheet §2-4 は
   `low_01 → high_01 → low_02 → ...` の交互生成を指定していたが、納品順は
