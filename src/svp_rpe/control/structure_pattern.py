@@ -25,6 +25,12 @@ import numpy as np
 # dBFS 変換のフロア（無音区間で log(0) にならないようにするガード）。
 _RMS_DB_FLOOR = 1e-6
 
+# knife-edge 判定の閾値（K2-seg バッチ 3 発注書 §5, 2026-07-10 事前登録）。
+# バッチ 2 実測 knife-edge（low_2_1 第 1 区間・3 区間平均の ±0.06% 境界上・
+# リサンプル条件で符号反転）の約 8 倍の保守マージン。区間 margin の絶対値が
+# これ未満なら knife-edge（符号が計測条件で反転し得る不安定区間）とみなす。
+KNIFE_EDGE_MARGIN = 0.005
+
 
 def split_section_rms(y: np.ndarray, n_sections: int) -> list[float]:
     """トラックをサンプル数で `n_sections` 等分し、各区間の一括 RMS（線形）を返す。
@@ -64,6 +70,27 @@ def sign_pattern(rms_linear: Sequence[float]) -> list[str]:
         raise ValueError("rms_linear must be non-empty")
     average = sum(values) / len(values)
     return ["high" if value >= average else "low" for value in values]
+
+
+def section_margins(rms_linear: Sequence[float]) -> list[float]:
+    """各区間の線形 RMS が算術平均からどれだけ離れているかを相対値で返す。
+
+    `(value - average) / average` — `sign_pattern` の符号化を支える連続量で、
+    knife-edge（符号が計測条件で反転し得る境界上の区間）を検出するための
+    計器。**計器であって verdict なし** — tight/loose/dead の判定はここでは
+    行わない（`KNIFE_EDGE_MARGIN` との比較は呼び出し側の責務）。
+
+    算術平均が 0 の縮退時は全区間 0.0 を返す（`sign_pattern` のゼロ分散
+    ケースに揃えた安全側の扱い — ゼロ除算を避けつつ「差なし」を表現する）。
+    """
+
+    values = list(rms_linear)
+    if not values:
+        raise ValueError("rms_linear must be non-empty")
+    average = sum(values) / len(values)
+    if average == 0.0:
+        return [0.0 for _ in values]
+    return [(value - average) / average for value in values]
 
 
 def pattern_match_rate(observed: Sequence[str], prescribed: Sequence[str]) -> float:

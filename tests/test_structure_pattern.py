@@ -18,11 +18,14 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import yaml
 
 from svp_rpe.control import grip_effect_size
 from svp_rpe.control.structure_pattern import (
+    KNIFE_EDGE_MARGIN,
     pattern_match_rate,
     rms_to_db,
+    section_margins,
     sign_pattern,
     split_section_rms,
 )
@@ -113,6 +116,45 @@ def test_split_section_rms_returns_linear_rms() -> None:
 def test_pattern_match_rate_rejects_length_mismatch() -> None:
     with pytest.raises(ValueError):
         pattern_match_rate(["low", "high"], PRESCRIBED_PATTERN)
+
+
+# ---------------------------------------------------------------------------
+# section_margins / KNIFE_EDGE_MARGIN（K2-seg バッチ 3 事前登録・knife-edge 計器）
+# ---------------------------------------------------------------------------
+
+
+def test_section_margins_computes_relative_deviation_from_arithmetic_mean() -> None:
+    """[0.1, 0.8, 0.1]: 算術平均 1/3 基準の (value - mean) / mean。"""
+    margins = section_margins([0.1, 0.8, 0.1])
+
+    assert margins == pytest.approx([-0.7, 1.4, -0.7], abs=1e-6)
+
+
+def test_section_margins_degenerate_zero_average_returns_all_zero() -> None:
+    """全区間 0（算術平均も 0）の縮退時は安全側で全要素 0.0（ゼロ除算回避）。"""
+    margins = section_margins([0.0, 0.0, 0.0])
+
+    assert margins == [0.0, 0.0, 0.0]
+
+
+def test_section_margins_rejects_empty_sequence() -> None:
+    with pytest.raises(ValueError):
+        section_margins([])
+
+
+def test_knife_edge_margin_boundary_is_exclusive() -> None:
+    """|margin| がちょうど KNIFE_EDGE_MARGIN (0.005) は非フラグ、0.0049 はフラグ。"""
+    assert KNIFE_EDGE_MARGIN == pytest.approx(0.005)
+
+    at_boundary = 0.005
+    just_inside = 0.0049
+
+    assert not (abs(at_boundary) < KNIFE_EDGE_MARGIN)
+    assert abs(just_inside) < KNIFE_EDGE_MARGIN
+
+    # 負方向も同様に境界排他的。
+    assert not (abs(-at_boundary) < KNIFE_EDGE_MARGIN)
+    assert abs(-just_inside) < KNIFE_EDGE_MARGIN
 
 
 # ---------------------------------------------------------------------------
@@ -314,6 +356,103 @@ def test_cli_expected_per_cell_zero_disables_gate(tmp_path: Path) -> None:
     assert len(report["songs"]["low"]) == 1
     assert len(report["songs"]["high"]) == 1
     assert report["aggregate"]["match_rate_low_cell"] is not None
+
+
+def _write_constant_wav(path: Path, duration_sec: float, sr: int = 22050, amplitude: float = 0.3) -> Path:
+    """定振幅（乱数なし）の合成 wav — 全区間 RMS が等しい縮退ケースを作るための helper。"""
+    import soundfile as sf
+
+    y = np.full(int(duration_sec * sr), amplitude, dtype=np.float32)
+    sf.write(path, y, sr)
+    return path
+
+
+def test_measure_song_output_carries_section_margins_and_knife_edge(tmp_path: Path) -> None:
+    """CLI 出力（`measure_song`）に `section_margins` / `knife_edge_sections` が乗り、
+    既存フィールド（sign_pattern / match_rate 等）は不変であること。"""
+    from scripts.measure_structure_pattern import measure_song
+
+    wav = _write_wav(tmp_path / "song.wav", 10.0)
+    measurement = measure_song(wav)
+
+    # 新規フィールドが乗る。
+    assert len(measurement.section_margins) == len(measurement.sign_pattern)
+    assert all(isinstance(v, float) for v in measurement.section_margins)
+    assert all(isinstance(i, int) for i in measurement.knife_edge_sections)
+    assert all(0 <= i < len(measurement.section_margins) for i in measurement.knife_edge_sections)
+
+    # 既存フィールドは match_rate 定義通りのまま（margin 追加で変わらない）。
+    from svp_rpe.control.structure_pattern import pattern_match_rate as _match_rate
+
+    assert measurement.match_rate == pytest.approx(
+        _match_rate(measurement.sign_pattern, PRESCRIBED_PATTERN), abs=1e-6
+    )
+
+
+def test_measure_song_degenerate_constant_amplitude_margins_near_zero_and_all_knife_edge(
+    tmp_path: Path,
+) -> None:
+    """全区間同振幅（縮退）: margins ≈ 0 かつ全区間が knife-edge フラグされる。"""
+    from scripts.measure_structure_pattern import measure_song
+
+    wav = _write_constant_wav(tmp_path / "constant.wav", 9.0)
+    measurement = measure_song(wav)
+
+    assert measurement.section_margins == pytest.approx([0.0, 0.0, 0.0], abs=1e-4)
+    assert measurement.knife_edge_sections == [0, 1, 2]
+
+
+def test_knife_edge_detection_uses_raw_margins_not_rounded(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """knife-edge 判定は丸め**前**の生 margin ベース（PR#167 P2 採用を pin）。
+
+    合成 RMS [1.0049996, 1.5, 0.4950004]（算術平均 1.0）→ 第 1 区間の生 margin は
+    0.0049996 < 0.005 でフラグ対象だが、6 桁丸め後は 0.005000 となり丸め値で
+    判定するとフラグ漏れする。YAML 表示値は丸めのまま 0.005 であることも固定。
+    """
+    import scripts.measure_structure_pattern as msp
+
+    wav = _write_wav(tmp_path / "boundary.wav", 10.0)
+    synthetic_rms = [1.0049996, 1.5, 0.4950004]
+    monkeypatch.setattr(msp, "split_section_rms", lambda y, n: list(synthetic_rms))
+
+    measurement = msp.measure_song(wav)
+
+    # 生 margin 0.0049996 の第 1 区間がフラグされる（丸め値 0.005000 なら漏れる）。
+    assert measurement.knife_edge_sections == [0]
+    # 表示用の section_margins は 6 桁丸めのまま（0.0049996 → 0.005）。
+    assert measurement.section_margins[0] == pytest.approx(0.005, abs=1e-9)
+    # 生値ベースであることのクロスチェック: 丸め後の値で判定すると空になる。
+    rounded_based = [
+        i for i, m in enumerate(measurement.section_margins) if abs(m) < KNIFE_EDGE_MARGIN
+    ]
+    assert rounded_based == []
+
+
+def test_build_report_yaml_includes_margin_fields_without_altering_existing(
+    tmp_path: Path,
+) -> None:
+    """render_yaml 経由の CLI 出力に両フィールドが乗り、match_rate/aggregate は不変。"""
+    from scripts.measure_structure_pattern import build_report, render_yaml
+
+    low = _write_wav(tmp_path / "low.wav", 10.0)
+    high = _write_wav(tmp_path / "high.wav", 10.0)
+
+    report = build_report([low], [high], min_duration_sec=0.0, expected_per_cell=1)
+    rendered = render_yaml(report)
+    reparsed = yaml.safe_load(rendered)
+
+    for cell in ("low", "high"):
+        for song in reparsed["songs"][cell]:
+            assert "section_margins" in song
+            assert "knife_edge_sections" in song
+            assert len(song["section_margins"]) == len(song["sign_pattern"])
+
+    # 既存フィールド（aggregate / sign_pattern / match_rate）は従来どおり存在し数値も揺れない。
+    assert reparsed["aggregate"]["match_rate_low_cell"] == report["aggregate"]["match_rate_low_cell"]
+    assert reparsed["aggregate"]["match_rate_high_cell"] == report["aggregate"]["match_rate_high_cell"]
+    assert reparsed["excluded"] == []
 
 
 def test_measure_song_resamples_to_canonical_rate(tmp_path: Path, monkeypatch) -> None:
