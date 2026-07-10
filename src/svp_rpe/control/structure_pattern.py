@@ -6,6 +6,11 @@ compose が送出する structure セクション記述（"intro: ...; role=..."
 固定結論・narrative はこのモジュールの責務外で、処方パターンとの一致率のみを
 返す（判定は order_sheet / plan.yaml の事前登録規約を設計側が適用する）。
 
+事前登録規約（発注書 §5 verbatim）: 各区間の **RMS（線形振幅）** を全区間 RMS の
+**算術平均**と比較して high/low に符号化する。dB 域での平均比較は線形域の
+幾何平均に相当する**別統計**であり、本計器では採用しない（dB は表示用のみ、
+`rms_to_db` ヘルパーを呼び出し側で適用する）。
+
 `examples/control/k2_suno_segments/structure_plan.yaml` /
 `docs/controllability_poc.md` K2-seg バッチ 2 節を参照。
 scratchpad 版 `measure_structure_batch2.py`（K2-seg バッチ 2 発注）の比較器部分を
@@ -22,10 +27,11 @@ _RMS_DB_FLOOR = 1e-6
 
 
 def split_section_rms(y: np.ndarray, n_sections: int) -> list[float]:
-    """トラックをサンプル数で `n_sections` 等分し、各区間の一括 RMS を dB で返す。
+    """トラックをサンプル数で `n_sections` 等分し、各区間の一括 RMS（線形）を返す。
 
     絶対秒でなく相対位置での等分（曲長が生成器依存で統制不能なため、
-    比例分割で吸収する）。
+    比例分割で吸収する）。返り値は線形振幅 RMS — `sign_pattern` の入力に
+    そのまま使う。表示用の dB 変換は `rms_to_db` を呼び出し側で適用する。
     """
     if n_sections <= 0:
         raise ValueError("n_sections must be positive")
@@ -34,23 +40,28 @@ def split_section_rms(y: np.ndarray, n_sections: int) -> list[float]:
     values: list[float] = []
     for section in sections:
         if section.size == 0:
-            values.append(_rms_to_db(0.0))
+            values.append(0.0)
             continue
-        rms = float(np.sqrt(np.mean(np.square(section))))
-        values.append(_rms_to_db(rms))
+        values.append(float(np.sqrt(np.mean(np.square(section)))))
     return values
 
 
-def _rms_to_db(rms: float) -> float:
+def rms_to_db(rms: float) -> float:
+    """線形 RMS を dBFS へ変換する表示用ヘルパー（比較には使わない）。"""
+
     return round(20.0 * float(np.log10(max(rms, _RMS_DB_FLOOR))), 4)
 
 
-def sign_pattern(rms_db: Sequence[float]) -> list[str]:
-    """区間 dB 値を全区間の算術平均と比較し high/low に符号化する。"""
+def sign_pattern(rms_linear: Sequence[float]) -> list[str]:
+    """線形 RMS 値を全区間の算術平均と比較し high/low に符号化する。
 
-    values = list(rms_db)
+    事前登録規約: **線形 RMS の算術平均**比較（発注書 §5 verbatim）。
+    dB 域での平均比較は線形域の幾何平均に相当する別統計であり、ここでは行わない。
+    """
+
+    values = list(rms_linear)
     if not values:
-        raise ValueError("rms_db must be non-empty")
+        raise ValueError("rms_linear must be non-empty")
     average = sum(values) / len(values)
     return ["high" if value >= average else "low" for value in values]
 

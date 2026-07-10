@@ -21,6 +21,7 @@ import pytest
 from svp_rpe.control import grip_effect_size
 from svp_rpe.control.structure_pattern import (
     pattern_match_rate,
+    rms_to_db,
     sign_pattern,
     split_section_rms,
 )
@@ -54,8 +55,8 @@ def _synth_track(amplitudes: list[float], n_per_section: int = 1000) -> np.ndarr
 
 def test_case_a_quiet_loud_quiet_is_full_match() -> None:
     y = _synth_track([0.1, 0.8, 0.1])
-    section_rms_db = split_section_rms(y, 3)
-    observed = sign_pattern(section_rms_db)
+    section_rms = split_section_rms(y, 3)
+    observed = sign_pattern(section_rms)
 
     assert observed == ["low", "high", "low"]
     assert pattern_match_rate(observed, PRESCRIBED_PATTERN) == pytest.approx(1.0)
@@ -63,8 +64,8 @@ def test_case_a_quiet_loud_quiet_is_full_match() -> None:
 
 def test_case_b_constant_amplitude_is_degenerate_not_full_match() -> None:
     y = _synth_track([0.4, 0.4, 0.4])
-    section_rms_db = split_section_rms(y, 3)
-    observed = sign_pattern(section_rms_db)
+    section_rms = split_section_rms(y, 3)
+    observed = sign_pattern(section_rms)
 
     # 縮退ケース: 値そのものは規定しないが、1.0（完全一致）にはならないことのみ確認する。
     assert pattern_match_rate(observed, PRESCRIBED_PATTERN) != pytest.approx(1.0)
@@ -72,11 +73,40 @@ def test_case_b_constant_amplitude_is_degenerate_not_full_match() -> None:
 
 def test_case_c_loud_quiet_loud_is_zero_match() -> None:
     y = _synth_track([0.8, 0.1, 0.8])
-    section_rms_db = split_section_rms(y, 3)
-    observed = sign_pattern(section_rms_db)
+    section_rms = split_section_rms(y, 3)
+    observed = sign_pattern(section_rms)
 
     assert observed == ["high", "low", "high"]
     assert pattern_match_rate(observed, PRESCRIBED_PATTERN) == pytest.approx(0.0)
+
+
+def test_sign_pattern_enforces_linear_domain_arithmetic_mean() -> None:
+    """事前登録規約は線形 RMS の算術平均比較 — dB 域平均（=線形域の幾何平均）とは
+    別統計であることを、両定義の符号が割れる合成ケースで enforce する。
+
+    線形 RMS [0.1, 0.32, 0.9]: 算術平均 0.44 → [low, low, high]。
+    dB 域 [-20.0, -9.897, -0.915]: 平均 -10.271 → [low, high, high]（中央区間が割れる）。
+    """
+    rms_linear = [0.1, 0.32, 0.9]
+
+    observed = sign_pattern(rms_linear)
+    assert observed == ["low", "low", "high"]
+
+    # dB 域平均比較なら中央区間が high になる（別統計であることの実証）。
+    rms_db = [rms_to_db(value) for value in rms_linear]
+    db_mean = sum(rms_db) / len(rms_db)
+    db_pattern = ["high" if value >= db_mean else "low" for value in rms_db]
+    assert db_pattern == ["low", "high", "high"]
+    assert db_pattern != observed
+
+
+def test_split_section_rms_returns_linear_rms() -> None:
+    """`split_section_rms` は線形 RMS（dB でない）を返す — 定振幅なら振幅そのもの。"""
+    y = _synth_track([0.1, 0.8, 0.1])
+    section_rms = split_section_rms(y, 3)
+
+    assert section_rms == pytest.approx([0.1, 0.8, 0.1])
+    assert rms_to_db(section_rms[0]) == pytest.approx(-20.0, abs=1e-3)
 
 
 def test_pattern_match_rate_rejects_length_mismatch() -> None:

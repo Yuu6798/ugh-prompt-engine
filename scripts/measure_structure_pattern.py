@@ -29,6 +29,7 @@ if str(SRC) not in sys.path:
 from svp_rpe.control import grip_effect_size  # noqa: E402
 from svp_rpe.control.structure_pattern import (  # noqa: E402
     pattern_match_rate,
+    rms_to_db,
     sign_pattern,
     split_section_rms,
 )
@@ -65,8 +66,10 @@ def measure_song(path: Path, prescribed: list[str] | None = None) -> SongMeasure
     y, sr = librosa.load(str(path), sr=None, mono=True)
     duration_sec = round(float(len(y) / sr), 4) if sr else 0.0
 
-    section_rms_db = split_section_rms(y, len(prescribed_pattern))
-    observed_pattern = sign_pattern(section_rms_db)
+    # 事前登録規約: 符号化は線形 RMS の算術平均比較（dB は出力 YAML の表示用のみ）。
+    section_rms = split_section_rms(y, len(prescribed_pattern))
+    section_rms_db = [rms_to_db(value) for value in section_rms]
+    observed_pattern = sign_pattern(section_rms)
     match = round(pattern_match_rate(observed_pattern, prescribed_pattern), 6)
     novelty_boundary_count = _novelty_boundary_count(y, sr)
 

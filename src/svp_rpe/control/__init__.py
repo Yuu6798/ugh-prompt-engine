@@ -32,6 +32,7 @@ from .orthogonality import (
 )
 from .structure_pattern import (
     pattern_match_rate,
+    rms_to_db,
     sign_pattern,
     split_section_rms,
 )
@@ -63,6 +64,7 @@ __all__ = [
     "noise_margin",
     "normalized_entropy",
     "pattern_match_rate",
+    "rms_to_db",
     "sign_pattern",
     "split_section_rms",
 ]
