@@ -442,12 +442,17 @@ fixture・判定結果の全詳細は
 「バッチ 2」節、生値は `structure_results_fixture.json` / `structure_expected_grip.json`。
 
 - **主センサー**: match_rate_low_cell=0.666667 / match_rate_high_cell=0.666667。
-  規約上は 0.3–0.7 の loose 帯だが、事前登録済みの経験的ヌル格下げ規則
-  （high ≤ low → dead）が**境界一致（0.666667 ≤ 0.666667）で初発動**し、
-  **verdict: dead** — high セルはヌル（low セル）に対する優位ゼロ。ヌル格下げ
-  比較は order caveat 付き — 納品順（high 全件 → low 全件）が cell と完全共線で
-  バッチ内時間ドリフトと分離不能。dead 判定の核は順序に依存しない high セル内の
-  観測（処方 outro 静音化 0/4、下記）。
+  事前登録済みの経験的ヌル格下げ規則（high ≤ low → dead）が**境界一致
+  （0.666667 ≤ 0.666667）で初発動**し、機械適用の結果は dead
+  （`preregistered_rule_outcome` として記録保全）。ただし **primary verdict は
+  「測定済みだが confounded・未確定」**（Codex #166 P2 第 4 ラウンド採用・
+  #164 Exclude 追試と同じ棚）: ヌル格下げは cross-cell 比較であり、納品順
+  （high 全件 → low 全件）が cell と完全共線でバッチ内時間ドリフトと分離不能。
+  high セル単独の規約適用は loose だが、low セル（ヌル）同値 = chance floor に
+  つき単独読みも grip の証拠にならない。処方非実現の記述的証拠（outro 静音化
+  0/4・完全一致ゼロ、順序非依存）は保持するが、これを verdict にする規則は
+  事前登録外につき確定判定には用いない。**確定は交互生成順（またはバッチ内順序
+  ランダム化）の isolated 追試待ち**。
 - **副センサー**: novelty 境界数 d=+0.4489（loose・expected_sign 同方向）。ただし
   セル平均曲長が low 54.5s vs high 94.7s と大きく異なり境界数は曲長と連動するため、
   **曲長交絡により structure 由来か曲長由来か確定不能**（事前登録外の caveat）。
@@ -461,7 +466,9 @@ fixture・判定結果の全詳細は
   より **#164 型の cross-batch 再利用交絡は回避**（同一バッチ・同一モデル・同日）。
   ただし「交絡ゼロ」ではない（Codex #166 P2 指摘・採用）: 交互生成順の事前登録
   逸脱により生成順が cell と完全共線で、セル間比較はバッチ内時間ドリフトと分離
-  不能。次バッチ要件 = 交互生成順の遵守。
+  不能 — この共線により primary verdict は結局 confounded・未確定へ格下げされた
+  （cross-batch 交絡を設計で回避しても、バッチ内順序共線という別の交絡が同じ
+  帰結を生んだ）。次バッチ要件 = 交互生成順の遵守（確定判定の前提条件）。
 - **計器知見**: 3 区間・処方 `[low, high, low]` は match_rate が
   `{0, 0.333, 0.667, 1.0}` の 4 値しか取れず分解能が粗い（本バッチ canonical
   計測は 8/8 が 0.667）。次バッチは loud–quiet–loud 等、生成器デフォルト形状と

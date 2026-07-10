@@ -331,10 +331,13 @@ tight 昇格禁止）に従えば grip_class は loose 止まりであり、tigh
 相当の formal な充足確認が別途必要という点も変わらない。
 
 **K2-seg Suno バッチ 2（2026-07-10）**: `structure` 欄の実測は主センサー match_rate
-（canonical 22050 計測で low 0.666667 / high 0.666667）が事前登録のヌル格下げ規則
-（境界一致で発火）により **dead** に確定した
-（当該 user-custom モデル限定の実測）。`device_profiles/suno.yaml` への
-`control_profile` 反映は行わない（dead ノブは config に載せない）。詳細と evidence は
+（canonical 22050 計測で low 0.666667 / high 0.666667）に事前登録のヌル格下げ規則が
+境界一致で発火（機械適用の結果 dead は `preregistered_rule_outcome` として記録保全）
+したが、この cross-cell 比較は生成順共線（high 全件 → low 全件）と分離不能のため
+**「測定済みだが confounded・未確定」**（#164 Exclude 追試と同じ棚。確定は交互生成順
+の isolated 追試待ち。当該 user-custom モデル限定の実測）。処方非実現の記述的証拠
+（outro 静音化 0/4）は順序非依存の観測として保持。`device_profiles/suno.yaml` への
+`control_profile` 反映は行わない（未確定ノブは config に載せない）。詳細と evidence は
 [`examples/control/k2_suno_segments/README.md`](../examples/control/k2_suno_segments/README.md)
 バッチ 2 節 / [`controllability_poc.md`](controllability_poc.md) K2-seg バッチ 2
 実測結果小節を参照。

@@ -24,12 +24,15 @@ preregistered_date: "2026-07-10"  # 発注書発行日 = 判定規約の事前�
 # 発注書 §2-2: Exclude Styles 欄は全セル空で統一（ユーザー申告）。
 exclude_styles: ""
 # honesty（順序共線）: 発注書 §2-4 の low/high 交互生成順は未実施（納品順は high
-# 全件 → low 全件）。生成順が cell と完全共線のため、セル間比較（ヌル格下げの
-# low > high）はバッチ内時間ドリフトと分離不能（README バッチ 2 節・
-# structure_expected_grip.json の order_collinearity_caveat 参照）。
+# 全件 → low 全件）。生成順が cell と完全共線のため、セル間比較（ヌル格下げ）は
+# バッチ内時間ドリフトと分離不能（README バッチ 2 節・
+# structure_expected_grip.json の order_collinearity_caveat / confound_note 参照）。
 order_collinearity_honesty: >-
-  交互生成順（事前登録）逸脱により生成順と cell が完全共線。ヌル格下げ比較は
-  時間ドリフトと分離不能、dead 判定の核は high セル内 outro 静音化 0/4（順序非依存）。
+  交互生成順（事前登録）逸脱により生成順と cell が完全共線。ヌル格下げ比較（cross-cell）
+  は時間ドリフトと分離不能のため primary verdict は confounded・未確定
+  （機械適用の結果 dead は preregistered_rule_outcome として記録保全）。
+  処方非実現の記述的証拠（high セル outro 静音化 0/4、順序非依存）は保持するが、
+  verdict にする規則は事前登録外につき確定判定には用いない。
 
 cells:
   - name: low

@@ -162,6 +162,9 @@ def test_novelty_d_recomputes_with_grip_effect_size() -> None:
 
 
 def test_null_gate_fired_derives_from_high_le_low_match_rate() -> None:
+    """ヌル格下げ規則の機械適用（preregistered_rule_outcome=dead）と、生成順共線に
+    よる primary verdict の confounded 格下げ（PR#166 P2 第 4 ラウンド採用）を pin。
+    """
     fixture = _load_fixture()
     expected = _load_expected_grip()
 
@@ -170,7 +173,12 @@ def test_null_gate_fired_derives_from_high_le_low_match_rate() -> None:
 
     assert expected["null_gate_fired"] == (high <= low)
     assert expected["null_gate_fired"] is True
-    assert expected["primary_verdict"] == "dead"
+    # 事前登録規約の機械適用は dead（記録保全）だが、cross-cell 比較が生成順共線と
+    # 分離不能のため primary verdict は confounded・非 canonical。
+    assert expected["preregistered_rule_outcome"] == "dead"
+    assert expected["primary_verdict"] == "confounded"
+    assert expected["verdict_canonical"] is False
+    assert expected["high_cell_only_reading"] == "loose"
 
 
 def test_excluded_takes_are_recorded_with_reason() -> None:

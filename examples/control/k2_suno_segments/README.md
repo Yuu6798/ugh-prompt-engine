@@ -250,14 +250,18 @@ canonical 値へ全面差し替えた（旧値は git 履歴・scratchpad
 `results_structure_2026-07-10.yaml` に保全）。
 
 **主センサー（比例分割 RMS 符号パターン一致率）**: low セル match_rate=**0.666667**、
-high セル match_rate=**0.666667**。規約上は 0.3–0.7 で loose 帯だが、
-事前登録済みの経験的ヌル格下げ規則（high セル match_rate ≤ low セル match_rate）
-が**境界一致（0.666667 ≤ 0.666667）で発火**し、**verdict: dead** — high セルは
-ヌル（low セル）に対する優位ゼロ。ただしヌル格下げ比較自体は **order caveat
-付き**: 納品順が high 全件 → low 全件で cell と完全共線のため、セル間比較は
-バッチ内時間ドリフトと分離不能（honesty (3) 参照）。**dead 判定の核は high セル内
-の観測** — 処方した outro 静音化の実現が **0/4**（下記「解釈」）というセル内事実
-であり、これは順序ドリフトでは説明できない。
+high セル match_rate=**0.666667**。事前登録済みの経験的ヌル格下げ規則（high セル
+match_rate ≤ low セル match_rate）が**境界一致（0.666667 ≤ 0.666667）で発火**し、
+機械適用の結果は **dead**（`preregistered_rule_outcome` として記録保全）。
+ただし **primary verdict は「測定済みだが confounded・未確定」**（Codex #166 P2
+第 4 ラウンド採用・#164 Exclude 追試と同じ棚）: ヌル格下げは cross-cell 比較で
+あり、納品順が high 全件 → low 全件で cell と完全共線のため、バッチ内時間
+ドリフトと分離不能（honesty (3) 参照）。high セル単独への規約適用は 0.666667 →
+loose だが、low セル（ヌル）が同値 = chance floor のため単独読みを grip の証拠に
+することもできない。処方 outro 静音化の実現 **0/4**・完全一致ゼロ（下記「解釈」）
+は処方非実現の**記述的証拠**（順序非依存）だが、これを verdict にする規則は
+事前登録外につき確定判定には用いない。**確定には交互生成順（またはバッチ内順序
+ランダム化）を遵守した isolated 追試が必要**。
 
 **副センサー（novelty 境界数の d）**: low=[5, 4, 7, 4]（mean 5.0）、
 high=[3, 6, 7, 7]（mean 5.75）、pooled-SD Cohen's d = **+0.4489**（loose 帯、
@@ -280,10 +284,12 @@ low 54.5s vs high 94.7s と大きく異なり、境界数は曲長と連動す�
 （Codex #166 P2 指摘・採用）: 生成順が high 全件 → low 全件で **cell と完全共線**
 （交互生成順の事前登録逸脱、honesty (3)）のため、ヌル格下げ比較
 （low 0.666667 と high 0.666667 の境界一致）はバッチ内時間ドリフトと分離不能。
-dead 判定は維持する
-が、その核は順序に依存しない high セル内の観測（処方 outro 静音化 0/4）であり、
-ヌル格下げ発動は order caveat 付きの記録である。**次バッチ要件: 交互生成順
-（low_01 → high_01 → ...）の遵守**（order_sheet §2-4 相当を再掲・執行）。
+この共線により本バッチの primary verdict も結局 **「測定済みだが confounded・
+未確定」**（#164 と同じ棚）に格下げされた — cross-batch 再利用交絡を設計で
+回避しても、バッチ内の生成順共線という別の交絡が同じ帰結を生んだ。処方非実現の
+記述的証拠（outro 静音化 0/4・完全一致ゼロ、順序非依存）は保持する。
+**次バッチ要件: 交互生成順（low_01 → high_01 → ...）の遵守**
+（order_sheet §2-4 相当を再掲・執行。これが確定判定の前提条件）。
 
 ### 計器知見（次バッチへの申し送り）
 
@@ -320,8 +326,9 @@ dead 判定は維持する
 - **(6) 初回計測は native 48kHz（SR 是正で canonical 値へ差し替え済み）**: 初回
   計測は native SR のまま行われ、`low_2_1` の第 1 区間が knife-edge（線形 RMS が
   3 区間平均の ±0.06% 境界上）だったため主センサー値がリサンプル条件で反転した
-  （0.75/1.0 → 0.666667/0.666667。verdict dead は不変・計器知見参照）。現 fixture
-  は canonical 22050 計測値のみを収載し、旧値は git 履歴と scratchpad に保全。
+  （0.75/1.0 → 0.666667/0.666667。機械適用のヌル格下げ発火は不変・計器知見参照）。
+  現 fixture は canonical 22050 計測値のみを収載し、旧値は git 履歴と scratchpad
+  に保全。
 - **除外テイク**: `high_1_1`（18.5s）/ `low_2`（29.0s）が事前登録の <30s
   除外規則に該当し除外。同日・同モデルで補充テイク `high_2_2`（94.1s）/
   `low_2_2`（37.3s）を生成し R=4 を充足した（`structure_results_fixture.json`
@@ -332,4 +339,4 @@ dead 判定は維持する
 - `docs/controllability_poc.md` K2-seg 節（Suno 転移結果表、バッチ 2 実測結果小節）
 - `docs/musicgen_backend.md` §7.6（キュー解消の起点、追試は交絡により未確定
   — honesty (f) 参照）
-- `docs/control_profile.md`（structure 欄 dead 判定の反映方針）
+- `docs/control_profile.md`（structure 欄の測定記録と config 非反映の方針）
