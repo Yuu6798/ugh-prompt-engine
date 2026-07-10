@@ -1,0 +1,175 @@
+{
+  "schema_version": "1.0",
+  "fixture_id": "k2seg_suno_batch2_structure",
+  "prescribed_pattern": [
+    "low",
+    "high",
+    "low"
+  ],
+  "measurement_note": "全計測（主センサー RMS 符号パターン・novelty とも）は canonical RPE 経路（svp_rpe.io.audio_loader.load_audio、extract_physical_from_file と同一の 22050 リサンプル）で実施。初回計測は native 48kHz で match_rate_low_cell=0.75（low_2_1 が [low,high,low] 1.0）・novelty_d=0.58554 だったが、SR 是正（Codex #166 P2 第 3 ラウンド採用）に伴い canonical 値へ全面差し替えた。旧値は git 履歴および scratchpad results_structure_2026-07-10.yaml に保全。low_2_1 の第 1 区間は線形 RMS が 3 区間平均の ±0.06% 境界上にあり、リサンプル条件で符号反転した（knife-edge、README 計器知見参照）。",
+  "songs": {
+    "low": [
+      {
+        "path": "low_1.mp3",
+        "sha256": "39108113fe470ca4a2f2f482b6b22aa4c99ed274fd177149a3dd0838d2b3641b",
+        "duration_sec": 44.64,
+        "section_rms_db": [
+          -16.7326,
+          -14.6187,
+          -14.5648
+        ],
+        "sign_pattern": [
+          "low",
+          "high",
+          "high"
+        ],
+        "match_rate": 0.666667,
+        "novelty_boundary_count": 5
+      },
+      {
+        "path": "low_1_1.mp3",
+        "sha256": "014906424b09516f4d182917369a0de3092289c4033cfc85f94506626dcd7478",
+        "duration_sec": 43.84,
+        "section_rms_db": [
+          -18.0241,
+          -16.78,
+          -16.4956
+        ],
+        "sign_pattern": [
+          "low",
+          "high",
+          "high"
+        ],
+        "match_rate": 0.666667,
+        "novelty_boundary_count": 4
+      },
+      {
+        "path": "low_2_1.mp3",
+        "sha256": "fa755742b580543d120ad00c8ddee169dcc3ef8e748296d725718c535574b02d",
+        "duration_sec": 92.4,
+        "section_rms_db": [
+          -16.3198,
+          -15.9361,
+          -16.7331
+        ],
+        "sign_pattern": [
+          "high",
+          "high",
+          "low"
+        ],
+        "match_rate": 0.666667,
+        "novelty_boundary_count": 7
+      },
+      {
+        "path": "low_2_2.mp3",
+        "sha256": "812c9a5f7ec036a7694b35382d738a391825245e107aeb9e9ef90e8b529864f1",
+        "duration_sec": 37.28,
+        "section_rms_db": [
+          -17.6683,
+          -15.0496,
+          -15.3123
+        ],
+        "sign_pattern": [
+          "low",
+          "high",
+          "high"
+        ],
+        "match_rate": 0.666667,
+        "novelty_boundary_count": 4
+      }
+    ],
+    "high": [
+      {
+        "path": "high_1.mp3",
+        "sha256": "ed8ed427a67cb26632ac3df51ee0c6e530b86fe443cecd903390d0a6d6d85035",
+        "duration_sec": 32.16,
+        "section_rms_db": [
+          -18.6462,
+          -14.9694,
+          -15.5253
+        ],
+        "sign_pattern": [
+          "low",
+          "high",
+          "high"
+        ],
+        "match_rate": 0.666667,
+        "novelty_boundary_count": 3
+      },
+      {
+        "path": "high_2.mp3",
+        "sha256": "bc36fdb0dab73fdbce2d0303a8c6bf621edf5892e9f180be14a6b48e0b569c70",
+        "duration_sec": 53.28,
+        "section_rms_db": [
+          -19.2865,
+          -16.2193,
+          -16.3551
+        ],
+        "sign_pattern": [
+          "low",
+          "high",
+          "high"
+        ],
+        "match_rate": 0.666667,
+        "novelty_boundary_count": 6
+      },
+      {
+        "path": "high_2_1.mp3",
+        "sha256": "5342df2dbe47d77889f3eff9a17d472236dd75fff5460945cdbf5ebddb13c2f3",
+        "duration_sec": 199.2,
+        "section_rms_db": [
+          -15.4582,
+          -14.836,
+          -14.7448
+        ],
+        "sign_pattern": [
+          "low",
+          "high",
+          "high"
+        ],
+        "match_rate": 0.666667,
+        "novelty_boundary_count": 7
+      },
+      {
+        "path": "high_2_2.mp3",
+        "sha256": "ab90e33cb6919210a7704f52abc2a0b0954a32c186abcc4b257c5341aaeb710f",
+        "duration_sec": 94.12,
+        "section_rms_db": [
+          -18.4926,
+          -15.1821,
+          -14.3475
+        ],
+        "sign_pattern": [
+          "low",
+          "high",
+          "high"
+        ],
+        "match_rate": 0.666667,
+        "novelty_boundary_count": 7
+      }
+    ]
+  },
+  "aggregate": {
+    "match_rate_low_cell": 0.666667,
+    "match_rate_high_cell": 0.666667,
+    "novelty_d": 0.448879
+  },
+  "excluded": [
+    {
+      "path": "high_1_1.mp3",
+      "cell": "high",
+      "sha256": "0673e2ef429b4f0bae489a2647edbcd7b0b0d2377771b30d99d3d7f45793868a",
+      "duration_sec": 18.5,
+      "excluded": true,
+      "reason": "duration <30s (preregistered)"
+    },
+    {
+      "path": "low_2.mp3",
+      "cell": "low",
+      "sha256": "c111fcdeb1510e803c9d085e824fdc9e7fbfa87260b783efa56be1c7545d1edb",
+      "duration_sec": 29.0,
+      "excluded": true,
+      "reason": "duration <30s (preregistered)"
+    }
+  ]
+}

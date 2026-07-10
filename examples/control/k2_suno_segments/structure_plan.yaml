@@ -1,0 +1,115 @@
+# K2-seg Suno 転移バッチ 2: structure 欄 grip（同一バッチ隔離設計・初適用）
+#
+# docs/controllability_poc.md §「K2-seg バッチ 2: structure 欄センサー設計
+# （2026-07-09 事前設計）」の実測。compose が送出する structure セクション記述
+# （"intro: ...; role=..."）が Suno の実生成で「構造」（quiet-loud-quiet の区間
+# エネルギー・パターン）として実現されるか（= structure 欄の grip）を、
+# low（structure: []）/ high（structure 3 区間）とも本バッチで新規生成した
+# 同一バッチ・同一モデル比較で測る。12 秒クリップの MusicGen では原理的に測定
+# 不能（#152 スコープ外）だった Suno 専用ノブ。
+#
+# 発注書: order_sheet_k2seg_suno_batch2_structure.md（本 PR には非同梱、scratchpad
+# 由来）。AGENTS.md §8「計測比較の交絡隔離規律（同一バッチ・同一モデル）」（#165）
+# の初適用 — バッチ 1 の calm（structure: []）を low セルに再利用する経済化案は
+# Exclude 追試（examples/control/k2_suno_segments/excl_plan.yaml）と同型の
+# cross-batch 交絡を招くため不採用とし、low/high とも新規生成した。
+schema_version: "1.0"
+fixture_id: k2seg_suno_batch2_structure
+generator: suno
+# Suno のユーザーオリジナル・カスタムモデルで生成（ユーザー申告 2026-07-10）。
+# 標準 stock モデルへの一般化は未検証（バッチ 1 honesty (g) と同型）。
+model: "user-custom (Suno カスタムモデル・ユーザー申告 2026-07-10)"
+repetitions: 4
+preregistered_date: "2026-07-10"  # 発注書発行日 = 判定規約の事前登録日（同日生成）
+# 発注書 §2-2: Exclude Styles 欄は全セル空で統一（ユーザー申告）。
+exclude_styles: ""
+# honesty（順序共線）: 発注書 §2-4 の low/high 交互生成順は未実施（納品順は high
+# 全件 → low 全件）。生成順が cell と完全共線のため、セル間比較（ヌル格下げ）は
+# バッチ内時間ドリフトと分離不能（README バッチ 2 節・
+# structure_expected_grip.json の order_collinearity_caveat / confound_note 参照）。
+order_collinearity_honesty: >-
+  交互生成順（事前登録）逸脱により生成順と cell が完全共線。ヌル格下げ比較（cross-cell）
+  は時間ドリフトと分離不能のため primary verdict は confounded・未確定
+  （機械適用の結果 dead は preregistered_rule_outcome として記録保全）。
+  処方非実現の記述的証拠（high セル outro 静音化 0/4、順序非依存）は保持するが、
+  verdict にする規則は事前登録外につき確定判定には用いない。
+
+cells:
+  - name: low
+    role: "structure ノブの low セル（structure: []）"
+    # svprpe compose（suno/external descriptor）実出力 verbatim（2026-07-10）。
+    # 155 字。Style 欄上限確認（発注書 §2-5 生成前ゲート）済み。
+    prompt: >-
+      120 BPM. Brightness balanced. Instrumental, no vocals. Calm atmosphere.
+      synthwave track. A minor. 4/4 time. Wide stereo. Active rate 0.8.
+      Valley depth 0.3.
+    prompt_source: score_structure_low.yaml (compose 実出力, 2026-07-10)
+    prompt_max_chars: 300
+  - name: high
+    role: "structure ノブの high セル（intro/peak/outro 3 区間、bars 16/16/16）"
+    # svprpe compose（suno/external descriptor）実出力 verbatim（2026-07-10）。
+    # 277 字。低セルとの差分は structure 3 セグメントの挿入のみ（他フィールド文は
+    # バイト単位で同一、検算照合ゲート 4/4 PASS 済み — order_sheet §3 参照）。
+    prompt: >-
+      120 BPM. Brightness balanced. Instrumental, no vocals. Calm atmosphere.
+      synthwave track. A minor. 4/4 time. intro: quiet sparse minimal;
+      role=intro. peak: loud dense full energy; role=peak. outro: quiet
+      sparse fading; role=outro. Wide stereo. Active rate 0.8. Valley depth 0.3.
+    prompt_source: score_structure_high.yaml (compose 実出力, 2026-07-10)
+    prompt_max_chars: 300
+
+# compose 入力 score の要点（発注書付録より、再現用参照）。
+compose_input_summary:
+  low:
+    structure: []
+  high:
+    structure:
+      - section: intro
+        bars: 16
+        role: "intro"
+        physical: "quiet sparse minimal"
+      - section: peak
+        bars: 16
+        role: "peak"
+        physical: "loud dense full energy"
+      - section: outro
+        bars: 16
+        role: "outro"
+        physical: "quiet sparse fading"
+  shared_physical:
+    bpm: 120
+    key: "A minor"
+    time_signature: "4/4"
+    active_rate_target: "0.8"
+    valley_depth_target: "0.3"
+    brightness: "balanced"
+    stereo_width: "wide"
+
+knobs:
+  - name: structure
+    primary_sensor: rms_section_pattern
+    secondary_sensor: novelty_boundaries
+    low_level: low
+    high_level: high
+    expected_sign: 1
+    prescribed_pattern: ["low", "high", "low"]
+    decision_rule: >-
+      主センサー: 比例分割 RMS 符号パターン一致率（categorical）。トラックを
+      相対位置で 3 等分し、各区間の RMS を 3 区間 RMS の平均と比較して
+      high/low に符号化する。処方パターン [low, high, low]（quiet-loud-quiet）
+      との per-song 一致率 = 一致区間数 / 3、セル値 = R=4 の平均。規約:
+      ≥0.7 tight / 0.3-0.7 loose / <0.3 dead（time_signature の match_rate 規約を
+      流用）。経験的ヌル（low セル）: low セルにも同一パターン照合を適用して
+      match_rate を必須併記する。high セル match_rate ≤ low セル match_rate の
+      場合は分類によらず dead へ格下げする（K3-1b の known-dead ヌル天井と同型
+      ―「calm な曲が偶然 quiet-loud-quiet に見える」chance 水準と不可分な効果を
+      tight/loose と誤認しない）。副センサー: novelty 境界数の d
+      （`structure_novelty` の検出境界数を low vs high の Cohen's d、
+      K 系列既定閾値 |d|≥0.8 tight / 0.2-0.8 loose / <0.2 dead・expected_sign +1
+      で判定）。order_sheet §5 verbatim。
+    exclusion_rule: >-
+      曲長 30 秒未満のテイクは除外する（構造が物理的に展開し得ない極端な短尺）。
+      除外が出た場合は同セルを同日・同モデルで追加生成して R=4 を充足し、
+      除外テイクと追加テイクの両方を記録に残す（order_sheet §4 verbatim）。
+
+# バッチ3繰越（本発注書のスコープ外）: active_rate / valley_depth / time_signature

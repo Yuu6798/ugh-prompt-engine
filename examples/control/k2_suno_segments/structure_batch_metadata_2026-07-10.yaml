@@ -1,0 +1,20 @@
+# K2-seg バッチ 2 (structure grip) 生成メタデータ — ユーザー申告記録
+batch_id: k2seg_suno_batch2_structure
+recorded: "2026-07-10"
+generator: suno
+model: "user-custom (Suno カスタムモデル・ユーザー申告 2026-07-10)"
+generation_flow: "ユーザー申告: 発注書 §2 の生成条件を遵守（同一モデル・同一フロー・Exclude Styles 空・Instrumental・Style 欄 verbatim 貼付）。UI 経路の個別確認は取得せず包括申告として記録"
+same_batch_isolation: "low / high とも本バッチ新規生成・同一カスタムモデル（申告）= #164 型の cross-batch 再利用交絡を回避（同一バッチ・同一モデル申告）。生成順共線の caveat は honesty 参照"
+honesty:
+  - "モデル・生成条件はユーザー申告ベース（batch-1 honesty (g) と同型）。カスタムモデル実測につき stock モデルへの一般化は未検証"
+  - "発注書 §2-4 の low/high 交互生成順は納品順から未実施とみられる（high 4 本→low 4 本の順に納品）。同日・同モデル申告のため同一バッチ性は維持、逸脱として記録"
+  - "除外発火: high_1_1 (18.5s) / low_2 (29.0s) が <30s 規則に該当。補充テイク high_2_2 (94.1s) / low_2_2 (37.3s) を同日受領し R=4 充足（発注書 §4 の同日追加生成規定どおり）"
+cells:
+  high:
+    accepted: [high_1.mp3, high_2.mp3, high_2_1.mp3, high_2_2.mp3]
+    excluded: [high_1_1.mp3]
+    pending: 0
+  low:
+    accepted: [low_1.mp3, low_1_1.mp3, low_2_1.mp3, low_2_2.mp3]
+    excluded: [low_2.mp3]
+    pending: 0

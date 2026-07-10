@@ -30,6 +30,12 @@ from .orthogonality import (
     noise_margin,
     normalized_entropy,
 )
+from .structure_pattern import (
+    pattern_match_rate,
+    rms_to_db,
+    sign_pattern,
+    split_section_rms,
+)
 
 __all__ = [
     "GRIP_EPSILON",
@@ -57,4 +63,8 @@ __all__ = [
     "noise_ceiling",
     "noise_margin",
     "normalized_entropy",
+    "pattern_match_rate",
+    "rms_to_db",
+    "sign_pattern",
+    "split_section_rms",
 ]
