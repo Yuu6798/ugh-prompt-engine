@@ -178,3 +178,85 @@ def test_excluded_takes_are_recorded_with_reason() -> None:
         assert item["excluded"] is True
         assert item["duration_sec"] < 30.0
         assert "preregistered" in item["reason"]
+
+
+# ---------------------------------------------------------------------------
+# CLI の事前登録カットオフ執行（scripts/measure_structure_pattern.py）
+# ---------------------------------------------------------------------------
+
+
+def _write_wav(path: Path, duration_sec: float, sr: int = 22050, amplitude: float = 0.3) -> Path:
+    """小さい合成 wav（決定論）を書き出す。実バッチ音源は使わない。
+
+    sr は selftest と同じ 22050（chroma_cqt が低 sr では Nyquist 制約で失敗するため）。
+    """
+    import soundfile as sf
+
+    rng = np.random.default_rng(20260710)
+    y = (rng.standard_normal(int(duration_sec * sr)) * amplitude).astype(np.float32)
+    sf.write(path, y, sr)
+    return path
+
+
+def test_cli_default_min_duration_is_preregistered_30s() -> None:
+    """batch-2 事前登録カットオフ（order_sheet §4: <30s 除外）が CLI 既定値。"""
+    from scripts.measure_structure_pattern import DEFAULT_MIN_DURATION_SEC
+
+    assert DEFAULT_MIN_DURATION_SEC == 30.0
+
+
+def test_cli_min_duration_excludes_short_takes_before_aggregation(tmp_path: Path) -> None:
+    from scripts.measure_structure_pattern import build_report
+
+    short = _write_wav(tmp_path / "short.wav", 3.0)
+    long_low = _write_wav(tmp_path / "long_low.wav", 10.0)
+    long_high = _write_wav(tmp_path / "long_high.wav", 10.0)
+
+    report = build_report([short, long_low], [long_high], min_duration_sec=5.0)
+
+    # 短尺テイクは集計から外れ、excluded: 節に明示記録される。
+    assert [song["path"] for song in report["songs"]["low"]] == [str(long_low)]
+    assert len(report["excluded"]) == 1
+    entry = report["excluded"][0]
+    assert entry["path"] == str(short)
+    assert entry["cell"] == "low"
+    assert entry["duration_sec"] == pytest.approx(3.0, abs=0.01)
+    assert entry["reason"] == "duration < 5s cutoff (preregistered)"
+
+
+def test_cli_min_duration_zero_disables_cutoff(tmp_path: Path) -> None:
+    from scripts.measure_structure_pattern import build_report
+
+    short_low = _write_wav(tmp_path / "short_low.wav", 3.0)
+    short_high = _write_wav(tmp_path / "short_high.wav", 3.0)
+
+    report = build_report([short_low], [short_high], min_duration_sec=0.0)
+
+    assert [song["path"] for song in report["songs"]["low"]] == [str(short_low)]
+    assert report["excluded"] == []
+
+
+def test_cli_fails_fast_when_cell_has_no_accepted_takes(tmp_path: Path) -> None:
+    from scripts.measure_structure_pattern import main
+
+    short_low = _write_wav(tmp_path / "short_low.wav", 3.0)
+    long_high = _write_wav(tmp_path / "long_high.wav", 10.0)
+
+    exit_code = main(
+        ["--low", str(short_low), "--high", str(long_high), "--min-duration", "5.0"]
+    )
+
+    assert exit_code == 2
+
+
+def test_cli_default_cutoff_applies_without_flag(tmp_path: Path) -> None:
+    """--min-duration 未指定でも既定 30s カットオフが CLI 経路で執行される
+    （10s テイクのみ → 全滅 fail-fast = 非ゼロ exit）。"""
+    from scripts.measure_structure_pattern import main
+
+    short_low = _write_wav(tmp_path / "short_low.wav", 10.0)
+    short_high = _write_wav(tmp_path / "short_high.wav", 10.0)
+
+    exit_code = main(["--low", str(short_low), "--high", str(short_high)])
+
+    assert exit_code == 2

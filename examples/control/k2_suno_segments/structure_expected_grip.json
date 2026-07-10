@@ -17,6 +17,7 @@
   "null_gate_fired": true,
   "null_gate_condition": "match_rate_high_cell <= match_rate_low_cell",
   "primary_verdict": "dead",
+  "order_collinearity_caveat": "生成順（high 全件 → low 全件）が cell と完全共線（交互生成順の事前登録逸脱）のため、ヌル格下げ比較（low 0.75 > high 0.666667）はバッチ内時間ドリフトと分離不能。dead 判定の核は high セル内の観測（処方 outro 静音化の実現 0/4）で順序非依存（Codex #166 P2 指摘・採用。README バッチ 2 節参照）。",
   "secondary": {
     "sensor": "novelty_boundaries",
     "expected_sign": 1,

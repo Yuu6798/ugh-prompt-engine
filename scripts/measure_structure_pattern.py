@@ -8,6 +8,11 @@
 
 判定ラベル（tight/loose/dead）はこのスクリプトの責務外 — 生成した数値に対して
 plan.yaml / order_sheet の事前登録規約を設計側が適用する。
+
+事前登録の短尺カットオフ（order_sheet §4: 曲長 30 秒未満は除外）は本 CLI が
+集計**前**に執行する（`--min-duration`、既定 30.0）。除外テイクは出力 YAML の
+`excluded:` 節に明示記録し、セルの受入が 0 本になったら fail-fast する
+（silent corruption 防止、Codex #166 P2 採用）。
 """
 from __future__ import annotations
 
@@ -37,6 +42,10 @@ from svp_rpe.rpe.structure_novelty import compute_novelty_curve, find_boundaries
 
 SCHEMA_VERSION = "1.0"
 PRESCRIBED_PATTERN: list[str] = ["low", "high", "low"]
+
+# batch-2 事前登録カットオフ（order_sheet §4: 構造が物理的に展開し得ない極端な
+# 短尺として曲長 30 秒未満のテイクを除外する）。--min-duration 0 で明示無効化可。
+DEFAULT_MIN_DURATION_SEC = 30.0
 
 
 @dataclass(frozen=True)
@@ -87,16 +96,57 @@ def measure_cell(paths: list[Path], prescribed: list[str]) -> list[SongMeasureme
     return [measure_song(path, prescribed) for path in paths]
 
 
+def _apply_duration_cutoff(
+    paths: list[Path],
+    cell: str,
+    min_duration_sec: float,
+) -> tuple[list[Path], list[dict[str, Any]]]:
+    """事前登録の短尺カットオフを集計前に適用する（silent corruption 防止）。
+
+    除外テイクは出力 YAML の `excluded:` 節に明示記録し、セルの受入が 0 本に
+    なった場合は fail-fast（ValueError）する。`min_duration_sec <= 0` は無効化。
+    """
+    if min_duration_sec <= 0:
+        return list(paths), []
+
+    accepted: list[Path] = []
+    excluded: list[dict[str, Any]] = []
+    for path in paths:
+        duration_sec = round(float(librosa.get_duration(path=str(path))), 4)
+        if duration_sec < min_duration_sec:
+            excluded.append(
+                {
+                    "path": str(path),
+                    "cell": cell,
+                    "duration_sec": duration_sec,
+                    "reason": f"duration < {min_duration_sec:g}s cutoff (preregistered)",
+                }
+            )
+        else:
+            accepted.append(path)
+
+    if not accepted:
+        raise ValueError(
+            f"{cell} cell has no accepted takes after the {min_duration_sec:g}s "
+            "preregistered duration cutoff (all takes excluded)"
+        )
+    return accepted, excluded
+
+
 def build_report(
     low_paths: list[Path],
     high_paths: list[Path],
     *,
     prescribed: list[str] | None = None,
+    min_duration_sec: float = DEFAULT_MIN_DURATION_SEC,
 ) -> dict[str, Any]:
     prescribed_pattern = prescribed if prescribed is not None else PRESCRIBED_PATTERN
 
-    low_songs = measure_cell(low_paths, prescribed_pattern)
-    high_songs = measure_cell(high_paths, prescribed_pattern)
+    low_accepted, low_excluded = _apply_duration_cutoff(low_paths, "low", min_duration_sec)
+    high_accepted, high_excluded = _apply_duration_cutoff(high_paths, "high", min_duration_sec)
+
+    low_songs = measure_cell(low_accepted, prescribed_pattern)
+    high_songs = measure_cell(high_accepted, prescribed_pattern)
 
     match_rate_low_cell = float(np.mean([s.match_rate for s in low_songs])) if low_songs else None
     match_rate_high_cell = (
@@ -126,6 +176,7 @@ def build_report(
             ),
             "novelty_d": round(novelty_d, 6) if novelty_d is not None else None,
         },
+        "excluded": low_excluded + high_excluded,
     }
 
 
@@ -161,10 +212,30 @@ def main(argv: list[str] | None = None) -> int:
         default=",".join(PRESCRIBED_PATTERN),
         help=f"処方パターン（カンマ区切り、既定: {','.join(PRESCRIBED_PATTERN)}）",
     )
+    parser.add_argument(
+        "--min-duration",
+        type=float,
+        default=DEFAULT_MIN_DURATION_SEC,  # batch-2 事前登録カットオフ（order_sheet §4）
+        metavar="SEC",
+        help=(
+            "曲長カットオフ秒数。未満のテイクは集計から除外し excluded: 節に記録する"
+            f"（既定: {DEFAULT_MIN_DURATION_SEC:g} = batch-2 事前登録カットオフ。"
+            "0 で明示無効化）"
+        ),
+    )
     args = parser.parse_args(argv)
 
     prescribed = [token.strip() for token in args.pattern.split(",")]
-    report = build_report(args.low, args.high, prescribed=prescribed)
+    try:
+        report = build_report(
+            args.low,
+            args.high,
+            prescribed=prescribed,
+            min_duration_sec=args.min_duration,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     sys.stdout.write(render_yaml(report))
     return 0
 

@@ -443,7 +443,10 @@ fixture・判定結果の全詳細は
 
 - **主センサー**: match_rate_low_cell=0.75 / match_rate_high_cell=0.666667。
   規約上は 0.3–0.7 の loose 帯だが、事前登録済みの経験的ヌル格下げ規則
-  （high ≤ low → dead）が**初発動**し、**verdict: dead**。
+  （high ≤ low → dead）が**初発動**し、**verdict: dead**。ヌル格下げ比較
+  （low > high）は order caveat 付き — 納品順（high 全件 → low 全件）が cell と
+  完全共線でバッチ内時間ドリフトと分離不能。dead 判定の核は順序に依存しない
+  high セル内の観測（処方 outro 静音化 0/4、下記）。
 - **副センサー**: novelty 境界数 d=+0.5855（loose・expected_sign 同方向）。ただし
   セル平均曲長が low 54.5s vs high 94.7s と大きく異なり境界数は曲長と連動するため、
   **曲長交絡により structure 由来か曲長由来か確定不能**（事前登録外の caveat）。
@@ -451,11 +454,13 @@ fixture・判定結果の全詳細は
   （末尾に向けてエネルギーが上がる）を示し、high セルで意図した outro 静音化が
   実現したテイクは 0/4。唯一の完全一致 `[low, high, low]` は low セルの
   `low_2_1`（processed pattern への chance 一致 = 「ヌルの実在」を裏付ける）。
-- **同一バッチ隔離設計の初適用**: 経済化のためバッチ 1 `calm` を low セルへ
-  再利用する案は「K2-seg Exclude 欄併用追試」節と同型の cross-batch 交絡を招く
-  ため設計段階で不採用にし、low/high とも新規生成した（AGENTS.md §8）。この
-  結果、交絡ゼロのまま dead 判定を確定でき、Exclude 追試のような事後の
-  confounded 格下げが不要になった。
+- **同一バッチ隔離設計の初適用（限定付き）**: 経済化のためバッチ 1 `calm` を low
+  セルへ再利用する案は「K2-seg Exclude 欄併用追試」節と同型の cross-batch 交絡を
+  招くため設計段階で不採用にし、low/high とも新規生成した（AGENTS.md §8）。これに
+  より **#164 型の cross-batch 再利用交絡は回避**（同一バッチ・同一モデル・同日）。
+  ただし「交絡ゼロ」ではない（Codex #166 P2 指摘・採用）: 交互生成順の事前登録
+  逸脱により生成順が cell と完全共線で、セル間比較はバッチ内時間ドリフトと分離
+  不能。次バッチ要件 = 交互生成順の遵守。
 - **計器知見**: 3 区間・処方 `[low, high, low]` は match_rate が
   `{0, 0.333, 0.667, 1.0}` の 4 値しか取れず分解能が粗い（本バッチは 8/8 が
   0.667 or 1.0）。次バッチは loud–quiet–loud 等、生成器デフォルト形状と正面から
