@@ -17,6 +17,12 @@ PR3 後半で generator device profile（`compose/device_profile.py`）を 2 経
 `control_profile` のフィールド欠落を `control_defaults` で補完（score 宣言が常に勝つ）、
 score の値が既知の癖（`knob_quirks`）に当たったら `GeneratedPrompt.advisories` へ警告を
 出す（プロンプト本文 / tags は一切変えない＝自動補正しない）。
+
+structure チャネル再配線（K2-seg バッチ3, #169）で structure 散文（`intro: ...;
+role=...` 形式）が Suno の実生成で区間エネルギー構造として実現されない（dead）ことが
+実測されたため、`suno` backend では structure 散文の送出を止め（`BackendDescriptor.
+omit_structure_prose`）、代わりに Suno ネイティブのセクション・メタタグ台本
+（`GeneratedPrompt.section_tags`、`_section_tags_for` がコンパイル）を新設した。
 """
 from __future__ import annotations
 
@@ -83,12 +89,30 @@ class BackendDescriptor:
     # `external` は Suno ルートのエイリアスだが実測は Suno 生成そのものに対するもの
     # であり汎用 external への横展開はしない（#153 と同じ規律）ため不変（False）。
     omit_body_negative: bool = False
+    # K2-seg バッチ3（#169, structure3_plan.yaml）実測: compose の structure 欄の散文
+    # （"intro: ...; role=..." 形式）は Suno user-custom の style prompt では区間
+    # エネルギー構造として実現されない（dead: 処方適合 1/3 = chance floor 正確一致・
+    # 処方 loud イントロ 0/4）。#153 / omit_body_negative と同型の判断で、True の
+    # backend は structure セグメントの送出自体を止める（candidate にすら入れない —
+    # `_segments_for` 参照、`dropped_elements` には計上しない）。実測なき横展開は
+    # しない規律により **suno のみ** True（musicgen は実測なし、external は #153 と
+    # 同じ理由づけで Suno ルートの汎用エイリアスへ横展開しないため不変）。
+    omit_structure_prose: bool = False
+    # structure 散文停止の代替チャネル: Suno custom モードの Lyrics 欄に貼るセクション・
+    # メタタグ台本（`_section_tags_for` 参照）。efficacy 未実証の実験チャネルのため
+    # **suno のみ** True（config 化はしない・YAGNI）。
+    emit_section_tags: bool = False
 
 
 # target_backend → BackendDescriptor。`external` は Suno ルートのエイリアス。
 _BACKEND_DESCRIPTORS: dict[str, BackendDescriptor] = {
     "external": BackendDescriptor(profile_key="suno"),
-    "suno": BackendDescriptor(profile_key="suno", omit_body_negative=True),
+    "suno": BackendDescriptor(
+        profile_key="suno",
+        omit_body_negative=True,
+        omit_structure_prose=True,
+        emit_section_tags=True,
+    ),
     "musicgen": BackendDescriptor(
         profile_key="musicgen",
         negative_channel="negative_prompt",
@@ -130,7 +154,12 @@ class ExternalPromptAdapter:
         rank = _rank_key_factory(score.rendering.priority, effective_profile)
 
         segments = sorted(
-            _segments_for(score, omit_avoid_segment=descriptor.omit_body_negative), key=rank
+            _segments_for(
+                score,
+                omit_avoid_segment=descriptor.omit_body_negative,
+                omit_structure_segments=descriptor.omit_structure_prose,
+            ),
+            key=rank,
         )
         kept = list(segments)
         dropped_elements: list[str] = []
@@ -141,13 +170,26 @@ class ExternalPromptAdapter:
             kept.remove(segment)
             dropped_elements.append(segment.token)
 
+        advisories = _advisories_for(score, device)
+        # 透明化（Design Memo 変更1）: structure 散文の送出停止が実際に発動した場合
+        # （score.structure が非空 かつ omit_structure_prose=True）のみ 1 件追加する。
+        # structure が元々空なら送出停止は無発動なので advisory は出さない。
+        if descriptor.omit_structure_prose and score.structure:
+            advisories.append(
+                "structure prose omitted for suno backend (measured dead in K2-seg "
+                "batch 3); structure is compiled to the section_tags channel instead."
+            )
+
         return GeneratedPrompt(
             backend=_generated_backend(score.rendering.target_backend),
             text=_join_segments(kept),
             tags=_tags_for(score),
             negative_tags=list(score.semantic.avoid),
             dropped_elements=dropped_elements,
-            advisories=_advisories_for(score, device),
+            advisories=advisories,
+            section_tags=(
+                _section_tags_for(score) if descriptor.emit_section_tags else None
+            ),
         )
 
 
@@ -220,7 +262,10 @@ def _advisories_for(score: CompositionScore, device: Optional[DeviceProfile]) ->
 
 
 def _segments_for(
-    score: CompositionScore, *, omit_avoid_segment: bool = False
+    score: CompositionScore,
+    *,
+    omit_avoid_segment: bool = False,
+    omit_structure_segments: bool = False,
 ) -> list[_PromptSegment]:
     segments: list[_PromptSegment] = []
 
@@ -244,11 +289,16 @@ def _segments_for(
     # （宣言したのに描画/保持されない穴を塞ぐ）。
     add("time_signature", f"{score.physical.time_signature} time.")
 
-    for section in score.structure:
-        add(
-            "structure",
-            f"{section.section}: {section.physical}; role={section.role}.",
-        )
+    # K2-seg バッチ3（#169）実測: structure 散文は Suno で区間エネルギー構造として
+    # 実現されない（dead）。omit_structure_segments=True の backend は候補にすら
+    # 入れない（omit_avoid_segment と同型 — 「字数超過 drop」ではなくルーティング
+    # なので `dropped_elements` に計上しない。omit ≠ drop accounting の区別）。
+    if not omit_structure_segments:
+        for section in score.structure:
+            add(
+                "structure",
+                f"{section.section}: {section.physical}; role={section.role}.",
+            )
 
     # 旧 physical.optional 束をフィールド粒度トークンへ分解（各々独立に keep/drop 可能）。
     add("brightness", f"Brightness {score.physical.brightness}.")
@@ -359,3 +409,57 @@ def _tags_for(score: CompositionScore) -> list[str]:
     if score.semantic.lyrics_presence == "absent":
         tags.append("instrumental")
     return tags
+
+
+# structure チャネル再配線（変更2）: `score.structure[].section` → Suno のネイティブ
+# セクション・メタタグ表記への語彙マップ。`rpe/structure_labels.py`（assign_labels の
+# 出力: Intro/Verse/Chorus/Bridge/Outro、複数 Verse は "Verse2" 等）と compose 側
+# fixture/テストで実際に使われる語彙（intro/verse/chorus/bridge/outro/breakdown/peak/
+# body、`examples/composition/`・`examples/control/k2_suno_segments/`・
+# `examples/roundtrip/` 実測）を踏まえ、少なくとも Design Memo 列挙語彙を網羅する。
+# lookup は case-insensitive（`_section_tags_for` で `.lower()` 正規化）。
+# config 化はしない（efficacy 未実証・YAGNI、Design Memo 判断）。
+_SUNO_SECTION_TAG_MAP: dict[str, str] = {
+    "intro": "Intro",
+    "verse": "Verse",
+    "chorus": "Chorus",
+    "bridge": "Bridge",
+    "outro": "Outro",
+    "breakdown": "Break",
+    "drop": "Drop",
+    "build": "Build",
+    "buildup": "Build",
+    "hook": "Hook",
+    "pre-chorus": "Pre-Chorus",
+}
+
+
+def _suno_section_tag_label(section: str) -> str:
+    """セクション名を Suno タグ表記へ解決する（case-insensitive、未知は Title-Case）。"""
+
+    mapped = _SUNO_SECTION_TAG_MAP.get(section.lower())
+    if mapped is not None:
+        return mapped
+    # 未知ラベルは決定論的フォールバック（str.title() — "verse2" -> "Verse2" 等、
+    # 既に Title-Case な structure_labels.py 出力もそのまま安定に通す）。
+    return section.title()
+
+
+def _section_tags_for(score: CompositionScore) -> Optional[str]:
+    """`score.structure` を Suno Lyrics 欄向けのセクション・メタタグ台本へコンパイルする。
+
+    v1 最小仕様（Design Memo）: role は含めない。`section.physical` が空なら
+    `[Label]`、非空なら `[Label: physical]`。各セクションを 1 行、改行連結。
+    grip（効果）は未実証の実験チャネル（structure4 実験で検証予定）。
+    """
+
+    if not score.structure:
+        return None
+    lines = []
+    for section in score.structure:
+        label = _suno_section_tag_label(section.section)
+        if section.physical:
+            lines.append(f"[{label}: {section.physical}]")
+        else:
+            lines.append(f"[{label}]")
+    return "\n".join(lines)

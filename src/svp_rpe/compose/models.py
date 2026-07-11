@@ -1,7 +1,7 @@
 """Pydantic models for author-facing Composition Score YAML."""
 from __future__ import annotations
 
-from typing import Any, List, Literal, Self
+from typing import Any, List, Literal, Optional, Self
 
 from pydantic import (
     BaseModel,
@@ -252,6 +252,18 @@ class GeneratedPrompt(CompositionModel):
     # PR3 後半: デバイスプロファイル知見が発火した警告（compose/device_profile.py）。
     # プロンプト本文 / tags には一切反映しない（自動補正しない・advisory のみ）。
     advisories: List[str] = Field(default_factory=list)
+    # structure チャネル再配線（K2-seg バッチ3, #169）: Suno custom モードの Lyrics 欄に
+    # 貼るセクション・メタタグ台本（例 "[Intro]\n[Chorus: full energy]"）。structure 散文の
+    # 送出を止める suno backend 専用の代替チャネルで、grip（効果）は未実証の実験チャネル
+    # （structure4 実験で検証予定）。suno 以外の backend では常に None。
+    section_tags: Optional[str] = None
+
+    @model_serializer(mode="wrap")
+    def serialize_without_empty_optionals(self, handler: Any) -> dict[str, Any]:
+        data = handler(self)
+        if self.section_tags is None:
+            data.pop("section_tags", None)
+        return data
 
 
 def _fixity_state_for_value(value: Any) -> FixityState:
