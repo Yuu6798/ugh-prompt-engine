@@ -87,8 +87,9 @@ format, a non-empty `section_tags` is surfaced on **stderr** the same way as
 `negative_tags`; `--format json` carries it as a `section_tags` field, but
 the key itself is **omitted** from the JSON payload when the backend does
 not emit it or `structure` is empty (`GeneratedPrompt.serialize_without_empty_optionals`
-drops `section_tags` when it is `None`, mirroring `negative_tags`/`lyrics_presence`
-elsewhere in this schema). Machine consumers should treat a missing
+drops `section_tags` when it is `None`, mirroring how `SemanticLayer.lyrics_presence`
+is omitted when unset; `negative_tags` by contrast is always present as a
+list). Machine consumers should treat a missing
 `section_tags` key as "no tags", not check for `null`.
 
 ### `svprpe measure <audio>`
