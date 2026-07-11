@@ -332,6 +332,17 @@ def compose(
             err=True,
         )
 
+    # structure チャネル再配線（#169 follow-up）: suno backend では structure 散文の
+    # 代わりに section_tags（Lyrics 欄向けセクション・メタタグ台本）が生成される。
+    # 本文（Style 欄）とは別チャネルの成果物のため、negative_tags と同じ経路
+    # （stdout / -o ファイルは不変・stderr のみ）で可視化する。JSON 出力は
+    # model_dump に section_tags が自然に乗るため追加処理不要。
+    if output_format == "text" and prompt.section_tags:
+        typer.echo(
+            "Section tags (paste into the generator's Lyrics field):\n" + prompt.section_tags,
+            err=True,
+        )
+
 
 @app.command()
 def measure(
