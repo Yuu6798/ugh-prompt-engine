@@ -645,6 +645,185 @@ def test_suno_avoid_body_segment_is_now_omitted() -> None:
     assert suno_prompt.negative_tags == ["bright festival EDM", "comic vocal delivery"]
 
 
+# --- structure チャネル再配線（K2-seg バッチ3, #169）: suno structure prose omit +
+# section_tags チャネル新設 --------------------------------------------------
+
+
+def test_suno_structure_prose_is_omitted_from_text_and_not_counted_as_dropped() -> None:
+    """suno backend では structure 散文が本文から消え、`dropped_elements` にも
+    現れない（`omit_body_negative` と同型のルーティング — drop accounting と区別）。"""
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["rendering"]["target_backend"] = "suno"
+    score = CompositionScore.model_validate(data)
+
+    prompt = ExternalPromptAdapter().render(score, max_chars=1000)
+
+    assert "intro:" not in prompt.text
+    assert "role=" not in prompt.text
+    assert "structure" not in prompt.dropped_elements
+
+
+def test_suno_structure_prose_omission_advisory_fires_only_when_structure_nonempty() -> None:
+    """advisory は structure 送出停止が実際に発動した場合（score.structure 非空）
+    のみ追加される。structure が空なら発動していないので advisory も出ない。"""
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["rendering"]["target_backend"] = "suno"
+    nonempty_score = CompositionScore.model_validate(data)
+
+    prompt = ExternalPromptAdapter().render(nonempty_score, max_chars=1000)
+    assert (
+        "structure prose omitted for suno backend (measured dead in K2-seg batch 3); "
+        "structure is compiled to the section_tags channel instead." in prompt.advisories
+    )
+
+    data["structure"] = []
+    empty_score = CompositionScore.model_validate(data)
+    empty_prompt = ExternalPromptAdapter().render(empty_score, max_chars=1000)
+    assert not any("structure prose omitted" in advisory for advisory in empty_prompt.advisories)
+
+
+def test_suno_section_tags_maps_known_labels_and_joins_physical() -> None:
+    """既知ラベル（intro/verse/chorus/bridge）が Suno タグ表記へマップされ、
+    `physical` が非空セクションは `[Label: physical]` で連結される。"""
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["rendering"]["target_backend"] = "suno"
+    score = CompositionScore.model_validate(data)
+
+    prompt = ExternalPromptAdapter().render(score, max_chars=1000)
+
+    assert prompt.section_tags == (
+        "[Intro: low density, sub bass only]\n"
+        "[Verse: sparse drums, short phrases, clear rests]\n"
+        "[Chorus: full energy, wide stereo, focused layers]\n"
+        "[Bridge: no kick, no bass, minimal texture]"
+    )
+
+
+def test_suno_section_tags_unknown_label_falls_back_to_title_case() -> None:
+    """マップにないラベル（例 "breakdown" 以外の未知語）は決定論的 Title-Case
+    フォールバックへ落ちる。"""
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["rendering"]["target_backend"] = "suno"
+    data["structure"] = [
+        {"section": "breakdown", "bars": 8, "role": "r", "physical": "quiet sparse"},
+        {"section": "unknown_section", "bars": 8, "role": "r", "physical": ""},
+    ]
+    score = CompositionScore.model_validate(data)
+
+    prompt = ExternalPromptAdapter().render(score, max_chars=1000)
+
+    assert prompt.section_tags == "[Break: quiet sparse]\n[Unknown_Section]"
+
+
+def test_suno_section_tags_empty_physical_omits_colon() -> None:
+    """`section.physical` が空なら `[Label]` のみ（コロン無し）。"""
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["rendering"]["target_backend"] = "suno"
+    data["structure"] = [{"section": "outro", "bars": 8, "role": "r", "physical": ""}]
+    score = CompositionScore.model_validate(data)
+
+    prompt = ExternalPromptAdapter().render(score, max_chars=1000)
+
+    assert prompt.section_tags == "[Outro]"
+
+
+def test_suno_section_tags_none_when_structure_empty() -> None:
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["rendering"]["target_backend"] = "suno"
+    data["structure"] = []
+    score = CompositionScore.model_validate(data)
+
+    prompt = ExternalPromptAdapter().render(score, max_chars=1000)
+
+    assert prompt.section_tags is None
+
+
+def test_external_and_musicgen_backends_never_emit_section_tags_and_keep_structure_prose() -> (
+    None
+):
+    """external / musicgen は structure 散文・section_tags とも従来どおり不変
+    （実測なき横展開はしない規律、#153 と同型）。"""
+    external_score = load_composition_score(SAMPLE_PATH)  # target_backend: external
+    external_prompt = ExternalPromptAdapter().render(external_score, max_chars=1000)
+    assert "intro:" in external_prompt.text
+    assert "role=" in external_prompt.text
+    assert external_prompt.section_tags is None
+
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["rendering"]["target_backend"] = "musicgen"
+    musicgen_score = CompositionScore.model_validate(data)
+    musicgen_prompt = ExternalPromptAdapter().render(musicgen_score, max_chars=1000)
+    assert "intro:" in musicgen_prompt.text
+    assert "role=" in musicgen_prompt.text
+    assert musicgen_prompt.section_tags is None
+
+
+def test_backend_descriptor_structure_rewiring_flags() -> None:
+    """`omit_structure_prose` / `emit_section_tags` は suno のみ True。"""
+    assert resolve_backend_descriptor("suno").omit_structure_prose is True
+    assert resolve_backend_descriptor("suno").emit_section_tags is True
+    assert resolve_backend_descriptor("external").omit_structure_prose is False
+    assert resolve_backend_descriptor("external").emit_section_tags is False
+    assert resolve_backend_descriptor("musicgen").omit_structure_prose is False
+    assert resolve_backend_descriptor("musicgen").emit_section_tags is False
+    assert resolve_backend_descriptor("udio").omit_structure_prose is False
+    assert resolve_backend_descriptor("udio").emit_section_tags is False
+
+
+def test_generated_prompt_section_tags_omitted_from_json_when_none() -> None:
+    """`section_tags` が None の render（external 等）は JSON 出力からキー自体が
+    消える（既存の Optional フィールド様式と統一）。"""
+    score = load_composition_score(SAMPLE_PATH)
+    prompt = ExternalPromptAdapter().render(score, max_chars=1000)
+
+    assert "section_tags" not in prompt.model_dump(mode="json")
+
+
+def test_generated_prompt_section_tags_present_in_json_for_suno() -> None:
+    data = yaml.safe_load(SAMPLE_PATH.read_text(encoding="utf-8"))
+    data["rendering"]["target_backend"] = "suno"
+    score = CompositionScore.model_validate(data)
+    prompt = ExternalPromptAdapter().render(score, max_chars=1000)
+
+    payload = prompt.model_dump(mode="json")
+    assert payload["section_tags"] == prompt.section_tags
+    assert payload["section_tags"] is not None
+
+
+def test_compose_cli_suno_text_surfaces_section_tags_on_stderr(tmp_path: Path) -> None:
+    """suno backend の text 出力は section_tags を stderr に可視化する（negative_tags
+    と同じ経路。stdout=コピペ成果物は不変）。"""
+    score_path = _write_sample_with_backend(tmp_path, "suno")
+
+    result = CliRunner().invoke(app, ["compose", str(score_path)])
+
+    assert result.exit_code == 0
+    assert "intro:" not in result.stdout
+    assert "Section tags" not in result.stdout
+    assert "[Intro: low density, sub bass only]" in result.stderr
+    assert "Section tags (paste into the generator's Lyrics field):" in result.stderr
+
+
+def test_compose_cli_external_text_has_no_section_tags_stderr_line(tmp_path: Path) -> None:
+    result = CliRunner().invoke(app, ["compose", str(SAMPLE_PATH)])
+
+    assert result.exit_code == 0
+    assert "Section tags" not in result.stdout
+    assert "Section tags" not in result.stderr
+
+
+def test_compose_cli_json_format_has_section_tags_field_for_suno(tmp_path: Path) -> None:
+    score_path = _write_sample_with_backend(tmp_path, "suno")
+
+    result = CliRunner().invoke(app, ["compose", str(score_path), "--format", "json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["section_tags"].startswith("[Intro:")
+    # stderr の可視化行は text 出力専用（JSON はフィールド同梱で足りる）。
+    assert "Section tags" not in result.stderr
+
+
 def test_lyrics_presence_bare_and_dotted_priority_tokens_normalize_identically() -> None:
     """The bare `lyrics_presence` spelling must behave identically to the dotted
     `semantic.lyrics_presence` spelling — both normalize to the same field token."""
