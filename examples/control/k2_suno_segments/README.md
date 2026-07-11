@@ -425,7 +425,10 @@ false（canonical 保留）** ── canonical 4 条件のうち 3 条件は充�
    または分解能 ≤ バッチ全長/40 ≈ 12 秒）の追加提出。他 3 条件は充足済みの
    ため、**時刻証跡のみで復元可**（音源の再生成は不要。
    `structure3_expected_grip.json` の `canonical_blocked_by` /
-   `canonical_restoration_condition` 参照）。
+   `canonical_restoration_condition` 参照）。**追記（2026-07-11）**: 復元条件
+   （秒単位タイムスタンプ）は取得不能とユーザー確認済み（2026-07-10）→
+   canonical 保留が最終状態（`structure3_expected_grip.json` の
+   `canonical_restoration_status` 参照）。
 
 **解析的 floor 照合**: high セル観測値 0.333333 は処方 `[high,low,high]` と
 デフォルト形状 `[low,high,high]` の解析的一致率（chance floor = 1/3）と
