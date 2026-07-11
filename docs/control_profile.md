@@ -352,6 +352,17 @@ match_rate_low_cell=0.416667・ヌル格下げ規則発火により **primary_ve
 バッチ 2 / バッチ 3 節 / [`controllability_poc.md`](controllability_poc.md)
 K2-seg バッチ 2 / バッチ 3 実測結果小節を参照。
 
+**設計反映（structure チャネル再配線）**: 上記バッチ 3 実測（dead）を受け、`suno`
+backend は structure 散文の本文送出を停止した（`omit_structure_prose=True`、
+`omit_body_negative` と同型の判断・#153 の実測なき横展開しない規律を踏襲）。
+`GeneratedPrompt.advisories` に停止発動時のみ 1 件の透明化メッセージを出す。
+代替として `section_tags`（Suno custom モードの Lyrics 欄に貼るセクション・メタタグ
+台本、`GeneratedPrompt.section_tags`）チャネルを新設した（`emit_section_tags=True`
+も suno のみ）。**この section_tags チャネル自体の grip（区間エネルギー構造として
+実現されるか）は未実証**— structure4 実験（`examples/control/k2_suno_segments/
+structure4_plan.yaml`）で dead 散文チャネルとの A/B として検証予定。config 化は
+しない（efficacy 未実証・YAGNI）。
+
 ### advisory 規則（自動補正はしない）
 
 `knob_quirks` を quirk 定義順に走査し、`advisory` が非 `null` かつ発火条件（`applies_to_values`
