@@ -80,6 +80,18 @@ backend's negative channel (suno/external = `exclude_styles`, musicgen =
 `omit_body_negative` backends. Machine consumers should use `--format json`
 (canonical; carries `negative_tags` in the payload).
 
+For the `suno` backend, `structure` prose is not compiled into the prompt
+body (measured dead in K2-seg batch 3); it is instead compiled into
+`section_tags`, a section-tag script for Suno's Lyrics field. In `text`
+format, a non-empty `section_tags` is surfaced on **stderr** the same way as
+`negative_tags`; `--format json` carries it as a `section_tags` field, but
+the key itself is **omitted** from the JSON payload when the backend does
+not emit it or `structure` is empty (`GeneratedPrompt.serialize_without_empty_optionals`
+drops `section_tags` when it is `None`, mirroring how `SemanticLayer.lyrics_presence`
+is omitted when unset; `negative_tags` by contrast is always present as a
+list). Machine consumers should treat a missing
+`section_tags` key as "no tags", not check for `null`.
+
 ### `svprpe measure <audio>`
 
 Measure the seven required `CompositionScore.physical` fields from one audio file.

@@ -1,0 +1,151 @@
+# K2-seg Suno structure4: Lyrics 欄セクションタグ台本 A/B（発注書・発注前）
+#
+# 目的: バッチ3（structure3_plan.yaml, #169）で structure 散文チャネル（compose
+# 本文の "intro: ...; role=..." 記述）が dead（処方適合 1/3 = chance floor 正確
+# 一致・処方 loud イントロ 0/4）と確定したことを受け、structure チャネル再配線
+# （suno backend: `omit_structure_prose` + `emit_section_tags`, 本 PR follow-up）
+# で新設した対チャネル — Suno custom モードの **Lyrics 欄セクション・メタタグ台本**
+# （`section_tags`、例 "[Intro: ...]"）は区間エネルギー構造を実現するか、を
+# 散文チャネル dead との対比で screen する。
+#
+# status: **発注前**（生成は User の人手トラック。本 PR はプロンプト作成・
+# 判定規約の事前登録までで、実際の Suno 生成・音声取得・計測は別セッション）。
+schema_version: "1.0"
+fixture_id: k2seg_suno_structure4
+generator: suno
+# バッチ3 と同一系（ユーザー申告予定・実生成時に確定）。標準 stock モデルへの
+# 一般化は未検証（バッチ 1 honesty (g) / バッチ 3 と同型）。
+model: "user-custom (Suno カスタムモデル・バッチ3と同一系を予定・生成時に申告確定)"
+repetitions: 4
+preregistered_date: "2026-07-11"  # 本ファイル作成日 = 判定規約の事前登録日（生成前登録）
+# バッチ3 と同じく Exclude Styles 欄は全セル空を予定（本文/Lyrics 欄のみの純粋な
+# チャネル比較のため）。
+exclude_styles: ""
+
+design:
+  same_batch_same_model: >-
+    AGENTS.md §8「計測比較の交絡隔離規律」（#165）遵守: A/B とも同一バッチ・
+    同一モデルで新規生成する（バッチ1 calm 再利用型の cross-batch 交絡は不採用）。
+  generation_order: "ABBA (run1 A -> run2 B -> run3 B -> run4 A)"
+  cell_size: "n=4 per cell"
+  total_generations: 8
+
+# A/B とも `structure4_score_low.yaml` / `structure4_score_high.yaml`
+# （本ディレクトリ同梱）を新 suno コンパイラ（`ExternalPromptAdapter`,
+# omit_structure_prose=True / emit_section_tags=True）に通した実出力を
+# verbatim 記載（手書きしない、2026-07-11 実行）。
+cells:
+  - name: A_baseline
+    role: "baseline（structure なし・新デフォルトの suno compile 出力・Lyrics 欄は空 instrumental）"
+    # svprpe compose structure4_score_low.yaml --format json 実出力 verbatim。
+    # 155 字。バッチ3 low（structure3_plan.yaml）とバイト完全一致
+    # （structure が元々空のため新旧コンパイラで挙動差がないことの検算）。
+    prompt: >-
+      120 BPM. Brightness balanced. Instrumental, no vocals. Calm atmosphere.
+      synthwave track. A minor. 4/4 time. Wide stereo. Active rate 0.8.
+      Valley depth 0.3.
+    prompt_char_count: 155
+    section_tags: null
+    lyrics_field: ""  # instrumental（Lyrics 欄は空、タグ台本なし）
+    prompt_source: structure4_score_low.yaml (compose 実出力, 2026-07-11)
+    prompt_max_chars: 300
+  - name: B_section_tags
+    role: >-
+      A と同一 style prompt + Lyrics 欄にバッチ3 と同じ直交処方
+      （loud intro / quiet breakdown / loud outro）のセクション・メタタグ台本
+    # svprpe compose structure4_score_high.yaml --format json 実出力 verbatim。
+    # style プロンプト本文（text）は A とバイト完全一致（structure 散文は suno
+    # backend で送出停止 — #169 follow-up）。section_tags のみが差分。
+    prompt: >-
+      120 BPM. Brightness balanced. Instrumental, no vocals. Calm atmosphere.
+      synthwave track. A minor. 4/4 time. Wide stereo. Active rate 0.8.
+      Valley depth 0.3.
+    prompt_char_count: 155
+    section_tags: |-
+      [Intro: loud dense full energy]
+      [Break: quiet sparse minimal]
+      [Outro: loud dense full energy]
+    lyrics_field: "section_tags 欄の内容をそのまま Suno Lyrics 欄へ貼る（自作歌詞なし、タグのみ）"
+    prompt_source: structure4_score_high.yaml (compose 実出力, 2026-07-11)
+    prompt_max_chars: 300
+
+# compose 入力 score の要点（本ディレクトリ同梱 score YAML の再現用参照）。
+compose_input_summary:
+  A_baseline:
+    structure: []
+  B_section_tags:
+    structure:
+      - section: intro
+        bars: 16
+        role: "intro"
+        physical: "loud dense full energy"
+      - section: breakdown
+        bars: 16
+        role: "breakdown"
+        physical: "quiet sparse minimal"
+      - section: outro
+        bars: 16
+        role: "outro"
+        physical: "loud dense full energy"
+  shared_physical:
+    bpm: 120
+    key: "A minor"
+    time_signature: "4/4"
+    active_rate_target: "0.8"
+    valley_depth_target: "0.3"
+    brightness: "balanced"
+    stereo_width: "wide"
+  shared_semantic:
+    lyrics_presence: "absent"  # instrumental 固定（タグのみの Lyrics 欄で歌詞交絡を回避）
+
+knobs:
+  - name: section_tags
+    primary_sensor: rms_section_pattern
+    secondary_sensor: novelty_boundaries
+    low_level: A_baseline
+    high_level: B_section_tags
+    expected_sign: 1
+    prescribed_pattern: ["high", "low", "high"]
+    instrument: "scripts/measure_structure_pattern.py（#167 凍結済み計器、バッチ3と同一）"
+    pattern: "loud-quiet-loud（バッチ3 と同一の直交処方、生成器デフォルト形状 [low,high,high] との一致は 1/3 に留まる）"
+    cutoff_defaults: "min_duration_sec=30.0（DEFAULT_MIN_DURATION_SEC）, expected_per_cell=4（DEFAULT_EXPECTED_PER_CELL）— 既定カットオフをそのまま使用（変更なし）。"
+    decision_rule: >-
+      structure3_plan.yaml の knobs.structure.decision_rule と同一規約を流用する
+      （主センサー比例3分割 RMS 算術平均比較・処方 [high,low,high] との一致率・
+      ≥0.7 tight / 0.3-0.7 loose / <0.3 dead・high セル match_rate <= low セル
+      match_rate のヌル格下げ規則・副センサー novelty 境界数 d、K 系列既定閾値
+      |d|>=0.8 tight / 0.2-0.8 loose / <0.2 dead）。相違点は low/high セルの中身が
+      「structure 散文の有無」ではなく「Lyrics 欄セクションタグ台本の有無」である点のみ
+      — 計器・規約は散文チャネル（バッチ3）と section_tags チャネル（本実験）で
+      共通にし、チャネルの効き方の直接比較を可能にする。
+    exclusion_rule: >-
+      曲長 30 秒未満のテイクは除外する（バッチ3 と同一規則）。除外・補充が発生した
+      場合は grip verdict について一律 non-canonical へ格下げする（バッチ3 継承）。
+
+# 事前登録（バッチ3 教訓の適用）: 時刻分解能が分単位のため均衡ゲート B<=0.1 は
+# 検証不能 — 本実験は non-canonical スクリーンとして事前登録する。canonical 化には
+# バッチ全長 40 分超（分解能 <= 全長/40 を満たす）、または秒単位の生成タイムスタンプ
+# 証跡（画面録画等）のいずれかが必要（バッチ3 の canonical_restoration_condition と
+# 同型の復元条件）。
+preregistration:
+  canonical_screen_status: "non-canonical（時刻分解能が分単位のため均衡ゲート B<=0.1 は現時点で検証不能と事前登録）"
+  canonicalization_requirement: >-
+    以下いずれかを満たせば canonical 化を検討する: (a) バッチ全長 40 分超
+    （分解能 <= 全長/40 の経験則を満たす）、(b) 秒単位（または同等精度）の
+    生成タイムスタンプ証跡（画面録画等、ダウンロード時刻代理ではない一次証跡）。
+    バッチ3（structure3_expected_grip.json の canonical_restoration_condition）と
+    同型の要件。
+  abba_counterbalance: "run1 A -> run2 B -> run3 B -> run4 A（バッチ3で確定した設計を継承）"
+
+# instrumental 固定: lyrics_presence=absent。B セルの Lyrics 欄はタグのみ
+# （自作歌詞なし）で、ボーカル/歌詞由来の意味層交絡（docs/lyrics_semantic_anchor.md
+# 系）を本実験のスコープから排除する。
+instrumental_fixed: true
+
+# 関連
+related:
+  - docs/control_profile.md (structure チャネル再配線・structure closeout 節)
+  - docs/cli.md (compose section_tags 出力)
+  - examples/control/k2_suno_segments/structure3_plan.yaml (dead 散文チャネルの対照実験元)
+  - examples/control/k2_suno_segments/structure3_expected_grip.json (バッチ3 判定結果・復元条件)
+  - examples/control/k2_suno_segments/README.md (バッチ2/バッチ3 節)

@@ -1,0 +1,73 @@
+# structure4 実験（B セル）: バッチ3 と同じ直交処方（loud intro / quiet breakdown /
+# loud outro）を structure 欄に持つ score。`structure4_score_low.yaml` と物理/意味
+# フィールドは完全同一（structure のみ差分）。新 suno コンパイラで compose すると
+# style プロンプト本文（text）は low セルとバイト完全一致し（structure 散文は
+# suno backend で送出停止、#169 follow-up）、`section_tags`（Lyrics 欄向けセクション・
+# メタタグ台本）にのみ処方が反映される。`svprpe compose structure4_score_high.yaml
+# --format json` で再現可能。
+meta:
+  title: "K2-seg Suno Structure4 A/B (loud-quiet-loud)"
+  version: "0.1"
+
+semantic:
+  core: "calm"
+  grv:
+    primary: "synthwave"
+    secondary: ""
+  delta_e:
+    overall: "steady"
+  avoid: []
+  lyrics_presence: "absent"
+
+physical:
+  bpm: 120
+  key: "A minor"
+  time_signature: "4/4"
+  active_rate_target: "0.8"
+  valley_depth_target: "0.3"
+  brightness: "balanced"
+  stereo_width: "wide"
+
+structure:
+  - section: intro
+    bars: 16
+    role: "intro"
+    physical: "loud dense full energy"
+  - section: breakdown
+    bars: 16
+    role: "breakdown"
+    physical: "quiet sparse minimal"
+  - section: outro
+    bars: 16
+    role: "outro"
+    physical: "loud dense full energy"
+
+rendering:
+  target_backend: "suno"
+  prompt_max_chars: 300
+  priority:
+    - semantic.core
+    - semantic.grv
+    - physical.bpm
+    - physical.key
+    - physical.time_signature
+    - structure
+    - semantic.avoid
+    - physical.optional
+
+control_profile:
+  suno:
+    bpm:
+      grip_class: "tight"
+      grip: 1.61
+      sensor: "bpm"
+      evidence: "examples/control/k2/expected_grip.json"
+    brightness:
+      grip_class: "tight"
+      grip: 0.86
+      sensor: "spectral_centroid"
+      evidence: "examples/control/k2/expected_grip.json"
+    lyrics_presence:
+      grip_class: "tight"
+      sensor: "clap_vocal_contrast"
+      evidence: "examples/learned/clap/lyrics_vocal_contrast_v2_fixture.json / docs/control_profile.md DD-4 (2026-07-08)"

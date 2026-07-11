@@ -1,0 +1,60 @@
+# structure4 実験（A セル / baseline）: structure なし・Lyrics 欄は空（instrumental）。
+# バッチ3 low セル（structure3_plan.yaml）と同一の物理/意味フィールドを用い、
+# 新 suno コンパイラ（omit_structure_prose / emit_section_tags, #169 follow-up）で
+# 実際に compose した score。text 出力はバッチ3 low（155 字）とバイト完全一致
+# （structure が元々空のため新旧コンパイラで挙動差なし）。
+# `svprpe compose structure4_score_low.yaml --format json` で再現可能。
+meta:
+  title: "K2-seg Suno Structure4 A/B (baseline)"
+  version: "0.1"
+
+semantic:
+  core: "calm"
+  grv:
+    primary: "synthwave"
+    secondary: ""
+  delta_e:
+    overall: "steady"
+  avoid: []
+  lyrics_presence: "absent"
+
+physical:
+  bpm: 120
+  key: "A minor"
+  time_signature: "4/4"
+  active_rate_target: "0.8"
+  valley_depth_target: "0.3"
+  brightness: "balanced"
+  stereo_width: "wide"
+
+structure: []
+
+rendering:
+  target_backend: "suno"
+  prompt_max_chars: 300
+  priority:
+    - semantic.core
+    - semantic.grv
+    - physical.bpm
+    - physical.key
+    - physical.time_signature
+    - structure
+    - semantic.avoid
+    - physical.optional
+
+control_profile:
+  suno:
+    bpm:
+      grip_class: "tight"
+      grip: 1.61
+      sensor: "bpm"
+      evidence: "examples/control/k2/expected_grip.json"
+    brightness:
+      grip_class: "tight"
+      grip: 0.86
+      sensor: "spectral_centroid"
+      evidence: "examples/control/k2/expected_grip.json"
+    lyrics_presence:
+      grip_class: "tight"
+      sensor: "clap_vocal_contrast"
+      evidence: "examples/learned/clap/lyrics_vocal_contrast_v2_fixture.json / docs/control_profile.md DD-4 (2026-07-08)"
