@@ -95,8 +95,15 @@ class BackendDescriptor:
     # 処方 loud イントロ 0/4）。#153 / omit_body_negative と同型の判断で、True の
     # backend は structure セグメントの送出自体を止める（candidate にすら入れない —
     # `_segments_for` 参照、`dropped_elements` には計上しない）。実測なき横展開は
-    # しない規律により **suno のみ** True（musicgen は実測なし、external は #153 と
-    # 同じ理由づけで Suno ルートの汎用エイリアスへ横展開しないため不変）。
+    # しない規律に従い **suno のみ** True で、musicgen はバッチ M1 実測
+    # （examples/control/musicgen_structure/m1_expected_grip.json, 2026-07-12）で
+    # loose＝区間エネルギー構造に部分的に写る（quiet breakdown が主担体・
+    # match_rate 0.583 vs baseline 0.417）ため送出継続（False）が確定 —
+    # 散文チャネルの dead は生成器一般の性質ではない（MusicGen 経路では loose。
+    # M1 は backend 別プロンプト整形＝欄順・structure 挿入位置の差込みの
+    # end-to-end 経路比較であり、差分の帰属（機種か整形か）は未分離 — #171 P2）。
+    # external は #153 と同じ理由づけで Suno ルートの汎用エイリアスへ横展開しない
+    # ため不変（False）。
     omit_structure_prose: bool = False
     # structure 散文停止の代替チャネル: Suno custom モードの Lyrics 欄に貼るセクション・
     # メタタグ台本（`_section_tags_for` 参照）。efficacy 未実証の実験チャネルのため

@@ -1,0 +1,390 @@
+{
+  "schema_version": "1.0",
+  "fixture_id": "m1_musicgen_structure",
+  "prescribed_pattern": [
+    "high",
+    "low",
+    "high"
+  ],
+  "songs": {
+    "low": [
+      {
+        "path": "structure_low_00.wav",
+        "sha256": "7a6d175528d74a9a8952cb4eb36f2666899d5a3fe0c132316618ce43c017191a",
+        "duration_sec": 30.54,
+        "section_rms_db": [
+          -21.4507,
+          -20.8803,
+          -22.5022
+        ],
+        "sign_pattern": [
+          "high",
+          "high",
+          "low"
+        ],
+        "match_rate": 0.333333,
+        "novelty_boundary_count": 2,
+        "section_margins": [
+          0.015617,
+          0.084556,
+          -0.100173
+        ],
+        "knife_edge_sections": []
+      },
+      {
+        "path": "structure_low_01.wav",
+        "sha256": "6e9901caefdaad83509403a300ae3f8087fe451a272b0a33bd6f23f29b3c7e1e",
+        "duration_sec": 30.54,
+        "section_rms_db": [
+          -18.4419,
+          -16.2626,
+          -17.67
+        ],
+        "sign_pattern": [
+          "low",
+          "high",
+          "low"
+        ],
+        "match_rate": 0.0,
+        "novelty_boundary_count": 2,
+        "section_margins": [
+          -0.111935,
+          0.141331,
+          -0.029396
+        ],
+        "knife_edge_sections": []
+      },
+      {
+        "path": "structure_low_02.wav",
+        "sha256": "648eeefa7f817fa3141421ffe160bdf5a1fb50bd1a43e4d3197976072b6a2199",
+        "duration_sec": 30.54,
+        "section_rms_db": [
+          -23.7316,
+          -18.7051,
+          -18.7521
+        ],
+        "sign_pattern": [
+          "low",
+          "high",
+          "high"
+        ],
+        "match_rate": 0.333333,
+        "novelty_boundary_count": 3,
+        "section_margins": [
+          -0.341788,
+          0.174068,
+          0.16772
+        ],
+        "knife_edge_sections": []
+      },
+      {
+        "path": "structure_low_03.wav",
+        "sha256": "63a77d0cb257cad464a024d9be2b11b29dd52db70514013aba79d5137d1cfa8c",
+        "duration_sec": 30.54,
+        "section_rms_db": [
+          -21.8984,
+          -17.8674,
+          -19.0614
+        ],
+        "sign_pattern": [
+          "low",
+          "high",
+          "high"
+        ],
+        "match_rate": 0.333333,
+        "novelty_boundary_count": 2,
+        "section_margins": [
+          -0.245635,
+          0.199871,
+          0.045764
+        ],
+        "knife_edge_sections": []
+      },
+      {
+        "path": "structure_low_04.wav",
+        "sha256": "af01c11df483796929c56e47801045dfd6abdd9d152317e58c74ac3ca3271331",
+        "duration_sec": 30.54,
+        "section_rms_db": [
+          -20.0484,
+          -19.1372,
+          -18.9962
+        ],
+        "sign_pattern": [
+          "low",
+          "high",
+          "high"
+        ],
+        "match_rate": 0.333333,
+        "novelty_boundary_count": 3,
+        "section_margins": [
+          -0.073898,
+          0.02853,
+          0.045368
+        ],
+        "knife_edge_sections": []
+      },
+      {
+        "path": "structure_low_05.wav",
+        "sha256": "4cdcc8e29978b12e7187a286ed5e3f77a0e01c3260969d20290c9406573a7ef1",
+        "duration_sec": 30.54,
+        "section_rms_db": [
+          -24.8785,
+          -35.693,
+          -34.5713
+        ],
+        "sign_pattern": [
+          "high",
+          "low",
+          "low"
+        ],
+        "match_rate": 0.666667,
+        "novelty_boundary_count": 3,
+        "section_margins": [
+          0.856974,
+          -0.465336,
+          -0.391637
+        ],
+        "knife_edge_sections": []
+      },
+      {
+        "path": "structure_low_06.wav",
+        "sha256": "d066bbb41196428bdd89d922b4baedc689d7083dae040ec1b209950f3797fb19",
+        "duration_sec": 30.54,
+        "section_rms_db": [
+          -20.2287,
+          -19.6013,
+          -18.5861
+        ],
+        "sign_pattern": [
+          "low",
+          "low",
+          "high"
+        ],
+        "match_rate": 0.666667,
+        "novelty_boundary_count": 1,
+        "section_margins": [
+          -0.086221,
+          -0.017779,
+          0.104
+        ],
+        "knife_edge_sections": []
+      },
+      {
+        "path": "structure_low_07.wav",
+        "sha256": "a7befe3aaa0a298d9ff98d77eaebca884c82c2706c50ce6e307efb253fc70d8b",
+        "duration_sec": 30.54,
+        "section_rms_db": [
+          -28.4385,
+          -39.4427,
+          -40.5138
+        ],
+        "sign_pattern": [
+          "high",
+          "low",
+          "low"
+        ],
+        "match_rate": 0.666667,
+        "novelty_boundary_count": 2,
+        "section_margins": [
+          0.959855,
+          -0.447903,
+          -0.511951
+        ],
+        "knife_edge_sections": []
+      }
+    ],
+    "high": [
+      {
+        "path": "structure_high_00.wav",
+        "sha256": "f3186499016ef9d30b52f1861eedc0ecc59301020942962cf20a3e8ed1e5e49c",
+        "duration_sec": 30.54,
+        "section_rms_db": [
+          -29.8175,
+          -20.9785,
+          -21.4345
+        ],
+        "sign_pattern": [
+          "low",
+          "high",
+          "high"
+        ],
+        "match_rate": 0.333333,
+        "novelty_boundary_count": 3,
+        "section_margins": [
+          -0.530647,
+          0.298528,
+          0.23212
+        ],
+        "knife_edge_sections": []
+      },
+      {
+        "path": "structure_high_01.wav",
+        "sha256": "20c6203ac8a8ed24eb9d3367315959a7e31d11cac6fd6c7012da7b466eb4579d",
+        "duration_sec": 30.54,
+        "section_rms_db": [
+          -17.9799,
+          -18.328,
+          -19.3724
+        ],
+        "sign_pattern": [
+          "high",
+          "high",
+          "low"
+        ],
+        "match_rate": 0.333333,
+        "novelty_boundary_count": 3,
+        "section_margins": [
+          0.066631,
+          0.024732,
+          -0.091362
+        ],
+        "knife_edge_sections": []
+      },
+      {
+        "path": "structure_high_02.wav",
+        "sha256": "9c1e434490c123bb8346c789b2a95d199e3f4b558ad15440f71ad05ac14f215a",
+        "duration_sec": 30.54,
+        "section_rms_db": [
+          -14.7935,
+          -14.8984,
+          -14.5105
+        ],
+        "sign_pattern": [
+          "low",
+          "low",
+          "high"
+        ],
+        "match_rate": 0.666667,
+        "novelty_boundary_count": 3,
+        "section_margins": [
+          -0.006986,
+          -0.018911,
+          0.025897
+        ],
+        "knife_edge_sections": []
+      },
+      {
+        "path": "structure_high_03.wav",
+        "sha256": "1be62d3f9d2bb45a7fc894a18b51ecc7dd8eb177c43d122a67771f67e093cb1e",
+        "duration_sec": 30.54,
+        "section_rms_db": [
+          -50.8085,
+          -80.2074,
+          -27.7246
+        ],
+        "sign_pattern": [
+          "low",
+          "low",
+          "high"
+        ],
+        "match_rate": 0.666667,
+        "novelty_boundary_count": 1,
+        "section_margins": [
+          -0.803875,
+          -0.993354,
+          1.797228
+        ],
+        "knife_edge_sections": []
+      },
+      {
+        "path": "structure_high_04.wav",
+        "sha256": "369bac4c71a799d9921842b8c9d978702fd5d1f8d448a0ebea0fdf94a879fde8",
+        "duration_sec": 30.54,
+        "section_rms_db": [
+          -20.4483,
+          -23.9983,
+          -22.3803
+        ],
+        "sign_pattern": [
+          "high",
+          "low",
+          "low"
+        ],
+        "match_rate": 0.666667,
+        "novelty_boundary_count": 3,
+        "section_margins": [
+          0.217004,
+          -0.191298,
+          -0.025706
+        ],
+        "knife_edge_sections": []
+      },
+      {
+        "path": "structure_high_05.wav",
+        "sha256": "2d8d800479177c1cf7c77ddad3c9bfbb48b335e63fb5a6179e6b77aa32c69355",
+        "duration_sec": 30.54,
+        "section_rms_db": [
+          -46.1779,
+          -28.589,
+          -20.8925
+        ],
+        "sign_pattern": [
+          "low",
+          "low",
+          "high"
+        ],
+        "match_rate": 0.666667,
+        "novelty_boundary_count": 2,
+        "section_margins": [
+          -0.888695,
+          -0.156746,
+          1.045442
+        ],
+        "knife_edge_sections": []
+      },
+      {
+        "path": "structure_high_06.wav",
+        "sha256": "046b8f4111e2c843c24a3c22ef2d773b1b4cae3a551e86a64c2fcf607df999aa",
+        "duration_sec": 30.54,
+        "section_rms_db": [
+          -15.6318,
+          -27.7245,
+          -30.9321
+        ],
+        "sign_pattern": [
+          "high",
+          "low",
+          "low"
+        ],
+        "match_rate": 0.666667,
+        "novelty_boundary_count": 2,
+        "section_margins": [
+          1.112219,
+          -0.475066,
+          -0.637153
+        ],
+        "knife_edge_sections": []
+      },
+      {
+        "path": "structure_high_07.wav",
+        "sha256": "45654693654630bb8178c9f58f1ffb8ae4524f3390990fce0ad5ad8fbacab6a3",
+        "duration_sec": 30.54,
+        "section_rms_db": [
+          -31.7646,
+          -29.8212,
+          -26.6511
+        ],
+        "sign_pattern": [
+          "low",
+          "low",
+          "high"
+        ],
+        "match_rate": 0.666667,
+        "novelty_boundary_count": 3,
+        "section_margins": [
+          -0.259703,
+          -0.074074,
+          0.333777
+        ],
+        "knife_edge_sections": []
+      }
+    ]
+  },
+  "aggregate": {
+    "match_rate_low_cell": 0.416667,
+    "match_rate_high_cell": 0.583333,
+    "novelty_d": 0.341565
+  },
+  "excluded": [],
+  "measurement_note": "全計測（主センサー RMS 符号パターン・margin・novelty とも）は canonical RPE 経路（svp_rpe.io.audio_loader.load_audio、extract_physical_from_file と同一の 22050 リサンプル）で実施。凍結計器 scripts/measure_structure_pattern.py（#167）を既定 --min-duration 30.0 のまま --pattern high,low,high --expected-per-cell 8 で実行（2026-07-12）。計器の生出力 verbatim は m1_measure_raw_2026-07-12.yaml、音声の provenance は m1_takes_manifest.json の audio_sha256（WAV 非コミット・facebook/musicgen-small @ 4c8334b0 の決定論 seed で byte 再現可能、docs/musicgen_backend.md §7.3 の同一環境 sha256 一致実測）。"
+}

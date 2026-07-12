@@ -1,0 +1,285 @@
+schema_version: '1.0'
+prescribed_pattern:
+- high
+- low
+- high
+songs:
+  low:
+  - path: /tmp/claude-0/-home-user-ugh-prompt-engine/e30e39ac-f7dd-5e4d-8220-4e7994ad72c4/scratchpad/musicgen_m1/takes/structure_low_00.wav
+    duration_sec: 30.54
+    section_rms_db:
+    - -21.4507
+    - -20.8803
+    - -22.5022
+    sign_pattern:
+    - high
+    - high
+    - low
+    match_rate: 0.333333
+    novelty_boundary_count: 2
+    section_margins:
+    - 0.015617
+    - 0.084556
+    - -0.100173
+    knife_edge_sections: []
+  - path: /tmp/claude-0/-home-user-ugh-prompt-engine/e30e39ac-f7dd-5e4d-8220-4e7994ad72c4/scratchpad/musicgen_m1/takes/structure_low_01.wav
+    duration_sec: 30.54
+    section_rms_db:
+    - -18.4419
+    - -16.2626
+    - -17.67
+    sign_pattern:
+    - low
+    - high
+    - low
+    match_rate: 0.0
+    novelty_boundary_count: 2
+    section_margins:
+    - -0.111935
+    - 0.141331
+    - -0.029396
+    knife_edge_sections: []
+  - path: /tmp/claude-0/-home-user-ugh-prompt-engine/e30e39ac-f7dd-5e4d-8220-4e7994ad72c4/scratchpad/musicgen_m1/takes/structure_low_02.wav
+    duration_sec: 30.54
+    section_rms_db:
+    - -23.7316
+    - -18.7051
+    - -18.7521
+    sign_pattern:
+    - low
+    - high
+    - high
+    match_rate: 0.333333
+    novelty_boundary_count: 3
+    section_margins:
+    - -0.341788
+    - 0.174068
+    - 0.16772
+    knife_edge_sections: []
+  - path: /tmp/claude-0/-home-user-ugh-prompt-engine/e30e39ac-f7dd-5e4d-8220-4e7994ad72c4/scratchpad/musicgen_m1/takes/structure_low_03.wav
+    duration_sec: 30.54
+    section_rms_db:
+    - -21.8984
+    - -17.8674
+    - -19.0614
+    sign_pattern:
+    - low
+    - high
+    - high
+    match_rate: 0.333333
+    novelty_boundary_count: 2
+    section_margins:
+    - -0.245635
+    - 0.199871
+    - 0.045764
+    knife_edge_sections: []
+  - path: /tmp/claude-0/-home-user-ugh-prompt-engine/e30e39ac-f7dd-5e4d-8220-4e7994ad72c4/scratchpad/musicgen_m1/takes/structure_low_04.wav
+    duration_sec: 30.54
+    section_rms_db:
+    - -20.0484
+    - -19.1372
+    - -18.9962
+    sign_pattern:
+    - low
+    - high
+    - high
+    match_rate: 0.333333
+    novelty_boundary_count: 3
+    section_margins:
+    - -0.073898
+    - 0.02853
+    - 0.045368
+    knife_edge_sections: []
+  - path: /tmp/claude-0/-home-user-ugh-prompt-engine/e30e39ac-f7dd-5e4d-8220-4e7994ad72c4/scratchpad/musicgen_m1/takes/structure_low_05.wav
+    duration_sec: 30.54
+    section_rms_db:
+    - -24.8785
+    - -35.693
+    - -34.5713
+    sign_pattern:
+    - high
+    - low
+    - low
+    match_rate: 0.666667
+    novelty_boundary_count: 3
+    section_margins:
+    - 0.856974
+    - -0.465336
+    - -0.391637
+    knife_edge_sections: []
+  - path: /tmp/claude-0/-home-user-ugh-prompt-engine/e30e39ac-f7dd-5e4d-8220-4e7994ad72c4/scratchpad/musicgen_m1/takes/structure_low_06.wav
+    duration_sec: 30.54
+    section_rms_db:
+    - -20.2287
+    - -19.6013
+    - -18.5861
+    sign_pattern:
+    - low
+    - low
+    - high
+    match_rate: 0.666667
+    novelty_boundary_count: 1
+    section_margins:
+    - -0.086221
+    - -0.017779
+    - 0.104
+    knife_edge_sections: []
+  - path: /tmp/claude-0/-home-user-ugh-prompt-engine/e30e39ac-f7dd-5e4d-8220-4e7994ad72c4/scratchpad/musicgen_m1/takes/structure_low_07.wav
+    duration_sec: 30.54
+    section_rms_db:
+    - -28.4385
+    - -39.4427
+    - -40.5138
+    sign_pattern:
+    - high
+    - low
+    - low
+    match_rate: 0.666667
+    novelty_boundary_count: 2
+    section_margins:
+    - 0.959855
+    - -0.447903
+    - -0.511951
+    knife_edge_sections: []
+  high:
+  - path: /tmp/claude-0/-home-user-ugh-prompt-engine/e30e39ac-f7dd-5e4d-8220-4e7994ad72c4/scratchpad/musicgen_m1/takes/structure_high_00.wav
+    duration_sec: 30.54
+    section_rms_db:
+    - -29.8175
+    - -20.9785
+    - -21.4345
+    sign_pattern:
+    - low
+    - high
+    - high
+    match_rate: 0.333333
+    novelty_boundary_count: 3
+    section_margins:
+    - -0.530647
+    - 0.298528
+    - 0.23212
+    knife_edge_sections: []
+  - path: /tmp/claude-0/-home-user-ugh-prompt-engine/e30e39ac-f7dd-5e4d-8220-4e7994ad72c4/scratchpad/musicgen_m1/takes/structure_high_01.wav
+    duration_sec: 30.54
+    section_rms_db:
+    - -17.9799
+    - -18.328
+    - -19.3724
+    sign_pattern:
+    - high
+    - high
+    - low
+    match_rate: 0.333333
+    novelty_boundary_count: 3
+    section_margins:
+    - 0.066631
+    - 0.024732
+    - -0.091362
+    knife_edge_sections: []
+  - path: /tmp/claude-0/-home-user-ugh-prompt-engine/e30e39ac-f7dd-5e4d-8220-4e7994ad72c4/scratchpad/musicgen_m1/takes/structure_high_02.wav
+    duration_sec: 30.54
+    section_rms_db:
+    - -14.7935
+    - -14.8984
+    - -14.5105
+    sign_pattern:
+    - low
+    - low
+    - high
+    match_rate: 0.666667
+    novelty_boundary_count: 3
+    section_margins:
+    - -0.006986
+    - -0.018911
+    - 0.025897
+    knife_edge_sections: []
+  - path: /tmp/claude-0/-home-user-ugh-prompt-engine/e30e39ac-f7dd-5e4d-8220-4e7994ad72c4/scratchpad/musicgen_m1/takes/structure_high_03.wav
+    duration_sec: 30.54
+    section_rms_db:
+    - -50.8085
+    - -80.2074
+    - -27.7246
+    sign_pattern:
+    - low
+    - low
+    - high
+    match_rate: 0.666667
+    novelty_boundary_count: 1
+    section_margins:
+    - -0.803875
+    - -0.993354
+    - 1.797228
+    knife_edge_sections: []
+  - path: /tmp/claude-0/-home-user-ugh-prompt-engine/e30e39ac-f7dd-5e4d-8220-4e7994ad72c4/scratchpad/musicgen_m1/takes/structure_high_04.wav
+    duration_sec: 30.54
+    section_rms_db:
+    - -20.4483
+    - -23.9983
+    - -22.3803
+    sign_pattern:
+    - high
+    - low
+    - low
+    match_rate: 0.666667
+    novelty_boundary_count: 3
+    section_margins:
+    - 0.217004
+    - -0.191298
+    - -0.025706
+    knife_edge_sections: []
+  - path: /tmp/claude-0/-home-user-ugh-prompt-engine/e30e39ac-f7dd-5e4d-8220-4e7994ad72c4/scratchpad/musicgen_m1/takes/structure_high_05.wav
+    duration_sec: 30.54
+    section_rms_db:
+    - -46.1779
+    - -28.589
+    - -20.8925
+    sign_pattern:
+    - low
+    - low
+    - high
+    match_rate: 0.666667
+    novelty_boundary_count: 2
+    section_margins:
+    - -0.888695
+    - -0.156746
+    - 1.045442
+    knife_edge_sections: []
+  - path: /tmp/claude-0/-home-user-ugh-prompt-engine/e30e39ac-f7dd-5e4d-8220-4e7994ad72c4/scratchpad/musicgen_m1/takes/structure_high_06.wav
+    duration_sec: 30.54
+    section_rms_db:
+    - -15.6318
+    - -27.7245
+    - -30.9321
+    sign_pattern:
+    - high
+    - low
+    - low
+    match_rate: 0.666667
+    novelty_boundary_count: 2
+    section_margins:
+    - 1.112219
+    - -0.475066
+    - -0.637153
+    knife_edge_sections: []
+  - path: /tmp/claude-0/-home-user-ugh-prompt-engine/e30e39ac-f7dd-5e4d-8220-4e7994ad72c4/scratchpad/musicgen_m1/takes/structure_high_07.wav
+    duration_sec: 30.54
+    section_rms_db:
+    - -31.7646
+    - -29.8212
+    - -26.6511
+    sign_pattern:
+    - low
+    - low
+    - high
+    match_rate: 0.666667
+    novelty_boundary_count: 3
+    section_margins:
+    - -0.259703
+    - -0.074074
+    - 0.333777
+    knife_edge_sections: []
+aggregate:
+  match_rate_low_cell: 0.416667
+  match_rate_high_cell: 0.583333
+  novelty_d: 0.341565
+excluded: []

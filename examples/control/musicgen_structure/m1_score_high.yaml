@@ -1,0 +1,59 @@
+# バッチ M1（MusicGen structure 欄 grip）B_structure_prose セル score:
+# バッチ 3 と同一の直交処方（loud intro / quiet breakdown / loud outro）を
+# structure 欄に持つ。`m1_score_low.yaml` と物理/意味フィールドは完全同一
+# （structure のみ差分）。musicgen backend は omit_structure_prose=False
+# （実測なしで据え置き、#170）のため、compose すると structure 散文
+# （"intro: ...; role=..." 形式）がプロンプト本文にそのまま入る — Suno と違い
+# 送出停止されない（この未計測を埋めるのが本バッチ）。
+# `svprpe compose m1_score_high.yaml --format json` の text（290 字）が
+# m1_plan.yaml の prompt_high verbatim（2026-07-12 実 compose 出力）。
+# low セルとの差分は structure 3 セグメントの挿入のみ（差分 135 字）。
+meta:
+  title: "M1 MusicGen Structure A/B (loud-quiet-loud)"
+  version: "0.1"
+
+semantic:
+  core: "calm"
+  grv:
+    primary: "synthwave"
+    secondary: ""
+  delta_e:
+    overall: "steady"
+  avoid: []
+  lyrics_presence: "absent"
+
+physical:
+  bpm: 120
+  key: "A minor"
+  time_signature: "4/4"
+  active_rate_target: "0.8"
+  valley_depth_target: "0.3"
+  brightness: "balanced"
+  stereo_width: "wide"
+
+structure:
+  - section: intro
+    bars: 16
+    role: "intro"
+    physical: "loud dense full energy"
+  - section: breakdown
+    bars: 16
+    role: "breakdown"
+    physical: "quiet sparse minimal"
+  - section: outro
+    bars: 16
+    role: "outro"
+    physical: "loud dense full energy"
+
+rendering:
+  target_backend: "musicgen"
+  prompt_max_chars: 300
+  priority:
+    - semantic.core
+    - semantic.grv
+    - physical.bpm
+    - physical.key
+    - physical.time_signature
+    - structure
+    - semantic.avoid
+    - physical.optional

@@ -25,12 +25,16 @@ from scripts.collect_musicgen_takes import (
     GenerationPlan,
     extract_fixture,
     generator_label,
+    iter_plan_takes,
     load_plan,
     load_takes_manifest,
     main,
+    merge_takes_manifests,
+    plan_chunk_manifest_stub,
     profile_scope_advisory,
     resolve_perform_target,
     sample_seed,
+    validate_merge_compatibility,
 )
 
 PLAN_PATH = Path("examples/control/k2_musicgen/plan.yaml")
@@ -503,6 +507,336 @@ def test_load_takes_manifest_round_trips(tmp_path: Path) -> None:
 
     assert loaded["fixture_id"] == "k2_musicgen_mini"
     assert len(loaded["samples"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# チャンク分割実行（--only-level / --only-repeat / --append、torch 不要の純ロジック）
+# ---------------------------------------------------------------------------
+
+
+def test_iter_plan_takes_filters_preserve_absolute_seeds() -> None:
+    """フィルタは列挙の部分集合であり、seed / インデックスは一括実行と同一。
+
+    チャンク分割（バッチ M1 の 1 クリップ 1 コール実行）が一括実行と同じ
+    (sample_id, seed) 系列を作ることの根拠。
+    """
+    plan = load_plan(SEGMENTS_PLAN_PATH)
+
+    full = {
+        (take.knob.name, take.level_token, take.repeat): take.seed
+        for take in iter_plan_takes(plan)
+    }
+    assert len(full) == len(plan.knobs) * 2 * plan.repetitions
+
+    filtered = list(iter_plan_takes(plan, only_level="high", only_repeat=3))
+    assert len(filtered) == len(plan.knobs)
+    for take in filtered:
+        assert take.level_token == "high"
+        assert take.repeat == 3
+        assert take.seed == full[(take.knob.name, "high", 3)]
+        assert take.seed == sample_seed(take.knob_index, 1, 3)
+
+
+def test_iter_plan_takes_rejects_invalid_filters() -> None:
+    plan = load_plan(SEGMENTS_PLAN_PATH)
+
+    with pytest.raises(ValueError, match="only_level"):
+        list(iter_plan_takes(plan, only_level="mid"))
+    with pytest.raises(ValueError, match="only_repeat"):
+        list(iter_plan_takes(plan, only_repeat=plan.repetitions))
+    with pytest.raises(ValueError, match="only_repeat"):
+        list(iter_plan_takes(plan, only_repeat=-1))
+
+
+# チャンク系テスト共通の pin 済み revision（--append は未 pin plan を生成前に
+# 拒否するため、append 系シナリオのヘルパーは pin 済みを既定にする）。
+_CHUNK_REVISION = "cafef00d5eed5eed5eed5eed5eed5eed5eed5eed"
+
+
+def _chunk_manifest(samples: list[dict]) -> dict:
+    """merge テスト用の最小チャンク manifest（ヘッダ共通・samples のみ差替え）。"""
+    return {
+        "schema_version": "1.0",
+        "fixture_id": "m1_chunks",
+        "generator": "musicgen-small",
+        "plan": {
+            "schema_version": "1.0",
+            "fixture_id": "m1_chunks",
+            "generator": "musicgen-small",
+            "model_id": "facebook/musicgen-small",
+            "model_revision": _CHUNK_REVISION,
+            "duration_seconds": 30.6,
+            "guidance_scale": 3.0,
+            "repetitions": 2,
+            "knobs": [
+                {
+                    "name": "structure",
+                    "sensor": "rms_section_pattern",
+                    "low_level": "low",
+                    "high_level": "high",
+                    "expected_sign": 1,
+                    "prompt_low": "a",
+                    "prompt_high": "b",
+                    # load_plan().model_dump() は既定 kind を明示するため、
+                    # 実 generate_takes が書くヘッダと同形にしておく
+                    # （--append 事前検証のヘッダ一致テストが実物と同じ形で走る）。
+                    "kind": "effect_size",
+                }
+            ],
+        },
+        "samples": samples,
+    }
+
+
+def _chunk_sample(level_token: str, repeat: int) -> dict:
+    level_index = 0 if level_token == "low" else 1
+    return {
+        "sample_id": f"structure_{level_token}_{repeat:02d}",
+        "knob": "structure",
+        "level": level_token,
+        "repeat": repeat,
+        "seed": sample_seed(0, level_index, repeat),
+        "prompt": "a" if level_token == "low" else "b",
+        "audio_path": f"structure_{level_token}_{repeat:02d}.wav",
+        "audio_sha256": "0" * 64,
+        "model_id": "facebook/musicgen-small",
+        "model_revision": _CHUNK_REVISION,
+        "duration_seconds": 30.6,
+        "guidance_scale": 3.0,
+    }
+
+
+def test_merge_takes_manifests_restores_canonical_order_regardless_of_chunk_order() -> None:
+    """逆順チャンク合流でも、samples は一括実行と同じ正準順（level→repeat）になる。"""
+    merged = merge_takes_manifests(
+        _chunk_manifest([_chunk_sample("high", 1)]),
+        _chunk_manifest([_chunk_sample("low", 0)]),
+    )
+    merged = merge_takes_manifests(merged, _chunk_manifest([_chunk_sample("high", 0)]))
+    merged = merge_takes_manifests(merged, _chunk_manifest([_chunk_sample("low", 1)]))
+
+    assert [sample["sample_id"] for sample in merged["samples"]] == [
+        "structure_low_00",
+        "structure_low_01",
+        "structure_high_00",
+        "structure_high_01",
+    ]
+
+
+def test_merge_takes_manifests_fails_fast_on_duplicate_or_plan_mismatch() -> None:
+    base = _chunk_manifest([_chunk_sample("low", 0)])
+
+    with pytest.raises(ValueError, match="duplicate sample_id"):
+        merge_takes_manifests(base, _chunk_manifest([_chunk_sample("low", 0)]))
+
+    other_plan = _chunk_manifest([_chunk_sample("high", 0)])
+    other_plan["plan"] = dict(other_plan["plan"], duration_seconds=12.0)
+    with pytest.raises(ValueError, match="plan differs"):
+        merge_takes_manifests(base, other_plan)
+
+
+def test_merge_rejects_mixed_sample_model_revisions() -> None:
+    """サンプルレベルの解決済み model_revision が混合する manifest の統合を拒否する
+    （#171 P2 3巡目: 宣言 plan が同一（例: 両方 null 宣言）でも、実行間で HF が
+    異なるコミットへ解決したチャンク同士が 1 fixture に暗黙混合され grip 計測を
+    汚染する経路を、merged manifest を書く前に塞ぐ多重防御）。"""
+    base = _chunk_manifest([_chunk_sample("low", 0)])
+    drifted = _chunk_manifest([_chunk_sample("high", 0)])
+    drifted["samples"][0]["model_revision"] = "0123456789abcdef0123456789abcdef01234567"
+
+    with pytest.raises(ValueError, match="mixed resolved model_id/model_revision"):
+        merge_takes_manifests(base, drifted)
+
+    # model_id の混合も同様に拒否される。
+    drifted_id = _chunk_manifest([_chunk_sample("high", 0)])
+    drifted_id["samples"][0]["model_id"] = "facebook/musicgen-medium"
+    with pytest.raises(ValueError, match="mixed resolved model_id/model_revision"):
+        merge_takes_manifests(base, drifted_id)
+
+    # 単一 revision（全サンプル一致）は従来どおり統合できる（回帰）。
+    merged = merge_takes_manifests(base, _chunk_manifest([_chunk_sample("high", 0)]))
+    assert len(merged["samples"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# `--append` の生成前検証（#171 P2 採用: WAV を 1 byte も書く前に fail-fast）
+# ---------------------------------------------------------------------------
+
+
+def _write_append_scene(tmp_path: Path, existing_manifest: dict) -> tuple[Path, Path, Path]:
+    """plan ファイル + 既存 manifest + 未作成 output_dir を配置する（torch 不要）。
+
+    plan ファイルの内容は `_chunk_manifest` のヘッダ `plan` と同一 —
+    `plan_chunk_manifest_stub` のヘッダが既存 manifest と一致する正常系を基準に、
+    テスト側で既存 manifest を汚して違反ケースを作る。
+    """
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(json.dumps(_chunk_manifest([])["plan"]), encoding="utf-8")
+    manifest_out = tmp_path / "manifest.json"
+    manifest_out.write_text(
+        json.dumps(existing_manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    output_dir = tmp_path / "takes"  # 生成前 fail-fast なら作成すらされない
+    return plan_path, manifest_out, output_dir
+
+
+def _run_generate_append(
+    plan_path: Path, output_dir: Path, manifest_out: Path, *, level: str, repeat: int
+) -> int:
+    return main(
+        [
+            "generate",
+            "--plan", str(plan_path),
+            "--output-dir", str(output_dir),
+            "--manifest-out", str(manifest_out),
+            "--only-level", level,
+            "--only-repeat", str(repeat),
+            "--append",
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    "revision",
+    [
+        None,  # 未 pin: HF 現行 head へ解決
+        "main",  # 可動 branch ref: チャンク間で別コミットへ解決し得る
+        "v1.0",  # 可動 tag ref: 同上（タグは付け替え可能）
+        "4C8334B02C6EC4E8664A91979669A501EC497792",  # 大文字 hex は正規形でない
+        "4c8334b0",  # 短縮ハッシュ: 不変性はあるが 40 桁の正規形を要求
+    ],
+)
+def test_generate_append_requires_immutable_commit_hash_revision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    revision: str | None,
+) -> None:
+    """--append は不変コミットハッシュ（40 桁小文字 hex）の model_revision を必須と
+    し、null だけでなく可動 ref（main / タグ等）も生成前に fail-fast する
+    （#171 P2 4巡目: 可動 ref は非 None 文字列として null 拒否を素通りするが、
+    チャンク実行間で別コミットへ解決し revision 混合を生む — 検出が生成後の
+    サンプルレベル検査だけでは「音声を書く前に fail する」意図が果たせない）。
+
+    既存 manifest の有無に依存しない（最初のチャンクから拒否 — 混合は 2 回目
+    以降でなく初回実行の時点で予防する）。
+    """
+    monkeypatch.setitem(sys.modules, "torch", None)
+    monkeypatch.setitem(sys.modules, "transformers", None)
+
+    movable_plan = dict(_chunk_manifest([])["plan"], model_revision=revision)
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(json.dumps(movable_plan), encoding="utf-8")
+    manifest_out = tmp_path / "manifest.json"  # 存在しない = 初回チャンク
+    output_dir = tmp_path / "takes"
+
+    exit_code = _run_generate_append(
+        plan_path, output_dir, manifest_out, level="low", repeat=0
+    )
+
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert "immutable commit hash" in captured.err
+    assert repr(revision) in captured.err
+    assert "no WAV written" in captured.err
+    assert not output_dir.exists()
+    assert not manifest_out.exists()
+
+
+def test_generate_append_rejects_duplicate_chunk_before_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """同一チャンクの誤再実行は **生成前** に fail-fast し、WAV も manifest も
+    触らない（#171 P2: 生成後の merge 検査だけでは同名 WAV を先に上書きしてから
+    重複で失敗し、旧 manifest が stale な sha256 を指したまま残る）。
+
+    torch を欠落させた環境で exit 2（事前検証）になることが順序の証明 —
+    検証が生成より後なら torch import が先に走り exit 1（ImportError）になる。
+    """
+    monkeypatch.setitem(sys.modules, "torch", None)
+    monkeypatch.setitem(sys.modules, "transformers", None)
+
+    existing = _chunk_manifest([_chunk_sample("low", 0)])
+    plan_path, manifest_out, output_dir = _write_append_scene(tmp_path, existing)
+    manifest_bytes_before = manifest_out.read_bytes()
+
+    exit_code = _run_generate_append(
+        plan_path, output_dir, manifest_out, level="low", repeat=0
+    )
+
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert "duplicate sample_id" in captured.err
+    assert "no WAV written" in captured.err
+    # WAV は 1 byte も書かれない（output_dir は作成すらされない）し、
+    # 既存 manifest も byte 単位で不変。
+    assert not output_dir.exists()
+    assert manifest_out.read_bytes() == manifest_bytes_before
+
+
+def test_generate_append_rejects_header_mismatch_before_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """既存 manifest とのヘッダ不整合（merge と同一基準）も生成前に拒否する。"""
+    monkeypatch.setitem(sys.modules, "torch", None)
+    monkeypatch.setitem(sys.modules, "transformers", None)
+
+    existing = _chunk_manifest([_chunk_sample("low", 0)])
+    existing["plan"] = dict(existing["plan"], duration_seconds=12.0)
+    plan_path, manifest_out, output_dir = _write_append_scene(tmp_path, existing)
+
+    # 重複しないチャンク（high 0）でもヘッダ不整合だけで拒否される。
+    exit_code = _run_generate_append(
+        plan_path, output_dir, manifest_out, level="high", repeat=0
+    )
+
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert "plan differs" in captured.err
+    assert not output_dir.exists()
+
+
+def test_generate_append_compatible_chunk_proceeds_to_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """整合するチャンクは事前検証を通過して生成段階へ進む（回帰: torch 欠落環境
+    では ImportError の exit 1 に到達する = 事前検証が正常 append を塞がない）。
+    既存 manifest は生成失敗時も不変。"""
+    monkeypatch.setitem(sys.modules, "torch", None)
+    monkeypatch.setitem(sys.modules, "transformers", None)
+
+    existing = _chunk_manifest([_chunk_sample("low", 0)])
+    plan_path, manifest_out, output_dir = _write_append_scene(tmp_path, existing)
+    manifest_bytes_before = manifest_out.read_bytes()
+
+    exit_code = _run_generate_append(
+        plan_path, output_dir, manifest_out, level="high", repeat=0
+    )
+
+    assert exit_code == 1  # 事前検証は pass し、torch 欠落の ImportError まで到達
+    captured = capsys.readouterr()
+    assert "musicgen" in captured.err
+    assert manifest_out.read_bytes() == manifest_bytes_before
+
+
+def test_plan_chunk_manifest_stub_header_matches_generate_output_shape() -> None:
+    """計画 stub のヘッダ/sample_id は `generate_takes` の manifest と同一系列
+    （検証の同値性 — stub が実生成と違う id を作ると事前検証がすり抜ける）。"""
+    plan = load_plan(SEGMENTS_PLAN_PATH)
+
+    stub = plan_chunk_manifest_stub(plan, only_level="low", only_repeat=2)
+
+    assert stub["schema_version"] == "1.0"
+    assert stub["fixture_id"] == plan.fixture_id
+    assert stub["generator"] == plan.generator
+    assert stub["plan"] == plan.model_dump()
+    assert [s["sample_id"] for s in stub["samples"]] == [
+        f"{take.knob.name}_low_02"
+        for take in iter_plan_takes(plan, only_level="low", only_repeat=2)
+    ]
+    # 整合する stub は validate_merge_compatibility を素通しする（正常系）。
+    full_stub = plan_chunk_manifest_stub(plan, only_level="high", only_repeat=2)
+    validate_merge_compatibility(stub, full_stub)
 
 
 # ---------------------------------------------------------------------------

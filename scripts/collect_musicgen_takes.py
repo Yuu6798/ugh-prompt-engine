@@ -68,7 +68,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, NamedTuple, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -80,6 +80,12 @@ if str(SRC) not in sys.path:
 SCHEMA_VERSION = "1.0"
 GENERATOR = "collect_musicgen_takes.py"
 _INSTALL_HINT = "pip install -e '.[musicgen]'"
+
+# 不変コミットハッシュ（HF の git commit SHA、40 桁小文字 hex）。`--append` の
+# preflight はこれ以外の model_revision（null / `main` / タグ等の可動 ref）を
+# 拒否する — 可動 ref はチャンク実行間で別コミットへ解決し revision 混合を生む
+# ため（#171 P2 4巡目）。
+_IMMUTABLE_REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
 
 # コミット済みの device profile / grip fixture が実測したモデルと revision
 # （PR B, 2026-07-03、docs/musicgen_backend.md §5 の G4 目視確認と同一 pin）。
@@ -183,6 +189,166 @@ def sample_seed(knob_index: int, level_index: int, repeat: int) -> int:
     return 1000 + knob_index * 100 + level_index * 50 + repeat
 
 
+class PlanTake(NamedTuple):
+    """`iter_plan_takes` が列挙する 1 テイク分の生成指示（純データ・torch 不要）。"""
+
+    knob_index: int
+    knob: KnobPlan
+    level_index: int
+    level_token: str
+    level_value: str
+    prompt: str
+    repeat: int
+    seed: int
+
+
+def iter_plan_takes(
+    plan: GenerationPlan,
+    *,
+    only_level: Optional[str] = None,
+    only_repeat: Optional[int] = None,
+) -> Iterator[PlanTake]:
+    """plan の全 (knob, level, repeat) を決定論順に列挙する（フィルタ付き・純ロジック）。
+
+    長時間バッチをチャンク分割実行するためのフィルタ:
+    ``only_level``（"low"/"high"）と ``only_repeat``（0-indexed）で部分集合だけを
+    生成できる。**seed はフィルタに依存しない** — `sample_seed` は絶対インデックス
+    （knob_index, level_index, repeat）から導出するため、チャンク分割しても
+    一括実行と同一の seed / sample_id 系列になる（K2-seg 運用ノートの復旧耐性と
+    同じ性質。分割の仕方は結果に影響しない）。
+    """
+    if only_level is not None and only_level not in ("low", "high"):
+        raise ValueError(f"only_level must be 'low' or 'high', got {only_level!r}")
+    if only_repeat is not None and not 0 <= only_repeat < plan.repetitions:
+        raise ValueError(
+            f"only_repeat must be within [0, {plan.repetitions}), got {only_repeat}"
+        )
+
+    for knob_index, knob in enumerate(plan.knobs):
+        levels = (
+            ("low", knob.low_level, knob.prompt_low),
+            ("high", knob.high_level, knob.prompt_high),
+        )
+        for level_index, (level_token, level_value, prompt) in enumerate(levels):
+            if only_level is not None and level_token != only_level:
+                continue
+            for repeat in range(plan.repetitions):
+                if only_repeat is not None and repeat != only_repeat:
+                    continue
+                yield PlanTake(
+                    knob_index=knob_index,
+                    knob=knob,
+                    level_index=level_index,
+                    level_token=level_token,
+                    level_value=level_value,
+                    prompt=prompt,
+                    repeat=repeat,
+                    seed=sample_seed(knob_index, level_index, repeat),
+                )
+
+
+def validate_merge_compatibility(existing: dict[str, Any], new: dict[str, Any]) -> None:
+    """manifest 統合の整合検査（`merge_takes_manifests` と `--append` 事前検証の共有）。
+
+    ヘッダ（schema_version / fixture_id / generator / plan）が完全一致しない
+    manifest 同士、sample_id が重複する manifest 同士、およびサンプルレベルの
+    解決済み (model_id, model_revision) が単一でない統合を fail-fast で拒否する
+    （別 plan のサンプル混入・同一チャンク二重実行・revision 混合の検出）。
+    ``new`` は samples の各要素が ``sample_id`` を持てばよく、生成前の計画 stub
+    （`plan_chunk_manifest_stub`）にも適用できる — `--append` の誤再実行を
+    **WAV を 1 byte も書く前に** 拒否するため（#171 P2: 生成後の検査だけでは
+    同名 WAV を先に上書きしてから重複で失敗し、再実行が異なる byte を生んだ場合
+    （revision 未 pin・環境差など）に旧 manifest が stale な sha256 を指したまま残る）。
+    """
+    for key in ("schema_version", "fixture_id", "generator", "plan"):
+        if existing.get(key) != new.get(key):
+            raise ValueError(
+                f"cannot merge manifests: {key} differs "
+                f"(existing={existing.get(key)!r}, new={new.get(key)!r})"
+            )
+
+    existing_ids = {sample["sample_id"] for sample in existing["samples"]}
+    duplicates = [
+        sample["sample_id"] for sample in new["samples"] if sample["sample_id"] in existing_ids
+    ]
+    if duplicates:
+        raise ValueError(
+            f"cannot merge manifests: duplicate sample_id(s) {duplicates} "
+            "(same chunk generated twice?)"
+        )
+
+    # サンプルレベルの解決済み model_id / model_revision の混合拒否（#171 P2 3巡目）:
+    # 宣言 plan の比較（上のヘッダ検査）だけでは `model_revision: null` の plan が
+    # 実行間で異なる HF コミットへ解決したチャンク同士を素通しする。generate_takes
+    # はサンプル別に解決済み revision を記録するので、統合対象の全サンプルで
+    # (model_id, model_revision) が単一であることを検査し、複数 revision の出力が
+    # 1 fixture に暗黙混合して grip 計測を汚染することを防ぐ。計画 stub のサンプル
+    # （sample_id のみ・生成前で解決値を持たない）は検査対象から自然に外れる。
+    resolved_models = {
+        (sample.get("model_id"), sample.get("model_revision"))
+        for sample in list(existing["samples"]) + list(new["samples"])
+        if "model_id" in sample or "model_revision" in sample
+    }
+    if len(resolved_models) > 1:
+        raise ValueError(
+            "cannot merge manifests: mixed resolved model_id/model_revision across samples "
+            f"{sorted(resolved_models, key=str)} — one fixture must come from a single "
+            "model revision (unpinned runs can resolve to different HF commits)"
+        )
+
+
+def plan_chunk_manifest_stub(
+    plan: GenerationPlan,
+    *,
+    only_level: Optional[str] = None,
+    only_repeat: Optional[int] = None,
+) -> dict[str, Any]:
+    """`generate_takes` が書き出す manifest と同一ヘッダ + sample_id のみの計画 stub。
+
+    torch 不要・生成前に組み立てられる。`validate_merge_compatibility` に渡して
+    `--append` の事前検証（重複チャンク・ヘッダ不整合の生成前 fail-fast）に使う。
+    sample_id の組み立て式は `generate_takes` と同一
+    （``f"{knob.name}_{level_token}_{repeat:02d}"``）。
+    """
+    samples = [
+        {"sample_id": f"{take.knob.name}_{take.level_token}_{take.repeat:02d}"}
+        for take in iter_plan_takes(plan, only_level=only_level, only_repeat=only_repeat)
+    ]
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "fixture_id": plan.fixture_id,
+        "generator": plan.generator,
+        "plan": plan.model_dump(),
+        "samples": samples,
+    }
+
+
+def merge_takes_manifests(existing: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
+    """チャンク実行が書き出した takes manifest を単一 manifest へ統合する。
+
+    整合検査（ヘッダ完全一致 + sample_id 重複の fail-fast）は
+    `validate_merge_compatibility`（共有ヘルパー）に委譲する。統合後の samples は
+    plan 由来の正準順（knob 順 → low/high → repeat 昇順）にソートするため、
+    **チャンクの実行順によらず一括実行と同一の manifest になる**。
+    """
+    validate_merge_compatibility(existing, new)
+
+    plan_raw = existing["plan"]
+    knob_order = {knob["name"]: index for index, knob in enumerate(plan_raw["knobs"])}
+
+    def _canonical_order(sample: dict[str, Any]) -> tuple[int, int, int]:
+        knob_index = knob_order[sample["knob"]]
+        knob = plan_raw["knobs"][knob_index]
+        level_index = 0 if sample["level"] == knob["low_level"] else 1
+        return (knob_index, level_index, int(sample["repeat"]))
+
+    merged = dict(existing)
+    merged["samples"] = sorted(
+        list(existing["samples"]) + list(new["samples"]), key=_canonical_order
+    )
+    return merged
+
+
 def generator_label(model_id: str) -> str:
     """model_id から generator ラベルを導出する（例: facebook/musicgen-medium → musicgen-medium）。
 
@@ -224,13 +390,26 @@ def _import_musicgen_stack() -> Any:
     return torch, AutoProcessor, MusicgenForConditionalGeneration
 
 
-def generate_takes(plan: GenerationPlan, *, output_dir: Path) -> dict[str, Any]:
-    """plan の全 (knob, level, repeat) について MusicGen 推論を行い、takes manifest を返す。
+def generate_takes(
+    plan: GenerationPlan,
+    *,
+    output_dir: Path,
+    only_level: Optional[str] = None,
+    only_repeat: Optional[int] = None,
+) -> dict[str, Any]:
+    """plan の (knob, level, repeat) について MusicGen 推論を行い、takes manifest を返す。
 
     音声は ``output_dir`` に WAV として書き出すのみでコミット対象にはしない。
     manifest の ``audio_sha256`` は書き出したバイト列から必ず計算する
     （``collect_clap_fixture.py`` と同じ規約）。
+
+    ``only_level`` / ``only_repeat`` でチャンク分割実行できる（実行環境のコマンド
+    タイムアウトより 1 チャンクを短くするため）。seed は絶対インデックス由来
+    （`iter_plan_takes` 参照）のため分割は結果に影響せず、チャンク manifest は
+    `merge_takes_manifests` で一括実行と同一の manifest に統合できる。
     """
+    takes = list(iter_plan_takes(plan, only_level=only_level, only_repeat=only_repeat))
+
     torch, AutoProcessor, MusicgenForConditionalGeneration = _import_musicgen_stack()
     from scipy.io import wavfile
 
@@ -249,40 +428,36 @@ def generate_takes(plan: GenerationPlan, *, output_dir: Path) -> dict[str, Any]:
     max_new_tokens = int(plan.duration_seconds * 50)
 
     samples: list[dict[str, Any]] = []
-    for knob_index, knob in enumerate(plan.knobs):
-        levels = (("low", knob.low_level, knob.prompt_low), ("high", knob.high_level, knob.prompt_high))
-        for level_index, (level_token, level_value, prompt) in enumerate(levels):
-            for repeat in range(plan.repetitions):
-                seed = sample_seed(knob_index, level_index, repeat)
-                torch.manual_seed(seed)
-                inputs = processor(text=[prompt], padding=True, return_tensors="pt")
-                audio_values = model.generate(
-                    **inputs,
-                    do_sample=True,
-                    guidance_scale=plan.guidance_scale,
-                    max_new_tokens=max_new_tokens,
-                )
-                waveform = audio_values[0, 0].detach().cpu().numpy()
-                sample_id = f"{knob.name}_{level_token}_{repeat:02d}"
-                audio_path = output_dir / f"{sample_id}.wav"
-                wavfile.write(str(audio_path), sampling_rate, waveform)
-                audio_sha256 = _sha256_file(audio_path)
-                samples.append(
-                    {
-                        "sample_id": sample_id,
-                        "knob": knob.name,
-                        "level": level_value,
-                        "repeat": repeat,
-                        "seed": seed,
-                        "prompt": prompt,
-                        "audio_path": audio_path.name,
-                        "audio_sha256": audio_sha256,
-                        "model_id": plan.model_id,
-                        "model_revision": resolved_revision,
-                        "duration_seconds": plan.duration_seconds,
-                        "guidance_scale": plan.guidance_scale,
-                    }
-                )
+    for take in takes:
+        torch.manual_seed(take.seed)
+        inputs = processor(text=[take.prompt], padding=True, return_tensors="pt")
+        audio_values = model.generate(
+            **inputs,
+            do_sample=True,
+            guidance_scale=plan.guidance_scale,
+            max_new_tokens=max_new_tokens,
+        )
+        waveform = audio_values[0, 0].detach().cpu().numpy()
+        sample_id = f"{take.knob.name}_{take.level_token}_{take.repeat:02d}"
+        audio_path = output_dir / f"{sample_id}.wav"
+        wavfile.write(str(audio_path), sampling_rate, waveform)
+        audio_sha256 = _sha256_file(audio_path)
+        samples.append(
+            {
+                "sample_id": sample_id,
+                "knob": take.knob.name,
+                "level": take.level_value,
+                "repeat": take.repeat,
+                "seed": take.seed,
+                "prompt": take.prompt,
+                "audio_path": audio_path.name,
+                "audio_sha256": audio_sha256,
+                "model_id": plan.model_id,
+                "model_revision": resolved_revision,
+                "duration_seconds": plan.duration_seconds,
+                "guidance_scale": plan.guidance_scale,
+            }
+        )
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -495,11 +670,63 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     advisory = profile_scope_advisory(plan.model_id, plan.model_revision)
     if advisory is not None:
         print(advisory, file=sys.stderr)
+
+    # --append の事前検証その 1（#171 P2 3-4巡目採用）: append 分割は **不変コミット
+    # ハッシュ**（40 桁小文字 hex）の model_revision を必須とする。未 pin（null）は
+    # チャンク実行のたびに HF の現行 head へ解決され、`main` やタグ等の**可動 ref**
+    # も非 None 文字列のままチャンク間で別コミットへ解決し得るため、どちらも長い
+    # --append バッチが複数モデル revision の出力を 1 fixture に暗黙混合し grip
+    # 計測を汚染する経路になる（4巡目: null 拒否だけでは可動 ref が素通りし
+    # 「音声を書く前に fail する」意図が果たせない）。生成前の HF 解決値比較は
+    # preflight にネットワーク依存を持ち込むため採らず、pin 規約どおり不変
+    # ハッシュを要求する（M1 前例: 4c8334b0… の 40 桁 pin）。単発生成（--append
+    # なし）は単一実行内で混合が起きないため従来どおり任意 revision 可。
+    if args.append and not _IMMUTABLE_REVISION_RE.fullmatch(plan.model_revision or ""):
+        print(
+            "error: --append chunked batches require the plan's model_revision to be an "
+            "immutable commit hash (40-char lowercase hex); got "
+            f"{plan.model_revision!r}. Unpinned (null) revisions resolve to the current "
+            "HF head, and movable refs (e.g. 'main' or a tag) can resolve to different "
+            "commits between chunk executions — either way silently mixing model "
+            "revisions in one fixture. Pin the full commit hash — refusing to generate "
+            "(no WAV written)",
+            file=sys.stderr,
+        )
+        return 2
+
+    # --append の事前検証その 2（#171 P2 採用）: merge と同一基準の整合検査
+    # （validate_merge_compatibility 共有ヘルパー）を **生成前** に計画 stub へ
+    # 適用する。生成後の merge 検査だけでは、同一チャンクの誤再実行が同名 WAV を
+    # 先に上書きしてから重複で失敗し、旧 manifest が stale な sha256 を指した
+    # まま残る — 違反時は WAV を 1 byte も書かずに fail-fast する。
+    existing: Optional[dict[str, Any]] = None
+    if args.append and args.manifest_out.exists():
+        existing = load_takes_manifest(args.manifest_out)
+        planned = plan_chunk_manifest_stub(
+            plan, only_level=args.only_level, only_repeat=args.only_repeat
+        )
+        try:
+            validate_merge_compatibility(existing, planned)
+        except ValueError as exc:
+            print(
+                f"error: {exc} — refusing to generate (no WAV written; "
+                "existing manifest and audio left untouched)",
+                file=sys.stderr,
+            )
+            return 2
+
     try:
-        manifest = generate_takes(plan, output_dir=args.output_dir)
+        manifest = generate_takes(
+            plan,
+            output_dir=args.output_dir,
+            only_level=args.only_level,
+            only_repeat=args.only_repeat,
+        )
     except ImportError as exc:
         print(str(exc), file=sys.stderr)
         return 1
+    if existing is not None:
+        manifest = merge_takes_manifests(existing, manifest)
     args.manifest_out.parent.mkdir(parents=True, exist_ok=True)
     args.manifest_out.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
@@ -566,6 +793,27 @@ def main(argv: list[str] | None = None) -> int:
     )
     generate_parser.add_argument(
         "--manifest-out", type=Path, required=True, help="takes manifest JSON の出力先"
+    )
+    generate_parser.add_argument(
+        "--only-level",
+        choices=("low", "high"),
+        default=None,
+        help="このレベルのテイクのみ生成する（チャンク分割実行用。seed は分割に不変）",
+    )
+    generate_parser.add_argument(
+        "--only-repeat",
+        type=int,
+        default=None,
+        metavar="N",
+        help="この repeat インデックス（0-indexed）のテイクのみ生成する（チャンク分割実行用）",
+    )
+    generate_parser.add_argument(
+        "--append",
+        action="store_true",
+        help=(
+            "--manifest-out が既存ならヘッダ一致を検証してサンプルを統合する"
+            "（正準順ソート・sample_id 重複は fail-fast）。チャンク分割実行の合流用"
+        ),
     )
     generate_parser.set_defaults(func=_cmd_generate)
 
