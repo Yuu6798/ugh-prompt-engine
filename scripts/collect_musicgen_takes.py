@@ -241,14 +241,17 @@ def iter_plan_takes(
                 )
 
 
-def merge_takes_manifests(existing: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
-    """チャンク実行が書き出した takes manifest を単一 manifest へ統合する。
+def validate_merge_compatibility(existing: dict[str, Any], new: dict[str, Any]) -> None:
+    """manifest 統合の整合検査（`merge_takes_manifests` と `--append` 事前検証の共有）。
 
     ヘッダ（schema_version / fixture_id / generator / plan）が完全一致しない
-    manifest 同士の統合は fail-fast（別 plan のサンプル混入防止）。sample_id の
-    重複も fail-fast（同一チャンクの二重実行の検出）。統合後の samples は
-    plan 由来の正準順（knob 順 → low/high → repeat 昇順）にソートするため、
-    **チャンクの実行順によらず一括実行と同一の manifest になる**。
+    manifest 同士、および sample_id が重複する manifest 同士の統合を fail-fast で
+    拒否する（別 plan のサンプル混入・同一チャンク二重実行の検出）。``new`` は
+    samples の各要素が ``sample_id`` を持てばよく、生成前の計画 stub
+    （`plan_chunk_manifest_stub`）にも適用できる — `--append` の誤再実行を
+    **WAV を 1 byte も書く前に** 拒否するため（#171 P2: 生成後の検査だけでは
+    同名 WAV を先に上書きしてから重複で失敗し、再実行が異なる byte を生んだ場合
+    （revision 未 pin・環境差など）に旧 manifest が stale な sha256 を指したまま残る）。
     """
     for key in ("schema_version", "fixture_id", "generator", "plan"):
         if existing.get(key) != new.get(key):
@@ -266,6 +269,43 @@ def merge_takes_manifests(existing: dict[str, Any], new: dict[str, Any]) -> dict
             f"cannot merge manifests: duplicate sample_id(s) {duplicates} "
             "(same chunk generated twice?)"
         )
+
+
+def plan_chunk_manifest_stub(
+    plan: GenerationPlan,
+    *,
+    only_level: Optional[str] = None,
+    only_repeat: Optional[int] = None,
+) -> dict[str, Any]:
+    """`generate_takes` が書き出す manifest と同一ヘッダ + sample_id のみの計画 stub。
+
+    torch 不要・生成前に組み立てられる。`validate_merge_compatibility` に渡して
+    `--append` の事前検証（重複チャンク・ヘッダ不整合の生成前 fail-fast）に使う。
+    sample_id の組み立て式は `generate_takes` と同一
+    （``f"{knob.name}_{level_token}_{repeat:02d}"``）。
+    """
+    samples = [
+        {"sample_id": f"{take.knob.name}_{take.level_token}_{take.repeat:02d}"}
+        for take in iter_plan_takes(plan, only_level=only_level, only_repeat=only_repeat)
+    ]
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "fixture_id": plan.fixture_id,
+        "generator": plan.generator,
+        "plan": plan.model_dump(),
+        "samples": samples,
+    }
+
+
+def merge_takes_manifests(existing: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
+    """チャンク実行が書き出した takes manifest を単一 manifest へ統合する。
+
+    整合検査（ヘッダ完全一致 + sample_id 重複の fail-fast）は
+    `validate_merge_compatibility`（共有ヘルパー）に委譲する。統合後の samples は
+    plan 由来の正準順（knob 順 → low/high → repeat 昇順）にソートするため、
+    **チャンクの実行順によらず一括実行と同一の manifest になる**。
+    """
+    validate_merge_compatibility(existing, new)
 
     plan_raw = existing["plan"]
     knob_order = {knob["name"]: index for index, knob in enumerate(plan_raw["knobs"])}
@@ -604,6 +644,28 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     advisory = profile_scope_advisory(plan.model_id, plan.model_revision)
     if advisory is not None:
         print(advisory, file=sys.stderr)
+
+    # --append の事前検証（#171 P2 採用）: merge と同一基準の整合検査
+    # （validate_merge_compatibility 共有ヘルパー）を **生成前** に計画 stub へ
+    # 適用する。生成後の merge 検査だけでは、同一チャンクの誤再実行が同名 WAV を
+    # 先に上書きしてから重複で失敗し、旧 manifest が stale な sha256 を指した
+    # まま残る — 違反時は WAV を 1 byte も書かずに fail-fast する。
+    existing: Optional[dict[str, Any]] = None
+    if args.append and args.manifest_out.exists():
+        existing = load_takes_manifest(args.manifest_out)
+        planned = plan_chunk_manifest_stub(
+            plan, only_level=args.only_level, only_repeat=args.only_repeat
+        )
+        try:
+            validate_merge_compatibility(existing, planned)
+        except ValueError as exc:
+            print(
+                f"error: {exc} — refusing to generate (no WAV written; "
+                "existing manifest and audio left untouched)",
+                file=sys.stderr,
+            )
+            return 2
+
     try:
         manifest = generate_takes(
             plan,
@@ -614,8 +676,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     except ImportError as exc:
         print(str(exc), file=sys.stderr)
         return 1
-    if args.append and args.manifest_out.exists():
-        existing = load_takes_manifest(args.manifest_out)
+    if existing is not None:
         manifest = merge_takes_manifests(existing, manifest)
     args.manifest_out.parent.mkdir(parents=True, exist_ok=True)
     args.manifest_out.write_text(
