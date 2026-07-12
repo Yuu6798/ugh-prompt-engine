@@ -1,0 +1,45 @@
+# バッチ M1（MusicGen structure 欄 grip）A_baseline セル score: structure なし。
+# K2-seg Suno バッチ 3（structure3_plan.yaml）の low セルと物理/意味フィールドを
+# 完全共有し、target_backend のみ musicgen に差し替えたもの（相違点は生成器のみ・
+# 計器/規約共通でチャネル×生成器の直接比較を可能にする）。
+# `svprpe compose m1_score_low.yaml --format json` の text（155 字）が
+# m1_plan.yaml の prompt_low verbatim（2026-07-12 実 compose 出力）。
+# musicgen backend は omit_structure_prose=False（実測なしで据え置き、#170）のため、
+# structure が空の本セルは high セルとの structure 散文の有無 A/B の baseline になる。
+meta:
+  title: "M1 MusicGen Structure A/B (baseline)"
+  version: "0.1"
+
+semantic:
+  core: "calm"
+  grv:
+    primary: "synthwave"
+    secondary: ""
+  delta_e:
+    overall: "steady"
+  avoid: []
+  lyrics_presence: "absent"
+
+physical:
+  bpm: 120
+  key: "A minor"
+  time_signature: "4/4"
+  active_rate_target: "0.8"
+  valley_depth_target: "0.3"
+  brightness: "balanced"
+  stereo_width: "wide"
+
+structure: []
+
+rendering:
+  target_backend: "musicgen"
+  prompt_max_chars: 300
+  priority:
+    - semantic.core
+    - semantic.grv
+    - physical.bpm
+    - physical.key
+    - physical.time_signature
+    - structure
+    - semantic.avoid
+    - physical.optional

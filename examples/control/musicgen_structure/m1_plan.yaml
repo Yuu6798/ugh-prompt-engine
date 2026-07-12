@@ -1,0 +1,107 @@
+# バッチ M1: MusicGen structure 欄 grip 実測 — 生成計画（事前登録、2026-07-12）
+#
+# 問い: compose の structure 散文（"intro: ...; role=..."）は MusicGen で区間
+# エネルギー構造として実現されるか。Suno では dead（K2-seg バッチ 3, #169,
+# structure3_plan.yaml / structure3_expected_grip.json）— 本バッチは**生成器を
+# 替えたチャネル比較**であり、バッチ 3 との相違点は生成器（Suno 手動 UI →
+# MusicGen ローカルスクリプト）のみ。計器（scripts/measure_structure_pattern.py、
+# #167 凍結済み）・判定規約（下記 decision_rule）・処方（loud-quiet-loud 直交処方）
+# は共通で、チャネル×生成器の直接比較を可能にする。
+#
+# 本ファイルは scripts/collect_musicgen_takes.py generate が読む機械可読 plan
+# （GenerationPlan スキーマ・未知キー fail-fast）であるため、事前登録プロトコル
+# はすべて YAML コメントとして encode する（コミット = 事前登録。生成前に本
+# ファイルをコミットしてからバッチを実行する）。
+#
+# ── セル定義 ─────────────────────────────────────────────────────────────
+# - low  = A_baseline: structure: []（155 字プロンプト・m1_score_low.yaml の
+#   compose 実出力 verbatim）
+# - high = B_structure_prose: intro/breakdown/outro = loud dense full energy /
+#   quiet sparse minimal / loud dense full energy（290 字プロンプト・
+#   m1_score_high.yaml の compose 実出力 verbatim。low との差分は structure
+#   3 セグメント挿入のみ・135 字）
+# - musicgen backend は omit_structure_prose=False（#170: 実測なし据え置き）の
+#   ため structure 散文はプロンプト本文に入る。負チャネルの交絡なし:
+#   両セルとも semantic.avoid は空・negative_tags 空、musicgen backend は
+#   omit_body_negative=True で本文 Avoid も送出しない（Phase 0 実出力確認済み・
+#   runbook の generate は negative チャネルを一切生成に配線していない）。
+#
+# ── duration_seconds: 30.6 の理由 ────────────────────────────────────────
+# MusicGen の 4-codebook delay pattern により、出力フレーム数は常に
+# max_new_tokens - (num_codebooks - 1) = max_new_tokens - 3 となる（Phase 0
+# 実測: 1500 tokens → 29.94s、1510 tokens → 30.14s、理論と一致）。
+# duration_seconds=30.0 ちょうどでは実出力 29.94s となり計器の事前登録カットオフ
+# min_duration_sec=30.0 を割る。30.6 指定（max_new_tokens=1530 → 実出力
+# ≈30.54s）でゲートを確実に通すマージンを取る。
+#
+# ── seed（決定論・runbook の sample_seed 式）─────────────────────────────
+# seed = 1000 + knob_index*100 + level_index*50 + repeat（knob_index=0、
+# low=level_index 0 / high=level_index 1、repeat 0..7）:
+#   low  セル: 1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007
+#   high セル: 1050, 1051, 1052, 1053, 1054, 1055, 1056, 1057
+# チャンク分割実行（--only-level/--only-repeat/--append）でも seed は絶対
+# インデックス由来のため一括実行と同一（tests/test_musicgen_runbook.py で pin）。
+#
+# ── プロトコル注記（事前登録）────────────────────────────────────────────
+# AGENTS.md §8 の canonical 4 条件のうち ABBA カウンターバランスと均衡ゲート B
+# は、人手 UI 生成の時間ドリフト対策である。本バッチは決定論 seed による
+# ローカルスクリプト生成であり、サンプル間に状態を持ち越す drift 機構が存在
+# しない（モデルは stateless・seed 固定で再現可能）ため、ABBA/B ゲートは
+# 非適用と事前登録する。同一バッチ・同一モデル・同一プロセスは充足。
+# 全サンプルの生成開始/終了の秒単位タイムスタンプを sidecar ログに記録する
+# （provenance は推定で埋めない）。
+#
+# ── decision_rule（バッチ 3 = structure3_plan.yaml knobs.structure と同一規約の流用）─
+# 主センサー: 比例 3 分割・線形 RMS 算術平均比較（canonical 22050 / load_audio
+# 経路）。処方パターン [high, low, high]（loud-quiet-loud）との per-song 一致率
+# = 一致区間数 / 3、セル値 = R=8 の平均。規約（high セルに適用）: >=0.7 tight /
+# 0.3-0.7 loose / <0.3 dead（time_signature の match_rate 規約を流用）。
+# ヌル格下げ規則: high セル match_rate <= low セル match_rate の場合は分類に
+# よらず dead へ格下げする（K3-1b の known-dead ヌル天井と同型 —「calm な曲が
+# 偶然 loud-quiet-loud に見える」chance 水準と不可分な効果を tight/loose と
+# 誤認しない）。副センサー: novelty 境界数の d（structure_novelty の検出境界数を
+# low vs high の Cohen's d、K 系列既定閾値 |d|>=0.8 tight / 0.2-0.8 loose /
+# <0.2 dead・expected_sign +1 で判定）。margin 計器: 各区間 margin =
+# (RMS - 3 区間平均) / 平均、|margin| < 0.005 は knife_edge フラグ（honesty
+# 注記のみ・match 計算は不変更、#167 凍結）。
+#
+# ── exclusion_rule（バッチ 3 継承）───────────────────────────────────────
+# 曲長 30 秒未満のテイクは除外する（構造が物理的に展開し得ない極端な短尺）。
+# ローカル生成では duration_seconds=30.6 のマージンにより発生しない見込みだが
+# 規約として残す。計測は凍結計器の既定 --min-duration 30.0 のまま実行し、
+# --expected-per-cell 8 でカットオフ後の受入数を fail-fast 検査する。
+#
+# ── 計測（生成後に実行・計器は凍結のまま）────────────────────────────────
+# python3 scripts/measure_structure_pattern.py \
+#     --low <low セル 8 wav> --high <high セル 8 wav> \
+#     --pattern high,low,high --expected-per-cell 8
+# （--min-duration は既定 30.0 のまま渡さない。音声 WAV はコミットせず
+# manifest の audio_sha256 で provenance を pin する。）
+schema_version: "1.0"
+fixture_id: m1_musicgen_structure
+generator: musicgen-small
+model_id: facebook/musicgen-small
+# G4 目視確認済み revision に pin（examples/control/k2_musicgen/plan.yaml と同一）。
+model_revision: 4c8334b02c6ec4e8664a91979669a501ec497792
+duration_seconds: 30.6
+guidance_scale: 3.0
+repetitions: 8
+knobs:
+  - name: structure
+    sensor: rms_section_pattern
+    low_level: "low"
+    high_level: "high"
+    expected_sign: 1
+    # 主解析は凍結計器 measure_structure_pattern.py（本ファイル冒頭の
+    # decision_rule）。runbook の extract / measure_grip.py 経路は本バッチでは
+    # 不使用（rms_section_pattern は extract の物理特徴量キーに存在しない）。
+    prompt_low: >-
+      Brightness balanced. synthwave track. A minor. Wide stereo.
+      Instrumental, no vocals. Calm atmosphere. 120 BPM. 4/4 time.
+      Active rate 0.8. Valley depth 0.3.
+    prompt_high: >-
+      Brightness balanced. synthwave track. A minor. intro: loud dense full
+      energy; role=intro. breakdown: quiet sparse minimal; role=breakdown.
+      outro: loud dense full energy; role=outro. Wide stereo. Instrumental,
+      no vocals. Calm atmosphere. 120 BPM. 4/4 time. Active rate 0.8.
+      Valley depth 0.3.
