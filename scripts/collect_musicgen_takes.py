@@ -68,7 +68,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, NamedTuple, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -183,6 +183,106 @@ def sample_seed(knob_index: int, level_index: int, repeat: int) -> int:
     return 1000 + knob_index * 100 + level_index * 50 + repeat
 
 
+class PlanTake(NamedTuple):
+    """`iter_plan_takes` が列挙する 1 テイク分の生成指示（純データ・torch 不要）。"""
+
+    knob_index: int
+    knob: KnobPlan
+    level_index: int
+    level_token: str
+    level_value: str
+    prompt: str
+    repeat: int
+    seed: int
+
+
+def iter_plan_takes(
+    plan: GenerationPlan,
+    *,
+    only_level: Optional[str] = None,
+    only_repeat: Optional[int] = None,
+) -> Iterator[PlanTake]:
+    """plan の全 (knob, level, repeat) を決定論順に列挙する（フィルタ付き・純ロジック）。
+
+    長時間バッチをチャンク分割実行するためのフィルタ:
+    ``only_level``（"low"/"high"）と ``only_repeat``（0-indexed）で部分集合だけを
+    生成できる。**seed はフィルタに依存しない** — `sample_seed` は絶対インデックス
+    （knob_index, level_index, repeat）から導出するため、チャンク分割しても
+    一括実行と同一の seed / sample_id 系列になる（K2-seg 運用ノートの復旧耐性と
+    同じ性質。分割の仕方は結果に影響しない）。
+    """
+    if only_level is not None and only_level not in ("low", "high"):
+        raise ValueError(f"only_level must be 'low' or 'high', got {only_level!r}")
+    if only_repeat is not None and not 0 <= only_repeat < plan.repetitions:
+        raise ValueError(
+            f"only_repeat must be within [0, {plan.repetitions}), got {only_repeat}"
+        )
+
+    for knob_index, knob in enumerate(plan.knobs):
+        levels = (
+            ("low", knob.low_level, knob.prompt_low),
+            ("high", knob.high_level, knob.prompt_high),
+        )
+        for level_index, (level_token, level_value, prompt) in enumerate(levels):
+            if only_level is not None and level_token != only_level:
+                continue
+            for repeat in range(plan.repetitions):
+                if only_repeat is not None and repeat != only_repeat:
+                    continue
+                yield PlanTake(
+                    knob_index=knob_index,
+                    knob=knob,
+                    level_index=level_index,
+                    level_token=level_token,
+                    level_value=level_value,
+                    prompt=prompt,
+                    repeat=repeat,
+                    seed=sample_seed(knob_index, level_index, repeat),
+                )
+
+
+def merge_takes_manifests(existing: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
+    """チャンク実行が書き出した takes manifest を単一 manifest へ統合する。
+
+    ヘッダ（schema_version / fixture_id / generator / plan）が完全一致しない
+    manifest 同士の統合は fail-fast（別 plan のサンプル混入防止）。sample_id の
+    重複も fail-fast（同一チャンクの二重実行の検出）。統合後の samples は
+    plan 由来の正準順（knob 順 → low/high → repeat 昇順）にソートするため、
+    **チャンクの実行順によらず一括実行と同一の manifest になる**。
+    """
+    for key in ("schema_version", "fixture_id", "generator", "plan"):
+        if existing.get(key) != new.get(key):
+            raise ValueError(
+                f"cannot merge manifests: {key} differs "
+                f"(existing={existing.get(key)!r}, new={new.get(key)!r})"
+            )
+
+    existing_ids = {sample["sample_id"] for sample in existing["samples"]}
+    duplicates = [
+        sample["sample_id"] for sample in new["samples"] if sample["sample_id"] in existing_ids
+    ]
+    if duplicates:
+        raise ValueError(
+            f"cannot merge manifests: duplicate sample_id(s) {duplicates} "
+            "(same chunk generated twice?)"
+        )
+
+    plan_raw = existing["plan"]
+    knob_order = {knob["name"]: index for index, knob in enumerate(plan_raw["knobs"])}
+
+    def _canonical_order(sample: dict[str, Any]) -> tuple[int, int, int]:
+        knob_index = knob_order[sample["knob"]]
+        knob = plan_raw["knobs"][knob_index]
+        level_index = 0 if sample["level"] == knob["low_level"] else 1
+        return (knob_index, level_index, int(sample["repeat"]))
+
+    merged = dict(existing)
+    merged["samples"] = sorted(
+        list(existing["samples"]) + list(new["samples"]), key=_canonical_order
+    )
+    return merged
+
+
 def generator_label(model_id: str) -> str:
     """model_id から generator ラベルを導出する（例: facebook/musicgen-medium → musicgen-medium）。
 
@@ -224,13 +324,26 @@ def _import_musicgen_stack() -> Any:
     return torch, AutoProcessor, MusicgenForConditionalGeneration
 
 
-def generate_takes(plan: GenerationPlan, *, output_dir: Path) -> dict[str, Any]:
-    """plan の全 (knob, level, repeat) について MusicGen 推論を行い、takes manifest を返す。
+def generate_takes(
+    plan: GenerationPlan,
+    *,
+    output_dir: Path,
+    only_level: Optional[str] = None,
+    only_repeat: Optional[int] = None,
+) -> dict[str, Any]:
+    """plan の (knob, level, repeat) について MusicGen 推論を行い、takes manifest を返す。
 
     音声は ``output_dir`` に WAV として書き出すのみでコミット対象にはしない。
     manifest の ``audio_sha256`` は書き出したバイト列から必ず計算する
     （``collect_clap_fixture.py`` と同じ規約）。
+
+    ``only_level`` / ``only_repeat`` でチャンク分割実行できる（実行環境のコマンド
+    タイムアウトより 1 チャンクを短くするため）。seed は絶対インデックス由来
+    （`iter_plan_takes` 参照）のため分割は結果に影響せず、チャンク manifest は
+    `merge_takes_manifests` で一括実行と同一の manifest に統合できる。
     """
+    takes = list(iter_plan_takes(plan, only_level=only_level, only_repeat=only_repeat))
+
     torch, AutoProcessor, MusicgenForConditionalGeneration = _import_musicgen_stack()
     from scipy.io import wavfile
 
@@ -249,40 +362,36 @@ def generate_takes(plan: GenerationPlan, *, output_dir: Path) -> dict[str, Any]:
     max_new_tokens = int(plan.duration_seconds * 50)
 
     samples: list[dict[str, Any]] = []
-    for knob_index, knob in enumerate(plan.knobs):
-        levels = (("low", knob.low_level, knob.prompt_low), ("high", knob.high_level, knob.prompt_high))
-        for level_index, (level_token, level_value, prompt) in enumerate(levels):
-            for repeat in range(plan.repetitions):
-                seed = sample_seed(knob_index, level_index, repeat)
-                torch.manual_seed(seed)
-                inputs = processor(text=[prompt], padding=True, return_tensors="pt")
-                audio_values = model.generate(
-                    **inputs,
-                    do_sample=True,
-                    guidance_scale=plan.guidance_scale,
-                    max_new_tokens=max_new_tokens,
-                )
-                waveform = audio_values[0, 0].detach().cpu().numpy()
-                sample_id = f"{knob.name}_{level_token}_{repeat:02d}"
-                audio_path = output_dir / f"{sample_id}.wav"
-                wavfile.write(str(audio_path), sampling_rate, waveform)
-                audio_sha256 = _sha256_file(audio_path)
-                samples.append(
-                    {
-                        "sample_id": sample_id,
-                        "knob": knob.name,
-                        "level": level_value,
-                        "repeat": repeat,
-                        "seed": seed,
-                        "prompt": prompt,
-                        "audio_path": audio_path.name,
-                        "audio_sha256": audio_sha256,
-                        "model_id": plan.model_id,
-                        "model_revision": resolved_revision,
-                        "duration_seconds": plan.duration_seconds,
-                        "guidance_scale": plan.guidance_scale,
-                    }
-                )
+    for take in takes:
+        torch.manual_seed(take.seed)
+        inputs = processor(text=[take.prompt], padding=True, return_tensors="pt")
+        audio_values = model.generate(
+            **inputs,
+            do_sample=True,
+            guidance_scale=plan.guidance_scale,
+            max_new_tokens=max_new_tokens,
+        )
+        waveform = audio_values[0, 0].detach().cpu().numpy()
+        sample_id = f"{take.knob.name}_{take.level_token}_{take.repeat:02d}"
+        audio_path = output_dir / f"{sample_id}.wav"
+        wavfile.write(str(audio_path), sampling_rate, waveform)
+        audio_sha256 = _sha256_file(audio_path)
+        samples.append(
+            {
+                "sample_id": sample_id,
+                "knob": take.knob.name,
+                "level": take.level_value,
+                "repeat": take.repeat,
+                "seed": take.seed,
+                "prompt": take.prompt,
+                "audio_path": audio_path.name,
+                "audio_sha256": audio_sha256,
+                "model_id": plan.model_id,
+                "model_revision": resolved_revision,
+                "duration_seconds": plan.duration_seconds,
+                "guidance_scale": plan.guidance_scale,
+            }
+        )
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -496,10 +605,18 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     if advisory is not None:
         print(advisory, file=sys.stderr)
     try:
-        manifest = generate_takes(plan, output_dir=args.output_dir)
+        manifest = generate_takes(
+            plan,
+            output_dir=args.output_dir,
+            only_level=args.only_level,
+            only_repeat=args.only_repeat,
+        )
     except ImportError as exc:
         print(str(exc), file=sys.stderr)
         return 1
+    if args.append and args.manifest_out.exists():
+        existing = load_takes_manifest(args.manifest_out)
+        manifest = merge_takes_manifests(existing, manifest)
     args.manifest_out.parent.mkdir(parents=True, exist_ok=True)
     args.manifest_out.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
@@ -566,6 +683,27 @@ def main(argv: list[str] | None = None) -> int:
     )
     generate_parser.add_argument(
         "--manifest-out", type=Path, required=True, help="takes manifest JSON の出力先"
+    )
+    generate_parser.add_argument(
+        "--only-level",
+        choices=("low", "high"),
+        default=None,
+        help="このレベルのテイクのみ生成する（チャンク分割実行用。seed は分割に不変）",
+    )
+    generate_parser.add_argument(
+        "--only-repeat",
+        type=int,
+        default=None,
+        metavar="N",
+        help="この repeat インデックス（0-indexed）のテイクのみ生成する（チャンク分割実行用）",
+    )
+    generate_parser.add_argument(
+        "--append",
+        action="store_true",
+        help=(
+            "--manifest-out が既存ならヘッダ一致を検証してサンプルを統合する"
+            "（正準順ソート・sample_id 重複は fail-fast）。チャンク分割実行の合流用"
+        ),
     )
     generate_parser.set_defaults(func=_cmd_generate)
 

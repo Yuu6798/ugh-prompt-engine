@@ -25,9 +25,11 @@ from scripts.collect_musicgen_takes import (
     GenerationPlan,
     extract_fixture,
     generator_label,
+    iter_plan_takes,
     load_plan,
     load_takes_manifest,
     main,
+    merge_takes_manifests,
     profile_scope_advisory,
     resolve_perform_target,
     sample_seed,
@@ -503,6 +505,123 @@ def test_load_takes_manifest_round_trips(tmp_path: Path) -> None:
 
     assert loaded["fixture_id"] == "k2_musicgen_mini"
     assert len(loaded["samples"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# チャンク分割実行（--only-level / --only-repeat / --append、torch 不要の純ロジック）
+# ---------------------------------------------------------------------------
+
+
+def test_iter_plan_takes_filters_preserve_absolute_seeds() -> None:
+    """フィルタは列挙の部分集合であり、seed / インデックスは一括実行と同一。
+
+    チャンク分割（バッチ M1 の 1 クリップ 1 コール実行）が一括実行と同じ
+    (sample_id, seed) 系列を作ることの根拠。
+    """
+    plan = load_plan(SEGMENTS_PLAN_PATH)
+
+    full = {
+        (take.knob.name, take.level_token, take.repeat): take.seed
+        for take in iter_plan_takes(plan)
+    }
+    assert len(full) == len(plan.knobs) * 2 * plan.repetitions
+
+    filtered = list(iter_plan_takes(plan, only_level="high", only_repeat=3))
+    assert len(filtered) == len(plan.knobs)
+    for take in filtered:
+        assert take.level_token == "high"
+        assert take.repeat == 3
+        assert take.seed == full[(take.knob.name, "high", 3)]
+        assert take.seed == sample_seed(take.knob_index, 1, 3)
+
+
+def test_iter_plan_takes_rejects_invalid_filters() -> None:
+    plan = load_plan(SEGMENTS_PLAN_PATH)
+
+    with pytest.raises(ValueError, match="only_level"):
+        list(iter_plan_takes(plan, only_level="mid"))
+    with pytest.raises(ValueError, match="only_repeat"):
+        list(iter_plan_takes(plan, only_repeat=plan.repetitions))
+    with pytest.raises(ValueError, match="only_repeat"):
+        list(iter_plan_takes(plan, only_repeat=-1))
+
+
+def _chunk_manifest(samples: list[dict]) -> dict:
+    """merge テスト用の最小チャンク manifest（ヘッダ共通・samples のみ差替え）。"""
+    return {
+        "schema_version": "1.0",
+        "fixture_id": "m1_chunks",
+        "generator": "musicgen-small",
+        "plan": {
+            "schema_version": "1.0",
+            "fixture_id": "m1_chunks",
+            "generator": "musicgen-small",
+            "model_id": "facebook/musicgen-small",
+            "model_revision": None,
+            "duration_seconds": 30.6,
+            "guidance_scale": 3.0,
+            "repetitions": 2,
+            "knobs": [
+                {
+                    "name": "structure",
+                    "sensor": "rms_section_pattern",
+                    "low_level": "low",
+                    "high_level": "high",
+                    "expected_sign": 1,
+                    "prompt_low": "a",
+                    "prompt_high": "b",
+                }
+            ],
+        },
+        "samples": samples,
+    }
+
+
+def _chunk_sample(level_token: str, repeat: int) -> dict:
+    level_index = 0 if level_token == "low" else 1
+    return {
+        "sample_id": f"structure_{level_token}_{repeat:02d}",
+        "knob": "structure",
+        "level": level_token,
+        "repeat": repeat,
+        "seed": sample_seed(0, level_index, repeat),
+        "prompt": "a" if level_token == "low" else "b",
+        "audio_path": f"structure_{level_token}_{repeat:02d}.wav",
+        "audio_sha256": "0" * 64,
+        "model_id": "facebook/musicgen-small",
+        "model_revision": None,
+        "duration_seconds": 30.6,
+        "guidance_scale": 3.0,
+    }
+
+
+def test_merge_takes_manifests_restores_canonical_order_regardless_of_chunk_order() -> None:
+    """逆順チャンク合流でも、samples は一括実行と同じ正準順（level→repeat）になる。"""
+    merged = merge_takes_manifests(
+        _chunk_manifest([_chunk_sample("high", 1)]),
+        _chunk_manifest([_chunk_sample("low", 0)]),
+    )
+    merged = merge_takes_manifests(merged, _chunk_manifest([_chunk_sample("high", 0)]))
+    merged = merge_takes_manifests(merged, _chunk_manifest([_chunk_sample("low", 1)]))
+
+    assert [sample["sample_id"] for sample in merged["samples"]] == [
+        "structure_low_00",
+        "structure_low_01",
+        "structure_high_00",
+        "structure_high_01",
+    ]
+
+
+def test_merge_takes_manifests_fails_fast_on_duplicate_or_plan_mismatch() -> None:
+    base = _chunk_manifest([_chunk_sample("low", 0)])
+
+    with pytest.raises(ValueError, match="duplicate sample_id"):
+        merge_takes_manifests(base, _chunk_manifest([_chunk_sample("low", 0)]))
+
+    other_plan = _chunk_manifest([_chunk_sample("high", 0)])
+    other_plan["plan"] = dict(other_plan["plan"], duration_seconds=12.0)
+    with pytest.raises(ValueError, match="plan differs"):
+        merge_takes_manifests(base, other_plan)
 
 
 # ---------------------------------------------------------------------------
