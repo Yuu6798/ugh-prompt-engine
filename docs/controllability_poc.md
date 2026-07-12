@@ -574,6 +574,12 @@ run3 high → run4 low）+ **直交処方**（quiet–loud–quiet → loud–qu
   バッチ 2 の primary_verdict（confounded・非 canonical）は本バッチによって
   遡って変更しない。structure grip の canonical 確定は時刻証跡の追加提出
   （復元条件）または次バッチ待ち。
+- **生成器交換比較（バッチ M1, 2026-07-12 追補）**: 同一計器・同一規約・同一処方で
+  生成器のみ MusicGen ローカルに替えた M1 バッチは match 0.583 vs 0.417・ヌルゲート
+  非発火の **loose**（quiet breakdown が主担体）— structure 散文 dead は Suno 機種
+  所見であり生成器一般の性質ではない。結果表と設計反映（musicgen は送出継続）は
+  [`musicgen_backend.md`](musicgen_backend.md) §7.6、fixture は
+  `examples/control/musicgen_structure/m1_expected_grip.json`。
 
 ### K3: 直交性行列 — DCI/MIG の効果量再定式化
 

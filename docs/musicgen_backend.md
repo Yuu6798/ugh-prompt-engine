@@ -280,9 +280,13 @@ fixture / manifest / expected_grip のみコミット（DD-A 踏襲、§2）。
 | `semantic_avoid`（本文 "Avoid: …"）| `spectral_centroid` | none / avoid_bright_highs | +1.10（符号逆）| **dead** | 下記 headline finding 参照 |
 | `semantic_core`（物理センサー）| `onset_density` | calm / euphoric | −0.70 | **dead** | 物理センサー盲。CLAP 第二センサー参照 |
 | `time_signature` | `time_signature`（categorical・match_rate） | 4/4 / 3/4 | 0.5（combined） | **dead**（honesty 判定） | 3/4 指定 0/8 不達（全観測 4/4）。combined match 0.5 は 4/4 セルの一致率が押し上げただけで loose 表記は誤読注意 |
+| `structure`（バッチ M1, 2026-07-12 追補）| `rms_section_pattern`（match_rate・副 `novelty_boundaries`）| structure なし / loud-quiet-loud 3 区間散文 | match 0.583 vs 0.417（novelty d +0.34）| **loose** | 30.54s×R=8・compose 実出力 verbatim（290/155 字）。ヌルゲート非発火・quiet breakdown が主担体（中央区間実現 6/8 vs 3/8）・完全形状一致 0/8。Suno バッチ 3 dead との生成器交換比較（同一計器/規約/処方）— dead は Suno 機種所見。fixture: `examples/control/musicgen_structure/m1_expected_grip.json` |
 
 `summary`: tight 0 / loose 2 / dead 3（`config/device_profiles/musicgen.yaml`
-`control_defaults` に反映済み）。
+`control_defaults` に反映済み）。structure（M1 追補・loose）は control_profile
+許可キー外のため config 非掲載 — 設計反映は `omit_structure_prose` を musicgen へ
+展開しない（送出継続・根拠を「実測なし」から「実測 loose」へ更新、
+`compose/prompt_renderer.py` / `docs/control_profile.md` 参照）。
 
 #### semantic_core の 2 センサー所見
 
@@ -337,7 +341,10 @@ suno も同様に本文 Avoid 送出を停止した — `external` のみ不変�
 - **`stereo_width`**: MusicGen small はモノラル出力＝sensor_blind が既に実証済み
   （§7.2 R3 初実測、0/5・0/20）。本スクリーンでは生成せず既知限界として記録するのみ。
 - **structure セクション記述**（intro/verse/chorus）: 12 秒クリップに曲構造は現れない。
-  長尺生成器（Suno 人手トラック）向けの課題として繰越記録する。
+  長尺生成器（Suno 人手トラック）向けの課題として繰越記録する。→ **バッチ M1
+  （2026-07-12）で解消**: 30.54s ローカルクリップ（duration_seconds 30.6・
+  delay-pattern の −3 フレーム込み）で structure 欄を実測し loose を確定
+  （上記結果表の追補行）。
 
 #### 運用ノート
 
