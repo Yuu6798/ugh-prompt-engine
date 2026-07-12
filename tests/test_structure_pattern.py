@@ -396,7 +396,7 @@ def test_batch3_relationship_to_batch2_is_recorded_without_mutating_batch2() -> 
 
 
 # ---------------------------------------------------------------------------
-# バッチ M1 — MusicGen structure 欄 grip（生成器を替えたチャネル比較）
+# バッチ M1 — MusicGen structure 欄 grip（end-to-end バックエンド経路比較・#171 P2）
 # fixture snapshot test（`examples/control/musicgen_structure/m1_results_fixture.json`
 # / `m1_expected_grip.json` の canonical 値: match_rate 0.416667 (low) / 0.583333
 # (high)、novelty_d 0.341565、ヌルゲート非発火・primary_verdict=loose・
@@ -579,7 +579,8 @@ def test_m1_design_reflection_is_deferred_and_batch3_untouched() -> None:
 
     assert expected_m1["config_reflected"] is False
     assert "設計者" in expected_m1["design_reflection_note"]
-    # 生成器のみ交換した直接比較の関係記録と、バッチ 3 の不変性。
+    # end-to-end backend 経路比較（生成器交換+backend 別プロンプト整形差込み・
+    # #171 P2 で表現精密化）の関係記録と、バッチ 3 の不変性。
     assert "dead" in expected_m1["suno_batch3_relationship"]
     assert expected_batch3["primary_verdict"] == "dead"
     assert expected_batch3["verdict_canonical"] is False

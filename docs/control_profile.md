@@ -363,12 +363,17 @@ backend は structure 散文の本文送出を停止した（`omit_structure_pro
 structure4_plan.yaml`）で dead 散文チャネルとの A/B として検証予定。config 化は
 しない（efficacy 未実証・YAGNI）。
 
-**生成器交換比較（バッチ M1, 2026-07-12）**: 同一計器（`measure_structure_pattern.py`
-#167 凍結）・同一判定規約・同一直交処方（loud–quiet–loud）で生成器のみ MusicGen
-（`facebook/musicgen-small`・ローカル決定論 seed・R=8）に替えた M1 バッチでは
-match_rate high 0.583333 vs low 0.416667・ヌルゲート非発火・**loose**（quiet
-breakdown が効きの主担体: 中央区間実現 6/8 vs 3/8）— **structure 散文 dead は
-Suno 機種所見であり生成器一般の性質ではない**。よって `omit_structure_prose` は
+**end-to-end バックエンド経路比較（バッチ M1, 2026-07-12・#171 P2 採用で表現精密化）**:
+同一計器（`measure_structure_pattern.py` #167 凍結）・同一判定規約・同一処方**内容**
+（loud–quiet–loud）で backend 経路を MusicGen（`facebook/musicgen-small`・ローカル
+決定論 seed・R=8）に替えた M1 バッチでは match_rate high 0.583333 vs low 0.416667・
+ヌルゲート非発火・**loose**（quiet breakdown が効きの主担体: 中央区間実現 6/8 vs
+3/8）。比較は生成器交換に加え **backend 別プロンプト整形の差**（`control_defaults`
+由来のティア順で欄順が異なり — suno は bpm tight で「120 BPM.」先頭 / musicgen は
+brightness tight・bpm loose で「Brightness balanced.」先頭 — structure 散文の挿入
+位置も異なる）を含む end-to-end の経路差であり、**散文チャネルの dead は生成器一般の
+性質ではない（MusicGen 経路では loose）が、差分の帰属（機種か整形か）は分離して
+いない**。よって `omit_structure_prose` は
 musicgen へ展開せず送出継続（False 維持・根拠を「実測なし」から「実測 loose」へ
 更新）。config/device_profiles への反映はなし（structure は control_profile 許可
 キー外）。fixture: `examples/control/musicgen_structure/m1_expected_grip.json`。

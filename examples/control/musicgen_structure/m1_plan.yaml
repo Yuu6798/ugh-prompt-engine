@@ -2,11 +2,15 @@
 #
 # 問い: compose の structure 散文（"intro: ...; role=..."）は MusicGen で区間
 # エネルギー構造として実現されるか。Suno では dead（K2-seg バッチ 3, #169,
-# structure3_plan.yaml / structure3_expected_grip.json）— 本バッチは**生成器を
-# 替えたチャネル比較**であり、バッチ 3 との相違点は生成器（Suno 手動 UI →
-# MusicGen ローカルスクリプト）のみ。計器（scripts/measure_structure_pattern.py、
-# #167 凍結済み）・判定規約（下記 decision_rule）・処方（loud-quiet-loud 直交処方）
-# は共通で、チャネル×生成器の直接比較を可能にする。
+# structure3_plan.yaml / structure3_expected_grip.json）— 本バッチは **end-to-end
+# バックエンド経路比較**（#171 P2 採用で「生成器のみ交換」から表現精密化）: バッチ 3
+# との相違点は生成器（Suno 手動 UI → MusicGen ローカルスクリプト）に加え、backend 別
+# プロンプト整形（control_defaults 由来ティア順による欄順・structure 挿入位置の差 —
+# suno は「120 BPM.」先頭 / musicgen は「Brightness balanced.」先頭）を含む。計器
+# （scripts/measure_structure_pattern.py、#167 凍結済み）・判定規約（下記
+# decision_rule）・処方内容（loud-quiet-loud 直交処方）は共通。差分の帰属
+# （機種か整形か）は本設計では分離しない（欄順は backend compile 経路の本質であり、
+# byte 一致プロンプトの流用は製品経路と乖離した人工実験になるため）。
 #
 # 本ファイルは scripts/collect_musicgen_takes.py generate が読む機械可読 plan
 # （GenerationPlan スキーマ・未知キー fail-fast）であるため、事前登録プロトコル
