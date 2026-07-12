@@ -207,15 +207,22 @@ def iter_plan_takes(
     *,
     only_level: Optional[str] = None,
     only_repeat: Optional[int] = None,
+    only_knob: Optional[str] = None,
 ) -> Iterator[PlanTake]:
     """plan の全 (knob, level, repeat) を決定論順に列挙する（フィルタ付き・純ロジック）。
 
     長時間バッチをチャンク分割実行するためのフィルタ:
-    ``only_level``（"low"/"high"）と ``only_repeat``（0-indexed）で部分集合だけを
-    生成できる。**seed はフィルタに依存しない** — `sample_seed` は絶対インデックス
-    （knob_index, level_index, repeat）から導出するため、チャンク分割しても
-    一括実行と同一の seed / sample_id 系列になる（K2-seg 運用ノートの復旧耐性と
-    同じ性質。分割の仕方は結果に影響しない）。
+    ``only_level``（"low"/"high"）、``only_repeat``（0-indexed）、``only_knob``
+    （plan.knobs の name）を自由に組み合わせて部分集合だけを生成できる
+    （例: 3 つ全部指定すれば厳密に 1 テイクへ絞れる — バッチ M2 の
+    「1 コマンド = 1 クリップ」逐次実行が前提とする性質）。**seed はフィルタに
+    依存しない** — `sample_seed` は絶対インデックス（knob_index, level_index,
+    repeat）から導出するため、チャンク分割しても一括実行と同一の seed /
+    sample_id 系列になる（K2-seg 運用ノートの復旧耐性と同じ性質。分割の仕方は
+    結果に影響しない）。``only_knob`` が plan に存在しない名前の場合は、
+    torch import より前（`generate_takes`/`plan_chunk_manifest_stub` が
+    `list(iter_plan_takes(...))` する時点）で fail-fast する — WAV を 1 byte も
+    書く前に誤入力を検出する（`--append` の生成前検証と同じ規律）。
     """
     if only_level is not None and only_level not in ("low", "high"):
         raise ValueError(f"only_level must be 'low' or 'high', got {only_level!r}")
@@ -223,8 +230,15 @@ def iter_plan_takes(
         raise ValueError(
             f"only_repeat must be within [0, {plan.repetitions}), got {only_repeat}"
         )
+    known_knobs = [knob.name for knob in plan.knobs]
+    if only_knob is not None and only_knob not in known_knobs:
+        raise ValueError(
+            f"only_knob {only_knob!r} not found in plan knobs {known_knobs}"
+        )
 
     for knob_index, knob in enumerate(plan.knobs):
+        if only_knob is not None and knob.name != only_knob:
+            continue
         levels = (
             ("low", knob.low_level, knob.prompt_low),
             ("high", knob.high_level, knob.prompt_high),
@@ -302,6 +316,7 @@ def plan_chunk_manifest_stub(
     *,
     only_level: Optional[str] = None,
     only_repeat: Optional[int] = None,
+    only_knob: Optional[str] = None,
 ) -> dict[str, Any]:
     """`generate_takes` が書き出す manifest と同一ヘッダ + sample_id のみの計画 stub。
 
@@ -312,7 +327,9 @@ def plan_chunk_manifest_stub(
     """
     samples = [
         {"sample_id": f"{take.knob.name}_{take.level_token}_{take.repeat:02d}"}
-        for take in iter_plan_takes(plan, only_level=only_level, only_repeat=only_repeat)
+        for take in iter_plan_takes(
+            plan, only_level=only_level, only_repeat=only_repeat, only_knob=only_knob
+        )
     ]
     return {
         "schema_version": SCHEMA_VERSION,
@@ -396,6 +413,7 @@ def generate_takes(
     output_dir: Path,
     only_level: Optional[str] = None,
     only_repeat: Optional[int] = None,
+    only_knob: Optional[str] = None,
 ) -> dict[str, Any]:
     """plan の (knob, level, repeat) について MusicGen 推論を行い、takes manifest を返す。
 
@@ -403,12 +421,18 @@ def generate_takes(
     manifest の ``audio_sha256`` は書き出したバイト列から必ず計算する
     （``collect_clap_fixture.py`` と同じ規約）。
 
-    ``only_level`` / ``only_repeat`` でチャンク分割実行できる（実行環境のコマンド
-    タイムアウトより 1 チャンクを短くするため）。seed は絶対インデックス由来
-    （`iter_plan_takes` 参照）のため分割は結果に影響せず、チャンク manifest は
-    `merge_takes_manifests` で一括実行と同一の manifest に統合できる。
+    ``only_level`` / ``only_repeat`` / ``only_knob`` でチャンク分割実行できる
+    （実行環境のコマンドタイムアウトより 1 チャンクを短くするため。3 つ全部
+    指定すれば 1 コマンド = 1 クリップに絞れる — バッチ M2 の運用様式）。seed は
+    絶対インデックス由来（`iter_plan_takes` 参照）のため分割は結果に影響せず、
+    チャンク manifest は `merge_takes_manifests` で一括実行と同一の manifest に
+    統合できる。
     """
-    takes = list(iter_plan_takes(plan, only_level=only_level, only_repeat=only_repeat))
+    takes = list(
+        iter_plan_takes(
+            plan, only_level=only_level, only_repeat=only_repeat, only_knob=only_knob
+        )
+    )
 
     torch, AutoProcessor, MusicgenForConditionalGeneration = _import_musicgen_stack()
     from scipy.io import wavfile
@@ -671,6 +695,21 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     if advisory is not None:
         print(advisory, file=sys.stderr)
 
+    # --only-knob の事前検証（バッチ M2 採用: 1 コマンド = 1 クリップの逐次実行では
+    # ノブ名タイプミスが起きやすいため、`iter_plan_takes` が投げる裸の ValueError
+    # （未捕捉トレースバック）ではなく、--append 系検証と同じ「stderr メッセージ +
+    # no WAV written + exit 2」の形に揃える。フィルタの組み合わせ（--only-level /
+    # --only-repeat 併用）によらず plan.knobs に存在しない名前は常にここで弾く。
+    if args.only_knob is not None:
+        known_knobs = [knob.name for knob in plan.knobs]
+        if args.only_knob not in known_knobs:
+            print(
+                f"error: --only-knob {args.only_knob!r} not found in plan knobs "
+                f"{known_knobs} — refusing to generate (no WAV written)",
+                file=sys.stderr,
+            )
+            return 2
+
     # --append の事前検証その 1（#171 P2 3-4巡目採用）: append 分割は **不変コミット
     # ハッシュ**（40 桁小文字 hex）の model_revision を必須とする。未 pin（null）は
     # チャンク実行のたびに HF の現行 head へ解決され、`main` やタグ等の**可動 ref**
@@ -703,7 +742,10 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     if args.append and args.manifest_out.exists():
         existing = load_takes_manifest(args.manifest_out)
         planned = plan_chunk_manifest_stub(
-            plan, only_level=args.only_level, only_repeat=args.only_repeat
+            plan,
+            only_level=args.only_level,
+            only_repeat=args.only_repeat,
+            only_knob=args.only_knob,
         )
         try:
             validate_merge_compatibility(existing, planned)
@@ -721,6 +763,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             output_dir=args.output_dir,
             only_level=args.only_level,
             only_repeat=args.only_repeat,
+            only_knob=args.only_knob,
         )
     except ImportError as exc:
         print(str(exc), file=sys.stderr)
@@ -806,6 +849,16 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         metavar="N",
         help="この repeat インデックス（0-indexed）のテイクのみ生成する（チャンク分割実行用）",
+    )
+    generate_parser.add_argument(
+        "--only-knob",
+        type=str,
+        default=None,
+        metavar="NAME",
+        help=(
+            "このノブ名（plan.knobs[].name）のテイクのみ生成する（チャンク分割実行用。"
+            "--only-level/--only-repeat と併用可。plan に無い名前は生成前に fail-fast）"
+        ),
     )
     generate_parser.add_argument(
         "--append",

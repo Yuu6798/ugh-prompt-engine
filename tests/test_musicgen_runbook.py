@@ -548,6 +548,65 @@ def test_iter_plan_takes_rejects_invalid_filters() -> None:
         list(iter_plan_takes(plan, only_repeat=-1))
 
 
+def test_iter_plan_takes_only_knob_filters_to_expected_take_set() -> None:
+    """--only-knob は指定ノブの (low+high) x repetitions テイクのみ列挙する。
+
+    (a) バッチ M2 の「1 コマンド = 1 クリップ」チャンク実行の前提: 単一ノブへの
+    絞り込みが期待どおりの集合になることを pin する。
+    """
+    plan = load_plan(SEGMENTS_PLAN_PATH)
+
+    filtered = list(iter_plan_takes(plan, only_knob="valley_depth_target"))
+
+    assert len(filtered) == 2 * plan.repetitions
+    assert all(take.knob.name == "valley_depth_target" for take in filtered)
+    level_repeat_pairs = {(take.level_token, take.repeat) for take in filtered}
+    assert level_repeat_pairs == {
+        (level, repeat) for level in ("low", "high") for repeat in range(plan.repetitions)
+    }
+
+
+def test_iter_plan_takes_only_knob_preserves_absolute_seeds() -> None:
+    """(b) --only-knob フィルタの有無で同一 take の seed は不変（絶対インデックス由来）。"""
+    plan = load_plan(SEGMENTS_PLAN_PATH)
+
+    full = {
+        (take.knob.name, take.level_token, take.repeat): take.seed
+        for take in iter_plan_takes(plan)
+    }
+    filtered = list(iter_plan_takes(plan, only_knob="time_signature"))
+
+    assert len(filtered) > 0
+    for take in filtered:
+        assert take.seed == full[(take.knob.name, take.level_token, take.repeat)]
+
+
+def test_iter_plan_takes_rejects_unknown_knob_name() -> None:
+    """(c) plan に存在しないノブ名は生成前（列挙時点）に fail-fast する。"""
+    plan = load_plan(SEGMENTS_PLAN_PATH)
+
+    with pytest.raises(ValueError, match="only_knob"):
+        list(iter_plan_takes(plan, only_knob="nonexistent_knob"))
+
+
+def test_iter_plan_takes_only_knob_with_level_and_repeat_narrows_to_single_take() -> None:
+    """(d) --only-knob + --only-level + --only-repeat の組合せで正確に 1 take に絞れる。"""
+    plan = load_plan(SEGMENTS_PLAN_PATH)
+
+    filtered = list(
+        iter_plan_takes(
+            plan, only_knob="active_rate_target", only_level="high", only_repeat=3
+        )
+    )
+
+    assert len(filtered) == 1
+    take = filtered[0]
+    assert take.knob.name == "active_rate_target"
+    assert take.level_token == "high"
+    assert take.repeat == 3
+    assert take.seed == sample_seed(take.knob_index, 1, 3)
+
+
 # チャンク系テスト共通の pin 済み revision（--append は未 pin plan を生成前に
 # 拒否するため、append 系シナリオのヘルパーは pin 済みを既定にする）。
 _CHUNK_REVISION = "cafef00d5eed5eed5eed5eed5eed5eed5eed5eed"
@@ -817,6 +876,38 @@ def test_generate_append_compatible_chunk_proceeds_to_generation(
     captured = capsys.readouterr()
     assert "musicgen" in captured.err
     assert manifest_out.read_bytes() == manifest_bytes_before
+
+
+def test_generate_cli_rejects_unknown_only_knob_before_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """CLI `--only-knob` の未知ノブ名は `--append` 系検証と同じ形（stderr メッセージ
+    + exit 2 + no WAV written）で生成前に拒否する（バッチ M2: 1 コマンド = 1 クリップ
+    運用ではノブ名タイプミスが起きやすいため、裸の ValueError トレースバックではなく
+    案内メッセージへ揃える）。"""
+    monkeypatch.setitem(sys.modules, "torch", None)
+    monkeypatch.setitem(sys.modules, "transformers", None)
+
+    output_dir = tmp_path / "takes"
+    manifest_out = tmp_path / "manifest.json"
+
+    exit_code = main(
+        [
+            "generate",
+            "--plan", str(SEGMENTS_PLAN_PATH),
+            "--output-dir", str(output_dir),
+            "--manifest-out", str(manifest_out),
+            "--only-knob", "nonexistent_knob",
+        ]
+    )
+
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert "only-knob" in captured.err
+    assert "nonexistent_knob" in captured.err
+    assert "no WAV written" in captured.err
+    assert not output_dir.exists()
+    assert not manifest_out.exists()
 
 
 def test_plan_chunk_manifest_stub_header_matches_generate_output_shape() -> None:
