@@ -81,6 +81,12 @@ SCHEMA_VERSION = "1.0"
 GENERATOR = "collect_musicgen_takes.py"
 _INSTALL_HINT = "pip install -e '.[musicgen]'"
 
+# 不変コミットハッシュ（HF の git commit SHA、40 桁小文字 hex）。`--append` の
+# preflight はこれ以外の model_revision（null / `main` / タグ等の可動 ref）を
+# 拒否する — 可動 ref はチャンク実行間で別コミットへ解決し revision 混合を生む
+# ため（#171 P2 4巡目）。
+_IMMUTABLE_REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
+
 # コミット済みの device profile / grip fixture が実測したモデルと revision
 # （PR B, 2026-07-03、docs/musicgen_backend.md §5 の G4 目視確認と同一 pin）。
 # `device_profiles/musicgen.yaml` は backend seam（target_backend: musicgen）で
@@ -665,17 +671,25 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     if advisory is not None:
         print(advisory, file=sys.stderr)
 
-    # --append の事前検証その 1（#171 P2 3巡目採用）: append 分割は pin 済み
-    # model_revision を必須とする。未 pin（null）の plan はチャンク実行のたびに
-    # HF の現行 head へ解決されるため、長い --append バッチが複数モデル revision
-    # の出力を 1 fixture に暗黙混合し grip 計測を汚染し得る。単発生成（--append
-    # なし）は単一実行内で混合が起きないため従来どおり未 pin でも可。
-    if args.append and plan.model_revision is None:
+    # --append の事前検証その 1（#171 P2 3-4巡目採用）: append 分割は **不変コミット
+    # ハッシュ**（40 桁小文字 hex）の model_revision を必須とする。未 pin（null）は
+    # チャンク実行のたびに HF の現行 head へ解決され、`main` やタグ等の**可動 ref**
+    # も非 None 文字列のままチャンク間で別コミットへ解決し得るため、どちらも長い
+    # --append バッチが複数モデル revision の出力を 1 fixture に暗黙混合し grip
+    # 計測を汚染する経路になる（4巡目: null 拒否だけでは可動 ref が素通りし
+    # 「音声を書く前に fail する」意図が果たせない）。生成前の HF 解決値比較は
+    # preflight にネットワーク依存を持ち込むため採らず、pin 規約どおり不変
+    # ハッシュを要求する（M1 前例: 4c8334b0… の 40 桁 pin）。単発生成（--append
+    # なし）は単一実行内で混合が起きないため従来どおり任意 revision 可。
+    if args.append and not _IMMUTABLE_REVISION_RE.fullmatch(plan.model_revision or ""):
         print(
-            "error: --append chunked batches require a pinned model_revision in the plan "
-            "(unpinned runs resolve to the current HF head, which can change between chunk "
-            "executions and silently mix model revisions in one fixture) — refusing to "
-            "generate (no WAV written)",
+            "error: --append chunked batches require the plan's model_revision to be an "
+            "immutable commit hash (40-char lowercase hex); got "
+            f"{plan.model_revision!r}. Unpinned (null) revisions resolve to the current "
+            "HF head, and movable refs (e.g. 'main' or a tag) can resolve to different "
+            "commits between chunk executions — either way silently mixing model "
+            "revisions in one fixture. Pin the full commit hash — refusing to generate "
+            "(no WAV written)",
             file=sys.stderr,
         )
         return 2

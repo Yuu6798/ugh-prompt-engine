@@ -696,12 +696,27 @@ def _run_generate_append(
     )
 
 
-def test_generate_append_requires_pinned_model_revision(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize(
+    "revision",
+    [
+        None,  # 未 pin: HF 現行 head へ解決
+        "main",  # 可動 branch ref: チャンク間で別コミットへ解決し得る
+        "v1.0",  # 可動 tag ref: 同上（タグは付け替え可能）
+        "4C8334B02C6EC4E8664A91979669A501EC497792",  # 大文字 hex は正規形でない
+        "4c8334b0",  # 短縮ハッシュ: 不変性はあるが 40 桁の正規形を要求
+    ],
+)
+def test_generate_append_requires_immutable_commit_hash_revision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    revision: str | None,
 ) -> None:
-    """--append は pin 済み model_revision を必須とし、未 pin plan は生成前に
-    fail-fast する（#171 P2 3巡目: 未 pin はチャンク実行のたびに HF 現行 head へ
-    解決され、長い append バッチが複数 revision を 1 fixture に暗黙混合するため）。
+    """--append は不変コミットハッシュ（40 桁小文字 hex）の model_revision を必須と
+    し、null だけでなく可動 ref（main / タグ等）も生成前に fail-fast する
+    （#171 P2 4巡目: 可動 ref は非 None 文字列として null 拒否を素通りするが、
+    チャンク実行間で別コミットへ解決し revision 混合を生む — 検出が生成後の
+    サンプルレベル検査だけでは「音声を書く前に fail する」意図が果たせない）。
 
     既存 manifest の有無に依存しない（最初のチャンクから拒否 — 混合は 2 回目
     以降でなく初回実行の時点で予防する）。
@@ -709,9 +724,9 @@ def test_generate_append_requires_pinned_model_revision(
     monkeypatch.setitem(sys.modules, "torch", None)
     monkeypatch.setitem(sys.modules, "transformers", None)
 
-    unpinned_plan = dict(_chunk_manifest([])["plan"], model_revision=None)
+    movable_plan = dict(_chunk_manifest([])["plan"], model_revision=revision)
     plan_path = tmp_path / "plan.json"
-    plan_path.write_text(json.dumps(unpinned_plan), encoding="utf-8")
+    plan_path.write_text(json.dumps(movable_plan), encoding="utf-8")
     manifest_out = tmp_path / "manifest.json"  # 存在しない = 初回チャンク
     output_dir = tmp_path / "takes"
 
@@ -721,7 +736,8 @@ def test_generate_append_requires_pinned_model_revision(
 
     assert exit_code == 2
     captured = capsys.readouterr()
-    assert "pinned model_revision" in captured.err
+    assert "immutable commit hash" in captured.err
+    assert repr(revision) in captured.err
     assert "no WAV written" in captured.err
     assert not output_dir.exists()
     assert not manifest_out.exists()
