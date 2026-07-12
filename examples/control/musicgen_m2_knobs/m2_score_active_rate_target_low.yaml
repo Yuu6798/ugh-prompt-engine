@@ -1,0 +1,46 @@
+# バッチ M2（MusicGen 3 ノブ grip 実測）active_rate_target の low セル score。
+# M1 baseline（examples/control/musicgen_structure/m1_score_low.yaml）を土台に、
+# 対象ノブ active_rate_target のみを変更し、他 2 ノブ（valley_depth_target /
+# time_signature）は M1 baseline 値に固定・structure は全ファイル共通で []。
+# active_rate_target low は旧 K2-seg 計測（0.55、examples/control/k2_musicgen_segments/
+# plan.yaml）から "0.30" へ拡大した（§7.6 実測で low セル観測 mean 0.967・headroom
+# 0.033 の天井効果が判明したため、低振り側を押し下げて headroom を確保する）。
+# `svprpe compose m2_score_active_rate_target_low.yaml --format json` の text が
+# m2_plan.yaml の knobs[0].prompt_low verbatim（2026-07-12 実 compose 出力）。
+meta:
+  title: "M2 MusicGen active_rate_target (low)"
+  version: "0.1"
+
+semantic:
+  core: "calm"
+  grv:
+    primary: "synthwave"
+    secondary: ""
+  delta_e:
+    overall: "steady"
+  avoid: []
+  lyrics_presence: "absent"
+
+physical:
+  bpm: 120
+  key: "A minor"
+  time_signature: "4/4"
+  active_rate_target: "0.30"
+  valley_depth_target: "0.3"
+  brightness: "balanced"
+  stereo_width: "wide"
+
+structure: []
+
+rendering:
+  target_backend: "musicgen"
+  prompt_max_chars: 300
+  priority:
+    - semantic.core
+    - semantic.grv
+    - physical.bpm
+    - physical.key
+    - physical.time_signature
+    - structure
+    - semantic.avoid
+    - physical.optional
