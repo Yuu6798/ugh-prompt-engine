@@ -396,6 +396,196 @@ def test_batch3_relationship_to_batch2_is_recorded_without_mutating_batch2() -> 
 
 
 # ---------------------------------------------------------------------------
+# バッチ M1 — MusicGen structure 欄 grip（生成器を替えたチャネル比較）
+# fixture snapshot test（`examples/control/musicgen_structure/m1_results_fixture.json`
+# / `m1_expected_grip.json` の canonical 値: match_rate 0.416667 (low) / 0.583333
+# (high)、novelty_d 0.341565、ヌルゲート非発火・primary_verdict=loose・
+# verdict_canonical=true — 事前登録ローカル生成プロトコル、m1_plan.yaml を生成前
+# コミット）をデータ内部の整合性として pin する。バッチ 2/3 と同じく測定値その
+# ものの再解釈はしない — 判定は m1_plan.yaml の事前登録規約が担い、設計反映
+# （omit_structure_prose の musicgen 展開可否）は本 fixture の責務外
+# （config_reflected=false / design_reflection_note）。
+# ---------------------------------------------------------------------------
+
+M1_PRESCRIBED_PATTERN = ["high", "low", "high"]
+
+M1_DIR = Path("examples/control/musicgen_structure")
+M1_FIXTURE_PATH = M1_DIR / "m1_results_fixture.json"
+M1_EXPECTED_GRIP_PATH = M1_DIR / "m1_expected_grip.json"
+M1_MANIFEST_PATH = M1_DIR / "m1_takes_manifest.json"
+M1_PLAN_PATH = M1_DIR / "m1_plan.yaml"
+
+
+def _load_m1_fixture() -> dict:
+    return json.loads(M1_FIXTURE_PATH.read_text(encoding="utf-8"))
+
+
+def _load_m1_expected_grip() -> dict:
+    return json.loads(M1_EXPECTED_GRIP_PATH.read_text(encoding="utf-8"))
+
+
+def test_m1_fixture_prescribed_pattern_matches_plan() -> None:
+    fixture = _load_m1_fixture()
+    assert fixture["prescribed_pattern"] == M1_PRESCRIBED_PATTERN
+
+
+def test_m1_per_song_match_rate_recomputes_from_sign_pattern() -> None:
+    fixture = _load_m1_fixture()
+    for cell in ("low", "high"):
+        assert len(fixture["songs"][cell]) == 8  # R=8 per cell（m1_plan.yaml 事前登録）
+        for song in fixture["songs"][cell]:
+            recomputed = pattern_match_rate(song["sign_pattern"], M1_PRESCRIBED_PATTERN)
+            assert recomputed == pytest.approx(song["match_rate"], abs=1e-6), song["path"]
+
+
+def test_m1_aggregate_match_rate_equals_per_song_average() -> None:
+    fixture = _load_m1_fixture()
+    cell_to_key = {"low": "match_rate_low_cell", "high": "match_rate_high_cell"}
+    for cell, key in cell_to_key.items():
+        songs = fixture["songs"][cell]
+        mean = sum(song["match_rate"] for song in songs) / len(songs)
+        assert fixture["aggregate"][key] == pytest.approx(mean, abs=1e-6)
+
+    # canonical 値（canonical 22050 計測・2026-07-12 実測）。
+    assert fixture["aggregate"]["match_rate_low_cell"] == pytest.approx(0.416667, abs=1e-6)
+    assert fixture["aggregate"]["match_rate_high_cell"] == pytest.approx(0.583333, abs=1e-6)
+
+
+def test_m1_novelty_d_recomputes_with_grip_effect_size() -> None:
+    fixture = _load_m1_fixture()
+    low_counts = [song["novelty_boundary_count"] for song in fixture["songs"]["low"]]
+    high_counts = [song["novelty_boundary_count"] for song in fixture["songs"]["high"]]
+
+    d = grip_effect_size(low_counts, high_counts)
+
+    assert d == pytest.approx(fixture["aggregate"]["novelty_d"], abs=1e-4)
+    # canonical 値（low mean 2.25 / high mean 2.5、K 系列 loose 帯・符号は expected_sign +1 と同方向）。
+    assert d == pytest.approx(0.341565, abs=1e-4)
+
+
+def test_m1_null_gate_not_fired_and_mechanical_outcome_is_loose() -> None:
+    """ヌル格下げ規則の機械適用（非発火 → 0.3-0.7 帯 = loose）と、事前登録
+    ローカル生成プロトコル下の canonical（ABBA/均衡ゲートは非適用と生成前に
+    事前登録・適用可能な 2 条件は充足）を pin する。"""
+    fixture = _load_m1_fixture()
+    expected = _load_m1_expected_grip()
+
+    high = fixture["aggregate"]["match_rate_high_cell"]
+    low = fixture["aggregate"]["match_rate_low_cell"]
+
+    assert expected["null_gate_fired"] == (high <= low)
+    assert expected["null_gate_fired"] is False
+    # 機械適用: high セル 0.583333 は [0.3, 0.7) 帯 → loose。
+    assert 0.3 <= high < 0.7
+    assert expected["preregistered_rule_outcome"] == "loose"
+    assert expected["primary_verdict"] == "loose"
+    assert expected["verdict_canonical"] is True
+
+    # canonical 条件: ABBA / 均衡ゲートは applicable=false（事前登録）、
+    # 補充ゼロ / タイムスタンプ記録は applicable かつ satisfied。
+    conditions = {c["id"]: c for c in expected["canonical_conditions"]["conditions"]}
+    assert set(conditions) == {
+        "abba_order",
+        "zero_replenishment",
+        "timestamps_recorded",
+        "balance_gate",
+    }
+    for cid in ("abba_order", "balance_gate"):
+        assert conditions[cid]["applicable"] is False
+        assert conditions[cid]["satisfied"] is None
+    for cid in ("zero_replenishment", "timestamps_recorded"):
+        assert conditions[cid]["applicable"] is True
+        assert conditions[cid]["satisfied"] is True
+
+
+def test_m1_fixture_sha256_pins_match_takes_manifest() -> None:
+    """results fixture の per-song sha256 は takes manifest の audio_sha256 と
+    一致する（WAV 非コミット・sha256 provenance の内部整合）。"""
+    fixture = _load_m1_fixture()
+    manifest = json.loads(M1_MANIFEST_PATH.read_text(encoding="utf-8"))
+    sha_by_name = {s["audio_path"]: s["audio_sha256"] for s in manifest["samples"]}
+
+    assert len(manifest["samples"]) == 16
+    for cell in ("low", "high"):
+        for song in fixture["songs"][cell]:
+            assert song["sha256"] == sha_by_name[song["path"]], song["path"]
+
+    # manifest 側の生成条件 pin（m1_plan.yaml 事前登録と一致）。
+    plan = manifest["plan"]
+    assert plan["fixture_id"] == "m1_musicgen_structure"
+    assert plan["duration_seconds"] == 30.6
+    assert plan["repetitions"] == 8
+    assert plan["model_id"] == "facebook/musicgen-small"
+    assert all(
+        s["model_revision"] == "4c8334b02c6ec4e8664a91979669a501ec497792"
+        for s in manifest["samples"]
+    )
+    # seed の決定論式（low 1000-1007 / high 1050-1057）。
+    seeds = [s["seed"] for s in manifest["samples"]]
+    assert seeds == list(range(1000, 1008)) + list(range(1050, 1058))
+
+
+def test_m1_plan_prompts_are_compose_verbatim_of_committed_scores() -> None:
+    """m1_plan.yaml の prompt_low/high は、コミット済み score
+    （m1_score_low/high.yaml, target_backend: musicgen）の compose 実出力と
+    バイト一致する（事前登録の完全性 — plan と score の乖離を検出する）。"""
+    from scripts.collect_musicgen_takes import load_plan
+    from svp_rpe.compose.loader import load_composition_score
+    from svp_rpe.compose.prompt_renderer import ExternalPromptAdapter
+
+    plan = load_plan(M1_PLAN_PATH)
+    knob = plan.knobs[0]
+    assert knob.name == "structure"
+
+    adapter = ExternalPromptAdapter()
+    low_prompt = adapter.render(load_composition_score(M1_DIR / "m1_score_low.yaml"))
+    high_prompt = adapter.render(load_composition_score(M1_DIR / "m1_score_high.yaml"))
+
+    assert low_prompt.backend == "musicgen"
+    assert high_prompt.backend == "musicgen"
+    assert knob.prompt_low == low_prompt.text
+    assert knob.prompt_high == high_prompt.text
+    # musicgen backend は structure 散文を送出する（omit されない — 本バッチの前提）。
+    assert "intro: loud dense full energy; role=intro" in high_prompt.text
+    assert "breakdown: quiet sparse minimal; role=breakdown" in high_prompt.text
+    assert "intro:" not in low_prompt.text
+    # 負チャネルの交絡なし（Avoid 空・negative_tags 空・字数超過 drop なし）。
+    assert high_prompt.negative_tags == []
+    assert low_prompt.negative_tags == []
+    assert high_prompt.dropped_elements == []
+    assert low_prompt.dropped_elements == []
+
+
+def test_m1_no_knife_edge_and_no_excluded_takes() -> None:
+    """全 16 曲・全区間 knife_edge 発火ゼロ + 補充ゼロ完走（30.54s 全数ゲート通過）。"""
+    fixture = _load_m1_fixture()
+    all_margins: list[float] = []
+    for cell in ("low", "high"):
+        for song in fixture["songs"][cell]:
+            assert song["knife_edge_sections"] == []
+            assert song["duration_sec"] >= 30.0
+            all_margins.extend(song["section_margins"])
+
+    assert min(abs(m) for m in all_margins) > KNIFE_EDGE_MARGIN
+    assert fixture["excluded"] == []
+
+
+def test_m1_design_reflection_is_deferred_and_batch3_untouched() -> None:
+    """M1 は計測記録のみ — omit_structure_prose の musicgen 展開判断は設計者判読
+    待ち（config_reflected=false）で、Suno バッチ 3 の fixture / verdict も変更
+    しないことを pin する。"""
+    expected_m1 = _load_m1_expected_grip()
+    expected_batch3 = _load_batch3_expected_grip()
+
+    assert expected_m1["config_reflected"] is False
+    assert "設計者" in expected_m1["design_reflection_note"]
+    # 生成器のみ交換した直接比較の関係記録と、バッチ 3 の不変性。
+    assert "dead" in expected_m1["suno_batch3_relationship"]
+    assert expected_batch3["primary_verdict"] == "dead"
+    assert expected_batch3["verdict_canonical"] is False
+
+
+# ---------------------------------------------------------------------------
 # CLI の事前登録カットオフ執行（scripts/measure_structure_pattern.py）
 # ---------------------------------------------------------------------------
 

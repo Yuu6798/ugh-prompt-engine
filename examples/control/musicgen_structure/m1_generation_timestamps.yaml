@@ -1,0 +1,64 @@
+# バッチ M1 生成タイムスタンプ sidecar（事前登録プロトコルの記録要件）
+#
+# m1_plan.yaml 事前登録: ABBA カウンターバランスと均衡ゲート B は人手 UI 生成の
+# 時間ドリフト対策であり、決定論 seed によるローカルスクリプト生成（stateless・
+# seed 固定で再現可能）には非適用。本ログは「タイムスタンプ記録」条件の充足を
+# 秒単位で担保する実測（`date -u +%Y-%m-%dT%H:%M:%SZ` によるコール単位の計測、
+# 推定値なし）。start は各チャンクのプロセス起動時刻で、モデルロード（約 35-40 秒）
+# を含む。生成順は low 0-7 → high 0-7 の逐次（1 コール 1 クリップのチャンク実行、
+# --only-level/--only-repeat/--append。seed は絶対インデックス由来のため生成順は
+# 結果に影響しない）。
+schema_version: "1.0"
+fixture_id: m1_musicgen_structure
+timestamp_source: "date -u (UTC, ISO 8601, 秒単位・コール単位実測)"
+generation_order: "sequential low 00-07 then high 00-07 (1 call = 1 clip)"
+abba_balance_gate: "not applicable (preregistered in m1_plan.yaml — deterministic stateless local generation)"
+samples:
+  - sample_id: structure_low_00
+    start_utc: "2026-07-12T02:09:11Z"
+    end_utc: "2026-07-12T02:14:26Z"
+  - sample_id: structure_low_01
+    start_utc: "2026-07-12T02:14:44Z"
+    end_utc: "2026-07-12T02:19:51Z"
+  - sample_id: structure_low_02
+    start_utc: "2026-07-12T02:20:04Z"
+    end_utc: "2026-07-12T02:25:17Z"
+  - sample_id: structure_low_03
+    start_utc: "2026-07-12T02:25:32Z"
+    end_utc: "2026-07-12T02:30:41Z"
+  - sample_id: structure_low_04
+    start_utc: "2026-07-12T02:30:53Z"
+    end_utc: "2026-07-12T02:35:59Z"
+  - sample_id: structure_low_05
+    start_utc: "2026-07-12T02:36:12Z"
+    end_utc: "2026-07-12T02:41:16Z"
+  - sample_id: structure_low_06
+    start_utc: "2026-07-12T02:41:25Z"
+    end_utc: "2026-07-12T02:46:28Z"
+  - sample_id: structure_low_07
+    start_utc: "2026-07-12T02:46:36Z"
+    end_utc: "2026-07-12T02:51:57Z"
+  - sample_id: structure_high_00
+    start_utc: "2026-07-12T02:52:10Z"
+    end_utc: "2026-07-12T02:57:18Z"
+  - sample_id: structure_high_01
+    start_utc: "2026-07-12T02:57:31Z"
+    end_utc: "2026-07-12T03:02:41Z"
+  - sample_id: structure_high_02
+    start_utc: "2026-07-12T03:02:53Z"
+    end_utc: "2026-07-12T03:08:03Z"
+  - sample_id: structure_high_03
+    start_utc: "2026-07-12T03:08:15Z"
+    end_utc: "2026-07-12T03:13:23Z"
+  - sample_id: structure_high_04
+    start_utc: "2026-07-12T03:13:35Z"
+    end_utc: "2026-07-12T03:18:52Z"
+  - sample_id: structure_high_05
+    start_utc: "2026-07-12T03:19:05Z"
+    end_utc: "2026-07-12T03:24:20Z"
+  - sample_id: structure_high_06
+    start_utc: "2026-07-12T03:24:33Z"
+    end_utc: "2026-07-12T03:29:51Z"
+  - sample_id: structure_high_07
+    start_utc: "2026-07-12T03:30:04Z"
+    end_utc: "2026-07-12T03:35:18Z"

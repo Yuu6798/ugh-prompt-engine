@@ -1,0 +1,81 @@
+{
+  "schema_version": "1.0",
+  "fixture_id": "m1_musicgen_structure",
+  "knob": "structure",
+  "generator": "musicgen-small",
+  "model": "facebook/musicgen-small @ 4c8334b02c6ec4e8664a91979669a501ec497792 (G4 目視確認済み revision に pin、docs/musicgen_backend.md §5)",
+  "repetitions": 8,
+  "sensor": "rms_section_pattern",
+  "prescribed_pattern": ["high", "low", "high"],
+  "match_rate_low_cell": 0.416667,
+  "match_rate_high_cell": 0.583333,
+  "decision_rule": ">=0.7 tight / 0.3-0.7 loose / <0.3 dead（time_signature の match_rate 規約を流用、バッチ 3 = structure3_plan.yaml knobs.structure と同一規約）。経験的ヌル格下げ規則: high セル match_rate <= low セル match_rate の場合は分類によらず dead へ格下げ（K3-1b の known-dead ヌル天井と同型）。m1_plan.yaml に事前登録（生成前コミット 1ed4be3）。",
+  "null_gate_fired": false,
+  "null_gate_condition": "match_rate_high_cell <= match_rate_low_cell（0.583333 > 0.416667 のため非発火）",
+  "preregistered_rule_outcome": "loose",
+  "primary_verdict": "loose",
+  "verdict_canonical": true,
+  "canonical_scope": "事前登録ローカル生成プロトコル下の canonical（m1_plan.yaml、生成前コミット）: ABBA カウンターバランスと均衡ゲート B は人手 UI 生成の時間ドリフト対策であり、決定論 seed によるローカルスクリプト生成（stateless・サンプル間に状態を持ち越す drift 機構なし・同一バッチ/同一モデル/同一プロセス）には非適用と事前登録。適用可能な条件（補充ゼロ・秒単位タイムスタンプ記録）は全充足。さらに決定論 seed により本バッチは同一環境で byte 再現可能（sha256 pin、docs/musicgen_backend.md §7.3 の同一 seed sha256 一致実測が前例）で、Suno バッチの「時刻証跡で復元」より強い provenance を持つ。",
+  "canonical_conditions": {
+    "summary": "AGENTS.md §8 の 4 条件のうち ABBA 順・均衡ゲートは事前登録により非適用（ドリフト機構の不在）。適用可能な 2 条件（補充ゼロ・タイムスタンプ記録）は充足 — verdict_canonical: true。",
+    "conditions": [
+      {
+        "id": "abba_order",
+        "applicable": false,
+        "satisfied": null,
+        "evidence": "非適用（m1_plan.yaml 事前登録）: ABBA は人手 UI 生成の時間ドリフト対策。本バッチは決定論 seed のローカルスクリプト生成でサンプル間に状態を持ち越す機構が存在しない。生成順は low 00-07 → high 00-07 の逐次（m1_generation_timestamps.yaml に記録）。"
+      },
+      {
+        "id": "zero_replenishment",
+        "applicable": true,
+        "satisfied": true,
+        "evidence": "全 16 テイクが 30.54s（duration_seconds 30.6 の delay-pattern -3 フレーム込み実測値）で 30s カットオフを通過。除外・補充ゼロ（m1_results_fixture.json excluded: []）。"
+      },
+      {
+        "id": "timestamps_recorded",
+        "applicable": true,
+        "satisfied": true,
+        "evidence": "全 16 サンプルのコール単位開始/終了を秒単位 UTC で実測記録（m1_generation_timestamps.yaml、date -u によるコール実測・推定値なし。バッチ 3 の分単位ダウンロード時刻代理と異なり attestation 依存なし）。"
+      },
+      {
+        "id": "balance_gate",
+        "applicable": false,
+        "satisfied": null,
+        "evidence": "非適用（m1_plan.yaml 事前登録）: 均衡ゲート B は線形セッションドリフトの打ち消し検査であり、ドリフト機構が不在のローカル決定論生成には対象事象がない。"
+      }
+    ]
+  },
+  "analytic_floor_check": {
+    "high_cell": {
+      "observed": 0.583333,
+      "chance_floor_note": "バッチ 3 の解析的 chance floor 1/3 は「Suno デフォルト形状 [low,high,high] と処方 [high,low,high] の一致率」由来で生成器依存。MusicGen の経験的ヌル（low セル 0.416667）に対して high セル 0.583333 は上方 — ヌルゲート非発火の直接根拠。"
+    },
+    "low_cell": {
+      "observed": 0.416667,
+      "note": "low セル（structure 指定なし）の形状は多様（[low,high,high] 3/8 が最頻・Suno デフォルト形状と同じ向きだが支配的でない。[high,low,low] 2/8 等）。"
+    }
+  },
+  "descriptive_evidence": {
+    "per_section_realization": "処方 3 区間の実現数（high セル vs low セル）: loud intro 3/8 vs 3/8（差なし・Suno バッチ 3 は 0/4）、quiet breakdown（中央 low）6/8 vs 3/8（+3 — 信号の主担体）、loud outro 5/8 vs 4/8（+1）。structure 散文の効きは中央区間の「quiet sparse minimal」に最も強く現れ、loud イントロはベースライン水準から動かなかった。",
+    "full_match_absence": "処方 [high,low,high] への完全一致（match_rate 1.0）は両セルとも 0/8 — 効果は区間単位の部分実現であり、3 区間同時の形状制御には達しない（loose の実質）。",
+    "extreme_dynamics": "high セルには近無音の breakdown を実現したテイクが存在する（structure_high_03 中央区間 -80.21 dBFS・margin -0.993、structure_high_05 冒頭 -46.18 dBFS）。low セルの静的なテイク（low_05/low_07 の先頭 high は後続の減衰による相対符号）と質的に異なる。",
+    "knife_edge_sections": "全 16 曲・全 48 区間で knife_edge フラグ発火ゼロ。最小 |margin| = 0.006986（structure_high_02 第 1 区間）> KNIFE_EDGE_MARGIN 0.005 — ただし閾値の 1.4 倍と近く、当該テイクの符号は計測条件感応の可能性を残す（match への影響は第 1 区間 1 マスのみ）。"
+  },
+  "order_provenance": "生成順は low 00-07 → high 00-07 の逐次チャンク実行（1 コール 1 クリップ、--only-level/--only-repeat/--append）。全コールの開始/終了を秒単位 UTC で実測記録（m1_generation_timestamps.yaml）。seed は絶対インデックス由来（low 1000-1007 / high 1050-1057）のため生成順・分割は結果に影響しない（tests/test_musicgen_runbook.py で pin）。",
+  "secondary": {
+    "sensor": "novelty_boundaries",
+    "expected_sign": 1,
+    "low_counts": [2, 2, 3, 2, 3, 3, 1, 2],
+    "high_counts": [3, 3, 3, 1, 3, 2, 2, 3],
+    "low_mean": 2.25,
+    "high_mean": 2.5,
+    "novelty_d": 0.341565,
+    "classification": "loose",
+    "decision_rule": "K 系列既定閾値 |d|>=0.8 tight / 0.2-0.8 loose / <0.2 dead・expected_sign +1（バッチ 3 と同一規約、m1_plan.yaml 事前登録）。",
+    "duration_note": "全 16 テイクが同一曲長 30.54s（ローカル生成の固定長）のため、バッチ 2 で問題化した曲長交絡は構造的に不在。ただし 30.54s は Suno バッチ（52-148s）より大幅に短く、novelty 計器の絶対水準（1-3 境界 vs Suno 4-7 境界）は曲長差を映すため生成器間の絶対比較には使えない（セル間 d のみ有効）。"
+  },
+  "interpretation": "主センサー: high セル match_rate=0.583333 が low セル（経験的ヌル）0.416667 を上回りヌルゲート非発火、事前登録規約の機械適用は loose（0.3-0.7 帯）。副センサー novelty d=+0.341565 も expected_sign と同方向の loose で整合。同一計器・同一規約・同一処方の Suno バッチ 3（high 0.333=chance floor 正確一致・ヌルゲート発火・dead）とは対照的に、MusicGen では structure 散文が区間エネルギー構造に部分的に写る — 効きの主担体は quiet breakdown（中央区間 6/8 vs 3/8）で、loud intro は動かず、完全形状一致は 0/8（tight には遠い）。チャネル×生成器比較の読み: 「structure 散文 dead」は Suno 機種所見であり生成器一般の性質ではない（機種依存の効きを証拠なしに横展開しない規律の実測的裏付け）。",
+  "suno_batch3_relationship": "同一計器（measure_structure_pattern.py #167 凍結）・同一判定規約・同一直交処方（loud-quiet-loud）で生成器のみ交換した直接比較: Suno バッチ 3 = dead（canonical 保留）に対し MusicGen M1 = loose（canonical・事前登録ローカルプロトコル）。バッチ 3 の fixture / verdict は本バッチによって変更しない。",
+  "config_reflected": false,
+  "design_reflection_note": "本 fixture は計測記録のみ。この結果（musicgen loose vs suno dead）を受けた omit_structure_prose の musicgen 展開可否・device profile (config/device_profiles/musicgen.yaml) への structure 欄反映は設計者の判読待ちで、本バッチでは行わない。"
+}
