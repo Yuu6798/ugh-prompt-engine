@@ -245,9 +245,10 @@ def validate_merge_compatibility(existing: dict[str, Any], new: dict[str, Any]) 
     """manifest 統合の整合検査（`merge_takes_manifests` と `--append` 事前検証の共有）。
 
     ヘッダ（schema_version / fixture_id / generator / plan）が完全一致しない
-    manifest 同士、および sample_id が重複する manifest 同士の統合を fail-fast で
-    拒否する（別 plan のサンプル混入・同一チャンク二重実行の検出）。``new`` は
-    samples の各要素が ``sample_id`` を持てばよく、生成前の計画 stub
+    manifest 同士、sample_id が重複する manifest 同士、およびサンプルレベルの
+    解決済み (model_id, model_revision) が単一でない統合を fail-fast で拒否する
+    （別 plan のサンプル混入・同一チャンク二重実行・revision 混合の検出）。
+    ``new`` は samples の各要素が ``sample_id`` を持てばよく、生成前の計画 stub
     （`plan_chunk_manifest_stub`）にも適用できる — `--append` の誤再実行を
     **WAV を 1 byte も書く前に** 拒否するため（#171 P2: 生成後の検査だけでは
     同名 WAV を先に上書きしてから重複で失敗し、再実行が異なる byte を生んだ場合
@@ -268,6 +269,25 @@ def validate_merge_compatibility(existing: dict[str, Any], new: dict[str, Any]) 
         raise ValueError(
             f"cannot merge manifests: duplicate sample_id(s) {duplicates} "
             "(same chunk generated twice?)"
+        )
+
+    # サンプルレベルの解決済み model_id / model_revision の混合拒否（#171 P2 3巡目）:
+    # 宣言 plan の比較（上のヘッダ検査）だけでは `model_revision: null` の plan が
+    # 実行間で異なる HF コミットへ解決したチャンク同士を素通しする。generate_takes
+    # はサンプル別に解決済み revision を記録するので、統合対象の全サンプルで
+    # (model_id, model_revision) が単一であることを検査し、複数 revision の出力が
+    # 1 fixture に暗黙混合して grip 計測を汚染することを防ぐ。計画 stub のサンプル
+    # （sample_id のみ・生成前で解決値を持たない）は検査対象から自然に外れる。
+    resolved_models = {
+        (sample.get("model_id"), sample.get("model_revision"))
+        for sample in list(existing["samples"]) + list(new["samples"])
+        if "model_id" in sample or "model_revision" in sample
+    }
+    if len(resolved_models) > 1:
+        raise ValueError(
+            "cannot merge manifests: mixed resolved model_id/model_revision across samples "
+            f"{sorted(resolved_models, key=str)} — one fixture must come from a single "
+            "model revision (unpinned runs can resolve to different HF commits)"
         )
 
 
@@ -645,7 +665,22 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     if advisory is not None:
         print(advisory, file=sys.stderr)
 
-    # --append の事前検証（#171 P2 採用）: merge と同一基準の整合検査
+    # --append の事前検証その 1（#171 P2 3巡目採用）: append 分割は pin 済み
+    # model_revision を必須とする。未 pin（null）の plan はチャンク実行のたびに
+    # HF の現行 head へ解決されるため、長い --append バッチが複数モデル revision
+    # の出力を 1 fixture に暗黙混合し grip 計測を汚染し得る。単発生成（--append
+    # なし）は単一実行内で混合が起きないため従来どおり未 pin でも可。
+    if args.append and plan.model_revision is None:
+        print(
+            "error: --append chunked batches require a pinned model_revision in the plan "
+            "(unpinned runs resolve to the current HF head, which can change between chunk "
+            "executions and silently mix model revisions in one fixture) — refusing to "
+            "generate (no WAV written)",
+            file=sys.stderr,
+        )
+        return 2
+
+    # --append の事前検証その 2（#171 P2 採用）: merge と同一基準の整合検査
     # （validate_merge_compatibility 共有ヘルパー）を **生成前** に計画 stub へ
     # 適用する。生成後の merge 検査だけでは、同一チャンクの誤再実行が同名 WAV を
     # 先に上書きしてから重複で失敗し、旧 manifest が stale な sha256 を指した

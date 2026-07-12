@@ -548,6 +548,11 @@ def test_iter_plan_takes_rejects_invalid_filters() -> None:
         list(iter_plan_takes(plan, only_repeat=-1))
 
 
+# チャンク系テスト共通の pin 済み revision（--append は未 pin plan を生成前に
+# 拒否するため、append 系シナリオのヘルパーは pin 済みを既定にする）。
+_CHUNK_REVISION = "cafef00d5eed5eed5eed5eed5eed5eed5eed5eed"
+
+
 def _chunk_manifest(samples: list[dict]) -> dict:
     """merge テスト用の最小チャンク manifest（ヘッダ共通・samples のみ差替え）。"""
     return {
@@ -559,7 +564,7 @@ def _chunk_manifest(samples: list[dict]) -> dict:
             "fixture_id": "m1_chunks",
             "generator": "musicgen-small",
             "model_id": "facebook/musicgen-small",
-            "model_revision": None,
+            "model_revision": _CHUNK_REVISION,
             "duration_seconds": 30.6,
             "guidance_scale": 3.0,
             "repetitions": 2,
@@ -595,7 +600,7 @@ def _chunk_sample(level_token: str, repeat: int) -> dict:
         "audio_path": f"structure_{level_token}_{repeat:02d}.wav",
         "audio_sha256": "0" * 64,
         "model_id": "facebook/musicgen-small",
-        "model_revision": None,
+        "model_revision": _CHUNK_REVISION,
         "duration_seconds": 30.6,
         "guidance_scale": 3.0,
     }
@@ -628,6 +633,29 @@ def test_merge_takes_manifests_fails_fast_on_duplicate_or_plan_mismatch() -> Non
     other_plan["plan"] = dict(other_plan["plan"], duration_seconds=12.0)
     with pytest.raises(ValueError, match="plan differs"):
         merge_takes_manifests(base, other_plan)
+
+
+def test_merge_rejects_mixed_sample_model_revisions() -> None:
+    """サンプルレベルの解決済み model_revision が混合する manifest の統合を拒否する
+    （#171 P2 3巡目: 宣言 plan が同一（例: 両方 null 宣言）でも、実行間で HF が
+    異なるコミットへ解決したチャンク同士が 1 fixture に暗黙混合され grip 計測を
+    汚染する経路を、merged manifest を書く前に塞ぐ多重防御）。"""
+    base = _chunk_manifest([_chunk_sample("low", 0)])
+    drifted = _chunk_manifest([_chunk_sample("high", 0)])
+    drifted["samples"][0]["model_revision"] = "0123456789abcdef0123456789abcdef01234567"
+
+    with pytest.raises(ValueError, match="mixed resolved model_id/model_revision"):
+        merge_takes_manifests(base, drifted)
+
+    # model_id の混合も同様に拒否される。
+    drifted_id = _chunk_manifest([_chunk_sample("high", 0)])
+    drifted_id["samples"][0]["model_id"] = "facebook/musicgen-medium"
+    with pytest.raises(ValueError, match="mixed resolved model_id/model_revision"):
+        merge_takes_manifests(base, drifted_id)
+
+    # 単一 revision（全サンプル一致）は従来どおり統合できる（回帰）。
+    merged = merge_takes_manifests(base, _chunk_manifest([_chunk_sample("high", 0)]))
+    assert len(merged["samples"]) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -666,6 +694,37 @@ def _run_generate_append(
             "--append",
         ]
     )
+
+
+def test_generate_append_requires_pinned_model_revision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--append は pin 済み model_revision を必須とし、未 pin plan は生成前に
+    fail-fast する（#171 P2 3巡目: 未 pin はチャンク実行のたびに HF 現行 head へ
+    解決され、長い append バッチが複数 revision を 1 fixture に暗黙混合するため）。
+
+    既存 manifest の有無に依存しない（最初のチャンクから拒否 — 混合は 2 回目
+    以降でなく初回実行の時点で予防する）。
+    """
+    monkeypatch.setitem(sys.modules, "torch", None)
+    monkeypatch.setitem(sys.modules, "transformers", None)
+
+    unpinned_plan = dict(_chunk_manifest([])["plan"], model_revision=None)
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(json.dumps(unpinned_plan), encoding="utf-8")
+    manifest_out = tmp_path / "manifest.json"  # 存在しない = 初回チャンク
+    output_dir = tmp_path / "takes"
+
+    exit_code = _run_generate_append(
+        plan_path, output_dir, manifest_out, level="low", repeat=0
+    )
+
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert "pinned model_revision" in captured.err
+    assert "no WAV written" in captured.err
+    assert not output_dir.exists()
+    assert not manifest_out.exists()
 
 
 def test_generate_append_rejects_duplicate_chunk_before_generation(
