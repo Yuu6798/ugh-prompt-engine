@@ -163,16 +163,22 @@ def _analyze_categorical_knob(
     classification = classify_match_grip(combined_rate)
 
     # 事前登録ヌルゲート（m2_plan.yaml §3、K3-1b 由来の known-dead ヌル天井と同型）:
-    # high セルの一致率が low セルを下回る（strict <）なら、combined match_rate の
-    # 機械分類（loose に見えうる）によらず dead へ格下げる。既存の `classification`
-    # は計器の生出力として温存し、本フィールドは additive に併記する
+    # high セルの一致率が low セルを下回るなら、combined match_rate の機械分類
+    # （loose に見えうる）によらず dead へ格下げる。既存の `classification` は
+    # 計器の生出力として温存し、本フィールドは additive に併記する
     # （categorical 経路のみ・continuous の effect_size 経路には適用しない）。
     #
-    # 等号は自動発火しない — 両セルが各自の処方を完全実現するケース
-    # （K1 key: low_mean 1.0 / high_mean 1.0 = tight）を dead に誤格下げするため。
-    # 等号時の裁定は per-cell 値を見て人間側で行う（M2 plan の事前登録は ≤ 表記
-    # だが、実データ 0.125 < 1.0 は strict でも発火し裁定不変）。
-    null_gate_fired = high_mean < low_mean
+    # 等号規則の原理: categorical は排他的完全一致（観測は low/high のどちらか
+    # 一方にしか一致しない）ため、処方非依存の静的出力では
+    # match_low + match_high <= 1 が必然。等号で和が 1 を超える場合
+    # （例 1.0/1.0、0.9/0.9）は静的出力で説明不能＝応答性の実証につき非発火。
+    # 和が 1 以下の等号（0.5/0.5 = 静的コインで説明可能）は改善証拠なしにつき
+    # 発火。厳密不等号（high < low）は常に発火（事前登録 ≤ 規約の非改善側）。
+    # structure 計器の 0.667/0.667 dead 前例は非排他マッチの別計器であり
+    # 本規則の対象外。
+    null_gate_fired = (high_mean < low_mean) or (
+        high_mean == low_mean and (low_mean + high_mean) <= 1.0
+    )
     gated_classification = "dead" if null_gate_fired else classification
 
     return {

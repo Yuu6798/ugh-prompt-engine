@@ -464,11 +464,16 @@ dead 1（time_signature）。3 欄とも `config/device_profiles/musicgen.yaml`
 **計器 encode（PR #173 Codex P2、2026-07-13）**: 本節の事前登録ヌルゲートは当初
 `m2_expected_grip.json` への手動転記のみだったが、`scripts/measure_grip.py` の
 categorical 経路へ additive フィールド（`null_gate_fired` / `gated_classification` /
-トップレベル `summary_gated`）として encode した。計器のゲート条件は **strict
-`high_mean < low_mean`** — 等号は自動発火しない（両セルが各自の処方を完全実現する
-ケース（K1 key: 1.0/1.0 tight）を dead に誤格下げするため。等号時の裁定は per-cell
-値を見て人間側で行う。M2 の事前登録は ≤ 表記だが実データ 0.125 < 1.0 は strict でも
-発火し裁定不変）。生の `classification`（stock 分類）は温存したまま、raw 出力
+トップレベル `summary_gated`）として encode した。計器のゲート条件（#174 Codex P2
+採用で等号規則を精密化）: 厳密不等号 `high_mean < low_mean` は常に発火（事前登録
+≤ 規約の非改善側。M2 実データ 0.125 < 1.0 はここで発火し裁定不変）。等号は和で
+分岐する — categorical は排他的完全一致（観測は low/high のどちらか一方にしか
+一致しない）ため、処方非依存の静的出力では match_low + match_high <= 1 が必然。
+等号で和が 1 を超える場合（例 K1 key 1.0/1.0 tight、0.9/0.9）は静的出力で説明
+不能＝応答性の実証につき非発火。和が 1 以下の等号（0.5/0.5 = 静的コインで説明
+可能）は改善証拠なしにつき発火。structure 計器の 0.667/0.667 dead 前例
+（M1、`measure_structure_pattern`）は非排他マッチの別計器であり本規則の対象外。
+生の `classification`（stock 分類）は温存したまま、raw 出力
 （`m2_measure_raw_2026-07-13.yaml`）にも `gated_classification: dead` が計器の
 自動算出として記録されるようになり、将来バッチが手動反映を忘れるリスクを構造的に
 縮小した。
