@@ -14,6 +14,7 @@ from scripts.measure_grip import (
     analyze_fixture,
     load_fixture,
     main,
+    render_markdown,
 )
 from svp_rpe.control import (
     GRIP_SATURATED,
@@ -94,6 +95,39 @@ def test_measure_grip_cli_knob_filter(capsys: pytest.CaptureFixture[str]) -> Non
     payload = json.loads(capsys.readouterr().out)
     assert [result["knob"] for result in payload["results"]] == ["bpm"]
     assert payload["summary"] == {"tight": 1, "loose": 0, "dead": 0}
+
+
+def test_measure_grip_cli_markdown_shows_gated_downgrade(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """既定 CLI（markdown）でもヌルゲート格下げが可視化される（#174 第 4R）。
+
+    gated 値が JSON のみだと markdown は stock classification を表示し続け
+    dead 格下げが隠れる。M2 fixture の time_signature 行に gate=fired /
+    gated class=dead が現れ、summary_gated も stock summary と並記されること。
+    continuous 行はゲート対象外の "—" 表示。"""
+    m2_fixture = Path("examples/control/musicgen_m2_knobs/m2_results_fixture.json")
+    exit_code = main(["--fixture", str(m2_fixture)])
+
+    assert exit_code == 0
+    markdown = capsys.readouterr().out
+    assert "| gate | gated class |" in markdown
+
+    lines = markdown.splitlines()
+    ts_row = next(line for line in lines if line.startswith("| time_signature "))
+    assert "| loose " in ts_row  # stock 分類は生値のまま温存される
+    assert "| fired " in ts_row
+    assert ts_row.rstrip().endswith("| dead |")
+
+    continuous_row = next(line for line in lines if line.startswith("| active_rate_target "))
+    assert "| — | — |" in continuous_row
+
+    assert "- summary (stock): tight 0 / loose 3 / dead 0" in markdown
+    assert "- summary_gated: tight 0 / loose 2 / dead 1" in markdown
+
+    # render_markdown 単体でも同一内容（CLI 経路と関数経路の同値性）。
+    report = analyze_fixture(load_fixture(m2_fixture))
+    assert render_markdown(report) == markdown
 
 
 def test_match_rate_bounds_and_validation() -> None:

@@ -486,7 +486,10 @@ M2 plan の事前登録（high <= low で分類によらず dead）は引き続�
 生の `classification`（stock 分類）は温存したまま、raw 出力
 （`m2_measure_raw_2026-07-13.yaml`）にも `gated_classification: dead` が計器の
 自動算出として記録されるようになり、将来バッチが手動反映を忘れるリスクを構造的に
-縮小した。
+縮小した。既定 CLI（markdown 出力）にも `gate` / `gated class` 列と
+`summary_gated` 行を追加し、JSON を開かなくてもヌルゲート格下げが見える
+（第 4 ラウンド。continuous 行はゲート対象外の "—" 表示、stock の class /
+summary は並記のまま温存）。
 
 ## 8. 関連ドキュメント
 

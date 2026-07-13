@@ -215,16 +215,28 @@ def render_json(report: dict[str, Any]) -> str:
 
 
 def render_markdown(report: dict[str, Any]) -> str:
+    # gate / gated class 列（#174 Codex P2 第 4 ラウンド採用）: gated 値が JSON
+    # 出力のみだと既定 CLI（markdown）は stock classification を表示し続け、
+    # ヌルゲートの dead 格下げが隠れる。生値（class / summary）と裁定
+    # （gated class / summary_gated）の並記は本 PR の一貫方針。continuous 行は
+    # ゲート対象外のため "—" を表示する。
     lines: list[str] = []
     lines.append("# K0 grip measurement\n")
     lines.append(f"- fixture: `{report['fixture_id']}`")
     lines.append(f"- repetitions: {report['repetitions']}")
     lines.append("")
     lines.append(
-        "| knob | sensor | low | high | mean low | mean high | grip | class |"
+        "| knob | sensor | low | high | mean low | mean high | grip | class "
+        "| gate | gated class |"
     )
-    lines.append("|---|---|---|---|---:|---:|---:|---|")
+    lines.append("|---|---|---|---|---:|---:|---:|---|---|---|")
     for result in report["results"]:
+        if "null_gate_fired" in result:
+            gate_cell = "fired" if result["null_gate_fired"] else "not fired"
+            gated_class_cell = str(result["gated_classification"])
+        else:
+            gate_cell = "—"
+            gated_class_cell = "—"
         lines.append(
             f"| {result['knob']} "
             f"| {result['sensor']} "
@@ -233,8 +245,21 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"| {result['low_mean']:.6g} "
             f"| {result['high_mean']:.6g} "
             f"| {result['grip']:.6g} "
-            f"| {result['classification']} |"
+            f"| {result['classification']} "
+            f"| {gate_cell} "
+            f"| {gated_class_cell} |"
         )
+    summary = report["summary"]
+    summary_gated = report["summary_gated"]
+    lines.append("")
+    lines.append(
+        f"- summary (stock): tight {summary['tight']} / loose {summary['loose']} "
+        f"/ dead {summary['dead']}"
+    )
+    lines.append(
+        f"- summary_gated: tight {summary_gated['tight']} / loose {summary_gated['loose']} "
+        f"/ dead {summary_gated['dead']}"
+    )
     return "\n".join(lines) + "\n"
 
 
