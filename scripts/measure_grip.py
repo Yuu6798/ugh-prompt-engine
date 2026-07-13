@@ -132,6 +132,26 @@ def analyze_fixture(raw: dict[str, Any], *, knob_filter: str | None = None) -> d
     }
 
 
+def _equal_means_static_null(
+    low_observed: list[str] | None,
+    high_observed: list[str] | None,
+    low_mean: float,
+    high_mean: float,
+    cross_score: float,
+) -> bool:
+    """等号 means 時の static-null 判定（#174 Codex P2 第 6 ラウンド採用）。
+
+    per-cell 観測 multiset の同一性 = 処方非依存（静的）出力の最強の観測的
+    シグネチャ。両セルの観測分布が同一なら処方への応答証拠がなく発火、
+    分布が異なれば（等号 means でも）応答的シフトでありうるため免除する。
+    観測リストが得られない場合のみ 1 + cross_score 和境界（静的性の必要条件
+    のみの近似）にフォールバックする。
+    """
+    if low_observed is not None and high_observed is not None:
+        return sorted(low_observed) == sorted(high_observed)
+    return (low_mean + high_mean) <= 1.0 + cross_score
+
+
 def _analyze_categorical_knob(
     spec: dict[str, Any],
     samples: list[dict[str, Any]],
@@ -169,18 +189,15 @@ def _analyze_categorical_knob(
     # 計器の生出力として温存し、本フィールドは additive に併記する
     # （categorical 経路のみ・continuous の effect_size 経路には適用しない）。
     #
-    # 等号規則の原理（#174 Codex P2 第 2 ラウンド採用・第 5 ラウンドで 1+s へ
-    # 一般化）: 静的（処方非依存）出力の 1 観測は両レベル合計で最大 1 + s
-    # （s = レベル間相互スコア = 当該 knob の match 計算に実際に使うスコア関数で
-    # low_level と high_level を相互採点した値。非対称スコアラーに備え max を
-    # 採る）しか取れない。排他的完全一致センサーは s=0 で従来の和 <= 1 に帰着
-    # （0.5/0.5 = 静的コインで説明可能につき発火、1.0/1.0 や 0.9/0.9 の和 > 1 は
-    # 静的出力で説明不能＝応答性の実証につき非発火）。fuzzy スコアラー
-    # （key の五度部分点等）では境界が 1+s に上がる — 五度部分点は方向付き
-    # （C 参照×G 観測 0.5 / 逆方向 0）のため文字どおりの C/G 静的 50/50 混合は
-    # 0.75/0.5 で strict 分岐が発火し、等号境界を突く 0.75/0.75（和 1.5 = 1+0.5）
-    # も等号分岐で発火。1.0/1.0（和 2.0 > 1.5）は完全一致必須につき静的で説明
-    # 不能＝免除。将来の fuzzy スコアラーにも自動で一般化される。
+    # 等号規則（#174 Codex P2 第 2R 和境界 → 第 5R 1+s → 第 6R 分布同一性）:
+    # 和境界は静的性の**必要条件にすぎない** — 応答して分布がシフトしても等号
+    # means になり得る（key 五度シフト例: low [C,G] / high [G,D] は means
+    # 0.75/0.75 だが分布は処方に追従して移動しており応答的）。等号時の発火は
+    # per-cell 観測 multiset の同一性 = 処方非依存（静的）出力の最強の観測的
+    # シグネチャで判定する。排他一致では multiset 一致 + 等号 means → 和 <= 1
+    # が数学的に必然のため、従来の排他一致ケース（0.5/0.5 発火・0.6/0.6 /
+    # 0.9/0.9 / 1.0/1.0 非発火）の挙動は完全に保存される。観測リストが無い場合
+    # のみ 1 + cross_score 和境界（necessary-only の近似）にフォールバックする。
     # structure 計器の 0.667/0.667 dead 前例は非排他マッチの別計器であり
     # 本規則の対象外。
     #
@@ -194,7 +211,12 @@ def _analyze_categorical_knob(
     cross_score = max(score_fn(low_level, high_level), score_fn(high_level, low_level))
     null_gate_fired = (
         (high_mean < low_mean and high_mean < MATCH_TIGHT_MIN)
-        or (high_mean == low_mean and (low_mean + high_mean) <= 1.0 + cross_score)
+        or (
+            high_mean == low_mean
+            and _equal_means_static_null(
+                low_observed, high_observed, low_mean, high_mean, cross_score
+            )
+        )
     )
     gated_classification = "dead" if null_gate_fired else classification
 

@@ -465,27 +465,27 @@ dead 1（time_signature）。3 欄とも `config/device_profiles/musicgen.yaml`
 `m2_expected_grip.json` への手動転記のみだったが、`scripts/measure_grip.py` の
 categorical 経路へ additive フィールド（`null_gate_fired` / `gated_classification` /
 トップレベル `summary_gated`）として encode した。計器のゲート条件（#174 Codex P2
-第 2・第 3・第 5 ラウンド採用の合成規則）:
-`null_gate_fired = (high < low and high < MATCH_TIGHT_MIN) or (high == low and low + high <= 1.0 + cross_score)`
-（`cross_score` = 当該 knob の match 計算に実際に使うスコア関数で low_level と
-high_level を相互採点した値の max）。
+第 2・第 3・第 5・第 6 ラウンド採用の合成規則）:
+`null_gate_fired = (high < low and high < MATCH_TIGHT_MIN) or (high == low and 等号ヌル条件)`。
+等号ヌル条件は **per-cell 観測 multiset の同一性**（= 処方非依存の静的出力の
+最強の観測的シグネチャ。第 6 ラウンド）で判定し、観測リストが得られない場合のみ
+`(low + high) <= 1.0 + cross_score` 和境界（`cross_score` = 当該 knob の match
+計算に実際に使うスコア関数で low_level と high_level を相互採点した値の max。
+第 5 ラウンド・necessary-only の近似）にフォールバックする。
 ゲートの目的は low/デフォルトセルが combined を押し上げる誤読の防止であり、
 非改善（high < low）でも high セル単独が tight 水準（>= MATCH_TIGHT_MIN = 0.7）に
 達していれば high 処方は実現されており誤読は発生しない＝免除する（第 3 ラウンド。
 例 low 1.0 / high 0.875、combined 0.9375 tight を温存。M2 実データ high 0.125 は
-tight 水準未達につき発火し裁定不変）。等号は和で分岐する — 静的（処方非依存）
-出力の 1 観測は両レベル合計で最大 1 + s（s = レベル間相互スコア）しか取れない
-（第 5 ラウンドで 1+s へ一般化）。排他的完全一致センサーは s=0 で和 <= 1 に帰着:
-等号で和が 1 を超える場合（例 K1 key 1.0/1.0 tight、0.9/0.9）は静的出力で説明
-不能＝応答性の実証につき非発火、和が 1 以下の等号（0.5/0.5 = 静的コインで説明
-可能）は改善証拠なしにつき発火（第 2 ラウンド）。fuzzy スコアラー（key の五度
-部分点等）では境界が 1+s に上がる — 五度部分点は方向付き（C 参照×G 観測 0.5 /
-逆方向 0）のため文字どおりの C/G 静的 50/50 混合は 0.75/0.5 で strict 分岐が
-発火し、等号境界を突く 0.75/0.75（和 1.5 = 1+0.5）も等号分岐で発火。1.0/1.0
-（和 2.0 > 1.5）は完全一致必須につき静的で説明不能＝免除（将来の fuzzy
-スコアラーにも自動で一般化される）。structure 計器の 0.667/0.667
-dead 前例（M1、`measure_structure_pattern`）は非排他マッチの別計器であり本規則の
-対象外。
+tight 水準未達につき発火し裁定不変）。等号 means の原理: 和境界（第 2 ラウンドの
+和 <= 1、第 5 ラウンドの 1+s）は静的性の**必要条件にすぎず**、応答して分布が
+シフトしても等号 means になり得る（key 五度シフト例: low [C,G] / high [G,D] は
+means 0.75/0.75 だが分布は処方に追従して移動しており応答的＝multiset 相違で
+免除）。両セルの観測 multiset が同一なら処方への応答証拠がなく発火する
+（例: 排他一致の 0.5/0.5 静的コイン、key の両セル [C,G,D] 静的混合 0.5/0.5）。
+排他一致では multiset 一致 + 等号 means → 和 <= 1 が数学的に必然のため、従来の
+排他一致ケース（0.5/0.5 発火・0.6/0.6 / 0.9/0.9 / 1.0/1.0 非発火）の挙動は完全に
+保存される。structure 計器の 0.667/0.667 dead 前例
+（M1、`measure_structure_pattern`）は非排他マッチの別計器であり本規則の対象外。
 なお各バッチの事前登録はバッチ局所の decision rule として計器既定に優先する —
 M2 plan の事前登録（high <= low で分類によらず dead）は引き続き M2 の裁定を支配し
 （M2 の high 0.125 は合成規則でも発火するため衝突なし）、将来バッチはより厳しい

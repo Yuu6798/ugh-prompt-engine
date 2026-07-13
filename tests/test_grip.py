@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 from scripts.measure_grip import (
+    _equal_means_static_null,
     _exact_match_score,
     _key_match_score,
     analyze_fixture,
@@ -258,24 +259,23 @@ def test_categorical_non_key_sensor_uses_exact_match_not_key_fuzzy() -> None:
 # 変更しない。m2_plan.yaml §3 の事前登録規約を、手動転記ではなく計器へ機械的に
 # encode する。
 #
-# ゲート条件（#174 Codex P2 第 2・第 3・第 5 ラウンド採用の合成規則）:
-#   cross_score = max(score(low_level, high_level), score(high_level, low_level))
+# ゲート条件（#174 Codex P2 第 2・第 3・第 5・第 6 ラウンド採用の合成規則）:
 #   null_gate_fired = (high < low and high < MATCH_TIGHT_MIN)
-#                     or (high == low and low + high <= 1.0 + cross_score)
+#                     or (high == low and 等号ヌル条件)
+#   等号ヌル条件 = multiset(low_observed) == multiset(high_observed)
+#                = (low + high) <= 1.0 + cross_score   # 観測リスト欠損時のみ
 # 非改善（high < low）は high セル単独が tight 水準（>= MATCH_TIGHT_MIN = 0.7）
 # 未達の場合のみ発火 — ゲートの目的は low/デフォルトセルが combined を押し上げる
 # 誤読の防止であり、high 処方が単独で実現済み（例 1.0/0.875）なら誤読は発生
-# しないため免除（第 3 ラウンド）。等号は和で分岐する — 静的（処方非依存）出力の
-# 1 観測は両レベル合計で最大 1 + s（s = レベル間相互スコア。当該 knob の match
-# 計算に実際に使うスコア関数で相互採点）しか取れない（第 5 ラウンドで 1+s へ
-# 一般化）。排他的完全一致センサーは s=0 で和 <= 1 に帰着: 等号で和が 1 を
-# 超える場合（例 K1 key 1.0/1.0、0.9/0.9）は静的出力で説明不能＝応答性の実証に
-# つき非発火、和が 1 以下の等号（0.5/0.5 = 静的コインで説明可能）は改善証拠なし
-# につき発火（第 2 ラウンド）。fuzzy スコアラー（key の五度部分点等）では境界が
-# 1+s に上がり、部分点による等号 0.75/0.75（和 1.5 = 1+0.5）は発火する
-# （五度部分点は方向付きのため文字どおりの C/G 静的混合は 0.75/0.5 で strict
-# 分岐が発火）。structure 計器の 0.667/0.667 dead 前例は非排他マッチの別計器で
-# あり本規則の対象外。
+# しないため免除（第 3 ラウンド）。等号 means 時は per-cell 観測 multiset の
+# 同一性 = 処方非依存（静的）出力の最強の観測的シグネチャで発火を判定する
+# （第 6 ラウンド。和境界 1+s（第 5 ラウンド）は静的性の必要条件にすぎず、
+# 応答して分布がシフトしても等号 means になり得る — key 五度シフト例
+# low [C,G] / high [G,D] の 0.75/0.75 は multiset 相違につき免除）。排他一致
+# では multiset 一致 + 等号 means → 和 <= 1 が数学的に必然のため、排他一致の
+# 従来挙動（0.5/0.5 発火・0.6/0.6 / 0.9/0.9 / 1.0/1.0 非発火）は完全に保存
+# される。structure 計器の 0.667/0.667 dead 前例は非排他マッチの別計器であり
+# 本規則の対象外。
 # ---------------------------------------------------------------------------
 
 
@@ -337,18 +337,38 @@ def _key_probe_fixture(low_observed: list[str], high_observed: list[str]) -> dic
     }
 
 
-def test_key_null_gate_fires_on_static_mixture_within_fuzzy_bound() -> None:
-    """fuzzy key スコアラーの部分点による免除すり抜けを封止（#174 第 5R）。
+def test_key_null_gate_exempts_responsive_fifth_shift_with_equal_means() -> None:
+    """応答的な五度シフト（low [C,G] / high [G,D]・means 0.75/0.75）は免除
+    （#174 第 6R）。
 
-    mir_eval の五度部分点は方向付き（score(C 参照, G 観測)=0.5 だが
-    score(G 参照, C 観測)=0.0）のため、文字どおりの C/G 静的 50/50 混合は
-    0.75/0.5 となり strict 分岐（high < low かつ high < 0.7）で発火する
-    （ケース 1）。等号境界 1+s 自体を突く反例は high セルに D major
-    （G の五度上・部分点 0.5）を置いた 0.75/0.75 で構成する（ケース 2）:
-    combined 0.75 = tight 帯だが、和 1.5 <= 1 + cross_score(C,G)=1.5 は
-    部分点込みで改善証拠なしにつき発火・gated dead。排他一致の和 <= 1 規則の
-    ままでは和 1.5 > 1 で免除されてしまう反例。"""
-    # ケース 1: 文字どおりの C/G 静的 50/50 混合 — strict 分岐で発火。
+    和境界 1+s（第 5R）は静的性の必要条件にすぎず、このケース（和 1.5 =
+    1+cross_score(C,G)=1.5）を dead に誤格下げしていた反例。分布は処方に追従して
+    [C,G]→[G,D] へシフトしており応答的 — per-cell 観測 multiset の相違により
+    非発火・stock tight 温存。"""
+    fixture = _key_probe_fixture(
+        low_observed=["C major", "G major"], high_observed=["G major", "D major"]
+    )
+    report = analyze_fixture(fixture)
+    result = report["results"][0]
+
+    assert result["low_mean"] == 0.75
+    assert result["high_mean"] == 0.75
+    assert result["classification"] == "tight"
+    assert result["null_gate_fired"] is False
+    assert result["gated_classification"] == "tight"
+    assert report["summary_gated"] == report["summary"]
+
+
+def test_key_null_gate_fires_on_identical_multiset_static_mixture() -> None:
+    """fuzzy key スコアラーの静的混合（処方非依存の同一分布）は発火（#174 第 5R/6R）。
+
+    ケース 1: 文字どおりの C/G 静的 50/50 混合 — mir_eval の五度部分点は方向付き
+    （score(C 参照, G 観測)=0.5 / 逆方向 0.0）のため means は 0.75/0.5 となり
+    strict 分岐（high < low かつ high < 0.7）で発火。
+    ケース 2: 両セルとも観測 [C, G, D] の静的混合 — means 0.5/0.5 の等号かつ
+    per-cell 観測 multiset が同一 = 処方非依存出力のシグネチャにつき等号分岐で
+    発火・gated dead（stock は combined 0.5 = loose 温存）。"""
+    # ケース 1: strict 分岐で発火。
     static_mixture = _key_probe_fixture(
         low_observed=["C major", "G major"], high_observed=["C major", "G major"]
     )
@@ -358,27 +378,29 @@ def test_key_null_gate_fires_on_static_mixture_within_fuzzy_bound() -> None:
     assert result["null_gate_fired"] is True
     assert result["gated_classification"] == "dead"
 
-    # ケース 2: 等号 0.75/0.75（和 1.5 = 1+s 境界ちょうど）— 等号分岐で発火。
+    # ケース 2: 等号 means + multiset 同一 — 等号分岐で発火。
     fixture = _key_probe_fixture(
-        low_observed=["C major", "G major"], high_observed=["G major", "D major"]
+        low_observed=["C major", "G major", "D major"],
+        high_observed=["D major", "C major", "G major"],
     )
     report = analyze_fixture(fixture)
     result = report["results"][0]
 
-    assert result["low_mean"] == 0.75
-    assert result["high_mean"] == 0.75
-    assert result["classification"] == "tight"  # stock 分類は生値のまま温存される
+    assert result["low_mean"] == 0.5
+    assert result["high_mean"] == 0.5
+    assert result["classification"] == "loose"  # stock 分類は生値のまま温存される
     assert result["null_gate_fired"] is True
     assert result["gated_classification"] == "dead"
-    assert report["summary"] == {"tight": 1, "loose": 0, "dead": 0}
+    assert report["summary"] == {"tight": 0, "loose": 1, "dead": 0}
     assert report["summary_gated"] == {"tight": 0, "loose": 0, "dead": 1}
 
 
-def test_key_null_gate_exempts_full_match_equal_means_beyond_fuzzy_bound() -> None:
-    """key の天井等号（1.0/1.0 — K1 key 相当）は 1+s 境界でも免除継続。
+def test_key_null_gate_exempts_full_match_equal_means() -> None:
+    """key の天井等号（1.0/1.0 — K1 key 相当）は免除継続。
 
-    和 2.0 > 1 + cross_score(C,G)=1.5 — 両セル完全一致は五度部分点でも静的出力で
-    説明不能（完全一致必須）＝応答性の実証につき非発火。"""
+    両セル完全一致（low [C,C] / high [G,G]）は per-cell 観測 multiset が相違
+    （分布が処方どおり移動）＝応答性の実証につき非発火（第 6R。第 5R の和境界
+    でも和 2.0 > 1.5 で免除だった — 判定機構が変わっても結論は不変）。"""
     fixture = _key_probe_fixture(
         low_observed=["C major", "C major"], high_observed=["G major", "G major"]
     )
@@ -391,6 +413,24 @@ def test_key_null_gate_exempts_full_match_equal_means_beyond_fuzzy_bound() -> No
     assert result["null_gate_fired"] is False
     assert result["gated_classification"] == "tight"
     assert report["summary_gated"] == report["summary"]
+
+
+def test_equal_means_static_null_fallback_without_observed_lists() -> None:
+    """観測リストが得られない場合のフォールバック（1 + cross_score 和境界、
+    necessary-only の近似）の単体検証（#174 第 6R）。
+
+    計器経路（analyze_fixture）は観測リストを常に持つため multiset 本則で判定
+    される — フォールバックは committed 結果の再検算等、観測リストを欠く入力
+    のための経路であり、ここで直接 pin する。"""
+    # 和 <= 1 + s: 静的で説明可能につき発火side（排他一致 s=0 の 0.5/0.5 相当）。
+    assert _equal_means_static_null(None, None, 0.5, 0.5, 0.0) is True
+    # 和 > 1 + s: 静的で説明不能につき免除side（K1 型 1.0/1.0、s=0）。
+    assert _equal_means_static_null(None, None, 1.0, 1.0, 0.0) is False
+    # fuzzy 境界 1+s=1.5: 0.75/0.75 は和 1.5 <= 1.5 で発火side（第 5R の挙動を保存）。
+    assert _equal_means_static_null(None, None, 0.75, 0.75, 0.5) is True
+    # 観測リストがあれば multiset 本則が優先（同 means でも相違なら免除）。
+    assert _equal_means_static_null(["C", "G"], ["G", "D"], 0.75, 0.75, 0.5) is False
+    assert _equal_means_static_null(["C", "G"], ["G", "C"], 0.5, 0.5, 0.0) is True
 
 
 def test_categorical_null_gate_fires_when_high_mean_below_low_mean() -> None:
@@ -457,7 +497,9 @@ def test_categorical_null_gate_fires_on_equal_means_explainable_by_static_output
     combined 0.5 の機械分類は loose 帯だが、両セル 0.5/0.5 は「常に同じ出力を
     返す静的コイン」でも達成できる値であり、処方への応答（改善）の証拠がない。
     #174 Codex P2 指摘: strict `<` のみだとこのケースが combined loose 誤読として
-    再導入されるため、和 <= 1 の等号は発火に変更。"""
+    再導入されるため、和 <= 1 の等号は発火に変更（第 2R）。第 6R では両セルの
+    観測 multiset が同一（{low, high}）= 静的シグネチャにつき multiset 本則で
+    発火する（挙動不変）。"""
     fixture = _categorical_probe_fixture(
         low_observed=["low", "high"], high_observed=["high", "low"]
     )
@@ -478,7 +520,8 @@ def test_categorical_null_gate_does_not_fire_on_equal_means_above_static_bound()
 
     排他的完全一致では静的出力の match_low + match_high は 1 を超えられない
     ため、和 1.2 は両セルが処方に部分応答した実証。改善（high > low）ではない
-    ものの、静的コインで説明できない以上 dead 格下げの根拠はない。"""
+    ものの、静的コインで説明できない以上 dead 格下げの根拠はない（第 6R では
+    観測 multiset の相違（low×3 vs high×3）として同じ結論に到達する — 挙動不変）。"""
     fixture = _categorical_probe_fixture(
         low_observed=["low", "low", "low", "x", "x"],
         high_observed=["high", "high", "high", "x", "x"],
@@ -622,8 +665,9 @@ def test_all_categorical_null_gate_fixtures_have_dead_verdict_when_gate_fires() 
                 continue
             high_mean = float(result["high_mean"])
             low_mean = float(result["low_mean"])
-            # 計器と同じスコア関数で cross_score（レベル間相互スコア）を再計算し、
-            # 等号境界 1+s を同期する（第 5R。排他一致センサーは s=0 で和 <= 1）。
+            # 計器と同じ等号ヌル判定を再計算して同期する（第 6R: 観測 multiset の
+            # 同一性が本則。committed 結果に観測リストがない場合は計器と同じ
+            # 1 + cross_score 和境界フォールバックに落ちる）。
             score_fn = (
                 _key_match_score if result["sensor"] == "key" else _exact_match_score
             )
@@ -631,11 +675,15 @@ def test_all_categorical_null_gate_fixtures_have_dead_verdict_when_gate_fires() 
                 score_fn(result["low_level"], result["high_level"]),
                 score_fn(result["high_level"], result["low_level"]),
             )
+            low_observed = result.get("low_observed")
+            high_observed = result.get("high_observed")
             gate_condition = (
                 (high_mean < low_mean and high_mean < MATCH_TIGHT_MIN)
                 or (
                     high_mean == low_mean
-                    and (low_mean + high_mean) <= 1.0 + cross_score
+                    and _equal_means_static_null(
+                        low_observed, high_observed, low_mean, high_mean, cross_score
+                    )
                 )
             )
             if "null_gate_fired" in result:
@@ -643,7 +691,8 @@ def test_all_categorical_null_gate_fixtures_have_dead_verdict_when_gate_fires() 
                     f"{path}: {result['knob']!r} committed null_gate_fired="
                     f"{result['null_gate_fired']} does not match the composite gate "
                     f"condition (high < low and high < MATCH_TIGHT_MIN, or equal "
-                    f"means with sum <= 1 + cross_score={cross_score}) for "
+                    f"means with the static-null multiset check / 1+cross_score="
+                    f"{1.0 + cross_score} fallback) for "
                     f"high_mean={high_mean} low_mean={low_mean} (is {gate_condition})"
                 )
             if not gate_condition:
