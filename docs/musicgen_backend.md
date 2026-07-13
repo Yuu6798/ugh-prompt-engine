@@ -461,6 +461,54 @@ dead 1（time_signature）。3 欄とも `config/device_profiles/musicgen.yaml`
 （§7.6 の 0.5 誤読前例と同型のリスク）ため、per-cell 値の併記とヌルゲート規約の
 機械適用を honesty の柱として維持した。
 
+**計器 encode（PR #173 Codex P2、2026-07-13）**: 本節の事前登録ヌルゲートは当初
+`m2_expected_grip.json` への手動転記のみだったが、`scripts/measure_grip.py` の
+categorical 経路へ additive フィールド（`null_gate_fired` / `gated_classification` /
+トップレベル `summary_gated`）として encode した。計器のゲート条件（#174 Codex P2
+第 2・第 3・第 5〜第 8 ラウンド採用の合成規則）:
+`null_gate_fired = (high < low and high < MATCH_TIGHT_MIN) or (high == low and 等号ヌル条件)`。
+等号ヌル条件は **per-cell 観測 multiset の同一性**（= 処方非依存の静的出力の
+最強の観測的シグネチャ。第 6 ラウンド）で判定し、multiset 比較は当該 knob の
+実スコア関数と同じ正規形（第 7 ラウンド: exact 経路は casefold + 空白正規化 —
+比較の等価関係は常にアクティブなスコア関数と一致させ、'LOW'/'low' 等スコアラーが
+同一視する表記揺れを別物と数える発火漏れを防ぐ）で行う。key 経路の正規形は
+異名同音等価の（ピッチクラス 0-11, mode）タプル（第 8 ラウンド:
+`svp_rpe.keys._parse_key_label` を再利用 — mir_eval スコアラーが同一視する
+C# major ≡ Db major を、シャープ/フラット表記に分かれた静的混合ごと同一分布と
+して検出する。パース不能ラベルは casefold 正規形へフォールバック。mir_eval
+非在時の casefold フォールバックスコアラーは異名同音を畳まないが正規形は
+enharmonic 形で統一 — 発火 = 静的混合検出が増える安全側の差のみ）。
+観測リストが得られない場合のみ
+`(low + high) <= 1.0 + cross_score` 和境界（`cross_score` = 当該 knob の match
+計算に実際に使うスコア関数で low_level と high_level を相互採点した値の max。
+第 5 ラウンド・necessary-only の近似）にフォールバックする。
+ゲートの目的は low/デフォルトセルが combined を押し上げる誤読の防止であり、
+非改善（high < low）でも high セル単独が tight 水準（>= MATCH_TIGHT_MIN = 0.7）に
+達していれば high 処方は実現されており誤読は発生しない＝免除する（第 3 ラウンド。
+例 low 1.0 / high 0.875、combined 0.9375 tight を温存。M2 実データ high 0.125 は
+tight 水準未達につき発火し裁定不変）。等号 means の原理: 和境界（第 2 ラウンドの
+和 <= 1、第 5 ラウンドの 1+s）は静的性の**必要条件にすぎず**、応答して分布が
+シフトしても等号 means になり得る（key 五度シフト例: low [C,G] / high [G,D] は
+means 0.75/0.75 だが分布は処方に追従して移動しており応答的＝multiset 相違で
+免除）。両セルの観測 multiset が同一なら処方への応答証拠がなく発火する
+（例: 排他一致の 0.5/0.5 静的コイン、key の両セル [C,G,D] 静的混合 0.5/0.5）。
+排他一致では multiset 一致 + 等号 means → 和 <= 1 が数学的に必然のため、従来の
+排他一致ケース（0.5/0.5 発火・0.6/0.6 / 0.9/0.9 / 1.0/1.0 非発火）の挙動は完全に
+保存される。structure 計器の 0.667/0.667 dead 前例
+（M1、`measure_structure_pattern`）は非排他マッチの別計器であり本規則の対象外。
+なお各バッチの事前登録はバッチ局所の decision rule として計器既定に優先する —
+M2 plan の事前登録（high <= low で分類によらず dead）は引き続き M2 の裁定を支配し
+（M2 の high 0.125 は合成規則でも発火するため衝突なし）、将来バッチはより厳しい
+規則を plan に事前登録してよい（計器の合成規則は事前登録がない場合の一般化された
+既定）。
+生の `classification`（stock 分類）は温存したまま、raw 出力
+（`m2_measure_raw_2026-07-13.yaml`）にも `gated_classification: dead` が計器の
+自動算出として記録されるようになり、将来バッチが手動反映を忘れるリスクを構造的に
+縮小した。既定 CLI（markdown 出力）にも `gate` / `gated class` 列と
+`summary_gated` 行を追加し、JSON を開かなくてもヌルゲート格下げが見える
+（第 4 ラウンド。continuous 行はゲート対象外の "—" 表示、stock の class /
+summary は並記のまま温存）。
+
 ## 8. 関連ドキュメント
 
 - [`controllability_poc.md`](controllability_poc.md) — DD-A、K0-K3 の grip

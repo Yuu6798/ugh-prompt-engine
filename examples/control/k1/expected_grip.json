@@ -67,7 +67,9 @@
       "low_mean": 1.0,
       "high_mean": 1.0,
       "grip": 1.0,
-      "classification": "tight"
+      "classification": "tight",
+      "null_gate_fired": false,
+      "gated_classification": "tight"
     },
     {
       "knob": "brightness",
@@ -175,6 +177,11 @@
     }
   ],
   "summary": {
+    "tight": 3,
+    "loose": 0,
+    "dead": 3
+  },
+  "summary_gated": {
     "tight": 3,
     "loose": 0,
     "dead": 3

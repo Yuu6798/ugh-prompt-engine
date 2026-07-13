@@ -114,7 +114,9 @@
 # （音声 WAV はコミットせず manifest の audio_sha256 で provenance を pin する。）
 schema_version: "1.0"
 fixture_id: musicgen_m2_knobs
-generator: musicgen
+# 生成後の是正（PR #173 Codex P2）: ラベルのみ M1/K2 表記へ統一
+# （musicgen → musicgen-small）。事前登録プロトコル本文・セル・判定規約は不変。
+generator: musicgen-small
 model_id: facebook/musicgen-small
 # G4 目視確認済み revision に pin（examples/control/musicgen_structure/m1_plan.yaml
 # / examples/control/k2_musicgen/plan.yaml と同一の不変コミットハッシュ）。

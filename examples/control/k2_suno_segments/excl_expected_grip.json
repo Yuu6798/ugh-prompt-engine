@@ -56,5 +56,10 @@
     "tight": 1,
     "loose": 0,
     "dead": 1
+  },
+  "summary_gated": {
+    "tight": 1,
+    "loose": 0,
+    "dead": 1
   }
 }
