@@ -465,14 +465,20 @@ dead 1（time_signature）。3 欄とも `config/device_profiles/musicgen.yaml`
 `m2_expected_grip.json` への手動転記のみだったが、`scripts/measure_grip.py` の
 categorical 経路へ additive フィールド（`null_gate_fired` / `gated_classification` /
 トップレベル `summary_gated`）として encode した。計器のゲート条件（#174 Codex P2
-第 2・第 3・第 5・第 6・第 7 ラウンド採用の合成規則）:
+第 2・第 3・第 5〜第 8 ラウンド採用の合成規則）:
 `null_gate_fired = (high < low and high < MATCH_TIGHT_MIN) or (high == low and 等号ヌル条件)`。
 等号ヌル条件は **per-cell 観測 multiset の同一性**（= 処方非依存の静的出力の
 最強の観測的シグネチャ。第 6 ラウンド）で判定し、multiset 比較は当該 knob の
-実スコア関数と同じ正規形（第 7 ラウンド: exact 経路は casefold + 空白正規化、
-key 経路は `svp_rpe.keys` の key ラベル正規化 — 比較の等価関係は常にアクティブな
-スコア関数と一致させ、'LOW'/'low' 等スコアラーが同一視する表記揺れを別物と数える
-発火漏れを防ぐ）で行う。観測リストが得られない場合のみ
+実スコア関数と同じ正規形（第 7 ラウンド: exact 経路は casefold + 空白正規化 —
+比較の等価関係は常にアクティブなスコア関数と一致させ、'LOW'/'low' 等スコアラーが
+同一視する表記揺れを別物と数える発火漏れを防ぐ）で行う。key 経路の正規形は
+異名同音等価の（ピッチクラス 0-11, mode）タプル（第 8 ラウンド:
+`svp_rpe.keys._parse_key_label` を再利用 — mir_eval スコアラーが同一視する
+C# major ≡ Db major を、シャープ/フラット表記に分かれた静的混合ごと同一分布と
+して検出する。パース不能ラベルは casefold 正規形へフォールバック。mir_eval
+非在時の casefold フォールバックスコアラーは異名同音を畳まないが正規形は
+enharmonic 形で統一 — 発火 = 静的混合検出が増える安全側の差のみ）。
+観測リストが得られない場合のみ
 `(low + high) <= 1.0 + cross_score` 和境界（`cross_score` = 当該 knob の match
 計算に実際に使うスコア関数で low_level と high_level を相互採点した値の max。
 第 5 ラウンド・necessary-only の近似）にフォールバックする。

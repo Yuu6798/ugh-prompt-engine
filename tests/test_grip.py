@@ -261,12 +261,14 @@ def test_categorical_non_key_sensor_uses_exact_match_not_key_fuzzy() -> None:
 # 変更しない。m2_plan.yaml §3 の事前登録規約を、手動転記ではなく計器へ機械的に
 # encode する。
 #
-# ゲート条件（#174 Codex P2 第 2・第 3・第 5・第 6・第 7 ラウンド採用の合成規則）:
+# ゲート条件（#174 Codex P2 第 2・第 3・第 5〜第 8 ラウンド採用の合成規則）:
 #   null_gate_fired = (high < low and high < MATCH_TIGHT_MIN)
 #                     or (high == low and 等号ヌル条件)
 #   等号ヌル条件 = multiset(low_observed) == multiset(high_observed)
-#                  （比較はスコアラー同一の正規形で行う — 第 7R。exact 経路は
-#                  casefold+空白正規化、key 経路は keys.py の key ラベル正規化）
+#                  （比較はスコアラー同一の正規形で行う — 第 7R/第 8R。exact
+#                  経路は casefold+空白正規化、key 経路は異名同音等価の
+#                  （ピッチクラス, mode）正規形 = keys.py のパーサ再利用で
+#                  C# major ≡ Db major を同一視。パース不能は casefold へ）
 #                = (low + high) <= 1.0 + cross_score   # 観測リスト欠損時のみ
 # 非改善（high < low）は high セル単独が tight 水準（>= MATCH_TIGHT_MIN = 0.7）
 # 未達の場合のみ発火 — ゲートの目的は low/デフォルトセルが combined を押し上げる
@@ -416,6 +418,52 @@ def test_key_null_gate_exempts_full_match_equal_means() -> None:
     assert result["classification"] == "tight"
     assert result["null_gate_fired"] is False
     assert result["gated_classification"] == "tight"
+    assert report["summary_gated"] == report["summary"]
+
+
+def test_key_null_gate_fires_on_enharmonically_respelled_static_mixture() -> None:
+    """シャープ/フラット表記に分かれた静的混合は発火（#174 第 8R）。
+
+    low 観測 ['C# major','A# minor'] / high ['Db major','Bb minor'] は
+    mir_eval スコアラーが同一視する異名同音（C#≡Db = pc1 major /
+    A#m≡Bbm = pc10 minor）の同一分布 — lowercase+空白のみの正規形では
+    multiset が別物に見えて発火漏れしていた。（ピッチクラス, mode）正規形に
+    より正規化後 multiset 一致・等号 means（0.0/0.0）につき発火・gated dead。"""
+    fixture = _key_probe_fixture(
+        low_observed=["C# major", "A# minor"],
+        high_observed=["Db major", "Bb minor"],
+    )
+    report = analyze_fixture(fixture)
+    result = report["results"][0]
+
+    assert result["low_mean"] == 0.0
+    assert result["high_mean"] == 0.0
+    assert result["classification"] == "dead"  # stock（combined 0.0）は生値のまま
+    assert result["null_gate_fired"] is True
+    assert result["gated_classification"] == "dead"
+    assert report["summary_gated"] == {"tight": 0, "loose": 0, "dead": 1}
+
+
+def test_key_null_gate_exempts_enharmonically_respelled_responsive_shift() -> None:
+    """異名同音の表記揺れ込みでも実際に分布がシフトしている応答的ケースは免除継続
+    （#174 第 8R）。
+
+    low ['C# major','Db major']（正規化後 pc1 major ×2）/ high
+    ['G# major','Ab major']（pc8 major ×2）は等号 means（0.0/0.0）だが、
+    正規化後の multiset は相違 — 分布は処方に応じて移動しており応答的につき
+    非発火（enharmonic 正規形はセル内の表記揺れを畳むだけで、セル間の実シフトを
+    誤って併合しない）。"""
+    fixture = _key_probe_fixture(
+        low_observed=["C# major", "Db major"],
+        high_observed=["G# major", "Ab major"],
+    )
+    report = analyze_fixture(fixture)
+    result = report["results"][0]
+
+    assert result["low_mean"] == 0.0
+    assert result["high_mean"] == 0.0
+    assert result["null_gate_fired"] is False
+    assert result["gated_classification"] == result["classification"]
     assert report["summary_gated"] == report["summary"]
 
 

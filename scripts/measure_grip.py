@@ -29,7 +29,7 @@ from svp_rpe.control import (  # noqa: E402
     match_rate,
 )
 from svp_rpe.keys import _normalize_label as _normalize_key_label  # noqa: E402
-from svp_rpe.keys import weighted_key_score  # noqa: E402
+from svp_rpe.keys import _parse_key_label, weighted_key_score  # noqa: E402
 
 SCHEMA_VERSION = "1.0"
 DEFAULT_FIXTURE = ROOT / "examples" / "control" / "k0" / "musicgen_rpe_fixture.json"
@@ -207,8 +207,9 @@ def _analyze_categorical_knob(
     # 0.75/0.75 だが分布は処方に追従して移動しており応答的）。等号時の発火は
     # per-cell 観測 multiset の同一性 = 処方非依存（静的）出力の最強の観測的
     # シグネチャで判定する。multiset 比較は当該 knob の実スコア関数と同じ正規形
-    # （第 7R: exact 経路は casefold+空白正規化、key 経路は keys.py の key ラベル
-    # 正規化）で行い、スコアラーが同一視する表記揺れを別物と数える発火漏れを防ぐ。
+    # （第 7R/第 8R: exact 経路は casefold+空白正規化、key 経路は異名同音等価の
+    # （ピッチクラス, mode）正規形 — keys.py のパーサ再利用）で行い、スコアラーが
+    # 同一視する表記揺れ・異名同音を別物と数える発火漏れを防ぐ。
     # 排他一致では multiset 一致 + 等号 means → 和 <= 1
     # が数学的に必然のため、従来の排他一致ケース（0.5/0.5 発火・0.6/0.6 /
     # 0.9/0.9 / 1.0/1.0 非発火）の挙動は完全に保存される。観測リストが無い場合
@@ -391,12 +392,23 @@ def _exact_label_norm(value: str) -> str:
 
 
 def _key_label_norm(value: str) -> str:
-    """key 経路の正規形（`svp_rpe.keys` の key ラベル正規化と同一）。
+    """key 経路の正規形（第 7R・第 8R: 比較の等価関係は常にアクティブな
+    スコア関数と一致させる）。
 
-    ヌルゲートの multiset 比較用（第 7R）。weighted_key_score の
-    フォールバックスコアラー（casefold 完全一致）およびリポジトリの
-    canonical key ラベル正規形と一致する。
+    mir_eval スコアラーは異名同音（C# major ≡ Db major = 1.0）を同一視する
+    ため、ヌルゲートの multiset 比較も key ラベルを（ピッチクラス 0-11, mode）
+    の正規タプルへ写像して行う — `svp_rpe.keys._parse_key_label`（♯♭記号
+    正規化 + `perform.parse_key` によるタプル化、`keys_enharmonically_equal`
+    と同じ部品）を再利用し、スコアラー経路と normalizer が同じ keys.py を通る
+    構造にする。パース不能ラベルは従来の casefold 正規形へフォールバック
+    （この場合の等価関係は casefold 一致まで）。mir_eval 非在時の casefold
+    フォールバックスコアラーは異名同音を畳まないが、正規形は単一の enharmonic
+    形で統一する（発火 = 静的混合検出が増える安全側の差のみ）。
     """
+    parsed = _parse_key_label(value)
+    if parsed is not None:
+        pitch_class, mode = parsed
+        return f"enharmonic:{pitch_class}:{mode}"
     return _normalize_key_label(value)
 
 
