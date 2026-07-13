@@ -50,13 +50,20 @@
       "low_mean": 1.0,
       "high_mean": 0.125,
       "grip": 0.5625,
-      "classification": "loose"
+      "classification": "loose",
+      "null_gate_fired": true,
+      "gated_classification": "dead"
     }
   ],
   "summary": {
     "tight": 0,
     "loose": 3,
     "dead": 0
+  },
+  "summary_gated": {
+    "tight": 0,
+    "loose": 2,
+    "dead": 1
   },
   "verdicts": {
     "active_rate_target": {

@@ -461,6 +461,18 @@ dead 1（time_signature）。3 欄とも `config/device_profiles/musicgen.yaml`
 （§7.6 の 0.5 誤読前例と同型のリスク）ため、per-cell 値の併記とヌルゲート規約の
 機械適用を honesty の柱として維持した。
 
+**計器 encode（PR #173 Codex P2、2026-07-13）**: 本節の事前登録ヌルゲートは当初
+`m2_expected_grip.json` への手動転記のみだったが、`scripts/measure_grip.py` の
+categorical 経路へ additive フィールド（`null_gate_fired` / `gated_classification` /
+トップレベル `summary_gated`）として encode した。計器のゲート条件は **strict
+`high_mean < low_mean`** — 等号は自動発火しない（両セルが各自の処方を完全実現する
+ケース（K1 key: 1.0/1.0 tight）を dead に誤格下げするため。等号時の裁定は per-cell
+値を見て人間側で行う。M2 の事前登録は ≤ 表記だが実データ 0.125 < 1.0 は strict でも
+発火し裁定不変）。生の `classification`（stock 分類）は温存したまま、raw 出力
+（`m2_measure_raw_2026-07-13.yaml`）にも `gated_classification: dead` が計器の
+自動算出として記録されるようになり、将来バッチが手動反映を忘れるリスクを構造的に
+縮小した。
+
 ## 8. 関連ドキュメント
 
 - [`controllability_poc.md`](controllability_poc.md) — DD-A、K0-K3 の grip

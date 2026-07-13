@@ -106,6 +106,13 @@ def analyze_fixture(raw: dict[str, Any], *, knob_filter: str | None = None) -> d
         )
 
     summary = Counter(result["classification"] for result in results)
+    # summary_gated: categorical 経路のヌルゲート（`gated_classification`）適用後の
+    # 集計。continuous 結果には `gated_classification` が存在しないため生の
+    # `classification`（変更なし）にフォールバックする — additive な併記であり、
+    # 既存の `summary` はここでは一切変更しない。
+    summary_gated = Counter(
+        result.get("gated_classification", result["classification"]) for result in results
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "fixture_id": fixture_id,
@@ -115,6 +122,11 @@ def analyze_fixture(raw: dict[str, Any], *, knob_filter: str | None = None) -> d
             "tight": int(summary["tight"]),
             "loose": int(summary["loose"]),
             "dead": int(summary["dead"]),
+        },
+        "summary_gated": {
+            "tight": int(summary_gated["tight"]),
+            "loose": int(summary_gated["loose"]),
+            "dead": int(summary_gated["dead"]),
         },
     }
 
@@ -146,6 +158,23 @@ def _analyze_categorical_knob(
     low_scores = [score_fn(low_level, observed) for observed in low_observed]
     high_scores = [score_fn(high_level, observed) for observed in high_observed]
     combined_rate = match_rate(low_scores + high_scores)
+    low_mean = _round_float(match_rate(low_scores))
+    high_mean = _round_float(match_rate(high_scores))
+    classification = classify_match_grip(combined_rate)
+
+    # 事前登録ヌルゲート（m2_plan.yaml §3、K3-1b 由来の known-dead ヌル天井と同型）:
+    # high セルの一致率が low セルを下回る（strict <）なら、combined match_rate の
+    # 機械分類（loose に見えうる）によらず dead へ格下げる。既存の `classification`
+    # は計器の生出力として温存し、本フィールドは additive に併記する
+    # （categorical 経路のみ・continuous の effect_size 経路には適用しない）。
+    #
+    # 等号は自動発火しない — 両セルが各自の処方を完全実現するケース
+    # （K1 key: low_mean 1.0 / high_mean 1.0 = tight）を dead に誤格下げするため。
+    # 等号時の裁定は per-cell 値を見て人間側で行う（M2 plan の事前登録は ≤ 表記
+    # だが、実データ 0.125 < 1.0 は strict でも発火し裁定不変）。
+    null_gate_fired = high_mean < low_mean
+    gated_classification = "dead" if null_gate_fired else classification
+
     return {
         "knob": knob_name,
         "sensor": sensor,
@@ -157,10 +186,12 @@ def _analyze_categorical_knob(
         "high_observed": high_observed,
         "low_values": _round_list(low_scores),
         "high_values": _round_list(high_scores),
-        "low_mean": _round_float(match_rate(low_scores)),
-        "high_mean": _round_float(match_rate(high_scores)),
+        "low_mean": low_mean,
+        "high_mean": high_mean,
         "grip": _round_float(combined_rate),
-        "classification": classify_match_grip(combined_rate),
+        "classification": classification,
+        "null_gate_fired": null_gate_fired,
+        "gated_classification": gated_classification,
     }
 
 

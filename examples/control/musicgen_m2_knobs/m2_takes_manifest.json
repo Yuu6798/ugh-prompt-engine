@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0",
   "fixture_id": "musicgen_m2_knobs",
-  "generator": "musicgen",
+  "generator": "musicgen-small",
   "plan": {
     "schema_version": "1.0",
     "fixture_id": "musicgen_m2_knobs",
-    "generator": "musicgen",
+    "generator": "musicgen-small",
     "model_id": "facebook/musicgen-small",
     "model_revision": "4c8334b02c6ec4e8664a91979669a501ec497792",
     "duration_seconds": 30.6,

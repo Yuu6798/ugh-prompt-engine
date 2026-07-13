@@ -215,6 +215,198 @@ def test_categorical_non_key_sensor_uses_exact_match_not_key_fuzzy() -> None:
     assert fuzzy_result["grip"] == 0.5
 
 
+# ---------------------------------------------------------------------------
+# 事前登録ヌルゲートの計器 encode（PR #173 Codex P2、2026-07-13）: categorical
+# 経路のみに additive フィールド（`null_gate_fired` / `gated_classification` /
+# トップレベル `summary_gated`）として実装する。既存の `classification`（combined
+# match_rate ベースの stock 分類）は温存し、continuous（effect_size）経路は
+# 変更しない。m2_plan.yaml §3 の事前登録規約を、手動転記ではなく計器へ機械的に
+# encode する。
+#
+# ゲート条件は **strict `high_mean < low_mean`** — 等号は自動発火しない。等号発火
+# （<=）だと両セルが各自の処方を完全実現するケース（K1 key: low 1.0 / high 1.0 =
+# tight）まで dead に誤格下げするため。等号時の裁定は per-cell 値を見て人間側で
+# 行う（M2 plan の事前登録は ≤ 表記だが、実データ 0.125 < 1.0 は strict でも
+# 発火し裁定不変）。
+# ---------------------------------------------------------------------------
+
+
+def _categorical_probe_fixture(low_observed: list[str], high_observed: list[str]) -> dict:
+    """`low_level`/`high_level` に一致する observed のみを 1.0、それ以外を 0.0 として
+    採点させる最小 categorical fixture（`_exact_match_score` 経路）。"""
+    return {
+        "fixture_id": "null_gate_probe",
+        "repetitions": len(low_observed),
+        "knobs": [
+            {
+                "name": "probe_knob",
+                "sensor": "probe_sensor",
+                "kind": "categorical",
+                "low_level": "low",
+                "high_level": "high",
+                "expected_sign": 0,
+            }
+        ],
+        "samples": (
+            [
+                {"knob": "probe_knob", "level": "low", "features": {"probe_sensor": observed}}
+                for observed in low_observed
+            ]
+            + [
+                {"knob": "probe_knob", "level": "high", "features": {"probe_sensor": observed}}
+                for observed in high_observed
+            ]
+        ),
+    }
+
+
+def test_categorical_null_gate_fires_when_high_mean_below_low_mean() -> None:
+    """high セル一致率 < low セル一致率（本例: high 0.0 < low 1.0）なら、combined
+    match_rate の機械分類（0.5 = loose 帯）によらず `gated_classification` は
+    "dead" へ additive に格下げる。既存の `classification`（stock）は不変。"""
+    fixture = _categorical_probe_fixture(
+        low_observed=["low", "low"], high_observed=["low", "low"]
+    )
+    report = analyze_fixture(fixture)
+    result = report["results"][0]
+
+    assert result["low_mean"] == 1.0
+    assert result["high_mean"] == 0.0
+    assert result["classification"] == "loose"  # stock 分類は生値のまま温存される
+    assert result["null_gate_fired"] is True
+    assert result["gated_classification"] == "dead"
+    assert report["summary"] == {"tight": 0, "loose": 1, "dead": 0}
+    assert report["summary_gated"] == {"tight": 0, "loose": 0, "dead": 1}
+
+
+def test_categorical_null_gate_does_not_fire_when_high_mean_exceeds_low_mean() -> None:
+    """high セル一致率が low セルを上回る（本例: high 1.0 > low 0.0）場合、ヌルゲートは
+    発火せず `gated_classification` は stock `classification` と同値のまま。"""
+    fixture = _categorical_probe_fixture(
+        low_observed=["high", "high"], high_observed=["high", "high"]
+    )
+    report = analyze_fixture(fixture)
+    result = report["results"][0]
+
+    assert result["low_mean"] == 0.0
+    assert result["high_mean"] == 1.0
+    assert result["classification"] == "loose"
+    assert result["null_gate_fired"] is False
+    assert result["gated_classification"] == result["classification"]
+    assert report["summary"] == {"tight": 0, "loose": 1, "dead": 0}
+    assert report["summary_gated"] == {"tight": 0, "loose": 1, "dead": 0}
+
+
+def test_categorical_null_gate_does_not_fire_on_equal_means() -> None:
+    """等号（high_mean == low_mean）はヌルゲートを自動発火させない（strict `<`）。
+
+    両セルが各自の処方を完全実現するケース（low 1.0 / high 1.0 — K1 key ノブが
+    実例で classification は tight）を <= 発火だと dead に誤格下げしてしまう。
+    等号時の裁定は per-cell 値を見て人間側で行う設計。"""
+    fixture = _categorical_probe_fixture(
+        low_observed=["low", "low"], high_observed=["high", "high"]
+    )
+    report = analyze_fixture(fixture)
+    result = report["results"][0]
+
+    assert result["low_mean"] == 1.0
+    assert result["high_mean"] == 1.0
+    assert result["classification"] == "tight"
+    assert result["null_gate_fired"] is False
+    assert result["gated_classification"] == "tight"
+    assert report["summary"] == {"tight": 1, "loose": 0, "dead": 0}
+    assert report["summary_gated"] == report["summary"]
+
+
+def test_continuous_knob_is_unaffected_by_null_gate() -> None:
+    """continuous（effect_size）経路は additive フィールド自体を持たない
+    （`null_gate_fired` / `gated_classification` キーが存在しない）。`summary_gated`
+    は categorical 結果が皆無なら `summary` と完全一致する（no-op であることの確認）。
+    符号不一致 dead（既存の `classify_grip` 規約）もヌルゲートとは無関係に温存される。"""
+    fixture = {
+        "fixture_id": "continuous_probe",
+        "repetitions": 2,
+        "knobs": [
+            {
+                "name": "sign_mismatch_knob",
+                "sensor": "probe_sensor",
+                "expected_sign": 1,
+                "low_level": "0",
+                "high_level": "1",
+            }
+        ],
+        "samples": [
+            {"knob": "sign_mismatch_knob", "level": "0", "features": {"probe_sensor": 5.0}},
+            {"knob": "sign_mismatch_knob", "level": "0", "features": {"probe_sensor": 5.0}},
+            {"knob": "sign_mismatch_knob", "level": "1", "features": {"probe_sensor": 1.0}},
+            {"knob": "sign_mismatch_knob", "level": "1", "features": {"probe_sensor": 1.0}},
+        ],
+    }
+    report = analyze_fixture(fixture)
+    result = report["results"][0]
+
+    assert result["classification"] == "dead"  # 符号不一致 dead（既存 classify_grip 規約）
+    assert "null_gate_fired" not in result
+    assert "gated_classification" not in result
+    assert report["summary"] == {"tight": 0, "loose": 0, "dead": 1}
+    assert report["summary_gated"] == report["summary"]
+
+
+def test_all_categorical_null_gate_fixtures_have_dead_verdict_when_gate_fires() -> None:
+    """将来バッチが `measure_grip.py` の categorical ヌルゲート発火を primary_verdict
+    へ手動反映し忘れるリスクの CI 化（Codex レビュー指摘・PR #173 Thread 3）。
+
+    `examples/control/**/*.json` のうち analyze_fixture 形式の `results` と、
+    手動裁定 `verdicts`（`primary_verdict` 付き knob 別 dict）を両方持つ fixture
+    （現状 m2_expected_grip.json のみ）について、categorical 結果で
+    **high_mean < low_mean（strict — 計器のゲート条件）** なのに対応する
+    `verdicts[knob]["primary_verdict"]` が "dead" でない場合に fail する。
+    ゲート条件は per-cell 平均から直接再計算し、committed `null_gate_fired`
+    フラグとの整合も合わせて検査する（転記ずれの検出）。"""
+    control_root = Path("examples/control")
+    checked_any = False
+    for path in sorted(control_root.rglob("*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        results = data.get("results")
+        verdicts = data.get("verdicts")
+        if not isinstance(results, list) or not isinstance(verdicts, dict):
+            continue
+        for result in results:
+            if not isinstance(result, dict) or result.get("kind") != "categorical":
+                continue
+            gate_condition = float(result["high_mean"]) < float(result["low_mean"])
+            if "null_gate_fired" in result:
+                assert result["null_gate_fired"] == gate_condition, (
+                    f"{path}: {result['knob']!r} committed null_gate_fired="
+                    f"{result['null_gate_fired']} does not match the strict gate "
+                    f"condition high_mean < low_mean "
+                    f"({result['high_mean']} < {result['low_mean']} is {gate_condition})"
+                )
+            if not gate_condition:
+                continue
+            checked_any = True
+            knob_name = result["knob"]
+            assert knob_name in verdicts, (
+                f"{path}: categorical knob {knob_name!r} fired the null gate "
+                "but has no corresponding verdicts entry"
+            )
+            assert verdicts[knob_name]["primary_verdict"] == "dead", (
+                f"{path}: {knob_name!r} fires the strict null gate "
+                f"(high_mean={result['high_mean']} < low_mean={result['low_mean']}) "
+                f"but verdicts[{knob_name!r}]['primary_verdict'] != 'dead' "
+                "(future batch forgot to reflect the preregistered null gate)"
+            )
+
+    # 本テストが実際に何か検査したことを確認する（fixture 構成変化で silently
+    # no-op 化するのを防ぐ — 現状 m2_expected_grip.json の time_signature が該当）。
+    assert checked_any
+
+
 def test_k1_fixture_snapshot_spans_tight_and_dead() -> None:
     """K1 代表マップ: 決定論的演奏者に対する 5 ツマミ + 補助センサーの grip 固定。"""
     report = analyze_fixture(load_fixture(K1_FIXTURE_PATH))
@@ -457,6 +649,22 @@ def test_m2_analyze_fixture_matches_measure_raw_and_expected_grip() -> None:
     # match_rate 分類 — verdict は下記テストで per-cell 込みで別途 pin する）。
     assert report["summary"] == {"tight": 0, "loose": 3, "dead": 0}
 
+    # additive フィールド（PR #173 Codex P2）: categorical 経路のヌルゲートが
+    # `null_gate_fired` / `gated_classification` を per-result に、`summary_gated`
+    # をトップレベルに additive で併記する。continuous 2 ノブは無変更（キー自体が
+    # 現れない）、time_signature のみ null_gate_fired=True で dead へ格下げる。
+    assert report["summary_gated"] == raw["summary_gated"]
+    assert report["summary_gated"] == expected["summary_gated"]
+    assert report["summary_gated"] == {"tight": 0, "loose": 2, "dead": 1}
+
+    by_knob = {result["knob"]: result for result in report["results"]}
+    assert "null_gate_fired" not in by_knob["active_rate_target"]
+    assert "gated_classification" not in by_knob["active_rate_target"]
+    assert "null_gate_fired" not in by_knob["valley_depth_target"]
+    assert "gated_classification" not in by_knob["valley_depth_target"]
+    assert by_knob["time_signature"]["null_gate_fired"] is True
+    assert by_knob["time_signature"]["gated_classification"] == "dead"
+
 
 def test_m2_active_rate_target_recomputes_and_supersedes_ceiling_confound() -> None:
     """§7.6 の active_rate_target 天井交絡（low '0.55' で headroom 0.033）を、low 処方
@@ -575,10 +783,16 @@ def test_m2_time_signature_combined_match_rate_is_loose_before_null_gate() -> No
 
 
 def test_m2_time_signature_null_gate_fires_and_downgrades_to_dead() -> None:
-    """per-cell ヌル格下げ規則（high セル match_rate <= low セル match_rate なら
-    分類によらず dead）が発火し、combined 機械分類 loose にもかかわらず
-    primary_verdict は dead で確定することを pin する（§7.6 の 0.5 combined 誤読
-    前例の再発防止・m2_plan.yaml §3 honesty 注記）。"""
+    """per-cell ヌル格下げ規則（事前登録は ≤ 表記・計器 encode は strict `<`。
+    実データ 0.125 < 1.0 はどちらでも発火し裁定不変）が発火し、combined 機械分類
+    loose にもかかわらず primary_verdict は dead で確定することを pin する
+    （§7.6 の 0.5 combined 誤読前例の再発防止・m2_plan.yaml §3 honesty 注記）。
+
+    PR #173 Codex P2 対応: 手動記録の verdict（下記）と、計器
+    （`measure_grip.py` categorical 経路の `null_gate_fired` / `gated_classification`
+    additive フィールド）が一致することを合わせて pin する — ゲート規則が
+    m2_plan.yaml §3 の事前登録どおり計器へ encode され、手動転記と計器出力が
+    ずれていないことの機械検算。"""
     expected = _load_m2_expected_grip()
     verdict = expected["verdicts"]["time_signature"]
 
@@ -587,7 +801,8 @@ def test_m2_time_signature_null_gate_fires_and_downgrades_to_dead() -> None:
     assert verdict["combined_match_rate"] == pytest.approx(0.5625, abs=1e-6)
     assert verdict["machine_classification_from_combined_match_rate"] == "loose"
 
-    null_gate_fired = verdict["match_rate_high_cell"] <= verdict["match_rate_low_cell"]
+    # strict `<`（計器のゲート条件）で再計算 — 0.125 < 1.0 で発火する。
+    null_gate_fired = verdict["match_rate_high_cell"] < verdict["match_rate_low_cell"]
     assert null_gate_fired is True
     assert verdict["null_gate_fired"] is True
     assert verdict["preregistered_rule_outcome"] == "dead"
@@ -595,6 +810,16 @@ def test_m2_time_signature_null_gate_fires_and_downgrades_to_dead() -> None:
     assert verdict["verdict_canonical"] is True
     assert "1/8" in verdict["descriptive_evidence"]
     assert "0/8" in verdict["descriptive_evidence"]
+
+    # 計器出力（additive フィールド）との整合: `analyze_fixture` が
+    # `m2_results_fixture.json` から機械算出する null_gate_fired /
+    # gated_classification が、上記の手動記録 verdict と一致する。
+    report = analyze_fixture(load_fixture(M2_RESULTS_FIXTURE_PATH))
+    instrument_result = next(r for r in report["results"] if r["knob"] == "time_signature")
+    assert instrument_result["low_mean"] == pytest.approx(verdict["match_rate_low_cell"])
+    assert instrument_result["high_mean"] == pytest.approx(verdict["match_rate_high_cell"])
+    assert instrument_result["null_gate_fired"] == verdict["null_gate_fired"]
+    assert instrument_result["gated_classification"] == verdict["primary_verdict"]
 
 
 def test_m2_takes_manifest_sha256_matches_results_fixture() -> None:

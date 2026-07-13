@@ -181,12 +181,19 @@
       "low_mean": 1.0,
       "high_mean": 0.0,
       "grip": 0.5,
-      "classification": "loose"
+      "classification": "loose",
+      "null_gate_fired": true,
+      "gated_classification": "dead"
     }
   ],
   "summary": {
     "tight": 0,
     "loose": 2,
     "dead": 3
+  },
+  "summary_gated": {
+    "tight": 0,
+    "loose": 1,
+    "dead": 4
   }
 }
