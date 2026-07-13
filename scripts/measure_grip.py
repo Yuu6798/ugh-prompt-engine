@@ -169,12 +169,19 @@ def _analyze_categorical_knob(
     # 計器の生出力として温存し、本フィールドは additive に併記する
     # （categorical 経路のみ・continuous の effect_size 経路には適用しない）。
     #
-    # 等号規則の原理（#174 Codex P2 第 2 ラウンド採用）: categorical は排他的
-    # 完全一致（観測は low/high のどちらか一方にしか一致しない）ため、処方非依存の
-    # 静的出力では match_low + match_high <= 1 が必然。等号で和が 1 を超える場合
-    # （例 1.0/1.0、0.9/0.9）は静的出力で説明不能＝応答性の実証につき非発火。
-    # 和が 1 以下の等号（0.5/0.5 = 静的コインで説明可能）は改善証拠なしにつき
-    # 発火。structure 計器の 0.667/0.667 dead 前例は非排他マッチの別計器であり
+    # 等号規則の原理（#174 Codex P2 第 2 ラウンド採用・第 5 ラウンドで 1+s へ
+    # 一般化）: 静的（処方非依存）出力の 1 観測は両レベル合計で最大 1 + s
+    # （s = レベル間相互スコア = 当該 knob の match 計算に実際に使うスコア関数で
+    # low_level と high_level を相互採点した値。非対称スコアラーに備え max を
+    # 採る）しか取れない。排他的完全一致センサーは s=0 で従来の和 <= 1 に帰着
+    # （0.5/0.5 = 静的コインで説明可能につき発火、1.0/1.0 や 0.9/0.9 の和 > 1 は
+    # 静的出力で説明不能＝応答性の実証につき非発火）。fuzzy スコアラー
+    # （key の五度部分点等）では境界が 1+s に上がる — 五度部分点は方向付き
+    # （C 参照×G 観測 0.5 / 逆方向 0）のため文字どおりの C/G 静的 50/50 混合は
+    # 0.75/0.5 で strict 分岐が発火し、等号境界を突く 0.75/0.75（和 1.5 = 1+0.5）
+    # も等号分岐で発火。1.0/1.0（和 2.0 > 1.5）は完全一致必須につき静的で説明
+    # 不能＝免除。将来の fuzzy スコアラーにも自動で一般化される。
+    # structure 計器の 0.667/0.667 dead 前例は非排他マッチの別計器であり
     # 本規則の対象外。
     #
     # high セル tight 免除（#174 Codex P2 第 3 ラウンド採用）: ゲートの目的は
@@ -184,9 +191,10 @@ def _analyze_categorical_knob(
     # （例 low 1.0 / high 0.875、combined 0.9375 tight を温存。第 2 ラウンドまでの
     # 「厳密不等号は常に発火」を精密化した合成規則）。M2 実データ high 0.125 は
     # tight 水準未達につき引き続き発火し裁定不変。
+    cross_score = max(score_fn(low_level, high_level), score_fn(high_level, low_level))
     null_gate_fired = (
         (high_mean < low_mean and high_mean < MATCH_TIGHT_MIN)
-        or (high_mean == low_mean and (low_mean + high_mean) <= 1.0)
+        or (high_mean == low_mean and (low_mean + high_mean) <= 1.0 + cross_score)
     )
     gated_classification = "dead" if null_gate_fired else classification
 

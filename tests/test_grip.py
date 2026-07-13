@@ -258,19 +258,24 @@ def test_categorical_non_key_sensor_uses_exact_match_not_key_fuzzy() -> None:
 # 変更しない。m2_plan.yaml §3 の事前登録規約を、手動転記ではなく計器へ機械的に
 # encode する。
 #
-# ゲート条件（#174 Codex P2 第 2・第 3 ラウンド採用の合成規則）:
+# ゲート条件（#174 Codex P2 第 2・第 3・第 5 ラウンド採用の合成規則）:
+#   cross_score = max(score(low_level, high_level), score(high_level, low_level))
 #   null_gate_fired = (high < low and high < MATCH_TIGHT_MIN)
-#                     or (high == low and low + high <= 1.0)
+#                     or (high == low and low + high <= 1.0 + cross_score)
 # 非改善（high < low）は high セル単独が tight 水準（>= MATCH_TIGHT_MIN = 0.7）
 # 未達の場合のみ発火 — ゲートの目的は low/デフォルトセルが combined を押し上げる
 # 誤読の防止であり、high 処方が単独で実現済み（例 1.0/0.875）なら誤読は発生
-# しないため免除（第 3 ラウンド）。等号は和で分岐する — categorical は排他的
-# 完全一致（観測は low/high のどちらか一方にしか一致しない）ため、処方非依存の
-# 静的出力では match_low + match_high <= 1 が必然。等号で和が 1 を超える場合
-# （例 K1 key 1.0/1.0、0.9/0.9）は静的出力で説明不能＝応答性の実証につき非発火。
-# 和が 1 以下の等号（0.5/0.5 = 静的コインで説明可能）は改善証拠なしにつき発火
-# （第 2 ラウンド）。structure 計器の 0.667/0.667 dead 前例は非排他マッチの
-# 別計器であり本規則の対象外。
+# しないため免除（第 3 ラウンド）。等号は和で分岐する — 静的（処方非依存）出力の
+# 1 観測は両レベル合計で最大 1 + s（s = レベル間相互スコア。当該 knob の match
+# 計算に実際に使うスコア関数で相互採点）しか取れない（第 5 ラウンドで 1+s へ
+# 一般化）。排他的完全一致センサーは s=0 で和 <= 1 に帰着: 等号で和が 1 を
+# 超える場合（例 K1 key 1.0/1.0、0.9/0.9）は静的出力で説明不能＝応答性の実証に
+# つき非発火、和が 1 以下の等号（0.5/0.5 = 静的コインで説明可能）は改善証拠なし
+# につき発火（第 2 ラウンド）。fuzzy スコアラー（key の五度部分点等）では境界が
+# 1+s に上がり、部分点による等号 0.75/0.75（和 1.5 = 1+0.5）は発火する
+# （五度部分点は方向付きのため文字どおりの C/G 静的混合は 0.75/0.5 で strict
+# 分岐が発火）。structure 計器の 0.667/0.667 dead 前例は非排他マッチの別計器で
+# あり本規則の対象外。
 # ---------------------------------------------------------------------------
 
 
@@ -301,6 +306,91 @@ def _categorical_probe_fixture(low_observed: list[str], high_observed: list[str]
             ]
         ),
     }
+
+
+def _key_probe_fixture(low_observed: list[str], high_observed: list[str]) -> dict:
+    """sensor="key"（`_key_match_score` の fuzzy 経路）で C major / G major を
+    セルレベルに持つ最小 categorical fixture。五度 C↔G の相互スコアは 0.5。"""
+    return {
+        "fixture_id": "key_null_gate_probe",
+        "repetitions": len(low_observed),
+        "knobs": [
+            {
+                "name": "key_knob",
+                "sensor": "key",
+                "kind": "categorical",
+                "low_level": "C major",
+                "high_level": "G major",
+                "expected_sign": 0,
+            }
+        ],
+        "samples": (
+            [
+                {"knob": "key_knob", "level": "C major", "features": {"key": observed}}
+                for observed in low_observed
+            ]
+            + [
+                {"knob": "key_knob", "level": "G major", "features": {"key": observed}}
+                for observed in high_observed
+            ]
+        ),
+    }
+
+
+def test_key_null_gate_fires_on_static_mixture_within_fuzzy_bound() -> None:
+    """fuzzy key スコアラーの部分点による免除すり抜けを封止（#174 第 5R）。
+
+    mir_eval の五度部分点は方向付き（score(C 参照, G 観測)=0.5 だが
+    score(G 参照, C 観測)=0.0）のため、文字どおりの C/G 静的 50/50 混合は
+    0.75/0.5 となり strict 分岐（high < low かつ high < 0.7）で発火する
+    （ケース 1）。等号境界 1+s 自体を突く反例は high セルに D major
+    （G の五度上・部分点 0.5）を置いた 0.75/0.75 で構成する（ケース 2）:
+    combined 0.75 = tight 帯だが、和 1.5 <= 1 + cross_score(C,G)=1.5 は
+    部分点込みで改善証拠なしにつき発火・gated dead。排他一致の和 <= 1 規則の
+    ままでは和 1.5 > 1 で免除されてしまう反例。"""
+    # ケース 1: 文字どおりの C/G 静的 50/50 混合 — strict 分岐で発火。
+    static_mixture = _key_probe_fixture(
+        low_observed=["C major", "G major"], high_observed=["C major", "G major"]
+    )
+    result = analyze_fixture(static_mixture)["results"][0]
+    assert result["low_mean"] == 0.75
+    assert result["high_mean"] == 0.5
+    assert result["null_gate_fired"] is True
+    assert result["gated_classification"] == "dead"
+
+    # ケース 2: 等号 0.75/0.75（和 1.5 = 1+s 境界ちょうど）— 等号分岐で発火。
+    fixture = _key_probe_fixture(
+        low_observed=["C major", "G major"], high_observed=["G major", "D major"]
+    )
+    report = analyze_fixture(fixture)
+    result = report["results"][0]
+
+    assert result["low_mean"] == 0.75
+    assert result["high_mean"] == 0.75
+    assert result["classification"] == "tight"  # stock 分類は生値のまま温存される
+    assert result["null_gate_fired"] is True
+    assert result["gated_classification"] == "dead"
+    assert report["summary"] == {"tight": 1, "loose": 0, "dead": 0}
+    assert report["summary_gated"] == {"tight": 0, "loose": 0, "dead": 1}
+
+
+def test_key_null_gate_exempts_full_match_equal_means_beyond_fuzzy_bound() -> None:
+    """key の天井等号（1.0/1.0 — K1 key 相当）は 1+s 境界でも免除継続。
+
+    和 2.0 > 1 + cross_score(C,G)=1.5 — 両セル完全一致は五度部分点でも静的出力で
+    説明不能（完全一致必須）＝応答性の実証につき非発火。"""
+    fixture = _key_probe_fixture(
+        low_observed=["C major", "C major"], high_observed=["G major", "G major"]
+    )
+    report = analyze_fixture(fixture)
+    result = report["results"][0]
+
+    assert result["low_mean"] == 1.0
+    assert result["high_mean"] == 1.0
+    assert result["classification"] == "tight"
+    assert result["null_gate_fired"] is False
+    assert result["gated_classification"] == "tight"
+    assert report["summary_gated"] == report["summary"]
 
 
 def test_categorical_null_gate_fires_when_high_mean_below_low_mean() -> None:
@@ -532,16 +622,28 @@ def test_all_categorical_null_gate_fixtures_have_dead_verdict_when_gate_fires() 
                 continue
             high_mean = float(result["high_mean"])
             low_mean = float(result["low_mean"])
+            # 計器と同じスコア関数で cross_score（レベル間相互スコア）を再計算し、
+            # 等号境界 1+s を同期する（第 5R。排他一致センサーは s=0 で和 <= 1）。
+            score_fn = (
+                _key_match_score if result["sensor"] == "key" else _exact_match_score
+            )
+            cross_score = max(
+                score_fn(result["low_level"], result["high_level"]),
+                score_fn(result["high_level"], result["low_level"]),
+            )
             gate_condition = (
                 (high_mean < low_mean and high_mean < MATCH_TIGHT_MIN)
-                or (high_mean == low_mean and (low_mean + high_mean) <= 1.0)
+                or (
+                    high_mean == low_mean
+                    and (low_mean + high_mean) <= 1.0 + cross_score
+                )
             )
             if "null_gate_fired" in result:
                 assert result["null_gate_fired"] == gate_condition, (
                     f"{path}: {result['knob']!r} committed null_gate_fired="
                     f"{result['null_gate_fired']} does not match the composite gate "
                     f"condition (high < low and high < MATCH_TIGHT_MIN, or equal "
-                    f"means with sum <= 1) for "
+                    f"means with sum <= 1 + cross_score={cross_score}) for "
                     f"high_mean={high_mean} low_mean={low_mean} (is {gate_condition})"
                 )
             if not gate_condition:
