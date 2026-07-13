@@ -10,7 +10,9 @@ import yaml
 
 from scripts.measure_grip import (
     _equal_means_static_null,
+    _exact_label_norm,
     _exact_match_score,
+    _key_label_norm,
     _key_match_score,
     analyze_fixture,
     load_fixture,
@@ -259,10 +261,12 @@ def test_categorical_non_key_sensor_uses_exact_match_not_key_fuzzy() -> None:
 # 変更しない。m2_plan.yaml §3 の事前登録規約を、手動転記ではなく計器へ機械的に
 # encode する。
 #
-# ゲート条件（#174 Codex P2 第 2・第 3・第 5・第 6 ラウンド採用の合成規則）:
+# ゲート条件（#174 Codex P2 第 2・第 3・第 5・第 6・第 7 ラウンド採用の合成規則）:
 #   null_gate_fired = (high < low and high < MATCH_TIGHT_MIN)
 #                     or (high == low and 等号ヌル条件)
 #   等号ヌル条件 = multiset(low_observed) == multiset(high_observed)
+#                  （比較はスコアラー同一の正規形で行う — 第 7R。exact 経路は
+#                  casefold+空白正規化、key 経路は keys.py の key ラベル正規化）
 #                = (low + high) <= 1.0 + cross_score   # 観測リスト欠損時のみ
 # 非改善（high < low）は high セル単独が tight 水準（>= MATCH_TIGHT_MIN = 0.7）
 # 未達の場合のみ発火 — ゲートの目的は low/デフォルトセルが combined を押し上げる
@@ -515,6 +519,52 @@ def test_categorical_null_gate_fires_on_equal_means_explainable_by_static_output
     assert report["summary_gated"] == {"tight": 0, "loose": 0, "dead": 1}
 
 
+def test_categorical_null_gate_fires_on_case_varied_static_mixture() -> None:
+    """表記揺れ込みの静的混合（low ['LOW','HIGH'] / high ['high','low']）は発火
+    （#174 第 7R）。
+
+    `_exact_match_score` は casefold 完全一致なので means は 0.5/0.5（第 2R の
+    静的コインと同値）だが、生文字列の sorted 比較では multiset が
+    {'LOW','HIGH'} vs {'high','low'} と別物になり発火漏れしていた。multiset
+    比較にスコアラーと同じ正規形（casefold + 空白正規化）を適用することで、
+    正規化後は同一の静的混合として本則で発火・gated dead。"""
+    fixture = _categorical_probe_fixture(
+        low_observed=["LOW", "HIGH"], high_observed=["high", "low"]
+    )
+    report = analyze_fixture(fixture)
+    result = report["results"][0]
+
+    assert result["low_mean"] == 0.5
+    assert result["high_mean"] == 0.5
+    assert result["classification"] == "loose"  # stock 分類は生値のまま温存される
+    assert result["null_gate_fired"] is True
+    assert result["gated_classification"] == "dead"
+    assert report["summary"] == {"tight": 0, "loose": 1, "dead": 0}
+    assert report["summary_gated"] == {"tight": 0, "loose": 0, "dead": 1}
+
+
+def test_categorical_null_gate_exempts_case_varied_responsive_shift() -> None:
+    """正規化後も multiset が相違する応答的シフトは表記揺れ込みでも免除継続
+    （#174 第 7R）。
+
+    low ['LOW','x'] / high ['HIGH','x'] は means 0.5/0.5 の等号だが、正規化後の
+    multiset は {low, x} vs {high, x} で相違 — 分布は処方に追従して移動しており
+    応答的につき非発火（正規化は静的混合の検出を強めるだけで、応答的シフトの
+    免除は保存される）。"""
+    fixture = _categorical_probe_fixture(
+        low_observed=["LOW", "x"], high_observed=["HIGH", "x"]
+    )
+    report = analyze_fixture(fixture)
+    result = report["results"][0]
+
+    assert result["low_mean"] == 0.5
+    assert result["high_mean"] == 0.5
+    assert result["classification"] == "loose"
+    assert result["null_gate_fired"] is False
+    assert result["gated_classification"] == result["classification"]
+    assert report["summary_gated"] == report["summary"]
+
+
 def test_categorical_null_gate_does_not_fire_on_equal_means_above_static_bound() -> None:
     """和が 1 を超える等号（low 0.6 / high 0.6、和 1.2）はヌルゲート非発火。
 
@@ -666,11 +716,12 @@ def test_all_categorical_null_gate_fixtures_have_dead_verdict_when_gate_fires() 
             high_mean = float(result["high_mean"])
             low_mean = float(result["low_mean"])
             # 計器と同じ等号ヌル判定を再計算して同期する（第 6R: 観測 multiset の
-            # 同一性が本則。committed 結果に観測リストがない場合は計器と同じ
+            # 同一性が本則・第 7R: multiset 比較はスコアラーと同じ正規形で行う。
+            # committed 結果に観測リストがない場合は計器と同じ
             # 1 + cross_score 和境界フォールバックに落ちる）。
-            score_fn = (
-                _key_match_score if result["sensor"] == "key" else _exact_match_score
-            )
+            is_key = result["sensor"] == "key"
+            score_fn = _key_match_score if is_key else _exact_match_score
+            normalize_fn = _key_label_norm if is_key else _exact_label_norm
             cross_score = max(
                 score_fn(result["low_level"], result["high_level"]),
                 score_fn(result["high_level"], result["low_level"]),
@@ -682,7 +733,12 @@ def test_all_categorical_null_gate_fixtures_have_dead_verdict_when_gate_fires() 
                 or (
                     high_mean == low_mean
                     and _equal_means_static_null(
-                        low_observed, high_observed, low_mean, high_mean, cross_score
+                        low_observed,
+                        high_observed,
+                        low_mean,
+                        high_mean,
+                        cross_score,
+                        normalize_fn=normalize_fn,
                     )
                 )
             )

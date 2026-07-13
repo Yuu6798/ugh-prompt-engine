@@ -28,6 +28,7 @@ from svp_rpe.control import (  # noqa: E402
     grip_effect_size,
     match_rate,
 )
+from svp_rpe.keys import _normalize_label as _normalize_key_label  # noqa: E402
 from svp_rpe.keys import weighted_key_score  # noqa: E402
 
 SCHEMA_VERSION = "1.0"
@@ -138,6 +139,7 @@ def _equal_means_static_null(
     low_mean: float,
     high_mean: float,
     cross_score: float,
+    normalize_fn: Any = None,
 ) -> bool:
     """等号 means 時の static-null 判定（#174 Codex P2 第 6 ラウンド採用）。
 
@@ -146,8 +148,16 @@ def _equal_means_static_null(
     分布が異なれば（等号 means でも）応答的シフトでありうるため免除する。
     観測リストが得られない場合のみ 1 + cross_score 和境界（静的性の必要条件
     のみの近似）にフォールバックする。
+
+    multiset 比較の等価関係は常にアクティブなスコア関数と一致させる（第 7R）:
+    生文字列の sorted 比較ではスコアラーが同一視する表記揺れ（'LOW'/'low' 等）を
+    別物と数え、正規化後は同一の静的混合を見逃して発火漏れするため、比較前に
+    `normalize_fn`（当該 knob の実スコア関数と同じ正規形化）を各観測に適用する。
     """
     if low_observed is not None and high_observed is not None:
+        if normalize_fn is not None:
+            low_observed = [normalize_fn(observed) for observed in low_observed]
+            high_observed = [normalize_fn(observed) for observed in high_observed]
         return sorted(low_observed) == sorted(high_observed)
     return (low_mean + high_mean) <= 1.0 + cross_score
 
@@ -176,6 +186,8 @@ def _analyze_categorical_knob(
         )
 
     score_fn = _key_match_score if sensor == "key" else _exact_match_score
+    # multiset 比較用の正規形はアクティブなスコア関数と常に一致させる（第 7R）。
+    normalize_fn = _key_label_norm if sensor == "key" else _exact_label_norm
     low_scores = [score_fn(low_level, observed) for observed in low_observed]
     high_scores = [score_fn(high_level, observed) for observed in high_observed]
     combined_rate = match_rate(low_scores + high_scores)
@@ -194,7 +206,10 @@ def _analyze_categorical_knob(
     # means になり得る（key 五度シフト例: low [C,G] / high [G,D] は means
     # 0.75/0.75 だが分布は処方に追従して移動しており応答的）。等号時の発火は
     # per-cell 観測 multiset の同一性 = 処方非依存（静的）出力の最強の観測的
-    # シグネチャで判定する。排他一致では multiset 一致 + 等号 means → 和 <= 1
+    # シグネチャで判定する。multiset 比較は当該 knob の実スコア関数と同じ正規形
+    # （第 7R: exact 経路は casefold+空白正規化、key 経路は keys.py の key ラベル
+    # 正規化）で行い、スコアラーが同一視する表記揺れを別物と数える発火漏れを防ぐ。
+    # 排他一致では multiset 一致 + 等号 means → 和 <= 1
     # が数学的に必然のため、従来の排他一致ケース（0.5/0.5 発火・0.6/0.6 /
     # 0.9/0.9 / 1.0/1.0 非発火）の挙動は完全に保存される。観測リストが無い場合
     # のみ 1 + cross_score 和境界（necessary-only の近似）にフォールバックする。
@@ -214,7 +229,12 @@ def _analyze_categorical_knob(
         or (
             high_mean == low_mean
             and _equal_means_static_null(
-                low_observed, high_observed, low_mean, high_mean, cross_score
+                low_observed,
+                high_observed,
+                low_mean,
+                high_mean,
+                cross_score,
+                normalize_fn=normalize_fn,
             )
         )
     )
@@ -358,9 +378,26 @@ def _exact_match_score(target: str, observed: str) -> float:
     段階採点は原理的に成立しない）。sensor が "key" でない categorical ノブは
     この関数で採点する — mir_eval には一切ルーティングしない。
     """
-    target_norm = " ".join(str(target).casefold().split())
-    observed_norm = " ".join(str(observed).casefold().split())
-    return 1.0 if target_norm == observed_norm else 0.0
+    return 1.0 if _exact_label_norm(target) == _exact_label_norm(observed) else 0.0
+
+
+def _exact_label_norm(value: str) -> str:
+    """`_exact_match_score` が使う正規形（casefold + 空白正規化）。
+
+    ヌルゲートの multiset 比較にも同じ正規形を適用する（第 7R:
+    比較の等価関係は常にアクティブなスコア関数と一致させる）。
+    """
+    return " ".join(str(value).casefold().split())
+
+
+def _key_label_norm(value: str) -> str:
+    """key 経路の正規形（`svp_rpe.keys` の key ラベル正規化と同一）。
+
+    ヌルゲートの multiset 比較用（第 7R）。weighted_key_score の
+    フォールバックスコアラー（casefold 完全一致）およびリポジトリの
+    canonical key ラベル正規形と一致する。
+    """
+    return _normalize_key_label(value)
 
 
 def _sensor_node(features: dict[str, Any], sensor: str) -> Any:

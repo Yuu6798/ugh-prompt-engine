@@ -465,10 +465,14 @@ dead 1（time_signature）。3 欄とも `config/device_profiles/musicgen.yaml`
 `m2_expected_grip.json` への手動転記のみだったが、`scripts/measure_grip.py` の
 categorical 経路へ additive フィールド（`null_gate_fired` / `gated_classification` /
 トップレベル `summary_gated`）として encode した。計器のゲート条件（#174 Codex P2
-第 2・第 3・第 5・第 6 ラウンド採用の合成規則）:
+第 2・第 3・第 5・第 6・第 7 ラウンド採用の合成規則）:
 `null_gate_fired = (high < low and high < MATCH_TIGHT_MIN) or (high == low and 等号ヌル条件)`。
 等号ヌル条件は **per-cell 観測 multiset の同一性**（= 処方非依存の静的出力の
-最強の観測的シグネチャ。第 6 ラウンド）で判定し、観測リストが得られない場合のみ
+最強の観測的シグネチャ。第 6 ラウンド）で判定し、multiset 比較は当該 knob の
+実スコア関数と同じ正規形（第 7 ラウンド: exact 経路は casefold + 空白正規化、
+key 経路は `svp_rpe.keys` の key ラベル正規化 — 比較の等価関係は常にアクティブな
+スコア関数と一致させ、'LOW'/'low' 等スコアラーが同一視する表記揺れを別物と数える
+発火漏れを防ぐ）で行う。観測リストが得られない場合のみ
 `(low + high) <= 1.0 + cross_score` 和境界（`cross_score` = 当該 knob の match
 計算に実際に使うスコア関数で low_level と high_level を相互採点した値の max。
 第 5 ラウンド・necessary-only の近似）にフォールバックする。
