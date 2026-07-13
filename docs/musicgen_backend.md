@@ -3,7 +3,7 @@
 Status: PR A / PR B / PR C 実装完了（PR B 実測 2026-07-03、§7）。§7.3 で R3 n=20
 スケールアップ（key 保存率 0.15 確定）、§7.4 で K3-2b フル直交性行列、§7.5 で CLAP
 相互検証②（MusicGen バッチへの学習版 grip 拡張）、§7.6 で K2-seg（compose プロンプト欄
-grip スクリーン）を追加実測済み
+grip スクリーン）、§7.7 で バッチ M2（§7.6 交絡 2 件の解消・30.6 秒再計測）を追加実測済み
 Scope: `facebook/musicgen-*`（transformers 経路）を第二生成器として組み込む計画
 
 ## 1. 目的と位置づけ
@@ -396,6 +396,70 @@ Avoid = attractor というバッチ内実測（#162, d=+4.03）から独立に�
 "Avoid: X" セグメントの送出を止める（`negative_tags` は従来どおり保持）。musicgen と
 同じ規律で、suno 実測が確定した欄のみを是正しており、`valley_depth_target` /
 `time_signature` へは横展開していない。
+
+#### M2（2026-07-13）で supersede された箇所
+
+本節（§7.6）の `active_rate_target` / `valley_depth_target` / `time_signature`
+3 欄は **バッチ M2（2026-07-13、§7.7）で再計測され supersede された**:
+active_rate 天井交絡は解消（loose 確定、天井アーティファクトではない）、
+valley 床（12s 定常ビート素材の物理制約）は「ツマミ死」ではなかったと確定
+（dead→loose）、time_signature は per-cell ヌルゲートにより dead 維持
+（3/4 初達成 1/8、§7.6 は 0/8）。上記の §7.6 実測値・本文は履歴として削除しない
+（旧計測条件（12s・手組みプロンプト）での事実として残す）。設計反映済みの現行値は
+`config/device_profiles/musicgen.yaml` および §7.7 を参照。
+
+### 7.7 バッチ M2: 3 ノブ天井/床/ヌルゲート確定（2026-07-13）
+
+**目的**: §7.6（K2-seg・12 秒手組みプロンプト計測）で疑われた交絡 2 件を解消する。
+(a) `valley_depth_target` の dead 判定（観測床 0.078）が「12 秒定常ビート素材の
+物理制約」か「ツマミ自体の死」かを、素材長を伸ばして分離する。(b)
+`active_rate_target` の low セル天井（旧処方 "0.55" で観測 mean 0.967・headroom
+0.033 しか残らず grip を過小評価しうる）を、low セル処方を拡大して解消する。
+`time_signature` は §7.6 と同一処方（4/4 / 3/4）のまま再計測し、ヌルゲート規約の
+機械適用を確定する。
+
+**方法**: M1（structure 欄、§7.6 末尾の追補行 / `examples/control/musicgen_structure/`）
+と同一規律 — `facebook/musicgen-small`（revision `4c8334b0…` pin）、30.6 秒クリップ
+（実出力 30.54s、delay-pattern 込み・M1 と同一根拠）、`guidance_scale=3.0`、3 ノブ ×
+2 セル × R=8 = 48 クリップ、`svprpe compose --format json` 実出力 verbatim のプロンプト
+（手組み禁止）。セル定義: `active_rate_target` low "0.30"（§7.6 の "0.55" から拡大）/
+high "0.92"（§7.6 と同値）。`valley_depth_target` low "0.15" / high "0.70"（§7.6 と
+同値のまま据え置き — 変数を素材長のみにする対照実験）。`time_signature` low "4/4" /
+high "3/4"（§7.6 と同値）。canonical 経路は AGENTS.md §8「ローカル決定論バッチの
+canonical 条件」（#172、M1 が適用第一号・本バッチが適用第二号）— ABBA/均衡ゲートは
+事前登録により非適用、fresh-process 決定論スポット検証（最遠 2 クリップの sha256 byte
+一致）で出力が壁時計順序と無関係であることを実測確認、補充ゼロ（48/48）・秒単位
+UTC タイムスタンプ記録の 2 条件は充足。詳細: `examples/control/musicgen_m2_knobs/`
+（`m2_plan.yaml` / `m2_results_fixture.json` / `m2_measure_raw_2026-07-13.yaml` /
+`m2_expected_grip.json` / `m2_takes_manifest.json` / `m2_generation_timestamps.yaml` /
+`m2_determinism_spot_check.yaml`）。
+
+#### 結果表
+
+| knob | sensor | low/high | grip | class | 読み |
+|---|---|---|---:|---|---|
+| `active_rate_target` | `active_rate` | 0.30 / 0.92 | 0.414395 | **loose** | headroom を 0.033→0.192 に拡大しても grip は §7.6 の 0.394025 とほぼ同値 — 天井アーティファクトでないことが確定（canonical） |
+| `valley_depth_target` | `valley_depth` | 0.15 / 0.70 | 0.3518 | **loose**（§7.6 dead を supersede） | セル値据え置き・素材長 12s→30.6s のみ変更で dead（0.152499）→loose に反転。旧 dead は valley 床（12s 定常ビート素材の物理制約）との合流で「ツマミ死」ではなかった（canonical）。ただし観測絶対値（low mean 0.100837 / high mean 0.139687）は処方値 0.15/0.70 への追従としてなお部分的 |
+| `time_signature` | `time_signature`（categorical・match_rate） | 4/4 / 3/4 | combined 0.5625（machine: loose）→ **dead**（per-cell ヌルゲート発火） | **dead**（honesty 判定・§7.6 dead を維持） | per-cell: low match_rate 1.0 / high match_rate 0.125。事前登録ヌルゲート（high <= low）が 0.125 <= 1.0 で発火し combined 機械分類 loose を上書き。3/4 の初達成は high セル 1/8（time_signature_high_06、§7.6 は 0/8）— 完全不達ではなくなったが帰属（生成器不達 vs 抽出器 4/4 バイアス）は未分離 |
+
+`summary`（機械分類・ヌルゲート適用前）: tight 0 / loose 3 / dead 0。ヌルゲート適用後の
+`primary_verdict` は tight 0 / loose 2（active_rate_target・valley_depth_target）/
+dead 1（time_signature）。3 欄とも `config/device_profiles/musicgen.yaml`
+`control_defaults` へ反映済み（`config_reflected: true`、§7.6 の structure 欄が
+`config_reflected: false` で設計判読待ちだったのとは異なり、本バッチは判定確定と
+同時に config へ配線した）。
+
+**canonical 経路**: 3 ノブ全ての verdict が `verdict_canonical: true`
+（`m2_expected_grip.json` `canonical_conditions`）。fresh-process 決定論スポット検証は
+バッチ最初（`active_rate_target_low_00`）/ 最後（`time_signature_high_07`）の 2 クリップ
+で sha256 完全一致（2/2、`m2_determinism_spot_check.yaml`）。
+
+**判定根拠（詳細は本節冒頭の結果表・`m2_expected_grip.json` `verdicts` を参照）**:
+天井/床という 2 つの「有効帯域アーティファクト疑い」がどちらも、セル処方値を変えずに
+実験条件（headroom・素材長）だけを動かすことで診断・解消できた点が本バッチの主眼。
+一方 `time_signature` は combined match_rate だけを見ると loose に誤読しうる
+（§7.6 の 0.5 誤読前例と同型のリスク）ため、per-cell 値の併記とヌルゲート規約の
+機械適用を honesty の柱として維持した。
 
 ## 8. 関連ドキュメント
 

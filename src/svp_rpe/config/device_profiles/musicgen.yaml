@@ -23,6 +23,24 @@ generator: "musicgen"
 # 従来どおり維持（楽譜の意図保全）。suno は K2-seg Suno 転移バッチ 1（#162, 2026-07-09）
 # の同種実測（d=+4.03）を受けて同様に停止済み。external は不変（実測は Suno 生成に
 # 対するもので汎用 external への横展開はしない — #153 と同じ規律）。
+#
+# バッチ M2（2026-07-13）: §7.6 で確認された 2 件の交絡を M1 規律（30.6 秒・compose
+# 実出力 verbatim・事前登録 canonical、AGENTS.md §8「ローカル決定論バッチの canonical
+# 条件」#172 適用第二号）で再計測し、以下 3 欄を supersede した
+# （examples/control/musicgen_m2_knobs/m2_expected_grip.json）:
+#   - active_rate_target: low 処方を "0.55"→"0.30" に拡大（headroom 確保）しても
+#     grip は 0.394025→0.414395 とほぼ不変 — loose は §7.6 で疑われた天井
+#     アーティファクトでないことが確定（loose 維持、grip 値更新）。
+#   - valley_depth_target: セル処方値は §7.6 と同値のまま素材長のみ 12s→30.6s に
+#     伸ばしたところ dead（0.152499）→loose（0.3518）に反転 — §7.6 の dead は
+#     「ツマミ死」ではなく「12 秒定常ビート素材の valley 床（0.078）」との合流
+#     だったことが確定（dead→loose に supersede）。ただし観測絶対値は処方値への
+#     追従としてなお部分的（限界は knob_quirks 参照）。
+#   - time_signature: §7.6 と同一処方（4/4 / 3/4）で再計測。combined match_rate
+#     0.5625 は機械分類で loose に見えるが、per-cell 値（low 1.0 / high 0.125）で
+#     事前登録ヌルゲート（high セル match_rate <= low セル match_rate）が発火し
+#     dead へ格下げ（dead 維持）。3/4 の初達成は 1/8（§7.6 は 0/8）だが帰属
+#     （生成器不達 vs 抽出器 4/4 バイアス）は未分離のまま。
 control_defaults:
   bpm:
     grip_class: loose
@@ -36,14 +54,14 @@ control_defaults:
     evidence: examples/control/k2_musicgen/expected_grip.json
   active_rate_target:
     grip_class: loose
-    grip: 0.39
+    grip: 0.414395
     sensor: active_rate
-    evidence: examples/control/k2_musicgen_segments/expected_grip.json
+    evidence: examples/control/musicgen_m2_knobs/m2_expected_grip.json
   valley_depth_target:
-    grip_class: dead
-    grip: 0.15
+    grip_class: loose
+    grip: 0.3518
     sensor: valley_depth
-    evidence: examples/control/k2_musicgen_segments/expected_grip.json
+    evidence: examples/control/musicgen_m2_knobs/m2_expected_grip.json
   semantic.avoid:
     grip_class: dead
     sensor: spectral_centroid
@@ -56,7 +74,7 @@ control_defaults:
   time_signature:
     grip_class: dead
     sensor: time_signature
-    evidence: examples/control/k2_musicgen_segments/expected_grip.json
+    evidence: examples/control/musicgen_m2_knobs/m2_expected_grip.json
 
 # 既知の癖。advisory が非 null のもののみ GeneratedPrompt.advisories を発火する
 # （プロンプト本文・tags は変えない＝自動補正しない）。
@@ -80,22 +98,22 @@ knob_quirks:
   - field: active_rate_target
     status: observed
     advisory: null
-    description: "ベース素材で low セル既に 0.967、headroom 0.033 での loose 判定＝有効帯域注意"
-    evidence: "examples/control/k2_musicgen_segments/expected_grip.json"
+    description: "M2（2026-07-13）で §7.6 の天井交絡を supersede: low 処方を '0.55'→'0.30' に拡大（headroom 0.033→0.192）しても grip は 0.394025→0.414395 とほぼ不変＝loose は天井アーティファクトでないことが確定（旧所見は削除せず本行で上書き）"
+    evidence: "examples/control/musicgen_m2_knobs/m2_expected_grip.json（旧: examples/control/k2_musicgen_segments/expected_grip.json、§7.6 12s 計測）"
   - field: valley_depth_target
     status: observed
     advisory: null
-    description: "12s 定常ビート素材では valley 床（0.078）＝ツマミ死と素材制約の分離未解決"
-    evidence: "examples/control/k2_musicgen_segments/expected_grip.json"
+    description: "M2（2026-07-13）で §7.6 の dead 判定を supersede: セル処方値据え置き・素材長のみ 12s→30.6s に伸ばしたところ dead（0.152499）→loose（0.3518）に反転＝旧 dead は「ツマミ死」ではなく 12s 定常ビート素材の valley 床（0.078）という物理制約との合流だったと確定。ただし観測絶対値（low mean 0.100837 / high mean 0.139687）は処方値 0.15/0.70 への追従としてなお部分的（限界は残る）"
+    evidence: "examples/control/musicgen_m2_knobs/m2_expected_grip.json（旧: examples/control/k2_musicgen_segments/expected_grip.json、§7.6 12s 計測）"
   - field: time_signature
     status: observed
     advisory: null
-    description: "3/4 指定 0/8 不達（全観測 4/4）。抽出器の 4/4 バイアス（観測 confidence 中央値 0.94-0.97）と分離未解決。combined match 0.5 は 4/4 セル由来で loose 表記は誤読注意"
-    evidence: "examples/control/k2_musicgen_segments/expected_grip.json"
+    description: "M2（2026-07-13）で §7.6 と同一処方（4/4 / 3/4）を再計測し dead を維持（per-cell ヌルゲート: high セル match_rate 0.125 <= low セル 1.0 で発火・combined match 0.5625 単独では loose に誤読しうるため per-cell 併記が必須）。3/4 の初達成は high セル 1/8（§7.6 は 0/8）— 完全不達ではなくなったが、帰属（生成器不達 vs 抽出器の 4/4 バイアス）は未分離のまま"
+    evidence: "examples/control/musicgen_m2_knobs/m2_expected_grip.json（旧: examples/control/k2_musicgen_segments/expected_grip.json、§7.6 12s 計測）"
 
 # K3 直交性行列は MusicGen ではまだ実測していないため cross_couplings は記録しない。
 # genre calibration（spectral_biases）も MusicGen 生成コーパス未取得のため記録しない。
 cross_couplings: []
 spectral_biases: []
 
-notes: "PR B 実測（R=8）に基づく初期プロファイル。bpm loose は素朴センサー読み（R2 closeout の規律: faster-side 回復は post-hoc 緩和でありコンパイル時保証には使わない）。brightness は Suno（0.86）より強い tight（2.25）で dark 到達も可能。K3 直交性・genre bias は未計測。実測スコープは facebook/musicgen-small のみ — medium/large 等の未計測バリアントには本 defaults の転移保証がない（backend seam の粒度上コンパイル側はモデル id を知らないため、runbook 側の profile_scope_advisory が stderr で注意喚起する。docs/musicgen_backend.md §7.1）。K2-seg（2026-07-05）: compose 送出プロンプト欄 5 本を同条件で追加実測（tight 0 / loose 2 / dead 3）。semantic.avoid は符号逆転（意図と逆方向に効く attractor）で dead、semantic.core は CLAP energy d=+1.90 と tight 域だが学習センサー由来ノブの昇格ゲート（#126）に従い loose に honesty 固定（docs/musicgen_backend.md §7.6）。"
+notes: "PR B 実測（R=8）に基づく初期プロファイル。bpm loose は素朴センサー読み（R2 closeout の規律: faster-side 回復は post-hoc 緩和でありコンパイル時保証には使わない）。brightness は Suno（0.86）より強い tight（2.25）で dark 到達も可能。K3 直交性・genre bias は未計測。実測スコープは facebook/musicgen-small のみ — medium/large 等の未計測バリアントには本 defaults の転移保証がない（backend seam の粒度上コンパイル側はモデル id を知らないため、runbook 側の profile_scope_advisory が stderr で注意喚起する。docs/musicgen_backend.md §7.1）。K2-seg（2026-07-05）: compose 送出プロンプト欄 5 本を同条件で追加実測（tight 0 / loose 2 / dead 3）。semantic.avoid は符号逆転（意図と逆方向に効く attractor）で dead、semantic.core は CLAP energy d=+1.90 と tight 域だが学習センサー由来ノブの昇格ゲート（#126）に従い loose に honesty 固定（docs/musicgen_backend.md §7.6）。バッチ M2（2026-07-13）: §7.6 の active_rate_target / valley_depth_target / time_signature 3 欄を 30.6 秒・compose 実出力 verbatim・事前登録 canonical（AGENTS.md §8 #172）で再計測し supersede。active_rate_target は天井交絡を解消し loose を確定（grip 0.394025→0.414395）、valley_depth_target は 12s 素材制約との合流と判明し dead→loose に反転（grip 0.152499→0.3518・観測絶対値の処方追従はなお部分的）、time_signature は per-cell ヌルゲート（high 0.125 <= low 1.0）が発火し dead を維持（3/4 初達成 1/8・§7.6 は 0/8 だが帰属未分離）。fixture: examples/control/musicgen_m2_knobs/m2_expected_grip.json。"
