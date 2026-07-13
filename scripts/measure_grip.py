@@ -22,6 +22,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from svp_rpe.control import (  # noqa: E402
+    MATCH_TIGHT_MIN,
     classify_grip,
     classify_match_grip,
     grip_effect_size,
@@ -168,16 +169,24 @@ def _analyze_categorical_knob(
     # 計器の生出力として温存し、本フィールドは additive に併記する
     # （categorical 経路のみ・continuous の effect_size 経路には適用しない）。
     #
-    # 等号規則の原理: categorical は排他的完全一致（観測は low/high のどちらか
-    # 一方にしか一致しない）ため、処方非依存の静的出力では
-    # match_low + match_high <= 1 が必然。等号で和が 1 を超える場合
+    # 等号規則の原理（#174 Codex P2 第 2 ラウンド採用）: categorical は排他的
+    # 完全一致（観測は low/high のどちらか一方にしか一致しない）ため、処方非依存の
+    # 静的出力では match_low + match_high <= 1 が必然。等号で和が 1 を超える場合
     # （例 1.0/1.0、0.9/0.9）は静的出力で説明不能＝応答性の実証につき非発火。
     # 和が 1 以下の等号（0.5/0.5 = 静的コインで説明可能）は改善証拠なしにつき
-    # 発火。厳密不等号（high < low）は常に発火（事前登録 ≤ 規約の非改善側）。
-    # structure 計器の 0.667/0.667 dead 前例は非排他マッチの別計器であり
+    # 発火。structure 計器の 0.667/0.667 dead 前例は非排他マッチの別計器であり
     # 本規則の対象外。
-    null_gate_fired = (high_mean < low_mean) or (
-        high_mean == low_mean and (low_mean + high_mean) <= 1.0
+    #
+    # high セル tight 免除（#174 Codex P2 第 3 ラウンド採用）: ゲートの目的は
+    # low/デフォルトセルが combined を押し上げる誤読の防止である。非改善
+    # （high < low）でも high セル単独が tight 水準（>= MATCH_TIGHT_MIN）に達して
+    # いれば high 処方は実現されており誤読は発生しない＝免除する
+    # （例 low 1.0 / high 0.875、combined 0.9375 tight を温存。第 2 ラウンドまでの
+    # 「厳密不等号は常に発火」を精密化した合成規則）。M2 実データ high 0.125 は
+    # tight 水準未達につき引き続き発火し裁定不変。
+    null_gate_fired = (
+        (high_mean < low_mean and high_mean < MATCH_TIGHT_MIN)
+        or (high_mean == low_mean and (low_mean + high_mean) <= 1.0)
     )
     gated_classification = "dead" if null_gate_fired else classification
 

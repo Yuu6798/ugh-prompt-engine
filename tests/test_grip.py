@@ -17,6 +17,7 @@ from scripts.measure_grip import (
 )
 from svp_rpe.control import (
     GRIP_SATURATED,
+    MATCH_TIGHT_MIN,
     classify_grip,
     classify_match_grip,
     grip_effect_size,
@@ -223,14 +224,19 @@ def test_categorical_non_key_sensor_uses_exact_match_not_key_fuzzy() -> None:
 # 変更しない。m2_plan.yaml §3 の事前登録規約を、手動転記ではなく計器へ機械的に
 # encode する。
 #
-# ゲート条件（#174 Codex P2 採用の等号規則）: 厳密不等号 `high_mean < low_mean`
-# は常に発火（事前登録 ≤ 規約の非改善側）。等号は和で分岐する — categorical は
-# 排他的完全一致（観測は low/high のどちらか一方にしか一致しない）ため、処方
-# 非依存の静的出力では match_low + match_high <= 1 が必然。等号で和が 1 を超える
-# 場合（例 K1 key 1.0/1.0、0.9/0.9）は静的出力で説明不能＝応答性の実証につき
-# 非発火。和が 1 以下の等号（0.5/0.5 = 静的コインで説明可能）は改善証拠なしに
-# つき発火。structure 計器の 0.667/0.667 dead 前例は非排他マッチの別計器であり
-# 本規則の対象外。
+# ゲート条件（#174 Codex P2 第 2・第 3 ラウンド採用の合成規則）:
+#   null_gate_fired = (high < low and high < MATCH_TIGHT_MIN)
+#                     or (high == low and low + high <= 1.0)
+# 非改善（high < low）は high セル単独が tight 水準（>= MATCH_TIGHT_MIN = 0.7）
+# 未達の場合のみ発火 — ゲートの目的は low/デフォルトセルが combined を押し上げる
+# 誤読の防止であり、high 処方が単独で実現済み（例 1.0/0.875）なら誤読は発生
+# しないため免除（第 3 ラウンド）。等号は和で分岐する — categorical は排他的
+# 完全一致（観測は low/high のどちらか一方にしか一致しない）ため、処方非依存の
+# 静的出力では match_low + match_high <= 1 が必然。等号で和が 1 を超える場合
+# （例 K1 key 1.0/1.0、0.9/0.9）は静的出力で説明不能＝応答性の実証につき非発火。
+# 和が 1 以下の等号（0.5/0.5 = 静的コインで説明可能）は改善証拠なしにつき発火
+# （第 2 ラウンド）。structure 計器の 0.667/0.667 dead 前例は非排他マッチの
+# 別計器であり本規則の対象外。
 # ---------------------------------------------------------------------------
 
 
@@ -383,6 +389,50 @@ def test_categorical_null_gate_does_not_fire_on_high_equal_means() -> None:
     assert report["summary_gated"] == report["summary"]
 
 
+def test_categorical_null_gate_exempts_non_improving_high_cell_at_tight_level() -> None:
+    """非改善（high 0.875 < low 1.0）でも high セル単独が tight 水準
+    （>= MATCH_TIGHT_MIN = 0.7）に達していればヌルゲート非発火（#174 第 3R）。
+
+    ゲートの目的は low/デフォルトセルが combined を押し上げる誤読の防止であり、
+    high 処方が 7/8 実現されている強い非対称ノブ（combined 0.9375 = tight）を
+    dead に誤殺してはならない。"""
+    fixture = _categorical_probe_fixture(
+        low_observed=["low"] * 8,
+        high_observed=["high"] * 7 + ["x"],
+    )
+    report = analyze_fixture(fixture)
+    result = report["results"][0]
+
+    assert result["low_mean"] == 1.0
+    assert result["high_mean"] == 0.875
+    assert result["classification"] == "tight"  # combined 0.9375
+    assert result["null_gate_fired"] is False
+    assert result["gated_classification"] == "tight"
+    assert report["summary_gated"] == report["summary"]
+
+
+def test_categorical_null_gate_fires_on_non_improving_high_cell_below_tight_level() -> None:
+    """非改善かつ high セル単独が tight 水準未達（high 0.65 < 0.7）はヌルゲート発火。
+
+    low 1.0 が combined（0.825 = tight 帯）を押し上げる誤読の典型形 — 第 3R の
+    免除は high >= MATCH_TIGHT_MIN の場合のみで、未達なら従来どおり dead へ
+    格下げる。"""
+    fixture = _categorical_probe_fixture(
+        low_observed=["low"] * 20,
+        high_observed=["high"] * 13 + ["x"] * 7,
+    )
+    report = analyze_fixture(fixture)
+    result = report["results"][0]
+
+    assert result["low_mean"] == 1.0
+    assert result["high_mean"] == 0.65
+    assert result["classification"] == "tight"  # stock 分類は生値のまま温存される
+    assert result["null_gate_fired"] is True
+    assert result["gated_classification"] == "dead"
+    assert report["summary"] == {"tight": 1, "loose": 0, "dead": 0}
+    assert report["summary_gated"] == {"tight": 0, "loose": 0, "dead": 1}
+
+
 def test_continuous_knob_is_unaffected_by_null_gate() -> None:
     """continuous（effect_size）経路は additive フィールド自体を持たない
     （`null_gate_fired` / `gated_classification` キーが存在しない）。`summary_gated`
@@ -424,10 +474,12 @@ def test_all_categorical_null_gate_fixtures_have_dead_verdict_when_gate_fires() 
     `examples/control/**/*.json` のうち analyze_fixture 形式の `results` と、
     手動裁定 `verdicts`（`primary_verdict` 付き knob 別 dict）を両方持つ fixture
     （現状 m2_expected_grip.json のみ）について、categorical 結果で計器のゲート
-    条件（high_mean < low_mean、または等号かつ和 <= 1）が成立するのに対応する
-    `verdicts[knob]["primary_verdict"]` が "dead" でない場合に fail する。
-    ゲート条件は per-cell 平均から直接再計算し、committed `null_gate_fired`
-    フラグとの整合も合わせて検査する（転記ずれの検出）。"""
+    条件（合成規則: high < low かつ high < MATCH_TIGHT_MIN、または等号かつ
+    和 <= 1）が成立するのに対応する `verdicts[knob]["primary_verdict"]` が
+    "dead" でない場合に fail する。ゲート条件は per-cell 平均から直接再計算し、
+    committed `null_gate_fired` フラグとの整合も合わせて検査する（転記ずれの
+    検出。計器と同じ合成規則で再計算しないと、1.0/0.875 型の tight 免除 fixture
+    投入時に人間裁定を override して CI が誤って赤くなる）。"""
     control_root = Path("examples/control")
     checked_any = False
     for path in sorted(control_root.rglob("*.json")):
@@ -446,14 +498,16 @@ def test_all_categorical_null_gate_fixtures_have_dead_verdict_when_gate_fires() 
                 continue
             high_mean = float(result["high_mean"])
             low_mean = float(result["low_mean"])
-            gate_condition = (high_mean < low_mean) or (
-                high_mean == low_mean and (low_mean + high_mean) <= 1.0
+            gate_condition = (
+                (high_mean < low_mean and high_mean < MATCH_TIGHT_MIN)
+                or (high_mean == low_mean and (low_mean + high_mean) <= 1.0)
             )
             if "null_gate_fired" in result:
                 assert result["null_gate_fired"] == gate_condition, (
                     f"{path}: {result['knob']!r} committed null_gate_fired="
-                    f"{result['null_gate_fired']} does not match the gate condition "
-                    f"(high_mean < low_mean, or equal means with sum <= 1) for "
+                    f"{result['null_gate_fired']} does not match the composite gate "
+                    f"condition (high < low and high < MATCH_TIGHT_MIN, or equal "
+                    f"means with sum <= 1) for "
                     f"high_mean={high_mean} low_mean={low_mean} (is {gate_condition})"
                 )
             if not gate_condition:
