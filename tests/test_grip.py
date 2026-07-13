@@ -6,6 +6,7 @@ import math
 from pathlib import Path
 
 import pytest
+import yaml
 
 from scripts.measure_grip import (
     _exact_match_score,
@@ -404,3 +405,308 @@ def test_k2_seg_suno_segments_excl_fixture_snapshot() -> None:
     assert by_knob["exclude_net_effect"]["grip"] == pytest.approx(1.642929, abs=1e-4)
     assert by_knob["exclude_net_effect"]["classification"] == "dead"
     assert report["summary"] == {"tight": 1, "loose": 0, "dead": 1}
+
+
+# ---------------------------------------------------------------------------
+# バッチ M2 — MusicGen 3 ノブ（active_rate_target / valley_depth_target /
+# time_signature）grip 再計測（2026-07-13）。§7.6（K2-seg・12 秒手組みプロンプト
+# 計測）の既知交絡 2 件を M1 規律（30.6 秒・compose 実出力 verbatim・事前登録
+# canonical、AGENTS.md §8「ローカル決定論バッチの canonical 条件」#172 適用第二号）
+# で再計測し解消した。fixture→grip の決定論スナップショット（分析ロジックは
+# K2-seg と同一の `scripts/measure_grip.py::analyze_fixture`）を
+# `m2_expected_grip.json`（判定 verdict を含む拡張スキーマ）と
+# `m2_measure_raw_2026-07-13.yaml`（`analyze_fixture` の生出力・再計算元）の
+# 双方に対して pin する。判定（loose/loose/dead）はここでは再解釈しない —
+# 事前登録規約（m2_plan.yaml §3）の機械適用結果を fixture 記録として固定する。
+# ---------------------------------------------------------------------------
+
+M2_DIR = Path("examples/control/musicgen_m2_knobs")
+M2_RESULTS_FIXTURE_PATH = M2_DIR / "m2_results_fixture.json"
+M2_EXPECTED_GRIP_PATH = M2_DIR / "m2_expected_grip.json"
+M2_MEASURE_RAW_PATH = M2_DIR / "m2_measure_raw_2026-07-13.yaml"
+M2_MANIFEST_PATH = M2_DIR / "m2_takes_manifest.json"
+M2_DETERMINISM_SPOT_CHECK_PATH = M2_DIR / "m2_determinism_spot_check.yaml"
+
+
+def _load_m2_results_fixture() -> dict:
+    return json.loads(M2_RESULTS_FIXTURE_PATH.read_text(encoding="utf-8"))
+
+
+def _load_m2_expected_grip() -> dict:
+    return json.loads(M2_EXPECTED_GRIP_PATH.read_text(encoding="utf-8"))
+
+
+def _load_m2_measure_raw() -> dict:
+    return yaml.safe_load(M2_MEASURE_RAW_PATH.read_text(encoding="utf-8"))
+
+
+def test_m2_analyze_fixture_matches_measure_raw_and_expected_grip() -> None:
+    """`analyze_fixture(m2_results_fixture.json)` の決定論出力が、委譲実行の生出力
+    （`m2_measure_raw_2026-07-13.yaml`）および設計反映済み fixture
+    （`m2_expected_grip.json`）の `results`/`summary` と一致することを pin する
+    （転記のみで再計算していないことの機械検算）。"""
+    report = analyze_fixture(load_fixture(M2_RESULTS_FIXTURE_PATH))
+    raw = _load_m2_measure_raw()
+    expected = _load_m2_expected_grip()
+
+    assert report["results"] == raw["results"]
+    assert report["summary"] == raw["summary"]
+    assert report["results"] == expected["results"]
+    assert report["summary"] == expected["summary"]
+    # 機械分類は 3 ノブとも loose（time_signature はヌルゲート適用前の combined
+    # match_rate 分類 — verdict は下記テストで per-cell 込みで別途 pin する）。
+    assert report["summary"] == {"tight": 0, "loose": 3, "dead": 0}
+
+
+def test_m2_active_rate_target_recomputes_and_supersedes_ceiling_confound() -> None:
+    """§7.6 の active_rate_target 天井交絡（low '0.55' で headroom 0.033）を、low 処方
+    '0.30' 拡大（headroom 0.192）で解消したことを pin する。grip は §7.6 の
+    0.394025 とほぼ同値（0.414395）— 天井アーティファクトでないことの確定証拠。"""
+    fixture = _load_m2_results_fixture()
+    expected = _load_m2_expected_grip()
+
+    low_values = [
+        s["features"]["active_rate"]
+        for s in fixture["samples"]
+        if s["knob"] == "active_rate_target" and s["level"] == "0.30"
+    ]
+    high_values = [
+        s["features"]["active_rate"]
+        for s in fixture["samples"]
+        if s["knob"] == "active_rate_target" and s["level"] == "0.92"
+    ]
+    assert len(low_values) == 8
+    assert len(high_values) == 8
+
+    d = grip_effect_size(low_values, high_values)
+    assert d == pytest.approx(0.414395, abs=1e-4)
+    assert classify_grip(d, 1) == "loose"
+
+    verdict = expected["verdicts"]["active_rate_target"]
+    assert verdict["primary_verdict"] == "loose"
+    assert verdict["verdict_canonical"] is True
+    assert verdict["grip"] == pytest.approx(d, abs=1e-6)
+    assert "§7.6" in verdict["supersedes"]
+    assert "天井" in verdict["supersedes"]
+
+    # §7.6 旧計測（K2-seg・12s 素材）との比較: 旧 grip 0.394025 とほぼ同値。
+    old_expected = json.loads(
+        Path("examples/control/k2_musicgen_segments/expected_grip.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    old_result = next(
+        r for r in old_expected["results"] if r["knob"] == "active_rate_target"
+    )
+    assert old_result["grip"] == pytest.approx(0.394025, abs=1e-4)
+    assert old_result["classification"] == "loose"
+    assert abs(d - old_result["grip"]) < 0.03
+
+
+def test_m2_valley_depth_target_recomputes_and_supersedes_dead_verdict() -> None:
+    """§7.6 の valley_depth_target dead 判定（12s 定常ビート素材の valley 床 0.078）
+    を、セル処方値据え置き・素材長のみ 12s→30.6s へ伸ばした M2 が supersede し
+    loose へ反転したことを pin する。"""
+    fixture = _load_m2_results_fixture()
+    expected = _load_m2_expected_grip()
+
+    low_values = [
+        s["features"]["valley_depth"]
+        for s in fixture["samples"]
+        if s["knob"] == "valley_depth_target" and s["level"] == "0.15"
+    ]
+    high_values = [
+        s["features"]["valley_depth"]
+        for s in fixture["samples"]
+        if s["knob"] == "valley_depth_target" and s["level"] == "0.70"
+    ]
+    assert len(low_values) == 8
+    assert len(high_values) == 8
+
+    d = grip_effect_size(low_values, high_values)
+    assert d == pytest.approx(0.3518, abs=1e-4)
+    assert classify_grip(d, 1) == "loose"
+
+    verdict = expected["verdicts"]["valley_depth_target"]
+    assert verdict["primary_verdict"] == "loose"
+    assert verdict["verdict_canonical"] is True
+    assert verdict["grip"] == pytest.approx(d, abs=1e-6)
+    assert "supersede" in verdict["supersedes"]
+    assert "dead" in verdict["supersedes"]
+
+    # §7.6 旧計測（K2-seg・12s 素材）は dead（0.152499）だった — 本バッチが反転させる。
+    old_expected = json.loads(
+        Path("examples/control/k2_musicgen_segments/expected_grip.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    old_result = next(
+        r for r in old_expected["results"] if r["knob"] == "valley_depth_target"
+    )
+    assert old_result["grip"] == pytest.approx(0.152499, abs=1e-4)
+    assert old_result["classification"] == "dead"
+    assert old_result["classification"] != verdict["primary_verdict"]
+
+
+def test_m2_time_signature_combined_match_rate_is_loose_before_null_gate() -> None:
+    """combined match_rate（低/高セル全 16 サンプル平均）の機械分類は 0.3-0.7 帯で
+    loose だが、これは per-cell 値を隠す honesty リスクがある（下記ヌルゲート
+    テストで dead へ格下げることを別途 pin する）。"""
+    fixture = _load_m2_results_fixture()
+
+    low_scores = [
+        1.0 if s["features"]["time_signature"] == "4/4" else 0.0
+        for s in fixture["samples"]
+        if s["knob"] == "time_signature" and s["level"] == "4/4"
+    ]
+    high_scores = [
+        1.0 if s["features"]["time_signature"] == "3/4" else 0.0
+        for s in fixture["samples"]
+        if s["knob"] == "time_signature" and s["level"] == "3/4"
+    ]
+    assert len(low_scores) == 8
+    assert len(high_scores) == 8
+    assert sum(low_scores) == 8.0
+    assert sum(high_scores) == 1.0  # 3/4 の初達成 1/8（time_signature_high_06）
+
+    combined = match_rate(low_scores + high_scores)
+    assert combined == pytest.approx(0.5625, abs=1e-6)
+    assert classify_match_grip(combined) == "loose"
+
+
+def test_m2_time_signature_null_gate_fires_and_downgrades_to_dead() -> None:
+    """per-cell ヌル格下げ規則（high セル match_rate <= low セル match_rate なら
+    分類によらず dead）が発火し、combined 機械分類 loose にもかかわらず
+    primary_verdict は dead で確定することを pin する（§7.6 の 0.5 combined 誤読
+    前例の再発防止・m2_plan.yaml §3 honesty 注記）。"""
+    expected = _load_m2_expected_grip()
+    verdict = expected["verdicts"]["time_signature"]
+
+    assert verdict["match_rate_low_cell"] == pytest.approx(1.0)
+    assert verdict["match_rate_high_cell"] == pytest.approx(0.125)
+    assert verdict["combined_match_rate"] == pytest.approx(0.5625, abs=1e-6)
+    assert verdict["machine_classification_from_combined_match_rate"] == "loose"
+
+    null_gate_fired = verdict["match_rate_high_cell"] <= verdict["match_rate_low_cell"]
+    assert null_gate_fired is True
+    assert verdict["null_gate_fired"] is True
+    assert verdict["preregistered_rule_outcome"] == "dead"
+    assert verdict["primary_verdict"] == "dead"
+    assert verdict["verdict_canonical"] is True
+    assert "1/8" in verdict["descriptive_evidence"]
+    assert "0/8" in verdict["descriptive_evidence"]
+
+
+def test_m2_takes_manifest_sha256_matches_results_fixture() -> None:
+    """results fixture の per-sample audio_sha256 は takes manifest と一致する
+    （WAV 非コミット・sha256 provenance の内部整合、M1 の同型テストを踏襲）。"""
+    fixture = _load_m2_results_fixture()
+    manifest = json.loads(M2_MANIFEST_PATH.read_text(encoding="utf-8"))
+    sha_by_id = {s["sample_id"]: s["audio_sha256"] for s in manifest["samples"]}
+
+    assert len(manifest["samples"]) == 48
+    for sample in fixture["samples"]:
+        assert sample["audio_sha256"] == sha_by_id[sample["sample_id"]], sample["sample_id"]
+
+    plan = manifest["plan"]
+    assert plan["fixture_id"] == "musicgen_m2_knobs"
+    assert plan["duration_seconds"] == 30.6
+    assert plan["repetitions"] == 8
+    assert plan["model_id"] == "facebook/musicgen-small"
+    assert all(
+        s["model_revision"] == "4c8334b02c6ec4e8664a91979669a501ec497792"
+        for s in manifest["samples"]
+    )
+
+    # seed の決定論式（m2_plan.yaml §6）: knob_index*100 + level_index*50 + repeat。
+    seeds_by_knob = {
+        "active_rate_target": list(range(1000, 1008)) + list(range(1050, 1058)),
+        "valley_depth_target": list(range(1100, 1108)) + list(range(1150, 1158)),
+        "time_signature": list(range(1200, 1208)) + list(range(1250, 1258)),
+    }
+    for knob_name, expected_seeds in seeds_by_knob.items():
+        observed_seeds = [
+            s["seed"] for s in manifest["samples"] if s["knob"] == knob_name
+        ]
+        assert observed_seeds == expected_seeds
+
+
+def test_m2_determinism_spot_check_records_two_byte_matches() -> None:
+    """canonical 免除根拠（出力の壁時計順序非依存）の実測証拠（バッチ最初/最後の
+    クリップ再生成 sha256 一致）を pin する。"""
+    spot_check = yaml.safe_load(M2_DETERMINISM_SPOT_CHECK_PATH.read_text(encoding="utf-8"))
+    expected = _load_m2_expected_grip()
+
+    assert spot_check["result"] == "2/2 byte 一致（sha256 完全一致）。"
+    assert len(spot_check["samples"]) == 2
+    for sample in spot_check["samples"]:
+        assert sample["match"] is True
+        assert sample["pinned_sha256"] == sample["regenerated_sha256"]
+
+    # expected_grip.json 側にも同内容が転記されていること（provenance の単一情報源が
+    # 2 箇所に重複せずずれていないかの内部整合）。
+    embedded = expected["determinism_spot_check"]
+    assert embedded["result"] == spot_check["result"]
+    assert len(embedded["samples"]) == 2
+    for sample in embedded["samples"]:
+        assert sample["match"] is True
+        assert sample["pinned_sha256"] == sample["regenerated_sha256"]
+
+
+def test_m2_canonical_conditions_follow_agents_md_local_batch_rule() -> None:
+    """AGENTS.md §8「ローカル決定論バッチの canonical 条件」（#172）どおり、
+    ABBA / 均衡ゲートは非適用（applicable=false）、補充ゼロ / タイムスタンプ記録は
+    充足（applicable=true・satisfied=true）であることを pin する（M1 と同型の
+    condition 集合）。"""
+    expected = _load_m2_expected_grip()
+    conditions = {c["id"]: c for c in expected["canonical_conditions"]["conditions"]}
+
+    assert set(conditions) == {
+        "abba_order",
+        "zero_replenishment",
+        "timestamps_recorded",
+        "balance_gate",
+    }
+    for cid in ("abba_order", "balance_gate"):
+        assert conditions[cid]["applicable"] is False
+        assert conditions[cid]["satisfied"] is None
+    for cid in ("zero_replenishment", "timestamps_recorded"):
+        assert conditions[cid]["applicable"] is True
+        assert conditions[cid]["satisfied"] is True
+
+    # 3 ノブ全ての verdict が canonical であることも合わせて pin する。
+    for knob_name in ("active_rate_target", "valley_depth_target", "time_signature"):
+        assert expected["verdicts"][knob_name]["verdict_canonical"] is True
+    assert expected["config_reflected"] is True
+
+
+def test_m2_config_control_defaults_match_expected_grip() -> None:
+    """`config/device_profiles/musicgen.yaml` の control_defaults 3 欄が
+    `m2_expected_grip.json` の verdict と一致することを pin する（設計反映の
+    config_reflected=true が実際に config に配線されていることの検算）。"""
+    from svp_rpe.compose.device_profile import load_device_profile
+
+    profile = load_device_profile("musicgen")
+    assert profile is not None
+    expected = _load_m2_expected_grip()
+
+    active_rate = profile.control_defaults["active_rate_target"]
+    assert active_rate.grip_class == expected["verdicts"]["active_rate_target"]["primary_verdict"]
+    assert active_rate.grip == pytest.approx(
+        expected["verdicts"]["active_rate_target"]["grip"], abs=1e-6
+    )
+    assert active_rate.evidence == "examples/control/musicgen_m2_knobs/m2_expected_grip.json"
+
+    valley_depth = profile.control_defaults["valley_depth_target"]
+    assert valley_depth.grip_class == expected["verdicts"]["valley_depth_target"]["primary_verdict"]
+    assert valley_depth.grip == pytest.approx(
+        expected["verdicts"]["valley_depth_target"]["grip"], abs=1e-6
+    )
+    assert valley_depth.evidence == "examples/control/musicgen_m2_knobs/m2_expected_grip.json"
+
+    time_signature = profile.control_defaults["time_signature"]
+    # time_signature は honesty ルール（categorical dead は grip キーに数値を持たない）
+    # を M1/K2-seg から踏襲する。
+    assert time_signature.grip_class == expected["verdicts"]["time_signature"]["primary_verdict"]
+    assert time_signature.grip is None
+    assert time_signature.evidence == "examples/control/musicgen_m2_knobs/m2_expected_grip.json"

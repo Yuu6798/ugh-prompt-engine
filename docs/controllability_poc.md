@@ -297,6 +297,21 @@ K3。製品転移の「効果量の絶対水準」までは主張せず、**分�
 attractor が headline finding）。詳細は
 [`musicgen_backend.md`](musicgen_backend.md) §7.6。
 
+**バッチ M2（2026-07-13、§7.6 交絡解消）**: 上記 K2-seg の `active_rate_target` /
+`valley_depth_target` / `time_signature` 3 欄を、M1 と同一規律（30.6 秒・compose
+実出力 verbatim・事前登録 canonical、AGENTS.md §8「ローカル決定論バッチの canonical
+条件」#172 適用第二号）で再計測。low 処方拡大（"0.55"→"0.30"）で headroom を確保しても
+`active_rate_target` の grip は §7.6 とほぼ同値（0.394025→0.414395）— loose は天井
+アーティファクトでないことを確定。`valley_depth_target` はセル値据え置き・素材長のみ
+12s→30.6s に伸ばしたところ dead（0.152499）→loose（0.3518）に反転し、§7.6 の dead が
+「ツマミ死」でなく 12 秒定常ビート素材の valley 床という物理制約との合流だったことが
+確定（ただし観測絶対値は処方値への追従として部分的）。`time_signature` は combined
+match_rate 0.5625 が機械分類では loose に見えるが、per-cell 値（low 1.0 / high 0.125）で
+事前登録ヌルゲートが発火し dead を維持（3/4 の初達成は 1/8、§7.6 は 0/8 だが帰属は
+未分離）。3 欄とも `config/device_profiles/musicgen.yaml` へ反映済み。結果表・判定根拠は
+[`musicgen_backend.md`](musicgen_backend.md) §7.7、fixture は
+`examples/control/musicgen_m2_knobs/m2_expected_grip.json`。
+
 #### K2-seg Suno 転移バッチ 1（2026-07-09）
 
 MusicGen スクリーン（§7.6）で裁定価値が最も高かった 2 欄（本文 `Avoid:` セグメント /

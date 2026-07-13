@@ -1,0 +1,165 @@
+{
+  "schema_version": "1.0",
+  "fixture_id": "musicgen_m2_knobs",
+  "generator": "musicgen-small",
+  "model": "facebook/musicgen-small @ 4c8334b02c6ec4e8664a91979669a501ec497792 (G4 目視確認済み revision に pin、docs/musicgen_backend.md §5)",
+  "duration_seconds": 30.6,
+  "repetitions": 8,
+  "purpose": "docs/musicgen_backend.md §7.6（K2-seg・12 秒手組みプロンプト計測）の既知交絡 2 件を M1 規律（30.6 秒・compose 実出力 verbatim・事前登録 canonical）で再計測して解消する（m2_plan.yaml §1）: (a) valley_depth の 12s 定常ビート素材の物理制約と knob 死の分離、(b) active_rate の low セル天井（旧 '0.55' で headroom 0.033）の解消。time_signature は §7.6 と同一処方のまま再計測しヌルゲート規約の機械適用を確定する。",
+  "measure_raw_source": "examples/control/musicgen_m2_knobs/m2_measure_raw_2026-07-13.yaml（scripts/measure_grip.py --fixture m2_results_fixture.json の生出力・再計算なしの転記元）",
+  "results": [
+    {
+      "knob": "active_rate_target",
+      "sensor": "active_rate",
+      "expected_sign": 1,
+      "low_level": "0.30",
+      "high_level": "0.92",
+      "repetitions": 8,
+      "low_values": [1.0, 0.791, 0.9688, 0.2074, 0.6216, 0.9985, 1.0, 0.8769],
+      "high_values": [1.0, 1.0, 1.0, 0.8404, 0.4802, 0.9932, 1.0, 0.9255],
+      "low_mean": 0.808025,
+      "high_mean": 0.904913,
+      "grip": 0.414395,
+      "classification": "loose"
+    },
+    {
+      "knob": "valley_depth_target",
+      "sensor": "valley_depth",
+      "expected_sign": 1,
+      "low_level": "0.15",
+      "high_level": "0.70",
+      "repetitions": 8,
+      "low_values": [0.0138, 0.094, 0.2057, 0.0548, 0.0306, 0.3064, 0.0556, 0.0458],
+      "high_values": [0.2011, 0.078, 0.1406, 0.0182, 0.0307, 0.2084, 0.0689, 0.3716],
+      "low_mean": 0.100837,
+      "high_mean": 0.139687,
+      "grip": 0.3518,
+      "classification": "loose"
+    },
+    {
+      "knob": "time_signature",
+      "sensor": "time_signature",
+      "kind": "categorical",
+      "low_level": "4/4",
+      "high_level": "3/4",
+      "repetitions": 8,
+      "low_observed": ["4/4", "4/4", "4/4", "4/4", "4/4", "4/4", "4/4", "4/4"],
+      "high_observed": ["4/4", "4/4", "4/4", "4/4", "4/4", "4/4", "3/4", "4/4"],
+      "low_values": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+      "high_values": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+      "low_mean": 1.0,
+      "high_mean": 0.125,
+      "grip": 0.5625,
+      "classification": "loose"
+    }
+  ],
+  "summary": {
+    "tight": 0,
+    "loose": 3,
+    "dead": 0
+  },
+  "verdicts": {
+    "active_rate_target": {
+      "sensor": "active_rate",
+      "low_level": "0.30",
+      "high_level": "0.92",
+      "grip": 0.414395,
+      "preregistered_rule_outcome": "loose",
+      "primary_verdict": "loose",
+      "verdict_canonical": true,
+      "supersedes": "docs/musicgen_backend.md §7.6 の active_rate_target（旧 low 処方 '0.55'・観測 mean 0.967・headroom 0.033・grip 0.394025・loose）を、low 処方を '0.30' へ拡大した本バッチの計測で更新する（旧エントリの分類は loose のまま変わらないが天井交絡の疑いを解消）。",
+      "interpretation": "M2 の low_mean 0.808025（headroom 0.192 — §7.6 の 0.033 から大幅拡大）でも grip は 0.414395 と §7.6 の 0.394025 とほぼ同値。低い headroom の下で測っても高い headroom の下で測ってもほぼ同じ d が出た＝loose は §7.6 で疑われた天井アーティファクトではなく、active_rate_target ツマミそのものの応答特性であることが確定した。"
+    },
+    "valley_depth_target": {
+      "sensor": "valley_depth",
+      "low_level": "0.15",
+      "high_level": "0.70",
+      "grip": 0.3518,
+      "preregistered_rule_outcome": "loose",
+      "primary_verdict": "loose",
+      "verdict_canonical": true,
+      "supersedes": "docs/musicgen_backend.md §7.6 の valley_depth_target（12 秒素材・観測 mean low 0.078313 / high 0.083187・grip 0.152499・dead）を supersede する。セル処方値（low '0.15' / high '0.70'）は §7.6 と同値のまま据え置き、変数を素材長（12s→30.6s）のみに絞った対照実験。",
+      "interpretation": "素材長を伸ばしただけで dead（0.152499）から loose（0.3518）へ knob が動いた＝§7.6 の dead は「ツマミが死んでいる」のではなく「12 秒定常ビート素材の物理制約（valley 床）」との合流だったことが確定した。ただし観測絶対値（low mean 0.100837 / high mean 0.139687）は処方値 0.15/0.70 への追従としては依然部分的（絶対水準は低いまま）— この限界は残る。"
+    },
+    "time_signature": {
+      "sensor": "time_signature",
+      "kind": "categorical",
+      "low_level": "4/4",
+      "high_level": "3/4",
+      "match_rate_low_cell": 1.0,
+      "match_rate_high_cell": 0.125,
+      "combined_match_rate": 0.5625,
+      "machine_classification_from_combined_match_rate": "loose",
+      "null_gate_fired": true,
+      "null_gate_condition": "match_rate_high_cell <= match_rate_low_cell（0.125 <= 1.0 のため発火）",
+      "decision_rule": "categorical: classify_match_grip（tight >=0.7 / loose >=0.3 / dead <0.3、combined match_rate 経由）に加え、per-cell 経験的ヌル格下げ規則（high セル match_rate <= low セル match_rate なら分類によらず dead へ格下げ。M1 structure ノブ・K2-seg §7.6 と同一規約、m2_plan.yaml §3 に事前登録）。",
+      "preregistered_rule_outcome": "dead",
+      "primary_verdict": "dead",
+      "verdict_canonical": true,
+      "honesty_note": "combined match_rate 0.5625 は機械分類では 0.3-0.7 帯の loose に見えるが、per-cell 値（low 1.0 / high 0.125）を見るとヌルゲート条件が成立し dead へ格下げる。combined 値単独で読むと §7.6 の 0.5 誤読前例（4/4 セルの一致率が押し上げただけで loose に見えた事故）を繰り返すため、per-cell 値を必ず併記する（m2_plan.yaml §3 honesty 注記）。",
+      "descriptive_evidence": "処方 3/4 の初達成は high セル 1/8（time_signature_high_06、seed 1256）— §7.6 の 12 秒素材では 0/8（全観測 4/4）で一度も 3/4 を実現しなかった。完全不達ではなくなったが、原因（生成器が真に 3/4 を実現したのか / 抽出器の 4/4 フォールバックが緩んだだけか）は本バッチでは分離できていない（m2_plan.yaml honesty 注記どおり）。帰属（生成器不達 vs 抽出器 4/4 バイアス）は未分離のまま。"
+    }
+  },
+  "canonical_scope": "事前登録ローカル生成プロトコル下の canonical（m2_plan.yaml、生成前コミット）。AGENTS.md §8「ローカル決定論バッチの canonical 条件（人手 UI バッチとの差分）」（#172、M1 が適用第一号・本バッチが適用第二号）に従い、ABBA カウンターバランスと均衡ゲート B は人手 UI 生成の時間ドリフト対策であり決定論 seed によるローカルスクリプト生成には非適用と事前登録。要件は (1) 生成前の事前登録（m2_plan.yaml §2 コミット）と (2) fresh-process 決定論スポット検証（最遠 2 クリップの sha256 byte 一致）の 2 点。実行実態は 1 コール = 1 クリップの fresh-process 逐次実行（48 プロセス・active_rate_target low00-07→high00-07 → valley_depth_target low00-07→high00-07 → time_signature low00-07→high00-07、m2_generation_timestamps.yaml に秒単位 UTC 記録）。適用可能な 2 条件（補充ゼロ・秒単位タイムスタンプ記録）は全充足。",
+  "canonical_conditions": {
+    "summary": "AGENTS.md §8（#172）の 4 条件のうち ABBA 順・均衡ゲートは事前登録により非適用（fresh-process 逐次実行 + 決定論 seed で出力が壁時計順序と無関係 — m2_determinism_spot_check.yaml で実測確認）。適用可能な 2 条件（補充ゼロ・タイムスタンプ記録）は充足 — verdict_canonical: true。",
+    "conditions": [
+      {
+        "id": "abba_order",
+        "applicable": false,
+        "satisfied": null,
+        "evidence": "非適用（m2_plan.yaml §2 事前登録）: ABBA は人手 UI 生成の時間ドリフト対策。本バッチは 1 コール = 1 クリップの fresh-process 逐次実行（48 プロセス・約 3 時間、m2_generation_timestamps.yaml に記録）で、毎回新プロセスのためサンプル間に持ち越し状態はなく、決定論 seed + pin 済み revision により出力は壁時計順序と無関係（determinism_spot_check: 最初/最後の 2 クリップの再生成 sha256 一致を実測確認）。"
+      },
+      {
+        "id": "zero_replenishment",
+        "applicable": true,
+        "satisfied": true,
+        "evidence": "全 48 テイクが 30.6s duration 指定（30.54s 実出力・delay-pattern -3 フレーム込み、M1 と同一根拠）で 30s カットオフを通過。除外・補充ゼロ（48/48・m2_takes_manifest.json samples 数 48）。"
+      },
+      {
+        "id": "timestamps_recorded",
+        "applicable": true,
+        "satisfied": true,
+        "evidence": "全 48 サンプルのコール単位開始/終了を秒単位 UTC で実測記録（m2_generation_timestamps.yaml、date -u によるコール実測・推定値なし）。"
+      },
+      {
+        "id": "balance_gate",
+        "applicable": false,
+        "satisfied": null,
+        "evidence": "非適用（m2_plan.yaml §2 事前登録）: 均衡ゲート B は線形セッションドリフトの打ち消し検査。fresh-process 逐次実行 + 決定論 seed により出力は壁時計順序と無関係で（determinism_spot_check の sha256 一致が本バッチ内実測証拠）、打ち消すべきドリフトが出力に介入する経路を持たない。"
+      }
+    ]
+  },
+  "determinism_spot_check": {
+    "date": "2026-07-13",
+    "purpose": "canonical 免除根拠（出力の壁時計順序非依存）の M2 内実測証拠（m2_plan.yaml 事前登録どおり）。時間的に最遠の 2 クリップ（バッチ最初/最後の生成物）を、コミット済み m2_plan.yaml・同一 seed 式・pin 済み revision で再生成し、m2_takes_manifest.json の audio_sha256 と照合した。",
+    "method": "collect_musicgen_takes.py generate --only-knob/--only-level/--only-repeat（--append なし・一時出力先）で単クリップ再生成 → sha256 比較",
+    "samples": [
+      {
+        "sample_id": "active_rate_target_low_00",
+        "role": "バッチ最初の生成物（seed 1000）",
+        "pinned_sha256": "dbf69f877b1cc978f40dea7019b8a176b021b1631d8734b2b1e3b8fc154974fa",
+        "regenerated_sha256": "dbf69f877b1cc978f40dea7019b8a176b021b1631d8734b2b1e3b8fc154974fa",
+        "match": true,
+        "original_generation_start_utc": "2026-07-12T23:38:02Z",
+        "original_generation_end_utc": "2026-07-12T23:41:31Z",
+        "regenerated_at_utc": "2026-07-13T02:39:10Z 開始 / 02:42:35Z 完了"
+      },
+      {
+        "sample_id": "time_signature_high_07",
+        "role": "バッチ最後の生成物（seed 1257）",
+        "pinned_sha256": "5ee131b20a516e861af4f13ed496f6bdfc17b368f96fbf08e381f7d97a1d3871",
+        "regenerated_sha256": "5ee131b20a516e861af4f13ed496f6bdfc17b368f96fbf08e381f7d97a1d3871",
+        "match": true,
+        "original_generation_start_utc": "2026-07-13T02:30:55Z",
+        "original_generation_end_utc": "2026-07-13T02:34:35Z",
+        "regenerated_at_utc": "2026-07-13T02:42:39Z 開始 / 02:46:09Z 完了"
+      }
+    ],
+    "result": "2/2 byte 一致（sha256 完全一致）。",
+    "note": "計測値・primary_verdict・verdict_canonical は本スポット検証によって変更されない（canonical 根拠の provenance 実測のみ）。"
+  },
+  "config_reflected": true,
+  "design_reflection_note": "本バッチの判定は config/device_profiles/musicgen.yaml control_defaults へ直接反映済み: active_rate_target（loose 維持・grip 値更新・天井交絡解消の注記）、valley_depth_target（dead→loose・grip 値更新・素材制約確定の注記）、time_signature（dead 維持・grip 値なし honesty・per-cell + 3/4 初達成 1/8 + 帰属未分離の注記）。",
+  "suno_transfer_relationship": "本バッチは MusicGen ローカル経路のみの再計測であり、Suno 側の同名ノブ（active_rate_target / valley_depth_target / time_signature、docs/musicgen_backend.md §7.6 スコープ外）への転移は本バッチでは検証していない。config/device_profiles/suno.yaml は本バッチによって変更しない。"
+}

@@ -1,0 +1,160 @@
+# バッチ M2 生成タイムスタンプ sidecar（事前登録プロトコルの記録要件）
+#
+# m2_plan.yaml 事前登録: ABBA カウンターバランスと均衡ゲート B は人手 UI 生成の
+# 時間ドリフト対策であり、決定論 seed によるローカルスクリプト生成（stateless・
+# seed 固定で再現可能）には非適用。本ログは「タイムスタンプ記録」条件の充足を
+# 秒単位で担保する実測（`date -u +%Y-%m-%dT%H:%M:%SZ` によるコール単位の計測、
+# 推定値なし）。生成順は plan の絶対順序（knob: active_rate_target →
+# valley_depth_target → time_signature、level: low → high、repeat: 0→7、
+# 1 コール 1 クリップのチャンク実行、--only-knob/--only-level/--only-repeat/
+# --append。seed は絶対インデックス由来のため生成順は結果に影響しない）。
+schema_version: "1.0"
+fixture_id: musicgen_m2_knobs
+timestamp_source: "date -u (UTC, ISO 8601, 秒単位・コール単位実測)"
+generation_order: "sequential active_rate_target(low00-07,high00-07) -> valley_depth_target(low00-07,high00-07) -> time_signature(low00-07,high00-07) (1 call = 1 clip)"
+abba_balance_gate: "not applicable (preregistered in m2_plan.yaml — deterministic stateless local generation)"
+samples:
+  - sample_id: active_rate_target_low_00
+    start_utc: "2026-07-12T23:38:02Z"
+    end_utc: "2026-07-12T23:41:31Z"
+  - sample_id: active_rate_target_low_01
+    start_utc: "2026-07-12T23:41:48Z"
+    end_utc: "2026-07-12T23:45:14Z"
+  - sample_id: active_rate_target_low_02
+    start_utc: "2026-07-12T23:45:28Z"
+    end_utc: "2026-07-12T23:48:51Z"
+  - sample_id: active_rate_target_low_03
+    start_utc: "2026-07-12T23:48:57Z"
+    end_utc: "2026-07-12T23:52:23Z"
+  - sample_id: active_rate_target_low_04
+    start_utc: "2026-07-12T23:52:30Z"
+    end_utc: "2026-07-12T23:56:00Z"
+  - sample_id: active_rate_target_low_05
+    start_utc: "2026-07-12T23:56:06Z"
+    end_utc: "2026-07-12T23:59:40Z"
+  - sample_id: active_rate_target_low_06
+    start_utc: "2026-07-12T23:59:46Z"
+    end_utc: "2026-07-13T00:03:16Z"
+  - sample_id: active_rate_target_low_07
+    start_utc: "2026-07-13T00:03:22Z"
+    end_utc: "2026-07-13T00:06:55Z"
+  - sample_id: active_rate_target_high_00
+    start_utc: "2026-07-13T00:07:02Z"
+    end_utc: "2026-07-13T00:10:35Z"
+  - sample_id: active_rate_target_high_01
+    start_utc: "2026-07-13T00:10:41Z"
+    end_utc: "2026-07-13T00:14:13Z"
+  - sample_id: active_rate_target_high_02
+    start_utc: "2026-07-13T00:14:18Z"
+    end_utc: "2026-07-13T00:17:49Z"
+  - sample_id: active_rate_target_high_03
+    start_utc: "2026-07-13T00:17:55Z"
+    end_utc: "2026-07-13T00:21:26Z"
+  - sample_id: active_rate_target_high_04
+    start_utc: "2026-07-13T00:21:34Z"
+    end_utc: "2026-07-13T00:25:13Z"
+  - sample_id: active_rate_target_high_05
+    start_utc: "2026-07-13T00:25:19Z"
+    end_utc: "2026-07-13T00:28:54Z"
+  - sample_id: active_rate_target_high_06
+    start_utc: "2026-07-13T00:29:00Z"
+    end_utc: "2026-07-13T00:32:36Z"
+  - sample_id: active_rate_target_high_07
+    start_utc: "2026-07-13T00:32:42Z"
+    end_utc: "2026-07-13T00:36:09Z"
+  - sample_id: valley_depth_target_low_00
+    start_utc: "2026-07-13T00:36:15Z"
+    end_utc: "2026-07-13T00:39:48Z"
+  - sample_id: valley_depth_target_low_01
+    start_utc: "2026-07-13T00:39:54Z"
+    end_utc: "2026-07-13T00:43:26Z"
+  - sample_id: valley_depth_target_low_02
+    start_utc: "2026-07-13T00:43:34Z"
+    end_utc: "2026-07-13T00:47:11Z"
+  - sample_id: valley_depth_target_low_03
+    start_utc: "2026-07-13T00:47:17Z"
+    end_utc: "2026-07-13T00:50:52Z"
+  - sample_id: valley_depth_target_low_04
+    start_utc: "2026-07-13T00:50:59Z"
+    end_utc: "2026-07-13T00:54:32Z"
+  - sample_id: valley_depth_target_low_05
+    start_utc: "2026-07-13T00:54:38Z"
+    end_utc: "2026-07-13T00:58:14Z"
+  - sample_id: valley_depth_target_low_06
+    start_utc: "2026-07-13T00:58:21Z"
+    end_utc: "2026-07-13T01:01:56Z"
+  - sample_id: valley_depth_target_low_07
+    start_utc: "2026-07-13T01:02:03Z"
+    end_utc: "2026-07-13T01:05:38Z"
+  - sample_id: valley_depth_target_high_00
+    start_utc: "2026-07-13T01:05:44Z"
+    end_utc: "2026-07-13T01:09:23Z"
+  - sample_id: valley_depth_target_high_01
+    start_utc: "2026-07-13T01:09:30Z"
+    end_utc: "2026-07-13T01:13:00Z"
+  - sample_id: valley_depth_target_high_02
+    start_utc: "2026-07-13T01:13:08Z"
+    end_utc: "2026-07-13T01:16:42Z"
+  - sample_id: valley_depth_target_high_03
+    start_utc: "2026-07-13T01:16:48Z"
+    end_utc: "2026-07-13T01:20:21Z"
+  - sample_id: valley_depth_target_high_04
+    start_utc: "2026-07-13T01:20:30Z"
+    end_utc: "2026-07-13T01:24:05Z"
+  - sample_id: valley_depth_target_high_05
+    start_utc: "2026-07-13T01:24:11Z"
+    end_utc: "2026-07-13T01:27:51Z"
+  - sample_id: valley_depth_target_high_06
+    start_utc: "2026-07-13T01:27:57Z"
+    end_utc: "2026-07-13T01:31:35Z"
+  - sample_id: valley_depth_target_high_07
+    start_utc: "2026-07-13T01:31:42Z"
+    end_utc: "2026-07-13T01:35:22Z"
+  - sample_id: time_signature_low_00
+    start_utc: "2026-07-13T01:35:28Z"
+    end_utc: "2026-07-13T01:39:08Z"
+  - sample_id: time_signature_low_01
+    start_utc: "2026-07-13T01:39:15Z"
+    end_utc: "2026-07-13T01:42:49Z"
+  - sample_id: time_signature_low_02
+    start_utc: "2026-07-13T01:42:56Z"
+    end_utc: "2026-07-13T01:46:35Z"
+  - sample_id: time_signature_low_03
+    start_utc: "2026-07-13T01:46:41Z"
+    end_utc: "2026-07-13T01:50:26Z"
+  - sample_id: time_signature_low_04
+    start_utc: "2026-07-13T01:50:32Z"
+    end_utc: "2026-07-13T01:54:12Z"
+  - sample_id: time_signature_low_05
+    start_utc: "2026-07-13T01:54:18Z"
+    end_utc: "2026-07-13T01:57:55Z"
+  - sample_id: time_signature_low_06
+    start_utc: "2026-07-13T01:58:02Z"
+    end_utc: "2026-07-13T02:01:37Z"
+  - sample_id: time_signature_low_07
+    start_utc: "2026-07-13T02:01:45Z"
+    end_utc: "2026-07-13T02:05:16Z"
+  - sample_id: time_signature_high_00
+    start_utc: "2026-07-13T02:05:23Z"
+    end_utc: "2026-07-13T02:09:00Z"
+  - sample_id: time_signature_high_01
+    start_utc: "2026-07-13T02:09:07Z"
+    end_utc: "2026-07-13T02:12:40Z"
+  - sample_id: time_signature_high_02
+    start_utc: "2026-07-13T02:12:46Z"
+    end_utc: "2026-07-13T02:16:15Z"
+  - sample_id: time_signature_high_03
+    start_utc: "2026-07-13T02:16:23Z"
+    end_utc: "2026-07-13T02:19:52Z"
+  - sample_id: time_signature_high_04
+    start_utc: "2026-07-13T02:19:58Z"
+    end_utc: "2026-07-13T02:23:30Z"
+  - sample_id: time_signature_high_05
+    start_utc: "2026-07-13T02:23:36Z"
+    end_utc: "2026-07-13T02:27:07Z"
+  - sample_id: time_signature_high_06
+    start_utc: "2026-07-13T02:27:14Z"
+    end_utc: "2026-07-13T02:30:47Z"
+  - sample_id: time_signature_high_07
+    start_utc: "2026-07-13T02:30:55Z"
+    end_utc: "2026-07-13T02:34:35Z"

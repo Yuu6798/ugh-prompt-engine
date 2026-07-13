@@ -1,0 +1,128 @@
+{
+  "schema_version": "1.0",
+  "fixture_id": "musicgen_m2_knobs",
+  "repetitions": 8,
+  "results": [
+    {
+      "knob": "active_rate_target",
+      "sensor": "active_rate",
+      "expected_sign": 1,
+      "low_level": "0.30",
+      "high_level": "0.92",
+      "repetitions": 8,
+      "low_values": [
+        1.0,
+        0.791,
+        0.9688,
+        0.2074,
+        0.6216,
+        0.9985,
+        1.0,
+        0.8769
+      ],
+      "high_values": [
+        1.0,
+        1.0,
+        1.0,
+        0.8404,
+        0.4802,
+        0.9932,
+        1.0,
+        0.9255
+      ],
+      "low_mean": 0.808025,
+      "high_mean": 0.904913,
+      "grip": 0.414395,
+      "classification": "loose"
+    },
+    {
+      "knob": "valley_depth_target",
+      "sensor": "valley_depth",
+      "expected_sign": 1,
+      "low_level": "0.15",
+      "high_level": "0.70",
+      "repetitions": 8,
+      "low_values": [
+        0.0138,
+        0.094,
+        0.2057,
+        0.0548,
+        0.0306,
+        0.3064,
+        0.0556,
+        0.0458
+      ],
+      "high_values": [
+        0.2011,
+        0.078,
+        0.1406,
+        0.0182,
+        0.0307,
+        0.2084,
+        0.0689,
+        0.3716
+      ],
+      "low_mean": 0.100837,
+      "high_mean": 0.139687,
+      "grip": 0.3518,
+      "classification": "loose"
+    },
+    {
+      "knob": "time_signature",
+      "sensor": "time_signature",
+      "kind": "categorical",
+      "low_level": "4/4",
+      "high_level": "3/4",
+      "repetitions": 8,
+      "low_observed": [
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4"
+      ],
+      "high_observed": [
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4",
+        "4/4",
+        "3/4",
+        "4/4"
+      ],
+      "low_values": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "high_values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ],
+      "low_mean": 1.0,
+      "high_mean": 0.125,
+      "grip": 0.5625,
+      "classification": "loose"
+    }
+  ],
+  "summary": {
+    "tight": 0,
+    "loose": 3,
+    "dead": 0
+  }
+}

@@ -47,7 +47,12 @@ def test_load_device_profile_suno_schema() -> None:
 
 
 def test_load_device_profile_musicgen_schema() -> None:
-    """K2-seg（2026-07-05）: 5 欄追記後の musicgen device profile スキーマ固定。"""
+    """K2-seg（2026-07-05）: 5 欄追記後の musicgen device profile スキーマ固定。
+
+    バッチ M2（2026-07-13）: active_rate_target / valley_depth_target / time_signature
+    の grip 値・grip_class を再計測で更新（valley_depth_target は dead→loose に
+    supersede、tests/test_grip.py の M2 fixture snapshot テスト参照）。
+    """
     profile = load_device_profile("musicgen")
 
     assert profile is not None
@@ -63,7 +68,9 @@ def test_load_device_profile_musicgen_schema() -> None:
         "time_signature",
     }
     assert profile.control_defaults["active_rate_target"].grip_class == "loose"
-    assert profile.control_defaults["valley_depth_target"].grip_class == "dead"
+    assert profile.control_defaults["active_rate_target"].grip == pytest.approx(0.414395)
+    assert profile.control_defaults["valley_depth_target"].grip_class == "loose"
+    assert profile.control_defaults["valley_depth_target"].grip == pytest.approx(0.3518)
     assert profile.control_defaults["semantic.avoid"].grip_class == "dead"
     # semantic_avoid の d=+1.10 は符号逆（Avoid が意図と逆方向に効く）のため grip キーには
     # 入れない honesty ルール（quirk 側にのみ記録）。

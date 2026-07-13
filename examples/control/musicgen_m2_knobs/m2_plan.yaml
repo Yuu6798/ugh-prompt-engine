@@ -1,0 +1,165 @@
+# バッチ M2: MusicGen 3 ノブ（active_rate_target / valley_depth_target /
+# time_signature）grip 実測 — 生成計画（事前登録、2026-07-12）。
+#
+# 本ファイルは scripts/collect_musicgen_takes.py generate が読む機械可読 plan
+# （GenerationPlan スキーマ・未知キー fail-fast）であるため、事前登録プロトコル
+# はすべて YAML コメントとして encode する（コミット = 事前登録。生成前に本
+# ファイルをコミットしてからバッチを実行する。**本コミット時点で生成は一切
+# 開始しない** — Phase 1（本事前登録）と Phase 2（生成）を分離する）。
+#
+# ── 1. 目的 ─────────────────────────────────────────────────────────────
+# M2 は docs/musicgen_backend.md §7.6 の K2-seg（12 秒・手組みプロンプト計測、
+# examples/control/k2_musicgen_segments/plan.yaml）を、M1 規律（30.6 秒・
+# compose 実出力 verbatim・canonical 事前登録、examples/control/musicgen_structure/
+# m1_plan.yaml）で再計測し、§7.6 の既知交絡 2 件を解消する:
+#   (a) valley_depth の床 0.078（§7.6 実測）が「12 秒定常ビート素材の物理制約」か
+#       「ツマミ自体が死んでいる」かを、素材長を 30.6 秒へ伸ばして分離する
+#       （valley_depth_target のセル値は §7.6 と同値のまま据え置き、変数を
+#       素材長のみにする）。
+#   (b) active_rate の天井効果（§7.6: low セル "0.55" で観測 mean 0.967・headroom
+#       0.033 しか残らず grip を過小評価しうる）を、low セルの処方を "0.30" へ
+#       拡大して headroom を確保することで解消する。
+# 結果は config/device_profiles/musicgen.yaml の control_defaults を supersede
+# する（§7.6 由来の旧エントリを本バッチの実測値で更新する。旧 12s fixture
+# （examples/control/k2_musicgen_segments/fixture.json 等）は履歴として残置し
+# 削除しない）。
+#
+# ── セル定義 ─────────────────────────────────────────────────────────────
+# - active_rate_target: low "0.30"（§7.6 の "0.55" から拡大 — 天井効果の headroom
+#   確保）/ high "0.92"（§7.6 と同値のまま据え置き）。score:
+#   examples/control/musicgen_m2_knobs/m2_score_active_rate_target_{low,high}.yaml
+# - valley_depth_target: low "0.15" / high "0.70"（§7.6 と同値のまま据え置き —
+#   変えないことで 12s→30.6s の素材効果のみを分離する）。score:
+#   m2_score_valley_depth_target_{low,high}.yaml
+# - time_signature: low "4/4" / high "3/4"（§7.6 と同値のまま据え置き。categorical・
+#   match_rate 経路）。score: m2_score_time_signature_{low,high}.yaml
+# 各セルの score は他 2 ノブを M1 baseline 値（active_rate_target "0.8" /
+# valley_depth_target "0.3" / time_signature "4/4"）に固定し、対象ノブのみを
+# 変更する（structure は全 6 score 共通で空）。prompt_low/high は各 score の
+# `svprpe compose --format json` 実出力 verbatim（手組み禁止、K2-seg 前例踏襲）。
+#
+# ── duration_seconds: 30.6 の理由（M1 由来・不変）───────────────────────
+# MusicGen の 4-codebook delay pattern により、出力フレーム数は常に
+# max_new_tokens - (num_codebooks - 1) = max_new_tokens - 3 となる（m1_plan.yaml
+# Phase 0 実測: 1500 tokens → 29.94s、1510 tokens → 30.14s、理論と一致）。
+# duration_seconds=30.0 ちょうどでは実出力 29.94s となり計器の事前登録カットオフ
+# min_duration_sec=30.0 を割る。30.6 指定（max_new_tokens=1530 → 実出力
+# ≈30.54s）でゲートを確実に通すマージンを取る（M1 と同一の根拠・同一の値）。
+#
+# ── 6. seed（決定論・runbook の sample_seed 式、既存式・フィルタ非依存）────
+# seed = 1000 + knob_index*100 + level_index*50 + repeat:
+#   knob_index 0 = active_rate_target: low  1000-1007 / high 1050-1057
+#   knob_index 1 = valley_depth_target: low 1100-1107 / high 1150-1157
+#   knob_index 2 = time_signature:      low 1200-1207 / high 1250-1257
+# `--only-knob`（本バッチで新設）/ `--only-level` / `--only-repeat` のどの
+# 組み合わせでチャンク分割実行しても、seed は絶対インデックス由来のため一括
+# 実行と同一になる（tests/test_musicgen_runbook.py で pin 済み）。
+#
+# ── 2. canonical 免除の事前登録（M1 文言踏襲）─────────────────────────────
+# AGENTS.md §8 の canonical 4 条件（PR #172 で encode 中の規律。同 PR は
+# claude/daily-task-planning-y17bvx ブランチで未マージのため main 未到達 —
+# 本コメントでは「PR #172 で encode 中の規律」として参照する）のうち ABBA
+# カウンターバランスと均衡ゲート B は、人手 UI 生成の時間ドリフト対策である。
+# 本バッチは決定論 seed による fresh-process 逐次スクリプト生成（1 コール =
+# 1 クリップ・毎回新プロセス）であり、サンプル間に状態を持ち越す drift 機構が
+# 存在しない（モデルは stateless・seed 固定で再現可能）ため、ABBA/B ゲートは
+# 非適用と事前登録する（M1 と同一論理、m1_plan.yaml / m1_expected_grip.json
+# canonical_conditions 参照）。
+# 充足する条件（適用可能な 2 条件）:
+#   - 補充ゼロ: 除外テイクを補充で埋めない（excluded として記録するのみ）。
+#   - 秒単位タイムスタンプ証跡: 全 48 クリップの UTC 開始/終了を m2_generation_
+#     timestamps.yaml に秒単位で記録する（date -u 実測・推定値なし）。
+#   - 生成後の fresh-process 決定論スポット検証: 時間的に最遠の 2 クリップ
+#     （knob0/low/repeat0 = active_rate_target_low_00、knob2/high/repeat7 =
+#     time_signature_high_07）を再生成し、sha256 byte 一致を確認する
+#     （M1 の determinism_spot_check と同型 — 出力が壁時計順序と無関係である
+#     ことの本バッチ内実測証拠）。
+#
+# ── 3. 判定規約 ───────────────────────────────────────────────────────────
+# active_rate_target / valley_depth_target: `scripts/measure_grip.py` の
+# `grip_effect_size`（Cohen's d）+ `classify_grip`（tight |d|>=0.8 / loose
+# |d|>=0.2、expected_sign 不一致かつ |d|>=0.2 は dead）。
+# time_signature: per-cell match_rate + `classify_match_grip`（tight >=0.7 /
+# loose >=0.3）に加え **ヌルゲート**: high セル match_rate <= low セル
+# match_rate なら分類によらず dead へ格下げる（K3-1b 由来の known-dead ヌル
+# 天井と同型・M1 の structure ノブと同一規約）。
+# **honesty 注記**: 既存 RPE 抽出器（`extract_physical_from_file` の
+# time_signature 経路）は語彙 {3/4, 4/4, 6/8} の 3 値のみを持ち、4/4
+# フォールバック構造がある（§7.6: 3/4 指定 0/8 不達・全観測 4/4）。したがって
+# high セル（3/4 処方）が不達だった場合、その原因が「生成器が 3/4 を実現
+# しなかった」のか「抽出器が 3/4 を 4/4 として誤検出した」のかは本バッチでは
+# 分離できない。§7.6 の combined match_rate 0.5 誤読前例（4/4 セルの一致率が
+# 押し上げただけで loose 表記に見えた事故）を繰り返さないため、per-cell の
+# match_rate（low セル値・high セル値）を必ず fixture に個別記録し、combined
+# 値だけで判定しない。
+#
+# ── 4. 除外規則（M1 継承）─────────────────────────────────────────────────
+# 抽出失敗（RPE 抽出が例外を投げる）または実測 duration < 30.0s のテイクは
+# excluded として記録する（補充はしない — 上記canonical免除の「補充ゼロ」
+# 条件に従う）。
+#
+# ── 5. 実行様式 ───────────────────────────────────────────────────────────
+# `scripts/collect_musicgen_takes.py generate --only-knob <name> --only-level
+# <low|high> --only-repeat <N> --append` の 1 コマンド = 1 クリップ逐次同期
+# 実行（1 クリップ ≈ 5.2 分・Bash 10 分上限内に収まる）。3 ノブ × 2 セル ×
+# repetitions 8 = 48 クリップ。各クリップの UTC 開始/終了を秒単位で
+# m2_generation_timestamps.yaml に記録する（provenance は推定で埋めない —
+# AGENTS.md §8 の規律。本バッチでは PR #172 で encode 中）。
+#
+# ── 計測（生成後に実行・計器は凍結のまま、Phase 2 以降）───────────────────
+# python3 scripts/collect_musicgen_takes.py extract \
+#     --manifest <takes_manifest.json> --audio-dir <output_dir> \
+#     --fixture-out examples/control/musicgen_m2_knobs/m2_results_fixture.json
+# python3 scripts/measure_grip.py --fixture m2_results_fixture.json
+# （音声 WAV はコミットせず manifest の audio_sha256 で provenance を pin する。）
+schema_version: "1.0"
+fixture_id: musicgen_m2_knobs
+generator: musicgen
+model_id: facebook/musicgen-small
+# G4 目視確認済み revision に pin（examples/control/musicgen_structure/m1_plan.yaml
+# / examples/control/k2_musicgen/plan.yaml と同一の不変コミットハッシュ）。
+model_revision: 4c8334b02c6ec4e8664a91979669a501ec497792
+duration_seconds: 30.6
+guidance_scale: 3.0
+repetitions: 8
+knobs:
+  - name: active_rate_target
+    sensor: active_rate
+    low_level: "0.30"
+    high_level: "0.92"
+    expected_sign: 1
+    prompt_low: >-
+      Brightness balanced. synthwave track. A minor. Wide stereo.
+      Instrumental, no vocals. Calm atmosphere. 120 BPM. 4/4 time.
+      Active rate 0.30. Valley depth 0.3.
+    prompt_high: >-
+      Brightness balanced. synthwave track. A minor. Wide stereo.
+      Instrumental, no vocals. Calm atmosphere. 120 BPM. 4/4 time.
+      Active rate 0.92. Valley depth 0.3.
+  - name: valley_depth_target
+    sensor: valley_depth
+    low_level: "0.15"
+    high_level: "0.70"
+    expected_sign: 1
+    prompt_low: >-
+      Brightness balanced. synthwave track. A minor. Wide stereo.
+      Instrumental, no vocals. Calm atmosphere. 120 BPM. 4/4 time.
+      Active rate 0.8. Valley depth 0.15.
+    prompt_high: >-
+      Brightness balanced. synthwave track. A minor. Wide stereo.
+      Instrumental, no vocals. Calm atmosphere. 120 BPM. 4/4 time.
+      Active rate 0.8. Valley depth 0.70.
+  - name: time_signature
+    sensor: time_signature
+    kind: categorical
+    low_level: "4/4"
+    high_level: "3/4"
+    expected_sign: 0
+    prompt_low: >-
+      Brightness balanced. synthwave track. A minor. Wide stereo.
+      Instrumental, no vocals. Calm atmosphere. 120 BPM. 4/4 time.
+      Active rate 0.8. Valley depth 0.3.
+    prompt_high: >-
+      Brightness balanced. synthwave track. A minor. Wide stereo.
+      Instrumental, no vocals. Calm atmosphere. 120 BPM. 3/4 time.
+      Active rate 0.8. Valley depth 0.3.

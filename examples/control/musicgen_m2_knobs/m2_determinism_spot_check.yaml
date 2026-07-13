@@ -1,0 +1,31 @@
+schema_version: "1.0"
+fixture_id: musicgen_m2_knobs
+date: "2026-07-13"
+purpose: >-
+  canonical 免除根拠（出力の壁時計順序非依存）の M2 内実測証拠（m2_plan.yaml
+  事前登録どおり）。時間的に最遠の 2 クリップ（バッチ最初/最後の生成物）を、
+  コミット済み m2_plan.yaml・同一 seed 式・pin 済み revision で再生成し、
+  m2_takes_manifest.json の audio_sha256 と照合した。
+method: >-
+  collect_musicgen_takes.py generate --only-knob/--only-level/--only-repeat
+  （--append なし・一時出力先）で単クリップ再生成 → sha256 比較
+samples:
+  - sample_id: active_rate_target_low_00
+    role: "バッチ最初の生成物（seed 1000）"
+    pinned_sha256: "dbf69f877b1cc978f40dea7019b8a176b021b1631d8734b2b1e3b8fc154974fa"
+    regenerated_sha256: "dbf69f877b1cc978f40dea7019b8a176b021b1631d8734b2b1e3b8fc154974fa"
+    match: true
+    original_generation_start_utc: "2026-07-12T23:38:02Z"
+    original_generation_end_utc: "2026-07-12T23:41:31Z"
+    regenerated_at_utc: "2026-07-13T02:39:10Z 開始 / 02:42:35Z 完了"
+  - sample_id: time_signature_high_07
+    role: "バッチ最後の生成物（seed 1257）"
+    pinned_sha256: "5ee131b20a516e861af4f13ed496f6bdfc17b368f96fbf08e381f7d97a1d3871"
+    regenerated_sha256: "5ee131b20a516e861af4f13ed496f6bdfc17b368f96fbf08e381f7d97a1d3871"
+    match: true
+    original_generation_start_utc: "2026-07-13T02:30:55Z"
+    original_generation_end_utc: "2026-07-13T02:34:35Z"
+    regenerated_at_utc: "2026-07-13T02:42:39Z 開始 / 02:46:09Z 完了"
+result: "2/2 byte 一致（sha256 完全一致）。"
+note: >-
+  本ファイルは sha256 照合の実測記録のみであり、verdict・canonical 主張は含まない。

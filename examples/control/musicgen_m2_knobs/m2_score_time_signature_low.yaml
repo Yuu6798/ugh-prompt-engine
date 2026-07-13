@@ -1,0 +1,46 @@
+# バッチ M2（MusicGen 3 ノブ grip 実測）time_signature の low セル score。
+# M1 baseline（examples/control/musicgen_structure/m1_score_low.yaml）を土台に、
+# 対象ノブ time_signature のみを変更し、他 2 ノブ（active_rate_target /
+# valley_depth_target）は M1 baseline 値に固定・structure は全ファイル共通で []。
+# time_signature low "4/4" は M1 baseline / K2-seg 計測（examples/control/
+# k2_musicgen_segments/plan.yaml）と同値のまま据え置く（categorical ノブの
+# 基準面。high "3/4" との対比は #171 P2 まで 12s 計測のみ・§7.6 参照）。
+# `svprpe compose m2_score_time_signature_low.yaml --format json` の text が
+# m2_plan.yaml の knobs[2].prompt_low verbatim（2026-07-12 実 compose 出力）。
+meta:
+  title: "M2 MusicGen time_signature (low)"
+  version: "0.1"
+
+semantic:
+  core: "calm"
+  grv:
+    primary: "synthwave"
+    secondary: ""
+  delta_e:
+    overall: "steady"
+  avoid: []
+  lyrics_presence: "absent"
+
+physical:
+  bpm: 120
+  key: "A minor"
+  time_signature: "4/4"
+  active_rate_target: "0.8"
+  valley_depth_target: "0.3"
+  brightness: "balanced"
+  stereo_width: "wide"
+
+structure: []
+
+rendering:
+  target_backend: "musicgen"
+  prompt_max_chars: 300
+  priority:
+    - semantic.core
+    - semantic.grv
+    - physical.bpm
+    - physical.key
+    - physical.time_signature
+    - structure
+    - semantic.avoid
+    - physical.optional
