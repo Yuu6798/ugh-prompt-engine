@@ -13,6 +13,13 @@ from svp_rpe.arrange.bundle import (
     DIFF_FILENAME,
     compile_arrangement,
 )
+from svp_rpe.arrange.contract import (
+    ContractAnchor,
+    DOMAIN_ALLOWED_TRANSFORMS,
+    PreservationContract,
+    PreservationContractError,
+    build_preservation_contract,
+)
 from svp_rpe.arrange.identity import (
     IdentityAnchor,
     IdentityManifest,
@@ -21,6 +28,8 @@ from svp_rpe.arrange.identity import (
 )
 from svp_rpe.arrange.loader import load_arrangement_spec
 from svp_rpe.arrange.models import (
+    AllowedTransformation,
+    AnchorPreservation,
     ArrangementChange,
     ArrangementMeta,
     ArrangementResolution,
@@ -44,6 +53,8 @@ from svp_rpe.arrange.resolver import (
 )
 
 __all__ = [
+    "AllowedTransformation",
+    "AnchorPreservation",
     "ArrangementChange",
     "ArrangementConflictError",
     "ArrangementError",
@@ -55,8 +66,10 @@ __all__ = [
     "BUNDLE_FILENAME",
     "CANONICAL_PATHS",
     "CompiledArrangement",
+    "ContractAnchor",
     "DERIVED_SCORE_FILENAME",
     "DIFF_FILENAME",
+    "DOMAIN_ALLOWED_TRANSFORMS",
     "DeltaEOverride",
     "EventOverride",
     "GrvOverride",
@@ -64,10 +77,13 @@ __all__ = [
     "IdentityManifest",
     "IdentityManifestError",
     "PhysicalOverride",
+    "PreservationContract",
+    "PreservationContractError",
     "PreservationMode",
     "PreservationSpec",
     "RenderingOverride",
     "SemanticOverride",
+    "build_preservation_contract",
     "compile_arrangement",
     "load_arrangement_spec",
     "load_identity_manifest",
