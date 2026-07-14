@@ -13,6 +13,12 @@ from svp_rpe.arrange.bundle import (
     DIFF_FILENAME,
     compile_arrangement,
 )
+from svp_rpe.arrange.identity import (
+    IdentityAnchor,
+    IdentityManifest,
+    IdentityManifestError,
+    load_identity_manifest,
+)
 from svp_rpe.arrange.loader import load_arrangement_spec
 from svp_rpe.arrange.models import (
     ArrangementChange,
@@ -54,6 +60,9 @@ __all__ = [
     "DeltaEOverride",
     "EventOverride",
     "GrvOverride",
+    "IdentityAnchor",
+    "IdentityManifest",
+    "IdentityManifestError",
     "PhysicalOverride",
     "PreservationMode",
     "PreservationSpec",
@@ -61,5 +70,6 @@ __all__ = [
     "SemanticOverride",
     "compile_arrangement",
     "load_arrangement_spec",
+    "load_identity_manifest",
     "resolve_arrangement",
 ]
