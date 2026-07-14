@@ -1,0 +1,34 @@
+# AR1-3: "Midnight Signal" を Jazz 編曲へ寄せる ArrangementSpec。
+# 同一 Base Score (composition_score.yaml) から EDM 版と対比するための一方。
+meta:
+  id: "midnight-signal-jazz-v1"
+  version: "0.1"
+  description: >-
+    Midnight Signal を jazz / lofi jazz へ編曲する variant。
+    ルーズなスウィングと会話的なダイナミクスへ delta_e を寄せ、bpm を 96 へ落とし、
+    stereo_width を narrow に絞り、valley_depth_target を深めのレンジへ広げる。
+
+target:
+  semantic:
+    grv:
+      primary: "jazz"
+      secondary: "lofi_jazz"
+    delta_e:
+      overall: "loose swing, conversational dynamics, late-night lounge"
+  physical:
+    bpm: 96
+    stereo_width: "narrow"
+    valley_depth_target: "0.30-0.45"
+
+# identity anchor: 「同じ曲のまま編曲する」契約を preservation-only で明示する。
+# semantic.core と physical.key は target で override せず、hard で保持を宣言する。
+preservation:
+  score_fields:
+    semantic.core: hard
+    physical.key: hard
+    semantic.grv.primary: free
+    semantic.grv.secondary: free
+    semantic.delta_e.overall: elastic
+    physical.bpm: free
+    physical.stereo_width: free
+    physical.valley_depth_target: elastic
