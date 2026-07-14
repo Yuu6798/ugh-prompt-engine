@@ -1,0 +1,54 @@
+{
+  "schema_version": "arrangement-bundle/0.1",
+  "arrangement_id": "midnight-signal-jazz-v1",
+  "source_score": {
+    "path": "examples/arrangement/midnight_signal/composition_score.yaml",
+    "sha256": "37854f54b42a1c4d424f357148d3d10f347e238ec72a42d1248bea2203f97d0b"
+  },
+  "arrangement_spec": {
+    "path": "examples/arrangement/midnight_signal/jazz.arrangement.yaml",
+    "sha256": "1b8c14fc03c1feff9c8ff68d2a0c7e64e7ee39916b7ed8375cebd83b23bd2ff5"
+  },
+  "changes": [
+    {
+      "path": "semantic.grv.primary",
+      "before": "deep_house",
+      "after": "jazz",
+      "preservation_mode": "free"
+    },
+    {
+      "path": "semantic.grv.secondary",
+      "before": "ambient",
+      "after": "lofi_jazz",
+      "preservation_mode": "free"
+    },
+    {
+      "path": "semantic.delta_e.overall",
+      "before": "gradual build from solitude to release",
+      "after": "loose swing, conversational dynamics, late-night lounge",
+      "preservation_mode": "elastic"
+    },
+    {
+      "path": "physical.bpm",
+      "before": 128,
+      "after": 96,
+      "preservation_mode": "free"
+    },
+    {
+      "path": "physical.valley_depth_target",
+      "before": "0.15-0.25",
+      "after": "0.30-0.45",
+      "preservation_mode": "elastic"
+    },
+    {
+      "path": "physical.stereo_width",
+      "before": "wide",
+      "after": "narrow",
+      "preservation_mode": "free"
+    }
+  ],
+  "outputs": {
+    "derived_score": "derived_score.yaml",
+    "arrangement_diff": "arrangement_diff.json"
+  }
+}

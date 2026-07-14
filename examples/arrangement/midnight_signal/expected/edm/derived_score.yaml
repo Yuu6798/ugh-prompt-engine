@@ -1,0 +1,67 @@
+meta:
+  title: Midnight Signal
+  version: '0.1'
+semantic:
+  core: introspective night drive
+  grv:
+    primary: melodic_edm
+    secondary: progressive_house
+  delta_e:
+    overall: build into a vocal hook and instrumental drop
+  avoid:
+  - bright festival EDM
+  - comic vocal delivery
+physical:
+  bpm: 132
+  key: C minor
+  time_signature: 4/4
+  active_rate_target: 0.90-0.93
+  valley_depth_target: 0.15-0.25
+  brightness: bright
+  stereo_width: wide
+structure:
+- section: intro
+  bars: 8
+  role: establish loneliness
+  physical: low density, sub bass only
+- section: verse
+  bars: 16
+  role: restrained movement
+  physical: sparse drums, short phrases, clear rests
+- section: chorus
+  bars: 16
+  role: emotional release
+  physical: full energy, wide stereo, focused layers
+- section: bridge
+  bars: 8
+  role: near silence and reflection
+  physical: no kick, no bass, minimal texture
+rendering:
+  target_backend: external
+  prompt_max_chars: 650
+  priority:
+  - semantic.core
+  - semantic.grv
+  - physical.bpm
+  - physical.key
+  - physical.time_signature
+  - structure
+  - semantic.avoid
+  - physical.optional
+control_profile:
+  suno:
+    bpm:
+      grip_class: tight
+      grip: 1.61
+      sensor: bpm
+      evidence: examples/control/k2/expected_grip.json
+    brightness:
+      grip_class: tight
+      grip: 0.86
+      sensor: spectral_centroid
+      evidence: examples/control/k2/expected_grip.json
+    lyrics_presence:
+      grip_class: tight
+      sensor: clap_vocal_contrast
+      evidence: examples/learned/clap/lyrics_vocal_contrast_v2_fixture.json / docs/control_profile.md
+        DD-4 (2026-07-08)

@@ -1,0 +1,48 @@
+{
+  "schema_version": "arrangement-bundle/0.1",
+  "arrangement_id": "midnight-signal-edm-v1",
+  "source_score": {
+    "path": "examples/arrangement/midnight_signal/composition_score.yaml",
+    "sha256": "37854f54b42a1c4d424f357148d3d10f347e238ec72a42d1248bea2203f97d0b"
+  },
+  "arrangement_spec": {
+    "path": "examples/arrangement/midnight_signal/edm.arrangement.yaml",
+    "sha256": "e61f31a4f99ae98c2420c014bd3a2af0a8a7c5fa6be52c25577d67c8f9b00329"
+  },
+  "changes": [
+    {
+      "path": "semantic.grv.primary",
+      "before": "deep_house",
+      "after": "melodic_edm",
+      "preservation_mode": "free"
+    },
+    {
+      "path": "semantic.grv.secondary",
+      "before": "ambient",
+      "after": "progressive_house",
+      "preservation_mode": "free"
+    },
+    {
+      "path": "semantic.delta_e.overall",
+      "before": "gradual build from solitude to release",
+      "after": "build into a vocal hook and instrumental drop",
+      "preservation_mode": "elastic"
+    },
+    {
+      "path": "physical.bpm",
+      "before": 128,
+      "after": 132,
+      "preservation_mode": "free"
+    },
+    {
+      "path": "physical.brightness",
+      "before": "dark",
+      "after": "bright",
+      "preservation_mode": "free"
+    }
+  ],
+  "outputs": {
+    "derived_score": "derived_score.yaml",
+    "arrangement_diff": "arrangement_diff.json"
+  }
+}
