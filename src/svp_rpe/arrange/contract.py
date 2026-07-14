@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from svp_rpe.arrange.identity import AnchorDomain, IdentityManifest
 from svp_rpe.arrange.models import AllowedTransformation, ArrangementSpec, PreservationMode
@@ -62,7 +62,14 @@ class ContractInputs(ContractModel):
 
 
 class ContractAnchor(ContractModel):
-    """1 anchor 分の正規化済み保持方針（policy + manifest 記載の artifact hash）。"""
+    """1 anchor 分の正規化済み保持方針（policy + manifest 記載の artifact hash）。
+
+    build 時の不変条件（mode/allow 整合・domain 語彙）を schema level でも強制する:
+    JSON から `model_validate` で読み戻す経路では `build_preservation_contract` の
+    cross-validation を通らないため、この validator が「検証済み契約」の safety net
+    となる（build 側の cross-validation は文脈の濃い `PreservationContractError` を
+    出す役割で残しており、build 経路での二重チェックは harmless）。
+    """
 
     anchor_id: str
     domain: AnchorDomain
@@ -71,6 +78,28 @@ class ContractAnchor(ContractModel):
     tolerance_profile: Optional[str] = None
     artifact: str
     artifact_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @model_validator(mode="after")
+    def _validate_invariants(self) -> "ContractAnchor":
+        if self.mode in ("hard", "free") and self.allow:
+            raise ValueError(
+                f"ContractAnchor: mode={self.mode!r} must have an empty 'allow' list "
+                f"(hard/free permit no transformations), got {self.allow!r}"
+            )
+        if self.mode == "elastic" and not self.allow:
+            raise ValueError(
+                "ContractAnchor: mode='elastic' requires at least one entry in "
+                "'allow' (an empty allow list would make the contract vacuous)"
+            )
+        allowed_vocab = DOMAIN_ALLOWED_TRANSFORMS[self.domain]
+        disallowed = sorted(set(self.allow) - allowed_vocab)
+        if disallowed:
+            raise ValueError(
+                f"ContractAnchor '{self.anchor_id}' (domain={self.domain!r}): "
+                f"transformation(s) outside the domain's allowed vocabulary "
+                f"{sorted(allowed_vocab)}: {disallowed}"
+            )
+        return self
 
 
 class PreservationContract(ContractModel):

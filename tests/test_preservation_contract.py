@@ -314,6 +314,71 @@ def test_build_preservation_contract_is_deterministic() -> None:
     assert first.model_dump(mode="json") == second.model_dump(mode="json")
 
 
+# --- schema: contract read-back invariants (safety net) -------------------------
+
+
+def _contract_dict(anchor: dict) -> dict:
+    return {
+        "schema_version": "preservation-contract/0.1",
+        "work_id": "work-1",
+        "inputs": {
+            "identity_manifest": {"sha256": MANIFEST_SHA256},
+            "arrangement_spec": {"sha256": SPEC_SHA256},
+        },
+        "anchors": [anchor],
+    }
+
+
+def _contract_anchor_dict(**overrides: object) -> dict:
+    anchor = {
+        "anchor_id": "anchor-x",
+        "domain": "melody",
+        "mode": "hard",
+        "allow": [],
+        "artifact": "anchor-x.txt",
+        "artifact_sha256": VALID_SHA256,
+    }
+    anchor.update(overrides)
+    return anchor
+
+
+def test_readback_hard_with_nonempty_allow_raises_validation_error() -> None:
+    data = _contract_dict(_contract_anchor_dict(mode="hard", allow=["timing_warp"]))
+
+    with pytest.raises(ValidationError):
+        PreservationContract.model_validate(data)
+
+
+def test_readback_elastic_with_empty_allow_raises_validation_error() -> None:
+    data = _contract_dict(_contract_anchor_dict(mode="elastic", allow=[]))
+
+    with pytest.raises(ValidationError):
+        PreservationContract.model_validate(data)
+
+
+def test_readback_domain_vocabulary_violation_raises_validation_error() -> None:
+    data = _contract_dict(
+        _contract_anchor_dict(domain="melody", mode="elastic", allow=["chord_extensions"])
+    )
+
+    with pytest.raises(ValidationError):
+        PreservationContract.model_validate(data)
+
+
+def test_built_contract_roundtrips_through_model_validate() -> None:
+    manifest = _planning_manifest()
+    spec = _spec(_planning_policies())
+
+    contract = build_preservation_contract(
+        manifest, spec, manifest_sha256=MANIFEST_SHA256, spec_sha256=SPEC_SHA256
+    )
+
+    dumped = contract.model_dump(mode="json")
+    readback = PreservationContract.model_validate(dumped)
+
+    assert readback.model_dump(mode="json") == dumped
+
+
 # --- schema: sha256 pattern validation ----------------------------------------
 
 
