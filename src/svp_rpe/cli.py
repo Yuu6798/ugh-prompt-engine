@@ -345,6 +345,53 @@ def compose(
 
 
 @app.command()
+def arrange(
+    score_yaml: str = typer.Argument(..., help="Path to base Composition Score YAML"),
+    arrangement_yaml: str = typer.Argument(..., help="Path to ArrangementSpec YAML"),
+    output_dir: str = typer.Option(..., "--output-dir", help="Output directory"),
+) -> None:
+    """Resolve an ArrangementSpec against a base Composition Score into provenance artifacts."""
+    import yaml
+    from pydantic import ValidationError
+
+    from svp_rpe.arrange import (
+        ArrangementError,
+        BUNDLE_FILENAME,
+        DERIVED_SCORE_FILENAME,
+        DIFF_FILENAME,
+        compile_arrangement,
+    )
+
+    try:
+        compiled = compile_arrangement(score_yaml, arrangement_yaml)
+    except (
+        FileNotFoundError,
+        yaml.YAMLError,
+        ValueError,
+        ValidationError,
+        ArrangementError,
+    ) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    derived_score_path = out_dir / DERIVED_SCORE_FILENAME
+    bundle_path = out_dir / BUNDLE_FILENAME
+    diff_path = out_dir / DIFF_FILENAME
+
+    derived_score_path.write_text(compiled.derived_score_yaml, encoding="utf-8")
+    bundle_path.write_text(
+        json.dumps(compiled.bundle, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    diff_path.write_text(json.dumps(compiled.diff, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    console.print(f"[green]Derived score saved to {derived_score_path}[/green]")
+    console.print(f"[green]Arrangement bundle saved to {bundle_path}[/green]")
+    console.print(f"[green]Arrangement diff saved to {diff_path}[/green]")
+
+
+@app.command()
 def measure(
     audio: str = typer.Argument(..., help="Path to WAV/MP3 file"),
     fields: Optional[str] = typer.Option(
