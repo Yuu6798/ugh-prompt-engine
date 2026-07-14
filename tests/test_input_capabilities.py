@@ -162,6 +162,85 @@ def test_evidence_base_defaults_to_cwd(
     assert profile.input_channels.style_prompt.support == "supported"
 
 
+# --- evidence confinement (可搬性契約: evidence は evidence_base 配下に閉じる) ----
+
+
+def test_absolute_evidence_path_is_rejected(tmp_path: Path) -> None:
+    outside_file = tmp_path / "outside.md"
+    outside_file.write_text("exists but absolute", encoding="utf-8")
+
+    profile_dict = _profile_dict(
+        style_prompt={"support": "supported", "evidence": str(outside_file)}
+    )
+    profile_path = tmp_path / "profile.yaml"
+    _write_profile(profile_path, profile_dict)
+
+    with pytest.raises(InputCapabilityError) as exc_info:
+        load_input_capability_profile(profile_path, evidence_base=tmp_path)
+
+    message = str(exc_info.value)
+    assert "acme" in message
+    assert "style_prompt" in message
+    assert str(outside_file) in message
+
+
+def test_parent_escaping_evidence_is_rejected_even_if_file_exists(tmp_path: Path) -> None:
+    base_dir = tmp_path / "base"
+    base_dir.mkdir()
+    (tmp_path / "outside.md").write_text("real file outside the base", encoding="utf-8")
+
+    profile_dict = _profile_dict(
+        style_prompt={"support": "supported", "evidence": "../outside.md"}
+    )
+    profile_path = base_dir / "profile.yaml"
+    _write_profile(profile_path, profile_dict)
+
+    with pytest.raises(InputCapabilityError) as exc_info:
+        load_input_capability_profile(profile_path, evidence_base=base_dir)
+
+    message = str(exc_info.value)
+    assert "acme" in message
+    assert "style_prompt" in message
+    assert "../outside.md" in message
+
+
+def test_symlink_escaping_evidence_is_rejected(tmp_path: Path) -> None:
+    base_dir = tmp_path / "base"
+    base_dir.mkdir()
+    outside_file = tmp_path / "outside.md"
+    outside_file.write_text("real file outside the base", encoding="utf-8")
+    (base_dir / "sneaky_link.md").symlink_to(outside_file)
+
+    profile_dict = _profile_dict(
+        style_prompt={"support": "supported", "evidence": "sneaky_link.md"}
+    )
+    profile_path = base_dir / "profile.yaml"
+    _write_profile(profile_path, profile_dict)
+
+    with pytest.raises(InputCapabilityError) as exc_info:
+        load_input_capability_profile(profile_path, evidence_base=base_dir)
+
+    message = str(exc_info.value)
+    assert "acme" in message
+    assert "style_prompt" in message
+
+
+def test_nested_relative_evidence_path_still_loads(tmp_path: Path) -> None:
+    evidence_dir = tmp_path / "docs" / "nested"
+    evidence_dir.mkdir(parents=True)
+    (evidence_dir / "proof.md").write_text("proof", encoding="utf-8")
+
+    profile_dict = _profile_dict(
+        style_prompt={"support": "supported", "evidence": "docs/nested/proof.md"}
+    )
+    profile_path = tmp_path / "profile.yaml"
+    _write_profile(profile_path, profile_dict)
+
+    profile = load_input_capability_profile(profile_path, evidence_base=tmp_path)
+
+    assert profile.input_channels.style_prompt.evidence == "docs/nested/proof.md"
+
+
 # --- schema validation --------------------------------------------------------
 
 
@@ -264,6 +343,21 @@ def test_capability_profiles_repo_and_packaged_copies_are_byte_identical() -> No
         assert (repo_dir / name).read_text(encoding="utf-8") == (
             packaged_dir / name
         ).read_text(encoding="utf-8"), f"capability profile drift: {name}"
+
+
+def test_capability_profiles_are_listed_in_package_data() -> None:
+    """wheel 配布で capability_profiles YAML が同梱されることを pin する。
+
+    editable install ではパッケージ path が src/ を直接指すため package-data の
+    欠落に気付けない（Codex P2-2）。エントリの存在自体を pin して回帰を防ぐ。
+    """
+    import tomllib
+
+    with (REPO_ROOT / "pyproject.toml").open("rb") as f:
+        pyproject = tomllib.load(f)
+
+    package_data = pyproject["tool"]["setuptools"]["package-data"]
+    assert package_data["svp_rpe.config.capability_profiles"] == ["*.yaml"]
 
 
 # --- determinism --------------------------------------------------------------

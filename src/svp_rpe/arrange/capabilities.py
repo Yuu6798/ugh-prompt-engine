@@ -113,6 +113,12 @@ def load_input_capability_profile(
     共通契約のため、これらはラップしない）。evidence が実在しない場合は
     `InputCapabilityError`（generator / channel / path 入りのメッセージ）を
     送出する。
+
+    evidence は `evidence_base` 配下に閉じた相対パスでなければならない
+    （identity.py の artifact 封じ込めと同じ可搬性契約）。絶対パス、および
+    `../` や symlink 経由で `evidence_base` の外を指す evidence は実在
+    チェックより前に fail-fast で拒否する — さもないと committed profile の
+    リンク切れ検知が非可搬な evidence を見逃す。
     """
     profile_path = Path(path)
     try:
@@ -128,7 +134,12 @@ def load_input_capability_profile(
         capability: InputChannelCapability = getattr(profile.input_channels, channel_name)
         if capability.evidence is None:
             continue
-        evidence_path = base_dir / capability.evidence
+        evidence_path = _resolve_confined_evidence(
+            capability.evidence,
+            base_dir,
+            generator=profile.generator,
+            channel=channel_name,
+        )
         if not evidence_path.is_file():
             raise InputCapabilityError(
                 f"input capability profile '{profile.generator}': channel "
@@ -136,6 +147,33 @@ def load_input_capability_profile(
             )
 
     return profile
+
+
+def _resolve_confined_evidence(
+    value: str, base_dir: Path, *, generator: str, channel: str
+) -> Path:
+    """evidence 文字列を base_dir 配下に閉じた実パスへ解決する。
+
+    絶対パスは `base_dir / value` が base を黙って無視するため拒否する。
+    `resolve()` は `../` と symlink の両方を追うため、解決後のパスが
+    `base_dir` 配下にないものは evidence_base 脱出として拒否する
+    （identity.py の `_resolve_confined` と同型の可搬性契約: evidence は
+    常に repo-root 相対）。
+    """
+    if Path(value).is_absolute():
+        raise InputCapabilityError(
+            f"input capability profile '{generator}': channel '{channel}' evidence "
+            f"{value!r} must be a relative path inside the evidence base "
+            f"(absolute paths are not allowed)"
+        )
+    base = base_dir.resolve()
+    resolved = (base / value).resolve()
+    if not resolved.is_relative_to(base):
+        raise InputCapabilityError(
+            f"input capability profile '{generator}': channel '{channel}' evidence "
+            f"{value!r} escapes the evidence base {base}: resolved to {resolved}"
+        )
+    return resolved
 
 
 def _load_yaml_mapping(path: Path) -> dict[str, Any]:
