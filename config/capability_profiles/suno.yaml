@@ -1,0 +1,26 @@
+schema_version: "input-capability/0.1"
+generator: suno
+profile_version: "2026-07"
+
+# InputCapabilityProfile: Suno が実際に受け取れる入力チャネルの自己記述
+# （AR3-1）。既存 config/device_profiles/suno.yaml（プロンプト欄 grip の
+# 自己記述）とは別モデル・別ファイルであり、そちらの内容には一切依存/変更
+# しない。`support` はチャネルの「存在」のみを意味し、grip（保持精度）は
+# 保証しない — grip は引き続き device_profiles 側の責務。
+input_channels:
+  style_prompt:
+    support: supported
+    evidence: docs/control_profile.md
+  lyrics_text:
+    support: supported
+    evidence: docs/lyrics_semantic_anchor.md
+  section_tags:
+    support: experimental
+    evidence: docs/control_profile.md
+  reference_audio:
+    support: unknown
+  symbolic_melody:
+    support: unsupported
+    note: "Suno の入力はテキスト+歌詞+タグのみで記号旋律チャネルが存在しない"
+  midi:
+    support: unsupported
