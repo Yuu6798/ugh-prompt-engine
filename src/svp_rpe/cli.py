@@ -368,7 +368,9 @@ def arrange(
     try:
         compiled = compile_arrangement(score_yaml, arrangement_yaml)
     except (
-        FileNotFoundError,
+        # OSError は FileNotFoundError に加え IsADirectoryError / PermissionError 等の
+        # 入力読み取り失敗を包含する（P2 第 4 ラウンド: 生 traceback でなく exit 1）。
+        OSError,
         yaml.YAMLError,
         ValueError,
         ValidationError,

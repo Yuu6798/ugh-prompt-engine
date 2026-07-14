@@ -373,6 +373,37 @@ def test_compile_arrangement_reads_each_input_exactly_once(
     ).hexdigest()
 
 
+@pytest.mark.parametrize("directory_input", ["score", "spec"])
+def test_directory_as_input_exits_1_without_traceback(
+    tmp_path: Path, directory_input: str
+) -> None:
+    """入力パスがディレクトリでも生 traceback でなく exit 1 + stderr 1 行（P2-r4）。"""
+    input_dir = tmp_path / "not_a_file"
+    input_dir.mkdir()
+    output_dir = tmp_path / "out"
+
+    if directory_input == "score":
+        score_arg = str(input_dir)
+        spec_path = tmp_path / "arrangement.yaml"
+        _write_spec(spec_path, _elastic_bpm_spec_dict())
+        spec_arg = str(spec_path)
+    else:
+        score_arg = str(SAMPLE_PATH)
+        spec_arg = str(input_dir)
+
+    result = CliRunner().invoke(
+        app,
+        ["arrange", score_arg, spec_arg, "--output-dir", str(output_dir)],
+    )
+
+    assert result.exit_code == 1
+    assert result.stderr.startswith("Error:")
+    assert "Traceback" not in result.output
+    # typer.Exit 由来の SystemExit であること（未捕捉例外の生 traceback でない）。
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    _assert_no_partial_artifacts(output_dir)
+
+
 @pytest.mark.parametrize("colliding_target", ["derived_score.yaml", "arrangement_bundle.json"])
 def test_input_path_colliding_with_output_artifact_exits_1(
     tmp_path: Path, colliding_target: str
