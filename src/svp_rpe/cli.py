@@ -345,6 +345,118 @@ def compose(
 
 
 @app.command()
+def arrange(
+    score_yaml: str = typer.Argument(..., help="Path to base Composition Score YAML"),
+    arrangement_yaml: str = typer.Argument(..., help="Path to ArrangementSpec YAML"),
+    output_dir: str = typer.Option(..., "--output-dir", help="Output directory"),
+) -> None:
+    """Resolve an ArrangementSpec against a base Composition Score into provenance artifacts."""
+    import os
+    import tempfile
+
+    import yaml
+    from pydantic import ValidationError
+
+    from svp_rpe.arrange import (
+        ArrangementError,
+        BUNDLE_FILENAME,
+        DERIVED_SCORE_FILENAME,
+        DIFF_FILENAME,
+        compile_arrangement,
+    )
+
+    try:
+        compiled = compile_arrangement(score_yaml, arrangement_yaml)
+    except (
+        # OSError は FileNotFoundError に加え IsADirectoryError / PermissionError 等の
+        # 入力読み取り失敗を包含する（P2 第 4 ラウンド: 生 traceback でなく exit 1）。
+        OSError,
+        yaml.YAMLError,
+        ValueError,
+        ValidationError,
+        ArrangementError,
+    ) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    contents = {
+        DERIVED_SCORE_FILENAME: compiled.derived_score_yaml,
+        BUNDLE_FILENAME: json.dumps(compiled.bundle, ensure_ascii=False, indent=2),
+        DIFF_FILENAME: json.dumps(compiled.diff, ensure_ascii=False, indent=2),
+    }
+
+    # 原子的公開（PR #176 P2-2 / P2 第 2 ラウンド）: staging へ全ファイルを書き、
+    # 既存ターゲットを staging 内へ snapshot 退避してから os.replace で公開する。
+    # 単一ファイルの os.replace は原子的だが、複数ファイルのセットコミットには
+    # POSIX に原子操作が存在しない。本実装は snapshot + best-effort rollback で
+    # partial publish の窓を「rollback 自体も失敗する二重障害」まで縮小する
+    # （honesty: ゼロにはならない）。退避も os.replace（同一 FS の rename）なので
+    # copy 系より失敗面が小さい。全成功時は staging（.prev ごと）が自動掃除される。
+    out_dir = Path(output_dir)
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        # 入力パスと出力成果物パスの衝突チェック（P2 第 3 ラウンド）: 入力が
+        # ターゲットのいずれかと同一実体なら、publish が入力を上書きして
+        # bundle の sha256（旧内容の hash）と path の指す実体（新成果物）が乖離し、
+        # 入力非改変契約にも違反する。resolve() で相対表記違い・symlink 経由も捕捉。
+        input_paths = {Path(score_yaml).resolve(), Path(arrangement_yaml).resolve()}
+        for filename in contents:
+            target = out_dir / filename
+            if target.resolve() in input_paths:
+                typer.echo(
+                    f"Error: input path collides with output artifact path: {target}",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+            if target.is_dir():
+                typer.echo(
+                    f"Error: output path is an existing directory: {target}",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+        with tempfile.TemporaryDirectory(dir=out_dir) as staging:
+            staging_dir = Path(staging)
+            for filename, content in contents.items():
+                (staging_dir / filename).write_text(content, encoding="utf-8")
+
+            snapshots: dict[str, Path] = {}
+            published: list[str] = []
+            try:
+                # snapshot: 既存ターゲットを staging 内の退避名へ os.replace で退避。
+                for filename in contents:
+                    target = out_dir / filename
+                    if target.exists():
+                        prev = staging_dir / f"{filename}.prev"
+                        os.replace(target, prev)
+                        snapshots[filename] = prev
+                # publish: staging の新ファイルをターゲット位置へ公開。
+                for filename in contents:
+                    os.replace(staging_dir / filename, out_dir / filename)
+                    published.append(filename)
+            except OSError:
+                # best-effort rollback: 公開済みの新ファイルを除去し、退避した
+                # .prev を元の位置へ戻す（個々の失敗は無視して続行）。
+                for filename in published:
+                    try:
+                        os.unlink(out_dir / filename)
+                    except OSError:
+                        pass
+                for filename, prev in snapshots.items():
+                    try:
+                        os.replace(prev, out_dir / filename)
+                    except OSError:
+                        pass
+                raise
+    except OSError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    console.print(f"[green]Derived score saved to {out_dir / DERIVED_SCORE_FILENAME}[/green]")
+    console.print(f"[green]Arrangement bundle saved to {out_dir / BUNDLE_FILENAME}[/green]")
+    console.print(f"[green]Arrangement diff saved to {out_dir / DIFF_FILENAME}[/green]")
+
+
+@app.command()
 def measure(
     audio: str = typer.Argument(..., help="Path to WAV/MP3 file"),
     fields: Optional[str] = typer.Option(

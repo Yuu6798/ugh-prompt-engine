@@ -92,6 +92,33 @@ is omitted when unset; `negative_tags` by contrast is always present as a
 list). Machine consumers should treat a missing
 `section_tags` key as "no tags", not check for `null`.
 
+### `svprpe arrange <composition_score.yaml> <arrangement.yaml> --output-dir <dir>`
+
+Resolve an `ArrangementSpec` (AR1-1: `src/svp_rpe/arrange/`) against a base
+Composition Score and write the derived score plus a provenance bundle:
+
+```bash
+svprpe arrange composition_score.yaml arrangement.yaml --output-dir ./out
+```
+
+Writes exactly three files under `--output-dir`:
+
+- `derived_score.yaml` — the resolved `CompositionScore` (loader-valid, reloadable
+  via `load_composition_score`)
+- `arrangement_bundle.json` — `schema_version: "arrangement-bundle/0.1"`,
+  `arrangement_id`, `source_score`/`arrangement_spec` (`path` + SHA-256 of the raw
+  input bytes), `changes`, and `outputs` (bare filenames only)
+- `arrangement_diff.json` — `schema_version: "arrangement-diff/0.1"`,
+  `arrangement_id`, and the same `changes` as the bundle
+
+All three artifacts are constructed in memory before any file is written, so a
+hard-preservation conflict, an unknown preservation path, invalid YAML, a
+missing input file, or a final `CompositionScore` validation failure leaves
+`--output-dir` without partial output (exit code `1`, one-line error on
+stderr). Given the same inputs and arguments, repeated runs produce
+byte-identical output regardless of `--output-dir`. The derived score can be
+fed straight back into `svprpe compose`.
+
 ### `svprpe measure <audio>`
 
 Measure the seven required `CompositionScore.physical` fields from one audio file.
