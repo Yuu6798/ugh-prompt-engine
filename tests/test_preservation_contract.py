@@ -365,6 +365,22 @@ def test_readback_domain_vocabulary_violation_raises_validation_error() -> None:
         PreservationContract.model_validate(data)
 
 
+def test_readback_duplicate_anchor_id_raises_validation_error() -> None:
+    data = _contract_dict(_contract_anchor_dict(anchor_id="anchor-dup"))
+    # 同一 anchor_id で矛盾する policy / hash を持つ 2 件目（builder 経由では
+    # IdentityManifest の重複拒否により発生し得ない読み戻し限定の矛盾状態）。
+    data["anchors"].append(
+        _contract_anchor_dict(
+            anchor_id="anchor-dup", mode="free", artifact_sha256=OTHER_SHA256
+        )
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        PreservationContract.model_validate(data)
+
+    assert "anchor-dup" in str(exc_info.value)
+
+
 def test_built_contract_roundtrips_through_model_validate() -> None:
     manifest = _planning_manifest()
     spec = _spec(_planning_policies())

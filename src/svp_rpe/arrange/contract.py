@@ -103,12 +103,35 @@ class ContractAnchor(ContractModel):
 
 
 class PreservationContract(ContractModel):
-    """work 単位の PreservationContract。"""
+    """work 単位の PreservationContract。
+
+    `anchor_id` の一意性を schema level で強制する: builder 経由では
+    `IdentityManifest` の重複 anchor id 拒否により発生し得ないが、JSON から
+    `model_validate` で読み戻す経路では同一 anchor に矛盾する policy / hash を
+    重複エントリとして持ち込めてしまうため、`ContractAnchor` の invariant
+    validator と同じ「読み戻し経路の safety net」としてここで拒否する
+    （`IdentityManifest._validate_unique_anchor_ids` と同型）。
+    """
 
     schema_version: str = "preservation-contract/0.1"
     work_id: str
     inputs: ContractInputs
     anchors: List[ContractAnchor]
+
+    @model_validator(mode="after")
+    def _validate_unique_anchor_ids(self) -> "PreservationContract":
+        seen: set[str] = set()
+        duplicates: set[str] = set()
+        for anchor in self.anchors:
+            if anchor.anchor_id in seen:
+                duplicates.add(anchor.anchor_id)
+            seen.add(anchor.anchor_id)
+        if duplicates:
+            raise ValueError(
+                f"duplicate anchor id(s) in preservation contract: "
+                f"{', '.join(sorted(duplicates))}"
+            )
+        return self
 
 
 def build_preservation_contract(
