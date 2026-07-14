@@ -393,10 +393,22 @@ def arrange(
     out_dir = Path(output_dir)
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
+        # 入力パスと出力成果物パスの衝突チェック（P2 第 3 ラウンド）: 入力が
+        # ターゲットのいずれかと同一実体なら、publish が入力を上書きして
+        # bundle の sha256（旧内容の hash）と path の指す実体（新成果物）が乖離し、
+        # 入力非改変契約にも違反する。resolve() で相対表記違い・symlink 経由も捕捉。
+        input_paths = {Path(score_yaml).resolve(), Path(arrangement_yaml).resolve()}
         for filename in contents:
-            if (out_dir / filename).is_dir():
+            target = out_dir / filename
+            if target.resolve() in input_paths:
                 typer.echo(
-                    f"Error: output path is an existing directory: {out_dir / filename}",
+                    f"Error: input path collides with output artifact path: {target}",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+            if target.is_dir():
+                typer.echo(
+                    f"Error: output path is an existing directory: {target}",
                     err=True,
                 )
                 raise typer.Exit(code=1)

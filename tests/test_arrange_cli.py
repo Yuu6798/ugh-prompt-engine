@@ -373,6 +373,44 @@ def test_compile_arrangement_reads_each_input_exactly_once(
     ).hexdigest()
 
 
+@pytest.mark.parametrize("colliding_target", ["derived_score.yaml", "arrangement_bundle.json"])
+def test_input_path_colliding_with_output_artifact_exits_1(
+    tmp_path: Path, colliding_target: str
+) -> None:
+    """入力が出力成果物パスと同一なら何も書かず exit 1（P2-r3: 入力上書き防止）。"""
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+
+    if colliding_target == "derived_score.yaml":
+        # score 入力を out_dir/derived_score.yaml に配置。
+        score_path = output_dir / "derived_score.yaml"
+        score_path.write_bytes(SAMPLE_PATH.read_bytes())
+        spec_path = tmp_path / "arrangement.yaml"
+        _write_spec(spec_path, _elastic_bpm_spec_dict())
+    else:
+        # spec 入力を out_dir/arrangement_bundle.json に配置。
+        score_path = SAMPLE_PATH
+        spec_path = output_dir / "arrangement_bundle.json"
+        _write_spec(spec_path, _elastic_bpm_spec_dict())
+
+    score_bytes_before = Path(score_path).read_bytes()
+    spec_bytes_before = Path(spec_path).read_bytes()
+
+    result = CliRunner().invoke(
+        app,
+        ["arrange", str(score_path), str(spec_path), "--output-dir", str(output_dir)],
+    )
+
+    assert result.exit_code == 1
+    assert "Error:" in result.stderr
+    # 入力 bytes 無傷。
+    assert Path(score_path).read_bytes() == score_bytes_before
+    assert Path(spec_path).read_bytes() == spec_bytes_before
+    # 衝突入力以外の成果物は一切生成されない。
+    produced = {p.name for p in output_dir.iterdir()}
+    assert produced == {colliding_target}
+
+
 def test_publish_failure_rolls_back_previous_artifacts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
