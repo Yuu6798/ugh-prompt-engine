@@ -341,6 +341,25 @@ def test_unknown_anchor_key_raises_validation_error(tmp_path: Path) -> None:
         load_identity_manifest(manifest_path)
 
 
+def test_missing_manifest_path_raises_identity_manifest_error(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "does-not-exist.yaml"
+
+    with pytest.raises(IdentityManifestError) as exc_info:
+        load_identity_manifest(manifest_path)
+
+    assert str(manifest_path) in str(exc_info.value)
+
+
+def test_directory_manifest_path_raises_identity_manifest_error(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "a_directory"
+    manifest_path.mkdir()
+
+    with pytest.raises(IdentityManifestError) as exc_info:
+        load_identity_manifest(manifest_path)
+
+    assert str(manifest_path) in str(exc_info.value)
+
+
 def test_non_mapping_yaml_raises_value_error(tmp_path: Path) -> None:
     manifest_path = tmp_path / "identity.yaml"
     manifest_path.write_text(yaml.safe_dump([1, 2, 3]), encoding="utf-8")

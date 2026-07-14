@@ -106,7 +106,16 @@ def load_identity_manifest(path: Path | str) -> IdentityManifest:
     `IdentityManifestError` を送出する。
     """
     manifest_path = Path(path)
-    data = _load_yaml_mapping(manifest_path)
+    try:
+        data = _load_yaml_mapping(manifest_path)
+    except OSError as exc:
+        # artifact 読み失敗（IdentityManifestError ラップ済み）との対称性を保ち、
+        # 呼び出し側の公開契約を生 OS 例外に晒さない。この時点で work_id は未知の
+        # ため path のみを記録する。非 mapping の ValueError と yaml.YAMLError は
+        # 他 loader（compose / arrange）との共通契約のためラップしない。
+        raise IdentityManifestError(
+            f"identity manifest unreadable at {manifest_path}: {exc}"
+        ) from exc
     manifest = IdentityManifest.model_validate(data)
 
     base_dir = manifest_path.resolve().parent
