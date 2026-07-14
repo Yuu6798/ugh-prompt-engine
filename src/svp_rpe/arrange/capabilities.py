@@ -99,26 +99,30 @@ def load_input_capability_profile(
 
     他 loader（`identity.py` 等）と同型: YAML mapping をロードし、
     `model_validate` でスキーマ検証した後、`evidence` が非 None の各チャネルに
-    ついて実ファイルの存在を確認する。
+    ついて検証を行う。
 
-    `evidence_base` 省略時は `Path.cwd()`（dev/CI 実行時は repo root からの
-    呼び出しを想定し、そこを基準に evidence の repo-root 相対パスを解決する）。
-    呼び出し側は明示的に渡すことで cwd 非依存に検証できる。
+    evidence のファイルシステム検証は**明示 base 限定**:
+
+    - `evidence_base=None`（既定）: evidence の実在チェックを行わない。
+      evidence は repo-root 相対の provenance 文字列として schema 保持のみ。
+      wheel 配布では profile YAML は package resource として同梱されるが
+      evidence の指す `docs/*.md` は同梱されないため、インストール環境
+      （repo checkout 外）では実在検証が必ず偽陽性で失敗する。evidence の
+      実在は repo checkout の場所を知る呼び出し側だけが検証できるので、
+      既定 cwd への暗黙依存は廃止した。ただし文字列としての形式検証
+      （絶対パス拒否 = 可搬性契約）は base 不要で判定できるため常に行う
+    - `evidence_base` 明示時: 封じ込め（絶対パス・`../`・symlink 脱出の
+      拒否 — identity.py の artifact 封じ込めと同じ可搬性契約）+ 実在
+      チェックを行い、evidence が実在しない場合は `InputCapabilityError`
+      （generator / channel / path 入りのメッセージ）を送出する（CI での
+      リンク切れ検知は repo root を明示して呼ぶ）
 
     path が存在しない・ディレクトリである場合は `InputCapabilityError` を
     送出する（`OSError` を `path.open()` 時点でラップし、生の OS 例外を
     呼び出し側の公開契約に晒さない）。YAML が非 mapping の場合は
     `ValueError`、スキーマ違反（未知 support 値 / 未知チャネル key / 未知
     トップ key）は pydantic の `ValidationError` を送出する（他 loader との
-    共通契約のため、これらはラップしない）。evidence が実在しない場合は
-    `InputCapabilityError`（generator / channel / path 入りのメッセージ）を
-    送出する。
-
-    evidence は `evidence_base` 配下に閉じた相対パスでなければならない
-    （identity.py の artifact 封じ込めと同じ可搬性契約）。絶対パス、および
-    `../` や symlink 経由で `evidence_base` の外を指す evidence は実在
-    チェックより前に fail-fast で拒否する — さもないと committed profile の
-    リンク切れ検知が非可搬な evidence を見逃す。
+    共通契約のため、これらはラップしない）。
     """
     profile_path = Path(path)
     try:
@@ -129,14 +133,18 @@ def load_input_capability_profile(
         ) from exc
     profile = InputCapabilityProfile.model_validate(data)
 
-    base_dir = evidence_base if evidence_base is not None else Path.cwd()
     for channel_name in INPUT_CHANNELS:
         capability: InputChannelCapability = getattr(profile.input_channels, channel_name)
         if capability.evidence is None:
             continue
+        _reject_absolute_evidence(
+            capability.evidence, generator=profile.generator, channel=channel_name
+        )
+        if evidence_base is None:
+            continue
         evidence_path = _resolve_confined_evidence(
             capability.evidence,
-            base_dir,
+            evidence_base,
             generator=profile.generator,
             channel=channel_name,
         )
@@ -147,6 +155,20 @@ def load_input_capability_profile(
             )
 
     return profile
+
+
+def _reject_absolute_evidence(value: str, *, generator: str, channel: str) -> None:
+    """evidence 文字列の形式検証（base 非依存）: 絶対パスを拒否する。
+
+    可搬性契約（evidence は repo-root 相対の provenance 文字列）は base が
+    無くても文字列だけで判定できるため、`evidence_base=None` でも常に行う。
+    """
+    if Path(value).is_absolute():
+        raise InputCapabilityError(
+            f"input capability profile '{generator}': channel '{channel}' evidence "
+            f"{value!r} must be a relative path inside the evidence base "
+            f"(absolute paths are not allowed)"
+        )
 
 
 def _resolve_confined_evidence(

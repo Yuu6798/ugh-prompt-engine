@@ -145,21 +145,42 @@ def test_evidence_none_skips_verification(tmp_path: Path) -> None:
     assert profile.input_channels.style_prompt.evidence is None
 
 
-def test_evidence_base_defaults_to_cwd(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    evidence_dir = tmp_path / "docs"
-    evidence_dir.mkdir()
-    (evidence_dir / "proof.md").write_text("proof", encoding="utf-8")
+def test_default_base_skips_existence_check_for_missing_evidence(tmp_path: Path) -> None:
+    """packaged 環境シミュレーション: evidence の実ファイルが無くてもロード成功する。
 
-    profile_dict = _profile_dict(style_prompt={"support": "supported", "evidence": "docs/proof.md"})
+    wheel インストール環境では profile YAML は package resource として存在するが
+    evidence の指す docs/*.md は同梱されない。`evidence_base=None`（既定）は
+    実在検証を行わず、evidence を provenance 文字列として保持するのみ。
+    """
+    profile_dict = _profile_dict(
+        style_prompt={"support": "supported", "evidence": "docs/not-shipped-in-wheel.md"}
+    )
     profile_path = tmp_path / "profile.yaml"
     _write_profile(profile_path, profile_dict)
 
-    monkeypatch.chdir(tmp_path)
     profile = load_input_capability_profile(profile_path)
 
-    assert profile.input_channels.style_prompt.support == "supported"
+    assert profile.input_channels.style_prompt.evidence == "docs/not-shipped-in-wheel.md"
+
+
+def test_default_base_still_rejects_absolute_evidence(tmp_path: Path) -> None:
+    """形式検証（絶対パス拒否）は base 非依存のため `evidence_base=None` でも維持。"""
+    outside_file = tmp_path / "outside.md"
+    outside_file.write_text("exists but absolute", encoding="utf-8")
+
+    profile_dict = _profile_dict(
+        style_prompt={"support": "supported", "evidence": str(outside_file)}
+    )
+    profile_path = tmp_path / "profile.yaml"
+    _write_profile(profile_path, profile_dict)
+
+    with pytest.raises(InputCapabilityError) as exc_info:
+        load_input_capability_profile(profile_path)
+
+    message = str(exc_info.value)
+    assert "acme" in message
+    assert "style_prompt" in message
+    assert str(outside_file) in message
 
 
 # --- evidence confinement (可搬性契約: evidence は evidence_base 配下に閉じる) ----
