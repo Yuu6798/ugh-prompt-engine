@@ -13,6 +13,15 @@ from svp_rpe.arrange.bundle import (
     DIFF_FILENAME,
     compile_arrangement,
 )
+from svp_rpe.arrange.capabilities import (
+    ChannelSupport,
+    INPUT_CHANNELS,
+    InputCapabilityError,
+    InputCapabilityProfile,
+    InputChannelCapability,
+    InputChannels,
+    load_input_capability_profile,
+)
 from svp_rpe.arrange.contract import (
     ContractAnchor,
     DOMAIN_ALLOWED_TRANSFORMS,
@@ -65,6 +74,7 @@ __all__ = [
     "ArrangementTarget",
     "BUNDLE_FILENAME",
     "CANONICAL_PATHS",
+    "ChannelSupport",
     "CompiledArrangement",
     "ContractAnchor",
     "DERIVED_SCORE_FILENAME",
@@ -73,9 +83,14 @@ __all__ = [
     "DeltaEOverride",
     "EventOverride",
     "GrvOverride",
+    "INPUT_CHANNELS",
     "IdentityAnchor",
     "IdentityManifest",
     "IdentityManifestError",
+    "InputCapabilityError",
+    "InputCapabilityProfile",
+    "InputChannelCapability",
+    "InputChannels",
     "PhysicalOverride",
     "PreservationContract",
     "PreservationContractError",
@@ -87,5 +102,6 @@ __all__ = [
     "compile_arrangement",
     "load_arrangement_spec",
     "load_identity_manifest",
+    "load_input_capability_profile",
     "resolve_arrangement",
 ]

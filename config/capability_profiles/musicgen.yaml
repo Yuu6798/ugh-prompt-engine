@@ -1,0 +1,25 @@
+schema_version: "input-capability/0.1"
+generator: musicgen
+profile_version: "2026-07"
+
+# InputCapabilityProfile: MusicGen が実際に受け取れる入力チャネルの自己記述
+# （AR3-1）。既存 config/device_profiles/musicgen.yaml（プロンプト欄 grip の
+# 自己記述）とは別モデル・別ファイルであり、そちらの内容には一切依存/変更
+# しない。`support` はチャネルの「存在」のみを意味し、grip（保持精度）は
+# 保証しない — grip は引き続き device_profiles 側の責務。
+input_channels:
+  style_prompt:
+    support: supported
+    evidence: docs/musicgen_backend.md
+  lyrics_text:
+    support: unsupported
+    note: "歌詞入力チャネルなし"
+  section_tags:
+    support: unsupported
+  reference_audio:
+    support: unknown
+    note: "melody conditioning variant は未使用・未実測"
+  symbolic_melody:
+    support: unsupported
+  midi:
+    support: unsupported
