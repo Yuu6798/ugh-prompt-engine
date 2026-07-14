@@ -351,6 +351,9 @@ def arrange(
     output_dir: str = typer.Option(..., "--output-dir", help="Output directory"),
 ) -> None:
     """Resolve an ArrangementSpec against a base Composition Score into provenance artifacts."""
+    import os
+    import tempfile
+
     import yaml
     from pydantic import ValidationError
 
@@ -374,21 +377,37 @@ def arrange(
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
+    contents = {
+        DERIVED_SCORE_FILENAME: compiled.derived_score_yaml,
+        BUNDLE_FILENAME: json.dumps(compiled.bundle, ensure_ascii=False, indent=2),
+        DIFF_FILENAME: json.dumps(compiled.diff, ensure_ascii=False, indent=2),
+    }
+
+    # 原子的公開（PR #176 P2-2）: staging へ全ファイルを書いてから os.replace で
+    # 公開する。途中失敗時は staging ごと自動掃除され、out_dir に部分成果物を残さない。
     out_dir = Path(output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    derived_score_path = out_dir / DERIVED_SCORE_FILENAME
-    bundle_path = out_dir / BUNDLE_FILENAME
-    diff_path = out_dir / DIFF_FILENAME
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for filename in contents:
+            if (out_dir / filename).is_dir():
+                typer.echo(
+                    f"Error: output path is an existing directory: {out_dir / filename}",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+        with tempfile.TemporaryDirectory(dir=out_dir) as staging:
+            staging_dir = Path(staging)
+            for filename, content in contents.items():
+                (staging_dir / filename).write_text(content, encoding="utf-8")
+            for filename in contents:
+                os.replace(staging_dir / filename, out_dir / filename)
+    except OSError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
 
-    derived_score_path.write_text(compiled.derived_score_yaml, encoding="utf-8")
-    bundle_path.write_text(
-        json.dumps(compiled.bundle, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    diff_path.write_text(json.dumps(compiled.diff, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    console.print(f"[green]Derived score saved to {derived_score_path}[/green]")
-    console.print(f"[green]Arrangement bundle saved to {bundle_path}[/green]")
-    console.print(f"[green]Arrangement diff saved to {diff_path}[/green]")
+    console.print(f"[green]Derived score saved to {out_dir / DERIVED_SCORE_FILENAME}[/green]")
+    console.print(f"[green]Arrangement bundle saved to {out_dir / BUNDLE_FILENAME}[/green]")
+    console.print(f"[green]Arrangement diff saved to {out_dir / DIFF_FILENAME}[/green]")
 
 
 @app.command()

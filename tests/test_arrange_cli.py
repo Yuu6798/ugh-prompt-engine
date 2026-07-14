@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 from typer.testing import CliRunner
 
@@ -317,6 +318,59 @@ def test_nonexistent_spec_input_exits_1(tmp_path: Path) -> None:
 
     assert result.exit_code == 1
     _assert_no_partial_artifacts(output_dir)
+
+
+def test_existing_directory_at_target_path_exits_1_and_preserves_other_files(
+    tmp_path: Path,
+) -> None:
+    """出力先のいずれかが既存ディレクトリなら何も書かず exit 1（P2-2 事前チェック）。"""
+    spec_path = tmp_path / "arrangement.yaml"
+    _write_spec(spec_path, _elastic_bpm_spec_dict())
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    (output_dir / "arrangement_bundle.json").mkdir()
+    existing_derived = output_dir / "derived_score.yaml"
+    existing_derived.write_text("pre-existing content\n", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        app,
+        ["arrange", str(SAMPLE_PATH), str(spec_path), "--output-dir", str(output_dir)],
+    )
+
+    assert result.exit_code == 1
+    assert "Error:" in result.stderr
+    # 既存 derived_score.yaml は上書き・生成されない（部分成果物なしの pin）。
+    assert existing_derived.read_text(encoding="utf-8") == "pre-existing content\n"
+    assert not (output_dir / "arrangement_diff.json").exists()
+
+
+def test_compile_arrangement_reads_each_input_exactly_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """hash とパースが同一バイト列を共有する（P2-1: 各入力の read_bytes は 1 回だけ）。"""
+    from svp_rpe.arrange import compile_arrangement
+
+    spec_path = tmp_path / "arrangement.yaml"
+    _write_spec(spec_path, _elastic_bpm_spec_dict())
+
+    read_counts: dict[str, int] = {}
+    original_read_bytes = Path.read_bytes
+
+    def counting_read_bytes(self: Path) -> bytes:
+        key = str(self)
+        read_counts[key] = read_counts.get(key, 0) + 1
+        return original_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", counting_read_bytes)
+
+    compiled = compile_arrangement(str(SAMPLE_PATH), str(spec_path))
+
+    assert read_counts[str(SAMPLE_PATH)] == 1
+    assert read_counts[str(spec_path)] == 1
+    # sha256 は同一バイト列由来（独立再計算と一致）。
+    assert compiled.bundle["source_score"]["sha256"] == hashlib.sha256(
+        SAMPLE_PATH.read_bytes()
+    ).hexdigest()
 
 
 def test_invalid_final_score_exits_1(tmp_path: Path) -> None:
