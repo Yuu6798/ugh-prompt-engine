@@ -12,11 +12,23 @@ from __future__ import annotations
 
 from typing import Any, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from svp_rpe.compose.models import ChordSpec, CompositionScore, StructureSection
 
 PreservationMode = Literal["hard", "elastic", "free"]
+
+# AR2-2: identity anchor に許容する変形の語彙。planning 記載の 7 種に限定する
+# （lyrics 等への語彙追加は将来の Design Memo 経由。ここで勝手に増やさない）。
+AllowedTransformation = Literal[
+    "octave_displacement",
+    "ornamentation",
+    "timing_warp",
+    "chord_extensions",
+    "functional_substitution",
+    "intro_extension",
+    "instrumental_break",
+]
 
 # pydantic>=2.0 下限では pydantic.JsonValue (2.5+) が使えないためローカル定義。
 # before/after は resolver が model_dump(mode="json") で正規化済みの JSON 互換値のみを格納する。
@@ -80,13 +92,55 @@ class ArrangementTarget(ArrangementModel):
     structure: Optional[List[StructureSection]] = None
 
 
-class PreservationSpec(ArrangementModel):
-    """canonical field path -> PreservationMode の対応表。
+class AnchorPreservation(ArrangementModel):
+    """IdentityManifest の anchor 単位に宣言する保持方針（AR2-2）。
 
-    path の allowlist 検証は resolver 側の明示定数で行う（本モデルは容れ物のみ）。
+    `mode` と `allow` の整合はここで強制する: ``hard`` / ``free`` は変形を
+    一切許さないため `allow` は空必須、``elastic`` は変形の語彙を最低 1 件
+    宣言することを必須とする（空の elastic は「何でも許す」への推測補完に
+    なるため拒否する）。
+
+    domain 別にどの変形語彙が許容されるか（`AllowedTransformation` のうち
+    どの部分集合か）は本モデルでは検証しない — anchor の domain と
+    `arrange/contract.py` の `DOMAIN_ALLOWED_TRANSFORMS` を突き合わせる
+    cross-validation は `build_preservation_contract` の責務である
+    （本モデル単体では anchor の domain を知らないため）。
+
+    `tolerance_profile` は AR4 が意味論を定義するまで opaque な文字列として
+    保持するのみで、本モデルは値を検証・解釈しない。
+    """
+
+    mode: PreservationMode
+    allow: List[AllowedTransformation] = []
+    tolerance_profile: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _validate_mode_allow_consistency(self) -> "AnchorPreservation":
+        if self.mode in ("hard", "free") and self.allow:
+            raise ValueError(
+                f"AnchorPreservation: mode={self.mode!r} must have an empty 'allow' list "
+                f"(hard/free permit no transformations), got {self.allow!r}"
+            )
+        if self.mode == "elastic" and not self.allow:
+            raise ValueError(
+                "AnchorPreservation: mode='elastic' requires at least one entry in "
+                "'allow' (an empty allow list would make the contract vacuous)"
+            )
+        return self
+
+
+class PreservationSpec(ArrangementModel):
+    """canonical field path -> PreservationMode の対応表 + identity anchor 単位の保持方針。
+
+    `score_fields` の path allowlist 検証は resolver 側の明示定数で行う
+    （本モデルは容れ物のみ）。`identity_anchors` は AR2-2 で additive に
+    追加された欄で、IdentityManifest の anchor id -> `AnchorPreservation` の
+    対応表を宣言する（省略時 `None` は「anchor policy 宣言なし」を意味し、
+    既存 spec の後方互換をそのまま保つ）。
     """
 
     score_fields: dict[str, PreservationMode]
+    identity_anchors: Optional[dict[str, AnchorPreservation]] = None
 
 
 class ArrangementMeta(ArrangementModel):
