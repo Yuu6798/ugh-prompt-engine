@@ -183,6 +183,86 @@ def test_directory_artifact_path_raises_identity_manifest_error(tmp_path: Path) 
     assert "anchor-lyrics" in str(exc_info.value)
 
 
+# --- path confinement (manifest 可搬性契約) -------------------------------------
+
+
+def test_absolute_locator_path_is_rejected(tmp_path: Path) -> None:
+    contents = _write_artifacts(tmp_path)
+    manifest_dict = _manifest_dict(contents)
+    absolute_locator = str(tmp_path / "source.wav")
+    manifest_dict["source"]["locator"] = absolute_locator
+    manifest_path = tmp_path / "identity.yaml"
+    _write_manifest(manifest_path, manifest_dict)
+
+    with pytest.raises(IdentityManifestError) as exc_info:
+        load_identity_manifest(manifest_path)
+
+    message = str(exc_info.value)
+    assert "work-1" in message
+    assert absolute_locator in message
+
+
+def test_parent_escaping_artifact_is_rejected_even_with_correct_hash(tmp_path: Path) -> None:
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    contents = _write_artifacts(manifest_dir)
+    outside_bytes = b"outside artifact bytes"
+    (tmp_path / "outside.txt").write_bytes(outside_bytes)
+
+    manifest_dict = _manifest_dict(contents)
+    manifest_dict["anchors"][0]["artifact"] = "../outside.txt"
+    manifest_dict["anchors"][0]["sha256"] = _sha256(outside_bytes)  # hash は正しい
+    manifest_path = manifest_dir / "identity.yaml"
+    _write_manifest(manifest_path, manifest_dict)
+
+    with pytest.raises(IdentityManifestError) as exc_info:
+        load_identity_manifest(manifest_path)
+
+    message = str(exc_info.value)
+    assert "anchor-lyrics" in message
+    assert "../outside.txt" in message
+
+
+def test_symlink_escaping_manifest_directory_is_rejected(tmp_path: Path) -> None:
+    manifest_dir = tmp_path / "manifest_dir"
+    manifest_dir.mkdir()
+    contents = _write_artifacts(manifest_dir)
+    outside_bytes = b"outside artifact bytes"
+    outside_file = tmp_path / "outside.txt"
+    outside_file.write_bytes(outside_bytes)
+    (manifest_dir / "sneaky_link.txt").symlink_to(outside_file)
+
+    manifest_dict = _manifest_dict(contents)
+    manifest_dict["anchors"][0]["artifact"] = "sneaky_link.txt"
+    manifest_dict["anchors"][0]["sha256"] = _sha256(outside_bytes)  # hash は正しい
+    manifest_path = manifest_dir / "identity.yaml"
+    _write_manifest(manifest_path, manifest_dict)
+
+    with pytest.raises(IdentityManifestError) as exc_info:
+        load_identity_manifest(manifest_path)
+
+    assert "anchor-lyrics" in str(exc_info.value)
+
+
+def test_nested_relative_artifact_path_loads(tmp_path: Path) -> None:
+    contents = _write_artifacts(tmp_path)
+    subdir = tmp_path / "identity"
+    subdir.mkdir()
+    nested_bytes = b"nested lyrics content"
+    (subdir / "lyrics.txt").write_bytes(nested_bytes)
+
+    manifest_dict = _manifest_dict(contents)
+    manifest_dict["anchors"][0]["artifact"] = "identity/lyrics.txt"
+    manifest_dict["anchors"][0]["sha256"] = _sha256(nested_bytes)
+    manifest_path = tmp_path / "identity.yaml"
+    _write_manifest(manifest_path, manifest_dict)
+
+    manifest = load_identity_manifest(manifest_path)
+
+    lyrics_anchor = next(a for a in manifest.anchors if a.id == "anchor-lyrics")
+    assert lyrics_anchor.artifact == "identity/lyrics.txt"
+
+
 # --- schema validation ---------------------------------------------------------
 
 

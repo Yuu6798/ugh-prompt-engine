@@ -97,10 +97,12 @@ def load_identity_manifest(path: Path | str) -> IdentityManifest:
     """IdentityManifest YAML をロードし、source / 各 anchor の宣言 sha256 を実 bytes と照合する。
 
     `source.locator` と各 `anchor.artifact` は manifest ファイルの親ディレクトリ
-    からの相対パスとして解決する（cwd に依存しない）。各 artifact は
-    `read_bytes` で 1 回だけ読み、そのバイト列から sha256 を計算して宣言値と
-    比較する（TOCTOU を単一読み取りで構造的に排除）。path が存在しない・
-    ディレクトリである・hash が一致しない場合は fail-fast で
+    からの相対パスとして解決する（cwd に依存しない）。絶対パス、および `../` や
+    symlink 経由で manifest ディレクトリの外を指すパスは hash 照合より前に
+    fail-fast で拒否する（manifest の可搬性契約: artifact は常に親ディレクトリ
+    配下に閉じる）。各 artifact は `read_bytes` で 1 回だけ読み、そのバイト列から
+    sha256 を計算して宣言値と比較する（TOCTOU を単一読み取りで構造的に排除）。
+    path が存在しない・ディレクトリである・hash が一致しない場合も
     `IdentityManifestError` を送出する。
     """
     manifest_path = Path(path)
@@ -110,18 +112,25 @@ def load_identity_manifest(path: Path | str) -> IdentityManifest:
     base_dir = manifest_path.resolve().parent
     work_id = manifest.meta.work_id
 
+    source_path = _resolve_confined(
+        manifest.source.locator, base_dir, work_id=work_id, target="source"
+    )
     _verify_artifact_hash(
-        base_dir / manifest.source.locator,
+        source_path,
         manifest.source.sha256,
         work_id=work_id,
         target="source",
     )
     for anchor in manifest.anchors:
+        target = f"anchor '{anchor.id}'"
+        artifact_path = _resolve_confined(
+            anchor.artifact, base_dir, work_id=work_id, target=target
+        )
         _verify_artifact_hash(
-            base_dir / anchor.artifact,
+            artifact_path,
             anchor.sha256,
             work_id=work_id,
-            target=f"anchor '{anchor.id}'",
+            target=target,
         )
 
     return manifest
@@ -133,6 +142,29 @@ def _load_yaml_mapping(path: Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError(f"identity manifest must be a mapping: {path}")
     return data
+
+
+def _resolve_confined(value: str, base_dir: Path, *, work_id: str, target: str) -> Path:
+    """locator / artifact 文字列を base_dir 配下に閉じた実パスへ解決する。
+
+    絶対パスは `base_dir / value` が base を黙って無視するため拒否する。
+    `resolve()` は `../` と symlink の両方を追うため、解決後のパスが
+    `base_dir` 配下にないものは manifest ディレクトリ脱出として拒否する
+    （manifest の可搬性契約: artifact は常に親ディレクトリ相対）。
+    """
+    if Path(value).is_absolute():
+        raise IdentityManifestError(
+            f"identity manifest '{work_id}': {target} path {value!r} must be a "
+            f"relative path inside the manifest directory (absolute paths are not allowed)"
+        )
+    base = base_dir.resolve()
+    resolved = (base / value).resolve()
+    if not resolved.is_relative_to(base):
+        raise IdentityManifestError(
+            f"identity manifest '{work_id}': {target} path {value!r} escapes the "
+            f"manifest directory {base}: resolved to {resolved}"
+        )
+    return resolved
 
 
 def _verify_artifact_hash(
