@@ -10,13 +10,17 @@
 """
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, JsonValue
+from pydantic import BaseModel, ConfigDict
 
 from svp_rpe.compose.models import ChordSpec, CompositionScore, StructureSection
 
 PreservationMode = Literal["hard", "elastic", "free"]
+
+# pydantic>=2.0 下限では pydantic.JsonValue (2.5+) が使えないためローカル定義。
+# before/after は resolver が model_dump(mode="json") で正規化済みの JSON 互換値のみを格納する。
+JsonValue = Any
 
 
 class ArrangementModel(BaseModel):

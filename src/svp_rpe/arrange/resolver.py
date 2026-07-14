@@ -13,17 +13,21 @@ mode を自動決定することはしない。
 
 resolve flow:
 
-    source.model_dump(mode="json") で deep copy
-    -> target override を適用
-    -> 明示 override path を導出
-    -> preservation policy を検証
-       - hard   + 変更あり -> ArrangementConflictError
-       - hard   + 変更なし -> 許可、change record なし
-       - elastic/free + 変更あり -> change record
-       - policy 未指定      -> ArrangementPolicyError
-    -> CompositionScore.model_validate(candidate)
+    preservation path の allowlist 検証
+    -> 明示 override path を導出し、全 path の policy 存在を一括チェック
+       （policy 未指定は ValidationError より先に ArrangementPolicyError）
+    -> source.model_dump(mode="json") を deep copy して raw override を適用
+    -> CompositionScore.model_validate(candidate) で derived を先に構築
+    -> derived.model_dump(mode="json") と source dump の canonical 値同士を比較
+       - before == after      -> 記録なし（hard も許可）
+       - hard    + 変更あり   -> ArrangementConflictError
+       - elastic/free + 変更あり -> change record（after は canonical 値）
     -> path の安定ソート
     -> ArrangementResolution
+
+比較・出力の双方で「`CompositionScore.model_validate` -> `model_dump(mode="json")`」
+という同一の正規化を通した canonical 値のみを使う（例: bpm の numeric string "128" は
+int 128 へ正規化されるため、hard の誤 conflict / elastic の偽 diff を生まない）。
 """
 from __future__ import annotations
 
@@ -83,23 +87,32 @@ def resolve_arrangement(source: CompositionScore, spec: ArrangementSpec) -> Arra
     arrangement_id = spec.meta.id
     _validate_preservation_paths(spec, arrangement_id)
 
-    source_json = source.model_dump(mode="json")
-    candidate = copy.deepcopy(source_json)
-
     explicit_overrides = _collect_explicit_overrides(spec)
 
-    changes: list[ArrangementChange] = []
-    for path, new_value in explicit_overrides.items():
-        mode = spec.preservation.score_fields.get(path)
-        if mode is None:
-            raise ArrangementPolicyError(
-                f"arrangement '{arrangement_id}': path '{path}' has no preservation policy "
-                "in preservation.score_fields"
-            )
+    # 全 explicit path の policy 存在チェックを validation より先に一括実行する
+    # （policy 欠落は最終 Score の妥当性以前の契約違反のため、ValidationError より
+    # 先に ArrangementPolicyError で報告する）。
+    missing_policy = sorted(set(explicit_overrides) - set(spec.preservation.score_fields))
+    if missing_policy:
+        raise ArrangementPolicyError(
+            f"arrangement '{arrangement_id}': path(s) with no preservation policy "
+            f"in preservation.score_fields: {', '.join(missing_policy)}"
+        )
 
+    source_json = source.model_dump(mode="json")
+    candidate = copy.deepcopy(source_json)
+    for path, new_value in explicit_overrides.items():
+        _set_path(candidate, path, copy.deepcopy(new_value))
+
+    # 比較より先に validate し、canonical 正規化済み dump 同士で diff を取る。
+    derived = CompositionScore.model_validate(candidate)
+    derived_json = derived.model_dump(mode="json")
+
+    changes: list[ArrangementChange] = []
+    for path in explicit_overrides:
+        mode = spec.preservation.score_fields[path]
         before = copy.deepcopy(_get_path(source_json, path))
-        after = copy.deepcopy(new_value)
-        _set_path(candidate, path, after)
+        after = copy.deepcopy(_get_path(derived_json, path))
 
         if before == after:
             continue
@@ -114,7 +127,6 @@ def resolve_arrangement(source: CompositionScore, spec: ArrangementSpec) -> Arra
             ArrangementChange(path=path, before=before, after=after, preservation_mode=mode)
         )
 
-    derived = CompositionScore.model_validate(candidate)
     changes.sort(key=lambda change: _PATH_ORDER[change.path])
 
     return ArrangementResolution(source_score=source, derived_score=derived, changes=changes)

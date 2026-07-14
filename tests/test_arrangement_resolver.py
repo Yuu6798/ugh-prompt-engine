@@ -239,6 +239,41 @@ def test_free_change_record() -> None:
     assert resolution.changes[0].after == "bright"
 
 
+# --- canonical normalization before comparison (P2-2) --------------------------
+
+
+def test_hard_numeric_string_bpm_normalizes_and_does_not_conflict() -> None:
+    """bpm の numeric string "128" は canonical 正規化で int 128 になるため、
+    hard でも conflict にならず change record も出ない。"""
+    source = _source()
+    spec = _spec(
+        target={"physical": {"bpm": "128"}},
+        score_fields={"physical.bpm": "hard"},
+    )
+
+    resolution = resolve_arrangement(source, spec)
+
+    assert resolution.changes == []
+    assert resolution.derived_score.physical.bpm == 128
+
+
+def test_elastic_numeric_string_bpm_records_canonical_after_value() -> None:
+    source = _source()
+    spec = _spec(
+        target={"physical": {"bpm": "140"}},
+        score_fields={"physical.bpm": "elastic"},
+    )
+
+    resolution = resolve_arrangement(source, spec)
+
+    assert resolution.derived_score.physical.bpm == 140
+    assert len(resolution.changes) == 1
+    change = resolution.changes[0]
+    assert change.before == 128
+    assert change.after == 140
+    assert isinstance(change.after, int)
+
+
 # --- policy errors -------------------------------------------------------------
 
 
@@ -265,6 +300,18 @@ def test_preservation_only_paths_without_target_override_are_allowed() -> None:
 
     assert resolution.changes == []
     assert resolution.derived_score.model_dump(mode="json") == source.model_dump(mode="json")
+
+
+def test_missing_policy_is_reported_before_final_score_validation() -> None:
+    """policy 欠落 + 最終 Score も invalid になる override の場合、
+    ValidationError より先に ArrangementPolicyError が出る（チェック順の pin）。"""
+    source = _source()
+    spec = _spec(target={"physical": {"bpm": "adagio"}}, score_fields={})
+
+    with pytest.raises(ArrangementPolicyError) as excinfo:
+        resolve_arrangement(source, spec)
+
+    assert "physical.bpm" in str(excinfo.value)
 
 
 def test_unknown_preservation_path_is_rejected() -> None:
