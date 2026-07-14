@@ -25,7 +25,7 @@ import するが、`compose` 側の型を参照することはない）。
 """
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal, Optional
 
 import yaml
@@ -110,10 +110,12 @@ def load_input_capability_profile(
       （repo checkout 外）では実在検証が必ず偽陽性で失敗する。evidence の
       実在は repo checkout の場所を知る呼び出し側だけが検証できるので、
       既定 cwd への暗黙依存は廃止した。ただし文字列としての形式検証
-      （絶対パス拒否 = 可搬性契約）は base 不要で判定できるため常に行う
-    - `evidence_base` 明示時: 封じ込め（絶対パス・`../`・symlink 脱出の
-      拒否 — identity.py の artifact 封じ込めと同じ可搬性契約）+ 実在
-      チェックを行い、evidence が実在しない場合は `InputCapabilityError`
+      （絶対パス拒否 + 字面の遡上拒否 = 可搬性契約）は base 不要で判定
+      できるため常に行う
+    - `evidence_base` 明示時: 上記の形式検証に加えて resolve() ベースの
+      封じ込め（symlink 脱出など実ファイルシステム上の脱出の拒否 —
+      identity.py の artifact 封じ込めと同じ可搬性契約）+ 実在チェックを
+      行い、evidence が実在しない場合は `InputCapabilityError`
       （generator / channel / path 入りのメッセージ）を送出する（CI での
       リンク切れ検知は repo root を明示して呼ぶ）
 
@@ -137,7 +139,7 @@ def load_input_capability_profile(
         capability: InputChannelCapability = getattr(profile.input_channels, channel_name)
         if capability.evidence is None:
             continue
-        _reject_absolute_evidence(
+        _validate_evidence_form(
             capability.evidence, generator=profile.generator, channel=channel_name
         )
         if evidence_base is None:
@@ -157,11 +159,19 @@ def load_input_capability_profile(
     return profile
 
 
-def _reject_absolute_evidence(value: str, *, generator: str, channel: str) -> None:
-    """evidence 文字列の形式検証（base 非依存）: 絶対パスを拒否する。
+def _validate_evidence_form(value: str, *, generator: str, channel: str) -> None:
+    """evidence 文字列の形式検証（base 非依存・字面のみ）。
 
     可搬性契約（evidence は repo-root 相対の provenance 文字列）は base が
-    無くても文字列だけで判定できるため、`evidence_base=None` でも常に行う。
+    無くても文字列だけで判定できるため、`evidence_base=None` でも常に行う:
+
+    - 絶対パス拒否
+    - 字面（lexical）の遡上拒否: `..` セグメントで深さカウンタを減らし、
+      0 未満になったら evidence root より上への遡上として拒否する。
+      `a/../b` のような内部相殺は 0 未満にならないので通る
+
+    symlink 経由の脱出は字面では判定できないため、`evidence_base` 明示時の
+    `_resolve_confined_evidence`（resolve() ベース封じ込め）が捕捉する。
     """
     if Path(value).is_absolute():
         raise InputCapabilityError(
@@ -169,6 +179,17 @@ def _reject_absolute_evidence(value: str, *, generator: str, channel: str) -> No
             f"{value!r} must be a relative path inside the evidence base "
             f"(absolute paths are not allowed)"
         )
+    depth = 0
+    for part in PurePosixPath(value).parts:
+        if part == "..":
+            depth -= 1
+        elif part != ".":
+            depth += 1
+        if depth < 0:
+            raise InputCapabilityError(
+                f"input capability profile '{generator}': channel '{channel}' evidence "
+                f"{value!r} must not traverse above the evidence root"
+            )
 
 
 def _resolve_confined_evidence(

@@ -262,6 +262,41 @@ def test_nested_relative_evidence_path_still_loads(tmp_path: Path) -> None:
     assert profile.input_channels.style_prompt.evidence == "docs/nested/proof.md"
 
 
+def test_default_base_rejects_lexically_traversing_evidence(tmp_path: Path) -> None:
+    """`evidence_base=None` でも字面の遡上（`../`）は形式検証で拒否される。"""
+    (tmp_path / "outside.md").write_text("real file outside the base", encoding="utf-8")
+
+    profile_dict = _profile_dict(
+        style_prompt={"support": "supported", "evidence": "../outside.md"}
+    )
+    profile_path = tmp_path / "base"
+    profile_path.mkdir()
+    profile_path = profile_path / "profile.yaml"
+    _write_profile(profile_path, profile_dict)
+
+    with pytest.raises(InputCapabilityError) as exc_info:
+        load_input_capability_profile(profile_path)
+
+    message = str(exc_info.value)
+    assert "acme" in message
+    assert "style_prompt" in message
+    assert "../outside.md" in message
+
+
+def test_default_base_allows_internally_cancelling_dotdot(tmp_path: Path) -> None:
+    """`docs/../docs/x.md` の内部相殺は遡上でないため形式検証を通過し、
+    `evidence_base=None` では実在検証もスキップされてロード成功する。"""
+    profile_dict = _profile_dict(
+        style_prompt={"support": "supported", "evidence": "docs/../docs/x.md"}
+    )
+    profile_path = tmp_path / "profile.yaml"
+    _write_profile(profile_path, profile_dict)
+
+    profile = load_input_capability_profile(profile_path)
+
+    assert profile.input_channels.style_prompt.evidence == "docs/../docs/x.md"
+
+
 # --- schema validation --------------------------------------------------------
 
 
