@@ -373,6 +373,57 @@ def test_compile_arrangement_reads_each_input_exactly_once(
     ).hexdigest()
 
 
+def test_publish_failure_rolls_back_previous_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """publish 途中の OSError で既存成果物が旧内容へ復元される（P2-r2 rollback の pin）。"""
+    import os
+
+    spec_path = tmp_path / "arrangement.yaml"
+    _write_spec(spec_path, _elastic_bpm_spec_dict())
+    output_dir = tmp_path / "out"
+
+    first = CliRunner().invoke(
+        app,
+        ["arrange", str(SAMPLE_PATH), str(spec_path), "--output-dir", str(output_dir)],
+    )
+    assert first.exit_code == 0, first.output
+    old_contents = {
+        name: (output_dir / name).read_bytes()
+        for name in ("derived_score.yaml", "arrangement_bundle.json", "arrangement_diff.json")
+    }
+
+    # 2 回目は別内容の spec で実行し、publish フェーズ 2 手目（bundle の公開）だけ失敗させる。
+    # 退避用 replace（dst が .prev）は素通しにする。
+    _write_spec(
+        spec_path,
+        _spec_dict(
+            target={"physical": {"bpm": 150}},
+            score_fields={"physical.bpm": "elastic"},
+        ),
+    )
+
+    original_replace = os.replace
+
+    def failing_replace(src: Any, dst: Any, **kwargs: Any) -> Any:
+        if str(dst).endswith("arrangement_bundle.json") and not str(src).endswith(".prev"):
+            raise OSError("injected publish failure")
+        return original_replace(src, dst, **kwargs)
+
+    monkeypatch.setattr("os.replace", failing_replace)
+
+    second = CliRunner().invoke(
+        app,
+        ["arrange", str(SAMPLE_PATH), str(spec_path), "--output-dir", str(output_dir)],
+    )
+
+    assert second.exit_code == 1
+    assert "Error:" in second.stderr
+    # 3 成果物とも 1 回目の旧内容へ復元されている（新 bpm=150 は一切公開されない）。
+    for name, old in old_contents.items():
+        assert (output_dir / name).read_bytes() == old, name
+
+
 def test_invalid_final_score_exits_1(tmp_path: Path) -> None:
     spec_path = tmp_path / "arrangement.yaml"
     _write_spec(

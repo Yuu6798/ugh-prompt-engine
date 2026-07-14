@@ -383,8 +383,13 @@ def arrange(
         DIFF_FILENAME: json.dumps(compiled.diff, ensure_ascii=False, indent=2),
     }
 
-    # 原子的公開（PR #176 P2-2）: staging へ全ファイルを書いてから os.replace で
-    # 公開する。途中失敗時は staging ごと自動掃除され、out_dir に部分成果物を残さない。
+    # 原子的公開（PR #176 P2-2 / P2 第 2 ラウンド）: staging へ全ファイルを書き、
+    # 既存ターゲットを staging 内へ snapshot 退避してから os.replace で公開する。
+    # 単一ファイルの os.replace は原子的だが、複数ファイルのセットコミットには
+    # POSIX に原子操作が存在しない。本実装は snapshot + best-effort rollback で
+    # partial publish の窓を「rollback 自体も失敗する二重障害」まで縮小する
+    # （honesty: ゼロにはならない）。退避も os.replace（同一 FS の rename）なので
+    # copy 系より失敗面が小さい。全成功時は staging（.prev ごと）が自動掃除される。
     out_dir = Path(output_dir)
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -399,8 +404,35 @@ def arrange(
             staging_dir = Path(staging)
             for filename, content in contents.items():
                 (staging_dir / filename).write_text(content, encoding="utf-8")
-            for filename in contents:
-                os.replace(staging_dir / filename, out_dir / filename)
+
+            snapshots: dict[str, Path] = {}
+            published: list[str] = []
+            try:
+                # snapshot: 既存ターゲットを staging 内の退避名へ os.replace で退避。
+                for filename in contents:
+                    target = out_dir / filename
+                    if target.exists():
+                        prev = staging_dir / f"{filename}.prev"
+                        os.replace(target, prev)
+                        snapshots[filename] = prev
+                # publish: staging の新ファイルをターゲット位置へ公開。
+                for filename in contents:
+                    os.replace(staging_dir / filename, out_dir / filename)
+                    published.append(filename)
+            except OSError:
+                # best-effort rollback: 公開済みの新ファイルを除去し、退避した
+                # .prev を元の位置へ戻す（個々の失敗は無視して続行）。
+                for filename in published:
+                    try:
+                        os.unlink(out_dir / filename)
+                    except OSError:
+                        pass
+                for filename, prev in snapshots.items():
+                    try:
+                        os.replace(prev, out_dir / filename)
+                    except OSError:
+                        pass
+                raise
     except OSError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
