@@ -179,7 +179,12 @@ class ArtifactBase(PackageModel):
     @field_validator("locator")
     @classmethod
     def _validate_relative_locator(cls, value: str) -> str:
-        if PurePosixPath(value).is_absolute() or PureWindowsPath(value).is_absolute():
+        windows_path = PureWindowsPath(value)
+        if (
+            PurePosixPath(value).is_absolute()
+            or windows_path.drive
+            or windows_path.root
+        ):
             raise ValueError("artifact base locator must be relative")
         return value
 
@@ -198,7 +203,7 @@ class ChannelArtifactReference(PackageModel):
     def _validate_artifact_path(cls, value: str) -> str:
         posix_path = PurePosixPath(value.replace("\\", "/"))
         windows_path = PureWindowsPath(value)
-        if posix_path.is_absolute() or windows_path.is_absolute():
+        if posix_path.is_absolute() or windows_path.drive or windows_path.root:
             raise ValueError("artifact path must be relative")
         if ".." in posix_path.parts or ".." in windows_path.parts:
             raise ValueError("artifact path must not contain parent traversal")

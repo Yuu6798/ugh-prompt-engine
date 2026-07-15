@@ -515,7 +515,12 @@ def test_package_readback_rejects_duplicate_and_inconsistent_delivery() -> None:
     with pytest.raises(ValidationError, match="artifact_base"):
         PerformancePackage.model_validate(missing_artifact_base)
 
-    for absolute_locator in ("/tmp/manifest", "C:\\manifest"):
+    for absolute_locator in (
+        "/tmp/manifest",
+        "C:\\manifest",
+        "C:manifest",
+        "\\manifest",
+    ):
         absolute_artifact_base = json.loads(json.dumps(data))
         absolute_artifact_base["channel_artifacts"]["lyrics_text"][0][
             "artifact_base"
@@ -528,6 +533,8 @@ def test_package_readback_rejects_duplicate_and_inconsistent_delivery() -> None:
         "nested/../../outside.wav",
         "/tmp/outside.wav",
         "C:\\outside.wav",
+        "C:outside.wav",
+        "\\outside.wav",
     ):
         invalid_artifact = json.loads(json.dumps(data))
         invalid_artifact["channel_artifacts"]["lyrics_text"][0][
