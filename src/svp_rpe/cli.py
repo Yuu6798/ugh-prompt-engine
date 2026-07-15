@@ -541,6 +541,7 @@ def package_command(
             identity_yaml,
             arrangement_yaml,
             capability_profile,
+            output_dir,
             strict=strict_capabilities,
         )
     except (

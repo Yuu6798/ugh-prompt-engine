@@ -140,8 +140,11 @@ their `allow` list and optional `tolerance_profile` for downstream policy-aware
 observation. Unsupported MIDI or symbolic
 melody anchors are recorded as unsupported rather than rewritten into prompt
 instructions. Each artifact path is explicitly relative to the identity
-manifest directory (`artifact_base: identity_manifest_directory`); artifacts
-are referenced and hash-pinned rather than copied into `--output-dir`.
+manifest directory. Its `artifact_base` records a concrete locator from the
+performance-package directory to that manifest directory, so consumers resolve
+`package_dir / artifact_base.locator / artifact`. The locator is relative and
+portable within the retained directory layout; artifacts are referenced and
+hash-pinned rather than copied into `--output-dir`.
 
 The capability profile's `generator` must match the derived score's resolved
 backend profile key (`external` resolves to `suno`). A mismatch fails before

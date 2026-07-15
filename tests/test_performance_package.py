@@ -170,6 +170,7 @@ def _build(
     strict: bool = False,
     score: CompositionScore | None = None,
     device_profile: DeviceProfile | None = None,
+    artifact_base_locator: str = ".",
 ):
     effective_score = score or _score()
     resolved_device_profile = (
@@ -183,6 +184,7 @@ def _build(
         profile,
         effective_score,
         device_profile=resolved_device_profile,
+        artifact_base_locator=artifact_base_locator,
         manifest_sha256=MANIFEST_SHA256,
         contract_sha256=CONTRACT_SHA256,
         profile_sha256=PROFILE_SHA256,
@@ -263,10 +265,13 @@ def test_builder_separates_all_delivery_states_and_future_states() -> None:
         compiled.package.channel_artifacts["section_tags"][0].format_version
         == "section-map/1"
     )
-    assert (
-        compiled.package.channel_artifacts["section_tags"][0].artifact_base
-        == "identity_manifest_directory"
-    )
+    assert compiled.package.channel_artifacts[
+        "section_tags"
+    ][0].artifact_base.model_dump() == {
+        "kind": "identity_manifest_directory",
+        "relative_to": "performance_package_directory",
+        "locator": ".",
+    }
     assert (
         json.loads(compiled.package_json)["channel_artifacts"]["section_tags"][0][
             "format_version"
@@ -277,7 +282,11 @@ def test_builder_separates_all_delivery_states_and_future_states() -> None:
         json.loads(compiled.package_json)["channel_artifacts"]["section_tags"][0][
             "artifact_base"
         ]
-        == "identity_manifest_directory"
+        == {
+            "kind": "identity_manifest_directory",
+            "relative_to": "performance_package_directory",
+            "locator": ".",
+        }
     )
     serialized_statuses = {
         status["anchor_id"]: status
@@ -506,6 +515,14 @@ def test_package_readback_rejects_duplicate_and_inconsistent_delivery() -> None:
     with pytest.raises(ValidationError, match="artifact_base"):
         PerformancePackage.model_validate(missing_artifact_base)
 
+    for absolute_locator in ("/tmp/manifest", "C:\\manifest"):
+        absolute_artifact_base = json.loads(json.dumps(data))
+        absolute_artifact_base["channel_artifacts"]["lyrics_text"][0][
+            "artifact_base"
+        ]["locator"] = absolute_locator
+        with pytest.raises(ValidationError, match="locator must be relative"):
+            PerformancePackage.model_validate(absolute_artifact_base)
+
 
 def test_package_readback_rejects_incomplete_or_unrequested_policy() -> None:
     manifest = _manifest([_anchor("sections", "structure", "section_map")])
@@ -649,7 +666,7 @@ def _package_cli_args(
 
 
 def test_package_cli_outputs_reload_and_are_byte_deterministic(tmp_path: Path) -> None:
-    manifest_path, spec_path, _ = _write_cli_fixture(tmp_path)
+    manifest_path, spec_path, artifact_path = _write_cli_fixture(tmp_path)
     outputs = [tmp_path / "out-1", tmp_path / "out-2"]
 
     for output_dir in outputs:
@@ -669,6 +686,12 @@ def test_package_cli_outputs_reload_and_are_byte_deterministic(tmp_path: Path) -
     )
     assert package.work_id == "cli-package"
     assert report.package_sha256 == hashlib.sha256(package_bytes).hexdigest()
+    reference = package.channel_artifacts["lyrics_text"][0]
+    assert (
+        outputs[0]
+        / reference.artifact_base.locator
+        / reference.artifact
+    ).resolve() == artifact_path.resolve()
     serialized = json.dumps(package.model_dump(mode="json"))
     assert str(tmp_path.resolve()) not in serialized
 
@@ -694,6 +717,7 @@ def test_path_compiler_reads_each_declared_input_once(
         manifest_path,
         spec_path,
         SUNO_PROFILE_PATH,
+        tmp_path / "out",
     )
 
     for path in declared:

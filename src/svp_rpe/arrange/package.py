@@ -7,12 +7,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass, replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Literal, Optional
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from svp_rpe.arrange.bundle import render_score_yaml
 from svp_rpe.arrange.capabilities import (
@@ -163,14 +171,27 @@ class PackageAnchorStatus(PackageModel):
         return self
 
 
+class ArtifactBase(PackageModel):
+    kind: Literal["identity_manifest_directory"]
+    relative_to: Literal["performance_package_directory"]
+    locator: str = Field(min_length=1)
+
+    @field_validator("locator")
+    @classmethod
+    def _validate_relative_locator(cls, value: str) -> str:
+        if PurePosixPath(value).is_absolute() or PureWindowsPath(value).is_absolute():
+            raise ValueError("artifact base locator must be relative")
+        return value
+
+
 class ChannelArtifactReference(PackageModel):
     anchor_id: str
-    artifact: str
+    artifact: str = Field(min_length=1)
     artifact_sha256: str = Field(pattern=_SHA256_PATTERN)
     artifact_type: ArtifactType
     media_type: str = Field(min_length=1)
     format_version: Optional[str] = None
-    artifact_base: Literal["identity_manifest_directory"]
+    artifact_base: ArtifactBase
 
 
 class PromptPayload(PackageModel):
@@ -418,6 +439,7 @@ def build_performance_package(
     derived_score: CompositionScore,
     *,
     device_profile: DeviceProfile | None,
+    artifact_base_locator: str,
     manifest_sha256: str,
     contract_sha256: str,
     profile_sha256: str,
@@ -455,6 +477,11 @@ def build_performance_package(
 
     statuses: list[PackageAnchorStatus] = []
     channel_artifacts: dict[InputChannel, list[ChannelArtifactReference]] = {}
+    artifact_base = ArtifactBase(
+        kind="identity_manifest_directory",
+        relative_to="performance_package_directory",
+        locator=artifact_base_locator,
+    )
     warnings: list[str] = []
     strict_failures: list[tuple[str, DeliveryStatus]] = []
 
@@ -518,7 +545,7 @@ def build_performance_package(
                     artifact_type=anchor.artifact_type,
                     media_type=anchor.media_type,
                     format_version=anchor.format_version,
-                    artifact_base="identity_manifest_directory",
+                    artifact_base=artifact_base,
                 )
             )
         if requested.mode == "hard" and delivery_status in ("unsupported", "unknown"):
@@ -621,6 +648,7 @@ def compile_performance_package(
     manifest_path: Path | str,
     spec_path: Path | str,
     profile_path: Path | str,
+    output_dir: Path | str,
     *,
     strict: bool = False,
 ) -> CompiledPerformancePackage:
@@ -629,6 +657,7 @@ def compile_performance_package(
     manifest_file = Path(manifest_path)
     spec_file = Path(spec_path)
     profile_file = Path(profile_path)
+    package_dir = Path(output_dir)
 
     score_bytes = score_file.read_bytes()
     manifest_bytes = manifest_file.read_bytes()
@@ -678,6 +707,18 @@ def compile_performance_package(
         resolution.derived_score.rendering.target_backend
     ).profile_key
     device_profile = load_device_profile(render_generator)
+    try:
+        artifact_base_locator = Path(
+            os.path.relpath(
+                manifest_file.resolve().parent,
+                package_dir.resolve(),
+            )
+        ).as_posix()
+    except ValueError as exc:
+        raise PackageCompilationError(
+            "identity manifest directory cannot be expressed relative to the "
+            f"performance package directory: {exc}"
+        ) from exc
 
     compiled = build_performance_package(
         manifest,
@@ -685,6 +726,7 @@ def compile_performance_package(
         profile,
         resolution.derived_score,
         device_profile=device_profile,
+        artifact_base_locator=artifact_base_locator,
         manifest_sha256=manifest_sha256,
         contract_sha256=contract_sha256,
         profile_sha256=hashlib.sha256(profile_bytes).hexdigest(),
