@@ -246,10 +246,20 @@ def test_builder_separates_all_delivery_states_and_future_states() -> None:
         == "section-map/1"
     )
     assert (
+        compiled.package.channel_artifacts["section_tags"][0].artifact_base
+        == "identity_manifest_directory"
+    )
+    assert (
         json.loads(compiled.package_json)["channel_artifacts"]["section_tags"][0][
             "format_version"
         ]
         == "section-map/1"
+    )
+    assert (
+        json.loads(compiled.package_json)["channel_artifacts"]["section_tags"][0][
+            "artifact_base"
+        ]
+        == "identity_manifest_directory"
     )
     assert compiled.report.warnings[:4] == [
         "anchor 'sections': channel 'section_tags' is experimental",
@@ -422,6 +432,11 @@ def test_package_readback_rejects_duplicate_and_inconsistent_delivery() -> None:
     with pytest.raises(ValidationError, match="requested_mode must be null"):
         PerformancePackage.model_validate(contradictory_request)
 
+    missing_artifact_base = json.loads(json.dumps(data))
+    del missing_artifact_base["channel_artifacts"]["lyrics_text"][0]["artifact_base"]
+    with pytest.raises(ValidationError, match="artifact_base"):
+        PerformancePackage.model_validate(missing_artifact_base)
+
 
 def test_package_and_report_reject_unknown_schema_versions() -> None:
     compiled = _build(_manifest([]), _contract(_manifest([]), {}), _profile())
@@ -454,10 +469,12 @@ def _write_cli_fixture(
     tmp_path: Path,
     *,
     target_backend: str | None = None,
+    source_name: str = "source.wav",
+    artifact_name: str = "lyrics.txt",
 ) -> tuple[Path, Path, Path]:
-    source_path = tmp_path / "source.wav"
+    source_path = tmp_path / source_name
     source_path.write_bytes(b"source audio")
-    artifact_path = tmp_path / "lyrics.txt"
+    artifact_path = tmp_path / artifact_name
     artifact_path.write_bytes(b"hello midnight")
 
     manifest_path = tmp_path / "identity.yaml"
@@ -652,3 +669,40 @@ def test_package_cli_rejects_profile_for_different_generator(tmp_path: Path) -> 
     assert "capability profile generator mismatch" in result.stderr
     assert "target_backend 'external' resolves to generator 'suno'" in result.stderr
     assert not output_dir.exists()
+
+
+@pytest.mark.parametrize(
+    ("source_name", "artifact_name", "colliding_name"),
+    [
+        ("performance_package.json", "lyrics.txt", "performance_package.json"),
+        ("source.wav", "compilation_report.json", "compilation_report.json"),
+    ],
+)
+def test_package_cli_does_not_overwrite_verified_manifest_artifacts(
+    tmp_path: Path,
+    source_name: str,
+    artifact_name: str,
+    colliding_name: str,
+) -> None:
+    manifest_path, spec_path, _ = _write_cli_fixture(
+        tmp_path,
+        source_name=source_name,
+        artifact_name=artifact_name,
+    )
+    colliding_path = tmp_path / colliding_name
+    original_bytes = colliding_path.read_bytes()
+
+    result = CliRunner().invoke(
+        app,
+        _package_cli_args(manifest_path, spec_path, tmp_path),
+    )
+
+    assert result.exit_code == 1
+    assert "input path collides with output artifact path" in result.stderr
+    assert colliding_path.read_bytes() == original_bytes
+    other_name = (
+        "compilation_report.json"
+        if colliding_name == "performance_package.json"
+        else "performance_package.json"
+    )
+    assert not (tmp_path / other_name).exists()

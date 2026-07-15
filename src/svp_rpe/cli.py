@@ -561,7 +561,7 @@ def package_command(
         out_dir = _publish_artifacts_atomically(
             contents,
             output_dir,
-            [score_yaml, identity_yaml, arrangement_yaml, capability_profile],
+            list(compiled.protected_input_paths),
         )
     except (OSError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)

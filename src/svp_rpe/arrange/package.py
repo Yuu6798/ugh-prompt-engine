@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, Optional
 
@@ -125,6 +125,7 @@ class ChannelArtifactReference(PackageModel):
     artifact_type: ArtifactType
     media_type: str = Field(min_length=1)
     format_version: Optional[str] = None
+    artifact_base: Literal["identity_manifest_directory"]
 
 
 class PromptPayload(PackageModel):
@@ -248,6 +249,7 @@ class CompiledPerformancePackage:
     report: CompilationReport
     package_json: str
     report_json: str
+    protected_input_paths: tuple[Path, ...] = ()
 
 
 def _render_json(model: BaseModel) -> str:
@@ -431,6 +433,7 @@ def build_performance_package(
                     artifact_type=anchor.artifact_type,
                     media_type=anchor.media_type,
                     format_version=anchor.format_version,
+                    artifact_base="identity_manifest_directory",
                 )
             )
         if requested.mode == "hard" and delivery_status in ("unsupported", "unknown"):
@@ -489,7 +492,10 @@ def _parse_yaml_mapping(raw_bytes: bytes, label: str, path_str: str) -> dict[str
     return data
 
 
-def _verify_manifest_artifacts(manifest: IdentityManifest, manifest_path: Path) -> None:
+def _verify_manifest_artifacts(
+    manifest: IdentityManifest,
+    manifest_path: Path,
+) -> tuple[Path, ...]:
     base_dir = manifest_path.resolve().parent
     work_id = manifest.meta.work_id
     source_path = _resolve_confined(
@@ -504,6 +510,7 @@ def _verify_manifest_artifacts(manifest: IdentityManifest, manifest_path: Path) 
         work_id=work_id,
         target="source",
     )
+    verified_paths = [source_path]
     for anchor in manifest.anchors:
         target = f"anchor '{anchor.id}'"
         artifact_path = _resolve_confined(
@@ -518,6 +525,8 @@ def _verify_manifest_artifacts(manifest: IdentityManifest, manifest_path: Path) 
             work_id=work_id,
             target=target,
         )
+        verified_paths.append(artifact_path)
+    return tuple(verified_paths)
 
 
 def compile_performance_package(
@@ -552,7 +561,7 @@ def compile_performance_package(
         _parse_yaml_mapping(profile_bytes, "input capability profile", str(profile_path))
     )
 
-    _verify_manifest_artifacts(manifest, manifest_file)
+    manifest_artifact_paths = _verify_manifest_artifacts(manifest, manifest_file)
     for channel_name in INPUT_CHANNELS:
         capability = getattr(profile.input_channels, channel_name)
         if capability.evidence is not None:
@@ -579,7 +588,7 @@ def compile_performance_package(
         derived_score_yaml.encode("utf-8")
     ).hexdigest()
 
-    return build_performance_package(
+    compiled = build_performance_package(
         manifest,
         contract,
         profile,
@@ -589,4 +598,14 @@ def compile_performance_package(
         profile_sha256=hashlib.sha256(profile_bytes).hexdigest(),
         derived_score_sha256=derived_score_sha256,
         strict=strict,
+    )
+    return replace(
+        compiled,
+        protected_input_paths=(
+            score_file.resolve(),
+            manifest_file.resolve(),
+            spec_file.resolve(),
+            profile_file.resolve(),
+            *manifest_artifact_paths,
+        ),
     )

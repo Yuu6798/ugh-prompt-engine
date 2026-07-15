@@ -137,7 +137,9 @@ control, and observation as separate states. Only `delivered` or
 `experimental` anchors appear in `channel_artifacts`; compile-time control is
 `unknown` and observation is `not_observed`. Unsupported MIDI or symbolic
 melody anchors are recorded as unsupported rather than rewritten into prompt
-instructions.
+instructions. Each artifact path is explicitly relative to the identity
+manifest directory (`artifact_base: identity_manifest_directory`); artifacts
+are referenced and hash-pinned rather than copied into `--output-dir`.
 
 The capability profile's `generator` must match the derived score's resolved
 backend profile key (`external` resolves to `suno`). A mismatch fails before
