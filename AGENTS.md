@@ -242,6 +242,9 @@ semantic-ci-code での 20 ラウンド以上の経験から蒸留した項目�
     いずれか）を Brief 段階で確定しておく。未確定のまま実装に渡すと、実装者が locked
     schema を広げて吸収し、それが自動レビュアーの連鎖指摘（P2 スパイラル）を誘発する
     — PR #71（T1）で 10+ ラウンドの churn を生んだ実例。
+11. **永続成果物タスクは安全ゲートを組み込む** — 新規 loader / 配布物 / 永続成果物の
+    書き込み系タスクの Memo には、§8 の Persistent Artifact Safety Gate を組み込む。
+    出典: #175–#180 の Codex P2 計 14 件 + 2026-07-14 提案者フィードバック承認。
 
 > **PR #71 教訓**: `compose/models.py` を Scope OUT に書いていたが、未検出
 > フィールドの扱いを Brief で決めていなかったため、実装が `bpm: int → int|str` と
@@ -270,6 +273,25 @@ AI エージェントはセッション間で記憶を持たない。したが�
 | 再現可能な不変条件 | `tests/` に自動テストとして追加 |
 | セッション固有の文脈 | `.claude/memory/YYYY-MM-DD.md` |
 | 反復的な手順 | チェックリストとして `AGENTS.md` に追加 |
+
+### Persistent Artifact Safety Gate（永続成果物安全ゲート）
+
+新規 loader、配布物、永続成果物の書き込み経路は、Design Memo と実装の両方で次の
+10 項目を確認する。出典: #175–#180 のレビューで反復した path、TOCTOU、原子性、
+読み戻し、packaged 資源整合の指摘型。
+
+1. **単一 read で parse + hash** — 同一バイト列から parse と hash を行い、TOCTOU を排除する
+2. **path 脱出検査を二段に分離** — lexical validation（`../` 遡上判定・base 不要）と、
+   resolved containment（symlink 解決後の `is_relative_to`）を分離して両方実施する
+3. **build → dump → validate の読み戻しテスト** — builder が保証する不変条件を schema
+   validator でも強制する
+4. **duplicate ID 拒否** — 同じ ID に矛盾する状態や artifact を重ねて持ち込ませない
+5. **unknown の推測補完禁止** — 省略欄を `supported` / `free` 等へ倒さない
+6. **全構築後公開** — staging + atomic rename を使い、部分成果物を残さない
+7. **公開途中失敗の注入テスト** — 公開処理の途中で失敗させ、部分成果物が残らないことを検証する
+8. **input + output hash 記録** — 入力と公開成果物の双方に内容 hash を残す
+9. **checkout vs installed の資源差テスト** — package-data と packaged コピーの整合を検証する
+10. **schema_version 未知値拒否** — `Literal` 等で未知バージョンの読み込みを拒否する
 
 ### デモ昇格チェックリスト（scratchpad デモ → repo ツール）
 
