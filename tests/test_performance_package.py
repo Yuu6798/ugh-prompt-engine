@@ -26,6 +26,7 @@ from svp_rpe.arrange.package import (
     build_performance_package,
     compile_performance_package,
 )
+from svp_rpe.compose.device_profile import DeviceProfile, load_device_profile
 from svp_rpe.compose.models import CompositionScore
 from svp_rpe.compose.prompt_renderer import ExternalPromptAdapter
 from svp_rpe.cli import app
@@ -168,12 +169,20 @@ def _build(
     *,
     strict: bool = False,
     score: CompositionScore | None = None,
+    device_profile: DeviceProfile | None = None,
 ):
+    effective_score = score or _score()
+    resolved_device_profile = (
+        device_profile
+        if device_profile is not None
+        else load_device_profile(profile.generator)
+    )
     return build_performance_package(
         manifest,
         contract,
         profile,
-        score or _score(),
+        effective_score,
+        device_profile=resolved_device_profile,
         manifest_sha256=MANIFEST_SHA256,
         contract_sha256=CONTRACT_SHA256,
         profile_sha256=PROFILE_SHA256,
@@ -418,6 +427,44 @@ def test_external_backend_alias_accepts_suno_capability_profile() -> None:
     assert external_score.rendering.target_backend == "external"
 
 
+def test_builder_pins_the_exact_device_profile_used_for_render(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _manifest([])
+    contract = _contract(manifest, {})
+    device_profile = load_device_profile("suno")
+    assert device_profile is not None
+
+    def fail_if_reloaded(_generator: str) -> None:
+        raise AssertionError("renderer reloaded the device profile")
+
+    monkeypatch.setattr(
+        "svp_rpe.compose.prompt_renderer.load_device_profile",
+        fail_if_reloaded,
+    )
+    compiled = _build(
+        manifest,
+        contract,
+        _profile(),
+        device_profile=device_profile,
+    )
+    altered = device_profile.model_copy(update={"notes": "different provenance"})
+    altered_compiled = _build(
+        manifest,
+        contract,
+        _profile(),
+        device_profile=altered,
+    )
+
+    pinned = compiled.package.inputs.device_profile
+    assert pinned.generator == "suno"
+    assert pinned.status == "loaded"
+    assert pinned.sha256 is not None
+    assert pinned.hash_basis == "canonical_model_json"
+    assert altered_compiled.package.inputs.device_profile.sha256 != pinned.sha256
+    assert compiled.report.inputs.device_profile == pinned
+
+
 def test_package_readback_rejects_duplicate_and_inconsistent_delivery() -> None:
     manifest = _manifest([_anchor("lyrics", "lyrics", "lyrics_text")])
     contract = _contract(manifest, {"lyrics": ("hard", [])})
@@ -484,6 +531,15 @@ def test_package_and_report_reject_unknown_schema_versions() -> None:
     report_data["schema_version"] = "compilation-report/0.2"
     with pytest.raises(ValidationError):
         CompilationReport.model_validate(report_data)
+
+
+def test_package_readback_rejects_inconsistent_device_profile_input() -> None:
+    manifest = _manifest([])
+    compiled = _build(manifest, _contract(manifest, {}), _profile())
+    package_data = compiled.package.model_dump(mode="json")
+    package_data["inputs"]["device_profile"]["status"] = "not_found"
+    with pytest.raises(ValidationError, match="device profile.*equivalent"):
+        PerformancePackage.model_validate(package_data)
 
 
 def test_builder_is_byte_deterministic_and_report_pins_package_bytes() -> None:

@@ -34,6 +34,7 @@ from svp_rpe.arrange.models import (
     PreservationMode,
 )
 from svp_rpe.arrange.resolver import ArrangementError, resolve_arrangement
+from svp_rpe.compose.device_profile import DeviceProfile, load_device_profile
 from svp_rpe.compose.models import CompositionScore
 from svp_rpe.compose.prompt_renderer import (
     ExternalPromptAdapter,
@@ -93,11 +94,28 @@ class PackageInputHash(PackageModel):
     sha256: str = Field(pattern=_SHA256_PATTERN)
 
 
+class DeviceProfileInput(PackageModel):
+    generator: str
+    status: Literal["loaded", "not_found"]
+    sha256: Optional[str] = Field(default=None, pattern=_SHA256_PATTERN)
+    hash_basis: Literal["canonical_model_json"] = "canonical_model_json"
+
+    @model_validator(mode="after")
+    def _validate_status_hash(self) -> "DeviceProfileInput":
+        if (self.status == "loaded") != (self.sha256 is not None):
+            raise ValueError(
+                "device profile status='loaded' and a non-null sha256 must be "
+                "equivalent"
+            )
+        return self
+
+
 class PackageInputs(PackageModel):
     identity_manifest: PackageInputHash
     preservation_contract: PackageInputHash
     capability_profile: PackageInputHash
     derived_score: PackageInputHash
+    device_profile: DeviceProfileInput
 
 
 class DeliveryState(PackageModel):
@@ -287,6 +305,30 @@ def _render_json(model: BaseModel) -> str:
     )
 
 
+def _device_profile_input(
+    generator: str,
+    device_profile: DeviceProfile | None,
+) -> DeviceProfileInput:
+    if device_profile is None:
+        return DeviceProfileInput(generator=generator, status="not_found")
+    if device_profile.generator != generator:
+        raise PackageCompilationError(
+            "device profile generator mismatch: expected "
+            f"{generator!r}, got {device_profile.generator!r}"
+        )
+    canonical_bytes = json.dumps(
+        device_profile.model_dump(mode="json", exclude_none=True),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return DeviceProfileInput(
+        generator=generator,
+        status="loaded",
+        sha256=hashlib.sha256(canonical_bytes).hexdigest(),
+    )
+
+
 def _delivery_status(support: ChannelSupport) -> DeliveryStatus:
     if support == "supported":
         return "delivered"
@@ -311,6 +353,7 @@ def _anchor_warning(
 def _prompt_payload(
     score: CompositionScore,
     profile: InputCapabilityProfile,
+    device_profile: DeviceProfile | None,
     warnings: list[str],
     *,
     render_backend: str,
@@ -333,7 +376,10 @@ def _prompt_payload(
                 )
             }
         )
-    generated = ExternalPromptAdapter().render(render_score)
+    generated = ExternalPromptAdapter().render(
+        render_score,
+        device_profile=device_profile,
+    )
     section_tags: str | None = None
     if generated.section_tags is not None:
         section_support = profile.input_channels.section_tags.support
@@ -364,6 +410,7 @@ def build_performance_package(
     profile: InputCapabilityProfile,
     derived_score: CompositionScore,
     *,
+    device_profile: DeviceProfile | None,
     manifest_sha256: str,
     contract_sha256: str,
     profile_sha256: str,
@@ -483,10 +530,12 @@ def build_performance_package(
         preservation_contract=PackageInputHash(sha256=contract_sha256),
         capability_profile=PackageInputHash(sha256=profile_sha256),
         derived_score=PackageInputHash(sha256=derived_score_sha256),
+        device_profile=_device_profile_input(expected_generator, device_profile),
     )
     prompt = _prompt_payload(
         derived_score,
         profile,
+        device_profile,
         warnings,
         render_backend=expected_generator,
     )
@@ -618,12 +667,17 @@ def compile_performance_package(
     derived_score_sha256 = hashlib.sha256(
         derived_score_yaml.encode("utf-8")
     ).hexdigest()
+    render_generator = resolve_backend_descriptor(
+        resolution.derived_score.rendering.target_backend
+    ).profile_key
+    device_profile = load_device_profile(render_generator)
 
     compiled = build_performance_package(
         manifest,
         contract,
         profile,
         resolution.derived_score,
+        device_profile=device_profile,
         manifest_sha256=manifest_sha256,
         contract_sha256=contract_sha256,
         profile_sha256=hashlib.sha256(profile_bytes).hexdigest(),

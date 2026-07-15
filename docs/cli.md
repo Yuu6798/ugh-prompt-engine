@@ -148,6 +148,10 @@ backend profile key (`external` resolves to `suno`). A mismatch fails before
 either artifact is published. Prompt rendering also uses that resolved
 generator, so an `external` score packaged for Suno receives the same
 Suno-specific prompt and section-tag behavior as `target_backend: suno`.
+The resolved generator device profile is loaded once, rendered from that exact
+model, and pinned in both outputs by a canonical-model-JSON SHA-256 (or an
+explicit `not_found` status), so prompt provenance does not depend on an
+unrecorded local-versus-packaged config choice.
 
 Advisory mode is the default and records capability warnings. Add
 `--strict-capabilities` to fail when any hard anchor is `unsupported` or
