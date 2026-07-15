@@ -489,6 +489,13 @@ def test_package_readback_rejects_duplicate_and_inconsistent_delivery() -> None:
     with pytest.raises(ValidationError, match="non-delivery anchor"):
         PerformancePackage.model_validate(non_delivery_reference)
 
+    wrong_artifact_type = json.loads(json.dumps(data))
+    wrong_artifact_type["channel_artifacts"]["lyrics_text"][0][
+        "artifact_type"
+    ] = "midi_clip"
+    with pytest.raises(ValidationError, match="midi_clip.*maps to 'midi'"):
+        PerformancePackage.model_validate(wrong_artifact_type)
+
     contradictory_request = json.loads(json.dumps(data))
     contradictory_request["anchor_statuses"][0]["requested_mode"] = None
     with pytest.raises(ValidationError, match="requested_mode must be null"):

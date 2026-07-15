@@ -239,6 +239,13 @@ class PerformancePackage(PackageModel):
                         f"anchor '{reference.anchor_id}' is listed under channel "
                         f"'{channel}' but status declares {status.delivery.channel!r}"
                     )
+                mapped_channel = ARTIFACT_TYPE_CHANNEL[reference.artifact_type]
+                if mapped_channel != channel:
+                    raise ValueError(
+                        f"anchor '{reference.anchor_id}' artifact_type "
+                        f"{reference.artifact_type!r} maps to {mapped_channel!r}, "
+                        f"not channel '{channel}'"
+                    )
 
         for status in self.anchor_statuses:
             is_requested = status.requested_mode is not None
