@@ -1,7 +1,7 @@
 # Arrangement Identity Track Planning
 
-**Status**: AR0 計画文書。AR1、AR2-1/2、AR3-1 は実装済み。AR2-3 は保留、
-AR3-2 と AR4 は未実装。
+**Status**: AR0 計画文書。AR1、AR2-1/2、AR3-1/2 は実装済み。AR2-3 は保留、
+AR4 は未実装。
 
 > この文書は、元の未コミット AR0 ドラフトが checkout 内に残っていなかったため、
 > 2026-07-15 のユーザー承認に基づき、マージ済み PR #175–#181、現行コード、
@@ -24,7 +24,7 @@ Composition PoC の C5「Layer Manipulator」を、元作品として残す要�
 | 段階 | 完了条件 | 現状 |
 |---|---|---|
 | Score-level preservation (M1) | 1 つの Base Score から異なる Derived Score を決定論的に作り、`semantic.core` と `physical.key` の保持を Score と差分で確認する | #177 で完了 |
-| Artifact delivery preservation | identity artifact と保持契約を生成器の実入力チャネルへ配送し、配送不能を明示状態として記録する | AR3-2 未実装 |
+| Artifact delivery preservation | identity artifact と保持契約を生成器の実入力チャネルへ配送し、配送不能を明示状態として記録する | AR3-2 compiler 実装済み。実 backend 縦切り E2E は未完了 |
 | Observed musical identity preservation | 生成後成果物を anchor ごとのセンサーと adherence 指標で比較し、観測結果を記録する | AR4 未実装 |
 
 M1 の正典表現は、**「意味核（`semantic.core`）とキー（`physical.key`）を保持した
@@ -71,7 +71,7 @@ Score は作品記述、sidecar は編曲セッション固有の要求・証跡
 場合に限る。
 
 これは artifact を渡した事実と、曖昧な自然言語で保持を依頼した事実を混同しないための
-境界である。D7 の実装先は AR3-2 とし、現時点では計画上の必須契約である。
+境界である。D7 は AR3-2 の `PerformancePackage` compiler で実装済みである。
 
 ### マージ済み実装で固定された制約
 
@@ -120,10 +120,11 @@ AR2 の完了は「何を残したいか」と「どの変形を許すか」を�
 - **AR3-1 (#180, #181)**: `InputCapabilityProfile`。`style_prompt`、`lyrics_text`、
   `section_tags`、`reference_audio`、`symbolic_melody`、`midi` の support 状態を
   `supported` / `experimental` / `unsupported` / `unknown` で記録する。
-- **AR3-2 (next)**: `PreservationContract` と capability profile から
+- **AR3-2 (implemented)**: `PreservationContract` と capability profile から
   `PerformancePackage` と `CompilationReport` を構築する。anchor ごとに
   requested / deliverable / controllable / observed を分離し、strict/advisory と
-  D7 の暗黙代替禁止を実装する。
+  D7 の暗黙代替禁止を実装した。compile 時点の control は `unknown`、observation は
+  `not_observed` に固定し、配送可否を保持実績へ読み替えない。
 
 Artifact delivery preservation の完了には、少なくとも 1 backend へ hard melody
 artifact を実配送し、package と backend invocation の双方で同一 artifact/hash を
@@ -150,7 +151,7 @@ chain で結ぶ。聴覚的同一性の判定条件と閾値は、その artifac
 | AR2-1/2 | IdentityManifest / PreservationContract | 完了 (#178, #179, #181) |
 | AR2-3 | structure anchor policy | 保留 |
 | AR3-1 | InputCapabilityProfile | 完了 (#180, #181) |
-| AR3-2 | PerformancePackage compiler | 未実装 |
+| AR3-2 | PerformancePackage compiler | 実装済み |
 | AR4 | generated-output identity observation | 未実装 |
 
 ## 7. 非目標

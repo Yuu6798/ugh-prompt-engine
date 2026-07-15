@@ -344,6 +344,57 @@ def compose(
         )
 
 
+def _publish_artifacts_atomically(
+    contents: dict[str, str],
+    output_dir: str | Path,
+    input_paths: list[str | Path],
+) -> Path:
+    """Publish a complete artifact set with rollback on an interrupted rename."""
+    import os
+    import tempfile
+
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    resolved_inputs = {Path(path).resolve() for path in input_paths}
+    for filename in contents:
+        target = out_dir / filename
+        if target.resolve() in resolved_inputs:
+            raise ValueError(f"input path collides with output artifact path: {target}")
+        if target.is_dir():
+            raise ValueError(f"output path is an existing directory: {target}")
+
+    with tempfile.TemporaryDirectory(dir=out_dir) as staging:
+        staging_dir = Path(staging)
+        for filename, content in contents.items():
+            (staging_dir / filename).write_bytes(content.encode("utf-8"))
+
+        snapshots: dict[str, Path] = {}
+        published: list[str] = []
+        try:
+            for filename in contents:
+                target = out_dir / filename
+                if target.exists():
+                    previous = staging_dir / f"{filename}.prev"
+                    os.replace(target, previous)
+                    snapshots[filename] = previous
+            for filename in contents:
+                os.replace(staging_dir / filename, out_dir / filename)
+                published.append(filename)
+        except OSError:
+            for filename in published:
+                try:
+                    os.unlink(out_dir / filename)
+                except OSError:
+                    pass
+            for filename, previous in snapshots.items():
+                try:
+                    os.replace(previous, out_dir / filename)
+                except OSError:
+                    pass
+            raise
+    return out_dir
+
+
 @app.command()
 def arrange(
     score_yaml: str = typer.Argument(..., help="Path to base Composition Score YAML"),
@@ -454,6 +505,76 @@ def arrange(
     console.print(f"[green]Derived score saved to {out_dir / DERIVED_SCORE_FILENAME}[/green]")
     console.print(f"[green]Arrangement bundle saved to {out_dir / BUNDLE_FILENAME}[/green]")
     console.print(f"[green]Arrangement diff saved to {out_dir / DIFF_FILENAME}[/green]")
+
+
+@app.command("package")
+def package_command(
+    score_yaml: str = typer.Argument(..., help="Path to base Composition Score YAML"),
+    identity_yaml: str = typer.Argument(..., help="Path to IdentityManifest YAML"),
+    arrangement_yaml: str = typer.Argument(..., help="Path to ArrangementSpec YAML"),
+    capability_profile: str = typer.Option(
+        ...,
+        "--capability-profile",
+        help="Path to InputCapabilityProfile YAML",
+    ),
+    output_dir: str = typer.Option(..., "--output-dir", help="Output directory"),
+    strict_capabilities: bool = typer.Option(
+        False,
+        "--strict-capabilities",
+        help="Fail when a hard anchor is unsupported or unknown",
+    ),
+) -> None:
+    """Compile a generator handoff package and capability report."""
+    import yaml
+    from pydantic import ValidationError
+
+    from svp_rpe.arrange import (
+        ArrangementError,
+        COMPILATION_REPORT_FILENAME,
+        PERFORMANCE_PACKAGE_FILENAME,
+        compile_performance_package,
+    )
+
+    try:
+        compiled = compile_performance_package(
+            score_yaml,
+            identity_yaml,
+            arrangement_yaml,
+            capability_profile,
+            strict=strict_capabilities,
+        )
+    except (
+        OSError,
+        yaml.YAMLError,
+        ValueError,
+        ValidationError,
+        ArrangementError,
+    ) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    contents = {
+        PERFORMANCE_PACKAGE_FILENAME: compiled.package_json,
+        COMPILATION_REPORT_FILENAME: compiled.report_json,
+    }
+    try:
+        out_dir = _publish_artifacts_atomically(
+            contents,
+            output_dir,
+            [score_yaml, identity_yaml, arrangement_yaml, capability_profile],
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    console.print(
+        f"[green]Performance package saved to "
+        f"{out_dir / PERFORMANCE_PACKAGE_FILENAME}[/green]"
+    )
+    console.print(
+        f"[green]Compilation report saved to "
+        f"{out_dir / COMPILATION_REPORT_FILENAME}[/green]"
+    )
 
 
 @app.command()

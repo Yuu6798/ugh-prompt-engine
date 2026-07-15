@@ -119,6 +119,34 @@ stderr). Given the same inputs and arguments, repeated runs produce
 byte-identical output regardless of `--output-dir`. The derived score can be
 fed straight back into `svprpe compose`.
 
+### `svprpe package <score.yaml> <identity.yaml> <arrangement.yaml> --capability-profile <profile.yaml> --output-dir <dir>`
+
+Compile a `PreservationContract` inline, match every requested identity anchor
+against the generator's `InputCapabilityProfile`, and write the deterministic
+handoff artifacts:
+
+```bash
+svprpe package composition_score.yaml identity.yaml arrangement.yaml \
+  --capability-profile config/capability_profiles/suno.yaml \
+  --output-dir ./package-out
+```
+
+The command writes exactly `performance_package.json` and
+`compilation_report.json`. The package keeps requested policy, delivery,
+control, and observation as separate states. Only `delivered` or
+`experimental` anchors appear in `channel_artifacts`; compile-time control is
+`unknown` and observation is `not_observed`. Unsupported MIDI or symbolic
+melody anchors are recorded as unsupported rather than rewritten into prompt
+instructions.
+
+Advisory mode is the default and records capability warnings. Add
+`--strict-capabilities` to fail when any hard anchor is `unsupported` or
+`unknown`; hard anchors on experimental but usable channels remain deliverable.
+Both JSON files are constructed before publication and are published together
+with rollback on failure. `compilation_report.json` pins the exact published
+package bytes with `package_sha256`; neither output contains timestamps,
+absolute paths, or the output directory.
+
 ### `svprpe measure <audio>`
 
 Measure the seven required `CompositionScore.physical` fields from one audio file.
