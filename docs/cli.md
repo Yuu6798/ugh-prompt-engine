@@ -139,6 +139,10 @@ control, and observation as separate states. Only `delivered` or
 melody anchors are recorded as unsupported rather than rewritten into prompt
 instructions.
 
+The capability profile's `generator` must match the derived score's resolved
+backend profile key (`external` resolves to `suno`). A mismatch fails before
+either artifact is published.
+
 Advisory mode is the default and records capability warnings. Add
 `--strict-capabilities` to fail when any hard anchor is `unsupported` or
 `unknown`; hard anchors on experimental but usable channels remain deliverable.

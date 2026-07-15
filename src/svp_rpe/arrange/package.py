@@ -31,7 +31,10 @@ from svp_rpe.arrange.identity import (
 from svp_rpe.arrange.models import ArrangementSpec, PreservationMode
 from svp_rpe.arrange.resolver import ArrangementError, resolve_arrangement
 from svp_rpe.compose.models import CompositionScore
-from svp_rpe.compose.prompt_renderer import ExternalPromptAdapter
+from svp_rpe.compose.prompt_renderer import (
+    ExternalPromptAdapter,
+    resolve_backend_descriptor,
+)
 
 PERFORMANCE_PACKAGE_FILENAME = "performance_package.json"
 COMPILATION_REPORT_FILENAME = "compilation_report.json"
@@ -335,6 +338,15 @@ def build_performance_package(
             "preservation contract identity_manifest sha256 does not match the "
             f"supplied manifest sha256: {contract.inputs.identity_manifest.sha256} "
             f"!= {manifest_sha256}"
+        )
+
+    target_backend = derived_score.rendering.target_backend
+    expected_generator = resolve_backend_descriptor(target_backend).profile_key
+    if profile.generator != expected_generator:
+        raise PackageCompilationError(
+            "capability profile generator mismatch: derived score target_backend "
+            f"{target_backend!r} resolves to generator {expected_generator!r}, but "
+            f"the supplied profile declares {profile.generator!r}"
         )
 
     manifest_by_id = {anchor.id: anchor for anchor in manifest.anchors}

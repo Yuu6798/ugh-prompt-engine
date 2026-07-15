@@ -128,6 +128,7 @@ def _contract(
 
 def _profile(
     *,
+    generator: str = "suno",
     style_prompt: str = "supported",
     lyrics_text: str = "supported",
     section_tags: str = "experimental",
@@ -146,7 +147,7 @@ def _profile(
     return InputCapabilityProfile.model_validate(
         {
             "schema_version": "input-capability/0.1",
-            "generator": "test-generator",
+            "generator": generator,
             "profile_version": "1",
             "input_channels": {
                 channel: {"support": support} for channel, support in supports.items()
@@ -340,6 +341,33 @@ def test_manifest_hash_pairing_mismatch_is_rejected() -> None:
         _build(manifest, bad_contract, _profile())
 
 
+def test_profile_generator_must_match_resolved_score_backend() -> None:
+    manifest = _manifest([])
+    contract = _contract(manifest, {})
+
+    with pytest.raises(PackageCompilationError) as exc_info:
+        _build(manifest, contract, _profile(generator="musicgen"))
+
+    message = str(exc_info.value)
+    assert "capability profile generator mismatch" in message
+    assert "target_backend 'suno' resolves to generator 'suno'" in message
+    assert "profile declares 'musicgen'" in message
+
+
+def test_external_backend_alias_accepts_suno_capability_profile() -> None:
+    manifest = _manifest([])
+    contract = _contract(manifest, {})
+
+    compiled = _build(
+        manifest,
+        contract,
+        _profile(generator="suno"),
+        score=_score(backend="external"),
+    )
+
+    assert compiled.package.generator == "suno"
+
+
 def test_package_readback_rejects_duplicate_and_inconsistent_delivery() -> None:
     manifest = _manifest([_anchor("lyrics", "lyrics", "lyrics_text")])
     contract = _contract(manifest, {"lyrics": ("hard", [])})
@@ -397,7 +425,11 @@ def test_builder_is_byte_deterministic_and_report_pins_package_bytes() -> None:
     ).hexdigest()
 
 
-def _write_cli_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
+def _write_cli_fixture(
+    tmp_path: Path,
+    *,
+    target_backend: str | None = None,
+) -> tuple[Path, Path, Path]:
     source_path = tmp_path / "source.wav"
     source_path.write_bytes(b"source audio")
     artifact_path = tmp_path / "lyrics.txt"
@@ -429,14 +461,20 @@ def _write_cli_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
         encoding="utf-8",
     )
 
+    target = {}
+    score_fields = {}
+    if target_backend is not None:
+        target = {"rendering": {"target_backend": target_backend}}
+        score_fields = {"rendering.target_backend": "free"}
+
     spec_path = tmp_path / "arrangement.yaml"
     spec_path.write_text(
         yaml.safe_dump(
             {
                 "meta": {"id": "package-arrangement", "version": "1"},
-                "target": {},
+                "target": target,
                 "preservation": {
-                    "score_fields": {},
+                    "score_fields": score_fields,
                     "identity_anchors": {"lyrics": {"mode": "hard", "allow": []}},
                 },
             },
@@ -549,7 +587,10 @@ def test_package_cli_publish_failure_leaves_no_partial_artifacts(
 
 
 def test_package_cli_strict_failure_publishes_nothing(tmp_path: Path) -> None:
-    manifest_path, spec_path, _ = _write_cli_fixture(tmp_path)
+    manifest_path, spec_path, _ = _write_cli_fixture(
+        tmp_path,
+        target_backend="musicgen",
+    )
     output_dir = tmp_path / "out"
 
     result = CliRunner().invoke(
@@ -565,4 +606,24 @@ def test_package_cli_strict_failure_publishes_nothing(tmp_path: Path) -> None:
 
     assert result.exit_code == 1
     assert "strict capability check failed" in result.stderr
+    assert not output_dir.exists()
+
+
+def test_package_cli_rejects_profile_for_different_generator(tmp_path: Path) -> None:
+    manifest_path, spec_path, _ = _write_cli_fixture(tmp_path)
+    output_dir = tmp_path / "out"
+
+    result = CliRunner().invoke(
+        app,
+        _package_cli_args(
+            manifest_path,
+            spec_path,
+            output_dir,
+            profile_path=MUSICGEN_PROFILE_PATH,
+        ),
+    )
+
+    assert result.exit_code == 1
+    assert "capability profile generator mismatch" in result.stderr
+    assert "target_backend 'external' resolves to generator 'suno'" in result.stderr
     assert not output_dir.exists()
