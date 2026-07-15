@@ -33,6 +33,17 @@ MANIFEST_SHA256 = "a" * 64
 SPEC_SHA256 = "b" * 64
 
 
+def _artifact_type_for_domain(domain: str) -> str:
+    return {
+        "lyrics": "lyrics_text",
+        "melody": "midi_clip",
+        "harmony": "chord_sequence_json",
+        "rhythm": "note_events_json",
+        "structure": "section_map",
+        "motif": "midi_clip",
+    }[domain]
+
+
 def _identity_anchor(
     anchor_id: str,
     domain: str,
@@ -45,6 +56,8 @@ def _identity_anchor(
         id=anchor_id,
         domain=domain,
         artifact=artifact or f"{anchor_id}.txt",
+        artifact_type=_artifact_type_for_domain(domain),
+        media_type="application/octet-stream",
         sha256=sha256,
         required=required,
     )
@@ -52,6 +65,7 @@ def _identity_anchor(
 
 def _manifest(anchors: list[IdentityAnchor], *, work_id: str = "work-1") -> IdentityManifest:
     return IdentityManifest(
+        schema_version="identity-manifest/0.1",
         meta=IdentityMeta(work_id=work_id, version="1"),
         source=IdentitySource(locator="source.wav", sha256=VALID_SHA256, rights_basis="original"),
         anchors=anchors,
@@ -99,12 +113,17 @@ def _planning_policies() -> dict[str, AnchorPreservation]:
 
 
 def test_hard_with_nonempty_allow_raises_validation_error() -> None:
-    with pytest.raises(ValidationError):
+    with pytest.raises(
+        ValidationError, match="hard forbids all transformations"
+    ):
         AnchorPreservation(mode="hard", allow=["octave_displacement"])
 
 
 def test_free_with_nonempty_allow_raises_validation_error() -> None:
-    with pytest.raises(ValidationError):
+    with pytest.raises(
+        ValidationError,
+        match="free does not constrain transformations by enumeration",
+    ):
         AnchorPreservation(mode="free", allow=["timing_warp"])
 
 
@@ -340,6 +359,35 @@ def _contract_anchor_dict(**overrides: object) -> dict:
     }
     anchor.update(overrides)
     return anchor
+
+
+def test_contract_anchor_hard_with_nonempty_allow_reason_is_specific() -> None:
+    with pytest.raises(
+        ValidationError, match="hard forbids all transformations"
+    ):
+        ContractAnchor.model_validate(
+            _contract_anchor_dict(mode="hard", allow=["timing_warp"])
+        )
+
+
+def test_contract_anchor_free_with_nonempty_allow_reason_is_specific() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="free does not constrain transformations by enumeration",
+    ):
+        ContractAnchor.model_validate(
+            _contract_anchor_dict(mode="free", allow=["timing_warp"])
+        )
+
+
+def test_unknown_preservation_contract_schema_version_raises_validation_error() -> None:
+    data = _contract_dict(_contract_anchor_dict())
+    data["schema_version"] = "preservation-contract/0.2"
+
+    with pytest.raises(ValidationError) as exc_info:
+        PreservationContract.model_validate(data)
+
+    assert "preservation-contract/0.2" in str(exc_info.value)
 
 
 def test_readback_hard_with_nonempty_allow_raises_validation_error() -> None:

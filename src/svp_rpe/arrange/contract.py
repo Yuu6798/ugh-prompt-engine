@@ -15,7 +15,7 @@ CLI 統合・capability・adherence 観測は本モジュールのスコープ�
 """
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -82,9 +82,14 @@ class ContractAnchor(ContractModel):
     @model_validator(mode="after")
     def _validate_invariants(self) -> "ContractAnchor":
         if self.mode in ("hard", "free") and self.allow:
+            reason = (
+                "hard forbids all transformations"
+                if self.mode == "hard"
+                else "free does not constrain transformations by enumeration"
+            )
             raise ValueError(
                 f"ContractAnchor: mode={self.mode!r} must have an empty 'allow' list "
-                f"(hard/free permit no transformations), got {self.allow!r}"
+                f"({reason}), got {self.allow!r}"
             )
         if self.mode == "elastic" and not self.allow:
             raise ValueError(
@@ -113,7 +118,7 @@ class PreservationContract(ContractModel):
     （`IdentityManifest._validate_unique_anchor_ids` と同型）。
     """
 
-    schema_version: str = "preservation-contract/0.1"
+    schema_version: Literal["preservation-contract/0.1"] = "preservation-contract/0.1"
     work_id: str
     inputs: ContractInputs
     anchors: List[ContractAnchor]

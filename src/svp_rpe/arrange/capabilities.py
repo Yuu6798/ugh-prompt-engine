@@ -82,7 +82,7 @@ class InputCapabilityProfile(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: str
+    schema_version: Literal["input-capability/0.1"]
     generator: str
     profile_version: str
     input_channels: InputChannels

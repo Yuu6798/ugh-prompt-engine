@@ -95,10 +95,10 @@ class ArrangementTarget(ArrangementModel):
 class AnchorPreservation(ArrangementModel):
     """IdentityManifest の anchor 単位に宣言する保持方針（AR2-2）。
 
-    `mode` と `allow` の整合はここで強制する: ``hard`` / ``free`` は変形を
-    一切許さないため `allow` は空必須、``elastic`` は変形の語彙を最低 1 件
-    宣言することを必須とする（空の elastic は「何でも許す」への推測補完に
-    なるため拒否する）。
+    `mode` と `allow` の整合はここで強制する: ``hard`` は変形を一切許さない
+    ため `allow` は空必須、``free`` は変形を個別列挙で制限しないため
+    `allow` は空必須、``elastic`` は変形の語彙を最低 1 件宣言することを
+    必須とする（空の elastic は「何でも許す」への推測補完になるため拒否する）。
 
     domain 別にどの変形語彙が許容されるか（`AllowedTransformation` のうち
     どの部分集合か）は本モデルでは検証しない — anchor の domain と
@@ -117,9 +117,14 @@ class AnchorPreservation(ArrangementModel):
     @model_validator(mode="after")
     def _validate_mode_allow_consistency(self) -> "AnchorPreservation":
         if self.mode in ("hard", "free") and self.allow:
+            reason = (
+                "hard forbids all transformations"
+                if self.mode == "hard"
+                else "free does not constrain transformations by enumeration"
+            )
             raise ValueError(
                 f"AnchorPreservation: mode={self.mode!r} must have an empty 'allow' list "
-                f"(hard/free permit no transformations), got {self.allow!r}"
+                f"({reason}), got {self.allow!r}"
             )
         if self.mode == "elastic" and not self.allow:
             raise ValueError(

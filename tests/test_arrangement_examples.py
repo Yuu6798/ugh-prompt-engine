@@ -147,7 +147,8 @@ def test_expected_derived_score_is_loadable_and_preserves_identity_anchor(varian
     base = load_composition_score(BASE_SCORE)
     derived = load_composition_score(_expected_dir(variant) / "derived_score.yaml")
 
-    # identity anchor (preservation-only hard): 同じ曲のまま編曲されている。
+    # Score-level identity preservation: semantic.core と physical.key の保持のみを
+    # 検証する（聴覚的同一性・メロディ保持は未実証）。
     assert derived.physical.key == base.physical.key
     assert derived.semantic.core == base.semantic.core
 
