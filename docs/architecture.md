@@ -22,6 +22,8 @@ Audio (WAV/MP3) → RPE Extraction → SVP Generation → Evaluation
 | Detection | `detect()` → Evidence | `extract()` → RPEBundle |
 | Calculation | `calculate()` → State | `generate()` → SVPBundle |
 | Decision | `decide()` → verdict | `evaluate()` / `compare()` → scores + action_hints |
+| Data structure | `frozen dataclass` | `Pydantic BaseModel` |
+| Config | `YAML registry` | `config/*.yaml` |
 
 ## Modules
 

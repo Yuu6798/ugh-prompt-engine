@@ -229,6 +229,7 @@ examples/                      # sample_input/ + expected_output/
 | [`docs/musicgen_backend.md`](docs/musicgen_backend.md) | MusicGen ローカル生成トラック: PR A(runbook+`musicgen` extra・実推論なし・CI 安全) / PR B(実バッチ→K2 型 fixture+`device_profiles/musicgen.yaml`+R3 初実測) / PR C(R3 ハーネス)。DD-A 決定論契約(fixture→grip のみ CI 対象)、annotation 隔離原則は対象外(生成側)、weights ライセンスは CC-BY-NC-4.0 実確認済(研究計器限定・重み非同梱) |
 | [`docs/semantic_sensor_clap.md`](docs/semantic_sensor_clap.md) | CLAP を抽出段階の意味層センサーとして配線(`svprpe extract --clap-semantic`): SOURCE 音声を固定の意味軸バッテリー(`config/semantic_probe_axes.yaml`)に対し A/B `contrast_fit` で計測、`LearnedAudioAnnotations.semantic_axes`(schema_version 1.1)に隔離、post-hoc fixture 比較(生成物対象)からの拡張として抽出時 SOURCE 音声を読む真の意味層センシングを実現。軸校正(2026-07-04 実推論・`scripts/calibrate_semantic_axes.py`): vocal/energy 実証・brightness は bpm 交絡・acousticness/warmth 探索扱い、有効帯域=実制作音楽 |
 | [`docs/lyrics_transcription_sensor.md`](docs/lyrics_transcription_sensor.md) | 歌詞転写センサー: faster-whisper + 既存 Demucs vocals stem で歌詞を機械化(CLAP の連続値 grip と相補的な記号列センサー)。入力側`svprpe extract --lyrics`→`LearnedAudioAnnotations.lyrics_transcription`(schema_version 1.2)、出力側`svprpe lyrics-adherence`(`eval/lyrics_match.py`, learned import なし・計器であって verdict なし)。fake-backend のみ、実推論は未計測 |
+| [`docs/arrangement_identity_planning.md`](docs/arrangement_identity_planning.md) | Arrangement Identity Track 計画: AR0–AR4、sidecar-first（D1）、M1=意味核とキーの Score-level identity preservation、artifact 配送と生成後観測への段階分離 |
 
 ## ドキュメント管理ポリシー
 
@@ -387,13 +388,3 @@ Codex が PR を作成する場合は [`AGENTS.md`](AGENTS.md) §2 の Completio
 - Push / PR で lint（`ruff check .`）+ test（`pytest -q --tb=short`）が通ることを必須とする
 - CI 通過 = lint clean + 全テスト pass
 - CI 固有のワークフロー詳細は `.github/workflows/*.yml` と `docs/` に記述する
-
-## ugh-audit-core パターン対応
-
-| ugh-audit-core | svp-rpe | 役割 |
-|---|---|---|
-| `detect()` → Evidence | `extract()` → RPEBundle | 入力からの事実抽出 |
-| `calculate()` → State | `generate()` → SVPBundle | 事実 → 設計図 |
-| `decide()` → verdict | `evaluate()` → scores | 評価・判定 |
-| frozen dataclass | Pydantic BaseModel | 不変データ構造 |
-| YAML registry | config/*.yaml | 外部化設定 |
