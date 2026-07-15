@@ -193,6 +193,17 @@ class ChannelArtifactReference(PackageModel):
     format_version: Optional[str] = None
     artifact_base: ArtifactBase
 
+    @field_validator("artifact")
+    @classmethod
+    def _validate_artifact_path(cls, value: str) -> str:
+        posix_path = PurePosixPath(value.replace("\\", "/"))
+        windows_path = PureWindowsPath(value)
+        if posix_path.is_absolute() or windows_path.is_absolute():
+            raise ValueError("artifact path must be relative")
+        if ".." in posix_path.parts or ".." in windows_path.parts:
+            raise ValueError("artifact path must not contain parent traversal")
+        return value
+
 
 class PromptPayload(PackageModel):
     text: str
@@ -223,6 +234,12 @@ class PerformancePackage(PackageModel):
 
     @model_validator(mode="after")
     def _validate_delivery_references(self) -> "PerformancePackage":
+        if self.inputs.device_profile.generator != self.generator:
+            raise ValueError(
+                "performance package generator must match device profile "
+                f"generator: {self.generator!r} != "
+                f"{self.inputs.device_profile.generator!r}"
+            )
         statuses: dict[str, PackageAnchorStatus] = {}
         duplicates: set[str] = set()
         for status in self.anchor_statuses:
@@ -312,6 +329,16 @@ class CompilationReport(PackageModel):
     inputs: PackageInputs
     package_sha256: str = Field(pattern=_SHA256_PATTERN)
     warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_device_profile_generator(self) -> "CompilationReport":
+        if self.inputs.device_profile.generator != self.generator:
+            raise ValueError(
+                "compilation report generator must match device profile "
+                f"generator: {self.generator!r} != "
+                f"{self.inputs.device_profile.generator!r}"
+            )
+        return self
 
 
 @dataclass(frozen=True)

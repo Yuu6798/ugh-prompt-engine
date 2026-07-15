@@ -523,6 +523,22 @@ def test_package_readback_rejects_duplicate_and_inconsistent_delivery() -> None:
         with pytest.raises(ValidationError, match="locator must be relative"):
             PerformancePackage.model_validate(absolute_artifact_base)
 
+    for escaping_artifact in (
+        "../outside.wav",
+        "nested/../../outside.wav",
+        "/tmp/outside.wav",
+        "C:\\outside.wav",
+    ):
+        invalid_artifact = json.loads(json.dumps(data))
+        invalid_artifact["channel_artifacts"]["lyrics_text"][0][
+            "artifact"
+        ] = escaping_artifact
+        with pytest.raises(
+            ValidationError,
+            match="artifact path must (be relative|not contain parent traversal)",
+        ):
+            PerformancePackage.model_validate(invalid_artifact)
+
 
 def test_package_readback_rejects_incomplete_or_unrequested_policy() -> None:
     manifest = _manifest([_anchor("sections", "structure", "section_map")])
@@ -564,6 +580,16 @@ def test_package_readback_rejects_inconsistent_device_profile_input() -> None:
     package_data["inputs"]["device_profile"]["status"] = "not_found"
     with pytest.raises(ValidationError, match="device profile.*equivalent"):
         PerformancePackage.model_validate(package_data)
+
+    wrong_package_generator = compiled.package.model_dump(mode="json")
+    wrong_package_generator["inputs"]["device_profile"]["generator"] = "musicgen"
+    with pytest.raises(ValidationError, match="package generator must match"):
+        PerformancePackage.model_validate(wrong_package_generator)
+
+    wrong_report_generator = compiled.report.model_dump(mode="json")
+    wrong_report_generator["inputs"]["device_profile"]["generator"] = "musicgen"
+    with pytest.raises(ValidationError, match="report generator must match"):
+        CompilationReport.model_validate(wrong_report_generator)
 
 
 def test_builder_is_byte_deterministic_and_report_pins_package_bytes() -> None:
