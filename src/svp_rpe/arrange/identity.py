@@ -26,6 +26,14 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from svp_rpe.arrange.resolver import ArrangementError
 
 AnchorDomain = Literal["lyrics", "melody", "harmony", "rhythm", "structure", "motif"]
+ArtifactType = Literal[
+    "lyrics_text",
+    "midi_clip",
+    "note_events_json",
+    "chord_sequence_json",
+    "audio_excerpt",
+    "section_map",
+]
 RightsBasis = Literal["original", "licensed", "permission_confirmed", "public_domain", "unknown"]
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
@@ -62,6 +70,9 @@ class IdentityAnchor(IdentityModel):
     id: str
     domain: AnchorDomain
     artifact: str
+    artifact_type: ArtifactType
+    media_type: str = Field(min_length=1)
+    format_version: Optional[str] = None
     sha256: str = Field(pattern=_SHA256_PATTERN)
     section_ref: Optional[str] = None
     required: bool
@@ -70,6 +81,7 @@ class IdentityAnchor(IdentityModel):
 class IdentityManifest(IdentityModel):
     """work 単位の IdentityManifest。source 1 件 + anchor 0 件以上。"""
 
+    schema_version: Literal["identity-manifest/0.1"]
     meta: IdentityMeta
     source: IdentitySource
     anchors: List[IdentityAnchor]

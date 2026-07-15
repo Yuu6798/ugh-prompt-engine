@@ -309,6 +309,20 @@ def test_unknown_support_value_raises_validation_error(tmp_path: Path) -> None:
         load_input_capability_profile(profile_path)
 
 
+def test_unknown_input_capability_schema_version_raises_validation_error(
+    tmp_path: Path,
+) -> None:
+    profile_dict = _profile_dict(style_prompt={"support": "supported"})
+    profile_dict["schema_version"] = "input-capability/0.2"
+    profile_path = tmp_path / "profile.yaml"
+    _write_profile(profile_path, profile_dict)
+
+    with pytest.raises(ValidationError) as exc_info:
+        load_input_capability_profile(profile_path)
+
+    assert "input-capability/0.2" in str(exc_info.value)
+
+
 def test_unknown_channel_key_raises_validation_error(tmp_path: Path) -> None:
     profile_dict = _profile_dict(
         style_prompt={"support": "supported"}, video_prompt={"support": "unknown"}

@@ -19,6 +19,17 @@ from svp_rpe.arrange.identity import IdentityMeta, IdentitySource
 
 VALID_SHA256 = "0" * 64
 
+ANCHOR_ARTIFACT_META = {
+    "lyrics.txt": {"artifact_type": "lyrics_text", "media_type": "text/plain"},
+    "melody.mid": {"artifact_type": "midi_clip", "media_type": "audio/midi"},
+    "harmony.txt": {
+        "artifact_type": "chord_sequence_json",
+        "media_type": "application/json",
+    },
+    "structure.yaml": {"artifact_type": "section_map", "media_type": "application/x-yaml"},
+    "motif.mid": {"artifact_type": "midi_clip", "media_type": "audio/midi"},
+}
+
 
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
@@ -39,6 +50,7 @@ def _write_artifacts(tmp_path: Path) -> dict[str, bytes]:
 
 def _manifest_dict(contents: dict[str, bytes], *, work_id: str = "work-1") -> dict[str, Any]:
     return {
+        "schema_version": "identity-manifest/0.1",
         "meta": {"work_id": work_id, "version": "1"},
         "source": {
             "locator": "source.wav",
@@ -50,6 +62,7 @@ def _manifest_dict(contents: dict[str, bytes], *, work_id: str = "work-1") -> di
                 "id": "anchor-lyrics",
                 "domain": "lyrics",
                 "artifact": "lyrics.txt",
+                **ANCHOR_ARTIFACT_META["lyrics.txt"],
                 "sha256": _sha256(contents["lyrics.txt"]),
                 "required": True,
             },
@@ -57,6 +70,7 @@ def _manifest_dict(contents: dict[str, bytes], *, work_id: str = "work-1") -> di
                 "id": "anchor-melody",
                 "domain": "melody",
                 "artifact": "melody.mid",
+                **ANCHOR_ARTIFACT_META["melody.mid"],
                 "sha256": _sha256(contents["melody.mid"]),
                 "required": True,
             },
@@ -64,6 +78,7 @@ def _manifest_dict(contents: dict[str, bytes], *, work_id: str = "work-1") -> di
                 "id": "anchor-harmony",
                 "domain": "harmony",
                 "artifact": "harmony.txt",
+                **ANCHOR_ARTIFACT_META["harmony.txt"],
                 "sha256": _sha256(contents["harmony.txt"]),
                 "required": False,
             },
@@ -71,6 +86,7 @@ def _manifest_dict(contents: dict[str, bytes], *, work_id: str = "work-1") -> di
                 "id": "anchor-structure",
                 "domain": "structure",
                 "artifact": "structure.yaml",
+                **ANCHOR_ARTIFACT_META["structure.yaml"],
                 "sha256": _sha256(contents["structure.yaml"]),
                 "section_ref": "verse-1",
                 "required": False,
@@ -100,6 +116,10 @@ def test_load_identity_manifest_succeeds_with_all_anchor_domains(tmp_path: Path)
     assert len(manifest.anchors) == 4
     domains = {anchor.domain for anchor in manifest.anchors}
     assert domains == {"lyrics", "melody", "harmony", "structure"}
+    lyrics_anchor = next(a for a in manifest.anchors if a.id == "anchor-lyrics")
+    assert lyrics_anchor.artifact_type == "lyrics_text"
+    assert lyrics_anchor.media_type == "text/plain"
+    assert lyrics_anchor.format_version is None
 
 
 def test_note_and_section_ref_are_optional_and_preserved(tmp_path: Path) -> None:
@@ -277,6 +297,36 @@ def test_duplicate_anchor_id_raises_validation_error(tmp_path: Path) -> None:
         load_identity_manifest(manifest_path)
 
 
+def test_missing_identity_manifest_schema_version_raises_validation_error(
+    tmp_path: Path,
+) -> None:
+    contents = _write_artifacts(tmp_path)
+    manifest_dict = _manifest_dict(contents)
+    manifest_dict.pop("schema_version")
+    manifest_path = tmp_path / "identity.yaml"
+    _write_manifest(manifest_path, manifest_dict)
+
+    with pytest.raises(ValidationError) as exc_info:
+        load_identity_manifest(manifest_path)
+
+    assert "schema_version" in str(exc_info.value)
+
+
+def test_unknown_identity_manifest_schema_version_raises_validation_error(
+    tmp_path: Path,
+) -> None:
+    contents = _write_artifacts(tmp_path)
+    manifest_dict = _manifest_dict(contents)
+    manifest_dict["schema_version"] = "identity-manifest/0.2"
+    manifest_path = tmp_path / "identity.yaml"
+    _write_manifest(manifest_path, manifest_dict)
+
+    with pytest.raises(ValidationError) as exc_info:
+        load_identity_manifest(manifest_path)
+
+    assert "identity-manifest/0.2" in str(exc_info.value)
+
+
 def test_unknown_anchor_domain_raises_validation_error(tmp_path: Path) -> None:
     contents = _write_artifacts(tmp_path)
     manifest_dict = _manifest_dict(contents)
@@ -286,6 +336,48 @@ def test_unknown_anchor_domain_raises_validation_error(tmp_path: Path) -> None:
 
     with pytest.raises(ValidationError):
         load_identity_manifest(manifest_path)
+
+
+def test_unknown_anchor_artifact_type_raises_validation_error(tmp_path: Path) -> None:
+    contents = _write_artifacts(tmp_path)
+    manifest_dict = _manifest_dict(contents)
+    manifest_dict["anchors"][0]["artifact_type"] = "pdf_score"
+    manifest_path = tmp_path / "identity.yaml"
+    _write_manifest(manifest_path, manifest_dict)
+
+    with pytest.raises(ValidationError) as exc_info:
+        load_identity_manifest(manifest_path)
+
+    assert "pdf_score" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("missing_key", ["artifact_type", "media_type"])
+def test_anchor_artifact_metadata_is_required(
+    tmp_path: Path, missing_key: str
+) -> None:
+    contents = _write_artifacts(tmp_path)
+    manifest_dict = _manifest_dict(contents)
+    manifest_dict["anchors"][0].pop(missing_key)
+    manifest_path = tmp_path / "identity.yaml"
+    _write_manifest(manifest_path, manifest_dict)
+
+    with pytest.raises(ValidationError) as exc_info:
+        load_identity_manifest(manifest_path)
+
+    assert missing_key in str(exc_info.value)
+
+
+def test_empty_anchor_media_type_raises_validation_error(tmp_path: Path) -> None:
+    contents = _write_artifacts(tmp_path)
+    manifest_dict = _manifest_dict(contents)
+    manifest_dict["anchors"][0]["media_type"] = ""
+    manifest_path = tmp_path / "identity.yaml"
+    _write_manifest(manifest_path, manifest_dict)
+
+    with pytest.raises(ValidationError) as exc_info:
+        load_identity_manifest(manifest_path)
+
+    assert "media_type" in str(exc_info.value)
 
 
 def test_unknown_rights_basis_raises_validation_error(tmp_path: Path) -> None:
@@ -418,6 +510,7 @@ def test_identity_module_does_not_import_compose() -> None:
 
 def test_identity_manifest_direct_construction_roundtrips() -> None:
     manifest = IdentityManifest(
+        schema_version="identity-manifest/0.1",
         meta=IdentityMeta(work_id="w1", version="1"),
         source=IdentitySource(
             locator="source.wav", sha256=VALID_SHA256, rights_basis="unknown"
@@ -427,6 +520,7 @@ def test_identity_manifest_direct_construction_roundtrips() -> None:
                 id="a1",
                 domain="motif",
                 artifact="motif.mid",
+                **ANCHOR_ARTIFACT_META["motif.mid"],
                 sha256=VALID_SHA256,
                 required=True,
             )
