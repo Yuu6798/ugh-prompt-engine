@@ -124,6 +124,7 @@ class ChannelArtifactReference(PackageModel):
     artifact_sha256: str = Field(pattern=_SHA256_PATTERN)
     artifact_type: ArtifactType
     media_type: str = Field(min_length=1)
+    format_version: Optional[str] = None
 
 
 class PromptPayload(PackageModel):
@@ -282,6 +283,8 @@ def _prompt_payload(
     score: CompositionScore,
     profile: InputCapabilityProfile,
     warnings: list[str],
+    *,
+    render_backend: str,
 ) -> PromptPayload | None:
     style_support = profile.input_channels.style_prompt.support
     if style_support in ("unsupported", "unknown"):
@@ -292,7 +295,16 @@ def _prompt_payload(
     if style_support == "experimental":
         warnings.append("style_prompt channel is experimental; prompt payload included")
 
-    generated = ExternalPromptAdapter().render(score)
+    render_score = score
+    if score.rendering.target_backend != render_backend:
+        render_score = score.model_copy(
+            update={
+                "rendering": score.rendering.model_copy(
+                    update={"target_backend": render_backend}
+                )
+            }
+        )
+    generated = ExternalPromptAdapter().render(render_score)
     section_tags: str | None = None
     if generated.section_tags is not None:
         section_support = profile.input_channels.section_tags.support
@@ -418,6 +430,7 @@ def build_performance_package(
                     artifact_sha256=anchor.sha256,
                     artifact_type=anchor.artifact_type,
                     media_type=anchor.media_type,
+                    format_version=anchor.format_version,
                 )
             )
         if requested.mode == "hard" and delivery_status in ("unsupported", "unknown"):
@@ -437,7 +450,12 @@ def build_performance_package(
         capability_profile=PackageInputHash(sha256=profile_sha256),
         derived_score=PackageInputHash(sha256=derived_score_sha256),
     )
-    prompt = _prompt_payload(derived_score, profile, warnings)
+    prompt = _prompt_payload(
+        derived_score,
+        profile,
+        warnings,
+        render_backend=expected_generator,
+    )
     package = PerformancePackage(
         work_id=manifest.meta.work_id,
         generator=profile.generator,

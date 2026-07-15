@@ -141,7 +141,9 @@ instructions.
 
 The capability profile's `generator` must match the derived score's resolved
 backend profile key (`external` resolves to `suno`). A mismatch fails before
-either artifact is published.
+either artifact is published. Prompt rendering also uses that resolved
+generator, so an `external` score packaged for Suno receives the same
+Suno-specific prompt and section-tag behavior as `target_backend: suno`.
 
 Advisory mode is the default and records capability warnings. Add
 `--strict-capabilities` to fail when any hard anchor is `unsupported` or

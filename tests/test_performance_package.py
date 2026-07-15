@@ -53,6 +53,7 @@ def _anchor(
     artifact_type: str,
     *,
     required: bool = True,
+    format_version: str | None = None,
 ) -> IdentityAnchor:
     extension = {
         "lyrics_text": "txt",
@@ -76,6 +77,7 @@ def _anchor(
         artifact=f"{anchor_id}.{extension}",
         artifact_type=artifact_type,
         media_type=media_type,
+        format_version=format_version,
         sha256=hashlib.sha256(anchor_id.encode()).hexdigest(),
         required=required,
     )
@@ -180,7 +182,12 @@ def _build(
 def test_builder_separates_all_delivery_states_and_future_states() -> None:
     anchors = [
         _anchor("lyrics", "lyrics", "lyrics_text"),
-        _anchor("sections", "structure", "section_map"),
+        _anchor(
+            "sections",
+            "structure",
+            "section_map",
+            format_version="section-map/1",
+        ),
         _anchor("midi", "melody", "midi_clip"),
         _anchor("audio", "motif", "audio_excerpt"),
         _anchor("chords", "harmony", "chord_sequence_json"),
@@ -234,6 +241,16 @@ def test_builder_separates_all_delivery_states_and_future_states() -> None:
         for references in compiled.package.channel_artifacts.values()
         for reference in references
     ] == ["lyrics", "sections"]
+    assert (
+        compiled.package.channel_artifacts["section_tags"][0].format_version
+        == "section-map/1"
+    )
+    assert (
+        json.loads(compiled.package_json)["channel_artifacts"]["section_tags"][0][
+            "format_version"
+        ]
+        == "section-map/1"
+    )
     assert compiled.report.warnings[:4] == [
         "anchor 'sections': channel 'section_tags' is experimental",
         "anchor 'midi': channel 'midi' is unsupported",
@@ -357,15 +374,23 @@ def test_profile_generator_must_match_resolved_score_backend() -> None:
 def test_external_backend_alias_accepts_suno_capability_profile() -> None:
     manifest = _manifest([])
     contract = _contract(manifest, {})
+    external_score = _score(backend="external")
 
     compiled = _build(
         manifest,
         contract,
         _profile(generator="suno"),
-        score=_score(backend="external"),
+        score=external_score,
     )
 
     assert compiled.package.generator == "suno"
+    assert compiled.package.prompt is not None
+    expected = ExternalPromptAdapter().render(_score(backend="suno"))
+    assert compiled.package.prompt.text == expected.text
+    assert compiled.package.prompt.section_tags == expected.section_tags
+    assert compiled.package.prompt.section_tags is not None
+    assert ExternalPromptAdapter().render(external_score).section_tags is None
+    assert external_score.rendering.target_backend == "external"
 
 
 def test_package_readback_rejects_duplicate_and_inconsistent_delivery() -> None:
