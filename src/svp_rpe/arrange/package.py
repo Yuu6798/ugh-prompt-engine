@@ -28,7 +28,11 @@ from svp_rpe.arrange.identity import (
     _resolve_confined,
     _verify_artifact_hash,
 )
-from svp_rpe.arrange.models import ArrangementSpec, PreservationMode
+from svp_rpe.arrange.models import (
+    AllowedTransformation,
+    ArrangementSpec,
+    PreservationMode,
+)
 from svp_rpe.arrange.resolver import ArrangementError, resolve_arrangement
 from svp_rpe.compose.models import CompositionScore
 from svp_rpe.compose.prompt_renderer import (
@@ -113,9 +117,32 @@ class ObservationState(PackageModel):
 class PackageAnchorStatus(PackageModel):
     anchor_id: str
     requested_mode: Optional[PreservationMode] = None
+    allow: list[AllowedTransformation] = Field(default_factory=list)
+    tolerance_profile: Optional[str] = None
     delivery: DeliveryState
     control: ControlState
     observation: ObservationState
+
+    @model_validator(mode="after")
+    def _validate_requested_policy(self) -> "PackageAnchorStatus":
+        if self.requested_mode is None:
+            if self.allow or self.tolerance_profile is not None:
+                raise ValueError(
+                    f"anchor '{self.anchor_id}': an unrequested anchor cannot carry "
+                    "allow or tolerance_profile"
+                )
+            return self
+        if self.requested_mode in ("hard", "free") and self.allow:
+            raise ValueError(
+                f"anchor '{self.anchor_id}': mode={self.requested_mode!r} must "
+                "have an empty allow list"
+            )
+        if self.requested_mode == "elastic" and not self.allow:
+            raise ValueError(
+                f"anchor '{self.anchor_id}': mode='elastic' requires at least "
+                "one allowed transformation"
+            )
+        return self
 
 
 class ChannelArtifactReference(PackageModel):
@@ -384,6 +411,8 @@ def build_performance_package(
                 PackageAnchorStatus(
                     anchor_id=anchor.id,
                     requested_mode=None,
+                    allow=[],
+                    tolerance_profile=None,
                     delivery=DeliveryState(status="not_requested"),
                     control=ControlState(status="unknown"),
                     observation=ObservationState(status="not_observed"),
@@ -407,6 +436,8 @@ def build_performance_package(
             PackageAnchorStatus(
                 anchor_id=anchor.id,
                 requested_mode=requested.mode,
+                allow=list(requested.allow),
+                tolerance_profile=requested.tolerance_profile,
                 delivery=DeliveryState(
                     channel=delivered_channel,
                     status=delivery_status,

@@ -101,6 +101,8 @@ def _manifest(anchors: list[IdentityAnchor]) -> IdentityManifest:
 def _contract(
     manifest: IdentityManifest,
     policies: dict[str, tuple[str, list[str]]],
+    *,
+    tolerance_profiles: dict[str, str] | None = None,
 ) -> PreservationContract:
     anchors: list[ContractAnchor] = []
     for anchor in manifest.anchors:
@@ -114,6 +116,7 @@ def _contract(
                 domain=anchor.domain,
                 mode=mode,
                 allow=allow,
+                tolerance_profile=(tolerance_profiles or {}).get(anchor.id),
                 artifact=anchor.artifact,
                 artifact_sha256=anchor.sha256,
             )
@@ -203,6 +206,7 @@ def test_builder_separates_all_delivery_states_and_future_states() -> None:
             "audio": ("free", []),
             "chords": ("hard", []),
         },
+        tolerance_profiles={"sections": "loose-v1"},
     )
 
     compiled = _build(manifest, contract, _profile())
@@ -229,7 +233,12 @@ def test_builder_separates_all_delivery_states_and_future_states() -> None:
         "status": "unknown",
     }
     assert statuses["optional"].requested_mode is None
+    assert statuses["optional"].allow == []
+    assert statuses["optional"].tolerance_profile is None
     assert statuses["optional"].delivery.status == "not_requested"
+    assert statuses["sections"].requested_mode == "elastic"
+    assert statuses["sections"].allow == ["intro_extension"]
+    assert statuses["sections"].tolerance_profile == "loose-v1"
     assert all(status.control.status == "unknown" for status in statuses.values())
     assert all(status.control.evidence is None for status in statuses.values())
     assert all(
@@ -261,6 +270,12 @@ def test_builder_separates_all_delivery_states_and_future_states() -> None:
         ]
         == "identity_manifest_directory"
     )
+    serialized_statuses = {
+        status["anchor_id"]: status
+        for status in json.loads(compiled.package_json)["anchor_statuses"]
+    }
+    assert serialized_statuses["sections"]["allow"] == ["intro_extension"]
+    assert serialized_statuses["sections"]["tolerance_profile"] == "loose-v1"
     assert compiled.report.warnings[:4] == [
         "anchor 'sections': channel 'section_tags' is experimental",
         "anchor 'midi': channel 'midi' is unsupported",
@@ -436,6 +451,26 @@ def test_package_readback_rejects_duplicate_and_inconsistent_delivery() -> None:
     del missing_artifact_base["channel_artifacts"]["lyrics_text"][0]["artifact_base"]
     with pytest.raises(ValidationError, match="artifact_base"):
         PerformancePackage.model_validate(missing_artifact_base)
+
+
+def test_package_readback_rejects_incomplete_or_unrequested_policy() -> None:
+    manifest = _manifest([_anchor("sections", "structure", "section_map")])
+    contract = _contract(
+        manifest,
+        {"sections": ("elastic", ["intro_extension"])},
+        tolerance_profiles={"sections": "loose-v1"},
+    )
+    data = _build(manifest, contract, _profile()).package.model_dump(mode="json")
+
+    missing_allow = json.loads(json.dumps(data))
+    del missing_allow["anchor_statuses"][0]["allow"]
+    with pytest.raises(ValidationError, match="elastic.*requires"):
+        PerformancePackage.model_validate(missing_allow)
+
+    unrequested_policy = json.loads(json.dumps(data))
+    unrequested_policy["anchor_statuses"][0]["requested_mode"] = None
+    with pytest.raises(ValidationError, match="unrequested anchor"):
+        PerformancePackage.model_validate(unrequested_policy)
 
 
 def test_package_and_report_reject_unknown_schema_versions() -> None:

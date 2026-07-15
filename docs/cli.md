@@ -135,7 +135,9 @@ The command writes exactly `performance_package.json` and
 `compilation_report.json`. The package keeps requested policy, delivery,
 control, and observation as separate states. Only `delivered` or
 `experimental` anchors appear in `channel_artifacts`; compile-time control is
-`unknown` and observation is `not_observed`. Unsupported MIDI or symbolic
+`unknown` and observation is `not_observed`. Elastic anchor statuses retain
+their `allow` list and optional `tolerance_profile` for downstream policy-aware
+observation. Unsupported MIDI or symbolic
 melody anchors are recorded as unsupported rather than rewritten into prompt
 instructions. Each artifact path is explicitly relative to the identity
 manifest directory (`artifact_base: identity_manifest_directory`); artifacts
