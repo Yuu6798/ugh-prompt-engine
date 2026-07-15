@@ -53,6 +53,17 @@ from svp_rpe.arrange.models import (
     RenderingOverride,
     SemanticOverride,
 )
+from svp_rpe.arrange.package import (
+    ARTIFACT_TYPE_CHANNEL,
+    COMPILATION_REPORT_FILENAME,
+    PERFORMANCE_PACKAGE_FILENAME,
+    CompilationReport,
+    CompiledPerformancePackage,
+    PackageCompilationError,
+    PerformancePackage,
+    build_performance_package,
+    compile_performance_package,
+)
 from svp_rpe.arrange.resolver import (
     ArrangementConflictError,
     ArrangementError,
@@ -63,6 +74,7 @@ from svp_rpe.arrange.resolver import (
 
 __all__ = [
     "AllowedTransformation",
+    "ARTIFACT_TYPE_CHANNEL",
     "AnchorPreservation",
     "ArrangementChange",
     "ArrangementConflictError",
@@ -75,7 +87,10 @@ __all__ = [
     "BUNDLE_FILENAME",
     "CANONICAL_PATHS",
     "ChannelSupport",
+    "COMPILATION_REPORT_FILENAME",
+    "CompilationReport",
     "CompiledArrangement",
+    "CompiledPerformancePackage",
     "ContractAnchor",
     "DERIVED_SCORE_FILENAME",
     "DIFF_FILENAME",
@@ -92,6 +107,9 @@ __all__ = [
     "InputChannelCapability",
     "InputChannels",
     "PhysicalOverride",
+    "PERFORMANCE_PACKAGE_FILENAME",
+    "PackageCompilationError",
+    "PerformancePackage",
     "PreservationContract",
     "PreservationContractError",
     "PreservationMode",
@@ -99,7 +117,9 @@ __all__ = [
     "RenderingOverride",
     "SemanticOverride",
     "build_preservation_contract",
+    "build_performance_package",
     "compile_arrangement",
+    "compile_performance_package",
     "load_arrangement_spec",
     "load_identity_manifest",
     "load_input_capability_profile",

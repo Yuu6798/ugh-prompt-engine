@@ -61,6 +61,13 @@ _TIER_FALLBACK = 1  # 未プロファイル: rendering.priority 順
 _TIER_ADVISORY = 2  # loose/dead: 助言・真っ先の削減候補
 
 
+class _LoadConfiguredDeviceProfile:
+    pass
+
+
+_LOAD_CONFIGURED_DEVICE_PROFILE = _LoadConfiguredDeviceProfile()
+
+
 @dataclass(frozen=True)
 class _PromptSegment:
     # 物理フィールドは PhysicalLayer.model_fields 正式名、意味層制御フィールドは
@@ -146,10 +153,22 @@ class ExternalPromptAdapter:
 
     backend = "external"
 
-    def render(self, score: CompositionScore, max_chars: int | None = None) -> GeneratedPrompt:
+    def render(
+        self,
+        score: CompositionScore,
+        max_chars: int | None = None,
+        *,
+        device_profile: DeviceProfile | None | _LoadConfiguredDeviceProfile = (
+            _LOAD_CONFIGURED_DEVICE_PROFILE
+        ),
+    ) -> GeneratedPrompt:
         limit = max(0, score.rendering.prompt_max_chars if max_chars is None else max_chars)
         descriptor = resolve_backend_descriptor(score.rendering.target_backend)
-        device = load_device_profile(descriptor.profile_key)
+        device = (
+            load_device_profile(descriptor.profile_key)
+            if isinstance(device_profile, _LoadConfiguredDeviceProfile)
+            else device_profile
+        )
         score_profile = (score.control_profile or {}).get(descriptor.profile_key)
         # device の control_defaults を score 宣言で上書き merge（score が常に勝つ）。
         # score 側が未宣言の backend / フィールドでも device defaults だけで成立する。
