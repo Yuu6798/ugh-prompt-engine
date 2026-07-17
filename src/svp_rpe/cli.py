@@ -440,6 +440,30 @@ def _update_builds_latest_pointer(latest_path: Path, content_digest: str, *, roo
         raise
 
 
+def _reject_builds_root_input_collision(
+    input_paths: list[str | Path], builds_root: str | Path
+) -> None:
+    """Guard against an input path aliasing `<builds_root>/latest.json`.
+
+    `latest.json` is the **only** file the builds-root scheme ever
+    overwrites; if an input (score / spec / manifest / capability profile /
+    etc.) resolves to that same path, publishing would silently clobber the
+    input on the `latest.json` update — the same shape of hole
+    `_publish_artifacts_atomically` already guards against for `--output-dir`
+    (#176 P2 R3). No equivalent check is needed against the
+    `<builds_root>/builds/<content_digest>/` directory itself: unpublished,
+    it doesn't exist yet; once published, it is never written to again — so
+    it is structurally safe either way.
+    """
+    latest_path = Path(builds_root) / "latest.json"
+    resolved_latest = latest_path.resolve()
+    for input_path in input_paths:
+        if Path(input_path).resolve() == resolved_latest:
+            raise ValueError(
+                f"input path collides with output artifact path: {latest_path}"
+            )
+
+
 def _publish_artifacts_to_builds_root(
     contents: dict[str, str],
     builds_root: str | Path,
@@ -555,10 +579,11 @@ def arrange(
     if builds_root is not None:
         content_digest = compiled.bundle["content_digest"]
         try:
+            _reject_builds_root_input_collision([score_yaml, arrangement_yaml], builds_root)
             published_dir, already_existed = _publish_artifacts_to_builds_root(
                 contents, builds_root, content_digest
             )
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             typer.echo(f"Error: {exc}", err=True)
             raise typer.Exit(code=1) from exc
         if already_existed:
@@ -675,10 +700,13 @@ def package_command(
     if builds_root is not None:
         content_digest = compiled.report.content_digest
         try:
+            _reject_builds_root_input_collision(
+                list(compiled.protected_input_paths), builds_root
+            )
             published_dir, already_existed = _publish_artifacts_to_builds_root(
                 contents, builds_root, content_digest
             )
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             typer.echo(f"Error: {exc}", err=True)
             raise typer.Exit(code=1) from exc
         if already_existed:

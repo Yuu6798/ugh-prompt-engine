@@ -341,3 +341,66 @@ def test_package_builds_root_republish_same_digest_is_immutable_noop(tmp_path: P
     assert "already published" in second.stderr
     assert {p.name: p.read_bytes() for p in digest_dir.iterdir()} == original_files
     assert len(list((root / "builds").iterdir())) == 1
+
+
+# --- input <-> latest.json collision guard -------------------------------------
+
+
+def test_arrange_builds_root_rejects_input_colliding_with_latest_json(tmp_path: Path) -> None:
+    """An input that aliases `<root>/latest.json` must not be silently clobbered.
+
+    `latest.json` is the one file the builds-root scheme ever overwrites; if
+    the arrangement spec itself resolves to that path, publishing would
+    overwrite the spec on the latest-pointer update.
+    """
+    root = tmp_path / "builds-root"
+    root.mkdir()
+    spec_path = root / "latest.json"
+    _write_arrangement_spec(spec_path)
+
+    result = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+
+    assert result.exit_code == 1
+    assert "Error:" in result.stderr
+    assert "input path collides with output artifact path" in result.stderr
+    assert str(root / "latest.json") in result.stderr
+    # nothing published at all — the input's own bytes are untouched and no
+    # digest directory or latest.json pointer was ever written.
+    assert not (root / "builds").exists()
+    assert spec_path.read_bytes() == (root / "latest.json").read_bytes()
+
+
+def test_package_builds_root_rejects_input_colliding_with_latest_json(tmp_path: Path) -> None:
+    """Same guard, exercised via `compiled.protected_input_paths` (score/manifest/
+    spec/profile/manifest-artifacts) rather than a raw two-path list."""
+    manifest_path, _ = _write_package_fixture(tmp_path)
+    root = tmp_path / "builds-root"
+    root.mkdir()
+    spec_path = root / "latest.json"
+    spec_path.write_text(
+        yaml.safe_dump(
+            {
+                "meta": {"id": "package-builds-root", "version": "1"},
+                "target": {},
+                "preservation": {
+                    "score_fields": {},
+                    "identity_anchors": {"lyrics": {"mode": "hard", "allow": []}},
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        app,
+        _package_args(manifest_path, spec_path, mode_flag="builds-root", mode_value=str(root)),
+    )
+
+    assert result.exit_code == 1
+    assert "Error:" in result.stderr
+    assert "input path collides with output artifact path" in result.stderr
+    assert str(root / "latest.json") in result.stderr
+    assert not (root / "builds").exists()
