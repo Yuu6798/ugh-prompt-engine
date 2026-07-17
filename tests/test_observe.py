@@ -1063,6 +1063,92 @@ def test_observe_cli_rejects_work_id_mismatch(tmp_path: Path) -> None:
     assert not report_path.exists()
 
 
+def test_observe_cli_rejects_package_anchor_set_missing_an_anchor(tmp_path: Path) -> None:
+    """PR #187 review round 15: sha256 and work_id matching don't rule out a
+    package whose `anchor_statuses` anchor_id set no longer matches the
+    manifest's anchors. Here, one status entry ("melody") is deleted from an
+    otherwise validly-compiled package (sha256/work_id both still correct);
+    `observe` must reject the mismatch before measuring anything."""
+    pkg_dir = tmp_path / "pkg"
+    result = CliRunner().invoke(app, _cli_package_args(pkg_dir))
+    assert result.exit_code == 0, result.output
+
+    package_data = json.loads((pkg_dir / "performance_package.json").read_text())
+    package_data["anchor_statuses"] = [
+        status for status in package_data["anchor_statuses"] if status["anchor_id"] != "melody"
+    ]
+    patched_package = pkg_dir / "performance_package_patched.json"
+    patched_package.write_text(json.dumps(package_data), encoding="utf-8")
+
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"unused-placeholder-audio-bytes")
+    report_path = tmp_path / "report.json"
+
+    result2 = CliRunner().invoke(
+        app,
+        [
+            "observe",
+            str(patched_package),
+            str(audio_path),
+            "--manifest",
+            str(IDENTITY_MANIFEST),
+            "-o",
+            str(report_path),
+        ],
+    )
+
+    assert result2.exit_code == 1
+    assert "anchor_id set does not match" in result2.stderr
+    assert "missing from package.anchor_statuses" in result2.stderr
+    assert "melody" in result2.stderr
+    assert not report_path.exists()
+
+
+def test_observe_cli_rejects_package_anchor_set_with_an_extra_anchor(tmp_path: Path) -> None:
+    """Contrast case: an extra `anchor_statuses` entry the manifest has no
+    corresponding anchor for must be rejected the same way."""
+    pkg_dir = tmp_path / "pkg"
+    result = CliRunner().invoke(app, _cli_package_args(pkg_dir))
+    assert result.exit_code == 0, result.output
+
+    package_data = json.loads((pkg_dir / "performance_package.json").read_text())
+    package_data["anchor_statuses"].append(
+        {
+            "anchor_id": "extra-anchor",
+            "requested_mode": None,
+            "allow": [],
+            "delivery": {"channel": None, "status": "not_requested"},
+            "control": {"status": "unknown"},
+            "observation": {"status": "not_observed"},
+        }
+    )
+    patched_package = pkg_dir / "performance_package_patched.json"
+    patched_package.write_text(json.dumps(package_data), encoding="utf-8")
+
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"unused-placeholder-audio-bytes")
+    report_path = tmp_path / "report.json"
+
+    result2 = CliRunner().invoke(
+        app,
+        [
+            "observe",
+            str(patched_package),
+            str(audio_path),
+            "--manifest",
+            str(IDENTITY_MANIFEST),
+            "-o",
+            str(report_path),
+        ],
+    )
+
+    assert result2.exit_code == 1
+    assert "anchor_id set does not match" in result2.stderr
+    assert "extra in package.anchor_statuses" in result2.stderr
+    assert "extra-anchor" in result2.stderr
+    assert not report_path.exists()
+
+
 def test_observe_cli_rejects_tampered_anchor_artifact(tmp_path: Path) -> None:
     pkg_dir = tmp_path / "pkg"
     result = CliRunner().invoke(app, _cli_package_args(pkg_dir))
@@ -1425,7 +1511,21 @@ def test_observe_cli_skips_snapshot_tempfile_when_no_wired_sensor_anchors(
             "derived_score": {"sha256": "e" * 64},
             "device_profile": {"generator": "suno", "status": "not_found"},
         },
-        anchor_statuses=[],
+        # Round 15's anchor_id set cross-check requires anchor_statuses to
+        # cover exactly the manifest's anchors ("lyrics" here) — an
+        # unrequested anchor's status shape, matching what
+        # build_performance_package itself produces for one.
+        anchor_statuses=[
+            {
+                "anchor_id": "lyrics",
+                "requested_mode": None,
+                "allow": [],
+                "tolerance_profile": None,
+                "delivery": {"channel": None, "status": "not_requested"},
+                "control": {"status": "unknown"},
+                "observation": {"status": "not_observed"},
+            }
+        ],
     )
     package_path = tmp_path / "performance_package.json"
     package_path.write_bytes(package.model_dump_json(indent=2).encode("utf-8"))

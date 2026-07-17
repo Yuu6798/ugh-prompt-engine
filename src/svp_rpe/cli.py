@@ -1479,6 +1479,31 @@ def observe_cmd(
         )
         raise typer.Exit(code=1)
 
+    # PR #187 review round 15: sha256 and work_id matching still don't rule
+    # out a package whose `anchor_statuses` set of anchor ids was tampered to
+    # no longer match `loaded_manifest.anchors` (missing an anchor the
+    # manifest declares, or carrying an extra one it doesn't) — a downstream
+    # anchor_id join between this observation report and the package would
+    # silently describe a different anchor set than the package's own
+    # provenance fields claim. Order-independent set comparison; either
+    # direction of mismatch is reported.
+    package_anchor_ids = {status.anchor_id for status in package.anchor_statuses}
+    manifest_anchor_ids = {anchor.id for anchor in loaded_manifest.anchors}
+    if package_anchor_ids != manifest_anchor_ids:
+        missing_from_package = sorted(manifest_anchor_ids - package_anchor_ids)
+        extra_in_package = sorted(package_anchor_ids - manifest_anchor_ids)
+        details = []
+        if missing_from_package:
+            details.append(f"missing from package.anchor_statuses: {missing_from_package}")
+        if extra_in_package:
+            details.append(f"extra in package.anchor_statuses: {extra_in_package}")
+        typer.echo(
+            "Error: package.anchor_statuses anchor_id set does not match "
+            "manifest.anchors id set (" + "; ".join(details) + ")",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
     try:
         protected_paths = _observe_protected_input_paths(
             package_path, manifest_path, audio_path, loaded_manifest
