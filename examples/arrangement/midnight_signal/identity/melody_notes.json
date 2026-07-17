@@ -1,0 +1,15 @@
+{
+  "schema": "note-events/0.1",
+  "notes": [
+    {"start_beat": 0.0, "pitch": "C4", "duration_beats": 1.0},
+    {"start_beat": 1.0, "pitch": "Eb4", "duration_beats": 1.0},
+    {"start_beat": 2.0, "pitch": "G4", "duration_beats": 1.0},
+    {"start_beat": 3.0, "pitch": "C5", "duration_beats": 1.0},
+    {"start_beat": 4.0, "pitch": "Bb4", "duration_beats": 1.0},
+    {"start_beat": 5.0, "pitch": "G4", "duration_beats": 1.0},
+    {"start_beat": 6.0, "pitch": "F4", "duration_beats": 1.0},
+    {"start_beat": 7.0, "pitch": "Eb4", "duration_beats": 1.0},
+    {"start_beat": 8.0, "pitch": "D4", "duration_beats": 1.0},
+    {"start_beat": 9.0, "pitch": "C4", "duration_beats": 2.0}
+  ]
+}

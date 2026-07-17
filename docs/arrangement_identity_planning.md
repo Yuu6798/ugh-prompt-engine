@@ -130,6 +130,20 @@ Artifact delivery preservation の完了には、少なくとも 1 backend へ h
 artifact を実配送し、package と backend invocation の双方で同一 artifact/hash を
 確認する縦切り E2E が必要である。
 
+2026-07-17: 1 曲 (`midnight_signal`) x 1 編曲 (`edm.identity.arrangement.yaml`) x
+1 生成器 (suno standard) x 実在 artifact (lyrics / melody) で
+IdentityManifest -> PreservationContract -> InputCapabilityProfile ->
+PerformancePackage を実 CLI で通す縦切り E2E fixture + テストを追加した
+（`tests/test_e2e_vertical_slice.py`）。hard melody anchor は committed
+suno profile へ配送不能であり（`symbolic_melody: unsupported`）、E2E はそれを
+成功偽装せず requested=hard / delivery=unsupported / control=unknown /
+observation=not_observed の 4 状態として記録することを実証した。同一 package 内で
+hard x supported な lyrics anchor が delivery=delivered となる対照も同時に固定し、
+delivery≠preservation の語彙分離を可視化した。配送成功や聴覚的同一性は主張しない。
+`compilation_report.json` は `invocation_provenance.compiler.git_commit` を含み
+コミット毎に変わるため committed byte-pin の対象外とし（フィールドレベル検証のみ）、
+committed byte-pin は `performance_package.json` のみとした。
+
 ### AR4: 生成後の作品同一性観測
 
 生成された音声または記号成果物を anchor ごとに比較し、adherence を観測する。
@@ -151,7 +165,7 @@ chain で結ぶ。聴覚的同一性の判定条件と閾値は、その artifac
 | AR2-1/2 | IdentityManifest / PreservationContract | 完了 (#178, #179, #181) |
 | AR2-3 | structure anchor policy | 保留 |
 | AR3-1 | InputCapabilityProfile | 完了 (#180, #181) |
-| AR3-2 | PerformancePackage compiler | 実装済み |
+| AR3-2 | PerformancePackage compiler + 縦切り E2E fixture | 実装済み（E2E fixture 追加 2026-07-17） |
 | AR4 | generated-output identity observation | 未実装 |
 
 2026-07-17: bundle/report に `content_digest`（内容指紋）と、

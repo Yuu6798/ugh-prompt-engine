@@ -244,6 +244,17 @@ performance-package directory to that manifest directory, so consumers resolve
 portable within the retained directory layout; artifacts are referenced and
 hash-pinned rather than copied into `--output-dir`.
 
+A committed, real end-to-end example lives under
+`examples/arrangement/midnight_signal/`: `identity_manifest.yaml` (lyrics +
+melody anchors), `edm.identity.arrangement.yaml` (the EDM variant with both
+anchors declared `hard`), and the resulting
+`expected/e2e_edm/performance_package.json` byte-pin (see
+`tests/test_e2e_vertical_slice.py`). It pins the honest outcome for a `suno`
+`standard` profile: the `melody` anchor is `requested_mode: hard` but
+`delivery.status: unsupported` (no `symbolic_melody` channel exists), while
+the `lyrics` anchor is `hard` and `delivered` — the same package records both
+states side by side rather than implying delivery from a `hard` request.
+
 The capability profile's `generator` must match the derived score's resolved
 backend profile key (`external` resolves to `suno`). A mismatch fails before
 either artifact is published. Prompt rendering also uses that resolved
