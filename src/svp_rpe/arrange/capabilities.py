@@ -83,13 +83,29 @@ class InputChannels(BaseModel):
 
 
 class InputCapabilityProfile(BaseModel):
-    """generator 単位の InputCapabilityProfile。未知 key を拒否する。"""
+    """generator 単位の InputCapabilityProfile。未知 key を拒否する。
+
+    ``generator_variant`` は経路（Suno 通常/remix/cover/reference-audio、
+    musicgen 通常/melody 等）の識別子で、1 (generator, variant) 対につき
+    1 profile ファイルという単位に対応する。自由文字列（Literal にしない —
+    新経路のたびに schema バンプさせないため、``generator`` が自由文字列
+    である既存判断と整合させる）で、必須・空文字列は拒否する。
+
+    ``model_version`` / ``interface`` は任意で、確認できる場合のみ値を
+    入れる（捏造禁止: 不明であれば ``None`` のままにする）。grip
+    （``control_profile`` / ``DeviceProfile``）は本モデルの管轄外のまま
+    variant 非対応である — variant 別 grip は "model-scope 機構"
+    （``docs/control_profile.md`` で保留中）の管轄。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["input-capability/0.1"]
+    schema_version: Literal["input-capability/0.2"]
     generator: str
+    generator_variant: str = Field(min_length=1)
     profile_version: str
+    model_version: Optional[str] = None
+    interface: Optional[str] = None
     input_channels: InputChannels
 
 

@@ -1,12 +1,25 @@
-schema_version: "input-capability/0.1"
+schema_version: "input-capability/0.2"
 generator: suno
+generator_variant: "standard"
 profile_version: "2026-07"
+# Suno はモデル版数（pin）をユーザーに公開しない。捏造しない（D-5）ため
+# null のまま — 検証可能な記録が現れない限り値を入れない。
+model_version: null
+# 実測バッチ（K2/K2-seg/カバー商流一周ほか）はすべてユーザーがブラウザ版 Suno
+# UI から手動生成したもの（docs/musicgen_backend.md:11「Suno は人手 UI 生成が
+# 律速」/ docs/controllability_poc.md:410「Suno ブラウザ版 UI には Exclude
+# Styles 欄が存在する」= UI 経由生成であることの確認記録）。API 経由生成の
+# 実測記録はリポジトリ内に存在しない。
+interface: "web-ui"
 
 # InputCapabilityProfile: Suno が実際に受け取れる入力チャネルの自己記述
 # （AR3-1）。既存 config/device_profiles/suno.yaml（プロンプト欄 grip の
 # 自己記述）とは別モデル・別ファイルであり、そちらの内容には一切依存/変更
 # しない。`support` はチャネルの「存在」のみを意味し、grip（保持精度）は
 # 保証しない — grip は引き続き device_profiles 側の責務。
+#
+# `generator_variant: "standard"` = Suno の通常経路（remix / cover /
+# reference-audio 等の別経路は本 profile の対象外・別ファイルの管轄）。
 input_channels:
   style_prompt:
     support: supported

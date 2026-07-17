@@ -139,6 +139,7 @@ def _contract(
 def _profile(
     *,
     generator: str = "suno",
+    generator_variant: str = "standard",
     style_prompt: str = "supported",
     lyrics_text: str = "supported",
     section_tags: str = "experimental",
@@ -156,8 +157,9 @@ def _profile(
     }
     return InputCapabilityProfile.model_validate(
         {
-            "schema_version": "input-capability/0.1",
+            "schema_version": "input-capability/0.2",
             "generator": generator,
+            "generator_variant": generator_variant,
             "profile_version": "1",
             "input_channels": {
                 channel: {"support": support} for channel, support in supports.items()
@@ -444,6 +446,29 @@ def test_external_backend_alias_accepts_suno_capability_profile() -> None:
     assert external_score.rendering.target_backend == "external"
 
 
+def test_generator_variant_is_transcribed_from_profile_to_package_and_report() -> None:
+    """`build_performance_package` copies `profile.generator_variant` verbatim
+    onto both `PerformancePackage` and `CompilationReport` (Design Memo §1) —
+    no cross-check against `device_profile` is expected, since DeviceProfile
+    carries no variant (D-2: grip stays variant-unaware)."""
+    manifest = _manifest([])
+    contract = _contract(manifest, {})
+
+    compiled = _build(manifest, contract, _profile(generator_variant="custom-variant"))
+
+    assert compiled.package.generator_variant == "custom-variant"
+    assert compiled.report.generator_variant == "custom-variant"
+    assert json.loads(compiled.package_json)["generator_variant"] == "custom-variant"
+    assert json.loads(compiled.report_json)["generator_variant"] == "custom-variant"
+
+
+def test_package_and_report_schema_versions_are_current() -> None:
+    compiled = _build(_manifest([]), _contract(_manifest([]), {}), _profile())
+
+    assert compiled.package.schema_version == "performance-package/0.2"
+    assert compiled.report.schema_version == "compilation-report/0.3"
+
+
 def test_builder_pins_the_exact_device_profile_used_for_render(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -578,15 +603,19 @@ def test_package_readback_rejects_incomplete_or_unrequested_policy() -> None:
 def test_package_and_report_reject_unknown_schema_versions() -> None:
     compiled = _build(_manifest([]), _contract(_manifest([]), {}), _profile())
     package_data = compiled.package.model_dump(mode="json")
-    package_data["schema_version"] = "performance-package/0.2"
+    # performance-package/0.2 is now the current (valid) version — the
+    # generator_variant Design Memo bumped it from 0.1, so the unknown-version
+    # probe moves to 0.3.
+    package_data["schema_version"] = "performance-package/0.3"
     with pytest.raises(ValidationError):
         PerformancePackage.model_validate(package_data)
 
     report_data = compiled.report.model_dump(mode="json")
-    # compilation-report/0.2 is now the current (valid) version — item 9/10
-    # bumped it to carry content_digest + invocation_provenance.compiler, so
-    # the unknown-version probe moves to 0.3.
-    report_data["schema_version"] = "compilation-report/0.3"
+    # compilation-report/0.3 is now the current (valid) version — item 9/10
+    # bumped it to 0.2 to carry content_digest + invocation_provenance.compiler,
+    # and the generator_variant Design Memo bumped it again to 0.3, so the
+    # unknown-version probe moves to 0.4.
+    report_data["schema_version"] = "compilation-report/0.4"
     with pytest.raises(ValidationError):
         CompilationReport.model_validate(report_data)
 

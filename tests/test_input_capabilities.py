@@ -22,8 +22,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 def _profile_dict(**channel_overrides: dict[str, Any]) -> dict[str, Any]:
     data: dict[str, Any] = {
-        "schema_version": "input-capability/0.1",
+        "schema_version": "input-capability/0.2",
         "generator": "acme",
+        "generator_variant": "standard",
         "profile_version": "2026-07",
         "input_channels": dict(channel_overrides),
     }
@@ -52,7 +53,8 @@ def test_load_profile_succeeds_with_all_channels_declared(tmp_path: Path) -> Non
     profile = load_input_capability_profile(profile_path)
 
     assert profile.generator == "acme"
-    assert profile.schema_version == "input-capability/0.1"
+    assert profile.generator_variant == "standard"
+    assert profile.schema_version == "input-capability/0.2"
     assert profile.input_channels.style_prompt.support == "supported"
     assert profile.input_channels.lyrics_text.note == "no lyrics channel"
 
@@ -313,14 +315,77 @@ def test_unknown_input_capability_schema_version_raises_validation_error(
     tmp_path: Path,
 ) -> None:
     profile_dict = _profile_dict(style_prompt={"support": "supported"})
-    profile_dict["schema_version"] = "input-capability/0.2"
+    profile_dict["schema_version"] = "input-capability/0.3"
     profile_path = tmp_path / "profile.yaml"
     _write_profile(profile_path, profile_dict)
 
     with pytest.raises(ValidationError) as exc_info:
         load_input_capability_profile(profile_path)
 
-    assert "input-capability/0.2" in str(exc_info.value)
+    assert "input-capability/0.3" in str(exc_info.value)
+
+
+def test_old_input_capability_schema_version_0_1_is_fail_fast_rejected(
+    tmp_path: Path,
+) -> None:
+    """`input-capability/0.1` predates `generator_variant` and is rejected —
+    unknown/old `schema_version` values must fail fast rather than be read as
+    if they were the current schema (Design Memo D generator_variant §1)."""
+    profile_dict = _profile_dict(style_prompt={"support": "supported"})
+    profile_dict["schema_version"] = "input-capability/0.1"
+    profile_path = tmp_path / "profile.yaml"
+    _write_profile(profile_path, profile_dict)
+
+    with pytest.raises(ValidationError) as exc_info:
+        load_input_capability_profile(profile_path)
+
+    assert "input-capability/0.1" in str(exc_info.value)
+
+
+def test_generator_variant_empty_string_is_rejected(tmp_path: Path) -> None:
+    profile_dict = _profile_dict(style_prompt={"support": "supported"})
+    profile_dict["generator_variant"] = ""
+    profile_path = tmp_path / "profile.yaml"
+    _write_profile(profile_path, profile_dict)
+
+    with pytest.raises(ValidationError):
+        load_input_capability_profile(profile_path)
+
+
+def test_generator_variant_missing_is_rejected(tmp_path: Path) -> None:
+    profile_dict = _profile_dict(style_prompt={"support": "supported"})
+    del profile_dict["generator_variant"]
+    profile_path = tmp_path / "profile.yaml"
+    _write_profile(profile_path, profile_dict)
+
+    with pytest.raises(ValidationError):
+        load_input_capability_profile(profile_path)
+
+
+def test_model_version_and_interface_are_optional_and_default_none(
+    tmp_path: Path,
+) -> None:
+    profile_dict = _profile_dict(style_prompt={"support": "supported"})
+    profile_path = tmp_path / "profile.yaml"
+    _write_profile(profile_path, profile_dict)
+
+    profile = load_input_capability_profile(profile_path)
+
+    assert profile.model_version is None
+    assert profile.interface is None
+
+
+def test_model_version_and_interface_roundtrip_when_declared(tmp_path: Path) -> None:
+    profile_dict = _profile_dict(style_prompt={"support": "supported"})
+    profile_dict["model_version"] = "acme-model@deadbeef"
+    profile_dict["interface"] = "local-transformers"
+    profile_path = tmp_path / "profile.yaml"
+    _write_profile(profile_path, profile_dict)
+
+    profile = load_input_capability_profile(profile_path)
+
+    assert profile.model_version == "acme-model@deadbeef"
+    assert profile.interface == "local-transformers"
 
 
 def test_unknown_channel_key_raises_validation_error(tmp_path: Path) -> None:
@@ -386,14 +451,29 @@ def test_non_mapping_yaml_raises_value_error(tmp_path: Path) -> None:
 # --- committed profiles: real load + evidence check ---------------------------
 
 
-@pytest.mark.parametrize("generator", ["suno", "musicgen"])
-def test_committed_profile_loads_and_evidence_resolves(generator: str) -> None:
+@pytest.mark.parametrize(
+    ("generator", "expected_model_version", "expected_interface"),
+    [
+        ("suno", None, "web-ui"),
+        (
+            "musicgen",
+            "facebook/musicgen-small@4c8334b02c6ec4e8664a91979669a501ec497792",
+            "local-transformers",
+        ),
+    ],
+)
+def test_committed_profile_loads_and_evidence_resolves(
+    generator: str, expected_model_version: str | None, expected_interface: str
+) -> None:
     profile_path = REPO_ROOT / "config" / "capability_profiles" / f"{generator}.yaml"
 
     profile = load_input_capability_profile(profile_path, evidence_base=REPO_ROOT)
 
     assert profile.generator == generator
-    assert profile.schema_version == "input-capability/0.1"
+    assert profile.generator_variant == "standard"
+    assert profile.schema_version == "input-capability/0.2"
+    assert profile.model_version == expected_model_version
+    assert profile.interface == expected_interface
 
 
 # --- config double-copy sync pin (tests/test_config.py 契約は変更せず、ここで独立に pin) --
@@ -449,8 +529,9 @@ def test_repeated_load_is_deterministic(tmp_path: Path) -> None:
 
 def test_input_capability_profile_direct_construction_roundtrips() -> None:
     profile = InputCapabilityProfile(
-        schema_version="input-capability/0.1",
+        schema_version="input-capability/0.2",
         generator="acme",
+        generator_variant="standard",
         profile_version="2026-07",
         input_channels=InputChannels(
             style_prompt=InputChannelCapability(support="supported"),
@@ -458,5 +539,19 @@ def test_input_capability_profile_direct_construction_roundtrips() -> None:
     )
 
     dumped = profile.model_dump(mode="json")
+    assert dumped["generator_variant"] == "standard"
+    assert dumped["model_version"] is None
+    assert dumped["interface"] is None
     assert dumped["input_channels"]["style_prompt"]["support"] == "supported"
     assert dumped["input_channels"]["midi"]["support"] == "unknown"
+
+
+def test_input_capability_profile_rejects_empty_generator_variant() -> None:
+    with pytest.raises(ValidationError):
+        InputCapabilityProfile(
+            schema_version="input-capability/0.2",
+            generator="acme",
+            generator_variant="",
+            profile_version="2026-07",
+            input_channels=InputChannels(),
+        )
