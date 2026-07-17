@@ -209,9 +209,26 @@ def _cycle_alignment(
     longest prefix of `collapsed_observed` that matches the canonical
     alternation continuously from the start (stopping at the first mismatch,
     not resuming past it), and how many full passes through `canonical` that
-    prefix consumed (counting the cycle-boundary collapse — i.e. 2 cycles of a
-    4-chord canonical progression collapse to 7 entries, not 8, when the first
-    and last chord are identical).
+    prefix consumed (counting collapse: any run of consecutive raw canonical
+    positions holding the same chord — whether that run sits entirely inside
+    one nominal cycle, e.g. `canonical=[C, G, G]`, or straddles the
+    cycle-boundary repeat, e.g. 2 cycles of a 4-chord progression whose first
+    and last chord are identical collapsing to 7 entries, not 8 — collapses to
+    a single matched entry and must count as consumed raw positions for
+    `full_cycles`, not just the first raw position where that entry was
+    found).
+
+    round 4 fix: the match loop's in-loop skip (the inner ``while True``)
+    only looks *forward* for the *next* distinct entry while searching for
+    it — it never looks past the *last* matched entry once the loop has
+    already stopped (exhausted `collapsed_observed`, or about to mismatch).
+    So a canonical progression with a trailing internal duplicate right after
+    the last matched position (`[C, G, G]` matched by `[C, G]`) undercounted
+    `full_cycles` by leaving those trailing repeats un-consumed in
+    `matched_raw_index`. The loop below applies the exact same collapse rule
+    once more, after the main loop, starting from wherever it left off —
+    bounded to `length` steps so a degenerate all-identical `canonical` can't
+    spin forever.
     """
     if not canonical or not collapsed_observed:
         return 0, 0
@@ -231,6 +248,14 @@ def _cycle_alignment(
         last_chord = expected_chord
         matched += 1
         matched_raw_index = raw_index
+    trailing_steps = 0
+    while (
+        matched > 0
+        and trailing_steps < length
+        and canonical[matched_raw_index % length] == last_chord
+    ):
+        matched_raw_index += 1
+        trailing_steps += 1
     return matched, matched_raw_index // length
 
 

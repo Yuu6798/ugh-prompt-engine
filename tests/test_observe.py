@@ -348,6 +348,59 @@ def test_observe_harmony_proper_prefix_below_one_cycle_stays_deferred() -> None:
     assert "less than one full canonical cycle" in str(observation.note)
 
 
+def test_cycle_alignment_counts_trailing_internal_duplicate_as_full_cycle() -> None:
+    """Round-4 fix: canonical=[C, G, G] has an internal duplicate (the two
+    G's) right after the position where the 2-entry observed sequence
+    [C, G] stops. Collapse semantics fold that trailing duplicate into the
+    same "G" entry already matched, so this genuinely is one full canonical
+    cycle observed — not the kind of incomplete proper-prefix the round-3
+    gate (`full_cycles >= 1`) is meant to catch. Before the round-4 fix,
+    `matched_raw_index` stopped at the first raw position of that "G" entry
+    (2) instead of consuming the trailing duplicate too (3), so
+    `full_cycles` undercounted as 0 instead of 1."""
+    canonical = [("C", "major"), ("G", "major"), ("G", "major")]
+    matched_prefix_length, full_cycles = _cycle_alignment(
+        canonical, [("C", "major"), ("G", "major")]
+    )
+    assert matched_prefix_length == 2
+    assert full_cycles == 1
+
+
+def test_cycle_alignment_short_prefix_without_trailing_duplicate_stays_below_one_cycle() -> None:
+    """Contrast case (round-3 gate must still hold): canonical=[C, G] has no
+    internal duplicate, so matching only its first chord genuinely is less
+    than one full cycle."""
+    canonical = [("C", "major"), ("G", "major")]
+    matched_prefix_length, full_cycles = _cycle_alignment(canonical, [("C", "major")])
+    assert matched_prefix_length == 1
+    assert full_cycles == 0
+
+
+def test_observe_harmony_trailing_internal_duplicate_reaches_preserved() -> None:
+    """End-to-end confirmation through `_observe_harmony`: with the round-4
+    fix, a canonical progression with a trailing internal duplicate whose
+    observed collapsed sequence covers exactly one full (collapse-aware)
+    cycle reaches `preserved` — not `deferred`, which the round-3 gate would
+    have wrongly forced without this fix (full_cycles undercounted at 0)."""
+    anchor = _anchor("harmony", "harmony", "chord_progression.json", "chord_sequence_json")
+    canonical = [("C", "major"), ("G", "major"), ("G", "major")]
+    bundle = _bundle_with_chords([("C", "major"), ("G", "major")])
+    artifact_bytes = _chord_artifact_bytes(canonical)
+
+    observation = _observe_harmony(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        bundle=bundle,
+        artifact_bytes=artifact_bytes,
+    )
+
+    assert observation.measurements["collapsed_observed_length"] == 2
+    assert observation.measurements["matched_cycle_prefix_length"] == 2
+    assert observation.adherence_status == "preserved"
+    assert observation.determination == "exact_match"
+
+
 # --- 4. build_observation_report: single shared extraction + determinism ----------
 
 
