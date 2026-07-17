@@ -117,18 +117,38 @@ def load_identity_manifest(path: Path | str) -> IdentityManifest:
     sha256 を計算して宣言値と比較する（TOCTOU を単一読み取りで構造的に排除）。
     path が存在しない・ディレクトリである・hash が一致しない場合も
     `IdentityManifestError` を送出する。
+
+    manifest ファイル自身は本関数がここで 1 回だけ読む（`parse_identity_manifest`
+    へ委譲）。呼び出し側が既に manifest bytes を別目的（例: 呼び出し側自身の
+    provenance chain 検証用 hash 計算）で読んでいる場合は、二重読み込みを避ける
+    ため `parse_identity_manifest` を直接呼ぶこと（`svprpe observe` の D-3 検証が
+    そうする — PR #187 review）。
     """
     manifest_path = Path(path)
     try:
-        data = _load_yaml_mapping(manifest_path)
+        raw_bytes = manifest_path.read_bytes()
     except OSError as exc:
         # artifact 読み失敗（IdentityManifestError ラップ済み）との対称性を保ち、
         # 呼び出し側の公開契約を生 OS 例外に晒さない。この時点で work_id は未知の
-        # ため path のみを記録する。非 mapping の ValueError と yaml.YAMLError は
-        # 他 loader（compose / arrange）との共通契約のためラップしない。
+        # ため path のみを記録する。
         raise IdentityManifestError(
             f"identity manifest unreadable at {manifest_path}: {exc}"
         ) from exc
+    return parse_identity_manifest(raw_bytes, manifest_path)
+
+
+def parse_identity_manifest(raw_bytes: bytes, manifest_path: Path | str) -> IdentityManifest:
+    """`load_identity_manifest` の中核（bytes を既に読んだ呼び出し側向けの経路）。
+
+    `raw_bytes` を manifest YAML としてパース・検証し、source / 各 anchor の
+    宣言 sha256 を実ファイルの bytes と照合する。`manifest_path` はエラー
+    メッセージと anchor/source locator の解決基点（親ディレクトリ）にのみ使う
+    — ファイルは読まない（呼び出し側がそれを担う）。非 mapping の `ValueError`
+    と `yaml.YAMLError` は `load_identity_manifest` と同じ契約でラップしない
+    （他 loader との共通挙動）。
+    """
+    manifest_path = Path(manifest_path)
+    data = _parse_yaml_mapping(raw_bytes, manifest_path)
     manifest = IdentityManifest.model_validate(data)
 
     base_dir = manifest_path.resolve().parent
@@ -158,9 +178,8 @@ def load_identity_manifest(path: Path | str) -> IdentityManifest:
     return manifest
 
 
-def _load_yaml_mapping(path: Path) -> dict[str, Any]:
-    with path.open(encoding="utf-8") as f:
-        data = yaml.safe_load(f)
+def _parse_yaml_mapping(raw_bytes: bytes, path: Path) -> dict[str, Any]:
+    data = yaml.safe_load(raw_bytes)
     if not isinstance(data, dict):
         raise ValueError(f"identity manifest must be a mapping: {path}")
     return data

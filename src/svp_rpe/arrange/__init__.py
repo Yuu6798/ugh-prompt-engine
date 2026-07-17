@@ -34,6 +34,7 @@ from svp_rpe.arrange.identity import (
     IdentityManifest,
     IdentityManifestError,
     load_identity_manifest,
+    parse_identity_manifest,
 )
 from svp_rpe.arrange.loader import load_arrangement_spec
 from svp_rpe.arrange.models import (
@@ -137,5 +138,6 @@ __all__ = [
     "load_arrangement_spec",
     "load_identity_manifest",
     "load_input_capability_profile",
+    "parse_identity_manifest",
     "resolve_arrangement",
 ]

@@ -529,6 +529,177 @@ def test_observe_cli_rejects_missing_package_file(tmp_path: Path) -> None:
     assert not (tmp_path / "report.json").exists()
 
 
+# --- 5b. PR #187 review: -o input/output collision guard --------------------------
+
+
+def test_observe_cli_rejects_output_path_colliding_with_manifest(tmp_path: Path) -> None:
+    pkg_dir = tmp_path / "pkg"
+    result = CliRunner().invoke(app, _cli_package_args(pkg_dir))
+    assert result.exit_code == 0, result.output
+
+    # A tmp_path copy (with its source/anchor artifacts alongside it, so
+    # parse_identity_manifest's own hash checks succeed) — never the real
+    # fixture path, so a regression here can never actually clobber a
+    # repo-tracked file even if the guard is broken.
+    (tmp_path / "identity").mkdir()
+    manifest_copy = tmp_path / "identity_manifest.yaml"
+    manifest_copy.write_bytes(IDENTITY_MANIFEST.read_bytes())
+    (tmp_path / "composition_score.yaml").write_bytes(BASE_SCORE.read_bytes())
+    for name in ("lyrics.txt", "melody_notes.json", "chord_progression.json"):
+        (tmp_path / "identity" / name).write_bytes(
+            (FIXTURE_DIR / "identity" / name).read_bytes()
+        )
+    original_bytes = manifest_copy.read_bytes()
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"unused-placeholder-audio-bytes")
+
+    result2 = CliRunner().invoke(
+        app,
+        [
+            "observe",
+            str(pkg_dir / "performance_package.json"),
+            str(audio_path),
+            "--manifest",
+            str(manifest_copy),
+            "-o",
+            str(manifest_copy),
+        ],
+    )
+
+    assert result2.exit_code == 1
+    assert "collides with output artifact path" in result2.stderr
+    assert manifest_copy.read_bytes() == original_bytes
+
+
+def test_observe_cli_rejects_output_path_colliding_with_package(tmp_path: Path) -> None:
+    pkg_dir = tmp_path / "pkg"
+    result = CliRunner().invoke(app, _cli_package_args(pkg_dir))
+    assert result.exit_code == 0, result.output
+    package_path = pkg_dir / "performance_package.json"
+    original_bytes = package_path.read_bytes()
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"unused-placeholder-audio-bytes")
+
+    result2 = CliRunner().invoke(
+        app,
+        [
+            "observe",
+            str(package_path),
+            str(audio_path),
+            "--manifest",
+            str(IDENTITY_MANIFEST),
+            "-o",
+            str(package_path),
+        ],
+    )
+
+    assert result2.exit_code == 1
+    assert "collides with output artifact path" in result2.stderr
+    assert package_path.read_bytes() == original_bytes
+
+
+# --- 5c. PR #187 review: manifest single-read discipline + audio snapshot ----------
+
+
+def test_observe_cli_reads_manifest_bytes_exactly_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression guard: `observe` must parse the manifest from the same bytes
+    it hashed for the D-3 sha256 check, not re-read the file a second time
+    (e.g. via `load_identity_manifest`, which re-reads internally)."""
+    pkg_dir = tmp_path / "pkg"
+    result = CliRunner().invoke(app, _cli_package_args(pkg_dir))
+    assert result.exit_code == 0, result.output
+
+    def fake_extract(path: str) -> RPEBundle:
+        return _bundle_with_chords(CANONICAL_PROGRESSION)
+
+    monkeypatch.setattr("svp_rpe.arrange.observe.extract_rpe_from_file", fake_extract)
+
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"unused-placeholder-audio-bytes")
+
+    resolved_manifest = IDENTITY_MANIFEST.resolve()
+    read_counts: dict[Path, int] = {}
+    original_read_bytes = Path.read_bytes
+
+    def counting_read_bytes(self: Path) -> bytes:
+        if self.resolve() == resolved_manifest:
+            read_counts[resolved_manifest] = read_counts.get(resolved_manifest, 0) + 1
+        return original_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", counting_read_bytes)
+
+    report_path = tmp_path / "report.json"
+    result2 = CliRunner().invoke(
+        app,
+        [
+            "observe",
+            str(pkg_dir / "performance_package.json"),
+            str(audio_path),
+            "--manifest",
+            str(IDENTITY_MANIFEST),
+            "-o",
+            str(report_path),
+        ],
+    )
+
+    assert result2.exit_code == 0, result2.output
+    assert read_counts.get(resolved_manifest) == 1
+
+
+def test_observe_cli_extracts_from_a_byte_identical_audio_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bytes handed to extraction must be exactly the bytes hashed into
+    `generated_artifact.sha256` — verified via a snapshot file, not the
+    original `audio_path` (so a report survives even if something else were to
+    mutate the original file between hashing and extraction). The snapshot
+    must be a temp file distinct from `audio_path`, cleaned up afterward, and
+    must never leak into `generated_artifact.path` (which stays the original
+    user-supplied string)."""
+    pkg_dir = tmp_path / "pkg"
+    result = CliRunner().invoke(app, _cli_package_args(pkg_dir))
+    assert result.exit_code == 0, result.output
+
+    audio_path = tmp_path / "fake.wav"
+    audio_bytes = b"unused-placeholder-audio-bytes-for-snapshot-check"
+    audio_path.write_bytes(audio_bytes)
+    expected_sha256 = hashlib.sha256(audio_bytes).hexdigest()
+
+    captured_paths: list[str] = []
+
+    def fake_extract(path: str) -> RPEBundle:
+        captured_paths.append(path)
+        assert Path(path).read_bytes() == audio_bytes
+        return _bundle_with_chords(CANONICAL_PROGRESSION)
+
+    monkeypatch.setattr("svp_rpe.arrange.observe.extract_rpe_from_file", fake_extract)
+
+    report_path = tmp_path / "report.json"
+    result2 = CliRunner().invoke(
+        app,
+        [
+            "observe",
+            str(pkg_dir / "performance_package.json"),
+            str(audio_path),
+            "--manifest",
+            str(IDENTITY_MANIFEST),
+            "-o",
+            str(report_path),
+        ],
+    )
+
+    assert result2.exit_code == 0, result2.output
+    assert len(captured_paths) == 1
+    assert Path(captured_paths[0]) != audio_path
+    assert not Path(captured_paths[0]).exists()  # snapshot cleaned up in `finally`
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["generated_artifact"]["path"] == str(audio_path)
+    assert report["generated_artifact"]["sha256"] == expected_sha256
+
+
 # --- 6. E2E (real perform + extract): pinned harmony measurement + determinism -----
 
 

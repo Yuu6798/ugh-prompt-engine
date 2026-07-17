@@ -25,6 +25,7 @@ from rich.table import Table
 from svp_rpe.eval.scorer_rpe import BASELINE_CONFIGS
 
 if TYPE_CHECKING:
+    from svp_rpe.arrange.identity import IdentityManifest
     from svp_rpe.transcribe import MeasurementReport
 
 app = typer.Typer(
@@ -1271,6 +1272,43 @@ def package_command(
     )
 
 
+def _observe_protected_input_paths(
+    package_path: Path,
+    manifest_path: Path,
+    audio_path: Path,
+    manifest: "IdentityManifest",
+) -> list[Path]:
+    """Every path `observe` reads as an input — package / manifest / audio /
+    manifest source locator / every anchor artifact — resolved so `-o` can be
+    checked against all of them before anything is measured or written
+    (PR #187 review round 1: the same collision shape
+    `_publish_artifacts_atomically` / `_reject_builds_root_input_collision`
+    already guard against for `arrange` / `package`, applied here to
+    `observe`'s single `-o` output file)."""
+    from svp_rpe.arrange.identity import _resolve_confined
+
+    base_dir = manifest_path.resolve().parent
+    work_id = manifest.meta.work_id
+    paths = [package_path.resolve(), manifest_path.resolve(), audio_path.resolve()]
+    paths.append(
+        _resolve_confined(manifest.source.locator, base_dir, work_id=work_id, target="source")
+    )
+    for anchor in manifest.anchors:
+        paths.append(
+            _resolve_confined(
+                anchor.artifact, base_dir, work_id=work_id, target=f"anchor '{anchor.id}'"
+            )
+        )
+    return paths
+
+
+def _reject_observe_output_collision(output_path: str | Path, input_paths: list[Path]) -> None:
+    resolved_output = Path(output_path).resolve()
+    for input_path in input_paths:
+        if input_path == resolved_output:
+            raise ValueError(f"input path collides with output artifact path: {resolved_output}")
+
+
 @app.command("observe")
 def observe_cmd(
     package_json: str = typer.Argument(..., help="Path to performance_package.json"),
@@ -1297,13 +1335,18 @@ def observe_cmd(
     every manifest anchor's artifact hash must match the file on disk (via the
     same loader `package` uses). A broken chain or malformed package exits 1
     without measuring anything — this instrument refuses to run against
-    inputs it cannot trust.
+    inputs it cannot trust. `-o` is also rejected (exit 1, nothing written) if
+    it resolves to any input path (package / manifest / audio / manifest
+    source locator / any anchor artifact) — the same input/output collision
+    guard `arrange` / `package` apply to their own outputs.
     """
     import hashlib
+    import os
+    import tempfile
 
     from pydantic import ValidationError
 
-    from svp_rpe.arrange.identity import IdentityManifestError, load_identity_manifest
+    from svp_rpe.arrange.identity import IdentityManifestError, parse_identity_manifest
     from svp_rpe.arrange.observe import build_observation_report
     from svp_rpe.arrange.package import PerformancePackage
 
@@ -1337,9 +1380,21 @@ def observe_cmd(
         )
         raise typer.Exit(code=1)
 
+    # Parse from the bytes already read and hashed above — `manifest_path` is
+    # only used to resolve anchor/source locators and for error messages, the
+    # file itself is never read a second time (PR #187 review round 1).
     try:
-        loaded_manifest = load_identity_manifest(manifest_path)
+        loaded_manifest = parse_identity_manifest(manifest_bytes, manifest_path)
     except IdentityManifestError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    try:
+        protected_paths = _observe_protected_input_paths(
+            package_path, manifest_path, audio_path, loaded_manifest
+        )
+        _reject_observe_output_collision(output, protected_paths)
+    except (IdentityManifestError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
@@ -1351,19 +1406,32 @@ def observe_cmd(
     audio_sha256 = hashlib.sha256(audio_bytes).hexdigest()
     package_sha256 = hashlib.sha256(package_bytes).hexdigest()
 
+    # Extract from a snapshot of exactly the bytes just hashed, not from
+    # `audio_path` directly — this makes "the sha256 recorded in the report"
+    # and "the bytes actually measured" the same bytes by construction, not
+    # merely by the assumption that nothing touches `audio_path` in between
+    # (PR #187 review round 1). `generated_artifact.path` in the report still
+    # reports the user-supplied `audio` string, not this temp path.
+    snapshot_fd, snapshot_name = tempfile.mkstemp(suffix=audio_path.suffix or ".wav")
+    snapshot_path = Path(snapshot_name)
     try:
-        report = build_observation_report(
-            package=package,
-            manifest=loaded_manifest,
-            manifest_path=manifest_path,
-            audio_path=audio_path,
-            package_sha256=package_sha256,
-            audio_sha256=audio_sha256,
-            generated_artifact_path=audio,
-        )
-    except (OSError, ValueError, ValidationError, IdentityManifestError) as exc:
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
+        with os.fdopen(snapshot_fd, "wb") as snapshot_file:
+            snapshot_file.write(audio_bytes)
+        try:
+            report = build_observation_report(
+                package=package,
+                manifest=loaded_manifest,
+                manifest_path=manifest_path,
+                audio_path=snapshot_path,
+                package_sha256=package_sha256,
+                audio_sha256=audio_sha256,
+                generated_artifact_path=audio,
+            )
+        except (OSError, ValueError, ValidationError, IdentityManifestError) as exc:
+            typer.echo(f"Error: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+    finally:
+        snapshot_path.unlink(missing_ok=True)
 
     content = json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2)
     Path(output).write_text(content, encoding="utf-8")
