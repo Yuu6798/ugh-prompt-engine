@@ -53,6 +53,14 @@ from svp_rpe.arrange.models import (
     RenderingOverride,
     SemanticOverride,
 )
+from svp_rpe.arrange.observe import (
+    OBSERVATION_REPORT_SCHEMA_VERSION,
+    AnchorObservation,
+    GeneratedArtifactRef,
+    ObservationReport,
+    SensorRecord,
+    build_observation_report,
+)
 from svp_rpe.arrange.package import (
     ARTIFACT_TYPE_CHANNEL,
     COMPILATION_REPORT_FILENAME,
@@ -75,6 +83,7 @@ from svp_rpe.arrange.resolver import (
 __all__ = [
     "AllowedTransformation",
     "ARTIFACT_TYPE_CHANNEL",
+    "AnchorObservation",
     "AnchorPreservation",
     "ArrangementChange",
     "ArrangementConflictError",
@@ -97,6 +106,7 @@ __all__ = [
     "DOMAIN_ALLOWED_TRANSFORMS",
     "DeltaEOverride",
     "EventOverride",
+    "GeneratedArtifactRef",
     "GrvOverride",
     "INPUT_CHANNELS",
     "IdentityAnchor",
@@ -106,6 +116,8 @@ __all__ = [
     "InputCapabilityProfile",
     "InputChannelCapability",
     "InputChannels",
+    "OBSERVATION_REPORT_SCHEMA_VERSION",
+    "ObservationReport",
     "PhysicalOverride",
     "PERFORMANCE_PACKAGE_FILENAME",
     "PackageCompilationError",
@@ -116,6 +128,8 @@ __all__ = [
     "PreservationSpec",
     "RenderingOverride",
     "SemanticOverride",
+    "SensorRecord",
+    "build_observation_report",
     "build_preservation_contract",
     "build_performance_package",
     "compile_arrangement",

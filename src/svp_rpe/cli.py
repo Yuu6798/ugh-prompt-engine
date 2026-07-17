@@ -1271,6 +1271,128 @@ def package_command(
     )
 
 
+@app.command("observe")
+def observe_cmd(
+    package_json: str = typer.Argument(..., help="Path to performance_package.json"),
+    audio: str = typer.Argument(..., help="Path to the generated audio (WAV/MP3)"),
+    manifest: str = typer.Option(
+        ..., "--manifest", help="Path to the IdentityManifest YAML used to compile the package"
+    ),
+    output: str = typer.Option(
+        ..., "-o", "--output", help="Output observation report JSON path"
+    ),
+) -> None:
+    """Record post-generation anchor observations against a generated artifact (AR4).
+
+    Instrument, not verdict (Design Memo D-1): `adherence_status` is only ever
+    set when it can be decided without a threshold — `not_observed` when no
+    sensor is wired for an anchor's domain, `preserved` on an exact identity
+    match, and `not_observed` (with `determination: "deferred"`) plus the raw
+    measurements when the sensor ran but did not match exactly. Threshold-based
+    `changed_within_policy` / `changed_outside_policy` classification is out of
+    scope until a future Design Memo fixes it.
+
+    Before measuring, verifies the provenance chain (D-3): the `--manifest`
+    file's sha256 must equal `package.inputs.identity_manifest.sha256`, and
+    every manifest anchor's artifact hash must match the file on disk (via the
+    same loader `package` uses). A broken chain or malformed package exits 1
+    without measuring anything — this instrument refuses to run against
+    inputs it cannot trust.
+    """
+    import hashlib
+
+    from pydantic import ValidationError
+
+    from svp_rpe.arrange.identity import IdentityManifestError, load_identity_manifest
+    from svp_rpe.arrange.observe import build_observation_report
+    from svp_rpe.arrange.package import PerformancePackage
+
+    package_path = Path(package_json)
+    manifest_path = Path(manifest)
+    audio_path = Path(audio)
+
+    try:
+        package_bytes = package_path.read_bytes()
+    except OSError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    try:
+        package = PerformancePackage.model_validate_json(package_bytes)
+    except ValidationError as exc:
+        typer.echo(f"Error: performance package failed schema validation: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    try:
+        manifest_bytes = manifest_path.read_bytes()
+    except OSError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    if manifest_sha256 != package.inputs.identity_manifest.sha256:
+        typer.echo(
+            "Error: identity manifest sha256 does not match "
+            f"package.inputs.identity_manifest.sha256: {manifest_sha256} != "
+            f"{package.inputs.identity_manifest.sha256}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        loaded_manifest = load_identity_manifest(manifest_path)
+    except IdentityManifestError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    try:
+        audio_bytes = audio_path.read_bytes()
+    except OSError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    audio_sha256 = hashlib.sha256(audio_bytes).hexdigest()
+    package_sha256 = hashlib.sha256(package_bytes).hexdigest()
+
+    try:
+        report = build_observation_report(
+            package=package,
+            manifest=loaded_manifest,
+            manifest_path=manifest_path,
+            audio_path=audio_path,
+            package_sha256=package_sha256,
+            audio_sha256=audio_sha256,
+            generated_artifact_path=audio,
+        )
+    except (OSError, ValueError, ValidationError, IdentityManifestError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    content = json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2)
+    Path(output).write_text(content, encoding="utf-8")
+
+    table = Table(title=f"Observation: {package.work_id}")
+    table.add_column("anchor_id")
+    table.add_column("domain")
+    table.add_column("sensor")
+    table.add_column("available")
+    table.add_column("adherence_status")
+    table.add_column("determination")
+    table.add_column("measurements")
+    for anchor_observation in report.anchors:
+        measurements_summary = ", ".join(
+            f"{key}={value}" for key, value in anchor_observation.measurements.items()
+        )
+        table.add_row(
+            anchor_observation.anchor_id,
+            anchor_observation.domain,
+            anchor_observation.sensor.name,
+            "yes" if anchor_observation.sensor.available else "no",
+            anchor_observation.adherence_status,
+            anchor_observation.determination,
+            measurements_summary,
+        )
+    console.print(table)
+    console.print(f"[green]Observation report saved to {output}[/green]")
+
+
 @app.command()
 def measure(
     audio: str = typer.Argument(..., help="Path to WAV/MP3 file"),

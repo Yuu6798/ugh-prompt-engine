@@ -372,6 +372,94 @@ locator relative to wherever the symlink actually points rather than the
 reserved placeholder path; a real directory sitting at the placeholder path
 is fine (same depth, so the locator is still correct) and is not rejected.
 
+### `svprpe observe <package.json> <audio> --manifest <identity_manifest.yaml> -o <report.json>`
+
+Record post-generation anchor observations against a generated artifact (AR4). Like
+`roundtrip` / `score-adherence` / `lyrics-adherence` / `audit`, this is a descriptive
+instrument and intentionally does not emit a pass/fail verdict:
+
+```bash
+svprpe observe build/performance_package.json generated_track.wav \
+  --manifest examples/arrangement/midnight_signal/identity_manifest.yaml \
+  -o observation_report.json
+```
+
+Before measuring anything, `observe` verifies the provenance chain (D-3 in the AR4
+Design Memo) and exits `1` without measuring if any link is broken:
+
+1. the `--manifest` file's sha256 must equal `package.inputs.identity_manifest.sha256`
+2. every manifest anchor's artifact hash must match the file on disk (via the same
+   `load_identity_manifest` loader `package` uses — reused here, not reimplemented)
+3. `package.json` itself must pass `PerformancePackage` schema validation
+
+Only then does it read the audio once (shared across every anchor) and record, in
+`observation_report.json` (schema `observation-report/0.1`):
+
+- `package_sha256` / `generated_artifact.{path,sha256}` — provenance of what was compared
+- one `AnchorObservation` per manifest anchor, each with:
+  - `sensor.{name,available,reason}` — which sensor ran (or why it didn't)
+  - `measurements` — raw sensor output only, no derived judgment
+  - `adherence_status` / `determination` — see below
+
+**`adherence_status`/`determination` follow exactly 3 branches (Design Memo D-1),
+and no others**: this PR fixes *what was measured*, not *what counts as
+preserved beyond exact identity* — that threshold judgment is deferred to a
+future Design Memo.
+
+| Case | `adherence_status` | `determination` |
+|---|---|---|
+| No sensor wired for the anchor's domain (lyrics/melody/rhythm/structure/motif in this PR) | `not_observed` | `no_sensor` |
+| Sensor ran and measured an exact identity match (harmony: the collapsed observed sequence matches the canonical progression's cycle alternation all the way through, no leftover tail) | `preserved` | `exact_match` |
+| Sensor ran but did not match exactly | `not_observed` | `deferred` |
+
+The only sensor wired in this PR is **harmony**: it extracts the generated audio with
+`extract_rpe_from_file` (the same dependency-free `compute_chord_events` chroma-template
+detector R4 uses) and normalizes `PhysicalRPE.chord_events` to `(root, quality)` pairs.
+Because the deterministic performer plays the canonical progression once per
+chord-playing section (so the honest comparison is against *repetitions* of the
+progression, not a single pass), the instrument records two families of measurement:
+
+- **raw, frame-level** (`chord_sequence_match_rate` / `repeated_chord_sequence_match_rate`)
+  — position-aligned comparisons against the raw `chord_events` list. Kept for
+  transparency, but structurally low-signal here: `chord_events` has one entry per
+  detected chord-frame run (irregular lengths), so a straight position-by-position
+  compare drifts out of phase almost immediately even for a musically faithful
+  performance. **Not used for the D-1 identity gate.**
+- **collapsed cycle-alignment** (`canonical_length`, `observed_length`,
+  `collapsed_observed_length`, `matched_cycle_prefix_length`,
+  `collapsed_match_fraction`, `unmatched_tail_length`, `unmatched_tail_head`) —
+  the raw `chord_events` sequence is collapsed (adjacent identical entries merged
+  into one), then matched from the start against the canonical progression's
+  infinite repeating alternation (itself collapsed across the cycle boundary,
+  e.g. a 4-chord progression whose first and last chord are identical collapses
+  2 cycles to 7 entries, not 8). `matched_cycle_prefix_length` is how much of the
+  collapsed observed sequence matches continuously before the first divergence.
+  **This is the D-1 identity gate**: `preserved` only when
+  `collapsed_observed_length > 0` and `matched_cycle_prefix_length` equals it
+  exactly (no leftover tail); otherwise `not_observed` / `deferred`, with the
+  `note` stating the number of full canonical cycles matched and the length of
+  the unmatched tail — a plain fact about the two sequences, not an
+  interpretation of *why* they diverge.
+
+Concretely, the deterministic `expected/edm/derived_score.yaml` E2E fixture measures
+`collapsed_observed_length: 10`, `matched_cycle_prefix_length: 7` — the collapsed
+chord sequence recovers 2 full canonical cycles (matching the score's 2 non-drone,
+chord-playing sections) before a 3-entry tail diverges. *Interpretation* (not
+recorded in the report, which states facts only): the 3-entry tail most likely
+comes from the drone-only intro/bridge sections, where the chroma-template
+detector still emits a (arbitrary-looking) major/minor label for a bare root tone
+that was never meant to carry a chord progression — see
+[`arrangement_identity_planning.md`](arrangement_identity_planning.md) AR4.
+
+lyrics/melody anchors are recorded as `available: false` with a `reason` (they need
+the optional `lyrics` / `basic-pitch` extras — not wired here); their future
+connection points are `eval/lyrics_match.py` / `rpe/learned/lyrics_adapter.py` and
+`rpe/learned/basic_pitch_adapter.py`.
+
+`observation_report.json` is a re-observable sidecar, not an immutable build artifact:
+re-running `observe` against the same `-o` path overwrites it (unlike
+`performance_package.json`'s byte-pin/builds-root immutability contract).
+
 ### `svprpe measure <audio>`
 
 Measure the seven required `CompositionScore.physical` fields from one audio file.

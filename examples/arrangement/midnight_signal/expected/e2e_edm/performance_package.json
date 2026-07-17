@@ -5,10 +5,10 @@
   "generator_variant": "standard",
   "inputs": {
     "identity_manifest": {
-      "sha256": "071b56ca6890386bd96a4d3c8f5d020ea96a8b5fbc6ec173a579b7b9f62af94d"
+      "sha256": "9ef82c9b490e2c2029f8047470e92b76f6dbd9cdb27983c6eabcaad5a143687a"
     },
     "preservation_contract": {
-      "sha256": "8fb4dc5abec7e1416e6e6cc979267d5d5b111affdd675ea98c02803a3c9f91dc"
+      "sha256": "e54a7e719cbd7b5f084ed46dc231884230dae742ac6594d25b44f3f35796dbe0"
     },
     "capability_profile": {
       "sha256": "343f3e84bb7e2bb4f4c945195659b3823318bf14c306774278a33ee7d116592b"
@@ -79,6 +79,20 @@
       "allow": [],
       "delivery": {
         "status": "unsupported"
+      },
+      "control": {
+        "status": "unknown"
+      },
+      "observation": {
+        "status": "not_observed"
+      }
+    },
+    {
+      "anchor_id": "harmony",
+      "requested_mode": "hard",
+      "allow": [],
+      "delivery": {
+        "status": "unknown"
       },
       "control": {
         "status": "unknown"

@@ -1,7 +1,8 @@
 # Arrangement Identity Track Planning
 
 **Status**: AR0 計画文書。AR1、AR2-1/2、AR3-1/2 は実装済み。AR2-3 は保留、
-AR4 は未実装。
+AR4 は計器配線済み（`svprpe observe` + `ObservationReport` sidecar。harmony
+domain のみ実測、判定閾値は未定・実 Suno 生成物での観測は未実施）。
 
 > この文書は、元の未コミット AR0 ドラフトが checkout 内に残っていなかったため、
 > 2026-07-15 のユーザー承認に基づき、マージ済み PR #175–#181、現行コード、
@@ -25,7 +26,7 @@ Composition PoC の C5「Layer Manipulator」を、元作品として残す要�
 |---|---|---|
 | Score-level preservation (M1) | 1 つの Base Score から異なる Derived Score を決定論的に作り、`semantic.core` と `physical.key` の保持を Score と差分で確認する | #177 で完了 |
 | Artifact delivery preservation | identity artifact と保持契約を生成器の実入力チャネルへ配送し、配送不能を明示状態として記録する | AR3-2 compiler 実装済み。実 backend 縦切り E2E は未完了 |
-| Observed musical identity preservation | 生成後成果物を anchor ごとのセンサーと adherence 指標で比較し、観測結果を記録する | AR4 未実装 |
+| Observed musical identity preservation | 生成後成果物を anchor ごとのセンサーと adherence 指標で比較し、観測結果を記録する | AR4: harmony センサー実配線・決定論 synth 実測のみ（実 Suno 生成物は未観測） |
 
 M1 の正典表現は、**「意味核（`semantic.core`）とキー（`physical.key`）を保持した
 Score-level identity preservation demo」**である。これは聴覚的同一性、メロディ保持、
@@ -156,6 +157,40 @@ capability profile、performance package、生成物、observation report を同
 chain で結ぶ。聴覚的同一性の判定条件と閾値は、その artifact とセンサーの実測を得てから
 別 Design Memo で固定する。
 
+2026-07-17: 計器を配線した（`svprpe observe` + `ObservationReport` sidecar,
+`observation-report/0.1`）。実配線したのは harmony domain のみ:
+`identity_manifest.yaml` に harmony anchor（`chord_sequence_json`。正典進行は
+`perform/performer.py` の C minor 既定進行 `MINOR_PROGRESSION` と一致させた
+`identity/chord_progression.json`）を追加し、生成音声を `extract_rpe_from_file`
+（依存ゼロの `compute_chord_events`）で実測する。measurements は生の frame 単位
+指標（`chord_sequence_match_rate` / `repeated_chord_sequence_match_rate`。
+透明性のため残すが恒等判定には使わない）に加え、繰り返しを織り込んだ collapsed
+cycle-alignment 系列（`canonical_length` / `observed_length` /
+`collapsed_observed_length` / `matched_cycle_prefix_length` /
+`collapsed_match_fraction` / `unmatched_tail_length` / `unmatched_tail_head`）
+を記録する。**`adherence_status` の恒等判定（D-1）はこの cycle-alignment
+prefix が collapsed 列全体に一致するかどうかで行う**（frame 単位の生 match_rate
+は判定に使わない — 「作品の和声的同一性 = 繰り返される正典進行」という計器
+意味論への修正、2026-07-17 round 2）。lyrics/melody は optional extra 依存の
+ためセンサー本体を配線せず `available: false` + reason のみ記録する（他
+domain も同様に `no_sensor`）。`adherence_status` / `determination` は 3 分岐
+のみ（no_sensor / preserved+exact_match / not_observed+deferred）—
+**閾値判定は書いていない**。observe は package を書き換えず、provenance
+chain（manifest sha256 / anchor artifact hash / package・音声 sha256）を
+測定前に検証し、切れていれば exit 1 とする。
+
+決定論 synth (`perform` + `FAITHFUL_TAKE`) による `expected/edm/derived_score.yaml`
+E2E fixture の実測: `collapsed_observed_length=10`、
+`matched_cycle_prefix_length=7`（正典 4 コード進行の 2 cycle 分＝スコアの
+非ドローン区間 2 つ（verse/chorus）と符合）、残り 3 エントリが不一致の tail。
+**解釈**（report 自体は事実のみを記録し、この解釈は含めない）:
+この tail はおそらくドローンのみの intro/bridge 区間に由来する — 和声進行を
+意図しない裸のルート音を chroma テンプレート検出器がそれでも何らかの
+major/minor ラベルへ強制分類するため。
+「観測できた」と言えるのは決定論 synth を実測したこの harmony 系列のみであり、
+**実 Suno 生成物での観測は未実施**。判定条件・閾値は引き続き未定（実測を積んで
+から別 Design Memo で固定）。詳細: [`cli.md`](cli.md) の `svprpe observe` 節。
+
 ## 6. 実装状況
 
 | Phase | 主成果物 | 状態 |
@@ -166,7 +201,7 @@ chain で結ぶ。聴覚的同一性の判定条件と閾値は、その artifac
 | AR2-3 | structure anchor policy | 保留 |
 | AR3-1 | InputCapabilityProfile | 完了 (#180, #181) |
 | AR3-2 | PerformancePackage compiler + 縦切り E2E fixture | 実装済み（E2E fixture 追加 2026-07-17） |
-| AR4 | generated-output identity observation | 未実装 |
+| AR4 | generated-output identity observation | 計器配線済み（harmony のみ実測。判定閾値は未定、実 Suno 生成物は未観測） |
 
 2026-07-17: bundle/report に `content_digest`（内容指紋）と、
 `CompilationReport` 限定の `invocation_provenance.compiler`（実行環境の監査記録、
