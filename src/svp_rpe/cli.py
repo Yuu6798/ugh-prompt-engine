@@ -470,6 +470,7 @@ def _check_existing_builds_root_publication(
     pending_content: str,
     *,
     content_digest: str,
+    expected_schema_version: str,
     extract_digest_inputs: Callable[[dict[str, Any]], dict[str, str]],
 ) -> bool:
     """Read-only consistency check for the immutable no-op publish path.
@@ -479,30 +480,37 @@ def _check_existing_builds_root_publication(
     `package` — the file that describes the whole publication, as opposed to
     plain content outputs) exactly once. If its bytes match what this
     invocation would have published for that same filename, that's the fast
-    path: no parsing, no digest recomputation, not a provenance difference.
+    path: no parsing, no digest recomputation, no schema check — an
+    identical-bytes descriptor was necessarily produced by *this* schema
+    version by construction, so there is nothing further to validate.
 
     If the bytes differ, this is *not* immediately treated as mere
     provenance/metadata drift (PR #184 review round 2, Thread B) — a
     directory merely occupying this digest path (corrupted, hand-edited, or
     from an unrelated build) must not be blessed by a `latest.json` update
     just because a byte difference was, in isolation, plausible-looking
-    provenance drift. Before returning "provenance differs", three things
-    are verified, each raising `ValueError` (and leaving `latest.json`
+    provenance drift. Before returning "provenance differs", four things are
+    verified, each raising `ValueError` (and leaving `latest.json`
     untouched) on failure:
 
     1. the descriptive file parses as JSON;
-    2. its own `content_digest` field equals the `content_digest` this
+    2. its `schema_version` field equals `expected_schema_version` (AGENTS.md
+       §8 Persistent Artifact Safety Gate: unknown `schema_version` values
+       are rejected, not read as if they were the current schema — a
+       descriptor written by an older/newer schema must not be silently
+       treated as an ordinary provenance difference in the *current* one);
+    3. its own `content_digest` field equals the `content_digest` this
        invocation computed (the digest is the directory's name, so this
        catches a descriptor that doesn't even claim to describe *this*
        digest);
-    3. recomputing `content_digest` from the descriptor's own declared
+    4. recomputing `content_digest` from the descriptor's own declared
        output hashes (via `extract_digest_inputs`, which knows the
        arrange-vs-package shape of "artifact_name -> sha256") reproduces the
        same digest — this catches a descriptor whose declared hashes were
-       tampered with (or corrupted) to match step 2's digest field without
+       tampered with (or corrupted) to match step 3's digest field without
        actually being self-consistent.
 
-    Only a byte difference that survives all three checks is reported as
+    Only a byte difference that survives all four checks is reported as
     provenance drift. This remains a partial, single-descriptor-file check —
     it does not rehash every artifact in the directory; a full recursive
     verification is left to a future `verify`-style command.
@@ -531,6 +539,14 @@ def _check_existing_builds_root_publication(
         raise ValueError(
             f"builds-root digest directory {target_dir} descriptive file "
             f"{descriptive_filename!r} must be a JSON object"
+        )
+
+    recorded_schema_version = existing_descriptor.get("schema_version")
+    if recorded_schema_version != expected_schema_version:
+        raise ValueError(
+            f"builds-root digest directory {target_dir} descriptive file "
+            f"{descriptive_filename!r} declares schema_version "
+            f"{recorded_schema_version!r}, expected {expected_schema_version!r}"
         )
 
     recorded_digest = existing_descriptor.get("content_digest")
@@ -588,6 +604,7 @@ def _publish_artifacts_to_builds_root(
     content_digest: str,
     *,
     descriptive_filename: str,
+    expected_schema_version: str,
     extract_digest_inputs: Callable[[dict[str, Any]], dict[str, str]],
 ) -> tuple[Path, bool, bool]:
     """Publish a complete artifact set under `<builds_root>/builds/<content_digest>/`.
@@ -687,6 +704,7 @@ def _publish_artifacts_to_builds_root(
             descriptive_filename,
             contents[descriptive_filename],
             content_digest=content_digest,
+            expected_schema_version=expected_schema_version,
             extract_digest_inputs=extract_digest_inputs,
         )
 
@@ -774,6 +792,7 @@ def arrange(
         DIFF_FILENAME,
         compile_arrangement,
     )
+    from svp_rpe.arrange.bundle import BUNDLE_SCHEMA_VERSION
 
     if (output_dir is None) == (builds_root is None):
         raise typer.BadParameter(
@@ -810,6 +829,7 @@ def arrange(
                 builds_root,
                 content_digest,
                 descriptive_filename=BUNDLE_FILENAME,
+                expected_schema_version=BUNDLE_SCHEMA_VERSION,
                 extract_digest_inputs=_arrange_bundle_digest_inputs,
             )
         except (OSError, ValueError) as exc:
@@ -881,6 +901,7 @@ def package_command(
         PERFORMANCE_PACKAGE_FILENAME,
         compile_performance_package,
     )
+    from svp_rpe.arrange.package import COMPILATION_REPORT_SCHEMA_VERSION
 
     if (output_dir is None) == (builds_root is None):
         raise typer.BadParameter(
@@ -934,6 +955,7 @@ def package_command(
                 builds_root,
                 content_digest,
                 descriptive_filename=COMPILATION_REPORT_FILENAME,
+                expected_schema_version=COMPILATION_REPORT_SCHEMA_VERSION,
                 extract_digest_inputs=_package_report_digest_inputs,
             )
         except (OSError, ValueError) as exc:

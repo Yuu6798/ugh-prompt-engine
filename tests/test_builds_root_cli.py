@@ -795,3 +795,72 @@ def test_arrange_builds_root_self_heals_latest_after_pointer_update_failure(
     assert "already published" in second.stderr
     latest = json.loads((root / "latest.json").read_text(encoding="utf-8"))
     assert latest["content_digest"] == digest_dir.name
+
+
+# --- PR #184 review round 4: descriptor schema_version validation --------------
+
+
+def test_arrange_builds_root_rejects_unknown_schema_version_in_descriptor(
+    tmp_path: Path,
+) -> None:
+    """A descriptor whose `schema_version` doesn't match the current bundle
+    schema must be rejected outright (AGENTS.md §8 Persistent Artifact Safety
+    Gate: unknown schema_version is rejected, not silently treated as an
+    ordinary provenance difference in the current schema), even though its
+    `content_digest` field and declared output hashes are still correct."""
+    spec_path = tmp_path / "arrangement.yaml"
+    _write_arrangement_spec(spec_path)
+    root = tmp_path / "builds-root"
+
+    first = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+    assert first.exit_code == 0, first.output
+    digest_dir = next((root / "builds").iterdir())
+    bundle_path = digest_dir / "arrangement_bundle.json"
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    bundle["schema_version"] = "arrangement-bundle/9.9"
+    bundle_path.write_text(json.dumps(bundle, ensure_ascii=False, indent=2), encoding="utf-8")
+    latest_before = (root / "latest.json").read_bytes()
+
+    second = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+
+    assert second.exit_code == 1
+    assert "Error:" in second.stderr
+    assert "schema_version" in second.stderr
+    assert "arrangement-bundle/9.9" in second.stderr
+    assert (root / "latest.json").read_bytes() == latest_before
+    assert (
+        json.loads(bundle_path.read_text(encoding="utf-8"))["schema_version"]
+        == "arrangement-bundle/9.9"
+    )
+
+
+def test_arrange_builds_root_rejects_descriptor_missing_schema_version(
+    tmp_path: Path,
+) -> None:
+    spec_path = tmp_path / "arrangement.yaml"
+    _write_arrangement_spec(spec_path)
+    root = tmp_path / "builds-root"
+
+    first = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+    assert first.exit_code == 0, first.output
+    digest_dir = next((root / "builds").iterdir())
+    bundle_path = digest_dir / "arrangement_bundle.json"
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    del bundle["schema_version"]
+    bundle_path.write_text(json.dumps(bundle, ensure_ascii=False, indent=2), encoding="utf-8")
+    latest_before = (root / "latest.json").read_bytes()
+
+    second = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+
+    assert second.exit_code == 1
+    assert "Error:" in second.stderr
+    assert "schema_version" in second.stderr
+    assert (root / "latest.json").read_bytes() == latest_before

@@ -54,6 +54,11 @@ from svp_rpe.compose.prompt_renderer import (
 
 PERFORMANCE_PACKAGE_FILENAME = "performance_package.json"
 COMPILATION_REPORT_FILENAME = "compilation_report.json"
+# Single source of truth for `CompilationReport.schema_version`'s current
+# value (the `Literal` annotation still needs the literal string, but the
+# runtime default and any external reference — e.g. cli.py's builds-root
+# schema_version validation — read this constant so the two can't drift).
+COMPILATION_REPORT_SCHEMA_VERSION = "compilation-report/0.2"
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _GIT_COMMIT_PATTERN = r"^[0-9a-f]{40}$"
@@ -365,7 +370,7 @@ class CompilationReport(PackageModel):
     ``content_digest`` (Design Memo D-1).
     """
 
-    schema_version: Literal["compilation-report/0.2"] = "compilation-report/0.2"
+    schema_version: Literal["compilation-report/0.2"] = COMPILATION_REPORT_SCHEMA_VERSION
     work_id: str
     generator: str
     mode: CompilationMode
