@@ -864,3 +864,137 @@ def test_arrange_builds_root_rejects_descriptor_missing_schema_version(
     assert "Error:" in second.stderr
     assert "schema_version" in second.stderr
     assert (root / "latest.json").read_bytes() == latest_before
+
+
+# --- PR #184 review round 5: blessing requires content-artifact verification ---
+# --- (Thread F) + locator-placeholder subtree rejection (Thread G, package) ----
+
+
+def test_arrange_builds_root_rejects_missing_content_artifact_on_fast_path(
+    tmp_path: Path,
+) -> None:
+    """A byte-identical descriptor is not enough to bless a directory that is
+    missing one of its declared content artifacts: the fast (byte-match)
+    path still verifies every declared output exists with its declared
+    hash before `latest.json` may be updated."""
+    spec_path = tmp_path / "arrangement.yaml"
+    _write_arrangement_spec(spec_path)
+    root = tmp_path / "builds-root"
+
+    first = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+    assert first.exit_code == 0, first.output
+    digest_dir = next((root / "builds").iterdir())
+    (digest_dir / "derived_score.yaml").unlink()
+    latest_before = (root / "latest.json").read_bytes()
+
+    second = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+
+    assert second.exit_code == 1
+    assert "Error:" in second.stderr
+    assert "derived_score.yaml" in second.stderr
+    assert "missing or unreadable content artifact" in second.stderr
+    assert (root / "latest.json").read_bytes() == latest_before
+
+
+def test_arrange_builds_root_rejects_tampered_content_artifact_hash(tmp_path: Path) -> None:
+    """A byte-identical descriptor whose declared output hash no longer
+    matches the actual on-disk artifact bytes must also be rejected — the
+    descriptor's own bytes being untouched doesn't prove the directory it
+    describes is still intact."""
+    spec_path = tmp_path / "arrangement.yaml"
+    _write_arrangement_spec(spec_path)
+    root = tmp_path / "builds-root"
+
+    first = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+    assert first.exit_code == 0, first.output
+    digest_dir = next((root / "builds").iterdir())
+    diff_path = digest_dir / "arrangement_diff.json"
+    diff_path.write_bytes(diff_path.read_bytes() + b"\n")  # tamper, descriptor left untouched
+    latest_before = (root / "latest.json").read_bytes()
+
+    second = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+
+    assert second.exit_code == 1
+    assert "Error:" in second.stderr
+    assert "arrangement_diff.json" in second.stderr
+    assert "sha256 mismatch" in second.stderr
+    assert (root / "latest.json").read_bytes() == latest_before
+
+
+def test_package_builds_root_rejects_manifest_artifact_inside_locator_placeholder(
+    tmp_path: Path,
+) -> None:
+    """An identity-manifest artifact that happens to live inside the reserved
+    `<root>/builds/<64 zeros>/` locator-placeholder subtree must be rejected:
+    the locator computed against the placeholder would not describe where
+    the artifact actually ends up relative to the real (differently-named)
+    digest directory once published."""
+    root = tmp_path / "builds-root"
+    placeholder_dir = root / "builds" / ("0" * 64)
+    placeholder_dir.mkdir(parents=True)
+
+    source_path = placeholder_dir / "source.wav"
+    source_path.write_bytes(b"source audio")
+    artifact_path = placeholder_dir / "lyrics.txt"
+    artifact_path.write_bytes(b"hello midnight")
+
+    manifest_path = tmp_path / "identity.yaml"
+    manifest_data = {
+        "schema_version": "identity-manifest/0.1",
+        "meta": {"work_id": "placeholder-subtree", "version": "1"},
+        "source": {
+            "locator": os.path.relpath(source_path, tmp_path),
+            "sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
+            "rights_basis": "original",
+        },
+        "anchors": [
+            {
+                "id": "lyrics",
+                "domain": "lyrics",
+                "artifact": os.path.relpath(artifact_path, tmp_path),
+                "artifact_type": "lyrics_text",
+                "media_type": "text/plain",
+                "sha256": hashlib.sha256(artifact_path.read_bytes()).hexdigest(),
+                "required": True,
+            }
+        ],
+    }
+    manifest_path.write_text(yaml.safe_dump(manifest_data, sort_keys=False), encoding="utf-8")
+
+    spec_path = tmp_path / "arrangement.yaml"
+    spec_path.write_text(
+        yaml.safe_dump(
+            {
+                "meta": {"id": "package-builds-root", "version": "1"},
+                "target": {},
+                "preservation": {
+                    "score_fields": {},
+                    "identity_anchors": {"lyrics": {"mode": "hard", "allow": []}},
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        app,
+        _package_args(manifest_path, spec_path, mode_flag="builds-root", mode_value=str(root)),
+    )
+
+    assert result.exit_code == 1
+    assert "Error:" in result.stderr
+    assert "input path collides with output artifact path" in result.stderr
+    assert "locator-placeholder subtree" in result.stderr
+    assert not (root / "latest.json").exists()
+    # a real (differently-named) digest directory is not similarly reserved:
+    # confirm nothing was published under the placeholder either.
+    assert sorted(p.name for p in (root / "builds").iterdir()) == ["0" * 64]

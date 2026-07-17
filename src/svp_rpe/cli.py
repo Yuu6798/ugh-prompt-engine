@@ -12,6 +12,7 @@ Commands:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Callable, Optional
@@ -441,26 +442,57 @@ def _update_builds_latest_pointer(latest_path: Path, content_digest: str, *, roo
 
 
 def _reject_builds_root_input_collision(
-    input_paths: list[str | Path], builds_root: str | Path
+    input_paths: list[str | Path],
+    builds_root: str | Path,
+    *,
+    reject_placeholder_subtree: bool = False,
 ) -> None:
-    """Guard against an input path aliasing `<builds_root>/latest.json`.
+    """Guard against an input path aliasing `<builds_root>/latest.json`, or
+    (package only) sitting inside the reserved locator-placeholder subtree.
 
     `latest.json` is the **only** file the builds-root scheme ever
     overwrites; if an input (score / spec / manifest / capability profile /
     etc.) resolves to that same path, publishing would silently clobber the
     input on the `latest.json` update — the same shape of hole
     `_publish_artifacts_atomically` already guards against for `--output-dir`
-    (#176 P2 R3). No equivalent check is needed against the
-    `<builds_root>/builds/<content_digest>/` directory itself: unpublished,
-    it doesn't exist yet; once published, it is never written to again — so
-    it is structurally safe either way.
+    (#176 P2 R3). No equivalent check is needed against a real
+    `<builds_root>/builds/<content_digest>/` directory: unpublished, it
+    doesn't exist yet; once published, it is never written to again — so it
+    is structurally safe either way.
+
+    `reject_placeholder_subtree=True` (package only; PR #184 review round 5,
+    Thread G) additionally rejects any input that resolves inside
+    `<builds_root>/builds/<64 zeros>/` — the reserved, same-depth stand-in
+    `_builds_placeholder_package_dir` uses to compute `artifact_base.locator`
+    *before* the real `content_digest` is known (see that function's
+    docstring). If an input — most concretely, an identity manifest anchor
+    artifact — actually lives inside that reserved subtree, the locator
+    computed against the placeholder does not describe where the artifact
+    ends up relative to the real digest directory once published, silently
+    breaking `artifact_base`. A *real* digest directory (any other 64-hex
+    name) is not reserved and is not rejected: an input placed there resolves
+    correctly regardless, because `os.path.relpath` only depends on depth and
+    every digest directory sits at the same depth under `builds/` (the same
+    property that makes the placeholder trick valid in the first place).
     """
     latest_path = Path(builds_root) / "latest.json"
     resolved_latest = latest_path.resolve()
+    placeholder_dir = (
+        _builds_placeholder_package_dir(builds_root).resolve()
+        if reject_placeholder_subtree
+        else None
+    )
     for input_path in input_paths:
-        if Path(input_path).resolve() == resolved_latest:
+        resolved_input = Path(input_path).resolve()
+        if resolved_input == resolved_latest:
             raise ValueError(
                 f"input path collides with output artifact path: {latest_path}"
+            )
+        if placeholder_dir is not None and resolved_input.is_relative_to(placeholder_dir):
+            raise ValueError(
+                f"input path collides with output artifact path: {resolved_input} "
+                f"lies inside the builds-root locator-placeholder subtree "
+                f"{placeholder_dir} reserved for artifact_base.locator computation"
             )
 
 
@@ -473,25 +505,26 @@ def _check_existing_builds_root_publication(
     expected_schema_version: str,
     extract_digest_inputs: Callable[[dict[str, Any]], dict[str, str]],
 ) -> bool:
-    """Read-only consistency check for the immutable no-op publish path.
+    """Read-and-verify check for the immutable no-op publish path, run before
+    `latest.json` is ever moved onto an existing digest directory.
 
     Reads the existing digest directory's one *descriptive* file
     (`arrangement_bundle.json` for `arrange`, `compilation_report.json` for
     `package` — the file that describes the whole publication, as opposed to
     plain content outputs) exactly once. If its bytes match what this
-    invocation would have published for that same filename, that's the fast
-    path: no parsing, no digest recomputation, no schema check — an
-    identical-bytes descriptor was necessarily produced by *this* schema
-    version by construction, so there is nothing further to validate.
+    invocation would have published for that same filename, no parsing, no
+    digest recomputation, no schema check is needed for the *descriptor
+    itself* — an identical-bytes descriptor was necessarily produced by
+    *this* schema version by construction. (PR #184 review round 5, Thread F:
+    that fast path alone is not enough to bless the directory — see below.)
 
-    If the bytes differ, this is *not* immediately treated as mere
-    provenance/metadata drift (PR #184 review round 2, Thread B) — a
-    directory merely occupying this digest path (corrupted, hand-edited, or
-    from an unrelated build) must not be blessed by a `latest.json` update
-    just because a byte difference was, in isolation, plausible-looking
-    provenance drift. Before returning "provenance differs", four things are
-    verified, each raising `ValueError` (and leaving `latest.json`
-    untouched) on failure:
+    If the descriptor's bytes differ, this is *not* immediately treated as
+    mere provenance/metadata drift (round 2, Thread B) — a directory merely
+    occupying this digest path (corrupted, hand-edited, or from an unrelated
+    build) must not be blessed by a `latest.json` update just because a byte
+    difference was, in isolation, plausible-looking provenance drift. Before
+    accepting it as provenance drift, four things are verified, each raising
+    `ValueError` (and leaving `latest.json` untouched) on failure:
 
     1. the descriptive file parses as JSON;
     2. its `schema_version` field equals `expected_schema_version` (AGENTS.md
@@ -510,10 +543,28 @@ def _check_existing_builds_root_publication(
        tampered with (or corrupted) to match step 3's digest field without
        actually being self-consistent.
 
-    Only a byte difference that survives all four checks is reported as
-    provenance drift. This remains a partial, single-descriptor-file check —
-    it does not rehash every artifact in the directory; a full recursive
-    verification is left to a future `verify`-style command.
+    Either way — byte-identical fast path or a byte-difference that survives
+    all four descriptor checks — one more thing is verified **before**
+    `latest.json` may be moved onto this directory: every content artifact
+    the descriptor declares (`extract_digest_inputs`' `{artifact_name:
+    sha256}`, e.g. `derived_score.yaml` + `arrangement_diff.json` for
+    `arrange`) actually exists in `target_dir` and hashes to its declared
+    value. A byte-identical (or otherwise self-consistent) *descriptor*
+    copied into a directory that is missing or has tampered content files
+    would otherwise slip through undetected — the descriptor alone doesn't
+    prove the directory it sits in is complete. On the fast path, the
+    declared output map is read from `pending_content` (already known to be
+    byte-identical to the on-disk descriptor, so parsing either is
+    equivalent) rather than re-reading the descriptor from disk a second
+    time.
+
+    Blessing a digest directory with a `latest.json` update therefore always
+    means: descriptor self-consistency (schema + digest, steps 1-4) plus
+    every declared output artifact present with a matching hash. This is
+    still not a full audit — it never rehashes *undeclared* files or
+    recurses into anything beyond what the descriptor itself lists, and
+    nothing in the directory is ever rewritten or repaired; an independent,
+    fully recursive audit is left to a future `verify`-style command.
     """
     descriptive_path = target_dir / descriptive_filename
     try:
@@ -525,59 +576,85 @@ def _check_existing_builds_root_publication(
         ) from exc
 
     pending_bytes = pending_content.encode("utf-8")
-    if existing_bytes == pending_bytes:
-        return False
+    provenance_differs = existing_bytes != pending_bytes
 
-    try:
-        existing_descriptor = json.loads(existing_bytes)
-    except json.JSONDecodeError as exc:
-        raise ValueError(
-            f"builds-root digest directory {target_dir} has an unparsable "
-            f"descriptive file {descriptive_filename!r}: {exc}"
-        ) from exc
-    if not isinstance(existing_descriptor, dict):
-        raise ValueError(
-            f"builds-root digest directory {target_dir} descriptive file "
-            f"{descriptive_filename!r} must be a JSON object"
-        )
+    if not provenance_differs:
+        # Fast path: the descriptor on disk is byte-identical to the one
+        # this invocation would publish, so parsing the pending copy (which
+        # this process already holds in memory) is equivalent to re-reading
+        # and re-parsing the one on disk.
+        digest_inputs = extract_digest_inputs(json.loads(pending_bytes))
+    else:
+        try:
+            existing_descriptor = json.loads(existing_bytes)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"builds-root digest directory {target_dir} has an unparsable "
+                f"descriptive file {descriptive_filename!r}: {exc}"
+            ) from exc
+        if not isinstance(existing_descriptor, dict):
+            raise ValueError(
+                f"builds-root digest directory {target_dir} descriptive file "
+                f"{descriptive_filename!r} must be a JSON object"
+            )
 
-    recorded_schema_version = existing_descriptor.get("schema_version")
-    if recorded_schema_version != expected_schema_version:
-        raise ValueError(
-            f"builds-root digest directory {target_dir} descriptive file "
-            f"{descriptive_filename!r} declares schema_version "
-            f"{recorded_schema_version!r}, expected {expected_schema_version!r}"
-        )
+        recorded_schema_version = existing_descriptor.get("schema_version")
+        if recorded_schema_version != expected_schema_version:
+            raise ValueError(
+                f"builds-root digest directory {target_dir} descriptive file "
+                f"{descriptive_filename!r} declares schema_version "
+                f"{recorded_schema_version!r}, expected {expected_schema_version!r}"
+            )
 
-    recorded_digest = existing_descriptor.get("content_digest")
-    if recorded_digest != content_digest:
-        raise ValueError(
-            f"builds-root digest directory {target_dir} descriptive file "
-            f"{descriptive_filename!r} declares content_digest {recorded_digest!r}, "
-            f"expected {content_digest!r}"
-        )
+        recorded_digest = existing_descriptor.get("content_digest")
+        if recorded_digest != content_digest:
+            raise ValueError(
+                f"builds-root digest directory {target_dir} descriptive file "
+                f"{descriptive_filename!r} declares content_digest "
+                f"{recorded_digest!r}, expected {content_digest!r}"
+            )
 
-    try:
-        digest_inputs = extract_digest_inputs(existing_descriptor)
-    except (KeyError, TypeError, AttributeError) as exc:
-        raise ValueError(
-            f"builds-root digest directory {target_dir} descriptive file "
-            f"{descriptive_filename!r} is missing field(s) needed to recompute "
-            f"content_digest: {exc}"
-        ) from exc
+        try:
+            digest_inputs = extract_digest_inputs(existing_descriptor)
+        except (KeyError, TypeError, AttributeError) as exc:
+            raise ValueError(
+                f"builds-root digest directory {target_dir} descriptive file "
+                f"{descriptive_filename!r} is missing field(s) needed to recompute "
+                f"content_digest: {exc}"
+            ) from exc
 
-    from svp_rpe.arrange.bundle import compute_content_digest
+        from svp_rpe.arrange.bundle import compute_content_digest
 
-    recomputed_digest = compute_content_digest(digest_inputs)
-    if recomputed_digest != content_digest:
-        raise ValueError(
-            f"builds-root digest directory {target_dir} descriptive file "
-            f"{descriptive_filename!r} recomputes to content_digest "
-            f"{recomputed_digest!r} from its own declared output hashes, expected "
-            f"{content_digest!r} — its declared hashes are not self-consistent"
-        )
+        recomputed_digest = compute_content_digest(digest_inputs)
+        if recomputed_digest != content_digest:
+            raise ValueError(
+                f"builds-root digest directory {target_dir} descriptive file "
+                f"{descriptive_filename!r} recomputes to content_digest "
+                f"{recomputed_digest!r} from its own declared output hashes, "
+                f"expected {content_digest!r} — its declared hashes are not "
+                "self-consistent"
+            )
 
-    return True
+    for artifact_name, expected_sha256 in digest_inputs.items():
+        artifact_path = target_dir / artifact_name
+        try:
+            artifact_bytes = artifact_path.read_bytes()
+        except OSError as exc:
+            raise ValueError(
+                f"builds-root digest directory {target_dir} is missing or "
+                f"unreadable content artifact {artifact_name!r} declared by "
+                f"descriptive file {descriptive_filename!r}: {exc}"
+            ) from exc
+        actual_sha256 = hashlib.sha256(artifact_bytes).hexdigest()
+        if actual_sha256 != expected_sha256:
+            raise ValueError(
+                f"builds-root digest directory {target_dir} content artifact "
+                f"{artifact_name!r} sha256 mismatch: expected {expected_sha256!r}, "
+                f"got {actual_sha256!r} (declared by descriptive file "
+                f"{descriptive_filename!r})"
+            )
+
+    return provenance_differs
 
 
 def _reject_invalid_latest_pointer_target(latest_path: Path) -> None:
@@ -948,7 +1025,9 @@ def package_command(
         content_digest = compiled.report.content_digest
         try:
             _reject_builds_root_input_collision(
-                list(compiled.protected_input_paths), builds_root
+                list(compiled.protected_input_paths),
+                builds_root,
+                reject_placeholder_subtree=True,
             )
             published_dir, already_existed, provenance_differs = _publish_artifacts_to_builds_root(
                 contents,

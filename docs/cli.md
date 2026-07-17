@@ -139,15 +139,16 @@ either absent or a plain, non-symlink file (exit `1`, nothing under
 `builds/` touched) — the one path this scheme ever overwrites must not be a
 directory or a symlink. A digest directory is **immutable**: if `<root>/builds/<content_digest>/`
 already exists as a directory from a previous run, its artifacts are never
-overwritten, appended to, or fully re-verified — only its one *descriptive*
-file (`arrangement_bundle.json`) is read once and compared byte-for-byte
-against what this invocation would have published for that filename, so a
-directory that merely happens to occupy this digest path isn't blindly
-trusted. If that file is missing or unreadable, the run fails (exit `1`,
-`latest.json` left untouched) rather than treating the directory as a valid
-prior publication. Re-running an identical build (first-publish-wins: the
-existing bytes match) prints an "already published" advisory and exits `0`
-with the directory untouched; because `content_digest` covers only
+overwritten, appended to, or repaired — but before `latest.json` may be moved
+onto it (before the directory is "blessed"), its one *descriptive* file
+(`arrangement_bundle.json`) is read once and compared byte-for-byte against
+what this invocation would have published for that filename, so a directory
+that merely happens to occupy this digest path isn't blindly trusted. If
+that file is missing or unreadable, the run fails (exit `1`, `latest.json`
+left untouched) rather than treating the directory as a valid prior
+publication. Re-running an identical build (first-publish-wins: the existing
+bytes match) prints an "already published" advisory and exits `0` with the
+directory untouched; because `content_digest` covers only
 `derived_score.yaml` + `arrangement_diff.json`, a same-digest rebuild whose
 recorded provenance differs (e.g. the same `arrangement.yaml` referenced via
 a different path) is *also* left untouched but gets a distinct "provenance
@@ -155,18 +156,28 @@ differs from this invocation" advisory instead — the first publication's
 provenance always wins, `latest.json` still moves to point at it. A byte
 difference is only accepted as provenance drift after the existing descriptor
 proves self-consistent: it must parse as JSON, declare this directory's
-`content_digest`, and recompute to that same digest from its own recorded
-output hashes — otherwise the run fails (exit `1`, `latest.json` untouched). If
+current `schema_version` and `content_digest`, and recompute to that same
+digest from its own recorded output hashes — otherwise the run fails (exit
+`1`, `latest.json` untouched). Either way — byte-identical or provenance
+drift accepted after the four descriptor checks — blessing the directory
+also means every content artifact the descriptor declares
+(`derived_score.yaml` + `arrangement_diff.json`) is confirmed to exist and
+hash to its declared value; a descriptor whose bytes are pristine (or
+otherwise self-consistent) does not by itself prove the directory around it
+is still intact, so this check runs even on the byte-identical fast path. If
 `<root>/builds/<content_digest>` already exists as something other than a
 *real, non-symlink* directory (a plain file, any symlink — including one
 pointing at an otherwise-valid directory — or a dangling symlink), the run
 fails outright (exit `1`, `latest.json` left untouched) rather than treating
 it as published. Re-running with different inputs that resolve to a
 different `content_digest` publishes a sibling directory; older digest
-directories are never pruned. This descriptive-file check is intentionally
-partial (one file, single read, no rehash of the other artifacts); a full
-recursive verification of a published digest directory is left to a future
-`verify`-style command.
+directories are never pruned. Blessing therefore means "descriptor
+self-consistent + every declared output present and hash-matching" — a
+digest directory `latest.json` points at is a complete publication matching
+its own bookkeeping, though this is still not a full audit (it never rehashes
+undeclared files or recurses beyond what the descriptor lists, and nothing in
+the directory is ever rewritten); an independent, fully recursive audit is
+left to a future `verify`-style command.
 
 If a first publish writes its artifacts successfully but the trailing
 `latest.json` update itself then fails, the freshly published digest
@@ -256,7 +267,19 @@ lands here). Because re-running with a stale checkout's inputs after an
 implementation change still reproduces the same `content_digest`, publishing
 never mutates a digest directory's `invocation_provenance` to match a newer
 compiler run — that is the immutability contract's direct consequence, not a
-bug.
+bug. Blessing an existing digest directory with `latest.json` here also
+verifies `performance_package.json` itself is present and hashes to what
+`compilation_report.json` declares, on the same terms as `arrange`'s
+`derived_score.yaml` + `arrangement_diff.json` check above.
+
+Because `--builds-root`'s locator computation stands in for the not-yet-known
+`content_digest` with a reserved, same-depth placeholder directory
+(`<root>/builds/<64 zeros>/`; see the `artifact_base.locator` note above), an
+identity-manifest artifact that happens to actually live inside that reserved
+subtree is rejected before publication (exit `1`) — the locator computed
+against the placeholder would not describe where the artifact ends up
+relative to the real (differently-named) digest directory. A real, already
+published digest directory is not similarly reserved and is never rejected.
 
 ### `svprpe measure <audio>`
 
