@@ -29,3 +29,16 @@ anchors:
     format_version: "note-events/0.1"
     sha256: "1d67d4fd0f38ee6864a32010c19b0fc8401208842d06f204def2cc9a70378fb5"
     required: true
+  - id: harmony
+    domain: harmony
+    # AR4 (Design Memo D-4): 正典進行は performer.py の C minor 既定進行
+    # (MINOR_PROGRESSION, transpose=0 の FAITHFUL_TAKE) と一致させてある。
+    # artifact_type は chord_sequence_json だが ARTIFACT_TYPE_CHANNEL では
+    # チャネル未対応 (None) のため、delivery は常に unknown — 「delivery と
+    # observation は別軸」の実証(observe は delivery 状態と無関係に測定する)。
+    artifact: identity/chord_progression.json
+    artifact_type: chord_sequence_json
+    media_type: application/json
+    format_version: "chord-sequence/0.1"
+    sha256: "180464a881ac63131c0a0fcdf812e0cc7bfd8dc1e9947698a5d5c65c89245299"
+    required: true

@@ -13,7 +13,9 @@ from svp_rpe.arrange import (
     IdentityAnchor,
     IdentityManifest,
     IdentityManifestError,
+    is_harmony_sensor_anchor,
     load_identity_manifest,
+    parse_identity_manifest_with_artifacts,
 )
 from svp_rpe.arrange.identity import IdentityMeta, IdentitySource
 
@@ -120,6 +122,50 @@ def test_load_identity_manifest_succeeds_with_all_anchor_domains(tmp_path: Path)
     assert lyrics_anchor.artifact_type == "lyrics_text"
     assert lyrics_anchor.media_type == "text/plain"
     assert lyrics_anchor.format_version is None
+
+
+def test_parse_identity_manifest_with_artifacts_collect_none_retains_nothing(
+    tmp_path: Path,
+) -> None:
+    """PR #187 review round 11: `collect=None` (what `parse_identity_manifest`
+    / `load_identity_manifest` pass) reads and hash-verifies every anchor's
+    bytes — the artifact content is still checked — but retains none of them
+    in the returned dict. The manifest-only path must not carry
+    O(total anchor bytes) in memory just because a caller somewhere else
+    wants a subset of it."""
+    contents = _write_artifacts(tmp_path)
+    manifest_dict = _manifest_dict(contents)
+    manifest_path = tmp_path / "identity.yaml"
+    _write_manifest(manifest_path, manifest_dict)
+
+    manifest, artifact_bytes = parse_identity_manifest_with_artifacts(
+        manifest_path.read_bytes(), manifest_path, collect=None
+    )
+
+    assert len(manifest.anchors) == 4
+    assert artifact_bytes == {}
+
+
+def test_parse_identity_manifest_with_artifacts_collect_predicate_selects_anchors(
+    tmp_path: Path,
+) -> None:
+    """`collect` retains only the anchors it selects. Using the same
+    predicate `svprpe observe` passes (`is_harmony_sensor_anchor`): only the
+    harmony/chord_sequence_json anchor's bytes come back, not the
+    lyrics/melody/structure anchors' (midi_clip / lyrics_text / section_map)
+    even though all four are read and hash-verified."""
+    contents = _write_artifacts(tmp_path)
+    manifest_dict = _manifest_dict(contents)
+    manifest_path = tmp_path / "identity.yaml"
+    _write_manifest(manifest_path, manifest_dict)
+
+    manifest, artifact_bytes = parse_identity_manifest_with_artifacts(
+        manifest_path.read_bytes(), manifest_path, collect=is_harmony_sensor_anchor
+    )
+
+    assert len(manifest.anchors) == 4
+    assert set(artifact_bytes) == {"anchor-harmony"}
+    assert artifact_bytes["anchor-harmony"] == contents["harmony.txt"]
 
 
 def test_note_and_section_ref_are_optional_and_preserved(tmp_path: Path) -> None:

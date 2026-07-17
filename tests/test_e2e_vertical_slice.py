@@ -141,6 +141,37 @@ def test_melody_anchor_is_honest_unsupported_and_lyrics_is_delivered(
     assert "anchor 'melody': channel 'symbolic_melody' is unsupported" in report.warnings
 
 
+# --- 2b. harmony anchor: chord_sequence_json は unmapped -> delivery=unknown (AR4 D-4) ---
+
+
+def test_harmony_anchor_delivery_is_unknown_and_unwarned(
+    advisory_package: dict[str, Any],
+) -> None:
+    """AR4 (Design Memo D-4): `chord_sequence_json` has no `ARTIFACT_TYPE_CHANNEL`
+    mapping, so a requested hard harmony anchor is honestly `delivery.status="unknown"`
+    with no channel — distinct from melody's `"unsupported"` (a channel exists but the
+    capability profile doesn't support it). `_anchor_warning` fires for *any* anchor
+    without a channel mapping (not only unsupported/unknown channel-mapped ones), so a
+    "no channel mapping defined" warning is expected here too."""
+
+    package = advisory_package["package"]
+    report = advisory_package["report"]
+    statuses = {status.anchor_id: status for status in package.anchor_statuses}
+
+    harmony = statuses["harmony"]
+    assert harmony.requested_mode == "hard"
+    assert harmony.delivery.status == "unknown"
+    assert harmony.delivery.channel is None
+    assert harmony.control.status == "unknown"
+    assert harmony.observation.status == "not_observed"
+    assert not any(
+        reference.anchor_id == "harmony"
+        for references in package.channel_artifacts.values()
+        for reference in references
+    )
+    assert "anchor 'harmony': no channel mapping defined" in report.warnings
+
+
 # --- 3. strict 失敗で非公開 ---------------------------------------------------------
 
 

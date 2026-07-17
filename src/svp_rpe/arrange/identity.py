@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Any, List, Literal, Optional
+from typing import Any, Callable, List, Literal, Optional
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -117,18 +117,77 @@ def load_identity_manifest(path: Path | str) -> IdentityManifest:
     sha256 を計算して宣言値と比較する（TOCTOU を単一読み取りで構造的に排除）。
     path が存在しない・ディレクトリである・hash が一致しない場合も
     `IdentityManifestError` を送出する。
+
+    manifest ファイル自身は本関数がここで 1 回だけ読む（`parse_identity_manifest`
+    へ委譲）。呼び出し側が既に manifest bytes を別目的（例: 呼び出し側自身の
+    provenance chain 検証用 hash 計算）で読んでいる場合は、二重読み込みを避ける
+    ため `parse_identity_manifest` を直接呼ぶこと（`svprpe observe` の D-3 検証が
+    そうする — PR #187 review）。
     """
     manifest_path = Path(path)
     try:
-        data = _load_yaml_mapping(manifest_path)
+        raw_bytes = manifest_path.read_bytes()
     except OSError as exc:
         # artifact 読み失敗（IdentityManifestError ラップ済み）との対称性を保ち、
         # 呼び出し側の公開契約を生 OS 例外に晒さない。この時点で work_id は未知の
-        # ため path のみを記録する。非 mapping の ValueError と yaml.YAMLError は
-        # 他 loader（compose / arrange）との共通契約のためラップしない。
+        # ため path のみを記録する。
         raise IdentityManifestError(
             f"identity manifest unreadable at {manifest_path}: {exc}"
         ) from exc
+    return parse_identity_manifest(raw_bytes, manifest_path)
+
+
+def parse_identity_manifest(raw_bytes: bytes, manifest_path: Path | str) -> IdentityManifest:
+    """`load_identity_manifest` の中核（bytes を既に読んだ呼び出し側向けの経路）。
+
+    `raw_bytes` を manifest YAML としてパース・検証し、source / 各 anchor の
+    宣言 sha256 を実ファイルの bytes と照合する。`manifest_path` はエラー
+    メッセージと anchor/source locator の解決基点（親ディレクトリ）にのみ使う
+    — ファイルは読まない（呼び出し側がそれを担う）。非 mapping の `ValueError`
+    と `yaml.YAMLError` は `load_identity_manifest` と同じ契約でラップしない
+    （他 loader との共通挙動）。
+
+    anchor artifact の中身（検証済み bytes）も必要な呼び出し側は
+    `parse_identity_manifest_with_artifacts` を使うこと（本関数はその bytes を
+    一切保持しない薄いラッパー — `collect=None` で呼ぶため、各 anchor の bytes
+    は hash 照合直後に破棄され、O(total anchor bytes) のメモリを保持しない。
+    PR #187 review round 11: 大きな `audio_excerpt` 等を参照する manifest でも
+    manifest-only 経路にメモリスパイクを持ち込まない）。
+    """
+    manifest, _artifact_bytes = parse_identity_manifest_with_artifacts(
+        raw_bytes, manifest_path, collect=None
+    )
+    return manifest
+
+
+def parse_identity_manifest_with_artifacts(
+    raw_bytes: bytes,
+    manifest_path: Path | str,
+    *,
+    collect: Callable[[IdentityAnchor], bool] | None = None,
+) -> tuple[IdentityManifest, dict[str, bytes]]:
+    """`parse_identity_manifest` と同じ検証を行い、加えて `collect` が選んだ
+    anchor の検証済み artifact bytes（`anchor_id -> bytes`）を返す。
+
+    この bytes は hash 照合のために既に読んだものと同一であり（`anchor` ループ
+    内で 1 回だけ `_read_and_verify_artifact_hash` を呼ぶ — 二重実装ではなく
+    `parse_identity_manifest` と共有する内部コア）、artifact の中身を必要とする
+    呼び出し側（例: `svprpe observe` の harmony センサー）はこれを再利用すれば
+    ファイルを二度読まずに済む（PR #187 review round 2）。
+
+    `collect`（PR #187 review round 11）は「戻り値の dict にどの anchor の
+    bytes を保持するか」を選ぶ述語で、**デフォルトの `None` は一切保持しない**
+    （hash 照合で読んだ bytes を anchor ごとに即座に破棄する — 呼び出し側が
+    artifact の中身を必要としない場合の既定挙動。大きな `audio_excerpt` 等を
+    参照する manifest で不要な O(total anchor bytes) のメモリ保持を避ける）。
+    `collect(anchor)` が True を返した anchor だけが戻り値の dict に入る
+    （例: `svprpe observe` は `is_harmony_sensor_anchor` を渡し、harmony
+    センサーが実際に中身を読む chord_sequence_json anchor のみ保持する）。
+    `source` artifact の bytes はこの dict の対象外のまま（呼び出し側が必要と
+    したことがないため — 必要になれば追補する）。
+    """
+    manifest_path = Path(manifest_path)
+    data = _parse_yaml_mapping(raw_bytes, manifest_path)
     manifest = IdentityManifest.model_validate(data)
 
     base_dir = manifest_path.resolve().parent
@@ -143,24 +202,27 @@ def load_identity_manifest(path: Path | str) -> IdentityManifest:
         work_id=work_id,
         target="source",
     )
+
+    artifact_bytes: dict[str, bytes] = {}
     for anchor in manifest.anchors:
         target = f"anchor '{anchor.id}'"
         artifact_path = _resolve_confined(
             anchor.artifact, base_dir, work_id=work_id, target=target
         )
-        _verify_artifact_hash(
+        verified_bytes = _read_and_verify_artifact_hash(
             artifact_path,
             anchor.sha256,
             work_id=work_id,
             target=target,
         )
+        if collect is not None and collect(anchor):
+            artifact_bytes[anchor.id] = verified_bytes
 
-    return manifest
+    return manifest, artifact_bytes
 
 
-def _load_yaml_mapping(path: Path) -> dict[str, Any]:
-    with path.open(encoding="utf-8") as f:
-        data = yaml.safe_load(f)
+def _parse_yaml_mapping(raw_bytes: bytes, path: Path) -> dict[str, Any]:
+    data = yaml.safe_load(raw_bytes)
     if not isinstance(data, dict):
         raise ValueError(f"identity manifest must be a mapping: {path}")
     return data
@@ -198,6 +260,19 @@ def _resolve_confined(value: str, base_dir: Path, *, work_id: str, target: str) 
 def _verify_artifact_hash(
     artifact_path: Path, expected_sha256: str, *, work_id: str, target: str
 ) -> None:
+    """Thin wrapper over `_read_and_verify_artifact_hash` for callers (e.g.
+    `package.py`) that only need the hash check, not the artifact bytes."""
+    _read_and_verify_artifact_hash(
+        artifact_path, expected_sha256, work_id=work_id, target=target
+    )
+
+
+def _read_and_verify_artifact_hash(
+    artifact_path: Path, expected_sha256: str, *, work_id: str, target: str
+) -> bytes:
+    """Read `artifact_path` once, verify its sha256, and return the bytes read
+    (the single-read core both `_verify_artifact_hash` and
+    `parse_identity_manifest_with_artifacts` share — PR #187 review round 2)."""
     try:
         raw_bytes = artifact_path.read_bytes()
     except OSError as exc:
@@ -212,3 +287,4 @@ def _verify_artifact_hash(
             f"identity manifest '{work_id}': {target} sha256 mismatch at {artifact_path}: "
             f"expected {expected_sha256}, got {actual_sha256}"
         )
+    return raw_bytes
