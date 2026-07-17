@@ -179,20 +179,29 @@ symlink (regardless of what it resolves to — even a symlink to an
 otherwise byte-identical file) or any non-regular-file entity, *before* it
 is ever read. A byte difference in the descriptor is only accepted as
 provenance drift after it proves self-consistent: it must parse as JSON,
-declare this directory's current `schema_version` and `content_digest`,
-recompute to that same digest from its own recorded output hashes, *and*
-differ from this invocation's own descriptor in only a small whitelist of
-top-level fields (`source_score` / `arrangement_spec` for `arrange`'s
-bundle) — every other field (`arrangement_id`, `changes`, `outputs`,
-`content_digest_basis`, etc.) must match exactly, since fields like
-`arrangement_id` and `changes` aren't part of `content_digest` at all and a
-tampered value there must not be waved through as mere provenance just
-because the digest still happens to match. Any of these checks failing
-fails the run (exit `1`, `latest.json` untouched). Re-running with different
+declare this directory's current `schema_version`, **pass full schema
+validation** (nested shapes, `sha256`/`schema_version` patterns, and unknown
+top-level keys — `arrange`'s bundle validates against a reader-only
+`ArrangementBundleDescriptor` model built for exactly this check;
+`package`'s report reuses `CompilationReport` itself), declare this
+directory's `content_digest`, recompute to that same digest from its own
+recorded output hashes, *and* differ from this invocation's own descriptor
+in only a small whitelist of top-level fields (`source_score` /
+`arrangement_spec` for `arrange`'s bundle) — every other field
+(`arrangement_id`, `changes`, `outputs`, `content_digest_basis`, etc.) must
+match exactly, since fields like `arrangement_id` and `changes` aren't part
+of `content_digest` at all and a tampered value there must not be waved
+through as mere provenance just because the digest still happens to match.
+A whitelisted field being present doesn't exempt it from schema validation
+either: a legitimately-drifting `inputs` or `invocation_provenance` must
+still be the right shape, not merely a differing value of any type. Any of
+these checks failing fails the run (exit `1`, `latest.json` untouched).
+Re-running with different
 inputs that resolve to a different `content_digest` publishes a sibling
 directory; older digest directories are never pruned. Blessing therefore
-means "descriptor self-consistent (including its provenance-only fields) +
-every declared output present, non-symlinked, and hash-matching" — a digest
+means "descriptor schema-valid and self-consistent (including its
+provenance-only fields) + every declared output present, non-symlinked, and
+hash-matching" — a digest
 directory `latest.json` points at is a complete publication matching its own
 bookkeeping, though this is still not a full audit (it never rehashes
 undeclared files or recurses beyond what the descriptor lists, and nothing in

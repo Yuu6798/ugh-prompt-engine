@@ -1159,6 +1159,11 @@ def test_arrange_builds_root_rejects_tampered_arrangement_id_outside_digest(
 
 
 def test_arrange_builds_root_rejects_tampered_content_digest_basis(tmp_path: Path) -> None:
+    """`content_digest_basis` is a `Literal` field on the round-9
+    `ArrangementBundleDescriptor` reader model, so a tampered value is now
+    caught by full schema validation (step 3) rather than reaching the
+    whitelist comparison (step 6) at all — still exit 1, latest untouched,
+    just a schema-validation error message instead of a whitelist one."""
     spec_path = tmp_path / "arrangement.yaml"
     _write_arrangement_spec(spec_path)
     root = tmp_path / "builds-root"
@@ -1180,7 +1185,6 @@ def test_arrange_builds_root_rejects_tampered_content_digest_basis(tmp_path: Pat
 
     assert second.exit_code == 1
     assert "Error:" in second.stderr
-    assert "non-provenance field" in second.stderr
     assert "content_digest_basis" in second.stderr
     assert (root / "latest.json").read_bytes() == latest_before
 
@@ -1339,3 +1343,127 @@ def test_package_builds_root_allows_inputs_only_difference(tmp_path: Path) -> No
     assert "provenance differs from this invocation" in second.stderr
     latest = json.loads((root / "latest.json").read_text(encoding="utf-8"))
     assert latest["content_digest"] == digest_dir.name
+
+
+# --- PR #184 review round 9: full schema validation of byte-differing --------
+# --- descriptors (arrange: new reader-only ArrangementBundleDescriptor; -------
+# --- package: reused CompilationReport) ---------------------------------------
+
+
+def test_package_builds_root_rejects_malformed_inputs_field(tmp_path: Path) -> None:
+    """`inputs` is whitelisted for legitimate provenance drift, but a
+    structurally invalid value (a bare string instead of the expected nested
+    object) is still caught by round 9's full `CompilationReport` schema
+    validation before the whitelist comparison is ever reached."""
+    manifest_path, spec_path = _write_package_fixture(tmp_path)
+    root = tmp_path / "builds-root"
+
+    first = CliRunner().invoke(
+        app,
+        _package_args(manifest_path, spec_path, mode_flag="builds-root", mode_value=str(root)),
+    )
+    assert first.exit_code == 0, first.output
+    digest_dir = next((root / "builds").iterdir())
+    report_path = digest_dir / "compilation_report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["inputs"] = "corrupt"
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    latest_before = (root / "latest.json").read_bytes()
+
+    second = CliRunner().invoke(
+        app,
+        _package_args(manifest_path, spec_path, mode_flag="builds-root", mode_value=str(root)),
+    )
+
+    assert second.exit_code == 1
+    assert "Error:" in second.stderr
+    assert "inputs" in second.stderr
+    assert (root / "latest.json").read_bytes() == latest_before
+
+
+def test_package_builds_root_rejects_malformed_invocation_provenance_field(
+    tmp_path: Path,
+) -> None:
+    """Same story for `invocation_provenance` — also whitelisted for
+    legitimate drift, but not for being the wrong shape entirely."""
+    manifest_path, spec_path = _write_package_fixture(tmp_path)
+    root = tmp_path / "builds-root"
+
+    first = CliRunner().invoke(
+        app,
+        _package_args(manifest_path, spec_path, mode_flag="builds-root", mode_value=str(root)),
+    )
+    assert first.exit_code == 0, first.output
+    digest_dir = next((root / "builds").iterdir())
+    report_path = digest_dir / "compilation_report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["invocation_provenance"] = "corrupt"
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    latest_before = (root / "latest.json").read_bytes()
+
+    second = CliRunner().invoke(
+        app,
+        _package_args(manifest_path, spec_path, mode_flag="builds-root", mode_value=str(root)),
+    )
+
+    assert second.exit_code == 1
+    assert "Error:" in second.stderr
+    assert "invocation_provenance" in second.stderr
+    assert (root / "latest.json").read_bytes() == latest_before
+
+
+def test_arrange_builds_root_rejects_malformed_source_score_field(tmp_path: Path) -> None:
+    """`source_score` is whitelisted for legitimate path-only drift, but a
+    bare string instead of the expected `{path, sha256}` object fails
+    `ArrangementBundleDescriptor` schema validation before the whitelist
+    comparison is ever reached."""
+    spec_path = tmp_path / "arrangement.yaml"
+    _write_arrangement_spec(spec_path)
+    root = tmp_path / "builds-root"
+
+    first = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+    assert first.exit_code == 0, first.output
+    digest_dir = next((root / "builds").iterdir())
+    bundle_path = digest_dir / "arrangement_bundle.json"
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    bundle["source_score"] = "corrupt"
+    bundle_path.write_text(json.dumps(bundle, ensure_ascii=False, indent=2), encoding="utf-8")
+    latest_before = (root / "latest.json").read_bytes()
+
+    second = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+
+    assert second.exit_code == 1
+    assert "Error:" in second.stderr
+    assert "source_score" in second.stderr
+    assert (root / "latest.json").read_bytes() == latest_before
+
+
+def test_arrange_builds_root_rejects_unknown_top_level_key(tmp_path: Path) -> None:
+    """`ArrangementBundleDescriptor`'s `extra="forbid"` rejects an unknown
+    top-level key even when every other field is untouched and correct."""
+    spec_path = tmp_path / "arrangement.yaml"
+    _write_arrangement_spec(spec_path)
+    root = tmp_path / "builds-root"
+
+    first = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+    assert first.exit_code == 0, first.output
+    digest_dir = next((root / "builds").iterdir())
+    bundle_path = digest_dir / "arrangement_bundle.json"
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    bundle["unexpected_extra_key"] = "value"
+    bundle_path.write_text(json.dumps(bundle, ensure_ascii=False, indent=2), encoding="utf-8")
+    latest_before = (root / "latest.json").read_bytes()
+
+    second = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+
+    assert second.exit_code == 1
+    assert "Error:" in second.stderr
+    assert (root / "latest.json").read_bytes() == latest_before

@@ -524,6 +524,7 @@ def _check_existing_builds_root_publication(
     expected_schema_version: str,
     extract_digest_inputs: Callable[[dict[str, Any]], dict[str, str]],
     allowed_provenance_fields: frozenset[str],
+    validate_descriptor: Callable[[dict[str, Any]], None],
 ) -> bool:
     """Read-and-verify check for the immutable no-op publish path, run before
     `latest.json` is ever moved onto an existing digest directory.
@@ -553,18 +554,32 @@ def _check_existing_builds_root_publication(
        §8 Persistent Artifact Safety Gate: unknown `schema_version` values
        are rejected, not read as if they were the current schema — a
        descriptor written by an older/newer schema must not be silently
-       treated as an ordinary provenance difference in the *current* one);
-    3. its own `content_digest` field equals the `content_digest` this
+       treated as an ordinary provenance difference in the *current* one).
+       This explicit check runs *before* step 3 so an unknown-schema
+       descriptor gets this specific, targeted error rather than whatever
+       incidental validation error the current schema's model happens to
+       raise against it;
+    3. (round 9) the whole descriptor validates against `validate_descriptor`
+       — `ArrangementBundleDescriptor.model_validate` for `arrange`,
+       `CompilationReport.model_validate` for `package` (both translate
+       `pydantic.ValidationError` to `ValueError` internally). This is a full
+       schema validation, not just the top-level fields step 6 below
+       compares: every nested shape (e.g. `outputs`' `{path, sha256}` entries,
+       `changes`' leaf-change records) is checked, `extra="forbid"` rejects
+       unknown keys, and it subsumes step 2's schema_version check in the
+       sense that an unexpected schema_version would fail model validation
+       too — step 2 is kept anyway for the more specific error message;
+    4. its own `content_digest` field equals the `content_digest` this
        invocation computed (the digest is the directory's name, so this
        catches a descriptor that doesn't even claim to describe *this*
        digest);
-    4. recomputing `content_digest` from the descriptor's own declared
+    5. recomputing `content_digest` from the descriptor's own declared
        output hashes (via `extract_digest_inputs`, which knows the
        arrange-vs-package shape of "artifact_name -> sha256") reproduces the
        same digest — this catches a descriptor whose declared hashes were
-       tampered with (or corrupted) to match step 3's digest field without
+       tampered with (or corrupted) to match step 4's digest field without
        actually being self-consistent;
-    5. (round 7, Thread J, checked after every content artifact below is
+    6. (round 7, Thread J, checked after every content artifact below is
        also confirmed present and hash-matching) every top-level field of
        the existing descriptor that is *not* in `allowed_provenance_fields`
        is byte-for-byte equal (as parsed JSON) to the same field in the
@@ -575,7 +590,7 @@ def _check_existing_builds_root_publication(
        provenance drift" merely because `content_digest` still matched.
 
     Either way — byte-identical fast path or a byte-difference that survives
-    checks 1-4 — one more thing is verified **before** `latest.json` may be
+    checks 1-5 — one more thing is verified **before** `latest.json` may be
     moved onto this directory: every content artifact the descriptor
     declares (`extract_digest_inputs`' `{artifact_name: sha256}`, e.g.
     `derived_score.yaml` + `arrangement_diff.json` for `arrange`) is neither
@@ -588,11 +603,12 @@ def _check_existing_builds_root_publication(
     the declared output map is read from `pending_content` (already known to
     be byte-identical to the on-disk descriptor, so parsing either is
     equivalent) rather than re-reading the descriptor from disk a second
-    time.
+    time — and, being byte-identical to a descriptor this invocation itself
+    just built via its own model, it needs no separate schema validation.
 
     Blessing a digest directory with a `latest.json` update therefore always
     means: descriptor self-consistency (schema + digest + provenance-only
-    diff, checks 1-5), every declared output artifact present with a
+    diff, checks 1-6), every declared output artifact present with a
     matching hash, and nothing read along the way was a symlink. This is
     still not a full audit — it never rehashes *undeclared* files or
     recurses into anything beyond what the descriptor itself lists, and
@@ -642,6 +658,14 @@ def _check_existing_builds_root_publication(
                 f"{descriptive_filename!r} declares schema_version "
                 f"{recorded_schema_version!r}, expected {expected_schema_version!r}"
             )
+
+        # `validate_descriptor` (arrange: `ArrangementBundleDescriptor.model_validate`,
+        # package: `CompilationReport.model_validate`) is expected to translate
+        # `pydantic.ValidationError` into `ValueError` itself — see
+        # `_arrange_bundle_validate_descriptor` / `_package_report_validate_descriptor`
+        # — so it can simply be called here and let `ValueError` propagate like
+        # every other check in this function.
+        validate_descriptor(existing_descriptor)
 
         recorded_digest = existing_descriptor.get("content_digest")
         if recorded_digest != content_digest:
@@ -744,6 +768,7 @@ def _publish_artifacts_to_builds_root(
     expected_schema_version: str,
     extract_digest_inputs: Callable[[dict[str, Any]], dict[str, str]],
     allowed_provenance_fields: frozenset[str],
+    validate_descriptor: Callable[[dict[str, Any]], None],
 ) -> tuple[Path, bool, bool]:
     """Publish a complete artifact set under `<builds_root>/builds/<content_digest>/`.
 
@@ -859,6 +884,7 @@ def _publish_artifacts_to_builds_root(
             expected_schema_version=expected_schema_version,
             extract_digest_inputs=extract_digest_inputs,
             allowed_provenance_fields=allowed_provenance_fields,
+            validate_descriptor=validate_descriptor,
         )
 
     try:
@@ -915,6 +941,45 @@ def _package_report_digest_inputs(descriptor: dict[str, Any]) -> dict[str, str]:
     from svp_rpe.arrange.package import PERFORMANCE_PACKAGE_FILENAME
 
     return {PERFORMANCE_PACKAGE_FILENAME: descriptor["package_sha256"]}
+
+
+def _arrange_bundle_validate_descriptor(descriptor: dict[str, Any]) -> None:
+    """Full schema validation of a parsed `arrangement_bundle.json` (round 9).
+
+    `ArrangementBundleDescriptor` (`arrange/bundle.py`) is a **reader-only**
+    model — `compile_arrangement` never uses it and keeps building the bundle
+    as a plain dict, so publish-side bytes are unaffected. It exists purely
+    so this blessing-path validation can check the whole descriptor's shape
+    (nested `{path, sha256}` entries, `changes` records, unknown top-level
+    keys via `extra="forbid"`) instead of just the individual fields
+    `_check_existing_builds_root_publication` otherwise inspects one at a
+    time.
+    """
+    from pydantic import ValidationError
+
+    from svp_rpe.arrange.bundle import ArrangementBundleDescriptor
+
+    try:
+        ArrangementBundleDescriptor.model_validate(descriptor)
+    except ValidationError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+def _package_report_validate_descriptor(descriptor: dict[str, Any]) -> None:
+    """Full schema validation of a parsed `compilation_report.json` (round 9).
+
+    Reuses `CompilationReport` itself (`arrange/package.py`) — the same model
+    `build_performance_package` constructs on the publish side — so there is
+    no separate reader-only model to keep in sync for `package`.
+    """
+    from pydantic import ValidationError
+
+    from svp_rpe.arrange.package import CompilationReport
+
+    try:
+        CompilationReport.model_validate(descriptor)
+    except ValidationError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 # PR #184 review round 7, Thread J: top-level descriptor fields allowed to
@@ -1023,6 +1088,7 @@ def arrange(
                 expected_schema_version=BUNDLE_SCHEMA_VERSION,
                 extract_digest_inputs=_arrange_bundle_digest_inputs,
                 allowed_provenance_fields=_ARRANGE_BUNDLE_ALLOWED_PROVENANCE_FIELDS,
+                validate_descriptor=_arrange_bundle_validate_descriptor,
             )
         except (OSError, ValueError) as exc:
             typer.echo(f"Error: {exc}", err=True)
@@ -1166,6 +1232,7 @@ def package_command(
                 expected_schema_version=COMPILATION_REPORT_SCHEMA_VERSION,
                 extract_digest_inputs=_package_report_digest_inputs,
                 allowed_provenance_fields=_PACKAGE_REPORT_ALLOWED_PROVENANCE_FIELDS,
+                validate_descriptor=_package_report_validate_descriptor,
             )
         except (OSError, ValueError) as exc:
             typer.echo(f"Error: {exc}", err=True)

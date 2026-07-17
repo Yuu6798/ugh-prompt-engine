@@ -20,11 +20,12 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
+from pydantic import BaseModel, ConfigDict, Field
 
-from svp_rpe.arrange.models import ArrangementSpec
+from svp_rpe.arrange.models import ArrangementChange, ArrangementSpec
 from svp_rpe.arrange.resolver import resolve_arrangement
 from svp_rpe.compose.models import CompositionScore
 
@@ -40,6 +41,51 @@ DIFF_FILENAME = "arrangement_diff.json"
 # `semantic_ci/core.py:canonical_json` と同型思想（sort_keys=True + 圧縮
 # separators）だが、`arrange/` は `semantic_ci` に依存しないためここで自前実装する。
 CONTENT_DIGEST_BASIS = "sha256-of-canonical-json-artifact-name-to-sha256/v1"
+
+_SHA256_PATTERN = r"^[0-9a-f]{64}$"
+
+
+class BundleReaderModel(BaseModel):
+    """`arrangement_bundle.json` 読み取り専用スキーマの共通基底。未知 key を拒否する。
+
+    **reader 専用**: `compile_arrangement`（生成側）はこのモデルを一切経由しない
+    — dict をそのまま構築し続け、byte 互換を厳密に維持する（既存 fixture /
+    CLI 出力の bytes を一切変更しない）。当初の Design Memo は
+    「`ArrangementBundle` のモデル化は読む側の需要が未発生」として scope out
+    していたが、builds-root の blessing 経路
+    （`cli.py:_check_existing_builds_root_publication`、PR #184 review round 9）
+    という reader が実際に現れたことでこの設計判断を解除する。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class BundleFileRef(BundleReaderModel):
+    """bundle 内の `{path, sha256}` 参照（`source_score` / `arrangement_spec` /
+    `outputs` の各エントリに共通する形）。"""
+
+    path: str
+    sha256: str = Field(pattern=_SHA256_PATTERN)
+
+
+class ArrangementBundleDescriptor(BundleReaderModel):
+    """`arrangement_bundle.json`（schema `arrangement-bundle/0.2`）の読み取り専用モデル。
+
+    builds-root の blessing 経路が、既存 digest ディレクトリの descriptor
+    全体をスキーマ検証するために使う（whitelist 欄の形状も含め pydantic の
+    型/pattern で保証する）。`changes` は `resolve_arrangement` が返す
+    `ArrangementChange` をそのまま再利用する（生成側と読み取り側で同一の
+    leaf-change 表現を共有し、二重定義を避ける）。
+    """
+
+    schema_version: Literal["arrangement-bundle/0.2"]
+    arrangement_id: str
+    source_score: BundleFileRef
+    arrangement_spec: BundleFileRef
+    changes: list[ArrangementChange]
+    outputs: dict[str, BundleFileRef]
+    content_digest: str = Field(pattern=_SHA256_PATTERN)
+    content_digest_basis: Literal["sha256-of-canonical-json-artifact-name-to-sha256/v1"]
 
 
 @dataclass(frozen=True)
