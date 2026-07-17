@@ -1303,10 +1303,35 @@ def _observe_protected_input_paths(
 
 
 def _reject_observe_output_collision(output_path: str | Path, input_paths: list[Path]) -> None:
+    """Reject `-o` if it aliases any input path — by resolved-path equality,
+    and (PR #187 review round 3) by same-file identity (`os.path.samefile`,
+    i.e. same `st_dev`/`st_ino`) when the output path already exists on disk.
+    The resolved-path check alone misses a hard link: two distinct paths that
+    are actually the same inode, neither of which is a symlink the other
+    resolves through, so `Path.resolve()` leaves them unequal even though
+    writing through one clobbers the other. `samefile` requires both paths to
+    exist; if it can't be determined (e.g. an input vanished between
+    resolution and this check, or some other OSError), that pair is skipped
+    and only the plain path-equality result stands — a determination failure
+    here must never crash the CLI, just fall back to the weaker check.
+    """
+    import os
+
     resolved_output = Path(output_path).resolve()
+    output_exists = resolved_output.exists()
     for input_path in input_paths:
         if input_path == resolved_output:
             raise ValueError(f"input path collides with output artifact path: {resolved_output}")
+        if output_exists:
+            try:
+                same_file = os.path.samefile(resolved_output, input_path)
+            except OSError:
+                continue
+            if same_file:
+                raise ValueError(
+                    f"input path collides with output artifact path: {resolved_output} "
+                    f"(same file as {input_path})"
+                )
 
 
 @app.command("observe")

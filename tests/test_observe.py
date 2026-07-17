@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,7 @@ from svp_rpe.arrange.observe import (
     GeneratedArtifactRef,
     ObservationReport,
     SensorRecord,
+    _cycle_alignment,
     _observe_anchor,
     _observe_harmony,
     _observe_unavailable,
@@ -306,6 +308,44 @@ def test_observe_harmony_mismatch_is_deferred_with_raw_measurements() -> None:
     assert observation.determination == "deferred"
     assert "matches 0 full canonical cycle(s); 4 trailing entries" in str(observation.note)
     assert "deferred to a future threshold Design Memo" in str(observation.note)
+
+
+def test_cycle_alignment_proper_prefix_below_one_cycle_is_not_a_full_cycle() -> None:
+    """Unit-level check of the round-3 fix's core arithmetic: a collapsed
+    observed sequence that matches only a *proper prefix* of the canonical
+    progression (here: just its first chord) is a full prefix match
+    (`matched_prefix_length == collapsed_observed_length`) but `full_cycles`
+    stays 0 — the signal `_observe_harmony` uses to withhold `preserved`."""
+    matched_prefix_length, full_cycles = _cycle_alignment(
+        CANONICAL_PROGRESSION, [CANONICAL_PROGRESSION[0]]
+    )
+    assert matched_prefix_length == 1
+    assert full_cycles == 0
+
+
+def test_observe_harmony_proper_prefix_below_one_cycle_stays_deferred() -> None:
+    """A drone/truncated output whose collapsed chord_events sequence is a
+    single chord — a proper prefix of the canonical progression, matched
+    exactly — must NOT be `preserved`: it hasn't observed one full canonical
+    cycle, so D-1's identity gate (round 3: `full_cycles >= 1`) keeps it
+    `deferred` even though the (short) prefix matches perfectly."""
+    anchor = _anchor("harmony", "harmony", "chord_progression.json", "chord_sequence_json")
+    bundle = _bundle_with_chords([CANONICAL_PROGRESSION[0]])
+    artifact_bytes = _chord_artifact_bytes(CANONICAL_PROGRESSION)
+
+    observation = _observe_harmony(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        bundle=bundle,
+        artifact_bytes=artifact_bytes,
+    )
+
+    assert observation.measurements["collapsed_observed_length"] == 1
+    assert observation.measurements["matched_cycle_prefix_length"] == 1
+    assert observation.adherence_status == "not_observed"
+    assert observation.determination == "deferred"
+    assert "less than one full canonical cycle" in str(observation.note)
 
 
 # --- 4. build_observation_report: single shared extraction + determinism ----------
@@ -643,6 +683,55 @@ def test_observe_cli_rejects_output_path_colliding_with_package(tmp_path: Path) 
     assert result2.exit_code == 1
     assert "collides with output artifact path" in result2.stderr
     assert package_path.read_bytes() == original_bytes
+
+
+def test_observe_cli_rejects_output_path_hard_linked_to_manifest(tmp_path: Path) -> None:
+    """PR #187 review round 3: resolved-path equality alone misses a hard
+    link — two distinct path names that are the same inode, neither a symlink
+    to the other, so `Path.resolve()` leaves them unequal. `-o` set to a hard
+    link of the manifest must still be rejected, and the manifest content
+    (reachable via either name — they're the same file) must stay untouched.
+    """
+    pkg_dir = tmp_path / "pkg"
+    result = CliRunner().invoke(app, _cli_package_args(pkg_dir))
+    assert result.exit_code == 0, result.output
+
+    (tmp_path / "identity").mkdir()
+    manifest_copy = tmp_path / "identity_manifest.yaml"
+    manifest_copy.write_bytes(IDENTITY_MANIFEST.read_bytes())
+    (tmp_path / "composition_score.yaml").write_bytes(BASE_SCORE.read_bytes())
+    for name in ("lyrics.txt", "melody_notes.json", "chord_progression.json"):
+        (tmp_path / "identity" / name).write_bytes(
+            (FIXTURE_DIR / "identity" / name).read_bytes()
+        )
+    original_bytes = manifest_copy.read_bytes()
+
+    hard_link_path = tmp_path / "output_via_hardlink.yaml"
+    try:
+        os.link(manifest_copy, hard_link_path)
+    except OSError as exc:
+        pytest.skip(f"filesystem does not support hard links here: {exc}")
+
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"unused-placeholder-audio-bytes")
+
+    result2 = CliRunner().invoke(
+        app,
+        [
+            "observe",
+            str(pkg_dir / "performance_package.json"),
+            str(audio_path),
+            "--manifest",
+            str(manifest_copy),
+            "-o",
+            str(hard_link_path),
+        ],
+    )
+
+    assert result2.exit_code == 1
+    assert "collides with output artifact path" in result2.stderr
+    assert manifest_copy.read_bytes() == original_bytes
+    assert hard_link_path.read_bytes() == original_bytes
 
 
 # --- 5c. PR #187 review: manifest single-read discipline + audio snapshot ----------

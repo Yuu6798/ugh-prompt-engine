@@ -31,10 +31,16 @@ harmony anchor（正典進行）と突き合わせる。measurements には従�
 （``collapsed_observed_length``）を、正典進行の無限交代列（サイクル境界の
 隣接重複 collapse を織り込み済み）と先頭から位置整合させ、最初に食い違うまでの
 長さを ``matched_cycle_prefix_length`` として記録する。D-1 の恒等判定は
-**この prefix が collapsed 列の全長と一致するか**（``collapsed_observed_length
-> 0 and matched_cycle_prefix_length == collapsed_observed_length``）で行う —
-「作品の和声的同一性 = 繰り返される正典進行」という計器意味論に合わせた基準
-であり、frame 単位の生 match_rate はもはや恒等判定の根拠にしない。
+**この prefix が collapsed 列の全長と一致し、かつ最低 1 完全サイクル分を
+観測できているか**（``collapsed_observed_length > 0 and
+matched_cycle_prefix_length == collapsed_observed_length and full_cycles >= 1``）
+で行う —「作品の和声的同一性 = 繰り返される正典進行」という計器意味論に合わせた
+基準であり、frame 単位の生 match_rate はもはや恒等判定の根拠にしない。
+``full_cycles >= 1`` を要求するのは、ドローン・切断された出力が正典進行の
+proper prefix（例: 1 コードのみの collapsed 列）に完全一致してしまうケースを
+「保存成功」と誤認しないため（2026-07-17 round 3: 正典 1 サイクルにも満たない
+観測は、prefix が完全一致していても deferred のまま — 未観測に近い状態を
+"preserved" と偽称しない）。
 
 lyrics / melody は optional extra 依存（faster-whisper / basic-pitch）のため
 センサー本体を配線せず、``available=false`` + reason を記録する（将来の接続点は
@@ -273,7 +279,15 @@ def _observe_harmony(
         "unmatched_tail_head": [[root, quality] for root, quality in unmatched_tail],
     }
     sensor = SensorRecord(name="chord_sequence_match", available=True, reason=None)
-    if collapsed_observed_length > 0 and matched_prefix_length == collapsed_observed_length:
+    full_prefix_match = (
+        collapsed_observed_length > 0 and matched_prefix_length == collapsed_observed_length
+    )
+    # round 3: a full prefix match alone is not enough — a drone/truncated
+    # output can collapse to a proper prefix of the canonical progression
+    # (e.g. a single chord) and match it exactly without ever completing one
+    # full cycle. That is not "preserved" (it barely observed anything), so
+    # `preserved` additionally requires at least one full canonical cycle.
+    if full_prefix_match and full_cycles >= 1:
         return AnchorObservation(
             anchor_id=anchor.id,
             domain=anchor.domain,
@@ -283,6 +297,23 @@ def _observe_harmony(
             determination="exact_match",
             note=None,
         )
+    if full_prefix_match:
+        note = (
+            "collapsed observed sequence matches the canonical progression "
+            "exactly, but the matched prefix covers less than one full "
+            f"canonical cycle ({matched_prefix_length}/{len(expected_sequence)} "
+            "canonical chords); changed_within_policy/changed_outside_policy "
+            "classification is out of scope for this instrument and deferred "
+            "to a future threshold Design Memo (D-1)."
+        )
+    else:
+        note = (
+            f"collapsed observed prefix matches {full_cycles} full canonical "
+            f"cycle(s); {unmatched_tail_length} trailing entries fall outside "
+            "the canonical alternation. changed_within_policy/"
+            "changed_outside_policy classification is out of scope for this "
+            "instrument and deferred to a future threshold Design Memo (D-1)."
+        )
     return AnchorObservation(
         anchor_id=anchor.id,
         domain=anchor.domain,
@@ -290,13 +321,7 @@ def _observe_harmony(
         measurements=measurements,
         adherence_status="not_observed",
         determination="deferred",
-        note=(
-            f"collapsed observed prefix matches {full_cycles} full canonical "
-            f"cycle(s); {unmatched_tail_length} trailing entries fall outside "
-            "the canonical alternation. changed_within_policy/"
-            "changed_outside_policy classification is out of scope for this "
-            "instrument and deferred to a future threshold Design Memo (D-1)."
-        ),
+        note=note,
     )
 
 
