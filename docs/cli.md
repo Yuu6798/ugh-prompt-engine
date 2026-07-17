@@ -135,11 +135,30 @@ publishes the same three artifacts to `<root>/builds/<content_digest>/`
 instead, and updates `<root>/latest.json` (`schema_version:
 "builds-latest/0.1"`, `{"content_digest": "<64hex>"}`) to point at it. A
 digest directory is **immutable**: if `<root>/builds/<content_digest>/`
-already exists from a previous run, it is left completely untouched (no
-overwrite, no re-verification) and only `latest.json` is updated — the CLI
-prints a one-line advisory to stderr and exits `0`. Re-running with different
-inputs that resolve to a different `content_digest` publishes a sibling
-directory; older digest directories are never pruned.
+already exists as a directory from a previous run, its artifacts are never
+overwritten, appended to, or fully re-verified — only its one *descriptive*
+file (`arrangement_bundle.json`) is read once and compared byte-for-byte
+against what this invocation would have published for that filename, so a
+directory that merely happens to occupy this digest path isn't blindly
+trusted. If that file is missing or unreadable, the run fails (exit `1`,
+`latest.json` left untouched) rather than treating the directory as a valid
+prior publication. Re-running an identical build (first-publish-wins: the
+existing bytes match) prints an "already published" advisory and exits `0`
+with the directory untouched; because `content_digest` covers only
+`derived_score.yaml` + `arrangement_diff.json`, a same-digest rebuild whose
+recorded provenance differs (e.g. the same `arrangement.yaml` referenced via
+a different path) is *also* left untouched but gets a distinct "provenance
+differs from this invocation" advisory instead — the first publication's
+provenance always wins, `latest.json` still moves to point at it. If
+`<root>/builds/<content_digest>` already exists as something other than a
+directory (a plain file, a symlink to a file, or a dangling symlink), the run
+fails outright (exit `1`, `latest.json` left untouched) rather than treating
+it as published. Re-running with different inputs that resolve to a
+different `content_digest` publishes a sibling directory; older digest
+directories are never pruned. This descriptive-file check is intentionally
+partial (one file, single read, no rehash of the other artifacts); a full
+recursive verification of a published digest directory is left to a future
+`verify`-style command.
 
 ### `svprpe package <score.yaml> <identity.yaml> <arrangement.yaml> --capability-profile <profile.yaml> (--output-dir <dir> | --builds-root <dir>)`
 
@@ -209,12 +228,18 @@ publishes `performance_package.json` + `compilation_report.json` to
 `<root>/builds/<content_digest>/` and updates `<root>/latest.json`
 (`schema_version: "builds-latest/0.1"`) to point at it, with the same
 immutable-digest-directory / mutable-`latest.json` contract described for
-`arrange` above (an already-published digest directory is left untouched;
-only `latest.json` moves, with an advisory on stderr and exit `0`). Because
-re-running with a stale checkout's inputs after an implementation change
-still reproduces the same `content_digest`, publishing never mutates a
-digest directory's `invocation_provenance` to match a newer compiler run —
-that is the immutability contract's direct consequence, not a bug.
+`arrange` above — here the one *descriptive* file read back for the
+byte-for-byte no-op check is `compilation_report.json` (first-publish-wins:
+an already-published digest directory is left untouched; only `latest.json`
+moves, with an "already published" advisory on exit `0`, or a "provenance
+differs from this invocation" advisory if this run's `compilation_report.json`
+bytes differ from the one already on disk for that digest — `content_digest`
+covers only `performance_package.json`, so `invocation_provenance` drift alone
+lands here). Because re-running with a stale checkout's inputs after an
+implementation change still reproduces the same `content_digest`, publishing
+never mutates a digest directory's `invocation_provenance` to match a newer
+compiler run — that is the immutability contract's direct consequence, not a
+bug.
 
 ### `svprpe measure <audio>`
 

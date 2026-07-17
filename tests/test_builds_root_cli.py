@@ -404,3 +404,149 @@ def test_package_builds_root_rejects_input_colliding_with_latest_json(tmp_path: 
     assert "input path collides with output artifact path" in result.stderr
     assert str(root / "latest.json") in result.stderr
     assert not (root / "builds").exists()
+
+
+# --- PR #184 review: non-directory digest target + read-only provenance check --
+
+
+def _arrange_content_digest(tmp_path: Path, spec_path: Path) -> str:
+    """Discover the content_digest a given (score, spec) pair resolves to, via
+    a real publish into a throwaway builds-root."""
+    probe_root = tmp_path / "digest-probe"
+    probe = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(probe_root))
+    )
+    assert probe.exit_code == 0, probe.output
+    return next((probe_root / "builds").iterdir()).name
+
+
+def test_arrange_builds_root_rejects_non_directory_digest_target(tmp_path: Path) -> None:
+    spec_path = tmp_path / "arrangement.yaml"
+    _write_arrangement_spec(spec_path)
+    digest = _arrange_content_digest(tmp_path, spec_path)
+
+    root = tmp_path / "builds-root"
+    (root / "builds").mkdir(parents=True)
+    occupying_file = root / "builds" / digest
+    occupying_file.write_text("not a directory", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+
+    assert result.exit_code == 1
+    assert "Error:" in result.stderr
+    assert "not a directory" in result.stderr
+    # neither the occupying file nor latest.json is touched.
+    assert occupying_file.read_text(encoding="utf-8") == "not a directory"
+    assert not (root / "latest.json").exists()
+
+
+def test_arrange_builds_root_rejects_dangling_symlink_digest_target(tmp_path: Path) -> None:
+    spec_path = tmp_path / "arrangement.yaml"
+    _write_arrangement_spec(spec_path)
+    digest = _arrange_content_digest(tmp_path, spec_path)
+
+    root = tmp_path / "builds-root"
+    (root / "builds").mkdir(parents=True)
+    dangling_target = root / "builds" / digest
+    dangling_target.symlink_to(root / "builds" / "does-not-exist")
+
+    result = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+
+    assert result.exit_code == 1
+    assert "Error:" in result.stderr
+    assert "not a directory" in result.stderr
+    assert dangling_target.is_symlink()
+    assert not (root / "latest.json").exists()
+
+
+def test_arrange_builds_root_rejects_existing_directory_missing_descriptor(
+    tmp_path: Path,
+) -> None:
+    spec_path = tmp_path / "arrangement.yaml"
+    _write_arrangement_spec(spec_path)
+    digest = _arrange_content_digest(tmp_path, spec_path)
+
+    root = tmp_path / "builds-root"
+    digest_dir = root / "builds" / digest
+    digest_dir.mkdir(parents=True)
+    # deliberately does not contain arrangement_bundle.json.
+
+    result = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+
+    assert result.exit_code == 1
+    assert "Error:" in result.stderr
+    assert "missing or unreadable" in result.stderr
+    assert not (root / "latest.json").exists()
+
+
+def test_arrange_builds_root_republish_with_differing_provenance_updates_latest_with_note(
+    tmp_path: Path,
+) -> None:
+    """Same `content_digest` (derived_score/diff bytes unchanged) but a
+    byte-different `arrangement_bundle.json` (a different `arrangement_spec.path`
+    string for byte-identical spec content) must not be silently treated as an
+    identical republish: the digest directory is still left untouched, but the
+    stderr note says provenance differs, and `latest.json` is still updated."""
+    spec_path = tmp_path / "arrangement.yaml"
+    _write_arrangement_spec(spec_path)
+    root = tmp_path / "builds-root"
+
+    first = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+    assert first.exit_code == 0, first.output
+    digest_dir = next((root / "builds").iterdir())
+    original_files = {p.name: p.read_bytes() for p in digest_dir.iterdir()}
+
+    spec_path_copy = tmp_path / "arrangement_copy.yaml"
+    spec_path_copy.write_bytes(spec_path.read_bytes())
+
+    second = CliRunner().invoke(
+        app, _arrange_args(spec_path_copy, mode_flag="builds-root", mode_value=str(root))
+    )
+
+    assert second.exit_code == 0, second.output
+    assert "provenance differs from this invocation" in second.stderr
+    # existing digest directory is completely untouched.
+    assert {p.name: p.read_bytes() for p in digest_dir.iterdir()} == original_files
+    assert len(list((root / "builds").iterdir())) == 1
+    # latest.json is still updated (same digest either way).
+    latest = json.loads((root / "latest.json").read_text(encoding="utf-8"))
+    assert latest["content_digest"] == digest_dir.name
+
+
+def test_package_builds_root_rejects_non_directory_digest_target(tmp_path: Path) -> None:
+    """Same non-directory rejection, exercised through the `package` CLI wiring."""
+    manifest_path, spec_path = _write_package_fixture(tmp_path)
+
+    probe_root = tmp_path / "digest-probe"
+    probe = CliRunner().invoke(
+        app,
+        _package_args(
+            manifest_path, spec_path, mode_flag="builds-root", mode_value=str(probe_root)
+        ),
+    )
+    assert probe.exit_code == 0, probe.output
+    digest = next((probe_root / "builds").iterdir()).name
+
+    root = tmp_path / "builds-root"
+    (root / "builds").mkdir(parents=True)
+    occupying_file = root / "builds" / digest
+    occupying_file.write_text("not a directory", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        app,
+        _package_args(manifest_path, spec_path, mode_flag="builds-root", mode_value=str(root)),
+    )
+
+    assert result.exit_code == 1
+    assert "Error:" in result.stderr
+    assert "not a directory" in result.stderr
+    assert occupying_file.read_text(encoding="utf-8") == "not a directory"
+    assert not (root / "latest.json").exists()

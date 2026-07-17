@@ -464,17 +464,62 @@ def _reject_builds_root_input_collision(
             )
 
 
+def _check_existing_builds_root_publication(
+    target_dir: Path, descriptive_filename: str, pending_content: str
+) -> bool:
+    """Read-only consistency check for the immutable no-op publish path.
+
+    Reads the existing digest directory's one *descriptive* file
+    (`arrangement_bundle.json` for `arrange`, `compilation_report.json` for
+    `package` — the file that describes the whole publication, as opposed to
+    plain content outputs) exactly once and compares it byte-for-byte
+    against what this invocation would have published for that same
+    filename. Returns whether the existing publication's bytes differ from
+    this invocation's (i.e. same `content_digest`, differing
+    provenance/metadata that isn't part of the digest — see PR #184 review
+    Thread 1). Does not touch, rewrite, or re-verify anything else in the
+    directory (no full artifact rehash — that is left to a future `verify`
+    command).
+
+    Raises `ValueError` if the descriptive file is missing or unreadable: a
+    directory occupying this digest path that isn't a valid prior
+    publication must not be blessed by a `latest.json` update.
+    """
+    descriptive_path = target_dir / descriptive_filename
+    try:
+        existing_bytes = descriptive_path.read_bytes()
+    except OSError as exc:
+        raise ValueError(
+            f"builds-root digest directory {target_dir} is missing or unreadable "
+            f"descriptive file {descriptive_filename!r}: {exc}"
+        ) from exc
+    return existing_bytes != pending_content.encode("utf-8")
+
+
 def _publish_artifacts_to_builds_root(
     contents: dict[str, str],
     builds_root: str | Path,
     content_digest: str,
-) -> tuple[Path, bool]:
+    *,
+    descriptive_filename: str,
+) -> tuple[Path, bool, bool]:
     """Publish a complete artifact set under `<builds_root>/builds/<content_digest>/`.
 
-    Immutability contract (Design Memo §4): if the digest directory already
-    exists, it is left **completely untouched** — no overwrite, no append,
-    no re-verification — and only `latest.json` is updated to point at it.
-    Returns `(published_dir, already_existed)`.
+    Immutability contract (Design Memo §4, revised by PR #184 review): if the
+    digest directory already exists, its artifacts are never rewritten,
+    appended to, or fully re-verified — but a single read of its one
+    *descriptive* file (`descriptive_filename`) is compared against what this
+    invocation would have published, so a directory that merely happens to
+    exist at this digest path isn't blindly trusted (see
+    `_check_existing_builds_root_publication`). `latest.json` is updated only
+    when that check passes. Returns `(published_dir, already_existed,
+    provenance_differs)`.
+
+    An existing path that is not a directory (a regular file, a symlink to a
+    file, or a dangling symlink — anything other than a real directory) is
+    rejected outright rather than silently treated as "already published":
+    that would advertise a non-artifact-directory digest path as valid and
+    still move `latest.json` onto it.
 
     First publish: the full artifact set is written into a
     `tempfile.mkdtemp` staging directory under `<builds_root>/builds/`, then
@@ -483,9 +528,9 @@ def _publish_artifacts_to_builds_root(
     snapshot+per-file `os.replace` dance `_publish_artifacts_atomically`
     needs for the mutable `--output-dir` case — a fresh digest directory has
     no previous content to roll back to). A `rename` failure that turns out
-    to be a concurrent publish (the target now exists) is treated as the
-    immutable no-op case; any other failure propagates after best-effort
-    staging cleanup.
+    to be a concurrent publish (the target now exists *as a directory*) is
+    treated as the immutable no-op case; any other failure propagates after
+    best-effort staging cleanup.
     """
     import os
     import shutil
@@ -496,7 +541,14 @@ def _publish_artifacts_to_builds_root(
     target_dir = builds_dir / content_digest
     latest_path = root / "latest.json"
 
-    already_existed = target_dir.exists()
+    def _reject_if_not_directory() -> None:
+        if not target_dir.is_dir() and (target_dir.exists() or target_dir.is_symlink()):
+            raise ValueError(
+                f"builds-root digest target is not a directory: {target_dir}"
+            )
+
+    _reject_if_not_directory()
+    already_existed = target_dir.is_dir()
     if not already_existed:
         builds_dir.mkdir(parents=True, exist_ok=True)
         staging = tempfile.mkdtemp(dir=builds_dir)
@@ -507,7 +559,8 @@ def _publish_artifacts_to_builds_root(
             try:
                 os.rename(staging, target_dir)
             except OSError:
-                if target_dir.exists():
+                _reject_if_not_directory()
+                if target_dir.is_dir():
                     # Lost a concurrent-publish race: the directory some other
                     # process just published wins (immutability contract).
                     already_existed = True
@@ -517,8 +570,33 @@ def _publish_artifacts_to_builds_root(
             if Path(staging).exists():
                 shutil.rmtree(staging, ignore_errors=True)
 
+    provenance_differs = False
+    if already_existed:
+        provenance_differs = _check_existing_builds_root_publication(
+            target_dir, descriptive_filename, contents[descriptive_filename]
+        )
+
     _update_builds_latest_pointer(latest_path, content_digest, root=root)
-    return target_dir, already_existed
+    return target_dir, already_existed, provenance_differs
+
+
+def _print_builds_root_publish_note(
+    content_digest: str, *, already_existed: bool, provenance_differs: bool
+) -> None:
+    if not already_existed:
+        return
+    if provenance_differs:
+        typer.echo(
+            f"note: builds/{content_digest} already published; existing publication "
+            "retained; its provenance differs from this invocation (latest.json updated)",
+            err=True,
+        )
+    else:
+        typer.echo(
+            f"note: builds/{content_digest} already published; left untouched "
+            "(latest.json updated)",
+            err=True,
+        )
 
 
 @app.command()
@@ -580,18 +658,15 @@ def arrange(
         content_digest = compiled.bundle["content_digest"]
         try:
             _reject_builds_root_input_collision([score_yaml, arrangement_yaml], builds_root)
-            published_dir, already_existed = _publish_artifacts_to_builds_root(
-                contents, builds_root, content_digest
+            published_dir, already_existed, provenance_differs = _publish_artifacts_to_builds_root(
+                contents, builds_root, content_digest, descriptive_filename=BUNDLE_FILENAME
             )
         except (OSError, ValueError) as exc:
             typer.echo(f"Error: {exc}", err=True)
             raise typer.Exit(code=1) from exc
-        if already_existed:
-            typer.echo(
-                f"note: builds/{content_digest} already published; left untouched "
-                "(latest.json updated)",
-                err=True,
-            )
+        _print_builds_root_publish_note(
+            content_digest, already_existed=already_existed, provenance_differs=provenance_differs
+        )
         console.print(
             f"[green]Derived score saved to {published_dir / DERIVED_SCORE_FILENAME}[/green]"
         )
@@ -703,18 +778,18 @@ def package_command(
             _reject_builds_root_input_collision(
                 list(compiled.protected_input_paths), builds_root
             )
-            published_dir, already_existed = _publish_artifacts_to_builds_root(
-                contents, builds_root, content_digest
+            published_dir, already_existed, provenance_differs = _publish_artifacts_to_builds_root(
+                contents,
+                builds_root,
+                content_digest,
+                descriptive_filename=COMPILATION_REPORT_FILENAME,
             )
         except (OSError, ValueError) as exc:
             typer.echo(f"Error: {exc}", err=True)
             raise typer.Exit(code=1) from exc
-        if already_existed:
-            typer.echo(
-                f"note: builds/{content_digest} already published; left untouched "
-                "(latest.json updated)",
-                err=True,
-            )
+        _print_builds_root_publish_note(
+            content_digest, already_existed=already_existed, provenance_differs=provenance_differs
+        )
         console.print(
             "[green]Performance package saved to "
             f"{published_dir / PERFORMANCE_PACKAGE_FILENAME}[/green]"
