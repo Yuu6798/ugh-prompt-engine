@@ -1575,6 +1575,108 @@ def test_observe_cli_skips_snapshot_tempfile_when_no_wired_sensor_anchors(
     assert report["anchors"][0]["adherence_status"] == "not_observed"
 
 
+def test_observe_cli_reports_snapshot_mkstemp_oserror_cleanly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PR #187 review round 17: an `OSError` from the audio-snapshot
+    `tempfile.mkstemp` call (disk full, unwritable temp dir, etc.) must be
+    reported through the same "Error: ..." + exit 1 handling every other
+    failure path in this command uses, not escape as a raw traceback."""
+    pkg_dir = tmp_path / "pkg"
+    result = CliRunner().invoke(app, _cli_package_args(pkg_dir))
+    assert result.exit_code == 0, result.output
+
+    # `_write_observation_report_atomically` (round 6) also calls
+    # `tempfile.mkstemp` (always with `dir=`) — that call must be unaffected;
+    # only the audio-snapshot call (no `dir=`) fails here, and since it fails
+    # before any report is built, the report-write path is never reached.
+    original_mkstemp = tempfile.mkstemp
+
+    def failing_mkstemp(*args: Any, **kwargs: Any) -> Any:
+        if "dir" not in kwargs:
+            raise OSError("no space left on device (simulated)")
+        return original_mkstemp(*args, **kwargs)
+
+    monkeypatch.setattr("tempfile.mkstemp", failing_mkstemp)
+
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"unused-placeholder-audio-bytes")
+    report_path = tmp_path / "report.json"
+
+    result2 = CliRunner().invoke(
+        app,
+        [
+            "observe",
+            str(pkg_dir / "performance_package.json"),
+            str(audio_path),
+            "--manifest",
+            str(IDENTITY_MANIFEST),
+            "-o",
+            str(report_path),
+        ],
+    )
+
+    assert result2.exit_code == 1
+    assert result2.stderr.startswith("Error:")
+    assert "Traceback" not in result2.stderr
+    assert not report_path.exists()
+    # mkstemp itself never created a file, so there is nothing to leave behind.
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_observe_cli_reports_snapshot_write_oserror_cleanly_and_removes_temp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Companion case: `mkstemp` succeeds but the snapshot write itself
+    raises `OSError` (e.g. the disk fills mid-write) — same clean
+    Error+exit 1 handling, and the partially-written temp file is removed
+    (best-effort cleanup in the outer `finally`) rather than left behind."""
+    pkg_dir = tmp_path / "pkg"
+    result = CliRunner().invoke(app, _cli_package_args(pkg_dir))
+    assert result.exit_code == 0, result.output
+
+    created_paths: list[str] = []
+    original_mkstemp = tempfile.mkstemp
+
+    def capturing_mkstemp(*args: Any, **kwargs: Any) -> Any:
+        fd, name = original_mkstemp(*args, **kwargs)
+        if "dir" not in kwargs:
+            created_paths.append(name)
+        return fd, name
+
+    monkeypatch.setattr("tempfile.mkstemp", capturing_mkstemp)
+
+    def failing_fdopen(fd: int, *args: Any, **kwargs: Any) -> Any:
+        os.close(fd)
+        raise OSError("no space left on device (simulated, mid-write)")
+
+    monkeypatch.setattr("os.fdopen", failing_fdopen)
+
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"unused-placeholder-audio-bytes")
+    report_path = tmp_path / "report.json"
+
+    result2 = CliRunner().invoke(
+        app,
+        [
+            "observe",
+            str(pkg_dir / "performance_package.json"),
+            str(audio_path),
+            "--manifest",
+            str(IDENTITY_MANIFEST),
+            "-o",
+            str(report_path),
+        ],
+    )
+
+    assert result2.exit_code == 1
+    assert result2.stderr.startswith("Error:")
+    assert "Traceback" not in result2.stderr
+    assert not report_path.exists()
+    assert len(created_paths) == 1
+    assert not Path(created_paths[0]).exists()  # cleaned up in the outer `finally`
+
+
 # --- 5d. PR #187 review round 2: harmony artifact bytes reuse + schema fail-closed -
 
 

@@ -1553,10 +1553,24 @@ def observe_cmd(
             # `audio_path` in between (PR #187 review round 1).
             # `generated_artifact.path` in the report still reports the
             # user-supplied `audio` string, not this temp path.
-            snapshot_fd, snapshot_name = tempfile.mkstemp(suffix=audio_path.suffix or ".wav")
-            snapshot_path = Path(snapshot_name)
-            with os.fdopen(snapshot_fd, "wb") as snapshot_file:
-                snapshot_file.write(audio_bytes)
+            #
+            # PR #187 review round 17: `mkstemp` / the snapshot write can
+            # raise `OSError` (temp disk full, unwritable, etc.) — wrapped in
+            # the same "Error: ..." + exit 1 handling every other failure
+            # path in this command uses, instead of escaping as a raw
+            # traceback. `snapshot_path` is set immediately after `mkstemp`
+            # succeeds (before the write), so the outer `finally` still
+            # cleans up a partially-written temp file on a write failure.
+            try:
+                snapshot_fd, snapshot_name = tempfile.mkstemp(
+                    suffix=audio_path.suffix or ".wav"
+                )
+                snapshot_path = Path(snapshot_name)
+                with os.fdopen(snapshot_fd, "wb") as snapshot_file:
+                    snapshot_file.write(audio_bytes)
+            except OSError as exc:
+                typer.echo(f"Error: {exc}", err=True)
+                raise typer.Exit(code=1) from exc
             measurement_audio_path = snapshot_path
         else:
             measurement_audio_path = audio_path
