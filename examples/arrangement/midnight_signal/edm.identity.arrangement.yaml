@@ -1,0 +1,40 @@
+# P2 縦切り E2E: edm.arrangement.yaml + identity_anchors。#177 の byte-pin fixture
+# (edm.arrangement.yaml / expected/edm) を連鎖再生成させないため、identity 付き
+# 編曲 spec は別ファイルとして新設する（Design Memo D-1）。
+meta:
+  id: "midnight-signal-edm-identity"
+  version: "0.1"
+  description: >-
+    Midnight Signal を melodic EDM / progressive house へ編曲する variant
+    （edm.arrangement.yaml と同一の編曲方針）に、IdentityManifest の
+    lyrics / melody anchor を hard 保持で結び付ける縦切り E2E 用 variant。
+
+target:
+  semantic:
+    grv:
+      primary: "melodic_edm"
+      secondary: "progressive_house"
+    delta_e:
+      overall: "build into a vocal hook and instrumental drop"
+  physical:
+    bpm: 132
+    brightness: "bright"
+
+# identity anchor: 「同じ曲のまま編曲する」契約を preservation-only で明示する。
+# semantic.core と physical.key は target で override せず、hard で保持を宣言する。
+preservation:
+  score_fields:
+    semantic.core: hard
+    physical.key: hard
+    semantic.grv.primary: free
+    semantic.grv.secondary: free
+    semantic.delta_e.overall: elastic
+    physical.bpm: free
+    physical.brightness: free
+  identity_anchors:
+    lyrics:
+      mode: hard
+      allow: []
+    melody:
+      mode: hard
+      allow: []
