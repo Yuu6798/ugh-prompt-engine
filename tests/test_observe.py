@@ -485,6 +485,88 @@ def test_observe_harmony_trailing_internal_duplicate_reaches_preserved() -> None
     assert observation.determination == "exact_match"
 
 
+def test_cycle_alignment_degenerate_canonical_does_not_hang_and_diverging_chord_is_tail() -> (
+    None
+):
+    """PR #187 review round 8 (real hang bug): canonical=[C, C] collapses to a
+    single repeated chord — there is no *other* chord canonical ever
+    produces. Before the round-8 fix, the in-loop search for "the next
+    distinct canonical entry" had no bound and spun forever once the observed
+    sequence diverged (here: a second entry, G, that can never match
+    anything canonical produces). Bounded to one cycle's worth of steps
+    (`length`), the search now correctly gives up and treats the diverging
+    chord as the start of the unmatched tail instead of hanging."""
+    canonical = [("C", "major"), ("C", "major")]
+    matched_prefix_length, full_cycles = _cycle_alignment(
+        canonical, [("C", "major"), ("G", "major")]
+    )
+    # Pinned against the actual (fixed) implementation's behavior: the first
+    # "C" matches, then the search for a distinct entry to compare "G"
+    # against exhausts one full cycle without ever finding one, so matching
+    # stops there — "G" never gets compared and becomes the unmatched tail.
+    assert matched_prefix_length == 1
+    assert full_cycles == 1
+
+
+def test_cycle_alignment_degenerate_canonical_single_chord_prefix_is_one_cycle() -> None:
+    """Companion case: canonical=[C, C], observed=[C] alone. The round-4
+    trailing-duplicate skip (bounded the same way) consumes canonical's
+    second "C" after the match, so the single observed chord already counts
+    as one full (collapse-aware) cycle — pinned against the actual
+    implementation's behavior, per the round-8 review request."""
+    canonical = [("C", "major"), ("C", "major")]
+    matched_prefix_length, full_cycles = _cycle_alignment(canonical, [("C", "major")])
+    assert matched_prefix_length == 1
+    assert full_cycles == 1
+
+
+def test_observe_harmony_degenerate_canonical_diverging_chord_stays_deferred() -> None:
+    """End-to-end confirmation through `_observe_harmony`: the round-8 fix
+    must not change the *outcome* for this case, only stop it from hanging —
+    a diverging second observed chord against a single-chord-collapsed
+    canonical still isn't a full prefix match, so this stays `deferred`."""
+    anchor = _anchor("harmony", "harmony", "chord_progression.json", "chord_sequence_json")
+    canonical = [("C", "major"), ("C", "major")]
+    bundle = _bundle_with_chords([("C", "major"), ("G", "major")])
+    artifact_bytes = _chord_artifact_bytes(canonical)
+
+    observation = _observe_harmony(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        bundle=bundle,
+        artifact_bytes=artifact_bytes,
+    )
+
+    assert observation.measurements["collapsed_observed_length"] == 2
+    assert observation.measurements["matched_cycle_prefix_length"] == 1
+    assert observation.adherence_status == "not_observed"
+    assert observation.determination == "deferred"
+
+
+def test_observe_harmony_degenerate_canonical_single_chord_reaches_preserved() -> None:
+    """Companion end-to-end case: observed collapses to exactly canonical's
+    one distinct chord — a full prefix match with `full_cycles == 1` via the
+    trailing-duplicate skip, so this reaches `preserved`."""
+    anchor = _anchor("harmony", "harmony", "chord_progression.json", "chord_sequence_json")
+    canonical = [("C", "major"), ("C", "major")]
+    bundle = _bundle_with_chords([("C", "major")])
+    artifact_bytes = _chord_artifact_bytes(canonical)
+
+    observation = _observe_harmony(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        bundle=bundle,
+        artifact_bytes=artifact_bytes,
+    )
+
+    assert observation.measurements["collapsed_observed_length"] == 1
+    assert observation.measurements["matched_cycle_prefix_length"] == 1
+    assert observation.adherence_status == "preserved"
+    assert observation.determination == "exact_match"
+
+
 # --- 4. build_observation_report: single shared extraction + determinism ----------
 
 

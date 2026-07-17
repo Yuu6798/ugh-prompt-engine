@@ -233,9 +233,9 @@ def _cycle_alignment(
     `full_cycles`, not just the first raw position where that entry was
     found).
 
-    round 4 fix: the match loop's in-loop skip (the inner ``while True``)
-    only looks *forward* for the *next* distinct entry while searching for
-    it — it never looks past the *last* matched entry once the loop has
+    round 4 fix: the match loop's in-loop skip (searching for the *next*
+    distinct entry while looking past duplicates of the *previous* matched
+    entry) never looks past the *last* matched entry once the loop has
     already stopped (exhausted `collapsed_observed`, or about to mismatch).
     So a canonical progression with a trailing internal duplicate right after
     the last matched position (`[C, G, G]` matched by `[C, G]`) undercounted
@@ -244,6 +244,17 @@ def _cycle_alignment(
     once more, after the main loop, starting from wherever it left off —
     bounded to `length` steps so a degenerate all-identical `canonical` can't
     spin forever.
+
+    round 8 fix: the in-loop search for the *next distinct* canonical entry
+    (inside the per-observed-chord loop) had no such bound and could hang —
+    if `canonical` collapses to a single repeated chord (e.g. `[C, C]`), that
+    search never finds anything different from `last_chord` and loops
+    forever. It is now bounded to the same `length` steps the round-4
+    trailing skip already uses: if no distinct entry turns up within one full
+    cycle, the current `observed_chord` cannot possibly be explained by the
+    canonical alternation (there is nothing else `canonical` could ever
+    produce), so matching stops there and that chord starts the unmatched
+    tail — the same outcome an ordinary mismatch produces.
     """
     if not canonical or not collapsed_observed:
         return 0, 0
@@ -253,11 +264,16 @@ def _cycle_alignment(
     matched = 0
     matched_raw_index = 0
     for observed_chord in collapsed_observed:
-        while True:
+        found_distinct = False
+        expected_chord = last_chord
+        for _ in range(length):
             expected_chord = canonical[raw_index % length]
             raw_index += 1
             if expected_chord != last_chord:
+                found_distinct = True
                 break
+        if not found_distinct:
+            break
         if expected_chord != observed_chord:
             break
         last_chord = expected_chord
