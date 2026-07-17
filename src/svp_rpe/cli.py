@@ -1405,7 +1405,7 @@ def observe_cmd(
         IdentityManifestError,
         parse_identity_manifest_with_artifacts,
     )
-    from svp_rpe.arrange.observe import build_observation_report
+    from svp_rpe.arrange.observe import build_observation_report, is_harmony_sensor_anchor
     from svp_rpe.arrange.package import PerformancePackage
 
     package_path = Path(package_json)
@@ -1448,8 +1448,16 @@ def observe_cmd(
     # a manifest can hash-match the package's recorded sha256 and still be
     # malformed YAML, non-mapping, or schema-invalid content.
     try:
+        # Collect only the anchors the harmony sensor actually reads content
+        # for (PR #187 review round 11) — every anchor's bytes are still read
+        # once and hash-verified regardless, but bytes for anchors outside
+        # this predicate (e.g. a large `audio_excerpt` reference) are
+        # discarded immediately rather than held in `artifact_bytes_by_id`
+        # for the whole observe run. Widen `is_harmony_sensor_anchor` (in
+        # observe.py, shared with `_observe_anchor`'s routing) if a future
+        # sensor needs another anchor's bytes.
         loaded_manifest, artifact_bytes_by_id = parse_identity_manifest_with_artifacts(
-            manifest_bytes, manifest_path
+            manifest_bytes, manifest_path, collect=is_harmony_sensor_anchor
         )
     except (IdentityManifestError, ValueError, ValidationError, yaml.YAMLError) as exc:
         typer.echo(f"Error: {exc}", err=True)

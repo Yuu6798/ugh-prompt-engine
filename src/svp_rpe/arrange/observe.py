@@ -437,6 +437,24 @@ def _observe_unavailable(anchor: IdentityAnchor) -> AnchorObservation:
     )
 
 
+def is_harmony_sensor_anchor(anchor: IdentityAnchor) -> bool:
+    """Whether `anchor` is the (domain, artifact_type) pair the harmony
+    sensor actually reads content for — `domain == "harmony"` and
+    `artifact_type == "chord_sequence_json"` (PR #187 review round 5).
+
+    Exposed (not just inlined in `_observe_anchor`) so callers that need to
+    decide *which* anchors' artifact bytes are worth collecting ahead of time
+    — e.g. the CLI's `parse_identity_manifest_with_artifacts(..., collect=...)`
+    predicate (PR #187 review round 11) — share the exact same routing rule
+    instead of maintaining a second copy that could drift out of sync. If a
+    future PR wires a sensor for another (domain, artifact_type) pair, widen
+    (or replace) this predicate — and update both `_observe_anchor` and every
+    `collect=` call site that relies on it — rather than adding an
+    independent one.
+    """
+    return anchor.domain == "harmony" and anchor.artifact_type == "chord_sequence_json"
+
+
 def _observe_anchor(
     anchor: IdentityAnchor,
     *,
@@ -445,7 +463,7 @@ def _observe_anchor(
     bundle: RPEBundle,
     artifact_bytes_by_id: dict[str, bytes],
 ) -> AnchorObservation:
-    if anchor.domain == "harmony" and anchor.artifact_type == "chord_sequence_json":
+    if is_harmony_sensor_anchor(anchor):
         return _observe_harmony(
             anchor,
             manifest_dir=manifest_dir,

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Any, List, Literal, Optional
+from typing import Any, Callable, List, Literal, Optional
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -149,25 +149,42 @@ def parse_identity_manifest(raw_bytes: bytes, manifest_path: Path | str) -> Iden
 
     anchor artifact の中身（検証済み bytes）も必要な呼び出し側は
     `parse_identity_manifest_with_artifacts` を使うこと（本関数はその bytes を
-    破棄する薄いラッパー）。
+    一切保持しない薄いラッパー — `collect=None` で呼ぶため、各 anchor の bytes
+    は hash 照合直後に破棄され、O(total anchor bytes) のメモリを保持しない。
+    PR #187 review round 11: 大きな `audio_excerpt` 等を参照する manifest でも
+    manifest-only 経路にメモリスパイクを持ち込まない）。
     """
-    manifest, _artifact_bytes = parse_identity_manifest_with_artifacts(raw_bytes, manifest_path)
+    manifest, _artifact_bytes = parse_identity_manifest_with_artifacts(
+        raw_bytes, manifest_path, collect=None
+    )
     return manifest
 
 
 def parse_identity_manifest_with_artifacts(
-    raw_bytes: bytes, manifest_path: Path | str
+    raw_bytes: bytes,
+    manifest_path: Path | str,
+    *,
+    collect: Callable[[IdentityAnchor], bool] | None = None,
 ) -> tuple[IdentityManifest, dict[str, bytes]]:
-    """`parse_identity_manifest` と同じ検証を行い、加えて各 anchor の検証済み
-    artifact bytes（`anchor_id -> bytes`）も返す。
+    """`parse_identity_manifest` と同じ検証を行い、加えて `collect` が選んだ
+    anchor の検証済み artifact bytes（`anchor_id -> bytes`）を返す。
 
     この bytes は hash 照合のために既に読んだものと同一であり（`anchor` ループ
     内で 1 回だけ `_read_and_verify_artifact_hash` を呼ぶ — 二重実装ではなく
     `parse_identity_manifest` と共有する内部コア）、artifact の中身を必要とする
     呼び出し側（例: `svprpe observe` の harmony センサー）はこれを再利用すれば
-    ファイルを二度読まずに済む（PR #187 review round 2）。`source` artifact の
-    bytes はこの辞書に含めない（呼び出し側が必要としたことがないため — 必要に
-    なれば追補する）。
+    ファイルを二度読まずに済む（PR #187 review round 2）。
+
+    `collect`（PR #187 review round 11）は「戻り値の dict にどの anchor の
+    bytes を保持するか」を選ぶ述語で、**デフォルトの `None` は一切保持しない**
+    （hash 照合で読んだ bytes を anchor ごとに即座に破棄する — 呼び出し側が
+    artifact の中身を必要としない場合の既定挙動。大きな `audio_excerpt` 等を
+    参照する manifest で不要な O(total anchor bytes) のメモリ保持を避ける）。
+    `collect(anchor)` が True を返した anchor だけが戻り値の dict に入る
+    （例: `svprpe observe` は `is_harmony_sensor_anchor` を渡し、harmony
+    センサーが実際に中身を読む chord_sequence_json anchor のみ保持する）。
+    `source` artifact の bytes はこの dict の対象外のまま（呼び出し側が必要と
+    したことがないため — 必要になれば追補する）。
     """
     manifest_path = Path(manifest_path)
     data = _parse_yaml_mapping(raw_bytes, manifest_path)
@@ -192,12 +209,14 @@ def parse_identity_manifest_with_artifacts(
         artifact_path = _resolve_confined(
             anchor.artifact, base_dir, work_id=work_id, target=target
         )
-        artifact_bytes[anchor.id] = _read_and_verify_artifact_hash(
+        verified_bytes = _read_and_verify_artifact_hash(
             artifact_path,
             anchor.sha256,
             work_id=work_id,
             target=target,
         )
+        if collect is not None and collect(anchor):
+            artifact_bytes[anchor.id] = verified_bytes
 
     return manifest, artifact_bytes
 
