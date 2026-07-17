@@ -1,5 +1,5 @@
 {
-  "schema_version": "arrangement-bundle/0.1",
+  "schema_version": "arrangement-bundle/0.2",
   "arrangement_id": "midnight-signal-edm-v1",
   "source_score": {
     "path": "examples/arrangement/midnight_signal/composition_score.yaml",
@@ -42,7 +42,15 @@
     }
   ],
   "outputs": {
-    "derived_score": "derived_score.yaml",
-    "arrangement_diff": "arrangement_diff.json"
-  }
+    "derived_score": {
+      "path": "derived_score.yaml",
+      "sha256": "c52fcd34d5844e2d5a072a4b0ac73763a2d3631bf4a2dab293e3b29bec5b61b5"
+    },
+    "arrangement_diff": {
+      "path": "arrangement_diff.json",
+      "sha256": "75c3a956952a717bcc468ece40256f05f6c6715444ca81f2eef6dd94f9f37888"
+    }
+  },
+  "content_digest": "9ce4fbef90f040b2da9b5bba57a8245d5790025069cde6a2a0aedf23885adf0e",
+  "content_digest_basis": "sha256-of-canonical-json-artifact-name-to-sha256/v1"
 }

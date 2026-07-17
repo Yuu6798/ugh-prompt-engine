@@ -25,12 +25,17 @@ import するが、`compose` 側の型を参照することはない）。
 """
 from __future__ import annotations
 
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Literal, Optional
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
+from svp_rpe.arrange.pathsafe import (
+    PathConfinementError,
+    resolve_confined,
+    validate_relative_locator,
+)
 from svp_rpe.arrange.resolver import ArrangementError
 
 ChannelSupport = Literal["supported", "experimental", "unsupported", "unknown"]
@@ -172,24 +177,25 @@ def _validate_evidence_form(value: str, *, generator: str, channel: str) -> None
 
     symlink 経由の脱出は字面では判定できないため、`evidence_base` 明示時の
     `_resolve_confined_evidence`（resolve() ベース封じ込め）が捕捉する。
+
+    確認は共通 utility `arrange.pathsafe.validate_relative_locator` に委譲する
+    （item 15: path 検証共通化）。ここで捕捉した `PathConfinementError` を
+    既存の `InputCapabilityError` 型・既存メッセージ書式へ再送出するだけで、
+    挙動は移行前と完全に同一。
     """
-    if Path(value).is_absolute():
-        raise InputCapabilityError(
-            f"input capability profile '{generator}': channel '{channel}' evidence "
-            f"{value!r} must be a relative path inside the evidence base "
-            f"(absolute paths are not allowed)"
-        )
-    depth = 0
-    for part in PurePosixPath(value).parts:
-        if part == "..":
-            depth -= 1
-        elif part != ".":
-            depth += 1
-        if depth < 0:
+    try:
+        validate_relative_locator(value)
+    except PathConfinementError as exc:
+        if exc.reason == "absolute":
             raise InputCapabilityError(
                 f"input capability profile '{generator}': channel '{channel}' evidence "
-                f"{value!r} must not traverse above the evidence root"
-            )
+                f"{value!r} must be a relative path inside the evidence base "
+                f"(absolute paths are not allowed)"
+            ) from exc
+        raise InputCapabilityError(
+            f"input capability profile '{generator}': channel '{channel}' evidence "
+            f"{value!r} must not traverse above the evidence root"
+        ) from exc
 
 
 def _resolve_confined_evidence(
@@ -202,21 +208,23 @@ def _resolve_confined_evidence(
     `base_dir` 配下にないものは evidence_base 脱出として拒否する
     （identity.py の `_resolve_confined` と同型の可搬性契約: evidence は
     常に repo-root 相対）。
+
+    確認は共通 utility `arrange.pathsafe.resolve_confined` に委譲する
+    （item 15: path 検証共通化）。挙動・メッセージは移行前と完全に同一。
     """
-    if Path(value).is_absolute():
+    try:
+        return resolve_confined(value, base_dir)
+    except PathConfinementError as exc:
+        if exc.reason == "absolute":
+            raise InputCapabilityError(
+                f"input capability profile '{generator}': channel '{channel}' evidence "
+                f"{value!r} must be a relative path inside the evidence base "
+                f"(absolute paths are not allowed)"
+            ) from exc
         raise InputCapabilityError(
             f"input capability profile '{generator}': channel '{channel}' evidence "
-            f"{value!r} must be a relative path inside the evidence base "
-            f"(absolute paths are not allowed)"
-        )
-    base = base_dir.resolve()
-    resolved = (base / value).resolve()
-    if not resolved.is_relative_to(base):
-        raise InputCapabilityError(
-            f"input capability profile '{generator}': channel '{channel}' evidence "
-            f"{value!r} escapes the evidence base {base}: resolved to {resolved}"
-        )
-    return resolved
+            f"{value!r} escapes the evidence base {exc.base}: resolved to {exc.resolved}"
+        ) from exc
 
 
 def _load_yaml_mapping(path: Path) -> dict[str, Any]:

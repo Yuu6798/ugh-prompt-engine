@@ -154,6 +154,12 @@ chain で結ぶ。聴覚的同一性の判定条件と閾値は、その artifac
 | AR3-2 | PerformancePackage compiler | 実装済み |
 | AR4 | generated-output identity observation | 未実装 |
 
+2026-07-17: bundle/report に `content_digest`（内容指紋）と、
+`CompilationReport` 限定の `invocation_provenance.compiler`（実行環境の監査記録、
+digest からは除外）を追加し、`arrange` / `package` に opt-in の不変
+`--builds-root` 出力先を配線した。AR4 の生成後観測に先立つ、証跡・再現性の
+基盤整備であり、配送実証や聴覚的同一性の主張ではない。
+
 ## 7. 非目標
 
 - canonical `CompositionScore` への identity/capability/adherence 欄の追加

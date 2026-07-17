@@ -99,8 +99,10 @@ def test_bundle_sha256_and_paths_match_independent_recomputation(tmp_path: Path)
     assert result.exit_code == 0, result.output
 
     bundle = json.loads((output_dir / "arrangement_bundle.json").read_text(encoding="utf-8"))
+    derived_score_bytes = (output_dir / "derived_score.yaml").read_bytes()
+    diff_bytes = (output_dir / "arrangement_diff.json").read_bytes()
 
-    assert bundle["schema_version"] == "arrangement-bundle/0.1"
+    assert bundle["schema_version"] == "arrangement-bundle/0.2"
     assert bundle["arrangement_id"] == "arr-test"
     assert bundle["source_score"]["path"] == str(SAMPLE_PATH)
     assert bundle["source_score"]["sha256"] == hashlib.sha256(
@@ -110,10 +112,36 @@ def test_bundle_sha256_and_paths_match_independent_recomputation(tmp_path: Path)
     assert bundle["arrangement_spec"]["sha256"] == hashlib.sha256(
         spec_path.read_bytes()
     ).hexdigest()
+    # outputs は path + sha256 の構造化欄 (schema 0.2)。sha256 は「公開された
+    # バイト列そのもの」から独立に再計算した値と一致する（TOCTOU 先取りの規律）。
     assert bundle["outputs"] == {
-        "derived_score": "derived_score.yaml",
-        "arrangement_diff": "arrangement_diff.json",
+        "derived_score": {
+            "path": "derived_score.yaml",
+            "sha256": hashlib.sha256(derived_score_bytes).hexdigest(),
+        },
+        "arrangement_diff": {
+            "path": "arrangement_diff.json",
+            "sha256": hashlib.sha256(diff_bytes).hexdigest(),
+        },
     }
+    # content_digest は outputs の sha256 の canonical JSON に対する sha256
+    # （bundle 自身は自己参照できないため outputs のみが対象）。
+    expected_content_digest = hashlib.sha256(
+        json.dumps(
+            {
+                "derived_score.yaml": hashlib.sha256(derived_score_bytes).hexdigest(),
+                "arrangement_diff.json": hashlib.sha256(diff_bytes).hexdigest(),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    assert bundle["content_digest"] == expected_content_digest
+    assert (
+        bundle["content_digest_basis"]
+        == "sha256-of-canonical-json-artifact-name-to-sha256/v1"
+    )
     # output_dir が bundle 内に埋め込まれていないこと（bare filename のみ）。
     assert str(output_dir) not in json.dumps(bundle)
 

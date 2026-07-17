@@ -92,7 +92,7 @@ is omitted when unset; `negative_tags` by contrast is always present as a
 list). Machine consumers should treat a missing
 `section_tags` key as "no tags", not check for `null`.
 
-### `svprpe arrange <composition_score.yaml> <arrangement.yaml> --output-dir <dir>`
+### `svprpe arrange <composition_score.yaml> <arrangement.yaml> (--output-dir <dir> | --builds-root <dir>)`
 
 Resolve an `ArrangementSpec` (AR1-1: `src/svp_rpe/arrange/`) against a base
 Composition Score and write the derived score plus a provenance bundle:
@@ -105,9 +105,11 @@ Writes exactly three files under `--output-dir`:
 
 - `derived_score.yaml` — the resolved `CompositionScore` (loader-valid, reloadable
   via `load_composition_score`)
-- `arrangement_bundle.json` — `schema_version: "arrangement-bundle/0.1"`,
+- `arrangement_bundle.json` — `schema_version: "arrangement-bundle/0.2"`,
   `arrangement_id`, `source_score`/`arrangement_spec` (`path` + SHA-256 of the raw
-  input bytes), `changes`, and `outputs` (bare filenames only)
+  input bytes), `changes`, `outputs` (each a `{path, sha256}` object — the SHA-256
+  is computed from the exact bytes published for that file), and
+  `content_digest`/`content_digest_basis` (see below)
 - `arrangement_diff.json` — `schema_version: "arrangement-diff/0.1"`,
   `arrangement_id`, and the same `changes` as the bundle
 
@@ -119,7 +121,103 @@ stderr). Given the same inputs and arguments, repeated runs produce
 byte-identical output regardless of `--output-dir`. The derived score can be
 fed straight back into `svprpe compose`.
 
-### `svprpe package <score.yaml> <identity.yaml> <arrangement.yaml> --capability-profile <profile.yaml> --output-dir <dir>`
+`content_digest` is `sha256(canonical_json({artifact_name: sha256_hex, ...}))`
+over `outputs` only (the bundle cannot hash itself, same reasoning as
+`package_sha256` below); `content_digest_basis` names that definition
+(`"sha256-of-canonical-json-artifact-name-to-sha256/v1"`) so a consumer can
+tell which hashing convention produced it. It intentionally carries no
+execution-environment information (see `--builds-root` and `package`'s
+`invocation_provenance` below).
+
+`--output-dir` and `--builds-root` are mutually exclusive; exactly one is
+required (both given or both omitted exits `2`). `--builds-root <root>`
+publishes the same three artifacts to `<root>/builds/<content_digest>/`
+instead, and updates `<root>/latest.json` (`schema_version:
+"builds-latest/0.1"`, `{"content_digest": "<64hex>"}`) to point at it. Before
+anything is written, a preflight rejects `<root>/latest.json` unless it is
+either absent or a plain, non-symlink file (exit `1`, nothing under
+`builds/` touched) — the one path this scheme ever overwrites must not be a
+directory or a symlink — and likewise rejects `<root>/builds` itself if it
+is a symlink (any target, including a real directory), since every digest
+directory lives under it; `<root>` (the `--builds-root` argument) is a
+caller-supplied path like `--output-dir` and is not subject to this check —
+a symlinked `builds_root` publishes normally. A digest directory is **immutable**: if `<root>/builds/<content_digest>/`
+already exists as a directory from a previous run, its artifacts are never
+overwritten, appended to, or repaired — but before `latest.json` may be moved
+onto it (before the directory is "blessed"), its one *descriptive* file
+(`arrangement_bundle.json`) is read once and compared byte-for-byte against
+what this invocation would have published for that filename, so a directory
+that merely happens to occupy this digest path isn't blindly trusted. If
+that file is missing or unreadable, the run fails (exit `1`, `latest.json`
+left untouched) rather than treating the directory as a valid prior
+publication. Re-running an identical build (first-publish-wins: the existing
+bytes match) prints an "already published" advisory and exits `0` with the
+directory untouched; because `content_digest` covers only
+`derived_score.yaml` + `arrangement_diff.json`, a same-digest rebuild whose
+recorded provenance differs (e.g. the same `arrangement.yaml` referenced via
+a different path) is *also* left untouched but gets a distinct "provenance
+differs from this invocation" advisory instead — the first publication's
+provenance always wins, `latest.json` still moves to point at it. A byte
+difference is only accepted as provenance drift after the existing descriptor
+proves self-consistent: it must parse as JSON, declare this directory's
+current `schema_version` and `content_digest`, and recompute to that same
+digest from its own recorded output hashes — otherwise the run fails (exit
+`1`, `latest.json` untouched). Either way — byte-identical or provenance
+drift accepted after the four descriptor checks — blessing the directory
+also means every content artifact the descriptor declares
+(`derived_score.yaml` + `arrangement_diff.json`) is confirmed to exist and
+hash to its declared value; a descriptor whose bytes are pristine (or
+otherwise self-consistent) does not by itself prove the directory around it
+is still intact, so this check runs even on the byte-identical fast path. If
+`<root>/builds/<content_digest>` already exists as something other than a
+*real, non-symlink* directory (a plain file, any symlink — including one
+pointing at an otherwise-valid directory — or a dangling symlink), the run
+fails outright (exit `1`, `latest.json` left untouched) rather than treating
+it as published. The descriptor and every declared content artifact are held
+to the same rule one level down: each is rejected outright if it is a
+symlink (regardless of what it resolves to — even a symlink to an
+otherwise byte-identical file) or any non-regular-file entity, *before* it
+is ever read. A byte difference in the descriptor is only accepted as
+provenance drift after it proves self-consistent: it must parse as JSON,
+declare this directory's current `schema_version`, **pass full schema
+validation** (nested shapes, `sha256`/`schema_version` patterns, and unknown
+top-level keys — `arrange`'s bundle validates against a reader-only
+`ArrangementBundleDescriptor` model built for exactly this check;
+`package`'s report reuses `CompilationReport` itself), declare this
+directory's `content_digest`, recompute to that same digest from its own
+recorded output hashes, *and* differ from this invocation's own descriptor
+in only a small whitelist of top-level fields (`source_score` /
+`arrangement_spec` for `arrange`'s bundle) — every other field
+(`arrangement_id`, `changes`, `outputs`, `content_digest_basis`, etc.) must
+match exactly, since fields like `arrangement_id` and `changes` aren't part
+of `content_digest` at all and a tampered value there must not be waved
+through as mere provenance just because the digest still happens to match.
+A whitelisted field being present doesn't exempt it from schema validation
+either: a legitimately-drifting `inputs` or `invocation_provenance` must
+still be the right shape, not merely a differing value of any type. Any of
+these checks failing fails the run (exit `1`, `latest.json` untouched).
+Re-running with different
+inputs that resolve to a different `content_digest` publishes a sibling
+directory; older digest directories are never pruned. Blessing therefore
+means "descriptor schema-valid and self-consistent (including its
+provenance-only fields) + every declared output present, non-symlinked, and
+hash-matching" — a digest
+directory `latest.json` points at is a complete publication matching its own
+bookkeeping, though this is still not a full audit (it never rehashes
+undeclared files or recurses beyond what the descriptor lists, and nothing in
+the directory is ever rewritten); an independent, fully recursive audit is
+left to a future `verify`-style command.
+
+If a first publish writes its artifacts successfully but the trailing
+`latest.json` update itself then fails, the freshly published digest
+directory is **not** rolled back — it is already a complete, valid
+publication, and deleting it would violate the immutability contract for no
+benefit. The command still fails on that run, but the digest directory
+self-heals `latest.json` on its own: a subsequent identical invocation finds
+it via the already-published no-op path and retries the pointer update, with
+no separate repair step.
+
+### `svprpe package <score.yaml> <identity.yaml> <arrangement.yaml> --capability-profile <profile.yaml> (--output-dir <dir> | --builds-root <dir>)`
 
 Compile a `PreservationContract` inline, match every requested identity anchor
 against the generator's `InputCapabilityProfile`, and write the deterministic
@@ -160,9 +258,78 @@ Advisory mode is the default and records capability warnings. Add
 `--strict-capabilities` to fail when any hard anchor is `unsupported` or
 `unknown`; hard anchors on experimental but usable channels remain deliverable.
 Both JSON files are constructed before publication and are published together
-with rollback on failure. `compilation_report.json` pins the exact published
-package bytes with `package_sha256`; neither output contains timestamps,
-absolute paths, or the output directory.
+with rollback on failure. `compilation_report.json` (`schema_version:
+"compilation-report/0.2"`) pins the exact published package bytes with
+`package_sha256`; neither output contains timestamps, absolute paths, or the
+output directory.
+
+`compilation_report.json` also carries `content_digest` /
+`content_digest_basis` (same definition as `arrange`'s bundle:
+`sha256(canonical_json({"performance_package.json": package_sha256}))`, basis
+`"sha256-of-canonical-json-artifact-name-to-sha256/v1"`) and a separate
+`invocation_provenance.compiler` block —
+`{"package_version": "<installed svp-rpe version or null>", "git_commit":
+"<40hex checkout HEAD or null>"}`. The split is deliberate: `content_digest`
+answers "does this content reproduce" (same inputs + same compiler behavior
+→ same digest) and is used as the `--builds-root` publish key;
+`invocation_provenance` answers "what environment produced this run" and is
+excluded from the digest so it never causes a rebuild to publish under a
+different directory. Both fields degrade to `null` rather than being
+fabricated (installed/wheel environment with no dist-info, no `git`, not a
+checkout, or any detection failure) — this also means `git_commit` cannot
+distinguish a dirty working tree from a clean checkout at that commit.
+
+`--output-dir` and `--builds-root` are mutually exclusive; exactly one is
+required (both given or both omitted exits `2`). `--builds-root <root>`
+publishes `performance_package.json` + `compilation_report.json` to
+`<root>/builds/<content_digest>/` and updates `<root>/latest.json`
+(`schema_version: "builds-latest/0.1"`) to point at it, with the same
+immutable-digest-directory / mutable-`latest.json` contract described for
+`arrange` above — here the one *descriptive* file read back for the
+byte-for-byte no-op check is `compilation_report.json` (first-publish-wins:
+an already-published digest directory is left untouched; only `latest.json`
+moves, with an "already published" advisory on exit `0`, or a "provenance
+differs from this invocation" advisory if this run's `compilation_report.json`
+bytes differ from the one already on disk for that digest — `content_digest`
+covers only `performance_package.json`, so `invocation_provenance` drift alone
+lands here). Because re-running with a stale checkout's inputs after an
+implementation change still reproduces the same `content_digest`, publishing
+never mutates a digest directory's `invocation_provenance` to match a newer
+compiler run — that is the immutability contract's direct consequence, not a
+bug. Blessing an existing digest directory with `latest.json` here also
+verifies `performance_package.json` itself is present, non-symlinked, and
+hashes to what `compilation_report.json` declares, on the same terms as
+`arrange`'s `derived_score.yaml` + `arrangement_diff.json` check above; the
+provenance-only whitelist for `compilation_report.json` is `inputs`,
+`invocation_provenance`, and `mode` — every other top-level field (`work_id`,
+`generator`, `package_sha256`, `content_digest`, `warnings`, etc.) must match
+exactly even when the descriptor bytes otherwise differ. `warnings` is
+deliberately *not* whitelisted: every warning `build_performance_package`
+emits is a pure function of facts already baked into
+`performance_package.json` bytes (channel support / anchor delivery status),
+so a matching `package_sha256` implies matching `warnings` — device-profile
+advisories are a separate stderr-only channel that never lands in
+`warnings` (#128) — so a `warnings` difference here is a tamper signal, not
+invocation drift. `inputs`, by contrast, stays whitelisted: it records
+input-file byte hashes, the same category of invocation provenance
+`invocation_provenance.compiler.git_commit` already is, and requiring it to
+match exactly would reject legitimate re-runs where a parse-equivalent but
+differently formatted input produces the same package under a different
+input-file hash.
+
+Because `--builds-root`'s locator computation stands in for the not-yet-known
+`content_digest` with a reserved, same-depth placeholder directory
+(`<root>/builds/<64 zeros>/`; see the `artifact_base.locator` note above), an
+identity-manifest artifact that happens to actually live inside that reserved
+subtree is rejected before publication (exit `1`) — the locator computed
+against the placeholder would not describe where the artifact ends up
+relative to the real (differently-named) digest directory. A real, already
+published digest directory is not similarly reserved and is never rejected.
+The placeholder path itself is also rejected outright if it is a symlink
+(exit `1`, before compilation even starts) — resolving it would compute the
+locator relative to wherever the symlink actually points rather than the
+reserved placeholder path; a real directory sitting at the placeholder path
+is fine (same depth, so the locator is still correct) and is not rejected.
 
 ### `svprpe measure <audio>`
 

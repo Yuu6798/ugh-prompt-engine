@@ -1,5 +1,5 @@
 {
-  "schema_version": "arrangement-bundle/0.1",
+  "schema_version": "arrangement-bundle/0.2",
   "arrangement_id": "midnight-signal-jazz-v1",
   "source_score": {
     "path": "examples/arrangement/midnight_signal/composition_score.yaml",
@@ -48,7 +48,15 @@
     }
   ],
   "outputs": {
-    "derived_score": "derived_score.yaml",
-    "arrangement_diff": "arrangement_diff.json"
-  }
+    "derived_score": {
+      "path": "derived_score.yaml",
+      "sha256": "e7b0e470818e33c419fbf0b17dc9c0ed1bbaeb07f622c700937ab3befe8e61d2"
+    },
+    "arrangement_diff": {
+      "path": "arrangement_diff.json",
+      "sha256": "ef8abc0e79f0adf1f61f7224b75a6acc24dc4fa37f6dd65eb4d39a6a56b281f2"
+    }
+  },
+  "content_digest": "4c38c41ca78b8f96b3ec61af81e58c49f4b72fd74ac10b3f66fc4c7a8928cc36",
+  "content_digest_basis": "sha256-of-canonical-json-artifact-name-to-sha256/v1"
 }

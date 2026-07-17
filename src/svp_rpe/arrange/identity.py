@@ -23,6 +23,7 @@ from typing import Any, List, Literal, Optional
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from svp_rpe.arrange.pathsafe import PathConfinementError, resolve_confined
 from svp_rpe.arrange.resolver import ArrangementError
 
 AnchorDomain = Literal["lyrics", "melody", "harmony", "rhythm", "structure", "motif"]
@@ -172,20 +173,26 @@ def _resolve_confined(value: str, base_dir: Path, *, work_id: str, target: str) 
     `resolve()` は `../` と symlink の両方を追うため、解決後のパスが
     `base_dir` 配下にないものは manifest ディレクトリ脱出として拒否する
     （manifest の可搬性契約: artifact は常に親ディレクトリ相対）。
+
+    確認は共通 utility `arrange.pathsafe.resolve_confined` に委譲する
+    （item 15: path 検証共通化）。本関数はここで捕捉した
+    `PathConfinementError` を既存の `IdentityManifestError` 型・既存メッセージ
+    書式へ再送出するだけで、挙動は移行前と完全に同一（lexical 深さカウンタは
+    このパスに追加しない — 追加すると traversal 系の失敗タイミング/メッセージが
+    変わり、挙動保存の契約に反する）。
     """
-    if Path(value).is_absolute():
-        raise IdentityManifestError(
-            f"identity manifest '{work_id}': {target} path {value!r} must be a "
-            f"relative path inside the manifest directory (absolute paths are not allowed)"
-        )
-    base = base_dir.resolve()
-    resolved = (base / value).resolve()
-    if not resolved.is_relative_to(base):
+    try:
+        return resolve_confined(value, base_dir)
+    except PathConfinementError as exc:
+        if exc.reason == "absolute":
+            raise IdentityManifestError(
+                f"identity manifest '{work_id}': {target} path {value!r} must be a "
+                f"relative path inside the manifest directory (absolute paths are not allowed)"
+            ) from exc
         raise IdentityManifestError(
             f"identity manifest '{work_id}': {target} path {value!r} escapes the "
-            f"manifest directory {base}: resolved to {resolved}"
-        )
-    return resolved
+            f"manifest directory {exc.base}: resolved to {exc.resolved}"
+        ) from exc
 
 
 def _verify_artifact_hash(
