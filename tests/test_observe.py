@@ -164,6 +164,60 @@ def test_anchor_observation_rejects_invalid_determination() -> None:
         )
 
 
+def test_anchor_observation_rejects_status_outside_0_1_vocabulary() -> None:
+    """PR #187 review round 12: observation-report/0.1 only ever emits
+    `preserved` / `not_observed`. `changed_outside_policy` is part of
+    package.py's wider 5-value `AdherenceStatus` (a future
+    observation-report/0.2 vocabulary, once a threshold Design Memo defines
+    it) and must be rejected on read-back, not silently accepted from a
+    tampered or hand-authored sidecar."""
+    with pytest.raises(ValidationError):
+        AnchorObservation.model_validate(
+            {
+                "anchor_id": "a",
+                "domain": "harmony",
+                "sensor": {"name": "x", "available": True},
+                "measurements": {},
+                "adherence_status": "changed_outside_policy",
+                "determination": "deferred",
+            }
+        )
+
+
+def test_anchor_observation_rejects_preserved_paired_with_deferred() -> None:
+    """The round-12 pairing validator: `adherence_status` and
+    `determination` must agree on which D-1 branch produced this
+    observation — `preserved` requires `exact_match`."""
+    with pytest.raises(ValidationError):
+        AnchorObservation.model_validate(
+            {
+                "anchor_id": "a",
+                "domain": "harmony",
+                "sensor": {"name": "x", "available": True},
+                "measurements": {},
+                "adherence_status": "preserved",
+                "determination": "deferred",
+            }
+        )
+
+
+def test_anchor_observation_rejects_not_observed_paired_with_exact_match() -> None:
+    """Contrast case: `not_observed` requires `determination` in
+    `("no_sensor", "deferred")` — pairing it with `exact_match` is rejected
+    the same way."""
+    with pytest.raises(ValidationError):
+        AnchorObservation.model_validate(
+            {
+                "anchor_id": "a",
+                "domain": "harmony",
+                "sensor": {"name": "x", "available": True},
+                "measurements": {},
+                "adherence_status": "not_observed",
+                "determination": "exact_match",
+            }
+        )
+
+
 def test_generated_artifact_ref_requires_64_hex_sha256() -> None:
     GeneratedArtifactRef(path="a.wav", sha256="0" * 64)
     with pytest.raises(ValidationError):
@@ -725,6 +779,47 @@ def test_build_observation_report_is_byte_deterministic(monkeypatch: pytest.Monk
     assert json.dumps(first.model_dump(mode="json"), sort_keys=True) == json.dumps(
         second.model_dump(mode="json"), sort_keys=True
     )
+
+
+def test_build_observation_report_skips_extraction_when_no_wired_sensor_anchors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PR #187 review round 12's extraction gate: if no manifest anchor
+    matches a wired sensor's (domain, artifact_type) predicate — here, a
+    manifest with only lyrics/melody anchors and no harmony anchor at all —
+    `extract_rpe_from_file` must never be called. The generated audio's
+    content is irrelevant to a report that's entirely `no_sensor`; only its
+    already-computed sha256 (passed in separately) is recorded."""
+
+    def fail_extract(path: str) -> RPEBundle:
+        raise AssertionError(
+            "extract_rpe_from_file must not be called when no anchor needs a wired sensor"
+        )
+
+    monkeypatch.setattr("svp_rpe.arrange.observe.extract_rpe_from_file", fail_extract)
+
+    manifest_data = _minimal_manifest().model_dump(mode="json")
+    manifest_data["anchors"] = [
+        anchor_data
+        for anchor_data in manifest_data["anchors"]
+        if anchor_data["domain"] != "harmony"
+    ]
+    manifest = IdentityManifest.model_validate(manifest_data)
+
+    report = build_observation_report(
+        package=_fake_package(),
+        manifest=manifest,
+        manifest_path=IDENTITY_MANIFEST,
+        artifact_bytes={},
+        audio_path=Path("unused.wav"),
+        package_sha256="a" * 64,
+        audio_sha256="b" * 64,
+        generated_artifact_path="unused.wav",
+    )
+
+    assert [anchor.anchor_id for anchor in report.anchors] == ["lyrics", "melody"]
+    assert all(anchor.determination == "no_sensor" for anchor in report.anchors)
+    assert all(anchor.adherence_status == "not_observed" for anchor in report.anchors)
 
 
 # --- 5. CLI D-3 provenance chain: negative paths (no audio needed — fail first) ----

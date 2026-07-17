@@ -69,7 +69,7 @@ import json
 from pathlib import Path
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from svp_rpe.arrange.identity import (
     AnchorDomain,
@@ -78,7 +78,7 @@ from svp_rpe.arrange.identity import (
     _resolve_confined,
 )
 from svp_rpe.arrange.models import JsonValue
-from svp_rpe.arrange.package import AdherenceStatus, PerformancePackage
+from svp_rpe.arrange.package import PerformancePackage
 from svp_rpe.compose.models import ChordSpec
 from svp_rpe.roundtrip.compare import (
     chord_sequence_match_rate,
@@ -91,6 +91,21 @@ OBSERVATION_REPORT_SCHEMA_VERSION = "observation-report/0.1"
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 
 Determination = Literal["exact_match", "deferred", "no_sensor"]
+
+# observation-report/0.1 versioning policy (PR #187 review round 12): this
+# schema version only narrows to the 2 status values D-1's 3 branches can
+# actually emit today. `package.py`'s `AdherenceStatus` (5 values:
+# preserved / changed_within_policy / changed_outside_policy / sensor_blind /
+# not_observed) is the wider *generation-delivery* vocabulary — reusing it
+# here left 3 values this instrument never publishes (changed_within_policy,
+# changed_outside_policy, sensor_blind) sitting dead in the schema, readable
+# as if a fixture-tampered or hand-authored sidecar could legitimately carry
+# them. `changed_*` is out of scope until a future threshold Design Memo
+# defines it (D-1), and `sensor_blind`'s automatic determination is likewise
+# deferred (D-1) — both are reserved for a future `observation-report/0.2`
+# once that Memo lands, not silently accepted now. `package.py`'s own
+# `AdherenceStatus` is unaffected — this narrowing is local to the sidecar.
+ObservationAdherenceStatus = Literal["preserved", "not_observed"]
 
 # D-4: lyrics / melody はこの PR ではセンサー本体を配線しない（optional extra
 # 依存）。sensor 名 + 不在理由（将来の接続点込み）のみ固定で記録する。
@@ -137,9 +152,33 @@ class AnchorObservation(ObserveModel):
     domain: AnchorDomain
     sensor: SensorRecord
     measurements: dict[str, JsonValue] = Field(default_factory=dict)
-    adherence_status: AdherenceStatus
+    adherence_status: ObservationAdherenceStatus
     determination: Determination
     note: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _validate_status_determination_pair(self) -> "AnchorObservation":
+        """Fail-closed pairing enforcement (PR #187 review round 12): a
+        tampered or hand-authored sidecar (or a future code path) must not be
+        able to read back as, say, `adherence_status="preserved"` paired with
+        `determination="deferred"` — the two fields must agree on which D-1
+        branch produced this observation, on write *and* on read-back
+        (`model_validate` re-runs this too, since it's an `AnchorObservation`
+        field validator, not a builder-only check)."""
+        if self.adherence_status == "preserved" and self.determination != "exact_match":
+            raise ValueError(
+                "AnchorObservation: adherence_status='preserved' requires "
+                f"determination='exact_match', got {self.determination!r}"
+            )
+        if self.adherence_status == "not_observed" and self.determination not in (
+            "no_sensor",
+            "deferred",
+        ):
+            raise ValueError(
+                "AnchorObservation: adherence_status='not_observed' requires "
+                f"determination in ('no_sensor', 'deferred'), got {self.determination!r}"
+            )
+        return self
 
 
 class ObservationReport(ObserveModel):
@@ -460,10 +499,15 @@ def _observe_anchor(
     *,
     manifest_dir: Path,
     work_id: str,
-    bundle: RPEBundle,
+    bundle: Optional[RPEBundle],
     artifact_bytes_by_id: dict[str, bytes],
 ) -> AnchorObservation:
     if is_harmony_sensor_anchor(anchor):
+        # `build_observation_report` only extracts (and passes a non-None
+        # bundle) when at least one manifest anchor matches this exact
+        # predicate (PR #187 review round 12's extraction gate) — so if
+        # we're in this branch, `bundle` is guaranteed to be set.
+        assert bundle is not None
         return _observe_harmony(
             anchor,
             manifest_dir=manifest_dir,
@@ -495,9 +539,17 @@ def build_observation_report(
     の戻り値）を渡す — anchor artifact をここで再度読むことはない
     （harmony センサーが `anchor_id -> bytes` で参照する。PR #187 review
     round 2）。
+
+    抽出は gate 化する（PR #187 review round 12）: 配線済みセンサーが実際に
+    測定する anchor（``is_harmony_sensor_anchor`` — `_observe_anchor` の
+    routing と同じ述語。二重定義しない）が manifest 中に 1 つも無ければ
+    ``extract_rpe_from_file`` を一切呼ばない。音声は provenance のため既に
+    hash 済みであり、全 anchor が no_sensor の report にとって中身の decode は
+    不要な作業（かつコスト）だからである。
     """
-    bundle = extract_rpe_from_file(str(audio_path))
     manifest_dir = Path(manifest_path).resolve().parent
+    needs_extraction = any(is_harmony_sensor_anchor(anchor) for anchor in manifest.anchors)
+    bundle = extract_rpe_from_file(str(audio_path)) if needs_extraction else None
     anchors = [
         _observe_anchor(
             anchor,
