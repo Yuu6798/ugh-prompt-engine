@@ -1334,6 +1334,35 @@ def _reject_observe_output_collision(output_path: str | Path, input_paths: list[
                 )
 
 
+def _write_observation_report_atomically(output_path: Path, content: str) -> None:
+    """Publish `output_path` via staging file + `os.replace` (PR #187 review
+    round 6), the same minimal pattern `_update_builds_latest_pointer` uses
+    for `latest.json`: write to a tempfile in the same directory, then
+    atomically rename it onto the target. A partially-written report must
+    never be observable as a complete one, whether the process is
+    interrupted mid-write or an existing report is being overwritten (D-1's
+    own instrument still needs its own output to be trustworthy). Any
+    failure cleans up the staging file on a best-effort basis (its own
+    unlink failure is swallowed) before re-raising.
+    """
+    import os
+    import tempfile
+
+    output_dir = output_path.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=output_dir, prefix=f"{output_path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        os.replace(tmp_name, output_path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
 @app.command("observe")
 def observe_cmd(
     package_json: str = typer.Argument(..., help="Path to performance_package.json"),
@@ -1369,6 +1398,7 @@ def observe_cmd(
     import os
     import tempfile
 
+    import yaml
     from pydantic import ValidationError
 
     from svp_rpe.arrange.identity import (
@@ -1413,12 +1443,15 @@ def observe_cmd(
     # manifest file itself is never read a second time (PR #187 review round 1).
     # `artifact_bytes_by_id` carries each anchor artifact's already-verified
     # bytes (same read the hash check performed) so the harmony sensor doesn't
-    # reopen the file either (PR #187 review round 2).
+    # reopen the file either (PR #187 review round 2). The exception set below
+    # matches `package`'s own manifest-parsing catch (PR #187 review round 6):
+    # a manifest can hash-match the package's recorded sha256 and still be
+    # malformed YAML, non-mapping, or schema-invalid content.
     try:
         loaded_manifest, artifact_bytes_by_id = parse_identity_manifest_with_artifacts(
             manifest_bytes, manifest_path
         )
-    except IdentityManifestError as exc:
+    except (IdentityManifestError, ValueError, ValidationError, yaml.YAMLError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
@@ -1468,7 +1501,11 @@ def observe_cmd(
         snapshot_path.unlink(missing_ok=True)
 
     content = json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2)
-    Path(output).write_text(content, encoding="utf-8")
+    try:
+        _write_observation_report_atomically(Path(output), content)
+    except OSError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
 
     table = Table(title=f"Observation: {package.work_id}")
     table.add_column("anchor_id")

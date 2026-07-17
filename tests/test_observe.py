@@ -639,6 +639,92 @@ def _build_scratch_identity_dir(tmp_path: Path, *, chord_artifact_bytes: bytes) 
     return manifest_path
 
 
+def _package_with_patched_manifest_sha256(pkg_dir: Path, manifest_sha256: str) -> Path:
+    """Build a normal, validly-compiled package, then hand-patch its recorded
+    `inputs.identity_manifest.sha256` to `manifest_sha256`.
+
+    Used to make the D-3 sha256 check pass against a manifest file that could
+    never have been validly compiled through `package` in the first place
+    (because its content is deliberately malformed/schema-invalid) — this
+    isolates the failure under test to the manifest *parse* step, not the
+    earlier sha256-mismatch check."""
+    result = CliRunner().invoke(app, _cli_package_args(pkg_dir))
+    assert result.exit_code == 0, result.output
+    package_data = json.loads((pkg_dir / "performance_package.json").read_text())
+    package_data["inputs"]["identity_manifest"]["sha256"] = manifest_sha256
+    patched_path = pkg_dir / "performance_package_patched.json"
+    patched_path.write_text(json.dumps(package_data), encoding="utf-8")
+    return patched_path
+
+
+def test_observe_cli_rejects_malformed_yaml_manifest_with_matching_sha(tmp_path: Path) -> None:
+    """PR #187 review round 6: a manifest whose bytes hash-match the
+    package's recorded sha256 (so D-3's sha256 check passes) but whose
+    content is invalid YAML must fail cleanly — "Error: ..." on stderr and
+    exit 1, not an uncaught `yaml.YAMLError` traceback."""
+    pkg_dir = tmp_path / "pkg"
+    malformed_manifest = tmp_path / "malformed.yaml"
+    malformed_manifest.write_bytes(b"schema_version: [unclosed\nmeta: {work_id: x\n")
+    manifest_sha256 = hashlib.sha256(malformed_manifest.read_bytes()).hexdigest()
+    patched_package = _package_with_patched_manifest_sha256(pkg_dir, manifest_sha256)
+
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"unused-placeholder-audio-bytes")
+    report_path = tmp_path / "report.json"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "observe",
+            str(patched_package),
+            str(audio_path),
+            "--manifest",
+            str(malformed_manifest),
+            "-o",
+            str(report_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert result.stderr.startswith("Error:")
+    assert "Traceback" not in result.stderr
+    assert not report_path.exists()
+
+
+def test_observe_cli_rejects_schema_invalid_manifest_with_matching_sha(tmp_path: Path) -> None:
+    """Same shape as the malformed-YAML case, but the content is valid YAML
+    — a mapping — that's missing required IdentityManifest fields (`meta`,
+    `source`, `anchors`). This is a pydantic `ValidationError`, not a
+    `yaml.YAMLError`; both must be caught the same way."""
+    pkg_dir = tmp_path / "pkg"
+    schema_invalid_manifest = tmp_path / "schema_invalid.yaml"
+    schema_invalid_manifest.write_bytes(b"schema_version: identity-manifest/0.1\n")
+    manifest_sha256 = hashlib.sha256(schema_invalid_manifest.read_bytes()).hexdigest()
+    patched_package = _package_with_patched_manifest_sha256(pkg_dir, manifest_sha256)
+
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"unused-placeholder-audio-bytes")
+    report_path = tmp_path / "report.json"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "observe",
+            str(patched_package),
+            str(audio_path),
+            "--manifest",
+            str(schema_invalid_manifest),
+            "-o",
+            str(report_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert result.stderr.startswith("Error:")
+    assert "Traceback" not in result.stderr
+    assert not report_path.exists()
+
+
 def test_observe_cli_rejects_manifest_sha_mismatch(tmp_path: Path) -> None:
     pkg_dir = tmp_path / "pkg"
     result = CliRunner().invoke(app, _cli_package_args(pkg_dir))
@@ -1129,6 +1215,54 @@ def test_observe_cli_rejects_chord_artifact_unknown_schema_version(
     assert result2.exit_code == 1
     assert "chord-sequence/0.2" in result2.stderr
     assert not report_path.exists()
+
+
+# --- 5e. PR #187 review round 6: atomic -o publish -----------------------------------
+
+
+def test_observe_cli_overwrites_an_existing_report_atomically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Round 6: `-o` is staged + `os.replace`'d rather than written in place.
+    Confirm the normal "re-observe into the same path" use case still works
+    (an existing report file gets fully replaced, not corrupted/appended),
+    and that the result is byte-identical to a fresh run with the same
+    inputs written to a brand new path."""
+    pkg_dir = tmp_path / "pkg"
+    result = CliRunner().invoke(app, _cli_package_args(pkg_dir))
+    assert result.exit_code == 0, result.output
+
+    def fake_extract(path: str) -> RPEBundle:
+        return _bundle_with_chords(CANONICAL_PROGRESSION)
+
+    monkeypatch.setattr("svp_rpe.arrange.observe.extract_rpe_from_file", fake_extract)
+
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"unused-placeholder-audio-bytes")
+
+    report_path = tmp_path / "report.json"
+    report_path.write_text("stale placeholder content from a previous run", encoding="utf-8")
+
+    observe_args = [
+        "observe",
+        str(pkg_dir / "performance_package.json"),
+        str(audio_path),
+        "--manifest",
+        str(IDENTITY_MANIFEST),
+        "-o",
+        str(report_path),
+    ]
+    result2 = CliRunner().invoke(app, observe_args)
+    assert result2.exit_code == 0, result2.output
+    overwritten_content = report_path.read_text(encoding="utf-8")
+    assert "stale placeholder" not in overwritten_content
+    report = json.loads(overwritten_content)
+    assert report["schema_version"] == OBSERVATION_REPORT_SCHEMA_VERSION
+
+    fresh_path = tmp_path / "report_fresh.json"
+    result3 = CliRunner().invoke(app, observe_args[:-1] + [str(fresh_path)])
+    assert result3.exit_code == 0, result3.output
+    assert fresh_path.read_bytes() == report_path.read_bytes()
 
 
 # --- 6. E2E (real perform + extract): pinned harmony measurement + determinism -----
