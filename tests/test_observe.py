@@ -236,6 +236,47 @@ def test_observation_report_requires_64_hex_package_sha256() -> None:
         )
 
 
+def test_observation_report_rejects_missing_schema_version() -> None:
+    """PR #187 review round 14: `schema_version` has no pydantic default (the
+    same shape as `IdentityManifest.schema_version`), so a hand-authored or
+    tampered sidecar missing that field must fail on read-back, not be
+    silently treated as the current `observation-report/0.1` version."""
+    with pytest.raises(ValidationError):
+        ObservationReport.model_validate(
+            {
+                "work_id": "w",
+                "package_sha256": "0" * 64,
+                "generated_artifact": {"path": "a.wav", "sha256": "0" * 64},
+                "anchors": [],
+            }
+        )
+
+
+def test_observation_report_rejects_duplicate_anchor_ids() -> None:
+    """PR #187 review round 14: the same anchor_id-uniqueness safety net
+    `IdentityManifest._validate_unique_anchor_ids` has, applied to
+    `ObservationReport.anchors` — including on read-back (`model_validate`),
+    not just at construction time."""
+    duplicated_anchor = {
+        "anchor_id": "harmony",
+        "domain": "harmony",
+        "sensor": {"name": "chord_sequence_match", "available": True},
+        "measurements": {},
+        "adherence_status": "not_observed",
+        "determination": "no_sensor",
+    }
+    with pytest.raises(ValidationError):
+        ObservationReport.model_validate(
+            {
+                "schema_version": OBSERVATION_REPORT_SCHEMA_VERSION,
+                "work_id": "w",
+                "package_sha256": "0" * 64,
+                "generated_artifact": {"path": "a.wav", "sha256": "0" * 64},
+                "anchors": [duplicated_anchor, duplicated_anchor],
+            }
+        )
+
+
 def test_observation_report_has_no_verdict_fields() -> None:
     # D-1: the schema itself must not carry a global verdict/pass-fail/count key.
     assert set(ObservationReport.model_fields) == {

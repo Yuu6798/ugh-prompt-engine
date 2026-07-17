@@ -182,13 +182,37 @@ class AnchorObservation(ObserveModel):
 
 
 class ObservationReport(ObserveModel):
-    """work 単位の ObservationReport。verdict 系・集計系フィールドは持たない。"""
+    """work 単位の ObservationReport。verdict 系・集計系フィールドは持たない。
 
-    schema_version: Literal["observation-report/0.1"] = OBSERVATION_REPORT_SCHEMA_VERSION
+    ``schema_version`` は ``IdentityManifest`` と同型で default を持たない
+    必須入力（PR #187 review round 14）: pydantic default 補完だと欠落
+    フィールドの sidecar が黙って「現行 0.1」として読み戻れてしまい、Safety
+    Gate の「未知/欠落 schema_version 拒否」原則に反する。発行側
+    (`build_observation_report`) は従来どおり ``OBSERVATION_REPORT_SCHEMA_VERSION``
+    を明示的に渡す — 変わるのは読み戻し（`model_validate`）の fail-closed 性のみ。
+    """
+
+    schema_version: Literal["observation-report/0.1"]
     work_id: str
     package_sha256: str = Field(pattern=_SHA256_PATTERN)
     generated_artifact: GeneratedArtifactRef
     anchors: list[AnchorObservation]
+
+    @model_validator(mode="after")
+    def _validate_unique_anchor_ids(self) -> "ObservationReport":
+        """`IdentityManifest._validate_unique_anchor_ids` と同型（PR #187
+        review round 14）: 読み戻し（`model_validate`）でも発火する safety net。"""
+        seen: set[str] = set()
+        duplicates: set[str] = set()
+        for anchor in self.anchors:
+            if anchor.anchor_id in seen:
+                duplicates.add(anchor.anchor_id)
+            seen.add(anchor.anchor_id)
+        if duplicates:
+            raise ValueError(
+                f"duplicate anchor_id(s) in observation report: {', '.join(sorted(duplicates))}"
+            )
+        return self
 
 
 CHORD_SEQUENCE_ARTIFACT_SCHEMA = "chord-sequence/0.1"
