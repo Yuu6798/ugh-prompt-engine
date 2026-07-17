@@ -431,7 +431,19 @@ def detect_compiler_git_commit() -> Optional[str]:
 
     Walks up from this file looking for a `.git` directory; if none is found
     (installed/wheel environment with no checkout in sight), returns `None`
-    without ever invoking `git`. Any subprocess failure — `git` missing, a
+    without ever invoking `git`. The first `.git` found must also actually
+    *be* the svp-rpe source tree — checked via the src-layout containment
+    `module_dir.is_relative_to((candidate / "src" / "svp_rpe").resolve())` —
+    before `git` is ever invoked (PR #184 review round 10): if this package
+    is installed (e.g. editable-installed into a `.venv`) *inside* some
+    unrelated app repository's checkout, the nearest `.git` upward is that
+    app's, not svp-rpe's, and naively trusting it would misattribute the
+    app's HEAD commit as the compiler's own provenance — exactly the
+    fabrication D-4 forbids. If the nearest `.git` fails this containment
+    check, detection stops there and returns `None` rather than continuing
+    to walk further up: a `.git` any further up the tree is strictly less
+    related to this module than the one just rejected, so there is nothing
+    more specific left to find. Any subprocess failure — `git` missing, a
     non-zero exit, a timeout, unparseable output — also degrades to `None`
     (D-4: this is audit metadata, never a fabricated value, and never an
     exception the caller must handle).
@@ -440,7 +452,9 @@ def detect_compiler_git_commit() -> Optional[str]:
     repo_root: Optional[Path] = None
     for candidate in (module_dir, *module_dir.parents):
         if (candidate / ".git").exists():
-            repo_root = candidate
+            src_layout_root = (candidate / "src" / "svp_rpe").resolve()
+            if module_dir.is_relative_to(src_layout_root):
+                repo_root = candidate
             break
     if repo_root is None:
         return None

@@ -964,6 +964,65 @@ def test_detect_compiler_git_commit_returns_none_when_no_checkout_found(
     assert package_module.detect_compiler_git_commit() is None
 
 
+def test_detect_compiler_git_commit_returns_none_inside_unrelated_app_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If svp-rpe were editable-installed into a `.venv` *inside* some
+    unrelated app repository's checkout, the nearest `.git` walking upward
+    from the module is that app's, not svp-rpe's. Naively trusting it would
+    misattribute the app's HEAD commit as the compiler's own provenance
+    (PR #184 review round 10, D-4 fabrication). The src-layout containment
+    check (`module_dir` must sit under `<candidate>/src/svp_rpe`) rejects
+    this `.git` and detection stops there — it does not keep walking further
+    up looking for a better candidate, since anything further up is
+    strictly less related to this module than the one just rejected."""
+    import subprocess
+
+    from svp_rpe.arrange import package as package_module
+
+    app_root = tmp_path / "app"
+    (app_root / ".git").mkdir(parents=True)
+    module_dir = (
+        app_root / ".venv" / "lib" / "python3.11" / "site-packages" / "svp_rpe" / "arrange"
+    )
+    module_dir.mkdir(parents=True)
+
+    def fail_if_called(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("git should not be invoked for an unrelated app checkout")
+
+    monkeypatch.setattr(package_module, "__file__", str(module_dir / "package.py"))
+    monkeypatch.setattr(subprocess, "run", fail_if_called)
+
+    assert package_module.detect_compiler_git_commit() is None
+
+
+def test_detect_compiler_git_commit_matches_real_checkout_head() -> None:
+    """In this actual checkout (src-layout, own `.git`), detection must
+    return the real `git rev-parse HEAD` value — the positive-path pin for
+    round 10's src-layout containment check (a checkout that *does* satisfy
+    containment must still resolve normally, not just reject the negative
+    case)."""
+    import shutil
+    import subprocess
+
+    from svp_rpe.arrange.package import detect_compiler_git_commit
+
+    if shutil.which("git") is None:
+        pytest.skip("git not available in this environment")
+
+    repo_root = Path(__file__).resolve().parents[1]
+    expected = subprocess.run(
+        ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if expected.returncode != 0:
+        pytest.skip("not a git checkout in this environment")
+
+    assert detect_compiler_git_commit() == expected.stdout.strip()
+
+
 def test_package_cli_compiler_provenance_is_present_or_none(tmp_path: Path) -> None:
     """The CLI-facing entry point (`compile_performance_package`) fills in real
     (or `None`) compiler provenance, never raising for either outcome."""
