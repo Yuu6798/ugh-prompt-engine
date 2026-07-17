@@ -247,7 +247,7 @@ class PerformancePackage(PackageModel):
     schema_version: Literal["performance-package/0.2"] = PERFORMANCE_PACKAGE_SCHEMA_VERSION
     work_id: str
     generator: str
-    generator_variant: str
+    generator_variant: str = Field(min_length=1)
     inputs: PackageInputs
     prompt: Optional[PromptPayload] = None
     channel_artifacts: dict[InputChannel, list[ChannelArtifactReference]] = Field(
@@ -379,7 +379,7 @@ class CompilationReport(PackageModel):
     schema_version: Literal["compilation-report/0.3"] = COMPILATION_REPORT_SCHEMA_VERSION
     work_id: str
     generator: str
-    generator_variant: str
+    generator_variant: str = Field(min_length=1)
     mode: CompilationMode
     inputs: PackageInputs
     package_sha256: str = Field(pattern=_SHA256_PATTERN)

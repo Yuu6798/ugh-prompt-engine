@@ -639,6 +639,26 @@ def test_package_readback_rejects_inconsistent_device_profile_input() -> None:
         CompilationReport.model_validate(wrong_report_generator)
 
 
+def test_package_readback_rejects_empty_generator_variant() -> None:
+    """Codex P2 (PR #185): readback (`model_validate`) must reject an empty
+    `generator_variant` too, not just the builder path — a persistent handoff
+    contract that silently lost its route identifier on reload would be worse
+    than one that never had it, so `Field(min_length=1)` applies symmetrically
+    with `InputCapabilityProfile.generator_variant`."""
+    manifest = _manifest([])
+    compiled = _build(manifest, _contract(manifest, {}), _profile())
+
+    package_data = compiled.package.model_dump(mode="json")
+    package_data["generator_variant"] = ""
+    with pytest.raises(ValidationError):
+        PerformancePackage.model_validate(package_data)
+
+    report_data = compiled.report.model_dump(mode="json")
+    report_data["generator_variant"] = ""
+    with pytest.raises(ValidationError):
+        CompilationReport.model_validate(report_data)
+
+
 def test_builder_is_byte_deterministic_and_report_pins_package_bytes() -> None:
     manifest = _manifest([_anchor("lyrics", "lyrics", "lyrics_text")])
     contract = _contract(manifest, {"lyrics": ("hard", [])})
