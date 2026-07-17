@@ -133,8 +133,11 @@ execution-environment information (see `--builds-root` and `package`'s
 required (both given or both omitted exits `2`). `--builds-root <root>`
 publishes the same three artifacts to `<root>/builds/<content_digest>/`
 instead, and updates `<root>/latest.json` (`schema_version:
-"builds-latest/0.1"`, `{"content_digest": "<64hex>"}`) to point at it. A
-digest directory is **immutable**: if `<root>/builds/<content_digest>/`
+"builds-latest/0.1"`, `{"content_digest": "<64hex>"}`) to point at it. Before
+anything is written, a preflight rejects `<root>/latest.json` unless it is
+either absent or a plain, non-symlink file (exit `1`, nothing under
+`builds/` touched) — the one path this scheme ever overwrites must not be a
+directory or a symlink. A digest directory is **immutable**: if `<root>/builds/<content_digest>/`
 already exists as a directory from a previous run, its artifacts are never
 overwritten, appended to, or fully re-verified — only its one *descriptive*
 file (`arrangement_bundle.json`) is read once and compared byte-for-byte
@@ -155,7 +158,8 @@ proves self-consistent: it must parse as JSON, declare this directory's
 `content_digest`, and recompute to that same digest from its own recorded
 output hashes — otherwise the run fails (exit `1`, `latest.json` untouched). If
 `<root>/builds/<content_digest>` already exists as something other than a
-directory (a plain file, a symlink to a file, or a dangling symlink), the run
+*real, non-symlink* directory (a plain file, any symlink — including one
+pointing at an otherwise-valid directory — or a dangling symlink), the run
 fails outright (exit `1`, `latest.json` left untouched) rather than treating
 it as published. Re-running with different inputs that resolve to a
 different `content_digest` publishes a sibling directory; older digest
@@ -163,6 +167,15 @@ directories are never pruned. This descriptive-file check is intentionally
 partial (one file, single read, no rehash of the other artifacts); a full
 recursive verification of a published digest directory is left to a future
 `verify`-style command.
+
+If a first publish writes its artifacts successfully but the trailing
+`latest.json` update itself then fails, the freshly published digest
+directory is **not** rolled back — it is already a complete, valid
+publication, and deleting it would violate the immutability contract for no
+benefit. The command still fails on that run, but the digest directory
+self-heals `latest.json` on its own: a subsequent identical invocation finds
+it via the already-published no-op path and retries the pointer update, with
+no separate repair step.
 
 ### `svprpe package <score.yaml> <identity.yaml> <arrangement.yaml> --capability-profile <profile.yaml> (--output-dir <dir> | --builds-root <dir>)`
 

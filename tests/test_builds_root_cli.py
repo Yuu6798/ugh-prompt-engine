@@ -642,3 +642,156 @@ def test_arrange_builds_root_rejects_self_inconsistent_output_hashes(tmp_path: P
     assert "Error:" in second.stderr
     assert "recomputes to content_digest" in second.stderr
     assert (root / "latest.json").read_bytes() == latest_before
+
+
+# --- PR #184 review round 3: symlink digest targets + latest.json preflight ----
+
+
+def test_arrange_builds_root_rejects_symlink_to_directory_digest_target(
+    tmp_path: Path,
+) -> None:
+    """A symlink digest target is rejected even when it points at a real,
+    otherwise-valid-looking directory: the symlink itself could be repointed
+    by whoever controls it, so this scheme only trusts a real directory."""
+    spec_path = tmp_path / "arrangement.yaml"
+    _write_arrangement_spec(spec_path)
+    digest = _arrange_content_digest(tmp_path, spec_path)
+
+    root = tmp_path / "builds-root"
+    (root / "builds").mkdir(parents=True)
+    real_dir = tmp_path / "real-digest-dir"
+    real_dir.mkdir()
+    (real_dir / "arrangement_bundle.json").write_text("{}", encoding="utf-8")
+    symlink_target = root / "builds" / digest
+    symlink_target.symlink_to(real_dir)
+
+    result = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+
+    assert result.exit_code == 1
+    assert "Error:" in result.stderr
+    assert "not a directory" in result.stderr
+    assert symlink_target.is_symlink()
+    assert not (root / "latest.json").exists()
+
+
+def test_arrange_builds_root_rejects_directory_latest_json_before_first_publish(
+    tmp_path: Path,
+) -> None:
+    """`latest.json` as a directory is rejected by the preflight *before*
+    `builds/` is even created — nothing under builds-root gets touched."""
+    spec_path = tmp_path / "arrangement.yaml"
+    _write_arrangement_spec(spec_path)
+    root = tmp_path / "builds-root"
+    (root / "latest.json").mkdir(parents=True)
+
+    result = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+
+    assert result.exit_code == 1
+    assert "Error:" in result.stderr
+    assert "latest pointer target is not a plain file" in result.stderr
+    assert not (root / "builds").exists()
+    assert (root / "latest.json").is_dir()
+
+
+def test_arrange_builds_root_rejects_directory_latest_json_with_existing_valid_digest_dir(
+    tmp_path: Path,
+) -> None:
+    """Even with an existing, otherwise-valid digest directory on disk, a
+    `latest.json` directory still fails the preflight and that digest
+    directory is left completely untouched."""
+    spec_path = tmp_path / "arrangement.yaml"
+    _write_arrangement_spec(spec_path)
+    root = tmp_path / "builds-root"
+
+    first = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+    assert first.exit_code == 0, first.output
+    digest_dir = next((root / "builds").iterdir())
+    original_files = {p.name: p.read_bytes() for p in digest_dir.iterdir()}
+
+    (root / "latest.json").unlink()
+    (root / "latest.json").mkdir()
+
+    second = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+
+    assert second.exit_code == 1
+    assert "Error:" in second.stderr
+    assert "latest pointer target is not a plain file" in second.stderr
+    assert {p.name: p.read_bytes() for p in digest_dir.iterdir()} == original_files
+    assert (root / "latest.json").is_dir()
+
+
+def test_arrange_builds_root_rejects_symlink_latest_json(tmp_path: Path) -> None:
+    spec_path = tmp_path / "arrangement.yaml"
+    _write_arrangement_spec(spec_path)
+    root = tmp_path / "builds-root"
+    root.mkdir(parents=True)
+    real_file = tmp_path / "real-latest.json"
+    real_file.write_text("{}", encoding="utf-8")
+    (root / "latest.json").symlink_to(real_file)
+
+    result = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+
+    assert result.exit_code == 1
+    assert "Error:" in result.stderr
+    assert "latest pointer target is not a plain file" in result.stderr
+    assert not (root / "builds").exists()
+    assert (root / "latest.json").is_symlink()
+
+
+def test_arrange_builds_root_self_heals_latest_after_pointer_update_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the trailing `latest.json` update fails after a successful first
+    publish, the freshly published digest directory is not rolled back; a
+    same-input re-run finds it via the already-published no-op path and
+    updates `latest.json` on its own (self-healing, no separate repair
+    step)."""
+    import svp_rpe.cli as cli_module
+
+    spec_path = tmp_path / "arrangement.yaml"
+    _write_arrangement_spec(spec_path)
+    root = tmp_path / "builds-root"
+
+    original_update = cli_module._update_builds_latest_pointer
+
+    def failing_update(*args: Any, **kwargs: Any) -> None:
+        raise OSError("injected latest.json update failure")
+
+    monkeypatch.setattr(cli_module, "_update_builds_latest_pointer", failing_update)
+
+    first = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+
+    assert first.exit_code == 1
+    assert "Error:" in first.stderr
+    assert "remains valid" in first.stderr
+    # the digest directory was published in full despite the pointer-update
+    # failure — it is not rolled back.
+    digest_dirs = list((root / "builds").iterdir())
+    assert len(digest_dirs) == 1
+    digest_dir = digest_dirs[0]
+    produced = sorted(p.name for p in digest_dir.iterdir())
+    assert produced == ["arrangement_bundle.json", "arrangement_diff.json", "derived_score.yaml"]
+    assert not (root / "latest.json").exists()
+
+    monkeypatch.setattr(cli_module, "_update_builds_latest_pointer", original_update)
+
+    second = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+
+    assert second.exit_code == 0, second.output
+    assert "already published" in second.stderr
+    latest = json.loads((root / "latest.json").read_text(encoding="utf-8"))
+    assert latest["content_digest"] == digest_dir.name

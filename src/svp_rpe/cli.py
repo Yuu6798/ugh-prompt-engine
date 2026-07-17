@@ -564,6 +564,24 @@ def _check_existing_builds_root_publication(
     return True
 
 
+def _reject_invalid_latest_pointer_target(latest_path: Path) -> None:
+    """Preflight: `<root>/latest.json` must be either absent or a plain,
+    non-symlink file — checked *before* anything under `builds/` is touched.
+
+    `latest.json` is the one path this scheme ever writes to via
+    `os.replace`; a directory, a symlink (dangling or not), or any other
+    non-regular entity sitting at that path must not be silently accepted
+    (`os.replace` onto a directory raises anyway, but only *after* a fresh
+    digest directory may already have been published — this preflight fails
+    first, before `builds/` is created or written to at all, so a bad
+    `latest.json` never leaves a stray digest directory behind it).
+    """
+    if latest_path.is_symlink() or (latest_path.exists() and not latest_path.is_file()):
+        raise ValueError(
+            f"builds-root latest pointer target is not a plain file: {latest_path}"
+        )
+
+
 def _publish_artifacts_to_builds_root(
     contents: dict[str, str],
     builds_root: str | Path,
@@ -586,11 +604,30 @@ def _publish_artifacts_to_builds_root(
     provenance drift). `latest.json` is updated only when that check passes.
     Returns `(published_dir, already_existed, provenance_differs)`.
 
-    An existing path that is not a directory (a regular file, a symlink to a
-    file, or a dangling symlink — anything other than a real directory) is
-    rejected outright rather than silently treated as "already published":
-    that would advertise a non-artifact-directory digest path as valid and
-    still move `latest.json` onto it.
+    Before anything is written, `_reject_invalid_latest_pointer_target`
+    rejects an invalid `latest.json` target (see that function) so a
+    misplaced `latest.json` can never leave a stray digest directory behind.
+
+    An existing digest path that is not a real, non-symlink directory (a
+    regular file, a dangling symlink, *or a symlink to a directory*) is
+    likewise rejected outright rather than silently treated as "already
+    published": a symlink digest target — even one pointing at a real
+    directory — could be repointed out from under the immutability contract
+    by whoever controls the symlink, and (like the non-directory cases)
+    still moving `latest.json` onto it would advertise a target this scheme
+    doesn't actually control as valid.
+
+    Self-healing on a `latest.json` update failure: if writing the artifact
+    set itself succeeds but the trailing `_update_builds_latest_pointer` call
+    fails (e.g. a permission or disk error on the rename), the freshly
+    published digest directory is **not** rolled back or deleted — it is a
+    complete, valid publication, and removing it would violate the
+    immutability contract for no benefit (the failure is in the mutable
+    `latest.json` pointer, not the immutable content). The run still fails
+    (the caller sees the wrapped error), but a subsequent identical
+    invocation takes the already-published no-op path and retries the
+    `latest.json` update on its own — no separate repair step exists or is
+    needed.
 
     First publish: the full artifact set is written into a
     `tempfile.mkdtemp` staging directory under `<builds_root>/builds/`, then
@@ -599,9 +636,9 @@ def _publish_artifacts_to_builds_root(
     snapshot+per-file `os.replace` dance `_publish_artifacts_atomically`
     needs for the mutable `--output-dir` case — a fresh digest directory has
     no previous content to roll back to). A `rename` failure that turns out
-    to be a concurrent publish (the target now exists *as a directory*) is
-    treated as the immutable no-op case; any other failure propagates after
-    best-effort staging cleanup.
+    to be a concurrent publish (the target now exists *as a real directory*)
+    is treated as the immutable no-op case; any other failure propagates
+    after best-effort staging cleanup.
     """
     import os
     import shutil
@@ -612,8 +649,10 @@ def _publish_artifacts_to_builds_root(
     target_dir = builds_dir / content_digest
     latest_path = root / "latest.json"
 
+    _reject_invalid_latest_pointer_target(latest_path)
+
     def _reject_if_not_directory() -> None:
-        if not target_dir.is_dir() and (target_dir.exists() or target_dir.is_symlink()):
+        if target_dir.is_symlink() or (target_dir.exists() and not target_dir.is_dir()):
             raise ValueError(
                 f"builds-root digest target is not a directory: {target_dir}"
             )
@@ -651,7 +690,16 @@ def _publish_artifacts_to_builds_root(
             extract_digest_inputs=extract_digest_inputs,
         )
 
-    _update_builds_latest_pointer(latest_path, content_digest, root=root)
+    try:
+        _update_builds_latest_pointer(latest_path, content_digest, root=root)
+    except Exception as exc:
+        raise ValueError(
+            f"failed to update {latest_path} to point at content_digest "
+            f"{content_digest!r}: {exc}. The digest directory {target_dir} was "
+            "already published successfully and remains valid (not rolled back); "
+            "re-running this command with the same inputs will retry the "
+            "latest.json update via the already-published no-op path."
+        ) from exc
     return target_dir, already_existed, provenance_differs
 
 
