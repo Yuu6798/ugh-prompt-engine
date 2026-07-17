@@ -55,6 +55,41 @@ def test_validate_relative_locator_allows_internally_cancelling_dotdot() -> None
     validate_relative_locator("docs/../docs/x.md")
 
 
+# --- backslash-separator traversal (PR #184 review round 2, Thread A) -----------
+
+
+def test_validate_relative_locator_rejects_backslash_upward_traversal() -> None:
+    """`..\\outside.md` は `PurePosixPath` 単独では 1 部品扱いになり depth カウンタ
+    が `..` を検出できない穴があった。`\\` を `/` と同格の区切りとして正規化する。"""
+    with pytest.raises(PathConfinementError) as exc_info:
+        validate_relative_locator("..\\outside.md")
+    assert exc_info.value.reason == "traversal"
+
+
+def test_validate_relative_locator_rejects_backslash_net_upward_traversal() -> None:
+    """`a\\..\\..\\b` は正規化後 depth が -1 になる正味の遡上。"""
+    with pytest.raises(PathConfinementError) as exc_info:
+        validate_relative_locator("a\\..\\..\\b")
+    assert exc_info.value.reason == "traversal"
+
+
+def test_validate_relative_locator_allows_backslash_internally_cancelling_dotdot() -> None:
+    """`a\\..\\b` は正規化後 depth が 0 未満にならない内部相殺なので許容する。"""
+    validate_relative_locator("a\\..\\b")
+
+
+def test_validate_relative_locator_rejects_mixed_separator_traversal() -> None:
+    """`sub/..\\x` のように `/` と `\\` が混在していても正味の遡上は遡上として拒否する。"""
+    with pytest.raises(PathConfinementError) as exc_info:
+        validate_relative_locator("sub/..\\..\\x")
+    assert exc_info.value.reason == "traversal"
+
+
+def test_validate_relative_locator_allows_mixed_separator_internal_cancel() -> None:
+    """`sub/..\\x` は `sub` を 1 段登って `x` に降りるだけで、正味の遡上ではない。"""
+    validate_relative_locator("sub/..\\x")
+
+
 def test_validate_relative_locator_allows_current_dir_segments() -> None:
     validate_relative_locator("./docs/./x.md")
 

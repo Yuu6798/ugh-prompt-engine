@@ -550,3 +550,95 @@ def test_package_builds_root_rejects_non_directory_digest_target(tmp_path: Path)
     assert "not a directory" in result.stderr
     assert occupying_file.read_text(encoding="utf-8") == "not a directory"
     assert not (root / "latest.json").exists()
+
+
+# --- PR #184 review round 2: descriptor self-consistency (not mere byte diff) ---
+
+
+def test_arrange_builds_root_rejects_tampered_content_digest_field(tmp_path: Path) -> None:
+    """A descriptor whose own `content_digest` field doesn't match the digest
+    directory it lives in must not be accepted as a valid prior publication,
+    even though it parses as JSON and differs byte-for-byte from what this
+    invocation would publish."""
+    spec_path = tmp_path / "arrangement.yaml"
+    _write_arrangement_spec(spec_path)
+    root = tmp_path / "builds-root"
+
+    first = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+    assert first.exit_code == 0, first.output
+    digest_dir = next((root / "builds").iterdir())
+    bundle_path = digest_dir / "arrangement_bundle.json"
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    bundle["content_digest"] = "0" * 64  # deliberately wrong
+    bundle_path.write_text(json.dumps(bundle, ensure_ascii=False, indent=2), encoding="utf-8")
+    latest_before = (root / "latest.json").read_bytes()
+
+    second = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+
+    assert second.exit_code == 1
+    assert "Error:" in second.stderr
+    assert "content_digest" in second.stderr
+    # not accepted as a no-op, and the corrupted descriptor + latest.json are
+    # both left exactly as they were (no repair, no blessing).
+    assert (root / "latest.json").read_bytes() == latest_before
+    assert json.loads(bundle_path.read_text(encoding="utf-8"))["content_digest"] == "0" * 64
+
+
+def test_arrange_builds_root_rejects_json_corrupted_descriptor(tmp_path: Path) -> None:
+    spec_path = tmp_path / "arrangement.yaml"
+    _write_arrangement_spec(spec_path)
+    root = tmp_path / "builds-root"
+
+    first = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+    assert first.exit_code == 0, first.output
+    digest_dir = next((root / "builds").iterdir())
+    bundle_path = digest_dir / "arrangement_bundle.json"
+    bundle_path.write_text("not valid json {{{", encoding="utf-8")
+    latest_before = (root / "latest.json").read_bytes()
+
+    second = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+
+    assert second.exit_code == 1
+    assert "Error:" in second.stderr
+    assert "unparsable" in second.stderr
+    assert (root / "latest.json").read_bytes() == latest_before
+
+
+def test_arrange_builds_root_rejects_self_inconsistent_output_hashes(tmp_path: Path) -> None:
+    """A descriptor whose declared `content_digest` matches its own directory
+    name, but whose declared output hashes recompute to a *different* digest,
+    must be rejected — its own bookkeeping is internally inconsistent (the
+    tamper this check exists for: step 2 alone would have let this through)."""
+    spec_path = tmp_path / "arrangement.yaml"
+    _write_arrangement_spec(spec_path)
+    root = tmp_path / "builds-root"
+
+    first = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+    assert first.exit_code == 0, first.output
+    digest_dir = next((root / "builds").iterdir())
+    bundle_path = digest_dir / "arrangement_bundle.json"
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    # content_digest field is left correct; only a declared output hash is
+    # tampered with, so the descriptor no longer recomputes to its own digest.
+    bundle["outputs"]["derived_score"]["sha256"] = "1" * 64
+    bundle_path.write_text(json.dumps(bundle, ensure_ascii=False, indent=2), encoding="utf-8")
+    latest_before = (root / "latest.json").read_bytes()
+
+    second = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+
+    assert second.exit_code == 1
+    assert "Error:" in second.stderr
+    assert "recomputes to content_digest" in second.stderr
+    assert (root / "latest.json").read_bytes() == latest_before

@@ -17,6 +17,18 @@ error type with their own message wording (AR-provenance PR: item 15,
 migrated from `identity.py:_resolve_confined` and
 `capabilities.py:_validate_evidence_form` / `_resolve_confined_evidence`,
 which keep their existing exception types and message text verbatim).
+
+`validate_relative_locator`'s lexical check treats **both** `/` and `\\` as
+segment separators (PR #184 review round 2, Thread A): a locator is checked
+on whatever platform runs this code, and a bare `PurePosixPath` split never
+sees `\\` as a separator, so `..\\outside.md` would otherwise pass through
+as a single opaque path component instead of being recognized as upward
+traversal. The normalization mirrors `package.py`'s
+`ChannelArtifactReference._validate_artifact_path` precedent
+(`value.replace("\\", "/")` before splitting). One consequence: on POSIX,
+`\\` is legal inside a filename, so a locator containing a literal backslash
+that isn't meant as a separator is conservatively treated as one and may be
+rejected — the safe-by-default direction for a confinement check.
 """
 from __future__ import annotations
 
@@ -70,14 +82,18 @@ def validate_relative_locator(value: str) -> None:
     Does not touch the filesystem, so it can run even when no confinement
     base is known yet (e.g. `evidence_base=None` in `capabilities.py`).
     Rejects absolute paths and any locator whose `..` segments net-traverse
-    above its own root; `a/../b` cancels internally and is allowed.
+    above its own root; `a/../b` cancels internally and is allowed. Both `/`
+    and `\\` are treated as segment separators (see module docstring) —
+    `..\\outside.md` and `a/..\\..\\b` are traversal exactly like their `/`
+    equivalents.
     """
     if _is_absolute(value):
         raise PathConfinementError(
             f"path must be relative: {value!r}", value=value, reason="absolute"
         )
+    normalized = value.replace("\\", "/")
     depth = 0
-    for part in PurePosixPath(value).parts:
+    for part in PurePosixPath(normalized).parts:
         if part == "..":
             depth -= 1
         elif part != ".":
@@ -96,7 +112,13 @@ def resolve_confined(value: str, base_dir: Path) -> Path:
     Rejects absolute paths, then resolves `value` against `base_dir` and
     rejects anything landing outside it. `resolve()` follows both `../` and
     symlinks, so this additionally catches symlink escapes that
-    `validate_relative_locator` cannot see.
+    `validate_relative_locator` cannot see. No `\\`-normalization is needed
+    here (unlike `validate_relative_locator`): this is real filesystem
+    resolution, and `\\` is not a path separator to any filesystem this
+    process runs on, so a `\\`-containing locator either resolves as one
+    literal (non-existent, on POSIX) path component or is rejected by
+    `is_relative_to` — it can never resolve *outside* `base_dir` by way of a
+    literal backslash the way a lexical `..` split could be fooled.
     """
     if _is_absolute(value):
         raise PathConfinementError(

@@ -149,7 +149,11 @@ with the directory untouched; because `content_digest` covers only
 recorded provenance differs (e.g. the same `arrangement.yaml` referenced via
 a different path) is *also* left untouched but gets a distinct "provenance
 differs from this invocation" advisory instead — the first publication's
-provenance always wins, `latest.json` still moves to point at it. If
+provenance always wins, `latest.json` still moves to point at it. A byte
+difference is only accepted as provenance drift after the existing descriptor
+proves self-consistent: it must parse as JSON, declare this directory's
+`content_digest`, and recompute to that same digest from its own recorded
+output hashes — otherwise the run fails (exit `1`, `latest.json` untouched). If
 `<root>/builds/<content_digest>` already exists as something other than a
 directory (a plain file, a symlink to a file, or a dangling symlink), the run
 fails outright (exit `1`, `latest.json` left untouched) rather than treating
