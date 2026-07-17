@@ -140,19 +140,40 @@ class ObservationReport(ObserveModel):
     anchors: list[AnchorObservation]
 
 
-def _load_chord_progression(path: Path) -> list[tuple[str, str]]:
+CHORD_SEQUENCE_ARTIFACT_SCHEMA = "chord-sequence/0.1"
+
+
+def _load_chord_progression(raw_bytes: bytes, *, artifact_path: Path) -> list[tuple[str, str]]:
     """harmony anchor artifact (``chord-sequence/0.1``) を (root, quality) 列へ変換する。
 
+    ``raw_bytes`` は呼び出し側が既に hash 照合済みの bytes を渡す（本関数は一切
+    ファイルを読まない — 二重読み込みを避けるため、PR #187 review round 2）。
+    ``artifact_path`` はエラーメッセージの表示にのみ使う。``schema`` キーは
+    ``CHORD_SEQUENCE_ARTIFACT_SCHEMA`` の既知値ちょうどでなければ fail-closed で
+    拒否する（欠落・未知値のどちらも ``ValueError``。将来 artifact スキーマが
+    ``chord-sequence/0.2`` 等へ進む際に、無警告で誤読させないための Safety Gate）。
     ``ChordSpec`` を再利用して root/quality を検証する（CHORD_NAMES / Literal
     と同じ規約を anchor artifact にも適用し、手書きパースの重複を避ける）。
     """
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"chord sequence artifact is not valid JSON: {path}: {exc}") from exc
-    if not isinstance(payload, dict) or "chords" not in payload:
+        payload = json.loads(raw_bytes.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise ValueError(
-            f"chord sequence artifact must be a mapping with a 'chords' key: {path}"
+            f"chord sequence artifact is not valid JSON: {artifact_path}: {exc}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise ValueError(
+            f"chord sequence artifact must be a mapping with a 'chords' key: {artifact_path}"
+        )
+    schema = payload.get("schema")
+    if schema != CHORD_SEQUENCE_ARTIFACT_SCHEMA:
+        raise ValueError(
+            f"chord sequence artifact has unsupported schema {schema!r} "
+            f"(expected {CHORD_SEQUENCE_ARTIFACT_SCHEMA!r}): {artifact_path}"
+        )
+    if "chords" not in payload:
+        raise ValueError(
+            f"chord sequence artifact must be a mapping with a 'chords' key: {artifact_path}"
         )
     chords = [ChordSpec.model_validate(item) for item in payload["chords"]]
     return [(chord.root, chord.quality) for chord in chords]
@@ -213,11 +234,15 @@ def _observe_harmony(
     manifest_dir: Path,
     work_id: str,
     bundle: RPEBundle,
+    artifact_bytes: bytes,
 ) -> AnchorObservation:
+    # Resolved only for error-message display — never read here. `artifact_bytes`
+    # is the same bytes the manifest loader already hashed (PR #187 review
+    # round 2: no second read of the artifact file).
     artifact_path = _resolve_confined(
         anchor.artifact, manifest_dir, work_id=work_id, target=f"anchor '{anchor.id}'"
     )
-    expected_sequence = _load_chord_progression(artifact_path)
+    expected_sequence = _load_chord_progression(artifact_bytes, artifact_path=artifact_path)
     observed_sequence = [
         (event.root, event.quality) for event in bundle.physical.chord_events
     ]
@@ -297,9 +322,16 @@ def _observe_anchor(
     manifest_dir: Path,
     work_id: str,
     bundle: RPEBundle,
+    artifact_bytes_by_id: dict[str, bytes],
 ) -> AnchorObservation:
     if anchor.domain == "harmony":
-        return _observe_harmony(anchor, manifest_dir=manifest_dir, work_id=work_id, bundle=bundle)
+        return _observe_harmony(
+            anchor,
+            manifest_dir=manifest_dir,
+            work_id=work_id,
+            bundle=bundle,
+            artifact_bytes=artifact_bytes_by_id[anchor.id],
+        )
     return _observe_unavailable(anchor)
 
 
@@ -308,6 +340,7 @@ def build_observation_report(
     package: PerformancePackage,
     manifest: IdentityManifest,
     manifest_path: Path,
+    artifact_bytes: dict[str, bytes],
     audio_path: Path,
     package_sha256: str,
     audio_sha256: str,
@@ -318,13 +351,21 @@ def build_observation_report(
     provenance chain の検証（manifest sha256 / anchor artifact hash 照合）は
     呼び出し側（CLI の D-3 実装）の責務であり、本関数は検証済みの
     ``manifest`` / ``package_sha256`` / ``audio_sha256`` を受け取るだけで、
-    ここではファイル hash の比較を一切行わない。
+    ここではファイル hash の比較を一切行わない。``artifact_bytes`` も同様に
+    呼び出し側が既に hash 照合済みの値（``parse_identity_manifest_with_artifacts``
+    の戻り値）を渡す — anchor artifact をここで再度読むことはない
+    （harmony センサーが `anchor_id -> bytes` で参照する。PR #187 review
+    round 2）。
     """
     bundle = extract_rpe_from_file(str(audio_path))
     manifest_dir = Path(manifest_path).resolve().parent
     anchors = [
         _observe_anchor(
-            anchor, manifest_dir=manifest_dir, work_id=manifest.meta.work_id, bundle=bundle
+            anchor,
+            manifest_dir=manifest_dir,
+            work_id=manifest.meta.work_id,
+            bundle=bundle,
+            artifact_bytes_by_id=artifact_bytes,
         )
         for anchor in manifest.anchors
     ]

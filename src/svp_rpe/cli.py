@@ -1346,7 +1346,10 @@ def observe_cmd(
 
     from pydantic import ValidationError
 
-    from svp_rpe.arrange.identity import IdentityManifestError, parse_identity_manifest
+    from svp_rpe.arrange.identity import (
+        IdentityManifestError,
+        parse_identity_manifest_with_artifacts,
+    )
     from svp_rpe.arrange.observe import build_observation_report
     from svp_rpe.arrange.package import PerformancePackage
 
@@ -1382,9 +1385,14 @@ def observe_cmd(
 
     # Parse from the bytes already read and hashed above — `manifest_path` is
     # only used to resolve anchor/source locators and for error messages, the
-    # file itself is never read a second time (PR #187 review round 1).
+    # manifest file itself is never read a second time (PR #187 review round 1).
+    # `artifact_bytes_by_id` carries each anchor artifact's already-verified
+    # bytes (same read the hash check performed) so the harmony sensor doesn't
+    # reopen the file either (PR #187 review round 2).
     try:
-        loaded_manifest = parse_identity_manifest(manifest_bytes, manifest_path)
+        loaded_manifest, artifact_bytes_by_id = parse_identity_manifest_with_artifacts(
+            manifest_bytes, manifest_path
+        )
     except IdentityManifestError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -1422,6 +1430,7 @@ def observe_cmd(
                 package=package,
                 manifest=loaded_manifest,
                 manifest_path=manifest_path,
+                artifact_bytes=artifact_bytes_by_id,
                 audio_path=snapshot_path,
                 package_sha256=package_sha256,
                 audio_sha256=audio_sha256,

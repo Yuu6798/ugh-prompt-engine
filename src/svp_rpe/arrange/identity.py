@@ -146,6 +146,28 @@ def parse_identity_manifest(raw_bytes: bytes, manifest_path: Path | str) -> Iden
     — ファイルは読まない（呼び出し側がそれを担う）。非 mapping の `ValueError`
     と `yaml.YAMLError` は `load_identity_manifest` と同じ契約でラップしない
     （他 loader との共通挙動）。
+
+    anchor artifact の中身（検証済み bytes）も必要な呼び出し側は
+    `parse_identity_manifest_with_artifacts` を使うこと（本関数はその bytes を
+    破棄する薄いラッパー）。
+    """
+    manifest, _artifact_bytes = parse_identity_manifest_with_artifacts(raw_bytes, manifest_path)
+    return manifest
+
+
+def parse_identity_manifest_with_artifacts(
+    raw_bytes: bytes, manifest_path: Path | str
+) -> tuple[IdentityManifest, dict[str, bytes]]:
+    """`parse_identity_manifest` と同じ検証を行い、加えて各 anchor の検証済み
+    artifact bytes（`anchor_id -> bytes`）も返す。
+
+    この bytes は hash 照合のために既に読んだものと同一であり（`anchor` ループ
+    内で 1 回だけ `_read_and_verify_artifact_hash` を呼ぶ — 二重実装ではなく
+    `parse_identity_manifest` と共有する内部コア）、artifact の中身を必要とする
+    呼び出し側（例: `svprpe observe` の harmony センサー）はこれを再利用すれば
+    ファイルを二度読まずに済む（PR #187 review round 2）。`source` artifact の
+    bytes はこの辞書に含めない（呼び出し側が必要としたことがないため — 必要に
+    なれば追補する）。
     """
     manifest_path = Path(manifest_path)
     data = _parse_yaml_mapping(raw_bytes, manifest_path)
@@ -163,19 +185,21 @@ def parse_identity_manifest(raw_bytes: bytes, manifest_path: Path | str) -> Iden
         work_id=work_id,
         target="source",
     )
+
+    artifact_bytes: dict[str, bytes] = {}
     for anchor in manifest.anchors:
         target = f"anchor '{anchor.id}'"
         artifact_path = _resolve_confined(
             anchor.artifact, base_dir, work_id=work_id, target=target
         )
-        _verify_artifact_hash(
+        artifact_bytes[anchor.id] = _read_and_verify_artifact_hash(
             artifact_path,
             anchor.sha256,
             work_id=work_id,
             target=target,
         )
 
-    return manifest
+    return manifest, artifact_bytes
 
 
 def _parse_yaml_mapping(raw_bytes: bytes, path: Path) -> dict[str, Any]:
@@ -217,6 +241,19 @@ def _resolve_confined(value: str, base_dir: Path, *, work_id: str, target: str) 
 def _verify_artifact_hash(
     artifact_path: Path, expected_sha256: str, *, work_id: str, target: str
 ) -> None:
+    """Thin wrapper over `_read_and_verify_artifact_hash` for callers (e.g.
+    `package.py`) that only need the hash check, not the artifact bytes."""
+    _read_and_verify_artifact_hash(
+        artifact_path, expected_sha256, work_id=work_id, target=target
+    )
+
+
+def _read_and_verify_artifact_hash(
+    artifact_path: Path, expected_sha256: str, *, work_id: str, target: str
+) -> bytes:
+    """Read `artifact_path` once, verify its sha256, and return the bytes read
+    (the single-read core both `_verify_artifact_hash` and
+    `parse_identity_manifest_with_artifacts` share — PR #187 review round 2)."""
     try:
         raw_bytes = artifact_path.read_bytes()
     except OSError as exc:
@@ -231,3 +268,4 @@ def _verify_artifact_hash(
             f"identity manifest '{work_id}': {target} sha256 mismatch at {artifact_path}: "
             f"expected {expected_sha256}, got {actual_sha256}"
         )
+    return raw_bytes

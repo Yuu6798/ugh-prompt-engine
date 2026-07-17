@@ -104,6 +104,14 @@ def _bundle_with_chords(chords: list[tuple[str, str]]) -> RPEBundle:
     )
 
 
+def _chord_artifact_bytes(chords: list[tuple[str, str]], *, schema: str = "chord-sequence/0.1") -> bytes:
+    payload = {
+        "schema": schema,
+        "chords": [{"root": root, "quality": quality} for root, quality in chords],
+    }
+    return json.dumps(payload).encode("utf-8")
+
+
 def _anchor(anchor_id: str, domain: str, artifact: str, artifact_type: str) -> IdentityAnchor:
     return IdentityAnchor(
         id=anchor_id,
@@ -220,6 +228,7 @@ def test_observe_anchor_dispatches_non_harmony_domains_to_unavailable() -> None:
         manifest_dir=Path("."),
         work_id="w",
         bundle=_bundle_with_chords([]),
+        artifact_bytes_by_id={},
     )
     assert observation.determination == "no_sensor"
 
@@ -230,9 +239,14 @@ def test_observe_anchor_dispatches_non_harmony_domains_to_unavailable() -> None:
 def test_observe_harmony_exact_match_is_preserved() -> None:
     anchor = _anchor("harmony", "harmony", "chord_progression.json", "chord_sequence_json")
     bundle = _bundle_with_chords(CANONICAL_PROGRESSION)
+    artifact_bytes = _chord_artifact_bytes(CANONICAL_PROGRESSION)
 
     observation = _observe_harmony(
-        anchor, manifest_dir=FIXTURE_DIR / "identity", work_id="midnight-signal", bundle=bundle
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        bundle=bundle,
+        artifact_bytes=artifact_bytes,
     )
 
     assert observation.sensor.available is True
@@ -257,9 +271,14 @@ def test_observe_harmony_mismatch_is_deferred_with_raw_measurements() -> None:
     anchor = _anchor("harmony", "harmony", "chord_progression.json", "chord_sequence_json")
     mismatched = [("A", "minor"), ("D", "minor"), ("E", "minor"), ("A", "minor")]
     bundle = _bundle_with_chords(mismatched)
+    artifact_bytes = _chord_artifact_bytes(CANONICAL_PROGRESSION)
 
     observation = _observe_harmony(
-        anchor, manifest_dir=FIXTURE_DIR / "identity", work_id="midnight-signal", bundle=bundle
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        bundle=bundle,
+        artifact_bytes=artifact_bytes,
     )
 
     assert observation.sensor.available is True
@@ -364,6 +383,7 @@ def test_build_observation_report_shares_a_single_extraction_across_anchors(
         package=_fake_package(),
         manifest=_minimal_manifest(),
         manifest_path=IDENTITY_MANIFEST,
+        artifact_bytes={"harmony": _chord_artifact_bytes(CANONICAL_PROGRESSION)},
         audio_path=Path("unused.wav"),
         package_sha256="a" * 64,
         audio_sha256="b" * 64,
@@ -386,6 +406,7 @@ def test_build_observation_report_is_byte_deterministic(monkeypatch: pytest.Monk
         "package": _fake_package(),
         "manifest": _minimal_manifest(),
         "manifest_path": IDENTITY_MANIFEST,
+        "artifact_bytes": {"harmony": _chord_artifact_bytes(CANONICAL_PROGRESSION)},
         "audio_path": Path("unused.wav"),
         "package_sha256": "a" * 64,
         "audio_sha256": "b" * 64,
@@ -402,17 +423,43 @@ def test_build_observation_report_is_byte_deterministic(monkeypatch: pytest.Monk
 # --- 5. CLI D-3 provenance chain: negative paths (no audio needed — fail first) ----
 
 
-def _cli_package_args(output_dir: Path) -> list[str]:
+def _cli_package_args(output_dir: Path, *, identity_yaml: Path = IDENTITY_MANIFEST) -> list[str]:
     return [
         "package",
         str(BASE_SCORE),
-        str(IDENTITY_MANIFEST),
+        str(identity_yaml),
         str(EDM_IDENTITY_SPEC),
         "--capability-profile",
         str(SUNO_PROFILE_PATH),
         "--output-dir",
         str(output_dir),
     ]
+
+
+def _build_scratch_identity_dir(tmp_path: Path, *, chord_artifact_bytes: bytes) -> Path:
+    """Copy the midnight_signal identity fixture set into `tmp_path`, replacing
+    the harmony anchor's artifact bytes with `chord_artifact_bytes` and
+    updating the manifest's declared sha256 to match — so provenance-chain
+    hash verification passes and a test failure is isolated to whatever the
+    replaced artifact's content actually triggers (e.g. a schema check),
+    rather than a sha256 mismatch."""
+    (tmp_path / "identity").mkdir()
+    (tmp_path / "composition_score.yaml").write_bytes(BASE_SCORE.read_bytes())
+    for name in ("lyrics.txt", "melody_notes.json"):
+        (tmp_path / "identity" / name).write_bytes(
+            (FIXTURE_DIR / "identity" / name).read_bytes()
+        )
+    (tmp_path / "identity" / "chord_progression.json").write_bytes(chord_artifact_bytes)
+
+    manifest_data = yaml.safe_load(IDENTITY_MANIFEST.read_text(encoding="utf-8"))
+    for anchor_data in manifest_data["anchors"]:
+        if anchor_data["id"] == "harmony":
+            anchor_data["sha256"] = hashlib.sha256(chord_artifact_bytes).hexdigest()
+    manifest_path = tmp_path / "identity_manifest.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(manifest_data, sort_keys=False, allow_unicode=True), encoding="utf-8"
+    )
+    return manifest_path
 
 
 def test_observe_cli_rejects_manifest_sha_mismatch(tmp_path: Path) -> None:
@@ -698,6 +745,164 @@ def test_observe_cli_extracts_from_a_byte_identical_audio_snapshot(
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["generated_artifact"]["path"] == str(audio_path)
     assert report["generated_artifact"]["sha256"] == expected_sha256
+
+
+# --- 5d. PR #187 review round 2: harmony artifact bytes reuse + schema fail-closed -
+
+
+def test_observe_harmony_uses_the_provided_artifact_bytes_without_reopening_the_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression guard at the sensor level: `_observe_harmony` must use the
+    `artifact_bytes` it was given, never re-reading the artifact file itself.
+    Reads the real fixture bytes *before* monkeypatching `Path.read_bytes` to
+    always raise, so any attempt to reopen anything through `Path.read_bytes`
+    afterward fails the test immediately."""
+    anchor = _anchor("harmony", "harmony", "chord_progression.json", "chord_sequence_json")
+    bundle = _bundle_with_chords(CANONICAL_PROGRESSION)
+    artifact_bytes = (FIXTURE_DIR / "identity" / "chord_progression.json").read_bytes()
+
+    def _boom(self: Path) -> bytes:
+        raise AssertionError(
+            f"_observe_harmony must not re-read the artifact file from disk: {self}"
+        )
+
+    monkeypatch.setattr(Path, "read_bytes", _boom)
+
+    observation = _observe_harmony(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        bundle=bundle,
+        artifact_bytes=artifact_bytes,
+    )
+
+    assert observation.adherence_status == "preserved"
+
+
+def test_observe_cli_harmony_measurement_does_not_reread_artifact_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CLI-level counterpart: the chord_progression.json artifact must be read
+    from disk exactly once for the whole `observe` invocation (during the D-3
+    anchor-hash verification inside `parse_identity_manifest_with_artifacts`),
+    not a second time when the harmony sensor measures against it."""
+    pkg_dir = tmp_path / "pkg"
+    result = CliRunner().invoke(app, _cli_package_args(pkg_dir))
+    assert result.exit_code == 0, result.output
+
+    def fake_extract(path: str) -> RPEBundle:
+        return _bundle_with_chords(CANONICAL_PROGRESSION)
+
+    monkeypatch.setattr("svp_rpe.arrange.observe.extract_rpe_from_file", fake_extract)
+
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"unused-placeholder-audio-bytes")
+
+    resolved_chord_artifact = (FIXTURE_DIR / "identity" / "chord_progression.json").resolve()
+    read_counts: dict[Path, int] = {}
+    original_read_bytes = Path.read_bytes
+
+    def counting_read_bytes(self: Path) -> bytes:
+        if self.resolve() == resolved_chord_artifact:
+            read_counts[resolved_chord_artifact] = read_counts.get(resolved_chord_artifact, 0) + 1
+        return original_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", counting_read_bytes)
+
+    report_path = tmp_path / "report.json"
+    result2 = CliRunner().invoke(
+        app,
+        [
+            "observe",
+            str(pkg_dir / "performance_package.json"),
+            str(audio_path),
+            "--manifest",
+            str(IDENTITY_MANIFEST),
+            "-o",
+            str(report_path),
+        ],
+    )
+
+    assert result2.exit_code == 0, result2.output
+    assert read_counts.get(resolved_chord_artifact) == 1
+
+
+def test_observe_cli_rejects_chord_artifact_missing_schema(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chord_bytes = b'{"chords": [{"root": "C", "quality": "minor"}]}'
+    manifest_path = _build_scratch_identity_dir(tmp_path, chord_artifact_bytes=chord_bytes)
+
+    pkg_dir = tmp_path / "pkg"
+    result = CliRunner().invoke(app, _cli_package_args(pkg_dir, identity_yaml=manifest_path))
+    assert result.exit_code == 0, result.output
+
+    def fake_extract(path: str) -> RPEBundle:
+        return _bundle_with_chords(CANONICAL_PROGRESSION)
+
+    monkeypatch.setattr("svp_rpe.arrange.observe.extract_rpe_from_file", fake_extract)
+
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"unused-placeholder-audio-bytes")
+    report_path = tmp_path / "report.json"
+
+    result2 = CliRunner().invoke(
+        app,
+        [
+            "observe",
+            str(pkg_dir / "performance_package.json"),
+            str(audio_path),
+            "--manifest",
+            str(manifest_path),
+            "-o",
+            str(report_path),
+        ],
+    )
+
+    assert result2.exit_code == 1
+    assert "unsupported schema" in result2.stderr
+    assert not report_path.exists()
+
+
+def test_observe_cli_rejects_chord_artifact_unknown_schema_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chord_bytes = (
+        b'{"schema": "chord-sequence/0.2", '
+        b'"chords": [{"root": "C", "quality": "minor"}]}'
+    )
+    manifest_path = _build_scratch_identity_dir(tmp_path, chord_artifact_bytes=chord_bytes)
+
+    pkg_dir = tmp_path / "pkg"
+    result = CliRunner().invoke(app, _cli_package_args(pkg_dir, identity_yaml=manifest_path))
+    assert result.exit_code == 0, result.output
+
+    def fake_extract(path: str) -> RPEBundle:
+        return _bundle_with_chords(CANONICAL_PROGRESSION)
+
+    monkeypatch.setattr("svp_rpe.arrange.observe.extract_rpe_from_file", fake_extract)
+
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"unused-placeholder-audio-bytes")
+    report_path = tmp_path / "report.json"
+
+    result2 = CliRunner().invoke(
+        app,
+        [
+            "observe",
+            str(pkg_dir / "performance_package.json"),
+            str(audio_path),
+            "--manifest",
+            str(manifest_path),
+            "-o",
+            str(report_path),
+        ],
+    )
+
+    assert result2.exit_code == 1
+    assert "chord-sequence/0.2" in result2.stderr
+    assert not report_path.exists()
 
 
 # --- 6. E2E (real perform + extract): pinned harmony measurement + determinism -----
