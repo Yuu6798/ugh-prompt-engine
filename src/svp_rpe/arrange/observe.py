@@ -333,6 +333,11 @@ def _observe_harmony(
         "collapsed_match_fraction": collapsed_match_fraction,
         "unmatched_tail_length": unmatched_tail_length,
         "unmatched_tail_head": [[root, quality] for root, quality in unmatched_tail],
+        # PR #187 review round 9: recorded on both branches — the value that
+        # drives the D-1 identity gate (`full_cycles >= 1`) must be
+        # independently auditable from the sidecar itself (self-description
+        # principle), not only inferable from the note text.
+        "full_cycles": full_cycles,
     }
     sensor = SensorRecord(name="chord_sequence_match", available=True, reason=None)
     full_prefix_match = (
@@ -351,7 +356,12 @@ def _observe_harmony(
             measurements=measurements,
             adherence_status="preserved",
             determination="exact_match",
-            note=None,
+            # round 9: state the fact the identity gate relied on, instead of
+            # leaving preserved's basis only in the measurements dict.
+            note=(
+                "collapsed observed sequence matches the canonical alternation "
+                f"exactly ({full_cycles} full cycle(s))."
+            ),
         )
     if full_prefix_match:
         note = (

@@ -344,13 +344,19 @@ def test_observe_harmony_exact_match_is_preserved() -> None:
         "observed_length": 4,
         "collapsed_observed_length": 4,
         "matched_cycle_prefix_length": 4,
+        "full_cycles": 1,
         "collapsed_match_fraction": 1.0,
         "unmatched_tail_length": 0,
         "unmatched_tail_head": [],
     }
     assert observation.adherence_status == "preserved"
     assert observation.determination == "exact_match"
-    assert observation.note is None
+    # PR #187 review round 9: preserved's note states the fact the identity
+    # gate relied on (full_cycles), self-descriptive from the sidecar alone.
+    assert observation.note == (
+        "collapsed observed sequence matches the canonical alternation "
+        "exactly (1 full cycle(s))."
+    )
 
 
 def test_observe_harmony_mismatch_is_deferred_with_raw_measurements() -> None:
@@ -378,6 +384,7 @@ def test_observe_harmony_mismatch_is_deferred_with_raw_measurements() -> None:
     assert observation.measurements["observed_length"] == 4
     assert observation.measurements["collapsed_observed_length"] == 4
     assert observation.measurements["matched_cycle_prefix_length"] == 0
+    assert observation.measurements["full_cycles"] == 0
     assert observation.measurements["collapsed_match_fraction"] == 0.0
     assert observation.measurements["unmatched_tail_length"] == 4
     assert observation.measurements["unmatched_tail_head"] == [
@@ -481,8 +488,13 @@ def test_observe_harmony_trailing_internal_duplicate_reaches_preserved() -> None
 
     assert observation.measurements["collapsed_observed_length"] == 2
     assert observation.measurements["matched_cycle_prefix_length"] == 2
+    assert observation.measurements["full_cycles"] == 1
     assert observation.adherence_status == "preserved"
     assert observation.determination == "exact_match"
+    assert observation.note == (
+        "collapsed observed sequence matches the canonical alternation "
+        "exactly (1 full cycle(s))."
+    )
 
 
 def test_cycle_alignment_degenerate_canonical_does_not_hang_and_diverging_chord_is_tail() -> (
@@ -563,8 +575,13 @@ def test_observe_harmony_degenerate_canonical_single_chord_reaches_preserved() -
 
     assert observation.measurements["collapsed_observed_length"] == 1
     assert observation.measurements["matched_cycle_prefix_length"] == 1
+    assert observation.measurements["full_cycles"] == 1
     assert observation.adherence_status == "preserved"
     assert observation.determination == "exact_match"
+    assert observation.note == (
+        "collapsed observed sequence matches the canonical alternation "
+        "exactly (1 full cycle(s))."
+    )
 
 
 # --- 4. build_observation_report: single shared extraction + determinism ----------
@@ -1498,6 +1515,7 @@ def test_observe_cli_e2e_harmony_measurement_is_pinned_and_deterministic(
         "observed_length": 25,
         "collapsed_observed_length": 10,
         "matched_cycle_prefix_length": 7,
+        "full_cycles": 2,
         "collapsed_match_fraction": 0.7,
         "unmatched_tail_length": 3,
         "unmatched_tail_head": [["C", "major"], ["C", "minor"], ["C", "major"]],

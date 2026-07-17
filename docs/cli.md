@@ -426,30 +426,36 @@ progression, not a single pass), the instrument records two families of measurem
   compare drifts out of phase almost immediately even for a musically faithful
   performance. **Not used for the D-1 identity gate.**
 - **collapsed cycle-alignment** (`canonical_length`, `observed_length`,
-  `collapsed_observed_length`, `matched_cycle_prefix_length`,
+  `collapsed_observed_length`, `matched_cycle_prefix_length`, `full_cycles`,
   `collapsed_match_fraction`, `unmatched_tail_length`, `unmatched_tail_head`) —
   the raw `chord_events` sequence is collapsed (adjacent identical entries merged
   into one), then matched from the start against the canonical progression's
   infinite repeating alternation (itself collapsed across the cycle boundary,
   e.g. a 4-chord progression whose first and last chord are identical collapses
   2 cycles to 7 entries, not 8). `matched_cycle_prefix_length` is how much of the
-  collapsed observed sequence matches continuously before the first divergence.
-  **This is the D-1 identity gate**: `preserved` only when
-  `collapsed_observed_length > 0` and `matched_cycle_prefix_length` equals it
-  exactly (no leftover tail); otherwise `not_observed` / `deferred`, with the
-  `note` stating the number of full canonical cycles matched and the length of
-  the unmatched tail — a plain fact about the two sequences, not an
+  collapsed observed sequence matches continuously before the first divergence,
+  and `full_cycles` is how many full passes through the canonical progression
+  that prefix represents. **This is the D-1 identity gate**: `preserved` only
+  when `collapsed_observed_length > 0`, `matched_cycle_prefix_length` equals it
+  exactly (no leftover tail), *and* `full_cycles >= 1` — a prefix match alone
+  isn't enough, since a drone/truncated output can collapse to a proper prefix
+  of the canonical progression (e.g. a single chord) and match it exactly
+  without ever completing one full cycle. `full_cycles` is always recorded in
+  `measurements` (on both branches), and `note` always states the fact the gate
+  relied on — "matches the canonical alternation exactly (N full cycle(s))" on
+  `preserved`, or the number of full cycles matched and the length of the
+  unmatched tail on `deferred` — a plain fact about the two sequences, not an
   interpretation of *why* they diverge.
 
 Concretely, the deterministic `expected/edm/derived_score.yaml` E2E fixture measures
-`collapsed_observed_length: 10`, `matched_cycle_prefix_length: 7` — the collapsed
-chord sequence recovers 2 full canonical cycles (matching the score's 2 non-drone,
-chord-playing sections) before a 3-entry tail diverges. *Interpretation* (not
-recorded in the report, which states facts only): the 3-entry tail most likely
-comes from the drone-only intro/bridge sections, where the chroma-template
-detector still emits a (arbitrary-looking) major/minor label for a bare root tone
-that was never meant to carry a chord progression — see
-[`arrangement_identity_planning.md`](arrangement_identity_planning.md) AR4.
+`collapsed_observed_length: 10`, `matched_cycle_prefix_length: 7`, `full_cycles: 2`
+— the collapsed chord sequence recovers 2 full canonical cycles (matching the
+score's 2 non-drone, chord-playing sections) before a 3-entry tail diverges.
+*Interpretation* (not recorded in the report, which states facts only): the
+3-entry tail most likely comes from the drone-only intro/bridge sections, where
+the chroma-template detector still emits a (arbitrary-looking) major/minor
+label for a bare root tone that was never meant to carry a chord progression —
+see [`arrangement_identity_planning.md`](arrangement_identity_planning.md) AR4.
 
 lyrics/melody anchors are recorded as `available: false` with a `reason` (they need
 the optional `lyrics` / `basic-pitch` extras — not wired here); their future
