@@ -1393,6 +1393,17 @@ def observe_cmd(
     it resolves to any input path (package / manifest / audio / manifest
     source locator / any anchor artifact) — the same input/output collision
     guard `arrange` / `package` apply to their own outputs.
+
+    Scope boundary (PR #187 review round 16, P2 rejected by design): the
+    cross-object checks here stop at *identifying* the observation target —
+    manifest sha256, `work_id`, and the `anchor_statuses` id set, i.e. "does
+    this package describe the same work and anchor set this manifest does".
+    Internal consistency of `package`'s own fields (e.g. `channel_artifacts`
+    entries' `artifact` / `artifact_sha256` matching the manifest anchors they
+    reference) is `package`'s own schema-validation responsibility, not
+    `observe`'s — a future `verify` command is the right home for exhaustive
+    package-internal consistency checking, so that job doesn't creep into this
+    instrument's provenance-identification role.
     """
     import hashlib
     import os
