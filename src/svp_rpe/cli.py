@@ -929,10 +929,30 @@ def _package_report_digest_inputs(descriptor: dict[str, Any]) -> dict[str, str]:
 # `_package_report_digest_inputs` the same way those pair with
 # `descriptive_filename` — one arrange-shaped constant, one package-shaped
 # constant.
+#
+# Round 8 partial adoption: `warnings` was removed from the package
+# whitelist (kept in round 7). Every warning `build_performance_package`
+# ever emits is a pure function of facts already baked into
+# `performance_package.json` bytes — channel support / anchor delivery
+# status — so an identical `package_sha256` (already pinned by
+# `content_digest`, since content_digest = sha256(package_sha256) for
+# package) implies identical warnings; device-profile advisories are a
+# separate stderr-only channel that never lands in `warnings` (#128), so
+# they can't explain a difference here either. A `warnings` difference at
+# matching `package_sha256` therefore isn't legitimate invocation drift —
+# it's a tamper signal, so it stays outside the whitelist.
+#
+# `inputs` is deliberately *kept* in the whitelist (the other half of the
+# same round-8 review comment was rejected): `inputs` records input-file
+# byte hashes, which is invocation provenance in the same sense
+# `invocation_provenance.compiler.git_commit` already is — first-publish-wins
+# already accepts that the *first* successful invocation's environment is
+# what gets recorded permanently. Requiring `inputs` to match exactly would
+# reject legitimate re-runs where a parse-equivalent but differently
+# formatted input (whitespace, key order) produces the same package but a
+# different input-file hash — a false positive, not a caught tamper.
 _ARRANGE_BUNDLE_ALLOWED_PROVENANCE_FIELDS = frozenset({"source_score", "arrangement_spec"})
-_PACKAGE_REPORT_ALLOWED_PROVENANCE_FIELDS = frozenset(
-    {"inputs", "invocation_provenance", "mode", "warnings"}
-)
+_PACKAGE_REPORT_ALLOWED_PROVENANCE_FIELDS = frozenset({"inputs", "invocation_provenance", "mode"})
 
 
 @app.command()

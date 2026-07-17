@@ -1270,3 +1270,72 @@ def test_package_builds_root_rejects_symlinked_locator_placeholder(tmp_path: Pat
     assert "locator placeholder is a symlink" in result.stderr
     assert not (root / "latest.json").exists()
     assert list(real_dir.iterdir()) == []
+
+
+# --- PR #184 review round 8: `warnings` removed from report whitelist --------
+# --- (`inputs` deliberately kept — pinned as still-allowed) -------------------
+
+
+def test_package_builds_root_rejects_tampered_warnings(tmp_path: Path) -> None:
+    """`warnings` is a pure function of facts already baked into
+    `performance_package.json` bytes (channel support / anchor delivery
+    status), so an identical `package_sha256` implies identical `warnings`;
+    device-profile advisories never land in `warnings` (#128). A `warnings`
+    difference at a matching `content_digest` is therefore a tamper signal,
+    not legitimate invocation drift, and round 8 removed it from the
+    package-report provenance whitelist."""
+    manifest_path, spec_path = _write_package_fixture(tmp_path)
+    root = tmp_path / "builds-root"
+
+    first = CliRunner().invoke(
+        app,
+        _package_args(manifest_path, spec_path, mode_flag="builds-root", mode_value=str(root)),
+    )
+    assert first.exit_code == 0, first.output
+    digest_dir = next((root / "builds").iterdir())
+    report_path = digest_dir / "compilation_report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["warnings"] = [*report["warnings"], "tampered warning"]
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    latest_before = (root / "latest.json").read_bytes()
+
+    second = CliRunner().invoke(
+        app,
+        _package_args(manifest_path, spec_path, mode_flag="builds-root", mode_value=str(root)),
+    )
+
+    assert second.exit_code == 1
+    assert "Error:" in second.stderr
+    assert "non-provenance field" in second.stderr
+    assert "warnings" in second.stderr
+    assert (root / "latest.json").read_bytes() == latest_before
+
+
+def test_package_builds_root_allows_inputs_only_difference(tmp_path: Path) -> None:
+    """`inputs` stays in the whitelist (round 8 rejected removing it too):
+    it records input-file byte hashes, the same category of invocation
+    provenance `invocation_provenance` already is, so it alone differing is
+    still accepted as a no-op with the "differs" advisory."""
+    manifest_path, spec_path = _write_package_fixture(tmp_path)
+    root = tmp_path / "builds-root"
+
+    first = CliRunner().invoke(
+        app,
+        _package_args(manifest_path, spec_path, mode_flag="builds-root", mode_value=str(root)),
+    )
+    assert first.exit_code == 0, first.output
+    digest_dir = next((root / "builds").iterdir())
+    report_path = digest_dir / "compilation_report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["inputs"]["identity_manifest"]["sha256"] = "9" * 64
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    second = CliRunner().invoke(
+        app,
+        _package_args(manifest_path, spec_path, mode_flag="builds-root", mode_value=str(root)),
+    )
+
+    assert second.exit_code == 0, second.output
+    assert "provenance differs from this invocation" in second.stderr
+    latest = json.loads((root / "latest.json").read_text(encoding="utf-8"))
+    assert latest["content_digest"] == digest_dir.name

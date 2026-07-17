@@ -292,9 +292,21 @@ verifies `performance_package.json` itself is present, non-symlinked, and
 hashes to what `compilation_report.json` declares, on the same terms as
 `arrange`'s `derived_score.yaml` + `arrangement_diff.json` check above; the
 provenance-only whitelist for `compilation_report.json` is `inputs`,
-`invocation_provenance`, `mode`, and `warnings` — every other top-level field
-(`work_id`, `generator`, `package_sha256`, `content_digest`, etc.) must match
-exactly even when the descriptor bytes otherwise differ.
+`invocation_provenance`, and `mode` — every other top-level field (`work_id`,
+`generator`, `package_sha256`, `content_digest`, `warnings`, etc.) must match
+exactly even when the descriptor bytes otherwise differ. `warnings` is
+deliberately *not* whitelisted: every warning `build_performance_package`
+emits is a pure function of facts already baked into
+`performance_package.json` bytes (channel support / anchor delivery status),
+so a matching `package_sha256` implies matching `warnings` — device-profile
+advisories are a separate stderr-only channel that never lands in
+`warnings` (#128) — so a `warnings` difference here is a tamper signal, not
+invocation drift. `inputs`, by contrast, stays whitelisted: it records
+input-file byte hashes, the same category of invocation provenance
+`invocation_provenance.compiler.git_commit` already is, and requiring it to
+match exactly would reject legitimate re-runs where a parse-equivalent but
+differently formatted input produces the same package under a different
+input-file hash.
 
 Because `--builds-root`'s locator computation stands in for the not-yet-known
 `content_digest` with a reserved, same-depth placeholder directory
