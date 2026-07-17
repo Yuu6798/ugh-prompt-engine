@@ -187,7 +187,16 @@ def _load_chord_progression(raw_bytes: bytes, *, artifact_path: Path) -> list[tu
         raise ValueError(
             f"chord sequence artifact must be a mapping with a 'chords' key: {artifact_path}"
         )
-    chords = [ChordSpec.model_validate(item) for item in payload["chords"]]
+    chords_field = payload["chords"]
+    if not isinstance(chords_field, list):
+        # PR #187 review round 7: without this check, `chords: null` would
+        # crash with an uncaught TypeError iterating None (not one of the
+        # types the CLI catches), and other non-list values (a mapping, a
+        # string — whose characters would silently become bogus per-item
+        # validation attempts) would produce a confusing pydantic error
+        # instead of a direct, on-topic message.
+        raise ValueError(f"chord sequence artifact 'chords' must be a list: {artifact_path}")
+    chords = [ChordSpec.model_validate(item) for item in chords_field]
     return [(chord.root, chord.quality) for chord in chords]
 
 

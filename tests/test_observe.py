@@ -1217,6 +1217,91 @@ def test_observe_cli_rejects_chord_artifact_unknown_schema_version(
     assert not report_path.exists()
 
 
+def test_observe_cli_rejects_chord_artifact_with_null_chords(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PR #187 review round 7: `chords: null` — valid JSON, correct schema,
+    hash-matching artifact — must fail cleanly ("Error: ..." + exit 1), not
+    crash with an uncaught `TypeError` from iterating `None`."""
+    chord_bytes = b'{"schema": "chord-sequence/0.1", "chords": null}'
+    manifest_path = _build_scratch_identity_dir(tmp_path, chord_artifact_bytes=chord_bytes)
+
+    pkg_dir = tmp_path / "pkg"
+    result = CliRunner().invoke(app, _cli_package_args(pkg_dir, identity_yaml=manifest_path))
+    assert result.exit_code == 0, result.output
+
+    def fake_extract(path: str) -> RPEBundle:
+        return _bundle_with_chords(CANONICAL_PROGRESSION)
+
+    monkeypatch.setattr("svp_rpe.arrange.observe.extract_rpe_from_file", fake_extract)
+
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"unused-placeholder-audio-bytes")
+    report_path = tmp_path / "report.json"
+
+    result2 = CliRunner().invoke(
+        app,
+        [
+            "observe",
+            str(pkg_dir / "performance_package.json"),
+            str(audio_path),
+            "--manifest",
+            str(manifest_path),
+            "-o",
+            str(report_path),
+        ],
+    )
+
+    assert result2.exit_code == 1
+    assert result2.stderr.startswith("Error:")
+    assert "'chords' must be a list" in result2.stderr
+    assert "Traceback" not in result2.stderr
+    assert not report_path.exists()
+
+
+def test_observe_cli_rejects_chord_artifact_with_string_chords(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same shape as the null case, but `chords` is a string — without the
+    isinstance(list) guard, iterating it would silently walk over individual
+    characters and fail with a confusing per-character pydantic error instead
+    of a direct, on-topic message."""
+    chord_bytes = b'{"schema": "chord-sequence/0.1", "chords": "abc"}'
+    manifest_path = _build_scratch_identity_dir(tmp_path, chord_artifact_bytes=chord_bytes)
+
+    pkg_dir = tmp_path / "pkg"
+    result = CliRunner().invoke(app, _cli_package_args(pkg_dir, identity_yaml=manifest_path))
+    assert result.exit_code == 0, result.output
+
+    def fake_extract(path: str) -> RPEBundle:
+        return _bundle_with_chords(CANONICAL_PROGRESSION)
+
+    monkeypatch.setattr("svp_rpe.arrange.observe.extract_rpe_from_file", fake_extract)
+
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"unused-placeholder-audio-bytes")
+    report_path = tmp_path / "report.json"
+
+    result2 = CliRunner().invoke(
+        app,
+        [
+            "observe",
+            str(pkg_dir / "performance_package.json"),
+            str(audio_path),
+            "--manifest",
+            str(manifest_path),
+            "-o",
+            str(report_path),
+        ],
+    )
+
+    assert result2.exit_code == 1
+    assert result2.stderr.startswith("Error:")
+    assert "'chords' must be a list" in result2.stderr
+    assert "Traceback" not in result2.stderr
+    assert not report_path.exists()
+
+
 # --- 5e. PR #187 review round 6: atomic -o publish -----------------------------------
 
 
