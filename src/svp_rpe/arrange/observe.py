@@ -255,6 +255,22 @@ def _cycle_alignment(
     canonical alternation (there is nothing else `canonical` could ever
     produce), so matching stops there and that chord starts the unmatched
     tail — the same outcome an ordinary mismatch produces.
+
+    round 10 fix: the round-4 trailing skip also needs to stop exactly at a
+    completed cycle, not wrap into the *next* one. `matched_raw_index % length
+    == 0` means the matches so far already account for a whole number of
+    cycles with nothing left over — any further step would consume the first
+    raw position of a new cycle, not a trailing duplicate of the one just
+    finished. Without this check, a single-chord canonical (`length == 1`,
+    e.g. `[C]`) over-swept: every raw position trivially equals `last_chord`
+    (there's only one chord to ever produce), so the old bound
+    (`trailing_steps < length`, i.e. `< 1`) still let it advance one step past
+    an already-complete cycle, inflating `full_cycles` from 1 to 2 for a
+    single observed chord. For `length >= 2` this addition changes nothing
+    observable: the old bound already prevented sweeping a full extra cycle's
+    worth of steps past a genuine match, so `matched_raw_index // length`
+    comes out the same whether the sweep stops exactly at the boundary or one
+    step short of the next one.
     """
     if not canonical or not collapsed_observed:
         return 0, 0
@@ -282,6 +298,7 @@ def _cycle_alignment(
     trailing_steps = 0
     while (
         matched > 0
+        and matched_raw_index % length != 0
         and trailing_steps < length
         and canonical[matched_raw_index % length] == last_chord
     ):

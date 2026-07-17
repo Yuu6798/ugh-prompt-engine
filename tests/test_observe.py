@@ -532,6 +532,37 @@ def test_cycle_alignment_degenerate_canonical_single_chord_prefix_is_one_cycle()
     assert full_cycles == 1
 
 
+def test_cycle_alignment_single_chord_canonical_exact_match_is_one_cycle_not_two() -> None:
+    """PR #187 review round 10 (real over-count bug): canonical=[C] (length
+    1) matched by a single observed [C] must be exactly 1 full cycle, not 2.
+    Before the round-10 fix, the round-4 trailing sweep's bound
+    (`trailing_steps < length`, i.e. `< 1`) still let it take one step past
+    an already-complete cycle — because with `length == 1` every raw
+    canonical position trivially equals `last_chord` (there's only one chord
+    `canonical` can ever produce), the sweep couldn't tell "duplicate within
+    the same cycle" from "first position of the next cycle" and always
+    advanced once, inflating `matched_raw_index` from 1 to 2 and
+    `full_cycles` from 1 to 2."""
+    canonical = [("C", "major")]
+    matched_prefix_length, full_cycles = _cycle_alignment(canonical, [("C", "major")])
+    assert matched_prefix_length == 1
+    assert full_cycles == 1
+
+
+def test_cycle_alignment_single_chord_canonical_diverging_chord_is_tail() -> None:
+    """Companion case: canonical=[C], observed=[C, G]. The bounded in-loop
+    search (round 8) can't find anything but "C" past the first match (there
+    is nothing else `canonical=[C]` could ever produce), so "G" is never
+    compared — it starts the unmatched tail — while the single matched "C"
+    still correctly counts as one full cycle (round 10)."""
+    canonical = [("C", "major")]
+    matched_prefix_length, full_cycles = _cycle_alignment(
+        canonical, [("C", "major"), ("G", "major")]
+    )
+    assert matched_prefix_length == 1
+    assert full_cycles == 1
+
+
 def test_observe_harmony_degenerate_canonical_diverging_chord_stays_deferred() -> None:
     """End-to-end confirmation through `_observe_harmony`: the round-8 fix
     must not change the *outcome* for this case, only stop it from hanging —
@@ -852,6 +883,47 @@ def test_observe_cli_rejects_manifest_sha_mismatch(tmp_path: Path) -> None:
     assert result2.exit_code == 1
     assert "sha256 does not match" in result2.stderr
     assert not (tmp_path / "report.json").exists()
+
+
+def test_observe_cli_rejects_work_id_mismatch(tmp_path: Path) -> None:
+    """PR #187 review round 10: the sha256 chain check only proves the
+    manifest *bytes* the package recorded and the `--manifest` file agree —
+    it doesn't independently prove they describe the same work. Patch the
+    package's own `work_id` (leaving `inputs.identity_manifest.sha256`
+    correct, so the earlier sha256 check still passes) to simulate that
+    mismatch; `observe` must reject it before measuring anything."""
+    pkg_dir = tmp_path / "pkg"
+    result = CliRunner().invoke(app, _cli_package_args(pkg_dir))
+    assert result.exit_code == 0, result.output
+
+    package_data = json.loads((pkg_dir / "performance_package.json").read_text())
+    original_work_id = package_data["work_id"]
+    package_data["work_id"] = "some-other-work"
+    patched_package = pkg_dir / "performance_package_patched.json"
+    patched_package.write_text(json.dumps(package_data), encoding="utf-8")
+
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"unused-placeholder-audio-bytes")
+    report_path = tmp_path / "report.json"
+
+    result2 = CliRunner().invoke(
+        app,
+        [
+            "observe",
+            str(patched_package),
+            str(audio_path),
+            "--manifest",
+            str(IDENTITY_MANIFEST),
+            "-o",
+            str(report_path),
+        ],
+    )
+
+    assert result2.exit_code == 1
+    assert "work_id" in result2.stderr
+    assert "some-other-work" in result2.stderr
+    assert original_work_id in result2.stderr
+    assert not report_path.exists()
 
 
 def test_observe_cli_rejects_tampered_anchor_artifact(tmp_path: Path) -> None:

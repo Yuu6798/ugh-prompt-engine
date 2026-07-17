@@ -1455,6 +1455,22 @@ def observe_cmd(
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
+    # PR #187 review round 10: the sha256 chain check above only proves the
+    # manifest *bytes* the package recorded and the `--manifest` file agree —
+    # it says nothing about whether they describe the *same work*. Two
+    # different manifests could (accidentally or not) hash-match a stale
+    # `package.inputs.identity_manifest.sha256` from an unrelated build only
+    # if the bytes are literally identical, in which case work_id already
+    # matches too — but defense in depth belongs at the provenance-chain
+    # layer, not assumed from the hash check alone.
+    if package.work_id != loaded_manifest.meta.work_id:
+        typer.echo(
+            "Error: package.work_id does not match manifest.meta.work_id: "
+            f"{package.work_id!r} != {loaded_manifest.meta.work_id!r}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
     try:
         protected_paths = _observe_protected_input_paths(
             package_path, manifest_path, audio_path, loaded_manifest
