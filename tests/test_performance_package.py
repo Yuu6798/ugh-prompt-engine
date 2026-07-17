@@ -19,12 +19,16 @@ from svp_rpe.arrange.contract import (
     PreservationContract,
 )
 from svp_rpe.arrange.identity import IdentityAnchor, IdentityManifest
+from svp_rpe.arrange.bundle import compute_content_digest
 from svp_rpe.arrange.package import (
+    PERFORMANCE_PACKAGE_FILENAME,
     CompilationReport,
     PackageCompilationError,
     PerformancePackage,
     build_performance_package,
     compile_performance_package,
+    detect_compiler_git_commit,
+    detect_compiler_package_version,
 )
 from svp_rpe.compose.device_profile import DeviceProfile, load_device_profile
 from svp_rpe.compose.models import CompositionScore
@@ -171,6 +175,8 @@ def _build(
     score: CompositionScore | None = None,
     device_profile: DeviceProfile | None = None,
     artifact_base_locator: str = ".",
+    compiler_package_version: str | None = None,
+    compiler_git_commit: str | None = None,
 ):
     effective_score = score or _score()
     resolved_device_profile = (
@@ -190,6 +196,8 @@ def _build(
         profile_sha256=PROFILE_SHA256,
         derived_score_sha256=DERIVED_SHA256,
         strict=strict,
+        compiler_package_version=compiler_package_version,
+        compiler_git_commit=compiler_git_commit,
     )
 
 
@@ -575,7 +583,10 @@ def test_package_and_report_reject_unknown_schema_versions() -> None:
         PerformancePackage.model_validate(package_data)
 
     report_data = compiled.report.model_dump(mode="json")
-    report_data["schema_version"] = "compilation-report/0.2"
+    # compilation-report/0.2 is now the current (valid) version — item 9/10
+    # bumped it to carry content_digest + invocation_provenance.compiler, so
+    # the unknown-version probe moves to 0.3.
+    report_data["schema_version"] = "compilation-report/0.3"
     with pytest.raises(ValidationError):
         CompilationReport.model_validate(report_data)
 
@@ -861,3 +872,116 @@ def test_package_cli_does_not_overwrite_verified_manifest_artifacts(
         else "performance_package.json"
     )
     assert not (tmp_path / other_name).exists()
+
+
+# --- item 9/10: content_digest + invocation_provenance.compiler -----------------
+
+
+def test_report_content_digest_matches_independent_recomputation() -> None:
+    """content_digest = sha256(canonical_json({performance_package.json: package_sha256}))."""
+    manifest = _manifest([_anchor("lyrics", "lyrics", "lyrics_text")])
+    contract = _contract(manifest, {"lyrics": ("hard", [])})
+
+    compiled = _build(manifest, contract, _profile())
+
+    expected = compute_content_digest(
+        {PERFORMANCE_PACKAGE_FILENAME: compiled.report.package_sha256}
+    )
+    assert compiled.report.content_digest == expected
+    assert (
+        compiled.report.content_digest_basis
+        == "sha256-of-canonical-json-artifact-name-to-sha256/v1"
+    )
+
+
+def test_report_content_digest_excludes_invocation_provenance() -> None:
+    """content_digest is stable across differing compiler provenance (D-1)."""
+    manifest = _manifest([])
+    contract = _contract(manifest, {})
+    profile = _profile()
+
+    first = _build(
+        manifest,
+        contract,
+        profile,
+        compiler_package_version="1.2.3",
+        compiler_git_commit="a" * 40,
+    )
+    second = _build(
+        manifest,
+        contract,
+        profile,
+        compiler_package_version=None,
+        compiler_git_commit=None,
+    )
+
+    assert first.report.content_digest == second.report.content_digest
+    assert first.report.package_sha256 == second.report.package_sha256
+    assert first.report.invocation_provenance.compiler.package_version == "1.2.3"
+    assert first.report.invocation_provenance.compiler.git_commit == "a" * 40
+    assert second.report.invocation_provenance.compiler.package_version is None
+    assert second.report.invocation_provenance.compiler.git_commit is None
+
+
+def test_build_performance_package_defaults_compiler_fields_to_none() -> None:
+    """Callers that don't supply compiler provenance get `None`, not fabricated values."""
+    manifest = _manifest([])
+    contract = _contract(manifest, {})
+
+    compiled = _build(manifest, contract, _profile())
+
+    compiler = compiled.report.invocation_provenance.compiler
+    assert compiler.package_version is None
+    assert compiler.git_commit is None
+
+
+def test_detect_compiler_package_version_and_git_commit_never_raise() -> None:
+    """Best-effort detection: any failure degrades to `None`, never an exception."""
+    version = detect_compiler_package_version()
+    commit = detect_compiler_git_commit()
+
+    assert version is None or isinstance(version, str)
+    assert commit is None or (isinstance(commit, str) and len(commit) == 40)
+
+
+def test_detect_compiler_git_commit_returns_none_when_no_checkout_found(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Outside any git checkout, detection returns `None` without invoking git."""
+    import subprocess
+
+    from svp_rpe.arrange import package as package_module
+
+    def fail_if_called(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("git should not be invoked when no .git directory is found")
+
+    # `tmp_path` has no `.git` anywhere above it, simulating an installed
+    # (non-checkout) environment; `__file__` is module-level so this affects
+    # the `Path(__file__).resolve().parent` walk inside the function.
+    monkeypatch.setattr(package_module, "__file__", str(tmp_path / "arrange" / "package.py"))
+    monkeypatch.setattr(subprocess, "run", fail_if_called)
+
+    assert package_module.detect_compiler_git_commit() is None
+
+
+def test_package_cli_compiler_provenance_is_present_or_none(tmp_path: Path) -> None:
+    """The CLI-facing entry point (`compile_performance_package`) fills in real
+    (or `None`) compiler provenance, never raising for either outcome."""
+    manifest_path, spec_path, _ = _write_cli_fixture(tmp_path)
+    output_dir = tmp_path / "out"
+
+    result = CliRunner().invoke(
+        app,
+        _package_cli_args(manifest_path, spec_path, output_dir),
+    )
+    assert result.exit_code == 0, result.output
+
+    report = CompilationReport.model_validate_json(
+        (output_dir / "compilation_report.json").read_bytes()
+    )
+    compiler = report.invocation_provenance.compiler
+    assert compiler.package_version is None or isinstance(compiler.package_version, str)
+    assert compiler.git_commit is None or len(compiler.git_commit) == 40
+    # this repo checkout has a .git directory, so git_commit should resolve.
+    assert compiler.git_commit is not None
+    assert compiler.git_commit == detect_compiler_git_commit()

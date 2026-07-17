@@ -6,8 +6,11 @@ as separate states.  In particular, delivery never implies preservation.
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata as _pkg_metadata
 import json
 import os
+import re
+import subprocess
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Literal, Optional
@@ -22,7 +25,7 @@ from pydantic import (
     model_validator,
 )
 
-from svp_rpe.arrange.bundle import render_score_yaml
+from svp_rpe.arrange.bundle import CONTENT_DIGEST_BASIS, compute_content_digest, render_score_yaml
 from svp_rpe.arrange.capabilities import (
     INPUT_CHANNELS,
     ChannelSupport,
@@ -53,6 +56,10 @@ PERFORMANCE_PACKAGE_FILENAME = "performance_package.json"
 COMPILATION_REPORT_FILENAME = "compilation_report.json"
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
+_GIT_COMMIT_PATTERN = r"^[0-9a-f]{40}$"
+# pyproject.toml [project].name — importlib.metadata の distribution 名は
+# パッケージ import 名 (svp_rpe) でなく setuptools 配布名 (svp-rpe) を使う。
+_DISTRIBUTION_NAME = "svp-rpe"
 
 InputChannel = Literal[
     "style_prompt",
@@ -320,19 +327,55 @@ class PerformancePackage(PackageModel):
         return data
 
 
+class CompilerProvenance(PackageModel):
+    """Best-effort self-description of the compiling `svp-rpe` binary.
+
+    ``None`` means undetectable (not fabricated) — installed environment
+    without dist-info, `git` unavailable, or not a checkout. Never a
+    contract the compiler must satisfy (D-4: fallback chain, no invention).
+    """
+
+    package_version: Optional[str] = None
+    git_commit: Optional[str] = Field(default=None, pattern=_GIT_COMMIT_PATTERN)
+
+
+class InvocationProvenance(PackageModel):
+    """Audit record of *this run's* environment. Excluded from `content_digest`.
+
+    Deliberately separate from `content_digest` (Design Memo D-1/§2): the
+    digest is "does this content reproduce", this is "what environment
+    produced it". Known limitation: `git_commit` does not distinguish a
+    dirty working tree from a clean checkout at that commit.
+    """
+
+    compiler: CompilerProvenance
+
+
 class CompilationReport(PackageModel):
     """Compilation record.
 
     ``package_sha256`` pins the published package bytes.  The report cannot
     contain a self-hash because adding that hash would change the report bytes.
+
+    ``content_digest`` is the content fingerprint of the published artifact
+    set (here: just ``performance_package.json``, since this report is the
+    descriptive side and cannot include its own bytes — same reasoning as
+    ``package_sha256``). ``invocation_provenance`` is audit metadata about
+    *this compilation run* and is intentionally excluded from
+    ``content_digest`` (Design Memo D-1).
     """
 
-    schema_version: Literal["compilation-report/0.1"] = "compilation-report/0.1"
+    schema_version: Literal["compilation-report/0.2"] = "compilation-report/0.2"
     work_id: str
     generator: str
     mode: CompilationMode
     inputs: PackageInputs
     package_sha256: str = Field(pattern=_SHA256_PATTERN)
+    content_digest: str = Field(pattern=_SHA256_PATTERN)
+    content_digest_basis: Literal[
+        "sha256-of-canonical-json-artifact-name-to-sha256/v1"
+    ] = CONTENT_DIGEST_BASIS
+    invocation_provenance: InvocationProvenance
     warnings: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -363,6 +406,55 @@ def _render_json(model: BaseModel) -> str:
         ensure_ascii=False,
         indent=2,
     )
+
+
+def detect_compiler_package_version() -> Optional[str]:
+    """Best-effort installed `svp-rpe` distribution version, else `None`.
+
+    Same fallback pattern as `rpe/learned/*_adapter.py` (D-4: never fabricate
+    — `importlib.metadata.PackageNotFoundError` degrades to `None`, e.g. a
+    `pip install -e .` checkout that was never actually installed).
+    """
+    try:
+        return _pkg_metadata.version(_DISTRIBUTION_NAME)
+    except _pkg_metadata.PackageNotFoundError:
+        return None
+
+
+def detect_compiler_git_commit() -> Optional[str]:
+    """Best-effort `git rev-parse HEAD` of the checkout containing this module.
+
+    Walks up from this file looking for a `.git` directory; if none is found
+    (installed/wheel environment with no checkout in sight), returns `None`
+    without ever invoking `git`. Any subprocess failure — `git` missing, a
+    non-zero exit, a timeout, unparseable output — also degrades to `None`
+    (D-4: this is audit metadata, never a fabricated value, and never an
+    exception the caller must handle).
+    """
+    module_dir = Path(__file__).resolve().parent
+    repo_root: Optional[Path] = None
+    for candidate in (module_dir, *module_dir.parents):
+        if (candidate / ".git").exists():
+            repo_root = candidate
+            break
+    if repo_root is None:
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    commit = result.stdout.strip()
+    if not re.fullmatch(_GIT_COMMIT_PATTERN, commit):
+        return None
+    return commit
 
 
 def _device_profile_input(
@@ -477,10 +569,18 @@ def build_performance_package(
     profile_sha256: str,
     derived_score_sha256: str,
     strict: bool = False,
+    compiler_package_version: Optional[str] = None,
+    compiler_git_commit: Optional[str] = None,
 ) -> CompiledPerformancePackage:
     """Build package and report completely in memory.
 
     Hashes are supplied by the caller so this function never performs disk I/O.
+    `compiler_package_version` / `compiler_git_commit` are likewise
+    caller-supplied (default `None`) rather than detected here, for the same
+    reason: detecting them is a subprocess/dist-info probe, not something
+    this pure builder should do on every call (`compile_performance_package`,
+    the file-reading CLI entry point, is where the real values come from —
+    see `detect_compiler_package_version` / `detect_compiler_git_commit`).
     """
     if contract.inputs.identity_manifest.sha256 != manifest_sha256:
         raise PackageCompilationError(
@@ -615,12 +715,20 @@ def build_performance_package(
     )
     package_json = _render_json(package)
     package_sha256 = hashlib.sha256(package_json.encode("utf-8")).hexdigest()
+    content_digest = compute_content_digest({PERFORMANCE_PACKAGE_FILENAME: package_sha256})
     report = CompilationReport(
         work_id=manifest.meta.work_id,
         generator=profile.generator,
         mode="strict" if strict else "advisory",
         inputs=inputs,
         package_sha256=package_sha256,
+        content_digest=content_digest,
+        invocation_provenance=InvocationProvenance(
+            compiler=CompilerProvenance(
+                package_version=compiler_package_version,
+                git_commit=compiler_git_commit,
+            )
+        ),
         warnings=warnings,
     )
     return CompiledPerformancePackage(
@@ -764,6 +872,8 @@ def compile_performance_package(
         profile_sha256=hashlib.sha256(profile_bytes).hexdigest(),
         derived_score_sha256=derived_score_sha256,
         strict=strict,
+        compiler_package_version=detect_compiler_package_version(),
+        compiler_git_commit=detect_compiler_git_commit(),
     )
     return replace(
         compiled,

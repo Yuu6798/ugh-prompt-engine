@@ -92,7 +92,7 @@ is omitted when unset; `negative_tags` by contrast is always present as a
 list). Machine consumers should treat a missing
 `section_tags` key as "no tags", not check for `null`.
 
-### `svprpe arrange <composition_score.yaml> <arrangement.yaml> --output-dir <dir>`
+### `svprpe arrange <composition_score.yaml> <arrangement.yaml> (--output-dir <dir> | --builds-root <dir>)`
 
 Resolve an `ArrangementSpec` (AR1-1: `src/svp_rpe/arrange/`) against a base
 Composition Score and write the derived score plus a provenance bundle:
@@ -105,9 +105,11 @@ Writes exactly three files under `--output-dir`:
 
 - `derived_score.yaml` — the resolved `CompositionScore` (loader-valid, reloadable
   via `load_composition_score`)
-- `arrangement_bundle.json` — `schema_version: "arrangement-bundle/0.1"`,
+- `arrangement_bundle.json` — `schema_version: "arrangement-bundle/0.2"`,
   `arrangement_id`, `source_score`/`arrangement_spec` (`path` + SHA-256 of the raw
-  input bytes), `changes`, and `outputs` (bare filenames only)
+  input bytes), `changes`, `outputs` (each a `{path, sha256}` object — the SHA-256
+  is computed from the exact bytes published for that file), and
+  `content_digest`/`content_digest_basis` (see below)
 - `arrangement_diff.json` — `schema_version: "arrangement-diff/0.1"`,
   `arrangement_id`, and the same `changes` as the bundle
 
@@ -119,7 +121,27 @@ stderr). Given the same inputs and arguments, repeated runs produce
 byte-identical output regardless of `--output-dir`. The derived score can be
 fed straight back into `svprpe compose`.
 
-### `svprpe package <score.yaml> <identity.yaml> <arrangement.yaml> --capability-profile <profile.yaml> --output-dir <dir>`
+`content_digest` is `sha256(canonical_json({artifact_name: sha256_hex, ...}))`
+over `outputs` only (the bundle cannot hash itself, same reasoning as
+`package_sha256` below); `content_digest_basis` names that definition
+(`"sha256-of-canonical-json-artifact-name-to-sha256/v1"`) so a consumer can
+tell which hashing convention produced it. It intentionally carries no
+execution-environment information (see `--builds-root` and `package`'s
+`invocation_provenance` below).
+
+`--output-dir` and `--builds-root` are mutually exclusive; exactly one is
+required (both given or both omitted exits `2`). `--builds-root <root>`
+publishes the same three artifacts to `<root>/builds/<content_digest>/`
+instead, and updates `<root>/latest.json` (`schema_version:
+"builds-latest/0.1"`, `{"content_digest": "<64hex>"}`) to point at it. A
+digest directory is **immutable**: if `<root>/builds/<content_digest>/`
+already exists from a previous run, it is left completely untouched (no
+overwrite, no re-verification) and only `latest.json` is updated — the CLI
+prints a one-line advisory to stderr and exits `0`. Re-running with different
+inputs that resolve to a different `content_digest` publishes a sibling
+directory; older digest directories are never pruned.
+
+### `svprpe package <score.yaml> <identity.yaml> <arrangement.yaml> --capability-profile <profile.yaml> (--output-dir <dir> | --builds-root <dir>)`
 
 Compile a `PreservationContract` inline, match every requested identity anchor
 against the generator's `InputCapabilityProfile`, and write the deterministic
@@ -160,9 +182,39 @@ Advisory mode is the default and records capability warnings. Add
 `--strict-capabilities` to fail when any hard anchor is `unsupported` or
 `unknown`; hard anchors on experimental but usable channels remain deliverable.
 Both JSON files are constructed before publication and are published together
-with rollback on failure. `compilation_report.json` pins the exact published
-package bytes with `package_sha256`; neither output contains timestamps,
-absolute paths, or the output directory.
+with rollback on failure. `compilation_report.json` (`schema_version:
+"compilation-report/0.2"`) pins the exact published package bytes with
+`package_sha256`; neither output contains timestamps, absolute paths, or the
+output directory.
+
+`compilation_report.json` also carries `content_digest` /
+`content_digest_basis` (same definition as `arrange`'s bundle:
+`sha256(canonical_json({"performance_package.json": package_sha256}))`, basis
+`"sha256-of-canonical-json-artifact-name-to-sha256/v1"`) and a separate
+`invocation_provenance.compiler` block —
+`{"package_version": "<installed svp-rpe version or null>", "git_commit":
+"<40hex checkout HEAD or null>"}`. The split is deliberate: `content_digest`
+answers "does this content reproduce" (same inputs + same compiler behavior
+→ same digest) and is used as the `--builds-root` publish key;
+`invocation_provenance` answers "what environment produced this run" and is
+excluded from the digest so it never causes a rebuild to publish under a
+different directory. Both fields degrade to `null` rather than being
+fabricated (installed/wheel environment with no dist-info, no `git`, not a
+checkout, or any detection failure) — this also means `git_commit` cannot
+distinguish a dirty working tree from a clean checkout at that commit.
+
+`--output-dir` and `--builds-root` are mutually exclusive; exactly one is
+required (both given or both omitted exits `2`). `--builds-root <root>`
+publishes `performance_package.json` + `compilation_report.json` to
+`<root>/builds/<content_digest>/` and updates `<root>/latest.json`
+(`schema_version: "builds-latest/0.1"`) to point at it, with the same
+immutable-digest-directory / mutable-`latest.json` contract described for
+`arrange` above (an already-published digest directory is left untouched;
+only `latest.json` moves, with an advisory on stderr and exit `0`). Because
+re-running with a stale checkout's inputs after an implementation change
+still reproduces the same `content_digest`, publishing never mutates a
+digest directory's `invocation_provenance` to match a newer compiler run —
+that is the immutability contract's direct consequence, not a bug.
 
 ### `svprpe measure <audio>`
 

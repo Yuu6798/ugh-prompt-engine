@@ -395,16 +395,126 @@ def _publish_artifacts_atomically(
     return out_dir
 
 
+BUILDS_LATEST_SCHEMA_VERSION = "builds-latest/0.1"
+# `os.path.relpath` depends only on path *depth*, never on the literal name
+# of the final component, so any 64-hex-char stand-in produces the exact
+# same relative locator as the real `content_digest` would (every real
+# digest directory sits at the same depth under `<builds_root>/builds/`).
+# This lets `package` compute `artifact_base.locator` — itself part of the
+# package content that determines `content_digest` — *before* the digest is
+# known, without the two ever needing to agree on a real value.
+_BUILDS_LOCATOR_PLACEHOLDER_DIGEST = "0" * 64
+
+
+def _builds_placeholder_package_dir(builds_root: str | Path) -> Path:
+    """Same-depth stand-in for `<builds_root>/builds/<content_digest>/`."""
+    return Path(builds_root) / "builds" / _BUILDS_LOCATOR_PLACEHOLDER_DIGEST
+
+
+def _update_builds_latest_pointer(latest_path: Path, content_digest: str, *, root: Path) -> None:
+    """Atomically (over)write `<root>/latest.json` to point at `content_digest`.
+
+    `latest.json` is the one file this scheme ever overwrites — everything
+    under `<root>/builds/<digest>/` is immutable once published (Design
+    Memo §4).
+    """
+    import os
+    import tempfile
+
+    payload = json.dumps(
+        {"schema_version": BUILDS_LATEST_SCHEMA_VERSION, "content_digest": content_digest},
+        ensure_ascii=False,
+        indent=2,
+    )
+    root.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=root, prefix="latest.json.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+        os.replace(tmp_name, latest_path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+def _publish_artifacts_to_builds_root(
+    contents: dict[str, str],
+    builds_root: str | Path,
+    content_digest: str,
+) -> tuple[Path, bool]:
+    """Publish a complete artifact set under `<builds_root>/builds/<content_digest>/`.
+
+    Immutability contract (Design Memo §4): if the digest directory already
+    exists, it is left **completely untouched** — no overwrite, no append,
+    no re-verification — and only `latest.json` is updated to point at it.
+    Returns `(published_dir, already_existed)`.
+
+    First publish: the full artifact set is written into a
+    `tempfile.mkdtemp` staging directory under `<builds_root>/builds/`, then
+    the whole staging directory is moved onto the target with a single
+    `os.rename` (an atomic directory-level publish, unlike the
+    snapshot+per-file `os.replace` dance `_publish_artifacts_atomically`
+    needs for the mutable `--output-dir` case — a fresh digest directory has
+    no previous content to roll back to). A `rename` failure that turns out
+    to be a concurrent publish (the target now exists) is treated as the
+    immutable no-op case; any other failure propagates after best-effort
+    staging cleanup.
+    """
+    import os
+    import shutil
+    import tempfile
+
+    root = Path(builds_root)
+    builds_dir = root / "builds"
+    target_dir = builds_dir / content_digest
+    latest_path = root / "latest.json"
+
+    already_existed = target_dir.exists()
+    if not already_existed:
+        builds_dir.mkdir(parents=True, exist_ok=True)
+        staging = tempfile.mkdtemp(dir=builds_dir)
+        try:
+            staging_path = Path(staging)
+            for filename, content in contents.items():
+                (staging_path / filename).write_bytes(content.encode("utf-8"))
+            try:
+                os.rename(staging, target_dir)
+            except OSError:
+                if target_dir.exists():
+                    # Lost a concurrent-publish race: the directory some other
+                    # process just published wins (immutability contract).
+                    already_existed = True
+                else:
+                    raise
+        finally:
+            if Path(staging).exists():
+                shutil.rmtree(staging, ignore_errors=True)
+
+    _update_builds_latest_pointer(latest_path, content_digest, root=root)
+    return target_dir, already_existed
+
+
 @app.command()
 def arrange(
     score_yaml: str = typer.Argument(..., help="Path to base Composition Score YAML"),
     arrangement_yaml: str = typer.Argument(..., help="Path to ArrangementSpec YAML"),
-    output_dir: str = typer.Option(..., "--output-dir", help="Output directory"),
+    output_dir: Optional[str] = typer.Option(
+        None, "--output-dir", help="Output directory (mutually exclusive with --builds-root)"
+    ),
+    builds_root: Optional[str] = typer.Option(
+        None,
+        "--builds-root",
+        help=(
+            "Publish under <root>/builds/<content_digest>/ (immutable once "
+            "published; <root>/latest.json points at the most recent digest). "
+            "Mutually exclusive with --output-dir."
+        ),
+    ),
 ) -> None:
     """Resolve an ArrangementSpec against a base Composition Score into provenance artifacts."""
-    import os
-    import tempfile
-
     import yaml
     from pydantic import ValidationError
 
@@ -415,6 +525,12 @@ def arrange(
         DIFF_FILENAME,
         compile_arrangement,
     )
+
+    if (output_dir is None) == (builds_root is None):
+        raise typer.BadParameter(
+            "exactly one of --output-dir or --builds-root is required",
+            param_hint="--output-dir / --builds-root",
+        )
 
     try:
         compiled = compile_arrangement(score_yaml, arrangement_yaml)
@@ -436,69 +552,38 @@ def arrange(
         DIFF_FILENAME: json.dumps(compiled.diff, ensure_ascii=False, indent=2),
     }
 
-    # 原子的公開（PR #176 P2-2 / P2 第 2 ラウンド）: staging へ全ファイルを書き、
-    # 既存ターゲットを staging 内へ snapshot 退避してから os.replace で公開する。
-    # 単一ファイルの os.replace は原子的だが、複数ファイルのセットコミットには
-    # POSIX に原子操作が存在しない。本実装は snapshot + best-effort rollback で
-    # partial publish の窓を「rollback 自体も失敗する二重障害」まで縮小する
-    # （honesty: ゼロにはならない）。退避も os.replace（同一 FS の rename）なので
-    # copy 系より失敗面が小さい。全成功時は staging（.prev ごと）が自動掃除される。
-    out_dir = Path(output_dir)
-    try:
-        out_dir.mkdir(parents=True, exist_ok=True)
-        # 入力パスと出力成果物パスの衝突チェック（P2 第 3 ラウンド）: 入力が
-        # ターゲットのいずれかと同一実体なら、publish が入力を上書きして
-        # bundle の sha256（旧内容の hash）と path の指す実体（新成果物）が乖離し、
-        # 入力非改変契約にも違反する。resolve() で相対表記違い・symlink 経由も捕捉。
-        input_paths = {Path(score_yaml).resolve(), Path(arrangement_yaml).resolve()}
-        for filename in contents:
-            target = out_dir / filename
-            if target.resolve() in input_paths:
-                typer.echo(
-                    f"Error: input path collides with output artifact path: {target}",
-                    err=True,
-                )
-                raise typer.Exit(code=1)
-            if target.is_dir():
-                typer.echo(
-                    f"Error: output path is an existing directory: {target}",
-                    err=True,
-                )
-                raise typer.Exit(code=1)
-        with tempfile.TemporaryDirectory(dir=out_dir) as staging:
-            staging_dir = Path(staging)
-            for filename, content in contents.items():
-                (staging_dir / filename).write_text(content, encoding="utf-8")
+    if builds_root is not None:
+        content_digest = compiled.bundle["content_digest"]
+        try:
+            published_dir, already_existed = _publish_artifacts_to_builds_root(
+                contents, builds_root, content_digest
+            )
+        except OSError as exc:
+            typer.echo(f"Error: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        if already_existed:
+            typer.echo(
+                f"note: builds/{content_digest} already published; left untouched "
+                "(latest.json updated)",
+                err=True,
+            )
+        console.print(
+            f"[green]Derived score saved to {published_dir / DERIVED_SCORE_FILENAME}[/green]"
+        )
+        console.print(
+            f"[green]Arrangement bundle saved to {published_dir / BUNDLE_FILENAME}[/green]"
+        )
+        console.print(
+            f"[green]Arrangement diff saved to {published_dir / DIFF_FILENAME}[/green]"
+        )
+        return
 
-            snapshots: dict[str, Path] = {}
-            published: list[str] = []
-            try:
-                # snapshot: 既存ターゲットを staging 内の退避名へ os.replace で退避。
-                for filename in contents:
-                    target = out_dir / filename
-                    if target.exists():
-                        prev = staging_dir / f"{filename}.prev"
-                        os.replace(target, prev)
-                        snapshots[filename] = prev
-                # publish: staging の新ファイルをターゲット位置へ公開。
-                for filename in contents:
-                    os.replace(staging_dir / filename, out_dir / filename)
-                    published.append(filename)
-            except OSError:
-                # best-effort rollback: 公開済みの新ファイルを除去し、退避した
-                # .prev を元の位置へ戻す（個々の失敗は無視して続行）。
-                for filename in published:
-                    try:
-                        os.unlink(out_dir / filename)
-                    except OSError:
-                        pass
-                for filename, prev in snapshots.items():
-                    try:
-                        os.replace(prev, out_dir / filename)
-                    except OSError:
-                        pass
-                raise
-    except OSError as exc:
+    assert output_dir is not None  # mutual-exclusion check above guarantees this
+    try:
+        out_dir = _publish_artifacts_atomically(
+            contents, output_dir, [score_yaml, arrangement_yaml]
+        )
+    except (OSError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
@@ -517,7 +602,18 @@ def package_command(
         "--capability-profile",
         help="Path to InputCapabilityProfile YAML",
     ),
-    output_dir: str = typer.Option(..., "--output-dir", help="Output directory"),
+    output_dir: Optional[str] = typer.Option(
+        None, "--output-dir", help="Output directory (mutually exclusive with --builds-root)"
+    ),
+    builds_root: Optional[str] = typer.Option(
+        None,
+        "--builds-root",
+        help=(
+            "Publish under <root>/builds/<content_digest>/ (immutable once "
+            "published; <root>/latest.json points at the most recent digest). "
+            "Mutually exclusive with --output-dir."
+        ),
+    ),
     strict_capabilities: bool = typer.Option(
         False,
         "--strict-capabilities",
@@ -535,13 +631,30 @@ def package_command(
         compile_performance_package,
     )
 
+    if (output_dir is None) == (builds_root is None):
+        raise typer.BadParameter(
+            "exactly one of --output-dir or --builds-root is required",
+            param_hint="--output-dir / --builds-root",
+        )
+
+    # `artifact_base.locator` (embedded in the package, part of what
+    # determines content_digest) is relative to the eventual package
+    # directory. In builds mode that directory's name is the content_digest
+    # itself, which is not known yet — a same-depth placeholder yields an
+    # identical relative path (see `_builds_placeholder_package_dir`).
+    locator_dir = (
+        str(_builds_placeholder_package_dir(builds_root))
+        if builds_root is not None
+        else output_dir
+    )
+
     try:
         compiled = compile_performance_package(
             score_yaml,
             identity_yaml,
             arrangement_yaml,
             capability_profile,
-            output_dir,
+            locator_dir,
             strict=strict_capabilities,
         )
     except (
@@ -558,6 +671,33 @@ def package_command(
         PERFORMANCE_PACKAGE_FILENAME: compiled.package_json,
         COMPILATION_REPORT_FILENAME: compiled.report_json,
     }
+
+    if builds_root is not None:
+        content_digest = compiled.report.content_digest
+        try:
+            published_dir, already_existed = _publish_artifacts_to_builds_root(
+                contents, builds_root, content_digest
+            )
+        except OSError as exc:
+            typer.echo(f"Error: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        if already_existed:
+            typer.echo(
+                f"note: builds/{content_digest} already published; left untouched "
+                "(latest.json updated)",
+                err=True,
+            )
+        console.print(
+            "[green]Performance package saved to "
+            f"{published_dir / PERFORMANCE_PACKAGE_FILENAME}[/green]"
+        )
+        console.print(
+            "[green]Compilation report saved to "
+            f"{published_dir / COMPILATION_REPORT_FILENAME}[/green]"
+        )
+        return
+
+    assert output_dir is not None  # mutual-exclusion check above guarantees this
     try:
         out_dir = _publish_artifacts_atomically(
             contents,

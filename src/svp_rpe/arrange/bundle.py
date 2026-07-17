@@ -17,6 +17,7 @@ YAML パースの両方に使う（PR #176 P2-1: 実行中に入力が差し替�
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -27,12 +28,18 @@ from svp_rpe.arrange.models import ArrangementSpec
 from svp_rpe.arrange.resolver import resolve_arrangement
 from svp_rpe.compose.models import CompositionScore
 
-BUNDLE_SCHEMA_VERSION = "arrangement-bundle/0.1"
+BUNDLE_SCHEMA_VERSION = "arrangement-bundle/0.2"
 DIFF_SCHEMA_VERSION = "arrangement-diff/0.1"
 
 DERIVED_SCORE_FILENAME = "derived_score.yaml"
 BUNDLE_FILENAME = "arrangement_bundle.json"
 DIFF_FILENAME = "arrangement_diff.json"
+
+# content_digest の定義（arrange / package で統一。Design Memo §2）:
+# sha256(canonical_json({artifact_name: sha256_hex, ...}))。canonical_json は
+# `semantic_ci/core.py:canonical_json` と同型思想（sort_keys=True + 圧縮
+# separators）だが、`arrange/` は `semantic_ci` に依存しないためここで自前実装する。
+CONTENT_DIGEST_BASIS = "sha256-of-canonical-json-artifact-name-to-sha256/v1"
 
 
 @dataclass(frozen=True)
@@ -47,6 +54,18 @@ class CompiledArrangement:
 def sha256_file(path: Path) -> str:
     """ファイルの raw bytes に対する SHA-256（小文字 hex）。"""
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def compute_content_digest(artifact_hashes: dict[str, str]) -> str:
+    """`{artifact_name: sha256_hex}` の canonical JSON に対する SHA-256。
+
+    `content_digest_basis` = `CONTENT_DIGEST_BASIS` が示す定義そのもの。
+    bundle / report は自身の記述対象（self-hash 不能）なので `artifact_hashes`
+    に含めない — `outputs` / `package_sha256` と同じ理由（report の docstring
+    参照）。
+    """
+    canonical = json.dumps(artifact_hashes, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def render_score_yaml(score: CompositionScore) -> str:
@@ -100,6 +119,28 @@ def compile_arrangement(score_path: Path | str, spec_path: Path | str) -> Compil
     source_sha256 = hashlib.sha256(score_bytes).hexdigest()
     spec_sha256 = hashlib.sha256(spec_bytes).hexdigest()
 
+    diff: dict[str, Any] = {
+        "schema_version": DIFF_SCHEMA_VERSION,
+        "arrangement_id": spec.meta.id,
+        "changes": changes,
+    }
+
+    # outputs の sha256 は「公開されるバイト列そのもの」から計算する（TOCTOU 先取り
+    # の同一バイト列規律）。diff は CLI が書き込む際と同じ
+    # `json.dumps(..., ensure_ascii=False, indent=2)` で先にシリアライズしてから
+    # hash する — 同一 dict は同一 bytes へ決定論的にシリアライズされるため、CLI
+    # 側で改めて `json.dumps` した publish 済みバイト列と本 hash は常に一致する。
+    derived_score_sha256 = hashlib.sha256(derived_score_yaml.encode("utf-8")).hexdigest()
+    diff_json = json.dumps(diff, ensure_ascii=False, indent=2)
+    diff_sha256 = hashlib.sha256(diff_json.encode("utf-8")).hexdigest()
+
+    content_digest = compute_content_digest(
+        {
+            DERIVED_SCORE_FILENAME: derived_score_sha256,
+            DIFF_FILENAME: diff_sha256,
+        }
+    )
+
     bundle: dict[str, Any] = {
         "schema_version": BUNDLE_SCHEMA_VERSION,
         "arrangement_id": spec.meta.id,
@@ -107,15 +148,11 @@ def compile_arrangement(score_path: Path | str, spec_path: Path | str) -> Compil
         "arrangement_spec": {"path": spec_path_str, "sha256": spec_sha256},
         "changes": changes,
         "outputs": {
-            "derived_score": DERIVED_SCORE_FILENAME,
-            "arrangement_diff": DIFF_FILENAME,
+            "derived_score": {"path": DERIVED_SCORE_FILENAME, "sha256": derived_score_sha256},
+            "arrangement_diff": {"path": DIFF_FILENAME, "sha256": diff_sha256},
         },
-    }
-
-    diff: dict[str, Any] = {
-        "schema_version": DIFF_SCHEMA_VERSION,
-        "arrangement_id": spec.meta.id,
-        "changes": changes,
+        "content_digest": content_digest,
+        "content_digest_basis": CONTENT_DIGEST_BASIS,
     }
 
     return CompiledArrangement(derived_score_yaml=derived_score_yaml, bundle=bundle, diff=diff)
