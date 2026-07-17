@@ -235,6 +235,90 @@ def test_observe_anchor_dispatches_non_harmony_domains_to_unavailable() -> None:
     assert observation.determination == "no_sensor"
 
 
+def test_observe_unavailable_harmony_domain_with_non_chord_artifact_type() -> None:
+    """PR #187 review round 5: the harmony sensor is wired to the
+    (domain, artifact_type) pair `("harmony", "chord_sequence_json")`
+    specifically, not the "harmony" domain alone. A harmony anchor with a
+    different, schema-legal artifact_type (e.g. `audio_excerpt`) gets a
+    reason naming that artifact_type, not the generic lyrics/melody-style
+    message."""
+    observation = _observe_unavailable(
+        _anchor("harmony_excerpt", "harmony", "excerpt.wav", "audio_excerpt")
+    )
+    assert observation.sensor.available is False
+    assert observation.sensor.name == "harmony_sensor"
+    assert "audio_excerpt" in str(observation.sensor.reason)
+    assert observation.determination == "no_sensor"
+    assert observation.adherence_status == "not_observed"
+
+
+def test_observe_anchor_dispatches_harmony_domain_with_non_chord_artifact_type_to_unavailable() -> (
+    None
+):
+    observation = _observe_anchor(
+        _anchor("harmony_excerpt", "harmony", "excerpt.wav", "audio_excerpt"),
+        manifest_dir=Path("."),
+        work_id="w",
+        bundle=_bundle_with_chords([]),
+        artifact_bytes_by_id={},
+    )
+    assert observation.determination == "no_sensor"
+    assert observation.sensor.available is False
+
+
+def test_build_observation_report_isolates_non_chord_harmony_anchor_from_others(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A manifest with a harmony anchor of the wrong artifact_type alongside
+    the normal lyrics/melody/harmony(chord_sequence_json) anchors must not
+    disrupt observation of the others: the run succeeds, the odd anchor is
+    no_sensor, and the real harmony anchor is measured exactly as before."""
+
+    def fake_extract(path: str) -> RPEBundle:
+        return _bundle_with_chords(CANONICAL_PROGRESSION)
+
+    monkeypatch.setattr("svp_rpe.arrange.observe.extract_rpe_from_file", fake_extract)
+
+    manifest_data = _minimal_manifest().model_dump(mode="json")
+    manifest_data["anchors"].append(
+        {
+            "id": "harmony_excerpt",
+            "domain": "harmony",
+            # Content is never read for this anchor (routing diverts it to
+            # _observe_unavailable before any artifact bytes are touched), so
+            # reusing an existing fixture file's bytes/sha256 pair is fine.
+            "artifact": "identity/lyrics.txt",
+            "artifact_type": "audio_excerpt",
+            "media_type": "audio/wav",
+            "sha256": hashlib.sha256(
+                (FIXTURE_DIR / "identity" / "lyrics.txt").read_bytes()
+            ).hexdigest(),
+            "required": True,
+        }
+    )
+    manifest = IdentityManifest.model_validate(manifest_data)
+
+    report = build_observation_report(
+        package=_fake_package(),
+        manifest=manifest,
+        manifest_path=IDENTITY_MANIFEST,
+        artifact_bytes={"harmony": _chord_artifact_bytes(CANONICAL_PROGRESSION)},
+        audio_path=Path("unused.wav"),
+        package_sha256="a" * 64,
+        audio_sha256="b" * 64,
+        generated_artifact_path="unused.wav",
+    )
+
+    anchors = {observation.anchor_id: observation for observation in report.anchors}
+    assert anchors["harmony_excerpt"].determination == "no_sensor"
+    assert anchors["harmony_excerpt"].sensor.available is False
+    assert "audio_excerpt" in str(anchors["harmony_excerpt"].sensor.reason)
+    assert anchors["harmony"].adherence_status == "preserved"
+    assert anchors["harmony"].determination == "exact_match"
+    assert anchors["lyrics"].determination == "no_sensor"
+    assert anchors["melody"].determination == "no_sensor"
+
+
 # --- 3. harmony sensor: D-1's 3-way branch on real chord_sequence_match_rate -------
 
 

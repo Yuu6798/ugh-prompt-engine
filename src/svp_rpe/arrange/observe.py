@@ -20,9 +20,15 @@ D-2: package（``PerformancePackage``）は書き換えない。observation は�
 sidecar として発行する — package 自身の ``observation.status``
 （``not_observed`` 固定）は本モジュールの対象外のまま不変。
 
-D-4: 本 PR で実配線するセンサーは harmony のみ。``compute_chord_events``
-（ルールベース・依存ゼロ）で生成音声から和声を実測し、``IdentityManifest`` の
-harmony anchor（正典進行）と突き合わせる。measurements には従来の生値
+D-4: 本 PR で実配線するセンサーは harmony のみ。センサーは domain 単独ではなく
+**(domain, artifact_type) の対**に結び付く（2026-07-17 round 5）:
+``domain == "harmony" and artifact_type == "chord_sequence_json"`` の場合のみ
+実配線し、それ以外（domain=harmony だが artifact_type が異なる anchor —
+identity schema 上は合法な組み合わせ、例 ``audio_excerpt``）は run を落とさず
+no_sensor 扱いにする（``available=false`` + artifact_type を含む reason）。
+実センサーは ``compute_chord_events``（ルールベース・依存ゼロ）で生成音声から
+和声を実測し、``IdentityManifest`` の harmony anchor（正典進行）と突き合わせる。
+measurements には従来の生値
 （``chord_sequence_match_rate`` / ``repeated_chord_sequence_match_rate``。
 どちらも frame 単位の生 chord_events 列に対する位置整合比較で、進行が繰り返し
 演奏される前提の元では低く出やすい — 透明性のため残すが D-1 の恒等判定の
@@ -351,10 +357,23 @@ def _observe_harmony(
 
 
 def _observe_unavailable(anchor: IdentityAnchor) -> AnchorObservation:
-    name, reason = _NO_SENSOR_INFO.get(
-        anchor.domain,
-        (f"{anchor.domain}_sensor", f"no sensor implemented for domain '{anchor.domain}'"),
-    )
+    if anchor.domain == "harmony":
+        # Reached only when domain == "harmony" but artifact_type isn't
+        # "chord_sequence_json" (PR #187 review round 5): the harmony sensor
+        # is wired to that specific (domain, artifact_type) pair, not to the
+        # domain alone. Other harmony-domain artifact types (e.g.
+        # audio_excerpt) are legal per the identity schema but have no sensor
+        # wired in this PR.
+        name = f"{anchor.domain}_sensor"
+        reason = (
+            f"no sensor wired for harmony anchors with artifact_type "
+            f"{anchor.artifact_type!r}"
+        )
+    else:
+        name, reason = _NO_SENSOR_INFO.get(
+            anchor.domain,
+            (f"{anchor.domain}_sensor", f"no sensor implemented for domain '{anchor.domain}'"),
+        )
     return AnchorObservation(
         anchor_id=anchor.id,
         domain=anchor.domain,
@@ -374,7 +393,7 @@ def _observe_anchor(
     bundle: RPEBundle,
     artifact_bytes_by_id: dict[str, bytes],
 ) -> AnchorObservation:
-    if anchor.domain == "harmony":
+    if anchor.domain == "harmony" and anchor.artifact_type == "chord_sequence_json":
         return _observe_harmony(
             anchor,
             manifest_dir=manifest_dir,
