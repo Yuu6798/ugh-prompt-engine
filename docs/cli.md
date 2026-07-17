@@ -254,12 +254,42 @@ model, and pinned in both outputs by a canonical-model-JSON SHA-256 (or an
 explicit `not_found` status), so prompt provenance does not depend on an
 unrecorded local-versus-packaged config choice.
 
+**`generator_variant`** (`InputCapabilityProfile`, `schema_version:
+"input-capability/0.2"`, required, non-empty): identifies the *route* a
+profile describes — e.g. Suno's standard text/lyrics/tags flow vs. a future
+remix/cover/reference-audio route, or MusicGen's standard text-to-music flow
+vs. a future melody-conditioning route. The unit is one (`generator`,
+`generator_variant`) pair per profile file; both committed profiles
+(`config/capability_profiles/{suno,musicgen}.yaml`) currently declare
+`generator_variant: "standard"` — no variant-specific profile exists yet
+(committed evidence for one, e.g. a cover-route profile, is not yet in the
+repo). `generator_variant` is a free string, not a closed enum: adding a new
+route does not require another schema bump. It is copied verbatim from the
+profile onto both `performance_package.json` and `compilation_report.json`
+(a handoff and its report describe the same route as the profile that
+compiled them); there is no cross-check against `device_profile`, which
+carries no variant of its own. **Grip stays variant-unaware**: `control_profile`
+/ `DeviceProfile` (`config/device_profiles/`) are not extended with
+`generator_variant` by this schema — a variant-scoped grip mechanism remains
+the deferred "model-scope" work noted in
+[`control_profile.md`](control_profile.md).
+
+`model_version` and `interface` (both `Optional[str]`, default `None`) record,
+only when independently confirmed from a repository record, which concrete
+model build and access surface a profile's `input_channels` measurements
+describe (e.g. `interface: "web-ui"` for Suno's user-driven browser flow,
+`model_version: "facebook/musicgen-small@<revision>"` and `interface:
+"local-transformers"` for MusicGen's local `transformers` pipeline). Neither
+field is fabricated when unconfirmed — Suno does not publish a model
+version/pin, so its profile leaves `model_version: null` with an explanatory
+note rather than guessing.
+
 Advisory mode is the default and records capability warnings. Add
 `--strict-capabilities` to fail when any hard anchor is `unsupported` or
 `unknown`; hard anchors on experimental but usable channels remain deliverable.
 Both JSON files are constructed before publication and are published together
 with rollback on failure. `compilation_report.json` (`schema_version:
-"compilation-report/0.2"`) pins the exact published package bytes with
+"compilation-report/0.3"`) pins the exact published package bytes with
 `package_sha256`; neither output contains timestamps, absolute paths, or the
 output directory.
 

@@ -1,12 +1,27 @@
-schema_version: "input-capability/0.1"
+schema_version: "input-capability/0.2"
 generator: musicgen
+generator_variant: "standard"
 profile_version: "2026-07"
+# 実測 K2 バッチ（scripts/collect_musicgen_takes.py の
+# PROFILE_MEASURED_MODEL_ID/PROFILE_MEASURED_MODEL_REVISION 定数・
+# config/device_profiles/musicgen.yaml 冒頭コメントの
+# "facebook/musicgen-small (revision 4c8334b0…)" 実測条件記録）に基づく
+# 転記値。書式は "<model_id>@<revision>"（実装判断）。
+model_version: "facebook/musicgen-small@4c8334b02c6ec4e8664a91979669a501ec497792"
+# ローカル transformers パイプライン経由（docs/musicgen_backend.md:7
+# "Scope: facebook/musicgen-*（transformers 経路）" / 同 :11
+# "MusicGen はローカル API 経由でバッチ生成"）。
+interface: "local-transformers"
 
 # InputCapabilityProfile: MusicGen が実際に受け取れる入力チャネルの自己記述
 # （AR3-1）。既存 config/device_profiles/musicgen.yaml（プロンプト欄 grip の
 # 自己記述）とは別モデル・別ファイルであり、そちらの内容には一切依存/変更
 # しない。`support` はチャネルの「存在」のみを意味し、grip（保持精度）は
 # 保証しない — grip は引き続き device_profiles 側の責務。
+#
+# `generator_variant: "standard"` = MusicGen の通常（text-to-music）経路。
+# melody conditioning 等の別経路は本 profile の対象外・未実測（下記
+# reference_audio note 参照）。
 input_channels:
   style_prompt:
     support: supported

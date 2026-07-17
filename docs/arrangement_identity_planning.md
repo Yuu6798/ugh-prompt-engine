@@ -160,6 +160,16 @@ digest からは除外）を追加し、`arrange` / `package` に opt-in の不�
 `--builds-root` 出力先を配線した。AR4 の生成後観測に先立つ、証跡・再現性の
 基盤整備であり、配送実証や聴覚的同一性の主張ではない。
 
+2026-07-17: `InputCapabilityProfile`（`input-capability/0.2`）に
+`generator_variant`（必須・経路の識別子）/ `model_version` / `interface`
+（任意・捏造禁止）を追加し、`PerformancePackage`（`0.2`）/
+`CompilationReport`（`0.3`）へ転記する経路区別の語彙とスキーマを導入した
+（詳細: [`cli.md`](cli.md) の `svprpe package` 節）。既存 2 profile
+（suno / musicgen）はいずれも `generator_variant: "standard"` のまま —
+remix/cover/reference-audio 等の変種 profile はリポジトリ内に実在する
+committed evidence が無いため未追加であり、実測 profile の拡充ではない。
+grip（`control_profile` / `DeviceProfile`）は本 PR の対象外のまま。
+
 ## 7. 非目標
 
 - canonical `CompositionScore` への identity/capability/adherence 欄の追加

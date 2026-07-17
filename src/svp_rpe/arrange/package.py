@@ -54,11 +54,16 @@ from svp_rpe.compose.prompt_renderer import (
 
 PERFORMANCE_PACKAGE_FILENAME = "performance_package.json"
 COMPILATION_REPORT_FILENAME = "compilation_report.json"
+# Single source of truth for `PerformancePackage.schema_version`'s current
+# value, mirroring `COMPILATION_REPORT_SCHEMA_VERSION` below (R4 precedent):
+# the `Literal` annotation still needs the literal string, but the runtime
+# default reads this constant so the two can't drift.
+PERFORMANCE_PACKAGE_SCHEMA_VERSION = "performance-package/0.2"
 # Single source of truth for `CompilationReport.schema_version`'s current
 # value (the `Literal` annotation still needs the literal string, but the
 # runtime default and any external reference — e.g. cli.py's builds-root
 # schema_version validation — read this constant so the two can't drift).
-COMPILATION_REPORT_SCHEMA_VERSION = "compilation-report/0.2"
+COMPILATION_REPORT_SCHEMA_VERSION = "compilation-report/0.3"
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _GIT_COMMIT_PATTERN = r"^[0-9a-f]{40}$"
@@ -239,9 +244,10 @@ class PromptPayload(PackageModel):
 
 
 class PerformancePackage(PackageModel):
-    schema_version: Literal["performance-package/0.1"] = "performance-package/0.1"
+    schema_version: Literal["performance-package/0.2"] = PERFORMANCE_PACKAGE_SCHEMA_VERSION
     work_id: str
     generator: str
+    generator_variant: str = Field(min_length=1)
     inputs: PackageInputs
     prompt: Optional[PromptPayload] = None
     channel_artifacts: dict[InputChannel, list[ChannelArtifactReference]] = Field(
@@ -370,9 +376,10 @@ class CompilationReport(PackageModel):
     ``content_digest`` (Design Memo D-1).
     """
 
-    schema_version: Literal["compilation-report/0.2"] = COMPILATION_REPORT_SCHEMA_VERSION
+    schema_version: Literal["compilation-report/0.3"] = COMPILATION_REPORT_SCHEMA_VERSION
     work_id: str
     generator: str
+    generator_variant: str = Field(min_length=1)
     mode: CompilationMode
     inputs: PackageInputs
     package_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -727,6 +734,7 @@ def build_performance_package(
     package = PerformancePackage(
         work_id=manifest.meta.work_id,
         generator=profile.generator,
+        generator_variant=profile.generator_variant,
         inputs=inputs,
         prompt=prompt,
         channel_artifacts=channel_artifacts,
@@ -738,6 +746,7 @@ def build_performance_package(
     report = CompilationReport(
         work_id=manifest.meta.work_id,
         generator=profile.generator,
+        generator_variant=profile.generator_variant,
         mode="strict" if strict else "advisory",
         inputs=inputs,
         package_sha256=package_sha256,

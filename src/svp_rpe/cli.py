@@ -987,8 +987,8 @@ def _package_report_validate_descriptor(descriptor: dict[str, Any]) -> None:
 # that being treated as anything worse than "provenance drift". Every other
 # top-level field — `schema_version`/`content_digest`/`content_digest_basis`
 # are already pinned exactly by earlier checks; `arrangement_id` / `changes`
-# (arrange) and `work_id` / `generator` / `package_sha256` (package) are not
-# part of `content_digest` at all, so without this whitelist a tampered
+# (arrange) and `work_id` / `generator` / `generator_variant` / `package_sha256`
+# (package) are not part of `content_digest` at all, so without this whitelist a tampered
 # `changes` list (for example) could otherwise be waved through as mere
 # provenance. Paired with `_arrange_bundle_digest_inputs` /
 # `_package_report_digest_inputs` the same way those pair with
