@@ -137,7 +137,11 @@ instead, and updates `<root>/latest.json` (`schema_version:
 anything is written, a preflight rejects `<root>/latest.json` unless it is
 either absent or a plain, non-symlink file (exit `1`, nothing under
 `builds/` touched) — the one path this scheme ever overwrites must not be a
-directory or a symlink. A digest directory is **immutable**: if `<root>/builds/<content_digest>/`
+directory or a symlink — and likewise rejects `<root>/builds` itself if it
+is a symlink (any target, including a real directory), since every digest
+directory lives under it; `<root>` (the `--builds-root` argument) is a
+caller-supplied path like `--output-dir` and is not subject to this check —
+a symlinked `builds_root` publishes normally. A digest directory is **immutable**: if `<root>/builds/<content_digest>/`
 already exists as a directory from a previous run, its artifacts are never
 overwritten, appended to, or repaired — but before `latest.json` may be moved
 onto it (before the directory is "blessed"), its one *descriptive* file

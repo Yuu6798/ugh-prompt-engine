@@ -702,6 +702,17 @@ def _publish_artifacts_to_builds_root(
     rejects an invalid `latest.json` target (see that function) so a
     misplaced `latest.json` can never leave a stray digest directory behind.
 
+    `<builds_root>/builds` itself is rejected the same way if it is a
+    symlink (any target, including a real directory): every digest directory
+    this scheme publishes lives under `builds/`, so a symlinked `builds/`
+    would place publications at a location outside `builds_root` that could
+    be repointed out from under the immutability contract by whoever
+    controls the symlink — the same hole a symlinked digest target (below)
+    would open one level down. `builds_root` itself (`root`) is deliberately
+    *not* checked this way: it is a user-supplied path the caller fully
+    controls (like `--output-dir`), not part of the scheme's own reserved
+    layout, so a symlinked `builds_root` is accepted.
+
     An existing digest path that is not a real, non-symlink directory (a
     regular file, a dangling symlink, *or a symlink to a directory*) is
     likewise rejected outright rather than silently treated as "already
@@ -742,6 +753,9 @@ def _publish_artifacts_to_builds_root(
     builds_dir = root / "builds"
     target_dir = builds_dir / content_digest
     latest_path = root / "latest.json"
+
+    if builds_dir.is_symlink():
+        raise ValueError(f"builds-root builds directory is a symlink: {builds_dir}")
 
     _reject_invalid_latest_pointer_target(latest_path)
 

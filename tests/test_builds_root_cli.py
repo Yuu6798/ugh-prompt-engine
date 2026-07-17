@@ -998,3 +998,60 @@ def test_package_builds_root_rejects_manifest_artifact_inside_locator_placeholde
     # a real (differently-named) digest directory is not similarly reserved:
     # confirm nothing was published under the placeholder either.
     assert sorted(p.name for p in (root / "builds").iterdir()) == ["0" * 64]
+
+
+# --- PR #184 review round 6: `<builds_root>/builds` symlink rejection ----------
+
+
+def test_arrange_builds_root_rejects_symlinked_builds_directory(tmp_path: Path) -> None:
+    """A symlinked `builds/` is rejected outright, even when it points at a
+    real, otherwise-writable directory: every digest directory this scheme
+    publishes lives under `builds/`, so a symlinked `builds/` would place
+    publications outside `builds_root`, repointable by whoever controls the
+    symlink — nothing is written, and the real directory the symlink points
+    at stays empty."""
+    spec_path = tmp_path / "arrangement.yaml"
+    _write_arrangement_spec(spec_path)
+    root = tmp_path / "builds-root"
+    root.mkdir(parents=True)
+    real_builds_dir = tmp_path / "real-builds"
+    real_builds_dir.mkdir()
+    (root / "builds").symlink_to(real_builds_dir)
+
+    result = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+
+    assert result.exit_code == 1
+    assert "Error:" in result.stderr
+    assert "builds directory is a symlink" in result.stderr
+    assert (root / "builds").is_symlink()
+    assert not (root / "latest.json").exists()
+    # nothing was published through the symlink into the real directory.
+    assert list(real_builds_dir.iterdir()) == []
+
+
+def test_arrange_builds_root_allows_symlinked_builds_root_itself(tmp_path: Path) -> None:
+    """`builds_root` itself (the user-supplied `--builds-root` argument) is
+    not subject to the same rejection: it is the caller's own path (like
+    `--output-dir`), not part of the scheme's reserved internal layout, so a
+    symlinked `builds_root` publishes normally."""
+    spec_path = tmp_path / "arrangement.yaml"
+    _write_arrangement_spec(spec_path)
+    real_root = tmp_path / "real-builds-root"
+    real_root.mkdir()
+    symlinked_root = tmp_path / "builds-root-link"
+    symlinked_root.symlink_to(real_root)
+
+    result = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(symlinked_root))
+    )
+
+    assert result.exit_code == 0, result.output
+    digest_dirs = list((real_root / "builds").iterdir())
+    assert len(digest_dirs) == 1
+    digest_dir = digest_dirs[0]
+    produced = sorted(p.name for p in digest_dir.iterdir())
+    assert produced == ["arrangement_bundle.json", "arrangement_diff.json", "derived_score.yaml"]
+    latest = json.loads((real_root / "latest.json").read_text(encoding="utf-8"))
+    assert latest["content_digest"] == digest_dir.name
