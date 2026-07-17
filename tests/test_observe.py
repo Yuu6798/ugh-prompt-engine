@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -1323,6 +1324,114 @@ def test_observe_cli_extracts_from_a_byte_identical_audio_snapshot(
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["generated_artifact"]["path"] == str(audio_path)
     assert report["generated_artifact"]["sha256"] == expected_sha256
+
+
+def test_observe_cli_skips_snapshot_tempfile_when_no_wired_sensor_anchors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PR #187 review round 13: a manifest with only a lyrics anchor (no
+    harmony/chord_sequence_json anchor at all) must not create the audio
+    snapshot tempfile — confirmed here by making `tempfile.mkstemp` fail —
+    and must not call `extract_rpe_from_file` either (round 12's gate).
+    `observe` must still succeed: nothing needs the audio's content, only its
+    already-computed sha256 for provenance.
+
+    Built by hand-constructing a minimal `PerformancePackage` (matching
+    work_id + `inputs.identity_manifest.sha256` to this manifest) rather than
+    compiling one via `svprpe package`, since the existing arrangement specs
+    all request a harmony policy this lyrics-only manifest doesn't declare an
+    anchor for."""
+    (tmp_path / "identity").mkdir()
+    source_bytes = b"source-audio-placeholder"
+    (tmp_path / "source.wav").write_bytes(source_bytes)
+    lyrics_bytes = (FIXTURE_DIR / "identity" / "lyrics.txt").read_bytes()
+    (tmp_path / "identity" / "lyrics.txt").write_bytes(lyrics_bytes)
+
+    manifest_data = {
+        "schema_version": "identity-manifest/0.1",
+        "meta": {"work_id": "lyrics-only-work", "version": "0.1"},
+        "source": {
+            "locator": "source.wav",
+            "sha256": hashlib.sha256(source_bytes).hexdigest(),
+            "rights_basis": "original",
+        },
+        "anchors": [
+            {
+                "id": "lyrics",
+                "domain": "lyrics",
+                "artifact": "identity/lyrics.txt",
+                "artifact_type": "lyrics_text",
+                "media_type": "text/plain",
+                "sha256": hashlib.sha256(lyrics_bytes).hexdigest(),
+                "required": True,
+            },
+        ],
+    }
+    manifest_path = tmp_path / "identity_manifest.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(manifest_data, sort_keys=False, allow_unicode=True), encoding="utf-8"
+    )
+    manifest_bytes = manifest_path.read_bytes()
+
+    package = PerformancePackage(
+        work_id="lyrics-only-work",
+        generator="suno",
+        generator_variant="standard",
+        inputs={
+            "identity_manifest": {"sha256": hashlib.sha256(manifest_bytes).hexdigest()},
+            "preservation_contract": {"sha256": "c" * 64},
+            "capability_profile": {"sha256": "d" * 64},
+            "derived_score": {"sha256": "e" * 64},
+            "device_profile": {"generator": "suno", "status": "not_found"},
+        },
+        anchor_statuses=[],
+    )
+    package_path = tmp_path / "performance_package.json"
+    package_path.write_bytes(package.model_dump_json(indent=2).encode("utf-8"))
+
+    # `_write_observation_report_atomically` (round 6) also calls
+    # `tempfile.mkstemp` — for the *report* JSON, always expected to run.
+    # Only the audio-snapshot call (distinguished here by not passing
+    # `dir=`, which the report-write call always does) must not happen.
+    original_mkstemp = tempfile.mkstemp
+
+    def guarded_mkstemp(*args: Any, **kwargs: Any) -> Any:
+        if "dir" not in kwargs:
+            raise AssertionError(
+                "tempfile.mkstemp must not be called for an audio snapshot "
+                "when no anchor needs a wired sensor"
+            )
+        return original_mkstemp(*args, **kwargs)
+
+    monkeypatch.setattr("tempfile.mkstemp", guarded_mkstemp)
+
+    def fail_extract(path: str) -> RPEBundle:
+        raise AssertionError("extract_rpe_from_file must not be called either")
+
+    monkeypatch.setattr("svp_rpe.arrange.observe.extract_rpe_from_file", fail_extract)
+
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"unused-placeholder-audio-bytes")
+    report_path = tmp_path / "report.json"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "observe",
+            str(package_path),
+            str(audio_path),
+            "--manifest",
+            str(manifest_path),
+            "-o",
+            str(report_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert [anchor["anchor_id"] for anchor in report["anchors"]] == ["lyrics"]
+    assert report["anchors"][0]["determination"] == "no_sensor"
+    assert report["anchors"][0]["adherence_status"] == "not_observed"
 
 
 # --- 5d. PR #187 review round 2: harmony artifact bytes reuse + schema fail-closed -

@@ -1496,24 +1496,42 @@ def observe_cmd(
     audio_sha256 = hashlib.sha256(audio_bytes).hexdigest()
     package_sha256 = hashlib.sha256(package_bytes).hexdigest()
 
-    # Extract from a snapshot of exactly the bytes just hashed, not from
-    # `audio_path` directly — this makes "the sha256 recorded in the report"
-    # and "the bytes actually measured" the same bytes by construction, not
-    # merely by the assumption that nothing touches `audio_path` in between
-    # (PR #187 review round 1). `generated_artifact.path` in the report still
-    # reports the user-supplied `audio` string, not this temp path.
-    snapshot_fd, snapshot_name = tempfile.mkstemp(suffix=audio_path.suffix or ".wav")
-    snapshot_path = Path(snapshot_name)
+    # PR #187 review round 13: only build the snapshot tempfile when
+    # extraction will actually happen — the same predicate
+    # `build_observation_report` gates its own `extract_rpe_from_file` call
+    # on (round 12), so routing / extraction-gate / snapshot-gate all agree
+    # on a single source of truth (no anchor matching `is_harmony_sensor_anchor`
+    # means nothing ever reads audio content, so the TOCTOU concern the
+    # snapshot exists for (round 1) doesn't arise — there's no "bytes actually
+    # measured" to keep in sync with the hashed bytes).
+    needs_extraction = any(
+        is_harmony_sensor_anchor(anchor) for anchor in loaded_manifest.anchors
+    )
+    snapshot_path: Optional[Path] = None
     try:
-        with os.fdopen(snapshot_fd, "wb") as snapshot_file:
-            snapshot_file.write(audio_bytes)
+        if needs_extraction:
+            # Extract from a snapshot of exactly the bytes just hashed, not
+            # from `audio_path` directly — this makes "the sha256 recorded in
+            # the report" and "the bytes actually measured" the same bytes by
+            # construction, not merely by the assumption that nothing touches
+            # `audio_path` in between (PR #187 review round 1).
+            # `generated_artifact.path` in the report still reports the
+            # user-supplied `audio` string, not this temp path.
+            snapshot_fd, snapshot_name = tempfile.mkstemp(suffix=audio_path.suffix or ".wav")
+            snapshot_path = Path(snapshot_name)
+            with os.fdopen(snapshot_fd, "wb") as snapshot_file:
+                snapshot_file.write(audio_bytes)
+            measurement_audio_path = snapshot_path
+        else:
+            measurement_audio_path = audio_path
+
         try:
             report = build_observation_report(
                 package=package,
                 manifest=loaded_manifest,
                 manifest_path=manifest_path,
                 artifact_bytes=artifact_bytes_by_id,
-                audio_path=snapshot_path,
+                audio_path=measurement_audio_path,
                 package_sha256=package_sha256,
                 audio_sha256=audio_sha256,
                 generated_artifact_path=audio,
@@ -1522,7 +1540,8 @@ def observe_cmd(
             typer.echo(f"Error: {exc}", err=True)
             raise typer.Exit(code=1) from exc
     finally:
-        snapshot_path.unlink(missing_ok=True)
+        if snapshot_path is not None:
+            snapshot_path.unlink(missing_ok=True)
 
     content = json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2)
     try:
