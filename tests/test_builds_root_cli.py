@@ -1055,3 +1055,218 @@ def test_arrange_builds_root_allows_symlinked_builds_root_itself(tmp_path: Path)
     assert produced == ["arrangement_bundle.json", "arrangement_diff.json", "derived_score.yaml"]
     latest = json.loads((real_root / "latest.json").read_text(encoding="utf-8"))
     assert latest["content_digest"] == digest_dir.name
+
+
+# --- PR #184 review round 7: symlinked blessing inputs (I) + whitelist (J) ----
+# --- + symlinked locator placeholder (K, package) -----------------------------
+
+
+def test_arrange_builds_root_rejects_symlinked_content_artifact(tmp_path: Path) -> None:
+    """A declared content artifact replaced with a symlink to a byte-identical
+    file elsewhere must still be rejected — a symlink is rejected regardless
+    of what it resolves to, since resolving it at all means trusting
+    whoever controls that link."""
+    spec_path = tmp_path / "arrangement.yaml"
+    _write_arrangement_spec(spec_path)
+    root = tmp_path / "builds-root"
+
+    first = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+    assert first.exit_code == 0, first.output
+    digest_dir = next((root / "builds").iterdir())
+    diff_path = digest_dir / "arrangement_diff.json"
+    external_copy = tmp_path / "external_diff_copy.json"
+    external_copy.write_bytes(diff_path.read_bytes())
+    diff_path.unlink()
+    diff_path.symlink_to(external_copy)
+    latest_before = (root / "latest.json").read_bytes()
+
+    second = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+
+    assert second.exit_code == 1
+    assert "Error:" in second.stderr
+    assert "arrangement_diff.json" in second.stderr
+    assert "is a symlink" in second.stderr
+    assert (root / "latest.json").read_bytes() == latest_before
+    assert diff_path.is_symlink()
+
+
+def test_arrange_builds_root_rejects_symlinked_descriptor(tmp_path: Path) -> None:
+    """The descriptor itself (`arrangement_bundle.json`) being a symlink —
+    even to a byte-identical copy — is rejected the same way."""
+    spec_path = tmp_path / "arrangement.yaml"
+    _write_arrangement_spec(spec_path)
+    root = tmp_path / "builds-root"
+
+    first = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+    assert first.exit_code == 0, first.output
+    digest_dir = next((root / "builds").iterdir())
+    bundle_path = digest_dir / "arrangement_bundle.json"
+    external_copy = tmp_path / "external_bundle_copy.json"
+    external_copy.write_bytes(bundle_path.read_bytes())
+    bundle_path.unlink()
+    bundle_path.symlink_to(external_copy)
+    latest_before = (root / "latest.json").read_bytes()
+
+    second = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+
+    assert second.exit_code == 1
+    assert "Error:" in second.stderr
+    assert "arrangement_bundle.json" in second.stderr
+    assert "is a symlink" in second.stderr
+    assert (root / "latest.json").read_bytes() == latest_before
+    assert bundle_path.is_symlink()
+
+
+def test_arrange_builds_root_rejects_tampered_arrangement_id_outside_digest(
+    tmp_path: Path,
+) -> None:
+    """`arrangement_id` is not part of `content_digest` at all, so a
+    descriptor with a tampered `arrangement_id` but an otherwise-correct
+    `content_digest`/`outputs` must still be rejected by the whitelist check
+    — not silently waved through as mere provenance drift."""
+    spec_path = tmp_path / "arrangement.yaml"
+    _write_arrangement_spec(spec_path)
+    root = tmp_path / "builds-root"
+
+    first = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+    assert first.exit_code == 0, first.output
+    digest_dir = next((root / "builds").iterdir())
+    bundle_path = digest_dir / "arrangement_bundle.json"
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    bundle["arrangement_id"] = "tampered-id"
+    bundle_path.write_text(json.dumps(bundle, ensure_ascii=False, indent=2), encoding="utf-8")
+    latest_before = (root / "latest.json").read_bytes()
+
+    second = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+
+    assert second.exit_code == 1
+    assert "Error:" in second.stderr
+    assert "non-provenance field" in second.stderr
+    assert "arrangement_id" in second.stderr
+    assert (root / "latest.json").read_bytes() == latest_before
+
+
+def test_arrange_builds_root_rejects_tampered_content_digest_basis(tmp_path: Path) -> None:
+    spec_path = tmp_path / "arrangement.yaml"
+    _write_arrangement_spec(spec_path)
+    root = tmp_path / "builds-root"
+
+    first = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+    assert first.exit_code == 0, first.output
+    digest_dir = next((root / "builds").iterdir())
+    bundle_path = digest_dir / "arrangement_bundle.json"
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    bundle["content_digest_basis"] = "tampered-basis/v1"
+    bundle_path.write_text(json.dumps(bundle, ensure_ascii=False, indent=2), encoding="utf-8")
+    latest_before = (root / "latest.json").read_bytes()
+
+    second = CliRunner().invoke(
+        app, _arrange_args(spec_path, mode_flag="builds-root", mode_value=str(root))
+    )
+
+    assert second.exit_code == 1
+    assert "Error:" in second.stderr
+    assert "non-provenance field" in second.stderr
+    assert "content_digest_basis" in second.stderr
+    assert (root / "latest.json").read_bytes() == latest_before
+
+
+def test_package_builds_root_rejects_tampered_work_id(tmp_path: Path) -> None:
+    """`work_id` is not part of `content_digest` (only `package_sha256` is),
+    so a tampered `work_id` must be caught by the whitelist check even
+    though the digest and package hash both still match."""
+    manifest_path, spec_path = _write_package_fixture(tmp_path)
+    root = tmp_path / "builds-root"
+
+    first = CliRunner().invoke(
+        app,
+        _package_args(manifest_path, spec_path, mode_flag="builds-root", mode_value=str(root)),
+    )
+    assert first.exit_code == 0, first.output
+    digest_dir = next((root / "builds").iterdir())
+    report_path = digest_dir / "compilation_report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["work_id"] = "tampered-work-id"
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    latest_before = (root / "latest.json").read_bytes()
+
+    second = CliRunner().invoke(
+        app,
+        _package_args(manifest_path, spec_path, mode_flag="builds-root", mode_value=str(root)),
+    )
+
+    assert second.exit_code == 1
+    assert "Error:" in second.stderr
+    assert "non-provenance field" in second.stderr
+    assert "work_id" in second.stderr
+    assert (root / "latest.json").read_bytes() == latest_before
+
+
+def test_package_builds_root_allows_invocation_provenance_only_difference(
+    tmp_path: Path,
+) -> None:
+    """`invocation_provenance` alone differing is exactly the intended
+    provenance-drift case (rounds 4/5's compiler-version story) and must
+    still succeed as a no-op with the "differs" advisory."""
+    manifest_path, spec_path = _write_package_fixture(tmp_path)
+    root = tmp_path / "builds-root"
+
+    first = CliRunner().invoke(
+        app,
+        _package_args(manifest_path, spec_path, mode_flag="builds-root", mode_value=str(root)),
+    )
+    assert first.exit_code == 0, first.output
+    digest_dir = next((root / "builds").iterdir())
+    report_path = digest_dir / "compilation_report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["invocation_provenance"]["compiler"]["package_version"] = "9.9.9"
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    second = CliRunner().invoke(
+        app,
+        _package_args(manifest_path, spec_path, mode_flag="builds-root", mode_value=str(root)),
+    )
+
+    assert second.exit_code == 0, second.output
+    assert "provenance differs from this invocation" in second.stderr
+    latest = json.loads((root / "latest.json").read_text(encoding="utf-8"))
+    assert latest["content_digest"] == digest_dir.name
+
+
+def test_package_builds_root_rejects_symlinked_locator_placeholder(tmp_path: Path) -> None:
+    """A `<root>/builds/<64 zeros>/` locator placeholder that is itself a
+    symlink (even to a real, writable directory) is rejected before
+    compilation even starts — resolving it would compute the locator
+    relative to wherever the symlink actually points, not the reserved
+    same-depth placeholder path."""
+    manifest_path, spec_path = _write_package_fixture(tmp_path)
+    root = tmp_path / "builds-root"
+    (root / "builds").mkdir(parents=True)
+    real_dir = tmp_path / "real-placeholder-target"
+    real_dir.mkdir()
+    (root / "builds" / ("0" * 64)).symlink_to(real_dir)
+
+    result = CliRunner().invoke(
+        app,
+        _package_args(manifest_path, spec_path, mode_flag="builds-root", mode_value=str(root)),
+    )
+
+    assert result.exit_code == 1
+    assert "Error:" in result.stderr
+    assert "locator placeholder is a symlink" in result.stderr
+    assert not (root / "latest.json").exists()
+    assert list(real_dir.iterdir()) == []

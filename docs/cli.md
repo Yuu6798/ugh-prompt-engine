@@ -173,12 +173,28 @@ is still intact, so this check runs even on the byte-identical fast path. If
 *real, non-symlink* directory (a plain file, any symlink — including one
 pointing at an otherwise-valid directory — or a dangling symlink), the run
 fails outright (exit `1`, `latest.json` left untouched) rather than treating
-it as published. Re-running with different inputs that resolve to a
-different `content_digest` publishes a sibling directory; older digest
-directories are never pruned. Blessing therefore means "descriptor
-self-consistent + every declared output present and hash-matching" — a
-digest directory `latest.json` points at is a complete publication matching
-its own bookkeeping, though this is still not a full audit (it never rehashes
+it as published. The descriptor and every declared content artifact are held
+to the same rule one level down: each is rejected outright if it is a
+symlink (regardless of what it resolves to — even a symlink to an
+otherwise byte-identical file) or any non-regular-file entity, *before* it
+is ever read. A byte difference in the descriptor is only accepted as
+provenance drift after it proves self-consistent: it must parse as JSON,
+declare this directory's current `schema_version` and `content_digest`,
+recompute to that same digest from its own recorded output hashes, *and*
+differ from this invocation's own descriptor in only a small whitelist of
+top-level fields (`source_score` / `arrangement_spec` for `arrange`'s
+bundle) — every other field (`arrangement_id`, `changes`, `outputs`,
+`content_digest_basis`, etc.) must match exactly, since fields like
+`arrangement_id` and `changes` aren't part of `content_digest` at all and a
+tampered value there must not be waved through as mere provenance just
+because the digest still happens to match. Any of these checks failing
+fails the run (exit `1`, `latest.json` untouched). Re-running with different
+inputs that resolve to a different `content_digest` publishes a sibling
+directory; older digest directories are never pruned. Blessing therefore
+means "descriptor self-consistent (including its provenance-only fields) +
+every declared output present, non-symlinked, and hash-matching" — a digest
+directory `latest.json` points at is a complete publication matching its own
+bookkeeping, though this is still not a full audit (it never rehashes
 undeclared files or recurses beyond what the descriptor lists, and nothing in
 the directory is ever rewritten); an independent, fully recursive audit is
 left to a future `verify`-style command.
@@ -272,9 +288,13 @@ implementation change still reproduces the same `content_digest`, publishing
 never mutates a digest directory's `invocation_provenance` to match a newer
 compiler run — that is the immutability contract's direct consequence, not a
 bug. Blessing an existing digest directory with `latest.json` here also
-verifies `performance_package.json` itself is present and hashes to what
-`compilation_report.json` declares, on the same terms as `arrange`'s
-`derived_score.yaml` + `arrangement_diff.json` check above.
+verifies `performance_package.json` itself is present, non-symlinked, and
+hashes to what `compilation_report.json` declares, on the same terms as
+`arrange`'s `derived_score.yaml` + `arrangement_diff.json` check above; the
+provenance-only whitelist for `compilation_report.json` is `inputs`,
+`invocation_provenance`, `mode`, and `warnings` — every other top-level field
+(`work_id`, `generator`, `package_sha256`, `content_digest`, etc.) must match
+exactly even when the descriptor bytes otherwise differ.
 
 Because `--builds-root`'s locator computation stands in for the not-yet-known
 `content_digest` with a reserved, same-depth placeholder directory
@@ -284,6 +304,11 @@ subtree is rejected before publication (exit `1`) — the locator computed
 against the placeholder would not describe where the artifact ends up
 relative to the real (differently-named) digest directory. A real, already
 published digest directory is not similarly reserved and is never rejected.
+The placeholder path itself is also rejected outright if it is a symlink
+(exit `1`, before compilation even starts) — resolving it would compute the
+locator relative to wherever the symlink actually points rather than the
+reserved placeholder path; a real directory sitting at the placeholder path
+is fine (same depth, so the locator is still correct) and is not rejected.
 
 ### `svprpe measure <audio>`
 

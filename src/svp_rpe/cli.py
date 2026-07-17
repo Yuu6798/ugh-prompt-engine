@@ -496,6 +496,25 @@ def _reject_builds_root_input_collision(
             )
 
 
+def _reject_if_not_regular_file(path: Path, *, label: str) -> None:
+    """Reject a symlink, or any existing non-regular-file entity, before it
+    is read (PR #184 review round 7, Thread I).
+
+    A blessed, immutable publication must not depend on a mutable entity
+    outside `builds_root` — the same principle as the round 3/6 digest- and
+    `builds/`-directory symlink rejections, applied one level down to every
+    file `_check_existing_builds_root_publication` reads (the descriptor
+    itself and each declared content artifact). A symlink is rejected
+    regardless of what it resolves to (even a symlink to an otherwise
+    byte-identical file) — resolving it at all would mean trusting whoever
+    controls that link.
+    """
+    if path.is_symlink():
+        raise ValueError(f"builds-root {label} is a symlink: {path}")
+    if path.exists() and not path.is_file():
+        raise ValueError(f"builds-root {label} is not a regular file: {path}")
+
+
 def _check_existing_builds_root_publication(
     target_dir: Path,
     descriptive_filename: str,
@@ -504,6 +523,7 @@ def _check_existing_builds_root_publication(
     content_digest: str,
     expected_schema_version: str,
     extract_digest_inputs: Callable[[dict[str, Any]], dict[str, str]],
+    allowed_provenance_fields: frozenset[str],
 ) -> bool:
     """Read-and-verify check for the immutable no-op publish path, run before
     `latest.json` is ever moved onto an existing digest directory.
@@ -511,20 +531,22 @@ def _check_existing_builds_root_publication(
     Reads the existing digest directory's one *descriptive* file
     (`arrangement_bundle.json` for `arrange`, `compilation_report.json` for
     `package` — the file that describes the whole publication, as opposed to
-    plain content outputs) exactly once. If its bytes match what this
-    invocation would have published for that same filename, no parsing, no
-    digest recomputation, no schema check is needed for the *descriptor
-    itself* — an identical-bytes descriptor was necessarily produced by
-    *this* schema version by construction. (PR #184 review round 5, Thread F:
-    that fast path alone is not enough to bless the directory — see below.)
+    plain content outputs) exactly once — after `_reject_if_not_regular_file`
+    confirms it is neither a symlink nor some other non-regular entity. If
+    its bytes match what this invocation would have published for that same
+    filename, no parsing, no digest recomputation, no schema check is needed
+    for the *descriptor itself* — an identical-bytes descriptor was
+    necessarily produced by *this* schema version by construction. (PR #184
+    review round 5, Thread F: that fast path alone is not enough to bless the
+    directory — see below.)
 
     If the descriptor's bytes differ, this is *not* immediately treated as
     mere provenance/metadata drift (round 2, Thread B) — a directory merely
     occupying this digest path (corrupted, hand-edited, or from an unrelated
     build) must not be blessed by a `latest.json` update just because a byte
     difference was, in isolation, plausible-looking provenance drift. Before
-    accepting it as provenance drift, four things are verified, each raising
-    `ValueError` (and leaving `latest.json` untouched) on failure:
+    accepting it as provenance drift, several things are verified, each
+    raising `ValueError` (and leaving `latest.json` untouched) on failure:
 
     1. the descriptive file parses as JSON;
     2. its `schema_version` field equals `expected_schema_version` (AGENTS.md
@@ -541,32 +563,47 @@ def _check_existing_builds_root_publication(
        arrange-vs-package shape of "artifact_name -> sha256") reproduces the
        same digest — this catches a descriptor whose declared hashes were
        tampered with (or corrupted) to match step 3's digest field without
-       actually being self-consistent.
+       actually being self-consistent;
+    5. (round 7, Thread J, checked after every content artifact below is
+       also confirmed present and hash-matching) every top-level field of
+       the existing descriptor that is *not* in `allowed_provenance_fields`
+       is byte-for-byte equal (as parsed JSON) to the same field in the
+       pending descriptor — e.g. for `arrange`'s bundle, only
+       `source_score`/`arrangement_spec` may differ; `arrangement_id` and
+       `changes` are *not* part of `content_digest`, so without this check a
+       tampered `changes` list could otherwise be waved through as "mere
+       provenance drift" merely because `content_digest` still matched.
 
     Either way — byte-identical fast path or a byte-difference that survives
-    all four descriptor checks — one more thing is verified **before**
-    `latest.json` may be moved onto this directory: every content artifact
-    the descriptor declares (`extract_digest_inputs`' `{artifact_name:
-    sha256}`, e.g. `derived_score.yaml` + `arrangement_diff.json` for
-    `arrange`) actually exists in `target_dir` and hashes to its declared
-    value. A byte-identical (or otherwise self-consistent) *descriptor*
-    copied into a directory that is missing or has tampered content files
-    would otherwise slip through undetected — the descriptor alone doesn't
-    prove the directory it sits in is complete. On the fast path, the
-    declared output map is read from `pending_content` (already known to be
-    byte-identical to the on-disk descriptor, so parsing either is
+    checks 1-4 — one more thing is verified **before** `latest.json` may be
+    moved onto this directory: every content artifact the descriptor
+    declares (`extract_digest_inputs`' `{artifact_name: sha256}`, e.g.
+    `derived_score.yaml` + `arrangement_diff.json` for `arrange`) is neither
+    a symlink nor a non-regular file (`_reject_if_not_regular_file` again),
+    actually exists in `target_dir`, and hashes to its declared value. A
+    byte-identical (or otherwise self-consistent) *descriptor* copied into a
+    directory that is missing, has tampered, or has symlinked-out content
+    files would otherwise slip through undetected — the descriptor alone
+    doesn't prove the directory it sits in is complete. On the fast path,
+    the declared output map is read from `pending_content` (already known to
+    be byte-identical to the on-disk descriptor, so parsing either is
     equivalent) rather than re-reading the descriptor from disk a second
     time.
 
     Blessing a digest directory with a `latest.json` update therefore always
-    means: descriptor self-consistency (schema + digest, steps 1-4) plus
-    every declared output artifact present with a matching hash. This is
+    means: descriptor self-consistency (schema + digest + provenance-only
+    diff, checks 1-5), every declared output artifact present with a
+    matching hash, and nothing read along the way was a symlink. This is
     still not a full audit — it never rehashes *undeclared* files or
     recurses into anything beyond what the descriptor itself lists, and
     nothing in the directory is ever rewritten or repaired; an independent,
     fully recursive audit is left to a future `verify`-style command.
     """
     descriptive_path = target_dir / descriptive_filename
+    _reject_if_not_regular_file(
+        descriptive_path,
+        label=f"digest directory {target_dir} descriptive file {descriptive_filename!r}",
+    )
     try:
         existing_bytes = descriptive_path.read_bytes()
     except OSError as exc:
@@ -637,6 +674,13 @@ def _check_existing_builds_root_publication(
 
     for artifact_name, expected_sha256 in digest_inputs.items():
         artifact_path = target_dir / artifact_name
+        _reject_if_not_regular_file(
+            artifact_path,
+            label=(
+                f"digest directory {target_dir} content artifact {artifact_name!r} "
+                f"(declared by descriptive file {descriptive_filename!r})"
+            ),
+        )
         try:
             artifact_bytes = artifact_path.read_bytes()
         except OSError as exc:
@@ -653,6 +697,22 @@ def _check_existing_builds_root_publication(
                 f"got {actual_sha256!r} (declared by descriptive file "
                 f"{descriptive_filename!r})"
             )
+
+    if provenance_differs:
+        pending_descriptor = json.loads(pending_bytes)
+        for key in sorted(set(existing_descriptor) | set(pending_descriptor)):
+            if key in allowed_provenance_fields:
+                continue
+            if existing_descriptor.get(key) != pending_descriptor.get(key):
+                raise ValueError(
+                    f"builds-root digest directory {target_dir} descriptive file "
+                    f"{descriptive_filename!r} differs from this invocation in "
+                    f"non-provenance field {key!r} (existing="
+                    f"{existing_descriptor.get(key)!r}, pending="
+                    f"{pending_descriptor.get(key)!r}); only "
+                    f"{sorted(allowed_provenance_fields)!r} may differ between "
+                    "publications sharing a content_digest"
+                )
 
     return provenance_differs
 
@@ -683,6 +743,7 @@ def _publish_artifacts_to_builds_root(
     descriptive_filename: str,
     expected_schema_version: str,
     extract_digest_inputs: Callable[[dict[str, Any]], dict[str, str]],
+    allowed_provenance_fields: frozenset[str],
 ) -> tuple[Path, bool, bool]:
     """Publish a complete artifact set under `<builds_root>/builds/<content_digest>/`.
 
@@ -797,6 +858,7 @@ def _publish_artifacts_to_builds_root(
             content_digest=content_digest,
             expected_schema_version=expected_schema_version,
             extract_digest_inputs=extract_digest_inputs,
+            allowed_provenance_fields=allowed_provenance_fields,
         )
 
     try:
@@ -853,6 +915,24 @@ def _package_report_digest_inputs(descriptor: dict[str, Any]) -> dict[str, str]:
     from svp_rpe.arrange.package import PERFORMANCE_PACKAGE_FILENAME
 
     return {PERFORMANCE_PACKAGE_FILENAME: descriptor["package_sha256"]}
+
+
+# PR #184 review round 7, Thread J: top-level descriptor fields allowed to
+# differ between two publications that share a `content_digest` without
+# that being treated as anything worse than "provenance drift". Every other
+# top-level field — `schema_version`/`content_digest`/`content_digest_basis`
+# are already pinned exactly by earlier checks; `arrangement_id` / `changes`
+# (arrange) and `work_id` / `generator` / `package_sha256` (package) are not
+# part of `content_digest` at all, so without this whitelist a tampered
+# `changes` list (for example) could otherwise be waved through as mere
+# provenance. Paired with `_arrange_bundle_digest_inputs` /
+# `_package_report_digest_inputs` the same way those pair with
+# `descriptive_filename` — one arrange-shaped constant, one package-shaped
+# constant.
+_ARRANGE_BUNDLE_ALLOWED_PROVENANCE_FIELDS = frozenset({"source_score", "arrangement_spec"})
+_PACKAGE_REPORT_ALLOWED_PROVENANCE_FIELDS = frozenset(
+    {"inputs", "invocation_provenance", "mode", "warnings"}
+)
 
 
 @app.command()
@@ -922,6 +1002,7 @@ def arrange(
                 descriptive_filename=BUNDLE_FILENAME,
                 expected_schema_version=BUNDLE_SCHEMA_VERSION,
                 extract_digest_inputs=_arrange_bundle_digest_inputs,
+                allowed_provenance_fields=_ARRANGE_BUNDLE_ALLOWED_PROVENANCE_FIELDS,
             )
         except (OSError, ValueError) as exc:
             typer.echo(f"Error: {exc}", err=True)
@@ -1005,11 +1086,25 @@ def package_command(
     # directory. In builds mode that directory's name is the content_digest
     # itself, which is not known yet — a same-depth placeholder yields an
     # identical relative path (see `_builds_placeholder_package_dir`).
-    locator_dir = (
-        str(_builds_placeholder_package_dir(builds_root))
-        if builds_root is not None
-        else output_dir
-    )
+    if builds_root is not None:
+        placeholder_dir = _builds_placeholder_package_dir(builds_root)
+        # PR #184 review round 7, Thread K: a *symlinked* placeholder would
+        # make `package_dir.resolve()` follow the symlink to wherever it
+        # actually points, so the locator gets computed relative to that
+        # (arbitrary, mutable) target instead of the reserved same-depth
+        # placeholder path — the locator would then be wrong once the real
+        # digest directory is published. A real directory sitting at the
+        # placeholder path is fine (same depth, so the locator is still
+        # correct); only a symlink is rejected here.
+        if placeholder_dir.is_symlink():
+            typer.echo(
+                f"Error: builds-root locator placeholder is a symlink: {placeholder_dir}",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        locator_dir = str(placeholder_dir)
+    else:
+        locator_dir = output_dir
 
     try:
         compiled = compile_performance_package(
@@ -1050,6 +1145,7 @@ def package_command(
                 descriptive_filename=COMPILATION_REPORT_FILENAME,
                 expected_schema_version=COMPILATION_REPORT_SCHEMA_VERSION,
                 extract_digest_inputs=_package_report_digest_inputs,
+                allowed_provenance_fields=_PACKAGE_REPORT_ALLOWED_PROVENANCE_FIELDS,
             )
         except (OSError, ValueError) as exc:
             typer.echo(f"Error: {exc}", err=True)
