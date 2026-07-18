@@ -152,6 +152,20 @@ class PhysicalRPE(BaseModel):
     active_rate: float
     valley_depth: float
     valley_depth_method: str = "rms"
+    # Metrics v2 (level-invariant, see docs/metrics.md "Metrics v2" and
+    # Metrics_v2_spec.md). Optional so existing JSON (pre-v2) deserializes
+    # unchanged; the extractor always populates these regardless of
+    # valley_depth_method. silence_rate/active_rate_v2 replace the
+    # level-dependent legacy active_rate; fullness measures wall-of-sound
+    # density; valley_db/valley_norm are the level-invariant dynamic range
+    # (dB and 0-1 normalized); crest_factor_robust is crest_factor with a
+    # robust (P99.99) peak.
+    silence_rate: Optional[float] = None
+    active_rate_v2: Optional[float] = None
+    fullness: Optional[float] = None
+    valley_db: Optional[float] = None
+    valley_norm: Optional[float] = None
+    crest_factor_robust: Optional[float] = None
     thickness: float
     spectral_centroid: float
     spectral_profile: SpectralProfile

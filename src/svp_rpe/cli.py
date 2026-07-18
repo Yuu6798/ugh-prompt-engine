@@ -55,8 +55,8 @@ SeparationDeviceOption = Annotated[
 def extract(
     audio: str = typer.Argument(..., help="Path to WAV/MP3 file"),
     output: Optional[str] = typer.Option(None, "-o", "--output", help="Output JSON path"),
-    valley_method: str = typer.Option("hybrid", "--valley-method",
-                                       help="Valley method: rms_percentile/section_ar/hybrid"),
+    valley_method: str = typer.Option("v2", "--valley-method",
+                                       help="Valley method: v2/legacy_hybrid/rms_percentile/section_ar/hybrid"),
     separate: SeparateOption = False,
     separation_model: SeparationModelOption = DEFAULT_SEPARATION_MODEL,
     separation_device: SeparationDeviceOption = DEFAULT_SEPARATION_DEVICE,
@@ -1762,8 +1762,8 @@ def evaluate(
     audio: str = typer.Option(..., "--audio", help="Path to audio file"),
     svp: Optional[str] = typer.Option(None, "--svp", help="Path to external SVP file"),
     output: Optional[str] = typer.Option(None, "-o", "--output", help="Output JSON path"),
-    valley_method: str = typer.Option("hybrid", "--valley-method",
-                                       help="Valley method: rms_percentile/section_ar/hybrid"),
+    valley_method: str = typer.Option("v2", "--valley-method",
+                                       help="Valley method: v2/legacy_hybrid/rms_percentile/section_ar/hybrid"),
     baseline: str = typer.Option(
         "pro",
         "--baseline",
@@ -1833,8 +1833,8 @@ def compare(
     candidate_svp: Optional[str] = typer.Option(None, "--candidate-svp",
                                                   help="Candidate SVP file"),
     output: Optional[str] = typer.Option(None, "-o", "--output", help="Output JSON path"),
-    valley_method: str = typer.Option("hybrid", "--valley-method",
-                                       help="Valley method: rms_percentile/section_ar/hybrid"),
+    valley_method: str = typer.Option("v2", "--valley-method",
+                                       help="Valley method: v2/legacy_hybrid/rms_percentile/section_ar/hybrid"),
 ) -> None:
     """Compare reference audio against candidate audio/SVP.
 
@@ -1947,8 +1947,8 @@ def run(
     audio: str = typer.Argument(..., help="Path to WAV/MP3 file"),
     output_dir: Optional[str] = typer.Option(None, "--output-dir", help="Output directory"),
     no_save: bool = typer.Option(False, "--no-save", help="Print to stdout only"),
-    valley_method: str = typer.Option("hybrid", "--valley-method",
-                                       help="Valley method: rms_percentile/section_ar/hybrid"),
+    valley_method: str = typer.Option("v2", "--valley-method",
+                                       help="Valley method: v2/legacy_hybrid/rms_percentile/section_ar/hybrid"),
     baseline: str = typer.Option(
         "pro",
         "--baseline",
@@ -2074,9 +2074,9 @@ def audit(
         help="Output format: text | json",
     ),
     valley_method: str = typer.Option(
-        "hybrid",
+        "v2",
         "--valley-method",
-        help="Valley method for audio input: rms_percentile/section_ar/hybrid",
+        help="Valley method for audio input: v2/legacy_hybrid/rms_percentile/section_ar/hybrid",
     ),
     output: Optional[str] = typer.Option(None, "-o", "--output", help="Output file path"),
 ) -> None:

@@ -1,3 +1,5 @@
+# DEPRECATED: fixed-threshold metrics (active_rate_ideal, valley_depth_pro) — see Metrics v2 (docs/metrics.md). Values frozen until n=20 re-baseline.
+# v2 reference: crest_pro ≈ 5.1 (robust P99.99 peak), valley_db is genre-dependent
 rms_mean_pro: 0.15
 active_rate_ideal: 0.75
 crest_factor_ideal: 8.0

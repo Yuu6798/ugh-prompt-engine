@@ -317,6 +317,141 @@ def compute_dynamic_range_db(y: np.ndarray, sr: int) -> Optional[float]:
     return round(20.0 * float(np.log10(p95 / p10)), 2)
 
 
+# ---------------------------------------------------------------------------
+# Metrics v2 — level-invariant active rate / fullness / valley (dB) / crest.
+#
+# The legacy `compute_active_rate` (fixed threshold=0.01 absolute RMS) and
+# `valley_rms_percentile` / `_valley_depth_simple` (absolute P90-P10 RMS
+# difference) are both level-dependent: a loud/produced master saturates
+# active_rate to 1.0, and valley depth scales down roughly linearly when the
+# whole track is attenuated (e.g. -12 dB halves it). Metrics v2 fixes this by
+# gating against the track's own robust peak (P99.99(|y|)) instead of an
+# absolute threshold, and by expressing dynamics in dB (log-ratio of RMS
+# percentiles) instead of a linear RMS difference. See docs/metrics.md
+# "Metrics v2" and the upstream Metrics_v2_spec.md for the full
+# derivation/validation (Pro vs AI corpus, n=3+4).
+#
+# The four v2 concepts are deliberately kept separate — the legacy metrics
+# conflated them into two formulas:
+#   - silence_rate / active_rate_v2: is the track actually silent here?
+#   - fullness: how much of the track sits near its own loud reference
+#     (wall-of-sound density)?
+#   - valley_db / valley_norm: how much does loudness vary, in dB (level
+#     invariant, unlike the legacy linear RMS difference)?
+#   - crest_factor_robust: peak-to-RMS "punch". `compute_crest_factor` was
+#     already level-invariant and correct (Metrics_v2_spec.md §1); this
+#     variant only swaps a robust (P99.99) peak in for `np.max` so a single
+#     outlier sample cannot dominate the ratio.
+# ---------------------------------------------------------------------------
+
+METRICS_V2_PEAK_FLOOR_DB = -40.0        # silence gate, relative to robust peak
+METRICS_V2_FULLNESS_WINDOW_DB = -12.0   # "still basically at full loudness" window
+METRICS_V2_FULLNESS_REF_PCT = 95.0      # loud-reference percentile among non-silent frames
+METRICS_V2_VALLEY_HI_PCT = 95.0
+METRICS_V2_VALLEY_LO_PCT = 10.0
+METRICS_V2_VALLEY_FULL_SCALE_DB = 30.0  # 0-1 normalization ceiling ("dramatic" dynamics)
+METRICS_V2_CREST_PEAK_PCT = 99.99
+
+
+def _frame_rms(
+    y: np.ndarray, frame_length: int = 2048, hop_length: int = 512,
+) -> np.ndarray:
+    """Frame-level RMS array. Canonical v2 framing (frame_length/hop_length)."""
+    return librosa.feature.rms(y=y, frame_length=frame_length, hop_length=hop_length)[0]
+
+
+def _robust_peak(y: np.ndarray, peak_pct: float = METRICS_V2_CREST_PEAK_PCT) -> float:
+    """P99.99(|y|), floored to avoid a zero gate on digital silence."""
+    return float(np.percentile(np.abs(y), peak_pct)) or 1e-9
+
+
+def compute_silence_rate(
+    y: np.ndarray, sr: int, peak_floor_db: float = METRICS_V2_PEAK_FLOOR_DB,
+) -> float:
+    """Fraction of frames at/below `peak_floor_db` relative to the track's own
+    robust peak — a level-invariant silence detector (unlike a fixed absolute
+    RMS threshold)."""
+    r = _frame_rms(y)
+    if r.size == 0:
+        return 0.0
+    gate = _robust_peak(y) * 10 ** (peak_floor_db / 20.0)
+    return round(_clamp(float(np.mean(r <= gate))), 4)
+
+
+def compute_active_rate_v2(
+    y: np.ndarray, sr: int, peak_floor_db: float = METRICS_V2_PEAK_FLOOR_DB,
+) -> float:
+    """1 - silence_rate: level-invariant replacement for `compute_active_rate`."""
+    return round(_clamp(1.0 - compute_silence_rate(y, sr, peak_floor_db)), 4)
+
+
+def compute_fullness(
+    y: np.ndarray,
+    sr: int,
+    window_db: float = METRICS_V2_FULLNESS_WINDOW_DB,
+    ref_pct: float = METRICS_V2_FULLNESS_REF_PCT,
+    peak_floor_db: float = METRICS_V2_PEAK_FLOOR_DB,
+) -> float:
+    """Fraction of frames within `window_db` of the track's own loud reference
+    (P`ref_pct` of non-silent frame RMS) — a wall-of-sound density detector."""
+    r = _frame_rms(y)
+    if r.size == 0:
+        return 0.0
+    gate = _robust_peak(y) * 10 ** (peak_floor_db / 20.0)
+    ns = r[r > gate]
+    if ns.size < 2:
+        return 0.0
+    ref = float(np.percentile(ns, ref_pct))
+    thr = ref * 10 ** (window_db / 20.0)
+    return round(_clamp(float(np.mean(r >= thr))), 4)
+
+
+def compute_valley_db(
+    y: np.ndarray,
+    sr: int,
+    hi_pct: float = METRICS_V2_VALLEY_HI_PCT,
+    lo_pct: float = METRICS_V2_VALLEY_LO_PCT,
+    peak_floor_db: float = METRICS_V2_PEAK_FLOOR_DB,
+) -> float:
+    """Level-invariant dynamic range: dB ratio of P`hi_pct`/P`lo_pct` frame RMS
+    among non-silent frames. Silence-gated sibling of `compute_dynamic_range_db`
+    above (which floors percentiles instead of gating frames); see that
+    function's docstring for the non-gated variant used elsewhere."""
+    r = _frame_rms(y)
+    if r.size < 2:
+        return 0.0
+    gate = _robust_peak(y) * 10 ** (peak_floor_db / 20.0)
+    ns = r[r > gate]
+    if ns.size < 2:
+        return 0.0
+    hi = float(np.percentile(ns, hi_pct))
+    lo = max(float(np.percentile(ns, lo_pct)), 1e-9)
+    return round(float(20.0 * np.log10(hi / lo)), 4)
+
+
+def valley_norm_from_db(
+    valley_db: float, full_scale_db: float = METRICS_V2_VALLEY_FULL_SCALE_DB,
+) -> float:
+    """0-1 normalization of `compute_valley_db` (`full_scale_db` = dramatic dynamics)."""
+    return round(_clamp(valley_db / full_scale_db), 4)
+
+
+def compute_crest_factor_robust(
+    y: np.ndarray, peak_pct: float = METRICS_V2_CREST_PEAK_PCT,
+) -> float:
+    """Peak-to-RMS ratio with a robust (P99.99) peak instead of `np.max`.
+
+    `compute_crest_factor` remains unchanged (already level-invariant and
+    correct); this is the crest reading v2 scoring/hints use, per
+    Metrics_v2_spec.md §1 (Pro/AI separation axis).
+    """
+    rms = float(np.sqrt(np.mean(y ** 2)))
+    if rms == 0:
+        return 0.0
+    peak = _robust_peak(y, peak_pct)
+    return round(peak / rms, 4)
+
+
 def _prepare_loudness_signal(y: np.ndarray) -> tuple[np.ndarray, int] | None:
     if y.size == 0:
         return None

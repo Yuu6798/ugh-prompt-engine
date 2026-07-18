@@ -1,6 +1,7 @@
 """rpe/valley.py — Valley depth estimation with strategy pattern.
 
-Methods: rms_percentile, section_ar, hybrid (default).
+Methods: rms_percentile, section_ar, hybrid, legacy_hybrid (alias of hybrid),
+v2 (default, level-invariant — see docs/metrics.md "Metrics v2").
 All methods return (value, ValleyDiagnostics).
 """
 from __future__ import annotations
@@ -12,6 +13,7 @@ import numpy as np
 
 from svp_rpe.eval.diff_models import ValleyDiagnostics
 from svp_rpe.rpe.models import SectionMarker
+from svp_rpe.rpe.physical_features import compute_valley_db, valley_norm_from_db
 
 
 def _clamp(v: float, lo: float = 0.0, hi: float = 1.0) -> float:
@@ -77,28 +79,47 @@ def compute_valley_depth(
     sr: int,
     sections: List[SectionMarker],
     *,
-    method: str = "hybrid",
+    method: str = "v2",
 ) -> tuple[float, ValleyDiagnostics]:
     """Compute valley depth with selectable strategy.
 
     Methods:
         - "rms_percentile": P90 - P10 of frame RMS
         - "section_ar": AR_main - AR_min across sections
-        - "hybrid": 0.5 * rms_percentile + 0.5 * section_ar (default)
+        - "hybrid": 0.5 * rms_percentile + 0.5 * section_ar
+        - "legacy_hybrid": alias of "hybrid" (identical value/behavior) —
+          explicit opt-out name for callers switching away from the "v2"
+          default who want to keep the pre-v2 calculation
+        - "v2" (default): level-invariant dB dynamic range
+          (`physical_features.compute_valley_db`), normalized to [0, 1] via
+          `valley_norm_from_db`. See docs/metrics.md "Metrics v2" for why the
+          legacy methods above are level-dependent.
+
+    All four legacy/hybrid + v2 values are always computed and recorded on
+    the returned diagnostics regardless of `method`, matching the existing
+    rms_percentile_value/section_ar_value/hybrid_value behavior.
 
     Returns (valley_depth, diagnostics).
     """
     rms_val, rms_diag = valley_rms_percentile(y, sr)
     ar_val, ar_diag = valley_section_ar(y, sr, sections)
+    hybrid_val = round(0.5 * rms_val + 0.5 * ar_val, 4)
+    v2_db_val = compute_valley_db(y, sr)
+    v2_norm_val = valley_norm_from_db(v2_db_val)
 
     if method == "rms_percentile":
         value = rms_val
     elif method == "section_ar":
         value = ar_val
-    elif method == "hybrid":
-        value = round(0.5 * rms_val + 0.5 * ar_val, 4)
+    elif method in ("hybrid", "legacy_hybrid"):
+        value = hybrid_val
+    elif method == "v2":
+        value = v2_norm_val
     else:
-        raise ValueError(f"unknown valley method: {method}. use rms_percentile/section_ar/hybrid")
+        raise ValueError(
+            "unknown valley method: "
+            f"{method}. use rms_percentile/section_ar/hybrid/legacy_hybrid/v2"
+        )
 
     # Confidence based on data quality
     confidence = 0.5
@@ -121,7 +142,9 @@ def compute_valley_depth(
         confidence=round(confidence, 4),
         rms_percentile_value=rms_val,
         section_ar_value=ar_val,
-        hybrid_value=round(0.5 * rms_val + 0.5 * ar_val, 4),
+        hybrid_value=hybrid_val,
+        v2_db_value=v2_db_val,
+        v2_norm_value=v2_norm_val,
     )
 
     return value, diagnostics

@@ -83,6 +83,13 @@ class PhysicalDiff(BaseModel):
     active_rate_diff: float = 0.0
     thickness_diff: float = 0.0
     spectral_centroid_diff: float = 0.0
+    # Metrics v2 (level-invariant) diffs. Optional / None when either side
+    # lacks the v2 field (legacy RPE JSON without v2 metrics) — see
+    # eval/comparison.py compute_physical_diff for the fallback rule.
+    valley_db_diff: Optional[float] = None
+    fullness_diff: Optional[float] = None
+    crest_diff: Optional[float] = None
+    active_rate_v2_diff: Optional[float] = None
     metrics: Dict[str, MetricDiff] = Field(default_factory=dict)
     overall: float = 0.0
     details: Dict[str, str] = Field(default_factory=dict)
@@ -154,6 +161,11 @@ class ValleyDiagnostics(BaseModel):
     rms_percentile_value: float = 0.0
     section_ar_value: float = 0.0
     hybrid_value: float = 0.0
+    # Metrics v2 (level-invariant dB dynamic range + 0-1 normalization). Always
+    # computed by valley.compute_valley_depth regardless of `method`, mirroring
+    # the three legacy *_value fields above.
+    v2_db_value: Optional[float] = None
+    v2_norm_value: Optional[float] = None
 
 
 class SectionFeature(BaseModel):
