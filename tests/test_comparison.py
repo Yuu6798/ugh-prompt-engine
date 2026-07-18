@@ -331,6 +331,7 @@ def _physical(
     *,
     valley_depth_method: str,
     valley_depth: float = 0.18,
+    valley_depth_legacy: float | None = None,
     valley_db: float | None = 12.0,
     fullness: float | None = 0.8,
     crest_factor_robust: float | None = 5.0,
@@ -346,6 +347,7 @@ def _physical(
         crest_factor=4.0,
         active_rate=active_rate,
         valley_depth=valley_depth,
+        valley_depth_legacy=valley_depth_legacy,
         valley_depth_method=valley_depth_method,
         valley_db=valley_db,
         fullness=fullness,
@@ -428,6 +430,41 @@ class TestComputePhysicalDiffValleyMethodGate:
         assert diff.crest_diff is None
         assert diff.active_rate_v2_diff is None
         assert diff.valley_diff == pytest.approx(-0.2)
+
+    def test_valley_diff_uses_legacy_scale_not_raw_valley_depth_on_mixed_methods(self) -> None:
+        # Codex PR #188 P2 #6: valley_diff must be computed from
+        # legacy_valley_depth on BOTH sides, not phys.valley_depth directly —
+        # otherwise a mixed ref(v2)/cand(legacy method) pair diffs a v2 norm
+        # against a legacy linear value (two different scales), which is
+        # exactly the bug this test pins.
+        ref = _physical(
+            valley_depth_method="v2", valley_depth=0.30, valley_depth_legacy=0.05,
+        )
+        cand = _physical(
+            valley_depth_method="hybrid", valley_depth=0.10, valley_depth_legacy=None,
+        )
+
+        diff = compute_physical_diff(ref, cand)
+
+        # legacy_valley_depth(cand)=0.10 (falls back to valley_depth, since
+        # cand carries no explicit legacy field and its selected method IS
+        # the legacy scale) minus legacy_valley_depth(ref)=0.05 (explicit
+        # legacy field) = 0.05 — NOT cand.valley_depth - ref.valley_depth
+        # = 0.10 - 0.30 = -0.20, which would be the old cross-scale bug.
+        assert diff.valley_diff == pytest.approx(0.05)
+
+        hints = generate_action_hints(
+            SemanticDiff(
+                por_lexical_similarity=0.9, grv_anchor_match=0.9,
+                delta_e_profile_alignment=0.9, instrumentation_context_alignment=0.9,
+                overall=0.9,
+            ),
+            diff,
+        )
+        # With the correct (positive, small) legacy-scale diff, the
+        # low-valley "Bridge/Verse" hint must NOT fire (it requires
+        # valley_diff < -0.05, which only the old buggy -0.20 would trigger).
+        assert not any("Bridge/Verse" in h for h in hints)
 
 
 # ---------------------------------------------------------------------------

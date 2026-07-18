@@ -17,7 +17,7 @@ from svp_rpe.eval.diff_models import (
     SemanticDiff,
 )
 from svp_rpe.eval.semantic_similarity import por_lexical_similarity
-from svp_rpe.rpe.models import PhysicalRPE, RPEBundle
+from svp_rpe.rpe.models import PhysicalRPE, RPEBundle, legacy_valley_depth
 
 
 def _clamp(v: float) -> float:
@@ -103,7 +103,21 @@ def compute_physical_diff(
     )
 
     rms_diff = round(phys_cand.rms_mean - phys_ref.rms_mean, 4)
-    valley_diff = round(phys_cand.valley_depth - phys_ref.valley_depth, 4)
+    # PhysicalDiff.valley_diff is defined on the LEGACY (pre-v2 hybrid)
+    # scale — always compute it from legacy_valley_depth on both sides
+    # (Codex PR #188 P2 #6), never from the raw v2-default valley_depth
+    # field directly. Without this, a mixed-method pair (e.g. ref left on
+    # v2, candidate explicitly re-extracted with legacy_hybrid) would diff a
+    # v2 norm against a legacy linear value — two different scales — and
+    # that cross-scale number would silently drive both the legacy valley
+    # score (`else` branch below, when both_v2 is False) and the
+    # "Bridge/Verse 低密度" / "breakdown" hints. legacy_valley_depth already
+    # falls back to `valley_depth` for pre-v2 JSON (where valley_depth WAS
+    # the hybrid value), so old fixtures keep comparing on the same scale
+    # they always did. When both sides are v2 (both_v2 below), valley_diff
+    # still isn't used for scoring/hints — valley_db_diff takes over — so
+    # this has no effect on the v2 path.
+    valley_diff = round(legacy_valley_depth(phys_cand) - legacy_valley_depth(phys_ref), 4)
     ar_diff = round(phys_cand.active_rate - phys_ref.active_rate, 4)
     thick_diff = round(phys_cand.thickness - phys_ref.thickness, 4)
     sc_diff = round(phys_cand.spectral_centroid - phys_ref.spectral_centroid, 2)
