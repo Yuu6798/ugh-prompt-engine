@@ -25,6 +25,24 @@ SEMANTIC_LAYERS: tuple[SemanticLayer, ...] = (
 HIGH_CONFIDENCE = 0.70
 
 
+def _legacy_valley_depth(phys: PhysicalRPE) -> float:
+    """Valley depth on the frozen pre-v2 hybrid scale.
+
+    Shared by every semantic-layer consumer that reads valley_depth against
+    thresholds calibrated before PR #188 switched the extractor default from
+    "hybrid" to the level-invariant v2 norm: the config-driven
+    valley_depth_min/_max/_gt conditions (6 sites incl. cultural_context's
+    ctx.cinematic_dynamic, read via `_feature_value` -> `_condition_evidence`)
+    AND the two hardcoded thresholds in `_infer_grv_anchor`
+    (valley_depth > 0.2) and `_infer_delta_e_profile` (vd = valley_depth).
+    Prefers `valley_depth_legacy` when the extractor populated it; falls
+    back to `valley_depth` for pre-v2 JSON (None legacy), where
+    `valley_depth` itself WAS the hybrid value. See
+    PhysicalRPE.valley_depth_legacy docstring.
+    """
+    return phys.valley_depth_legacy if phys.valley_depth_legacy is not None else phys.valley_depth
+
+
 def _feature_value(name: str, phys: PhysicalRPE) -> Any:
     """Return a comparable physical value by rule key."""
     if "." in name:
@@ -41,16 +59,10 @@ def _feature_value(name: str, phys: PhysicalRPE) -> Any:
         "mode": lambda item: item.mode,
         "spectral_centroid": lambda item: item.spectral_centroid,
         # config の valley_depth_min/_max/_gt 条件（6 箇所、cultural_context の
-        # ctx.cinematic_dynamic 含む）は旧 hybrid スケールで校正済み。PR #188 で
-        # `valley_depth` 既定が level-invariant な v2 norm に切替わったため、
-        # 凍結済み閾値を維持するには legacy 優先で読む（フォールバックは
-        # valley_depth 自体 — 旧 JSON では valley_depth = hybrid 値だったため
-        # 正しい）。config の閾値・ルール文言はここでは一切変更しない。
-        "valley_depth": lambda item: (
-            item.valley_depth_legacy
-            if item.valley_depth_legacy is not None
-            else item.valley_depth
-        ),
+        # ctx.cinematic_dynamic 含む）は旧 hybrid スケールで校正済み。凍結済み
+        # 閾値を維持するには legacy 優先で読む。config の閾値・ルール文言は
+        # ここでは一切変更しない。
+        "valley_depth": _legacy_valley_depth,
         "stereo_width": lambda item: item.stereo_profile.width
         if item.stereo_profile
         else None,
@@ -212,7 +224,9 @@ def _infer_grv_anchor(phys: PhysicalRPE, por_surface: List[SemanticLabel]) -> Gr
     secondary = []
     if phys.active_rate > 0.8:
         secondary.append("dense")
-    if phys.valley_depth > 0.2:
+    # 0.2 は旧 hybrid スケールで校正済みの閾値 -> legacy 優先で読む（config の
+    # valley_depth_* 条件と同じ優先順位。共有ヘルパー _legacy_valley_depth）。
+    if _legacy_valley_depth(phys) > 0.2:
         secondary.append("dynamic")
     if phys.stereo_profile and phys.stereo_profile.width > 0.5:
         secondary.append("wide-field")
@@ -223,7 +237,10 @@ def _infer_grv_anchor(phys: PhysicalRPE, por_surface: List[SemanticLabel]) -> Gr
 
 def _infer_delta_e_profile(phys: PhysicalRPE) -> DeltaEProfile:
     """Infer energy transition profile from physical features."""
-    vd = phys.valley_depth
+    # 0.3/0.15 は旧 hybrid スケールで校正済みの閾値 -> legacy 優先で読む
+    # （共有ヘルパー _legacy_valley_depth。config の valley_depth_* 条件と同じ
+    # 優先順位）。
+    vd = _legacy_valley_depth(phys)
     ar = phys.active_rate
 
     if vd > 0.3:
