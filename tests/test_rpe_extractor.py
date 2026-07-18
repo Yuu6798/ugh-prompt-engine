@@ -45,7 +45,8 @@ class TestPhysicalFeatures:
         sections = [SectionMarker(label="s1", start_sec=0.0, end_sec=3.0)]
         vd, diag = compute_valley_depth(audio.y_mono, audio.sr, sections)
         assert vd >= 0.0
-        assert diag.method == "hybrid"
+        # Default method switched hybrid -> v2 (Metrics v2 rollout).
+        assert diag.method == "v2"
 
     def test_onset_density_non_negative(self, sine_wave_mono):
         audio = load_audio(sine_wave_mono)

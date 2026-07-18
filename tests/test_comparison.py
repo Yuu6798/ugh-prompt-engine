@@ -329,7 +329,8 @@ class TestExtractorV2:
         phys, valley_diag, section_features = extract_physical(audio)
         assert phys.duration_sec > 0
         assert valley_diag is not None
-        assert valley_diag.method == "hybrid"
+        # Default method switched hybrid -> v2 (Metrics v2 rollout).
+        assert valley_diag.method == "v2"
         assert len(section_features) >= 1
 
     def test_section_labels_not_generic(self, sine_wave_mono):

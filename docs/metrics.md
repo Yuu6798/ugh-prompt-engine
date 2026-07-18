@@ -313,3 +313,54 @@ ValleyDiagnostics output: rms_p90, rms_p10, ar_main, ar_min, chorus_sections, lo
 SemanticDiff: por_lexical_similarity, grv_anchor_match, delta_e_profile_alignment, instrumentation_context_alignment.
 PhysicalDiff: bpm_diff, key_match, rms_diff, valley_diff, active_rate_diff, thickness_diff, spectral_centroid_diff.
 action_hints: auto-generated improvement suggestions based on diffs.
+
+## Metrics v2 (level-invariant)
+
+The legacy `active_rate` (RMS > fixed 0.01 threshold) and `valley_depth`
+(`rms_percentile`/`section_ar`/`hybrid`, all built on absolute RMS
+differences) are **level-dependent**: a loud/produced master saturates
+`active_rate` to 1.0, and `valley_depth` scales down ~linearly when the whole
+track is attenuated (empirically ×0.25 at -12 dB). Synthetic-signal testing
+also showed the two formulas conflate four distinct concepts (silence,
+density, dynamics, transient punch) into two numbers, so neither separates
+Pro from AI-generated masters. `crest_factor` (peak/RMS) was the one legacy
+metric already correct — it is level-invariant and was the only metric that
+separated a Pro corpus (crest ≈ 5.1) from an AI corpus (crest ≈ 4.2).
+
+Metrics v2 (`rpe/physical_features.py`) gates every measurement against the
+track's own robust peak (`P99.99(|y|)`, not an absolute threshold) and
+expresses dynamics in dB, keeping the four concepts separate:
+
+| Metric | Field | Formula | Concept |
+|---|---|---|---|
+| Silence rate | `PhysicalRPE.silence_rate` | `mean(frame_rms <= peak*10^(-40/20))` | is it actually silent here? |
+| Active rate v2 | `PhysicalRPE.active_rate_v2` | `1 - silence_rate` | level-invariant `active_rate` |
+| Fullness | `PhysicalRPE.fullness` | `mean(frame_rms >= P95(non-silent) * 10^(-12/20))` | wall-of-sound density |
+| Valley (dB) | `PhysicalRPE.valley_db` | `20*log10(P95(non-silent)/P10(non-silent))` | level-invariant dynamic range |
+| Valley (0-1) | `PhysicalRPE.valley_norm` | `clamp(valley_db / 30)` | 0-1 normalized (30 dB = dramatic) |
+| Crest (robust) | `PhysicalRPE.crest_factor_robust` | `P99.99(\|y\|) / rms` | transient punch (Pro/AI separator) |
+
+Frame RMS uses `librosa.feature.rms(frame_length=2048, hop_length=512)`
+throughout. All fields are `Optional`, always populated by the extractor
+regardless of `valley_depth_method`, and `schema_version` stays `"1.0"`
+(purely additive, existing JSON deserializes unchanged).
+
+`valley_depth_method` now accepts `"v2"` (**default**, `valley_depth` =
+`valley_norm`), `"legacy_hybrid"` (alias of `"hybrid"`, identical value —
+the explicit opt-out name), plus the unchanged `rms_percentile`/
+`section_ar`/`hybrid`. `ValleyDiagnostics.v2_db_value`/`v2_norm_value` are
+always populated alongside the three legacy `*_value` fields. `--valley-method
+legacy_hybrid` reproduces pre-v2 behavior exactly.
+
+`compare_physical_diff` scores valley/active-rate on the v2 fields
+(`valley_db_diff`/12 dB, `active_rate_v2_diff`/0.3) when both sides of a
+comparison carry them, falling back to the legacy `valley_diff`/0.3 and
+`active_rate_diff`/0.3 scoring for pre-v2 RPE JSON. Action hints likewise
+switch to a crest-driven hint ("トランジェントの張り不足") once v2 data is
+present, since crest — not valley/AR — is the metric that actually tracks
+Pro/AI quality (Metrics_v2_spec.md §4-5); the legacy "Bridge/Verse 低密度" /
+"breakdown 挿入" hints remain for legacy-only comparisons.
+
+Baseline config (`config/*_baseline.yaml`) `active_rate_ideal` and
+`valley_depth_pro` are frozen (values unchanged) pending an n=20 v2
+re-baseline; see the `DEPRECATED` header comment in each file.
