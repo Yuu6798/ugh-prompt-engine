@@ -1,6 +1,7 @@
 """eval/delta_e_alignment.py — ΔE profile alignment scoring."""
 from __future__ import annotations
 
+from svp_rpe.utils.clamp import clamp
 
 _TRANSITION_TYPES = {
     "flat", "sustained_energy", "gradual_build", "dramatic_contrast",
@@ -13,10 +14,6 @@ _COMPATIBLE_PAIRS = {
     ("dramatic_contrast", "sudden_drop"),
     ("sustained_energy", "flat"),
 }
-
-
-def _clamp(v: float) -> float:
-    return max(0.0, min(1.0, v))
 
 
 def delta_e_profile_alignment(
@@ -45,4 +42,4 @@ def delta_e_profile_alignment(
     # Intensity proximity
     intensity_score = 1.0 - min(abs(intensity_a - intensity_b), 1.0)
 
-    return round(_clamp(type_score * 0.7 + intensity_score * 0.3), 4)
+    return round(clamp(type_score * 0.7 + intensity_score * 0.3), 4)

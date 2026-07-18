@@ -8,10 +8,7 @@ from __future__ import annotations
 from svp_rpe.eval.models import UGHerScore
 from svp_rpe.rpe.models import RPEBundle
 from svp_rpe.svp.models import SVPBundle
-
-
-def _clamp(v: float, lo: float = 0.0, hi: float = 1.0) -> float:
-    return max(lo, min(hi, v))
+from svp_rpe.utils.clamp import clamp
 
 
 def _token_overlap(text_a: str, text_b: str) -> float:
@@ -69,7 +66,7 @@ def score_ugher(rpe: RPEBundle, svp: SVPBundle) -> UGHerScore:
     ) else 0.5
 
     # physical_accuracy: how many physical checks are generated
-    physical_accuracy = _clamp(len(svp.evaluation_criteria.physical_checks) / 4.0)
+    physical_accuracy = clamp(len(svp.evaluation_criteria.physical_checks) / 4.0)
 
     overall = round(
         (por_similarity * 0.3 + grv_consistency * 0.3

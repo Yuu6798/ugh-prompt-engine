@@ -18,10 +18,7 @@ from svp_rpe.eval.diff_models import (
 )
 from svp_rpe.eval.semantic_similarity import por_lexical_similarity
 from svp_rpe.rpe.models import PhysicalRPE, RPEBundle, legacy_valley_depth
-
-
-def _clamp(v: float) -> float:
-    return max(0.0, min(1.0, v))
+from svp_rpe.utils.clamp import clamp
 
 
 def _is_numeric_metric_value(value: Any) -> bool:
@@ -38,7 +35,7 @@ def _instrumentation_alignment(notes_a: List[str], notes_b: List[str]) -> float:
     set_b = set(" ".join(notes_b).lower().split())
     if not set_a or not set_b:
         return 0.0
-    return _clamp(len(set_a & set_b) / max(len(set_a), len(set_b)))
+    return clamp(len(set_a & set_b) / max(len(set_a), len(set_b)))
 
 
 def compute_semantic_diff(
@@ -158,23 +155,23 @@ def compute_physical_diff(
     # Overall: proximity score (closer = better)
     scores = []
     if bpm_diff is not None:
-        scores.append(_clamp(1.0 - abs(bpm_diff) / 20.0))
+        scores.append(clamp(1.0 - abs(bpm_diff) / 20.0))
     scores.append(1.0 if key_match else 0.0)
-    scores.append(_clamp(1.0 - abs(rms_diff) / 0.3))
+    scores.append(clamp(1.0 - abs(rms_diff) / 0.3))
     # Valley: v2 dB-based score when both sides have valley_db (12 dB diff →
     # score 0, per the v2 spec's genre-dependent dynamics range), else the
     # legacy linear valley_depth score (0.3 diff → score 0). See item 5 of
     # the v2 rollout: comparing legacy_hybrid JSON must not crash or silently
     # mis-score just because valley_db is absent.
     if valley_db_diff is not None:
-        scores.append(_clamp(1.0 - abs(valley_db_diff) / 12.0))
+        scores.append(clamp(1.0 - abs(valley_db_diff) / 12.0))
     else:
-        scores.append(_clamp(1.0 - abs(valley_diff) / 0.3))
+        scores.append(clamp(1.0 - abs(valley_diff) / 0.3))
     # Active rate: v2 when available, else legacy.
     if active_rate_v2_diff is not None:
-        scores.append(_clamp(1.0 - abs(active_rate_v2_diff) / 0.3))
+        scores.append(clamp(1.0 - abs(active_rate_v2_diff) / 0.3))
     else:
-        scores.append(_clamp(1.0 - abs(ar_diff) / 0.3))
+        scores.append(clamp(1.0 - abs(ar_diff) / 0.3))
 
     overall = round(sum(scores) / max(len(scores), 1), 4)
 

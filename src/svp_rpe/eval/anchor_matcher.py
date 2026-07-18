@@ -3,9 +3,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-
-def _clamp(v: float) -> float:
-    return max(0.0, min(1.0, v))
+from svp_rpe.utils.clamp import clamp
 
 
 def grv_anchor_match(
@@ -77,4 +75,4 @@ def grv_anchor_match(
         anchor_overlap_score(),
     ]
     active_scores = [score for score in scores if score is not None]
-    return _clamp(sum(active_scores) / max(len(active_scores), 1))
+    return clamp(sum(active_scores) / max(len(active_scores), 1))
