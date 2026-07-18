@@ -108,16 +108,56 @@ def compute_physical_diff(
     thick_diff = round(phys_cand.thickness - phys_ref.thickness, 4)
     sc_diff = round(phys_cand.spectral_centroid - phys_ref.spectral_centroid, 2)
 
+    # Metrics v2 (level-invariant) diffs. Only computed when both sides carry
+    # the v2 field — legacy RPE JSON (pre-v2, fields None) falls back to the
+    # legacy diffs above so old fixtures keep working. See docs/metrics.md
+    # "Metrics v2".
+    valley_db_diff = None
+    if phys_ref.valley_db is not None and phys_cand.valley_db is not None:
+        valley_db_diff = round(phys_cand.valley_db - phys_ref.valley_db, 4)
+
+    fullness_diff = None
+    if phys_ref.fullness is not None and phys_cand.fullness is not None:
+        fullness_diff = round(phys_cand.fullness - phys_ref.fullness, 4)
+
+    crest_diff = None
+    if phys_ref.crest_factor_robust is not None and phys_cand.crest_factor_robust is not None:
+        crest_diff = round(phys_cand.crest_factor_robust - phys_ref.crest_factor_robust, 4)
+
+    active_rate_v2_diff = None
+    if phys_ref.active_rate_v2 is not None and phys_cand.active_rate_v2 is not None:
+        active_rate_v2_diff = round(phys_cand.active_rate_v2 - phys_ref.active_rate_v2, 4)
+
     # Overall: proximity score (closer = better)
     scores = []
     if bpm_diff is not None:
         scores.append(_clamp(1.0 - abs(bpm_diff) / 20.0))
     scores.append(1.0 if key_match else 0.0)
     scores.append(_clamp(1.0 - abs(rms_diff) / 0.3))
-    scores.append(_clamp(1.0 - abs(valley_diff) / 0.3))
-    scores.append(_clamp(1.0 - abs(ar_diff) / 0.3))
+    # Valley: v2 dB-based score when both sides have valley_db (12 dB diff →
+    # score 0, per the v2 spec's genre-dependent dynamics range), else the
+    # legacy linear valley_depth score (0.3 diff → score 0). See item 5 of
+    # the v2 rollout: comparing legacy_hybrid JSON must not crash or silently
+    # mis-score just because valley_db is absent.
+    if valley_db_diff is not None:
+        scores.append(_clamp(1.0 - abs(valley_db_diff) / 12.0))
+    else:
+        scores.append(_clamp(1.0 - abs(valley_diff) / 0.3))
+    # Active rate: v2 when available, else legacy.
+    if active_rate_v2_diff is not None:
+        scores.append(_clamp(1.0 - abs(active_rate_v2_diff) / 0.3))
+    else:
+        scores.append(_clamp(1.0 - abs(ar_diff) / 0.3))
 
     overall = round(sum(scores) / max(len(scores), 1), 4)
+
+    # Stashed for _physical_action_hints' absolute crest threshold (the
+    # candidate's own crest_factor_robust, not just its diff from reference —
+    # `details` is the existing free-form str/str field, so this avoids
+    # adding a dedicated PhysicalDiff field just for a hint heuristic).
+    details: dict[str, str] = {}
+    if phys_cand.crest_factor_robust is not None:
+        details["crest_factor_robust_cand"] = str(phys_cand.crest_factor_robust)
 
     return PhysicalDiff(
         bpm_diff=bpm_diff,
@@ -127,7 +167,12 @@ def compute_physical_diff(
         active_rate_diff=ar_diff,
         thickness_diff=thick_diff,
         spectral_centroid_diff=sc_diff,
+        valley_db_diff=valley_db_diff,
+        fullness_diff=fullness_diff,
+        crest_diff=crest_diff,
+        active_rate_v2_diff=active_rate_v2_diff,
         overall=overall,
+        details=details,
     )
 
 
@@ -202,14 +247,41 @@ def compare_metric_values(
 # ---------------------------------------------------------------------------
 
 
+def _crest_hint(physical_diff: PhysicalDiff) -> Optional[str]:
+    """Metrics v2 crest-driven hint (Metrics_v2_spec.md §4-5: crest — not
+    valley/AR — is what separates Pro from AI-generated masters)."""
+    crest_low = physical_diff.crest_diff is not None and physical_diff.crest_diff <= -0.5
+    if not crest_low:
+        cand_crest_str = physical_diff.details.get("crest_factor_robust_cand")
+        if cand_crest_str is not None:
+            try:
+                crest_low = float(cand_crest_str) < 4.5
+            except ValueError:
+                crest_low = False
+    if crest_low:
+        return "トランジェントの張り不足（生成/ミックス側で確保）"
+    return None
+
+
 def _physical_action_hints(physical_diff: PhysicalDiff) -> List[str]:
     hints: List[str] = []
 
-    if physical_diff.valley_diff < -0.05:
-        hints.append("Bridge/Verse の低密度設計を強化 (valley_depth が低い)")
+    has_v2_data = physical_diff.valley_db_diff is not None or physical_diff.crest_diff is not None
 
-    if physical_diff.active_rate_diff > 0.05 and physical_diff.valley_diff < 0:
-        hints.append("breakdown / silence bar を挿入 (AR高+valley不足)")
+    if has_v2_data:
+        # v2 replaces the level-dependent "Bridge/Verse 低密度" / "breakdown
+        # 挿入" hints below (they were artifacts of the legacy valley/AR
+        # formulas, not real quality signals — see docs/metrics.md
+        # "Metrics v2").
+        crest_hint = _crest_hint(physical_diff)
+        if crest_hint is not None:
+            hints.append(crest_hint)
+    else:
+        if physical_diff.valley_diff < -0.05:
+            hints.append("Bridge/Verse の低密度設計を強化 (valley_depth が低い)")
+
+        if physical_diff.active_rate_diff > 0.05 and physical_diff.valley_diff < 0:
+            hints.append("breakdown / silence bar を挿入 (AR高+valley不足)")
 
     if physical_diff.bpm_diff is not None and abs(physical_diff.bpm_diff) > 10:
         hints.append(f"grv anchor に bpm を明示 (差分: {physical_diff.bpm_diff:+.0f})")
