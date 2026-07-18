@@ -58,7 +58,7 @@
     {
       "score_field": "valley_depth_target",
       "sensor": "physical.valley_depth",
-      "raw_value": 0.1935,
+      "raw_value": 0.5623,
       "unit": "ratio",
       "score_value": null,
       "calibration": [
