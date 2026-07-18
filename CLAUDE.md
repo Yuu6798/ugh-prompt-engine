@@ -135,7 +135,7 @@ discipline ゲート: `.claude/memory/` の直 main push の前に必ず
 
 ```
 src/svp_rpe/
-├── cli.py                     # typer CLI (svprpe command)
+├── cli/                       # typer CLI (svprpe command。コマンド別モジュール + builds_root ヘルパー)
 ├── keys.py                     # 調ラベル一致度: weighted_key_score (grip 用連続値) / keys_enharmonically_equal (roundtrip 用二値)
 ├── sentinels.py                 # transcribe TODO センチネル (`TODO(transcribe):`) の single source of truth
 ├── io/

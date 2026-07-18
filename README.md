@@ -102,7 +102,7 @@ svprpe --help
 
 ```
 src/svp_rpe/                # Main package (src layout)
-├── cli.py                  # typer CLI (svprpe command)
+├── cli/                    # typer CLI (svprpe command。コマンド別モジュール)
 ├── keys.py                 # 調ラベル一致度 (weighted_key_score / keys_enharmonically_equal)
 ├── sentinels.py            # 共有 sentinel 値
 ├── io/                     # WAV/MP3 loading + optional Demucs source separation
