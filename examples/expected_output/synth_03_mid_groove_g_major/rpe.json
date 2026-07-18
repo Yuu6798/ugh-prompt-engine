@@ -1553,6 +1553,13 @@
     "active_rate": 0.9826,
     "valley_depth": 0.1816,
     "valley_depth_method": "hybrid",
+    "silence_rate": 0.0127,
+    "active_rate_v2": 0.9873,
+    "fullness": 0.8264,
+    "valley_db": 15.6879,
+    "valley_norm": 0.5229,
+    "crest_factor_robust": 2.5524,
+    "valley_depth_legacy": 0.1816,
     "thickness": 1.2342,
     "spectral_centroid": 719.95,
     "spectral_profile": {

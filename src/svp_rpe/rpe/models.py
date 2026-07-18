@@ -152,6 +152,45 @@ class PhysicalRPE(BaseModel):
     active_rate: float
     valley_depth: float
     valley_depth_method: str = "rms"
+    # Metrics v2 (level-invariant, see docs/metrics.md "Metrics v2" and
+    # Metrics_v2_spec.md). Optional so existing JSON (pre-v2) deserializes
+    # unchanged; the extractor always populates these regardless of
+    # valley_depth_method. silence_rate/active_rate_v2 replace the
+    # level-dependent legacy active_rate; fullness measures wall-of-sound
+    # density; valley_db/valley_norm are the level-invariant dynamic range
+    # (dB and 0-1 normalized); crest_factor_robust is crest_factor with a
+    # robust (P99.99) peak.
+    silence_rate: Optional[float] = None
+    active_rate_v2: Optional[float] = None
+    fullness: Optional[float] = None
+    valley_db: Optional[float] = None
+    valley_norm: Optional[float] = None
+    crest_factor_robust: Optional[float] = None
+    # The legacy-scale valley depth that frozen-threshold consumers should
+    # read. PR #188 switched the default `valley_depth` (and
+    # `valley_depth_method`) to the level-invariant v2 norm, but several
+    # downstream consumers still interpret valley against thresholds/target
+    # bands calibrated on the old (pre-v2) scale: eval/scorer_rpe.py's
+    # valley_depth_pro proximity score, rpe/semantic_rules.py's
+    # valley_depth_min/_max/_gt conditions (incl. cultural_context's
+    # ctx.cinematic_dynamic) and its hardcoded grv_anchor/delta_e thresholds,
+    # and the CompositionScore measure/draft/roundtrip/audit chain rooted at
+    # semantic_ci/observed_adapter.py.
+    #
+    # Populated unconditionally by the extractor (Codex PR #188 P2 #3): when
+    # `valley_method` is a legacy method (rms_percentile/section_ar/hybrid/
+    # legacy_hybrid), this holds that SELECTED value itself — the caller's
+    # explicit choice must keep driving these consumers, not a fixed hybrid
+    # formula. Only when `valley_method` is "v2" does this fall back to the
+    # hybrid diagnostic (ValleyDiagnostics.hybrid_value, always computed
+    # regardless of method) as a separate legacy-scale reading.
+    #
+    # Optional so pre-existing JSON (no field) still deserializes; those
+    # consumers fall back to `valley_depth` in that case (correct because
+    # pre-v2 `valley_depth` WAS the hybrid value). To be removed once the
+    # frozen consumers are re-baselined against v2 (n=20 re-baseline; see
+    # docs/metrics.md).
+    valley_depth_legacy: Optional[float] = None
     thickness: float
     spectral_centroid: float
     spectral_profile: SpectralProfile
@@ -180,6 +219,27 @@ class PhysicalRPE(BaseModel):
         if not self.stem_rpe:
             data.pop("stem_rpe", None)
         return data
+
+
+def legacy_valley_depth(phys: PhysicalRPE) -> float:
+    """Valley depth on the frozen pre-v2 hybrid scale.
+
+    Shared by every consumer that reads valley_depth against thresholds or
+    target bands calibrated before PR #188 switched the extractor default
+    from "hybrid" to the level-invariant v2 norm: eval/scorer_rpe.py's
+    valley_depth_pro proximity score, rpe/semantic_rules.py's
+    valley_depth_min/_max/_gt conditions and hardcoded grv_anchor/delta_e
+    thresholds, and the CompositionScore measurement/observation/roundtrip
+    chain rooted at semantic_ci/observed_adapter.py's rpe_bundle_to_observed
+    (which transcribe/measure.py, transcribe/score_draft.py, and
+    roundtrip/diagnose.py + roundtrip/corpus_batch.py consume downstream).
+
+    Prefers `valley_depth_legacy` when the extractor populated it; falls
+    back to `valley_depth` for pre-v2 JSON (None legacy), where
+    `valley_depth` itself WAS the hybrid value. See
+    PhysicalRPE.valley_depth_legacy docstring above.
+    """
+    return phys.valley_depth_legacy if phys.valley_depth_legacy is not None else phys.valley_depth
 
 
 class GrvAnchor(BaseModel):

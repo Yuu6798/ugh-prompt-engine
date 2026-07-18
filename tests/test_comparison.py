@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from svp_rpe.eval.anchor_matcher import grv_anchor_match
-from svp_rpe.eval.comparison import compare_rpe_vs_svp, generate_action_hints
+from svp_rpe.eval.comparison import compare_rpe_vs_svp, compute_physical_diff, generate_action_hints
 from svp_rpe.eval.delta_e_alignment import delta_e_profile_alignment
 from svp_rpe.eval.diff_models import (
     ParsedSVP,
@@ -14,6 +14,7 @@ from svp_rpe.eval.diff_models import (
 from svp_rpe.eval.semantic_similarity import por_lexical_similarity
 from svp_rpe.io.audio_loader import load_audio
 from svp_rpe.rpe.extractor import extract_physical, extract_rpe
+from svp_rpe.rpe.models import PhysicalRPE, SectionMarker, SpectralProfile
 from svp_rpe.rpe.structure_labels import assign_labels
 from svp_rpe.rpe.valley import compute_valley_depth, valley_rms_percentile, valley_section_ar
 from svp_rpe.svp.parser import load_svp, parse_svp_text, parse_svp_yaml
@@ -319,6 +320,154 @@ class TestComparison:
 
 
 # ---------------------------------------------------------------------------
+# compute_physical_diff: v2 scoring gated on both-sides valley_depth_method
+# (Codex PR #188 P2 #4 — the extractor now populates v2 fields
+# unconditionally, so gating solely on field presence made the legacy
+# comparison path unreachable for fresh extractions).
+# ---------------------------------------------------------------------------
+
+
+def _physical(
+    *,
+    valley_depth_method: str,
+    valley_depth: float = 0.18,
+    valley_depth_legacy: float | None = None,
+    valley_db: float | None = 12.0,
+    fullness: float | None = 0.8,
+    crest_factor_robust: float | None = 5.0,
+    active_rate_v2: float | None = 0.9,
+    active_rate: float = 0.7,
+) -> PhysicalRPE:
+    return PhysicalRPE(
+        duration_sec=10.0,
+        sample_rate=44100,
+        structure=[SectionMarker(label="full", start_sec=0.0, end_sec=10.0)],
+        rms_mean=0.2,
+        peak_amplitude=0.8,
+        crest_factor=4.0,
+        active_rate=active_rate,
+        valley_depth=valley_depth,
+        valley_depth_legacy=valley_depth_legacy,
+        valley_depth_method=valley_depth_method,
+        valley_db=valley_db,
+        fullness=fullness,
+        crest_factor_robust=crest_factor_robust,
+        active_rate_v2=active_rate_v2,
+        thickness=1.0,
+        spectral_centroid=2000.0,
+        spectral_profile=SpectralProfile(
+            centroid=2000.0, low_ratio=0.3, mid_ratio=0.5, high_ratio=0.2, brightness=0.2,
+        ),
+        onset_density=2.0,
+    )
+
+
+class TestComputePhysicalDiffValleyMethodGate:
+    def test_both_sides_v2_scores_v2_diffs_and_fires_crest_hint(self) -> None:
+        ref = _physical(
+            valley_depth_method="v2", valley_depth=0.30, valley_db=12.0,
+            crest_factor_robust=6.0,
+        )
+        cand = _physical(
+            valley_depth_method="v2", valley_depth=0.35, valley_db=4.0,
+            crest_factor_robust=4.0,
+        )
+
+        diff = compute_physical_diff(ref, cand)
+
+        assert diff.valley_db_diff == -8.0
+        assert diff.fullness_diff == 0.0
+        assert diff.crest_diff == -2.0
+        assert diff.active_rate_v2_diff == 0.0
+        assert diff.details.get("crest_factor_robust_cand") == "4.0"
+
+        hints = generate_action_hints(
+            SemanticDiff(
+                por_lexical_similarity=0.9, grv_anchor_match=0.9,
+                delta_e_profile_alignment=0.9, instrumentation_context_alignment=0.9,
+                overall=0.9,
+            ),
+            diff,
+        )
+        assert any("張り不足" in h for h in hints)
+
+    def test_both_sides_legacy_hybrid_v2_diffs_stay_none_and_legacy_hint_fires(self) -> None:
+        # Both sides carry v2 fields (as the extractor now always populates
+        # them) but explicitly chose a legacy method — the gate must still
+        # keep all four v2 diffs None so scoring/hints fall through to the
+        # legacy path, reproducing pre-v2 compare behavior for
+        # `--valley-method legacy_hybrid`.
+        ref = _physical(valley_depth_method="legacy_hybrid", valley_depth=0.30)
+        cand = _physical(valley_depth_method="legacy_hybrid", valley_depth=0.10)
+
+        diff = compute_physical_diff(ref, cand)
+
+        assert diff.valley_db_diff is None
+        assert diff.fullness_diff is None
+        assert diff.crest_diff is None
+        assert diff.active_rate_v2_diff is None
+        assert diff.details == {}
+        assert diff.valley_diff == pytest.approx(-0.2)
+
+        hints = generate_action_hints(
+            SemanticDiff(
+                por_lexical_similarity=0.9, grv_anchor_match=0.9,
+                delta_e_profile_alignment=0.9, instrumentation_context_alignment=0.9,
+                overall=0.9,
+            ),
+            diff,
+        )
+        assert any("Bridge/Verse" in h for h in hints)
+
+    def test_mixed_methods_fall_back_to_legacy_diffs(self) -> None:
+        ref = _physical(valley_depth_method="v2", valley_depth=0.30)
+        cand = _physical(valley_depth_method="hybrid", valley_depth=0.10)
+
+        diff = compute_physical_diff(ref, cand)
+
+        assert diff.valley_db_diff is None
+        assert diff.fullness_diff is None
+        assert diff.crest_diff is None
+        assert diff.active_rate_v2_diff is None
+        assert diff.valley_diff == pytest.approx(-0.2)
+
+    def test_valley_diff_uses_legacy_scale_not_raw_valley_depth_on_mixed_methods(self) -> None:
+        # Codex PR #188 P2 #6: valley_diff must be computed from
+        # legacy_valley_depth on BOTH sides, not phys.valley_depth directly —
+        # otherwise a mixed ref(v2)/cand(legacy method) pair diffs a v2 norm
+        # against a legacy linear value (two different scales), which is
+        # exactly the bug this test pins.
+        ref = _physical(
+            valley_depth_method="v2", valley_depth=0.30, valley_depth_legacy=0.05,
+        )
+        cand = _physical(
+            valley_depth_method="hybrid", valley_depth=0.10, valley_depth_legacy=None,
+        )
+
+        diff = compute_physical_diff(ref, cand)
+
+        # legacy_valley_depth(cand)=0.10 (falls back to valley_depth, since
+        # cand carries no explicit legacy field and its selected method IS
+        # the legacy scale) minus legacy_valley_depth(ref)=0.05 (explicit
+        # legacy field) = 0.05 — NOT cand.valley_depth - ref.valley_depth
+        # = 0.10 - 0.30 = -0.20, which would be the old cross-scale bug.
+        assert diff.valley_diff == pytest.approx(0.05)
+
+        hints = generate_action_hints(
+            SemanticDiff(
+                por_lexical_similarity=0.9, grv_anchor_match=0.9,
+                delta_e_profile_alignment=0.9, instrumentation_context_alignment=0.9,
+                overall=0.9,
+            ),
+            diff,
+        )
+        # With the correct (positive, small) legacy-scale diff, the
+        # low-valley "Bridge/Verse" hint must NOT fire (it requires
+        # valley_diff < -0.05, which only the old buggy -0.20 would trigger).
+        assert not any("Bridge/Verse" in h for h in hints)
+
+
+# ---------------------------------------------------------------------------
 # Extractor v2 integration tests
 # ---------------------------------------------------------------------------
 
@@ -329,7 +478,8 @@ class TestExtractorV2:
         phys, valley_diag, section_features = extract_physical(audio)
         assert phys.duration_sec > 0
         assert valley_diag is not None
-        assert valley_diag.method == "hybrid"
+        # Default method switched hybrid -> v2 (Metrics v2 rollout).
+        assert valley_diag.method == "v2"
         assert len(section_features) >= 1
 
     def test_section_labels_not_generic(self, sine_wave_mono):

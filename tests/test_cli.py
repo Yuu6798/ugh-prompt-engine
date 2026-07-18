@@ -130,7 +130,7 @@ def test_extract_separate_options_forward_to_extractor(monkeypatch):
         (
             "fixture.wav",
             {
-                "valley_method": "hybrid",
+                "valley_method": "v2",
                 "include_stems": True,
                 "separation_model": "fake-model",
                 "separation_device": "cuda",

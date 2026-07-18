@@ -90,6 +90,33 @@ def test_rpe_bundle_to_observed_preserves_raw_metrics_and_source() -> None:
     }
 
 
+def test_rpe_bundle_to_observed_prefers_legacy_valley_depth_over_v2() -> None:
+    # Codex PR #188 P2 #2: valley_depth_target bands (CompositionScore
+    # measurement/roundtrip/audit chain) are calibrated on the frozen pre-v2
+    # hybrid scale. A high v2-scale valley_depth (0.5) must not leak into
+    # the ObservedRPE metrics when valley_depth_legacy (0.05) is populated.
+    bundle = _make_bundle(stereo_profile=StereoProfile(width=0.8, correlation=0.2))
+    bundle.physical.valley_depth = 0.5
+    bundle.physical.valley_depth_legacy = 0.05
+
+    observed = rpe_bundle_to_observed(bundle, id="legacy-valley")
+
+    assert observed.metrics["valley_depth"] == 0.05
+    assert observed.metrics["valley_depth_target"] == 0.05
+
+
+def test_rpe_bundle_to_observed_falls_back_to_valley_depth_when_legacy_absent() -> None:
+    # Pre-v2 JSON has no valley_depth_legacy (None); valley_depth itself WAS
+    # the hybrid value in that case, so metrics must fall back to it.
+    bundle = _make_bundle(stereo_profile=StereoProfile(width=0.8, correlation=0.2))
+    assert bundle.physical.valley_depth_legacy is None
+
+    observed = rpe_bundle_to_observed(bundle, id="legacy-absent")
+
+    assert observed.metrics["valley_depth"] == bundle.physical.valley_depth
+    assert observed.metrics["valley_depth_target"] == bundle.physical.valley_depth
+
+
 def test_rpe_bundle_to_observed_allows_missing_stereo_sensor() -> None:
     observed = rpe_bundle_to_observed(_make_bundle(stereo_profile=None), id="mono")
 

@@ -22,16 +22,20 @@ from svp_rpe.rpe.dynamics_summary import compute_dynamics_summary
 from svp_rpe.rpe.physical_features import (
     BPM_OCTAVE_AMBIGUOUS_CONFIDENCE_CAP,
     compute_active_rate,
+    compute_active_rate_v2,
     compute_bpm,
     compute_chord_events,
     compute_crest_factor,
+    compute_crest_factor_robust,
     compute_dynamic_range_db,
+    compute_fullness,
     compute_hpss_ratio,
     compute_key,
     compute_loudness,
     compute_melody_contour,
     compute_onset_density,
     compute_rms_mean,
+    compute_silence_rate,
     compute_spectral_bands,
     compute_spectral_profile,
     compute_stereo_profile,
@@ -39,14 +43,16 @@ from svp_rpe.rpe.physical_features import (
     compute_thickness,
     compute_downbeat_times,
     compute_time_signature,
+    compute_valley_db,
     detect_bpm_octave_ambiguity,
     detect_bpm_prior_disagreement,
+    valley_norm_from_db,
 )
 from svp_rpe.rpe.section_features import extract_section_features
 from svp_rpe.rpe.semantic_rules import generate_semantic
 from svp_rpe.rpe.structure_labels import assign_labels
 from svp_rpe.rpe.structure_novelty import compute_novelty_curve, find_boundaries
-from svp_rpe.rpe.valley import compute_valley_depth
+from svp_rpe.rpe.valley import LEGACY_VALLEY_METHODS, compute_valley_depth
 
 
 def _detect_sections_v2(
@@ -157,7 +163,7 @@ def _maybe_separate_stems(
 def extract_physical(
     audio: AudioData,
     *,
-    valley_method: str = "hybrid",
+    valley_method: str = "v2",
     stem_bundle: StemBundle | None = None,
 ) -> tuple[PhysicalRPE, Optional[ValleyDiagnostics], list[SectionFeature]]:
     """Extract PhysicalRPE with improved structure and valley estimation.
@@ -171,6 +177,15 @@ def extract_physical(
     peak_amplitude = float(np.max(np.abs(y)))
     crest_factor = compute_crest_factor(y)
     active_rate = compute_active_rate(y, sr)
+    # Metrics v2 (level-invariant) — always computed regardless of
+    # valley_method, mirroring how dynamic_range_db is always computed below.
+    # See docs/metrics.md "Metrics v2".
+    silence_rate = compute_silence_rate(y, sr)
+    active_rate_v2 = compute_active_rate_v2(y, sr)
+    fullness = compute_fullness(y, sr)
+    valley_db = compute_valley_db(y, sr)
+    valley_norm = valley_norm_from_db(valley_db)
+    crest_factor_robust = compute_crest_factor_robust(y)
     thickness = compute_thickness(y, sr)
     spectral_profile = compute_spectral_profile(y, sr)
     spectral_bands = compute_spectral_bands(y, sr)
@@ -277,6 +292,26 @@ def extract_physical(
         active_rate=round(active_rate, 4),
         valley_depth=valley_depth,
         valley_depth_method=valley_method,
+        # Frozen-scale valley for legacy-calibrated consumers (scorer_rpe /
+        # semantic_rules / the CompositionScore measure/draft/roundtrip/audit
+        # chain). Codex PR #188 P2 #3: when the caller explicitly selects a
+        # legacy method (rms_percentile/section_ar/hybrid/legacy_hybrid),
+        # that SELECTED value is already on the legacy scale and must be
+        # what those consumers see — falling back to the hybrid diagnostic
+        # here would silently override the caller's explicit choice with a
+        # fixed hybrid formula. Only when method=="v2" (the level-invariant
+        # default) do we need a separate legacy-scale reading, taken from
+        # diagnostics.hybrid_value (always computed regardless of method).
+        # See PhysicalRPE.valley_depth_legacy docstring.
+        valley_depth_legacy=(
+            valley_depth if valley_method in LEGACY_VALLEY_METHODS else valley_diag.hybrid_value
+        ),
+        silence_rate=silence_rate,
+        active_rate_v2=active_rate_v2,
+        fullness=fullness,
+        valley_db=valley_db,
+        valley_norm=valley_norm,
+        crest_factor_robust=crest_factor_robust,
         thickness=thickness,
         spectral_centroid=spectral_profile.centroid,
         spectral_profile=spectral_profile,
@@ -297,7 +332,7 @@ def extract_physical(
 def extract_physical_from_file(
     path: str,
     *,
-    valley_method: str = "hybrid",
+    valley_method: str = "v2",
     include_stems: bool = False,
     separation_model: str = "htdemucs_ft",
     separation_device: str = "cpu",
@@ -321,7 +356,7 @@ def extract_physical_from_file(
 def extract_rpe(
     audio: AudioData,
     *,
-    valley_method: str = "hybrid",
+    valley_method: str = "v2",
     stem_bundle: StemBundle | None = None,
 ) -> RPEBundle:
     """Full RPE extraction: physical + semantic → RPEBundle."""
@@ -345,7 +380,7 @@ def extract_rpe(
 def extract_rpe_from_file(
     path: str,
     *,
-    valley_method: str = "hybrid",
+    valley_method: str = "v2",
     include_stems: bool = False,
     separation_model: str = "htdemucs_ft",
     separation_device: str = "cpu",

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from svp_rpe.rpe.models import RPEBundle
+from svp_rpe.rpe.models import RPEBundle, legacy_valley_depth
 from svp_rpe.semantic_ci.models import ObservedRPE
 
 
@@ -15,6 +15,15 @@ def rpe_bundle_to_observed(bundle: RPEBundle, *, id: str) -> ObservedRPE:
         f"{physical.key} {physical.mode}" if physical.key and physical.mode else physical.key
     )
 
+    # valley_depth_target bands (CompositionScore transcribe/roundtrip/audit
+    # chain) are calibrated on the frozen pre-v2 hybrid scale (Codex PR #188
+    # P2 #2). Read via the shared legacy_valley_depth helper so the whole
+    # measurement/observation/roundtrip chain rooted here stays on that
+    # scale until an n=20 v2 re-baseline. `valley_depth` (the v2 field
+    # itself) and comparison.py's compare scoring are unaffected — only this
+    # ObservedRPE sensor-snapshot metric changes.
+    legacy_valley = legacy_valley_depth(physical)
+
     metrics: dict[str, Any] = {
         "bpm": float(physical.bpm) if physical.bpm is not None else None,
         "key": combined_key,
@@ -22,8 +31,8 @@ def rpe_bundle_to_observed(bundle: RPEBundle, *, id: str) -> ObservedRPE:
         "time_signature": physical.time_signature,
         "active_rate": float(physical.active_rate),
         "active_rate_target": float(physical.active_rate),
-        "valley_depth": float(physical.valley_depth),
-        "valley_depth_target": float(physical.valley_depth),
+        "valley_depth": float(legacy_valley),
+        "valley_depth_target": float(legacy_valley),
         "brightness": float(physical.spectral_profile.brightness),
         "spectral_centroid": float(physical.spectral_centroid),
         "stereo_width": (

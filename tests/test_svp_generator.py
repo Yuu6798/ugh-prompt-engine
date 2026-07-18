@@ -6,6 +6,8 @@ from svp_rpe.eval.scorer_rpe import score_rpe
 from svp_rpe.eval.scorer_ugher import score_ugher
 from svp_rpe.io.audio_loader import load_audio
 from svp_rpe.rpe.extractor import extract_rpe
+from svp_rpe.rpe.models import PhysicalRPE, RPEBundle, SectionMarker, SpectralProfile
+from svp_rpe.rpe.semantic_rules import generate_semantic
 from svp_rpe.svp.generator import generate_svp
 from svp_rpe.svp.render_text import render_text
 from svp_rpe.svp.render_yaml import render_yaml
@@ -106,3 +108,71 @@ class TestFullPipeline:
 
         assert rpe1.model_dump() == rpe2.model_dump()
         assert svp1.model_dump() == svp2.model_dump()
+
+
+def _make_bundle_for_domain_profile(*, valley_depth: float, valley_depth_legacy: float | None) -> RPEBundle:
+    physical = PhysicalRPE(
+        bpm=100.0,
+        key="C",
+        mode="major",
+        duration_sec=10.0,
+        sample_rate=44100,
+        structure=[SectionMarker(label="full", start_sec=0.0, end_sec=10.0)],
+        rms_mean=0.2,
+        peak_amplitude=0.8,
+        crest_factor=4.0,
+        active_rate=0.5,
+        valley_depth=valley_depth,
+        valley_depth_legacy=valley_depth_legacy,
+        thickness=1.0,
+        spectral_centroid=1800.0,
+        spectral_profile=SpectralProfile(
+            centroid=1800.0, low_ratio=0.2, mid_ratio=0.3, high_ratio=0.2, brightness=0.2,
+        ),
+        onset_density=2.0,
+    )
+    return RPEBundle(
+        physical=physical,
+        semantic=generate_semantic(physical),
+        audio_file="fixture.wav",
+        audio_duration_sec=10.0,
+        audio_sample_rate=44100,
+        audio_channels=1,
+        audio_format="wav",
+    )
+
+
+class TestGenerateSvpValleyDepthLegacyScale:
+    """Codex PR #188 P2 #5: generate_svp's domain-profile context must read
+    the legacy valley scale, since domain_profiles/music.yaml's
+    valley_depth_min/_max conditions (struct.dynamic / struct.gradual_motion
+    style labels) are calibrated on the frozen pre-v2 hybrid scale."""
+
+    def test_dynamic_style_label_does_not_fire_from_v2_valley_when_legacy_is_low(self) -> None:
+        bundle = _make_bundle_for_domain_profile(valley_depth=0.5, valley_depth_legacy=0.05)
+
+        svp = generate_svp(bundle)
+
+        assert "dynamic" not in svp.svp_for_generation.style_tags
+        assert "contrastive" not in svp.svp_for_generation.style_tags
+        assert "evolving" not in svp.svp_for_generation.style_tags
+
+    def test_dynamic_style_label_fires_from_legacy_valley_when_v2_is_low(self) -> None:
+        # Converse: a low v2 valley_depth (0.05) must not suppress the
+        # struct.dynamic label when valley_depth_legacy (0.4) clears the
+        # frozen threshold — confirms legacy is actually consulted.
+        bundle = _make_bundle_for_domain_profile(valley_depth=0.05, valley_depth_legacy=0.4)
+
+        svp = generate_svp(bundle)
+
+        assert "dynamic" in svp.svp_for_generation.style_tags
+        assert "contrastive" in svp.svp_for_generation.style_tags
+
+    def test_falls_back_to_valley_depth_when_legacy_absent(self) -> None:
+        # Pre-v2 JSON has no valley_depth_legacy (None); valley_depth itself
+        # WAS the hybrid value in that case, so context must fall back to it.
+        bundle = _make_bundle_for_domain_profile(valley_depth=0.4, valley_depth_legacy=None)
+
+        svp = generate_svp(bundle)
+
+        assert "dynamic" in svp.svp_for_generation.style_tags

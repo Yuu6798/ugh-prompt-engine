@@ -5,7 +5,7 @@ Deterministic: same RPEBundle → same SVPBundle.
 """
 from __future__ import annotations
 
-from svp_rpe.rpe.models import RPEBundle, SemanticLabel
+from svp_rpe.rpe.models import RPEBundle, SemanticLabel, legacy_valley_depth
 from svp_rpe.svp.domain_profile import DomainProfile, load_domain_profile
 from svp_rpe.svp.models import (
     AnalysisRPE,
@@ -59,7 +59,14 @@ def _build_context(bundle: RPEBundle) -> dict:
         "mode": phys.mode,
         "rms_mean": phys.rms_mean,
         "active_rate": phys.active_rate,
-        "valley_depth": phys.valley_depth,
+        # Codex PR #188 P2 #5: domain_profiles/music.yaml's
+        # valley_depth_min/_max conditions (por_surface_rules/
+        # grv_primary_vocab/delta_e_vocab — dynamic/evolving/cinematic
+        # style labels) are calibrated on the frozen pre-v2 hybrid scale.
+        # This context feeds those condition evaluations directly, so it
+        # must read the legacy scale, not the v2-default valley_depth.
+        # music.yaml's thresholds/wording are unchanged.
+        "valley_depth": legacy_valley_depth(phys),
         "thickness": phys.thickness,
         "spectral_centroid": phys.spectral_centroid,
         "low_ratio": phys.spectral_profile.low_ratio,
