@@ -166,16 +166,25 @@ class PhysicalRPE(BaseModel):
     valley_db: Optional[float] = None
     valley_norm: Optional[float] = None
     crest_factor_robust: Optional[float] = None
-    # Frozen-scale valley depth (pre-v2 "hybrid" formula: 0.5 * rms_percentile
-    # + 0.5 * section_ar). PR #188 switched the default `valley_depth`
-    # (and `valley_depth_method`) to the level-invariant v2 norm, but two
-    # downstream consumers still interpret valley_depth against thresholds
-    # calibrated on the old hybrid scale: eval/scorer_rpe.py's
-    # valley_depth_pro proximity score and rpe/semantic_rules.py's
+    # The legacy-scale valley depth that frozen-threshold consumers should
+    # read. PR #188 switched the default `valley_depth` (and
+    # `valley_depth_method`) to the level-invariant v2 norm, but several
+    # downstream consumers still interpret valley against thresholds/target
+    # bands calibrated on the old (pre-v2) scale: eval/scorer_rpe.py's
+    # valley_depth_pro proximity score, rpe/semantic_rules.py's
     # valley_depth_min/_max/_gt conditions (incl. cultural_context's
-    # ctx.cinematic_dynamic). Populated unconditionally by the extractor
-    # (from ValleyDiagnostics.hybrid_value) regardless of valley_depth_method,
-    # so those frozen-threshold consumers keep pre-v2 behavior unchanged.
+    # ctx.cinematic_dynamic) and its hardcoded grv_anchor/delta_e thresholds,
+    # and the CompositionScore measure/draft/roundtrip/audit chain rooted at
+    # semantic_ci/observed_adapter.py.
+    #
+    # Populated unconditionally by the extractor (Codex PR #188 P2 #3): when
+    # `valley_method` is a legacy method (rms_percentile/section_ar/hybrid/
+    # legacy_hybrid), this holds that SELECTED value itself — the caller's
+    # explicit choice must keep driving these consumers, not a fixed hybrid
+    # formula. Only when `valley_method` is "v2" does this fall back to the
+    # hybrid diagnostic (ValleyDiagnostics.hybrid_value, always computed
+    # regardless of method) as a separate legacy-scale reading.
+    #
     # Optional so pre-existing JSON (no field) still deserializes; those
     # consumers fall back to `valley_depth` in that case (correct because
     # pre-v2 `valley_depth` WAS the hybrid value). To be removed once the

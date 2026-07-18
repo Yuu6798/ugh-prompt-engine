@@ -15,6 +15,13 @@ from svp_rpe.eval.diff_models import ValleyDiagnostics
 from svp_rpe.rpe.models import SectionMarker
 from svp_rpe.rpe.physical_features import compute_valley_db, valley_norm_from_db
 
+# Methods whose selected value is on the pre-v2 (level-dependent) scale —
+# used by the extractor to decide what to store in `valley_depth_legacy`
+# (Codex PR #188 P2 #3): when the caller explicitly picks one of these, that
+# selected value itself IS the legacy-scale reading and must drive frozen
+# consumers (scorer_rpe / semantic_rules), not the hybrid diagnostic.
+LEGACY_VALLEY_METHODS = frozenset({"rms_percentile", "section_ar", "hybrid", "legacy_hybrid"})
+
 
 def _clamp(v: float, lo: float = 0.0, hi: float = 1.0) -> float:
     return max(lo, min(hi, v))

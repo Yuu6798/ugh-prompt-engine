@@ -52,7 +52,7 @@ from svp_rpe.rpe.section_features import extract_section_features
 from svp_rpe.rpe.semantic_rules import generate_semantic
 from svp_rpe.rpe.structure_labels import assign_labels
 from svp_rpe.rpe.structure_novelty import compute_novelty_curve, find_boundaries
-from svp_rpe.rpe.valley import compute_valley_depth
+from svp_rpe.rpe.valley import LEGACY_VALLEY_METHODS, compute_valley_depth
 
 
 def _detect_sections_v2(
@@ -293,10 +293,19 @@ def extract_physical(
         valley_depth=valley_depth,
         valley_depth_method=valley_method,
         # Frozen-scale valley for legacy-calibrated consumers (scorer_rpe /
-        # semantic_rules). Always populated from diagnostics regardless of
-        # valley_method — compute_valley_depth computes hybrid_value
-        # unconditionally. See PhysicalRPE.valley_depth_legacy docstring.
-        valley_depth_legacy=valley_diag.hybrid_value,
+        # semantic_rules / the CompositionScore measure/draft/roundtrip/audit
+        # chain). Codex PR #188 P2 #3: when the caller explicitly selects a
+        # legacy method (rms_percentile/section_ar/hybrid/legacy_hybrid),
+        # that SELECTED value is already on the legacy scale and must be
+        # what those consumers see — falling back to the hybrid diagnostic
+        # here would silently override the caller's explicit choice with a
+        # fixed hybrid formula. Only when method=="v2" (the level-invariant
+        # default) do we need a separate legacy-scale reading, taken from
+        # diagnostics.hybrid_value (always computed regardless of method).
+        # See PhysicalRPE.valley_depth_legacy docstring.
+        valley_depth_legacy=(
+            valley_depth if valley_method in LEGACY_VALLEY_METHODS else valley_diag.hybrid_value
+        ),
         silence_rate=silence_rate,
         active_rate_v2=active_rate_v2,
         fullness=fullness,

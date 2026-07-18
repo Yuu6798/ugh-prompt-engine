@@ -70,6 +70,32 @@ class TestPhysicalFeatures:
         )
         assert rpe.valley_depth_legacy == pytest.approx(hybrid_diag.hybrid_value)
 
+    def test_valley_depth_legacy_mirrors_selected_value_for_explicit_legacy_method(
+        self, sine_wave_mono
+    ):
+        # Codex PR #188 P2 #3: when the caller explicitly picks a legacy
+        # method (e.g. rms_percentile), valley_depth_legacy must mirror that
+        # SELECTED value — not silently override it with the hybrid
+        # diagnostic — so scorer_rpe/semantic_rules keep being driven by the
+        # caller's explicit choice, exactly like before valley_depth_legacy
+        # existed.
+        audio = load_audio(sine_wave_mono)
+        rpe, valley_diag, _ = extract_physical(audio, valley_method="rms_percentile")
+
+        assert rpe.valley_depth_method == "rms_percentile"
+        assert rpe.valley_depth_legacy == rpe.valley_depth
+        assert rpe.valley_depth_legacy == valley_diag.rms_percentile_value
+
+    def test_valley_depth_legacy_mirrors_selected_value_for_section_ar_method(
+        self, sine_wave_mono
+    ):
+        audio = load_audio(sine_wave_mono)
+        rpe, valley_diag, _ = extract_physical(audio, valley_method="section_ar")
+
+        assert rpe.valley_depth_method == "section_ar"
+        assert rpe.valley_depth_legacy == rpe.valley_depth
+        assert rpe.valley_depth_legacy == valley_diag.section_ar_value
+
     def test_onset_density_non_negative(self, sine_wave_mono):
         audio = load_audio(sine_wave_mono)
         od = compute_onset_density(audio.y_mono, audio.sr)

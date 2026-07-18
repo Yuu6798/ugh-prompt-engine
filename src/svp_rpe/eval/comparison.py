@@ -108,25 +108,38 @@ def compute_physical_diff(
     thick_diff = round(phys_cand.thickness - phys_ref.thickness, 4)
     sc_diff = round(phys_cand.spectral_centroid - phys_ref.spectral_centroid, 2)
 
-    # Metrics v2 (level-invariant) diffs. Only computed when both sides carry
-    # the v2 field — legacy RPE JSON (pre-v2, fields None) falls back to the
-    # legacy diffs above so old fixtures keep working. See docs/metrics.md
-    # "Metrics v2".
+    # Metrics v2 (level-invariant) diffs. The extractor now populates the v2
+    # fields unconditionally regardless of valley_method (Codex PR #188 P2
+    # #4), so gating on "both sides carry the field" alone is no longer
+    # enough — a fresh extraction with `--valley-method legacy_hybrid` would
+    # still carry valley_db and silently force v2 scoring, making the
+    # advertised legacy opt-out unreachable. Gate on BOTH sides having
+    # explicitly selected valley_depth_method == "v2" instead: only then are
+    # the v2 fields the caller's intended scale. Any other case (explicit
+    # legacy method, pre-v2 JSON with the fields absent, or a mixed
+    # ref/candidate pair) leaves all four v2 diffs None, so scoring/hints
+    # fall through to the legacy diffs below — reproducing pre-v2 compare
+    # behavior exactly. See docs/metrics.md "Metrics v2".
+    both_v2 = phys_ref.valley_depth_method == "v2" and phys_cand.valley_depth_method == "v2"
+
     valley_db_diff = None
-    if phys_ref.valley_db is not None and phys_cand.valley_db is not None:
-        valley_db_diff = round(phys_cand.valley_db - phys_ref.valley_db, 4)
-
     fullness_diff = None
-    if phys_ref.fullness is not None and phys_cand.fullness is not None:
-        fullness_diff = round(phys_cand.fullness - phys_ref.fullness, 4)
-
     crest_diff = None
-    if phys_ref.crest_factor_robust is not None and phys_cand.crest_factor_robust is not None:
-        crest_diff = round(phys_cand.crest_factor_robust - phys_ref.crest_factor_robust, 4)
-
     active_rate_v2_diff = None
-    if phys_ref.active_rate_v2 is not None and phys_cand.active_rate_v2 is not None:
-        active_rate_v2_diff = round(phys_cand.active_rate_v2 - phys_ref.active_rate_v2, 4)
+    if both_v2:
+        if phys_ref.valley_db is not None and phys_cand.valley_db is not None:
+            valley_db_diff = round(phys_cand.valley_db - phys_ref.valley_db, 4)
+
+        if phys_ref.fullness is not None and phys_cand.fullness is not None:
+            fullness_diff = round(phys_cand.fullness - phys_ref.fullness, 4)
+
+        if phys_ref.crest_factor_robust is not None and phys_cand.crest_factor_robust is not None:
+            crest_diff = round(phys_cand.crest_factor_robust - phys_ref.crest_factor_robust, 4)
+
+        if phys_ref.active_rate_v2 is not None and phys_cand.active_rate_v2 is not None:
+            active_rate_v2_diff = round(
+                phys_cand.active_rate_v2 - phys_ref.active_rate_v2, 4
+            )
 
     # Overall: proximity score (closer = better)
     scores = []
@@ -154,9 +167,13 @@ def compute_physical_diff(
     # Stashed for _physical_action_hints' absolute crest threshold (the
     # candidate's own crest_factor_robust, not just its diff from reference —
     # `details` is the existing free-form str/str field, so this avoids
-    # adding a dedicated PhysicalDiff field just for a hint heuristic).
+    # adding a dedicated PhysicalDiff field just for a hint heuristic). Gated
+    # on both_v2 like the diffs above: without it, a legacy-method
+    # comparison would still surface v2 crest data and let
+    # _physical_action_hints take the has_v2_data branch even though no
+    # other v2 diff is present.
     details: dict[str, str] = {}
-    if phys_cand.crest_factor_robust is not None:
+    if both_v2 and phys_cand.crest_factor_robust is not None:
         details["crest_factor_robust_cand"] = str(phys_cand.crest_factor_robust)
 
     return PhysicalDiff(

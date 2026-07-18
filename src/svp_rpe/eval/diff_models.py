@@ -83,8 +83,10 @@ class PhysicalDiff(BaseModel):
     active_rate_diff: float = 0.0
     thickness_diff: float = 0.0
     spectral_centroid_diff: float = 0.0
-    # Metrics v2 (level-invariant) diffs. Optional / None when either side
-    # lacks the v2 field (legacy RPE JSON without v2 metrics) — see
+    # Metrics v2 (level-invariant) diffs. Optional / None unless both sides
+    # explicitly used valley_depth_method=="v2" (Codex PR #188 P2 #4 — the
+    # extractor populates the v2 fields unconditionally regardless of
+    # method, so field-presence alone can't gate this) — see
     # eval/comparison.py compute_physical_diff for the fallback rule.
     valley_db_diff: Optional[float] = None
     fullness_diff: Optional[float] = None
