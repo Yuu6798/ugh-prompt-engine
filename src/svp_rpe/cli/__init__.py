@@ -28,6 +28,3 @@ from svp_rpe.cli import roundtrip_cmd as roundtrip_cmd
 from svp_rpe.cli import corpus_cmd as corpus_cmd
 
 __all__ = ["app", "console"]
-
-if __name__ == "__main__":
-    app()
