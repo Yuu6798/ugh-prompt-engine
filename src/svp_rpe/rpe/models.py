@@ -212,6 +212,27 @@ class PhysicalRPE(BaseModel):
         return data
 
 
+def legacy_valley_depth(phys: PhysicalRPE) -> float:
+    """Valley depth on the frozen pre-v2 hybrid scale.
+
+    Shared by every consumer that reads valley_depth against thresholds or
+    target bands calibrated before PR #188 switched the extractor default
+    from "hybrid" to the level-invariant v2 norm: eval/scorer_rpe.py's
+    valley_depth_pro proximity score, rpe/semantic_rules.py's
+    valley_depth_min/_max/_gt conditions and hardcoded grv_anchor/delta_e
+    thresholds, and the CompositionScore measurement/observation/roundtrip
+    chain rooted at semantic_ci/observed_adapter.py's rpe_bundle_to_observed
+    (which transcribe/measure.py, transcribe/score_draft.py, and
+    roundtrip/diagnose.py + roundtrip/corpus_batch.py consume downstream).
+
+    Prefers `valley_depth_legacy` when the extractor populated it; falls
+    back to `valley_depth` for pre-v2 JSON (None legacy), where
+    `valley_depth` itself WAS the hybrid value. See
+    PhysicalRPE.valley_depth_legacy docstring above.
+    """
+    return phys.valley_depth_legacy if phys.valley_depth_legacy is not None else phys.valley_depth
+
+
 class GrvAnchor(BaseModel):
     """Gravity anchor — dominant sonic character."""
 

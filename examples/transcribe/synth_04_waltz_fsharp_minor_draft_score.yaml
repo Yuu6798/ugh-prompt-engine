@@ -14,7 +14,7 @@ physical:
   key: F# minor
   time_signature: 3/4
   active_rate_target: 0.96-1.00
-  valley_depth_target: 0.51-0.55
+  valley_depth_target: 0.17-0.21
   brightness: dark
   stereo_width: 'TODO(transcribe): stereo unmeasured'
 structure:

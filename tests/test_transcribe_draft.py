@@ -126,7 +126,7 @@ def test_draft_score_maps_t0_measurements_to_physical_layer() -> None:
     assert score.physical.time_signature == "4/4"
     assert score.physical.brightness == "dark"
     assert score.physical.active_rate_target == "0.96-1.00"
-    assert score.physical.valley_depth_target == "0.49-0.53"
+    assert score.physical.valley_depth_target == "0.16-0.20"
     assert field_fixity(score) == {
         "bpm": "locked",
         "key": "locked",

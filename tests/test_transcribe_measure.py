@@ -115,6 +115,31 @@ def test_measure_fields_maps_all_score_fields() -> None:
     assert all(item.calibration for item in report.measurements)
 
 
+def test_valley_depth_target_prefers_legacy_valley_depth_over_v2() -> None:
+    # Codex PR #188 P2 #2: valley_depth_target is calibrated on the frozen
+    # pre-v2 hybrid scale. A high v2-scale valley_depth (0.5) must not leak
+    # into the measurement when valley_depth_legacy (0.05) is populated —
+    # the whole chain is rooted at semantic_ci.rpe_bundle_to_observed.
+    bundle = _make_bundle(stereo_profile=StereoProfile(width=0.82, correlation=0.1))
+    bundle.physical.valley_depth = 0.5
+    bundle.physical.valley_depth_legacy = 0.05
+
+    raw = _measurement_by_field(bundle)["valley_depth_target"].raw_value
+
+    assert raw == 0.05
+
+
+def test_valley_depth_target_falls_back_to_valley_depth_when_legacy_absent() -> None:
+    # Pre-v2 JSON has no valley_depth_legacy (None); valley_depth itself WAS
+    # the hybrid value in that case, so measurement must fall back to it.
+    bundle = _make_bundle(stereo_profile=StereoProfile(width=0.82, correlation=0.1))
+    assert bundle.physical.valley_depth_legacy is None
+
+    raw = _measurement_by_field(bundle)["valley_depth_target"].raw_value
+
+    assert raw == bundle.physical.valley_depth
+
+
 def test_brightness_reads_spectral_centroid_not_legacy_band_ratio() -> None:
     bundle = _make_bundle(spectral_centroid=2600.0, band_brightness=0.0)
     brightness = _measurement_by_field(bundle)["brightness"]

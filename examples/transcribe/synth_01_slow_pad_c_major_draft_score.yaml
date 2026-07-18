@@ -14,7 +14,7 @@ physical:
   key: C major
   time_signature: 4/4
   active_rate_target: 0.96-1.00
-  valley_depth_target: 0.49-0.53
+  valley_depth_target: 0.16-0.20
   brightness: dark
   stereo_width: 'TODO(transcribe): stereo unmeasured'
 structure:

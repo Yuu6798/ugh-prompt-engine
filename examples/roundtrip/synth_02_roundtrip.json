@@ -61,13 +61,13 @@
     {
       "field": "valley_depth_target",
       "source_value": "0.30-0.40",
-      "transcribed_value": "0.35-0.39",
-      "diagnosis": "preserved",
+      "transcribed_value": "0.10-0.14",
+      "diagnosis": "knob_dead",
       "grip": 0.056881,
       "grip_class": "dead",
       "sensor": "physical.valley_depth",
       "sensor_state": "working",
-      "note": null
+      "note": "K1 grip map classifies this control as dead."
     },
     {
       "field": "stereo_width",

@@ -8,7 +8,7 @@ import warnings
 from typing import Final
 
 from svp_rpe.eval.models import RPEScore
-from svp_rpe.rpe.models import PhysicalRPE
+from svp_rpe.rpe.models import PhysicalRPE, legacy_valley_depth
 from svp_rpe.utils.config_loader import load_config
 
 BASELINE_CONFIGS: Final[dict[str, str]] = {
@@ -54,18 +54,6 @@ def _proximity_score(actual: float, ideal: float, tolerance: float) -> float:
     return _clamp(1.0 - distance)
 
 
-def _valley_depth_for_scoring(phys: PhysicalRPE) -> float:
-    """Valley depth on the frozen (pre-v2 hybrid) scale that valley_depth_pro
-    was calibrated against. `valley_depth` defaults to the level-invariant v2
-    norm since PR #188, which is not comparable to `valley_depth_pro`
-    (0.2165) — so prefer `valley_depth_legacy` when the extractor populated
-    it. Pre-v2 JSON has no `valley_depth_legacy` (None); in that case
-    `valley_depth` itself IS the hybrid value, so falling back to it is
-    correct.
-    """
-    return phys.valley_depth_legacy if phys.valley_depth_legacy is not None else phys.valley_depth
-
-
 def _load_baseline_config(baseline: str) -> dict[str, float]:
     config_name = BASELINE_CONFIGS.get(baseline)
     if config_name is None:
@@ -90,7 +78,10 @@ def _score_single_rpe(
     rms_score = _proximity_score(phys.rms_mean, cfg["rms_mean_pro"], 0.3)
     active_rate_score = _proximity_score(phys.active_rate, cfg["active_rate_ideal"], 0.5)
     crest_factor_score = _proximity_score(phys.crest_factor, cfg["crest_factor_ideal"], 5.0)
-    valley_score = _proximity_score(_valley_depth_for_scoring(phys), cfg["valley_depth_pro"], 0.3)
+    # valley_depth_pro is calibrated on the frozen pre-v2 hybrid scale; read
+    # via the shared legacy_valley_depth helper (rpe/models.py) rather than
+    # the v2-default valley_depth field. See legacy_valley_depth docstring.
+    valley_score = _proximity_score(legacy_valley_depth(phys), cfg["valley_depth_pro"], 0.3)
     thickness_score = _proximity_score(phys.thickness, cfg["thickness_pro"], 2.0)
 
     overall = round(

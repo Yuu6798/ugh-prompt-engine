@@ -61,7 +61,7 @@
     {
       "field": "valley_depth_target",
       "source_value": "0.10-0.20",
-      "transcribed_value": "0.05-0.09",
+      "transcribed_value": "0.02-0.06",
       "diagnosis": "knob_dead",
       "grip": 0.056881,
       "grip_class": "dead",
