@@ -604,3 +604,85 @@ def test_feature_value_scalar_keys_are_unchanged() -> None:
     assert _feature_value("harmonic_ratio", phys) == 0.71
     assert _feature_value("low_ratio", phys) == 0.42
     assert _feature_value("bpm", phys) == 129.0
+
+
+def test_feature_value_valley_depth_prefers_legacy_over_v2_value() -> None:
+    # config's valley_depth_min/_max/_gt conditions (incl.
+    # ctx.cinematic_dynamic) are calibrated on the frozen pre-v2 hybrid
+    # scale. The condition engine must read valley_depth_legacy when
+    # present, not the (post-#188 default) level-invariant v2 valley_depth.
+    phys = _make_physical_genre(
+        harmonic_ratio=0.71,
+        spectral_centroid=3735.0,
+        low_ratio=0.42,
+        mid_ratio=0.25,
+        high_ratio=0.33,
+        bpm=129.0,
+        active_rate=0.98,
+        valley_depth=0.5,  # off-scale v2 value; must be ignored when legacy set
+    )
+    phys.valley_depth_legacy = 0.05
+
+    assert _feature_value("valley_depth", phys) == 0.05
+
+
+def test_feature_value_valley_depth_falls_back_when_legacy_absent() -> None:
+    phys = _make_physical_genre(
+        harmonic_ratio=0.71,
+        spectral_centroid=3735.0,
+        low_ratio=0.42,
+        mid_ratio=0.25,
+        high_ratio=0.33,
+        bpm=129.0,
+        active_rate=0.98,
+        valley_depth=0.07,
+    )
+    assert phys.valley_depth_legacy is None
+
+    assert _feature_value("valley_depth", phys) == 0.07
+
+
+def test_struct_dynamic_rule_evaluates_against_legacy_valley_not_v2() -> None:
+    # struct.dynamic (config: valley_depth_min: 0.3) must NOT fire from a
+    # high v2-scale valley_depth (0.5) when valley_depth_legacy (0.05) is
+    # below threshold — the frozen rule reads the legacy scale.
+    phys = _make_physical_genre(
+        harmonic_ratio=0.71,
+        spectral_centroid=1800.0,
+        low_ratio=0.20,
+        mid_ratio=0.30,
+        high_ratio=0.20,
+        bpm=100.0,
+        active_rate=0.6,
+        valley_depth=0.5,
+    )
+    phys.valley_depth_legacy = 0.05
+
+    semantic = generate_semantic(phys)
+    surface_labels = {label.label for label in semantic.por_surface}
+
+    assert "dynamic" not in surface_labels
+    assert "contrastive" not in surface_labels
+
+
+def test_struct_dynamic_rule_fires_from_legacy_valley_when_v2_is_low() -> None:
+    # Converse of the above: a low v2 valley_depth (0.05) must not suppress
+    # struct.dynamic when valley_depth_legacy (0.4) clears the frozen
+    # threshold — confirms legacy is actually consulted, not merely ignored.
+    phys = _make_physical_genre(
+        harmonic_ratio=0.71,
+        spectral_centroid=1800.0,
+        low_ratio=0.20,
+        mid_ratio=0.30,
+        high_ratio=0.20,
+        bpm=100.0,
+        active_rate=0.6,
+        valley_depth=0.05,
+    )
+    phys.valley_depth_legacy = 0.4
+
+    semantic = generate_semantic(phys)
+    surface_labels = {label.label for label in semantic.por_surface}
+
+    assert "dynamic" in surface_labels
+    assert "contrastive" in surface_labels

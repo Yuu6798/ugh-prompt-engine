@@ -1625,6 +1625,7 @@
     "valley_db": 15.9733,
     "valley_norm": 0.5324,
     "crest_factor_robust": 2.514,
+    "valley_depth_legacy": 0.1866,
     "thickness": 1.2307,
     "spectral_centroid": 730.93,
     "spectral_profile": {

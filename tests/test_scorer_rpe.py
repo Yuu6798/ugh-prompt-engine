@@ -133,6 +133,37 @@ def test_nested_stem_rpe_warns_and_is_not_scored_recursively() -> None:
     assert score.stem_scores["vocals"].stem_scores == {}
 
 
+def test_valley_score_prefers_valley_depth_legacy_over_v2_valley_depth() -> None:
+    # Codex PR #188 P2: valley_depth_pro (0.2165) is calibrated on the frozen
+    # pre-v2 hybrid scale. When valley_depth_legacy is populated (the
+    # post-v2 extractor always does this), scoring must use it instead of
+    # the level-invariant v2 valley_depth — otherwise a real-song v2 norm
+    # (~0.5) would blow up the proximity score against the old threshold.
+    cfg = load_config(BASELINE_CONFIGS["pro"])
+    phys = _physical_at_baseline("pro").model_copy(
+        update={
+            "valley_depth": 0.9,  # wildly off-scale v2 value; must be ignored
+            "valley_depth_legacy": cfg["valley_depth_pro"],  # exact match
+        }
+    )
+
+    score = score_rpe(phys, baseline="pro")
+
+    assert score.valley_score == 1.0
+
+
+def test_valley_score_falls_back_to_valley_depth_when_legacy_absent() -> None:
+    # Pre-v2 JSON has no valley_depth_legacy field (None after deserialization).
+    # In that case valley_depth itself IS the pre-v2 hybrid value, so scoring
+    # must fall back to it rather than treating the score as unscoreable.
+    phys = _physical_at_baseline("pro")
+    assert phys.valley_depth_legacy is None
+
+    score = score_rpe(phys, baseline="pro")
+
+    assert score.valley_score == 1.0
+
+
 def test_rpe_score_rejects_nested_stem_scores() -> None:
     """RPEScore validator must reject manually-constructed nested stem_scores."""
     from svp_rpe.eval.models import RPEScore

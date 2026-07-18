@@ -166,6 +166,22 @@ class PhysicalRPE(BaseModel):
     valley_db: Optional[float] = None
     valley_norm: Optional[float] = None
     crest_factor_robust: Optional[float] = None
+    # Frozen-scale valley depth (pre-v2 "hybrid" formula: 0.5 * rms_percentile
+    # + 0.5 * section_ar). PR #188 switched the default `valley_depth`
+    # (and `valley_depth_method`) to the level-invariant v2 norm, but two
+    # downstream consumers still interpret valley_depth against thresholds
+    # calibrated on the old hybrid scale: eval/scorer_rpe.py's
+    # valley_depth_pro proximity score and rpe/semantic_rules.py's
+    # valley_depth_min/_max/_gt conditions (incl. cultural_context's
+    # ctx.cinematic_dynamic). Populated unconditionally by the extractor
+    # (from ValleyDiagnostics.hybrid_value) regardless of valley_depth_method,
+    # so those frozen-threshold consumers keep pre-v2 behavior unchanged.
+    # Optional so pre-existing JSON (no field) still deserializes; those
+    # consumers fall back to `valley_depth` in that case (correct because
+    # pre-v2 `valley_depth` WAS the hybrid value). To be removed once the
+    # frozen consumers are re-baselined against v2 (n=20 re-baseline; see
+    # docs/metrics.md).
+    valley_depth_legacy: Optional[float] = None
     thickness: float
     spectral_centroid: float
     spectral_profile: SpectralProfile

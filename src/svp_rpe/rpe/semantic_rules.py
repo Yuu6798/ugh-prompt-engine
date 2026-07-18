@@ -40,7 +40,17 @@ def _feature_value(name: str, phys: PhysicalRPE) -> Any:
         "active_rate": lambda item: item.active_rate,
         "mode": lambda item: item.mode,
         "spectral_centroid": lambda item: item.spectral_centroid,
-        "valley_depth": lambda item: item.valley_depth,
+        # config の valley_depth_min/_max/_gt 条件（6 箇所、cultural_context の
+        # ctx.cinematic_dynamic 含む）は旧 hybrid スケールで校正済み。PR #188 で
+        # `valley_depth` 既定が level-invariant な v2 norm に切替わったため、
+        # 凍結済み閾値を維持するには legacy 優先で読む（フォールバックは
+        # valley_depth 自体 — 旧 JSON では valley_depth = hybrid 値だったため
+        # 正しい）。config の閾値・ルール文言はここでは一切変更しない。
+        "valley_depth": lambda item: (
+            item.valley_depth_legacy
+            if item.valley_depth_legacy is not None
+            else item.valley_depth
+        ),
         "stereo_width": lambda item: item.stereo_profile.width
         if item.stereo_profile
         else None,

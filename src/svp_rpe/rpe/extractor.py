@@ -292,6 +292,11 @@ def extract_physical(
         active_rate=round(active_rate, 4),
         valley_depth=valley_depth,
         valley_depth_method=valley_method,
+        # Frozen-scale valley for legacy-calibrated consumers (scorer_rpe /
+        # semantic_rules). Always populated from diagnostics regardless of
+        # valley_method — compute_valley_depth computes hybrid_value
+        # unconditionally. See PhysicalRPE.valley_depth_legacy docstring.
+        valley_depth_legacy=valley_diag.hybrid_value,
         silence_rate=silence_rate,
         active_rate_v2=active_rate_v2,
         fullness=fullness,
