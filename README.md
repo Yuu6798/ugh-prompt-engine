@@ -103,6 +103,7 @@ svprpe --help
 ```
 src/svp_rpe/                # Main package (src layout)
 ├── cli.py                  # typer CLI (svprpe command)
+├── keys.py                 # 調ラベル一致度 (weighted_key_score / keys_enharmonically_equal)
 ├── sentinels.py            # 共有 sentinel 値
 ├── io/                     # WAV/MP3 loading + optional Demucs source separation
 ├── rpe/                    # RPE 抽出層 (physical/semantic/structure/valley/learned)
@@ -117,8 +118,9 @@ src/svp_rpe/                # Main package (src layout)
 ├── semantic_ci/            # Target SVP → Expected RPE → Diff → Repair SVP
 ├── control/                # 制御トラック: grip 効果量 / K3 直交性行列
 ├── calibration/            # ジャンル/楽器語彙コーパス校正 (genre-calibrate / genre-audit)
+├── arrange/                # ArrangementSpec: 決定論的 override/resolve/compile + identity/capability/observation sidecar (AR 系列)
 ├── config/                 # config/*.yaml のパッケージ同梱コピー
-└── utils/                  # config loader 等の共通ユーティリティ
+└── utils/                  # config loader・clamp 等の共通ユーティリティ
 
 config/                     # External configuration (src/svp_rpe/config/ と同期)
 ├── pro_baseline.yaml       # RPE Pro baseline values
