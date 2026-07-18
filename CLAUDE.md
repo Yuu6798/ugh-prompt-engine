@@ -135,7 +135,9 @@ discipline ゲート: `.claude/memory/` の直 main push の前に必ず
 
 ```
 src/svp_rpe/
-├── cli.py                     # typer CLI (svprpe command)
+├── cli/                       # typer CLI (svprpe command。コマンド別モジュール + builds_root ヘルパー)
+├── keys.py                     # 調ラベル一致度: weighted_key_score (grip 用連続値) / keys_enharmonically_equal (roundtrip 用二値)
+├── sentinels.py                 # transcribe TODO センチネル (`TODO(transcribe):`) の single source of truth
 ├── io/
 │   └── audio_loader.py        # WAV/MP3 loading + AudioMetadata
 ├── rpe/                       # RPE 抽出層
@@ -173,11 +175,13 @@ src/svp_rpe/
 ├── roundtrip/                  # R0 往復保存性診断 (harness / compare / corpus_batch)
 ├── control/                    # grip 効果量 (制御トラック K 系列)
 ├── calibration/                # ジャンル/楽器語彙コーパス校正 (genre-calibrate / genre-audit)
+├── arrange/                    # ArrangementSpec: 決定論的 override/resolve/compile + identity/capability/observation sidecar (AR 系列。models/resolver/bundle/contract/identity/capabilities/observe/package/pathsafe/loader)
 ├── batch/                     # バッチ処理
 │   ├── runner.py              # batch コマンド本体
 │   └── discovery.py           # 入力ファイル発見
 └── utils/
-    └── config_loader.py       # YAML config loading
+    ├── config_loader.py       # YAML config loading
+    └── clamp.py                # float クランプ共通化 (max(lo,min(hi,v)); 旧 8 重複 _clamp の集約先)
 
 config/                        # リポジトリ直下 + src/svp_rpe/config/ に同梱コピー (同期)
 ├── pro_baseline.yaml          # RPE Pro baseline values

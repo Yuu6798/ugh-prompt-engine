@@ -6,11 +6,8 @@ from __future__ import annotations
 
 from typing import Dict, Set
 
+from svp_rpe.utils.clamp import clamp
 from svp_rpe.utils.config_loader import load_config
-
-
-def _clamp(v: float) -> float:
-    return max(0.0, min(1.0, v))
 
 
 def _load_synonym_map() -> Dict[str, Set[str]]:
@@ -66,4 +63,4 @@ def por_lexical_similarity(text_a: str, text_b: str) -> float:
     intersection = expanded_a & expanded_b
     union_size = max(len(expanded_a), len(expanded_b))
 
-    return _clamp(len(intersection) / union_size) if union_size > 0 else 0.0
+    return clamp(len(intersection) / union_size) if union_size > 0 else 0.0

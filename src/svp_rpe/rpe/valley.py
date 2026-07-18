@@ -23,10 +23,6 @@ from svp_rpe.rpe.physical_features import compute_valley_db, valley_norm_from_db
 LEGACY_VALLEY_METHODS = frozenset({"rms_percentile", "section_ar", "hybrid", "legacy_hybrid"})
 
 
-def _clamp(v: float, lo: float = 0.0, hi: float = 1.0) -> float:
-    return max(lo, min(hi, v))
-
-
 def valley_rms_percentile(y: np.ndarray, sr: int) -> tuple[float, dict]:
     """P90 - P10 of frame RMS."""
     rms = librosa.feature.rms(y=y, hop_length=512)[0]

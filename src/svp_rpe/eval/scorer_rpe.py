@@ -9,6 +9,7 @@ from typing import Final
 
 from svp_rpe.eval.models import RPEScore
 from svp_rpe.rpe.models import PhysicalRPE, legacy_valley_depth
+from svp_rpe.utils.clamp import clamp
 from svp_rpe.utils.config_loader import load_config
 
 BASELINE_CONFIGS: Final[dict[str, str]] = {
@@ -42,16 +43,12 @@ STEM_BASELINE_PROFILES: Final[dict[str, str]] = {
 }
 
 
-def _clamp(v: float, lo: float = 0.0, hi: float = 1.0) -> float:
-    return max(lo, min(hi, v))
-
-
 def _proximity_score(actual: float, ideal: float, tolerance: float) -> float:
     """Score based on proximity to ideal. 1.0 = exact match, 0.0 = far away."""
     if tolerance == 0:
         return 1.0 if actual == ideal else 0.0
     distance = abs(actual - ideal) / tolerance
-    return _clamp(1.0 - distance)
+    return clamp(1.0 - distance)
 
 
 def _load_baseline_config(baseline: str) -> dict[str, float]:

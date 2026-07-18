@@ -756,7 +756,7 @@ def test_arrange_builds_root_self_heals_latest_after_pointer_update_failure(
     same-input re-run finds it via the already-published no-op path and
     updates `latest.json` on its own (self-healing, no separate repair
     step)."""
-    import svp_rpe.cli as cli_module
+    import svp_rpe.cli.builds_root as cli_module
 
     spec_path = tmp_path / "arrangement.yaml"
     _write_arrangement_spec(spec_path)

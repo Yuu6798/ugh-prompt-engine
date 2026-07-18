@@ -20,16 +20,13 @@ from svp_rpe.rpe.models import (
     SpectralProfile,
     StereoProfile,
 )
+from svp_rpe.utils.clamp import clamp
 
 try:
     import pyloudnorm as pyln
     _HAS_PYLOUDNORM = True
 except ModuleNotFoundError:  # pragma: no cover - optional at runtime
     _HAS_PYLOUDNORM = False
-
-
-def _clamp(value: float, lo: float = 0.0, hi: float = 1.0) -> float:
-    return max(lo, min(hi, value))
 
 
 # ---------------------------------------------------------------------------
@@ -48,7 +45,7 @@ def compute_active_rate(y: np.ndarray, sr: int, threshold: float = 0.01) -> floa
     rms = librosa.feature.rms(y=y)[0]
     if len(rms) == 0:
         return 0.0
-    return _clamp(float(np.sum(rms > threshold) / len(rms)))
+    return clamp(float(np.sum(rms > threshold) / len(rms)))
 
 
 def compute_crest_factor(y: np.ndarray) -> float:
@@ -77,15 +74,15 @@ def compute_thickness(y: np.ndarray, sr: int) -> float:
     """
     # Spectral richness: bandwidth normalized
     bw = librosa.feature.spectral_bandwidth(y=y, sr=sr)[0]
-    spectral_richness = _clamp(float(np.mean(bw)) / 5000.0)
+    spectral_richness = clamp(float(np.mean(bw)) / 5000.0)
 
     # RMS normalized to ~[0,1] (0.5 is typical for loud audio)
     rms = float(np.sqrt(np.mean(y ** 2)))
-    rms_norm = _clamp(rms / 0.5)
+    rms_norm = clamp(rms / 0.5)
 
     # Valley inverse: less valley = more continuous = thicker
     valley = _valley_depth_simple(y, sr)
-    valley_norm = _clamp(valley / 0.5)
+    valley_norm = clamp(valley / 0.5)
 
     w1, w2, w3 = 1.0, 1.0, 1.0
     return round(w1 * spectral_richness + w2 * rms_norm + w3 * (1.0 - valley_norm), 4)
@@ -263,7 +260,7 @@ def compute_stereo_profile(y_stereo: np.ndarray, sr: int) -> Optional[StereoProf
     summ = left + right
     rms_diff = float(np.sqrt(np.mean(diff ** 2)))
     rms_sum = float(np.sqrt(np.mean(summ ** 2)))
-    width = _clamp(rms_diff / max(rms_sum, 1e-8))
+    width = clamp(rms_diff / max(rms_sum, 1e-8))
 
     # Correlation
     if len(left) > 0:
@@ -275,7 +272,7 @@ def compute_stereo_profile(y_stereo: np.ndarray, sr: int) -> Optional[StereoProf
 
     return StereoProfile(
         width=round(width, 4),
-        correlation=round(_clamp(corr, -1.0, 1.0), 4),
+        correlation=round(clamp(corr, -1.0, 1.0), 4),
     )
 
 
@@ -375,14 +372,14 @@ def compute_silence_rate(
     if r.size == 0:
         return 0.0
     gate = _robust_peak(y) * 10 ** (peak_floor_db / 20.0)
-    return round(_clamp(float(np.mean(r <= gate))), 4)
+    return round(clamp(float(np.mean(r <= gate))), 4)
 
 
 def compute_active_rate_v2(
     y: np.ndarray, sr: int, peak_floor_db: float = METRICS_V2_PEAK_FLOOR_DB,
 ) -> float:
     """1 - silence_rate: level-invariant replacement for `compute_active_rate`."""
-    return round(_clamp(1.0 - compute_silence_rate(y, sr, peak_floor_db)), 4)
+    return round(clamp(1.0 - compute_silence_rate(y, sr, peak_floor_db)), 4)
 
 
 def compute_fullness(
@@ -403,7 +400,7 @@ def compute_fullness(
         return 0.0
     ref = float(np.percentile(ns, ref_pct))
     thr = ref * 10 ** (window_db / 20.0)
-    return round(_clamp(float(np.mean(r >= thr))), 4)
+    return round(clamp(float(np.mean(r >= thr))), 4)
 
 
 def compute_valley_db(
@@ -433,7 +430,7 @@ def valley_norm_from_db(
     valley_db: float, full_scale_db: float = METRICS_V2_VALLEY_FULL_SCALE_DB,
 ) -> float:
     """0-1 normalization of `compute_valley_db` (`full_scale_db` = dramatic dynamics)."""
-    return round(_clamp(valley_db / full_scale_db), 4)
+    return round(clamp(valley_db / full_scale_db), 4)
 
 
 def compute_crest_factor_robust(
@@ -599,7 +596,7 @@ def compute_bpm(
         return round(bpm, 2), 0.0
 
     cv = float(np.std(intervals) / mean_interval)
-    confidence = _clamp(1.0 - BPM_CONFIDENCE_CV_SCALE * cv, 0.0, 1.0)
+    confidence = clamp(1.0 - BPM_CONFIDENCE_CV_SCALE * cv, 0.0, 1.0)
     return round(bpm, 2), round(confidence, 4)
 
 
@@ -886,7 +883,7 @@ def _classify_time_signature_from_beat_strengths(
         and ac3 >= TS_TRIPLE_AC_THRESHOLD
         and compound_margin >= TS_COMPOUND_MARGIN_THRESHOLD
     ):
-        confidence = _clamp(
+        confidence = clamp(
             0.60 + TS_CONFIDENCE_GAIN * (ac6 - TS_COMPOUND_AC_THRESHOLD)
             + compound_margin,
         )
@@ -894,14 +891,14 @@ def _classify_time_signature_from_beat_strengths(
 
     triple_margin = ac3 - max(ac2, ac4)
     if ac3 >= TS_TRIPLE_AC_THRESHOLD and triple_margin >= TS_TRIPLE_MARGIN_THRESHOLD:
-        confidence = _clamp(
+        confidence = clamp(
             0.60 + TS_CONFIDENCE_GAIN * (ac3 - TS_TRIPLE_AC_THRESHOLD)
             + triple_margin,
         )
         return "3/4", round(confidence, 4)
 
     four_four_evidence = max(ac4, ac8, 0.0) - max(ac3, 0.0)
-    confidence = _clamp(TS_FOUR_FOUR_BASE_CONFIDENCE + max(0.0, four_four_evidence))
+    confidence = clamp(TS_FOUR_FOUR_BASE_CONFIDENCE + max(0.0, four_four_evidence))
     return "4/4", round(confidence, 4)
 
 
@@ -1040,7 +1037,7 @@ def _classify_chroma_frame(
     scores = np.asarray([float(np.dot(frame, template)) for _, _, template in templates])
     best_index = int(np.argmax(scores))
     root, quality, _ = templates[best_index]
-    confidence = _clamp(float(scores[best_index]))
+    confidence = clamp(float(scores[best_index]))
     return f"{root} {quality}", root, quality, confidence
 
 
@@ -1108,7 +1105,7 @@ def _build_chord_event(
         quality=qualities[start_index],
         start_sec=round(start_sec, 4),
         end_sec=round(end_sec, 4),
-        confidence=round(_clamp(confidence), 4),
+        confidence=round(clamp(confidence), 4),
     )
 
 
@@ -1227,7 +1224,7 @@ def _melody_contour_from_arrays(
     return MelodyContour(
         times=[round(float(t), 4) for t in times],
         frequencies_hz=[round(float(freq), 2) for freq in frequencies],
-        voicing=[round(_clamp(float(prob)), 4) for prob in voicing],
+        voicing=[round(clamp(float(prob)), 4) for prob in voicing],
     )
 
 
@@ -1282,5 +1279,5 @@ def compute_key(y: np.ndarray, sr: int) -> tuple[Optional[str], Optional[str], O
             best_key = shift
             best_mode = "minor"
 
-    confidence = _clamp((best_corr + 1.0) / 2.0)  # normalize [-1,1] → [0,1]
+    confidence = clamp((best_corr + 1.0) / 2.0)  # normalize [-1,1] → [0,1]
     return key_names[best_key], best_mode, round(confidence, 4)

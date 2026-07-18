@@ -133,6 +133,23 @@ Composition Score を "楽譜"、外部生成器を "演奏者" とみなす往�
 - `analyze.py` / `render.py`: `genre-calibrate`（ジャンル別特徴統計 + pair separability）
 - `audit.py`: `genre-audit`（現行ルールの misfire 計測、verdict なし）
 
+## Modules — Arrangement Track (AR 系列)
+
+`ArrangementSpec`（既存 `CompositionScore` を破壊せず部分 override する入力）から
+決定論的に derived score / provenance / diff / identity sidecar / observation を
+導出するモジュール群。詳細は
+[`arrangement_identity_planning.md`](arrangement_identity_planning.md) を参照。
+
+### arrange/
+- `models.py` / `loader.py`: `ArrangementSpec` スキーマ（`extra="forbid"`）+ YAML loader
+- `resolver.py` / `bundle.py`: 決定論的 resolve（`DerivedScore` + field-level diff）+ compile 中核
+- `identity.py`: `IdentityManifest`（hash 付き sidecar、`CompositionScore` を import しない、AR2-1）
+- `contract.py`: `PreservationContract`（identity anchor と保持方針の cross-validate、AR2-2）
+- `capabilities.py`: `InputCapabilityProfile`（生成器が受け取れる入力チャネルの自己記述、`control_profile` とは別モデル）
+- `observe.py`: `ObservationReport`（生成後 anchor 観測の計器、verdict なし、AR4）
+- `package.py`: 生成器へのハンドオフパッケージを決定論的に compile
+- `pathsafe.py`: sidecar loader 共有のパス閉じ込めプリミティブ
+
 ## Config Files
 
 | File | Purpose |

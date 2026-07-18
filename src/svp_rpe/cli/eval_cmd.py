@@ -1,0 +1,379 @@
+"""svprpe evaluate / compare / ci-check / run / batch / audit."""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Optional
+
+import click
+import typer
+
+from svp_rpe.cli._app import (
+    BASELINE_PROFILE_CHOICE,
+    BASELINE_PROFILE_HELP,
+    DEFAULT_SEPARATION_DEVICE,
+    DEFAULT_SEPARATION_MODEL,
+    SeparateOption,
+    SeparationDeviceOption,
+    SeparationModelOption,
+    app,
+    console,
+)
+
+AUDIO_INPUT_SUFFIXES = {".wav", ".mp3", ".flac", ".ogg"}
+
+
+@app.command()
+def evaluate(
+    audio: str = typer.Option(..., "--audio", help="Path to audio file"),
+    svp: Optional[str] = typer.Option(None, "--svp", help="Path to external SVP file"),
+    output: Optional[str] = typer.Option(None, "-o", "--output", help="Output JSON path"),
+    valley_method: str = typer.Option("v2", "--valley-method",
+                                       help="Valley method: v2/legacy_hybrid/rms_percentile/section_ar/hybrid"),
+    baseline: str = typer.Option(
+        "pro",
+        "--baseline",
+        click_type=BASELINE_PROFILE_CHOICE,
+        help=BASELINE_PROFILE_HELP,
+    ),
+    separate: SeparateOption = False,
+    separation_model: SeparationModelOption = DEFAULT_SEPARATION_MODEL,
+    separation_device: SeparationDeviceOption = DEFAULT_SEPARATION_DEVICE,
+) -> None:
+    """Evaluate audio. With --svp: compare against external SVP. Without: self-evaluate."""
+    from svp_rpe.eval.scorer_integrated import score_integrated
+    from svp_rpe.eval.scorer_rpe import score_rpe
+    from svp_rpe.eval.scorer_ugher import score_ugher
+    from svp_rpe.rpe.extractor import extract_rpe_from_file
+    from svp_rpe.svp.generator import generate_svp
+
+    console.print(f"[bold]Evaluating {audio}...[/bold]")
+    rpe_bundle = extract_rpe_from_file(
+        audio,
+        valley_method=valley_method,
+        include_stems=separate,
+        separation_model=separation_model,
+        separation_device=separation_device,
+    )
+    svp_bundle = generate_svp(rpe_bundle)
+
+    rpe_score = score_rpe(rpe_bundle.physical, baseline=baseline)
+    ugher_score = score_ugher(rpe_bundle, svp_bundle)
+    integrated = score_integrated(ugher_score, rpe_score)
+
+    result: dict = {
+        "mode": "self",
+        "rpe_score": rpe_score.model_dump(),
+        "ugher_score": ugher_score.model_dump(),
+        "integrated_score": integrated.model_dump(),
+    }
+
+    # If external SVP provided, run comparison
+    if svp:
+        from svp_rpe.eval.comparison import compare_rpe_vs_svp
+        from svp_rpe.svp.parser import load_svp
+
+        console.print(f"[bold]Comparing against external SVP: {svp}[/bold]")
+        parsed_svp = load_svp(svp)
+        comp = compare_rpe_vs_svp(rpe_bundle, parsed_svp)
+        result["mode"] = "compare"
+        result["comparison"] = comp.model_dump()
+        result["action_hints"] = comp.action_hints
+
+    result_json = json.dumps(result, ensure_ascii=False, indent=2)
+
+    if output:
+        Path(output).write_text(result_json, encoding="utf-8")
+        console.print(f"[green]Evaluation saved to {output}[/green]")
+    else:
+        console.print(result_json)
+
+
+@app.command()
+def compare(
+    reference_audio: str = typer.Option(..., "--reference-audio", help="Reference audio file"),
+    candidate_audio: Optional[str] = typer.Option(None, "--candidate-audio",
+                                                    help="Candidate audio file"),
+    reference_svp: Optional[str] = typer.Option(None, "--reference-svp",
+                                                  help="Reference SVP file"),
+    candidate_svp: Optional[str] = typer.Option(None, "--candidate-svp",
+                                                  help="Candidate SVP file"),
+    output: Optional[str] = typer.Option(None, "-o", "--output", help="Output JSON path"),
+    valley_method: str = typer.Option("v2", "--valley-method",
+                                       help="Valley method: v2/legacy_hybrid/rms_percentile/section_ar/hybrid"),
+) -> None:
+    """Compare reference audio against candidate audio/SVP.
+
+    Note: stem separation is not supported here because the comparison engine
+    does not consume PhysicalRPE.stem_rpe. Use `evaluate --separate` or
+    `run --separate` for per-stem analysis.
+    """
+    from svp_rpe.eval.comparison import compare_rpe_vs_svp
+    from svp_rpe.rpe.extractor import extract_rpe_from_file
+    from svp_rpe.svp.parser import load_svp
+
+    console.print(f"[bold]Extracting RPE from reference: {reference_audio}...[/bold]")
+    ref_rpe = extract_rpe_from_file(reference_audio, valley_method=valley_method)
+
+    # Determine comparison target
+    candidate_phys = None
+    if candidate_audio:
+        console.print(f"[bold]Extracting RPE from candidate: {candidate_audio}...[/bold]")
+        cand_rpe = extract_rpe_from_file(candidate_audio, valley_method=valley_method)
+        candidate_phys = cand_rpe.physical
+
+    # Determine SVP to compare against
+    if candidate_svp:
+        parsed_svp = load_svp(candidate_svp)
+    elif reference_svp:
+        parsed_svp = load_svp(reference_svp)
+    else:
+        # Auto-generate SVP from reference
+        from svp_rpe.svp.generator import generate_svp
+
+        svp_bundle = generate_svp(ref_rpe)
+        from svp_rpe.eval.diff_models import ParsedSVP
+        parsed_svp = ParsedSVP(
+            por_core=svp_bundle.analysis_rpe.por_core,
+            por_surface=svp_bundle.analysis_rpe.por_surface,
+            grv_primary=svp_bundle.analysis_rpe.grv_primary,
+            bpm=svp_bundle.analysis_rpe.bpm,
+            key=svp_bundle.analysis_rpe.key,
+            mode=svp_bundle.analysis_rpe.mode,
+            duration_sec=svp_bundle.analysis_rpe.duration_sec,
+            constraints=svp_bundle.svp_for_generation.constraints,
+            style_tags=svp_bundle.svp_for_generation.style_tags,
+            delta_e_profile=svp_bundle.minimal_svp.de,
+        )
+
+    comp = compare_rpe_vs_svp(ref_rpe, parsed_svp, candidate_phys=candidate_phys)
+
+    result = comp.model_dump()
+    result["reference_source"] = reference_audio
+    result["candidate_source"] = candidate_audio or candidate_svp or "auto-generated"
+
+    result_json = json.dumps(result, ensure_ascii=False, indent=2)
+
+    if output:
+        Path(output).write_text(result_json, encoding="utf-8")
+        console.print(f"[green]Comparison saved to {output}[/green]")
+    else:
+        console.print(result_json)
+
+
+@app.command("ci-check")
+def ci_check(
+    target_svp: str = typer.Argument(..., help="Path to TargetSVP JSON"),
+    observed_rpe: str = typer.Argument(..., help="Path to ObservedRPE fixture JSON"),
+    output: Optional[str] = typer.Option(None, "-o", "--output", help="Output path"),
+    output_format: str = typer.Option(
+        "json",
+        "--format",
+        click_type=click.Choice(["json", "markdown"]),
+        help="Output format: json | markdown",
+    ),
+    threshold: float = typer.Option(
+        0.0,
+        "--threshold",
+        click_type=click.FloatRange(0.0, 1.0),
+        help="Pass semantic CI when loss is less than or equal to this threshold.",
+    ),
+) -> None:
+    """Run deterministic semantic CI: TargetSVP → ExpectedRPE → Diff → RepairSVP."""
+    from svp_rpe.semantic_ci import ObservedRPE, TargetSVP, render_markdown, run_semantic_ci
+
+    target_data = json.loads(Path(target_svp).read_text(encoding="utf-8"))
+    observed_data = json.loads(Path(observed_rpe).read_text(encoding="utf-8"))
+    result = run_semantic_ci(
+        TargetSVP(**target_data),
+        ObservedRPE(**observed_data),
+        threshold=threshold,
+    )
+    content = (
+        render_markdown(result)
+        if output_format == "markdown"
+        else json.dumps(result.model_dump(mode="json"), ensure_ascii=False, indent=2)
+    )
+
+    if output:
+        Path(output).write_text(content, encoding="utf-8")
+        console.print(f"[green]Semantic CI result saved to {output}[/green]")
+    else:
+        if output_format == "markdown":
+            typer.echo(content, nl=False)
+        else:
+            typer.echo(content)
+
+    if result.semantic_diff.verdict == "repair":
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def run(
+    audio: str = typer.Argument(..., help="Path to WAV/MP3 file"),
+    output_dir: Optional[str] = typer.Option(None, "--output-dir", help="Output directory"),
+    no_save: bool = typer.Option(False, "--no-save", help="Print to stdout only"),
+    valley_method: str = typer.Option("v2", "--valley-method",
+                                       help="Valley method: v2/legacy_hybrid/rms_percentile/section_ar/hybrid"),
+    baseline: str = typer.Option(
+        "pro",
+        "--baseline",
+        click_type=BASELINE_PROFILE_CHOICE,
+        help=BASELINE_PROFILE_HELP,
+    ),
+    separate: SeparateOption = False,
+    separation_model: SeparationModelOption = DEFAULT_SEPARATION_MODEL,
+    separation_device: SeparationDeviceOption = DEFAULT_SEPARATION_DEVICE,
+) -> None:
+    """Run full pipeline: extract → generate → evaluate."""
+    from svp_rpe.eval.scorer_integrated import score_integrated
+    from svp_rpe.eval.scorer_rpe import score_rpe
+    from svp_rpe.eval.scorer_ugher import score_ugher
+    from svp_rpe.rpe.extractor import extract_rpe_from_file
+    from svp_rpe.svp.generator import generate_svp
+    from svp_rpe.svp.render_yaml import render_yaml
+
+    console.print(f"[bold]Running full pipeline on {audio}...[/bold]")
+
+    rpe_bundle = extract_rpe_from_file(
+        audio,
+        valley_method=valley_method,
+        include_stems=separate,
+        separation_model=separation_model,
+        separation_device=separation_device,
+    )
+    console.print("[green]✓[/green] RPE extraction complete")
+
+    svp_bundle = generate_svp(rpe_bundle)
+    console.print("[green]✓[/green] SVP generation complete")
+
+    rpe_score = score_rpe(rpe_bundle.physical, baseline=baseline)
+    ugher_score = score_ugher(rpe_bundle, svp_bundle)
+    integrated = score_integrated(ugher_score, rpe_score)
+    console.print("[green]✓[/green] Evaluation complete")
+
+    console.print(f"\n[bold]Integrated Score: {integrated.integrated_score:.4f}[/bold]")
+    console.print(f"  UGHer: {ugher_score.overall:.4f}  |  RPE: {rpe_score.overall:.4f}")
+
+    if no_save:
+        console.print("\n--- RPE ---")
+        console.print(json.dumps(rpe_bundle.model_dump(), ensure_ascii=False, indent=2))
+        console.print("\n--- SVP ---")
+        console.print(render_yaml(svp_bundle))
+        return
+
+    if output_dir:
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+
+        (out / "rpe.json").write_text(
+            json.dumps(rpe_bundle.model_dump(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (out / "svp.yaml").write_text(render_yaml(svp_bundle), encoding="utf-8")
+        (out / "evaluation.json").write_text(
+            json.dumps({
+                "rpe_score": rpe_score.model_dump(),
+                "ugher_score": ugher_score.model_dump(),
+                "integrated_score": integrated.model_dump(),
+            }, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        console.print(f"\n[green]All outputs saved to {out}/[/green]")
+    else:
+        console.print("\n[dim]Use --output-dir to save files, or --no-save to print.[/dim]")
+
+
+@app.command()
+def batch(
+    audio_dir: str = typer.Argument(..., help="Directory containing audio files"),
+    svp_dir: Optional[str] = typer.Option(None, "--svp-dir", help="Directory with SVP candidates"),
+    mode: str = typer.Option("evaluate", "--mode", help="Mode: evaluate | compare"),
+    output_dir: Optional[str] = typer.Option(None, "--output-dir", help="Output directory"),
+    baseline: str = typer.Option(
+        "pro",
+        "--baseline",
+        click_type=BASELINE_PROFILE_CHOICE,
+        help=BASELINE_PROFILE_HELP,
+    ),
+    separate: SeparateOption = False,
+    separation_model: SeparationModelOption = DEFAULT_SEPARATION_MODEL,
+    separation_device: SeparationDeviceOption = DEFAULT_SEPARATION_DEVICE,
+) -> None:
+    """Batch process multiple audio files."""
+    from svp_rpe.batch.runner import run_batch
+
+    console.print(f"[bold]Batch processing {audio_dir}...[/bold]")
+    summary = run_batch(
+        audio_dir,
+        svp_dir=svp_dir,
+        mode=mode,
+        output_dir=output_dir,
+        baseline=baseline,
+        include_stems=separate,
+        separation_model=separation_model,
+        separation_device=separation_device,
+    )
+
+    console.print(f"\n[bold]Results: {summary['successful']}/{summary['total_files']} successful[/bold]")
+
+    if summary.get("ranking"):
+        console.print("\n[bold]Ranking:[/bold]")
+        for entry in summary["ranking"][:10]:
+            console.print(f"  {entry['rank']}. {entry['audio']} — {entry['score']:.4f}")
+
+    if output_dir:
+        console.print(f"\n[green]Reports saved to {output_dir}/[/green]")
+
+
+@app.command("audit")
+def audit(
+    composition_score: str = typer.Argument(..., help="Path to Composition Score YAML"),
+    rpe_or_audio: str = typer.Argument(
+        ...,
+        help="Path to extracted RPEBundle JSON or generated audio file",
+    ),
+    output_format: str = typer.Option(
+        "text",
+        "--format",
+        click_type=click.Choice(["text", "json"]),
+        help="Output format: text | json",
+    ),
+    valley_method: str = typer.Option(
+        "v2",
+        "--valley-method",
+        help="Valley method for audio input: v2/legacy_hybrid/rms_percentile/section_ar/hybrid",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output", help="Output file path"),
+) -> None:
+    """Render a composition control-panel audit from a score and RPE/audio input."""
+    from svp_rpe.compose import load_composition_score
+    from svp_rpe.rpe.models import RPEBundle
+    from svp_rpe.semantic_ci.audit import build_audit_report, render_audit_text
+
+    score = load_composition_score(composition_score)
+    input_path = Path(rpe_or_audio)
+    # JSON fixtures remain the deterministic DD-A test path. Audio inputs call
+    # the existing extractor as a convenience front-end for the one-shot workflow.
+    if input_path.suffix.lower() in AUDIO_INPUT_SUFFIXES:
+        from svp_rpe.rpe.extractor import extract_rpe_from_file
+
+        bundle = extract_rpe_from_file(str(input_path), valley_method=valley_method)
+    else:
+        data = json.loads(input_path.read_text(encoding="utf-8"))
+        bundle = RPEBundle(**data)
+    report = build_audit_report(score, bundle, observed_id=input_path.stem)
+
+    if output_format == "json":
+        content = json.dumps(
+            report.model_dump(mode="json"),
+            ensure_ascii=False,
+            indent=2,
+        )
+    else:
+        content = render_audit_text(report)
+
+    if output:
+        Path(output).write_text(content, encoding="utf-8")
+    else:
+        typer.echo(content)
