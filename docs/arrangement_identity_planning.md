@@ -1,10 +1,10 @@
 # Arrangement Identity Track Planning
 
-**Status**: AR0 計画文書。AR1、AR2-1/2、AR3-1/2 は実装済み。AR2-3 は保留
-（2026-07-20: 解凍条件 (a) structure センサー配線は充足、(b) 長尺 form
-artifact 待ち）、AR4 は計器配線済み（`svprpe observe` + `ObservationReport`
-sidecar。harmony + structure domain を実測、判定閾値は未定・実 Suno 生成物での
-観測は未実施）。
+**Status**: AR0 計画文書。AR1、AR2-1/2、AR3-1/2 は実装済み。AR2-3 は
+**2026-07-20 に解凍**（(a) structure センサー配線 #192 + (b) MusicGen 30s form
+実測 n=2 で保留条件充足。設計着手可・実装未着手）、AR4 は計器配線済み
+（`svprpe observe` + `ObservationReport` sidecar。harmony + structure domain を
+実測、判定閾値は未定・実 Suno 生成物での観測は未実施）。
 
 > この文書は、元の未コミット AR0 ドラフトが checkout 内に残っていなかったため、
 > 2026-07-15 のユーザー承認に基づき、マージ済み PR #175–#181、現行コード、
@@ -122,6 +122,15 @@ AR1 は Score の保持だけを扱い、外部 artifact の配送や生成後�
   の既存資産を流用可能）、(b) form が存在する長尺 artifact の用意（MusicGen は
   30s 上限のため相性要検討・Suno なら人手律速）。(a) は Claude 完結可能な先行
   タスクであり、AR2-3 の解凍は (a)+(b) 充足後に再判断する。
+  **2026-07-20 再判断: 解凍**。(a) は #192、(b) は MusicGen 30s × structure
+  anchor 入り manifest の実測（`observed/musicgen_form/`、n=2）で充足 — 保留条件
+  「実 form artifact での AR4 結果」は文言どおり取得された。実データは AR2-3 の
+  設計空間を直接照らす: 挿入（正典に無い outro の観測）・欠落（verse は 2 take
+  とも一度も観測されず）・重複（chorus×2）・長さ振れ（正典 4 に対し観測 5 / 2）が
+  実生成の常態であり、section policy は厳密一致以外の許容カテゴリ（挿入・欠落・
+  並び替えの扱い）を、stable ID は不安定な観測系列への対応付けを、それぞれ前提に
+  設計する必要がある。留保: n=2・MusicGen 30s のみ・Suno 未観測。本解凍は
+  **設計着手の解凍**であって form 制御性の主張ではない。
 
 AR2 の完了は「何を残したいか」と「どの変形を許すか」を機械可読にしたことを意味し、
 生成器へ渡せたことは意味しない。
@@ -284,7 +293,7 @@ preserved を成功条件にしていない**: この結果自体が
 | AR0 | 本計画文書 | 完了 |
 | AR1 | resolver / CLI / bundle / diff / EDM-Jazz fixture | 完了 (#175–#177) |
 | AR2-1/2 | IdentityManifest / PreservationContract | 完了 (#178, #179, #181) |
-| AR2-3 | structure anchor policy | 保留（2026-07-20: 解凍条件 (a)(b) とも実測材料は揃った — (a) structure センサー配線、(b) MusicGen 30s form 実測 n=2。解凍可否の判断は別途） |
+| AR2-3 | structure anchor policy | **解凍（2026-07-20）**: (a) structure センサー配線 (#192) + (b) MusicGen 30s form 実測 n=2 で条件充足。設計着手可（実測が示す挿入・欠落・重複・長さ振れを前提に stable ID / section policy を設計する）。実装は未着手 |
 | AR3-1 | InputCapabilityProfile | 完了 (#180, #181) |
 | AR3-2 | PerformancePackage compiler + 縦切り E2E fixture | 実装済み（E2E fixture 追加 2026-07-17） |
 | AR4 | generated-output identity observation | 計器配線済み。harmony + structure を実測（decisive synth E2E + 2026-07-19 MusicGen 12s n=2 + 2026-07-20 MusicGen 30s form n=2）。判定閾値は未定、実 Suno 生成物は未観測 |
