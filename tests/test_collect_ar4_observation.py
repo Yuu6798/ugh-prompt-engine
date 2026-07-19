@@ -198,6 +198,18 @@ def test_build_package_provenance_scratch_build_records_structured_recipe() -> N
         input_path = ROOT / entry["path"]
         assert input_path.is_file()
         assert entry["sha256"] == hashlib.sha256(input_path.read_bytes()).hexdigest()
+    # `_DEFAULT_RECIPE_PACKAGE_DATA` には channel_artifacts が無い（このテストの
+    # 検証対象は inputs pin のみ）ため、output_geometry は「幾何非依存」注記に
+    # 落ちる（Codex 7R P2 review #191, discussion_r3610250841）。
+    assert recipe["output_geometry"] == {
+        "note": (
+            "no channel artifact locators (channel_artifacts is empty for this "
+            "package, e.g. because no anchor's delivery status is delivered/"
+            "experimental); performance_package.sha256 is independent of "
+            "--output-dir geometry for this recipe (Codex 7R P2 review #191, "
+            "discussion_r3610250841)."
+        )
+    }
 
 
 def test_build_package_provenance_repo_relative_package_path() -> None:
@@ -312,6 +324,93 @@ def test_build_package_provenance_emits_recipe_when_pins_match() -> None:
         "capability_profile": _recipe_input_entry(DEFAULT_CAPABILITY_PROFILE),
         "device_profile": _recipe_input_entry(ROOT / "config/device_profiles/musicgen.yaml"),
     }
+    assert "output_geometry" in recipe
+    assert "note" in recipe["output_geometry"]
+
+
+def test_build_package_provenance_records_output_geometry_locator_when_channel_artifacts_present() -> (  # noqa: E501
+    None
+):
+    """`channel_artifacts` に `artifact_base.locator` を持つエントリがあれば、
+    `build_recipe.output_geometry` はその locator と幾何制約の説明を記録する
+    （Codex 7R P2 review #191, discussion_r3610250841: `--output-dir
+    <output-dir>` プレースホルダは自由な値ではなく、
+    ``os.path.relpath(identity_manifest の親 dir, --output-dir)`` が
+    `artifact_base.locator` に一致する geometry でなければ recompile 結果の
+    `performance_package.sha256` が pin と一致しない、という欠陥への修正）。
+    複数 distinct な locator がある場合は配列で記録することも併せて確認する。"""
+    scratch_package = Path("/tmp/ar4_scratch_build/performance_package.json")
+    package_data_with_locator = {
+        **_DEFAULT_RECIPE_PACKAGE_DATA,
+        "channel_artifacts": {
+            "symbolic_melody": [
+                {
+                    "anchor_id": "melody",
+                    "artifact_base": {
+                        "kind": "identity_manifest_directory",
+                        "relative_to": "performance_package_directory",
+                        "locator": "../../identity_manifest_dir",
+                    },
+                }
+            ]
+        },
+    }
+    provenance = build_package_provenance(
+        scratch_package,
+        "3" + "c" * 63,
+        package_data_with_locator,
+        score=DEFAULT_SCORE,
+        identity_manifest=DEFAULT_IDENTITY_MANIFEST,
+        arrangement=DEFAULT_ARRANGEMENT,
+        capability_profile=DEFAULT_CAPABILITY_PROFILE,
+    )
+    recipe = provenance["build_recipe"]
+    assert recipe["output_geometry"]["artifact_base_locator"] == "../../identity_manifest_dir"
+    assert "constraint" in recipe["output_geometry"]
+    assert "artifact_base_locator" in recipe["output_geometry"]["constraint"]
+    assert "performance_package.sha256 depends on this relative geometry" in (
+        recipe["output_geometry"]["constraint"]
+    )
+
+    # 複数 distinct な locator がある場合は配列で記録する。
+    package_data_with_multiple_locators = {
+        **_DEFAULT_RECIPE_PACKAGE_DATA,
+        "channel_artifacts": {
+            "symbolic_melody": [
+                {
+                    "anchor_id": "melody",
+                    "artifact_base": {
+                        "kind": "identity_manifest_directory",
+                        "relative_to": "performance_package_directory",
+                        "locator": "../a",
+                    },
+                }
+            ],
+            "reference_audio": [
+                {
+                    "anchor_id": "harmony",
+                    "artifact_base": {
+                        "kind": "identity_manifest_directory",
+                        "relative_to": "performance_package_directory",
+                        "locator": "../b",
+                    },
+                }
+            ],
+        },
+    }
+    provenance_multi = build_package_provenance(
+        scratch_package,
+        "4" + "d" * 63,
+        package_data_with_multiple_locators,
+        score=DEFAULT_SCORE,
+        identity_manifest=DEFAULT_IDENTITY_MANIFEST,
+        arrangement=DEFAULT_ARRANGEMENT,
+        capability_profile=DEFAULT_CAPABILITY_PROFILE,
+    )
+    assert provenance_multi["build_recipe"]["output_geometry"]["artifact_base_locator"] == [
+        "../a",
+        "../b",
+    ]
 
 
 def test_build_package_provenance_rejects_mistyped_score_with_existing_yaml() -> None:

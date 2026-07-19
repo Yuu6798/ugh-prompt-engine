@@ -251,6 +251,44 @@ def _package_input_pin(package_data: dict[str, Any], input_name: str) -> Optiona
     return None
 
 
+def _artifact_base_locators(package_data: dict[str, Any]) -> list[str]:
+    """`channel_artifacts[*][*].artifact_base.locator` の distinct 値一覧
+    （安定した順序のためソート済み）。
+
+    `compile_performance_package`（`src/svp_rpe/arrange/package.py`）は
+    channel_artifacts を持つ package を compile する際、
+    ``os.path.relpath(identity_manifest の親ディレクトリ, --output-dir)``
+    を ``artifact_base.locator`` として package JSON に埋め込む。つまり
+    `build_recipe.compile_command` の ``--output-dir <output-dir>``
+    プレースホルダは実は自由な値ではなく、この relpath 計算結果が locator
+    と一致する geometry でなければ recompile 結果の
+    `performance_package.sha256` が pin と一致しない（Codex 7R P2 review
+    #191, discussion_r3610250841）。
+
+    channel_artifacts が空（全 anchor が unsupported/unknown 等で
+    delivered_channel を持たない）の package では locator がどこにも
+    現れず、この関数は空リストを返す — その場合 package sha256 は
+    ``--output-dir`` の実際の値に依存しない（幾何非依存）。
+    """
+    locators: set[str] = set()
+    channel_artifacts = package_data.get("channel_artifacts")
+    if not isinstance(channel_artifacts, dict):
+        return []
+    for references in channel_artifacts.values():
+        if not isinstance(references, list):
+            continue
+        for reference in references:
+            if not isinstance(reference, dict):
+                continue
+            artifact_base = reference.get("artifact_base")
+            if not isinstance(artifact_base, dict):
+                continue
+            locator = artifact_base.get("locator")
+            if isinstance(locator, str):
+                locators.add(locator)
+    return sorted(locators)
+
+
 def _verify_recipe_input(
     path: Path, *, pin_sha256: Optional[str]
 ) -> tuple[Optional[bytes], Optional[str]]:
@@ -495,6 +533,24 @@ def build_package_provenance(
        `inputs.device_profile.sha256` が canonical JSON（Pydantic 再
        シリアライズ後）の pin であるのに対し、`build_recipe` 側は他の 4 入力
        と同じ raw ファイル bytes の sha256（両者は別の値）。
+
+       さらに `build_recipe.output_geometry` として、``--output-dir
+       <output-dir>`` プレースホルダが実は自由な値ではないことを明記する
+       （Codex 7R P2 review #191, discussion_r3610250841）:
+       `compile_performance_package` は channel_artifacts を持つ package を
+       compile する際、``os.path.relpath(identity_manifest の親ディレクトリ,
+       --output-dir)`` を各 `ChannelArtifactReference.artifact_base.locator`
+       として package sha256 に焼き込む。``package_data["channel_artifacts"]``
+       から distinct な locator を集め（`_artifact_base_locators`）:
+
+       - locator が 1 件以上あれば、その値（複数 distinct なら配列）と
+         「recompile 時は relpath がこの locator に一致する --output-dir を
+         選ぶ必要がある」という制約文を記録する。
+       - locator がゼロ（channel_artifacts が空。例えば全 anchor が
+         unsupported/unknown で delivered_channel を持たない場合）なら、
+         フィールドを省略せず「幾何非依存であることを確認済み」の旨を
+         明示する（省略すると「未検討」なのか「非依存確認済み」なのか
+         将来の読み手が区別できないため）。
     3. 上記いずれも成立しない場合（レシピ入力が揃っていない、または検証に
        失敗した場合）は sha256 のみを provenance として残す（部分的な入力や
        検証未通過の入力から不完全/偽のレシピを捏造しない — 偽レシピより正直な
@@ -720,6 +776,43 @@ def build_package_provenance(
                 if device_profile_auto_load_note is not None:
                     provenance["build_recipe"]["auto_loaded_inputs"] = {
                         "device_profile": device_profile_auto_load_note
+                    }
+                # `--output-dir <output-dir>` の compile_command プレースホルダは
+                # 自由な値ではない: channel_artifacts を持つ package では
+                # `artifact_base.locator` が
+                # `os.path.relpath(identity_manifest の親 dir, --output-dir)`
+                # として package sha256 に焼き込まれているため、別 geometry から
+                # recompile すると pinned sha256 を再現しない (Codex 7R P2 review
+                # #191, discussion_r3610250841)。locator が存在すればその制約を
+                # 明記し、channel_artifacts が空（locator ゼロ）の場合も
+                # 「未検討」ではなく「幾何非依存であることを確認済み」と明示する。
+                artifact_base_locators = _artifact_base_locators(data)
+                if artifact_base_locators:
+                    provenance["build_recipe"]["output_geometry"] = {
+                        "artifact_base_locator": (
+                            artifact_base_locators[0]
+                            if len(artifact_base_locators) == 1
+                            else artifact_base_locators
+                        ),
+                        "constraint": (
+                            "choose --output-dir so that "
+                            "os.path.relpath(<identity_manifest's parent dir>, "
+                            "<output-dir>) equals artifact_base_locator; "
+                            "performance_package.sha256 depends on this relative "
+                            "geometry (Codex 7R P2 review #191, "
+                            "discussion_r3610250841)."
+                        ),
+                    }
+                else:
+                    provenance["build_recipe"]["output_geometry"] = {
+                        "note": (
+                            "no channel artifact locators (channel_artifacts is "
+                            "empty for this package, e.g. because no anchor's "
+                            "delivery status is delivered/experimental); "
+                            "performance_package.sha256 is independent of "
+                            "--output-dir geometry for this recipe (Codex 7R P2 "
+                            "review #191, discussion_r3610250841)."
+                        )
                     }
                 return provenance
             provenance["note"] = (

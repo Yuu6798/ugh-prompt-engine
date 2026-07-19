@@ -30,6 +30,9 @@
       "compile_command": "svprpe package examples/arrangement/midnight_signal/composition_score.yaml examples/arrangement/midnight_signal/identity_manifest.yaml examples/arrangement/midnight_signal/edm.identity.musicgen.arrangement.yaml --capability-profile config/capability_profiles/musicgen.yaml --output-dir <output-dir>",
       "auto_loaded_inputs": {
         "device_profile": "device_profile is auto-loaded by `svprpe package` from config/device_profiles/<generator>.yaml based on the resolved rendering.target_backend; it is not a compile_command argument, but is required for byte-identical reproduction and is pinned separately as inputs.device_profile in performance_package.json (Codex 5R P2 review #191, discussion_r3610193512)."
+      },
+      "output_geometry": {
+        "note": "no channel artifact locators (channel_artifacts is empty for this package, e.g. because no anchor's delivery status is delivered/experimental); performance_package.sha256 is independent of --output-dir geometry for this recipe (Codex 7R P2 review #191, discussion_r3610250841)."
       }
     }
   },
