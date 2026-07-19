@@ -1,0 +1,109 @@
+# AR4 form 実観測バッチ 事前登録（Design Memo:
+# design_memo_ar4_form.md, Fable, 2026-07-20, ブランチ
+# claude/recommended-tasks-check-jzksqh）。目的: AR2-3 の最後の解凍条件 (b)
+# 「form が存在する長尺 artifact」を MusicGen 30s で実測し、structure センサー
+# (AR2-3 解凍条件 (a), PR #192) の実観測データを取得する。生成開始前に内容確定
+# （AGENTS.md §8「ローカル決定論バッチの canonical 条件」1 項）。
+# plan_confirmed_at_utc は本ファイルを確定コミットする直前に `date -u` で実測した
+# 値であり、後続の Phase 2 生成タイムスタンプ（ar4f_generation_timestamps.yaml）
+# より必ず先行する（受け入れ条件: 事前登録 -> 生成 -> 観測の時系列を yaml 内の
+# 実測 UTC で裏付ける）。
+schema_version: "1.0"
+plan_id: ar4f_musicgen_midnight_signal_edm_form_n2
+plan_confirmed_at_utc: "2026-07-19T11:23:50Z"
+
+scope:
+  fixture: examples/arrangement/midnight_signal
+  arrangement: edm.identity.musicgen.arrangement.yaml
+  # #191 (ar4_plan.yaml) の identity_manifest.yaml とは別ファイル — 本バッチ専用の
+  # structure anchor を追加した variant（既存 identity_manifest.yaml / observed/musicgen/
+  # の pin 連鎖は不変のまま）。
+  identity_manifest: examples/arrangement/midnight_signal/identity_manifest.form.yaml
+  capability_profile: config/capability_profiles/musicgen.yaml
+  generator: musicgen
+  takes: 2  # n=2 (全数)
+
+# ABBA/均衡ゲート非適用の宣言と根拠（#191 と同文）: 本バッチは決定論 seed による
+# スクリプト生成のみで構成され、人手評価や比較呈示の順序に由来するドリフト機構
+# （呈示順バイアス等）がそもそも存在しない。ABBA counter-balancing はそのような
+# 呈示順バイアスを打ち消すための統制であり、本バッチには適用対象がない。
+counter_balancing:
+  applies: false
+  rationale: >-
+    Deterministic seeded script generation has no presentation-order drift
+    mechanism (no human rater, no A/B display order) for ABBA counter-balancing
+    to correct — the gate is inapplicable by construction, not skipped.
+
+model:
+  model_id: facebook/musicgen-small
+  model_revision: "4c8334b02c6ec4e8664a91979669a501ec497792"
+  interface: local-transformers
+  device: cpu
+  guidance_scale: 3.0
+  # #191 の 12.0s から拡大: 「form が存在する長尺 artifact」を狙う本バッチの核心
+  # パラメータ。MusicGen の実務上限に近い 30s を採用する
+  # （scripts/collect_ar4_observation.py の `--duration-seconds`、既定値 12.0 は
+  # 不変のまま本バッチのみ override）。
+  duration_seconds: 30.0
+
+# seed 系列: 8100 + take_index。#191 の AR4 専用レンジ (8000 + take_index) と
+# 非衝突の新レンジ（既存 sample_seed / perform_takes 既定 seed_base=5000 とも
+# 非衝突）。
+seeds:
+  take0: 8100
+  take1: 8101
+  formula: "8100 + take_index"
+
+# prompt の出所: performance_package.json（Phase 0 でコンパイル済み・sha256 を pin）
+# の prompt.text ペイロードそのもの。生成スクリプトはこの文字列を再導出せず読み取るのみ。
+prompt_source:
+  compiled_via: >-
+    svprpe package examples/arrangement/midnight_signal/composition_score.yaml
+    examples/arrangement/midnight_signal/identity_manifest.form.yaml
+    examples/arrangement/midnight_signal/edm.identity.musicgen.arrangement.yaml
+    --capability-profile config/capability_profiles/musicgen.yaml
+    --output-dir <output-dir>
+  performance_package_sha256: c918300473fa6040757338df2c1cea740a8e1f205b226400cca4f01b6129303d
+  compilation_report_sha256: d5bf4c6e68d522eab3f327e94a38d2c28c560f25fe203c85ae9f2ae233089208
+  prompt_field: "performance_package.json#/prompt/text"
+  note: >-
+    Prompt text is not re-derived from the score; it is read verbatim from the
+    already-compiled package (chain honesty: score -> package -> generator).
+    ar4f_takes_manifest.json's `prompt` field is the same string, copied
+    verbatim by scripts/collect_ar4_observation.py's `load_package_prompt`.
+    `svprpe verify` against this package + --manifest identity_manifest.form.yaml
+    passed all checks (16/16) before generation started.
+
+# 観測手順
+observation_procedure:
+  command: >-
+    svprpe observe <package.json> <take.wav>
+    --manifest examples/arrangement/midnight_signal/identity_manifest.form.yaml
+    -o ar4f_observation_take{N}.json
+
+# 判定の事前登録（Design Memo「判定の事前登録」節をそのまま記録する。どの結果でも
+# 成果 — preserved を成功条件にしない。harmony と同じ 3 分岐に加え、本バッチ固有の
+# 律速確定条件も明記する）:
+adherence_determination_branches:
+  - adherence_status: preserved
+    determination: exact_match
+    meaning: "sensor ran and measured an exact identity match"
+  - adherence_status: not_observed
+    determination: deferred
+    meaning: "sensor ran but did not match exactly"
+  - adherence_status: not_observed
+    determination: no_sensor
+    meaning: "no sensor wired for the anchor's domain"
+success_criterion: >-
+  Instrument data acquisition itself is the success criterion — obtaining a
+  real observation_report.json for real 30s generated audio for the first
+  time, exercising the structure sensor (section-map/0.1) against a real
+  generative artifact for the first time (arrangement_identity_planning.md
+  §5, AR2-3 解凍条件 (b)). No particular determination is required for
+  success: a "MusicGen 30s does not express form" result (e.g. observed
+  section count far below the canonical 4) is registered in advance as an
+  equally valid outcome — it would confirm condition (b) as the rate-limiter
+  and become the basis for a Suno commission instead. structure センサーの
+  observe 結果（preserved / not_observed 双方の measurements）をそのまま記録し、
+  Fable がこのデータを判読した上で AR2-3 の解凍再判断を別途行う（本バッチの
+  スコープ外）。

@@ -1,0 +1,26 @@
+# AR4 form 実観測バッチ Phase 3: 決定論スポット検証（#191 前例の型）。canonical
+# n=2 バッチの take0/take1（全数）を、それぞれ別プロセス（`python3
+# scripts/collect_ar4_observation.py generate ...` の独立起動、canonical 生成とは
+# 別プロセス）で --take-index を 1 本ずつ指定し再生成し、sha256 を比較した。
+# 不一致でも捏造せず記録して続行する方針だったが、本バッチでは両テイクとも
+# 完全一致した。
+schema_version: "1.0"
+method: >-
+  fresh-process re-generation: each of the n=2 canonical takes was regenerated
+  via a separate `python3 scripts/collect_ar4_observation.py generate ...`
+  process invocation (same --package / --model-id / --model-revision /
+  --seed-base / --duration-seconds / --guidance-scale as the canonical batch,
+  restricted to a single --take-index), and the resulting audio_sha256 was
+  compared against the canonical manifest's pinned value.
+checks:
+  - sample_id: take0
+    seed: 8100
+    pinned_sha256: 21bb3bb6d79830322bb2a6730c84e25598e51f7c176e81fb304a8cff5c247010
+    regenerated_sha256: 21bb3bb6d79830322bb2a6730c84e25598e51f7c176e81fb304a8cff5c247010
+    match: true
+  - sample_id: take1
+    seed: 8101
+    pinned_sha256: 64e50cf1046d58236c5576dc396d389bf43724e8dd8a6f6ebe40ab7ff8c10c7b
+    regenerated_sha256: 64e50cf1046d58236c5576dc396d389bf43724e8dd8a6f6ebe40ab7ff8c10c7b
+    match: true
+summary: "2/2 fresh-process regenerations matched the canonical pinned sha256 exactly."

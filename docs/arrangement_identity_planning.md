@@ -250,6 +250,33 @@ identity anchor の stable ID・section policy の意味論には一切触れて
 anchor の stable ID / section policy 確定）とは独立。詳細:
 [`cli.md`](cli.md) の `svprpe observe` 節。
 
+2026-07-20: AR2-3 解凍条件 (b)（form が存在する長尺 artifact の用意）を
+MusicGen 30s で実測した（Design Memo `design_memo_ar4_form.md`）。
+`identity_manifest.form.yaml`（既存 `identity_manifest.yaml` + structure anchor
+1 件。既存 manifest は不変）+ `identity/section_map.json`
+（正典セクション名は `composition_score.yaml` の `structure` 欄
+`[intro, verse, chorus, bridge]` からの機械転記）で package した performance
+package から、`facebook/musicgen-small@4c8334b0…`・CPU・guidance_scale=3.0・
+**30s**・seed 8100/8101 で n=2 take を実生成した
+（決定論スポット検証 2/2 一致、`svprpe verify` 16/16 pass）。両 take とも
+`svprpe observe` の D-3 provenance chain 検証を通過し（exit 0）、structure
+anchor は実測されたが `not_observed`/`deferred` のまま — take0 は
+observed raw sections `[Intro, Chorus, Chorus, Bridge, Outro]`
+（正規化後 `position_match_rate=0.6`）、take1 は `[Intro, Outro]`
+（正規化後 `position_match_rate=0.25`）で、いずれも正典 4 セクション
+`[intro, verse, chorus, bridge]` と `sequence_exact_match=False`。harmony も
+両 take とも `full_cycles=0`（0 cycle 一致）。**判定の事前登録どおり
+preserved を成功条件にしていない**: この結果自体が
+「MusicGen 30s は正典 verse を一度も表現せず、30s クリップでも section 系列を
+完全再現しない」という律速確定の実測材料であり、条件 (b) の充足として記録する
+（preserved の獲得ではなく、計器で実データを取得できたことが成果— D-1 の
+事前登録どおり）。AR2-3 の解凍可否そのものの判断はこの実測データをもって
+別途行う（本バッチのスコープ外）。成果物一式:
+`examples/arrangement/midnight_signal/observed/musicgen_form/`
+（`ar4f_plan.yaml` / `ar4f_takes_manifest.json` /
+`ar4f_observation_take{0,1}.json` / `ar4f_generation_timestamps.yaml` /
+`ar4f_determinism_spot_check.yaml`。WAV は DD-A によりコミット対象外）。
+
 ## 6. 実装状況
 
 | Phase | 主成果物 | 状態 |
@@ -257,10 +284,10 @@ anchor の stable ID / section policy 確定）とは独立。詳細:
 | AR0 | 本計画文書 | 完了 |
 | AR1 | resolver / CLI / bundle / diff / EDM-Jazz fixture | 完了 (#175–#177) |
 | AR2-1/2 | IdentityManifest / PreservationContract | 完了 (#178, #179, #181) |
-| AR2-3 | structure anchor policy | 保留（2026-07-20: 解凍条件 (a) structure センサー配線は充足。残るは (b) 長尺 form artifact の用意） |
+| AR2-3 | structure anchor policy | 保留（2026-07-20: 解凍条件 (a)(b) とも実測材料は揃った — (a) structure センサー配線、(b) MusicGen 30s form 実測 n=2。解凍可否の判断は別途） |
 | AR3-1 | InputCapabilityProfile | 完了 (#180, #181) |
 | AR3-2 | PerformancePackage compiler + 縦切り E2E fixture | 実装済み（E2E fixture 追加 2026-07-17） |
-| AR4 | generated-output identity observation | 計器配線済み。harmony + structure を実測（decisive synth E2E + 2026-07-19 MusicGen 実生成物 n=2）。判定閾値は未定、実 Suno 生成物は未観測 |
+| AR4 | generated-output identity observation | 計器配線済み。harmony + structure を実測（decisive synth E2E + 2026-07-19 MusicGen 12s n=2 + 2026-07-20 MusicGen 30s form n=2）。判定閾値は未定、実 Suno 生成物は未観測 |
 
 2026-07-17: bundle/report に `content_digest`（内容指紋）と、
 `CompilationReport` 限定の `invocation_provenance.compiler`（実行環境の監査記録、
