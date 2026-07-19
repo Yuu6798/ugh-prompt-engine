@@ -466,6 +466,62 @@ connection points are `eval/lyrics_match.py` / `rpe/learned/lyrics_adapter.py` a
 re-running `observe` against the same `-o` path overwrites it (unlike
 `performance_package.json`'s byte-pin/builds-root immutability contract).
 
+### `svprpe verify <package.json> --manifest <identity_manifest.yaml>`
+
+Exhaustively check a single `PerformancePackage`'s own internal consistency —
+read-only, writes nothing, ever:
+
+```bash
+svprpe verify build/performance_package.json \
+  --manifest examples/arrangement/midnight_signal/identity_manifest.yaml
+```
+
+The first argument accepts either the `performance_package.json` path directly or
+its containing directory. Where `observe` stops at *identifying* the observation
+target (manifest sha256 / `work_id` / `anchor_statuses` id set — PR #187 review
+round 16), `verify` picks up exactly there and checks everything else a `package` +
+its sibling `compilation_report.json` + the `--manifest` chain declare about
+themselves, in four groups:
+
+1. **V1 — package load**: not a symlink/non-regular file, reads, and validates
+   against `PerformancePackage`'s schema (which already enforces
+   `channel_artifacts` cross-references via `_validate_delivery_references` — not
+   re-checked here).
+2. **V2 — compilation report**: the co-located `compilation_report.json` is
+   present, valid, and its `work_id` / `generator` / `generator_variant` /
+   `inputs` / `package_sha256` / `content_digest` all agree with the package (the
+   digest is independently recomputed via `arrange.bundle.compute_content_digest`,
+   not merely read back).
+3. **V3 — identity manifest chain**: the `--manifest` file sha256-pins to
+   `package.inputs.identity_manifest.sha256`, parses and hash-verifies every
+   source/anchor artifact it declares (via the same
+   `parse_identity_manifest_with_artifacts` `observe` uses), and its `work_id` /
+   anchor id set agree with the package.
+4. **V4 — channel_artifacts**: every entry's `artifact_base.locator` resolves
+   (relative to the package directory) to an existing directory — legitimately
+   *outside* the package directory, `".."` being the normal shape, so no
+   confinement applies there — and its `artifact` resolves confined under that
+   base directory (`arrange.pathsafe.resolve_confined`), its bytes hash to the
+   declared `artifact_sha256`, and its `anchor_id` is one the manifest actually
+   declares.
+
+Every group's checks are collected in full before anything is printed — a single
+failure never hides the rest (exit `1` if *any* check across all groups fails).
+The only exception is a **structural** load failure — the package file itself
+failing to parse/validate (V1), or the manifest failing to parse/validate
+against `IdentityManifest`'s schema (V3; artifact hash mismatches are ordinary
+collected failures, not structural) — which aborts every check that
+depends on the missing object (V1 failing skips V2-V4 entirely; V3 failing skips
+only V4).
+
+Out of scope, left to follow-up work: a recursive audit of an entire
+`--builds-root` tree (a distinct, larger surface than a single package — the
+no-op-publish blessing check `arrange`/`package` already do at L209 above is
+scoped to one digest directory, not this); cross-checking against an
+`ObservationReport` sidecar (AR2-3 depends on structure-anchor policy that
+hasn't landed); repairing anything found broken; and any musical/perceptual
+verdict — `verify` only ever reports structural pass/fail.
+
 ### `svprpe measure <audio>`
 
 Measure the seven required `CompositionScore.physical` fields from one audio file.
