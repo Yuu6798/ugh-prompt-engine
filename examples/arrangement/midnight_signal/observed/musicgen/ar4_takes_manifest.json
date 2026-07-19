@@ -4,7 +4,15 @@
   "fixture_id": "ar4_musicgen_midnight_signal_edm",
   "performance_package": {
     "sha256": "da3e726f9f149e600b9cc6d1c9c58bbb03a606b11c7d6d8ed959b2e6a578e57f",
-    "note": "performance_package.json itself is not committed (ephemeral build artifact, byte-for-byte reproducible via `svprpe package` from the committed score/identity_manifest/arrangement/capability-profile inputs recorded in ar4_plan.yaml#prompt_source.compiled_via); only its sha256 is pinned here as provenance, matching the WAV audio_sha256-pin convention (DD-A)."
+    "build_recipe": {
+      "inputs": {
+        "score": "examples/arrangement/midnight_signal/composition_score.yaml",
+        "identity_manifest": "examples/arrangement/midnight_signal/identity_manifest.yaml",
+        "arrangement": "examples/arrangement/midnight_signal/edm.identity.musicgen.arrangement.yaml",
+        "capability_profile": "config/capability_profiles/musicgen.yaml"
+      },
+      "compile_command": "svprpe package examples/arrangement/midnight_signal/composition_score.yaml examples/arrangement/midnight_signal/identity_manifest.yaml examples/arrangement/midnight_signal/edm.identity.musicgen.arrangement.yaml --capability-profile config/capability_profiles/musicgen.yaml --output-dir <output-dir>"
+    }
   },
   "prompt": "Brightness bright. melodic_edm / progressive_house track. C minor. intro: low density, sub bass only; role=establish loneliness. verse: sparse drums, short phrases, clear rests; role=restrained movement. chorus: full energy, wide stereo, focused layers; role=emotional release. bridge: no kick, no bass, minimal texture; role=near silence and reflection. Wide stereo. Introspective night drive atmosphere. 132 BPM. 4/4 time. Active rate 0.90-0.93. Valley depth 0.15-0.25.",
   "model_id": "facebook/musicgen-small",

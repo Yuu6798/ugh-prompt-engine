@@ -59,6 +59,18 @@ DEFAULT_MODEL_ID = "facebook/musicgen-small"
 DEFAULT_SEED_BASE = 8000  # AR4 専用レンジ（sample_seed の 1000+ / perform_takes の
 # 既定 seed_base=5000 と衝突しない。ar4_plan.yaml の seeds.formula と同一定義）
 
+# `performance_package` provenance recording 用の既定入力（repo 相対）。
+# ar4_plan.yaml#scope / #prompt_source.compiled_via と同一の値 — `--package` が
+# 指す performance_package.json 自体は scratch ビルド成果物でコミット対象外だが、
+# これらの入力からの再現レシピは repo 相対パスなのでマシン非依存に記録できる
+# （Codex P2 review #191: `str(package_path)` は絶対パスでマシン固有だった）。
+DEFAULT_SCORE = ROOT / "examples/arrangement/midnight_signal/composition_score.yaml"
+DEFAULT_IDENTITY_MANIFEST = ROOT / "examples/arrangement/midnight_signal/identity_manifest.yaml"
+DEFAULT_ARRANGEMENT = (
+    ROOT / "examples/arrangement/midnight_signal/edm.identity.musicgen.arrangement.yaml"
+)
+DEFAULT_CAPABILITY_PROFILE = ROOT / "config/capability_profiles/musicgen.yaml"
+
 
 def _utc_now_iso() -> str:
     """実測 UTC タイムスタンプ（秒精度、`date -u` 相当）。推定値は使わない。"""
@@ -183,12 +195,91 @@ def generate_ar4_takes(
     }
 
 
+def _repo_relative(path: Path) -> Optional[str]:
+    """`path` を repo-root 相対の POSIX パスへ変換する。
+
+    リポジトリ外のパス（scratch ビルドディレクトリ等）は ``None`` を返す —
+    マシン固有の絶対パスへフォールバックしない（D-4: 値の捏造をしない代わりに
+    欠落を許容する）。
+    """
+    try:
+        return path.resolve().relative_to(ROOT).as_posix()
+    except ValueError:
+        return None
+
+
+def build_package_provenance(
+    package_path: Path,
+    package_sha256: str,
+    *,
+    score: Optional[Path] = None,
+    identity_manifest: Optional[Path] = None,
+    arrangement: Optional[Path] = None,
+    capability_profile: Optional[Path] = None,
+) -> dict[str, Any]:
+    """`performance_package` provenance フィールドを組み立てる（sha256 pin +
+    マシン非依存な安定レシピ）。
+
+    ``str(package_path)`` はマシン固有の絶対パスになるため記録しない
+    （Codex P2 review #191, discussion_r3610116228）。優先順位:
+
+    1. ``package_path`` 自体がリポジトリ内ファイルなら、その repo-root 相対
+       パスをそのまま記録する。
+    2. リポジトリ外（AR4 runbook の通常経路である scratch ビルド）の場合、
+       ``score``/``identity_manifest``/``arrangement``/``capability_profile``
+       が全て与えられ、かつ全て repo 相対に解決できれば、それらの入力パスと
+       コンパイルコマンドからなる構造化レシピ（``build_recipe``）を記録する。
+    3. 上記いずれも成立しない場合は sha256 のみを provenance として残す
+       （部分的な入力から不完全なレシピを捏造しない）。
+    """
+    provenance: dict[str, Any] = {"sha256": package_sha256}
+
+    repo_relative_package = _repo_relative(package_path)
+    if repo_relative_package is not None:
+        provenance["repo_relative_path"] = repo_relative_package
+        return provenance
+
+    recipe_paths = {
+        "score": score,
+        "identity_manifest": identity_manifest,
+        "arrangement": arrangement,
+        "capability_profile": capability_profile,
+    }
+    if all(path is not None for path in recipe_paths.values()):
+        repo_relative_inputs = {
+            name: _repo_relative(path) for name, path in recipe_paths.items() if path is not None
+        }
+        if all(value is not None for value in repo_relative_inputs.values()):
+            provenance["build_recipe"] = {
+                "inputs": repo_relative_inputs,
+                "compile_command": (
+                    "svprpe package {score} {identity_manifest} {arrangement} "
+                    "--capability-profile {capability_profile} --output-dir <output-dir>"
+                ).format(**repo_relative_inputs),
+            }
+            return provenance
+
+    provenance["note"] = (
+        "performance_package.json itself is not committed (ephemeral build "
+        "artifact, byte-for-byte reproducible via `svprpe package` from the "
+        "committed score/identity_manifest/arrangement/capability-profile "
+        "inputs recorded in ar4_plan.yaml#prompt_source.compiled_via); only "
+        "its sha256 is pinned here as provenance, matching the WAV "
+        "audio_sha256-pin convention (DD-A)."
+    )
+    return provenance
+
+
 def build_takes_manifest(
     result: dict[str, Any],
     *,
     fixture_id: str,
     package_path: Path,
     package_sha256: str,
+    score: Optional[Path] = None,
+    identity_manifest: Optional[Path] = None,
+    arrangement: Optional[Path] = None,
+    capability_profile: Optional[Path] = None,
 ) -> dict[str, Any]:
     """`generate_ar4_takes` の戻り値から、コミット対象の
     ``ar4_takes_manifest.json`` 用ペイロード（timestamps を除く）を組み立てる。"""
@@ -196,10 +287,14 @@ def build_takes_manifest(
         "schema_version": SCHEMA_VERSION,
         "generator": GENERATOR,
         "fixture_id": fixture_id,
-        "performance_package": {
-            "path": str(package_path),
-            "sha256": package_sha256,
-        },
+        "performance_package": build_package_provenance(
+            package_path,
+            package_sha256,
+            score=score,
+            identity_manifest=identity_manifest,
+            arrangement=arrangement,
+            capability_profile=capability_profile,
+        ),
         "prompt": result["prompt"],
         "model_id": result["model_id"],
         "model_revision": result["model_revision"],
@@ -248,6 +343,10 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         fixture_id=args.fixture_id,
         package_path=args.package,
         package_sha256=package_sha256,
+        score=args.score,
+        identity_manifest=args.identity_manifest,
+        arrangement=args.arrangement,
+        capability_profile=args.capability_profile,
     )
     args.manifest_out.parent.mkdir(parents=True, exist_ok=True)
     args.manifest_out.write_text(
@@ -321,6 +420,34 @@ def main(argv: list[str] | None = None) -> int:
     )
     generate_parser.add_argument(
         "--fixture-id", type=str, default=DEFAULT_FIXTURE_ID, help="manifest の fixture_id"
+    )
+    generate_parser.add_argument(
+        "--score",
+        type=Path,
+        default=DEFAULT_SCORE,
+        help=(
+            "provenance recording 専用（生成には使わない — prompt は --package から"
+            "読む）: performance_package.json をコンパイルした score YAML のパス。"
+            "manifest の performance_package.build_recipe に repo 相対で記録する"
+        ),
+    )
+    generate_parser.add_argument(
+        "--identity-manifest",
+        type=Path,
+        default=DEFAULT_IDENTITY_MANIFEST,
+        help="provenance recording 専用: performance_package.json をコンパイルした identity manifest YAML のパス",
+    )
+    generate_parser.add_argument(
+        "--arrangement",
+        type=Path,
+        default=DEFAULT_ARRANGEMENT,
+        help="provenance recording 専用: performance_package.json をコンパイルした arrangement spec YAML のパス",
+    )
+    generate_parser.add_argument(
+        "--capability-profile",
+        type=Path,
+        default=DEFAULT_CAPABILITY_PROFILE,
+        help="provenance recording 専用: performance_package.json をコンパイルした capability profile YAML のパス",
     )
     generate_parser.set_defaults(func=_cmd_generate)
 

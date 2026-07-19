@@ -150,6 +150,12 @@ def test_determinism_spot_check_matches_manifest_pinned_sha256() -> None:
     for check in spot_check["checks"]:
         assert check["pinned_sha256"] == manifest_sha_by_id[check["sample_id"]]
         assert check["match"] == (check["pinned_sha256"] == check["regenerated_sha256"])
+        # 本 fixture は fresh-process 2/2 byte 一致を canonical の根拠として主張して
+        # いるため、`match` の自己整合性だけでなく一致そのものを enforce する —
+        # 将来 AR4 が再生成されて乖離した場合にこのゲートで fail させる
+        # （Codex P2 review #191, discussion_r3610116230）。
+        assert check["match"] is True
+        assert check["regenerated_sha256"] == check["pinned_sha256"]
 
 
 # --- 6. 事前登録が生成に先行する（実測 UTC タイムスタンプで裏付け）------------------
