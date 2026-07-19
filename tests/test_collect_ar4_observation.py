@@ -33,6 +33,7 @@ from scripts.collect_ar4_observation import (
     ROOT,
     _generate_output_paths,
     _reject_generate_output_collision,
+    _verify_recipe_input,
     build_package_provenance,
     build_takes_manifest,
     main,
@@ -272,6 +273,33 @@ def test_build_package_provenance_rejects_nonexistent_repo_relative_recipe_input
     assert "note" in provenance
     assert "does not exist" in provenance["note"]
     assert "score:" in provenance["note"]
+    # Codex 9R P2 review #191, discussion_r3610299285: `bogus_score` は ROOT 配下
+    # なので理由文字列は repo 相対パスで表現される — マシン固有の絶対パス
+    # (`str(bogus_score)` / `str(ROOT)` / `/tmp/`) が note に焼き込まれてはならない。
+    assert str(bogus_score) not in provenance["note"]
+    assert str(ROOT) not in provenance["note"]
+    assert "/tmp/" not in provenance["note"]
+    assert "examples/arrangement/midnight_signal/does_not_exist.yaml" in provenance["note"]
+
+
+def test_verify_recipe_input_missing_file_outside_repo_reports_basename_only() -> None:
+    """`_verify_recipe_input` の失敗理由はマシン固有の絶対パスを漏らさない
+    （Codex 9R P2 review #191, discussion_r3610299285）。`build_package_provenance`
+    の呼び出し経路では 4 入力すべてが repo 相対に解決できた場合のみ
+    `_verify_recipe_input` へ到達する（リポジトリ外のパスが1つでもあれば
+    その手前の repo-relative チェックで sha256-only フォールバックへ落ちる）ため、
+    ここでは `_verify_recipe_input` 自体を直接呼び、``_repo_relative`` が
+    ``None`` を返すケース（リポジトリ外パス）のフォールバック表現を単体で
+    検証する。"""
+    outside_repo_path = Path("/tmp/some_other_machine_dir/mistyped_score.yaml")
+    assert not outside_repo_path.is_file()  # 前提: このパスは本当に存在しない
+    raw_bytes, reason = _verify_recipe_input(outside_repo_path, pin_sha256=None)
+    assert raw_bytes is None
+    assert reason is not None
+    assert "does not exist" in reason
+    assert str(outside_repo_path) not in reason
+    assert "/tmp/" not in reason
+    assert reason.startswith("mistyped_score.yaml")
 
 
 def test_build_package_provenance_rejects_pin_mismatch() -> None:
@@ -301,6 +329,11 @@ def test_build_package_provenance_rejects_pin_mismatch() -> None:
     assert "note" in provenance
     assert "identity_manifest:" in provenance["note"]
     assert "does not match package-pinned sha256" in provenance["note"]
+    # Codex 9R P2 review #191, discussion_r3610299285: pin 不一致理由も repo 相対
+    # パスで表現し、マシン固有の絶対パスを note に焼き込まない。
+    assert str(DEFAULT_IDENTITY_MANIFEST) not in provenance["note"]
+    assert str(ROOT) not in provenance["note"]
+    assert "/tmp/" not in provenance["note"]
 
 
 def test_build_package_provenance_emits_recipe_when_pins_match() -> None:

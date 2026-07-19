@@ -228,6 +228,24 @@ def _repo_relative(path: Path) -> Optional[str]:
         return None
 
 
+def _display_path_for_reason(path: Path) -> str:
+    """検証失敗理由（`performance_package.note` に直列化されうる）に埋め込む
+    人間可読なパス表現。``str(path)`` をそのまま使うとマシン固有の絶対パスが
+    committed provenance artifact に焼き込まれてしまう（Codex 9R P2 review
+    #191, discussion_r3610299285）ため、ここで正規化する:
+
+    - リポジトリ配下なら repo-root 相対の POSIX パス（``_repo_relative`` と
+      同じ変換）を返す。
+    - リポジトリ外（誤指定パス等）なら、絶対パスを漏らさずファイル名のみを
+      返す — 「存在しない」ことだけを報告できれば十分で、マシン固有の
+      ディレクトリ構造を note に残す必要はない。
+    """
+    relative = _repo_relative(path)
+    if relative is not None:
+        return relative
+    return path.name
+
+
 def _package_input_pin(package_data: dict[str, Any], input_name: str) -> Optional[str]:
     """`performance_package.json` の `inputs.<input_name>.sha256` pin を取得する。
 
@@ -325,13 +343,13 @@ def _verify_recipe_input(
     の sha256 記録にそのまま再利用できる。
     """
     if not path.is_file():
-        return None, f"{path} does not exist or is not a regular file"
+        return None, f"{_display_path_for_reason(path)} does not exist or is not a regular file"
     raw_bytes = path.read_bytes()
     if pin_sha256 is not None:
         actual_sha256 = hashlib.sha256(raw_bytes).hexdigest()
         if actual_sha256 != pin_sha256:
             return raw_bytes, (
-                f"{path} sha256 {actual_sha256} does not match "
+                f"{_display_path_for_reason(path)} sha256 {actual_sha256} does not match "
                 f"package-pinned sha256 {pin_sha256}"
             )
     return raw_bytes, None
@@ -706,7 +724,7 @@ def build_package_provenance(
                                 # emit a recipe entry without a verified sha256.
                                 failures.append(
                                     "device_profile: "
-                                    f"{device_profile_absolute_path} does not exist "
+                                    f"{device_profile_relative_path} does not exist "
                                     "or is not a regular file (unexpected: "
                                     "load_device_profile reported it as loaded)"
                                 )

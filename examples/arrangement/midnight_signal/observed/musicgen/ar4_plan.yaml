@@ -1,6 +1,5 @@
-# AR4 実観測バッチ 事前登録（Design Memo:
-# /tmp/claude-0/-home-user-ugh-prompt-engine/a0e0f92b-e776-5a6f-a1cf-8505d12bbca8/scratchpad/design_memo_ar4_musicgen.md、
-# 2026-07-19 Fable 設計）。生成開始前に内容確定（AGENTS.md §8「ローカル決定論バッチの
+# AR4 実観測バッチ 事前登録（Design Memo: AR4 Design Memo (Fable, 2026-07-19,
+# PR #191)）。生成開始前に内容確定（AGENTS.md §8「ローカル決定論バッチの
 # canonical 条件」1 項）。plan_confirmed_at_utc は本ファイルを確定コミットする直前に
 # `date -u` で実測した値であり、後続の Phase 2 生成タイムスタンプ
 # （ar4_generation_timestamps.yaml）より必ず先行する（受け入れ条件: 事前登録 -> 生成
