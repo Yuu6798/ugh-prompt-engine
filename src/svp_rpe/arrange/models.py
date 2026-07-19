@@ -18,8 +18,15 @@ from svp_rpe.compose.models import ChordSpec, CompositionScore, StructureSection
 
 PreservationMode = Literal["hard", "elastic", "free"]
 
-# AR2-2: identity anchor に許容する変形の語彙。planning 記載の 7 種に限定する
-# （lyrics 等への語彙追加は将来の Design Memo 経由。ここで勝手に増やさない）。
+# AR2-2/AR2-3: identity anchor に許容する変形の語彙。
+# AR2-2 が定義した最初の 7 語（octave_displacement..instrumental_break）に、
+# AR2-3（design_memo_ar2_3.md）が structure domain 向けに 3 語を追加した:
+# section_insertion / section_omission / section_repetition。この 3 語は
+# 推測補完ではなく、#193 の実 form 実測（MusicGen 30s ×
+# examples/arrangement/midnight_signal/observed/musicgen_form/）が観測した
+# 変形カテゴリそのもの — 挿入（正典に無い outro の観測）・欠落（verse が
+# 2 take とも一度も観測されない）・反復（chorus×2）に由来する。
+# 語彙追加は Design Memo 経由に限る（ここで勝手に増やさない）。
 AllowedTransformation = Literal[
     "octave_displacement",
     "ornamentation",
@@ -28,6 +35,9 @@ AllowedTransformation = Literal[
     "functional_substitution",
     "intro_extension",
     "instrumental_break",
+    "section_insertion",
+    "section_omission",
+    "section_repetition",
 ]
 
 # pydantic>=2.0 下限では pydantic.JsonValue (2.5+) が使えないためローカル定義。

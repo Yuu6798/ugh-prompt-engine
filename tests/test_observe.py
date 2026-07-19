@@ -33,6 +33,7 @@ from svp_rpe.arrange.observe import (
     SensorRecord,
     _cycle_alignment,
     _load_section_map,
+    _load_section_map_v2,
     _normalize_canonical_section_label,
     _normalize_observed_section_label,
     _observe_anchor,
@@ -43,6 +44,7 @@ from svp_rpe.arrange.observe import (
     is_structure_sensor_anchor,
 )
 from svp_rpe.arrange.package import PerformancePackage
+from svp_rpe.arrange.section_map import SectionMapArtifactV2
 from svp_rpe.cli import app
 from svp_rpe.compose.models import CompositionScore
 from svp_rpe.perform import FAITHFUL_TAKE, perform, wav_bytes
@@ -1098,6 +1100,291 @@ def test_load_section_map_rejects_missing_schema_version() -> None:
     artifact_bytes = json.dumps({"sections": ["intro"]}).encode("utf-8")
     with pytest.raises(ValueError):
         _load_section_map(artifact_bytes, artifact_path=Path("section_map.json"))
+
+
+# --- AR2-3: section-map/0.2 (stable id + label) ------------------------------
+
+
+def _section_map_v2_artifact_bytes(
+    entries: list[tuple[str, str]],
+    *,
+    schema_version: str = "section-map/0.2",
+) -> bytes:
+    payload = {
+        "schema_version": schema_version,
+        "sections": [{"id": section_id, "label": label} for section_id, label in entries],
+    }
+    return json.dumps(payload).encode("utf-8")
+
+
+def test_is_structure_sensor_anchor_accepts_section_map_0_2_format_version() -> None:
+    """AR2-3: `is_structure_sensor_anchor` widens from the single
+    `section-map/0.1` format_version it accepted before this PR to also route
+    `section-map/0.2` anchors to the structure sensor."""
+    anchor = _anchor(
+        "structure",
+        "structure",
+        "section_map.json",
+        "section_map",
+        format_version="section-map/0.2",
+    )
+    assert is_structure_sensor_anchor(anchor) is True
+
+
+def test_observe_structure_0_2_records_canonical_section_ids_as_additional_raw_value() -> None:
+    """AR2-3 AC: a section-map/0.2 anchor's observation carries every field a
+    0.1 anchor's would (label-based comparison, unchanged), plus a
+    `canonical_section_ids` raw value — the artifact's declared ids in
+    artifact order, unnormalized. The D-1 gate (`sequence_exact_match`) is
+    still computed purely from labels; the ids never participate in it."""
+    entries = [("sec-intro", "Intro"), ("sec-verse", "VERSE"), ("sec-chorus", "Chorus")]
+    observed_raw = ["intro", "verse1", "chorus"]
+    anchor = _anchor(
+        "structure",
+        "structure",
+        "section_map.json",
+        "section_map",
+        format_version="section-map/0.2",
+    )
+    bundle = _bundle_with_structure(observed_raw)
+    artifact_bytes = _section_map_v2_artifact_bytes(entries)
+
+    observation = _observe_structure(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        bundle=bundle,
+        artifact_bytes=artifact_bytes,
+    )
+
+    assert observation.measurements["canonical_sections"] == ["intro", "verse", "chorus"]
+    assert observation.measurements["canonical_section_ids"] == [
+        "sec-intro",
+        "sec-verse",
+        "sec-chorus",
+    ]
+    assert observation.measurements["observed_sections"] == ["intro", "verse", "chorus"]
+    assert observation.measurements["sequence_exact_match"] is True
+    assert observation.adherence_status == "preserved"
+    assert observation.determination == "exact_match"
+
+
+def test_observe_structure_0_2_mismatch_still_uses_labels_for_d1_gate() -> None:
+    """A section-map/0.2 anchor whose labels don't match the observed
+    sequence stays `not_observed`/`deferred` exactly like a 0.1 mismatch —
+    `canonical_section_ids` is recorded but does not change the gate."""
+    entries = [("sec-intro", "intro"), ("sec-verse", "verse"), ("sec-chorus", "chorus")]
+    observed_raw = ["intro", "chorus", "verse"]
+    anchor = _anchor(
+        "structure",
+        "structure",
+        "section_map.json",
+        "section_map",
+        format_version="section-map/0.2",
+    )
+    bundle = _bundle_with_structure(observed_raw)
+    artifact_bytes = _section_map_v2_artifact_bytes(entries)
+
+    observation = _observe_structure(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        bundle=bundle,
+        artifact_bytes=artifact_bytes,
+    )
+
+    assert observation.measurements["canonical_section_ids"] == [
+        "sec-intro",
+        "sec-verse",
+        "sec-chorus",
+    ]
+    assert observation.measurements["sequence_exact_match"] is False
+    assert observation.adherence_status == "not_observed"
+    assert observation.determination == "deferred"
+
+
+def test_observe_structure_0_1_measurements_never_gain_canonical_section_ids() -> None:
+    """Regression guard for the AR2-3 AC that 0.1 observations are byte-for-byte
+    unchanged: a section-map/0.1 anchor's measurements dict must never carry
+    the `canonical_section_ids` key, not even as `null` — its presence/absence
+    is how a reader tells the two format versions' reports apart."""
+    anchor = _anchor("structure", "structure", "section_map.json", "section_map")
+    bundle = _bundle_with_structure(["intro", "verse"])
+    artifact_bytes = _section_map_artifact_bytes(["intro", "verse"])
+
+    observation = _observe_structure(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        bundle=bundle,
+        artifact_bytes=artifact_bytes,
+    )
+
+    assert "canonical_section_ids" not in observation.measurements
+
+
+def test_observe_structure_format_version_0_1_declared_but_content_is_0_2_fails_closed() -> None:
+    """AR2-3 AC: a declared/actual `format_version`/`schema_version` mismatch
+    fails closed. Here the anchor declares `section-map/0.1` (routing to the
+    0.1 parser) but the artifact bytes actually carry `section-map/0.2`."""
+    anchor = _anchor(
+        "structure",
+        "structure",
+        "section_map.json",
+        "section_map",
+        format_version="section-map/0.1",
+    )
+    bad_bytes = _section_map_v2_artifact_bytes([("sec-intro", "intro")])
+
+    with pytest.raises(ValueError, match="section-map/0.2"):
+        _observe_structure(
+            anchor,
+            manifest_dir=FIXTURE_DIR / "identity",
+            work_id="midnight-signal",
+            bundle=_bundle_with_structure(["intro"]),
+            artifact_bytes=bad_bytes,
+        )
+
+
+def test_observe_structure_format_version_0_2_declared_but_content_is_0_1_fails_closed() -> None:
+    """Mirror of the previous test: anchor declares `section-map/0.2`
+    (routing to the 0.2 parser) but the artifact bytes actually carry
+    `section-map/0.1`."""
+    anchor = _anchor(
+        "structure",
+        "structure",
+        "section_map.json",
+        "section_map",
+        format_version="section-map/0.2",
+    )
+    bad_bytes = _section_map_artifact_bytes(["intro"])
+
+    with pytest.raises(ValueError, match="section-map/0.1"):
+        _observe_structure(
+            anchor,
+            manifest_dir=FIXTURE_DIR / "identity",
+            work_id="midnight-signal",
+            bundle=_bundle_with_structure(["intro"]),
+            artifact_bytes=bad_bytes,
+        )
+
+
+def test_load_section_map_v2_rejects_duplicate_ids() -> None:
+    artifact_bytes = json.dumps(
+        {
+            "schema_version": "section-map/0.2",
+            "sections": [
+                {"id": "sec-1", "label": "intro"},
+                {"id": "sec-1", "label": "verse"},
+            ],
+        }
+    ).encode("utf-8")
+    with pytest.raises(ValueError, match="sec-1"):
+        _load_section_map_v2(artifact_bytes, artifact_path=Path("section_map.json"))
+
+
+def test_load_section_map_v2_rejects_empty_id() -> None:
+    artifact_bytes = json.dumps(
+        {"schema_version": "section-map/0.2", "sections": [{"id": "", "label": "intro"}]}
+    ).encode("utf-8")
+    with pytest.raises(ValueError):
+        _load_section_map_v2(artifact_bytes, artifact_path=Path("section_map.json"))
+
+
+def test_load_section_map_v2_rejects_empty_label() -> None:
+    artifact_bytes = json.dumps(
+        {"schema_version": "section-map/0.2", "sections": [{"id": "sec-1", "label": ""}]}
+    ).encode("utf-8")
+    with pytest.raises(ValueError):
+        _load_section_map_v2(artifact_bytes, artifact_path=Path("section_map.json"))
+
+
+def test_load_section_map_v2_rejects_empty_sections() -> None:
+    artifact_bytes = json.dumps(
+        {"schema_version": "section-map/0.2", "sections": []}
+    ).encode("utf-8")
+    with pytest.raises(ValueError):
+        _load_section_map_v2(artifact_bytes, artifact_path=Path("section_map.json"))
+
+
+def test_load_section_map_v2_rejects_unknown_key() -> None:
+    artifact_bytes = json.dumps(
+        {
+            "schema_version": "section-map/0.2",
+            "sections": [{"id": "sec-1", "label": "intro"}],
+            "extra": "no",
+        }
+    ).encode("utf-8")
+    with pytest.raises(ValueError):
+        _load_section_map_v2(artifact_bytes, artifact_path=Path("section_map.json"))
+
+
+def test_load_section_map_v2_rejects_unknown_schema_version() -> None:
+    artifact_bytes = _section_map_v2_artifact_bytes(
+        [("sec-1", "intro")], schema_version="section-map/0.1"
+    )
+    with pytest.raises(ValueError, match="section-map/0.1"):
+        _load_section_map_v2(artifact_bytes, artifact_path=Path("section_map.json"))
+
+
+# --- AR2-3 AC: `SectionMapArtifactV2` schema itself raises ValidationError -------
+
+
+def test_section_map_artifact_v2_rejects_duplicate_ids() -> None:
+    with pytest.raises(ValidationError, match="sec-1"):
+        SectionMapArtifactV2.model_validate(
+            {
+                "schema_version": "section-map/0.2",
+                "sections": [
+                    {"id": "sec-1", "label": "intro"},
+                    {"id": "sec-1", "label": "verse"},
+                ],
+            }
+        )
+
+
+def test_section_map_artifact_v2_rejects_empty_sections() -> None:
+    with pytest.raises(ValidationError):
+        SectionMapArtifactV2.model_validate({"schema_version": "section-map/0.2", "sections": []})
+
+
+def test_section_map_artifact_v2_rejects_empty_id() -> None:
+    with pytest.raises(ValidationError):
+        SectionMapArtifactV2.model_validate(
+            {"schema_version": "section-map/0.2", "sections": [{"id": "", "label": "intro"}]}
+        )
+
+
+def test_section_map_artifact_v2_rejects_empty_label() -> None:
+    with pytest.raises(ValidationError):
+        SectionMapArtifactV2.model_validate(
+            {"schema_version": "section-map/0.2", "sections": [{"id": "sec-1", "label": ""}]}
+        )
+
+
+def test_section_map_artifact_v2_rejects_unknown_key() -> None:
+    with pytest.raises(ValidationError):
+        SectionMapArtifactV2.model_validate(
+            {
+                "schema_version": "section-map/0.2",
+                "sections": [{"id": "sec-1", "label": "intro"}],
+                "extra": "no",
+            }
+        )
+
+
+def test_section_map_artifact_v2_accepts_well_formed_payload() -> None:
+    artifact = SectionMapArtifactV2.model_validate(
+        {
+            "schema_version": "section-map/0.2",
+            "sections": [
+                {"id": "sec-intro", "label": "intro"},
+                {"id": "sec-verse", "label": "verse"},
+            ],
+        }
+    )
+    assert [entry.id for entry in artifact.sections] == ["sec-intro", "sec-verse"]
+    assert [entry.label for entry in artifact.sections] == ["intro", "verse"]
 
 
 def test_observe_anchor_dispatches_structure_domain_with_non_section_map_artifact_type_to_unavailable() -> (

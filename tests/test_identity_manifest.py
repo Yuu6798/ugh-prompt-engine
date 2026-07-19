@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -182,6 +183,305 @@ def test_note_and_section_ref_are_optional_and_preserved(tmp_path: Path) -> None
     assert structure_anchor.section_ref == "verse-1"
     lyrics_anchor = next(a for a in manifest.anchors if a.id == "anchor-lyrics")
     assert lyrics_anchor.section_ref is None
+
+
+# --- AR2-3: section_ref resolution against section-map/0.2 structure anchors ----
+
+
+def _write_section_map_v2(
+    tmp_path: Path, entries: list[tuple[str, str]], *, filename: str
+) -> bytes:
+    payload = {
+        "schema_version": "section-map/0.2",
+        "sections": [{"id": section_id, "label": label} for section_id, label in entries],
+    }
+    data = json.dumps(payload).encode("utf-8")
+    (tmp_path / filename).write_bytes(data)
+    return data
+
+
+def _section_ref_manifest_dict(
+    *,
+    source_contents: bytes,
+    lyrics_contents: bytes,
+    lyrics_section_ref: str | None,
+    structure_anchors: list[dict[str, Any]],
+    work_id: str = "work-1",
+) -> dict[str, Any]:
+    """Minimal manifest dict dedicated to `section_ref` resolution tests — kept
+    separate from `_manifest_dict` (whose `anchor-structure` always declares
+    `section_ref: "verse-1"` with no `format_version`) so adding a
+    section-map/0.2 structure anchor to a test manifest never accidentally
+    makes that unrelated, pre-existing `section_ref` value subject to the new
+    resolution the anchor's presence now triggers."""
+    return {
+        "schema_version": "identity-manifest/0.1",
+        "meta": {"work_id": work_id, "version": "1"},
+        "source": {
+            "locator": "source.wav",
+            "sha256": _sha256(source_contents),
+            "rights_basis": "original",
+        },
+        "anchors": [
+            {
+                "id": "anchor-lyrics",
+                "domain": "lyrics",
+                "artifact": "lyrics.txt",
+                "artifact_type": "lyrics_text",
+                "media_type": "text/plain",
+                "sha256": _sha256(lyrics_contents),
+                "section_ref": lyrics_section_ref,
+                "required": True,
+            },
+            *structure_anchors,
+        ],
+    }
+
+
+def _write_section_ref_scenario(
+    tmp_path: Path,
+    *,
+    lyrics_section_ref: str | None,
+    section_maps: list[list[tuple[str, str]]],
+) -> Path:
+    """Write a minimal manifest + artifacts with one lyrics anchor (declaring
+    `lyrics_section_ref`) and one section-map/0.2 structure anchor per entry
+    in `section_maps` (each a list of `(id, label)` pairs)."""
+    source_contents = b"source-audio-bytes"
+    lyrics_contents = b"lyrics transcript content"
+    (tmp_path / "source.wav").write_bytes(source_contents)
+    (tmp_path / "lyrics.txt").write_bytes(lyrics_contents)
+
+    structure_anchors: list[dict[str, Any]] = []
+    for index, entries in enumerate(section_maps):
+        filename = f"section_map_v2_{index}.json"
+        artifact_bytes = _write_section_map_v2(tmp_path, entries, filename=filename)
+        structure_anchors.append(
+            {
+                "id": f"anchor-structure-v2-{index}",
+                "domain": "structure",
+                "artifact": filename,
+                "artifact_type": "section_map",
+                "media_type": "application/json",
+                "format_version": "section-map/0.2",
+                "sha256": _sha256(artifact_bytes),
+                "required": False,
+            }
+        )
+
+    manifest_dict = _section_ref_manifest_dict(
+        source_contents=source_contents,
+        lyrics_contents=lyrics_contents,
+        lyrics_section_ref=lyrics_section_ref,
+        structure_anchors=structure_anchors,
+    )
+    manifest_path = tmp_path / "identity.yaml"
+    _write_manifest(manifest_path, manifest_dict)
+    return manifest_path
+
+
+def test_section_ref_resolves_against_single_0_2_structure_anchor(tmp_path: Path) -> None:
+    manifest_path = _write_section_ref_scenario(
+        tmp_path,
+        lyrics_section_ref="sec-verse",
+        section_maps=[[("sec-intro", "intro"), ("sec-verse", "verse")]],
+    )
+
+    manifest = load_identity_manifest(manifest_path)
+
+    lyrics_anchor = next(a for a in manifest.anchors if a.id == "anchor-lyrics")
+    assert lyrics_anchor.section_ref == "sec-verse"
+
+
+def test_section_ref_dangling_reference_raises_when_0_2_anchor_present(
+    tmp_path: Path,
+) -> None:
+    manifest_path = _write_section_ref_scenario(
+        tmp_path,
+        lyrics_section_ref="sec-does-not-exist",
+        section_maps=[[("sec-intro", "intro"), ("sec-verse", "verse")]],
+    )
+
+    with pytest.raises(IdentityManifestError) as exc_info:
+        load_identity_manifest(manifest_path)
+
+    message = str(exc_info.value)
+    assert "work-1" in message
+    assert "anchor-lyrics" in message
+    assert "sec-does-not-exist" in message
+
+
+def test_section_ref_stays_opaque_without_any_0_2_structure_anchor(tmp_path: Path) -> None:
+    """No section-map/0.2 structure anchor at all: an unresolvable-looking
+    `section_ref` is left untouched (opaque), matching pre-AR2-3 behaviour."""
+    manifest_path = _write_section_ref_scenario(
+        tmp_path,
+        lyrics_section_ref="this-id-does-not-exist-anywhere",
+        section_maps=[],
+    )
+
+    manifest = load_identity_manifest(manifest_path)
+
+    lyrics_anchor = next(a for a in manifest.anchors if a.id == "anchor-lyrics")
+    assert lyrics_anchor.section_ref == "this-id-does-not-exist-anywhere"
+
+
+def test_section_ref_resolves_across_merged_ids_from_multiple_0_2_structure_anchors(
+    tmp_path: Path,
+) -> None:
+    manifest_path = _write_section_ref_scenario(
+        tmp_path,
+        lyrics_section_ref="sec-chorus",
+        section_maps=[
+            [("sec-intro", "intro"), ("sec-verse", "verse")],
+            [("sec-chorus", "chorus"), ("sec-outro", "outro")],
+        ],
+    )
+
+    manifest = load_identity_manifest(manifest_path)
+
+    lyrics_anchor = next(a for a in manifest.anchors if a.id == "anchor-lyrics")
+    assert lyrics_anchor.section_ref == "sec-chorus"
+
+
+def test_section_ref_duplicate_id_across_multiple_0_2_structure_anchors_raises(
+    tmp_path: Path,
+) -> None:
+    manifest_path = _write_section_ref_scenario(
+        tmp_path,
+        lyrics_section_ref=None,
+        section_maps=[
+            [("sec-intro", "intro"), ("sec-verse", "verse")],
+            [("sec-verse", "verse-again"), ("sec-outro", "outro")],
+        ],
+    )
+
+    with pytest.raises(IdentityManifestError) as exc_info:
+        load_identity_manifest(manifest_path)
+
+    message = str(exc_info.value)
+    assert "work-1" in message
+    assert "sec-verse" in message
+
+
+def test_section_ref_none_is_never_validated_even_with_0_2_anchor_present(
+    tmp_path: Path,
+) -> None:
+    """`section_ref: null` (no reference declared) is always fine, regardless
+    of whether the manifest has a section-map/0.2 structure anchor — only
+    *non-None* `section_ref` values are resolved/validated."""
+    manifest_path = _write_section_ref_scenario(
+        tmp_path,
+        lyrics_section_ref=None,
+        section_maps=[[("sec-intro", "intro")]],
+    )
+
+    manifest = load_identity_manifest(manifest_path)
+
+    lyrics_anchor = next(a for a in manifest.anchors if a.id == "anchor-lyrics")
+    assert lyrics_anchor.section_ref is None
+
+
+def test_section_ref_own_structure_anchor_is_also_resolved(tmp_path: Path) -> None:
+    """A structure anchor's own `section_ref` (e.g. one 0.2 section map
+    referencing an id declared by another) is resolved too — resolution
+    applies to every anchor's `section_ref`, not just non-structure anchors."""
+    source_contents = b"source-audio-bytes"
+    lyrics_contents = b"lyrics transcript content"
+    (tmp_path / "source.wav").write_bytes(source_contents)
+    (tmp_path / "lyrics.txt").write_bytes(lyrics_contents)
+    artifact_bytes = _write_section_map_v2(
+        tmp_path, [("sec-intro", "intro"), ("sec-verse", "verse")], filename="section_map_v2.json"
+    )
+
+    manifest_dict = {
+        "schema_version": "identity-manifest/0.1",
+        "meta": {"work_id": "work-1", "version": "1"},
+        "source": {
+            "locator": "source.wav",
+            "sha256": _sha256(source_contents),
+            "rights_basis": "original",
+        },
+        "anchors": [
+            {
+                "id": "anchor-lyrics",
+                "domain": "lyrics",
+                "artifact": "lyrics.txt",
+                "artifact_type": "lyrics_text",
+                "media_type": "text/plain",
+                "sha256": _sha256(lyrics_contents),
+                "required": True,
+            },
+            {
+                "id": "anchor-structure-v2",
+                "domain": "structure",
+                "artifact": "section_map_v2.json",
+                "artifact_type": "section_map",
+                "media_type": "application/json",
+                "format_version": "section-map/0.2",
+                "sha256": _sha256(artifact_bytes),
+                "section_ref": "sec-intro",
+                "required": False,
+            },
+        ],
+    }
+    manifest_path = tmp_path / "identity.yaml"
+    _write_manifest(manifest_path, manifest_dict)
+
+    manifest = load_identity_manifest(manifest_path)
+
+    structure_anchor = next(a for a in manifest.anchors if a.id == "anchor-structure-v2")
+    assert structure_anchor.section_ref == "sec-intro"
+
+
+def test_section_map_v2_anchor_with_invalid_artifact_content_raises_identity_manifest_error(
+    tmp_path: Path,
+) -> None:
+    """A declared section-map/0.2 structure anchor whose artifact content
+    fails `SectionMapArtifactV2` validation (here: a duplicate section id)
+    surfaces as `IdentityManifestError` — this module's existing error
+    contract — not a raw `ValueError`/`ValidationError` leaking from the
+    shared `arrange.section_map` parser."""
+    source_contents = b"source-audio-bytes"
+    lyrics_contents = b"lyrics transcript content"
+    (tmp_path / "source.wav").write_bytes(source_contents)
+    (tmp_path / "lyrics.txt").write_bytes(lyrics_contents)
+    bad_payload = {
+        "schema_version": "section-map/0.2",
+        "sections": [
+            {"id": "sec-1", "label": "intro"},
+            {"id": "sec-1", "label": "verse"},
+        ],
+    }
+    artifact_bytes = json.dumps(bad_payload).encode("utf-8")
+    (tmp_path / "section_map_v2.json").write_bytes(artifact_bytes)
+
+    manifest_dict = _section_ref_manifest_dict(
+        source_contents=source_contents,
+        lyrics_contents=lyrics_contents,
+        lyrics_section_ref=None,
+        structure_anchors=[
+            {
+                "id": "anchor-structure-v2",
+                "domain": "structure",
+                "artifact": "section_map_v2.json",
+                "artifact_type": "section_map",
+                "media_type": "application/json",
+                "format_version": "section-map/0.2",
+                "sha256": _sha256(artifact_bytes),
+                "required": False,
+            }
+        ],
+    )
+    manifest_path = tmp_path / "identity.yaml"
+    _write_manifest(manifest_path, manifest_dict)
+
+    with pytest.raises(IdentityManifestError) as exc_info:
+        load_identity_manifest(manifest_path)
+
+    message = str(exc_info.value)
+    assert "anchor-structure-v2" in message
+    assert "sec-1" in message
 
 
 # --- hash mismatch ------------------------------------------------------------

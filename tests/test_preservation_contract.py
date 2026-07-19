@@ -303,6 +303,87 @@ def test_vocabulary_empty_domains_reject_elastic(domain: str) -> None:
     assert "anchor-x" in str(exc_info.value)
 
 
+# --- AR2-3: structure 語彙 3 語追加 (section_insertion/omission/repetition) -----
+
+
+def test_anchor_preservation_accepts_ar2_3_structure_vocabulary() -> None:
+    """models.py の `AllowedTransformation` Literal レベルの受理確認（3 層検証の
+    第 1 層）。#193 の実 form 実測（挿入/欠落/反復）に由来する 3 語。"""
+    policy = AnchorPreservation(
+        mode="elastic",
+        allow=["section_insertion", "section_omission", "section_repetition"],
+    )
+    assert policy.allow == ["section_insertion", "section_omission", "section_repetition"]
+
+
+def test_structure_domain_accepts_ar2_3_vocabulary_alongside_existing() -> None:
+    """`build_preservation_contract`（3 層検証の第 2 層）: 新 3 語は既存の
+    intro_extension/instrumental_break と共存し、structure anchor で受理される。"""
+    manifest = _manifest([_identity_anchor("anchor-structure", "structure", required=True)])
+    spec = _spec(
+        {
+            "anchor-structure": AnchorPreservation(
+                mode="elastic",
+                allow=[
+                    "intro_extension",
+                    "instrumental_break",
+                    "section_insertion",
+                    "section_omission",
+                    "section_repetition",
+                ],
+            )
+        }
+    )
+
+    contract = build_preservation_contract(
+        manifest, spec, manifest_sha256=MANIFEST_SHA256, spec_sha256=SPEC_SHA256
+    )
+
+    assert contract.anchors[0].allow == [
+        "intro_extension",
+        "instrumental_break",
+        "section_insertion",
+        "section_omission",
+        "section_repetition",
+    ]
+
+
+def test_ar2_3_structure_vocabulary_rejected_for_other_domain() -> None:
+    """新 3 語は structure 限定であり、他 domain（melody）では既存の
+    domain-vocabulary cross-validation により拒否される。"""
+    manifest = _manifest([_identity_anchor("anchor-melody", "melody", required=True)])
+    spec = _spec(
+        {"anchor-melody": AnchorPreservation(mode="elastic", allow=["section_insertion"])}
+    )
+
+    with pytest.raises(PreservationContractError) as exc_info:
+        build_preservation_contract(
+            manifest, spec, manifest_sha256=MANIFEST_SHA256, spec_sha256=SPEC_SHA256
+        )
+
+    message = str(exc_info.value)
+    assert "anchor-melody" in message
+    assert "melody" in message
+
+
+def test_contract_anchor_readback_accepts_ar2_3_structure_vocabulary() -> None:
+    """`ContractAnchor`（3 層検証の第 2 層の read-back safety net）: JSON からの
+    読み戻し経路でも新 3 語が structure domain で受理される。"""
+    data = _contract_anchor_dict(
+        domain="structure",
+        mode="elastic",
+        allow=["section_insertion", "section_omission", "section_repetition"],
+    )
+    anchor = ContractAnchor.model_validate(data)
+    assert anchor.allow == ["section_insertion", "section_omission", "section_repetition"]
+
+
+def test_contract_anchor_readback_rejects_ar2_3_vocabulary_for_other_domain() -> None:
+    data = _contract_anchor_dict(domain="melody", mode="elastic", allow=["section_insertion"])
+    with pytest.raises(ValidationError):
+        ContractAnchor.model_validate(data)
+
+
 @pytest.mark.parametrize("mode", ["hard", "free"])
 def test_vocabulary_empty_domains_accept_hard_and_free(mode: str) -> None:
     manifest = _manifest([_identity_anchor("anchor-x", "lyrics", required=True)])
