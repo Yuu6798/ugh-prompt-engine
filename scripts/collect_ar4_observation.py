@@ -888,6 +888,76 @@ def build_generation_timestamps(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _generate_output_paths(
+    output_dir: Path,
+    manifest_out: Path,
+    timestamps_out: Optional[Path],
+    take_indices: list[int],
+) -> list[Path]:
+    """`generate` サブコマンドが書き込みうる全出力パスを、生成を一切始める前に
+    列挙する（``resolve()`` するだけで存在確認はしない — まだ存在しないファ
+    イルも列挙対象に含める）。
+
+    各 take の WAV 出力先は `generate_ar4_takes` の命名規則
+    (``output_dir / f"take{take_index}.wav"``) をそのまま踏襲する。生成本体
+    を実際に呼ぶと torch が必要になり衝突検証が torch なしでテストできなく
+    なるため、ここでパス計算だけをロジックとして複製している（Codex 8R P2
+    review #191: `--timestamps-out` が `--manifest-out` と同一パスの場合、
+    manifest 書き込み後に timestamps 書き込みが silent に上書きし、両方書け
+    たと報告しながら takes manifest が失われる欠陥への修正。生成本体を呼ばず
+    に検証関数を単体テストできるよう分離する）。
+    """
+    paths = [output_dir.resolve(), manifest_out.resolve()]
+    if timestamps_out is not None:
+        paths.append(timestamps_out.resolve())
+    for take_index in take_indices:
+        paths.append((output_dir / f"take{take_index}.wav").resolve())
+    return paths
+
+
+def _reject_generate_output_collision(
+    output_paths: list[Path], input_paths: list[Path]
+) -> None:
+    """出力パス同士、および出力パスと provenance 入力パスの衝突を、何も生成/
+    書き込みしていない時点で検出する。
+
+    `observe` の `_reject_observe_output_collision`
+    (`src/svp_rpe/cli/observe_cmd.py`) と同型のガード: resolved-path 等値に
+    加え、両者が実在するファイルなら `os.path.samefile`
+    (同一 ``st_dev``/``st_ino``) でハードリンクも検出する。samefile が判定
+    不能（片方が消えた等の `OSError`）な場合は例外を投げず弱いチェック
+    (resolved-path 等値) にフォールバックする — 判定不能が CLI をクラッシュ
+    させてはならない。
+
+    最初に見つかった衝突 1 件で ``ValueError`` を送出して打ち切る（呼び出し
+    側はこれを 1 行の stderr メッセージにして exit 1 する。Codex 8R P2 review
+    #191）。
+    """
+    import os
+
+    def _same(path_a: Path, path_b: Path) -> bool:
+        if path_a == path_b:
+            return True
+        if path_a.exists() and path_b.exists():
+            try:
+                return os.path.samefile(path_a, path_b)
+            except OSError:
+                return False
+        return False
+
+    for index, path_a in enumerate(output_paths):
+        for path_b in output_paths[index + 1 :]:
+            if _same(path_a, path_b):
+                raise ValueError(f"output paths collide: {path_a} == {path_b}")
+
+    for output_path in output_paths:
+        for input_path in input_paths:
+            if _same(output_path, input_path):
+                raise ValueError(
+                    f"output path collides with input path: {output_path} == {input_path}"
+                )
+
+
 def _cmd_generate(args: argparse.Namespace) -> int:
     try:
         prompt_text, package_sha256, package_data = load_package_prompt(args.package)
@@ -896,6 +966,28 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         return 1
 
     take_indices = args.take_index if args.take_index else [0, 1]
+
+    # Codex 8R P2 review #191: 生成 (torch 推論) を一切始める前に、全出力パス
+    # 同士および出力パスと provenance 入力パス (package/score/identity-manifest/
+    # arrangement/capability-profile) の衝突を検証する。`--timestamps-out` が
+    # `--manifest-out` と同一パスだと manifest 書き込み後に timestamps 書き込
+    # みが silent に上書きし、両方書けたと報告しながら takes manifest が失わ
+    # れる — ここで fail-closed に拒否し、何も書かない。
+    output_paths = _generate_output_paths(
+        args.output_dir, args.manifest_out, args.timestamps_out, take_indices
+    )
+    input_paths = [
+        args.package.resolve(),
+        args.score.resolve(),
+        args.identity_manifest.resolve(),
+        args.arrangement.resolve(),
+        args.capability_profile.resolve(),
+    ]
+    try:
+        _reject_generate_output_collision(output_paths, input_paths)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
     try:
         result = generate_ar4_takes(

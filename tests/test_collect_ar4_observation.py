@@ -22,6 +22,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 from scripts.collect_ar4_observation import (
@@ -30,8 +31,11 @@ from scripts.collect_ar4_observation import (
     DEFAULT_IDENTITY_MANIFEST,
     DEFAULT_SCORE,
     ROOT,
+    _generate_output_paths,
+    _reject_generate_output_collision,
     build_package_provenance,
     build_takes_manifest,
+    main,
 )
 
 SRC = ROOT / "src"
@@ -601,3 +605,149 @@ def test_build_takes_manifest_matches_committed_fixture_with_default_recipe_inpu
             f"fixture build_recipe.inputs.{name}.sha256 does not match the real "
             f"file sha256 at {entry['path']}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Codex 8R P2 review #191: `--timestamps-out` が `--manifest-out` と同一パス
+# の場合、manifest 書き込み後に timestamps 書き込みが silent に上書きし、両方
+# 書けたと報告しながら takes manifest が失われる欠陥への回帰テスト。生成本体
+# (torch 推論) を一切呼ばずに検証できるよう、`_generate_output_paths` /
+# `_reject_generate_output_collision` を単体テストし、`_cmd_generate` レベル
+# (`main(["generate", ...])`) では collision があれば `generate_ar4_takes` に
+# 到達する前に exit 1 し、何も書かれないことを確認する。
+# ---------------------------------------------------------------------------
+
+
+def test_generate_output_paths_lists_output_dir_manifest_timestamps_and_take_wavs(
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "out"
+    manifest_out = tmp_path / "manifest.json"
+    timestamps_out = tmp_path / "timestamps.yaml"
+
+    paths = _generate_output_paths(output_dir, manifest_out, timestamps_out, [0, 1])
+
+    assert paths == [
+        output_dir.resolve(),
+        manifest_out.resolve(),
+        timestamps_out.resolve(),
+        (output_dir / "take0.wav").resolve(),
+        (output_dir / "take1.wav").resolve(),
+    ]
+
+
+def test_generate_output_paths_omits_timestamps_when_not_requested(tmp_path: Path) -> None:
+    output_dir = tmp_path / "out"
+    manifest_out = tmp_path / "manifest.json"
+
+    paths = _generate_output_paths(output_dir, manifest_out, None, [0])
+
+    assert paths == [
+        output_dir.resolve(),
+        manifest_out.resolve(),
+        (output_dir / "take0.wav").resolve(),
+    ]
+
+
+def test_reject_generate_output_collision_rejects_manifest_timestamps_same_path(
+    tmp_path: Path,
+) -> None:
+    same_path = tmp_path / "manifest.json"
+    output_paths = _generate_output_paths(
+        tmp_path / "out", same_path, same_path, [0, 1]
+    )
+
+    with pytest.raises(ValueError, match="collide"):
+        _reject_generate_output_collision(output_paths, input_paths=[])
+
+
+def test_reject_generate_output_collision_rejects_output_matching_input(
+    tmp_path: Path,
+) -> None:
+    package_path = tmp_path / "performance_package.json"
+    package_path.write_text("{}", encoding="utf-8")
+    output_paths = _generate_output_paths(
+        tmp_path / "out", package_path, None, [0]
+    )
+
+    with pytest.raises(ValueError, match="collides with input path"):
+        _reject_generate_output_collision(output_paths, input_paths=[package_path.resolve()])
+
+
+def test_reject_generate_output_collision_allows_disjoint_paths(tmp_path: Path) -> None:
+    output_paths = _generate_output_paths(
+        tmp_path / "out", tmp_path / "manifest.json", tmp_path / "timestamps.yaml", [0, 1]
+    )
+    input_paths = [DEFAULT_SCORE.resolve(), DEFAULT_ARRANGEMENT.resolve()]
+
+    _reject_generate_output_collision(output_paths, input_paths)  # must not raise
+
+
+def _write_minimal_package(path: Path) -> None:
+    path.write_text(json.dumps({"prompt": {"text": "a minimal test prompt"}}), encoding="utf-8")
+
+
+def test_cmd_generate_rejects_manifest_timestamps_collision_before_writing(
+    tmp_path: Path, capsys: Any
+) -> None:
+    """`--manifest-out` と `--timestamps-out` が同一パスなら、`generate` は
+    生成 (torch 推論) にも manifest 書き込みにも到達せず exit 1 する（Codex 8R
+    P2 review #191 の回帰確認: 生成器が両方書けたと報告しながら実際は
+    timestamps 書き込みが manifest を silent に上書きしていた欠陥）。
+    """
+    package_path = tmp_path / "performance_package.json"
+    _write_minimal_package(package_path)
+    output_dir = tmp_path / "out"
+    same_path = tmp_path / "ar4_takes_manifest.json"
+
+    exit_code = main(
+        [
+            "generate",
+            "--package",
+            str(package_path),
+            "--output-dir",
+            str(output_dir),
+            "--manifest-out",
+            str(same_path),
+            "--timestamps-out",
+            str(same_path),
+        ]
+    )
+
+    assert exit_code == 1
+    assert not same_path.exists()
+    assert not output_dir.exists()
+    captured = capsys.readouterr()
+    assert "collide" in captured.err
+
+
+def test_cmd_generate_rejects_output_pointing_at_input_package(
+    tmp_path: Path, capsys: Any
+) -> None:
+    """出力パス (`--manifest-out`) が provenance 入力 (`--package`) を指す場合
+    も、生成前に exit 1 し、入力ファイルは上書きされない（Codex 8R P2 review
+    #191: manifest/timestamps だけでなく package のような入力の上書き防止に
+    も同型のガードを適用する）。
+    """
+    package_path = tmp_path / "performance_package.json"
+    _write_minimal_package(package_path)
+    original_bytes = package_path.read_bytes()
+    output_dir = tmp_path / "out"
+
+    exit_code = main(
+        [
+            "generate",
+            "--package",
+            str(package_path),
+            "--output-dir",
+            str(output_dir),
+            "--manifest-out",
+            str(package_path),
+        ]
+    )
+
+    assert exit_code == 1
+    assert package_path.read_bytes() == original_bytes
+    assert not output_dir.exists()
+    captured = capsys.readouterr()
+    assert "collides with input path" in captured.err
