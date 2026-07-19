@@ -22,6 +22,7 @@ from svp_rpe.cli import compose_cmd as compose_cmd
 from svp_rpe.cli import arrange_cmd as arrange_cmd
 from svp_rpe.cli import package_cmd as package_cmd
 from svp_rpe.cli import observe_cmd as observe_cmd
+from svp_rpe.cli import verify_cmd as verify_cmd
 from svp_rpe.cli import transcribe_cmd as transcribe_cmd
 from svp_rpe.cli import eval_cmd as eval_cmd
 from svp_rpe.cli import roundtrip_cmd as roundtrip_cmd

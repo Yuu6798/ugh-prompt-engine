@@ -143,7 +143,7 @@ def observe_cmd(
     Internal consistency of `package`'s own fields (e.g. `channel_artifacts`
     entries' `artifact` / `artifact_sha256` matching the manifest anchors they
     reference) is `package`'s own schema-validation responsibility, not
-    `observe`'s — a future `verify` command is the right home for exhaustive
+    `observe`'s — the `svprpe verify` command is the right home for exhaustive
     package-internal consistency checking, so that job doesn't creep into this
     instrument's provenance-identification role.
     """
