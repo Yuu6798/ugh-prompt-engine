@@ -171,14 +171,21 @@ def _section_map_artifact_bytes(
     return json.dumps(payload).encode("utf-8")
 
 
-def _anchor(anchor_id: str, domain: str, artifact: str, artifact_type: str) -> IdentityAnchor:
+def _anchor(
+    anchor_id: str,
+    domain: str,
+    artifact: str,
+    artifact_type: str,
+    *,
+    format_version: str | None = None,
+) -> IdentityAnchor:
     return IdentityAnchor(
         id=anchor_id,
         domain=domain,
         artifact=artifact,
         artifact_type=artifact_type,
         media_type="application/json",
-        format_version=None,
+        format_version=format_version,
         sha256=hashlib.sha256(anchor_id.encode()).hexdigest(),
         required=True,
     )
@@ -964,6 +971,115 @@ def test_observe_anchor_dispatches_structure_domain_with_non_section_map_artifac
     )
     assert observation.determination == "no_sensor"
     assert observation.sensor.available is False
+
+
+def test_is_structure_sensor_anchor_requires_section_map_0_1_format_version() -> None:
+    """PR #192 review round 1: `artifact_type == "section_map"` alone isn't
+    enough to route to `_observe_structure` — the anchor must also declare
+    the exact `format_version` its JSON parser understands
+    (`section-map/0.1`). `format_version=None` is the common case (the
+    schema doesn't require declaring one at all — precedent:
+    `tests/test_identity_manifest.py`'s YAML `section_map` anchor), and
+    `format_version="section-map/1"` is a distinct declared format
+    (precedent: `tests/test_performance_package.py`). Neither should match."""
+    unversioned = _anchor("structure", "structure", "structure.yaml", "section_map")
+    assert unversioned.format_version is None
+    assert is_structure_sensor_anchor(unversioned) is False
+
+    other_format = _anchor(
+        "structure",
+        "structure",
+        "section_tags.json",
+        "section_map",
+        format_version="section-map/1",
+    )
+    assert is_structure_sensor_anchor(other_format) is False
+
+    wired = _anchor(
+        "structure",
+        "structure",
+        "section_map.json",
+        "section_map",
+        format_version="section-map/0.1",
+    )
+    assert is_structure_sensor_anchor(wired) is True
+
+
+def test_observe_anchor_falls_back_to_no_sensor_for_yaml_section_map_precedent() -> None:
+    """Regression guard for PR #192 review round 1: a `section_map` anchor
+    shaped like `tests/test_identity_manifest.py`'s (YAML `media_type`, no
+    declared `format_version`) must keep getting the `no_sensor` fallback it
+    always had — not be force-fed into `_observe_structure`'s JSON parser and
+    abort the whole `observe` run."""
+    anchor = _anchor("structure", "structure", "structure.yaml", "section_map")
+    observation = _observe_anchor(
+        anchor,
+        manifest_dir=Path("."),
+        work_id="w",
+        bundle=_bundle_with_structure(["intro"]),
+        artifact_bytes_by_id={},
+    )
+    assert observation.determination == "no_sensor"
+    assert observation.sensor.available is False
+    assert observation.sensor.name == "structure_sensor"
+    assert "section-map/0.1" in str(observation.sensor.reason)
+    assert "None" in str(observation.sensor.reason)
+
+
+def test_observe_anchor_falls_back_to_no_sensor_for_other_format_version_section_map() -> None:
+    """Regression guard for PR #192 review round 1: repo precedent
+    (`tests/test_performance_package.py`) declares `section_map` anchors with
+    `format_version="section-map/1"` — a different, non-JSON-guaranteed
+    format this sensor doesn't understand — which must also keep the
+    `no_sensor` fallback rather than being routed to the section-map/0.1
+    parser."""
+    anchor = _anchor(
+        "structure",
+        "structure",
+        "section_tags.json",
+        "section_map",
+        format_version="section-map/1",
+    )
+    observation = _observe_anchor(
+        anchor,
+        manifest_dir=Path("."),
+        work_id="w",
+        bundle=_bundle_with_structure(["intro"]),
+        artifact_bytes_by_id={},
+    )
+    assert observation.determination == "no_sensor"
+    assert observation.sensor.available is False
+    assert "section-map/1" in str(observation.sensor.reason)
+
+
+def test_observe_anchor_wired_section_map_0_1_with_invalid_content_still_fails_closed() -> None:
+    """The format_version gate only decides *routing* — an anchor that does
+    declare `section-map/0.1` but carries schema-invalid bytes still fails
+    closed inside `_observe_structure` / `_load_section_map`, exactly like
+    harmony's `chord-sequence/0.1` contract (same fail-closed boundary as
+    `test_load_section_map_rejects_unknown_schema_version`, exercised here at
+    the `_observe_anchor` dispatch level instead of calling `_load_section_map`
+    directly)."""
+    anchor = _anchor(
+        "structure",
+        "structure",
+        "section_map.json",
+        "section_map",
+        format_version="section-map/0.1",
+    )
+    assert is_structure_sensor_anchor(anchor) is True
+    bad_bytes = json.dumps(
+        {"schema_version": "section-map/0.2", "sections": ["intro"]}
+    ).encode("utf-8")
+
+    with pytest.raises(ValueError, match="section-map/0.2"):
+        _observe_anchor(
+            anchor,
+            manifest_dir=Path("."),
+            work_id="w",
+            bundle=_bundle_with_structure(["intro"]),
+            artifact_bytes_by_id={"structure": bad_bytes},
+        )
 
 
 # --- 4. build_observation_report: single shared extraction + determinism ----------

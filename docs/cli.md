@@ -424,7 +424,12 @@ condition (a)). Both route on the *(domain, artifact_type)* pair, not the domain
 alone — a `harmony` anchor whose `artifact_type` isn't `chord_sequence_json` (e.g.
 `audio_excerpt`), or a `structure` anchor whose `artifact_type` isn't `section_map`,
 falls back to the generic no-sensor path even though the domain itself has a wired
-sensor elsewhere.
+sensor elsewhere. **structure** additionally gates on the anchor's declared
+`format_version`: only `format_version="section-map/0.1"` routes to the JSON
+sensor (PR #192 review round 1) — pre-existing `section_map` anchor precedent
+in other formats (undeclared `format_version`, or e.g. `"section-map/1"`) keeps
+the no-sensor fallback instead of being force-fed into the `section-map/0.1`
+JSON parser.
 
 **harmony** extracts the generated audio with
 `extract_rpe_from_file` (the same dependency-free `compute_chord_events` chroma-template
@@ -472,7 +477,10 @@ label for a bare root tone that was never meant to carry a chord progression —
 see [`arrangement_identity_planning.md`](arrangement_identity_planning.md) AR4.
 
 **structure** (2026-07-20) is wired to the `(domain="structure",
-artifact_type="section_map")` pair. The canonical side is the `section_map`
+artifact_type="section_map", format_version="section-map/0.1")` triple — the
+format_version declaration is the routing gate that keeps other-format
+`section_map` anchors on the no-sensor fallback (see above). The canonical
+side is the `section_map`
 anchor artifact (`section-map/0.1`: `{"schema_version": "section-map/0.1",
 "sections": [...]}` — a non-empty, order-significant list of section labels;
 an unknown key, non-list/empty `sections`, or unsupported `schema_version` is

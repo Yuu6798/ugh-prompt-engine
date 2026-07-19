@@ -625,6 +625,30 @@ def _observe_unavailable(anchor: IdentityAnchor) -> AnchorObservation:
             f"no sensor wired for harmony anchors with artifact_type "
             f"{anchor.artifact_type!r}"
         )
+    elif anchor.domain == "structure":
+        # Reached when domain == "structure" but either artifact_type isn't
+        # "section_map", or it is "section_map" but the anchor doesn't
+        # declare the one format_version the structure sensor actually reads
+        # (PR #192 review round 1): unlike harmony, the repo has real
+        # pre-existing `section_map` anchors in a *different* format (e.g.
+        # `tests/test_identity_manifest.py`'s YAML `media_type` anchor with no
+        # format_version, and `tests/test_performance_package.py`'s
+        # `format_version="section-map/1"`) that must keep falling back to
+        # no_sensor rather than being force-fed into `_observe_structure`'s
+        # JSON parser. The reason names the anchor's declared format_version
+        # (including the `None` case) so it's clear this is a format gate,
+        # not an artifact_type gate alone.
+        name = f"{anchor.domain}_sensor"
+        if anchor.artifact_type == "section_map":
+            reason = (
+                "structure sensor reads section-map/0.1 only; anchor declares "
+                f"format_version {anchor.format_version!r}"
+            )
+        else:
+            reason = (
+                f"no sensor wired for structure anchors with artifact_type "
+                f"{anchor.artifact_type!r}"
+            )
     else:
         name, reason = _NO_SENSOR_INFO.get(
             anchor.domain,
@@ -651,8 +675,11 @@ def is_harmony_sensor_anchor(anchor: IdentityAnchor) -> bool:
     — e.g. the CLI's `parse_identity_manifest_with_artifacts(..., collect=...)`
     predicate (PR #187 review round 11) — share the exact same routing rule
     instead of maintaining a second copy that could drift out of sync. A
-    sibling predicate, `is_structure_sensor_anchor`, follows the identical
-    shape for the (structure, section_map) pair wired 2026-07-20 — both are
+    sibling predicate, `is_structure_sensor_anchor`, follows the same overall
+    shape for the (structure, section_map) pair wired 2026-07-20, but also
+    gates on `format_version` — see its own docstring for why (PR #192
+    review round 1: other-format `section_map` anchor precedent already
+    exists in this repo, unlike harmony's `chord_sequence_json`). Both are
     consulted at every sync point (`_observe_anchor`'s dispatch, the
     extraction gate below, and the CLI's `collect=` site) rather than one
     being folded silently into the other. If a future PR wires a sensor for
@@ -663,14 +690,41 @@ def is_harmony_sensor_anchor(anchor: IdentityAnchor) -> bool:
 
 
 def is_structure_sensor_anchor(anchor: IdentityAnchor) -> bool:
-    """Whether `anchor` is the (domain, artifact_type) pair the structure
-    sensor actually reads content for — `domain == "structure"` and
-    `artifact_type == "section_map"` (structure Design Memo section 2,
-    2026-07-20). Same shape and same rationale as `is_harmony_sensor_anchor`
-    — see that docstring for the sync-point list this predicate is also
-    consulted at.
+    """Whether `anchor` is the (domain, artifact_type, format_version) triple
+    the structure sensor actually reads content for — `domain == "structure"`,
+    `artifact_type == "section_map"`, *and*
+    `format_version == "section-map/0.1"` (structure Design Memo section 2,
+    2026-07-20; format-version gate added PR #192 review round 1). Same shape
+    and same rationale as `is_harmony_sensor_anchor` for the sync-point list
+    this predicate is also consulted at — see that docstring.
+
+    Unlike harmony, this predicate also gates on `format_version`, not just
+    `artifact_type`: the repo already has `section_map` anchor precedent in
+    other formats before this PR wired a JSON sensor for `section-map/0.1`
+    specifically (`tests/test_identity_manifest.py` declares a YAML
+    `media_type` section_map anchor with no `format_version`, and
+    `tests/test_performance_package.py` declares one with
+    `format_version="section-map/1"`). Routing on artifact_type alone would
+    force those other-format anchors into `_observe_structure`'s JSON
+    parser/validator and abort the whole `observe` run instead of the
+    `no_sensor` fallback they got before this sensor existed. The
+    `format_version` field is the anchor's own self-declared schema id, so
+    gating on it is a declared-format check, not content sniffing or
+    guessing: an anchor that doesn't declare `section-map/0.1` — including
+    one that declares nothing (`format_version is None`) — falls through to
+    `_observe_unavailable` no matter what its bytes actually contain. This is
+    a routing gate only: an anchor that *does* declare `section-map/0.1` but
+    whose artifact bytes are malformed or schema-invalid still fails closed
+    inside `_observe_structure` / `_load_section_map`, exactly like harmony's
+    `chord-sequence/0.1` contract — declaring the right format is not a
+    promise the content is well-formed, only a promise this sensor is the
+    right one to check.
     """
-    return anchor.domain == "structure" and anchor.artifact_type == "section_map"
+    return (
+        anchor.domain == "structure"
+        and anchor.artifact_type == "section_map"
+        and anchor.format_version == SECTION_MAP_ARTIFACT_SCHEMA
+    )
 
 
 def _observe_anchor(
