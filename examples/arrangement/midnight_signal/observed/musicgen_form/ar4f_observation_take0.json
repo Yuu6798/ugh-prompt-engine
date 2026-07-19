@@ -1,0 +1,112 @@
+{
+  "schema_version": "observation-report/0.1",
+  "work_id": "midnight-signal",
+  "package_sha256": "c918300473fa6040757338df2c1cea740a8e1f205b226400cca4f01b6129303d",
+  "generated_artifact": {
+    "path": "take0.wav",
+    "sha256": "21bb3bb6d79830322bb2a6730c84e25598e51f7c176e81fb304a8cff5c247010"
+  },
+  "anchors": [
+    {
+      "anchor_id": "lyrics",
+      "domain": "lyrics",
+      "sensor": {
+        "name": "lyrics_transcription",
+        "available": false,
+        "reason": "lyrics sensor not wired in this PR (requires the 'lyrics' extra / faster-whisper); future connection point: eval/lyrics_match.py + rpe/learned/lyrics_adapter.py"
+      },
+      "measurements": {},
+      "adherence_status": "not_observed",
+      "determination": "no_sensor",
+      "note": null
+    },
+    {
+      "anchor_id": "melody",
+      "domain": "melody",
+      "sensor": {
+        "name": "note_events",
+        "available": false,
+        "reason": "melody sensor not wired in this PR (requires the 'basic-pitch' extra); future connection point: rpe/learned/basic_pitch_adapter.py"
+      },
+      "measurements": {},
+      "adherence_status": "not_observed",
+      "determination": "no_sensor",
+      "note": null
+    },
+    {
+      "anchor_id": "harmony",
+      "domain": "harmony",
+      "sensor": {
+        "name": "chord_sequence_match",
+        "available": true,
+        "reason": null
+      },
+      "measurements": {
+        "chord_sequence_match_rate": 0.0,
+        "repeated_chord_sequence_match_rate": 0.0,
+        "canonical_length": 4,
+        "observed_length": 9,
+        "collapsed_observed_length": 3,
+        "matched_cycle_prefix_length": 0,
+        "collapsed_match_fraction": 0.0,
+        "unmatched_tail_length": 3,
+        "unmatched_tail_head": [
+          [
+            "D",
+            "minor"
+          ],
+          [
+            "A#",
+            "minor"
+          ],
+          [
+            "C#",
+            "major"
+          ]
+        ],
+        "full_cycles": 0
+      },
+      "adherence_status": "not_observed",
+      "determination": "deferred",
+      "note": "collapsed observed prefix matches 0 full canonical cycle(s); 3 trailing entries fall outside the canonical alternation. changed_within_policy/changed_outside_policy classification is out of scope for this instrument and deferred to a future threshold Design Memo (D-1)."
+    },
+    {
+      "anchor_id": "structure",
+      "domain": "structure",
+      "sensor": {
+        "name": "section_sequence_match",
+        "available": true,
+        "reason": null
+      },
+      "measurements": {
+        "canonical_sections": [
+          "intro",
+          "verse",
+          "chorus",
+          "bridge"
+        ],
+        "canonical_length": 4,
+        "observed_sections": [
+          "intro",
+          "chorus",
+          "chorus",
+          "bridge",
+          "outro"
+        ],
+        "observed_sections_raw": [
+          "Intro",
+          "Chorus",
+          "Chorus",
+          "Bridge",
+          "Outro"
+        ],
+        "observed_length": 5,
+        "position_match_rate": 0.6,
+        "sequence_exact_match": false
+      },
+      "adherence_status": "not_observed",
+      "determination": "deferred",
+      "note": "normalized canonical and observed section sequences do not match exactly (changed_within_policy/changed_outside_policy classification is out of scope for this instrument and deferred to a future threshold Design Memo, D-1)."
+    }
+  ]
+}

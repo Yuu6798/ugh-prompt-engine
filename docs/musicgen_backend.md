@@ -517,6 +517,17 @@ midnight_signal EDM 編曲 + MusicGen capability profile の performance package
 一致）で初めて実生成物観測（`svprpe observe`）を埋めた —
 `examples/arrangement/midnight_signal/observed/musicgen/` 参照。
 
+### 7.9 AR4 form 実観測バッチ（2026-07-19）
+
+AR2-3 解凍条件 (b)（form が存在する長尺 artifact）の実測材料として、§7.8 と同一
+fixture 系列に structure anchor（`identity_manifest.form.yaml` +
+`identity/section_map.json`）を加え、`--duration-seconds 30.0`
+（seed 8100/8101, n=2, 決定論スポット検証 2/2 一致）で structure センサー
+（`docs/arrangement_identity_planning.md` AR2-3 解凍条件 (a)）を初めて実生成物に
+対して実行した。両 take とも `sequence_exact_match=False`（30s クリップは正典
+`[intro, verse, chorus, bridge]` の完全な系列を再現しなかった）—
+`examples/arrangement/midnight_signal/observed/musicgen_form/` 参照。
+
 ## 8. 関連ドキュメント
 
 - [`controllability_poc.md`](controllability_poc.md) — DD-A、K0-K3 の grip
