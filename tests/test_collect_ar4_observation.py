@@ -65,6 +65,18 @@ def _load_fixture_manifest() -> dict[str, Any]:
     return json.loads(FIXTURE_MANIFEST_PATH.read_text(encoding="utf-8"))
 
 
+def _recipe_input_entry(path: Path) -> dict[str, str]:
+    """``build_recipe.inputs.<name>`` の期待値 (``{"path": ..., "sha256": ...}``)
+    を、検証対象 (`build_package_provenance`) とは独立に ``path.read_bytes()``
+    -> ``hashlib.sha256`` で直接計算する（Codex 6R P2 review #191: repo 相対
+    パスのみでなく、検証済み per-input raw bytes sha256 も焼き込む形式への追従。
+    tautology を避けるため検証対象の内部ヘルパーは使わない）。"""
+    return {
+        "path": path.resolve().relative_to(ROOT).as_posix(),
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    }
+
+
 def _real_recipe_package_data() -> dict[str, Any]:
     """DEFAULT_SCORE/DEFAULT_IDENTITY_MANIFEST/DEFAULT_ARRANGEMENT/
     DEFAULT_CAPABILITY_PROFILE から実際に compile した場合に
@@ -164,11 +176,11 @@ def test_build_package_provenance_scratch_build_records_structured_recipe() -> N
     assert "path" not in provenance  # 旧フィールド名は残らない
     recipe = provenance["build_recipe"]
     assert recipe["inputs"] == {
-        "score": "examples/arrangement/midnight_signal/composition_score.yaml",
-        "identity_manifest": "examples/arrangement/midnight_signal/identity_manifest.yaml",
-        "arrangement": "examples/arrangement/midnight_signal/edm.identity.musicgen.arrangement.yaml",
-        "capability_profile": "config/capability_profiles/musicgen.yaml",
-        "device_profile": "config/device_profiles/musicgen.yaml",
+        "score": _recipe_input_entry(DEFAULT_SCORE),
+        "identity_manifest": _recipe_input_entry(DEFAULT_IDENTITY_MANIFEST),
+        "arrangement": _recipe_input_entry(DEFAULT_ARRANGEMENT),
+        "capability_profile": _recipe_input_entry(DEFAULT_CAPABILITY_PROFILE),
+        "device_profile": _recipe_input_entry(ROOT / "config/device_profiles/musicgen.yaml"),
     }
     assert recipe["auto_loaded_inputs"].keys() == {"device_profile"}
     assert "auto-loaded" in recipe["auto_loaded_inputs"]["device_profile"]
@@ -180,9 +192,12 @@ def test_build_package_provenance_scratch_build_records_structured_recipe() -> N
         "--capability-profile config/capability_profiles/musicgen.yaml "
         "--output-dir <output-dir>"
     )
-    # レシピの全ての入力パスが実在する repo 相対パスであること（架空パスの捏造禁止）
-    for relative_path in recipe["inputs"].values():
-        assert (ROOT / relative_path).is_file()
+    # レシピの全ての入力パスが実在する repo 相対パスであること（架空パスの捏造禁止）、
+    # かつ焼き込まれた sha256 が実ファイルの sha256 と一致すること
+    for entry in recipe["inputs"].values():
+        input_path = ROOT / entry["path"]
+        assert input_path.is_file()
+        assert entry["sha256"] == hashlib.sha256(input_path.read_bytes()).hexdigest()
 
 
 def test_build_package_provenance_repo_relative_package_path() -> None:
@@ -291,11 +306,11 @@ def test_build_package_provenance_emits_recipe_when_pins_match() -> None:
     assert "note" not in provenance
     recipe = provenance["build_recipe"]
     assert recipe["inputs"] == {
-        "score": "examples/arrangement/midnight_signal/composition_score.yaml",
-        "identity_manifest": "examples/arrangement/midnight_signal/identity_manifest.yaml",
-        "arrangement": "examples/arrangement/midnight_signal/edm.identity.musicgen.arrangement.yaml",
-        "capability_profile": "config/capability_profiles/musicgen.yaml",
-        "device_profile": "config/device_profiles/musicgen.yaml",
+        "score": _recipe_input_entry(DEFAULT_SCORE),
+        "identity_manifest": _recipe_input_entry(DEFAULT_IDENTITY_MANIFEST),
+        "arrangement": _recipe_input_entry(DEFAULT_ARRANGEMENT),
+        "capability_profile": _recipe_input_entry(DEFAULT_CAPABILITY_PROFILE),
+        "device_profile": _recipe_input_entry(ROOT / "config/device_profiles/musicgen.yaml"),
     }
 
 
@@ -431,7 +446,9 @@ def test_recompute_device_profile_pin_not_found_is_legitimate(tmp_path: Path) ->
     tmp_arrangement = tmp_path / "unprofiled.arrangement.yaml"
     tmp_arrangement.write_text(arrangement_text, encoding="utf-8")
 
-    result = _recompute_device_profile_pin(DEFAULT_SCORE, tmp_arrangement)
+    result = _recompute_device_profile_pin(
+        DEFAULT_SCORE.read_bytes(), tmp_arrangement.read_bytes()
+    )
     assert result == (unprofiled_backend, "not_found", None)
 
 
@@ -445,6 +462,11 @@ def test_build_takes_manifest_matches_committed_fixture_with_default_recipe_inpu
     `package_data` なしでは幾何非依存 pin を突合できず build_recipe を
     emit しなくなったため、committed fixture の `build_recipe` を再現するには
     実 pin が必要（design memo point 4）。
+
+    また、committed fixture の `build_recipe.inputs.<name>.sha256` 各値が
+    実ファイルの sha256 と一致することも独立に確認する（Codex 6R P2 review
+    #191: per-input sha256 焼き込みの追加で、fixture 自体が捏造されていない
+    ことの回帰確認）。
     """
     fixture = _load_fixture_manifest()
     result = {
@@ -468,3 +490,15 @@ def test_build_takes_manifest_matches_committed_fixture_with_default_recipe_inpu
         capability_profile=DEFAULT_CAPABILITY_PROFILE,
     )
     assert manifest == fixture
+
+    # fixture の build_recipe.inputs.<name>.sha256 が実ファイルの sha256 と
+    # 一致すること（捏造禁止の直接検証。上の `manifest == fixture` は生成器の
+    # 出力とfixtureの一致のみを見るため、fixture 自体の正しさは別途確認する）。
+    fixture_inputs = fixture["performance_package"]["build_recipe"]["inputs"]
+    for name, entry in fixture_inputs.items():
+        input_path = ROOT / entry["path"]
+        assert input_path.is_file()
+        assert entry["sha256"] == hashlib.sha256(input_path.read_bytes()).hexdigest(), (
+            f"fixture build_recipe.inputs.{name}.sha256 does not match the real "
+            f"file sha256 at {entry['path']}"
+        )

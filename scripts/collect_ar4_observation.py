@@ -251,11 +251,22 @@ def _package_input_pin(package_data: dict[str, Any], input_name: str) -> Optiona
     return None
 
 
-def _verify_recipe_input(path: Path, *, pin_sha256: Optional[str]) -> Optional[str]:
-    """単一レシピ入力を検証する。問題なければ ``None``、問題があれば理由文字列を
-    返す（Codex 3R P2 review #191, discussion_r3610153978: 誤指定/実在しない
-    パスでも repo-relative に解決できさえすれば `build_recipe` を出してしまって
-    いた欠陥への修正）。
+def _verify_recipe_input(
+    path: Path, *, pin_sha256: Optional[str]
+) -> tuple[Optional[bytes], Optional[str]]:
+    """単一レシピ入力を検証し、読めた場合は raw bytes も返す（Codex 6R P2 review
+    #191: `build_recipe.inputs.<name>` に検証済み per-input sha256 を焼き込む
+    ため、この検証パスで読んだ bytes をそのまま呼び出し側の recipe sha256
+    記録に再利用する — 単一 read 規律。検証と hash 記録で二重読みしない）。
+
+    戻り値は ``(raw_bytes, failure_reason)``: 問題なければ
+    ``(file_bytes, None)``、ファイルが存在しない場合は ``(None, 理由文字列)``、
+    存在するが pin 不一致の場合は ``(file_bytes, 理由文字列)``（bytes は
+    読めているので呼び出し側は失敗時でも捨てずに保持してよい）。
+
+    検証内容（Codex 3R P2 review #191, discussion_r3610153978: 誤指定/実在
+    しないパスでも repo-relative に解決できさえすれば `build_recipe` を出して
+    しまっていた欠陥への修正）:
 
     (a) 実在する regular file であること
     (b) ``pin_sha256`` が与えられている場合（package がこの入力種を raw bytes で
@@ -271,18 +282,21 @@ def _verify_recipe_input(path: Path, *, pin_sha256: Optional[str]) -> Optional[s
     `_recompute_derived_score_sha256` / `_recompute_preservation_contract_sha256`
     が幾何非依存の合成 pin を再計算して別途突合する（Codex 4R P2 review #191,
     discussion_r3610170990: existence-only では実在する別の YAML への誤指定を
-    検出できなかった欠陥への修正）。
+    検出できなかった欠陥への修正）。この 2 種についても raw bytes は返す —
+    (a) を通った時点でファイルは読めているので、`build_recipe.inputs.<name>`
+    の sha256 記録にそのまま再利用できる。
     """
     if not path.is_file():
-        return f"{path} does not exist or is not a regular file"
+        return None, f"{path} does not exist or is not a regular file"
+    raw_bytes = path.read_bytes()
     if pin_sha256 is not None:
-        actual_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+        actual_sha256 = hashlib.sha256(raw_bytes).hexdigest()
         if actual_sha256 != pin_sha256:
-            return (
+            return raw_bytes, (
                 f"{path} sha256 {actual_sha256} does not match "
                 f"package-pinned sha256 {pin_sha256}"
             )
-    return None
+    return raw_bytes, None
 
 
 def _load_yaml_mapping(raw_bytes: bytes) -> dict[str, Any]:
@@ -293,11 +307,16 @@ def _load_yaml_mapping(raw_bytes: bytes) -> dict[str, Any]:
 
 
 def _recompute_derived_score_sha256(
-    score_path: Path, arrangement_path: Path
+    score_bytes: bytes, arrangement_bytes: bytes
 ) -> Optional[str]:
-    """``--score`` / ``--arrangement`` の実ファイルから
+    """``--score`` / ``--arrangement`` の raw bytes から
     `inputs.derived_score.sha256` pin を再計算する（Codex 4R P2 review #191,
     discussion_r3610170990）。
+
+    引数は raw bytes を受け取る（``Path`` ではない）— 呼び出し側
+    (`build_package_provenance`) が ``_verify_recipe_input`` で既に読んだ bytes
+    をそのまま渡す単一 read 規律（Codex 6R P2 review #191: 検証と
+    `build_recipe.inputs.<name>.sha256` 記録で二重読みしない）。
 
     `derived_score` pin は score + arrangement spec の内容のみで決まり、
     package の出力ディレクトリ（幾何）には依存しない —
@@ -308,12 +327,8 @@ def _recompute_derived_score_sha256(
     呼び出し側は pin 突合不能として扱い、検証失敗にフォールバックする）。
     """
     try:
-        source = CompositionScore.model_validate(
-            _load_yaml_mapping(score_path.read_bytes())
-        )
-        spec = ArrangementSpec.model_validate(
-            _load_yaml_mapping(arrangement_path.read_bytes())
-        )
+        source = CompositionScore.model_validate(_load_yaml_mapping(score_bytes))
+        spec = ArrangementSpec.model_validate(_load_yaml_mapping(arrangement_bytes))
         resolution = resolve_arrangement(source, spec)
         return compute_derived_score_sha256(resolution.derived_score)
     except Exception:
@@ -321,10 +336,11 @@ def _recompute_derived_score_sha256(
 
 
 def _recompute_preservation_contract_sha256(
-    identity_manifest_path: Path, arrangement_path: Path
+    identity_manifest_bytes: bytes, arrangement_bytes: bytes
 ) -> Optional[str]:
-    """``--identity-manifest`` / ``--arrangement`` の実ファイルから
-    `inputs.preservation_contract.sha256` pin を再計算する（同上の理由）。
+    """``--identity-manifest`` / ``--arrangement`` の raw bytes から
+    `inputs.preservation_contract.sha256` pin を再計算する（同上の理由。引数が
+    raw bytes である理由も同上 — 単一 read 規律）。
 
     `preservation_contract` pin は identity manifest + arrangement spec の
     内容のみで決まり、package の出力ディレクトリ（幾何）には依存しない —
@@ -333,12 +349,12 @@ def _recompute_preservation_contract_sha256(
     ``None``（fail-closed。例外は投げない）。
     """
     try:
-        manifest_bytes = identity_manifest_path.read_bytes()
-        spec_bytes = arrangement_path.read_bytes()
-        manifest = IdentityManifest.model_validate(_load_yaml_mapping(manifest_bytes))
-        spec = ArrangementSpec.model_validate(_load_yaml_mapping(spec_bytes))
-        manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
-        spec_sha256 = hashlib.sha256(spec_bytes).hexdigest()
+        manifest = IdentityManifest.model_validate(
+            _load_yaml_mapping(identity_manifest_bytes)
+        )
+        spec = ArrangementSpec.model_validate(_load_yaml_mapping(arrangement_bytes))
+        manifest_sha256 = hashlib.sha256(identity_manifest_bytes).hexdigest()
+        spec_sha256 = hashlib.sha256(arrangement_bytes).hexdigest()
         contract = build_preservation_contract(
             manifest, spec, manifest_sha256=manifest_sha256, spec_sha256=spec_sha256
         )
@@ -348,11 +364,20 @@ def _recompute_preservation_contract_sha256(
 
 
 def _recompute_device_profile_pin(
-    score_path: Path, arrangement_path: Path
+    score_bytes: bytes, arrangement_bytes: bytes
 ) -> Optional[tuple[str, str, Optional[str]]]:
-    """``--score`` / ``--arrangement`` の実ファイルから、`svprpe package` が
+    """``--score`` / ``--arrangement`` の raw bytes から、`svprpe package` が
     auto-load する device profile の (generator, status, sha256) を再計算する
-    （Codex 5R P2 review #191, discussion_r3610193512）。
+    （Codex 5R P2 review #191, discussion_r3610193512）。引数が raw bytes で
+    ある理由は上 2 関数と同じ単一 read 規律（Codex 6R P2 review #191）。
+
+    ここで返す ``sha256`` は device profile の **canonical JSON**（Pydantic
+    モデル再シリアライズ後）の pin であり、`performance_package.json` の
+    `inputs.device_profile.sha256` と突合するためのもの。`build_recipe` に
+    記録する raw ファイル bytes の sha256（他 4 入力と同一の意味論）とは別の
+    値なので混同しないこと — 呼び出し側 (`build_package_provenance`) が
+    device profile の raw bytes を別途読んで `build_recipe.inputs.device_profile`
+    に記録する。
 
     `compile_performance_package`（`src/svp_rpe/arrange/package.py`）は compile
     時に ``resolve_backend_descriptor(resolution.derived_score.rendering.
@@ -379,12 +404,8 @@ def _recompute_device_profile_pin(
     にフォールバックする）。
     """
     try:
-        source = CompositionScore.model_validate(
-            _load_yaml_mapping(score_path.read_bytes())
-        )
-        spec = ArrangementSpec.model_validate(
-            _load_yaml_mapping(arrangement_path.read_bytes())
-        )
+        source = CompositionScore.model_validate(_load_yaml_mapping(score_bytes))
+        spec = ArrangementSpec.model_validate(_load_yaml_mapping(arrangement_bytes))
         resolution = resolve_arrangement(source, spec)
         generator = resolve_backend_descriptor(
             resolution.derived_score.rendering.target_backend
@@ -423,7 +444,10 @@ def build_package_provenance(
 
        (a) ``_verify_recipe_input`` で 4 入力それぞれの実在を確認する。
            ``identity_manifest`` / ``capability_profile`` は package の
-           `inputs.<name>.sha256`（raw bytes pin）とも突合する。
+           `inputs.<name>.sha256`（raw bytes pin）とも突合する。この検証で
+           読んだ raw bytes はそのまま (b) の再計算と、下記の per-input
+           sha256 記録（`build_recipe.inputs.<name>.sha256`）に再利用する
+           （単一 read 規律 — 検証と hash 記録で二重読みしない）。
        (b) ``score`` + ``arrangement`` から `inputs.derived_score.sha256`
            を、``identity_manifest`` + ``arrangement`` から
            `inputs.preservation_contract.sha256` を、それぞれ
@@ -458,6 +482,19 @@ def build_package_provenance(
        自体が package JSON に存在しない場合は、レシピの正当性を主張できない
        ため検証失敗として扱う（(a) のみを通っても `build_recipe` は emit
        しない）。
+
+       検証を全て通った場合、``build_recipe.inputs.<name>`` は
+       ``"<repo相対パス>"`` の単純文字列ではなく
+       ``{"path": "<repo相対パス>", "sha256": "<検証時点の raw bytes
+       sha256>"}`` オブジェクトとして記録する（Codex 6R P2 review #191:
+       repo 相対パスのみでは、後年 checkout で入力ファイルの中身が変わっても
+       最終 package sha256 の不一致でしか検知できず、どの入力がドリフトした
+       か特定できない欠陥への修正）。5 入力（score / identity_manifest /
+       arrangement / capability_profile / device_profile）すべて raw bytes
+       の sha256 で一様に統一する — ``device_profile`` は package の
+       `inputs.device_profile.sha256` が canonical JSON（Pydantic 再
+       シリアライズ後）の pin であるのに対し、`build_recipe` 側は他の 4 入力
+       と同じ raw ファイル bytes の sha256（両者は別の値）。
     3. 上記いずれも成立しない場合（レシピ入力が揃っていない、または検証に
        失敗した場合）は sha256 のみを provenance として残す（部分的な入力や
        検証未通過の入力から不完全/偽のレシピを捏造しない — 偽レシピより正直な
@@ -493,9 +530,15 @@ def build_package_provenance(
                 "capability_profile": _package_input_pin(data, "capability_profile"),
             }
             failures: list[str] = []
+            # 検証で読んだ raw bytes を保持し、(b) の再計算と build_recipe の
+            # per-input sha256 記録の両方に再利用する（単一 read 規律 — Codex
+            # 6R P2 review #191: 検証と hash 記録で二重読みしない）。
+            input_bytes: dict[str, bytes] = {}
             for name, path in recipe_paths.items():
                 assert path is not None  # narrowed by the `all(...)` check above
-                reason = _verify_recipe_input(path, pin_sha256=pins[name])
+                raw_bytes, reason = _verify_recipe_input(path, pin_sha256=pins[name])
+                if raw_bytes is not None:
+                    input_bytes[name] = raw_bytes
                 if reason is not None:
                     failures.append(f"{name}: {reason}")
 
@@ -506,12 +549,9 @@ def build_package_provenance(
                 # package と同じ経路で再計算し pin と突合する。package_data が
                 # 読めない/pin 自体が欠落している場合は正当性を主張できないため
                 # 検証失敗として扱う（build_recipe を emit しない）。
-                score_path = recipe_paths["score"]
-                identity_manifest_path = recipe_paths["identity_manifest"]
-                arrangement_path = recipe_paths["arrangement"]
-                assert score_path is not None
-                assert identity_manifest_path is not None
-                assert arrangement_path is not None
+                score_bytes = input_bytes["score"]
+                identity_manifest_bytes = input_bytes["identity_manifest"]
+                arrangement_bytes = input_bytes["arrangement"]
 
                 expected_derived_score = _package_input_pin(data, "derived_score")
                 if expected_derived_score is None:
@@ -522,7 +562,7 @@ def build_package_provenance(
                     )
                 else:
                     recomputed_derived_score = _recompute_derived_score_sha256(
-                        score_path, arrangement_path
+                        score_bytes, arrangement_bytes
                     )
                     if recomputed_derived_score != expected_derived_score:
                         failures.append(
@@ -541,7 +581,7 @@ def build_package_provenance(
                     )
                 else:
                     recomputed_contract = _recompute_preservation_contract_sha256(
-                        identity_manifest_path, arrangement_path
+                        identity_manifest_bytes, arrangement_bytes
                     )
                     if recomputed_contract != expected_contract:
                         failures.append(
@@ -556,7 +596,7 @@ def build_package_provenance(
                 # arrangement には一切現れない隠れ入力なので、旧 4 入力の検証を
                 # 全て通っても device profile だけが差し替わっていれば
                 # recompile 結果の package sha256 がずれる。
-                device_profile_recipe: Optional[dict[str, str]] = None
+                device_profile_recipe: Optional[dict[str, dict[str, str]]] = None
                 device_profile_auto_load_note: Optional[str] = None
                 expected_device_profile = data.get("inputs", {}).get("device_profile")
                 if not isinstance(expected_device_profile, dict):
@@ -568,7 +608,7 @@ def build_package_provenance(
                     )
                 else:
                     recomputed_device_profile = _recompute_device_profile_pin(
-                        score_path, arrangement_path
+                        score_bytes, arrangement_bytes
                     )
                     if recomputed_device_profile is None:
                         failures.append(
@@ -600,21 +640,49 @@ def build_package_provenance(
                                 f"sha256={expected_sha256!r})"
                             )
                         elif recomputed_status == "loaded":
-                            device_profile_recipe = {
-                                "device_profile": (
-                                    f"config/device_profiles/{recomputed_generator}.yaml"
-                                )
-                            }
-                            device_profile_auto_load_note = (
-                                "device_profile is auto-loaded by `svprpe package` "
-                                "from config/device_profiles/<generator>.yaml based "
-                                "on the resolved rendering.target_backend; it is not "
-                                "a compile_command argument, but is required for "
-                                "byte-identical reproduction and is pinned "
-                                "separately as inputs.device_profile in "
-                                "performance_package.json (Codex 5R P2 review #191, "
-                                "discussion_r3610193512)."
+                            device_profile_relative_path = (
+                                f"config/device_profiles/{recomputed_generator}.yaml"
                             )
+                            device_profile_absolute_path = ROOT / device_profile_relative_path
+                            if not device_profile_absolute_path.is_file():
+                                # `load_device_profile` succeeded, so this should be
+                                # unreachable in practice; fail closed rather than
+                                # emit a recipe entry without a verified sha256.
+                                failures.append(
+                                    "device_profile: "
+                                    f"{device_profile_absolute_path} does not exist "
+                                    "or is not a regular file (unexpected: "
+                                    "load_device_profile reported it as loaded)"
+                                )
+                            else:
+                                # device profile の raw bytes は他 4 入力と異なり
+                                # 検証フローでまだ読んでいない新規入力（(c) の pin
+                                # 突合は canonical JSON hash であり raw bytes では
+                                # ない）ため、ここで 1 回だけ読む（Codex 6R P2
+                                # review #191: 単一 read 規律 — 追加読みは 1 回に
+                                # 統合する）。
+                                device_profile_raw_bytes = (
+                                    device_profile_absolute_path.read_bytes()
+                                )
+                                device_profile_recipe = {
+                                    "device_profile": {
+                                        "path": device_profile_relative_path,
+                                        "sha256": hashlib.sha256(
+                                            device_profile_raw_bytes
+                                        ).hexdigest(),
+                                    }
+                                }
+                                device_profile_auto_load_note = (
+                                    "device_profile is auto-loaded by `svprpe "
+                                    "package` from config/device_profiles/"
+                                    "<generator>.yaml based on the resolved "
+                                    "rendering.target_backend; it is not a "
+                                    "compile_command argument, but is required for "
+                                    "byte-identical reproduction and is pinned "
+                                    "separately as inputs.device_profile in "
+                                    "performance_package.json (Codex 5R P2 review "
+                                    "#191, discussion_r3610193512)."
+                                )
                         else:
                             device_profile_auto_load_note = (
                                 "no config/device_profiles/"
@@ -626,10 +694,24 @@ def build_package_provenance(
                             )
 
             if not failures:
+                # 検証済み per-input sha256 を焼き込む（Codex 6R P2 review #191:
+                # repo 相対パスのみでは、後年 checkout で入力の中身が変わっても
+                # 最終 package sha256 の不一致でしか検知できず、どの入力が
+                # ドリフトしたか特定できない欠陥への修正）。sha256 は上の検証
+                # ループで既に読んだ ``input_bytes`` から取る（単一 read 規律 —
+                # ここで再度ファイルを読まない）。compile_command 用の
+                # ``repo_relative_inputs``（plain path 文字列）はそのまま流用。
+                recipe_inputs: dict[str, dict[str, str]] = {
+                    name: {
+                        "path": repo_relative_inputs[name],
+                        "sha256": hashlib.sha256(input_bytes[name]).hexdigest(),
+                    }
+                    for name in recipe_paths
+                }
                 if device_profile_recipe is not None:
-                    repo_relative_inputs = {**repo_relative_inputs, **device_profile_recipe}
+                    recipe_inputs.update(device_profile_recipe)
                 provenance["build_recipe"] = {
-                    "inputs": repo_relative_inputs,
+                    "inputs": recipe_inputs,
                     "compile_command": (
                         "svprpe package {score} {identity_manifest} {arrangement} "
                         "--capability-profile {capability_profile} --output-dir <output-dir>"

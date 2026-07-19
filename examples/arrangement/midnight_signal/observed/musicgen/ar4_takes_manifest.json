@@ -6,11 +6,26 @@
     "sha256": "da3e726f9f149e600b9cc6d1c9c58bbb03a606b11c7d6d8ed959b2e6a578e57f",
     "build_recipe": {
       "inputs": {
-        "score": "examples/arrangement/midnight_signal/composition_score.yaml",
-        "identity_manifest": "examples/arrangement/midnight_signal/identity_manifest.yaml",
-        "arrangement": "examples/arrangement/midnight_signal/edm.identity.musicgen.arrangement.yaml",
-        "capability_profile": "config/capability_profiles/musicgen.yaml",
-        "device_profile": "config/device_profiles/musicgen.yaml"
+        "score": {
+          "path": "examples/arrangement/midnight_signal/composition_score.yaml",
+          "sha256": "37854f54b42a1c4d424f357148d3d10f347e238ec72a42d1248bea2203f97d0b"
+        },
+        "identity_manifest": {
+          "path": "examples/arrangement/midnight_signal/identity_manifest.yaml",
+          "sha256": "9ef82c9b490e2c2029f8047470e92b76f6dbd9cdb27983c6eabcaad5a143687a"
+        },
+        "arrangement": {
+          "path": "examples/arrangement/midnight_signal/edm.identity.musicgen.arrangement.yaml",
+          "sha256": "4c9e5c521f7eafd55d0fd940502dd1a68a367a512171caf14f619ba8f27129ee"
+        },
+        "capability_profile": {
+          "path": "config/capability_profiles/musicgen.yaml",
+          "sha256": "190fe585d5085a45b2cd572d05a20c227be71924a885a407f6b135a31efa1f45"
+        },
+        "device_profile": {
+          "path": "config/device_profiles/musicgen.yaml",
+          "sha256": "987f4efe6e70ab5b9e7df5470580e283be644e08c57e7b8d6e9c37caf0ac1211"
+        }
       },
       "compile_command": "svprpe package examples/arrangement/midnight_signal/composition_score.yaml examples/arrangement/midnight_signal/identity_manifest.yaml examples/arrangement/midnight_signal/edm.identity.musicgen.arrangement.yaml --capability-profile config/capability_profiles/musicgen.yaml --output-dir <output-dir>",
       "auto_loaded_inputs": {
