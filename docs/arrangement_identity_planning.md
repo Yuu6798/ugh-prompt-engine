@@ -1,8 +1,8 @@
 # Arrangement Identity Track Planning
 
-**Status**: AR0 計画文書。AR1、AR2-1/2、AR3-1/2 は実装済み。AR2-3 は
-**2026-07-19 に解凍**（同日の form 実測到着後の再判断。(a) structure センサー配線 #192 + (b) MusicGen 30s form
-実測 n=2 で保留条件充足。設計着手可・実装未着手）、AR4 は計器配線済み
+**Status**: AR0 計画文書。AR1、AR2-1/2/3、AR3-1/2 は実装済み。AR2-3 は
+**2026-07-19 に解凍・同日実装完了**（AR2-3 Design Memo (Fable, 2026-07-19): section-map/0.2 の
+stable ID、`section_ref` 解決規則、structure 変形語彙 3 語追加）、AR4 は計器配線済み
 （`svprpe observe` + `ObservationReport` sidecar。harmony + structure domain を
 実測、判定閾値は未定・実 Suno 生成物での観測は未実施）。
 
@@ -112,7 +112,8 @@ AR1 は Score の保持だけを扱い、外部 artifact の配送や生成後�
   path と sha256 を検証する。
 - **AR2-2 (#179, #181)**: anchor ごとの `hard` / `elastic` / `free` と許容変形から
   `PreservationContract` を構築する。省略 anchor を推測で補完しない。
-- **AR2-3 (deferred)**: structure anchor の stable ID と section policy。
+- **AR2-3 (実装済み、2026-07-19、AR2-3 Design Memo (Fable))**: structure anchor の
+  stable ID と section policy。
   実 form artifact を用いる AR4 の結果が得られるまで保留する。
   **2026-07-19 解凍判断（AR4 実生成物 n=2 到着後）: 保留継続**。今回の実観測は
   harmony domain のみで、form/structure anchor は manifest に存在せず、12 秒
@@ -131,6 +132,56 @@ AR1 は Score の保持だけを扱い、外部 artifact の配送や生成後�
   並び替えの扱い）を、stable ID は不安定な観測系列への対応付けを、それぞれ前提に
   設計する必要がある。留保: n=2・MusicGen 30s のみ・Suno 未観測。本解凍は
   **設計着手の解凍**であって form 制御性の主張ではない。
+  **2026-07-19 実装完了（AR2-3 Design Memo, Fable — 本節がその規範仕様の反映先）**: 解凍直後、同日中に設計から
+  実装まで完了した。実装内容は 3 点:
+  1. **section-map/0.2**（`arrange/section_map.py`、`identity.py`/`observe.py`
+     双方が依存する第三モジュール — `observe.py` が `identity.py` を import する
+     既存の一方向依存を壊さないための切り出し）: 既存 `section-map/0.1`（id 概念
+     なしの順序付きラベル列。committed fixture
+     `examples/arrangement/midnight_signal/identity/section_map.json` が pin
+     している形式で、無変更のまま維持する）と並置で、各セクションが artifact
+     内で一意な安定 `id` + `label` を持つ `section-map/0.2` を追加した
+     （未知キー・空 `sections`・id 重複・空 `id`/`label` は fail-closed）。
+     `is_structure_sensor_anchor`（`observe.py`）は 0.1/0.2 いずれの
+     `format_version` 宣言も structure センサーへ配線するよう拡張し、宣言
+     `format_version` と artifact 内 `schema_version` の不一致は各 format 専用
+     parser の Literal 検証により自然に fail-closed になる。0.2 anchor の
+     observe 実行では、既存の label 系 measurements（`canonical_sections` /
+     `sequence_exact_match` 等、0.1 と完全に同一のロジック）に加えて
+     `canonical_section_ids`（artifact 記載順の生 id 列）を記録するが、
+     D-1 の恒等判定（`sequence_exact_match`）は 0.1 と同様 label 系列のみを
+     根拠とし、id は一切使わない。0.1 anchor の observe measurements は
+     1 bit も変わらない（`canonical_section_ids` キー自体が存在しない）。
+  2. **`section_ref` 解決**（`identity.py`）: manifest 内に
+     `format_version == "section-map/0.2"` の structure anchor が 1 件以上
+     あれば、非 `None` の `section_ref` はそれら anchor の（複数あれば合併した）
+     section id のいずれかに解決されなければならず、解決できなければ
+     `IdentityManifestError`（dangling reference、fail-fast）。合併した id が
+     複数の 0.2 anchor から重複宣言されている場合も同様に fail-fast。0.2
+     structure anchor が manifest に無い場合、`section_ref` は AR2-2 以前と
+     同じく opaque な文字列のまま検証しない（既存 manifest の後方互換 —
+     `test_note_and_section_ref_are_optional_and_preserved` は無変更で pass）。
+     stable id は section-map artifact 自身が持ち、`IdentityAnchor` 側には
+     複製しない（sidecar-first: id は「1 artifact 内の部分」の識別子）。
+  3. **form 変形語彙 3 語**（`models.py` の `AllowedTransformation` +
+     `contract.py` の `DOMAIN_ALLOWED_TRANSFORMS["structure"]`）:
+     `section_insertion` / `section_omission` / `section_repetition` を追加した。
+     上記の MusicGen 30s form 実測（挿入=正典外 outro の観測・欠落=verse が
+     2 take とも未観測・反復=chorus×2）に由来する語彙であり、推測補完ではない。
+     既存の `intro_extension`（intro 延長という特定の楽曲的意図）・
+     `instrumental_break`（間奏挿入という特定の楽曲的意図）とは意図の粒度が
+     異なる、より一般的な form レベルのカテゴリとして共存する — 前者を後者の
+     別名やコード語彙上位互換として削除しない。3 層検証（`AnchorPreservation`
+     の mode/allow 整合、`build_preservation_contract`/`ContractAnchor` の
+     domain-vocab cross-validation、`PackageAnchorStatus` への転記）は
+     `AllowedTransformation` Literal と `DOMAIN_ALLOWED_TRANSFORMS` の更新のみで
+     自動追従し、他 domain（例: melody）へのこの 3 語の指定は既存の
+     domain-vocab 検証により引き続き拒否される。
+
+  閾値分類（挿入/欠落/反復のうちどれが「保存範囲内」かの判定基準）は本実装の
+  範囲外のまま — AR2-3 が供給したのは計器（section-map/0.2 + `section_ref`
+  解決）と契約語彙（3 変形カテゴリ）であり、判定条件は実測を積んでから別
+  Design Memo が固定する（D-1 の原則を AR2-3 にも適用）。
 
 AR2 の完了は「何を残したいか」と「どの変形を許すか」を機械可読にしたことを意味し、
 生成器へ渡せたことは意味しない。
@@ -293,7 +344,7 @@ preserved を成功条件にしていない**: この結果自体が
 | AR0 | 本計画文書 | 完了 |
 | AR1 | resolver / CLI / bundle / diff / EDM-Jazz fixture | 完了 (#175–#177) |
 | AR2-1/2 | IdentityManifest / PreservationContract | 完了 (#178, #179, #181) |
-| AR2-3 | structure anchor policy | **解凍（2026-07-19・同日 form 実測後の再判断）**: (a) structure センサー配線 (#192) + (b) MusicGen 30s form 実測 n=2 で条件充足。設計着手可（実測が示す挿入・欠落・重複・長さ振れを前提に stable ID / section policy を設計する）。実装は未着手 |
+| AR2-3 | structure anchor policy | **完了（2026-07-19、AR2-3 Design Memo (Fable)）**: section-map/0.2（stable id 付き section map、0.1 と並置）+ `section_ref` 解決（0.2 anchor 存在時のみ fail-fast 検証、それ以外は opaque 後方互換）+ structure 変形語彙 3 語追加（section_insertion/section_omission/section_repetition、実 form 実測由来）。閾値分類は範囲外のまま |
 | AR3-1 | InputCapabilityProfile | 完了 (#180, #181) |
 | AR3-2 | PerformancePackage compiler + 縦切り E2E fixture | 実装済み（E2E fixture 追加 2026-07-17） |
 | AR4 | generated-output identity observation | 計器配線済み。harmony + structure を実測（decisive synth E2E + 2026-07-19 MusicGen 12s n=2 + 同日 MusicGen 30s form n=2）。判定閾値は未定、実 Suno 生成物は未観測 |

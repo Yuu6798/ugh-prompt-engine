@@ -312,6 +312,34 @@ def test_builder_separates_all_delivery_states_and_future_states() -> None:
     ]
 
 
+def test_package_anchor_status_accepts_ar2_3_structure_vocabulary() -> None:
+    """3 層検証の第 3 層（`PackageAnchorStatus`）: AR2-3 が追加した
+    section_insertion/section_omission/section_repetition が `allow` に載って
+    package まで転記される（`ContractAnchor` の domain-vocab 検証を通過した
+    値をそのまま転記する経路 — package 自身は domain-vocab を再検証しない）。"""
+    anchors = [
+        _anchor("sections", "structure", "section_map", format_version="section-map/1"),
+    ]
+    manifest = _manifest(anchors)
+    contract = _contract(
+        manifest,
+        {
+            "sections": (
+                "elastic",
+                ["section_insertion", "section_omission", "section_repetition"],
+            ),
+        },
+    )
+
+    compiled = _build(manifest, contract, _profile())
+    status = next(
+        status for status in compiled.package.anchor_statuses if status.anchor_id == "sections"
+    )
+
+    assert status.requested_mode == "elastic"
+    assert status.allow == ["section_insertion", "section_omission", "section_repetition"]
+
+
 def test_strict_lists_every_hard_unsupported_or_unknown_anchor() -> None:
     manifest = _manifest(
         [

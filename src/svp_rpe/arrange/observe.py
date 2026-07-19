@@ -48,22 +48,38 @@ proper prefix（例: 1 コードのみの collapsed 列）に完全一致して�
 観測は、prefix が完全一致していても deferred のまま — 未観測に近い状態を
 "preserved" と偽称しない）。
 
-structure（2026-07-20、AR2-3 解凍条件 (a) — Design Memo
-`design_memo_structure_sensor.md`）: ``domain == "structure" and
-artifact_type == "section_map"`` の対にのみ実配線する。正典は
-``section-map/0.1`` artifact（`sections`: 非空の文字列リスト、順序が正典）、
-観測は ``PhysicalRPE.structure``（``SectionMarker.label`` 列、extract で常に
-populate 済み）。harmony の cycle-alignment のような繰り返し折り畳みは行わない
-（structure には「繰り返し正典進行」に相当する周期構造の前提が無いため） —
-両側を正規化（lowercase 化 + 末尾数字 strip。それ以外の変換はしない）した上で
-先頭から位置整合させ、一致数 / max(正典長, 観測長) を ``position_match_rate``
-として記録する（0 除算は 0.0）。D-1 の恒等判定は
+structure（2026-07-19、AR2-3 解凍条件 (a) — Design Memo
+`design_memo_structure_sensor.md`。0.2 対応は本体 AR2-3 — Design Memo
+`design_memo_ar2_3.md`）: ``domain == "structure" and artifact_type ==
+"section_map"`` の対に加え、anchor の宣言 ``format_version`` が
+``section-map/0.1`` / ``section-map/0.2`` のいずれかである場合にのみ実配線する
+（`is_structure_sensor_anchor`）。正典は宣言された format_version に対応する
+schema で parse する: ``section-map/0.1`` artifact（`sections`: 非空の文字列
+リスト、id 概念なし、順序が正典）、または ``section-map/0.2`` artifact
+（`sections`: 非空の `{id, label}` オブジェクト列、id は artifact 内一意、
+順序が正典）。観測は両形式共通で ``PhysicalRPE.structure``
+（``SectionMarker.label`` 列、extract で常に populate 済み）。harmony の
+cycle-alignment のような繰り返し折り畳みは行わない（structure には
+「繰り返し正典進行」に相当する周期構造の前提が無いため） — 両側を正規化
+（lowercase 化 + 末尾数字 strip。それ以外の変換はしない）した上で先頭から
+位置整合させ、一致数 / max(正典長, 観測長) を ``position_match_rate`` として
+記録する（0 除算は 0.0）。D-1 の恒等判定は
 **正規化後の列が長さ・順序とも完全一致するか**
 （``sequence_exact_match``）のみで行う — 閾値化した ``position_match_rate``
-を恒等判定には使わない。artifact_type が ``section_map`` でない structure
-anchor（identity schema 上は合法。例 ``audio_excerpt``）は harmony 同様
-no_sensor のまま（domain 単独ではなく (domain, artifact_type) の対で
-ルーティングする一貫性）。
+を恒等判定には使わない。0.2 anchor はさらに ``canonical_section_ids``
+（artifact 記載順の id 列・生値）を measurements に記録するが、これは
+透明性のための記録であり D-1 の恒等判定には一切使わない（0.1 anchor の
+measurements は従来どおり ``canonical_section_ids`` を持たない — 形式間の
+measurements shape の違いは format_version 宣言そのものから読み取れる）。
+anchor の ``format_version`` 宣言と artifact 内 ``schema_version`` の不一致
+（例: 宣言は 0.1 なのに内容は 0.2）は、宣言に対応する schema の parser が
+``schema_version`` を Literal で検証するため自然に fail-closed になる
+（harmony の ``chord-sequence/0.1`` と同じ posture）。artifact_type が
+``section_map`` でない structure anchor（identity schema 上は合法。例
+``audio_excerpt``）や、``section-map/0.1``/``section-map/0.2`` のいずれでも
+ない format_version（未宣言含む）を持つ structure anchor は harmony 同様
+no_sensor のまま（domain 単独ではなく (domain, artifact_type,
+format_version) の組でルーティングする一貫性）。
 
 lyrics / melody は optional extra 依存（faster-whisper / basic-pitch）のため
 センサー本体を配線せず、``available=false`` + reason を記録する（将来の接続点は
@@ -87,7 +103,7 @@ import re
 from pathlib import Path
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from svp_rpe.arrange.identity import (
     AnchorDomain,
@@ -97,6 +113,12 @@ from svp_rpe.arrange.identity import (
 )
 from svp_rpe.arrange.models import JsonValue
 from svp_rpe.arrange.package import PerformancePackage
+from svp_rpe.arrange.section_map import (
+    SECTION_MAP_ARTIFACT_SCHEMA_0_1,
+    SECTION_MAP_ARTIFACT_SCHEMA_0_2,
+    parse_section_map_artifact_0_1,
+    parse_section_map_artifact_0_2,
+)
 from svp_rpe.compose.models import ChordSpec
 from svp_rpe.roundtrip.compare import (
     chord_sequence_match_rate,
@@ -489,22 +511,16 @@ def _observe_harmony(
     )
 
 
-SECTION_MAP_ARTIFACT_SCHEMA = "section-map/0.1"
-
-
-class SectionMapArtifact(ObserveModel):
-    """``section-map/0.1`` anchor artifact — the canonical section label sequence.
-
-    Fail-closed via the same ``ObserveModel`` base every observe schema uses
-    (``extra="forbid"``): an unknown key, a non-``section-map/0.1``
-    ``schema_version``, or an empty ``sections`` list are all rejected at
-    parse time rather than silently accepted (mirrors
-    ``_load_chord_progression``'s fail-closed contract for
-    ``chord-sequence/0.1``, structure Design Memo section 1).
-    """
-
-    schema_version: Literal["section-map/0.1"]
-    sections: list[str] = Field(min_length=1)
+# AR2-3: SectionMapArtifact / SectionMapArtifactV2 (the section-map/0.1 and
+# section-map/0.2 pydantic schemas themselves) now live in `arrange.section_map`
+# — shared with `identity.py`'s `section_ref` resolution, which cannot import
+# this module (observe.py imports identity.py, not the other way around; see
+# `arrange/section_map.py`'s module docstring). `SECTION_MAP_ARTIFACT_SCHEMA_0_1`
+# is kept as the name this module has always used at the call sites below.
+SECTION_MAP_ARTIFACT_SCHEMA = SECTION_MAP_ARTIFACT_SCHEMA_0_1
+_STRUCTURE_SENSOR_FORMAT_VERSIONS = frozenset(
+    {SECTION_MAP_ARTIFACT_SCHEMA_0_1, SECTION_MAP_ARTIFACT_SCHEMA_0_2}
+)
 
 
 def _load_section_map(raw_bytes: bytes, *, artifact_path: Path) -> list[str]:
@@ -512,26 +528,26 @@ def _load_section_map(raw_bytes: bytes, *, artifact_path: Path) -> list[str]:
 
     ``raw_bytes`` は呼び出し側が既に hash 照合済みの bytes を渡す（本関数は一切
     ファイルを読まない — `_load_chord_progression` と同じ契約）。
-    ``artifact_path`` はエラーメッセージの表示にのみ使う。
+    ``artifact_path`` はエラーメッセージの表示にのみ使う。実際の JSON 検証は
+    `arrange.section_map.parse_section_map_artifact_0_1` へ委譲する（AR2-3:
+    schema 定義の二重化を避けるための共有モジュール切り出し）。
     """
-    try:
-        payload = json.loads(raw_bytes.decode("utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise ValueError(
-            f"section map artifact is not valid JSON: {artifact_path}: {exc}"
-        ) from exc
-    if not isinstance(payload, dict):
-        raise ValueError(
-            "section map artifact must be a mapping with 'schema_version' and "
-            f"'sections' keys: {artifact_path}"
-        )
-    try:
-        artifact = SectionMapArtifact.model_validate(payload)
-    except ValidationError as exc:
-        raise ValueError(
-            f"section map artifact failed validation: {artifact_path}: {exc}"
-        ) from exc
-    return list(artifact.sections)
+    return list(parse_section_map_artifact_0_1(raw_bytes, artifact_path=artifact_path).sections)
+
+
+def _load_section_map_v2(
+    raw_bytes: bytes, *, artifact_path: Path
+) -> tuple[list[str], list[str]]:
+    """``section-map/0.2`` artifact (JSON) を (正典セクションラベル列, id 列) へ
+    変換する（AR2-3）。両列は artifact 記載順（正典順）を保ち、位置で対応する
+    （``labels[i]`` は ``ids[i]`` のラベル）。``ids`` は artifact 内一意であることを
+    `SectionMapArtifactV2` 自身の validator が保証済み。契約は `_load_section_map`
+    と同型（bytes は呼び出し側が hash 照合済みのものを渡す。ファイルは読まない）。
+    """
+    artifact = parse_section_map_artifact_0_2(raw_bytes, artifact_path=artifact_path)
+    labels = [entry.label for entry in artifact.sections]
+    ids = [entry.id for entry in artifact.sections]
+    return labels, ids
 
 
 _TRAILING_DIGITS_PATTERN = re.compile(r"\d+$")
@@ -605,7 +621,22 @@ def _observe_structure(
     artifact_path = _resolve_confined(
         anchor.artifact, manifest_dir, work_id=work_id, target=f"anchor '{anchor.id}'"
     )
-    canonical_sections_raw = _load_section_map(artifact_bytes, artifact_path=artifact_path)
+    # AR2-3: dispatch on the anchor's *declared* format_version, not the
+    # artifact's own content — `is_structure_sensor_anchor` already restricted
+    # `anchor.format_version` to {section-map/0.1, section-map/0.2} before this
+    # function is ever called, so this is an exhaustive 2-way branch, not a
+    # fallback chain. Each parser's `schema_version: Literal[...]` still
+    # independently enforces that the artifact's *internal* declaration agrees
+    # with what was dispatched to (a 0.1-declared anchor whose bytes actually
+    # say `section-map/0.2`, or vice versa, fails closed inside the parser —
+    # same posture harmony's `chord-sequence/0.1` takes).
+    canonical_section_ids_raw: Optional[list[str]] = None
+    if anchor.format_version == SECTION_MAP_ARTIFACT_SCHEMA_0_2:
+        canonical_sections_raw, canonical_section_ids_raw = _load_section_map_v2(
+            artifact_bytes, artifact_path=artifact_path
+        )
+    else:
+        canonical_sections_raw = _load_section_map(artifact_bytes, artifact_path=artifact_path)
     observed_sections_raw = [marker.label for marker in bundle.physical.structure]
 
     canonical_sections = [
@@ -635,6 +666,16 @@ def _observe_structure(
         "position_match_rate": position_match_rate,
         "sequence_exact_match": sequence_exact_match,
     }
+    if canonical_section_ids_raw is not None:
+        # AR2-3: section-map/0.2 anchors additionally self-describe their
+        # stable section ids (artifact order, unmodified — a raw value, not
+        # normalized like `canonical_sections`). Transparency only: the D-1
+        # identity gate below still keys off `sequence_exact_match` (the
+        # label sequence) alone, exactly as it does for section-map/0.1 —
+        # ids are not compared against anything here. 0.1 anchors never get
+        # this key at all, not even `null`, so `measurements`' shape itself
+        # tells a reader which format produced a given report.
+        measurements["canonical_section_ids"] = canonical_section_ids_raw
     sensor = SensorRecord(name="section_sequence_match", available=True, reason=None)
     if sequence_exact_match:
         return AnchorObservation(
@@ -691,8 +732,8 @@ def _observe_unavailable(anchor: IdentityAnchor) -> AnchorObservation:
         name = f"{anchor.domain}_sensor"
         if anchor.artifact_type == "section_map":
             reason = (
-                "structure sensor reads section-map/0.1 only; anchor declares "
-                f"format_version {anchor.format_version!r}"
+                "structure sensor reads section-map/0.1 or section-map/0.2 only; "
+                f"anchor declares format_version {anchor.format_version!r}"
             )
         else:
             reason = (
@@ -726,7 +767,7 @@ def is_harmony_sensor_anchor(anchor: IdentityAnchor) -> bool:
     predicate (PR #187 review round 11) — share the exact same routing rule
     instead of maintaining a second copy that could drift out of sync. A
     sibling predicate, `is_structure_sensor_anchor`, follows the same overall
-    shape for the (structure, section_map) pair wired 2026-07-20, but also
+    shape for the (structure, section_map) pair wired 2026-07-19, but also
     gates on `format_version` — see its own docstring for why (PR #192
     review round 1: other-format `section_map` anchor precedent already
     exists in this repo, unlike harmony's `chord_sequence_json`). Both are
@@ -742,15 +783,16 @@ def is_harmony_sensor_anchor(anchor: IdentityAnchor) -> bool:
 def is_structure_sensor_anchor(anchor: IdentityAnchor) -> bool:
     """Whether `anchor` is the (domain, artifact_type, format_version) triple
     the structure sensor actually reads content for — `domain == "structure"`,
-    `artifact_type == "section_map"`, *and*
-    `format_version == "section-map/0.1"` (structure Design Memo section 2,
-    2026-07-20; format-version gate added PR #192 review round 1). Same shape
-    and same rationale as `is_harmony_sensor_anchor` for the sync-point list
-    this predicate is also consulted at — see that docstring.
+    `artifact_type == "section_map"`, *and* `format_version` one of
+    `{"section-map/0.1", "section-map/0.2"}` (structure Design Memo section 2,
+    2026-07-19; format-version gate added PR #192 review round 1; 0.2 added
+    AR2-3, `design_memo_ar2_3.md`). Same shape and same rationale as
+    `is_harmony_sensor_anchor` for the sync-point list this predicate is also
+    consulted at — see that docstring.
 
     Unlike harmony, this predicate also gates on `format_version`, not just
     `artifact_type`: the repo already has `section_map` anchor precedent in
-    other formats before this PR wired a JSON sensor for `section-map/0.1`
+    other formats before PR #192 wired a JSON sensor for `section-map/0.1`
     specifically (`tests/test_identity_manifest.py` declares a YAML
     `media_type` section_map anchor with no `format_version`, and
     `tests/test_performance_package.py` declares one with
@@ -760,20 +802,22 @@ def is_structure_sensor_anchor(anchor: IdentityAnchor) -> bool:
     `no_sensor` fallback they got before this sensor existed. The
     `format_version` field is the anchor's own self-declared schema id, so
     gating on it is a declared-format check, not content sniffing or
-    guessing: an anchor that doesn't declare `section-map/0.1` — including
-    one that declares nothing (`format_version is None`) — falls through to
-    `_observe_unavailable` no matter what its bytes actually contain. This is
-    a routing gate only: an anchor that *does* declare `section-map/0.1` but
-    whose artifact bytes are malformed or schema-invalid still fails closed
-    inside `_observe_structure` / `_load_section_map`, exactly like harmony's
-    `chord-sequence/0.1` contract — declaring the right format is not a
-    promise the content is well-formed, only a promise this sensor is the
-    right one to check.
+    guessing: an anchor that doesn't declare one of the two known section-map
+    format_versions — including one that declares nothing
+    (`format_version is None`) — falls through to `_observe_unavailable` no
+    matter what its bytes actually contain. This is a routing gate only: an
+    anchor that *does* declare a known format_version but whose artifact
+    bytes are malformed, schema-invalid, or internally declare a *different*
+    `schema_version` than the one this anchor claims still fails closed
+    inside `_observe_structure` / `_load_section_map` / `_load_section_map_v2`,
+    exactly like harmony's `chord-sequence/0.1` contract — declaring the right
+    format is not a promise the content is well-formed or self-consistent,
+    only a promise this sensor is the right one to check.
     """
     return (
         anchor.domain == "structure"
         and anchor.artifact_type == "section_map"
-        and anchor.format_version == SECTION_MAP_ARTIFACT_SCHEMA
+        and anchor.format_version in _STRUCTURE_SENSOR_FORMAT_VERSIONS
     )
 
 
@@ -789,7 +833,7 @@ def _observe_anchor(
         # `build_observation_report` only extracts (and passes a non-None
         # bundle) when at least one manifest anchor matches a wired sensor's
         # predicate (PR #187 review round 12's extraction gate, widened
-        # 2026-07-20 to also cover `is_structure_sensor_anchor`) — so if
+        # 2026-07-19 to also cover `is_structure_sensor_anchor`) — so if
         # we're in this branch, `bundle` is guaranteed to be set.
         assert bundle is not None
         return _observe_harmony(
@@ -833,7 +877,7 @@ def build_observation_report(
     （harmony センサーが `anchor_id -> bytes` で参照する。PR #187 review
     round 2）。
 
-    抽出は gate 化する（PR #187 review round 12。2026-07-20: structure センサー
+    抽出は gate 化する（PR #187 review round 12。2026-07-19: structure センサー
     追加に伴い述語を widen）: 配線済みセンサーが実際に測定する anchor
     （``is_harmony_sensor_anchor`` または ``is_structure_sensor_anchor`` —
     `_observe_anchor` の routing と同じ述語。二重定義しない）が manifest 中に

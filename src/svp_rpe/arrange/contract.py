@@ -25,15 +25,30 @@ from svp_rpe.arrange.resolver import ArrangementError
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 
-# AR2-2: domain 別に許容される変形語彙の明示定数（勝手に増やさない。将来の語彙
-# 追加は Design Memo 経由）。lyrics / rhythm / motif は変形語彙が未定義のため空
-# 集合とする — 語彙なきドメインへの elastic 宣言は契約の空洞化になるため、
+# AR2-2/AR2-3: domain 別に許容される変形語彙の明示定数（勝手に増やさない。将来の
+# 語彙追加は Design Memo 経由）。lyrics / rhythm / motif は変形語彙が未定義のため
+# 空集合とする — 語彙なきドメインへの elastic 宣言は契約の空洞化になるため、
 # `build_preservation_contract` はこれらのドメインで elastic を一律拒否する
 # （hard か free のみ許可）。
+# structure の section_insertion/section_omission/section_repetition は AR2-3
+# （design_memo_ar2_3.md）で追加した — #193 の実 form 実測が示した挿入・欠落・
+# 反復の 3 変形（`AllowedTransformation` のコメント参照）。既存の
+# intro_extension（特定の楽曲的意図を持つ intro 延長という個別カテゴリ）と
+# instrumental_break（同じく個別カテゴリの間奏挿入）は、より一般的な form
+# レベルのカテゴリである section_insertion 等と共存する — 前者を後者の別名や
+# 上位互換として扱って削除しない（意図の粒度が異なる別語彙のため）。
 DOMAIN_ALLOWED_TRANSFORMS: dict[AnchorDomain, frozenset[str]] = {
     "melody": frozenset({"octave_displacement", "ornamentation", "timing_warp"}),
     "harmony": frozenset({"chord_extensions", "functional_substitution"}),
-    "structure": frozenset({"intro_extension", "instrumental_break"}),
+    "structure": frozenset(
+        {
+            "intro_extension",
+            "instrumental_break",
+            "section_insertion",
+            "section_omission",
+            "section_repetition",
+        }
+    ),
     "lyrics": frozenset(),
     "rhythm": frozenset(),
     "motif": frozenset(),

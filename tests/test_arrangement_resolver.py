@@ -487,3 +487,47 @@ def test_midnight_signal_regression_resolve() -> None:
     assert resolution.derived_score.meta == source.meta
     paths = {c.path for c in resolution.changes}
     assert paths == {"physical.bpm", "physical.brightness", "rendering.priority"}
+
+
+# --- AR2-3: preservation.identity_anchors vocabulary parses through the spec ----
+
+
+def test_identity_anchors_ar2_3_vocabulary_round_trips_through_spec_parsing() -> None:
+    """`ArrangementSpec.preservation.identity_anchors` accepts the AR2-3
+    structure vocabulary (section_insertion/section_omission/
+    section_repetition), and `resolve_arrangement` — which only ever reads
+    `score_fields` for scalar/list overrides — is indifferent to its
+    presence: `identity_anchors` cross-validation against a manifest's actual
+    anchors/domains is `build_preservation_contract`'s job
+    (`tests/test_preservation_contract.py`), not the resolver's."""
+    source = _source()
+    spec = ArrangementSpec.model_validate(
+        {
+            "meta": {"id": "arr-test", "version": "1"},
+            "target": {},
+            "preservation": {
+                "score_fields": {},
+                "identity_anchors": {
+                    "anchor-structure": {
+                        "mode": "elastic",
+                        "allow": [
+                            "section_insertion",
+                            "section_omission",
+                            "section_repetition",
+                        ],
+                    }
+                },
+            },
+        }
+    )
+
+    resolution = resolve_arrangement(source, spec)
+
+    assert resolution.changes == []
+    assert resolution.derived_score.model_dump(mode="json") == source.model_dump(mode="json")
+    assert spec.preservation.identity_anchors is not None
+    assert spec.preservation.identity_anchors["anchor-structure"].allow == [
+        "section_insertion",
+        "section_omission",
+        "section_repetition",
+    ]
