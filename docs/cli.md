@@ -415,11 +415,23 @@ future Design Memo.
 
 | Case | `adherence_status` | `determination` |
 |---|---|---|
-| No sensor wired for the anchor's domain (lyrics/melody/rhythm/structure/motif in this PR) | `not_observed` | `no_sensor` |
-| Sensor ran and measured an exact identity match (harmony: the collapsed observed sequence matches the canonical progression's cycle alternation all the way through, no leftover tail) | `preserved` | `exact_match` |
+| No sensor wired for the anchor's domain (lyrics/melody/rhythm/motif) | `not_observed` | `no_sensor` |
+| Sensor ran and measured an exact identity match (harmony: the collapsed observed sequence matches the canonical progression's cycle alternation all the way through, no leftover tail. structure: the normalized canonical and observed section sequences match exactly) | `preserved` | `exact_match` |
 | Sensor ran but did not match exactly | `not_observed` | `deferred` |
 
-The only sensor wired in this PR is **harmony**: it extracts the generated audio with
+Two sensors are wired: **harmony** and **structure** (2026-07-20, AR2-3 unfreeze
+condition (a)). Both route on the *(domain, artifact_type)* pair, not the domain
+alone — a `harmony` anchor whose `artifact_type` isn't `chord_sequence_json` (e.g.
+`audio_excerpt`), or a `structure` anchor whose `artifact_type` isn't `section_map`,
+falls back to the generic no-sensor path even though the domain itself has a wired
+sensor elsewhere. **structure** additionally gates on the anchor's declared
+`format_version`: only `format_version="section-map/0.1"` routes to the JSON
+sensor (PR #192 review round 1) — pre-existing `section_map` anchor precedent
+in other formats (undeclared `format_version`, or e.g. `"section-map/1"`) keeps
+the no-sensor fallback instead of being force-fed into the `section-map/0.1`
+JSON parser.
+
+**harmony** extracts the generated audio with
 `extract_rpe_from_file` (the same dependency-free `compute_chord_events` chroma-template
 detector R4 uses) and normalizes `PhysicalRPE.chord_events` to `(root, quality)` pairs.
 Because the deterministic performer plays the canonical progression once per
@@ -463,6 +475,62 @@ score's 2 non-drone, chord-playing sections) before a 3-entry tail diverges.
 the chroma-template detector still emits a (arbitrary-looking) major/minor
 label for a bare root tone that was never meant to carry a chord progression —
 see [`arrangement_identity_planning.md`](arrangement_identity_planning.md) AR4.
+
+**structure** (2026-07-20) is wired to the `(domain="structure",
+artifact_type="section_map", format_version="section-map/0.1")` triple — the
+format_version declaration is the routing gate that keeps other-format
+`section_map` anchors on the no-sensor fallback (see above). The canonical
+side is the `section_map`
+anchor artifact (`section-map/0.1`: `{"schema_version": "section-map/0.1",
+"sections": [...]}` — a non-empty, order-significant list of section labels;
+an unknown key, non-list/empty `sections`, or unsupported `schema_version` is
+rejected fail-closed, the same posture `chord-sequence/0.1` takes). The
+observed side is `PhysicalRPE.structure` (`SectionMarker.label`, always
+populated by extraction — no extra dependency to wire). Normalization is
+**asymmetric** between the two sides (Codex 3R P2 — an earlier revision
+normalized both sides the same way, which could collapse a hand-authored
+canonical's own repeat-numbering convention, e.g. `chorus1`/`chorus2`, onto
+a single value and mask a real reordering):
+
+- **canonical** (`_normalize_canonical_section_label`) — lowercase only.
+  Author-written identifiers are kept verbatim, including any trailing
+  digits (`verse2` stays `verse2`, `chorus1`/`chorus2` stay distinct). The
+  convention for expressing a repeated section on the canonical side is
+  enumeration, not numbering — write `["verse", "chorus", "verse",
+  "chorus"]`, not `["verse1", "chorus1", "verse2", "chorus2"]`.
+- **observed** (`_normalize_observed_section_label`) — lowercase, then strip
+  a trailing digit only when the stripped stem is exactly `verse` (e.g. the
+  extractor's auto-numbered `Verse2` label normalizes to `verse`). `verse` is
+  the *only* stem `assign_labels` (`rpe/structure_labels.py`) ever
+  auto-numbers — Intro/Outro are emitted exactly once, and Chorus/Bridge are
+  always emitted as their bare singular form even though Chorus can occur up
+  to twice — so stripping is restricted to that one stem rather than the
+  full five-word vocabulary an earlier revision used (Codex 2R P2's fix
+  narrowed the *vocabulary* that gets stripped; Codex 3R P2 additionally
+  narrowed *which side* gets stripped at all).
+
+Labels outside the extractor's numbered vocabulary keep their trailing
+digits after lowercasing on both sides, so generic identifier-style labels
+such as `section_01`/`section_02` stay distinct instead of collapsing onto
+the same `section_` value. This absorbs case differences and the
+extractor's `VerseN` repeat-numbering without merging synonyms, collapsing
+distinct identifiers, or doing any other semantic equivalence. `measurements`
+records both the normalized and raw
+observed sequences (`canonical_sections`, `observed_sections`,
+`observed_sections_raw`) plus their lengths, and:
+
+- `position_match_rate` — position-aligned match count over
+  `max(canonical_length, observed_length)` (0 when both are empty; a length
+  mismatch always keeps this below 1.0, since the longer sequence's excess
+  positions can never match). A transparency measurement only — **not** the
+  D-1 identity gate.
+- `sequence_exact_match` — whether the normalized canonical and observed
+  sequences are identical in both length and order. **This is the D-1
+  identity gate**: `preserved` only when `sequence_exact_match` is `True`;
+  otherwise `not_observed`/`deferred`, with the raw measurements still fully
+  recorded. Unlike harmony, structure has no repeating-progression semantics
+  to collapse/cycle-align against — the sequence itself is the whole
+  observation.
 
 lyrics/melody anchors are recorded as `available: false` with a `reason` (they need
 the optional `lyrics` / `basic-pitch` extras — not wired here); their future

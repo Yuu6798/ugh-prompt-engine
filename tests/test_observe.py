@@ -32,10 +32,15 @@ from svp_rpe.arrange.observe import (
     ObservationReport,
     SensorRecord,
     _cycle_alignment,
+    _load_section_map,
+    _normalize_canonical_section_label,
+    _normalize_observed_section_label,
     _observe_anchor,
     _observe_harmony,
+    _observe_structure,
     _observe_unavailable,
     build_observation_report,
+    is_structure_sensor_anchor,
 )
 from svp_rpe.arrange.package import PerformancePackage
 from svp_rpe.cli import app
@@ -115,14 +120,73 @@ def _chord_artifact_bytes(chords: list[tuple[str, str]], *, schema: str = "chord
     return json.dumps(payload).encode("utf-8")
 
 
-def _anchor(anchor_id: str, domain: str, artifact: str, artifact_type: str) -> IdentityAnchor:
+def _bundle_with_structure(labels: list[str]) -> RPEBundle:
+    """Synthetic RPEBundle carrying only the `physical.structure` sequence
+    needed by `_observe_structure` (`chord_events` left empty — the structure
+    sensor never reads them, mirroring `_bundle_with_chords`'s narrow-fixture
+    style for the harmony sensor)."""
+    markers = [
+        SectionMarker(label=label, start_sec=float(index), end_sec=float(index + 1))
+        for index, label in enumerate(labels)
+    ]
+    physical = PhysicalRPE(
+        bpm=120.0,
+        bpm_confidence=0.9,
+        key="C",
+        mode="minor",
+        key_confidence=0.9,
+        duration_sec=8.0,
+        sample_rate=44100,
+        time_signature="4/4",
+        time_signature_confidence=0.9,
+        structure=markers,
+        rms_mean=0.2,
+        peak_amplitude=0.8,
+        crest_factor=4.0,
+        active_rate=0.73,
+        valley_depth=0.18,
+        thickness=1.0,
+        spectral_centroid=900.0,
+        spectral_profile=SpectralProfile(
+            centroid=900.0, low_ratio=0.4, mid_ratio=0.5, high_ratio=0.1, brightness=0.1,
+        ),
+        stereo_profile=None,
+        onset_density=2.0,
+        chord_events=[],
+    )
+    return RPEBundle(
+        physical=physical,
+        semantic=generate_semantic(physical),
+        audio_file="fixture.wav",
+        audio_duration_sec=8.0,
+        audio_sample_rate=44100,
+        audio_channels=1,
+        audio_format="wav",
+    )
+
+
+def _section_map_artifact_bytes(
+    sections: list[str], *, schema_version: str = "section-map/0.1"
+) -> bytes:
+    payload = {"schema_version": schema_version, "sections": sections}
+    return json.dumps(payload).encode("utf-8")
+
+
+def _anchor(
+    anchor_id: str,
+    domain: str,
+    artifact: str,
+    artifact_type: str,
+    *,
+    format_version: str | None = None,
+) -> IdentityAnchor:
     return IdentityAnchor(
         id=anchor_id,
         domain=domain,
         artifact=artifact,
         artifact_type=artifact_type,
         media_type="application/json",
-        format_version=None,
+        format_version=format_version,
         sha256=hashlib.sha256(anchor_id.encode()).hexdigest(),
         required=True,
     )
@@ -320,9 +384,13 @@ def test_observe_unavailable_unmapped_domain_falls_back_to_generic_reason() -> N
     assert observation.adherence_status == "not_observed"
 
 
-def test_observe_anchor_dispatches_non_harmony_domains_to_unavailable() -> None:
+def test_observe_anchor_dispatches_unwired_domains_to_unavailable() -> None:
+    """`structure` (with a `section_map` artifact_type) is no longer routed
+    here — it has its own wired sensor now (`_observe_structure`). `rhythm`
+    has no sensor at all regardless of artifact_type, so it still falls
+    through `_observe_anchor` to the generic `_observe_unavailable` path."""
     observation = _observe_anchor(
-        _anchor("structure", "structure", "structure.json", "section_map"),
+        _anchor("beat", "rhythm", "beat.json", "section_map"),
         manifest_dir=Path("."),
         work_id="w",
         bundle=_bundle_with_chords([]),
@@ -711,6 +779,458 @@ def test_observe_harmony_degenerate_canonical_single_chord_reaches_preserved() -
     )
 
 
+# --- 3b. structure sensor: D-1's 3-way branch on section-sequence position match --
+
+
+def test_normalize_canonical_section_label_lowercases_only() -> None:
+    """Unit-level check of the canonical-side normalization rule (structure
+    Design Memo section 3, revised Codex 3R P2): lowercase only, never strip
+    trailing digits. Author-written identifiers (including a hand-authored
+    numbering convention like `chorus1`/`chorus2`) are kept verbatim so a
+    reordering of them is never masked by normalization."""
+    assert _normalize_canonical_section_label("Verse2") == "verse2"
+    assert _normalize_canonical_section_label("CHORUS") == "chorus"
+    assert _normalize_canonical_section_label("bridge") == "bridge"
+    assert _normalize_canonical_section_label("Chorus1") == "chorus1"
+    assert _normalize_canonical_section_label("Chorus2") == "chorus2"
+    assert _normalize_canonical_section_label("section_01") == "section_01"
+    assert _normalize_canonical_section_label("SECTION_01") == "section_01"
+
+
+def test_normalize_observed_section_label_strips_verse_stem_only() -> None:
+    """Unit-level check of the observed-side normalization rule (structure
+    Design Memo section 3, revised Codex 3R P2): lowercase always; trailing
+    digits are stripped only when the stripped stem is exactly `verse` — the
+    single word `assign_labels` (rpe/structure_labels.py) ever auto-numbers.
+    Chorus/Bridge/Intro/Outro are never emitted with a numeric suffix by the
+    extractor, so their trailing digits (if any, e.g. from a synthetic
+    fixture) are left untouched rather than stripped."""
+    assert _normalize_observed_section_label("Verse2") == "verse"
+    assert _normalize_observed_section_label("verse3") == "verse"
+    assert _normalize_observed_section_label("CHORUS") == "chorus"
+    assert _normalize_observed_section_label("bridge") == "bridge"
+    # Chorus/Bridge/Intro/Outro stems are excluded from stripping even though
+    # they were in the pre-Codex-3R vocabulary: the extractor never emits
+    # them numbered, so a numeric suffix on these stems keeps its digits.
+    assert _normalize_observed_section_label("chorus3") == "chorus3"
+    assert _normalize_observed_section_label("outro2") == "outro2"
+    assert _normalize_observed_section_label("bridge2") == "bridge2"
+    # Stems outside the extractor's vocabulary entirely keep their trailing
+    # digits too, so distinct identifier-style labels never collapse.
+    assert _normalize_observed_section_label("interlude2") == "interlude2"
+    assert _normalize_observed_section_label("section_01") == "section_01"
+    assert _normalize_observed_section_label("section_02") == "section_02"
+    assert _normalize_observed_section_label("SECTION_01") == "section_01"
+
+
+def test_observe_structure_exact_match_is_preserved() -> None:
+    canonical = ["intro", "verse", "chorus", "outro"]
+    anchor = _anchor("structure", "structure", "section_map.json", "section_map")
+    bundle = _bundle_with_structure(canonical)
+    artifact_bytes = _section_map_artifact_bytes(canonical)
+
+    observation = _observe_structure(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        bundle=bundle,
+        artifact_bytes=artifact_bytes,
+    )
+
+    assert observation.sensor.available is True
+    assert observation.sensor.name == "section_sequence_match"
+    assert observation.measurements == {
+        "canonical_sections": canonical,
+        "canonical_length": 4,
+        "observed_sections": canonical,
+        "observed_sections_raw": canonical,
+        "observed_length": 4,
+        "position_match_rate": 1.0,
+        "sequence_exact_match": True,
+    }
+    assert observation.adherence_status == "preserved"
+    assert observation.determination == "exact_match"
+    assert observation.note == (
+        "normalized canonical and observed section sequences match exactly."
+    )
+
+
+def test_observe_structure_normalization_makes_raw_mismatch_an_exact_match() -> None:
+    """`Intro`/`intro` casing and the extractor's `verse1`/`verse` trailing-
+    digit convention are both absorbed by normalization — the raw sequences
+    differ, but the normalized ones match exactly, so this still reaches
+    `preserved`."""
+    anchor = _anchor("structure", "structure", "section_map.json", "section_map")
+    canonical_raw = ["Intro", "VERSE", "Chorus"]
+    observed_raw = ["intro", "verse1", "chorus"]
+    bundle = _bundle_with_structure(observed_raw)
+    artifact_bytes = _section_map_artifact_bytes(canonical_raw)
+
+    observation = _observe_structure(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        bundle=bundle,
+        artifact_bytes=artifact_bytes,
+    )
+
+    assert observation.measurements["canonical_sections"] == ["intro", "verse", "chorus"]
+    assert observation.measurements["observed_sections"] == ["intro", "verse", "chorus"]
+    assert observation.measurements["observed_sections_raw"] == observed_raw
+    assert observation.measurements["sequence_exact_match"] is True
+    assert observation.adherence_status == "preserved"
+    assert observation.determination == "exact_match"
+
+
+def test_observe_structure_canonical_chorus_numbering_stays_distinct() -> None:
+    """Regression for Codex 3R P2
+    (https://github.com/Yuu6798/ugh-prompt-engine/pull/192#discussion_r3610383648
+    follow-up): a hand-authored canonical using its own `chorus1`/`chorus2`
+    repeat-numbering convention must never be collapsed by normalization —
+    the canonical side only lowercases, it never strips trailing digits. A
+    reordering of `chorus1`/`chorus2` (which the pre-Codex-3R five-word-stem
+    strip would have silently absorbed into a false `sequence_exact_match`)
+    must therefore surface as a real mismatch."""
+    canonical = ["intro", "chorus1", "chorus2", "outro"]
+    observed = ["intro", "chorus2", "chorus1", "outro"]
+    anchor = _anchor("structure", "structure", "section_map.json", "section_map")
+    bundle = _bundle_with_structure(observed)
+    artifact_bytes = _section_map_artifact_bytes(canonical)
+
+    observation = _observe_structure(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        bundle=bundle,
+        artifact_bytes=artifact_bytes,
+    )
+
+    assert observation.measurements["canonical_sections"] == canonical
+    assert observation.measurements["observed_sections"] == observed
+    assert observation.measurements["sequence_exact_match"] is False
+    assert observation.adherence_status == "not_observed"
+    assert observation.determination == "deferred"
+
+
+def test_observe_structure_canonical_verse2_is_not_collapsed_to_verse() -> None:
+    """The canonical side never strips trailing digits, so an author-written
+    `verse2` identifier stays `verse2` after normalization and does not match
+    an observed (extractor) `verse` label — canonical-side authors who want
+    to express a second verse occurrence use enumeration (`["verse",
+    "chorus", "verse", "chorus"]`), not extractor-style numbering; a literal
+    `verse2` in the canonical is treated as a distinct identifier, not as
+    "the second verse"."""
+    canonical = ["intro", "verse2", "outro"]
+    observed = ["intro", "verse", "outro"]
+    anchor = _anchor("structure", "structure", "section_map.json", "section_map")
+    bundle = _bundle_with_structure(observed)
+    artifact_bytes = _section_map_artifact_bytes(canonical)
+
+    observation = _observe_structure(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        bundle=bundle,
+        artifact_bytes=artifact_bytes,
+    )
+
+    assert observation.measurements["canonical_sections"] == ["intro", "verse2", "outro"]
+    assert observation.measurements["observed_sections"] == ["intro", "verse", "outro"]
+    assert observation.measurements["sequence_exact_match"] is False
+    assert observation.adherence_status == "not_observed"
+    assert observation.determination == "deferred"
+
+
+def test_observe_structure_observed_chorus_digit_is_not_stripped() -> None:
+    """If a `Chorus2`-style label ever appears on the observed side (the real
+    extractor never emits it numbered, but this guards the normalization
+    contract directly rather than relying on that invariant), the trailing
+    digit must NOT be stripped — only the `verse` stem is. A canonical
+    `chorus` therefore does not match an observed `Chorus2`."""
+    canonical = ["intro", "chorus", "outro"]
+    observed = ["Intro", "Chorus2", "Outro"]
+    anchor = _anchor("structure", "structure", "section_map.json", "section_map")
+    bundle = _bundle_with_structure(observed)
+    artifact_bytes = _section_map_artifact_bytes(canonical)
+
+    observation = _observe_structure(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        bundle=bundle,
+        artifact_bytes=artifact_bytes,
+    )
+
+    assert observation.measurements["canonical_sections"] == canonical
+    assert observation.measurements["observed_sections"] == ["intro", "chorus2", "outro"]
+    assert observation.measurements["sequence_exact_match"] is False
+    assert observation.adherence_status == "not_observed"
+    assert observation.determination == "deferred"
+
+
+def test_observe_structure_numbered_identifier_labels_stay_distinct() -> None:
+    """Regression for Codex 2R P2
+    (https://github.com/Yuu6798/ugh-prompt-engine/pull/192#discussion_r3610383648):
+    generic identifier-style labels like `section_01`/`section_02` are outside
+    the extractor's known vocabulary, so normalization must NOT strip their
+    trailing digits. A reordered `section_01`/`section_02` sequence must
+    therefore stay a mismatch, not a false-positive `sequence_exact_match`."""
+    canonical = ["section_01", "section_02", "section_03"]
+    observed = ["section_02", "section_01", "section_03"]
+    anchor = _anchor("structure", "structure", "section_map.json", "section_map")
+    bundle = _bundle_with_structure(observed)
+    artifact_bytes = _section_map_artifact_bytes(canonical)
+
+    observation = _observe_structure(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        bundle=bundle,
+        artifact_bytes=artifact_bytes,
+    )
+
+    assert observation.measurements["canonical_sections"] == canonical
+    assert observation.measurements["observed_sections"] == observed
+    assert observation.measurements["sequence_exact_match"] is False
+    assert observation.measurements["position_match_rate"] == 0.3333
+    assert observation.adherence_status == "not_observed"
+    assert observation.determination == "deferred"
+
+
+def test_observe_structure_reordered_sections_is_deferred_with_match_rate() -> None:
+    canonical = ["intro", "verse", "chorus", "outro"]
+    observed = ["intro", "chorus", "verse", "outro"]
+    anchor = _anchor("structure", "structure", "section_map.json", "section_map")
+    bundle = _bundle_with_structure(observed)
+    artifact_bytes = _section_map_artifact_bytes(canonical)
+
+    observation = _observe_structure(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        bundle=bundle,
+        artifact_bytes=artifact_bytes,
+    )
+
+    assert observation.measurements["position_match_rate"] == 0.5
+    assert observation.measurements["sequence_exact_match"] is False
+    assert observation.adherence_status == "not_observed"
+    assert observation.determination == "deferred"
+    assert "deferred to a future threshold Design Memo" in str(observation.note)
+
+
+def test_observe_structure_missing_trailing_sections_is_deferred_with_match_rate() -> None:
+    """Observed sequence shorter than canonical (e.g. a truncated take that
+    never reaches the tail sections): position_match_rate divides by the
+    longer (canonical) length, and the missing positions never contribute a
+    match."""
+    canonical = ["intro", "verse", "chorus", "outro"]
+    observed = ["intro", "verse"]
+    anchor = _anchor("structure", "structure", "section_map.json", "section_map")
+    bundle = _bundle_with_structure(observed)
+    artifact_bytes = _section_map_artifact_bytes(canonical)
+
+    observation = _observe_structure(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        bundle=bundle,
+        artifact_bytes=artifact_bytes,
+    )
+
+    assert observation.measurements["canonical_length"] == 4
+    assert observation.measurements["observed_length"] == 2
+    assert observation.measurements["position_match_rate"] == 0.5
+    assert observation.measurements["sequence_exact_match"] is False
+    assert observation.adherence_status == "not_observed"
+    assert observation.determination == "deferred"
+
+
+def test_observe_structure_extra_observed_sections_is_deferred_with_match_rate() -> None:
+    """Observed sequence longer than canonical (e.g. extra sections the
+    extractor found beyond what the identity manifest declares):
+    position_match_rate still divides by the longer (observed) length."""
+    canonical = ["intro", "verse"]
+    observed = ["intro", "verse", "chorus", "outro"]
+    anchor = _anchor("structure", "structure", "section_map.json", "section_map")
+    bundle = _bundle_with_structure(observed)
+    artifact_bytes = _section_map_artifact_bytes(canonical)
+
+    observation = _observe_structure(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        bundle=bundle,
+        artifact_bytes=artifact_bytes,
+    )
+
+    assert observation.measurements["canonical_length"] == 2
+    assert observation.measurements["observed_length"] == 4
+    assert observation.measurements["position_match_rate"] == 0.5
+    assert observation.measurements["sequence_exact_match"] is False
+    assert observation.adherence_status == "not_observed"
+    assert observation.determination == "deferred"
+
+
+def test_load_section_map_rejects_unknown_schema_version() -> None:
+    artifact_bytes = _section_map_artifact_bytes(["intro"], schema_version="section-map/0.2")
+    with pytest.raises(ValueError, match="section-map/0.2"):
+        _load_section_map(artifact_bytes, artifact_path=Path("section_map.json"))
+
+
+def test_load_section_map_rejects_empty_sections() -> None:
+    artifact_bytes = json.dumps(
+        {"schema_version": "section-map/0.1", "sections": []}
+    ).encode("utf-8")
+    with pytest.raises(ValueError):
+        _load_section_map(artifact_bytes, artifact_path=Path("section_map.json"))
+
+
+def test_load_section_map_rejects_unknown_key() -> None:
+    artifact_bytes = json.dumps(
+        {"schema_version": "section-map/0.1", "sections": ["intro"], "extra": "no"}
+    ).encode("utf-8")
+    with pytest.raises(ValueError):
+        _load_section_map(artifact_bytes, artifact_path=Path("section_map.json"))
+
+
+def test_load_section_map_rejects_missing_schema_version() -> None:
+    artifact_bytes = json.dumps({"sections": ["intro"]}).encode("utf-8")
+    with pytest.raises(ValueError):
+        _load_section_map(artifact_bytes, artifact_path=Path("section_map.json"))
+
+
+def test_observe_anchor_dispatches_structure_domain_with_non_section_map_artifact_type_to_unavailable() -> (
+    None
+):
+    """Same shape as harmony's `("harmony", "audio_excerpt")` case: a
+    structure anchor with a schema-legal but unwired artifact_type (e.g.
+    `audio_excerpt`) is not routed to `_observe_structure` and falls back to
+    the generic no_sensor path unchanged (structure Design Memo section 2 —
+    routes on the (domain, artifact_type) pair, not the domain alone)."""
+    anchor = _anchor("structure_excerpt", "structure", "excerpt.wav", "audio_excerpt")
+    assert is_structure_sensor_anchor(anchor) is False
+
+    observation = _observe_anchor(
+        anchor,
+        manifest_dir=Path("."),
+        work_id="w",
+        bundle=_bundle_with_structure(["intro"]),
+        artifact_bytes_by_id={},
+    )
+    assert observation.determination == "no_sensor"
+    assert observation.sensor.available is False
+
+
+def test_is_structure_sensor_anchor_requires_section_map_0_1_format_version() -> None:
+    """PR #192 review round 1: `artifact_type == "section_map"` alone isn't
+    enough to route to `_observe_structure` — the anchor must also declare
+    the exact `format_version` its JSON parser understands
+    (`section-map/0.1`). `format_version=None` is the common case (the
+    schema doesn't require declaring one at all — precedent:
+    `tests/test_identity_manifest.py`'s YAML `section_map` anchor), and
+    `format_version="section-map/1"` is a distinct declared format
+    (precedent: `tests/test_performance_package.py`). Neither should match."""
+    unversioned = _anchor("structure", "structure", "structure.yaml", "section_map")
+    assert unversioned.format_version is None
+    assert is_structure_sensor_anchor(unversioned) is False
+
+    other_format = _anchor(
+        "structure",
+        "structure",
+        "section_tags.json",
+        "section_map",
+        format_version="section-map/1",
+    )
+    assert is_structure_sensor_anchor(other_format) is False
+
+    wired = _anchor(
+        "structure",
+        "structure",
+        "section_map.json",
+        "section_map",
+        format_version="section-map/0.1",
+    )
+    assert is_structure_sensor_anchor(wired) is True
+
+
+def test_observe_anchor_falls_back_to_no_sensor_for_yaml_section_map_precedent() -> None:
+    """Regression guard for PR #192 review round 1: a `section_map` anchor
+    shaped like `tests/test_identity_manifest.py`'s (YAML `media_type`, no
+    declared `format_version`) must keep getting the `no_sensor` fallback it
+    always had — not be force-fed into `_observe_structure`'s JSON parser and
+    abort the whole `observe` run."""
+    anchor = _anchor("structure", "structure", "structure.yaml", "section_map")
+    observation = _observe_anchor(
+        anchor,
+        manifest_dir=Path("."),
+        work_id="w",
+        bundle=_bundle_with_structure(["intro"]),
+        artifact_bytes_by_id={},
+    )
+    assert observation.determination == "no_sensor"
+    assert observation.sensor.available is False
+    assert observation.sensor.name == "structure_sensor"
+    assert "section-map/0.1" in str(observation.sensor.reason)
+    assert "None" in str(observation.sensor.reason)
+
+
+def test_observe_anchor_falls_back_to_no_sensor_for_other_format_version_section_map() -> None:
+    """Regression guard for PR #192 review round 1: repo precedent
+    (`tests/test_performance_package.py`) declares `section_map` anchors with
+    `format_version="section-map/1"` — a different, non-JSON-guaranteed
+    format this sensor doesn't understand — which must also keep the
+    `no_sensor` fallback rather than being routed to the section-map/0.1
+    parser."""
+    anchor = _anchor(
+        "structure",
+        "structure",
+        "section_tags.json",
+        "section_map",
+        format_version="section-map/1",
+    )
+    observation = _observe_anchor(
+        anchor,
+        manifest_dir=Path("."),
+        work_id="w",
+        bundle=_bundle_with_structure(["intro"]),
+        artifact_bytes_by_id={},
+    )
+    assert observation.determination == "no_sensor"
+    assert observation.sensor.available is False
+    assert "section-map/1" in str(observation.sensor.reason)
+
+
+def test_observe_anchor_wired_section_map_0_1_with_invalid_content_still_fails_closed() -> None:
+    """The format_version gate only decides *routing* — an anchor that does
+    declare `section-map/0.1` but carries schema-invalid bytes still fails
+    closed inside `_observe_structure` / `_load_section_map`, exactly like
+    harmony's `chord-sequence/0.1` contract (same fail-closed boundary as
+    `test_load_section_map_rejects_unknown_schema_version`, exercised here at
+    the `_observe_anchor` dispatch level instead of calling `_load_section_map`
+    directly)."""
+    anchor = _anchor(
+        "structure",
+        "structure",
+        "section_map.json",
+        "section_map",
+        format_version="section-map/0.1",
+    )
+    assert is_structure_sensor_anchor(anchor) is True
+    bad_bytes = json.dumps(
+        {"schema_version": "section-map/0.2", "sections": ["intro"]}
+    ).encode("utf-8")
+
+    with pytest.raises(ValueError, match="section-map/0.2"):
+        _observe_anchor(
+            anchor,
+            manifest_dir=Path("."),
+            work_id="w",
+            bundle=_bundle_with_structure(["intro"]),
+            artifact_bytes_by_id={"structure": bad_bytes},
+        )
+
+
 # --- 4. build_observation_report: single shared extraction + determinism ----------
 
 
@@ -899,6 +1419,66 @@ def _build_scratch_identity_dir(tmp_path: Path, *, chord_artifact_bytes: bytes) 
     for anchor_data in manifest_data["anchors"]:
         if anchor_data["id"] == "harmony":
             anchor_data["sha256"] = hashlib.sha256(chord_artifact_bytes).hexdigest()
+    manifest_path = tmp_path / "identity_manifest.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(manifest_data, sort_keys=False, allow_unicode=True), encoding="utf-8"
+    )
+    return manifest_path
+
+
+def _build_scratch_identity_dir_with_structure_anchor(
+    tmp_path: Path, *, canonical_sections: list[str]
+) -> Path:
+    """Copy the midnight_signal identity fixture set into `tmp_path`
+    unmodified (lyrics/melody/harmony artifacts and their declared sha256
+    values are untouched — same-shaped copy `_build_scratch_identity_dir`
+    does), then append a new `structure` anchor whose `section-map/0.1`
+    artifact declares `canonical_sections`.
+
+    `examples/arrangement/midnight_signal/` itself is never written to —
+    AR2-3 froze that fixture set, so a structure anchor's manifest entry
+    only exists in this synthetic tmp_path copy (structure Design Memo
+    section 5's slow e2e). The arrangement spec `edm.identity.arrangement.yaml`
+    used by `_cli_package_args` doesn't reference a `structure` anchor id in
+    its `identity_anchors` preservation policy, so `package` records it as
+    `requested_mode=None` / `not_requested` — harmless, since `observe`
+    measures independently of delivery/preservation-contract status.
+    """
+    (tmp_path / "identity").mkdir()
+    (tmp_path / "composition_score.yaml").write_bytes(BASE_SCORE.read_bytes())
+    for name in ("lyrics.txt", "melody_notes.json", "chord_progression.json"):
+        (tmp_path / "identity" / name).write_bytes(
+            (FIXTURE_DIR / "identity" / name).read_bytes()
+        )
+    section_map_bytes = _section_map_artifact_bytes(canonical_sections)
+    (tmp_path / "identity" / "section_map.json").write_bytes(section_map_bytes)
+
+    manifest_data = yaml.safe_load(IDENTITY_MANIFEST.read_text(encoding="utf-8"))
+    manifest_data["anchors"].append(
+        {
+            "id": "structure",
+            "domain": "structure",
+            "artifact": "identity/section_map.json",
+            "artifact_type": "section_map",
+            "media_type": "application/json",
+            "format_version": "section-map/0.1",
+            "sha256": hashlib.sha256(section_map_bytes).hexdigest(),
+            # `required=False`: `edm.identity.arrangement.yaml` (the fixture
+            # arrangement spec `_cli_package_args` compiles against, and
+            # AR2-3-frozen — not editable to add a `structure` preservation
+            # policy entry) only declares identity_anchors for
+            # lyrics/melody/harmony. `build_preservation_contract` demands a
+            # policy for every `required=True` anchor
+            # (`arrange/contract.py`'s "required anchor(s) have no
+            # preservation policy" check), so a required structure anchor
+            # would fail `package` before `observe` is ever reached.
+            # `required=False` makes it legitimately unrequested
+            # (`requested_mode=None` / `not_requested`), which `observe`
+            # doesn't care about — the sensor measures every manifest anchor
+            # regardless of its preservation-contract status.
+            "required": False,
+        }
+    )
     manifest_path = tmp_path / "identity_manifest.yaml"
     manifest_path.write_text(
         yaml.safe_dump(manifest_data, sort_keys=False, allow_unicode=True), encoding="utf-8"
@@ -2042,6 +2622,110 @@ def test_observe_cli_e2e_harmony_measurement_is_pinned_and_deterministic(
     assert harmony["adherence_status"] == "not_observed"
     assert harmony["determination"] == "deferred"
     assert "matches 2 full canonical cycle(s); 3 trailing entries" in harmony["note"]
+
+    # Determinism: same inputs, a second observe invocation -> byte-identical report.
+    report_path_2 = tmp_path / "report2.json"
+    result3 = _invoke_observe(report_path_2)
+    assert result3.exit_code == 0, result3.output
+    assert report_path_1.read_bytes() == report_path_2.read_bytes()
+
+
+@pytest.mark.slow
+def test_observe_cli_e2e_structure_measurement_is_pinned_and_deterministic(
+    tmp_path: Path,
+) -> None:
+    """AR2-3 解凍条件 (a) の実証: structure Design Memo section 5. Same shape as
+    `test_observe_cli_e2e_harmony_measurement_is_pinned_and_deterministic`
+    (real `perform` + real `extract_rpe_from_file`, no monkeypatch), but with
+    a synthetic manifest carrying a `structure` anchor —
+    `examples/arrangement/midnight_signal/` itself stays untouched (AR2-3
+    froze it; only `_build_scratch_identity_dir_with_structure_anchor`'s
+    tmp_path copy gains the new anchor)."""
+    canonical_sections = ["intro", "chorus", "bridge", "verse", "chorus", "verse", "outro"]
+    manifest_path = _build_scratch_identity_dir_with_structure_anchor(
+        tmp_path, canonical_sections=canonical_sections
+    )
+
+    pkg_dir = tmp_path / "pkg"
+    result = CliRunner().invoke(app, _cli_package_args(pkg_dir, identity_yaml=manifest_path))
+    assert result.exit_code == 0, result.output
+
+    score = CompositionScore.model_validate(
+        yaml.safe_load(DERIVED_SCORE_PATH.read_text(encoding="utf-8"))
+    )
+    wav_path = tmp_path / "take.wav"
+    wav_path.write_bytes(wav_bytes(perform(score, FAITHFUL_TAKE)))
+
+    def _invoke_observe(report_path: Path) -> Any:
+        return CliRunner().invoke(
+            app,
+            [
+                "observe",
+                str(pkg_dir / "performance_package.json"),
+                str(wav_path),
+                "--manifest",
+                str(manifest_path),
+                "-o",
+                str(report_path),
+            ],
+        )
+
+    report_path_1 = tmp_path / "report1.json"
+    result2 = _invoke_observe(report_path_1)
+    assert result2.exit_code == 0, result2.output
+
+    report = json.loads(report_path_1.read_text(encoding="utf-8"))
+    anchors = {anchor["anchor_id"]: anchor for anchor in report["anchors"]}
+
+    # harmony is still measured too (extraction is shared across anchors) —
+    # exact values are already pinned by the harmony e2e test above; here we
+    # only confirm co-existence didn't disturb it (still ran, still available).
+    harmony = anchors["harmony"]
+    assert harmony["sensor"]["available"] is True
+
+    structure = anchors["structure"]
+    assert structure["sensor"]["available"] is True
+    assert structure["sensor"]["name"] == "section_sequence_match"
+    # Pinned real-extraction values (`extract_rpe_from_file` against the
+    # deterministic FAITHFUL_TAKE performance of expected/edm/derived_score.yaml
+    # — the same audio the harmony e2e test above measures): the extractor's
+    # real section labels are `Intro/Chorus/Bridge/Verse/Chorus/Verse2/Outro`
+    # (mixed case, with the repeated "Verse" section auto-numbered "Verse2").
+    # `canonical_sections` was chosen to equal the *normalized* form of that
+    # real observed sequence exactly, so this pin demonstrates the
+    # normalization rule (lowercase + strip trailing digits) doing real work
+    # against real extractor output: the raw sequences differ (case,
+    # "Verse2" vs "verse") but the normalized ones match exactly.
+    assert structure["measurements"] == {
+        "canonical_sections": canonical_sections,
+        "canonical_length": 7,
+        "observed_sections": [
+            "intro",
+            "chorus",
+            "bridge",
+            "verse",
+            "chorus",
+            "verse",
+            "outro",
+        ],
+        "observed_sections_raw": [
+            "Intro",
+            "Chorus",
+            "Bridge",
+            "Verse",
+            "Chorus",
+            "Verse2",
+            "Outro",
+        ],
+        "observed_length": 7,
+        "position_match_rate": 1.0,
+        "sequence_exact_match": True,
+    }
+    assert structure["adherence_status"] == "preserved"
+    assert structure["determination"] == "exact_match"
+    assert structure["note"] == (
+        "normalized canonical and observed section sequences match exactly."
+    )
 
     # Determinism: same inputs, a second observe invocation -> byte-identical report.
     report_path_2 = tmp_path / "report2.json"

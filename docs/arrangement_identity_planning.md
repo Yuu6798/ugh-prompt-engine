@@ -1,8 +1,10 @@
 # Arrangement Identity Track Planning
 
-**Status**: AR0 計画文書。AR1、AR2-1/2、AR3-1/2 は実装済み。AR2-3 は保留、
-AR4 は計器配線済み（`svprpe observe` + `ObservationReport` sidecar。harmony
-domain のみ実測、判定閾値は未定・実 Suno 生成物での観測は未実施）。
+**Status**: AR0 計画文書。AR1、AR2-1/2、AR3-1/2 は実装済み。AR2-3 は保留
+（2026-07-20: 解凍条件 (a) structure センサー配線は充足、(b) 長尺 form
+artifact 待ち）、AR4 は計器配線済み（`svprpe observe` + `ObservationReport`
+sidecar。harmony + structure domain を実測、判定閾値は未定・実 Suno 生成物での
+観測は未実施）。
 
 > この文書は、元の未コミット AR0 ドラフトが checkout 内に残っていなかったため、
 > 2026-07-15 のユーザー承認に基づき、マージ済み PR #175–#181、現行コード、
@@ -219,6 +221,35 @@ observed sequence が正典進行の 1 cycle も一致しない — take0 は
 `ar4_observation_take{0,1}.json` / `ar4_generation_timestamps.yaml` /
 `ar4_determinism_spot_check.yaml`。WAV 自体は DD-A によりコミット対象外）。
 
+2026-07-20: AR2-3 解凍条件 (a)（structure センサーの observe 配線）を充足した
+（Design Memo `design_memo_structure_sensor.md`）。harmony と完全に同型の
+「計器・verdict なし・D-1 3 分岐」設計で `domain == "structure" and
+artifact_type == "section_map"` にのみ実配線する
+（`is_structure_sensor_anchor`。それ以外の artifact_type を持つ structure
+anchor は harmony 同様 no_sensor のまま）。正典は `section-map/0.1` artifact
+（`sections`: 非空の文字列リスト、順序が正典。未知キー・型不正・未知
+schema_version は fail-closed）、観測は `PhysicalRPE.structure`
+（`SectionMarker.label` 列、extract で常に populate 済みのため新規抽出コード
+不要）。両側を正規化（lowercase 化 + 末尾数字 strip。それ以外の変換はしない）
+した上で先頭から位置整合させ、一致数 / max(正典長, 観測長) を
+`position_match_rate` として記録する。**D-1 の恒等判定は正規化後の列が長さ・
+順序とも完全一致するか（`sequence_exact_match`）のみで行う** —
+`position_match_rate` は透明性のための生値であり閾値判定には使わない。harmony
+の cycle-alignment のような繰り返し折り畳みは行わない（structure には
+「繰り返す正典進行」に相当する周期構造の前提が無いため）。決定論 synth
+（`perform` + `FAITHFUL_TAKE`）による `expected/edm/derived_score.yaml` E2E
+実測（合成 manifest。`examples/arrangement/midnight_signal/` 本体は不変）:
+実抽出器のセクションラベルは `Intro/Chorus/Bridge/Verse/Chorus/Verse2/Outro`
+（大文字・繰り返し区間の自動連番付き）で、正典を正規化後の観測列と一致する
+`intro/chorus/bridge/verse/chorus/verse/outro` に設定した結果
+`sequence_exact_match=True` / `preserved`/`exact_match` に到達し、正規化規則が
+実データに対して機能することを実証した。**AR2-3 の解凍は残る条件 (b)（form が
+存在する長尺 artifact の用意）待ちのまま** — structure センサーの配線自体は
+identity anchor の stable ID・section policy の意味論には一切触れておらず
+（`IdentityAnchor.section_ref` は引き続き opaque 文字列）、AR2-3 本体（structure
+anchor の stable ID / section policy 確定）とは独立。詳細:
+[`cli.md`](cli.md) の `svprpe observe` 節。
+
 ## 6. 実装状況
 
 | Phase | 主成果物 | 状態 |
@@ -226,10 +257,10 @@ observed sequence が正典進行の 1 cycle も一致しない — take0 は
 | AR0 | 本計画文書 | 完了 |
 | AR1 | resolver / CLI / bundle / diff / EDM-Jazz fixture | 完了 (#175–#177) |
 | AR2-1/2 | IdentityManifest / PreservationContract | 完了 (#178, #179, #181) |
-| AR2-3 | structure anchor policy | 保留（2026-07-19 再判断: 継続。解凍条件を structure センサー配線 + 長尺 form artifact に具体化） |
+| AR2-3 | structure anchor policy | 保留（2026-07-20: 解凍条件 (a) structure センサー配線は充足。残るは (b) 長尺 form artifact の用意） |
 | AR3-1 | InputCapabilityProfile | 完了 (#180, #181) |
 | AR3-2 | PerformancePackage compiler + 縦切り E2E fixture | 実装済み（E2E fixture 追加 2026-07-17） |
-| AR4 | generated-output identity observation | 計器配線済み。harmony のみ実測（decisive synth E2E + 2026-07-19 MusicGen 実生成物 n=2）。判定閾値は未定、実 Suno 生成物は未観測 |
+| AR4 | generated-output identity observation | 計器配線済み。harmony + structure を実測（decisive synth E2E + 2026-07-19 MusicGen 実生成物 n=2）。判定閾値は未定、実 Suno 生成物は未観測 |
 
 2026-07-17: bundle/report に `content_digest`（内容指紋）と、
 `CompilationReport` 限定の `invocation_provenance.compiler`（実行環境の監査記録、

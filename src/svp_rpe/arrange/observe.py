@@ -20,8 +20,8 @@ D-2: package（``PerformancePackage``）は書き換えない。observation は�
 sidecar として発行する — package 自身の ``observation.status``
 （``not_observed`` 固定）は本モジュールの対象外のまま不変。
 
-D-4: 本 PR で実配線するセンサーは harmony のみ。センサーは domain 単独ではなく
-**(domain, artifact_type) の対**に結び付く（2026-07-17 round 5）:
+D-4: センサーは domain 単独ではなく
+**(domain, artifact_type) の対**に結び付く（2026-07-17 round 5）。harmony:
 ``domain == "harmony" and artifact_type == "chord_sequence_json"`` の場合のみ
 実配線し、それ以外（domain=harmony だが artifact_type が異なる anchor —
 identity schema 上は合法な組み合わせ、例 ``audio_excerpt``）は run を落とさず
@@ -48,16 +48,33 @@ proper prefix（例: 1 コードのみの collapsed 列）に完全一致して�
 観測は、prefix が完全一致していても deferred のまま — 未観測に近い状態を
 "preserved" と偽称しない）。
 
+structure（2026-07-20、AR2-3 解凍条件 (a) — Design Memo
+`design_memo_structure_sensor.md`）: ``domain == "structure" and
+artifact_type == "section_map"`` の対にのみ実配線する。正典は
+``section-map/0.1`` artifact（`sections`: 非空の文字列リスト、順序が正典）、
+観測は ``PhysicalRPE.structure``（``SectionMarker.label`` 列、extract で常に
+populate 済み）。harmony の cycle-alignment のような繰り返し折り畳みは行わない
+（structure には「繰り返し正典進行」に相当する周期構造の前提が無いため） —
+両側を正規化（lowercase 化 + 末尾数字 strip。それ以外の変換はしない）した上で
+先頭から位置整合させ、一致数 / max(正典長, 観測長) を ``position_match_rate``
+として記録する（0 除算は 0.0）。D-1 の恒等判定は
+**正規化後の列が長さ・順序とも完全一致するか**
+（``sequence_exact_match``）のみで行う — 閾値化した ``position_match_rate``
+を恒等判定には使わない。artifact_type が ``section_map`` でない structure
+anchor（identity schema 上は合法。例 ``audio_excerpt``）は harmony 同様
+no_sensor のまま（domain 単独ではなく (domain, artifact_type) の対で
+ルーティングする一貫性）。
+
 lyrics / melody は optional extra 依存（faster-whisper / basic-pitch）のため
 センサー本体を配線せず、``available=false`` + reason を記録する（将来の接続点は
 ``eval/lyrics_match.py`` / ``rpe/learned/lyrics_adapter.py`` と
-``rpe/learned/basic_pitch_adapter.py``）。他の domain（rhythm/structure/motif）
-も同様に no_sensor。
+``rpe/learned/basic_pitch_adapter.py``）。他の domain（rhythm/motif）も
+同様に no_sensor（structure は上記のとおり実配線済み）。
 
-harmony measurements の note は事実（一致した cycle 数・食い違った tail の
-長さ）のみを記述し、食い違いの原因についての解釈（例: ドローン区間のセンサー
-雑音）は書かない — 解釈は docs 側の役割（``docs/cli.md`` の `observe` 節 /
-`docs/arrangement_identity_planning.md`）。
+harmony / structure の measurements の note は事実（一致した cycle 数・食い違った
+tail の長さ、あるいは正規化後の列が一致したかどうか）のみを記述し、食い違いの
+原因についての解釈（例: ドローン区間のセンサー雑音）は書かない — 解釈は docs
+側の役割（``docs/cli.md`` の `observe` 節 / `docs/arrangement_identity_planning.md`）。
 
 再観測についての可変性の規律: sidecar ファイルの出力先が既存ファイルであれば
 上書きしてよい（observation report は「今 measured したもの」を表す再観測可能な
@@ -66,10 +83,11 @@ harmony measurements の note は事実（一致した cycle 数・食い違っ�
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from svp_rpe.arrange.identity import (
     AnchorDomain,
@@ -471,6 +489,179 @@ def _observe_harmony(
     )
 
 
+SECTION_MAP_ARTIFACT_SCHEMA = "section-map/0.1"
+
+
+class SectionMapArtifact(ObserveModel):
+    """``section-map/0.1`` anchor artifact — the canonical section label sequence.
+
+    Fail-closed via the same ``ObserveModel`` base every observe schema uses
+    (``extra="forbid"``): an unknown key, a non-``section-map/0.1``
+    ``schema_version``, or an empty ``sections`` list are all rejected at
+    parse time rather than silently accepted (mirrors
+    ``_load_chord_progression``'s fail-closed contract for
+    ``chord-sequence/0.1``, structure Design Memo section 1).
+    """
+
+    schema_version: Literal["section-map/0.1"]
+    sections: list[str] = Field(min_length=1)
+
+
+def _load_section_map(raw_bytes: bytes, *, artifact_path: Path) -> list[str]:
+    """``section-map/0.1`` artifact (JSON) を正典セクションラベル列へ変換する。
+
+    ``raw_bytes`` は呼び出し側が既に hash 照合済みの bytes を渡す（本関数は一切
+    ファイルを読まない — `_load_chord_progression` と同じ契約）。
+    ``artifact_path`` はエラーメッセージの表示にのみ使う。
+    """
+    try:
+        payload = json.loads(raw_bytes.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ValueError(
+            f"section map artifact is not valid JSON: {artifact_path}: {exc}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise ValueError(
+            "section map artifact must be a mapping with 'schema_version' and "
+            f"'sections' keys: {artifact_path}"
+        )
+    try:
+        artifact = SectionMapArtifact.model_validate(payload)
+    except ValidationError as exc:
+        raise ValueError(
+            f"section map artifact failed validation: {artifact_path}: {exc}"
+        ) from exc
+    return list(artifact.sections)
+
+
+_TRAILING_DIGITS_PATTERN = re.compile(r"\d+$")
+
+# `assign_labels` (rpe/structure_labels.py) is the sole producer of extractor
+# structure labels, but it does NOT auto-number all five base words equally:
+# only "Verse" ever gets a numeric suffix (`Verse`, `Verse2`, `Verse3`, ... —
+# `_assign_verses`, used to fill however many "leftover" middle sections
+# remain once Chorus/Bridge are assigned). Intro/Outro are always emitted
+# exactly once (first/last section), Bridge is capped at one occurrence, and
+# Chorus is capped at two occurrences but neither Bridge nor Chorus ever
+# receives a numeric suffix (`_assign_choruses`/`_assign_bridge` always write
+# the bare "Chorus"/"Bridge" string). Trailing-digit stripping on the
+# *observed* side is therefore restricted to this single stem, not the full
+# five-word vocabulary an earlier revision used (Codex 3R P2,
+# https://github.com/Yuu6798/ugh-prompt-engine/pull/192#discussion_r3610383648):
+# stripping `chorus`/`bridge`/`intro`/`outro` digits was over-broad, since the
+# extractor never emits those numbered — the only real source of a trailing
+# digit on the observed side is `VerseN`.
+_OBSERVED_NUMBERED_STEM = "verse"
+
+
+def _normalize_canonical_section_label(label: str) -> str:
+    """正典 (`section-map/0.1` アーティファクト) 側の正規化規則（structure
+    Design Memo section 3、Codex 3R P2 で非対称化）: lowercase のみを行う。
+    作者が明示的に書いた識別子は verbatim で保持し、末尾数字を一切 strip
+    しない — ``verse2`` は ``verse2`` のまま、``chorus1``/``chorus2`` もその
+    まま区別される。正典側で同種セクションの繰り返しを表現する場合は番号で
+    はなく列挙で書く慣行を前提とする（例: ``["verse", "chorus", "verse",
+    "chorus"]`` であって ``["verse1", "chorus1", "verse2", "chorus2"]`` では
+    ない）。手書き正典が意図的に番号付き識別子（``chorus1``/``chorus2`` 等）
+    を使う場合は、それを抽出器の連番慣行に合わせて potentially 別々のセク
+    ションを同一視するのではなく、区別する情報としてそのまま尊重する。
+    """
+    return label.lower()
+
+
+def _normalize_observed_section_label(label: str) -> str:
+    """観測 (`PhysicalRPE.structure` / 抽出器 `assign_labels`) 側の正規化規則
+    （structure Design Memo section 3、Codex 3R P2 で非対称化）: lowercase
+    した上で、語幹が ``_OBSERVED_NUMBERED_STEM`` (``verse``) の場合のみ末尾
+    数字を strip する（例: extractor の ``Verse2`` → ``verse``）。
+    `assign_labels` (rpe/structure_labels.py) が連番を発行するのは Verse
+    のみで、Chorus/Bridge/Intro/Outro は常に単数形のまま発行されるため
+    （`_assign_choruses`/`_assign_bridge` 参照）、strip 対象をこの一語幹に
+    限定する — それ以外の語は抽出器がそもそも数字付きで生成しないので strip
+    対象にする理由がなく、対象を広げると手書き正典側の識別番号付きラベル
+    （例: ``chorus1``/``chorus2``）が誤って同一視されるリスクだけが残る
+    （正典側は `_normalize_canonical_section_label` で strip しないため、
+    この関数を観測側だけに限定する非対称性そのものがその防御になる）。
+    それ以外の変換はしない — 抽出器のラベル連番付与の吸収に限定し、それ以上
+    の意味的な同値判断（同義語マージ等）は行わない。
+    """
+    lowered = label.lower()
+    stripped = _TRAILING_DIGITS_PATTERN.sub("", lowered)
+    if stripped != lowered and stripped == _OBSERVED_NUMBERED_STEM:
+        return stripped
+    return lowered
+
+
+def _observe_structure(
+    anchor: IdentityAnchor,
+    *,
+    manifest_dir: Path,
+    work_id: str,
+    bundle: RPEBundle,
+    artifact_bytes: bytes,
+) -> AnchorObservation:
+    # Resolved only for error-message display — never read here, same
+    # contract `_observe_harmony` follows for its own artifact.
+    artifact_path = _resolve_confined(
+        anchor.artifact, manifest_dir, work_id=work_id, target=f"anchor '{anchor.id}'"
+    )
+    canonical_sections_raw = _load_section_map(artifact_bytes, artifact_path=artifact_path)
+    observed_sections_raw = [marker.label for marker in bundle.physical.structure]
+
+    canonical_sections = [
+        _normalize_canonical_section_label(label) for label in canonical_sections_raw
+    ]
+    observed_sections = [
+        _normalize_observed_section_label(label) for label in observed_sections_raw
+    ]
+
+    canonical_length = len(canonical_sections)
+    observed_length = len(observed_sections)
+    max_length = max(canonical_length, observed_length)
+    position_match_count = sum(
+        1
+        for canonical_label, observed_label in zip(canonical_sections, observed_sections)
+        if canonical_label == observed_label
+    )
+    position_match_rate = round(position_match_count / max_length, 4) if max_length else 0.0
+    sequence_exact_match = canonical_sections == observed_sections
+
+    measurements: dict[str, JsonValue] = {
+        "canonical_sections": canonical_sections,
+        "canonical_length": canonical_length,
+        "observed_sections": observed_sections,
+        "observed_sections_raw": observed_sections_raw,
+        "observed_length": observed_length,
+        "position_match_rate": position_match_rate,
+        "sequence_exact_match": sequence_exact_match,
+    }
+    sensor = SensorRecord(name="section_sequence_match", available=True, reason=None)
+    if sequence_exact_match:
+        return AnchorObservation(
+            anchor_id=anchor.id,
+            domain=anchor.domain,
+            sensor=sensor,
+            measurements=measurements,
+            adherence_status="preserved",
+            determination="exact_match",
+            note="normalized canonical and observed section sequences match exactly.",
+        )
+    return AnchorObservation(
+        anchor_id=anchor.id,
+        domain=anchor.domain,
+        sensor=sensor,
+        measurements=measurements,
+        adherence_status="not_observed",
+        determination="deferred",
+        note=(
+            "normalized canonical and observed section sequences do not match "
+            "exactly (changed_within_policy/changed_outside_policy classification "
+            "is out of scope for this instrument and deferred to a future "
+            "threshold Design Memo, D-1)."
+        ),
+    )
+
+
 def _observe_unavailable(anchor: IdentityAnchor) -> AnchorObservation:
     if anchor.domain == "harmony":
         # Reached only when domain == "harmony" but artifact_type isn't
@@ -484,6 +675,30 @@ def _observe_unavailable(anchor: IdentityAnchor) -> AnchorObservation:
             f"no sensor wired for harmony anchors with artifact_type "
             f"{anchor.artifact_type!r}"
         )
+    elif anchor.domain == "structure":
+        # Reached when domain == "structure" but either artifact_type isn't
+        # "section_map", or it is "section_map" but the anchor doesn't
+        # declare the one format_version the structure sensor actually reads
+        # (PR #192 review round 1): unlike harmony, the repo has real
+        # pre-existing `section_map` anchors in a *different* format (e.g.
+        # `tests/test_identity_manifest.py`'s YAML `media_type` anchor with no
+        # format_version, and `tests/test_performance_package.py`'s
+        # `format_version="section-map/1"`) that must keep falling back to
+        # no_sensor rather than being force-fed into `_observe_structure`'s
+        # JSON parser. The reason names the anchor's declared format_version
+        # (including the `None` case) so it's clear this is a format gate,
+        # not an artifact_type gate alone.
+        name = f"{anchor.domain}_sensor"
+        if anchor.artifact_type == "section_map":
+            reason = (
+                "structure sensor reads section-map/0.1 only; anchor declares "
+                f"format_version {anchor.format_version!r}"
+            )
+        else:
+            reason = (
+                f"no sensor wired for structure anchors with artifact_type "
+                f"{anchor.artifact_type!r}"
+            )
     else:
         name, reason = _NO_SENSOR_INFO.get(
             anchor.domain,
@@ -509,13 +724,57 @@ def is_harmony_sensor_anchor(anchor: IdentityAnchor) -> bool:
     decide *which* anchors' artifact bytes are worth collecting ahead of time
     — e.g. the CLI's `parse_identity_manifest_with_artifacts(..., collect=...)`
     predicate (PR #187 review round 11) — share the exact same routing rule
-    instead of maintaining a second copy that could drift out of sync. If a
-    future PR wires a sensor for another (domain, artifact_type) pair, widen
-    (or replace) this predicate — and update both `_observe_anchor` and every
-    `collect=` call site that relies on it — rather than adding an
-    independent one.
+    instead of maintaining a second copy that could drift out of sync. A
+    sibling predicate, `is_structure_sensor_anchor`, follows the same overall
+    shape for the (structure, section_map) pair wired 2026-07-20, but also
+    gates on `format_version` — see its own docstring for why (PR #192
+    review round 1: other-format `section_map` anchor precedent already
+    exists in this repo, unlike harmony's `chord_sequence_json`). Both are
+    consulted at every sync point (`_observe_anchor`'s dispatch, the
+    extraction gate below, and the CLI's `collect=` site) rather than one
+    being folded silently into the other. If a future PR wires a sensor for
+    another (domain, artifact_type) pair, add a same-shaped predicate and
+    update those same sync points — don't special-case it inline.
     """
     return anchor.domain == "harmony" and anchor.artifact_type == "chord_sequence_json"
+
+
+def is_structure_sensor_anchor(anchor: IdentityAnchor) -> bool:
+    """Whether `anchor` is the (domain, artifact_type, format_version) triple
+    the structure sensor actually reads content for — `domain == "structure"`,
+    `artifact_type == "section_map"`, *and*
+    `format_version == "section-map/0.1"` (structure Design Memo section 2,
+    2026-07-20; format-version gate added PR #192 review round 1). Same shape
+    and same rationale as `is_harmony_sensor_anchor` for the sync-point list
+    this predicate is also consulted at — see that docstring.
+
+    Unlike harmony, this predicate also gates on `format_version`, not just
+    `artifact_type`: the repo already has `section_map` anchor precedent in
+    other formats before this PR wired a JSON sensor for `section-map/0.1`
+    specifically (`tests/test_identity_manifest.py` declares a YAML
+    `media_type` section_map anchor with no `format_version`, and
+    `tests/test_performance_package.py` declares one with
+    `format_version="section-map/1"`). Routing on artifact_type alone would
+    force those other-format anchors into `_observe_structure`'s JSON
+    parser/validator and abort the whole `observe` run instead of the
+    `no_sensor` fallback they got before this sensor existed. The
+    `format_version` field is the anchor's own self-declared schema id, so
+    gating on it is a declared-format check, not content sniffing or
+    guessing: an anchor that doesn't declare `section-map/0.1` — including
+    one that declares nothing (`format_version is None`) — falls through to
+    `_observe_unavailable` no matter what its bytes actually contain. This is
+    a routing gate only: an anchor that *does* declare `section-map/0.1` but
+    whose artifact bytes are malformed or schema-invalid still fails closed
+    inside `_observe_structure` / `_load_section_map`, exactly like harmony's
+    `chord-sequence/0.1` contract — declaring the right format is not a
+    promise the content is well-formed, only a promise this sensor is the
+    right one to check.
+    """
+    return (
+        anchor.domain == "structure"
+        and anchor.artifact_type == "section_map"
+        and anchor.format_version == SECTION_MAP_ARTIFACT_SCHEMA
+    )
 
 
 def _observe_anchor(
@@ -528,11 +787,21 @@ def _observe_anchor(
 ) -> AnchorObservation:
     if is_harmony_sensor_anchor(anchor):
         # `build_observation_report` only extracts (and passes a non-None
-        # bundle) when at least one manifest anchor matches this exact
-        # predicate (PR #187 review round 12's extraction gate) — so if
+        # bundle) when at least one manifest anchor matches a wired sensor's
+        # predicate (PR #187 review round 12's extraction gate, widened
+        # 2026-07-20 to also cover `is_structure_sensor_anchor`) — so if
         # we're in this branch, `bundle` is guaranteed to be set.
         assert bundle is not None
         return _observe_harmony(
+            anchor,
+            manifest_dir=manifest_dir,
+            work_id=work_id,
+            bundle=bundle,
+            artifact_bytes=artifact_bytes_by_id[anchor.id],
+        )
+    if is_structure_sensor_anchor(anchor):
+        assert bundle is not None
+        return _observe_structure(
             anchor,
             manifest_dir=manifest_dir,
             work_id=work_id,
@@ -564,15 +833,19 @@ def build_observation_report(
     （harmony センサーが `anchor_id -> bytes` で参照する。PR #187 review
     round 2）。
 
-    抽出は gate 化する（PR #187 review round 12）: 配線済みセンサーが実際に
-    測定する anchor（``is_harmony_sensor_anchor`` — `_observe_anchor` の
-    routing と同じ述語。二重定義しない）が manifest 中に 1 つも無ければ
-    ``extract_rpe_from_file`` を一切呼ばない。音声は provenance のため既に
-    hash 済みであり、全 anchor が no_sensor の report にとって中身の decode は
-    不要な作業（かつコスト）だからである。
+    抽出は gate 化する（PR #187 review round 12。2026-07-20: structure センサー
+    追加に伴い述語を widen）: 配線済みセンサーが実際に測定する anchor
+    （``is_harmony_sensor_anchor`` または ``is_structure_sensor_anchor`` —
+    `_observe_anchor` の routing と同じ述語。二重定義しない）が manifest 中に
+    1 つも無ければ ``extract_rpe_from_file`` を一切呼ばない。音声は provenance
+    のため既に hash 済みであり、全 anchor が no_sensor の report にとって
+    中身の decode は不要な作業（かつコスト）だからである。
     """
     manifest_dir = Path(manifest_path).resolve().parent
-    needs_extraction = any(is_harmony_sensor_anchor(anchor) for anchor in manifest.anchors)
+    needs_extraction = any(
+        is_harmony_sensor_anchor(anchor) or is_structure_sensor_anchor(anchor)
+        for anchor in manifest.anchors
+    )
     bundle = extract_rpe_from_file(str(audio_path)) if needs_extraction else None
     anchors = [
         _observe_anchor(

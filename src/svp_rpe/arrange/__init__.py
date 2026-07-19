@@ -63,6 +63,7 @@ from svp_rpe.arrange.observe import (
     SensorRecord,
     build_observation_report,
     is_harmony_sensor_anchor,
+    is_structure_sensor_anchor,
 )
 from svp_rpe.arrange.package import (
     ARTIFACT_TYPE_CHANNEL,
@@ -138,6 +139,7 @@ __all__ = [
     "compile_arrangement",
     "compile_performance_package",
     "is_harmony_sensor_anchor",
+    "is_structure_sensor_anchor",
     "load_arrangement_spec",
     "load_identity_manifest",
     "load_input_capability_profile",
