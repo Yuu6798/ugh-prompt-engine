@@ -537,31 +537,57 @@ def _load_section_map(raw_bytes: bytes, *, artifact_path: Path) -> list[str]:
 _TRAILING_DIGITS_PATTERN = re.compile(r"\d+$")
 
 # `assign_labels` (rpe/structure_labels.py) is the sole producer of extractor
-# structure labels, and its base vocabulary is exactly these five words (plus
-# the single-section-only "Full", which it never numbers). Trailing-digit
-# stripping is restricted to this vocabulary so generic identifier-style
-# labels like `section_01`/`section_02` (which the extractor never emits, but
-# a hand-authored `section-map/0.1` artifact may use) keep their distinct
-# numeric suffixes instead of collapsing onto each other (Codex 2R P2,
-# https://github.com/Yuu6798/ugh-prompt-engine/pull/192#discussion_r3610383648).
-_KNOWN_SECTION_LABEL_STEMS = frozenset({"intro", "verse", "chorus", "bridge", "outro"})
+# structure labels, but it does NOT auto-number all five base words equally:
+# only "Verse" ever gets a numeric suffix (`Verse`, `Verse2`, `Verse3`, ... —
+# `_assign_verses`, used to fill however many "leftover" middle sections
+# remain once Chorus/Bridge are assigned). Intro/Outro are always emitted
+# exactly once (first/last section), Bridge is capped at one occurrence, and
+# Chorus is capped at two occurrences but neither Bridge nor Chorus ever
+# receives a numeric suffix (`_assign_choruses`/`_assign_bridge` always write
+# the bare "Chorus"/"Bridge" string). Trailing-digit stripping on the
+# *observed* side is therefore restricted to this single stem, not the full
+# five-word vocabulary an earlier revision used (Codex 3R P2,
+# https://github.com/Yuu6798/ugh-prompt-engine/pull/192#discussion_r3610383648):
+# stripping `chorus`/`bridge`/`intro`/`outro` digits was over-broad, since the
+# extractor never emits those numbered — the only real source of a trailing
+# digit on the observed side is `VerseN`.
+_OBSERVED_NUMBERED_STEM = "verse"
 
 
-def _normalize_section_label(label: str) -> str:
-    """正規化規則（structure Design Memo section 3、Codex 2R P2 で語彙限定に改訂。
-    計測上の決定であり docstring に明記する）: まず lowercase 化する。その上で
-    末尾数字を strip した語幹が抽出器の既知語彙 ``_KNOWN_SECTION_LABEL_STEMS``
-    （``assign_labels`` が発行する ``intro``/``verse``/``chorus``/``bridge``/
-    ``outro``）に含まれる場合のみ strip を適用する（例: extractor の ``Verse2``
-    → ``verse``）。語彙に含まれない場合は末尾数字を保持する — ``section_01`` /
-    ``section_02`` のような識別番号付きラベルは lowercase 化のみでそのまま
-    区別を維持し、``section_`` に潰れて順序違反を隠さない。それ以外の変換は
-    しない — 抽出器のラベル連番付与の吸収に限定し、それ以上の意味的な同値
-    判断（同義語マージ等）は行わない。
+def _normalize_canonical_section_label(label: str) -> str:
+    """正典 (`section-map/0.1` アーティファクト) 側の正規化規則（structure
+    Design Memo section 3、Codex 3R P2 で非対称化）: lowercase のみを行う。
+    作者が明示的に書いた識別子は verbatim で保持し、末尾数字を一切 strip
+    しない — ``verse2`` は ``verse2`` のまま、``chorus1``/``chorus2`` もその
+    まま区別される。正典側で同種セクションの繰り返しを表現する場合は番号で
+    はなく列挙で書く慣行を前提とする（例: ``["verse", "chorus", "verse",
+    "chorus"]`` であって ``["verse1", "chorus1", "verse2", "chorus2"]`` では
+    ない）。手書き正典が意図的に番号付き識別子（``chorus1``/``chorus2`` 等）
+    を使う場合は、それを抽出器の連番慣行に合わせて potentially 別々のセク
+    ションを同一視するのではなく、区別する情報としてそのまま尊重する。
+    """
+    return label.lower()
+
+
+def _normalize_observed_section_label(label: str) -> str:
+    """観測 (`PhysicalRPE.structure` / 抽出器 `assign_labels`) 側の正規化規則
+    （structure Design Memo section 3、Codex 3R P2 で非対称化）: lowercase
+    した上で、語幹が ``_OBSERVED_NUMBERED_STEM`` (``verse``) の場合のみ末尾
+    数字を strip する（例: extractor の ``Verse2`` → ``verse``）。
+    `assign_labels` (rpe/structure_labels.py) が連番を発行するのは Verse
+    のみで、Chorus/Bridge/Intro/Outro は常に単数形のまま発行されるため
+    （`_assign_choruses`/`_assign_bridge` 参照）、strip 対象をこの一語幹に
+    限定する — それ以外の語は抽出器がそもそも数字付きで生成しないので strip
+    対象にする理由がなく、対象を広げると手書き正典側の識別番号付きラベル
+    （例: ``chorus1``/``chorus2``）が誤って同一視されるリスクだけが残る
+    （正典側は `_normalize_canonical_section_label` で strip しないため、
+    この関数を観測側だけに限定する非対称性そのものがその防御になる）。
+    それ以外の変換はしない — 抽出器のラベル連番付与の吸収に限定し、それ以上
+    の意味的な同値判断（同義語マージ等）は行わない。
     """
     lowered = label.lower()
     stripped = _TRAILING_DIGITS_PATTERN.sub("", lowered)
-    if stripped != lowered and stripped in _KNOWN_SECTION_LABEL_STEMS:
+    if stripped != lowered and stripped == _OBSERVED_NUMBERED_STEM:
         return stripped
     return lowered
 
@@ -582,8 +608,12 @@ def _observe_structure(
     canonical_sections_raw = _load_section_map(artifact_bytes, artifact_path=artifact_path)
     observed_sections_raw = [marker.label for marker in bundle.physical.structure]
 
-    canonical_sections = [_normalize_section_label(label) for label in canonical_sections_raw]
-    observed_sections = [_normalize_section_label(label) for label in observed_sections_raw]
+    canonical_sections = [
+        _normalize_canonical_section_label(label) for label in canonical_sections_raw
+    ]
+    observed_sections = [
+        _normalize_observed_section_label(label) for label in observed_sections_raw
+    ]
 
     canonical_length = len(canonical_sections)
     observed_length = len(observed_sections)

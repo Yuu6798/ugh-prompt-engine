@@ -33,7 +33,8 @@ from svp_rpe.arrange.observe import (
     SensorRecord,
     _cycle_alignment,
     _load_section_map,
-    _normalize_section_label,
+    _normalize_canonical_section_label,
+    _normalize_observed_section_label,
     _observe_anchor,
     _observe_harmony,
     _observe_structure,
@@ -781,24 +782,45 @@ def test_observe_harmony_degenerate_canonical_single_chord_reaches_preserved() -
 # --- 3b. structure sensor: D-1's 3-way branch on section-sequence position match --
 
 
-def test_normalize_section_label_lowercases_and_strips_trailing_digits() -> None:
-    """Unit-level check of the normalization rule (structure Design Memo
-    section 3, revised Codex 2R P2): lowercase always; trailing digits are
-    stripped only when the stripped stem is one of the extractor's known
-    vocabulary words (`intro`/`verse`/`chorus`/`bridge`/`outro`)."""
-    assert _normalize_section_label("Verse2") == "verse"
-    assert _normalize_section_label("CHORUS") == "chorus"
-    assert _normalize_section_label("bridge") == "bridge"
-    # Vocabulary boundary: known extractor stems strip regardless of which
-    # of the five words carries the digit...
-    assert _normalize_section_label("chorus3") == "chorus"
-    assert _normalize_section_label("outro2") == "outro"
-    # ...but a stem outside the known vocabulary keeps its trailing digits,
-    # so distinct identifier-style labels never collapse onto each other.
-    assert _normalize_section_label("interlude2") == "interlude2"
-    assert _normalize_section_label("section_01") == "section_01"
-    assert _normalize_section_label("section_02") == "section_02"
-    assert _normalize_section_label("SECTION_01") == "section_01"
+def test_normalize_canonical_section_label_lowercases_only() -> None:
+    """Unit-level check of the canonical-side normalization rule (structure
+    Design Memo section 3, revised Codex 3R P2): lowercase only, never strip
+    trailing digits. Author-written identifiers (including a hand-authored
+    numbering convention like `chorus1`/`chorus2`) are kept verbatim so a
+    reordering of them is never masked by normalization."""
+    assert _normalize_canonical_section_label("Verse2") == "verse2"
+    assert _normalize_canonical_section_label("CHORUS") == "chorus"
+    assert _normalize_canonical_section_label("bridge") == "bridge"
+    assert _normalize_canonical_section_label("Chorus1") == "chorus1"
+    assert _normalize_canonical_section_label("Chorus2") == "chorus2"
+    assert _normalize_canonical_section_label("section_01") == "section_01"
+    assert _normalize_canonical_section_label("SECTION_01") == "section_01"
+
+
+def test_normalize_observed_section_label_strips_verse_stem_only() -> None:
+    """Unit-level check of the observed-side normalization rule (structure
+    Design Memo section 3, revised Codex 3R P2): lowercase always; trailing
+    digits are stripped only when the stripped stem is exactly `verse` — the
+    single word `assign_labels` (rpe/structure_labels.py) ever auto-numbers.
+    Chorus/Bridge/Intro/Outro are never emitted with a numeric suffix by the
+    extractor, so their trailing digits (if any, e.g. from a synthetic
+    fixture) are left untouched rather than stripped."""
+    assert _normalize_observed_section_label("Verse2") == "verse"
+    assert _normalize_observed_section_label("verse3") == "verse"
+    assert _normalize_observed_section_label("CHORUS") == "chorus"
+    assert _normalize_observed_section_label("bridge") == "bridge"
+    # Chorus/Bridge/Intro/Outro stems are excluded from stripping even though
+    # they were in the pre-Codex-3R vocabulary: the extractor never emits
+    # them numbered, so a numeric suffix on these stems keeps its digits.
+    assert _normalize_observed_section_label("chorus3") == "chorus3"
+    assert _normalize_observed_section_label("outro2") == "outro2"
+    assert _normalize_observed_section_label("bridge2") == "bridge2"
+    # Stems outside the extractor's vocabulary entirely keep their trailing
+    # digits too, so distinct identifier-style labels never collapse.
+    assert _normalize_observed_section_label("interlude2") == "interlude2"
+    assert _normalize_observed_section_label("section_01") == "section_01"
+    assert _normalize_observed_section_label("section_02") == "section_02"
+    assert _normalize_observed_section_label("SECTION_01") == "section_01"
 
 
 def test_observe_structure_exact_match_is_preserved() -> None:
@@ -834,11 +856,12 @@ def test_observe_structure_exact_match_is_preserved() -> None:
 
 
 def test_observe_structure_normalization_makes_raw_mismatch_an_exact_match() -> None:
-    """`Intro`/`intro` case and `Chorus2`/`chorus` trailing-digit differences
-    are both absorbed by normalization — the raw sequences differ, but the
-    normalized ones match exactly, so this still reaches `preserved`."""
+    """`Intro`/`intro` casing and the extractor's `verse1`/`verse` trailing-
+    digit convention are both absorbed by normalization — the raw sequences
+    differ, but the normalized ones match exactly, so this still reaches
+    `preserved`."""
     anchor = _anchor("structure", "structure", "section_map.json", "section_map")
-    canonical_raw = ["Intro", "VERSE", "Chorus2"]
+    canonical_raw = ["Intro", "VERSE", "Chorus"]
     observed_raw = ["intro", "verse1", "chorus"]
     bundle = _bundle_with_structure(observed_raw)
     artifact_bytes = _section_map_artifact_bytes(canonical_raw)
@@ -857,6 +880,92 @@ def test_observe_structure_normalization_makes_raw_mismatch_an_exact_match() -> 
     assert observation.measurements["sequence_exact_match"] is True
     assert observation.adherence_status == "preserved"
     assert observation.determination == "exact_match"
+
+
+def test_observe_structure_canonical_chorus_numbering_stays_distinct() -> None:
+    """Regression for Codex 3R P2
+    (https://github.com/Yuu6798/ugh-prompt-engine/pull/192#discussion_r3610383648
+    follow-up): a hand-authored canonical using its own `chorus1`/`chorus2`
+    repeat-numbering convention must never be collapsed by normalization —
+    the canonical side only lowercases, it never strips trailing digits. A
+    reordering of `chorus1`/`chorus2` (which the pre-Codex-3R five-word-stem
+    strip would have silently absorbed into a false `sequence_exact_match`)
+    must therefore surface as a real mismatch."""
+    canonical = ["intro", "chorus1", "chorus2", "outro"]
+    observed = ["intro", "chorus2", "chorus1", "outro"]
+    anchor = _anchor("structure", "structure", "section_map.json", "section_map")
+    bundle = _bundle_with_structure(observed)
+    artifact_bytes = _section_map_artifact_bytes(canonical)
+
+    observation = _observe_structure(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        bundle=bundle,
+        artifact_bytes=artifact_bytes,
+    )
+
+    assert observation.measurements["canonical_sections"] == canonical
+    assert observation.measurements["observed_sections"] == observed
+    assert observation.measurements["sequence_exact_match"] is False
+    assert observation.adherence_status == "not_observed"
+    assert observation.determination == "deferred"
+
+
+def test_observe_structure_canonical_verse2_is_not_collapsed_to_verse() -> None:
+    """The canonical side never strips trailing digits, so an author-written
+    `verse2` identifier stays `verse2` after normalization and does not match
+    an observed (extractor) `verse` label — canonical-side authors who want
+    to express a second verse occurrence use enumeration (`["verse",
+    "chorus", "verse", "chorus"]`), not extractor-style numbering; a literal
+    `verse2` in the canonical is treated as a distinct identifier, not as
+    "the second verse"."""
+    canonical = ["intro", "verse2", "outro"]
+    observed = ["intro", "verse", "outro"]
+    anchor = _anchor("structure", "structure", "section_map.json", "section_map")
+    bundle = _bundle_with_structure(observed)
+    artifact_bytes = _section_map_artifact_bytes(canonical)
+
+    observation = _observe_structure(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        bundle=bundle,
+        artifact_bytes=artifact_bytes,
+    )
+
+    assert observation.measurements["canonical_sections"] == ["intro", "verse2", "outro"]
+    assert observation.measurements["observed_sections"] == ["intro", "verse", "outro"]
+    assert observation.measurements["sequence_exact_match"] is False
+    assert observation.adherence_status == "not_observed"
+    assert observation.determination == "deferred"
+
+
+def test_observe_structure_observed_chorus_digit_is_not_stripped() -> None:
+    """If a `Chorus2`-style label ever appears on the observed side (the real
+    extractor never emits it numbered, but this guards the normalization
+    contract directly rather than relying on that invariant), the trailing
+    digit must NOT be stripped — only the `verse` stem is. A canonical
+    `chorus` therefore does not match an observed `Chorus2`."""
+    canonical = ["intro", "chorus", "outro"]
+    observed = ["Intro", "Chorus2", "Outro"]
+    anchor = _anchor("structure", "structure", "section_map.json", "section_map")
+    bundle = _bundle_with_structure(observed)
+    artifact_bytes = _section_map_artifact_bytes(canonical)
+
+    observation = _observe_structure(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        bundle=bundle,
+        artifact_bytes=artifact_bytes,
+    )
+
+    assert observation.measurements["canonical_sections"] == canonical
+    assert observation.measurements["observed_sections"] == ["intro", "chorus2", "outro"]
+    assert observation.measurements["sequence_exact_match"] is False
+    assert observation.adherence_status == "not_observed"
+    assert observation.determination == "deferred"
 
 
 def test_observe_structure_numbered_identifier_labels_stay_distinct() -> None:

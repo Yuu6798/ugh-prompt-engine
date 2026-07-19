@@ -486,19 +486,34 @@ anchor artifact (`section-map/0.1`: `{"schema_version": "section-map/0.1",
 an unknown key, non-list/empty `sections`, or unsupported `schema_version` is
 rejected fail-closed, the same posture `chord-sequence/0.1` takes). The
 observed side is `PhysicalRPE.structure` (`SectionMarker.label`, always
-populated by extraction — no extra dependency to wire). Both sides are
-normalized before comparison — **lowercase, then strip trailing digits only
-when the stripped stem is one of the extractor's known vocabulary words**
-(`intro`/`verse`/`chorus`/`bridge`/`outro` — the base labels `assign_labels`
-(`rpe/structure_labels.py`) emits; e.g. the extractor's auto-numbered
-`Verse2` label normalizes to `verse`) — and nothing else. Labels outside that
-vocabulary keep their trailing digits after lowercasing, so generic
-identifier-style labels such as `section_01`/`section_02` stay distinct
-instead of collapsing onto the same `section_` value (Codex 2R P2: an earlier
-version stripped trailing digits from every label, which could make a
-reordered or wrong `section_01`/`section_02` sequence still register as
-`sequence_exact_match=True`). This absorbs case differences and the
-extractor's repeated-section numbering without merging synonyms, collapsing
+populated by extraction — no extra dependency to wire). Normalization is
+**asymmetric** between the two sides (Codex 3R P2 — an earlier revision
+normalized both sides the same way, which could collapse a hand-authored
+canonical's own repeat-numbering convention, e.g. `chorus1`/`chorus2`, onto
+a single value and mask a real reordering):
+
+- **canonical** (`_normalize_canonical_section_label`) — lowercase only.
+  Author-written identifiers are kept verbatim, including any trailing
+  digits (`verse2` stays `verse2`, `chorus1`/`chorus2` stay distinct). The
+  convention for expressing a repeated section on the canonical side is
+  enumeration, not numbering — write `["verse", "chorus", "verse",
+  "chorus"]`, not `["verse1", "chorus1", "verse2", "chorus2"]`.
+- **observed** (`_normalize_observed_section_label`) — lowercase, then strip
+  a trailing digit only when the stripped stem is exactly `verse` (e.g. the
+  extractor's auto-numbered `Verse2` label normalizes to `verse`). `verse` is
+  the *only* stem `assign_labels` (`rpe/structure_labels.py`) ever
+  auto-numbers — Intro/Outro are emitted exactly once, and Chorus/Bridge are
+  always emitted as their bare singular form even though Chorus can occur up
+  to twice — so stripping is restricted to that one stem rather than the
+  full five-word vocabulary an earlier revision used (Codex 2R P2's fix
+  narrowed the *vocabulary* that gets stripped; Codex 3R P2 additionally
+  narrowed *which side* gets stripped at all).
+
+Labels outside the extractor's numbered vocabulary keep their trailing
+digits after lowercasing on both sides, so generic identifier-style labels
+such as `section_01`/`section_02` stay distinct instead of collapsing onto
+the same `section_` value. This absorbs case differences and the
+extractor's `VerseN` repeat-numbering without merging synonyms, collapsing
 distinct identifiers, or doing any other semantic equivalence. `measurements`
 records both the normalized and raw
 observed sequences (`canonical_sections`, `observed_sections`,
