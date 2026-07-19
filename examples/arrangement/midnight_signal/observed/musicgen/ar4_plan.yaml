@@ -1,0 +1,91 @@
+# AR4 実観測バッチ 事前登録（Design Memo: AR4 Design Memo (Fable, 2026-07-19,
+# PR #191)）。生成開始前に内容確定（AGENTS.md §8「ローカル決定論バッチの
+# canonical 条件」1 項）。plan_confirmed_at_utc は本ファイルを確定コミットする直前に
+# `date -u` で実測した値であり、後続の Phase 2 生成タイムスタンプ
+# （ar4_generation_timestamps.yaml）より必ず先行する（受け入れ条件: 事前登録 -> 生成
+# -> 観測の時系列を yaml 内の実測 UTC で裏付ける）。
+schema_version: "1.0"
+plan_id: ar4_musicgen_midnight_signal_edm_n2
+plan_confirmed_at_utc: "2026-07-19T07:13:10Z"
+
+scope:
+  fixture: examples/arrangement/midnight_signal
+  arrangement: edm.identity.musicgen.arrangement.yaml
+  identity_manifest: examples/arrangement/midnight_signal/identity_manifest.yaml
+  capability_profile: config/capability_profiles/musicgen.yaml
+  generator: musicgen
+  takes: 2  # n=2 (全数)
+
+# ABBA/均衡ゲート非適用の宣言と根拠: 本バッチは決定論 seed によるスクリプト生成のみで
+# 構成され、人手評価や比較呈示の順序に由来するドリフト機構（呈示順バイアス等）が
+# そもそも存在しない。ABBA counter-balancing はそのような呈示順バイアスを打ち消す
+# ための統制であり、本バッチには適用対象がない。
+counter_balancing:
+  applies: false
+  rationale: >-
+    Deterministic seeded script generation has no presentation-order drift
+    mechanism (no human rater, no A/B display order) for ABBA counter-balancing
+    to correct — the gate is inapplicable by construction, not skipped.
+
+model:
+  model_id: facebook/musicgen-small
+  model_revision: "4c8334b02c6ec4e8664a91979669a501ec497792"
+  interface: local-transformers
+  device: cpu
+  guidance_scale: 3.0
+  duration_seconds: 12.0
+
+# seed 系列: 8000 + take_index。既存 sample_seed（scripts/collect_musicgen_takes.py,
+# 1000 + knob_index*100 + level_index*50 + repeat）/ perform_takes の既定 seed_base
+# (5000) と衝突しない新レンジ。
+seeds:
+  take0: 8000
+  take1: 8001
+  formula: "8000 + take_index"
+
+# prompt の出所: performance_package.json（Phase 0 でコンパイル済み・sha256 を pin）
+# の prompt.text ペイロードそのもの。生成スクリプトはこの文字列を再導出せず読み取るのみ。
+prompt_source:
+  # performance_package.json 自体は committed artifact ではない（score / identity
+  # manifest / arrangement / capability profile から `svprpe package` で
+  # byte-for-byte 決定論的に再生成可能なため、WAV と同じ DD-A 規律で sha256 pin
+  # のみをコミットする）。
+  compiled_via: >-
+    svprpe package examples/arrangement/midnight_signal/composition_score.yaml
+    examples/arrangement/midnight_signal/identity_manifest.yaml
+    examples/arrangement/midnight_signal/edm.identity.musicgen.arrangement.yaml
+    --capability-profile config/capability_profiles/musicgen.yaml
+    --output-dir <output-dir>
+  performance_package_sha256: da3e726f9f149e600b9cc6d1c9c58bbb03a606b11c7d6d8ed959b2e6a578e57f
+  compilation_report_sha256: a4178feefd6eae3f2ab0a2d1e93c5bb2de77f2e05fbe648f04190d9a89122abd
+  prompt_field: "performance_package.json#/prompt/text"
+  note: >-
+    Prompt text is not re-derived from the score; it is read verbatim from the
+    already-compiled package (chain honesty: score -> package -> generator).
+    ar4_takes_manifest.json's `prompt` field is the same string, copied
+    verbatim by scripts/collect_ar4_observation.py's `load_package_prompt`.
+
+# 観測手順
+observation_procedure:
+  command: >-
+    svprpe observe <package.json> <take.wav>
+    --manifest examples/arrangement/midnight_signal/identity_manifest.yaml
+    -o ar4_observation_take{N}.json
+
+# 判定の事前登録 (Design Memo D-1 の 3 分岐をそのまま記録する。どの結果でも成果 —
+# preserved を成功条件にしない):
+adherence_determination_branches:
+  - adherence_status: preserved
+    determination: exact_match
+    meaning: "sensor ran and measured an exact identity match"
+  - adherence_status: not_observed
+    determination: deferred
+    meaning: "sensor ran but did not match exactly"
+  - adherence_status: not_observed
+    determination: no_sensor
+    meaning: "no sensor wired for the anchor's domain"
+success_criterion: >-
+  Instrument data acquisition itself is the success criterion — obtaining a
+  real observation_report.json for real generated audio for the first time
+  (arrangement_identity_planning.md §5). No particular determination is
+  required for success.

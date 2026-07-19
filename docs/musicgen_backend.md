@@ -509,6 +509,14 @@ M2 plan の事前登録（high <= low で分類によらず dead）は引き続�
 （第 4 ラウンド。continuous 行はゲート対象外の "—" 表示、stock の class /
 summary は並記のまま温存）。
 
+### 7.8 AR4 実観測バッチ（2026-07-19）
+
+`docs/arrangement_identity_planning.md` AR4 の「実 Suno 生成物は未観測」を、
+midnight_signal EDM 編曲 + MusicGen capability profile の performance package から
+`facebook/musicgen-small@4c8334b0…`（seed 8000/8001, n=2, 決定論スポット検証 2/2
+一致）で初めて実生成物観測（`svprpe observe`）を埋めた —
+`examples/arrangement/midnight_signal/observed/musicgen/` 参照。
+
 ## 8. 関連ドキュメント
 
 - [`controllability_poc.md`](controllability_poc.md) — DD-A、K0-K3 の grip

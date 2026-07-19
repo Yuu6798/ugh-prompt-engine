@@ -112,6 +112,14 @@ AR1 は Score の保持だけを扱い、外部 artifact の配送や生成後�
   `PreservationContract` を構築する。省略 anchor を推測で補完しない。
 - **AR2-3 (deferred)**: structure anchor の stable ID と section policy。
   実 form artifact を用いる AR4 の結果が得られるまで保留する。
+  **2026-07-19 解凍判断（AR4 実生成物 n=2 到着後）: 保留継続**。今回の実観測は
+  harmony domain のみで、form/structure anchor は manifest に存在せず、12 秒
+  クリップは form を表現できないため、保留条件（実 form artifact での AR4 結果）は
+  未充足。ただし律速の性質は「人手生成待ち」から次の 2 点へ変質した:
+  (a) structure センサーの observe 配線（`rpe/structure.py` / `structure_labels.py`
+  の既存資産を流用可能）、(b) form が存在する長尺 artifact の用意（MusicGen は
+  30s 上限のため相性要検討・Suno なら人手律速）。(a) は Claude 完結可能な先行
+  タスクであり、AR2-3 の解凍は (a)+(b) 充足後に再判断する。
 
 AR2 の完了は「何を残したいか」と「どの変形を許すか」を機械可読にしたことを意味し、
 生成器へ渡せたことは意味しない。
@@ -191,6 +199,26 @@ major/minor ラベルへ強制分類するため。
 **実 Suno 生成物での観測は未実施**。判定条件・閾値は引き続き未定（実測を積んで
 から別 Design Memo で固定）。詳細: [`cli.md`](cli.md) の `svprpe observe` 節。
 
+2026-07-19: 上記の「実 Suno 生成物は未観測」を、**MusicGen ローカル生成の実観測**で
+初めて埋めた（Design Memo AR4 実観測バッチ、#171/#136 と同じ MusicGen ローカル
+決定論路線）。`midnight_signal` の EDM 編曲 + identity anchor（lyrics/melody/harmony
+hard）+ `config/capability_profiles/musicgen.yaml` で `svprpe package` した
+performance package（`prompt.text` は非空を確認済み、`svprpe verify` の実データ初
+適用は 16 checks 全 pass）から、`facebook/musicgen-small@4c8334b0…`・CPU・
+guidance_scale=3.0・12s・seed 8000/8001 で n=2 take を実生成した
+（`scripts/collect_ar4_observation.py`）。決定論スポット検証（各 take を別プロセスで
+再生成）は 2/2 一致。両 take とも `svprpe observe` の D-3 provenance chain 検証を
+通過し（exit 0）、harmony anchor は実測されたが `not_observed`/`deferred`（collapsed
+observed sequence が正典進行の 1 cycle も一致しない — take0 は
+`matched_cycle_prefix_length=0`/`full_cycles=0`、take1 も同様）、lyrics/melody は
+従来どおり `not_observed`/`no_sensor`。**実 Suno 生成物での観測は依然未実施のまま**。
+事前登録（`ar4_plan.yaml` の `plan_confirmed_at_utc`）は生成タイムスタンプ
+（`ar4_generation_timestamps.yaml`）に先行する。成果物一式:
+`examples/arrangement/midnight_signal/observed/musicgen/`
+（`ar4_plan.yaml` / `ar4_takes_manifest.json` /
+`ar4_observation_take{0,1}.json` / `ar4_generation_timestamps.yaml` /
+`ar4_determinism_spot_check.yaml`。WAV 自体は DD-A によりコミット対象外）。
+
 ## 6. 実装状況
 
 | Phase | 主成果物 | 状態 |
@@ -198,10 +226,10 @@ major/minor ラベルへ強制分類するため。
 | AR0 | 本計画文書 | 完了 |
 | AR1 | resolver / CLI / bundle / diff / EDM-Jazz fixture | 完了 (#175–#177) |
 | AR2-1/2 | IdentityManifest / PreservationContract | 完了 (#178, #179, #181) |
-| AR2-3 | structure anchor policy | 保留 |
+| AR2-3 | structure anchor policy | 保留（2026-07-19 再判断: 継続。解凍条件を structure センサー配線 + 長尺 form artifact に具体化） |
 | AR3-1 | InputCapabilityProfile | 完了 (#180, #181) |
 | AR3-2 | PerformancePackage compiler + 縦切り E2E fixture | 実装済み（E2E fixture 追加 2026-07-17） |
-| AR4 | generated-output identity observation | 計器配線済み（harmony のみ実測。判定閾値は未定、実 Suno 生成物は未観測） |
+| AR4 | generated-output identity observation | 計器配線済み。harmony のみ実測（decisive synth E2E + 2026-07-19 MusicGen 実生成物 n=2）。判定閾値は未定、実 Suno 生成物は未観測 |
 
 2026-07-17: bundle/report に `content_digest`（内容指紋）と、
 `CompilationReport` 限定の `invocation_provenance.compiler`（実行環境の監査記録、

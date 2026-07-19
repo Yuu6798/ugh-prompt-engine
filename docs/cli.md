@@ -395,7 +395,14 @@ Design Memo) and exits `1` without measuring if any link is broken:
 Only then does it read the audio once (shared across every anchor) and record, in
 `observation_report.json` (schema `observation-report/0.1`):
 
-- `package_sha256` / `generated_artifact.{path,sha256}` — provenance of what was compared
+- `package_sha256` / `generated_artifact.{path,sha256}` — provenance of what was compared.
+  `generated_artifact.path` is recorded verbatim as the `<audio>` argument string, not
+  resolved to an absolute path — if the report is a committed provenance artifact (as
+  the AR4 fixtures under `examples/arrangement/*/observed/` are), invoke `observe` with
+  a stable relative `<audio>` path (e.g. run from the audio's own directory and pass
+  just its filename) so the report stays byte-reproducible across machines/checkouts
+  (Codex PR #191 round 2 review: an absolute scratch path leaked into a committed
+  fixture this way).
 - one `AnchorObservation` per manifest anchor, each with:
   - `sensor.{name,available,reason}` — which sensor ran (or why it didn't)
   - `measurements` — raw sensor output only, no derived judgment

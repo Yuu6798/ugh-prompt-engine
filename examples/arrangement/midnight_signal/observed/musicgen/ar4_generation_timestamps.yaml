@@ -1,0 +1,17 @@
+# AR4 実観測バッチ: canonical n=2 生成の各コール開始/終了 UTC タイムスタンプ
+# （秒精度、`date -u` 相当の実測値。推定禁止）。plan.yaml の
+# plan_confirmed_at_utc (2026-07-19T07:13:10Z) は本ファイルの全 started_at_utc
+# より先行する — 事前登録が生成より先であることの裏付け（受け入れ条件）。
+schema_version: "1.0"
+generator: collect_ar4_observation.py
+generation_calls:
+  - sample_id: take0
+    take_index: 0
+    seed: 8000
+    started_at_utc: "2026-07-19T07:15:51Z"
+    ended_at_utc: "2026-07-19T07:16:42Z"
+  - sample_id: take1
+    take_index: 1
+    seed: 8001
+    started_at_utc: "2026-07-19T07:16:42Z"
+    ended_at_utc: "2026-07-19T07:17:28Z"

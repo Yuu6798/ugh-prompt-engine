@@ -420,6 +420,35 @@ def _render_json(model: BaseModel) -> str:
     )
 
 
+def compute_derived_score_sha256(derived_score: CompositionScore) -> str:
+    """Compute the `inputs.derived_score.sha256` pin from an already-resolved
+    derived score (i.e. ``resolve_arrangement(source, spec).derived_score``).
+
+    This is the exact same render-then-hash step `compile_performance_package`
+    uses, factored out so external callers (e.g. AR4 recipe-verification
+    tooling) can recompute the pin from a candidate score/arrangement pair
+    without duplicating the hashing logic (Codex 4R P2 review #191,
+    discussion_r3610170990). The pin is geometry-independent: it depends only
+    on the content of `derived_score`, never on any output directory.
+    """
+    derived_score_yaml = render_score_yaml(derived_score)
+    return hashlib.sha256(derived_score_yaml.encode("utf-8")).hexdigest()
+
+
+def compute_preservation_contract_sha256(contract: PreservationContract) -> str:
+    """Compute the `inputs.preservation_contract.sha256` pin from an
+    already-built `PreservationContract` (i.e.
+    ``build_preservation_contract(manifest, spec, ...)``).
+
+    Same rationale as `compute_derived_score_sha256`: factored out of
+    `compile_performance_package` so it can be reused verbatim to recompute
+    the pin from a candidate identity-manifest/arrangement pair (Codex 4R P2
+    review #191, discussion_r3610170990). Geometry-independent: depends only
+    on the manifest + arrangement content baked into `contract`.
+    """
+    return hashlib.sha256(_render_json(contract).encode("utf-8")).hexdigest()
+
+
 def detect_compiler_package_version() -> Optional[str]:
     """Best-effort installed `svp-rpe` distribution version, else `None`.
 
@@ -483,6 +512,24 @@ def detect_compiler_git_commit() -> Optional[str]:
     return commit
 
 
+def compute_device_profile_sha256(device_profile: DeviceProfile) -> str:
+    """`DeviceProfile` の canonical JSON (sort_keys, ``exclude_none``) sha256。
+
+    `inputs.device_profile.sha256`（``hash_basis="canonical_model_json"``）が
+    package 内で使う pin と同一の計算経路 — 呼び出し側（`_device_profile_input`
+    自身、および `scripts/collect_ar4_observation.py` の build_recipe 検証）が
+    別々にロジックをコピーして計算経路が drift しないよう、ここへ一本化する
+    （Codex 5R P2 review #191, discussion_r3610193512）。
+    """
+    canonical_bytes = json.dumps(
+        device_profile.model_dump(mode="json", exclude_none=True),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical_bytes).hexdigest()
+
+
 def _device_profile_input(
     generator: str,
     device_profile: DeviceProfile | None,
@@ -494,16 +541,10 @@ def _device_profile_input(
             "device profile generator mismatch: expected "
             f"{generator!r}, got {device_profile.generator!r}"
         )
-    canonical_bytes = json.dumps(
-        device_profile.model_dump(mode="json", exclude_none=True),
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
     return DeviceProfileInput(
         generator=generator,
         status="loaded",
-        sha256=hashlib.sha256(canonical_bytes).hexdigest(),
+        sha256=compute_device_profile_sha256(device_profile),
     )
 
 
@@ -865,12 +906,8 @@ def compile_performance_package(
         spec_sha256=spec_sha256,
     )
 
-    contract_json = _render_json(contract)
-    contract_sha256 = hashlib.sha256(contract_json.encode("utf-8")).hexdigest()
-    derived_score_yaml = render_score_yaml(resolution.derived_score)
-    derived_score_sha256 = hashlib.sha256(
-        derived_score_yaml.encode("utf-8")
-    ).hexdigest()
+    contract_sha256 = compute_preservation_contract_sha256(contract)
+    derived_score_sha256 = compute_derived_score_sha256(resolution.derived_score)
     render_generator = resolve_backend_descriptor(
         resolution.derived_score.rendering.target_backend
     ).profile_key
