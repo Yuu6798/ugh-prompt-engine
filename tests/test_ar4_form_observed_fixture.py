@@ -1,4 +1,4 @@
-"""AR4 form 実観測バッチ (2026-07-20, MusicGen local 30s) fixture self-test.
+"""AR4 form 実観測バッチ (2026-07-19, MusicGen local 30s) fixture self-test.
 
 `examples/arrangement/midnight_signal/observed/musicgen_form/` に committed された
 実観測成果物一式（`ar4f_plan.yaml` / `ar4f_takes_manifest.json` /

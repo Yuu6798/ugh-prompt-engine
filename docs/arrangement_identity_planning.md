@@ -1,7 +1,7 @@
 # Arrangement Identity Track Planning
 
 **Status**: AR0 計画文書。AR1、AR2-1/2、AR3-1/2 は実装済み。AR2-3 は
-**2026-07-20 に解凍**（(a) structure センサー配線 #192 + (b) MusicGen 30s form
+**2026-07-19 に解凍**（同日の form 実測到着後の再判断。(a) structure センサー配線 #192 + (b) MusicGen 30s form
 実測 n=2 で保留条件充足。設計着手可・実装未着手）、AR4 は計器配線済み
 （`svprpe observe` + `ObservationReport` sidecar。harmony + structure domain を
 実測、判定閾値は未定・実 Suno 生成物での観測は未実施）。
@@ -122,7 +122,7 @@ AR1 は Score の保持だけを扱い、外部 artifact の配送や生成後�
   の既存資産を流用可能）、(b) form が存在する長尺 artifact の用意（MusicGen は
   30s 上限のため相性要検討・Suno なら人手律速）。(a) は Claude 完結可能な先行
   タスクであり、AR2-3 の解凍は (a)+(b) 充足後に再判断する。
-  **2026-07-20 再判断: 解凍**。(a) は #192、(b) は MusicGen 30s × structure
+  **2026-07-19 再判断（同日の form 実測 n=2 到着後・上記保留継続判断の後刻）: 解凍**。(a) は #192、(b) は MusicGen 30s × structure
   anchor 入り manifest の実測（`observed/musicgen_form/`、n=2）で充足 — 保留条件
   「実 form artifact での AR4 結果」は文言どおり取得された。実データは AR2-3 の
   設計空間を直接照らす: 挿入（正典に無い outro の観測）・欠落（verse は 2 take
@@ -230,7 +230,7 @@ observed sequence が正典進行の 1 cycle も一致しない — take0 は
 `ar4_observation_take{0,1}.json` / `ar4_generation_timestamps.yaml` /
 `ar4_determinism_spot_check.yaml`。WAV 自体は DD-A によりコミット対象外）。
 
-2026-07-20: AR2-3 解凍条件 (a)（structure センサーの observe 配線）を充足した
+2026-07-19: AR2-3 解凍条件 (a)（structure センサーの observe 配線）を充足した
 （Design Memo `design_memo_structure_sensor.md`）。harmony と完全に同型の
 「計器・verdict なし・D-1 3 分岐」設計で `domain == "structure" and
 artifact_type == "section_map"` にのみ実配線する
@@ -259,7 +259,7 @@ identity anchor の stable ID・section policy の意味論には一切触れて
 anchor の stable ID / section policy 確定）とは独立。詳細:
 [`cli.md`](cli.md) の `svprpe observe` 節。
 
-2026-07-20: AR2-3 解凍条件 (b)（form が存在する長尺 artifact の用意）を
+2026-07-19: AR2-3 解凍条件 (b)（form が存在する長尺 artifact の用意）を
 MusicGen 30s で実測した（Design Memo `design_memo_ar4_form.md`）。
 `identity_manifest.form.yaml`（既存 `identity_manifest.yaml` + structure anchor
 1 件。既存 manifest は不変）+ `identity/section_map.json`
@@ -293,10 +293,10 @@ preserved を成功条件にしていない**: この結果自体が
 | AR0 | 本計画文書 | 完了 |
 | AR1 | resolver / CLI / bundle / diff / EDM-Jazz fixture | 完了 (#175–#177) |
 | AR2-1/2 | IdentityManifest / PreservationContract | 完了 (#178, #179, #181) |
-| AR2-3 | structure anchor policy | **解凍（2026-07-20）**: (a) structure センサー配線 (#192) + (b) MusicGen 30s form 実測 n=2 で条件充足。設計着手可（実測が示す挿入・欠落・重複・長さ振れを前提に stable ID / section policy を設計する）。実装は未着手 |
+| AR2-3 | structure anchor policy | **解凍（2026-07-19・同日 form 実測後の再判断）**: (a) structure センサー配線 (#192) + (b) MusicGen 30s form 実測 n=2 で条件充足。設計着手可（実測が示す挿入・欠落・重複・長さ振れを前提に stable ID / section policy を設計する）。実装は未着手 |
 | AR3-1 | InputCapabilityProfile | 完了 (#180, #181) |
 | AR3-2 | PerformancePackage compiler + 縦切り E2E fixture | 実装済み（E2E fixture 追加 2026-07-17） |
-| AR4 | generated-output identity observation | 計器配線済み。harmony + structure を実測（decisive synth E2E + 2026-07-19 MusicGen 12s n=2 + 2026-07-20 MusicGen 30s form n=2）。判定閾値は未定、実 Suno 生成物は未観測 |
+| AR4 | generated-output identity observation | 計器配線済み。harmony + structure を実測（decisive synth E2E + 2026-07-19 MusicGen 12s n=2 + 同日 MusicGen 30s form n=2）。判定閾値は未定、実 Suno 生成物は未観測 |
 
 2026-07-17: bundle/report に `content_digest`（内容指紋）と、
 `CompilationReport` 限定の `invocation_provenance.compiler`（実行環境の監査記録、

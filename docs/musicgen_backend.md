@@ -517,7 +517,7 @@ midnight_signal EDM 編曲 + MusicGen capability profile の performance package
 一致）で初めて実生成物観測（`svprpe observe`）を埋めた —
 `examples/arrangement/midnight_signal/observed/musicgen/` 参照。
 
-### 7.9 AR4 form 実観測バッチ（2026-07-20）
+### 7.9 AR4 form 実観測バッチ（2026-07-19）
 
 AR2-3 解凍条件 (b)（form が存在する長尺 artifact）の実測材料として、§7.8 と同一
 fixture 系列に structure anchor（`identity_manifest.form.yaml` +

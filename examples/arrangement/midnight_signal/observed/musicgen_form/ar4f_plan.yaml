@@ -1,5 +1,5 @@
 # AR4 form 実観測バッチ 事前登録（Design Memo:
-# design_memo_ar4_form.md, Fable, 2026-07-20, ブランチ
+# design_memo_ar4_form.md, Fable, 2026-07-19, ブランチ
 # claude/recommended-tasks-check-jzksqh）。目的: AR2-3 の最後の解凍条件 (b)
 # 「form が存在する長尺 artifact」を MusicGen 30s で実測し、structure センサー
 # (AR2-3 解凍条件 (a), PR #192) の実観測データを取得する。生成開始前に内容確定
