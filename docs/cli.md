@@ -503,7 +503,12 @@ themselves, in four groups:
    confinement applies there — and its `artifact` resolves confined under that
    base directory (`arrange.pathsafe.resolve_confined`), its bytes hash to the
    declared `artifact_sha256`, and its `anchor_id` is one the manifest actually
-   declares.
+   declares — and, once that anchor_id is found, its `artifact` /
+   `artifact_sha256` / `artifact_type` / `media_type` / `format_version` are
+   each compared field-by-field against the same-id manifest anchor (Codex
+   review, PR #190: an id-set-only check let a reference be retargeted to a
+   different file under `artifact_base` whose bytes still matched the
+   package-local hash).
 
 Every group's checks are collected in full before anything is printed — a single
 failure never hides the rest (exit `1` if *any* check across all groups fails).

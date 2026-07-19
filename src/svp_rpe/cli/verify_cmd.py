@@ -79,7 +79,12 @@ def verify_cmd(
       confined under that base directory
       (`arrange.pathsafe.resolve_confined`), its bytes hash to the declared
       `artifact_sha256`, and its `anchor_id` is one the manifest actually
-      declares.
+      declares — and, once that anchor_id is found, its `artifact` /
+      `artifact_sha256` / `artifact_type` / `media_type` / `format_version`
+      are each compared field-by-field against the same-id manifest anchor
+      (not just the anchor id set), so a reference silently retargeted to a
+      different file under `artifact_base` is caught even when its
+      package-local hash still matches that file's bytes.
 
     Every group's checks are collected in full before anything is printed — a
     single failure never hides the rest (exit 1 if *any* check across all

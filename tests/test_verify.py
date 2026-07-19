@@ -12,9 +12,12 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from typing import Callable
 
 from typer.testing import CliRunner
 
+from svp_rpe.arrange.bundle import compute_content_digest
+from svp_rpe.arrange.package import PERFORMANCE_PACKAGE_FILENAME
 from svp_rpe.cli import app
 from tests.test_observe import FIXTURE_DIR, _build_scratch_identity_dir, _cli_package_args
 
@@ -129,6 +132,26 @@ def _patch_report(pkg_dir: Path, **fields: object) -> None:
     report_path.write_text(json.dumps(data), encoding="utf-8")
 
 
+def _patch_package(pkg_dir: Path, mutate: Callable[[dict], None]) -> None:
+    """Hand-edit `performance_package.json` in place via `mutate(data)`."""
+    package_path = pkg_dir / "performance_package.json"
+    data = json.loads(package_path.read_text(encoding="utf-8"))
+    mutate(data)
+    package_path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def _recompute_report_hashes(pkg_dir: Path) -> None:
+    """Recompute `compilation_report.json`'s `package_sha256` / `content_digest`
+    to match the current (possibly hand-tampered) `performance_package.json`
+    bytes. Mirrors the Codex review round-1 P2 attack shape (PR #190): the
+    package and its sibling report are edited *together* so V1/V2 stay green
+    and any channel-reference tamper is left for V4 alone to catch."""
+    package_bytes = (pkg_dir / "performance_package.json").read_bytes()
+    package_sha256 = hashlib.sha256(package_bytes).hexdigest()
+    content_digest = compute_content_digest({PERFORMANCE_PACKAGE_FILENAME: package_sha256})
+    _patch_report(pkg_dir, package_sha256=package_sha256, content_digest=content_digest)
+
+
 def test_verify_rejects_tampered_package_sha256_in_report(tmp_path: Path) -> None:
     pkg_dir, manifest_path = _build_package(tmp_path)
     _patch_report(pkg_dir, package_sha256="0" * 64)
@@ -203,6 +226,110 @@ def test_verify_collects_all_failures_across_groups_in_a_single_run(tmp_path: Pa
     assert "artifact sha256 matches artifact_sha256" in flat_output
     fail_count = result.output.count("FAIL")
     assert fail_count >= 2
+
+
+def test_verify_rejects_reference_retargeted_to_a_different_file(tmp_path: Path) -> None:
+    """Codex review round 1 (PR #190, P2): V4 used to reduce the manifest to
+    an id set only, and never compared `reference.artifact` /
+    `artifact_sha256` / etc. against the same-id manifest anchor. That let an
+    attacker retarget the `lyrics` channel reference to a *different* real
+    file under `artifact_base` (here: the `melody` anchor's own artifact) and
+    recompute both the declared `artifact_sha256` and the sibling report's
+    `package_sha256` / `content_digest` to match it byte-for-byte. Every
+    *old* V4 check for this reference (locator resolves, confined, bytes hash
+    to the declared sha, anchor_id known to the manifest) and every V1-V3
+    check all still pass under that tamper -- only a field-by-field
+    reference-vs-manifest-anchor comparison catches it."""
+    from svp_rpe.arrange.verify import verify_package
+
+    pkg_dir, manifest_path = _build_package(tmp_path)
+    melody_bytes = (tmp_path / "identity" / "melody_notes.json").read_bytes()
+    melody_sha256 = hashlib.sha256(melody_bytes).hexdigest()
+
+    def _retarget(data: dict) -> None:
+        references = data["channel_artifacts"]["lyrics_text"]
+        (reference,) = [r for r in references if r["anchor_id"] == "lyrics"]
+        assert reference["artifact"] != "identity/melody_notes.json"
+        reference["artifact"] = "identity/melody_notes.json"
+        reference["artifact_sha256"] = melody_sha256
+
+    _patch_package(pkg_dir, _retarget)
+    _recompute_report_hashes(pkg_dir)
+
+    report = verify_package(pkg_dir / "performance_package.json", manifest_path)
+
+    assert not report.ok
+    checks_by_label = {check.label: check for check in report.checks}
+    prefix = "channel 'lyrics_text' anchor 'lyrics'"
+    # every *old* V1-V3 + V4-physical check still passes -- the tamper is
+    # internally self-consistent by construction.
+    assert not report.aborted
+    assert {check.group for check in report.checks} == {"V1", "V2", "V3", "V4"}
+    for old_label in (
+        f"{prefix}: artifact_base.locator resolves to an existing directory",
+        f"{prefix}: artifact is a regular, non-symlink file",
+        f"{prefix}: artifact resolves inside the artifact_base directory",
+        f"{prefix}: artifact sha256 matches artifact_sha256",
+        f"{prefix}: anchor_id is present in the manifest anchor set",
+    ):
+        assert checks_by_label[old_label].ok, old_label
+    # the new field-by-field comparisons catch the retarget:
+    assert not checks_by_label[
+        f"{prefix}: reference.artifact matches manifest anchor artifact locator"
+    ].ok
+    assert not checks_by_label[
+        f"{prefix}: reference.artifact_sha256 matches manifest anchor sha256"
+    ].ok
+    # artifact_type/media_type/format_version were left untouched, so those
+    # still pass -- confirming the comparison is field-level, not all-or-nothing.
+    for untouched_label in (
+        f"{prefix}: reference.artifact_type matches manifest anchor artifact_type",
+        f"{prefix}: reference.media_type matches manifest anchor media_type",
+        f"{prefix}: reference.format_version matches manifest anchor format_version",
+    ):
+        assert checks_by_label[untouched_label].ok, untouched_label
+
+
+def test_verify_rejects_reference_sha256_mismatched_against_manifest_anchor(
+    tmp_path: Path,
+) -> None:
+    """Field-level granularity companion to the retargeting test above: even
+    when `reference.artifact` still matches the same-id manifest anchor's
+    artifact locator untouched, a declared `artifact_sha256` that diverges
+    from the manifest anchor's own `sha256` is caught by its own dedicated
+    check (distinct from the pre-existing artifact-bytes-hash check, which
+    also fires here since the declared value no longer matches the real
+    file's bytes either)."""
+    from svp_rpe.arrange.verify import verify_package
+
+    pkg_dir, manifest_path = _build_package(tmp_path)
+    bogus_sha256 = "0" * 64
+
+    def _corrupt_sha(data: dict) -> None:
+        references = data["channel_artifacts"]["lyrics_text"]
+        (reference,) = [r for r in references if r["anchor_id"] == "lyrics"]
+        assert reference["artifact_sha256"] != bogus_sha256
+        reference["artifact_sha256"] = bogus_sha256
+
+    _patch_package(pkg_dir, _corrupt_sha)
+    _recompute_report_hashes(pkg_dir)
+
+    report = verify_package(pkg_dir / "performance_package.json", manifest_path)
+
+    assert not report.ok
+    checks_by_label = {check.label: check for check in report.checks}
+    prefix = "channel 'lyrics_text' anchor 'lyrics'"
+    # the artifact locator itself is untouched, so it still resolves and
+    # still matches the manifest anchor's artifact field:
+    assert checks_by_label[
+        f"{prefix}: reference.artifact matches manifest anchor artifact locator"
+    ].ok
+    # but the declared sha256 no longer matches either the real file's bytes
+    # (pre-existing check) or the manifest anchor's own sha256 (new check):
+    assert not checks_by_label[f"{prefix}: artifact sha256 matches artifact_sha256"].ok
+    assert not checks_by_label[
+        f"{prefix}: reference.artifact_sha256 matches manifest anchor sha256"
+    ].ok
 
 
 def _snapshot_tree(*roots: Path) -> dict[str, bytes]:

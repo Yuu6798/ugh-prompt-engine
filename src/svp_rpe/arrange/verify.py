@@ -32,6 +32,7 @@ from pydantic import ValidationError
 
 from svp_rpe.arrange.bundle import compute_content_digest
 from svp_rpe.arrange.identity import (
+    IdentityAnchor,
     IdentityManifest,
     IdentityManifestError,
     parse_identity_manifest_with_artifacts,
@@ -385,9 +386,27 @@ def _v4_channel_artifacts(
     `artifact_base_dir` を基点に `resolve_confined` で封じ込め解決する箇所であり、
     `arrange/identity.py` が `anchor.artifact` を `manifest_dir` 基準で封じ込める
     のと同じ構図をここでも踏襲する。
+
+    step 3（Codex review round 1, PR #190, P2）: 上記のファイルシステム対面検証
+    だけでは、`performance_package.json` と `compilation_report.json` を一緒に
+    書き換えて report 側の hash を再計算すれば、`reference.artifact` を
+    `artifact_base` 配下の別ファイルへ差し替え、その別ファイルの実 sha256 に
+    `artifact_sha256` を合わせることで検出をすり抜けられてしまう
+    （anchor_id 集合の一致だけでは reference が「本当にどの anchor か」まで見て
+    いない）。これを塞ぐため、同 anchor_id の manifest anchor
+    （`IdentityAnchor`）と `reference` を欄単位で突合する。`build_performance_package`
+    （`package.py`）が `ChannelArtifactReference` の `artifact` /
+    `artifact_sha256` / `artifact_type` / `media_type` / `format_version` を
+    対応する `IdentityAnchor` の同名フィールドからそのままコピーして構築する
+    （`package.py` 参照 — locator 文字列の再結合や正規化は行わない）ため、この
+    5 フィールドはいずれも文字列としての単純な等値比較で足りる。突合は
+    anchor_id が manifest に存在する場合のみ行う（存在しない場合は既存の
+    presence チェックが単独で fail するため、フィールド突合はスキップする）。
     """
     checks: list[VerifyCheck] = []
-    manifest_anchor_ids = {anchor.id for anchor in manifest.anchors}
+    manifest_anchors_by_id: dict[str, IdentityAnchor] = {
+        anchor.id: anchor for anchor in manifest.anchors
+    }
     for channel in sorted(package.channel_artifacts):
         for reference in package.channel_artifacts[channel]:
             prefix = f"channel '{channel}' anchor '{reference.anchor_id}'"
@@ -498,11 +517,8 @@ def _v4_channel_artifacts(
                         )
                     )
 
-            if reference.anchor_id in manifest_anchor_ids:
-                checks.append(
-                    VerifyCheck("V4", f"{prefix}: anchor_id is present in the manifest anchor set", True)
-                )
-            else:
+            manifest_anchor = manifest_anchors_by_id.get(reference.anchor_id)
+            if manifest_anchor is None:
                 checks.append(
                     VerifyCheck(
                         "V4",
@@ -511,6 +527,50 @@ def _v4_channel_artifacts(
                         f"{reference.anchor_id!r} not found in manifest anchor ids",
                     )
                 )
+                continue
+            checks.append(
+                VerifyCheck("V4", f"{prefix}: anchor_id is present in the manifest anchor set", True)
+            )
+            checks.append(
+                _eq_check(
+                    "V4",
+                    f"{prefix}: reference.artifact matches manifest anchor artifact locator",
+                    reference.artifact,
+                    manifest_anchor.artifact,
+                )
+            )
+            checks.append(
+                _eq_check(
+                    "V4",
+                    f"{prefix}: reference.artifact_sha256 matches manifest anchor sha256",
+                    reference.artifact_sha256,
+                    manifest_anchor.sha256,
+                )
+            )
+            checks.append(
+                _eq_check(
+                    "V4",
+                    f"{prefix}: reference.artifact_type matches manifest anchor artifact_type",
+                    reference.artifact_type,
+                    manifest_anchor.artifact_type,
+                )
+            )
+            checks.append(
+                _eq_check(
+                    "V4",
+                    f"{prefix}: reference.media_type matches manifest anchor media_type",
+                    reference.media_type,
+                    manifest_anchor.media_type,
+                )
+            )
+            checks.append(
+                _eq_check(
+                    "V4",
+                    f"{prefix}: reference.format_version matches manifest anchor format_version",
+                    reference.format_version,
+                    manifest_anchor.format_version,
+                )
+            )
     return checks
 
 
