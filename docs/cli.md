@@ -487,11 +487,20 @@ an unknown key, non-list/empty `sections`, or unsupported `schema_version` is
 rejected fail-closed, the same posture `chord-sequence/0.1` takes). The
 observed side is `PhysicalRPE.structure` (`SectionMarker.label`, always
 populated by extraction — no extra dependency to wire). Both sides are
-normalized before comparison — **lowercase, then strip trailing digits**
-(e.g. the extractor's auto-numbered `Verse2` label normalizes to `verse`) —
-and nothing else; this absorbs case differences and the extractor's
-repeated-section numbering without merging synonyms or doing any other
-semantic equivalence. `measurements` records both the normalized and raw
+normalized before comparison — **lowercase, then strip trailing digits only
+when the stripped stem is one of the extractor's known vocabulary words**
+(`intro`/`verse`/`chorus`/`bridge`/`outro` — the base labels `assign_labels`
+(`rpe/structure_labels.py`) emits; e.g. the extractor's auto-numbered
+`Verse2` label normalizes to `verse`) — and nothing else. Labels outside that
+vocabulary keep their trailing digits after lowercasing, so generic
+identifier-style labels such as `section_01`/`section_02` stay distinct
+instead of collapsing onto the same `section_` value (Codex 2R P2: an earlier
+version stripped trailing digits from every label, which could make a
+reordered or wrong `section_01`/`section_02` sequence still register as
+`sequence_exact_match=True`). This absorbs case differences and the
+extractor's repeated-section numbering without merging synonyms, collapsing
+distinct identifiers, or doing any other semantic equivalence. `measurements`
+records both the normalized and raw
 observed sequences (`canonical_sections`, `observed_sections`,
 `observed_sections_raw`) plus their lengths, and:
 

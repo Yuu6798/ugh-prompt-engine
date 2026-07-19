@@ -783,11 +783,22 @@ def test_observe_harmony_degenerate_canonical_single_chord_reaches_preserved() -
 
 def test_normalize_section_label_lowercases_and_strips_trailing_digits() -> None:
     """Unit-level check of the normalization rule (structure Design Memo
-    section 3): lowercase + strip trailing digits only, nothing else."""
+    section 3, revised Codex 2R P2): lowercase always; trailing digits are
+    stripped only when the stripped stem is one of the extractor's known
+    vocabulary words (`intro`/`verse`/`chorus`/`bridge`/`outro`)."""
     assert _normalize_section_label("Verse2") == "verse"
     assert _normalize_section_label("CHORUS") == "chorus"
-    assert _normalize_section_label("section_01") == "section_"
     assert _normalize_section_label("bridge") == "bridge"
+    # Vocabulary boundary: known extractor stems strip regardless of which
+    # of the five words carries the digit...
+    assert _normalize_section_label("chorus3") == "chorus"
+    assert _normalize_section_label("outro2") == "outro"
+    # ...but a stem outside the known vocabulary keeps its trailing digits,
+    # so distinct identifier-style labels never collapse onto each other.
+    assert _normalize_section_label("interlude2") == "interlude2"
+    assert _normalize_section_label("section_01") == "section_01"
+    assert _normalize_section_label("section_02") == "section_02"
+    assert _normalize_section_label("SECTION_01") == "section_01"
 
 
 def test_observe_structure_exact_match_is_preserved() -> None:
@@ -846,6 +857,35 @@ def test_observe_structure_normalization_makes_raw_mismatch_an_exact_match() -> 
     assert observation.measurements["sequence_exact_match"] is True
     assert observation.adherence_status == "preserved"
     assert observation.determination == "exact_match"
+
+
+def test_observe_structure_numbered_identifier_labels_stay_distinct() -> None:
+    """Regression for Codex 2R P2
+    (https://github.com/Yuu6798/ugh-prompt-engine/pull/192#discussion_r3610383648):
+    generic identifier-style labels like `section_01`/`section_02` are outside
+    the extractor's known vocabulary, so normalization must NOT strip their
+    trailing digits. A reordered `section_01`/`section_02` sequence must
+    therefore stay a mismatch, not a false-positive `sequence_exact_match`."""
+    canonical = ["section_01", "section_02", "section_03"]
+    observed = ["section_02", "section_01", "section_03"]
+    anchor = _anchor("structure", "structure", "section_map.json", "section_map")
+    bundle = _bundle_with_structure(observed)
+    artifact_bytes = _section_map_artifact_bytes(canonical)
+
+    observation = _observe_structure(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        bundle=bundle,
+        artifact_bytes=artifact_bytes,
+    )
+
+    assert observation.measurements["canonical_sections"] == canonical
+    assert observation.measurements["observed_sections"] == observed
+    assert observation.measurements["sequence_exact_match"] is False
+    assert observation.measurements["position_match_rate"] == 0.3333
+    assert observation.adherence_status == "not_observed"
+    assert observation.determination == "deferred"
 
 
 def test_observe_structure_reordered_sections_is_deferred_with_match_rate() -> None:

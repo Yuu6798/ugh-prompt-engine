@@ -536,14 +536,34 @@ def _load_section_map(raw_bytes: bytes, *, artifact_path: Path) -> list[str]:
 
 _TRAILING_DIGITS_PATTERN = re.compile(r"\d+$")
 
+# `assign_labels` (rpe/structure_labels.py) is the sole producer of extractor
+# structure labels, and its base vocabulary is exactly these five words (plus
+# the single-section-only "Full", which it never numbers). Trailing-digit
+# stripping is restricted to this vocabulary so generic identifier-style
+# labels like `section_01`/`section_02` (which the extractor never emits, but
+# a hand-authored `section-map/0.1` artifact may use) keep their distinct
+# numeric suffixes instead of collapsing onto each other (Codex 2R P2,
+# https://github.com/Yuu6798/ugh-prompt-engine/pull/192#discussion_r3610383648).
+_KNOWN_SECTION_LABEL_STEMS = frozenset({"intro", "verse", "chorus", "bridge", "outro"})
+
 
 def _normalize_section_label(label: str) -> str:
-    """正規化規則（structure Design Memo section 3。計測上の決定であり docstring
-    に明記する）: lowercase 化 + 末尾数字を strip（extractor の ``Verse2`` →
-    ``verse``）。それ以外の変換はしない — 大文字小文字と抽出器のラベル連番付与
-    だけを吸収し、それ以上の意味的な同値判断（同義語マージ等）は行わない。
+    """正規化規則（structure Design Memo section 3、Codex 2R P2 で語彙限定に改訂。
+    計測上の決定であり docstring に明記する）: まず lowercase 化する。その上で
+    末尾数字を strip した語幹が抽出器の既知語彙 ``_KNOWN_SECTION_LABEL_STEMS``
+    （``assign_labels`` が発行する ``intro``/``verse``/``chorus``/``bridge``/
+    ``outro``）に含まれる場合のみ strip を適用する（例: extractor の ``Verse2``
+    → ``verse``）。語彙に含まれない場合は末尾数字を保持する — ``section_01`` /
+    ``section_02`` のような識別番号付きラベルは lowercase 化のみでそのまま
+    区別を維持し、``section_`` に潰れて順序違反を隠さない。それ以外の変換は
+    しない — 抽出器のラベル連番付与の吸収に限定し、それ以上の意味的な同値
+    判断（同義語マージ等）は行わない。
     """
-    return _TRAILING_DIGITS_PATTERN.sub("", label.lower())
+    lowered = label.lower()
+    stripped = _TRAILING_DIGITS_PATTERN.sub("", lowered)
+    if stripped != lowered and stripped in _KNOWN_SECTION_LABEL_STEMS:
+        return stripped
+    return lowered
 
 
 def _observe_structure(
