@@ -415,11 +415,18 @@ future Design Memo.
 
 | Case | `adherence_status` | `determination` |
 |---|---|---|
-| No sensor wired for the anchor's domain (lyrics/melody/rhythm/structure/motif in this PR) | `not_observed` | `no_sensor` |
-| Sensor ran and measured an exact identity match (harmony: the collapsed observed sequence matches the canonical progression's cycle alternation all the way through, no leftover tail) | `preserved` | `exact_match` |
+| No sensor wired for the anchor's domain (lyrics/melody/rhythm/motif) | `not_observed` | `no_sensor` |
+| Sensor ran and measured an exact identity match (harmony: the collapsed observed sequence matches the canonical progression's cycle alternation all the way through, no leftover tail. structure: the normalized canonical and observed section sequences match exactly) | `preserved` | `exact_match` |
 | Sensor ran but did not match exactly | `not_observed` | `deferred` |
 
-The only sensor wired in this PR is **harmony**: it extracts the generated audio with
+Two sensors are wired: **harmony** and **structure** (2026-07-20, AR2-3 unfreeze
+condition (a)). Both route on the *(domain, artifact_type)* pair, not the domain
+alone — a `harmony` anchor whose `artifact_type` isn't `chord_sequence_json` (e.g.
+`audio_excerpt`), or a `structure` anchor whose `artifact_type` isn't `section_map`,
+falls back to the generic no-sensor path even though the domain itself has a wired
+sensor elsewhere.
+
+**harmony** extracts the generated audio with
 `extract_rpe_from_file` (the same dependency-free `compute_chord_events` chroma-template
 detector R4 uses) and normalizes `PhysicalRPE.chord_events` to `(root, quality)` pairs.
 Because the deterministic performer plays the canonical progression once per
@@ -463,6 +470,35 @@ score's 2 non-drone, chord-playing sections) before a 3-entry tail diverges.
 the chroma-template detector still emits a (arbitrary-looking) major/minor
 label for a bare root tone that was never meant to carry a chord progression —
 see [`arrangement_identity_planning.md`](arrangement_identity_planning.md) AR4.
+
+**structure** (2026-07-20) is wired to the `(domain="structure",
+artifact_type="section_map")` pair. The canonical side is the `section_map`
+anchor artifact (`section-map/0.1`: `{"schema_version": "section-map/0.1",
+"sections": [...]}` — a non-empty, order-significant list of section labels;
+an unknown key, non-list/empty `sections`, or unsupported `schema_version` is
+rejected fail-closed, the same posture `chord-sequence/0.1` takes). The
+observed side is `PhysicalRPE.structure` (`SectionMarker.label`, always
+populated by extraction — no extra dependency to wire). Both sides are
+normalized before comparison — **lowercase, then strip trailing digits**
+(e.g. the extractor's auto-numbered `Verse2` label normalizes to `verse`) —
+and nothing else; this absorbs case differences and the extractor's
+repeated-section numbering without merging synonyms or doing any other
+semantic equivalence. `measurements` records both the normalized and raw
+observed sequences (`canonical_sections`, `observed_sections`,
+`observed_sections_raw`) plus their lengths, and:
+
+- `position_match_rate` — position-aligned match count over
+  `max(canonical_length, observed_length)` (0 when both are empty; a length
+  mismatch always keeps this below 1.0, since the longer sequence's excess
+  positions can never match). A transparency measurement only — **not** the
+  D-1 identity gate.
+- `sequence_exact_match` — whether the normalized canonical and observed
+  sequences are identical in both length and order. **This is the D-1
+  identity gate**: `preserved` only when `sequence_exact_match` is `True`;
+  otherwise `not_observed`/`deferred`, with the raw measurements still fully
+  recorded. Unlike harmony, structure has no repeating-progression semantics
+  to collapse/cycle-align against — the sequence itself is the whole
+  observation.
 
 lyrics/melody anchors are recorded as `available: false` with a `reason` (they need
 the optional `lyrics` / `basic-pitch` extras — not wired here); their future
