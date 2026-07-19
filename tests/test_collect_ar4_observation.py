@@ -7,14 +7,22 @@ stays confined to the pure-logic manifest-building helpers — the same split
 it locks in the `performance_package` provenance shape (Codex P2 review #191,
 discussion_r3610116228): the generator must never serialize a machine-specific
 absolute path, and its default output for the AR4 midnight_signal fixture must
-match the committed `ar4_takes_manifest.json` byte-for-byte in structure.
+match the committed `ar4_takes_manifest.json` byte-for-byte in structure. It
+also locks in the geometry-independent composite-pin verification for
+``derived_score`` / ``preservation_contract`` added in Codex 4R P2 review #191
+(discussion_r3610170990): a `--score` or `--arrangement` mistyped to another
+*existing* repo YAML must be caught by pin mismatch, not waved through by an
+existence-only check.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from scripts.collect_ar4_observation import (
     DEFAULT_ARRANGEMENT,
@@ -26,13 +34,76 @@ from scripts.collect_ar4_observation import (
     build_takes_manifest,
 )
 
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from svp_rpe.arrange.contract import build_preservation_contract  # noqa: E402
+from svp_rpe.arrange.identity import IdentityManifest  # noqa: E402
+from svp_rpe.arrange.models import ArrangementSpec  # noqa: E402
+from svp_rpe.arrange.package import (  # noqa: E402
+    compute_derived_score_sha256,
+    compute_preservation_contract_sha256,
+)
+from svp_rpe.arrange.resolver import resolve_arrangement  # noqa: E402
+from svp_rpe.compose.models import CompositionScore  # noqa: E402
+
 FIXTURE_MANIFEST_PATH = Path(
     "examples/arrangement/midnight_signal/observed/musicgen/ar4_takes_manifest.json"
 )
 
+# 誤指定シナリオ用: リポジトリに実在するが DEFAULT_SCORE / DEFAULT_ARRANGEMENT とは
+# 別内容の YAML（存在はするが誤った入力を模す）。
+WRONG_SCORE = ROOT / "examples/control/k2_suno_segments/structure4_score_high.yaml"
+WRONG_ARRANGEMENT = ROOT / "examples/arrangement/midnight_signal/edm.identity.arrangement.yaml"
+
 
 def _load_fixture_manifest() -> dict[str, Any]:
     return json.loads(FIXTURE_MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+def _real_recipe_package_data() -> dict[str, Any]:
+    """DEFAULT_SCORE/DEFAULT_IDENTITY_MANIFEST/DEFAULT_ARRANGEMENT/
+    DEFAULT_CAPABILITY_PROFILE から実際に compile した場合に
+    `performance_package.json` が持つはずの 4 pin を、production の pin 計算
+    経路（`resolve_arrangement` / `compute_derived_score_sha256` /
+    `build_preservation_contract` / `compute_preservation_contract_sha256`）を
+    直接呼んで独立に再現する。`build_package_provenance` の内部 recompute
+    ヘルパーとは別経路で期待値を作ることで、テストが検証対象と同じ計算を
+    無条件に信頼してしまう（tautology）のを避ける。
+    """
+    score_bytes = DEFAULT_SCORE.read_bytes()
+    manifest_bytes = DEFAULT_IDENTITY_MANIFEST.read_bytes()
+    arrangement_bytes = DEFAULT_ARRANGEMENT.read_bytes()
+    capability_bytes = DEFAULT_CAPABILITY_PROFILE.read_bytes()
+
+    source = CompositionScore.model_validate(yaml.safe_load(score_bytes))
+    manifest = IdentityManifest.model_validate(yaml.safe_load(manifest_bytes))
+    spec = ArrangementSpec.model_validate(yaml.safe_load(arrangement_bytes))
+
+    resolution = resolve_arrangement(source, spec)
+    derived_score_sha256 = compute_derived_score_sha256(resolution.derived_score)
+
+    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    spec_sha256 = hashlib.sha256(arrangement_bytes).hexdigest()
+    contract = build_preservation_contract(
+        manifest, spec, manifest_sha256=manifest_sha256, spec_sha256=spec_sha256
+    )
+    contract_sha256 = compute_preservation_contract_sha256(contract)
+
+    return {
+        "inputs": {
+            "identity_manifest": {"sha256": manifest_sha256},
+            "capability_profile": {
+                "sha256": hashlib.sha256(capability_bytes).hexdigest()
+            },
+            "derived_score": {"sha256": derived_score_sha256},
+            "preservation_contract": {"sha256": contract_sha256},
+        }
+    }
+
+
+_DEFAULT_RECIPE_PACKAGE_DATA = _real_recipe_package_data()
 
 
 def test_build_package_provenance_never_records_absolute_scratch_path() -> None:
@@ -53,13 +124,15 @@ def test_build_package_provenance_never_records_absolute_scratch_path() -> None:
 
 
 def test_build_package_provenance_scratch_build_records_structured_recipe() -> None:
-    """4 入力が全て repo 相対に解決できれば、入力パス + コンパイルコマンドの
-    構造化レシピ (`build_recipe`) を記録する。"""
+    """4 入力が全て repo 相対に解決でき、かつ package の pin と幾何非依存の
+    合成 pin（derived_score / preservation_contract）が一致すれば、入力パス +
+    コンパイルコマンドの構造化レシピ (`build_recipe`) を記録する。"""
     scratch_package = Path("/tmp/ar4_scratch_build/performance_package.json")
     package_sha256 = "b" * 64
     provenance = build_package_provenance(
         scratch_package,
         package_sha256,
+        _DEFAULT_RECIPE_PACKAGE_DATA,
         score=DEFAULT_SCORE,
         identity_manifest=DEFAULT_IDENTITY_MANIFEST,
         arrangement=DEFAULT_ARRANGEMENT,
@@ -174,28 +247,15 @@ def test_build_package_provenance_rejects_pin_mismatch() -> None:
 
 
 def test_build_package_provenance_emits_recipe_when_pins_match() -> None:
-    """package の pin と実ファイル bytes が一致する場合（正しい既定入力）は、
-    従来どおり build_recipe を記録する — pin 突合の追加が正当な入力を巻き添えに
-    しないことの回帰確認。"""
+    """package の pin（identity_manifest / capability_profile の raw bytes pin
+    と、derived_score / preservation_contract の幾何非依存合成 pin）が実ファイル
+    /実計算と一致する場合（正しい既定入力）は、従来どおり build_recipe を
+    記録する — pin 突合の追加が正当な入力を巻き添えにしないことの回帰確認。"""
     scratch_package = Path("/tmp/ar4_scratch_build/performance_package.json")
-    package_data = {
-        "inputs": {
-            "identity_manifest": {
-                "sha256": hashlib.sha256(
-                    DEFAULT_IDENTITY_MANIFEST.read_bytes()
-                ).hexdigest()
-            },
-            "capability_profile": {
-                "sha256": hashlib.sha256(
-                    DEFAULT_CAPABILITY_PROFILE.read_bytes()
-                ).hexdigest()
-            },
-        }
-    }
     provenance = build_package_provenance(
         scratch_package,
         "2" + "b" * 63,
-        package_data,
+        _DEFAULT_RECIPE_PACKAGE_DATA,
         score=DEFAULT_SCORE,
         identity_manifest=DEFAULT_IDENTITY_MANIFEST,
         arrangement=DEFAULT_ARRANGEMENT,
@@ -211,10 +271,65 @@ def test_build_package_provenance_emits_recipe_when_pins_match() -> None:
     }
 
 
+def test_build_package_provenance_rejects_mistyped_score_with_existing_yaml() -> None:
+    """`--score` が実在するが別内容の YAML（別 work の score）に誤指定された
+    場合、existence-only では検出できないが derived_score の合成 pin 不一致で
+    検出され、build_recipe を出さず sha256-only フォールバックする（Codex 4R P2
+    review #191, discussion_r3610170990）。"""
+    assert WRONG_SCORE.is_file()  # 前提: 実在する別 YAML であること
+    scratch_package = Path("/tmp/ar4_scratch_build/performance_package.json")
+    provenance = build_package_provenance(
+        scratch_package,
+        "3" + "c" * 63,
+        _DEFAULT_RECIPE_PACKAGE_DATA,
+        score=WRONG_SCORE,
+        identity_manifest=DEFAULT_IDENTITY_MANIFEST,
+        arrangement=DEFAULT_ARRANGEMENT,
+        capability_profile=DEFAULT_CAPABILITY_PROFILE,
+    )
+    assert "build_recipe" not in provenance
+    assert "note" in provenance
+    assert "derived_score:" in provenance["note"]
+    assert "does not match package-pinned inputs.derived_score.sha256" in provenance["note"]
+
+
+def test_build_package_provenance_rejects_mistyped_arrangement_with_existing_yaml() -> None:
+    """`--arrangement` が実在するが別 variant の arrangement spec に誤指定された
+    場合、existence-only では検出できないが preservation_contract の合成 pin
+    不一致で検出され、build_recipe を出さず sha256-only フォールバックする
+    （Codex 4R P2 review #191, discussion_r3610170990）。"""
+    assert WRONG_ARRANGEMENT.is_file()  # 前提: 実在する別 YAML であること
+    assert WRONG_ARRANGEMENT != DEFAULT_ARRANGEMENT
+    scratch_package = Path("/tmp/ar4_scratch_build/performance_package.json")
+    provenance = build_package_provenance(
+        scratch_package,
+        "4" + "d" * 63,
+        _DEFAULT_RECIPE_PACKAGE_DATA,
+        score=DEFAULT_SCORE,
+        identity_manifest=DEFAULT_IDENTITY_MANIFEST,
+        arrangement=WRONG_ARRANGEMENT,
+        capability_profile=DEFAULT_CAPABILITY_PROFILE,
+    )
+    assert "build_recipe" not in provenance
+    assert "note" in provenance
+    assert "preservation_contract:" in provenance["note"]
+    assert (
+        "does not match package-pinned inputs.preservation_contract.sha256"
+        in provenance["note"]
+    )
+
+
 def test_build_takes_manifest_matches_committed_fixture_with_default_recipe_inputs() -> None:
-    """修正後の生成器（既定のレシピ入力）が、committed
+    """修正後の生成器（既定のレシピ入力 + 実 package pin）が、committed
     `ar4_takes_manifest.json` と構造的に一致する manifest を組み立てることを
-    確認する — 完了条件: 生成器の出力形式と fixture の直接一致。"""
+    確認する — 完了条件: 生成器の出力形式と fixture の直接一致。
+
+    `package_data` には `_DEFAULT_RECIPE_PACKAGE_DATA`（DEFAULT_* 入力から
+    独立に再計算した実 pin）を渡す — Codex 4R P2 review #191 の修正で
+    `package_data` なしでは幾何非依存 pin を突合できず build_recipe を
+    emit しなくなったため、committed fixture の `build_recipe` を再現するには
+    実 pin が必要（design memo point 4）。
+    """
     fixture = _load_fixture_manifest()
     result = {
         "prompt": fixture["prompt"],
@@ -230,6 +345,7 @@ def test_build_takes_manifest_matches_committed_fixture_with_default_recipe_inpu
         fixture_id=fixture["fixture_id"],
         package_path=scratch_package,
         package_sha256=fixture["performance_package"]["sha256"],
+        package_data=_DEFAULT_RECIPE_PACKAGE_DATA,
         score=DEFAULT_SCORE,
         identity_manifest=DEFAULT_IDENTITY_MANIFEST,
         arrangement=DEFAULT_ARRANGEMENT,

@@ -420,6 +420,35 @@ def _render_json(model: BaseModel) -> str:
     )
 
 
+def compute_derived_score_sha256(derived_score: CompositionScore) -> str:
+    """Compute the `inputs.derived_score.sha256` pin from an already-resolved
+    derived score (i.e. ``resolve_arrangement(source, spec).derived_score``).
+
+    This is the exact same render-then-hash step `compile_performance_package`
+    uses, factored out so external callers (e.g. AR4 recipe-verification
+    tooling) can recompute the pin from a candidate score/arrangement pair
+    without duplicating the hashing logic (Codex 4R P2 review #191,
+    discussion_r3610170990). The pin is geometry-independent: it depends only
+    on the content of `derived_score`, never on any output directory.
+    """
+    derived_score_yaml = render_score_yaml(derived_score)
+    return hashlib.sha256(derived_score_yaml.encode("utf-8")).hexdigest()
+
+
+def compute_preservation_contract_sha256(contract: PreservationContract) -> str:
+    """Compute the `inputs.preservation_contract.sha256` pin from an
+    already-built `PreservationContract` (i.e.
+    ``build_preservation_contract(manifest, spec, ...)``).
+
+    Same rationale as `compute_derived_score_sha256`: factored out of
+    `compile_performance_package` so it can be reused verbatim to recompute
+    the pin from a candidate identity-manifest/arrangement pair (Codex 4R P2
+    review #191, discussion_r3610170990). Geometry-independent: depends only
+    on the manifest + arrangement content baked into `contract`.
+    """
+    return hashlib.sha256(_render_json(contract).encode("utf-8")).hexdigest()
+
+
 def detect_compiler_package_version() -> Optional[str]:
     """Best-effort installed `svp-rpe` distribution version, else `None`.
 
@@ -865,12 +894,8 @@ def compile_performance_package(
         spec_sha256=spec_sha256,
     )
 
-    contract_json = _render_json(contract)
-    contract_sha256 = hashlib.sha256(contract_json.encode("utf-8")).hexdigest()
-    derived_score_yaml = render_score_yaml(resolution.derived_score)
-    derived_score_sha256 = hashlib.sha256(
-        derived_score_yaml.encode("utf-8")
-    ).hexdigest()
+    contract_sha256 = compute_preservation_contract_sha256(contract)
+    derived_score_sha256 = compute_derived_score_sha256(resolution.derived_score)
     render_generator = resolve_backend_descriptor(
         resolution.derived_score.rendering.target_backend
     ).profile_key

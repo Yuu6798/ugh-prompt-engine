@@ -44,6 +44,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
@@ -52,6 +54,15 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.collect_musicgen_takes import _import_musicgen_stack, _sha256_file  # noqa: E402
+from svp_rpe.arrange.contract import build_preservation_contract  # noqa: E402
+from svp_rpe.arrange.identity import IdentityManifest  # noqa: E402
+from svp_rpe.arrange.models import ArrangementSpec  # noqa: E402
+from svp_rpe.arrange.package import (  # noqa: E402
+    compute_derived_score_sha256,
+    compute_preservation_contract_sha256,
+)
+from svp_rpe.arrange.resolver import resolve_arrangement  # noqa: E402
+from svp_rpe.compose.models import CompositionScore  # noqa: E402
 
 SCHEMA_VERSION = "1.0"
 GENERATOR = "collect_ar4_observation.py"
@@ -252,9 +263,12 @@ def _verify_recipe_input(path: Path, *, pin_sha256: Optional[str]) -> Optional[s
     `resolve_arrangement` 後の再レンダリングであり raw な score.yaml の bytes
     ではなく、``preservation_contract`` の pin は manifest+spec から合成した
     契約 JSON の hash であり arrangement spec の raw bytes ではない）ため、この
-    2 種は呼び出し側が ``pin_sha256=None`` を渡し (a) のみで検証される。
-    幾何依存の再コンパイル（`resolve_arrangement` / `build_preservation_contract`
-    の再実行）は行わない — 実測 pin との突合のみに留める。
+    2 種は呼び出し側が ``pin_sha256=None`` を渡し (a) のみで検証される —
+    その代わり、この 2 種が実際に正しい組み合わせかどうかは
+    `_recompute_derived_score_sha256` / `_recompute_preservation_contract_sha256`
+    が幾何非依存の合成 pin を再計算して別途突合する（Codex 4R P2 review #191,
+    discussion_r3610170990: existence-only では実在する別の YAML への誤指定を
+    検出できなかった欠陥への修正）。
     """
     if not path.is_file():
         return f"{path} does not exist or is not a regular file"
@@ -266,6 +280,68 @@ def _verify_recipe_input(path: Path, *, pin_sha256: Optional[str]) -> Optional[s
                 f"package-pinned sha256 {pin_sha256}"
             )
     return None
+
+
+def _load_yaml_mapping(raw_bytes: bytes) -> dict[str, Any]:
+    data = yaml.safe_load(raw_bytes)
+    if not isinstance(data, dict):
+        raise ValueError("expected a YAML mapping")
+    return data
+
+
+def _recompute_derived_score_sha256(
+    score_path: Path, arrangement_path: Path
+) -> Optional[str]:
+    """``--score`` / ``--arrangement`` の実ファイルから
+    `inputs.derived_score.sha256` pin を再計算する（Codex 4R P2 review #191,
+    discussion_r3610170990）。
+
+    `derived_score` pin は score + arrangement spec の内容のみで決まり、
+    package の出力ディレクトリ（幾何）には依存しない —
+    `compile_performance_package`（`src/svp_rpe/arrange/package.py`）と完全に
+    同じ ``resolve_arrangement(source, spec)`` -> `compute_derived_score_sha256`
+    の経路を再利用する（ロジックの緩いコピーはしない）。YAML 不正・スキーマ
+    不一致・resolve 失敗はすべて ``None`` を返す fail-closed（例外は投げない —
+    呼び出し側は pin 突合不能として扱い、検証失敗にフォールバックする）。
+    """
+    try:
+        source = CompositionScore.model_validate(
+            _load_yaml_mapping(score_path.read_bytes())
+        )
+        spec = ArrangementSpec.model_validate(
+            _load_yaml_mapping(arrangement_path.read_bytes())
+        )
+        resolution = resolve_arrangement(source, spec)
+        return compute_derived_score_sha256(resolution.derived_score)
+    except Exception:
+        return None
+
+
+def _recompute_preservation_contract_sha256(
+    identity_manifest_path: Path, arrangement_path: Path
+) -> Optional[str]:
+    """``--identity-manifest`` / ``--arrangement`` の実ファイルから
+    `inputs.preservation_contract.sha256` pin を再計算する（同上の理由）。
+
+    `preservation_contract` pin は identity manifest + arrangement spec の
+    内容のみで決まり、package の出力ディレクトリ（幾何）には依存しない —
+    `compile_performance_package` と完全に同じ ``build_preservation_contract``
+    -> `compute_preservation_contract_sha256` の経路を再利用する。失敗はすべて
+    ``None``（fail-closed。例外は投げない）。
+    """
+    try:
+        manifest_bytes = identity_manifest_path.read_bytes()
+        spec_bytes = arrangement_path.read_bytes()
+        manifest = IdentityManifest.model_validate(_load_yaml_mapping(manifest_bytes))
+        spec = ArrangementSpec.model_validate(_load_yaml_mapping(spec_bytes))
+        manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+        spec_sha256 = hashlib.sha256(spec_bytes).hexdigest()
+        contract = build_preservation_contract(
+            manifest, spec, manifest_sha256=manifest_sha256, spec_sha256=spec_sha256
+        )
+        return compute_preservation_contract_sha256(contract)
+    except Exception:
+        return None
 
 
 def build_package_provenance(
@@ -288,14 +364,32 @@ def build_package_provenance(
        パスをそのまま記録する。
     2. リポジトリ外（AR4 runbook の通常経路である scratch ビルド）の場合、
        ``score``/``identity_manifest``/``arrangement``/``capability_profile``
-       が全て与えられ、かつ全て repo 相対に解決でき、かつ ``_verify_recipe_input``
-       の検証（実在 + pin がある入力種は sha256 一致）を全て通れば、それらの
-       入力パスとコンパイルコマンドからなる構造化レシピ（``build_recipe``）を
-       記録する（Codex 3R P2 review #191, discussion_r3610153978: 誤指定/存在
-       しないパスや package と食い違う bytes から「偽の再現レシピ」を emit
-       しないためのゲート）。``package_data`` が ``None``（呼び出し側が
-       `performance_package.json` の JSON を持っていない場合）は pin 突合を
-       スキップし existence-only 検証になる。
+       が全て与えられ、かつ全て repo 相対に解決でき、かつ以下の 2 段の検証を
+       全て通れば、それらの入力パスとコンパイルコマンドからなる構造化レシピ
+       （``build_recipe``）を記録する:
+
+       (a) ``_verify_recipe_input`` で 4 入力それぞれの実在を確認する。
+           ``identity_manifest`` / ``capability_profile`` は package の
+           `inputs.<name>.sha256`（raw bytes pin）とも突合する。
+       (b) ``score`` + ``arrangement`` から `inputs.derived_score.sha256`
+           を、``identity_manifest`` + ``arrangement`` から
+           `inputs.preservation_contract.sha256` を、それぞれ
+           `compile_performance_package` と同じ経路
+           （`_recompute_derived_score_sha256` /
+           `_recompute_preservation_contract_sha256`、内部的に
+           `src/svp_rpe/arrange/package.py` の
+           `compute_derived_score_sha256` / `compute_preservation_contract_sha256`
+           を再利用）で再計算し、package の pin と突合する（Codex 4R P2
+           review #191, discussion_r3610170990: (a) だけでは
+           existence-only のため、実在する別の YAML への誤指定
+           （例: 別 work の score / 別 variant の arrangement）を
+           `build_recipe` が誤って裏書きしてしまっていた欠陥への修正 —
+           これで 4 入力すべてが package の pin に検証で結ばれる）。
+
+       ``package_data`` が ``None``、または `inputs.derived_score.sha256` /
+       `inputs.preservation_contract.sha256` pin 自体が package JSON に
+       存在しない場合は、レシピの正当性を主張できないため検証失敗として扱う
+       （(a) のみを通っても `build_recipe` は emit しない）。
     3. 上記いずれも成立しない場合（レシピ入力が揃っていない、または検証に
        失敗した場合）は sha256 のみを provenance として残す（部分的な入力や
        検証未通過の入力から不完全/偽のレシピを捏造しない — 偽レシピより正直な
@@ -321,7 +415,9 @@ def build_package_provenance(
         if all(value is not None for value in repo_relative_inputs.values()):
             data = package_data if package_data is not None else {}
             # score / arrangement: performance_package.json に raw bytes 相当の
-            # pin がないため pin_sha256=None（existence-only）。
+            # pin がないため pin_sha256=None（existence-only）。この2種の内容
+            # 自体は下の合成 pin 突合（derived_score / preservation_contract）
+            # で別途検証する。
             pins: dict[str, Optional[str]] = {
                 "score": None,
                 "identity_manifest": _package_input_pin(data, "identity_manifest"),
@@ -334,6 +430,59 @@ def build_package_provenance(
                 reason = _verify_recipe_input(path, pin_sha256=pins[name])
                 if reason is not None:
                     failures.append(f"{name}: {reason}")
+
+            if not failures:
+                # 幾何非依存の合成 pin 再計算（Codex 4R P2 review #191,
+                # discussion_r3610170990）: score/arrangement -> derived_score、
+                # identity_manifest/arrangement -> preservation_contract を
+                # package と同じ経路で再計算し pin と突合する。package_data が
+                # 読めない/pin 自体が欠落している場合は正当性を主張できないため
+                # 検証失敗として扱う（build_recipe を emit しない）。
+                score_path = recipe_paths["score"]
+                identity_manifest_path = recipe_paths["identity_manifest"]
+                arrangement_path = recipe_paths["arrangement"]
+                assert score_path is not None
+                assert identity_manifest_path is not None
+                assert arrangement_path is not None
+
+                expected_derived_score = _package_input_pin(data, "derived_score")
+                if expected_derived_score is None:
+                    failures.append(
+                        "derived_score: performance_package.json has no readable "
+                        "inputs.derived_score.sha256 pin to verify --score/"
+                        "--arrangement against"
+                    )
+                else:
+                    recomputed_derived_score = _recompute_derived_score_sha256(
+                        score_path, arrangement_path
+                    )
+                    if recomputed_derived_score != expected_derived_score:
+                        failures.append(
+                            "derived_score: recomputed sha256 from --score/"
+                            f"--arrangement ({recomputed_derived_score!r}) does not "
+                            "match package-pinned inputs.derived_score.sha256 "
+                            f"{expected_derived_score}"
+                        )
+
+                expected_contract = _package_input_pin(data, "preservation_contract")
+                if expected_contract is None:
+                    failures.append(
+                        "preservation_contract: performance_package.json has no "
+                        "readable inputs.preservation_contract.sha256 pin to verify "
+                        "--identity-manifest/--arrangement against"
+                    )
+                else:
+                    recomputed_contract = _recompute_preservation_contract_sha256(
+                        identity_manifest_path, arrangement_path
+                    )
+                    if recomputed_contract != expected_contract:
+                        failures.append(
+                            "preservation_contract: recomputed sha256 from "
+                            f"--identity-manifest/--arrangement ({recomputed_contract!r}) "
+                            "does not match package-pinned "
+                            f"inputs.preservation_contract.sha256 {expected_contract}"
+                        )
+
             if not failures:
                 provenance["build_recipe"] = {
                     "inputs": repo_relative_inputs,
@@ -347,8 +496,8 @@ def build_package_provenance(
                 "recipe inputs failed verification: "
                 + "; ".join(failures)
                 + ". Falling back to sha256-only provenance rather than emitting a "
-                "possibly-false reproduction recipe (Codex 3R P2 review #191, "
-                "discussion_r3610153978)."
+                "possibly-false reproduction recipe (Codex 3R/4R P2 review #191, "
+                "discussion_r3610153978 / discussion_r3610170990)."
             )
             return provenance
 
