@@ -112,6 +112,14 @@ AR1 は Score の保持だけを扱い、外部 artifact の配送や生成後�
   `PreservationContract` を構築する。省略 anchor を推測で補完しない。
 - **AR2-3 (deferred)**: structure anchor の stable ID と section policy。
   実 form artifact を用いる AR4 の結果が得られるまで保留する。
+  **2026-07-19 解凍判断（AR4 実生成物 n=2 到着後）: 保留継続**。今回の実観測は
+  harmony domain のみで、form/structure anchor は manifest に存在せず、12 秒
+  クリップは form を表現できないため、保留条件（実 form artifact での AR4 結果）は
+  未充足。ただし律速の性質は「人手生成待ち」から次の 2 点へ変質した:
+  (a) structure センサーの observe 配線（`rpe/structure.py` / `structure_labels.py`
+  の既存資産を流用可能）、(b) form が存在する長尺 artifact の用意（MusicGen は
+  30s 上限のため相性要検討・Suno なら人手律速）。(a) は Claude 完結可能な先行
+  タスクであり、AR2-3 の解凍は (a)+(b) 充足後に再判断する。
 
 AR2 の完了は「何を残したいか」と「どの変形を許すか」を機械可読にしたことを意味し、
 生成器へ渡せたことは意味しない。
@@ -218,7 +226,7 @@ observed sequence が正典進行の 1 cycle も一致しない — take0 は
 | AR0 | 本計画文書 | 完了 |
 | AR1 | resolver / CLI / bundle / diff / EDM-Jazz fixture | 完了 (#175–#177) |
 | AR2-1/2 | IdentityManifest / PreservationContract | 完了 (#178, #179, #181) |
-| AR2-3 | structure anchor policy | 保留 |
+| AR2-3 | structure anchor policy | 保留（2026-07-19 再判断: 継続。解凍条件を structure センサー配線 + 長尺 form artifact に具体化） |
 | AR3-1 | InputCapabilityProfile | 完了 (#180, #181) |
 | AR3-2 | PerformancePackage compiler + 縦切り E2E fixture | 実装済み（E2E fixture 追加 2026-07-17） |
 | AR4 | generated-output identity observation | 計器配線済み。harmony のみ実測（decisive synth E2E + 2026-07-19 MusicGen 実生成物 n=2）。判定閾値は未定、実 Suno 生成物は未観測 |
