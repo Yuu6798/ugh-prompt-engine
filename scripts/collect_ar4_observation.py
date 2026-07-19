@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -77,13 +78,18 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def load_package_prompt(package_path: Path) -> tuple[str, str]:
+def load_package_prompt(package_path: Path) -> tuple[str, str, dict[str, Any]]:
     """コンパイル済み `performance_package.json` の `prompt.text` を検証済みの
     終端としてそのまま読む（chain の正直さ: 再導出しない）。
 
     `prompt` が `None`、または `text` が空/空白のみの場合は ``ValueError`` を送出
     する — 呼び出し側はここで停止して報告し、プロンプトを発明してはならない
     （Design Memo Phase 0 #3 / 呼び出し元指示）。
+
+    戻り値の 3 要素目は生の JSON dict（`data`）— `build_package_provenance` が
+    `inputs.*.sha256` pin を突合するのに使う（Codex 3R P2 review #191,
+    discussion_r3610153978: 誤指定/実在しないレシピ入力パスを package の pin で
+    検出するため、この呼び出し側で一度読んだ JSON をそのまま渡し、二重読みしない）。
     """
     package_bytes = package_path.read_bytes()
     package_sha256 = hashlib.sha256(package_bytes).hexdigest()
@@ -102,7 +108,7 @@ def load_package_prompt(package_path: Path) -> tuple[str, str]:
             f"performance_package.json at {package_path} has an empty prompt.text. "
             "Refusing to invent a prompt; stop here and report."
         )
-    return str(text), package_sha256
+    return str(text), package_sha256, data
 
 
 def generate_ar4_takes(
@@ -208,9 +214,64 @@ def _repo_relative(path: Path) -> Optional[str]:
         return None
 
 
+def _package_input_pin(package_data: dict[str, Any], input_name: str) -> Optional[str]:
+    """`performance_package.json` の `inputs.<input_name>.sha256` pin を取得する。
+
+    `PackageInputs`（`src/svp_rpe/arrange/package.py`）のうち
+    ``identity_manifest`` と ``capability_profile`` は compile 時に読んだ raw
+    ファイル bytes を直接 sha256 pin している（`compile_performance_package` の
+    `hashlib.sha256(manifest_bytes)` / `hashlib.sha256(profile_bytes)`）ので、
+    ここで raw ファイルを再ハッシュして突合できる。欠落/型不正はすべて ``None``
+    （fail-closed の起点 — 呼び出し側は pin なしとして existence-only 検証に
+    落ちる。例外は投げない）。
+    """
+    inputs = package_data.get("inputs")
+    if not isinstance(inputs, dict):
+        return None
+    entry = inputs.get(input_name)
+    if not isinstance(entry, dict):
+        return None
+    sha256 = entry.get("sha256")
+    if isinstance(sha256, str) and re.fullmatch(r"[0-9a-f]{64}", sha256):
+        return sha256
+    return None
+
+
+def _verify_recipe_input(path: Path, *, pin_sha256: Optional[str]) -> Optional[str]:
+    """単一レシピ入力を検証する。問題なければ ``None``、問題があれば理由文字列を
+    返す（Codex 3R P2 review #191, discussion_r3610153978: 誤指定/実在しない
+    パスでも repo-relative に解決できさえすれば `build_recipe` を出してしまって
+    いた欠陥への修正）。
+
+    (a) 実在する regular file であること
+    (b) ``pin_sha256`` が与えられている場合（package がこの入力種を raw bytes で
+        pin している場合）、ファイル実 bytes の sha256 が pin と一致すること
+
+    ``score`` / ``arrangement`` には raw bytes 相当の pin が
+    `performance_package.json` 内に存在しない（``derived_score`` は
+    `resolve_arrangement` 後の再レンダリングであり raw な score.yaml の bytes
+    ではなく、``preservation_contract`` の pin は manifest+spec から合成した
+    契約 JSON の hash であり arrangement spec の raw bytes ではない）ため、この
+    2 種は呼び出し側が ``pin_sha256=None`` を渡し (a) のみで検証される。
+    幾何依存の再コンパイル（`resolve_arrangement` / `build_preservation_contract`
+    の再実行）は行わない — 実測 pin との突合のみに留める。
+    """
+    if not path.is_file():
+        return f"{path} does not exist or is not a regular file"
+    if pin_sha256 is not None:
+        actual_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual_sha256 != pin_sha256:
+            return (
+                f"{path} sha256 {actual_sha256} does not match "
+                f"package-pinned sha256 {pin_sha256}"
+            )
+    return None
+
+
 def build_package_provenance(
     package_path: Path,
     package_sha256: str,
+    package_data: Optional[dict[str, Any]] = None,
     *,
     score: Optional[Path] = None,
     identity_manifest: Optional[Path] = None,
@@ -227,10 +288,18 @@ def build_package_provenance(
        パスをそのまま記録する。
     2. リポジトリ外（AR4 runbook の通常経路である scratch ビルド）の場合、
        ``score``/``identity_manifest``/``arrangement``/``capability_profile``
-       が全て与えられ、かつ全て repo 相対に解決できれば、それらの入力パスと
-       コンパイルコマンドからなる構造化レシピ（``build_recipe``）を記録する。
-    3. 上記いずれも成立しない場合は sha256 のみを provenance として残す
-       （部分的な入力から不完全なレシピを捏造しない）。
+       が全て与えられ、かつ全て repo 相対に解決でき、かつ ``_verify_recipe_input``
+       の検証（実在 + pin がある入力種は sha256 一致）を全て通れば、それらの
+       入力パスとコンパイルコマンドからなる構造化レシピ（``build_recipe``）を
+       記録する（Codex 3R P2 review #191, discussion_r3610153978: 誤指定/存在
+       しないパスや package と食い違う bytes から「偽の再現レシピ」を emit
+       しないためのゲート）。``package_data`` が ``None``（呼び出し側が
+       `performance_package.json` の JSON を持っていない場合）は pin 突合を
+       スキップし existence-only 検証になる。
+    3. 上記いずれも成立しない場合（レシピ入力が揃っていない、または検証に
+       失敗した場合）は sha256 のみを provenance として残す（部分的な入力や
+       検証未通過の入力から不完全/偽のレシピを捏造しない — 偽レシピより正直な
+       欠落）。検証失敗の場合は ``note`` にどの入力がなぜ失敗したかを記録する。
     """
     provenance: dict[str, Any] = {"sha256": package_sha256}
 
@@ -250,13 +319,37 @@ def build_package_provenance(
             name: _repo_relative(path) for name, path in recipe_paths.items() if path is not None
         }
         if all(value is not None for value in repo_relative_inputs.values()):
-            provenance["build_recipe"] = {
-                "inputs": repo_relative_inputs,
-                "compile_command": (
-                    "svprpe package {score} {identity_manifest} {arrangement} "
-                    "--capability-profile {capability_profile} --output-dir <output-dir>"
-                ).format(**repo_relative_inputs),
+            data = package_data if package_data is not None else {}
+            # score / arrangement: performance_package.json に raw bytes 相当の
+            # pin がないため pin_sha256=None（existence-only）。
+            pins: dict[str, Optional[str]] = {
+                "score": None,
+                "identity_manifest": _package_input_pin(data, "identity_manifest"),
+                "arrangement": None,
+                "capability_profile": _package_input_pin(data, "capability_profile"),
             }
+            failures: list[str] = []
+            for name, path in recipe_paths.items():
+                assert path is not None  # narrowed by the `all(...)` check above
+                reason = _verify_recipe_input(path, pin_sha256=pins[name])
+                if reason is not None:
+                    failures.append(f"{name}: {reason}")
+            if not failures:
+                provenance["build_recipe"] = {
+                    "inputs": repo_relative_inputs,
+                    "compile_command": (
+                        "svprpe package {score} {identity_manifest} {arrangement} "
+                        "--capability-profile {capability_profile} --output-dir <output-dir>"
+                    ).format(**repo_relative_inputs),
+                }
+                return provenance
+            provenance["note"] = (
+                "recipe inputs failed verification: "
+                + "; ".join(failures)
+                + ". Falling back to sha256-only provenance rather than emitting a "
+                "possibly-false reproduction recipe (Codex 3R P2 review #191, "
+                "discussion_r3610153978)."
+            )
             return provenance
 
     provenance["note"] = (
@@ -276,13 +369,20 @@ def build_takes_manifest(
     fixture_id: str,
     package_path: Path,
     package_sha256: str,
+    package_data: Optional[dict[str, Any]] = None,
     score: Optional[Path] = None,
     identity_manifest: Optional[Path] = None,
     arrangement: Optional[Path] = None,
     capability_profile: Optional[Path] = None,
 ) -> dict[str, Any]:
     """`generate_ar4_takes` の戻り値から、コミット対象の
-    ``ar4_takes_manifest.json`` 用ペイロード（timestamps を除く）を組み立てる。"""
+    ``ar4_takes_manifest.json`` 用ペイロード（timestamps を除く）を組み立てる。
+
+    ``package_data``（`load_package_prompt` が読んだ `performance_package.json`
+    の生 JSON dict）は `build_package_provenance` の pin 突合に使う。省略時は
+    pin 突合なしの existence-only 検証になる（テストの後方互換用 — 実際の
+    `_cmd_generate` からは常に渡される）。
+    """
     return {
         "schema_version": SCHEMA_VERSION,
         "generator": GENERATOR,
@@ -290,6 +390,7 @@ def build_takes_manifest(
         "performance_package": build_package_provenance(
             package_path,
             package_sha256,
+            package_data,
             score=score,
             identity_manifest=identity_manifest,
             arrangement=arrangement,
@@ -316,7 +417,7 @@ def build_generation_timestamps(result: dict[str, Any]) -> dict[str, Any]:
 
 def _cmd_generate(args: argparse.Namespace) -> int:
     try:
-        prompt_text, package_sha256 = load_package_prompt(args.package)
+        prompt_text, package_sha256, package_data = load_package_prompt(args.package)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -343,6 +444,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         fixture_id=args.fixture_id,
         package_path=args.package,
         package_sha256=package_sha256,
+        package_data=package_data,
         score=args.score,
         identity_manifest=args.identity_manifest,
         arrangement=args.arrangement,

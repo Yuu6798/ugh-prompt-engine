@@ -11,6 +11,7 @@ match the committed `ar4_takes_manifest.json` byte-for-byte in structure.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -120,6 +121,94 @@ def test_build_package_provenance_falls_back_to_note_with_partial_recipe_inputs(
     )
     assert "build_recipe" not in provenance
     assert "note" in provenance
+
+
+def test_build_package_provenance_rejects_nonexistent_repo_relative_recipe_input() -> None:
+    """レシピ入力の1つが repo 相対に解決できても実在しない場合（誤指定パス）は
+    偽の `build_recipe` を出さず sha256-only フォールバックする（Codex 3R P2
+    review #191, discussion_r3610153978）。"""
+    scratch_package = Path("/tmp/ar4_scratch_build/performance_package.json")
+    bogus_score = ROOT / "examples/arrangement/midnight_signal/does_not_exist.yaml"
+    assert not bogus_score.is_file()  # 前提: このパスは本当に存在しない
+    provenance = build_package_provenance(
+        scratch_package,
+        "f" * 64,
+        score=bogus_score,
+        identity_manifest=DEFAULT_IDENTITY_MANIFEST,
+        arrangement=DEFAULT_ARRANGEMENT,
+        capability_profile=DEFAULT_CAPABILITY_PROFILE,
+    )
+    assert "build_recipe" not in provenance
+    assert "note" in provenance
+    assert "does not exist" in provenance["note"]
+    assert "score:" in provenance["note"]
+
+
+def test_build_package_provenance_rejects_pin_mismatch() -> None:
+    """レシピ入力が実在しても、package の pin と bytes が食い違う場合（改ざん/
+    差し替え）は build_recipe を出さず sha256-only フォールバックする。"""
+    scratch_package = Path("/tmp/ar4_scratch_build/performance_package.json")
+    real_capability_sha256 = hashlib.sha256(
+        DEFAULT_CAPABILITY_PROFILE.read_bytes()
+    ).hexdigest()
+    package_data = {
+        "inputs": {
+            # identity_manifest の pin をわざと不一致にする（tampered manifest 相当）
+            "identity_manifest": {"sha256": "0" * 64},
+            "capability_profile": {"sha256": real_capability_sha256},
+        }
+    }
+    provenance = build_package_provenance(
+        scratch_package,
+        "1" + "a" * 63,
+        package_data,
+        score=DEFAULT_SCORE,
+        identity_manifest=DEFAULT_IDENTITY_MANIFEST,
+        arrangement=DEFAULT_ARRANGEMENT,
+        capability_profile=DEFAULT_CAPABILITY_PROFILE,
+    )
+    assert "build_recipe" not in provenance
+    assert "note" in provenance
+    assert "identity_manifest:" in provenance["note"]
+    assert "does not match package-pinned sha256" in provenance["note"]
+
+
+def test_build_package_provenance_emits_recipe_when_pins_match() -> None:
+    """package の pin と実ファイル bytes が一致する場合（正しい既定入力）は、
+    従来どおり build_recipe を記録する — pin 突合の追加が正当な入力を巻き添えに
+    しないことの回帰確認。"""
+    scratch_package = Path("/tmp/ar4_scratch_build/performance_package.json")
+    package_data = {
+        "inputs": {
+            "identity_manifest": {
+                "sha256": hashlib.sha256(
+                    DEFAULT_IDENTITY_MANIFEST.read_bytes()
+                ).hexdigest()
+            },
+            "capability_profile": {
+                "sha256": hashlib.sha256(
+                    DEFAULT_CAPABILITY_PROFILE.read_bytes()
+                ).hexdigest()
+            },
+        }
+    }
+    provenance = build_package_provenance(
+        scratch_package,
+        "2" + "b" * 63,
+        package_data,
+        score=DEFAULT_SCORE,
+        identity_manifest=DEFAULT_IDENTITY_MANIFEST,
+        arrangement=DEFAULT_ARRANGEMENT,
+        capability_profile=DEFAULT_CAPABILITY_PROFILE,
+    )
+    assert "note" not in provenance
+    recipe = provenance["build_recipe"]
+    assert recipe["inputs"] == {
+        "score": "examples/arrangement/midnight_signal/composition_score.yaml",
+        "identity_manifest": "examples/arrangement/midnight_signal/identity_manifest.yaml",
+        "arrangement": "examples/arrangement/midnight_signal/edm.identity.musicgen.arrangement.yaml",
+        "capability_profile": "config/capability_profiles/musicgen.yaml",
+    }
 
 
 def test_build_takes_manifest_matches_committed_fixture_with_default_recipe_inputs() -> None:
