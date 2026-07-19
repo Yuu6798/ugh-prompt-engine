@@ -332,6 +332,93 @@ def test_verify_rejects_reference_sha256_mismatched_against_manifest_anchor(
     ].ok
 
 
+def test_verify_rejects_artifact_base_pointing_outside_the_manifest_directory(
+    tmp_path: Path,
+) -> None:
+    """Codex review round 2 (PR #190, P2): V4 step 1 used to accept *any*
+    existing directory as `artifact_base.locator`, never checking it against
+    the identity manifest directory `--manifest` actually points at. That let
+    an attacker plant a byte-identical copy of the anchor artifact in an
+    unrelated decoy directory, retarget `artifact_base.locator` to it, and
+    recompute the sibling report's `package_sha256` / `content_digest` to
+    match -- every *other* V4 check (locator resolves to an existing
+    directory, artifact is a regular file, resolves confined under that base,
+    bytes hash to the declared sha256, anchor_id known to the manifest, and
+    every field-by-field reference-vs-manifest-anchor comparison) still
+    passes under that tamper, since the decoy copy and its declared metadata
+    are byte-for-byte identical to the real artifact -- only a check that the
+    resolved base directory is the *same directory* as the supplied
+    `--manifest`'s own parent catches it."""
+    from svp_rpe.arrange.verify import verify_package
+
+    pkg_dir, manifest_path = _build_package(tmp_path)
+    lyrics_bytes = (tmp_path / "identity" / "lyrics.txt").read_bytes()
+    decoy_dir = tmp_path / "decoy"
+    (decoy_dir / "identity").mkdir(parents=True)
+    (decoy_dir / "identity" / "lyrics.txt").write_bytes(lyrics_bytes)
+    decoy_locator = os.path.relpath(str(decoy_dir), str(pkg_dir))
+
+    def _retarget_base(data: dict) -> None:
+        references = data["channel_artifacts"]["lyrics_text"]
+        (reference,) = [r for r in references if r["anchor_id"] == "lyrics"]
+        assert reference["artifact_base"]["locator"] != decoy_locator
+        reference["artifact_base"]["locator"] = decoy_locator
+
+    _patch_package(pkg_dir, _retarget_base)
+    _recompute_report_hashes(pkg_dir)
+
+    report = verify_package(pkg_dir / "performance_package.json", manifest_path)
+
+    assert not report.ok
+    assert not report.aborted
+    checks_by_label = {check.label: check for check in report.checks}
+    prefix = "channel 'lyrics_text' anchor 'lyrics'"
+    # every *old* V4 check still passes -- the decoy is a byte-identical,
+    # correctly-shaped copy, so nothing about it looks tampered in isolation.
+    for old_label in (
+        f"{prefix}: artifact_base.locator resolves to an existing directory",
+        f"{prefix}: artifact is a regular, non-symlink file",
+        f"{prefix}: artifact resolves inside the artifact_base directory",
+        f"{prefix}: artifact sha256 matches artifact_sha256",
+        f"{prefix}: anchor_id is present in the manifest anchor set",
+        f"{prefix}: reference.artifact matches manifest anchor artifact locator",
+        f"{prefix}: reference.artifact_sha256 matches manifest anchor sha256",
+        f"{prefix}: reference.artifact_type matches manifest anchor artifact_type",
+        f"{prefix}: reference.media_type matches manifest anchor media_type",
+        f"{prefix}: reference.format_version matches manifest anchor format_version",
+    ):
+        assert checks_by_label[old_label].ok, old_label
+    # only the new same-directory identity check catches the retarget:
+    new_check = checks_by_label[
+        f"{prefix}: artifact_base.locator resolves to the supplied identity manifest directory"
+    ]
+    assert not new_check.ok
+    assert str(decoy_dir.resolve()) in (new_check.detail or "")
+    assert str(tmp_path.resolve()) in (new_check.detail or "")
+
+
+def test_verify_accepts_artifact_base_locator_matching_the_manifest_directory(
+    tmp_path: Path,
+) -> None:
+    """Happy-path companion/regression guard for the new check above: the
+    legitimately compiled package's `artifact_base.locator` (computed by
+    `compile_performance_package` itself) must still resolve to the same
+    directory as `--manifest`'s own parent, so the new check passes without
+    any tampering involved."""
+    from svp_rpe.arrange.verify import verify_package
+
+    pkg_dir, manifest_path = _build_package(tmp_path)
+
+    report = verify_package(pkg_dir / "performance_package.json", manifest_path)
+
+    assert report.ok
+    checks_by_label = {check.label: check for check in report.checks}
+    prefix = "channel 'lyrics_text' anchor 'lyrics'"
+    assert checks_by_label[
+        f"{prefix}: artifact_base.locator resolves to the supplied identity manifest directory"
+    ].ok
+
+
 def _snapshot_tree(*roots: Path) -> dict[str, bytes]:
     snapshot: dict[str, bytes] = {}
     for root in roots:

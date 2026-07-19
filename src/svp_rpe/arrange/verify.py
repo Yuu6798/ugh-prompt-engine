@@ -366,7 +366,10 @@ def _v3_identity_manifest(
 
 
 def _v4_channel_artifacts(
-    package_dir: Path, package: PerformancePackage, manifest: IdentityManifest
+    package_dir: Path,
+    package: PerformancePackage,
+    manifest: IdentityManifest,
+    manifest_path: Path,
 ) -> list[VerifyCheck]:
     """package の `channel_artifacts` を全数、package ディレクトリ基準で物理検証する
     （V4）。channel はソート順、reference はリスト順で走査し、順序を決定論的にする。
@@ -380,7 +383,22 @@ def _v4_channel_artifacts(
     みを拒否し `".."` を許容している。したがって V4 step 1 は
     `pathsafe.resolve_confined` の escape 拒否をここに適用せず、`package_dir` 起点の
     単純な解決 + 実在ディレクトリ確認に留める（絶対パス拒否は V1 の schema 検証が
-    既に保証済み）。confinement（symlink escape を含む物理封じ込め）が実際に効くのは
+    既に保証済み）。ただし「package ディレクトリ配下への封じ込めをしない」ことは
+    「どの実在ディレクトリでも許容する」ことを意味しない ── `kind` が宣言する通り
+    `artifact_base.locator` は「この CLI 呼び出しが `--manifest` で渡された、その
+    identity manifest ディレクトリそのもの」を指さねばならない（Codex review round
+    2, PR #190, P2）。そこで実在ディレクトリ確認に加え、解決済みの候補ディレクトリ
+    を `manifest_path.parent`（呼び出し側が実際に検証した manifest ファイルの親
+    ディレクトリ）の解決済みパスと同一実体か比較する。これを怠ると、hash 一致
+    コピーを別ディレクトリに置いて `artifact_base.locator` をそこへ差し替え、
+    package/report の hash を一緒に再計算するだけで、pin された manifest
+    ディレクトリを迂回しつつ後続の全 V4 チェックを素通りできてしまう
+    （下記の field-by-field 突合は「同じ anchor_id の manifest エントリと値が
+    一致するか」しか見ておらず、「その値がどの実ディレクトリ由来か」までは
+    保証しない）。不一致でも構造的失敗としては扱わず、後続のファイルシステム
+    検査・anchor 突合は同じ `artifact_base_dir` を使って継続する（全数収集方式
+    維持 ── この 1 検査の fail 自体が既に `VerifyReport.ok=False` を確定させる）。
+    confinement（symlink escape を含む物理封じ込め）が実際に効くのは
     step 2 ── `reference.artifact`（この locator の値自体は schema 側 `".."` 拒否
     済みだが、symlink 経由の脱出は schema では検出できない）を、解決済みの
     `artifact_base_dir` を基点に `resolve_confined` で封じ込め解決する箇所であり、
@@ -407,6 +425,11 @@ def _v4_channel_artifacts(
     manifest_anchors_by_id: dict[str, IdentityAnchor] = {
         anchor.id: anchor for anchor in manifest.anchors
     }
+    # V3 already confirmed `manifest_path` is a regular, non-symlink, readable
+    # file, so resolving it here cannot raise. Computed once (not per
+    # reference) since it does not depend on the channel/reference being
+    # walked.
+    expected_manifest_dir = manifest_path.resolve().parent
     for channel in sorted(package.channel_artifacts):
         for reference in package.channel_artifacts[channel]:
             prefix = f"channel '{channel}' anchor '{reference.anchor_id}'"
@@ -445,6 +468,27 @@ def _v4_channel_artifacts(
                             f"{candidate_base_dir} is not a directory",
                         )
                     )
+
+                # Codex review round 2 (PR #190, P2): an existing directory is
+                # not enough on its own -- it must be *the* identity manifest
+                # directory this invocation was actually given via
+                # `--manifest`, or a hash-matching artifact copy planted
+                # anywhere else (with the package/report hashes recomputed to
+                # match) sails through every other V4 check below untouched.
+                # A mismatch here does not null out `artifact_base_dir`: the
+                # full-enumeration discipline this module follows means the
+                # remaining filesystem/anchor checks still run against
+                # whatever directory the package actually points at, and this
+                # check's own failure is what fails the run.
+                checks.append(
+                    _eq_check(
+                        "V4",
+                        f"{prefix}: artifact_base.locator resolves to the supplied "
+                        "identity manifest directory",
+                        candidate_base_dir,
+                        expected_manifest_dir,
+                    )
+                )
 
             # The literal (unresolved) join must be symlink-checked *before*
             # `resolve_confined` ever runs — `resolve_confined` calls
@@ -596,5 +640,5 @@ def verify_package(package_path: Path, manifest_path: Path) -> VerifyReport:
     if loaded_manifest is None:
         return VerifyReport(checks=tuple(checks), aborted=True)
 
-    checks.extend(_v4_channel_artifacts(package_dir, package, loaded_manifest))
+    checks.extend(_v4_channel_artifacts(package_dir, package, loaded_manifest, manifest_path))
     return VerifyReport(checks=tuple(checks), aborted=False)

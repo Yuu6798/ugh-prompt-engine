@@ -500,15 +500,20 @@ themselves, in four groups:
 4. **V4 — channel_artifacts**: every entry's `artifact_base.locator` resolves
    (relative to the package directory) to an existing directory — legitimately
    *outside* the package directory, `".."` being the normal shape, so no
-   confinement applies there — and its `artifact` resolves confined under that
-   base directory (`arrange.pathsafe.resolve_confined`), its bytes hash to the
-   declared `artifact_sha256`, and its `anchor_id` is one the manifest actually
+   confinement applies there — that must itself resolve to the same directory
+   as the supplied `--manifest`'s own parent directory (Codex review round 2,
+   PR #190: an existing directory alone is not enough — a hash-matching
+   artifact copy planted anywhere else, with the package/report hashes
+   recomputed to match, would otherwise sail through every other V4 check).
+   Its `artifact` also resolves confined under that base directory
+   (`arrange.pathsafe.resolve_confined`), its bytes hash to the declared
+   `artifact_sha256`, and its `anchor_id` is one the manifest actually
    declares — and, once that anchor_id is found, its `artifact` /
    `artifact_sha256` / `artifact_type` / `media_type` / `format_version` are
    each compared field-by-field against the same-id manifest anchor (Codex
-   review, PR #190: an id-set-only check let a reference be retargeted to a
-   different file under `artifact_base` whose bytes still matched the
-   package-local hash).
+   review round 1, PR #190: an id-set-only check let a reference be
+   retargeted to a different file under `artifact_base` whose bytes still
+   matched the package-local hash).
 
 Every group's checks are collected in full before anything is printed — a single
 failure never hides the rest (exit `1` if *any* check across all groups fails).
