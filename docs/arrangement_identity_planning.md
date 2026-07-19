@@ -191,6 +191,26 @@ major/minor ラベルへ強制分類するため。
 **実 Suno 生成物での観測は未実施**。判定条件・閾値は引き続き未定（実測を積んで
 から別 Design Memo で固定）。詳細: [`cli.md`](cli.md) の `svprpe observe` 節。
 
+2026-07-19: 上記の「実 Suno 生成物は未観測」を、**MusicGen ローカル生成の実観測**で
+初めて埋めた（Design Memo AR4 実観測バッチ、#171/#136 と同じ MusicGen ローカル
+決定論路線）。`midnight_signal` の EDM 編曲 + identity anchor（lyrics/melody/harmony
+hard）+ `config/capability_profiles/musicgen.yaml` で `svprpe package` した
+performance package（`prompt.text` は非空を確認済み、`svprpe verify` の実データ初
+適用は 16 checks 全 pass）から、`facebook/musicgen-small@4c8334b0…`・CPU・
+guidance_scale=3.0・12s・seed 8000/8001 で n=2 take を実生成した
+（`scripts/collect_ar4_observation.py`）。決定論スポット検証（各 take を別プロセスで
+再生成）は 2/2 一致。両 take とも `svprpe observe` の D-3 provenance chain 検証を
+通過し（exit 0）、harmony anchor は実測されたが `not_observed`/`deferred`（collapsed
+observed sequence が正典進行の 1 cycle も一致しない — take0 は
+`matched_cycle_prefix_length=0`/`full_cycles=0`、take1 も同様）、lyrics/melody は
+従来どおり `not_observed`/`no_sensor`。**実 Suno 生成物での観測は依然未実施のまま**。
+事前登録（`ar4_plan.yaml` の `plan_confirmed_at_utc`）は生成タイムスタンプ
+（`ar4_generation_timestamps.yaml`）に先行する。成果物一式:
+`examples/arrangement/midnight_signal/observed/musicgen/`
+（`ar4_plan.yaml` / `ar4_takes_manifest.json` /
+`ar4_observation_take{0,1}.json` / `ar4_generation_timestamps.yaml` /
+`ar4_determinism_spot_check.yaml`。WAV 自体は DD-A によりコミット対象外）。
+
 ## 6. 実装状況
 
 | Phase | 主成果物 | 状態 |
@@ -201,7 +221,7 @@ major/minor ラベルへ強制分類するため。
 | AR2-3 | structure anchor policy | 保留 |
 | AR3-1 | InputCapabilityProfile | 完了 (#180, #181) |
 | AR3-2 | PerformancePackage compiler + 縦切り E2E fixture | 実装済み（E2E fixture 追加 2026-07-17） |
-| AR4 | generated-output identity observation | 計器配線済み（harmony のみ実測。判定閾値は未定、実 Suno 生成物は未観測） |
+| AR4 | generated-output identity observation | 計器配線済み。harmony のみ実測（decisive synth E2E + 2026-07-19 MusicGen 実生成物 n=2）。判定閾値は未定、実 Suno 生成物は未観測 |
 
 2026-07-17: bundle/report に `content_digest`（内容指紋）と、
 `CompilationReport` 限定の `invocation_provenance.compiler`（実行環境の監査記録、

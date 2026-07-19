@@ -1,0 +1,51 @@
+# AR4 実観測バッチ（2026-07-19 Design Memo）: edm.identity.arrangement.yaml と同一の
+# EDM 編曲方針・identity anchor 保持契約に、`rendering.target_backend` override を
+# 追加した additive variant。base score の target_backend は "external"（Suno ルート
+# のエイリアス、docs/cli.md package 節）に固定されているため、
+# `config/capability_profiles/musicgen.yaml`（generator: musicgen）で package する
+# には derived score 側で target_backend を "musicgen" へ override する必要がある
+# （svprpe package が `resolve_backend_descriptor(target_backend).profile_key` と
+# capability profile の generator の一致を要求するため）。edm.identity.arrangement.yaml
+# 自体は #177/#187 の byte-pin fixture 連鎖を保つため変更しない — 本ファイルは別ファイル
+# として新設する（既存 variant と同じ規律、meta.description 参照）。
+meta:
+  id: "midnight-signal-edm-identity-musicgen"
+  version: "0.1"
+  description: >-
+    edm.identity.arrangement.yaml と同一の EDM 編曲方針 + identity anchor 保持契約
+    (lyrics/melody/harmony hard) に、rendering.target_backend の musicgen override
+    を追加した AR4 実観測バッチ専用 variant。
+
+target:
+  semantic:
+    grv:
+      primary: "melodic_edm"
+      secondary: "progressive_house"
+    delta_e:
+      overall: "build into a vocal hook and instrumental drop"
+  physical:
+    bpm: 132
+    brightness: "bright"
+  rendering:
+    target_backend: "musicgen"
+
+preservation:
+  score_fields:
+    semantic.core: hard
+    physical.key: hard
+    semantic.grv.primary: free
+    semantic.grv.secondary: free
+    semantic.delta_e.overall: elastic
+    physical.bpm: free
+    physical.brightness: free
+    rendering.target_backend: free
+  identity_anchors:
+    lyrics:
+      mode: hard
+      allow: []
+    melody:
+      mode: hard
+      allow: []
+    harmony:
+      mode: hard
+      allow: []
