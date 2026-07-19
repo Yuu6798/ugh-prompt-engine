@@ -3,7 +3,7 @@
   "work_id": "midnight-signal",
   "package_sha256": "da3e726f9f149e600b9cc6d1c9c58bbb03a606b11c7d6d8ed959b2e6a578e57f",
   "generated_artifact": {
-    "path": "/tmp/claude-0/-home-user-ugh-prompt-engine/a0e0f92b-e776-5a6f-a1cf-8505d12bbca8/scratchpad/ar4_audio/canonical/take1.wav",
+    "path": "take1.wav",
     "sha256": "53b8b3fde6c731017e7aaa68cf525467b23c8538161a8cf2b0c7d29f014f67cd"
   },
   "anchors": [

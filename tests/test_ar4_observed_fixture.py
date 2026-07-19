@@ -138,6 +138,28 @@ def test_observation_reports_only_use_the_three_registered_determination_branche
         assert "full_cycles" in harmony["measurements"]
 
 
+def test_observation_report_generated_artifact_path_is_machine_independent() -> None:
+    """`generated_artifact.path` は `observe` の `<audio>` 引数文字列をそのまま記録する
+    （`svp_rpe/cli/observe_cmd.py` の `generated_artifact_path=audio`）。committed
+    provenance fixture でビルド機固有の絶対パス（例: `/tmp/...` scratch ディレクトリ）が
+    焼き込まれると、他の checkout/scratch から再観測した際に path フィールドだけが
+    ドリフトし byte reproducibility が壊れる（Codex PR #191 round 2 review,
+    discussion_r3610138834）。恒久ゲートとして、先頭が `/` の絶対パスでないこと、
+    かつ `/tmp/` を含まないことを固定する。
+    """
+    for path in OBSERVATION_PATHS.values():
+        report = _load_json(path)
+        artifact_path = report["generated_artifact"]["path"]
+        assert not artifact_path.startswith("/"), (
+            f"{path}: generated_artifact.path must not be an absolute path, "
+            f"got {artifact_path!r}"
+        )
+        assert "/tmp/" not in artifact_path, (
+            f"{path}: generated_artifact.path must not leak a machine-specific "
+            f"scratch directory, got {artifact_path!r}"
+        )
+
+
 # --- 5. 決定論スポット検証: pinned == regenerated ------------------------------------
 
 
