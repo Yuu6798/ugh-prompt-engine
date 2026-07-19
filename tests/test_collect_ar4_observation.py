@@ -43,10 +43,13 @@ from svp_rpe.arrange.identity import IdentityManifest  # noqa: E402
 from svp_rpe.arrange.models import ArrangementSpec  # noqa: E402
 from svp_rpe.arrange.package import (  # noqa: E402
     compute_derived_score_sha256,
+    compute_device_profile_sha256,
     compute_preservation_contract_sha256,
 )
 from svp_rpe.arrange.resolver import resolve_arrangement  # noqa: E402
+from svp_rpe.compose.device_profile import load_device_profile  # noqa: E402
 from svp_rpe.compose.models import CompositionScore  # noqa: E402
+from svp_rpe.compose.prompt_renderer import resolve_backend_descriptor  # noqa: E402
 
 FIXTURE_MANIFEST_PATH = Path(
     "examples/arrangement/midnight_signal/observed/musicgen/ar4_takes_manifest.json"
@@ -91,6 +94,21 @@ def _real_recipe_package_data() -> dict[str, Any]:
     )
     contract_sha256 = compute_preservation_contract_sha256(contract)
 
+    # device_profile: `svprpe package` が auto-load する隠れ入力（Codex 5R P2
+    # review #191, discussion_r3610193512）。production と同じ経路
+    # （resolve_arrangement -> resolve_backend_descriptor -> load_device_profile
+    # -> compute_device_profile_sha256）で独立に再現する。
+    render_generator = resolve_backend_descriptor(
+        resolution.derived_score.rendering.target_backend
+    ).profile_key
+    device_profile = load_device_profile(render_generator)
+    assert device_profile is not None  # 前提: musicgen device profile は committed
+    device_profile_entry: dict[str, Any] = {
+        "generator": render_generator,
+        "status": "loaded",
+        "sha256": compute_device_profile_sha256(device_profile),
+    }
+
     return {
         "inputs": {
             "identity_manifest": {"sha256": manifest_sha256},
@@ -99,6 +117,7 @@ def _real_recipe_package_data() -> dict[str, Any]:
             },
             "derived_score": {"sha256": derived_score_sha256},
             "preservation_contract": {"sha256": contract_sha256},
+            "device_profile": device_profile_entry,
         }
     }
 
@@ -125,8 +144,11 @@ def test_build_package_provenance_never_records_absolute_scratch_path() -> None:
 
 def test_build_package_provenance_scratch_build_records_structured_recipe() -> None:
     """4 入力が全て repo 相対に解決でき、かつ package の pin と幾何非依存の
-    合成 pin（derived_score / preservation_contract）が一致すれば、入力パス +
-    コンパイルコマンドの構造化レシピ (`build_recipe`) を記録する。"""
+    合成 pin（derived_score / preservation_contract / device_profile）が一致
+    すれば、入力パス + コンパイルコマンドの構造化レシピ (`build_recipe`) を
+    記録する。device_profile は `svprpe package` の隠れた auto-load 入力
+    なので `inputs` に追記され、`auto_loaded_inputs` にその旨の注記が付く
+    （Codex 5R P2 review #191, discussion_r3610193512）。"""
     scratch_package = Path("/tmp/ar4_scratch_build/performance_package.json")
     package_sha256 = "b" * 64
     provenance = build_package_provenance(
@@ -146,7 +168,11 @@ def test_build_package_provenance_scratch_build_records_structured_recipe() -> N
         "identity_manifest": "examples/arrangement/midnight_signal/identity_manifest.yaml",
         "arrangement": "examples/arrangement/midnight_signal/edm.identity.musicgen.arrangement.yaml",
         "capability_profile": "config/capability_profiles/musicgen.yaml",
+        "device_profile": "config/device_profiles/musicgen.yaml",
     }
+    assert recipe["auto_loaded_inputs"].keys() == {"device_profile"}
+    assert "auto-loaded" in recipe["auto_loaded_inputs"]["device_profile"]
+    assert "not a compile_command argument" in recipe["auto_loaded_inputs"]["device_profile"]
     assert recipe["compile_command"] == (
         "svprpe package examples/arrangement/midnight_signal/composition_score.yaml "
         "examples/arrangement/midnight_signal/identity_manifest.yaml "
@@ -248,9 +274,10 @@ def test_build_package_provenance_rejects_pin_mismatch() -> None:
 
 def test_build_package_provenance_emits_recipe_when_pins_match() -> None:
     """package の pin（identity_manifest / capability_profile の raw bytes pin
-    と、derived_score / preservation_contract の幾何非依存合成 pin）が実ファイル
-    /実計算と一致する場合（正しい既定入力）は、従来どおり build_recipe を
-    記録する — pin 突合の追加が正当な入力を巻き添えにしないことの回帰確認。"""
+    と、derived_score / preservation_contract / device_profile の幾何非依存
+    合成 pin）が実ファイル/実計算と一致する場合（正しい既定入力）は、従来どおり
+    build_recipe を記録する — pin 突合の追加が正当な入力を巻き添えにしないこと
+    の回帰確認。"""
     scratch_package = Path("/tmp/ar4_scratch_build/performance_package.json")
     provenance = build_package_provenance(
         scratch_package,
@@ -268,6 +295,7 @@ def test_build_package_provenance_emits_recipe_when_pins_match() -> None:
         "identity_manifest": "examples/arrangement/midnight_signal/identity_manifest.yaml",
         "arrangement": "examples/arrangement/midnight_signal/edm.identity.musicgen.arrangement.yaml",
         "capability_profile": "config/capability_profiles/musicgen.yaml",
+        "device_profile": "config/device_profiles/musicgen.yaml",
     }
 
 
@@ -317,6 +345,94 @@ def test_build_package_provenance_rejects_mistyped_arrangement_with_existing_yam
         "does not match package-pinned inputs.preservation_contract.sha256"
         in provenance["note"]
     )
+
+
+def test_build_package_provenance_rejects_device_profile_pin_mismatch() -> None:
+    """`inputs.device_profile.sha256` が実際に auto-load される
+    `config/device_profiles/musicgen.yaml` の pin と食い違う場合（device profile
+    差し替え/改ざんを模す）、旧 4 入力の pin が全て一致していても build_recipe
+    を出さず sha256-only フォールバックする（Codex 5R P2 review #191,
+    discussion_r3610193512: device profile が recipe 検証から漏れていた
+    "false reproduction recipe" 欠陥への修正）。"""
+    scratch_package = Path("/tmp/ar4_scratch_build/performance_package.json")
+    tampered_package_data = {
+        "inputs": {
+            **_DEFAULT_RECIPE_PACKAGE_DATA["inputs"],
+            "device_profile": {
+                "generator": "musicgen",
+                "status": "loaded",
+                "sha256": "0" * 64,
+            },
+        }
+    }
+    provenance = build_package_provenance(
+        scratch_package,
+        "5" + "e" * 63,
+        tampered_package_data,
+        score=DEFAULT_SCORE,
+        identity_manifest=DEFAULT_IDENTITY_MANIFEST,
+        arrangement=DEFAULT_ARRANGEMENT,
+        capability_profile=DEFAULT_CAPABILITY_PROFILE,
+    )
+    assert "build_recipe" not in provenance
+    assert "note" in provenance
+    assert "device_profile:" in provenance["note"]
+    assert (
+        "does not match package-pinned inputs.device_profile" in provenance["note"]
+    )
+
+
+def test_build_package_provenance_missing_device_profile_pin_falls_back() -> None:
+    """package JSON に `inputs.device_profile` 自体が存在しない（旧世代の package
+    または欠落）場合も、レシピの正当性を主張できないため build_recipe を出さず
+    フォールバックする（derived_score/preservation_contract と同型の規律）。"""
+    scratch_package = Path("/tmp/ar4_scratch_build/performance_package.json")
+    package_data_without_device_profile = {
+        "inputs": {
+            key: value
+            for key, value in _DEFAULT_RECIPE_PACKAGE_DATA["inputs"].items()
+            if key != "device_profile"
+        }
+    }
+    provenance = build_package_provenance(
+        scratch_package,
+        "6" + "f" * 63,
+        package_data_without_device_profile,
+        score=DEFAULT_SCORE,
+        identity_manifest=DEFAULT_IDENTITY_MANIFEST,
+        arrangement=DEFAULT_ARRANGEMENT,
+        capability_profile=DEFAULT_CAPABILITY_PROFILE,
+    )
+    assert "build_recipe" not in provenance
+    assert "note" in provenance
+    assert "device_profile:" in provenance["note"]
+    assert "no readable inputs.device_profile entry" in provenance["note"]
+
+
+def test_recompute_device_profile_pin_not_found_is_legitimate(tmp_path: Path) -> None:
+    """generator に対応する `config/device_profiles/<generator>.yaml` が存在しない
+    場合、`_recompute_device_profile_pin` は例外にせず ``status="not_found"`` /
+    ``sha256=None`` を返す（`DeviceProfileInput` 上正当な状態 —
+    `src/svp_rpe/arrange/package.py` の `_device_profile_input` 参照）。device
+    profile の pin 有無が package の必須フィールドかどうかを package.py の実装で
+    確認した上での設計判断（Design Memo point 2）を固定するテスト。"""
+    from scripts.collect_ar4_observation import _recompute_device_profile_pin
+
+    unprofiled_backend = "unprofiled_test_backend"
+    assert not (
+        ROOT / "config" / "device_profiles" / f"{unprofiled_backend}.yaml"
+    ).is_file()  # 前提: このジェネレータ名には device profile が存在しない
+
+    arrangement_text = DEFAULT_ARRANGEMENT.read_text(encoding="utf-8").replace(
+        'target_backend: "musicgen"', f'target_backend: "{unprofiled_backend}"'
+    )
+    assert f'target_backend: "{unprofiled_backend}"' in arrangement_text  # 置換が効いたこと
+
+    tmp_arrangement = tmp_path / "unprofiled.arrangement.yaml"
+    tmp_arrangement.write_text(arrangement_text, encoding="utf-8")
+
+    result = _recompute_device_profile_pin(DEFAULT_SCORE, tmp_arrangement)
+    assert result == (unprofiled_backend, "not_found", None)
 
 
 def test_build_takes_manifest_matches_committed_fixture_with_default_recipe_inputs() -> None:

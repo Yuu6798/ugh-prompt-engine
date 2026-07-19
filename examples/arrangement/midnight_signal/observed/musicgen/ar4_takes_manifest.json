@@ -9,9 +9,13 @@
         "score": "examples/arrangement/midnight_signal/composition_score.yaml",
         "identity_manifest": "examples/arrangement/midnight_signal/identity_manifest.yaml",
         "arrangement": "examples/arrangement/midnight_signal/edm.identity.musicgen.arrangement.yaml",
-        "capability_profile": "config/capability_profiles/musicgen.yaml"
+        "capability_profile": "config/capability_profiles/musicgen.yaml",
+        "device_profile": "config/device_profiles/musicgen.yaml"
       },
-      "compile_command": "svprpe package examples/arrangement/midnight_signal/composition_score.yaml examples/arrangement/midnight_signal/identity_manifest.yaml examples/arrangement/midnight_signal/edm.identity.musicgen.arrangement.yaml --capability-profile config/capability_profiles/musicgen.yaml --output-dir <output-dir>"
+      "compile_command": "svprpe package examples/arrangement/midnight_signal/composition_score.yaml examples/arrangement/midnight_signal/identity_manifest.yaml examples/arrangement/midnight_signal/edm.identity.musicgen.arrangement.yaml --capability-profile config/capability_profiles/musicgen.yaml --output-dir <output-dir>",
+      "auto_loaded_inputs": {
+        "device_profile": "device_profile is auto-loaded by `svprpe package` from config/device_profiles/<generator>.yaml based on the resolved rendering.target_backend; it is not a compile_command argument, but is required for byte-identical reproduction and is pinned separately as inputs.device_profile in performance_package.json (Codex 5R P2 review #191, discussion_r3610193512)."
+      }
     }
   },
   "prompt": "Brightness bright. melodic_edm / progressive_house track. C minor. intro: low density, sub bass only; role=establish loneliness. verse: sparse drums, short phrases, clear rests; role=restrained movement. chorus: full energy, wide stereo, focused layers; role=emotional release. bridge: no kick, no bass, minimal texture; role=near silence and reflection. Wide stereo. Introspective night drive atmosphere. 132 BPM. 4/4 time. Active rate 0.90-0.93. Valley depth 0.15-0.25.",

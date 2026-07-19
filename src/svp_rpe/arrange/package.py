@@ -512,6 +512,24 @@ def detect_compiler_git_commit() -> Optional[str]:
     return commit
 
 
+def compute_device_profile_sha256(device_profile: DeviceProfile) -> str:
+    """`DeviceProfile` の canonical JSON (sort_keys, ``exclude_none``) sha256。
+
+    `inputs.device_profile.sha256`（``hash_basis="canonical_model_json"``）が
+    package 内で使う pin と同一の計算経路 — 呼び出し側（`_device_profile_input`
+    自身、および `scripts/collect_ar4_observation.py` の build_recipe 検証）が
+    別々にロジックをコピーして計算経路が drift しないよう、ここへ一本化する
+    （Codex 5R P2 review #191, discussion_r3610193512）。
+    """
+    canonical_bytes = json.dumps(
+        device_profile.model_dump(mode="json", exclude_none=True),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical_bytes).hexdigest()
+
+
 def _device_profile_input(
     generator: str,
     device_profile: DeviceProfile | None,
@@ -523,16 +541,10 @@ def _device_profile_input(
             "device profile generator mismatch: expected "
             f"{generator!r}, got {device_profile.generator!r}"
         )
-    canonical_bytes = json.dumps(
-        device_profile.model_dump(mode="json", exclude_none=True),
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
     return DeviceProfileInput(
         generator=generator,
         status="loaded",
-        sha256=hashlib.sha256(canonical_bytes).hexdigest(),
+        sha256=compute_device_profile_sha256(device_profile),
     )
 
 

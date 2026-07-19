@@ -59,10 +59,13 @@ from svp_rpe.arrange.identity import IdentityManifest  # noqa: E402
 from svp_rpe.arrange.models import ArrangementSpec  # noqa: E402
 from svp_rpe.arrange.package import (  # noqa: E402
     compute_derived_score_sha256,
+    compute_device_profile_sha256,
     compute_preservation_contract_sha256,
 )
 from svp_rpe.arrange.resolver import resolve_arrangement  # noqa: E402
+from svp_rpe.compose.device_profile import load_device_profile  # noqa: E402
 from svp_rpe.compose.models import CompositionScore  # noqa: E402
+from svp_rpe.compose.prompt_renderer import resolve_backend_descriptor  # noqa: E402
 
 SCHEMA_VERSION = "1.0"
 GENERATOR = "collect_ar4_observation.py"
@@ -344,6 +347,56 @@ def _recompute_preservation_contract_sha256(
         return None
 
 
+def _recompute_device_profile_pin(
+    score_path: Path, arrangement_path: Path
+) -> Optional[tuple[str, str, Optional[str]]]:
+    """``--score`` / ``--arrangement`` の実ファイルから、`svprpe package` が
+    auto-load する device profile の (generator, status, sha256) を再計算する
+    （Codex 5R P2 review #191, discussion_r3610193512）。
+
+    `compile_performance_package`（`src/svp_rpe/arrange/package.py`）は compile
+    時に ``resolve_backend_descriptor(resolution.derived_score.rendering.
+    target_backend).profile_key`` を generator として
+    `config/device_profiles/<generator>.yaml` を auto-load し（score/arrangement
+    には一切現れない、compile command 引数にもならない隠れ入力）、その canonical
+    JSON sha256 を `inputs.device_profile` として package に pin embed する。
+    device profile を差し替えて（あるいは既定から変更して）compile した package
+    に対し、旧 4 入力（score/identity_manifest/arrangement/capability_profile）
+    だけを検証しても device profile の差分は検出できず、このレシピに従って
+    recompile すると異なる ``performance_package.sha256`` を産む "false
+    reproduction recipe" になり得る、という指摘への対応。
+
+    `compile_performance_package` と完全に同じ経路
+    （``resolve_arrangement`` -> ``resolve_backend_descriptor`` ->
+    `load_device_profile` -> `compute_device_profile_sha256`）を再利用する。
+
+    ``status="not_found"``（generator に対応する device profile ファイルが
+    存在しない）は `DeviceProfileInput` 上正当な状態であり、その場合 sha256 は
+    ``None`` を返す（device profile 自体が package の必須フィールドである一方、
+    その中身が「ファイル無し」であることは正当に起こりうる — package.py の
+    `_device_profile_input` 参照）。YAML 不正・スキーマ不一致・resolve 失敗は
+    すべて ``None``（fail-closed。呼び出し側は pin 突合不能として扱い、検証失敗
+    にフォールバックする）。
+    """
+    try:
+        source = CompositionScore.model_validate(
+            _load_yaml_mapping(score_path.read_bytes())
+        )
+        spec = ArrangementSpec.model_validate(
+            _load_yaml_mapping(arrangement_path.read_bytes())
+        )
+        resolution = resolve_arrangement(source, spec)
+        generator = resolve_backend_descriptor(
+            resolution.derived_score.rendering.target_backend
+        ).profile_key
+        device_profile = load_device_profile(generator)
+    except Exception:
+        return None
+    if device_profile is None:
+        return (generator, "not_found", None)
+    return (generator, "loaded", compute_device_profile_sha256(device_profile))
+
+
 def build_package_provenance(
     package_path: Path,
     package_sha256: str,
@@ -385,11 +438,26 @@ def build_package_provenance(
            （例: 別 work の score / 別 variant の arrangement）を
            `build_recipe` が誤って裏書きしてしまっていた欠陥への修正 —
            これで 4 入力すべてが package の pin に検証で結ばれる）。
+       (c) ``score`` + ``arrangement`` から `svprpe package` が auto-load する
+           device profile（`config/device_profiles/<generator>.yaml`、
+           compile command 引数にも score/arrangement の中身にも一切現れない
+           隠れ入力）の (generator, status, sha256) を
+           `_recompute_device_profile_pin` で再計算し、package の
+           `inputs.device_profile` と突合する（Codex 5R P2 review #191,
+           discussion_r3610193512: (a)(b) の 4 入力がすべて検証を通っても
+           device profile だけが差し替わっていれば recompile 結果の
+           package sha256 が変わる "false reproduction recipe" になり得た
+           欠陥への修正）。一致すれば `build_recipe.inputs.device_profile`
+           に auto-loaded 入力として明示的に追記する（status="not_found"、
+           すなわち generator に対応する device profile ファイルが存在しない
+           場合は正当な状態であり、`inputs` には追記せず
+           `auto_loaded_inputs` にその旨を記録するのみ）。
 
        ``package_data`` が ``None``、または `inputs.derived_score.sha256` /
-       `inputs.preservation_contract.sha256` pin 自体が package JSON に
-       存在しない場合は、レシピの正当性を主張できないため検証失敗として扱う
-       （(a) のみを通っても `build_recipe` は emit しない）。
+       `inputs.preservation_contract.sha256` / `inputs.device_profile` pin
+       自体が package JSON に存在しない場合は、レシピの正当性を主張できない
+       ため検証失敗として扱う（(a) のみを通っても `build_recipe` は emit
+       しない）。
     3. 上記いずれも成立しない場合（レシピ入力が揃っていない、または検証に
        失敗した場合）は sha256 のみを provenance として残す（部分的な入力や
        検証未通過の入力から不完全/偽のレシピを捏造しない — 偽レシピより正直な
@@ -483,7 +551,83 @@ def build_package_provenance(
                             f"inputs.preservation_contract.sha256 {expected_contract}"
                         )
 
+                # svprpe package が auto-load する device profile
+                # (Codex 5R P2 review #191, discussion_r3610193512): score/
+                # arrangement には一切現れない隠れ入力なので、旧 4 入力の検証を
+                # 全て通っても device profile だけが差し替わっていれば
+                # recompile 結果の package sha256 がずれる。
+                device_profile_recipe: Optional[dict[str, str]] = None
+                device_profile_auto_load_note: Optional[str] = None
+                expected_device_profile = data.get("inputs", {}).get("device_profile")
+                if not isinstance(expected_device_profile, dict):
+                    failures.append(
+                        "device_profile: performance_package.json has no readable "
+                        "inputs.device_profile entry to verify the auto-loaded "
+                        "device profile (config/device_profiles/<generator>.yaml) "
+                        "against"
+                    )
+                else:
+                    recomputed_device_profile = _recompute_device_profile_pin(
+                        score_path, arrangement_path
+                    )
+                    if recomputed_device_profile is None:
+                        failures.append(
+                            "device_profile: could not recompute the auto-loaded "
+                            "device profile pin from --score/--arrangement"
+                        )
+                    else:
+                        (
+                            recomputed_generator,
+                            recomputed_status,
+                            recomputed_sha256,
+                        ) = recomputed_device_profile
+                        expected_generator = expected_device_profile.get("generator")
+                        expected_status = expected_device_profile.get("status")
+                        expected_sha256 = expected_device_profile.get("sha256")
+                        if (
+                            recomputed_generator != expected_generator
+                            or recomputed_status != expected_status
+                            or recomputed_sha256 != expected_sha256
+                        ):
+                            failures.append(
+                                "device_profile: recomputed auto-loaded device "
+                                f"profile (generator={recomputed_generator!r}, "
+                                f"status={recomputed_status!r}, "
+                                f"sha256={recomputed_sha256!r}) does not match "
+                                "package-pinned inputs.device_profile "
+                                f"(generator={expected_generator!r}, "
+                                f"status={expected_status!r}, "
+                                f"sha256={expected_sha256!r})"
+                            )
+                        elif recomputed_status == "loaded":
+                            device_profile_recipe = {
+                                "device_profile": (
+                                    f"config/device_profiles/{recomputed_generator}.yaml"
+                                )
+                            }
+                            device_profile_auto_load_note = (
+                                "device_profile is auto-loaded by `svprpe package` "
+                                "from config/device_profiles/<generator>.yaml based "
+                                "on the resolved rendering.target_backend; it is not "
+                                "a compile_command argument, but is required for "
+                                "byte-identical reproduction and is pinned "
+                                "separately as inputs.device_profile in "
+                                "performance_package.json (Codex 5R P2 review #191, "
+                                "discussion_r3610193512)."
+                            )
+                        else:
+                            device_profile_auto_load_note = (
+                                "no config/device_profiles/"
+                                f"{recomputed_generator}.yaml exists for generator "
+                                f"{recomputed_generator!r}; svprpe package's "
+                                "device-profile auto-load is a legitimate no-op for "
+                                "this recipe (inputs.device_profile.status="
+                                "'not_found')."
+                            )
+
             if not failures:
+                if device_profile_recipe is not None:
+                    repo_relative_inputs = {**repo_relative_inputs, **device_profile_recipe}
                 provenance["build_recipe"] = {
                     "inputs": repo_relative_inputs,
                     "compile_command": (
@@ -491,13 +635,18 @@ def build_package_provenance(
                         "--capability-profile {capability_profile} --output-dir <output-dir>"
                     ).format(**repo_relative_inputs),
                 }
+                if device_profile_auto_load_note is not None:
+                    provenance["build_recipe"]["auto_loaded_inputs"] = {
+                        "device_profile": device_profile_auto_load_note
+                    }
                 return provenance
             provenance["note"] = (
                 "recipe inputs failed verification: "
                 + "; ".join(failures)
                 + ". Falling back to sha256-only provenance rather than emitting a "
-                "possibly-false reproduction recipe (Codex 3R/4R P2 review #191, "
-                "discussion_r3610153978 / discussion_r3610170990)."
+                "possibly-false reproduction recipe (Codex 3R/4R/5R P2 review #191, "
+                "discussion_r3610153978 / discussion_r3610170990 / "
+                "discussion_r3610193512)."
             )
             return provenance
 
