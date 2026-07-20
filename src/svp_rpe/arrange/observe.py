@@ -970,6 +970,18 @@ def _load_note_events_artifact(raw_bytes: bytes, *, artifact_path: Path) -> list
     の既知値ちょうどでなければ fail-closed（欠落・未知値どちらも ``ValueError``）。
     各 note エントリは ``pitch``（音名文字列）と ``start_beat``（並べ替えキー。
     onset 順を復元するためだけに使い、拍→秒変換は一切行わない）を必須とする。
+
+    ``duration_beats``（Codex P2, PR #198 review）: v0 の恒等判定
+    （``_observe_melody``）は pitch 系列のみを比較し、本関数が返す MIDI 整数列も
+    onset 順のピッチのみで duration の値そのものは呼び出し側で一切使わない —
+    その挙動（比較ロジック）は変えない。しかし committed fixture
+    （``examples/arrangement/midnight_signal/identity/melody_notes.json``）と
+    `docs/cli.md` の note-events/0.1 定義は ``duration_beats`` をスキーマの必須
+    フィールドとして明記しているため、「値を使わない」ことと「検証しない」ことは
+    別問題 — 欠落・型不正（非数値）・負値はいずれも fail-closed で拒否する
+    （``_load_chord_progression`` が ``chords`` の型不正を拒否するのと同じ、
+    「canonical artifact が壊れていたら黙って通さない」流儀）。検証範囲の拡張のみで
+    比較ロジックには一切手を入れていない。
     """
     try:
         payload = json.loads(raw_bytes.decode("utf-8"))
@@ -998,13 +1010,20 @@ def _load_note_events_artifact(raw_bytes: bytes, *, artifact_path: Path) -> list
         raise ValueError(f"note events artifact 'notes' must not be empty: {artifact_path}")
     entries: list[tuple[float, int, str]] = []
     for index, item in enumerate(notes_field):
-        if not isinstance(item, dict) or "pitch" not in item or "start_beat" not in item:
+        if (
+            not isinstance(item, dict)
+            or "pitch" not in item
+            or "start_beat" not in item
+            or "duration_beats" not in item
+        ):
             raise ValueError(
-                "note events artifact note entry missing 'pitch'/'start_beat': "
+                "note events artifact note entry missing "
+                "'pitch'/'start_beat'/'duration_beats': "
                 f"{item!r} ({artifact_path})"
             )
         pitch = item["pitch"]
         start_beat = item["start_beat"]
+        duration_beats = item["duration_beats"]
         if not isinstance(pitch, str):
             raise ValueError(
                 f"note events artifact note 'pitch' must be a string: {item!r} ({artifact_path})"
@@ -1012,6 +1031,23 @@ def _load_note_events_artifact(raw_bytes: bytes, *, artifact_path: Path) -> list
         if not isinstance(start_beat, (int, float)) or isinstance(start_beat, bool):
             raise ValueError(
                 "note events artifact note 'start_beat' must be numeric: "
+                f"{item!r} ({artifact_path})"
+            )
+        # Codex P2 (PR #198 review): `duration_beats` is part of the
+        # committed fixture's/docs' note-events/0.1 schema even though v0's
+        # identity gate never reads its value (pitch-only comparison,
+        # unchanged by this validation) — a malformed canonical artifact
+        # must fail-closed here rather than silently reporting `preserved`.
+        # Same posture/shape as the `start_beat` numeric check above and as
+        # `_load_chord_progression`'s type validation for `chords`.
+        if not isinstance(duration_beats, (int, float)) or isinstance(duration_beats, bool):
+            raise ValueError(
+                "note events artifact note 'duration_beats' must be numeric: "
+                f"{item!r} ({artifact_path})"
+            )
+        if duration_beats < 0:
+            raise ValueError(
+                "note events artifact note 'duration_beats' must be non-negative: "
                 f"{item!r} ({artifact_path})"
             )
         entries.append((float(start_beat), index, pitch))

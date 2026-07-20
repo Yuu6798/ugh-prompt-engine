@@ -1726,6 +1726,45 @@ def test_load_note_events_artifact_rejects_note_missing_required_keys() -> None:
         _load_note_events_artifact(bad_bytes, artifact_path=Path("melody.json"))
 
 
+# --- Codex P2 (PR #198 review): `duration_beats` is part of the note-events/0.1
+# schema (committed fixture + docs/cli.md) even though v0's identity gate never
+# reads its value — a malformed canonical artifact must still fail-closed here,
+# the same posture `_load_chord_progression` applies to `chords`.
+
+
+def test_load_note_events_artifact_rejects_note_missing_duration_beats() -> None:
+    bad_bytes = json.dumps(
+        {
+            "schema": "note-events/0.1",
+            "notes": [{"start_beat": 0.0, "pitch": "C4"}],
+        }
+    ).encode("utf-8")
+    with pytest.raises(ValueError, match="duration_beats"):
+        _load_note_events_artifact(bad_bytes, artifact_path=Path("melody.json"))
+
+
+def test_load_note_events_artifact_rejects_note_with_non_numeric_duration_beats() -> None:
+    bad_bytes = json.dumps(
+        {
+            "schema": "note-events/0.1",
+            "notes": [{"start_beat": 0.0, "pitch": "C4", "duration_beats": "one"}],
+        }
+    ).encode("utf-8")
+    with pytest.raises(ValueError, match="duration_beats.*must be numeric"):
+        _load_note_events_artifact(bad_bytes, artifact_path=Path("melody.json"))
+
+
+def test_load_note_events_artifact_rejects_note_with_negative_duration_beats() -> None:
+    bad_bytes = json.dumps(
+        {
+            "schema": "note-events/0.1",
+            "notes": [{"start_beat": 0.0, "pitch": "C4", "duration_beats": -1.0}],
+        }
+    ).encode("utf-8")
+    with pytest.raises(ValueError, match="duration_beats.*must be non-negative"):
+        _load_note_events_artifact(bad_bytes, artifact_path=Path("melody.json"))
+
+
 # --- WI0-a design contract D: independent verification of hand-computed values ----
 
 
