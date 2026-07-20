@@ -3,7 +3,7 @@
   "work_id": "midnight-signal",
   "package_sha256": "d76ff2d4db744354320ef8e0a38671e86a3d34e24a80e2bb7024083cf8bf5d7f",
   "generated_artifact": {
-    "path": "/tmp/claude-0/-home-user-ugh-prompt-engine/d2c3ae3d-d806-5dac-b97e-80e503d72ffe/scratchpad/wi0b_run/faithful_take.wav",
+    "path": "examples/arrangement/midnight_signal/observed/wi0b_synth/faithful_take.wav",
     "sha256": "4d8c83f67c1b2441e09fa84debdc47ec0131c1a13ee1b813b0ef55e874903e90"
   },
   "anchors": [
@@ -12,13 +12,122 @@
       "domain": "lyrics",
       "sensor": {
         "name": "lyrics_transcription",
-        "available": false,
-        "reason": "faster_whisper is not installed. Install it via the optional `lyrics` extra:\n    pip install -e \".[lyrics]\""
+        "available": true,
+        "reason": null
       },
-      "measurements": {},
+      "measurements": {
+        "canonical_line_count": 11,
+        "match_lyrics": {
+          "lines": [
+            {
+              "expected": "Midnight Signal",
+              "best_ratio": 0.4286,
+              "best_match": "Y Llywodraeth Cymru wedi'i gweithio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r",
+              "best_match_index": 2,
+              "match_offset": 609,
+              "out_of_order": false
+            },
+            {
+              "expected": "Empty streets, a single light,",
+              "best_ratio": 0.3333,
+              "best_match": "Felly, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n g",
+              "best_match_index": 0,
+              "match_offset": 0,
+              "out_of_order": true
+            },
+            {
+              "expected": "I count the mile markers of the night.",
+              "best_ratio": 0.4333,
+              "best_match": "Felly, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n g",
+              "best_match_index": 0,
+              "match_offset": 8,
+              "out_of_order": false
+            },
+            {
+              "expected": "Static hums where silence used to be,",
+              "best_ratio": 0.3333,
+              "best_match": "Felly, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n g\nddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'\nY Llywodraeth Cymru wedi'i gweithio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r",
+              "best_match_index": 3,
+              "match_offset": 324,
+              "out_of_order": false
+            },
+            {
+              "expected": "just the road, the dark, and me.",
+              "best_ratio": 0.3478,
+              "best_match": "Felly, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n g",
+              "best_match_index": 0,
+              "match_offset": 13,
+              "out_of_order": true
+            },
+            {
+              "expected": "Somewhere past the edge of town",
+              "best_ratio": 0.4231,
+              "best_match": "Felly, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n g\nddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'r ddweud o'\nY Llywodraeth Cymru wedi'i gweithio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r",
+              "best_match_index": 3,
+              "match_offset": 315,
+              "out_of_order": false
+            },
+            {
+              "expected": "the signal breaks and lifts me up somehow.",
+              "best_ratio": 0.3235,
+              "best_match": "Y Llywodraeth Cymru wedi'i gweithio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r",
+              "best_match_index": 2,
+              "match_offset": 319,
+              "out_of_order": false
+            },
+            {
+              "expected": "No one's watching, no one needs to know—",
+              "best_ratio": 0.4,
+              "best_match": "Felly, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n gweithio, mae'n g",
+              "best_match_index": 0,
+              "match_offset": 8,
+              "out_of_order": true
+            },
+            {
+              "expected": "I let the quiet finally let go.",
+              "best_ratio": 0.375,
+              "best_match": "Y Llywodraeth Cymru wedi'i gweithio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r ysgolio'r",
+              "best_match_index": 2,
+              "match_offset": 599,
+              "out_of_order": false
+            }
+          ],
+          "overall_similarity": 0.0018,
+          "matched_index_sequence": [
+            2,
+            0,
+            0,
+            3,
+            0,
+            3,
+            2,
+            0,
+            2
+          ],
+          "matched_offset_sequence": [
+            609,
+            0,
+            8,
+            324,
+            13,
+            315,
+            319,
+            8,
+            599
+          ],
+          "order_ratio": 0.625,
+          "n_expected_lines": 11,
+          "n_skipped_empty_lines": 2,
+          "params": {
+            "normalization": "nfkc_casefold_nopunct_nospace",
+            "matcher": "difflib.SequenceMatcher+partial",
+            "order_stats": "char_offset_cursor (best window start in normalized full transcript)"
+          }
+        }
+      },
       "adherence_status": "not_observed",
-      "determination": "no_sensor",
-      "note": null
+      "determination": "deferred",
+      "note": "transcribed lyrics do not match the canonical lines exactly (changed_within_policy/changed_outside_policy classification is out of scope for this instrument and deferred to a future threshold Design Memo, D-1)."
     },
     {
       "anchor_id": "melody",

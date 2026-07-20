@@ -82,12 +82,13 @@
 instrumental な `faithful_take.wav`（歌なし・melody 計測と同一ファイル）に対して
 faster-whisper `small`（int8）で転写した結果:
 
-- **`no_speech_prob` は 0.92–0.94 の高値域を自己申告している**（seg 単位実測:
-  0.9309 / 0.9425 / 0.9218 — instrumental な区間であることをモデル自身が正しく
-  示唆している）
+- **`no_speech_prob` は 0.92–0.94 台の高値域を自己申告している**（seg 単位実測:
+  0.9464 / 0.9404 / 0.9471 — instrumental な区間であることをモデル自身が正しく
+  示唆している。証跡 JSON: [`observed/wi0b_lyrics_extract.json`](observed/wi0b_lyrics_extract.json)
+  に pin。値の出所は §4 Re-run 参照）
 - **にもかかわらず abstain せず、ウェールズ語（`language: "cy"`,
-  `language_probability: 0.5536`）のハルシネーション文を emit する**
-  （`"Felly, mae'n gweithio, ..."` の反復。`overall_similarity = 0.0056` と
+  `language_probability: 0.5489`）のハルシネーション文を emit する**
+  （`"Felly, mae'n gweithio, ..."` の反復。`overall_similarity = 0.0126` と
   英語正典歌詞（`Midnight Signal` 他）とはほぼ無関係）
 - `svprpe observe` の判定は `adherence_status: not_observed` /
   `determination: deferred` — **計器としては正しい動作**（存在しない一致を
@@ -101,6 +102,64 @@ faster-whisper `small`（int8）で転写した結果:
 
 精度そのものの実測（歌入り音源での歌詞転写精度）は、歌入り + 歌詞 pin 済みの
 音源が手元にないため素材律速で defer する（`plan.md` に明記の事前制約どおり）。
+
+## 4. Re-run（相対パス安定化・PR #199 Codex P2 対応）
+
+作成日 (UTC): 2026-07-20T17:08:23Z（`date -u` 実測）
+
+PR #199 レビュー（Codex P2 2 件）:
+
+1. 「Use relative paths in committed observation reports」— `generated_artifact.path`
+   がこの計測を実施したコンテナのローカル `/tmp/.../scratchpad` パスのままだと、
+   別 checkout から `docs/cli.md` の手順を再現しても sha256 は一致するが report の
+   バイト列は一致せず、byte-reproducibility の主張が成立しない
+2. 「Commit the extract evidence behind no_speech claims」— §3 の `no_speech_prob` /
+   `language_probability` 主張の根拠 (`svprpe extract --lyrics` 出力) が非 commit
+   だった
+
+対応: committed JSON の手編集はせず、決定論を利用して同一 wav（sha256 pin 一致
+確認済み）に対し stable なリポジトリ相対パス
+（`examples/arrangement/midnight_signal/observed/wi0b_synth/faithful_take.wav`）で
+`svprpe observe`（melody / lyrics smoke）と `svprpe extract --lyrics` を再実行し、
+その生出力で fixture 3 本 (`observed/wi0b_melody_observation.json` /
+`observed/wi0b_lyrics_smoke_observation.json` /
+`observed/lyrics_anchor_extracted.json`) を差し替え、新規に
+[`observed/wi0b_lyrics_extract.json`](observed/wi0b_lyrics_extract.json) を追加
+収載した。手順の verbatim ログは [`commands.md`](commands.md) の Re-run 節。
+
+### 決定論再確認
+
+- **render**: `render_faithful.py` の出力 wav の sha256 が初回計測時の pin
+  (`4d8c83f67c1b2441e09fa84debdc47ec0131c1a13ee1b813b0ef55e874903e90`) と一致
+  （決定論の主張どおり、Composition Score から byte 一致で再生成できることを
+  再確認）
+- **observe/extract 新旧 diff**: `melody` / `harmony` anchor は新旧で完全一致
+  （§1/§2 の判定根拠データは無傷）。`lyrics` anchor のみ差分があった。差分の内訳:
+  - `wi0b_melody_observation.json`: 初回計測時は `pip install -e ".[pitch]"` のみ
+    導入済みで lyrics extra 未導入だったため `sensor.available: false`
+    だったが、本 re-run の実行環境には両 extras が事前導入済みのため
+    `sensor.available: true` に変わり、`match_lyrics` の実測値が新規に入った
+    （incidental な環境差で、melody anchor 自体には影響しない）
+  - `wi0b_lyrics_smoke_observation.json` / `lyrics_anchor_extracted.json`:
+    `no_speech_prob` (0.9309/0.9425/0.9218 → 0.9464/0.9404/0.9471)、
+    `language_probability` (0.5536 → 0.5489)、`overall_similarity`
+    (0.0056 → 0.0126) が変動した。faster-whisper は `temperature: 0.0` でも
+    別プロセスでの再実行間では完全な bit 決定論ではない（CPU スレッド並列化 /
+    beam search の非決定性由来と推測）。ハルシネーション文自体も実行ごとに異なる
+    （ウェールズ語である点、`no_speech_prob` が高値域である点、abstain しない点
+    という**境界挙動の結論は両実行で不変**）
+  - path 系フィールド（`generated_artifact.path` / extract の `audio_file`）は
+    いずれもリポジトリ相対パスに変わった（今回の主目的）
+
+上記のとおり、`path` フィールド以外にも差分があったため（whisper 非決定性由来の
+数値変動）、committed 値は本 re-run の実測値で統一した（隠さず本節と §3 に記録、
+テスト `tests/test_wi0b_synth_observed_fixture.py` で新値を pin）。
+
+### 環境（re-run）
+
+初回計測時と同一コンテナ（pitch / lyrics extras とモデルは導入済みのまま）。
+再実行に使った一時 wav (`faithful_take.wav`) はコミットしない方針を維持し、検証後
+削除した。
 
 ## 関連
 

@@ -164,13 +164,21 @@ WI0-b（[`docs/work_identity_roadmap.md`](work_identity_roadmap.md) WI0 節）�
 - **入力**: 決定論 synth performer が生成した instrumental な faithful take
   （歌なし。`composition_score.yaml` + `render_faithful.py` から再生成可能、
   sha256 pin あり）
-- **`no_speech_prob` は 0.92–0.94 の高値域を正しく自己申告**（seg 単位実測:
-  0.9309 / 0.9425 / 0.9218）— §7/§8 の「honesty 信号」としての機能を
-  instrumental 入力かつ vocals 分離込みの経路で追認
+- **`no_speech_prob` は 0.92–0.94 台の高値域を正しく自己申告**（seg 単位実測:
+  0.9464 / 0.9404 / 0.9471、証跡 JSON
+  [`observed/wi0b_lyrics_extract.json`](../examples/arrangement/midnight_signal/observed/wi0b_synth/observed/wi0b_lyrics_extract.json)
+  に pin）— §7/§8 の「honesty 信号」としての機能を instrumental 入力かつ
+  vocals 分離込みの経路で追認
 - **一方で abstain はしない**: ウェールズ語（`language: "cy"`,
-  `language_probability: 0.5536`）のハルシネーション文
+  `language_probability: 0.5489`）のハルシネーション文
   （`"Felly, mae'n gweithio, ..."` の反復）を emit する。英語正典歌詞との
-  `overall_similarity` は `0.0056`
+  `overall_similarity` は `0.0126`
+- 上記の値は 2026-07-20 の相対パス安定化 re-run（PR #199 Codex P2 対応、
+  `commands.md` / `results.md` の Re-run 節）時点のもの。faster-whisper は
+  `temperature=0.0` でも同一プロセス外の別実行間で完全決定論ではなく、初回計測時
+  （no_speech_prob 0.9309/0.9425/0.9218、`overall_similarity` 0.0056）から数値が
+  微変動した。境界挙動の結論（`no_speech_prob` 高値域の自己申告 + abstain しない
+  ハルシネーション）自体は両実行で不変
 - `svprpe observe` の判定は `adherence_status: not_observed` /
   `determination: deferred` — 計器としては正しい動作（存在しない一致を
   `preserved` と誤判定していない）

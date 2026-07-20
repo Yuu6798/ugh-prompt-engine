@@ -147,3 +147,65 @@ DL がこの呼び出し中に発生した（`~/.cache/huggingface/hub` に
 `models--Systran--faster-whisper-small` と `models--adefossez--HTDemucs-ft`
 が新規作成された。実測: `du -sh ~/.cache/huggingface` = 785M 合計、
 2 モデル分の内訳は未分離）。
+
+## Re-run（相対パス安定化・`date -u` 実測日時）
+
+実測日時 (UTC): 2026-07-20T17:08:23Z
+
+PR #199 レビュー Codex P2 対応（`results.md` §4 参照）。上記ログの
+`generated_artifact.path` がこの計測を実施したコンテナのローカル
+`/tmp/.../scratchpad` パスだった問題を是正するため、同一 wav（sha256 pin 一致
+確認済み）に対しリポジトリ相対パスで `svprpe observe` / `svprpe extract --lyrics`
+を再実行した。committed JSON の手編集はしない — 以下の CLI 実行の生出力で
+差し替えている。
+
+```
+# 1. wav を決定論再生成（sha256 が初回計測時の pin と一致することを確認）
+python examples/arrangement/midnight_signal/observed/wi0b_synth/render_faithful.py \
+  examples/arrangement/midnight_signal/composition_score.yaml \
+  /tmp/.../scratchpad/wi0b_rerun/faithful_take.wav
+
+sha256sum /tmp/.../scratchpad/wi0b_rerun/faithful_take.wav
+# 4d8c83f67c1b2441e09fa84debdc47ec0131c1a13ee1b813b0ef55e874903e90
+# -> pin と一致
+
+# 2. repo 内相対位置にコピー（非コミット・検証後に削除）
+cp /tmp/.../scratchpad/wi0b_rerun/faithful_take.wav \
+   examples/arrangement/midnight_signal/observed/wi0b_synth/faithful_take.wav
+
+# 3. melody 観測（相対パス）
+svprpe observe \
+  examples/arrangement/midnight_signal/expected/e2e_edm/performance_package.json \
+  examples/arrangement/midnight_signal/observed/wi0b_synth/faithful_take.wav \
+  --manifest examples/arrangement/midnight_signal/identity_manifest.yaml \
+  -o <scratch>/wi0b_melody_observation_new.json
+# exit code: 0
+
+# 4. lyrics smoke 観測（相対パス、同じ wav・同じコマンド形）
+svprpe observe \
+  examples/arrangement/midnight_signal/expected/e2e_edm/performance_package.json \
+  examples/arrangement/midnight_signal/observed/wi0b_synth/faithful_take.wav \
+  --manifest examples/arrangement/midnight_signal/identity_manifest.yaml \
+  -o <scratch>/wi0b_lyrics_smoke_observation_new.json
+# exit code: 0
+
+# 5. extract 証跡（no_speech_prob 系、新規収載分）
+svprpe extract examples/arrangement/midnight_signal/observed/wi0b_synth/faithful_take.wav \
+  --lyrics \
+  -o <scratch>/wi0b_lyrics_extract_new.json
+# exit code: 0
+```
+
+新旧 diff（`results.md` §4 に要約）: `melody` / `harmony` anchor は新旧で完全一致
+（byte 単位）。`lyrics` anchor のみ差分があった —
+`wi0b_melody_observation.json` は初回計測時に lyrics extra 未導入で
+`sensor.available: false` だったが、本 re-run のコンテナには両 extras が
+事前導入済みのため `available: true` に変わった（melody anchor 自体は無傷）。
+`wi0b_lyrics_smoke_observation.json` / `lyrics_anchor_extracted.json` は
+faster-whisper の別プロセス間非決定性により `no_speech_prob` /
+`language_probability` / `overall_similarity` の実測値が変動した（境界挙動の
+結論自体は不変）。`path` フィールド以外にも上記の差分があったため、committed
+値はすべて本 re-run の実測値で統一した（`results.md` §4 に記録、隠さず報告）。
+
+検証後、repo 内の一時 wav (`faithful_take.wav`) は削除し、未追跡ファイルなしを
+確認した。
