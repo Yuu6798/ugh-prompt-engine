@@ -55,6 +55,29 @@ svprpe verify examples/arrangement/midnight_signal/observed/suno/package/perform
 このディレクトリの内容整合（pin 一致・repo 正本とのバイト同一・非 canonical
 探索の位置づけの pin）は `tests/test_ar4_suno_observed_fixture.py` が enforce する。
 
+## package 共有と処置（A/B）provenance の切り分け
+
+`package/performance_package.json` は **A/B 両セル共通の**コンパイル済みハンドオフ
+（`svprpe package` の単一実行結果）であり、`prompt.section_tags`（section-tag
+script）を含む。A/B の実際の処置分岐——この script を Suno UI の Lyrics 欄へ貼るか
+（セル A）空のままにするか（セル B）——は **package の外側**、すなわち人間操作層
+（`order_sheet.md` の "Cell A — tags" / "Cell B — no tags" 節）で行われた。package
+自体はどちらのセルの操作を反映したものでもなく、両セルが参照する単一の正典
+ハンドオフである。
+
+したがって B セル（`suno_B1`/`suno_B2`）の観測 JSON に記録された `package_sha256`
+は、「この package の正典 anchor（manifest 連鎖）に対して `svprpe observe` を
+実行した」という歴史的事実の verbatim 記録であって、「この package の
+`prompt` 全体（`section_tags` 含む）が B の生成入力として Suno に渡された」こと
+を意味しない——B の生成入力は Style フィールドのみで、Lyrics 欄は空だった
+（`order_sheet.md` 参照）。package/report の sha256 連鎖単体からは A/B の処置
+を判別できない。
+
+処置（treatment/control）の provenance の正本は `takes_memo.yaml` の各 take の
+`cell` 欄（`suno_A1`/`suno_A2` → `A (tags)`、`suno_B1`/`suno_B2` →
+`B (no tags)`）と `order_sheet.md` のセル定義であり、
+`tests/test_ar4_suno_observed_fixture.py` がこの cell 割当を機械 pin する。
+
 ## 観測の要点（詳細は `docs/arrangement_identity_planning.md` の 2026-07-19 dated エントリ）
 
 - 4 take とも harmony/structure が `not_observed`/`deferred`、

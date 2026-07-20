@@ -82,6 +82,27 @@ def test_order_sheet_and_takes_memo_and_summary_exist() -> None:
     ]
 
 
+def test_takes_memo_cell_assignment_matches_ab_design() -> None:
+    """処置（treatment/control）provenance の正本の機械 pin（Codex P2 対応）。
+
+    4 take とも同一 `performance_package.json` を参照する（`package_sha256` pin、
+    後続テスト参照）ため、package/report 連鎖単体では A（tags）/B（no tags）の
+    処置を判別できない。実際の処置分岐は package の外側（`order_sheet.md` の
+    Cell A / Cell B 節に基づく人間操作）で行われており、その正本は
+    `takes_memo.yaml` の各 take の `cell` 欄である。ここでその欄を
+    `suno_A1`/`suno_A2` -> "A (tags)"、`suno_B1`/`suno_B2` -> "B (no tags)" に
+    pin し、将来の fixture 更新で処置 provenance が消えないようにする。
+    """
+    memo = _load_yaml(TAKES_MEMO_PATH)
+    cell_by_name = {take["assigned_name"]: take["cell"] for take in memo["takes"]}
+    assert cell_by_name == {
+        "suno_A1": "A (tags)",
+        "suno_A2": "A (tags)",
+        "suno_B1": "B (no tags)",
+        "suno_B2": "B (no tags)",
+    }
+
+
 # --- 1. 観測 JSON 4 本が ObservationReport schema でロード可能 -------------------------
 
 
@@ -102,6 +123,13 @@ def test_all_observation_reports_load_against_observation_report_schema() -> Non
 
 
 def test_all_observation_reports_agree_on_package_sha256_with_committed_package() -> None:
+    """4 take とも同一 package を pin する — これは実際の検収手順の歴史的事実の
+    verbatim 記録であり(A/B とも同じ `svprpe package` ハンドオフに対して `observe`
+    した)、A/B の処置(section-tag script を Lyrics 欄へ貼ったか否か)を判別する
+    ものではない。処置 provenance の正本は `test_takes_memo_cell_assignment_matches_ab_design`
+    (cell 欄 pin)が担う — 詳細は `observed/suno/README.md` の
+    「package 共有と処置（A/B）provenance の切り分け」節を参照。
+    """
     package_sha256 = _sha256(PACKAGE_PATH)
 
     for take_id, path in OBSERVATION_PATHS.items():
