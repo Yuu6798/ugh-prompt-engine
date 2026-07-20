@@ -2829,6 +2829,182 @@ def test_build_observation_report_melody_malformed_artifact_never_calls_pitch_he
         )
 
 
+# --- 4d. Codex P2 (PR #198 review round 3): "Pre-validate learned anchors
+# before first inference" — round 2 fixed the single-anchor ordering (this
+# anchor's own canonical is validated before this anchor's own inference
+# call), but left an anchor-to-anchor interleaving intact: with two
+# lyrics_text/note_events_json anchors in one manifest — the first
+# well-formed, the second malformed — the first anchor's `_observe_lyrics`/
+# `_observe_melody` already validates and calls the shared provider before
+# `_observe_anchor` ever visits the second (malformed) anchor, so the
+# expensive learned helper still runs before the manifest as a whole is
+# known to be well-formed. Round 3 pre-validates every routed anchor of a
+# family in one batch (in `build_observation_report`, before that family's
+# provider is even constructed) so a malformed sibling anywhere in the
+# family blocks inference for the whole family, not just for itself.
+
+
+def test_build_observation_report_lyrics_family_malformed_sibling_blocks_all_inference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_transcribe(audio_path: Path) -> tuple[Optional[str], Optional[str]]:
+        raise AssertionError(
+            "_transcribe_lyrics_for_observation must not be called when any "
+            "lyrics anchor in the manifest has a malformed canonical artifact "
+            "(round 3: family-wide pre-validation, not just per-anchor)"
+        )
+
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._transcribe_lyrics_for_observation", fail_transcribe
+    )
+
+    manifest_data = _manifest_with_duplicate_lyrics_and_melody_anchors().model_dump(mode="json")
+    # Order matters for this pin: "lyrics" (well-formed) is declared before
+    # "lyrics2" (malformed) — the bug round 3 fixes only reproduces when the
+    # first-visited anchor of the family is the valid one.
+    manifest_data["anchors"] = [a for a in manifest_data["anchors"] if a["domain"] == "lyrics"]
+    assert [a["id"] for a in manifest_data["anchors"]] == ["lyrics", "lyrics2"]
+    manifest = IdentityManifest.model_validate(manifest_data)
+
+    with pytest.raises(ValueError, match="not valid UTF-8"):
+        build_observation_report(
+            package=_fake_package(),
+            manifest=manifest,
+            manifest_path=IDENTITY_MANIFEST,
+            artifact_bytes={
+                "lyrics": _lyrics_artifact_bytes(),
+                "lyrics2": b"\xff\xfe not valid utf-8",
+            },
+            audio_path=Path("unused.wav"),
+            package_sha256="a" * 64,
+            audio_sha256="b" * 64,
+            generated_artifact_path="unused.wav",
+        )
+
+
+def test_build_observation_report_melody_family_malformed_sibling_blocks_all_inference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_extract_melody(audio_path: Path) -> tuple[Optional[list[int]], Optional[str]]:
+        raise AssertionError(
+            "_extract_melody_for_observation must not be called when any "
+            "melody anchor in the manifest has a malformed canonical artifact "
+            "(round 3: family-wide pre-validation, not just per-anchor)"
+        )
+
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._extract_melody_for_observation", fail_extract_melody
+    )
+
+    manifest_data = _manifest_with_duplicate_lyrics_and_melody_anchors().model_dump(mode="json")
+    manifest_data["anchors"] = [a for a in manifest_data["anchors"] if a["domain"] == "melody"]
+    assert [a["id"] for a in manifest_data["anchors"]] == ["melody", "melody2"]
+    manifest = IdentityManifest.model_validate(manifest_data)
+
+    # Malformed note-events/0.1 artifact: missing the required `duration_beats`
+    # field on its single note entry (same shape as the round-2 single-anchor
+    # pin above).
+    bad_bytes = json.dumps(
+        {"schema": "note-events/0.1", "notes": [{"start_beat": 0.0, "pitch": "C4"}]}
+    ).encode("utf-8")
+
+    with pytest.raises(ValueError, match="duration_beats"):
+        build_observation_report(
+            package=_fake_package(),
+            manifest=manifest,
+            manifest_path=IDENTITY_MANIFEST,
+            artifact_bytes={
+                "melody": _melody_artifact_bytes(),
+                "melody2": bad_bytes,
+            },
+            audio_path=Path("unused.wav"),
+            package_sha256="a" * 64,
+            audio_sha256="b" * 64,
+            generated_artifact_path="unused.wav",
+        )
+
+
+def test_build_observation_report_lyrics_canonical_parsed_once_not_twice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex P2 (PR #198 review round 3): once `build_observation_report`'s
+    family-wide pre-validation has parsed a lyrics anchor's canonical
+    artifact, `_observe_lyrics` must reuse that already-parsed value rather
+    than decoding `artifact_bytes` a second time (the `canonical_lines`
+    pass-through parameter documented on `_observe_lyrics`/`_observe_anchor`)."""
+    from svp_rpe.arrange import observe as observe_module
+
+    parse_calls = {"n": 0}
+    original_load = observe_module._load_lyrics_artifact
+
+    def counting_load(raw_bytes: bytes, *, artifact_path: Path) -> list[str]:
+        parse_calls["n"] += 1
+        return original_load(raw_bytes, artifact_path=artifact_path)
+
+    monkeypatch.setattr(observe_module, "_load_lyrics_artifact", counting_load)
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._transcribe_lyrics_for_observation",
+        lambda audio_path: (
+            (FIXTURE_DIR / "identity" / "lyrics.txt").read_text(encoding="utf-8"),
+            None,
+        ),
+    )
+
+    manifest_data = _minimal_manifest().model_dump(mode="json")
+    manifest_data["anchors"] = [a for a in manifest_data["anchors"] if a["domain"] == "lyrics"]
+    manifest = IdentityManifest.model_validate(manifest_data)
+
+    build_observation_report(
+        package=_fake_package(),
+        manifest=manifest,
+        manifest_path=IDENTITY_MANIFEST,
+        artifact_bytes={"lyrics": _lyrics_artifact_bytes()},
+        audio_path=Path("unused.wav"),
+        package_sha256="a" * 64,
+        audio_sha256="b" * 64,
+        generated_artifact_path="unused.wav",
+    )
+
+    assert parse_calls["n"] == 1
+
+
+def test_build_observation_report_melody_canonical_parsed_once_not_twice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Melody counterpart of the lyrics no-double-parse pin above."""
+    from svp_rpe.arrange import observe as observe_module
+
+    parse_calls = {"n": 0}
+    original_load = observe_module._load_note_events_artifact
+
+    def counting_load(raw_bytes: bytes, *, artifact_path: Path) -> list[int]:
+        parse_calls["n"] += 1
+        return original_load(raw_bytes, artifact_path=artifact_path)
+
+    monkeypatch.setattr(observe_module, "_load_note_events_artifact", counting_load)
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._extract_melody_for_observation",
+        lambda audio_path: ([60, 62, 64], None),
+    )
+
+    manifest_data = _minimal_manifest().model_dump(mode="json")
+    manifest_data["anchors"] = [a for a in manifest_data["anchors"] if a["domain"] == "melody"]
+    manifest = IdentityManifest.model_validate(manifest_data)
+
+    build_observation_report(
+        package=_fake_package(),
+        manifest=manifest,
+        manifest_path=IDENTITY_MANIFEST,
+        artifact_bytes={"melody": _melody_artifact_bytes()},
+        audio_path=Path("unused.wav"),
+        package_sha256="a" * 64,
+        audio_sha256="b" * 64,
+        generated_artifact_path="unused.wav",
+    )
+
+    assert parse_calls["n"] == 1
+
+
 # --- 5. CLI D-3 provenance chain: negative paths (no audio needed — fail first) ----
 
 

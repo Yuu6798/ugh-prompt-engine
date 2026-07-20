@@ -847,6 +847,28 @@ def _transcribe_lyrics_for_observation(
     return transcription.text, None
 
 
+def _load_lyrics_artifact(raw_bytes: bytes, *, artifact_path: Path) -> list[str]:
+    """``lyrics_text`` 正典 artifact (UTF-8 プレーンテキスト) を行のリストへ変換する。
+
+    ``_load_note_events_artifact`` と同じ契約: ``raw_bytes`` は呼び出し側が既に
+    hash 照合済みの bytes（本関数はファイルを一切読まない）。``artifact_path`` は
+    エラーメッセージ表示専用。不正 UTF-8 は fail-closed で ``ValueError``。
+
+    Codex P2 (PR #198 review round 3) で ``_observe_lyrics`` のインライン
+    decode から抽出: ``build_observation_report`` が learned 推論より前に
+    routed な全 lyrics anchor を一括事前検証する際、``_observe_lyrics`` を
+    経由せずこの parse だけを直接呼べる必要があるため、単独の関数として
+    切り出す（``_load_note_events_artifact`` が melody 側で既に担っている
+    役割と対称）。
+    """
+    try:
+        return raw_bytes.decode("utf-8").splitlines()
+    except UnicodeDecodeError as exc:
+        raise ValueError(
+            f"lyrics artifact is not valid UTF-8 text: {artifact_path}: {exc}"
+        ) from exc
+
+
 def _observe_lyrics(
     anchor: IdentityAnchor,
     *,
@@ -855,6 +877,7 @@ def _observe_lyrics(
     artifact_bytes: bytes,
     audio_path: Path,
     transcription_provider: Optional[Callable[[], tuple[Optional[str], Optional[str]]]] = None,
+    canonical_lines: Optional[list[str]] = None,
 ) -> AnchorObservation:
     """``transcription_provider`` (Codex P2, PR #198 review round 2): a
     zero-arg callable — typically an ``_OnceCache`` shared across every
@@ -880,24 +903,35 @@ def _observe_lyrics(
     validation, same ordering) — this keeps the function callable standalone
     (as the existing single-anchor tests in this module already do) without
     requiring every caller to construct a provider.
+
+    ``canonical_lines`` (Codex P2, PR #198 review round 3): when supplied,
+    this anchor's canonical artifact has ALREADY been parsed/validated by
+    ``build_observation_report`` as part of its family-wide pre-validation
+    pass (see that function's docstring) — this function reuses that value
+    instead of re-decoding ``artifact_bytes`` (no double parse). ``None``
+    (the default) falls back to parsing here, same as before — this keeps
+    direct/standalone calls (unit tests, backward compatibility) working
+    without requiring a pre-parsed value.
     """
     # Resolved only for error-message display — never read here, same
     # contract `_observe_harmony`/`_observe_structure` follow for their own
     # artifacts.
-    artifact_path = _resolve_confined(
-        anchor.artifact, manifest_dir, work_id=work_id, target=f"anchor '{anchor.id}'"
-    )
-    try:
-        expected_lines = artifact_bytes.decode("utf-8").splitlines()
-    except UnicodeDecodeError as exc:
-        raise ValueError(
-            f"lyrics artifact is not valid UTF-8 text: {artifact_path}: {exc}"
-        ) from exc
+    if canonical_lines is not None:
+        expected_lines = canonical_lines
+    else:
+        artifact_path = _resolve_confined(
+            anchor.artifact, manifest_dir, work_id=work_id, target=f"anchor '{anchor.id}'"
+        )
+        expected_lines = _load_lyrics_artifact(artifact_bytes, artifact_path=artifact_path)
 
     sensor_name = "lyrics_transcription"
     # Codex P2 round 2: the shared provider (if any) is only ever called
-    # here, after the `try`/`except` above has already validated the
-    # canonical artifact — never earlier.
+    # here, after the canonical artifact above has already been validated —
+    # never earlier. Round 3 widens this guarantee to the whole family (see
+    # `build_observation_report`): by the time this call is reached, EVERY
+    # routed lyrics anchor in the report — not just this one — has already
+    # been validated, so a malformed sibling anchor can no longer let this
+    # anchor's inference run first.
     if transcription_provider is not None:
         transcribed_text, reason = transcription_provider()
     else:
@@ -1230,22 +1264,35 @@ def _observe_melody(
     note_events_provider: Optional[
         Callable[[], tuple[Optional[list[int]], Optional[str]]]
     ] = None,
+    canonical_midi: Optional[list[int]] = None,
 ) -> AnchorObservation:
     """``note_events_provider`` (Codex P2, PR #198 review round 2): a zero-arg
     callable — typically an ``_OnceCache`` shared across every
     note_events_json anchor in one report — same rationale, lazy-until-
     validated ordering, and default-``None`` fallback shape as
     ``_observe_lyrics``'s ``transcription_provider`` parameter (see that
-    docstring)."""
-    artifact_path = _resolve_confined(
-        anchor.artifact, manifest_dir, work_id=work_id, target=f"anchor '{anchor.id}'"
-    )
-    canonical_midi = _load_note_events_artifact(artifact_bytes, artifact_path=artifact_path)
+    docstring).
+
+    ``canonical_midi`` (Codex P2, PR #198 review round 3): when supplied,
+    this anchor's canonical note-events artifact has ALREADY been
+    parsed/validated by ``build_observation_report`` as part of its
+    family-wide pre-validation pass — this function reuses that value
+    instead of re-parsing ``artifact_bytes`` (no double parse). ``None``
+    (the default) falls back to parsing here, same as
+    ``_observe_lyrics``'s ``canonical_lines`` parameter — see that
+    docstring."""
+    if canonical_midi is None:
+        artifact_path = _resolve_confined(
+            anchor.artifact, manifest_dir, work_id=work_id, target=f"anchor '{anchor.id}'"
+        )
+        canonical_midi = _load_note_events_artifact(artifact_bytes, artifact_path=artifact_path)
     sensor_name = "note_events"
 
-    # Codex P2 round 2: `_load_note_events_artifact` above already validated
-    # (and would have raised on) a malformed canonical artifact — the
-    # provider is only ever called here, never earlier.
+    # Codex P2 round 2: the canonical artifact above has already been
+    # validated (and would have raised on malformed content) — the provider
+    # is only ever called here, never earlier. Round 3 widens this
+    # guarantee to the whole family — see `_observe_lyrics`'s matching
+    # comment and `build_observation_report`'s docstring.
     if note_events_provider is not None:
         observed_midi, reason = note_events_provider()
     else:
@@ -1473,7 +1520,20 @@ def _observe_anchor(
     melody_note_events_provider: Optional[
         Callable[[], tuple[Optional[list[int]], Optional[str]]]
     ] = None,
+    lyrics_canonical_by_id: Optional[dict[str, list[str]]] = None,
+    melody_canonical_by_id: Optional[dict[str, list[int]]] = None,
 ) -> AnchorObservation:
+    """``lyrics_canonical_by_id`` / ``melody_canonical_by_id`` (Codex P2,
+    PR #198 review round 3): anchor-id-keyed maps of already-parsed/validated
+    canonical values, built once by ``build_observation_report``'s
+    family-wide pre-validation pass (see that function's docstring) and
+    looked up here per anchor so ``_observe_lyrics``/``_observe_melody``
+    never re-parse an artifact this function's caller already validated.
+    ``None`` (the default, and what direct/standalone callers of
+    ``_observe_anchor`` naturally pass) means "no pre-parsed value available"
+    and each sensor falls back to parsing its own artifact internally,
+    exactly as before this parameter existed.
+    """
     if is_harmony_sensor_anchor(anchor):
         # `build_observation_report` only extracts (and passes a non-None
         # bundle) when at least one manifest anchor matches a wired sensor's
@@ -1510,6 +1570,11 @@ def _observe_anchor(
             artifact_bytes=artifact_bytes_by_id[anchor.id],
             audio_path=audio_path,
             transcription_provider=lyrics_transcription_provider,
+            canonical_lines=(
+                lyrics_canonical_by_id.get(anchor.id)
+                if lyrics_canonical_by_id is not None
+                else None
+            ),
         )
     if is_melody_sensor_anchor(anchor):
         assert audio_path is not None
@@ -1520,6 +1585,11 @@ def _observe_anchor(
             artifact_bytes=artifact_bytes_by_id[anchor.id],
             audio_path=audio_path,
             note_events_provider=melody_note_events_provider,
+            canonical_midi=(
+                melody_canonical_by_id.get(anchor.id)
+                if melody_canonical_by_id is not None
+                else None
+            ),
         )
     return _observe_unavailable(anchor)
 
@@ -1588,6 +1658,29 @@ def build_observation_report(
     推論より前に fail する、(2) 複数 anchor が該当しても推論は report あたり
     最大 1 回（``_OnceCache`` のメモ化）、(3) 該当 anchor が 1 つも無ければ
     provider 自体を作らないので未呼び出しのまま。
+
+    round 3 (Codex P2, PR #198 review): round 2 は「1 anchor 分の検証 → その
+    anchor の推論」の順序は直したが、family 内に anchor が複数ある場合の
+    **anchor 間の**インターリーブは直っていなかった —
+    ``manifest.anchors`` を anchor ごとに逐次 ``_observe_anchor`` へ渡す
+    このリスト内包表記の構造上、lyrics_text anchor が 2 つ（1 つ目は正常、
+    2 つ目は malformed）ある manifest では、1 つ目の ``_observe_lyrics`` が
+    自分の正典検証を通過した時点で（2 つ目はまだ一切検証されていないのに）
+    共有 provider 経由で推論を呼んでしまい、2 つ目の検証失敗はその**後**に
+    発生していた（実測で確認済み）。ここでは family（lyrics / melody）
+    ごとに、routed な全 anchor の正典を ``_load_lyrics_artifact`` /
+    ``_load_note_events_artifact`` で**一括**事前 parse・検証してから
+    provider を組み立てる — family 内のどれか 1 つでも malformed なら、
+    その family の provider を構築する前（したがって learned ヘルパーを
+    一切呼ぶ前）に ``ValueError`` で fail-closed する。parse 結果は
+    anchor id をキーとする dict（``lyrics_canonical_by_id`` /
+    ``melody_canonical_by_id``）に集め、``_observe_anchor`` 経由で
+    ``_observe_lyrics`` / ``_observe_melody`` へ配る — 両者はこの
+    事前 parse 済み値を受け取った場合はもう一度 decode/parse し直さない
+    （二重 parse を避ける。``canonical_lines`` / ``canonical_midi`` 引数、
+    それぞれの docstring を参照）。該当 anchor が 1 つも無ければこの
+    pre-validation ループ自体が空回りするだけで parse も推論も発生せず、
+    推論は report あたり最大 1 回のままという round 1/2 の性質は変えない。
     """
     manifest_dir = Path(manifest_path).resolve().parent
     needs_extraction = any(
@@ -1596,16 +1689,43 @@ def build_observation_report(
     )
     bundle = extract_rpe_from_file(str(audio_path)) if needs_extraction else None
 
-    needs_lyrics = any(is_lyrics_sensor_anchor(anchor) for anchor in manifest.anchors)
+    # round 3: pre-validate every routed lyrics anchor's canonical artifact
+    # BEFORE constructing the shared inference provider — fail-closed, before
+    # any learned helper is ever reachable, if any one of them is malformed.
+    lyrics_anchors = [a for a in manifest.anchors if is_lyrics_sensor_anchor(a)]
+    lyrics_canonical_by_id: dict[str, list[str]] = {}
+    for lyrics_anchor in lyrics_anchors:
+        lyrics_artifact_path = _resolve_confined(
+            lyrics_anchor.artifact,
+            manifest_dir,
+            work_id=manifest.meta.work_id,
+            target=f"anchor '{lyrics_anchor.id}'",
+        )
+        lyrics_canonical_by_id[lyrics_anchor.id] = _load_lyrics_artifact(
+            artifact_bytes[lyrics_anchor.id], artifact_path=lyrics_artifact_path
+        )
     lyrics_transcription_provider = (
         _OnceCache(lambda: _transcribe_lyrics_for_observation(audio_path))
-        if needs_lyrics
+        if lyrics_anchors
         else None
     )
-    needs_melody = any(is_melody_sensor_anchor(anchor) for anchor in manifest.anchors)
+
+    # Same pre-validate-the-whole-family-first shape for melody.
+    melody_anchors = [a for a in manifest.anchors if is_melody_sensor_anchor(a)]
+    melody_canonical_by_id: dict[str, list[int]] = {}
+    for melody_anchor in melody_anchors:
+        melody_artifact_path = _resolve_confined(
+            melody_anchor.artifact,
+            manifest_dir,
+            work_id=manifest.meta.work_id,
+            target=f"anchor '{melody_anchor.id}'",
+        )
+        melody_canonical_by_id[melody_anchor.id] = _load_note_events_artifact(
+            artifact_bytes[melody_anchor.id], artifact_path=melody_artifact_path
+        )
     melody_note_events_provider = (
         _OnceCache(lambda: _extract_melody_for_observation(audio_path))
-        if needs_melody
+        if melody_anchors
         else None
     )
 
@@ -1619,6 +1739,8 @@ def build_observation_report(
             audio_path=audio_path,
             lyrics_transcription_provider=lyrics_transcription_provider,
             melody_note_events_provider=melody_note_events_provider,
+            lyrics_canonical_by_id=lyrics_canonical_by_id,
+            melody_canonical_by_id=melody_canonical_by_id,
         )
         for anchor in manifest.anchors
     ]
