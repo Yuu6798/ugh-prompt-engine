@@ -142,9 +142,10 @@ tail の長さ、あるいは正規化後の列が一致したかどうか）の
 from __future__ import annotations
 
 import json
+import math
 import re
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Callable, Generic, Literal, Optional, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -213,6 +214,42 @@ _NO_SENSOR_INFO: dict[str, tuple[str, str]] = {
         "see rpe/learned/basic_pitch_adapter.py",
     ),
 }
+
+
+_T = TypeVar("_T")
+
+
+class _OnceCache(Generic[_T]):
+    """Zero-arg callable wrapper: runs ``compute`` at most once and replays
+    the cached result on every subsequent call (Codex P2, PR #198 review
+    round 2 — "Validate anchors before running learned inference").
+
+    ``build_observation_report`` constructs one of these per report for the
+    lyrics/melody learned inference helpers instead of calling
+    ``_transcribe_lyrics_for_observation`` / ``_extract_melody_for_observation``
+    eagerly before iterating any anchor. The cache instance itself is handed
+    down through ``_observe_anchor`` to ``_observe_lyrics`` / ``_observe_melody``,
+    which only invoke it *after* their own canonical-artifact validation
+    (UTF-8 decode / note-events schema check) has passed for that anchor.
+    This keeps the R4 "at most 1 underlying call per report, 0 calls when no
+    matching anchor exists" contract intact while adding the property this
+    round fixes: a malformed canonical artifact must fail before the
+    expensive, optional-extra-gated learned helper ever runs, not after —
+    regardless of how many anchors of that artifact_type the manifest
+    declares, and regardless of which one (malformed or well-formed) happens
+    to be validated first.
+    """
+
+    _UNSET = object()
+
+    def __init__(self, compute: Callable[[], _T]) -> None:
+        self._compute = compute
+        self._result: object = self._UNSET
+
+    def __call__(self) -> _T:
+        if self._result is self._UNSET:
+            self._result = self._compute()
+        return self._result  # type: ignore[return-value]
 
 
 class ObserveModel(BaseModel):
@@ -817,21 +854,32 @@ def _observe_lyrics(
     work_id: str,
     artifact_bytes: bytes,
     audio_path: Path,
-    transcription: Optional[tuple[Optional[str], Optional[str]]] = None,
+    transcription_provider: Optional[Callable[[], tuple[Optional[str], Optional[str]]]] = None,
 ) -> AnchorObservation:
-    """``transcription`` (Codex P2, PR #198 review): the caller-memoized
-    ``_transcribe_lyrics_for_observation`` result, shared across every
-    lyrics_text anchor in one report (``build_observation_report`` computes
-    it at most once and passes the same tuple to every lyrics anchor via
-    ``_observe_anchor``'s ``lyrics_transcription`` parameter) — a manifest
-    can legally declare more than one lyrics anchor, and re-running
+    """``transcription_provider`` (Codex P2, PR #198 review round 2): a
+    zero-arg callable — typically an ``_OnceCache`` shared across every
+    lyrics_text anchor in one report (``build_observation_report`` builds it
+    at most once and passes the same instance to every lyrics anchor via
+    ``_observe_anchor``'s ``lyrics_transcription_provider`` parameter) — a
+    manifest can legally declare more than one lyrics anchor, and re-running
     faster-whisper/Demucs once per anchor would repeat the same expensive,
     dependency-gated call against the same ``audio_path`` for an identical
-    outcome. ``None`` (the default) means "no precomputed result" and falls
-    back to calling ``_transcribe_lyrics_for_observation`` directly — this
-    keeps the function callable standalone (as the existing single-anchor
-    tests in this module already do) without requiring every caller to
-    precompute.
+    outcome.
+
+    Deliberately **not invoked until after** this anchor's own canonical
+    artifact has been validated (the UTF-8 decode below): the caller must be
+    able to hand this function a provider that hasn't computed anything yet
+    (round 2's fix — the previous ``transcription`` tuple parameter was
+    already fully computed by the time it reached here, which meant
+    ``build_observation_report`` had to eagerly call the learned helper
+    before any anchor validation ran at all). Passing a lazy provider lets
+    validation gate the first actual inference call instead.
+
+    ``None`` (the default) means "no shared provider" and falls back to
+    calling ``_transcribe_lyrics_for_observation`` directly (still only after
+    validation, same ordering) — this keeps the function callable standalone
+    (as the existing single-anchor tests in this module already do) without
+    requiring every caller to construct a provider.
     """
     # Resolved only for error-message display — never read here, same
     # contract `_observe_harmony`/`_observe_structure` follow for their own
@@ -847,9 +895,13 @@ def _observe_lyrics(
         ) from exc
 
     sensor_name = "lyrics_transcription"
-    if transcription is None:
-        transcription = _transcribe_lyrics_for_observation(audio_path)
-    transcribed_text, reason = transcription
+    # Codex P2 round 2: the shared provider (if any) is only ever called
+    # here, after the `try`/`except` above has already validated the
+    # canonical artifact — never earlier.
+    if transcription_provider is not None:
+        transcribed_text, reason = transcription_provider()
+    else:
+        transcribed_text, reason = _transcribe_lyrics_for_observation(audio_path)
     if transcribed_text is None:
         return AnchorObservation(
             anchor_id=anchor.id,
@@ -999,6 +1051,14 @@ def _load_note_events_artifact(raw_bytes: bytes, *, artifact_path: Path) -> list
     （``_load_chord_progression`` が ``chords`` の型不正を拒否するのと同じ、
     「canonical artifact が壊れていたら黙って通さない」流儀）。検証範囲の拡張のみで
     比較ロジックには一切手を入れていない。
+
+    非有限値（Codex P2, PR #198 review round 2）: ``start_beat`` /
+    ``duration_beats`` はいずれも ``math.isfinite`` を要求する — ``json.loads``
+    は標準外の ``NaN`` / ``Infinity`` / ``-Infinity`` バアワードを許容してしまい
+    （``isinstance(x, (int, float))`` だけでは通ってしまう）、``start_beat`` が
+    非有限だと onset ソートが破綻し、``duration_beats`` が非有限だと後続の
+    非負チェック（``nan < 0`` は ``False``）をすり抜けかねないため、型検証と
+    同じ fail-closed の posture で拒否する。
     """
     try:
         payload = json.loads(raw_bytes.decode("utf-8"))
@@ -1050,6 +1110,20 @@ def _load_note_events_artifact(raw_bytes: bytes, *, artifact_path: Path) -> list
                 "note events artifact note 'start_beat' must be numeric: "
                 f"{item!r} ({artifact_path})"
             )
+        # Codex P2 (PR #198 review round 2): `json.loads` is non-standard-JSON
+        # permissive by default and happily parses the bareword tokens
+        # `NaN`/`Infinity`/`-Infinity` into `float('nan')`/`float('inf')`/
+        # `float('-inf')` — `isinstance(x, (int, float))` alone does not
+        # reject these (they genuinely are floats by this point), and letting
+        # a non-finite `start_beat` through would corrupt the onset sort
+        # below (`nan` compares false against everything, `inf`/`-inf` would
+        # silently pin a note to the very end/start of the sequence). Same
+        # fail-closed posture as the type checks around it.
+        if not math.isfinite(start_beat):
+            raise ValueError(
+                "note events artifact note 'start_beat' must be finite "
+                f"(not NaN/Infinity): {item!r} ({artifact_path})"
+            )
         # Codex P2 (PR #198 review): `duration_beats` is part of the
         # committed fixture's/docs' note-events/0.1 schema even though v0's
         # identity gate never reads its value (pitch-only comparison,
@@ -1061,6 +1135,17 @@ def _load_note_events_artifact(raw_bytes: bytes, *, artifact_path: Path) -> list
             raise ValueError(
                 "note events artifact note 'duration_beats' must be numeric: "
                 f"{item!r} ({artifact_path})"
+            )
+        # Codex P2 (PR #198 review round 2): same NaN/Infinity closure as
+        # `start_beat` above — checked before the negative-value check below,
+        # since `nan < 0` is `False` (a NaN would otherwise slip past that
+        # check silently) and `-inf < 0` is `True` (which would raise the
+        # wrong, misleading "must be non-negative" message instead of naming
+        # the actual problem).
+        if not math.isfinite(duration_beats):
+            raise ValueError(
+                "note events artifact note 'duration_beats' must be finite "
+                f"(not NaN/Infinity): {item!r} ({artifact_path})"
             )
         if duration_beats < 0:
             raise ValueError(
@@ -1142,22 +1227,29 @@ def _observe_melody(
     work_id: str,
     artifact_bytes: bytes,
     audio_path: Path,
-    note_events: Optional[tuple[Optional[list[int]], Optional[str]]] = None,
+    note_events_provider: Optional[
+        Callable[[], tuple[Optional[list[int]], Optional[str]]]
+    ] = None,
 ) -> AnchorObservation:
-    """``note_events`` (Codex P2, PR #198 review): the caller-memoized
-    ``_extract_melody_for_observation`` result, shared across every
-    note_events_json anchor in one report — same rationale and default-None
-    fallback shape as ``_observe_lyrics``'s ``transcription`` parameter (see
-    that docstring)."""
+    """``note_events_provider`` (Codex P2, PR #198 review round 2): a zero-arg
+    callable — typically an ``_OnceCache`` shared across every
+    note_events_json anchor in one report — same rationale, lazy-until-
+    validated ordering, and default-``None`` fallback shape as
+    ``_observe_lyrics``'s ``transcription_provider`` parameter (see that
+    docstring)."""
     artifact_path = _resolve_confined(
         anchor.artifact, manifest_dir, work_id=work_id, target=f"anchor '{anchor.id}'"
     )
     canonical_midi = _load_note_events_artifact(artifact_bytes, artifact_path=artifact_path)
     sensor_name = "note_events"
 
-    if note_events is None:
-        note_events = _extract_melody_for_observation(audio_path)
-    observed_midi, reason = note_events
+    # Codex P2 round 2: `_load_note_events_artifact` above already validated
+    # (and would have raised on) a malformed canonical artifact — the
+    # provider is only ever called here, never earlier.
+    if note_events_provider is not None:
+        observed_midi, reason = note_events_provider()
+    else:
+        observed_midi, reason = _extract_melody_for_observation(audio_path)
     if observed_midi is None:
         return AnchorObservation(
             anchor_id=anchor.id,
@@ -1375,8 +1467,12 @@ def _observe_anchor(
     bundle: Optional[RPEBundle],
     artifact_bytes_by_id: dict[str, bytes],
     audio_path: Optional[Path] = None,
-    lyrics_transcription: Optional[tuple[Optional[str], Optional[str]]] = None,
-    melody_note_events: Optional[tuple[Optional[list[int]], Optional[str]]] = None,
+    lyrics_transcription_provider: Optional[
+        Callable[[], tuple[Optional[str], Optional[str]]]
+    ] = None,
+    melody_note_events_provider: Optional[
+        Callable[[], tuple[Optional[list[int]], Optional[str]]]
+    ] = None,
 ) -> AnchorObservation:
     if is_harmony_sensor_anchor(anchor):
         # `build_observation_report` only extracts (and passes a non-None
@@ -1413,7 +1509,7 @@ def _observe_anchor(
             work_id=work_id,
             artifact_bytes=artifact_bytes_by_id[anchor.id],
             audio_path=audio_path,
-            transcription=lyrics_transcription,
+            transcription_provider=lyrics_transcription_provider,
         )
     if is_melody_sensor_anchor(anchor):
         assert audio_path is not None
@@ -1423,7 +1519,7 @@ def _observe_anchor(
             work_id=work_id,
             artifact_bytes=artifact_bytes_by_id[anchor.id],
             audio_path=audio_path,
-            note_events=melody_note_events,
+            note_events_provider=melody_note_events_provider,
         )
     return _observe_unavailable(anchor)
 
@@ -1476,6 +1572,22 @@ def build_observation_report(
     artifact_type の anchor が manifest に 1 つも無ければ、対応する helper
     を一切呼ばない（``needs_extraction`` が harmony/structure に対して
     行っているのと同じゲート方式）。
+
+    round 2 (Codex P2, PR #198 re-review): 「report あたり 1 回」の共有
+    そのものに加え、その 1 回がいつ発生するかも遅延させる。以前はここで
+    ``_transcribe_lyrics_for_observation`` / ``_extract_melody_for_observation``
+    を eager に（＝どの anchor の正典 artifact もまだ検証していない時点で）
+    呼んでいたため、正典 lyrics（不正 UTF-8）や正典 note-events
+    （schema/型不正）が壊れていても、``_observe_lyrics`` / ``_observe_melody``
+    が検証で fail-closed する前に高価な学習推論が実行されてしまっていた。
+    ここでは代わりに ``_OnceCache``（初回呼び出し時に 1 回だけ計算し以後は
+    同一結果を返す zero-arg callable）を構築するだけに留め、実際の呼び出しは
+    ``_observe_anchor`` 経由で ``_observe_lyrics`` / ``_observe_melody`` に
+    委ね、両者は自分の正典 artifact の parse・検証を通過した**後**にのみ
+    provider を呼ぶ。これにより次の 3 性質が同時に成立する: (1) 壊れた正典は
+    推論より前に fail する、(2) 複数 anchor が該当しても推論は report あたり
+    最大 1 回（``_OnceCache`` のメモ化）、(3) 該当 anchor が 1 つも無ければ
+    provider 自体を作らないので未呼び出しのまま。
     """
     manifest_dir = Path(manifest_path).resolve().parent
     needs_extraction = any(
@@ -1485,12 +1597,16 @@ def build_observation_report(
     bundle = extract_rpe_from_file(str(audio_path)) if needs_extraction else None
 
     needs_lyrics = any(is_lyrics_sensor_anchor(anchor) for anchor in manifest.anchors)
-    lyrics_transcription = (
-        _transcribe_lyrics_for_observation(audio_path) if needs_lyrics else None
+    lyrics_transcription_provider = (
+        _OnceCache(lambda: _transcribe_lyrics_for_observation(audio_path))
+        if needs_lyrics
+        else None
     )
     needs_melody = any(is_melody_sensor_anchor(anchor) for anchor in manifest.anchors)
-    melody_note_events = (
-        _extract_melody_for_observation(audio_path) if needs_melody else None
+    melody_note_events_provider = (
+        _OnceCache(lambda: _extract_melody_for_observation(audio_path))
+        if needs_melody
+        else None
     )
 
     anchors = [
@@ -1501,8 +1617,8 @@ def build_observation_report(
             bundle=bundle,
             artifact_bytes_by_id=artifact_bytes,
             audio_path=audio_path,
-            lyrics_transcription=lyrics_transcription,
-            melody_note_events=melody_note_events,
+            lyrics_transcription_provider=lyrics_transcription_provider,
+            melody_note_events_provider=melody_note_events_provider,
         )
         for anchor in manifest.anchors
     ]

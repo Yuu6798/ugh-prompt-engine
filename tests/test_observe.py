@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import tempfile
 from pathlib import Path
@@ -1765,6 +1766,91 @@ def test_load_note_events_artifact_rejects_note_with_negative_duration_beats() -
         _load_note_events_artifact(bad_bytes, artifact_path=Path("melody.json"))
 
 
+# --- Codex P2 (PR #198 review round 2): "Reject non-finite note-event beat
+# values" — stdlib `json.loads` is non-standard-JSON permissive by default and
+# happily parses the bareword tokens `NaN`/`Infinity`/`-Infinity` into
+# `float('nan')`/`float('inf')`/`float('-inf')`, which the previous
+# `isinstance(x, (int, float))` checks alone did not reject (they genuinely
+# are floats by the time they reach that check).
+
+
+def test_json_loads_accepts_nan_and_infinity_bareword_literals() -> None:
+    """Reproduction/sanity check: this is *why* `_load_note_events_artifact`
+    cannot rely on `isinstance` alone — `json.loads` itself already accepts
+    these non-standard-JSON tokens before any of this module's code runs."""
+    payload = json.loads('{"a": NaN, "b": Infinity, "c": -Infinity}')
+    assert math.isnan(payload["a"])
+    assert payload["b"] == float("inf")
+    assert payload["c"] == float("-inf")
+
+
+def test_load_note_events_artifact_rejects_note_with_nan_duration_beats() -> None:
+    bad_bytes = json.dumps(
+        {
+            "schema": "note-events/0.1",
+            "notes": [{"start_beat": 0.0, "pitch": "C4", "duration_beats": float("nan")}],
+        }
+    ).encode("utf-8")
+    with pytest.raises(ValueError, match="duration_beats.*must be finite"):
+        _load_note_events_artifact(bad_bytes, artifact_path=Path("melody.json"))
+
+
+def test_load_note_events_artifact_rejects_note_with_infinite_start_beat() -> None:
+    bad_bytes = json.dumps(
+        {
+            "schema": "note-events/0.1",
+            "notes": [{"start_beat": float("inf"), "pitch": "C4", "duration_beats": 1.0}],
+        }
+    ).encode("utf-8")
+    with pytest.raises(ValueError, match="start_beat.*must be finite"):
+        _load_note_events_artifact(bad_bytes, artifact_path=Path("melody.json"))
+
+
+def test_load_note_events_artifact_rejects_note_with_negative_infinite_start_beat() -> None:
+    bad_bytes = json.dumps(
+        {
+            "schema": "note-events/0.1",
+            "notes": [{"start_beat": float("-inf"), "pitch": "C4", "duration_beats": 1.0}],
+        }
+    ).encode("utf-8")
+    with pytest.raises(ValueError, match="start_beat.*must be finite"):
+        _load_note_events_artifact(bad_bytes, artifact_path=Path("melody.json"))
+
+
+def test_load_note_events_artifact_rejects_nan_duration_beats_raw_json_literal() -> None:
+    """Same as the NaN test above but written as a raw JSON string literal
+    (not built via `json.dumps(float("nan"))`) — this is the literal shape a
+    hand-authored or tampered artifact file on disk would actually contain,
+    and confirms `json.loads` parses the `NaN` bareword token before this
+    module's validation ever sees it (Design Memo repro requirement)."""
+    bad_bytes = (
+        b'{"schema": "note-events/0.1", '
+        b'"notes": [{"start_beat": 0.0, "pitch": "C4", "duration_beats": NaN}]}'
+    )
+    with pytest.raises(ValueError, match="duration_beats.*must be finite"):
+        _load_note_events_artifact(bad_bytes, artifact_path=Path("melody.json"))
+
+
+def test_load_note_events_artifact_rejects_infinity_start_beat_raw_json_literal() -> None:
+    bad_bytes = (
+        b'{"schema": "note-events/0.1", '
+        b'"notes": [{"start_beat": Infinity, "pitch": "C4", "duration_beats": 1.0}]}'
+    )
+    with pytest.raises(ValueError, match="start_beat.*must be finite"):
+        _load_note_events_artifact(bad_bytes, artifact_path=Path("melody.json"))
+
+
+def test_load_note_events_artifact_rejects_negative_infinity_start_beat_raw_json_literal() -> (
+    None
+):
+    bad_bytes = (
+        b'{"schema": "note-events/0.1", '
+        b'"notes": [{"start_beat": -Infinity, "pitch": "C4", "duration_beats": 1.0}]}'
+    )
+    with pytest.raises(ValueError, match="start_beat.*must be finite"):
+        _load_note_events_artifact(bad_bytes, artifact_path=Path("melody.json"))
+
+
 # --- WI0-a design contract D: independent verification of hand-computed values ----
 
 
@@ -2654,6 +2740,93 @@ def test_build_observation_report_lyrics_melody_helpers_not_called_without_match
     )
 
     assert [anchor.anchor_id for anchor in report.anchors] == ["harmony"]
+
+
+# --- 4c. Codex P2 (PR #198 review round 2): "Validate anchors before running
+# learned inference" — the report-level shared provider must be lazy enough
+# that a malformed canonical artifact fails *before* the expensive,
+# optional-extra-gated learned helper is ever invoked. Round 2's fix moved
+# `_transcribe_lyrics_for_observation` / `_extract_melody_for_observation`
+# from an eager, pre-anchor-loop call inside `build_observation_report` to a
+# per-report `_OnceCache` that `_observe_lyrics` / `_observe_melody` only
+# invoke *after* their own canonical-artifact validation (UTF-8 decode /
+# note-events schema check) has passed. These tests exercise the bug this
+# fixes: calling `_observe_lyrics`/`_observe_melody` directly already
+# validated-before-inferring even before this fix (the standalone functions
+# decode/parse before falling back to a direct helper call) — the eager call
+# this fix removes only ever happened inside `build_observation_report`
+# itself, before any anchor was ever visited, so the pin below goes through
+# `build_observation_report`.
+
+
+def test_build_observation_report_lyrics_malformed_artifact_never_calls_transcription_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_transcribe(audio_path: Path) -> tuple[Optional[str], Optional[str]]:
+        raise AssertionError(
+            "_transcribe_lyrics_for_observation must not be called before the "
+            "canonical lyrics artifact has been validated"
+        )
+
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._transcribe_lyrics_for_observation", fail_transcribe
+    )
+
+    manifest_data = _minimal_manifest().model_dump(mode="json")
+    manifest_data["anchors"] = [
+        anchor_data for anchor_data in manifest_data["anchors"] if anchor_data["domain"] == "lyrics"
+    ]
+    manifest = IdentityManifest.model_validate(manifest_data)
+
+    with pytest.raises(ValueError, match="not valid UTF-8"):
+        build_observation_report(
+            package=_fake_package(),
+            manifest=manifest,
+            manifest_path=IDENTITY_MANIFEST,
+            artifact_bytes={"lyrics": b"\xff\xfe not valid utf-8"},
+            audio_path=Path("unused.wav"),
+            package_sha256="a" * 64,
+            audio_sha256="b" * 64,
+            generated_artifact_path="unused.wav",
+        )
+
+
+def test_build_observation_report_melody_malformed_artifact_never_calls_pitch_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_extract_melody(audio_path: Path) -> tuple[Optional[list[int]], Optional[str]]:
+        raise AssertionError(
+            "_extract_melody_for_observation must not be called before the "
+            "canonical note-events artifact has been validated"
+        )
+
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._extract_melody_for_observation", fail_extract_melody
+    )
+
+    manifest_data = _minimal_manifest().model_dump(mode="json")
+    manifest_data["anchors"] = [
+        anchor_data for anchor_data in manifest_data["anchors"] if anchor_data["domain"] == "melody"
+    ]
+    manifest = IdentityManifest.model_validate(manifest_data)
+
+    # Malformed note-events/0.1 artifact: missing the required `duration_beats`
+    # field on its single note entry.
+    bad_bytes = json.dumps(
+        {"schema": "note-events/0.1", "notes": [{"start_beat": 0.0, "pitch": "C4"}]}
+    ).encode("utf-8")
+
+    with pytest.raises(ValueError, match="duration_beats"):
+        build_observation_report(
+            package=_fake_package(),
+            manifest=manifest,
+            manifest_path=IDENTITY_MANIFEST,
+            artifact_bytes={"melody": bad_bytes},
+            audio_path=Path("unused.wav"),
+            package_sha256="a" * 64,
+            audio_sha256="b" * 64,
+            generated_artifact_path="unused.wav",
+        )
 
 
 # --- 5. CLI D-3 provenance chain: negative paths (no audio needed — fail first) ----
