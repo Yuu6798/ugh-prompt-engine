@@ -31,16 +31,26 @@ from svp_rpe.arrange.observe import (
     GeneratedArtifactRef,
     ObservationReport,
     SensorRecord,
+    _adjacent_diffs,
     _cycle_alignment,
+    _extract_melody_for_observation,
+    _lcs_length,
+    _load_note_events_artifact,
     _load_section_map,
     _load_section_map_v2,
     _normalize_canonical_section_label,
     _normalize_observed_section_label,
+    _note_name_to_midi,
     _observe_anchor,
     _observe_harmony,
+    _observe_lyrics,
+    _observe_melody,
     _observe_structure,
     _observe_unavailable,
+    _transcribe_lyrics_for_observation,
     build_observation_report,
+    is_lyrics_sensor_anchor,
+    is_melody_sensor_anchor,
     is_structure_sensor_anchor,
 )
 from svp_rpe.arrange.package import PerformancePackage
@@ -171,6 +181,35 @@ def _section_map_artifact_bytes(
     sections: list[str], *, schema_version: str = "section-map/0.1"
 ) -> bytes:
     payload = {"schema_version": schema_version, "sections": sections}
+    return json.dumps(payload).encode("utf-8")
+
+
+def _lyrics_artifact_bytes() -> bytes:
+    """The real committed fixture bytes (`identity/lyrics.txt`) — used as a
+    stand-in canonical artifact wherever a lyrics anchor needs SOME valid
+    UTF-8 text and the test doesn't care about its exact content (WI0-a: now
+    that lyrics/melody anchors route to real sensor functions instead of the
+    generic no_sensor fallback, `_observe_anchor` needs `artifact_bytes_by_id`
+    populated for them, or it KeyErrors)."""
+    return (FIXTURE_DIR / "identity" / "lyrics.txt").read_bytes()
+
+
+def _melody_artifact_bytes(
+    notes: list[tuple[float, str]] | None = None,
+) -> bytes:
+    """A ``note-events/0.1`` artifact. Defaults to the real committed fixture
+    bytes (`identity/melody_notes.json`); pass `notes` as
+    `(start_beat, pitch)` pairs to build a synthetic one instead (used by the
+    dedicated `_observe_melody` unit tests below)."""
+    if notes is None:
+        return (FIXTURE_DIR / "identity" / "melody_notes.json").read_bytes()
+    payload = {
+        "schema": "note-events/0.1",
+        "notes": [
+            {"start_beat": start_beat, "pitch": pitch, "duration_beats": 1.0}
+            for start_beat, pitch in notes
+        ],
+    }
     return json.dumps(payload).encode("utf-8")
 
 
@@ -468,7 +507,11 @@ def test_build_observation_report_isolates_non_chord_harmony_anchor_from_others(
         package=_fake_package(),
         manifest=manifest,
         manifest_path=IDENTITY_MANIFEST,
-        artifact_bytes={"harmony": _chord_artifact_bytes(CANONICAL_PROGRESSION)},
+        artifact_bytes={
+            "harmony": _chord_artifact_bytes(CANONICAL_PROGRESSION),
+            "lyrics": _lyrics_artifact_bytes(),
+            "melody": _melody_artifact_bytes(),
+        },
         audio_path=Path("unused.wav"),
         package_sha256="a" * 64,
         audio_sha256="b" * 64,
@@ -1518,6 +1561,521 @@ def test_observe_anchor_wired_section_map_0_1_with_invalid_content_still_fails_c
         )
 
 
+# --- 3c. lyrics / melody sensors (WI0-a, synthetic — no real inference) -----------
+
+
+def test_is_lyrics_sensor_anchor_requires_lyrics_text_artifact_type() -> None:
+    assert is_lyrics_sensor_anchor(_anchor("lyrics", "lyrics", "lyrics.txt", "lyrics_text")) is True
+    assert (
+        is_lyrics_sensor_anchor(_anchor("lyrics", "lyrics", "lyrics.wav", "audio_excerpt"))
+        is False
+    )
+    assert (
+        is_lyrics_sensor_anchor(_anchor("lyrics", "harmony", "lyrics.txt", "lyrics_text"))
+        is False
+    )
+
+
+def test_is_melody_sensor_anchor_requires_note_events_json_artifact_type() -> None:
+    assert (
+        is_melody_sensor_anchor(_anchor("melody", "melody", "melody.json", "note_events_json"))
+        is True
+    )
+    assert (
+        is_melody_sensor_anchor(_anchor("melody", "melody", "melody.mid", "midi_clip")) is False
+    )
+    assert (
+        is_melody_sensor_anchor(
+            _anchor("melody", "structure", "melody.json", "note_events_json")
+        )
+        is False
+    )
+
+
+def test_observe_anchor_dispatches_lyrics_and_melody_to_their_sensors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_observe_anchor` routes lyrics/melody anchors to the real sensor
+    functions (not `_observe_unavailable`) now — exercised end-to-end through
+    the dispatch layer, with both optional-extra reads monkeypatched so the
+    test doesn't depend on faster-whisper/basic-pitch being installed."""
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._transcribe_lyrics_for_observation",
+        lambda audio_path: (None, "faster_whisper is not installed (fake)"),
+    )
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._extract_melody_for_observation",
+        lambda audio_path: (None, "basic_pitch is not installed (fake)"),
+    )
+
+    lyrics_observation = _observe_anchor(
+        _anchor("lyrics", "lyrics", "lyrics.txt", "lyrics_text"),
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        bundle=None,
+        artifact_bytes_by_id={"lyrics": _lyrics_artifact_bytes()},
+        audio_path=Path("unused.wav"),
+    )
+    assert lyrics_observation.sensor.name == "lyrics_transcription"
+    assert lyrics_observation.determination == "no_sensor"
+
+    melody_observation = _observe_anchor(
+        _anchor("melody", "melody", "melody.json", "note_events_json"),
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        bundle=None,
+        artifact_bytes_by_id={"melody": _melody_artifact_bytes()},
+        audio_path=Path("unused.wav"),
+    )
+    assert melody_observation.sensor.name == "note_events"
+    assert melody_observation.determination == "no_sensor"
+
+
+# --- note-name -> MIDI conversion (v0, WI0-a) --------------------------------
+
+
+def test_note_name_to_midi_natural_notes() -> None:
+    assert _note_name_to_midi("C4") == 60
+    assert _note_name_to_midi("A4") == 69
+    assert _note_name_to_midi("C-1") == 0
+    assert _note_name_to_midi("G9") == 127
+
+
+def test_note_name_to_midi_sharps_and_flats() -> None:
+    """♯/♭ (ASCII and Unicode) accidentals."""
+    assert _note_name_to_midi("C#4") == 61
+    assert _note_name_to_midi("Db4") == 61
+    assert _note_name_to_midi("Eb4") == 63
+    assert _note_name_to_midi("D♯4") == 63
+    assert _note_name_to_midi("A♭4") == 68
+
+
+def test_note_name_to_midi_multiple_octaves() -> None:
+    assert _note_name_to_midi("C0") == 12
+    assert _note_name_to_midi("C4") == 60
+    assert _note_name_to_midi("C5") == 72
+    assert _note_name_to_midi("C-1") == 0
+
+
+def test_note_name_to_midi_rejects_unsupported_names() -> None:
+    with pytest.raises(ValueError, match="unsupported note name"):
+        _note_name_to_midi("H4")  # not a valid letter
+    with pytest.raises(ValueError, match="unsupported note name"):
+        _note_name_to_midi("C")  # missing octave
+
+
+# --- note-events/0.1 artifact parsing ----------------------------------------
+
+
+def test_load_note_events_artifact_sorts_by_start_beat_and_converts_to_midi() -> None:
+    artifact_bytes = _melody_artifact_bytes([(1.0, "D4"), (0.0, "C4"), (2.0, "E4")])
+    midi = _load_note_events_artifact(artifact_bytes, artifact_path=Path("melody.json"))
+    assert midi == [60, 62, 64]
+
+
+def test_load_note_events_artifact_rejects_unsupported_schema() -> None:
+    bad_bytes = json.dumps(
+        {"schema": "note-events/9.9", "notes": [{"start_beat": 0.0, "pitch": "C4"}]}
+    ).encode("utf-8")
+    with pytest.raises(ValueError, match="note-events/0.1"):
+        _load_note_events_artifact(bad_bytes, artifact_path=Path("melody.json"))
+
+
+def test_load_note_events_artifact_rejects_empty_notes() -> None:
+    bad_bytes = json.dumps({"schema": "note-events/0.1", "notes": []}).encode("utf-8")
+    with pytest.raises(ValueError):
+        _load_note_events_artifact(bad_bytes, artifact_path=Path("melody.json"))
+
+
+def test_load_note_events_artifact_rejects_note_missing_required_keys() -> None:
+    bad_bytes = json.dumps(
+        {"schema": "note-events/0.1", "notes": [{"start_beat": 0.0}]}
+    ).encode("utf-8")
+    with pytest.raises(ValueError, match="pitch"):
+        _load_note_events_artifact(bad_bytes, artifact_path=Path("melody.json"))
+
+
+# --- WI0-a design contract D: independent verification of hand-computed values ----
+
+
+def test_lcs_and_interval_lcs_design_check_pin() -> None:
+    """Independent re-derivation of the WI0-a Design Memo's hand-computed
+    example (a passing-tone/neighbor-tone case), computed here from scratch
+    rather than trusted from the memo:
+
+    canonical MIDI = [60, 62, 64, 65]; observed MIDI = [60, 62, 63, 64, 65]
+    (one extra passing tone, 63, inserted between 62 and 64).
+
+    Pitch LCS: canonical is a full subsequence of observed
+    (60 -> 62 -> [skip 63] -> 64 -> 65), so LCS length = 4 = canonical_length
+    -> pitch_lcs_ratio = 4/4 = 1.0.
+
+    Interval (adjacent-diff) series: canonical = [2, 2, 1] (62-60, 64-62,
+    65-64); observed = [2, 1, 1, 1] (62-60, 63-62, 64-63, 65-64). The longest
+    common subsequence of [2, 2, 1] and [2, 1, 1, 1] is [2, 1] (match the
+    leading 2, then either of the trailing 1's — no way to also match the
+    second canonical 2, since observed has only one 2) -> length 2 ->
+    interval_lcs_ratio = 2 / (4 - 1) = 2/3 = 0.6667 (rounded 4dp).
+    """
+    canonical = [60, 62, 64, 65]
+    observed = [60, 62, 63, 64, 65]
+    assert _lcs_length(canonical, observed) == 4
+
+    canonical_intervals = _adjacent_diffs(canonical)
+    observed_intervals = _adjacent_diffs(observed)
+    assert canonical_intervals == [2, 2, 1]
+    assert observed_intervals == [2, 1, 1, 1]
+    interval_lcs = _lcs_length(canonical_intervals, observed_intervals)
+    assert interval_lcs == 2
+    assert round(interval_lcs / len(canonical_intervals), 4) == 0.6667
+
+
+def test_lcs_and_interval_lcs_transposition_design_check_pin() -> None:
+    """Independent re-derivation of the WI0-a Design Memo's transposition
+    example: canonical MIDI = [60, 62, 64]; observed MIDI = [65, 67, 69]
+    (the same 3-note shape transposed up a perfect fourth, +5 semitones).
+
+    Pitch LCS: no element of canonical appears anywhere in observed (the two
+    sets {60, 62, 64} and {65, 67, 69} are disjoint) -> LCS length = 0 ->
+    pitch_lcs_ratio = 0/3 = 0.0 — transposition is pitch-blind, as expected.
+
+    Interval series: canonical = [2, 2] (62-60, 64-62); observed = [2, 2]
+    (67-65, 69-67) — identical -> LCS length = 2 = len(canonical_intervals)
+    -> interval_lcs_ratio = 2/2 = 1.0 — transposition preserves the melodic
+    shape (interval-perfect) even though it changes every absolute pitch.
+    """
+    canonical = [60, 62, 64]
+    observed = [65, 67, 69]
+    assert _lcs_length(canonical, observed) == 0
+
+    canonical_intervals = _adjacent_diffs(canonical)
+    observed_intervals = _adjacent_diffs(observed)
+    assert canonical_intervals == [2, 2]
+    assert observed_intervals == [2, 2]
+    interval_lcs = _lcs_length(canonical_intervals, observed_intervals)
+    assert interval_lcs == 2
+    assert round(interval_lcs / len(canonical_intervals), 4) == 1.0
+
+
+# --- _observe_melody: dependency-missing / exact-match / mismatch / edge cases ----
+
+
+def test_observe_melody_dependency_missing_is_no_sensor(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._extract_melody_for_observation",
+        lambda audio_path: (None, "basic_pitch is not installed (fake)"),
+    )
+    anchor = _anchor("melody", "melody", "melody_notes.json", "note_events_json")
+
+    observation = _observe_melody(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        artifact_bytes=_melody_artifact_bytes([(0.0, "C4"), (1.0, "D4")]),
+        audio_path=Path("unused.wav"),
+    )
+
+    assert observation.sensor.available is False
+    assert observation.sensor.name == "note_events"
+    assert "basic_pitch" in str(observation.sensor.reason)
+    assert observation.determination == "no_sensor"
+    assert observation.adherence_status == "not_observed"
+    assert observation.measurements == {}
+
+
+def test_observe_melody_exact_match_is_preserved(monkeypatch: pytest.MonkeyPatch) -> None:
+    canonical_notes = [(0.0, "C4"), (1.0, "D4"), (2.0, "E4"), (3.0, "F4")]  # 60, 62, 64, 65
+    canonical_midi = [60, 62, 64, 65]
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._extract_melody_for_observation",
+        lambda audio_path: (list(canonical_midi), None),
+    )
+    anchor = _anchor("melody", "melody", "melody_notes.json", "note_events_json")
+
+    observation = _observe_melody(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        artifact_bytes=_melody_artifact_bytes(canonical_notes),
+        audio_path=Path("unused.wav"),
+    )
+
+    assert observation.sensor.available is True
+    assert observation.measurements == {
+        "canonical_length": 4,
+        "observed_length": 4,
+        "pitch_sequence_exact_match": True,
+        "pitch_lcs_ratio": 1.0,
+        "interval_lcs_ratio": 1.0,
+        "observed_head": canonical_midi,
+    }
+    assert observation.adherence_status == "preserved"
+    assert observation.determination == "exact_match"
+
+
+def test_observe_melody_mismatch_is_deferred_with_lcs_measurements(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Uses the same passing-tone case pinned independently by
+    `test_lcs_and_interval_lcs_design_check_pin` above."""
+    canonical_notes = [(0.0, "C4"), (1.0, "D4"), (2.0, "E4"), (3.0, "F4")]  # 60, 62, 64, 65
+    observed_midi = [60, 62, 63, 64, 65]
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._extract_melody_for_observation",
+        lambda audio_path: (list(observed_midi), None),
+    )
+    anchor = _anchor("melody", "melody", "melody_notes.json", "note_events_json")
+
+    observation = _observe_melody(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        artifact_bytes=_melody_artifact_bytes(canonical_notes),
+        audio_path=Path("unused.wav"),
+    )
+
+    assert observation.measurements["canonical_length"] == 4
+    assert observation.measurements["observed_length"] == 5
+    assert observation.measurements["pitch_sequence_exact_match"] is False
+    assert observation.measurements["pitch_lcs_ratio"] == 1.0
+    assert observation.measurements["interval_lcs_ratio"] == 0.6667
+    assert observation.measurements["observed_head"] == observed_midi
+    assert observation.adherence_status == "not_observed"
+    assert observation.determination == "deferred"
+
+
+def test_observe_melody_empty_observed_sequence_is_deferred(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._extract_melody_for_observation",
+        lambda audio_path: ([], None),
+    )
+    canonical_notes = [(0.0, "C4"), (1.0, "D4"), (2.0, "E4"), (3.0, "F4")]
+    anchor = _anchor("melody", "melody", "melody_notes.json", "note_events_json")
+
+    observation = _observe_melody(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        artifact_bytes=_melody_artifact_bytes(canonical_notes),
+        audio_path=Path("unused.wav"),
+    )
+
+    assert observation.sensor.available is True
+    assert observation.measurements["observed_length"] == 0
+    assert observation.measurements["pitch_lcs_ratio"] == 0.0
+    assert observation.measurements["interval_lcs_ratio"] == 0.0
+    assert observation.measurements["observed_head"] == []
+    assert observation.measurements["pitch_sequence_exact_match"] is False
+    assert observation.adherence_status == "not_observed"
+    assert observation.determination == "deferred"
+
+
+def test_observe_melody_single_note_canonical_has_null_interval_ratio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """WI0-a design contract C: `canonical_length < 2` -> `interval_lcs_ratio`
+    is `None` (no adjacent pair exists to diff), not a misleading 0.0/1.0."""
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._extract_melody_for_observation",
+        lambda audio_path: ([60], None),
+    )
+    anchor = _anchor("melody", "melody", "melody_notes.json", "note_events_json")
+
+    observation = _observe_melody(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        artifact_bytes=_melody_artifact_bytes([(0.0, "C4")]),
+        audio_path=Path("unused.wav"),
+    )
+
+    assert observation.measurements["canonical_length"] == 1
+    assert observation.measurements["interval_lcs_ratio"] is None
+    assert observation.measurements["pitch_sequence_exact_match"] is True
+    assert observation.adherence_status == "preserved"
+    assert observation.determination == "exact_match"
+
+
+# --- _observe_lyrics: dependency-missing / exact-match / mismatch ----------------
+
+
+def test_observe_lyrics_dependency_missing_is_no_sensor(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._transcribe_lyrics_for_observation",
+        lambda audio_path: (None, "faster_whisper is not installed (fake)"),
+    )
+    anchor = _anchor("lyrics", "lyrics", "lyrics.txt", "lyrics_text")
+
+    observation = _observe_lyrics(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        artifact_bytes=b"line one\nline two\n",
+        audio_path=Path("unused.wav"),
+    )
+
+    assert observation.sensor.available is False
+    assert observation.sensor.name == "lyrics_transcription"
+    assert "faster_whisper" in str(observation.sensor.reason)
+    assert observation.determination == "no_sensor"
+    assert observation.adherence_status == "not_observed"
+    assert observation.measurements == {}
+
+
+def test_observe_lyrics_exact_transcription_is_preserved(monkeypatch: pytest.MonkeyPatch) -> None:
+    expected_text = "hello world\nsecond line"
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._transcribe_lyrics_for_observation",
+        lambda audio_path: (expected_text, None),
+    )
+    anchor = _anchor("lyrics", "lyrics", "lyrics.txt", "lyrics_text")
+
+    observation = _observe_lyrics(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        artifact_bytes=expected_text.encode("utf-8"),
+        audio_path=Path("unused.wav"),
+    )
+
+    assert observation.sensor.available is True
+    assert observation.sensor.name == "lyrics_transcription"
+    assert observation.measurements["canonical_line_count"] == 2
+    assert observation.measurements["match_lyrics"]["overall_similarity"] == 1.0
+    assert observation.adherence_status == "preserved"
+    assert observation.determination == "exact_match"
+
+
+def test_observe_lyrics_mismatch_is_deferred_with_match_lyrics_measurements(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._transcribe_lyrics_for_observation",
+        lambda audio_path: ("a totally unrelated transcript", None),
+    )
+    anchor = _anchor("lyrics", "lyrics", "lyrics.txt", "lyrics_text")
+
+    observation = _observe_lyrics(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        artifact_bytes=b"hello world\nsecond line",
+        audio_path=Path("unused.wav"),
+    )
+
+    assert observation.sensor.available is True
+    assert observation.measurements["canonical_line_count"] == 2
+    assert observation.measurements["match_lyrics"]["overall_similarity"] < 1.0
+    assert observation.adherence_status == "not_observed"
+    assert observation.determination == "deferred"
+
+
+# --- transcribe/extract helpers: exception isolation (monkeypatched at the ------
+# --- adapter source, so this is reproducible whether or not faster-whisper / ----
+# --- basic-pitch happen to be installed in the current environment) -------------
+
+
+def test_transcribe_lyrics_for_observation_catches_learned_model_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from svp_rpe.rpe.learned import LearnedModelUnavailable
+
+    def fake_transcribe(*args: object, **kwargs: object) -> None:
+        raise LearnedModelUnavailable("faster_whisper is not installed (fake)")
+
+    monkeypatch.setattr(
+        "svp_rpe.rpe.learned.lyrics_adapter.transcribe_lyrics", fake_transcribe
+    )
+
+    text, reason = _transcribe_lyrics_for_observation(Path("unused.wav"))
+    assert text is None
+    assert reason == "faster_whisper is not installed (fake)"
+
+
+def test_transcribe_lyrics_for_observation_catches_separator_not_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from svp_rpe.io.source_separator import SeparatorNotAvailableError
+
+    def fake_transcribe(*args: object, **kwargs: object) -> None:
+        raise SeparatorNotAvailableError("demucs is not installed (fake)")
+
+    monkeypatch.setattr(
+        "svp_rpe.rpe.learned.lyrics_adapter.transcribe_lyrics", fake_transcribe
+    )
+
+    text, reason = _transcribe_lyrics_for_observation(Path("unused.wav"))
+    assert text is None
+    assert reason == "demucs is not installed (fake)"
+
+
+def test_transcribe_lyrics_for_observation_returns_text_on_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeTranscription:
+        text = "sung lyrics text"
+
+    def fake_transcribe(*args: object, **kwargs: object) -> _FakeTranscription:
+        return _FakeTranscription()
+
+    monkeypatch.setattr(
+        "svp_rpe.rpe.learned.lyrics_adapter.transcribe_lyrics", fake_transcribe
+    )
+
+    text, reason = _transcribe_lyrics_for_observation(Path("unused.wav"))
+    assert text == "sung lyrics text"
+    assert reason is None
+
+
+def test_extract_melody_for_observation_catches_learned_model_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from svp_rpe.rpe.learned import LearnedModelUnavailable
+
+    def fake_extract(*args: object, **kwargs: object) -> None:
+        raise LearnedModelUnavailable("basic_pitch is not installed (fake)")
+
+    monkeypatch.setattr(
+        "svp_rpe.rpe.learned.basic_pitch_adapter.extract_basic_pitch_annotations",
+        fake_extract,
+    )
+
+    midi, reason = _extract_melody_for_observation(Path("unused.wav"))
+    assert midi is None
+    assert reason == "basic_pitch is not installed (fake)"
+
+
+def test_extract_melody_for_observation_sorts_by_start_sec(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from svp_rpe.rpe.models import LearnedAudioAnnotations, LearnedNoteEvent
+
+    def fake_extract(*args: object, **kwargs: object) -> LearnedAudioAnnotations:
+        return LearnedAudioAnnotations(
+            note_events=[
+                LearnedNoteEvent(
+                    start_sec=1.0, end_sec=1.5, pitch_midi=62, confidence=0.9,
+                    source_model="fake",
+                ),
+                LearnedNoteEvent(
+                    start_sec=0.0, end_sec=0.5, pitch_midi=60, confidence=0.9,
+                    source_model="fake",
+                ),
+            ]
+        )
+
+    monkeypatch.setattr(
+        "svp_rpe.rpe.learned.basic_pitch_adapter.extract_basic_pitch_annotations",
+        fake_extract,
+    )
+
+    midi, reason = _extract_melody_for_observation(Path("unused.wav"))
+    assert midi == [60, 62]
+    assert reason is None
+
+
 # --- 4. build_observation_report: single shared extraction + determinism ----------
 
 
@@ -1593,7 +2151,11 @@ def test_build_observation_report_shares_a_single_extraction_across_anchors(
         package=_fake_package(),
         manifest=_minimal_manifest(),
         manifest_path=IDENTITY_MANIFEST,
-        artifact_bytes={"harmony": _chord_artifact_bytes(CANONICAL_PROGRESSION)},
+        artifact_bytes={
+            "harmony": _chord_artifact_bytes(CANONICAL_PROGRESSION),
+            "lyrics": _lyrics_artifact_bytes(),
+            "melody": _melody_artifact_bytes(),
+        },
         audio_path=Path("unused.wav"),
         package_sha256="a" * 64,
         audio_sha256="b" * 64,
@@ -1616,7 +2178,11 @@ def test_build_observation_report_is_byte_deterministic(monkeypatch: pytest.Monk
         "package": _fake_package(),
         "manifest": _minimal_manifest(),
         "manifest_path": IDENTITY_MANIFEST,
-        "artifact_bytes": {"harmony": _chord_artifact_bytes(CANONICAL_PROGRESSION)},
+        "artifact_bytes": {
+            "harmony": _chord_artifact_bytes(CANONICAL_PROGRESSION),
+            "lyrics": _lyrics_artifact_bytes(),
+            "melody": _melody_artifact_bytes(),
+        },
         "audio_path": Path("unused.wav"),
         "package_sha256": "a" * 64,
         "audio_sha256": "b" * 64,
@@ -1634,15 +2200,21 @@ def test_build_observation_report_skips_extraction_when_no_wired_sensor_anchors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """PR #187 review round 12's extraction gate: if no manifest anchor
-    matches a wired sensor's (domain, artifact_type) predicate — here, a
-    manifest with only lyrics/melody anchors and no harmony anchor at all —
-    `extract_rpe_from_file` must never be called. The generated audio's
-    content is irrelevant to a report that's entirely `no_sensor`; only its
-    already-computed sha256 (passed in separately) is recorded."""
+    matches the harmony/structure predicates that gate the SHARED
+    `RPEBundle` extraction — here, a manifest with only lyrics/melody
+    anchors and no harmony anchor at all — `extract_rpe_from_file` must
+    never be called. (WI0-a: lyrics/melody now do attempt their own,
+    separate optional-extra reads of `audio_path` — `transcribe_lyrics` /
+    `extract_basic_pitch_annotations`, neither of which is
+    `extract_rpe_from_file` — and degrade to `no_sensor` here because
+    neither the `lyrics` nor `pitch` extra is installed in this test
+    environment; that degrade path is what this test now also exercises for
+    lyrics/melody, in addition to its original assertion.)"""
 
     def fail_extract(path: str) -> RPEBundle:
         raise AssertionError(
-            "extract_rpe_from_file must not be called when no anchor needs a wired sensor"
+            "extract_rpe_from_file must not be called when no anchor needs the "
+            "shared RPEBundle extraction"
         )
 
     monkeypatch.setattr("svp_rpe.arrange.observe.extract_rpe_from_file", fail_extract)
@@ -1659,7 +2231,7 @@ def test_build_observation_report_skips_extraction_when_no_wired_sensor_anchors(
         package=_fake_package(),
         manifest=manifest,
         manifest_path=IDENTITY_MANIFEST,
-        artifact_bytes={},
+        artifact_bytes={"lyrics": _lyrics_artifact_bytes(), "melody": _melody_artifact_bytes()},
         audio_path=Path("unused.wav"),
         package_sha256="a" * 64,
         audio_sha256="b" * 64,
@@ -2323,27 +2895,36 @@ def test_observe_cli_extracts_from_a_byte_identical_audio_snapshot(
 def test_observe_cli_skips_snapshot_tempfile_when_no_wired_sensor_anchors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """PR #187 review round 13: a manifest with only a lyrics anchor (no
-    harmony/chord_sequence_json anchor at all) must not create the audio
-    snapshot tempfile — confirmed here by making `tempfile.mkstemp` fail —
-    and must not call `extract_rpe_from_file` either (round 12's gate).
-    `observe` must still succeed: nothing needs the audio's content, only its
-    already-computed sha256 for provenance.
+    """PR #187 review round 13: a manifest with only a `rhythm` anchor (no
+    harmony/structure/lyrics/melody anchor at all — `rhythm` has no wired
+    sensor regardless of `artifact_type`, per `_NO_SENSOR_INFO`) must not
+    create the audio snapshot tempfile — confirmed here by making
+    `tempfile.mkstemp` fail — and must not call `extract_rpe_from_file`
+    either (round 12's gate). `observe` must still succeed: nothing needs
+    the audio's content, only its already-computed sha256 for provenance.
+
+    WI0-a note: this fixture used to declare a `lyrics` anchor instead of
+    `rhythm`, back when lyrics had no wired sensor at all. Now that
+    lyrics/melody are wired (WI0-a) and their snapshot/extraction gate was
+    widened to match, a lyrics-only manifest DOES create the snapshot (see
+    `test_observe_cli_creates_snapshot_tempfile_for_lyrics_only_manifest`
+    below) — `rhythm` is the domain this test's "truly nothing is wired"
+    premise now needs.
 
     Built by hand-constructing a minimal `PerformancePackage` (matching
     work_id + `inputs.identity_manifest.sha256` to this manifest) rather than
     compiling one via `svprpe package`, since the existing arrangement specs
-    all request a harmony policy this lyrics-only manifest doesn't declare an
+    all request a harmony policy this rhythm-only manifest doesn't declare an
     anchor for."""
     (tmp_path / "identity").mkdir()
     source_bytes = b"source-audio-placeholder"
     (tmp_path / "source.wav").write_bytes(source_bytes)
-    lyrics_bytes = (FIXTURE_DIR / "identity" / "lyrics.txt").read_bytes()
-    (tmp_path / "identity" / "lyrics.txt").write_bytes(lyrics_bytes)
+    rhythm_bytes = _section_map_artifact_bytes(["intro"])
+    (tmp_path / "identity" / "rhythm.json").write_bytes(rhythm_bytes)
 
     manifest_data = {
         "schema_version": "identity-manifest/0.1",
-        "meta": {"work_id": "lyrics-only-work", "version": "0.1"},
+        "meta": {"work_id": "rhythm-only-work", "version": "0.1"},
         "source": {
             "locator": "source.wav",
             "sha256": hashlib.sha256(source_bytes).hexdigest(),
@@ -2351,12 +2932,12 @@ def test_observe_cli_skips_snapshot_tempfile_when_no_wired_sensor_anchors(
         },
         "anchors": [
             {
-                "id": "lyrics",
-                "domain": "lyrics",
-                "artifact": "identity/lyrics.txt",
-                "artifact_type": "lyrics_text",
-                "media_type": "text/plain",
-                "sha256": hashlib.sha256(lyrics_bytes).hexdigest(),
+                "id": "rhythm",
+                "domain": "rhythm",
+                "artifact": "identity/rhythm.json",
+                "artifact_type": "section_map",
+                "media_type": "application/json",
+                "sha256": hashlib.sha256(rhythm_bytes).hexdigest(),
                 "required": True,
             },
         ],
@@ -2368,7 +2949,7 @@ def test_observe_cli_skips_snapshot_tempfile_when_no_wired_sensor_anchors(
     manifest_bytes = manifest_path.read_bytes()
 
     package = PerformancePackage(
-        work_id="lyrics-only-work",
+        work_id="rhythm-only-work",
         generator="suno",
         generator_variant="standard",
         inputs={
@@ -2379,12 +2960,12 @@ def test_observe_cli_skips_snapshot_tempfile_when_no_wired_sensor_anchors(
             "device_profile": {"generator": "suno", "status": "not_found"},
         },
         # Round 15's anchor_id set cross-check requires anchor_statuses to
-        # cover exactly the manifest's anchors ("lyrics" here) — an
+        # cover exactly the manifest's anchors ("rhythm" here) — an
         # unrequested anchor's status shape, matching what
         # build_performance_package itself produces for one.
         anchor_statuses=[
             {
-                "anchor_id": "lyrics",
+                "anchor_id": "rhythm",
                 "requested_mode": None,
                 "allow": [],
                 "tolerance_profile": None,
@@ -2437,7 +3018,124 @@ def test_observe_cli_skips_snapshot_tempfile_when_no_wired_sensor_anchors(
 
     assert result.exit_code == 0, result.output
     report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert [anchor["anchor_id"] for anchor in report["anchors"]] == ["rhythm"]
+    assert report["anchors"][0]["determination"] == "no_sensor"
+    assert report["anchors"][0]["adherence_status"] == "not_observed"
+
+
+def test_observe_cli_creates_snapshot_tempfile_for_lyrics_only_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WI0-a companion/contrast case to the `rhythm`-only test above: now
+    that lyrics is wired, a lyrics-only manifest DOES read `audio_path`
+    (via `_transcribe_lyrics_for_observation`), so the round-1 TOCTOU
+    snapshot protection must engage for it too — confirmed by asserting the
+    audio-snapshot `tempfile.mkstemp(dir=...)` call actually happens.
+    `extract_rpe_from_file` (the harmony/structure shared-bundle path) must
+    still never be called, since lyrics doesn't use it. Neither optional
+    extra (`lyrics`/`pitch`) is installed in this environment, so the
+    report still ends up `no_sensor` — this test is about the snapshot
+    mechanism engaging, not about a real transcription."""
+    (tmp_path / "identity").mkdir()
+    source_bytes = b"source-audio-placeholder"
+    (tmp_path / "source.wav").write_bytes(source_bytes)
+    lyrics_bytes = (FIXTURE_DIR / "identity" / "lyrics.txt").read_bytes()
+    (tmp_path / "identity" / "lyrics.txt").write_bytes(lyrics_bytes)
+
+    manifest_data = {
+        "schema_version": "identity-manifest/0.1",
+        "meta": {"work_id": "lyrics-only-work", "version": "0.1"},
+        "source": {
+            "locator": "source.wav",
+            "sha256": hashlib.sha256(source_bytes).hexdigest(),
+            "rights_basis": "original",
+        },
+        "anchors": [
+            {
+                "id": "lyrics",
+                "domain": "lyrics",
+                "artifact": "identity/lyrics.txt",
+                "artifact_type": "lyrics_text",
+                "media_type": "text/plain",
+                "sha256": hashlib.sha256(lyrics_bytes).hexdigest(),
+                "required": True,
+            },
+        ],
+    }
+    manifest_path = tmp_path / "identity_manifest.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(manifest_data, sort_keys=False, allow_unicode=True), encoding="utf-8"
+    )
+    manifest_bytes = manifest_path.read_bytes()
+
+    package = PerformancePackage(
+        work_id="lyrics-only-work",
+        generator="suno",
+        generator_variant="standard",
+        inputs={
+            "identity_manifest": {"sha256": hashlib.sha256(manifest_bytes).hexdigest()},
+            "preservation_contract": {"sha256": "c" * 64},
+            "capability_profile": {"sha256": "d" * 64},
+            "derived_score": {"sha256": "e" * 64},
+            "device_profile": {"generator": "suno", "status": "not_found"},
+        },
+        anchor_statuses=[
+            {
+                "anchor_id": "lyrics",
+                "requested_mode": None,
+                "allow": [],
+                "tolerance_profile": None,
+                "delivery": {"channel": None, "status": "not_requested"},
+                "control": {"status": "unknown"},
+                "observation": {"status": "not_observed"},
+            }
+        ],
+    )
+    package_path = tmp_path / "performance_package.json"
+    package_path.write_bytes(package.model_dump_json(indent=2).encode("utf-8"))
+
+    snapshot_calls = {"n": 0}
+    original_mkstemp = tempfile.mkstemp
+
+    def counting_mkstemp(*args: Any, **kwargs: Any) -> Any:
+        if "dir" not in kwargs:
+            snapshot_calls["n"] += 1
+        return original_mkstemp(*args, **kwargs)
+
+    monkeypatch.setattr("tempfile.mkstemp", counting_mkstemp)
+
+    def fail_extract(path: str) -> RPEBundle:
+        raise AssertionError(
+            "extract_rpe_from_file must not be called for a lyrics-only manifest"
+        )
+
+    monkeypatch.setattr("svp_rpe.arrange.observe.extract_rpe_from_file", fail_extract)
+
+    audio_path = tmp_path / "fake.wav"
+    audio_path.write_bytes(b"unused-placeholder-audio-bytes")
+    report_path = tmp_path / "report.json"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "observe",
+            str(package_path),
+            str(audio_path),
+            "--manifest",
+            str(manifest_path),
+            "-o",
+            str(report_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert snapshot_calls["n"] == 1
+    report = json.loads(report_path.read_text(encoding="utf-8"))
     assert [anchor["anchor_id"] for anchor in report["anchors"]] == ["lyrics"]
+    # Neither the `lyrics` nor `pitch` optional extra is installed in this
+    # dev/CI environment, so the sensor gracefully degrades to no_sensor —
+    # the point of this test is that the snapshot mechanism engaged at all
+    # (`snapshot_calls["n"] == 1` above), not the resulting determination.
     assert report["anchors"][0]["determination"] == "no_sensor"
     assert report["anchors"][0]["adherence_status"] == "not_observed"
 

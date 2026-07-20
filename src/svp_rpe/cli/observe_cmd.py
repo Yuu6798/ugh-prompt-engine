@@ -161,6 +161,8 @@ def observe_cmd(
     from svp_rpe.arrange.observe import (
         build_observation_report,
         is_harmony_sensor_anchor,
+        is_lyrics_sensor_anchor,
+        is_melody_sensor_anchor,
         is_structure_sensor_anchor,
     )
     from svp_rpe.arrange.package import PerformancePackage
@@ -206,19 +208,22 @@ def observe_cmd(
     # malformed YAML, non-mapping, or schema-invalid content.
     try:
         # Collect only the anchors a wired sensor actually reads content for
-        # (PR #187 review round 11; widened 2026-07-20 to also cover the
-        # structure sensor) — every anchor's bytes are still read once and
-        # hash-verified regardless, but bytes for anchors outside this
-        # predicate (e.g. a large `audio_excerpt` reference) are discarded
-        # immediately rather than held in `artifact_bytes_by_id` for the
-        # whole observe run. Update both predicates here (and in observe.py,
-        # shared with `_observe_anchor`'s routing) if a future sensor needs
-        # another anchor's bytes.
+        # (PR #187 review round 11; widened 2026-07-19 for structure, and
+        # 2026-07-20/WI0-a for lyrics/melody) — every anchor's bytes are
+        # still read once and hash-verified regardless, but bytes for
+        # anchors outside this predicate (e.g. a large `audio_excerpt`
+        # reference) are discarded immediately rather than held in
+        # `artifact_bytes_by_id` for the whole observe run. Update all four
+        # predicates here (and in observe.py, shared with `_observe_anchor`'s
+        # routing) if a future sensor needs another anchor's bytes.
         loaded_manifest, artifact_bytes_by_id = parse_identity_manifest_with_artifacts(
             manifest_bytes,
             manifest_path,
             collect=lambda anchor: (
-                is_harmony_sensor_anchor(anchor) or is_structure_sensor_anchor(anchor)
+                is_harmony_sensor_anchor(anchor)
+                or is_structure_sensor_anchor(anchor)
+                or is_lyrics_sensor_anchor(anchor)
+                or is_melody_sensor_anchor(anchor)
             ),
         )
     except (IdentityManifestError, ValueError, ValidationError, yaml.YAMLError) as exc:
@@ -283,17 +288,23 @@ def observe_cmd(
     audio_sha256 = hashlib.sha256(audio_bytes).hexdigest()
     package_sha256 = hashlib.sha256(package_bytes).hexdigest()
 
-    # PR #187 review round 13: only build the snapshot tempfile when
-    # extraction will actually happen — the same predicate pair
-    # `build_observation_report` gates its own `extract_rpe_from_file` call
-    # on (round 12; widened 2026-07-20 for the structure sensor), so routing /
-    # extraction-gate / snapshot-gate all agree on a single source of truth
-    # (no anchor matching either predicate means nothing ever reads audio
-    # content, so the TOCTOU concern the snapshot exists for (round 1)
-    # doesn't arise — there's no "bytes actually measured" to keep in sync
-    # with the hashed bytes).
+    # PR #187 review round 13: only build the snapshot tempfile when audio
+    # content will actually be read — the same predicate set
+    # `build_observation_report`/`_observe_anchor` route on (round 12;
+    # widened 2026-07-19 for structure, 2026-07-20/WI0-a for lyrics/melody),
+    # so routing / extraction-gate / snapshot-gate all agree on a single
+    # source of truth (no anchor matching any predicate means nothing ever
+    # reads audio content, so the TOCTOU concern the snapshot exists for
+    # (round 1) doesn't arise — there's no "bytes actually measured" to keep
+    # in sync with the hashed bytes). Lyrics/melody read `audio_path`
+    # directly (not through `extract_rpe_from_file`/`bundle`) but the same
+    # TOCTOU concern applies to their file reads too, so they widen this
+    # gate exactly like structure did for the shared-bundle path.
     needs_extraction = any(
-        is_harmony_sensor_anchor(anchor) or is_structure_sensor_anchor(anchor)
+        is_harmony_sensor_anchor(anchor)
+        or is_structure_sensor_anchor(anchor)
+        or is_lyrics_sensor_anchor(anchor)
+        or is_melody_sensor_anchor(anchor)
         for anchor in loaded_manifest.anchors
     )
     snapshot_path: Optional[Path] = None
