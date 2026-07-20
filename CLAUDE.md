@@ -234,6 +234,7 @@ examples/                      # sample_input/ + expected_output/
 | [`docs/semantic_sensor_clap.md`](docs/semantic_sensor_clap.md) | CLAP を抽出段階の意味層センサーとして配線(`svprpe extract --clap-semantic`): SOURCE 音声を固定の意味軸バッテリー(`config/semantic_probe_axes.yaml`)に対し A/B `contrast_fit` で計測、`LearnedAudioAnnotations.semantic_axes`(schema_version 1.1)に隔離、post-hoc fixture 比較(生成物対象)からの拡張として抽出時 SOURCE 音声を読む真の意味層センシングを実現。軸校正(2026-07-04 実推論・`scripts/calibrate_semantic_axes.py`): vocal/energy 実証・brightness は bpm 交絡・acousticness/warmth 探索扱い、有効帯域=実制作音楽 |
 | [`docs/lyrics_transcription_sensor.md`](docs/lyrics_transcription_sensor.md) | 歌詞転写センサー: faster-whisper + 既存 Demucs vocals stem で歌詞を機械化(CLAP の連続値 grip と相補的な記号列センサー)。入力側`svprpe extract --lyrics`→`LearnedAudioAnnotations.lyrics_transcription`(schema_version 1.2)、出力側`svprpe lyrics-adherence`(`eval/lyrics_match.py`, learned import なし・計器であって verdict なし)。fake-backend のみ、実推論は未計測 |
 | [`docs/arrangement_identity_planning.md`](docs/arrangement_identity_planning.md) | Arrangement Identity Track 計画: AR0–AR4、sidecar-first（D1）、M1=意味核とキーの Score-level identity preservation、artifact 配送と生成後観測への段階分離 |
+| [`docs/work_identity_roadmap.md`](docs/work_identity_roadmap.md) | 同一性判定トラック（WI0–WI4）: 作品同一性を宣言的契約×弁別判定×人間校正×被覆正直会計で実測定義する計画。melody/lyrics センサー→D-1 閾値→弁別ハーネス→identity proxy v0→制度化 |
 
 ## ドキュメント管理ポリシー
 

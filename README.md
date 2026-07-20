@@ -193,6 +193,7 @@ svprpe --help
 - [Arrangement Identity Planning](docs/arrangement_identity_planning.md) — AR0–AR4 plan for arrangement while preserving work identity: sidecar-first policy, deterministic score derivation,
   identity artifacts, backend delivery, and post-generation observation. M1 is limited to Score-level preservation of `semantic.core` and `physical.key`;
   auditory identity remains a later milestone.
+- [Work Identity Roadmap](docs/work_identity_roadmap.md) — WI0–WI4 identity-judgment track: defines work identity via declarative contracts × discriminability judgment × human calibration × honest coverage accounting; melody/lyrics sensors → D-1 thresholds → discriminability harness → identity proxy v0 → institutionalization
 - [AGENTS.md](AGENTS.md) — Claude × Codex orchestration protocol (Task Brief / Completion Summary templates)
 
 ## License
