@@ -60,6 +60,28 @@ preservation の検証を実行計画に落とし、「測れるが判定でき�
   転写精度は実測して記録し、WI2 の軸集合に入れるかは実測で決める（精度不足なら
   not_observed のまま除外＝それも記録）
 
+**2026-07-20 実測完了**: WI0-a（センサー配線、#198）に続き WI0-b（実推論初計測）を
+完了した。決定論 synth performer 出力（faithful take, transpose 0）に対する
+basic-pitch 実推論で `pitch_lcs_ratio = 0.6 < 0.8`（事前登録閾値）→ **melody 軸は
+WI2 v0 の軸集合から除外**する（被覆明細では `not_observed` 扱い）。原因は
+センサー品質ではなく比較設計（全ミックスをポリフォニックに採譜 vs 単旋律正典を
+分離層なしで直接比較）— 再入条件は旋律分離層の導入後の再計測。lyrics は
+instrumental 入力で faster-whisper が `no_speech_prob` 0.92–0.94 を自己申告し
+つつ abstain せずハルシネーション文を emit する境界挙動を記録した（精度実測は
+歌入り + 歌詞 pin 音源が無く素材律速で defer）。詳細・生値・判定根拠:
+[`examples/arrangement/midnight_signal/observed/wi0b_synth/results.md`](../examples/arrangement/midnight_signal/observed/wi0b_synth/results.md)。
+**WI2/WI3 への含意**: v0 の軸集合に melody は入らない（被覆明細で `not_observed`
+として明示する）。
+
+**follow-up（PR #199 Codex P2, 2026-07-20）**: extract 証跡（`svprpe extract --lyrics`
+出力、`RPEBundle` スキーマ）は入力音声の hash 欄を持たないため、pin 済み wav との
+完全な機械的紐付けができない — attestation（同一セッション内の手順連続性）と
+決定論部分の実行時機械接地（`tests/test_wi0b_synth_observed_fixture.py` の slow
+テスト）で代替した（詳細:
+[`wi0b_synth/results.md`](../examples/arrangement/midnight_signal/observed/wi0b_synth/results.md)
+§5）。`RPEBundle` に `source_audio_sha256` 欄を追加してこの限界を解消する件は
+未着手 — WI1 以降で他の schema 変更とまとめて検討する。
+
 ### WI1 — 逸脱分布と D-1 閾値 Design Memo
 
 - MusicGen 無人バッチ n=20（canonical 規律・事前登録・fresh-process sha スポット

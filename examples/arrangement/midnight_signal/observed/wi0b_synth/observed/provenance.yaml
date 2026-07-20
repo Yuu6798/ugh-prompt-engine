@@ -1,0 +1,77 @@
+# WI0-b 観測証跡の機械可読 provenance サイドカー（PR #199 Codex P2 対応:
+# "Link the extract evidence to the pinned audio hash"）。
+#
+# 目的: results.md §1/§4 が散文で主張している「melody 観測 / lyrics smoke 観測 /
+# lyrics_anchor_extracted / wi0b_lyrics_extract は同一 wav（決定論レンダリング,
+# sha256 pin 済み）に対し 2026-07-20 相対パス再実行セッション（commands.md
+# "Re-run" 節・commit 3c52b22）で生成された」という結び付けを、
+# `tests/test_wi0b_synth_observed_fixture.py` から機械的に検証可能にする。
+# 新規の事実主張は含まない — results.md / commands.md の既存記述の転記。
+format: "wi0b-observation-provenance/0.1"
+recorded_at_utc: "2026-07-20T17:25:37Z"  # `date -u` 実測
+
+# 決定論レンダリング wav（`render_faithful.py` の出力、非コミット）の sha256。
+# fresh-process 2 回実行で完全一致（results.md §1「決定論確認」参照）。
+# 下記 observed_files の全エントリは、この 1 本の wav に対して生成されている。
+source_audio_sha256: "4d8c83f67c1b2441e09fa84debdc47ec0131c1a13ee1b813b0ef55e874903e90"
+
+# 生成セッション: results.md §4 / commands.md "Re-run" 節に記載の相対パス再実行
+# （2026-07-20T17:08:23Z 実測開始）。同一コンテナ・同一 wav
+# （sha256 が source_audio_sha256 と一致することを再確認済み）に対し、
+# `svprpe observe`（melody / lyrics smoke）と `svprpe extract --lyrics` を
+# 相対パス引数で再実行した一連の生出力。
+generation_session: "2026-07-20 relative-path re-run (PR #199 Codex P2, commit 3c52b22)"
+
+observed_files:
+  - path: "wi0b_melody_observation.json"
+    sha256: "05ff335ec5bf5f618491652072984175ee6f72788e4b298b368c1d3e0abec554"
+    generated_by: "svprpe observe (melody anchor manifest)"
+    source_audio_sha256_ref: "generated_artifact.sha256 field inside this file"
+    input_audio_sha256_basis: "mechanical (generated_artifact.sha256 in-file)"
+    note: >-
+      commands.md "Re-run" 節 手順 3 の生出力（相対パス
+      `examples/arrangement/midnight_signal/observed/wi0b_synth/faithful_take.wav`）。
+      同ファイル内 `generated_artifact.sha256` が source_audio_sha256 と一致する
+      ことを機械的に突合する（本 provenance の中核チェック）。
+  - path: "wi0b_lyrics_smoke_observation.json"
+    sha256: "e8959fc64d9261ad530d066b8d5df5e4d2fef09df8c302b7233d24ddc31d10b2"
+    generated_by: "svprpe observe (lyrics anchor manifest, same package/manifest/wav as melody)"
+    source_audio_sha256_ref: "generated_artifact.sha256 field inside this file"
+    input_audio_sha256_basis: "mechanical (generated_artifact.sha256 in-file)"
+    note: >-
+      commands.md "Re-run" 節 手順 4 の生出力。melody 観測と同一 wav・同一セッション
+      （手順 3 の直後）。
+  - path: "lyrics_anchor_extracted.json"
+    sha256: "c864bb7c033b6cebc2451fed5cad228065b09641524c8396869cd8a13c81269b"
+    generated_by: "manual verbatim excerpt of the lyrics anchor from wi0b_lyrics_smoke_observation.json"
+    source_audio_sha256_ref: "derived from wi0b_lyrics_smoke_observation.json (transitively same wav)"
+    note: >-
+      独立生成ではなく wi0b_lyrics_smoke_observation.json の `anchors[lyrics_id=lyrics]`
+      要素の逐語抜粋（`tests/test_wi0b_synth_observed_fixture.py::
+      test_lyrics_anchor_extracted_is_a_verbatim_single_anchor_excerpt` が
+      親 report との完全一致を固定）。sha256 は抜粋ファイル自体のもの。
+  - path: "wi0b_lyrics_extract.json"
+    sha256: "3e2380f63db3d6807cd70851061ffce5a4aaa8a3fe5c4fcc72c4500fab1ec56b"
+    generated_by: "svprpe extract --lyrics"
+    source_audio_sha256_ref: "4d8c83f67c1b2441e09fa84debdc47ec0131c1a13ee1b813b0ef55e874903e90"
+    input_audio_sha256_basis: >-
+      same-session attestation (RPEBundle schema carries no input hash field;
+      sequencing evidence in commands.md Re-run section)
+    note: >-
+      commands.md "Re-run" 節 手順 5 の生出力（no_speech_prob / language /
+      language_probability の一次証跡、results.md §3 の主張根拠）。
+      RPEBundle スキーマは audio_file にパス（本ファイルの `audio_file` が
+      GENERATED_ARTIFACT_RELATIVE_PATH と一致することは既存テストで固定
+      済み）のみを記録し sha256 は持たないため、この 1 本単独では
+      source_audio_sha256 との機械的突合はできない。上記
+      source_audio_sha256_ref は source_audio_sha256 と同値を明示したもので、
+      根拠は commands.md 手順 3〜5 の連続実行ログ（本 provenance の
+      generation_session フィールド）に基づく attestation（同一セッション内
+      での手順連続性からの断定）であり、他 3 エントリのようなファイル内
+      sha256 フィールドとの機械照合ではない — 根拠種別は
+      input_audio_sha256_basis を参照。
+
+verification:
+  - "source_audio_sha256 == wi0b_melody_observation.json[generated_artifact][sha256]"
+  - "source_audio_sha256 == wi0b_lyrics_smoke_observation.json[generated_artifact][sha256]"
+  - "各 observed_files[].sha256 == 対応する committed ファイルの実 sha256（stale 差し替え検出）"
