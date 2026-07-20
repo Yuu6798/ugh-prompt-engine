@@ -17,7 +17,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import pytest
 import yaml
@@ -2452,6 +2452,208 @@ def test_build_observation_report_skips_extraction_when_no_wired_sensor_anchors(
     assert [anchor.anchor_id for anchor in report.anchors] == ["lyrics", "melody"]
     assert all(anchor.determination == "no_sensor" for anchor in report.anchors)
     assert all(anchor.adherence_status == "not_observed" for anchor in report.anchors)
+
+
+# --- 4b. Codex P2 (PR #198 review): learned sensor outputs cached per report ------
+
+
+def _manifest_with_duplicate_lyrics_and_melody_anchors() -> IdentityManifest:
+    """`_minimal_manifest`, but with a second lyrics_text anchor (``lyrics2``)
+    and a second note_events_json anchor (``melody2``) added, and the
+    harmony anchor dropped (out of scope for this test — keeps the shared
+    `RPEBundle` extraction gate out of the picture entirely). Both
+    duplicates point at the exact same artifact bytes as their originals
+    (a manifest is free to declare more than one anchor of the same
+    artifact_type; nothing requires distinct content)."""
+    manifest_data = _minimal_manifest().model_dump(mode="json")
+    anchors = [a for a in manifest_data["anchors"] if a["domain"] != "harmony"]
+    lyrics_anchor = next(a for a in anchors if a["id"] == "lyrics")
+    melody_anchor = next(a for a in anchors if a["id"] == "melody")
+    duplicate_lyrics = dict(lyrics_anchor, id="lyrics2")
+    duplicate_melody = dict(melody_anchor, id="melody2")
+    manifest_data["anchors"] = anchors + [duplicate_lyrics, duplicate_melody]
+    return IdentityManifest.model_validate(manifest_data)
+
+
+def test_build_observation_report_shares_lyrics_and_melody_inference_across_anchors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex P2 (PR #198 review): a manifest declaring more than one
+    lyrics_text/note_events_json anchor must still call
+    `_transcribe_lyrics_for_observation` / `_extract_melody_for_observation`
+    at most once per report — the memoized result is shared across every
+    matching anchor, the same "per report, not per anchor" discipline the
+    shared `RPEBundle` extraction already follows for the rule-based
+    harmony/structure sensors
+    (`test_build_observation_report_shares_a_single_extraction_across_anchors`).
+    """
+    lyrics_calls = {"n": 0}
+    melody_calls = {"n": 0}
+
+    def fake_transcribe(audio_path: Path) -> tuple[Optional[str], Optional[str]]:
+        lyrics_calls["n"] += 1
+        return (FIXTURE_DIR / "identity" / "lyrics.txt").read_text(encoding="utf-8"), None
+
+    def fake_extract_melody(audio_path: Path) -> tuple[Optional[list[int]], Optional[str]]:
+        melody_calls["n"] += 1
+        return [60, 62, 64], None
+
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._transcribe_lyrics_for_observation", fake_transcribe
+    )
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._extract_melody_for_observation", fake_extract_melody
+    )
+
+    manifest = _manifest_with_duplicate_lyrics_and_melody_anchors()
+    report = build_observation_report(
+        package=_fake_package(),
+        manifest=manifest,
+        manifest_path=IDENTITY_MANIFEST,
+        artifact_bytes={
+            "lyrics": _lyrics_artifact_bytes(),
+            "lyrics2": _lyrics_artifact_bytes(),
+            "melody": _melody_artifact_bytes(),
+            "melody2": _melody_artifact_bytes(),
+        },
+        audio_path=Path("unused.wav"),
+        package_sha256="a" * 64,
+        audio_sha256="b" * 64,
+        generated_artifact_path="unused.wav",
+    )
+
+    # (a) the underlying learned helper is called exactly once per report,
+    # not once per matching anchor.
+    assert lyrics_calls["n"] == 1
+    assert melody_calls["n"] == 1
+
+    # (b) both anchors of the same artifact_type receive the identical
+    # observed result (measurements/determination/adherence all match).
+    lyrics_observations = [a for a in report.anchors if a.anchor_id in ("lyrics", "lyrics2")]
+    assert len(lyrics_observations) == 2
+    assert lyrics_observations[0].measurements == lyrics_observations[1].measurements
+    assert lyrics_observations[0].determination == lyrics_observations[1].determination
+    assert lyrics_observations[0].adherence_status == lyrics_observations[1].adherence_status
+    assert lyrics_observations[0].determination == "exact_match"
+
+    melody_observations = [a for a in report.anchors if a.anchor_id in ("melody", "melody2")]
+    assert len(melody_observations) == 2
+    assert melody_observations[0].measurements == melody_observations[1].measurements
+    assert melody_observations[0].determination == melody_observations[1].determination
+    assert melody_observations[0].adherence_status == melody_observations[1].adherence_status
+
+
+def test_build_observation_report_shares_lyrics_and_melody_no_sensor_across_anchors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex P2 (PR #198 review): the memoized-per-report cache must also
+    cover the *failure* branch — when the optional `lyrics`/`pitch` extras
+    are unavailable, the dependency probe still runs at most once per
+    report (not once per anchor), and every matching anchor degrades to
+    `no_sensor` sharing the same reason string."""
+    lyrics_calls = {"n": 0}
+    melody_calls = {"n": 0}
+
+    def fake_transcribe(audio_path: Path) -> tuple[Optional[str], Optional[str]]:
+        lyrics_calls["n"] += 1
+        return None, "faster_whisper is not installed (fake)"
+
+    def fake_extract_melody(audio_path: Path) -> tuple[Optional[list[int]], Optional[str]]:
+        melody_calls["n"] += 1
+        return None, "basic_pitch is not installed (fake)"
+
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._transcribe_lyrics_for_observation", fake_transcribe
+    )
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._extract_melody_for_observation", fake_extract_melody
+    )
+
+    manifest = _manifest_with_duplicate_lyrics_and_melody_anchors()
+    report = build_observation_report(
+        package=_fake_package(),
+        manifest=manifest,
+        manifest_path=IDENTITY_MANIFEST,
+        artifact_bytes={
+            "lyrics": _lyrics_artifact_bytes(),
+            "lyrics2": _lyrics_artifact_bytes(),
+            "melody": _melody_artifact_bytes(),
+            "melody2": _melody_artifact_bytes(),
+        },
+        audio_path=Path("unused.wav"),
+        package_sha256="a" * 64,
+        audio_sha256="b" * 64,
+        generated_artifact_path="unused.wav",
+    )
+
+    # (c) dependency-missing case: probe runs once, both anchors of each
+    # artifact_type still end up no_sensor (not repeated once per anchor).
+    assert lyrics_calls["n"] == 1
+    assert melody_calls["n"] == 1
+    assert all(anchor.determination == "no_sensor" for anchor in report.anchors)
+    assert all(anchor.adherence_status == "not_observed" for anchor in report.anchors)
+    lyrics_reasons = {
+        a.sensor.reason for a in report.anchors if a.anchor_id in ("lyrics", "lyrics2")
+    }
+    assert lyrics_reasons == {"faster_whisper is not installed (fake)"}
+    melody_reasons = {
+        a.sensor.reason for a in report.anchors if a.anchor_id in ("melody", "melody2")
+    }
+    assert melody_reasons == {"basic_pitch is not installed (fake)"}
+
+
+def test_build_observation_report_lyrics_melody_helpers_not_called_without_matching_anchors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex P2 (PR #198 review) requires the per-report cache to stay
+    lazy: if the manifest has no lyrics_text/note_events_json anchor at
+    all, the underlying learned-inference helpers must never be called —
+    same "no matching anchor, no work" discipline the shared `RPEBundle`
+    extraction gate already enforces
+    (`test_build_observation_report_skips_extraction_when_no_wired_sensor_anchors`).
+    """
+
+    def fail_transcribe(audio_path: Path) -> tuple[Optional[str], Optional[str]]:
+        raise AssertionError(
+            "_transcribe_lyrics_for_observation must not be called when no lyrics anchor exists"
+        )
+
+    def fail_extract_melody(audio_path: Path) -> tuple[Optional[list[int]], Optional[str]]:
+        raise AssertionError(
+            "_extract_melody_for_observation must not be called when no melody anchor exists"
+        )
+
+    def fake_extract(path: str) -> RPEBundle:
+        return _bundle_with_chords(CANONICAL_PROGRESSION)
+
+    monkeypatch.setattr("svp_rpe.arrange.observe.extract_rpe_from_file", fake_extract)
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._transcribe_lyrics_for_observation", fail_transcribe
+    )
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._extract_melody_for_observation", fail_extract_melody
+    )
+
+    manifest_data = _minimal_manifest().model_dump(mode="json")
+    manifest_data["anchors"] = [
+        anchor_data
+        for anchor_data in manifest_data["anchors"]
+        if anchor_data["domain"] not in ("lyrics", "melody")
+    ]
+    manifest = IdentityManifest.model_validate(manifest_data)
+
+    report = build_observation_report(
+        package=_fake_package(),
+        manifest=manifest,
+        manifest_path=IDENTITY_MANIFEST,
+        artifact_bytes={"harmony": _chord_artifact_bytes(CANONICAL_PROGRESSION)},
+        audio_path=Path("unused.wav"),
+        package_sha256="a" * 64,
+        audio_sha256="b" * 64,
+        generated_artifact_path="unused.wav",
+    )
+
+    assert [anchor.anchor_id for anchor in report.anchors] == ["harmony"]
 
 
 # --- 5. CLI D-3 provenance chain: negative paths (no audio needed — fail first) ----

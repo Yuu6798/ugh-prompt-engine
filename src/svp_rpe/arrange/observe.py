@@ -817,7 +817,22 @@ def _observe_lyrics(
     work_id: str,
     artifact_bytes: bytes,
     audio_path: Path,
+    transcription: Optional[tuple[Optional[str], Optional[str]]] = None,
 ) -> AnchorObservation:
+    """``transcription`` (Codex P2, PR #198 review): the caller-memoized
+    ``_transcribe_lyrics_for_observation`` result, shared across every
+    lyrics_text anchor in one report (``build_observation_report`` computes
+    it at most once and passes the same tuple to every lyrics anchor via
+    ``_observe_anchor``'s ``lyrics_transcription`` parameter) — a manifest
+    can legally declare more than one lyrics anchor, and re-running
+    faster-whisper/Demucs once per anchor would repeat the same expensive,
+    dependency-gated call against the same ``audio_path`` for an identical
+    outcome. ``None`` (the default) means "no precomputed result" and falls
+    back to calling ``_transcribe_lyrics_for_observation`` directly — this
+    keeps the function callable standalone (as the existing single-anchor
+    tests in this module already do) without requiring every caller to
+    precompute.
+    """
     # Resolved only for error-message display — never read here, same
     # contract `_observe_harmony`/`_observe_structure` follow for their own
     # artifacts.
@@ -832,7 +847,9 @@ def _observe_lyrics(
         ) from exc
 
     sensor_name = "lyrics_transcription"
-    transcribed_text, reason = _transcribe_lyrics_for_observation(audio_path)
+    if transcription is None:
+        transcription = _transcribe_lyrics_for_observation(audio_path)
+    transcribed_text, reason = transcription
     if transcribed_text is None:
         return AnchorObservation(
             anchor_id=anchor.id,
@@ -1125,14 +1142,22 @@ def _observe_melody(
     work_id: str,
     artifact_bytes: bytes,
     audio_path: Path,
+    note_events: Optional[tuple[Optional[list[int]], Optional[str]]] = None,
 ) -> AnchorObservation:
+    """``note_events`` (Codex P2, PR #198 review): the caller-memoized
+    ``_extract_melody_for_observation`` result, shared across every
+    note_events_json anchor in one report — same rationale and default-None
+    fallback shape as ``_observe_lyrics``'s ``transcription`` parameter (see
+    that docstring)."""
     artifact_path = _resolve_confined(
         anchor.artifact, manifest_dir, work_id=work_id, target=f"anchor '{anchor.id}'"
     )
     canonical_midi = _load_note_events_artifact(artifact_bytes, artifact_path=artifact_path)
     sensor_name = "note_events"
 
-    observed_midi, reason = _extract_melody_for_observation(audio_path)
+    if note_events is None:
+        note_events = _extract_melody_for_observation(audio_path)
+    observed_midi, reason = note_events
     if observed_midi is None:
         return AnchorObservation(
             anchor_id=anchor.id,
@@ -1350,6 +1375,8 @@ def _observe_anchor(
     bundle: Optional[RPEBundle],
     artifact_bytes_by_id: dict[str, bytes],
     audio_path: Optional[Path] = None,
+    lyrics_transcription: Optional[tuple[Optional[str], Optional[str]]] = None,
+    melody_note_events: Optional[tuple[Optional[list[int]], Optional[str]]] = None,
 ) -> AnchorObservation:
     if is_harmony_sensor_anchor(anchor):
         # `build_observation_report` only extracts (and passes a non-None
@@ -1386,6 +1413,7 @@ def _observe_anchor(
             work_id=work_id,
             artifact_bytes=artifact_bytes_by_id[anchor.id],
             audio_path=audio_path,
+            transcription=lyrics_transcription,
         )
     if is_melody_sensor_anchor(anchor):
         assert audio_path is not None
@@ -1395,6 +1423,7 @@ def _observe_anchor(
             work_id=work_id,
             artifact_bytes=artifact_bytes_by_id[anchor.id],
             audio_path=audio_path,
+            note_events=melody_note_events,
         )
     return _observe_unavailable(anchor)
 
@@ -1436,6 +1465,17 @@ def build_observation_report(
     常に ``_observe_anchor`` へ渡す。実際に転写/推論が走るのは manifest に
     lyrics/melody anchor が存在し、かつ `_observe_anchor` がそれへ routing
     した場合のみ（余計な重処理をしない — WI0-a 設計契約 E）。
+
+    lyrics/melody の重い learned 推論も、rule-based ``bundle`` 抽出と同じ
+    「report あたり 1 回」の共有規律に従う（Codex P2, PR #198 review）:
+    manifest が同一 artifact_type の anchor を複数宣言した場合（例えば
+    lyrics_text anchor が 2 つ）でも、``_transcribe_lyrics_for_observation``
+    / ``_extract_melody_for_observation`` はそれぞれ最大 1 回しか呼ばない —
+    結果（成功時の値、および依存欠如時の ``(None, reason)`` の両方）を
+    memoize して該当する全 anchor へ配る。遅延評価は維持する: 該当
+    artifact_type の anchor が manifest に 1 つも無ければ、対応する helper
+    を一切呼ばない（``needs_extraction`` が harmony/structure に対して
+    行っているのと同じゲート方式）。
     """
     manifest_dir = Path(manifest_path).resolve().parent
     needs_extraction = any(
@@ -1443,6 +1483,16 @@ def build_observation_report(
         for anchor in manifest.anchors
     )
     bundle = extract_rpe_from_file(str(audio_path)) if needs_extraction else None
+
+    needs_lyrics = any(is_lyrics_sensor_anchor(anchor) for anchor in manifest.anchors)
+    lyrics_transcription = (
+        _transcribe_lyrics_for_observation(audio_path) if needs_lyrics else None
+    )
+    needs_melody = any(is_melody_sensor_anchor(anchor) for anchor in manifest.anchors)
+    melody_note_events = (
+        _extract_melody_for_observation(audio_path) if needs_melody else None
+    )
+
     anchors = [
         _observe_anchor(
             anchor,
@@ -1451,6 +1501,8 @@ def build_observation_report(
             bundle=bundle,
             artifact_bytes_by_id=artifact_bytes,
             audio_path=audio_path,
+            lyrics_transcription=lyrics_transcription,
+            melody_note_events=melody_note_events,
         )
         for anchor in manifest.anchors
     ]
