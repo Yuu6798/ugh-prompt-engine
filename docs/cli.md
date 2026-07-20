@@ -645,6 +645,14 @@ common subsequence of the two pitch sequences, over `canonical_length`) /
 adjacent pair to diff) / `observed_head` (first 8 observed MIDI values). The D-1
 identity gate is `pitch_sequence_exact_match` alone.
 
+**Known limitation (WI0-b, 2026-07-20 real-inference measurement)**: basic-pitch
+transcribes the full mix polyphonically with no melody-separation layer, so
+comparing it against a monophonic canonical `note-events/0.1` sequence reads low
+even on a deterministic, faithfully-rendered take (`pitch_lcs_ratio = 0.6` on the
+`midnight_signal` fixture, below the `>= 0.8` preregistered v0 adoption threshold —
+see `examples/arrangement/midnight_signal/observed/wi0b_synth/results.md`). This is
+the comparison design's blind spot, not necessarily sensor error.
+
 Both lyrics and melody degrade gracefully to the `no_sensor` case above when their
 optional extra isn't installed — the adapter's own `LearnedModelUnavailable` (and,
 for lyrics' default vocal-separation step, `SeparatorNotAvailableError` if Demucs

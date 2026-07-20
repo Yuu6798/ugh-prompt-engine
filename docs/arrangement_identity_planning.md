@@ -394,7 +394,7 @@ enforce、D-3 連鎖は `svprpe verify` で再検証可能）。音源 4 本は�
 | AR2-3 | structure anchor policy | **完了（2026-07-19、AR2-3 Design Memo (Fable)）**: section-map/0.2（stable id 付き section map、0.1 と並置）+ `section_ref` 解決（0.2 anchor 存在時のみ fail-fast 検証、それ以外は opaque 後方互換）+ structure 変形語彙 3 語追加（section_insertion/section_omission/section_repetition、実 form 実測由来）。閾値分類は範囲外のまま |
 | AR3-1 | InputCapabilityProfile | 完了 (#180, #181) |
 | AR3-2 | PerformancePackage compiler + 縦切り E2E fixture | 実装済み（E2E fixture 追加 2026-07-17） |
-| AR4 | generated-output identity observation | 計器配線済み。harmony + structure を実測（decisive synth E2E + 2026-07-19 MusicGen 12s n=2 + 同日 MusicGen 30s form n=2）。判定閾値は未定（D-1）。実 Suno 5.5 初観測あり（非 canonical 探索 n=2×2・2026-07-19・`observed/suno/`）。**WI0-a（2026-07-20）**: lyrics/melody センサーを配線（synthetic 検証のみ・実測は WI0-b） |
+| AR4 | generated-output identity observation | 計器配線済み。harmony + structure を実測（decisive synth E2E + 2026-07-19 MusicGen 12s n=2 + 同日 MusicGen 30s form n=2）。判定閾値は未定（D-1）。実 Suno 5.5 初観測あり（非 canonical 探索 n=2×2・2026-07-19・`observed/suno/`）。**WI0-a（2026-07-20）**: lyrics/melody センサーを配線 + **WI0-b（2026-07-20）実推論初実測**（melody は `pitch_lcs_ratio=0.6` で WI2 v0 除外・lyrics は instrumental 境界のハルシネーション記録、`observed/wi0b_synth/`） |
 
 2026-07-17: bundle/report に `content_digest`（内容指紋）と、
 `CompilationReport` 限定の `invocation_provenance.compiler`（実行環境の監査記録、

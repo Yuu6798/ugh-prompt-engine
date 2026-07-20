@@ -1,0 +1,90 @@
+{
+  "schema_version": "observation-report/0.1",
+  "work_id": "midnight-signal",
+  "package_sha256": "d76ff2d4db744354320ef8e0a38671e86a3d34e24a80e2bb7024083cf8bf5d7f",
+  "generated_artifact": {
+    "path": "/tmp/claude-0/-home-user-ugh-prompt-engine/d2c3ae3d-d806-5dac-b97e-80e503d72ffe/scratchpad/wi0b_run/faithful_take.wav",
+    "sha256": "4d8c83f67c1b2441e09fa84debdc47ec0131c1a13ee1b813b0ef55e874903e90"
+  },
+  "anchors": [
+    {
+      "anchor_id": "lyrics",
+      "domain": "lyrics",
+      "sensor": {
+        "name": "lyrics_transcription",
+        "available": false,
+        "reason": "faster_whisper is not installed. Install it via the optional `lyrics` extra:\n    pip install -e \".[lyrics]\""
+      },
+      "measurements": {},
+      "adherence_status": "not_observed",
+      "determination": "no_sensor",
+      "note": null
+    },
+    {
+      "anchor_id": "melody",
+      "domain": "melody",
+      "sensor": {
+        "name": "note_events",
+        "available": true,
+        "reason": null
+      },
+      "measurements": {
+        "canonical_length": 10,
+        "observed_length": 108,
+        "pitch_sequence_exact_match": false,
+        "pitch_lcs_ratio": 0.6,
+        "interval_lcs_ratio": 0.4444,
+        "observed_head": [
+          36,
+          36,
+          55,
+          51,
+          48,
+          51,
+          48,
+          55
+        ]
+      },
+      "adherence_status": "not_observed",
+      "determination": "deferred",
+      "note": "observed MIDI pitch sequence does not match the canonical sequence exactly (changed_within_policy/changed_outside_policy classification is out of scope for this instrument and deferred to a future threshold Design Memo, D-1)."
+    },
+    {
+      "anchor_id": "harmony",
+      "domain": "harmony",
+      "sensor": {
+        "name": "chord_sequence_match",
+        "available": true,
+        "reason": null
+      },
+      "measurements": {
+        "chord_sequence_match_rate": 0.0833,
+        "repeated_chord_sequence_match_rate": 0.0,
+        "canonical_length": 4,
+        "observed_length": 24,
+        "collapsed_observed_length": 10,
+        "matched_cycle_prefix_length": 7,
+        "collapsed_match_fraction": 0.7,
+        "unmatched_tail_length": 3,
+        "unmatched_tail_head": [
+          [
+            "C",
+            "major"
+          ],
+          [
+            "C",
+            "minor"
+          ],
+          [
+            "C",
+            "major"
+          ]
+        ],
+        "full_cycles": 2
+      },
+      "adherence_status": "not_observed",
+      "determination": "deferred",
+      "note": "collapsed observed prefix matches 2 full canonical cycle(s); 3 trailing entries fall outside the canonical alternation. changed_within_policy/changed_outside_policy classification is out of scope for this instrument and deferred to a future threshold Design Memo (D-1)."
+    }
+  ]
+}

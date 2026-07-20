@@ -1,6 +1,9 @@
 # 歌詞転写センサー (Lyrics Transcription Sensor)
 
-Status: 実装済み（fake-backend テストのみ、実推論結果は未計測 — §7 参照）
+Status: 実装済み。fake-backend テストに加え、2026-07-05 スモーク（§8）と
+2026-07-20 WI0-b（§9、identity anchor observe 経由の実 E2E・vocals 分離込み）で
+実推論を初計測済み。実ボーカル（歌入り）音源での精度実測は引き続き素材律速で
+未計測（§7 参照）
 Scope: `rpe/learned/lyrics_adapter.py`（faster-whisper アダプタ）、
 `eval/lyrics_match.py`（照合計器）、`svprpe extract --lyrics` /
 `svprpe lyrics-adherence` CLI
@@ -143,8 +146,37 @@ Section 2 を参照。
 - **隔離の実測確認**: `extract --lyrics` の出力 JSON で、ハルシネーション
   テキストが `learned_annotations` の外（`SemanticRPE`/`SVP` 等）に
   一切リークしないことを確認。
-- **未検証（環境律速）**: vocals stem 分離経由の実 E2E は本検証環境に
-  ffmpeg が無く未実施（`--lyrics-no-separate` のフルミックス経路のみ
-  実推論確認）。分離は既存 `io/source_separator` の再利用であり、
-  そちらは `docs/coverage.md` 記載のローカル Demucs スモークで検証済み。
-  歌入り実音源（Drive 保管）での分離込み検証は実音源律速の follow-up。
+- **未検証（環境律速）→ 2026-07-20 WI0-b で解消**: vocals stem 分離経由の実 E2E は
+  当時の検証環境に ffmpeg が無く未実施だった（`--lyrics-no-separate` のフルミックス
+  経路のみ実推論確認）。2026-07-20 の WI0-b（§9）で `pip install -e ".[lyrics]"`
+  環境を再構築し、デフォルトの `htdemucs_ft` 分離込みで実 E2E を実施した
+  （instrumental 入力のため精度実測ではなく境界挙動の記録）。歌入り実音源
+  （Drive 保管）での分離込み**精度**検証は引き続き実音源律速の follow-up。
+
+## 9. 実推論結果（2026-07-20 WI0-b: identity anchor observe 経由の実 E2E）
+
+WI0-b（[`docs/work_identity_roadmap.md`](work_identity_roadmap.md) WI0 節）の
+一環として、`svprpe observe` の lyrics anchor 経由で faster-whisper `small`
+（int8 / CPU）+ Demucs `htdemucs_ft`（デフォルトの vocals 分離、
+`--lyrics-no-separate` は未使用）の実 E2E を実施した。fixture:
+[`examples/arrangement/midnight_signal/observed/wi0b_synth/`](../examples/arrangement/midnight_signal/observed/wi0b_synth/results.md)。
+
+- **入力**: 決定論 synth performer が生成した instrumental な faithful take
+  （歌なし。`composition_score.yaml` + `render_faithful.py` から再生成可能、
+  sha256 pin あり）
+- **`no_speech_prob` は 0.92–0.94 の高値域を正しく自己申告**（seg 単位実測:
+  0.9309 / 0.9425 / 0.9218）— §7/§8 の「honesty 信号」としての機能を
+  instrumental 入力かつ vocals 分離込みの経路で追認
+- **一方で abstain はしない**: ウェールズ語（`language: "cy"`,
+  `language_probability: 0.5536`）のハルシネーション文
+  （`"Felly, mae'n gweithio, ..."` の反復）を emit する。英語正典歌詞との
+  `overall_similarity` は `0.0056`
+- `svprpe observe` の判定は `adherence_status: not_observed` /
+  `determination: deferred` — 計器としては正しい動作（存在しない一致を
+  `preserved` と誤判定していない）
+- **設計含意（記録のみ・本センサー自体は verdict しない）**: 「転写文字列そのもの
+  でなく `no_speech_prob` を下流の abstain ゲートに使う」という方向性が、今回の
+  実測で補強された。閾値化・ゲート実装は本ドキュメントの範囲外（WI1/WI4 の
+  設計入力として持ち越す）
+- **精度実測は引き続き素材律速**: 歌入り + 歌詞 pin 済みの音源が手元にないため、
+  今回は境界挙動の記録に留め精度主張はしない（`plan.md` の事前制約どおり）
