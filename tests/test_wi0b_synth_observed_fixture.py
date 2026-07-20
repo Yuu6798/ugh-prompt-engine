@@ -5,8 +5,9 @@
 WI0-b 事前登録計測（`plan.md`）の成果物一式（`plan.md` / `commands.md` /
 `render_faithful.py` / `results.md` / `observed/wi0b_melody_observation.json` /
 `observed/wi0b_lyrics_smoke_observation.json` / `observed/lyrics_anchor_extracted.json` /
-`observed/wi0b_lyrics_extract.json`）を、`tests/test_ar4_observed_fixture.py` の型を
-踏襲して schema readback + sha256 整合で固定する回帰テスト。
+`observed/wi0b_lyrics_extract.json` / `observed/provenance.yaml`）を、
+`tests/test_ar4_observed_fixture.py` の型を踏襲して schema readback + sha256 整合で
+固定する回帰テスト。
 
 本バッチは実推論（basic-pitch 0.4.0 / faster-whisper small int8 + htdemucs_ft）を
 伴うため CLI 再実行はしない — committed JSON を読み込んで整合性だけを検査する
@@ -24,12 +25,23 @@ PR #199 レビュー Codex P2 2 件対応（2026-07-20 相対パス再実行、`
 あることを固定した（絶対パス回帰防止）。合わせて no_speech_prob 系の実測証跡
 (`observed/wi0b_lyrics_extract.json`, `svprpe extract --lyrics` 出力) を新規収載し、
 segment 単位の `no_speech_prob` / `language` / `language_probability` を pin する。
+
+PR #199 レビュー Codex P2 2 件目対応（"Link the extract evidence to the pinned
+audio hash"）: `observed/provenance.yaml` を新設し、上記 4 観測ファイル
+（melody 観測 / lyrics smoke 観測 / lyrics_anchor_extracted / wi0b_lyrics_extract）が
+同一 wav（`source_audio_sha256` pin）から同一セッションで生成された旨を機械可読で
+固定した。本ファイルではその sidecar を (a) YAML としてロード可能であること、
+(b) `source_audio_sha256` が両観測 JSON の `generated_artifact.sha256` と一致する
+こと、(c) sidecar に記録された各ファイル sha256 が committed ファイルの実 sha256 と
+一致すること（stale 差し替え検出）を検査する。
 """
 from __future__ import annotations
 
 import hashlib
 import json
 from pathlib import Path
+
+import yaml
 
 from svp_rpe.arrange.observe import ObservationReport
 from svp_rpe.rpe.models import RPEBundle
@@ -45,6 +57,7 @@ MELODY_OBSERVATION_PATH = FIXTURE_DIR / "observed" / "wi0b_melody_observation.js
 LYRICS_SMOKE_OBSERVATION_PATH = FIXTURE_DIR / "observed" / "wi0b_lyrics_smoke_observation.json"
 LYRICS_ANCHOR_EXTRACTED_PATH = FIXTURE_DIR / "observed" / "lyrics_anchor_extracted.json"
 LYRICS_EXTRACT_PATH = FIXTURE_DIR / "observed" / "wi0b_lyrics_extract.json"
+PROVENANCE_PATH = FIXTURE_DIR / "observed" / "provenance.yaml"
 
 COMMITTED_PACKAGE_PATH = Path(
     "examples/arrangement/midnight_signal/expected/e2e_edm/performance_package.json"
@@ -251,3 +264,70 @@ def test_lyrics_extract_pins_no_speech_prob_and_language_evidence() -> None:
     inference_config = lyrics_transcription["inference_config"]
     assert inference_config["model_size"] == "small"
     assert inference_config["temperature"] == 0.0
+
+
+# --- 7. provenance サイドカー: 音源 hash 接続の機械的突合 -----------------------------
+# Codex P2 (PR #199 review, 2 件目): "Link the extract evidence to the pinned audio
+# hash" — melody 観測 / lyrics smoke 観測 / lyrics_anchor_extracted / wi0b_lyrics_extract
+# の 4 観測ファイルが同一 wav（`source_audio_sha256`）から同一セッションで生成された
+# ことを、散文 (results.md) だけでなく機械可読 sidecar で固定する。
+
+
+def _load_provenance() -> dict:
+    return yaml.safe_load(PROVENANCE_PATH.read_text(encoding="utf-8"))
+
+
+def test_provenance_sidecar_is_loadable_and_pins_source_audio_sha256() -> None:
+    provenance = _load_provenance()
+    assert provenance["format"] == "wi0b-observation-provenance/0.1"
+    assert provenance["source_audio_sha256"] == RENDERED_WAV_SHA256
+
+    observed_paths = {entry["path"] for entry in provenance["observed_files"]}
+    assert observed_paths == {
+        MELODY_OBSERVATION_PATH.name,
+        LYRICS_SMOKE_OBSERVATION_PATH.name,
+        LYRICS_ANCHOR_EXTRACTED_PATH.name,
+        LYRICS_EXTRACT_PATH.name,
+    }
+
+
+def test_provenance_source_audio_sha256_matches_both_observation_reports() -> None:
+    """`source_audio_sha256` == melody / lyrics smoke 観測 JSON の
+    `generated_artifact.sha256`（機械的突合）。lyrics_anchor_extracted.json と
+    wi0b_lyrics_extract.json はそれぞれ抜粋 / RPEBundle スキーマ（sha256 field
+    なし）のため、この直接突合の対象は ObservationReport 2 本に限る。
+    """
+    provenance = _load_provenance()
+
+    for path in (MELODY_OBSERVATION_PATH, LYRICS_SMOKE_OBSERVATION_PATH):
+        report = _load_json(path)
+        assert report["generated_artifact"]["sha256"] == provenance["source_audio_sha256"], (
+            f"{path}: generated_artifact.sha256 does not match provenance.yaml "
+            "source_audio_sha256"
+        )
+
+
+def test_provenance_recorded_file_hashes_match_committed_files() -> None:
+    """provenance.yaml に記録された各ファイルの sha256 が committed ファイルの実
+    sha256 と一致することを固定する（stale 差し替え検出: 観測 JSON を更新したのに
+    provenance.yaml の pin を更新し忘れた場合にここで落ちる）。
+    """
+    provenance = _load_provenance()
+    entries_by_path = {entry["path"]: entry for entry in provenance["observed_files"]}
+
+    for path in (
+        MELODY_OBSERVATION_PATH,
+        LYRICS_SMOKE_OBSERVATION_PATH,
+        LYRICS_ANCHOR_EXTRACTED_PATH,
+        LYRICS_EXTRACT_PATH,
+    ):
+        entry = entries_by_path[path.name]
+        assert entry["sha256"] == _sha256(path), (
+            f"{path.name}: provenance.yaml sha256 pin is stale relative to the "
+            "committed file"
+        )
+
+
+def test_results_md_references_provenance_sidecar() -> None:
+    results_text = RESULTS_PATH.read_text(encoding="utf-8")
+    assert "provenance.yaml" in results_text

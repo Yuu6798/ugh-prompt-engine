@@ -29,10 +29,23 @@
   `4d8c83f67c1b2441e09fa84debdc47ec0131c1a13ee1b813b0ef55e874903e90`
   （committed wav は非コミット・このハッシュに pin。決定論再現可能なため wav 自体は
   同梱しない — score + `render_faithful.py` から再生成できる）
-- **observe**: 同一 wav に対する `svprpe observe` 2 回実行の出力 report がバイト列
-  完全一致（2/2）: sha256 `4d7a53279c2524e15dd0cc983c81d7444217dff65236aa8b8625b300bbaacf25`
-  （`observed/wi0b_melody_observation.json` はこの run1 の出力そのもの。run2 との
-  byte 一致は上記 sha256 の一致で裏付け済み — diff なし、`commands.md` 参照）
+- **observe（初回計測時点の履歴的事実）**: 同一 wav に対する `svprpe observe` 2 回
+  実行の出力 report がバイト列完全一致（2/2）: sha256
+  `4d7a53279c2524e15dd0cc983c81d7444217dff65236aa8b8625b300bbaacf25`（run2 との byte
+  一致は上記 sha256 の一致で裏付け済み — diff なし、`commands.md` 参照）。**この値は
+  初回計測時**（絶対パス・lyrics extras 未導入段階、`observed/wi0b_melody_observation.json`
+  がこの run1 の出力そのものだった時点）**の pin であり、§4 の相対化再実行
+  （commit 3c52b22）により superseded**（`generated_artifact.path` が絶対パスから
+  相対パスへ変わり、`sensor.available` も変化したため report のバイト列自体が変わった
+  — 詳細は §4「observe/extract 新旧 diff」参照）。
+- **observe（現 committed 版, PR #199 Codex P2 対応後）**: 現在 committed されている
+  `observed/wi0b_melody_observation.json` の実 sha256 は
+  `05ff335ec5bf5f618491652072984175ee6f72788e4b298b368c1d3e0abec554`
+  （`observed/provenance.yaml` の同名エントリと一致・相互確認済み）。この値は §4 の
+  相対化再実行 1 回のみの出力に対するもので、run1/run2 のような複数回 byte 一致の
+  再確認はしていない — **melody / harmony anchor の byte 再現性は §4「決定論再確認」
+  記載のとおり、初回計測との新旧 diff が完全一致であることで別途裏付けられている**
+  （lyrics anchor のみ whisper 非決定性により変動する。§4 参照）。
 
 ### 環境
 
@@ -166,5 +179,9 @@ PR #199 レビュー（Codex P2 2 件）:
 - 事前登録: [`plan.md`](plan.md)
 - 再現コマンド verbatim ログ: [`commands.md`](commands.md)
 - 決定論レンダリングスクリプト: [`render_faithful.py`](render_faithful.py)
+- 音源 hash 接続の機械可読 provenance サイドカー（PR #199 Codex P2 対応）:
+  [`observed/provenance.yaml`](observed/provenance.yaml)（`source_audio_sha256` +
+  4 観測ファイルの sha256 pin。melody/lyrics smoke 観測 JSON の
+  `generated_artifact.sha256` との機械的突合は `tests/test_wi0b_synth_observed_fixture.py`）
 - fixture 整合テスト: `tests/test_wi0b_synth_observed_fixture.py`
 - ロードマップ: [`docs/work_identity_roadmap.md`](../../../../../docs/work_identity_roadmap.md) WI0 節
