@@ -49,7 +49,7 @@ import difflib
 import unicodedata
 from typing import Any
 
-__all__ = ["normalize_lyrics_text", "match_lyrics"]
+__all__ = ["normalize_lyrics_text", "char_level_normalize", "match_lyrics"]
 
 _STRIPPED_CATEGORY_PREFIXES = ("P", "S")
 
@@ -72,8 +72,18 @@ def normalize_lyrics_text(text: str) -> str:
     return " ".join(kept.split())
 
 
-def _char_level(text: str) -> str:
-    """`normalize_lyrics_text` with whitespace also stripped, for char-level matching."""
+def char_level_normalize(text: str) -> str:
+    """`normalize_lyrics_text` with whitespace also stripped, for char-level matching.
+
+    Public (WI0-a Codex P2): this is the exact normalization
+    `match_lyrics` applies to both sides before computing
+    `overall_similarity`'s `SequenceMatcher.ratio()`. Exported so callers
+    that need an unrounded, string-equality read of "are these two texts
+    identical after normalization" (e.g. `arrange/observe.py`'s
+    `_observe_lyrics` exact-match gate) can reuse the identical
+    normalization instead of re-deriving it from the rounded
+    `overall_similarity` scalar, which loses precision at 4 decimal places.
+    """
     return normalize_lyrics_text(text).replace(" ", "")
 
 
@@ -189,9 +199,9 @@ def match_lyrics(expected_lines: list[str], transcribed_text: str) -> dict[str, 
         params: {normalization, matcher, order_stats}
     """
     transcribed_candidates: list[str] = [
-        line for line in transcribed_text.splitlines() if _char_level(line)
+        line for line in transcribed_text.splitlines() if char_level_normalize(line)
     ]
-    full_transcribed_norm = _char_level(transcribed_text)
+    full_transcribed_norm = char_level_normalize(transcribed_text)
     # The full text is always a candidate (in addition to per-line
     # candidates) — a segment boundary is a whisper artifact, not a lyric
     # boundary, so the best match for a multi-segment expected line may
@@ -210,7 +220,7 @@ def match_lyrics(expected_lines: list[str], transcribed_text: str) -> dict[str, 
     # occurrence's offset — a documented limitation).
     previous_matched_offset: int | None = None
     for expected in expected_lines:
-        norm_expected = _char_level(expected)
+        norm_expected = char_level_normalize(expected)
         if not norm_expected:
             skipped_empty += 1
             continue
@@ -219,7 +229,7 @@ def match_lyrics(expected_lines: list[str], transcribed_text: str) -> dict[str, 
         best_match = ""
         best_match_index: int | None = None
         for candidate_index, candidate in enumerate(candidates):
-            norm_candidate = _char_level(candidate)
+            norm_candidate = char_level_normalize(candidate)
             if not norm_candidate:
                 continue
             ratio = _partial_ratio(norm_expected, norm_candidate)
@@ -270,7 +280,7 @@ def match_lyrics(expected_lines: list[str], transcribed_text: str) -> dict[str, 
         # disagree — 1.0 by definition, not a claim of verified order.
         order_ratio = 1.0
 
-    expected_norm_concat = _char_level("\n".join(expected_lines))
+    expected_norm_concat = char_level_normalize("\n".join(expected_lines))
     overall_similarity = round(
         difflib.SequenceMatcher(None, expected_norm_concat, full_transcribed_norm).ratio(),
         4,

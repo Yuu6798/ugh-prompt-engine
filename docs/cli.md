@@ -416,7 +416,7 @@ future Design Memo.
 | Case | `adherence_status` | `determination` |
 |---|---|---|
 | No sensor wired for the anchor's domain (rhythm/motif), OR a wired domain's optional extra isn't installed (lyrics: `lyrics`; melody: `pitch`) | `not_observed` | `no_sensor` |
-| Sensor ran and measured an exact identity match (harmony: the collapsed observed sequence matches the canonical progression's cycle alternation all the way through, no leftover tail. structure: the normalized canonical and observed section sequences match exactly. lyrics: `match_lyrics` reports `overall_similarity == 1.0`. melody: the observed MIDI pitch sequence equals the canonical one exactly) | `preserved` | `exact_match` |
+| Sensor ran and measured an exact identity match (harmony: the collapsed observed sequence matches the canonical progression's cycle alternation all the way through, no leftover tail. structure: the normalized canonical and observed section sequences match exactly. lyrics: the normalized canonical full text and normalized transcribed full text are string-equal (`eval/lyrics_match.char_level_normalize`, not a rounded `overall_similarity == 1.0` comparison). melody: the observed MIDI pitch sequence equals the canonical one exactly) | `preserved` | `exact_match` |
 | Sensor ran but did not match exactly | `not_observed` | `deferred` |
 
 Four sensors are wired: **harmony**, **structure**, **lyrics**, and **melody**
@@ -609,17 +609,24 @@ preservation:
         - section_repetition
 ```
 
-**lyrics** (`domain="lyrics", artifact_type="lyrics_text"`, WI0-a) transcribes the
-generated audio with `rpe/learned/lyrics_adapter.transcribe_lyrics` (requires the
-optional `lyrics` extra — faster-whisper + Demucs; by default isolates vocals via
-Demucs before transcribing) and compares it against the canonical `lyrics_text`
-artifact's lines with `eval/lyrics_match.match_lyrics` (the same instrument
-`svprpe lyrics-adherence` uses — no new metric invented). `measurements` records
-`canonical_line_count` plus the full `match_lyrics` report verbatim under a
-`match_lyrics` key. The D-1 identity gate is `match_lyrics`'s single strongest
-scalar signal, `overall_similarity == 1.0` (the plain, order-sensitive ratio
-between the full normalized canonical/transcribed texts — "are these two
-normalized strings identical") — not the order-free per-line `best_ratio`.
+**lyrics** (`domain="lyrics", artifact_type="lyrics_text"`, WI0-a) probes
+`rpe/learned/lyrics_adapter.ensure_lyrics_available` first (faster-whisper import
+check only, no Demucs work) and degrades to `no_sensor` immediately if it's
+missing — same probe-first shape as `svprpe lyrics-adherence` — before
+transcribing the generated audio with `rpe/learned/lyrics_adapter.transcribe_lyrics`
+(requires the optional `lyrics` extra — faster-whisper + Demucs; by default
+isolates vocals via Demucs before transcribing) and comparing it against the
+canonical `lyrics_text` artifact's lines with `eval/lyrics_match.match_lyrics`
+(the same instrument `svprpe lyrics-adherence` uses — no new metric invented).
+`measurements` records `canonical_line_count` plus the full `match_lyrics` report
+verbatim under a `match_lyrics` key. The D-1 identity gate is **string equality**
+of the normalized canonical full text and normalized transcribed full text via
+`eval/lyrics_match.char_level_normalize` (the exact normalization `match_lyrics`
+applies to both sides before computing `overall_similarity`) — not a comparison
+against the rounded (4dp) `overall_similarity` scalar, which can round up to a
+reported `1.0` for a genuinely non-identical pair. `overall_similarity` remains
+in `measurements` for reference. Per-line `best_ratio` stays out of the gate
+either way — it's the order-free per-line presence read.
 
 **melody** (`domain="melody", artifact_type="note_events_json"`, WI0-a) parses the
 canonical `note-events/0.1` artifact (`{"schema": "note-events/0.1", "notes":

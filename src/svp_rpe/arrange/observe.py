@@ -100,13 +100,18 @@ format_version までは絞らない。他 domain の他形式 anchor 前例が 
 
 lyrics センサー（``_observe_lyrics``）は ``eval/lyrics_match.match_lyrics``
 （learned import ゼロ）をそのまま呼ぶだけで新しい指標は作らない。転写
-（faster-whisper）は分離ヘルパー ``_transcribe_lyrics_for_observation`` に
-隔離する。恒等判定は ``match_lyrics`` が返す最も強い単一 scalar の一致信号
-``overall_similarity``（正規化した canonical/transcribed 全文連結同士の
-非部分一致比率 — 「2 つの正規化済みテキストが同一文字列かどうか」を測る
-唯一の値）が厳密に ``1.0`` かどうかで行う。per-line ``best_ratio`` は
+（faster-whisper。``ensure_lyrics_available()`` で probe してから呼ぶ —
+``cli/roundtrip_cmd.py`` の既存呼び出し側と同型。未導入なら Demucs 分離に
+入らず即 degrade）は分離ヘルパー ``_transcribe_lyrics_for_observation`` に
+隔離する。恒等判定は ``match_lyrics`` が使うのと同じ正規化
+（``eval/lyrics_match.char_level_normalize``）を canonical 全文連結と
+transcribed 全文それぞれへ適用した上での**文字列等値**で行う（Codex P2,
+WI0-a review）。``match_lyrics`` が返す ``overall_similarity`` は同じ
+正規化済み文字列同士の非部分一致比率だが 4 桁に丸めて返るため、丸めで
+``1.0`` に繰り上がる非同一ペアを exact_match と誤判定し得る — measurements
+には温存するが恒等判定の根拠には使わない。per-line ``best_ratio`` は
 意図的に順序無視の存在確認読みなので（``match_lyrics`` 自身の docstring）、
-恒等判定の根拠には使わない。
+これも恒等判定の根拠には使わない。
 
 melody センサー（``_observe_melody``）の正典は ``note-events/0.1``
 （``{"schema": "note-events/0.1", "notes": [{"start_beat", "pitch",
@@ -158,7 +163,7 @@ from svp_rpe.arrange.section_map import (
     parse_section_map_artifact_0_2,
 )
 from svp_rpe.compose.models import ChordSpec
-from svp_rpe.eval.lyrics_match import match_lyrics
+from svp_rpe.eval.lyrics_match import char_level_normalize, match_lyrics
 from svp_rpe.roundtrip.compare import (
     chord_sequence_match_rate,
     repeated_chord_sequence_match_rate,
@@ -762,6 +767,16 @@ def _transcribe_lyrics_for_observation(
     the optional dependency is unavailable — `reason` is the adapter's own
     exception message (install hint included), never fabricated here.
 
+    Probes `ensure_lyrics_available()` (a faster-whisper import check only —
+    no model load, no Demucs invocation) BEFORE calling `transcribe_lyrics`
+    (Codex P2, WI0-a review): without this, a missing faster-whisper install
+    would still pay for `transcribe_lyrics`'s default `separate_vocals=True`
+    Demucs pass before hitting the whisper import and raising
+    `LearnedModelUnavailable` — wasted work on a path already known to be a
+    dead end. `cli/roundtrip_cmd.py`'s `lyrics_adherence_cmd` follows the
+    same probe-first shape; this mirrors it so both call sites degrade
+    identically without doing the separation work.
+
     Deviation from the letter of the repo's usual fallback-chain convention
     (CLAUDE.md: "try/except ModuleNotFoundError to detect an optional
     dependency"): `rpe/learned/lyrics_adapter.transcribe_lyrics` does not
@@ -778,7 +793,15 @@ def _transcribe_lyrics_for_observation(
     """
     from svp_rpe.io.source_separator import SeparatorNotAvailableError
     from svp_rpe.rpe.learned import LearnedModelUnavailable
-    from svp_rpe.rpe.learned.lyrics_adapter import transcribe_lyrics
+    from svp_rpe.rpe.learned.lyrics_adapter import (
+        ensure_lyrics_available,
+        transcribe_lyrics,
+    )
+
+    try:
+        ensure_lyrics_available()
+    except LearnedModelUnavailable as exc:
+        return None, str(exc)
 
     try:
         transcription = transcribe_lyrics(str(audio_path))
@@ -830,15 +853,20 @@ def _observe_lyrics(
         "match_lyrics": match_report,
     }
     sensor = SensorRecord(name=sensor_name, available=True, reason=None)
-    # `overall_similarity` is `match_lyrics`'s strongest single-scalar
-    # identity read: the plain (non-partial, order-sensitive) ratio between
-    # the full normalized concatenation of the canonical lines and the full
-    # normalized transcript — "are these two normalized texts the same
-    # string", which is the literal definition of "exact match after
-    # normalization". Per-line `best_ratio` is deliberately order-free (a
-    # presence read, per `match_lyrics`'s own docstring), so it cannot serve
-    # this role alone.
-    if match_report["overall_similarity"] == 1.0:
+    # The D-1 identity gate is STRING EQUALITY of the two texts after
+    # `match_lyrics`'s own char-level normalization — NOT
+    # `overall_similarity == 1.0` (Codex P2, WI0-a review): `overall_similarity`
+    # is rounded to 4dp before being returned, so a genuinely non-identical
+    # pair (e.g. a long transcript with a single mismatched character) can
+    # round up to a reported `1.0` and be misclassified `exact_match`. This
+    # reuses `char_level_normalize` — the exact normalization `match_lyrics`
+    # applies to both sides before computing that same ratio — so the gate
+    # stays behaviorally aligned with `overall_similarity`'s definition
+    # ("are these two normalized texts the same string") while comparing the
+    # unrounded strings directly instead of the rounded scalar.
+    canonical_normalized = char_level_normalize("\n".join(expected_lines))
+    transcribed_normalized = char_level_normalize(transcribed_text)
+    if canonical_normalized == transcribed_normalized:
         return AnchorObservation(
             anchor_id=anchor.id,
             domain=anchor.domain,
@@ -848,7 +876,8 @@ def _observe_lyrics(
             determination="exact_match",
             note=(
                 "transcribed lyrics match the canonical lines exactly after "
-                "normalization (match_lyrics overall_similarity == 1.0)."
+                "normalization (char_level_normalize string equality, not a "
+                "rounded overall_similarity comparison)."
             ),
         )
     return AnchorObservation(
@@ -895,6 +924,23 @@ def _note_name_to_midi(name: str) -> int:
     pair parses a bare `<letter><accidental> major|minor` KEY string, not an
     octave-qualified note name like `"Eb4"` — a different grammar entirely —
     so this is a new pure function rather than a reuse.
+
+    Octave-crossing accidentals (Codex P2, WI0-a review): `pitch_class` is
+    NOT wrapped to `0..11` before combining with the octave term. Wrapping
+    it first (the previous implementation's `pitch_class % 12`) silently
+    drops the octave carry — `Cb4` (pitch_class -1) would fold to 11 and
+    read as the octave-4 pitch class B *within octave 4* (MIDI 71, an
+    octave too high) instead of B3 (MIDI 59, one semitone below C4); `B#3`
+    (pitch_class 12) would fold to 0 and read as C *within octave 3* (MIDI
+    48) instead of C4 (MIDI 60, one semitone above B3). Adding the
+    unwrapped (possibly -1 or 12) `pitch_class` straight to `(octave + 1) *
+    12` carries the accidental across the octave boundary correctly in
+    both directions.
+
+    The result is validated against the MIDI byte range (`0..127`) and
+    raises `ValueError` on overflow/underflow — same fail-closed posture as
+    the unsupported-note-name branch above, rather than silently returning
+    an out-of-range int.
     """
     match = _NOTE_NAME_PATTERN.match(name.strip())
     if match is None:
@@ -906,7 +952,13 @@ def _note_name_to_midi(name: str) -> int:
     elif accidental in ("b", "♭"):
         pitch_class -= 1
     octave = int(octave_text)
-    return (octave + 1) * 12 + pitch_class % 12
+    midi = (octave + 1) * 12 + pitch_class
+    if not 0 <= midi <= 127:
+        raise ValueError(
+            f"note name {name!r} resolves to out-of-range MIDI value {midi} "
+            "(valid range is 0-127)"
+        )
+    return midi
 
 
 def _load_note_events_artifact(raw_bytes: bytes, *, artifact_path: Path) -> list[int]:

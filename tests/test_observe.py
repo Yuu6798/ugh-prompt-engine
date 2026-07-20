@@ -1664,6 +1664,25 @@ def test_note_name_to_midi_rejects_unsupported_names() -> None:
         _note_name_to_midi("C")  # missing octave
 
 
+def test_note_name_to_midi_carries_accidental_across_octave_boundary() -> None:
+    """Codex P2 (WI0-a review): the previous implementation wrapped
+    `pitch_class % 12` BEFORE combining with the octave term, which dropped
+    the octave carry for accidentals that cross the C boundary. `Cb4` must
+    resolve to B3 (MIDI 59, one semitone below C4/60), not B *within*
+    octave 4 (MIDI 71); `B#3` must resolve to C4 (MIDI 60, one semitone
+    above B3/59), not C *within* octave 3 (MIDI 48).
+    """
+    assert _note_name_to_midi("Cb4") == 59
+    assert _note_name_to_midi("B#3") == 60
+    assert _note_name_to_midi("E#4") == 65
+    assert _note_name_to_midi("Fb4") == 64
+
+
+def test_note_name_to_midi_rejects_out_of_range_midi() -> None:
+    with pytest.raises(ValueError, match="out-of-range MIDI"):
+        _note_name_to_midi("G#10")
+
+
 # --- note-events/0.1 artifact parsing ----------------------------------------
 
 
@@ -1972,6 +1991,60 @@ def test_observe_lyrics_mismatch_is_deferred_with_match_lyrics_measurements(
     assert observation.determination == "deferred"
 
 
+def test_observe_lyrics_rounded_overall_similarity_does_not_gate_exact_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex P2 (WI0-a review): `match_lyrics`'s `overall_similarity` is
+    rounded to 4dp, so a long-enough near-match (here: a single flipped
+    character inside a 100k-char text) can round UP to a reported `1.0`
+    while the normalized full strings are genuinely NOT equal. The D-1 gate
+    must be `char_level_normalize` string equality, not a comparison against
+    the rounded scalar — so this case must land `not_observed`/`deferred`,
+    never `preserved`/`exact_match`.
+    """
+    from svp_rpe.eval.lyrics_match import char_level_normalize, match_lyrics
+
+    # 25_000 DISTINCT CJK letters (no repeats at all), not a repeated pattern:
+    # `difflib.SequenceMatcher`'s autojunk heuristic treats characters that
+    # recur past ~1% of a >=200-char sequence as junk and excludes them from
+    # matching, which would tank the ratio of a naively repeated pattern (a
+    # first version of this test built the text from a 10-character repeated
+    # pattern and measured overall_similarity == 0.5, not the near-1.0 this
+    # scenario needs) — distinct characters sidestep that entirely.
+    codepoints = list(range(0x3400, 0x4DC0)) + list(range(0x4E00, 0xA000))
+    n = 25_000
+    assert len(codepoints) >= n
+    base = "".join(chr(cp) for cp in codepoints[:n])
+    canonical_text = base
+    mid = n // 2
+    transcribed_text = base[:mid] + "a" + base[mid + 1 :]  # one char flipped
+
+    # Sanity: this scenario really does exercise the rounding gap this fix
+    # closes (reported overall_similarity == 1.0 despite unequal normalized
+    # strings) — otherwise the test below isn't testing what it claims to.
+    sanity_report = match_lyrics([canonical_text], transcribed_text)
+    assert sanity_report["overall_similarity"] == 1.0
+    assert char_level_normalize(canonical_text) != char_level_normalize(transcribed_text)
+
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._transcribe_lyrics_for_observation",
+        lambda audio_path: (transcribed_text, None),
+    )
+    anchor = _anchor("lyrics", "lyrics", "lyrics.txt", "lyrics_text")
+
+    observation = _observe_lyrics(
+        anchor,
+        manifest_dir=FIXTURE_DIR / "identity",
+        work_id="midnight-signal",
+        artifact_bytes=canonical_text.encode("utf-8"),
+        audio_path=Path("unused.wav"),
+    )
+
+    assert observation.measurements["match_lyrics"]["overall_similarity"] == 1.0
+    assert observation.adherence_status == "not_observed"
+    assert observation.determination == "deferred"
+
+
 # --- transcribe/extract helpers: exception isolation (monkeypatched at the ------
 # --- adapter source, so this is reproducible whether or not faster-whisper / ----
 # --- basic-pitch happen to be installed in the current environment) -------------
@@ -1981,6 +2054,14 @@ def test_transcribe_lyrics_for_observation_catches_learned_model_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from svp_rpe.rpe.learned import LearnedModelUnavailable
+
+    # `ensure_lyrics_available()` (Codex P2 pre-probe) is stubbed to a no-op
+    # here so this test isolates `transcribe_lyrics`'s OWN exception
+    # handling, independent of whether faster-whisper is actually installed
+    # in the test environment.
+    monkeypatch.setattr(
+        "svp_rpe.rpe.learned.lyrics_adapter.ensure_lyrics_available", lambda: None
+    )
 
     def fake_transcribe(*args: object, **kwargs: object) -> None:
         raise LearnedModelUnavailable("faster_whisper is not installed (fake)")
@@ -1998,6 +2079,10 @@ def test_transcribe_lyrics_for_observation_catches_separator_not_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from svp_rpe.io.source_separator import SeparatorNotAvailableError
+
+    monkeypatch.setattr(
+        "svp_rpe.rpe.learned.lyrics_adapter.ensure_lyrics_available", lambda: None
+    )
 
     def fake_transcribe(*args: object, **kwargs: object) -> None:
         raise SeparatorNotAvailableError("demucs is not installed (fake)")
@@ -2017,6 +2102,10 @@ def test_transcribe_lyrics_for_observation_returns_text_on_success(
     class _FakeTranscription:
         text = "sung lyrics text"
 
+    monkeypatch.setattr(
+        "svp_rpe.rpe.learned.lyrics_adapter.ensure_lyrics_available", lambda: None
+    )
+
     def fake_transcribe(*args: object, **kwargs: object) -> _FakeTranscription:
         return _FakeTranscription()
 
@@ -2027,6 +2116,40 @@ def test_transcribe_lyrics_for_observation_returns_text_on_success(
     text, reason = _transcribe_lyrics_for_observation(Path("unused.wav"))
     assert text == "sung lyrics text"
     assert reason is None
+
+
+def test_transcribe_lyrics_for_observation_probes_before_separating(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex P2 (WI0-a review): `ensure_lyrics_available()` (a faster-whisper
+    import check only) must be probed BEFORE `transcribe_lyrics` is called —
+    mirroring `cli/roundtrip_cmd.py`'s `lyrics_adherence_cmd`. When the probe
+    fails, `transcribe_lyrics` (whose default `separate_vocals=True` would run
+    Demucs before ever reaching the whisper import) must NOT be called at
+    all — pinned here with a spy that fails the test if invoked.
+    """
+    from svp_rpe.rpe.learned import LearnedModelUnavailable
+
+    def fake_ensure_lyrics_available() -> None:
+        raise LearnedModelUnavailable("faster_whisper is not installed (probe fake)")
+
+    def spy_transcribe(*args: object, **kwargs: object) -> None:
+        raise AssertionError(
+            "transcribe_lyrics must not be called when ensure_lyrics_available "
+            "fails the pre-probe (Demucs separation would run for nothing)"
+        )
+
+    monkeypatch.setattr(
+        "svp_rpe.rpe.learned.lyrics_adapter.ensure_lyrics_available",
+        fake_ensure_lyrics_available,
+    )
+    monkeypatch.setattr(
+        "svp_rpe.rpe.learned.lyrics_adapter.transcribe_lyrics", spy_transcribe
+    )
+
+    text, reason = _transcribe_lyrics_for_observation(Path("unused.wav"))
+    assert text is None
+    assert reason == "faster_whisper is not installed (probe fake)"
 
 
 def test_extract_melody_for_observation_catches_learned_model_unavailable(
