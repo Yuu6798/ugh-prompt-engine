@@ -68,7 +68,9 @@ preservation の検証を実行計画に落とし、「測れるが判定でき�
   独立検算を通す（§8 検算照合ゲート）。実 Suno A/B の A2 / B1
   （`observed/suno/`）は分類設計の**中立な候補入力**として使う
 - **受け入れ条件**: 分布 fixture + 閾値 Memo。閾値適用で observe の
-  `determination` が deferred から分類へ進める設計になっていること（実配線は
+  `adherence_status` が `not_observed` から `changed_within_policy` /
+  `changed_outside_policy` の分類へ進める設計になっていること（`determination`
+  の語彙 `exact_match` / `deferred` / `no_sensor` は不変のまま。実配線は
   WI4 でもよい）
 
 ### WI2 — 弁別判定ハーネス
