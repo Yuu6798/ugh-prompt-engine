@@ -39,6 +39,7 @@ OBSERVATION_PATHS = {
 }
 PACKAGE_PATH = FIXTURE_DIR / "package" / "performance_package.json"
 COMPILATION_REPORT_PATH = FIXTURE_DIR / "package" / "compilation_report.json"
+HANDOFF_DEVIATIONS_PATH = FIXTURE_DIR / "handoff_deviations.yaml"
 MANIFEST_PATH = FIXTURE_DIR / "inputs" / "identity_manifest.demo.yaml"
 ARRANGEMENT_SPEC_PATH = FIXTURE_DIR / "inputs" / "edm.identity.suno.arrangement.yaml"
 SECTION_MAP_PATH = FIXTURE_DIR / "inputs" / "identity" / "section_map.v2.json"
@@ -256,3 +257,72 @@ def test_arrangement_spec_and_section_map_are_readable() -> None:
 
     section_map = _load_json(SECTION_MAP_PATH)
     assert isinstance(section_map, dict) and section_map
+
+
+# --- 9. handoff_deviations.yaml: 実行手交と package の逸脱の機械可読記録（Codex P2） ------
+#
+# package の lyrics anchor (`hard`) は `lyrics_text` チャネルで `delivered` と記録
+# されているが、実際に Suno UI へ供給されたのは両セルとも instrumental で
+# `identity/lyrics.txt` は非貼付だった。この逸脱は order_sheet.md のセル定義（散文）に
+# 記録済みだが機械可読ではなかったため、`handoff_deviations.yaml` を新設し、
+# order_sheet.md / takes_memo.yaml からの機械転記のみ（推定補完なし）で per-cell に
+# actually_pasted / not_pasted を記録した。package 自体（verbatim 記録）は無編集。
+
+
+def test_handoff_deviations_package_sha256_matches_committed_package() -> None:
+    deviations = _load_yaml(HANDOFF_DEVIATIONS_PATH)
+    assert deviations["format"] == "handoff-deviations/0.1"
+    assert deviations["package_sha256"] == _sha256(PACKAGE_PATH)
+
+
+def test_handoff_deviations_cells_cover_all_four_takes_matching_takes_memo_cell() -> None:
+    deviations = _load_yaml(HANDOFF_DEVIATIONS_PATH)
+    memo = _load_yaml(TAKES_MEMO_PATH)
+    cell_by_name = {take["assigned_name"]: take["cell"] for take in memo["takes"]}
+
+    all_takes: list[str] = []
+    for cell in deviations["cells"]:
+        for take in cell["takes"]:
+            assert cell_by_name[take] == cell["cell"], (
+                f"{take}: handoff_deviations.yaml cell label {cell['cell']!r} does not "
+                f"match takes_memo.yaml cell {cell_by_name[take]!r}"
+            )
+            all_takes.append(take)
+
+    assert set(all_takes) == set(cell_by_name)
+    assert len(all_takes) == 4
+
+
+def test_handoff_deviations_package_channel_artifacts_matches_committed_package() -> None:
+    deviations = _load_yaml(HANDOFF_DEVIATIONS_PATH)
+    package = _load_json(PACKAGE_PATH)
+    assert set(deviations["package_channel_artifacts"]) == set(package["channel_artifacts"])
+
+
+def test_handoff_deviations_cells_partition_package_channel_artifacts() -> None:
+    deviations = _load_yaml(HANDOFF_DEVIATIONS_PATH)
+    channel_artifacts = set(deviations["package_channel_artifacts"])
+
+    for cell in deviations["cells"]:
+        pasted = set(cell["channel_artifacts_actually_pasted"])
+        not_pasted = set(cell["channel_artifacts_not_pasted"])
+        assert pasted | not_pasted == channel_artifacts, (
+            f"{cell['cell']}: actually_pasted union not_pasted does not cover "
+            "package_channel_artifacts"
+        )
+        assert pasted & not_pasted == set(), (
+            f"{cell['cell']}: actually_pasted and not_pasted overlap"
+        )
+
+
+def test_handoff_deviations_cell_a_pasted_tags_only_cell_b_pasted_nothing() -> None:
+    deviations = _load_yaml(HANDOFF_DEVIATIONS_PATH)
+    cells_by_label = {cell["cell"]: cell for cell in deviations["cells"]}
+
+    cell_a = cells_by_label["A (tags)"]
+    assert cell_a["channel_artifacts_actually_pasted"] == ["section_tags"]
+    assert cell_a["channel_artifacts_not_pasted"] == ["lyrics_text"]
+
+    cell_b = cells_by_label["B (no tags)"]
+    assert cell_b["channel_artifacts_actually_pasted"] == []
+    assert set(cell_b["channel_artifacts_not_pasted"]) == {"lyrics_text", "section_tags"}

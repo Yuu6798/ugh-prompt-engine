@@ -364,6 +364,11 @@ preserved を成功条件にしていない**: この結果自体が
   delivery.status は `experimental` のまま（成功偽装なし）
 - D-1 閾値 Design Memo の試金石: A2（契約内逸脱のみ）と B1（契約外相当）が
   `changed_within_policy` / `changed_outside_policy` 分類の実例ペア
+- 実行された UI 手交は package の channel_artifacts から逸脱（両セル instrumental に
+  つき lyrics_text 非貼付・B セルは section_tags も非貼付）。package は verbatim 記録
+  につき無編集とし、逸脱は order_sheet からの機械転記 sidecar
+  `observed/suno/handoff_deviations.yaml` で機械可読化（delivery=delivered は
+  コンパイル済みハンドオフの宣言であって実行手交の記録ではない）
 
 成果物一式: `examples/arrangement/midnight_signal/observed/suno/`（発注書=事前登録
 ブロック込み・takes provenance・観測 JSON 4 本 verbatim・demo 入力 sidecar と package。

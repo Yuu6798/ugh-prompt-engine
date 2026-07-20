@@ -78,6 +78,20 @@ script）を含む。A/B の実際の処置分岐——この script を Suno UI
 `B (no tags)`）と `order_sheet.md` のセル定義であり、
 `tests/test_ar4_suno_observed_fixture.py` がこの cell 割当を機械 pin する。
 
+同様の切り分けが lyrics anchor の delivery status にも当てはまる。
+`performance_package.json` の `anchor_statuses` は lyrics anchor（`hard`）を
+`lyrics_text` チャネルで `delivered` と記録しているが、これは「`svprpe package` が
+`identity/lyrics.txt` をコンパイル済みハンドオフに含めた」という宣言であって、
+「Suno UI に歌詞が実際に貼付された」ことの記録ではない。実行手交では A/B 両セルとも
+instrumental 固定であり、`identity/lyrics.txt` はどちらのセルの Lyrics 欄にも
+貼付されていない（A セルの Lyrics 欄には `prompt.section_tags` の section-tag script
+のみ、B セルの Lyrics 欄は空欄——`order_sheet.md` の Cell A / Cell B 節参照）。
+実行手交と package の `channel_artifacts` との差分（どの channel が実際に UI へ
+貼付されたか／されなかったか）は `handoff_deviations.yaml`（`order_sheet.md` /
+`takes_memo.yaml` からの機械転記のみ・推定補完なし）が正本であり、
+`tests/test_ar4_suno_observed_fixture.py` が package sha256・channel 集合・cell
+割当の整合を機械 pin する。
+
 ## 観測の要点（詳細は `docs/arrangement_identity_planning.md` の 2026-07-19 dated エントリ）
 
 - 4 take とも harmony/structure が `not_observed`/`deferred`、
