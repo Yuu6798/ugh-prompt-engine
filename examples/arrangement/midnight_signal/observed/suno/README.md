@@ -84,6 +84,7 @@ script）を含む。A/B の実際の処置分岐——この script を Suno UI
   `sequence_exact_match: false`
 - structure `position_match_rate`: tags セル A = {0.25, 0.5} vs no-tags セル
   B = {0.125, 0.375}（記述統計のみ）
-- 尺: A = 191.0s / 178.2s vs B = 84.4s / 94.6s（n=2 につき方向の記録のみ）
+- 尺: A = 191.0s / 178.2s vs B = 84.4s / 94.6s — 観測された A/B の尺差の記録のみ
+  （非 canonical・実生成順 B1,B2,A1,A2 の順序交絡あり・n=2。因果・効果の主張なし）
 - harmony: 4 take とも `full_cycles=0`（正典コード進行は 1 cycle も非再現）だが
   観測コードは C minor 近親圏

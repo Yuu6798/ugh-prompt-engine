@@ -353,8 +353,9 @@ preserved を成功条件にしていない**: この結果自体が
   冒頭で完全再現し、逸脱が #194 の契約許容語彙（`section_insertion` /
   `section_repetition`）内に収まる唯一の take。B1 は Intro→Chorus→Bridge→Verse の
   順序破壊（reordering は本デモの allow-list 外＝契約外相当）
-- 尺: A = 191.0s / 178.2s vs B = 84.4s / 94.6s — section-tag script がフル尺形式を
-  誘発する方向（n=2 につき方向の記録のみ)
+- 尺: A = 191.0s / 178.2s vs B = 84.4s / 94.6s — 本デモで観測された A/B の尺差の
+  記録のみ（非 canonical・実生成順 B1,B2,A1,A2 の順序交絡あり・n=2。因果・効果の
+  主張なし — 「タグが尺を変える」の裁定は canonical バッチ待ち）
 - harmony: 4 take とも `full_cycles=0`（正典 4 コード進行は 1 cycle も非再現）だが
   観測コードは C minor 近親圏 — 「調は効く・進行は非再現」の既知知見を、制度化された
   検収計器で追認
