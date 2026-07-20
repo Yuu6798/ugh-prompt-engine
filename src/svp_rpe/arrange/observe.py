@@ -81,11 +81,54 @@ anchor の ``format_version`` 宣言と artifact 内 ``schema_version`` の不�
 no_sensor のまま（domain 単独ではなく (domain, artifact_type,
 format_version) の組でルーティングする一貫性）。
 
-lyrics / melody は optional extra 依存（faster-whisper / basic-pitch）のため
-センサー本体を配線せず、``available=false`` + reason を記録する（将来の接続点は
-``eval/lyrics_match.py`` / ``rpe/learned/lyrics_adapter.py`` と
-``rpe/learned/basic_pitch_adapter.py``）。他の domain（rhythm/motif）も
-同様に no_sensor（structure は上記のとおり実配線済み）。
+lyrics / melody（WI0-a、2026-07-20）: ``domain == "lyrics" and artifact_type ==
+"lyrics_text"`` / ``domain == "melody" and artifact_type == "note_events_json"``
+の対にセンサーを実配線した（``is_lyrics_sensor_anchor`` / ``is_melody_sensor_anchor``、
+harmony と同型の (domain, artifact_type) 2 要素ゲート — structure と異なり
+format_version までは絞らない。他 domain の他形式 anchor 前例が section_map に
+あったのと違い、``lyrics_text``/``note_events_json`` にはその種の前例が本リポジトリに
+無いため。note-events artifact 自身の ``schema`` フィールドが ``note-events/0.1``
+ちょうどでなければパーサ内部で fail-closed になる — harmony の
+``chord-sequence/0.1`` と同じ posture）。どちらも optional extra
+（``lyrics`` = faster-whisper + Demucs / ``pitch`` = basic-pitch）に依存するため、
+未導入環境では呼び出し時に ``LearnedModelUnavailable``（lyrics はボーカル分離の
+``SeparatorNotAvailableError`` も）を捕捉して ``available=false`` + reason
+（例外メッセージそのもの、インストールヒント込み）へ degrade する — 各アダプタが
+実際に送出する専用例外クラスを補足する契約（``cli/roundtrip_cmd.py`` /
+``cli/extract_cmd.py`` の既存呼び出し側と同じ例外捕捉の型）。他 domain
+（rhythm/motif）は引き続き no_sensor（structure は上記のとおり実配線済み）。
+
+lyrics センサー（``_observe_lyrics``）は ``eval/lyrics_match.match_lyrics``
+（learned import ゼロ）をそのまま呼ぶだけで新しい指標は作らない。転写
+（faster-whisper。``ensure_lyrics_available()`` で probe してから呼ぶ —
+``cli/roundtrip_cmd.py`` の既存呼び出し側と同型。未導入なら Demucs 分離に
+入らず即 degrade）は分離ヘルパー ``_transcribe_lyrics_for_observation`` に
+隔離する。恒等判定は ``match_lyrics`` が使うのと同じ正規化
+（``eval/lyrics_match.char_level_normalize``）を canonical 全文連結と
+transcribed 全文それぞれへ適用した上での**文字列等値**で行う（Codex P2,
+WI0-a review）。``match_lyrics`` が返す ``overall_similarity`` は同じ
+正規化済み文字列同士の非部分一致比率だが 4 桁に丸めて返るため、丸めで
+``1.0`` に繰り上がる非同一ペアを exact_match と誤判定し得る — measurements
+には温存するが恒等判定の根拠には使わない。per-line ``best_ratio`` は
+意図的に順序無視の存在確認読みなので（``match_lyrics`` 自身の docstring）、
+これも恒等判定の根拠には使わない。
+
+melody センサー（``_observe_melody``）の正典は ``note-events/0.1``
+（``{"schema": "note-events/0.1", "notes": [{"start_beat", "pitch",
+"duration_beats"}, ...]}``、beat 単位・音名文字列）— ``start_beat`` 昇順
+（onset 順）に並べ替えた上で音名文字列（例 ``"Eb4"``）を MIDI 整数へ変換する
+（♯/♭/オクターブ対応の純粋関数 ``_note_name_to_midi`` を本モジュールに新設 —
+``perform/performer.py`` の ``PITCH_CLASSES``/``parse_key`` は「ルート音名 +
+major/minor」のキー文字列専用で、オクターブ付き音名文字列は扱わないため
+再利用不可と確認した上での新設）。観測側は
+``rpe/learned/basic_pitch_adapter.extract_basic_pitch_annotations`` の
+``LearnedNoteEvent`` 列を ``start_sec`` 昇順に並べた ``pitch_midi`` 整数列 —
+**v0 は音高系列のみで拍↔秒の時間整列は行わない**（beat→sec 変換には BPM 推定を
+挟む必要があり、それ自体が交絡要因になるため意図的に見送る。時間整列と実推論
+精度の実測は WI0-b の対象）。比較は本モジュール新設の LCS（最長共通部分列）
+実装 ``_lcs_length`` を pitch 系列・隣接差分（interval）系列の双方に適用し、
+``pitch_lcs_ratio`` / ``interval_lcs_ratio`` として記録する — 恒等判定
+（``pitch_sequence_exact_match``）は系列の完全一致のみで行う。
 
 harmony / structure の measurements の note は事実（一致した cycle 数・食い違った
 tail の長さ、あるいは正規化後の列が一致したかどうか）のみを記述し、食い違いの
@@ -99,9 +142,10 @@ tail の長さ、あるいは正規化後の列が一致したかどうか）の
 from __future__ import annotations
 
 import json
+import math
 import re
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Callable, Generic, Literal, Optional, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -120,6 +164,7 @@ from svp_rpe.arrange.section_map import (
     parse_section_map_artifact_0_2,
 )
 from svp_rpe.compose.models import ChordSpec
+from svp_rpe.eval.lyrics_match import char_level_normalize, match_lyrics
 from svp_rpe.roundtrip.compare import (
     chord_sequence_match_rate,
     repeated_chord_sequence_match_rate,
@@ -147,21 +192,64 @@ Determination = Literal["exact_match", "deferred", "no_sensor"]
 # `AdherenceStatus` is unaffected — this narrowing is local to the sidecar.
 ObservationAdherenceStatus = Literal["preserved", "not_observed"]
 
-# D-4: lyrics / melody はこの PR ではセンサー本体を配線しない（optional extra
-# 依存）。sensor 名 + 不在理由（将来の接続点込み）のみ固定で記録する。
+# D-4: lyrics / melody sensors (WI0-a) are wired only for the (domain,
+# artifact_type) pair `is_lyrics_sensor_anchor` / `is_melody_sensor_anchor`
+# actually route — this dict is the fallback for anchors whose domain matches
+# but whose artifact_type doesn't (predicate non-match; kept exactly as the
+# harmony/structure precedent's `_observe_unavailable` fallback shape). It is
+# NOT reached for the dependency-missing case anymore — that now degrades to
+# no_sensor from inside `_observe_lyrics`/`_observe_melody` themselves, with
+# the adapter's own exception message as `reason` (see the module docstring).
 _NO_SENSOR_INFO: dict[str, tuple[str, str]] = {
     "lyrics": (
         "lyrics_transcription",
-        "lyrics sensor not wired in this PR (requires the 'lyrics' extra / "
-        "faster-whisper); future connection point: eval/lyrics_match.py + "
-        "rpe/learned/lyrics_adapter.py",
+        "lyrics sensor is wired only for artifact_type == 'lyrics_text' anchors "
+        "(requires the 'lyrics' extra / faster-whisper at runtime); "
+        "see eval/lyrics_match.py + rpe/learned/lyrics_adapter.py",
     ),
     "melody": (
         "note_events",
-        "melody sensor not wired in this PR (requires the 'basic-pitch' extra); "
-        "future connection point: rpe/learned/basic_pitch_adapter.py",
+        "melody sensor is wired only for artifact_type == 'note_events_json' "
+        "anchors (requires the 'basic-pitch' extra at runtime); "
+        "see rpe/learned/basic_pitch_adapter.py",
     ),
 }
+
+
+_T = TypeVar("_T")
+
+
+class _OnceCache(Generic[_T]):
+    """Zero-arg callable wrapper: runs ``compute`` at most once and replays
+    the cached result on every subsequent call (Codex P2, PR #198 review
+    round 2 — "Validate anchors before running learned inference").
+
+    ``build_observation_report`` constructs one of these per report for the
+    lyrics/melody learned inference helpers instead of calling
+    ``_transcribe_lyrics_for_observation`` / ``_extract_melody_for_observation``
+    eagerly before iterating any anchor. The cache instance itself is handed
+    down through ``_observe_anchor`` to ``_observe_lyrics`` / ``_observe_melody``,
+    which only invoke it *after* their own canonical-artifact validation
+    (UTF-8 decode / note-events schema check) has passed for that anchor.
+    This keeps the R4 "at most 1 underlying call per report, 0 calls when no
+    matching anchor exists" contract intact while adding the property this
+    round fixes: a malformed canonical artifact must fail before the
+    expensive, optional-extra-gated learned helper ever runs, not after —
+    regardless of how many anchors of that artifact_type the manifest
+    declares, and regardless of which one (malformed or well-formed) happens
+    to be validated first.
+    """
+
+    _UNSET = object()
+
+    def __init__(self, compute: Callable[[], _T]) -> None:
+        self._compute = compute
+        self._result: object = self._UNSET
+
+    def __call__(self) -> _T:
+        if self._result is self._UNSET:
+            self._result = self._compute()
+        return self._result  # type: ignore[return-value]
 
 
 class ObserveModel(BaseModel):
@@ -703,6 +791,575 @@ def _observe_structure(
     )
 
 
+# --- lyrics sensor (WI0-a, 2026-07-20) ---------------------------------------
+
+
+def _transcribe_lyrics_for_observation(
+    audio_path: Path,
+) -> tuple[Optional[str], Optional[str]]:
+    """Transcribe `audio_path`'s lyrics for the observation sensor, isolating
+    the optional `lyrics` extra (faster-whisper + Demucs) from the caller.
+
+    Returns `(transcribed_text, None)` on success, or `(None, reason)` when
+    the optional dependency is unavailable — `reason` is the adapter's own
+    exception message (install hint included), never fabricated here.
+
+    Probes `ensure_lyrics_available()` (a faster-whisper import check only —
+    no model load, no Demucs invocation) BEFORE calling `transcribe_lyrics`
+    (Codex P2, WI0-a review): without this, a missing faster-whisper install
+    would still pay for `transcribe_lyrics`'s default `separate_vocals=True`
+    Demucs pass before hitting the whisper import and raising
+    `LearnedModelUnavailable` — wasted work on a path already known to be a
+    dead end. `cli/roundtrip_cmd.py`'s `lyrics_adherence_cmd` follows the
+    same probe-first shape; this mirrors it so both call sites degrade
+    identically without doing the separation work.
+
+    Deviation from the letter of the repo's usual fallback-chain convention
+    (CLAUDE.md: "try/except ModuleNotFoundError to detect an optional
+    dependency"): `rpe/learned/lyrics_adapter.transcribe_lyrics` does not
+    raise `ModuleNotFoundError` itself — it already converts the underlying
+    `ImportError` into `LearnedModelUnavailable` (the `rpe/learned` package's
+    own "optional dependency missing" exception; checked directly against
+    the adapter source for this PR), and its default `separate_vocals=True`
+    path can independently raise `SeparatorNotAvailableError` (missing
+    Demucs) before ever reaching the faster-whisper import. Both are caught
+    here — the same two exception types the existing CLI call sites catch
+    for this exact function (`cli/roundtrip_cmd.py`'s `lyrics_adherence_cmd`,
+    `cli/extract_cmd.py`'s `--lyrics` path) — so this helper matches actual
+    adapter behavior rather than the literal exception-class name.
+    """
+    from svp_rpe.io.source_separator import SeparatorNotAvailableError
+    from svp_rpe.rpe.learned import LearnedModelUnavailable
+    from svp_rpe.rpe.learned.lyrics_adapter import (
+        ensure_lyrics_available,
+        transcribe_lyrics,
+    )
+
+    try:
+        ensure_lyrics_available()
+    except LearnedModelUnavailable as exc:
+        return None, str(exc)
+
+    try:
+        transcription = transcribe_lyrics(str(audio_path))
+    except (LearnedModelUnavailable, SeparatorNotAvailableError) as exc:
+        return None, str(exc)
+    return transcription.text, None
+
+
+def _load_lyrics_artifact(raw_bytes: bytes, *, artifact_path: Path) -> list[str]:
+    """``lyrics_text`` 正典 artifact (UTF-8 プレーンテキスト) を行のリストへ変換する。
+
+    ``_load_note_events_artifact`` と同じ契約: ``raw_bytes`` は呼び出し側が既に
+    hash 照合済みの bytes（本関数はファイルを一切読まない）。``artifact_path`` は
+    エラーメッセージ表示専用。不正 UTF-8 は fail-closed で ``ValueError``。
+
+    Codex P2 (PR #198 review round 3) で ``_observe_lyrics`` のインライン
+    decode から抽出: ``build_observation_report`` が learned 推論より前に
+    routed な全 lyrics anchor を一括事前検証する際、``_observe_lyrics`` を
+    経由せずこの parse だけを直接呼べる必要があるため、単独の関数として
+    切り出す（``_load_note_events_artifact`` が melody 側で既に担っている
+    役割と対称）。
+    """
+    try:
+        return raw_bytes.decode("utf-8").splitlines()
+    except UnicodeDecodeError as exc:
+        raise ValueError(
+            f"lyrics artifact is not valid UTF-8 text: {artifact_path}: {exc}"
+        ) from exc
+
+
+def _observe_lyrics(
+    anchor: IdentityAnchor,
+    *,
+    manifest_dir: Path,
+    work_id: str,
+    artifact_bytes: bytes,
+    audio_path: Path,
+    transcription_provider: Optional[Callable[[], tuple[Optional[str], Optional[str]]]] = None,
+    canonical_lines: Optional[list[str]] = None,
+) -> AnchorObservation:
+    """``transcription_provider`` (Codex P2, PR #198 review round 2): a
+    zero-arg callable — typically an ``_OnceCache`` shared across every
+    lyrics_text anchor in one report (``build_observation_report`` builds it
+    at most once and passes the same instance to every lyrics anchor via
+    ``_observe_anchor``'s ``lyrics_transcription_provider`` parameter) — a
+    manifest can legally declare more than one lyrics anchor, and re-running
+    faster-whisper/Demucs once per anchor would repeat the same expensive,
+    dependency-gated call against the same ``audio_path`` for an identical
+    outcome.
+
+    Deliberately **not invoked until after** this anchor's own canonical
+    artifact has been validated (the UTF-8 decode below): the caller must be
+    able to hand this function a provider that hasn't computed anything yet
+    (round 2's fix — the previous ``transcription`` tuple parameter was
+    already fully computed by the time it reached here, which meant
+    ``build_observation_report`` had to eagerly call the learned helper
+    before any anchor validation ran at all). Passing a lazy provider lets
+    validation gate the first actual inference call instead.
+
+    ``None`` (the default) means "no shared provider" and falls back to
+    calling ``_transcribe_lyrics_for_observation`` directly (still only after
+    validation, same ordering) — this keeps the function callable standalone
+    (as the existing single-anchor tests in this module already do) without
+    requiring every caller to construct a provider.
+
+    ``canonical_lines`` (Codex P2, PR #198 review round 3): when supplied,
+    this anchor's canonical artifact has ALREADY been parsed/validated by
+    ``build_observation_report`` as part of its family-wide pre-validation
+    pass (see that function's docstring) — this function reuses that value
+    instead of re-decoding ``artifact_bytes`` (no double parse). ``None``
+    (the default) falls back to parsing here, same as before — this keeps
+    direct/standalone calls (unit tests, backward compatibility) working
+    without requiring a pre-parsed value.
+    """
+    # Resolved only for error-message display — never read here, same
+    # contract `_observe_harmony`/`_observe_structure` follow for their own
+    # artifacts.
+    if canonical_lines is not None:
+        expected_lines = canonical_lines
+    else:
+        artifact_path = _resolve_confined(
+            anchor.artifact, manifest_dir, work_id=work_id, target=f"anchor '{anchor.id}'"
+        )
+        expected_lines = _load_lyrics_artifact(artifact_bytes, artifact_path=artifact_path)
+
+    sensor_name = "lyrics_transcription"
+    # Codex P2 round 2: the shared provider (if any) is only ever called
+    # here, after the canonical artifact above has already been validated —
+    # never earlier. Round 3 widens this guarantee to the whole family (see
+    # `build_observation_report`): by the time this call is reached, EVERY
+    # routed lyrics anchor in the report — not just this one — has already
+    # been validated, so a malformed sibling anchor can no longer let this
+    # anchor's inference run first.
+    if transcription_provider is not None:
+        transcribed_text, reason = transcription_provider()
+    else:
+        transcribed_text, reason = _transcribe_lyrics_for_observation(audio_path)
+    if transcribed_text is None:
+        return AnchorObservation(
+            anchor_id=anchor.id,
+            domain=anchor.domain,
+            sensor=SensorRecord(name=sensor_name, available=False, reason=reason),
+            measurements={},
+            adherence_status="not_observed",
+            determination="no_sensor",
+            note=None,
+        )
+
+    match_report = match_lyrics(expected_lines, transcribed_text)
+    measurements: dict[str, JsonValue] = {
+        "canonical_line_count": len(expected_lines),
+        # `match_lyrics`'s full report, verbatim and unmodified — this
+        # instrument reuses its measurements rather than inventing new ones
+        # (WI0-a design contract B).
+        "match_lyrics": match_report,
+    }
+    sensor = SensorRecord(name=sensor_name, available=True, reason=None)
+    # The D-1 identity gate is STRING EQUALITY of the two texts after
+    # `match_lyrics`'s own char-level normalization — NOT
+    # `overall_similarity == 1.0` (Codex P2, WI0-a review): `overall_similarity`
+    # is rounded to 4dp before being returned, so a genuinely non-identical
+    # pair (e.g. a long transcript with a single mismatched character) can
+    # round up to a reported `1.0` and be misclassified `exact_match`. This
+    # reuses `char_level_normalize` — the exact normalization `match_lyrics`
+    # applies to both sides before computing that same ratio — so the gate
+    # stays behaviorally aligned with `overall_similarity`'s definition
+    # ("are these two normalized texts the same string") while comparing the
+    # unrounded strings directly instead of the rounded scalar.
+    canonical_normalized = char_level_normalize("\n".join(expected_lines))
+    transcribed_normalized = char_level_normalize(transcribed_text)
+    if canonical_normalized == transcribed_normalized:
+        return AnchorObservation(
+            anchor_id=anchor.id,
+            domain=anchor.domain,
+            sensor=sensor,
+            measurements=measurements,
+            adherence_status="preserved",
+            determination="exact_match",
+            note=(
+                "transcribed lyrics match the canonical lines exactly after "
+                "normalization (char_level_normalize string equality, not a "
+                "rounded overall_similarity comparison)."
+            ),
+        )
+    return AnchorObservation(
+        anchor_id=anchor.id,
+        domain=anchor.domain,
+        sensor=sensor,
+        measurements=measurements,
+        adherence_status="not_observed",
+        determination="deferred",
+        note=(
+            "transcribed lyrics do not match the canonical lines exactly "
+            "(changed_within_policy/changed_outside_policy classification is "
+            "out of scope for this instrument and deferred to a future "
+            "threshold Design Memo, D-1)."
+        ),
+    )
+
+
+# --- melody sensor (WI0-a, 2026-07-20) ---------------------------------------
+
+NOTE_EVENTS_ARTIFACT_SCHEMA = "note-events/0.1"
+
+_PITCH_CLASS_BASE: dict[str, int] = {
+    "C": 0,
+    "D": 2,
+    "E": 4,
+    "F": 5,
+    "G": 7,
+    "A": 9,
+    "B": 11,
+}
+_NOTE_NAME_PATTERN = re.compile(r"^([A-Ga-g])([#♯]|[b♭])?(-?\d+)$")
+
+
+def _note_name_to_midi(name: str) -> int:
+    """Pure note-name -> MIDI integer conversion (v0, WI0-a).
+
+    Scientific pitch notation (`C4` == MIDI 60, `A4` == MIDI 69 / 440 Hz):
+    `midi = (octave + 1) * 12 + pitch_class`. Accepts a single optional
+    accidental, ASCII (`#` / `b`) or Unicode (`♯` / `♭`).
+
+    No existing parser in this repo covers this shape (checked per the WI0-a
+    design contract): `perform/performer.py`'s `PITCH_CLASSES` / `parse_key`
+    pair parses a bare `<letter><accidental> major|minor` KEY string, not an
+    octave-qualified note name like `"Eb4"` — a different grammar entirely —
+    so this is a new pure function rather than a reuse.
+
+    Octave-crossing accidentals (Codex P2, WI0-a review): `pitch_class` is
+    NOT wrapped to `0..11` before combining with the octave term. Wrapping
+    it first (the previous implementation's `pitch_class % 12`) silently
+    drops the octave carry — `Cb4` (pitch_class -1) would fold to 11 and
+    read as the octave-4 pitch class B *within octave 4* (MIDI 71, an
+    octave too high) instead of B3 (MIDI 59, one semitone below C4); `B#3`
+    (pitch_class 12) would fold to 0 and read as C *within octave 3* (MIDI
+    48) instead of C4 (MIDI 60, one semitone above B3). Adding the
+    unwrapped (possibly -1 or 12) `pitch_class` straight to `(octave + 1) *
+    12` carries the accidental across the octave boundary correctly in
+    both directions.
+
+    The result is validated against the MIDI byte range (`0..127`) and
+    raises `ValueError` on overflow/underflow — same fail-closed posture as
+    the unsupported-note-name branch above, rather than silently returning
+    an out-of-range int.
+    """
+    match = _NOTE_NAME_PATTERN.match(name.strip())
+    if match is None:
+        raise ValueError(f"unsupported note name: {name!r}")
+    letter, accidental, octave_text = match.groups()
+    pitch_class = _PITCH_CLASS_BASE[letter.upper()]
+    if accidental in ("#", "♯"):
+        pitch_class += 1
+    elif accidental in ("b", "♭"):
+        pitch_class -= 1
+    octave = int(octave_text)
+    midi = (octave + 1) * 12 + pitch_class
+    if not 0 <= midi <= 127:
+        raise ValueError(
+            f"note name {name!r} resolves to out-of-range MIDI value {midi} "
+            "(valid range is 0-127)"
+        )
+    return midi
+
+
+def _load_note_events_artifact(raw_bytes: bytes, *, artifact_path: Path) -> list[int]:
+    """``note-events/0.1`` artifact (JSON) を onset 順の正典 MIDI 整数列へ変換する。
+
+    `_load_chord_progression` と同じ契約: ``raw_bytes`` は呼び出し側が既に hash
+    照合済みの bytes（本関数はファイルを一切読まない）。``artifact_path`` は
+    エラーメッセージ表示専用。``schema`` キーは ``NOTE_EVENTS_ARTIFACT_SCHEMA``
+    の既知値ちょうどでなければ fail-closed（欠落・未知値どちらも ``ValueError``）。
+    各 note エントリは ``pitch``（音名文字列）と ``start_beat``（並べ替えキー。
+    onset 順を復元するためだけに使い、拍→秒変換は一切行わない）を必須とする。
+
+    ``duration_beats``（Codex P2, PR #198 review）: v0 の恒等判定
+    （``_observe_melody``）は pitch 系列のみを比較し、本関数が返す MIDI 整数列も
+    onset 順のピッチのみで duration の値そのものは呼び出し側で一切使わない —
+    その挙動（比較ロジック）は変えない。しかし committed fixture
+    （``examples/arrangement/midnight_signal/identity/melody_notes.json``）と
+    `docs/cli.md` の note-events/0.1 定義は ``duration_beats`` をスキーマの必須
+    フィールドとして明記しているため、「値を使わない」ことと「検証しない」ことは
+    別問題 — 欠落・型不正（非数値）・負値はいずれも fail-closed で拒否する
+    （``_load_chord_progression`` が ``chords`` の型不正を拒否するのと同じ、
+    「canonical artifact が壊れていたら黙って通さない」流儀）。検証範囲の拡張のみで
+    比較ロジックには一切手を入れていない。
+
+    非有限値（Codex P2, PR #198 review round 2）: ``start_beat`` /
+    ``duration_beats`` はいずれも ``math.isfinite`` を要求する — ``json.loads``
+    は標準外の ``NaN`` / ``Infinity`` / ``-Infinity`` バアワードを許容してしまい
+    （``isinstance(x, (int, float))`` だけでは通ってしまう）、``start_beat`` が
+    非有限だと onset ソートが破綻し、``duration_beats`` が非有限だと後続の
+    非負チェック（``nan < 0`` は ``False``）をすり抜けかねないため、型検証と
+    同じ fail-closed の posture で拒否する。
+    """
+    try:
+        payload = json.loads(raw_bytes.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ValueError(
+            f"note events artifact is not valid JSON: {artifact_path}: {exc}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise ValueError(
+            f"note events artifact must be a mapping with a 'notes' key: {artifact_path}"
+        )
+    schema = payload.get("schema")
+    if schema != NOTE_EVENTS_ARTIFACT_SCHEMA:
+        raise ValueError(
+            f"note events artifact has unsupported schema {schema!r} "
+            f"(expected {NOTE_EVENTS_ARTIFACT_SCHEMA!r}): {artifact_path}"
+        )
+    if "notes" not in payload:
+        raise ValueError(
+            f"note events artifact must be a mapping with a 'notes' key: {artifact_path}"
+        )
+    notes_field = payload["notes"]
+    if not isinstance(notes_field, list):
+        raise ValueError(f"note events artifact 'notes' must be a list: {artifact_path}")
+    if not notes_field:
+        raise ValueError(f"note events artifact 'notes' must not be empty: {artifact_path}")
+    entries: list[tuple[float, int, str]] = []
+    for index, item in enumerate(notes_field):
+        if (
+            not isinstance(item, dict)
+            or "pitch" not in item
+            or "start_beat" not in item
+            or "duration_beats" not in item
+        ):
+            raise ValueError(
+                "note events artifact note entry missing "
+                "'pitch'/'start_beat'/'duration_beats': "
+                f"{item!r} ({artifact_path})"
+            )
+        pitch = item["pitch"]
+        start_beat = item["start_beat"]
+        duration_beats = item["duration_beats"]
+        if not isinstance(pitch, str):
+            raise ValueError(
+                f"note events artifact note 'pitch' must be a string: {item!r} ({artifact_path})"
+            )
+        if not isinstance(start_beat, (int, float)) or isinstance(start_beat, bool):
+            raise ValueError(
+                "note events artifact note 'start_beat' must be numeric: "
+                f"{item!r} ({artifact_path})"
+            )
+        # Codex P2 (PR #198 review round 2): `json.loads` is non-standard-JSON
+        # permissive by default and happily parses the bareword tokens
+        # `NaN`/`Infinity`/`-Infinity` into `float('nan')`/`float('inf')`/
+        # `float('-inf')` — `isinstance(x, (int, float))` alone does not
+        # reject these (they genuinely are floats by this point), and letting
+        # a non-finite `start_beat` through would corrupt the onset sort
+        # below (`nan` compares false against everything, `inf`/`-inf` would
+        # silently pin a note to the very end/start of the sequence). Same
+        # fail-closed posture as the type checks around it.
+        if not math.isfinite(start_beat):
+            raise ValueError(
+                "note events artifact note 'start_beat' must be finite "
+                f"(not NaN/Infinity): {item!r} ({artifact_path})"
+            )
+        # Codex P2 (PR #198 review): `duration_beats` is part of the
+        # committed fixture's/docs' note-events/0.1 schema even though v0's
+        # identity gate never reads its value (pitch-only comparison,
+        # unchanged by this validation) — a malformed canonical artifact
+        # must fail-closed here rather than silently reporting `preserved`.
+        # Same posture/shape as the `start_beat` numeric check above and as
+        # `_load_chord_progression`'s type validation for `chords`.
+        if not isinstance(duration_beats, (int, float)) or isinstance(duration_beats, bool):
+            raise ValueError(
+                "note events artifact note 'duration_beats' must be numeric: "
+                f"{item!r} ({artifact_path})"
+            )
+        # Codex P2 (PR #198 review round 2): same NaN/Infinity closure as
+        # `start_beat` above — checked before the negative-value check below,
+        # since `nan < 0` is `False` (a NaN would otherwise slip past that
+        # check silently) and `-inf < 0` is `True` (which would raise the
+        # wrong, misleading "must be non-negative" message instead of naming
+        # the actual problem).
+        if not math.isfinite(duration_beats):
+            raise ValueError(
+                "note events artifact note 'duration_beats' must be finite "
+                f"(not NaN/Infinity): {item!r} ({artifact_path})"
+            )
+        if duration_beats < 0:
+            raise ValueError(
+                "note events artifact note 'duration_beats' must be non-negative: "
+                f"{item!r} ({artifact_path})"
+            )
+        entries.append((float(start_beat), index, pitch))
+    # Stable sort keyed on (start_beat, original artifact index): the index
+    # is an explicit tie-break rather than relying implicitly on
+    # `list.sort`'s stability, so onset order is well-defined even if this
+    # list is later filtered/reordered upstream.
+    entries.sort(key=lambda entry: (entry[0], entry[1]))
+    return [_note_name_to_midi(pitch) for _, _, pitch in entries]
+
+
+def _lcs_length(a: list[int], b: list[int]) -> int:
+    """Longest common subsequence length between integer sequences `a`/`b`
+    (standard O(len(a) * len(b)) DP).
+
+    Used by `_observe_melody` for both the pitch sequence and the
+    adjacent-interval sequence — no existing repo utility does subsequence
+    comparison over pitch/interval integers (`roundtrip/compare.py`'s
+    chord-sequence helpers only ever compare `(root, quality)` tuples
+    position-aligned/collapsed, not via LCS; `keys.py` /
+    `eval/anchor_matcher.py` / `eval/semantic_similarity.py` don't touch
+    pitch sequences at all — checked per the WI0 exploration map), so this is
+    a new pure function.
+    """
+    if not a or not b:
+        return 0
+    previous = [0] * (len(b) + 1)
+    for x in a:
+        current = [0] * (len(b) + 1)
+        for j, y in enumerate(b, start=1):
+            current[j] = previous[j - 1] + 1 if x == y else max(previous[j], current[j - 1])
+        previous = current
+    return previous[-1]
+
+
+def _adjacent_diffs(seq: list[int]) -> list[int]:
+    """Consecutive-difference series of `seq` (length `len(seq) - 1`, empty
+    if `len(seq) < 2`)."""
+    return [second - first for first, second in zip(seq, seq[1:])]
+
+
+def _extract_melody_for_observation(
+    audio_path: Path,
+) -> tuple[Optional[list[int]], Optional[str]]:
+    """Run basic-pitch on `audio_path` for the observation sensor, isolating
+    the optional `pitch` extra from the caller.
+
+    Returns `(observed_midi, None)` on success — `observed_midi` is
+    `LearnedNoteEvent.pitch_midi` in `start_sec` ascending order (no time
+    alignment against `start_beat`/BPM; see the module docstring's WI0-a
+    note) — or `(None, reason)` when the optional dependency is unavailable.
+
+    Same deviation from the literal "except ModuleNotFoundError" convention
+    as `_transcribe_lyrics_for_observation`: `basic_pitch_adapter` converts
+    the underlying `ImportError` into `LearnedModelUnavailable` itself
+    (checked directly against the adapter source), so that is the exception
+    actually caught here — matching `cli/extract_cmd.py`'s own `--pitch`
+    catch.
+    """
+    from svp_rpe.rpe.learned import LearnedModelUnavailable
+    from svp_rpe.rpe.learned.basic_pitch_adapter import extract_basic_pitch_annotations
+
+    try:
+        annotations = extract_basic_pitch_annotations(audio_path)
+    except LearnedModelUnavailable as exc:
+        return None, str(exc)
+    ordered_events = sorted(annotations.note_events, key=lambda event: event.start_sec)
+    return [event.pitch_midi for event in ordered_events], None
+
+
+def _observe_melody(
+    anchor: IdentityAnchor,
+    *,
+    manifest_dir: Path,
+    work_id: str,
+    artifact_bytes: bytes,
+    audio_path: Path,
+    note_events_provider: Optional[
+        Callable[[], tuple[Optional[list[int]], Optional[str]]]
+    ] = None,
+    canonical_midi: Optional[list[int]] = None,
+) -> AnchorObservation:
+    """``note_events_provider`` (Codex P2, PR #198 review round 2): a zero-arg
+    callable — typically an ``_OnceCache`` shared across every
+    note_events_json anchor in one report — same rationale, lazy-until-
+    validated ordering, and default-``None`` fallback shape as
+    ``_observe_lyrics``'s ``transcription_provider`` parameter (see that
+    docstring).
+
+    ``canonical_midi`` (Codex P2, PR #198 review round 3): when supplied,
+    this anchor's canonical note-events artifact has ALREADY been
+    parsed/validated by ``build_observation_report`` as part of its
+    family-wide pre-validation pass — this function reuses that value
+    instead of re-parsing ``artifact_bytes`` (no double parse). ``None``
+    (the default) falls back to parsing here, same as
+    ``_observe_lyrics``'s ``canonical_lines`` parameter — see that
+    docstring."""
+    if canonical_midi is None:
+        artifact_path = _resolve_confined(
+            anchor.artifact, manifest_dir, work_id=work_id, target=f"anchor '{anchor.id}'"
+        )
+        canonical_midi = _load_note_events_artifact(artifact_bytes, artifact_path=artifact_path)
+    sensor_name = "note_events"
+
+    # Codex P2 round 2: the canonical artifact above has already been
+    # validated (and would have raised on malformed content) — the provider
+    # is only ever called here, never earlier. Round 3 widens this
+    # guarantee to the whole family — see `_observe_lyrics`'s matching
+    # comment and `build_observation_report`'s docstring.
+    if note_events_provider is not None:
+        observed_midi, reason = note_events_provider()
+    else:
+        observed_midi, reason = _extract_melody_for_observation(audio_path)
+    if observed_midi is None:
+        return AnchorObservation(
+            anchor_id=anchor.id,
+            domain=anchor.domain,
+            sensor=SensorRecord(name=sensor_name, available=False, reason=reason),
+            measurements={},
+            adherence_status="not_observed",
+            determination="no_sensor",
+            note=None,
+        )
+
+    canonical_length = len(canonical_midi)
+    observed_length = len(observed_midi)
+    pitch_lcs = _lcs_length(canonical_midi, observed_midi)
+    pitch_lcs_ratio = round(pitch_lcs / canonical_length, 4) if canonical_length else 0.0
+
+    canonical_intervals = _adjacent_diffs(canonical_midi)
+    observed_intervals = _adjacent_diffs(observed_midi)
+    interval_lcs_ratio: Optional[float]
+    if len(canonical_intervals) >= 1:
+        interval_lcs = _lcs_length(canonical_intervals, observed_intervals)
+        interval_lcs_ratio = round(interval_lcs / len(canonical_intervals), 4)
+    else:
+        # canonical_length < 2 — no adjacent pair exists to diff, so an
+        # interval-LCS ratio is undefined rather than a misleading 0.0/1.0.
+        interval_lcs_ratio = None
+
+    pitch_sequence_exact_match = canonical_midi == observed_midi
+    measurements: dict[str, JsonValue] = {
+        "canonical_length": canonical_length,
+        "observed_length": observed_length,
+        "pitch_sequence_exact_match": pitch_sequence_exact_match,
+        "pitch_lcs_ratio": pitch_lcs_ratio,
+        "interval_lcs_ratio": interval_lcs_ratio,
+        "observed_head": observed_midi[:8],
+    }
+    sensor = SensorRecord(name=sensor_name, available=True, reason=None)
+    if pitch_sequence_exact_match:
+        return AnchorObservation(
+            anchor_id=anchor.id,
+            domain=anchor.domain,
+            sensor=sensor,
+            measurements=measurements,
+            adherence_status="preserved",
+            determination="exact_match",
+            note="observed MIDI pitch sequence matches the canonical sequence exactly.",
+        )
+    return AnchorObservation(
+        anchor_id=anchor.id,
+        domain=anchor.domain,
+        sensor=sensor,
+        measurements=measurements,
+        adherence_status="not_observed",
+        determination="deferred",
+        note=(
+            "observed MIDI pitch sequence does not match the canonical sequence "
+            "exactly (changed_within_policy/changed_outside_policy classification "
+            "is out of scope for this instrument and deferred to a future "
+            "threshold Design Memo, D-1)."
+        ),
+    )
+
+
 def _observe_unavailable(anchor: IdentityAnchor) -> AnchorObservation:
     if anchor.domain == "harmony":
         # Reached only when domain == "harmony" but artifact_type isn't
@@ -821,6 +1478,34 @@ def is_structure_sensor_anchor(anchor: IdentityAnchor) -> bool:
     )
 
 
+def is_lyrics_sensor_anchor(anchor: IdentityAnchor) -> bool:
+    """Whether `anchor` is the (domain, artifact_type) pair the lyrics
+    sensor actually reads content for — `domain == "lyrics"` and
+    `artifact_type == "lyrics_text"` (WI0-a, 2026-07-20).
+
+    Same harmony-style 2-tuple shape as `is_harmony_sensor_anchor` — no
+    `format_version` gate the way `is_structure_sensor_anchor` adds, because
+    (checked per the WI0-a design contract) this repo has no pre-existing
+    other-format `lyrics_text` anchor precedent the way `section_map` did for
+    structure before PR #192. Consulted at the same sync points harmony's
+    predicate is: `_observe_anchor`'s dispatch and the CLI's `collect=` /
+    snapshot-gate predicates (`cli/observe_cmd.py`).
+    """
+    return anchor.domain == "lyrics" and anchor.artifact_type == "lyrics_text"
+
+
+def is_melody_sensor_anchor(anchor: IdentityAnchor) -> bool:
+    """Whether `anchor` is the (domain, artifact_type) pair the melody
+    sensor actually reads content for — `domain == "melody"` and
+    `artifact_type == "note_events_json"` (WI0-a, 2026-07-20). Same shape
+    and rationale as `is_lyrics_sensor_anchor` — see that docstring. The
+    note-events artifact's own `schema` field (checked inside
+    `_load_note_events_artifact`) is what fails closed on an unsupported
+    note-events format version, not this routing predicate.
+    """
+    return anchor.domain == "melody" and anchor.artifact_type == "note_events_json"
+
+
 def _observe_anchor(
     anchor: IdentityAnchor,
     *,
@@ -828,7 +1513,27 @@ def _observe_anchor(
     work_id: str,
     bundle: Optional[RPEBundle],
     artifact_bytes_by_id: dict[str, bytes],
+    audio_path: Optional[Path] = None,
+    lyrics_transcription_provider: Optional[
+        Callable[[], tuple[Optional[str], Optional[str]]]
+    ] = None,
+    melody_note_events_provider: Optional[
+        Callable[[], tuple[Optional[list[int]], Optional[str]]]
+    ] = None,
+    lyrics_canonical_by_id: Optional[dict[str, list[str]]] = None,
+    melody_canonical_by_id: Optional[dict[str, list[int]]] = None,
 ) -> AnchorObservation:
+    """``lyrics_canonical_by_id`` / ``melody_canonical_by_id`` (Codex P2,
+    PR #198 review round 3): anchor-id-keyed maps of already-parsed/validated
+    canonical values, built once by ``build_observation_report``'s
+    family-wide pre-validation pass (see that function's docstring) and
+    looked up here per anchor so ``_observe_lyrics``/``_observe_melody``
+    never re-parse an artifact this function's caller already validated.
+    ``None`` (the default, and what direct/standalone callers of
+    ``_observe_anchor`` naturally pass) means "no pre-parsed value available"
+    and each sensor falls back to parsing its own artifact internally,
+    exactly as before this parameter existed.
+    """
     if is_harmony_sensor_anchor(anchor):
         # `build_observation_report` only extracts (and passes a non-None
         # bundle) when at least one manifest anchor matches a wired sensor's
@@ -851,6 +1556,40 @@ def _observe_anchor(
             work_id=work_id,
             bundle=bundle,
             artifact_bytes=artifact_bytes_by_id[anchor.id],
+        )
+    if is_lyrics_sensor_anchor(anchor):
+        # Lyrics/melody don't use the shared `RPEBundle` extraction at all —
+        # they read `audio_path` directly through their own optional-extra
+        # adapters (WI0-a), so `build_observation_report` always passes a
+        # real `audio_path` regardless of `bundle`/`needs_extraction`.
+        assert audio_path is not None
+        return _observe_lyrics(
+            anchor,
+            manifest_dir=manifest_dir,
+            work_id=work_id,
+            artifact_bytes=artifact_bytes_by_id[anchor.id],
+            audio_path=audio_path,
+            transcription_provider=lyrics_transcription_provider,
+            canonical_lines=(
+                lyrics_canonical_by_id.get(anchor.id)
+                if lyrics_canonical_by_id is not None
+                else None
+            ),
+        )
+    if is_melody_sensor_anchor(anchor):
+        assert audio_path is not None
+        return _observe_melody(
+            anchor,
+            manifest_dir=manifest_dir,
+            work_id=work_id,
+            artifact_bytes=artifact_bytes_by_id[anchor.id],
+            audio_path=audio_path,
+            note_events_provider=melody_note_events_provider,
+            canonical_midi=(
+                melody_canonical_by_id.get(anchor.id)
+                if melody_canonical_by_id is not None
+                else None
+            ),
         )
     return _observe_unavailable(anchor)
 
@@ -884,6 +1623,64 @@ def build_observation_report(
     1 つも無ければ ``extract_rpe_from_file`` を一切呼ばない。音声は provenance
     のため既に hash 済みであり、全 anchor が no_sensor の report にとって
     中身の decode は不要な作業（かつコスト）だからである。
+
+    lyrics / melody（WI0-a）はこの ``bundle``/``extract_rpe_from_file`` の
+    共有抽出には乗らない — それぞれ ``audio_path`` を直接読む独自の optional
+    extra アダプタ（``transcribe_lyrics`` / ``extract_basic_pitch_annotations``）
+    経由で測定するため、``audio_path`` は ``needs_extraction`` の真偽に関わらず
+    常に ``_observe_anchor`` へ渡す。実際に転写/推論が走るのは manifest に
+    lyrics/melody anchor が存在し、かつ `_observe_anchor` がそれへ routing
+    した場合のみ（余計な重処理をしない — WI0-a 設計契約 E）。
+
+    lyrics/melody の重い learned 推論も、rule-based ``bundle`` 抽出と同じ
+    「report あたり 1 回」の共有規律に従う（Codex P2, PR #198 review）:
+    manifest が同一 artifact_type の anchor を複数宣言した場合（例えば
+    lyrics_text anchor が 2 つ）でも、``_transcribe_lyrics_for_observation``
+    / ``_extract_melody_for_observation`` はそれぞれ最大 1 回しか呼ばない —
+    結果（成功時の値、および依存欠如時の ``(None, reason)`` の両方）を
+    memoize して該当する全 anchor へ配る。遅延評価は維持する: 該当
+    artifact_type の anchor が manifest に 1 つも無ければ、対応する helper
+    を一切呼ばない（``needs_extraction`` が harmony/structure に対して
+    行っているのと同じゲート方式）。
+
+    round 2 (Codex P2, PR #198 re-review): 「report あたり 1 回」の共有
+    そのものに加え、その 1 回がいつ発生するかも遅延させる。以前はここで
+    ``_transcribe_lyrics_for_observation`` / ``_extract_melody_for_observation``
+    を eager に（＝どの anchor の正典 artifact もまだ検証していない時点で）
+    呼んでいたため、正典 lyrics（不正 UTF-8）や正典 note-events
+    （schema/型不正）が壊れていても、``_observe_lyrics`` / ``_observe_melody``
+    が検証で fail-closed する前に高価な学習推論が実行されてしまっていた。
+    ここでは代わりに ``_OnceCache``（初回呼び出し時に 1 回だけ計算し以後は
+    同一結果を返す zero-arg callable）を構築するだけに留め、実際の呼び出しは
+    ``_observe_anchor`` 経由で ``_observe_lyrics`` / ``_observe_melody`` に
+    委ね、両者は自分の正典 artifact の parse・検証を通過した**後**にのみ
+    provider を呼ぶ。これにより次の 3 性質が同時に成立する: (1) 壊れた正典は
+    推論より前に fail する、(2) 複数 anchor が該当しても推論は report あたり
+    最大 1 回（``_OnceCache`` のメモ化）、(3) 該当 anchor が 1 つも無ければ
+    provider 自体を作らないので未呼び出しのまま。
+
+    round 3 (Codex P2, PR #198 review): round 2 は「1 anchor 分の検証 → その
+    anchor の推論」の順序は直したが、family 内に anchor が複数ある場合の
+    **anchor 間の**インターリーブは直っていなかった —
+    ``manifest.anchors`` を anchor ごとに逐次 ``_observe_anchor`` へ渡す
+    このリスト内包表記の構造上、lyrics_text anchor が 2 つ（1 つ目は正常、
+    2 つ目は malformed）ある manifest では、1 つ目の ``_observe_lyrics`` が
+    自分の正典検証を通過した時点で（2 つ目はまだ一切検証されていないのに）
+    共有 provider 経由で推論を呼んでしまい、2 つ目の検証失敗はその**後**に
+    発生していた（実測で確認済み）。ここでは family（lyrics / melody）
+    ごとに、routed な全 anchor の正典を ``_load_lyrics_artifact`` /
+    ``_load_note_events_artifact`` で**一括**事前 parse・検証してから
+    provider を組み立てる — family 内のどれか 1 つでも malformed なら、
+    その family の provider を構築する前（したがって learned ヘルパーを
+    一切呼ぶ前）に ``ValueError`` で fail-closed する。parse 結果は
+    anchor id をキーとする dict（``lyrics_canonical_by_id`` /
+    ``melody_canonical_by_id``）に集め、``_observe_anchor`` 経由で
+    ``_observe_lyrics`` / ``_observe_melody`` へ配る — 両者はこの
+    事前 parse 済み値を受け取った場合はもう一度 decode/parse し直さない
+    （二重 parse を避ける。``canonical_lines`` / ``canonical_midi`` 引数、
+    それぞれの docstring を参照）。該当 anchor が 1 つも無ければこの
+    pre-validation ループ自体が空回りするだけで parse も推論も発生せず、
+    推論は report あたり最大 1 回のままという round 1/2 の性質は変えない。
     """
     manifest_dir = Path(manifest_path).resolve().parent
     needs_extraction = any(
@@ -891,6 +1688,47 @@ def build_observation_report(
         for anchor in manifest.anchors
     )
     bundle = extract_rpe_from_file(str(audio_path)) if needs_extraction else None
+
+    # round 3: pre-validate every routed lyrics anchor's canonical artifact
+    # BEFORE constructing the shared inference provider — fail-closed, before
+    # any learned helper is ever reachable, if any one of them is malformed.
+    lyrics_anchors = [a for a in manifest.anchors if is_lyrics_sensor_anchor(a)]
+    lyrics_canonical_by_id: dict[str, list[str]] = {}
+    for lyrics_anchor in lyrics_anchors:
+        lyrics_artifact_path = _resolve_confined(
+            lyrics_anchor.artifact,
+            manifest_dir,
+            work_id=manifest.meta.work_id,
+            target=f"anchor '{lyrics_anchor.id}'",
+        )
+        lyrics_canonical_by_id[lyrics_anchor.id] = _load_lyrics_artifact(
+            artifact_bytes[lyrics_anchor.id], artifact_path=lyrics_artifact_path
+        )
+    lyrics_transcription_provider = (
+        _OnceCache(lambda: _transcribe_lyrics_for_observation(audio_path))
+        if lyrics_anchors
+        else None
+    )
+
+    # Same pre-validate-the-whole-family-first shape for melody.
+    melody_anchors = [a for a in manifest.anchors if is_melody_sensor_anchor(a)]
+    melody_canonical_by_id: dict[str, list[int]] = {}
+    for melody_anchor in melody_anchors:
+        melody_artifact_path = _resolve_confined(
+            melody_anchor.artifact,
+            manifest_dir,
+            work_id=manifest.meta.work_id,
+            target=f"anchor '{melody_anchor.id}'",
+        )
+        melody_canonical_by_id[melody_anchor.id] = _load_note_events_artifact(
+            artifact_bytes[melody_anchor.id], artifact_path=melody_artifact_path
+        )
+    melody_note_events_provider = (
+        _OnceCache(lambda: _extract_melody_for_observation(audio_path))
+        if melody_anchors
+        else None
+    )
+
     anchors = [
         _observe_anchor(
             anchor,
@@ -898,6 +1736,11 @@ def build_observation_report(
             work_id=manifest.meta.work_id,
             bundle=bundle,
             artifact_bytes_by_id=artifact_bytes,
+            audio_path=audio_path,
+            lyrics_transcription_provider=lyrics_transcription_provider,
+            melody_note_events_provider=melody_note_events_provider,
+            lyrics_canonical_by_id=lyrics_canonical_by_id,
+            melody_canonical_by_id=melody_canonical_by_id,
         )
         for anchor in manifest.anchors
     ]

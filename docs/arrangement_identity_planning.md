@@ -242,9 +242,14 @@ cycle-alignment 系列（`canonical_length` / `observed_length` /
 を記録する。**`adherence_status` の恒等判定（D-1）はこの cycle-alignment
 prefix が collapsed 列全体に一致するかどうかで行う**（frame 単位の生 match_rate
 は判定に使わない — 「作品の和声的同一性 = 繰り返される正典進行」という計器
-意味論への修正、2026-07-17 round 2）。lyrics/melody は optional extra 依存の
-ためセンサー本体を配線せず `available: false` + reason のみ記録する（他
-domain も同様に `no_sensor`）。`adherence_status` / `determination` は 3 分岐
+意味論への修正、2026-07-17 round 2）。lyrics/melody は WI0-a（2026-07-20）で
+センサーを配線した（lyrics: `eval/lyrics_match.match_lyrics` + faster-whisper
+転写・melody: note-events/0.1 正典→MIDI 変換 + basic-pitch 観測。ともに
+optional extra 依存 — `lyrics`/`pitch` 未導入環境では呼び出し時に
+`available: false` + reason へ degrade。melody v0 は音高系列比較のみで
+拍→秒の時間整列は未実装、実推論精度の実測は WI0-b の対象。詳細:
+[`cli.md`](cli.md) の `svprpe observe` 節）。rhythm/motif は引き続き
+`no_sensor`。`adherence_status` / `determination` は 3 分岐
 のみ（no_sensor / preserved+exact_match / not_observed+deferred）—
 **閾値判定は書いていない**。observe は package を書き換えず、provenance
 chain（manifest sha256 / anchor artifact hash / package・音声 sha256）を
@@ -389,7 +394,7 @@ enforce、D-3 連鎖は `svprpe verify` で再検証可能）。音源 4 本は�
 | AR2-3 | structure anchor policy | **完了（2026-07-19、AR2-3 Design Memo (Fable)）**: section-map/0.2（stable id 付き section map、0.1 と並置）+ `section_ref` 解決（0.2 anchor 存在時のみ fail-fast 検証、それ以外は opaque 後方互換）+ structure 変形語彙 3 語追加（section_insertion/section_omission/section_repetition、実 form 実測由来）。閾値分類は範囲外のまま |
 | AR3-1 | InputCapabilityProfile | 完了 (#180, #181) |
 | AR3-2 | PerformancePackage compiler + 縦切り E2E fixture | 実装済み（E2E fixture 追加 2026-07-17） |
-| AR4 | generated-output identity observation | 計器配線済み。harmony + structure を実測（decisive synth E2E + 2026-07-19 MusicGen 12s n=2 + 同日 MusicGen 30s form n=2）。判定閾値は未定（D-1）。実 Suno 5.5 初観測あり（非 canonical 探索 n=2×2・2026-07-19・`observed/suno/`） |
+| AR4 | generated-output identity observation | 計器配線済み。harmony + structure を実測（decisive synth E2E + 2026-07-19 MusicGen 12s n=2 + 同日 MusicGen 30s form n=2）。判定閾値は未定（D-1）。実 Suno 5.5 初観測あり（非 canonical 探索 n=2×2・2026-07-19・`observed/suno/`）。**WI0-a（2026-07-20）**: lyrics/melody センサーを配線（synthetic 検証のみ・実測は WI0-b） |
 
 2026-07-17: bundle/report に `content_digest`（内容指紋）と、
 `CompilationReport` 限定の `invocation_provenance.compiler`（実行環境の監査記録、

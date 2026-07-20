@@ -415,13 +415,15 @@ future Design Memo.
 
 | Case | `adherence_status` | `determination` |
 |---|---|---|
-| No sensor wired for the anchor's domain (lyrics/melody/rhythm/motif) | `not_observed` | `no_sensor` |
-| Sensor ran and measured an exact identity match (harmony: the collapsed observed sequence matches the canonical progression's cycle alternation all the way through, no leftover tail. structure: the normalized canonical and observed section sequences match exactly) | `preserved` | `exact_match` |
+| No sensor wired for the anchor's domain (rhythm/motif), OR a wired domain's optional extra isn't installed (lyrics: `lyrics`; melody: `pitch`) | `not_observed` | `no_sensor` |
+| Sensor ran and measured an exact identity match (harmony: the collapsed observed sequence matches the canonical progression's cycle alternation all the way through, no leftover tail. structure: the normalized canonical and observed section sequences match exactly. lyrics: the normalized canonical full text and normalized transcribed full text are string-equal (`eval/lyrics_match.char_level_normalize`, not a rounded `overall_similarity == 1.0` comparison). melody: the observed MIDI pitch sequence equals the canonical one exactly) | `preserved` | `exact_match` |
 | Sensor ran but did not match exactly | `not_observed` | `deferred` |
 
-Two sensors are wired: **harmony** and **structure** (2026-07-19, AR2-3 unfreeze
-condition (a); structure's `section-map/0.2` support landed the same day as AR2-3's
-implementation, `design_memo_ar2_3.md`). Both route on the *(domain, artifact_type)*
+Four sensors are wired: **harmony**, **structure**, **lyrics**, and **melody**
+(harmony/structure: 2026-07-19, AR2-3 unfreeze condition (a); structure's
+`section-map/0.2` support landed the same day as AR2-3's implementation,
+`design_memo_ar2_3.md`. lyrics/melody: WI0-a, 2026-07-20). All route on the
+*(domain, artifact_type)*
 pair, not the domain alone — a `harmony` anchor whose `artifact_type` isn't
 `chord_sequence_json` (e.g. `audio_excerpt`), or a `structure` anchor whose
 `artifact_type` isn't `section_map`, falls back to the generic no-sensor path even
@@ -607,10 +609,48 @@ preservation:
         - section_repetition
 ```
 
-lyrics/melody anchors are recorded as `available: false` with a `reason` (they need
-the optional `lyrics` / `basic-pitch` extras — not wired here); their future
-connection points are `eval/lyrics_match.py` / `rpe/learned/lyrics_adapter.py` and
-`rpe/learned/basic_pitch_adapter.py`.
+**lyrics** (`domain="lyrics", artifact_type="lyrics_text"`, WI0-a) probes
+`rpe/learned/lyrics_adapter.ensure_lyrics_available` first (faster-whisper import
+check only, no Demucs work) and degrades to `no_sensor` immediately if it's
+missing — same probe-first shape as `svprpe lyrics-adherence` — before
+transcribing the generated audio with `rpe/learned/lyrics_adapter.transcribe_lyrics`
+(requires the optional `lyrics` extra — faster-whisper + Demucs; by default
+isolates vocals via Demucs before transcribing) and comparing it against the
+canonical `lyrics_text` artifact's lines with `eval/lyrics_match.match_lyrics`
+(the same instrument `svprpe lyrics-adherence` uses — no new metric invented).
+`measurements` records `canonical_line_count` plus the full `match_lyrics` report
+verbatim under a `match_lyrics` key. The D-1 identity gate is **string equality**
+of the normalized canonical full text and normalized transcribed full text via
+`eval/lyrics_match.char_level_normalize` (the exact normalization `match_lyrics`
+applies to both sides before computing `overall_similarity`) — not a comparison
+against the rounded (4dp) `overall_similarity` scalar, which can round up to a
+reported `1.0` for a genuinely non-identical pair. `overall_similarity` remains
+in `measurements` for reference. Per-line `best_ratio` stays out of the gate
+either way — it's the order-free per-line presence read.
+
+**melody** (`domain="melody", artifact_type="note_events_json"`, WI0-a) parses the
+canonical `note-events/0.1` artifact (`{"schema": "note-events/0.1", "notes":
+[{"start_beat", "pitch", "duration_beats"}, ...]}`, beat-unit, note-name strings
+like `"Eb4"`) into an onset-ordered MIDI integer sequence, and extracts the
+generated audio with `rpe/learned/basic_pitch_adapter.extract_basic_pitch_annotations`
+(requires the optional `pitch` extra — basic-pitch, Python < 3.12 only) into its own
+`start_sec`-ordered MIDI sequence. **v0 compares pitch sequences only — there is no
+beat↔second time alignment** (deriving one would require a BPM estimate, itself a
+confound this instrument deliberately avoids; time alignment and real-inference
+accuracy are deferred to WI0-b). `measurements` records `canonical_length` /
+`observed_length` / `pitch_sequence_exact_match` / `pitch_lcs_ratio` (longest
+common subsequence of the two pitch sequences, over `canonical_length`) /
+`interval_lcs_ratio` (LCS of the two adjacent-semitone-difference sequences, over
+`canonical_length - 1`; `None` when `canonical_length < 2`, since there is no
+adjacent pair to diff) / `observed_head` (first 8 observed MIDI values). The D-1
+identity gate is `pitch_sequence_exact_match` alone.
+
+Both lyrics and melody degrade gracefully to the `no_sensor` case above when their
+optional extra isn't installed — the adapter's own `LearnedModelUnavailable` (and,
+for lyrics' default vocal-separation step, `SeparatorNotAvailableError` if Demucs
+specifically is missing) is caught and its message recorded verbatim as `reason`,
+never fabricated. `rhythm`/`motif` anchors remain unwired (`no_sensor` regardless
+of `artifact_type`).
 
 `observation_report.json` is a re-observable sidecar, not an immutable build artifact:
 re-running `observe` against the same `-o` path overwrites it (unlike
