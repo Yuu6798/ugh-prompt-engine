@@ -39,8 +39,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
+import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 from svp_rpe.arrange.observe import ObservationReport
@@ -331,3 +334,80 @@ def test_provenance_recorded_file_hashes_match_committed_files() -> None:
 def test_results_md_references_provenance_sidecar() -> None:
     results_text = RESULTS_PATH.read_text(encoding="utf-8")
     assert "provenance.yaml" in results_text
+
+
+def test_provenance_extract_entry_attested_hash_matches_source_audio_sha256() -> None:
+    """PR #199 Codex P2 3件目対応 ("Pin the extract input hash"): `wi0b_lyrics_extract.json`
+    エントリの `source_audio_sha256_ref` はもう `null` ではなく、`source_audio_sha256` と
+    同値の実 hash を明示する。RPEBundle スキーマに入力音声 hash 欄が無いため、他 3
+    エントリのような file-in-file の機械照合はできない（`input_audio_sha256_basis` が
+    根拠種別 "same-session attestation" を明記）— この非対称性自体を固定する。
+    """
+    provenance = _load_provenance()
+    entries_by_path = {entry["path"]: entry for entry in provenance["observed_files"]}
+
+    extract_entry = entries_by_path[LYRICS_EXTRACT_PATH.name]
+    assert extract_entry["source_audio_sha256_ref"] == provenance["source_audio_sha256"]
+    assert "attestation" in extract_entry["input_audio_sha256_basis"]
+
+    for path in (MELODY_OBSERVATION_PATH, LYRICS_SMOKE_OBSERVATION_PATH):
+        entry = entries_by_path[path.name]
+        assert entry["input_audio_sha256_basis"] == "mechanical (generated_artifact.sha256 in-file)"
+
+
+# --- 8. 決定論部分の機械的接地: render -> extract を実行し committed fixture と突合 -------
+# PR #199 Codex P2 3件目 ("Pin the extract input hash") への層 2 対応。RPEBundle が入力
+# 音声の hash を保持しないため、extract 証跡と pin 済み wav の完全な機械的紐付けは
+# schema 上不可能 — 代わりに、決定論レンダリング (render_faithful.py) の出力 wav の
+# sha256 が pin と一致すること、かつその wav に対するルールベース抽出
+# (`extract_rpe_from_file`, --lyrics なし・learned なし) の決定論 physical 値が committed
+# `wi0b_lyrics_extract.json` と一致することを実行時に検証する。これにより「pin された
+# wav -> committed extract 証跡の決定論部分」の連鎖が機械的に閉じる（attestation を
+# 実行で裏付ける）。render も rule-based extract も heavy extras（basic-pitch /
+# faster-whisper / torch / demucs）を要さないため slow だが CI 安全。
+
+
+@pytest.mark.slow
+def test_render_faithful_and_rule_based_extract_match_committed_deterministic_fixture(
+    tmp_path: Path,
+) -> None:
+    """render_faithful.py を documented どおり別プロセスで実行し (`commands.md` の
+    invocation を再現)、出力 wav の sha256 が pin と一致することを確認したうえで、
+    その wav に対しルールベース抽出 (`extract_rpe_from_file`, --lyrics なし・learned
+    なし) を実行して committed `wi0b_lyrics_extract.json` の決定論 physical 欄と
+    突合する。
+    """
+    score_path = Path("examples/arrangement/midnight_signal/composition_score.yaml")
+    wav_path = tmp_path / "faithful_take.wav"
+
+    result = subprocess.run(
+        [sys.executable, str(RENDER_SCRIPT_PATH), str(score_path), str(wav_path)],
+        cwd=Path.cwd(),
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0, (
+        f"render_faithful.py failed (stdout={result.stdout!r}, stderr={result.stderr!r})"
+    )
+    assert wav_path.is_file()
+
+    rendered_sha256 = _sha256(wav_path)
+    assert rendered_sha256 == RENDERED_WAV_SHA256, (
+        "render_faithful.py output does not reproduce the sha256 pinned in "
+        "provenance.yaml / results.md — deterministic re-render is broken"
+    )
+
+    from svp_rpe.rpe.extractor import extract_rpe_from_file
+
+    bundle = extract_rpe_from_file(str(wav_path))
+    physical = bundle.physical
+
+    committed = _load_json(LYRICS_EXTRACT_PATH)["physical"]
+
+    assert physical.duration_sec == pytest.approx(committed["duration_sec"])
+    assert physical.bpm == pytest.approx(committed["bpm"])
+    assert physical.key == committed["key"]
+    assert physical.mode == committed["mode"]
+    assert physical.spectral_centroid == pytest.approx(committed["spectral_centroid"])
+    assert physical.rms_mean == pytest.approx(committed["rms_mean"])
+    assert physical.dynamic_range_db == pytest.approx(committed["dynamic_range_db"])

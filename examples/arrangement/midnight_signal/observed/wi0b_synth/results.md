@@ -174,6 +174,30 @@ PR #199 レビュー（Codex P2 2 件）:
 再実行に使った一時 wav (`faithful_take.wav`) はコミットしない方針を維持し、検証後
 削除した。
 
+## 5. extract 証跡の入力 hash pin — 機械的限界と follow-up（PR #199 Codex P2 3件目対応）
+
+`observed/provenance.yaml` の `wi0b_lyrics_extract.json` エントリは、`source_audio_sha256_ref`
+に pin 済み wav の実 sha256 (`source_audio_sha256` と同値) を明示し、根拠種別を
+`input_audio_sha256_basis: "same-session attestation (...)"` として記録した。ただし
+これは同一セッション内の手順連続性（`commands.md` "Re-run" 節）に基づく attestation
+であり、melody/lyrics smoke 観測 JSON（`generated_artifact.sha256` を file-in-file に
+持つ）のような機械照合ではない — `RPEBundle` スキーマ（`svp_rpe.rpe.models.RPEBundle`）
+が入力音声の hash 欄を一切持たないため、extract 証跡 1 本単独からは pin 済み wav との
+完全な機械的紐付けができない、という schema 上の原理的限界がある。
+
+これを埋める代替として、決定論で閉じている部分（レンダリング → ルールベース抽出）を
+実行時に機械接地する slow テスト
+(`tests/test_wi0b_synth_observed_fixture.py::test_render_faithful_and_rule_based_extract_match_committed_deterministic_fixture`)
+を追加した: `render_faithful.py` を tmp_path 出力で実行して sha256 が pin と一致することを
+確認し、その wav に対する `extract_rpe_from_file`（`--lyrics` なし・learned なし）の
+決定論 physical 値（`duration_sec` / `bpm` / `key` / `mode` / `spectral_centroid` /
+`rms_mean` / `dynamic_range_db`）が committed `wi0b_lyrics_extract.json` と一致することを
+突合する。これにより「pin 済み wav → extract 証跡の決定論部分」の接続は機械的に閉じるが、
+`lyrics_transcription`（faster-whisper、非決定的）を含む extract 証跡全体の入力音声との
+完全な機械的紐付けは attestation に留まる。`RPEBundle` に `source_audio_sha256` 欄を
+追加してこの限界を解消する件は、本 PR ではスキーマ変更を行わず WI0 follow-up として
+`docs/work_identity_roadmap.md` に記録する。
+
 ## 関連
 
 - 事前登録: [`plan.md`](plan.md)
@@ -183,5 +207,6 @@ PR #199 レビュー（Codex P2 2 件）:
   [`observed/provenance.yaml`](observed/provenance.yaml)（`source_audio_sha256` +
   4 観測ファイルの sha256 pin。melody/lyrics smoke 観測 JSON の
   `generated_artifact.sha256` との機械的突合は `tests/test_wi0b_synth_observed_fixture.py`）
+- extract 証跡の入力 hash pin の機械的限界と決定論部分の機械接地: 本ファイル §5
 - fixture 整合テスト: `tests/test_wi0b_synth_observed_fixture.py`
 - ロードマップ: [`docs/work_identity_roadmap.md`](../../../../../docs/work_identity_roadmap.md) WI0 節
