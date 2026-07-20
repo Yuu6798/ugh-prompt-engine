@@ -483,6 +483,18 @@ def test_build_observation_report_isolates_non_chord_harmony_anchor_from_others(
         return _bundle_with_chords(CANONICAL_PROGRESSION)
 
     monkeypatch.setattr("svp_rpe.arrange.observe.extract_rpe_from_file", fake_extract)
+    # Codex P2 (WI0-a review): keep lyrics/melody synthetic so this report-level
+    # assertion holds regardless of whether the `lyrics`/`pitch` extras are
+    # installed (nightly extras CI would otherwise attempt a real read of
+    # `audio_path`, which doesn't exist as playable audio here).
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._transcribe_lyrics_for_observation",
+        lambda audio_path: (None, "faster_whisper is not installed (fake)"),
+    )
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._extract_melody_for_observation",
+        lambda audio_path: (None, "basic_pitch is not installed (fake)"),
+    )
 
     manifest_data = _minimal_manifest().model_dump(mode="json")
     manifest_data["anchors"].append(
@@ -2269,6 +2281,18 @@ def test_build_observation_report_shares_a_single_extraction_across_anchors(
         return _bundle_with_chords(CANONICAL_PROGRESSION)
 
     monkeypatch.setattr("svp_rpe.arrange.observe.extract_rpe_from_file", fake_extract)
+    # Codex P2 (WI0-a review): `audio_path` here ("unused.wav") isn't real
+    # audio, so lyrics/melody must stay synthetic — otherwise this test's
+    # behavior would flip depending on whether the `lyrics`/`pitch` extras
+    # happen to be installed (nightly extras CI) instead of staying pinned.
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._transcribe_lyrics_for_observation",
+        lambda audio_path: (None, "faster_whisper is not installed (fake)"),
+    )
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._extract_melody_for_observation",
+        lambda audio_path: (None, "basic_pitch is not installed (fake)"),
+    )
 
     report = build_observation_report(
         package=_fake_package(),
@@ -2296,6 +2320,18 @@ def test_build_observation_report_is_byte_deterministic(monkeypatch: pytest.Monk
         return _bundle_with_chords(CANONICAL_PROGRESSION)
 
     monkeypatch.setattr("svp_rpe.arrange.observe.extract_rpe_from_file", fake_extract)
+    # Codex P2 (WI0-a review): keep lyrics/melody synthetic so this
+    # determinism pin doesn't depend on the `lyrics`/`pitch` extras being
+    # absent (nightly extras CI would otherwise attempt a real read of
+    # `audio_path`, which isn't real audio here).
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._transcribe_lyrics_for_observation",
+        lambda audio_path: (None, "faster_whisper is not installed (fake)"),
+    )
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._extract_melody_for_observation",
+        lambda audio_path: (None, "basic_pitch is not installed (fake)"),
+    )
 
     kwargs: dict[str, Any] = {
         "package": _fake_package(),
@@ -2329,10 +2365,15 @@ def test_build_observation_report_skips_extraction_when_no_wired_sensor_anchors(
     never be called. (WI0-a: lyrics/melody now do attempt their own,
     separate optional-extra reads of `audio_path` — `transcribe_lyrics` /
     `extract_basic_pitch_annotations`, neither of which is
-    `extract_rpe_from_file` — and degrade to `no_sensor` here because
-    neither the `lyrics` nor `pitch` extra is installed in this test
-    environment; that degrade path is what this test now also exercises for
-    lyrics/melody, in addition to its original assertion.)"""
+    `extract_rpe_from_file` — and degrade to `no_sensor` here via their own
+    optional-extra guard. Codex P2 (WI0-a review): that degrade is now forced
+    with a synthetic monkeypatch rather than left to depend on the `lyrics`/
+    `pitch` extras actually being absent from the environment, so the
+    `no_sensor` assertions below stay pinned under nightly extras CI too —
+    the degrade path itself (real `ensure_lyrics_available`/`basic_pitch`
+    absence handling) is covered separately by
+    `test_observe_lyrics_dependency_missing_is_no_sensor` /
+    `test_observe_melody_dependency_missing_is_no_sensor`.)"""
 
     def fail_extract(path: str) -> RPEBundle:
         raise AssertionError(
@@ -2341,6 +2382,14 @@ def test_build_observation_report_skips_extraction_when_no_wired_sensor_anchors(
         )
 
     monkeypatch.setattr("svp_rpe.arrange.observe.extract_rpe_from_file", fail_extract)
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._transcribe_lyrics_for_observation",
+        lambda audio_path: (None, "faster_whisper is not installed (fake)"),
+    )
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._extract_melody_for_observation",
+        lambda audio_path: (None, "basic_pitch is not installed (fake)"),
+    )
 
     manifest_data = _minimal_manifest().model_dump(mode="json")
     manifest_data["anchors"] = [
@@ -2930,6 +2979,18 @@ def test_observe_cli_reads_manifest_bytes_exactly_once(
         return _bundle_with_chords(CANONICAL_PROGRESSION)
 
     monkeypatch.setattr("svp_rpe.arrange.observe.extract_rpe_from_file", fake_extract)
+    # Codex P2 (WI0-a review): `IDENTITY_MANIFEST` also declares lyrics/melody
+    # anchors; keep their sensors synthetic so this test doesn't depend on the
+    # `lyrics`/`pitch` extras being absent (`audio_path` below is placeholder
+    # bytes, not real audio).
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._transcribe_lyrics_for_observation",
+        lambda audio_path: (None, "faster_whisper is not installed (fake)"),
+    )
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._extract_melody_for_observation",
+        lambda audio_path: (None, "basic_pitch is not installed (fake)"),
+    )
 
     audio_path = tmp_path / "fake.wav"
     audio_path.write_bytes(b"unused-placeholder-audio-bytes")
@@ -2990,6 +3051,18 @@ def test_observe_cli_extracts_from_a_byte_identical_audio_snapshot(
         return _bundle_with_chords(CANONICAL_PROGRESSION)
 
     monkeypatch.setattr("svp_rpe.arrange.observe.extract_rpe_from_file", fake_extract)
+    # Codex P2 (WI0-a review): `IDENTITY_MANIFEST` also declares lyrics/melody
+    # anchors; keep their sensors synthetic so this test doesn't depend on the
+    # `lyrics`/`pitch` extras being absent (the snapshot bytes here aren't
+    # real audio either).
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._transcribe_lyrics_for_observation",
+        lambda audio_path: (None, "faster_whisper is not installed (fake)"),
+    )
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._extract_melody_for_observation",
+        lambda audio_path: (None, "basic_pitch is not installed (fake)"),
+    )
 
     report_path = tmp_path / "report.json"
     result2 = CliRunner().invoke(
@@ -3233,6 +3306,15 @@ def test_observe_cli_creates_snapshot_tempfile_for_lyrics_only_manifest(
         )
 
     monkeypatch.setattr("svp_rpe.arrange.observe.extract_rpe_from_file", fail_extract)
+    # Codex P2 (WI0-a review): force the lyrics degrade synthetically instead
+    # of relying on the `lyrics` extra actually being absent — the snapshot
+    # gate below is keyed on anchor type (`is_lyrics_sensor_anchor`), not on
+    # this helper, so monkeypatching it doesn't disturb the
+    # `snapshot_calls["n"] == 1` assertion this test is actually about.
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._transcribe_lyrics_for_observation",
+        lambda audio_path: (None, "faster_whisper is not installed (fake)"),
+    )
 
     audio_path = tmp_path / "fake.wav"
     audio_path.write_bytes(b"unused-placeholder-audio-bytes")
@@ -3255,9 +3337,9 @@ def test_observe_cli_creates_snapshot_tempfile_for_lyrics_only_manifest(
     assert snapshot_calls["n"] == 1
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert [anchor["anchor_id"] for anchor in report["anchors"]] == ["lyrics"]
-    # Neither the `lyrics` nor `pitch` optional extra is installed in this
-    # dev/CI environment, so the sensor gracefully degrades to no_sensor —
-    # the point of this test is that the snapshot mechanism engaged at all
+    # The lyrics sensor is forced synthetic above (Codex P2) rather than
+    # relying on the `lyrics` extra actually being absent — the point of
+    # this test is that the snapshot mechanism engaged at all
     # (`snapshot_calls["n"] == 1` above), not the resulting determination.
     assert report["anchors"][0]["determination"] == "no_sensor"
     assert report["anchors"][0]["adherence_status"] == "not_observed"
@@ -3413,6 +3495,18 @@ def test_observe_cli_harmony_measurement_does_not_reread_artifact_file(
         return _bundle_with_chords(CANONICAL_PROGRESSION)
 
     monkeypatch.setattr("svp_rpe.arrange.observe.extract_rpe_from_file", fake_extract)
+    # Codex P2 (WI0-a review): `IDENTITY_MANIFEST` also declares lyrics/melody
+    # anchors; keep their sensors synthetic so this test doesn't depend on the
+    # `lyrics`/`pitch` extras being absent (`audio_path` below is placeholder
+    # bytes, not real audio).
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._transcribe_lyrics_for_observation",
+        lambda audio_path: (None, "faster_whisper is not installed (fake)"),
+    )
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._extract_melody_for_observation",
+        lambda audio_path: (None, "basic_pitch is not installed (fake)"),
+    )
 
     audio_path = tmp_path / "fake.wav"
     audio_path.write_bytes(b"unused-placeholder-audio-bytes")
@@ -3460,6 +3554,19 @@ def test_observe_cli_rejects_chord_artifact_missing_schema(
         return _bundle_with_chords(CANONICAL_PROGRESSION)
 
     monkeypatch.setattr("svp_rpe.arrange.observe.extract_rpe_from_file", fake_extract)
+    # Codex P2 (WI0-a review): `_build_scratch_identity_dir` copies
+    # `IDENTITY_MANIFEST`'s lyrics/melody anchors verbatim, and the manifest's
+    # anchor order (lyrics, melody, harmony) means both sensors run before
+    # this test's chord-schema failure is ever reached — keep them synthetic
+    # so this test doesn't depend on the `lyrics`/`pitch` extras being absent.
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._transcribe_lyrics_for_observation",
+        lambda audio_path: (None, "faster_whisper is not installed (fake)"),
+    )
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._extract_melody_for_observation",
+        lambda audio_path: (None, "basic_pitch is not installed (fake)"),
+    )
 
     audio_path = tmp_path / "fake.wav"
     audio_path.write_bytes(b"unused-placeholder-audio-bytes")
@@ -3500,6 +3607,19 @@ def test_observe_cli_rejects_chord_artifact_unknown_schema_version(
         return _bundle_with_chords(CANONICAL_PROGRESSION)
 
     monkeypatch.setattr("svp_rpe.arrange.observe.extract_rpe_from_file", fake_extract)
+    # Codex P2 (WI0-a review): `_build_scratch_identity_dir` copies
+    # `IDENTITY_MANIFEST`'s lyrics/melody anchors verbatim, and the manifest's
+    # anchor order (lyrics, melody, harmony) means both sensors run before
+    # this test's chord-schema failure is ever reached — keep them synthetic
+    # so this test doesn't depend on the `lyrics`/`pitch` extras being absent.
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._transcribe_lyrics_for_observation",
+        lambda audio_path: (None, "faster_whisper is not installed (fake)"),
+    )
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._extract_melody_for_observation",
+        lambda audio_path: (None, "basic_pitch is not installed (fake)"),
+    )
 
     audio_path = tmp_path / "fake.wav"
     audio_path.write_bytes(b"unused-placeholder-audio-bytes")
@@ -3540,6 +3660,19 @@ def test_observe_cli_rejects_chord_artifact_with_null_chords(
         return _bundle_with_chords(CANONICAL_PROGRESSION)
 
     monkeypatch.setattr("svp_rpe.arrange.observe.extract_rpe_from_file", fake_extract)
+    # Codex P2 (WI0-a review): `_build_scratch_identity_dir` copies
+    # `IDENTITY_MANIFEST`'s lyrics/melody anchors verbatim, and the manifest's
+    # anchor order (lyrics, melody, harmony) means both sensors run before
+    # this test's chord-schema failure is ever reached — keep them synthetic
+    # so this test doesn't depend on the `lyrics`/`pitch` extras being absent.
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._transcribe_lyrics_for_observation",
+        lambda audio_path: (None, "faster_whisper is not installed (fake)"),
+    )
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._extract_melody_for_observation",
+        lambda audio_path: (None, "basic_pitch is not installed (fake)"),
+    )
 
     audio_path = tmp_path / "fake.wav"
     audio_path.write_bytes(b"unused-placeholder-audio-bytes")
@@ -3583,6 +3716,19 @@ def test_observe_cli_rejects_chord_artifact_with_string_chords(
         return _bundle_with_chords(CANONICAL_PROGRESSION)
 
     monkeypatch.setattr("svp_rpe.arrange.observe.extract_rpe_from_file", fake_extract)
+    # Codex P2 (WI0-a review): `_build_scratch_identity_dir` copies
+    # `IDENTITY_MANIFEST`'s lyrics/melody anchors verbatim, and the manifest's
+    # anchor order (lyrics, melody, harmony) means both sensors run before
+    # this test's chord-schema failure is ever reached — keep them synthetic
+    # so this test doesn't depend on the `lyrics`/`pitch` extras being absent.
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._transcribe_lyrics_for_observation",
+        lambda audio_path: (None, "faster_whisper is not installed (fake)"),
+    )
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._extract_melody_for_observation",
+        lambda audio_path: (None, "basic_pitch is not installed (fake)"),
+    )
 
     audio_path = tmp_path / "fake.wav"
     audio_path.write_bytes(b"unused-placeholder-audio-bytes")
@@ -3627,6 +3773,18 @@ def test_observe_cli_overwrites_an_existing_report_atomically(
         return _bundle_with_chords(CANONICAL_PROGRESSION)
 
     monkeypatch.setattr("svp_rpe.arrange.observe.extract_rpe_from_file", fake_extract)
+    # Codex P2 (WI0-a review): `IDENTITY_MANIFEST` also declares lyrics/melody
+    # anchors; keep their sensors synthetic so this test doesn't depend on the
+    # `lyrics`/`pitch` extras being absent (`audio_path` below is placeholder
+    # bytes, not real audio).
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._transcribe_lyrics_for_observation",
+        lambda audio_path: (None, "faster_whisper is not installed (fake)"),
+    )
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._extract_melody_for_observation",
+        lambda audio_path: (None, "basic_pitch is not installed (fake)"),
+    )
 
     audio_path = tmp_path / "fake.wav"
     audio_path.write_bytes(b"unused-placeholder-audio-bytes")
@@ -3662,7 +3820,25 @@ def test_observe_cli_overwrites_an_existing_report_atomically(
 @pytest.mark.slow
 def test_observe_cli_e2e_harmony_measurement_is_pinned_and_deterministic(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Codex P2 (WI0-a review): this test is real perform + real
+    # `extract_rpe_from_file` for the *harmony* pin (deliberately unmocked —
+    # see the docstring on the structure e2e test below for the shared
+    # rationale), but lyrics/melody must stay synthetic regardless: `wav_path`
+    # is real EDM-instrumental audio, so whether the `lyrics`/`pitch` extras
+    # happen to be installed (nightly extras CI) could otherwise flip the
+    # `no_sensor`/`available: False` pins asserted below from environment
+    # noise rather than from a real absence of vocals/melody content.
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._transcribe_lyrics_for_observation",
+        lambda audio_path: (None, "faster_whisper is not installed (fake)"),
+    )
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._extract_melody_for_observation",
+        lambda audio_path: (None, "basic_pitch is not installed (fake)"),
+    )
+
     pkg_dir = tmp_path / "pkg"
     result = CliRunner().invoke(app, _cli_package_args(pkg_dir))
     assert result.exit_code == 0, result.output
@@ -3741,14 +3917,29 @@ def test_observe_cli_e2e_harmony_measurement_is_pinned_and_deterministic(
 @pytest.mark.slow
 def test_observe_cli_e2e_structure_measurement_is_pinned_and_deterministic(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """AR2-3 解凍条件 (a) の実証: structure Design Memo section 5. Same shape as
     `test_observe_cli_e2e_harmony_measurement_is_pinned_and_deterministic`
-    (real `perform` + real `extract_rpe_from_file`, no monkeypatch), but with
-    a synthetic manifest carrying a `structure` anchor —
-    `examples/arrangement/midnight_signal/` itself stays untouched (AR2-3
-    froze it; only `_build_scratch_identity_dir_with_structure_anchor`'s
-    tmp_path copy gains the new anchor)."""
+    (real `perform` + real `extract_rpe_from_file`, no monkeypatch of the
+    harmony/structure path), but with a synthetic manifest carrying a
+    `structure` anchor — `examples/arrangement/midnight_signal/` itself stays
+    untouched (AR2-3 froze it; only
+    `_build_scratch_identity_dir_with_structure_anchor`'s tmp_path copy gains
+    the new anchor). This test doesn't assert on lyrics/melody, but the copied
+    manifest still declares those anchors (Codex P2, WI0-a review): keep them
+    synthetic anyway, matching the harmony e2e test above, so neither sensor
+    can throw an unexpected exception against the real synthesized `wav_path`
+    audio under nightly extras CI and take the whole test down with it."""
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._transcribe_lyrics_for_observation",
+        lambda audio_path: (None, "faster_whisper is not installed (fake)"),
+    )
+    monkeypatch.setattr(
+        "svp_rpe.arrange.observe._extract_melody_for_observation",
+        lambda audio_path: (None, "basic_pitch is not installed (fake)"),
+    )
+
     canonical_sections = ["intro", "chorus", "bridge", "verse", "chorus", "verse", "outro"]
     manifest_path = _build_scratch_identity_dir_with_structure_anchor(
         tmp_path, canonical_sections=canonical_sections
