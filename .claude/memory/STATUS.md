@@ -2,15 +2,14 @@
 
 ## Phase
 
-2026-07-19、**Arrangement Identity Track を AR0–AR4 全フェーズ実装済みまで 1 セッションで貫通（PR 5 本 #190–#194 全マージ）**。#190 `svprpe verify`（package 内部整合の全数検査計器・#187 round 16 の受け皿）+ AGENTS.md §8「計測スケール変更の消費者全数インベントリ」/ #191 AR4 実観測初取得（queue の「Suno 人手律速」を MusicGen ローカル決定論で解体・12s n=2・fresh-process sha 2/2・AR2-3 は保留継続とし解凍条件を (a) structure センサー + (b) 長尺 form artifact に具体化）/ #192 structure センサー observe 配線（section-map/0.1・(a) 充足・正規化は 3R で「正典 verbatim / 観測は VerseN のみ吸収」の非対称に収束）/ #193 form 実測（30s n=2・挿入/欠落/反復/長さ振れ=実生成の常態を確定・**AR2-3 解凍**）/ #194 **AR2-3 本体**（section-map/0.2 stable ID・section_ref 解決・実測由来 form 語彙 3 語・new-brief 起草で Codex 指摘ゼロ）。Codex 通算 15R・P2 17 件全採用（#191 の 9R は provenance 同一ファミリー）。締めに**実 Suno 5.5 初の AR4 検収 A/B**（scratchpad・非 canonical）: tags セルで正典 form 冒頭完全再現 take・尺 2 倍・進行は 4/4 非再現（調近親圏は維持）。運用: full pytest 1663 件は Bash 10 分上限超 → not-slow+slow 分割が標準。次=MusicGen 無人 n=20 → D-1 閾値 Design Memo（人手ゼロ路線を User と合意）。詳細=2026-07-19.md。
+2026-07-20、**WI 系列（Work Identity 判定トラック）始動 — 壁打ち→ロードマップ→WI0 完了まで 1 セッション貫通（PR 5 本 #195–#199 全マージ）**。#195 AGENTS.md §8 規律 2 件恒久化（記録日付の date -u 実測確認 / provenance 再現レシピは全入力 pin 検証接続後に emit）→ #196 実 Suno AR4 検収デモを dated fixture 化（非 canonical 維持・pin 検証規律の適用第一号・verify 38/38）→ #197 `docs/work_identity_roadmap.md` 新設（WI0–WI4: 宣言的契約×弁別判定×人間校正×正直会計。queue の D-1/センサー配線を WI1/WI0 へ編入）→ #198 WI0-a=observe へ lyrics/melody センサー配線（synthetic・schema 0.1 無変更・4 anchor domain 全計器化）→ #199 WI0-b=実推論初実測: **melody pitch_lcs 0.6<0.8（事前登録閾値）で WI2 v0 除外**（原因=分離層欠如でセンサー品質でない・再入条件=旋律分離後 ≥0.8）+ lyrics ハルシネーション境界記録（ゲート=no_speech_prob・#149 追認）。1682 passed。セッションはエラー停止し wrap-up は継承セッションが PR 記録から代行（会話ログ喪失・非 PR 成果物は欠落の可能性・ブランチは User 復元済み）。次=**WI1**（MusicGen 無人 n=20 → 逸脱分布 → D-1 閾値 Design Memo・torch 再セットアップから）。詳細=2026-07-20.md。
 
 ## Next-Issue Queue
 
 | ID | Title | Priority | Notes |
 |---|---|---|---|
-| D-1 閾値 Design Memo | MusicGen 無人バッチ n=20 → 逸脱分布 → changed_within/outside_policy 分類の閾値起草 | P1 | 人手ゼロ。#194 の語彙（section_insertion/omission/repetition）が分類カテゴリの受け皿。実 Suno A/B の A2（契約内逸脱のみ）/B1（順序破壊）が分類の試金石。環境揮発のため新セッションで torch+重み再セットアップ（~20 分）から |
-| lyrics / melody センサー配線 | observe の no_sensor 2 domain 解消 | P2 | 人手ゼロ。接続点は observe.py docstring 明記済み（lyrics=eval/lyrics_match+lyrics_adapter / melody=basic_pitch）。structure センサー（#192）と同型の手順 |
-| 実 Suno AR4 デモの fixture 化 | scratchpad/suno_ar4_demo の 4 観測を dated case study として commit するか | P3 | **User 未決**。実 Suno 初の AR4 観測データ（planning doc「実 Suno 未観測」ギャップを埋める）。観測 JSON 等は wrap-up 時に SendUserFile で User へ退避済み（scratchpad 揮発対策）。非 canonical 探索の位置づけ維持が条件 |
+| WI1: D-1 閾値 Design Memo | MusicGen 無人バッチ n=20 → 逸脱分布 → changed_within/outside_policy 分類の閾値起草 | P1 | 人手ゼロ。#197 で WI 系列 WI1 へ編入。#194 の語彙（section_insertion/omission/repetition）が分類カテゴリの受け皿。実 Suno A/B の A2（契約内逸脱のみ）/B1（順序破壊）が分類の試金石。**WI2 v0 の軸から melody は除外**（#199 事前登録判定・再入条件=旋律分離層導入後 ≥0.8）。環境揮発のため新セッションで torch+重み再セットアップ（~20 分）から |
+| lyrics 転写の精度実測 | 歌入り+歌詞 pin 音源での転写精度実測 | P3 | #199 で defer（素材律速）。配線・境界挙動（instrumental ハルシネーション・no_speech_prob ゲート）は WI0-b で実測済み |
 | verify builds-root 再帰監査 | --builds-root ツリー全体の再帰 verify | P3 | #190 で out of scope と明記した follow-up（docs/cli.md 言及）。完全ローカル |
 | Metrics v2 メタモルフィック検証 | レベル不変性（ゲインシフト不変）を probe で掃引恒久化 | P3 | #188 の T-INV 単発を Hypothesis 掃引へ。完全ローカル・決定論 |
 | Metrics v2 再ベースライン | Pro n=20 で v2 基準値化 + legacy_valley_depth 一括撤去 | P2 | #188 の凍結措置の解凍タスク。Pro 群 n=20 を v2 で再計測→ジャンル別 crest/valley_db 分布→`config/*_baseline.yaml` の実置換（active_rate_ideal/valley_depth_pro 系の凍結解除）+ semantic rules/domain profile の valley 閾値 v2 スケール移行 + `legacy_valley_depth()` と `valley_depth_legacy` の一括撤去（時限マーカー: rpe/models.py:191 / semantic_ci/observed_adapter.py:22 / baseline yaml 4 本 / docs/metrics.md）。CompositionScore 計器の v2 移行は target 帯再ベースラインと同時。律速=Pro 実音源 n=20 の入手（licensing） |
@@ -29,8 +28,8 @@
 
 | PR | Title | Date | Phase |
 |---|---|---|---|
-| #194 | feat(arrange): AR2-3 本体 — section-map/0.2（stable id・0.1 と並置=committed 観測 fixture 再現性の根拠付き例外）+ section_ref 解決（0.2 anchor の id へ・dangling fail-fast・0.2 不在は opaque 後方互換）+ form 変形語彙 3 語（実測由来・3 層検証自動追従）。new-brief 起草で Codex 指摘ゼロ。1663 passed | 2026-07-19 | AR2-3（解凍→同日実装） |
-| #193 | feat(arrange): AR4 form 実測 — MusicGen 30s×structure センサーで実 form artifact 初観測（挿入・欠落・重複・長さ振れ=常態を確定）+ AR2-3 解凍判断。日付 provenance P2 是正（実クロック 07-19 へ・hash 連鎖内コメントは意図的残置） | 2026-07-19 | AR2-3 解凍条件 (b) |
-| #192 | feat(arrange): structure センサー observe 配線 — section-map/0.1 + 位置揃え一致計量。Codex 3R: format_version 宣言ゲート／正規化を非対称（正典 verbatim・観測は抽出器 VerseN 慣行のみ吸収）へ収束 | 2026-07-19 | AR2-3 解凍条件 (a) |
-| #191 | feat(arrange): AR4 実観測データ初取得 — MusicGen ローカル決定論 n=2（canonical 事前登録・fresh-process sha 2/2）で observation report を実生成物で充填 + verify 実データ初適用 16/16。Codex 9R 全採用（provenance 同一ファミリー: 全入力 pin 検証接続・per-input hash・出力幾何・衝突ガード・パス衛生） | 2026-07-19 | AR4 実観測（人手律速の解体） |
-| #190 | feat(arrange): svprpe verify — PerformancePackage 内部整合の全数検査計器（V1–V4・全数収集・#187 round 16 の受け皿）+ AGENTS.md §8 計測スケール変更の消費者全数インベントリ規律。Codex 2R（manifest anchor 5 欄突合・artifact_base 同一実体検査） | 2026-07-19 | AR 計器 + 規律恒久化 |
+| #199 | feat(arrange): WI0-b — 実推論の転写精度初実測を fixture 化。melody pitch_lcs 0.6<0.8（事前登録閾値・事後変更なし）で **WI2 v0 除外**（原因=v0 比較設計の分離層欠如でセンサー品質でない・再入条件=旋律分離後 ≥0.8）+ lyrics は instrumental 入力の Whisper ハルシネーション境界記録（ゲート=no_speech_prob・#149 追認・精度実測は素材律速 defer）。1682 passed | 2026-07-20 | WI0-b |
+| #198 | feat(arrange): WI0-a — observe へ lyrics/melody センサー配線（synthetic 検証・schema 0.1 無変更・4 anchor domain 全計器化・依存欠如は degrade 契約・melody v0 は音高系列のみ=BPM 交絡回避・検算照合 4 件全一致）。1650 passed | 2026-07-20 | WI0-a |
+| #197 | docs(roadmap): WI 系列（Work Identity 判定トラック）ロードマップ新設 — WI0–WI4・思想 4 点セット（宣言的契約×弁別判定×人間校正×正直会計）・Goodhart 抑止/ラベル先行付与禁止の事前埋め込み・queue 2 項目を WI0/WI1 へ編入 | 2026-07-20 | WI 系列新設 |
+| #196 | feat(arrange): 実 Suno AR4 検収デモを dated fixture 化（observed/suno/・非 canonical 探索の位置づけ維持・emit 前 pin 検証=#195 規律の適用第一号・verify 38/38・音源 4 本は sha256 pin のみで非コミット） | 2026-07-20 | AR4 実 Suno 初観測 |
+| #195 | docs(agents): §8 に記録日付の date -u 実測確認 + provenance 再現レシピの全入力 pin 検証後 emit の 2 規律を恒久化（#193 日付誤記 / #191 9R 同根の教訓・414 行） | 2026-07-20 | §8 規律恒久化 |
