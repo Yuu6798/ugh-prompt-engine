@@ -381,6 +381,29 @@ canonical 根拠の記述は実行の実態（例: fresh-process 16 本）に即
 凍結閾値消費者への漏れ」という同根で、最終ラウンドで行った src 全域 `.valley_depth`
 直読の全数分類を最初に行っていれば 1 ラウンドで閉じた。
 
+### 記録日付の実測確認（date -u してから書く）
+
+永続成果物（Design Memo・fixture・observation report・docs の dated log・
+correction_history）に記録日付を書くときは、推定や体感の「今日」で書かず、
+書き込み直前に `date -u` を実測して確認した UTC 日付を使う。セッションが UTC の
+日付境界を跨ぐ場合や長時間セッションでは体感と実クロックが乖離する。誤日付が
+provenance 連鎖（hash が pin する manifest 等）に入った後の是正は、コメント正誤より
+hash 連鎖保全を優先する判断を伴い高くつく。出典: 2026-07-19 #193 実測 — Memo 日付を
+2026-07-20 と誤記し decision trail に混入（Codex P2）。実クロック（生成タイムスタンプ・
+authored date）は全て 07-19 UTC で、是正時に hash 連鎖が pin する manifest 内コメントの
+誤日付は意図的残置となった。
+
+### provenance 成果物の再現レシピは全入力の pin 検証接続後に emit
+
+再現レシピ（コマンド列・スクリプト・generation plan 等）を committed provenance
+成果物として emit する場合は、emit 前に「レシピの**全入力**（プロンプト・素材・
+config・モデル・スクリプト自身）を package の pin（sha256 / manifest hash）へ
+検証付きで接続し、マシン非依存で再現可能にする」設計を先に固める。一部入力だけ
+pin して残りを指摘駆動で塞ぐと、同一ファミリーの穴（per-input hash 欠落・出力幾何・
+衝突ガード・パス衛生）が逐次露呈する。出典: 2026-07-19 #191 実測 — Codex 9 ラウンドが
+全て「committed provenance 成果物のマシン非依存・全入力の pin 検証接続」という同根で、
+最初にこの設計を固めていれば 1–2 ラウンドで閉じた。
+
 ---
 
 ## 関連ドキュメント
