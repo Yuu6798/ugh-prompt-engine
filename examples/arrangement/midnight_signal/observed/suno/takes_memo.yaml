@@ -1,0 +1,68 @@
+# Plan C demo — received takes memo
+# Provenance for the 4 Suno A/B audio files used in this AR4 demo.
+# Nothing in this file or directory is committed to the repo.
+
+received_at_utc: "2026-07-19T14:43:32Z"  # date -u at copy/hash time (this file's data-collection instant)
+order_sheet_registered_at_utc: "2026-07-19T14:31:23Z"  # from order_sheet.md pre-registration block
+
+generation_model: "Suno 5.5"  # user-reported, uniform across all 4 takes
+generation_order_actual: "B1, B2, A1, A2"  # user memo: cell B generated before cell A (reverse of order-sheet's A-then-B listing)
+user_reported_warnings: "none reported by user"
+user_reported_ui_model_badge: "not reported by user"
+
+assignment_rule: >
+  Browser duplicate-download convention: for each cell, the file with no
+  numeric suffix in its original upload name is the 1st take, and the file
+  with a "_1" suffix is the 2nd take. This ordering convention is independent
+  of (and not to be confused with) the actual generation order memo above.
+
+takes:
+  - assigned_name: suno_A1
+    cell: A (tags)
+    original_upload_filename: "826406c2-__A_____.mp3"
+    original_upload_path: "/root/.claude/uploads/a0e0f92b-e776-5a6f-a1cf-8505d12bbca8/826406c2-__A_____.mp3"
+    assignment_basis: "no numeric suffix -> 1st Cell A take"
+    sha256: "25621c50f3e51132626e561aa21017ce727bab594f309b0643b9d01b92708772"
+    duration_seconds: 190.960
+    duration_measurement_method: "librosa.load(sr=None, mono=True); duration = len(y)/sr"
+    sample_rate_hz: 48000
+    file_type: "Audio file with ID3 version 2.4.0, contains: MPEG ADTS, layer III, v1, 64 kbps, 48 kHz, Stereo"
+
+  - assigned_name: suno_A2
+    cell: A (tags)
+    original_upload_filename: "674ed272-__A______1.mp3"
+    original_upload_path: "/root/.claude/uploads/a0e0f92b-e776-5a6f-a1cf-8505d12bbca8/674ed272-__A______1.mp3"
+    assignment_basis: "'_1' suffix -> 2nd Cell A take"
+    sha256: "cc19d9bbd3c3fe8f508ed1b1a37a8db606e39eef7d47329cca2b8a4fe7c1e1bf"
+    duration_seconds: 178.200
+    duration_measurement_method: "librosa.load(sr=None, mono=True); duration = len(y)/sr"
+    sample_rate_hz: 48000
+    file_type: "Audio file with ID3 version 2.4.0, contains: MPEG ADTS, layer III, v1, 64 kbps, 48 kHz, Stereo"
+
+  - assigned_name: suno_B1
+    cell: B (no tags)
+    original_upload_filename: "2c427a21-__B_____.mp3"
+    original_upload_path: "/root/.claude/uploads/a0e0f92b-e776-5a6f-a1cf-8505d12bbca8/2c427a21-__B_____.mp3"
+    assignment_basis: "no numeric suffix -> 1st Cell B take"
+    sha256: "2c2930f07ae1bbe394a83c1ebfb308e792fba1eb0c8ca89ebd42115a910ebd1f"
+    duration_seconds: 84.360
+    duration_measurement_method: "librosa.load(sr=None, mono=True); duration = len(y)/sr"
+    sample_rate_hz: 48000
+    file_type: "Audio file with ID3 version 2.4.0, contains: MPEG ADTS, layer III, v1, 64 kbps, 48 kHz, Stereo"
+
+  - assigned_name: suno_B2
+    cell: B (no tags)
+    original_upload_filename: "cd1a7a13-__B______1.mp3"
+    original_upload_path: "/root/.claude/uploads/a0e0f92b-e776-5a6f-a1cf-8505d12bbca8/cd1a7a13-__B______1.mp3"
+    assignment_basis: "'_1' suffix -> 2nd Cell B take"
+    sha256: "115b9da6570014054ea8d88c781de83e40d73c7d479b5afd4d613496b0e88cb3"
+    duration_seconds: 94.600
+    duration_measurement_method: "librosa.load(sr=None, mono=True); duration = len(y)/sr"
+    sample_rate_hz: 48000
+    file_type: "Audio file with ID3 version 2.4.0, contains: MPEG ADTS, layer III, v1, 64 kbps, 48 kHz, Stereo"
+
+notes: >
+  ffprobe was not available in this environment (`which ffprobe` -> not
+  found); duration and playability were both confirmed via a successful
+  librosa.load() decode of each file (sr=None, mono=True), per the order
+  sheet's "ffprobe or librosa" allowance. All 4 files decoded without error.

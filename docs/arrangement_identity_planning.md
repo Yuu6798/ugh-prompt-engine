@@ -4,7 +4,8 @@
 **2026-07-19 に解凍・同日実装完了**（AR2-3 Design Memo (Fable, 2026-07-19): section-map/0.2 の
 stable ID、`section_ref` 解決規則、structure 変形語彙 3 語追加）、AR4 は計器配線済み
 （`svprpe observe` + `ObservationReport` sidecar。harmony + structure domain を
-実測、判定閾値は未定・実 Suno 生成物での観測は未実施）。
+実測、判定閾値は未定。実 Suno 生成物は 2026-07-19 の非 canonical 探索 A/B
+（n=2×2、`observed/suno/` fixture）で初観測）。
 
 > この文書は、元の未コミット AR0 ドラフトが checkout 内に残っていなかったため、
 > 2026-07-15 のユーザー承認に基づき、マージ済み PR #175–#181、現行コード、
@@ -28,7 +29,7 @@ Composition PoC の C5「Layer Manipulator」を、元作品として残す要�
 |---|---|---|
 | Score-level preservation (M1) | 1 つの Base Score から異なる Derived Score を決定論的に作り、`semantic.core` と `physical.key` の保持を Score と差分で確認する | #177 で完了 |
 | Artifact delivery preservation | identity artifact と保持契約を生成器の実入力チャネルへ配送し、配送不能を明示状態として記録する | AR3-2 compiler 実装済み。実 backend 縦切り E2E は未完了 |
-| Observed musical identity preservation | 生成後成果物を anchor ごとのセンサーと adherence 指標で比較し、観測結果を記録する | AR4: harmony センサー実配線・決定論 synth 実測のみ（実 Suno 生成物は未観測） |
+| Observed musical identity preservation | 生成後成果物を anchor ごとのセンサーと adherence 指標で比較し、観測結果を記録する | AR4: harmony センサー実配線・決定論 synth 実測のみ（実 Suno は 2026-07-19 非 canonical 探索 n=2×2 で初観測） |
 
 M1 の正典表現は、**「意味核（`semantic.core`）とキー（`physical.key`）を保持した
 Score-level identity preservation demo」**である。これは聴覚的同一性、メロディ保持、
@@ -258,7 +259,8 @@ E2E fixture の実測: `collapsed_observed_length=10`、
 意図しない裸のルート音を chroma テンプレート検出器がそれでも何らかの
 major/minor ラベルへ強制分類するため。
 「観測できた」と言えるのは決定論 synth を実測したこの harmony 系列のみであり、
-**実 Suno 生成物での観測は未実施**。判定条件・閾値は引き続き未定（実測を積んで
+実 Suno 生成物での観測は 2026-07-19 の非 canonical 探索 A/B が初（下記 dated
+エントリ）。判定条件・閾値は引き続き未定（実測を積んで
 から別 Design Memo で固定）。詳細: [`cli.md`](cli.md) の `svprpe observe` 節。
 
 2026-07-19: 上記の「実 Suno 生成物は未観測」を、**MusicGen ローカル生成の実観測**で
@@ -273,7 +275,8 @@ guidance_scale=3.0・12s・seed 8000/8001 で n=2 take を実生成した
 通過し（exit 0）、harmony anchor は実測されたが `not_observed`/`deferred`（collapsed
 observed sequence が正典進行の 1 cycle も一致しない — take0 は
 `matched_cycle_prefix_length=0`/`full_cycles=0`、take1 も同様）、lyrics/melody は
-従来どおり `not_observed`/`no_sensor`。**実 Suno 生成物での観測は依然未実施のまま**。
+従来どおり `not_observed`/`no_sensor`。**実 Suno 生成物での観測は依然未実施のまま**
+（同日夕の実 Suno 検収デモで初観測 — 下記 2026-07-19 エントリ参照）。
 事前登録（`ar4_plan.yaml` の `plan_confirmed_at_utc`）は生成タイムスタンプ
 （`ar4_generation_timestamps.yaml`）に先行する。成果物一式:
 `examples/arrangement/midnight_signal/observed/musicgen/`
@@ -337,6 +340,36 @@ preserved を成功条件にしていない**: この結果自体が
 `ar4f_observation_take{0,1}.json` / `ar4f_generation_timestamps.yaml` /
 `ar4f_determinism_spot_check.yaml`。WAV は DD-A によりコミット対象外）。
 
+2026-07-19（fixture 化 2026-07-20）: **実 Suno 生成物での AR4 観測を初取得**（実 Suno 5.5・
+検収 A/B デモ・**非 canonical 探索** n=2×2）。上記 MusicGen 実観測とは別に、実 Suno への
+発注（Custom mode・instrumental 固定・Style 欄同一で Lyrics 欄の section-tag script 有無
+のみ差替の 2 セル×2 take）で 4 take を取得し、`svprpe observe` を 4 本とも exit 0 で通した
+（D-3 provenance 連鎖の再検証込み）。事前登録どおり ABBA なし・時刻証跡連鎖なし・
+記述統計のみ（効果量の主張なし）。4 take とも harmony/structure が
+`not_observed`/`deferred`・`sequence_exact_match: false`。観測の要点:
+
+- structure `position_match_rate`: tags セル A = {0.25, 0.5} vs no-tags セル B =
+  {0.125, 0.375}（記述統計のみ）。A2 は正典 4 セクション（intro/verse/chorus/bridge）を
+  冒頭で完全再現し、逸脱が #194 の契約許容語彙（`section_insertion` /
+  `section_repetition`）内に収まる唯一の take。B1 は Intro→Chorus→Bridge→Verse の
+  順序破壊（reordering は本デモの allow-list 外＝契約外相当）
+- 尺: A = 191.0s / 178.2s vs B = 84.4s / 94.6s — section-tag script がフル尺形式を
+  誘発する方向（n=2 につき方向の記録のみ)
+- harmony: 4 take とも `full_cycles=0`（正典 4 コード進行は 1 cycle も非再現）だが
+  観測コードは C minor 近親圏 — 「調は効く・進行は非再現」の既知知見を、制度化された
+  検収計器で追認
+- structure センサーが section-map/0.2 anchor（stable id）に発火した初の実データ。
+  melody anchor の `section_ref: "s3-chorus"` 解決も実データ初。structure チャネルの
+  delivery.status は `experimental` のまま（成功偽装なし）
+- D-1 閾値 Design Memo の試金石: A2（契約内逸脱のみ）と B1（契約外相当）が
+  `changed_within_policy` / `changed_outside_policy` 分類の実例ペア
+
+成果物一式: `examples/arrangement/midnight_signal/observed/suno/`（発注書=事前登録
+ブロック込み・takes provenance・観測 JSON 4 本 verbatim・demo 入力 sidecar と package。
+fixture 整合と repo 正本とのバイト同一は `tests/test_ar4_suno_observed_fixture.py` が
+enforce、D-3 連鎖は `svprpe verify` で再検証可能）。音源 4 本は非コミット
+（sha256 pin のみ・Drive 化は follow-up）。
+
 ## 6. 実装状況
 
 | Phase | 主成果物 | 状態 |
@@ -347,7 +380,7 @@ preserved を成功条件にしていない**: この結果自体が
 | AR2-3 | structure anchor policy | **完了（2026-07-19、AR2-3 Design Memo (Fable)）**: section-map/0.2（stable id 付き section map、0.1 と並置）+ `section_ref` 解決（0.2 anchor 存在時のみ fail-fast 検証、それ以外は opaque 後方互換）+ structure 変形語彙 3 語追加（section_insertion/section_omission/section_repetition、実 form 実測由来）。閾値分類は範囲外のまま |
 | AR3-1 | InputCapabilityProfile | 完了 (#180, #181) |
 | AR3-2 | PerformancePackage compiler + 縦切り E2E fixture | 実装済み（E2E fixture 追加 2026-07-17） |
-| AR4 | generated-output identity observation | 計器配線済み。harmony + structure を実測（decisive synth E2E + 2026-07-19 MusicGen 12s n=2 + 同日 MusicGen 30s form n=2）。判定閾値は未定、実 Suno 生成物は未観測 |
+| AR4 | generated-output identity observation | 計器配線済み。harmony + structure を実測（decisive synth E2E + 2026-07-19 MusicGen 12s n=2 + 同日 MusicGen 30s form n=2）。判定閾値は未定（D-1）。実 Suno 5.5 初観測あり（非 canonical 探索 n=2×2・2026-07-19・`observed/suno/`） |
 
 2026-07-17: bundle/report に `content_digest`（内容指紋）と、
 `CompilationReport` 限定の `invocation_provenance.compiler`（実行環境の監査記録、

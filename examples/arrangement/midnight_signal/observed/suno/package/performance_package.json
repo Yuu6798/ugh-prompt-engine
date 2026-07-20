@@ -1,0 +1,138 @@
+{
+  "schema_version": "performance-package/0.2",
+  "work_id": "midnight-signal",
+  "generator": "suno",
+  "generator_variant": "standard",
+  "inputs": {
+    "identity_manifest": {
+      "sha256": "f96c5f0b4296d18242d8aa3df48ef1d4c040337c79ac8224df61cb34af774aa4"
+    },
+    "preservation_contract": {
+      "sha256": "5f5889265bf5c352e4f42d119406b2573e26d6478555c4f043553d41b363787e"
+    },
+    "capability_profile": {
+      "sha256": "343f3e84bb7e2bb4f4c945195659b3823318bf14c306774278a33ee7d116592b"
+    },
+    "derived_score": {
+      "sha256": "c52fcd34d5844e2d5a072a4b0ac73763a2d3631bf4a2dab293e3b29bec5b61b5"
+    },
+    "device_profile": {
+      "generator": "suno",
+      "status": "loaded",
+      "sha256": "574f7ef3d6d6183244929276539461d9cecefe693e69f3075f553e3d415d020f",
+      "hash_basis": "canonical_model_json"
+    }
+  },
+  "prompt": {
+    "text": "132 BPM. Brightness bright. Introspective night drive atmosphere. melodic_edm / progressive_house track. C minor. 4/4 time. Wide stereo. Active rate 0.90-0.93. Valley depth 0.15-0.25.",
+    "tags": [
+      "melodic_edm",
+      "progressive_house",
+      "bright",
+      "wide_stereo"
+    ],
+    "negative_tags": [
+      "bright festival EDM",
+      "comic vocal delivery"
+    ],
+    "dropped_elements": [],
+    "advisories": [
+      "structure prose omitted for suno backend (measured dead in K2-seg batch 3); structure is compiled to the section_tags channel instead."
+    ],
+    "section_tags": "[Intro: low density, sub bass only]\n[Verse: sparse drums, short phrases, clear rests]\n[Chorus: full energy, wide stereo, focused layers]\n[Bridge: no kick, no bass, minimal texture]"
+  },
+  "channel_artifacts": {
+    "lyrics_text": [
+      {
+        "anchor_id": "lyrics",
+        "artifact": "identity/lyrics.txt",
+        "artifact_sha256": "2da7dca390e13fd6d19c3fbe74646583884313b112981f8bc7d62f0d6d3a27b2",
+        "artifact_type": "lyrics_text",
+        "media_type": "text/plain",
+        "artifact_base": {
+          "kind": "identity_manifest_directory",
+          "relative_to": "performance_package_directory",
+          "locator": "../inputs"
+        }
+      }
+    ],
+    "section_tags": [
+      {
+        "anchor_id": "structure",
+        "artifact": "identity/section_map.v2.json",
+        "artifact_sha256": "e0b1d7b9667d78b566b517a2389aaedb80da062419ad87a8386cc9c0d0eee951",
+        "artifact_type": "section_map",
+        "media_type": "application/json",
+        "format_version": "section-map/0.2",
+        "artifact_base": {
+          "kind": "identity_manifest_directory",
+          "relative_to": "performance_package_directory",
+          "locator": "../inputs"
+        }
+      }
+    ]
+  },
+  "anchor_statuses": [
+    {
+      "anchor_id": "lyrics",
+      "requested_mode": "hard",
+      "allow": [],
+      "delivery": {
+        "channel": "lyrics_text",
+        "status": "delivered"
+      },
+      "control": {
+        "status": "unknown"
+      },
+      "observation": {
+        "status": "not_observed"
+      }
+    },
+    {
+      "anchor_id": "melody",
+      "requested_mode": "hard",
+      "allow": [],
+      "delivery": {
+        "status": "unsupported"
+      },
+      "control": {
+        "status": "unknown"
+      },
+      "observation": {
+        "status": "not_observed"
+      }
+    },
+    {
+      "anchor_id": "harmony",
+      "requested_mode": "hard",
+      "allow": [],
+      "delivery": {
+        "status": "unknown"
+      },
+      "control": {
+        "status": "unknown"
+      },
+      "observation": {
+        "status": "not_observed"
+      }
+    },
+    {
+      "anchor_id": "structure",
+      "requested_mode": "elastic",
+      "allow": [
+        "section_repetition",
+        "section_insertion"
+      ],
+      "delivery": {
+        "channel": "section_tags",
+        "status": "experimental"
+      },
+      "control": {
+        "status": "unknown"
+      },
+      "observation": {
+        "status": "not_observed"
+      }
+    }
+  ]
+}

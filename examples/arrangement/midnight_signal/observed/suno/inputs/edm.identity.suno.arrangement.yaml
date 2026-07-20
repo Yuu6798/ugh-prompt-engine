@@ -1,0 +1,62 @@
+# Plan C: Suno A/B real-commission demo — ArrangementSpec.
+#
+# Same EDM arrangement target as the existing, committed
+# edm.identity.arrangement.yaml (melodic_edm / progressive_house, bpm 132,
+# bright), with lyrics/melody/harmony anchors preserved hard exactly as that
+# file declares. This demo variant adds one identity_anchors entry for the
+# new structure anchor (identity_manifest.demo.yaml): mode elastic with an
+# explicit allow-list of the two #194 structure vocab words this demo
+# exercises — section_repetition and section_insertion. section_omission and
+# any reordering vocab are deliberately *not* listed: this demo does not
+# declare drops or resequencing as within-policy, only repeats/insertions.
+#
+# target_backend is left unset here (inherited from the base
+# composition_score.yaml's rendering.target_backend: "external", which
+# resolves to the "suno" capability-profile key) — same as
+# edm.identity.arrangement.yaml, confirming existing resolution behavior
+# rather than introducing a new backend path.
+
+meta:
+  id: "midnight-signal-suno-ar4-demo"
+  version: "0.1"
+  description: >-
+    Midnight Signal EDM variant used for the Plan C Suno A/B real-commission
+    demo. Identical semantic/physical target to edm.identity.arrangement.yaml,
+    with an added elastic structure identity_anchors policy exercising the
+    #194 section-map/0.2 vocab (section_repetition, section_insertion).
+
+target:
+  semantic:
+    grv:
+      primary: "melodic_edm"
+      secondary: "progressive_house"
+    delta_e:
+      overall: "build into a vocal hook and instrumental drop"
+  physical:
+    bpm: 132
+    brightness: "bright"
+
+preservation:
+  score_fields:
+    semantic.core: hard
+    physical.key: hard
+    semantic.grv.primary: free
+    semantic.grv.secondary: free
+    semantic.delta_e.overall: elastic
+    physical.bpm: free
+    physical.brightness: free
+  identity_anchors:
+    lyrics:
+      mode: hard
+      allow: []
+    melody:
+      mode: hard
+      allow: []
+    harmony:
+      mode: hard
+      allow: []
+    structure:
+      mode: elastic
+      allow:
+        - section_repetition
+        - section_insertion

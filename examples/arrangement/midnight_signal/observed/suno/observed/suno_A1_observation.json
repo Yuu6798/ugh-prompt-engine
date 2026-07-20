@@ -1,0 +1,144 @@
+{
+  "schema_version": "observation-report/0.1",
+  "work_id": "midnight-signal",
+  "package_sha256": "792f350deb85e0c94384d98f96391c1c635a9ded7afec68af4c317ad0bdbc160",
+  "generated_artifact": {
+    "path": "suno_A1.mp3",
+    "sha256": "25621c50f3e51132626e561aa21017ce727bab594f309b0643b9d01b92708772"
+  },
+  "anchors": [
+    {
+      "anchor_id": "lyrics",
+      "domain": "lyrics",
+      "sensor": {
+        "name": "lyrics_transcription",
+        "available": false,
+        "reason": "lyrics sensor not wired in this PR (requires the 'lyrics' extra / faster-whisper); future connection point: eval/lyrics_match.py + rpe/learned/lyrics_adapter.py"
+      },
+      "measurements": {},
+      "adherence_status": "not_observed",
+      "determination": "no_sensor",
+      "note": null
+    },
+    {
+      "anchor_id": "melody",
+      "domain": "melody",
+      "sensor": {
+        "name": "note_events",
+        "available": false,
+        "reason": "melody sensor not wired in this PR (requires the 'basic-pitch' extra); future connection point: rpe/learned/basic_pitch_adapter.py"
+      },
+      "measurements": {},
+      "adherence_status": "not_observed",
+      "determination": "no_sensor",
+      "note": null
+    },
+    {
+      "anchor_id": "harmony",
+      "domain": "harmony",
+      "sensor": {
+        "name": "chord_sequence_match",
+        "available": true,
+        "reason": null
+      },
+      "measurements": {
+        "chord_sequence_match_rate": 0.0526,
+        "repeated_chord_sequence_match_rate": 0.0,
+        "canonical_length": 4,
+        "observed_length": 38,
+        "collapsed_observed_length": 20,
+        "matched_cycle_prefix_length": 1,
+        "collapsed_match_fraction": 0.05,
+        "unmatched_tail_length": 19,
+        "unmatched_tail_head": [
+          [
+            "G",
+            "minor"
+          ],
+          [
+            "G#",
+            "major"
+          ],
+          [
+            "C",
+            "minor"
+          ],
+          [
+            "G",
+            "minor"
+          ],
+          [
+            "G#",
+            "minor"
+          ],
+          [
+            "G#",
+            "major"
+          ],
+          [
+            "G",
+            "minor"
+          ],
+          [
+            "G",
+            "major"
+          ]
+        ],
+        "full_cycles": 0
+      },
+      "adherence_status": "not_observed",
+      "determination": "deferred",
+      "note": "collapsed observed prefix matches 0 full canonical cycle(s); 19 trailing entries fall outside the canonical alternation. changed_within_policy/changed_outside_policy classification is out of scope for this instrument and deferred to a future threshold Design Memo (D-1)."
+    },
+    {
+      "anchor_id": "structure",
+      "domain": "structure",
+      "sensor": {
+        "name": "section_sequence_match",
+        "available": true,
+        "reason": null
+      },
+      "measurements": {
+        "canonical_sections": [
+          "intro",
+          "verse",
+          "chorus",
+          "bridge"
+        ],
+        "canonical_length": 4,
+        "observed_sections": [
+          "intro",
+          "verse",
+          "verse",
+          "verse",
+          "bridge",
+          "chorus",
+          "chorus",
+          "outro"
+        ],
+        "observed_sections_raw": [
+          "Intro",
+          "Verse",
+          "Verse2",
+          "Verse3",
+          "Bridge",
+          "Chorus",
+          "Chorus",
+          "Outro"
+        ],
+        "observed_length": 8,
+        "position_match_rate": 0.25,
+        "sequence_exact_match": false,
+        "canonical_section_ids": [
+          "s1-intro",
+          "s2-verse",
+          "s3-chorus",
+          "s4-bridge"
+        ]
+      },
+      "adherence_status": "not_observed",
+      "determination": "deferred",
+      "note": "normalized canonical and observed section sequences do not match exactly (changed_within_policy/changed_outside_policy classification is out of scope for this instrument and deferred to a future threshold Design Memo, D-1)."
+    }
+  ]
+}
