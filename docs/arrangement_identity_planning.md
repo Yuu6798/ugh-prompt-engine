@@ -362,8 +362,11 @@ preserved を成功条件にしていない**: この結果自体が
 - structure センサーが section-map/0.2 anchor（stable id）に発火した初の実データ。
   melody anchor の `section_ref: "s3-chorus"` 解決も実データ初。structure チャネルの
   delivery.status は `experimental` のまま（成功偽装なし）
-- D-1 閾値 Design Memo の試金石: A2（契約内逸脱のみ）と B1（契約外相当）が
-  `changed_within_policy` / `changed_outside_policy` 分類の実例ペア
+- D-1 閾値 Design Memo への候補事例: A2（観測逸脱が契約許容語彙内に収まる）と
+  B1（allow-list 外の reordering を含む）を、`changed_within_policy` /
+  `changed_outside_policy` 分類設計の**中立な候補入力**として D-1 起草時に使う。
+  観測レポートどおり分類自体は deferred のままであり、ここで両 take に分類ラベルを
+  先行付与するものではない
 - 実行された UI 手交は package の channel_artifacts から逸脱（両セル instrumental に
   つき lyrics_text 非貼付・B セルは section_tags も非貼付）。package は verbatim 記録
   につき無編集とし、逸脱は order_sheet からの機械転記 sidecar
