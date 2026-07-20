@@ -515,7 +515,9 @@ summary は並記のまま温存）。
 midnight_signal EDM 編曲 + MusicGen capability profile の performance package から
 `facebook/musicgen-small@4c8334b0…`（seed 8000/8001, n=2, 決定論スポット検証 2/2
 一致）で初めて実生成物観測（`svprpe observe`）を埋めた —
-`examples/arrangement/midnight_signal/observed/musicgen/` 参照。
+`examples/arrangement/midnight_signal/observed/musicgen/` 参照（実 Suno 自体での
+AR4 初観測は同日夕の検収デモ — `docs/arrangement_identity_planning.md` の
+2026-07-19（fixture 化 2026-07-20）エントリ、`observed/suno/` 参照）。
 
 ### 7.9 AR4 form 実観測バッチ（2026-07-19）
 

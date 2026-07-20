@@ -1,0 +1,42 @@
+{
+  "schema_version": "compilation-report/0.3",
+  "work_id": "midnight-signal",
+  "generator": "suno",
+  "generator_variant": "standard",
+  "mode": "advisory",
+  "inputs": {
+    "identity_manifest": {
+      "sha256": "f96c5f0b4296d18242d8aa3df48ef1d4c040337c79ac8224df61cb34af774aa4"
+    },
+    "preservation_contract": {
+      "sha256": "5f5889265bf5c352e4f42d119406b2573e26d6478555c4f043553d41b363787e"
+    },
+    "capability_profile": {
+      "sha256": "343f3e84bb7e2bb4f4c945195659b3823318bf14c306774278a33ee7d116592b"
+    },
+    "derived_score": {
+      "sha256": "c52fcd34d5844e2d5a072a4b0ac73763a2d3631bf4a2dab293e3b29bec5b61b5"
+    },
+    "device_profile": {
+      "generator": "suno",
+      "status": "loaded",
+      "sha256": "574f7ef3d6d6183244929276539461d9cecefe693e69f3075f553e3d415d020f",
+      "hash_basis": "canonical_model_json"
+    }
+  },
+  "package_sha256": "792f350deb85e0c94384d98f96391c1c635a9ded7afec68af4c317ad0bdbc160",
+  "content_digest": "6f50ab883ad293742b0c3f00e1d7cdb25d0dbf72d0f881102b779945b7383cf4",
+  "content_digest_basis": "sha256-of-canonical-json-artifact-name-to-sha256/v1",
+  "invocation_provenance": {
+    "compiler": {
+      "package_version": "0.1.0",
+      "git_commit": "1b2a2356bdeaba936ea35fabee295b6d808d6364"
+    }
+  },
+  "warnings": [
+    "anchor 'melody': channel 'symbolic_melody' is unsupported",
+    "anchor 'harmony': no channel mapping defined",
+    "anchor 'structure': channel 'section_tags' is experimental",
+    "section_tags channel is experimental; payload included"
+  ]
+}

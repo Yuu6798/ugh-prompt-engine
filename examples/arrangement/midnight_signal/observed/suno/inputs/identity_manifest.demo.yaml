@@ -1,0 +1,78 @@
+# Plan C: Suno A/B real-commission demo — IdentityManifest sidecar.
+#
+# Base content is the existing, committed
+# examples/arrangement/midnight_signal/identity_manifest.yaml (lyrics / melody /
+# harmony anchors, byte-identical artifacts confirmed by sha256 before this file
+# was written). This demo variant adds one structure anchor pointing at a new
+# section-map/0.2 artifact (stable per-section id + label, AR2-3 / #194) and
+# wires IdentityAnchor.section_ref (melody -> "s3-chorus") to dogfood #194's
+# section_ref resolution against a real 0.2 anchor for the first time outside
+# test fixtures.
+#
+# All anchor artifacts referenced below are *copies* of the real examples/
+# files, placed under inputs/identity/ next to this manifest so every path
+# resolves inside this demo directory (no reach-out to the repo tree, no path
+# escape).
+schema_version: "identity-manifest/0.1"
+meta:
+  work_id: "midnight-signal"
+  version: "0.1"
+source:
+  locator: composition_score.yaml
+  sha256: "37854f54b42a1c4d424f357148d3d10f347e238ec72a42d1248bea2203f97d0b"
+  rights_basis: original
+  note: >-
+    合成 fixture 作品・音源なし。locator は base Composition Score 自身であり、
+    生成済み音声への参照ではない。
+anchors:
+  - id: lyrics
+    domain: lyrics
+    artifact: identity/lyrics.txt
+    artifact_type: lyrics_text
+    media_type: text/plain
+    sha256: "2da7dca390e13fd6d19c3fbe74646583884313b112981f8bc7d62f0d6d3a27b2"
+    required: true
+  - id: melody
+    domain: melody
+    artifact: identity/melody_notes.json
+    artifact_type: note_events_json
+    media_type: application/json
+    format_version: "note-events/0.1"
+    sha256: "1d67d4fd0f38ee6864a32010c19b0fc8401208842d06f204def2cc9a70378fb5"
+    required: true
+    # #194 dogfood: forward reference into the section-map/0.2 structure
+    # anchor below. Manifest load only succeeds if "s3-chorus" resolves
+    # against that anchor's declared section ids (IdentityAnchor.section_ref
+    # docstring / design_memo_ar2_3.md) — a successful `svprpe package`/
+    # `svprpe verify` run against this manifest is itself the proof that
+    # resolution succeeded.
+    section_ref: "s3-chorus"
+  - id: harmony
+    domain: harmony
+    # AR4 (Design Memo D-4): canonical progression matches performer.py's
+    # C minor default progression (MINOR_PROGRESSION, transpose=0,
+    # FAITHFUL_TAKE). artifact_type is chord_sequence_json, which
+    # ARTIFACT_TYPE_CHANNEL does not map to any input channel (None), so
+    # delivery is always unknown — delivery and observation are separate
+    # axes; observe measures regardless of delivery state.
+    artifact: identity/chord_progression.json
+    artifact_type: chord_sequence_json
+    media_type: application/json
+    format_version: "chord-sequence/0.1"
+    sha256: "180464a881ac63131c0a0fcdf812e0cc7bfd8dc1e9947698a5d5c65c89245299"
+    required: true
+  - id: structure
+    domain: structure
+    # section-map/0.2 (#194): each section carries a stable id alongside its
+    # label. ids/labels below are mechanically transcribed from
+    # composition_score.yaml's `structure` section names (intro/verse/
+    # chorus/bridge) — not invented. required: false, matching the existing
+    # identity_manifest.form.yaml precedent for the structure anchor (the
+    # edm.identity.suno.arrangement.yaml preservation policy below is what
+    # actually requests it).
+    artifact: identity/section_map.v2.json
+    artifact_type: section_map
+    media_type: application/json
+    format_version: "section-map/0.2"
+    sha256: "e0b1d7b9667d78b566b517a2389aaedb80da062419ad87a8386cc9c0d0eee951"
+    required: false

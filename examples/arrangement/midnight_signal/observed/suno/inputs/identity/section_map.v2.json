@@ -1,0 +1,9 @@
+{
+  "schema_version": "section-map/0.2",
+  "sections": [
+    {"id": "s1-intro", "label": "intro"},
+    {"id": "s2-verse", "label": "verse"},
+    {"id": "s3-chorus", "label": "chorus"},
+    {"id": "s4-bridge", "label": "bridge"}
+  ]
+}

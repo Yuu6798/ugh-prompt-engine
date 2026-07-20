@@ -1,0 +1,35 @@
+# 実行された Suno UI 手交と compiled package の差分の機械可読記録（per cell）。
+#
+# performance_package.json（sha256 792f350deb85e0c94384d98f96391c1c635a9ded7afec68af4c317ad0bdbc160・
+# 4 観測 JSON の package_sha256 が pin する verbatim 記録）は「コンパイル済みハンドオフの
+# 宣言」であり編集しない。実際に人間オペレータが Suno UI へ供給した内容はそこから逸脱して
+# おり、その事実は order_sheet.md のセル定義（散文）に記録済み。本ファイルはそれの
+# 機械可読転記であり、新規の事実主張・推定補完を含まない。
+# 転記元: order_sheet.md（Cell A / Cell B 節・Pre-registration ブロック）+ takes_memo.yaml。
+format: "handoff-deviations/0.1"
+authored_at_utc: "2026-07-20T07:14:11Z"
+package_sha256: "792f350deb85e0c94384d98f96391c1c635a9ded7afec68af4c317ad0bdbc160"
+transcription_sources: [order_sheet.md, takes_memo.yaml]
+generation_ui: "Suno Custom mode / Instrumental toggle ON（両セル）"
+package_channel_artifacts: [lyrics_text, section_tags]   # performance_package.json の channel_artifacts の実キー
+cells:
+  - cell: "A (tags)"
+    takes: [suno_A1, suno_A2]
+    style_field: "package prompt.text の Style 内容を貼付（order_sheet.md Cell A 節の指定どおり）"
+    lyrics_field: "section-tag script（package prompt.section_tags）のみ貼付。Instrumental ON のため歌詞ではない"
+    exclude_styles_field: "order_sheet.md 記載の 2 句（bright festival EDM, comic vocal delivery）を貼付"
+    channel_artifacts_actually_pasted: [section_tags]
+    channel_artifacts_not_pasted: [lyrics_text]
+  - cell: "B (no tags)"
+    takes: [suno_B1, suno_B2]
+    style_field: "Cell A と同一の Style 内容を貼付"
+    lyrics_field: "空欄（何も貼付していない。Instrumental トグルのみに依拠し [Instrumental] タグ等も未使用）"
+    exclude_styles_field: "Cell A と同一の 2 句を貼付"
+    channel_artifacts_actually_pasted: []
+    channel_artifacts_not_pasted: [lyrics_text, section_tags]
+note: >-
+  package の anchor_statuses が lyrics anchor（hard）を lyrics_text チャネルで
+  delivered と記録しているのはコンパイル済みハンドオフとしての宣言であり、実行された
+  手交の記録ではない。実行手交では両セルとも instrumental のため identity/lyrics.txt
+  は非貼付。treatment/control の正本は takes_memo.yaml の cell 欄 + order_sheet.md
+  （README.md の「package 共有と処置（A/B）provenance の切り分け」節参照）。
