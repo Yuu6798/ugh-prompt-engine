@@ -1,0 +1,112 @@
+{
+  "schema_version": "observation-report/0.1",
+  "work_id": "midnight-signal",
+  "package_sha256": "c918300473fa6040757338df2c1cea740a8e1f205b226400cca4f01b6129303d",
+  "generated_artifact": {
+    "path": "examples/arrangement/midnight_signal/observed/wi1_musicgen_n20/take6.wav",
+    "sha256": "f4528035ac096bbd0bf002dd77236309fe3d01a022986d70fbad68efa5d5baf7"
+  },
+  "anchors": [
+    {
+      "anchor_id": "lyrics",
+      "domain": "lyrics",
+      "sensor": {
+        "name": "lyrics_transcription",
+        "available": false,
+        "reason": "faster_whisper is not installed. Install it via the optional `lyrics` extra:\n    pip install -e \".[lyrics]\""
+      },
+      "measurements": {},
+      "adherence_status": "not_observed",
+      "determination": "no_sensor",
+      "note": null
+    },
+    {
+      "anchor_id": "melody",
+      "domain": "melody",
+      "sensor": {
+        "name": "note_events",
+        "available": false,
+        "reason": "basic_pitch is not installed. Install it via the optional `pitch` extra on Python 3.11:\n    pip install -e \".[pitch]\"\nbasic-pitch 0.4.0 is not enabled for Python >=3.12 because its TensorFlow dependency is not compatible with that runtime."
+      },
+      "measurements": {},
+      "adherence_status": "not_observed",
+      "determination": "no_sensor",
+      "note": null
+    },
+    {
+      "anchor_id": "harmony",
+      "domain": "harmony",
+      "sensor": {
+        "name": "chord_sequence_match",
+        "available": true,
+        "reason": null
+      },
+      "measurements": {
+        "chord_sequence_match_rate": 0.1429,
+        "repeated_chord_sequence_match_rate": 0.25,
+        "canonical_length": 4,
+        "observed_length": 7,
+        "collapsed_observed_length": 4,
+        "matched_cycle_prefix_length": 1,
+        "collapsed_match_fraction": 0.25,
+        "unmatched_tail_length": 3,
+        "unmatched_tail_head": [
+          [
+            "C",
+            "major"
+          ],
+          [
+            "C",
+            "minor"
+          ],
+          [
+            "C",
+            "major"
+          ]
+        ],
+        "full_cycles": 0
+      },
+      "adherence_status": "not_observed",
+      "determination": "deferred",
+      "note": "collapsed observed prefix matches 0 full canonical cycle(s); 3 trailing entries fall outside the canonical alternation. changed_within_policy/changed_outside_policy classification is out of scope for this instrument and deferred to a future threshold Design Memo (D-1)."
+    },
+    {
+      "anchor_id": "structure",
+      "domain": "structure",
+      "sensor": {
+        "name": "section_sequence_match",
+        "available": true,
+        "reason": null
+      },
+      "measurements": {
+        "canonical_sections": [
+          "intro",
+          "verse",
+          "chorus",
+          "bridge"
+        ],
+        "canonical_length": 4,
+        "observed_sections": [
+          "intro",
+          "bridge",
+          "chorus",
+          "chorus",
+          "outro"
+        ],
+        "observed_sections_raw": [
+          "Intro",
+          "Bridge",
+          "Chorus",
+          "Chorus",
+          "Outro"
+        ],
+        "observed_length": 5,
+        "position_match_rate": 0.4,
+        "sequence_exact_match": false
+      },
+      "adherence_status": "not_observed",
+      "determination": "deferred",
+      "note": "normalized canonical and observed section sequences do not match exactly (changed_within_policy/changed_outside_policy classification is out of scope for this instrument and deferred to a future threshold Design Memo, D-1)."
+    }
+  ]
+}

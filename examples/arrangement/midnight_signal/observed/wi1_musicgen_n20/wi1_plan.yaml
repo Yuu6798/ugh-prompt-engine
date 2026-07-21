@@ -1,0 +1,171 @@
+# WI1 無人バッチ n=20 事前登録（設計: Fable,
+# scratchpad/wi1_preregistration_design.md。実行: Sonnet, ブランチ
+# claude/continuation-from-yesterday-uqec0o）。目的: MusicGen 無人バッチ n=20 で
+# structure / harmony の逸脱分布を取得し、D-1 閾値
+# （changed_within_policy / changed_outside_policy 分類）Design Memo の実測基盤
+# とする（docs/work_identity_roadmap.md WI1 節が仕様の起点）。生成開始前に内容
+# 確定（AGENTS.md §8「ローカル決定論バッチの canonical 条件」1 項）。
+# plan_confirmed_at_utc は本ファイルを書き込む直前に `date -u` で実測した値であり、
+# 後続の Phase 2 生成タイムスタンプ（wi1_generation_timestamps.yaml）より必ず
+# 先行する（受け入れ条件: 事前登録 -> 生成 -> 観測の時系列を yaml 内の実測 UTC
+# で裏付ける）。
+schema_version: "1.0"
+plan_id: wi1_musicgen_midnight_signal_edm_form_n20
+plan_confirmed_at_utc: "2026-07-21T03:49:01Z"
+
+scope:
+  fixture: examples/arrangement/midnight_signal
+  arrangement: edm.identity.musicgen.arrangement.yaml
+  identity_manifest: examples/arrangement/midnight_signal/identity_manifest.form.yaml
+  capability_profile: config/capability_profiles/musicgen.yaml
+  generator: musicgen
+  takes: 20  # n=20 の位置づけ: 単一条件の逸脱分布取得。セル間比較はしない
+  # 単一セル・分布計測のみ。ノブ比較（K2 型）は行わない。
+
+# ABBA/均衡ゲート非適用の宣言と根拠（#191/#193 と同文の延長。決定論 seed による
+# ローカルスクリプト生成には人手評価や呈示順に由来する時間ドリフト機構が
+# そもそも存在しないため非適用。AGENTS.md §8 規定の非適用条件を満たす）。
+counter_balancing:
+  applies: false
+  rationale: >-
+    Deterministic seeded script generation has no presentation-order drift
+    mechanism (no human rater, no A/B display order) for ABBA counter-balancing
+    to correct — the gate is inapplicable by construction, not skipped.
+
+model:
+  model_id: facebook/musicgen-small
+  # #193 fixture (ar4f_plan.yaml) からの転記値。新規取得しない。
+  model_revision: "4c8334b02c6ec4e8664a91979669a501ec497792"
+  interface: local-transformers
+  device: cpu
+  guidance_scale: 3.0
+  duration_seconds: 30.0  # #193 と同一。12s は harmony collapse 後 1 エントリの
+  # 素材制約が #191 で実証済みのため不採用。
+
+# seed 系列: 8200 + take_index, take_index = 0..19（n=20）。#191 の 8000 系・
+# #193 の 8100 系と衝突しない新規系列。既存 take の再利用・混入はしない
+# （交絡隔離: 単一バッチ内で分布を完結させる）。
+seeds:
+  formula: "8200 + take_index"
+  take_index_range: [0, 19]
+  values:
+    take0: 8200
+    take1: 8201
+    take2: 8202
+    take3: 8203
+    take4: 8204
+    take5: 8205
+    take6: 8206
+    take7: 8207
+    take8: 8208
+    take9: 8209
+    take10: 8210
+    take11: 8211
+    take12: 8212
+    take13: 8213
+    take14: 8214
+    take15: 8215
+    take16: 8216
+    take17: 8217
+    take18: 8218
+    take19: 8219
+
+# prompt の出所: performance_package.json（本バッチ Phase 0 で #193 と同一入力
+# から決定論再構築・sha256 が #193 fixture の pin と byte 一致することを生成前に
+# 検証済み）の prompt.text ペイロードそのもの。生成スクリプトはこの文字列を
+# 再導出せず読み取るのみ（chain honesty: score -> package -> generator）。
+prompt_source:
+  compiled_via: >-
+    svprpe package examples/arrangement/midnight_signal/composition_score.yaml
+    examples/arrangement/midnight_signal/identity_manifest.form.yaml
+    examples/arrangement/midnight_signal/edm.identity.musicgen.arrangement.yaml
+    --capability-profile config/capability_profiles/musicgen.yaml
+    --output-dir <output-dir>
+  performance_package_sha256: c918300473fa6040757338df2c1cea740a8e1f205b226400cca4f01b6129303d
+  prompt_field: "performance_package.json#/prompt/text"
+  reconstruction_verification: >-
+    Rebuilt performance_package.json via the compile_command above into a
+    scratch --output-dir immediately before this plan was written, and
+    confirmed sha256 byte-identical to #193's pinned
+    performance_package_sha256 (c918300473fa6040757338df2c1cea740a8e1f205b226400cca4f01b6129303d,
+    from examples/arrangement/midnight_signal/observed/musicgen_form/ar4f_plan.yaml
+    and ar4f_takes_manifest.json) before any generation began.
+  note: >-
+    Prompt text is not re-derived from the score; it is read verbatim from the
+    already-compiled package (chain honesty: score -> package -> generator),
+    same as #191/#193. wi1_takes_manifest.json's `prompt` field is the same
+    string, copied verbatim by scripts/collect_ar4_observation.py's
+    `load_package_prompt`.
+
+# 観測手順（#191/#193 と同型。相対パスで呼ぶ — #191 教訓: 絶対パスを JSON に
+# 焼き込まない）。
+observation_procedure:
+  command: >-
+    svprpe observe <package.json> <takeN.wav>
+    --manifest examples/arrangement/midnight_signal/identity_manifest.form.yaml
+    -o examples/arrangement/midnight_signal/observed/wi1_musicgen_n20/wi1_observation_take{N}.json
+
+# 事前登録された canonical 条件充足設計（AGENTS.md §8。#191/#193 と同型）:
+# fresh-process 決定論スポット検証。時間的に最遠の take0 と take19 を、canonical
+# 生成とは別プロセス起動で再生成し sha256 byte 一致を確認する。実測結果は
+# wi1_determinism_spot_check.yaml に「fresh-process 2 本」と実態どおり記録する。
+determinism_spot_check_plan:
+  targets: [take0, take19]
+  method: >-
+    Each of take0 and take19 (the temporally-farthest-apart pair in the n=20
+    sequence) is regenerated via a separate `python3
+    scripts/collect_ar4_observation.py generate ...` process invocation (same
+    --package / --model-id / --model-revision / --seed-base /
+    --duration-seconds / --guidance-scale as the canonical batch, restricted to
+    a single --take-index), and the resulting audio_sha256 is compared against
+    the canonical manifest's pinned value. Recorded as "fresh-process 2 runs"
+    matching the actual execution (not "same process").
+
+# 判定の事前登録（#193 と同文の 3 分岐。どの結果でも成果 — preserved を成功
+# 条件にしない）:
+adherence_determination_branches:
+  - adherence_status: preserved
+    determination: exact_match
+    meaning: "sensor ran and measured an exact identity match"
+  - adherence_status: not_observed
+    determination: deferred
+    meaning: "sensor ran but did not match exactly"
+  - adherence_status: not_observed
+    determination: no_sensor
+    meaning: "no sensor wired for the anchor's domain"
+
+# 計測量の事前固定（take ごと、observe CLI の既存出力のみ。新設式なし。設計書
+# §3 の転記）。分類・閾値は本バッチの出力に一切影響しない — Fable が Design
+# Memo 段階で別途行う。
+measurements_recorded_per_take:
+  structure:
+    - position_match_rate
+    - sequence_exact_match
+    - observed_sections            # 正規化後
+    - observed_sections_raw
+    - observed_length
+  harmony:
+    - collapsed_observed_length
+    - matched_cycle_prefix_length
+    - full_cycles
+    - collapsed_match_fraction
+    - unmatched_tail_length
+    - unmatched_tail_head
+    # 透明性記録の生値（D-1 恒等判定には不使用）:
+    - chord_sequence_match_rate
+    - repeated_chord_sequence_match_rate
+  status_fields:
+    - adherence_status
+    - determination
+
+success_criterion: >-
+  Instrument data acquisition itself is the success criterion — obtaining n=20
+  real observation_report.json instances for real 30s generated audio,
+  exercising the structure and harmony sensors against a real generative
+  artifact at distribution scale for the first time. No particular
+  determination is required for success: any distribution of
+  preserved/not_observed outcomes, including "all takes fall outside the
+  allowed-vocabulary decomposition," is registered in advance as an equally
+  valid outcome (判定不能の正直会計). Classification into
+  changed_within_policy / changed_outside_policy is out of scope for this
+  batch and is performed separately by Fable in the D-1 threshold Design Memo.

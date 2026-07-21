@@ -1,0 +1,37 @@
+# WI1 バッチ n=20 決定論スポット検証（#191/#193 前例の型・AGENTS.md §8 canonical
+# 条件 2 項）。時間的に最遠の take0 と take19（wi1_generation_timestamps.yaml
+# 参照）を、canonical 生成とは別プロセス起動で再生成し sha256 byte 一致を確認
+# した。不一致でも捏造せず記録して続行する方針だったが、本バッチでは両テイクとも
+# 完全一致した。
+schema_version: "1.0"
+method: >-
+  fresh-process re-generation: each of take0 and take19 (the temporally
+  farthest-apart pair among the n=20 canonical takes) was regenerated via a
+  separate `python3 scripts/collect_ar4_observation.py generate ...` process
+  invocation (same --package / --model-id / --model-revision / --seed-base /
+  --duration-seconds / --guidance-scale / --identity-manifest as the canonical
+  batch, restricted to a single --take-index each), and the resulting
+  audio_sha256 was compared against the canonical manifest's pinned value.
+  Recorded as "fresh-process 2 runs" matching the actual execution (each
+  regeneration was its own `python3` process invocation, not the same
+  process).
+checks:
+  - sample_id: take0
+    seed: 8200
+    canonical_started_at_utc: "2026-07-21T03:50:25Z"
+    canonical_ended_at_utc: "2026-07-21T03:54:05Z"
+    spot_check_started_at_utc: "2026-07-21T05:09:48Z"
+    spot_check_ended_at_utc: "2026-07-21T05:13:37Z"
+    pinned_sha256: 73c8c51eb9b23db1bb30a025454043efb32bc4ae46738e2ce6f3b1ac7a3e9a26
+    regenerated_sha256: 73c8c51eb9b23db1bb30a025454043efb32bc4ae46738e2ce6f3b1ac7a3e9a26
+    match: true
+  - sample_id: take19
+    seed: 8219
+    canonical_started_at_utc: "2026-07-21T05:05:31Z"
+    canonical_ended_at_utc: "2026-07-21T05:09:22Z"
+    spot_check_started_at_utc: "2026-07-21T05:13:51Z"
+    spot_check_ended_at_utc: "2026-07-21T05:17:36Z"
+    pinned_sha256: deb6d110bc62832e86c22916db119232954728cc15009f9fa4aaf2a0a571dc58
+    regenerated_sha256: deb6d110bc62832e86c22916db119232954728cc15009f9fa4aaf2a0a571dc58
+    match: true
+summary: "2/2 fresh-process regenerations matched the canonical pinned sha256 exactly."
