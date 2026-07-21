@@ -53,15 +53,19 @@
       "ranking": [
         {
           "rank": 1,
-          "ref_id": "harmony_decoy",
-          "distance": 0.75,
-          "tied_with": []
+          "ref_id": "canonical",
+          "distance": 1.0,
+          "tied_with": [
+            "harmony_decoy"
+          ]
         },
         {
           "rank": 2,
-          "ref_id": "canonical",
+          "ref_id": "harmony_decoy",
           "distance": 1.0,
-          "tied_with": []
+          "tied_with": [
+            "canonical"
+          ]
         }
       ],
       "not_observed": [

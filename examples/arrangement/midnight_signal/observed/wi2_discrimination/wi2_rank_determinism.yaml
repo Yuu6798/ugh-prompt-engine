@@ -6,6 +6,17 @@
 # 2026-07-21 再生成: RankEntry に tied_with を追加した後の再実行
 # （距離式・rank 番号・tie-break 順序は不変、JSON に列が追加されたため
 # sha256 のみ全件更新）。
+#
+# 2026-07-21 再生成 (2): Codex P2 #201 4th item — harmony 軸の
+# repeated_chord_sequence_match_rate 呼び出しに参照 score の structure から
+# 導いた cycle 数（reference_chord_progression_cycle_count、
+# roundtrip/diagnose.py の _source_chord_cycle_count と同規則）を渡すよう修正。
+# 12 本中 11 本は harmony 軸を含め数値・sha256 とも無変更（canonical/harmony_decoy
+# の cycle 数が偶然どちらも 2 で揃うため、tie/rank の実質は変わらない）。
+# wi2_C_take1 のみ harmony 軸が変化（旧: harmony_decoy rank1 distance=0.75 単独勝ち
+# / canonical rank2 distance=1.0 → 新: canonical/harmony_decoy とも distance=1.0
+# の tie）。structure/key/bpm/brightness の 4 軸は 12 本とも無変更。sha256_pass1 ==
+# sha256_pass2 を全 12 本で再確認済み（決定論は保存）。
 schema_version: "wi2-rank-determinism/0.1"
 command_template: >-
   svprpe identity-rank <bundle> --references
@@ -51,8 +62,8 @@ results:
     take: 1
     bundle: wi2_C_take1.rpe.json
     report: wi2_rank_C_take1.json
-    sha256_pass1: 05c357da4c8e0dcf3a417455394e8857ea8524af67f9c1f54f8c82606757a48c
-    sha256_pass2: 05c357da4c8e0dcf3a417455394e8857ea8524af67f9c1f54f8c82606757a48c
+    sha256_pass1: a097b24d7cc8f98c009061eb050bc4d89dac3d5346ed8f584b68375b11d26255
+    sha256_pass2: a097b24d7cc8f98c009061eb050bc4d89dac3d5346ed8f584b68375b11d26255
     match: true
   - cell: C
     take: 2

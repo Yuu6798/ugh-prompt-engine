@@ -38,6 +38,7 @@ from svp_rpe.roundtrip.identity_rank import (
     normalize_observed_section_label,
     normalize_reference_section_label,
     position_match_rate,
+    reference_chord_progression_cycle_count,
     render_identity_rank_text,
     run_identity_rank,
 )
@@ -147,7 +148,15 @@ def _score(
     key: str = "C minor",
     brightness: str = "dark",
     structure_sections: list[str],
+    section_role_physical: dict[str, tuple[str, str]] | None = None,
 ) -> CompositionScore:
+    """``section_role_physical`` optionally overrides a given section's
+    ``role``/``physical`` text (default ``("r", "p")``, which never matches
+    ``_reference_section_plays_chords``'s silence/no-kick/low-density/
+    sub-bass substrings) — used by the harmony-axis cycle-count tests to
+    build references with a mix of playable and non-playable sections."""
+
+    default_role_physical = ("r", "p")
     return CompositionScore.model_validate(
         {
             "meta": {"title": "fixture", "version": "0.1"},
@@ -167,7 +176,14 @@ def _score(
                 "stereo_width": "wide",
             },
             "structure": [
-                {"section": section, "bars": 1, "role": "r", "physical": "p"}
+                {
+                    "section": section,
+                    "bars": 1,
+                    "role": (section_role_physical or {}).get(section, default_role_physical)[0],
+                    "physical": (section_role_physical or {}).get(
+                        section, default_role_physical
+                    )[1],
+                }
                 for section in structure_sections
             ],
             "rendering": {
@@ -404,6 +420,113 @@ def test_harmony_axis_reuses_repeated_chord_sequence_match_rate() -> None:
     axis = _harmony_axis(bundle, [ref])
 
     assert axis.ranking[0].distance == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Harmony axis: cycle count derived from the reference score's structure
+# (Codex P2 #201 4th item). The deterministic performer renders
+# events.chord_progression once per non-drone/silent section, so a
+# multi-section reference's *observed* chord stream is several repeated
+# cycles of the authored pattern, not one — passing the default cycles=1
+# to repeated_chord_sequence_match_rate would report a faithful multi-cycle
+# performance as a total mismatch (distance=1.0) purely from a length
+# mismatch, the bug the real wi2_C_take1 fixture exhibited before this fix.
+# ---------------------------------------------------------------------------
+
+
+def test_reference_chord_progression_cycle_count_counts_playable_sections_only() -> None:
+    """Same rule as roundtrip/diagnose.py's _source_chord_cycle_count: a
+    section whose role/physical hint mentions silence/no-kick/low-density/
+    sub-bass does not repeat the chord progression and is excluded from the
+    count."""
+
+    score = _score(
+        structure_sections=["intro", "verse", "chorus", "bridge"],
+        section_role_physical={
+            "intro": ("establish loneliness", "low density, sub bass only"),
+            "verse": ("restrained movement", "sparse drums, short phrases"),
+            "chorus": ("emotional release", "full energy, wide stereo"),
+            "bridge": ("near silence and reflection", "no kick, no bass, minimal texture"),
+        },
+    )
+
+    # Only verse + chorus play chords (intro is sub-bass-only, bridge is
+    # both "near silence" and "no kick") -> 2 cycles, matching the real
+    # wi2_references.yaml derived_score.yaml fixtures this rule was built
+    # from.
+    assert reference_chord_progression_cycle_count(score) == 2
+
+
+def test_reference_chord_progression_cycle_count_is_at_least_one() -> None:
+    """A reference with zero playable sections still assumes one cycle
+    (max(1, playable_sections)), matching _source_chord_cycle_count."""
+
+    score = _score(
+        structure_sections=["intro"],
+        section_role_physical={"intro": ("establish loneliness", "low density, sub bass only")},
+    )
+
+    assert reference_chord_progression_cycle_count(score) == 1
+
+
+def test_harmony_axis_faithful_two_cycle_stream_is_zero_distance() -> None:
+    """A reference with 2 playable sections whose observed chord stream is
+    exactly 2 faithful repetitions of the authored progression must score
+    distance=0.0 — before this fix (default cycles=1) this same faithful
+    performance scored distance=1.0 (total mismatch by length alone), the
+    exact failure mode the real wi2_C_take1 fixture exhibited."""
+
+    progression = [("C", "minor"), ("G", "major")]
+    bundle = _bundle(
+        structure_labels=["verse", "chorus"],
+        chords=progression + progression,  # two faithful cycles, no adjacent dupes
+    )
+    ref = _resolved(
+        "canonical",
+        _score(
+            structure_sections=["intro", "verse", "chorus", "bridge"],
+            section_role_physical={
+                "intro": ("establish loneliness", "low density, sub bass only"),
+                "verse": ("restrained movement", "sparse drums, short phrases"),
+                "chorus": ("emotional release", "full energy, wide stereo"),
+                "bridge": ("near silence and reflection", "no kick, no bass, minimal texture"),
+            },
+        ),
+        progression=progression,
+    )
+
+    axis = _harmony_axis(bundle, [ref])
+
+    assert axis.ranking[0].distance == 0.0
+
+
+def test_harmony_axis_partial_single_cycle_stream_is_full_mismatch() -> None:
+    """The same 2-cycle reference against an observed stream carrying only
+    one cycle's worth of chords is a length mismatch under
+    repeated_chord_sequence_match_rate (no partial credit) — distance=1.0,
+    not some intermediate value. Documents the existing all-or-nothing
+    length-mismatch behavior is unchanged by this fix, only the cycle count
+    fed into it is corrected."""
+
+    progression = [("C", "minor"), ("G", "major")]
+    bundle = _bundle(structure_labels=["verse", "chorus"], chords=progression)
+    ref = _resolved(
+        "canonical",
+        _score(
+            structure_sections=["intro", "verse", "chorus", "bridge"],
+            section_role_physical={
+                "intro": ("establish loneliness", "low density, sub bass only"),
+                "verse": ("restrained movement", "sparse drums, short phrases"),
+                "chorus": ("emotional release", "full energy, wide stereo"),
+                "bridge": ("near silence and reflection", "no kick, no bass, minimal texture"),
+            },
+        ),
+        progression=progression,
+    )
+
+    axis = _harmony_axis(bundle, [ref])
+
+    assert axis.ranking[0].distance == 1.0
 
 
 # ---------------------------------------------------------------------------

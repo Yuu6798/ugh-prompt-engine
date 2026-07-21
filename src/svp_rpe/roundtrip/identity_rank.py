@@ -29,9 +29,19 @@ Axes and their exact distance formulas (design memo section C):
   as new public functions (``normalize_reference_section_label`` /
   ``normalize_observed_section_label``).
 - **harmony**: ``1 - repeated_chord_sequence_match_rate(reference_progression,
-  observed_chord_sequence)``, reusing ``roundtrip.compare``'s public
-  function directly (no reimplementation). References with no
-  ``progression_path`` are ``not_observed`` on this axis.
+  observed_chord_sequence, cycles=reference_chord_progression_cycle_count(ref.score))``,
+  reusing ``roundtrip.compare``'s public function directly (no
+  reimplementation) for the match-rate math. ``cycles`` is not left at the
+  default of 1: the deterministic performer renders
+  ``events.chord_progression`` once per non-drone/silent section (a
+  multi-section reference performs the authored pattern several times in a
+  row), so comparing the full rendered observed stream against only one
+  un-repeated cycle would report every genuine match as a mismatch —
+  chain honesty with ``roundtrip/diagnose.py``'s ``_diagnose_chord_progression``,
+  which compensates for the same rendering fact via its own (module-private)
+  ``_source_chord_cycle_count``. See ``reference_chord_progression_cycle_count``
+  for the reimplemented rule. References with no ``progression_path`` are
+  ``not_observed`` on this axis.
 - **key**: ``1 - weighted_key_score(reference_key, observed_key_label).score``,
   reusing ``keys.py`` directly. ``reference_key`` is the reference score's
   single ``physical.key`` string, already in mir_eval's ``"<tonic> <mode>"``
@@ -379,6 +389,53 @@ def _load_reference_chord_progression(path: Path) -> list[tuple[str, str]]:
     return [(chord.root, chord.quality) for chord in chords]
 
 
+def reference_chord_progression_cycle_count(score: CompositionScore) -> int:
+    """How many authored-progression cycles the deterministic performer
+    would render for this reference score's ``structure`` (Codex P2 #201
+    4th item: chain honesty with the performer's actual rendering).
+
+    The performer plays ``events.chord_progression`` once per non-drone,
+    non-silent section rather than once for the whole take, so the observed
+    chord stream this axis compares against is ``len(playable sections)``
+    repetitions of the authored pattern, not one. Passing the default
+    ``cycles=1`` to ``repeated_chord_sequence_match_rate`` for a
+    multi-section reference would report a genuinely faithful performance
+    as a total mismatch (``distance=1.0``) purely because the observed
+    stream is longer than one bare cycle.
+
+    Same rule ``roundtrip/diagnose.py``'s (module-private)
+    ``_source_chord_cycle_count``/``_section_plays_chords`` use for its own
+    ``_diagnose_chord_progression`` call to this same
+    ``repeated_chord_sequence_match_rate`` function — reimplemented here as
+    a new public function rather than importing the private helpers, the
+    same restraint this module documents elsewhere for its relationship to
+    ``arrange/observe.py``. A section counts as "plays chords" unless its
+    ``physical``/``role`` hint text mentions silence, no-kick, low-density,
+    or sub-bass framing (identical substring checks to
+    ``_section_plays_chords``); at least one cycle is always assumed
+    (``max(1, playable_sections)``).
+    """
+
+    playable_sections = sum(
+        1 for section in score.structure if _reference_section_plays_chords(section)
+    )
+    return max(1, playable_sections)
+
+
+def _reference_section_plays_chords(section: Any) -> bool:
+    """Same substring rule as ``roundtrip/diagnose.py``'s (module-private)
+    ``_section_plays_chords``: a section is silent/droning (does not repeat
+    the chord progression) when its combined ``physical``/``role`` hint text
+    mentions silence, no-kick, low-density, or sub-bass framing."""
+
+    hint = f"{section.physical} {section.role}".lower()
+    if "silence" in hint or "no kick" in hint:
+        return False
+    if "low density" in hint or "sub bass" in hint:
+        return False
+    return True
+
+
 # --- brightness axis: dark/neutral/bright band bounds -----------------------
 
 
@@ -556,7 +613,11 @@ def _harmony_axis(bundle: RPEBundle, refs: list[_ResolvedReference]) -> AxisRank
                 "reference declares no progression_path (no harmony anchor to compare)"
             )
             continue
-        rate = repeated_chord_sequence_match_rate(ref.progression, observed_sequence)
+        rate = repeated_chord_sequence_match_rate(
+            ref.progression,
+            observed_sequence,
+            cycles=reference_chord_progression_cycle_count(ref.score),
+        )
         distances[ref.ref_id] = round(1.0 - rate, 4)
     return _rank_axis("harmony", distances, not_observed)
 

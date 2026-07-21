@@ -73,6 +73,13 @@ harmony 破壊 derived_score を faithful と同一 seed 8300 で生成した結
    参照を最小差構成（canonical=derived/A・structure_destroyed=derived/C・
    harmony_decoy=derived/Bp）へ是正。教訓: **順位計器の参照セットは対比ごとに
    単一因子差で構成する**（交絡隔離規律の参照側への適用）
+3. **harmony 軸の cycle 数不整合**（Codex P2 検出）: performer は進行を
+   playable セクションごとに反復レンダーし roundtrip 診断は cycle 数で補償
+   するのに、計器が cycles=1 固定で比較していた（忠実 2 周ストリームが
+   距離 1.0 になる chain honesty の破れ）。diagnose.py と同規則の公開ヘルパー
+   `reference_chord_progression_cycle_count` で是正。**当初「C take1 のみ
+   decoy 0.75 単独勝ち」と見えた観測はこのバグの産物**で、正しい cycle=2 では
+   12/12 完全 tie に揃った（見かけの弁別が計器誤差だった実例）
 
 ## 4. 実測結果（n=12、修正後 v2）
 
@@ -80,7 +87,7 @@ harmony 破壊 derived_score を faithful と同一 seed 8300 で生成した結
 |---|---|---|
 | **bpm** | **成立（唯一）** | 作品帰属 11/12 正解（A/C→canonical 側 7/8・D→other_work 4/4）。唯一の誤帰属は A take3 = 89.1 アトラクタ。C take3 は 258.4（129.2 の octave 倍化）でも帰属自体は正解（全距離が大きいまま canonical 最小） |
 | structure | 不成立 | A/C 間弁別なし。A 群 [Intro,Chorus,Outro] ×3 では destroyed(0.5) < canonical(0.75) の**逆転**（位置整合率の長さバイアス: 3 トークン観測は 4 トークン正典より他作品 3 トークン参照に近く出る） |
-| harmony | 不成立 | 11/12 が canonical vs decoy の 1.0 同率 tie（tie-break 選出であって弁別でない）。唯一の単独勝ちは C take1 の decoy 0.75 = F ドローンの偶然一致 |
+| harmony | 不成立 | **12/12 が canonical vs decoy の 1.0 同率 tie**（tie-break 選出であって弁別でない）。cycle 修正前に見えた C take1 の decoy 0.75「単独勝ち」は cycles=1 バグの産物（§3 欠陥 3）— 弁別信号は完全にゼロで、チャネル死証明（§2）と整合 |
 | key | 不安定 | 修正後も帰属 3/12 正解程度。センサーが平行調/同主調へ流れる（C major 読み 6/12） |
 | brightness | 原理的に不能 | 全参照が bright 宣言のため全行 tie。宣言が一致する行列では帯域内判定しか出ない |
 

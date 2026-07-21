@@ -120,8 +120,9 @@ fresh-process sha スポット検証 2/2 一致）で identity-rank 計器を 12
 cell P は A take0 と同一 seed 再演奏が byte 一致し、harmony プロンプトチャネル死を
 機械証明した。順位表の決定論再現は 12/12 一致。弁別が成立したのは **bpm のみ**
 （A/C 8 take 中 7 take で canonical 側、D 4 take 全てで other_work）。structure は
-長さバイアスで destroyed recast が canonical に勝つ逆転、harmony は 11/12 take が
-canonical/harmony_decoy 距離 1.0 の tie、brightness は全 take 4 参照同距離の tie
+長さバイアスで destroyed recast が canonical に勝つ逆転、harmony は 12/12 take が
+canonical/harmony_decoy 距離 1.0 の tie（cycle 数バグ修正後）、brightness は
+全 take 4 参照同距離の tie
 で非弁別。key は軸バグ修正後も不安定。詳細・数値表・pin 照合:
 [`wi2_discrimination_harness.md`](wi2_discrimination_harness.md)。
 

@@ -241,10 +241,21 @@ def test_bpm_axis_canonical_wins_seven_of_eight_a_and_c_takes_other_work_wins_al
         assert rank1["ref_id"] == "other_work", f"D take{take}: expected other_work bpm rank1"
 
 
-def test_harmony_axis_eleven_of_twelve_takes_tie_canonical_and_harmony_decoy_at_1_0() -> None:
-    """harmony tie: 12 take 中 11 take で canonical と harmony_decoy の距離が
-    ともに 1.0 の tie（tied_with に相互記載）・C take1 のみ harmony_decoy 0.75
-    の単独勝ち。"""
+def test_harmony_axis_all_twelve_takes_tie_canonical_and_harmony_decoy_at_1_0() -> None:
+    """harmony tie: 12 take 全てで canonical と harmony_decoy の距離がともに
+    1.0 の tie（tied_with に相互記載）。
+
+    2026-07-21 Codex P2 #201 4th item 修正後の実測値更新: 修正前は C take1 のみ
+    harmony_decoy が距離 0.75 の単独勝ちだったが、これは
+    ``repeated_chord_sequence_match_rate`` を（参照 score の structure から
+    導くべき）cycle 数ではなく既定の ``cycles=1`` で呼んでいたバグに由来する
+    見かけの弁別だった。``reference_chord_progression_cycle_count``
+    （``roundtrip/diagnose.py`` の ``_source_chord_cycle_count`` と同規則）で
+    正しい cycle 数（canonical/harmony_decoy いずれも 2 — A/Bp 両 derived
+    score の playable section 数）を渡すよう修正した結果、C take1 も他の 11
+    take と同じ 1.0 tie になった（＝ harmony チャネルは 12/12 で非弁別、
+    wi2_channel_death_proof.yaml の「harmony プロンプトチャネルは死んでいる」
+    という結論と整合する）。"""
 
     tie_takes: list[tuple[str, int]] = []
     single_winner_takes: list[tuple[str, int]] = []
@@ -260,15 +271,8 @@ def test_harmony_axis_eleven_of_twelve_takes_tie_canonical_and_harmony_decoy_at_
         else:
             single_winner_takes.append((cell, take))
 
-    assert single_winner_takes == [("C", 1)]
-    assert len(tie_takes) == 11
-
-    c_take1_report = _load_rank_report("C", 1)
-    c_take1_harmony = _ranking_by_ref_id(_axis(c_take1_report, "harmony"))
-    assert c_take1_harmony["harmony_decoy"]["distance"] == 0.75
-    assert c_take1_harmony["harmony_decoy"]["rank"] == 1
-    assert c_take1_harmony["harmony_decoy"]["tied_with"] == []
-    assert c_take1_harmony["canonical"]["distance"] == 1.0
+    assert single_winner_takes == []
+    assert len(tie_takes) == 12
 
 
 def test_structure_axis_a_group_three_takes_destroyed_beats_canonical() -> None:
