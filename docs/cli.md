@@ -807,6 +807,33 @@ plus tight/kept/preserved counts. Like `roundtrip`, it is a descriptive instrume
 intentionally does not emit a global verdict or pass/fail key. See
 [`control_profile.md`](control_profile.md).
 
+### `svprpe identity-rank <bundle.json> --references <refs.yaml>`
+
+Rank an already-extracted take's per-axis closeness to a list of references —
+the canonical score, anchor-destroyed decoys, and/or another work (WI2
+discrimination harness):
+
+```bash
+svprpe identity-rank take0_bundle.json --references wi2_references.yaml
+svprpe identity-rank take0_bundle.json --references wi2_references.yaml --format json -o rank.json
+```
+
+`--references` points at a YAML file (`schema_version: wi2-references/0.1`)
+listing entries of `ref_id` / `score_path` / optional `progression_path`
+(a `chord-sequence/0.1` JSON), both resolved relative to the references
+file's own directory. The report is per axis (`structure` / `harmony` /
+`key` / `bpm` / `brightness`): each reference's distance from the take and
+the resulting rank (ties broken by ascending `ref_id`), plus which
+references that axis could not observe and why (e.g. a reference with no
+`progression_path` is `not_observed` on `harmony`; one whose declared
+`brightness` isn't `dark`/`neutral`/`bright` is `not_observed` on
+`brightness`). `bpm_octave_ambiguous` is carried at the top level alongside
+the bpm axis. `melody`/`lyrics`/`clap` are out of scope for this WI2 v0
+instrument entirely and are listed under `excluded_domains` with why. Like
+`roundtrip` / `score-adherence` / `lyrics-adherence`, this is a descriptive
+instrument and intentionally does not emit a pass/fail verdict or a
+"closest reference" pick.
+
 ### `svprpe lyrics-adherence <audio> --expected <lyrics.txt>`
 
 Check whether generated audio sings the ordered expected lyrics — the output-side
@@ -1011,7 +1038,7 @@ svprpe genre-audit examples/calibration/genre/manifest.yaml --format json -o aud
 | `--output` / `-o` | Output file path |
 | `--output-dir` | Output directory (creates if needed) |
 | `--fields` | Comma-separated `CompositionScore.physical` fields for `measure` |
-| `--format` | Output format. `generate`: `yaml` (default) or `text`; `ci-check`: `json` (default) or `markdown`; `roundtrip` / `roundtrip-corpus` / `roundtrip-rep` / `compose` / `audit` / `score-adherence` / `genre-calibrate` / `genre-audit`: `text` (default) or `json` |
+| `--format` | Output format. `generate`: `yaml` (default) or `text`; `ci-check`: `json` (default) or `markdown`; `roundtrip` / `roundtrip-corpus` / `roundtrip-rep` / `compose` / `audit` / `score-adherence` / `identity-rank` / `genre-calibrate` / `genre-audit`: `text` (default) or `json` |
 | `--max-chars` | Override `rendering.prompt_max_chars` (`compose` only) |
 | `--threshold` | Semantic CI pass threshold from `0.0` to `1.0` (`ci-check` only) |
 | `--no-save` | Print output to stdout instead of saving |
@@ -1024,6 +1051,7 @@ svprpe genre-audit examples/calibration/genre/manifest.yaml --format json -o aud
 | `--lyrics-model` | faster-whisper model size used with `--lyrics` / `lyrics-adherence` (default: `small`) |
 | `--lyrics-no-separate` | Transcribe the full mix instead of isolating vocals via Demucs first |
 | `--expected` | Path to a text file of expected lyric lines, one per line (`lyrics-adherence` only) |
+| `--references` | Path to a WI2 references YAML (`ref_id` / `score_path` / `progression_path`) (`identity-rank` only) |
 | `--svp` | External SVP file for comparison |
 | `--svp-dir` | Directory with SVP candidates (batch mode) |
 | `--mode` | Batch mode: `evaluate` (default) or `compare` |

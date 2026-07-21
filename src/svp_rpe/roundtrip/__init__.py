@@ -17,6 +17,19 @@ from .corpus_batch import (
 )
 from .diagnose import GripRecord, diagnose_roundtrip, load_grip_map
 from .harness import run_roundtrip
+from .identity_rank import (
+    AxisRanking,
+    ExcludedDomain,
+    IdentityRankReport,
+    NotObservedReference,
+    RankEntry,
+    ReferenceEntry,
+    ReferenceList,
+    identity_rank_from_paths,
+    load_reference_list,
+    render_identity_rank_text,
+    run_identity_rank,
+)
 from .manifest import (
     FieldIntent,
     RoundtripManifest,
@@ -39,12 +52,19 @@ from .repetition import (
 )
 
 __all__ = [
+    "AxisRanking",
     "CorpusBatchReport",
     "CorpusFieldComparison",
     "CorpusTakeResult",
+    "ExcludedDomain",
     "FieldIntent",
     "FieldRepetitionSummary",
     "GripRecord",
+    "IdentityRankReport",
+    "NotObservedReference",
+    "RankEntry",
+    "ReferenceEntry",
+    "ReferenceList",
     "RepetitionRankingEntry",
     "RepetitionReport",
     "RepetitionTakeResult",
@@ -58,14 +78,18 @@ __all__ = [
     "TightFieldAdherence",
     "classify_take",
     "diagnose_roundtrip",
+    "identity_rank_from_paths",
     "load_grip_map",
     "load_manifest",
+    "load_reference_list",
     "load_takes_for_repetition",
     "render_corpus_batch_text",
+    "render_identity_rank_text",
     "render_repetition_text",
     "render_roundtrip_text",
     "render_score_adherence_text",
     "run_corpus_batch",
+    "run_identity_rank",
     "run_repetition_batch",
     "run_roundtrip",
     "run_score_adherence",

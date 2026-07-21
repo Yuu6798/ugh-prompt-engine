@@ -1,0 +1,30 @@
+# WI2 順位判定計器 (`svprpe identity-rank`) の参照リスト。
+# 設計正本: wi2_preregistration_design.md セクション C/D。
+# score_path / progression_path はいずれもこのファイル自身のディレクトリからの
+# 相対パス（IdentityManifest の anchor artifact 解決と同じ規約）。
+schema_version: "wi2-references/0.1"
+references:
+  # A: 正典 CompositionScore 一式（structure = [intro, verse, chorus, bridge]、
+  # harmony anchor = identity/chord_progression.json の正典進行）。
+  - ref_id: canonical
+    score_path: "../../composition_score.yaml"
+    progression_path: "../../identity/chord_progression.json"
+
+  # C: structure 破壊 recast の derived_score（verse/chorus のエントリ順のみ交換、
+  # 他 override は canonical と同一。harmony anchor は用意していないため harmony
+  # 軸は not_observed になる — これは意図した挙動）。
+  - ref_id: structure_destroyed
+    score_path: "derived/C/derived_score.yaml"
+
+  # B': harmony デコイ。生成チャネルが dead であるため score 自体は canonical
+  # (composition_score.yaml) と同一のものを使い、harmony 軸の比較先だけを
+  # decoy_chord_progression.json（各位置のルートを+5半音シフトした進行）に
+  # 差し替える。
+  - ref_id: harmony_decoy
+    score_path: "../../composition_score.yaml"
+    progression_path: "decoy_chord_progression.json"
+
+  # D: 他作品（bpm/key/structure が canonical と全て異なる）。harmony anchor を
+  # 持たないため harmony 軸は not_observed。
+  - ref_id: other_work
+    score_path: "../../../../roundtrip/musicgen_r3_source.yaml"
