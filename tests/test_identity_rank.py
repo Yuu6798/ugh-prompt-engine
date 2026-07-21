@@ -443,6 +443,67 @@ def test_bpm_axis_not_observed_when_bundle_bpm_missing() -> None:
     assert axis.not_observed[0].reason.startswith("bundle.physical.bpm is None")
 
 
+# ---------------------------------------------------------------------------
+# bpm axis: non-positive bpm (either side) degrades to not_observed (Codex P2
+# #201 2nd item: a negative reference bpm previously produced a negative
+# distance that sorted ahead of every genuine reference and won rank1 by
+# construction, regardless of actual closeness).
+# ---------------------------------------------------------------------------
+
+
+def test_bpm_axis_not_observed_when_reference_bpm_is_negative() -> None:
+    """A negative reference bpm must not sneak into the ranking at all — the
+    old ``== 0.0`` guard let it fall through and produce a negative distance
+    that would win rank1 unconditionally."""
+
+    bundle = _bundle(structure_labels=["intro"], bpm=120.0)
+    negative_ref = _resolved("negative_bpm_ref", _score(bpm=-120, structure_sections=["intro"]))
+    positive_ref = _resolved("positive_bpm_ref", _score(bpm=128, structure_sections=["intro"]))
+
+    axis = _bpm_axis(bundle, [negative_ref, positive_ref])
+
+    ranked_ids = {entry.ref_id for entry in axis.ranking}
+    assert ranked_ids == {"positive_bpm_ref"}
+    assert all(entry.distance >= 0.0 for entry in axis.ranking)
+    not_observed_ids = {item.ref_id for item in axis.not_observed}
+    assert not_observed_ids == {"negative_bpm_ref"}
+    reason = next(item.reason for item in axis.not_observed if item.ref_id == "negative_bpm_ref")
+    assert reason == "non-positive reference bpm — invalid declaration"
+
+
+def test_bpm_axis_not_observed_when_reference_bpm_is_zero() -> None:
+    """Existing zero-bpm behavior preserved: still not_observed, now sharing
+    the same non-positive-reference-bpm reason as the negative case."""
+
+    bundle = _bundle(structure_labels=["intro"], bpm=120.0)
+    ref = _resolved("zero_bpm_ref", _score(bpm=0, structure_sections=["intro"]))
+
+    axis = _bpm_axis(bundle, [ref])
+
+    assert axis.ranking == []
+    assert axis.not_observed[0].reason == "non-positive reference bpm — invalid declaration"
+
+
+def test_bpm_axis_not_observed_when_observed_bpm_is_negative() -> None:
+    bundle = _bundle(structure_labels=["intro"], bpm=-120.0)
+    ref = _resolved("canonical", _score(bpm=128, structure_sections=["intro"]))
+
+    axis = _bpm_axis(bundle, [ref])
+
+    assert axis.ranking == []
+    assert axis.not_observed[0].reason == "non-positive observed bpm — invalid sensor reading"
+
+
+def test_bpm_axis_not_observed_when_observed_bpm_is_zero() -> None:
+    bundle = _bundle(structure_labels=["intro"], bpm=0.0)
+    ref = _resolved("canonical", _score(bpm=128, structure_sections=["intro"]))
+
+    axis = _bpm_axis(bundle, [ref])
+
+    assert axis.ranking == []
+    assert axis.not_observed[0].reason == "non-positive observed bpm — invalid sensor reading"
+
+
 def test_brightness_axis_not_observed_for_unrecognized_declared_class() -> None:
     bundle = _bundle(structure_labels=["intro"], spectral_centroid=2000.0)
     ref = _resolved("canonical", _score(brightness="TODO(transcribe): unknown", structure_sections=["intro"]))

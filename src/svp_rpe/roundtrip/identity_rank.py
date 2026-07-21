@@ -69,14 +69,18 @@ module also degrades to ``not_observed`` — rather than fabricating a
 distance — when the *bundle* itself lacks a sensor reading needed for an
 axis (``physical.bpm is None`` / ``physical.key is None`` / ``physical.key``
 present but ``physical.mode is None``, since no mir_eval-comparable key
-label can be built from a tonic alone), when mir_eval itself is not
+label can be built from a tonic alone), when the bundle's own observed bpm
+is non-positive (not a valid tempo reading), when mir_eval itself is not
 installed (the key axis's ``require_mir_eval=True`` contract above), or when
 a reference's own field cannot be read as a number (an unresolved
-``TODO(transcribe):`` bpm sentinel, or a reference bpm of exactly 0). These
-are defensive extensions of the same "not_observed over guessing" posture
-the design memo's two named conditions already establish, not new distance
-math — the formulas above are unchanged whenever the inputs they need are
-actually present.
+``TODO(transcribe):`` bpm sentinel, or a reference bpm that is zero or
+negative — the bpm distance formula divides by the reference bpm, so a
+non-positive value is either undefined or would otherwise sort as a bogus
+negative distance ahead of every genuine reference regardless of actual
+closeness). These are defensive extensions of the same "not_observed over
+guessing" posture the design memo's two named conditions already establish,
+not new distance math — the formulas above are unchanged whenever the
+inputs they need are actually present.
 
 melody / lyrics / clap are out of scope for this WI2 v0 instrument entirely
 (not attempted, not just unobserved for a particular take) — see
@@ -557,6 +561,14 @@ def _bpm_axis(bundle: RPEBundle, refs: list[_ResolvedReference]) -> AxisRanking:
     if observed_bpm is None:
         for ref in refs:
             not_observed[ref.ref_id] = "bundle.physical.bpm is None (bpm not detected in extraction)"
+    elif observed_bpm <= 0.0:
+        # A non-positive observed bpm is not a valid sensor reading (the
+        # distance formula divides by the *reference* bpm, but a
+        # non-positive observed value is still physically meaningless as a
+        # tempo) — degrade to not_observed rather than emitting a distance
+        # built on a bogus numerator.
+        for ref in refs:
+            not_observed[ref.ref_id] = "non-positive observed bpm — invalid sensor reading"
     else:
         for ref in refs:
             reference_bpm_raw = ref.score.physical.bpm
@@ -566,8 +578,14 @@ def _bpm_axis(bundle: RPEBundle, refs: list[_ResolvedReference]) -> AxisRanking:
                 )
                 continue
             reference_bpm = float(reference_bpm_raw)
-            if reference_bpm == 0.0:
-                not_observed[ref.ref_id] = "reference bpm is zero (distance is undefined)"
+            if reference_bpm <= 0.0:
+                # Zero makes the distance formula's division undefined; a
+                # negative bpm is not a valid tempo declaration at all. Both
+                # degrade to not_observed rather than letting a negative
+                # reference bpm produce a negative distance that would sort
+                # ahead of every genuine (non-negative) distance and win
+                # rank1 by construction, regardless of actual closeness.
+                not_observed[ref.ref_id] = "non-positive reference bpm — invalid declaration"
                 continue
             distances[ref.ref_id] = round(abs(observed_bpm - reference_bpm) / reference_bpm, 4)
     return _rank_axis("bpm", distances, not_observed)
