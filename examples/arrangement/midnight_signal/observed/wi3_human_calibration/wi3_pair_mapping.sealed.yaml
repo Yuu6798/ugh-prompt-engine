@@ -1,0 +1,215 @@
+# SEALED — 聴取完了・回答提出まで User は開かないこと。
+#
+# このファイルは WI3 ペア聴取キットの「提示順ペア -> 素材」完全マッピングを
+# 保持する封印ファイルである。wi3_preregistration.yaml には素材 ID を一切
+# 記載していない（ペア数・カテゴリ別本数・予測規則のみ）。運用規約:
+# n=1 自己実験のため技術的な閲覧強制はできない — この限界は honesty として
+# 集計時の結果に明記する。
+#
+# 実行担当・fixture 作成は Claude（design 側）が行った。committed 版の
+# キット wav 自体は非コミット（sha256 pin のみ、本ファイルと
+# wi3_kit_manifest.json が実体の同一性を保証する）。
+schema_version: "1.0"
+harness: "wi3_human_calibration"
+plan_confirmed_at_utc: "2026-07-21T13:56:58Z"
+
+# --- シャッフル再現手順（決定論・re-run で bit-for-bit 再現済み 2/2） --------
+shuffle_reproduction:
+  seed: 8400
+  pair_id_table_order: >-
+    [p01, p02, p03, p04, p05, p06, p07, p08, p09, p10, p11, p12]
+    （タスクブリーフのペア表の記載順そのまま。Fable 確定済みで変更不可）
+  algorithm: |
+    import random
+    PAIR_IDS = [f"p{i:02d}" for i in range(1, 13)]
+    rng = random.Random(8400)
+
+    # (a) 提示順: PAIR_IDS の単純コピーを rng.shuffle() で一度だけシャッフルする。
+    presentation_order = PAIR_IDS.copy()
+    rng.shuffle(presentation_order)
+
+    # (b) 各ペアの X/Y -> A/B 割当: shuffle 呼び出しの「後」に、PAIR_IDS の
+    # 元の（シャッフル前の）順序で 1 ペアにつき rng.random() を 1 回ずつ引く。
+    # swap=False -> X が A、Y が B。swap=True -> Y が A、X が B。
+    ab_swap = {pid: (rng.random() < 0.5) for pid in PAIR_IDS}
+
+    slot_of = {pid: i + 1 for i, pid in enumerate(presentation_order)}
+  determinism_check: >-
+    同一プロセス内および fresh python 起動の2回の実行で
+    presentation_order / ab_swap とも byte-for-byte 一致
+    （wi3_blind_shuffle_run1.json == wi3_blind_shuffle_run2.json、scratchpad 保存）。
+  presentation_order_pair_ids:
+    - p05
+    - p01
+    - p04
+    - p08
+    - p12
+    - p10
+    - p06
+    - p03
+    - p07
+    - p11
+    - p02
+    - p09
+  ab_swap:
+    p01: false
+    p02: true
+    p03: true
+    p04: true
+    p05: true
+    p06: false
+    p07: true
+    p08: true
+    p09: false
+    p10: true
+    p11: true
+    p12: true
+
+# --- 素材 ID -> ソース wav（scratchpad 由来。committed 版は非コミット） ------
+material_source:
+  wi2_A_take0: "wi2_wavs/wi2_A_take0.wav"
+  wi2_A_take1: "wi2_wavs/wi2_A_take1.wav"
+  wi2_A_take2: "wi2_wavs/wi2_A_take2.wav"
+  wi2_A_take3: "wi2_wavs/wi2_A_take3.wav"
+  wi2_C_take0: "wi2_wavs/wi2_C_take0.wav"
+  wi2_C_take1: "wi2_wavs/wi2_C_take1.wav"
+  wi2_C_take2: "wi2_wavs/wi2_C_take2.wav"
+  wi2_C_take3: "wi2_wavs/wi2_C_take3.wav"
+  wi2_D_take0: "wi2_wavs/wi2_D_take0.wav"
+  wi2_D_take1: "wi2_wavs/wi2_D_take1.wav"
+  wi2_D_take2: "wi2_wavs/wi2_D_take2.wav"
+  wi2_D_take3: "wi2_wavs/wi2_D_take3.wav"
+  synth_faithful: "wi3_synth/faithful_take.wav"
+  synth_first_take: "wi3_synth/first_take.wav"
+  note: >-
+    パスはこのラウンドの scratchpad ディレクトリからの相対パス
+    （wi2_wavs/ は wi2 弁別ハーネスの既存在庫、wi3_synth/ は本タスクで
+    render_faithful.py 相当のレシピを使い新規再生成した決定論 synth 2本）。
+
+# --- 完全マッピング（提示順） ------------------------------------------------
+pairs:
+  - pair_id: p05
+    cat: P2
+    presentation_slot: 1
+    kit_filenames: {A: pair01_A.wav, B: pair01_B.wav}
+    x_material: wi2_A_take2
+    y_material: wi2_C_take1
+    ab_swap: true
+    a_material: wi2_C_take1
+    b_material: wi2_A_take2
+  - pair_id: p01
+    cat: P1
+    presentation_slot: 2
+    kit_filenames: {A: pair02_A.wav, B: pair02_B.wav}
+    x_material: wi2_A_take0
+    y_material: wi2_A_take2
+    ab_swap: false
+    a_material: wi2_A_take0
+    b_material: wi2_A_take2
+  - pair_id: p04
+    cat: P2
+    presentation_slot: 3
+    kit_filenames: {A: pair03_A.wav, B: pair03_B.wav}
+    x_material: wi2_A_take1
+    y_material: wi2_C_take2
+    ab_swap: true
+    a_material: wi2_C_take2
+    b_material: wi2_A_take1
+  - pair_id: p08
+    cat: P3
+    presentation_slot: 4
+    kit_filenames: {A: pair04_A.wav, B: pair04_B.wav}
+    x_material: wi2_C_take2
+    y_material: wi2_D_take3
+    ab_swap: true
+    a_material: wi2_D_take3
+    b_material: wi2_C_take2
+  - pair_id: p12
+    cat: P2
+    presentation_slot: 5
+    kit_filenames: {A: pair05_A.wav, B: pair05_B.wav}
+    x_material: wi2_A_take3
+    y_material: wi2_C_take3
+    ab_swap: true
+    a_material: wi2_C_take3
+    b_material: wi2_A_take3
+    note: "補助ペア（両側アトラクタ/octave 病理 take 同士）"
+  - pair_id: p10
+    cat: P4
+    presentation_slot: 6
+    kit_filenames: {A: pair06_A.wav, B: pair06_B.wav}
+    x_material: synth_faithful
+    y_material: synth_first_take
+    ab_swap: true
+    a_material: synth_first_take
+    b_material: synth_faithful
+  - pair_id: p06
+    cat: P3
+    presentation_slot: 7
+    kit_filenames: {A: pair07_A.wav, B: pair07_B.wav}
+    x_material: wi2_A_take0
+    y_material: wi2_D_take1
+    ab_swap: false
+    a_material: wi2_A_take0
+    b_material: wi2_D_take1
+  - pair_id: p03
+    cat: P2
+    presentation_slot: 8
+    kit_filenames: {A: pair08_A.wav, B: pair08_B.wav}
+    x_material: wi2_A_take0
+    y_material: wi2_C_take0
+    ab_swap: true
+    a_material: wi2_C_take0
+    b_material: wi2_A_take0
+  - pair_id: p07
+    cat: P3
+    presentation_slot: 9
+    kit_filenames: {A: pair09_A.wav, B: pair09_B.wav}
+    x_material: wi2_A_take3
+    y_material: wi2_D_take0
+    ab_swap: true
+    a_material: wi2_D_take0
+    b_material: wi2_A_take3
+  - pair_id: p11
+    cat: P4
+    presentation_slot: 10
+    kit_filenames: {A: pair10_A.wav, B: pair10_B.wav}
+    x_material: synth_faithful
+    y_material: wi2_D_take2
+    ab_swap: true
+    a_material: wi2_D_take2
+    b_material: synth_faithful
+  - pair_id: p02
+    cat: P1
+    presentation_slot: 11
+    kit_filenames: {A: pair11_A.wav, B: pair11_B.wav}
+    x_material: wi2_D_take0
+    y_material: wi2_D_take2
+    ab_swap: true
+    a_material: wi2_D_take2
+    b_material: wi2_D_take0
+  - pair_id: p09
+    cat: P4
+    presentation_slot: 12
+    kit_filenames: {A: pair12_A.wav, B: pair12_B.wav}
+    x_material: synth_faithful
+    y_material: wi2_A_take1
+    ab_swap: false
+    a_material: synth_faithful
+    b_material: wi2_A_take1
+
+# --- 既知の限界（honesty 記録） ---------------------------------------------
+known_limitations:
+  - >-
+    wi2_A_take0（sha256 90eb7c68...）は p01/p03/p06 の3ペアで X 素材として
+    再利用されている（タスクブリーフのペア表そのまま・Claude 側で変更していない）。
+    キット内で pair02_A.wav / pair07_A.wav / pair08_B.wav はバイト単位で同一
+    ファイルになる。これは「同じ take を複数の対照に使う」実験設計そのものの
+    帰結であり、匿名化の欠陥ではないが、聴取者がバイト比較すれば気づき得る
+    という限界は記録しておく（通常の聴取では気づかない）。
+  - >-
+    synth 素材（wi3_synth/*）は MusicGen 素材（wi2_wavs/*）とファイルサイズが
+    異なる（faithful=7,938,044 bytes, first_take=10,160,684 bytes, wi2 全件=
+    3,832,378 bytes）。P4 ペアは聴感上も明確に synth 音色だとわかるため、
+    ファイルサイズ差は追加の情報漏洩にならない（耳で分かることをメタデータが
+    先取りしているだけ）。

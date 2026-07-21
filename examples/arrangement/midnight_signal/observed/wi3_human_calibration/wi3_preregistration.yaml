@@ -1,0 +1,108 @@
+# WI3 人間校正 v0 — 事前登録（聴取開始前に固定・凍結）。
+# 設計正本: Fable 起草の事前登録ドラフト（プロトコル §1-§4）+ 本タスクブリーフの
+# ペア表（Fable 確定済み）。ペアの具体的な素材 ID・A/B 割当は本ファイルには
+# 一切書かない（封印側 `wi3_pair_mapping.sealed.yaml` のみが保持する）。
+# `plan_confirmed_at_utc` はこのファイルを書き込む直前に実測した `date -u` の値。
+schema_version: "1.0"
+harness: "wi3_human_calibration"
+plan_confirmed_at_utc: "2026-07-21T13:56:58Z"
+
+# --- 1. 判定プロトコル（固定・一言一句） -----------------------------------
+protocol:
+  judgment_question: >-
+    この2つの音源は同じ曲（同一作品のカバー/アレンジ/再演）だと認めますか?
+  response_schema:
+    verdict: "yes | no"
+    confidence: "1-5 (1=当てずっぽう, 5=確信)"
+    note: "自由記述（任意）"
+  judge: "User n=1（基準器・non-canonical v0 格付け。canonical な人間判定ではない）"
+  listening_condition: >-
+    各音源を最低1回通し聴取する。提示順はキットのファイル名 pairNN_{A,B}.wav の
+    NN 昇順に固定する。ペア内の再聴取は自由。判定後の変更は不可
+    （記録した verdict が最終・訂正なし）。
+  recording: >-
+    配布する wi3_responses_template.yaml の pair01..pair12 各エントリに
+    verdict / confidence / note を記入する。
+
+# --- 2. ペア設計サマリ（カテゴリ別本数・役割。素材 ID は書かない） -----------
+pair_design:
+  total_pairs: 12
+  categories:
+    - cat: P1
+      n: 2
+      role: "陽性対照 = 再生成ノイズ（同一 cell 内の別 take 同士）"
+      expected_a_priori: "人間「同じ」（成否は問わない・事前の期待の記録のみ）"
+    - cat: P2
+      n: 4
+      role: >-
+        structure 破壊・レンダー不能差（計器と人間の乖離測定のキーペア）。
+        p12 は両側アトラクタ/octave 病理 take 同士の補助ペアを含む
+      expected_a_priori: "人間「同じ」寄り（音はほぼ同種）だが計器 structure 軸は逆転を出す"
+    - cat: P3
+      n: 3
+      role: "陰性対照（他作品との比較）"
+      expected_a_priori: "人間「別の曲」"
+    - cat: P4
+      n: 3
+      role: "決定論 synth performer の2スタイル・別ソース間比較（本命「カバー」判定の代理）"
+      expected_a_priori: "未知（これが校正の主目的の一部）"
+    - cat: P5
+      n: 0
+      role: "実 Suno 正典 form take vs 順序破壊 take（契約外逸脱の人間判定）"
+      status: >-
+        本トランシェでは実施しない。P5 に必要な実 Suno 素材
+        (suno_A1/A2/B1/B2 等) は sha256 pin のみで Drive 未回収
+        （wi3_audio_inventory.md §2.1/§2.5 実地確認済み、Drive 検索 0件ヒット）。
+        User の手元 or Drive からの再回収が前提のため、P5 は第2トランシェへ
+        繰り延べる。本トランシェの proxy v0 判定は P5 を含まない。
+
+# --- 3. ブラインド手順（固定） ----------------------------------------------
+blinding:
+  filename_scheme: "pair{presentation_slot:02d}_{A|B}.wav（例: pair01_A.wav）"
+  mapping_file: >-
+    wi3_pair_mapping.sealed.yaml — 提示順ペア → (素材 X/Y, A/B 割当, cat) の
+    完全マッピング。聴取完了・回答提出まで User は開かない
+    （運用規約。n=1 自己実験のため技術的強制は不可 — この限界は honesty として
+    結果に明記する）。
+  shuffle_method: >-
+    Python `random.Random(8400)` による決定論シャッフルで (a) 提示順
+    (pairNN の割当) と (b) 各ペアの X/Y -> A/B 割当（bool 列）を生成。
+    再現手順は封印ファイル側に記録（本ファイルには入れない）。
+  copy_integrity: >-
+    キット内の各 wav は元素材からのバイトコピーのみ（変換・加工なし）。
+    各コピーの sha256 は元 wav と一致することを検証済み
+    （wi3_kit_manifest.json）。
+
+# --- 4. 集計規約（固定・聴取前に確定） ---------------------------------------
+aggregation:
+  axis_prediction_rule: >-
+    各ペアについて計器軸ごとの「近い方」判定（tie は除外し、tie-break 勝ちを
+    勝ちに数えない）と人間 verdict の一致を照合し、軸ごとの一致率と誤りペアの
+    明細を出す。
+  pair_level_prediction_rule: >-
+    両 take の軸別 rank-1 参照（tie 除外・not_observed 除外）が同一なら
+    "same"、異なれば "different" と予測する。どちらかの take で当該軸が
+    tie または not_observed の場合はそのペア×軸の予測は棄権する
+    （集計から除外し、棄権件数として明細に記録する）。
+  noise_floor: >-
+    P1（陽性対照）の計器距離と人間判定を「効果 > 再生成ノイズ」基準の
+    baseline に使う。
+  proxy_v0_adoption_condition: >-
+    事前固定。当該軸が (a) 判定可能だったペア（tie/not_observed 除外後）で
+    誤り <= 1、かつ (b) P1 と P3 の対照ペアをともに正しく分類していること。
+    条件を満たす軸集合 + 誤り数由来の重みを proxy v0 とする。
+  null_results_are_valid: >-
+    「どの軸も条件を満たさない」「判定割れ（低確信度多数）」も事前登録済みの
+    有効な結果として扱う。被覆明細（melody/lyrics/CLAP not_observed）を
+    常に添付する。
+  deferred_scope: >-
+    P5（実 Suno ペア）は本トランシェの proxy v0 判定に含まれない（§2 参照）。
+    第2トランシェで素材回収後に追加登録する。
+
+# --- 5. 計器カバレッジの前提 -------------------------------------------------
+instrument_coverage: >-
+  各ペアの両メンバーについて `svprpe extract` -> `svprpe identity-rank
+  --references .../wi2_discrimination/wi2_references.yaml` の実測値が
+  紐付いていること（WI2 MusicGen 素材は既存 wi2_rank_*.json、synth 2素材は
+  本ラウンドで新規実測）。melody/lyrics/CLAP は本 v0 の対象外（instrument
+  coverage の既知の限界として被覆明細に明記する）。

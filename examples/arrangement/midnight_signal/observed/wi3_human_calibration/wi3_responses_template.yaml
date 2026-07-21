@@ -1,0 +1,32 @@
+# WI3 聴取回答テンプレート — 記入用。
+#
+# 手順:
+# 1. wi3_kit/ の wav を pair01 -> pair12 の順（ファイル名の NN 昇順）で
+#    A -> B の順に最低1回通し聴取する。
+# 2. 判定質問（一言一句固定・wi3_preregistration.yaml §1 protocol と同一）:
+#    「この2つの音源は同じ曲（同一作品のカバー/アレンジ/再演）だと認めますか?」
+# 3. 各ペアについて verdict（yes/no）と confidence（1-5、1=当てずっぽう、
+#    5=確信）を記入する。note は任意の自由記述。
+# 4. 判定後の変更は不可。記入した verdict/confidence が最終結果として扱われる
+#    （後から聴き直して考えが変わっても、このテンプレートの値は上書きしない
+#    — 変える場合は「変更した」事実とその理由を note に残すこと）。
+# 5. wi3_pair_mapping.sealed.yaml は聴取・記入が完了し本ファイルを提出する
+#    まで開かないこと。
+#
+# 記入が終わったら本ファイルをそのまま提出する。
+schema_version: "1.0"
+harness: "wi3_human_calibration"
+
+responses:
+  pair01: {verdict: "", confidence: "", note: ""}
+  pair02: {verdict: "", confidence: "", note: ""}
+  pair03: {verdict: "", confidence: "", note: ""}
+  pair04: {verdict: "", confidence: "", note: ""}
+  pair05: {verdict: "", confidence: "", note: ""}
+  pair06: {verdict: "", confidence: "", note: ""}
+  pair07: {verdict: "", confidence: "", note: ""}
+  pair08: {verdict: "", confidence: "", note: ""}
+  pair09: {verdict: "", confidence: "", note: ""}
+  pair10: {verdict: "", confidence: "", note: ""}
+  pair11: {verdict: "", confidence: "", note: ""}
+  pair12: {verdict: "", confidence: "", note: ""}

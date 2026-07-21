@@ -1,0 +1,129 @@
+{
+  "schema_version": "1.0",
+  "harness": "wi3_human_calibration",
+  "plan_confirmed_at_utc": "2026-07-21T13:56:58Z",
+  "note": "sha256 = 元 wav の sha256。origin_dir はディレクトリ単位の由来のみ（wi2_wavs/ = 既存 WI2 MusicGen 在庫、wi3_synth/ = 本タスクで新規再生成した決定論 synth）。詳細素材 ID は封印側とテンプレの中立性維持のため本ファイルには書かない（wi3_pair_mapping.sealed.yaml が保持）。キット内の各 wav は元ファイルのバイトコピーのみ（変換なし）—本 manifest の sha256 は元 wav と完全一致する。",
+  "kit_file_count": 24,
+  "files": [
+    {
+      "kit_filename": "pair01_A.wav",
+      "sha256": "341842aadc75d7469f620b3600c442440e9c7ac8ce79bacad7d68475b6c532fb",
+      "origin_dir": "wi2_wavs/"
+    },
+    {
+      "kit_filename": "pair01_B.wav",
+      "sha256": "2b7bce41c750d7fa0ed815e5929138b96fd734ec08de64a15b6a7de83ed05921",
+      "origin_dir": "wi2_wavs/"
+    },
+    {
+      "kit_filename": "pair02_A.wav",
+      "sha256": "90eb7c68349fb4e48c5488516d87c322dcf1fc0e51df5a6e5286b86f67d463e2",
+      "origin_dir": "wi2_wavs/"
+    },
+    {
+      "kit_filename": "pair02_B.wav",
+      "sha256": "2b7bce41c750d7fa0ed815e5929138b96fd734ec08de64a15b6a7de83ed05921",
+      "origin_dir": "wi2_wavs/"
+    },
+    {
+      "kit_filename": "pair03_A.wav",
+      "sha256": "14f108e7d2862d95fca6c62d250a90cb745e4f2f2be6bedf197dbd06695ceaa3",
+      "origin_dir": "wi2_wavs/"
+    },
+    {
+      "kit_filename": "pair03_B.wav",
+      "sha256": "20fe5317d5516115a17f4f38b752f6c40620e4be553fada7bdabf138316e2b78",
+      "origin_dir": "wi2_wavs/"
+    },
+    {
+      "kit_filename": "pair04_A.wav",
+      "sha256": "e32b1bda0a85980714604e6de0b2bbf9e299b96bc1a081e5b1cb7a5016e20d59",
+      "origin_dir": "wi2_wavs/"
+    },
+    {
+      "kit_filename": "pair04_B.wav",
+      "sha256": "14f108e7d2862d95fca6c62d250a90cb745e4f2f2be6bedf197dbd06695ceaa3",
+      "origin_dir": "wi2_wavs/"
+    },
+    {
+      "kit_filename": "pair05_A.wav",
+      "sha256": "49ea90c33c95496a966f3ffa3bf615aee16eb06a6d253455729bf9a65191a465",
+      "origin_dir": "wi2_wavs/"
+    },
+    {
+      "kit_filename": "pair05_B.wav",
+      "sha256": "04621c4734999314ebbced853ce733a6016b9ffa85e83b0939cdcf2221d45256",
+      "origin_dir": "wi2_wavs/"
+    },
+    {
+      "kit_filename": "pair06_A.wav",
+      "sha256": "467f5200173cbea43933c69a5ba9dd8b156eee2e11ff9de0bd6475ed5dfb7e46",
+      "origin_dir": "wi3_synth/"
+    },
+    {
+      "kit_filename": "pair06_B.wav",
+      "sha256": "4d8c83f67c1b2441e09fa84debdc47ec0131c1a13ee1b813b0ef55e874903e90",
+      "origin_dir": "wi3_synth/"
+    },
+    {
+      "kit_filename": "pair07_A.wav",
+      "sha256": "90eb7c68349fb4e48c5488516d87c322dcf1fc0e51df5a6e5286b86f67d463e2",
+      "origin_dir": "wi2_wavs/"
+    },
+    {
+      "kit_filename": "pair07_B.wav",
+      "sha256": "61cffce2cf5cb2a0bd269d0b12d0b9b438784f9a2f5311ade7045c3a9384a8cc",
+      "origin_dir": "wi2_wavs/"
+    },
+    {
+      "kit_filename": "pair08_A.wav",
+      "sha256": "938266d6e5168e2a5d1aeac08f5fb7e8495b2e2edc20a2637c54db146f92701c",
+      "origin_dir": "wi2_wavs/"
+    },
+    {
+      "kit_filename": "pair08_B.wav",
+      "sha256": "90eb7c68349fb4e48c5488516d87c322dcf1fc0e51df5a6e5286b86f67d463e2",
+      "origin_dir": "wi2_wavs/"
+    },
+    {
+      "kit_filename": "pair09_A.wav",
+      "sha256": "c40d4192c31a4273362542c0d9d09a0259c9f933aee4283cdea60751b9149650",
+      "origin_dir": "wi2_wavs/"
+    },
+    {
+      "kit_filename": "pair09_B.wav",
+      "sha256": "04621c4734999314ebbced853ce733a6016b9ffa85e83b0939cdcf2221d45256",
+      "origin_dir": "wi2_wavs/"
+    },
+    {
+      "kit_filename": "pair10_A.wav",
+      "sha256": "e52b9674bb3bc0ffe3f77a5f45008a8b0d6653d281a4328d8a107d85445b6e8b",
+      "origin_dir": "wi2_wavs/"
+    },
+    {
+      "kit_filename": "pair10_B.wav",
+      "sha256": "4d8c83f67c1b2441e09fa84debdc47ec0131c1a13ee1b813b0ef55e874903e90",
+      "origin_dir": "wi3_synth/"
+    },
+    {
+      "kit_filename": "pair11_A.wav",
+      "sha256": "e52b9674bb3bc0ffe3f77a5f45008a8b0d6653d281a4328d8a107d85445b6e8b",
+      "origin_dir": "wi2_wavs/"
+    },
+    {
+      "kit_filename": "pair11_B.wav",
+      "sha256": "c40d4192c31a4273362542c0d9d09a0259c9f933aee4283cdea60751b9149650",
+      "origin_dir": "wi2_wavs/"
+    },
+    {
+      "kit_filename": "pair12_A.wav",
+      "sha256": "4d8c83f67c1b2441e09fa84debdc47ec0131c1a13ee1b813b0ef55e874903e90",
+      "origin_dir": "wi3_synth/"
+    },
+    {
+      "kit_filename": "pair12_B.wav",
+      "sha256": "20fe5317d5516115a17f4f38b752f6c40620e4be553fada7bdabf138316e2b78",
+      "origin_dir": "wi2_wavs/"
+    }
+  ]
+}
