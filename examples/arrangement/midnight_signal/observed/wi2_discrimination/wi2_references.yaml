@@ -2,12 +2,26 @@
 # 設計正本: wi2_preregistration_design.md セクション C/D。
 # score_path / progression_path はいずれもこのファイル自身のディレクトリからの
 # 相対パス（IdentityManifest の anchor artifact 解決と同じ規約）。
+#
+# 2026-07-21 是正: 初回パスは canonical / harmony_decoy の score_path に
+# ../../composition_score.yaml（生成前のベース score）を充てていたため、
+# derived/A/derived_score.yaml（実際に arrange 経由で演奏された score）との
+# 間で base-vs-derived の brightness/bpm 交絡が生じることを検出した
+# （derived 側は override 適用後の値を持ちうる一方、canonical/harmony_decoy
+# はベース値のまま）。距離式・軸定義は不変のまま、各参照の score_path を
+# 「意図した 1 変数のみが canonical と異なる」最小差構成へ是正する:
+#   - canonical: derived/A/derived_score.yaml（= 実際に演奏された正典）+
+#     identity/chord_progression.json（正典進行）
+#   - structure_destroyed: derived/C/derived_score.yaml（canonical との差は
+#     structure の順序のみ。progression なし = harmony 軸 not_observed）
+#   - harmony_decoy: derived/Bp/derived_score.yaml（canonical との差は
+#     harmony 軸の比較先進行のみ）+ decoy_chord_progression.json
 schema_version: "wi2-references/0.1"
 references:
   # A: 正典 CompositionScore 一式（structure = [intro, verse, chorus, bridge]、
   # harmony anchor = identity/chord_progression.json の正典進行）。
   - ref_id: canonical
-    score_path: "../../composition_score.yaml"
+    score_path: "derived/A/derived_score.yaml"
     progression_path: "../../identity/chord_progression.json"
 
   # C: structure 破壊 recast の derived_score（verse/chorus のエントリ順のみ交換、
@@ -16,12 +30,12 @@ references:
   - ref_id: structure_destroyed
     score_path: "derived/C/derived_score.yaml"
 
-  # B': harmony デコイ。生成チャネルが dead であるため score 自体は canonical
-  # (composition_score.yaml) と同一のものを使い、harmony 軸の比較先だけを
+  # B': harmony デコイ。score 自体は canonical と同一の derived score
+  # (derived/Bp/derived_score.yaml) を使い、harmony 軸の比較先だけを
   # decoy_chord_progression.json（各位置のルートを+5半音シフトした進行）に
   # 差し替える。
   - ref_id: harmony_decoy
-    score_path: "../../composition_score.yaml"
+    score_path: "derived/Bp/derived_score.yaml"
     progression_path: "decoy_chord_progression.json"
 
   # D: 他作品（bpm/key/structure が canonical と全て異なる）。harmony anchor を

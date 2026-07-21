@@ -115,6 +115,16 @@ D-1 分類規約 v0（参照ポリシー下）を適用して within 14 / outsid
 - **受け入れ条件**: 順位表の決定論再現（sha 一致）。既知の grip 地図（K1 / K2）と
   矛盾しないことのスモーク照合
 
+**2026-07-21 実測完了**: MusicGen 弁別バッチ（4 セル A/C/D/P・13 clips・事前登録・
+fresh-process sha スポット検証 2/2 一致）で identity-rank 計器を 12 take に適用。
+cell P は A take0 と同一 seed 再演奏が byte 一致し、harmony プロンプトチャネル死を
+機械証明した。順位表の決定論再現は 12/12 一致。弁別が成立したのは **bpm のみ**
+（A/C 8 take 中 7 take で canonical 側、D 4 take 全てで other_work）。structure は
+長さバイアスで destroyed recast が canonical に勝つ逆転、harmony は 11/12 take が
+canonical/harmony_decoy 距離 1.0 の tie、brightness は全 take 4 参照同距離の tie
+で非弁別。key は軸バグ修正後も不安定。詳細・数値表・pin 照合:
+[`wi2_discrimination_harness.md`](wi2_discrimination_harness.md)。
+
 ### WI3 — 人間校正 v0（identity proxy v0）
 
 - 事前登録: 判定質問（「同じ曲のカバーと認めるか」二値 + 確信度）・提示順・

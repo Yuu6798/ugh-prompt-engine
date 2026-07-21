@@ -236,6 +236,7 @@ examples/                      # sample_input/ + expected_output/
 | [`docs/arrangement_identity_planning.md`](docs/arrangement_identity_planning.md) | Arrangement Identity Track 計画: AR0–AR4、sidecar-first（D1）、M1=意味核とキーの Score-level identity preservation、artifact 配送と生成後観測への段階分離 |
 | [`docs/work_identity_roadmap.md`](docs/work_identity_roadmap.md) | 同一性判定トラック（WI0–WI4）: 作品同一性を宣言的契約×弁別判定×人間校正×被覆正直会計で実測定義する計画。melody/lyrics センサー→D-1 閾値→弁別ハーネス→identity proxy v0→制度化 |
 | [`docs/wi1_d1_thresholds.md`](docs/wi1_d1_thresholds.md) | WI1 逸脱分布と D-1 閾値 Design Memo: MusicGen 無人 n=20 の structure/harmony 逸脱分布、§4 編集分解アルゴリズム、§5 D-1 分類規約 v0（within 14/outside 6）、harmony は v0 未分類 |
+| [`docs/wi2_discrimination_harness.md`](docs/wi2_discrimination_harness.md) | WI2 弁別判定ハーネス: 4 セル 13 clips の MusicGen 弁別バッチ、identity-rank 5 軸判定、cell P のチャネル死 byte 証明、順位表決定論再現 12/12、弁別成立は bpm のみ（structure/harmony/brightness は非弁別、key は不安定） |
 
 ## ドキュメント管理ポリシー
 

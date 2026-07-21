@@ -59,10 +59,16 @@ def _bundle(
     chords: list[tuple[str, str]] | None = None,
     bpm: float | None = 120.0,
     key: str | None = "C",
+    mode: str | None = "minor",
     spectral_centroid: float = 2200.0,
     bpm_octave_ambiguous: bool = False,
 ) -> RPEBundle:
-    """Synthetic RPEBundle carrying only the fields identity_rank's axes read."""
+    """Synthetic RPEBundle carrying only the fields identity_rank's axes read.
+
+    ``key`` / ``mode`` are kept as two separate fields on purpose — matching
+    real ``RPEBundle`` fixtures (e.g. ``wi2_A_take1.rpe.json``: ``key: "C"``,
+    ``mode: "minor"``) rather than a single combined ``"C minor"`` string.
+    """
 
     markers = [
         SectionMarker(label=label, start_sec=float(index), end_sec=float(index + 1))
@@ -84,7 +90,7 @@ def _bundle(
         bpm_confidence=0.9 if bpm is not None else None,
         bpm_octave_ambiguous=bpm_octave_ambiguous,
         key=key,
-        mode="minor",
+        mode=mode,
         key_confidence=0.9 if key is not None else None,
         duration_sec=8.0,
         sample_rate=44100,
@@ -246,6 +252,46 @@ def test_brightness_neutral_in_band_is_zero() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Key axis: bundle key/mode are separate fields (regression for #key-axis-bug)
+#
+# Real RPEBundle fixtures (e.g. wi2_A_take1.rpe.json) store the tonic and
+# mode as two separate physical fields (``key: "C"``, ``mode: "minor"``),
+# while a reference CompositionScore's physical.key is a single mir_eval-
+# style "<tonic> <mode>" string (e.g. "C minor"). ``_key_axis`` must join the
+# bundle's two fields before scoring, or every comparison silently fails
+# mir_eval's key-label validation and falls back to a 0.0 score (distance
+# 1.0) for every reference, even an exact match. The previous synthetic
+# ``_bundle`` helper masked this: it hardcoded ``mode="minor"`` and let
+# callers pass an already-combined string (e.g. ``key="C major"``) as
+# ``key``, which happened to already be in the exact single-string form
+# mir_eval expects — never exercising the real two-field bundle shape.
+# ---------------------------------------------------------------------------
+
+
+def test_key_axis_exact_match_real_bundle_format_is_zero_distance() -> None:
+    """Minimal excerpt of wi2_A_take1.rpe.json's shape: bundle key="C" +
+    mode="minor" (separate fields) vs a canonical reference of "C minor"
+    (single mir_eval-style string, as composition_score.yaml declares) must
+    score as a perfect match (distance 0.0), not distance 1.0."""
+
+    bundle = _bundle(structure_labels=["intro"], key="C", mode="minor")
+    ref = _resolved("canonical", _score(key="C minor", structure_sections=["intro"]))
+
+    axis = _key_axis(bundle, [ref])
+
+    assert axis.ranking[0].distance == 0.0
+
+
+def test_key_axis_mismatched_key_is_nonzero_distance() -> None:
+    bundle = _bundle(structure_labels=["intro"], key="C", mode="minor")
+    ref = _resolved("other_work", _score(key="F# major", structure_sections=["intro"]))
+
+    axis = _key_axis(bundle, [ref])
+
+    assert axis.ranking[0].distance > 0.0
+
+
+# ---------------------------------------------------------------------------
 # Normalization helpers (independent public reimplementation of observe.py)
 # ---------------------------------------------------------------------------
 
@@ -307,6 +353,20 @@ def test_key_axis_not_observed_when_bundle_key_missing() -> None:
     assert axis.not_observed[0].reason.startswith("bundle.physical.key is None")
 
 
+def test_key_axis_not_observed_when_bundle_mode_missing() -> None:
+    """A bare tonic without a mode (e.g. mode not detected in extraction)
+    cannot form a valid mir_eval key label — not_observed, not a fabricated
+    distance."""
+
+    bundle = _bundle(structure_labels=["intro"], key="C", mode=None)
+    ref = _resolved("canonical", _score(structure_sections=["intro"]))
+
+    axis = _key_axis(bundle, [ref])
+
+    assert axis.ranking == []
+    assert axis.not_observed[0].reason.startswith("bundle.physical.mode is None")
+
+
 def test_bpm_axis_not_observed_when_bundle_bpm_missing() -> None:
     bundle = _bundle(structure_labels=["intro"], bpm=None)
     ref = _resolved("canonical", _score(structure_sections=["intro"]))
@@ -344,6 +404,48 @@ def test_tie_break_orders_by_ascending_ref_id() -> None:
     assert [entry.ref_id for entry in axis.ranking] == ["aaa_ref", "zzz_ref"]
     assert [entry.rank for entry in axis.ranking] == [1, 2]
     assert axis.ranking[0].distance == axis.ranking[1].distance == 0.0
+    # Both share the same distance: the ref_id tie-break gave "aaa_ref"
+    # rank1, but that is a machine tie-break pick, not a genuine
+    # discrimination — tied_with must say so on both entries.
+    assert axis.ranking[0].tied_with == ["zzz_ref"]
+    assert axis.ranking[1].tied_with == ["aaa_ref"]
+
+
+def test_tied_with_is_empty_for_a_genuine_unique_win() -> None:
+    """A reference with a strictly smaller distance than every other
+    reference is an undisputed win: tied_with must be empty, not just
+    unmentioned, for every entry in a ranking with no ties at all."""
+
+    bundle = _bundle(structure_labels=["intro", "verse"])
+    refs = [
+        _resolved("closer_ref", _score(structure_sections=["intro", "verse"])),
+        _resolved("farther_ref", _score(structure_sections=["verse", "intro"])),
+    ]
+
+    axis = _structure_axis(bundle, refs)
+
+    assert [entry.ref_id for entry in axis.ranking] == ["closer_ref", "farther_ref"]
+    assert axis.ranking[0].tied_with == []
+    assert axis.ranking[1].tied_with == []
+
+
+def test_tied_with_groups_three_way_tie_excluding_self() -> None:
+    """A three-way tie must list the *other two* ref_ids on each entry, in
+    ascending ref_id order, never including the entry's own ref_id."""
+
+    bundle = _bundle(structure_labels=["intro", "verse"])
+    refs = [
+        _resolved("bbb_ref", _score(structure_sections=["outro", "outro"])),
+        _resolved("aaa_ref", _score(structure_sections=["outro", "outro"])),
+        _resolved("ccc_ref", _score(structure_sections=["outro", "outro"])),
+    ]
+
+    axis = _structure_axis(bundle, refs)
+
+    assert [entry.ref_id for entry in axis.ranking] == ["aaa_ref", "bbb_ref", "ccc_ref"]
+    assert axis.ranking[0].tied_with == ["bbb_ref", "ccc_ref"]
+    assert axis.ranking[1].tied_with == ["aaa_ref", "ccc_ref"]
+    assert axis.ranking[2].tied_with == ["aaa_ref", "bbb_ref"]
 
 
 # ---------------------------------------------------------------------------
@@ -366,7 +468,8 @@ def test_run_identity_rank_against_real_fixture_references() -> None:
     bundle = _bundle(
         structure_labels=["intro", "chorus", "outro"],
         bpm=120.0,
-        key="C major",
+        key="C",
+        mode="major",
         spectral_centroid=2200.0,
     )
     from svp_rpe.roundtrip.identity_rank import load_reference_list

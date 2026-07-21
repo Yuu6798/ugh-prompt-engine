@@ -78,7 +78,7 @@ harmony 破壊 derived_score を faithful と同一 seed 8300 で生成した結
 
 | 軸 | 弁別成立 | 実測内訳 |
 |---|---|---|
-| **bpm** | **成立（唯一）** | 作品帰属 10/12 正解（A/C→canonical 側 7/8・D→other_work 4/4）。誤り 2 件は既知アトラクタ（A take3=89.1・C take3=258.4=129.2 の octave 誤検出）で説明可能 |
+| **bpm** | **成立（唯一）** | 作品帰属 11/12 正解（A/C→canonical 側 7/8・D→other_work 4/4）。唯一の誤帰属は A take3 = 89.1 アトラクタ。C take3 は 258.4（129.2 の octave 倍化）でも帰属自体は正解（全距離が大きいまま canonical 最小） |
 | structure | 不成立 | A/C 間弁別なし。A 群 [Intro,Chorus,Outro] ×3 では destroyed(0.5) < canonical(0.75) の**逆転**（位置整合率の長さバイアス: 3 トークン観測は 4 トークン正典より他作品 3 トークン参照に近く出る） |
 | harmony | 不成立 | 11/12 が canonical vs decoy の 1.0 同率 tie（tie-break 選出であって弁別でない）。唯一の単独勝ちは C take1 の decoy 0.75 = F ドローンの偶然一致 |
 | key | 不安定 | 修正後も帰属 3/12 正解程度。センサーが平行調/同主調へ流れる（C major 読み 6/12） |

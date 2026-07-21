@@ -10,7 +10,10 @@ harmony / key / bpm / brightness), each reference's distance from the
 observed take and the resulting rank (ties broken by ascending ``ref_id`` —
 the same stable tie-break ``roundtrip/repetition.py``'s
 ``RepetitionRankingEntry`` ranking uses), plus which references (or axes)
-could not be observed and why.
+could not be observed and why. Each ``RankEntry`` also carries ``tied_with``
+— the other references sharing its exact distance — so a same-distance
+rank1 (a tie-break pick) is legible in the report itself instead of reading
+as an undisputed win.
 
 Axes and their exact distance formulas (design memo section C):
 
@@ -29,8 +32,16 @@ Axes and their exact distance formulas (design memo section C):
   observed_chord_sequence)``, reusing ``roundtrip.compare``'s public
   function directly (no reimplementation). References with no
   ``progression_path`` are ``not_observed`` on this axis.
-- **key**: ``1 - weighted_key_score(reference_key, observed_key).score``,
-  reusing ``keys.py`` directly.
+- **key**: ``1 - weighted_key_score(reference_key, observed_key_label).score``,
+  reusing ``keys.py`` directly. ``reference_key`` is the reference score's
+  single ``physical.key`` string, already in mir_eval's ``"<tonic> <mode>"``
+  form (e.g. ``"C minor"``). The bundle stores the same information as two
+  *separate* fields (``physical.key`` = bare tonic, ``physical.mode`` =
+  ``"major"``/``"minor"``/``None``), so ``observed_key_label`` is built by
+  joining them (``f"{key} {mode}"``) before comparison — passing the bare
+  tonic alone to ``weighted_key_score`` is not a valid mir_eval key label and
+  silently scores 0.0 (distance 1.0) for every reference, regardless of
+  actual closeness.
 - **bpm**: ``abs(observed_bpm - reference_bpm) / reference_bpm``. The
   bundle's ``bpm_octave_ambiguous`` flag is carried at the report's top
   level alongside this axis, not folded into the distance.
@@ -48,8 +59,10 @@ Beyond the design memo's own two named ``not_observed`` conditions (harmony
 without a progression, brightness without a resolvable declared class), this
 module also degrades to ``not_observed`` — rather than fabricating a
 distance — when the *bundle* itself lacks a sensor reading needed for an
-axis (``physical.bpm is None`` / ``physical.key is None``) or when a
-reference's own field cannot be read as a number (an unresolved
+axis (``physical.bpm is None`` / ``physical.key is None`` / ``physical.key``
+present but ``physical.mode is None``, since no mir_eval-comparable key
+label can be built from a tonic alone) or when a reference's own field
+cannot be read as a number (an unresolved
 ``TODO(transcribe):`` bpm sentinel, or a reference bpm of exactly 0). These
 are defensive extensions of the same "not_observed over guessing" posture
 the design memo's two named conditions already establish, not new distance
@@ -156,6 +169,16 @@ class RankEntry(BaseModel):
     References ``not_observed`` on this axis are excluded from ``ranking``
     entirely (see ``AxisRanking.not_observed``), so ``rank`` numbers a
     reference among only the other references actually ranked on this axis.
+
+    ``tied_with`` makes the ``ref_id`` tie-break visible in the report
+    itself rather than letting a same-distance rank1 read as a genuine
+    discrimination: it lists the other ``ref_id``\\ s that share this
+    entry's exact (already-rounded) ``distance``, in ascending ``ref_id``
+    order, excluding this entry's own ``ref_id``. Empty when this entry's
+    distance is unique among the axis's ranking (a real, undisputed win).
+    Does not change ``rank`` numbering, the distance formulas, or the
+    ``ref_id`` tie-break order above — purely additive reporting of a
+    condition the rank/distance fields already imply but do not state.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -163,6 +186,7 @@ class RankEntry(BaseModel):
     rank: int
     ref_id: str
     distance: float
+    tied_with: list[str] = Field(default_factory=list)
 
 
 class NotObservedReference(BaseModel):
@@ -413,8 +437,19 @@ def _rank_axis(
     not_observed_reasons: dict[str, str],
 ) -> AxisRanking:
     ordered = sorted(distances.items(), key=lambda item: (item[1], item[0]))
+    # Group ref_ids sharing the exact same (already-rounded) distance, in the
+    # same ascending-ref_id order `ordered` already establishes, so each
+    # entry's `tied_with` can be read off without a second sort.
+    peers_by_distance: dict[float, list[str]] = {}
+    for ref_id, distance in ordered:
+        peers_by_distance.setdefault(distance, []).append(ref_id)
     ranking = [
-        RankEntry(rank=index + 1, ref_id=ref_id, distance=distance)
+        RankEntry(
+            rank=index + 1,
+            ref_id=ref_id,
+            distance=distance,
+            tied_with=[peer for peer in peers_by_distance[distance] if peer != ref_id],
+        )
         for index, (ref_id, distance) in enumerate(ordered)
     ]
     not_observed = [
@@ -455,14 +490,28 @@ def _harmony_axis(bundle: RPEBundle, refs: list[_ResolvedReference]) -> AxisRank
 
 def _key_axis(bundle: RPEBundle, refs: list[_ResolvedReference]) -> AxisRanking:
     observed_key = bundle.physical.key
+    observed_mode = bundle.physical.mode
     distances: dict[str, float] = {}
     not_observed: dict[str, str] = {}
     if observed_key is None:
         for ref in refs:
             not_observed[ref.ref_id] = "bundle.physical.key is None (key not detected in extraction)"
-    else:
+    elif observed_mode is None:
         for ref in refs:
-            score = weighted_key_score(ref.score.physical.key, observed_key).score
+            not_observed[ref.ref_id] = (
+                "bundle.physical.mode is None (key mode not detected in extraction; "
+                "a bare tonic is not a valid mir_eval key label)"
+            )
+    else:
+        # The bundle carries tonic and mode as separate fields; the reference
+        # score's physical.key is already a single "<tonic> <mode>" string
+        # (mir_eval's format). Join the two before scoring so a genuine
+        # exact match (e.g. observed "C"/"minor" vs reference "C minor")
+        # actually compares as equal instead of failing mir_eval's
+        # "(key) (mode)" validation and silently falling back to 0.0.
+        observed_key_label = f"{observed_key} {observed_mode}"
+        for ref in refs:
+            score = weighted_key_score(ref.score.physical.key, observed_key_label).score
             distances[ref.ref_id] = round(1.0 - score, 4)
     return _rank_axis("key", distances, not_observed)
 
@@ -590,11 +639,14 @@ def render_identity_rank_text(report: IdentityRankReport) -> str:
             "",
             f"## {axis.axis}",
             "",
-            "| rank | ref_id | distance |",
-            "|---:|---|---:|",
+            "| rank | ref_id | distance | tied_with |",
+            "|---:|---|---:|---|",
         ]
         for entry in axis.ranking:
-            lines.append(f"| {entry.rank} | {entry.ref_id} | {entry.distance} |")
+            tied_with = ", ".join(entry.tied_with) if entry.tied_with else "-"
+            lines.append(
+                f"| {entry.rank} | {entry.ref_id} | {entry.distance} | {tied_with} |"
+            )
         if axis.not_observed:
             lines.append("")
             lines.append("not_observed:")
