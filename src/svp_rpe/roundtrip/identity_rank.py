@@ -41,7 +41,15 @@ Axes and their exact distance formulas (design memo section C):
   joining them (``f"{key} {mode}"``) before comparison — passing the bare
   tonic alone to ``weighted_key_score`` is not a valid mir_eval key label and
   silently scores 0.0 (distance 1.0) for every reference, regardless of
-  actual closeness.
+  actual closeness. Calls ``weighted_key_score(..., require_mir_eval=True)``:
+  mir_eval is a ``dev``-extra-only dependency (see ``pyproject.toml``), and
+  its undeclared exact-string-match fallback is a *different* scoring rule
+  with different numbers for the same inputs — accepting that fallback here
+  would make the committed identity-rank JSON non-reproducible across
+  dev-extra vs normal installs. When mir_eval is unavailable this axis
+  degrades to ``not_observed`` for every reference instead (reason:
+  ``"mir_eval unavailable — dev extra required for weighted key scoring"``),
+  never a silently-different distance.
 - **bpm**: ``abs(observed_bpm - reference_bpm) / reference_bpm``. The
   bundle's ``bpm_octave_ambiguous`` flag is carried at the report's top
   level alongside this axis, not folded into the distance.
@@ -61,8 +69,9 @@ module also degrades to ``not_observed`` — rather than fabricating a
 distance — when the *bundle* itself lacks a sensor reading needed for an
 axis (``physical.bpm is None`` / ``physical.key is None`` / ``physical.key``
 present but ``physical.mode is None``, since no mir_eval-comparable key
-label can be built from a tonic alone) or when a reference's own field
-cannot be read as a number (an unresolved
+label can be built from a tonic alone), when mir_eval itself is not
+installed (the key axis's ``require_mir_eval=True`` contract above), or when
+a reference's own field cannot be read as a number (an unresolved
 ``TODO(transcribe):`` bpm sentinel, or a reference bpm of exactly 0). These
 are defensive extensions of the same "not_observed over guessing" posture
 the design memo's two named conditions already establish, not new distance
@@ -510,9 +519,34 @@ def _key_axis(bundle: RPEBundle, refs: list[_ResolvedReference]) -> AxisRanking:
         # actually compares as equal instead of failing mir_eval's
         # "(key) (mode)" validation and silently falling back to 0.0.
         observed_key_label = f"{observed_key} {observed_mode}"
-        for ref in refs:
-            score = weighted_key_score(ref.score.physical.key, observed_key_label).score
-            distances[ref.ref_id] = round(1.0 - score, 4)
+        # require_mir_eval=True: this axis's distance formula is mir_eval's
+        # weighted key score specifically (partial credit for relative/
+        # dominant keys etc., per the design memo). weighted_key_score's
+        # undeclared exact-string-match fallback is a *different* scoring
+        # rule with different numbers for the same inputs — silently
+        # accepting it here would make the committed identity-rank JSON
+        # non-reproducible across dev-extra vs normal installs (mir_eval is
+        # dev-extra only; see pyproject.toml). Degrade to not_observed
+        # instead of guessing, the same "no_sensor over fabricating a
+        # reading" contract `arrange/observe.py` establishes.
+        try:
+            scored = [
+                (
+                    ref,
+                    weighted_key_score(
+                        ref.score.physical.key, observed_key_label, require_mir_eval=True
+                    ).score,
+                )
+                for ref in refs
+            ]
+        except RuntimeError:
+            for ref in refs:
+                not_observed[ref.ref_id] = (
+                    "mir_eval unavailable — dev extra required for weighted key scoring"
+                )
+        else:
+            for ref, score in scored:
+                distances[ref.ref_id] = round(1.0 - score, 4)
     return _rank_axis("key", distances, not_observed)
 
 

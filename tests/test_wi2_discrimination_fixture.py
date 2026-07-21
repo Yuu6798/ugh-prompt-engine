@@ -25,6 +25,7 @@ import json
 import re
 from pathlib import Path
 
+import pytest
 import yaml
 
 from svp_rpe.roundtrip.identity_rank import identity_rank_from_paths
@@ -173,6 +174,13 @@ def test_channel_death_proof_sha256_pair_matches_each_other_and_manifest() -> No
 
 
 def test_identity_rank_reruns_byte_identical_to_committed_reports_for_all_twelve_takes() -> None:
+    pytest.importorskip(
+        "mir_eval",
+        reason=(
+            "committed fixture は mir_eval 前提（mir_eval あり環境で生成・数値 pin 済み）"
+            "— mir_eval 不在環境では key 軸が not_observed に落ちて非一致になるのが正しい挙動"
+        ),
+    )
     mismatches: list[str] = []
     for cell, take in RANKED_CELLS_AND_TAKES:
         bundle_path = _bundle_path(cell, take)
@@ -194,6 +202,13 @@ def test_key_axis_a_take1_canonical_distance_is_zero_regression_pin() -> None:
     physical.key/physical.mode を別フィールドで持つのに対し reference は単一
     "<tonic> <mode>" 文字列という食い違いの是正) の恒久 pin。"""
 
+    pytest.importorskip(
+        "mir_eval",
+        reason=(
+            "committed fixture は mir_eval 前提（mir_eval あり環境で生成・数値 pin 済み）"
+            "— mir_eval 不在環境では key 軸が not_observed に落ちて distance 自体が存在しない"
+        ),
+    )
     report = _load_rank_report("A", 1)
     key_axis = _axis(report, "key")
     ranking = _ranking_by_ref_id(key_axis)

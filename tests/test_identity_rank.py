@@ -11,6 +11,7 @@ not something to quietly "fix" here.
 """
 from __future__ import annotations
 
+import builtins
 import json
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,22 @@ from svp_rpe.roundtrip.identity_rank import (
 )
 
 runner = CliRunner()
+
+
+def _fake_import_without_mir_eval(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Same technique ``tests/test_keys.py`` uses to simulate a normal
+    (non-``dev``-extra) install where ``mir_eval`` is absent: patch
+    ``builtins.__import__`` to raise ``ModuleNotFoundError`` only for
+    ``mir_eval.key``, leaving every other import untouched."""
+
+    real_import = builtins.__import__
+
+    def fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "mir_eval.key":
+            raise ModuleNotFoundError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
 
 
 def _assert_no_outcome_keys(value: Any) -> None:
@@ -272,8 +289,13 @@ def test_key_axis_exact_match_real_bundle_format_is_zero_distance() -> None:
     """Minimal excerpt of wi2_A_take1.rpe.json's shape: bundle key="C" +
     mode="minor" (separate fields) vs a canonical reference of "C minor"
     (single mir_eval-style string, as composition_score.yaml declares) must
-    score as a perfect match (distance 0.0), not distance 1.0."""
+    score as a perfect match (distance 0.0), not distance 1.0.
 
+    ``_key_axis`` requires mir_eval (see the not_observed-degrade test
+    below), so this numeric assertion needs a real mir_eval to be installed
+    — skip rather than fail on a non-dev install."""
+
+    pytest.importorskip("mir_eval")
     bundle = _bundle(structure_labels=["intro"], key="C", mode="minor")
     ref = _resolved("canonical", _score(key="C minor", structure_sections=["intro"]))
 
@@ -283,12 +305,56 @@ def test_key_axis_exact_match_real_bundle_format_is_zero_distance() -> None:
 
 
 def test_key_axis_mismatched_key_is_nonzero_distance() -> None:
+    pytest.importorskip("mir_eval")
     bundle = _bundle(structure_labels=["intro"], key="C", mode="minor")
     ref = _resolved("other_work", _score(key="F# major", structure_sections=["intro"]))
 
     axis = _key_axis(bundle, [ref])
 
     assert axis.ranking[0].distance > 0.0
+
+
+# ---------------------------------------------------------------------------
+# Key axis: mir_eval unavailable degrades to not_observed (Codex P2 #201:
+# require_mir_eval=True instead of the undeclared exact-string-match
+# fallback, which would otherwise silently change key-axis distances between
+# dev-extra and normal installs).
+# ---------------------------------------------------------------------------
+
+
+def test_key_axis_not_observed_when_mir_eval_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_import_without_mir_eval(monkeypatch)
+
+    bundle = _bundle(structure_labels=["intro"], key="C", mode="minor")
+    ref = _resolved("canonical", _score(key="C minor", structure_sections=["intro"]))
+
+    axis = _key_axis(bundle, [ref])
+
+    assert axis.ranking == []
+    assert axis.not_observed[0].ref_id == "canonical"
+    assert axis.not_observed[0].reason == (
+        "mir_eval unavailable — dev extra required for weighted key scoring"
+    )
+
+
+def test_key_axis_not_observed_when_mir_eval_unavailable_all_refs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every reference degrades to not_observed, not just the first one
+    scored — mir_eval's absence is a single condition applying uniformly."""
+
+    _fake_import_without_mir_eval(monkeypatch)
+
+    bundle = _bundle(structure_labels=["intro"], key="C", mode="minor")
+    refs = [
+        _resolved("canonical", _score(key="C minor", structure_sections=["intro"])),
+        _resolved("other_work", _score(key="F# major", structure_sections=["intro"])),
+    ]
+
+    axis = _key_axis(bundle, refs)
+
+    assert axis.ranking == []
+    assert {item.ref_id for item in axis.not_observed} == {"canonical", "other_work"}
 
 
 # ---------------------------------------------------------------------------
