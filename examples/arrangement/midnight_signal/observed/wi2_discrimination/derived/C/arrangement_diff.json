@@ -1,0 +1,98 @@
+{
+  "schema_version": "arrangement-diff/0.1",
+  "arrangement_id": "midnight-signal-edm-identity-musicgen-structure-destroyed",
+  "changes": [
+    {
+      "path": "semantic.grv.primary",
+      "before": "deep_house",
+      "after": "melodic_edm",
+      "preservation_mode": "free"
+    },
+    {
+      "path": "semantic.grv.secondary",
+      "before": "ambient",
+      "after": "progressive_house",
+      "preservation_mode": "free"
+    },
+    {
+      "path": "semantic.delta_e.overall",
+      "before": "gradual build from solitude to release",
+      "after": "build into a vocal hook and instrumental drop",
+      "preservation_mode": "elastic"
+    },
+    {
+      "path": "physical.bpm",
+      "before": 128,
+      "after": 132,
+      "preservation_mode": "free"
+    },
+    {
+      "path": "physical.brightness",
+      "before": "dark",
+      "after": "bright",
+      "preservation_mode": "free"
+    },
+    {
+      "path": "rendering.target_backend",
+      "before": "external",
+      "after": "musicgen",
+      "preservation_mode": "free"
+    },
+    {
+      "path": "structure",
+      "before": [
+        {
+          "section": "intro",
+          "bars": 8,
+          "role": "establish loneliness",
+          "physical": "low density, sub bass only"
+        },
+        {
+          "section": "verse",
+          "bars": 16,
+          "role": "restrained movement",
+          "physical": "sparse drums, short phrases, clear rests"
+        },
+        {
+          "section": "chorus",
+          "bars": 16,
+          "role": "emotional release",
+          "physical": "full energy, wide stereo, focused layers"
+        },
+        {
+          "section": "bridge",
+          "bars": 8,
+          "role": "near silence and reflection",
+          "physical": "no kick, no bass, minimal texture"
+        }
+      ],
+      "after": [
+        {
+          "section": "intro",
+          "bars": 8,
+          "role": "establish loneliness",
+          "physical": "low density, sub bass only"
+        },
+        {
+          "section": "chorus",
+          "bars": 16,
+          "role": "emotional release",
+          "physical": "full energy, wide stereo, focused layers"
+        },
+        {
+          "section": "verse",
+          "bars": 16,
+          "role": "restrained movement",
+          "physical": "sparse drums, short phrases, clear rests"
+        },
+        {
+          "section": "bridge",
+          "bars": 8,
+          "role": "near silence and reflection",
+          "physical": "no kick, no bass, minimal texture"
+        }
+      ],
+      "preservation_mode": "free"
+    }
+  ]
+}

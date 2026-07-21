@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.0",
+  "fixture_id": "wi2-P",
+  "generator": "musicgen-small",
+  "score_path": "examples/arrangement/midnight_signal/observed/wi2_discrimination/derived/Bp/derived_score.yaml",
+  "prompt": "Brightness bright. melodic_edm / progressive_house track. C minor. intro: low density, sub bass only; role=establish loneliness. verse: sparse drums, short phrases, clear rests; role=restrained movement. chorus: full energy, wide stereo, focused layers; role=emotional release. bridge: no kick, no bass, minimal texture; role=near silence and reflection. Wide stereo. Introspective night drive atmosphere. 132 BPM. 4/4 time. Active rate 0.90-0.93. Valley depth 0.15-0.25.",
+  "model_id": "facebook/musicgen-small",
+  "model_revision": "4c8334b02c6ec4e8664a91979669a501ec497792",
+  "samples": [
+    {
+      "sample_id": "wi2-P_00",
+      "repeat": 0,
+      "seed": 8300,
+      "audio_path": "wi2-P_00.wav",
+      "audio_sha256": "90eb7c68349fb4e48c5488516d87c322dcf1fc0e51df5a6e5286b86f67d463e2",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "wi2-P_01",
+      "repeat": 1,
+      "seed": 8301,
+      "audio_path": "wi2-P_01.wav",
+      "audio_sha256": "20fe5317d5516115a17f4f38b752f6c40620e4be553fada7bdabf138316e2b78",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0
+    }
+  ]
+}

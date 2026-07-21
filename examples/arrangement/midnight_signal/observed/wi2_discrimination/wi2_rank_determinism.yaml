@@ -1,0 +1,109 @@
+# WI2 identity-rank determinism check.
+# 12 bundles x 2 independent process runs, sha256 compared.
+# Pass 1: canonical outputs in this directory (wi2_rank_{cell}_take{N}.json).
+# Pass 2: re-run in a separate process into a scratch tmp dir, then deleted.
+#
+# 2026-07-21 再生成: RankEntry に tied_with を追加した後の再実行
+# （距離式・rank 番号・tie-break 順序は不変、JSON に列が追加されたため
+# sha256 のみ全件更新）。
+#
+# 2026-07-21 再生成 (2): Codex P2 #201 4th item — harmony 軸の
+# repeated_chord_sequence_match_rate 呼び出しに参照 score の structure から
+# 導いた cycle 数（reference_chord_progression_cycle_count、
+# roundtrip/diagnose.py の _source_chord_cycle_count と同規則）を渡すよう修正。
+# 12 本中 11 本は harmony 軸を含め数値・sha256 とも無変更（canonical/harmony_decoy
+# の cycle 数が偶然どちらも 2 で揃うため、tie/rank の実質は変わらない）。
+# wi2_C_take1 のみ harmony 軸が変化（旧: harmony_decoy rank1 distance=0.75 単独勝ち
+# / canonical rank2 distance=1.0 → 新: canonical/harmony_decoy とも distance=1.0
+# の tie）。structure/key/bpm/brightness の 4 軸は 12 本とも無変更。sha256_pass1 ==
+# sha256_pass2 を全 12 本で再確認済み（決定論は保存）。
+schema_version: "wi2-rank-determinism/0.1"
+command_template: >-
+  svprpe identity-rank <bundle> --references
+  examples/arrangement/midnight_signal/observed/wi2_discrimination/wi2_references.yaml
+  -o <output> --format json
+results:
+  - cell: A
+    take: 0
+    bundle: wi2_A_take0.rpe.json
+    report: wi2_rank_A_take0.json
+    sha256_pass1: 9b324eeeb0cde323f66471ca71f04b0fe6c3eb4521c216eb82b58bc339e9340a
+    sha256_pass2: 9b324eeeb0cde323f66471ca71f04b0fe6c3eb4521c216eb82b58bc339e9340a
+    match: true
+  - cell: A
+    take: 1
+    bundle: wi2_A_take1.rpe.json
+    report: wi2_rank_A_take1.json
+    sha256_pass1: 39eba3ca730eb0e691262e63f54109c96926668b0e6881a24652197db95a80e9
+    sha256_pass2: 39eba3ca730eb0e691262e63f54109c96926668b0e6881a24652197db95a80e9
+    match: true
+  - cell: A
+    take: 2
+    bundle: wi2_A_take2.rpe.json
+    report: wi2_rank_A_take2.json
+    sha256_pass1: dcfe7f449caae244e633da7f91701be0692ce052cba10a6bed7ccc09566f7e5f
+    sha256_pass2: dcfe7f449caae244e633da7f91701be0692ce052cba10a6bed7ccc09566f7e5f
+    match: true
+  - cell: A
+    take: 3
+    bundle: wi2_A_take3.rpe.json
+    report: wi2_rank_A_take3.json
+    sha256_pass1: 262e3529775a6b4a61880a4694b2425482a1849716d486684404fbba28111cc9
+    sha256_pass2: 262e3529775a6b4a61880a4694b2425482a1849716d486684404fbba28111cc9
+    match: true
+  - cell: C
+    take: 0
+    bundle: wi2_C_take0.rpe.json
+    report: wi2_rank_C_take0.json
+    sha256_pass1: be3ff006454c52ba51ab86e2003a24c020e532ef3757524b5777da36ba34b142
+    sha256_pass2: be3ff006454c52ba51ab86e2003a24c020e532ef3757524b5777da36ba34b142
+    match: true
+  - cell: C
+    take: 1
+    bundle: wi2_C_take1.rpe.json
+    report: wi2_rank_C_take1.json
+    sha256_pass1: a097b24d7cc8f98c009061eb050bc4d89dac3d5346ed8f584b68375b11d26255
+    sha256_pass2: a097b24d7cc8f98c009061eb050bc4d89dac3d5346ed8f584b68375b11d26255
+    match: true
+  - cell: C
+    take: 2
+    bundle: wi2_C_take2.rpe.json
+    report: wi2_rank_C_take2.json
+    sha256_pass1: c16a88e4d3e7d4d92852095e840a42ccc6375140d3d2d597d1b0bb01b511b5f1
+    sha256_pass2: c16a88e4d3e7d4d92852095e840a42ccc6375140d3d2d597d1b0bb01b511b5f1
+    match: true
+  - cell: C
+    take: 3
+    bundle: wi2_C_take3.rpe.json
+    report: wi2_rank_C_take3.json
+    sha256_pass1: 0d6f718cae9e2248f9164fdfa38becc1ad45eb1fc5746788bdeee51b9c611919
+    sha256_pass2: 0d6f718cae9e2248f9164fdfa38becc1ad45eb1fc5746788bdeee51b9c611919
+    match: true
+  - cell: D
+    take: 0
+    bundle: wi2_D_take0.rpe.json
+    report: wi2_rank_D_take0.json
+    sha256_pass1: de08f2b4d301751eddb31018c66c62ad9338bb4a221b78aa6b13b192a8da19da
+    sha256_pass2: de08f2b4d301751eddb31018c66c62ad9338bb4a221b78aa6b13b192a8da19da
+    match: true
+  - cell: D
+    take: 1
+    bundle: wi2_D_take1.rpe.json
+    report: wi2_rank_D_take1.json
+    sha256_pass1: 85ecd6f6e0c527eb6456447cd9467aaa98c413c457425d82ae5b2c8be7d43f13
+    sha256_pass2: 85ecd6f6e0c527eb6456447cd9467aaa98c413c457425d82ae5b2c8be7d43f13
+    match: true
+  - cell: D
+    take: 2
+    bundle: wi2_D_take2.rpe.json
+    report: wi2_rank_D_take2.json
+    sha256_pass1: 4ba4aabd55c1dfc68e0120f8c66806a1c0b6d82534f46e350c53cf3c9a11478b
+    sha256_pass2: 4ba4aabd55c1dfc68e0120f8c66806a1c0b6d82534f46e350c53cf3c9a11478b
+    match: true
+  - cell: D
+    take: 3
+    bundle: wi2_D_take3.rpe.json
+    report: wi2_rank_D_take3.json
+    sha256_pass1: a23e302c116567a920f54697017cf78b4b703a5df7936a9b0d2461d06de49f4a
+    sha256_pass2: a23e302c116567a920f54697017cf78b4b703a5df7936a9b0d2461d06de49f4a
+    match: true

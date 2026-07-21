@@ -1,0 +1,228 @@
+{
+  "schema_version": "identity-rank-report/0.1",
+  "audio_file": "examples/arrangement/midnight_signal/observed/wi2_discrimination/wi2_C_take1.wav",
+  "bpm_octave_ambiguous": false,
+  "reference_ids": [
+    "canonical",
+    "structure_destroyed",
+    "harmony_decoy",
+    "other_work"
+  ],
+  "axes": [
+    {
+      "axis": "structure",
+      "ranking": [
+        {
+          "rank": 1,
+          "ref_id": "canonical",
+          "distance": 0.5,
+          "tied_with": [
+            "harmony_decoy",
+            "structure_destroyed"
+          ]
+        },
+        {
+          "rank": 2,
+          "ref_id": "harmony_decoy",
+          "distance": 0.5,
+          "tied_with": [
+            "canonical",
+            "structure_destroyed"
+          ]
+        },
+        {
+          "rank": 3,
+          "ref_id": "structure_destroyed",
+          "distance": 0.5,
+          "tied_with": [
+            "canonical",
+            "harmony_decoy"
+          ]
+        },
+        {
+          "rank": 4,
+          "ref_id": "other_work",
+          "distance": 0.75,
+          "tied_with": []
+        }
+      ],
+      "not_observed": []
+    },
+    {
+      "axis": "harmony",
+      "ranking": [
+        {
+          "rank": 1,
+          "ref_id": "canonical",
+          "distance": 1.0,
+          "tied_with": [
+            "harmony_decoy"
+          ]
+        },
+        {
+          "rank": 2,
+          "ref_id": "harmony_decoy",
+          "distance": 1.0,
+          "tied_with": [
+            "canonical"
+          ]
+        }
+      ],
+      "not_observed": [
+        {
+          "ref_id": "other_work",
+          "reason": "reference declares no progression_path (no harmony anchor to compare)"
+        },
+        {
+          "ref_id": "structure_destroyed",
+          "reason": "reference declares no progression_path (no harmony anchor to compare)"
+        }
+      ]
+    },
+    {
+      "axis": "key",
+      "ranking": [
+        {
+          "rank": 1,
+          "ref_id": "canonical",
+          "distance": 1.0,
+          "tied_with": [
+            "harmony_decoy",
+            "other_work",
+            "structure_destroyed"
+          ]
+        },
+        {
+          "rank": 2,
+          "ref_id": "harmony_decoy",
+          "distance": 1.0,
+          "tied_with": [
+            "canonical",
+            "other_work",
+            "structure_destroyed"
+          ]
+        },
+        {
+          "rank": 3,
+          "ref_id": "other_work",
+          "distance": 1.0,
+          "tied_with": [
+            "canonical",
+            "harmony_decoy",
+            "structure_destroyed"
+          ]
+        },
+        {
+          "rank": 4,
+          "ref_id": "structure_destroyed",
+          "distance": 1.0,
+          "tied_with": [
+            "canonical",
+            "harmony_decoy",
+            "other_work"
+          ]
+        }
+      ],
+      "not_observed": []
+    },
+    {
+      "axis": "bpm",
+      "ranking": [
+        {
+          "rank": 1,
+          "ref_id": "canonical",
+          "distance": 0.0212,
+          "tied_with": [
+            "harmony_decoy",
+            "structure_destroyed"
+          ]
+        },
+        {
+          "rank": 2,
+          "ref_id": "harmony_decoy",
+          "distance": 0.0212,
+          "tied_with": [
+            "canonical",
+            "structure_destroyed"
+          ]
+        },
+        {
+          "rank": 3,
+          "ref_id": "structure_destroyed",
+          "distance": 0.0212,
+          "tied_with": [
+            "canonical",
+            "harmony_decoy"
+          ]
+        },
+        {
+          "rank": 4,
+          "ref_id": "other_work",
+          "distance": 0.0767,
+          "tied_with": []
+        }
+      ],
+      "not_observed": []
+    },
+    {
+      "axis": "brightness",
+      "ranking": [
+        {
+          "rank": 1,
+          "ref_id": "canonical",
+          "distance": 0.7879,
+          "tied_with": [
+            "harmony_decoy",
+            "other_work",
+            "structure_destroyed"
+          ]
+        },
+        {
+          "rank": 2,
+          "ref_id": "harmony_decoy",
+          "distance": 0.7879,
+          "tied_with": [
+            "canonical",
+            "other_work",
+            "structure_destroyed"
+          ]
+        },
+        {
+          "rank": 3,
+          "ref_id": "other_work",
+          "distance": 0.7879,
+          "tied_with": [
+            "canonical",
+            "harmony_decoy",
+            "structure_destroyed"
+          ]
+        },
+        {
+          "rank": 4,
+          "ref_id": "structure_destroyed",
+          "distance": 0.7879,
+          "tied_with": [
+            "canonical",
+            "harmony_decoy",
+            "other_work"
+          ]
+        }
+      ],
+      "not_observed": []
+    }
+  ],
+  "excluded_domains": [
+    {
+      "domain": "melody",
+      "reason": "#199 により WI2 v0 の計測対象から除外"
+    },
+    {
+      "domain": "lyrics",
+      "reason": "instrumental 入力につき歌詞センサー対象外"
+    },
+    {
+      "domain": "clap",
+      "reason": "semantic-embed extra (laion-clap) 未導入につき対象外"
+    }
+  ]
+}

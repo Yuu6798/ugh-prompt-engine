@@ -1,0 +1,246 @@
+{
+  "schema_version": "1.0",
+  "physical": {
+    "schema_version": "1.0",
+    "bpm": 129.2,
+    "bpm_confidence": 0.8046,
+    "bpm_octave_ambiguous": false,
+    "bpm_candidates": [],
+    "bpm_prior_disagreement": false,
+    "key": "F",
+    "mode": "major",
+    "key_confidence": 0.8881,
+    "duration_sec": 29.94,
+    "sample_rate": 22050,
+    "time_signature": "4/4",
+    "time_signature_confidence": 0.55,
+    "downbeat_times": [
+      0.1393,
+      2.0434,
+      3.8777,
+      5.6889,
+      7.5,
+      9.3344,
+      11.1456,
+      12.9567
+    ],
+    "chord_events": [
+      {
+        "schema_version": "1.0",
+        "chord": "F minor",
+        "root": "F",
+        "quality": "minor",
+        "start_sec": 0.0,
+        "end_sec": 2.2291,
+        "confidence": 0.6827
+      },
+      {
+        "schema_version": "1.0",
+        "chord": "F major",
+        "root": "F",
+        "quality": "major",
+        "start_sec": 2.9722,
+        "end_sec": 4.644,
+        "confidence": 0.6911
+      },
+      {
+        "schema_version": "1.0",
+        "chord": "F major",
+        "root": "F",
+        "quality": "major",
+        "start_sec": 5.9443,
+        "end_sec": 8.3592,
+        "confidence": 0.7217
+      },
+      {
+        "schema_version": "1.0",
+        "chord": "F minor",
+        "root": "F",
+        "quality": "minor",
+        "start_sec": 8.3592,
+        "end_sec": 9.288,
+        "confidence": 0.7581
+      },
+      {
+        "schema_version": "1.0",
+        "chord": "F minor",
+        "root": "F",
+        "quality": "minor",
+        "start_sec": 11.4242,
+        "end_sec": 13.0961,
+        "confidence": 0.7718
+      },
+      {
+        "schema_version": "1.0",
+        "chord": "F minor",
+        "root": "F",
+        "quality": "minor",
+        "start_sec": 19.8763,
+        "end_sec": 20.9908,
+        "confidence": 0.7857
+      },
+      {
+        "schema_version": "1.0",
+        "chord": "F minor",
+        "root": "F",
+        "quality": "minor",
+        "start_sec": 25.9135,
+        "end_sec": 26.7494,
+        "confidence": 0.7963
+      },
+      {
+        "schema_version": "1.0",
+        "chord": "F major",
+        "root": "F",
+        "quality": "major",
+        "start_sec": 28.7927,
+        "end_sec": 29.7215,
+        "confidence": 0.7669
+      }
+    ],
+    "melody_contour": null,
+    "structure": [
+      {
+        "schema_version": "1.0",
+        "label": "Intro",
+        "start_sec": 0.0,
+        "end_sec": 5.0852,
+        "rms_mean": 0.1231
+      },
+      {
+        "schema_version": "1.0",
+        "label": "Chorus",
+        "start_sec": 5.0852,
+        "end_sec": 10.2168,
+        "rms_mean": 0.2007
+      },
+      {
+        "schema_version": "1.0",
+        "label": "Chorus",
+        "start_sec": 10.2168,
+        "end_sec": 22.593,
+        "rms_mean": 0.2565
+      },
+      {
+        "schema_version": "1.0",
+        "label": "Outro",
+        "start_sec": 22.593,
+        "end_sec": 29.94,
+        "rms_mean": 0.3389
+      }
+    ],
+    "rms_mean": 0.2445,
+    "peak_amplitude": 0.904,
+    "crest_factor": 3.4508,
+    "loudness_lufs_integrated": -13.36,
+    "true_peak_dbfs": -0.87,
+    "active_rate": 1.0,
+    "valley_depth": 0.3634,
+    "valley_depth_method": "v2",
+    "silence_rate": 0.0,
+    "active_rate_v2": 1.0,
+    "fullness": 0.9155,
+    "valley_db": 10.9006,
+    "valley_norm": 0.3634,
+    "crest_factor_robust": 3.3044,
+    "valley_depth_legacy": 0.1178,
+    "thickness": 1.2351,
+    "spectral_centroid": 530.37,
+    "spectral_profile": {
+      "schema_version": "1.0",
+      "centroid": 530.37,
+      "low_ratio": 0.9987,
+      "mid_ratio": 0.0012,
+      "high_ratio": 0.0001,
+      "brightness": 0.0001
+    },
+    "spectral_bands": {
+      "schema_version": "1.0",
+      "sub_bass": 0.1464,
+      "bass": 0.6964,
+      "low_mid": 0.0262,
+      "mid": 0.0643,
+      "high_mid": 0.0383,
+      "presence": 0.0153,
+      "brilliance": 0.0131
+    },
+    "tempo_stability_std": 5.66,
+    "harmonic_ratio": 0.995,
+    "percussive_ratio": 0.005,
+    "stereo_profile": null,
+    "onset_density": 5.5778,
+    "dynamic_range_db": 10.9,
+    "dynamics_summary": {
+      "schema_version": "1.0",
+      "peak_novelty": 0.5186,
+      "mean_novelty": 0.1325,
+      "std_novelty": 0.0664,
+      "event_count": 189,
+      "temporal_balance": 1.0224
+    }
+  },
+  "semantic": {
+    "schema_version": "2.0",
+    "por_core": "A bass-heavy, dark, grounded sonic character",
+    "por_surface": [
+      {
+        "label": "dark",
+        "layer": "perceptual",
+        "confidence": 0.85,
+        "evidence": [
+          "spectral_centroid=530.4 <= 1200"
+        ],
+        "source_rule": "perc.dark"
+      },
+      {
+        "label": "bass-heavy",
+        "layer": "perceptual",
+        "confidence": 0.9,
+        "evidence": [
+          "low_ratio=0.9987 >= 0.4"
+        ],
+        "source_rule": "perc.bass_heavy"
+      },
+      {
+        "label": "grounded",
+        "layer": "perceptual",
+        "confidence": 0.8,
+        "evidence": [
+          "low_ratio=0.9987 >= 0.4"
+        ],
+        "source_rule": "perc.bass_heavy"
+      }
+    ],
+    "grv_anchor": {
+      "schema_version": "1.0",
+      "primary": "bass-heavy",
+      "secondary": [
+        "dense"
+      ],
+      "confidence": 0.6
+    },
+    "delta_e_profile": {
+      "schema_version": "1.0",
+      "transition_type": "sustained_energy",
+      "intensity": 0.5,
+      "description": "Consistently high energy with minimal transitions"
+    },
+    "cultural_context": [
+      "cinematic/orchestral"
+    ],
+    "instrumentation_summary": "Bass-heavy production with prominent low-end",
+    "production_notes": [
+      "Continuous energy, minimal silence"
+    ],
+    "confidence_notes": [
+      "rule matched: perc.dark -> ['dark']",
+      "rule matched: perc.bass_heavy -> ['bass-heavy', 'grounded']"
+    ],
+    "estimation_disclaimer": "semantic層はルールベース推定であり、意味理解の真値ではない"
+  },
+  "audio_file": "examples/arrangement/midnight_signal/observed/wi2_discrimination/wi2_C_take1.wav",
+  "audio_duration_sec": 29.94,
+  "audio_sample_rate": 22050,
+  "audio_channels": 1,
+  "audio_format": "wav"
+}

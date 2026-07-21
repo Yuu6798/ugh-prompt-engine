@@ -1,0 +1,47 @@
+{
+  "schema_version": "1.0",
+  "fixture_id": "wi2-C",
+  "generator": "musicgen-small",
+  "score_path": "examples/arrangement/midnight_signal/observed/wi2_discrimination/derived/C/derived_score.yaml",
+  "prompt": "Brightness bright. melodic_edm / progressive_house track. C minor. intro: low density, sub bass only; role=establish loneliness. chorus: full energy, wide stereo, focused layers; role=emotional release. verse: sparse drums, short phrases, clear rests; role=restrained movement. bridge: no kick, no bass, minimal texture; role=near silence and reflection. Wide stereo. Introspective night drive atmosphere. 132 BPM. 4/4 time. Active rate 0.90-0.93. Valley depth 0.15-0.25.",
+  "model_id": "facebook/musicgen-small",
+  "model_revision": "4c8334b02c6ec4e8664a91979669a501ec497792",
+  "samples": [
+    {
+      "sample_id": "wi2-C_00",
+      "repeat": 0,
+      "seed": 8320,
+      "audio_path": "wi2-C_00.wav",
+      "audio_sha256": "938266d6e5168e2a5d1aeac08f5fb7e8495b2e2edc20a2637c54db146f92701c",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "wi2-C_01",
+      "repeat": 1,
+      "seed": 8321,
+      "audio_path": "wi2-C_01.wav",
+      "audio_sha256": "341842aadc75d7469f620b3600c442440e9c7ac8ce79bacad7d68475b6c532fb",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "wi2-C_02",
+      "repeat": 2,
+      "seed": 8322,
+      "audio_path": "wi2-C_02.wav",
+      "audio_sha256": "14f108e7d2862d95fca6c62d250a90cb745e4f2f2be6bedf197dbd06695ceaa3",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "wi2-C_03",
+      "repeat": 3,
+      "seed": 8323,
+      "audio_path": "wi2-C_03.wav",
+      "audio_sha256": "49ea90c33c95496a966f3ffa3bf615aee16eb06a6d253455729bf9a65191a465",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0
+    }
+  ]
+}

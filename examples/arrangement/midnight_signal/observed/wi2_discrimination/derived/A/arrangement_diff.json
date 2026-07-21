@@ -1,0 +1,42 @@
+{
+  "schema_version": "arrangement-diff/0.1",
+  "arrangement_id": "midnight-signal-edm-identity-musicgen",
+  "changes": [
+    {
+      "path": "semantic.grv.primary",
+      "before": "deep_house",
+      "after": "melodic_edm",
+      "preservation_mode": "free"
+    },
+    {
+      "path": "semantic.grv.secondary",
+      "before": "ambient",
+      "after": "progressive_house",
+      "preservation_mode": "free"
+    },
+    {
+      "path": "semantic.delta_e.overall",
+      "before": "gradual build from solitude to release",
+      "after": "build into a vocal hook and instrumental drop",
+      "preservation_mode": "elastic"
+    },
+    {
+      "path": "physical.bpm",
+      "before": 128,
+      "after": 132,
+      "preservation_mode": "free"
+    },
+    {
+      "path": "physical.brightness",
+      "before": "dark",
+      "after": "bright",
+      "preservation_mode": "free"
+    },
+    {
+      "path": "rendering.target_backend",
+      "before": "external",
+      "after": "musicgen",
+      "preservation_mode": "free"
+    }
+  ]
+}

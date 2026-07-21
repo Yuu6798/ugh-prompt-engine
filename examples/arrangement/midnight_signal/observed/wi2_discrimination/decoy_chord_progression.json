@@ -1,0 +1,10 @@
+{
+  "schema": "chord-sequence/0.1",
+  "_provenance": "WI2 cell P (channel-death proof) decoy progression. Derived by hand from identity/chord_progression.json (canonical: C minor, G# major, A# major, C minor) by transposing every root +5 semitones (mod 12) while holding quality fixed, per Design Memo Section B. This guarantees (root, quality) differs from the canonical at every position: C(0)->F(5), G#(8)->C#(1 mod 12), A#(10)->D#(3 mod 12), C(0)->F(5).",
+  "chords": [
+    {"root": "F", "quality": "minor"},
+    {"root": "C#", "quality": "major"},
+    {"root": "D#", "quality": "major"},
+    {"root": "F", "quality": "minor"}
+  ]
+}

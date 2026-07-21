@@ -1,0 +1,102 @@
+# WI2 弁別判定ハーネス — バッチ事前登録（生成前固定）。
+# 設計正本: wi2_preregistration_design.md（Fable 起草）。本ファイルはその
+# A/B/D 節の内容をバッチ実行直前に転記した pre-registration スナップショット。
+# `plan_confirmed_at_utc` はこのファイルを書き込む直前に実測した `date -u` の
+# 値であり、以降のすべての生成呼び出しはこの時刻より後に開始する
+# （#171 前例 "生成前の事前登録" 条件 (1) と同一の規律）。
+schema_version: "1.0"
+harness: "wi2_discrimination"
+plan_confirmed_at_utc: "2026-07-21T06:27:42Z"
+
+generation_conditions:
+  model_id: "facebook/musicgen-small"
+  model_revision: "4c8334b02c6ec4e8664a91979669a501ec497792"
+  route: "scripts/collect_musicgen_takes.py perform (ExternalPromptAdapter 直接、package/identity 非経由)"
+  duration_seconds: 30.0
+  guidance_scale: 3.0
+  note: >-
+    perform 経路のプロンプト整形は WI1 の package 経路 (collect_ar4_observation.py)
+    とは異なるため、WI1 の観測値との横比較はしない（WI2 design facts §4 参照）。
+
+cells:
+  - id: A
+    label: "faithful"
+    description: >-
+      既存 edm.identity.musicgen.arrangement.yaml の derived_score
+      （derived/A/derived_score.yaml）を perform 直接演奏。
+    derived_score: "derived/A/derived_score.yaml"
+    n: 4
+    seeds: [8300, 8301, 8302, 8303]
+    seed_rule: "8300 + i (i = 0..3)"
+  - id: C
+    label: "structure_destroyed"
+    description: >-
+      新設 edm.identity.musicgen.structure_destroyed.arrangement.yaml の
+      derived_score（derived/C/derived_score.yaml）。structure の verse/chorus
+      エントリ順のみ交換（[intro, chorus, verse, bridge]）、他 override は A と同一。
+    derived_score: "derived/C/derived_score.yaml"
+    n: 4
+    seeds: [8320, 8321, 8322, 8323]
+    seed_rule: "8320 + i (i = 0..3)"
+  - id: D
+    label: "other_work"
+    description: >-
+      examples/roundtrip/musicgen_r3_source.yaml（bpm=120, key=C major,
+      structure=[intro, body, outro]）を perform 直接演奏。bpm/key/structure が
+      A/C（bpm=132 override, key=C minor hard, structure=intro/verse/chorus/bridge）
+      と全て異なる「別作品」候補。
+    derived_score: "examples/roundtrip/musicgen_r3_source.yaml"
+    n: 4
+    seeds: [8340, 8341, 8342, 8343]
+    seed_rule: "8340 + i (i = 0..3)"
+  - id: P
+    label: "channel_death_proof"
+    description: >-
+      新設 edm.identity.musicgen.harmony_destroyed.arrangement.yaml (B') の
+      derived_score（derived/Bp/derived_score.yaml）を cell A と同一 seed
+      （8300）で 1 本演奏し、wi2_A_take0.wav と sha256 byte 一致を確認する。
+      chord_progression はプロンプト本文に一切レンダリングされないため
+      （src/svp_rpe/compose/prompt_renderer.py 確認済み）、一致すれば
+      harmony override のプロンプトチャネルが dead であることの機械証明になる。
+      一致しない場合は改変せずその事実をそのまま記録する（それも有効な結果）。
+    derived_score: "derived/Bp/derived_score.yaml"
+    n: 1
+    seeds: [8300]
+    seed_rule: "cell A take0 と同一 seed を固定指定（8300）"
+
+destruction_spec:
+  structure_c: >-
+    正典 structure [intro(8), verse(16), chorus(16), bridge(8)] の verse と
+    chorus のエントリ順のみを交換（各エントリの bars/role/physical は不変）。
+    結果は [intro, chorus, verse, bridge]。最小の順序破壊 = AR2-3
+    AllowedTransformation 語彙（section_insertion/section_omission/
+    section_repetition）外の最弱形。structure grip は loose（M1 0.583）につき
+    「A/C 間の弁別が出ない」も事前登録済みの有効な結果。
+  harmony_bp: >-
+    identity/chord_progression.json の正典進行（C minor, G# major, A# major,
+    C minor）と同数の和音列で、各位置のルートを +5 半音（mod 12）シフトし
+    quality は不変（decoy: F minor, C# major, D# major, F minor）。この規則から
+    全位置で (root, quality) が正典と異なることが機械的に保証される。
+    decoy 進行の provenance: observed/wi2_discrimination/decoy_chord_progression.json。
+
+determinism_canonical_conditions: >-
+  ABBA カウンターバランス等の人手 UI 向け対策は決定論 seed のローカル生成には
+  不要だが、非適用を canonical と認めるには #171 前例に倣い (1) 本ファイルによる
+  生成前の事前登録、(2) fresh-process 決定論スポット検証（時間的に最遠のクリップ
+  2 本以上を別プロセスで再生成し sha256 byte 一致を確認）の 2 条件を満たす。
+spot_check_targets:
+  - cell: A
+    take: 0
+    seed: 8300
+    reason: "バッチ内で時間的に最も早いクリップ"
+  - cell: D
+    take: 3
+    seed: 8343
+    reason: "バッチ内で時間的に最も遅いクリップ（A take0 と時間的に最遠）"
+
+honesty_notes:
+  - "structure(C) と harmony(Bp/P) の弁別が出ない、または他作品(D)の方が近い、
+     という結果もすべて事前登録済みの有効な結果として記録する（棄却しない）。"
+  - "ABBA 非適用の根拠は determinism_canonical_conditions のとおり
+     （決定論 seed 生成には人手評価バイアス対策が構造的に不要 — 生成器は
+     プロンプト+seed のみに依存し、提示順序を観測しない）。"

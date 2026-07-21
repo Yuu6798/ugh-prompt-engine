@@ -1,0 +1,118 @@
+{
+  "schema_version": "arrangement-bundle/0.2",
+  "arrangement_id": "midnight-signal-edm-identity-musicgen-structure-destroyed",
+  "source_score": {
+    "path": "examples/arrangement/midnight_signal/composition_score.yaml",
+    "sha256": "37854f54b42a1c4d424f357148d3d10f347e238ec72a42d1248bea2203f97d0b"
+  },
+  "arrangement_spec": {
+    "path": "examples/arrangement/midnight_signal/edm.identity.musicgen.structure_destroyed.arrangement.yaml",
+    "sha256": "45a9b58c78eaca1ba6d958e48cb116eab3be9fed37fee58fb83de708766c32bf"
+  },
+  "changes": [
+    {
+      "path": "semantic.grv.primary",
+      "before": "deep_house",
+      "after": "melodic_edm",
+      "preservation_mode": "free"
+    },
+    {
+      "path": "semantic.grv.secondary",
+      "before": "ambient",
+      "after": "progressive_house",
+      "preservation_mode": "free"
+    },
+    {
+      "path": "semantic.delta_e.overall",
+      "before": "gradual build from solitude to release",
+      "after": "build into a vocal hook and instrumental drop",
+      "preservation_mode": "elastic"
+    },
+    {
+      "path": "physical.bpm",
+      "before": 128,
+      "after": 132,
+      "preservation_mode": "free"
+    },
+    {
+      "path": "physical.brightness",
+      "before": "dark",
+      "after": "bright",
+      "preservation_mode": "free"
+    },
+    {
+      "path": "rendering.target_backend",
+      "before": "external",
+      "after": "musicgen",
+      "preservation_mode": "free"
+    },
+    {
+      "path": "structure",
+      "before": [
+        {
+          "section": "intro",
+          "bars": 8,
+          "role": "establish loneliness",
+          "physical": "low density, sub bass only"
+        },
+        {
+          "section": "verse",
+          "bars": 16,
+          "role": "restrained movement",
+          "physical": "sparse drums, short phrases, clear rests"
+        },
+        {
+          "section": "chorus",
+          "bars": 16,
+          "role": "emotional release",
+          "physical": "full energy, wide stereo, focused layers"
+        },
+        {
+          "section": "bridge",
+          "bars": 8,
+          "role": "near silence and reflection",
+          "physical": "no kick, no bass, minimal texture"
+        }
+      ],
+      "after": [
+        {
+          "section": "intro",
+          "bars": 8,
+          "role": "establish loneliness",
+          "physical": "low density, sub bass only"
+        },
+        {
+          "section": "chorus",
+          "bars": 16,
+          "role": "emotional release",
+          "physical": "full energy, wide stereo, focused layers"
+        },
+        {
+          "section": "verse",
+          "bars": 16,
+          "role": "restrained movement",
+          "physical": "sparse drums, short phrases, clear rests"
+        },
+        {
+          "section": "bridge",
+          "bars": 8,
+          "role": "near silence and reflection",
+          "physical": "no kick, no bass, minimal texture"
+        }
+      ],
+      "preservation_mode": "free"
+    }
+  ],
+  "outputs": {
+    "derived_score": {
+      "path": "derived_score.yaml",
+      "sha256": "e6973483d53a6d1f7cc291db4fb246ec5fad0f89c2509b8ff5bb4aaf402a9998"
+    },
+    "arrangement_diff": {
+      "path": "arrangement_diff.json",
+      "sha256": "c72bbedec4baefc63d9dbb39de6924adeb01e611973e38cbb640e23926aed4d4"
+    }
+  },
+  "content_digest": "48dde5bab99b3351774ebe9a1c7100a0f08e59d761fbee3ea95396e1f6c24032",
+  "content_digest_basis": "sha256-of-canonical-json-artifact-name-to-sha256/v1"
+}

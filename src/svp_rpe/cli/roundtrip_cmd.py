@@ -81,6 +81,51 @@ def score_adherence_cmd(
         typer.echo(content)
 
 
+@app.command("identity-rank")
+def identity_rank_cmd(
+    bundle: str = typer.Argument(..., help="Path to an extracted RPE bundle JSON"),
+    references: str = typer.Option(
+        ..., "--references", help="Path to a WI2 references YAML (ref_id / score_path / progression_path)"
+    ),
+    output_format: str = typer.Option(
+        "text",
+        "--format",
+        click_type=click.Choice(["text", "json"]),
+        help="Output format: text | json",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output", help="Output file path"),
+) -> None:
+    """Rank a take's per-axis closeness to canonical/decoy/other-work references (WI2).
+
+    Reads an already-extracted RPE bundle JSON and a WI2 references YAML
+    (each entry: ``ref_id`` / ``score_path`` / optional ``progression_path``,
+    resolved relative to the references YAML's own directory) and reports,
+    per axis (structure / harmony / key / bpm / brightness), each
+    reference's distance from the take and the resulting rank — ties broken
+    by ascending ``ref_id``. Like `roundtrip` / `score-adherence` /
+    `lyrics-adherence`, this is a descriptive instrument and intentionally
+    does not emit a pass/fail verdict or a "closest reference" pick; it also
+    reports, per axis, which references could not be observed and why, plus
+    the domains (melody/lyrics/clap) this WI2 v0 instrument does not attempt
+    to measure at all.
+    """
+    from svp_rpe.roundtrip.identity_rank import (
+        identity_rank_from_paths,
+        render_identity_rank_text,
+    )
+
+    report = identity_rank_from_paths(bundle, references)
+    if output_format == "json":
+        content = json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2)
+    else:
+        content = render_identity_rank_text(report)
+
+    if output:
+        Path(output).write_text(content, encoding="utf-8")
+    else:
+        typer.echo(content)
+
+
 @app.command("lyrics-adherence")
 def lyrics_adherence_cmd(
     audio: str = typer.Argument(..., help="Path to WAV/MP3 file"),
