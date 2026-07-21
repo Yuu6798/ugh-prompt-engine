@@ -205,6 +205,58 @@ def test_determinism_spot_check_records_two_of_two_fresh_process_matches() -> No
     assert spot_check["summary"] == "2/2 fresh-process regenerations matched the canonical pinned sha256 exactly."
 
 
+# --- provenance 突合 (Codex P2 #200 review r3619778609 / r3619778615): 各 observation
+# report / spot check を wi1_takes_manifest.json の sha256 pin に紐付け、pattern/
+# classification 検算が別 WAV・別 package の混入報告を静かに通さないことを保証する
+# (tests/test_ar4_form_observed_fixture.py の
+# `test_manifest_audio_sha256_matches_observation_generated_artifact_sha256` /
+# `test_observation_reports_agree_on_package_sha256_with_manifest_and_plan` /
+# `test_determinism_spot_check_matches_manifest_pinned_sha256` と同型)。
+
+
+def test_observation_reports_agree_with_manifest_audio_sha256_and_package_sha256_pin() -> None:
+    manifest = _load_json(MANIFEST_PATH)
+    plan = _load_yaml(PLAN_PATH)
+
+    manifest_sha_by_take = {
+        sample["take_index"]: sample["audio_sha256"] for sample in manifest["samples"]
+    }
+    assert len(manifest_sha_by_take) == N_TAKES
+
+    package_sha256 = manifest["performance_package"]["sha256"]
+    assert plan["prompt_source"]["performance_package_sha256"] == package_sha256
+
+    for take_index in range(N_TAKES):
+        report = _load_json(_observation_path(take_index))
+        assert (
+            report["generated_artifact"]["sha256"] == manifest_sha_by_take[take_index]
+        ), (
+            f"take{take_index}: observation generated_artifact.sha256 does not match "
+            "wi1_takes_manifest.json audio_sha256 pin"
+        )
+        assert report["package_sha256"] == package_sha256, (
+            f"take{take_index}: observation package_sha256 does not match "
+            "wi1_takes_manifest.json performance_package.sha256 pin"
+        )
+
+
+def test_determinism_spot_check_matches_manifest_pinned_sha256() -> None:
+    manifest = _load_json(MANIFEST_PATH)
+    spot_check = _load_yaml(SPOT_CHECK_PATH)
+
+    manifest_sha_by_id = {
+        sample["sample_id"]: sample["audio_sha256"] for sample in manifest["samples"]
+    }
+
+    checks = spot_check["checks"]
+    assert {check["sample_id"] for check in checks} == {"take0", "take19"}
+    for check in checks:
+        assert check["pinned_sha256"] == manifest_sha_by_id[check["sample_id"]], (
+            f"{check['sample_id']}: spot check pinned_sha256 does not match "
+            "wi1_takes_manifest.json audio_sha256 pin"
+        )
+
+
 # --- (B) 検算照合ゲート (本命): §4/§5 の独立再実装で Memo の数表と照合 -----------------
 
 
