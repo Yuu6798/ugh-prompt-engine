@@ -1,0 +1,40 @@
+# WI2 fresh-process 決定論スポット検証（#171 前例の canonical 条件 (2)）。
+# ABBA カウンターバランス非適用を canonical と認めるための2条件のうち、
+# 事前登録（wi2_plan.yaml）に続く第2条件: バッチ内で時間的に最遠のクリップ
+# 2 本（cell A take0 = バッチ最初期、cell D take3 = バッチ最後期）を、
+# バッチ生成時とは別の fresh python プロセスで再生成し、sha256 byte 一致を
+# 確認する。
+schema_version: "1.0"
+harness: "wi2_discrimination"
+
+spot_checks:
+  - cell: A
+    take: 0
+    seed: 8300
+    derived_score: "derived/A/derived_score.yaml"
+    batch_audio: "wi2_A_take0.wav"
+    batch_sha256: "90eb7c68349fb4e48c5488516d87c322dcf1fc0e51df5a6e5286b86f67d463e2"
+    fresh_process_sha256: "90eb7c68349fb4e48c5488516d87c322dcf1fc0e51df5a6e5286b86f67d463e2"
+    match: true
+    fresh_run_started_at_utc: "2026-07-21T07:13:17Z"
+    fresh_run_ended_at_utc: "2026-07-21T07:19:10Z"
+  - cell: D
+    take: 3
+    seed: 8343
+    derived_score: "examples/roundtrip/musicgen_r3_source.yaml"
+    batch_audio: "wi2_D_take3.wav"
+    batch_sha256: "e32b1bda0a85980714604e6de0b2bbf9e299b96bc1a081e5b1cb7a5016e20d59"
+    fresh_process_sha256: "e32b1bda0a85980714604e6de0b2bbf9e299b96bc1a081e5b1cb7a5016e20d59"
+    match: true
+    fresh_run_started_at_utc: "2026-07-21T07:19:22Z"
+    fresh_run_ended_at_utc: "2026-07-21T07:25:08Z"
+
+result: "2/2 fresh-process determinism matches — canonical condition (2) satisfied."
+
+incidental_note: >-
+  The cell D spot check's --repetitions 2 batch (seed_base=8342, required by
+  perform's floor of 2) incidentally also regenerated seed 8342 (cell D take2)
+  in the same fresh process, and its sha256
+  (e52b9674bb3bc0ffe3f77a5f45008a8b0d6653d281a4328d8a107d85445b6e8b) matches
+  the original batch's wi2_D_take2.wav byte-for-byte as well — an unplanned
+  third confirmation, not counted toward the registered 2/2 requirement.

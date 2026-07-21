@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0",
+  "harness": "wi2_discrimination",
+  "generator": "collect_musicgen_takes.py perform",
+  "model_id": "facebook/musicgen-small",
+  "model_revision": "4c8334b02c6ec4e8664a91979669a501ec497792",
+  "duration_seconds": 30.0,
+  "guidance_scale": 3.0,
+  "note": "wav files are not committed (git add skipped per task constraint); only this manifest and the RPE extraction outputs are tracked as candidate artifacts.",
+  "samples": [
+    {"sample_id": "wi2_A_take0", "cell": "A", "take": 0, "seed": 8300, "derived_score": "derived/A/derived_score.yaml", "audio_path": "wi2_A_take0.wav", "audio_sha256": "90eb7c68349fb4e48c5488516d87c322dcf1fc0e51df5a6e5286b86f67d463e2"},
+    {"sample_id": "wi2_A_take1", "cell": "A", "take": 1, "seed": 8301, "derived_score": "derived/A/derived_score.yaml", "audio_path": "wi2_A_take1.wav", "audio_sha256": "20fe5317d5516115a17f4f38b752f6c40620e4be553fada7bdabf138316e2b78"},
+    {"sample_id": "wi2_A_take2", "cell": "A", "take": 2, "seed": 8302, "derived_score": "derived/A/derived_score.yaml", "audio_path": "wi2_A_take2.wav", "audio_sha256": "2b7bce41c750d7fa0ed815e5929138b96fd734ec08de64a15b6a7de83ed05921"},
+    {"sample_id": "wi2_A_take3", "cell": "A", "take": 3, "seed": 8303, "derived_score": "derived/A/derived_score.yaml", "audio_path": "wi2_A_take3.wav", "audio_sha256": "04621c4734999314ebbced853ce733a6016b9ffa85e83b0939cdcf2221d45256"},
+    {"sample_id": "wi2_C_take0", "cell": "C", "take": 0, "seed": 8320, "derived_score": "derived/C/derived_score.yaml", "audio_path": "wi2_C_take0.wav", "audio_sha256": "938266d6e5168e2a5d1aeac08f5fb7e8495b2e2edc20a2637c54db146f92701c"},
+    {"sample_id": "wi2_C_take1", "cell": "C", "take": 1, "seed": 8321, "derived_score": "derived/C/derived_score.yaml", "audio_path": "wi2_C_take1.wav", "audio_sha256": "341842aadc75d7469f620b3600c442440e9c7ac8ce79bacad7d68475b6c532fb"},
+    {"sample_id": "wi2_C_take2", "cell": "C", "take": 2, "seed": 8322, "derived_score": "derived/C/derived_score.yaml", "audio_path": "wi2_C_take2.wav", "audio_sha256": "14f108e7d2862d95fca6c62d250a90cb745e4f2f2be6bedf197dbd06695ceaa3"},
+    {"sample_id": "wi2_C_take3", "cell": "C", "take": 3, "seed": 8323, "derived_score": "derived/C/derived_score.yaml", "audio_path": "wi2_C_take3.wav", "audio_sha256": "49ea90c33c95496a966f3ffa3bf615aee16eb06a6d253455729bf9a65191a465"},
+    {"sample_id": "wi2_D_take0", "cell": "D", "take": 0, "seed": 8340, "derived_score": "examples/roundtrip/musicgen_r3_source.yaml", "audio_path": "wi2_D_take0.wav", "audio_sha256": "c40d4192c31a4273362542c0d9d09a0259c9f933aee4283cdea60751b9149650"},
+    {"sample_id": "wi2_D_take1", "cell": "D", "take": 1, "seed": 8341, "derived_score": "examples/roundtrip/musicgen_r3_source.yaml", "audio_path": "wi2_D_take1.wav", "audio_sha256": "61cffce2cf5cb2a0bd269d0b12d0b9b438784f9a2f5311ade7045c3a9384a8cc"},
+    {"sample_id": "wi2_D_take2", "cell": "D", "take": 2, "seed": 8342, "derived_score": "examples/roundtrip/musicgen_r3_source.yaml", "audio_path": "wi2_D_take2.wav", "audio_sha256": "e52b9674bb3bc0ffe3f77a5f45008a8b0d6653d281a4328d8a107d85445b6e8b"},
+    {"sample_id": "wi2_D_take3", "cell": "D", "take": 3, "seed": 8343, "derived_score": "examples/roundtrip/musicgen_r3_source.yaml", "audio_path": "wi2_D_take3.wav", "audio_sha256": "e32b1bda0a85980714604e6de0b2bbf9e299b96bc1a081e5b1cb7a5016e20d59"},
+    {"sample_id": "wi2_P_take0", "cell": "P", "take": 0, "seed": 8300, "derived_score": "derived/Bp/derived_score.yaml", "audio_path": "wi2_P_take0.wav", "audio_sha256": "90eb7c68349fb4e48c5488516d87c322dcf1fc0e51df5a6e5286b86f67d463e2", "note": "channel-death proof clip; excluded from RPE extraction step (not part of the 12 extracted takes)."}
+  ]
+}

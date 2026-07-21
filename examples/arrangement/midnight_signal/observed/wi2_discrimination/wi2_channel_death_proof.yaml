@@ -1,0 +1,58 @@
+# WI2 cell P — harmony (chord_progression) プロンプトチャネル死の機械証明。
+# 手順: edm.identity.musicgen.harmony_destroyed.arrangement.yaml (B') の
+# derived_score (derived/Bp/derived_score.yaml) を、cell A faithful
+# (derived/A/derived_score.yaml) の take0 と **同一 seed（8300）** で 1 本演奏し、
+# 生成された WAV の sha256 を byte 比較する。target.events.chord_progression の
+# デコイ置換以外の override（semantic.grv / semantic.delta_e / physical.bpm /
+# physical.brightness / rendering.target_backend / structure）は cell A と完全
+# 同一であり、structure/bpm/brightness 等の他チャネルからの弁別混入はない。
+schema_version: "1.0"
+harness: "wi2_discrimination"
+cell: "P"
+
+inputs:
+  a_faithful:
+    derived_score: "derived/A/derived_score.yaml"
+    seed: 8300
+    audio: "wi2_A_take0.wav"
+    audio_sha256: "90eb7c68349fb4e48c5488516d87c322dcf1fc0e51df5a6e5286b86f67d463e2"
+  bp_harmony_destroyed:
+    derived_score: "derived/Bp/derived_score.yaml"
+    seed: 8300
+    audio: "wi2_P_take0.wav"
+    audio_sha256: "90eb7c68349fb4e48c5488516d87c322dcf1fc0e51df5a6e5286b86f67d463e2"
+
+rendered_prompts_identical: true
+prompt_text: >-
+  Brightness bright. melodic_edm / progressive_house track. C minor. intro:
+  low density, sub bass only; role=establish loneliness. verse: sparse drums,
+  short phrases, clear rests; role=restrained movement. chorus: full energy,
+  wide stereo, focused layers; role=emotional release. bridge: no kick, no
+  bass, minimal texture; role=near silence and reflection. Wide stereo.
+  Introspective night drive atmosphere. 132 BPM. 4/4 time. Active rate
+  0.90-0.93. Valley depth 0.15-0.25.
+
+verdict:
+  sha256_byte_identical: true
+  interpretation: >-
+    wi2_A_take0.wav と wi2_P_take0.wav は sha256 が完全一致（byte-identical）。
+    target.events.chord_progression のデコイ置換（+5 半音シフト、全位置で
+    (root, quality) が正典と異なる）は生成音声のバイト列に一切影響しなかった
+    ——これは chord_progression がプロンプト本文に一切レンダリングされない
+    （src/svp_rpe/compose/prompt_renderer.py 未参照、上記 prompt_text が cell A
+    と文字列レベルで完全一致することでも裏付けられる）という設計事実の
+    直接的な機械証明である。harmony override のプロンプト送出チャネルは
+    dead と結論できる。
+  note: >-
+    この結果は事前登録（wi2_plan.yaml cell P 節）どおりであり、
+    「一致しなければ改変せずそのまま記録する」も事前登録済みの規約だったが、
+    実測は一致（byte-identical）だった。
+
+byproduct:
+  description: >-
+    perform サブコマンドは --repetitions>=2 を要求するため（R3 harness 向けの
+    ガード）、cell P の必要クリップ(seed 8300)を得るには最低 2 本の生成が
+    必要だった。2 本目（seed 8301, sha256
+    20fe5317d5516115a17f4f38b752f6c40620e4be553fada7bdabf138316e2b78）は
+    本ハーネスの成果物として使わず、生成後に破棄した
+    （examples/.../gen_raw/wi2-P_01.wav を削除。takes manifest にも含めない）。

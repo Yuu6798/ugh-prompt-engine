@@ -1,0 +1,73 @@
+# WI2 生成呼び出し単位の開始/終了時刻（date -u 実測）。
+# perform_takes の manifest 自体はタイムスタンプを記録しないため、各 Bash
+# 呼び出しの直前/直後に `date -u` を実行して手動記録した（呼び出し粒度。
+# 1 呼び出しで複数 seed を生成した場合は呼び出し全体の開始/終了のみを記録し、
+# seed 単位の精密なサブタイムスタンプは持たない）。
+#
+# perform サブコマンドは --repetitions>=2 を要求するため、Bash ツールの
+# 10 分フォアグラウンド上限との兼ね合いから、4 seed セルは一部 2+2 の
+# ペア呼び出しに分割した（cell A）。cell C/D はモデルキャッシュが温まった後
+# だったため 4 seed を 1 呼び出しで生成できた（ハーネスの自動バックグラウンド
+# 化により、フォアグラウンド 10 分を超えても実行は継続し完了通知で判明した
+# ——CLAUDE.md の既知の運用事実どおり）。
+schema_version: "1.0"
+harness: "wi2_discrimination"
+
+generation_calls:
+  - call_id: "wi2-A-lo"
+    cell: A
+    seeds: [8300, 8301]
+    fixture_id: "wi2-A-lo"
+    started_at_utc: "2026-07-21T06:29:11Z"
+    ended_at_utc: "2026-07-21T06:39:27Z"
+    note: "モデルロード(2m03s、cold cache)を含む。600s foreground 上限を超え自動バックグラウンド化、完了通知で確認。"
+  - call_id: "wi2-A-hi"
+    cell: A
+    seeds: [8302, 8303]
+    fixture_id: "wi2-A-hi"
+    started_at_utc: "2026-07-21T06:39:59Z"
+    ended_at_utc: "2026-07-21T06:45:46Z"
+    note: "モデルロード高速（warm cache）。フォアグラウンドで完走。"
+  - call_id: "wi2-C"
+    cell: C
+    seeds: [8320, 8321, 8322, 8323]
+    fixture_id: "wi2-C"
+    started_at_utc: "2026-07-21T06:45:54Z"
+    ended_at_utc: "2026-07-21T06:56:10Z"
+    note: "4 seed を 1 呼び出しで生成。600s foreground 上限を超え自動バックグラウンド化、完了通知で確認。"
+  - call_id: "wi2-D"
+    cell: D
+    seeds: [8340, 8341, 8342, 8343]
+    fixture_id: "wi2-D"
+    started_at_utc: "2026-07-21T06:56:22Z"
+    ended_at_utc: "2026-07-21T07:06:39Z"
+    note: >-
+      開始時刻は直前コマンド（cell C の rename/sha256 確認）の `date -u`
+      出力から採取（本呼び出し自体の直前に個別の `date -u` を取り忘れたため、
+      数秒の誤差を許容した近似値。透明に開示する）。600s foreground 上限を
+      超え自動バックグラウンド化、完了通知で確認。
+  - call_id: "wi2-P"
+    cell: P
+    seeds: [8300, 8301]
+    fixture_id: "wi2-P"
+    started_at_utc: "2026-07-21T07:06:47Z"
+    ended_at_utc: "2026-07-21T07:12:39Z"
+    note: >-
+      開始時刻は直前コマンド（cell D の rename/sha256 確認）の `date -u`
+      出力から採取（同上の理由で近似値）。seed 8300 のみ成果物として使用、
+      seed 8301 は --repetitions>=2 の floor による副産物として破棄
+      （wi2_channel_death_proof.yaml の byproduct 節参照）。フォアグラウンドで完走。
+
+spot_check_calls:
+  - call_id: "wi2-spot-A"
+    cell: A
+    take_reference: 0
+    seeds: [8300, 8301]
+    started_at_utc: "2026-07-21T07:13:17Z"
+    ended_at_utc: "2026-07-21T07:19:10Z"
+  - call_id: "wi2-spot-D"
+    cell: D
+    take_reference: 3
+    seeds: [8342, 8343]
+    started_at_utc: "2026-07-21T07:19:22Z"
+    ended_at_utc: "2026-07-21T07:25:08Z"

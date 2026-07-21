@@ -1,0 +1,91 @@
+# WI2 弁別判定ハーネス — cell C（structure 破壊）専用 variant（2026-07-21
+# Design Memo: /tmp scratchpad wi2_preregistration_design.md §A/§B 節）。
+# `edm.identity.musicgen.arrangement.yaml`（cell A faithful）と同一の EDM 編曲
+# 方針・override 群（semantic.grv / semantic.delta_e / physical.bpm /
+# physical.brightness / rendering.target_backend）に、`target.structure`
+# override を additive に追加した variant。既存 variant 群
+# （edm.identity.arrangement.yaml / edm.identity.musicgen.arrangement.yaml）は
+# #177/#187 由来の byte-pin fixture 連鎖を保つため一切変更しない — 本ファイルは
+# 別ファイルとして新設する（同ファイルのコメントにある規律を踏襲）。
+#
+# structure 破壊仕様（事前登録・中強度、Design Memo §B）: composition_score.yaml
+# の正典 structure [intro(8), verse(16), chorus(16), bridge(8)] のうち、
+# verse と chorus の **エントリ順のみ** を交換する（各エントリの bars/role/
+# physical は composition_score.yaml の値をそのまま不変転記——発明ではない）。
+# 結果は [intro, chorus, verse, bridge]。これは AR2-3 の
+# `AllowedTransformation` 語彙（section_insertion/section_omission/
+# section_repetition）のいずれにも該当しない「並べ替え」で、D-1 語彙外の
+# 最弱形の構造破壊にあたる（Design Memo 手計算アンカー §C 参照）。
+meta:
+  id: "midnight-signal-edm-identity-musicgen-structure-destroyed"
+  version: "0.1"
+  description: >-
+    WI2 cell C: edm.identity.musicgen.arrangement.yaml と同一の override 群 +
+    target.structure の verse/chorus エントリ順交換（[intro, chorus, verse,
+    bridge]）。WI2 弁別判定ハーネスの中強度構造破壊対照群。
+
+target:
+  semantic:
+    grv:
+      primary: "melodic_edm"
+      secondary: "progressive_house"
+    delta_e:
+      overall: "build into a vocal hook and instrumental drop"
+  physical:
+    bpm: 132
+    brightness: "bright"
+  rendering:
+    target_backend: "musicgen"
+  structure:
+    - section: intro
+      bars: 8
+      role: "establish loneliness"
+      physical: "low density, sub bass only"
+    - section: chorus
+      bars: 16
+      role: "emotional release"
+      physical: "full energy, wide stereo, focused layers"
+    - section: verse
+      bars: 16
+      role: "restrained movement"
+      physical: "sparse drums, short phrases, clear rests"
+    - section: bridge
+      bars: 8
+      role: "near silence and reflection"
+      physical: "no kick, no bass, minimal texture"
+
+preservation:
+  score_fields:
+    semantic.core: hard
+    physical.key: hard
+    semantic.grv.primary: free
+    semantic.grv.secondary: free
+    semantic.delta_e.overall: elastic
+    physical.bpm: free
+    physical.brightness: free
+    rendering.target_backend: free
+    # structure: このアレンジは意図的に structure の並び順を破壊する実験用
+    # fixture であり、hard（変更不可）は使えない（resolve 時に
+    # ArrangementConflictError になる）。elastic も使わない —
+    # AllowedTransformation 語彙（section_insertion/section_omission/
+    # section_repetition）のいずれも「エントリ順の交換」を正しく記述しない
+    # ため、ミスマッチな allow を宣言するくらいなら honesty のため free を
+    # 選ぶ（Design Memo 方針）。
+    structure: free
+  # identity_anchors: lyrics/melody/harmony は edm.identity.musicgen.arrangement.yaml
+  # と同一の hard 契約のまま据え置く（このアレンジが破壊するのは structure のみ
+  # で、lyrics/melody/harmony はいずれも触れていないため矛盾しない。この repo の
+  # AR2 anchor scheme には structure 用の identity_anchors key が存在しない —
+  # structure identity anchor は identity_manifest.form.yaml 側で別途 `required:
+  # false` として宣言されており、本 arrangement の preservation.score_fields の
+  # `structure: free` がその代替として機能する）。
+  identity_anchors:
+    lyrics:
+      mode: hard
+      allow: []
+    melody:
+      mode: hard
+      allow: []
+    harmony:
+      mode: hard
+      allow: []

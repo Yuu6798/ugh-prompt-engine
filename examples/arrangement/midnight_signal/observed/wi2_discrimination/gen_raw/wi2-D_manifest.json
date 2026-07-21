@@ -1,0 +1,47 @@
+{
+  "schema_version": "1.0",
+  "fixture_id": "wi2-D",
+  "generator": "musicgen-small",
+  "score_path": "examples/roundtrip/musicgen_r3_source.yaml",
+  "prompt": "Brightness bright. electronic / four-on-the-floor track. C major. intro: driving pulse, bright leads; role=establish the beat. body: steady four-on-the-floor, bright; role=hold the energy. outro: steady pulse to the end; role=ride out. Normal stereo. Bright energetic electronic dance atmosphere. 120 BPM. Active rate 0.90-0.95. Valley depth 0.10-0.20. 4/4 time.",
+  "model_id": "facebook/musicgen-small",
+  "model_revision": "4c8334b02c6ec4e8664a91979669a501ec497792",
+  "samples": [
+    {
+      "sample_id": "wi2-D_00",
+      "repeat": 0,
+      "seed": 8340,
+      "audio_path": "wi2-D_00.wav",
+      "audio_sha256": "c40d4192c31a4273362542c0d9d09a0259c9f933aee4283cdea60751b9149650",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "wi2-D_01",
+      "repeat": 1,
+      "seed": 8341,
+      "audio_path": "wi2-D_01.wav",
+      "audio_sha256": "61cffce2cf5cb2a0bd269d0b12d0b9b438784f9a2f5311ade7045c3a9384a8cc",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "wi2-D_02",
+      "repeat": 2,
+      "seed": 8342,
+      "audio_path": "wi2-D_02.wav",
+      "audio_sha256": "e52b9674bb3bc0ffe3f77a5f45008a8b0d6653d281a4328d8a107d85445b6e8b",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0
+    },
+    {
+      "sample_id": "wi2-D_03",
+      "repeat": 3,
+      "seed": 8343,
+      "audio_path": "wi2-D_03.wav",
+      "audio_sha256": "e32b1bda0a85980714604e6de0b2bbf9e299b96bc1a081e5b1cb7a5016e20d59",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0
+    }
+  ]
+}

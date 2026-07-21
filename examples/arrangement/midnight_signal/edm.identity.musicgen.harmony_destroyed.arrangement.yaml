@@ -1,0 +1,92 @@
+# WI2 弁別判定ハーネス — cell P（チャネル死証明用の harmony 破壊 B'）専用
+# variant（2026-07-21 Design Memo: /tmp scratchpad wi2_preregistration_design.md
+# §A/§B 節）。`edm.identity.musicgen.arrangement.yaml`（cell A faithful）と同一の
+# EDM 編曲方針・override 群（semantic.grv / semantic.delta_e / physical.bpm /
+# physical.brightness / rendering.target_backend）に、`target.events.
+# chord_progression` override を additive に追加した variant。structure は
+# 正典のまま変更しない。既存 variant 群は #177/#187 由来の byte-pin fixture
+# 連鎖を保つため一切変更しない — 本ファイルは別ファイルとして新設する。
+#
+# harmony デコイ仕様（事前登録、Design Memo §B）: identity/chord_progression.json
+# の正典進行（C minor, G# major, A# major, C minor）と同数の和音列で、
+# 各位置のルートを +5 半音（mod 12）シフトし quality は不変に保つ
+# （decoy: F minor, C# major, D# major, F minor — observed/wi2_discrimination/
+# decoy_chord_progression.json に同一値を provenance として記録済み）。この
+# 規則から全位置で (root, quality) が正典と異なることが機械的に保証される。
+#
+# 用途: chord_progression はプロンプト本文に一切レンダリングされない
+# （src/svp_rpe/compose/prompt_renderer.py 全文に参照なし — WI2 design facts
+# 調査で確認済み）。したがってこの override は生成音声に影響しない「はず」——
+# これを **機械証明** するのが cell P: 本 variant の derived_score を cell A と
+# 同一 seed（8300）で 1 本演奏し、cell A take0 の WAV と sha256 byte 一致を
+# 確認する（一致すれば harmony override のプロンプトチャネルが dead である
+# ことの直接証拠）。cell B'（本ファイル）自体は「順位計器の参照デコイ」としても
+# 使う（Design Memo §A 注記）。
+meta:
+  id: "midnight-signal-edm-identity-musicgen-harmony-destroyed"
+  version: "0.1"
+  description: >-
+    WI2 cell P/B': edm.identity.musicgen.arrangement.yaml と同一の override 群 +
+    target.events.chord_progression の +5 半音デコイ置換（root のみ変化、
+    quality 不変）。structure は正典のまま。チャネル死証明（P）と順位計器の
+    参照デコイ（B'）の両方に使う。
+
+target:
+  semantic:
+    grv:
+      primary: "melodic_edm"
+      secondary: "progressive_house"
+    delta_e:
+      overall: "build into a vocal hook and instrumental drop"
+  physical:
+    bpm: 132
+    brightness: "bright"
+  rendering:
+    target_backend: "musicgen"
+  events:
+    chord_progression:
+      - root: "F"
+        quality: "minor"
+      - root: "C#"
+        quality: "major"
+      - root: "D#"
+        quality: "major"
+      - root: "F"
+        quality: "minor"
+
+preservation:
+  score_fields:
+    semantic.core: hard
+    physical.key: hard
+    semantic.grv.primary: free
+    semantic.grv.secondary: free
+    semantic.delta_e.overall: elastic
+    physical.bpm: free
+    physical.brightness: free
+    rendering.target_backend: free
+    # events.chord_progression: このアレンジは意図的に harmony（和音進行）を
+    # 破壊する実験用 fixture であり、hard は使えない（resolve 時に
+    # ArrangementConflictError になる）。elastic の語彙
+    # （chord_extensions/functional_substitution 等）も「全位置を体系的に
+    # +5 半音シフトする総破壊」を正しく表現しないため、honesty のため free を
+    # 選ぶ（Design Memo 方針、structure_destroyed variant と同じ選択規律）。
+    events.chord_progression: free
+  # identity_anchors: lyrics/melody は edm.identity.musicgen.arrangement.yaml と
+  # 同一の hard 契約のまま据え置く（このアレンジはどちらも触れていない）。
+  # harmony は **意図的に省略する**: このアレンジの target.events.
+  # chord_progression override は edm.identity.musicgen.arrangement.yaml が
+  # 宣言する harmony: hard 契約を実験目的で意図的に破っている。
+  # resolve_arrangement は identity_anchors を override 検証に一切使わない
+  # （arrange/resolver.py 参照 — score_fields の policy のみが fail-fast
+  # 対象）ため、harmony: hard を残しても resolve は技術的には通ってしまうが、
+  # それは実態と矛盾する provenance になる。したがって harmony を
+  # identity_anchors から省略し、本コメントで意図的破壊であることを明記する
+  # （本ファイルは AR4 の identity-preservation observe 契約には使わない
+  # ——WI2 の順位計器実験専用）。
+  identity_anchors:
+    lyrics:
+      mode: hard
+      allow: []
+    melody:
+      mode: hard
+      allow: []

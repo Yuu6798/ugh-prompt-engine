@@ -1,0 +1,85 @@
+{
+  "schema_version": "arrangement-bundle/0.2",
+  "arrangement_id": "midnight-signal-edm-identity-musicgen-harmony-destroyed",
+  "source_score": {
+    "path": "examples/arrangement/midnight_signal/composition_score.yaml",
+    "sha256": "37854f54b42a1c4d424f357148d3d10f347e238ec72a42d1248bea2203f97d0b"
+  },
+  "arrangement_spec": {
+    "path": "examples/arrangement/midnight_signal/edm.identity.musicgen.harmony_destroyed.arrangement.yaml",
+    "sha256": "52a662ad29b4f1ae197f3418537211ba406cbe251d005a45dc99b00f0f87042a"
+  },
+  "changes": [
+    {
+      "path": "semantic.grv.primary",
+      "before": "deep_house",
+      "after": "melodic_edm",
+      "preservation_mode": "free"
+    },
+    {
+      "path": "semantic.grv.secondary",
+      "before": "ambient",
+      "after": "progressive_house",
+      "preservation_mode": "free"
+    },
+    {
+      "path": "semantic.delta_e.overall",
+      "before": "gradual build from solitude to release",
+      "after": "build into a vocal hook and instrumental drop",
+      "preservation_mode": "elastic"
+    },
+    {
+      "path": "physical.bpm",
+      "before": 128,
+      "after": 132,
+      "preservation_mode": "free"
+    },
+    {
+      "path": "physical.brightness",
+      "before": "dark",
+      "after": "bright",
+      "preservation_mode": "free"
+    },
+    {
+      "path": "rendering.target_backend",
+      "before": "external",
+      "after": "musicgen",
+      "preservation_mode": "free"
+    },
+    {
+      "path": "events.chord_progression",
+      "before": null,
+      "after": [
+        {
+          "root": "F",
+          "quality": "minor"
+        },
+        {
+          "root": "C#",
+          "quality": "major"
+        },
+        {
+          "root": "D#",
+          "quality": "major"
+        },
+        {
+          "root": "F",
+          "quality": "minor"
+        }
+      ],
+      "preservation_mode": "free"
+    }
+  ],
+  "outputs": {
+    "derived_score": {
+      "path": "derived_score.yaml",
+      "sha256": "e10528f9437810b86821ad17bbb6674fe53d99cbcb651a931438f66548fa5fb2"
+    },
+    "arrangement_diff": {
+      "path": "arrangement_diff.json",
+      "sha256": "38f4a3dd1cca59567fc7583058864a8e3fb14a9df6d3980b46e0d57f38b7e1fb"
+    }
+  },
+  "content_digest": "87ca3a32be0389beb2c8a679bc1d9eaddaf12a0db64f8d6d805f1407e99ecedb",
+  "content_digest_basis": "sha256-of-canonical-json-artifact-name-to-sha256/v1"
+}
