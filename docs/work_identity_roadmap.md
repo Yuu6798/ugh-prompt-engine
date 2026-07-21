@@ -95,6 +95,14 @@ instrumental 入力で faster-whisper が `no_speech_prob` 0.92–0.94 を自己
   の語彙 `exact_match` / `deferred` / `no_sensor` は不変のまま。実配線は
   WI4 でもよい）
 
+**2026-07-21 実測完了**: MusicGen 無人バッチ n=20（canonical 規律・事前登録・
+fresh-process sha スポット検証 2/2 一致）で structure/harmony 逸脱分布を取得し、
+D-1 分類規約 v0（参照ポリシー下）を適用して within 14 / outside 6（reorder 2 +
+被覆床 4）を確定した。harmony は `full_cycles=0` が 20/20 のため v0 では
+分類を定義せず `deferred` を維持する。実 Suno A2/B1 を中立候補入力として適用し
+定性判断と一致することも確認済み。詳細・分布表・検算照合:
+[`wi1_d1_thresholds.md`](wi1_d1_thresholds.md)。
+
 ### WI2 — 弁別判定ハーネス
 
 - `svprpe arrange` で同一 Base Score から「全 anchor 保存」recast と「anchor を

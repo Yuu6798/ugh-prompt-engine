@@ -194,6 +194,7 @@ svprpe --help
   identity artifacts, backend delivery, and post-generation observation. M1 is limited to Score-level preservation of `semantic.core` and `physical.key`;
   auditory identity remains a later milestone.
 - [Work Identity Roadmap](docs/work_identity_roadmap.md) — WI0–WI4 identity-judgment track: defines work identity via declarative contracts × discriminability judgment × human calibration × honest coverage accounting; melody/lyrics sensors → D-1 thresholds → discriminability harness → identity proxy v0 → institutionalization
+- [WI1 D-1 Thresholds](docs/wi1_d1_thresholds.md) — WI1 deviation-distribution + D-1 threshold Design Memo: MusicGen unattended n=20 structure/harmony deviation distribution, §4 edit-decomposition algorithm, §5 D-1 classification policy v0 (within 14 / outside 6, reference policy), harmony left unclassified in v0
 - [AGENTS.md](AGENTS.md) — Claude × Codex orchestration protocol (Task Brief / Completion Summary templates)
 
 ## License

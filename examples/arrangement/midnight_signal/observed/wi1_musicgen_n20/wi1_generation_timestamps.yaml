@@ -1,0 +1,110 @@
+# WI1 バッチ n=20 生成: canonical 20 テイク（30s/take）の各コール開始/終了 UTC
+# タイムスタンプ（秒精度、`date -u` 相当の実測値。推定禁止）。wi1_plan.yaml の
+# plan_confirmed_at_utc (2026-07-21T03:49:01Z) は本ファイルの全 started_at_utc
+# より先行する — 事前登録が生成より先であることの裏付け（受け入れ条件）。
+# 「1 コマンド = 1 クリップ」逐次実行（M2 運用様式）: take0..take19 を個別
+# `python3 scripts/collect_ar4_observation.py generate --take-index N ...` 呼び出しで
+# 生成した（--seed-base 8200 固定, seed = 8200 + take_index）。
+schema_version: "1.0"
+generator: collect_ar4_observation.py
+generation_calls:
+  - sample_id: take0
+    take_index: 0
+    seed: 8200
+    started_at_utc: "2026-07-21T03:50:25Z"
+    ended_at_utc: "2026-07-21T03:54:05Z"
+  - sample_id: take1
+    take_index: 1
+    seed: 8201
+    started_at_utc: "2026-07-21T03:54:25Z"
+    ended_at_utc: "2026-07-21T03:58:02Z"
+  - sample_id: take2
+    take_index: 2
+    seed: 8202
+    started_at_utc: "2026-07-21T03:58:15Z"
+    ended_at_utc: "2026-07-21T04:02:01Z"
+  - sample_id: take3
+    take_index: 3
+    seed: 8203
+    started_at_utc: "2026-07-21T04:02:15Z"
+    ended_at_utc: "2026-07-21T04:06:02Z"
+  - sample_id: take4
+    take_index: 4
+    seed: 8204
+    started_at_utc: "2026-07-21T04:06:16Z"
+    ended_at_utc: "2026-07-21T04:09:53Z"
+  - sample_id: take5
+    take_index: 5
+    seed: 8205
+    started_at_utc: "2026-07-21T04:10:07Z"
+    ended_at_utc: "2026-07-21T04:14:05Z"
+  - sample_id: take6
+    take_index: 6
+    seed: 8206
+    started_at_utc: "2026-07-21T04:14:26Z"
+    ended_at_utc: "2026-07-21T04:18:04Z"
+  - sample_id: take7
+    take_index: 7
+    seed: 8207
+    started_at_utc: "2026-07-21T04:18:17Z"
+    ended_at_utc: "2026-07-21T04:22:05Z"
+  - sample_id: take8
+    take_index: 8
+    seed: 8208
+    started_at_utc: "2026-07-21T04:22:20Z"
+    ended_at_utc: "2026-07-21T04:25:59Z"
+  - sample_id: take9
+    take_index: 9
+    seed: 8209
+    started_at_utc: "2026-07-21T04:26:12Z"
+    ended_at_utc: "2026-07-21T04:29:55Z"
+  - sample_id: take10
+    take_index: 10
+    seed: 8210
+    started_at_utc: "2026-07-21T04:30:10Z"
+    ended_at_utc: "2026-07-21T04:33:44Z"
+  - sample_id: take11
+    take_index: 11
+    seed: 8211
+    started_at_utc: "2026-07-21T04:33:59Z"
+    ended_at_utc: "2026-07-21T04:37:37Z"
+  - sample_id: take12
+    take_index: 12
+    seed: 8212
+    started_at_utc: "2026-07-21T04:37:50Z"
+    ended_at_utc: "2026-07-21T04:41:35Z"
+  - sample_id: take13
+    take_index: 13
+    seed: 8213
+    started_at_utc: "2026-07-21T04:41:50Z"
+    ended_at_utc: "2026-07-21T04:45:27Z"
+  - sample_id: take14
+    take_index: 14
+    seed: 8214
+    started_at_utc: "2026-07-21T04:45:41Z"
+    ended_at_utc: "2026-07-21T04:49:22Z"
+  - sample_id: take15
+    take_index: 15
+    seed: 8215
+    started_at_utc: "2026-07-21T04:49:38Z"
+    ended_at_utc: "2026-07-21T04:53:15Z"
+  - sample_id: take16
+    take_index: 16
+    seed: 8216
+    started_at_utc: "2026-07-21T04:53:30Z"
+    ended_at_utc: "2026-07-21T04:57:09Z"
+  - sample_id: take17
+    take_index: 17
+    seed: 8217
+    started_at_utc: "2026-07-21T04:57:23Z"
+    ended_at_utc: "2026-07-21T05:01:09Z"
+  - sample_id: take18
+    take_index: 18
+    seed: 8218
+    started_at_utc: "2026-07-21T05:01:26Z"
+    ended_at_utc: "2026-07-21T05:05:18Z"
+  - sample_id: take19
+    take_index: 19
+    seed: 8219
+    started_at_utc: "2026-07-21T05:05:31Z"
+    ended_at_utc: "2026-07-21T05:09:22Z"

@@ -1,0 +1,266 @@
+{
+  "schema_version": "1.0",
+  "generator": "collect_ar4_observation.py",
+  "fixture_id": "wi1_musicgen_midnight_signal_edm_form_n20",
+  "performance_package": {
+    "sha256": "c918300473fa6040757338df2c1cea740a8e1f205b226400cca4f01b6129303d",
+    "build_recipe": {
+      "inputs": {
+        "score": {
+          "path": "examples/arrangement/midnight_signal/composition_score.yaml",
+          "sha256": "37854f54b42a1c4d424f357148d3d10f347e238ec72a42d1248bea2203f97d0b"
+        },
+        "identity_manifest": {
+          "path": "examples/arrangement/midnight_signal/identity_manifest.form.yaml",
+          "sha256": "c22027fffe3744bd038614968234445c23394aa155274a32b987fc3dee2432cf"
+        },
+        "arrangement": {
+          "path": "examples/arrangement/midnight_signal/edm.identity.musicgen.arrangement.yaml",
+          "sha256": "4c9e5c521f7eafd55d0fd940502dd1a68a367a512171caf14f619ba8f27129ee"
+        },
+        "capability_profile": {
+          "path": "config/capability_profiles/musicgen.yaml",
+          "sha256": "190fe585d5085a45b2cd572d05a20c227be71924a885a407f6b135a31efa1f45"
+        },
+        "device_profile": {
+          "path": "config/device_profiles/musicgen.yaml",
+          "sha256": "987f4efe6e70ab5b9e7df5470580e283be644e08c57e7b8d6e9c37caf0ac1211"
+        }
+      },
+      "compile_command": "svprpe package examples/arrangement/midnight_signal/composition_score.yaml examples/arrangement/midnight_signal/identity_manifest.form.yaml examples/arrangement/midnight_signal/edm.identity.musicgen.arrangement.yaml --capability-profile config/capability_profiles/musicgen.yaml --output-dir <output-dir>",
+      "auto_loaded_inputs": {
+        "device_profile": "device_profile is auto-loaded by `svprpe package` from config/device_profiles/<generator>.yaml based on the resolved rendering.target_backend; it is not a compile_command argument, but is required for byte-identical reproduction and is pinned separately as inputs.device_profile in performance_package.json (Codex 5R P2 review #191, discussion_r3610193512)."
+      },
+      "output_geometry": {
+        "note": "no channel artifact locators (channel_artifacts is empty for this package, e.g. because no anchor's delivery status is delivered/experimental); performance_package.sha256 is independent of --output-dir geometry for this recipe (Codex 7R P2 review #191, discussion_r3610250841)."
+      }
+    }
+  },
+  "prompt": "Brightness bright. melodic_edm / progressive_house track. C minor. intro: low density, sub bass only; role=establish loneliness. verse: sparse drums, short phrases, clear rests; role=restrained movement. chorus: full energy, wide stereo, focused layers; role=emotional release. bridge: no kick, no bass, minimal texture; role=near silence and reflection. Wide stereo. Introspective night drive atmosphere. 132 BPM. 4/4 time. Active rate 0.90-0.93. Valley depth 0.15-0.25.",
+  "model_id": "facebook/musicgen-small",
+  "model_revision": "4c8334b02c6ec4e8664a91979669a501ec497792",
+  "duration_seconds": 30.0,
+  "guidance_scale": 3.0,
+  "samples": [
+    {
+      "sample_id": "take0",
+      "take_index": 0,
+      "seed": 8200,
+      "audio_path": "take0.wav",
+      "audio_sha256": "73c8c51eb9b23db1bb30a025454043efb32bc4ae46738e2ce6f3b1ac7a3e9a26",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0,
+      "model_id": "facebook/musicgen-small",
+      "model_revision": "4c8334b02c6ec4e8664a91979669a501ec497792"
+    },
+    {
+      "sample_id": "take1",
+      "take_index": 1,
+      "seed": 8201,
+      "audio_path": "take1.wav",
+      "audio_sha256": "98a75fd5dd5eb3386bcf3474df2b189c0e5e29be816a07d3b86efe94c86ba73c",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0,
+      "model_id": "facebook/musicgen-small",
+      "model_revision": "4c8334b02c6ec4e8664a91979669a501ec497792"
+    },
+    {
+      "sample_id": "take2",
+      "take_index": 2,
+      "seed": 8202,
+      "audio_path": "take2.wav",
+      "audio_sha256": "55f36da77f7e5638160b5d1690d06719ab3f96349da91e075783cbee0ad2e931",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0,
+      "model_id": "facebook/musicgen-small",
+      "model_revision": "4c8334b02c6ec4e8664a91979669a501ec497792"
+    },
+    {
+      "sample_id": "take3",
+      "take_index": 3,
+      "seed": 8203,
+      "audio_path": "take3.wav",
+      "audio_sha256": "296ffd6043a2c42ad9d6e0e799d4c935ebe969b82df43ee1fc9bf99bdacd2e49",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0,
+      "model_id": "facebook/musicgen-small",
+      "model_revision": "4c8334b02c6ec4e8664a91979669a501ec497792"
+    },
+    {
+      "sample_id": "take4",
+      "take_index": 4,
+      "seed": 8204,
+      "audio_path": "take4.wav",
+      "audio_sha256": "85fe183aac3f5f025035f812f990b46810e62ab12e92861372e5862362826344",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0,
+      "model_id": "facebook/musicgen-small",
+      "model_revision": "4c8334b02c6ec4e8664a91979669a501ec497792"
+    },
+    {
+      "sample_id": "take5",
+      "take_index": 5,
+      "seed": 8205,
+      "audio_path": "take5.wav",
+      "audio_sha256": "1a994d2d681a8258df04149035b7ca93b0198da10317006686960ed34c7264b7",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0,
+      "model_id": "facebook/musicgen-small",
+      "model_revision": "4c8334b02c6ec4e8664a91979669a501ec497792"
+    },
+    {
+      "sample_id": "take6",
+      "take_index": 6,
+      "seed": 8206,
+      "audio_path": "take6.wav",
+      "audio_sha256": "f4528035ac096bbd0bf002dd77236309fe3d01a022986d70fbad68efa5d5baf7",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0,
+      "model_id": "facebook/musicgen-small",
+      "model_revision": "4c8334b02c6ec4e8664a91979669a501ec497792"
+    },
+    {
+      "sample_id": "take7",
+      "take_index": 7,
+      "seed": 8207,
+      "audio_path": "take7.wav",
+      "audio_sha256": "830d42dc4fb127322daeb22e0d7f747057a3d08a2c352d835436714348780b24",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0,
+      "model_id": "facebook/musicgen-small",
+      "model_revision": "4c8334b02c6ec4e8664a91979669a501ec497792"
+    },
+    {
+      "sample_id": "take8",
+      "take_index": 8,
+      "seed": 8208,
+      "audio_path": "take8.wav",
+      "audio_sha256": "7b105e7ecc8572e94885f6e65653716b3603346106d286fc429aa3d1c39fcbce",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0,
+      "model_id": "facebook/musicgen-small",
+      "model_revision": "4c8334b02c6ec4e8664a91979669a501ec497792"
+    },
+    {
+      "sample_id": "take9",
+      "take_index": 9,
+      "seed": 8209,
+      "audio_path": "take9.wav",
+      "audio_sha256": "4e18087309796b4b89958a9e1eebd2a2f96c670e4679d4862e0b1c39d9b07cb2",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0,
+      "model_id": "facebook/musicgen-small",
+      "model_revision": "4c8334b02c6ec4e8664a91979669a501ec497792"
+    },
+    {
+      "sample_id": "take10",
+      "take_index": 10,
+      "seed": 8210,
+      "audio_path": "take10.wav",
+      "audio_sha256": "5933d65b57f592c831ec57fd93bb77cf2120908a58902d0772b5704983e0d59f",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0,
+      "model_id": "facebook/musicgen-small",
+      "model_revision": "4c8334b02c6ec4e8664a91979669a501ec497792"
+    },
+    {
+      "sample_id": "take11",
+      "take_index": 11,
+      "seed": 8211,
+      "audio_path": "take11.wav",
+      "audio_sha256": "b3794bcf5503d9428d38ab6089e10eccff2173f388a09a75803a65ff5029e7c3",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0,
+      "model_id": "facebook/musicgen-small",
+      "model_revision": "4c8334b02c6ec4e8664a91979669a501ec497792"
+    },
+    {
+      "sample_id": "take12",
+      "take_index": 12,
+      "seed": 8212,
+      "audio_path": "take12.wav",
+      "audio_sha256": "72bae2c0541cd210da4bd1193f782db31b90bd4e73b82cd055f8e2aa373683cf",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0,
+      "model_id": "facebook/musicgen-small",
+      "model_revision": "4c8334b02c6ec4e8664a91979669a501ec497792"
+    },
+    {
+      "sample_id": "take13",
+      "take_index": 13,
+      "seed": 8213,
+      "audio_path": "take13.wav",
+      "audio_sha256": "e8333f8dd12288f97ef025494545bf0d53cb99d6f8cd697c5ce193c6fd57787a",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0,
+      "model_id": "facebook/musicgen-small",
+      "model_revision": "4c8334b02c6ec4e8664a91979669a501ec497792"
+    },
+    {
+      "sample_id": "take14",
+      "take_index": 14,
+      "seed": 8214,
+      "audio_path": "take14.wav",
+      "audio_sha256": "acf11e43453b96477141756ac39f0c6d0eac075ee3e3aebcb0e270f5fa925135",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0,
+      "model_id": "facebook/musicgen-small",
+      "model_revision": "4c8334b02c6ec4e8664a91979669a501ec497792"
+    },
+    {
+      "sample_id": "take15",
+      "take_index": 15,
+      "seed": 8215,
+      "audio_path": "take15.wav",
+      "audio_sha256": "3da2eb707f29eb566799fb0b015cf7262ca71caf6ee5e42884acff3d010e22c2",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0,
+      "model_id": "facebook/musicgen-small",
+      "model_revision": "4c8334b02c6ec4e8664a91979669a501ec497792"
+    },
+    {
+      "sample_id": "take16",
+      "take_index": 16,
+      "seed": 8216,
+      "audio_path": "take16.wav",
+      "audio_sha256": "76e8aba88b31b5d1ae3fe1b13a3a9efc35e8b28801e0c5eb94e4e07e07875519",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0,
+      "model_id": "facebook/musicgen-small",
+      "model_revision": "4c8334b02c6ec4e8664a91979669a501ec497792"
+    },
+    {
+      "sample_id": "take17",
+      "take_index": 17,
+      "seed": 8217,
+      "audio_path": "take17.wav",
+      "audio_sha256": "85df2cfe6e77ef326ea17821dcd06031e03f5daaa6d6e1d5eaa2b670e0cb4a9c",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0,
+      "model_id": "facebook/musicgen-small",
+      "model_revision": "4c8334b02c6ec4e8664a91979669a501ec497792"
+    },
+    {
+      "sample_id": "take18",
+      "take_index": 18,
+      "seed": 8218,
+      "audio_path": "take18.wav",
+      "audio_sha256": "bd1e4acfec2f62817d773d565dafb13a9bb5a56c3d829cc6d20e3011b1600bf2",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0,
+      "model_id": "facebook/musicgen-small",
+      "model_revision": "4c8334b02c6ec4e8664a91979669a501ec497792"
+    },
+    {
+      "sample_id": "take19",
+      "take_index": 19,
+      "seed": 8219,
+      "audio_path": "take19.wav",
+      "audio_sha256": "deb6d110bc62832e86c22916db119232954728cc15009f9fa4aaf2a0a571dc58",
+      "duration_seconds": 30.0,
+      "guidance_scale": 3.0,
+      "model_id": "facebook/musicgen-small",
+      "model_revision": "4c8334b02c6ec4e8664a91979669a501ec497792"
+    }
+  ]
+}
