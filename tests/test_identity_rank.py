@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 from typer.testing import CliRunner
 
 from svp_rpe.cli import app
@@ -31,6 +32,7 @@ from svp_rpe.roundtrip.identity_rank import (
     _bpm_axis,
     _harmony_axis,
     _key_axis,
+    _resolve_references,
     _structure_axis,
     identity_rank_from_paths,
     normalize_observed_section_label,
@@ -573,6 +575,74 @@ def test_tied_with_groups_three_way_tie_excluding_self() -> None:
     assert axis.ranking[0].tied_with == ["bbb_ref", "ccc_ref"]
     assert axis.ranking[1].tied_with == ["aaa_ref", "ccc_ref"]
     assert axis.ranking[2].tied_with == ["aaa_ref", "bbb_ref"]
+
+
+# ---------------------------------------------------------------------------
+# Reference locator confinement: absolute score_path/progression_path fail
+# fast (Codex P2 #201 3rd item) instead of silently discarding base_dir and
+# reading a machine-specific file. A relative ``..`` escape is intentionally
+# *not* rejected (unlike arrange/identity.py's stricter manifest artifact
+# confinement) — real committed references legitimately reach a
+# sibling/ancestor directory this way (wi2_references.yaml's
+# canonical.progression_path resolves two directories above its own file).
+# ---------------------------------------------------------------------------
+
+
+def _write_score_yaml(path: Path, **score_kwargs: Any) -> None:
+    path.write_text(yaml.safe_dump(_score(**score_kwargs).model_dump()), encoding="utf-8")
+
+
+def test_resolve_references_rejects_absolute_score_path(tmp_path: Path) -> None:
+    references = ReferenceList(
+        schema_version="wi2-references/0.1",
+        references=[ReferenceEntry(ref_id="canonical", score_path="/etc/passwd")],
+    )
+
+    with pytest.raises(ValueError, match=r"score_path.*must be a relative path"):
+        _resolve_references(references, base_dir=tmp_path)
+
+
+def test_resolve_references_rejects_absolute_progression_path(tmp_path: Path) -> None:
+    _write_score_yaml(tmp_path / "score.yaml", structure_sections=["intro"])
+    references = ReferenceList(
+        schema_version="wi2-references/0.1",
+        references=[
+            ReferenceEntry(
+                ref_id="canonical",
+                score_path="score.yaml",
+                progression_path="/etc/passwd",
+            )
+        ],
+    )
+
+    with pytest.raises(ValueError, match=r"progression_path.*must be a relative path"):
+        _resolve_references(references, base_dir=tmp_path)
+
+
+def test_resolve_references_allows_relative_parent_directory_escape(tmp_path: Path) -> None:
+    """A relative ``..`` path reaching outside ``base_dir`` is allowed by
+    design — only absolute paths are rejected. This mirrors the real
+    committed ``wi2_references.yaml``, whose ``canonical`` entry's
+    ``progression_path`` climbs two directories above the references
+    file."""
+
+    references_dir = tmp_path / "refs"
+    references_dir.mkdir()
+    outside_dir = tmp_path / "sibling"
+    outside_dir.mkdir()
+    _write_score_yaml(outside_dir / "score.yaml", structure_sections=["intro"])
+
+    references = ReferenceList(
+        schema_version="wi2-references/0.1",
+        references=[
+            ReferenceEntry(ref_id="canonical", score_path=f"../{outside_dir.name}/score.yaml")
+        ],
+    )
+
+    resolved = _resolve_references(references, base_dir=references_dir)
+
+    assert resolved[0].ref_id == "canonical"
+    assert resolved[0].score.structure[0].section == "intro"
 
 
 # ---------------------------------------------------------------------------

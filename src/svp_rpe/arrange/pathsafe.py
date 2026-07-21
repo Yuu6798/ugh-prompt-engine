@@ -70,8 +70,23 @@ class PathConfinementError(ValueError):
         self.resolved = resolved
 
 
-def _is_absolute(value: str) -> bool:
-    """Cross-platform absolute-path check (posix root or Windows drive/root)."""
+def is_absolute_path(value: str) -> bool:
+    """Cross-platform absolute-path check (posix root or Windows drive/root).
+
+    Public on its own (not just as an internal step of
+    ``validate_relative_locator``/``resolve_confined``) for callers whose
+    locator convention rejects absolute paths but intentionally allows a
+    relative path's ``..`` segments to reach outside a base directory —
+    e.g. ``roundtrip/identity_rank.py``'s WI2 references, where a
+    reference's ``score_path``/``progression_path`` legitimately points at
+    a sibling or ancestor directory (a shared ``derived/`` tree, an
+    ``identity/`` anchor two levels up) rather than staying confined below
+    the references file the way an ``IdentityManifest`` anchor must.
+    ``validate_relative_locator``'s stricter net-upward-traversal check
+    would reject those same paths, so such a caller uses only this
+    narrower absolute-path check, not the full lexical/physical
+    confinement below.
+    """
     windows_path = PureWindowsPath(value)
     return bool(PurePosixPath(value).is_absolute() or windows_path.drive or windows_path.root)
 
@@ -87,7 +102,7 @@ def validate_relative_locator(value: str) -> None:
     `..\\outside.md` and `a/..\\..\\b` are traversal exactly like their `/`
     equivalents.
     """
-    if _is_absolute(value):
+    if is_absolute_path(value):
         raise PathConfinementError(
             f"path must be relative: {value!r}", value=value, reason="absolute"
         )
@@ -120,7 +135,7 @@ def resolve_confined(value: str, base_dir: Path) -> Path:
     `is_relative_to` — it can never resolve *outside* `base_dir` by way of a
     literal backslash the way a lexical `..` split could be fooled.
     """
-    if _is_absolute(value):
+    if is_absolute_path(value):
         raise PathConfinementError(
             f"path must be relative: {value!r}", value=value, reason="absolute"
         )

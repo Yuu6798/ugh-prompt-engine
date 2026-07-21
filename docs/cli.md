@@ -821,7 +821,14 @@ svprpe identity-rank take0_bundle.json --references wi2_references.yaml --format
 `--references` points at a YAML file (`schema_version: wi2-references/0.1`)
 listing entries of `ref_id` / `score_path` / optional `progression_path`
 (a `chord-sequence/0.1` JSON), both resolved relative to the references
-file's own directory. The report is per axis (`structure` / `harmony` /
+file's own directory. An absolute `score_path`/`progression_path` is
+rejected fail-fast (it would otherwise silently discard the references
+file's directory and read a machine-specific path) — but unlike
+`arrange/identity.py`'s manifest artifact resolution, a relative path's
+`..` segments are not further restricted to staying below that directory,
+since real references legitimately reach a sibling/ancestor directory this
+way (e.g. a shared `derived/` tree, an `identity/` anchor two levels up).
+The report is per axis (`structure` / `harmony` /
 `key` / `bpm` / `brightness`): each reference's distance from the take and
 the resulting rank (ties broken by ascending `ref_id`), plus which
 references that axis could not observe and why (e.g. a reference with no

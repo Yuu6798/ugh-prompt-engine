@@ -96,6 +96,7 @@ from typing import Any, Literal, Optional
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from svp_rpe.arrange.pathsafe import is_absolute_path
 from svp_rpe.compose.loader import load_composition_score
 from svp_rpe.compose.models import ChordSpec, CompositionScore
 from svp_rpe.keys import weighted_key_score
@@ -127,6 +128,21 @@ class ReferenceEntry(BaseModel):
     ``progression_path`` is optional: a reference with no authored harmony
     anchor simply reports ``not_observed`` on the harmony axis rather than
     failing the whole run.
+
+    Both fields are rejected fail-fast at resolution time (see
+    ``_resolve_reference_locator``) when absolute — an absolute
+    ``score_path``/``progression_path`` would otherwise silently discard
+    ``base_dir`` and read a machine-specific file the references YAML never
+    declared (Codex P2 #201 3rd item). Unlike ``arrange/identity.py``'s
+    manifest artifact resolution, a relative path's ``..`` segments are
+    *not* additionally restricted to staying below the references file's
+    own directory: real committed references legitimately reach a
+    sibling/ancestor directory this way (e.g. ``wi2_references.yaml``'s
+    ``canonical.progression_path`` resolves two directories above its own
+    references file). This model itself performs no path check —
+    ``score_path``/``progression_path`` are plain strings here because no
+    ``base_dir`` is known yet at parse time; the absolute-path check happens
+    once a ``base_dir`` exists, in ``_resolve_reference_locator``.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -428,15 +444,59 @@ class _ResolvedReference:
         self.progression = progression
 
 
+def _resolve_reference_locator(value: str, base_dir: Path, *, ref_id: str, field: str) -> Path:
+    """Resolve one WI2 reference's ``score_path``/``progression_path``
+    against the references YAML's own directory, rejecting an absolute path
+    fail-fast (Codex P2 #201 3rd item).
+
+    ``base_dir / value`` silently discards ``base_dir`` entirely when
+    ``value`` is absolute (``Path("/a") / "/etc/passwd" ==
+    Path("/etc/passwd")``), so an absolute ``score_path``/``progression_path``
+    would read a machine-specific file the references YAML never portably
+    declared, instead of failing loudly.
+
+    Deliberately narrower than ``arrange/identity.py``'s manifest artifact
+    resolution (``arrange.pathsafe.resolve_confined``/
+    ``validate_relative_locator``): this module's own committed references
+    legitimately use ``..`` to reach a sibling/ancestor directory rather
+    than staying confined below the references file — e.g.
+    ``wi2_references.yaml``'s ``canonical`` entry declares
+    ``progression_path: "../../identity/chord_progression.json"``, which
+    resolves two directories *above* ``base_dir``, and its ``other_work``
+    entry reaches four directories up into a different example tree
+    entirely. Both of ``resolve_confined``'s "escape" check and
+    ``validate_relative_locator``'s "traversal" (net-upward-``..``) check
+    would reject those same real, working, relative paths, so this helper
+    reuses only ``arrange.pathsafe.is_absolute_path`` — the same
+    cross-platform (posix root / Windows drive) check those helpers use
+    internally — rather than duplicating that logic, without adopting
+    their stricter containment semantics.
+    """
+
+    if is_absolute_path(value):
+        raise ValueError(
+            f"WI2 reference {ref_id!r}: {field} {value!r} must be a relative path "
+            "(only paths relative to the references file are allowed; absolute "
+            "paths are rejected)"
+        )
+    return base_dir / value
+
+
 def _resolve_references(
     references: ReferenceList, *, base_dir: Path
 ) -> list[_ResolvedReference]:
     resolved: list[_ResolvedReference] = []
     for entry in references.references:
-        score = load_composition_score(base_dir / entry.score_path)
+        score_path = _resolve_reference_locator(
+            entry.score_path, base_dir, ref_id=entry.ref_id, field="score_path"
+        )
+        score = load_composition_score(score_path)
         progression: Optional[list[tuple[str, str]]] = None
         if entry.progression_path is not None:
-            progression = _load_reference_chord_progression(base_dir / entry.progression_path)
+            progression_path = _resolve_reference_locator(
+                entry.progression_path, base_dir, ref_id=entry.ref_id, field="progression_path"
+            )
+            progression = _load_reference_chord_progression(progression_path)
         resolved.append(_ResolvedReference(entry.ref_id, score, progression))
     return resolved
 
