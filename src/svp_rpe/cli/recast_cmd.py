@@ -382,7 +382,11 @@ def recast_ingest_cmd(
     must match the current inputs, *and* the recorded `plan_sha256` must
     match the current `recast_plan.json` bytes (missing/unreadable counts as
     a mismatch) — either mismatch is reported and exits 1 without touching
-    any file. Only then does it rebuild the plan context via the same
+    any file. A `None` `inputs_digest`/`plan_sha256` (e.g. an old-schema or
+    hand-copied state) is *not* trusted as "unknown, skip the check" — it is
+    treated as stale too (Codex P2 review round 4, PR3 #208 指摘 9: a missing
+    pin is exactly the case a stale/forged state most plausibly has). Only
+    then does it rebuild the plan context via the same
     `build_recast_plan_artifacts` path `recast run` uses (re-publishing
     `recast_plan.json` — same `_publish_recast_plan` single source), resolve
     the `ManualInvoker`, and call `collect(audio)` to atomically ingest the
@@ -438,7 +442,14 @@ def recast_ingest_cmd(
     except (OSError, ValueError, RecastError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
-    if run.inputs_digest is not None and run.inputs_digest != current_digest:
+    if run.inputs_digest is None:
+        typer.echo(
+            f"Error: {run_key} has no recorded inputs_digest (stale — no pin). "
+            "Re-run 'svprpe recast plan' / 'svprpe recast run' first.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if run.inputs_digest != current_digest:
         typer.echo(
             f"Error: {run_key} inputs changed since the order files were published (stale). "
             "Re-run 'svprpe recast plan' / 'svprpe recast run' first.",
@@ -447,7 +458,14 @@ def recast_ingest_cmd(
         raise typer.Exit(code=1)
 
     current_plan_sha256 = _read_plan_sha256(loaded.project_dir / RECAST_PLAN_FILENAME)
-    if run.plan_sha256 is not None and run.plan_sha256 != current_plan_sha256:
+    if run.plan_sha256 is None:
+        typer.echo(
+            f"Error: {run_key} has no recorded plan_sha256 (stale — no pin). "
+            "Re-run 'svprpe recast plan' / 'svprpe recast run' first.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if run.plan_sha256 != current_plan_sha256:
         typer.echo(
             f"Error: {run_key} plan artifact (recast_plan.json) changed or is missing since "
             "the order files were published (stale). Re-run 'svprpe recast plan' / "
@@ -507,7 +525,10 @@ def recast_status_cmd(
     #207）。加えて、記録済み `plan_sha256` を現在の `recast_plan.json` の
     bytes（不在/読取失敗を含む）と突き合わせる — publish 後に plan 成果物が
     削除・破損・別 (variant,backend) の plan で上書きされた場合も同様に stale
-    表示へ倒す（Codex P2 fourth round #207: fail-closed）。
+    表示へ倒す（Codex P2 fourth round #207: fail-closed）。`inputs_digest`/
+    `plan_sha256` のいずれかが `None`（旧形式/手動コピーされた state 等）の
+    場合も「未確認だからスキップ」ではなく stale（pin なし）として表示する
+    （Codex P2 review round 4, PR3 #208 指摘 9）。
     """
     from svp_rpe.recast import RecastError, load_recast_project
     from svp_rpe.recast.plan import RECAST_PLAN_FILENAME, compute_recast_inputs_digest
@@ -542,10 +563,13 @@ def recast_status_cmd(
                 current_digest = compute_recast_inputs_digest(
                     loaded, variant=variant, backend=backend
                 )
-                if run.inputs_digest is not None and run.inputs_digest != current_digest:
+                if run.inputs_digest is None or run.plan_sha256 is None:
+                    note = "stale（pin なし）— svprpe recast plan 再実行が必要"
+                    next_step = replan_step
+                elif run.inputs_digest != current_digest:
                     note = "stale（入力が変更済み）— svprpe recast plan 再実行が必要"
                     next_step = replan_step
-                elif run.plan_sha256 is not None and run.plan_sha256 != current_plan_sha256:
+                elif run.plan_sha256 != current_plan_sha256:
                     note = "stale（plan 成果物が変更/不在）— svprpe recast plan 再実行が必要"
                     next_step = replan_step
                 else:

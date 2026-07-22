@@ -129,6 +129,59 @@ def test_demo_project_plan_matches_committed_snapshot_byte_for_byte(tmp_path: Pa
     assert canonical == expected
 
 
+# --- single-read bundle (Codex P2 sixth round #207) -----------------------------
+
+
+def test_build_recast_plan_reads_each_bundle_input_exactly_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """digest 用の読み取りと compile 用の読み取りが分離していた旧実装は、実行中
+    の入力差し替え A→B→A で「B で compile した plan を A の digest で pin」
+    しうる TOCTOU があった（AGENTS §8-A）。single-read 束化後は
+    arrangement spec / capability profile / mode_overrides / device profile の
+    各ファイルが `Path.read_bytes()` されるのはちょうど 1 回であることを
+    monkeypatch カウンタで検証する。
+
+    identity manifest と score は、束の外側にある別の single-read 規律を持つ
+    副系（`verify_package` 自身の独立した V3 再検証）からも読まれるため
+    1 回では収まらない（1 回に固定すると無関係な副系の実装詳細でテストが
+    壊れやすくなるため、正確な期待値をここに明記する — この副系自体は
+    本ゲートの対象外の正当な read）:
+    - identity manifest: 束（1 回）+ `verify_package` の V3 再検証（manifest
+      ファイル自体の read は 1 回、`manifest_bytes` を渡してパースし直す
+      だけ）… 計 2 回。
+    - score: demo fixture の identity `source.locator` が
+      `composition_score.yaml` 自身を指すため、束の直接 read（1 回）+ 束内の
+      `parse_identity_manifest_with_artifacts` が source artifact として
+      検証する read（1 回）+ `verify_package` の V3 再検証がもう一度 source
+      artifact を検証する read（1 回）… 計 3 回。"""
+    project_path = _copy_demo_project(tmp_path)
+    loaded = load_recast_project(project_path)
+
+    read_counts: dict[str, int] = {}
+    original_read_bytes = Path.read_bytes
+
+    def _counting_read_bytes(self: Path) -> bytes:
+        key = str(self.resolve())
+        read_counts[key] = read_counts.get(key, 0) + 1
+        return original_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", _counting_read_bytes)
+
+    result = build_recast_plan(loaded, variant="edm", backend="suno")
+    assert result.plan.state_reached == "verified"
+
+    def _count(path: Path) -> int:
+        return read_counts.get(str(path.resolve()), 0)
+
+    assert _count(loaded.arrangement_paths["edm"]) == 1
+    assert _count(loaded.capability_profile_paths["suno"]) == 1
+    assert _count(loaded.mode_override_paths["suno"]) == 1
+    assert _count(Path("config/device_profiles/suno.yaml")) == 1
+    assert _count(loaded.identity_manifest_path) == 2
+    assert _count(loaded.score_path) == 3
+
+
 # --- scenario (a): blocked_authoring via unresolved TODO sentinel --------------
 
 
