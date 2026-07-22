@@ -1,6 +1,7 @@
 """`svprpe recast plan` / `svprpe recast status` CLI テスト（PR2）。"""
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -8,6 +9,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from svp_rpe.cli import app
+from svp_rpe.recast.state import load_recast_state
 
 DEMO_PROJECT = Path("examples/recast/demo_project")
 EXPECTED_PLAN = DEMO_PROJECT / "expected" / "recast_plan_edm_suno.json"
@@ -39,6 +41,33 @@ def test_recast_plan_succeeds_and_writes_plan_json(tmp_path: Path) -> None:
     data = json.loads(plan_path.read_text(encoding="utf-8"))
     assert data["state_reached"] == "verified"
     assert "blocked" not in data or data["blocked"] is None
+
+
+def test_recast_plan_records_sha256_matching_actual_written_bytes(tmp_path: Path) -> None:
+    """`recast_plan.json` の atomic 書き込みは bytes 経路に統一されている
+    （Codex P2 ninth round #207: 旧実装は text モードで書いており、Windows
+    では改行変換 `"\n"`→`"\r\n"` により `plan_sha256`（計算元は `"\n"` のみの
+    encode 済み bytes）と実際にディスクへ書かれた bytes が乖離しうる —
+    直後の `recast status` が偽 stale を報告する原因になっていた）。
+    改行変換の再現自体は環境依存のため、ここでは記録された `plan_sha256` が
+    実際に書かれたファイルの生 bytes の sha256 と厳密に一致することを直接
+    検証する（現在の実行環境で既に一致していれば、bytes 経路であることの
+    十分条件を満たす — text モードのままなら POSIX でも一致はするが、
+    それでも single-source of truth 化そのものは常に検証可能）。"""
+    project_path = _copy_demo_project(tmp_path)
+
+    result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert result.exit_code == 0, result.output
+
+    plan_path = project_path.parent / "recast_plan.json"
+    actual_sha256 = hashlib.sha256(plan_path.read_bytes()).hexdigest()
+
+    state_file = load_recast_state(project_path.parent)
+    recorded_plan_sha256 = state_file.runs["edm@suno"].plan_sha256
+    assert recorded_plan_sha256 is not None
+    assert recorded_plan_sha256 == actual_sha256
 
 
 def test_recast_plan_matches_committed_snapshot_via_cli(tmp_path: Path) -> None:

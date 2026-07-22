@@ -47,14 +47,21 @@ def _read_plan_sha256(path: Path) -> Optional[str]:
         return None
 
 
-def _write_recast_plan_atomically(path: Path, content: str) -> None:
+def _write_recast_plan_atomically(path: Path, content: bytes) -> None:
     """tempfile + `os.replace` による atomic publish（`cli/observe_cmd.py` の
-    `_write_observation_report_atomically` と同型）。"""
+    `_write_observation_report_atomically` と同型）。bytes を受け取り binary
+    モードで書く（Codex P2 ninth round #207: 旧実装は text モード
+    `open(..., "w", encoding="utf-8")` で書いており、Windows では改行が
+    `"\n"` → `"\r\n"` に変換される。`plan_sha256` は `canonical.encode("utf-8")`
+    から計算していたため、記録した hash と実際にディスクへ書かれた bytes が
+    乖離し、publish 直後の `recast status` が偽 stale を報告しうる欠陥が
+    あった。呼び出し側が 1 回だけ encode した bytes をそのまま書き込み、
+    同じ bytes から hash も計算する single-source 設計に統一する）。"""
     output_dir = path.parent
     output_dir.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=output_dir, prefix=f"{path.name}.", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        with os.fdopen(fd, "wb") as handle:
             handle.write(content)
         os.replace(tmp_name, path)
     except BaseException:
@@ -104,8 +111,12 @@ def recast_plan_cmd(
         )
         + "\n"
     )
+    # encode は 1 回だけ行い、書き込みも hash 計算もこの同一 bytes から行う
+    # （Codex P2 ninth round #207: single-source of truth — text モード書き込み
+    # は改行変換の余地があり、書かれた bytes と hash 計算元が乖離しうる）。
+    canonical_bytes = canonical.encode("utf-8")
     try:
-        _write_recast_plan_atomically(plan_path, canonical)
+        _write_recast_plan_atomically(plan_path, canonical_bytes)
     except OSError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -116,7 +127,7 @@ def recast_plan_cmd(
     # fourth round #207: publish 後の recast_plan.json 削除・破損・別
     # (variant,backend) の plan による上書きを `recast status` が検出できる
     # ようにする）。
-    plan_sha256 = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    plan_sha256 = hashlib.sha256(canonical_bytes).hexdigest()
     if result.plan.blocked is not None:
         state_note = "; ".join(result.plan.blocked.reasons)
     else:
