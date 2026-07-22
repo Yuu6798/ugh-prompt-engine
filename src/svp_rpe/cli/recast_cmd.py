@@ -259,7 +259,7 @@ def recast_run_cmd(
         resolve_invoker,
         run_context_from_plan_artifacts,
     )
-    from svp_rpe.recast.plan import build_recast_plan_artifacts
+    from svp_rpe.recast.plan import _normalize_diagnostic, build_recast_plan_artifacts
     from svp_rpe.recast.state import record_state
 
     try:
@@ -338,12 +338,16 @@ def recast_run_cmd(
     try:
         take = invoker.invoke(prepared)
     except RecastError as exc:
+        # note は recast_plan.json と同じ絞り口（`_normalize_diagnostic`）を通し、
+        # 例外メッセージに実行マシンの絶対パスが residual として残らないようにする
+        # （Codex P2 review round 4, PR3 #208: run/ingest 側の state note にも
+        # plan.py 側と同一の正規化を一貫適用する要請への対応）。
         record_state(
             loaded.project_dir,
             variant,
             backend,
             "generation_failed",
-            note=str(exc),
+            note=_normalize_diagnostic(str(exc), loaded.project_dir),
             inputs_digest=inputs_digest,
             plan_sha256=plan_sha256,
         )

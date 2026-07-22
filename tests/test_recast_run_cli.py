@@ -306,6 +306,61 @@ def test_recast_ingest_rejects_when_plan_artifact_is_stale(tmp_path: Path) -> No
     assert "plan artifact" in result.output
 
 
+def test_recast_ingest_rejects_when_pin_is_missing(tmp_path: Path) -> None:
+    """Codex P2 review round 4（PR3 #208 指摘 9）: 旧形式/手動コピーされた
+    `recast_state.json`（`inputs_digest`/`plan_sha256` が `None`）を「未確認
+    だから判定スキップ」で信用してしまうと、実際には変更済みかもしれない
+    入力に対して素通りで ingest してしまう。`None` は stale と同扱いにして
+    拒否することを検証する（`recast plan`/`recast run` の再実行を促す）。"""
+    from svp_rpe.recast.state import record_state
+
+    project_path = _copy_demo_project(tmp_path)
+    run_result = runner.invoke(
+        app, ["recast", "run", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert run_result.exit_code == 0, run_result.output
+
+    state_file = load_recast_state(project_path.parent)
+    run = state_file.runs["edm@suno"]
+    assert run.state == "awaiting_generation"
+    # pin を落とした state を直接記録する（旧 schema や手動コピーの模倣）。
+    record_state(
+        project_path.parent,
+        "edm",
+        "suno",
+        run.state,
+        note=run.note,
+        inputs_digest=None,
+        plan_sha256=None,
+    )
+
+    audio_path = tmp_path / "external.wav"
+    audio_path.write_bytes(b"RIFF....WAVEfake-audio-bytes")
+
+    result = runner.invoke(
+        app,
+        [
+            "recast",
+            "ingest",
+            str(project_path),
+            "--variant",
+            "edm",
+            "--backend",
+            "suno",
+            "--audio",
+            str(audio_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "no pin" in result.output.lower() or "pin" in result.output.lower()
+    assert "stale" in result.output.lower()
+
+    status_result = runner.invoke(app, ["recast", "status", str(project_path)])
+    assert status_result.exit_code == 0
+    assert "pin" in status_result.output
+
+
 def test_recast_help_lists_ingest() -> None:
     result = runner.invoke(app, ["recast", "--help"])
 

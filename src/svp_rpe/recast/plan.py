@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -292,6 +293,36 @@ def _atomic_publish_text_bundle(
                 except OSError:
                     pass
             raise
+
+
+# 診断文字列に残る絶対パスの残骸を検出する（`(?<![\w./-])` は "0/4" や
+# "cover/prompt_only" のような path でない "/" 区切りを誤検出しないための
+# 否定先読み — 直前が英数字/ドット/スラッシュ/ハイフンなら「/」始まりの
+# トークンとして扱わない）。
+_ABSOLUTE_PATH_TOKEN_RE = re.compile(r"(?<![\w./-])/[^\s'\"]*")
+
+
+def _normalize_diagnostic(text: str, project_dir: Path) -> str:
+    """診断文字列（例外メッセージ由来）に含まれる解決済み絶対パスを project
+    相対の locator へ正規化する（Codex P2 seventh round #207: blocked plan の
+    reasons/warnings に `str(exc)` をそのまま埋め込んでいたため、実行マシンの
+    絶対パス（`project_dir` 配下）が `recast_plan.json` という永続化物へ
+    そのまま漏れ、成果物が checkout ごとに異なる機械依存 bytes になっていた
+    — `RecastPlan` の「同一 checkout なら常に同じ bytes」契約に反する）。
+
+    `project_dir` 配下の絶対パスは相対 locator（例 `identity/lyrics.txt`）へ
+    置換する。project 外を指す絶対パス（通常は出ないはずだが、封じ込め
+    エラーの escaped-to パス等の将来経路に備える）は安定したプレースホルダ
+    `<external-path>` へ置換し、ローカル FS レイアウトの漏洩を fail-closed に
+    防ぐ（中身は判読せず一律マスクする）。"""
+    project_dir_str = str(project_dir)
+    normalized = text.replace(project_dir_str + os.sep, "")
+    normalized = normalized.replace(project_dir_str, ".")
+    return _ABSOLUTE_PATH_TOKEN_RE.sub("<external-path>", normalized)
+
+
+def _normalize_diagnostics(texts: List[str], project_dir: Path) -> List[str]:
+    return [_normalize_diagnostic(text, project_dir) for text in texts]
 
 
 def _collect_todo_sentinel_paths(value: Any, path: str, unresolved: List[str]) -> None:
@@ -870,6 +901,20 @@ def build_recast_plan_artifacts(
         profile_sha256: Optional[str] = None,
         derived_score_sha256: Optional[str] = None,
     ) -> RecastPlanArtifacts:
+        # 診断文字列（例外メッセージ由来の blocked.reasons / warnings）を
+        # project 相対へ正規化してから plan へ載せる（Codex P2 seventh round
+        # #207: 全生成点を個別に潰すのではなく、plan/state へ入る直前の
+        # 単一の絞り口でまとめて正規化する — 将来の新規例外経路も自動的に
+        # 対象になる fail-closed 設計）。
+        if blocked is not None:
+            blocked = BlockedInfo(
+                state=blocked.state,
+                reasons=_normalize_diagnostics(blocked.reasons, loaded.project_dir),
+            )
+        normalized_warnings = (
+            _normalize_diagnostics(warnings, loaded.project_dir) if warnings else warnings
+        )
+
         resolved_changed_fields = changed_fields or []
         recommendation = _build_recommendation(
             blocked,
@@ -888,7 +933,7 @@ def build_recast_plan_artifacts(
             blocked=blocked,
             anchors=anchors or [],
             changed_fields=resolved_changed_fields,
-            warnings=warnings or [],
+            warnings=normalized_warnings or [],
             recommendation=recommendation,
         )
         result = RecastPlanResult(

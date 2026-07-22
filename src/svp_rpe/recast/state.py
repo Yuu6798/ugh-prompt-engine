@@ -67,14 +67,17 @@ class RecastRunState(RecastStateModel):
     identity_manifest/arrangement spec/capability profile/mode_overrides）の
     合成 digest（`recast.plan.compute_recast_inputs_digest`）。optional —
     本フィールド追加前に書かれた既存 `recast_state.json` との後方互換のため
-    `None` を許容する（`recast status` は `None` を「不明」として stale
-    判定をスキップし、false positive を出さない）。
+    `None` を許容する（型としては許容するが、値としては信用しない —
+    `recast status`/`recast ingest` は `None` を「不明だから判定スキップ」
+    ではなく fail-closed に stale（pin なし）として扱う。Codex P2 review
+    round 4, PR3 #208 指摘 9: pin 欠落は旧形式/手動コピーされた state が
+    最もありそうなケースであり、そのまま素通りさせるのは危険）。
 
     `plan_sha256`: この run を記録した時点で publish した `recast_plan.json`
     自身の bytes sha256（Codex P2 fourth round #207: state は plan の中身を
     一切参照しておらず、publish 後に成果物が削除・破損・別 (variant,backend)
     の plan で上書きされても state だけが古い `verified` を信用し続けていた）。
-    `inputs_digest` と同じ optional 後方互換規約。
+    `inputs_digest` と同じ optional 後方互換規約（同じく `None` は stale 扱い）。
     """
 
     state: RecastState

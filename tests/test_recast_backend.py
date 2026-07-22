@@ -463,6 +463,54 @@ def test_build_recast_plan_rejects_capability_profile_colliding_with_packages_ou
     assert not (colliding_path.parent / "compilation_report.json").exists()
 
 
+def test_atomic_publish_text_bundle_partial_failure_restores_old_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 review round 4（PR3 #208 指摘 8）: `performance_package.json` /
+    `compilation_report.json` は従来 2 回の独立 `_atomic_write_text` で公開して
+    いたため、package.json の rename が成功した直後に report.json の rename
+    が失敗すると「新 package + 古い report」という half-updated な packages
+    ディレクトリが残り得た。`_atomic_publish_text_bundle`（`build_recast_plan_
+    artifacts` が package/report を公開する際に使う）で report.json 側の最終
+    rename だけを失敗注入し、package.json 側も含めて呼び出し前の内容（＝
+    旧 package/旧 report）へロールバックされる（新 package だけが現れる／
+    古い report だけが残るという half-updated 状態にならない）ことを検証する。"""
+    import os
+
+    from svp_rpe.recast.plan import _atomic_publish_text_bundle
+
+    output_dir = tmp_path / "packages" / "edm@suno"
+    output_dir.mkdir(parents=True)
+    (output_dir / "performance_package.json").write_text("old-package", encoding="utf-8")
+    (output_dir / "compilation_report.json").write_text("old-report", encoding="utf-8")
+
+    real_replace = os.replace
+    calls = {"failed_once": False}
+
+    def flaky_replace(src: object, dst: object) -> None:
+        if str(dst) == str(output_dir / "compilation_report.json") and not calls["failed_once"]:
+            calls["failed_once"] = True
+            raise OSError("simulated disk full while publishing compilation_report.json")
+        real_replace(src, dst)
+
+    monkeypatch.setattr("os.replace", flaky_replace)
+
+    with pytest.raises(OSError):
+        _atomic_publish_text_bundle(
+            output_dir,
+            {
+                "performance_package.json": "new-package",
+                "compilation_report.json": "new-report",
+            },
+            protected_inputs=[],
+        )
+
+    # package.json 側の rename は成功していたが、report.json 側の失敗を受けて
+    # 両方とも旧内容へロールバックされている（新 package だけが生き残らない）。
+    assert (output_dir / "performance_package.json").read_text(encoding="utf-8") == "old-package"
+    assert (output_dir / "compilation_report.json").read_text(encoding="utf-8") == "old-report"
+
+
 # --- deterministic: invoke + determinism ----------------------------------------
 
 
