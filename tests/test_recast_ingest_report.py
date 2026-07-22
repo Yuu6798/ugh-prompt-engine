@@ -104,10 +104,15 @@ def _synthesize_deterministic_take(project_path: Path) -> tuple[Path, str]:
     理由は `tests/test_recast_run_cli.py:test_e2e_manual_awaiting_generation_then_ingest_cli_reaches_generated`
     と同じ: `recast_plan.json` はプロジェクト単位の単一ファイルのため、CLI 経由で
     2 つ目の backend の plan を走らせると 1 つ目（`deterministic_manual`）の
-    `plan_sha256` を stale にしてしまう。"""
+    `plan_sha256` を stale にしてしまう（`recast_plan.json` 自体は CLI の
+    `_publish_recast_plan` だけが書く別の公開サイトであり、ここで渡す
+    `publish=True`（Codex P2, PR3 #208 指摘19 後の必須引数）は
+    `builds/packages/<variant>@<backend>/` への package 公開のみを指す —
+    同 helper が使うのと同じ precedent は
+    `tests/test_recast_run_cli.py` 496 行目参照）。"""
     loaded = load_recast_project(project_path)
     artifacts = build_recast_plan_artifacts(
-        loaded, variant="deterministic_e2e", backend="deterministic"
+        loaded, variant="deterministic_e2e", backend="deterministic", publish=True
     )
     assert artifacts.result.plan.state_reached == "verified", artifacts.result.text
     profile = load_backend_capability_profile(loaded, "deterministic")
