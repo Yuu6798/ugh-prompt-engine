@@ -118,6 +118,31 @@ def test_unresolved_author_field_blocks_authoring(tmp_path: Path) -> None:
     assert state_file.runs["edm@suno"].state == "blocked_authoring"
 
 
+def test_unresolved_structure_role_blocks_authoring(tmp_path: Path) -> None:
+    """`structure[].role` は semantic 層の外にある author 欄 — 全走査ゲートが
+    semantic 限定の旧実装を置換したことを検証する回帰テスト（Codex P2 #207）。"""
+    project_path = _copy_demo_project(tmp_path)
+    score_path = project_path.parent / "composition_score.yaml"
+    original = score_path.read_text(encoding="utf-8")
+    mutated = original.replace(
+        'role: "establish loneliness"',
+        'role: "TODO(transcribe): author input required"',
+    )
+    assert mutated != original  # sanity: the replacement actually matched
+    score_path.write_text(mutated, encoding="utf-8")
+
+    loaded = load_recast_project(project_path)
+    result = build_recast_plan(loaded, variant="edm", backend="suno")
+
+    assert result.plan.state_reached == "blocked_authoring"
+    assert result.plan.blocked is not None
+    assert result.plan.blocked.state == "blocked_authoring"
+    assert any("structure[0].role" in reason for reason in result.plan.blocked.reasons)
+
+    state_file = load_recast_state(loaded.project_dir)
+    assert state_file.runs["edm@suno"].state == "blocked_authoring"
+
+
 # --- scenario (b): blocked_capability via strict capability_mode ---------------
 
 

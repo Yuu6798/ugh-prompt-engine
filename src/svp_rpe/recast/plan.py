@@ -161,25 +161,29 @@ def _parse_yaml_mapping(raw_bytes: bytes, label: str, path_str: str) -> Dict[str
     return data
 
 
+def _collect_todo_sentinel_paths(value: Any, path: str, unresolved: List[str]) -> None:
+    """`value`（`CompositionScore.model_dump()` の canonical dump 断片）を再帰走査し、
+    `sentinels.is_todo_sentinel` に該当する文字列値の canonical path を `unresolved` へ
+    追記する。dict / list を降り、それ以外はリーフとして判定する（著者欄か計測欄かは
+    問わない — TODO が残る score は全面的に compile 不適格という fail-closed ゲート）。"""
+    if isinstance(value, dict):
+        for key, sub_value in value.items():
+            sub_path = f"{path}.{key}" if path else str(key)
+            _collect_todo_sentinel_paths(sub_value, sub_path, unresolved)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _collect_todo_sentinel_paths(item, f"{path}[{index}]", unresolved)
+    elif is_todo_sentinel(value):
+        unresolved.append(path)
+
+
 def _unresolved_author_field_paths(score: CompositionScore) -> List[str]:
-    """semantic 層（core / grv / delta_e / avoid / lyrics_presence）を走査し、
-    `sentinels.is_todo_sentinel` に該当する値が残っている canonical path 一覧を返す。
-    """
-    semantic = score.semantic
+    """`score` の canonical dump（`model_dump()`）全体を再帰走査し、
+    `sentinels.is_todo_sentinel` に該当する全ての文字列値を canonical path 付きで
+    返す — semantic 層に限らず structure[].role / structure[].physical を含む
+    score 全体が対象（1 件でも残っていれば compile 不適格）。"""
     unresolved: List[str] = []
-    if is_todo_sentinel(semantic.core):
-        unresolved.append("semantic.core")
-    if is_todo_sentinel(semantic.grv.primary):
-        unresolved.append("semantic.grv.primary")
-    if is_todo_sentinel(semantic.grv.secondary):
-        unresolved.append("semantic.grv.secondary")
-    if is_todo_sentinel(semantic.delta_e.overall):
-        unresolved.append("semantic.delta_e.overall")
-    for index, item in enumerate(semantic.avoid):
-        if is_todo_sentinel(item):
-            unresolved.append(f"semantic.avoid[{index}]")
-    if is_todo_sentinel(semantic.lyrics_presence):
-        unresolved.append("semantic.lyrics_presence")
+    _collect_todo_sentinel_paths(score.model_dump(), "", unresolved)
     return unresolved
 
 
