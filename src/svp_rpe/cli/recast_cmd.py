@@ -178,12 +178,23 @@ def recast_plan_cmd(
 
     from svp_rpe.arrange.resolver import ArrangementError
     from svp_rpe.recast import RecastError, load_recast_project
-    from svp_rpe.recast.plan import build_recast_plan
+    from svp_rpe.recast.plan import build_recast_plan_artifacts
     from svp_rpe.recast.state import record_state
 
     try:
         loaded = load_recast_project(project_yaml)
-        result = build_recast_plan(loaded, variant=variant, backend=backend)
+        # `publish=True`（Codex P2 review round 10, PR3 #208 指摘19）:
+        # `build_recast_plan`（読み取り専用の薄いラッパー、`publish=False`
+        # 固定）は「診断だけしたい」プログラム的呼び出し向けの API であり、
+        # `svprpe recast plan` CLI 自体は元々 package/report を builds_root
+        # へ永続公開する副作用込みの契約（`recast run`/`ingest` がそれを
+        # 再利用する設計の核）を持つ — CLI 3 コマンド（plan/run/ingest）は
+        # 明示的に `build_recast_plan_artifacts(..., publish=True)` を直接
+        # 呼ぶことでこの契約を保つ。
+        artifacts = build_recast_plan_artifacts(
+            loaded, variant=variant, backend=backend, publish=True
+        )
+        result = artifacts.result
     except (OSError, ValueError, ValidationError, yaml.YAMLError, RecastError, ArrangementError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -311,7 +322,9 @@ def recast_run_cmd(
 
     try:
         loaded = load_recast_project(project_yaml)
-        artifacts = build_recast_plan_artifacts(loaded, variant=variant, backend=backend)
+        artifacts = build_recast_plan_artifacts(
+            loaded, variant=variant, backend=backend, publish=True
+        )
     except (OSError, ValueError, ValidationError, yaml.YAMLError, RecastError, ArrangementError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -561,7 +574,9 @@ def recast_ingest_cmd(
         raise typer.Exit(code=1)
 
     try:
-        artifacts = build_recast_plan_artifacts(loaded, variant=variant, backend=backend)
+        artifacts = build_recast_plan_artifacts(
+            loaded, variant=variant, backend=backend, publish=True
+        )
     except (OSError, ValueError, ValidationError, yaml.YAMLError, RecastError, ArrangementError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc

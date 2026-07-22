@@ -181,20 +181,20 @@ def test_recast_plan_verification_staging_uses_builds_root(
     assert str(builds_root) not in plan_text  # staging パスが永続出力に混入しない
 
 
-def test_build_recast_plan_publishes_package_to_builds_root(tmp_path: Path) -> None:
-    """`build_recast_plan`（`build_recast_plan_artifacts` の薄いラッパー）を
-    API 直呼びし、`compiled`/`verified` 到達時に `builds_root/packages/
-    <variant>@<backend>/` へ package/report が実際に公開されることを検証する。
-
-    pr2 thirteenth round #207 指摘21（`build_recast_plan` が検証 staging の
-    ために builds_root を mkdir しており「ディスクへ副作用を持たない純粋
-    関数」契約に反する）は pr2 自身の実装に対する指摘であり、PR3 には
-    そのまま適用されない — PR3 の `build_recast_plan_artifacts` は元々
-    「plan JSON の publish/state 記録だけが CLI 側の責務」という契約で、
-    package/report の builds_root への永続公開は本関数自身が意図して持つ
-    副作用（モジュール docstring・`RecastPlanArtifacts` docstring に明記済み、
-    `recast/backend.py` がこの副作用の成果物を再利用する設計の核）。本テストは
-    その意図した挙動を positive に固定する回帰テスト。"""
+def test_build_recast_plan_does_not_create_builds_root(tmp_path: Path) -> None:
+    """`build_recast_plan`（`build_recast_plan_artifacts(..., publish=False)`
+    の薄いラッパー）を API 直呼びし、`compiled`/`verified` 到達時にも
+    `builds_root` へ一切触れない（ディレクトリすら作られない）ことを検証する
+    （Codex P2 review round 10, PR3 #208 指摘19: 読み取り専用を謳う
+    `build_recast_plan()` が内部で package/report を永続公開しており、
+    pr2 由来の「診断のみの純粋関数」契約に反していた。`publish` を
+    `build_recast_plan_artifacts` の必須引数として切り出し、
+    `build_recast_plan` は常に `publish=False` で呼ぶよう固定した — 公開を
+    伴う経路は `svprpe recast plan`/`run`/`ingest` の 3 CLI コマンドが直接
+    `build_recast_plan_artifacts(..., publish=True)` を呼ぶ形に限定する）。
+    `policy.require_verified_package` が真の demo project でも、検証用の
+    package/report は project_dir 配下の ephemeral tempdir だけに書かれ、
+    関数を抜けると跡形も残らない。"""
     from svp_rpe.recast import load_recast_project
     from svp_rpe.recast.plan import build_recast_plan
 
@@ -206,11 +206,40 @@ def test_build_recast_plan_publishes_package_to_builds_root(tmp_path: Path) -> N
     result = build_recast_plan(loaded, variant="edm", backend="suno")
 
     assert result.plan.state_reached == "verified"
-    package_dir = builds_root / "packages" / "edm@suno"
-    assert sorted(p.name for p in package_dir.iterdir()) == [
-        "compilation_report.json",
-        "performance_package.json",
-    ]
+    assert not builds_root.exists()  # build_recast_plan はディスクへ書き込まない
+
+
+def test_build_recast_plan_writes_nothing_when_verification_not_required(
+    tmp_path: Path,
+) -> None:
+    """`policy.require_verified_package: false` の project では
+    `build_recast_plan`（`publish=False`）が検証用の ephemeral tempdir すら
+    作らない — 真の意味で一切ディスクへ書き込まない純粋関数であることを
+    検証する（Codex P2 review round 10, PR3 #208 指摘19: `require_verified_
+    package` が真の場合のみ verify_package 用に ephemeral tempdir へ書く
+    設計だが、偽の場合は compile 結果を in-memory のまま使い、
+    ディスク書き込みが一切発生しないことも回帰対象に含める）。project_dir
+    直下のエントリ集合が呼び出し前後で完全に不変であることを確認する。"""
+    from svp_rpe.recast import load_recast_project
+    from svp_rpe.recast.plan import build_recast_plan
+
+    project_path = _copy_demo_project(tmp_path)
+    project_text = project_path.read_text(encoding="utf-8")
+    updated = project_text.replace(
+        "require_verified_package: true", "require_verified_package: false"
+    )
+    assert updated != project_text  # sanity
+    project_path.write_text(updated, encoding="utf-8")
+
+    project_dir = project_path.parent
+    before_entries = {entry.name for entry in project_dir.iterdir()}
+
+    loaded = load_recast_project(project_path)
+    result = build_recast_plan(loaded, variant="edm", backend="suno")
+
+    assert result.plan.state_reached == "compiled"
+    after_entries = {entry.name for entry in project_dir.iterdir()}
+    assert after_entries == before_entries  # 新規ファイル/ディレクトリが一切増えない
 
 
 def test_recast_plan_matches_committed_snapshot_via_cli(tmp_path: Path) -> None:

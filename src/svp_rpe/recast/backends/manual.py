@@ -8,7 +8,12 @@ Suno のような手動生成器固有の分岐は一切ここに持ち込まな
 `section_tags.txt` / `order_sheet.md` / `expected_artifacts.json` /
 `next_command.txt`）を全て決定論的に構築し（タイムスタンプなし・
 checkout-stable 相対パスのみ）、`<builds_root>/orders/<variant>@<backend>/`
-へ atomic 公開する（`cli/builds_root.py` の `_publish_artifacts_atomically`）。
+へ atomic 公開する（`recast/backend.py` の `atomic_publish_bytes_bundle` —
+Codex P2 ninth round #207 指摘17: 以前は `cli/builds_root.py:
+_publish_artifacts_atomically`（rename フェーズの rollback が `except
+OSError` のみ）に依存しており、rename 中の `KeyboardInterrupt`/`SystemExit`
+で 6 ファイルの一部だけが更新された状態が残り得た。`atomic_publish_bytes_
+bundle` は `except BaseException` で統一済み — PR3 #208 指摘 14 参照）。
 
 `invoke()` は常に `RecastError`（manual backend はローカル生成できない）。
 `collect()` は外部生成された音声を受領し、`<builds_root>/takes/<variant>@<backend>/`
@@ -21,14 +26,14 @@ import json
 import os
 import shlex
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
+from svp_rpe.arrange.package import ChannelArtifactReference
 from svp_rpe.arrange.pathsafe import resolve_confined
 from svp_rpe.arrange.section_map import (
     parse_section_map_artifact_0_1,
     parse_section_map_artifact_0_2,
 )
-from svp_rpe.cli.builds_root import _publish_artifacts_atomically
 from svp_rpe.recast.backend import (
     GeneratedTake,
     PreparedInvocation,
@@ -75,30 +80,86 @@ def _lyrics_text(prepared: PreparedInvocation, loaded: LoadedRecastProject) -> s
     refs = prepared.package.channel_artifacts.get("lyrics_text")
     if not refs:
         return _LYRICS_ANCHOR_PLACEHOLDER
-    artifact_path = resolve_confined(refs[0].artifact, _identity_manifest_dir(loaded))
-    text = artifact_path.read_text(encoding="utf-8")
-    return text if text.endswith("\n") else text + "\n"
-
-
-def _section_tags_text(prepared: PreparedInvocation, loaded: LoadedRecastProject) -> str:
-    prompt = prepared.package.prompt
-    if prompt is not None and prompt.section_tags:
-        return prompt.section_tags if prompt.section_tags.endswith("\n") else prompt.section_tags + "\n"
-
-    refs = prepared.package.channel_artifacts.get("section_tags")
-    if refs:
+    # 全 refs を package 内の順（`channel_artifacts` のリスト順）のまま描画する
+    # （Codex P2 ninth round #207 指摘18: 従来は `refs[0]` のみを読んでおり、
+    # 複数 lyrics anchor を preserve する project では 2 件目以降を黙って
+    # 落としていた — plan/package は全 anchor を delivered と報告しているのに
+    # manual generator へ渡る `lyrics.txt` には最初の 1 件しか現れず、
+    # hard-preservation な後続 anchor が生成へ反映されない事故を招いた）。
+    # 単一 ref のときは従来どおり見出しなしのプレーンテキスト（既存 snapshot
+    # との互換）、複数のときのみ `anchor_id` 見出しで連結する。
+    if len(refs) == 1:
         artifact_path = resolve_confined(refs[0].artifact, _identity_manifest_dir(loaded))
+        text = artifact_path.read_text(encoding="utf-8")
+        return text if text.endswith("\n") else text + "\n"
+
+    sections: list[str] = []
+    for ref in refs:
+        artifact_path = resolve_confined(ref.artifact, _identity_manifest_dir(loaded))
+        text = artifact_path.read_text(encoding="utf-8")
+        text = text if text.endswith("\n") else text + "\n"
+        sections.append(f"# {ref.anchor_id}\n\n{text}")
+    return "\n".join(sections)
+
+
+def _channel_artifact_refs_section_tags_text(
+    refs: List[ChannelArtifactReference], loaded: LoadedRecastProject
+) -> Optional[str]:
+    """`channel_artifacts["section_tags"]` の全 refs を package 内の順のまま
+    描画する（Codex P2 ninth round #207 指摘18 と同じ全数描画の原則を
+    section_tags にも適用）。単一 ref は従来どおり見出しなし、複数は
+    `anchor_id` 見出しで連結する。パース不能な ref（v0.1/v0.2 いずれの section
+    map schema にも該当しない）は静かに読み飛ばす（従来の単一 ref 実装と
+    同じ寛容さを維持）。1 件も解釈できなければ `None`（呼び出し側が
+    prompt.section_tags → placeholder へフォールバックする）。"""
+
+    def _render_one(ref: ChannelArtifactReference) -> Optional[str]:
+        artifact_path = resolve_confined(ref.artifact, _identity_manifest_dir(loaded))
         raw = artifact_path.read_bytes()
         try:
             v2 = parse_section_map_artifact_0_2(raw, artifact_path=artifact_path)
-            return ", ".join(f"{entry.id}:{entry.label}" for entry in v2.sections) + "\n"
+            return ", ".join(f"{entry.id}:{entry.label}" for entry in v2.sections)
         except ValueError:
             pass
         try:
             v1 = parse_section_map_artifact_0_1(raw, artifact_path=artifact_path)
-            return ", ".join(v1.sections) + "\n"
+            return ", ".join(v1.sections)
         except ValueError:
             pass
+        return None
+
+    if len(refs) == 1:
+        rendered = _render_one(refs[0])
+        return None if rendered is None else rendered + "\n"
+
+    sections: list[str] = []
+    for ref in refs:
+        rendered = _render_one(ref)
+        if rendered is None:
+            continue
+        sections.append(f"# {ref.anchor_id}\n\n{rendered}\n")
+    return "\n".join(sections) if sections else None
+
+
+def _section_tags_text(prepared: PreparedInvocation, loaded: LoadedRecastProject) -> str:
+    # 優先順（Codex P2 ninth round #207 指摘20）: 配送済み channel artifact
+    # refs（hard 保存された実 section_map）→ 無ければ prompt.section_tags
+    # （derived score が生成した advisory 値）→ どちらも無ければプレース
+    # ホルダー。従来は prompt.section_tags を無条件に先に採用しており、
+    # channel_artifacts["section_tags"] に実際に delivered な section_map
+    # （hard anchor の実体）があってもそちらを一切読んでいなかった —
+    # 「plan は delivered と報告するのに manual generator へ渡る
+    # section_tags.txt には反映されない」という指摘18と同型の欠落だった。
+    refs = prepared.package.channel_artifacts.get("section_tags")
+    if refs:
+        rendered = _channel_artifact_refs_section_tags_text(refs, loaded)
+        if rendered is not None:
+            return rendered
+
+    prompt = prepared.package.prompt
+    if prompt is not None and prompt.section_tags:
+        return prompt.section_tags if prompt.section_tags.endswith("\n") else prompt.section_tags + "\n"
+
     return _SECTION_TAGS_PLACEHOLDER
 
 
@@ -246,8 +307,18 @@ class ManualInvoker:
         # 対象だった）。`prepared.protected_input_paths` は
         # `base_prepared_invocation` が計算済みの同じ値 — ここで再計算しない
         # single source（指摘 6/7 対応で全公開サイト共通化）。
-        _publish_artifacts_atomically(
-            contents, prepared.order_dir, prepared.protected_input_paths
+        #
+        # `atomic_publish_bytes_bundle`（BaseException-safe rollback、PR3
+        # #208 指摘 14）で公開する — 従来の `_publish_artifacts_atomically`
+        # は rename フェーズの rollback が `except OSError` のみで、
+        # KeyboardInterrupt/SystemExit 系だと 6 ファイルの一部だけが更新
+        # された状態が残り得た（指摘17）。同関数は bytes 契約のため、text
+        # コンテンツは呼び出し側で 1 回だけ encode する（pr2 abc2350 と同じ
+        # 単一 encode 原則 — hash 突合の対象ではないここでも一貫させる）。
+        atomic_publish_bytes_bundle(
+            prepared.order_dir,
+            {name: content.encode("utf-8") for name, content in contents.items()},
+            protected_inputs=prepared.protected_input_paths,
         )
         return prepared
 

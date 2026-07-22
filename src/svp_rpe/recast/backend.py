@@ -114,8 +114,13 @@ def build_recast_run_context(
 ) -> RecastRunContext:
     """`build_recast_plan_artifacts` を 1 回だけ呼び、`RecastRunContext` を組み立てる
     利便関数（テスト・非 CLI 呼び出し向け）。`recast run` CLI は plan 診断表示を
-    共有するため `run_context_from_plan_artifacts` を直接使う。"""
-    artifacts = build_recast_plan_artifacts(loaded, variant=variant, backend=backend)
+    共有するため `run_context_from_plan_artifacts` を直接使う。`publish=True`
+    で呼ぶ — CLI の `recast run` と同じく package/report を builds_root へ
+    永続公開する経路を再現する（PR3 #208 指摘19: `build_recast_plan_
+    artifacts` は `publish` が必須引数になった）。"""
+    artifacts = build_recast_plan_artifacts(
+        loaded, variant=variant, backend=backend, publish=True
+    )
     profile = load_backend_capability_profile(loaded, backend)
     return run_context_from_plan_artifacts(
         loaded, variant=variant, backend=backend, artifacts=artifacts, profile=profile

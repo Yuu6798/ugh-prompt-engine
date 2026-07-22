@@ -490,7 +490,7 @@ def test_e2e_manual_awaiting_generation_then_ingest_cli_reaches_generated(
     # (Suno UI, not this repo's own CLI) must not do.
     loaded = load_recast_project(project_path)
     det_artifacts = build_recast_plan_artifacts(
-        loaded, variant="edm_deterministic", backend="deterministic"
+        loaded, variant="edm_deterministic", backend="deterministic", publish=True
     )
     assert det_artifacts.result.plan.state_reached in ("compiled", "verified")
     det_profile = load_backend_capability_profile(loaded, "deterministic")
