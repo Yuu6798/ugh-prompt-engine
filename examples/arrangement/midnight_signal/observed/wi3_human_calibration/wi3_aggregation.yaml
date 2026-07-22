@@ -1,0 +1,1432 @@
+schema_version: '1.0'
+harness: wi3_human_calibration
+generated_by: mechanical aggregation per wi3_preregistration.yaml §4 pair_level_prediction_rule (no interpretation
+  applied)
+inputs:
+  preregistration: examples/arrangement/midnight_signal/observed/wi3_human_calibration/wi3_preregistration.yaml
+  responses: examples/arrangement/midnight_signal/observed/wi3_human_calibration/wi3_responses.yaml
+  pair_mapping_sealed: examples/arrangement/midnight_signal/observed/wi3_human_calibration/wi3_pair_mapping.sealed.yaml
+  wi2_rank_reports: examples/arrangement/midnight_signal/observed/wi2_discrimination/wi2_rank_{A,C,D}_take{0-3}.json
+    (12 files)
+  # PR #202 Codex P2 是正 (2026-07-22): 元は scratchpad/wi3_identity_rank/synth_{faithful_take,first_take}_rank.json
+  # (this session's scratchpad, 非コミット) を指していたため fresh checkout から再検証不能だった。
+  # wi3_rank_synth_{faithful,first_take}.json として本ディレクトリに commit し、パスをそちらへ更新した
+  # (レポート内容は audio_file フィールド以外バイト単位で不変 — wi3_rank_synth_provenance.yaml 参照)。
+  synth_rank_reports: 'examples/arrangement/midnight_signal/observed/wi3_human_calibration/wi3_rank_synth_{faithful,first_take}.json
+    (2 files, committed fixture; provenance sidecar: wi3_rank_synth_provenance.yaml)'
+response_pair_label_note: wi3_responses.yaml の pairNN ラベルは提示順（presentation_slot、キット ファイル名 pairNN_{A,B}.wav）であり、事前登録・封印ファイルの
+  pair_id (p01..p12, タスクブリーフのペア表順) とは別の軸。wi3_pair_mapping.sealed.yaml の presentation_order_pair_ids で変換した。
+verdict_yaml_boolean_note: 'wi3_responses.yaml の `verdict: yes|no` は PyYAML の既定 (YAML 1.1) resolver がベア
+  yes/no を bool にコアーションするため yaml.safe_load 直後は True/False になる。集計スクリプトで yes<-True / no<-False に 明示的に正規化してから使用した（生の
+  bool のまま人間 verdict と比較すると 全ペアが一致しない誤集計になる既知の落とし穴）。'
+material_axis_rank1:
+  synth_faithful:
+    structure:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'structure_destroyed']
+    harmony:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy']
+    key:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'structure_destroyed']
+    bpm:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'structure_destroyed']
+    brightness:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'other_work', 'structure_destroyed']
+  synth_first_take:
+    structure:
+      status: unique
+      rank1_ref: structure_destroyed
+      reason: null
+    harmony:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy']
+    key:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'other_work', 'structure_destroyed']
+    bpm:
+      status: unique
+      rank1_ref: other_work
+      reason: null
+    brightness:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'other_work', 'structure_destroyed']
+  wi2_A_take0:
+    structure:
+      status: unique
+      rank1_ref: other_work
+      reason: null
+    harmony:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy']
+    key:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'other_work', 'structure_destroyed']
+    bpm:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'structure_destroyed']
+    brightness:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'other_work', 'structure_destroyed']
+  wi2_A_take1:
+    structure:
+      status: unique
+      rank1_ref: other_work
+      reason: null
+    harmony:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy']
+    key:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'structure_destroyed']
+    bpm:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'structure_destroyed']
+    brightness:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'other_work', 'structure_destroyed']
+  wi2_A_take2:
+    structure:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy']
+    harmony:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy']
+    key:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'other_work', 'structure_destroyed']
+    bpm:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'structure_destroyed']
+    brightness:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'other_work', 'structure_destroyed']
+  wi2_A_take3:
+    structure:
+      status: unique
+      rank1_ref: other_work
+      reason: null
+    harmony:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy']
+    key:
+      status: unique
+      rank1_ref: other_work
+      reason: null
+    bpm:
+      status: unique
+      rank1_ref: other_work
+      reason: null
+    brightness:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'other_work', 'structure_destroyed']
+  wi2_C_take0:
+    structure:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'structure_destroyed']
+    harmony:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy']
+    key:
+      status: unique
+      rank1_ref: other_work
+      reason: null
+    bpm:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'structure_destroyed']
+    brightness:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'other_work', 'structure_destroyed']
+  wi2_C_take1:
+    structure:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'structure_destroyed']
+    harmony:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy']
+    key:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'other_work', 'structure_destroyed']
+    bpm:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'structure_destroyed']
+    brightness:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'other_work', 'structure_destroyed']
+  wi2_C_take2:
+    structure:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'structure_destroyed']
+    harmony:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy']
+    key:
+      status: unique
+      rank1_ref: other_work
+      reason: null
+    bpm:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'structure_destroyed']
+    brightness:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'other_work', 'structure_destroyed']
+  wi2_C_take3:
+    structure:
+      status: unique
+      rank1_ref: other_work
+      reason: null
+    harmony:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy']
+    key:
+      status: unique
+      rank1_ref: other_work
+      reason: null
+    bpm:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'structure_destroyed']
+    brightness:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'other_work', 'structure_destroyed']
+  wi2_D_take0:
+    structure:
+      status: unique
+      rank1_ref: other_work
+      reason: null
+    harmony:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy']
+    key:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'structure_destroyed']
+    bpm:
+      status: unique
+      rank1_ref: other_work
+      reason: null
+    brightness:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'other_work', 'structure_destroyed']
+  wi2_D_take1:
+    structure:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'structure_destroyed']
+    harmony:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy']
+    key:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'structure_destroyed']
+    bpm:
+      status: unique
+      rank1_ref: other_work
+      reason: null
+    brightness:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'other_work', 'structure_destroyed']
+  wi2_D_take2:
+    structure:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'structure_destroyed']
+    harmony:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy']
+    key:
+      status: unique
+      rank1_ref: other_work
+      reason: null
+    bpm:
+      status: unique
+      rank1_ref: other_work
+      reason: null
+    brightness:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'other_work', 'structure_destroyed']
+  wi2_D_take3:
+    structure:
+      status: unique
+      rank1_ref: other_work
+      reason: null
+    harmony:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy']
+    key:
+      status: unique
+      rank1_ref: other_work
+      reason: null
+    bpm:
+      status: unique
+      rank1_ref: other_work
+      reason: null
+    brightness:
+      status: tie
+      rank1_ref: null
+      reason: tied_with=['harmony_decoy', 'other_work', 'structure_destroyed']
+pair_level_predictions:
+- pair_id: p01
+  cat: P1
+  presentation_slot: 2
+  x_material: wi2_A_take0
+  y_material: wi2_A_take2
+  human_verdict: 'no'
+  human_confidence: 2
+  axes:
+    structure:
+      x_rank1_status: unique
+      x_rank1_ref: other_work
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: y=wi2_A_take2:tie(rank-1 tied with ['harmony_decoy'])
+      human_prediction_equiv: different
+      outcome: abstain
+    harmony:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_A_take0:tie(rank-1 tied with ['harmony_decoy']); y=wi2_A_take2:tie(rank-1
+        tied with ['harmony_decoy'])
+      human_prediction_equiv: different
+      outcome: abstain
+    key:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_A_take0:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=wi2_A_take2:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+    bpm:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_A_take0:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed']); y=wi2_A_take2:tie(rank-1
+        tied with ['harmony_decoy', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+    brightness:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_A_take0:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=wi2_A_take2:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+- pair_id: p02
+  cat: P1
+  presentation_slot: 11
+  x_material: wi2_D_take0
+  y_material: wi2_D_take2
+  human_verdict: 'yes'
+  human_confidence: 2
+  axes:
+    structure:
+      x_rank1_status: unique
+      x_rank1_ref: other_work
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: y=wi2_D_take2:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+      human_prediction_equiv: same
+      outcome: abstain
+    harmony:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_D_take0:tie(rank-1 tied with ['harmony_decoy']); y=wi2_D_take2:tie(rank-1
+        tied with ['harmony_decoy'])
+      human_prediction_equiv: same
+      outcome: abstain
+    key:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: unique
+      y_rank1_ref: other_work
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_D_take0:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+      human_prediction_equiv: same
+      outcome: abstain
+    bpm:
+      x_rank1_status: unique
+      x_rank1_ref: other_work
+      y_rank1_status: unique
+      y_rank1_ref: other_work
+      prediction: same
+      abstain: false
+      abstain_reason: null
+      human_prediction_equiv: same
+      outcome: match
+    brightness:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_D_take0:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=wi2_D_take2:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+      human_prediction_equiv: same
+      outcome: abstain
+- pair_id: p03
+  cat: P2
+  presentation_slot: 8
+  x_material: wi2_A_take0
+  y_material: wi2_C_take0
+  human_verdict: 'no'
+  human_confidence: 3
+  axes:
+    structure:
+      x_rank1_status: unique
+      x_rank1_ref: other_work
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: y=wi2_C_take0:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+    harmony:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_A_take0:tie(rank-1 tied with ['harmony_decoy']); y=wi2_C_take0:tie(rank-1
+        tied with ['harmony_decoy'])
+      human_prediction_equiv: different
+      outcome: abstain
+    key:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: unique
+      y_rank1_ref: other_work
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_A_take0:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+    bpm:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_A_take0:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed']); y=wi2_C_take0:tie(rank-1
+        tied with ['harmony_decoy', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+    brightness:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_A_take0:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=wi2_C_take0:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+- pair_id: p04
+  cat: P2
+  presentation_slot: 3
+  x_material: wi2_A_take1
+  y_material: wi2_C_take2
+  human_verdict: 'no'
+  human_confidence: 4
+  axes:
+    structure:
+      x_rank1_status: unique
+      x_rank1_ref: other_work
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: y=wi2_C_take2:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+    harmony:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_A_take1:tie(rank-1 tied with ['harmony_decoy']); y=wi2_C_take2:tie(rank-1
+        tied with ['harmony_decoy'])
+      human_prediction_equiv: different
+      outcome: abstain
+    key:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: unique
+      y_rank1_ref: other_work
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_A_take1:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+    bpm:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_A_take1:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed']); y=wi2_C_take2:tie(rank-1
+        tied with ['harmony_decoy', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+    brightness:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_A_take1:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=wi2_C_take2:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+- pair_id: p05
+  cat: P2
+  presentation_slot: 1
+  x_material: wi2_A_take2
+  y_material: wi2_C_take1
+  human_verdict: 'no'
+  human_confidence: 3
+  axes:
+    structure:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_A_take2:tie(rank-1 tied with ['harmony_decoy']); y=wi2_C_take1:tie(rank-1
+        tied with ['harmony_decoy', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+    harmony:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_A_take2:tie(rank-1 tied with ['harmony_decoy']); y=wi2_C_take1:tie(rank-1
+        tied with ['harmony_decoy'])
+      human_prediction_equiv: different
+      outcome: abstain
+    key:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_A_take2:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=wi2_C_take1:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+    bpm:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_A_take2:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed']); y=wi2_C_take1:tie(rank-1
+        tied with ['harmony_decoy', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+    brightness:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_A_take2:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=wi2_C_take1:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+- pair_id: p06
+  cat: P3
+  presentation_slot: 7
+  x_material: wi2_A_take0
+  y_material: wi2_D_take1
+  human_verdict: 'no'
+  human_confidence: 5
+  axes:
+    structure:
+      x_rank1_status: unique
+      x_rank1_ref: other_work
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: y=wi2_D_take1:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+    harmony:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_A_take0:tie(rank-1 tied with ['harmony_decoy']); y=wi2_D_take1:tie(rank-1
+        tied with ['harmony_decoy'])
+      human_prediction_equiv: different
+      outcome: abstain
+    key:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_A_take0:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=wi2_D_take1:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+    bpm:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: unique
+      y_rank1_ref: other_work
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_A_take0:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+    brightness:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_A_take0:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=wi2_D_take1:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+- pair_id: p07
+  cat: P3
+  presentation_slot: 9
+  x_material: wi2_A_take3
+  y_material: wi2_D_take0
+  human_verdict: 'no'
+  human_confidence: 3
+  axes:
+    structure:
+      x_rank1_status: unique
+      x_rank1_ref: other_work
+      y_rank1_status: unique
+      y_rank1_ref: other_work
+      prediction: same
+      abstain: false
+      abstain_reason: null
+      human_prediction_equiv: different
+      outcome: mismatch
+    harmony:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_A_take3:tie(rank-1 tied with ['harmony_decoy']); y=wi2_D_take0:tie(rank-1
+        tied with ['harmony_decoy'])
+      human_prediction_equiv: different
+      outcome: abstain
+    key:
+      x_rank1_status: unique
+      x_rank1_ref: other_work
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: y=wi2_D_take0:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+    bpm:
+      x_rank1_status: unique
+      x_rank1_ref: other_work
+      y_rank1_status: unique
+      y_rank1_ref: other_work
+      prediction: same
+      abstain: false
+      abstain_reason: null
+      human_prediction_equiv: different
+      outcome: mismatch
+    brightness:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_A_take3:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=wi2_D_take0:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+- pair_id: p08
+  cat: P3
+  presentation_slot: 4
+  x_material: wi2_C_take2
+  y_material: wi2_D_take3
+  human_verdict: 'no'
+  human_confidence: 1
+  axes:
+    structure:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: unique
+      y_rank1_ref: other_work
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_C_take2:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+    harmony:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_C_take2:tie(rank-1 tied with ['harmony_decoy']); y=wi2_D_take3:tie(rank-1
+        tied with ['harmony_decoy'])
+      human_prediction_equiv: different
+      outcome: abstain
+    key:
+      x_rank1_status: unique
+      x_rank1_ref: other_work
+      y_rank1_status: unique
+      y_rank1_ref: other_work
+      prediction: same
+      abstain: false
+      abstain_reason: null
+      human_prediction_equiv: different
+      outcome: mismatch
+    bpm:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: unique
+      y_rank1_ref: other_work
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_C_take2:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+    brightness:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_C_take2:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=wi2_D_take3:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+- pair_id: p09
+  cat: P4
+  presentation_slot: 12
+  x_material: synth_faithful
+  y_material: wi2_A_take1
+  human_verdict: 'no'
+  human_confidence: 4
+  axes:
+    structure:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: unique
+      y_rank1_ref: other_work
+      prediction: null
+      abstain: true
+      abstain_reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+    harmony:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy']); y=wi2_A_take1:tie(rank-1
+        tied with ['harmony_decoy'])
+      human_prediction_equiv: different
+      outcome: abstain
+    key:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed']);
+        y=wi2_A_take1:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+    bpm:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed']);
+        y=wi2_A_take1:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+    brightness:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=wi2_A_take1:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+- pair_id: p10
+  cat: P4
+  presentation_slot: 6
+  x_material: synth_faithful
+  y_material: synth_first_take
+  human_verdict: 'yes'
+  human_confidence: 1
+  axes:
+    structure:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: unique
+      y_rank1_ref: structure_destroyed
+      prediction: null
+      abstain: true
+      abstain_reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+      human_prediction_equiv: same
+      outcome: abstain
+    harmony:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy']); y=synth_first_take:tie(rank-1
+        tied with ['harmony_decoy'])
+      human_prediction_equiv: same
+      outcome: abstain
+    key:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed']);
+        y=synth_first_take:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+      human_prediction_equiv: same
+      outcome: abstain
+    bpm:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: unique
+      y_rank1_ref: other_work
+      prediction: null
+      abstain: true
+      abstain_reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+      human_prediction_equiv: same
+      outcome: abstain
+    brightness:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=synth_first_take:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+      human_prediction_equiv: same
+      outcome: abstain
+- pair_id: p11
+  cat: P4
+  presentation_slot: 10
+  x_material: synth_faithful
+  y_material: wi2_D_take2
+  human_verdict: 'no'
+  human_confidence: 5
+  axes:
+    structure:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed']);
+        y=wi2_D_take2:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+    harmony:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy']); y=wi2_D_take2:tie(rank-1
+        tied with ['harmony_decoy'])
+      human_prediction_equiv: different
+      outcome: abstain
+    key:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: unique
+      y_rank1_ref: other_work
+      prediction: null
+      abstain: true
+      abstain_reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+    bpm:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: unique
+      y_rank1_ref: other_work
+      prediction: null
+      abstain: true
+      abstain_reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+    brightness:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=wi2_D_take2:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+      human_prediction_equiv: different
+      outcome: abstain
+- pair_id: p12
+  cat: P2
+  presentation_slot: 5
+  x_material: wi2_A_take3
+  y_material: wi2_C_take3
+  human_verdict: 'yes'
+  human_confidence: 1
+  axes:
+    structure:
+      x_rank1_status: unique
+      x_rank1_ref: other_work
+      y_rank1_status: unique
+      y_rank1_ref: other_work
+      prediction: same
+      abstain: false
+      abstain_reason: null
+      human_prediction_equiv: same
+      outcome: match
+    harmony:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_A_take3:tie(rank-1 tied with ['harmony_decoy']); y=wi2_C_take3:tie(rank-1
+        tied with ['harmony_decoy'])
+      human_prediction_equiv: same
+      outcome: abstain
+    key:
+      x_rank1_status: unique
+      x_rank1_ref: other_work
+      y_rank1_status: unique
+      y_rank1_ref: other_work
+      prediction: same
+      abstain: false
+      abstain_reason: null
+      human_prediction_equiv: same
+      outcome: match
+    bpm:
+      x_rank1_status: unique
+      x_rank1_ref: other_work
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: y=wi2_C_take3:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+      human_prediction_equiv: same
+      outcome: abstain
+    brightness:
+      x_rank1_status: tie
+      x_rank1_ref: null
+      y_rank1_status: tie
+      y_rank1_ref: null
+      prediction: null
+      abstain: true
+      abstain_reason: x=wi2_A_take3:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=wi2_C_take3:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+      human_prediction_equiv: same
+      outcome: abstain
+axis_summary:
+  structure:
+    n_decidable_pairs: 2
+    n_correct: 1
+    n_errors: 1
+    n_abstain: 10
+    errors:
+    - pair_id: p07
+      cat: P3
+      prediction: same
+      human_verdict: 'no'
+      human_confidence: 3
+      x_material: wi2_A_take3
+      x_ref: other_work
+      y_material: wi2_D_take0
+      y_ref: other_work
+    abstains:
+    - pair_id: p01
+      cat: P1
+      reason: y=wi2_A_take2:tie(rank-1 tied with ['harmony_decoy'])
+    - pair_id: p02
+      cat: P1
+      reason: y=wi2_D_take2:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+    - pair_id: p03
+      cat: P2
+      reason: y=wi2_C_take0:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+    - pair_id: p04
+      cat: P2
+      reason: y=wi2_C_take2:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+    - pair_id: p05
+      cat: P2
+      reason: x=wi2_A_take2:tie(rank-1 tied with ['harmony_decoy']); y=wi2_C_take1:tie(rank-1 tied with
+        ['harmony_decoy', 'structure_destroyed'])
+    - pair_id: p06
+      cat: P3
+      reason: y=wi2_D_take1:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+    - pair_id: p08
+      cat: P3
+      reason: x=wi2_C_take2:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+    - pair_id: p09
+      cat: P4
+      reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+    - pair_id: p10
+      cat: P4
+      reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+    - pair_id: p11
+      cat: P4
+      reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed']); y=wi2_D_take2:tie(rank-1
+        tied with ['harmony_decoy', 'structure_destroyed'])
+    p1_pair_status:
+      p01: abstain
+      p02: abstain
+    p1_all_correctly_classified: false
+    p3_pair_status:
+      p06: abstain
+      p07: mismatch
+      p08: abstain
+    p3_all_correctly_classified: false
+    proxy_v0_adoption_condition_met: false
+    proxy_v0_note: null
+  harmony:
+    n_decidable_pairs: 0
+    n_correct: 0
+    n_errors: 0
+    n_abstain: 12
+    errors: []
+    abstains:
+    - pair_id: p01
+      cat: P1
+      reason: x=wi2_A_take0:tie(rank-1 tied with ['harmony_decoy']); y=wi2_A_take2:tie(rank-1 tied with
+        ['harmony_decoy'])
+    - pair_id: p02
+      cat: P1
+      reason: x=wi2_D_take0:tie(rank-1 tied with ['harmony_decoy']); y=wi2_D_take2:tie(rank-1 tied with
+        ['harmony_decoy'])
+    - pair_id: p03
+      cat: P2
+      reason: x=wi2_A_take0:tie(rank-1 tied with ['harmony_decoy']); y=wi2_C_take0:tie(rank-1 tied with
+        ['harmony_decoy'])
+    - pair_id: p04
+      cat: P2
+      reason: x=wi2_A_take1:tie(rank-1 tied with ['harmony_decoy']); y=wi2_C_take2:tie(rank-1 tied with
+        ['harmony_decoy'])
+    - pair_id: p05
+      cat: P2
+      reason: x=wi2_A_take2:tie(rank-1 tied with ['harmony_decoy']); y=wi2_C_take1:tie(rank-1 tied with
+        ['harmony_decoy'])
+    - pair_id: p06
+      cat: P3
+      reason: x=wi2_A_take0:tie(rank-1 tied with ['harmony_decoy']); y=wi2_D_take1:tie(rank-1 tied with
+        ['harmony_decoy'])
+    - pair_id: p07
+      cat: P3
+      reason: x=wi2_A_take3:tie(rank-1 tied with ['harmony_decoy']); y=wi2_D_take0:tie(rank-1 tied with
+        ['harmony_decoy'])
+    - pair_id: p08
+      cat: P3
+      reason: x=wi2_C_take2:tie(rank-1 tied with ['harmony_decoy']); y=wi2_D_take3:tie(rank-1 tied with
+        ['harmony_decoy'])
+    - pair_id: p09
+      cat: P4
+      reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy']); y=wi2_A_take1:tie(rank-1 tied
+        with ['harmony_decoy'])
+    - pair_id: p10
+      cat: P4
+      reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy']); y=synth_first_take:tie(rank-1
+        tied with ['harmony_decoy'])
+    - pair_id: p11
+      cat: P4
+      reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy']); y=wi2_D_take2:tie(rank-1 tied
+        with ['harmony_decoy'])
+    - pair_id: p12
+      cat: P2
+      reason: x=wi2_A_take3:tie(rank-1 tied with ['harmony_decoy']); y=wi2_C_take3:tie(rank-1 tied with
+        ['harmony_decoy'])
+    p1_pair_status:
+      p01: abstain
+      p02: abstain
+    p1_all_correctly_classified: false
+    p3_pair_status:
+      p06: abstain
+      p07: abstain
+      p08: abstain
+    p3_all_correctly_classified: false
+    proxy_v0_adoption_condition_met: false
+    proxy_v0_note: null
+    coverage_note: P1/P3 の全ペアで当該軸が tie により棄権（判定可能ペア 0 件）。誤り数 0 は判定可能ペアが存在しないことによる vacuous な結果であり、proxy
+      v0 採用条件 (a)(b) の実質的な充足ではない（(b) は「正しく分類」を要求しており、棄権は分類していない）。よって不採用として扱う。
+  key:
+    n_decidable_pairs: 2
+    n_correct: 1
+    n_errors: 1
+    n_abstain: 10
+    errors:
+    - pair_id: p08
+      cat: P3
+      prediction: same
+      human_verdict: 'no'
+      human_confidence: 1
+      x_material: wi2_C_take2
+      x_ref: other_work
+      y_material: wi2_D_take3
+      y_ref: other_work
+    abstains:
+    - pair_id: p01
+      cat: P1
+      reason: x=wi2_A_take0:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=wi2_A_take2:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+    - pair_id: p02
+      cat: P1
+      reason: x=wi2_D_take0:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+    - pair_id: p03
+      cat: P2
+      reason: x=wi2_A_take0:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+    - pair_id: p04
+      cat: P2
+      reason: x=wi2_A_take1:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+    - pair_id: p05
+      cat: P2
+      reason: x=wi2_A_take2:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=wi2_C_take1:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+    - pair_id: p06
+      cat: P3
+      reason: x=wi2_A_take0:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=wi2_D_take1:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+    - pair_id: p07
+      cat: P3
+      reason: y=wi2_D_take0:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+    - pair_id: p09
+      cat: P4
+      reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed']); y=wi2_A_take1:tie(rank-1
+        tied with ['harmony_decoy', 'structure_destroyed'])
+    - pair_id: p10
+      cat: P4
+      reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed']); y=synth_first_take:tie(rank-1
+        tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+    - pair_id: p11
+      cat: P4
+      reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+    p1_pair_status:
+      p01: abstain
+      p02: abstain
+    p1_all_correctly_classified: false
+    p3_pair_status:
+      p06: abstain
+      p07: abstain
+      p08: mismatch
+    p3_all_correctly_classified: false
+    proxy_v0_adoption_condition_met: false
+    proxy_v0_note: null
+  bpm:
+    n_decidable_pairs: 2
+    n_correct: 1
+    n_errors: 1
+    n_abstain: 10
+    errors:
+    - pair_id: p07
+      cat: P3
+      prediction: same
+      human_verdict: 'no'
+      human_confidence: 3
+      x_material: wi2_A_take3
+      x_ref: other_work
+      y_material: wi2_D_take0
+      y_ref: other_work
+    abstains:
+    - pair_id: p01
+      cat: P1
+      reason: x=wi2_A_take0:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed']); y=wi2_A_take2:tie(rank-1
+        tied with ['harmony_decoy', 'structure_destroyed'])
+    - pair_id: p03
+      cat: P2
+      reason: x=wi2_A_take0:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed']); y=wi2_C_take0:tie(rank-1
+        tied with ['harmony_decoy', 'structure_destroyed'])
+    - pair_id: p04
+      cat: P2
+      reason: x=wi2_A_take1:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed']); y=wi2_C_take2:tie(rank-1
+        tied with ['harmony_decoy', 'structure_destroyed'])
+    - pair_id: p05
+      cat: P2
+      reason: x=wi2_A_take2:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed']); y=wi2_C_take1:tie(rank-1
+        tied with ['harmony_decoy', 'structure_destroyed'])
+    - pair_id: p06
+      cat: P3
+      reason: x=wi2_A_take0:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+    - pair_id: p08
+      cat: P3
+      reason: x=wi2_C_take2:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+    - pair_id: p09
+      cat: P4
+      reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed']); y=wi2_A_take1:tie(rank-1
+        tied with ['harmony_decoy', 'structure_destroyed'])
+    - pair_id: p10
+      cat: P4
+      reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+    - pair_id: p11
+      cat: P4
+      reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+    - pair_id: p12
+      cat: P2
+      reason: y=wi2_C_take3:tie(rank-1 tied with ['harmony_decoy', 'structure_destroyed'])
+    p1_pair_status:
+      p01: abstain
+      p02: match
+    p1_all_correctly_classified: false
+    p3_pair_status:
+      p06: abstain
+      p07: mismatch
+      p08: abstain
+    p3_all_correctly_classified: false
+    proxy_v0_adoption_condition_met: false
+    proxy_v0_note: null
+  brightness:
+    n_decidable_pairs: 0
+    n_correct: 0
+    n_errors: 0
+    n_abstain: 12
+    errors: []
+    abstains:
+    - pair_id: p01
+      cat: P1
+      reason: x=wi2_A_take0:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=wi2_A_take2:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+    - pair_id: p02
+      cat: P1
+      reason: x=wi2_D_take0:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=wi2_D_take2:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+    - pair_id: p03
+      cat: P2
+      reason: x=wi2_A_take0:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=wi2_C_take0:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+    - pair_id: p04
+      cat: P2
+      reason: x=wi2_A_take1:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=wi2_C_take2:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+    - pair_id: p05
+      cat: P2
+      reason: x=wi2_A_take2:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=wi2_C_take1:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+    - pair_id: p06
+      cat: P3
+      reason: x=wi2_A_take0:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=wi2_D_take1:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+    - pair_id: p07
+      cat: P3
+      reason: x=wi2_A_take3:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=wi2_D_take0:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+    - pair_id: p08
+      cat: P3
+      reason: x=wi2_C_take2:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=wi2_D_take3:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+    - pair_id: p09
+      cat: P4
+      reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=wi2_A_take1:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+    - pair_id: p10
+      cat: P4
+      reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=synth_first_take:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+    - pair_id: p11
+      cat: P4
+      reason: x=synth_faithful:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=wi2_D_take2:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+    - pair_id: p12
+      cat: P2
+      reason: x=wi2_A_take3:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed']);
+        y=wi2_C_take3:tie(rank-1 tied with ['harmony_decoy', 'other_work', 'structure_destroyed'])
+    p1_pair_status:
+      p01: abstain
+      p02: abstain
+    p1_all_correctly_classified: false
+    p3_pair_status:
+      p06: abstain
+      p07: abstain
+      p08: abstain
+    p3_all_correctly_classified: false
+    proxy_v0_adoption_condition_met: false
+    proxy_v0_note: null
+    coverage_note: P1/P3 の全ペアで当該軸が tie により棄権（判定可能ペア 0 件）。誤り数 0 は判定可能ペアが存在しないことによる vacuous な結果であり、proxy
+      v0 採用条件 (a)(b) の実質的な充足ではない（(b) は「正しく分類」を要求しており、棄権は分類していない）。よって不採用として扱う。
+anchor_verification:
+  all_anchors_matched: true
+  checks:
+  - pair_id: p02
+    axis: bpm
+    expected_prediction: same
+    expected_human: 'yes'
+    expected_outcome: match
+    computed_prediction: same
+    computed_human: 'yes'
+    computed_outcome: match
+    anchor_ok: true
+  - pair_id: p07
+    axis: bpm
+    expected_prediction: same
+    expected_human: 'no'
+    expected_outcome: mismatch
+    computed_prediction: same
+    computed_human: 'no'
+    computed_outcome: mismatch
+    anchor_ok: true
+  - pair_id: p07
+    axis: structure
+    expected_prediction: same
+    expected_human: 'no'
+    expected_outcome: mismatch
+    computed_prediction: same
+    computed_human: 'no'
+    computed_outcome: mismatch
+    anchor_ok: true
+  - pair_id: p08
+    axis: key
+    expected_prediction: same
+    expected_human: 'no'
+    expected_outcome: mismatch
+    computed_prediction: same
+    computed_human: 'no'
+    computed_outcome: mismatch
+    anchor_ok: true
+  - pair_id: p12
+    axis: key
+    expected_prediction: same
+    expected_human: 'yes'
+    expected_outcome: match
+    computed_prediction: same
+    computed_human: 'yes'
+    computed_outcome: match
+    anchor_ok: true
+  - check: harmony_all_12_pairs_abstain
+    expected: true
+    computed: true
+    anchor_ok: true
+  - check: brightness_all_12_pairs_abstain
+    expected: true
+    computed: true
+    anchor_ok: true
+  - check: bpm_A_C_group3_structural_tie_abstain(p03,p04,p05)
+    expected: true
+    computed: true
+    anchor_ok: true
+overall_conclusion:
+  any_axis_meets_proxy_v0_adoption: false
+  note: null_results_are_valid（事前登録 §4）に基づき、条件を満たす軸が0件であることも有効な結果として記録する。

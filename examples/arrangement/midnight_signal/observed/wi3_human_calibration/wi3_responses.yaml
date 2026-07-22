@@ -1,0 +1,34 @@
+# WI3 人間校正 v0 — 判定回答（原本転記・凍結）
+#
+# User がチャットで提出した回答の逐語転記（2026-07-22 受領・date -u 実測確認済み）。
+# 原文は「ペア N / verdict / confidence」形式の 12 行 + 定性メモ 1 文。
+# verdict の表記ゆれ（Yes/no）は yes/no に正規化した以外、内容の変更なし。
+# 事前登録プロトコル（wi3_preregistration.yaml §1）どおり判定後の変更は不可、
+# 本ファイルが最終記録。封印マッピングの開封は本回答の受領後
+# （プロトコル充足・開封前に本ファイルを先に確定した）。
+schema_version: "1.0"
+received_at_utc: "2026-07-22T05:40:41Z"
+judge: "User n=1（基準器・non-canonical v0）"
+
+responses:
+  - {pair: pair01, verdict: no,  confidence: 3}
+  - {pair: pair02, verdict: no,  confidence: 2}
+  - {pair: pair03, verdict: no,  confidence: 4}
+  - {pair: pair04, verdict: no,  confidence: 1}
+  - {pair: pair05, verdict: yes, confidence: 1}
+  - {pair: pair06, verdict: yes, confidence: 1}
+  - {pair: pair07, verdict: no,  confidence: 5}
+  - {pair: pair08, verdict: no,  confidence: 3}
+  - {pair: pair09, verdict: no,  confidence: 3}
+  - {pair: pair10, verdict: no,  confidence: 5}
+  - {pair: pair11, verdict: yes, confidence: 2}
+  - {pair: pair12, verdict: no,  confidence: 4}
+
+qualitative_note: >-
+  「やってみたけど全体として同じと感じる曲はなくテンポやトーンから似てると
+  感じる基準で評価した」（原文ママ）。= どのペアも「同じ曲」とは感じられず、
+  判定はテンポ・トーンの類似性を基準に行われた、という判定者自身の申告。
+
+# 集計上の含意（解釈は docs 側で行うが、事実として記録）:
+# - yes は 3 件のみ（pair05/06/11）で全て confidence 1-2（低確信）
+# - no の高確信（4-5）は pair03/07/10/12
