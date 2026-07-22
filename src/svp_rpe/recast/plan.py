@@ -50,6 +50,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import re
@@ -79,6 +80,7 @@ from svp_rpe.arrange.identity import (
     parse_identity_manifest_with_artifacts,
 )
 from svp_rpe.arrange.models import ArrangementChange, ArrangementSpec, PreservationMode
+from svp_rpe.arrange.pathsafe import resolve_confined
 from svp_rpe.arrange.observe import (
     is_harmony_sensor_anchor,
     is_lyrics_sensor_anchor,
@@ -120,7 +122,7 @@ from svp_rpe.recast.models import (
     RecastModel,
     RecastProject,
 )
-from svp_rpe.recast.run_paths import collect_protected_input_paths, resolve_packages_dir
+from svp_rpe.recast.run_paths import resolve_packages_dir
 from svp_rpe.recast.state import RecastState
 from svp_rpe.sentinels import is_todo_sentinel
 from svp_rpe.utils.config_loader import resolve_config_bytes
@@ -192,12 +194,27 @@ class RecastPlanResult:
     （`blocked=None` の場合のみ意味を持つ — blocked の場合は
     `plan.blocked.reasons` が同じ情報を既に保持する）。CLI と単体テストが
     state note を組み立てる際、ゲート判定ロジックを再実装せずここから
-    そのまま読む single source。"""
+    そのまま読む single source。
+
+    `protected_inputs`: この `(variant, backend)` run が参照する外部入力
+    パス一式（`recast/run_paths.py:collect_protected_input_paths` と同じ
+    集合）を、single-read 束が既に読んだ/保持しているオブジェクトから
+    副作用なく再構成したもの（Codex P2 review round 7, PR3 #208 指摘 13:
+    CLI 側の publish-前ガード — `recast_plan.json`/`recast_state.json` 公開
+    サイト — が独立に `collect_protected_input_paths` を呼んで identity
+    manifest を**再 parse**すると、blocked_verification（manifest 破損）
+    のケースで publish 前ガードそのものが例外を送出し、「blocked でも plan
+    は公開される」契約を壊して CLI top-level Error に落ちる。ここで束の
+    読み取り結果から再構成すれば追加の read/parse が一切発生せず、束が既に
+    manifest parse 失敗を許容している以上ガードも同じ degrade（manifest が
+    参照する source/anchor artifact は対象外だが、manifest ファイル自身は
+    対象に含める）を継承する。"""
 
     plan: RecastPlan
     text: str
     inputs_digest: str
     mode_gate_reasons: List[str]
+    protected_inputs: List[Path]
 
 
 @dataclass(frozen=True)
@@ -294,7 +311,11 @@ def _atomic_publish_text_bundle(
             for filename in contents:
                 os.replace(staging_dir / filename, output_dir / filename)
                 published.append(filename)
-        except OSError:
+        except BaseException:
+            # `except BaseException`（`except OSError` ではなく）: rename 中に
+            # `KeyboardInterrupt`/`SystemExit` が飛んでも rollback を必ず通す
+            # （Codex P2 review round 7, PR3 #208 指摘 14 — `backend.py:
+            # atomic_publish_bytes_bundle` と同じ理由・同じ統一）。
             for filename in published:
                 try:
                     os.unlink(output_dir / filename)
@@ -311,8 +332,15 @@ def _atomic_publish_text_bundle(
 # 診断文字列に残る絶対パスの残骸を検出する（`(?<![\w./-])` は "0/4" や
 # "cover/prompt_only" のような path でない "/" 区切りを誤検出しないための
 # 否定先読み — 直前が英数字/ドット/スラッシュ/ハイフンなら「/」始まりの
-# トークンとして扱わない）。
-_ABSOLUTE_PATH_TOKEN_RE = re.compile(r"(?<![\w./-])/[^\s'\"]*")
+# トークンとして扱わない）。POSIX 絶対パスに加え、Windows ドライブレター
+# 形式（`C:\...` / `C:/...`）と UNC パス（`\\server\share\...`）も対象に
+# する（Codex P2 thirteenth round #207: 旧実装は POSIX の `/...` トークンしか
+# 認識せず、Windows 実行時の絶対パスがマスクされずそのまま漏れていた）。
+_ABSOLUTE_PATH_TOKEN_RE = re.compile(
+    r"(?<![\w./-])/[^\s'\"]*"
+    r"|(?<![\w:\\])[A-Za-z]:[\\/][^\s'\"]*"
+    r"|(?<!\\)\\\\[^\s'\"]*"
+)
 
 
 def _normalize_diagnostic(text: str, project_dir: Path) -> str:
@@ -335,14 +363,35 @@ def _normalize_diagnostic(text: str, project_dir: Path) -> str:
     `demo_project_evil` のような**文字列 prefix が同じだけの兄弟ディレクトリ**
     まで剥がしてしまい、`._evil/...` のような機械依存の断片が残る。
     `project_dir` 配下として認識できない絶対パスは兄弟ディレクトリごと
-    `<external-path>` へ完全にマスクされる（`_ABSOLUTE_PATH_TOKEN_RE` 側）。"""
+    `<external-path>` へ完全にマスクされる（`_ABSOLUTE_PATH_TOKEN_RE` 側）。
+
+    Windows パス対応（Codex P2 thirteenth round #207）: Windows 実行時は
+    `project_dir` 自身がバックスラッシュ区切りの文字列になる（`str(Path)` は
+    OS ネイティブの区切り文字を使う）。project_dir 配下の絶対パスを検出する
+    区切り文字は `/` と `\\` の両方を受理し、relativize した結果の相対
+    locator は常に POSIX 区切り（`/`）へ正規化する（`recast_plan.json` の
+    「同一 checkout なら常に同じ bytes」契約は OS を跨いでも成立させたい
+    ため、区切り文字の違いを出力から消す）。"""
     project_dir_pattern = re.escape(str(project_dir))
-    # 1) "project_dir/xxx" 形（配下の絶対パス）を相対 locator へ。
-    normalized = re.sub(project_dir_pattern + r"/", "", text)
+
+    def _relativize(match: "re.Match[str]") -> str:
+        # マッチした相対 locator 部分（project_dir + 区切り文字の直後から
+        # 次の空白/引用符まで）だけを POSIX 区切りへ変換する — 診断文字列の
+        # 他の部分（無関係なバックスラッシュを含みうる自由文）には触れない。
+        return match.group(1).replace("\\", "/")
+
+    # 1) "project_dir/xxx" または "project_dir\xxx" 形（配下の絶対パス）を
+    #    相対 locator へ。
+    normalized = re.sub(
+        project_dir_pattern + r"[\\/]([^\s'\"]*)",
+        _relativize,
+        text,
+    )
     # 2) project_dir 自身への完全一致（直後が path 継続文字でない場合のみ）を
-    #    "." へ。既に 1) で "project_dir/" 形は除去済みのため、ここに残る
-    #    一致は「project_dir で終わる」か「project_dir の直後が "/" 以外の
-    #    非継続文字（空白・引用符・行末等）」のいずれかに限られる。
+    #    "." へ。既に 1) で "project_dir/" / "project_dir\" 形は除去済みのため、
+    #    ここに残る一致は「project_dir で終わる」か「project_dir の直後が
+    #    区切り文字以外の非継続文字（空白・引用符・行末等）」のいずれかに
+    #    限られる。
     normalized = re.sub(project_dir_pattern + r"(?![\w.-])", ".", normalized)
     return _ABSOLUTE_PATH_TOKEN_RE.sub("<external-path>", normalized)
 
@@ -718,21 +767,56 @@ def build_recast_plan(
     `recast.state.record_state` は呼び出し側 CLI の責務、PR2 P2 対応）。
 
     既存公開 API（PR2 由来）: 返り値の型・JSON 出力は不変。内部的には
-    `build_recast_plan_artifacts` の `result` フィールドを返すだけの薄いラッパー
-    （PR3 でのリファクタ — compile 済み成果物の再利用は `recast/backend.py` が
-    `build_recast_plan_artifacts` を直接呼ぶことで行う）。
-    """
-    return build_recast_plan_artifacts(loaded, variant=variant, backend=backend).result
+    `build_recast_plan_artifacts(..., publish=False)` の `result` フィールドを
+    返すだけの薄いラッパー（PR3 でのリファクタ — compile 済み成果物の再利用は
+    `recast/backend.py` が `build_recast_plan_artifacts(..., publish=True)` を
+    直接呼ぶことで行う）。
+
+    `publish=False`（Codex P2 review round 10, PR3 #208 指摘19）: 本関数は
+    「診断のみ」の read-only API という pr2 由来の契約を厳密に守る —
+    package/report を `builds_root` 配下へ永続公開しない。検証
+    （`policy.require_verified_package`）に必要な一時ファイルは
+    `build_recast_plan_artifacts` 側で ephemeral tempdir を使って読み書きし、
+    関数を抜けると跡形も残らない（`build_recast_plan_artifacts` の
+    docstring 参照）。"""
+    return build_recast_plan_artifacts(
+        loaded, variant=variant, backend=backend, publish=False
+    ).result
 
 
 def build_recast_plan_artifacts(
-    loaded: LoadedRecastProject, *, variant: str, backend: str
+    loaded: LoadedRecastProject, *, variant: str, backend: str, publish: bool
 ) -> RecastPlanArtifacts:
     """`build_recast_plan` の完全版: `RecastPlanResult`（`inputs_digest` 込み）に
     加え、到達状態が `compiled`/`verified` のときの compile 済み成果物一式
-    （`RecastPlanArtifacts`）を返す。**純粋関数**（ディスクへの副作用なし —
-    `recast_plan.json` の publish・`record_state` はいずれも呼び出し側の責務、
-    PR2 P2 対応）。診断構築のロジックは `build_recast_plan` と完全に同一。
+    （`RecastPlanArtifacts`）を返す。診断構築のロジックは `build_recast_plan`
+    と完全に同一。
+
+    `publish`（必須引数 — デフォルト値なし、Codex P2 review round 10, PR3
+    #208 指摘19: 呼び出し側が意図せず永続公開/非公開のどちらかへ倒れるのを
+    signature で防ぐ）:
+
+    - `publish=True`（`recast plan`/`run`/`ingest` の 3 CLI コマンドのみが
+      使う経路）: 到達状態が `compiled`/`verified` のとき package/report を
+      `<builds_root>/packages/<variant>@<backend>/` へ永続公開する（この
+      公開自体は本関数が意図して持つ副作用 — `recast_plan.json` の publish・
+      `record_state` はあくまで別途 CLI 側の責務のまま、PR2 P2 対応の範囲は
+      変えない）。
+    - `publish=False`（`build_recast_plan` 経由の読み取り専用診断）: 永続
+      ディレクトリには一切触れない。`policy.require_verified_package` が
+      偽ならディスクへ全く書き込まない（真の意味での純粋関数）。真の場合の
+      み、`verify_package`（ファイルベースの V1-V4 検証器）に読ませるための
+      ephemeral tempdir（`tempfile.TemporaryDirectory(dir=loaded.project_dir)`
+      — pr2 twelfth round #207 指摘19 と同じ理由で project_dir 配下に固定し
+      Windows の別ドライブ問題を避ける）を関数内だけで使い、`with` を抜ける
+      際に必ず cleanup される（pr2 thirteenth round #207 指摘21 の「builds_root
+      を mkdir する純関数契約違反」を PR3 の `publish` 分岐でも同じ精神で
+      解消する）。この経路で返る `RecastPlanArtifacts.compiled` の
+      `artifact_base.locator` は ephemeral tempdir の深さに依存する非
+      checkout-stable な値になり得るが、`build_recast_plan`（薄いラッパー）
+      は `.result` だけを返して `compiled` を呼び出し元へ一切渡さないため、
+      `recast_plan.json`（`RecastPlan` 診断表 — package_sha256/content_digest
+      を含まない）の決定論には影響しない。
 
     single-read 束（Codex P2 sixth round #207）: score / identity manifest /
     arrangement spec / capability profile / mode_overrides / device profile の
@@ -915,13 +999,47 @@ def build_recast_plan_artifacts(
             except (ValueError, ValidationError, yaml.YAMLError) as exc:
                 device_profile_error = exc
     else:
+        # resolution が None になる原因は score_parse_error / spec_read_error /
+        # resolve_error の 3 通りあり、優先順位は該当する step チェックの評価順
+        # （score → spec 読み取り → spec parse・resolve_arrangement）と一致させる
+        # （Codex P2 thirteenth round #207: 従来は常に resolve_error だけを参照
+        # しており、score 破損時は resolve_error が未設定 (None) のまま
+        # "NoneType: None" という無意味な固定文字列を digest へ焼き込んでいた。
+        # `recast status` が使う独立の `_device_profile_digest_component` は
+        # 同じ入力を再パースして実際の例外を捕捉するため型/メッセージが
+        # 一致し、plan 発行直後の同一入力に対して digest が食い違い、
+        # blocked_authoring な run を偽 stale と誤判定させていた）。
+        resolution_error: Optional[Exception] = score_parse_error or spec_read_error or resolve_error
         digest_components["device_profile_resolution_error"] = (
-            f"{type(resolve_error).__name__}: {resolve_error}"
+            f"{type(resolution_error).__name__}: {resolution_error}"
         )
 
     inputs_digest = compute_content_digest(digest_components)
     # step 9 で確定する（strict/advisory ゲート対象の changed_field 診断一式）。
     mode_gate_reasons: List[str] = []
+
+    # `collect_protected_input_paths` と同じ集合を、束が既に読んだ/保持している
+    # オブジェクトから副作用なく再構成する（Codex P2 review round 7, PR3 #208
+    # 指摘 13: `RecastPlanResult.protected_inputs` の docstring 参照 — 再 read/
+    # re-parse を一切行わない。manifest parse が失敗している場合は
+    # source/anchor artifact の解決を諦める degrade を束の失敗許容と合わせる）。
+    protected_inputs: List[Path] = [
+        loaded.path,
+        loaded.score_path,
+        manifest_path,
+        arrangement_path,
+        profile_path,
+    ]
+    if mode_override_path is not None:
+        protected_inputs.append(mode_override_path)
+    if manifest is not None:
+        manifest_dir = manifest_path.resolve().parent
+        try:
+            protected_inputs.append(resolve_confined(manifest.source.locator, manifest_dir))
+            for anchor in manifest.anchors:
+                protected_inputs.append(resolve_confined(anchor.artifact, manifest_dir))
+        except ValueError:
+            pass
 
     def _finalize(
         *,
@@ -977,6 +1095,7 @@ def build_recast_plan_artifacts(
             text=_render_text(plan),
             inputs_digest=inputs_digest,
             mode_gate_reasons=mode_gate_reasons,
+            protected_inputs=protected_inputs,
         )
         return RecastPlanArtifacts(
             result=result,
@@ -1075,11 +1194,25 @@ def build_recast_plan_artifacts(
             state_reached="blocked_capability",
             blocked=BlockedInfo(state="blocked_capability", reasons=[str(mode_overrides_error)]),
         )
+    # mode_overrides.generator と capability profile.generator の不一致も、
+    # 他の capability 層の不整合と同じ blocked_capability として finalize する
+    # （Codex P2 twelfth round #207: eighth round で一度スコープ外にした箇所の
+    # 再指摘 — 以前は raise していたため CLI が top-level Error で落ち、
+    # recast_plan.json も state も残らなかった）。reasons に両 generator 名と
+    # 是正の示唆（mode_overrides を差し替えるか宣言を外す）を含める。
     if mode_overrides_config is not None and mode_overrides_config.generator != profile.generator:
-        raise RecastError(
-            f"recast project '{project.project.id}': backend {backend!r} mode_overrides "
-            f"generator {mode_overrides_config.generator!r} does not match capability "
-            f"profile generator {profile.generator!r}"
+        return _finalize(
+            state_reached="blocked_capability",
+            blocked=BlockedInfo(
+                state="blocked_capability",
+                reasons=[
+                    f"backend {backend!r} mode_overrides generator "
+                    f"{mode_overrides_config.generator!r} does not match capability profile "
+                    f"generator {profile.generator!r} — mode_overrides を "
+                    f"{profile.generator!r} 用に差し替えるか、backend の mode_overrides 宣言"
+                    "を外してください"
+                ],
+            ),
         )
 
     # --- step 7: build performance package ----------------------------------
@@ -1096,92 +1229,141 @@ def build_recast_plan_artifacts(
     contract_sha256 = compute_preservation_contract_sha256(contract)
     derived_score_sha256 = compute_derived_score_sha256(resolution.derived_score)
 
-    # package_dir は `<builds_root>/packages/<variant>@<backend>/` の永続公開先
-    # （PR3 #208 指摘 3）: tempfile.TemporaryDirectory だと `artifact_base_locator`
-    # （manifest ディレクトリからの相対 locator）が呼び出し環境のテンポラリ
-    # パス深さに依存し package_sha256/content_digest が非決定になっていた。
-    # builds_root 配下の固定パスへ変えることで locator が checkout-stable になる
-    # （builds_root 自体が project_dir から相対解決される既存契約 — loader.py
-    # `_resolve_builds_root`）。この dir は per-(variant, backend) の mutable
-    # 最新スナップショット（`recast_plan.json`/`recast_state.json` と同じ規約
-    # — content-addressed な `arrange`/`package` の builds-root 免疫契約とは別物
-    # で、再実行のたびに上書きしてよい）。
-    package_dir = resolve_packages_dir(loaded, variant, backend)
-    try:
-        artifact_base_locator = Path(
-            os.path.relpath(manifest_path.resolve().parent, package_dir.resolve())
-        ).as_posix()
-    except ValueError as exc:
-        return _finalize(
-            state_reached="blocked_capability",
-            blocked=BlockedInfo(state="blocked_capability", reasons=[str(exc)]),
-        )
-
-    try:
-        compiled = build_performance_package(
-            manifest,
-            contract,
-            profile,
-            resolution.derived_score,
-            device_profile=device_profile,
-            artifact_base_locator=artifact_base_locator,
-            manifest_sha256=manifest_sha256,
-            contract_sha256=contract_sha256,
-            profile_sha256=profile_sha256,
-            derived_score_sha256=derived_score_sha256,
-            strict=(project.policy.capability_mode == "strict"),
-            compiler_package_version=detect_compiler_package_version(),
-            compiler_git_commit=detect_compiler_git_commit(),
-        )
-    except (PackageCompilationError, ValidationError) as exc:
-        return _finalize(
-            state_reached="blocked_capability",
-            blocked=BlockedInfo(state="blocked_capability", reasons=[str(exc)]),
-        )
-
-    warnings = list(compiled.report.warnings)
-
-    # package/report を永続公開する（require_verified_package の有無に関わらず
-    # 常に — "compiled" 到達時も最新の compile 結果を builds_root へ残す）。
-    # `collect_protected_input_paths` を全公開サイト共通の衝突ガードとして渡す
-    # （Codex P2 review, PR3 #208 指摘 7: 従来 packages 公開は一切ガードなしで、
-    # capability_profile/mode_overrides/manifest anchor artifact 等が偶然
-    # `packages/<variant>@<backend>/` 配下と衝突する project 構成では入力を
-    # 無警告で上書き破壊し得た）。
-    protected_inputs = collect_protected_input_paths(loaded, variant, backend)
-    # encode は 1 回だけ行い、書き込みも（`arrange/package.py` が既に計算
-    # 済みの）`package_sha256` の hash 計算元もこの同一 bytes に揃える
-    # （Codex P2 review round 6, PR3 #208 指摘 12 — `_atomic_publish_text_bundle`
-    # 側の docstring参照）。
-    try:
-        _atomic_publish_text_bundle(
-            package_dir,
-            {
-                PERFORMANCE_PACKAGE_FILENAME: compiled.package_json.encode("utf-8"),
-                COMPILATION_REPORT_FILENAME: compiled.report_json.encode("utf-8"),
-            },
-            protected_inputs=protected_inputs,
-        )
-    except ValueError as exc:
-        return _finalize(
-            state_reached="blocked_capability",
-            blocked=BlockedInfo(state="blocked_capability", reasons=[str(exc)]),
-        )
-
-    # --- step 8: optional verification --------------------------------------
-    if project.policy.require_verified_package:
-        verify_report = verify_package(package_dir / PERFORMANCE_PACKAGE_FILENAME, manifest_path)
-        if not verify_report.ok:
-            reasons = [
-                f"{check.group} {check.label}: {check.detail}" for check in verify_report.failures
-            ]
-            return _finalize(
-                state_reached="blocked_verification",
-                blocked=BlockedInfo(state="blocked_verification", reasons=reasons),
-            )
-        state_reached: RecastState = "verified"
+    # package_dir: `publish=True` では `<builds_root>/packages/<variant>@
+    # <backend>/` の永続公開先（PR3 #208 指摘 3）: tempfile.TemporaryDirectory
+    # だと `artifact_base_locator`（manifest ディレクトリからの相対 locator）
+    # が呼び出し環境のテンポラリパス深さに依存し package_sha256/content_digest
+    # が非決定になっていた。builds_root 配下の固定パスへ変えることで locator
+    # が checkout-stable になる（builds_root 自体が project_dir から相対解決
+    # される既存契約 — loader.py `_resolve_builds_root`）。この dir は
+    # per-(variant, backend) の mutable 最新スナップショット
+    # （`recast_plan.json`/`recast_state.json` と同じ規約 — content-addressed
+    # な `arrange`/`package` の builds-root 免疫契約とは別物で、再実行のたびに
+    # 上書きしてよい）。
+    #
+    # `publish=False` では project_dir 直下の ephemeral tempdir（Codex P2
+    # review round 10, PR3 #208 指摘19: `build_recast_plan` の読み取り専用
+    # 契約を守るため — pr2 twelfth round #207 指摘19 と同じ理由で project_dir
+    # 配下に固定し Windows の別ドライブ問題を避ける）。`with` を抜ける際に
+    # 必ず cleanup され、`require_verified_package` が偽の project では
+    # このブロックはそもそも一切書き込まない（下記参照）。
+    if publish:
+        package_dir_cm = contextlib.nullcontext(resolve_packages_dir(loaded, variant, backend))
     else:
-        state_reached = "compiled"
+        package_dir_cm = tempfile.TemporaryDirectory(dir=loaded.project_dir)
+
+    with package_dir_cm as package_dir_value:
+        package_dir = Path(package_dir_value)
+        try:
+            artifact_base_locator = Path(
+                os.path.relpath(manifest_path.resolve().parent, package_dir.resolve())
+            ).as_posix()
+        except ValueError as exc:
+            return _finalize(
+                state_reached="blocked_capability",
+                blocked=BlockedInfo(state="blocked_capability", reasons=[str(exc)]),
+            )
+
+        try:
+            compiled = build_performance_package(
+                manifest,
+                contract,
+                profile,
+                resolution.derived_score,
+                device_profile=device_profile,
+                artifact_base_locator=artifact_base_locator,
+                manifest_sha256=manifest_sha256,
+                contract_sha256=contract_sha256,
+                profile_sha256=profile_sha256,
+                derived_score_sha256=derived_score_sha256,
+                strict=(project.policy.capability_mode == "strict"),
+                compiler_package_version=detect_compiler_package_version(),
+                compiler_git_commit=detect_compiler_git_commit(),
+            )
+        except (PackageCompilationError, ValidationError) as exc:
+            return _finalize(
+                state_reached="blocked_capability",
+                blocked=BlockedInfo(state="blocked_capability", reasons=[str(exc)]),
+            )
+
+        warnings = list(compiled.report.warnings)
+
+        if publish:
+            # package/report を永続公開する（require_verified_package の
+            # 有無に関わらず常に — "compiled" 到達時も最新の compile 結果を
+            # builds_root へ残す。`recast run`/`ingest` がこの永続成果物を
+            # 再利用する設計の核）。束の読み取り結果から再構成済みの
+            # `protected_inputs`（closure 変数、上記参照）を全公開サイト
+            # 共通の衝突ガードとして渡す（Codex P2 review, PR3 #208 指摘 7:
+            # 従来 packages 公開は一切ガードなしで、capability_profile/
+            # mode_overrides/manifest anchor artifact 等が偶然 `packages/
+            # <variant>@<backend>/` 配下と衝突する project 構成では入力を
+            # 無警告で上書き破壊し得た。指摘 13 対応でここでの再計算は廃止
+            # — この時点は manifest parse が既に成功しているケースのみ到達
+            # するため、束から再構成した完全な集合をそのまま使い回せる）。
+            # encode は 1 回だけ行い、書き込みも（`arrange/package.py` が
+            # 既に計算済みの）`package_sha256` の hash 計算元もこの同一
+            # bytes に揃える（Codex P2 review round 6, PR3 #208 指摘 12 —
+            # `_atomic_publish_text_bundle` 側の docstring参照）。
+            try:
+                _atomic_publish_text_bundle(
+                    package_dir,
+                    {
+                        PERFORMANCE_PACKAGE_FILENAME: compiled.package_json.encode("utf-8"),
+                        COMPILATION_REPORT_FILENAME: compiled.report_json.encode("utf-8"),
+                    },
+                    protected_inputs=protected_inputs,
+                )
+            except ValueError as exc:
+                return _finalize(
+                    state_reached="blocked_capability",
+                    blocked=BlockedInfo(state="blocked_capability", reasons=[str(exc)]),
+                )
+
+            # --- step 8: optional verification --------------------------------
+            if project.policy.require_verified_package:
+                verify_report = verify_package(
+                    package_dir / PERFORMANCE_PACKAGE_FILENAME, manifest_path
+                )
+                if not verify_report.ok:
+                    reasons = [
+                        f"{check.group} {check.label}: {check.detail}"
+                        for check in verify_report.failures
+                    ]
+                    return _finalize(
+                        state_reached="blocked_verification",
+                        blocked=BlockedInfo(state="blocked_verification", reasons=reasons),
+                    )
+                state_reached: RecastState = "verified"
+            else:
+                state_reached = "compiled"
+        else:
+            # 読み取り専用経路（`build_recast_plan`）: 検証が必要なときだけ
+            # ephemeral tempdir へ package/report を書いて verify し、
+            # 不要なら一切ディスクへ触れない（PR3 #208 指摘19 — pr2 の
+            # 純関数意味論への復帰）。
+            if project.policy.require_verified_package:
+                (package_dir / PERFORMANCE_PACKAGE_FILENAME).write_bytes(
+                    compiled.package_json.encode("utf-8")
+                )
+                (package_dir / COMPILATION_REPORT_FILENAME).write_bytes(
+                    compiled.report_json.encode("utf-8")
+                )
+                verify_report = verify_package(
+                    package_dir / PERFORMANCE_PACKAGE_FILENAME, manifest_path
+                )
+                if not verify_report.ok:
+                    reasons = [
+                        f"{check.group} {check.label}: {check.detail}"
+                        for check in verify_report.failures
+                    ]
+                    return _finalize(
+                        state_reached="blocked_verification",
+                        blocked=BlockedInfo(state="blocked_verification", reasons=reasons),
+                    )
+                state_reached = "verified"
+            else:
+                state_reached = "compiled"
 
     # --- step 9: diagnostics tables -------------------------------------------
     anchors = _build_anchor_entries(compiled.package, manifest_by_id)

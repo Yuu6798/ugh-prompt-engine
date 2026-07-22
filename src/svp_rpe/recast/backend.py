@@ -114,8 +114,13 @@ def build_recast_run_context(
 ) -> RecastRunContext:
     """`build_recast_plan_artifacts` を 1 回だけ呼び、`RecastRunContext` を組み立てる
     利便関数（テスト・非 CLI 呼び出し向け）。`recast run` CLI は plan 診断表示を
-    共有するため `run_context_from_plan_artifacts` を直接使う。"""
-    artifacts = build_recast_plan_artifacts(loaded, variant=variant, backend=backend)
+    共有するため `run_context_from_plan_artifacts` を直接使う。`publish=True`
+    で呼ぶ — CLI の `recast run` と同じく package/report を builds_root へ
+    永続公開する経路を再現する（PR3 #208 指摘19: `build_recast_plan_
+    artifacts` は `publish` が必須引数になった）。"""
+    artifacts = build_recast_plan_artifacts(
+        loaded, variant=variant, backend=backend, publish=True
+    )
     profile = load_backend_capability_profile(loaded, backend)
     return run_context_from_plan_artifacts(
         loaded, variant=variant, backend=backend, artifacts=artifacts, profile=profile
@@ -265,7 +270,16 @@ def atomic_publish_bytes_bundle(
             for filename in contents:
                 os.replace(staging_dir / filename, output_dir / filename)
                 published.append(filename)
-        except OSError:
+        except BaseException:
+            # `except BaseException`（`except OSError` ではなく）: rename 中に
+            # `KeyboardInterrupt`/`SystemExit` が飛んでも rollback を必ず通す
+            # （Codex P2 review round 7, PR3 #208 指摘 14: 単一ファイル atomic
+            # writer 群 — `_write_recast_plan_atomically` / `_write_recast_state_
+            # atomically` 等 — は元から `except BaseException` で統一されており、
+            # 複数ファイル bundle publisher だけが `except OSError` に留まって
+            # いた。`OSError` のみだと非 `OSError` の中断シグナルで rollback を
+            # 素通りし、snapshot ごと失われた「半端に publish 済み」の状態が
+            # 残り得た）。
             for filename in published:
                 try:
                     os.unlink(output_dir / filename)

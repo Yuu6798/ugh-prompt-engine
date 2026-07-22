@@ -125,7 +125,9 @@ def _print_plan_warnings(plan: Any) -> None:
         console.print(f"  - {warning}")
 
 
-def _publish_recast_plan(loaded: Any, plan: Any) -> tuple[Path, str]:
+def _publish_recast_plan(
+    loaded: Any, plan: Any, *, protected_inputs: list[Path]
+) -> tuple[Path, str]:
     """`plan`（`RecastPlan`）を `<project_dir>/recast_plan.json` へ canonical
     形式（sorted keys, 2-space indent, trailing newline — deterministic）で
     atomic 公開し、publish したバイト列自身の sha256（`plan_sha256`）を返す。
@@ -139,13 +141,19 @@ def _publish_recast_plan(loaded: Any, plan: Any) -> tuple[Path, str]:
     存在しなかった）。呼び出し側は書き込み失敗（`OSError`）を own の Exit
     コードへ変換する。
 
-    公開前に `collect_protected_input_paths(loaded, plan.variant, plan.backend)`
-    との alias 検査を行う（Codex P2 review round 5, PR3 #208 指摘 10:
-    project.yaml 自体が `recast_plan.json` という名前を取る/`work.score` が
-    そこを指す等、project 側の宣言次第で入力パスが `<project_dir>/
-    recast_plan.json` と一致し得る — 従来この公開サイトだけ他の 4 公開サイト
-    （orders/takes×2/packages）と異なりガード対象外だった）。衝突時は何も
-    書かずに `ValueError` を送出する（fail-closed — 他公開サイトと同じ契約）。
+    `protected_inputs` は呼び出し側が `RecastPlanResult.protected_inputs`
+    （plan 段の single-read 束から副作用なく再構成済みの集合）から渡す
+    必須引数（デフォルト値なし）。公開前にこの集合との alias 検査を行い、
+    衝突時は何も書かずに `ValueError` を送出する（fail-closed — 他公開サイト
+    と同じ契約、Codex P2 review round 5, PR3 #208 指摘 10）。
+
+    ここで独自に `collect_protected_input_paths` を呼んで identity manifest
+    を**再 parse**しないのが要点（Codex P2 review round 7, PR3 #208 指摘 13:
+    再 parse すると、manifest 破損で plan が既に `blocked_verification` へ
+    finalize 済みのケースでもこの guard 自身が例外を送出し、「blocked でも
+    plan は公開される」契約を破って CLI top-level Error に落ちていた —
+    `RecastPlanResult.protected_inputs` は束の失敗許容を継承済みで再 parse
+    しないため、blocked plan の publish を妨げない）。
 
     encode は 1 回だけ行い、書き込みも `plan_sha256` の hash 計算もこの同一
     bytes から行う（Codex P2 review round 6, PR3 #208 由来の pr2 統合分
@@ -156,10 +164,8 @@ def _publish_recast_plan(loaded: Any, plan: Any) -> tuple[Path, str]:
     status` が偽 stale を報告しうる欠陥があった）。
     """
     from svp_rpe.recast.plan import RECAST_PLAN_FILENAME
-    from svp_rpe.recast.run_paths import collect_protected_input_paths
 
     plan_path = loaded.project_dir / RECAST_PLAN_FILENAME
-    protected_inputs = collect_protected_input_paths(loaded, plan.variant, plan.backend)
     if plan_path.resolve() in {candidate.resolve() for candidate in protected_inputs}:
         raise ValueError(f"output path collides with a protected input path: {plan_path}")
 
@@ -197,24 +203,40 @@ def recast_plan_cmd(
 
     from svp_rpe.arrange.resolver import ArrangementError
     from svp_rpe.recast import RecastError, load_recast_project
-    from svp_rpe.recast.plan import build_recast_plan
-    from svp_rpe.recast.run_paths import collect_protected_input_paths
+    from svp_rpe.recast.plan import build_recast_plan_artifacts
     from svp_rpe.recast.state import record_state
 
     try:
         loaded = load_recast_project(project_yaml)
-        result = build_recast_plan(loaded, variant=variant, backend=backend)
+        # `publish=True`（Codex P2 review round 10, PR3 #208 指摘19）:
+        # `build_recast_plan`（読み取り専用の薄いラッパー、`publish=False`
+        # 固定）は「診断だけしたい」プログラム的呼び出し向けの API であり、
+        # `svprpe recast plan` CLI 自体は元々 package/report を builds_root
+        # へ永続公開する副作用込みの契約（`recast run`/`ingest` がそれを
+        # 再利用する設計の核）を持つ — CLI 3 コマンド（plan/run/ingest）は
+        # 明示的に `build_recast_plan_artifacts(..., publish=True)` を直接
+        # 呼ぶことでこの契約を保つ。
+        artifacts = build_recast_plan_artifacts(
+            loaded, variant=variant, backend=backend, publish=True
+        )
+        result = artifacts.result
     except (OSError, ValueError, ValidationError, yaml.YAMLError, RecastError, ArrangementError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
+    # `result.protected_inputs` は plan 段の single-read 束から副作用なく
+    # 再構成済み（Codex P2 review round 7, PR3 #208 指摘 13）— ここで
+    # `collect_protected_input_paths` を独立に呼んで manifest を再 parse
+    # しない（blocked_verification でも publish 前ガードが例外を送出しない
+    # ようにする）。
     try:
-        plan_path, plan_sha256 = _publish_recast_plan(loaded, result.plan)
+        plan_path, plan_sha256 = _publish_recast_plan(
+            loaded, result.plan, protected_inputs=result.protected_inputs
+        )
     except (OSError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
-    protected_inputs = collect_protected_input_paths(loaded, variant, backend)
     # 状態記録は plan JSON の publish が成功した後にのみ行う（Codex P2 #207）:
     # 書き込み失敗時に stale な recast_state.json を残さないための順序保証。
     try:
@@ -226,7 +248,7 @@ def recast_plan_cmd(
             _plan_state_note(result),
             inputs_digest=result.inputs_digest,
             plan_sha256=plan_sha256,
-            protected_inputs=protected_inputs,
+            protected_inputs=result.protected_inputs,
         )
     except (OSError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
@@ -321,23 +343,29 @@ def recast_run_cmd(
         run_context_from_plan_artifacts,
     )
     from svp_rpe.recast.plan import _normalize_diagnostic, build_recast_plan_artifacts
-    from svp_rpe.recast.run_paths import collect_protected_input_paths
     from svp_rpe.recast.state import record_state
 
     try:
         loaded = load_recast_project(project_yaml)
-        artifacts = build_recast_plan_artifacts(loaded, variant=variant, backend=backend)
+        artifacts = build_recast_plan_artifacts(
+            loaded, variant=variant, backend=backend, publish=True
+        )
     except (OSError, ValueError, ValidationError, yaml.YAMLError, RecastError, ArrangementError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
+    # `artifacts.result.protected_inputs` は plan 段の single-read 束から
+    # 副作用なく再構成済み（Codex P2 review round 7, PR3 #208 指摘 13）—
+    # `collect_protected_input_paths` を独立に呼んで manifest を再 parse しない。
+    protected_inputs = artifacts.result.protected_inputs
     try:
-        _plan_path, plan_sha256 = _publish_recast_plan(loaded, artifacts.result.plan)
+        _plan_path, plan_sha256 = _publish_recast_plan(
+            loaded, artifacts.result.plan, protected_inputs=protected_inputs
+        )
     except (OSError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
-    protected_inputs = collect_protected_input_paths(loaded, variant, backend)
     inputs_digest = artifacts.result.inputs_digest
     # plan 段の到達状態は plan JSON の publish 成功後にのみ記録する（Codex P2
     # #207 の順序保証を run にも適用 — plan_sha256 が実在ファイルを指すように）。
@@ -474,8 +502,17 @@ def recast_ingest_cmd(
     treated as stale too (Codex P2 review round 4, PR3 #208 指摘 9: a missing
     pin is exactly the case a stale/forged state most plausibly has). Only
     then does it rebuild the plan context via the same
-    `build_recast_plan_artifacts` path `recast run` uses (re-publishing
-    `recast_plan.json` — same `_publish_recast_plan` single source), resolve
+    `build_recast_plan_artifacts` path `recast run` uses. Before that rebuild's
+    result is trusted (re-published as `recast_plan.json` or used to `collect`
+    the take), its freshly recomputed `inputs_digest` is re-compared against
+    the same recorded pin (Codex P2 eighth round #207 指摘16: the precheck
+    above and this rebuild are not atomic — inputs could be swapped in the gap
+    between them, letting an old order's externally generated audio get
+    recorded as the `generated` take for a *new* plan built from the swapped
+    inputs). A mismatch here exits 1 without publishing the plan, collecting
+    the audio, or touching `recast_state.json` — the old plan/state are left
+    untouched. Only once that re-check passes does it re-publish
+    `recast_plan.json` (same `_publish_recast_plan` single source), resolve
     the `ManualInvoker`, and call `collect(audio)` to atomically ingest the
     audio into `<builds_root>/takes/<variant>@<backend>/`. Records `generated`
     (with the freshly (re)computed `inputs_digest`/`plan_sha256`) only after
@@ -586,13 +623,40 @@ def recast_ingest_cmd(
         raise typer.Exit(code=1)
 
     try:
-        artifacts = build_recast_plan_artifacts(loaded, variant=variant, backend=backend)
+        artifacts = build_recast_plan_artifacts(
+            loaded, variant=variant, backend=backend, publish=True
+        )
     except (OSError, ValueError, ValidationError, yaml.YAMLError, RecastError, ArrangementError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
+    # rebuild 後・publish/collect の前に、rebuild が実際に見た入力の digest を
+    # 記録済み pin（`run.inputs_digest` — 上の precheck で `current_digest` との
+    # 一致を既に確認済み）と再突合する（Codex P2 eighth round #207 指摘16:
+    # precheck（518行目 `compute_recast_inputs_digest`）と rebuild（直上の
+    # `build_recast_plan_artifacts`）の間には TOCTOU 窓があり、その間に入力
+    # （例: composition_score.yaml）が差し替えられると rebuild は新しい入力で
+    # 新しい plan を構築してしまう — precheck は既に通過済みなのでここを
+    # チェックしないと、旧注文（旧 prompt/lyrics 向けに外部生成された音声）を
+    # 新 plan の `generated` として記録・plan を新入力で上書き公開してしまう。
+    # `build_recast_plan_artifacts` は同じ入力から独立に digest を再計算する
+    # ため（`compute_recast_inputs_digest` と同一ロジック — plan.py 内)、
+    # 差し替えがあれば必ず値が変わり検出できる。ここで拒否する場合は
+    # `_publish_recast_plan`/`collect`/`record_state` のいずれも呼ばない
+    # （plan・take・state のいずれも書き換えない — 旧 plan/state は無傷のまま）。
+    if artifacts.result.inputs_digest != run.inputs_digest:
+        typer.echo(
+            f"Error: {run_key} inputs changed since the order files were published "
+            "(detected during rebuild — stale). Re-run 'svprpe recast plan' / "
+            "'svprpe recast run' first.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
     try:
-        _plan_path, plan_sha256 = _publish_recast_plan(loaded, artifacts.result.plan)
+        _plan_path, plan_sha256 = _publish_recast_plan(
+            loaded, artifacts.result.plan, protected_inputs=artifacts.result.protected_inputs
+        )
     except (OSError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
