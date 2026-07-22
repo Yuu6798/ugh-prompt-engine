@@ -7,7 +7,7 @@
     "svp_rpe.rpe.models",
     "svp_rpe.rpe.physical_features"
   ],
-  "generated_by": "scripts/spike_melody_similarity.py --dump-modules (execution-trace sys.modules walk, post-measurement)",
+  "generated_by": "scripts/spike_melody_similarity.py --dump-modules (pre-run snapshot of svp_rpe module bytes, taken immediately after top-level import completion and before run_spike() execution -- TOCTOU-safe: executed bytes == pinned bytes; post-run growth check fails closed instead of pinning post-hoc)",
   "modules": {
     "svp_rpe": {
       "path": "src/svp_rpe/__init__.py",

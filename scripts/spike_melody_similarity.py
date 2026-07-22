@@ -291,38 +291,70 @@ def compute_similarity(
 # ---------------------------------------------------------------------------
 
 
-def _dump_modules_manifest(path: Path) -> None:
-    """測定完了後（``run_spike()`` 実行後）に呼ぶ。このプロセスが実際に
-    ロードした ``svp_rpe`` 配下のモジュール（= 実行トレース由来の推移閉包）を
-    ``sys.modules`` から列挙し、canonical JSON として書き出す。
+def _svp_rpe_module_names() -> set[str]:
+    return {name for name in sys.modules if name == "svp_rpe" or name.startswith("svp_rpe.")}
 
-    測定結果 JSON の生成後に副作用として呼ばれるだけで、測定結果自体には
-    一切影響しない（決定論は維持される）。直接 import 対象はこのスクリプト
-    自身のソースから ``from svp_rpe.* import`` 行を正規表現で機械抽出する
-    （手動列挙を経由しない）。
+
+def _snapshot_svp_rpe_module_bytes() -> dict[str, dict[str, str]]:
+    """トップレベル import 完了直後（``run_spike()`` 実行前）に呼ぶ。
+
+    現在ロード済みの ``svp_rpe`` 配下モジュールの bytes をここで sha256 に
+    採取する（TOCTOU 排除）。測定完了後に ``read_bytes`` すると、pyin 実行中に
+    working tree が書き換わった場合「実際に実行された bytes」と「manifest に
+    pin される bytes」が乖離しうる。実行前スナップショットなら、ここで読んだ
+    bytes がそのまま実行に使われた bytes と一致する。
     """
+    snapshot: dict[str, dict[str, str]] = {}
+    for name in _svp_rpe_module_names():
+        mod = sys.modules[name]
+        file_attr = getattr(mod, "__file__", None)
+        if file_attr is None:
+            continue
+        file_path = Path(file_attr).resolve()
+        rel_path = file_path.relative_to(ROOT)
+        sha256 = hashlib.sha256(file_path.read_bytes()).hexdigest()
+        snapshot[name] = {"path": str(rel_path), "sha256": sha256}
+    return snapshot
+
+
+def _dump_modules_manifest(pre_run_snapshot: dict[str, dict[str, str]], path: Path) -> None:
+    """測定完了後（``run_spike()`` 実行後）に呼ぶ。
+
+    実行中に ``svp_rpe`` 閉包が増えていないこと（= 実行前スナップショットが
+    実行に使われた全モジュールを取りこぼしていないこと）を確認したうえで、
+    実行前スナップショットの bytes を manifest として書き出す。閉包が
+    増えていた場合はスナップショットが不完全だったということなので、
+    manifest を書かず非ゼロ exit で fail-closed する（測定結果 JSON は既に
+    書き込み済みのため測定自体は保存されるが、manifest だけは信頼できないと
+    判断して emit しない）。直接 import 対象はこのスクリプト自身のソースから
+    ``from svp_rpe.* import`` 行を正規表現で機械抽出する（手動列挙を経由しない）。
+    """
+    grown = _svp_rpe_module_names() - set(pre_run_snapshot)
+    if grown:
+        print(
+            "ERROR: --dump-modules: svp_rpe module closure grew during "
+            f"run_spike() execution (newly loaded: {sorted(grown)}). "
+            "The pre-run snapshot is incomplete for this run -- refusing to "
+            "write a manifest that would omit modules actually exercised "
+            "(fail-closed, TOCTOU guard).",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
     own_source = Path(__file__).read_text(encoding="utf-8")
     direct_imports = sorted(re.findall(r"^from (svp_rpe\.[\w.]+) import", own_source, re.MULTILINE))
-
-    closure: dict[str, dict[str, str]] = {}
-    for name, mod in sys.modules.items():
-        if name == "svp_rpe" or name.startswith("svp_rpe."):
-            file_attr = getattr(mod, "__file__", None)
-            if file_attr is None:
-                continue
-            file_path = Path(file_attr).resolve()
-            rel_path = file_path.relative_to(ROOT)
-            sha256 = hashlib.sha256(file_path.read_bytes()).hexdigest()
-            closure[name] = {"path": str(rel_path), "sha256": sha256}
 
     manifest = {
         "schema_version": "1.0",
         "generated_by": (
             "scripts/spike_melody_similarity.py --dump-modules "
-            "(execution-trace sys.modules walk, post-measurement)"
+            "(pre-run snapshot of svp_rpe module bytes, taken immediately after "
+            "top-level import completion and before run_spike() execution -- "
+            "TOCTOU-safe: executed bytes == pinned bytes; post-run growth check "
+            "fails closed instead of pinning post-hoc)"
         ),
         "direct_imports": direct_imports,
-        "modules": dict(sorted(closure.items())),
+        "modules": dict(sorted(pre_run_snapshot.items())),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
@@ -496,11 +528,16 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=None,
         help=(
-            "optional: write the execution-trace svp_rpe module closure "
-            "(post-measurement sys.modules walk) as canonical JSON to this path"
+            "optional: write a pre-run (TOCTOU-safe) svp_rpe module closure "
+            "snapshot, taken right after top-level import and before "
+            "run_spike(), as canonical JSON to this path"
         ),
     )
     args = parser.parse_args(argv)
+
+    # 実行前スナップショットは run_spike() より前に採る（TOCTOU 排除 --
+    # 「実際に実行された bytes」と「manifest に pin される bytes」を一致させる）。
+    module_snapshot = _snapshot_svp_rpe_module_bytes() if args.dump_modules is not None else None
 
     report = run_spike()
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -509,7 +546,8 @@ def main(argv: list[str] | None = None) -> int:
         f.write("\n")
 
     if args.dump_modules is not None:
-        _dump_modules_manifest(args.dump_modules)
+        assert module_snapshot is not None
+        _dump_modules_manifest(module_snapshot, args.dump_modules)
     return 0
 
 
