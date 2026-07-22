@@ -115,8 +115,9 @@ recast PR4 の縦切り hard anchor は melody を採用せず、以下に差し
   harmony センサー（コード進行の事象レベル一致率）
 - **structure**: `section_map` + structure センサー（セクション構成の一致率）
 
-melody は recast 初版において **`not_observable` を正式ステータス**として扱う
-（`observe` の既存 D-1 `no_sensor` / `not_observed` 経路をそのまま使う）。
+melody は recast 初版において **`not_observed`**（`observe` 既存スキーマの
+`ObservationAdherenceStatus`）として扱う。新語彙は導入せず、既存 D-1 の
+determination `no_sensor` 経路をそのまま使う。
 **melody preserved の判定は行わない**——分類できないものを「保存されている」と
 偽って報告することは避ける。この帰結は pyin 経路（本スパイク実測）と
 note_events 経路（#199/#201 既往実測）が**それぞれ独立に**不成立であることに
