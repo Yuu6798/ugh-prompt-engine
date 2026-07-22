@@ -176,6 +176,7 @@ src/svp_rpe/
 ├── control/                    # grip 効果量 (制御トラック K 系列)
 ├── calibration/                # ジャンル/楽器語彙コーパス校正 (genre-calibrate / genre-audit)
 ├── arrange/                    # ArrangementSpec: 決定論的 override/resolve/compile + identity/capability/observation sidecar (AR 系列。models/resolver/bundle/contract/identity/capabilities/observe/package/verify/pathsafe/loader)
+├── recast/                    # RecastProject: 既存 sidecar (CompositionScore/IdentityManifest/ArrangementSpec/InputCapabilityProfile) への参照+実行方針のみのワークスペース定義 (recast-project/0.1。models/loader。PR1 = schema+loader+fixture、CLI 配線・mode_overrides 消費は PR2 以降)
 ├── batch/                     # バッチ処理
 │   ├── runner.py              # batch コマンド本体
 │   └── discovery.py           # 入力ファイル発見

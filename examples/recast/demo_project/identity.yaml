@@ -1,0 +1,44 @@
+# AR2-1/AR4 縦切り E2E: "Midnight Signal" の IdentityManifest。
+# midnight_signal はリポジトリ内の合成 fixture 作品であり、音源ファイルは存在しない。
+# source は「この作品の正典ソース」として base Composition Score 自身を指す
+# （音源ではないが locator/hash 検証の実配線としては十分。Design Memo D-4 参照）。
+schema_version: "identity-manifest/0.1"
+meta:
+  work_id: "midnight-signal"
+  version: "0.1"
+source:
+  locator: composition_score.yaml
+  sha256: "37854f54b42a1c4d424f357148d3d10f347e238ec72a42d1248bea2203f97d0b"
+  rights_basis: original
+  note: >-
+    合成 fixture 作品・音源なし。locator は base Composition Score 自身であり、
+    生成済み音声への参照ではない。
+anchors:
+  - id: lyrics
+    domain: lyrics
+    artifact: identity/lyrics.txt
+    artifact_type: lyrics_text
+    media_type: text/plain
+    sha256: "2da7dca390e13fd6d19c3fbe74646583884313b112981f8bc7d62f0d6d3a27b2"
+    required: true
+  - id: melody
+    domain: melody
+    artifact: identity/melody_notes.json
+    artifact_type: note_events_json
+    media_type: application/json
+    format_version: "note-events/0.1"
+    sha256: "1d67d4fd0f38ee6864a32010c19b0fc8401208842d06f204def2cc9a70378fb5"
+    required: true
+  - id: harmony
+    domain: harmony
+    # AR4 (Design Memo D-4): 正典進行は performer.py の C minor 既定進行
+    # (MINOR_PROGRESSION, transpose=0 の FAITHFUL_TAKE) と一致させてある。
+    # artifact_type は chord_sequence_json だが ARTIFACT_TYPE_CHANNEL では
+    # チャネル未対応 (None) のため、delivery は常に unknown — 「delivery と
+    # observation は別軸」の実証(observe は delivery 状態と無関係に測定する)。
+    artifact: identity/chord_progression.json
+    artifact_type: chord_sequence_json
+    media_type: application/json
+    format_version: "chord-sequence/0.1"
+    sha256: "180464a881ac63131c0a0fcdf812e0cc7bfd8dc1e9947698a5d5c65c89245299"
+    required: true
