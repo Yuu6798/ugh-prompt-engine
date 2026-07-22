@@ -131,6 +131,43 @@ def test_build_recast_report_maps_policy_mode_and_tallies_coverage() -> None:
     assert recast_report.take.sha256 == "2" * 64
 
 
+def test_build_recast_report_narrows_to_observation_anchors_when_declared() -> None:
+    """PR6: `observation_anchors`（`ObservationConfig.anchors`）が非空なら
+    `RecastReport.anchors`/`coverage` はその集合に絞り込まれる — 空（既定）は
+    絞り込みなし（`test_build_recast_report_maps_policy_mode_and_tallies_coverage`
+    が既存の全 anchor 経路を担保）。"""
+    report = _observation_report(
+        [
+            _anchor_observation("harmony", "harmony", "preserved", "exact_match"),
+            _anchor_observation("structure", "structure", "not_observed", "deferred"),
+            _anchor_observation(
+                "lyrics", "lyrics", "not_observed", "no_sensor", sensor_available=False
+            ),
+        ]
+    )
+    package = _package(
+        [
+            PackageAnchorStatus.model_construct(anchor_id="harmony", requested_mode="hard"),
+            PackageAnchorStatus.model_construct(anchor_id="structure", requested_mode="hard"),
+            PackageAnchorStatus.model_construct(anchor_id="lyrics", requested_mode="free"),
+        ]
+    )
+
+    recast_report = build_recast_report(
+        project_id="p",
+        variant="v",
+        backend="b",
+        package=package,
+        report=report,
+        take_path_relative="builds/takes/v@b/take-01.wav",
+        take_sha256="2" * 64,
+        observation_anchors=["harmony"],
+    )
+
+    assert [a.anchor_id for a in recast_report.anchors] == ["harmony"]
+    assert recast_report.coverage == RecastReportCoverage(verified=1, violated=0, not_observed=0)
+
+
 def test_build_recast_report_policy_mode_none_when_anchor_missing_from_package() -> None:
     """`package.anchor_statuses` に対応する anchor_id が無い（あり得ない状態
     だが fail-closed に None を出す方が silent な誤帰属より安全）場合、

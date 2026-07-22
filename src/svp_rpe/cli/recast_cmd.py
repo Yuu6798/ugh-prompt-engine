@@ -497,6 +497,15 @@ def recast_ingest_cmd(
     When `observation.enabled` is false this command stops at `generated`,
     unchanged from PR3/PR4 behavior — `svprpe observe` remains available as a
     manual fallback either way.
+
+    Scope (PR6): `observation.anchors`（非空リスト）を宣言した project は
+    `recast_report.json`/`recast_summary.md`（coverage 集計も含む）をその
+    anchor 集合へ絞り込む（`recast.report.build_recast_report` の
+    `observation_anchors` 引数）。空リスト（既定）は絞り込みなし＝全 anchor。
+    未知 anchor id を宣言した project は `build_recast_plan_artifacts`
+    （plan 段、identity manifest ロード直後）が `RecastError` で fail-closed
+    する — この ingest コマンドに到達する前に `recast plan`/`recast run` の
+    時点で既に落ちている。
     """
     import yaml
     from pydantic import ValidationError
@@ -697,6 +706,7 @@ def recast_ingest_cmd(
         report=observation.report,
         take_path_relative=take_relative,
         take_sha256=take.sha256,
+        observation_anchors=loaded.project.observation.anchors,
     )
     summary_markdown = render_recast_summary_markdown(recast_report)
     report_json_bytes = (

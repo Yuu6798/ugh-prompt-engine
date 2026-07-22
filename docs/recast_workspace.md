@@ -1,0 +1,177 @@
+# Recast Workspace — 概要（PR0–PR6 総括）
+
+日付: 2026-07-22（`date -u` 実測確認済み）
+
+## 1. 位置づけ
+
+recast は既存 svp-rpe 研究計器（RPE 抽出 / SVP 生成 / ArrangementSpec 解決 /
+compile / verify / observe の各層）を変更せず、その上に「編曲制作フロー」の
+**製品受付層**を薄く被せるワークスペース定義（`recast-project/0.1`）。
+
+- **内部は研究計器のまま**: `arrange/` 以下のスキーマ（`CompositionScore` /
+  `IdentityManifest` / `ArrangementSpec` / `InputCapabilityProfile`）は一切
+  変更しない。recast はそれらへの**参照のみ**を持つ（歌詞・旋律・楽譜本文の
+  複製は禁止）
+- **製品層が足すのは 3 つだけ**: (1) 既存 sidecar 一式を突き合わせる**受付**
+  （`recast plan` の診断パイプライン）、(2) backend 呼び出しの**執行**
+  （`recast run`/`ingest` の manual 注文書 / local invocation）、(3) 生成後の
+  **検収**（`recast ingest` の observe→report、D-1 の被覆語彙で正直に報告）
+- 単一の同一性スコアは出さない（`identity_assessment: {enabled: false}` は
+  将来の閾値 Design Memo までの予約フィールド）。「約束するのは測定できる
+  ものだけ」— 詳細は §5
+
+## 2. recast-project/0.1 スキーマ概要
+
+`project.yaml` 1 本が既存 sidecar への参照 + 実行方針を宣言する
+（`src/svp_rpe/recast/models.py`）:
+
+```yaml
+schema_version: "recast-project/0.1"
+project: { id: "...", builds_root: "builds" }
+work: { score: "...", identity_manifest: "..." }        # CompositionScore / IdentityManifest への参照
+variants: { <name>: { arrangement: "..." } }              # ArrangementSpec への参照（1 つ以上）
+backends: { <name>: { capability_profile, invocation, invocation_mode, mode_overrides? } }
+policy: { capability_mode, require_author_fields_resolved, require_verified_package }
+observation: { enabled, anchors }                          # PR5/PR6: 観測スコープ（§4）
+```
+
+`invocation` は `manual`（外部生成器へ注文書を渡す）/ `local`（in-process
+演奏者を直接呼ぶ）の二択。`invocation_mode` は `cover`（参照音声からのカバー
+生成）/ `prompt_only`（テキストのみ）の二択で、`backends.<name>.mode_overrides`
+（`mode-overrides/0.1`、任意）と組み合わせて §4 の invocation_mode 軸を計測する。
+
+## 3. 状態機械
+
+`recast_state.json`（`src/svp_rpe/recast/state.py`）が `(variant, backend)`
+ごとに追跡する到達状態:
+
+```
+draft → authored → compiled → verified
+                                  │
+                    ┌─────────────┴─────────────┐
+                    │ local invocation           │ manual invocation
+                    ▼                             ▼
+                generated               awaiting_generation
+                    │                             │ (外部生成 + ingest --audio)
+                    │                             ▼
+                    │                        generated
+                    └──────────────┬──────────────┘
+                                   │ (observation.enabled=true の ingest のみ自動継続)
+                                   ▼
+                               observed → reported
+
+失敗系（正常系から分岐する終端）:
+blocked_authoring / blocked_capability / blocked_verification /
+generation_failed / observation_incomplete
+```
+
+local invocation の `recast run` は `generated` までしか進めない（PR5 の
+observe→report 自動化は manual backend の `ingest` 限定 — §6 golden path が
+local backend 分の report をどう作るかを示す）。
+
+## 4. CLI フロー
+
+```bash
+svprpe recast init <audio> --project-dir <dir>          # 音源から project 雛形を生成（対話式 semantic.core/avoid）
+svprpe recast plan  <project.yaml> --variant V --backend B  # 受付: 診断表 + recast_plan.json + state 記録
+svprpe recast run   <project.yaml> --variant V --backend B  # 執行: manual=注文書 6 ファイル / local=実生成
+svprpe recast ingest <project.yaml> --variant V --backend B --audio <file>  # manual 執行後の収蔵（+観測→report）
+svprpe recast status <project.yaml>                       # 全 (variant, backend) の到達状態 + 次の一手
+```
+
+`plan`/`run`/`ingest` は毎回 `recast_plan.json`（project 直下・単一ファイル、
+最後に評価した (variant, backend) の診断で上書きされる）を publish し、
+`inputs_digest`/`plan_sha256` を state へ pin する。`ingest` はこの pin を
+`awaiting_generation` を信用する前に fail-closed 突合する（stale 検出）。
+
+## 5. 「約束するのは測定できるものだけ」
+
+D-1（`docs/wi1_d1_thresholds.md` 系列の裁定）を継承する:
+
+- `RecastReport.identity_assessment` は `{"enabled": false}` の予約フィールド
+  のみ — 複数 anchor の観測結果を単一スコアへ縮約しない
+- 被覆（coverage）は anchor 単位で `verified` / `violated` / `not_observed`
+  の 3 状態のみを報告する（`recast/report.py`）。「保存されている」と
+  偽って報告しない — 計測できない anchor は正直に `not_observed`
+
+### Phase 0 ゲート帰結（melody 除外）
+
+PR4 の縦切り hard anchor は **melody を採用せず**、`harmony`
+（`chord_progression` + chord-sequence センサー）+ `structure`
+（`section_map` + structure センサー）の 2 本を柱とする。根拠は独立な 2 系統
+の不成立実測:
+
+- pyin（`melody_contour`）経路: 合成和音パッド音源に対しノート系列がほぼ
+  返らない（1 曲あたり 1–4 音）— DTW/LCS 以前にアルゴリズムへ渡す入力系列が
+  成立しない
+- note_events（basic_pitch）経路: WI0-b（類似度 0.6 < 事前登録閾値 0.8）/
+  WI2（弁別非成立）の既往実測で不成立
+
+melody は recast 初版において D-1 既存語彙の `not_observed`
+（determination `no_sensor`）として扱う。新語彙は導入しない。再入条件
+（ボーカル分離 + 単旋律ソースでの再スパイク）は将来の melody sensor 検討の
+前提として残す。
+
+### invocation_mode 軸（cover vs prompt_only の実測差）
+
+`mode_overrides`（`mode-overrides/0.1`、`config/mode_overrides/suno.yaml`）は
+「同じ generator でも invocation_mode が変わると同じ score field の override
+がどれだけ届くか」の実測記録（`InputCapabilityProfile` とは別軸）。Cowork
+実測 2026-07-17〜19（n=4×2、cover 4 本 + prompt_only 4 本）の帰結:
+
+| field | cover | prompt_only |
+|---|---|---|
+| `physical.time_signature` | unsupported（4/4→3/4 override 0/4 反映） | experimental（3/4 override 2/4 成功、分散大） |
+| `physical.bpm` | experimental（原曲テンポへスナップ傾向） | experimental（152bpm 指定 3/4 が着地、cover より届く） |
+| `physical.key` | unsupported（原曲キーへ強くアンカー） | experimental（分散増・ジャンル慣用句の交絡） |
+| `physical.valley_depth_target` | unsupported（cover にチャネル自体が無い） | unsupported（prompt_only でもチャネルが無い） |
+
+cover は「原曲へのアンカーが強い＝override が届きにくい」、prompt_only は
+「届きやすいが分散も大きい（ジャンル慣用句との交絡あり）」という非対称が
+実測されている。`recast plan` の strict/advisory ゲートはこの support
+ラベル（`unsupported`/`unknown`）を changed_fields 診断へ折り込む。
+
+## 6. golden path の回し方
+
+`examples/recast/golden_project/`（PR6）は 1 作品（score + harmony/structure
+の 2 anchor manifest）× 1 編曲 × deterministic backend の 2 エントリ
+（`deterministic`=local, `deterministic_manual`=manual）× 2 take の committed
+fixture。CI 全経路回帰は `tests/test_recast_golden_path.py`
+（`@pytest.mark.slow`）が担う:
+
+1. take-01: `deterministic` backend で `recast plan` → `recast run`
+   （local invocation, PR3 `DeterministicInvoker` 固定 style seed=12）
+2. take-01 の観測: local backend は `recast run` だけでは `generated` までし
+   か進まないため、テストは CLI ingest 尾部と同じ手順
+   （`observe_generated_artifact` → `build_recast_report` → atomic publish →
+   `record_state`）を直接呼んで report まで完走させる
+3. take-02: `deterministic_manual` backend で `recast plan` → `recast run`
+   （注文書 6 ファイル公開）→ 別 seed（99）の `PerformanceStyle` で
+   `perform()` した音源を `recast ingest --audio` で収蔵（manual 執行の代役。
+   `observation.enabled: true` のため ingest が observe→report まで自動継続）
+
+committed 固定は「軽量成果物 + sha256 pin」方式（wav はコミットしない）:
+`examples/recast/golden_project/expected/` に `recast_plan.json`（project
+単一ファイル・最後に評価された `golden@deterministic_manual` の診断）/
+注文書 6 ファイル/ 両 backend の `recast_report.json` + `recast_summary.md`/
+両 take の sha256 pin（`expected/takes.json`）を commit し、テストが全経路を
+実行して byte 一致（JSON/md）+ take sha256 一致を検証する。両 take とも
+harmony/structure いずれも exact match せず coverage は
+`{"verified": 0, "violated": 0, "not_observed": 2}`（決定論シンセ演奏者の
+出力が正典進行/正典セクション系列と厳密一致しないため — §5 の「測定できる
+ものだけ約束する」の実例）。
+
+```bash
+pytest tests/test_recast_golden_path.py -m slow -q   # 全経路回帰（数分）
+```
+
+## 7. `observation.anchors` 配線（PR6）
+
+`project.yaml` の `observation.anchors`（非空リスト）は観測・レポートを
+その anchor 集合へ絞り込む（空リスト = 全 anchor、既定）。未知 anchor id
+（identity manifest に存在しない id）を宣言した project は `recast plan`/
+`run`/`ingest` の plan 段（identity manifest ロード直後）で `RecastError` に
+より fail-closed する — `ObservationConfig.anchors` の重複拒否と同じ即時
+失敗の規律。実装は `recast/report.py:build_recast_report` の
+`observation_anchors` 引数（純粋なフィルタリング）+ `recast/plan.py` の
+manifest ロード直後の集合検証。

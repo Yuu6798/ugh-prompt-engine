@@ -1035,6 +1035,22 @@ def build_recast_plan_artifacts(
     assert manifest is not None  # 上の 2 ガードで None のケースは既に return 済み
     manifest_by_id = {anchor.id: anchor for anchor in manifest.anchors}
 
+    # observation.anchors（非空の場合）が manifest に存在しない anchor id を
+    # 列挙していないか検証する（PR6: `ObservationConfig` の重複拒否と同様の
+    # fail-closed 契約。schema 層では manifest の中身を知らないため、manifest
+    # が解決できたこの時点で行う）。project.yaml 側の宣言ミスであり
+    # variant/backend 名の不在チェック（関数冒頭）と同じ「診断ではなく即時
+    # RecastError」として扱う — blocked_* へ変換して recast_plan.json/state
+    # に残す種類の実行時失敗（入力破損等）とは性質が異なる設定ミスのため。
+    unknown_observation_anchors = sorted(set(project.observation.anchors) - set(manifest_by_id))
+    if unknown_observation_anchors:
+        raise RecastError(
+            f"recast project '{project.project.id}': observation.anchors references "
+            f"unknown anchor id(s) not present in the identity manifest: "
+            f"{', '.join(unknown_observation_anchors)} (declared anchors: "
+            f"{sorted(manifest_by_id)})"
+        )
+
     # --- step 4+5: arrangement resolve + preservation contract -------------
     if spec_read_error is not None:
         return _finalize(

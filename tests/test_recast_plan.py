@@ -110,6 +110,44 @@ def test_unknown_backend_raises_recast_error(tmp_path: Path) -> None:
         build_recast_plan(loaded, variant="edm", backend="does-not-exist")
 
 
+def test_unknown_observation_anchor_raises_recast_error(tmp_path: Path) -> None:
+    """PR6: `observation.anchors` が identity manifest に無い anchor id を列挙
+    している project は、manifest ロード直後（plan 段）に fail-closed で
+    `RecastError` を送出する（`ObservationConfig` の重複拒否と同様の即時失敗
+    — demo_project の manifest 側 anchor id は lyrics/melody/harmony のみ）。"""
+    project_path = _copy_demo_project(tmp_path)
+    text = project_path.read_text(encoding="utf-8")
+    assert "observation:\n  enabled: false\n  anchors: []\n" in text  # sanity
+    text = text.replace(
+        "observation:\n  enabled: false\n  anchors: []\n",
+        "observation:\n  enabled: false\n  anchors: [does-not-exist]\n",
+        1,
+    )
+    project_path.write_text(text, encoding="utf-8")
+    loaded = load_recast_project(project_path)
+
+    with pytest.raises(RecastError, match="does-not-exist"):
+        build_recast_plan(loaded, variant="edm", backend="suno")
+
+
+def test_known_observation_anchor_subset_is_accepted(tmp_path: Path) -> None:
+    """`observation.anchors` が manifest に実在する anchor id の部分集合なら
+    plan 段は通常どおり評価される（unknown 検証は id 集合の非部分集合のみを
+    弾く — 空リストと全 anchor 列挙のどちらも通す既存契約を壊さない）。"""
+    project_path = _copy_demo_project(tmp_path)
+    text = project_path.read_text(encoding="utf-8")
+    text = text.replace(
+        "observation:\n  enabled: false\n  anchors: []\n",
+        "observation:\n  enabled: false\n  anchors: [harmony]\n",
+        1,
+    )
+    project_path.write_text(text, encoding="utf-8")
+    loaded = load_recast_project(project_path)
+
+    result = build_recast_plan(loaded, variant="edm", backend="suno")
+    assert result.plan.state_reached == "verified"
+
+
 # --- byte-pin snapshot ---------------------------------------------------------
 
 

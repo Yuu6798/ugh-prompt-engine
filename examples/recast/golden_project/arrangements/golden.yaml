@@ -1,0 +1,42 @@
+# PR6: golden path fixture 用 variant（1 編曲）。
+#
+# `examples/recast/e2e_project/arrangements/deterministic_e2e.yaml` と同一
+# 設計判断（Phase 0 ゲート判定 PR #205 の帰結: melody センサーは pyin 縮退に
+# より不成立。よって本 project の manifest は harmony+structure の 2 anchor
+# のみを持ち、本 variant はその両方を identity_anchors で hard 宣言する）。
+#
+# composition_score.yaml（golden_project も同一 bytes）は
+# rendering.target_backend: "external" を宣言しており、package.py の
+# generator 一致検査（capability_mode に関わらず無条件）により、override
+# なしでは deterministic/deterministic_manual いずれの backend も常に
+# blocked_capability に到達する。deterministic in-process 演奏者経路を
+# compiled/verified まで到達させるため、rendering.target_backend を
+# override する（bpm も軽微な changed field として override — mode_overrides
+# 非依存の changed field の実測材料を残す）。
+meta:
+  id: "midnight-signal-golden-v1"
+  version: "0.1"
+  description: >-
+    PR6 golden path fixture 用 variant。deterministic backend
+    （perform.performer 経由の CI-safe in-process 演奏者）で compile 可能に
+    するため rendering.target_backend を override し、harmony
+    （chord_sequence_json）+ structure（section_map）を identity_anchors で
+    hard 宣言する。
+
+target:
+  rendering:
+    target_backend: "deterministic"
+  physical:
+    bpm: 132
+
+preservation:
+  score_fields:
+    rendering.target_backend: free
+    physical.bpm: free
+  identity_anchors:
+    harmony:
+      mode: hard
+      allow: []
+    structure:
+      mode: hard
+      allow: []
