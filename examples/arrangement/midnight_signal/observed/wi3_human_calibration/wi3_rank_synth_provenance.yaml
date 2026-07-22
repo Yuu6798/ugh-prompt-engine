@@ -31,14 +31,26 @@
 #   掃除コマンドを明記した。これでレシピ全体がシェルへの逐語コピペで実行可能
 #   になる。レシピを実際にコピペで再実行し、出力が committed レポートと byte
 #   一致・wav sha256 2/2 pin 一致を確認済み。
-# - 本版（第7ラウンド対応）で、リプレイ（render -> extract -> identity-rank）
-#   の間に実際に読まれる全ファイルを機械的に列挙し、下記 `replay_input_pins`
-#   として sha256 pin を新設した。これまで `composition_score.yaml` と
+# - 第7版で、リプレイ（render -> extract -> identity-rank）の間に実際に
+#   読まれる全ファイルを機械的に列挙し、下記 `replay_input_pins` として
+#   sha256 pin を新設した。これまで `composition_score.yaml` と
 #   `wi2_references.yaml` 自体、および `--references` が解決する先の 6 ファイル
 #   （derived score 3 本 + chord progression 2 本 + other_work score 1 本）には
 #   pin がなく、無断で変更されてもレポート内容の変化が検出できなかった不備を
-#   是正（同型指摘のクラスを一括で閉じる対応 — 個別ファイルごとの Codex 指摘を
-#   先回り）。
+#   是正した。ただしこのラウンドでは「`svprpe extract` が内部で読む
+#   `config/semantic_rules.yaml` 等は本レシピ固有の入力データではない」と
+#   一括で scope-out 宣言し、これが事実誤認だった（identity-rank の
+#   brightness 軸が同ファイルを直接読んで消費している）ことが本版
+#   （第8ラウンド）で判明した。
+# - 本版（第8ラウンド対応）で、レシピの正確なコマンドから到達可能な
+#   `load_config`/config 読み込みを **呼び出しグラフを機械追跡**して洗い出し、
+#   個別に採否判定した（一括宣言はしない）。結論: `config/semantic_rules.yaml`
+#   が `svp_rpe.roundtrip.identity_rank._brightness_band_rules()`
+#   （brightness 軸の `neutral_band_bounds` 算出）から直接読まれ、report の
+#   bytes に影響し得るため `replay_input_pins` へ追加した。他に到達する
+#   config 読み込みは全て「レシピの正確なコマンドからは到達しない」ことを
+#   grep + ソース実読で確認し個別に除外した（詳細は下記
+#   `replay_input_pins` 直前のコメントと `pr202_fix_verification.md` 参照）。
 #
 # 目的: wi3_rank_synth_faithful.json / wi3_rank_synth_first_take.json
 # （本ディレクトリに commit）が、決定論 synth performer の 2 スタイル
@@ -47,18 +59,19 @@
 # 生出力であることを機械的に検証可能にする。新規の事実主張は含まない —
 # wi3_aggregation.yaml の inputs.synth_rank_reports 記述 および
 # wi0b_synth/observed/provenance.yaml の source_audio_sha256 pin の転記。
-format: "wi3-rank-synth-provenance/0.7"
-# `date -u` 実測（本ファイル書き込み直前に実行して確認した値。初版の
+format: "wi3-rank-synth-provenance/0.8"
+# `date -u` 実測(本ファイル書き込み直前に実行して確認した値。初版の
 # recorded_at_utc は実測でない未来時刻だった不備を第2ラウンドで是正済み
-# — 本版はその後継の追加是正であり、書き込み直前に改めて実測している）。
-recorded_at_utc: "2026-07-22T07:47:04Z"
+# — 本版はその後継の追加是正であり、書き込み直前に改めて実測している)。
+recorded_at_utc: "2026-07-22T07:59:27Z"
 
 generation_session: >-
-  PR #202 Codex P2 第7ラウンド対応セッション（2026-07-22）。リプレイの間に
-  読まれる全ファイル（レシピ直接引数 2 本 + references 解決先 6 本）を
-  `svp_rpe.roundtrip.identity_rank` のソースコード（`_resolve_references` /
-  `_resolve_reference_locator` / `_load_reference_chord_progression`）を
-  読んで機械的に列挙し、`replay_input_pins` として sha256 pin を新設した。
+  PR #202 Codex P2 第8ラウンド対応セッション（2026-07-22）。レシピの正確な
+  コマンド（`render_synth_takes.py` / `svprpe extract` フラグなし /
+  `svprpe identity-rank`）から到達可能な `load_config` 呼び出しを
+  `grep -rn "load_config("` とソース実読で全て追跡し、report の bytes に
+  影響し得るもの（`config/semantic_rules.yaml` — brightness 軸の
+  neutral_band_bounds）のみを個別の理由付きで `replay_input_pins` へ追加した。
 
 # 生成コマンド列（score -> render -> extract -> identity-rank）。全コマンドは
 # リポジトリルートを cwd として実行し、引数は全て相対パス（checkout-stable）。
@@ -137,11 +150,11 @@ render_script_sha256:
   render_synth_takes.py: "97159b2542b50348a5aa57ceebe091f1e347373ab6c36fb5155d921d21c08ac4"
 
 # リプレイ（render -> extract -> identity-rank）の間に実際に読まれる、
-# レシピの直接引数 + `--references` が解決する先の全ファイルの sha256 pin
-# （第7ラウンド Codex P2 対応: これまで無断で変更されてもレポート内容の
-# 変化を検出できなかった不備を是正）。
+# レシピの直接引数 + `--references` が解決する先の全ファイル + report の
+# bytes に影響し得る config 読み込みの sha256 pin（第7/第8ラウンド Codex P2
+# 対応: 無断で変更されてもレポート内容の変化を検出できなかった不備を是正）。
 #
-# 列挙の根拠（漏れ確認）:
+# 列挙の根拠（漏れ確認 — データファイル、第7ラウンド）:
 # - render 手順（`render_synth_takes.py`）の直接引数: `score_path` 1 本
 #   （`svp_rpe.compose.loader.load_composition_score` は単一 YAML を
 #   `yaml.safe_load` するのみで、`$ref` 等の内部インクルード機構を持たない —
@@ -165,12 +178,66 @@ render_script_sha256:
 #   `decoy_chord_progression.json`（harmony_decoy の progression_path）+
 #   `../../../../roundtrip/musicgen_r3_source.yaml`（other_work の
 #   score_path、progression_path なし）の 6 ファイル。
-# - 対象外（意図的なスコープ境界の明記）: `svprpe extract` が内部で読む
-#   `config/semantic_rules.yaml` 等の svp_rpe パッケージ共通設定は、本
-#   レシピ固有の入力データではなくパッケージ全体の挙動バージョンであり、
-#   `tests/test_config.py`（config の二重コピー同期テスト）の管轄。本
-#   `replay_input_pins` はこのレシピが宣言的に指し示す素材データ
-#   （score/reference/progression）に限定する。
+#
+# 呼び出しグラフの機械追跡（config 読み込み、第8ラウンド — 個別採否、一括
+# 宣言はしない）: `grep -rn "load_config(\|load_packaged_config("
+# src/svp_rpe/` で全 `load_config` 呼び出しサイトを洗い出し、レシピの正確な
+# コマンド（`render_synth_takes.py` / `svprpe extract` フラグなし /
+# `svprpe identity-rank`）から到達可能かをソース実読で判定した。
+#
+# [採用] `config/semantic_rules.yaml`:
+#   - identity-rank 実行時に `_brightness_band_rules()`
+#     （`src/svp_rpe/roundtrip/identity_rank.py:456`、`load_config("semantic_rules")`）
+#     が直接読み、`_brightness_band_bounds()` -> `neutral_band_bounds()` 経由で
+#     `dark_max`/`bright_min` を算出、`_brightness_axis()` が全参照の
+#     brightness 軸 distance/rank/tied_with をこの bounds に基づいて計算する
+#     ため、**このファイルの内容変更は committed レポートの bytes を変え得る**。
+#     よって `replay_input_pins` へ追加する。
+#
+# [除外・個別理由] 以下は grep で `load_config` 呼び出しサイトとして検出したが、
+# 判定基準（report の bytes を変え得るか）に照らして個別に除外した:
+#   - `config/semantic_rules.yaml`（2 度目の読み込み経路）:
+#     `svprpe extract` は内部で `svp_rpe.rpe.semantic_rules.generate_semantic()`
+#     （`load_config("semantic_rules")` at line 322、`load_packaged_config`
+#     backfill at line 302）を呼ぶが、これは `SemanticRPE`
+#     （por_surface/cultural_context/instrumentation 等）のみを導出し、
+#     `PhysicalRPE` には一切書き戻さない（`generate_semantic(phys:
+#     PhysicalRPE) -> SemanticRPE` のシグネチャで確認）。identity-rank の
+#     5 軸（structure/harmony/key/bpm/brightness）は全て `bundle.physical.*`
+#     のみを読む（`_structure_axis`=`physical.structure`,
+#     `_harmony_axis`=`physical.chord_events`, `_key_axis`=`physical.key`/
+#     `mode`, `_bpm_axis`=`physical.bpm`, `_brightness_axis`=
+#     `physical.spectral_centroid`、全てソースコードで確認済み）ため
+#     `bundle.semantic.*` を消費しない。よってこの読み込み経路は report の
+#     bytes に影響し得ない（同一ファイルは上記の identity-rank 読み込み経路
+#     で既に pin 済みのため、二重 pin は不要）。
+#   - `config/semantic_probe_axes.yaml`（`src/svp_rpe/rpe/learned/semantic_axes.py`）:
+#     `--clap-semantic`/`--clap-sections` フラグ経由でのみ到達する
+#     （`src/svp_rpe/cli/extract_cmd.py` で両フラグとも既定値 `False`）。
+#     レシピの `svprpe extract` コマンドはいずれのフラグも渡さないため、
+#     このコードパスは到達しない。除外。
+#   - `config/device_profiles/{generator}.yaml`
+#     （`src/svp_rpe/compose/device_profile.py`）: `svprpe compose`/
+#     arrangement compile の control_profile 解決経路でのみ到達する。
+#     `render_synth_takes.py` は `svp_rpe.compose.loader`+`svp_rpe.perform`
+#     のみを呼び、compile 経路を通らない。extract/identity-rank からも
+#     到達しない。除外。
+#   - `config/synonym_map.yaml`（`src/svp_rpe/eval/semantic_similarity.py`,
+#     `src/svp_rpe/semantic_ci/core.py`, `src/svp_rpe/semantic_ci/audit.py`）:
+#     `evaluate`/`compare`/`ci-check`/`audit` コマンド経由でのみ到達する。
+#     レシピ（render/extract/identity-rank）はこれらを呼ばない。除外。
+#   - `config/pro_baseline.yaml` / `acoustic_baseline.yaml` / `edm_baseline.yaml`
+#     / `loud_pop_baseline.yaml` / `domain_profiles/music.yaml`:
+#     `grep -rn "pro_baseline\|acoustic_baseline\|edm_baseline\|loud_pop_baseline\|domain_profiles"
+#     src/svp_rpe/rpe/extractor.py src/svp_rpe/cli/*.py` が 0 件ヒット
+#     （extract パイプライン内では未参照）。`src/svp_rpe/eval/scorer_rpe.py`
+#     （evaluate/compare 用）と genre-calibrate/audit 系コマンドのみが読む。
+#     レシピからは到達しない。除外。
+#
+# `src/svp_rpe/config/semantic_rules.yaml`（packaged 同梱コピー）は
+# `tests/test_config.py` の同期テストが `config/semantic_rules.yaml`
+# （リポジトリ直下、実際に読まれる方）とのバイト一致を enforce するため、
+# 二重 pin は不要（同期テストが崩れれば `test_config.py` 側が検出する）。
 replay_input_pins:
   - path: "examples/arrangement/midnight_signal/composition_score.yaml"
     role: "render 手順の score_path 引数（FAITHFUL_TAKE/FIRST_TAKE 両スタイルの入力 score）"
@@ -196,6 +263,17 @@ replay_input_pins:
   - path: "examples/roundtrip/musicgen_r3_source.yaml"
     role: "wi2_references.yaml other_work.score_path (../../../../roundtrip/musicgen_r3_source.yaml, progression_path なし)"
     sha256: "567410a58358399d46d251028b8b93b0cd7a387e6a6a2cec11540b4d94cb6f57"
+  - path: "config/semantic_rules.yaml"
+    role: >-
+      identity-rank の brightness 軸が依存する neutral_band_bounds の元データ
+      （svp_rpe.roundtrip.identity_rank._brightness_band_rules() が
+      load_config("semantic_rules") で読み、_brightness_band_bounds() ->
+      neutral_band_bounds() 経由で dark_max/bright_min を算出し
+      _brightness_axis() の全参照 distance/rank/tied_with を決定する。
+      packaged 同梱コピー src/svp_rpe/config/semantic_rules.yaml との
+      バイト一致は tests/test_config.py の同期テストが enforce するため
+      二重 pin は不要）
+    sha256: "2c61947cd17c533f7a7785e4df7e1a816b0d1d6cb42fe3bdb0d405b976ba93b2"
 
 # 入力 wav の sha256。wi0b_synth/observed/provenance.yaml の
 # source_audio_sha256（faithful_take）と一致することを明記（同一
@@ -237,7 +315,7 @@ verification:
   - "report_sha256[wi3_rank_synth_faithful.json] == 実 commit ファイルの sha256"
   - "report_sha256[wi3_rank_synth_first_take.json] == 実 commit ファイルの sha256"
   - "render_script_sha256[render_synth_takes.py] == 実 commit スクリプトの sha256"
-  - "replay_input_pins の全 8 エントリの sha256 == working tree の実ファイルの sha256（tests/test_wi3_human_calibration_fixture.py が pin する — いずれかが無断変更されたら fixture テストが赤くなる）"
+  - "replay_input_pins の全 9 エントリ（データファイル 8 + config/semantic_rules.yaml 1）の sha256 == working tree の実ファイルの sha256（tests/test_wi3_human_calibration_fixture.py がエントリ数に依存しない全数ループで pin する — いずれかが無断変更されたら fixture テストが赤くなる）"
   - "input_audio_sha256.faithful_take.sha256 == wi0b_synth/observed/provenance.yaml source_audio_sha256"
   - "5 軸 x 2 素材の rank-1 unique/tie 状態が wi3_aggregation.yaml material_axis_rank1 と一致（10/10, 本是正時点で再確認済み）"
   - "各レポートの audio_file が examples/... 配下の相対パスであり、絶対パス（scratchpad 等）を含まないこと"

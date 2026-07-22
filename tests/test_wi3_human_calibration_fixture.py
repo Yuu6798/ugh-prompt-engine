@@ -422,19 +422,28 @@ def test_render_script_sha256_matches_provenance_pin() -> None:
 
 
 def test_replay_input_pins_match_working_tree_sha256() -> None:
-    """PR #202 Codex P2 第7ラウンド対応: リプレイ（render -> extract ->
+    """PR #202 Codex P2 第7/第8ラウンド対応: リプレイ（render -> extract ->
     identity-rank）の間に実際に読まれる全ファイル（レシピ直接引数の
-    ``composition_score.yaml``/``wi2_references.yaml``、および
-    ``wi2_references.yaml`` の 4 参照が解決する先の score/progression 6 本、
-    計 8 ファイル）の sha256 が working tree の実ファイルと一致することを
-    assert する恒久ガード — このうちどれか 1 つでも将来変更されれば、
-    identity-rank レポートの内容（distance/rank-1）が変わりうるにもかかわらず
-    それを検出する術がなかった（第7ラウンド Codex P2 で指摘された不備の
-    クラス全体を閉じる）。1 ファイルでも変更されれば本テストが赤くなる。
+    ``composition_score.yaml``/``wi2_references.yaml``、``wi2_references.yaml``
+    の 4 参照が解決する先の score/progression 6 本、および identity-rank の
+    brightness 軸が消費する ``config/semantic_rules.yaml``、計 9 ファイル）の
+    sha256 が working tree の実ファイルと一致することを assert する恒久ガード
+    — このうちどれか 1 つでも将来変更されれば、identity-rank レポートの内容
+    （distance/rank-1）が変わりうるにもかかわらずそれを検出する術がなかった
+    （第7/第8ラウンド Codex P2 で指摘された不備のクラス全体を閉じる）。
+
+    このループ自体は ``replay_input_pins`` の実際のエントリ数に関わらず
+    全件を検証する（ハードコードされた個数のファイルパスを列挙しない）ため、
+    将来 provenance 側にエントリを追加すれば本テストは変更なしで自動的に
+    その新エントリも検証対象に含める。下の ``len(pins) == 9`` は「何個
+    pin されているはずか」を意識的に確認させるための個数 pin であり、
+    エントリ追加時にこの数値も更新することで「追加したつもりが実は
+    YAML の記述ミスで登録されていなかった」を検出する（1 ファイルでも
+    ずれれば本テストが赤くなる）。
     """
     provenance = _load_yaml(SYNTH_PROVENANCE_PATH)
     pins = provenance["replay_input_pins"]
-    assert len(pins) == 8, f"expected 8 replay_input_pins entries, got {len(pins)}"
+    assert len(pins) == 9, f"expected 9 replay_input_pins entries, got {len(pins)}"
 
     for entry in pins:
         path = Path(entry["path"])
