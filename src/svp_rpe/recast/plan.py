@@ -3,19 +3,27 @@
 `build_recast_plan` は `LoadedRecastProject`（PR1 の loader が解決した参照一式）+
 `variant` + `backend` から、以下を 1 パイプラインとして評価する:
 
-0. 入力一式（project/score/identity_manifest/arrangement spec/capability
-   profile/mode_overrides）の raw bytes sha256 を合成した `inputs_digest` を計算
-   （`recast status` の stale run 検出用。`arrange.bundle.compute_content_digest` 流用）。
+0. single-read 束: 入力一式（project は loader 済み sha を再利用/score/
+   identity_manifest/arrangement spec/capability profile/mode_overrides/
+   device profile）を **各 1 回だけ `read_bytes()`** し、その同一 bytes から
+   `inputs_digest`（`arrange.bundle.compute_content_digest` 流用）の hash 計算と
+   parse/resolve/compile の両方を行う（Codex P2 sixth round #207: 別経路で
+   digest 用に再読込していた旧実装は、実行中の入力差し替え A→B→A で「B で
+   compile した plan を A の digest で pin」してしまう TOCTOU があった）。
    identity_manifest **自身**の bytes に加え、それが参照する source artifact /
-   各 anchor artifact の内容も折り込む（`_identity_reference_digest_components`
-   — manifest.yaml 自体は無変更のまま参照先だけが書き換わる/破損するケースの検出）
+   各 anchor artifact の宣言 sha も折り込む（`parse_identity_manifest_with_artifacts`
+   が同一 read で検証済み — manifest.yaml 自体は無変更のまま参照先だけが
+   書き換わる/破損するケースの検出）。device profile は
+   `resolve_arrangement` の結果（`rendering.target_backend`）に依存するため、
+   この束の中で score/arrangement spec を先に parse/resolve してから読む
 1. variant/backend 名の存在検証
-2. CompositionScore ロード + author field (TODO sentinel) 未解決チェック
+2. author field (TODO sentinel) 未解決チェック
    （semantic 層限定ではなく `model_dump()` 全体を再帰走査する fail-closed ゲート）
-3. IdentityManifest ロード + artifact hash 照合
-4. ArrangementSpec ロード + `resolve_arrangement`
-5. `build_preservation_contract`
-6. capability profile + mode_overrides（指定時）ロード
+3. IdentityManifest の artifact hash 照合結果（束で検証済み）を判定
+4. ArrangementSpec の `resolve_arrangement` 結果（束で解決済み）を判定 +
+   `build_preservation_contract`
+5. （4 に統合）
+6. capability profile + mode_overrides（指定時）の parse 結果（束で解決済み）を判定
 7. `build_performance_package`（純関数、strict= policy.capability_mode=="strict"）
 8. `require_verified_package` なら一時ディレクトリで `verify_package`
 9. 診断表（anchors / changed_fields）の構築。`changed_fields` に
@@ -24,6 +32,11 @@
    （未実測）が 1 件でもあれば、anchor 配送と同じ strict/advisory 意味論を
    適用する（`_mode_gate_reasons`）: strict は `blocked_capability` へ降格、
    advisory は到達状態を維持したまま warnings へ積む（推奨 1 行も切替）
+
+各段の**判定・報告順序**（先行ステップの失敗が後続ステップの失敗より優先して
+報告される規律）は 0 の read 前倒し後も変えない — 束の構築時点では成功時
+オブジェクト/失敗時例外を保持するだけに留め、実際に `blocked_*` を返す/
+例外を送出する判定は元のステップ位置のまま行う。
 
 **本関数はディスクへ副作用を持たない純粋関数** — `recast_plan.json` の publish と
 `recast.state.record_state` による状態永続化は呼び出し側（CLI）の責務であり、
@@ -50,6 +63,7 @@ from pydantic import ValidationError
 from svp_rpe.arrange.bundle import compute_content_digest, sha256_file
 from svp_rpe.arrange.capabilities import (
     INPUT_CHANNELS,
+    InputCapabilityError,
     InputCapabilityProfile,
     _validate_evidence_form,
 )
@@ -89,11 +103,10 @@ from svp_rpe.arrange.resolver import (
     resolve_arrangement,
 )
 from svp_rpe.arrange.verify import verify_package
-from svp_rpe.compose.device_profile import load_device_profile
-from svp_rpe.compose.loader import load_composition_score
+from svp_rpe.compose.device_profile import DeviceProfile
 from svp_rpe.compose.models import CompositionScore
 from svp_rpe.compose.prompt_renderer import resolve_backend_descriptor
-from svp_rpe.recast.loader import LoadedRecastProject, load_mode_overrides
+from svp_rpe.recast.loader import LoadedRecastProject
 from svp_rpe.recast.models import (
     BackendRef,
     CapabilityMode,
@@ -554,7 +567,24 @@ def build_recast_plan(
     loaded: LoadedRecastProject, *, variant: str, backend: str
 ) -> RecastPlanResult:
     """`loaded` の (variant, backend) 組に対する RecastPlan を構築する（純粋関数、
-    ディスクへの副作用なし）。"""
+    ディスクへの副作用なし）。
+
+    single-read 束（Codex P2 sixth round #207）: score / identity manifest /
+    arrangement spec / capability profile / mode_overrides / device profile の
+    各ファイルはこの関数内で `read_bytes()` を 1 回ずつしか呼ばない —
+    `inputs_digest` の hash 計算も、実際の parse/resolve/compile も同じ bytes
+    から行う。以前は `compute_recast_inputs_digest` を関数冒頭で別途呼び、
+    実パイプラインの読み取りと独立に再読込していたため、実行中の入力差し替え
+    A→B→A で「B で compile した plan を A の digest で pin」してしまう TOCTOU
+    があった（`compute_recast_inputs_digest` 自体は `recast status` が独立の
+    時点で鮮度チェックする際の標準経路として引き続き公開する — そちらは
+    意図的な別時点での再読込であり stale 検出の本質そのもの）。
+
+    各ファイルの read はここで前倒しするが、失敗の**報告順序**（どの段の
+    エラーが優先して `blocked_*` になるか）は変えない — 読み取り/parse の
+    成功時オブジェクトまたは失敗時例外を一旦保持するだけに留め、実際に
+    `_finalize` を呼ぶ/例外を送出する判定は元のステップ位置のまま行う。
+    """
     project: RecastProject = loaded.project
 
     if variant not in project.variants:
@@ -569,10 +599,152 @@ def build_recast_plan(
         )
 
     backend_ref: BackendRef = project.backends[backend]
-    inputs_digest = compute_recast_inputs_digest(loaded, variant=variant, backend=backend)
-    # step 6 で確定する（backend が mode_overrides を宣言しているか）。それより
-    # 前の早期 blocked_* 到達時は changed_fields が空のため意味を持たない。
-    mode_overrides_declared = False
+
+    # ======================================================================
+    # single-read bundle: 全入力ファイルをここで 1 回ずつ read_bytes する。
+    # ======================================================================
+    digest_components: Dict[str, str] = {"project": loaded.sha256}
+
+    # --- score ---------------------------------------------------------------
+    score_bytes = loaded.score_path.read_bytes()
+    digest_components["score"] = hashlib.sha256(score_bytes).hexdigest()
+    score = CompositionScore.model_validate(
+        _parse_yaml_mapping(score_bytes, "composition score", str(loaded.score_path))
+    )
+
+    # --- identity manifest -----------------------------------------------------
+    manifest_path = loaded.identity_manifest_path
+    manifest_read_error: Optional[OSError] = None
+    manifest_bytes: Optional[bytes] = None
+    try:
+        manifest_bytes = manifest_path.read_bytes()
+    except OSError as exc:
+        manifest_read_error = exc
+
+    manifest = None
+    manifest_parse_error: Optional[Exception] = None
+    manifest_sha256 = ""
+    if manifest_bytes is not None:
+        manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+        digest_components["identity_manifest"] = manifest_sha256
+        try:
+            manifest, _manifest_artifact_bytes = parse_identity_manifest_with_artifacts(
+                manifest_bytes, manifest_path, collect=None
+            )
+        except (IdentityManifestError, ValueError, ValidationError, yaml.YAMLError) as exc:
+            manifest_parse_error = exc
+
+    if manifest is not None:
+        digest_components["identity_source"] = manifest.source.sha256
+        for anchor in manifest.anchors:
+            digest_components[f"identity_artifact:{anchor.id}"] = anchor.sha256
+    else:
+        identity_error = manifest_read_error or manifest_parse_error
+        digest_components["identity_reference_error"] = (
+            f"{type(identity_error).__name__}: {identity_error}"
+        )
+
+    # --- arrangement spec + resolve ---------------------------------------------
+    arrangement_path = loaded.arrangement_paths[variant]
+    spec_read_error: Optional[OSError] = None
+    spec_bytes: Optional[bytes] = None
+    try:
+        spec_bytes = arrangement_path.read_bytes()
+    except OSError as exc:
+        spec_read_error = exc
+
+    spec: Optional[ArrangementSpec] = None
+    resolution = None
+    resolve_error: Optional[Exception] = None
+    spec_sha256 = ""
+    if spec_bytes is not None:
+        spec_sha256 = hashlib.sha256(spec_bytes).hexdigest()
+        digest_components["arrangement_spec"] = spec_sha256
+        try:
+            spec = ArrangementSpec.model_validate(
+                _parse_yaml_mapping(spec_bytes, "arrangement spec", str(arrangement_path))
+            )
+            resolution = resolve_arrangement(score, spec)
+        except (
+            ValueError,
+            ValidationError,
+            yaml.YAMLError,
+            ArrangementConflictError,
+            ArrangementPolicyError,
+        ) as exc:
+            resolve_error = exc
+
+    # --- capability profile ------------------------------------------------------
+    profile_path = loaded.capability_profile_paths[backend]
+    profile_bytes = profile_path.read_bytes()
+    profile_sha256 = hashlib.sha256(profile_bytes).hexdigest()
+    digest_components["capability_profile"] = profile_sha256
+    profile: Optional[InputCapabilityProfile] = None
+    profile_error: Optional[Exception] = None
+    try:
+        profile_data = _parse_yaml_mapping(
+            profile_bytes, "input capability profile", str(profile_path)
+        )
+        profile = InputCapabilityProfile.model_validate(profile_data)
+        for channel_name in INPUT_CHANNELS:
+            capability = getattr(profile.input_channels, channel_name)
+            if capability.evidence is not None:
+                _validate_evidence_form(
+                    capability.evidence, generator=profile.generator, channel=channel_name
+                )
+    except (ValueError, ValidationError, InputCapabilityError) as exc:
+        profile_error = exc
+
+    # --- mode overrides ------------------------------------------------------------
+    mode_overrides_config: Optional[ModeOverridesConfig] = None
+    mode_overrides_error: Optional[Exception] = None
+    mode_override_path = loaded.mode_override_paths.get(backend)
+    if mode_override_path is not None:
+        mode_overrides_bytes = mode_override_path.read_bytes()
+        digest_components["mode_overrides"] = hashlib.sha256(mode_overrides_bytes).hexdigest()
+        try:
+            mode_overrides_data = _parse_yaml_mapping(
+                mode_overrides_bytes, "mode overrides", str(mode_override_path)
+            )
+            mode_overrides_config = ModeOverridesConfig.model_validate(mode_overrides_data)
+        except (ValueError, ValidationError, yaml.YAMLError) as exc:
+            mode_overrides_error = exc
+    # mode_overrides を宣言している backend のみ、changed_fields の unknown を
+    # strict/advisory ゲート対象に含める（opt-in 計器 — `_mode_gate_reasons` 参照）。
+    mode_overrides_declared = mode_overrides_config is not None
+
+    # --- device profile ---------------------------------------------------------
+    # 使う device profile は derived score の rendering.target_backend に依存する
+    # ため、resolve_arrangement が成功した場合のみ決定できる。
+    device_profile: Optional[DeviceProfile] = None
+    device_profile_error: Optional[Exception] = None
+    if resolution is not None:
+        render_generator = resolve_backend_descriptor(
+            resolution.derived_score.rendering.target_backend
+        ).profile_key
+        device_profile_bytes = resolve_config_bytes(f"device_profiles/{render_generator}")
+        if device_profile_bytes is None:
+            digest_components["device_profile"] = "not_found"
+        else:
+            digest_components["device_profile"] = hashlib.sha256(
+                device_profile_bytes
+            ).hexdigest()
+            try:
+                device_profile = DeviceProfile.model_validate(
+                    _parse_yaml_mapping(
+                        device_profile_bytes,
+                        "device profile",
+                        f"device_profiles/{render_generator}",
+                    )
+                )
+            except (ValueError, ValidationError, yaml.YAMLError) as exc:
+                device_profile_error = exc
+    else:
+        digest_components["device_profile_resolution_error"] = (
+            f"{type(resolve_error).__name__}: {resolve_error}"
+        )
+
+    inputs_digest = compute_content_digest(digest_components)
     # step 9 で確定する（strict/advisory ゲート対象の changed_field 診断一式）。
     mode_gate_reasons: List[str] = []
 
@@ -612,8 +784,7 @@ def build_recast_plan(
             mode_gate_reasons=mode_gate_reasons,
         )
 
-    # --- step 2: score + author field resolution ---------------------------
-    score = load_composition_score(loaded.score_path)
+    # --- step 2: author field (TODO sentinel) 未解決チェック -----------------
     if project.policy.require_author_fields_resolved:
         unresolved = _unresolved_author_field_paths(score)
         if unresolved:
@@ -628,92 +799,61 @@ def build_recast_plan(
             )
 
     # --- step 3: identity manifest -----------------------------------------
-    manifest_path = loaded.identity_manifest_path
-    try:
-        manifest_bytes = manifest_path.read_bytes()
-    except OSError as exc:
+    if manifest_read_error is not None:
         return _finalize(
             state_reached="blocked_verification",
-            blocked=BlockedInfo(state="blocked_verification", reasons=[str(exc)]),
+            blocked=BlockedInfo(state="blocked_verification", reasons=[str(manifest_read_error)]),
         )
-    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
-    try:
-        manifest, _artifact_bytes = parse_identity_manifest_with_artifacts(
-            manifest_bytes, manifest_path, collect=None
-        )
-    except (IdentityManifestError, ValueError, ValidationError, yaml.YAMLError) as exc:
+    if manifest_parse_error is not None:
         return _finalize(
             state_reached="blocked_verification",
-            blocked=BlockedInfo(state="blocked_verification", reasons=[str(exc)]),
+            blocked=BlockedInfo(
+                state="blocked_verification", reasons=[str(manifest_parse_error)]
+            ),
         )
+    assert manifest is not None  # 上の 2 ガードで None のケースは既に return 済み
     manifest_by_id = {anchor.id: anchor for anchor in manifest.anchors}
 
     # --- step 4+5: arrangement resolve + preservation contract -------------
-    arrangement_path = loaded.arrangement_paths[variant]
-    try:
-        spec_bytes = arrangement_path.read_bytes()
-    except OSError as exc:
+    if spec_read_error is not None:
         return _finalize(
             state_reached="blocked_authoring",
-            blocked=BlockedInfo(state="blocked_authoring", reasons=[str(exc)]),
+            blocked=BlockedInfo(state="blocked_authoring", reasons=[str(spec_read_error)]),
         )
-    spec_sha256 = hashlib.sha256(spec_bytes).hexdigest()
+    if resolve_error is not None:
+        return _finalize(
+            state_reached="blocked_authoring",
+            blocked=BlockedInfo(state="blocked_authoring", reasons=[str(resolve_error)]),
+        )
+    assert spec is not None and resolution is not None  # 上の 2 ガードで既に return 済み
     try:
-        spec_data = _parse_yaml_mapping(spec_bytes, "arrangement spec", str(arrangement_path))
-        spec = ArrangementSpec.model_validate(spec_data)
-        resolution = resolve_arrangement(score, spec)
         contract = build_preservation_contract(
             manifest, spec, manifest_sha256=manifest_sha256, spec_sha256=spec_sha256
         )
-    except (
-        ValueError,
-        ValidationError,
-        yaml.YAMLError,
-        ArrangementConflictError,
-        ArrangementPolicyError,
-        PreservationContractError,
-    ) as exc:
+    except PreservationContractError as exc:
         return _finalize(
             state_reached="blocked_authoring",
             blocked=BlockedInfo(state="blocked_authoring", reasons=[str(exc)]),
         )
 
     # --- step 6: capability profile + mode overrides ------------------------
-    profile_path = loaded.capability_profile_paths[backend]
-    profile_bytes = profile_path.read_bytes()
-    profile_sha256 = hashlib.sha256(profile_bytes).hexdigest()
-    profile_data = _parse_yaml_mapping(
-        profile_bytes, "input capability profile", str(profile_path)
-    )
-    profile = InputCapabilityProfile.model_validate(profile_data)
-    for channel_name in INPUT_CHANNELS:
-        capability = getattr(profile.input_channels, channel_name)
-        if capability.evidence is not None:
-            _validate_evidence_form(
-                capability.evidence, generator=profile.generator, channel=channel_name
-            )
-
-    mode_overrides_config: Optional[ModeOverridesConfig] = None
-    mode_override_path = loaded.mode_override_paths.get(backend)
-    if mode_override_path is not None:
-        mode_overrides_config = load_mode_overrides(mode_override_path)
-        if mode_overrides_config.generator != profile.generator:
-            raise RecastError(
-                f"recast project '{project.project.id}': backend {backend!r} mode_overrides "
-                f"generator {mode_overrides_config.generator!r} does not match capability "
-                f"profile generator {profile.generator!r}"
-            )
-    # mode_overrides を宣言している backend のみ、changed_fields の unknown を
-    # strict/advisory ゲート対象に含める（opt-in 計器 — `_mode_gate_reasons` 参照）。
-    mode_overrides_declared = mode_overrides_config is not None
+    if profile_error is not None:
+        raise profile_error
+    assert profile is not None
+    if mode_overrides_error is not None:
+        raise mode_overrides_error
+    if mode_overrides_config is not None and mode_overrides_config.generator != profile.generator:
+        raise RecastError(
+            f"recast project '{project.project.id}': backend {backend!r} mode_overrides "
+            f"generator {mode_overrides_config.generator!r} does not match capability "
+            f"profile generator {profile.generator!r}"
+        )
 
     # --- step 7: build performance package ----------------------------------
+    if device_profile_error is not None:
+        raise device_profile_error
     contract_sha256 = compute_preservation_contract_sha256(contract)
     derived_score_sha256 = compute_derived_score_sha256(resolution.derived_score)
-    render_generator = resolve_backend_descriptor(
-        resolution.derived_score.rendering.target_backend
-    ).profile_key
-    device_profile = load_device_profile(render_generator)
 
     with tempfile.TemporaryDirectory() as tmp_dir_str:
         package_dir = Path(tmp_dir_str)
