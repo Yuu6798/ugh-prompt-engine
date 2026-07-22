@@ -7,7 +7,7 @@
     "svp_rpe.rpe.models",
     "svp_rpe.rpe.physical_features"
   ],
-  "generated_by": "throwaway script per docs/recast_phase0_melody_spike.md provenance section (importlib closure walk of sys.modules)",
+  "generated_by": "scripts/spike_melody_similarity.py --dump-modules (execution-trace sys.modules walk, post-measurement)",
   "modules": {
     "svp_rpe": {
       "path": "src/svp_rpe/__init__.py",

@@ -14,7 +14,9 @@ S2/S3=無関係曲級にスクリプト内で決定論的に構築した派生�
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Sequence
@@ -285,6 +287,50 @@ def compute_similarity(
 
 
 # ---------------------------------------------------------------------------
+# --dump-modules: 実行トレース由来の svp_rpe 推移閉包 manifest
+# ---------------------------------------------------------------------------
+
+
+def _dump_modules_manifest(path: Path) -> None:
+    """測定完了後（``run_spike()`` 実行後）に呼ぶ。このプロセスが実際に
+    ロードした ``svp_rpe`` 配下のモジュール（= 実行トレース由来の推移閉包）を
+    ``sys.modules`` から列挙し、canonical JSON として書き出す。
+
+    測定結果 JSON の生成後に副作用として呼ばれるだけで、測定結果自体には
+    一切影響しない（決定論は維持される）。直接 import 対象はこのスクリプト
+    自身のソースから ``from svp_rpe.* import`` 行を正規表現で機械抽出する
+    （手動列挙を経由しない）。
+    """
+    own_source = Path(__file__).read_text(encoding="utf-8")
+    direct_imports = sorted(re.findall(r"^from (svp_rpe\.[\w.]+) import", own_source, re.MULTILINE))
+
+    closure: dict[str, dict[str, str]] = {}
+    for name, mod in sys.modules.items():
+        if name == "svp_rpe" or name.startswith("svp_rpe."):
+            file_attr = getattr(mod, "__file__", None)
+            if file_attr is None:
+                continue
+            file_path = Path(file_attr).resolve()
+            rel_path = file_path.relative_to(ROOT)
+            sha256 = hashlib.sha256(file_path.read_bytes()).hexdigest()
+            closure[name] = {"path": str(rel_path), "sha256": sha256}
+
+    manifest = {
+        "schema_version": "1.0",
+        "generated_by": (
+            "scripts/spike_melody_similarity.py --dump-modules "
+            "(execution-trace sys.modules walk, post-measurement)"
+        ),
+        "direct_imports": direct_imports,
+        "modules": dict(sorted(closure.items())),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2, sort_keys=True)
+        f.write("\n")
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -445,6 +491,15 @@ def main(argv: list[str] | None = None) -> int:
         description="Phase 0 melody sensor spike: raw DTW/LCS similarity data dump.",
     )
     parser.add_argument("--out", type=Path, required=True, help="output JSON path")
+    parser.add_argument(
+        "--dump-modules",
+        type=Path,
+        default=None,
+        help=(
+            "optional: write the execution-trace svp_rpe module closure "
+            "(post-measurement sys.modules walk) as canonical JSON to this path"
+        ),
+    )
     args = parser.parse_args(argv)
 
     report = run_spike()
@@ -452,6 +507,9 @@ def main(argv: list[str] | None = None) -> int:
     with args.out.open("w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2, sort_keys=True)
         f.write("\n")
+
+    if args.dump_modules is not None:
+        _dump_modules_manifest(args.dump_modules)
     return 0
 
 

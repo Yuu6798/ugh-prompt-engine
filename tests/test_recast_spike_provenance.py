@@ -6,7 +6,8 @@ emit 前チェックリスト項目 5「pin は fixture テストで全数突合
 実 sha256 と照合し、将来の入力変更を機械検出（エントリ追加で自動拡張される
 ループ実装で）」に対応する恒久ガード（PR #205 Codex P2 第2巡指摘、以降複数巡で
 測定コードの pin 粒度を段階的に是正 — 直接 import 手動 4 本列挙 → 手動 6 本
-列挙 → 本ファイルの機械閉包検証で終端化）。
+列挙 → importlib 閉包の事前列挙・サブプロセス再計算 → 本ファイルの
+「実行トレース由来 manifest + hash-only 検証」で終端化）。
 
 (A) memo の provenance 節（`` `<path>` ... sha256:\\n  `<hex>` `` 形式の箇条書き/表）を
 正規表現で parse し、parse された全 (path, sha256) エントリをループで working
@@ -15,26 +16,23 @@ S1 score・出力 JSON・測定コード manifest sidecar）。将来 memo に p
 追加・変更されても、本テストはハードコードした個別パスではなく parse 結果に
 追従するため変更なしで自動拡張される。
 
-(B) 測定コードの pin は「直接 import モジュールの手動列挙」ではなく
-first-party 推移閉包の**機械列挙**で担保する。
-``scripts/spike_melody_similarity.py`` から ``from (svp_rpe\\.[\\w.]+) import``
-で直接 import 対象を正規表現抽出し、サブプロセスでその import を実行した
-うえで ``sys.modules`` を走査して ``svp_rpe`` パッケージ配下のロード済み
-モジュール全て（= 実行時の推移閉包）を集め直し、committed sidecar
-``examples/recast/melody_spike_2026-07-22.modules.json`` と**両方向**
-（欠落・余剰とも）で突合し、各モジュールファイルの sha256 も再照合する。
-サブプロセスで再計算するのは、同一プロセス内の ``sys.modules`` はテスト
-セッション全体で他のテストファイルが読み込んだ無関係な svp_rpe モジュールで
-汚染され得るため（フルスイート実行時に閉包が過大に見えてしまう false
-positive を避ける）。
+(B) 測定コードの pin は「直接 import モジュールの手動列挙」ではなく、
+``scripts/spike_melody_similarity.py --dump-modules`` で**実行トレース由来**
+（実測時に実際にロードされた ``svp_rpe`` 配下のモジュールのみ）で機械生成した
+committed sidecar ``examples/recast/melody_spike_2026-07-22.modules.json`` で
+担保する。closed-loop 論証（memo 参照）により、実行経路への新規 import 追加は
+pin 済みファイルの編集を経由してしか起こり得ず、その編集が本テストの hash
+アラームを踏むため、閉包を CI 内でサブプロセス再実行して都度再検証する必要は
+ない（重い実行コスト無しの hash-only 検証で足りる）。本テストは
+(b1) manifest が列挙する全ファイルが working tree に存在し sha256 が一致する
+こと、(b2) スクリプトから機械抽出した直接 import 6 モジュールが manifest の
+`direct_imports` の部分集合であること、の 2 点のみを検証する。
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import re
-import subprocess
-import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -51,39 +49,12 @@ PIN_PATTERN = re.compile(r"`([^`\n]+)`[^\n`]*sha256:\s*\n\s*`([0-9a-f]{64})`")
 
 #: parse が silent に空へ縮退していないことの下限（スクリプト本体・S1 score 入力・
 #: 出力 JSON・測定コード manifest sidecar の 4 件は常に memo に記載されている想定。
-#: 個々の測定モジュールは (B) の閉包検証テストが別途担保するため、ここでの
+#: 個々の測定モジュールは (B) の manifest 突合テストが別途担保するため、ここでの
 #: 下限には含めない）。
 MIN_EXPECTED_PIN_COUNT = 4
 
 #: スクリプトの直接 import 対象（第一者 svp_rpe モジュール）を機械抽出する正規表現。
 DIRECT_IMPORT_PATTERN = re.compile(r"^from (svp_rpe\.[\w.]+) import", re.MULTILINE)
-
-#: サブプロセス内で「direct import → sys.modules 走査」を実行し、svp_rpe 配下の
-#: 推移閉包 {module_name: {path, sha256}} を JSON で標準出力へ吐く使い捨てコード。
-_CLOSURE_WALK_CODE = r"""
-import sys, json, hashlib, importlib
-from pathlib import Path
-
-root = Path(sys.argv[1])
-sys.path.insert(0, str(root / "src"))
-
-direct_imports = json.loads(sys.argv[2])
-for m in direct_imports:
-    importlib.import_module(m)
-
-closure = {}
-for name, mod in sys.modules.items():
-    if name == "svp_rpe" or name.startswith("svp_rpe."):
-        f = getattr(mod, "__file__", None)
-        if f is None:
-            continue
-        p = Path(f).resolve()
-        rel = p.relative_to(root)
-        sha = hashlib.sha256(p.read_bytes()).hexdigest()
-        closure[name] = {"path": str(rel), "sha256": sha}
-
-print(json.dumps(closure))
-"""
 
 
 def _parse_provenance_pins(memo_text: str) -> list[tuple[str, str]]:
@@ -92,21 +63,6 @@ def _parse_provenance_pins(memo_text: str) -> list[tuple[str, str]]:
 
 def _extract_direct_imports(script_text: str) -> list[str]:
     return DIRECT_IMPORT_PATTERN.findall(script_text)
-
-
-def _recompute_closure(direct_imports: list[str]) -> dict[str, dict[str, str]]:
-    """direct_imports を新規サブプロセスで import し、svp_rpe 配下の推移閉包
-    {module_name: {path, sha256}} を再計算する（現プロセスの sys.modules
-    汚染から独立させるためサブプロセスを使う）。
-    """
-    result = subprocess.run(
-        [sys.executable, "-c", _CLOSURE_WALK_CODE, str(REPO_ROOT), json.dumps(direct_imports)],
-        capture_output=True,
-        text=True,
-        check=True,
-        cwd=REPO_ROOT,
-    )
-    return json.loads(result.stdout)
 
 
 # ---------------------------------------------------------------------------
@@ -148,72 +104,54 @@ def test_provenance_pins_match_working_tree_sha256() -> None:
 
 
 # ---------------------------------------------------------------------------
-# (B) 測定コード first-party 推移閉包の機械検証
+# (B) 測定コード manifest（実行トレース由来）の hash-only 検証
 # ---------------------------------------------------------------------------
 
 
-def test_direct_imports_extracted_from_script_match_manifest() -> None:
+def test_module_manifest_entries_match_working_tree_sha256() -> None:
+    """`examples/recast/melody_spike_2026-07-22.modules.json`（実行トレース由来の
+    svp_rpe 推移閉包 manifest）が列挙する全モジュールについて、記録された
+    ``path`` が working tree に実在し、その sha256 が manifest の pin と
+    一致することを assert する。将来 pin 済みファイルのいずれかが変更されると
+    本テストが赤くなり、silent stale を防止する（closed-loop 論証は memo 参照）。
+    """
+    manifest = json.loads(MODULES_MANIFEST_PATH.read_text(encoding="utf-8"))
+    modules: dict[str, dict[str, str]] = manifest["modules"]
+    assert modules, f"{MODULES_MANIFEST_PATH.name} has no modules -- manifest may be stale/empty"
+
+    for name, entry in modules.items():
+        file_path = REPO_ROOT / entry["path"]
+        assert file_path.is_file(), (
+            f"{name}: manifest path {entry['path']!r} does not exist in the working tree"
+        )
+        actual_sha256 = hashlib.sha256(file_path.read_bytes()).hexdigest()
+        assert actual_sha256 == entry["sha256"], (
+            f"{name}: working tree sha256 {actual_sha256!r} does not match "
+            f"{MODULES_MANIFEST_PATH.name} pin {entry['sha256']!r} (stale pin -- "
+            "regenerate via `scripts/spike_melody_similarity.py --dump-modules`)"
+        )
+
+
+def test_direct_imports_extracted_from_script_are_subset_of_manifest() -> None:
     """スクリプトの `from svp_rpe... import` 行から機械抽出した直接 import 対象が、
-    committed manifest sidecar の `direct_imports` フィールドと一致することを
-    assert する（列挙が手作業でなく機械抽出であることの相互検算）。
+    committed manifest sidecar の `direct_imports` フィールド、および
+    `modules` のキー集合の部分集合であることを assert する（列挙が手作業でなく
+    機械抽出であることの相互検算 + 直接 import が閉包から漏れていないことの検算）。
     """
     script_text = SPIKE_SCRIPT_PATH.read_text(encoding="utf-8")
     extracted = _extract_direct_imports(script_text)
     assert extracted, "no `from svp_rpe.* import` lines found -- extraction regex may be stale"
 
     manifest = json.loads(MODULES_MANIFEST_PATH.read_text(encoding="utf-8"))
-    assert set(extracted) == set(manifest["direct_imports"]), (
+    manifest_direct = set(manifest["direct_imports"])
+    manifest_modules = set(manifest["modules"])
+
+    assert set(extracted) == manifest_direct, (
         f"direct imports extracted from {SPIKE_SCRIPT_PATH.name} {sorted(extracted)} "
-        f"do not match manifest direct_imports {sorted(manifest['direct_imports'])}"
+        f"do not match manifest direct_imports {sorted(manifest_direct)}"
     )
-
-
-def test_module_closure_recomputes_and_matches_manifest_bidirectionally() -> None:
-    """スクリプトの直接 import 対象を新規サブプロセスで import し、
-    `sys.modules` 走査で svp_rpe 配下の推移閉包を再計算、committed manifest
-    sidecar と (a) キー集合が完全一致（欠落も余剰も fail）、(b) 各モジュールの
-    sha256 が working tree の実ファイルと一致、することを assert する。
-    将来 transitive 依存が増減・変更されると本テストが自動的に赤くなる。
-    """
-    script_text = SPIKE_SCRIPT_PATH.read_text(encoding="utf-8")
-    direct_imports = _extract_direct_imports(script_text)
-    assert direct_imports, "no direct imports extracted -- cannot recompute closure"
-
-    manifest = json.loads(MODULES_MANIFEST_PATH.read_text(encoding="utf-8"))
-    manifest_modules: dict[str, dict[str, str]] = manifest["modules"]
-
-    recomputed = _recompute_closure(direct_imports)
-
-    recomputed_keys = set(recomputed)
-    manifest_keys = set(manifest_modules)
-    missing_from_manifest = recomputed_keys - manifest_keys
-    extra_in_manifest = manifest_keys - recomputed_keys
-    assert not missing_from_manifest, (
-        f"recomputed closure has modules absent from {MODULES_MANIFEST_PATH.name}: "
-        f"{sorted(missing_from_manifest)} -- manifest is stale, regenerate it"
+    missing_from_modules = manifest_direct - manifest_modules
+    assert not missing_from_modules, (
+        f"manifest direct_imports references modules absent from its own `modules` "
+        f"closure: {sorted(missing_from_modules)}"
     )
-    assert not extra_in_manifest, (
-        f"{MODULES_MANIFEST_PATH.name} lists modules no longer part of the recomputed "
-        f"closure: {sorted(extra_in_manifest)} -- manifest is stale, regenerate it"
-    )
-
-    for name in sorted(recomputed_keys):
-        recomputed_entry = recomputed[name]
-        manifest_entry = manifest_modules[name]
-        assert recomputed_entry["path"] == manifest_entry["path"], (
-            f"{name}: recomputed path {recomputed_entry['path']!r} != "
-            f"manifest path {manifest_entry['path']!r}"
-        )
-        # re-hash the working-tree file directly (not just trusting the subprocess's
-        # own hashing) so a corrupted subprocess computation can't mask drift.
-        file_path = REPO_ROOT / recomputed_entry["path"]
-        assert file_path.is_file(), f"{name}: {file_path} does not exist in the working tree"
-        actual_sha256 = hashlib.sha256(file_path.read_bytes()).hexdigest()
-        assert actual_sha256 == manifest_entry["sha256"], (
-            f"{name}: working tree sha256 {actual_sha256!r} does not match "
-            f"{MODULES_MANIFEST_PATH.name} pin {manifest_entry['sha256']!r} (stale pin)"
-        )
-        assert recomputed_entry["sha256"] == manifest_entry["sha256"], (
-            f"{name}: subprocess-recomputed sha256 {recomputed_entry['sha256']!r} does not "
-            f"match {MODULES_MANIFEST_PATH.name} pin {manifest_entry['sha256']!r}"
-        )
