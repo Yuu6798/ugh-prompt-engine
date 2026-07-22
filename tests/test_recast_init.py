@@ -256,6 +256,21 @@ def test_recast_init_no_interactive_generates_full_project_with_todo_core(
     assert manifest.source.locator == f"source/{SAMPLE_AUDIO.name}"
     assert manifest.source.sha256 == hashlib.sha256(SAMPLE_AUDIO.read_bytes()).hexdigest()
 
+    # Codex P2（#210 round 4 指摘6）: identity.yaml の各 pin（source + 全
+    # anchor）が disk 上の実 bytes の sha256 と一致することを明示的にループで
+    # 検証する（`load_identity_manifest` 自体が同じ照合で fail-closed する
+    # ため上の呼び出しが既に間接的に保証しているが、pin と実 bytes が
+    # 同一の bytes 経路（`write_bytes` 1 回 encode）から生まれていることを
+    # 直接 assert する — text-mode 改行変換のような環境依存の乖離を pin の
+    # 数値そのもので検出する回帰テスト）。
+    assert (
+        hashlib.sha256((project_dir / manifest.source.locator).read_bytes()).hexdigest()
+        == manifest.source.sha256
+    )
+    for anchor in manifest.anchors:
+        artifact_bytes = (project_dir / anchor.artifact).read_bytes()
+        assert hashlib.sha256(artifact_bytes).hexdigest() == anchor.sha256, anchor.id
+
     chord_payload = json.loads(
         (project_dir / "identity" / "chord_progression.json").read_text(encoding="utf-8")
     )

@@ -1117,10 +1117,15 @@ def recast_init_cmd(
         (staging_dir / "identity").mkdir(parents=True, exist_ok=True)
         (staging_dir / "arrangements").mkdir(parents=True, exist_ok=True)
 
-        composition_score_yaml = render_draft_score_yaml(score)
-        (staging_dir / "composition_score.yaml").write_text(
-            composition_score_yaml, encoding="utf-8"
-        )
+        # Codex P2（#210 round 4 指摘6）: hash 対象になる全ファイルは encode を
+        # **1 回だけ**行い、その同一 bytes を `write_bytes` と sha256 計算の
+        # 両方に使う（pr2 abc2350 と同原則 — 従来の `write_text(...,
+        # encoding="utf-8")` は Windows では既定の text-mode 改行変換で
+        # `"\n"` → `"\r\n"` に化け、encode 済み文字列から計算した sha256 と
+        # 実際にディスクへ書かれた bytes が乖離しうる）。hash 対象でない
+        # ファイルも一貫性のため同じ bytes 書き込み経路に揃える。
+        composition_score_bytes = render_draft_score_yaml(score).encode("utf-8")
+        (staging_dir / "composition_score.yaml").write_bytes(composition_score_bytes)
 
         identity_anchors: list[dict[str, Any]] = []
         identity_anchor_policies: dict[str, dict[str, Any]] = {}
@@ -1133,11 +1138,11 @@ def recast_init_cmd(
                     for event in bundle.physical.chord_events
                 ],
             }
-            chord_json = (
+            chord_json_bytes = (
                 json.dumps(chord_payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
-            )
-            (staging_dir / "identity" / "chord_progression.json").write_text(
-                chord_json, encoding="utf-8"
+            ).encode("utf-8")
+            (staging_dir / "identity" / "chord_progression.json").write_bytes(
+                chord_json_bytes
             )
             identity_anchors.append(
                 {
@@ -1147,7 +1152,7 @@ def recast_init_cmd(
                     "artifact_type": "chord_sequence_json",
                     "media_type": "application/json",
                     "format_version": CHORD_SEQUENCE_ARTIFACT_SCHEMA,
-                    "sha256": hashlib.sha256(chord_json.encode("utf-8")).hexdigest(),
+                    "sha256": hashlib.sha256(chord_json_bytes).hexdigest(),
                     "required": True,
                 }
             )
@@ -1158,12 +1163,10 @@ def recast_init_cmd(
                 "schema_version": SECTION_MAP_ARTIFACT_SCHEMA_0_1,
                 "sections": [marker.label for marker in bundle.physical.structure],
             }
-            section_json = (
+            section_json_bytes = (
                 json.dumps(section_payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
-            )
-            (staging_dir / "identity" / "section_map.json").write_text(
-                section_json, encoding="utf-8"
-            )
+            ).encode("utf-8")
+            (staging_dir / "identity" / "section_map.json").write_bytes(section_json_bytes)
             identity_anchors.append(
                 {
                     "id": "structure",
@@ -1172,7 +1175,7 @@ def recast_init_cmd(
                     "artifact_type": "section_map",
                     "media_type": "application/json",
                     "format_version": SECTION_MAP_ARTIFACT_SCHEMA_0_1,
-                    "sha256": hashlib.sha256(section_json.encode("utf-8")).hexdigest(),
+                    "sha256": hashlib.sha256(section_json_bytes).hexdigest(),
                     "required": True,
                 }
             )
@@ -1188,10 +1191,10 @@ def recast_init_cmd(
             },
             "anchors": identity_anchors,
         }
-        (staging_dir / "identity.yaml").write_text(
-            yaml.safe_dump(identity_payload, sort_keys=False, allow_unicode=True),
-            encoding="utf-8",
-        )
+        identity_yaml_bytes = yaml.safe_dump(
+            identity_payload, sort_keys=False, allow_unicode=True
+        ).encode("utf-8")
+        (staging_dir / "identity.yaml").write_bytes(identity_yaml_bytes)
 
         preservation_payload: dict[str, Any] = {"score_fields": {}}
         if identity_anchor_policies:
@@ -1205,10 +1208,10 @@ def recast_init_cmd(
             "target": {},
             "preservation": preservation_payload,
         }
-        (staging_dir / "arrangements" / "default.yaml").write_text(
-            yaml.safe_dump(arrangement_payload, sort_keys=False, allow_unicode=True),
-            encoding="utf-8",
-        )
+        arrangement_yaml_bytes = yaml.safe_dump(
+            arrangement_payload, sort_keys=False, allow_unicode=True
+        ).encode("utf-8")
+        (staging_dir / "arrangements" / "default.yaml").write_bytes(arrangement_yaml_bytes)
 
         project_payload: dict[str, Any] = {
             "schema_version": "recast-project/0.1",
@@ -1235,10 +1238,10 @@ def recast_init_cmd(
             },
             "observation": {"enabled": True, "anchors": []},
         }
-        (staging_dir / "project.yaml").write_text(
-            yaml.safe_dump(project_payload, sort_keys=False, allow_unicode=True),
-            encoding="utf-8",
-        )
+        project_yaml_bytes = yaml.safe_dump(
+            project_payload, sort_keys=False, allow_unicode=True
+        ).encode("utf-8")
+        (staging_dir / "project.yaml").write_bytes(project_yaml_bytes)
 
         try:
             loaded = load_recast_project(staging_dir / "project.yaml")
