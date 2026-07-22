@@ -107,6 +107,7 @@ from svp_rpe.recast.models import (
 from svp_rpe.recast.run_paths import resolve_packages_dir
 from svp_rpe.recast.state import RecastState
 from svp_rpe.sentinels import is_todo_sentinel
+from svp_rpe.utils.config_loader import resolve_config_bytes
 
 PreservationChangeMode = Literal["elastic", "free"]
 
@@ -446,6 +447,59 @@ def _identity_reference_digest_components(identity_manifest_path: Path) -> Dict[
     return components
 
 
+def _device_profile_digest_component(
+    loaded: LoadedRecastProject, *, variant: str, backend: str
+) -> Dict[str, str]:
+    """実際に使われる device profile（`config/device_profiles/<generator>.yaml`）の
+    raw bytes sha256 を digest component として返す（Codex P2 fourth round #207:
+    `config/device_profiles/suno.yaml` を編集しても、それまでの digest は
+    device profile の中身を一切見ていなかったため `recast status` が変化を
+    検出できなかった）。
+
+    使う device profile は derived score の `rendering.target_backend`
+    （score 自体の宣言、または arrangement の override）に依存する
+    （`resolve_backend_descriptor(...).profile_key`）ため、ここで score +
+    arrangement spec を独立にロードし `resolve_arrangement` を呼んで決定する
+    — `build_recast_plan` 本体のステップ 2/4/7 と同じ計算を、digest 専用に
+    副作用なく再現する。解決パスは `load_device_profile` が実際に読む
+    local→packaged フォールバック（`utils.config_loader.resolve_config_bytes`）
+    と同一にする。
+
+    score/spec のロード・resolve のいずれかが失敗した場合は例外を送出せず、
+    正常系とは構造的に異なる 1 component を返す fail-closed 戦略を取る
+    （`_identity_reference_digest_components` と同型）。profile 自体が
+    見つからない場合は省略ではなく pinned センチネル `"not_found"` を使う
+    （後からファイルが現れたケースも実 sha256 との差分で検出できるように）。"""
+    try:
+        score_bytes = loaded.score_path.read_bytes()
+        score_data = _parse_yaml_mapping(score_bytes, "composition score", str(loaded.score_path))
+        score = CompositionScore.model_validate(score_data)
+
+        spec_path = loaded.arrangement_paths[variant]
+        spec_bytes = spec_path.read_bytes()
+        spec_data = _parse_yaml_mapping(spec_bytes, "arrangement spec", str(spec_path))
+        spec = ArrangementSpec.model_validate(spec_data)
+
+        resolution = resolve_arrangement(score, spec)
+        render_generator = resolve_backend_descriptor(
+            resolution.derived_score.rendering.target_backend
+        ).profile_key
+    except (
+        OSError,
+        ValueError,
+        ValidationError,
+        yaml.YAMLError,
+        ArrangementConflictError,
+        ArrangementPolicyError,
+    ) as exc:
+        return {"device_profile_resolution_error": f"{type(exc).__name__}: {exc}"}
+
+    profile_bytes = resolve_config_bytes(f"device_profiles/{render_generator}")
+    if profile_bytes is None:
+        return {"device_profile": "not_found"}
+    return {"device_profile": hashlib.sha256(profile_bytes).hexdigest()}
+
+
 def compute_recast_inputs_digest(
     loaded: LoadedRecastProject, *, variant: str, backend: str
 ) -> str:
@@ -455,8 +509,9 @@ def compute_recast_inputs_digest(
     `loaded` はロード時点で score/identity_manifest/arrangement/capability_profile
     の実在を検証済みのため、これらは読み取りをガードしない（`build_recast_plan` の
     既存ステップ 3/6 の raw read と同じ規約）。identity manifest が参照する
-    source/anchor artifact は `_identity_reference_digest_components` が
-    fail-closed に折り込む（読めない/破損していても例外を送出しない）。
+    source/anchor artifact は `_identity_reference_digest_components` が、
+    実際に使われる device profile は `_device_profile_digest_component` が
+    それぞれ fail-closed に折り込む（読めない/破損していても例外を送出しない）。
     `recast plan` はこの digest を state へ永続化し、`recast status` は現在の
     入力から再計算した digest と突き合わせて stale run（永続化後に入力または
     参照先 artifact が変更された run）を検出する。"""
@@ -468,6 +523,9 @@ def compute_recast_inputs_digest(
         "capability_profile": sha256_file(loaded.capability_profile_paths[backend]),
     }
     components.update(_identity_reference_digest_components(loaded.identity_manifest_path))
+    components.update(
+        _device_profile_digest_component(loaded, variant=variant, backend=backend)
+    )
     mode_override_path = loaded.mode_override_paths.get(backend)
     if mode_override_path is not None:
         components["mode_overrides"] = sha256_file(mode_override_path)

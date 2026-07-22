@@ -1,6 +1,7 @@
 """svprpe recast plan / status."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
@@ -36,6 +37,17 @@ _NEXT_STEP_BY_STATE: dict[str, str] = {
     "generation_failed": "生成失敗の原因を調査し、生成をやり直す",
     "observation_incomplete": "完全な音声 artifact で svprpe observe をやり直す",
 }
+
+
+def _read_plan_sha256(path: Path) -> Optional[str]:
+    """`path`（`recast_plan.json`）の現在の bytes の sha256 を返す。読めない
+    （不在・権限エラー等）場合は `None`（`recast status` はこれを「不明」では
+    なく永続化済み `plan_sha256` との不一致として扱い、fail-closed に stale
+    表示へ倒す — Codex P2 fourth round #207）。"""
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
 
 
 def _write_recast_plan_atomically(path: Path, content: str) -> None:
@@ -80,6 +92,37 @@ def _print_plan_warnings(plan: Any) -> None:
         console.print(f"  - {warning}")
 
 
+def _publish_recast_plan(loaded: Any, plan: Any) -> tuple[Path, str]:
+    """`plan`（`RecastPlan`）を `<project_dir>/recast_plan.json` へ canonical
+    形式（sorted keys, 2-space indent, trailing newline — deterministic）で
+    atomic 公開し、publish したバイト列自身の sha256（`plan_sha256`）を返す。
+
+    `recast plan`/`recast run`/`recast ingest` の 3 コマンドすべてが計画
+    パイプラインを評価するたびに使う single source（Codex P2 fourth round
+    #207 の `plan_sha256` 突合契約 — publish 後の削除・破損・別 (variant,
+    backend) の plan による上書きを `recast status` が検出できるようにする
+    — を `run`/`ingest` にも一貫適用する。従来 `run` は `recast_plan.json`
+    を publish しなかったため、`ingest` が信頼する `plan_sha256` の実体が
+    存在しなかった）。呼び出し側は書き込み失敗（`OSError`）を own の Exit
+    コードへ変換する。
+    """
+    from svp_rpe.recast.plan import RECAST_PLAN_FILENAME
+
+    plan_path = loaded.project_dir / RECAST_PLAN_FILENAME
+    canonical = (
+        json.dumps(
+            plan.model_dump(mode="json", exclude_none=True),
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+        )
+        + "\n"
+    )
+    _write_recast_plan_atomically(plan_path, canonical)
+    plan_sha256 = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return plan_path, plan_sha256
+
+
 @recast_app.command("plan")
 def recast_plan_cmd(
     project_yaml: str = typer.Argument(..., help="Path to RecastProject YAML"),
@@ -109,18 +152,8 @@ def recast_plan_cmd(
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
-    plan_path = loaded.project_dir / "recast_plan.json"
-    canonical = (
-        json.dumps(
-            result.plan.model_dump(mode="json", exclude_none=True),
-            ensure_ascii=False,
-            sort_keys=True,
-            indent=2,
-        )
-        + "\n"
-    )
     try:
-        _write_recast_plan_atomically(plan_path, canonical)
+        plan_path, plan_sha256 = _publish_recast_plan(loaded, result.plan)
     except OSError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -134,6 +167,7 @@ def recast_plan_cmd(
         result.plan.state_reached,
         _plan_state_note(result.plan),
         inputs_digest=result.inputs_digest,
+        plan_sha256=plan_sha256,
     )
 
     anchors_table = Table(title=f"Anchors: {variant}@{backend}")
@@ -191,16 +225,18 @@ def recast_run_cmd(
     """Resolve the backend invoker for (variant, backend) and run it.
 
     Step 1 runs the same plan pipeline as `recast plan` (reusing its compiled
-    artifacts, not recomputing them) — the plan-stage outcome (`state_reached`,
-    `blocked`/advisory-unsupported note, `inputs_digest`) is recorded via the
-    same `record_state` semantics as `recast plan` (Codex P2 #207 applied
-    consistently here too), even though `run` does not itself publish
-    `recast_plan.json` (there is no artifact-ordering concern for a file this
-    command never writes — the record purely reflects what this invocation's
-    plan pipeline evaluated). Reaching `compiled`/`verified` (whichever
-    `policy.require_verified_package` demands) is required — anything short of
-    that (a `blocked_*` state) is reported (including advisory warnings) and
-    exits 1 without invoking a backend.
+    artifacts, not recomputing them) — and, like `recast plan`, publishes
+    `recast_plan.json` and records the plan-stage outcome (`state_reached`,
+    `blocked`/advisory-unsupported note, `inputs_digest`, `plan_sha256`) via
+    the exact same `record_state`/`_publish_recast_plan` semantics (Codex P2
+    #207 / fourth round applied consistently here — `run` used to skip
+    publishing `recast_plan.json` at all, which left `plan_sha256` with no
+    real file to stand for, breaking the fail-closed staleness contract
+    `recast ingest` needs before trusting a recorded `awaiting_generation`).
+    Reaching `compiled`/`verified` (whichever `policy.require_verified_package`
+    demands) is required — anything short of that (a `blocked_*` state) is
+    reported (including advisory warnings) and exits 1 without invoking a
+    backend.
 
     manual backends publish the 6 order files under
     `<builds_root>/orders/<variant>@<backend>/`, *then* record
@@ -208,8 +244,9 @@ def recast_run_cmd(
     *then* record `generated` (or `generation_failed` on error), and exit 0/1
     accordingly — publish-before-record in both cases, matching the plan
     stage's publish-before-record order. Every `record_state` call in this
-    command carries the same `inputs_digest` computed by the plan stage, so
-    `recast status`'s stale-run detection also covers post-generation states.
+    command carries the same `inputs_digest`/`plan_sha256` computed by the
+    plan stage, so `recast status`'s (and `recast ingest`'s) stale-run
+    detection also covers post-generation states.
     """
     import yaml
     from pydantic import ValidationError
@@ -231,11 +268,15 @@ def recast_run_cmd(
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
+    try:
+        _plan_path, plan_sha256 = _publish_recast_plan(loaded, artifacts.result.plan)
+    except OSError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
     inputs_digest = artifacts.result.inputs_digest
-    # plan 段の到達状態を記録する（Codex P2 #207 の意味論を run にも一貫適用）。
-    # run は recast_plan.json を publish しないため「publish 成功後に記録」の
-    # artifact-ordering 制約はそもそも掛からない — この record は単に「この
-    # 呼び出しの plan パイプラインが何を評価したか」を反映するだけ。
+    # plan 段の到達状態は plan JSON の publish 成功後にのみ記録する（Codex P2
+    # #207 の順序保証を run にも適用 — plan_sha256 が実在ファイルを指すように）。
     record_state(
         loaded.project_dir,
         variant,
@@ -243,6 +284,7 @@ def recast_run_cmd(
         artifacts.result.plan.state_reached,
         _plan_state_note(artifacts.result.plan),
         inputs_digest=inputs_digest,
+        plan_sha256=plan_sha256,
     )
     _print_plan_warnings(artifacts.result.plan)
 
@@ -273,9 +315,11 @@ def recast_run_cmd(
     if artifacts.backend_ref.invocation == "manual":
         # 注文書 6 ファイルは invoker.prepare() が既に atomic 公開済み — 記録は
         # その公開成功後（prepare() が例外なく戻った後）にのみ行う。
-        # inputs_digest は plan 段で計算済みの値を引き回す（Codex P2 review round 2
-        # 指摘 4: run 後の record_state が inputs_digest=None で上書きすると、
-        # plan 実行後の入力変更を status の stale 検出が見失う）。
+        # inputs_digest/plan_sha256 は plan 段で計算・publish 済みの値を引き回す
+        # （Codex P2 review round 2 指摘 4: run 後の record_state が
+        # inputs_digest=None で上書きすると、plan 実行後の入力変更を status の
+        # stale 検出が見失う。plan_sha256 も同様に引き回さないと `recast ingest`
+        # の plan ファイル突合が機能しない）。
         note = os.path.relpath(prepared.order_dir, loaded.project_dir)
         record_state(
             loaded.project_dir,
@@ -284,6 +328,7 @@ def recast_run_cmd(
             "awaiting_generation",
             note=note,
             inputs_digest=inputs_digest,
+            plan_sha256=plan_sha256,
         )
         console.print(f"[green]Order files published to {prepared.order_dir}[/green]")
         console.print(f"Next step: see {prepared.order_dir / 'next_command.txt'}")
@@ -299,13 +344,20 @@ def recast_run_cmd(
             "generation_failed",
             note=str(exc),
             inputs_digest=inputs_digest,
+            plan_sha256=plan_sha256,
         )
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
     note = f"{os.path.relpath(take.audio_path, loaded.project_dir)} sha256={take.sha256}"
     record_state(
-        loaded.project_dir, variant, backend, "generated", note=note, inputs_digest=inputs_digest
+        loaded.project_dir,
+        variant,
+        backend,
+        "generated",
+        note=note,
+        inputs_digest=inputs_digest,
+        plan_sha256=plan_sha256,
     )
     console.print(f"[green]Generated take: {take.audio_path} (sha256={take.sha256})[/green]")
 
@@ -322,15 +374,21 @@ def recast_ingest_cmd(
     """Ingest an externally generated take for a manual backend run.
 
     Requires `(variant, backend)` to currently be at `awaiting_generation`
-    (per `recast_state.json`) — anything else (including a stale
-    `inputs_digest`, same detection as `recast status`) is reported and
-    exits 1 without touching any file. Rebuilds the same plan context as
-    `recast run` (not a different code path), resolves the `ManualInvoker`,
-    and calls `collect(audio)` to atomically ingest the audio into
-    `<builds_root>/takes/<variant>@<backend>/`. Records `generated` (with the
-    same `inputs_digest` the plan stage computed) only after that publish
-    succeeds — this is the command `next_command.txt`/`order_sheet.md`
-    (`ManualInvoker`) advertise.
+    (per `recast_state.json`). Before trusting that recorded state, applies
+    the exact same fail-closed staleness checks as `recast status`
+    (Codex P2 review round 2 indicated this command is where PR2's own
+    forward-looking `plan_sha256` note applies): the recorded `inputs_digest`
+    must match the current inputs, *and* the recorded `plan_sha256` must
+    match the current `recast_plan.json` bytes (missing/unreadable counts as
+    a mismatch) — either mismatch is reported and exits 1 without touching
+    any file. Only then does it rebuild the plan context via the same
+    `build_recast_plan_artifacts` path `recast run` uses (re-publishing
+    `recast_plan.json` — same `_publish_recast_plan` single source), resolve
+    the `ManualInvoker`, and call `collect(audio)` to atomically ingest the
+    audio into `<builds_root>/takes/<variant>@<backend>/`. Records `generated`
+    (with the freshly (re)computed `inputs_digest`/`plan_sha256`) only after
+    that publish succeeds — this is the command `next_command.txt`/
+    `order_sheet.md` (`ManualInvoker`) advertise.
 
     Scope: this command stops at `generated`. `observe`/`report` integration
     (`recast status`'s next-step for `generated`) is PR5 scope — this command
@@ -346,7 +404,11 @@ def recast_ingest_cmd(
         resolve_invoker,
         run_context_from_plan_artifacts,
     )
-    from svp_rpe.recast.plan import build_recast_plan_artifacts, compute_recast_inputs_digest
+    from svp_rpe.recast.plan import (
+        RECAST_PLAN_FILENAME,
+        build_recast_plan_artifacts,
+        compute_recast_inputs_digest,
+    )
     from svp_rpe.recast.state import load_recast_state, record_state
 
     try:
@@ -367,6 +429,9 @@ def recast_ingest_cmd(
         )
         raise typer.Exit(code=1)
 
+    # 状態を信用する前の突合（`recast status` と同じ fail-closed 意味論、
+    # Codex P2 review round 2 指摘 4 / PR2 の申し送り「run コマンド追加時は
+    # plan_sha256 突合を先に行う」対応）: inputs_digest → plan_sha256 の順。
     try:
         current_digest = compute_recast_inputs_digest(loaded, variant=variant, backend=backend)
     except (OSError, ValueError, RecastError) as exc:
@@ -380,9 +445,25 @@ def recast_ingest_cmd(
         )
         raise typer.Exit(code=1)
 
+    current_plan_sha256 = _read_plan_sha256(loaded.project_dir / RECAST_PLAN_FILENAME)
+    if run.plan_sha256 is not None and run.plan_sha256 != current_plan_sha256:
+        typer.echo(
+            f"Error: {run_key} plan artifact (recast_plan.json) changed or is missing since "
+            "the order files were published (stale). Re-run 'svprpe recast plan' / "
+            "'svprpe recast run' first.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
     try:
         artifacts = build_recast_plan_artifacts(loaded, variant=variant, backend=backend)
     except (OSError, ValueError, ValidationError, yaml.YAMLError, RecastError, ArrangementError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    try:
+        _plan_path, plan_sha256 = _publish_recast_plan(loaded, artifacts.result.plan)
+    except OSError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
@@ -406,6 +487,7 @@ def recast_ingest_cmd(
         "generated",
         note=note,
         inputs_digest=artifacts.result.inputs_digest,
+        plan_sha256=plan_sha256,
     )
     console.print(f"[green]Ingested take: {take.audio_path} (sha256={take.sha256})[/green]")
     console.print("Next step: observe/report は今後のコマンドで提供予定です（未実装）。")
@@ -418,12 +500,16 @@ def recast_status_cmd(
     """Show `recast_state.json`'s current state per (variant, backend) run + next step.
 
     入力（score/identity_manifest/arrangement spec/capability profile/
-    mode_overrides）が記録済み run の `inputs_digest` と一致しない場合、その run
-    は stale（`recast plan` 再実行が必要）として表示する — 旧 state をそのまま
-    信用して次の一手（例: 生成に進む）を勧めない（Codex P2 #207）。
+    mode_overrides/device profile）が記録済み run の `inputs_digest` と一致しない
+    場合、その run は stale（`recast plan` 再実行が必要）として表示する — 旧
+    state をそのまま信用して次の一手（例: 生成に進む）を勧めない（Codex P2
+    #207）。加えて、記録済み `plan_sha256` を現在の `recast_plan.json` の
+    bytes（不在/読取失敗を含む）と突き合わせる — publish 後に plan 成果物が
+    削除・破損・別 (variant,backend) の plan で上書きされた場合も同様に stale
+    表示へ倒す（Codex P2 fourth round #207: fail-closed）。
     """
     from svp_rpe.recast import RecastError, load_recast_project
-    from svp_rpe.recast.plan import compute_recast_inputs_digest
+    from svp_rpe.recast.plan import RECAST_PLAN_FILENAME, compute_recast_inputs_digest
     from svp_rpe.recast.state import load_recast_state
 
     try:
@@ -439,6 +525,8 @@ def recast_status_cmd(
     table.add_column("next step")
 
     replan_step = _NEXT_STEP_BY_STATE["draft"]
+    plan_path = loaded.project_dir / RECAST_PLAN_FILENAME
+    current_plan_sha256 = _read_plan_sha256(plan_path)
     for variant in sorted(loaded.project.variants):
         for backend in sorted(loaded.project.backends):
             key = f"{variant}@{backend}"
@@ -455,6 +543,9 @@ def recast_status_cmd(
                 )
                 if run.inputs_digest is not None and run.inputs_digest != current_digest:
                     note = "stale（入力が変更済み）— svprpe recast plan 再実行が必要"
+                    next_step = replan_step
+                elif run.plan_sha256 is not None and run.plan_sha256 != current_plan_sha256:
+                    note = "stale（plan 成果物が変更/不在）— svprpe recast plan 再実行が必要"
                     next_step = replan_step
                 else:
                     next_step = _NEXT_STEP_BY_STATE.get(state, "-")

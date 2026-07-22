@@ -69,6 +69,12 @@ class RecastRunState(RecastStateModel):
     本フィールド追加前に書かれた既存 `recast_state.json` との後方互換のため
     `None` を許容する（`recast status` は `None` を「不明」として stale
     判定をスキップし、false positive を出さない）。
+
+    `plan_sha256`: この run を記録した時点で publish した `recast_plan.json`
+    自身の bytes sha256（Codex P2 fourth round #207: state は plan の中身を
+    一切参照しておらず、publish 後に成果物が削除・破損・別 (variant,backend)
+    の plan で上書きされても state だけが古い `verified` を信用し続けていた）。
+    `inputs_digest` と同じ optional 後方互換規約。
     """
 
     state: RecastState
@@ -76,6 +82,7 @@ class RecastRunState(RecastStateModel):
     updated_at: str
     history: List[RecastStateHistoryEntry] = Field(default_factory=list)
     inputs_digest: Optional[str] = None
+    plan_sha256: Optional[str] = None
 
 
 class RecastStateFile(RecastStateModel):
@@ -144,15 +151,17 @@ def record_state(
     note: Optional[str] = None,
     *,
     inputs_digest: Optional[str] = None,
+    plan_sha256: Optional[str] = None,
 ) -> RecastStateFile:
     """`(variant, backend)` 実行の到達状態を記録し、更新後の `RecastStateFile` を返す。
 
-    再実行冪等: 直前の記録済み状態が `state` + `note` + `inputs_digest` の組で
-    完全一致する場合は history に重複追加せず、ファイルも書き換えない（呼び出し側
-    から見て純粋な no-op — `updated_at` も更新しない）。`inputs_digest` も
-    同一性判定に含める理由: 入力が変わっても偶然 state/note が同じになるケースで
-    digest だけ古いまま no-op してしまうと `recast status` の stale 検出が機能
-    しなくなるため。それ以外は history へ 1 件追記し、atomic write で publish する。
+    再実行冪等: 直前の記録済み状態が `state` + `note` + `inputs_digest` +
+    `plan_sha256` の組で完全一致する場合は history に重複追加せず、ファイルも
+    書き換えない（呼び出し側から見て純粋な no-op — `updated_at` も更新しない）。
+    `inputs_digest` / `plan_sha256` も同一性判定に含める理由: これらが変わっても
+    偶然 state/note が同じになるケースで古いまま no-op してしまうと
+    `recast status` の stale 検出が機能しなくなるため。それ以外は history へ
+    1 件追記し、atomic write で publish する。
     """
     state_file = load_recast_state(project_dir)
     key = _run_key(variant, backend)
@@ -162,6 +171,7 @@ def record_state(
         and existing.state == state
         and existing.note == note
         and existing.inputs_digest == inputs_digest
+        and existing.plan_sha256 == plan_sha256
     ):
         return state_file
 
@@ -175,6 +185,7 @@ def record_state(
         updated_at=now,
         history=new_history,
         inputs_digest=inputs_digest,
+        plan_sha256=plan_sha256,
     )
     new_state_file = RecastStateFile(schema_version=RECAST_STATE_SCHEMA_VERSION, runs=new_runs)
 

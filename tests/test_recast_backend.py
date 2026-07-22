@@ -152,6 +152,59 @@ def test_manual_order_files_are_byte_identical_across_reruns(tmp_path: Path) -> 
         assert (prepared_second.order_dir / name).read_bytes() == expected_bytes
 
 
+def test_next_command_txt_advertises_a_real_working_ingest_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """機械 assert: `next_command.txt`/`order_sheet.md` が案内するコマンドが
+    実在し、実際に成功することを検証する（Codex P2 review round 2 指摘 5:
+    従来は `svprpe recast ingest` が未実装のまま案内されていた）。
+
+    `next_command.txt` を一切解釈・書き換えせず、そのままシェルへ渡せる文字列
+    として `shlex.split` するだけで CLI 起動引数を得て実行する — 文面が実
+    コマンドと僅かでもずれていれば exit_code != 0 で検出できる。`svprpe recast
+    run`（CLI）で publish させる — `ingest` は `recast_state.json` の
+    `awaiting_generation` + `recast_plan.json` の存在を前提とするため、API 直呼び
+    の `_prepare_manual` ではその前提が揃わない。
+    """
+    import shlex
+
+    from typer.testing import CliRunner
+
+    from svp_rpe.cli import app
+
+    project_path = _copy_demo_project(tmp_path)
+    runner = CliRunner()
+    run_result = runner.invoke(
+        app, ["recast", "run", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert run_result.exit_code == 0, run_result.output
+
+    order_dir = project_path.parent / "builds" / "orders" / "edm@suno"
+    next_command = (order_dir / "next_command.txt").read_text(encoding="utf-8").strip()
+    order_sheet = (order_dir / "order_sheet.md").read_text(encoding="utf-8")
+    assert next_command in order_sheet  # order_sheet.md のコードブロックと一致
+
+    tokens = shlex.split(next_command)
+    assert tokens[0] == "svprpe"
+    argv = tokens[1:]
+
+    audio_relative = argv[argv.index("--audio") + 1]
+    audio_path = project_path.parent / audio_relative
+    audio_path.parent.mkdir(parents=True, exist_ok=True)
+    audio_path.write_bytes(b"RIFF....WAVEfake-audio-bytes")
+
+    # next_command.txt のパス（project 引数・--audio）はいずれも project_dir
+    # 相対 — 実運用同様、project_dir を cwd にしてから実行する。
+    monkeypatch.chdir(project_path.parent)
+    result = runner.invoke(app, argv)
+
+    assert result.exit_code == 0, result.output
+    from svp_rpe.recast.state import load_recast_state
+
+    state_file = load_recast_state(project_path.parent)
+    assert state_file.runs["edm@suno"].state == "generated"
+
+
 # --- manual: cover mode branch --------------------------------------------------
 
 

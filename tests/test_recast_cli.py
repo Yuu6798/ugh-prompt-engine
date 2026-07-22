@@ -188,6 +188,106 @@ def test_recast_status_reports_stale_after_identity_artifact_changes(tmp_path: P
     assert "backend を実行して音声を生成する" not in status_result.output
 
 
+def test_recast_status_reports_stale_after_device_profile_changes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """`recast plan` 実行後に、実際に使われる device profile
+    （`config/device_profiles/suno.yaml`）の内容が変わった場合、`recast status`
+    は stale と表示することを検証する（Codex P2 fourth round #207:
+    `inputs_digest` が device profile の中身を一切見ていなかった欠陥）。
+
+    実リポジトリの `config/device_profiles/suno.yaml` は変更せず、
+    `svp_rpe.recast.plan.resolve_config_bytes`（digest 専用の解決経路）だけを
+    monkeypatch でスタブに差し替え、tmp_path 配下の fake ファイルを指すように
+    する（実 pipeline が使う `load_device_profile` 経路とは独立 — plan の
+    verified 到達には影響しない）。"""
+    import svp_rpe.recast.plan as recast_plan_module
+
+    project_path = _copy_demo_project(tmp_path)
+
+    device_profile_path = tmp_path / "fake_device_profile.yaml"
+    device_profile_path.write_bytes(b"schema_version: device-profile/fake\ngenerator: suno\n")
+
+    def _fake_resolve_config_bytes(name: str) -> bytes | None:
+        if name == "device_profiles/suno":
+            return device_profile_path.read_bytes()
+        return None
+
+    monkeypatch.setattr(recast_plan_module, "resolve_config_bytes", _fake_resolve_config_bytes)
+
+    plan_result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert plan_result.exit_code == 0, plan_result.output
+
+    device_profile_path.write_bytes(
+        b"schema_version: device-profile/fake\ngenerator: suno\nnotes: changed\n"
+    )
+
+    status_result = runner.invoke(app, ["recast", "status", str(project_path)])
+
+    assert status_result.exit_code == 0, status_result.output
+    assert "stale" in status_result.output
+    assert "再実行" in status_result.output
+
+
+def _add_cover_backend(project_path: Path) -> None:
+    """既存 `suno` backend と同じ `capability_profile`/`mode_overrides` を再利用し
+    invocation_mode だけ異なる第 2 backend `suno_cover` を project.yaml に追記する
+    （recast_plan.json 上書きテスト専用 — variant はどの backend でも `edm` を
+    共用するため新規 arrangement は不要）。`suno:` backend ブロック直後（唯一の
+    `mode_overrides: "suno"` 行の直後）へ挿入する — PR3 で `deterministic:`
+    backend が `suno:` の後に追加されたため、`policy:` への直接隣接は前提に
+    できない（backends マッピング内での挿入位置は YAML/pydantic の dict なので
+    どこでもよい）。"""
+    text = project_path.read_text(encoding="utf-8")
+    mutated = text.replace(
+        '    mode_overrides: "suno"\n',
+        '    mode_overrides: "suno"\n'
+        "  suno_cover:\n"
+        '    capability_profile: "suno"\n'
+        "    invocation: manual\n"
+        "    invocation_mode: cover\n"
+        '    mode_overrides: "suno"\n',
+        1,
+    )
+    assert mutated != text  # sanity: the replacement actually matched
+    project_path.write_text(mutated, encoding="utf-8")
+
+
+def test_recast_status_reports_stale_after_plan_overwritten_by_other_run(
+    tmp_path: Path,
+) -> None:
+    """`recast_plan.json` は project 単位で単一ファイル — 別の (variant, backend)
+    向けに `recast plan` を再実行すると同じファイルが上書きされる。元の run
+    （`edm@suno`）の state はまだ `verified` のままだが、その `plan_sha256` は
+    もはや現在の `recast_plan.json`（`edm@suno_cover` 分）と一致しない。
+    `recast status` はこれを検出して stale 表示にすることを検証する（Codex P2
+    fourth round #207: 生成物の削除・破損・別 run による上書きへの fail-closed
+    fallback）。"""
+    project_path = _copy_demo_project(tmp_path)
+    _add_cover_backend(project_path)
+
+    first = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert first.exit_code == 0, first.output
+
+    # 2 回目の実行結果（verified/blocked）は問わない — recast_plan.json が
+    # 別内容で上書きされることだけがこのテストの前提。
+    runner.invoke(
+        app,
+        ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno_cover"],
+    )
+    assert (project_path.parent / "recast_plan.json").is_file()
+
+    status_result = runner.invoke(app, ["recast", "status", str(project_path)])
+
+    assert status_result.exit_code == 0, status_result.output
+    assert "stale" in status_result.output
+    assert "再実行" in status_result.output
+
+
 def test_recast_help_lists_plan_and_status() -> None:
     result = runner.invoke(app, ["recast", "--help"])
 

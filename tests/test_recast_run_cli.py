@@ -15,7 +15,6 @@ from svp_rpe.recast.backend import (
     resolve_invoker,
     run_context_from_plan_artifacts,
 )
-from svp_rpe.recast.backends.manual import ManualInvoker
 from svp_rpe.recast.plan import build_recast_plan_artifacts
 from svp_rpe.recast.state import load_recast_state
 
@@ -156,17 +155,176 @@ def test_recast_help_lists_run() -> None:
     assert "run" in result.output
 
 
-# --- E2E acceptance: manual run -> deterministic invoke -> collect -> generated -
+# --- recast ingest ---------------------------------------------------------------
+
+
+def test_recast_ingest_transitions_awaiting_generation_to_generated(tmp_path: Path) -> None:
+    project_path = _copy_demo_project(tmp_path)
+    run_result = runner.invoke(
+        app, ["recast", "run", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert run_result.exit_code == 0, run_result.output
+
+    # next_command.txt が実在コマンドを案内していることの機械 assert（Codex P2
+    # review round 2 指摘 5）: 文字列冒頭が `svprpe recast ingest ` であること
+    # の直接検証は tests/test_recast_backend.py 側（実行までの機械 assert）で
+    # 行う。ここでは案内された通りの --audio 相対パスへ音声を置いてから
+    # ingest する実運用手順そのものを検証する。
+    order_dir = project_path.parent / "builds" / "orders" / "edm@suno"
+    next_command = (order_dir / "next_command.txt").read_text(encoding="utf-8").strip()
+    assert next_command.startswith("svprpe recast ingest ")
+
+    takes_dir = project_path.parent / "builds" / "takes" / "edm@suno"
+    takes_dir.mkdir(parents=True, exist_ok=True)
+    audio_path = takes_dir / "take-01.wav"
+    audio_path.write_bytes(b"RIFF....WAVEfake-audio-bytes")
+
+    ingest_result = runner.invoke(
+        app,
+        [
+            "recast",
+            "ingest",
+            str(project_path),
+            "--variant",
+            "edm",
+            "--backend",
+            "suno",
+            "--audio",
+            str(audio_path),
+        ],
+    )
+    assert ingest_result.exit_code == 0, ingest_result.output
+    # 未実装コマンド名（svprpe observe/report 等）を案内しない（正直な次の一手）。
+    assert "svprpe observe" not in ingest_result.output
+    assert "svprpe recast report" not in ingest_result.output
+
+    state_file = load_recast_state(project_path.parent)
+    run = state_file.runs["edm@suno"]
+    assert run.state == "generated"
+    assert run.inputs_digest is not None
+    assert run.plan_sha256 is not None
+
+    take_json = json.loads((takes_dir / "take.json").read_text(encoding="utf-8"))
+    assert take_json["source"] == "manual"
+
+
+def test_recast_ingest_rejects_when_not_awaiting_generation(tmp_path: Path) -> None:
+    project_path = _copy_demo_project(tmp_path)
+    audio_path = tmp_path / "external.wav"
+    audio_path.write_bytes(b"RIFF....WAVEfake-audio-bytes")
+
+    result = runner.invoke(
+        app,
+        [
+            "recast",
+            "ingest",
+            str(project_path),
+            "--variant",
+            "edm",
+            "--backend",
+            "suno",
+            "--audio",
+            str(audio_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "awaiting_generation" in result.output
+
+
+def test_recast_ingest_rejects_when_inputs_are_stale(tmp_path: Path) -> None:
+    project_path = _copy_demo_project(tmp_path)
+    run_result = runner.invoke(
+        app, ["recast", "run", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert run_result.exit_code == 0, run_result.output
+
+    score_path = project_path.parent / "composition_score.yaml"
+    score_path.write_text(
+        score_path.read_text(encoding="utf-8").replace(
+            'core: "introspective night drive"', 'core: "changed after awaiting_generation"'
+        ),
+        encoding="utf-8",
+    )
+    audio_path = tmp_path / "external.wav"
+    audio_path.write_bytes(b"RIFF....WAVEfake-audio-bytes")
+
+    result = runner.invoke(
+        app,
+        [
+            "recast",
+            "ingest",
+            str(project_path),
+            "--variant",
+            "edm",
+            "--backend",
+            "suno",
+            "--audio",
+            str(audio_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "stale" in result.output
+
+    # ingest が拒否された run に対して status も stale 表示し、ingest 案内を
+    # 出さない（Codex P2 review round 2 指摘 4 の受け入れ条件）。
+    status_result = runner.invoke(app, ["recast", "status", str(project_path)])
+    assert status_result.exit_code == 0
+    assert "stale" in status_result.output
+    assert "ingest" not in status_result.output
+
+
+def test_recast_ingest_rejects_when_plan_artifact_is_stale(tmp_path: Path) -> None:
+    project_path = _copy_demo_project(tmp_path)
+    run_result = runner.invoke(
+        app, ["recast", "run", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert run_result.exit_code == 0, run_result.output
+
+    plan_path = project_path.parent / "recast_plan.json"
+    plan_path.unlink()  # recast_plan.json 削除（P2 fourth round: 不在も stale 扱い）
+    audio_path = tmp_path / "external.wav"
+    audio_path.write_bytes(b"RIFF....WAVEfake-audio-bytes")
+
+    result = runner.invoke(
+        app,
+        [
+            "recast",
+            "ingest",
+            str(project_path),
+            "--variant",
+            "edm",
+            "--backend",
+            "suno",
+            "--audio",
+            str(audio_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "plan artifact" in result.output
+
+
+def test_recast_help_lists_ingest() -> None:
+    result = runner.invoke(app, ["recast", "--help"])
+
+    assert result.exit_code == 0
+    assert "ingest" in result.output
+
+
+# --- E2E acceptance: manual run -> deterministic invoke -> ingest CLI -> generated
 
 
 @pytest.mark.slow
-def test_e2e_manual_awaiting_generation_then_deterministic_collect_reaches_generated(
+def test_e2e_manual_awaiting_generation_then_ingest_cli_reaches_generated(
     tmp_path: Path,
 ) -> None:
-    """受け入れ条件（PR3 指示書）:
+    """受け入れ条件（PR3 指示書 + Codex P2 review round 2 指摘 5 対応）:
     ① manual run（CLI）→ awaiting_generation
     ② deterministic invoke（API）で「外部生成の代役」音声を合成
-    ③ ManualInvoker.collect()（API）でその音声を takes へ収蔵
+    ③ svprpe recast ingest（CLI — next_command.txt が実際に案内するコマンド）で
+       takes へ atomic 収蔵
     ④ 状態が generated へ遷移
     """
     project_path = _copy_demo_project(tmp_path)
@@ -180,22 +338,18 @@ def test_e2e_manual_awaiting_generation_then_deterministic_collect_reaches_gener
     state_after_run = load_recast_state(project_path.parent)
     assert state_after_run.runs["edm@suno"].state == "awaiting_generation"
 
-    # Rebuild the same ManualInvoker/PreparedInvocation via the API to get a
-    # handle on `order_dir`/`takes_dir` for the collect() step (the CLI process
-    # itself doesn't hand these back to the test — determinism of `prepare()`
-    # guarantees this reproduces the same paths, verified separately by
-    # test_recast_backend.py::test_manual_order_files_are_byte_identical_across_reruns).
-    loaded = load_recast_project(project_path)
-    suno_artifacts = build_recast_plan_artifacts(loaded, variant="edm", backend="suno")
-    suno_profile = load_backend_capability_profile(loaded, "suno")
-    suno_ctx = run_context_from_plan_artifacts(
-        loaded, variant="edm", backend="suno", artifacts=suno_artifacts, profile=suno_profile
-    )
-    suno_invoker = resolve_invoker(suno_artifacts.backend_ref, suno_profile)
-    assert isinstance(suno_invoker, ManualInvoker)
-    suno_prepared = suno_invoker.prepare(suno_ctx)
+    order_dir = project_path.parent / "builds" / "orders" / "edm@suno"
+    next_command = (order_dir / "next_command.txt").read_text(encoding="utf-8").strip()
+    assert next_command.startswith("svprpe recast ingest ")
 
-    # ② API: deterministic invoke synthesizes a stand-in "externally generated" take.
+    # ② API: deterministic invoke synthesizes a stand-in "externally generated"
+    # take. This deliberately stays API-level rather than going through
+    # `svprpe recast run --backend deterministic`: `recast_plan.json` is a
+    # single file shared by the whole project directory, so running a second
+    # backend's plan through the CLI would overwrite it and make the suno
+    # run's `plan_sha256` stale — exactly what an *external* generation step
+    # (Suno UI, not this repo's own CLI) must not do.
+    loaded = load_recast_project(project_path)
     det_artifacts = build_recast_plan_artifacts(
         loaded, variant="edm_deterministic", backend="deterministic"
     )
@@ -213,27 +367,30 @@ def test_e2e_manual_awaiting_generation_then_deterministic_collect_reaches_gener
     det_take = det_invoker.invoke(det_prepared)
     assert det_take.audio_path.is_file()
 
-    # ③ API: ManualInvoker.collect() ingests that stand-in audio as if delivered
-    # externally.
-    from svp_rpe.recast.state import record_state
-
-    manual_take = suno_invoker.collect(suno_prepared, det_take.audio_path)
-    assert manual_take.source == "manual"
-    assert manual_take.audio_path == suno_prepared.takes_dir / "take-01.wav"
-    assert manual_take.audio_path.read_bytes() == det_take.audio_path.read_bytes()
-
-    record_state(
-        loaded.project_dir,
-        "edm",
-        "suno",
-        "generated",
-        note=f"{manual_take.audio_path} sha256={manual_take.sha256}",
+    # ③ CLI: svprpe recast ingest — the exact command next_command.txt advertises.
+    ingest_result = runner.invoke(
+        app,
+        [
+            "recast",
+            "ingest",
+            str(project_path),
+            "--variant",
+            "edm",
+            "--backend",
+            "suno",
+            "--audio",
+            str(det_take.audio_path),
+        ],
     )
+    assert ingest_result.exit_code == 0, ingest_result.output
 
     # ④ state transitioned to generated.
-    final_state = load_recast_state(loaded.project_dir)
-    assert final_state.runs["edm@suno"].state == "generated"
+    final_state = load_recast_state(project_path.parent)
+    run = final_state.runs["edm@suno"]
+    assert run.state == "generated"
+    assert run.plan_sha256 is not None
 
-    take_json = json.loads((suno_prepared.takes_dir / "take.json").read_text(encoding="utf-8"))
+    takes_dir = project_path.parent / "builds" / "takes" / "edm@suno"
+    take_json = json.loads((takes_dir / "take.json").read_text(encoding="utf-8"))
     assert take_json["source"] == "manual"
-    assert take_json["sha256"] == manual_take.sha256
+    assert (takes_dir / "take-01.wav").read_bytes() == det_take.audio_path.read_bytes()

@@ -48,6 +48,30 @@ def load_packaged_config(name: str) -> Optional[dict[str, Any]]:
     return _load_packaged_config(name)
 
 
+def resolve_config_bytes(name: str) -> Optional[bytes]:
+    """`load_config` と同じ local→packaged 解決順序で `name` の raw bytes を返す。
+
+    中身のパース/検証を必要としない呼び出し側（例: `recast.plan` の
+    stale-run 検出用 digest 計算 — 実際に読まれるファイルと同一の解決パスを
+    再現する必要がある）向け。見つからなければ `None`（`load_config` の
+    `FileNotFoundError` 相当だが、こちらは「見つからない」を正当な結果として
+    返す — 呼び出し側が存在有無を明示的に扱えるようにする）。"""
+    for path in _local_config_paths(name):
+        if path.is_file():
+            return path.read_bytes()
+    return _load_packaged_config_bytes(name)
+
+
+def _load_packaged_config_bytes(name: str) -> Optional[bytes]:
+    try:
+        resource = files("svp_rpe.config").joinpath(f"{name}.yaml")
+    except ModuleNotFoundError:
+        return None
+    if not resource.is_file():
+        return None
+    return resource.read_bytes()
+
+
 def _load_packaged_config(name: str) -> Optional[dict[str, Any]]:
     try:
         resource = files("svp_rpe.config").joinpath(f"{name}.yaml")
