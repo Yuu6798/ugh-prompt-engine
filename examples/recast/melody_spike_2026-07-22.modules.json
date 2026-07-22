@@ -1,0 +1,130 @@
+{
+  "direct_imports": [
+    "svp_rpe.compose.loader",
+    "svp_rpe.compose.models",
+    "svp_rpe.perform.performer",
+    "svp_rpe.perform.synth",
+    "svp_rpe.rpe.models",
+    "svp_rpe.rpe.physical_features"
+  ],
+  "generated_by": "throwaway script per docs/recast_phase0_melody_spike.md provenance section (importlib closure walk of sys.modules)",
+  "modules": {
+    "svp_rpe": {
+      "path": "src/svp_rpe/__init__.py",
+      "sha256": "2fea059aff6c6f69641c1cbb142c4fa410a8f7bccd6d092d2d6ed56a540b5a93"
+    },
+    "svp_rpe.compose": {
+      "path": "src/svp_rpe/compose/__init__.py",
+      "sha256": "abe7cec73ff1d491f7d15f337b79c21765532f893af01502482faacda6163129"
+    },
+    "svp_rpe.compose.convert": {
+      "path": "src/svp_rpe/compose/convert.py",
+      "sha256": "8e8fd34e4b898828bde881e81e221eca1dceeb442f7a11f649279ba54a247e65"
+    },
+    "svp_rpe.compose.device_profile": {
+      "path": "src/svp_rpe/compose/device_profile.py",
+      "sha256": "4ec53cb9dd89ab4d11a33f00640fb43b62b8a81c1e475cf6705d729d63393ce4"
+    },
+    "svp_rpe.compose.fixity": {
+      "path": "src/svp_rpe/compose/fixity.py",
+      "sha256": "f8a801d2f0204723b9d4c57206a5b029ec9eb49f87c38800bba50657fb2921a8"
+    },
+    "svp_rpe.compose.loader": {
+      "path": "src/svp_rpe/compose/loader.py",
+      "sha256": "ad581b49056b02a409f11db22a255ed3d3a568341a1d9fe3ae0e37524786232e"
+    },
+    "svp_rpe.compose.models": {
+      "path": "src/svp_rpe/compose/models.py",
+      "sha256": "ab78160e0d021912d6d6d2eb3430167bf2cae0a4b19d58fa488279088c645a7f"
+    },
+    "svp_rpe.compose.prompt_renderer": {
+      "path": "src/svp_rpe/compose/prompt_renderer.py",
+      "sha256": "dbf9a46964b08e075727b220ae49cd5fd0f8531182b8bd89586105fe9f367621"
+    },
+    "svp_rpe.eval": {
+      "path": "src/svp_rpe/eval/__init__.py",
+      "sha256": "210cb182ffaf8def3b8adaff31d519471510484b9c2d7f569768058b0f90beac"
+    },
+    "svp_rpe.eval.anchor_matcher": {
+      "path": "src/svp_rpe/eval/anchor_matcher.py",
+      "sha256": "744127b1b81cac872a25fb682bc7fbf17e61eb1f6d8736856dfd5bb07a46972b"
+    },
+    "svp_rpe.eval.delta_e_alignment": {
+      "path": "src/svp_rpe/eval/delta_e_alignment.py",
+      "sha256": "18dc90f71ff11149b344e4ad0c1093c9c019a1cb231afd11b55241d387695fc1"
+    },
+    "svp_rpe.eval.semantic_similarity": {
+      "path": "src/svp_rpe/eval/semantic_similarity.py",
+      "sha256": "21d465f03fd0df934bb3ade26aa359bef5d38f836beb1ba75178c20fe7966a16"
+    },
+    "svp_rpe.keys": {
+      "path": "src/svp_rpe/keys.py",
+      "sha256": "1717165d01a5c0db8b59b465c68feabf23fd12a3258b9f8ffa475c38f37382b1"
+    },
+    "svp_rpe.perform": {
+      "path": "src/svp_rpe/perform/__init__.py",
+      "sha256": "d882df4e7941bed8319ebc8ee05c9fd57dd9082626903ced040140d3f00d2cea"
+    },
+    "svp_rpe.perform.performer": {
+      "path": "src/svp_rpe/perform/performer.py",
+      "sha256": "4c0c8ca737400f759f2f665dad90f989ca12584d1a0b1969ef31df61a89b684e"
+    },
+    "svp_rpe.perform.synth": {
+      "path": "src/svp_rpe/perform/synth.py",
+      "sha256": "e36d831712b3ef247292a235415a1ce36fe6d6ebaeb127987e23363c43963884"
+    },
+    "svp_rpe.rpe": {
+      "path": "src/svp_rpe/rpe/__init__.py",
+      "sha256": "628bff506647f05700ae24c402284cfd6169add1be131d048a9a1a0ec384907d"
+    },
+    "svp_rpe.rpe.models": {
+      "path": "src/svp_rpe/rpe/models.py",
+      "sha256": "56b8f1c6762a6bcf5e67edf84fe9b00dbe109bdca22167f64ebe0820253fb8db"
+    },
+    "svp_rpe.rpe.physical_features": {
+      "path": "src/svp_rpe/rpe/physical_features.py",
+      "sha256": "f25e6a44572f551c295005b69b874e66bdc9086c0424ac3ec8fc53154c74029f"
+    },
+    "svp_rpe.semantic_ci": {
+      "path": "src/svp_rpe/semantic_ci/__init__.py",
+      "sha256": "fe8c0a18f4454d27afa721c5616990b2787143d3a908f335cc1b3ca826b56c27"
+    },
+    "svp_rpe.semantic_ci.audit": {
+      "path": "src/svp_rpe/semantic_ci/audit.py",
+      "sha256": "b49ffb041892f959f4c3d3606a2c02b44300bcbd851dc4dbe45167f39e15eb00"
+    },
+    "svp_rpe.semantic_ci.core": {
+      "path": "src/svp_rpe/semantic_ci/core.py",
+      "sha256": "09150066d18fd792b3f308b44eecb0bac8999d4eecc4c5325803425b42583b00"
+    },
+    "svp_rpe.semantic_ci.models": {
+      "path": "src/svp_rpe/semantic_ci/models.py",
+      "sha256": "b2a99820eb2900269b4c882895738744ccc34b18251be175613b8b07aa4d3ed6"
+    },
+    "svp_rpe.semantic_ci.observed_adapter": {
+      "path": "src/svp_rpe/semantic_ci/observed_adapter.py",
+      "sha256": "2f44c329516c0d9d0bf3cdbfd345eeb5fc913e5bab5804d9caeb86494d4b4ab1"
+    },
+    "svp_rpe.semantic_ci.report": {
+      "path": "src/svp_rpe/semantic_ci/report.py",
+      "sha256": "c91b2c0770d88a8512569659351a67b6e7c73fb23cb7a2f75288a957c7aeed2c"
+    },
+    "svp_rpe.sentinels": {
+      "path": "src/svp_rpe/sentinels.py",
+      "sha256": "ed2fac3f6e4b914c9eea45ce411a9bc5a8314e76d01be12d5d2872b1717f4e71"
+    },
+    "svp_rpe.utils": {
+      "path": "src/svp_rpe/utils/__init__.py",
+      "sha256": "2769956a64d2bbb0f903a8e2c5b0b5b768ae480ef0820ccf3644abee1ebba266"
+    },
+    "svp_rpe.utils.clamp": {
+      "path": "src/svp_rpe/utils/clamp.py",
+      "sha256": "e842b49eb918fa5b406d765836052a2090473c4d3fce58a9919b3a8b20f15155"
+    },
+    "svp_rpe.utils.config_loader": {
+      "path": "src/svp_rpe/utils/config_loader.py",
+      "sha256": "c165ee2c2c9e7b0563be51d725b4ab42586e3b5c0cec1763478f3048b7bae1eb"
+    }
+  },
+  "schema_version": "1.0"
+}

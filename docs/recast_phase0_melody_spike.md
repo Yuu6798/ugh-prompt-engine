@@ -47,50 +47,41 @@ S2/S3 はスクリプト内で決定論的に構築されるため追加 fixture
   `37854f54b42a1c4d424f357148d3d10f347e238ec72a42d1248bea2203f97d0b`
 - `examples/recast/melody_spike_2026-07-22.json` sha256:
   `12ae62ca08bbb0801fa628943e6feeec21b11dd05c90ecdade059233f887df52`
+- `examples/recast/melody_spike_2026-07-22.modules.json`（測定コード manifest、下記参照）sha256:
+  `057e8023f8f9e093a4448e8af3bf8a1905a9a5a6ac33cc91e56eddd1edabadb5`
 - S2/S3 はスクリプト内で S1 から決定論的に派生するため、S1 の pin +
   スクリプトの pin で全 9 テイクの入力系列が固定される
 - 呼び出しグラフ上、本レシピはこれ以外に YAML config を読まない
   （`load_composition_score` は指定パスのみを読み、`compute_melody_contour` /
   `perform` は config 非依存であることを実装確認済み）
 - 決定論: 同一コマンドを 2 回実行し出力 JSON が byte-identical であることを実測済み
-- **測定コードの同一性は src モジュール manifest pin で担保**:
-  `scripts/spike_melody_similarity.py` の `from svp_rpe...` import 文を実読して
-  第一者（svp_rpe）直接 import の**全数**を列挙した結果、6 モジュールの sha256:
-  - `src/svp_rpe/compose/loader.py` sha256:
-    `ad581b49056b02a409f11db22a255ed3d3a568341a1d9fe3ae0e37524786232e`
-  - `src/svp_rpe/compose/models.py` sha256:
-    `ab78160e0d021912d6d6d2eb3430167bf2cae0a4b19d58fa488279088c645a7f`
-  - `src/svp_rpe/perform/performer.py` sha256:
-    `4c0c8ca737400f759f2f665dad90f989ca12584d1a0b1969ef31df61a89b684e`
-  - `src/svp_rpe/perform/synth.py` sha256:
-    `e36d831712b3ef247292a235415a1ce36fe6d6ebaeb127987e23363c43963884`
-  - `src/svp_rpe/rpe/models.py` sha256:
-    `56b8f1c6762a6bcf5e67edf84fe9b00dbe109bdca22167f64ebe0820253fb8db`
-  - `src/svp_rpe/rpe/physical_features.py` sha256:
-    `f25e6a44572f551c295005b69b874e66bdc9086c0424ac3ec8fc53154c74029f`
-
-  列挙根拠: `grep -n "^from svp_rpe" scripts/spike_melody_similarity.py` で拾える
-  import 文 6 行（`compose.loader.load_composition_score` /
-  `compose.models.CompositionScore` / `perform.performer.{PerformanceStyle,perform}` /
-  `perform.synth.{SAMPLE_RATE,sha256_bytes,wav_bytes}` /
-  `rpe.models.MelodyContour` / `rpe.physical_features.compute_melody_contour`）の
-  解決先ファイル全数（AGENTS.md §8 項目 1 準拠。旧版はこのうち
-  `compose.models` / `rpe.models` を見落としていた）。
-
-  上記 6 本を含む pin 表全体を `tests/test_recast_spike_provenance.py` が working
-  tree と機械照合するため、**再現の前提は「pin 表の全ファイルが working tree と
-  一致していること」**であり、特定 commit の checkout そのものではない
-  （squash 等でオブジェクトが祖先から外れても pin 表の記法自体は影響を受けない）。
-  実測を実行した commit `1248186` は、squash 等の非参照文脈では祖先関係を
+- **測定コードの pin は first-party 推移閉包 manifest**（手動列挙は含まない）:
+  モジュール列挙はインタープリタの実 import 機構による機械列挙で行う——
+  スクリプトが `from svp_rpe... import ...` で直接 import する 6 モジュール
+  （`compose.loader` / `compose.models` / `perform.performer` / `perform.synth` /
+  `rpe.models` / `rpe.physical_features`）を `importlib.import_module` した後、
+  `sys.modules` を走査して `svp_rpe` パッケージ配下のロード済みモジュール全て
+  （= 実行時に実際に必要となった推移閉包）を集め、各モジュールの `__file__` を
+  sha256 する。生成手順は使い捨てスクリプトで実行し、結果を
+  `examples/recast/melody_spike_2026-07-22.modules.json`（module 名 → {path, sha256}
+  の canonical JSON、29 モジュール）として committed fixture 化した。直接 import 6
+  本の対象は正規表現 `^from (svp_rpe\.[\w.]+) import` でスクリプト自身から機械
+  抽出し、手動列挙を経由しない
+  （手動 4 本列挙 → 手動 6 本列挙と 2 度漏れた反省を踏まえ、列挙自体を機械化して
+  終端化。AGENTS.md §8 項目 1 準拠）。
+  `tests/test_recast_spike_provenance.py` が同じ手順をテスト内で再実行して
+  閉包を再計算し、`.modules.json` と**両方向**（欠落・余剰とも）で突合する
+  ため、transitive 依存の増減・変更も自動検出される
+- **再現の前提**: pin 表の全ファイル（データ 4 件 + `.modules.json` が指す
+  29 モジュールの `.py` 実体）が working tree と一致していること。特定
+  commit の checkout そのものは前提としない（squash 等でオブジェクトが
+  祖先から外れても pin 表・manifest の記法自体は影響を受けない）。実測を
+  実行した commit `1248186` は、squash 等の非参照文脈では祖先関係を
   主張できない実測時 tree の **attestation（記録）** として残す
   （AGENTS.md §8 項目 6 準拠）
-- **限界**: 本 manifest は直接 import の file 単位 granularity であり、
-  これらのモジュールがさらに import する transitive 依存（librosa/scipy 等の
-  外部ライブラリ、共有スキーマ層）の変更は対象外。将来 attestation との差異が
-  疑われた場合は再実測で補完する
-- **効果**: 上記 6 モジュールいずれかが将来変更されると
-  `tests/test_recast_spike_provenance.py` が赤くなり、本メモの数値を無言で
-  差し替える（silent stale）ことができず、新しい日付の再実測として
+- **効果**: 推移閉包中のいずれか 1 モジュールでも将来変更されると
+  `tests/test_recast_spike_provenance.py` の閉包検証テストが赤くなり、本メモの
+  数値を無言で差し替える（silent stale）ことができず、新しい日付の再実測として
   別途記録する（dated log 規律）ことが強制される
 
 ## 3. 結果（生数値）
@@ -183,3 +174,5 @@ note_events 経路（#199/#201 既往実測）が**それぞれ独立に**不成
 
 - `scripts/spike_melody_similarity.py`（スパイクスクリプト本体）
 - `examples/recast/melody_spike_2026-07-22.json`（実測生データ、決定論 byte 一致 2 回確認済み）
+- `examples/recast/melody_spike_2026-07-22.modules.json`（測定コード first-party
+  推移閉包 manifest、29 モジュール）
