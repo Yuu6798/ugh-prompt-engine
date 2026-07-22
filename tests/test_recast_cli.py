@@ -159,6 +159,43 @@ def test_recast_plan_write_failure_does_not_persist_state(tmp_path: Path, monkey
     assert not state_path.exists()
 
 
+def test_recast_plan_rejects_score_aliased_to_recast_plan_output(tmp_path: Path) -> None:
+    """Codex P2 review round 5（PR3 #208 指摘 10）: `work.score`（あるいは
+    project.yaml 自体）が `<project_dir>/recast_plan.json` という publish 先と
+    同じパスを指す project 構成では、従来 `_publish_recast_plan` が衝突ガード
+    無しで publish していたため、最初の `recast plan` が入力（score）を
+    plan JSON で上書き破壊し得た。`work.score` を `recast_plan.json` へ
+    向け、publish 前に fail-closed で拒否され、かつ元の score 内容が一切
+    上書きされないことを検証する。"""
+    project_path = _copy_demo_project(tmp_path)
+    project_dir = project_path.parent
+
+    # score の内容を recast_plan.json という名前へ移し、work.score をそこへ
+    # 向け直す（project.yaml 自体は別ファイルのまま — 衝突対象は score 側）。
+    original_score_bytes = (project_dir / "composition_score.yaml").read_bytes()
+    aliased_score_path = project_dir / "recast_plan.json"
+    aliased_score_path.write_bytes(original_score_bytes)
+    (project_dir / "composition_score.yaml").unlink()
+
+    project_text = project_path.read_text(encoding="utf-8")
+    updated = project_text.replace("score: composition_score.yaml", "score: recast_plan.json", 1)
+    assert updated != project_text  # sanity
+    project_path.write_text(updated, encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+
+    assert result.exit_code == 1
+    assert "collides with a protected input path" in result.output
+
+    # fail-closed: score の内容（recast_plan.json という名前のファイル）が
+    # plan JSON で上書きされていない。
+    assert aliased_score_path.read_bytes() == original_score_bytes
+    # record_state も呼ばれていない（publish 失敗後は状態を記録しない順序保証）。
+    assert not (project_dir / "recast_state.json").exists()
+
+
 def test_recast_plan_unknown_variant_exits_nonzero_without_writing_plan(tmp_path: Path) -> None:
     project_path = _copy_demo_project(tmp_path)
 

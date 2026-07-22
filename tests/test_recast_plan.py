@@ -16,6 +16,7 @@ from svp_rpe.recast.plan import (
     build_recast_plan,
     mode_support_for_path,
 )
+from svp_rpe.recast.run_paths import collect_protected_input_paths
 from svp_rpe.recast.state import load_recast_state, record_state
 
 DEMO_PROJECT = Path("examples/recast/demo_project")
@@ -41,6 +42,7 @@ def _persist_state(
         result.plan.state_reached,
         note,
         inputs_digest=result.inputs_digest,
+        protected_inputs=collect_protected_input_paths(loaded, variant, backend),
     )
 
 
