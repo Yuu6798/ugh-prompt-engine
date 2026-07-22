@@ -878,6 +878,8 @@ def recast_init_cmd(
     Fail-closed: refuses to write into a `--project-dir` that already exists
     and is non-empty (does not overwrite).
     """
+    import shutil
+
     import yaml
     from pydantic import ValidationError
 
@@ -909,11 +911,36 @@ def recast_init_cmd(
                 err=True,
             )
             raise typer.Exit(code=1)
+    dest_existed_before = dest_dir.exists()
+
+    # Codex P2 (#210, AGENTS §8-A 項目1): source audio を **1 回だけ**
+    # read_bytes する（TOCTOU 排除）。この同一 bytes から (1) sha256（identity
+    # manifest の source pin）を計算し、(2) project-dir 内の `source/` へ
+    # スナップショットとして書き出し、(3) 抽出はそのスナップショットに対して
+    # 実行する — 元の `audio_path` を実行中に差し替えても、抽出結果 /
+    # コピー済み音声 / pin された sha256 が食い違わない（3 者が同一 bytes を
+    # 消費する）。
+    try:
+        audio_bytes = audio_path.read_bytes()
+    except OSError as exc:
+        typer.echo(f"Error: failed to read {audio_path}: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    audio_sha256 = hashlib.sha256(audio_bytes).hexdigest()
+    source_filename = audio_path.name
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    (dest_dir / "source").mkdir(parents=True, exist_ok=True)
+    snapshot_path = dest_dir / "source" / source_filename
+    snapshot_path.write_bytes(audio_bytes)
 
     try:
-        bundle = extract_rpe_from_file(str(audio_path))
+        bundle = extract_rpe_from_file(str(snapshot_path))
     except (OSError, ValueError) as exc:
         typer.echo(f"Error: failed to extract from {audio_path}: {exc}", err=True)
+        if dest_existed_before:
+            shutil.rmtree(dest_dir / "source", ignore_errors=True)
+        else:
+            shutil.rmtree(dest_dir, ignore_errors=True)
         raise typer.Exit(code=1) from exc
 
     score = draft_score(bundle)
@@ -940,15 +967,8 @@ def recast_init_cmd(
 
     slug = _slugify(audio_path.stem) or "recast-project"
 
-    dest_dir.mkdir(parents=True, exist_ok=True)
     (dest_dir / "identity").mkdir(parents=True, exist_ok=True)
     (dest_dir / "arrangements").mkdir(parents=True, exist_ok=True)
-    (dest_dir / "source").mkdir(parents=True, exist_ok=True)
-
-    audio_bytes = audio_path.read_bytes()
-    audio_sha256 = hashlib.sha256(audio_bytes).hexdigest()
-    source_filename = audio_path.name
-    (dest_dir / "source" / source_filename).write_bytes(audio_bytes)
 
     composition_score_yaml = render_draft_score_yaml(score)
     (dest_dir / "composition_score.yaml").write_text(composition_score_yaml, encoding="utf-8")
