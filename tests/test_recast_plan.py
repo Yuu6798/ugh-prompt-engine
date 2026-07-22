@@ -203,6 +203,7 @@ def test_unresolved_author_field_blocks_authoring(tmp_path: Path) -> None:
     assert result.plan.blocked is not None
     assert result.plan.blocked.state == "blocked_authoring"
     assert any("semantic.core" in reason for reason in result.plan.blocked.reasons)
+    assert str(tmp_path) not in " ".join(result.plan.blocked.reasons)
 
     _persist_state(loaded, "edm", "suno", result)
     state_file = load_recast_state(loaded.project_dir)
@@ -229,6 +230,7 @@ def test_unresolved_structure_role_blocks_authoring(tmp_path: Path) -> None:
     assert result.plan.blocked is not None
     assert result.plan.blocked.state == "blocked_authoring"
     assert any("structure[0].role" in reason for reason in result.plan.blocked.reasons)
+    assert str(tmp_path) not in " ".join(result.plan.blocked.reasons)
 
     _persist_state(loaded, "edm", "suno", result)
     state_file = load_recast_state(loaded.project_dir)
@@ -262,6 +264,7 @@ def test_strict_capability_mode_blocks_on_hard_unsupported_anchor(tmp_path: Path
     reasons_text = " ".join(result.plan.blocked.reasons)
     assert "melody" in reasons_text
     assert "strict capability check failed" in reasons_text
+    assert str(tmp_path) not in reasons_text
 
     _persist_state(loaded, "edm", "suno", result)
     state_file = load_recast_state(loaded.project_dir)
@@ -272,6 +275,12 @@ def test_strict_capability_mode_blocks_on_hard_unsupported_anchor(tmp_path: Path
 
 
 def test_tampered_anchor_artifact_blocks_verification(tmp_path: Path) -> None:
+    """1 byte 改竄した anchor artifact は `parse_identity_manifest_with_artifacts`
+    の sha256 mismatch メッセージ（解決済み絶対パス入り）を `blocked.reasons` へ
+    そのまま乗せていた（Codex P2 seventh round #207: blocked plan が機械依存
+    bytes になり、ローカル FS レイアウトが `recast_plan.json` へ漏洩していた）。
+    `_normalize_diagnostic` が project 相対へ正規化するため、publish される
+    canonical JSON に tmp_path の絶対パス文字列が一切含まれないことを検証する。"""
     project_path = _copy_demo_project(tmp_path)
     lyrics_path = project_path.parent / "identity" / "lyrics.txt"
     original_bytes = lyrics_path.read_bytes()
@@ -284,6 +293,20 @@ def test_tampered_anchor_artifact_blocks_verification(tmp_path: Path) -> None:
     assert result.plan.blocked is not None
     assert result.plan.blocked.state == "blocked_verification"
     assert any("sha256" in reason for reason in result.plan.blocked.reasons)
+    # 相対 locator へ正規化されたことの直接確認（identity/lyrics.txt が anchor
+    # 'lyrics' の artifact path）。
+    assert any("identity/lyrics.txt" in reason for reason in result.plan.blocked.reasons)
+
+    canonical = (
+        json.dumps(
+            result.plan.model_dump(mode="json", exclude_none=True),
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+        )
+        + "\n"
+    )
+    assert str(tmp_path) not in canonical
 
     _persist_state(loaded, "edm", "suno", result)
     state_file = load_recast_state(loaded.project_dir)
@@ -339,6 +362,7 @@ def test_unsupported_changed_field_blocks_capability_in_strict_mode(tmp_path: Pa
     assert "physical.key" in reasons_text
     assert "invocation_mode cover" in reasons_text
     assert "unsupported" in reasons_text
+    assert str(tmp_path) not in reasons_text
 
     _persist_state(loaded, "edm", "suno", result)
     state_file = load_recast_state(loaded.project_dir)
@@ -411,6 +435,7 @@ def test_unknown_changed_field_blocks_capability_in_strict_mode_when_declared(
     assert "physical.brightness" in reasons_text
     assert "invocation_mode prompt_only" in reasons_text
     assert "unknown（未実測）" in reasons_text
+    assert str(tmp_path) not in reasons_text
 
     _persist_state(loaded, "edm", "suno", result)
     state_file = load_recast_state(loaded.project_dir)
