@@ -205,8 +205,8 @@ hash-matching" — a digest
 directory `latest.json` points at is a complete publication matching its own
 bookkeeping, though this is still not a full audit (it never rehashes
 undeclared files or recurses beyond what the descriptor lists, and nothing in
-the directory is ever rewritten); an independent, fully recursive audit is
-left to a future `verify`-style command.
+the directory is ever rewritten); an independent, fully recursive audit of an
+entire `--builds-root` tree is `svprpe verify --builds-root` (see below).
 
 If a first publish writes its artifacts successfully but the trailing
 `latest.json` update itself then fails, the freshly published digest
@@ -664,7 +664,15 @@ of `artifact_type`).
 re-running `observe` against the same `-o` path overwrites it (unlike
 `performance_package.json`'s byte-pin/builds-root immutability contract).
 
-### `svprpe verify <package.json> --manifest <identity_manifest.yaml>`
+### `svprpe verify <package.json> --manifest <identity_manifest.yaml>` / `svprpe verify --builds-root <root>`
+
+Two mutually exclusive modes (violating the split — `--builds-root` together
+with the package argument and/or `--manifest`, or neither pairing supplied —
+exits `2`, mirroring `arrange`/`package`'s own `--output-dir`/`--builds-root`
+exclusivity convention). Both are read-only and write nothing, ever, and
+neither renders a musical/perceptual verdict.
+
+#### Single-package mode
 
 Exhaustively check a single `PerformancePackage`'s own internal consistency —
 read-only, writes nothing, ever:
@@ -722,14 +730,75 @@ collected failures, not structural) — which aborts every check that
 depends on the missing object (V1 failing skips V2-V4 entirely; V3 failing skips
 only V4).
 
-Out of scope, left to follow-up work: a recursive audit of an entire
-`--builds-root` tree (a distinct, larger surface than a single package — the
-no-op-publish blessing check `arrange`/`package` already do at L209 above is
-scoped to one digest directory, not this); cross-checking against an
+Out of scope in both modes, left to follow-up work: cross-checking against an
 `ObservationReport` sidecar (not yet implemented — AR2-3's structure-anchor
 policy has since landed, but `verify` itself has not been extended to
 consume observation reports); repairing anything found broken; and any
 musical/perceptual verdict — `verify` only ever reports structural pass/fail.
+A recursive audit of an entire `--builds-root` tree used to be out of scope
+here too — that is exactly what `--builds-root` mode below now covers.
+
+#### `--builds-root` mode
+
+Recursively audit an entire `<root>/` tree published by `arrange`/`package
+--builds-root` — a distinct, larger surface than a single package. The
+no-op-publish blessing check `arrange`/`package` already do (see above) is
+deliberately *not* this: it only re-verifies one digest directory at publish
+time, from its own descriptor's declared outputs, and never rehashes
+undeclared files. `--builds-root` mode needs no `--manifest` and never
+touches the `IdentityManifest` chain or `channel_artifacts` cross-references
+(single-package mode's V3/V4) — a builds-root tree alone carries no manifest
+to check against; that scope stays single-package-only.
+
+```bash
+svprpe verify --builds-root build/builds-root
+```
+
+Checks, in order:
+
+1. **root** — `<root>/` itself is a real, non-symlink directory (structural
+   gate: if this fails, nothing else is audited and the run aborts).
+2. **latest** — `<root>/latest.json` is present (a successful publish always
+   writes it — absence is treated as a broken, to-be-retried state, not a
+   silently-legitimate "nothing published yet"), a regular non-symlink file,
+   valid JSON, `schema_version == "builds-latest/0.1"`, its `content_digest`
+   is a 64-hex sha256 string, and that digest has a corresponding real,
+   non-symlink directory under `<root>/builds/`.
+3. **root-entries** — no unexpected entries directly under `<root>/` other
+   than `latest.json` and `builds/`.
+4. **builds-dir** / **digest-names** — `<root>/builds/` itself is a real,
+   non-symlink directory; every entry directly under it is a real,
+   non-symlink directory whose name is a 64-hex sha256 string and not the
+   reserved all-zero locator-placeholder digest (`cli/builds_root.py`'s
+   `_builds_placeholder_package_dir` — never a real completed build).
+5. For every remaining valid digest directory (sorted, deterministic order),
+   a **descriptor** check group: exactly one of `arrangement_bundle.json` /
+   `compilation_report.json` is present (0 or 2 fails this one check and
+   skips the rest of that build entirely — no descriptive file, no basis for
+   any further check on it); it is a regular non-symlink file, valid JSON,
+   and validates against its schema (`ArrangementBundleDescriptor` /
+   `CompilationReport`, the same reader models `cli/builds_root.py`'s
+   blessing path uses).
+6. **content-digest** — the descriptor's own declared output hashes
+   (`arrange`: `outputs`' `{path, sha256}` entries; `package`:
+   `{performance_package.json: package_sha256}`) independently recompute, via
+   `arrange.bundle.compute_content_digest`, to (a) the descriptor's own
+   `content_digest` field and (b) the digest directory's own name.
+7. **artifacts** — every artifact the descriptor declares: a regular,
+   non-symlink file (literal path checked before any symlink-following
+   resolution), resolves confined under the digest directory
+   (`arrange.pathsafe.resolve_confined`), and its bytes hash to the declared
+   value.
+8. **undeclared** — the part neither the single-package V4 group above nor
+   `cli/builds_root.py`'s blessing check ever do: the digest directory is
+   walked recursively (never following symlinked subdirectories), and every
+   entry — file, subdirectory, or symlink — that isn't the descriptive file
+   or a declared artifact is individually reported as an unexpected entry.
+
+Every check across every build is collected in full before anything is
+printed — a single failure never hides the rest (exit `1` if *any* check
+fails, across the root or any build). The run ends with a summary line:
+`builds N, checked M, failed K`.
 
 ### `svprpe measure <audio>`
 

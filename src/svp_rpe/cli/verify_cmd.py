@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Iterable, Optional
 
 import typer
 
@@ -10,6 +10,7 @@ from svp_rpe.cli._app import app, console
 
 if TYPE_CHECKING:
     from svp_rpe.arrange.verify import VerifyReport
+    from svp_rpe.cli.builds_audit import AuditCheck, BuildsRootAuditReport
 
 
 def _render_verify_report(
@@ -39,16 +40,98 @@ def _render_verify_report(
     console.print(f"[{summary_color}]checked {checked}, failed {failed}[/{summary_color}]")
 
 
+def _print_audit_checks(checks: Iterable["AuditCheck"]) -> None:
+    current_group: Optional[str] = None
+    for check in checks:
+        if check.group != current_group:
+            current_group = check.group
+            console.print(f"[bold]{current_group}[/bold]")
+        status = "[green]ok[/green]  " if check.ok else "[red]FAIL[/red]"
+        line = f"  {status} {check.label}"
+        if not check.ok and check.detail:
+            line += f" — {check.detail}"
+        console.print(line)
+
+
+def _render_builds_root_audit_report(
+    report: "BuildsRootAuditReport", *, builds_root: Path
+) -> None:
+    console.print(f"[bold]Verify (builds-root): {builds_root}[/bold]")
+    console.print("[bold]root[/bold]")
+    _print_audit_checks(report.root_checks)
+
+    if report.aborted:
+        console.print(
+            "[yellow]note: builds_root itself failed a structural check; no build "
+            "directories were audited[/yellow]"
+        )
+
+    for build in report.builds:
+        console.print(f"[bold]build {build.digest_dir_name}[/bold]")
+        _print_audit_checks(build.checks)
+
+    checked = len(report.root_checks) + sum(len(build.checks) for build in report.builds)
+    failed = len(report.failures)
+    summary_color = "red" if failed else "green"
+    console.print(
+        f"[{summary_color}]builds {len(report.builds)}, checked {checked}, "
+        f"failed {failed}[/{summary_color}]"
+    )
+
+
 @app.command("verify")
 def verify_cmd(
-    package_json: str = typer.Argument(
-        ..., help="Path to performance_package.json, or the directory containing it"
+    package_json: Optional[str] = typer.Argument(
+        None,
+        help=(
+            "Path to performance_package.json, or the directory containing it "
+            "(mutually exclusive with --builds-root)"
+        ),
     ),
-    manifest: str = typer.Option(
-        ..., "--manifest", help="Path to the IdentityManifest YAML used to compile the package"
+    manifest: Optional[str] = typer.Option(
+        None,
+        "--manifest",
+        help=(
+            "Path to the IdentityManifest YAML used to compile the package "
+            "(required unless --builds-root; mutually exclusive with --builds-root)"
+        ),
+    ),
+    builds_root: Optional[str] = typer.Option(
+        None,
+        "--builds-root",
+        help=(
+            "Recursively audit an entire <root>/ tree published by `arrange`/"
+            "`package --builds-root` (structural audit only, no --manifest; "
+            "mutually exclusive with the package argument and --manifest)"
+        ),
     ),
 ) -> None:
     """Exhaustively verify a PerformancePackage's own internal consistency (V1-V4).
+
+    Two mutually exclusive modes, selected by whether `--builds-root` is given
+    (violating the split — `--builds-root` together with `package_json` and/or
+    `--manifest`, or neither `package_json`/`--manifest` nor `--builds-root` —
+    exits `2`, mirroring `arrange`/`package`'s own `--output-dir`/`--builds-root`
+    exclusivity convention):
+
+    - **Single-package mode** (`package_json` + `--manifest`, both required):
+      everything documented below (V1-V4). Unchanged by this option's addition.
+    - **`--builds-root` mode**: a *different, larger* surface — recursively
+      audits an entire `<root>/` tree published by `arrange`/`package
+      --builds-root` (see `cli/builds_audit.py`'s `audit_builds_root`), not any
+      single package. This mode needs no `--manifest` and never touches V3/V4's
+      `IdentityManifest` chain or `channel_artifacts` cross-references — those
+      remain single-package-mode-only, since a builds-root tree alone carries no
+      manifest to check against. It checks `<root>/latest.json`'s shape and
+      pointer validity, every `<root>/builds/<content_digest>/` directory's
+      descriptive file (`arrangement_bundle.json` or `compilation_report.json`)
+      schema-validity and self-consistent `content_digest`, every artifact that
+      file declares (existence, non-symlink, hash), and — the part neither this
+      command's single-package V4 nor `cli/builds_root.py`'s no-op-publish
+      blessing check ever do — every entry each digest directory contains that
+      its descriptive file does *not* declare. Structural audit only: like
+      single-package mode, it repairs nothing and renders no musical/perceptual
+      verdict.
 
     Read-only, full internal-consistency instrument — the receiving end PR #187
     review round 16 named when it drew `observe`'s scope boundary at
@@ -101,15 +184,39 @@ def verify_cmd(
     skips V2-V4 entirely; V3 failing skips only V4, since V2 needs neither the
     manifest nor V3's outcome).
 
-    Out of scope (follow-up, not this command's job): a recursive audit of an
-    entire `--builds-root` tree (see `docs/cli.md`'s `arrange`/`package` notes
-    on the no-op-publish blessing check, which is deliberately not that either
-    — a distinct, larger surface than a single package); cross-checking
-    against an `ObservationReport` sidecar (AR2-3 depends on structure-anchor
-    policy that hasn't landed); rewriting or repairing anything found broken
-    (this command writes nothing, ever); and any musical/perceptual verdict —
-    `verify` only ever reports structural pass/fail, never adherence quality.
+    Out of scope in both modes (follow-up, not this command's job):
+    cross-checking against an `ObservationReport` sidecar (AR2-3 depends on
+    structure-anchor policy that hasn't landed); rewriting or repairing
+    anything found broken (this command writes nothing, ever, in either mode);
+    and any musical/perceptual verdict — `verify` only ever reports structural
+    pass/fail, never adherence quality. A recursive `--builds-root` tree audit
+    used to be out of scope too (see `docs/cli.md`'s `arrange`/`package` notes
+    on the no-op-publish blessing check, which is deliberately *not* that — a
+    distinct, larger surface than a single digest directory) — that is exactly
+    what `--builds-root` mode above now covers.
     """
+    if builds_root is not None:
+        if package_json is not None or manifest is not None:
+            raise typer.BadParameter(
+                "--builds-root is mutually exclusive with the package argument and --manifest",
+                param_hint="package_json / --manifest / --builds-root",
+            )
+        from svp_rpe.cli.builds_audit import audit_builds_root
+
+        builds_root_path = Path(builds_root)
+        audit_report = audit_builds_root(builds_root_path)
+        _render_builds_root_audit_report(audit_report, builds_root=builds_root_path)
+
+        if not audit_report.ok:
+            raise typer.Exit(code=1)
+        return
+
+    if package_json is None or manifest is None:
+        raise typer.BadParameter(
+            "package_json and --manifest are both required unless --builds-root is given",
+            param_hint="package_json / --manifest / --builds-root",
+        )
+
     from svp_rpe.arrange.package import PERFORMANCE_PACKAGE_FILENAME
     from svp_rpe.arrange.verify import GROUP_TITLES, verify_package
 
