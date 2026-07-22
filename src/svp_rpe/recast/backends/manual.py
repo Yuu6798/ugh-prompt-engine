@@ -29,7 +29,6 @@ from pathlib import Path
 from typing import List, Optional
 
 from svp_rpe.arrange.package import ChannelArtifactReference
-from svp_rpe.arrange.pathsafe import resolve_confined
 from svp_rpe.arrange.section_map import (
     parse_section_map_artifact_0_1,
     parse_section_map_artifact_0_2,
@@ -41,7 +40,6 @@ from svp_rpe.recast.backend import (
     atomic_publish_bytes_bundle,
     base_prepared_invocation,
 )
-from svp_rpe.recast.loader import LoadedRecastProject
 from svp_rpe.recast.models import RecastError
 
 _ACCEPTED_AUDIO_EXTENSIONS = (".wav", ".mp3")
@@ -72,11 +70,33 @@ def _prompt_json(prepared: PreparedInvocation) -> str:
     return _canonical_json(payload)
 
 
-def _identity_manifest_dir(loaded: LoadedRecastProject) -> Path:
-    return loaded.identity_manifest_path.resolve().parent
+def _pinned_artifact_bytes(prepared: PreparedInvocation, ref: ChannelArtifactReference) -> bytes:
+    """`ref.anchor_id` の hash 照合済み bytes を `prepared.channel_artifact_bytes`
+    から取り出す（Codex P2 review round 11, PR3 #208 指摘22: plan 段
+    （`build_recast_plan_artifacts`）が single-read で 1 回だけ読み hash 照合
+    済みの bytes をそのまま使い、注文書描画時に artifact ファイルを disk から
+    再 read しない — plan 構築から注文書公開までの間にファイルが差し替わっても
+    注文書の中身は plan 段の bytes のまま揺らがない）。
+
+    `prepared.package.channel_artifacts` に列挙される lyrics_text/section_tags
+    channel の全 ref は、pin 対象を選ぶ `_is_manual_order_channel_anchor`
+    （`recast/plan.py`）が同じ artifact_type 集合（`lyrics_text`/`section_map`）
+    を対象にしているため必ず辞書に存在する — 見つからない場合は plan/backend
+    間の契約違反であり fail-closed（`RecastError`）で止める（silent fallback
+    や再 read での代替はしない）。
+    """
+    try:
+        return prepared.channel_artifact_bytes[ref.anchor_id]
+    except KeyError as exc:
+        raise RecastError(
+            f"recast order sheet: anchor {ref.anchor_id!r} (artifact_type="
+            f"{ref.artifact_type!r}) has no pinned artifact bytes from the plan "
+            "bundle — this indicates a plan/backend contract mismatch, not a "
+            "recoverable I/O condition"
+        ) from exc
 
 
-def _lyrics_text(prepared: PreparedInvocation, loaded: LoadedRecastProject) -> str:
+def _lyrics_text(prepared: PreparedInvocation) -> str:
     refs = prepared.package.channel_artifacts.get("lyrics_text")
     if not refs:
         return _LYRICS_ANCHOR_PLACEHOLDER
@@ -89,59 +109,76 @@ def _lyrics_text(prepared: PreparedInvocation, loaded: LoadedRecastProject) -> s
     # 単一 ref のときは従来どおり見出しなしのプレーンテキスト（既存 snapshot
     # との互換）、複数のときのみ `anchor_id` 見出しで連結する。
     if len(refs) == 1:
-        artifact_path = resolve_confined(refs[0].artifact, _identity_manifest_dir(loaded))
-        text = artifact_path.read_text(encoding="utf-8")
+        text = _pinned_artifact_bytes(prepared, refs[0]).decode("utf-8")
         return text if text.endswith("\n") else text + "\n"
 
     sections: list[str] = []
     for ref in refs:
-        artifact_path = resolve_confined(ref.artifact, _identity_manifest_dir(loaded))
-        text = artifact_path.read_text(encoding="utf-8")
+        text = _pinned_artifact_bytes(prepared, ref).decode("utf-8")
         text = text if text.endswith("\n") else text + "\n"
         sections.append(f"# {ref.anchor_id}\n\n{text}")
     return "\n".join(sections)
 
 
 def _channel_artifact_refs_section_tags_text(
-    refs: List[ChannelArtifactReference], loaded: LoadedRecastProject
+    prepared: PreparedInvocation, refs: List[ChannelArtifactReference]
 ) -> Optional[str]:
     """`channel_artifacts["section_tags"]` の全 refs を package 内の順のまま
     描画する（Codex P2 ninth round #207 指摘18 と同じ全数描画の原則を
     section_tags にも適用）。単一 ref は従来どおり見出しなし、複数は
-    `anchor_id` 見出しで連結する。パース不能な ref（v0.1/v0.2 いずれの section
-    map schema にも該当しない）は静かに読み飛ばす（従来の単一 ref 実装と
-    同じ寛容さを維持）。1 件も解釈できなければ `None`（呼び出し側が
-    prompt.section_tags → placeholder へフォールバックする）。"""
+    `anchor_id` 見出しで連結する。
+
+    plan 段の pin 済み bytes（`_pinned_artifact_bytes`、指摘22）から読む —
+    disk への再 read はしない。パース不能な ref（v0.1/v0.2 いずれの section
+    map schema にも該当しない）は個別には読み飛ばすが、**1 件も解釈できな
+    かった場合は `None` を返さず `RecastError` で fail-closed する**（Codex
+    P2 review round 11, PR3 #208 指摘23: 従来は 1 件も parse できないと
+    黙って `None` を返し、呼び出し側が prompt.section_tags や placeholder
+    へ silent fallback していた — refs が 1 件でも delivered と package が
+    報告している以上、それが注文書へ一切反映されないまま公開されるのは
+    hard anchor の欠落を隠蔽する。parse 可能な ref が 1 件でもあれば、
+    それらだけを描画する既存の寛容さは維持する）。"""
 
     def _render_one(ref: ChannelArtifactReference) -> Optional[str]:
-        artifact_path = resolve_confined(ref.artifact, _identity_manifest_dir(loaded))
-        raw = artifact_path.read_bytes()
+        raw = _pinned_artifact_bytes(prepared, ref)
         try:
-            v2 = parse_section_map_artifact_0_2(raw, artifact_path=artifact_path)
+            v2 = parse_section_map_artifact_0_2(raw, artifact_path=Path(ref.artifact))
             return ", ".join(f"{entry.id}:{entry.label}" for entry in v2.sections)
         except ValueError:
             pass
         try:
-            v1 = parse_section_map_artifact_0_1(raw, artifact_path=artifact_path)
+            v1 = parse_section_map_artifact_0_1(raw, artifact_path=Path(ref.artifact))
             return ", ".join(v1.sections)
         except ValueError:
             pass
         return None
 
+    rendered_by_ref = [(ref, _render_one(ref)) for ref in refs]
+    if all(rendered is None for _ref, rendered in rendered_by_ref):
+        unparseable = ", ".join(
+            f"{ref.anchor_id} (format_version={ref.format_version!r})" for ref, _rendered in rendered_by_ref
+        )
+        raise RecastError(
+            "recast order sheet: delivered section_tags channel artifact(s) failed to "
+            f"parse under both section-map/0.1 and section-map/0.2 schemas: {unparseable} "
+            "— refusing to publish an order sheet that silently drops a delivered hard "
+            "anchor"
+        )
+
     if len(refs) == 1:
-        rendered = _render_one(refs[0])
-        return None if rendered is None else rendered + "\n"
+        rendered = rendered_by_ref[0][1]
+        assert rendered is not None  # 上の all() ガードで単一件かつ None のケースは既に raise 済み
+        return rendered + "\n"
 
     sections: list[str] = []
-    for ref in refs:
-        rendered = _render_one(ref)
+    for ref, rendered in rendered_by_ref:
         if rendered is None:
             continue
         sections.append(f"# {ref.anchor_id}\n\n{rendered}\n")
-    return "\n".join(sections) if sections else None
+    return "\n".join(sections)
 
 
-def _section_tags_text(prepared: PreparedInvocation, loaded: LoadedRecastProject) -> str:
+def _section_tags_text(prepared: PreparedInvocation) -> str:
     # 優先順（Codex P2 ninth round #207 指摘20）: 配送済み channel artifact
     # refs（hard 保存された実 section_map）→ 無ければ prompt.section_tags
     # （derived score が生成した advisory 値）→ どちらも無ければプレース
@@ -150,11 +187,13 @@ def _section_tags_text(prepared: PreparedInvocation, loaded: LoadedRecastProject
     # （hard anchor の実体）があってもそちらを一切読んでいなかった —
     # 「plan は delivered と報告するのに manual generator へ渡る
     # section_tags.txt には反映されない」という指摘18と同型の欠落だった。
+    #
+    # refs が 1 件でもあれば `_channel_artifact_refs_section_tags_text` が
+    # 必ず文字列を返すか `RecastError` で fail-closed する（指摘23） —
+    # 呼び出し側でこれ以上の None フォールバックは発生しない。
     refs = prepared.package.channel_artifacts.get("section_tags")
     if refs:
-        rendered = _channel_artifact_refs_section_tags_text(refs, loaded)
-        if rendered is not None:
-            return rendered
+        return _channel_artifact_refs_section_tags_text(prepared, refs)
 
     prompt = prepared.package.prompt
     if prompt is not None and prompt.section_tags:
@@ -294,8 +333,8 @@ class ManualInvoker:
         next_command = _next_command_text(ctx, prepared)
         contents = {
             "prompt.json": _prompt_json(prepared),
-            "lyrics.txt": _lyrics_text(prepared, ctx.loaded),
-            "section_tags.txt": _section_tags_text(prepared, ctx.loaded),
+            "lyrics.txt": _lyrics_text(prepared),
+            "section_tags.txt": _section_tags_text(prepared),
             "expected_artifacts.json": _expected_artifacts_json(prepared),
             "next_command.txt": next_command,
             "order_sheet.md": _order_sheet_md(ctx, prepared, next_command),

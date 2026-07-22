@@ -131,12 +131,19 @@ def test_recast_plan_verification_staging_uses_builds_root(
     `_atomic_publish_text_bundle` 内部 staging」という別設計で、pr2 が
     懸念する同ドライブ要件（指摘19）を構造的に満たす（#208 指摘 3）。
 
-    `tempfile.TemporaryDirectory` を実クラス継承のスタブに monkeypatch し、
-    実際に渡された `dir` kwarg が `builds_root` 配下（project files と常に
-    同一ドライブ）の `packages_dir` そのものであることを検証する。公開後の
-    `packages_dir` は "検証専用の空 staging" ではなく最終成果物 2 ファイルが
-    永続する場所のため、「cleanup 後に空」ではなく「最終ファイル 2 つのみで
-    staging 残骸がない」ことを確認する。"""
+    Codex P2 review round 11（PR3 #208 指摘21）: 検証・mode gate を通過する
+    前に packages を永続公開しないよう、`tempfile.TemporaryDirectory` の
+    呼び出しが 2 段になった — (1) 検証専用 staging（`packages_dir` の**兄弟**
+    ディレクトリ、`dir=builds_root/packages`。深さを `packages_dir` と揃える
+    ことで `artifact_base_locator` が公開後と同一の値になる）と、(2) 検証・
+    mode gate 通過後にのみ実行される `_atomic_publish_text_bundle` 自身の
+    内部 staging（`dir=packages_dir`）。`tempfile.TemporaryDirectory` を実
+    クラス継承のスタブに monkeypatch し、この 2 回の呼び出しの `dir` kwarg が
+    それぞれ意図した場所（builds_root 配下・project files と常に同一
+    ドライブ）であることを検証する。公開後の `packages_dir` は "検証専用の
+    空 staging" ではなく最終成果物 2 ファイルが永続する場所のため、
+    「cleanup 後に空」ではなく「最終ファイル 2 つのみで staging 残骸がない」
+    ことを確認する。"""
     import tempfile as tempfile_module
 
     import svp_rpe.recast.plan as recast_plan_module
@@ -163,8 +170,13 @@ def test_recast_plan_verification_staging_uses_builds_root(
     assert result.exit_code == 0, result.output
 
     package_dir = builds_root / "packages" / "edm@suno"
-    assert len(captured_dir_args) == 1
-    assert Path(str(captured_dir_args[0])).resolve() == package_dir.resolve()
+    packages_parent_dir = builds_root / "packages"
+    assert len(captured_dir_args) == 2
+    # (1) 検証専用 staging: packages_dir の兄弟（packages_dir の親配下）。
+    assert Path(str(captured_dir_args[0])).resolve() == packages_parent_dir.resolve()
+    # (2) 検証・mode gate 通過後の実 publish: _atomic_publish_text_bundle 自身の
+    # 内部 staging（packages_dir そのもの配下）。
+    assert Path(str(captured_dir_args[1])).resolve() == package_dir.resolve()
     # builds_root 配下（project_dir に confine 済み）にあるため、project files
     # と常に同一ドライブであることが構造的に保証される。
     assert package_dir.resolve().is_relative_to(builds_root.resolve())
