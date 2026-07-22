@@ -205,6 +205,68 @@ def test_next_command_txt_advertises_a_real_working_ingest_command(
     assert state_file.runs["edm@suno"].state == "generated"
 
 
+def test_next_command_txt_is_shell_quoted_for_project_filename_with_space(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 review round 5（PR3 #208 指摘 11）: `next_command.txt` の
+    `project_relative`（`ctx.loaded.path.name` — CLI にユーザーが渡した
+    project YAML のファイル名そのまま）が空白等を含む場合、未クオートだと
+    copy-paste 実行時にシェルがトークンを分割してしまい実行不能になる。
+    project YAML を `my project.yaml`（空白入りファイル名）として配置し、
+    `shlex.split(next_command)` が単一トークンへ正しく分割され、実際に
+    `svprpe recast ingest` として成功することを検証する（`tmp_path` 直下に
+    空白入りディレクトリを作る代わりに、より直接的な発生源であるファイル名
+    自体に空白を持たせる — 空白はディレクトリ名でもファイル名でも同じ
+    トークン分割問題を起こすため等価な回帰形態）。"""
+    import shlex
+
+    from typer.testing import CliRunner
+
+    from svp_rpe.cli import app
+
+    dest = tmp_path / "demo_project"
+    dest.mkdir()
+    shutil.copy(DEMO_PROJECT / "project.yaml", dest / "my project.yaml")
+    shutil.copy(DEMO_PROJECT / "composition_score.yaml", dest / "composition_score.yaml")
+    shutil.copy(DEMO_PROJECT / "identity.yaml", dest / "identity.yaml")
+    shutil.copytree(DEMO_PROJECT / "identity", dest / "identity")
+    shutil.copytree(DEMO_PROJECT / "arrangements", dest / "arrangements")
+    project_path = dest / "my project.yaml"
+
+    runner = CliRunner()
+    run_result = runner.invoke(
+        app, ["recast", "run", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert run_result.exit_code == 0, run_result.output
+
+    order_dir = dest / "builds" / "orders" / "edm@suno"
+    next_command = (order_dir / "next_command.txt").read_text(encoding="utf-8").strip()
+    order_sheet = (order_dir / "order_sheet.md").read_text(encoding="utf-8")
+    assert next_command in order_sheet
+
+    # 未クオートのままなら "my" と "project.yaml" の 2 トークンに割れてしまう —
+    # shlex.split で 1 トークンに正しく戻ることを機械的に確認する。
+    tokens = shlex.split(next_command)
+    assert tokens[:3] == ["svprpe", "recast", "ingest"]
+    project_token = tokens[3]
+    assert project_token == "my project.yaml"
+
+    argv = tokens[1:]
+    audio_relative = argv[argv.index("--audio") + 1]
+    audio_path = dest / audio_relative
+    audio_path.parent.mkdir(parents=True, exist_ok=True)
+    audio_path.write_bytes(b"RIFF....WAVEfake-audio-bytes")
+
+    monkeypatch.chdir(dest)
+    result = runner.invoke(app, argv)
+
+    assert result.exit_code == 0, result.output
+    from svp_rpe.recast.state import load_recast_state
+
+    state_file = load_recast_state(dest)
+    assert state_file.runs["edm@suno"].state == "generated"
+
+
 # --- manual: cover mode branch --------------------------------------------------
 
 

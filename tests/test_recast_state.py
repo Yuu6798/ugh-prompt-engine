@@ -55,7 +55,9 @@ def test_load_recast_state_non_mapping_raises(tmp_path: Path) -> None:
 
 
 def test_record_state_creates_run_with_single_history_entry(tmp_path: Path) -> None:
-    result = record_state(tmp_path, "edm", "suno", "authored", "first author pass")
+    result = record_state(
+        tmp_path, "edm", "suno", "authored", "first author pass", protected_inputs=[]
+    )
 
     run = result.runs["edm@suno"]
     assert run.state == "authored"
@@ -69,9 +71,9 @@ def test_record_state_creates_run_with_single_history_entry(tmp_path: Path) -> N
 
 
 def test_record_state_appends_history_on_transition(tmp_path: Path) -> None:
-    record_state(tmp_path, "edm", "suno", "draft")
-    record_state(tmp_path, "edm", "suno", "authored")
-    result = record_state(tmp_path, "edm", "suno", "compiled")
+    record_state(tmp_path, "edm", "suno", "draft", protected_inputs=[])
+    record_state(tmp_path, "edm", "suno", "authored", protected_inputs=[])
+    result = record_state(tmp_path, "edm", "suno", "compiled", protected_inputs=[])
 
     run = result.runs["edm@suno"]
     assert run.state == "compiled"
@@ -79,8 +81,8 @@ def test_record_state_appends_history_on_transition(tmp_path: Path) -> None:
 
 
 def test_record_state_is_idempotent_for_identical_state_and_note(tmp_path: Path) -> None:
-    first = record_state(tmp_path, "edm", "suno", "verified", "note-a")
-    second = record_state(tmp_path, "edm", "suno", "verified", "note-a")
+    first = record_state(tmp_path, "edm", "suno", "verified", "note-a", protected_inputs=[])
+    second = record_state(tmp_path, "edm", "suno", "verified", "note-a", protected_inputs=[])
 
     run = second.runs["edm@suno"]
     assert len(run.history) == 1
@@ -88,8 +90,10 @@ def test_record_state_is_idempotent_for_identical_state_and_note(tmp_path: Path)
 
 
 def test_record_state_with_different_note_is_not_idempotent(tmp_path: Path) -> None:
-    record_state(tmp_path, "edm", "suno", "blocked_authoring", "reason A")
-    result = record_state(tmp_path, "edm", "suno", "blocked_authoring", "reason B")
+    record_state(tmp_path, "edm", "suno", "blocked_authoring", "reason A", protected_inputs=[])
+    result = record_state(
+        tmp_path, "edm", "suno", "blocked_authoring", "reason B", protected_inputs=[]
+    )
 
     run = result.runs["edm@suno"]
     assert len(run.history) == 2
@@ -97,8 +101,8 @@ def test_record_state_with_different_note_is_not_idempotent(tmp_path: Path) -> N
 
 
 def test_record_state_tracks_independent_variant_backend_keys(tmp_path: Path) -> None:
-    record_state(tmp_path, "edm", "suno", "authored")
-    result = record_state(tmp_path, "jazz", "musicgen", "draft")
+    record_state(tmp_path, "edm", "suno", "authored", protected_inputs=[])
+    result = record_state(tmp_path, "jazz", "musicgen", "draft", protected_inputs=[])
 
     assert set(result.runs) == {"edm@suno", "jazz@musicgen"}
     assert result.runs["edm@suno"].state == "authored"
@@ -111,9 +115,9 @@ def test_record_state_timestamps_are_not_used_for_identity(tmp_path: Path) -> No
     （時刻が違っても history は不変のまま）。"""
     import time
 
-    record_state(tmp_path, "edm", "suno", "verified", "same")
+    record_state(tmp_path, "edm", "suno", "verified", "same", protected_inputs=[])
     time.sleep(0.01)
-    result = record_state(tmp_path, "edm", "suno", "verified", "same")
+    result = record_state(tmp_path, "edm", "suno", "verified", "same", protected_inputs=[])
 
     assert len(result.runs["edm@suno"].history) == 1
 
@@ -136,7 +140,7 @@ def test_record_state_atomic_write_leaves_no_partial_file_on_failure(
     monkeypatch.setattr(state_module.os, "replace", _boom)
 
     with pytest.raises(OSError):
-        record_state(tmp_path, "edm", "suno", "authored")
+        record_state(tmp_path, "edm", "suno", "authored", protected_inputs=[])
 
     # No target file was ever published...
     assert not (tmp_path / RECAST_STATE_FILENAME).exists()
@@ -148,7 +152,7 @@ def test_record_state_atomic_write_leaves_no_partial_file_on_failure(
 
 
 def test_record_state_publishes_valid_json(tmp_path: Path) -> None:
-    record_state(tmp_path, "edm", "suno", "authored", "note")
+    record_state(tmp_path, "edm", "suno", "authored", "note", protected_inputs=[])
 
     raw = (tmp_path / RECAST_STATE_FILENAME).read_text(encoding="utf-8")
     assert raw.endswith("\n")

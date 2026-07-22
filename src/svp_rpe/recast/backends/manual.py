@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 from pathlib import Path
 from typing import Optional
 
@@ -115,10 +116,27 @@ def _next_command_text(ctx: RecastRunContext, prepared: PreparedInvocation) -> s
     project_relative = ctx.loaded.path.name
     takes_relative = os.path.relpath(prepared.takes_dir, ctx.loaded.project_dir)
     audio_relative = f"{takes_relative}/take-01.wav"
-    return (
-        f"svprpe recast ingest {project_relative} --variant {prepared.variant} "
-        f"--backend {prepared.backend_name} --audio {audio_relative}\n"
+    # Codex P2 review round 5（PR3 #208 指摘 11）: 動的引数（project パス名 /
+    # variant / backend / audio 相対パス）は project_dir 自体や builds_root の
+    # 命名次第で空白等シェル特殊文字を含み得る。全動的引数を `shlex.join` で
+    # クオートし、copy-paste でそのまま実行可能なコマンド文字列にする
+    # （`tests/test_recast_backend.py:test_next_command_txt_advertises_a_real_working_ingest_command`
+    # が実際に `shlex.split` → `CliRunner` で実行して検証する契約と対称）。
+    command = shlex.join(
+        [
+            "svprpe",
+            "recast",
+            "ingest",
+            project_relative,
+            "--variant",
+            prepared.variant,
+            "--backend",
+            prepared.backend_name,
+            "--audio",
+            audio_relative,
+        ]
     )
+    return f"{command}\n"
 
 
 def _order_sheet_md(ctx: RecastRunContext, prepared: PreparedInvocation, next_command: str) -> str:

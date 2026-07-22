@@ -332,6 +332,7 @@ def test_recast_ingest_rejects_when_pin_is_missing(tmp_path: Path) -> None:
         note=run.note,
         inputs_digest=None,
         plan_sha256=None,
+        protected_inputs=[],
     )
 
     audio_path = tmp_path / "external.wav"

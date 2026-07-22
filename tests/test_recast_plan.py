@@ -10,7 +10,13 @@ import pytest
 from svp_rpe.recast import RecastError, load_recast_project
 from svp_rpe.recast.loader import LoadedRecastProject, load_mode_overrides
 from svp_rpe.recast.models import ModeOverridesConfig
-from svp_rpe.recast.plan import RecastPlanResult, build_recast_plan, mode_support_for_path
+from svp_rpe.recast.plan import (
+    RecastPlanResult,
+    _normalize_diagnostic,
+    build_recast_plan,
+    mode_support_for_path,
+)
+from svp_rpe.recast.run_paths import collect_protected_input_paths
 from svp_rpe.recast.state import load_recast_state, record_state
 
 DEMO_PROJECT = Path("examples/recast/demo_project")
@@ -36,6 +42,7 @@ def _persist_state(
         result.plan.state_reached,
         note,
         inputs_digest=result.inputs_digest,
+        protected_inputs=collect_protected_input_paths(loaded, variant, backend),
     )
 
 
@@ -191,6 +198,49 @@ def test_build_recast_plan_reads_each_bundle_input_exactly_once(
     assert _count(Path("config/device_profiles/suno.yaml")) == 1
     assert _count(loaded.identity_manifest_path) == 3
     assert _count(loaded.score_path) == 3
+
+
+# --- diagnostic path normalization (Codex P2 seventh/eighth round #207) --------
+
+
+def test_normalize_diagnostic_relativizes_paths_under_project_dir() -> None:
+    project_dir = Path("/tmp/x/demo_project")
+    text = (
+        "identity manifest 'w': anchor 'lyrics' sha256 mismatch at "
+        "/tmp/x/demo_project/identity/lyrics.txt: expected a, got b"
+    )
+    normalized = _normalize_diagnostic(text, project_dir)
+    assert "identity/lyrics.txt" in normalized
+    assert "/tmp/x/demo_project" not in normalized
+
+
+def test_normalize_diagnostic_masks_sibling_directory_with_shared_prefix() -> None:
+    """`project_dir` と文字列 prefix が一致するだけの兄弟ディレクトリ
+    （例 `demo_project_evil`）は project_dir 配下ではない — 無境界な
+    `str.replace(project_dir_str, ...)` だと `._evil/...` のような機械依存の
+    断片が残ってしまう（Codex P2 eighth round #207）。境界判定を厳密にし、
+    こうした兄弟パスは丸ごと `<external-path>` へマスクされる（project 相対の
+    断片が残らない）ことを検証する。"""
+    project_dir = Path("/tmp/x/demo_project")
+    text = (
+        "identity manifest 'w': anchor 'lyrics' sha256 mismatch at "
+        "/tmp/x/demo_project_evil/identity/lyrics.txt: expected a, got b"
+    )
+    normalized = _normalize_diagnostic(text, project_dir)
+    assert "._evil" not in normalized
+    assert "demo_project_evil" not in normalized
+    assert "/tmp/x/demo_project" not in normalized
+    assert "<external-path>" in normalized
+
+
+def test_normalize_diagnostic_leaves_bare_project_dir_relative() -> None:
+    """`project_dir` 自身への完全一致（サブパスなし）は "." へ正規化される
+    （境界判定: 直後が path 継続文字でないケース）。"""
+    project_dir = Path("/tmp/x/demo_project")
+    text = "identity manifest unreadable at /tmp/x/demo_project"
+    normalized = _normalize_diagnostic(text, project_dir)
+    assert "/tmp/x/demo_project" not in normalized
+    assert normalized.endswith(".")
 
 
 # --- scenario (a): blocked_authoring via unresolved TODO sentinel --------------

@@ -1,6 +1,7 @@
 """`svprpe recast plan` / `svprpe recast status` CLI テスト（PR2）。"""
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -8,6 +9,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from svp_rpe.cli import app
+from svp_rpe.recast.state import load_recast_state
 
 DEMO_PROJECT = Path("examples/recast/demo_project")
 EXPECTED_PLAN = DEMO_PROJECT / "expected" / "recast_plan_edm_suno.json"
@@ -39,6 +41,33 @@ def test_recast_plan_succeeds_and_writes_plan_json(tmp_path: Path) -> None:
     data = json.loads(plan_path.read_text(encoding="utf-8"))
     assert data["state_reached"] == "verified"
     assert "blocked" not in data or data["blocked"] is None
+
+
+def test_recast_plan_records_sha256_matching_actual_written_bytes(tmp_path: Path) -> None:
+    """`recast_plan.json` の atomic 書き込みは bytes 経路に統一されている
+    （Codex P2 ninth round #207: 旧実装は text モードで書いており、Windows
+    では改行変換 `"\n"`→`"\r\n"` により `plan_sha256`（計算元は `"\n"` のみの
+    encode 済み bytes）と実際にディスクへ書かれた bytes が乖離しうる —
+    直後の `recast status` が偽 stale を報告する原因になっていた）。
+    改行変換の再現自体は環境依存のため、ここでは記録された `plan_sha256` が
+    実際に書かれたファイルの生 bytes の sha256 と厳密に一致することを直接
+    検証する（現在の実行環境で既に一致していれば、bytes 経路であることの
+    十分条件を満たす — text モードのままなら POSIX でも一致はするが、
+    それでも single-source of truth 化そのものは常に検証可能）。"""
+    project_path = _copy_demo_project(tmp_path)
+
+    result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert result.exit_code == 0, result.output
+
+    plan_path = project_path.parent / "recast_plan.json"
+    actual_sha256 = hashlib.sha256(plan_path.read_bytes()).hexdigest()
+
+    state_file = load_recast_state(project_path.parent)
+    recorded_plan_sha256 = state_file.runs["edm@suno"].plan_sha256
+    assert recorded_plan_sha256 is not None
+    assert recorded_plan_sha256 == actual_sha256
 
 
 def test_recast_plan_matches_committed_snapshot_via_cli(tmp_path: Path) -> None:
@@ -75,6 +104,65 @@ def test_recast_plan_exits_nonzero_when_blocked(tmp_path: Path) -> None:
     assert data["state_reached"] == "blocked_authoring"
 
 
+def test_recast_plan_blocks_capability_on_corrupted_capability_profile(tmp_path: Path) -> None:
+    """capability_profile の YAML 破損は identity manifest / arrangement spec の
+    同種の失敗（blocked_verification / blocked_authoring）と一貫させ
+    blocked_capability として recast_plan.json に publish + state 記録される
+    ことを検証する（Codex P2 eighth round #207: 以前は保存済み例外を re-raise
+    し、CLI が top-level Error で落ちて plan/state が一切書かれなかった）。"""
+    project_path = _copy_demo_project(tmp_path)
+    project_text = project_path.read_text(encoding="utf-8")
+    mutated = project_text.replace(
+        'capability_profile: "suno"', 'capability_profile: "capability_profile.yaml"'
+    )
+    assert mutated != project_text  # sanity: the replacement actually matched
+    project_path.write_text(mutated, encoding="utf-8")
+    (project_path.parent / "capability_profile.yaml").write_text(
+        "not-a-mapping\n", encoding="utf-8"
+    )
+
+    result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+
+    assert result.exit_code == 1
+    plan_path = project_path.parent / "recast_plan.json"
+    assert plan_path.is_file()
+    data = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert data["state_reached"] == "blocked_capability"
+
+    status_result = runner.invoke(app, ["recast", "status", str(project_path)])
+    assert status_result.exit_code == 0, status_result.output
+    assert "blocked_capability" in status_result.output
+
+
+def test_recast_plan_blocks_capability_on_corrupted_mode_overrides(tmp_path: Path) -> None:
+    """mode_overrides の YAML 破損も同様に blocked_capability として publish +
+    state 記録される（Codex P2 eighth round #207）。"""
+    project_path = _copy_demo_project(tmp_path)
+    project_text = project_path.read_text(encoding="utf-8")
+    mutated = project_text.replace(
+        'mode_overrides: "suno"', 'mode_overrides: "mode_overrides.yaml"'
+    )
+    assert mutated != project_text  # sanity: the replacement actually matched
+    project_path.write_text(mutated, encoding="utf-8")
+    (project_path.parent / "mode_overrides.yaml").write_text("not-a-mapping\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+
+    assert result.exit_code == 1
+    plan_path = project_path.parent / "recast_plan.json"
+    assert plan_path.is_file()
+    data = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert data["state_reached"] == "blocked_capability"
+
+    status_result = runner.invoke(app, ["recast", "status", str(project_path)])
+    assert status_result.exit_code == 0, status_result.output
+    assert "blocked_capability" in status_result.output
+
+
 def test_recast_plan_write_failure_does_not_persist_state(tmp_path: Path, monkeypatch) -> None:
     """`recast_plan.json` の atomic publish が失敗した場合、`record_state` は
     呼ばれず `recast_state.json` も書き換わらないことを検証する（Codex P2 second
@@ -98,6 +186,43 @@ def test_recast_plan_write_failure_does_not_persist_state(tmp_path: Path, monkey
     assert not plan_path.exists()
     state_path = project_path.parent / "recast_state.json"
     assert not state_path.exists()
+
+
+def test_recast_plan_rejects_score_aliased_to_recast_plan_output(tmp_path: Path) -> None:
+    """Codex P2 review round 5（PR3 #208 指摘 10）: `work.score`（あるいは
+    project.yaml 自体）が `<project_dir>/recast_plan.json` という publish 先と
+    同じパスを指す project 構成では、従来 `_publish_recast_plan` が衝突ガード
+    無しで publish していたため、最初の `recast plan` が入力（score）を
+    plan JSON で上書き破壊し得た。`work.score` を `recast_plan.json` へ
+    向け、publish 前に fail-closed で拒否され、かつ元の score 内容が一切
+    上書きされないことを検証する。"""
+    project_path = _copy_demo_project(tmp_path)
+    project_dir = project_path.parent
+
+    # score の内容を recast_plan.json という名前へ移し、work.score をそこへ
+    # 向け直す（project.yaml 自体は別ファイルのまま — 衝突対象は score 側）。
+    original_score_bytes = (project_dir / "composition_score.yaml").read_bytes()
+    aliased_score_path = project_dir / "recast_plan.json"
+    aliased_score_path.write_bytes(original_score_bytes)
+    (project_dir / "composition_score.yaml").unlink()
+
+    project_text = project_path.read_text(encoding="utf-8")
+    updated = project_text.replace("score: composition_score.yaml", "score: recast_plan.json", 1)
+    assert updated != project_text  # sanity
+    project_path.write_text(updated, encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+
+    assert result.exit_code == 1
+    assert "collides with a protected input path" in result.output
+
+    # fail-closed: score の内容（recast_plan.json という名前のファイル）が
+    # plan JSON で上書きされていない。
+    assert aliased_score_path.read_bytes() == original_score_bytes
+    # record_state も呼ばれていない（publish 失敗後は状態を記録しない順序保証）。
+    assert not (project_dir / "recast_state.json").exists()
 
 
 def test_recast_plan_unknown_variant_exits_nonzero_without_writing_plan(tmp_path: Path) -> None:

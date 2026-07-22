@@ -50,14 +50,21 @@ def _read_plan_sha256(path: Path) -> Optional[str]:
         return None
 
 
-def _write_recast_plan_atomically(path: Path, content: str) -> None:
+def _write_recast_plan_atomically(path: Path, content: bytes) -> None:
     """tempfile + `os.replace` による atomic publish（`cli/observe_cmd.py` の
-    `_write_observation_report_atomically` と同型）。"""
+    `_write_observation_report_atomically` と同型）。bytes を受け取り binary
+    モードで書く（Codex P2 ninth round #207: 旧実装は text モード
+    `open(..., "w", encoding="utf-8")` で書いており、Windows では改行が
+    `"\n"` → `"\r\n"` に変換される。`plan_sha256` は `canonical.encode("utf-8")`
+    から計算していたため、記録した hash と実際にディスクへ書かれた bytes が
+    乖離し、publish 直後の `recast status` が偽 stale を報告しうる欠陥が
+    あった。呼び出し側が 1 回だけ encode した bytes をそのまま書き込み、
+    同じ bytes から hash も計算する single-source 設計に統一する）。"""
     output_dir = path.parent
     output_dir.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=output_dir, prefix=f"{path.name}.", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        with os.fdopen(fd, "wb") as handle:
             handle.write(content)
         os.replace(tmp_name, path)
     except BaseException:
@@ -106,10 +113,31 @@ def _publish_recast_plan(loaded: Any, plan: Any) -> tuple[Path, str]:
     を publish しなかったため、`ingest` が信頼する `plan_sha256` の実体が
     存在しなかった）。呼び出し側は書き込み失敗（`OSError`）を own の Exit
     コードへ変換する。
+
+    公開前に `collect_protected_input_paths(loaded, plan.variant, plan.backend)`
+    との alias 検査を行う（Codex P2 review round 5, PR3 #208 指摘 10:
+    project.yaml 自体が `recast_plan.json` という名前を取る/`work.score` が
+    そこを指す等、project 側の宣言次第で入力パスが `<project_dir>/
+    recast_plan.json` と一致し得る — 従来この公開サイトだけ他の 4 公開サイト
+    （orders/takes×2/packages）と異なりガード対象外だった）。衝突時は何も
+    書かずに `ValueError` を送出する（fail-closed — 他公開サイトと同じ契約）。
+
+    encode は 1 回だけ行い、書き込みも `plan_sha256` の hash 計算もこの同一
+    bytes から行う（Codex P2 review round 6, PR3 #208 由来の pr2 統合分
+    #207 ninth round: 旧実装は text モード `open(..., "w", encoding="utf-8")`
+    で書いており、Windows では改行が `"\n"` → `"\r\n"` に変換される。
+    `plan_sha256` は encode 済み bytes から計算していたため、記録した hash
+    と実際にディスクへ書かれた bytes が乖離し、publish 直後の `recast
+    status` が偽 stale を報告しうる欠陥があった）。
     """
     from svp_rpe.recast.plan import RECAST_PLAN_FILENAME
+    from svp_rpe.recast.run_paths import collect_protected_input_paths
 
     plan_path = loaded.project_dir / RECAST_PLAN_FILENAME
+    protected_inputs = collect_protected_input_paths(loaded, plan.variant, plan.backend)
+    if plan_path.resolve() in {candidate.resolve() for candidate in protected_inputs}:
+        raise ValueError(f"output path collides with a protected input path: {plan_path}")
+
     canonical = (
         json.dumps(
             plan.model_dump(mode="json", exclude_none=True),
@@ -119,8 +147,9 @@ def _publish_recast_plan(loaded: Any, plan: Any) -> tuple[Path, str]:
         )
         + "\n"
     )
-    _write_recast_plan_atomically(plan_path, canonical)
-    plan_sha256 = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    canonical_bytes = canonical.encode("utf-8")
+    _write_recast_plan_atomically(plan_path, canonical_bytes)
+    plan_sha256 = hashlib.sha256(canonical_bytes).hexdigest()
     return plan_path, plan_sha256
 
 
@@ -144,6 +173,7 @@ def recast_plan_cmd(
     from svp_rpe.arrange.resolver import ArrangementError
     from svp_rpe.recast import RecastError, load_recast_project
     from svp_rpe.recast.plan import build_recast_plan
+    from svp_rpe.recast.run_paths import collect_protected_input_paths
     from svp_rpe.recast.state import record_state
 
     try:
@@ -155,21 +185,27 @@ def recast_plan_cmd(
 
     try:
         plan_path, plan_sha256 = _publish_recast_plan(loaded, result.plan)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
+    protected_inputs = collect_protected_input_paths(loaded, variant, backend)
     # 状態記録は plan JSON の publish が成功した後にのみ行う（Codex P2 #207）:
     # 書き込み失敗時に stale な recast_state.json を残さないための順序保証。
-    record_state(
-        loaded.project_dir,
-        variant,
-        backend,
-        result.plan.state_reached,
-        _plan_state_note(result),
-        inputs_digest=result.inputs_digest,
-        plan_sha256=plan_sha256,
-    )
+    try:
+        record_state(
+            loaded.project_dir,
+            variant,
+            backend,
+            result.plan.state_reached,
+            _plan_state_note(result),
+            inputs_digest=result.inputs_digest,
+            plan_sha256=plan_sha256,
+            protected_inputs=protected_inputs,
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
 
     anchors_table = Table(title=f"Anchors: {variant}@{backend}")
     anchors_table.add_column("anchor_id")
@@ -260,6 +296,7 @@ def recast_run_cmd(
         run_context_from_plan_artifacts,
     )
     from svp_rpe.recast.plan import _normalize_diagnostic, build_recast_plan_artifacts
+    from svp_rpe.recast.run_paths import collect_protected_input_paths
     from svp_rpe.recast.state import record_state
 
     try:
@@ -271,22 +308,28 @@ def recast_run_cmd(
 
     try:
         _plan_path, plan_sha256 = _publish_recast_plan(loaded, artifacts.result.plan)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
+    protected_inputs = collect_protected_input_paths(loaded, variant, backend)
     inputs_digest = artifacts.result.inputs_digest
     # plan 段の到達状態は plan JSON の publish 成功後にのみ記録する（Codex P2
     # #207 の順序保証を run にも適用 — plan_sha256 が実在ファイルを指すように）。
-    record_state(
-        loaded.project_dir,
-        variant,
-        backend,
-        artifacts.result.plan.state_reached,
-        _plan_state_note(artifacts.result),
-        inputs_digest=inputs_digest,
-        plan_sha256=plan_sha256,
-    )
+    try:
+        record_state(
+            loaded.project_dir,
+            variant,
+            backend,
+            artifacts.result.plan.state_reached,
+            _plan_state_note(artifacts.result),
+            inputs_digest=inputs_digest,
+            plan_sha256=plan_sha256,
+            protected_inputs=protected_inputs,
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
     _print_plan_warnings(artifacts.result.plan)
 
     state_reached = artifacts.result.plan.state_reached
@@ -322,15 +365,20 @@ def recast_run_cmd(
         # stale 検出が見失う。plan_sha256 も同様に引き回さないと `recast ingest`
         # の plan ファイル突合が機能しない）。
         note = os.path.relpath(prepared.order_dir, loaded.project_dir)
-        record_state(
-            loaded.project_dir,
-            variant,
-            backend,
-            "awaiting_generation",
-            note=note,
-            inputs_digest=inputs_digest,
-            plan_sha256=plan_sha256,
-        )
+        try:
+            record_state(
+                loaded.project_dir,
+                variant,
+                backend,
+                "awaiting_generation",
+                note=note,
+                inputs_digest=inputs_digest,
+                plan_sha256=plan_sha256,
+                protected_inputs=protected_inputs,
+            )
+        except (OSError, ValueError) as exc:
+            typer.echo(f"Error: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
         console.print(f"[green]Order files published to {prepared.order_dir}[/green]")
         console.print(f"Next step: see {prepared.order_dir / 'next_command.txt'}")
         raise typer.Exit(code=0)
@@ -342,28 +390,38 @@ def recast_run_cmd(
         # 例外メッセージに実行マシンの絶対パスが residual として残らないようにする
         # （Codex P2 review round 4, PR3 #208: run/ingest 側の state note にも
         # plan.py 側と同一の正規化を一貫適用する要請への対応）。
-        record_state(
-            loaded.project_dir,
-            variant,
-            backend,
-            "generation_failed",
-            note=_normalize_diagnostic(str(exc), loaded.project_dir),
-            inputs_digest=inputs_digest,
-            plan_sha256=plan_sha256,
-        )
+        try:
+            record_state(
+                loaded.project_dir,
+                variant,
+                backend,
+                "generation_failed",
+                note=_normalize_diagnostic(str(exc), loaded.project_dir),
+                inputs_digest=inputs_digest,
+                plan_sha256=plan_sha256,
+                protected_inputs=protected_inputs,
+            )
+        except (OSError, ValueError) as record_exc:
+            typer.echo(f"Error: {record_exc}", err=True)
+            raise typer.Exit(code=1) from record_exc
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
     note = f"{os.path.relpath(take.audio_path, loaded.project_dir)} sha256={take.sha256}"
-    record_state(
-        loaded.project_dir,
-        variant,
-        backend,
-        "generated",
-        note=note,
-        inputs_digest=inputs_digest,
-        plan_sha256=plan_sha256,
-    )
+    try:
+        record_state(
+            loaded.project_dir,
+            variant,
+            backend,
+            "generated",
+            note=note,
+            inputs_digest=inputs_digest,
+            plan_sha256=plan_sha256,
+            protected_inputs=protected_inputs,
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
     console.print(f"[green]Generated take: {take.audio_path} (sha256={take.sha256})[/green]")
 
 
@@ -486,7 +544,7 @@ def recast_ingest_cmd(
 
     try:
         _plan_path, plan_sha256 = _publish_recast_plan(loaded, artifacts.result.plan)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
@@ -503,15 +561,20 @@ def recast_ingest_cmd(
         raise typer.Exit(code=1) from exc
 
     note = f"{os.path.relpath(take.audio_path, loaded.project_dir)} sha256={take.sha256}"
-    record_state(
-        loaded.project_dir,
-        variant,
-        backend,
-        "generated",
-        note=note,
-        inputs_digest=artifacts.result.inputs_digest,
-        plan_sha256=plan_sha256,
-    )
+    try:
+        record_state(
+            loaded.project_dir,
+            variant,
+            backend,
+            "generated",
+            note=note,
+            inputs_digest=artifacts.result.inputs_digest,
+            plan_sha256=plan_sha256,
+            protected_inputs=prepared.protected_input_paths,
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
     console.print(f"[green]Ingested take: {take.audio_path} (sha256={take.sha256})[/green]")
     console.print("Next step: observe/report は今後のコマンドで提供予定です（未実装）。")
 

@@ -127,15 +127,20 @@ def load_recast_state(project_dir: Path | str) -> RecastStateFile:
     return RecastStateFile.model_validate(data)
 
 
-def _write_recast_state_atomically(path: Path, content: str) -> None:
+def _write_recast_state_atomically(path: Path, content: bytes) -> None:
     """tempfile + `os.replace` による atomic publish（`cli/observe_cmd.py` の
     `_write_observation_report_atomically` と同型）。書き込み途中の失敗が
-    部分的な `recast_state.json` を残さないようにする。"""
+    部分的な `recast_state.json` を残さないようにする。bytes を受け取り
+    binary モードで書く（Codex P2 ninth round #207: `recast_cmd.py` の
+    `recast_plan.json` 書き込みと同じ理由で text モードを避ける —
+    `recast_state.json` 自体は現状バイト単位の hash 突合対象ではないが、
+    single-source of truth 原則で recast モジュール内の atomic 書き込みを
+    統一する）。"""
     output_dir = path.parent
     output_dir.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=output_dir, prefix=f"{path.name}.", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        with os.fdopen(fd, "wb") as handle:
             handle.write(content)
         os.replace(tmp_name, path)
     except BaseException:
@@ -155,6 +160,7 @@ def record_state(
     *,
     inputs_digest: Optional[str] = None,
     plan_sha256: Optional[str] = None,
+    protected_inputs: List[Path],
 ) -> RecastStateFile:
     """`(variant, backend)` 実行の到達状態を記録し、更新後の `RecastStateFile` を返す。
 
@@ -165,7 +171,14 @@ def record_state(
     偶然 state/note が同じになるケースで古いまま no-op してしまうと
     `recast status` の stale 検出が機能しなくなるため。それ以外は history へ
     1 件追記し、atomic write で publish する。
-    """
+
+    `protected_inputs` は必須（デフォルト値なし — Codex P2 review round 5,
+    PR3 #208 指摘 10: `recast/plan.py:_publish_recast_plan` と同じ理由で、
+    project 側の宣言次第で入力パスが `<project_dir>/recast_state.json` と
+    一致し得る。書き込み直前に `recast/run_paths.py:collect_protected_input_paths`
+    の戻り値との alias 検査を行い、衝突時は何も書かずに `ValueError` を送出する
+    （fail-closed — 他の publish サイトと同じ契約）。冪等 no-op で返る経路
+    （既存記録と完全一致）は実際には書き込まないため検査しない。"""
     state_file = load_recast_state(project_dir)
     key = _run_key(variant, backend)
     existing = state_file.runs.get(key)
@@ -177,6 +190,12 @@ def record_state(
         and existing.plan_sha256 == plan_sha256
     ):
         return state_file
+
+    state_path = _state_path(project_dir)
+    if protected_inputs:
+        resolved_inputs = {candidate.resolve() for candidate in protected_inputs}
+        if state_path.resolve() in resolved_inputs:
+            raise ValueError(f"output path collides with a protected input path: {state_path}")
 
     now = _now_iso()
     new_history = list(existing.history) if existing is not None else []
@@ -200,5 +219,5 @@ def record_state(
         )
         + "\n"
     )
-    _write_recast_state_atomically(_state_path(project_dir), content)
+    _write_recast_state_atomically(_state_path(project_dir), content.encode("utf-8"))
     return new_state_file
