@@ -21,9 +21,12 @@ _NEXT_STEP_BY_STATE: dict[str, str] = {
     "draft": "svprpe recast plan <project.yaml> --variant <variant> --backend <backend>",
     "authored": "svprpe recast plan <project.yaml> --variant <variant> --backend <backend>",
     "compiled": "policy.require_verified_package を有効にするか svprpe verify で検証",
-    "verified": "backend を実行して音声を生成する（invocation_mode に従う）",
-    "awaiting_generation": "backend を実行して音声を生成する",
-    "generated": "svprpe observe <package.json> <audio> --manifest <identity.yaml> -o <report.json>",
+    "verified": "svprpe recast run <project.yaml> --variant <variant> --backend <backend>",
+    "awaiting_generation": (
+        "外部生成後: svprpe recast ingest <project.yaml> --variant <variant> "
+        "--backend <backend> --audio <takes_dir>/take-01.wav (注文書 next_command.txt 参照)"
+    ),
+    "generated": "観測 (svprpe observe 連携) は PR5 で configure 予定",
     "observed": "観測結果を確認し reported へ進める",
     "reported": "run 完了",
     "blocked_authoring": "TODO(transcribe) sentinel / preservation 契約違反を解消して再実行",
@@ -135,6 +138,91 @@ def recast_plan_cmd(
 
     if result.plan.blocked is not None:
         raise typer.Exit(code=1)
+
+
+_COMPILED_OR_BETTER_STATES = frozenset({"compiled", "verified"})
+
+
+@recast_app.command("run")
+def recast_run_cmd(
+    project_yaml: str = typer.Argument(..., help="Path to RecastProject YAML"),
+    variant: str = typer.Option(..., "--variant", help="Variant name declared in the project"),
+    backend: str = typer.Option(..., "--backend", help="Backend name declared in the project"),
+) -> None:
+    """Resolve the backend invoker for (variant, backend) and run it.
+
+    Step 1 runs the same plan pipeline as `recast plan` (reusing its compiled
+    artifacts, not recomputing them) and requires the run to have reached
+    `compiled`/`verified` (whichever `policy.require_verified_package`
+    demands) — anything short of that (a `blocked_*` state) is reported and
+    exits 1 without invoking a backend.
+
+    manual backends publish the 6 order files under
+    `<builds_root>/orders/<variant>@<backend>/`, record `awaiting_generation`,
+    and exit 0. local backends invoke the generator, record `generated` (or
+    `generation_failed` on error), and exit 0/1 accordingly.
+    """
+    import yaml
+    from pydantic import ValidationError
+
+    from svp_rpe.arrange.resolver import ArrangementError
+    from svp_rpe.recast import RecastError, load_recast_project
+    from svp_rpe.recast.backend import (
+        load_backend_capability_profile,
+        resolve_invoker,
+        run_context_from_plan_artifacts,
+    )
+    from svp_rpe.recast.plan import build_recast_plan_artifacts
+    from svp_rpe.recast.state import record_state
+
+    try:
+        loaded = load_recast_project(project_yaml)
+        artifacts = build_recast_plan_artifacts(loaded, variant=variant, backend=backend)
+    except (OSError, ValueError, ValidationError, yaml.YAMLError, RecastError, ArrangementError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    state_reached = artifacts.result.plan.state_reached
+    if state_reached not in _COMPILED_OR_BETTER_STATES:
+        console.print(
+            f"[red]recast run: {variant}@{backend} has not reached a compiled package "
+            f"(state_reached={state_reached})[/red]"
+        )
+        if artifacts.result.plan.blocked is not None:
+            console.print(f"[red]Blocked: {artifacts.result.plan.blocked.state}[/red]")
+            for reason in artifacts.result.plan.blocked.reasons:
+                console.print(f"  - {reason}")
+        console.print(f"Recommendation: {artifacts.result.plan.recommendation}")
+        raise typer.Exit(code=1)
+
+    try:
+        profile = load_backend_capability_profile(loaded, backend)
+        ctx = run_context_from_plan_artifacts(
+            loaded, variant=variant, backend=backend, artifacts=artifacts, profile=profile
+        )
+        invoker = resolve_invoker(artifacts.backend_ref, profile)
+        prepared = invoker.prepare(ctx)
+    except (OSError, ValueError, ValidationError, yaml.YAMLError, RecastError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if artifacts.backend_ref.invocation == "manual":
+        note = os.path.relpath(prepared.order_dir, loaded.project_dir)
+        record_state(loaded.project_dir, variant, backend, "awaiting_generation", note=note)
+        console.print(f"[green]Order files published to {prepared.order_dir}[/green]")
+        console.print(f"Next step: see {prepared.order_dir / 'next_command.txt'}")
+        raise typer.Exit(code=0)
+
+    try:
+        take = invoker.invoke(prepared)
+    except RecastError as exc:
+        record_state(loaded.project_dir, variant, backend, "generation_failed", note=str(exc))
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    note = f"{os.path.relpath(take.audio_path, loaded.project_dir)} sha256={take.sha256}"
+    record_state(loaded.project_dir, variant, backend, "generated", note=note)
+    console.print(f"[green]Generated take: {take.audio_path} (sha256={take.sha256})[/green]")
 
 
 @recast_app.command("status")

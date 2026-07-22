@@ -56,6 +56,7 @@ from svp_rpe.arrange.observe import (
 from svp_rpe.arrange.package import (
     COMPILATION_REPORT_FILENAME,
     PERFORMANCE_PACKAGE_FILENAME,
+    CompiledPerformancePackage,
     DeliveryStatus,
     InputChannel,
     PackageCompilationError,
@@ -152,6 +153,30 @@ class RecastPlanResult:
 
     plan: RecastPlan
     text: str
+
+
+@dataclass(frozen=True)
+class RecastPlanArtifacts:
+    """`build_recast_plan_artifacts` の戻り値: 決定論的 `RecastPlanResult`（`result`）に
+    加え、到達状態が `compiled`/`verified` のときのみ非 None になる compile 済み成果物
+    一式（PR3 §「recast run」用）。
+
+    PR3 の `recast/backend.py` はこれを再利用して `PreparedInvocation` を組み立てる —
+    plan パイプラインを再計算せず、plan 段が既に構築した `CompiledPerformancePackage` /
+    derived score / 各 sha256 pin をそのまま流用する（指示書「plan の再計算でなく
+    plan 段の compile 結果を再利用できる形に plan.py を小さくリファクタしてよい」への
+    対応）。`build_recast_plan`（既存公開 API）はこの `result` フィールドだけを返す
+    薄いラッパーへ縮退し、返り値の型・JSON 出力は一切変更しない。
+    """
+
+    result: RecastPlanResult
+    backend_ref: BackendRef
+    compiled: Optional[CompiledPerformancePackage] = None
+    derived_score: Optional[CompositionScore] = None
+    manifest_sha256: Optional[str] = None
+    contract_sha256: Optional[str] = None
+    profile_sha256: Optional[str] = None
+    derived_score_sha256: Optional[str] = None
 
 
 def _parse_yaml_mapping(raw_bytes: bytes, label: str, path_str: str) -> Dict[str, Any]:
@@ -329,7 +354,24 @@ def _render_text(plan: RecastPlan) -> str:
 def build_recast_plan(
     loaded: LoadedRecastProject, *, variant: str, backend: str
 ) -> RecastPlanResult:
-    """`loaded` の (variant, backend) 組に対する RecastPlan を構築し、state を永続化する。"""
+    """`loaded` の (variant, backend) 組に対する RecastPlan を構築し、state を永続化する。
+
+    既存公開 API（PR2 由来）: 返り値の型・JSON 出力は不変。内部的には
+    `build_recast_plan_artifacts` の `result` フィールドを返すだけの薄いラッパー
+    （PR3 でのリファクタ — compile 済み成果物の再利用は `recast/backend.py` が
+    `build_recast_plan_artifacts` を直接呼ぶことで行う）。
+    """
+    return build_recast_plan_artifacts(loaded, variant=variant, backend=backend).result
+
+
+def build_recast_plan_artifacts(
+    loaded: LoadedRecastProject, *, variant: str, backend: str
+) -> RecastPlanArtifacts:
+    """`build_recast_plan` の完全版: `RecastPlanResult` に加え、到達状態が
+    `compiled`/`verified` のときの compile 済み成果物一式（`RecastPlanArtifacts`）
+    を返す。state 永続化・診断構築のロジックは `build_recast_plan` と完全に同一
+    （PR2 からの挙動は一切変えない）。
+    """
     project: RecastProject = loaded.project
 
     if variant not in project.variants:
@@ -352,7 +394,13 @@ def build_recast_plan(
         anchors: Optional[List[AnchorPlanEntry]] = None,
         changed_fields: Optional[List[ChangedFieldPlanEntry]] = None,
         warnings: Optional[List[str]] = None,
-    ) -> RecastPlanResult:
+        compiled: Optional[CompiledPerformancePackage] = None,
+        derived_score: Optional[CompositionScore] = None,
+        manifest_sha256: Optional[str] = None,
+        contract_sha256: Optional[str] = None,
+        profile_sha256: Optional[str] = None,
+        derived_score_sha256: Optional[str] = None,
+    ) -> RecastPlanArtifacts:
         resolved_changed_fields = changed_fields or []
         recommendation = _build_recommendation(blocked, state_reached, resolved_changed_fields)
         plan = RecastPlan(
@@ -371,7 +419,17 @@ def build_recast_plan(
         )
         note = "; ".join(blocked.reasons) if blocked is not None else None
         record_state(loaded.project_dir, variant, backend, state_reached, note)
-        return RecastPlanResult(plan=plan, text=_render_text(plan))
+        result = RecastPlanResult(plan=plan, text=_render_text(plan))
+        return RecastPlanArtifacts(
+            result=result,
+            backend_ref=backend_ref,
+            compiled=compiled,
+            derived_score=derived_score,
+            manifest_sha256=manifest_sha256,
+            contract_sha256=contract_sha256,
+            profile_sha256=profile_sha256,
+            derived_score_sha256=derived_score_sha256,
+        )
 
     # --- step 2: score + author field resolution ---------------------------
     score = load_composition_score(loaded.score_path)
@@ -543,4 +601,10 @@ def build_recast_plan(
             anchors=anchors,
             changed_fields=changed_fields,
             warnings=warnings,
+            compiled=compiled,
+            derived_score=resolution.derived_score,
+            manifest_sha256=manifest_sha256,
+            contract_sha256=contract_sha256,
+            profile_sha256=profile_sha256,
+            derived_score_sha256=derived_score_sha256,
         )
