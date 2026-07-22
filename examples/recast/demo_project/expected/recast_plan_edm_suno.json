@@ -1,0 +1,68 @@
+{
+  "anchors": [
+    {
+      "anchor_id": "lyrics",
+      "channel": "lyrics_text",
+      "delivery": "delivered",
+      "domain": "lyrics",
+      "policy_mode": "hard",
+      "sensor_available": true
+    },
+    {
+      "anchor_id": "melody",
+      "delivery": "unsupported",
+      "domain": "melody",
+      "policy_mode": "hard",
+      "sensor_available": true
+    },
+    {
+      "anchor_id": "harmony",
+      "delivery": "unknown",
+      "domain": "harmony",
+      "policy_mode": "hard",
+      "sensor_available": true
+    }
+  ],
+  "backend": "suno",
+  "capability_mode": "advisory",
+  "changed_fields": [
+    {
+      "mode_support": "unknown",
+      "path": "semantic.grv.primary",
+      "preservation_mode": "free"
+    },
+    {
+      "mode_support": "unknown",
+      "path": "semantic.grv.secondary",
+      "preservation_mode": "free"
+    },
+    {
+      "mode_support": "unknown",
+      "path": "semantic.delta_e.overall",
+      "preservation_mode": "elastic"
+    },
+    {
+      "mode_support": "experimental",
+      "note": "152 bpm 指定 4 本中 3 本が 152 付近へ着地。cover よりは届くが 全数一致ではない。",
+      "path": "physical.bpm",
+      "preservation_mode": "free"
+    },
+    {
+      "mode_support": "unknown",
+      "path": "physical.brightness",
+      "preservation_mode": "free"
+    }
+  ],
+  "invocation": "manual",
+  "invocation_mode": "prompt_only",
+  "project_id": "midnight-signal-demo",
+  "recommendation": "run へ進行可。",
+  "schema_version": "recast-plan/0.1",
+  "state_reached": "verified",
+  "variant": "edm",
+  "warnings": [
+    "anchor 'melody': channel 'symbolic_melody' is unsupported",
+    "anchor 'harmony': no channel mapping defined",
+    "section_tags channel is experimental; payload included"
+  ]
+}

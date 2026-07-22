@@ -81,7 +81,6 @@ def test_committed_fixture_loads_and_resolves_paths() -> None:
     assert loaded.score_path == project_dir / "composition_score.yaml"
     assert loaded.identity_manifest_path == project_dir / "identity.yaml"
     assert loaded.arrangement_paths == {"edm": project_dir / "arrangements" / "edm.yaml"}
-    assert loaded.mode_override_paths == {}
     assert loaded.builds_root == project_dir / "builds"
     assert loaded.sha256  # non-empty hex digest
     assert len(loaded.sha256) == 64
@@ -91,6 +90,12 @@ def test_committed_fixture_loads_and_resolves_paths() -> None:
     suno_path = loaded.capability_profile_paths["suno"]
     assert suno_path.is_file()
     assert suno_path.parts[-3:] == ("config", "capability_profiles", "suno.yaml")
+
+    # PR2: backends.suno.mode_overrides "suno" も同じ名前参照規約で
+    # config/mode_overrides/suno.yaml (repo checkout) へ解決される。
+    mode_overrides_path = loaded.mode_override_paths["suno"]
+    assert mode_overrides_path.is_file()
+    assert mode_overrides_path.parts[-3:] == ("config", "mode_overrides", "suno.yaml")
 
     for path in (loaded.score_path, loaded.identity_manifest_path):
         assert path.is_file()

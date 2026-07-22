@@ -30,3 +30,19 @@ preservation:
     semantic.delta_e.overall: elastic
     physical.bpm: free
     physical.brightness: free
+  # PR2: examples/arrangement/midnight_signal/edm.identity.arrangement.yaml と
+  # 同一の hard 契約（identity.yaml の 3 anchor は全て required: true のため、
+  # build_preservation_contract はこれらすべてに policy を要求する）。
+  identity_anchors:
+    lyrics:
+      mode: hard
+      allow: []
+    melody:
+      mode: hard
+      allow: []
+    # AR4: harmony anchor は chord_sequence_json (ARTIFACT_TYPE_CHANNEL 未対応)
+    # のため delivery は常に unknown だが、observe は delivery と独立に測定する
+    # (Design Memo D-4)。
+    harmony:
+      mode: hard
+      allow: []

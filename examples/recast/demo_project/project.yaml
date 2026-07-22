@@ -25,6 +25,10 @@ backends:
     capability_profile: "suno"
     invocation: manual
     invocation_mode: prompt_only
+    # ★invocation_mode 軸の実測サポート状況（PR2, config/mode_overrides/suno.yaml）。
+    # capability_profile とは別軸・別スキーマ: 「チャネルが存在するか」ではなく
+    # 「invocation_mode（cover/prompt_only）ごとに override が実際に届くか」。
+    mode_overrides: "suno"
 
 policy:
   capability_mode: advisory

@@ -27,5 +27,6 @@ from svp_rpe.cli import transcribe_cmd as transcribe_cmd
 from svp_rpe.cli import eval_cmd as eval_cmd
 from svp_rpe.cli import roundtrip_cmd as roundtrip_cmd
 from svp_rpe.cli import corpus_cmd as corpus_cmd
+from svp_rpe.cli import recast_cmd as recast_cmd
 
 __all__ = ["app", "console"]

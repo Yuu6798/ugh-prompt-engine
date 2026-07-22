@@ -19,9 +19,12 @@ from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
+from svp_rpe.arrange.resolver import CANONICAL_PATHS
+
 InvocationKind = Literal["manual", "local"]
 InvocationMode = Literal["prompt_only", "cover"]
 CapabilityMode = Literal["strict", "advisory"]
+OverrideSupport = Literal["supported", "experimental", "unsupported", "unknown"]
 
 # project.id / variants キー / backends キーに共通する slug 規約。
 _SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -140,3 +143,41 @@ class RecastError(ValueError):
 
 class RecastReferenceError(RecastError):
     """参照先の不在・封じ込め違反に関するエラー（project path + 参照値を含む）。"""
+
+
+class ModeOverrideEntry(RecastModel):
+    """1 (invocation_mode, score field path) 組の実測サポート状況（★invocation_mode 軸）。
+
+    `InputCapabilityProfile`（generator が受け取れるチャネルの自己記述）とは別軸:
+    こちらは「同じ generator でも invocation_mode（cover / prompt_only）が変わると
+    同じ canonical path の変更がどれだけ届くか」の実測記録であり、既存
+    `CapabilityProfile` / `control_profile` スキーマを一切変更しない別 config。
+    """
+
+    support: OverrideSupport
+    evidence: Optional[str] = None
+    note: Optional[str] = None
+
+
+class ModeOverridesConfig(RecastModel):
+    """generator 単位の mode-overrides/0.1 設定。
+
+    ``modes`` の内側 dict のキーは canonical score field path（`resolver.CANONICAL_PATHS`
+    の allowlist に含まれるもののみ）。未知 path は fail-closed で拒否する。
+    """
+
+    schema_version: Literal["mode-overrides/0.1"]
+    generator: str
+    modes: Dict[InvocationMode, Dict[str, ModeOverrideEntry]]
+
+    @model_validator(mode="after")
+    def _validate_score_field_paths(self) -> "ModeOverridesConfig":
+        allowed = frozenset(CANONICAL_PATHS)
+        for mode_name, entries in self.modes.items():
+            unknown = sorted(set(entries) - allowed)
+            if unknown:
+                raise ValueError(
+                    f"mode overrides ({self.generator!r}): mode {mode_name!r} references "
+                    f"unknown score field path(s) not in CANONICAL_PATHS: {', '.join(unknown)}"
+                )
+        return self
