@@ -58,8 +58,11 @@ S2/S3 はスクリプト内で決定論的に構築されるため追加 fixture
 
 ノート列長は 1–4（きわめて短い）。特に S1:base は voicing フレームから抽出できた
 ノートが 1 音のみで、音程列（interval）が 0 個 = 類似度計算が成立しない。
-9 テイク・全 24 ペア中 11 ペアが `insufficient_notes_for_intervals` /
-`similarity_skipped_empty_intervals` で skip（うち S1 が絡むペアが大半）。
+9 テイク・全 24 ペア中 14 ペアで類似度が算出でき、10 ペアが
+`similarity_skipped_empty_intervals` で skip した（skip は全て S1:base の
+1 音縮退に起因）。これとは別勘定で、take レベルの skip 記録が 1 件
+（`S1:base` の `insufficient_notes_for_intervals` — ペアでなくテイク単位の
+記録）が JSON に含まれる。
 
 計算が成立した 14 ペアの類似度分布:
 
