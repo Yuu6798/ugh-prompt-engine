@@ -238,12 +238,14 @@ class ManualInvoker:
         )
         # 音声 + take.json を 1 組として atomic publish する（Codex P2 review,
         # PR3 #208 指摘 1: 個別 publish だと take.json 書き込み失敗時に
-        # provenance の無い音声だけが takes_dir に残り得る）。supplied_audio
-        # 自体との自己衝突（読み取り元＝書き込み先）も拒否する。
+        # provenance の無い音声だけが takes_dir に残り得る）。`data` は
+        # `supplied_audio` から既に読み終えているため、`supplied_audio` が
+        # 最終公開先そのもの（`svprpe recast ingest` の next_command.txt が
+        # 案内する `<takes_dir>/take-01.wav` に生成音声を直接置いてから ingest
+        # する自然な運用）であっても安全な自己上書き — 保護対象には含めない。
         atomic_publish_bytes_bundle(
             prepared.takes_dir,
             {take_filename: data, "take.json": take_record.encode("utf-8")},
-            protected_inputs=[supplied_audio],
         )
 
         note: Optional[str] = f"collected from {supplied_audio.name}"

@@ -273,8 +273,18 @@ def recast_run_cmd(
     if artifacts.backend_ref.invocation == "manual":
         # 注文書 6 ファイルは invoker.prepare() が既に atomic 公開済み — 記録は
         # その公開成功後（prepare() が例外なく戻った後）にのみ行う。
+        # inputs_digest は plan 段で計算済みの値を引き回す（Codex P2 review round 2
+        # 指摘 4: run 後の record_state が inputs_digest=None で上書きすると、
+        # plan 実行後の入力変更を status の stale 検出が見失う）。
         note = os.path.relpath(prepared.order_dir, loaded.project_dir)
-        record_state(loaded.project_dir, variant, backend, "awaiting_generation", note=note)
+        record_state(
+            loaded.project_dir,
+            variant,
+            backend,
+            "awaiting_generation",
+            note=note,
+            inputs_digest=inputs_digest,
+        )
         console.print(f"[green]Order files published to {prepared.order_dir}[/green]")
         console.print(f"Next step: see {prepared.order_dir / 'next_command.txt'}")
         raise typer.Exit(code=0)
@@ -282,13 +292,123 @@ def recast_run_cmd(
     try:
         take = invoker.invoke(prepared)
     except RecastError as exc:
-        record_state(loaded.project_dir, variant, backend, "generation_failed", note=str(exc))
+        record_state(
+            loaded.project_dir,
+            variant,
+            backend,
+            "generation_failed",
+            note=str(exc),
+            inputs_digest=inputs_digest,
+        )
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
     note = f"{os.path.relpath(take.audio_path, loaded.project_dir)} sha256={take.sha256}"
-    record_state(loaded.project_dir, variant, backend, "generated", note=note)
+    record_state(
+        loaded.project_dir, variant, backend, "generated", note=note, inputs_digest=inputs_digest
+    )
     console.print(f"[green]Generated take: {take.audio_path} (sha256={take.sha256})[/green]")
+
+
+@recast_app.command("ingest")
+def recast_ingest_cmd(
+    project_yaml: str = typer.Argument(..., help="Path to RecastProject YAML"),
+    variant: str = typer.Option(..., "--variant", help="Variant name declared in the project"),
+    backend: str = typer.Option(..., "--backend", help="Backend name declared in the project"),
+    audio: str = typer.Option(
+        ..., "--audio", help="Path to the externally generated audio (.wav/.mp3)"
+    ),
+) -> None:
+    """Ingest an externally generated take for a manual backend run.
+
+    Requires `(variant, backend)` to currently be at `awaiting_generation`
+    (per `recast_state.json`) — anything else (including a stale
+    `inputs_digest`, same detection as `recast status`) is reported and
+    exits 1 without touching any file. Rebuilds the same plan context as
+    `recast run` (not a different code path), resolves the `ManualInvoker`,
+    and calls `collect(audio)` to atomically ingest the audio into
+    `<builds_root>/takes/<variant>@<backend>/`. Records `generated` (with the
+    same `inputs_digest` the plan stage computed) only after that publish
+    succeeds — this is the command `next_command.txt`/`order_sheet.md`
+    (`ManualInvoker`) advertise.
+
+    Scope: this command stops at `generated`. `observe`/`report` integration
+    (`recast status`'s next-step for `generated`) is PR5 scope — this command
+    never names an unimplemented command.
+    """
+    import yaml
+    from pydantic import ValidationError
+
+    from svp_rpe.arrange.resolver import ArrangementError
+    from svp_rpe.recast import RecastError, load_recast_project
+    from svp_rpe.recast.backend import (
+        load_backend_capability_profile,
+        resolve_invoker,
+        run_context_from_plan_artifacts,
+    )
+    from svp_rpe.recast.plan import build_recast_plan_artifacts, compute_recast_inputs_digest
+    from svp_rpe.recast.state import load_recast_state, record_state
+
+    try:
+        loaded = load_recast_project(project_yaml)
+        state_file = load_recast_state(loaded.project_dir)
+    except (OSError, ValueError, RecastError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    run_key = f"{variant}@{backend}"
+    run = state_file.runs.get(run_key)
+    if run is None or run.state != "awaiting_generation":
+        current_state = run.state if run is not None else "draft"
+        typer.echo(
+            f"Error: {run_key} is at state {current_state!r}, not 'awaiting_generation'. "
+            "Run 'svprpe recast run' first to publish order files for a manual backend.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        current_digest = compute_recast_inputs_digest(loaded, variant=variant, backend=backend)
+    except (OSError, ValueError, RecastError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if run.inputs_digest is not None and run.inputs_digest != current_digest:
+        typer.echo(
+            f"Error: {run_key} inputs changed since the order files were published (stale). "
+            "Re-run 'svprpe recast plan' / 'svprpe recast run' first.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        artifacts = build_recast_plan_artifacts(loaded, variant=variant, backend=backend)
+    except (OSError, ValueError, ValidationError, yaml.YAMLError, RecastError, ArrangementError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    try:
+        profile = load_backend_capability_profile(loaded, backend)
+        ctx = run_context_from_plan_artifacts(
+            loaded, variant=variant, backend=backend, artifacts=artifacts, profile=profile
+        )
+        invoker = resolve_invoker(artifacts.backend_ref, profile)
+        prepared = invoker.prepare(ctx)
+        take = invoker.collect(prepared, Path(audio))
+    except (OSError, ValueError, ValidationError, yaml.YAMLError, RecastError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    note = f"{os.path.relpath(take.audio_path, loaded.project_dir)} sha256={take.sha256}"
+    record_state(
+        loaded.project_dir,
+        variant,
+        backend,
+        "generated",
+        note=note,
+        inputs_digest=artifacts.result.inputs_digest,
+    )
+    console.print(f"[green]Ingested take: {take.audio_path} (sha256={take.sha256})[/green]")
+    console.print("Next step: observe/report は今後のコマンドで提供予定です（未実装）。")
 
 
 @recast_app.command("status")
