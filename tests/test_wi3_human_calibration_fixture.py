@@ -378,6 +378,27 @@ def test_synth_rank_reports_sha256_matches_provenance_pin() -> None:
     assert input_audio_sha256["first_take"]["sha256"] == kit_sha256_by_filename["pair06_A.wav"]
 
 
+def test_synth_rank_reports_audio_file_is_checkout_stable_relative_path() -> None:
+    """PR #202 Codex P2 第2ラウンド対応: 各 synth rank レポートの ``audio_file``
+    が本リポジトリ配下の相対パスであり、scratchpad 等の絶対パスを含まないこと
+    を assert する（fresh checkout での再検証可能性のゲート — 生成手順自体が
+    リポジトリルートからの相対パス実行に是正されたことの機械的な裏付け）。
+    """
+    for path in SYNTH_MATERIAL_RANK_REPORT_PATHS.values():
+        report = _load_json(path)
+        audio_file = report["audio_file"]
+        assert not audio_file.startswith("/"), (
+            f"{path.name}: audio_file {audio_file!r} is an absolute path "
+            "(expected a repo-relative path, e.g. under examples/...)"
+        )
+        assert "scratchpad" not in audio_file, (
+            f"{path.name}: audio_file {audio_file!r} still references a scratchpad path"
+        )
+        assert audio_file.startswith(
+            "examples/arrangement/midnight_signal/observed/wi3_human_calibration/synth/"
+        ), f"{path.name}: unexpected audio_file {audio_file!r}"
+
+
 def test_pair_level_predictions_and_axis_summary_recompute_from_committed_inputs() -> None:
     """恒久検算ゲート: wi3_aggregation.yaml の集計値を、committed 入力
     （responses / sealed mapping / wi2_rank_*.json 12 本 +

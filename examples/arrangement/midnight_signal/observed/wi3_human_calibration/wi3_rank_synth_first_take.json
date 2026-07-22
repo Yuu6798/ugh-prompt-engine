@@ -1,6 +1,6 @@
 {
   "schema_version": "identity-rank-report/0.1",
-  "audio_file": "/tmp/claude-0/-home-user-ugh-prompt-engine/0b1b6a4e-441d-5d4f-9f4e-c7429c3548fd/scratchpad/wi3_synth/first_take.wav",
+  "audio_file": "examples/arrangement/midnight_signal/observed/wi3_human_calibration/synth/first_take.wav",
   "bpm_octave_ambiguous": false,
   "reference_ids": [
     "canonical",

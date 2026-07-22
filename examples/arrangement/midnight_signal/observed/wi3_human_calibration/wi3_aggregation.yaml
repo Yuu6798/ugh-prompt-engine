@@ -8,8 +8,12 @@ inputs:
   pair_mapping_sealed: examples/arrangement/midnight_signal/observed/wi3_human_calibration/wi3_pair_mapping.sealed.yaml
   wi2_rank_reports: examples/arrangement/midnight_signal/observed/wi2_discrimination/wi2_rank_{A,C,D}_take{0-3}.json
     (12 files)
-  synth_rank_reports: scratchpad/wi3_identity_rank/synth_{faithful_take,first_take}_rank.json (2 files,
-    this session's scratchpad)
+  # PR #202 Codex P2 是正 (2026-07-22): 元は scratchpad/wi3_identity_rank/synth_{faithful_take,first_take}_rank.json
+  # (this session's scratchpad, 非コミット) を指していたため fresh checkout から再検証不能だった。
+  # wi3_rank_synth_{faithful,first_take}.json として本ディレクトリに commit し、パスをそちらへ更新した
+  # (レポート内容は audio_file フィールド以外バイト単位で不変 — wi3_rank_synth_provenance.yaml 参照)。
+  synth_rank_reports: 'examples/arrangement/midnight_signal/observed/wi3_human_calibration/wi3_rank_synth_{faithful,first_take}.json
+    (2 files, committed fixture; provenance sidecar: wi3_rank_synth_provenance.yaml)'
 response_pair_label_note: wi3_responses.yaml の pairNN ラベルは提示順（presentation_slot、キット ファイル名 pairNN_{A,B}.wav）であり、事前登録・封印ファイルの
   pair_id (p01..p12, タスクブリーフのペア表順) とは別の軸。wi3_pair_mapping.sealed.yaml の presentation_order_pair_ids で変換した。
 verdict_yaml_boolean_note: 'wi3_responses.yaml の `verdict: yes|no` は PyYAML の既定 (YAML 1.1) resolver がベア

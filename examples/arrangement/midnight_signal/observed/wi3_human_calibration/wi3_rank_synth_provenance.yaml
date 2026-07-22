@@ -1,26 +1,38 @@
 # WI3 P4 ペア（p09/p10/p11）の入力である synth 2 素材（synth_faithful /
-# synth_first_take）の identity-rank レポート provenance サイドカー
-# (PR #202 Codex P2 対応: 「scratchpad のみで非コミット -> fresh checkout で
-# 再検証不能・テストは wi3_aggregation.yaml 自身の material_axis_rank1 を
-# 再利用する循環」の是正)。
+# synth_first_take）の identity-rank レポート provenance サイドカー。
+#
+# 履歴: 初版（PR #202 Codex P2 第1ラウンド対応）は生成時の `audio_file` が
+# scratchpad 絶対パスのまま焼き込まれ、fresh checkout から同一手順を
+# 再現できなかった（第2ラウンド Codex P2 で検出）。本版で
+# **checkout-stable な相対パス手順**に是正: リポジトリルートから
+# `examples/arrangement/midnight_signal/observed/wi3_human_calibration/synth/`
+# （非コミット・sha256 pin のみ、本ディレクトリの `synth/` は実行後に削除）へ
+# 決定論レンダー -> その相対パスのまま extract / identity-rank を実行する。
+# 音声 bytes は初版と完全同一（sha256 pin 変わらず）のため、レポート内容も
+# `audio_file` フィールド以外は初版とバイト単位で同一（本是正で
+# 再検証済み・§ note 参照）。
 #
 # 目的: wi3_rank_synth_faithful.json / wi3_rank_synth_first_take.json
-# （本ディレクトリに新規 commit）が、決定論 synth performer の 2 スタイル
+# （本ディレクトリに commit）が、決定論 synth performer の 2 スタイル
 # （FAITHFUL_TAKE / FIRST_TAKE, `svp_rpe.perform`）を同一 composition_score
 # から生成した wav に対する `svprpe extract` -> `svprpe identity-rank` の
 # 生出力であることを機械的に検証可能にする。新規の事実主張は含まない —
 # wi3_aggregation.yaml の inputs.synth_rank_reports 記述 および
 # wi0b_synth/observed/provenance.yaml の source_audio_sha256 pin の転記。
-format: "wi3-rank-synth-provenance/0.1"
-recorded_at_utc: "2026-07-22T13:00:00Z"
+format: "wi3-rank-synth-provenance/0.2"
+# `date -u` 実測（本ファイル書き込み直前に実行して確認した値。初版の
+# recorded_at_utc は実測でない未来時刻だった不備を是正 — 第2ラウンド
+# Codex P2 参照）。
+recorded_at_utc: "2026-07-22T06:26:33Z"
 
 generation_session: >-
-  PR #202 Codex P2 対応セッション（2026-07-22）。wi3_human_calibration 本ラウンドの
-  scratchpad（`scratchpad/wi3_synth/`, `scratchpad/wi3_identity_rank/`）で
-  一度生成した decoded 出力を、fresh-process で再現できることを本セッションで
-  2 回目のコンテナ実行として確認した上でコミットした。
+  PR #202 Codex P2 第2ラウンド対応セッション（2026-07-22）。リポジトリルート
+  （cwd）から相対パスのみで render -> extract -> identity-rank を実行し、
+  fresh checkout から同一手順が再現できることを本セッションで確認した上で
+  レポート 2 本を置き換えた。
 
-# 生成コマンド列（score -> render -> extract -> identity-rank）。
+# 生成コマンド列（score -> render -> extract -> identity-rank）。全コマンドは
+# リポジトリルートを cwd として実行し、引数は全て相対パス（checkout-stable）。
 # score_path は wi0b_synth/commands.md の render_faithful.py 呼び出しと同一の
 # composition_score.yaml（faithful_take の sha256 が wi0b_synth の既存 pin と
 # 一致することがこの同一性の機械的な裏付け — 下記 source_audio_sha256 参照）。
@@ -28,20 +40,32 @@ commands:
   - step: render
     description: >-
       決定論 synth performer で 2 スタイル (FAITHFUL_TAKE, FIRST_TAKE) を
-      同一 composition_score から wav にレンダー
-      (`svp_rpe.compose.loader.load_composition_score` +
+      同一 composition_score から wav にレンダーし、本ディレクトリ配下の
+      `synth/` に出力する（`svp_rpe.compose.loader.load_composition_score` +
       `svp_rpe.perform.{FAITHFUL_TAKE,FIRST_TAKE,perform,wav_bytes}`;
       wi0b_synth/render_faithful.py と同じ Python API を 2 スタイル分呼ぶ
-      scratchpad 限定スクリプト — src 変更なし)。
+      scratchpad 限定スクリプト — src 変更なし）。出力 wav は非コミット
+      （sha256 pin のみ — 下記 input_audio_sha256）、レポート生成後に削除する。
     command: >-
-      python render_both.py
-      examples/arrangement/midnight_signal/composition_score.yaml
-      <out_dir>
-    outputs: ["faithful_take.wav", "first_take.wav"]
+      python <script> examples/arrangement/midnight_signal/composition_score.yaml
+      examples/arrangement/midnight_signal/observed/wi3_human_calibration/synth
+    outputs:
+      - "examples/arrangement/midnight_signal/observed/wi3_human_calibration/synth/faithful_take.wav"
+      - "examples/arrangement/midnight_signal/observed/wi3_human_calibration/synth/first_take.wav"
   - step: extract
-    description: "各 wav を RPE bundle に抽出（デフォルト設定、追加フラグなし）"
-    command: "svprpe extract <out_dir>/faithful_take.wav -o synth_faithful_take.rpe.json"
-    command_first_take: "svprpe extract <out_dir>/first_take.wav -o synth_first_take.rpe.json"
+    description: "各 wav を RPE bundle に抽出（デフォルト設定、追加フラグなし。引数は相対パス）"
+    command: >-
+      svprpe extract
+      examples/arrangement/midnight_signal/observed/wi3_human_calibration/synth/faithful_take.wav
+      -o <tmp>/synth_faithful_take.rpe.json
+    command_first_take: >-
+      svprpe extract
+      examples/arrangement/midnight_signal/observed/wi3_human_calibration/synth/first_take.wav
+      -o <tmp>/synth_first_take.rpe.json
+    note: >-
+      bundle の `audio_file` フィールドは extract に渡した引数をそのまま記録する
+      ため、相対パス引数を渡すことで bundle 内が相対パスになる（下流の
+      identity-rank レポートの `audio_file` にそのまま伝播）。
   - step: identity-rank
     description: >-
       各 bundle を WI2 と同一の参照リストに対して順位付け
@@ -49,11 +73,11 @@ commands:
       schema_version wi2-references/0.1: canonical / structure_destroyed /
       harmony_decoy / other_work の 4 参照）。
     command: >-
-      svprpe identity-rank synth_faithful_take.rpe.json
+      svprpe identity-rank <tmp>/synth_faithful_take.rpe.json
       --references examples/arrangement/midnight_signal/observed/wi2_discrimination/wi2_references.yaml
       --format json -o wi3_rank_synth_faithful.json
     command_first_take: >-
-      svprpe identity-rank synth_first_take.rpe.json
+      svprpe identity-rank <tmp>/synth_first_take.rpe.json
       --references examples/arrangement/midnight_signal/observed/wi2_discrimination/wi2_references.yaml
       --format json -o wi3_rank_synth_first_take.json
 
@@ -62,33 +86,39 @@ commands:
 # composition_score・同一 FAITHFUL_TAKE スタイルからの決定論レンダリングである
 # ことの機械的裏付け）。first_take (FIRST_TAKE style) は wi0b_synth に対応物が
 # ないため wi3_kit_manifest.json の pair06_A.wav pin と突合する。
-# fresh-process 2/2 再現済み（本セッションで render_both.py を独立プロセスで
-# 2 回実行し、両 wav の sha256 が下記 pin と完全一致することを実測 —
-# scratchpad/wi3_synth/ と scratchpad/wi3_synth_run2/ の 2 ディレクトリで確認）。
+# fresh-process 再現: 本是正（相対パス手順への切替）でリポジトリルートから
+# 再レンダーした結果も含め、これまでに独立した実行で 3/3 一致
+# （scratchpad/wi3_synth/, scratchpad/wi3_synth_run2/ の 2 回 + 本是正の
+# 相対パス実行 1 回）。
 input_audio_sha256:
   faithful_take:
     sha256: "4d8c83f67c1b2441e09fa84debdc47ec0131c1a13ee1b813b0ef55e874903e90"
     cross_check: "wi0b_synth/observed/provenance.yaml#source_audio_sha256 (同値) / wi3_kit_manifest.json pair06_B.wav"
-    fresh_process_reproduction: "2/2 (scratchpad/wi3_synth/, scratchpad/wi3_synth_run2/)"
+    fresh_process_reproduction: "3/3 (scratchpad/wi3_synth/, scratchpad/wi3_synth_run2/, 本是正の相対パス実行)"
   first_take:
     sha256: "467f5200173cbea43933c69a5ba9dd8b156eee2e11ff9de0bd6475ed5dfb7e46"
     cross_check: "wi3_kit_manifest.json pair06_A.wav"
-    fresh_process_reproduction: "2/2 (scratchpad/wi3_synth/, scratchpad/wi3_synth_run2/)"
+    fresh_process_reproduction: "3/3 (scratchpad/wi3_synth/, scratchpad/wi3_synth_run2/, 本是正の相対パス実行)"
 
 # レポート 2 本自身の sha256（本ディレクトリに commit したファイルの stale
 # 差し替え検出用 — tests/test_wi3_human_calibration_fixture.py がこの pin と
-# 突合する）。
+# 突合する）。初版（scratchpad 絶対パス版）から `audio_file` フィールドのみが
+# 変わったため sha256 も変わっている（他フィールドはバイト単位で同一 —
+# 本是正で再検証済み）。
 report_sha256:
-  wi3_rank_synth_faithful.json: "0ca4ff55852027c00771f31379d8bd7af82357daaa565e317cbce9fc97d3fade"
-  wi3_rank_synth_first_take.json: "c2e60a459690095d0e50b0a8e23e738bb353a72baca134d54b776e5c9019fcce"
+  wi3_rank_synth_faithful.json: "a72c9b115410e663b4669d5ad60313ee57c04da2827aff4428e46644b5ee8232"
+  wi3_rank_synth_first_take.json: "2f63248eb41214e322965621e9892a08d01151057df23f94fa5d1542120a9a13"
 
-# rank-1 一致検証（本 PR 対応の一部として実施・結果: 全一致・不一致 0 件）:
+# rank-1 一致検証（本是正で再実施・結果: 全一致・不一致 0 件。加えて
+# audio_file 以外のフィールドが初版とバイト単位で同一であることも確認済み）:
 # wi3_rank_synth_{faithful,first_take}.json の各軸 rank==1 エントリから導出した
 # unique/tie 状態・rank1_ref・tied_with が、wi3_aggregation.yaml の
 # material_axis_rank1.{synth_faithful,synth_first_take} 記載値と完全一致する
-# ことをコピー前に確認済み（5 軸 x 2 素材 = 10 エントリ全一致）。
+# ことを新レポート生成後・commit 前に確認済み（5 軸 x 2 素材 = 10 エントリ全一致）。
 verification:
   - "report_sha256[wi3_rank_synth_faithful.json] == 実 commit ファイルの sha256"
   - "report_sha256[wi3_rank_synth_first_take.json] == 実 commit ファイルの sha256"
   - "input_audio_sha256.faithful_take.sha256 == wi0b_synth/observed/provenance.yaml source_audio_sha256"
-  - "5 軸 x 2 素材の rank-1 unique/tie 状態が wi3_aggregation.yaml material_axis_rank1 と一致（10/10, PR #202 対応時点で確認済み）"
+  - "5 軸 x 2 素材の rank-1 unique/tie 状態が wi3_aggregation.yaml material_axis_rank1 と一致（10/10, 本是正時点で再確認済み）"
+  - "各レポートの audio_file が examples/... 配下の相対パスであり、絶対パス（scratchpad 等）を含まないこと"
+  - "audio_file 以外の全フィールドが初版（scratchpad 絶対パス版）とバイト単位で同一（rank-1・distance 値は音声レンダリングが不変ゆえ不変）"
