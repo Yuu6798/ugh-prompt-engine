@@ -1044,8 +1044,16 @@ def build_recast_plan_artifacts(
         )
 
     # --- step 7: build performance package ----------------------------------
+    # device profile の YAML 破損・schema 不正も capability_profile/mode_overrides
+    # と同じ blocked_capability として finalize する（Codex P2 tenth round #207:
+    # 以前は保存済み例外を re-raise していたため CLI が top-level Error で落ち、
+    # recast_plan.json も state も残らなかった — eighth round で対応した
+    # capability_profile/mode_overrides と同クラスの非一貫だった）。
     if device_profile_error is not None:
-        raise device_profile_error
+        return _finalize(
+            state_reached="blocked_capability",
+            blocked=BlockedInfo(state="blocked_capability", reasons=[str(device_profile_error)]),
+        )
     contract_sha256 = compute_preservation_contract_sha256(contract)
     derived_score_sha256 = compute_derived_score_sha256(resolution.derived_score)
 
