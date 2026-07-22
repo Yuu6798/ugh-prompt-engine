@@ -53,6 +53,17 @@ S2/S3 はスクリプト内で決定論的に構築されるため追加 fixture
   （`load_composition_score` は指定パスのみを読み、`compute_melody_contour` /
   `perform` は config 非依存であることを実装確認済み）
 - 決定論: 同一コマンドを 2 回実行し出力 JSON が byte-identical であることを実測済み
+- **測定コードの同一性は commit pin で担保**: 本レシピがスクリプト経由で import
+  する svp_rpe モジュール群（`perform` / `rpe.physical_features`
+  （`compute_melody_contour`）/ `compose.loader`（`load_composition_score`）等）は、
+  上記データ pin（スクリプト本体・S1 score・出力 JSON の sha256）とは別に、
+  実測を実行した commit `1248186` の tree で固定される。データ pin テスト
+  （`tests/test_recast_spike_provenance.py`）が守るのはデータファイルのみで、
+  測定コード自体の同一性は commit 祖先関係で担保する方式のため、
+  **再現実行は当該 commit（またはその子孫で該当モジュールが未変更のコミット）の
+  checkout を前提**とする
+- 以降のコード変更でレシピ出力が変わる場合は、本メモの数値を書き換えるのではなく、
+  新しい日付の再実測として別途記録する（dated log 規律）
 
 ## 3. 結果（生数値）
 
