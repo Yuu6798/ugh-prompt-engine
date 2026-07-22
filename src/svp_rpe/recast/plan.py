@@ -331,8 +331,15 @@ def _atomic_publish_text_bundle(
 # 診断文字列に残る絶対パスの残骸を検出する（`(?<![\w./-])` は "0/4" や
 # "cover/prompt_only" のような path でない "/" 区切りを誤検出しないための
 # 否定先読み — 直前が英数字/ドット/スラッシュ/ハイフンなら「/」始まりの
-# トークンとして扱わない）。
-_ABSOLUTE_PATH_TOKEN_RE = re.compile(r"(?<![\w./-])/[^\s'\"]*")
+# トークンとして扱わない）。POSIX 絶対パスに加え、Windows ドライブレター
+# 形式（`C:\...` / `C:/...`）と UNC パス（`\\server\share\...`）も対象に
+# する（Codex P2 thirteenth round #207: 旧実装は POSIX の `/...` トークンしか
+# 認識せず、Windows 実行時の絶対パスがマスクされずそのまま漏れていた）。
+_ABSOLUTE_PATH_TOKEN_RE = re.compile(
+    r"(?<![\w./-])/[^\s'\"]*"
+    r"|(?<![\w:\\])[A-Za-z]:[\\/][^\s'\"]*"
+    r"|(?<!\\)\\\\[^\s'\"]*"
+)
 
 
 def _normalize_diagnostic(text: str, project_dir: Path) -> str:
@@ -355,14 +362,35 @@ def _normalize_diagnostic(text: str, project_dir: Path) -> str:
     `demo_project_evil` のような**文字列 prefix が同じだけの兄弟ディレクトリ**
     まで剥がしてしまい、`._evil/...` のような機械依存の断片が残る。
     `project_dir` 配下として認識できない絶対パスは兄弟ディレクトリごと
-    `<external-path>` へ完全にマスクされる（`_ABSOLUTE_PATH_TOKEN_RE` 側）。"""
+    `<external-path>` へ完全にマスクされる（`_ABSOLUTE_PATH_TOKEN_RE` 側）。
+
+    Windows パス対応（Codex P2 thirteenth round #207）: Windows 実行時は
+    `project_dir` 自身がバックスラッシュ区切りの文字列になる（`str(Path)` は
+    OS ネイティブの区切り文字を使う）。project_dir 配下の絶対パスを検出する
+    区切り文字は `/` と `\\` の両方を受理し、relativize した結果の相対
+    locator は常に POSIX 区切り（`/`）へ正規化する（`recast_plan.json` の
+    「同一 checkout なら常に同じ bytes」契約は OS を跨いでも成立させたい
+    ため、区切り文字の違いを出力から消す）。"""
     project_dir_pattern = re.escape(str(project_dir))
-    # 1) "project_dir/xxx" 形（配下の絶対パス）を相対 locator へ。
-    normalized = re.sub(project_dir_pattern + r"/", "", text)
+
+    def _relativize(match: "re.Match[str]") -> str:
+        # マッチした相対 locator 部分（project_dir + 区切り文字の直後から
+        # 次の空白/引用符まで）だけを POSIX 区切りへ変換する — 診断文字列の
+        # 他の部分（無関係なバックスラッシュを含みうる自由文）には触れない。
+        return match.group(1).replace("\\", "/")
+
+    # 1) "project_dir/xxx" または "project_dir\xxx" 形（配下の絶対パス）を
+    #    相対 locator へ。
+    normalized = re.sub(
+        project_dir_pattern + r"[\\/]([^\s'\"]*)",
+        _relativize,
+        text,
+    )
     # 2) project_dir 自身への完全一致（直後が path 継続文字でない場合のみ）を
-    #    "." へ。既に 1) で "project_dir/" 形は除去済みのため、ここに残る
-    #    一致は「project_dir で終わる」か「project_dir の直後が "/" 以外の
-    #    非継続文字（空白・引用符・行末等）」のいずれかに限られる。
+    #    "." へ。既に 1) で "project_dir/" / "project_dir\" 形は除去済みのため、
+    #    ここに残る一致は「project_dir で終わる」か「project_dir の直後が
+    #    区切り文字以外の非継続文字（空白・引用符・行末等）」のいずれかに
+    #    限られる。
     normalized = re.sub(project_dir_pattern + r"(?![\w.-])", ".", normalized)
     return _ABSOLUTE_PATH_TOKEN_RE.sub("<external-path>", normalized)
 
@@ -935,8 +963,19 @@ def build_recast_plan_artifacts(
             except (ValueError, ValidationError, yaml.YAMLError) as exc:
                 device_profile_error = exc
     else:
+        # resolution が None になる原因は score_parse_error / spec_read_error /
+        # resolve_error の 3 通りあり、優先順位は該当する step チェックの評価順
+        # （score → spec 読み取り → spec parse・resolve_arrangement）と一致させる
+        # （Codex P2 thirteenth round #207: 従来は常に resolve_error だけを参照
+        # しており、score 破損時は resolve_error が未設定 (None) のまま
+        # "NoneType: None" という無意味な固定文字列を digest へ焼き込んでいた。
+        # `recast status` が使う独立の `_device_profile_digest_component` は
+        # 同じ入力を再パースして実際の例外を捕捉するため型/メッセージが
+        # 一致し、plan 発行直後の同一入力に対して digest が食い違い、
+        # blocked_authoring な run を偽 stale と誤判定させていた）。
+        resolution_error: Optional[Exception] = score_parse_error or spec_read_error or resolve_error
         digest_components["device_profile_resolution_error"] = (
-            f"{type(resolve_error).__name__}: {resolve_error}"
+            f"{type(resolution_error).__name__}: {resolution_error}"
         )
 
     inputs_digest = compute_content_digest(digest_components)
@@ -1172,6 +1211,20 @@ def build_recast_plan_artifacts(
     # ドライブ）採用により構造的に該当しない — `_atomic_publish_text_bundle`
     # 内部の staging（`tempfile.TemporaryDirectory(dir=output_dir)`）も
     # `package_dir` 配下なので同様に同一ドライブが保証される。
+    #
+    # pr2 thirteenth round #207 指摘 21（`build_recast_plan` が builds_root を
+    # mkdir しており「ディスクへ副作用を持たない純粋関数」契約に反していた —
+    # staging 先を project_dir へ変更し mkdir を撤去）も PR3 では事情が異なる:
+    # `build_recast_plan_artifacts` は元々 compiled/verified 到達時に package/
+    # report を builds_root 配下へ永続公開する副作用を意図的に持つ関数
+    # （本 docstring 上部に明記済み — 「plan JSON の publish/state 記録」だけが
+    # 呼び出し側 CLI の責務という契約で、package 公開はこの関数自身の責務）。
+    # `resolve_packages_dir` は `mkdir` 自体を `_atomic_publish_text_bundle` の
+    # 内部（`output_dir.mkdir(parents=True, exist_ok=True)`）へ委譲しており、
+    # builds_root が project.yaml で未実在パスとして宣言されていても、実際に
+    # package を公開する経路（compiled/verified 到達時のみ）でのみ mkdir が
+    # 起きる — blocked_* 到達時は package_dir 自体に触れないため builds_root
+    # も作られない（pr2 の懸念する「副作用が意図せず広がる」経路は無い）。
     package_dir = resolve_packages_dir(loaded, variant, backend)
     try:
         artifact_base_locator = Path(

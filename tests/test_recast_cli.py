@@ -120,16 +120,23 @@ def test_recast_plan_verification_staging_uses_builds_root(
     loader が project_dir 配下に confine 済みで project files と常に同一
     ドライブにある）。
 
-    PR3 は pr2 のこの懸念に「検証専用の使い捨て staging」ではなく「永続
-    `packages_dir`（`builds_root/packages/<variant>@<backend>/`）＋その配下の
-    `_atomic_publish_text_bundle` 内部 staging」という別設計で構造的に対応
-    している（#208 指摘 3）— `tempfile.TemporaryDirectory` を実クラス継承の
-    スタブに monkeypatch し、実際に渡された `dir` kwarg が `builds_root` 配下
-    （project files と常に同一ドライブ）の `packages_dir` そのものであること
-    を検証する。pr2 のオリジナルテストと異なり、公開後の `packages_dir` は
-    "検証専用の空 staging" ではなく最終成果物 2 ファイルが永続する場所のため、
-    「cleanup 後に空」ではなく「最終ファイル 2 つのみで staging 残骸がない」
-    ことを確認する。"""
+    pr2 は thirteenth round #207 指摘21（`build_recast_plan` が builds_root を
+    mkdir しており「ディスクへ副作用を持たない純粋関数」契約に反する）で
+    staging 先を project_dir へ変更したが、PR3 の `build_recast_plan_artifacts`
+    はそもそも「plan JSON の publish/state 記録だけが CLI 側の責務」という
+    契約であり、package/report の builds_root への永続公開は本関数自身が
+    意図して持つ副作用（本モジュール上部の docstring 参照）。PR3 は pr2 の
+    「検証専用の使い捨て staging」ではなく「永続 `packages_dir`
+    （`builds_root/packages/<variant>@<backend>/`）＋その配下の
+    `_atomic_publish_text_bundle` 内部 staging」という別設計で、pr2 が
+    懸念する同ドライブ要件（指摘19）を構造的に満たす（#208 指摘 3）。
+
+    `tempfile.TemporaryDirectory` を実クラス継承のスタブに monkeypatch し、
+    実際に渡された `dir` kwarg が `builds_root` 配下（project files と常に
+    同一ドライブ）の `packages_dir` そのものであることを検証する。公開後の
+    `packages_dir` は "検証専用の空 staging" ではなく最終成果物 2 ファイルが
+    永続する場所のため、「cleanup 後に空」ではなく「最終ファイル 2 つのみで
+    staging 残骸がない」ことを確認する。"""
     import tempfile as tempfile_module
 
     import svp_rpe.recast.plan as recast_plan_module
@@ -172,6 +179,38 @@ def test_recast_plan_verification_staging_uses_builds_root(
     plan_path = project_path.parent / "recast_plan.json"
     plan_text = plan_path.read_text(encoding="utf-8")
     assert str(builds_root) not in plan_text  # staging パスが永続出力に混入しない
+
+
+def test_build_recast_plan_publishes_package_to_builds_root(tmp_path: Path) -> None:
+    """`build_recast_plan`（`build_recast_plan_artifacts` の薄いラッパー）を
+    API 直呼びし、`compiled`/`verified` 到達時に `builds_root/packages/
+    <variant>@<backend>/` へ package/report が実際に公開されることを検証する。
+
+    pr2 thirteenth round #207 指摘21（`build_recast_plan` が検証 staging の
+    ために builds_root を mkdir しており「ディスクへ副作用を持たない純粋
+    関数」契約に反する）は pr2 自身の実装に対する指摘であり、PR3 には
+    そのまま適用されない — PR3 の `build_recast_plan_artifacts` は元々
+    「plan JSON の publish/state 記録だけが CLI 側の責務」という契約で、
+    package/report の builds_root への永続公開は本関数自身が意図して持つ
+    副作用（モジュール docstring・`RecastPlanArtifacts` docstring に明記済み、
+    `recast/backend.py` がこの副作用の成果物を再利用する設計の核）。本テストは
+    その意図した挙動を positive に固定する回帰テスト。"""
+    from svp_rpe.recast import load_recast_project
+    from svp_rpe.recast.plan import build_recast_plan
+
+    project_path = _copy_demo_project(tmp_path)
+    loaded = load_recast_project(project_path)
+    builds_root = loaded.builds_root
+    assert not builds_root.exists()  # デモ fixture は builds/ を同梱しない
+
+    result = build_recast_plan(loaded, variant="edm", backend="suno")
+
+    assert result.plan.state_reached == "verified"
+    package_dir = builds_root / "packages" / "edm@suno"
+    assert sorted(p.name for p in package_dir.iterdir()) == [
+        "compilation_report.json",
+        "performance_package.json",
+    ]
 
 
 def test_recast_plan_matches_committed_snapshot_via_cli(tmp_path: Path) -> None:
@@ -233,6 +272,40 @@ def test_recast_plan_blocks_authoring_on_corrupted_score(tmp_path: Path) -> None
     status_result = runner.invoke(app, ["recast", "status", str(project_path)])
     assert status_result.exit_code == 0, status_result.output
     assert "blocked_authoring" in status_result.output
+
+
+def test_recast_status_after_corrupted_score_plan_is_not_stale(tmp_path: Path) -> None:
+    """破損 score で `recast plan` が blocked_authoring を publish した直後、
+    同一入力に対する `recast status` が stale と誤判定しないことを検証する
+    （Codex P2 thirteenth round #207, 指摘22: device profile digest
+    component の失敗表現が、resolution が None になった実際の原因
+    （score_parse_error / spec_read_error）ではなく常に `resolve_error`
+    （score 破損時は未設定=None のまま）を参照していたため、
+    `"NoneType: None"` という無意味な固定文字列を digest へ焼き込んでいた。
+    `recast status` が使う独立の `compute_recast_inputs_digest` は実際の
+    例外を捕捉するため digest が食い違い、plan/state 発行直後の同一入力
+    ですら stale と誤判定していた）。
+
+    `test_recast_plan_blocks_authoring_on_corrupted_score` は state 列に
+    常に表示される `state_reached`（blocked_authoring）の存在だけを見ており
+    stale ノートの有無を区別しないため、この回帰を検出できなかった —
+    ここでは note に `"stale"` が **含まれない** ことを明示的に検証する。"""
+    project_path = _copy_demo_project(tmp_path)
+    score_path = project_path.parent / "composition_score.yaml"
+    score_path.write_text("not-a-mapping\n", encoding="utf-8")
+
+    plan_result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert plan_result.exit_code == 1
+    plan_path = project_path.parent / "recast_plan.json"
+    data = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert data["state_reached"] == "blocked_authoring"
+
+    status_result = runner.invoke(app, ["recast", "status", str(project_path)])
+    assert status_result.exit_code == 0, status_result.output
+    assert "blocked_authoring" in status_result.output
+    assert "stale" not in status_result.output
 
 
 def test_recast_plan_blocks_capability_on_corrupted_capability_profile(tmp_path: Path) -> None:
