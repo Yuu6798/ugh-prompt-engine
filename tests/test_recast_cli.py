@@ -95,7 +95,10 @@ def test_recast_verification_staging_bytes_match_report_package_sha256(
     staging_dir.mkdir()
 
     @contextlib.contextmanager
-    def _persistent_staging_dir():
+    def _persistent_staging_dir(*args: object, **kwargs: object):
+        # twelfth round #207 以降、呼び出し側は `dir=loaded.builds_root` を渡す
+        # （builds_root 配下へのステージング配置）— このスタブは実際の一時
+        # ディレクトリ配置場所を差し替えるだけなので、渡された引数は無視する。
         yield str(staging_dir)
 
     monkeypatch.setattr(
@@ -116,6 +119,60 @@ def test_recast_verification_staging_bytes_match_report_package_sha256(
     report_data = json.loads((staging_dir / COMPILATION_REPORT_FILENAME).read_bytes())
 
     assert hashlib.sha256(package_bytes).hexdigest() == report_data["package_sha256"]
+
+
+def test_recast_plan_verification_staging_uses_builds_root(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """検証ステージング（`tempfile.TemporaryDirectory`）は project の builds_root
+    配下に確保されることを検証する（Codex P2 twelfth round #207: 既定の system
+    temp（`dir` 省略時）は project files と別ドライブに配置されうる — Windows で
+    システムドライブと project ドライブが異なる場合、直後の `os.path.relpath`
+    （project files ↔ staging dir）が同一ドライブ前提のため ValueError を送出し、
+    本来 valid な plan を偽の `blocked_capability` にしてしまう。`builds_root` は
+    loader が project_dir 配下に confine 済みで project files と常に同一
+    ドライブにある）。
+
+    `tempfile.TemporaryDirectory` を実クラスを継承したスタブに monkeypatch し、
+    実際に渡された `dir` kwarg を捕捉しつつ本物の挙動へ委譲する（実際の
+    cleanup 動作は変えない）。CLI 呼び出し完了後、builds_root ディレクトリ
+    自体は（`mkdir(parents=True, exist_ok=True)` により）作られているが、
+    ステージング先は `TemporaryDirectory` の cleanup で削除済みのため中身は
+    空であることも確認する（成功パスでも staging 残骸が残らない）。"""
+    import tempfile as tempfile_module
+
+    import svp_rpe.recast.plan as recast_plan_module
+
+    project_path = _copy_demo_project(tmp_path)
+    builds_root = project_path.parent / "builds"
+    assert not builds_root.exists()  # デモ fixture は builds/ を同梱しない
+
+    real_temporary_directory = tempfile_module.TemporaryDirectory
+    captured_dir_args: list[object] = []
+
+    class _CapturingTemporaryDirectory(real_temporary_directory):  # type: ignore[misc]
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            captured_dir_args.append(kwargs.get("dir"))
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(
+        recast_plan_module.tempfile, "TemporaryDirectory", _CapturingTemporaryDirectory
+    )
+
+    result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert result.exit_code == 0, result.output
+
+    assert len(captured_dir_args) == 1
+    assert Path(str(captured_dir_args[0])).resolve() == builds_root.resolve()
+
+    assert builds_root.is_dir()
+    assert list(builds_root.iterdir()) == []  # cleanup 後は staging 残骸なし
+
+    plan_path = project_path.parent / "recast_plan.json"
+    plan_text = plan_path.read_text(encoding="utf-8")
+    assert str(builds_root) not in plan_text  # staging パスが永続出力に混入しない
 
 
 def test_recast_plan_matches_committed_snapshot_via_cli(tmp_path: Path) -> None:
@@ -272,6 +329,45 @@ def test_recast_plan_blocks_capability_on_corrupted_device_profile(
     assert plan_path.is_file()
     data = json.loads(plan_path.read_text(encoding="utf-8"))
     assert data["state_reached"] == "blocked_capability"
+
+    status_result = runner.invoke(app, ["recast", "status", str(project_path)])
+    assert status_result.exit_code == 0, status_result.output
+    assert "blocked_capability" in status_result.output
+
+
+def test_recast_plan_blocks_capability_on_mode_overrides_generator_mismatch(
+    tmp_path: Path,
+) -> None:
+    """mode_overrides.generator と capability profile.generator の不一致も
+    blocked_capability として recast_plan.json に publish + state 記録される
+    ことを検証する（Codex P2 twelfth round #207: eighth round で一度スコープ外に
+    した箇所の再指摘 — 以前は raise していたため CLI が top-level Error で落ち、
+    plan/state が一切書かれなかった）。
+
+    backend の capability_profile を `"suno"` から `"musicgen"`（packaged
+    config/capability_profiles/musicgen.yaml, generator=musicgen）へ差し替え、
+    mode_overrides はデモ既定の `"suno"`（config/mode_overrides/suno.yaml,
+    generator=suno）のまま残すことで両者を不一致にする。"""
+    project_path = _copy_demo_project(tmp_path)
+    project_text = project_path.read_text(encoding="utf-8")
+    mutated = project_text.replace(
+        'capability_profile: "suno"', 'capability_profile: "musicgen"'
+    )
+    assert mutated != project_text  # sanity: the replacement actually matched
+    project_path.write_text(mutated, encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+
+    assert result.exit_code == 1
+    plan_path = project_path.parent / "recast_plan.json"
+    assert plan_path.is_file()
+    data = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert data["state_reached"] == "blocked_capability"
+    reasons = " ".join(data["blocked"]["reasons"])
+    assert "musicgen" in reasons
+    assert "suno" in reasons
 
     status_result = runner.invoke(app, ["recast", "status", str(project_path)])
     assert status_result.exit_code == 0, status_result.output

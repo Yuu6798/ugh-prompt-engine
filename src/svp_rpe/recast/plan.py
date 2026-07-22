@@ -938,11 +938,25 @@ def build_recast_plan(
             state_reached="blocked_capability",
             blocked=BlockedInfo(state="blocked_capability", reasons=[str(mode_overrides_error)]),
         )
+    # mode_overrides.generator と capability profile.generator の不一致も、
+    # 他の capability 層の不整合と同じ blocked_capability として finalize する
+    # （Codex P2 twelfth round #207: eighth round で一度スコープ外にした箇所の
+    # 再指摘 — 以前は raise していたため CLI が top-level Error で落ち、
+    # recast_plan.json も state も残らなかった）。reasons に両 generator 名と
+    # 是正の示唆（mode_overrides を差し替えるか宣言を外す）を含める。
     if mode_overrides_config is not None and mode_overrides_config.generator != profile.generator:
-        raise RecastError(
-            f"recast project '{project.project.id}': backend {backend!r} mode_overrides "
-            f"generator {mode_overrides_config.generator!r} does not match capability "
-            f"profile generator {profile.generator!r}"
+        return _finalize(
+            state_reached="blocked_capability",
+            blocked=BlockedInfo(
+                state="blocked_capability",
+                reasons=[
+                    f"backend {backend!r} mode_overrides generator "
+                    f"{mode_overrides_config.generator!r} does not match capability profile "
+                    f"generator {profile.generator!r} — mode_overrides を "
+                    f"{profile.generator!r} 用に差し替えるか、backend の mode_overrides 宣言"
+                    "を外してください"
+                ],
+            ),
         )
 
     # --- step 7: build performance package ----------------------------------
@@ -959,7 +973,29 @@ def build_recast_plan(
     contract_sha256 = compute_preservation_contract_sha256(contract)
     derived_score_sha256 = compute_derived_score_sha256(resolution.derived_score)
 
-    with tempfile.TemporaryDirectory() as tmp_dir_str:
+    # 検証ステージングは project の builds_root 配下に確保する（Codex P2
+    # twelfth round #207: 既定の system temp (`tempfile.TemporaryDirectory()`
+    # の dir 省略時) は project files と別ドライブに配置されうる — Windows で
+    # システムドライブと project ドライブが異なる場合、直後の
+    # `os.path.relpath(manifest_path, package_dir)` が同一ドライブ前提のため
+    # ValueError を送出し、本来 valid な plan を偽の blocked_capability に
+    # してしまう。`loaded.builds_root` は loader が project_dir 配下に
+    # confine 済み（`_resolve_builds_root`）で、project files と常に同一
+    # ドライブにある。builds_root 自体は project_dir のサブパスのため、
+    # ステージング先の絶対パスが診断文字列へ漏れても `_finalize` の
+    # `_normalize_diagnostic`（project_dir 全体を対象に正規化）が既に
+    # マスクする — 追加の特別扱いは不要。`TemporaryDirectory` は
+    # with ブロックを抜ける際（成功・例外いずれでも）必ず cleanup するため、
+    # builds_root 配下にステージング残骸は残らない。
+    try:
+        loaded.builds_root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return _finalize(
+            state_reached="blocked_capability",
+            blocked=BlockedInfo(state="blocked_capability", reasons=[str(exc)]),
+        )
+
+    with tempfile.TemporaryDirectory(dir=loaded.builds_root) as tmp_dir_str:
         package_dir = Path(tmp_dir_str)
         try:
             artifact_base_locator = Path(
