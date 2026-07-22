@@ -317,17 +317,61 @@ def _snapshot_svp_rpe_module_bytes() -> dict[str, dict[str, str]]:
     return snapshot
 
 
-def _dump_modules_manifest(pre_run_snapshot: dict[str, dict[str, str]], path: Path) -> None:
+def _run_spike_tracking_consumption() -> tuple[dict[str, Any], set[str]]:
+    """``run_spike()`` を ``sys.setprofile`` の call イベントでラップして実行し、
+    実行中に実際に呼ばれた関数の ``co_filename`` が指す ``svp_rpe`` 配下の
+    ソースファイル（= 実行時消費 granularity）を集めながら測定する。
+
+    ロードされた（import された）だけで一度も呼ばれない package ``__init__``
+    副作用 export（例: `svp_rpe.compose.__init__` が unconditional に import
+    する `convert` / `prompt_renderer` / `semantic_ci` 系列）はここでは
+    捕捉されない——本関数が返す集合はあくまで「実行中に呼び出された関数を
+    含むファイル」のみである。プロファイラのインストール自体は測定の数値には
+    影響しない（`--dump-modules` の有無で出力 JSON が byte-identical で
+    あることを実測で確認済み）。
+    """
+    src_root = str((ROOT / "src").resolve()) + "/"
+    consumed_rel_paths: set[str] = set()
+
+    def _profiler(frame: Any, event: str, arg: Any) -> None:  # noqa: ARG001
+        if event != "call":
+            return
+        filename = frame.f_code.co_filename
+        if not filename.startswith(src_root):
+            return
+        resolved = Path(filename).resolve()
+        if "svp_rpe" not in resolved.parts:
+            return
+        consumed_rel_paths.add(str(resolved.relative_to(ROOT)))
+
+    previous_profiler = sys.getprofile()
+    sys.setprofile(_profiler)
+    try:
+        report = run_spike()
+    finally:
+        sys.setprofile(previous_profiler)
+    return report, consumed_rel_paths
+
+
+def _dump_modules_manifest(
+    pre_run_snapshot: dict[str, dict[str, str]],
+    consumed_rel_paths: set[str],
+    path: Path,
+) -> None:
     """測定完了後（``run_spike()`` 実行後）に呼ぶ。
 
-    実行中に ``svp_rpe`` 閉包が増えていないこと（= 実行前スナップショットが
-    実行に使われた全モジュールを取りこぼしていないこと）を確認したうえで、
-    実行前スナップショットの bytes を manifest として書き出す。閉包が
-    増えていた場合はスナップショットが不完全だったということなので、
-    manifest を書かず非ゼロ exit で fail-closed する（測定結果 JSON は既に
-    書き込み済みのため測定自体は保存されるが、manifest だけは信頼できないと
-    判断して emit しない）。直接 import 対象はこのスクリプト自身のソースから
-    ``from svp_rpe.* import`` 行を正規表現で機械抽出する（手動列挙を経由しない）。
+    実行中に ``svp_rpe`` 閉包（ロード済みモジュール名の集合）が増えていないこと
+    （= 実行前スナップショットが実行に使われた全モジュールを取りこぼして
+    いないこと）を確認したうえで、実行前スナップショット（bytes は TOCTOU
+    排除のためこの時点のもの）を実行時消費集合（``consumed_rel_paths``）と
+    交差させ、実際に呼ばれた関数を含むモジュールのみを manifest に書き出す。
+    ロードされただけで呼ばれなかった package 副作用 export は manifest から
+    除外される。閉包が増えていた場合はスナップショットが不完全だったという
+    ことなので、manifest を書かず非ゼロ exit で fail-closed する（測定結果
+    JSON は既に書き込み済みのため測定自体は保存されるが、manifest だけは
+    信頼できないと判断して emit しない）。直接 import 対象はこのスクリプト
+    自身のソースから ``from svp_rpe.* import`` 行を正規表現で機械抽出する
+    （手動列挙を経由しない）。
     """
     grown = _svp_rpe_module_names() - set(pre_run_snapshot)
     if grown:
@@ -344,17 +388,24 @@ def _dump_modules_manifest(pre_run_snapshot: dict[str, dict[str, str]], path: Pa
     own_source = Path(__file__).read_text(encoding="utf-8")
     direct_imports = sorted(re.findall(r"^from (svp_rpe\.[\w.]+) import", own_source, re.MULTILINE))
 
+    consumed_modules = {
+        name: entry
+        for name, entry in pre_run_snapshot.items()
+        if entry["path"] in consumed_rel_paths
+    }
+
     manifest = {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "generated_by": (
             "scripts/spike_melody_similarity.py --dump-modules "
-            "(pre-run snapshot of svp_rpe module bytes, taken immediately after "
-            "top-level import completion and before run_spike() execution -- "
-            "TOCTOU-safe: executed bytes == pinned bytes; post-run growth check "
-            "fails closed instead of pinning post-hoc)"
+            "(execution-time consumption granularity: sys.setprofile call-event "
+            "trace of run_spike(), intersected with a pre-run bytes snapshot "
+            "for TOCTOU safety; modules that are only imported via package "
+            "__init__ side effects but whose functions are never called during "
+            "measurement are excluded)"
         ),
         "direct_imports": direct_imports,
-        "modules": dict(sorted(pre_run_snapshot.items())),
+        "modules": dict(sorted(consumed_modules.items())),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
@@ -528,18 +579,24 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=None,
         help=(
-            "optional: write a pre-run (TOCTOU-safe) svp_rpe module closure "
-            "snapshot, taken right after top-level import and before "
-            "run_spike(), as canonical JSON to this path"
+            "optional: write an execution-time-consumption svp_rpe module "
+            "manifest (pre-run bytes snapshot intersected with a "
+            "sys.setprofile call-event trace of run_spike()) as canonical "
+            "JSON to this path"
         ),
     )
     args = parser.parse_args(argv)
 
     # 実行前スナップショットは run_spike() より前に採る（TOCTOU 排除 --
     # 「実際に実行された bytes」と「manifest に pin される bytes」を一致させる）。
-    module_snapshot = _snapshot_svp_rpe_module_bytes() if args.dump_modules is not None else None
+    if args.dump_modules is not None:
+        module_snapshot = _snapshot_svp_rpe_module_bytes()
+        report, consumed_rel_paths = _run_spike_tracking_consumption()
+    else:
+        module_snapshot = None
+        consumed_rel_paths = None
+        report = run_spike()
 
-    report = run_spike()
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with args.out.open("w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2, sort_keys=True)
@@ -547,7 +604,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.dump_modules is not None:
         assert module_snapshot is not None
-        _dump_modules_manifest(module_snapshot, args.dump_modules)
+        assert consumed_rel_paths is not None
+        _dump_modules_manifest(module_snapshot, consumed_rel_paths, args.dump_modules)
     return 0
 
 

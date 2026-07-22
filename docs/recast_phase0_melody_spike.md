@@ -39,62 +39,76 @@ python scripts/spike_melody_similarity.py --out examples/recast/melody_spike_202
   --dump-modules examples/recast/melody_spike_2026-07-22.modules.json
 ```
 
-`--dump-modules`（optional）は、トップレベル import 完了直後・`run_spike()`
-実行前に `svp_rpe` 配下モジュールの bytes を sha256 スナップショットし
-（TOCTOU 排除——測定完了後に読み直すと、pyin 実行中に working tree が
-書き換わった場合「実際に実行された bytes」と「manifest に pin される bytes」
-が乖離しうる）、測定完了後に閉包が増えていないことを確認したうえで
-実行前スナップショットの bytes を manifest として書き出す副作用専用フラグ。
-測定結果 JSON には一切影響しない。閉包が増えていた場合（= スナップショットが
-不完全だった場合）は manifest を書かず非ゼロ exit で fail-closed する。
+`--dump-modules`（optional）は次の 2 段で測定コード manifest を書き出す
+副作用専用フラグ（測定結果 JSON には一切影響しない）:
+(1) トップレベル import 完了直後・`run_spike()` 実行前に `svp_rpe` 配下
+ロード済みモジュール全ての bytes を sha256 スナップショットする（TOCTOU
+排除——測定完了後に読み直すと、pyin 実行中に working tree が書き換わった
+場合「実際に実行された bytes」と「manifest に pin される bytes」が乖離
+しうる）。(2) `run_spike()` の実行を `sys.setprofile` の call イベントで
+ラップし、実行中に実際に呼ばれた関数の `co_filename` が指す `svp_rpe` 配下
+ファイル（= 実行時消費 granularity）を集める。測定完了後、閉包（ロード済み
+モジュール名の集合）が実行中に増えていないことを確認したうえで、
+「(1) のスナップショット bytes」と「(2) の消費ファイル集合」の**交差**を
+manifest として書き出す。閉包が増えていた場合は manifest を書かず非ゼロ
+exit で fail-closed する。
 
 全入力は committed（スクリプト本体 + `examples/composition/midnight_signal/composition_score.yaml`。
 S2/S3 はスクリプト内で決定論的に構築されるため追加 fixture 不要）。
 
 - `scripts/spike_melody_similarity.py` sha256:
-  `279a0f97f1e755e6117b98aca2984c5b01be3326edf6865c66afa7429ae5e0ec`
+  `246faf13b8ccbe1cb97c6db27405a41a83c744b21e9d1a4bae04fc0f94851162`
 - `examples/composition/midnight_signal/composition_score.yaml`（S1 の入力）sha256:
   `37854f54b42a1c4d424f357148d3d10f347e238ec72a42d1248bea2203f97d0b`
 - `examples/recast/melody_spike_2026-07-22.json` sha256:
   `12ae62ca08bbb0801fa628943e6feeec21b11dd05c90ecdade059233f887df52`
 - `examples/recast/melody_spike_2026-07-22.modules.json`（測定コード manifest、下記参照）sha256:
-  `a029f8010b27e4f5a406f719d9678ee9acae288fa0753d8f67821626d2c724f7`
+  `4aa28af2a9e02c4c2814715c0598fee457f8be4da3201e4218d06deb11299fd9`
 - S2/S3 はスクリプト内で S1 から決定論的に派生するため、S1 の pin +
   スクリプトの pin で全 9 テイクの入力系列が固定される
 - 呼び出しグラフ上、本レシピはこれ以外に YAML config を読まない
   （`load_composition_score` は指定パスのみを読み、`compute_melody_contour` /
   `perform` は config 非依存であることを実装確認済み）
 - 決定論: 同一コマンドを 2 回実行し出力 JSON が byte-identical であることを実測済み。
-  上記スクリプト pin の更新（`--dump-modules` の bytes 採取をスナップショット方式へ
-  変更）後も、`--out` の測定結果 JSON が更新前と byte-identical であることを実行して
-  確認済み（スクリプト変更が測定に無影響であることの実測裏付け）
-- **測定コードの pin は実行前スナップショット由来の推移閉包 manifest**
-  （手動列挙は含まない）:
-  `--dump-modules` を付けてスパイクをフル実行し、トップレベル import 完了直後に
-  実際にこのプロセスがロードした `svp_rpe` 配下のモジュール（= 測定を実行する
-  ために実際に必要だったモジュール全て）を `sys.modules` から集め bytes を
-  スナップショットし、`examples/recast/melody_spike_2026-07-22.modules.json`
-  （module 名 → {path, sha256} の canonical JSON、29 モジュール）として
-  committed fixture 化した。直接 import 対象（`from svp_rpe.* import` 6 行）は
-  スクリプト自身のソースから正規表現で機械抽出し、手動列挙を経由しない
-  （手動 4 本列挙 → 手動 6 本列挙 → importlib 閉包の事前列挙 → 実行トレース
-  post-hoc read → 実行前スナップショット、と 4 段階の是正を経て、TOCTOU
-  安全な bytes 採取に終端化。AGENTS.md §8 項目 1・8-A 項目 1 準拠）
+  上記スクリプト pin の更新（`--dump-modules` の manifest 収集を
+  「実行前スナップショット × sys.setprofile 実行時消費トレース」の交差方式へ
+  変更）後も、`--out` の測定結果 JSON が更新前と byte-identical であることを
+  実行して確認済み（プロファイラ導入・スクリプト変更が測定に無影響であることの
+  実測裏付け）
+- **測定コードの pin は実行時消費 granularity の manifest**（手動列挙は含まない）:
+  `--dump-modules` を付けてスパイクをフル実行し、上記 (1)(2) の交差
+  （= 測定を実行するために実際に呼ばれたモジュールのみ）を
+  `examples/recast/melody_spike_2026-07-22.modules.json`
+  （module 名 → {path, sha256} の canonical JSON、7 モジュール:
+  `compose.loader` / `compose.models` / `perform.performer` / `perform.synth` /
+  `rpe.models` / `rpe.physical_features`（= 直接 import 6 本全て）+
+  `utils.clamp`（`physical_features` から実際に呼ばれる transitive 依存））
+  として committed fixture 化した。ロードされただけで一度も呼ばれない
+  package `__init__` 副作用 export（`compose.convert` / `compose.device_profile` /
+  `compose.fixity` / `compose.prompt_renderer` / `semantic_ci` 系列 / `eval` 系列
+  など、旧版で 29 モジュールまで膨らんでいた原因）は manifest から除外される。
+  直接 import 対象（`from svp_rpe.* import` 6 行）はスクリプト自身のソースから
+  正規表現で機械抽出し、手動列挙を経由しない（手動 4 本列挙 → 手動 6 本列挙 →
+  importlib 閉包の事前列挙 → 実行トレース post-hoc read → 実行前スナップショット
+  → 実行前スナップショット×実行時消費トレースの交差、と 5 段階の是正を経て、
+  TOCTOU 安全かつ「呼ばれもしない副作用 export」を含まない granularity に
+  終端化。AGENTS.md §8 項目 1・8-A 項目 1 準拠）
 - **閉ループ論証**: bytes 採取は実行前スナップショット（`run_spike()` 実行前に
   読んだ bytes）であるため「実行に使われた bytes」と「manifest に pin される
-  bytes」が常に一致する。この閉包は実行トレース由来（実測時に実際にロードされた
-  モジュールのみを含む）でもある。実行経路に新規 import が追加されるのは、上記の
-  pin 済みファイル（スクリプト自身、または manifest が列挙するモジュールのいずれか）
-  を編集したときに限られ、その編集自体が対応する hash pin のアラーム
-  （`tests/test_recast_spike_provenance.py`）を踏んで赤くする。赤くなった場合の
-  唯一の是正経路は「manifest を再生成する新しい dated 再実測」であり、
-  その再実測が改めて実行前スナップショットを取り直すため、列挙は自己完結して
-  閉じている（手動更新で pin だけを合わせて実体との乖離を放置する経路は存在しない）
+  bytes」が常に一致する。この manifest は実行時消費 granularity（実測時に
+  実際に呼ばれた関数を含むモジュールのみ）である。実行経路（呼び出しグラフ）に
+  新規消費が追加されるのは、上記の pin 済みファイル（スクリプト自身、または
+  manifest が列挙するモジュールのいずれか）を編集したときに限られ、その編集
+  自体が対応する hash pin のアラーム（`tests/test_recast_spike_provenance.py`）
+  を踏んで赤くする。赤くなった場合の唯一の是正経路は「manifest を再生成する
+  新しい dated 再実測」であり、その再実測が改めてスナップショット×消費トレース
+  を取り直すため、列挙は自己完結して閉じている（手動更新で pin だけを合わせて
+  実体との乖離を放置する経路は存在しない）
 - `tests/test_recast_spike_provenance.py` は、manifest が列挙する全ファイルの
   存在 + working tree との sha256 一致、および直接 import 6 モジュールが
   manifest に含まれていること（⊆ 検算）を機械検証する
 - **再現の前提**: pin 表の全ファイル（データ 4 件 + `.modules.json` が指す
-  29 モジュールの `.py` 実体）が working tree と一致していること、かつ
+  7 モジュールの `.py` 実体）が working tree と一致していること、かつ
   実行環境が下記「実測環境（attestation）」表と一致していること
   （§「実測環境」参照）。特定 commit の checkout そのものは前提としない
   （squash 等でオブジェクトが祖先から外れても pin 表・manifest の記法自体は
@@ -109,10 +123,12 @@ S2/S3 はスクリプト内で決定論的に構築されるため追加 fixture
 #### 実測環境（attestation）
 
 `importlib.metadata.version` で実測（2026-07-22 `--dump-modules` 実行時点）。
-本メモの byte 一致再現の主張は**下記バージョンと一致する環境内**に限定される
-——異バージョン環境（依存更新後を含む）での再実行は本メモの検証範囲外であり、
-差異が出ても「壊れた」ではなく新しい日付の再実測として別途記録する対象になる
-（lockfile 導入自体はリポジトリ全体の依存管理方針の話であり本メモの射程外）。
+列挙基準は**実行経路の第一者コードが直接呼ぶサードパーティ実装**（audio スタック
+だけでなく score parse 経路の PyYAML/pydantic も含む）。本メモの byte 一致再現の
+主張は**下記バージョンと一致する環境内**に限定される——異バージョン環境（依存
+更新後を含む）での再実行は本メモの検証範囲外であり、差異が出ても「壊れた」では
+なく新しい日付の再実測として別途記録する対象になる（lockfile 導入自体は
+リポジトリ全体の依存管理方針の話であり本メモの射程外）。
 
 | package | version |
 |---|---|
@@ -122,6 +138,9 @@ S2/S3 はスクリプト内で決定論的に構築されるため追加 fixture
 | librosa | 0.11.0 |
 | soundfile | 0.14.0 |
 | numba | 0.66.0 |
+| pyyaml | 6.0.1 |
+| pydantic | 2.13.4 |
+| pydantic-core | 2.46.4 |
 
 ## 3. 結果（生数値）
 
@@ -213,5 +232,5 @@ note_events 経路（#199/#201 既往実測）が**それぞれ独立に**不成
 
 - `scripts/spike_melody_similarity.py`（スパイクスクリプト本体）
 - `examples/recast/melody_spike_2026-07-22.json`（実測生データ、決定論 byte 一致 2 回確認済み）
-- `examples/recast/melody_spike_2026-07-22.modules.json`（測定コード first-party
-  推移閉包 manifest、29 モジュール）
+- `examples/recast/melody_spike_2026-07-22.modules.json`（測定コード実行時消費
+  manifest、7 モジュール）

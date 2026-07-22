@@ -6,8 +6,12 @@ emit 前チェックリスト項目 5「pin は fixture テストで全数突合
 実 sha256 と照合し、将来の入力変更を機械検出（エントリ追加で自動拡張される
 ループ実装で）」に対応する恒久ガード（PR #205 Codex P2 第2巡指摘、以降複数巡で
 測定コードの pin 粒度を段階的に是正 — 直接 import 手動 4 本列挙 → 手動 6 本
-列挙 → importlib 閉包の事前列挙・サブプロセス再計算 → 本ファイルの
-「実行トレース由来 manifest + hash-only 検証」で終端化）。
+列挙 → importlib 閉包の事前列挙・サブプロセス再計算 → 実行前スナップショット
+（TOCTOU 排除）→ 本ファイルの「実行前スナップショット × sys.setprofile 実行時
+消費トレースの交差 manifest + hash-only 検証」で終端化。旧版はロードされた
+だけで一度も呼ばれない package `__init__` 副作用 export を pin してしまい
+（29 モジュール）無関係変更で偽の再実測強制を招いていたため、実行時消費
+granularity（7 モジュール）に絞った）。
 
 (A) memo の provenance 節（`` `<path>` ... sha256:\\n  `<hex>` `` 形式の箇条書き/表）を
 正規表現で parse し、parse された全 (path, sha256) エントリをループで working
@@ -17,13 +21,14 @@ S1 score・出力 JSON・測定コード manifest sidecar）。将来 memo に p
 追従するため変更なしで自動拡張される。
 
 (B) 測定コードの pin は「直接 import モジュールの手動列挙」ではなく、
-``scripts/spike_melody_similarity.py --dump-modules`` で**実行トレース由来**
-（実測時に実際にロードされた ``svp_rpe`` 配下のモジュールのみ）で機械生成した
-committed sidecar ``examples/recast/melody_spike_2026-07-22.modules.json`` で
-担保する。closed-loop 論証（memo 参照）により、実行経路への新規 import 追加は
-pin 済みファイルの編集を経由してしか起こり得ず、その編集が本テストの hash
-アラームを踏むため、閉包を CI 内でサブプロセス再実行して都度再検証する必要は
-ない（重い実行コスト無しの hash-only 検証で足りる）。本テストは
+``scripts/spike_melody_similarity.py --dump-modules`` で**実行前スナップショット
+（TOCTOU 排除）× 実行時消費トレース（sys.setprofile call イベント）の交差**
+として機械生成した committed sidecar
+``examples/recast/melody_spike_2026-07-22.modules.json`` で担保する。
+closed-loop 論証（memo 参照）により、実行経路への新規消費追加は pin 済み
+ファイルの編集を経由してしか起こり得ず、その編集が本テストの hash アラームを
+踏むため、閉包を CI 内でサブプロセス再実行して都度再検証する必要はない
+（重い実行コスト無しの hash-only 検証で足りる）。本テストは
 (b1) manifest が列挙する全ファイルが working tree に存在し sha256 が一致する
 こと、(b2) スクリプトから機械抽出した直接 import 6 モジュールが manifest の
 `direct_imports` の部分集合であること、の 2 点のみを検証する。
