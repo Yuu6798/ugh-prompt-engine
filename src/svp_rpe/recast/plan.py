@@ -5,7 +5,10 @@
 
 0. 入力一式（project/score/identity_manifest/arrangement spec/capability
    profile/mode_overrides）の raw bytes sha256 を合成した `inputs_digest` を計算
-   （`recast status` の stale run 検出用。`arrange.bundle.compute_content_digest` 流用）
+   （`recast status` の stale run 検出用。`arrange.bundle.compute_content_digest` 流用）。
+   identity_manifest **自身**の bytes に加え、それが参照する source artifact /
+   各 anchor artifact の内容も折り込む（`_identity_reference_digest_components`
+   — manifest.yaml 自体は無変更のまま参照先だけが書き換わる/破損するケースの検出）
 1. variant/backend 名の存在検証
 2. CompositionScore ロード + author field (TODO sentinel) 未解決チェック
    （semantic 層限定ではなく `model_dump()` 全体を再帰走査する fail-closed ゲート）
@@ -410,6 +413,39 @@ def _render_text(plan: RecastPlan) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _identity_reference_digest_components(identity_manifest_path: Path) -> Dict[str, str]:
+    """identity manifest **自身**の bytes だけでなく、それが参照する source
+    artifact / 各 anchor artifact の内容も digest へ折り込む（Codex P2 third
+    round #207: `identity_manifest` component だけでは、manifest.yaml 自体は
+    無変更のまま参照先の artifact（例 `lyrics.txt`）だけが書き換わる/破損する
+    ケースを検出できない）。
+
+    `parse_identity_manifest_with_artifacts` は source → 各 anchor の順で
+    「宣言 sha256 == 実 bytes の sha256」を照合してから正常 return するため、
+    これを呼ぶだけで参照先の drift（書き換え・削除・封じ込め違反・不正 YAML 等）
+    を一括検出できる — 呼び出しが成功した時点で `manifest.source.sha256` /
+    `anchor.sha256` は実 bytes と一致済みであり、component にはそれらの宣言値を
+    そのまま使う（`collect=None` — bytes 自体は破棄済みで再ハッシュ不要）。
+
+    失敗時（`IdentityManifestError` / 読み取り不能 `OSError` / 不正 YAML /
+    schema 不一致）は例外を送出せず、正常系とは構造的に異なる 1 component
+    （例外の型+メッセージ）を返す fail-closed 戦略を取る — `recast status` は
+    これにより「digest 不一致」を経由して自動的に stale 表示へ落ちる（design
+    point 2: 例外を握って stale 表示に倒す）。"""
+    try:
+        manifest_bytes = identity_manifest_path.read_bytes()
+        manifest, _artifact_bytes = parse_identity_manifest_with_artifacts(
+            manifest_bytes, identity_manifest_path, collect=None
+        )
+    except (IdentityManifestError, OSError, ValidationError, yaml.YAMLError, ValueError) as exc:
+        return {"identity_reference_error": f"{type(exc).__name__}: {exc}"}
+
+    components: Dict[str, str] = {"identity_source": manifest.source.sha256}
+    for anchor in manifest.anchors:
+        components[f"identity_artifact:{anchor.id}"] = anchor.sha256
+    return components
+
+
 def compute_recast_inputs_digest(
     loaded: LoadedRecastProject, *, variant: str, backend: str
 ) -> str:
@@ -417,10 +453,13 @@ def compute_recast_inputs_digest(
     canonical digest へ合成する（`arrange.bundle.compute_content_digest` 流用）。
 
     `loaded` はロード時点で score/identity_manifest/arrangement/capability_profile
-    の実在を検証済みのため、ここでは読み取りをガードしない（`build_recast_plan` の
-    既存ステップ 3/6 の raw read と同じ規約）。`recast plan` はこの digest を
-    state へ永続化し、`recast status` は現在の入力から再計算した digest と
-    突き合わせて stale run（永続化後に入力が変更された run）を検出する。"""
+    の実在を検証済みのため、これらは読み取りをガードしない（`build_recast_plan` の
+    既存ステップ 3/6 の raw read と同じ規約）。identity manifest が参照する
+    source/anchor artifact は `_identity_reference_digest_components` が
+    fail-closed に折り込む（読めない/破損していても例外を送出しない）。
+    `recast plan` はこの digest を state へ永続化し、`recast status` は現在の
+    入力から再計算した digest と突き合わせて stale run（永続化後に入力または
+    参照先 artifact が変更された run）を検出する。"""
     components: Dict[str, str] = {
         "project": loaded.sha256,
         "score": sha256_file(loaded.score_path),
@@ -428,6 +467,7 @@ def compute_recast_inputs_digest(
         "arrangement_spec": sha256_file(loaded.arrangement_paths[variant]),
         "capability_profile": sha256_file(loaded.capability_profile_paths[backend]),
     }
+    components.update(_identity_reference_digest_components(loaded.identity_manifest_path))
     mode_override_path = loaded.mode_override_paths.get(backend)
     if mode_override_path is not None:
         components["mode_overrides"] = sha256_file(mode_override_path)
