@@ -365,3 +365,67 @@ def test_ingest_records_observation_incomplete_when_take_changes_between_collect
 
     reports_dir = project_path.parent / "builds" / "reports" / "edm@suno"
     assert not reports_dir.exists()
+
+
+def test_ingest_records_observation_incomplete_when_package_changes_after_publish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2（#210 round 3 指摘5）: `observe_generated_artifact` が
+    disk 上の `performance_package.json` を再 read するだけでは、publish
+    直後〜観測の読み出しの間に **自己整合な別内容**（D-3 の内部整合チェック
+    だけなら通過し得る、別 sha256 の package）へ差し替えられていても検出
+    できない。`expected_package_sha256`（rebuild で確定した
+    `artifacts.compiled.report.package_sha256`）との突合で、そのケースも
+    観測・report 記録の前に `observation_incomplete`+exit 1 する。
+
+    「自己整合な別内容」の再現: 公開済み package の JSON を同じ内容のまま
+    再シリアライズ（indent を変える）して書き戻す — `PerformancePackage`
+    としての妥当性・内部整合性は変わらない（schema 検証・D-3 の他チェック
+    はすべて通過し得る）が bytes/sha256 だけが変わる、という指摘そのものの
+    シナリオ。"""
+    import svp_rpe.arrange.observe as observe_module
+
+    real_observe_generated_artifact = observe_module.observe_generated_artifact
+
+    project_path = _copy_demo_project(tmp_path, label="package-race")
+    text = project_path.read_text(encoding="utf-8")
+    text = text.replace(_OBSERVATION_DISABLED_BLOCK, _OBSERVATION_ENABLED_BLOCK, 1)
+    project_path.write_text(text, encoding="utf-8")
+
+    run_result = runner.invoke(
+        app, ["recast", "run", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert run_result.exit_code == 0, run_result.output
+
+    takes_dir = project_path.parent / "builds" / "takes" / "edm@suno"
+    takes_dir.mkdir(parents=True, exist_ok=True)
+    audio_path = takes_dir / "take-01.wav"
+    audio_path.write_bytes(b"RIFF....WAVEfake-audio-bytes")
+
+    def _racy_observe(**kwargs: Any) -> Any:
+        # publish 完了直後・観測の読み出し直前という想定の位置で package を
+        # 自己整合な別 bytes（同じ内容の re-serialize）へ差し替える。
+        package_path: Path = kwargs["package_path"]
+        original = json.loads(package_path.read_text(encoding="utf-8"))
+        package_path.write_text(json.dumps(original, indent=4), encoding="utf-8")
+        return real_observe_generated_artifact(**kwargs)
+
+    monkeypatch.setattr("svp_rpe.arrange.observe.observe_generated_artifact", _racy_observe)
+
+    ingest_result = runner.invoke(
+        app,
+        [
+            "recast", "ingest", str(project_path),
+            "--variant", "edm", "--backend", "suno",
+            "--audio", str(audio_path),
+        ],
+    )
+    assert ingest_result.exit_code == 1, ingest_result.output
+
+    state_file = load_recast_state(project_path.parent)
+    run = state_file.runs["edm@suno"]
+    assert run.state == "observation_incomplete"
+    assert run.note is not None and "changed since publish" in run.note
+
+    reports_dir = project_path.parent / "builds" / "reports" / "edm@suno"
+    assert not reports_dir.exists()

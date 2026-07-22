@@ -1775,6 +1775,7 @@ def observe_generated_artifact(
     audio_path: Path,
     generated_artifact_path: Optional[str] = None,
     expected_audio_sha256: Optional[str] = None,
+    expected_package_sha256: Optional[str] = None,
 ) -> GeneratedArtifactObservation:
     """`package_path`/`manifest_path`/`audio_path` から provenance chain を検証し、
     `build_observation_report` を呼ぶ非-CLI 経路（PR5: `recast ingest` の
@@ -1804,6 +1805,20 @@ def observe_generated_artifact(
     （`None`）はこの突合を行わない（`svprpe observe` 単体実行など、
     collect 時点の pin を持たない呼び出し元向け）。
 
+    `expected_package_sha256`（Codex P2, #210 round 3 指摘5）:
+    `expected_audio_sha256` と同型の pin だが `package_path` 側に対する
+    もの — 呼び出し側が rebuild で確定させた package の sha256（`recast
+    ingest` では publish 直後の `artifacts.compiled.report.package_sha256`）。
+    渡された場合、`package_path` を読んだ直後（D-3 provenance chain の
+    検証より前）に、実際に読んだ bytes の sha256 と突き合わせる — 公開から
+    この関数の読み出しまでの間に `package_path` が別の自己整合な package
+    （＝ D-3 の内部整合チェックだけを通過し得る、別 sha256 の
+    performance_package.json）へ差し替えられていた場合でも、観測・report
+    記録の前に `ValueError` で fail-closed する（take 側の突合と対になる
+    契約 — `audio_path` だけでなく `package_path` も呼び出し側が最後に
+    確定させた bytes から動いていないことを保証する）。省略時（`None`）は
+    この突合を行わない。
+
     `audio_path` の TOCTOU 対策として、`is_*_sensor_anchor` のいずれかが
     manifest 中に存在する場合のみ一時スナップショットへコピーしてから
     抽出する（`build_observation_report`/`observe` コマンドと同じ規律 —
@@ -1814,6 +1829,13 @@ def observe_generated_artifact(
     import tempfile
 
     package_bytes = package_path.read_bytes()
+    if expected_package_sha256 is not None:
+        actual_package_sha256 = hashlib.sha256(package_bytes).hexdigest()
+        if actual_package_sha256 != expected_package_sha256:
+            raise ValueError(
+                f"package at {package_path} changed since publish (TOCTOU): expected "
+                f"sha256 {expected_package_sha256}, got {actual_package_sha256}"
+            )
     package = PerformancePackage.model_validate_json(package_bytes)
 
     manifest_bytes = manifest_path.read_bytes()

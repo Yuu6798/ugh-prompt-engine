@@ -540,7 +540,10 @@ def recast_ingest_cmd(
 
     from svp_rpe.arrange.identity import IdentityManifestError
     from svp_rpe.arrange.observe import observe_generated_artifact
-    from svp_rpe.arrange.package import PERFORMANCE_PACKAGE_FILENAME
+    from svp_rpe.arrange.package import (
+        COMPILATION_REPORT_FILENAME,
+        PERFORMANCE_PACKAGE_FILENAME,
+    )
     from svp_rpe.arrange.resolver import ArrangementError
     from svp_rpe.recast import RecastError, load_recast_project
     from svp_rpe.recast.backend import (
@@ -551,6 +554,7 @@ def recast_ingest_cmd(
     )
     from svp_rpe.recast.plan import (
         RECAST_PLAN_FILENAME,
+        _atomic_publish_text_bundle,
         _normalize_diagnostic,
         build_recast_plan_artifacts,
         compute_recast_inputs_digest,
@@ -623,8 +627,12 @@ def recast_ingest_cmd(
         raise typer.Exit(code=1)
 
     try:
+        # `publish=False`（Codex P2, #210 round 3 指摘4）: 突合前に
+        # `builds/packages/<variant>@<backend>/` を上書きしない。rebuild
+        # 直後の digest 再突合（すぐ下）が reject した場合、packages・plan・
+        # state のいずれも無変更のまま exit する契約を保つ。
         artifacts = build_recast_plan_artifacts(
-            loaded, variant=variant, backend=backend, publish=True
+            loaded, variant=variant, backend=backend, publish=False
         )
     except (OSError, ValueError, ValidationError, yaml.YAMLError, RecastError, ArrangementError) as exc:
         typer.echo(f"Error: {exc}", err=True)
@@ -642,8 +650,10 @@ def recast_ingest_cmd(
     # `build_recast_plan_artifacts` は同じ入力から独立に digest を再計算する
     # ため（`compute_recast_inputs_digest` と同一ロジック — plan.py 内)、
     # 差し替えがあれば必ず値が変わり検出できる。ここで拒否する場合は
-    # `_publish_recast_plan`/`collect`/`record_state` のいずれも呼ばない
-    # （plan・take・state のいずれも書き換えない — 旧 plan/state は無傷のまま）。
+    # packages/`_publish_recast_plan`/`collect`/`record_state` のいずれも
+    # 呼ばない（packages・plan・take・state のいずれも書き換えない — 旧
+    # plan/state/packages は無傷のまま。round 3 指摘4: `publish=False` に
+    # したことで packages/ もこの契約に含まれるようになった）。
     if artifacts.result.inputs_digest != run.inputs_digest:
         typer.echo(
             f"Error: {run_key} inputs changed since the order files were published "
@@ -652,6 +662,32 @@ def recast_ingest_cmd(
             err=True,
         )
         raise typer.Exit(code=1)
+
+    # 突合を通過して初めて package/report を publish する（Codex P2, #210
+    # round 3 指摘4）: `build_recast_plan_artifacts` を `publish=True` で
+    # 再実行せず、上の `publish=False` 呼び出しが既に確定させた
+    # `artifacts.compiled`（in-memory の compile 済み成果物 — state_reached
+    # が compiled/verified のときのみ non-None、`_publish_recast_plan` 直下の
+    # `_COMPILED_OR_BETTER_STATES` チェックより前にここへ到達するため必ず
+    # non-None）をそのまま書き出す「公開専用」の呼び出しに留める。二重
+    # コンパイルも新たな読み取り機会（＝新たな TOCTOU 窓）も増やさない。
+    if artifacts.compiled is not None:
+        try:
+            _atomic_publish_text_bundle(
+                resolve_packages_dir(loaded, variant, backend),
+                {
+                    PERFORMANCE_PACKAGE_FILENAME: artifacts.compiled.package_json.encode(
+                        "utf-8"
+                    ),
+                    COMPILATION_REPORT_FILENAME: artifacts.compiled.report_json.encode(
+                        "utf-8"
+                    ),
+                },
+                protected_inputs=artifacts.result.protected_inputs,
+            )
+        except ValueError as exc:
+            typer.echo(f"Error: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
 
     try:
         _plan_path, plan_sha256 = _publish_recast_plan(
@@ -707,6 +743,10 @@ def recast_ingest_cmd(
     # 信用しない — `svprpe observe` の D-3 契約と同じ posture）。
     package_path = resolve_packages_dir(loaded, variant, backend) / PERFORMANCE_PACKAGE_FILENAME
     take_relative = os.path.relpath(take.audio_path, loaded.project_dir)
+    # `run_context_from_plan_artifacts`（上で `ctx` を組み立てる際）が既に
+    # `artifacts.compiled is not None` を要求している（さもなくば RecastError
+    # で既に exit 1 済み）ため、ここへ到達する時点で常に non-None。
+    assert artifacts.compiled is not None
 
     try:
         # `expected_audio_sha256=take.sha256`（Codex P2, #210 round 2 指摘2）:
@@ -715,12 +755,19 @@ def recast_ingest_cmd(
         # 突き合わせる — collect 完了からこの読み出しまでの間に take が
         # 差し替わっていた場合、「観測していない take を collect 時 hash で
         # 証明する」report を組み立てる前に fail-closed する。
+        # `expected_package_sha256=artifacts.compiled.report.package_sha256`
+        # （Codex P2, #210 round 3 指摘5）: 同型の pin を package 側にも適用
+        # する — 直上で publish した package の sha256 を、
+        # `observe_generated_artifact` が `package_path` を読んだ直後に
+        # 突き合わせ、公開後に自己整合な別 package へ差し替えられていても
+        # 観測前に fail-closed する。
         observation = observe_generated_artifact(
             package_path=package_path,
             manifest_path=loaded.identity_manifest_path,
             audio_path=take.audio_path,
             generated_artifact_path=take_relative,
             expected_audio_sha256=take.sha256,
+            expected_package_sha256=artifacts.compiled.report.package_sha256,
         )
     except (OSError, ValueError, ValidationError, IdentityManifestError) as exc:
         obs_note = _normalize_diagnostic(f"observation failed: {exc}", loaded.project_dir)
