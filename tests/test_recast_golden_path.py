@@ -57,11 +57,7 @@ from svp_rpe.recast.report import (
     build_recast_report,
     render_recast_summary_markdown,
 )
-from svp_rpe.recast.run_paths import (
-    collect_protected_input_paths,
-    resolve_packages_dir,
-    resolve_reports_dir,
-)
+from svp_rpe.recast.run_paths import resolve_packages_dir, resolve_reports_dir
 from svp_rpe.recast.state import load_recast_state, record_state
 
 GOLDEN_PROJECT = Path("examples/recast/golden_project")
@@ -129,9 +125,20 @@ def _run_golden_path(tmp_path: Path, *, label: str) -> GoldenPathResult:
     # （`svp_rpe.cli.recast_cmd.recast_ingest_cmd`）と同じ手順をここで直接
     # 呼び、take-01 分の recast_report.json/recast_summary.md も作る。
     loaded = load_recast_project(project_path)
-    artifacts_take01 = build_recast_plan_artifacts(loaded, variant="golden", backend="deterministic")
+    # `publish=True`（recast-pr5 base 更新: `build_recast_plan_artifacts` は
+    # `publish` が必須引数になった — CLI 3 コマンド（plan/run/ingest）と同じ
+    # 「package/report を builds_root へ永続公開する」経路を再現する。
+    # `publish=False`（`build_recast_plan` 経由）は読み取り専用で package を
+    # builds_root へ残さないため、後段の `observe_generated_artifact` が読む
+    # `performance_package.json` が存在しなくなる）。
+    artifacts_take01 = build_recast_plan_artifacts(
+        loaded, variant="golden", backend="deterministic", publish=True
+    )
     assert artifacts_take01.result.plan.state_reached == "verified", artifacts_take01.result.text
-    protected_inputs_take01 = collect_protected_input_paths(loaded, "golden", "deterministic")
+    # `RecastPlanResult.protected_inputs`（plan 段の single-read 束から副作用
+    # なく再構成済み）を使う — `collect_protected_input_paths` を独立に呼んで
+    # manifest を再 parse しない（recast-pr5 base 更新後の CLI と同じ規約）。
+    protected_inputs_take01 = artifacts_take01.result.protected_inputs
 
     package_path_take01 = (
         resolve_packages_dir(loaded, "golden", "deterministic") / PERFORMANCE_PACKAGE_FILENAME
@@ -142,6 +149,7 @@ def _run_golden_path(tmp_path: Path, *, label: str) -> GoldenPathResult:
         manifest_path=loaded.identity_manifest_path,
         audio_path=take01_path,
         generated_artifact_path=take01_relative,
+        expected_audio_sha256=take01_sha256,
     )
     record_state(
         project_dir,
@@ -215,8 +223,12 @@ def _run_golden_path(tmp_path: Path, *, label: str) -> GoldenPathResult:
     assert state_after_take02_run.runs["golden@deterministic_manual"].state == "awaiting_generation"
 
     loaded_take02 = load_recast_project(project_path)
+    # `publish=False`: 上の CLI `recast run` 呼び出しが既に package を
+    # publish 済み — ここは `derived_score` を読むためだけの診断再計算なので
+    # 永続公開しない読み取り専用経路で十分（recast-pr5 base 更新後の
+    # `build_recast_plan_artifacts` の必須 `publish` 引数）。
     artifacts_take02 = build_recast_plan_artifacts(
-        loaded_take02, variant="golden", backend="deterministic_manual"
+        loaded_take02, variant="golden", backend="deterministic_manual", publish=False
     )
     assert artifacts_take02.derived_score is not None
     samples_take02 = perform(artifacts_take02.derived_score, TAKE2_STYLE)
