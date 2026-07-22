@@ -127,15 +127,20 @@ def load_recast_state(project_dir: Path | str) -> RecastStateFile:
     return RecastStateFile.model_validate(data)
 
 
-def _write_recast_state_atomically(path: Path, content: str) -> None:
+def _write_recast_state_atomically(path: Path, content: bytes) -> None:
     """tempfile + `os.replace` による atomic publish（`cli/observe_cmd.py` の
     `_write_observation_report_atomically` と同型）。書き込み途中の失敗が
-    部分的な `recast_state.json` を残さないようにする。"""
+    部分的な `recast_state.json` を残さないようにする。bytes を受け取り
+    binary モードで書く（Codex P2 ninth round #207: `recast_cmd.py` の
+    `recast_plan.json` 書き込みと同じ理由で text モードを避ける —
+    `recast_state.json` 自体は現状バイト単位の hash 突合対象ではないが、
+    single-source of truth 原則で recast モジュール内の atomic 書き込みを
+    統一する）。"""
     output_dir = path.parent
     output_dir.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=output_dir, prefix=f"{path.name}.", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        with os.fdopen(fd, "wb") as handle:
             handle.write(content)
         os.replace(tmp_name, path)
     except BaseException:
@@ -214,5 +219,5 @@ def record_state(
         )
         + "\n"
     )
-    _write_recast_state_atomically(_state_path(project_dir), content)
+    _write_recast_state_atomically(_state_path(project_dir), content.encode("utf-8"))
     return new_state_file

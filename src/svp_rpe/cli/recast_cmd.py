@@ -50,14 +50,21 @@ def _read_plan_sha256(path: Path) -> Optional[str]:
         return None
 
 
-def _write_recast_plan_atomically(path: Path, content: str) -> None:
+def _write_recast_plan_atomically(path: Path, content: bytes) -> None:
     """tempfile + `os.replace` による atomic publish（`cli/observe_cmd.py` の
-    `_write_observation_report_atomically` と同型）。"""
+    `_write_observation_report_atomically` と同型）。bytes を受け取り binary
+    モードで書く（Codex P2 ninth round #207: 旧実装は text モード
+    `open(..., "w", encoding="utf-8")` で書いており、Windows では改行が
+    `"\n"` → `"\r\n"` に変換される。`plan_sha256` は `canonical.encode("utf-8")`
+    から計算していたため、記録した hash と実際にディスクへ書かれた bytes が
+    乖離し、publish 直後の `recast status` が偽 stale を報告しうる欠陥が
+    あった。呼び出し側が 1 回だけ encode した bytes をそのまま書き込み、
+    同じ bytes から hash も計算する single-source 設計に統一する）。"""
     output_dir = path.parent
     output_dir.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=output_dir, prefix=f"{path.name}.", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        with os.fdopen(fd, "wb") as handle:
             handle.write(content)
         os.replace(tmp_name, path)
     except BaseException:
@@ -114,6 +121,14 @@ def _publish_recast_plan(loaded: Any, plan: Any) -> tuple[Path, str]:
     recast_plan.json` と一致し得る — 従来この公開サイトだけ他の 4 公開サイト
     （orders/takes×2/packages）と異なりガード対象外だった）。衝突時は何も
     書かずに `ValueError` を送出する（fail-closed — 他公開サイトと同じ契約）。
+
+    encode は 1 回だけ行い、書き込みも `plan_sha256` の hash 計算もこの同一
+    bytes から行う（Codex P2 review round 6, PR3 #208 由来の pr2 統合分
+    #207 ninth round: 旧実装は text モード `open(..., "w", encoding="utf-8")`
+    で書いており、Windows では改行が `"\n"` → `"\r\n"` に変換される。
+    `plan_sha256` は encode 済み bytes から計算していたため、記録した hash
+    と実際にディスクへ書かれた bytes が乖離し、publish 直後の `recast
+    status` が偽 stale を報告しうる欠陥があった）。
     """
     from svp_rpe.recast.plan import RECAST_PLAN_FILENAME
     from svp_rpe.recast.run_paths import collect_protected_input_paths
@@ -132,8 +147,9 @@ def _publish_recast_plan(loaded: Any, plan: Any) -> tuple[Path, str]:
         )
         + "\n"
     )
-    _write_recast_plan_atomically(plan_path, canonical)
-    plan_sha256 = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    canonical_bytes = canonical.encode("utf-8")
+    _write_recast_plan_atomically(plan_path, canonical_bytes)
+    plan_sha256 = hashlib.sha256(canonical_bytes).hexdigest()
     return plan_path, plan_sha256
 
 
