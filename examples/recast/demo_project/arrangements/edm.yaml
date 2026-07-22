@@ -1,0 +1,32 @@
+# AR1-3: "Midnight Signal" を EDM 編曲へ寄せる ArrangementSpec。
+# 同一 Base Score (composition_score.yaml) から Jazz 版と対比するための一方。
+meta:
+  id: "midnight-signal-edm-v1"
+  version: "0.1"
+  description: >-
+    Midnight Signal を melodic EDM / progressive house へ編曲する variant。
+    ボーカルフックからインストゥルメンタル・ドロップへ向かう delta_e を持たせ、
+    bpm を 132 へ引き上げ、brightness を dark から bright へ反転させる。
+
+target:
+  semantic:
+    grv:
+      primary: "melodic_edm"
+      secondary: "progressive_house"
+    delta_e:
+      overall: "build into a vocal hook and instrumental drop"
+  physical:
+    bpm: 132
+    brightness: "bright"
+
+# identity anchor: 「同じ曲のまま編曲する」契約を preservation-only で明示する。
+# semantic.core と physical.key は target で override せず、hard で保持を宣言する。
+preservation:
+  score_fields:
+    semantic.core: hard
+    physical.key: hard
+    semantic.grv.primary: free
+    semantic.grv.secondary: free
+    semantic.delta_e.overall: elastic
+    physical.bpm: free
+    physical.brightness: free

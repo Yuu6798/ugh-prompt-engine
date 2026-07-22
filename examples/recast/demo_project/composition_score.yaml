@@ -1,0 +1,80 @@
+meta:
+  title: "Midnight Signal"
+  version: 0.1
+
+semantic:
+  core: "introspective night drive"
+  grv:
+    primary: "deep_house"
+    secondary: "ambient"
+  delta_e:
+    overall: "gradual build from solitude to release"
+  avoid:
+    - "bright festival EDM"
+    - "comic vocal delivery"
+
+physical:
+  bpm: 128
+  key: "C minor"
+  time_signature: "4/4"
+  active_rate_target: "0.90-0.93"
+  valley_depth_target: "0.15-0.25"
+  brightness: "dark"
+  stereo_width: "wide"
+
+structure:
+  - section: intro
+    bars: 8
+    role: "establish loneliness"
+    physical: "low density, sub bass only"
+
+  - section: verse
+    bars: 16
+    role: "restrained movement"
+    physical: "sparse drums, short phrases, clear rests"
+
+  - section: chorus
+    bars: 16
+    role: "emotional release"
+    physical: "full energy, wide stereo, focused layers"
+
+  - section: bridge
+    bars: 8
+    role: "near silence and reflection"
+    physical: "no kick, no bass, minimal texture"
+
+rendering:
+  target_backend: "external"
+  prompt_max_chars: 650
+  priority:
+    - semantic.core
+    - semantic.grv
+    - physical.bpm
+    - physical.key
+    - physical.time_signature
+    - structure
+    - semantic.avoid
+    - physical.optional
+
+# どの生成器でどの物理フィールドが「効く」かの自己記述（grip_class）。
+# K2（#117）の実測 grip を初期データとして投入。Suno で tight が実証された
+# bpm / brightness のみの疎なプロファイル（網羅必須は引き継がない）。
+control_profile:
+  suno:
+    bpm:
+      grip_class: "tight"
+      grip: 1.61
+      sensor: "bpm"
+      evidence: "examples/control/k2/expected_grip.json"
+    brightness:
+      grip_class: "tight"
+      grip: 0.86
+      sensor: "spectral_centroid"
+      evidence: "examples/control/k2/expected_grip.json"
+    # SEM-1: 歌詞の有無（意味層ノブ）。2026-07-08 の対称ブロック (#159) で昇格ゲート
+    # 条件1（CLAP vocal contrast の効果>ノイズ: EDM 2.1× / Rock 1.9×）と条件2
+    # （ジャンル干渉分離）を両充足し loose→tight へ昇格（docs/control_profile.md DD-4）。
+    lyrics_presence:
+      grip_class: "tight"
+      sensor: "clap_vocal_contrast"
+      evidence: "examples/learned/clap/lyrics_vocal_contrast_v2_fixture.json / docs/control_profile.md DD-4 (2026-07-08)"

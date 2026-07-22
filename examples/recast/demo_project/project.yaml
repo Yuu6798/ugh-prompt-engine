@@ -1,0 +1,36 @@
+# recast-project/0.1 デモ fixture: 既存 sidecar（"Midnight Signal" 一式、
+# examples/arrangement/midnight_signal/ からコピー・整合済み）への参照のみを
+# 持つワークスペース定義。歌詞・旋律・楽譜本文はここに複製せず、
+# work.identity_manifest 経由で既存 sidecar を参照するだけ。
+#
+# deterministic backend（synth performer 経由の CI-safe パス）は本 PR では
+# 追加しない — capability-mode 突合や mode_overrides の消費配線は PR2 以降の
+# 責務であり、PR1 はスキーマ+loader+fixture の存在確認に留める。
+schema_version: "recast-project/0.1"
+
+project:
+  id: "midnight-signal-demo"
+  builds_root: "builds"
+
+work:
+  score: composition_score.yaml
+  identity_manifest: identity.yaml
+
+variants:
+  edm:
+    arrangement: arrangements/edm.yaml
+
+backends:
+  suno:
+    capability_profile: "suno"
+    invocation: manual
+    invocation_mode: prompt_only
+
+policy:
+  capability_mode: advisory
+  require_author_fields_resolved: true
+  require_verified_package: true
+
+observation:
+  enabled: false
+  anchors: []
