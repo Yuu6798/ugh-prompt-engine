@@ -10,11 +10,7 @@ from typer.testing import CliRunner
 
 from svp_rpe.cli import app
 from svp_rpe.recast import load_recast_project
-from svp_rpe.recast.backend import (
-    load_backend_capability_profile,
-    resolve_invoker,
-    run_context_from_plan_artifacts,
-)
+from svp_rpe.recast.backend import resolve_invoker, run_context_from_plan_artifacts
 from svp_rpe.recast.plan import build_recast_plan_artifacts
 from svp_rpe.recast.state import load_recast_state
 
@@ -493,15 +489,13 @@ def test_e2e_manual_awaiting_generation_then_ingest_cli_reaches_generated(
         loaded, variant="edm_deterministic", backend="deterministic", publish=True
     )
     assert det_artifacts.result.plan.state_reached in ("compiled", "verified")
-    det_profile = load_backend_capability_profile(loaded, "deterministic")
     det_ctx = run_context_from_plan_artifacts(
         loaded,
         variant="edm_deterministic",
         backend="deterministic",
         artifacts=det_artifacts,
-        profile=det_profile,
     )
-    det_invoker = resolve_invoker(det_artifacts.backend_ref, det_profile)
+    det_invoker = resolve_invoker(det_artifacts.backend_ref, det_ctx.profile)
     det_prepared = det_invoker.prepare(det_ctx)
     det_take = det_invoker.invoke(det_prepared)
     assert det_take.audio_path.is_file()

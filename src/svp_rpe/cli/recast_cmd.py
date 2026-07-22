@@ -312,11 +312,7 @@ def recast_run_cmd(
 
     from svp_rpe.arrange.resolver import ArrangementError
     from svp_rpe.recast import RecastError, load_recast_project
-    from svp_rpe.recast.backend import (
-        load_backend_capability_profile,
-        resolve_invoker,
-        run_context_from_plan_artifacts,
-    )
+    from svp_rpe.recast.backend import resolve_invoker, run_context_from_plan_artifacts
     from svp_rpe.recast.plan import _normalize_diagnostic, build_recast_plan_artifacts
     from svp_rpe.recast.state import record_state
 
@@ -374,11 +370,17 @@ def recast_run_cmd(
         raise typer.Exit(code=1)
 
     try:
-        profile = load_backend_capability_profile(loaded, backend)
+        # `profile` は plan 段（`build_recast_plan_artifacts`）が single-read 束で
+        # 既に parse・validate 済みの `artifacts.profile` をそのまま使う —
+        # `load_backend_capability_profile` で capability_profile YAML を再 read/
+        # 再 parse しない（Codex P2 review round 12, PR3 #208 指摘24: 従来は
+        # ここで独立に再 read しており、plan の診断（recast_plan.json）が前提と
+        # した profile と実際に invoke/注文書へ使われる profile が実行中の入力
+        # 変化で乖離し得た）。
         ctx = run_context_from_plan_artifacts(
-            loaded, variant=variant, backend=backend, artifacts=artifacts, profile=profile
+            loaded, variant=variant, backend=backend, artifacts=artifacts
         )
-        invoker = resolve_invoker(artifacts.backend_ref, profile)
+        invoker = resolve_invoker(artifacts.backend_ref, ctx.profile)
         prepared = invoker.prepare(ctx)
     except (OSError, ValueError, ValidationError, yaml.YAMLError, RecastError) as exc:
         typer.echo(f"Error: {exc}", err=True)
@@ -503,11 +505,7 @@ def recast_ingest_cmd(
 
     from svp_rpe.arrange.resolver import ArrangementError
     from svp_rpe.recast import RecastError, load_recast_project
-    from svp_rpe.recast.backend import (
-        load_backend_capability_profile,
-        resolve_invoker,
-        run_context_from_plan_artifacts,
-    )
+    from svp_rpe.recast.backend import resolve_invoker, run_context_from_plan_artifacts
     from svp_rpe.recast.plan import (
         RECAST_PLAN_FILENAME,
         build_recast_plan_artifacts,
@@ -613,11 +611,13 @@ def recast_ingest_cmd(
         raise typer.Exit(code=1) from exc
 
     try:
-        profile = load_backend_capability_profile(loaded, backend)
+        # `profile` は plan 段が single-read 束で既に parse・validate 済みの
+        # `artifacts.profile` をそのまま使う（Codex P2 review round 12, PR3
+        # #208 指摘24 — 詳細は `recast run` 側の同型コメント参照）。
         ctx = run_context_from_plan_artifacts(
-            loaded, variant=variant, backend=backend, artifacts=artifacts, profile=profile
+            loaded, variant=variant, backend=backend, artifacts=artifacts
         )
-        invoker = resolve_invoker(artifacts.backend_ref, profile)
+        invoker = resolve_invoker(artifacts.backend_ref, ctx.profile)
         prepared = invoker.prepare(ctx)
         take = invoker.collect(prepared, Path(audio))
     except (OSError, ValueError, ValidationError, yaml.YAMLError, RecastError) as exc:
