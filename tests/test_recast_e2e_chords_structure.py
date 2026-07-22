@@ -4,22 +4,16 @@ Phase 0 ゲート判定（PR #205）の帰結: メロディセンサーは pyin 
 不成立（#199 既往）のため、本 PR の縦切り hard anchor は harmony
 （chord_sequence_json）+ structure（section_map）の 2 つに限る。
 
-lyrics/melody anchor は本 E2E の対象外とする（Codex P2 review, PR4 #209
-指摘: nightly core-extras 環境では faster_whisper/basic_pitch が実際に
-インストールされているため、committed `identity.yaml` をそのまま使うと
-`svprpe observe` が lyrics/melody を **実 learned adapter**（faster-whisper
-文字起こし・basic-pitch ピッチ推定、いずれもモデルダウンロード/推論を伴う）
-へルーティングしてしまい、「センサー不在 → `no_sensor`」という pin が環境
-依存の偽 fail になり得る。本テストは tmp_path へコピーした project の
-working copy から lyrics/melody anchor を除去した派生 manifest（harmony +
-structure のみ。source / 残 anchor の sha256 pin は不変）を使うことで、
-learned adapter を一切呼ばずに環境非依存にする — `identity_anchors` から
-lyrics/melody の policy も合わせて除去しないと、manifest に存在しない
-anchor id を指す policy として `PreservationContractError`（unknown anchor
-id）になるため両方を揃えて除去する。committed fixture
-（`examples/recast/demo_project/identity.yaml` /
-`arrangements/deterministic_e2e.yaml`）自体は変更しない — 派生はテスト側
-（working copy）でのみ行う）。
+`examples/recast/e2e_project/`（Codex P2 review round 2, PR4 #209）を使う:
+`examples/recast/demo_project/` は lyrics/melody anchor を持つ suno manual
+デモ用の fixture のまま（PR4 以前の姿）に保ち、本 E2E 専用の committed
+project を別ディレクトリに新設した — manifest（identity.yaml）が
+harmony+structure の 2 anchor のみを持つため、working copy を tmp へ
+コピーしただけで（テスト側での anchor 除去ロジックなしに）人が直接
+`examples/recast/e2e_project/` を実行する committed 経路そのものが
+learned adapter（faster-whisper/basic-pitch）非依存になる（round 1 の
+tmp 派生 strip では committed デモ経路自体は救われない、という round 2
+指摘への対応）。
 
 一連の実行を 1 つの E2E として検証する:
   1. `svprpe recast plan <project> --variant deterministic_e2e --backend
@@ -28,7 +22,7 @@ id）になるため両方を揃えて除去する。committed fixture
   2. `svprpe recast run ...` → deterministic invoke（in-process 演奏者）で
      take-01.wav を合成 → 状態 `generated`
   3. `svprpe observe`（`builds/packages/.../performance_package.json` +
-     派生 manifest + `builds/takes/.../take-01.wav`）で生成後観測
+     `identity.yaml` + `builds/takes/.../take-01.wav`）で生成後観測
   4. 実測した `adherence_status`/`determination`/`measurements` を pin する
      （事前に仮定で書かず、実行結果をそのまま固定した値 — この計器は
      harmony/structure いずれも `preserved` に到達しない: exact match しない
@@ -42,9 +36,10 @@ id）になるため両方を揃えて除去する。committed fixture
 perform + 実 extract を伴うため `@pytest.mark.slow`（実測 wall time 目安:
 plan+run 数秒 + observe（perform ~4s + extract ~23s）で 1 サイクルあたり
 30 秒程度 — 60 秒ガイドラインの対象は「テスト内の合成」であり、本テストの
-支配的コストは perform ではなく extract 側）。lyrics/melody anchor を除去
-したことで take-01.wav の合成対象（CompositionScore 由来、identity manifest
-非依存）自体は変わらない — sha256 は除去前と同一であることを実測確認済み。
+支配的コストは perform ではなく extract 側）。tmp_path へのコピーは書き込み
+分離（`builds/`・`recast_plan.json`・`recast_state.json` の並行 test 実行間
+干渉防止）のためだけであり、`examples/recast/e2e_project/` 自体の
+manifest/arrangement は無加工のまま使う。
 """
 from __future__ import annotations
 
@@ -59,78 +54,22 @@ from typer.testing import CliRunner
 from svp_rpe.cli import app
 from svp_rpe.recast.state import load_recast_state
 
-DEMO_PROJECT = Path("examples/recast/demo_project")
+E2E_PROJECT = Path("examples/recast/e2e_project")
 
 runner = CliRunner()
 
-# committed `identity.yaml` の lyrics/melody anchor ブロック（バイト単位で
-# 一致させ、派生 manifest から丸ごと取り除く）。sanity assert で
-# committed fixture との drift を検出する。
-_LYRICS_ANCHOR_BLOCK = (
-    "  - id: lyrics\n"
-    "    domain: lyrics\n"
-    "    artifact: identity/lyrics.txt\n"
-    "    artifact_type: lyrics_text\n"
-    "    media_type: text/plain\n"
-    '    sha256: "2da7dca390e13fd6d19c3fbe74646583884313b112981f8bc7d62f0d6d3a27b2"\n'
-    "    required: true\n"
-)
-_MELODY_ANCHOR_BLOCK = (
-    "  - id: melody\n"
-    "    domain: melody\n"
-    "    artifact: identity/melody_notes.json\n"
-    "    artifact_type: note_events_json\n"
-    "    media_type: application/json\n"
-    '    format_version: "note-events/0.1"\n'
-    '    sha256: "1d67d4fd0f38ee6864a32010c19b0fc8401208842d06f204def2cc9a70378fb5"\n'
-    "    required: true\n"
-)
-_ARRANGEMENT_LYRICS_MELODY_POLICY = (
-    "  identity_anchors:\n"
-    "    lyrics:\n"
-    "      mode: free\n"
-    "    melody:\n"
-    "      mode: free\n"
-    "    harmony:\n"
-)
-_ARRANGEMENT_HARMONY_ONLY_POLICY = "  identity_anchors:\n    harmony:\n"
 
-
-def _copy_demo_project(tmp_path: Path, *, label: str) -> Path:
-    dest = tmp_path / f"demo_project_{label}"
+def _copy_e2e_project(tmp_path: Path, *, label: str) -> Path:
+    """`examples/recast/e2e_project/` を書き込み分離のためだけに tmp_path へ
+    コピーする（manifest/arrangement/project.yaml はいずれも無加工）。"""
+    dest = tmp_path / f"e2e_project_{label}"
     dest.mkdir()
-    shutil.copy(DEMO_PROJECT / "project.yaml", dest / "project.yaml")
-    shutil.copy(DEMO_PROJECT / "composition_score.yaml", dest / "composition_score.yaml")
-    shutil.copy(DEMO_PROJECT / "identity.yaml", dest / "identity.yaml")
-    shutil.copytree(DEMO_PROJECT / "identity", dest / "identity")
-    shutil.copytree(DEMO_PROJECT / "arrangements", dest / "arrangements")
+    shutil.copy(E2E_PROJECT / "project.yaml", dest / "project.yaml")
+    shutil.copy(E2E_PROJECT / "composition_score.yaml", dest / "composition_score.yaml")
+    shutil.copy(E2E_PROJECT / "identity.yaml", dest / "identity.yaml")
+    shutil.copytree(E2E_PROJECT / "identity", dest / "identity")
+    shutil.copytree(E2E_PROJECT / "arrangements", dest / "arrangements")
     return dest / "project.yaml"
-
-
-def _strip_lyrics_melody_anchors(project_path: Path) -> None:
-    """working copy の `identity.yaml` から lyrics/melody anchor を、
-    `arrangements/deterministic_e2e.yaml` からその 2 anchor 分の
-    `identity_anchors` policy を、それぞれ除去する（harmony/structure の
-    sha256/policy は不変）。learned adapter（faster-whisper/basic-pitch）が
-    インストールされている環境でも `svprpe observe` がそれらへ一切
-    ルーティングしないようにするための派生（committed fixture 自体は
-    変更しない）。"""
-    identity_path = project_path.parent / "identity.yaml"
-    identity_text = identity_path.read_text(encoding="utf-8")
-    assert _LYRICS_ANCHOR_BLOCK in identity_text  # sanity: committed fixture との drift 検出
-    assert _MELODY_ANCHOR_BLOCK in identity_text  # sanity
-    identity_text = identity_text.replace(_LYRICS_ANCHOR_BLOCK, "").replace(
-        _MELODY_ANCHOR_BLOCK, ""
-    )
-    identity_path.write_text(identity_text, encoding="utf-8")
-
-    arrangement_path = project_path.parent / "arrangements" / "deterministic_e2e.yaml"
-    arrangement_text = arrangement_path.read_text(encoding="utf-8")
-    assert _ARRANGEMENT_LYRICS_MELODY_POLICY in arrangement_text  # sanity
-    arrangement_text = arrangement_text.replace(
-        _ARRANGEMENT_LYRICS_MELODY_POLICY, _ARRANGEMENT_HARMONY_ONLY_POLICY
-    )
-    arrangement_path.write_text(arrangement_text, encoding="utf-8")
 
 
 def _anchor_policy_modes(project_dir: Path) -> dict[str, Any]:
@@ -145,8 +84,7 @@ def _run_plan_then_run(project_path: Path) -> tuple[Path, Path]:
     """`recast plan` → `recast run`（deterministic backend）を CLI で実行し、
     (performance_package.json のパス, take-01.wav のパス) を返す。両コマンドの
     exit_code が 0 であること、state が `generated` へ到達することを検証する。
-    呼び出し前に `_strip_lyrics_melody_anchors` 済みであることを前提とする
-    （anchors は harmony/structure の 2 件のみ）。"""
+    `e2e_project` の manifest は harmony/structure の 2 anchor のみを持つ。"""
     plan_result = runner.invoke(
         app,
         [
@@ -229,10 +167,10 @@ def _observe(
 
 # 実測して pin した期待値（`docs/wi1_d1_thresholds.md` 系の裁定と同じく、この
 # 計器の出力を仮定で書かない — 事前に一度実行して得た実測値をそのまま固定
-# する。lyrics/melody を manifest から除去したことによる take-01.wav /
-# harmony・structure の実測値への影響は無い — 両 anchor の実測に使う音声は
-# CompositionScore 由来で identity manifest の anchor 集合に依存しないことを
-# 除去前後の sha256/measurements 一致で確認済み）。
+# する。`e2e_project` は `demo_project` と同一 base score/同一 harmony・
+# structure anchor のため、round 1（demo_project + tmp 派生 strip）で実測した
+# 値と一致することを確認済み — take-01.wav の合成対象は CompositionScore
+# 由来で identity manifest の anchor 集合に依存しない）。
 _EXPECTED_HARMONY_MEASUREMENTS = {
     "chord_sequence_match_rate": 0.0833,
     "repeated_chord_sequence_match_rate": 0.0,
@@ -276,8 +214,8 @@ _EXPECTED_STRUCTURE_MEASUREMENTS = {
 
 def _assert_pinned_anchors(report: dict[str, Any]) -> None:
     anchors = {anchor["anchor_id"]: anchor for anchor in report["anchors"]}
-    # lyrics/melody は派生 manifest に存在しないため report にも現れない
-    # （learned adapter は一切呼ばれない）。
+    # e2e_project の manifest は harmony/structure のみを宣言している
+    # （learned adapter を要する lyrics/melody は存在しない）。
     assert set(anchors) == {"harmony", "structure"}
 
     # harmony/structure: hard 宣言した 2 anchor。いずれも exact match しない
@@ -300,8 +238,7 @@ def _assert_pinned_anchors(report: dict[str, Any]) -> None:
 def test_e2e_deterministic_chords_structure_reaches_generated_and_observes(
     tmp_path: Path,
 ) -> None:
-    project_path = _copy_demo_project(tmp_path, label="a")
-    _strip_lyrics_melody_anchors(project_path)
+    project_path = _copy_e2e_project(tmp_path, label="a")
 
     package_path, take_path = _run_plan_then_run(project_path)
 
@@ -324,15 +261,13 @@ def test_e2e_deterministic_chords_structure_is_reproducible_across_full_reruns(
     合成された結果としての E2E 全体の再現性）。"""
     import hashlib
 
-    project_path_a = _copy_demo_project(tmp_path, label="rerun_a")
-    _strip_lyrics_melody_anchors(project_path_a)
+    project_path_a = _copy_e2e_project(tmp_path, label="rerun_a")
     _package_a, take_a = _run_plan_then_run(project_path_a)
     report_a = _observe(
         project_path_a, _package_a, take_a, tmp_path / "observation_report_rerun_a.json"
     )
 
-    project_path_b = _copy_demo_project(tmp_path, label="rerun_b")
-    _strip_lyrics_melody_anchors(project_path_b)
+    project_path_b = _copy_e2e_project(tmp_path, label="rerun_b")
     package_b, take_b = _run_plan_then_run(project_path_b)
     report_b = _observe(
         project_path_b, package_b, take_b, tmp_path / "observation_report_rerun_b.json"

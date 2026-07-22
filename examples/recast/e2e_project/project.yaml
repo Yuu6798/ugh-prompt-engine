@@ -1,0 +1,38 @@
+# recast-project/0.1: PR4 chords（harmony）+ structure 縦切り E2E 専用
+# committed project。Codex P2 review round 2（PR4 #209）の帰結: この project
+# は `deterministic_e2e` variant / `deterministic` backend のみを持ち、
+# manifest（identity.yaml）は harmony+structure の 2 anchor のみを持つため、
+# 人が直接このディレクトリで `svprpe recast plan/run/observe` を実行しても
+# lyrics/melody の learned adapter（faster-whisper/basic-pitch）へは一切
+# ルーティングされない（committed 経路そのものが learned anchor 非依存）。
+#
+# `examples/recast/demo_project/` とは責務分離: そちらは suno manual デモ
+# （lyrics/melody を含む 3+1 anchor 一式）のまま PR4 以前の姿を保つ。
+schema_version: "recast-project/0.1"
+
+project:
+  id: "midnight-signal-e2e"
+  builds_root: "builds"
+
+work:
+  score: composition_score.yaml
+  identity_manifest: identity.yaml
+
+variants:
+  deterministic_e2e:
+    arrangement: arrangements/deterministic_e2e.yaml
+
+backends:
+  deterministic:
+    capability_profile: "deterministic"
+    invocation: local
+    invocation_mode: prompt_only
+
+policy:
+  capability_mode: advisory
+  require_author_fields_resolved: true
+  require_verified_package: true
+
+observation:
+  enabled: false
+  anchors: []

@@ -19,10 +19,6 @@ work:
 variants:
   edm:
     arrangement: arrangements/edm.yaml
-  # PR4: chords+structure 縦切り E2E 専用 variant（arrangements/deterministic_e2e.yaml
-  # のコメント参照）。deterministic backend でのみ compiled/verified へ到達する。
-  deterministic_e2e:
-    arrangement: arrangements/deterministic_e2e.yaml
 
 backends:
   suno:

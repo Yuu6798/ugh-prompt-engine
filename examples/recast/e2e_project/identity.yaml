@@ -1,0 +1,56 @@
+# PR4: chords（harmony）+ structure 縦切り E2E 専用の IdentityManifest。
+#
+# Codex P2 review round 2（PR4 #209）の帰結: `examples/recast/demo_project/`
+# は lyrics/melody anchor を持つ suno manual デモ用の fixture のまま保つ
+# （PR4 以前の姿へ復元済み）。本 project はそれとは別に、harmony+structure の
+# 2 anchor のみを持つ manifest を committed fixture として新設する —
+# working copy を tmp へコピーしただけでは committed 経路（人が直接
+# `examples/recast/e2e_project/` を実行する経路）そのものは learned anchor
+# から独立しない、という round 2 指摘への対応（tmp 派生 strip では demo の
+# committed 経路は救われない）。
+#
+# "Midnight Signal" の同一 base score（`composition_score.yaml`、
+# `examples/recast/demo_project/composition_score.yaml` と同一 bytes）に
+# 対する harmony/structure anchor は
+# `examples/recast/demo_project/identity.yaml`（PR4 時点）と同一
+# 内容・同一 sha256（source/chord_progression.json/section_map.json のいずれも
+# 同一 base score から機械転記したもののため）。
+schema_version: "identity-manifest/0.1"
+meta:
+  work_id: "midnight-signal"
+  version: "0.1"
+source:
+  locator: composition_score.yaml
+  sha256: "37854f54b42a1c4d424f357148d3d10f347e238ec72a42d1248bea2203f97d0b"
+  rights_basis: original
+  note: >-
+    合成 fixture 作品・音源なし。locator は base Composition Score 自身であり、
+    生成済み音声への参照ではない。
+anchors:
+  - id: harmony
+    domain: harmony
+    # AR4 (Design Memo D-4): 正典進行は performer.py の C minor 既定進行
+    # (MINOR_PROGRESSION, transpose=0 の FAITHFUL_TAKE) と一致させてある。
+    # artifact_type は chord_sequence_json だが ARTIFACT_TYPE_CHANNEL では
+    # チャネル未対応 (None) のため、delivery は常に unknown — 「delivery と
+    # observation は別軸」の実証(observe は delivery 状態と無関係に測定する)。
+    artifact: identity/chord_progression.json
+    artifact_type: chord_sequence_json
+    media_type: application/json
+    format_version: "chord-sequence/0.1"
+    sha256: "180464a881ac63131c0a0fcdf812e0cc7bfd8dc1e9947698a5d5c65c89245299"
+    required: true
+  - id: structure
+    domain: structure
+    # 正典は composition_score.yaml の structure 欄のセクション名を機械転記
+    # したもの（intro/verse/chorus/bridge）。
+    # examples/arrangement/midnight_signal/identity_manifest.form.yaml /
+    # PR4 時点の examples/recast/demo_project/identity.yaml と同一 base
+    # score・同一 structure 欄のため section_map.json の内容と sha256 も
+    # そちらと一致する（実ファイル読み取り確認済み）。
+    artifact: identity/section_map.json
+    artifact_type: section_map
+    media_type: application/json
+    format_version: "section-map/0.1"
+    sha256: "1fc7e8dabf83c691758114128fdd36b7679dd61175d8492afae3f97577047eb1"
+    required: true

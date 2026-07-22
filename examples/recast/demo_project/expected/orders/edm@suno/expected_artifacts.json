@@ -3,7 +3,7 @@
     "wav",
     "mp3"
   ],
-  "content_digest": "7637822215f8836e72caf8dd1b9b5ed09b137a9bf20656247882ab241e340f52",
+  "content_digest": "9329b2054fd2af05c598e339ef7b7416486fb54dd31bc14af4bbe1ad83593e99",
   "filename_pattern": "take-01.{wav,mp3}",
-  "package_sha256": "8be3e4b91bd18d302ab8669b12e05c97b11b24fc47bff1a76ed79dc77f548b5d"
+  "package_sha256": "2279e4581d20ca692becce7d7c89f0c0c11285a43ce21603914b2388b2e5fe32"
 }
