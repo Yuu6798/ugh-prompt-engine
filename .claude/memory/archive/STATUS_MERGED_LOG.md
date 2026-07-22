@@ -147,3 +147,4 @@ STATUS.md "Recently Merged"（最新 5 件保持）から溢れたマージ済�
 | #196 | feat(arrange): 実 Suno AR4 検収デモを dated fixture 化（observed/suno/・非 canonical 探索の位置づけ維持・emit 前 pin 検証=#195 規律の適用第一号・verify 38/38・音源 4 本は sha256 pin のみで非コミット） | 2026-07-20 | AR4 実 Suno 初観測 |
 | #197 | docs(roadmap): WI 系列（Work Identity 判定トラック）ロードマップ新設 — WI0–WI4・思想 4 点セット（宣言的契約×弁別判定×人間校正×正直会計）・Goodhart 抑止/ラベル先行付与禁止の事前埋め込み・queue 2 項目を WI0/WI1 へ編入 | 2026-07-20 | WI 系列新設 |
 | #198 | feat(arrange): WI0-a — observe へ lyrics/melody センサー配線（synthetic 検証・schema 0.1 無変更・4 anchor domain 全計器化・依存欠如は degrade 契約・melody v0 は音高系列のみ=BPM 交絡回避・検算照合 4 件全一致）。1650 passed | 2026-07-20 | WI0-a |
+| #199 | feat(arrange): WI0-b — 実推論の転写精度初実測を fixture 化。melody pitch_lcs 0.6<0.8（事前登録閾値・事後変更なし）で **WI2 v0 除外**（原因=v0 比較設計の分離層欠如でセンサー品質でない・再入条件=旋律分離後 ≥0.8）+ lyrics は instrumental 入力の Whisper ハルシネーション境界記録（ゲート=no_speech_prob・#149 追認・精度実測は素材律速 defer）。1682 passed | 2026-07-20 | WI0-b |

@@ -2,7 +2,7 @@
 
 ## Phase
 
-2026-07-22、**WI 系列 WI0–WI3 v0 貫通 — 跨ぎセッション（7/21–22）で PR 4 本 #200–#203 全マージ**。WI1（#200）=MusicGen 無人 n=20 逸脱分布 → D-1 分類規約 v0（編集分解 + 3 段ゲート・within 14/outside 6・harmony は full_cycles=0 20/20 で未分類=deferred 維持）→ WI2（#201）=identity-rank 計器 + 破壊 recast 行列 13 clips（**弁別成立は bpm のみ 11/12**・chord チャネル死を同一 seed byte 一致で機械証明・計器欠陥 5 件を実測検出→修正・verse 未出現通算 32/32）→ WI3（#202）=事前登録 12 ペア n=1 ブラインド聴取で **identity proxy v0 = 空集合（有効 null）**・「同一スコア再生成すら別の曲」=作品同一性のレンダリング消失を機械と人間が独立確認・誤り 3 件は軸別機構（bpm=89.1 アトラクタ / structure=長さバイアス / key=平行調流れ）・厳格 tie 規則×最小差参照の構造的棄権 10–12/12 は v0 限界として透明記録。#202 の Codex P2 **12 巡 14 件**（全て provenance 検証可能性の同型）を全対応し、蒸留した **emit 前チェックリスト 7 項目を §8 恒久化**（#203・指摘ゼロ即マージ）。Claude 単独で進められる残キューは実質ゼロ（素材/人手律速のみ）。次=**WI3 第 2 トランシェ**（実 Suno 4 take 回収 → P5 ペア + tie 規則 v1 再事前登録。WI4 はその結果待ち）。詳細=2026-07-21.md / 2026-07-22.md。
+2026-07-22 Session 2、**完全ローカル P3 残キュー 2 件を PR #204 で closeout**。①verify builds-root 再帰監査（#190 follow-up）: `cli/builds_audit.py` 新設 + `svprpe verify --builds-root` 構造監査モード（blessing チェックが明示的に諦めていた**宣言外ファイル検出＋ツリー全体再ハッシュ**が核心・--manifest 不要・read-only・全数収集・単一パッケージモードと相互排他 exit 2）。②Metrics v2 レベル不変性の Hypothesis 掃引恒久化（#188 follow-up）: 純関数層（gain [-60,+12]dB×信号ファミリ 4 軸・~3 秒・slow 非対象）+ 実抽出 E2E 層（render_sample→FLOAT WAV→実 extract・@slow）の 2 層構成、実測が全 5 key×7 gain で厳密 0 差だったため E2E 許容誤差はむしろ厳格化（0.01/0.1dB）。Codex P2 2 件は**検証後採用**（UnicodeDecodeError の FAIL 収集化 / symlink root 受理=publish 側契約 builds_root.py L461-467 を一次ソース+実 CLI 再現で確認してから採用）・2 ラウンド即日解消。全件 1847 passed・CI 3.11/3.12 緑。**Claude 単独で進められる残キューは名実ともにゼロ（素材/人手律速のみ）**。次=**WI3 第 2 トランシェ**（実 Suno 4 take 回収 → P5 ペア + tie 規則 v1 再事前登録。WI4 はその結果待ち）。詳細=2026-07-22.md。前 Phase（WI0–WI3 v0 貫通 #200–#203）の詳細=2026-07-21.md / 2026-07-22.md。
 
 ## Next-Issue Queue
 
@@ -11,8 +11,6 @@
 | WI3 第 2 トランシェ | 実 Suno P5 ペア + tie 規則 v1 で人間校正を再事前登録 | P2 | 律速=実 Suno 4 take（A1/A2/B1/B2）の音源回収（sha pin のみ・Drive 未回収を #202 で実地確認。#94 方式で回収可）。v1 規則=作品単位同値類+距離マージン（#202 docs §3 の構造的棄権対策）・synth スタイル変換ペア拡充（p10 が唯一の「作品保存×yes」）。事前登録はし直し（事後変更なし） |
 | WI4 制度化 | proxy advisory 配線・per-work identity budget | P3 | **第 2 トランシェで proxy 軸が非空になるまでブロック**（v0 は空集合につき配線対象なし）。材料=WI2 弁別表（bpm のみ）+ WI3 誤り機構台帳（アトラクタ/長さバイアス/平行調） |
 | lyrics 転写の精度実測 | 歌入り+歌詞 pin 音源での転写精度実測 | P3 | #199 で defer（素材律速）。配線・境界挙動（instrumental ハルシネーション・no_speech_prob ゲート）は WI0-b で実測済み |
-| verify builds-root 再帰監査 | --builds-root ツリー全体の再帰 verify | P3 | #190 で out of scope と明記した follow-up（docs/cli.md 言及）。完全ローカル |
-| Metrics v2 メタモルフィック検証 | レベル不変性（ゲインシフト不変）を probe で掃引恒久化 | P3 | #188 の T-INV 単発を Hypothesis 掃引へ。完全ローカル・決定論 |
 | Metrics v2 再ベースライン | Pro n=20 で v2 基準値化 + legacy_valley_depth 一括撤去 | P2 | #188 の凍結措置の解凍タスク。Pro 群 n=20 を v2 で再計測→ジャンル別 crest/valley_db 分布→`config/*_baseline.yaml` の実置換（active_rate_ideal/valley_depth_pro 系の凍結解除）+ semantic rules/domain profile の valley 閾値 v2 スケール移行 + `legacy_valley_depth()` と `valley_depth_legacy` の一括撤去（時限マーカー: rpe/models.py:191 / semantic_ci/observed_adapter.py:22 / baseline yaml 4 本 / docs/metrics.md）。CompositionScore 計器の v2 移行は target 帯再ベースラインと同時。律速=Pro 実音源 n=20 の入手（licensing） |
 | DD-D 解除（意味フィールド write-through） | CLAP 読みの semantic.* 自動記入解禁の是非 | P3 | 軸バッテリー本体は #151 で v1.1 closeout（probe チューニング第一巡・7 軸・sweep 手順制度化＝追加軸は config 追記+`--axes-config` sweep+校正ログ再生成のみ）。write-through 解禁は promotion gate G1-G5 + 校正基準文書化が前提（score_centric §5）。valence 軸の本来検証（セクション別感情アーク）は実制作音源律速 |
 | K2-seg Suno 転移 | プロンプト欄 grip 地図の Suno 側検証（バッチ 4 = 残 3 ノブ）+ structure4 タグチャネル A/B | P2 | **MusicGen 側はバッチ M2（#173/#174・2026-07-13）で closeout** — 3 ノブとも M1 規律 canonical で再計測済み（active_rate loose 0.414 / valley_depth dead→loose 0.3518 / time_signature dead・device profile 反映済み）。**残は Suno 側のみ**: バッチ 4 は時刻証跡前提（画面録画 or 40 分超バッチ）、**structure4 発注書（タグチャネル A/B・non-canonical 事前登録・instrumental 固定）はコミット済み=発注可能状態**（律速=Suno 人手生成 8 本）。バッチ 1（avoid+core）=#162 / Exclude 追試=#164（confounded・isolated 追試待ち）は従来どおり。副次の種: バッチ 3 novelty d=+0.71 loose の追検討・M1 の区間別非対称（quiet 通る/loud 通らない=デフォルト形状引力と整合） |
@@ -29,8 +27,8 @@
 
 | PR | Title | Date | Phase |
 |---|---|---|---|
+| #204 | feat(verify): 完全ローカル P3 2 件 closeout — `verify --builds-root` 再帰監査（builds_audit.py 新設・宣言外ファイル検出+全数再ハッシュ・read-only 構造監査・#190 follow-up）+ Metrics v2 レベル不変性の Hypothesis 掃引恒久化（純関数層+実抽出 E2E 層・FLOAT subtype・実測厳密 0 差で許容誤差厳格化・#188 follow-up）。Codex P2 2 件は検証後採用（UnicodeDecodeError FAIL 収集化 / symlink root 受理=publish 契約の一次ソース確認）。1847 passed | 2026-07-22 | verify 計器 + Metrics v2 |
 | #203 | docs(agents): §8 provenance 規律に emit 前チェックリスト 7 項目を運用具体化（#202 の 12 巡 14 指摘の蒸留・入力全数列挙=呼び出しグラフ実読/実行物 pin/逐語シェル実行可能/checkout-stable パス/pin 全数突合/時系列 2 層/委譲検収タイムスタンプ突合。指摘ゼロ即マージ・433 行） | 2026-07-22 | §8 恒久化 |
 | #202 | feat(arrange): WI3 人間校正 v0 — 事前登録 12 ペア n=1 聴取で **proxy v0 空集合（有効 null）**・同一性のレンダリング消失を人間側でも確認（同一スコア再生成すら「別の曲」・テンポ/トーン基準）・誤り 3 件は軸別機構。Codex P2 12 巡 14 件全対応（synth リプレイ全入力 9 pin・逐語実行可能レシピ・消費文脈 2 層の証跡） | 2026-07-22 | WI3 v0 |
 | #201 | feat(roundtrip): WI2 弁別判定ハーネス — identity-rank 計器（5 軸・tied_with 明示・verdict なし）+ 破壊 recast 行列 13 clips。弁別成立は bpm のみ（11/12）・chord チャネル死を同一 seed byte 一致で機械証明・計器欠陥 5 件（key/mode・参照交絡・mir_eval・bpm 非正値・harmony cycle）を実測修正。1756 passed | 2026-07-21 | WI2 |
 | #200 | feat(arrange): WI1 — MusicGen 無人 n=20 逸脱分布 fixture + D-1 分類規約 v0（編集分解の一意分解 + 3 段ゲート・within 14/outside 6・harmony 未分類）+ 検算照合テスト（Memo 数表の独立再計算全一致）。1704 passed | 2026-07-21 | WI1 |
-| #199 | feat(arrange): WI0-b — 実推論の転写精度初実測を fixture 化。melody pitch_lcs 0.6<0.8（事前登録閾値・事後変更なし）で **WI2 v0 除外**（原因=v0 比較設計の分離層欠如でセンサー品質でない・再入条件=旋律分離後 ≥0.8）+ lyrics は instrumental 入力の Whisper ハルシネーション境界記録（ゲート=no_speech_prob・#149 追認・精度実測は素材律速 defer）。1682 passed | 2026-07-20 | WI0-b |
