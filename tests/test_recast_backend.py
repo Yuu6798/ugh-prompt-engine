@@ -561,8 +561,8 @@ def test_atomic_publish_text_bundle_partial_failure_restores_old_files(
         _atomic_publish_text_bundle(
             output_dir,
             {
-                "performance_package.json": "new-package",
-                "compilation_report.json": "new-report",
+                "performance_package.json": b"new-package",
+                "compilation_report.json": b"new-report",
             },
             protected_inputs=[],
         )
@@ -571,6 +571,35 @@ def test_atomic_publish_text_bundle_partial_failure_restores_old_files(
     # 両方とも旧内容へロールバックされている（新 package だけが生き残らない）。
     assert (output_dir / "performance_package.json").read_text(encoding="utf-8") == "old-package"
     assert (output_dir / "compilation_report.json").read_text(encoding="utf-8") == "old-report"
+
+
+def test_published_package_json_bytes_sha256_matches_recorded_package_sha256(
+    tmp_path: Path,
+) -> None:
+    """Codex P2 review round 6（PR3 #208 指摘 12）: `_atomic_publish_text_bundle`
+    が従来 `Path.write_text(..., encoding="utf-8")` で `performance_package.json`
+    を publish していたため、Windows の text-mode 既定 newline 変換
+    （`"\n"` → `"\r\n"`）でディスク上の実 bytes が `package_sha256`（
+    `compiled.package_json.encode("utf-8")` から計算済みの pin — `arrange/
+    package.py:build_performance_package`）と乖離し得た。実際に公開された
+    `performance_package.json` の実 bytes の sha256 が、同じく公開された
+    `compilation_report.json` に記録された `package_sha256` と一致することを
+    直接検証する（このテストは POSIX 環境では常に pass するが、`write_bytes`
+    経路への置換自体は Windows 上の newline 変換を構造的に排除する）。"""
+    project_path = _copy_demo_project(tmp_path)
+    loaded = load_recast_project(project_path)
+    artifacts = build_recast_plan_artifacts(loaded, variant="edm", backend="suno")
+
+    assert artifacts.result.plan.state_reached == "verified"
+    package_dir = project_path.parent / "builds" / "packages" / "edm@suno"
+    published_package_bytes = (package_dir / "performance_package.json").read_bytes()
+    published_report = json.loads(
+        (package_dir / "compilation_report.json").read_text(encoding="utf-8")
+    )
+
+    import hashlib
+
+    assert hashlib.sha256(published_package_bytes).hexdigest() == published_report["package_sha256"]
 
 
 # --- deterministic: invoke + determinism ----------------------------------------

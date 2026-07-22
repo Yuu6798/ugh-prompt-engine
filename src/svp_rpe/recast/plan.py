@@ -232,13 +232,26 @@ def _parse_yaml_mapping(raw_bytes: bytes, label: str, path_str: str) -> Dict[str
 
 
 def _atomic_publish_text_bundle(
-    output_dir: Path, contents: Dict[str, str], *, protected_inputs: List[Path]
+    output_dir: Path, contents: Dict[str, bytes], *, protected_inputs: List[Path]
 ) -> None:
-    """複数 text ファイルを「全部揃って初めて意味を持つ 1 組」として atomic
-    publish する（`recast/backend.py` の `atomic_publish_bytes_bundle` の text
-    版 — `build_recast_plan_artifacts` が `resolve_packages_dir` へ
+    """複数ファイルを「全部揃って初めて意味を持つ 1 組」として atomic publish
+    する（`recast/backend.py` の `atomic_publish_bytes_bundle` と同型 —
+    `build_recast_plan_artifacts` が `resolve_packages_dir` へ
     `performance_package.json` + `compilation_report.json` を公開する際に使う。
     ロールバック契約はそちらの docstring と同一）。
+
+    `contents` は呼び出し側が **1 回だけ** `.encode("utf-8")` した bytes を
+    渡す契約（Codex P2 review round 6, PR3 #208 指摘 12: 従来は `str` を
+    受け取り `Path.write_text(..., encoding="utf-8")` で書いていたため、
+    Windows では既定の text-mode newline 変換で `"\n"` → `"\r\n"` に化ける。
+    `package_sha256`（`arrange/package.py` が `compiled.package_json.encode
+    ("utf-8")` から計算し `compilation_report.json` へ埋め込む pin）は変換
+    前の bytes から計算済みのため、実際にディスクへ書かれた bytes と乖離し
+    `verify_package` の V2 hash 突合が偽の `blocked_verification` を報告し
+    得た。`write_bytes` は newline 変換を一切行わないため、呼び出し側が
+    encode した bytes がそのままディスク上の bytes になる — pr2 abc2350 の
+    `_write_recast_plan_atomically`/`_write_recast_state_atomically` bytes
+    経路化と同じ原則をここにも適用する）。
 
     Codex P2 review, PR3 #208 指摘 8: 従来は 2 ファイルをそれぞれ独立
     `_atomic_write_text` で公開していたため、package.json の公開が成功した
@@ -267,7 +280,7 @@ def _atomic_publish_text_bundle(
     with tempfile.TemporaryDirectory(dir=output_dir) as staging:
         staging_dir = Path(staging)
         for filename, content in contents.items():
-            (staging_dir / filename).write_text(content, encoding="utf-8")
+            (staging_dir / filename).write_bytes(content)
 
         snapshots: Dict[str, Path] = {}
         published: List[str] = []
@@ -1110,12 +1123,16 @@ def build_recast_plan_artifacts(
     # `packages/<variant>@<backend>/` 配下と衝突する project 構成では入力を
     # 無警告で上書き破壊し得た）。
     protected_inputs = collect_protected_input_paths(loaded, variant, backend)
+    # encode は 1 回だけ行い、書き込みも（`arrange/package.py` が既に計算
+    # 済みの）`package_sha256` の hash 計算元もこの同一 bytes に揃える
+    # （Codex P2 review round 6, PR3 #208 指摘 12 — `_atomic_publish_text_bundle`
+    # 側の docstring参照）。
     try:
         _atomic_publish_text_bundle(
             package_dir,
             {
-                PERFORMANCE_PACKAGE_FILENAME: compiled.package_json,
-                COMPILATION_REPORT_FILENAME: compiled.report_json,
+                PERFORMANCE_PACKAGE_FILENAME: compiled.package_json.encode("utf-8"),
+                COMPILATION_REPORT_FILENAME: compiled.report_json.encode("utf-8"),
             },
             protected_inputs=protected_inputs,
         )
