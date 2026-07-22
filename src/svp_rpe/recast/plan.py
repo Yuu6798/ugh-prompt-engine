@@ -208,8 +208,15 @@ def _parse_yaml_mapping(raw_bytes: bytes, label: str, path_str: str) -> Dict[str
 # 診断文字列に残る絶対パスの残骸を検出する（`(?<![\w./-])` は "0/4" や
 # "cover/prompt_only" のような path でない "/" 区切りを誤検出しないための
 # 否定先読み — 直前が英数字/ドット/スラッシュ/ハイフンなら「/」始まりの
-# トークンとして扱わない）。
-_ABSOLUTE_PATH_TOKEN_RE = re.compile(r"(?<![\w./-])/[^\s'\"]*")
+# トークンとして扱わない）。POSIX 絶対パスに加え、Windows ドライブレター
+# 形式（`C:\...` / `C:/...`）と UNC パス（`\\server\share\...`）も対象に
+# する（Codex P2 thirteenth round #207: 旧実装は POSIX の `/...` トークンしか
+# 認識せず、Windows 実行時の絶対パスがマスクされずそのまま漏れていた）。
+_ABSOLUTE_PATH_TOKEN_RE = re.compile(
+    r"(?<![\w./-])/[^\s'\"]*"
+    r"|(?<![\w:\\])[A-Za-z]:[\\/][^\s'\"]*"
+    r"|(?<!\\)\\\\[^\s'\"]*"
+)
 
 
 def _normalize_diagnostic(text: str, project_dir: Path) -> str:
@@ -232,14 +239,35 @@ def _normalize_diagnostic(text: str, project_dir: Path) -> str:
     `demo_project_evil` のような**文字列 prefix が同じだけの兄弟ディレクトリ**
     まで剥がしてしまい、`._evil/...` のような機械依存の断片が残る。
     `project_dir` 配下として認識できない絶対パスは兄弟ディレクトリごと
-    `<external-path>` へ完全にマスクされる（`_ABSOLUTE_PATH_TOKEN_RE` 側）。"""
+    `<external-path>` へ完全にマスクされる（`_ABSOLUTE_PATH_TOKEN_RE` 側）。
+
+    Windows パス対応（Codex P2 thirteenth round #207）: Windows 実行時は
+    `project_dir` 自身がバックスラッシュ区切りの文字列になる（`str(Path)` は
+    OS ネイティブの区切り文字を使う）。project_dir 配下の絶対パスを検出する
+    区切り文字は `/` と `\\` の両方を受理し、relativize した結果の相対
+    locator は常に POSIX 区切り（`/`）へ正規化する（`recast_plan.json` の
+    「同一 checkout なら常に同じ bytes」契約は OS を跨いでも成立させたい
+    ため、区切り文字の違いを出力から消す）。"""
     project_dir_pattern = re.escape(str(project_dir))
-    # 1) "project_dir/xxx" 形（配下の絶対パス）を相対 locator へ。
-    normalized = re.sub(project_dir_pattern + r"/", "", text)
+
+    def _relativize(match: "re.Match[str]") -> str:
+        # マッチした相対 locator 部分（project_dir + 区切り文字の直後から
+        # 次の空白/引用符まで）だけを POSIX 区切りへ変換する — 診断文字列の
+        # 他の部分（無関係なバックスラッシュを含みうる自由文）には触れない。
+        return match.group(1).replace("\\", "/")
+
+    # 1) "project_dir/xxx" または "project_dir\xxx" 形（配下の絶対パス）を
+    #    相対 locator へ。
+    normalized = re.sub(
+        project_dir_pattern + r"[\\/]([^\s'\"]*)",
+        _relativize,
+        text,
+    )
     # 2) project_dir 自身への完全一致（直後が path 継続文字でない場合のみ）を
-    #    "." へ。既に 1) で "project_dir/" 形は除去済みのため、ここに残る
-    #    一致は「project_dir で終わる」か「project_dir の直後が "/" 以外の
-    #    非継続文字（空白・引用符・行末等）」のいずれかに限られる。
+    #    "." へ。既に 1) で "project_dir/" / "project_dir\" 形は除去済みのため、
+    #    ここに残る一致は「project_dir で終わる」か「project_dir の直後が
+    #    区切り文字以外の非継続文字（空白・引用符・行末等）」のいずれかに
+    #    限られる。
     normalized = re.sub(project_dir_pattern + r"(?![\w.-])", ".", normalized)
     return _ABSOLUTE_PATH_TOKEN_RE.sub("<external-path>", normalized)
 
@@ -794,8 +822,19 @@ def build_recast_plan(
             except (ValueError, ValidationError, yaml.YAMLError) as exc:
                 device_profile_error = exc
     else:
+        # resolution が None になる原因は score_parse_error / spec_read_error /
+        # resolve_error の 3 通りあり、優先順位は該当する step チェックの評価順
+        # （score → spec 読み取り → spec parse・resolve_arrangement）と一致させる
+        # （Codex P2 thirteenth round #207: 従来は常に resolve_error だけを参照
+        # しており、score 破損時は resolve_error が未設定 (None) のまま
+        # "NoneType: None" という無意味な固定文字列を digest へ焼き込んでいた。
+        # `recast status` が使う独立の `_device_profile_digest_component` は
+        # 同じ入力を再パースして実際の例外を捕捉するため型/メッセージが
+        # 一致し、plan 発行直後の同一入力に対して digest が食い違い、
+        # blocked_authoring な run を偽 stale と誤判定させていた）。
+        resolution_error: Optional[Exception] = score_parse_error or spec_read_error or resolve_error
         digest_components["device_profile_resolution_error"] = (
-            f"{type(resolve_error).__name__}: {resolve_error}"
+            f"{type(resolution_error).__name__}: {resolution_error}"
         )
 
     inputs_digest = compute_content_digest(digest_components)
@@ -973,29 +1012,21 @@ def build_recast_plan(
     contract_sha256 = compute_preservation_contract_sha256(contract)
     derived_score_sha256 = compute_derived_score_sha256(resolution.derived_score)
 
-    # 検証ステージングは project の builds_root 配下に確保する（Codex P2
-    # twelfth round #207: 既定の system temp (`tempfile.TemporaryDirectory()`
-    # の dir 省略時) は project files と別ドライブに配置されうる — Windows で
-    # システムドライブと project ドライブが異なる場合、直後の
-    # `os.path.relpath(manifest_path, package_dir)` が同一ドライブ前提のため
-    # ValueError を送出し、本来 valid な plan を偽の blocked_capability に
-    # してしまう。`loaded.builds_root` は loader が project_dir 配下に
-    # confine 済み（`_resolve_builds_root`）で、project files と常に同一
-    # ドライブにある。builds_root 自体は project_dir のサブパスのため、
-    # ステージング先の絶対パスが診断文字列へ漏れても `_finalize` の
-    # `_normalize_diagnostic`（project_dir 全体を対象に正規化）が既に
-    # マスクする — 追加の特別扱いは不要。`TemporaryDirectory` は
-    # with ブロックを抜ける際（成功・例外いずれでも）必ず cleanup するため、
-    # builds_root 配下にステージング残骸は残らない。
-    try:
-        loaded.builds_root.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        return _finalize(
-            state_reached="blocked_capability",
-            blocked=BlockedInfo(state="blocked_capability", reasons=[str(exc)]),
-        )
-
-    with tempfile.TemporaryDirectory(dir=loaded.builds_root) as tmp_dir_str:
+    # 検証ステージングは project_dir 配下に確保する（Codex P2 twelfth round
+    # #207 で builds_root 配下へ変更したが、builds_root は project.yaml で
+    # 未実在パスを宣言できる（loader は実在を要求しない — `_resolve_builds_root`）
+    # ため、そのままだと `TemporaryDirectory(dir=...)` の前に mkdir が必要になり
+    # `build_recast_plan`（ディスクへ副作用を持たない純粋関数、という関数
+    # docstring の契約）を破ってしまっていた（Codex P2 thirteenth round #207,
+    # 指摘21）。`project_dir` は `loaded.project.path` が読めた時点で実在が
+    # 保証済み（loader が project.yaml を読むために既に存在確認済み）なので
+    # mkdir 不要かつ project files と常に同一ドライブ（twelfth round #207,
+    # 指摘19 の同ドライブ要件はそのまま維持）。project_dir 配下の絶対パスが
+    # 診断文字列へ漏れても `_finalize` の `_normalize_diagnostic`（project_dir
+    # 全体を対象に正規化）がマスクする。`TemporaryDirectory` は with ブロックを
+    # 抜ける際（成功・例外いずれでも）必ず cleanup するため、project_dir 配下に
+    # ステージング残骸は残らない。
+    with tempfile.TemporaryDirectory(dir=loaded.project_dir) as tmp_dir_str:
         package_dir = Path(tmp_dir_str)
         try:
             artifact_base_locator = Path(

@@ -230,6 +230,47 @@ def test_normalize_diagnostic_leaves_bare_project_dir_relative() -> None:
     assert normalized.endswith(".")
 
 
+def test_normalize_diagnostic_relativizes_windows_drive_letter_paths() -> None:
+    """Windows 実行時は `project_dir` 自身がバックスラッシュ区切りの文字列
+    になる（`str(Path)` は OS ネイティブの区切り文字を使う）。`Path` は
+    POSIX ランナー上でもバックスラッシュを含む文字列をそのまま保持する
+    （PosixPath はバックスラッシュを区切り文字として解釈しない）ため、実際の
+    OS に依存しない純文字列テストとして Windows 風パスを検証できる
+    （Codex P2 thirteenth round #207, 指摘20: 旧実装は POSIX の `/...`
+    トークンしか認識せず、ドライブレター形式の絶対パスがマスク・相対化
+    されずそのまま漏れていた）。project 配下相対化の出力は常に POSIX 区切り
+    （`/`）へ正規化される。"""
+    project_dir = Path("C:\\tmp\\demo_project")
+    text = (
+        "identity manifest 'w': anchor 'lyrics' sha256 mismatch at "
+        "C:\\tmp\\demo_project\\identity\\lyrics.txt: expected a, got b"
+    )
+    normalized = _normalize_diagnostic(text, project_dir)
+    assert "identity/lyrics.txt" in normalized
+    assert "C:\\tmp\\demo_project" not in normalized
+    assert "\\" not in normalized  # 相対化された locator は POSIX 区切りのみ
+
+
+def test_normalize_diagnostic_masks_external_windows_drive_letter_path() -> None:
+    """project_dir 外を指す Windows ドライブレター絶対パスは `<external-path>`
+    へマスクされる（Codex P2 thirteenth round #207, 指摘20）。"""
+    project_dir = Path("C:\\tmp\\demo_project")
+    text = "escaped containment to D:\\other\\place\\evil.yaml during resolve"
+    normalized = _normalize_diagnostic(text, project_dir)
+    assert "D:\\other" not in normalized
+    assert "<external-path>" in normalized
+
+
+def test_normalize_diagnostic_masks_external_unc_path() -> None:
+    """project_dir 外を指す UNC パス（`\\\\server\\share\\...`）も
+    `<external-path>` へマスクされる（Codex P2 thirteenth round #207, 指摘20）。"""
+    project_dir = Path("C:\\tmp\\demo_project")
+    text = "escaped containment to \\\\server\\share\\evil.yaml during resolve"
+    normalized = _normalize_diagnostic(text, project_dir)
+    assert "\\\\server" not in normalized
+    assert "<external-path>" in normalized
+
+
 # --- scenario (a): blocked_authoring via unresolved TODO sentinel --------------
 
 

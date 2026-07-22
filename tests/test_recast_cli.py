@@ -121,31 +121,30 @@ def test_recast_verification_staging_bytes_match_report_package_sha256(
     assert hashlib.sha256(package_bytes).hexdigest() == report_data["package_sha256"]
 
 
-def test_recast_plan_verification_staging_uses_builds_root(
+def test_recast_plan_verification_staging_uses_project_dir(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """検証ステージング（`tempfile.TemporaryDirectory`）は project の builds_root
-    配下に確保されることを検証する（Codex P2 twelfth round #207: 既定の system
-    temp（`dir` 省略時）は project files と別ドライブに配置されうる — Windows で
-    システムドライブと project ドライブが異なる場合、直後の `os.path.relpath`
-    （project files ↔ staging dir）が同一ドライブ前提のため ValueError を送出し、
-    本来 valid な plan を偽の `blocked_capability` にしてしまう。`builds_root` は
-    loader が project_dir 配下に confine 済みで project files と常に同一
-    ドライブにある）。
+    """検証ステージング（`tempfile.TemporaryDirectory`）は project_dir 配下に
+    確保されることを検証する（Codex P2 thirteenth round #207, 指摘21:
+    twelfth round #207 で builds_root 配下へ変更したが、builds_root は
+    project.yaml で未実在パスを宣言できるため mkdir が必要になり、
+    `build_recast_plan` の「ディスクへ副作用を持たない純粋関数」契約を破って
+    いた。project_dir は loader が project.yaml を読めた時点で実在保証済み
+    ── mkdir 不要かつ project files と常に同一ドライブ（twelfth round #207,
+    指摘19 の同ドライブ要件は維持）。
 
     `tempfile.TemporaryDirectory` を実クラスを継承したスタブに monkeypatch し、
     実際に渡された `dir` kwarg を捕捉しつつ本物の挙動へ委譲する（実際の
-    cleanup 動作は変えない）。CLI 呼び出し完了後、builds_root ディレクトリ
-    自体は（`mkdir(parents=True, exist_ok=True)` により）作られているが、
-    ステージング先は `TemporaryDirectory` の cleanup で削除済みのため中身は
-    空であることも確認する（成功パスでも staging 残骸が残らない）。"""
+    cleanup 動作は変えない）。CLI 呼び出し完了後、ステージング先は
+    `TemporaryDirectory` の cleanup で削除済みのため project_dir 直下に
+    staging 残骸が残らないことも確認する。"""
     import tempfile as tempfile_module
 
     import svp_rpe.recast.plan as recast_plan_module
 
     project_path = _copy_demo_project(tmp_path)
-    builds_root = project_path.parent / "builds"
-    assert not builds_root.exists()  # デモ fixture は builds/ を同梱しない
+    project_dir = project_path.parent
+    before_entries = {entry.name for entry in project_dir.iterdir()}
 
     real_temporary_directory = tempfile_module.TemporaryDirectory
     captured_dir_args: list[object] = []
@@ -165,14 +164,36 @@ def test_recast_plan_verification_staging_uses_builds_root(
     assert result.exit_code == 0, result.output
 
     assert len(captured_dir_args) == 1
-    assert Path(str(captured_dir_args[0])).resolve() == builds_root.resolve()
+    assert Path(str(captured_dir_args[0])).resolve() == project_dir.resolve()
 
-    assert builds_root.is_dir()
-    assert list(builds_root.iterdir()) == []  # cleanup 後は staging 残骸なし
+    # cleanup 後は project_dir 直下に staging 残骸が残らない（CLI が publish
+    # する recast_plan.json / recast_state.json だけが新規に増えている）。
+    after_entries = {entry.name for entry in project_dir.iterdir()}
+    assert after_entries - before_entries == {"recast_plan.json", "recast_state.json"}
+    assert not (project_dir / "builds").exists()  # builds_root は mkdir されない
 
-    plan_path = project_path.parent / "recast_plan.json"
+    plan_path = project_dir / "recast_plan.json"
     plan_text = plan_path.read_text(encoding="utf-8")
-    assert str(builds_root) not in plan_text  # staging パスが永続出力に混入しない
+    assert str(project_dir) not in plan_text  # staging パスが永続出力に混入しない
+
+
+def test_build_recast_plan_does_not_create_builds_root(tmp_path: Path) -> None:
+    """`build_recast_plan`（純粋関数、ディスクへの副作用なし契約）を API 直呼びし、
+    呼び出し前に存在しなかった builds_root がディレクトリとして作られないことを
+    検証する（Codex P2 thirteenth round #207, 指摘21: 検証 staging のために
+    builds_root を mkdir していたのは純粋関数契約への違反だった）。"""
+    from svp_rpe.recast import load_recast_project
+    from svp_rpe.recast.plan import build_recast_plan
+
+    project_path = _copy_demo_project(tmp_path)
+    loaded = load_recast_project(project_path)
+    builds_root = loaded.builds_root
+    assert not builds_root.exists()  # デモ fixture は builds/ を同梱しない
+
+    result = build_recast_plan(loaded, variant="edm", backend="suno")
+
+    assert result.plan.state_reached == "verified"
+    assert not builds_root.exists()  # build_recast_plan はディスクへ書き込まない
 
 
 def test_recast_plan_matches_committed_snapshot_via_cli(tmp_path: Path) -> None:
@@ -234,6 +255,40 @@ def test_recast_plan_blocks_authoring_on_corrupted_score(tmp_path: Path) -> None
     status_result = runner.invoke(app, ["recast", "status", str(project_path)])
     assert status_result.exit_code == 0, status_result.output
     assert "blocked_authoring" in status_result.output
+
+
+def test_recast_status_after_corrupted_score_plan_is_not_stale(tmp_path: Path) -> None:
+    """破損 score で `recast plan` が blocked_authoring を publish した直後、
+    同一入力に対する `recast status` が stale と誤判定しないことを検証する
+    （Codex P2 thirteenth round #207, 指摘22: device profile digest
+    component の失敗表現が、resolution が None になった実際の原因
+    （score_parse_error / spec_read_error）ではなく常に `resolve_error`
+    （score 破損時は未設定=None のまま）を参照していたため、
+    `"NoneType: None"` という無意味な固定文字列を digest へ焼き込んでいた。
+    `recast status` が使う独立の `compute_recast_inputs_digest` は実際の
+    例外を捕捉するため digest が食い違い、plan/state 発行直後の同一入力
+    ですら stale と誤判定していた）。
+
+    `test_recast_plan_blocks_authoring_on_corrupted_score` は state 列に
+    常に表示される `state_reached`（blocked_authoring）の存在だけを見ており
+    stale ノートの有無を区別しないため、この回帰を検出できなかった —
+    ここでは note に `"stale"` が **含まれない** ことを明示的に検証する。"""
+    project_path = _copy_demo_project(tmp_path)
+    score_path = project_path.parent / "composition_score.yaml"
+    score_path.write_text("not-a-mapping\n", encoding="utf-8")
+
+    plan_result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert plan_result.exit_code == 1
+    plan_path = project_path.parent / "recast_plan.json"
+    data = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert data["state_reached"] == "blocked_authoring"
+
+    status_result = runner.invoke(app, ["recast", "status", str(project_path)])
+    assert status_result.exit_code == 0, status_result.output
+    assert "blocked_authoring" in status_result.output
+    assert "stale" not in status_result.output
 
 
 def test_recast_plan_blocks_capability_on_corrupted_capability_profile(tmp_path: Path) -> None:
