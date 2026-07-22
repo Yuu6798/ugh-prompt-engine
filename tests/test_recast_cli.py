@@ -70,6 +70,44 @@ def test_recast_plan_records_sha256_matching_actual_written_bytes(tmp_path: Path
     assert recorded_plan_sha256 == actual_sha256
 
 
+def test_recast_verification_staging_bytes_match_report_package_sha256(
+    tmp_path: Path,
+) -> None:
+    """`performance_package.json` の公開 bytes が `compiled.report` の
+    `package_sha256`（hash 計算元と同一の UTF-8 bytes）と一致することを CLI
+    E2E で検証する（Codex P2 eleventh round #207: 旧実装は `write_text()` を
+    使っており、Windows では改行変換 `"\n"` -> `"\r\n"` によりステージング先の
+    実 bytes と `package_sha256` が乖離しうる — `verify_package` はステージング
+    先の実 bytes から package_sha256 を再計算して突合するため、乖離があれば
+    偽の `blocked_verification` を招く。PR3 の `_atomic_publish_text_bundle`
+    は `write_bytes()` に統一済み — `tests/test_recast_backend.py::
+    test_published_package_json_bytes_sha256_matches_recorded_package_sha256`
+    がライブラリ API 直呼びで同じ性質を検証する一方、本テストは `recast plan`
+    CLI 経由の E2E 変種として残す）。
+
+    PR3 では package/report は `<builds_root>/packages/<variant>@<backend>/`
+    という永続ディレクトリへ公開される（pr2 の一時 `tempfile.
+    TemporaryDirectory` ベースの検証ステージングとは異なる — #208 指摘 3）
+    ため、monkeypatch 不要で CLI 呼び出し後にそのまま実ファイルを検査できる。"""
+    from svp_rpe.arrange.package import COMPILATION_REPORT_FILENAME, PERFORMANCE_PACKAGE_FILENAME
+
+    project_path = _copy_demo_project(tmp_path)
+    result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert result.exit_code == 0, result.output
+
+    plan_path = project_path.parent / "recast_plan.json"
+    plan_data = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert plan_data["state_reached"] == "verified"  # require_verified_package 経路を通った
+
+    package_dir = project_path.parent / "builds" / "packages" / "edm@suno"
+    package_bytes = (package_dir / PERFORMANCE_PACKAGE_FILENAME).read_bytes()
+    report_data = json.loads((package_dir / COMPILATION_REPORT_FILENAME).read_bytes())
+
+    assert hashlib.sha256(package_bytes).hexdigest() == report_data["package_sha256"]
+
+
 def test_recast_plan_matches_committed_snapshot_via_cli(tmp_path: Path) -> None:
     project_path = _copy_demo_project(tmp_path)
 
@@ -102,6 +140,33 @@ def test_recast_plan_exits_nonzero_when_blocked(tmp_path: Path) -> None:
     assert plan_path.is_file()  # blocked plans are still published
     data = json.loads(plan_path.read_text(encoding="utf-8"))
     assert data["state_reached"] == "blocked_authoring"
+
+
+def test_recast_plan_blocks_authoring_on_corrupted_score(tmp_path: Path) -> None:
+    """composition_score.yaml の YAML 破損・schema 不正は blocked_authoring として
+    recast_plan.json に publish + state 記録されることを検証する（Codex P2
+    eleventh round #207: 以前は score の parse/validate を bundle 先頭で無条件に
+    呼んでおり、失敗時は捕捉されない例外として関数外へ伝播し CLI が top-level
+    Error で落ちて plan/state が一切書かれなかった。score は著者成果物なので
+    identity manifest/capability profile とは異なり blocked_authoring に分類する
+    — 既存の TODO sentinel 未解決チェックと同じ state_reached）。"""
+    project_path = _copy_demo_project(tmp_path)
+    score_path = project_path.parent / "composition_score.yaml"
+    score_path.write_text("not-a-mapping\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+
+    assert result.exit_code == 1
+    plan_path = project_path.parent / "recast_plan.json"
+    assert plan_path.is_file()
+    data = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert data["state_reached"] == "blocked_authoring"
+
+    status_result = runner.invoke(app, ["recast", "status", str(project_path)])
+    assert status_result.exit_code == 0, status_result.output
+    assert "blocked_authoring" in status_result.output
 
 
 def test_recast_plan_blocks_capability_on_corrupted_capability_profile(tmp_path: Path) -> None:
