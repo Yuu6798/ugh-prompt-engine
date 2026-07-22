@@ -366,6 +366,89 @@ def test_recast_ingest_rejects_when_pin_is_missing(tmp_path: Path) -> None:
     assert "pin" in status_result.output
 
 
+def test_recast_ingest_rejects_when_inputs_swapped_during_rebuild(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 eighth round #207 指摘16（recast_cmd.py:555）: `recast ingest`
+    の precheck（`compute_recast_inputs_digest` vs 記録済み pin）と、その直後の
+    plan rebuild（`build_recast_plan_artifacts`）は別々の入力読み取りであり
+    atomic ではない。precheck を通過させた**後**・rebuild が実際に入力を読む
+    **直前**に composition_score.yaml を差し替えることで、この窓を再現する
+    — rebuild は新しい（差し替え後の）入力から新しい plan/inputs_digest を
+    構築してしまうが、その新 digest は記録済み pin（旧入力に対する digest）
+    とは一致しないはずで、publish/collect の前に検出・拒否されるべきである。
+    `svp_rpe.recast.plan.build_recast_plan_artifacts` をラップして「呼び出し
+    直前に score を書き換えてから本物を呼ぶ」スタブに monkeypatch する —
+    `recast_ingest_cmd` はこれをローカル `from ... import` で毎回名前解決する
+    ため、定義元モジュールの属性を差し替えれば意図した箇所を確実に横取り
+    できる。"""
+    import svp_rpe.recast.plan as recast_plan_module
+
+    project_path = _copy_demo_project(tmp_path)
+    run_result = runner.invoke(
+        app, ["recast", "run", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert run_result.exit_code == 0, run_result.output
+
+    project_dir = project_path.parent
+    plan_path = project_dir / "recast_plan.json"
+    plan_bytes_before = plan_path.read_bytes()
+    state_before = load_recast_state(project_dir)
+    assert state_before.runs["edm@suno"].state == "awaiting_generation"
+
+    takes_dir = project_dir / "builds" / "takes" / "edm@suno"
+    takes_dir.mkdir(parents=True, exist_ok=True)
+    audio_path = takes_dir / "take-01.wav"
+    audio_path.write_bytes(b"RIFF....WAVEfake-audio-bytes")
+
+    score_path = project_dir / "composition_score.yaml"
+    original_score_text = score_path.read_text(encoding="utf-8")
+    swapped_score_text = original_score_text.replace(
+        'core: "introspective night drive"', 'core: "swapped during rebuild window"'
+    )
+    assert swapped_score_text != original_score_text  # sanity
+
+    real_build_recast_plan_artifacts = recast_plan_module.build_recast_plan_artifacts
+
+    def _swap_inputs_then_build(*args: object, **kwargs: object):
+        # precheck は既に通過済み（この関数に到達した時点）— rebuild が実際に
+        # composition_score.yaml を読む直前に差し替える。
+        score_path.write_text(swapped_score_text, encoding="utf-8")
+        return real_build_recast_plan_artifacts(*args, **kwargs)
+
+    monkeypatch.setattr(
+        recast_plan_module, "build_recast_plan_artifacts", _swap_inputs_then_build
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "recast",
+            "ingest",
+            str(project_path),
+            "--variant",
+            "edm",
+            "--backend",
+            "suno",
+            "--audio",
+            str(audio_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "stale" in result.output.lower()
+
+    # 旧 plan は非破壊（rebuild 済みの新入力向け plan で上書き publish されない）。
+    assert plan_path.read_bytes() == plan_bytes_before
+
+    # take は収蔵されない（旧注文向け音声が新 plan の generated として記録されない）。
+    assert not (takes_dir / "take.json").exists()
+
+    # state も awaiting_generation のまま（generated へ誤って遷移しない）。
+    state_after = load_recast_state(project_dir)
+    assert state_after.runs["edm@suno"].state == "awaiting_generation"
+
+
 def test_recast_help_lists_ingest() -> None:
     result = runner.invoke(app, ["recast", "--help"])
 
@@ -411,7 +494,7 @@ def test_e2e_manual_awaiting_generation_then_ingest_cli_reaches_generated(
     # (Suno UI, not this repo's own CLI) must not do.
     loaded = load_recast_project(project_path)
     det_artifacts = build_recast_plan_artifacts(
-        loaded, variant="edm_deterministic", backend="deterministic"
+        loaded, variant="edm_deterministic", backend="deterministic", publish=True
     )
     assert det_artifacts.result.plan.state_reached in ("compiled", "verified")
     det_profile = load_backend_capability_profile(loaded, "deterministic")

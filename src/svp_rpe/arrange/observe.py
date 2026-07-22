@@ -1774,6 +1774,7 @@ def observe_generated_artifact(
     manifest_path: Path,
     audio_path: Path,
     generated_artifact_path: Optional[str] = None,
+    expected_audio_sha256: Optional[str] = None,
 ) -> GeneratedArtifactObservation:
     """`package_path`/`manifest_path`/`audio_path` から provenance chain を検証し、
     `build_observation_report` を呼ぶ非-CLI 経路（PR5: `recast ingest` の
@@ -1790,6 +1791,18 @@ def observe_generated_artifact(
     は report の `generated_artifact.path` に記録する文字列（省略時は
     `str(audio_path)` — CLI 実行時の絶対パスが漏れないよう、呼び出し側は
     project 相対パスを渡すこと）。
+
+    `expected_audio_sha256`（Codex P2, #210 round 2 指摘2）: 呼び出し側が
+    別時点で既に確定させた `audio_path` の sha256（`recast ingest` では
+    `collect()`/`invoke()` が返す `GeneratedTake.sha256`）。渡された場合、
+    この関数が `audio_path` を読んだ直後（抽出より前）に、そこで実際に
+    読んだ bytes の sha256 と突き合わせる — collect 完了から本関数の読み
+    出しまでの間に `audio_path` が別 bytes へ差し替わっていた場合、
+    「観測していない take を collect 時 hash で証明する」report が組み
+    立てられる前に `ValueError` で fail-closed する（report は一切構築
+    されない — 無駄な抽出も走らせない、最短経路での検出）。省略時
+    （`None`）はこの突合を行わない（`svprpe observe` 単体実行など、
+    collect 時点の pin を持たない呼び出し元向け）。
 
     `audio_path` の TOCTOU 対策として、`is_*_sensor_anchor` のいずれかが
     manifest 中に存在する場合のみ一時スナップショットへコピーしてから
@@ -1846,6 +1859,11 @@ def observe_generated_artifact(
 
     audio_bytes = audio_path.read_bytes()
     audio_sha256 = hashlib.sha256(audio_bytes).hexdigest()
+    if expected_audio_sha256 is not None and audio_sha256 != expected_audio_sha256:
+        raise ValueError(
+            f"audio at {audio_path} changed since collection (TOCTOU): expected sha256 "
+            f"{expected_audio_sha256}, got {audio_sha256}"
+        )
     package_sha256 = hashlib.sha256(package_bytes).hexdigest()
 
     needs_extraction = any(
