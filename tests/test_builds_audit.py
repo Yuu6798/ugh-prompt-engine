@@ -211,6 +211,24 @@ def test_reports_duplicated_descriptive_file(tmp_path: Path) -> None:
     assert "exactly one descriptive file present" in flat
 
 
+def test_reports_non_utf8_descriptive_file(tmp_path: Path) -> None:
+    """A descriptive file with non-UTF-8 bytes is a FAIL check, not a crash
+
+    (Codex P2, PR #204): `json.loads(bytes)` raises `UnicodeDecodeError` before
+    it ever gets a chance at `json.JSONDecodeError`, so the except clause must
+    catch both.
+    """
+    root = _build_arrange_tree(tmp_path)
+    digest_dir = next((root / "builds").iterdir())
+    (digest_dir / "arrangement_bundle.json").write_bytes(b"\xff\xfe{\"broken")
+
+    result = CliRunner().invoke(app, _verify_builds_root_args(root))
+
+    assert result.exit_code == 1
+    flat = _flat(result.output)
+    assert "arrangement_bundle.json parses as JSON" in flat
+
+
 # --- tamper: content_digest vs. digest directory name mismatch ------------------
 
 
@@ -237,6 +255,23 @@ def test_reports_content_digest_mismatch_when_digest_directory_renamed(tmp_path:
 def test_reports_unparsable_latest_json(tmp_path: Path) -> None:
     root = _build_arrange_tree(tmp_path)
     (root / "latest.json").write_text("not valid json {{{", encoding="utf-8")
+
+    result = CliRunner().invoke(app, _verify_builds_root_args(root))
+
+    assert result.exit_code == 1
+    flat = _flat(result.output)
+    assert "latest.json parses as JSON" in flat
+
+
+def test_reports_non_utf8_latest_json(tmp_path: Path) -> None:
+    """A `latest.json` with non-UTF-8 bytes is a FAIL check, not a crash
+
+    (Codex P2, PR #204): `json.loads(bytes)` raises `UnicodeDecodeError` before
+    it ever gets a chance at `json.JSONDecodeError`, so the except clause must
+    catch both.
+    """
+    root = _build_arrange_tree(tmp_path)
+    (root / "latest.json").write_bytes(b"\xff\xfe{\"broken")
 
     result = CliRunner().invoke(app, _verify_builds_root_args(root))
 

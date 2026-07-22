@@ -205,7 +205,7 @@ def _audit_root(builds_root: Path) -> tuple[list[AuditCheck], bool, list[str]]:
         )
         try:
             latest_data = json.loads(latest_path.read_bytes())
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
             checks.append(AuditCheck("latest", "latest.json parses as JSON", False, str(exc)))
         else:
             if not isinstance(latest_data, dict):
@@ -491,7 +491,7 @@ def _audit_digest_dir(digest_dir: Path) -> BuildAuditResult:
 
     try:
         parsed = json.loads(raw_bytes)
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         checks.append(
             AuditCheck(
                 "descriptor", f"{descriptive_filename} parses as JSON", False, str(exc)
