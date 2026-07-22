@@ -129,40 +129,70 @@ _DESCRIPTOR_KINDS: dict[str, _DescriptorKind] = {
 }
 
 
-def _audit_root(builds_root: Path) -> tuple[list[AuditCheck], bool, list[str]]:
-    """ルート構造を監査する。戻り値は `(checks, aborted, valid_digest_dir_names)`。
+def _audit_root(builds_root: Path) -> tuple[list[AuditCheck], bool, list[str], Path]:
+    """ルート構造を監査する。戻り値は
+    `(checks, aborted, valid_digest_dir_names, resolved_root)`。
 
-    `aborted=True` になるのは `builds_root` 自身が実在ディレクトリでない場合のみ
-    （structural gate）。それ以外のルート不整合（`latest.json` の欠落・`builds/`
-    の欠落等）は通常の FAIL として収集し、後続の per-build 監査を続行する（この
-    場合 `valid_digest_dir_names` は自然と空になる）。
+    `aborted=True` になるのは `builds_root`（symlink なら resolve 先）が実在
+    ディレクトリでない場合のみ（structural gate）。それ以外のルート不整合
+    （`latest.json` の欠落・`builds/` の欠落等）は通常の FAIL として収集し、
+    後続の per-build 監査を続行する（この場合 `valid_digest_dir_names` は
+    自然と空になる）。
+
+    `builds_root` 自身が symlink であることは拒否しない。`cli/builds_root.py`
+    の `_publish_artifacts_to_builds_root` docstring が明文化する publish 側の
+    契約どおり、`builds_root` はユーザー指定パスであり `--output-dir` 同様
+    symlink を受け入れる（symlink 拒否は `builds/`・`latest.json`・digest
+    ディレクトリ・artifact 等、スキーム自身が管理する予約された子要素のみ）。
+    symlink な `builds_root` はここで一度だけ `resolve()` し、以降の監査
+    （`latest.json` / `builds/` / 各 digest ディレクトリの探索）は常にこの
+    `resolved_root` に対して行う — publish 経由で作られた正当な tree が同じ
+    entrypoint 経由で監査不能になることを避けるため（Codex P2 review）。
+    resolve 先が実在ディレクトリでない（dangling symlink・ファイル等）場合は
+    引き続き FAIL で打ち切る。
     """
     checks: list[AuditCheck] = []
 
+    resolved_root = builds_root
     if builds_root.is_symlink():
+        resolved_root = builds_root.resolve()
+        if not resolved_root.is_dir():
+            checks.append(
+                AuditCheck(
+                    "root",
+                    "builds_root is a real directory, or a symlink resolving to one",
+                    False,
+                    f"{builds_root} is a symlink resolving to {resolved_root}, "
+                    "which does not exist or is not a directory",
+                )
+            )
+            return checks, True, [], resolved_root
         checks.append(
             AuditCheck(
                 "root",
-                "builds_root is a real, non-symlink directory",
-                False,
-                f"{builds_root} is a symlink",
+                "builds_root is a real directory, or a symlink resolving to one",
+                True,
             )
         )
-        return checks, True, []
-    if not builds_root.is_dir():
+    elif not builds_root.is_dir():
         checks.append(
             AuditCheck(
                 "root",
-                "builds_root is a real, non-symlink directory",
+                "builds_root is a real directory, or a symlink resolving to one",
                 False,
                 f"{builds_root} does not exist or is not a directory",
             )
         )
-        return checks, True, []
-    checks.append(AuditCheck("root", "builds_root is a real, non-symlink directory", True))
+        return checks, True, [], resolved_root
+    else:
+        checks.append(
+            AuditCheck(
+                "root", "builds_root is a real directory, or a symlink resolving to one", True
+            )
+        )
 
-    builds_dir = builds_root / "builds"
-    latest_path = builds_root / "latest.json"
+    builds_dir = resolved_root / "builds"
+    latest_path = resolved_root / "latest.json"
 
     # --- latest.json ------------------------------------------------------
     # A successful `arrange`/`package --builds-root` publish always writes
@@ -263,7 +293,7 @@ def _audit_root(builds_root: Path) -> tuple[list[AuditCheck], bool, list[str]]:
 
     # --- unexpected root-level entries -------------------------------------
     try:
-        root_entries = sorted(os.scandir(builds_root), key=lambda entry: entry.name)
+        root_entries = sorted(os.scandir(resolved_root), key=lambda entry: entry.name)
     except OSError as exc:
         checks.append(AuditCheck("root-entries", "builds_root is listable", False, str(exc)))
         root_entries = []
@@ -291,7 +321,7 @@ def _audit_root(builds_root: Path) -> tuple[list[AuditCheck], bool, list[str]]:
                 f"{builds_dir} is a symlink",
             )
         )
-        return checks, False, valid_digest_dir_names
+        return checks, False, valid_digest_dir_names, resolved_root
     if not builds_dir.exists():
         checks.append(
             AuditCheck(
@@ -301,7 +331,7 @@ def _audit_root(builds_root: Path) -> tuple[list[AuditCheck], bool, list[str]]:
                 f"{builds_dir} is missing",
             )
         )
-        return checks, False, valid_digest_dir_names
+        return checks, False, valid_digest_dir_names, resolved_root
     if not builds_dir.is_dir():
         checks.append(
             AuditCheck(
@@ -311,7 +341,7 @@ def _audit_root(builds_root: Path) -> tuple[list[AuditCheck], bool, list[str]]:
                 f"{builds_dir} is not a directory",
             )
         )
-        return checks, False, valid_digest_dir_names
+        return checks, False, valid_digest_dir_names, resolved_root
     checks.append(AuditCheck("builds-dir", "builds/ is a real, non-symlink directory", True))
 
     try:
@@ -365,7 +395,7 @@ def _audit_root(builds_root: Path) -> tuple[list[AuditCheck], bool, list[str]]:
             continue
         valid_digest_dir_names.append(name)
 
-    return checks, False, valid_digest_dir_names
+    return checks, False, valid_digest_dir_names, resolved_root
 
 
 def _undeclared_entry_checks(digest_dir: Path, allowed_names: set[str]) -> list[AuditCheck]:
@@ -628,15 +658,19 @@ def _audit_digest_dir(digest_dir: Path) -> BuildAuditResult:
 def audit_builds_root(builds_root: Path) -> BuildsRootAuditReport:
     """`<builds_root>/` ツリー全体を再帰的に読み取り専用監査する。
 
-    `builds_root` 自身が実在の非 symlink ディレクトリでない場合のみ
+    `builds_root`（symlink なら resolve 先）が実在ディレクトリでない場合のみ
     `aborted=True` で即座に打ち切る（それ以外のルート不整合は通常の FAIL として
     収集し、per-build 監査は有効な digest ディレクトリ集合に対して続行する）。
+    `builds_root` 自身が symlink であることは拒否しない（`_audit_root` 参照 —
+    publish 側 `cli/builds_root.py` の契約と対称。symlink 拒否は `builds/` /
+    `latest.json` / digest ディレクトリ / artifact 等の予約された子要素のみ）。
+    resolve 済みの `resolved_root` に対して以降の監査を行う。
     """
-    root_checks, aborted, valid_digest_dir_names = _audit_root(builds_root)
+    root_checks, aborted, valid_digest_dir_names, resolved_root = _audit_root(builds_root)
     if aborted:
         return BuildsRootAuditReport(root_checks=tuple(root_checks), builds=(), aborted=True)
 
-    builds_dir = builds_root / "builds"
+    builds_dir = resolved_root / "builds"
     build_results = tuple(
         _audit_digest_dir(builds_dir / name) for name in sorted(valid_digest_dir_names)
     )

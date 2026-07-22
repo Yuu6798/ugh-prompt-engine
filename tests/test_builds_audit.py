@@ -351,6 +351,45 @@ def test_reports_unexpected_root_level_entry(tmp_path: Path) -> None:
     assert "stray.txt" in flat
 
 
+# --- symlinked builds_root entrypoint (Codex P2 review, PR #204) -----------------
+#
+# Publish (`arrange`/`package --builds-root`) treats `builds_root` itself as a
+# user-supplied path and accepts a symlink there (only its reserved child
+# elements — `builds/`, `latest.json`, digest dirs, artifacts — reject
+# symlinks; see `cli/builds_root.py`'s `_publish_artifacts_to_builds_root`
+# docstring). `verify --builds-root` must accept the same entrypoint shape,
+# auditing the resolved tree, so a publisher-created tree stays auditable
+# through a symlinked root.
+
+
+def test_verify_builds_root_accepts_symlinked_root_entrypoint(tmp_path: Path) -> None:
+    real_root = _build_arrange_tree(tmp_path, root_dirname="real_root")
+    symlink_root = tmp_path / "symlink_root"
+    symlink_root.symlink_to(real_root)
+
+    result = CliRunner().invoke(app, _verify_builds_root_args(symlink_root))
+
+    assert result.exit_code == 0, result.output
+    assert "FAIL" not in result.output
+    flat = _flat(result.output)
+    assert "builds 1, checked" in flat
+    assert "failed 0" in flat
+
+
+def test_verify_builds_root_rejects_dangling_symlink_root(tmp_path: Path) -> None:
+    missing_target = tmp_path / "does_not_exist"
+    symlink_root = tmp_path / "symlink_root"
+    symlink_root.symlink_to(missing_target)
+
+    result = CliRunner().invoke(app, _verify_builds_root_args(symlink_root))
+
+    assert result.exit_code == 1
+    flat = _flat(result.output)
+    assert "builds_root is a real directory, or a symlink resolving to one" in flat
+    assert str(missing_target) in flat
+    assert "no build directories were audited" in flat
+
+
 # --- mutual exclusion ------------------------------------------------------------
 
 
