@@ -645,11 +645,18 @@ def recast_ingest_cmd(
     take_relative = os.path.relpath(take.audio_path, loaded.project_dir)
 
     try:
+        # `expected_audio_sha256=take.sha256`（Codex P2, #210 round 2 指摘2）:
+        # `collect()`/`invoke()` が確定させた take の sha256 を、
+        # `observe_generated_artifact` 自身が `take.audio_path` を読んだ直後に
+        # 突き合わせる — collect 完了からこの読み出しまでの間に take が
+        # 差し替わっていた場合、「観測していない take を collect 時 hash で
+        # 証明する」report を組み立てる前に fail-closed する。
         observation = observe_generated_artifact(
             package_path=package_path,
             manifest_path=loaded.identity_manifest_path,
             audio_path=take.audio_path,
             generated_artifact_path=take_relative,
+            expected_audio_sha256=take.sha256,
         )
     except (OSError, ValueError, ValidationError, IdentityManifestError) as exc:
         obs_note = _normalize_diagnostic(f"observation failed: {exc}", loaded.project_dir)
@@ -876,7 +883,12 @@ def recast_init_cmd(
     acceptance test for the TODO-preserving path, not a bug.
 
     Fail-closed: refuses to write into a `--project-dir` that already exists
-    and is non-empty (does not overwrite).
+    and is non-empty (does not overwrite). All output is built in a staging
+    directory (sibling of `--project-dir`, same filesystem) and only
+    published via an atomic rename after the whole project validates
+    (`load_recast_project`) — any failure partway through (extraction error,
+    an aborted interactive prompt, a schema error, ...) leaves `--project-dir`
+    untouched, never a half-initialized directory that then blocks a retry.
     """
     import shutil
 
@@ -899,27 +911,29 @@ def recast_init_cmd(
         raise typer.Exit(code=1)
 
     dest_dir = Path(project_dir)
-    if dest_dir.exists():
-        if not dest_dir.is_dir():
-            typer.echo(
-                f"Error: --project-dir exists and is not a directory: {dest_dir}", err=True
-            )
-            raise typer.Exit(code=1)
-        if any(dest_dir.iterdir()):
-            typer.echo(
-                f"Error: --project-dir already has files, refusing to overwrite: {dest_dir}",
-                err=True,
-            )
-            raise typer.Exit(code=1)
-    dest_existed_before = dest_dir.exists()
+
+    def _reject_nonempty_dest() -> None:
+        if dest_dir.exists():
+            if not dest_dir.is_dir():
+                typer.echo(
+                    f"Error: --project-dir exists and is not a directory: {dest_dir}", err=True
+                )
+                raise typer.Exit(code=1)
+            if any(dest_dir.iterdir()):
+                typer.echo(
+                    f"Error: --project-dir already has files, refusing to overwrite: {dest_dir}",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+
+    _reject_nonempty_dest()
 
     # Codex P2 (#210, AGENTS §8-A 項目1): source audio を **1 回だけ**
     # read_bytes する（TOCTOU 排除）。この同一 bytes から (1) sha256（identity
-    # manifest の source pin）を計算し、(2) project-dir 内の `source/` へ
-    # スナップショットとして書き出し、(3) 抽出はそのスナップショットに対して
-    # 実行する — 元の `audio_path` を実行中に差し替えても、抽出結果 /
-    # コピー済み音声 / pin された sha256 が食い違わない（3 者が同一 bytes を
-    # 消費する）。
+    # manifest の source pin）を計算し、(2) staging 内 `source/` へスナップ
+    # ショットとして書き出し、(3) 抽出はそのスナップショットに対して実行する
+    # — 元の `audio_path` を実行中に差し替えても、抽出結果/コピー済み音声/pin
+    # された sha256 が食い違わない（3 者が同一 bytes を消費する）。
     try:
         audio_bytes = audio_path.read_bytes()
     except OSError as exc:
@@ -928,170 +942,219 @@ def recast_init_cmd(
     audio_sha256 = hashlib.sha256(audio_bytes).hexdigest()
     source_filename = audio_path.name
 
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    (dest_dir / "source").mkdir(parents=True, exist_ok=True)
-    snapshot_path = dest_dir / "source" / source_filename
-    snapshot_path.write_bytes(audio_bytes)
-
+    # Codex P2 (#210 round 2 指摘3): 全出力を staging ディレクトリ（`dest_dir`
+    # の親配下 = 同一ファイルシステム、`os.replace` の atomic rename 前提）で
+    # 構築し、`load_recast_project` による最終検証まで成功した後にのみ
+    # `dest_dir` へ atomic 公開する。途中失敗（抽出失敗・対話式入力の中断
+    # (`click.exceptions.Abort`/`EOFError` を含む — Python の `finally` は
+    # 例外の型を問わず必ず実行される)・schema 検証失敗等）は `finally` で
+    # staging を後始末するだけで済み、「非空のため再実行不能な部分初期化」を
+    # `dest_dir` に残さない（旧実装は抽出失敗の後始末のみ個別に持っていた —
+    # 本方式へ統一する）。
     try:
-        bundle = extract_rpe_from_file(str(snapshot_path))
-    except (OSError, ValueError) as exc:
-        typer.echo(f"Error: failed to extract from {audio_path}: {exc}", err=True)
-        if dest_existed_before:
-            shutil.rmtree(dest_dir / "source", ignore_errors=True)
-        else:
-            shutil.rmtree(dest_dir, ignore_errors=True)
+        dest_dir.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        typer.echo(f"Error: failed to create {dest_dir.parent}: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    try:
+        staging_dir = Path(tempfile.mkdtemp(prefix=f".{dest_dir.name}.", dir=dest_dir.parent))
+    except OSError as exc:
+        typer.echo(
+            f"Error: failed to create staging directory under {dest_dir.parent}: {exc}",
+            err=True,
+        )
         raise typer.Exit(code=1) from exc
 
-    score = draft_score(bundle)
+    published = False
+    try:
+        (staging_dir / "source").mkdir(parents=True, exist_ok=True)
+        snapshot_path = staging_dir / "source" / source_filename
+        snapshot_path.write_bytes(audio_bytes)
 
-    if interactive:
-        core_answer = typer.prompt("この曲の核 (semantic.core)", default="", show_default=False)
-        avoid_answer = typer.prompt(
-            "避けたいもの (semantic.avoid, カンマ区切り)", default="", show_default=False
-        )
-        theme_answer = typer.prompt(
-            "主題/題材 (任意。core に併合されます)", default="", show_default=False
-        )
-        core_parts = [part.strip() for part in (core_answer, theme_answer) if part.strip()]
-        avoid_list = [item.strip() for item in avoid_answer.split(",") if item.strip()]
-        semantic_updates: dict[str, Any] = {}
-        if core_parts:
-            semantic_updates["core"] = "; ".join(core_parts)
-        if avoid_list:
-            semantic_updates["avoid"] = avoid_list
-        if semantic_updates:
-            score = score.model_copy(
-                update={"semantic": score.semantic.model_copy(update=semantic_updates)}
+        try:
+            bundle = extract_rpe_from_file(str(snapshot_path))
+        except (OSError, ValueError) as exc:
+            typer.echo(f"Error: failed to extract from {audio_path}: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+
+        score = draft_score(bundle)
+
+        if interactive:
+            core_answer = typer.prompt(
+                "この曲の核 (semantic.core)", default="", show_default=False
             )
+            avoid_answer = typer.prompt(
+                "避けたいもの (semantic.avoid, カンマ区切り)", default="", show_default=False
+            )
+            theme_answer = typer.prompt(
+                "主題/題材 (任意。core に併合されます)", default="", show_default=False
+            )
+            core_parts = [part.strip() for part in (core_answer, theme_answer) if part.strip()]
+            avoid_list = [item.strip() for item in avoid_answer.split(",") if item.strip()]
+            semantic_updates: dict[str, Any] = {}
+            if core_parts:
+                semantic_updates["core"] = "; ".join(core_parts)
+            if avoid_list:
+                semantic_updates["avoid"] = avoid_list
+            if semantic_updates:
+                score = score.model_copy(
+                    update={"semantic": score.semantic.model_copy(update=semantic_updates)}
+                )
 
-    slug = _slugify(audio_path.stem) or "recast-project"
+        slug = _slugify(audio_path.stem) or "recast-project"
 
-    (dest_dir / "identity").mkdir(parents=True, exist_ok=True)
-    (dest_dir / "arrangements").mkdir(parents=True, exist_ok=True)
+        (staging_dir / "identity").mkdir(parents=True, exist_ok=True)
+        (staging_dir / "arrangements").mkdir(parents=True, exist_ok=True)
 
-    composition_score_yaml = render_draft_score_yaml(score)
-    (dest_dir / "composition_score.yaml").write_text(composition_score_yaml, encoding="utf-8")
-
-    identity_anchors: list[dict[str, Any]] = []
-    identity_anchor_policies: dict[str, dict[str, Any]] = {}
-
-    if bundle.physical.chord_events:
-        chord_payload = {
-            "schema": CHORD_SEQUENCE_ARTIFACT_SCHEMA,
-            "chords": [
-                {"root": event.root, "quality": event.quality}
-                for event in bundle.physical.chord_events
-            ],
-        }
-        chord_json = (
-            json.dumps(chord_payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+        composition_score_yaml = render_draft_score_yaml(score)
+        (staging_dir / "composition_score.yaml").write_text(
+            composition_score_yaml, encoding="utf-8"
         )
-        (dest_dir / "identity" / "chord_progression.json").write_text(
-            chord_json, encoding="utf-8"
-        )
-        identity_anchors.append(
-            {
-                "id": "harmony",
-                "domain": "harmony",
-                "artifact": "identity/chord_progression.json",
-                "artifact_type": "chord_sequence_json",
-                "media_type": "application/json",
-                "format_version": CHORD_SEQUENCE_ARTIFACT_SCHEMA,
-                "sha256": hashlib.sha256(chord_json.encode("utf-8")).hexdigest(),
-                "required": True,
+
+        identity_anchors: list[dict[str, Any]] = []
+        identity_anchor_policies: dict[str, dict[str, Any]] = {}
+
+        if bundle.physical.chord_events:
+            chord_payload = {
+                "schema": CHORD_SEQUENCE_ARTIFACT_SCHEMA,
+                "chords": [
+                    {"root": event.root, "quality": event.quality}
+                    for event in bundle.physical.chord_events
+                ],
             }
-        )
-        identity_anchor_policies["harmony"] = {"mode": "hard", "allow": []}
+            chord_json = (
+                json.dumps(chord_payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+            )
+            (staging_dir / "identity" / "chord_progression.json").write_text(
+                chord_json, encoding="utf-8"
+            )
+            identity_anchors.append(
+                {
+                    "id": "harmony",
+                    "domain": "harmony",
+                    "artifact": "identity/chord_progression.json",
+                    "artifact_type": "chord_sequence_json",
+                    "media_type": "application/json",
+                    "format_version": CHORD_SEQUENCE_ARTIFACT_SCHEMA,
+                    "sha256": hashlib.sha256(chord_json.encode("utf-8")).hexdigest(),
+                    "required": True,
+                }
+            )
+            identity_anchor_policies["harmony"] = {"mode": "hard", "allow": []}
 
-    if bundle.physical.structure:
-        section_payload = {
-            "schema_version": SECTION_MAP_ARTIFACT_SCHEMA_0_1,
-            "sections": [marker.label for marker in bundle.physical.structure],
-        }
-        section_json = (
-            json.dumps(section_payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
-        )
-        (dest_dir / "identity" / "section_map.json").write_text(section_json, encoding="utf-8")
-        identity_anchors.append(
-            {
-                "id": "structure",
-                "domain": "structure",
-                "artifact": "identity/section_map.json",
-                "artifact_type": "section_map",
-                "media_type": "application/json",
-                "format_version": SECTION_MAP_ARTIFACT_SCHEMA_0_1,
-                "sha256": hashlib.sha256(section_json.encode("utf-8")).hexdigest(),
-                "required": True,
+        if bundle.physical.structure:
+            section_payload = {
+                "schema_version": SECTION_MAP_ARTIFACT_SCHEMA_0_1,
+                "sections": [marker.label for marker in bundle.physical.structure],
             }
+            section_json = (
+                json.dumps(section_payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+            )
+            (staging_dir / "identity" / "section_map.json").write_text(
+                section_json, encoding="utf-8"
+            )
+            identity_anchors.append(
+                {
+                    "id": "structure",
+                    "domain": "structure",
+                    "artifact": "identity/section_map.json",
+                    "artifact_type": "section_map",
+                    "media_type": "application/json",
+                    "format_version": SECTION_MAP_ARTIFACT_SCHEMA_0_1,
+                    "sha256": hashlib.sha256(section_json.encode("utf-8")).hexdigest(),
+                    "required": True,
+                }
+            )
+            identity_anchor_policies["structure"] = {"mode": "hard", "allow": []}
+
+        identity_payload: dict[str, Any] = {
+            "schema_version": "identity-manifest/0.1",
+            "meta": {"work_id": slug, "version": "0.1"},
+            "source": {
+                "locator": f"source/{source_filename}",
+                "sha256": audio_sha256,
+                "rights_basis": "unknown",
+            },
+            "anchors": identity_anchors,
+        }
+        (staging_dir / "identity.yaml").write_text(
+            yaml.safe_dump(identity_payload, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
         )
-        identity_anchor_policies["structure"] = {"mode": "hard", "allow": []}
 
-    identity_payload: dict[str, Any] = {
-        "schema_version": "identity-manifest/0.1",
-        "meta": {"work_id": slug, "version": "0.1"},
-        "source": {
-            "locator": f"source/{source_filename}",
-            "sha256": audio_sha256,
-            "rights_basis": "unknown",
-        },
-        "anchors": identity_anchors,
-    }
-    (dest_dir / "identity.yaml").write_text(
-        yaml.safe_dump(identity_payload, sort_keys=False, allow_unicode=True), encoding="utf-8"
-    )
-
-    preservation_payload: dict[str, Any] = {"score_fields": {}}
-    if identity_anchor_policies:
-        preservation_payload["identity_anchors"] = identity_anchor_policies
-    arrangement_payload: dict[str, Any] = {
-        "meta": {
-            "id": f"{slug}-default-v1",
-            "version": "0.1",
-            "description": "svprpe recast init が生成した無変更の最小 ArrangementSpec 雛形。",
-        },
-        "target": {},
-        "preservation": preservation_payload,
-    }
-    (dest_dir / "arrangements" / "default.yaml").write_text(
-        yaml.safe_dump(arrangement_payload, sort_keys=False, allow_unicode=True),
-        encoding="utf-8",
-    )
-
-    project_payload: dict[str, Any] = {
-        "schema_version": "recast-project/0.1",
-        "project": {"id": slug, "builds_root": "builds"},
-        "work": {"score": "composition_score.yaml", "identity_manifest": "identity.yaml"},
-        "variants": {"default": {"arrangement": "arrangements/default.yaml"}},
-        "backends": {
-            "suno": {
-                "capability_profile": "suno",
-                "invocation": "manual",
-                "invocation_mode": "prompt_only",
-                "mode_overrides": "suno",
+        preservation_payload: dict[str, Any] = {"score_fields": {}}
+        if identity_anchor_policies:
+            preservation_payload["identity_anchors"] = identity_anchor_policies
+        arrangement_payload: dict[str, Any] = {
+            "meta": {
+                "id": f"{slug}-default-v1",
+                "version": "0.1",
+                "description": "svprpe recast init が生成した無変更の最小 ArrangementSpec 雛形。",
             },
-            "deterministic": {
-                "capability_profile": "deterministic",
-                "invocation": "local",
-                "invocation_mode": "prompt_only",
-            },
-        },
-        "policy": {
-            "capability_mode": "advisory",
-            "require_author_fields_resolved": True,
-            "require_verified_package": True,
-        },
-        "observation": {"enabled": True, "anchors": []},
-    }
-    (dest_dir / "project.yaml").write_text(
-        yaml.safe_dump(project_payload, sort_keys=False, allow_unicode=True), encoding="utf-8"
-    )
+            "target": {},
+            "preservation": preservation_payload,
+        }
+        (staging_dir / "arrangements" / "default.yaml").write_text(
+            yaml.safe_dump(arrangement_payload, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
 
-    try:
-        loaded = load_recast_project(dest_dir / "project.yaml")
-    except (RecastError, ValidationError, yaml.YAMLError) as exc:
-        typer.echo(f"Error: generated recast project failed to load: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
+        project_payload: dict[str, Any] = {
+            "schema_version": "recast-project/0.1",
+            "project": {"id": slug, "builds_root": "builds"},
+            "work": {"score": "composition_score.yaml", "identity_manifest": "identity.yaml"},
+            "variants": {"default": {"arrangement": "arrangements/default.yaml"}},
+            "backends": {
+                "suno": {
+                    "capability_profile": "suno",
+                    "invocation": "manual",
+                    "invocation_mode": "prompt_only",
+                    "mode_overrides": "suno",
+                },
+                "deterministic": {
+                    "capability_profile": "deterministic",
+                    "invocation": "local",
+                    "invocation_mode": "prompt_only",
+                },
+            },
+            "policy": {
+                "capability_mode": "advisory",
+                "require_author_fields_resolved": True,
+                "require_verified_package": True,
+            },
+            "observation": {"enabled": True, "anchors": []},
+        }
+        (staging_dir / "project.yaml").write_text(
+            yaml.safe_dump(project_payload, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+
+        try:
+            loaded = load_recast_project(staging_dir / "project.yaml")
+        except (RecastError, ValidationError, yaml.YAMLError) as exc:
+            typer.echo(f"Error: generated recast project failed to load: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+
+        # rename 直前の再確認（Codex P2 #210 round 2 指摘3）: staging 構築中に
+        # 他プロセスが dest_dir を作成/汚染していないか、atomic move 直前に
+        # もう一度確認し TOCTOU 窓を最小化する。
+        _reject_nonempty_dest()
+        if dest_dir.exists():
+            # 直前確認を通過した時点で「存在するが空」の場合のみここに到達する
+            # （非空/非ディレクトリは _reject_nonempty_dest が既に exit 1 済み）。
+            # 空ディレクトリを明示的に rmdir してから rename する方が
+            # `os.replace` の挙動をプラットフォーム非依存で読みやすくする。
+            dest_dir.rmdir()
+
+        try:
+            os.replace(str(staging_dir), str(dest_dir))
+        except OSError as exc:
+            typer.echo(f"Error: failed to publish project to {dest_dir}: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        published = True
+    finally:
+        if not published:
+            shutil.rmtree(staging_dir, ignore_errors=True)
 
     console.print(f"[green]Recast project initialized at {dest_dir}[/green]")
     console.print(f"work_id: {slug}")

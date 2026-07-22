@@ -298,3 +298,65 @@ def test_ingest_records_observation_incomplete_and_leaves_no_partial_report(
 
     reports_dir = project_path.parent / "builds" / "reports" / "edm@suno"
     assert not reports_dir.exists()
+
+
+def test_ingest_records_observation_incomplete_when_take_changes_between_collect_and_observe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2（#210 round 2 指摘2）: `collect()` が確定させた take の
+    sha256（`GeneratedTake.sha256`）と、`observe_generated_artifact` が
+    `audio_path` を読んだ直後に計算する sha256 が食い違う場合（collect
+    完了〜観測の読み出しの間に take ファイルが差し替わった場合の実測代替）、
+    report は一切構築・公開されず `observation_incomplete` を記録して exit 1
+    する — 「観測していない take を collect 時 hash で証明する」report が
+    出回らないことの機械 assert。
+
+    実際の観測関数（`observe_generated_artifact`）をラップし、呼び出し
+    直前（＝collect 完了後）に `audio_path` の中身を差し替えてから実装本体へ
+    委譲する — 実装本体は自分が読んだ bytes の sha256 と
+    `expected_audio_sha256`（collect 時 pin）を突き合わせて fail-closed する
+    契約そのものを検証する（スタブで結果だけ模倣しない）。"""
+    import svp_rpe.arrange.observe as observe_module
+
+    real_observe_generated_artifact = observe_module.observe_generated_artifact
+
+    project_path = _copy_demo_project(tmp_path, label="race")
+    text = project_path.read_text(encoding="utf-8")
+    text = text.replace(_OBSERVATION_DISABLED_BLOCK, _OBSERVATION_ENABLED_BLOCK, 1)
+    project_path.write_text(text, encoding="utf-8")
+
+    run_result = runner.invoke(
+        app, ["recast", "run", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert run_result.exit_code == 0, run_result.output
+
+    takes_dir = project_path.parent / "builds" / "takes" / "edm@suno"
+    takes_dir.mkdir(parents=True, exist_ok=True)
+    audio_path = takes_dir / "take-01.wav"
+    audio_path.write_bytes(b"RIFF....WAVEoriginal-bytes-collected-here")
+
+    def _racy_observe(**kwargs: Any) -> Any:
+        # collect() 完了直後・観測の読み出し直前という想定の位置で take を
+        # 差し替える（実運用での同種の race を機械的に再現する）。
+        kwargs["audio_path"].write_bytes(b"RIFF....WAVEtampered-bytes-different-length!!")
+        return real_observe_generated_artifact(**kwargs)
+
+    monkeypatch.setattr("svp_rpe.arrange.observe.observe_generated_artifact", _racy_observe)
+
+    ingest_result = runner.invoke(
+        app,
+        [
+            "recast", "ingest", str(project_path),
+            "--variant", "edm", "--backend", "suno",
+            "--audio", str(audio_path),
+        ],
+    )
+    assert ingest_result.exit_code == 1, ingest_result.output
+
+    state_file = load_recast_state(project_path.parent)
+    run = state_file.runs["edm@suno"]
+    assert run.state == "observation_incomplete"
+    assert run.note is not None and "changed since collection" in run.note
+
+    reports_dir = project_path.parent / "builds" / "reports" / "edm@suno"
+    assert not reports_dir.exists()
