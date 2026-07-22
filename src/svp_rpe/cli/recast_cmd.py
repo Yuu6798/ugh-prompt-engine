@@ -68,17 +68,18 @@ def _write_recast_plan_atomically(path: Path, content: str) -> None:
         raise
 
 
-def _plan_state_note(plan: Any) -> Optional[str]:
-    """`record_state` へ渡す note を `RecastPlan` から組み立てる single source
-    （`recast plan` / `recast run` 両方の plan 段が共有する — Codex P2 #207 の
-    意味論を run 側にも一貫適用: blocked なら reasons、blocked でなければ
-    advisory の unsupported changed field 診断、それも無ければ `None`）。"""
-    from svp_rpe.recast.plan import unsupported_changed_field_reasons
-
+def _plan_state_note(result: Any) -> Optional[str]:
+    """`record_state` へ渡す note を `RecastPlanResult` から組み立てる single
+    source（`recast plan` / `recast run` 両方の plan 段が共有する — Codex P2
+    #207 の意味論を run 側にも一貫適用）: blocked なら `plan.blocked.reasons`、
+    blocked でなければ `result.mode_gate_reasons`（`build_recast_plan` の
+    strict/advisory ゲートが確定した診断一式 — unsupported + mode_overrides
+    宣言時のみ unknown も合成済み。fifth round #207: ここで再導出しない
+    single source）、それも無ければ `None`。"""
+    plan = result.plan
     if plan.blocked is not None:
         return "; ".join(plan.blocked.reasons)
-    reasons = unsupported_changed_field_reasons(plan.changed_fields, plan.invocation_mode)
-    return "; ".join(reasons) if reasons else None
+    return "; ".join(result.mode_gate_reasons) if result.mode_gate_reasons else None
 
 
 def _print_plan_warnings(plan: Any) -> None:
@@ -165,7 +166,7 @@ def recast_plan_cmd(
         variant,
         backend,
         result.plan.state_reached,
-        _plan_state_note(result.plan),
+        _plan_state_note(result),
         inputs_digest=result.inputs_digest,
         plan_sha256=plan_sha256,
     )
@@ -282,7 +283,7 @@ def recast_run_cmd(
         variant,
         backend,
         artifacts.result.plan.state_reached,
-        _plan_state_note(artifacts.result.plan),
+        _plan_state_note(artifacts.result),
         inputs_digest=inputs_digest,
         plan_sha256=plan_sha256,
     )

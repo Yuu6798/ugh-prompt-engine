@@ -28,18 +28,22 @@ import yaml
 
 from svp_rpe.arrange.capabilities import InputCapabilityProfile
 from svp_rpe.arrange.identity import IdentityManifest
-from svp_rpe.arrange.package import (
-    COMPILATION_REPORT_FILENAME,
-    PERFORMANCE_PACKAGE_FILENAME,
-    CompiledPerformancePackage,
-    PerformancePackage,
-)
-from svp_rpe.arrange.pathsafe import resolve_confined
+from svp_rpe.arrange.package import CompiledPerformancePackage, PerformancePackage
 from svp_rpe.compose.models import CompositionScore
 from svp_rpe.recast.loader import LoadedRecastProject
 from svp_rpe.recast.models import BackendRef, InvocationKind, InvocationMode, RecastError
 from svp_rpe.recast.plan import RecastPlanArtifacts, RecastPlanResult, build_recast_plan_artifacts
-from svp_rpe.recast.run_paths import resolve_orders_dir, resolve_packages_dir, resolve_takes_dir
+from svp_rpe.recast.run_paths import (
+    collect_protected_input_paths,
+    resolve_orders_dir,
+    resolve_takes_dir,
+)
+
+# `collect_protected_input_paths`（`recast/run_paths.py` が single source —
+# `plan.py` も同じ関数を必要とし、`plan.py` → `backend.py` の逆方向 import は
+# 循環するため。PR3 #208 指摘 6/7 対応）は `svp_rpe.recast.backend` からも
+# 従来どおり参照できるよう re-export しておく（本行はただの import 文であり、
+# 明示 import には `__all__` は影響しない）。
 
 
 class RecastBackendUnavailable(RecastError):
@@ -124,47 +128,6 @@ def build_recast_run_context(
 resolve_order_dir = resolve_orders_dir
 
 
-def collect_protected_input_paths(
-    loaded: LoadedRecastProject, variant: str, backend: str
-) -> list[Path]:
-    """`(variant, backend)` run が参照する入力一式（project.yaml 自身 / score /
-    identity manifest / manifest が参照する source・各 anchor artifact /
-    arrangement spec / capability_profile / mode_overrides）と、plan 段が
-    package/report を公開する `packages/<variant>@<backend>/` の 2 ファイルを
-    集める。
-
-    manual invoker が orders/ を公開する前・local invoker が takes/ を公開する
-    前に、出力ファイルパスがこれらのいずれとも衝突しないことを保証するために使う
-    （Codex P2 review, PR3 #208 指摘 2: 従来は project/score/manifest/arrangement
-    のみが対象で、project ローカルの capability_profile / mode_overrides や
-    manifest 側の anchor artifact / source が抜けていた — それらが orders 出力
-    パスと衝突すると入力を無警告で上書き破壊してしまう）。
-    """
-    paths: list[Path] = [
-        loaded.path,
-        loaded.score_path,
-        loaded.identity_manifest_path,
-        loaded.arrangement_paths[variant],
-        loaded.capability_profile_paths[backend],
-    ]
-    mode_override_path = loaded.mode_override_paths.get(backend)
-    if mode_override_path is not None:
-        paths.append(mode_override_path)
-
-    manifest_dir = loaded.identity_manifest_path.resolve().parent
-    manifest_data = yaml.safe_load(loaded.identity_manifest_path.read_bytes())
-    if isinstance(manifest_data, dict):
-        manifest = IdentityManifest.model_validate(manifest_data)
-        paths.append(resolve_confined(manifest.source.locator, manifest_dir))
-        for anchor in manifest.anchors:
-            paths.append(resolve_confined(anchor.artifact, manifest_dir))
-
-    packages_dir = resolve_packages_dir(loaded, variant, backend)
-    paths.append(packages_dir / PERFORMANCE_PACKAGE_FILENAME)
-    paths.append(packages_dir / COMPILATION_REPORT_FILENAME)
-    return paths
-
-
 def read_identity_source(loaded: LoadedRecastProject) -> tuple[str, str]:
     """`IdentityManifest.source` の locator + sha256 を読む（軽量パースのみ —
     plan 段が既に artifact hash 照合済みのため、ここでは anchor bytes の再読み・
@@ -182,10 +145,21 @@ def read_identity_source(loaded: LoadedRecastProject) -> tuple[str, str]:
 def base_prepared_invocation(ctx: RecastRunContext) -> PreparedInvocation:
     """3 つの具象 invoker（manual/deterministic/musicgen）が共有する
     `PreparedInvocation` の共通フィールド組み立て（order_dir/takes_dir の解決 +
-    package/derived_score/sha256 pin + identity source 参照）。"""
+    package/derived_score/sha256 pin + identity source 参照 +
+    `protected_input_paths`）。
+
+    `protected_input_paths` はここで 1 回だけ計算し（`collect_protected_input_paths`,
+    `recast/run_paths.py`）`PreparedInvocation` に固定する — orders/takes 双方の
+    公開サイト（`ManualInvoker.prepare`/`collect`、`DeterministicInvoker.invoke`）
+    が `ctx`/`loaded` を持たない `prepared` だけから同じ衝突ガード対象を読める
+    ようにするため（PR3 #208 指摘 6: 従来 `collect()`/`invoke()` は
+    `protected_inputs` を一切渡していなかった — signature 上 `ctx` を持たない
+    ためその場で計算できなかった、という抜け穴を構造的に塞ぐ）。
+    """
     order_dir = resolve_order_dir(ctx.loaded, ctx.variant, ctx.backend)
     takes_dir = resolve_takes_dir(ctx.loaded, ctx.variant, ctx.backend)
     identity_source_locator, identity_source_sha256 = read_identity_source(ctx.loaded)
+    protected_input_paths = collect_protected_input_paths(ctx.loaded, ctx.variant, ctx.backend)
     return PreparedInvocation(
         variant=ctx.variant,
         backend_name=ctx.backend,
@@ -200,6 +174,7 @@ def base_prepared_invocation(ctx: RecastRunContext) -> PreparedInvocation:
         takes_dir=takes_dir,
         identity_source_locator=identity_source_locator,
         identity_source_sha256=identity_source_sha256,
+        protected_input_paths=protected_input_paths,
     )
 
 
@@ -236,16 +211,20 @@ def atomic_publish_bytes_bundle(
     output_dir: Path,
     contents: dict[str, bytes],
     *,
-    protected_inputs: Optional[list[Path]] = None,
+    protected_inputs: list[Path],
 ) -> None:
     """複数バイナリファイルを「全部揃って初めて意味を持つ 1 組」として atomic
     publish する（binary 版 `cli/builds_root.py:_publish_artifacts_atomically`
     — recast->cli の層依存を避けるため import せずここへ複製・binary 化した
     もの。ロールバック契約はそちらの docstring と同一）。
 
-    `protected_inputs` を渡すと、`output_dir / filename` のいずれかがそれらの
-    いずれかと一致する場合は何も書かずに `ValueError` を送出する（fail-closed
-    — `_publish_artifacts_atomically` の同名パラメータと同じ契約）。
+    `protected_inputs` は必須（デフォルト値なし — Codex P2 review, PR3 #208
+    指摘 6/7: 呼び出し側が渡し忘れると衝突ガードが黙って無効になっていた。
+    シグネチャで必須化することで渡し忘れを型/実行時に検出できるようにする）。
+    `output_dir / filename` のいずれかがそれらのいずれかと一致する場合は
+    何も書かずに `ValueError` を送出する（fail-closed — `_publish_artifacts_atomically`
+    の同名パラメータと同じ契約。空リストを渡せば実質的にガード無効も明示的に
+    選べる — が本モジュール内の全呼び出し元は非空リストを渡す）。
 
     Codex P2 review（PR3 #208 指摘 1）対応: `take-01.wav` を単独で最終名へ
     publish してから `take.json` を書くと、後者が失敗した時に provenance の
@@ -317,6 +296,7 @@ class PreparedInvocation:
     takes_dir: Path
     identity_source_locator: str
     identity_source_sha256: str
+    protected_input_paths: list[Path]
 
 
 @dataclass(frozen=True)

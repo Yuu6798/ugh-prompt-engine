@@ -34,7 +34,6 @@ from svp_rpe.recast.backend import (
     RecastRunContext,
     atomic_publish_bytes_bundle,
     base_prepared_invocation,
-    collect_protected_input_paths,
 )
 from svp_rpe.recast.loader import LoadedRecastProject
 from svp_rpe.recast.models import RecastError
@@ -199,12 +198,16 @@ class ManualInvoker:
             "next_command.txt": next_command,
             "order_sheet.md": _order_sheet_md(ctx, prepared, next_command),
         }
-        # 出力パスが project.yaml/score/identity manifest/arrangement だけでなく
-        # capability_profile / mode_overrides / manifest 側 anchor artifact・
-        # source / packages/ 公開物のいずれとも衝突しないことを保証する
-        # （Codex P2 review, PR3 #208 指摘 2 — 従来は前 4 者のみが対象だった）。
-        protected_inputs = collect_protected_input_paths(ctx.loaded, ctx.variant, ctx.backend)
-        _publish_artifacts_atomically(contents, prepared.order_dir, protected_inputs)
+        # 出力パスが project.yaml/score/identity manifest/arrangement/
+        # capability_profile/mode_overrides/manifest 側 anchor artifact・source
+        # のいずれとも衝突しないことを保証する（Codex P2 review, PR3 #208
+        # 指摘 2 — 従来は project/score/manifest/arrangement の 4 者のみが
+        # 対象だった）。`prepared.protected_input_paths` は
+        # `base_prepared_invocation` が計算済みの同じ値 — ここで再計算しない
+        # single source（指摘 6/7 対応で全公開サイト共通化）。
+        _publish_artifacts_atomically(
+            contents, prepared.order_dir, prepared.protected_input_paths
+        )
         return prepared
 
     def invoke(self, prepared: PreparedInvocation) -> GeneratedTake:
@@ -238,14 +241,19 @@ class ManualInvoker:
         )
         # 音声 + take.json を 1 組として atomic publish する（Codex P2 review,
         # PR3 #208 指摘 1: 個別 publish だと take.json 書き込み失敗時に
-        # provenance の無い音声だけが takes_dir に残り得る）。`data` は
-        # `supplied_audio` から既に読み終えているため、`supplied_audio` が
-        # 最終公開先そのもの（`svprpe recast ingest` の next_command.txt が
-        # 案内する `<takes_dir>/take-01.wav` に生成音声を直接置いてから ingest
-        # する自然な運用）であっても安全な自己上書き — 保護対象には含めない。
+        # provenance の無い音声だけが takes_dir に残り得る）。`protected_inputs`
+        # には `supplied_audio` 自体を含めない — `data` は `supplied_audio` から
+        # 既に読み終えているため、`supplied_audio` が最終公開先そのもの
+        # （`svprpe recast ingest` の next_command.txt が案内する
+        # `<takes_dir>/take-01.wav` に生成音声を直接置いてから ingest する自然な
+        # 運用）であっても安全な自己上書き。`prepared.protected_input_paths`
+        # （project/score/manifest/arrangement/capability_profile/
+        # mode_overrides/anchor artifact・source）とは衝突しないことを保証する
+        # （Codex P2 review, PR3 #208 指摘 6: 従来 collect() は一切渡していなかった）。
         atomic_publish_bytes_bundle(
             prepared.takes_dir,
             {take_filename: data, "take.json": take_record.encode("utf-8")},
+            protected_inputs=prepared.protected_input_paths,
         )
 
         note: Optional[str] = f"collected from {supplied_audio.name}"

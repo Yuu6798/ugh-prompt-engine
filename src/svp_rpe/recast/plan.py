@@ -19,8 +19,10 @@
 7. `build_performance_package`（純関数、strict= policy.capability_mode=="strict"）
 8. `require_verified_package` なら一時ディレクトリで `verify_package`
 9. 診断表（anchors / changed_fields）の構築。`changed_fields` に
-   `mode_support=="unsupported"` が 1 件でもあれば、anchor 配送と同じ
-   strict/advisory 意味論を適用する: strict は `blocked_capability` へ降格、
+   `mode_support=="unsupported"` が 1 件でも、または backend が
+   mode_overrides を宣言している場合に限り `mode_support=="unknown"`
+   （未実測）が 1 件でもあれば、anchor 配送と同じ strict/advisory 意味論を
+   適用する（`_mode_gate_reasons`）: strict は `blocked_capability` へ降格、
    advisory は到達状態を維持したまま warnings へ積む（推奨 1 行も切替）
 
 **本関数はディスクへ副作用を持たない純粋関数** — `recast_plan.json` の publish と
@@ -104,7 +106,7 @@ from svp_rpe.recast.models import (
     RecastModel,
     RecastProject,
 )
-from svp_rpe.recast.run_paths import resolve_packages_dir
+from svp_rpe.recast.run_paths import collect_protected_input_paths, resolve_packages_dir
 from svp_rpe.recast.state import RecastState
 from svp_rpe.sentinels import is_todo_sentinel
 from svp_rpe.utils.config_loader import resolve_config_bytes
@@ -167,12 +169,21 @@ class RecastPlan(RecastModel):
 @dataclass(frozen=True)
 class RecastPlanResult:
     """`build_recast_plan` の戻り値: 決定論的 `plan` + human 向けテキスト +
-    state 永続化用 `inputs_digest`（呼び出し側が `recast.state.record_state` へ
-    渡す。`plan` 自体には含めない — `recast_plan.json` の byte 互換を変えないため）。"""
+    state 永続化用 `inputs_digest` + `mode_gate_reasons`（呼び出し側が
+    `recast.state.record_state` へ渡す。いずれも `plan` 自体には含めない —
+    `recast_plan.json` の byte 互換を変えないため）。
+
+    `mode_gate_reasons`: strict/advisory ゲート（`_mode_gate_reasons`）が
+    changed_fields から導出した「届かない/未実測」診断の確定リスト
+    （`blocked=None` の場合のみ意味を持つ — blocked の場合は
+    `plan.blocked.reasons` が同じ情報を既に保持する）。CLI と単体テストが
+    state note を組み立てる際、ゲート判定ロジックを再実装せずここから
+    そのまま読む single source。"""
 
     plan: RecastPlan
     text: str
     inputs_digest: str
+    mode_gate_reasons: List[str]
 
 
 @dataclass(frozen=True)
@@ -206,12 +217,26 @@ def _parse_yaml_mapping(raw_bytes: bytes, label: str, path_str: str) -> Dict[str
     return data
 
 
-def _atomic_write_text(path: Path, content: str) -> None:
+def _atomic_write_text(path: Path, content: str, *, protected_inputs: List[Path]) -> None:
     """tempfile + `os.replace` による atomic publish（`recast/state.py` の
     `_write_recast_state_atomically` と同型）。`build_recast_plan_artifacts` が
     `resolve_packages_dir` へ compile 済み package/report を公開する際に使う
     （PR3 #208 指摘 3: tempfile.TemporaryDirectory ではなく永続 builds_root
-    配下へ公開することで `artifact_base_locator` を checkout-stable にする）。"""
+    配下へ公開することで `artifact_base_locator` を checkout-stable にする）。
+
+    `protected_inputs` は必須（デフォルト値なし — Codex P2 review, PR3 #208
+    指摘 7: packages 公開が衝突ガードを一切持たず、`collect_protected_input_paths`
+    の対象パス（capability_profile/mode_overrides/manifest anchor artifact 等）
+    が偶然 `packages/<variant>@<backend>/` 配下と衝突する project 構成では
+    入力を無警告で上書き破壊し得た）。`path` がそれらのいずれかと一致する場合は
+    何も書かずに `ValueError` を送出する（fail-closed — `atomic_publish_bytes_bundle`
+    の同名パラメータと同じ契約）。
+    """
+    if protected_inputs:
+        resolved_inputs = {candidate.resolve() for candidate in protected_inputs}
+        if path.resolve() in resolved_inputs:
+            raise ValueError(f"output path collides with a protected input path: {path}")
+
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp")
     try:
@@ -337,8 +362,9 @@ def unsupported_changed_field_reasons(
     changed_fields: List[ChangedFieldPlanEntry], invocation_mode: InvocationMode
 ) -> List[str]:
     """`changed_fields` のうち `mode_support=="unsupported"` な各 path から、
-    anchor 配送の warning/reason と同じ文体の 1 行診断を作る（`build_recast_plan`
-    の strict/advisory ゲートと CLI の state note 双方から共有する single source）。"""
+    anchor 配送の warning/reason と同じ文体の 1 行診断を作る（`_mode_gate_reasons`
+    が下記の unknown（宣言時のみ）と合成する土台。「unsupported」は
+    mode_overrides の declared/undeclared を問わず常にゲート対象）。"""
     return [
         f"field {c.path} は invocation_mode {invocation_mode} で unsupported"
         for c in changed_fields
@@ -346,18 +372,59 @@ def unsupported_changed_field_reasons(
     ]
 
 
+def _mode_gate_reasons(
+    changed_fields: List[ChangedFieldPlanEntry],
+    invocation_mode: InvocationMode,
+    *,
+    mode_overrides_declared: bool,
+) -> List[str]:
+    """anchor 配送と同じ strict/advisory ゲート対象の changed_field 診断一式を作る
+    （`build_recast_plan` の strict/advisory ゲート・`RecastPlanResult.mode_gate_reasons`
+    経由の CLI state note、両方が共有する single source）。
+
+    `mode_support=="unsupported"` は常に対象（`unsupported_changed_field_reasons`）。
+    `mode_support=="unknown"`（mode_overrides ファイルに当該 path のエントリが
+    無い＝未実測）は **backend が mode_overrides を宣言している場合のみ**
+    対象に含める（Codex P2 fifth round #207）。
+
+    線引きの根拠（opt-in 計器）: mode_overrides は backend ごとの opt-in 計器
+    — 宣言していない backend は invocation_mode 軸そのものを未計測であり、
+    全 changed_field が unknown になるのは仕様どおりで異常ではない（従来
+    挙動を変えない）。一方、宣言した backend にとっての unknown は「この
+    path を計測対象にしたが実測データがまだ無い」を意味し、届くか不明な
+    まま生成へ進めるのは fail-closed の趣旨に反する。これは
+    `arrange/package.py` の strict 検査が hard 宣言 anchor の
+    delivery=="unknown" を strict failure として扱う（`requested.mode ==
+    "hard" and delivery_status in ("unsupported", "unknown")`）既存規律と
+    同型 — 「宣言した契約について unknown を許容しない」という一貫した規律。"""
+    reasons = unsupported_changed_field_reasons(changed_fields, invocation_mode)
+    if mode_overrides_declared:
+        reasons = reasons + [
+            f"field {c.path} は invocation_mode {invocation_mode} で unknown（未実測）"
+            for c in changed_fields
+            if c.mode_support == "unknown"
+        ]
+    return reasons
+
+
 def _build_recommendation(
     blocked: Optional[BlockedInfo],
     state_reached: RecastState,
     changed_fields: List[ChangedFieldPlanEntry],
+    *,
+    mode_overrides_declared: bool,
 ) -> str:
     if blocked is not None:
         if blocked.state == "blocked_capability":
-            if any(c.mode_support == "unsupported" for c in changed_fields):
+            mode_gated = any(c.mode_support == "unsupported" for c in changed_fields) or (
+                mode_overrides_declared
+                and any(c.mode_support == "unknown" for c in changed_fields)
+            )
+            if mode_gated:
                 return (
-                    "この invocation_mode では届かない変更が含まれています。capability_mode を "
-                    "advisory へ切替するか、届く invocation_mode（cover/prompt_only の切替）を "
-                    "検討してください。"
+                    "この invocation_mode では届くか未確認な変更が含まれています。"
+                    "capability_mode を advisory へ切替するか、届く invocation_mode"
+                    "（cover/prompt_only の切替）を検討してください。"
                 )
             return (
                 "capability_mode を advisory へ切替するか、hard 宣言した anchor の "
@@ -370,10 +437,21 @@ def _build_recommendation(
         return "ブロックを解消してから再実行してください。"
 
     unsupported_paths = [c.path for c in changed_fields if c.mode_support == "unsupported"]
-    if unsupported_paths:
+    unknown_paths = (
+        [c.path for c in changed_fields if c.mode_support == "unknown"]
+        if mode_overrides_declared
+        else []
+    )
+    if unsupported_paths or unknown_paths:
+        clauses = []
+        if unsupported_paths:
+            clauses.append(f"届きません: {', '.join(unsupported_paths)}")
+        if unknown_paths:
+            clauses.append(f"未実測です: {', '.join(unknown_paths)}")
         return (
-            "この invocation_mode ではこの変更は届きません: "
-            f"{', '.join(unsupported_paths)}（cover/prompt_only の切替を検討してください）。"
+            "この invocation_mode ではこの変更は "
+            + " / ".join(clauses)
+            + "（cover/prompt_only の切替を検討してください）。"
         )
     if state_reached == "verified":
         return "run へ進行可。"
@@ -571,6 +649,11 @@ def build_recast_plan_artifacts(
 
     backend_ref: BackendRef = project.backends[backend]
     inputs_digest = compute_recast_inputs_digest(loaded, variant=variant, backend=backend)
+    # step 6 で確定する（backend が mode_overrides を宣言しているか）。それより
+    # 前の早期 blocked_* 到達時は changed_fields が空のため意味を持たない。
+    mode_overrides_declared = False
+    # step 9 で確定する（strict/advisory ゲート対象の changed_field 診断一式）。
+    mode_gate_reasons: List[str] = []
 
     def _finalize(
         *,
@@ -587,7 +670,12 @@ def build_recast_plan_artifacts(
         derived_score_sha256: Optional[str] = None,
     ) -> RecastPlanArtifacts:
         resolved_changed_fields = changed_fields or []
-        recommendation = _build_recommendation(blocked, state_reached, resolved_changed_fields)
+        recommendation = _build_recommendation(
+            blocked,
+            state_reached,
+            resolved_changed_fields,
+            mode_overrides_declared=mode_overrides_declared,
+        )
         plan = RecastPlan(
             project_id=project.project.id,
             variant=variant,
@@ -602,7 +690,12 @@ def build_recast_plan_artifacts(
             warnings=warnings or [],
             recommendation=recommendation,
         )
-        result = RecastPlanResult(plan=plan, text=_render_text(plan), inputs_digest=inputs_digest)
+        result = RecastPlanResult(
+            plan=plan,
+            text=_render_text(plan),
+            inputs_digest=inputs_digest,
+            mode_gate_reasons=mode_gate_reasons,
+        )
         return RecastPlanArtifacts(
             result=result,
             backend_ref=backend_ref,
@@ -705,6 +798,9 @@ def build_recast_plan_artifacts(
                 f"generator {mode_overrides_config.generator!r} does not match capability "
                 f"profile generator {profile.generator!r}"
             )
+    # mode_overrides を宣言している backend のみ、changed_fields の unknown を
+    # strict/advisory ゲート対象に含める（opt-in 計器 — `_mode_gate_reasons` 参照）。
+    mode_overrides_declared = mode_overrides_config is not None
 
     # --- step 7: build performance package ----------------------------------
     contract_sha256 = compute_preservation_contract_sha256(contract)
@@ -761,8 +857,28 @@ def build_recast_plan_artifacts(
 
     # package/report を永続公開する（require_verified_package の有無に関わらず
     # 常に — "compiled" 到達時も最新の compile 結果を builds_root へ残す）。
-    _atomic_write_text(package_dir / PERFORMANCE_PACKAGE_FILENAME, compiled.package_json)
-    _atomic_write_text(package_dir / COMPILATION_REPORT_FILENAME, compiled.report_json)
+    # `collect_protected_input_paths` を全公開サイト共通の衝突ガードとして渡す
+    # （Codex P2 review, PR3 #208 指摘 7: 従来 packages 公開は一切ガードなしで、
+    # capability_profile/mode_overrides/manifest anchor artifact 等が偶然
+    # `packages/<variant>@<backend>/` 配下と衝突する project 構成では入力を
+    # 無警告で上書き破壊し得た）。
+    protected_inputs = collect_protected_input_paths(loaded, variant, backend)
+    try:
+        _atomic_write_text(
+            package_dir / PERFORMANCE_PACKAGE_FILENAME,
+            compiled.package_json,
+            protected_inputs=protected_inputs,
+        )
+        _atomic_write_text(
+            package_dir / COMPILATION_REPORT_FILENAME,
+            compiled.report_json,
+            protected_inputs=protected_inputs,
+        )
+    except ValueError as exc:
+        return _finalize(
+            state_reached="blocked_capability",
+            blocked=BlockedInfo(state="blocked_capability", reasons=[str(exc)]),
+        )
 
     # --- step 8: optional verification --------------------------------------
     if project.policy.require_verified_package:
@@ -786,22 +902,27 @@ def build_recast_plan_artifacts(
     )
 
     # anchor 配送と同じ strict/advisory 意味論を changed_fields にも適用する:
-    # mode_overrides が「この invocation_mode では届かない」と実測している変更が
-    # 1 件でもあれば、strict は blocked_capability へ降格（生成しても届かない変更を
-    # verified/exit 0 で推奨しない）、advisory は到達状態を維持しつつ warnings へ積む。
-    unsupported_reasons = unsupported_changed_field_reasons(
-        changed_fields, backend_ref.invocation_mode
+    # mode_overrides が「この invocation_mode では届かない」（unsupported）と
+    # 実測している変更、および backend が mode_overrides を宣言している場合の
+    # 「未実測」（unknown）な変更が 1 件でもあれば、strict は blocked_capability
+    # へ降格（生成しても届くか不明な変更を verified/exit 0 で推奨しない）、
+    # advisory は到達状態を維持しつつ warnings へ積む（`_mode_gate_reasons`
+    # docstring に opt-in 計器としての線引きの根拠を記載）。
+    mode_gate_reasons = _mode_gate_reasons(
+        changed_fields,
+        backend_ref.invocation_mode,
+        mode_overrides_declared=mode_overrides_declared,
     )
-    if unsupported_reasons:
+    if mode_gate_reasons:
         if project.policy.capability_mode == "strict":
             return _finalize(
                 state_reached="blocked_capability",
-                blocked=BlockedInfo(state="blocked_capability", reasons=unsupported_reasons),
+                blocked=BlockedInfo(state="blocked_capability", reasons=mode_gate_reasons),
                 anchors=anchors,
                 changed_fields=changed_fields,
                 warnings=warnings,
             )
-        warnings = warnings + unsupported_reasons
+        warnings = warnings + mode_gate_reasons
 
     return _finalize(
         state_reached=state_reached,

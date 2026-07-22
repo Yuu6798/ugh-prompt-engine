@@ -61,9 +61,14 @@ class DeterministicInvoker:
         # 音声 + take.json を 1 組として atomic publish する（Codex P2 review,
         # PR3 #208 指摘 1: 個別 publish だと take.json 書き込み失敗時に
         # provenance の無い音声だけが takes_dir に残り得る）。
+        # `prepared.protected_input_paths`（project/score/manifest/arrangement/
+        # capability_profile/mode_overrides/anchor artifact・source）とは
+        # 衝突しないことを保証する（Codex P2 review, PR3 #208 指摘 6:
+        # 従来 invoke() は一切渡していなかった）。
         atomic_publish_bytes_bundle(
             prepared.takes_dir,
             {take_filename: audio_bytes, "take.json": take_record.encode("utf-8")},
+            protected_inputs=prepared.protected_input_paths,
         )
 
         return GeneratedTake(

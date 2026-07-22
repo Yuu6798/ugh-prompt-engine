@@ -368,6 +368,101 @@ def test_manual_orders_publish_rejects_mode_overrides_colliding_with_output(
     assert colliding_path.read_bytes() == original_mode_overrides
 
 
+# --- deterministic: takes 公開の衝突ガード ----------------------------------------
+
+
+@pytest.mark.slow
+def test_deterministic_invoke_rejects_capability_profile_colliding_with_takes_output(
+    tmp_path: Path,
+) -> None:
+    """Codex P2 review round 3（PR3 #208 指摘 6）: `DeterministicInvoker.invoke()`
+    の takes 公開が `protected_inputs` を一切渡しておらず、identity source /
+    anchor artifact 等の入力が takes 出力パスにあると無警告で上書きし得た。
+    ここでは `backends.deterministic.capability_profile` を takes 出力パス
+    （`take-01.wav`）へ直接向け、`invoke()` が publish 前に fail-closed で拒否し
+    （かつ既存内容を上書きしない）ことを検証する。"""
+    project_path = _copy_demo_project(tmp_path)
+    _add_target_backend_variant(
+        project_path, variant_name="edm_deterministic", target_backend="deterministic"
+    )
+    project_dir = project_path.parent
+
+    colliding_path = project_dir / "builds" / "takes" / "edm_deterministic@deterministic" / "take-01.wav"
+    colliding_path.parent.mkdir(parents=True, exist_ok=True)
+    original_capability_profile = Path("config/capability_profiles/deterministic.yaml").read_bytes()
+    colliding_path.write_bytes(original_capability_profile)
+
+    project_text = project_path.read_text(encoding="utf-8")
+    updated = project_text.replace(
+        'capability_profile: "deterministic"',
+        'capability_profile: "builds/takes/edm_deterministic@deterministic/take-01.wav"',
+        1,
+    )
+    assert updated != project_text  # sanity
+    project_path.write_text(updated, encoding="utf-8")
+
+    loaded = load_recast_project(project_path)
+    ctx = build_recast_run_context(loaded, variant="edm_deterministic", backend="deterministic")
+    invoker = resolve_invoker(ctx.backend_ref, ctx.profile)
+    assert isinstance(invoker, DeterministicInvoker)
+    prepared = invoker.prepare(ctx)
+
+    with pytest.raises(ValueError):
+        invoker.invoke(prepared)
+
+    # fail-closed: 衝突先の既存内容（capability_profile YAML）が上書きされていない。
+    assert colliding_path.read_bytes() == original_capability_profile
+    assert not (colliding_path.parent / "take.json").exists()
+
+
+# --- plan: packages 公開の衝突ガード ----------------------------------------------
+
+
+def test_build_recast_plan_rejects_capability_profile_colliding_with_packages_output(
+    tmp_path: Path,
+) -> None:
+    """Codex P2 review round 3（PR3 #208 指摘 7）: `build_recast_plan_artifacts`
+    の package/report 永続公開（`packages/<variant>@<backend>/`）が衝突ガードを
+    一切持たず、`capability_profile`/`mode_overrides`/manifest anchor artifact
+    等の入力がその出力パスにあると無警告で上書きし得た。ここでは
+    `backends.suno.capability_profile` を packages 出力パス
+    （`performance_package.json`）へ直接向け、`build_recast_plan_artifacts` が
+    publish 前に fail-closed で `blocked_capability` へ倒す（かつ既存内容を
+    上書きしない）ことを検証する。"""
+    project_path = _copy_demo_project(tmp_path)
+    project_dir = project_path.parent
+
+    colliding_path = (
+        project_dir / "builds" / "packages" / "edm@suno" / "performance_package.json"
+    )
+    colliding_path.parent.mkdir(parents=True, exist_ok=True)
+    original_capability_profile = Path("config/capability_profiles/suno.yaml").read_bytes()
+    colliding_path.write_bytes(original_capability_profile)
+
+    project_text = project_path.read_text(encoding="utf-8")
+    updated = project_text.replace(
+        'capability_profile: "suno"',
+        'capability_profile: "builds/packages/edm@suno/performance_package.json"',
+        1,
+    )
+    assert updated != project_text  # sanity
+    project_path.write_text(updated, encoding="utf-8")
+
+    loaded = load_recast_project(project_path)
+    artifacts = build_recast_plan_artifacts(loaded, variant="edm", backend="suno")
+
+    assert artifacts.result.plan.state_reached == "blocked_capability"
+    assert artifacts.result.plan.blocked is not None
+    assert any(
+        "collides with a protected input path" in reason
+        for reason in artifacts.result.plan.blocked.reasons
+    )
+
+    # fail-closed: 衝突先の既存内容（capability_profile YAML）が上書きされていない。
+    assert colliding_path.read_bytes() == original_capability_profile
+    assert not (colliding_path.parent / "compilation_report.json").exists()
+
+
 # --- deterministic: invoke + determinism ----------------------------------------
 
 
