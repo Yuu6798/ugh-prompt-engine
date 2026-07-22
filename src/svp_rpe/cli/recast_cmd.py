@@ -1,10 +1,12 @@
 """svprpe recast plan / status."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
 from pathlib import Path
+from typing import Optional
 
 import typer
 from rich.table import Table
@@ -32,6 +34,17 @@ _NEXT_STEP_BY_STATE: dict[str, str] = {
     "generation_failed": "生成失敗の原因を調査し、生成をやり直す",
     "observation_incomplete": "完全な音声 artifact で svprpe observe をやり直す",
 }
+
+
+def _read_plan_sha256(path: Path) -> Optional[str]:
+    """`path`（`recast_plan.json`）の現在の bytes の sha256 を返す。読めない
+    （不在・権限エラー等）場合は `None`（`recast status` はこれを「不明」では
+    なく永続化済み `plan_sha256` との不一致として扱い、fail-closed に stale
+    表示へ倒す — Codex P2 fourth round #207）。"""
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
 
 
 def _write_recast_plan_atomically(path: Path, content: str) -> None:
@@ -71,7 +84,11 @@ def recast_plan_cmd(
 
     from svp_rpe.arrange.resolver import ArrangementError
     from svp_rpe.recast import RecastError, load_recast_project
-    from svp_rpe.recast.plan import build_recast_plan, unsupported_changed_field_reasons
+    from svp_rpe.recast.plan import (
+        RECAST_PLAN_FILENAME,
+        build_recast_plan,
+        unsupported_changed_field_reasons,
+    )
     from svp_rpe.recast.state import record_state
 
     try:
@@ -81,7 +98,7 @@ def recast_plan_cmd(
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
-    plan_path = loaded.project_dir / "recast_plan.json"
+    plan_path = loaded.project_dir / RECAST_PLAN_FILENAME
     canonical = (
         json.dumps(
             result.plan.model_dump(mode="json", exclude_none=True),
@@ -99,6 +116,11 @@ def recast_plan_cmd(
 
     # 状態記録は plan JSON の publish が成功した後にのみ行う（Codex P2 #207）:
     # 書き込み失敗時に stale な recast_state.json を残さないための順序保証。
+    # plan_sha256 は実際に publish したバイト列そのものから計算する（Codex P2
+    # fourth round #207: publish 後の recast_plan.json 削除・破損・別
+    # (variant,backend) の plan による上書きを `recast status` が検出できる
+    # ようにする）。
+    plan_sha256 = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     if result.plan.blocked is not None:
         state_note = "; ".join(result.plan.blocked.reasons)
     else:
@@ -113,6 +135,7 @@ def recast_plan_cmd(
         result.plan.state_reached,
         state_note,
         inputs_digest=result.inputs_digest,
+        plan_sha256=plan_sha256,
     )
 
     anchors_table = Table(title=f"Anchors: {variant}@{backend}")
@@ -163,12 +186,16 @@ def recast_status_cmd(
     """Show `recast_state.json`'s current state per (variant, backend) run + next step.
 
     入力（score/identity_manifest/arrangement spec/capability profile/
-    mode_overrides）が記録済み run の `inputs_digest` と一致しない場合、その run
-    は stale（`recast plan` 再実行が必要）として表示する — 旧 state をそのまま
-    信用して次の一手（例: 生成に進む）を勧めない（Codex P2 #207）。
+    mode_overrides/device profile）が記録済み run の `inputs_digest` と一致しない
+    場合、その run は stale（`recast plan` 再実行が必要）として表示する — 旧
+    state をそのまま信用して次の一手（例: 生成に進む）を勧めない（Codex P2
+    #207）。加えて、記録済み `plan_sha256` を現在の `recast_plan.json` の
+    bytes（不在/読取失敗を含む）と突き合わせる — publish 後に plan 成果物が
+    削除・破損・別 (variant,backend) の plan で上書きされた場合も同様に stale
+    表示へ倒す（Codex P2 fourth round #207: fail-closed）。
     """
     from svp_rpe.recast import RecastError, load_recast_project
-    from svp_rpe.recast.plan import compute_recast_inputs_digest
+    from svp_rpe.recast.plan import RECAST_PLAN_FILENAME, compute_recast_inputs_digest
     from svp_rpe.recast.state import load_recast_state
 
     try:
@@ -184,6 +211,8 @@ def recast_status_cmd(
     table.add_column("next step")
 
     replan_step = _NEXT_STEP_BY_STATE["draft"]
+    plan_path = loaded.project_dir / RECAST_PLAN_FILENAME
+    current_plan_sha256 = _read_plan_sha256(plan_path)
     for variant in sorted(loaded.project.variants):
         for backend in sorted(loaded.project.backends):
             key = f"{variant}@{backend}"
@@ -200,6 +229,9 @@ def recast_status_cmd(
                 )
                 if run.inputs_digest is not None and run.inputs_digest != current_digest:
                     note = "stale（入力が変更済み）— svprpe recast plan 再実行が必要"
+                    next_step = replan_step
+                elif run.plan_sha256 is not None and run.plan_sha256 != current_plan_sha256:
+                    note = "stale（plan 成果物が変更/不在）— svprpe recast plan 再実行が必要"
                     next_step = replan_step
                 else:
                     next_step = _NEXT_STEP_BY_STATE.get(state, "-")
