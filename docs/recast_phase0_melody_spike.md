@@ -53,17 +53,32 @@ S2/S3 はスクリプト内で決定論的に構築されるため追加 fixture
   （`load_composition_score` は指定パスのみを読み、`compute_melody_contour` /
   `perform` は config 非依存であることを実装確認済み）
 - 決定論: 同一コマンドを 2 回実行し出力 JSON が byte-identical であることを実測済み
-- **測定コードの同一性は commit pin で担保**: 本レシピがスクリプト経由で import
-  する svp_rpe モジュール群（`perform` / `rpe.physical_features`
-  （`compute_melody_contour`）/ `compose.loader`（`load_composition_score`）等）は、
-  上記データ pin（スクリプト本体・S1 score・出力 JSON の sha256）とは別に、
-  実測を実行した commit `1248186` の tree で固定される。データ pin テスト
-  （`tests/test_recast_spike_provenance.py`）が守るのはデータファイルのみで、
-  測定コード自体の同一性は commit 祖先関係で担保する方式のため、
-  **再現実行は当該 commit（またはその子孫で該当モジュールが未変更のコミット）の
-  checkout を前提**とする
-- 以降のコード変更でレシピ出力が変わる場合は、本メモの数値を書き換えるのではなく、
-  新しい日付の再実測として別途記録する（dated log 規律）
+- **測定コードの同一性は src モジュール manifest pin で担保**: 本レシピが
+  スクリプトから**直接 import する**第一者測定モジュール 4 本の sha256:
+  - `src/svp_rpe/compose/loader.py` sha256:
+    `ad581b49056b02a409f11db22a255ed3d3a568341a1d9fe3ae0e37524786232e`
+  - `src/svp_rpe/perform/performer.py` sha256:
+    `4c0c8ca737400f759f2f665dad90f989ca12584d1a0b1969ef31df61a89b684e`
+  - `src/svp_rpe/perform/synth.py` sha256:
+    `e36d831712b3ef247292a235415a1ce36fe6d6ebaeb127987e23363c43963884`
+  - `src/svp_rpe/rpe/physical_features.py` sha256:
+    `f25e6a44572f551c295005b69b874e66bdc9086c0424ac3ec8fc53154c74029f`
+
+  上記 4 本を含む pin 表全体を `tests/test_recast_spike_provenance.py` が working
+  tree と機械照合するため、**再現の前提は「pin 表の全ファイルが working tree と
+  一致していること」**であり、特定 commit の checkout そのものではない
+  （squash 等でオブジェクトが祖先から外れても pin 表の記法自体は影響を受けない）。
+  実測を実行した commit `1248186` は、squash 等の非参照文脈では祖先関係を
+  主張できない実測時 tree の **attestation（記録）** として残す
+  （AGENTS.md §8 項目 6 準拠）
+- **限界**: 本 manifest は直接 import の file 単位 granularity であり、
+  これらのモジュールがさらに import する transitive 依存（librosa/scipy 等の
+  外部ライブラリ、共有スキーマ層）の変更は対象外。将来 attestation との差異が
+  疑われた場合は再実測で補完する
+- **効果**: 上記 4 モジュールいずれかが将来変更されると
+  `tests/test_recast_spike_provenance.py` が赤くなり、本メモの数値を無言で
+  差し替える（silent stale）ことができず、新しい日付の再実測として
+  別途記録する（dated log 規律）ことが強制される
 
 ## 3. 結果（生数値）
 

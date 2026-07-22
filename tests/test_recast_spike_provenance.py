@@ -12,7 +12,8 @@ tree の実ファイルと再ハッシュ照合する。将来 memo に pin エ�
 されても、本テストはハードコードした個別パスではなく parse 結果に追従するため
 変更なしで自動拡張される。parse 件数が 0（memo の記法変更でパースが機能しなく
 なった場合など）で silent pass しないよう、件数の下限 assert も併置する
-（スクリプト本体・S1 score・出力 JSON の最低 3 件）。
+（スクリプト本体・S1 score・出力 JSON の 3 件 + 直接 import される第一者
+測定モジュール 4 本の manifest pin で、最低 7 件）。
 """
 from __future__ import annotations
 
@@ -30,8 +31,10 @@ MEMO_PATH = Path("docs/recast_phase0_melody_spike.md")
 PIN_PATTERN = re.compile(r"`([^`\n]+)`[^\n`]*sha256:\s*\n\s*`([0-9a-f]{64})`")
 
 #: parse が silent に空へ縮退していないことの下限（スクリプト本体・S1 score 入力・
-#: 出力 JSON の最低 3 件は常に memo に記載されている想定）。
-MIN_EXPECTED_PIN_COUNT = 3
+#: 出力 JSON の 3 件 + 直接 import される第一者測定モジュール(compose/loader.py・
+#: perform/performer.py・perform/synth.py・rpe/physical_features.py)4 本の
+#: manifest pin で、最低 7 件は常に memo に記載されている想定）。
+MIN_EXPECTED_PIN_COUNT = 7
 
 
 def _parse_provenance_pins(memo_text: str) -> list[tuple[str, str]]:
