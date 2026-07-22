@@ -16,13 +16,20 @@
 #   に commit し、`render_script_sha256` で pin。音声 bytes は初版から一貫して
 #   完全同一（sha256 pin 変わらず）のため、レポート内容も `audio_file`
 #   フィールド以外は初版とバイト単位で同一（各ラウンドで再検証済み）。
-# - 本版（第4ラウンド対応）で、`render_synth_takes.py` の実バグ（出力先
-#   ディレクトリ `synth/` が非コミット = git は空ディレクトリを追跡しないため
-#   fresh checkout には存在せず、`mkdir` なしでは `FileNotFoundError` になる）
-#   を修正: `out_dir.mkdir(parents=True, exist_ok=True)` を追加。fresh checkout
-#   相当（`synth/` ディレクトリを削除した状態）から実行して修正を確認済み。
+# - 第4版で、`render_synth_takes.py` の実バグ（出力先ディレクトリ `synth/` が
+#   非コミット = git は空ディレクトリを追跡しないため fresh checkout には
+#   存在せず、`mkdir` なしでは `FileNotFoundError` になる）を修正:
+#   `out_dir.mkdir(parents=True, exist_ok=True)` を追加。fresh checkout 相当
+#   （`synth/` ディレクトリを削除した状態）から実行して修正を確認済み。
 #   修正でスクリプトのバイト内容が変わったため `render_script_sha256` を
 #   更新した。音声 bytes・レポート内容は不変（wav sha256 2/2 一致を再確認済み）。
+# - 本版（第5ラウンド対応）で、identity-rank 手順の `-o` 引数がリポジトリ
+#   ルート起点の裸ファイル名（`wi3_rank_synth_faithful.json` /
+#   `wi3_rank_synth_first_take.json`）になっており、committed fixture の
+#   実パスが書かれていなかった不備を是正: `-o` をこのディレクトリ配下への
+#   完全な相対パスに書き換えた。レシピを逐語どおり再実行し、出力が committed
+#   レポートと byte 一致することを確認済み（`-o` パス自体はレポート内容に
+#   一切混入しない ため、この変更でレポートのバイト内容は不変）。
 #
 # 目的: wi3_rank_synth_faithful.json / wi3_rank_synth_first_take.json
 # （本ディレクトリに commit）が、決定論 synth performer の 2 スタイル
@@ -31,18 +38,17 @@
 # 生出力であることを機械的に検証可能にする。新規の事実主張は含まない —
 # wi3_aggregation.yaml の inputs.synth_rank_reports 記述 および
 # wi0b_synth/observed/provenance.yaml の source_audio_sha256 pin の転記。
-format: "wi3-rank-synth-provenance/0.4"
+format: "wi3-rank-synth-provenance/0.5"
 # `date -u` 実測（本ファイル書き込み直前に実行して確認した値。初版の
 # recorded_at_utc は実測でない未来時刻だった不備を第2ラウンドで是正済み
 # — 本版はその後継の追加是正であり、書き込み直前に改めて実測している）。
-recorded_at_utc: "2026-07-22T06:53:22Z"
+recorded_at_utc: "2026-07-22T07:04:19Z"
 
 generation_session: >-
-  PR #202 Codex P2 第4ラウンド対応セッション（2026-07-22）。
-  `render_synth_takes.py` の mkdir 欠落バグ（fresh checkout で
-  `FileNotFoundError`）を修正し、`synth/` ディレクトリを削除した
-  fresh-checkout 相当の状態から実行して修正を確認した
-  （生成 wav の sha256 が既存 pin と完全一致、レポート内容は不変）。
+  PR #202 Codex P2 第5ラウンド対応セッション（2026-07-22）。identity-rank
+  手順の `-o` 引数を fixture 相対の完全パスに是正し、レシピを逐語どおり
+  リポジトリルートから再実行して、出力が committed レポートと byte 一致する
+  ことを確認した（`-o` パスの違いはレポート内容に影響しないことの実証）。
 
 # 生成コマンド列（score -> render -> extract -> identity-rank）。全コマンドは
 # リポジトリルートを cwd として実行し、引数は全て相対パス（checkout-stable）。
@@ -92,11 +98,13 @@ commands:
     command: >-
       svprpe identity-rank <tmp>/synth_faithful_take.rpe.json
       --references examples/arrangement/midnight_signal/observed/wi2_discrimination/wi2_references.yaml
-      --format json -o wi3_rank_synth_faithful.json
+      --format json
+      -o examples/arrangement/midnight_signal/observed/wi3_human_calibration/wi3_rank_synth_faithful.json
     command_first_take: >-
       svprpe identity-rank <tmp>/synth_first_take.rpe.json
       --references examples/arrangement/midnight_signal/observed/wi2_discrimination/wi2_references.yaml
-      --format json -o wi3_rank_synth_first_take.json
+      --format json
+      -o examples/arrangement/midnight_signal/observed/wi3_human_calibration/wi3_rank_synth_first_take.json
 
 # render 手順で実行する committed スクリプト自体の sha256（stale 差し替え
 # 検出用 — tests/test_wi3_human_calibration_fixture.py がこの pin と突合する）。
