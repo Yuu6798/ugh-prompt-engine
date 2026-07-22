@@ -8,13 +8,17 @@
 
 recast 製品層（編曲制作フロー）が謳う「主旋律 preserved」保証に必要な
 メロディ保存センサーのゲートスパイク。既存素材（`PhysicalRPE.melody_contour`
-= librosa.pyin ベース、`LearnedAudioAnnotations.note_events` = basic_pitch）で
-移調・テンポ不変の類似度指標が成立するかを判定する。
+= librosa.pyin ベース）で移調・テンポ不変の類似度指標が成立するかを判定する。
+**本スパイクの実測範囲は `melody_contour`（pyin）経路のみ**であり、
+`LearnedAudioAnnotations.note_events`（basic_pitch）経路は本スパイクでは
+実行していない（除外根拠は §4 参照）。
 
 ## 2. 方法
 
 ベーススコア 3 本 × スタイル 3 種（計 9 テイク）を決定論演奏者（`perform`）で
-合成し、メロディ輪郭からノート系列 → 類似度 2 指標を計算した。
+合成し、`compute_melody_contour`（pyin）でメロディ輪郭 → ノート系列 →
+類似度 2 指標を計算した。basic_pitch（`note_events`）経路は本スパイクでは
+実行していない。
 
 - **ベーススコア**:
   - S1 = `examples/composition/midnight_signal/composition_score.yaml`（既存 fixture）
@@ -39,8 +43,15 @@ S2/S3 はスクリプト内で決定論的に構築されるため追加 fixture
 
 - `scripts/spike_melody_similarity.py` sha256:
   `f97105593a334e220afddc322982e415b88d1a58a4a01cd015cea93fe2e3d444`
+- `examples/composition/midnight_signal/composition_score.yaml`（S1 の入力）sha256:
+  `37854f54b42a1c4d424f357148d3d10f347e238ec72a42d1248bea2203f97d0b`
 - `examples/recast/melody_spike_2026-07-22.json` sha256:
   `12ae62ca08bbb0801fa628943e6feeec21b11dd05c90ecdade059233f887df52`
+- S2/S3 はスクリプト内で S1 から決定論的に派生するため、S1 の pin +
+  スクリプトの pin で全 9 テイクの入力系列が固定される
+- 呼び出しグラフ上、本レシピはこれ以外に YAML config を読まない
+  （`load_composition_score` は指定パスのみを読み、`compute_melody_contour` /
+  `perform` は config 非依存であることを実装確認済み）
 - 決定論: 同一コマンドを 2 回実行し出力 JSON が byte-identical であることを実測済み
 
 ## 3. 結果（生数値）
@@ -85,11 +96,16 @@ S2/S3 はスクリプト内で決定論的に構築されるため追加 fixture
 そもそも類似度アルゴリズムに渡す入力系列が成立していない。DTW/LCS という
 アルゴリズム選択の優劣以前の問題であり、指標の改善では解決しない。
 
-既往実測と整合する:
+`note_events`（basic_pitch）経路は本スパイクでは実行していないが、除外根拠は
+以下の既往実測にある（追試ではなく既存結果の参照）:
 
-- WI0-b（#199）: melody 実推論が sim 0.6 < 閾値 0.8 で WI2 v0 から除外
+- WI0-b（#199）: melody 実推論が sim 0.6 < 事前登録閾値 0.8 で WI2 v0 から除外
   （メロディ抽出とボーカル/伴奏分離層の欠如が既知の弱点）
 - WI2（#201）: melody 軸が非弁別（生成物の同一性判定でも melody は機能していない）
+
+すなわち本スパイクの pyin 経路実測（本セクション冒頭）と、#199/#201 による
+note_events 経路の既往不成立が、それぞれ独立に melody センサーのゲートを
+不成立にしている。
 
 ## 5. 帰結（Recast Workspace 指示書 §2 ゲート条項適用）
 
@@ -102,13 +118,17 @@ recast PR4 の縦切り hard anchor は melody を採用せず、以下に差し
 melody は recast 初版において **`not_observable` を正式ステータス**として扱う
 （`observe` の既存 D-1 `no_sensor` / `not_observed` 経路をそのまま使う）。
 **melody preserved の判定は行わない**——分類できないものを「保存されている」と
-偽って報告することは避ける。
+偽って報告することは避ける。この帰結は pyin 経路（本スパイク実測）と
+note_events 経路（#199/#201 既往実測）が**それぞれ独立に**不成立であることに
+基づくため、上記の射程訂正後も変わらない。
 
 ### WI 系への再入条件
 
 ボーカル分離層（Demucs 等）+ 単旋律素材（ボーカルあり曲・ボーカル stem 抽出後）
 での再スパイクが必要。合成和音パッドではなく単旋律ソースで pyin/basic_pitch が
-機能するかを再検証してから melody センサーの再検討を行う。
+機能するかを再検証してから melody センサーの再検討を行う。再入時は本スパイク
+（pyin/`melody_contour`）の再測に加え、note_events（basic_pitch）経路の再測も
+対象に含める。
 
 ## 6. 限界（honesty）
 
