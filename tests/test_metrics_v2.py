@@ -16,11 +16,15 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from svp_rpe.rpe.physical_features import (
     compute_active_rate,
     compute_active_rate_v2,
+    compute_crest_factor_robust,
     compute_fullness,
+    compute_silence_rate,
     compute_valley_db,
 )
 from svp_rpe.rpe.valley import valley_rms_percentile
@@ -174,6 +178,78 @@ def test_inv_level_invariance_on_synthetic_mix(scale_db: float) -> None:
     assert compute_valley_db(y_scaled, SR) == pytest.approx(
         compute_valley_db(y, SR), abs=0.3
     )
+
+
+# ---------------------------------------------------------------------------
+# T-INV property sweep — generalizes test_inv_level_invariance_on_synthetic_mix
+# (single fixed signal x 3 gains) into a Hypothesis sweep over the signal
+# family + an arbitrary gain. Pure numpy/librosa, no audio decode, so this
+# stays in the fast (non-`slow`) loop — see CLAUDE.md Testing 節.
+# ---------------------------------------------------------------------------
+
+
+def _sweep_signal(
+    *,
+    freq: float,
+    envelope_depth: float,
+    noise_amp: float,
+    seed: int,
+    duration_sec: float = 8.0,
+    sr: int = SR,
+) -> np.ndarray:
+    """Same recipe as test_inv_level_invariance_on_synthetic_mix (tone + seeded
+    noise + slow swell), parameterized for the property sweep. `duration_sec`
+    is shortened from the fixed test's 20s to keep the sweep's total runtime
+    small. The envelope is `0.5 + envelope_depth * sin(...)`; with
+    `envelope_depth` capped at 0.4 the minimum level is 0.5 - 0.4 = 0.1, so the
+    signal never dips into true digital silence (matching the Design Memo's
+    "min level does not fall below 0.1" constraint)."""
+    rng = np.random.default_rng(seed)
+    t = np.arange(int(duration_sec * sr)) / sr
+    tone = 0.3 * np.sin(2 * np.pi * freq * t)
+    noise = noise_amp * rng.normal(0.0, 1.0, t.size)
+    envelope = 0.5 + envelope_depth * np.sin(2 * np.pi * 0.1 * t)
+    return ((tone + noise) * envelope).astype(np.float32)
+
+
+@settings(max_examples=15, deadline=None, derandomize=True)
+@given(
+    gain_db=st.floats(min_value=-60.0, max_value=12.0),
+    freq=st.floats(min_value=80.0, max_value=2000.0),
+    envelope_depth=st.floats(min_value=0.0, max_value=0.4),
+    noise_amp=st.floats(min_value=0.0, max_value=0.1),
+    seed=st.sampled_from([1, 2, 3, 4, 5]),
+)
+def test_inv_level_invariance_property_sweep(
+    gain_db: float,
+    freq: float,
+    envelope_depth: float,
+    noise_amp: float,
+    seed: int,
+) -> None:
+    """T-INV, generalized: for an arbitrary signal from the tone+noise+swell
+    family and an arbitrary gain shift, the v2 metrics must not move (and
+    silence_rate/active_rate_v2 must always sum to 1)."""
+    y = _sweep_signal(freq=freq, envelope_depth=envelope_depth, noise_amp=noise_amp, seed=seed)
+    y_scaled = (y * 10 ** (gain_db / 20.0)).astype(np.float32)
+
+    silence, silence_scaled = compute_silence_rate(y, SR), compute_silence_rate(y_scaled, SR)
+    active, active_scaled = compute_active_rate_v2(y, SR), compute_active_rate_v2(y_scaled, SR)
+    fullness, fullness_scaled = compute_fullness(y, SR), compute_fullness(y_scaled, SR)
+    valley, valley_scaled = compute_valley_db(y, SR), compute_valley_db(y_scaled, SR)
+    crest, crest_scaled = compute_crest_factor_robust(y), compute_crest_factor_robust(y_scaled)
+
+    # Identity: silence_rate + active_rate_v2 == 1, at any gain.
+    assert silence + active == pytest.approx(1.0, abs=1e-6)
+    assert silence_scaled + active_scaled == pytest.approx(1.0, abs=1e-6)
+
+    # Level invariance, tolerances inherited from the fixed T3/INV tests above.
+    assert active_scaled == pytest.approx(active, abs=0.02)
+    assert fullness_scaled == pytest.approx(fullness, abs=0.02)
+    assert valley_scaled == pytest.approx(valley, abs=0.3)
+    # crest_factor_robust is a ratio (peak/RMS) so it is level-invariant by
+    # construction; 1% relative tolerance absorbs float32 rounding only.
+    assert crest_scaled == pytest.approx(crest, rel=0.01)
 
 
 class TestLegacyRegressionProtection:
