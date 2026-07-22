@@ -23,13 +23,14 @@
 #   （`synth/` ディレクトリを削除した状態）から実行して修正を確認済み。
 #   修正でスクリプトのバイト内容が変わったため `render_script_sha256` を
 #   更新した。音声 bytes・レポート内容は不変（wav sha256 2/2 一致を再確認済み）。
-# - 本版（第5ラウンド対応）で、identity-rank 手順の `-o` 引数がリポジトリ
-#   ルート起点の裸ファイル名（`wi3_rank_synth_faithful.json` /
-#   `wi3_rank_synth_first_take.json`）になっており、committed fixture の
-#   実パスが書かれていなかった不備を是正: `-o` をこのディレクトリ配下への
-#   完全な相対パスに書き換えた。レシピを逐語どおり再実行し、出力が committed
-#   レポートと byte 一致することを確認済み（`-o` パス自体はレポート内容に
-#   一切混入しない ため、この変更でレポートのバイト内容は不変）。
+# - 本版（第6ラウンド対応）で、extract/identity-rank 手順の中間ファイル名が
+#   `<tmp>/...` というプレースホルダのままで、bash にコピペすると
+#   `<tmp>` がリダイレクト構文として誤解釈され実行不能だった不備を是正:
+#   中間 bundle (`.rpe.json`) の置き場を非コミットの `synth/`（render 出力と
+#   同じディレクトリ）に固定した具体的な相対パスへ書き換え、レシピ末尾に
+#   `synth/` ディレクトリごと削除する掃除コマンドを明記した。これでレシピ全体が
+#   シェルへの逐語コピペで実行可能になる。レシピを実際にコピペで再実行し、
+#   出力が committed レポートと byte 一致・wav sha256 2/2 pin 一致を確認済み。
 #
 # 目的: wi3_rank_synth_faithful.json / wi3_rank_synth_first_take.json
 # （本ディレクトリに commit）が、決定論 synth performer の 2 スタイル
@@ -38,17 +39,18 @@
 # 生出力であることを機械的に検証可能にする。新規の事実主張は含まない —
 # wi3_aggregation.yaml の inputs.synth_rank_reports 記述 および
 # wi0b_synth/observed/provenance.yaml の source_audio_sha256 pin の転記。
-format: "wi3-rank-synth-provenance/0.5"
+format: "wi3-rank-synth-provenance/0.6"
 # `date -u` 実測（本ファイル書き込み直前に実行して確認した値。初版の
 # recorded_at_utc は実測でない未来時刻だった不備を第2ラウンドで是正済み
 # — 本版はその後継の追加是正であり、書き込み直前に改めて実測している）。
-recorded_at_utc: "2026-07-22T07:04:19Z"
+recorded_at_utc: "2026-07-22T07:33:48Z"
 
 generation_session: >-
-  PR #202 Codex P2 第5ラウンド対応セッション（2026-07-22）。identity-rank
-  手順の `-o` 引数を fixture 相対の完全パスに是正し、レシピを逐語どおり
-  リポジトリルートから再実行して、出力が committed レポートと byte 一致する
-  ことを確認した（`-o` パスの違いはレポート内容に影響しないことの実証）。
+  PR #202 Codex P2 第6ラウンド対応セッション（2026-07-22）。レシピ中の
+  `<tmp>` プレースホルダ（bash でリダイレクト解釈され実行不能）を具体的な
+  相対パス（非コミットの `synth/` ディレクトリ配下）へ置換し、末尾に掃除
+  コマンドを明記。レシピを一字一句シェルにコピペで逐語再実行し、出力が
+  committed レポートと byte 一致することを確認した。
 
 # 生成コマンド列（score -> render -> extract -> identity-rank）。全コマンドは
 # リポジトリルートを cwd として実行し、引数は全て相対パス（checkout-stable）。
@@ -76,15 +78,20 @@ commands:
       - "examples/arrangement/midnight_signal/observed/wi3_human_calibration/synth/faithful_take.wav"
       - "examples/arrangement/midnight_signal/observed/wi3_human_calibration/synth/first_take.wav"
   - step: extract
-    description: "各 wav を RPE bundle に抽出（デフォルト設定、追加フラグなし。引数は相対パス）"
+    description: >-
+      各 wav を RPE bundle に抽出（デフォルト設定、追加フラグなし。引数は
+      相対パス）。中間 bundle は render 出力と同じ非コミットの `synth/`
+      ディレクトリ配下に書く（`<tmp>` プレースホルダは bash でリダイレクト
+      構文として誤解釈され実行不能だったため、具体的な相対パスに固定した
+      — 第6ラウンド Codex P2 是正）。
     command: >-
       svprpe extract
       examples/arrangement/midnight_signal/observed/wi3_human_calibration/synth/faithful_take.wav
-      -o <tmp>/synth_faithful_take.rpe.json
+      -o examples/arrangement/midnight_signal/observed/wi3_human_calibration/synth/synth_faithful_take.rpe.json
     command_first_take: >-
       svprpe extract
       examples/arrangement/midnight_signal/observed/wi3_human_calibration/synth/first_take.wav
-      -o <tmp>/synth_first_take.rpe.json
+      -o examples/arrangement/midnight_signal/observed/wi3_human_calibration/synth/synth_first_take.rpe.json
     note: >-
       bundle の `audio_file` フィールドは extract に渡した引数をそのまま記録する
       ため、相対パス引数を渡すことで bundle 内が相対パスになる（下流の
@@ -96,15 +103,24 @@ commands:
       schema_version wi2-references/0.1: canonical / structure_destroyed /
       harmony_decoy / other_work の 4 参照）。
     command: >-
-      svprpe identity-rank <tmp>/synth_faithful_take.rpe.json
+      svprpe identity-rank
+      examples/arrangement/midnight_signal/observed/wi3_human_calibration/synth/synth_faithful_take.rpe.json
       --references examples/arrangement/midnight_signal/observed/wi2_discrimination/wi2_references.yaml
       --format json
       -o examples/arrangement/midnight_signal/observed/wi3_human_calibration/wi3_rank_synth_faithful.json
     command_first_take: >-
-      svprpe identity-rank <tmp>/synth_first_take.rpe.json
+      svprpe identity-rank
+      examples/arrangement/midnight_signal/observed/wi3_human_calibration/synth/synth_first_take.rpe.json
       --references examples/arrangement/midnight_signal/observed/wi2_discrimination/wi2_references.yaml
       --format json
       -o examples/arrangement/midnight_signal/observed/wi3_human_calibration/wi3_rank_synth_first_take.json
+  - step: cleanup
+    description: >-
+      非コミットの中間物（render 出力 wav 2 本 + extract の中間 bundle 2 本）を
+      `synth/` ディレクトリごと削除する。committed なのはレポート 2 本
+      （`wi3_rank_synth_{faithful,first_take}.json`）のみ。
+    command: >-
+      rm -rf examples/arrangement/midnight_signal/observed/wi3_human_calibration/synth
 
 # render 手順で実行する committed スクリプト自体の sha256（stale 差し替え
 # 検出用 — tests/test_wi3_human_calibration_fixture.py がこの pin と突合する）。
