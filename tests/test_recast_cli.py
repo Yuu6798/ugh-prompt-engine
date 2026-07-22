@@ -75,6 +75,65 @@ def test_recast_plan_exits_nonzero_when_blocked(tmp_path: Path) -> None:
     assert data["state_reached"] == "blocked_authoring"
 
 
+def test_recast_plan_blocks_capability_on_corrupted_capability_profile(tmp_path: Path) -> None:
+    """capability_profile の YAML 破損は identity manifest / arrangement spec の
+    同種の失敗（blocked_verification / blocked_authoring）と一貫させ
+    blocked_capability として recast_plan.json に publish + state 記録される
+    ことを検証する（Codex P2 eighth round #207: 以前は保存済み例外を re-raise
+    し、CLI が top-level Error で落ちて plan/state が一切書かれなかった）。"""
+    project_path = _copy_demo_project(tmp_path)
+    project_text = project_path.read_text(encoding="utf-8")
+    mutated = project_text.replace(
+        'capability_profile: "suno"', 'capability_profile: "capability_profile.yaml"'
+    )
+    assert mutated != project_text  # sanity: the replacement actually matched
+    project_path.write_text(mutated, encoding="utf-8")
+    (project_path.parent / "capability_profile.yaml").write_text(
+        "not-a-mapping\n", encoding="utf-8"
+    )
+
+    result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+
+    assert result.exit_code == 1
+    plan_path = project_path.parent / "recast_plan.json"
+    assert plan_path.is_file()
+    data = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert data["state_reached"] == "blocked_capability"
+
+    status_result = runner.invoke(app, ["recast", "status", str(project_path)])
+    assert status_result.exit_code == 0, status_result.output
+    assert "blocked_capability" in status_result.output
+
+
+def test_recast_plan_blocks_capability_on_corrupted_mode_overrides(tmp_path: Path) -> None:
+    """mode_overrides の YAML 破損も同様に blocked_capability として publish +
+    state 記録される（Codex P2 eighth round #207）。"""
+    project_path = _copy_demo_project(tmp_path)
+    project_text = project_path.read_text(encoding="utf-8")
+    mutated = project_text.replace(
+        'mode_overrides: "suno"', 'mode_overrides: "mode_overrides.yaml"'
+    )
+    assert mutated != project_text  # sanity: the replacement actually matched
+    project_path.write_text(mutated, encoding="utf-8")
+    (project_path.parent / "mode_overrides.yaml").write_text("not-a-mapping\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+
+    assert result.exit_code == 1
+    plan_path = project_path.parent / "recast_plan.json"
+    assert plan_path.is_file()
+    data = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert data["state_reached"] == "blocked_capability"
+
+    status_result = runner.invoke(app, ["recast", "status", str(project_path)])
+    assert status_result.exit_code == 0, status_result.output
+    assert "blocked_capability" in status_result.output
+
+
 def test_recast_plan_write_failure_does_not_persist_state(tmp_path: Path, monkeypatch) -> None:
     """`recast_plan.json` の atomic publish が失敗した場合、`record_state` は
     呼ばれず `recast_state.json` も書き換わらないことを検証する（Codex P2 second

@@ -224,10 +224,23 @@ def _normalize_diagnostic(text: str, project_dir: Path) -> str:
     置換する。project 外を指す絶対パス（通常は出ないはずだが、封じ込め
     エラーの escaped-to パス等の将来経路に備える）は安定したプレースホルダ
     `<external-path>` へ置換し、ローカル FS レイアウトの漏洩を fail-closed に
-    防ぐ（中身は判読せず一律マスクする）。"""
-    project_dir_str = str(project_dir)
-    normalized = text.replace(project_dir_str + os.sep, "")
-    normalized = normalized.replace(project_dir_str, ".")
+    防ぐ（中身は判読せず一律マスクする）。
+
+    境界判定（Codex P2 eighth round #207）: `project_dir` は文字列 prefix
+    一致だけでなく、直後が path 継続文字（英数字/`.`/`-`/`_`）でないことまで
+    確認してから置換する。無境界な `str.replace(project_dir_str, ...)` だと
+    `demo_project_evil` のような**文字列 prefix が同じだけの兄弟ディレクトリ**
+    まで剥がしてしまい、`._evil/...` のような機械依存の断片が残る。
+    `project_dir` 配下として認識できない絶対パスは兄弟ディレクトリごと
+    `<external-path>` へ完全にマスクされる（`_ABSOLUTE_PATH_TOKEN_RE` 側）。"""
+    project_dir_pattern = re.escape(str(project_dir))
+    # 1) "project_dir/xxx" 形（配下の絶対パス）を相対 locator へ。
+    normalized = re.sub(project_dir_pattern + r"/", "", text)
+    # 2) project_dir 自身への完全一致（直後が path 継続文字でない場合のみ）を
+    #    "." へ。既に 1) で "project_dir/" 形は除去済みのため、ここに残る
+    #    一致は「project_dir で終わる」か「project_dir の直後が "/" 以外の
+    #    非継続文字（空白・引用符・行末等）」のいずれかに限られる。
+    normalized = re.sub(project_dir_pattern + r"(?![\w.-])", ".", normalized)
     return _ABSOLUTE_PATH_TOKEN_RE.sub("<external-path>", normalized)
 
 
@@ -882,11 +895,23 @@ def build_recast_plan(
         )
 
     # --- step 6: capability profile + mode overrides ------------------------
+    # capability_profile / mode_overrides の YAML 破損・schema 不正は、
+    # identity manifest / arrangement spec の同種の失敗（blocked_verification /
+    # blocked_authoring）と一貫させ blocked_capability として finalize する
+    # （Codex P2 eighth round #207: 以前は保存済み例外を re-raise していたため
+    # CLI が top-level Error で落ち、recast_plan.json も state も残らなかった
+    # — 他の parse 失敗系と非一貫だった）。
     if profile_error is not None:
-        raise profile_error
+        return _finalize(
+            state_reached="blocked_capability",
+            blocked=BlockedInfo(state="blocked_capability", reasons=[str(profile_error)]),
+        )
     assert profile is not None
     if mode_overrides_error is not None:
-        raise mode_overrides_error
+        return _finalize(
+            state_reached="blocked_capability",
+            blocked=BlockedInfo(state="blocked_capability", reasons=[str(mode_overrides_error)]),
+        )
     if mode_overrides_config is not None and mode_overrides_config.generator != profile.generator:
         raise RecastError(
             f"recast project '{project.project.id}': backend {backend!r} mode_overrides "
