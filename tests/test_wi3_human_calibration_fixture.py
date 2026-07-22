@@ -47,6 +47,7 @@ import yaml
 
 FIXTURE_DIR = Path("examples/arrangement/midnight_signal/observed/wi3_human_calibration")
 WI2_FIXTURE_DIR = Path("examples/arrangement/midnight_signal/observed/wi2_discrimination")
+SUNO_FIXTURE_DIR = Path("examples/arrangement/midnight_signal/observed/suno")
 
 PREREGISTRATION_PATH = FIXTURE_DIR / "wi3_preregistration.yaml"
 SEALED_MAPPING_PATH = FIXTURE_DIR / "wi3_pair_mapping.sealed.yaml"
@@ -55,6 +56,8 @@ KIT_MANIFEST_PATH = FIXTURE_DIR / "wi3_kit_manifest.json"
 AGGREGATION_PATH = FIXTURE_DIR / "wi3_aggregation.yaml"
 SYNTH_PROVENANCE_PATH = FIXTURE_DIR / "wi3_rank_synth_provenance.yaml"
 SYNTH_RENDER_SCRIPT_PATH = FIXTURE_DIR / "render_synth_takes.py"
+P5_DEFERRAL_EVIDENCE_PATH = FIXTURE_DIR / "wi3_p5_deferral_evidence.md"
+SUNO_TAKES_MEMO_PATH = SUNO_FIXTURE_DIR / "takes_memo.yaml"
 
 PLAN_CONFIRMED_AT_UTC = "2026-07-21T13:56:58Z"
 RECEIVED_AT_UTC = "2026-07-22T05:40:41Z"
@@ -416,6 +419,32 @@ def test_render_script_sha256_matches_provenance_pin() -> None:
         f"{SYNTH_RENDER_SCRIPT_PATH.name}: committed file sha256 {actual_sha256!r} does not match "
         f"wi3_rank_synth_provenance.yaml pin {pinned_sha256!r}"
     )
+
+
+def test_suno_p5_materials_have_sha256_pin_and_no_drive_file_id() -> None:
+    """PR #202 Codex P2 第4ラウンド対応: ``wi3_p5_deferral_evidence.md``
+    (a) 節の機械検証可能な事実を pin する — P5（実 Suno 正典 form take vs
+    順序破壊 take）に必要な 4 take (``suno_A1``/``suno_A2``/``suno_B1``/
+    ``suno_B2``) の provenance 正本 ``observed/suno/takes_memo.yaml`` の
+    各エントリが ``sha256`` フィールドを持ち、``drive_file_id`` フィールドを
+    一切持たないことを assert する（``wi3_preregistration.yaml`` §2 の P5
+    status「sha256 pin のみで Drive 未回収」の committed 裏付け。
+    ``wi3_preregistration.yaml`` 自体は聴取前凍結の歴史的記録のため本テストは
+    それを変更・再検証しない — 参照するのは ``takes_memo.yaml`` の実データの
+    みである）。
+    """
+    memo = _load_yaml(SUNO_TAKES_MEMO_PATH)
+    takes = memo["takes"]
+    assert {t["assigned_name"] for t in takes} == {"suno_A1", "suno_A2", "suno_B1", "suno_B2"}
+
+    for take in takes:
+        name = take["assigned_name"]
+        assert re.fullmatch(r"[0-9a-f]{64}", take["sha256"]), f"{name}: not a well-formed sha256 hex digest"
+        assert "drive_file_id" not in take, f"{name}: unexpectedly has a drive_file_id field"
+
+    # the evidence doc itself must exist (committed backing for the
+    # preregistration's scratchpad-only wi3_audio_inventory.md reference).
+    assert P5_DEFERRAL_EVIDENCE_PATH.is_file()
 
 
 def test_pair_level_predictions_and_axis_summary_recompute_from_committed_inputs() -> None:

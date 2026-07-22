@@ -12,11 +12,17 @@
 #   スクリプト自体は scratchpad 限定（コマンド列に `<script>` プレースホルダ
 #   のみ記載）で、fresh checkout に再生成用の実行物が存在しなかった
 #   （第3ラウンド Codex P2 で検出）。
-# - 本版（第3ラウンド対応）で、レンダースクリプトを
-#   `render_synth_takes.py` として本ディレクトリに commit し、下記
-#   `render_script_sha256` で pin。音声 bytes は初版から一貫して完全同一
-#   （sha256 pin 変わらず）のため、レポート内容も `audio_file` フィールド
-#   以外は初版とバイト単位で同一（各ラウンドで再検証済み）。
+# - 第3版で、レンダースクリプトを `render_synth_takes.py` として本ディレクトリ
+#   に commit し、`render_script_sha256` で pin。音声 bytes は初版から一貫して
+#   完全同一（sha256 pin 変わらず）のため、レポート内容も `audio_file`
+#   フィールド以外は初版とバイト単位で同一（各ラウンドで再検証済み）。
+# - 本版（第4ラウンド対応）で、`render_synth_takes.py` の実バグ（出力先
+#   ディレクトリ `synth/` が非コミット = git は空ディレクトリを追跡しないため
+#   fresh checkout には存在せず、`mkdir` なしでは `FileNotFoundError` になる）
+#   を修正: `out_dir.mkdir(parents=True, exist_ok=True)` を追加。fresh checkout
+#   相当（`synth/` ディレクトリを削除した状態）から実行して修正を確認済み。
+#   修正でスクリプトのバイト内容が変わったため `render_script_sha256` を
+#   更新した。音声 bytes・レポート内容は不変（wav sha256 2/2 一致を再確認済み）。
 #
 # 目的: wi3_rank_synth_faithful.json / wi3_rank_synth_first_take.json
 # （本ディレクトリに commit）が、決定論 synth performer の 2 スタイル
@@ -25,17 +31,17 @@
 # 生出力であることを機械的に検証可能にする。新規の事実主張は含まない —
 # wi3_aggregation.yaml の inputs.synth_rank_reports 記述 および
 # wi0b_synth/observed/provenance.yaml の source_audio_sha256 pin の転記。
-format: "wi3-rank-synth-provenance/0.3"
+format: "wi3-rank-synth-provenance/0.4"
 # `date -u` 実測（本ファイル書き込み直前に実行して確認した値。初版の
 # recorded_at_utc は実測でない未来時刻だった不備を第2ラウンドで是正済み
 # — 本版はその後継の追加是正であり、書き込み直前に改めて実測している）。
-recorded_at_utc: "2026-07-22T06:39:47Z"
+recorded_at_utc: "2026-07-22T06:53:22Z"
 
 generation_session: >-
-  PR #202 Codex P2 第3ラウンド対応セッション（2026-07-22）。レンダースクリプト
-  `render_synth_takes.py` を本ディレクトリに commit した上でリポジトリルート
-  （cwd）から実行し、fresh checkout から wav 再作成 -> extract -> identity-rank
-  まで一連の手順が pin 済み実行物のみで再現できることを確認した
+  PR #202 Codex P2 第4ラウンド対応セッション（2026-07-22）。
+  `render_synth_takes.py` の mkdir 欠落バグ（fresh checkout で
+  `FileNotFoundError`）を修正し、`synth/` ディレクトリを削除した
+  fresh-checkout 相当の状態から実行して修正を確認した
   （生成 wav の sha256 が既存 pin と完全一致、レポート内容は不変）。
 
 # 生成コマンド列（score -> render -> extract -> identity-rank）。全コマンドは
@@ -94,27 +100,30 @@ commands:
 
 # render 手順で実行する committed スクリプト自体の sha256（stale 差し替え
 # 検出用 — tests/test_wi3_human_calibration_fixture.py がこの pin と突合する）。
+# 第4ラウンドで mkdir 欠落バグ修正によりバイト内容が変わったため pin 更新。
 render_script_sha256:
-  render_synth_takes.py: "f9bcfb504d50588b5da61e84c475f2d09c9d516e3826d8afb26cddfc04a56220"
+  render_synth_takes.py: "97159b2542b50348a5aa57ceebe091f1e347373ab6c36fb5155d921d21c08ac4"
 
 # 入力 wav の sha256。wi0b_synth/observed/provenance.yaml の
 # source_audio_sha256（faithful_take）と一致することを明記（同一
 # composition_score・同一 FAITHFUL_TAKE スタイルからの決定論レンダリングである
 # ことの機械的裏付け）。first_take (FIRST_TAKE style) は wi0b_synth に対応物が
 # ないため wi3_kit_manifest.json の pair06_A.wav pin と突合する。
-# fresh-process 再現: committed render_synth_takes.py をリポジトリルートから
-# 実行した結果も含め、これまでに独立した実行で 4/4 一致
+# fresh-process 再現: mkdir バグ修正後の committed render_synth_takes.py を
+# 「`synth/` ディレクトリ削除済み（fresh checkout 相当）」の状態から
+# リポジトリルートで実行した結果も含め、これまでに独立した実行で 5/5 一致
 # （scratchpad/wi3_synth/, scratchpad/wi3_synth_run2/ の 2 回 + 第2ラウンドの
-# 相対パス実行 1 回 + 本ラウンドの committed スクリプト実行 1 回）。
+# 相対パス実行 1 回 + 第3ラウンドの committed スクリプト実行 1 回 + 本ラウンドの
+# mkdir バグ修正後・fresh-checkout 相当実行 1 回）。
 input_audio_sha256:
   faithful_take:
     sha256: "4d8c83f67c1b2441e09fa84debdc47ec0131c1a13ee1b813b0ef55e874903e90"
     cross_check: "wi0b_synth/observed/provenance.yaml#source_audio_sha256 (同値) / wi3_kit_manifest.json pair06_B.wav"
-    fresh_process_reproduction: "4/4 (scratchpad/wi3_synth/, scratchpad/wi3_synth_run2/, 第2ラウンド相対パス実行, 本ラウンド committed スクリプト実行)"
+    fresh_process_reproduction: "5/5 (scratchpad/wi3_synth/, scratchpad/wi3_synth_run2/, 第2ラウンド相対パス実行, 第3ラウンド committed スクリプト実行, 第4ラウンド mkdir修正後 fresh-checkout相当実行)"
   first_take:
     sha256: "467f5200173cbea43933c69a5ba9dd8b156eee2e11ff9de0bd6475ed5dfb7e46"
     cross_check: "wi3_kit_manifest.json pair06_A.wav"
-    fresh_process_reproduction: "4/4 (scratchpad/wi3_synth/, scratchpad/wi3_synth_run2/, 第2ラウンド相対パス実行, 本ラウンド committed スクリプト実行)"
+    fresh_process_reproduction: "5/5 (scratchpad/wi3_synth/, scratchpad/wi3_synth_run2/, 第2ラウンド相対パス実行, 第3ラウンド committed スクリプト実行, 第4ラウンド mkdir修正後 fresh-checkout相当実行)"
 
 # レポート 2 本自身の sha256（本ディレクトリに commit したファイルの stale
 # 差し替え検出用 — tests/test_wi3_human_calibration_fixture.py がこの pin と

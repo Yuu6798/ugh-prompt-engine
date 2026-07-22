@@ -33,6 +33,12 @@ from svp_rpe.perform import FAITHFUL_TAKE, FIRST_TAKE, perform, wav_bytes
 def main() -> None:
     score_path = Path(sys.argv[1])
     out_dir = Path(sys.argv[2])
+    # `synth/` is intentionally non-committed (git does not track empty
+    # directories), so a fresh checkout has no such directory yet -- create it
+    # here rather than requiring the caller to `mkdir` first (that omission
+    # was a real FileNotFoundError on a fresh checkout, caught by PR #202
+    # Codex P2).
+    out_dir.mkdir(parents=True, exist_ok=True)
     score = load_composition_score(score_path)
 
     for style, fname in ((FAITHFUL_TAKE, "faithful_take.wav"), (FIRST_TAKE, "first_take.wav")):
