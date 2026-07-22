@@ -7,7 +7,7 @@
     "svp_rpe.rpe.models",
     "svp_rpe.rpe.physical_features"
   ],
-  "generated_by": "scripts/spike_melody_similarity.py --dump-modules (execution-time consumption granularity: sys.setprofile call-event trace of run_spike(), intersected with a pre-run bytes snapshot for TOCTOU safety; modules that are only imported via package __init__ side effects but whose functions are never called during measurement are excluded)",
+  "generated_by": "scripts/spike_melody_similarity.py --dump-modules (execution-time consumption granularity: sys.setprofile call-event trace of run_spike(), intersected with a pre-import source-tree hash table taken before any svp_rpe import for TOCTOU safety; modules that are only imported via package __init__ side effects but whose functions are never called during measurement are excluded)",
   "modules": {
     "svp_rpe.compose.loader": {
       "path": "src/svp_rpe/compose/loader.py",

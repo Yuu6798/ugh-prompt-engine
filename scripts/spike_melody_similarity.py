@@ -29,25 +29,60 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from svp_rpe.compose.loader import load_composition_score  # noqa: E402
-from svp_rpe.compose.models import CompositionScore  # noqa: E402
-from svp_rpe.perform.performer import PerformanceStyle, perform  # noqa: E402
-from svp_rpe.perform.synth import SAMPLE_RATE, sha256_bytes, wav_bytes  # noqa: E402
-from svp_rpe.rpe.models import MelodyContour  # noqa: E402
-from svp_rpe.rpe.physical_features import compute_melody_contour  # noqa: E402
+# 注意: svp_rpe の import はここではまだ行わない。``--dump-modules`` 使用時は
+# import 前に事前ハッシュ（``_prehash_svp_rpe_source_tree``）を取る必要があり、
+# import はそのあと ``_import_svp_rpe_symbols()`` の中で一括して行う（TOCTOU を
+# import 実行そのものより前に排除するため）。svp_rpe に依存するモジュール定数
+# （``STYLE_A`` 等）もその関数の中で初期化される。以下で宣言する名前は、
+# ``main()`` が ``_import_svp_rpe_symbols()`` を呼んだ後に実際の値へ束縛される
+# （`from __future__ import annotations` によりこのファイル内の型注釈は文字列
+# として遅延評価されるため、import 前でも関数定義自体は問題なく行える）。
+load_composition_score: Any = None
+CompositionScore: Any = None
+PerformanceStyle: Any = None
+perform: Any = None
+SAMPLE_RATE: Any = None
+sha256_bytes: Any = None
+wav_bytes: Any = None
+MelodyContour: Any = None
+compute_melody_contour: Any = None
+STYLE_A: Any = None
+STYLE_B1: Any = None
+STYLE_B2: Any = None
+STYLES: Any = None
 
 SCHEMA_VERSION = "1.0"
 S1_PATH = ROOT / "examples" / "composition" / "midnight_signal" / "composition_score.yaml"
 
-# 演奏テイク定義（Design Memo 指定どおり: seed のみが乱数源）。
-STYLE_A = PerformanceStyle(name="base", seed=20)
-STYLE_B1 = PerformanceStyle(name="transposed_up", transpose=3, bpm_bias=25.0, seed=21)
-STYLE_B2 = PerformanceStyle(name="transposed_down", transpose=-4, bpm_bias=-20.0, seed=22)
-STYLES = (STYLE_A, STYLE_B1, STYLE_B2)
-
 MEDFILT_KERNEL = 5
 MIN_RUN_LENGTH = 3
 MIN_VOICING = 0.5
+
+
+def _import_svp_rpe_symbols() -> None:
+    """svp_rpe の import と、それに依存するモジュール定数（``STYLE_A`` 等）の
+    初期化をここに集約する。``--dump-modules`` 使用時は、この関数を呼ぶ前に
+    ``_prehash_svp_rpe_source_tree()`` で事前ハッシュを取っておくことで、
+    「pin される bytes」と「import 機構が実際に読む bytes」を一致させる
+    （import 完了直後にスナップショットする旧方式だと、import 実行そのものと
+    スナップショットの間に working tree が書き換わるケースを拾えなかった）。
+    """
+    global load_composition_score, CompositionScore, PerformanceStyle, perform
+    global SAMPLE_RATE, sha256_bytes, wav_bytes, MelodyContour, compute_melody_contour
+    global STYLE_A, STYLE_B1, STYLE_B2, STYLES
+
+    from svp_rpe.compose.loader import load_composition_score
+    from svp_rpe.compose.models import CompositionScore
+    from svp_rpe.perform.performer import PerformanceStyle, perform
+    from svp_rpe.perform.synth import SAMPLE_RATE, sha256_bytes, wav_bytes
+    from svp_rpe.rpe.models import MelodyContour
+    from svp_rpe.rpe.physical_features import compute_melody_contour
+
+    # 演奏テイク定義（Design Memo 指定どおり: seed のみが乱数源）。
+    STYLE_A = PerformanceStyle(name="base", seed=20)
+    STYLE_B1 = PerformanceStyle(name="transposed_up", transpose=3, bpm_bias=25.0, seed=21)
+    STYLE_B2 = PerformanceStyle(name="transposed_down", transpose=-4, bpm_bias=-20.0, seed=22)
+    STYLES = (STYLE_A, STYLE_B1, STYLE_B2)
 
 
 # ---------------------------------------------------------------------------
@@ -287,34 +322,42 @@ def compute_similarity(
 
 
 # ---------------------------------------------------------------------------
-# --dump-modules: 実行トレース由来の svp_rpe 推移閉包 manifest
+# --dump-modules: 実行時消費 granularity の svp_rpe manifest
 # ---------------------------------------------------------------------------
 
 
-def _svp_rpe_module_names() -> set[str]:
-    return {name for name in sys.modules if name == "svp_rpe" or name.startswith("svp_rpe.")}
+def _prehash_svp_rpe_source_tree() -> dict[str, str]:
+    """svp_rpe を**一切 import する前**（``_import_svp_rpe_symbols()`` 呼び出し前）
+    に呼ぶ。``src/svp_rpe/`` 配下の全 ``*.py`` ファイルを glob し、bytes を
+    sha256 して ``{relpath: sha256}`` の事前ハッシュ表を作る。
 
-
-def _snapshot_svp_rpe_module_bytes() -> dict[str, dict[str, str]]:
-    """トップレベル import 完了直後（``run_spike()`` 実行前）に呼ぶ。
-
-    現在ロード済みの ``svp_rpe`` 配下モジュールの bytes をここで sha256 に
-    採取する（TOCTOU 排除）。測定完了後に ``read_bytes`` すると、pyin 実行中に
-    working tree が書き換わった場合「実際に実行された bytes」と「manifest に
-    pin される bytes」が乖離しうる。実行前スナップショットなら、ここで読んだ
-    bytes がそのまま実行に使われた bytes と一致する。
+    import 完了直後にスナップショットする旧方式（``sys.modules`` を走査する
+    方式）だと、「import 実行そのもの」と「スナップショット取得」の間に working
+    tree が書き換わるケースを拾えなかった（import 機構が読んだ bytes と pin
+    される bytes が乖離しうる）。本関数は import 機構が一度も走っていない時点で
+    ソースツリー全体を先に固定するため、この乖離が構造的に発生しない
+    （~30 ファイル程度で軽量、pre-hash 自体のコストは無視できる）。
     """
-    snapshot: dict[str, dict[str, str]] = {}
-    for name in _svp_rpe_module_names():
-        mod = sys.modules[name]
-        file_attr = getattr(mod, "__file__", None)
-        if file_attr is None:
-            continue
-        file_path = Path(file_attr).resolve()
+    svp_rpe_src = ROOT / "src" / "svp_rpe"
+    table: dict[str, str] = {}
+    for file_path in sorted(svp_rpe_src.rglob("*.py")):
         rel_path = file_path.relative_to(ROOT)
-        sha256 = hashlib.sha256(file_path.read_bytes()).hexdigest()
-        snapshot[name] = {"path": str(rel_path), "sha256": sha256}
-    return snapshot
+        table[str(rel_path)] = hashlib.sha256(file_path.read_bytes()).hexdigest()
+    return table
+
+
+def _module_name_from_relpath(rel_path: str) -> str:
+    """``"src/svp_rpe/rpe/physical_features.py"`` → ``"svp_rpe.rpe.physical_features"``、
+    ``"src/svp_rpe/compose/__init__.py"`` → ``"svp_rpe.compose"`` のように、
+    リポジトリルート相対パスから対応する dotted module 名を機械的に導出する。
+    """
+    assert rel_path.startswith("src/"), f"expected a src/-relative path, got {rel_path!r}"
+    without_src = rel_path[len("src/") :]
+    assert without_src.endswith(".py"), f"expected a .py file, got {rel_path!r}"
+    parts = without_src[: -len(".py")].split("/")
+    if parts[-1] == "__init__":
+        parts = parts[:-1]
+    return ".".join(parts)
 
 
 def _run_spike_tracking_consumption() -> tuple[dict[str, Any], set[str]]:
@@ -354,55 +397,65 @@ def _run_spike_tracking_consumption() -> tuple[dict[str, Any], set[str]]:
 
 
 def _dump_modules_manifest(
-    pre_run_snapshot: dict[str, dict[str, str]],
+    pre_hash_table: dict[str, str],
     consumed_rel_paths: set[str],
     path: Path,
 ) -> None:
     """測定完了後（``run_spike()`` 実行後）に呼ぶ。
 
-    実行中に ``svp_rpe`` 閉包（ロード済みモジュール名の集合）が増えていないこと
-    （= 実行前スナップショットが実行に使われた全モジュールを取りこぼして
-    いないこと）を確認したうえで、実行前スナップショット（bytes は TOCTOU
-    排除のためこの時点のもの）を実行時消費集合（``consumed_rel_paths``）と
-    交差させ、実際に呼ばれた関数を含むモジュールのみを manifest に書き出す。
-    ロードされただけで呼ばれなかった package 副作用 export は manifest から
-    除外される。閉包が増えていた場合はスナップショットが不完全だったという
-    ことなので、manifest を書かず非ゼロ exit で fail-closed する（測定結果
-    JSON は既に書き込み済みのため測定自体は保存されるが、manifest だけは
-    信頼できないと判断して emit しない）。直接 import 対象はこのスクリプト
-    自身のソースから ``from svp_rpe.* import`` 行を正規表現で機械抽出する
-    （手動列挙を経由しない）。
+    「import 前の事前ハッシュ表」（``pre_hash_table``、TOCTOU 排除のため
+    svp_rpe を一切 import する前に採取した bytes）を実行時消費集合
+    （``consumed_rel_paths``、``sys.setprofile`` が実測した呼び出しファイル
+    集合）と交差させ、実際に呼ばれた関数を含むモジュールのみを manifest に
+    書き出す。ロードされただけで呼ばれなかった package 副作用 export は
+    manifest から除外される。
+
+    消費されたファイルが事前ハッシュ表に存在しない場合（= pre-hash 採取後に
+    新規作成されたファイルが実行中に呼ばれた場合）は、その bytes を
+    信頼できる形で pin できないため、manifest を書かず非ゼロ exit で
+    fail-closed する（測定結果 JSON は既に書き込み済みのため測定自体は
+    保存されるが、manifest だけは信頼できないと判断して emit しない）。
+    直接 import 対象はこのスクリプト自身のソースから
+    ``from svp_rpe.* import`` 行を正規表現で機械抽出する（手動列挙を
+    経由しない。関数内 import のため行頭に空白が入り得る点に注意）。
     """
-    grown = _svp_rpe_module_names() - set(pre_run_snapshot)
-    if grown:
+    own_source = Path(__file__).read_text(encoding="utf-8")
+    direct_imports = sorted(
+        re.findall(r"^\s*from (svp_rpe\.[\w.]+) import", own_source, re.MULTILINE)
+    )
+
+    consumed_modules: dict[str, dict[str, str]] = {}
+    missing_from_prehash: list[str] = []
+    for rel_path in sorted(consumed_rel_paths):
+        sha256 = pre_hash_table.get(rel_path)
+        if sha256 is None:
+            missing_from_prehash.append(rel_path)
+            continue
+        module_name = _module_name_from_relpath(rel_path)
+        consumed_modules[module_name] = {"path": rel_path, "sha256": sha256}
+
+    if missing_from_prehash:
         print(
-            "ERROR: --dump-modules: svp_rpe module closure grew during "
-            f"run_spike() execution (newly loaded: {sorted(grown)}). "
-            "The pre-run snapshot is incomplete for this run -- refusing to "
-            "write a manifest that would omit modules actually exercised "
-            "(fail-closed, TOCTOU guard).",
+            "ERROR: --dump-modules: the following svp_rpe files were consumed "
+            "during run_spike() execution but are absent from the pre-import "
+            f"hash table: {sorted(missing_from_prehash)}. These files did not "
+            "exist (or were not under src/svp_rpe/) at pre-hash time -- "
+            "refusing to write a manifest that would pin bytes read after "
+            "execution started (fail-closed, TOCTOU guard).",
             file=sys.stderr,
         )
         raise SystemExit(1)
-
-    own_source = Path(__file__).read_text(encoding="utf-8")
-    direct_imports = sorted(re.findall(r"^from (svp_rpe\.[\w.]+) import", own_source, re.MULTILINE))
-
-    consumed_modules = {
-        name: entry
-        for name, entry in pre_run_snapshot.items()
-        if entry["path"] in consumed_rel_paths
-    }
 
     manifest = {
         "schema_version": "1.1",
         "generated_by": (
             "scripts/spike_melody_similarity.py --dump-modules "
             "(execution-time consumption granularity: sys.setprofile call-event "
-            "trace of run_spike(), intersected with a pre-run bytes snapshot "
-            "for TOCTOU safety; modules that are only imported via package "
-            "__init__ side effects but whose functions are never called during "
-            "measurement are excluded)"
+            "trace of run_spike(), intersected with a pre-import source-tree "
+            "hash table taken before any svp_rpe import for TOCTOU safety; "
+            "modules that are only imported via package __init__ side effects "
+            "but whose functions are never called during measurement are "
+            "excluded)"
         ),
         "direct_imports": direct_imports,
         "modules": dict(sorted(consumed_modules.items())),
@@ -580,20 +633,23 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             "optional: write an execution-time-consumption svp_rpe module "
-            "manifest (pre-run bytes snapshot intersected with a "
+            "manifest (a pre-import source-tree hash table intersected with a "
             "sys.setprofile call-event trace of run_spike()) as canonical "
             "JSON to this path"
         ),
     )
     args = parser.parse_args(argv)
 
-    # 実行前スナップショットは run_spike() より前に採る（TOCTOU 排除 --
-    # 「実際に実行された bytes」と「manifest に pin される bytes」を一致させる）。
+    # 事前ハッシュは svp_rpe を一切 import する前に取る（TOCTOU をさらに
+    # 前倒しで排除 -- pin される bytes と import 機構が実際に読む bytes を
+    # 一致させる）。この後で初めて svp_rpe を import する。
+    pre_hash_table = _prehash_svp_rpe_source_tree() if args.dump_modules is not None else None
+
+    _import_svp_rpe_symbols()
+
     if args.dump_modules is not None:
-        module_snapshot = _snapshot_svp_rpe_module_bytes()
         report, consumed_rel_paths = _run_spike_tracking_consumption()
     else:
-        module_snapshot = None
         consumed_rel_paths = None
         report = run_spike()
 
@@ -603,9 +659,9 @@ def main(argv: list[str] | None = None) -> int:
         f.write("\n")
 
     if args.dump_modules is not None:
-        assert module_snapshot is not None
+        assert pre_hash_table is not None
         assert consumed_rel_paths is not None
-        _dump_modules_manifest(module_snapshot, consumed_rel_paths, args.dump_modules)
+        _dump_modules_manifest(pre_hash_table, consumed_rel_paths, args.dump_modules)
     return 0
 
 

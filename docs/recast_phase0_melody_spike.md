@@ -41,40 +41,42 @@ python scripts/spike_melody_similarity.py --out examples/recast/melody_spike_202
 
 `--dump-modules`（optional）は次の 2 段で測定コード manifest を書き出す
 副作用専用フラグ（測定結果 JSON には一切影響しない）:
-(1) トップレベル import 完了直後・`run_spike()` 実行前に `svp_rpe` 配下
-ロード済みモジュール全ての bytes を sha256 スナップショットする（TOCTOU
-排除——測定完了後に読み直すと、pyin 実行中に working tree が書き換わった
-場合「実際に実行された bytes」と「manifest に pin される bytes」が乖離
-しうる）。(2) `run_spike()` の実行を `sys.setprofile` の call イベントで
-ラップし、実行中に実際に呼ばれた関数の `co_filename` が指す `svp_rpe` 配下
-ファイル（= 実行時消費 granularity）を集める。測定完了後、閉包（ロード済み
-モジュール名の集合）が実行中に増えていないことを確認したうえで、
-「(1) のスナップショット bytes」と「(2) の消費ファイル集合」の**交差**を
-manifest として書き出す。閉包が増えていた場合は manifest を書かず非ゼロ
-exit で fail-closed する。
+(1) **svp_rpe を一切 import する前**に `src/svp_rpe/` 配下の全 `.py` ファイルを
+glob → read_bytes → sha256 して事前ハッシュ表を作る（TOCTOU をさらに前倒しで
+排除——旧版は「トップレベル import 完了直後」にスナップショットしていたが、
+import 実行そのものとスナップショット取得の間に working tree が書き換わる
+余地が残っていた。スクリプト側で svp_rpe の import を
+`_import_svp_rpe_symbols()` 関数へ遅延させ、この事前ハッシュを import 実行
+より前に完了させる構成に変更した）。(2) その後で import し、`run_spike()`
+の実行を `sys.setprofile` の call イベントでラップして、実行中に実際に
+呼ばれた関数の `co_filename` が指す `svp_rpe` 配下ファイル（= 実行時消費
+granularity）を集める。測定完了後、「(1) の事前ハッシュ表」と「(2) の消費
+ファイル集合」の**交差**を manifest として書き出す。消費されたファイルが
+事前ハッシュ表に存在しない場合（= 事前ハッシュ採取後に新規作成されたファイルが
+実行中に呼ばれた場合）は manifest を書かず非ゼロ exit で fail-closed する。
 
 全入力は committed（スクリプト本体 + `examples/composition/midnight_signal/composition_score.yaml`。
 S2/S3 はスクリプト内で決定論的に構築されるため追加 fixture 不要）。
 
 - `scripts/spike_melody_similarity.py` sha256:
-  `246faf13b8ccbe1cb97c6db27405a41a83c744b21e9d1a4bae04fc0f94851162`
+  `ab5ec86955e87ae6c62c3814ce747360eb53ad221643fca45b64a0bb5fac7bc2`
 - `examples/composition/midnight_signal/composition_score.yaml`（S1 の入力）sha256:
   `37854f54b42a1c4d424f357148d3d10f347e238ec72a42d1248bea2203f97d0b`
 - `examples/recast/melody_spike_2026-07-22.json` sha256:
   `12ae62ca08bbb0801fa628943e6feeec21b11dd05c90ecdade059233f887df52`
 - `examples/recast/melody_spike_2026-07-22.modules.json`（測定コード manifest、下記参照）sha256:
-  `4aa28af2a9e02c4c2814715c0598fee457f8be4da3201e4218d06deb11299fd9`
+  `c607d5b07444abc0f13dee0295ff390c4749192d9112c39b99243b947023ab26`
 - S2/S3 はスクリプト内で S1 から決定論的に派生するため、S1 の pin +
   スクリプトの pin で全 9 テイクの入力系列が固定される
 - 呼び出しグラフ上、本レシピはこれ以外に YAML config を読まない
   （`load_composition_score` は指定パスのみを読み、`compute_melody_contour` /
   `perform` は config 非依存であることを実装確認済み）
 - 決定論: 同一コマンドを 2 回実行し出力 JSON が byte-identical であることを実測済み。
-  上記スクリプト pin の更新（`--dump-modules` の manifest 収集を
-  「実行前スナップショット × sys.setprofile 実行時消費トレース」の交差方式へ
-  変更）後も、`--out` の測定結果 JSON が更新前と byte-identical であることを
-  実行して確認済み（プロファイラ導入・スクリプト変更が測定に無影響であることの
-  実測裏付け）
+  上記スクリプト pin の更新（svp_rpe の import を関数へ遅延させ、`--dump-modules`
+  の事前ハッシュ採取を import 実行より前に完了させる構成へ変更）後も、`--out`
+  の測定結果 JSON が更新前と byte-identical であることを実行して確認済み
+  （import 順序の並べ替え・スクリプト変更が測定に無影響であることの実測裏付け。
+  manifest 自体の内容（7 モジュール・全 hash）も不変であることを確認済み）
 - **測定コードの pin は実行時消費 granularity の manifest**（手動列挙は含まない）:
   `--dump-modules` を付けてスパイクをフル実行し、上記 (1)(2) の交差
   （= 測定を実行するために実際に呼ばれたモジュールのみ）を
@@ -89,21 +91,28 @@ S2/S3 はスクリプト内で決定論的に構築されるため追加 fixture
   など、旧版で 29 モジュールまで膨らんでいた原因）は manifest から除外される。
   直接 import 対象（`from svp_rpe.* import` 6 行）はスクリプト自身のソースから
   正規表現で機械抽出し、手動列挙を経由しない（手動 4 本列挙 → 手動 6 本列挙 →
-  importlib 閉包の事前列挙 → 実行トレース post-hoc read → 実行前スナップショット
-  → 実行前スナップショット×実行時消費トレースの交差、と 5 段階の是正を経て、
+  importlib 閉包の事前列挙 → import 完了直後のスナップショット →
+  import 前の事前ハッシュ×実行時消費トレースの交差、と 5 段階の是正を経て、
   TOCTOU 安全かつ「呼ばれもしない副作用 export」を含まない granularity に
   終端化。AGENTS.md §8 項目 1・8-A 項目 1 準拠）
-- **閉ループ論証**: bytes 採取は実行前スナップショット（`run_spike()` 実行前に
-  読んだ bytes）であるため「実行に使われた bytes」と「manifest に pin される
-  bytes」が常に一致する。この manifest は実行時消費 granularity（実測時に
-  実際に呼ばれた関数を含むモジュールのみ）である。実行経路（呼び出しグラフ）に
-  新規消費が追加されるのは、上記の pin 済みファイル（スクリプト自身、または
-  manifest が列挙するモジュールのいずれか）を編集したときに限られ、その編集
-  自体が対応する hash pin のアラーム（`tests/test_recast_spike_provenance.py`）
-  を踏んで赤くする。赤くなった場合の唯一の是正経路は「manifest を再生成する
-  新しい dated 再実測」であり、その再実測が改めてスナップショット×消費トレース
-  を取り直すため、列挙は自己完結して閉じている（手動更新で pin だけを合わせて
-  実体との乖離を放置する経路は存在しない）
+- **不変条件（bytes 採取の順序）**: bytes 採取は svp_rpe の import 実行前に
+  行う（pin される bytes = import 機構が実際に読む bytes）。実行中（pre-hash
+  取得後から測定終了まで）に working tree の該当ファイルを書き換えないことが
+  再現の前提であり、これは §「再現の前提」に明記した「pin 表の全ファイルが
+  working tree と一致していること」という条件の帰結として既に成立している
+  （実行前後で内容が変わらないことを前提にしている以上、実行中に変更しない
+  ことも同じ前提の一部である）
+- **閉ループ論証**: 上記の不変条件（bytes 採取は import 前）により「実行に
+  使われた bytes」と「manifest に pin される bytes」が常に一致する。この
+  manifest は実行時消費 granularity（実測時に実際に呼ばれた関数を含むモジュール
+  のみ）である。実行経路（呼び出しグラフ）に新規消費が追加されるのは、上記の
+  pin 済みファイル（スクリプト自身、または manifest が列挙するモジュールの
+  いずれか）を編集したときに限られ、その編集自体が対応する hash pin の
+  アラーム（`tests/test_recast_spike_provenance.py`）を踏んで赤くする。
+  赤くなった場合の唯一の是正経路は「manifest を再生成する新しい dated
+  再実測」であり、その再実測が改めて事前ハッシュ×消費トレースを取り直すため、
+  列挙は自己完結して閉じている（手動更新で pin だけを合わせて実体との乖離を
+  放置する経路は存在しない）
 - `tests/test_recast_spike_provenance.py` は、manifest が列挙する全ファイルの
   存在 + working tree との sha256 一致、および直接 import 6 モジュールが
   manifest に含まれていること（⊆ 検算）を機械検証する

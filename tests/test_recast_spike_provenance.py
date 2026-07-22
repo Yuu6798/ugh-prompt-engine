@@ -6,12 +6,17 @@ emit 前チェックリスト項目 5「pin は fixture テストで全数突合
 実 sha256 と照合し、将来の入力変更を機械検出（エントリ追加で自動拡張される
 ループ実装で）」に対応する恒久ガード（PR #205 Codex P2 第2巡指摘、以降複数巡で
 測定コードの pin 粒度を段階的に是正 — 直接 import 手動 4 本列挙 → 手動 6 本
-列挙 → importlib 閉包の事前列挙・サブプロセス再計算 → 実行前スナップショット
-（TOCTOU 排除）→ 本ファイルの「実行前スナップショット × sys.setprofile 実行時
-消費トレースの交差 manifest + hash-only 検証」で終端化。旧版はロードされた
-だけで一度も呼ばれない package `__init__` 副作用 export を pin してしまい
-（29 モジュール）無関係変更で偽の再実測強制を招いていたため、実行時消費
-granularity（7 モジュール）に絞った）。
+列挙 → importlib 閉包の事前列挙・サブプロセス再計算 → import 完了直後の
+スナップショット（TOCTOU 排除）→ import 前の事前ハッシュ（TOCTOU をさらに
+前倒し）→ 本ファイルの「事前ハッシュ表 × sys.setprofile 実行時消費トレースの
+交差 manifest + hash-only 検証」で終端化。旧版はロードされただけで一度も
+呼ばれない package `__init__` 副作用 export を pin してしまい（29 モジュール）
+無関係変更で偽の再実測強制を招いていたため、実行時消費 granularity
+（7 モジュール）に絞った。さらにその後、bytes 採取のタイミングが
+「svp_rpe import 完了直後」だと import 実行そのものとスナップショット取得の
+間に working tree が書き換わる余地が残っていたため、スクリプト側で
+svp_rpe の import を `_import_svp_rpe_symbols()` 関数へ遅延させ、事前ハッシュを
+その呼び出しより前に完了させる構成へ変更した）。
 
 (A) memo の provenance 節（`` `<path>` ... sha256:\\n  `<hex>` `` 形式の箇条書き/表）を
 正規表現で parse し、parse された全 (path, sha256) エントリをループで working
@@ -21,7 +26,7 @@ S1 score・出力 JSON・測定コード manifest sidecar）。将来 memo に p
 追従するため変更なしで自動拡張される。
 
 (B) 測定コードの pin は「直接 import モジュールの手動列挙」ではなく、
-``scripts/spike_melody_similarity.py --dump-modules`` で**実行前スナップショット
+``scripts/spike_melody_similarity.py --dump-modules`` で**import 前の事前ハッシュ表
 （TOCTOU 排除）× 実行時消費トレース（sys.setprofile call イベント）の交差**
 として機械生成した committed sidecar
 ``examples/recast/melody_spike_2026-07-22.modules.json`` で担保する。
@@ -59,7 +64,9 @@ PIN_PATTERN = re.compile(r"`([^`\n]+)`[^\n`]*sha256:\s*\n\s*`([0-9a-f]{64})`")
 MIN_EXPECTED_PIN_COUNT = 4
 
 #: スクリプトの直接 import 対象（第一者 svp_rpe モジュール）を機械抽出する正規表現。
-DIRECT_IMPORT_PATTERN = re.compile(r"^from (svp_rpe\.[\w.]+) import", re.MULTILINE)
+#: import 文はスクリプト側で ``_import_svp_rpe_symbols()`` 関数内（インデント
+#: あり）に配置されているため、行頭の空白を許容する。
+DIRECT_IMPORT_PATTERN = re.compile(r"^\s*from (svp_rpe\.[\w.]+) import", re.MULTILINE)
 
 
 def _parse_provenance_pins(memo_text: str) -> list[tuple[str, str]]:
@@ -114,11 +121,12 @@ def test_provenance_pins_match_working_tree_sha256() -> None:
 
 
 def test_module_manifest_entries_match_working_tree_sha256() -> None:
-    """`examples/recast/melody_spike_2026-07-22.modules.json`（実行トレース由来の
-    svp_rpe 推移閉包 manifest）が列挙する全モジュールについて、記録された
-    ``path`` が working tree に実在し、その sha256 が manifest の pin と
-    一致することを assert する。将来 pin 済みファイルのいずれかが変更されると
-    本テストが赤くなり、silent stale を防止する（closed-loop 論証は memo 参照）。
+    """`examples/recast/melody_spike_2026-07-22.modules.json`（import 前の事前
+    ハッシュ表 × 実行時消費トレースの交差で機械生成した svp_rpe manifest）が
+    列挙する全モジュールについて、記録された ``path`` が working tree に実在し、
+    その sha256 が manifest の pin と一致することを assert する。将来 pin 済み
+    ファイルのいずれかが変更されると本テストが赤くなり、silent stale を防止する
+    （closed-loop 論証は memo 参照）。
     """
     manifest = json.loads(MODULES_MANIFEST_PATH.read_text(encoding="utf-8"))
     modules: dict[str, dict[str, str]] = manifest["modules"]
