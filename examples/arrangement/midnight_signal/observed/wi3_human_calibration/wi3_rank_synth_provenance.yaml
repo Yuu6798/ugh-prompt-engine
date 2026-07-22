@@ -1,16 +1,22 @@
 # WI3 P4 ペア（p09/p10/p11）の入力である synth 2 素材（synth_faithful /
 # synth_first_take）の identity-rank レポート provenance サイドカー。
 #
-# 履歴: 初版（PR #202 Codex P2 第1ラウンド対応）は生成時の `audio_file` が
-# scratchpad 絶対パスのまま焼き込まれ、fresh checkout から同一手順を
-# 再現できなかった（第2ラウンド Codex P2 で検出）。本版で
-# **checkout-stable な相対パス手順**に是正: リポジトリルートから
-# `examples/arrangement/midnight_signal/observed/wi3_human_calibration/synth/`
-# （非コミット・sha256 pin のみ、本ディレクトリの `synth/` は実行後に削除）へ
-# 決定論レンダー -> その相対パスのまま extract / identity-rank を実行する。
-# 音声 bytes は初版と完全同一（sha256 pin 変わらず）のため、レポート内容も
-# `audio_file` フィールド以外は初版とバイト単位で同一（本是正で
-# 再検証済み・§ note 参照）。
+# 履歴:
+# - 初版（PR #202 Codex P2 第1ラウンド対応）は生成時の `audio_file` が
+#   scratchpad 絶対パスのまま焼き込まれ、fresh checkout から同一手順を
+#   再現できなかった（第2ラウンド Codex P2 で検出）。
+# - 第2版で **checkout-stable な相対パス手順**に是正: リポジトリルートから
+#   `examples/arrangement/midnight_signal/observed/wi3_human_calibration/synth/`
+#   （非コミット・sha256 pin のみ、`synth/` は実行後に削除）へ決定論レンダー
+#   -> その相対パスのまま extract / identity-rank を実行する。ただしレンダー
+#   スクリプト自体は scratchpad 限定（コマンド列に `<script>` プレースホルダ
+#   のみ記載）で、fresh checkout に再生成用の実行物が存在しなかった
+#   （第3ラウンド Codex P2 で検出）。
+# - 本版（第3ラウンド対応）で、レンダースクリプトを
+#   `render_synth_takes.py` として本ディレクトリに commit し、下記
+#   `render_script_sha256` で pin。音声 bytes は初版から一貫して完全同一
+#   （sha256 pin 変わらず）のため、レポート内容も `audio_file` フィールド
+#   以外は初版とバイト単位で同一（各ラウンドで再検証済み）。
 #
 # 目的: wi3_rank_synth_faithful.json / wi3_rank_synth_first_take.json
 # （本ディレクトリに commit）が、決定論 synth performer の 2 スタイル
@@ -19,20 +25,23 @@
 # 生出力であることを機械的に検証可能にする。新規の事実主張は含まない —
 # wi3_aggregation.yaml の inputs.synth_rank_reports 記述 および
 # wi0b_synth/observed/provenance.yaml の source_audio_sha256 pin の転記。
-format: "wi3-rank-synth-provenance/0.2"
+format: "wi3-rank-synth-provenance/0.3"
 # `date -u` 実測（本ファイル書き込み直前に実行して確認した値。初版の
-# recorded_at_utc は実測でない未来時刻だった不備を是正 — 第2ラウンド
-# Codex P2 参照）。
-recorded_at_utc: "2026-07-22T06:26:33Z"
+# recorded_at_utc は実測でない未来時刻だった不備を第2ラウンドで是正済み
+# — 本版はその後継の追加是正であり、書き込み直前に改めて実測している）。
+recorded_at_utc: "2026-07-22T06:39:47Z"
 
 generation_session: >-
-  PR #202 Codex P2 第2ラウンド対応セッション（2026-07-22）。リポジトリルート
-  （cwd）から相対パスのみで render -> extract -> identity-rank を実行し、
-  fresh checkout から同一手順が再現できることを本セッションで確認した上で
-  レポート 2 本を置き換えた。
+  PR #202 Codex P2 第3ラウンド対応セッション（2026-07-22）。レンダースクリプト
+  `render_synth_takes.py` を本ディレクトリに commit した上でリポジトリルート
+  （cwd）から実行し、fresh checkout から wav 再作成 -> extract -> identity-rank
+  まで一連の手順が pin 済み実行物のみで再現できることを確認した
+  （生成 wav の sha256 が既存 pin と完全一致、レポート内容は不変）。
 
 # 生成コマンド列（score -> render -> extract -> identity-rank）。全コマンドは
 # リポジトリルートを cwd として実行し、引数は全て相対パス（checkout-stable）。
+# render 手順は本ディレクトリに commit 済みの `render_synth_takes.py` を呼ぶ
+# （scratchpad 依存を解消 — 下記 render_script_sha256 で pin）。
 # score_path は wi0b_synth/commands.md の render_faithful.py 呼び出しと同一の
 # composition_score.yaml（faithful_take の sha256 が wi0b_synth の既存 pin と
 # 一致することがこの同一性の機械的な裏付け — 下記 source_audio_sha256 参照）。
@@ -41,13 +50,15 @@ commands:
     description: >-
       決定論 synth performer で 2 スタイル (FAITHFUL_TAKE, FIRST_TAKE) を
       同一 composition_score から wav にレンダーし、本ディレクトリ配下の
-      `synth/` に出力する（`svp_rpe.compose.loader.load_composition_score` +
-      `svp_rpe.perform.{FAITHFUL_TAKE,FIRST_TAKE,perform,wav_bytes}`;
-      wi0b_synth/render_faithful.py と同じ Python API を 2 スタイル分呼ぶ
-      scratchpad 限定スクリプト — src 変更なし）。出力 wav は非コミット
-      （sha256 pin のみ — 下記 input_audio_sha256）、レポート生成後に削除する。
+      `synth/` に出力する。committed
+      `examples/arrangement/midnight_signal/observed/wi3_human_calibration/render_synth_takes.py`
+      を実行する（`wi0b_synth/render_faithful.py` と同一 recipe の
+      faithful+first_take 両スタイル版 — スクリプト自身の docstring に明記）。
+      出力 wav は非コミット（sha256 pin のみ — 下記 input_audio_sha256）、
+      レポート生成後に削除する。
     command: >-
-      python <script> examples/arrangement/midnight_signal/composition_score.yaml
+      python examples/arrangement/midnight_signal/observed/wi3_human_calibration/render_synth_takes.py
+      examples/arrangement/midnight_signal/composition_score.yaml
       examples/arrangement/midnight_signal/observed/wi3_human_calibration/synth
     outputs:
       - "examples/arrangement/midnight_signal/observed/wi3_human_calibration/synth/faithful_take.wav"
@@ -81,24 +92,29 @@ commands:
       --references examples/arrangement/midnight_signal/observed/wi2_discrimination/wi2_references.yaml
       --format json -o wi3_rank_synth_first_take.json
 
+# render 手順で実行する committed スクリプト自体の sha256（stale 差し替え
+# 検出用 — tests/test_wi3_human_calibration_fixture.py がこの pin と突合する）。
+render_script_sha256:
+  render_synth_takes.py: "f9bcfb504d50588b5da61e84c475f2d09c9d516e3826d8afb26cddfc04a56220"
+
 # 入力 wav の sha256。wi0b_synth/observed/provenance.yaml の
 # source_audio_sha256（faithful_take）と一致することを明記（同一
 # composition_score・同一 FAITHFUL_TAKE スタイルからの決定論レンダリングである
 # ことの機械的裏付け）。first_take (FIRST_TAKE style) は wi0b_synth に対応物が
 # ないため wi3_kit_manifest.json の pair06_A.wav pin と突合する。
-# fresh-process 再現: 本是正（相対パス手順への切替）でリポジトリルートから
-# 再レンダーした結果も含め、これまでに独立した実行で 3/3 一致
-# （scratchpad/wi3_synth/, scratchpad/wi3_synth_run2/ の 2 回 + 本是正の
-# 相対パス実行 1 回）。
+# fresh-process 再現: committed render_synth_takes.py をリポジトリルートから
+# 実行した結果も含め、これまでに独立した実行で 4/4 一致
+# （scratchpad/wi3_synth/, scratchpad/wi3_synth_run2/ の 2 回 + 第2ラウンドの
+# 相対パス実行 1 回 + 本ラウンドの committed スクリプト実行 1 回）。
 input_audio_sha256:
   faithful_take:
     sha256: "4d8c83f67c1b2441e09fa84debdc47ec0131c1a13ee1b813b0ef55e874903e90"
     cross_check: "wi0b_synth/observed/provenance.yaml#source_audio_sha256 (同値) / wi3_kit_manifest.json pair06_B.wav"
-    fresh_process_reproduction: "3/3 (scratchpad/wi3_synth/, scratchpad/wi3_synth_run2/, 本是正の相対パス実行)"
+    fresh_process_reproduction: "4/4 (scratchpad/wi3_synth/, scratchpad/wi3_synth_run2/, 第2ラウンド相対パス実行, 本ラウンド committed スクリプト実行)"
   first_take:
     sha256: "467f5200173cbea43933c69a5ba9dd8b156eee2e11ff9de0bd6475ed5dfb7e46"
     cross_check: "wi3_kit_manifest.json pair06_A.wav"
-    fresh_process_reproduction: "3/3 (scratchpad/wi3_synth/, scratchpad/wi3_synth_run2/, 本是正の相対パス実行)"
+    fresh_process_reproduction: "4/4 (scratchpad/wi3_synth/, scratchpad/wi3_synth_run2/, 第2ラウンド相対パス実行, 本ラウンド committed スクリプト実行)"
 
 # レポート 2 本自身の sha256（本ディレクトリに commit したファイルの stale
 # 差し替え検出用 — tests/test_wi3_human_calibration_fixture.py がこの pin と
@@ -118,6 +134,7 @@ report_sha256:
 verification:
   - "report_sha256[wi3_rank_synth_faithful.json] == 実 commit ファイルの sha256"
   - "report_sha256[wi3_rank_synth_first_take.json] == 実 commit ファイルの sha256"
+  - "render_script_sha256[render_synth_takes.py] == 実 commit スクリプトの sha256"
   - "input_audio_sha256.faithful_take.sha256 == wi0b_synth/observed/provenance.yaml source_audio_sha256"
   - "5 軸 x 2 素材の rank-1 unique/tie 状態が wi3_aggregation.yaml material_axis_rank1 と一致（10/10, 本是正時点で再確認済み）"
   - "各レポートの audio_file が examples/... 配下の相対パスであり、絶対パス（scratchpad 等）を含まないこと"

@@ -54,6 +54,7 @@ RESPONSES_PATH = FIXTURE_DIR / "wi3_responses.yaml"
 KIT_MANIFEST_PATH = FIXTURE_DIR / "wi3_kit_manifest.json"
 AGGREGATION_PATH = FIXTURE_DIR / "wi3_aggregation.yaml"
 SYNTH_PROVENANCE_PATH = FIXTURE_DIR / "wi3_rank_synth_provenance.yaml"
+SYNTH_RENDER_SCRIPT_PATH = FIXTURE_DIR / "render_synth_takes.py"
 
 PLAN_CONFIRMED_AT_UTC = "2026-07-21T13:56:58Z"
 RECEIVED_AT_UTC = "2026-07-22T05:40:41Z"
@@ -397,6 +398,24 @@ def test_synth_rank_reports_audio_file_is_checkout_stable_relative_path() -> Non
         assert audio_file.startswith(
             "examples/arrangement/midnight_signal/observed/wi3_human_calibration/synth/"
         ), f"{path.name}: unexpected audio_file {audio_file!r}"
+
+
+def test_render_script_sha256_matches_provenance_pin() -> None:
+    """PR #202 Codex P2 第3ラウンド対応: synth wav の再現レシピが scratchpad
+    限定の未収載スクリプトに依存していた不備を是正 — レンダースクリプト
+    (``render_synth_takes.py``) 自体を fixture 収載し、その sha256 が
+    ``wi3_rank_synth_provenance.yaml`` の ``render_script_sha256`` pin と
+    一致することを assert する（stale 差し替え検出。これにより fresh
+    checkout だけで render -> extract -> identity-rank の全手順が pin 済み
+    実行物のみから再現できることの機械的裏付けとなる）。
+    """
+    provenance = _load_yaml(SYNTH_PROVENANCE_PATH)
+    pinned_sha256 = provenance["render_script_sha256"][SYNTH_RENDER_SCRIPT_PATH.name]
+    actual_sha256 = hashlib.sha256(SYNTH_RENDER_SCRIPT_PATH.read_bytes()).hexdigest()
+    assert actual_sha256 == pinned_sha256, (
+        f"{SYNTH_RENDER_SCRIPT_PATH.name}: committed file sha256 {actual_sha256!r} does not match "
+        f"wi3_rank_synth_provenance.yaml pin {pinned_sha256!r}"
+    )
 
 
 def test_pair_level_predictions_and_axis_summary_recompute_from_committed_inputs() -> None:
