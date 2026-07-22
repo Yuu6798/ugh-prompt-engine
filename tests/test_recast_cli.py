@@ -108,6 +108,72 @@ def test_recast_verification_staging_bytes_match_report_package_sha256(
     assert hashlib.sha256(package_bytes).hexdigest() == report_data["package_sha256"]
 
 
+def test_recast_plan_verification_staging_uses_builds_root(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """検証ステージング（`tempfile.TemporaryDirectory`）は project の builds_root
+    配下に確保されることを検証する（Codex P2 twelfth round #207: 既定の system
+    temp（`dir` 省略時）は project files と別ドライブに配置されうる — Windows で
+    システムドライブと project ドライブが異なる場合、直後の `os.path.relpath`
+    （project files ↔ staging dir）が同一ドライブ前提のため ValueError を送出し、
+    本来 valid な plan を偽の `blocked_capability` にしてしまう。`builds_root` は
+    loader が project_dir 配下に confine 済みで project files と常に同一
+    ドライブにある）。
+
+    PR3 は pr2 のこの懸念に「検証専用の使い捨て staging」ではなく「永続
+    `packages_dir`（`builds_root/packages/<variant>@<backend>/`）＋その配下の
+    `_atomic_publish_text_bundle` 内部 staging」という別設計で構造的に対応
+    している（#208 指摘 3）— `tempfile.TemporaryDirectory` を実クラス継承の
+    スタブに monkeypatch し、実際に渡された `dir` kwarg が `builds_root` 配下
+    （project files と常に同一ドライブ）の `packages_dir` そのものであること
+    を検証する。pr2 のオリジナルテストと異なり、公開後の `packages_dir` は
+    "検証専用の空 staging" ではなく最終成果物 2 ファイルが永続する場所のため、
+    「cleanup 後に空」ではなく「最終ファイル 2 つのみで staging 残骸がない」
+    ことを確認する。"""
+    import tempfile as tempfile_module
+
+    import svp_rpe.recast.plan as recast_plan_module
+
+    project_path = _copy_demo_project(tmp_path)
+    builds_root = project_path.parent / "builds"
+    assert not builds_root.exists()  # デモ fixture は builds/ を同梱しない
+
+    real_temporary_directory = tempfile_module.TemporaryDirectory
+    captured_dir_args: list[object] = []
+
+    class _CapturingTemporaryDirectory(real_temporary_directory):  # type: ignore[misc]
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            captured_dir_args.append(kwargs.get("dir"))
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(
+        recast_plan_module.tempfile, "TemporaryDirectory", _CapturingTemporaryDirectory
+    )
+
+    result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert result.exit_code == 0, result.output
+
+    package_dir = builds_root / "packages" / "edm@suno"
+    assert len(captured_dir_args) == 1
+    assert Path(str(captured_dir_args[0])).resolve() == package_dir.resolve()
+    # builds_root 配下（project_dir に confine 済み）にあるため、project files
+    # と常に同一ドライブであることが構造的に保証される。
+    assert package_dir.resolve().is_relative_to(builds_root.resolve())
+
+    # 公開後は最終ファイル 2 つのみが残り、staging 残骸（`.prev`/一時ディレクトリ
+    # 等）は無い。
+    assert sorted(p.name for p in package_dir.iterdir()) == [
+        "compilation_report.json",
+        "performance_package.json",
+    ]
+
+    plan_path = project_path.parent / "recast_plan.json"
+    plan_text = plan_path.read_text(encoding="utf-8")
+    assert str(builds_root) not in plan_text  # staging パスが永続出力に混入しない
+
+
 def test_recast_plan_matches_committed_snapshot_via_cli(tmp_path: Path) -> None:
     project_path = _copy_demo_project(tmp_path)
 
@@ -301,6 +367,45 @@ def test_recast_plan_publishes_blocked_verification_on_corrupted_identity_manife
     status_result = runner.invoke(app, ["recast", "status", str(project_path)])
     assert status_result.exit_code == 0, status_result.output
     assert "blocked_verification" in status_result.output
+
+
+def test_recast_plan_blocks_capability_on_mode_overrides_generator_mismatch(
+    tmp_path: Path,
+) -> None:
+    """mode_overrides.generator と capability profile.generator の不一致も
+    blocked_capability として recast_plan.json に publish + state 記録される
+    ことを検証する（Codex P2 twelfth round #207: eighth round で一度スコープ外に
+    した箇所の再指摘 — 以前は raise していたため CLI が top-level Error で落ち、
+    plan/state が一切書かれなかった）。
+
+    backend の capability_profile を `"suno"` から `"musicgen"`（packaged
+    config/capability_profiles/musicgen.yaml, generator=musicgen）へ差し替え、
+    mode_overrides はデモ既定の `"suno"`（config/mode_overrides/suno.yaml,
+    generator=suno）のまま残すことで両者を不一致にする。"""
+    project_path = _copy_demo_project(tmp_path)
+    project_text = project_path.read_text(encoding="utf-8")
+    mutated = project_text.replace(
+        'capability_profile: "suno"', 'capability_profile: "musicgen"'
+    )
+    assert mutated != project_text  # sanity: the replacement actually matched
+    project_path.write_text(mutated, encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+
+    assert result.exit_code == 1
+    plan_path = project_path.parent / "recast_plan.json"
+    assert plan_path.is_file()
+    data = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert data["state_reached"] == "blocked_capability"
+    reasons = " ".join(data["blocked"]["reasons"])
+    assert "musicgen" in reasons
+    assert "suno" in reasons
+
+    status_result = runner.invoke(app, ["recast", "status", str(project_path)])
+    assert status_result.exit_code == 0, status_result.output
+    assert "blocked_capability" in status_result.output
 
 
 def test_recast_plan_write_failure_does_not_persist_state(tmp_path: Path, monkeypatch) -> None:

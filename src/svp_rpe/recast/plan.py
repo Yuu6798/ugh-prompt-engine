@@ -1119,11 +1119,25 @@ def build_recast_plan_artifacts(
             state_reached="blocked_capability",
             blocked=BlockedInfo(state="blocked_capability", reasons=[str(mode_overrides_error)]),
         )
+    # mode_overrides.generator と capability profile.generator の不一致も、
+    # 他の capability 層の不整合と同じ blocked_capability として finalize する
+    # （Codex P2 twelfth round #207: eighth round で一度スコープ外にした箇所の
+    # 再指摘 — 以前は raise していたため CLI が top-level Error で落ち、
+    # recast_plan.json も state も残らなかった）。reasons に両 generator 名と
+    # 是正の示唆（mode_overrides を差し替えるか宣言を外す）を含める。
     if mode_overrides_config is not None and mode_overrides_config.generator != profile.generator:
-        raise RecastError(
-            f"recast project '{project.project.id}': backend {backend!r} mode_overrides "
-            f"generator {mode_overrides_config.generator!r} does not match capability "
-            f"profile generator {profile.generator!r}"
+        return _finalize(
+            state_reached="blocked_capability",
+            blocked=BlockedInfo(
+                state="blocked_capability",
+                reasons=[
+                    f"backend {backend!r} mode_overrides generator "
+                    f"{mode_overrides_config.generator!r} does not match capability profile "
+                    f"generator {profile.generator!r} — mode_overrides を "
+                    f"{profile.generator!r} 用に差し替えるか、backend の mode_overrides 宣言"
+                    "を外してください"
+                ],
+            ),
         )
 
     # --- step 7: build performance package ----------------------------------
@@ -1150,6 +1164,14 @@ def build_recast_plan_artifacts(
     # 最新スナップショット（`recast_plan.json`/`recast_state.json` と同じ規約
     # — content-addressed な `arrange`/`package` の builds-root 免疫契約とは別物
     # で、再実行のたびに上書きしてよい）。
+    #
+    # pr2 側の同種指摘（Codex P2 twelfth round #207 指摘 19: 検証ステージングが
+    # system temp に作られると project files と別ドライブになりうる Windows で
+    # `os.path.relpath` が ValueError を送出しうる）は、PR3 のこの
+    # `resolve_packages_dir`（`builds_root` 配下、常に project files と同一
+    # ドライブ）採用により構造的に該当しない — `_atomic_publish_text_bundle`
+    # 内部の staging（`tempfile.TemporaryDirectory(dir=output_dir)`）も
+    # `package_dir` 配下なので同様に同一ドライブが保証される。
     package_dir = resolve_packages_dir(loaded, variant, backend)
     try:
         artifact_base_locator = Path(
