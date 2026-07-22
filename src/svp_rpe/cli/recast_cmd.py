@@ -84,11 +84,7 @@ def recast_plan_cmd(
 
     from svp_rpe.arrange.resolver import ArrangementError
     from svp_rpe.recast import RecastError, load_recast_project
-    from svp_rpe.recast.plan import (
-        RECAST_PLAN_FILENAME,
-        build_recast_plan,
-        unsupported_changed_field_reasons,
-    )
+    from svp_rpe.recast.plan import RECAST_PLAN_FILENAME, build_recast_plan
     from svp_rpe.recast.state import record_state
 
     try:
@@ -124,10 +120,10 @@ def recast_plan_cmd(
     if result.plan.blocked is not None:
         state_note = "; ".join(result.plan.blocked.reasons)
     else:
-        reasons = unsupported_changed_field_reasons(
-            result.plan.changed_fields, result.plan.invocation_mode
-        )
-        state_note = "; ".join(reasons) if reasons else None
+        # `result.mode_gate_reasons` は build_recast_plan の strict/advisory
+        # ゲートが確定した診断一式（unsupported + 宣言時のみ unknown）そのもの
+        # — ここで再導出しない single source（Codex P2 fifth round #207）。
+        state_note = "; ".join(result.mode_gate_reasons) if result.mode_gate_reasons else None
     record_state(
         loaded.project_dir,
         variant,

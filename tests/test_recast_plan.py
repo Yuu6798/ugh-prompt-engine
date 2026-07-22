@@ -10,12 +10,7 @@ import pytest
 from svp_rpe.recast import RecastError, load_recast_project
 from svp_rpe.recast.loader import LoadedRecastProject, load_mode_overrides
 from svp_rpe.recast.models import ModeOverridesConfig
-from svp_rpe.recast.plan import (
-    RecastPlanResult,
-    build_recast_plan,
-    mode_support_for_path,
-    unsupported_changed_field_reasons,
-)
+from svp_rpe.recast.plan import RecastPlanResult, build_recast_plan, mode_support_for_path
 from svp_rpe.recast.state import load_recast_state, record_state
 
 DEMO_PROJECT = Path("examples/recast/demo_project")
@@ -27,14 +22,13 @@ def _persist_state(
 ) -> None:
     """`svprpe recast plan` CLI が plan JSON publish 成功後に行う状態記録を模倣する
     （Codex P2 #207 で `build_recast_plan` からこの副作用を除去し CLI 側の責務に
-    移した — このヘルパーはユニットテストから同じ手順を再現する）。"""
+    移した — このヘルパーはユニットテストから同じ手順を再現する）。`note` は
+    `result.mode_gate_reasons`（strict/advisory ゲートが確定した診断一式の
+    single source, Codex P2 fifth round #207）から組み立てる。"""
     if result.plan.blocked is not None:
         note = "; ".join(result.plan.blocked.reasons)
     else:
-        reasons = unsupported_changed_field_reasons(
-            result.plan.changed_fields, result.plan.invocation_mode
-        )
-        note = "; ".join(reasons) if reasons else None
+        note = "; ".join(result.mode_gate_reasons) if result.mode_gate_reasons else None
     record_state(
         loaded.project_dir,
         variant,
@@ -64,6 +58,13 @@ def _copy_demo_project(tmp_path: Path) -> Path:
 
 
 def test_demo_project_reaches_verified(tmp_path: Path) -> None:
+    """demo backend (`suno`) は mode_overrides を宣言しているため、
+    `semantic.grv.*` / `semantic.delta_e.overall` / `physical.brightness`
+    （suno mode_overrides に prompt_only エントリが無い＝unknown/未実測）が
+    advisory ゲート対象に入り、`recommendation`/`warnings` に反映される
+    （Codex P2 fifth round #207: 宣言済み backend の unknown を fail-closed に
+    扱う opt-in 計器）。state_reached 自体は `verified` のまま（advisory は
+    到達状態を降格しない）。"""
     project_path = _copy_demo_project(tmp_path)
     loaded = load_recast_project(project_path)
 
@@ -72,7 +73,13 @@ def test_demo_project_reaches_verified(tmp_path: Path) -> None:
     assert result.plan.blocked is None
     assert result.plan.state_reached == "verified"
     assert {a.anchor_id for a in result.plan.anchors} == {"lyrics", "melody", "harmony"}
-    assert result.plan.recommendation == "run へ進行可。"
+    assert result.mode_gate_reasons  # unknown（未実測）ゲート対象が存在する
+    assert any(
+        "semantic.grv.primary" in reason and "unknown" in reason
+        for reason in result.mode_gate_reasons
+    )
+    assert "未実測です" in result.plan.recommendation
+    assert all(reason in result.plan.warnings for reason in result.mode_gate_reasons)
 
     _persist_state(loaded, "edm", "suno", result)
     state_file = load_recast_state(loaded.project_dir)
@@ -304,6 +311,113 @@ def test_unsupported_changed_field_warns_but_verifies_in_advisory_mode(tmp_path:
     assert state_file.runs["edm@suno"].state == "verified"
     assert state_file.runs["edm@suno"].note is not None
     assert "physical.key" in state_file.runs["edm@suno"].note
+
+
+# --- unknown changed field (未実測): opt-in ゲート (Codex P2 fifth round #207) --
+
+
+def _declared_backend_project(tmp_path: Path, *, capability_mode: str) -> Path:
+    """demo project（backend `suno` は mode_overrides "suno" を宣言済み）を、
+    identity_anchors の hard 宣言由来の別経路 strict failure（本ゲートとは
+    無関係 — `test_strict_capability_mode_blocks_on_hard_unsupported_anchor`
+    参照）を避けるため free に緩めた一時 project にする。invocation_mode は
+    demo 既定の prompt_only のまま（`semantic.grv.*` / `semantic.delta_e.overall`
+    / `physical.brightness` は suno mode_overrides の prompt_only に
+    エントリが無いため mode_support=="unknown" になる — unknown（未実測）
+    ゲート単体を検証する目的）。"""
+    project_path = _copy_demo_project(tmp_path)
+
+    project_text = project_path.read_text(encoding="utf-8")
+    mutated_project = project_text.replace(
+        "capability_mode: advisory", f"capability_mode: {capability_mode}"
+    )
+    # demo の既定は advisory なので capability_mode="advisory" 呼び出しではテキストが
+    # 変わらない（no-op）— これは意図どおりであり sanity assert の対象外とする。
+    project_path.write_text(mutated_project, encoding="utf-8")
+
+    arrangement_path = project_path.parent / "arrangements" / "edm.yaml"
+    arrangement_text = arrangement_path.read_text(encoding="utf-8")
+    mutated_arrangement = arrangement_text.replace("mode: hard", "mode: free")
+    assert mutated_arrangement != arrangement_text
+    arrangement_path.write_text(mutated_arrangement, encoding="utf-8")
+
+    return project_path
+
+
+def test_unknown_changed_field_blocks_capability_in_strict_mode_when_declared(
+    tmp_path: Path,
+) -> None:
+    project_path = _declared_backend_project(tmp_path, capability_mode="strict")
+    loaded = load_recast_project(project_path)
+
+    result = build_recast_plan(loaded, variant="edm", backend="suno")
+
+    assert result.plan.state_reached == "blocked_capability"
+    assert result.plan.blocked is not None
+    reasons_text = " ".join(result.plan.blocked.reasons)
+    assert "physical.brightness" in reasons_text
+    assert "invocation_mode prompt_only" in reasons_text
+    assert "unknown（未実測）" in reasons_text
+
+    _persist_state(loaded, "edm", "suno", result)
+    state_file = load_recast_state(loaded.project_dir)
+    assert state_file.runs["edm@suno"].state == "blocked_capability"
+
+
+def test_unknown_changed_field_warns_but_verifies_in_advisory_mode_when_declared(
+    tmp_path: Path,
+) -> None:
+    project_path = _declared_backend_project(tmp_path, capability_mode="advisory")
+    loaded = load_recast_project(project_path)
+
+    result = build_recast_plan(loaded, variant="edm", backend="suno")
+
+    assert result.plan.blocked is None
+    assert result.plan.state_reached == "verified"
+    warnings_text = " ".join(result.plan.warnings)
+    assert "physical.brightness" in warnings_text
+    assert "invocation_mode prompt_only" in warnings_text
+    assert "unknown（未実測）" in warnings_text
+    assert "未実測です" in result.plan.recommendation
+
+    _persist_state(loaded, "edm", "suno", result)
+    state_file = load_recast_state(loaded.project_dir)
+    assert state_file.runs["edm@suno"].state == "verified"
+    assert state_file.runs["edm@suno"].note is not None
+    assert "physical.brightness" in state_file.runs["edm@suno"].note
+
+
+def test_unknown_changed_field_does_not_gate_backend_without_mode_overrides(
+    tmp_path: Path,
+) -> None:
+    """mode_overrides を宣言していない backend では、changed_fields が丸ごと
+    unknown（`mode_overrides` 未参照のため）になっても従来どおり無視される —
+    opt-in 計器の線引き（宣言していない backend は invocation_mode 軸自体を
+    計測対象にしていないため、全 changed_field が unknown になるのは仕様
+    どおりで異常ではない）を確認する回帰テスト。"""
+    project_path = _copy_demo_project(tmp_path)
+    project_text = project_path.read_text(encoding="utf-8")
+    mutated = project_text.replace(
+        '    mode_overrides: "suno"\n\npolicy:',
+        '    mode_overrides: "suno"\n'
+        "  suno_bare:\n"
+        '    capability_profile: "suno"\n'
+        "    invocation: manual\n"
+        "    invocation_mode: prompt_only\n"
+        "\npolicy:",
+    )
+    assert mutated != project_text
+    project_path.write_text(mutated, encoding="utf-8")
+
+    loaded = load_recast_project(project_path)
+    result = build_recast_plan(loaded, variant="edm", backend="suno_bare")
+
+    assert result.plan.blocked is None
+    assert result.plan.state_reached == "verified"
+    assert result.mode_gate_reasons == []
+    assert result.plan.recommendation == "run へ進行可。"
+    assert all(c.mode_support == "unknown" for c in result.plan.changed_fields)
+    assert not any(w.startswith("field ") for w in result.plan.warnings)
 
 
 # --- mode_overrides: ★invocation_mode 軸 ---------------------------------------
