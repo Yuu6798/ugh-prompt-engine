@@ -49,6 +49,11 @@ python -m pytest tests/test_metamorphic_probe.py    # プロパティ検証
 4. **不変条件** — brightness∈[0,1]、各帯域比∈[0,1]、centroid>0、各 confidence∈[0,1]。
 5. **回帰ガード（計測知見）** — `test_brightness_high_band_is_blind_for_synth`（power 盲）
    + `test_brightness_magnitude_brilliance_is_blind_for_synth`（magnitude も盲、Q1-5 Ph2）。
+6. **Metrics v2 レベル不変性（#188 follow-up）** —
+   `test_metrics_v2_level_invariance_e2e`: 実 WAV 書き出し（FLOAT subtype）→
+   `extract_physical_from_file` を通しても `active_rate_v2`/`fullness`/
+   `valley_db`/`crest_factor_robust` がゲインシフト不変であることを掃引実証
+   （純関数層は `tests/test_metrics_v2.py::test_inv_level_invariance_property_sweep`）。
 
 ## 計測された設計知見（G major, 2026-06-16）
 

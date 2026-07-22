@@ -364,3 +364,10 @@ Pro/AI quality (Metrics_v2_spec.md §4-5); the legacy "Bridge/Verse 低密度" /
 Baseline config (`config/*_baseline.yaml`) `active_rate_ideal` and
 `valley_depth_pro` are frozen (values unchanged) pending an n=20 v2
 re-baseline; see the `DEPRECATED` header comment in each file.
+
+Level invariance itself is permanently regression-guarded by a Hypothesis
+property sweep (#188 follow-up), not just the fixed single-signal/fixed-gain
+cases above: `tests/test_metrics_v2.py::test_inv_level_invariance_property_sweep`
+(pure-function layer, arbitrary gain/tone/envelope/noise) and
+`tests/test_metamorphic_probe.py::test_metrics_v2_level_invariance_e2e`
+(real `extract_physical_from_file` E2E layer, `@pytest.mark.slow`).

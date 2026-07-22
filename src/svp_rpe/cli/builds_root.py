@@ -277,7 +277,10 @@ def _check_existing_builds_root_publication(
     still not a full audit — it never rehashes *undeclared* files or
     recurses into anything beyond what the descriptor itself lists, and
     nothing in the directory is ever rewritten or repaired; an independent,
-    fully recursive audit is left to a future `verify`-style command.
+    fully recursive audit of an entire `--builds-root` tree — including the
+    undeclared-file recursion this function deliberately skips — is
+    `svprpe verify --builds-root` (`cli/builds_audit.py`'s `audit_builds_root`,
+    #190 follow-up).
     """
     descriptive_path = target_dir / descriptive_filename
     _reject_if_not_regular_file(

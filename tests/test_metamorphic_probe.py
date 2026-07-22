@@ -10,13 +10,19 @@ pass/fail にせず、ここでは「動く/不変/有界」の robust な関係
 """
 from __future__ import annotations
 
+import tempfile
 from dataclasses import replace
+from pathlib import Path
 
+import numpy as np
 import pytest
+import soundfile as sf
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 import scripts.metamorphic_probe as mp
+from svp_rpe.rpe.extractor import extract_physical_from_file
+from svp_rpe.rpe.models import PhysicalRPE
 
 # 実抽出を伴う Hypothesis テストの共通設定。deadline 無効化（抽出は遅い）、
 # derandomize で決定論化、max_examples は総実行時間の予算から逆算して小さく。
@@ -151,6 +157,80 @@ def test_extraction_is_deterministic(key: tuple[str, str], bpm: float, level: fl
     assert first.bpm == second.bpm
     assert (first.key, first.mode) == (second.key, second.mode)
     assert first.spectral_profile.brightness == second.spectral_profile.brightness
+
+
+# ---------------------------------------------------------------------------
+# T-INV (E2E) — Metrics v2 レベル不変性の実経路掃引（#188 follow-up, 層②）。
+# tests/test_metrics_v2.py の純関数掃引（層①）に対し、こちらは
+# render_sample → WAV 書き出し → extract_physical_from_file という実抽出経路
+# を通しても v2 フィールドがゲインシフト不変であることを実証する。
+# ---------------------------------------------------------------------------
+
+gain_db_strategy = st.floats(min_value=-24.0, max_value=6.0)
+
+
+def _write_and_extract(y: np.ndarray, sr: int = mp.SAMPLE_RATE) -> PhysicalRPE:
+    """WAV (FLOAT subtype) 経由で実 extract する。
+
+    設計判断 (a): `synth_extract` の PCM_16 書き出しは深い減衰でビット深度量子化が
+    起き、それ自体がレベル不変性を壊してしまう（16bit の量子化ステップは絶対振幅に
+    比例するので、-24dB 減衰後の信号は有効ビット数が減り誤差が相対的に拡大する）。
+    そのため本ヘルパーは soundfile `subtype="FLOAT"`（32bit float, 量子化なし）で
+    書き出す。抽出器（`librosa.load` 経由）が float WAV を問題なく読めることは
+    本テストの実行そのもので確認している。
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "probe_gain.wav"
+        sf.write(str(path), y, sr, subtype="FLOAT")
+        return extract_physical_from_file(str(path))
+
+
+@pytest.mark.slow
+@settings(
+    max_examples=3,
+    deadline=None,
+    derandomize=True,
+    suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture],
+)
+@given(key=key_strategy, gain_db=gain_db_strategy)
+def test_metrics_v2_level_invariance_e2e(key: tuple[str, str], gain_db: float) -> None:
+    """T-INV (E2E): 実抽出経路を通しても Metrics v2 の各フィールドはゲインシフト
+    不変（#188 T-INV の恒久掃引・層②。層①の純関数版は tests/test_metrics_v2.py）。
+
+    許容誤差は実測で決定した（本テスト作成時に KEYS 全 5 種 × gain
+    [-24, -16, -8, 0, ..., 6]dB の 7 点、および本 Hypothesis 設定と同一の
+    derandomize=True で選ばれる 3 example を手動実行して比較 — いずれも
+    active_rate_v2/fullness/valley_db/crest_factor_robust の差分は厳密に 0
+    （crest のみ float64 丸め由来の ~1e-47 の相対誤差）だった。これは代数的にも
+    妥当: v2 メトリクスは全て「自身のロバストピークに対する相対ゲート」
+    または「パーセンタイル比」であり、ゲイン a を乗じるとゲートも a 倍される
+    ため比較結果は不変、リサンプル（librosa.load）も線形演算なのでゲインと
+    可換。よってここでの許容誤差は層①より**緩めているのではなく**、実測 0 に
+    対する安全マージン（float32 往復 + リサンプル丸め誤差の余裕）として設定
+    している。gain 域を [-24, 6] dB に制限しているのは量子化回避（FLOAT
+    なので理論上不要）ではなく、音源のピーク余裕（`generate_synth_samples.
+    render_sample` は peak-normalize to 0.82）を大きく超えるゲインは検証意図
+    （現実的なマスタリング差）から外れるため。
+    """
+    key_name, mode = key
+    spec = mp.build_spec(
+        key=key_name, mode=mode, bpm=120.0, brightness_level=0.5, duration_sec=20.0
+    )
+    audio = mp.g.render_sample(spec).astype(np.float32)
+    scaled = (audio.astype(np.float64) * 10 ** (gain_db / 20.0)).astype(np.float32)
+
+    base = _write_and_extract(audio)
+    shifted = _write_and_extract(scaled)
+
+    assert base.active_rate_v2 is not None and shifted.active_rate_v2 is not None
+    assert base.fullness is not None and shifted.fullness is not None
+    assert base.valley_db is not None and shifted.valley_db is not None
+    assert base.crest_factor_robust is not None and shifted.crest_factor_robust is not None
+
+    assert shifted.active_rate_v2 == pytest.approx(base.active_rate_v2, abs=0.01)
+    assert shifted.fullness == pytest.approx(base.fullness, abs=0.01)
+    assert shifted.valley_db == pytest.approx(base.valley_db, abs=0.1)
+    assert shifted.crest_factor_robust == pytest.approx(base.crest_factor_robust, rel=0.01)
 
 
 # ---------------------------------------------------------------------------
