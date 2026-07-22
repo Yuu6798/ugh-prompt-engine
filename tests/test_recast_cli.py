@@ -163,6 +163,46 @@ def test_recast_plan_blocks_capability_on_corrupted_mode_overrides(tmp_path: Pat
     assert "blocked_capability" in status_result.output
 
 
+def test_recast_plan_blocks_capability_on_corrupted_device_profile(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """device profile（`config/device_profiles/<generator>.yaml`）の YAML 破損・
+    schema 不正も capability_profile / mode_overrides と同じ blocked_capability
+    として recast_plan.json に publish + state 記録されることを検証する
+    （Codex P2 tenth round #207: 以前は保存済み例外を re-raise しており、CLI が
+    top-level Error で落ちて plan/state が一切書かれなかった — eighth round で
+    対応した capability_profile/mode_overrides と同クラスの非一貫だった）。
+
+    実リポジトリの `config/device_profiles/suno.yaml` は変更せず、
+    `svp_rpe.recast.plan.resolve_config_bytes` を monkeypatch で差し替え、
+    schema 不正な bytes を返すスタブにする（`test_recast_status_reports_stale_
+    after_device_profile_changes` と同じ手法）。"""
+    import svp_rpe.recast.plan as recast_plan_module
+
+    project_path = _copy_demo_project(tmp_path)
+
+    def _fake_resolve_config_bytes(name: str) -> bytes | None:
+        if name == "device_profiles/suno":
+            return b"not-a-mapping\n"
+        return None
+
+    monkeypatch.setattr(recast_plan_module, "resolve_config_bytes", _fake_resolve_config_bytes)
+
+    result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+
+    assert result.exit_code == 1
+    plan_path = project_path.parent / "recast_plan.json"
+    assert plan_path.is_file()
+    data = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert data["state_reached"] == "blocked_capability"
+
+    status_result = runner.invoke(app, ["recast", "status", str(project_path)])
+    assert status_result.exit_code == 0, status_result.output
+    assert "blocked_capability" in status_result.output
+
+
 def test_recast_plan_write_failure_does_not_persist_state(tmp_path: Path, monkeypatch) -> None:
     """`recast_plan.json` の atomic publish が失敗した場合、`record_state` は
     呼ばれず `recast_state.json` も書き換わらないことを検証する（Codex P2 second
