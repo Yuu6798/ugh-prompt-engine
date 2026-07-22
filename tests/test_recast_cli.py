@@ -268,6 +268,41 @@ def test_recast_plan_blocks_capability_on_corrupted_device_profile(
     assert "blocked_capability" in status_result.output
 
 
+def test_recast_plan_publishes_blocked_verification_on_corrupted_identity_manifest(
+    tmp_path: Path,
+) -> None:
+    """Codex P2 review round 7（PR3 #208 指摘 13）: identity manifest（`work.
+    identity_manifest`）の YAML 破損は `build_recast_plan_artifacts` の
+    single-read 束が既に捕捉し `blocked_verification` として finalize
+    済みだが、従来の `_publish_recast_plan` は publish 前ガードとして独立に
+    `collect_protected_input_paths` を呼んでおり、これが manifest を**再
+    parse**して同じ YAML 破損に遭遇し、`_publish_recast_plan`/`record_state`
+    が捕捉しない例外（`RecastError`/`yaml.YAMLError` 等、`(OSError,
+    ValueError)` の catch に入らない型）を送出していた — 「blocked でも plan
+    は公開される」契約が崩れ、`recast plan` が recast_plan.json/state を
+    一切書かずに CLI top-level Error で落ちる回帰があった（本テストはこの
+    回帰の再発防止）。`recast plan` が exit 1 で `blocked_verification` を
+    正常に publish し、state にも記録されることを検証する。"""
+    project_path = _copy_demo_project(tmp_path)
+    identity_path = project_path.parent / "identity.yaml"
+    identity_path.write_text("not-a-mapping\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output  # 未捕捉例外で top-level Error に落ちていない
+    plan_path = project_path.parent / "recast_plan.json"
+    assert plan_path.is_file()
+    data = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert data["state_reached"] == "blocked_verification"
+
+    status_result = runner.invoke(app, ["recast", "status", str(project_path)])
+    assert status_result.exit_code == 0, status_result.output
+    assert "blocked_verification" in status_result.output
+
+
 def test_recast_plan_write_failure_does_not_persist_state(tmp_path: Path, monkeypatch) -> None:
     """`recast_plan.json` の atomic publish が失敗した場合、`record_state` は
     呼ばれず `recast_state.json` も書き換わらないことを検証する（Codex P2 second

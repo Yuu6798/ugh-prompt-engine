@@ -100,7 +100,9 @@ def _print_plan_warnings(plan: Any) -> None:
         console.print(f"  - {warning}")
 
 
-def _publish_recast_plan(loaded: Any, plan: Any) -> tuple[Path, str]:
+def _publish_recast_plan(
+    loaded: Any, plan: Any, *, protected_inputs: list[Path]
+) -> tuple[Path, str]:
     """`plan`（`RecastPlan`）を `<project_dir>/recast_plan.json` へ canonical
     形式（sorted keys, 2-space indent, trailing newline — deterministic）で
     atomic 公開し、publish したバイト列自身の sha256（`plan_sha256`）を返す。
@@ -114,13 +116,19 @@ def _publish_recast_plan(loaded: Any, plan: Any) -> tuple[Path, str]:
     存在しなかった）。呼び出し側は書き込み失敗（`OSError`）を own の Exit
     コードへ変換する。
 
-    公開前に `collect_protected_input_paths(loaded, plan.variant, plan.backend)`
-    との alias 検査を行う（Codex P2 review round 5, PR3 #208 指摘 10:
-    project.yaml 自体が `recast_plan.json` という名前を取る/`work.score` が
-    そこを指す等、project 側の宣言次第で入力パスが `<project_dir>/
-    recast_plan.json` と一致し得る — 従来この公開サイトだけ他の 4 公開サイト
-    （orders/takes×2/packages）と異なりガード対象外だった）。衝突時は何も
-    書かずに `ValueError` を送出する（fail-closed — 他公開サイトと同じ契約）。
+    `protected_inputs` は呼び出し側が `RecastPlanResult.protected_inputs`
+    （plan 段の single-read 束から副作用なく再構成済みの集合）から渡す
+    必須引数（デフォルト値なし）。公開前にこの集合との alias 検査を行い、
+    衝突時は何も書かずに `ValueError` を送出する（fail-closed — 他公開サイト
+    と同じ契約、Codex P2 review round 5, PR3 #208 指摘 10）。
+
+    ここで独自に `collect_protected_input_paths` を呼んで identity manifest
+    を**再 parse**しないのが要点（Codex P2 review round 7, PR3 #208 指摘 13:
+    再 parse すると、manifest 破損で plan が既に `blocked_verification` へ
+    finalize 済みのケースでもこの guard 自身が例外を送出し、「blocked でも
+    plan は公開される」契約を破って CLI top-level Error に落ちていた —
+    `RecastPlanResult.protected_inputs` は束の失敗許容を継承済みで再 parse
+    しないため、blocked plan の publish を妨げない）。
 
     encode は 1 回だけ行い、書き込みも `plan_sha256` の hash 計算もこの同一
     bytes から行う（Codex P2 review round 6, PR3 #208 由来の pr2 統合分
@@ -131,10 +139,8 @@ def _publish_recast_plan(loaded: Any, plan: Any) -> tuple[Path, str]:
     status` が偽 stale を報告しうる欠陥があった）。
     """
     from svp_rpe.recast.plan import RECAST_PLAN_FILENAME
-    from svp_rpe.recast.run_paths import collect_protected_input_paths
 
     plan_path = loaded.project_dir / RECAST_PLAN_FILENAME
-    protected_inputs = collect_protected_input_paths(loaded, plan.variant, plan.backend)
     if plan_path.resolve() in {candidate.resolve() for candidate in protected_inputs}:
         raise ValueError(f"output path collides with a protected input path: {plan_path}")
 
@@ -173,7 +179,6 @@ def recast_plan_cmd(
     from svp_rpe.arrange.resolver import ArrangementError
     from svp_rpe.recast import RecastError, load_recast_project
     from svp_rpe.recast.plan import build_recast_plan
-    from svp_rpe.recast.run_paths import collect_protected_input_paths
     from svp_rpe.recast.state import record_state
 
     try:
@@ -183,13 +188,19 @@ def recast_plan_cmd(
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
+    # `result.protected_inputs` は plan 段の single-read 束から副作用なく
+    # 再構成済み（Codex P2 review round 7, PR3 #208 指摘 13）— ここで
+    # `collect_protected_input_paths` を独立に呼んで manifest を再 parse
+    # しない（blocked_verification でも publish 前ガードが例外を送出しない
+    # ようにする）。
     try:
-        plan_path, plan_sha256 = _publish_recast_plan(loaded, result.plan)
+        plan_path, plan_sha256 = _publish_recast_plan(
+            loaded, result.plan, protected_inputs=result.protected_inputs
+        )
     except (OSError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
-    protected_inputs = collect_protected_input_paths(loaded, variant, backend)
     # 状態記録は plan JSON の publish が成功した後にのみ行う（Codex P2 #207）:
     # 書き込み失敗時に stale な recast_state.json を残さないための順序保証。
     try:
@@ -201,7 +212,7 @@ def recast_plan_cmd(
             _plan_state_note(result),
             inputs_digest=result.inputs_digest,
             plan_sha256=plan_sha256,
-            protected_inputs=protected_inputs,
+            protected_inputs=result.protected_inputs,
         )
     except (OSError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
@@ -296,7 +307,6 @@ def recast_run_cmd(
         run_context_from_plan_artifacts,
     )
     from svp_rpe.recast.plan import _normalize_diagnostic, build_recast_plan_artifacts
-    from svp_rpe.recast.run_paths import collect_protected_input_paths
     from svp_rpe.recast.state import record_state
 
     try:
@@ -306,13 +316,18 @@ def recast_run_cmd(
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
+    # `artifacts.result.protected_inputs` は plan 段の single-read 束から
+    # 副作用なく再構成済み（Codex P2 review round 7, PR3 #208 指摘 13）—
+    # `collect_protected_input_paths` を独立に呼んで manifest を再 parse しない。
+    protected_inputs = artifacts.result.protected_inputs
     try:
-        _plan_path, plan_sha256 = _publish_recast_plan(loaded, artifacts.result.plan)
+        _plan_path, plan_sha256 = _publish_recast_plan(
+            loaded, artifacts.result.plan, protected_inputs=protected_inputs
+        )
     except (OSError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
-    protected_inputs = collect_protected_input_paths(loaded, variant, backend)
     inputs_digest = artifacts.result.inputs_digest
     # plan 段の到達状態は plan JSON の publish 成功後にのみ記録する（Codex P2
     # #207 の順序保証を run にも適用 — plan_sha256 が実在ファイルを指すように）。
@@ -543,7 +558,9 @@ def recast_ingest_cmd(
         raise typer.Exit(code=1) from exc
 
     try:
-        _plan_path, plan_sha256 = _publish_recast_plan(loaded, artifacts.result.plan)
+        _plan_path, plan_sha256 = _publish_recast_plan(
+            loaded, artifacts.result.plan, protected_inputs=artifacts.result.protected_inputs
+        )
     except (OSError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc

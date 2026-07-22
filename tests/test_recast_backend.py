@@ -388,6 +388,44 @@ def test_manual_collect_take_json_failure_leaves_no_orphaned_audio(
     assert not (prepared.takes_dir / "take.json").exists()
 
 
+class _InjectedBaseException(BaseException):
+    """`Exception` を継承しない注入用テスト例外（`KeyboardInterrupt`/
+    `SystemExit` と同じ `BaseException` 直下の系統を模す — PR3 #208 指摘 14）。"""
+
+
+def test_manual_collect_take_json_base_exception_during_rename_still_rolls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 review round 7（PR3 #208 指摘 14）: `atomic_publish_bytes_bundle`
+    の rename フェーズが従来 `except OSError` のみだったため、rename 中に
+    `KeyboardInterrupt`/`SystemExit` 系（`Exception` を継承しない
+    `BaseException`）が飛ぶと rollback を素通りし、snapshot ごと失われた
+    「半端に publish 済み」の状態が残り得た。`os.replace` の `take.json` 側
+    最終 rename に `Exception` を継承しない例外を注入し、それでも
+    `take-01.wav`/`take.json` が残らない（rollback が効く）ことを検証する。"""
+    import os
+
+    project_path = _copy_demo_project(tmp_path)
+    _loaded, invoker, prepared = _prepare_manual(project_path)
+    supplied = tmp_path / "external_take.wav"
+    supplied.write_bytes(b"RIFF....WAVEfake-audio-bytes")
+
+    real_replace = os.replace
+
+    def flaky_replace(src: object, dst: object) -> None:
+        if str(dst).endswith("take.json"):
+            raise _InjectedBaseException("simulated KeyboardInterrupt-like interruption")
+        real_replace(src, dst)
+
+    monkeypatch.setattr("os.replace", flaky_replace)
+
+    with pytest.raises(_InjectedBaseException):
+        invoker.collect(prepared, supplied)
+
+    assert not (prepared.takes_dir / "take-01.wav").exists()
+    assert not (prepared.takes_dir / "take.json").exists()
+
+
 # --- manual: orders publish collision guard --------------------------------------
 
 
@@ -569,6 +607,49 @@ def test_atomic_publish_text_bundle_partial_failure_restores_old_files(
 
     # package.json 側の rename は成功していたが、report.json 側の失敗を受けて
     # 両方とも旧内容へロールバックされている（新 package だけが生き残らない）。
+    assert (output_dir / "performance_package.json").read_text(encoding="utf-8") == "old-package"
+    assert (output_dir / "compilation_report.json").read_text(encoding="utf-8") == "old-report"
+
+
+def test_atomic_publish_text_bundle_base_exception_during_rename_still_rolls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 review round 7（PR3 #208 指摘 14）: `_atomic_publish_text_bundle`
+    の rename フェーズが従来 `except OSError` のみだったため、rename 中に
+    `Exception` を継承しない `BaseException`（`KeyboardInterrupt`/`SystemExit`
+    系）が飛ぶと rollback を素通りしていた。`compilation_report.json` 側の
+    最終 rename に `Exception` を継承しない例外を注入しても、両ファイルとも
+    旧内容へロールバックされる（rollback が確実に効く）ことを検証する。"""
+    import os
+
+    from svp_rpe.recast.plan import _atomic_publish_text_bundle
+
+    output_dir = tmp_path / "packages" / "edm@suno"
+    output_dir.mkdir(parents=True)
+    (output_dir / "performance_package.json").write_text("old-package", encoding="utf-8")
+    (output_dir / "compilation_report.json").write_text("old-report", encoding="utf-8")
+
+    real_replace = os.replace
+    calls = {"failed_once": False}
+
+    def flaky_replace(src: object, dst: object) -> None:
+        if str(dst) == str(output_dir / "compilation_report.json") and not calls["failed_once"]:
+            calls["failed_once"] = True
+            raise _InjectedBaseException("simulated KeyboardInterrupt-like interruption")
+        real_replace(src, dst)
+
+    monkeypatch.setattr("os.replace", flaky_replace)
+
+    with pytest.raises(_InjectedBaseException):
+        _atomic_publish_text_bundle(
+            output_dir,
+            {
+                "performance_package.json": b"new-package",
+                "compilation_report.json": b"new-report",
+            },
+            protected_inputs=[],
+        )
+
     assert (output_dir / "performance_package.json").read_text(encoding="utf-8") == "old-package"
     assert (output_dir / "compilation_report.json").read_text(encoding="utf-8") == "old-report"
 

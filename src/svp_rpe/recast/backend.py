@@ -265,7 +265,16 @@ def atomic_publish_bytes_bundle(
             for filename in contents:
                 os.replace(staging_dir / filename, output_dir / filename)
                 published.append(filename)
-        except OSError:
+        except BaseException:
+            # `except BaseException`（`except OSError` ではなく）: rename 中に
+            # `KeyboardInterrupt`/`SystemExit` が飛んでも rollback を必ず通す
+            # （Codex P2 review round 7, PR3 #208 指摘 14: 単一ファイル atomic
+            # writer 群 — `_write_recast_plan_atomically` / `_write_recast_state_
+            # atomically` 等 — は元から `except BaseException` で統一されており、
+            # 複数ファイル bundle publisher だけが `except OSError` に留まって
+            # いた。`OSError` のみだと非 `OSError` の中断シグナルで rollback を
+            # 素通りし、snapshot ごと失われた「半端に publish 済み」の状態が
+            # 残り得た）。
             for filename in published:
                 try:
                     os.unlink(output_dir / filename)

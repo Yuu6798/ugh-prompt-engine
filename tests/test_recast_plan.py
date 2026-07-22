@@ -150,16 +150,20 @@ def test_build_recast_plan_reads_each_bundle_input_exactly_once(
     monkeypatch カウンタで検証する。
 
     identity manifest と score は、束の外側にある別の single-read 規律を持つ
-    副系（`verify_package` 自身の独立した V3 再検証、PR3 の
-    `collect_protected_input_paths` 衝突ガード）からも読まれるため 1 回では
-    収まらない（1 回に固定すると無関係な副系の実装詳細でテストが壊れやすく
-    なるため、正確な期待値をここに明記する — これらの副系自体は本ゲートの
+    副系（`verify_package` 自身の独立した V3 再検証）からも読まれるため 1 回
+    では収まらない（1 回に固定すると無関係な副系の実装詳細でテストが壊れ
+    やすくなるため、正確な期待値をここに明記する — この副系自体は本ゲートの
     対象外の正当な read）:
     - identity manifest: 束（1 回）+ `verify_package` の V3 再検証（manifest
       ファイル自体の read は 1 回、`manifest_bytes` を渡してパースし直す
-      だけ）+ PR3 `collect_protected_input_paths`（packages 公開前の衝突
-      ガードが対象パス一式を得るため、束と別目的で manifest を再読込する
-      — #208 指摘 2/6/7）… 計 3 回。
+      だけ）… 計 2 回。PR3 の packages 公開前衝突ガード（`protected_inputs`）は
+      束が既に読んだ/parse 済みの manifest オブジェクトから副作用なく再構成
+      するため追加 read は発生しない（Codex P2 review round 7, PR3 #208
+      指摘 13 — 従来は `collect_protected_input_paths` を独立に呼んで
+      manifest を再 parse しており、それが計 3 回目の read だったが、
+      再 parse 自体が「blocked plan でも publish される」契約を壊す不具合
+      だったため single-read 束からの再構成へ置き換えた副次効果でここも
+      1 回減った）。
     - score: demo fixture の identity `source.locator` が
       `composition_score.yaml` 自身を指すため、束の直接 read（1 回）+ 束内の
       `parse_identity_manifest_with_artifacts` が source artifact として
@@ -188,7 +192,7 @@ def test_build_recast_plan_reads_each_bundle_input_exactly_once(
     assert _count(loaded.capability_profile_paths["suno"]) == 1
     assert _count(loaded.mode_override_paths["suno"]) == 1
     assert _count(Path("config/device_profiles/suno.yaml")) == 1
-    assert _count(loaded.identity_manifest_path) == 3
+    assert _count(loaded.identity_manifest_path) == 2
     assert _count(loaded.score_path) == 3
 
 

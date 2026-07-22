@@ -79,6 +79,7 @@ from svp_rpe.arrange.identity import (
     parse_identity_manifest_with_artifacts,
 )
 from svp_rpe.arrange.models import ArrangementChange, ArrangementSpec, PreservationMode
+from svp_rpe.arrange.pathsafe import resolve_confined
 from svp_rpe.arrange.observe import (
     is_harmony_sensor_anchor,
     is_lyrics_sensor_anchor,
@@ -120,7 +121,7 @@ from svp_rpe.recast.models import (
     RecastModel,
     RecastProject,
 )
-from svp_rpe.recast.run_paths import collect_protected_input_paths, resolve_packages_dir
+from svp_rpe.recast.run_paths import resolve_packages_dir
 from svp_rpe.recast.state import RecastState
 from svp_rpe.sentinels import is_todo_sentinel
 from svp_rpe.utils.config_loader import resolve_config_bytes
@@ -192,12 +193,27 @@ class RecastPlanResult:
     （`blocked=None` の場合のみ意味を持つ — blocked の場合は
     `plan.blocked.reasons` が同じ情報を既に保持する）。CLI と単体テストが
     state note を組み立てる際、ゲート判定ロジックを再実装せずここから
-    そのまま読む single source。"""
+    そのまま読む single source。
+
+    `protected_inputs`: この `(variant, backend)` run が参照する外部入力
+    パス一式（`recast/run_paths.py:collect_protected_input_paths` と同じ
+    集合）を、single-read 束が既に読んだ/保持しているオブジェクトから
+    副作用なく再構成したもの（Codex P2 review round 7, PR3 #208 指摘 13:
+    CLI 側の publish-前ガード — `recast_plan.json`/`recast_state.json` 公開
+    サイト — が独立に `collect_protected_input_paths` を呼んで identity
+    manifest を**再 parse**すると、blocked_verification（manifest 破損）
+    のケースで publish 前ガードそのものが例外を送出し、「blocked でも plan
+    は公開される」契約を壊して CLI top-level Error に落ちる。ここで束の
+    読み取り結果から再構成すれば追加の read/parse が一切発生せず、束が既に
+    manifest parse 失敗を許容している以上ガードも同じ degrade（manifest が
+    参照する source/anchor artifact は対象外だが、manifest ファイル自身は
+    対象に含める）を継承する。"""
 
     plan: RecastPlan
     text: str
     inputs_digest: str
     mode_gate_reasons: List[str]
+    protected_inputs: List[Path]
 
 
 @dataclass(frozen=True)
@@ -294,7 +310,11 @@ def _atomic_publish_text_bundle(
             for filename in contents:
                 os.replace(staging_dir / filename, output_dir / filename)
                 published.append(filename)
-        except OSError:
+        except BaseException:
+            # `except BaseException`（`except OSError` ではなく）: rename 中に
+            # `KeyboardInterrupt`/`SystemExit` が飛んでも rollback を必ず通す
+            # （Codex P2 review round 7, PR3 #208 指摘 14 — `backend.py:
+            # atomic_publish_bytes_bundle` と同じ理由・同じ統一）。
             for filename in published:
                 try:
                     os.unlink(output_dir / filename)
@@ -923,6 +943,29 @@ def build_recast_plan_artifacts(
     # step 9 で確定する（strict/advisory ゲート対象の changed_field 診断一式）。
     mode_gate_reasons: List[str] = []
 
+    # `collect_protected_input_paths` と同じ集合を、束が既に読んだ/保持している
+    # オブジェクトから副作用なく再構成する（Codex P2 review round 7, PR3 #208
+    # 指摘 13: `RecastPlanResult.protected_inputs` の docstring 参照 — 再 read/
+    # re-parse を一切行わない。manifest parse が失敗している場合は
+    # source/anchor artifact の解決を諦める degrade を束の失敗許容と合わせる）。
+    protected_inputs: List[Path] = [
+        loaded.path,
+        loaded.score_path,
+        manifest_path,
+        arrangement_path,
+        profile_path,
+    ]
+    if mode_override_path is not None:
+        protected_inputs.append(mode_override_path)
+    if manifest is not None:
+        manifest_dir = manifest_path.resolve().parent
+        try:
+            protected_inputs.append(resolve_confined(manifest.source.locator, manifest_dir))
+            for anchor in manifest.anchors:
+                protected_inputs.append(resolve_confined(anchor.artifact, manifest_dir))
+        except ValueError:
+            pass
+
     def _finalize(
         *,
         state_reached: RecastState,
@@ -977,6 +1020,7 @@ def build_recast_plan_artifacts(
             text=_render_text(plan),
             inputs_digest=inputs_digest,
             mode_gate_reasons=mode_gate_reasons,
+            protected_inputs=protected_inputs,
         )
         return RecastPlanArtifacts(
             result=result,
@@ -1143,12 +1187,14 @@ def build_recast_plan_artifacts(
 
     # package/report を永続公開する（require_verified_package の有無に関わらず
     # 常に — "compiled" 到達時も最新の compile 結果を builds_root へ残す）。
-    # `collect_protected_input_paths` を全公開サイト共通の衝突ガードとして渡す
-    # （Codex P2 review, PR3 #208 指摘 7: 従来 packages 公開は一切ガードなしで、
-    # capability_profile/mode_overrides/manifest anchor artifact 等が偶然
-    # `packages/<variant>@<backend>/` 配下と衝突する project 構成では入力を
-    # 無警告で上書き破壊し得た）。
-    protected_inputs = collect_protected_input_paths(loaded, variant, backend)
+    # 束の読み取り結果から再構成済みの `protected_inputs`（closure 変数、上記
+    # 参照）を全公開サイト共通の衝突ガードとして渡す（Codex P2 review, PR3
+    # #208 指摘 7: 従来 packages 公開は一切ガードなしで、capability_profile/
+    # mode_overrides/manifest anchor artifact 等が偶然 `packages/<variant>@
+    # <backend>/` 配下と衝突する project 構成では入力を無警告で上書き破壊し
+    # 得た。指摘 13 対応でここでの再計算は廃止 — この時点は manifest parse
+    # が既に成功しているケースのみ到達するため、束から再構成した完全な集合を
+    # そのまま使い回せる）。
     # encode は 1 回だけ行い、書き込みも（`arrange/package.py` が既に計算
     # 済みの）`package_sha256` の hash 計算元もこの同一 bytes に揃える
     # （Codex P2 review round 6, PR3 #208 指摘 12 — `_atomic_publish_text_bundle`
