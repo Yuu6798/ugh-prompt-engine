@@ -80,7 +80,12 @@ def test_committed_fixture_loads_and_resolves_paths() -> None:
     assert loaded.project_dir == project_dir
     assert loaded.score_path == project_dir / "composition_score.yaml"
     assert loaded.identity_manifest_path == project_dir / "identity.yaml"
-    assert loaded.arrangement_paths == {"edm": project_dir / "arrangements" / "edm.yaml"}
+    assert loaded.arrangement_paths == {
+        "edm": project_dir / "arrangements" / "edm.yaml",
+        # PR4: chords+structure 縦切り E2E 専用 variant
+        # (arrangements/deterministic_e2e.yaml)。
+        "deterministic_e2e": project_dir / "arrangements" / "deterministic_e2e.yaml",
+    }
     assert loaded.builds_root == project_dir / "builds"
     assert loaded.sha256  # non-empty hex digest
     assert len(loaded.sha256) == 64

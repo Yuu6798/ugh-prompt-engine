@@ -1,0 +1,4 @@
+{
+  "schema_version": "section-map/0.1",
+  "sections": ["intro", "verse", "chorus", "bridge"]
+}

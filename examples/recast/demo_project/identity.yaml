@@ -42,3 +42,27 @@ anchors:
     format_version: "chord-sequence/0.1"
     sha256: "180464a881ac63131c0a0fcdf812e0cc7bfd8dc1e9947698a5d5c65c89245299"
     required: true
+  - id: structure
+    domain: structure
+    # PR4（Phase 0 ゲート判定 #205 の帰結。melody センサーは pyin 縮退により
+    # 不成立のため縦切り hard anchor から除外し harmony+structure を採用する）:
+    # 正典は composition_score.yaml の structure 欄のセクション名を機械転記
+    # したもの（intro/verse/chorus/bridge）。
+    # examples/arrangement/midnight_signal/identity_manifest.form.yaml と同一
+    # base score・同一 structure 欄のため section_map.json の内容と sha256 も
+    # そちらと一致する（再利用ではなく偶然の一致ではない — 実ファイル読み取り
+    # 確認済み）。
+    # required: false — 既存 "edm" variant（arrangements/edm.yaml）は
+    # lyrics/melody/harmony の 3 anchor のみ identity_anchors に宣言しており
+    # structure の policy を持たない。build_preservation_contract は
+    # required: true の全 anchor に policy を要求するため、structure を
+    # required: true にすると edm variant が blocked_authoring に落ちる
+    # （既存 pin 連鎖を壊さないための意図的な required: false —
+    # identity_manifest.form.yaml と同じ規律）。deterministic_e2e variant は
+    # この anchor を identity_anchors で明示的に hard 宣言する。
+    artifact: identity/section_map.json
+    artifact_type: section_map
+    media_type: application/json
+    format_version: "section-map/0.1"
+    sha256: "1fc7e8dabf83c691758114128fdd36b7679dd61175d8492afae3f97577047eb1"
+    required: false

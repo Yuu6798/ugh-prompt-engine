@@ -72,7 +72,15 @@ def test_demo_project_reaches_verified(tmp_path: Path) -> None:
 
     assert result.plan.blocked is None
     assert result.plan.state_reached == "verified"
-    assert {a.anchor_id for a in result.plan.anchors} == {"lyrics", "melody", "harmony"}
+    # PR4: identity.yaml に structure anchor (required: false) が追加された
+    # ため、"edm" variant の anchor table にも policy 未宣言のまま
+    # (delivery=not_requested) 4 件目として現れる。
+    assert {a.anchor_id for a in result.plan.anchors} == {
+        "lyrics",
+        "melody",
+        "harmony",
+        "structure",
+    }
     assert result.mode_gate_reasons  # unknown（未実測）ゲート対象が存在する
     assert any(
         "semantic.grv.primary" in reason and "unknown" in reason

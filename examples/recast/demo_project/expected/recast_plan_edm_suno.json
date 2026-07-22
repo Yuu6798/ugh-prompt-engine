@@ -21,6 +21,12 @@
       "domain": "harmony",
       "policy_mode": "hard",
       "sensor_available": true
+    },
+    {
+      "anchor_id": "structure",
+      "delivery": "not_requested",
+      "domain": "structure",
+      "sensor_available": true
     }
   ],
   "backend": "suno",
