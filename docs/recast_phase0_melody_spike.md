@@ -53,18 +53,31 @@ S2/S3 はスクリプト内で決定論的に構築されるため追加 fixture
   （`load_composition_score` は指定パスのみを読み、`compute_melody_contour` /
   `perform` は config 非依存であることを実装確認済み）
 - 決定論: 同一コマンドを 2 回実行し出力 JSON が byte-identical であることを実測済み
-- **測定コードの同一性は src モジュール manifest pin で担保**: 本レシピが
-  スクリプトから**直接 import する**第一者測定モジュール 4 本の sha256:
+- **測定コードの同一性は src モジュール manifest pin で担保**:
+  `scripts/spike_melody_similarity.py` の `from svp_rpe...` import 文を実読して
+  第一者（svp_rpe）直接 import の**全数**を列挙した結果、6 モジュールの sha256:
   - `src/svp_rpe/compose/loader.py` sha256:
     `ad581b49056b02a409f11db22a255ed3d3a568341a1d9fe3ae0e37524786232e`
+  - `src/svp_rpe/compose/models.py` sha256:
+    `ab78160e0d021912d6d6d2eb3430167bf2cae0a4b19d58fa488279088c645a7f`
   - `src/svp_rpe/perform/performer.py` sha256:
     `4c0c8ca737400f759f2f665dad90f989ca12584d1a0b1969ef31df61a89b684e`
   - `src/svp_rpe/perform/synth.py` sha256:
     `e36d831712b3ef247292a235415a1ce36fe6d6ebaeb127987e23363c43963884`
+  - `src/svp_rpe/rpe/models.py` sha256:
+    `56b8f1c6762a6bcf5e67edf84fe9b00dbe109bdca22167f64ebe0820253fb8db`
   - `src/svp_rpe/rpe/physical_features.py` sha256:
     `f25e6a44572f551c295005b69b874e66bdc9086c0424ac3ec8fc53154c74029f`
 
-  上記 4 本を含む pin 表全体を `tests/test_recast_spike_provenance.py` が working
+  列挙根拠: `grep -n "^from svp_rpe" scripts/spike_melody_similarity.py` で拾える
+  import 文 6 行（`compose.loader.load_composition_score` /
+  `compose.models.CompositionScore` / `perform.performer.{PerformanceStyle,perform}` /
+  `perform.synth.{SAMPLE_RATE,sha256_bytes,wav_bytes}` /
+  `rpe.models.MelodyContour` / `rpe.physical_features.compute_melody_contour`）の
+  解決先ファイル全数（AGENTS.md §8 項目 1 準拠。旧版はこのうち
+  `compose.models` / `rpe.models` を見落としていた）。
+
+  上記 6 本を含む pin 表全体を `tests/test_recast_spike_provenance.py` が working
   tree と機械照合するため、**再現の前提は「pin 表の全ファイルが working tree と
   一致していること」**であり、特定 commit の checkout そのものではない
   （squash 等でオブジェクトが祖先から外れても pin 表の記法自体は影響を受けない）。
@@ -75,7 +88,7 @@ S2/S3 はスクリプト内で決定論的に構築されるため追加 fixture
   これらのモジュールがさらに import する transitive 依存（librosa/scipy 等の
   外部ライブラリ、共有スキーマ層）の変更は対象外。将来 attestation との差異が
   疑われた場合は再実測で補完する
-- **効果**: 上記 4 モジュールいずれかが将来変更されると
+- **効果**: 上記 6 モジュールいずれかが将来変更されると
   `tests/test_recast_spike_provenance.py` が赤くなり、本メモの数値を無言で
   差し替える（silent stale）ことができず、新しい日付の再実測として
   別途記録する（dated log 規律）ことが強制される
