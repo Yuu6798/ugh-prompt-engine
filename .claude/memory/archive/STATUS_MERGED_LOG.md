@@ -143,3 +143,7 @@ STATUS.md "Recently Merged"（最新 5 件保持）から溢れたマージ済�
 | #192 | feat(arrange): structure センサー observe 配線 — section-map/0.1 + 位置揃え一致計量。Codex 3R: format_version 宣言ゲート／正規化を非対称（正典 verbatim・観測は抽出器 VerseN 慣行のみ吸収）へ収束 | 2026-07-19 | AR2-3 解凍条件 (a) |
 | #193 | feat(arrange): AR4 form 実測 — MusicGen 30s×structure センサーで実 form artifact 初観測（挿入・欠落・重複・長さ振れ=常態を確定）+ AR2-3 解凍判断。日付 provenance P2 是正（実クロック 07-19 へ・hash 連鎖内コメントは意図的残置） | 2026-07-19 | AR2-3 解凍条件 (b) |
 | #194 | feat(arrange): AR2-3 本体 — section-map/0.2（stable id・0.1 と並置=committed 観測 fixture 再現性の根拠付き例外）+ section_ref 解決（0.2 anchor の id へ・dangling fail-fast・0.2 不在は opaque 後方互換）+ form 変形語彙 3 語（実測由来・3 層検証自動追従）。new-brief 起草で Codex 指摘ゼロ。1663 passed | 2026-07-19 | AR2-3（解凍→同日実装） |
+| #195 | docs(agents): §8 に記録日付の date -u 実測確認 + provenance 再現レシピの全入力 pin 検証後 emit の 2 規律を恒久化（#193 日付誤記 / #191 9R 同根の教訓・414 行） | 2026-07-20 | §8 規律恒久化 |
+| #196 | feat(arrange): 実 Suno AR4 検収デモを dated fixture 化（observed/suno/・非 canonical 探索の位置づけ維持・emit 前 pin 検証=#195 規律の適用第一号・verify 38/38・音源 4 本は sha256 pin のみで非コミット） | 2026-07-20 | AR4 実 Suno 初観測 |
+| #197 | docs(roadmap): WI 系列（Work Identity 判定トラック）ロードマップ新設 — WI0–WI4・思想 4 点セット（宣言的契約×弁別判定×人間校正×正直会計）・Goodhart 抑止/ラベル先行付与禁止の事前埋め込み・queue 2 項目を WI0/WI1 へ編入 | 2026-07-20 | WI 系列新設 |
+| #198 | feat(arrange): WI0-a — observe へ lyrics/melody センサー配線（synthetic 検証・schema 0.1 無変更・4 anchor domain 全計器化・依存欠如は degrade 契約・melody v0 は音高系列のみ=BPM 交絡回避・検算照合 4 件全一致）。1650 passed | 2026-07-20 | WI0-a |
