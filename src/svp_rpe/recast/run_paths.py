@@ -45,6 +45,13 @@ def resolve_packages_dir(loaded: LoadedRecastProject, variant: str, backend: str
     return loaded.builds_root / "packages" / run_key(variant, backend)
 
 
+def resolve_reports_dir(loaded: LoadedRecastProject, variant: str, backend: str) -> Path:
+    """PR5: `recast ingest` の observe→report 段が `recast_report.json` /
+    `recast_summary.md` を公開する先（packages/orders/takes と同じ命名規約
+    — この 3 種に加える 4 種目の per-(variant, backend) 出力ディレクトリ）。"""
+    return loaded.builds_root / "reports" / run_key(variant, backend)
+
+
 def collect_protected_input_paths(
     loaded: LoadedRecastProject, variant: str, backend: str
 ) -> list[Path]:

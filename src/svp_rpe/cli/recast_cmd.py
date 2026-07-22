@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import Any, Optional
@@ -28,9 +29,18 @@ _NEXT_STEP_BY_STATE: dict[str, str] = {
         "外部生成後: svprpe recast ingest <project.yaml> --variant <variant> "
         "--backend <backend> --audio <takes_dir>/take-01.wav (注文書 next_command.txt 参照)"
     ),
-    "generated": "観測 (svprpe observe 連携) は PR5 で configure 予定",
-    "observed": "観測結果を確認し reported へ進める",
-    "reported": "run 完了",
+    # PR5: manual backend は project.yaml の observation.enabled=true なら
+    # svprpe recast ingest が observe→report まで自動で進める（下記
+    # "reported" 参照）。local backend の recast run はこの拡張の対象外の
+    # ため generated で完了 — observation.enabled でも svprpe observe を
+    # 手動実行できる（ingest 非依存の従来経路）。
+    "generated": (
+        "manual backend + observation.enabled=true: svprpe recast ingest が "
+        "observe→report まで自動実行済みのはず。無効時 / local backend は "
+        "svprpe observe <package> <audio> --manifest <identity.yaml> -o <report.json> を手動実行"
+    ),
+    "observed": "reported へ進行中の中間状態（通常 ingest 内で即座に reported へ続く）",
+    "reported": "builds_root/reports/<variant>@<backend>/recast_summary.md を確認",
     "blocked_authoring": "TODO(transcribe) sentinel / preservation 契約違反を解消して再実行",
     "blocked_capability": "capability_mode を advisory へ切替するか anchor 要求を降格して再実行",
     "blocked_verification": "identity manifest / package artifact の整合性を修正して再実行",
@@ -48,6 +58,21 @@ def _read_plan_sha256(path: Path) -> Optional[str]:
         return hashlib.sha256(path.read_bytes()).hexdigest()
     except OSError:
         return None
+
+
+_SLUG_SANITIZE_RE = re.compile(r"[^a-z0-9]+")
+_SLUG_MULTI_DASH_RE = re.compile(r"-{2,}")
+
+
+def _slugify(value: str) -> str:
+    """`recast init` の project.id / identity work_id / arrangement meta.id を
+    `recast/models.py:_SLUG_PATTERN`（`^[a-z0-9][a-z0-9_-]*$`）へ機械的に
+    正規化する。空・記号のみ等 slug 化不能な入力は空文字を返す（呼び出し側が
+    `"recast-project"` 等のフォールバックへ倒す）。"""
+    lowered = value.strip().lower()
+    dashed = _SLUG_SANITIZE_RE.sub("-", lowered)
+    collapsed = _SLUG_MULTI_DASH_RE.sub("-", dashed).strip("-")
+    return collapsed
 
 
 def _write_recast_plan_atomically(path: Path, content: bytes) -> None:
@@ -457,25 +482,49 @@ def recast_ingest_cmd(
     that publish succeeds — this is the command `next_command.txt`/
     `order_sheet.md` (`ManualInvoker`) advertise.
 
-    Scope: this command stops at `generated`. `observe`/`report` integration
-    (`recast status`'s next-step for `generated`) is PR5 scope — this command
-    never names an unimplemented command.
+    Scope (PR5): once the take is collected and `generated` is recorded, if
+    `project.yaml`'s `observation.enabled` is true this command continues on
+    to observe the take (`svp_rpe.arrange.observe.observe_generated_artifact`,
+    the same provenance-checked path `svprpe observe` uses) against the
+    published `performance_package.json` + `--manifest` identity manifest,
+    records `observed`, builds + publishes a `recast_report.json` +
+    `recast_summary.md` pair (`svp_rpe.recast.report`) under
+    `<builds_root>/reports/<variant>@<backend>/`, and records `reported`. A
+    failure anywhere in the observe/report stage (extraction error, publish
+    I/O failure, ...) is recorded as `observation_incomplete` and exits 1 —
+    no partial `recast_report.json`/`recast_summary.md` is ever left behind
+    (the pair publishes atomically as one bundle, `atomic_publish_bytes_bundle`).
+    When `observation.enabled` is false this command stops at `generated`,
+    unchanged from PR3/PR4 behavior — `svprpe observe` remains available as a
+    manual fallback either way.
     """
     import yaml
     from pydantic import ValidationError
 
+    from svp_rpe.arrange.identity import IdentityManifestError
+    from svp_rpe.arrange.observe import observe_generated_artifact
+    from svp_rpe.arrange.package import PERFORMANCE_PACKAGE_FILENAME
     from svp_rpe.arrange.resolver import ArrangementError
     from svp_rpe.recast import RecastError, load_recast_project
     from svp_rpe.recast.backend import (
+        atomic_publish_bytes_bundle,
         load_backend_capability_profile,
         resolve_invoker,
         run_context_from_plan_artifacts,
     )
     from svp_rpe.recast.plan import (
         RECAST_PLAN_FILENAME,
+        _normalize_diagnostic,
         build_recast_plan_artifacts,
         compute_recast_inputs_digest,
     )
+    from svp_rpe.recast.report import (
+        RECAST_REPORT_FILENAME,
+        RECAST_SUMMARY_FILENAME,
+        build_recast_report,
+        render_recast_summary_markdown,
+    )
+    from svp_rpe.recast.run_paths import resolve_packages_dir, resolve_reports_dir
     from svp_rpe.recast.state import load_recast_state, record_state
 
     try:
@@ -576,7 +625,142 @@ def recast_ingest_cmd(
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     console.print(f"[green]Ingested take: {take.audio_path} (sha256={take.sha256})[/green]")
-    console.print("Next step: observe/report は今後のコマンドで提供予定です（未実装）。")
+
+    if not loaded.project.observation.enabled:
+        console.print(
+            "Next step: project.yaml の observation.enabled が無効です。"
+            "svprpe observe <package.json> <audio> --manifest <identity.yaml> "
+            "-o <report.json> で手動観測してください。"
+        )
+        raise typer.Exit(code=0)
+
+    # PR5: observation.enabled=true の manual backend はここから observe→report
+    # まで自動で継続する。`take.audio_path` は上の `atomic_publish_bytes_bundle`
+    # 経由の publish が成功した後の実ファイルパスであり、`prepared.package` は
+    # `PerformancePackage` オブジェクトそのものだが `observe_generated_artifact`
+    # は provenance chain を自分自身で再検証する必要があるため、公開済みの
+    # `performance_package.json` bytes を改めて読む（in-memory オブジェクトを
+    # 信用しない — `svprpe observe` の D-3 契約と同じ posture）。
+    package_path = resolve_packages_dir(loaded, variant, backend) / PERFORMANCE_PACKAGE_FILENAME
+    take_relative = os.path.relpath(take.audio_path, loaded.project_dir)
+
+    try:
+        observation = observe_generated_artifact(
+            package_path=package_path,
+            manifest_path=loaded.identity_manifest_path,
+            audio_path=take.audio_path,
+            generated_artifact_path=take_relative,
+        )
+    except (OSError, ValueError, ValidationError, IdentityManifestError) as exc:
+        obs_note = _normalize_diagnostic(f"observation failed: {exc}", loaded.project_dir)
+        try:
+            record_state(
+                loaded.project_dir,
+                variant,
+                backend,
+                "observation_incomplete",
+                note=obs_note,
+                inputs_digest=artifacts.result.inputs_digest,
+                plan_sha256=plan_sha256,
+                protected_inputs=prepared.protected_input_paths,
+            )
+        except (OSError, ValueError) as record_exc:
+            typer.echo(f"Error: {record_exc}", err=True)
+            raise typer.Exit(code=1) from record_exc
+        typer.echo(f"Error: observation failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    observed_note = (
+        f"anchors={len(observation.report.anchors)} "
+        f"package_sha256={observation.report.package_sha256[:12]}"
+    )
+    try:
+        record_state(
+            loaded.project_dir,
+            variant,
+            backend,
+            "observed",
+            note=observed_note,
+            inputs_digest=artifacts.result.inputs_digest,
+            plan_sha256=plan_sha256,
+            protected_inputs=prepared.protected_input_paths,
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    recast_report = build_recast_report(
+        project_id=loaded.project.project.id,
+        variant=variant,
+        backend=backend,
+        package=observation.package,
+        report=observation.report,
+        take_path_relative=take_relative,
+        take_sha256=take.sha256,
+    )
+    summary_markdown = render_recast_summary_markdown(recast_report)
+    report_json_bytes = (
+        json.dumps(
+            recast_report.model_dump(mode="json", exclude_none=True),
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+        )
+        + "\n"
+    ).encode("utf-8")
+    reports_dir = resolve_reports_dir(loaded, variant, backend)
+
+    try:
+        atomic_publish_bytes_bundle(
+            reports_dir,
+            {
+                RECAST_REPORT_FILENAME: report_json_bytes,
+                RECAST_SUMMARY_FILENAME: summary_markdown.encode("utf-8"),
+            },
+            protected_inputs=prepared.protected_input_paths,
+        )
+    except (OSError, ValueError) as exc:
+        obs_note = _normalize_diagnostic(f"report publish failed: {exc}", loaded.project_dir)
+        try:
+            record_state(
+                loaded.project_dir,
+                variant,
+                backend,
+                "observation_incomplete",
+                note=obs_note,
+                inputs_digest=artifacts.result.inputs_digest,
+                plan_sha256=plan_sha256,
+                protected_inputs=prepared.protected_input_paths,
+            )
+        except (OSError, ValueError) as record_exc:
+            typer.echo(f"Error: {record_exc}", err=True)
+            raise typer.Exit(code=1) from record_exc
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    reported_note = os.path.relpath(reports_dir / RECAST_SUMMARY_FILENAME, loaded.project_dir)
+    try:
+        record_state(
+            loaded.project_dir,
+            variant,
+            backend,
+            "reported",
+            note=reported_note,
+            inputs_digest=artifacts.result.inputs_digest,
+            plan_sha256=plan_sha256,
+            protected_inputs=prepared.protected_input_paths,
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    console.print(
+        f"[green]Observation report published to {reports_dir} "
+        f"(verified={recast_report.coverage.verified} "
+        f"violated={recast_report.coverage.violated} "
+        f"not_observed={recast_report.coverage.not_observed})[/green]"
+    )
+    console.print(f"Next step: {reports_dir / RECAST_SUMMARY_FILENAME} を確認してください。")
 
 
 @recast_app.command("status")
@@ -644,3 +828,263 @@ def recast_status_cmd(
             label = f"{state} {note}".strip()
             table.add_row(key, label, next_step)
     console.print(table)
+
+
+@recast_app.command("init")
+def recast_init_cmd(
+    audio: str = typer.Argument(..., help="Path to source audio (WAV/MP3) to extract from"),
+    project_dir: str = typer.Option(
+        ..., "--project-dir", help="Directory to create the new recast project in (must be empty)"
+    ),
+    interactive: bool = typer.Option(
+        True,
+        "--interactive/--no-interactive",
+        help=(
+            "Prompt for semantic.core / semantic.avoid (up to 3 questions). "
+            "--no-interactive leaves them as TODO sentinels."
+        ),
+    ),
+) -> None:
+    """Initialize a new recast project from a source audio file.
+
+    Extracts an `RPEBundle` (`svp_rpe.rpe.extractor.extract_rpe_from_file`,
+    default options only — no learned-model extras), drafts a
+    `CompositionScore` (`svp_rpe.transcribe.score_draft.draft_score`) written
+    as `composition_score.yaml`, and writes an `identity.yaml` whose only
+    anchors are the ones the extraction can actually back: `harmony`
+    (`identity/chord_progression.json`, `chord-sequence/0.1`, the exact
+    canonical format `observe`'s harmony sensor reads) when the bundle has
+    chord events, and `structure` (`identity/section_map.json`,
+    `section-map/0.1`) when it has section markers. lyrics/melody anchors are
+    never fabricated (Recast Phase 0 melody spike; no lyrics sensor input
+    here) — `docs/recast_phase0_melody_spike.md`.
+
+    Also writes a minimal `arrangements/default.yaml` (no-op `target`,
+    `identity_anchors` declaring `harmony`/`structure` as `hard`) and a
+    `project.yaml` (`recast-project/0.1`) declaring a `suno` manual backend
+    (`prompt_only`, `mode_overrides: "suno"`) and a `deterministic` local
+    backend, `policy.capability_mode: advisory`, and
+    `observation.enabled: true` (PR5's ingest observe→report extension is
+    opt-in per-project; `recast init` turns it on for the project it creates).
+
+    Interactive by default (`--interactive`, the default): prompts up to 3
+    questions (core / avoid / theme) and writes non-empty answers into
+    `semantic.core` (theme is merged into core) / `semantic.avoid`. Blank
+    answers are left as TODO sentinels — `--no-interactive` always leaves
+    them as TODO. Either way, an unresolved TODO makes the first `recast
+    plan` reach `blocked_authoring` (existing gate, unchanged) — this is the
+    acceptance test for the TODO-preserving path, not a bug.
+
+    Fail-closed: refuses to write into a `--project-dir` that already exists
+    and is non-empty (does not overwrite).
+    """
+    import yaml
+    from pydantic import ValidationError
+
+    from svp_rpe.arrange.observe import CHORD_SEQUENCE_ARTIFACT_SCHEMA
+    from svp_rpe.arrange.section_map import SECTION_MAP_ARTIFACT_SCHEMA_0_1
+    from svp_rpe.recast import RecastError, load_recast_project
+    from svp_rpe.rpe.extractor import extract_rpe_from_file
+    from svp_rpe.transcribe.score_draft import (
+        TODO_AUTHOR_INPUT,
+        draft_score,
+        render_draft_score_yaml,
+    )
+
+    audio_path = Path(audio)
+    if not audio_path.is_file():
+        typer.echo(f"Error: audio file not found: {audio_path}", err=True)
+        raise typer.Exit(code=1)
+
+    dest_dir = Path(project_dir)
+    if dest_dir.exists():
+        if not dest_dir.is_dir():
+            typer.echo(
+                f"Error: --project-dir exists and is not a directory: {dest_dir}", err=True
+            )
+            raise typer.Exit(code=1)
+        if any(dest_dir.iterdir()):
+            typer.echo(
+                f"Error: --project-dir already has files, refusing to overwrite: {dest_dir}",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+    try:
+        bundle = extract_rpe_from_file(str(audio_path))
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: failed to extract from {audio_path}: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    score = draft_score(bundle)
+
+    if interactive:
+        core_answer = typer.prompt("この曲の核 (semantic.core)", default="", show_default=False)
+        avoid_answer = typer.prompt(
+            "避けたいもの (semantic.avoid, カンマ区切り)", default="", show_default=False
+        )
+        theme_answer = typer.prompt(
+            "主題/題材 (任意。core に併合されます)", default="", show_default=False
+        )
+        core_parts = [part.strip() for part in (core_answer, theme_answer) if part.strip()]
+        avoid_list = [item.strip() for item in avoid_answer.split(",") if item.strip()]
+        semantic_updates: dict[str, Any] = {}
+        if core_parts:
+            semantic_updates["core"] = "; ".join(core_parts)
+        if avoid_list:
+            semantic_updates["avoid"] = avoid_list
+        if semantic_updates:
+            score = score.model_copy(
+                update={"semantic": score.semantic.model_copy(update=semantic_updates)}
+            )
+
+    slug = _slugify(audio_path.stem) or "recast-project"
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    (dest_dir / "identity").mkdir(parents=True, exist_ok=True)
+    (dest_dir / "arrangements").mkdir(parents=True, exist_ok=True)
+    (dest_dir / "source").mkdir(parents=True, exist_ok=True)
+
+    audio_bytes = audio_path.read_bytes()
+    audio_sha256 = hashlib.sha256(audio_bytes).hexdigest()
+    source_filename = audio_path.name
+    (dest_dir / "source" / source_filename).write_bytes(audio_bytes)
+
+    composition_score_yaml = render_draft_score_yaml(score)
+    (dest_dir / "composition_score.yaml").write_text(composition_score_yaml, encoding="utf-8")
+
+    identity_anchors: list[dict[str, Any]] = []
+    identity_anchor_policies: dict[str, dict[str, Any]] = {}
+
+    if bundle.physical.chord_events:
+        chord_payload = {
+            "schema": CHORD_SEQUENCE_ARTIFACT_SCHEMA,
+            "chords": [
+                {"root": event.root, "quality": event.quality}
+                for event in bundle.physical.chord_events
+            ],
+        }
+        chord_json = (
+            json.dumps(chord_payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+        )
+        (dest_dir / "identity" / "chord_progression.json").write_text(
+            chord_json, encoding="utf-8"
+        )
+        identity_anchors.append(
+            {
+                "id": "harmony",
+                "domain": "harmony",
+                "artifact": "identity/chord_progression.json",
+                "artifact_type": "chord_sequence_json",
+                "media_type": "application/json",
+                "format_version": CHORD_SEQUENCE_ARTIFACT_SCHEMA,
+                "sha256": hashlib.sha256(chord_json.encode("utf-8")).hexdigest(),
+                "required": True,
+            }
+        )
+        identity_anchor_policies["harmony"] = {"mode": "hard", "allow": []}
+
+    if bundle.physical.structure:
+        section_payload = {
+            "schema_version": SECTION_MAP_ARTIFACT_SCHEMA_0_1,
+            "sections": [marker.label for marker in bundle.physical.structure],
+        }
+        section_json = (
+            json.dumps(section_payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+        )
+        (dest_dir / "identity" / "section_map.json").write_text(section_json, encoding="utf-8")
+        identity_anchors.append(
+            {
+                "id": "structure",
+                "domain": "structure",
+                "artifact": "identity/section_map.json",
+                "artifact_type": "section_map",
+                "media_type": "application/json",
+                "format_version": SECTION_MAP_ARTIFACT_SCHEMA_0_1,
+                "sha256": hashlib.sha256(section_json.encode("utf-8")).hexdigest(),
+                "required": True,
+            }
+        )
+        identity_anchor_policies["structure"] = {"mode": "hard", "allow": []}
+
+    identity_payload: dict[str, Any] = {
+        "schema_version": "identity-manifest/0.1",
+        "meta": {"work_id": slug, "version": "0.1"},
+        "source": {
+            "locator": f"source/{source_filename}",
+            "sha256": audio_sha256,
+            "rights_basis": "unknown",
+        },
+        "anchors": identity_anchors,
+    }
+    (dest_dir / "identity.yaml").write_text(
+        yaml.safe_dump(identity_payload, sort_keys=False, allow_unicode=True), encoding="utf-8"
+    )
+
+    preservation_payload: dict[str, Any] = {"score_fields": {}}
+    if identity_anchor_policies:
+        preservation_payload["identity_anchors"] = identity_anchor_policies
+    arrangement_payload: dict[str, Any] = {
+        "meta": {
+            "id": f"{slug}-default-v1",
+            "version": "0.1",
+            "description": "svprpe recast init が生成した無変更の最小 ArrangementSpec 雛形。",
+        },
+        "target": {},
+        "preservation": preservation_payload,
+    }
+    (dest_dir / "arrangements" / "default.yaml").write_text(
+        yaml.safe_dump(arrangement_payload, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+
+    project_payload: dict[str, Any] = {
+        "schema_version": "recast-project/0.1",
+        "project": {"id": slug, "builds_root": "builds"},
+        "work": {"score": "composition_score.yaml", "identity_manifest": "identity.yaml"},
+        "variants": {"default": {"arrangement": "arrangements/default.yaml"}},
+        "backends": {
+            "suno": {
+                "capability_profile": "suno",
+                "invocation": "manual",
+                "invocation_mode": "prompt_only",
+                "mode_overrides": "suno",
+            },
+            "deterministic": {
+                "capability_profile": "deterministic",
+                "invocation": "local",
+                "invocation_mode": "prompt_only",
+            },
+        },
+        "policy": {
+            "capability_mode": "advisory",
+            "require_author_fields_resolved": True,
+            "require_verified_package": True,
+        },
+        "observation": {"enabled": True, "anchors": []},
+    }
+    (dest_dir / "project.yaml").write_text(
+        yaml.safe_dump(project_payload, sort_keys=False, allow_unicode=True), encoding="utf-8"
+    )
+
+    try:
+        loaded = load_recast_project(dest_dir / "project.yaml")
+    except (RecastError, ValidationError, yaml.YAMLError) as exc:
+        typer.echo(f"Error: generated recast project failed to load: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    console.print(f"[green]Recast project initialized at {dest_dir}[/green]")
+    console.print(f"work_id: {slug}")
+    console.print(
+        f"variants: {sorted(loaded.project.variants)}  backends: {sorted(loaded.project.backends)}"
+    )
+    if score.semantic.core == TODO_AUTHOR_INPUT:
+        console.print(
+            "[yellow]semantic.core は未入力 (TODO) のままです。"
+            "composition_score.yaml を編集するか --interactive で再実行するまで "
+            "svprpe recast plan は blocked_authoring になります。[/yellow]"
+        )
+    console.print(
+        "Next step: svprpe recast plan "
+        f"{dest_dir / 'project.yaml'} --variant default --backend suno"
+    )

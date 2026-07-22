@@ -144,6 +144,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Generic, Literal, Optional, TypeVar
 
@@ -153,6 +154,7 @@ from svp_rpe.arrange.identity import (
     AnchorDomain,
     IdentityAnchor,
     IdentityManifest,
+    parse_identity_manifest_with_artifacts,
     _resolve_confined,
 )
 from svp_rpe.arrange.models import JsonValue
@@ -1752,4 +1754,132 @@ def build_observation_report(
             path=generated_artifact_path, sha256=audio_sha256
         ),
         anchors=anchors,
+    )
+
+
+@dataclass(frozen=True)
+class GeneratedArtifactObservation:
+    """`observe_generated_artifact` の戻り値: 検証済み `package`/`manifest` +
+    組み立て済み `report`（呼び出し側が `package.anchor_statuses` の
+    `requested_mode` 等、report 以外の情報も必要とする場合の再取得を避ける）。"""
+
+    package: PerformancePackage
+    manifest: IdentityManifest
+    report: ObservationReport
+
+
+def observe_generated_artifact(
+    *,
+    package_path: Path,
+    manifest_path: Path,
+    audio_path: Path,
+    generated_artifact_path: Optional[str] = None,
+) -> GeneratedArtifactObservation:
+    """`package_path`/`manifest_path`/`audio_path` から provenance chain を検証し、
+    `build_observation_report` を呼ぶ非-CLI 経路（PR5: `recast ingest` の
+    observe→report 拡張が使う。`cli/observe_cmd.py` の `observe` コマンドとは
+    独立に実装する — あちらは `-o` 出力パスの衝突検査など CLI 固有の関心事を
+    持つため、無理に共有関数へ括り出すと責務が混ざる。検証内容だけは同一に
+    保つ: D-3 provenance chain（`--manifest` sha256 == `package.inputs.
+    identity_manifest.sha256`）+ `package.work_id`/`manifest.meta.work_id` の
+    一致 + `package.anchor_statuses`/`manifest.anchors` の anchor_id 集合一致。
+
+    失敗はすべて `OSError` / `ValueError` / `pydantic.ValidationError` /
+    `IdentityManifestError` をそのまま送出する（ラップしない — 呼び出し側が
+    自分の Error 表示・state 記録規約で捕捉する）。`generated_artifact_path`
+    は report の `generated_artifact.path` に記録する文字列（省略時は
+    `str(audio_path)` — CLI 実行時の絶対パスが漏れないよう、呼び出し側は
+    project 相対パスを渡すこと）。
+
+    `audio_path` の TOCTOU 対策として、`is_*_sensor_anchor` のいずれかが
+    manifest 中に存在する場合のみ一時スナップショットへコピーしてから
+    抽出する（`build_observation_report`/`observe` コマンドと同じ規律 —
+    「report に記録する sha256」と「実際に測定した bytes」を同一にする）。
+    """
+    import hashlib
+    import os
+    import tempfile
+
+    package_bytes = package_path.read_bytes()
+    package = PerformancePackage.model_validate_json(package_bytes)
+
+    manifest_bytes = manifest_path.read_bytes()
+    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    if manifest_sha256 != package.inputs.identity_manifest.sha256:
+        raise ValueError(
+            "identity manifest sha256 does not match "
+            f"package.inputs.identity_manifest.sha256: {manifest_sha256} != "
+            f"{package.inputs.identity_manifest.sha256}"
+        )
+
+    loaded_manifest, artifact_bytes_by_id = parse_identity_manifest_with_artifacts(
+        manifest_bytes,
+        manifest_path,
+        collect=lambda anchor: (
+            is_harmony_sensor_anchor(anchor)
+            or is_structure_sensor_anchor(anchor)
+            or is_lyrics_sensor_anchor(anchor)
+            or is_melody_sensor_anchor(anchor)
+        ),
+    )
+
+    if package.work_id != loaded_manifest.meta.work_id:
+        raise ValueError(
+            "package.work_id does not match manifest.meta.work_id: "
+            f"{package.work_id!r} != {loaded_manifest.meta.work_id!r}"
+        )
+
+    package_anchor_ids = {status.anchor_id for status in package.anchor_statuses}
+    manifest_anchor_ids = {anchor.id for anchor in loaded_manifest.anchors}
+    if package_anchor_ids != manifest_anchor_ids:
+        missing_from_package = sorted(manifest_anchor_ids - package_anchor_ids)
+        extra_in_package = sorted(package_anchor_ids - manifest_anchor_ids)
+        details = []
+        if missing_from_package:
+            details.append(f"missing from package.anchor_statuses: {missing_from_package}")
+        if extra_in_package:
+            details.append(f"extra in package.anchor_statuses: {extra_in_package}")
+        raise ValueError(
+            "package.anchor_statuses anchor_id set does not match "
+            "manifest.anchors id set (" + "; ".join(details) + ")"
+        )
+
+    audio_bytes = audio_path.read_bytes()
+    audio_sha256 = hashlib.sha256(audio_bytes).hexdigest()
+    package_sha256 = hashlib.sha256(package_bytes).hexdigest()
+
+    needs_extraction = any(
+        is_harmony_sensor_anchor(anchor)
+        or is_structure_sensor_anchor(anchor)
+        or is_lyrics_sensor_anchor(anchor)
+        or is_melody_sensor_anchor(anchor)
+        for anchor in loaded_manifest.anchors
+    )
+    snapshot_path: Optional[Path] = None
+    try:
+        if needs_extraction:
+            snapshot_fd, snapshot_name = tempfile.mkstemp(suffix=audio_path.suffix or ".wav")
+            snapshot_path = Path(snapshot_name)
+            with os.fdopen(snapshot_fd, "wb") as snapshot_file:
+                snapshot_file.write(audio_bytes)
+            measurement_audio_path = snapshot_path
+        else:
+            measurement_audio_path = audio_path
+
+        report = build_observation_report(
+            package=package,
+            manifest=loaded_manifest,
+            manifest_path=manifest_path,
+            artifact_bytes=artifact_bytes_by_id,
+            audio_path=measurement_audio_path,
+            package_sha256=package_sha256,
+            audio_sha256=audio_sha256,
+            generated_artifact_path=generated_artifact_path or str(audio_path),
+        )
+    finally:
+        if snapshot_path is not None:
+            snapshot_path.unlink(missing_ok=True)
+
+    return GeneratedArtifactObservation(
+        package=package, manifest=loaded_manifest, report=report
     )

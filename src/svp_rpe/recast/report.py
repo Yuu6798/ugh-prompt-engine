@@ -1,0 +1,231 @@
+"""RecastReport: `svprpe recast ingest` の観測段が発行する work 単位レポート（PR5）。
+
+`ObservationReport`（`arrange/observe.py`, AR4）は 1 anchor ずつの生観測を
+記録する計器 sidecar。本モジュールはそれを (variant, backend) 実行の文脈
+（take の provenance / package の同一性 / anchor ごとの保持方針
+`policy_mode`）と組み合わせ、被覆（coverage）集計を添えた
+`recast_report.json`（機械可読）+ `recast_summary.md`（人間可読）の 1 組へ
+束ねる。
+
+D-1 の裁定を継承する: **単一の同一性スコアは出さない**。`identity_assessment`
+は `{"enabled": false}` の予約フィールドのみ — 将来 Design Memo が閾値付き
+判定を定義するまで、複数 anchor の観測を 1 個のスコアへ縮約しない。
+
+被覆写像（`_ADHERENCE_TO_COVERAGE`）は D-1 の 4 語彙
+（`preserved` / `changed_within_policy` / `changed_outside_policy` /
+`not_observed`）全てを受ける契約でスキーマ・マッピング関数を用意するが、
+`ObservationReport.anchors[].adherence_status` の型（`ObservationAdherenceStatus`
+= `Literal["preserved", "not_observed"]`）自体は `arrange/observe.py` の D-1
+narrowing をそのまま継承する — 現行の計器が実際に発行できるのはこの 2 語彙
+のみで、`changed_within_policy`/`changed_outside_policy` は将来の閾値
+Design Memo が `observation-report/0.2` を定義するまで到達不能（マッピング
+関数だけを 4 語彙対応にしておくことで、その時点でここを書き換えずに済む）。
+
+決定論契約: `recast_report.json` はタイムスタンプ・絶対パスを含まない
+（他 recast 成果物 — `recast_plan.json` 等 — と同じ契約）。`take.path` は
+呼び出し側が project 相対パスとして渡す。
+"""
+from __future__ import annotations
+
+from typing import Dict, List, Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from svp_rpe.arrange.identity import AnchorDomain
+from svp_rpe.arrange.models import JsonValue, PreservationMode
+from svp_rpe.arrange.observe import (
+    Determination,
+    ObservationAdherenceStatus,
+    ObservationReport,
+    SensorRecord,
+)
+from svp_rpe.arrange.package import PerformancePackage
+
+RECAST_REPORT_SCHEMA_VERSION = "recast-report/0.1"
+RECAST_REPORT_FILENAME = "recast_report.json"
+RECAST_SUMMARY_FILENAME = "recast_summary.md"
+
+_SHA256_PATTERN = r"^[0-9a-f]{64}$"
+
+CoverageStatus = Literal["verified", "violated", "not_observed"]
+
+# D-1 の 4 語彙を受ける被覆写像（docstring 参照）。ここに列挙した語彙以外の
+# `adherence_status` はプログラミングエラー（未知の D-1 分岐）として
+# fail-closed に拒否する（`_coverage_for` 参照）。
+_ADHERENCE_TO_COVERAGE: Dict[str, CoverageStatus] = {
+    "preserved": "verified",
+    "changed_within_policy": "verified",
+    "changed_outside_policy": "violated",
+    "not_observed": "not_observed",
+}
+
+
+def _coverage_for(adherence_status: str) -> CoverageStatus:
+    try:
+        return _ADHERENCE_TO_COVERAGE[adherence_status]
+    except KeyError:
+        raise ValueError(
+            f"unknown adherence_status for recast report coverage mapping: "
+            f"{adherence_status!r} (expected one of {sorted(_ADHERENCE_TO_COVERAGE)})"
+        ) from None
+
+
+class RecastReportModel(BaseModel):
+    """recast-report 側スキーマの共通基底。未知 key を拒否する。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class RecastReportTake(RecastReportModel):
+    """観測対象の take（生成音声）の provenance 記録。"""
+
+    path: str
+    sha256: str = Field(pattern=_SHA256_PATTERN)
+
+
+class RecastReportAnchor(RecastReportModel):
+    """1 anchor 分の観測 + 被覆判定（`ObservationReport.anchors[]` を
+    `package.anchor_statuses[].requested_mode`（保持方針、contract 由来）と
+    結合したもの）。"""
+
+    anchor_id: str
+    domain: AnchorDomain
+    policy_mode: Optional[PreservationMode] = None
+    adherence_status: ObservationAdherenceStatus
+    determination: Determination
+    sensor: SensorRecord
+    measurements: Dict[str, JsonValue] = Field(default_factory=dict)
+    coverage: CoverageStatus
+
+
+class RecastReportCoverage(RecastReportModel):
+    """anchor 単位の被覆集計。"""
+
+    verified: int
+    violated: int
+    not_observed: int
+
+
+class IdentityAssessment(RecastReportModel):
+    """予約フィールド: 単一の同一性スコアは本 PR の管轄外（D-1 継承）。
+    将来 Design Memo が閾値付き判定を定義するまで `enabled=false` のみ。"""
+
+    enabled: bool = False
+
+
+class RecastReport(RecastReportModel):
+    """`svprpe recast ingest` の観測段が発行する recast-report/0.1 本体。"""
+
+    schema_version: Literal["recast-report/0.1"] = RECAST_REPORT_SCHEMA_VERSION
+    project_id: str
+    variant: str
+    backend: str
+    work_id: str
+    take: RecastReportTake
+    package_sha256: str = Field(pattern=_SHA256_PATTERN)
+    anchors: List[RecastReportAnchor]
+    coverage: RecastReportCoverage
+    identity_assessment: IdentityAssessment = Field(default_factory=IdentityAssessment)
+
+
+def build_recast_report(
+    *,
+    project_id: str,
+    variant: str,
+    backend: str,
+    package: PerformancePackage,
+    report: ObservationReport,
+    take_path_relative: str,
+    take_sha256: str,
+) -> RecastReport:
+    """`ObservationReport`（`observe_generated_artifact` が組み立てた計器出力）+
+    `package`（`anchor_statuses[].requested_mode` 由来の policy_mode）から
+    `RecastReport` を構築する（純粋関数、ディスクへの副作用なし — publish は
+    呼び出し側 CLI の責務）。
+
+    anchor の順序は `report.anchors`（= manifest.anchors の宣言順）をそのまま
+    保つ — 決定論契約（同一 checkout + 同一観測結果なら常に同じ順序）。
+    """
+    policy_by_anchor: Dict[str, Optional[PreservationMode]] = {
+        status.anchor_id: status.requested_mode for status in package.anchor_statuses
+    }
+
+    anchors: List[RecastReportAnchor] = []
+    counts: Dict[CoverageStatus, int] = {"verified": 0, "violated": 0, "not_observed": 0}
+    for observation in report.anchors:
+        coverage = _coverage_for(observation.adherence_status)
+        counts[coverage] += 1
+        anchors.append(
+            RecastReportAnchor(
+                anchor_id=observation.anchor_id,
+                domain=observation.domain,
+                policy_mode=policy_by_anchor.get(observation.anchor_id),
+                adherence_status=observation.adherence_status,
+                determination=observation.determination,
+                sensor=observation.sensor,
+                measurements=observation.measurements,
+                coverage=coverage,
+            )
+        )
+
+    return RecastReport(
+        schema_version=RECAST_REPORT_SCHEMA_VERSION,
+        project_id=project_id,
+        variant=variant,
+        backend=backend,
+        work_id=report.work_id,
+        take=RecastReportTake(path=take_path_relative, sha256=take_sha256),
+        package_sha256=report.package_sha256,
+        anchors=anchors,
+        coverage=RecastReportCoverage(**counts),
+        identity_assessment=IdentityAssessment(enabled=False),
+    )
+
+
+def render_recast_summary_markdown(report: RecastReport) -> str:
+    """`RecastReport` を人間可読の Markdown へ描画する（決定論・タイムスタンプ
+    なし）。anchor 別表 + 被覆集計 + 次の一手のみ — 単一スコアは出さない。"""
+    lines: List[str] = [
+        f"# Recast Report: {report.project_id} / {report.variant}@{report.backend}",
+        "",
+        f"- work_id: {report.work_id}",
+        f"- take: {report.take.path} (sha256={report.take.sha256})",
+        f"- package_sha256: {report.package_sha256}",
+        "",
+        "## Anchors",
+        "",
+        "| anchor_id | domain | policy_mode | adherence_status | determination | coverage |",
+        "|---|---|---|---|---|---|",
+    ]
+    for anchor in report.anchors:
+        lines.append(
+            f"| {anchor.anchor_id} | {anchor.domain} | {anchor.policy_mode or '-'} | "
+            f"{anchor.adherence_status} | {anchor.determination} | {anchor.coverage} |"
+        )
+    lines += [
+        "",
+        "## Coverage",
+        "",
+        f"- verified: {report.coverage.verified}",
+        f"- violated: {report.coverage.violated}",
+        f"- not_observed: {report.coverage.not_observed}",
+        "",
+        "## Identity assessment",
+        "",
+        "- enabled: false (単一の同一性スコアは本レポートの管轄外 — 予約フィールド)",
+        "",
+        "## Next step",
+        "",
+    ]
+    if report.coverage.violated > 0:
+        lines.append(
+            "- violated な anchor があります。arrangement/identity 契約を見直してください。"
+        )
+    elif report.coverage.not_observed > 0:
+        lines.append(
+            "- not_observed な anchor があります（計器未配線、または exact match "
+            "不成立のいずれか — measurements を確認してください。verdict ではありません）。"
+        )
+    else:
+        lines.append("- 全 anchor が verified です。")
+    return "\n".join(lines) + "\n"

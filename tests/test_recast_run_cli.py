@@ -194,8 +194,12 @@ def test_recast_ingest_transitions_awaiting_generation_to_generated(tmp_path: Pa
         ],
     )
     assert ingest_result.exit_code == 0, ingest_result.output
-    # 未実装コマンド名（svprpe observe/report 等）を案内しない（正直な次の一手）。
-    assert "svprpe observe" not in ingest_result.output
+    # demo fixture の project.yaml は observation.enabled: false のため、
+    # ingest は observe/report 段へ進まず `generated` で止まる（PR5: 有効化
+    # されたプロジェクトの ingest→observe→report 経路は
+    # tests/test_recast_ingest_report.py が別途検証する）。無効時の次の一手は
+    # 実在する `svprpe observe` コマンドへの手動フォールバック案内であり、
+    # 存在しない `svprpe recast report` サブコマンドは案内しない。
     assert "svprpe recast report" not in ingest_result.output
 
     state_file = load_recast_state(project_path.parent)
