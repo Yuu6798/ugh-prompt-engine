@@ -421,6 +421,32 @@ def test_render_script_sha256_matches_provenance_pin() -> None:
     )
 
 
+def test_replay_input_pins_match_working_tree_sha256() -> None:
+    """PR #202 Codex P2 第7ラウンド対応: リプレイ（render -> extract ->
+    identity-rank）の間に実際に読まれる全ファイル（レシピ直接引数の
+    ``composition_score.yaml``/``wi2_references.yaml``、および
+    ``wi2_references.yaml`` の 4 参照が解決する先の score/progression 6 本、
+    計 8 ファイル）の sha256 が working tree の実ファイルと一致することを
+    assert する恒久ガード — このうちどれか 1 つでも将来変更されれば、
+    identity-rank レポートの内容（distance/rank-1）が変わりうるにもかかわらず
+    それを検出する術がなかった（第7ラウンド Codex P2 で指摘された不備の
+    クラス全体を閉じる）。1 ファイルでも変更されれば本テストが赤くなる。
+    """
+    provenance = _load_yaml(SYNTH_PROVENANCE_PATH)
+    pins = provenance["replay_input_pins"]
+    assert len(pins) == 8, f"expected 8 replay_input_pins entries, got {len(pins)}"
+
+    for entry in pins:
+        path = Path(entry["path"])
+        assert path.is_file(), f"replay_input_pins entry {entry['path']!r} does not exist in the working tree"
+        actual_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+        assert actual_sha256 == entry["sha256"], (
+            f"{entry['path']}: working tree sha256 {actual_sha256!r} does not match "
+            f"wi3_rank_synth_provenance.yaml replay_input_pins pin {entry['sha256']!r} "
+            f"(role: {entry.get('role')!r})"
+        )
+
+
 def test_suno_p5_materials_have_sha256_pin_and_no_drive_file_id() -> None:
     """PR #202 Codex P2 第4ラウンド対応: ``wi3_p5_deferral_evidence.md``
     (a) 節の機械検証可能な事実を pin する — P5（実 Suno 正典 form take vs

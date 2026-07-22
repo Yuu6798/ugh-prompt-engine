@@ -23,14 +23,22 @@
 #   （`synth/` ディレクトリを削除した状態）から実行して修正を確認済み。
 #   修正でスクリプトのバイト内容が変わったため `render_script_sha256` を
 #   更新した。音声 bytes・レポート内容は不変（wav sha256 2/2 一致を再確認済み）。
-# - 本版（第6ラウンド対応）で、extract/identity-rank 手順の中間ファイル名が
-#   `<tmp>/...` というプレースホルダのままで、bash にコピペすると
-#   `<tmp>` がリダイレクト構文として誤解釈され実行不能だった不備を是正:
-#   中間 bundle (`.rpe.json`) の置き場を非コミットの `synth/`（render 出力と
-#   同じディレクトリ）に固定した具体的な相対パスへ書き換え、レシピ末尾に
-#   `synth/` ディレクトリごと削除する掃除コマンドを明記した。これでレシピ全体が
-#   シェルへの逐語コピペで実行可能になる。レシピを実際にコピペで再実行し、
-#   出力が committed レポートと byte 一致・wav sha256 2/2 pin 一致を確認済み。
+# - 第6版で、extract/identity-rank 手順の中間ファイル名が `<tmp>/...` という
+#   プレースホルダのままで、bash にコピペすると `<tmp>` がリダイレクト構文と
+#   して誤解釈され実行不能だった不備を是正: 中間 bundle (`.rpe.json`) の
+#   置き場を非コミットの `synth/`（render 出力と同じディレクトリ）に固定した
+#   具体的な相対パスへ書き換え、レシピ末尾に `synth/` ディレクトリごと削除する
+#   掃除コマンドを明記した。これでレシピ全体がシェルへの逐語コピペで実行可能
+#   になる。レシピを実際にコピペで再実行し、出力が committed レポートと byte
+#   一致・wav sha256 2/2 pin 一致を確認済み。
+# - 本版（第7ラウンド対応）で、リプレイ（render -> extract -> identity-rank）
+#   の間に実際に読まれる全ファイルを機械的に列挙し、下記 `replay_input_pins`
+#   として sha256 pin を新設した。これまで `composition_score.yaml` と
+#   `wi2_references.yaml` 自体、および `--references` が解決する先の 6 ファイル
+#   （derived score 3 本 + chord progression 2 本 + other_work score 1 本）には
+#   pin がなく、無断で変更されてもレポート内容の変化が検出できなかった不備を
+#   是正（同型指摘のクラスを一括で閉じる対応 — 個別ファイルごとの Codex 指摘を
+#   先回り）。
 #
 # 目的: wi3_rank_synth_faithful.json / wi3_rank_synth_first_take.json
 # （本ディレクトリに commit）が、決定論 synth performer の 2 スタイル
@@ -39,18 +47,18 @@
 # 生出力であることを機械的に検証可能にする。新規の事実主張は含まない —
 # wi3_aggregation.yaml の inputs.synth_rank_reports 記述 および
 # wi0b_synth/observed/provenance.yaml の source_audio_sha256 pin の転記。
-format: "wi3-rank-synth-provenance/0.6"
+format: "wi3-rank-synth-provenance/0.7"
 # `date -u` 実測（本ファイル書き込み直前に実行して確認した値。初版の
 # recorded_at_utc は実測でない未来時刻だった不備を第2ラウンドで是正済み
 # — 本版はその後継の追加是正であり、書き込み直前に改めて実測している）。
-recorded_at_utc: "2026-07-22T07:33:48Z"
+recorded_at_utc: "2026-07-22T07:47:04Z"
 
 generation_session: >-
-  PR #202 Codex P2 第6ラウンド対応セッション（2026-07-22）。レシピ中の
-  `<tmp>` プレースホルダ（bash でリダイレクト解釈され実行不能）を具体的な
-  相対パス（非コミットの `synth/` ディレクトリ配下）へ置換し、末尾に掃除
-  コマンドを明記。レシピを一字一句シェルにコピペで逐語再実行し、出力が
-  committed レポートと byte 一致することを確認した。
+  PR #202 Codex P2 第7ラウンド対応セッション（2026-07-22）。リプレイの間に
+  読まれる全ファイル（レシピ直接引数 2 本 + references 解決先 6 本）を
+  `svp_rpe.roundtrip.identity_rank` のソースコード（`_resolve_references` /
+  `_resolve_reference_locator` / `_load_reference_chord_progression`）を
+  読んで機械的に列挙し、`replay_input_pins` として sha256 pin を新設した。
 
 # 生成コマンド列（score -> render -> extract -> identity-rank）。全コマンドは
 # リポジトリルートを cwd として実行し、引数は全て相対パス（checkout-stable）。
@@ -128,6 +136,67 @@ commands:
 render_script_sha256:
   render_synth_takes.py: "97159b2542b50348a5aa57ceebe091f1e347373ab6c36fb5155d921d21c08ac4"
 
+# リプレイ（render -> extract -> identity-rank）の間に実際に読まれる、
+# レシピの直接引数 + `--references` が解決する先の全ファイルの sha256 pin
+# （第7ラウンド Codex P2 対応: これまで無断で変更されてもレポート内容の
+# 変化を検出できなかった不備を是正）。
+#
+# 列挙の根拠（漏れ確認）:
+# - render 手順（`render_synth_takes.py`）の直接引数: `score_path` 1 本
+#   （`svp_rpe.compose.loader.load_composition_score` は単一 YAML を
+#   `yaml.safe_load` するのみで、`$ref` 等の内部インクルード機構を持たない —
+#   ソースコード確認済み。`svp_rpe.perform` モジュールは wav レンダー中に
+#   追加のファイル読み込みを一切行わない — grep で確認済み、リポジトリ内
+#   データの読み込みはこの 1 本のみ）。
+# - identity-rank 手順の直接引数: `--references` 1 本
+#   （`wi2_references.yaml` 自体）。
+# - `wi2_references.yaml` の 4 参照 (`canonical` / `structure_destroyed` /
+#   `harmony_decoy` / `other_work`) が宣言する `score_path`/`progression_path`
+#   （`svp_rpe.roundtrip.identity_rank._resolve_references` /
+#   `_resolve_reference_locator` / `_load_reference_chord_progression` の
+#   ソースコードを読んで機械的に列挙 — 各参照ごとに `score_path` は
+#   `load_composition_score` で読み込み単一ファイル、`progression_path` は
+#   任意で `chord-sequence/0.1` JSON を直接 `read_text`、いずれも他ファイルへの
+#   further indirection なし）: `derived/A/derived_score.yaml`
+#   （canonical の score_path）+ `../../identity/chord_progression.json`
+#   （canonical の progression_path）+ `derived/C/derived_score.yaml`
+#   （structure_destroyed の score_path、progression_path なし）+
+#   `derived/Bp/derived_score.yaml`（harmony_decoy の score_path）+
+#   `decoy_chord_progression.json`（harmony_decoy の progression_path）+
+#   `../../../../roundtrip/musicgen_r3_source.yaml`（other_work の
+#   score_path、progression_path なし）の 6 ファイル。
+# - 対象外（意図的なスコープ境界の明記）: `svprpe extract` が内部で読む
+#   `config/semantic_rules.yaml` 等の svp_rpe パッケージ共通設定は、本
+#   レシピ固有の入力データではなくパッケージ全体の挙動バージョンであり、
+#   `tests/test_config.py`（config の二重コピー同期テスト）の管轄。本
+#   `replay_input_pins` はこのレシピが宣言的に指し示す素材データ
+#   （score/reference/progression）に限定する。
+replay_input_pins:
+  - path: "examples/arrangement/midnight_signal/composition_score.yaml"
+    role: "render 手順の score_path 引数（FAITHFUL_TAKE/FIRST_TAKE 両スタイルの入力 score）"
+    sha256: "37854f54b42a1c4d424f357148d3d10f347e238ec72a42d1248bea2203f97d0b"
+  - path: "examples/arrangement/midnight_signal/observed/wi2_discrimination/wi2_references.yaml"
+    role: "identity-rank 手順の --references 引数"
+    sha256: "ced66bc782ab989303083c185dec4a1bc221b27750946f2e8da58d07263c53b4"
+  - path: "examples/arrangement/midnight_signal/observed/wi2_discrimination/derived/A/derived_score.yaml"
+    role: "wi2_references.yaml canonical.score_path"
+    sha256: "5ea80e9a5c96154bd71927e7179821ed9a30dff887f2dc50369755ae19fc6ea8"
+  - path: "examples/arrangement/midnight_signal/identity/chord_progression.json"
+    role: "wi2_references.yaml canonical.progression_path (../../identity/chord_progression.json)"
+    sha256: "180464a881ac63131c0a0fcdf812e0cc7bfd8dc1e9947698a5d5c65c89245299"
+  - path: "examples/arrangement/midnight_signal/observed/wi2_discrimination/derived/C/derived_score.yaml"
+    role: "wi2_references.yaml structure_destroyed.score_path (progression_path なし)"
+    sha256: "e6973483d53a6d1f7cc291db4fb246ec5fad0f89c2509b8ff5bb4aaf402a9998"
+  - path: "examples/arrangement/midnight_signal/observed/wi2_discrimination/derived/Bp/derived_score.yaml"
+    role: "wi2_references.yaml harmony_decoy.score_path"
+    sha256: "e10528f9437810b86821ad17bbb6674fe53d99cbcb651a931438f66548fa5fb2"
+  - path: "examples/arrangement/midnight_signal/observed/wi2_discrimination/decoy_chord_progression.json"
+    role: "wi2_references.yaml harmony_decoy.progression_path"
+    sha256: "d6a3e8d5d78f119cdce07a157ddcaa592d0e2561292fcf46b8534230bd07c624"
+  - path: "examples/roundtrip/musicgen_r3_source.yaml"
+    role: "wi2_references.yaml other_work.score_path (../../../../roundtrip/musicgen_r3_source.yaml, progression_path なし)"
+    sha256: "567410a58358399d46d251028b8b93b0cd7a387e6a6a2cec11540b4d94cb6f57"
+
 # 入力 wav の sha256。wi0b_synth/observed/provenance.yaml の
 # source_audio_sha256（faithful_take）と一致することを明記（同一
 # composition_score・同一 FAITHFUL_TAKE スタイルからの決定論レンダリングである
@@ -168,6 +237,7 @@ verification:
   - "report_sha256[wi3_rank_synth_faithful.json] == 実 commit ファイルの sha256"
   - "report_sha256[wi3_rank_synth_first_take.json] == 実 commit ファイルの sha256"
   - "render_script_sha256[render_synth_takes.py] == 実 commit スクリプトの sha256"
+  - "replay_input_pins の全 8 エントリの sha256 == working tree の実ファイルの sha256（tests/test_wi3_human_calibration_fixture.py が pin する — いずれかが無断変更されたら fixture テストが赤くなる）"
   - "input_audio_sha256.faithful_take.sha256 == wi0b_synth/observed/provenance.yaml source_audio_sha256"
   - "5 軸 x 2 素材の rank-1 unique/tie 状態が wi3_aggregation.yaml material_axis_rank1 と一致（10/10, 本是正時点で再確認済み）"
   - "各レポートの audio_file が examples/... 配下の相対パスであり、絶対パス（scratchpad 等）を含まないこと"
