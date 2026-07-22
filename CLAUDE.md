@@ -239,6 +239,7 @@ examples/                      # sample_input/ + expected_output/
 | [`docs/wi1_d1_thresholds.md`](docs/wi1_d1_thresholds.md) | WI1 逸脱分布と D-1 閾値 Design Memo: MusicGen 無人 n=20 の structure/harmony 逸脱分布、§4 編集分解アルゴリズム、§5 D-1 分類規約 v0（within 14/outside 6）、harmony は v0 未分類 |
 | [`docs/wi2_discrimination_harness.md`](docs/wi2_discrimination_harness.md) | WI2 弁別判定ハーネス: 4 セル 13 clips の MusicGen 弁別バッチ、identity-rank 5 軸判定、cell P のチャネル死 byte 証明、順位表決定論再現 12/12、弁別成立は bpm のみ（structure/harmony/brightness は非弁別、key は不安定） |
 | [`docs/wi3_human_calibration.md`](docs/wi3_human_calibration.md) | WI3 人間校正 v0: 事前登録 12 ペア判定（基準器 n=1・ブラインド seed 8400）、identity proxy v0 は空集合（採用 0/5 軸）、同一スコア再生成ペアすら「別の曲」判定、誤り 3 件は P3 same 誤予測（機構は bpm アトラクタ/長さバイアス/平行調流れの軸別）、実 Suno ペア(P5)は第 2 トランシェへ繰延 |
+| [`docs/recast_phase0_melody_spike.md`](docs/recast_phase0_melody_spike.md) | Recast Phase 0 メロディ類似度スパイク: 決定論 pyin ノート抽出が縮退し同曲/異曲分布が重複（ゲート不成立）→ PR4 hard anchor は chords+structure に差し替え、melody は `not_observed`（既存 D-1 `no_sensor`、新語彙なし） |
 
 ## ドキュメント管理ポリシー
 

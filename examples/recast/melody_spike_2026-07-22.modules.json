@@ -1,0 +1,42 @@
+{
+  "direct_imports": [
+    "svp_rpe.compose.loader",
+    "svp_rpe.compose.models",
+    "svp_rpe.perform.performer",
+    "svp_rpe.perform.synth",
+    "svp_rpe.rpe.models",
+    "svp_rpe.rpe.physical_features"
+  ],
+  "generated_by": "scripts/spike_melody_similarity.py --dump-modules (execution-time consumption granularity: sys.setprofile call-event trace of run_spike(), intersected with a pre-import source-tree hash table taken before any svp_rpe import for TOCTOU safety; modules that are only imported via package __init__ side effects but whose functions are never called during measurement are excluded)",
+  "modules": {
+    "svp_rpe.compose.loader": {
+      "path": "src/svp_rpe/compose/loader.py",
+      "sha256": "ad581b49056b02a409f11db22a255ed3d3a568341a1d9fe3ae0e37524786232e"
+    },
+    "svp_rpe.compose.models": {
+      "path": "src/svp_rpe/compose/models.py",
+      "sha256": "ab78160e0d021912d6d6d2eb3430167bf2cae0a4b19d58fa488279088c645a7f"
+    },
+    "svp_rpe.perform.performer": {
+      "path": "src/svp_rpe/perform/performer.py",
+      "sha256": "4c0c8ca737400f759f2f665dad90f989ca12584d1a0b1969ef31df61a89b684e"
+    },
+    "svp_rpe.perform.synth": {
+      "path": "src/svp_rpe/perform/synth.py",
+      "sha256": "e36d831712b3ef247292a235415a1ce36fe6d6ebaeb127987e23363c43963884"
+    },
+    "svp_rpe.rpe.models": {
+      "path": "src/svp_rpe/rpe/models.py",
+      "sha256": "56b8f1c6762a6bcf5e67edf84fe9b00dbe109bdca22167f64ebe0820253fb8db"
+    },
+    "svp_rpe.rpe.physical_features": {
+      "path": "src/svp_rpe/rpe/physical_features.py",
+      "sha256": "f25e6a44572f551c295005b69b874e66bdc9086c0424ac3ec8fc53154c74029f"
+    },
+    "svp_rpe.utils.clamp": {
+      "path": "src/svp_rpe/utils/clamp.py",
+      "sha256": "e842b49eb918fa5b406d765836052a2090473c4d3fce58a9919b3a8b20f15155"
+    }
+  },
+  "schema_version": "1.1"
+}
