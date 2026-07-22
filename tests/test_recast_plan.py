@@ -8,13 +8,41 @@ from pathlib import Path
 import pytest
 
 from svp_rpe.recast import RecastError, load_recast_project
-from svp_rpe.recast.loader import load_mode_overrides
+from svp_rpe.recast.loader import LoadedRecastProject, load_mode_overrides
 from svp_rpe.recast.models import ModeOverridesConfig
-from svp_rpe.recast.plan import build_recast_plan, mode_support_for_path
-from svp_rpe.recast.state import load_recast_state
+from svp_rpe.recast.plan import (
+    RecastPlanResult,
+    build_recast_plan,
+    mode_support_for_path,
+    unsupported_changed_field_reasons,
+)
+from svp_rpe.recast.state import load_recast_state, record_state
 
 DEMO_PROJECT = Path("examples/recast/demo_project")
 EXPECTED_PLAN = DEMO_PROJECT / "expected" / "recast_plan_edm_suno.json"
+
+
+def _persist_state(
+    loaded: LoadedRecastProject, variant: str, backend: str, result: RecastPlanResult
+) -> None:
+    """`svprpe recast plan` CLI が plan JSON publish 成功後に行う状態記録を模倣する
+    （Codex P2 #207 で `build_recast_plan` からこの副作用を除去し CLI 側の責務に
+    移した — このヘルパーはユニットテストから同じ手順を再現する）。"""
+    if result.plan.blocked is not None:
+        note = "; ".join(result.plan.blocked.reasons)
+    else:
+        reasons = unsupported_changed_field_reasons(
+            result.plan.changed_fields, result.plan.invocation_mode
+        )
+        note = "; ".join(reasons) if reasons else None
+    record_state(
+        loaded.project_dir,
+        variant,
+        backend,
+        result.plan.state_reached,
+        note,
+        inputs_digest=result.inputs_digest,
+    )
 
 
 def _copy_demo_project(tmp_path: Path) -> Path:
@@ -46,8 +74,10 @@ def test_demo_project_reaches_verified(tmp_path: Path) -> None:
     assert {a.anchor_id for a in result.plan.anchors} == {"lyrics", "melody", "harmony"}
     assert result.plan.recommendation == "run へ進行可。"
 
+    _persist_state(loaded, "edm", "suno", result)
     state_file = load_recast_state(loaded.project_dir)
     assert state_file.runs["edm@suno"].state == "verified"
+    assert state_file.runs["edm@suno"].inputs_digest == result.inputs_digest
 
 
 def test_unknown_variant_raises_recast_error(tmp_path: Path) -> None:
@@ -114,6 +144,7 @@ def test_unresolved_author_field_blocks_authoring(tmp_path: Path) -> None:
     assert result.plan.blocked.state == "blocked_authoring"
     assert any("semantic.core" in reason for reason in result.plan.blocked.reasons)
 
+    _persist_state(loaded, "edm", "suno", result)
     state_file = load_recast_state(loaded.project_dir)
     assert state_file.runs["edm@suno"].state == "blocked_authoring"
 
@@ -139,6 +170,7 @@ def test_unresolved_structure_role_blocks_authoring(tmp_path: Path) -> None:
     assert result.plan.blocked.state == "blocked_authoring"
     assert any("structure[0].role" in reason for reason in result.plan.blocked.reasons)
 
+    _persist_state(loaded, "edm", "suno", result)
     state_file = load_recast_state(loaded.project_dir)
     assert state_file.runs["edm@suno"].state == "blocked_authoring"
 
@@ -171,6 +203,7 @@ def test_strict_capability_mode_blocks_on_hard_unsupported_anchor(tmp_path: Path
     assert "melody" in reasons_text
     assert "strict capability check failed" in reasons_text
 
+    _persist_state(loaded, "edm", "suno", result)
     state_file = load_recast_state(loaded.project_dir)
     assert state_file.runs["edm@suno"].state == "blocked_capability"
 
@@ -192,8 +225,85 @@ def test_tampered_anchor_artifact_blocks_verification(tmp_path: Path) -> None:
     assert result.plan.blocked.state == "blocked_verification"
     assert any("sha256" in reason for reason in result.plan.blocked.reasons)
 
+    _persist_state(loaded, "edm", "suno", result)
     state_file = load_recast_state(loaded.project_dir)
     assert state_file.runs["edm@suno"].state == "blocked_verification"
+
+
+# --- unsupported changed field: strict/advisory ゲート (Codex P2 second round #207) --
+
+
+def _cover_key_override_project(tmp_path: Path, *, capability_mode: str) -> Path:
+    """demo project を変形する: backend の invocation_mode を cover にし、
+    physical.key を override する（cover の physical.key は
+    `config/mode_overrides/suno.yaml` で unsupported と実測済み）。identity_anchors
+    は melody/harmony の hard 宣言に由来する既存の strict failure（本ゲートとは
+    無関係な別経路 — `test_strict_capability_mode_blocks_on_hard_unsupported_anchor`
+    参照）を避けるため free に緩め、changed_fields の unsupported ゲートだけを単離する。"""
+    project_path = _copy_demo_project(tmp_path)
+
+    project_text = project_path.read_text(encoding="utf-8")
+    mutated_project = project_text.replace("invocation_mode: prompt_only", "invocation_mode: cover")
+    assert mutated_project != project_text
+    mutated_project = mutated_project.replace(
+        "capability_mode: advisory", f"capability_mode: {capability_mode}"
+    )
+    project_path.write_text(mutated_project, encoding="utf-8")
+
+    arrangement_path = project_path.parent / "arrangements" / "edm.yaml"
+    arrangement_text = arrangement_path.read_text(encoding="utf-8")
+    mutated_arrangement = arrangement_text.replace(
+        '  physical:\n    bpm: 132\n    brightness: "bright"\n',
+        '  physical:\n    bpm: 132\n    brightness: "bright"\n    key: "A minor"\n',
+    )
+    assert mutated_arrangement != arrangement_text
+    mutated_arrangement = mutated_arrangement.replace(
+        "    physical.key: hard", "    physical.key: free"
+    )
+    mutated_arrangement = mutated_arrangement.replace("mode: hard", "mode: free")
+    arrangement_path.write_text(mutated_arrangement, encoding="utf-8")
+
+    return project_path
+
+
+def test_unsupported_changed_field_blocks_capability_in_strict_mode(tmp_path: Path) -> None:
+    project_path = _cover_key_override_project(tmp_path, capability_mode="strict")
+    loaded = load_recast_project(project_path)
+
+    result = build_recast_plan(loaded, variant="edm", backend="suno")
+
+    assert result.plan.state_reached == "blocked_capability"
+    assert result.plan.blocked is not None
+    assert result.plan.blocked.state == "blocked_capability"
+    reasons_text = " ".join(result.plan.blocked.reasons)
+    assert "physical.key" in reasons_text
+    assert "invocation_mode cover" in reasons_text
+    assert "unsupported" in reasons_text
+
+    _persist_state(loaded, "edm", "suno", result)
+    state_file = load_recast_state(loaded.project_dir)
+    assert state_file.runs["edm@suno"].state == "blocked_capability"
+
+
+def test_unsupported_changed_field_warns_but_verifies_in_advisory_mode(tmp_path: Path) -> None:
+    project_path = _cover_key_override_project(tmp_path, capability_mode="advisory")
+    loaded = load_recast_project(project_path)
+
+    result = build_recast_plan(loaded, variant="edm", backend="suno")
+
+    assert result.plan.blocked is None
+    assert result.plan.state_reached == "verified"
+    warnings_text = " ".join(result.plan.warnings)
+    assert "physical.key" in warnings_text
+    assert "invocation_mode cover" in warnings_text
+    assert "unsupported" in warnings_text
+    assert "届きません" in result.plan.recommendation
+
+    _persist_state(loaded, "edm", "suno", result)
+    state_file = load_recast_state(loaded.project_dir)
+    assert state_file.runs["edm@suno"].state == "verified"
+    assert state_file.runs["edm@suno"].note is not None
+    assert "physical.key" in state_file.runs["edm@suno"].note
 
 
 # --- mode_overrides: ★invocation_mode 軸 ---------------------------------------

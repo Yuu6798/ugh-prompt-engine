@@ -3,16 +3,27 @@
 `build_recast_plan` は `LoadedRecastProject`（PR1 の loader が解決した参照一式）+
 `variant` + `backend` から、以下を 1 パイプラインとして評価する:
 
+0. 入力一式（project/score/identity_manifest/arrangement spec/capability
+   profile/mode_overrides）の raw bytes sha256 を合成した `inputs_digest` を計算
+   （`recast status` の stale run 検出用。`arrange.bundle.compute_content_digest` 流用）
 1. variant/backend 名の存在検証
 2. CompositionScore ロード + author field (TODO sentinel) 未解決チェック
+   （semantic 層限定ではなく `model_dump()` 全体を再帰走査する fail-closed ゲート）
 3. IdentityManifest ロード + artifact hash 照合
 4. ArrangementSpec ロード + `resolve_arrangement`
 5. `build_preservation_contract`
 6. capability profile + mode_overrides（指定時）ロード
 7. `build_performance_package`（純関数、strict= policy.capability_mode=="strict"）
 8. `require_verified_package` なら一時ディレクトリで `verify_package`
-9. 診断表（anchors / changed_fields）と推奨 1 行の構築
-10. `recast.state.record_state` による状態永続化
+9. 診断表（anchors / changed_fields）の構築。`changed_fields` に
+   `mode_support=="unsupported"` が 1 件でもあれば、anchor 配送と同じ
+   strict/advisory 意味論を適用する: strict は `blocked_capability` へ降格、
+   advisory は到達状態を維持したまま warnings へ積む（推奨 1 行も切替）
+
+**本関数はディスクへ副作用を持たない純粋関数** — `recast_plan.json` の publish と
+`recast.state.record_state` による状態永続化は呼び出し側（CLI）の責務であり、
+「plan JSON の書き込み成功後に state を記録する」順序も CLI 側が保証する
+（書き込み失敗時に stale state を残さないため）。
 
 各段の例外は診断へ変換し、最初のブロックで停止して到達状態を記録する
 （`blocked_authoring` / `blocked_capability` / `blocked_verification`）。
@@ -31,6 +42,7 @@ from typing import Any, Dict, List, Literal, Optional
 import yaml
 from pydantic import ValidationError
 
+from svp_rpe.arrange.bundle import compute_content_digest, sha256_file
 from svp_rpe.arrange.capabilities import (
     INPUT_CHANNELS,
     InputCapabilityProfile,
@@ -88,7 +100,7 @@ from svp_rpe.recast.models import (
     RecastModel,
     RecastProject,
 )
-from svp_rpe.recast.state import RecastState, record_state
+from svp_rpe.recast.state import RecastState
 from svp_rpe.sentinels import is_todo_sentinel
 
 PreservationChangeMode = Literal["elastic", "free"]
@@ -148,10 +160,13 @@ class RecastPlan(RecastModel):
 
 @dataclass(frozen=True)
 class RecastPlanResult:
-    """`build_recast_plan` の戻り値: 決定論的 `plan` + human 向けテキスト。"""
+    """`build_recast_plan` の戻り値: 決定論的 `plan` + human 向けテキスト +
+    state 永続化用 `inputs_digest`（呼び出し側が `recast.state.record_state` へ
+    渡す。`plan` 自体には含めない — `recast_plan.json` の byte 互換を変えないため）。"""
 
     plan: RecastPlan
     text: str
+    inputs_digest: str
 
 
 def _parse_yaml_mapping(raw_bytes: bytes, label: str, path_str: str) -> Dict[str, Any]:
@@ -268,6 +283,19 @@ def _build_changed_field_entries(
     ]
 
 
+def unsupported_changed_field_reasons(
+    changed_fields: List[ChangedFieldPlanEntry], invocation_mode: InvocationMode
+) -> List[str]:
+    """`changed_fields` のうち `mode_support=="unsupported"` な各 path から、
+    anchor 配送の warning/reason と同じ文体の 1 行診断を作る（`build_recast_plan`
+    の strict/advisory ゲートと CLI の state note 双方から共有する single source）。"""
+    return [
+        f"field {c.path} は invocation_mode {invocation_mode} で unsupported"
+        for c in changed_fields
+        if c.mode_support == "unsupported"
+    ]
+
+
 def _build_recommendation(
     blocked: Optional[BlockedInfo],
     state_reached: RecastState,
@@ -275,6 +303,12 @@ def _build_recommendation(
 ) -> str:
     if blocked is not None:
         if blocked.state == "blocked_capability":
+            if any(c.mode_support == "unsupported" for c in changed_fields):
+                return (
+                    "この invocation_mode では届かない変更が含まれています。capability_mode を "
+                    "advisory へ切替するか、届く invocation_mode（cover/prompt_only の切替）を "
+                    "検討してください。"
+                )
             return (
                 "capability_mode を advisory へ切替するか、hard 宣言した anchor の "
                 "要求を降格してください。"
@@ -330,10 +364,35 @@ def _render_text(plan: RecastPlan) -> str:
     return "\n".join(lines) + "\n"
 
 
+def compute_recast_inputs_digest(
+    loaded: LoadedRecastProject, *, variant: str, backend: str
+) -> str:
+    """`(variant, backend)` run が参照する入力一式の raw bytes sha256 を
+    canonical digest へ合成する（`arrange.bundle.compute_content_digest` 流用）。
+
+    `loaded` はロード時点で score/identity_manifest/arrangement/capability_profile
+    の実在を検証済みのため、ここでは読み取りをガードしない（`build_recast_plan` の
+    既存ステップ 3/6 の raw read と同じ規約）。`recast plan` はこの digest を
+    state へ永続化し、`recast status` は現在の入力から再計算した digest と
+    突き合わせて stale run（永続化後に入力が変更された run）を検出する。"""
+    components: Dict[str, str] = {
+        "project": loaded.sha256,
+        "score": sha256_file(loaded.score_path),
+        "identity_manifest": sha256_file(loaded.identity_manifest_path),
+        "arrangement_spec": sha256_file(loaded.arrangement_paths[variant]),
+        "capability_profile": sha256_file(loaded.capability_profile_paths[backend]),
+    }
+    mode_override_path = loaded.mode_override_paths.get(backend)
+    if mode_override_path is not None:
+        components["mode_overrides"] = sha256_file(mode_override_path)
+    return compute_content_digest(components)
+
+
 def build_recast_plan(
     loaded: LoadedRecastProject, *, variant: str, backend: str
 ) -> RecastPlanResult:
-    """`loaded` の (variant, backend) 組に対する RecastPlan を構築し、state を永続化する。"""
+    """`loaded` の (variant, backend) 組に対する RecastPlan を構築する（純粋関数、
+    ディスクへの副作用なし）。"""
     project: RecastProject = loaded.project
 
     if variant not in project.variants:
@@ -348,6 +407,7 @@ def build_recast_plan(
         )
 
     backend_ref: BackendRef = project.backends[backend]
+    inputs_digest = compute_recast_inputs_digest(loaded, variant=variant, backend=backend)
 
     def _finalize(
         *,
@@ -373,9 +433,7 @@ def build_recast_plan(
             warnings=warnings or [],
             recommendation=recommendation,
         )
-        note = "; ".join(blocked.reasons) if blocked is not None else None
-        record_state(loaded.project_dir, variant, backend, state_reached, note)
-        return RecastPlanResult(plan=plan, text=_render_text(plan))
+        return RecastPlanResult(plan=plan, text=_render_text(plan), inputs_digest=inputs_digest)
 
     # --- step 2: score + author field resolution ---------------------------
     score = load_composition_score(loaded.score_path)
@@ -540,6 +598,24 @@ def build_recast_plan(
         changed_fields = _build_changed_field_entries(
             resolution.changes, backend_ref.invocation_mode, mode_overrides_config
         )
+
+        # anchor 配送と同じ strict/advisory 意味論を changed_fields にも適用する:
+        # mode_overrides が「この invocation_mode では届かない」と実測している変更が
+        # 1 件でもあれば、strict は blocked_capability へ降格（生成しても届かない変更を
+        # verified/exit 0 で推奨しない）、advisory は到達状態を維持しつつ warnings へ積む。
+        unsupported_reasons = unsupported_changed_field_reasons(
+            changed_fields, backend_ref.invocation_mode
+        )
+        if unsupported_reasons:
+            if project.policy.capability_mode == "strict":
+                return _finalize(
+                    state_reached="blocked_capability",
+                    blocked=BlockedInfo(state="blocked_capability", reasons=unsupported_reasons),
+                    anchors=anchors,
+                    changed_fields=changed_fields,
+                    warnings=warnings,
+                )
+            warnings = warnings + unsupported_reasons
 
         return _finalize(
             state_reached=state_reached,

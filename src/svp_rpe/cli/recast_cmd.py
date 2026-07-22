@@ -71,7 +71,8 @@ def recast_plan_cmd(
 
     from svp_rpe.arrange.resolver import ArrangementError
     from svp_rpe.recast import RecastError, load_recast_project
-    from svp_rpe.recast.plan import build_recast_plan
+    from svp_rpe.recast.plan import build_recast_plan, unsupported_changed_field_reasons
+    from svp_rpe.recast.state import record_state
 
     try:
         loaded = load_recast_project(project_yaml)
@@ -95,6 +96,24 @@ def recast_plan_cmd(
     except OSError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+
+    # 状態記録は plan JSON の publish が成功した後にのみ行う（Codex P2 #207）:
+    # 書き込み失敗時に stale な recast_state.json を残さないための順序保証。
+    if result.plan.blocked is not None:
+        state_note = "; ".join(result.plan.blocked.reasons)
+    else:
+        reasons = unsupported_changed_field_reasons(
+            result.plan.changed_fields, result.plan.invocation_mode
+        )
+        state_note = "; ".join(reasons) if reasons else None
+    record_state(
+        loaded.project_dir,
+        variant,
+        backend,
+        result.plan.state_reached,
+        state_note,
+        inputs_digest=result.inputs_digest,
+    )
 
     anchors_table = Table(title=f"Anchors: {variant}@{backend}")
     anchors_table.add_column("anchor_id")
@@ -141,8 +160,15 @@ def recast_plan_cmd(
 def recast_status_cmd(
     project_yaml: str = typer.Argument(..., help="Path to RecastProject YAML"),
 ) -> None:
-    """Show `recast_state.json`'s current state per (variant, backend) run + next step."""
+    """Show `recast_state.json`'s current state per (variant, backend) run + next step.
+
+    入力（score/identity_manifest/arrangement spec/capability profile/
+    mode_overrides）が記録済み run の `inputs_digest` と一致しない場合、その run
+    は stale（`recast plan` 再実行が必要）として表示する — 旧 state をそのまま
+    信用して次の一手（例: 生成に進む）を勧めない（Codex P2 #207）。
+    """
     from svp_rpe.recast import RecastError, load_recast_project
+    from svp_rpe.recast.plan import compute_recast_inputs_digest
     from svp_rpe.recast.state import load_recast_state
 
     try:
@@ -157,6 +183,7 @@ def recast_status_cmd(
     table.add_column("state")
     table.add_column("next step")
 
+    replan_step = _NEXT_STEP_BY_STATE["draft"]
     for variant in sorted(loaded.project.variants):
         for backend in sorted(loaded.project.backends):
             key = f"{variant}@{backend}"
@@ -164,10 +191,18 @@ def recast_status_cmd(
             if run is None:
                 state = "draft"
                 note = "(plan 未実行)"
+                next_step = _NEXT_STEP_BY_STATE.get(state, "-")
             else:
                 state = run.state
-                note = ""
-            next_step = _NEXT_STEP_BY_STATE.get(state, "-")
+                note = run.note or ""
+                current_digest = compute_recast_inputs_digest(
+                    loaded, variant=variant, backend=backend
+                )
+                if run.inputs_digest is not None and run.inputs_digest != current_digest:
+                    note = "stale（入力が変更済み）— svprpe recast plan 再実行が必要"
+                    next_step = replan_step
+                else:
+                    next_step = _NEXT_STEP_BY_STATE.get(state, "-")
             label = f"{state} {note}".strip()
             table.add_row(key, label, next_step)
     console.print(table)
