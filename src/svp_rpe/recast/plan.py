@@ -652,9 +652,14 @@ def build_recast_plan(
     # --- score ---------------------------------------------------------------
     score_bytes = loaded.score_path.read_bytes()
     digest_components["score"] = hashlib.sha256(score_bytes).hexdigest()
-    score = CompositionScore.model_validate(
-        _parse_yaml_mapping(score_bytes, "composition score", str(loaded.score_path))
-    )
+    score: Optional[CompositionScore] = None
+    score_parse_error: Optional[Exception] = None
+    try:
+        score = CompositionScore.model_validate(
+            _parse_yaml_mapping(score_bytes, "composition score", str(loaded.score_path))
+        )
+    except (ValueError, ValidationError, yaml.YAMLError) as exc:
+        score_parse_error = exc
 
     # --- identity manifest -----------------------------------------------------
     manifest_path = loaded.identity_manifest_path
@@ -708,7 +713,12 @@ def build_recast_plan(
             spec = ArrangementSpec.model_validate(
                 _parse_yaml_mapping(spec_bytes, "arrangement spec", str(arrangement_path))
             )
-            resolution = resolve_arrangement(score, spec)
+            # score の parse/validate が失敗している場合は resolve_arrangement を
+            # 呼ばない（score_parse_error は step 2 で最優先報告され、この関数は
+            # そこで既に return 済みのはず — ここに到達するのは score が有効な
+            # 場合のみだが、念のため None ガードで TypeError 化を防ぐ）。
+            if score is not None:
+                resolution = resolve_arrangement(score, spec)
         except (
             ValueError,
             ValidationError,
@@ -842,6 +852,22 @@ def build_recast_plan(
             mode_gate_reasons=mode_gate_reasons,
         )
 
+    # --- step 2a: score の YAML 破損・schema 不正チェック --------------------
+    # score は著者成果物 (author field / preservation 契約と同じ層) のため、
+    # parse/validate 失敗は identity manifest / capability profile と違う
+    # blocked_authoring として finalize する（Codex P2 eleventh round #207:
+    # 以前は score parse を bundle 先頭で無条件に呼んでおり、失敗時は捕捉
+    # されない例外として関数外へ伝播し CLI が top-level Error で落ちていた
+    # ため recast_plan.json も state も残らなかった）。他の bundle 読み取り
+    # より先に発生していた元の失敗順序を保つため、step 2 のチェックより先に
+    # 判定する。
+    if score_parse_error is not None:
+        return _finalize(
+            state_reached="blocked_authoring",
+            blocked=BlockedInfo(state="blocked_authoring", reasons=[str(score_parse_error)]),
+        )
+    assert score is not None
+
     # --- step 2: author field (TODO sentinel) 未解決チェック -----------------
     if project.policy.require_author_fields_resolved:
         unresolved = _unresolved_author_field_paths(score)
@@ -971,11 +997,22 @@ def build_recast_plan(
 
         # --- step 8: optional verification ----------------------------------
         if project.policy.require_verified_package:
-            (package_dir / PERFORMANCE_PACKAGE_FILENAME).write_text(
-                compiled.package_json, encoding="utf-8"
+            # `write_text(..., encoding="utf-8")` はプラットフォーム依存の改行変換
+            # (`\n` -> `\r\n` on Windows) を行うため、ステージング先に書かれる
+            # bytes が `compiled.report.package_sha256`（`package_json.encode
+            # ("utf-8")` から計算済み — hash に使ったのと同じ `\n` のみの bytes）
+            # と乖離しうる（Codex P2 eleventh round #207: ninth round #207
+            # (abc2350) で recast_plan.json / recast_state.json に適用したのと
+            # 同原則）。`verify_package` はステージング先の実 bytes から
+            # package_sha256 を再計算して突合するため、この乖離は Windows で
+            # 偽の `blocked_verification` を招く。hash 計算元と同一の UTF-8
+            # bytes を `write_bytes()` で書き、on-disk bytes と pin 済み hash の
+            # 単一 source of truth を保証する。
+            (package_dir / PERFORMANCE_PACKAGE_FILENAME).write_bytes(
+                compiled.package_json.encode("utf-8")
             )
-            (package_dir / COMPILATION_REPORT_FILENAME).write_text(
-                compiled.report_json, encoding="utf-8"
+            (package_dir / COMPILATION_REPORT_FILENAME).write_bytes(
+                compiled.report_json.encode("utf-8")
             )
             verify_report = verify_package(package_dir / PERFORMANCE_PACKAGE_FILENAME, manifest_path)
             if not verify_report.ok:
