@@ -424,6 +424,106 @@ def test_section_tags_text_prefers_delivered_channel_artifact_over_prompt(
     assert "[Intro:" not in section_tags_text
 
 
+def test_lyrics_text_uses_plan_pinned_bytes_not_disk_reread_at_render_time(
+    tmp_path: Path,
+) -> None:
+    """Codex P2 review round 11（PR3 #208 指摘22）: `_lyrics_text` は従来
+    `resolve_confined(...).read_text()` で注文書描画のたびに artifact を
+    disk から再 read しており、plan 段（`build_recast_plan_artifacts`）の
+    hash 検証と実際に描画される中身が乖離し得る TOCTOU があった。plan
+    構築後・`prepare()` 呼び出し前に artifact ファイルの中身を書き換えても、
+    `lyrics.txt` には plan 段が pin した（書き換え前の）bytes がそのまま
+    反映されることを検証する。"""
+    project_path = _copy_demo_project(tmp_path)
+    loaded = load_recast_project(project_path)
+    ctx = build_recast_run_context(loaded, variant="edm", backend="suno")
+
+    lyrics_path = project_path.parent / "identity" / "lyrics.txt"
+    original_text = lyrics_path.read_text(encoding="utf-8")
+    lyrics_path.write_bytes(b"MUTATED AFTER PLAN BUILD, BEFORE RENDER\n")
+
+    invoker = resolve_invoker(ctx.backend_ref, ctx.profile)
+    prepared = invoker.prepare(ctx)
+
+    lyrics_text = (prepared.order_dir / "lyrics.txt").read_text(encoding="utf-8")
+    assert "MUTATED AFTER PLAN BUILD" not in lyrics_text
+    assert lyrics_text == (
+        original_text if original_text.endswith("\n") else original_text + "\n"
+    )
+
+
+def _add_malformed_section_map_anchor(project_path: Path, *, content: bytes) -> None:
+    """指摘23 回帰テスト用フィクスチャ: sha256 は content と一致する（plan 段の
+    hash 検証は通る）が、section-map v0.1/v0.2 いずれの schema にも parse
+    できない bytes を持つ section_tags anchor を追加する。`format_version` は
+    宣言しない — 宣言すると（`section-map/0.2` の場合）plan.py 側の
+    `_is_section_map_v2_structure_anchor`（AR2-3 の `section_ref` merge
+    resolution）がこの anchor を先に parse し、plan 段で blocked_verification
+    として弾かれてしまい `ManualInvoker.prepare()` まで到達しない
+    （= 本テストが検証したい manual.py 側の fail-closed 経路に届かない）。"""
+    import hashlib
+
+    project_dir = project_path.parent
+    artifact_path = project_dir / "identity" / "section_tags_broken.json"
+    artifact_path.write_bytes(content)
+    sha256 = hashlib.sha256(content).hexdigest()
+
+    identity_path = project_dir / "identity.yaml"
+    identity_text = identity_path.read_text(encoding="utf-8")
+    anchor_block = (
+        "  - id: structure_tags\n"
+        "    domain: structure\n"
+        "    artifact: identity/section_tags_broken.json\n"
+        "    artifact_type: section_map\n"
+        "    media_type: application/json\n"
+        f'    sha256: "{sha256}"\n'
+        "    required: true\n"
+    )
+    updated_identity = identity_text.replace(
+        "    required: true\n  - id: melody\n",
+        "    required: true\n" + anchor_block + "  - id: melody\n",
+        1,
+    )
+    assert updated_identity != identity_text  # sanity
+    identity_path.write_text(updated_identity, encoding="utf-8")
+
+    arrangement_path = project_dir / "arrangements" / "edm.yaml"
+    arrangement_text = arrangement_path.read_text(encoding="utf-8")
+    updated_arrangement = arrangement_text.replace(
+        "  identity_anchors:\n",
+        "  identity_anchors:\n    structure_tags:\n      mode: hard\n      allow: []\n",
+        1,
+    )
+    assert updated_arrangement != arrangement_text  # sanity
+    arrangement_path.write_text(updated_arrangement, encoding="utf-8")
+
+
+def test_section_tags_text_fails_closed_when_delivered_section_map_is_unparseable(
+    tmp_path: Path,
+) -> None:
+    """Codex P2 review round 11（PR3 #208 指摘23）: 配送済み
+    `channel_artifacts['section_tags']` ref が section-map v0.1/v0.2 いずれの
+    schema にも parse できない場合、従来は `_channel_artifact_refs_section_
+    tags_text` が黙って `None` を返し、呼び出し側が `prompt.section_tags`/
+    placeholder へ silent fallback していた — plan/package は delivered と
+    報告している hard anchor の実体が、気づかれないまま注文書から欠落する
+    事故を招く。1 件も解釈できない場合は `RecastError` で fail-closed し、
+    注文書（6 ファイルいずれも）を一切公開しないことを検証する。"""
+    project_path = _copy_demo_project(tmp_path)
+    _add_malformed_section_map_anchor(project_path, content=b"not valid json at all")
+
+    loaded = load_recast_project(project_path)
+    ctx = build_recast_run_context(loaded, variant="edm", backend="suno")
+    assert "section_tags" in ctx.compiled.package.channel_artifacts  # delivered 前提の sanity
+    invoker = resolve_invoker(ctx.backend_ref, ctx.profile)
+
+    with pytest.raises(RecastError, match="structure_tags"):
+        invoker.prepare(ctx)
+
+    order_dir = loaded.builds_root / "orders" / "edm@suno"
+    assert not order_dir.exists()
+
+
 # --- manual: cover mode branch --------------------------------------------------
 
 

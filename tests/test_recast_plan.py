@@ -14,6 +14,7 @@ from svp_rpe.recast.plan import (
     RecastPlanResult,
     _normalize_diagnostic,
     build_recast_plan,
+    build_recast_plan_artifacts,
     mode_support_for_path,
 )
 from svp_rpe.recast.run_paths import collect_protected_input_paths
@@ -465,6 +466,63 @@ def test_unsupported_changed_field_blocks_capability_in_strict_mode(tmp_path: Pa
     _persist_state(loaded, "edm", "suno", result)
     state_file = load_recast_state(loaded.project_dir)
     assert state_file.runs["edm@suno"].state == "blocked_capability"
+
+
+def test_strict_mode_gate_does_not_publish_packages(tmp_path: Path) -> None:
+    """Codex P2 review round 11（PR3 #208 指摘21）: `publish=True` で
+    verification 自体は通っても、strict の mode gate（changed_fields の
+    unsupported）で最終的に blocked_capability へ降格するケースでは、
+    package/report を builds_root へ永続公開してはいけない — 従来は
+    verification の**前**に永続公開していたため、blocked な plan なのに
+    「使えそうな成果物」が builds_root に残ってしまっていた。本テストは
+    `publish=True` を直接使い、`build_recast_plan_artifacts` 呼び出し後も
+    `builds_root/packages/edm@suno/` が一切作られないことを検証する。"""
+    project_path = _cover_key_override_project(tmp_path, capability_mode="strict")
+    loaded = load_recast_project(project_path)
+    package_dir = loaded.builds_root / "packages" / "edm@suno"
+    assert not loaded.builds_root.exists()  # デモ fixture は builds/ を同梱しない
+
+    artifacts = build_recast_plan_artifacts(loaded, variant="edm", backend="suno", publish=True)
+
+    assert artifacts.result.plan.state_reached == "blocked_capability"
+    assert not package_dir.exists()  # gate 通過前なので packages は publish されない
+
+
+def test_strict_mode_gate_does_not_overwrite_existing_packages(tmp_path: Path) -> None:
+    """`test_strict_mode_gate_does_not_publish_packages` の変種: 既に旧
+    package/report が `builds_root/packages/edm@suno/` に存在する状態
+    （advisory で一度 verified に到達した後、strict へ切り替えて同じ
+    unsupported changed field で mode gate に引っかかるケースを模す）で、
+    strict の mode gate により blocked_capability へ降格した場合に、その
+    既存内容が上書きされない（旧内容のまま残る）ことを検証する。"""
+    project_path = _cover_key_override_project(tmp_path, capability_mode="advisory")
+    loaded = load_recast_project(project_path)
+
+    # advisory では unsupported changed field があっても verified まで到達し、
+    # publish=True で旧 package/report が実際に公開される。
+    first = build_recast_plan_artifacts(loaded, variant="edm", backend="suno", publish=True)
+    assert first.result.plan.state_reached == "verified"
+    package_dir = loaded.builds_root / "packages" / "edm@suno"
+    old_package_bytes = (package_dir / "performance_package.json").read_bytes()
+    old_report_bytes = (package_dir / "compilation_report.json").read_bytes()
+
+    # capability_mode を strict へ切り替え、同じ unsupported changed field で
+    # 今度は mode gate に引っかからせる。
+    project_text = project_path.read_text(encoding="utf-8")
+    updated = project_text.replace("capability_mode: advisory", "capability_mode: strict")
+    assert updated != project_text  # sanity
+    project_path.write_text(updated, encoding="utf-8")
+    loaded_strict = load_recast_project(project_path)
+
+    second = build_recast_plan_artifacts(
+        loaded_strict, variant="edm", backend="suno", publish=True
+    )
+    assert second.result.plan.state_reached == "blocked_capability"
+
+    # 既存の package/report は一切上書きされていない（旧 verified 時点の
+    # bytes のまま）。
+    assert (package_dir / "performance_package.json").read_bytes() == old_package_bytes
+    assert (package_dir / "compilation_report.json").read_bytes() == old_report_bytes
 
 
 def test_unsupported_changed_field_warns_but_verifies_in_advisory_mode(tmp_path: Path) -> None:
