@@ -464,8 +464,17 @@ def recast_ingest_cmd(
     treated as stale too (Codex P2 review round 4, PR3 #208 指摘 9: a missing
     pin is exactly the case a stale/forged state most plausibly has). Only
     then does it rebuild the plan context via the same
-    `build_recast_plan_artifacts` path `recast run` uses (re-publishing
-    `recast_plan.json` — same `_publish_recast_plan` single source), resolve
+    `build_recast_plan_artifacts` path `recast run` uses. Before that rebuild's
+    result is trusted (re-published as `recast_plan.json` or used to `collect`
+    the take), its freshly recomputed `inputs_digest` is re-compared against
+    the same recorded pin (Codex P2 eighth round #207 指摘16: the precheck
+    above and this rebuild are not atomic — inputs could be swapped in the gap
+    between them, letting an old order's externally generated audio get
+    recorded as the `generated` take for a *new* plan built from the swapped
+    inputs). A mismatch here exits 1 without publishing the plan, collecting
+    the audio, or touching `recast_state.json` — the old plan/state are left
+    untouched. Only once that re-check passes does it re-publish
+    `recast_plan.json` (same `_publish_recast_plan` single source), resolve
     the `ManualInvoker`, and call `collect(audio)` to atomically ingest the
     audio into `<builds_root>/takes/<variant>@<backend>/`. Records `generated`
     (with the freshly (re)computed `inputs_digest`/`plan_sha256`) only after
@@ -556,6 +565,29 @@ def recast_ingest_cmd(
     except (OSError, ValueError, ValidationError, yaml.YAMLError, RecastError, ArrangementError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+
+    # rebuild 後・publish/collect の前に、rebuild が実際に見た入力の digest を
+    # 記録済み pin（`run.inputs_digest` — 上の precheck で `current_digest` との
+    # 一致を既に確認済み）と再突合する（Codex P2 eighth round #207 指摘16:
+    # precheck（518行目 `compute_recast_inputs_digest`）と rebuild（直上の
+    # `build_recast_plan_artifacts`）の間には TOCTOU 窓があり、その間に入力
+    # （例: composition_score.yaml）が差し替えられると rebuild は新しい入力で
+    # 新しい plan を構築してしまう — precheck は既に通過済みなのでここを
+    # チェックしないと、旧注文（旧 prompt/lyrics 向けに外部生成された音声）を
+    # 新 plan の `generated` として記録・plan を新入力で上書き公開してしまう。
+    # `build_recast_plan_artifacts` は同じ入力から独立に digest を再計算する
+    # ため（`compute_recast_inputs_digest` と同一ロジック — plan.py 内)、
+    # 差し替えがあれば必ず値が変わり検出できる。ここで拒否する場合は
+    # `_publish_recast_plan`/`collect`/`record_state` のいずれも呼ばない
+    # （plan・take・state のいずれも書き換えない — 旧 plan/state は無傷のまま）。
+    if artifacts.result.inputs_digest != run.inputs_digest:
+        typer.echo(
+            f"Error: {run_key} inputs changed since the order files were published "
+            "(detected during rebuild — stale). Re-run 'svprpe recast plan' / "
+            "'svprpe recast run' first.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
     try:
         _plan_path, plan_sha256 = _publish_recast_plan(

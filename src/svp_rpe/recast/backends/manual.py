@@ -106,6 +106,13 @@ def _expected_artifacts_json(prepared: PreparedInvocation) -> str:
     payload = {
         "accepted_formats": ["wav", "mp3"],
         "content_digest": prepared.content_digest,
+        # `cwd`: 注文書内の相対パス（`expected_artifacts.json` 自身は使わないが
+        # next_command.txt / order_sheet.md の `--audio` 等）が基準とする作業
+        # ディレクトリを明示する（Codex P2 eighth round #207 指摘15: 前提 cwd が
+        # どこにも明示されておらず、次善のディレクトリで実行すると相対パスが
+        # 解決できなかった）。project.yaml のあるディレクトリ（"." = project_dir）
+        # で固定 — checkout 間で不変なので絶対パスは焼き込まない。
+        "cwd": ".",
         "filename_pattern": "take-01.{wav,mp3}",
         "package_sha256": prepared.package_sha256,
     }
@@ -149,12 +156,26 @@ def _order_sheet_md(ctx: RecastRunContext, prepared: PreparedInvocation, next_co
         if change.note is not None
     ]
     takes_relative = os.path.relpath(prepared.takes_dir, ctx.loaded.project_dir)
+    # 注文書内の相対パス（project 引数・`--audio`）の前提 cwd を明示する
+    # （Codex P2 eighth round #207 指摘15: manual.py:118 — 前提 cwd がどこにも
+    # 明示されておらず、注文書だけを見た運用者が誤った場所で `next_command.txt`
+    # を実行すると相対パス解決に失敗した）。order_dir から project_dir への
+    # 相対パスは checkout-stable（builds_root は project_dir 配下に confine
+    # 済み — loader `_resolve_builds_root`）なので絶対パスを焼き込まずに済む。
+    cwd_from_order_dir = os.path.relpath(ctx.loaded.project_dir, prepared.order_dir)
 
     lines: list[str] = [
         f"# Recast order sheet: {prepared.variant}@{prepared.backend_name}",
         "",
         f"- generator: {prepared.generator}",
         f"- invocation_mode: {prepared.invocation_mode}",
+        "",
+        "## 作業ディレクトリ（cwd）",
+        "",
+        "このファイルおよび `next_command.txt` 内の相対パス（project 引数・"
+        "`--audio`）はすべて **project.yaml のあるディレクトリ**（この注文書"
+        f"（`{prepared.order_dir.name}/`）から見て `{cwd_from_order_dir}`）を"
+        "基準にしている。以下のコマンドは必ずそのディレクトリで実行すること。",
         "",
     ]
     if prepared.invocation_mode == "cover":
@@ -192,9 +213,11 @@ def _order_sheet_md(ctx: RecastRunContext, prepared: PreparedInvocation, next_co
         "## 出力音源の保存",
         "",
         f"生成した音源を `{takes_relative}/take-01.wav`（または `.mp3`）として保存し、"
+        "project ディレクトリ（上記「作業ディレクトリ」参照）へ移動したうえで"
         "以下のコマンドで取り込んでください:",
         "",
         "```",
+        f"cd {cwd_from_order_dir}  # この注文書ディレクトリから project.yaml のあるディレクトリへ",
         next_command.rstrip("\n"),
         "```",
         "",
