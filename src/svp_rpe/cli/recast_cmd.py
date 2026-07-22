@@ -5,6 +5,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
+from typing import Any, Optional
 
 import typer
 from rich.table import Table
@@ -55,6 +56,30 @@ def _write_recast_plan_atomically(path: Path, content: str) -> None:
         raise
 
 
+def _plan_state_note(plan: Any) -> Optional[str]:
+    """`record_state` へ渡す note を `RecastPlan` から組み立てる single source
+    （`recast plan` / `recast run` 両方の plan 段が共有する — Codex P2 #207 の
+    意味論を run 側にも一貫適用: blocked なら reasons、blocked でなければ
+    advisory の unsupported changed field 診断、それも無ければ `None`）。"""
+    from svp_rpe.recast.plan import unsupported_changed_field_reasons
+
+    if plan.blocked is not None:
+        return "; ".join(plan.blocked.reasons)
+    reasons = unsupported_changed_field_reasons(plan.changed_fields, plan.invocation_mode)
+    return "; ".join(reasons) if reasons else None
+
+
+def _print_plan_warnings(plan: Any) -> None:
+    """advisory の unsupported changed field warnings 等、`plan.warnings` を
+    表示する（`recast plan`/`recast run` 共通 — run 側にも同じ可視性を持たせる、
+    Codex P2 #207 の意味論の一貫適用）。"""
+    if not plan.warnings:
+        return
+    console.print("[yellow]Warnings:[/yellow]")
+    for warning in plan.warnings:
+        console.print(f"  - {warning}")
+
+
 @recast_app.command("plan")
 def recast_plan_cmd(
     project_yaml: str = typer.Argument(..., help="Path to RecastProject YAML"),
@@ -75,6 +100,7 @@ def recast_plan_cmd(
     from svp_rpe.arrange.resolver import ArrangementError
     from svp_rpe.recast import RecastError, load_recast_project
     from svp_rpe.recast.plan import build_recast_plan
+    from svp_rpe.recast.state import record_state
 
     try:
         loaded = load_recast_project(project_yaml)
@@ -98,6 +124,17 @@ def recast_plan_cmd(
     except OSError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+
+    # 状態記録は plan JSON の publish が成功した後にのみ行う（Codex P2 #207）:
+    # 書き込み失敗時に stale な recast_state.json を残さないための順序保証。
+    record_state(
+        loaded.project_dir,
+        variant,
+        backend,
+        result.plan.state_reached,
+        _plan_state_note(result.plan),
+        inputs_digest=result.inputs_digest,
+    )
 
     anchors_table = Table(title=f"Anchors: {variant}@{backend}")
     anchors_table.add_column("anchor_id")
@@ -128,6 +165,8 @@ def recast_plan_cmd(
         )
     console.print(changed_table)
 
+    _print_plan_warnings(result.plan)
+
     if result.plan.blocked is not None:
         console.print(f"[red]Blocked: {result.plan.blocked.state}[/red]")
         for reason in result.plan.blocked.reasons:
@@ -152,15 +191,25 @@ def recast_run_cmd(
     """Resolve the backend invoker for (variant, backend) and run it.
 
     Step 1 runs the same plan pipeline as `recast plan` (reusing its compiled
-    artifacts, not recomputing them) and requires the run to have reached
-    `compiled`/`verified` (whichever `policy.require_verified_package`
-    demands) — anything short of that (a `blocked_*` state) is reported and
+    artifacts, not recomputing them) — the plan-stage outcome (`state_reached`,
+    `blocked`/advisory-unsupported note, `inputs_digest`) is recorded via the
+    same `record_state` semantics as `recast plan` (Codex P2 #207 applied
+    consistently here too), even though `run` does not itself publish
+    `recast_plan.json` (there is no artifact-ordering concern for a file this
+    command never writes — the record purely reflects what this invocation's
+    plan pipeline evaluated). Reaching `compiled`/`verified` (whichever
+    `policy.require_verified_package` demands) is required — anything short of
+    that (a `blocked_*` state) is reported (including advisory warnings) and
     exits 1 without invoking a backend.
 
     manual backends publish the 6 order files under
-    `<builds_root>/orders/<variant>@<backend>/`, record `awaiting_generation`,
-    and exit 0. local backends invoke the generator, record `generated` (or
-    `generation_failed` on error), and exit 0/1 accordingly.
+    `<builds_root>/orders/<variant>@<backend>/`, *then* record
+    `awaiting_generation`, and exit 0. local backends invoke the generator,
+    *then* record `generated` (or `generation_failed` on error), and exit 0/1
+    accordingly — publish-before-record in both cases, matching the plan
+    stage's publish-before-record order. Every `record_state` call in this
+    command carries the same `inputs_digest` computed by the plan stage, so
+    `recast status`'s stale-run detection also covers post-generation states.
     """
     import yaml
     from pydantic import ValidationError
@@ -181,6 +230,21 @@ def recast_run_cmd(
     except (OSError, ValueError, ValidationError, yaml.YAMLError, RecastError, ArrangementError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+
+    inputs_digest = artifacts.result.inputs_digest
+    # plan 段の到達状態を記録する（Codex P2 #207 の意味論を run にも一貫適用）。
+    # run は recast_plan.json を publish しないため「publish 成功後に記録」の
+    # artifact-ordering 制約はそもそも掛からない — この record は単に「この
+    # 呼び出しの plan パイプラインが何を評価したか」を反映するだけ。
+    record_state(
+        loaded.project_dir,
+        variant,
+        backend,
+        artifacts.result.plan.state_reached,
+        _plan_state_note(artifacts.result.plan),
+        inputs_digest=inputs_digest,
+    )
+    _print_plan_warnings(artifacts.result.plan)
 
     state_reached = artifacts.result.plan.state_reached
     if state_reached not in _COMPILED_OR_BETTER_STATES:
@@ -207,6 +271,8 @@ def recast_run_cmd(
         raise typer.Exit(code=1) from exc
 
     if artifacts.backend_ref.invocation == "manual":
+        # 注文書 6 ファイルは invoker.prepare() が既に atomic 公開済み — 記録は
+        # その公開成功後（prepare() が例外なく戻った後）にのみ行う。
         note = os.path.relpath(prepared.order_dir, loaded.project_dir)
         record_state(loaded.project_dir, variant, backend, "awaiting_generation", note=note)
         console.print(f"[green]Order files published to {prepared.order_dir}[/green]")
@@ -229,8 +295,15 @@ def recast_run_cmd(
 def recast_status_cmd(
     project_yaml: str = typer.Argument(..., help="Path to RecastProject YAML"),
 ) -> None:
-    """Show `recast_state.json`'s current state per (variant, backend) run + next step."""
+    """Show `recast_state.json`'s current state per (variant, backend) run + next step.
+
+    入力（score/identity_manifest/arrangement spec/capability profile/
+    mode_overrides）が記録済み run の `inputs_digest` と一致しない場合、その run
+    は stale（`recast plan` 再実行が必要）として表示する — 旧 state をそのまま
+    信用して次の一手（例: 生成に進む）を勧めない（Codex P2 #207）。
+    """
     from svp_rpe.recast import RecastError, load_recast_project
+    from svp_rpe.recast.plan import compute_recast_inputs_digest
     from svp_rpe.recast.state import load_recast_state
 
     try:
@@ -245,6 +318,7 @@ def recast_status_cmd(
     table.add_column("state")
     table.add_column("next step")
 
+    replan_step = _NEXT_STEP_BY_STATE["draft"]
     for variant in sorted(loaded.project.variants):
         for backend in sorted(loaded.project.backends):
             key = f"{variant}@{backend}"
@@ -252,10 +326,18 @@ def recast_status_cmd(
             if run is None:
                 state = "draft"
                 note = "(plan 未実行)"
+                next_step = _NEXT_STEP_BY_STATE.get(state, "-")
             else:
                 state = run.state
-                note = ""
-            next_step = _NEXT_STEP_BY_STATE.get(state, "-")
+                note = run.note or ""
+                current_digest = compute_recast_inputs_digest(
+                    loaded, variant=variant, backend=backend
+                )
+                if run.inputs_digest is not None and run.inputs_digest != current_digest:
+                    note = "stale（入力が変更済み）— svprpe recast plan 再実行が必要"
+                    next_step = replan_step
+                else:
+                    next_step = _NEXT_STEP_BY_STATE.get(state, "-")
             label = f"{state} {note}".strip()
             table.add_row(key, label, next_step)
     console.print(table)

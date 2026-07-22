@@ -31,11 +31,15 @@ modes:
         override 指定 4 本中、原曲テンポへスナップする傾向を確認（完全な
         hard preservation ではないが override も安定して反映されない）。
     physical.key:
-      support: supported
+      support: unsupported
       evidence: "Cowork 実測 2026-07-17〜19 cover n=4"
       note: >-
-        原曲の調へ強くアンカーされる（override 指定の有無によらず原曲キーを
-        維持）— 保持したい identity anchor の観点では有利な挙動。
+        キー変更（override）はこのモードでは届かない — 原曲キーへ強く
+        アンカーされ、override 指定の有無によらず原曲の調から動かなかった。
+        「届くか」（override 追従性=unsupported）と「保たれるか」（原曲キーの
+        保存性=有利）は別軸: キー保持（不変）に有利という保存側の性質は
+        identity anchor の evidence を参照（`arrange/identity.py` の
+        harmony domain preservation）。
     physical.valley_depth_target:
       support: unsupported
       evidence: "Cowork 実測 2026-07-17〜19 cover n=3 rounds"

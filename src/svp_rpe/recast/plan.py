@@ -3,16 +3,27 @@
 `build_recast_plan` は `LoadedRecastProject`（PR1 の loader が解決した参照一式）+
 `variant` + `backend` から、以下を 1 パイプラインとして評価する:
 
+0. 入力一式（project/score/identity_manifest/arrangement spec/capability
+   profile/mode_overrides）の raw bytes sha256 を合成した `inputs_digest` を計算
+   （`recast status` の stale run 検出用。`arrange.bundle.compute_content_digest` 流用）
 1. variant/backend 名の存在検証
 2. CompositionScore ロード + author field (TODO sentinel) 未解決チェック
+   （semantic 層限定ではなく `model_dump()` 全体を再帰走査する fail-closed ゲート）
 3. IdentityManifest ロード + artifact hash 照合
 4. ArrangementSpec ロード + `resolve_arrangement`
 5. `build_preservation_contract`
 6. capability profile + mode_overrides（指定時）ロード
 7. `build_performance_package`（純関数、strict= policy.capability_mode=="strict"）
 8. `require_verified_package` なら一時ディレクトリで `verify_package`
-9. 診断表（anchors / changed_fields）と推奨 1 行の構築
-10. `recast.state.record_state` による状態永続化
+9. 診断表（anchors / changed_fields）の構築。`changed_fields` に
+   `mode_support=="unsupported"` が 1 件でもあれば、anchor 配送と同じ
+   strict/advisory 意味論を適用する: strict は `blocked_capability` へ降格、
+   advisory は到達状態を維持したまま warnings へ積む（推奨 1 行も切替）
+
+**本関数はディスクへ副作用を持たない純粋関数** — `recast_plan.json` の publish と
+`recast.state.record_state` による状態永続化は呼び出し側（CLI）の責務であり、
+「plan JSON の書き込み成功後に state を記録する」順序も CLI 側が保証する
+（書き込み失敗時に stale state を残さないため）。
 
 各段の例外は診断へ変換し、最初のブロックで停止して到達状態を記録する
 （`blocked_authoring` / `blocked_capability` / `blocked_verification`）。
@@ -31,6 +42,7 @@ from typing import Any, Dict, List, Literal, Optional
 import yaml
 from pydantic import ValidationError
 
+from svp_rpe.arrange.bundle import compute_content_digest, sha256_file
 from svp_rpe.arrange.capabilities import (
     INPUT_CHANNELS,
     InputCapabilityProfile,
@@ -89,7 +101,8 @@ from svp_rpe.recast.models import (
     RecastModel,
     RecastProject,
 )
-from svp_rpe.recast.state import RecastState, record_state
+from svp_rpe.recast.run_paths import resolve_packages_dir
+from svp_rpe.recast.state import RecastState
 from svp_rpe.sentinels import is_todo_sentinel
 
 PreservationChangeMode = Literal["elastic", "free"]
@@ -149,10 +162,13 @@ class RecastPlan(RecastModel):
 
 @dataclass(frozen=True)
 class RecastPlanResult:
-    """`build_recast_plan` の戻り値: 決定論的 `plan` + human 向けテキスト。"""
+    """`build_recast_plan` の戻り値: 決定論的 `plan` + human 向けテキスト +
+    state 永続化用 `inputs_digest`（呼び出し側が `recast.state.record_state` へ
+    渡す。`plan` 自体には含めない — `recast_plan.json` の byte 互換を変えないため）。"""
 
     plan: RecastPlan
     text: str
+    inputs_digest: str
 
 
 @dataclass(frozen=True)
@@ -186,25 +202,49 @@ def _parse_yaml_mapping(raw_bytes: bytes, label: str, path_str: str) -> Dict[str
     return data
 
 
+def _atomic_write_text(path: Path, content: str) -> None:
+    """tempfile + `os.replace` による atomic publish（`recast/state.py` の
+    `_write_recast_state_atomically` と同型）。`build_recast_plan_artifacts` が
+    `resolve_packages_dir` へ compile 済み package/report を公開する際に使う
+    （PR3 #208 指摘 3: tempfile.TemporaryDirectory ではなく永続 builds_root
+    配下へ公開することで `artifact_base_locator` を checkout-stable にする）。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+def _collect_todo_sentinel_paths(value: Any, path: str, unresolved: List[str]) -> None:
+    """`value`（`CompositionScore.model_dump()` の canonical dump 断片）を再帰走査し、
+    `sentinels.is_todo_sentinel` に該当する文字列値の canonical path を `unresolved` へ
+    追記する。dict / list を降り、それ以外はリーフとして判定する（著者欄か計測欄かは
+    問わない — TODO が残る score は全面的に compile 不適格という fail-closed ゲート）。"""
+    if isinstance(value, dict):
+        for key, sub_value in value.items():
+            sub_path = f"{path}.{key}" if path else str(key)
+            _collect_todo_sentinel_paths(sub_value, sub_path, unresolved)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _collect_todo_sentinel_paths(item, f"{path}[{index}]", unresolved)
+    elif is_todo_sentinel(value):
+        unresolved.append(path)
+
+
 def _unresolved_author_field_paths(score: CompositionScore) -> List[str]:
-    """semantic 層（core / grv / delta_e / avoid / lyrics_presence）を走査し、
-    `sentinels.is_todo_sentinel` に該当する値が残っている canonical path 一覧を返す。
-    """
-    semantic = score.semantic
+    """`score` の canonical dump（`model_dump()`）全体を再帰走査し、
+    `sentinels.is_todo_sentinel` に該当する全ての文字列値を canonical path 付きで
+    返す — semantic 層に限らず structure[].role / structure[].physical を含む
+    score 全体が対象（1 件でも残っていれば compile 不適格）。"""
     unresolved: List[str] = []
-    if is_todo_sentinel(semantic.core):
-        unresolved.append("semantic.core")
-    if is_todo_sentinel(semantic.grv.primary):
-        unresolved.append("semantic.grv.primary")
-    if is_todo_sentinel(semantic.grv.secondary):
-        unresolved.append("semantic.grv.secondary")
-    if is_todo_sentinel(semantic.delta_e.overall):
-        unresolved.append("semantic.delta_e.overall")
-    for index, item in enumerate(semantic.avoid):
-        if is_todo_sentinel(item):
-            unresolved.append(f"semantic.avoid[{index}]")
-    if is_todo_sentinel(semantic.lyrics_presence):
-        unresolved.append("semantic.lyrics_presence")
+    _collect_todo_sentinel_paths(score.model_dump(), "", unresolved)
     return unresolved
 
 
@@ -289,6 +329,19 @@ def _build_changed_field_entries(
     ]
 
 
+def unsupported_changed_field_reasons(
+    changed_fields: List[ChangedFieldPlanEntry], invocation_mode: InvocationMode
+) -> List[str]:
+    """`changed_fields` のうち `mode_support=="unsupported"` な各 path から、
+    anchor 配送の warning/reason と同じ文体の 1 行診断を作る（`build_recast_plan`
+    の strict/advisory ゲートと CLI の state note 双方から共有する single source）。"""
+    return [
+        f"field {c.path} は invocation_mode {invocation_mode} で unsupported"
+        for c in changed_fields
+        if c.mode_support == "unsupported"
+    ]
+
+
 def _build_recommendation(
     blocked: Optional[BlockedInfo],
     state_reached: RecastState,
@@ -296,6 +349,12 @@ def _build_recommendation(
 ) -> str:
     if blocked is not None:
         if blocked.state == "blocked_capability":
+            if any(c.mode_support == "unsupported" for c in changed_fields):
+                return (
+                    "この invocation_mode では届かない変更が含まれています。capability_mode を "
+                    "advisory へ切替するか、届く invocation_mode（cover/prompt_only の切替）を "
+                    "検討してください。"
+                )
             return (
                 "capability_mode を advisory へ切替するか、hard 宣言した anchor の "
                 "要求を降格してください。"
@@ -351,10 +410,36 @@ def _render_text(plan: RecastPlan) -> str:
     return "\n".join(lines) + "\n"
 
 
+def compute_recast_inputs_digest(
+    loaded: LoadedRecastProject, *, variant: str, backend: str
+) -> str:
+    """`(variant, backend)` run が参照する入力一式の raw bytes sha256 を
+    canonical digest へ合成する（`arrange.bundle.compute_content_digest` 流用）。
+
+    `loaded` はロード時点で score/identity_manifest/arrangement/capability_profile
+    の実在を検証済みのため、ここでは読み取りをガードしない（`build_recast_plan` の
+    既存ステップ 3/6 の raw read と同じ規約）。`recast plan` はこの digest を
+    state へ永続化し、`recast status` は現在の入力から再計算した digest と
+    突き合わせて stale run（永続化後に入力が変更された run）を検出する。"""
+    components: Dict[str, str] = {
+        "project": loaded.sha256,
+        "score": sha256_file(loaded.score_path),
+        "identity_manifest": sha256_file(loaded.identity_manifest_path),
+        "arrangement_spec": sha256_file(loaded.arrangement_paths[variant]),
+        "capability_profile": sha256_file(loaded.capability_profile_paths[backend]),
+    }
+    mode_override_path = loaded.mode_override_paths.get(backend)
+    if mode_override_path is not None:
+        components["mode_overrides"] = sha256_file(mode_override_path)
+    return compute_content_digest(components)
+
+
 def build_recast_plan(
     loaded: LoadedRecastProject, *, variant: str, backend: str
 ) -> RecastPlanResult:
-    """`loaded` の (variant, backend) 組に対する RecastPlan を構築し、state を永続化する。
+    """`loaded` の (variant, backend) 組に対する RecastPlan を構築する（純粋関数、
+    ディスクへの副作用なし — `recast_plan.json` の publish と
+    `recast.state.record_state` は呼び出し側 CLI の責務、PR2 P2 対応）。
 
     既存公開 API（PR2 由来）: 返り値の型・JSON 出力は不変。内部的には
     `build_recast_plan_artifacts` の `result` フィールドを返すだけの薄いラッパー
@@ -367,10 +452,11 @@ def build_recast_plan(
 def build_recast_plan_artifacts(
     loaded: LoadedRecastProject, *, variant: str, backend: str
 ) -> RecastPlanArtifacts:
-    """`build_recast_plan` の完全版: `RecastPlanResult` に加え、到達状態が
-    `compiled`/`verified` のときの compile 済み成果物一式（`RecastPlanArtifacts`）
-    を返す。state 永続化・診断構築のロジックは `build_recast_plan` と完全に同一
-    （PR2 からの挙動は一切変えない）。
+    """`build_recast_plan` の完全版: `RecastPlanResult`（`inputs_digest` 込み）に
+    加え、到達状態が `compiled`/`verified` のときの compile 済み成果物一式
+    （`RecastPlanArtifacts`）を返す。**純粋関数**（ディスクへの副作用なし —
+    `recast_plan.json` の publish・`record_state` はいずれも呼び出し側の責務、
+    PR2 P2 対応）。診断構築のロジックは `build_recast_plan` と完全に同一。
     """
     project: RecastProject = loaded.project
 
@@ -386,6 +472,7 @@ def build_recast_plan_artifacts(
         )
 
     backend_ref: BackendRef = project.backends[backend]
+    inputs_digest = compute_recast_inputs_digest(loaded, variant=variant, backend=backend)
 
     def _finalize(
         *,
@@ -417,9 +504,7 @@ def build_recast_plan_artifacts(
             warnings=warnings or [],
             recommendation=recommendation,
         )
-        note = "; ".join(blocked.reasons) if blocked is not None else None
-        record_state(loaded.project_dir, variant, backend, state_reached, note)
-        result = RecastPlanResult(plan=plan, text=_render_text(plan))
+        result = RecastPlanResult(plan=plan, text=_render_text(plan), inputs_digest=inputs_digest)
         return RecastPlanArtifacts(
             result=result,
             backend_ref=backend_ref,
@@ -531,80 +616,105 @@ def build_recast_plan_artifacts(
     ).profile_key
     device_profile = load_device_profile(render_generator)
 
-    with tempfile.TemporaryDirectory() as tmp_dir_str:
-        package_dir = Path(tmp_dir_str)
-        try:
-            artifact_base_locator = Path(
-                os.path.relpath(manifest_path.resolve().parent, package_dir.resolve())
-            ).as_posix()
-        except ValueError as exc:
-            return _finalize(
-                state_reached="blocked_capability",
-                blocked=BlockedInfo(state="blocked_capability", reasons=[str(exc)]),
-            )
-
-        try:
-            compiled = build_performance_package(
-                manifest,
-                contract,
-                profile,
-                resolution.derived_score,
-                device_profile=device_profile,
-                artifact_base_locator=artifact_base_locator,
-                manifest_sha256=manifest_sha256,
-                contract_sha256=contract_sha256,
-                profile_sha256=profile_sha256,
-                derived_score_sha256=derived_score_sha256,
-                strict=(project.policy.capability_mode == "strict"),
-                compiler_package_version=detect_compiler_package_version(),
-                compiler_git_commit=detect_compiler_git_commit(),
-            )
-        except (PackageCompilationError, ValidationError) as exc:
-            return _finalize(
-                state_reached="blocked_capability",
-                blocked=BlockedInfo(state="blocked_capability", reasons=[str(exc)]),
-            )
-
-        warnings = list(compiled.report.warnings)
-
-        # --- step 8: optional verification ----------------------------------
-        if project.policy.require_verified_package:
-            (package_dir / PERFORMANCE_PACKAGE_FILENAME).write_text(
-                compiled.package_json, encoding="utf-8"
-            )
-            (package_dir / COMPILATION_REPORT_FILENAME).write_text(
-                compiled.report_json, encoding="utf-8"
-            )
-            verify_report = verify_package(package_dir / PERFORMANCE_PACKAGE_FILENAME, manifest_path)
-            if not verify_report.ok:
-                reasons = [
-                    f"{check.group} {check.label}: {check.detail}"
-                    for check in verify_report.failures
-                ]
-                return _finalize(
-                    state_reached="blocked_verification",
-                    blocked=BlockedInfo(state="blocked_verification", reasons=reasons),
-                )
-            state_reached: RecastState = "verified"
-        else:
-            state_reached = "compiled"
-
-        # --- step 9: diagnostics tables ---------------------------------------
-        anchors = _build_anchor_entries(compiled.package, manifest_by_id)
-        changed_fields = _build_changed_field_entries(
-            resolution.changes, backend_ref.invocation_mode, mode_overrides_config
+    # package_dir は `<builds_root>/packages/<variant>@<backend>/` の永続公開先
+    # （PR3 #208 指摘 3）: tempfile.TemporaryDirectory だと `artifact_base_locator`
+    # （manifest ディレクトリからの相対 locator）が呼び出し環境のテンポラリ
+    # パス深さに依存し package_sha256/content_digest が非決定になっていた。
+    # builds_root 配下の固定パスへ変えることで locator が checkout-stable になる
+    # （builds_root 自体が project_dir から相対解決される既存契約 — loader.py
+    # `_resolve_builds_root`）。この dir は per-(variant, backend) の mutable
+    # 最新スナップショット（`recast_plan.json`/`recast_state.json` と同じ規約
+    # — content-addressed な `arrange`/`package` の builds-root 免疫契約とは別物
+    # で、再実行のたびに上書きしてよい）。
+    package_dir = resolve_packages_dir(loaded, variant, backend)
+    try:
+        artifact_base_locator = Path(
+            os.path.relpath(manifest_path.resolve().parent, package_dir.resolve())
+        ).as_posix()
+    except ValueError as exc:
+        return _finalize(
+            state_reached="blocked_capability",
+            blocked=BlockedInfo(state="blocked_capability", reasons=[str(exc)]),
         )
 
-        return _finalize(
-            state_reached=state_reached,
-            blocked=None,
-            anchors=anchors,
-            changed_fields=changed_fields,
-            warnings=warnings,
-            compiled=compiled,
-            derived_score=resolution.derived_score,
+    try:
+        compiled = build_performance_package(
+            manifest,
+            contract,
+            profile,
+            resolution.derived_score,
+            device_profile=device_profile,
+            artifact_base_locator=artifact_base_locator,
             manifest_sha256=manifest_sha256,
             contract_sha256=contract_sha256,
             profile_sha256=profile_sha256,
             derived_score_sha256=derived_score_sha256,
+            strict=(project.policy.capability_mode == "strict"),
+            compiler_package_version=detect_compiler_package_version(),
+            compiler_git_commit=detect_compiler_git_commit(),
         )
+    except (PackageCompilationError, ValidationError) as exc:
+        return _finalize(
+            state_reached="blocked_capability",
+            blocked=BlockedInfo(state="blocked_capability", reasons=[str(exc)]),
+        )
+
+    warnings = list(compiled.report.warnings)
+
+    # package/report を永続公開する（require_verified_package の有無に関わらず
+    # 常に — "compiled" 到達時も最新の compile 結果を builds_root へ残す）。
+    _atomic_write_text(package_dir / PERFORMANCE_PACKAGE_FILENAME, compiled.package_json)
+    _atomic_write_text(package_dir / COMPILATION_REPORT_FILENAME, compiled.report_json)
+
+    # --- step 8: optional verification --------------------------------------
+    if project.policy.require_verified_package:
+        verify_report = verify_package(package_dir / PERFORMANCE_PACKAGE_FILENAME, manifest_path)
+        if not verify_report.ok:
+            reasons = [
+                f"{check.group} {check.label}: {check.detail}" for check in verify_report.failures
+            ]
+            return _finalize(
+                state_reached="blocked_verification",
+                blocked=BlockedInfo(state="blocked_verification", reasons=reasons),
+            )
+        state_reached: RecastState = "verified"
+    else:
+        state_reached = "compiled"
+
+    # --- step 9: diagnostics tables -------------------------------------------
+    anchors = _build_anchor_entries(compiled.package, manifest_by_id)
+    changed_fields = _build_changed_field_entries(
+        resolution.changes, backend_ref.invocation_mode, mode_overrides_config
+    )
+
+    # anchor 配送と同じ strict/advisory 意味論を changed_fields にも適用する:
+    # mode_overrides が「この invocation_mode では届かない」と実測している変更が
+    # 1 件でもあれば、strict は blocked_capability へ降格（生成しても届かない変更を
+    # verified/exit 0 で推奨しない）、advisory は到達状態を維持しつつ warnings へ積む。
+    unsupported_reasons = unsupported_changed_field_reasons(
+        changed_fields, backend_ref.invocation_mode
+    )
+    if unsupported_reasons:
+        if project.policy.capability_mode == "strict":
+            return _finalize(
+                state_reached="blocked_capability",
+                blocked=BlockedInfo(state="blocked_capability", reasons=unsupported_reasons),
+                anchors=anchors,
+                changed_fields=changed_fields,
+                warnings=warnings,
+            )
+        warnings = warnings + unsupported_reasons
+
+    return _finalize(
+        state_reached=state_reached,
+        blocked=None,
+        anchors=anchors,
+        changed_fields=changed_fields,
+        warnings=warnings,
+        compiled=compiled,
+        derived_score=resolution.derived_score,
+        manifest_sha256=manifest_sha256,
+        contract_sha256=contract_sha256,
+        profile_sha256=profile_sha256,
+        derived_score_sha256=derived_score_sha256,
+    )

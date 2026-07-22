@@ -28,11 +28,18 @@ import yaml
 
 from svp_rpe.arrange.capabilities import InputCapabilityProfile
 from svp_rpe.arrange.identity import IdentityManifest
-from svp_rpe.arrange.package import CompiledPerformancePackage, PerformancePackage
+from svp_rpe.arrange.package import (
+    COMPILATION_REPORT_FILENAME,
+    PERFORMANCE_PACKAGE_FILENAME,
+    CompiledPerformancePackage,
+    PerformancePackage,
+)
+from svp_rpe.arrange.pathsafe import resolve_confined
 from svp_rpe.compose.models import CompositionScore
 from svp_rpe.recast.loader import LoadedRecastProject
 from svp_rpe.recast.models import BackendRef, InvocationKind, InvocationMode, RecastError
 from svp_rpe.recast.plan import RecastPlanArtifacts, RecastPlanResult, build_recast_plan_artifacts
+from svp_rpe.recast.run_paths import resolve_orders_dir, resolve_packages_dir, resolve_takes_dir
 
 
 class RecastBackendUnavailable(RecastError):
@@ -111,19 +118,51 @@ def build_recast_run_context(
     )
 
 
-def _run_key(variant: str, backend: str) -> str:
-    return f"{variant}@{backend}"
+# `resolve_order_dir`/`resolve_takes_dir` は `recast/run_paths.py`（PR3 #208
+# 指摘 3: packages/ の永続公開先追加に伴い single source を切り出した）へ委譲する
+# 薄いエイリアス。既存呼び出し元（本モジュール内・テスト）の名前は変えない。
+resolve_order_dir = resolve_orders_dir
 
 
-def resolve_order_dir(loaded: LoadedRecastProject, variant: str, backend: str) -> Path:
-    """manual invoker が注文書 6 ファイルを公開する先: `<builds_root>/orders/<variant>@<backend>/`。"""
-    return loaded.builds_root / "orders" / _run_key(variant, backend)
+def collect_protected_input_paths(
+    loaded: LoadedRecastProject, variant: str, backend: str
+) -> list[Path]:
+    """`(variant, backend)` run が参照する入力一式（project.yaml 自身 / score /
+    identity manifest / manifest が参照する source・各 anchor artifact /
+    arrangement spec / capability_profile / mode_overrides）と、plan 段が
+    package/report を公開する `packages/<variant>@<backend>/` の 2 ファイルを
+    集める。
 
+    manual invoker が orders/ を公開する前・local invoker が takes/ を公開する
+    前に、出力ファイルパスがこれらのいずれとも衝突しないことを保証するために使う
+    （Codex P2 review, PR3 #208 指摘 2: 従来は project/score/manifest/arrangement
+    のみが対象で、project ローカルの capability_profile / mode_overrides や
+    manifest 側の anchor artifact / source が抜けていた — それらが orders 出力
+    パスと衝突すると入力を無警告で上書き破壊してしまう）。
+    """
+    paths: list[Path] = [
+        loaded.path,
+        loaded.score_path,
+        loaded.identity_manifest_path,
+        loaded.arrangement_paths[variant],
+        loaded.capability_profile_paths[backend],
+    ]
+    mode_override_path = loaded.mode_override_paths.get(backend)
+    if mode_override_path is not None:
+        paths.append(mode_override_path)
 
-def resolve_takes_dir(loaded: LoadedRecastProject, variant: str, backend: str) -> Path:
-    """生成済みテイクの収蔵先（manual collect / local invoke 共通）:
-    `<builds_root>/takes/<variant>@<backend>/`。"""
-    return loaded.builds_root / "takes" / _run_key(variant, backend)
+    manifest_dir = loaded.identity_manifest_path.resolve().parent
+    manifest_data = yaml.safe_load(loaded.identity_manifest_path.read_bytes())
+    if isinstance(manifest_data, dict):
+        manifest = IdentityManifest.model_validate(manifest_data)
+        paths.append(resolve_confined(manifest.source.locator, manifest_dir))
+        for anchor in manifest.anchors:
+            paths.append(resolve_confined(anchor.artifact, manifest_dir))
+
+    packages_dir = resolve_packages_dir(loaded, variant, backend)
+    paths.append(packages_dir / PERFORMANCE_PACKAGE_FILENAME)
+    paths.append(packages_dir / COMPILATION_REPORT_FILENAME)
+    return paths
 
 
 def read_identity_source(loaded: LoadedRecastProject) -> tuple[str, str]:
@@ -165,10 +204,17 @@ def base_prepared_invocation(ctx: RecastRunContext) -> PreparedInvocation:
 
 
 def atomic_write_bytes(path: Path, data: bytes) -> None:
-    """tempfile + `os.replace` による atomic publish（binary 版。
+    """tempfile + `os.replace` による atomic publish（binary 版、単一ファイル）。
     `recast/state.py` の `_write_recast_state_atomically` と同型 — テキスト
     専用の `cli/builds_root.py:_publish_artifacts_atomically` は
-    `str.encode('utf-8')` 前提のため音声 bytes には使えず、本関数を別途持つ）。"""
+    `str.encode('utf-8')` 前提のため音声 bytes には使えず、本関数を別途持つ。
+
+    複数ファイルを「全部揃って初めて意味を持つ 1 組」として publish する場合
+    （take 音声 + `take.json` provenance 等）は本関数を個別に 2 回呼ばず、
+    `atomic_publish_bytes_bundle` を使うこと（Codex P2 review, PR3 #208
+    指摘 1: 個別 publish だと 1 本目成功・2 本目失敗で provenance を伴わない
+    半端な成果物が残り得る）。
+    """
     import os
     import tempfile
 
@@ -184,6 +230,74 @@ def atomic_write_bytes(path: Path, data: bytes) -> None:
         except OSError:
             pass
         raise
+
+
+def atomic_publish_bytes_bundle(
+    output_dir: Path,
+    contents: dict[str, bytes],
+    *,
+    protected_inputs: Optional[list[Path]] = None,
+) -> None:
+    """複数バイナリファイルを「全部揃って初めて意味を持つ 1 組」として atomic
+    publish する（binary 版 `cli/builds_root.py:_publish_artifacts_atomically`
+    — recast->cli の層依存を避けるため import せずここへ複製・binary 化した
+    もの。ロールバック契約はそちらの docstring と同一）。
+
+    `protected_inputs` を渡すと、`output_dir / filename` のいずれかがそれらの
+    いずれかと一致する場合は何も書かずに `ValueError` を送出する（fail-closed
+    — `_publish_artifacts_atomically` の同名パラメータと同じ契約）。
+
+    Codex P2 review（PR3 #208 指摘 1）対応: `take-01.wav` を単独で最終名へ
+    publish してから `take.json` を書くと、後者が失敗した時に provenance の
+    無い音声だけが `takes_dir` に残ってしまう。`ManualInvoker.collect` /
+    `DeterministicInvoker.invoke` は本関数で音声 + `take.json` を 1 組として
+    publish し、途中失敗時は（ステージング中の失敗はもちろん、`os.replace`
+    による最終 publish 中の失敗も）ロールバックして `output_dir` を呼び出し前
+    と同じ状態に戻す。
+    """
+    import os
+    import tempfile
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if protected_inputs:
+        resolved_inputs = {path.resolve() for path in protected_inputs}
+        for filename in contents:
+            target = output_dir / filename
+            if target.resolve() in resolved_inputs:
+                raise ValueError(f"output path collides with a protected input path: {target}")
+            if target.is_dir():
+                raise ValueError(f"output path is an existing directory: {target}")
+
+    with tempfile.TemporaryDirectory(dir=output_dir) as staging:
+        staging_dir = Path(staging)
+        for filename, data in contents.items():
+            (staging_dir / filename).write_bytes(data)
+
+        snapshots: dict[str, Path] = {}
+        published: list[str] = []
+        try:
+            for filename in contents:
+                target = output_dir / filename
+                if target.exists():
+                    previous = staging_dir / f"{filename}.prev"
+                    os.replace(target, previous)
+                    snapshots[filename] = previous
+            for filename in contents:
+                os.replace(staging_dir / filename, output_dir / filename)
+                published.append(filename)
+        except OSError:
+            for filename in published:
+                try:
+                    os.unlink(output_dir / filename)
+                except OSError:
+                    pass
+            for filename, previous in snapshots.items():
+                try:
+                    os.replace(previous, output_dir / filename)
+                except OSError:
+                    pass
+            raise
 
 
 @dataclass(frozen=True)

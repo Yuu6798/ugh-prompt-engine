@@ -32,8 +32,9 @@ from svp_rpe.recast.backend import (
     GeneratedTake,
     PreparedInvocation,
     RecastRunContext,
-    atomic_write_bytes,
+    atomic_publish_bytes_bundle,
     base_prepared_invocation,
+    collect_protected_input_paths,
 )
 from svp_rpe.recast.loader import LoadedRecastProject
 from svp_rpe.recast.models import RecastError
@@ -198,12 +199,11 @@ class ManualInvoker:
             "next_command.txt": next_command,
             "order_sheet.md": _order_sheet_md(ctx, prepared, next_command),
         }
-        protected_inputs = [
-            ctx.loaded.path,
-            ctx.loaded.score_path,
-            ctx.loaded.identity_manifest_path,
-            ctx.loaded.arrangement_paths[ctx.variant],
-        ]
+        # 出力パスが project.yaml/score/identity manifest/arrangement だけでなく
+        # capability_profile / mode_overrides / manifest 側 anchor artifact・
+        # source / packages/ 公開物のいずれとも衝突しないことを保証する
+        # （Codex P2 review, PR3 #208 指摘 2 — 従来は前 4 者のみが対象だった）。
+        protected_inputs = collect_protected_input_paths(ctx.loaded, ctx.variant, ctx.backend)
         _publish_artifacts_atomically(contents, prepared.order_dir, protected_inputs)
         return prepared
 
@@ -225,8 +225,8 @@ class ManualInvoker:
             )
         data = supplied_audio.read_bytes()
         sha256 = hashlib.sha256(data).hexdigest()
-        target = prepared.takes_dir / f"take-01{extension}"
-        atomic_write_bytes(target, data)
+        take_filename = f"take-01{extension}"
+        target = prepared.takes_dir / take_filename
 
         take_record = _canonical_json(
             {
@@ -236,7 +236,15 @@ class ManualInvoker:
                 "original_filename": supplied_audio.name,
             }
         )
-        atomic_write_bytes(prepared.takes_dir / "take.json", take_record.encode("utf-8"))
+        # 音声 + take.json を 1 組として atomic publish する（Codex P2 review,
+        # PR3 #208 指摘 1: 個別 publish だと take.json 書き込み失敗時に
+        # provenance の無い音声だけが takes_dir に残り得る）。supplied_audio
+        # 自体との自己衝突（読み取り元＝書き込み先）も拒否する。
+        atomic_publish_bytes_bundle(
+            prepared.takes_dir,
+            {take_filename: data, "take.json": take_record.encode("utf-8")},
+            protected_inputs=[supplied_audio],
+        )
 
         note: Optional[str] = f"collected from {supplied_audio.name}"
         return GeneratedTake(

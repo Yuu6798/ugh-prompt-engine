@@ -22,7 +22,7 @@ from svp_rpe.recast.backend import (
     GeneratedTake,
     PreparedInvocation,
     RecastRunContext,
-    atomic_write_bytes,
+    atomic_publish_bytes_bundle,
     base_prepared_invocation,
 )
 from svp_rpe.recast.models import RecastError
@@ -42,8 +42,8 @@ class DeterministicInvoker:
         audio_bytes = wav_bytes(samples)
         sha256 = sha256_bytes(audio_bytes)
 
-        target = prepared.takes_dir / "take-01.wav"
-        atomic_write_bytes(target, audio_bytes)
+        take_filename = "take-01.wav"
+        target = prepared.takes_dir / take_filename
 
         take_record = (
             json.dumps(
@@ -58,7 +58,13 @@ class DeterministicInvoker:
             )
             + "\n"
         )
-        atomic_write_bytes(prepared.takes_dir / "take.json", take_record.encode("utf-8"))
+        # 音声 + take.json を 1 組として atomic publish する（Codex P2 review,
+        # PR3 #208 指摘 1: 個別 publish だと take.json 書き込み失敗時に
+        # provenance の無い音声だけが takes_dir に残り得る）。
+        atomic_publish_bytes_bundle(
+            prepared.takes_dir,
+            {take_filename: audio_bytes, "take.json": take_record.encode("utf-8")},
+        )
 
         return GeneratedTake(
             audio_path=target,

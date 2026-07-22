@@ -61,12 +61,21 @@ class RecastStateHistoryEntry(RecastStateModel):
 
 
 class RecastRunState(RecastStateModel):
-    """1 (variant, backend) 実行の現在状態 + 履歴全体。"""
+    """1 (variant, backend) 実行の現在状態 + 履歴全体。
+
+    `inputs_digest`: この run を記録した時点の入力一式（project/score/
+    identity_manifest/arrangement spec/capability profile/mode_overrides）の
+    合成 digest（`recast.plan.compute_recast_inputs_digest`）。optional —
+    本フィールド追加前に書かれた既存 `recast_state.json` との後方互換のため
+    `None` を許容する（`recast status` は `None` を「不明」として stale
+    判定をスキップし、false positive を出さない）。
+    """
 
     state: RecastState
     note: Optional[str] = None
     updated_at: str
     history: List[RecastStateHistoryEntry] = Field(default_factory=list)
+    inputs_digest: Optional[str] = None
 
 
 class RecastStateFile(RecastStateModel):
@@ -133,25 +142,40 @@ def record_state(
     backend: str,
     state: RecastState,
     note: Optional[str] = None,
+    *,
+    inputs_digest: Optional[str] = None,
 ) -> RecastStateFile:
     """`(variant, backend)` 実行の到達状態を記録し、更新後の `RecastStateFile` を返す。
 
-    再実行冪等: 直前の記録済み状態が `state` + `note` の組で完全一致する場合は
-    history に重複追加せず、ファイルも書き換えない（呼び出し側から見て純粋な
-    no-op — `updated_at` も更新しない）。それ以外は history へ 1 件追記し、
-    atomic write で publish する。
+    再実行冪等: 直前の記録済み状態が `state` + `note` + `inputs_digest` の組で
+    完全一致する場合は history に重複追加せず、ファイルも書き換えない（呼び出し側
+    から見て純粋な no-op — `updated_at` も更新しない）。`inputs_digest` も
+    同一性判定に含める理由: 入力が変わっても偶然 state/note が同じになるケースで
+    digest だけ古いまま no-op してしまうと `recast status` の stale 検出が機能
+    しなくなるため。それ以外は history へ 1 件追記し、atomic write で publish する。
     """
     state_file = load_recast_state(project_dir)
     key = _run_key(variant, backend)
     existing = state_file.runs.get(key)
-    if existing is not None and existing.state == state and existing.note == note:
+    if (
+        existing is not None
+        and existing.state == state
+        and existing.note == note
+        and existing.inputs_digest == inputs_digest
+    ):
         return state_file
 
     now = _now_iso()
     new_history = list(existing.history) if existing is not None else []
     new_history.append(RecastStateHistoryEntry(state=state, note=note, at=now))
     new_runs = dict(state_file.runs)
-    new_runs[key] = RecastRunState(state=state, note=note, updated_at=now, history=new_history)
+    new_runs[key] = RecastRunState(
+        state=state,
+        note=note,
+        updated_at=now,
+        history=new_history,
+        inputs_digest=inputs_digest,
+    )
     new_state_file = RecastStateFile(schema_version=RECAST_STATE_SCHEMA_VERSION, runs=new_runs)
 
     content = (

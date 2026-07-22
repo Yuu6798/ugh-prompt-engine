@@ -91,48 +91,31 @@ def _prepare_manual(project_path: Path):
 
 # --- manual: order file content -----------------------------------------------
 
-# `prompt.json` / `expected_artifacts.json` の `content_digest`/`package_sha256`
-# は byte-pin 対象から除外する（下記 test 内コメント参照: PR3 で発見した既存
-# plan.py/package.py 由来の非決定要素 — `artifact_base.locator` が
-# `tempfile.TemporaryDirectory()` の実パス深さに依存するため）。
-_VOLATILE_DIGEST_FIELDS = ("content_digest", "package_sha256")
-
-
-def _normalize_digest_fields(payload: dict) -> dict:
-    normalized = dict(payload)
-    for field in _VOLATILE_DIGEST_FIELDS:
-        if field in normalized:
-            normalized[field] = "<sha256>"
-    return normalized
-
 
 def test_manual_order_files_match_committed_snapshot(tmp_path: Path) -> None:
+    """全 6 ファイルを byte-pin する — `prompt.json`/`expected_artifacts.json` の
+    `content_digest`/`package_sha256` も含む。以前はこれらを正規化して除外していた
+    （`plan.py` が `tempfile.TemporaryDirectory()` を package の一時置き場に使い、
+    `artifact_base.locator` が呼び出し環境のテンポラリパス深さに依存し
+    package_sha256/content_digest が非決定だったため）が、Codex P2 review
+    （PR3 #208 指摘 3）で `plan.py` が `<builds_root>/packages/<variant>@<backend>/`
+    へ package/report を永続公開するよう修正され、`artifact_base.locator` は
+    project_dir 配下の固定深さのみに依存する checkout-stable な値になった —
+    正規化 workaround は不要になったため撤去した。"""
     project_path = _copy_demo_project(tmp_path)
     _loaded, _invoker, prepared = _prepare_manual(project_path)
 
-    for name in ("lyrics.txt", "section_tags.txt", "order_sheet.md", "next_command.txt"):
+    for name in (
+        "prompt.json",
+        "lyrics.txt",
+        "section_tags.txt",
+        "order_sheet.md",
+        "expected_artifacts.json",
+        "next_command.txt",
+    ):
         actual = (prepared.order_dir / name).read_text(encoding="utf-8")
         expected = (EXPECTED_ORDERS / name).read_text(encoding="utf-8")
         assert actual == expected, f"order file drift: {name}"
-
-    # prompt.json / expected_artifacts.json: PR3 で発見した逸脱事項 —
-    # `content_digest`/`package_sha256` の実値は `build_performance_package`
-    # (`arrange/package.py`, PR1/PR2 由来・PR3 では変更していない) の
-    # `artifact_base.locator` が `plan.py` 内の `tempfile.TemporaryDirectory()`
-    # (package_dir) と identity manifest ディレクトリとの相対深さに依存するため、
-    # 呼び出し環境（cwd や pytest tmp_path のネスト段数等）によって変わり得る
-    # （環境非依存の byte-pin 対象にできない）。ハッシュ以外の全フィールドは
-    # byte-pin し、ハッシュ自身は「この実行が実際に計算した値と一致するか」で
-    # 検証する（`test_manual_order_files_are_byte_identical_across_reruns` が
-    # 同一環境内での再現性は別途保証する）。
-    for name in ("prompt.json", "expected_artifacts.json"):
-        actual_json = json.loads((prepared.order_dir / name).read_text(encoding="utf-8"))
-        expected_json = json.loads((EXPECTED_ORDERS / name).read_text(encoding="utf-8"))
-        assert _normalize_digest_fields(actual_json) == _normalize_digest_fields(
-            expected_json
-        ), f"order file drift (ignoring volatile digest fields): {name}"
-        assert actual_json["content_digest"] == prepared.content_digest
-        assert actual_json["package_sha256"] == prepared.package_sha256
 
 
 _TIMESTAMP_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
@@ -259,6 +242,79 @@ def test_manual_collect_writes_take_and_take_json(tmp_path: Path) -> None:
     assert take_json["backend_name"] == "suno"
 
 
+def test_manual_collect_take_json_failure_leaves_no_orphaned_audio(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 review（PR3 #208 指摘 1）: `take-01.wav` を先に最終名へ publish
+    してから `take.json` を書くと、後者が失敗したときに provenance の無い音声
+    だけが `takes_dir` に残ってしまう。`atomic_publish_bytes_bundle` は両方を
+    staging してから publish するため、`take.json` 側の最終 rename を失敗
+    注入しても `take-01.wav` が残らないことを検証する。"""
+    import os
+
+    project_path = _copy_demo_project(tmp_path)
+    _loaded, invoker, prepared = _prepare_manual(project_path)
+    supplied = tmp_path / "external_take.wav"
+    supplied.write_bytes(b"RIFF....WAVEfake-audio-bytes")
+
+    real_replace = os.replace
+
+    def flaky_replace(src: object, dst: object) -> None:
+        if str(dst).endswith("take.json"):
+            raise OSError("simulated disk full while publishing take.json")
+        real_replace(src, dst)
+
+    monkeypatch.setattr("os.replace", flaky_replace)
+
+    with pytest.raises(OSError):
+        invoker.collect(prepared, supplied)
+
+    assert not (prepared.takes_dir / "take-01.wav").exists()
+    assert not (prepared.takes_dir / "take.json").exists()
+
+
+# --- manual: orders publish collision guard --------------------------------------
+
+
+def test_manual_orders_publish_rejects_mode_overrides_colliding_with_output(
+    tmp_path: Path,
+) -> None:
+    """Codex P2 review（PR3 #208 指摘 2）: 従来の衝突ガードは
+    project/score/identity_manifest/arrangement のみが対象で、project ローカルの
+    capability_profile / mode_overrides は対象外だった。ここでは
+    `backends.suno.mode_overrides` を orders 出力パス（`prompt.json`）の位置に
+    直接置き、`prepare()` が publish 前に fail-closed で拒否する（かつ既存内容を
+    上書きしない）ことを検証する。"""
+    project_path = _copy_demo_project(tmp_path)
+    project_dir = project_path.parent
+
+    colliding_path = project_dir / "builds" / "orders" / "edm@suno" / "prompt.json"
+    colliding_path.parent.mkdir(parents=True, exist_ok=True)
+    original_mode_overrides = (
+        Path("config/mode_overrides/suno.yaml").read_bytes()
+    )
+    colliding_path.write_bytes(original_mode_overrides)
+
+    project_text = project_path.read_text(encoding="utf-8")
+    updated = project_text.replace(
+        'mode_overrides: "suno"',
+        'mode_overrides: "builds/orders/edm@suno/prompt.json"',
+        1,
+    )
+    assert updated != project_text  # sanity
+    project_path.write_text(updated, encoding="utf-8")
+
+    loaded = load_recast_project(project_path)
+    ctx = build_recast_run_context(loaded, variant="edm", backend="suno")
+    invoker = resolve_invoker(ctx.backend_ref, ctx.profile)
+
+    with pytest.raises(ValueError):
+        invoker.prepare(ctx)
+
+    # fail-closed: 衝突先の既存内容（mode_overrides YAML）が上書きされていない。
+    assert colliding_path.read_bytes() == original_mode_overrides
+
+
 # --- deterministic: invoke + determinism ----------------------------------------
 
 
@@ -282,6 +338,40 @@ def test_deterministic_invoke_writes_take(tmp_path: Path) -> None:
     take_json = json.loads((prepared.takes_dir / "take.json").read_text(encoding="utf-8"))
     assert take_json["sha256"] == take.sha256
     assert take_json["source"] == "local"
+
+
+@pytest.mark.slow
+def test_deterministic_invoke_take_json_failure_leaves_no_orphaned_audio(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 review（PR3 #208 指摘 1）: `DeterministicInvoker.invoke` も
+    manual collect と同じ atomic bundle publish を使う — `take.json` の最終
+    rename を失敗注入しても `take-01.wav` が残らないことを検証する。"""
+    import os
+
+    project_path = _copy_demo_project(tmp_path)
+    _add_target_backend_variant(
+        project_path, variant_name="edm_deterministic", target_backend="deterministic"
+    )
+    loaded = load_recast_project(project_path)
+    ctx = build_recast_run_context(loaded, variant="edm_deterministic", backend="deterministic")
+    invoker = resolve_invoker(ctx.backend_ref, ctx.profile)
+    prepared = invoker.prepare(ctx)
+
+    real_replace = os.replace
+
+    def flaky_replace(src: object, dst: object) -> None:
+        if str(dst).endswith("take.json"):
+            raise OSError("simulated disk full while publishing take.json")
+        real_replace(src, dst)
+
+    monkeypatch.setattr("os.replace", flaky_replace)
+
+    with pytest.raises(OSError):
+        invoker.invoke(prepared)
+
+    assert not (prepared.takes_dir / "take-01.wav").exists()
+    assert not (prepared.takes_dir / "take.json").exists()
 
 
 @pytest.mark.slow
