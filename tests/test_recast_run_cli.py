@@ -396,6 +396,12 @@ def test_recast_ingest_rejects_when_inputs_swapped_during_rebuild(
     state_before = load_recast_state(project_dir)
     assert state_before.runs["edm@suno"].state == "awaiting_generation"
 
+    # `recast run` が plan 段（`build_recast_plan_artifacts(..., publish=True)`）
+    # で既に公開済みの package（Codex P2, #210 round 3 指摘4 の対象そのもの）。
+    package_path = project_dir / "builds" / "packages" / "edm@suno" / "performance_package.json"
+    assert package_path.is_file()  # sanity: recast run が公開済み
+    package_bytes_before = package_path.read_bytes()
+
     takes_dir = project_dir / "builds" / "takes" / "edm@suno"
     takes_dir.mkdir(parents=True, exist_ok=True)
     audio_path = takes_dir / "take-01.wav"
@@ -440,6 +446,13 @@ def test_recast_ingest_rejects_when_inputs_swapped_during_rebuild(
 
     # 旧 plan は非破壊（rebuild 済みの新入力向け plan で上書き publish されない）。
     assert plan_path.read_bytes() == plan_bytes_before
+
+    # 旧 package も非破壊（Codex P2, #210 round 3 指摘4: rebuild を
+    # `publish=False` で行い、digest 突合を通過するまで package を
+    # publish しないことの機械 assert — 従来は rebuild 自体が
+    # `publish=True` で走っていたため、この後の digest 拒否より前に
+    # 差し替え後の入力で package が上書きされてしまっていた）。
+    assert package_path.read_bytes() == package_bytes_before
 
     # take は収蔵されない（旧注文向け音声が新 plan の generated として記録されない）。
     assert not (takes_dir / "take.json").exists()

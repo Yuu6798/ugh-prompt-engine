@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Optional, Protocol
+from typing import Dict, Literal, Optional, Protocol
 
 import yaml
 
@@ -63,6 +63,14 @@ class RecastRunContext:
     plan_result: RecastPlanResult
     compiled: CompiledPerformancePackage
     derived_score: CompositionScore
+    # `lyrics_text`/`section_map` anchor の hash 照合済み bytes（anchor_id
+    # キー）。plan 段（`build_recast_plan_artifacts`）が single-read で 1 回
+    # だけ読んだものをそのまま引き回す — `ManualInvoker.prepare()` の注文書
+    # 描画（`lyrics.txt`/`section_tags.txt`）がこれを使い、artifact ファイルを
+    # 再 read しない（Codex P2 review round 11, PR3 #208 指摘22: 従来は
+    # 注文書描画時に `resolve_confined(...).read_text()` で disk から再 read
+    # しており、plan 段の hash 検証とファイル内容が乖離し得る TOCTOU があった）。
+    channel_artifact_bytes: Dict[str, bytes]
 
 
 def load_backend_capability_profile(
@@ -106,6 +114,7 @@ def run_context_from_plan_artifacts(
         plan_result=artifacts.result,
         compiled=artifacts.compiled,
         derived_score=artifacts.derived_score,
+        channel_artifact_bytes=artifacts.channel_artifact_bytes,
     )
 
 
@@ -180,6 +189,7 @@ def base_prepared_invocation(ctx: RecastRunContext) -> PreparedInvocation:
         identity_source_locator=identity_source_locator,
         identity_source_sha256=identity_source_sha256,
         protected_input_paths=protected_input_paths,
+        channel_artifact_bytes=ctx.channel_artifact_bytes,
     )
 
 
@@ -311,6 +321,10 @@ class PreparedInvocation:
     identity_source_locator: str
     identity_source_sha256: str
     protected_input_paths: list[Path]
+    # `RecastRunContext.channel_artifact_bytes` の docstring 参照（Codex P2
+    # review round 11, PR3 #208 指摘22）: `ManualInvoker.prepare()` の注文書
+    # 描画がこの pin 済み bytes を使い、artifact ファイルを再 read しない。
+    channel_artifact_bytes: Dict[str, bytes]
 
 
 @dataclass(frozen=True)
