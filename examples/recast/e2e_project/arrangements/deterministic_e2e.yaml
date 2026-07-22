@@ -1,0 +1,53 @@
+# PR4: chords(harmony)+structure 縦切り E2E 用 variant。
+#
+# Phase 0 ゲート判定（PR #205）の帰結: melody センサーは pyin 縮退により
+# 不成立（#199 既往）。よって本 project の manifest（identity.yaml）は
+# harmony+structure の 2 anchor のみを持ち、本 variant はその両方を
+# identity_anchors で hard 宣言する。
+#
+# 実装ノート（tests/test_recast_backend.py の _add_target_backend_variant /
+# tests/test_recast_run_cli.py の _add_deterministic_variant と同じ手法）:
+# demo の composition_score.yaml（本 project も同一 bytes）は
+# rendering.target_backend: "external" を宣言しており、package.py の
+# generator 一致検査（capability_mode に関わらず無条件）により、override
+# なしでは backend "deterministic" は常に blocked_capability に到達する。
+# deterministic backend（in-process 演奏者）を実際に compiled/verified まで
+# 到達させるため、rendering.target_backend を override する。
+#
+# capability_mode は project.yaml 側で advisory のまま（deterministic
+# capability_profile は section_tags/style_prompt 等の全チャネルが
+# unsupported — in-process 演奏者は PerformancePackage を介さず derived
+# CompositionScore を直接消費するため。harmony の chord_sequence_json は
+# ARTIFACT_TYPE_CHANNEL 未対応でチャネル自体が存在しない None 写像。
+# したがって harmony/structure を hard 宣言しても delivery は
+# unknown/unsupported が正直な会計になる — strict では通らないのが正しい
+# 挙動であり、advisory のまま compiled/verified へ到達させて生成後観測
+# （svprpe observe）側で保存性を計測する、という設計）。
+meta:
+  id: "midnight-signal-deterministic-e2e-v1"
+  version: "0.1"
+  description: >-
+    PR4 chords+structure 縦切り E2E 用 variant。deterministic backend
+    （perform.performer 経由の CI-safe in-process 演奏者）で compile 可能に
+    するため rendering.target_backend を override し、harmony
+    （chord_sequence_json）+ structure（section_map）を identity_anchors で
+    hard 宣言する。物理層の軽微な変更として bpm のみ override する
+    （mode_overrides 非依存の changed field）。
+
+target:
+  rendering:
+    target_backend: "deterministic"
+  physical:
+    bpm: 132
+
+preservation:
+  score_fields:
+    rendering.target_backend: free
+    physical.bpm: free
+  identity_anchors:
+    harmony:
+      mode: hard
+      allow: []
+    structure:
+      mode: hard
+      allow: []
