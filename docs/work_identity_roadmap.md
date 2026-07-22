@@ -143,8 +143,9 @@ canonical/harmony_decoy 距離 1.0 の tie（cycle 数バグ修正後）、brigh
 **identity proxy v0 は空集合**（採用条件を満たす軸 0/5・`null_results_are_valid`
 に基づく有効な null）。人間側の核心: 同一スコア再生成ペア（p01）ですら「別の曲」
 判定になり、判定はテンポ/トーン基準（原文申告）で行われた——作品同一性が
-MusicGen レンダリングで消失している。計器側の誤りは全て bpm アトラクタ由来の
-P3（陰性対照）「same」誤予測。実 Suno ペア（P5）は素材未回収のため第 2
+MusicGen レンダリングで消失している。計器側の誤り 3 件は全て P3（陰性対照）での
+「same」誤予測だが機構は軸別（bpm=89.1 アトラクタ / structure=長さバイアス /
+key=平行調流れ）。実 Suno ペア（P5）は素材未回収のため第 2
 トランシェへ繰り延べ。詳細・provenance・検算照合:
 [`wi3_human_calibration.md`](wi3_human_calibration.md)。
 
