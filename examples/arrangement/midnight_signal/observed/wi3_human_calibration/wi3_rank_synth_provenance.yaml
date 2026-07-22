@@ -1,0 +1,94 @@
+# WI3 P4 ペア（p09/p10/p11）の入力である synth 2 素材（synth_faithful /
+# synth_first_take）の identity-rank レポート provenance サイドカー
+# (PR #202 Codex P2 対応: 「scratchpad のみで非コミット -> fresh checkout で
+# 再検証不能・テストは wi3_aggregation.yaml 自身の material_axis_rank1 を
+# 再利用する循環」の是正)。
+#
+# 目的: wi3_rank_synth_faithful.json / wi3_rank_synth_first_take.json
+# （本ディレクトリに新規 commit）が、決定論 synth performer の 2 スタイル
+# （FAITHFUL_TAKE / FIRST_TAKE, `svp_rpe.perform`）を同一 composition_score
+# から生成した wav に対する `svprpe extract` -> `svprpe identity-rank` の
+# 生出力であることを機械的に検証可能にする。新規の事実主張は含まない —
+# wi3_aggregation.yaml の inputs.synth_rank_reports 記述 および
+# wi0b_synth/observed/provenance.yaml の source_audio_sha256 pin の転記。
+format: "wi3-rank-synth-provenance/0.1"
+recorded_at_utc: "2026-07-22T13:00:00Z"
+
+generation_session: >-
+  PR #202 Codex P2 対応セッション（2026-07-22）。wi3_human_calibration 本ラウンドの
+  scratchpad（`scratchpad/wi3_synth/`, `scratchpad/wi3_identity_rank/`）で
+  一度生成した decoded 出力を、fresh-process で再現できることを本セッションで
+  2 回目のコンテナ実行として確認した上でコミットした。
+
+# 生成コマンド列（score -> render -> extract -> identity-rank）。
+# score_path は wi0b_synth/commands.md の render_faithful.py 呼び出しと同一の
+# composition_score.yaml（faithful_take の sha256 が wi0b_synth の既存 pin と
+# 一致することがこの同一性の機械的な裏付け — 下記 source_audio_sha256 参照）。
+commands:
+  - step: render
+    description: >-
+      決定論 synth performer で 2 スタイル (FAITHFUL_TAKE, FIRST_TAKE) を
+      同一 composition_score から wav にレンダー
+      (`svp_rpe.compose.loader.load_composition_score` +
+      `svp_rpe.perform.{FAITHFUL_TAKE,FIRST_TAKE,perform,wav_bytes}`;
+      wi0b_synth/render_faithful.py と同じ Python API を 2 スタイル分呼ぶ
+      scratchpad 限定スクリプト — src 変更なし)。
+    command: >-
+      python render_both.py
+      examples/arrangement/midnight_signal/composition_score.yaml
+      <out_dir>
+    outputs: ["faithful_take.wav", "first_take.wav"]
+  - step: extract
+    description: "各 wav を RPE bundle に抽出（デフォルト設定、追加フラグなし）"
+    command: "svprpe extract <out_dir>/faithful_take.wav -o synth_faithful_take.rpe.json"
+    command_first_take: "svprpe extract <out_dir>/first_take.wav -o synth_first_take.rpe.json"
+  - step: identity-rank
+    description: >-
+      各 bundle を WI2 と同一の参照リストに対して順位付け
+      （`examples/arrangement/midnight_signal/observed/wi2_discrimination/wi2_references.yaml`,
+      schema_version wi2-references/0.1: canonical / structure_destroyed /
+      harmony_decoy / other_work の 4 参照）。
+    command: >-
+      svprpe identity-rank synth_faithful_take.rpe.json
+      --references examples/arrangement/midnight_signal/observed/wi2_discrimination/wi2_references.yaml
+      --format json -o wi3_rank_synth_faithful.json
+    command_first_take: >-
+      svprpe identity-rank synth_first_take.rpe.json
+      --references examples/arrangement/midnight_signal/observed/wi2_discrimination/wi2_references.yaml
+      --format json -o wi3_rank_synth_first_take.json
+
+# 入力 wav の sha256。wi0b_synth/observed/provenance.yaml の
+# source_audio_sha256（faithful_take）と一致することを明記（同一
+# composition_score・同一 FAITHFUL_TAKE スタイルからの決定論レンダリングである
+# ことの機械的裏付け）。first_take (FIRST_TAKE style) は wi0b_synth に対応物が
+# ないため wi3_kit_manifest.json の pair06_A.wav pin と突合する。
+# fresh-process 2/2 再現済み（本セッションで render_both.py を独立プロセスで
+# 2 回実行し、両 wav の sha256 が下記 pin と完全一致することを実測 —
+# scratchpad/wi3_synth/ と scratchpad/wi3_synth_run2/ の 2 ディレクトリで確認）。
+input_audio_sha256:
+  faithful_take:
+    sha256: "4d8c83f67c1b2441e09fa84debdc47ec0131c1a13ee1b813b0ef55e874903e90"
+    cross_check: "wi0b_synth/observed/provenance.yaml#source_audio_sha256 (同値) / wi3_kit_manifest.json pair06_B.wav"
+    fresh_process_reproduction: "2/2 (scratchpad/wi3_synth/, scratchpad/wi3_synth_run2/)"
+  first_take:
+    sha256: "467f5200173cbea43933c69a5ba9dd8b156eee2e11ff9de0bd6475ed5dfb7e46"
+    cross_check: "wi3_kit_manifest.json pair06_A.wav"
+    fresh_process_reproduction: "2/2 (scratchpad/wi3_synth/, scratchpad/wi3_synth_run2/)"
+
+# レポート 2 本自身の sha256（本ディレクトリに commit したファイルの stale
+# 差し替え検出用 — tests/test_wi3_human_calibration_fixture.py がこの pin と
+# 突合する）。
+report_sha256:
+  wi3_rank_synth_faithful.json: "0ca4ff55852027c00771f31379d8bd7af82357daaa565e317cbce9fc97d3fade"
+  wi3_rank_synth_first_take.json: "c2e60a459690095d0e50b0a8e23e738bb353a72baca134d54b776e5c9019fcce"
+
+# rank-1 一致検証（本 PR 対応の一部として実施・結果: 全一致・不一致 0 件）:
+# wi3_rank_synth_{faithful,first_take}.json の各軸 rank==1 エントリから導出した
+# unique/tie 状態・rank1_ref・tied_with が、wi3_aggregation.yaml の
+# material_axis_rank1.{synth_faithful,synth_first_take} 記載値と完全一致する
+# ことをコピー前に確認済み（5 軸 x 2 素材 = 10 エントリ全一致）。
+verification:
+  - "report_sha256[wi3_rank_synth_faithful.json] == 実 commit ファイルの sha256"
+  - "report_sha256[wi3_rank_synth_first_take.json] == 実 commit ファイルの sha256"
+  - "input_audio_sha256.faithful_take.sha256 == wi0b_synth/observed/provenance.yaml source_audio_sha256"
+  - "5 軸 x 2 素材の rank-1 unique/tie 状態が wi3_aggregation.yaml material_axis_rank1 と一致（10/10, PR #202 対応時点で確認済み）"

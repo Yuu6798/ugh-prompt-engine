@@ -16,21 +16,16 @@
 できること、kit manifest 24 エントリの sha256 形式を確認する。
 (C) は **集計の決定論再現**（検算照合の恒久化）—— ``wi3_aggregation.yaml`` の
 集計を、committed 入力（``wi3_responses.yaml`` / ``wi3_pair_mapping.sealed.yaml`` /
-``wi2_rank_{A,C,D}_take{0-3}.json`` 12 本）から事前登録 §4 の集計規約
+``wi2_rank_{A,C,D}_take{0-3}.json`` 12 本 +
+``wi3_rank_synth_{faithful,first_take}.json`` 2 本）から事前登録 §4 の集計規約
 （``pair_level_prediction_rule``）に従ってテスト内で独立に再計算し、
-``wi3_aggregation.yaml`` の記録値と一致することを assert する。
-
-**scope の限界（docstring 明記）**: synth 2 素材（``synth_faithful`` /
-``synth_first_take``）の identity-rank 結果は本ラウンドの scratchpad
-（``scratchpad/wi3_identity_rank/synth_{faithful_take,first_take}_rank.json``）
-にのみ存在し、非コミット（MusicGen 9 ペア分の committed rank JSON のみが
-再計算対象）。この 2 素材が関与するペア（p09 / p10 / p11、いずれも P4
-カテゴリ）については、``wi3_aggregation.yaml`` の ``material_axis_rank1`` に
-記録済みの synth 素材別 rank-1 状態を再計算の入力として直接使用する
-（完全な独立再計算ではなく、記録済み中間値からの再計算である旨をここに明記
-する）。MusicGen 側 12 素材（``wi2_rank_*.json``）は本テストが独立に
-（committed JSON から）rank-1 状態を導出し、``wi3_aggregation.yaml`` の記録と
-一致することを assert するため、こちらは完全な独立再計算になっている。
+``wi3_aggregation.yaml`` の記録値と一致することを assert する。12 ペア全てが
+committed 入力からの完全な独立再計算になっている（synth 2 素材の rank-1 状態も、
+他の 12 MusicGen 素材と同様に committed identity-rank レポートから本テストが
+独立に導出する — PR #202 Codex P2 対応: 以前は synth 2 素材のみ非コミットで
+``wi3_aggregation.yaml`` 自身の ``material_axis_rank1`` を再利用する循環に
+なっていた）。synth レポート 2 本の sha256 は
+``wi3_rank_synth_provenance.yaml`` の pin と照合する。
 
 pin（数値が食い違ったら修正せず停止して報告する対象）:
 
@@ -41,6 +36,7 @@ pin（数値が食い違ったら修正せず停止して報告する対象）:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 import re
@@ -57,6 +53,7 @@ SEALED_MAPPING_PATH = FIXTURE_DIR / "wi3_pair_mapping.sealed.yaml"
 RESPONSES_PATH = FIXTURE_DIR / "wi3_responses.yaml"
 KIT_MANIFEST_PATH = FIXTURE_DIR / "wi3_kit_manifest.json"
 AGGREGATION_PATH = FIXTURE_DIR / "wi3_aggregation.yaml"
+SYNTH_PROVENANCE_PATH = FIXTURE_DIR / "wi3_rank_synth_provenance.yaml"
 
 PLAN_CONFIRMED_AT_UTC = "2026-07-21T13:56:58Z"
 RECEIVED_AT_UTC = "2026-07-22T05:40:41Z"
@@ -68,6 +65,15 @@ AXES: tuple[str, ...] = ("structure", "harmony", "key", "bpm", "brightness")
 WI2_MATERIAL_CELLS_AND_TAKES: tuple[tuple[str, int], ...] = tuple(
     (cell, take) for cell in ("A", "C", "D") for take in range(4)
 )
+
+#: The 2 decisive-synth materials (P4 pairs p09/p10/p11) with committed
+#: identity-rank reports (PR #202 Codex P2: previously scratchpad-only,
+#: unreproducible from a fresh checkout). `wi3_rank_synth_provenance.yaml`
+#: pins the generating commands and input-wav/report sha256.
+SYNTH_MATERIAL_RANK_REPORT_PATHS: dict[str, Path] = {
+    "synth_faithful": FIXTURE_DIR / "wi3_rank_synth_faithful.json",
+    "synth_first_take": FIXTURE_DIR / "wi3_rank_synth_first_take.json",
+}
 
 #: pin — axis-level {decidable, correct, error} counts (§4 pair_level_prediction_rule
 #: applied mechanically; see wi3_aggregation.yaml axis_summary).
@@ -131,7 +137,10 @@ def _rank1_status_from_ranking(ranking: list[dict]) -> tuple[str, str | None]:
     return "unique", entry["ref_id"]
 
 
-def _material_axis_rank1_from_wi2_report(report: dict) -> dict[str, tuple[str, str | None]]:
+def _material_axis_rank1_from_rank_report(report: dict) -> dict[str, tuple[str, str | None]]:
+    """Derive per-axis rank-1 (status, ref) from a committed `identity-rank`
+    JSON report (``wi2_rank_*.json`` or ``wi3_rank_synth_*.json`` — same
+    ``identity-rank-report/0.1`` schema in both cases)."""
     result: dict[str, tuple[str, str | None]] = {}
     for axis_entry in report["axes"]:
         result[axis_entry["axis"]] = _rank1_status_from_ranking(axis_entry["ranking"])
@@ -139,6 +148,9 @@ def _material_axis_rank1_from_wi2_report(report: dict) -> dict[str, tuple[str, s
 
 
 def _material_axis_rank1_from_aggregation(agg: dict, material: str) -> dict[str, tuple[str, str | None]]:
+    """Read the recorded rank-1 table straight out of ``wi3_aggregation.yaml``
+    (used only as the *expected* side of an equality assertion — never as a
+    recompute input; see ``test_material_axis_rank1_recomputes_from_committed_*``)."""
     entry = agg["material_axis_rank1"][material]
     return {axis: (entry[axis]["status"], entry[axis]["rank1_ref"]) for axis in AXES}
 
@@ -156,15 +168,17 @@ def _reproduce_shuffle() -> tuple[list[str], dict[str, bool]]:
     return presentation_order, ab_swap
 
 
-def _build_material_axis_rank1_table(agg: dict) -> dict[str, dict[str, tuple[str, str | None]]]:
+def _build_material_axis_rank1_table() -> dict[str, dict[str, tuple[str, str | None]]]:
+    """Build the material -> axis -> rank-1 table entirely from committed
+    identity-rank reports (12 WI2 MusicGen takes + 2 synth styles) — no
+    dependency on ``wi3_aggregation.yaml``'s own recorded values."""
     table: dict[str, dict[str, tuple[str, str | None]]] = {}
     for cell, take in WI2_MATERIAL_CELLS_AND_TAKES:
         report = _load_json(WI2_FIXTURE_DIR / f"wi2_rank_{cell}_take{take}.json")
-        table[f"wi2_{cell}_take{take}"] = _material_axis_rank1_from_wi2_report(report)
-    # synth materials: no committed rank JSON (scratchpad-only, this round) —
-    # use the recorded aggregation values as input, per this module's docstring.
-    for material in ("synth_faithful", "synth_first_take"):
-        table[material] = _material_axis_rank1_from_aggregation(agg, material)
+        table[f"wi2_{cell}_take{take}"] = _material_axis_rank1_from_rank_report(report)
+    for material, path in SYNTH_MATERIAL_RANK_REPORT_PATHS.items():
+        report = _load_json(path)
+        table[material] = _material_axis_rank1_from_rank_report(report)
     return table
 
 
@@ -310,42 +324,66 @@ def test_material_axis_rank1_recomputes_from_committed_wi2_rank_reports() -> Non
     """12 の MusicGen 素材について、committed ``wi2_rank_*.json`` から
     rank-1 状態（tie/unique・rank1_ref）を独立に導出し、
     ``wi3_aggregation.yaml`` の ``material_axis_rank1`` と一致することを assert する。
-    synth 2 素材はこのテストの対象外（別テストで記録値の使用を明示する）。
     """
     agg = _load_yaml(AGGREGATION_PATH)
 
     for cell, take in WI2_MATERIAL_CELLS_AND_TAKES:
         material = f"wi2_{cell}_take{take}"
         report = _load_json(WI2_FIXTURE_DIR / f"wi2_rank_{cell}_take{take}.json")
-        computed = _material_axis_rank1_from_wi2_report(report)
+        computed = _material_axis_rank1_from_rank_report(report)
         recorded = _material_axis_rank1_from_aggregation(agg, material)
         assert computed == recorded, f"{material}: rank-1 status mismatch {computed} != {recorded}"
 
 
-def test_synth_materials_use_recorded_aggregation_values_as_recompute_input() -> None:
-    """synth_faithful / synth_first_take の rank JSON はこのラウンドの
-    scratchpad にのみ存在し非コミット。本テストは committed
-    ``wi3_aggregation.yaml`` に記録済みの rank-1 状態を、以降の再計算
-    （pair-level predictions / axis summary）の入力として使うことを明示する
-    契約テスト（値そのものの独立検証ではない）。
+def test_synth_material_axis_rank1_recomputes_from_committed_rank_reports() -> None:
+    """PR #202 Codex P2 対応: synth_faithful / synth_first_take についても、
+    (WI2 側 12 素材と同じ型で) committed ``wi3_rank_synth_{faithful,first_take}.json``
+    から rank-1 状態を独立に導出し、``wi3_aggregation.yaml`` の
+    ``material_axis_rank1`` と一致することを assert する（以前は非コミットの
+    scratchpad レポートしか存在せず、この 2 素材だけ ``wi3_aggregation.yaml``
+    自身の記録値を再計算の入力に使う循環になっていた — 本テストが独立検証に
+    置き換える）。
     """
     agg = _load_yaml(AGGREGATION_PATH)
-    for material in ("synth_faithful", "synth_first_take"):
-        assert material in agg["material_axis_rank1"], f"missing recorded rank-1 table for {material}"
-        for axis in AXES:
-            entry = agg["material_axis_rank1"][material][axis]
-            assert entry["status"] in {"tie", "unique"}
-            if entry["status"] == "unique":
-                assert isinstance(entry["rank1_ref"], str)
-            else:
-                assert entry["rank1_ref"] is None
+    for material, path in SYNTH_MATERIAL_RANK_REPORT_PATHS.items():
+        report = _load_json(path)
+        computed = _material_axis_rank1_from_rank_report(report)
+        recorded = _material_axis_rank1_from_aggregation(agg, material)
+        assert computed == recorded, f"{material}: rank-1 status mismatch {computed} != {recorded}"
+
+
+def test_synth_rank_reports_sha256_matches_provenance_pin() -> None:
+    """committed synth rank レポート 2 本の sha256 が
+    ``wi3_rank_synth_provenance.yaml`` の ``report_sha256`` pin と一致することを
+    assert する（stale 差し替え検出 — provenance サイドカーが指す実体と、
+    集計に使われる実ファイルが機械的に同一であることの保証）。あわせて
+    provenance サイドカーが記録する入力 wav sha256 が ``wi3_kit_manifest.json``
+    （キット同梱 wav の pin）とも一致することを確認する。
+    """
+    provenance = _load_yaml(SYNTH_PROVENANCE_PATH)
+    report_sha256 = provenance["report_sha256"]
+
+    for material, path in SYNTH_MATERIAL_RANK_REPORT_PATHS.items():
+        actual_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+        pinned_sha256 = report_sha256[path.name]
+        assert actual_sha256 == pinned_sha256, (
+            f"{path.name}: committed file sha256 {actual_sha256!r} does not match "
+            f"wi3_rank_synth_provenance.yaml pin {pinned_sha256!r}"
+        )
+
+    manifest = _load_json(KIT_MANIFEST_PATH)
+    kit_sha256_by_filename = {entry["kit_filename"]: entry["sha256"] for entry in manifest["files"]}
+    input_audio_sha256 = provenance["input_audio_sha256"]
+    assert input_audio_sha256["faithful_take"]["sha256"] == kit_sha256_by_filename["pair06_B.wav"]
+    assert input_audio_sha256["first_take"]["sha256"] == kit_sha256_by_filename["pair06_A.wav"]
 
 
 def test_pair_level_predictions_and_axis_summary_recompute_from_committed_inputs() -> None:
     """恒久検算ゲート: wi3_aggregation.yaml の集計値を、committed 入力
-    （responses / sealed mapping / wi2_rank_*.json 12 本 + 記録済み synth
-    rank-1 値）から事前登録 §4 の pair_level_prediction_rule に基づき
-    テスト内で独立に再計算し、記録値と一致することを assert する。
+    （responses / sealed mapping / wi2_rank_*.json 12 本 +
+    wi3_rank_synth_{faithful,first_take}.json 2 本）から事前登録 §4 の
+    pair_level_prediction_rule に基づきテスト内で独立に再計算し、記録値と
+    一致することを assert する。
 
     数値が食い違ったら、この結果自体を修正するのではなく停止して報告する
     （タスクブリーフの指示どおり）。
@@ -368,7 +406,7 @@ def test_pair_level_predictions_and_axis_summary_recompute_from_committed_inputs
         responses_by_pair_id[pair_id] = (_normalize_verdict(entry["verdict"]), entry["confidence"])
     assert set(responses_by_pair_id) == {f"p{i:02d}" for i in range(1, 13)}
 
-    material_axis_rank1 = _build_material_axis_rank1_table(agg)
+    material_axis_rank1 = _build_material_axis_rank1_table()
     computed_pairs = _recompute_pair_predictions(sealed, responses_by_pair_id, material_axis_rank1)
 
     # --- pair-level cross-check against wi3_aggregation.yaml ---
