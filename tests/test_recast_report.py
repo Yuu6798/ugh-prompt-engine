@@ -414,3 +414,68 @@ def test_recast_report_rejects_anchor_row_coverage_forged_independent_of_status(
     }
     with pytest.raises(ValidationError):
         RecastReport.model_validate(payload)
+
+
+# --- anchor_id uniqueness (Codex P2, #210 round 11 指摘14) ---------------------
+
+
+def test_recast_report_rejects_duplicate_anchor_id_even_when_coverage_tally_is_consistent() -> (
+    None
+):
+    """harmony を 2 行（両方 `coverage="verified"`）に複製した report は、
+    `coverage` 集計だけを見れば辻褄が合う（`verified: 2` は実際の 2 行分と
+    一致する）ため、round 5/6 の coverage validator はいずれも素通りする —
+    「harmony が 2 回観測された」という虚偽の被覆を、identity/observation
+    sidecar と同型の anchor_id 一意性 validator で独立に検出・拒否する。"""
+    payload = {
+        "schema_version": RECAST_REPORT_SCHEMA_VERSION,
+        "project_id": "p",
+        "variant": "v",
+        "backend": "b",
+        "work_id": "w",
+        "take": {"path": "take.wav", "sha256": "0" * 64},
+        "package_sha256": "0" * 64,
+        "anchors": [
+            _harmony_anchor_payload(
+                adherence_status="preserved", determination="exact_match", coverage="verified"
+            ),
+            _harmony_anchor_payload(
+                adherence_status="preserved", determination="exact_match", coverage="verified"
+            ),
+        ],
+        # 2 行分（両方 verified）ときっちり辻褄が合う — coverage 側の
+        # validator だけでは検出できないことを示す。
+        "coverage": {"verified": 2, "violated": 0, "not_observed": 0},
+        "identity_assessment": {"enabled": False},
+    }
+    with pytest.raises(ValidationError, match="duplicate anchor_id"):
+        RecastReport.model_validate(payload)
+
+
+def test_recast_report_round_trip_preserves_unique_anchor_ids() -> None:
+    """正常な読み戻し: `build_recast_report` が発行する report（anchor_id が
+    一意）は dump→`model_validate` で pass する（round 11 の一意性 validator
+    が正常経路を誤って弾かないことの機械 assert）。"""
+    report = _observation_report(
+        [
+            _anchor_observation("harmony", "harmony", "preserved", "exact_match"),
+            _anchor_observation("structure", "structure", "not_observed", "deferred"),
+        ]
+    )
+    package = _package(
+        [
+            PackageAnchorStatus.model_construct(anchor_id="harmony", requested_mode="hard"),
+            PackageAnchorStatus.model_construct(anchor_id="structure", requested_mode="hard"),
+        ]
+    )
+    recast_report = build_recast_report(
+        project_id="p",
+        variant="v",
+        backend="b",
+        package=package,
+        report=report,
+        take_path_relative="take.wav",
+        take_sha256="a" * 64,
+    )
+    round_tripped = RecastReport.model_validate(recast_report.model_dump(mode="json"))
+    assert [a.anchor_id for a in round_tripped.anchors] == ["harmony", "structure"]
