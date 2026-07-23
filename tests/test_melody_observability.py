@@ -403,6 +403,39 @@ def test_atomic_write_text_preserves_prior_on_failure(tmp_path, monkeypatch):
     assert out.read_text(encoding="utf-8") == '{"new": true}'
 
 
+def test_pair_generation_fails_closed_on_stem_collision(tmp_path, monkeypatch):
+    """同名 basename の別ソースを同じ out_dir へ出すと fail-closed（同一ソースは冪等）。"""
+    import scripts.make_melody_pairs as pairs
+
+    sr = 22050
+    t = np.linspace(0, 1.0, sr, endpoint=False)
+    out_dir = tmp_path / "out"
+
+    def _write(path, freq):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        sf.write(path, (0.3 * np.sin(2 * np.pi * freq * t)).astype(np.float32), sr, subtype="FLOAT")
+
+    # 別ディレクトリの同名ソース（内容は別 → source_sha256 が異なる）。
+    src_a = tmp_path / "a" / "song.wav"
+    src_b = tmp_path / "b" / "song.wav"
+    _write(src_a, 330.0)
+    _write(src_b, 440.0)
+
+    def _run(src):
+        monkeypatch.setattr(
+            sys, "argv",
+            ["make_melody_pairs", "--input", str(src), "--out-dir", str(out_dir),
+             "--semitones", "2", "--time-rates", "1.05"],
+        )
+        return pairs.main()
+
+    _run(src_a)  # 最初のソースは成功。
+    with pytest.raises(ValueError, match="stem collision"):
+        _run(src_b)  # 同名 basename の別ソース → fail-closed。
+    # 同一ソースの再生成は冪等に成功する（衝突ではない）。
+    _run(src_a)
+
+
 def test_unique_id_map_rejects_duplicate_registry_ids():
     """registry の重複 fixture id は last-wins でなく fail-closed で reject。"""
     import scripts.run_melody_observability as harness

@@ -85,6 +85,28 @@ def main() -> int:
     source_bytes = args.input.read_bytes()
     source_sha256 = hashlib.sha256(source_bytes).hexdigest()
 
+    # stem 衝突の fail-closed: 出力ファイル名は入力の basename（stem）だけから導くため、
+    # 別ディレクトリの同名ソース（例 artist_a/song.wav と artist_b/song.wav）を同じ
+    # out_dir へ生成すると後の run が前の `song__*` を黙って上書きし、additive な
+    # negative ペア構築を壊す（Codex 指摘・AGENTS §8）。既存 manifest の source_sha256 が
+    # 現ソースと異なる場合は別ソースの衝突とみなして reject する。同一 source_sha256
+    # なら同一ソースの冪等再生成なので許可する。
+    existing_manifest = out_dir / f"{stem}__pairs_manifest.json"
+    if existing_manifest.exists():
+        try:
+            prior_sha = json.loads(existing_manifest.read_text(encoding="utf-8")).get(
+                "source_sha256"
+            )
+        except (ValueError, OSError):
+            prior_sha = None
+        if prior_sha is not None and prior_sha != source_sha256:
+            raise ValueError(
+                f"pair output stem collision in {out_dir}: {existing_manifest.name} already "
+                f"exists for a DIFFERENT source (source_sha256 {prior_sha} != {source_sha256}). "
+                "同名 basename の別ソースは別 --out-dir へ出力すること（stem 名前空間の衝突を "
+                "上書きしない fail-closed）。"
+            )
+
     # 成果物一式を staging ディレクトリに完成させてから out_dir へ os.replace で
     # 公開する。既存 out_dir へ直接書くと、途中で中断された場合に variant WAV と
     # manifest が食い違う半端な成果物が下流に見える（Codex 指摘・AGENTS §8）。
