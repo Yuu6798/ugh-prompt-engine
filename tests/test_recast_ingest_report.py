@@ -21,11 +21,15 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
+from svp_rpe.arrange.observe import observe_generated_artifact
 from svp_rpe.cli import app
 from svp_rpe.recast import load_recast_project
 from svp_rpe.recast.backend import resolve_invoker, run_context_from_plan_artifacts
 from svp_rpe.recast.plan import build_recast_plan_artifacts
+from svp_rpe.recast.run_paths import resolve_packages_dir
 from svp_rpe.recast.state import load_recast_state
+from svp_rpe.rpe.models import ChordEvent, PhysicalRPE, RPEBundle, SectionMarker, SpectralProfile
+from svp_rpe.rpe.semantic_rules import generate_semantic
 
 DEMO_PROJECT = Path("examples/recast/demo_project")
 E2E_PROJECT = Path("examples/recast/e2e_project")
@@ -395,6 +399,126 @@ def test_ingest_records_observation_incomplete_when_take_changes_between_collect
 
     reports_dir = project_path.parent / "builds" / "reports" / "edm@suno"
     assert not reports_dir.exists()
+
+
+# --- anchor_scope (Codex P2, PR #211) -------------------------------------------
+
+
+def _empty_chord_bundle() -> RPEBundle:
+    """`_observe_harmony` が読む `bundle.physical.chord_events` だけを持つ
+    最小 stub（一致は問わない — このテストの関心は scope 絞り込みそのもの
+    であり harmony の一致判定精度ではない）。"""
+    physical = PhysicalRPE(
+        bpm=120.0,
+        bpm_confidence=0.9,
+        key="C",
+        mode="minor",
+        key_confidence=0.9,
+        duration_sec=8.0,
+        sample_rate=44100,
+        time_signature="4/4",
+        time_signature_confidence=0.9,
+        structure=[SectionMarker(label="full", start_sec=0.0, end_sec=8.0)],
+        rms_mean=0.2,
+        peak_amplitude=0.8,
+        crest_factor=4.0,
+        active_rate=0.73,
+        valley_depth=0.18,
+        thickness=1.0,
+        spectral_centroid=900.0,
+        spectral_profile=SpectralProfile(
+            centroid=900.0, low_ratio=0.4, mid_ratio=0.5, high_ratio=0.1, brightness=0.1,
+        ),
+        stereo_profile=None,
+        onset_density=2.0,
+        chord_events=[
+            ChordEvent(
+                chord="C minor", root="C", quality="minor",
+                start_sec=0.0, end_sec=1.0, confidence=0.9,
+            )
+        ],
+    )
+    return RPEBundle(
+        physical=physical,
+        semantic=generate_semantic(physical),
+        audio_file="fixture.wav",
+        audio_duration_sec=8.0,
+        audio_sample_rate=44100,
+        audio_channels=1,
+        audio_format="wav",
+    )
+
+
+def test_observe_generated_artifact_anchor_scope_skips_excluded_anchors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2（#211）: `anchor_scope={"harmony"}` の場合、`demo_project`
+    （lyrics/melody/harmony の 3 anchor）で除外 anchor（lyrics/melody）の
+    artifact を破損させても観測は落ちない（① 事前検証ゼロ）。learned 系
+    provider（`_transcribe_lyrics_for_observation`/`_extract_melody_for_
+    observation`）は一切呼ばれない（② monkeypatch カウンタ = 呼ばれたら
+    AssertionError）。結果の report/ObservationReport は harmony のみを
+    収載する（③）。"""
+    import svp_rpe.arrange.observe as observe_module
+
+    project_path = _copy_demo_project(tmp_path, label="anchor-scope")
+
+    # まず正常な artifact のまま plan/publish する（`recast plan` 自体は
+    # anchor_scope 非対応で manifest 全体をコンパイルするため、ここでは
+    # 破損させない — 破損させるのは publish 後、観測直前）。
+    plan_result = runner.invoke(
+        app,
+        [
+            "recast", "plan", str(project_path),
+            "--variant", "edm", "--backend", "suno",
+        ],
+    )
+    assert plan_result.exit_code == 0, plan_result.output
+
+    # ① 除外 anchor（lyrics/melody）の artifact を publish 後に破損させる —
+    # 観測（anchor_scope 適用後）がこれを一切事前検証しないことの対象。
+    (project_path.parent / "identity" / "lyrics.txt").write_bytes(b"\x00corrupted-lyrics")
+    (project_path.parent / "identity" / "melody_notes.json").write_bytes(
+        b"{not-valid-json-at-all"
+    )
+
+    loaded = load_recast_project(project_path)
+    package_path = resolve_packages_dir(loaded, "edm", "suno") / "performance_package.json"
+    assert package_path.is_file()
+
+    audio_path = tmp_path / "fake-take.wav"
+    audio_path.write_bytes(b"RIFF....WAVEfake-audio-bytes-for-anchor-scope-test")
+
+    def _fail_lyrics(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError(
+            "_transcribe_lyrics_for_observation must not be called when lyrics "
+            "is outside anchor_scope"
+        )
+
+    def _fail_melody(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError(
+            "_extract_melody_for_observation must not be called when melody "
+            "is outside anchor_scope"
+        )
+
+    monkeypatch.setattr(
+        observe_module, "extract_rpe_from_file", lambda *_a, **_k: _empty_chord_bundle()
+    )
+    monkeypatch.setattr(observe_module, "_transcribe_lyrics_for_observation", _fail_lyrics)
+    monkeypatch.setattr(observe_module, "_extract_melody_for_observation", _fail_melody)
+
+    observation = observe_generated_artifact(
+        package_path=package_path,
+        manifest_path=loaded.identity_manifest_path,
+        audio_path=audio_path,
+        anchor_scope={"harmony"},
+    )
+
+    # ③ report は harmony のみ（lyrics/melody は事前フィルタで manifest から
+    # 消える — anchor_id set 自体に現れない）。
+    anchor_ids = {anchor.anchor_id for anchor in observation.report.anchors}
+    assert anchor_ids == {"harmony"}
+    assert observation.report.anchors[0].sensor.available is True
 
 
 def test_ingest_records_observation_incomplete_when_package_changes_after_publish(

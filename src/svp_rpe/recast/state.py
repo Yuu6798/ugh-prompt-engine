@@ -78,6 +78,20 @@ class RecastRunState(RecastStateModel):
     一切参照しておらず、publish 後に成果物が削除・破損・別 (variant,backend)
     の plan で上書きされても state だけが古い `verified` を信用し続けていた）。
     `inputs_digest` と同じ optional 後方互換規約（同じく `None` は stale 扱い）。
+
+    `orders_digest`: manual invocation の `awaiting_generation` 記録時に
+    publish した注文書 6 ファイル（`recast/backends/manual.py:
+    MANUAL_ORDER_FILENAMES`）の content digest
+    （`recast/backends/manual.py:compute_orders_digest`）。`recast ingest` が
+    collect 前に disk 上の現在の 6 ファイルからこれを再計算し突合する（Codex
+    P2 review round 13, PR3 #208 指摘28: `ManualInvoker.prepare()` は呼ぶ度に
+    同じ 6 ファイルを無条件に再公開するため、ingest が単純に `prepare()` を
+    再度呼ぶと run 後に人手で編集された注文書が黙って rebuild 結果で
+    上書きされ、「編集済み注文で生成された音声」を正規の注文書由来として
+    受理してしまう）。`inputs_digest`/`plan_sha256` と同じ optional 後方互換
+    規約（本フィールド追加前の state・local backend の run は `None` — local
+    backend は注文書を publish しないため意図的に無関係で常に `None`）。
+    manual invocation の run で `None` の場合は同じく stale（pin なし）扱い。
     """
 
     state: RecastState
@@ -86,6 +100,7 @@ class RecastRunState(RecastStateModel):
     history: List[RecastStateHistoryEntry] = Field(default_factory=list)
     inputs_digest: Optional[str] = None
     plan_sha256: Optional[str] = None
+    orders_digest: Optional[str] = None
 
 
 class RecastStateFile(RecastStateModel):
@@ -93,7 +108,7 @@ class RecastStateFile(RecastStateModel):
     pydantic の `ValidationError` により fail-closed で拒否される
     （他 recast loader と同じ「ラップしない」規約）。"""
 
-    schema_version: Literal["recast-state/0.1"] = RECAST_STATE_SCHEMA_VERSION
+    schema_version: Literal["recast-state/0.1"]
     runs: Dict[str, RecastRunState] = Field(default_factory=dict)
 
 
@@ -119,7 +134,7 @@ def load_recast_state(project_dir: Path | str) -> RecastStateFile:
     """
     path = _state_path(project_dir)
     if not path.is_file():
-        return RecastStateFile()
+        return RecastStateFile(schema_version=RECAST_STATE_SCHEMA_VERSION)
     raw_bytes = path.read_bytes()
     data = json.loads(raw_bytes)
     if not isinstance(data, dict):
@@ -160,14 +175,16 @@ def record_state(
     *,
     inputs_digest: Optional[str] = None,
     plan_sha256: Optional[str] = None,
+    orders_digest: Optional[str] = None,
     protected_inputs: List[Path],
 ) -> RecastStateFile:
     """`(variant, backend)` 実行の到達状態を記録し、更新後の `RecastStateFile` を返す。
 
     再実行冪等: 直前の記録済み状態が `state` + `note` + `inputs_digest` +
-    `plan_sha256` の組で完全一致する場合は history に重複追加せず、ファイルも
-    書き換えない（呼び出し側から見て純粋な no-op — `updated_at` も更新しない）。
-    `inputs_digest` / `plan_sha256` も同一性判定に含める理由: これらが変わっても
+    `plan_sha256` + `orders_digest` の組で完全一致する場合は history に
+    重複追加せず、ファイルも書き換えない（呼び出し側から見て純粋な no-op —
+    `updated_at` も更新しない）。
+    `inputs_digest` / `plan_sha256` / `orders_digest` も同一性判定に含める理由: これらが変わっても
     偶然 state/note が同じになるケースで古いまま no-op してしまうと
     `recast status` の stale 検出が機能しなくなるため。それ以外は history へ
     1 件追記し、atomic write で publish する。
@@ -188,6 +205,7 @@ def record_state(
         and existing.note == note
         and existing.inputs_digest == inputs_digest
         and existing.plan_sha256 == plan_sha256
+        and existing.orders_digest == orders_digest
     ):
         return state_file
 
@@ -208,6 +226,7 @@ def record_state(
         history=new_history,
         inputs_digest=inputs_digest,
         plan_sha256=plan_sha256,
+        orders_digest=orders_digest,
     )
     new_state_file = RecastStateFile(schema_version=RECAST_STATE_SCHEMA_VERSION, runs=new_runs)
 

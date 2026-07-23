@@ -244,25 +244,45 @@ def test_recast_report_take_requires_64_hex_sha256() -> None:
         RecastReportTake(path="take.wav", sha256="not-a-hash")
 
 
-def test_recast_report_schema_version_defaults_to_current() -> None:
-    """`recast/plan.py:RecastPlan` / `recast/state.py:RecastStateFile` と同じ
-    recast-module 規約（generated-output artifact は default を持つ — 手書き/
-    改竄された author 向け入力の `IdentityManifest`/`ObservationReport` とは
-    異なる posture）: 省略時は現行バージョンへ default 補完される。"""
+def test_recast_report_schema_version_is_required_not_defaulted() -> None:
+    """Codex P2（#210 round 8 指摘9）: `schema_version` はデフォルト値なしの
+    必須フィールド（`recast/models.py:RecastProjectFile` /
+    `mode-overrides/0.1` と同じ規約へ揃える）。省略した dict の
+    `model_validate` は他の未知/欠落 schema_version 検査と同様に
+    fail-closed で拒否されなければならない — デフォルト補完で「欠落 JSON が
+    現行版として silent 受理される」抜け道を塞ぐ。`build_recast_report` は
+    定数を明示的に渡すため、正常な発行経路はこの必須化の影響を受けない。"""
+    payload = {
+        "project_id": "p",
+        "variant": "v",
+        "backend": "b",
+        "work_id": "w",
+        "take": {"path": "take.wav", "sha256": "0" * 64},
+        "package_sha256": "0" * 64,
+        "anchors": [],
+        "coverage": {"verified": 0, "violated": 0, "not_observed": 0},
+        "identity_assessment": {"enabled": False},
+    }
+    with pytest.raises(ValidationError):
+        RecastReport.model_validate(payload)
+
     report = RecastReport.model_validate(
-        {
-            "project_id": "p",
-            "variant": "v",
-            "backend": "b",
-            "work_id": "w",
-            "take": {"path": "take.wav", "sha256": "0" * 64},
-            "package_sha256": "0" * 64,
-            "anchors": [],
-            "coverage": {"verified": 0, "violated": 0, "not_observed": 0},
-            "identity_assessment": {"enabled": False},
-        }
+        {**payload, "schema_version": RECAST_REPORT_SCHEMA_VERSION}
     )
     assert report.schema_version == RECAST_REPORT_SCHEMA_VERSION
+
+
+def test_identity_assessment_rejects_enabled_true() -> None:
+    """Codex P2（#210 round 8 指摘10）: `enabled` は `Literal[False]` — ツールが
+    実際には計算していない同一性評価を `enabled: true` の手編集 report で
+    掲示できてしまうと、常に `enabled: false` 固定文言を描画する
+    `render_recast_summary_markdown` と矛盾する。読み込み時に fail-closed で
+    拒否する（WI4 の閾値 Design Memo が新スキーマを定義するまで不変）。"""
+    from svp_rpe.recast.report import IdentityAssessment
+
+    IdentityAssessment(enabled=False)
+    with pytest.raises(ValidationError):
+        IdentityAssessment.model_validate({"enabled": True})
 
 
 # --- coverage/anchors consistency validator (Codex P2, #210 round 5 指摘7) -----
@@ -324,6 +344,72 @@ def test_recast_report_rejects_coverage_inconsistent_with_anchor_rows() -> None:
         # 実際の anchor 行は not_observed=1 のみだが、coverage は
         # violated=1（ずらした値）を主張する — 不整合。
         "coverage": {"verified": 0, "violated": 1, "not_observed": 0},
+        "identity_assessment": {"enabled": False},
+    }
+    with pytest.raises(ValidationError):
+        RecastReport.model_validate(payload)
+
+
+def _harmony_anchor_payload(*, adherence_status: str, determination: str, coverage: str) -> dict:
+    return {
+        "anchor_id": "harmony",
+        "domain": "harmony",
+        "policy_mode": "hard",
+        "adherence_status": adherence_status,
+        "determination": determination,
+        "sensor": {"name": "chord_sequence_match", "available": True},
+        "measurements": {},
+        "coverage": coverage,
+    }
+
+
+def test_recast_report_accepts_anchor_row_whose_coverage_matches_adherence_status() -> None:
+    """正常な読み戻し: 行の `coverage` が `adherence_status` の写像結果と
+    一致していれば `model_validate` は pass する（round 6 の行単位 validator
+    が正常経路を誤って弾かないことの機械 assert）。"""
+    payload = {
+        "schema_version": RECAST_REPORT_SCHEMA_VERSION,
+        "project_id": "p",
+        "variant": "v",
+        "backend": "b",
+        "work_id": "w",
+        "take": {"path": "take.wav", "sha256": "0" * 64},
+        "package_sha256": "0" * 64,
+        "anchors": [
+            _harmony_anchor_payload(
+                adherence_status="not_observed", determination="deferred", coverage="not_observed"
+            )
+        ],
+        "coverage": {"verified": 0, "violated": 0, "not_observed": 1},
+        "identity_assessment": {"enabled": False},
+    }
+    report = RecastReport.model_validate(payload)
+    assert report.anchors[0].coverage == "not_observed"
+
+
+def test_recast_report_rejects_anchor_row_coverage_forged_independent_of_status() -> None:
+    """Codex P2（#210 round 6 指摘8）: 行の `coverage` が `adherence_status`
+    と独立に偽装される（`adherence_status="not_observed"` なのに
+    `coverage="verified"`）場合、上位の集計（`RecastReport.coverage`）だけ
+    辻褄を合わせても（round 5 の集計 validator は per-row `coverage` の生値
+    をそのまま合計するため、この偽装 1 件だけなら `verified: 1` の宣言と
+    一致してしまう）、行単位の写像 validator が独立に検出して拒否する。"""
+    payload = {
+        "schema_version": RECAST_REPORT_SCHEMA_VERSION,
+        "project_id": "p",
+        "variant": "v",
+        "backend": "b",
+        "work_id": "w",
+        "take": {"path": "take.wav", "sha256": "0" * 64},
+        "package_sha256": "0" * 64,
+        "anchors": [
+            _harmony_anchor_payload(
+                adherence_status="not_observed", determination="deferred", coverage="verified"
+            )
+        ],
+        # 集計側は偽装した行の coverage（"verified"）とちょうど辻褄が合う
+        # よう仕組んである — round 5 の集計 validator 単体では通過し得る。
+        "coverage": {"verified": 1, "violated": 0, "not_observed": 0},
         "identity_assessment": {"enabled": False},
     }
     with pytest.raises(ValidationError):

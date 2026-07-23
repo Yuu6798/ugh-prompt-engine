@@ -266,6 +266,44 @@ def test_next_command_txt_is_shell_quoted_for_project_filename_with_space(
     assert state_file.runs["edm@suno"].state == "generated"
 
 
+def test_order_sheet_cd_line_is_shell_quoted_for_project_filename_with_space(
+    tmp_path: Path,
+) -> None:
+    """Codex P2 review round 14（PR3 #208 — #210 側にも同内容の指摘）:
+    `order_sheet.md` のコマンドブロック先頭 `cd <cwd_from_order_dir>` が
+    未クオートだった — `_next_command_text`（指摘11 で対応済み）の
+    `--audio`/project 引数と同じコマンドブロック内にある隣接行なのに、
+    そちらだけ `shlex.join` によるクオートが漏れていた。`shlex.join(["cd",
+    cwd_from_order_dir])` でクオートし、空白入り project ファイル名の
+    project で `order_sheet.md` の `cd` 行が `shlex.split` で厳密に 2
+    トークン（`["cd", <単一パス>]`）に戻ることを検証する。"""
+    import shlex
+
+    dest = tmp_path / "demo_project"
+    dest.mkdir()
+    shutil.copy(DEMO_PROJECT / "project.yaml", dest / "my project.yaml")
+    shutil.copy(DEMO_PROJECT / "composition_score.yaml", dest / "composition_score.yaml")
+    shutil.copy(DEMO_PROJECT / "identity.yaml", dest / "identity.yaml")
+    shutil.copytree(DEMO_PROJECT / "identity", dest / "identity")
+    shutil.copytree(DEMO_PROJECT / "arrangements", dest / "arrangements")
+    project_path = dest / "my project.yaml"
+
+    loaded = load_recast_project(project_path)
+    ctx = build_recast_run_context(loaded, variant="edm", backend="suno")
+    invoker = resolve_invoker(ctx.backend_ref, ctx.profile)
+    prepared = invoker.prepare(ctx)
+
+    order_sheet = (prepared.order_dir / "order_sheet.md").read_text(encoding="utf-8")
+    cd_lines = [line for line in order_sheet.splitlines() if line.startswith("cd ")]
+    assert len(cd_lines) == 1
+    # 末尾のシェルコメント（`  # ...`）はコマンド本体ではないため
+    # shlex.split の対象から外す。
+    command_part = cd_lines[0].split("  #", 1)[0]
+    tokens = shlex.split(command_part)
+    assert tokens[0] == "cd"
+    assert len(tokens) == 2  # ["cd", <単一パス>] — 空白でトークン分割されない
+
+
 # --- manual: multi-anchor channel artifact rendering ----------------------------
 
 

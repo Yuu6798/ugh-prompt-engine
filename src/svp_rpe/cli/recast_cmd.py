@@ -125,6 +125,60 @@ def _print_plan_warnings(plan: Any) -> None:
         console.print(f"  - {warning}")
 
 
+def _preflight_reject_plan_state_output_collision(loaded: Any, variant: str, backend: str) -> None:
+    """`<project_dir>/recast_plan.json`/`recast_state.json`（`recast plan`/
+    `run`/`ingest` が最終的に書き込む 2 つの出力ファイル）が、この
+    (variant, backend) run の保護対象入力パス一式（`collect_protected_
+    input_paths`）のいずれかと alias していないかを、**plan 束を構築する
+    （＝ `publish=True` で packages/ へ公開する）前**に検査する（Codex P2
+    review round 15, PR3 #208 指摘30）。
+
+    従来この種の alias は `_publish_recast_plan`/`record_state` それぞれの
+    公開直前ガード（`ValueError` で fail-closed）でしか検出されなかった。
+    しかし `build_recast_plan_artifacts(publish=True)` は verification/mode
+    gate 通過後に packages/ を**先に**公開する設計（round 11 指摘21）であり、
+    この packages 公開自体には `recast_plan.json`/`recast_state.json` との
+    alias ガードが（そもそも対象外なので）存在しない。そのため、例えば
+    project.yaml の `work.score` が誤って `<project_dir>/recast_state.json`
+    を指すような構成では、`record_state` が最終的に衝突を検出して拒否
+    しても、その前段で既に packages/ の公開自体は成功してしまっており、
+    「plan/state のどちらにも一切対応しない成果物」が builds_root に残る
+    ことになる。この preflight はそれを、packages 公開の前段（plan 束の
+    構築そのものより前）で fail-closed に止める。
+
+    `collect_protected_input_paths`（`recast/run_paths.py`）を直接呼ぶ
+    純パス比較のみ（plan 束をまだ構築していないため
+    `RecastPlanResult.protected_inputs` は利用できない — 呼び出しコストは
+    identity manifest の 1 回の read/parse のみで、同関数は manifest
+    破損時も例外を送出せず degrade する契約を既に持つ）。
+
+    衝突を検出した場合はエラーメッセージを出力して `typer.Exit(code=1)` を
+    送出する（呼び出し側は何も書かれていないことを保証される）。
+
+    既存の `_publish_recast_plan`/`record_state` 内ガードは撤去しない —
+    本 preflight を経由しない将来の呼び出し経路に対する defense in depth
+    として維持する。
+    """
+    from svp_rpe.recast.plan import RECAST_PLAN_FILENAME
+    from svp_rpe.recast.run_paths import collect_protected_input_paths
+    from svp_rpe.recast.state import RECAST_STATE_FILENAME
+
+    resolved_inputs = {
+        candidate.resolve()
+        for candidate in collect_protected_input_paths(loaded, variant, backend)
+    }
+    for output_path in (
+        loaded.project_dir / RECAST_PLAN_FILENAME,
+        loaded.project_dir / RECAST_STATE_FILENAME,
+    ):
+        if output_path.resolve() in resolved_inputs:
+            typer.echo(
+                f"Error: output path collides with a protected input path: {output_path}",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+
 def _publish_recast_plan(
     loaded: Any, plan: Any, *, protected_inputs: list[Path]
 ) -> tuple[Path, str]:
@@ -208,6 +262,12 @@ def recast_plan_cmd(
 
     try:
         loaded = load_recast_project(project_yaml)
+        # packages/ への publish=True 公開前の preflight（Codex P2 review
+        # round 15, PR3 #208 指摘30 — `_preflight_reject_plan_state_output_
+        # collision` docstring 参照）: plan 束を構築する前に、この run が
+        # 最終的に書く 2 出力（recast_plan.json/recast_state.json）が保護
+        # 対象入力と alias していないかを検査する。
+        _preflight_reject_plan_state_output_collision(loaded, variant, backend)
         # `publish=True`（Codex P2 review round 10, PR3 #208 指摘19）:
         # `build_recast_plan`（読み取り専用の薄いラッパー、`publish=False`
         # 固定）は「診断だけしたい」プログラム的呼び出し向けの API であり、
@@ -338,11 +398,15 @@ def recast_run_cmd(
     from svp_rpe.arrange.resolver import ArrangementError
     from svp_rpe.recast import RecastError, load_recast_project
     from svp_rpe.recast.backend import resolve_invoker, run_context_from_plan_artifacts
+    from svp_rpe.recast.backends.manual import compute_orders_digest
     from svp_rpe.recast.plan import _normalize_diagnostic, build_recast_plan_artifacts
     from svp_rpe.recast.state import record_state
 
     try:
         loaded = load_recast_project(project_yaml)
+        # packages/ への publish=True 公開前の preflight（Codex P2 review
+        # round 15, PR3 #208 指摘30 — `recast plan` 側の同型コメント参照）。
+        _preflight_reject_plan_state_output_collision(loaded, variant, backend)
         artifacts = build_recast_plan_artifacts(
             loaded, variant=variant, backend=backend, publish=True
         )
@@ -419,6 +483,16 @@ def recast_run_cmd(
         # inputs_digest=None で上書きすると、plan 実行後の入力変更を status の
         # stale 検出が見失う。plan_sha256 も同様に引き回さないと `recast ingest`
         # の plan ファイル突合が機能しない）。
+        #
+        # `orders_digest`（Codex P2 review round 13, PR3 #208 指摘28）: 直上で
+        # atomic 公開された 6 ファイルの content digest を計算し pin する —
+        # `recast ingest` が collect 前にこの pin と disk 上の現在の 6 ファイル
+        # を突合し、run 後に注文書が人手で編集されていないことを検証する。
+        try:
+            orders_digest = compute_orders_digest(prepared.order_dir)
+        except OSError as exc:
+            typer.echo(f"Error: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
         note = os.path.relpath(prepared.order_dir, loaded.project_dir)
         try:
             record_state(
@@ -429,6 +503,7 @@ def recast_run_cmd(
                 note=note,
                 inputs_digest=inputs_digest,
                 plan_sha256=plan_sha256,
+                orders_digest=orders_digest,
                 protected_inputs=protected_inputs,
             )
         except (OSError, ValueError) as exc:
@@ -496,30 +571,53 @@ def recast_ingest_cmd(
     the exact same fail-closed staleness checks as `recast status`
     (Codex P2 review round 2 indicated this command is where PR2's own
     forward-looking `plan_sha256` note applies): the recorded `inputs_digest`
-    must match the current inputs, *and* the recorded `plan_sha256` must
-    match the current `recast_plan.json` bytes (missing/unreadable counts as
-    a mismatch) — either mismatch is reported and exits 1 without touching
-    any file. A `None` `inputs_digest`/`plan_sha256` (e.g. an old-schema or
-    hand-copied state) is *not* trusted as "unknown, skip the check" — it is
-    treated as stale too (Codex P2 review round 4, PR3 #208 指摘 9: a missing
-    pin is exactly the case a stale/forged state most plausibly has). Only
-    then does it rebuild the plan context via the same
-    `build_recast_plan_artifacts` path `recast run` uses. Before that rebuild's
-    result is trusted (re-published as `recast_plan.json` or used to `collect`
-    the take), its freshly recomputed `inputs_digest` is re-compared against
-    the same recorded pin (Codex P2 eighth round #207 指摘16: the precheck
-    above and this rebuild are not atomic — inputs could be swapped in the gap
-    between them, letting an old order's externally generated audio get
-    recorded as the `generated` take for a *new* plan built from the swapped
-    inputs). A mismatch here exits 1 without publishing the plan, collecting
-    the audio, or touching `recast_state.json` — the old plan/state are left
-    untouched. Only once that re-check passes does it re-publish
-    `recast_plan.json` (same `_publish_recast_plan` single source), resolve
-    the `ManualInvoker`, and call `collect(audio)` to atomically ingest the
-    audio into `<builds_root>/takes/<variant>@<backend>/`. Records `generated`
-    (with the freshly (re)computed `inputs_digest`/`plan_sha256`) only after
-    that publish succeeds — this is the command `next_command.txt`/
-    `order_sheet.md` (`ManualInvoker`) advertise.
+    must match the current inputs, the recorded `plan_sha256` must match the
+    current `recast_plan.json` bytes, and the recorded `orders_digest` must
+    match the current 6 order files on disk (Codex P2 review round 13, PR3
+    #208 指摘28 — `recast/backends/manual.py:compute_orders_digest`; missing/
+    unreadable counts as a mismatch in every case) — any mismatch is reported
+    and exits 1 without touching any file. A `None` `inputs_digest`/
+    `plan_sha256`/`orders_digest` (e.g. an old-schema or hand-copied state) is
+    *not* trusted as "unknown, skip the check" — it is treated as stale too
+    (Codex P2 review round 4, PR3 #208 指摘 9: a missing pin is exactly the
+    case a stale/forged state most plausibly has). Only then does it rebuild
+    the plan context via the same `build_recast_plan_artifacts` path
+    `recast run` uses — with `publish=False` (Codex P2 review round 13, PR3
+    #208 指摘27: publishing `builds/packages/<variant>@<backend>/` before the
+    rebuild's own freshly recomputed `inputs_digest` is re-compared against
+    the recorded pin let a swapped-input rebuild overwrite `packages/` even
+    when the digest re-check below was about to reject the run). Before that
+    rebuild's result is trusted (published to `packages/`, re-published as
+    `recast_plan.json`, or used to `collect` the take), its freshly
+    recomputed `inputs_digest` is re-compared against the same recorded pin
+    (Codex P2 eighth round #207 指摘16: the precheck above and this rebuild
+    are not atomic — inputs could be swapped in the gap between them, letting
+    an old order's externally generated audio get recorded as the `generated`
+    take for a *new* plan built from the swapped inputs). A mismatch here
+    exits 1 without publishing `packages/`, the plan, collecting the audio, or
+    touching `recast_state.json` — the old packages/plan/state are left
+    untouched. Only once that re-check passes does it publish `packages/`
+    (from the same in-memory compile the `publish=False` rebuild already
+    produced — no recompile), re-publish `recast_plan.json` (same
+    `_publish_recast_plan` single source), resolve the `ManualInvoker`, and
+    call `collect(audio)` to atomically ingest the audio into
+    `<builds_root>/takes/<variant>@<backend>/`. Records `generated` (with the
+    freshly (re)computed `inputs_digest`/`plan_sha256`) only after that
+    publish succeeds — this is the command `next_command.txt`/`order_sheet.md`
+    (`ManualInvoker`) advertise.
+
+    Order files are never re-published by this command (Codex P2 review
+    round 13, PR3 #208 指摘28): `ManualInvoker.prepare()` unconditionally
+    re-publishes all 6 order files, which would silently erase any manual
+    edit made to them after `recast run` — an edited `prompt.json` (say) that
+    the externally generated audio was actually produced from would be
+    overwritten back to the rebuilt "canonical" content right before
+    `collect`, letting tampered-order audio get accepted as if it came from
+    the pristine, originally published order. This command instead calls
+    `base_prepared_invocation` (the same field assembly `prepare()` uses
+    internally, minus the publish side effect) once the `orders_digest`
+    precheck above has confirmed the 6 files on disk are byte-identical to
+    what was pinned at `recast run` time.
 
     Scope (PR5): once the take is collected and `generated` is recorded, if
     `project.yaml`'s `observation.enabled` is true this command continues on
@@ -559,9 +657,11 @@ def recast_ingest_cmd(
     from svp_rpe.recast import RecastError, load_recast_project
     from svp_rpe.recast.backend import (
         atomic_publish_bytes_bundle,
+        base_prepared_invocation,
         resolve_invoker,
         run_context_from_plan_artifacts,
     )
+    from svp_rpe.recast.backends.manual import compute_orders_digest
     from svp_rpe.recast.plan import (
         RECAST_PLAN_FILENAME,
         _atomic_publish_text_bundle,
@@ -575,11 +675,20 @@ def recast_ingest_cmd(
         build_recast_report,
         render_recast_summary_markdown,
     )
-    from svp_rpe.recast.run_paths import resolve_packages_dir, resolve_reports_dir
+    from svp_rpe.recast.run_paths import (
+        resolve_orders_dir,
+        resolve_packages_dir,
+        resolve_reports_dir,
+    )
     from svp_rpe.recast.state import load_recast_state, record_state
 
     try:
         loaded = load_recast_project(project_yaml)
+        # packages/ への公開（指摘27 対応で `publish=False` 再ビルド後の
+        # 直接 `_atomic_publish_text_bundle` 呼び出し）前の preflight
+        # （Codex P2 review round 15, PR3 #208 指摘30 — `recast plan` 側の
+        # 同型コメント参照）。
+        _preflight_reject_plan_state_output_collision(loaded, variant, backend)
         state_file = load_recast_state(loaded.project_dir)
     except (OSError, ValueError, RecastError) as exc:
         typer.echo(f"Error: {exc}", err=True)
@@ -598,7 +707,9 @@ def recast_ingest_cmd(
 
     # 状態を信用する前の突合（`recast status` と同じ fail-closed 意味論、
     # Codex P2 review round 2 指摘 4 / PR2 の申し送り「run コマンド追加時は
-    # plan_sha256 突合を先に行う」対応）: inputs_digest → plan_sha256 の順。
+    # plan_sha256 突合を先に行う」対応）: inputs_digest → plan_sha256 →
+    # orders_digest の順（Codex P2 review round 13, PR3 #208 指摘28 で
+    # orders_digest を追加）。
     try:
         current_digest = compute_recast_inputs_digest(loaded, variant=variant, backend=backend)
     except (OSError, ValueError, RecastError) as exc:
@@ -636,11 +747,46 @@ def recast_ingest_cmd(
         )
         raise typer.Exit(code=1)
 
+    # orders_digest 突合（Codex P2 review round 13, PR3 #208 指摘28）: 注文書
+    # 6 ファイルが `recast run` 公開時点から disk 上で一切変わっていないことを
+    # 検証する。証拠保全のため、不一致・ファイル欠落いずれの場合も
+    # republish（＝再公開そのものが編集痕跡を消してしまう）は一切行わず、
+    # ここで即座に exit する — 以降のどの publish/collect/record_state にも
+    # 到達しない。
+    order_dir = resolve_orders_dir(loaded, variant, backend)
+    if run.orders_digest is None:
+        typer.echo(
+            f"Error: {run_key} has no recorded orders_digest (stale — no pin). "
+            "Re-run 'svprpe recast plan' / 'svprpe recast run' first.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
     try:
-        # `publish=False`（Codex P2, #210 round 3 指摘4）: 突合前に
-        # `builds/packages/<variant>@<backend>/` を上書きしない。rebuild
-        # 直後の digest 再突合（すぐ下）が reject した場合、packages・plan・
-        # state のいずれも無変更のまま exit する契約を保つ。
+        current_orders_digest = compute_orders_digest(order_dir)
+    except OSError as exc:
+        typer.echo(
+            f"Error: {run_key} order files are missing or unreadable at {order_dir} "
+            f"(cannot verify orders_digest, not re-publishing): {exc}",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    if current_orders_digest != run.orders_digest:
+        typer.echo(
+            f"Error: {run_key} order files changed since they were published by "
+            "'svprpe recast run' (orders_digest mismatch — an order file was edited after "
+            "publication). Not re-publishing (would erase the evidence of the edit). "
+            "Re-run 'svprpe recast run' to publish a fresh order for the current inputs "
+            "before generating and ingesting audio.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # `publish=False`（Codex P2 review round 13, PR3 #208 指摘27; pr5 #210
+    # round 3 指摘4 の同型修正 127891c と実装形を寄せてある）: 突合前に
+    # `builds/packages/<variant>@<backend>/` を上書きしない。下の digest
+    # 再突合が reject した場合、packages・plan・state のいずれも無変更のまま
+    # exit する契約を保つ。
+    try:
         artifacts = build_recast_plan_artifacts(
             loaded, variant=variant, backend=backend, publish=False
         )
@@ -651,7 +797,7 @@ def recast_ingest_cmd(
     # rebuild 後・publish/collect の前に、rebuild が実際に見た入力の digest を
     # 記録済み pin（`run.inputs_digest` — 上の precheck で `current_digest` との
     # 一致を既に確認済み）と再突合する（Codex P2 eighth round #207 指摘16:
-    # precheck（518行目 `compute_recast_inputs_digest`）と rebuild（直上の
+    # precheck（上の `compute_recast_inputs_digest`）と rebuild（直上の
     # `build_recast_plan_artifacts`）の間には TOCTOU 窓があり、その間に入力
     # （例: composition_score.yaml）が差し替えられると rebuild は新しい入力で
     # 新しい plan を構築してしまう — precheck は既に通過済みなのでここを
@@ -662,8 +808,8 @@ def recast_ingest_cmd(
     # 差し替えがあれば必ず値が変わり検出できる。ここで拒否する場合は
     # packages/`_publish_recast_plan`/`collect`/`record_state` のいずれも
     # 呼ばない（packages・plan・take・state のいずれも書き換えない — 旧
-    # plan/state/packages は無傷のまま。round 3 指摘4: `publish=False` に
-    # したことで packages/ もこの契約に含まれるようになった）。
+    # plan/state/packages は無傷のまま。`publish=False` にしたことで
+    # packages/ もこの契約に含まれる — 指摘27）。
     if artifacts.result.inputs_digest != run.inputs_digest:
         typer.echo(
             f"Error: {run_key} inputs changed since the order files were published "
@@ -673,14 +819,14 @@ def recast_ingest_cmd(
         )
         raise typer.Exit(code=1)
 
-    # 突合を通過して初めて package/report を publish する（Codex P2, #210
-    # round 3 指摘4）: `build_recast_plan_artifacts` を `publish=True` で
+    # 突合を通過して初めて package/report を publish する（Codex P2 review
+    # round 13, PR3 #208 指摘27 — pr5 #210 の同型修正 127891c と実装形を
+    # 寄せてある）: `build_recast_plan_artifacts` を `publish=True` で
     # 再実行せず、上の `publish=False` 呼び出しが既に確定させた
     # `artifacts.compiled`（in-memory の compile 済み成果物 — state_reached
-    # が compiled/verified のときのみ non-None、`_publish_recast_plan` 直下の
-    # `_COMPILED_OR_BETTER_STATES` チェックより前にここへ到達するため必ず
-    # non-None）をそのまま書き出す「公開専用」の呼び出しに留める。二重
-    # コンパイルも新たな読み取り機会（＝新たな TOCTOU 窓）も増やさない。
+    # が compiled/verified のときのみ non-None）をそのまま書き出す「公開
+    # 専用」の呼び出しに留める。二重コンパイルも新たな読み取り機会（＝新たな
+    # TOCTOU 窓）も増やさない。
     if artifacts.compiled is not None:
         try:
             _atomic_publish_text_bundle(
@@ -715,7 +861,14 @@ def recast_ingest_cmd(
             loaded, variant=variant, backend=backend, artifacts=artifacts
         )
         invoker = resolve_invoker(artifacts.backend_ref, ctx.profile)
-        prepared = invoker.prepare(ctx)
+        # `invoker.prepare(ctx)` ではなく `base_prepared_invocation(ctx)` を
+        # 直接呼ぶ（Codex P2 review round 13, PR3 #208 指摘28）: 上の
+        # orders_digest 突合により disk 上の 6 ファイルが pin と一致すると
+        # 既に確認済みのため、`ManualInvoker.prepare()` の無条件再公開は
+        # 不要（`一致時も republish は不要` — 指示書どおり）。`prepare()` を
+        # 呼ばないことで、万一ここより後で drift が生じても再公開そのものが
+        # 証拠を上書きすることはない。
+        prepared = base_prepared_invocation(ctx)
         take = invoker.collect(prepared, Path(audio))
     except (OSError, ValueError, ValidationError, yaml.YAMLError, RecastError) as exc:
         typer.echo(f"Error: {exc}", err=True)
@@ -759,6 +912,13 @@ def recast_ingest_cmd(
     # `artifacts.compiled is not None` を要求している（さもなくば RecastError
     # で既に exit 1 済み）ため、ここへ到達する時点で常に non-None。
     assert artifacts.compiled is not None
+    # `observation.anchors`（Codex P2, #211）: 非空なら観測対象を絞る。空
+    # （既定）は「絞り込みなし」— 従来どおり全 manifest anchor を観測する。
+    anchor_scope = (
+        set(loaded.project.observation.anchors)
+        if loaded.project.observation.anchors
+        else None
+    )
 
     try:
         # `expected_audio_sha256=take.sha256`（Codex P2, #210 round 2 指摘2）:
@@ -780,6 +940,7 @@ def recast_ingest_cmd(
             generated_artifact_path=take_relative,
             expected_audio_sha256=take.sha256,
             expected_package_sha256=artifacts.compiled.report.package_sha256,
+            anchor_scope=anchor_scope,
         )
     except (OSError, ValueError, ValidationError, IdentityManifestError) as exc:
         obs_note = _normalize_diagnostic(f"observation failed: {exc}", loaded.project_dir)

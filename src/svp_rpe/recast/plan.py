@@ -50,13 +50,14 @@
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Iterator, List, Literal, Optional
 
 import yaml
 from pydantic import ValidationError
@@ -166,7 +167,7 @@ class RecastPlan(RecastModel):
     であれば常に同じ JSON bytes になる（snapshot 比較の前提）。
     """
 
-    schema_version: Literal["recast-plan/0.1"] = RECAST_PLAN_SCHEMA_VERSION
+    schema_version: Literal["recast-plan/0.1"]
     project_id: str
     variant: str
     backend: str
@@ -795,6 +796,74 @@ def compute_recast_inputs_digest(
     return compute_content_digest(components)
 
 
+@contextlib.contextmanager
+def _staging_directory_at_packages_depth(
+    staging_parent_dir: Path, *, cleanup_created_ancestors: bool
+) -> Iterator[Path]:
+    """`staging_parent_dir`（= `resolve_packages_dir(...).parent`、つまり
+    `builds_root/packages/`）配下に verify/diagnostics 専用の tempdir を作り、
+    そのパスを yield する。
+
+    呼び出し側は `publish` の真偽に関わらず必ず `staging_parent_dir` を
+    `resolve_packages_dir(...).parent` として渡す — こうすることで、この
+    tempdir と実際の公開先 `resolve_packages_dir(...)` は常に**兄弟**（同一
+    親配下）になり、`os.path.relpath` で計算する `artifact_base_locator` が
+    どちらに対しても同一の文字列になる（Codex P2 review round 11, PR3 #208
+    指摘21 で `publish=True` に導入した trick を、round 14 指摘29 で
+    `publish=False`（`recast ingest` の precheck rebuild / `build_recast_plan`
+    の読み取り専用 API）にも一本化して適用する — 従来 `publish=False` は
+    `project_dir` 直下の ephemeral tempdir を使っており、`resolve_packages_
+    dir(...)` とは深さが食い違う locator を焼き込んでいた。`recast ingest`
+    が rebuild 後にこの locator を持つ bytes をそのまま `resolve_packages_
+    dir(...)` へ publish すると、`verify_package`/`observe` の anchor 解決が
+    実際の公開位置では壊れる不整合を生んでいた）。
+
+    `cleanup_created_ancestors=True`（`publish=False` 時）: `staging_parent_
+    dir` に至る祖先ディレクトリのうち、呼び出し時点でまだ存在しないものだけを
+    記録しながら新規作成し、`with` を抜ける際（例外・早期 return を含む
+    あらゆる経路 — `finally` で保証）に、自分が作った祖先だけを深い方から
+    逆順に「空であれば」rmdir して元の状態へ完全に復元する。既に存在する
+    祖先（例: `recast run` 済みで `builds_root/packages/` が既にある
+    `recast ingest` の通常ケース）には一切触れない。これにより
+    `build_recast_plan()`（`publish=False` の読み取り専用 API、pr2 由来の
+    「診断のみ・`builds_root` 非接触」契約）が sibling-staging を使っても
+    `builds_root` に一切痕跡を残さない、という既存契約
+    （`test_build_recast_plan_does_not_create_builds_root`/`test_build_
+    recast_plan_writes_nothing_when_verification_not_required`）を保つ。
+
+    `cleanup_created_ancestors=False`（`publish=True` 時）: 単に
+    `mkdir(parents=True, exist_ok=True)` する — `packages/`（や必要なら
+    `builds_root`）が作成されたまま残ることは、`publish=True` の呼び出し元は
+    どのみち何かを `builds_root` へ永続公開する前提のため許容する
+    （round 11 での既存判断を維持）。
+    """
+    created: List[Path] = []
+    if cleanup_created_ancestors:
+        cursor = staging_parent_dir
+        to_create: List[Path] = []
+        while not cursor.exists():
+            to_create.append(cursor)
+            cursor = cursor.parent
+        for directory in reversed(to_create):
+            directory.mkdir()
+            created.append(directory)
+    else:
+        staging_parent_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with tempfile.TemporaryDirectory(dir=staging_parent_dir) as staging:
+            yield Path(staging)
+    finally:
+        for directory in reversed(created):
+            try:
+                directory.rmdir()
+            except OSError:
+                # 空でない（想定外に他プロセスが書き込んだ等）場合は無理に
+                # 消さない — fail-closed に「痕跡が残り得る」側へ倒す
+                # （他データを巻き込んで削除しない）。
+                pass
+
+
 def build_recast_plan(
     loaded: LoadedRecastProject, *, variant: str, backend: str
 ) -> RecastPlanResult:
@@ -838,21 +907,31 @@ def build_recast_plan_artifacts(
       公開自体は本関数が意図して持つ副作用 — `recast_plan.json` の publish・
       `record_state` はあくまで別途 CLI 側の責務のまま、PR2 P2 対応の範囲は
       変えない）。
-    - `publish=False`（`build_recast_plan` 経由の読み取り専用診断）: 永続
-      ディレクトリには一切触れない。`policy.require_verified_package` が
-      偽ならディスクへ全く書き込まない（真の意味での純粋関数）。真の場合の
-      み、`verify_package`（ファイルベースの V1-V4 検証器）に読ませるための
-      ephemeral tempdir（`tempfile.TemporaryDirectory(dir=loaded.project_dir)`
-      — pr2 twelfth round #207 指摘19 と同じ理由で project_dir 配下に固定し
-      Windows の別ドライブ問題を避ける）を関数内だけで使い、`with` を抜ける
-      際に必ず cleanup される（pr2 thirteenth round #207 指摘21 の「builds_root
-      を mkdir する純関数契約違反」を PR3 の `publish` 分岐でも同じ精神で
-      解消する）。この経路で返る `RecastPlanArtifacts.compiled` の
-      `artifact_base.locator` は ephemeral tempdir の深さに依存する非
-      checkout-stable な値になり得るが、`build_recast_plan`（薄いラッパー）
-      は `.result` だけを返して `compiled` を呼び出し元へ一切渡さないため、
-      `recast_plan.json`（`RecastPlan` 診断表 — package_sha256/content_digest
-      を含まない）の決定論には影響しない。
+    - `publish=False`（`build_recast_plan` 経由の読み取り専用診断、および
+      `recast ingest` の precheck rebuild — Codex P2 review round 13, PR3
+      #208 指摘27 で追加された経路）: `<builds_root>/packages/<variant>@
+      <backend>/` 自体へは書き込まない。verify（`policy.require_verified_
+      package` が真の場合）用の一時ファイルは、実公開先 `resolve_packages_
+      dir(...)` の**兄弟**（`.parent` 配下の tempdir、`_staging_directory_
+      at_packages_depth` 参照）を使う — `publish=True` と同一の sibling-
+      staging（Codex P2 review round 11, PR3 #208 指摘21 導入）を round 14
+      指摘29 で `publish=False` にも一本化した。従来（指摘29 対応前）は
+      project_dir 直下の ephemeral tempdir を使っており、返る
+      `RecastPlanArtifacts.compiled` の `artifact_base.locator` が実公開先
+      とは異なる深さで焼き込まれていた — `build_recast_plan`（薄いラッパー）
+      経由では `.result` だけが呼び出し元へ渡るため無害だったが、`recast
+      ingest`（指摘27 対応で `publish=False` 再ビルド → 突合通過後に
+      `artifacts.compiled` をそのまま実公開先へ publish する経路になった）
+      では、この深さの食い違いが公開後の `verify_package`/`observe` の
+      anchor 解決を壊し得る実害だった。sibling-staging の一本化によりこの
+      食い違いは解消される。`builds_root/packages/`（さらには `builds_root`
+      自体）が呼び出し前に存在しなければ一時的に作成が必要になるが、
+      `_staging_directory_at_packages_depth(cleanup_created_ancestors=True)`
+      が新規作成した祖先だけを `with` を抜ける際に完全に rmdir で復元する
+      ため、`build_recast_plan()` の「`builds_root` に一切触れない」読み取り
+      専用契約（`policy.require_verified_package` が偽なら加えてディスクへ
+      全く書き込まない — こちらは変更なし・真の意味での純粋関数のまま）は
+      維持される。
 
     single-read 束（Codex P2 sixth round #207）: score / identity manifest /
     arrangement spec / capability profile / mode_overrides / device profile の
@@ -1125,6 +1204,7 @@ def build_recast_plan_artifacts(
             mode_overrides_declared=mode_overrides_declared,
         )
         plan = RecastPlan(
+            schema_version=RECAST_PLAN_SCHEMA_VERSION,
             project_id=project.project.id,
             variant=variant,
             backend=backend,
@@ -1307,30 +1387,33 @@ def build_recast_plan_artifacts(
     # になるケースでも、「使えそうな成果物」が builds_root に残ってしまって
     # いた — blocked な plan なのに generator が誤ってそれを拾える状態だった）。
     #
-    # staging_dir の配置: `publish=True` では `real_package_dir`（後述）の
-    # **兄弟**（`resolve_packages_dir(...).parent` 配下の tempdir）に置く —
-    # 兄弟同士は project_dir から見た深さが常に同一のため、`os.path.relpath`
-    # で計算する `artifact_base_locator` は staging_dir に対しても
-    # real_package_dir に対しても同一の文字列になる（`verify_package` は
+    # staging_dir の配置: `publish` の真偽に関わらず、常に実公開先
+    # `resolve_packages_dir(...)` の**兄弟**（`.parent` 配下の tempdir）に
+    # 置く — 兄弟同士は project_dir から見た深さが常に同一のため、
+    # `os.path.relpath` で計算する `artifact_base_locator` は staging_dir に
+    # 対しても実公開先に対しても同一の文字列になる（`verify_package` は
     # `package_dir / locator` で manifest ディレクトリを解決するため、
-    # verify 時点の実ディレクトリ（staging_dir）と最終公開時の実ディレクトリ
-    # （real_package_dir）とで locator の意味が変わってはいけない — 深さを
-    # 揃えることでこれを両立する）。verify 通過後、同じ `compiled.package_json`
-    # /`report_json` bytes をそのまま `real_package_dir` へ publish するため
-    # 再 compile は不要。`publish=False`（`build_recast_plan` の読み取り専用
-    # 経路、PR3 #208 指摘19）では従来どおり project_dir 直下の ephemeral
-    # tempdir を使う（builds_root にはそもそも一切触れない契約のため）。
-    if publish:
-        real_package_dir = resolve_packages_dir(loaded, variant, backend)
-        staging_parent_dir = real_package_dir.parent
-        staging_parent_dir.mkdir(parents=True, exist_ok=True)
-        staging_cm = tempfile.TemporaryDirectory(dir=staging_parent_dir)
-    else:
-        real_package_dir = None
-        staging_cm = tempfile.TemporaryDirectory(dir=loaded.project_dir)
+    # verify 時点の実ディレクトリと最終公開時の実ディレクトリとで locator の
+    # 意味が変わってはいけない — 深さを揃えることでこれを両立する）。
+    #
+    # `publish=False`（`build_recast_plan` の読み取り専用 API・`recast
+    # ingest` の precheck rebuild）でも同じ sibling-staging を使う（Codex P2
+    # review round 14, PR3 #208 指摘29: 従来 `publish=False` は project_dir
+    # 直下の ephemeral tempdir を使っており、実公開先とは深さが食い違う
+    # locator を焼き込んでいた — `recast ingest` が rebuild 後にこの
+    # locator を持つ bytes をそのまま実公開先へ publish すると、
+    # `verify_package`/`observe` の anchor 解決が実際の公開位置では壊れる
+    # 不整合を生む）。`build_recast_plan()` の「`builds_root` に一切触れない」
+    # 読み取り専用契約は `_staging_directory_at_packages_depth` 側の
+    # `cleanup_created_ancestors=True`（新規作成した祖先だけを事後 rmdir で
+    # 完全復元する）で維持する — 詳細は同関数の docstring 参照。
+    packages_dir = resolve_packages_dir(loaded, variant, backend)
+    real_package_dir = packages_dir if publish else None
+    staging_parent_dir = packages_dir.parent
 
-    with staging_cm as staging_dir_value:
-        staging_dir = Path(staging_dir_value)
+    with _staging_directory_at_packages_depth(
+        staging_parent_dir, cleanup_created_ancestors=not publish
+    ) as staging_dir:
         try:
             artifact_base_locator = Path(
                 os.path.relpath(manifest_path.resolve().parent, staging_dir.resolve())

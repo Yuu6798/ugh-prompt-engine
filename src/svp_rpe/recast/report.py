@@ -97,6 +97,27 @@ class RecastReportAnchor(RecastReportModel):
     measurements: Dict[str, JsonValue] = Field(default_factory=dict)
     coverage: CoverageStatus
 
+    @model_validator(mode="after")
+    def _validate_coverage_matches_adherence_status(self) -> "RecastReportAnchor":
+        """`coverage` は `_coverage_for(adherence_status)` の写像結果と
+        一致しなければならない（Codex P2, #210 round 6 指摘8）: 手編集や
+        別経路で生成された行が、例えば `adherence_status="not_observed"`
+        なのに `coverage="verified"` を主張する — 上位の `RecastReport.
+        _validate_coverage_matches_anchors`（round 5 対応）は集計値の
+        一致しか見ないため、複数行の偽装が辻褄合わせで打ち消し合うと
+        素通りしてしまう。行単位の写像そのものを fail-closed に強制する。
+        `build_recast_report` は既に `_coverage_for` の戻り値をそのまま
+        `coverage` に渡しているため、正常な発行経路は自然にこの validator
+        を通過する（builder→dump→validate の読み戻し規律）。"""
+        expected = _coverage_for(self.adherence_status)
+        if self.coverage != expected:
+            raise ValueError(
+                f"RecastReportAnchor '{self.anchor_id}': coverage does not match "
+                f"adherence_status={self.adherence_status!r}: declared coverage="
+                f"{self.coverage!r}, expected {expected!r}"
+            )
+        return self
+
 
 class RecastReportCoverage(RecastReportModel):
     """anchor 単位の被覆集計。"""
@@ -108,9 +129,17 @@ class RecastReportCoverage(RecastReportModel):
 
 class IdentityAssessment(RecastReportModel):
     """予約フィールド: 単一の同一性スコアは本 PR の管轄外（D-1 継承）。
-    将来 Design Memo が閾値付き判定を定義するまで `enabled=false` のみ。"""
+    将来 Design Memo が閾値付き判定を定義するまで `enabled=false` のみ。
 
-    enabled: bool = False
+    `enabled` は `Literal[False]`（Codex P2, #210 round 8 指摘10）: `bool` の
+    ままだと手編集/別経路の report が `enabled: true` を主張してもそのまま
+    受理されてしまうが、`render_recast_summary_markdown` は無条件で
+    `enabled: false` 固定文言を描画するため、report と summary が矛盾した
+    ままレビューへ出回る。ツールが実際には計算していない同一性評価を
+    掲示できないよう、読み込み時に fail-closed で強制する（WI4 の閾値
+    Design Memo が `enabled=true` を許す新スキーマを定義するまで不変）。"""
+
+    enabled: Literal[False] = False
 
 
 def _tally_anchor_coverage(anchors: List[RecastReportAnchor]) -> RecastReportCoverage:
@@ -129,7 +158,7 @@ def _tally_anchor_coverage(anchors: List[RecastReportAnchor]) -> RecastReportCov
 class RecastReport(RecastReportModel):
     """`svprpe recast ingest` の観測段が発行する recast-report/0.1 本体。"""
 
-    schema_version: Literal["recast-report/0.1"] = RECAST_REPORT_SCHEMA_VERSION
+    schema_version: Literal["recast-report/0.1"]
     project_id: str
     variant: str
     backend: str
