@@ -140,10 +140,22 @@ external_fixtures:
 # slow/manual lane の dated 実測時に記録する（本環境では未導入のため TBD）。
 provenance:
   synthesis_specs: synthesis_specs.yaml
-  # synthesis_specs.yaml の sha256 pin（波形の pin）。仕様を変えたらこの値を
-  # 新しい digest へ更新すること（dated 再実測の規律）。
-  # tests/test_melody_observability.py が実ファイルとの完全一致を機械検証する。
+  # synthesis_specs.yaml の sha256 pin。仕様を変えたらこの値を新しい digest へ
+  # 更新すること（dated 再実測の規律）。tests/test_melody_observability.py が実
+  # ファイルとの完全一致を機械検証する。
   synthesis_specs_sha256: "ac8573fcc015005bdf058bab317d2d51467187d7da4d99eadd6fd197cf0fa030"
+  # 波形サンプルの pin。生成波形は build_signal(spec) の関数であり、仕様 YAML
+  # だけでなく builder（scripts/build_melody_bench.py: トーン合成・ギャップ・
+  # dtype）にも依存する。仕様が不変でも builder が変われば音が変わりうるため、
+  # 「spec pin = 波形 pin」を保証するには波形そのものを pin する必要がある。
+  # 値 = sha256(build_signal(fid).y を float32 化した tobytes())。soundfile の
+  # コンテナエンコードに依存しない生サンプルの pin なので libsoundfile 版差にも
+  # 頑健。builder か spec が波形を変えれば test が赤くなり dated 再実測を強制する。
+  waveform_sha256:
+    synth_mono_phrased: "22117ad3e6c09c604ff3eecd91d35717de64930aaf95567e3c64b52bb1a34c64"
+    synth_mono_two_phrase: "df3b5a083d68e02a8d3eaeff9bcd761cd66fa3696fbc1758f66784c11f2fda03"
+    synth_chord_pad: "eec32a54eb987725202797dc80183ca44240295b66f0f260074cf5bed6abaa64"
+    synth_unison_drone: "1a3c83a827a043d1cd3295a3e26456a0f329a21ca6722cdb7df57ccb4f7cf401"
   model_weights:
     demucs: "TBD at slow-lane run (htdemucs_ft weights version/hash)"
     crepe: "TBD at slow-lane run (crepe wheel model-*.h5 version/hash)"

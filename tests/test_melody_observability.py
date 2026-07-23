@@ -319,6 +319,28 @@ def test_synthesis_specs_provenance_pin():
     )
 
 
+def test_waveform_pin_matches_generated_samples():
+    """波形サンプルの pin（builder + spec = 波形）。builder 変更でも赤くなる。
+
+    synthesis_specs.yaml の sha256 pin は仕様だけを固定するが、生成波形は builder
+    (`build_melody_bench.build_signal`) にも依存する。ここでは各 fixture を実際に
+    合成し、float32 サンプルの sha256 が registry の `provenance.waveform_sha256`
+    と完全一致することを検証する（builder が音を変えれば赤くなり dated 再実測を
+    強制する）。
+    """
+    registry = yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))
+    pinned = registry["provenance"]["waveform_sha256"]
+    specs = bench.load_specs()
+    assert set(pinned) == set(specs["fixtures"]), "pin と spec の fixture 集合が不一致"
+    for fid in specs["fixtures"]:
+        y, _sr = bench.build_signal(fid, specs)
+        actual = hashlib.sha256(np.asarray(y, dtype=np.float32).tobytes()).hexdigest()
+        assert actual == pinned[fid], (
+            f"波形が変化: {fid} {actual} != pinned {pinned[fid]}. "
+            "spec か builder を変更したなら registry の waveform_sha256 を更新すること。"
+        )
+
+
 def test_build_signal_is_deterministic():
     specs = bench.load_specs()
     y1, sr1 = bench.build_signal("synth_mono_phrased", specs)
@@ -444,6 +466,10 @@ def test_route_assist_populates_cross_extractor_agreement(monkeypatch, tmp_path)
     assert row["assist_extractor"] == "melodia"
     assert row["assist_status"] == "measured"
     assert row["report"]["cross_extractor_agreement"] == pytest.approx(1.0)
+    # provenance: 主・補助抽出器の source_model が行に記録される。
+    assert row["source_model"] == "main"
+    assert row["assist_source_model"] == "assist"
+    assert "extractor_version" in row and "assist_extractor_version" in row
 
 
 def test_external_manifest_hash_matches_parsed_bytes(tmp_path):

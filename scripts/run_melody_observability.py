@@ -51,6 +51,27 @@ from svp_rpe.rpe.learned import LearnedModelUnavailable  # noqa: E402
 
 REGISTRY_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "registry.yaml"
 
+# 抽出器名 → PyPI distribution 名（provenance の installed version 採取用）。
+_EXTRACTOR_DIST = {
+    "pyin": "librosa",
+    "crepe": "crepe",
+    "melodia": "essentia",
+    "basic_pitch": "basic-pitch",
+}
+
+
+def _extractor_version(extractor: str) -> "str | None":
+    """抽出器の installed package version を best-effort で返す（未導入なら None）。"""
+    import importlib.metadata as _md
+
+    dist = _EXTRACTOR_DIST.get(extractor)
+    if not dist:
+        return None
+    try:
+        return _md.version(dist)
+    except Exception:
+        return None
+
 
 def load_thresholds(registry_path: Path = REGISTRY_PATH) -> ObservabilityThresholds:
     with open(registry_path, "r", encoding="utf-8") as handle:
@@ -95,24 +116,33 @@ def _run_routes_on_file(
         # agreement は null のまま（graceful・slow-lane 隔離）。
         reference_notes = None
         assist_status = None
+        assist_source_model = None
         if route.assist:
             try:
-                reference_notes = observe_assist_notes(audio_path, route, thresholds)
+                reference_notes, assist_source_model = observe_assist_notes(
+                    audio_path, route, thresholds
+                )
                 assist_status = "measured"
             except LearnedModelUnavailable:
                 assist_status = "unavailable"
         report = assess_observability(
             observation, thresholds, reference_notes=reference_notes
         )
+        # provenance: 同一 audio_sha256 でも抽出器ビルド/モデル差で結果が変わりうる
+        # ため、主・補助抽出器の source_model と installed version を行に記録する。
         row: Dict[str, Any] = {
             "route": route.name,
             "extractor": route.extractor,
             "outcome": report.status,
             "report": report.to_dict(),
+            "source_model": observation.source_model,
+            "extractor_version": _extractor_version(route.extractor),
         }
         if route.assist:
             row["assist_extractor"] = route.assist
             row["assist_status"] = assist_status
+            row["assist_source_model"] = assist_source_model
+            row["assist_extractor_version"] = _extractor_version(route.assist)
         rows.append(row)
     return rows
 

@@ -239,19 +239,20 @@ def _observation_notes(
 
 def observe_assist_notes(
     audio_path: str, route: "MelodyRoute", thresholds: ObservabilityThresholds
-) -> list:
-    """route の assist 抽出器を同一音声（同一前処理）に走らせ reference notes を返す。
+) -> "tuple[list, str | None]":
+    """route の assist 抽出器を同一音声（同一前処理）に走らせ (notes, source_model)。
 
     full_mix の basic-pitch × Melodia のように、主抽出器と別の補助抽出器の
-    cross_extractor_agreement を実測するための reference notes を供給する
-    （設計 §4.2「一致時のみ」）。assist 抽出器が未導入なら
-    `LearnedModelUnavailable` が伝播し、呼び出し側で agreement を null に落とす。
+    cross_extractor_agreement を実測するための reference notes と、その補助抽出器の
+    provenance（source_model）を返す（設計 §4.2「一致時のみ」）。assist 抽出器が
+    未導入なら `LearnedModelUnavailable` が伝播し、呼び出し側で agreement を null に
+    落とす。
 
     前処理は主経路と同一（`route.preprocessing`）を用いる — 分離が要る経路では
     同じ vocals stem 上で両抽出器を比較する。
     """
     if not route.assist:
-        return []
+        return [], None
     from svp_rpe.melody.routing import MelodyRoute
 
     assist_route = MelodyRoute(
@@ -260,4 +261,4 @@ def observe_assist_notes(
         extractor=route.assist,
     )
     assist_observation = observe_via_route(audio_path, assist_route)
-    return _observation_notes(assist_observation, thresholds)
+    return _observation_notes(assist_observation, thresholds), assist_observation.source_model
