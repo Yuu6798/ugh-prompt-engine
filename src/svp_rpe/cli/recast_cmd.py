@@ -100,6 +100,60 @@ def _print_plan_warnings(plan: Any) -> None:
         console.print(f"  - {warning}")
 
 
+def _preflight_reject_plan_state_output_collision(loaded: Any, variant: str, backend: str) -> None:
+    """`<project_dir>/recast_plan.json`/`recast_state.json`（`recast plan`/
+    `run`/`ingest` が最終的に書き込む 2 つの出力ファイル）が、この
+    (variant, backend) run の保護対象入力パス一式（`collect_protected_
+    input_paths`）のいずれかと alias していないかを、**plan 束を構築する
+    （＝ `publish=True` で packages/ へ公開する）前**に検査する（Codex P2
+    review round 15, PR3 #208 指摘30）。
+
+    従来この種の alias は `_publish_recast_plan`/`record_state` それぞれの
+    公開直前ガード（`ValueError` で fail-closed）でしか検出されなかった。
+    しかし `build_recast_plan_artifacts(publish=True)` は verification/mode
+    gate 通過後に packages/ を**先に**公開する設計（round 11 指摘21）であり、
+    この packages 公開自体には `recast_plan.json`/`recast_state.json` との
+    alias ガードが（そもそも対象外なので）存在しない。そのため、例えば
+    project.yaml の `work.score` が誤って `<project_dir>/recast_state.json`
+    を指すような構成では、`record_state` が最終的に衝突を検出して拒否
+    しても、その前段で既に packages/ の公開自体は成功してしまっており、
+    「plan/state のどちらにも一切対応しない成果物」が builds_root に残る
+    ことになる。この preflight はそれを、packages 公開の前段（plan 束の
+    構築そのものより前）で fail-closed に止める。
+
+    `collect_protected_input_paths`（`recast/run_paths.py`）を直接呼ぶ
+    純パス比較のみ（plan 束をまだ構築していないため
+    `RecastPlanResult.protected_inputs` は利用できない — 呼び出しコストは
+    identity manifest の 1 回の read/parse のみで、同関数は manifest
+    破損時も例外を送出せず degrade する契約を既に持つ）。
+
+    衝突を検出した場合はエラーメッセージを出力して `typer.Exit(code=1)` を
+    送出する（呼び出し側は何も書かれていないことを保証される）。
+
+    既存の `_publish_recast_plan`/`record_state` 内ガードは撤去しない —
+    本 preflight を経由しない将来の呼び出し経路に対する defense in depth
+    として維持する。
+    """
+    from svp_rpe.recast.plan import RECAST_PLAN_FILENAME
+    from svp_rpe.recast.run_paths import collect_protected_input_paths
+    from svp_rpe.recast.state import RECAST_STATE_FILENAME
+
+    resolved_inputs = {
+        candidate.resolve()
+        for candidate in collect_protected_input_paths(loaded, variant, backend)
+    }
+    for output_path in (
+        loaded.project_dir / RECAST_PLAN_FILENAME,
+        loaded.project_dir / RECAST_STATE_FILENAME,
+    ):
+        if output_path.resolve() in resolved_inputs:
+            typer.echo(
+                f"Error: output path collides with a protected input path: {output_path}",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+
 def _publish_recast_plan(
     loaded: Any, plan: Any, *, protected_inputs: list[Path]
 ) -> tuple[Path, str]:
@@ -183,6 +237,12 @@ def recast_plan_cmd(
 
     try:
         loaded = load_recast_project(project_yaml)
+        # packages/ への publish=True 公開前の preflight（Codex P2 review
+        # round 15, PR3 #208 指摘30 — `_preflight_reject_plan_state_output_
+        # collision` docstring 参照）: plan 束を構築する前に、この run が
+        # 最終的に書く 2 出力（recast_plan.json/recast_state.json）が保護
+        # 対象入力と alias していないかを検査する。
+        _preflight_reject_plan_state_output_collision(loaded, variant, backend)
         # `publish=True`（Codex P2 review round 10, PR3 #208 指摘19）:
         # `build_recast_plan`（読み取り専用の薄いラッパー、`publish=False`
         # 固定）は「診断だけしたい」プログラム的呼び出し向けの API であり、
@@ -319,6 +379,9 @@ def recast_run_cmd(
 
     try:
         loaded = load_recast_project(project_yaml)
+        # packages/ への publish=True 公開前の preflight（Codex P2 review
+        # round 15, PR3 #208 指摘30 — `recast plan` 側の同型コメント参照）。
+        _preflight_reject_plan_state_output_collision(loaded, variant, backend)
         artifacts = build_recast_plan_artifacts(
             loaded, variant=variant, backend=backend, publish=True
         )
@@ -558,6 +621,11 @@ def recast_ingest_cmd(
 
     try:
         loaded = load_recast_project(project_yaml)
+        # packages/ への公開（指摘27 対応で `publish=False` 再ビルド後の
+        # 直接 `_atomic_publish_text_bundle` 呼び出し）前の preflight
+        # （Codex P2 review round 15, PR3 #208 指摘30 — `recast plan` 側の
+        # 同型コメント参照）。
+        _preflight_reject_plan_state_output_collision(loaded, variant, backend)
         state_file = load_recast_state(loaded.project_dir)
     except (OSError, ValueError, RecastError) as exc:
         typer.echo(f"Error: {exc}", err=True)
