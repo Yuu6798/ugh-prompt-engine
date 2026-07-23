@@ -1,0 +1,40 @@
+schema_version: "input-capability/0.2"
+generator: deterministic
+generator_variant: "standard"
+profile_version: "2026-07"
+# 決定論的インスタンス: model_version という概念自体が存在しない
+# （学習モデルではなく `perform.performer.perform` の純粋関数）。
+model_version: null
+interface: "in-process"
+
+# InputCapabilityProfile: recast PR3 の deterministic backend（`perform.performer`
+# 経由の CI-safe in-process 演奏者）の自己記述。他 generator（Suno/MusicGen）の
+# instance と同じ input-capability/0.2 スキーマのインスタンスを追加しているだけで、
+# スキーマ自体の変更ではない。
+#
+# 全チャネル unsupported: in-process 演奏者は `PerformancePackage` を介さず
+# derived CompositionScore を直接消費するため、style_prompt/lyrics_text 等の
+# 「生成器へ渡す入力チャネル」という体系そのものが適用外（recast/backends/deterministic.py
+# の DeterministicInvoker.invoke は prepared.derived_score を直接 perform() へ渡す）。
+# 配送会計（PerformancePackage.channel_artifacts / anchor_statuses）は
+# unknown/unsupported で正直に落ち、捏造しない — 「保存されているか」の証明は
+# 生成後観測（`arrange/observe.py`）側の責務のまま。
+input_channels:
+  style_prompt:
+    support: unsupported
+    note: "in-process 演奏者は CompositionScore を直接消費するため入力チャネル体系の適用外"
+  lyrics_text:
+    support: unsupported
+    note: "in-process 演奏者は CompositionScore を直接消費するため入力チャネル体系の適用外"
+  section_tags:
+    support: unsupported
+    note: "in-process 演奏者は CompositionScore を直接消費するため入力チャネル体系の適用外"
+  reference_audio:
+    support: unsupported
+    note: "in-process 演奏者は CompositionScore を直接消費するため入力チャネル体系の適用外"
+  symbolic_melody:
+    support: unsupported
+    note: "in-process 演奏者は CompositionScore を直接消費するため入力チャネル体系の適用外"
+  midi:
+    support: unsupported
+    note: "in-process 演奏者は CompositionScore を直接消費するため入力チャネル体系の適用外"

@@ -1,0 +1,41 @@
+# recast-project/0.1: PR6 golden path fixture — 1 作品（score+identity:
+# harmony+structure anchor）× 1 編曲（golden variant）× deterministic backend
+# × 2 take（take-01=local invoke / take-02=manual ingest 代役）の CI 全経路
+# 回帰専用 committed project。
+#
+# `examples/recast/e2e_project/` を拡張したもの: identical base score/manifest
+# に対し、deterministic（local）+ deterministic_manual（manual）の 2 backend
+# を宣言し、`observation.enabled: true` で ingest の observe→report 段まで
+# 毎回 CI で回す（`tests/test_recast_golden_path.py`）。
+schema_version: "recast-project/0.1"
+
+project:
+  id: "midnight-signal-golden"
+  builds_root: "builds"
+
+work:
+  score: composition_score.yaml
+  identity_manifest: identity.yaml
+
+variants:
+  golden:
+    arrangement: arrangements/golden.yaml
+
+backends:
+  deterministic:
+    capability_profile: "deterministic"
+    invocation: local
+    invocation_mode: prompt_only
+  deterministic_manual:
+    capability_profile: "deterministic"
+    invocation: manual
+    invocation_mode: prompt_only
+
+policy:
+  capability_mode: advisory
+  require_author_fields_resolved: true
+  require_verified_package: true
+
+observation:
+  enabled: true
+  anchors: []

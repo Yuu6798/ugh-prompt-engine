@@ -63,10 +63,10 @@ def test_packaged_configs_match_repo_configs() -> None:
     load_config はローカル checkout が無い環境でパッケージリソースへフォールバック
     するため、乖離するとインストール実行時のみ旧ルールで動く（PR #66 レビュー指摘）。
 
-    `config/` 直下と `config/domain_profiles/` `config/device_profiles/` の全 YAML
-    を動的に列挙して比較する（固定ファイル名の列挙だと新規追加分がすり抜ける —
-    負債監査指摘）。両側のファイル集合の一致も assert し、片側にしか無いファイルを
-    検出する。
+    `config/` 直下と `config/domain_profiles/` `config/device_profiles/`
+    `config/capability_profiles/` `config/mode_overrides/` の全 YAML を動的に
+    列挙して比較する（固定ファイル名の列挙だと新規追加分がすり抜ける — 負債監査
+    指摘）。両側のファイル集合の一致も assert し、片側にしか無いファイルを検出する。
     """
     from pathlib import Path
 
@@ -74,7 +74,13 @@ def test_packaged_configs_match_repo_configs() -> None:
     repo_config_root = root / "config"
     packaged_config_root = root / "src" / "svp_rpe" / "config"
 
-    subdirs = ("", "domain_profiles", "device_profiles")
+    subdirs = (
+        "",
+        "domain_profiles",
+        "device_profiles",
+        "capability_profiles",
+        "mode_overrides",
+    )
 
     repo_relatives: set[str] = set()
     for subdir in subdirs:

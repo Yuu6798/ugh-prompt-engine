@@ -1,0 +1,10 @@
+{
+  "accepted_formats": [
+    "wav",
+    "mp3"
+  ],
+  "content_digest": "9329b2054fd2af05c598e339ef7b7416486fb54dd31bc14af4bbe1ad83593e99",
+  "cwd": ".",
+  "filename_pattern": "take-01.{wav,mp3}",
+  "package_sha256": "2279e4581d20ca692becce7d7c89f0c0c11285a43ce21603914b2388b2e5fe32"
+}

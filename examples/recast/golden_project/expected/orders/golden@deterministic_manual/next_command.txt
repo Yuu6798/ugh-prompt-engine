@@ -1,0 +1,1 @@
+svprpe recast ingest project.yaml --variant golden --backend deterministic_manual --audio builds/takes/golden@deterministic_manual/take-01.wav

@@ -1,0 +1,71 @@
+# 出典: Cowork 実測 2026-07-17〜19, n=4×2 モード(cover/prompt_only)。
+#
+# InputCapabilityProfile（config/capability_profiles/suno.yaml）は「generator
+# が受け取れる入力チャネルが存在するか」の自己記述（invocation_mode 非依存）。
+# 本ファイルはそれとは別軸（★invocation_mode 軸）: 同じ Suno でも
+# invocation_mode（cover=既存曲を種に生成 / prompt_only=テキストのみで生成）が
+# 変わると、同じ canonical score field path の override が実際にどれだけ
+# 生成結果へ届くかが変わる、という実測記録。既存 CapabilityProfile /
+# control_profile スキーマは一切変更しない（recast/models.py の
+# ModeOverridesConfig という別スキーマ・別ファイル）。
+#
+# n=4×2（cover 4 本 + prompt_only 4 本、各 4 本は time_signature/bpm/key の
+# override 指定を変えたラウンド）の生成結果を目視・実測比較して得た support
+# ラベル。tight/loose のような grip 連続値ではなく、K 系列 grip_class とも
+# 別の 4 値カテゴリ（ChannelSupport と同型: supported/experimental/
+# unsupported/unknown）。
+schema_version: "mode-overrides/0.1"
+generator: suno
+modes:
+  cover:
+    physical.time_signature:
+      support: unsupported
+      evidence: "Cowork 実測 2026-07-17〜19 cover n=4"
+      note: >-
+        4/4 -> 3/4 の override 指定 4 本中 0/4 が反映。生成結果は一貫して
+        原曲（4/4）の拍子へアンカーされ、override が一切届かなかった。
+    physical.bpm:
+      support: experimental
+      evidence: "Cowork 実測 2026-07-17〜19 cover n=4"
+      note: >-
+        override 指定 4 本中、原曲テンポへスナップする傾向を確認（完全な
+        hard preservation ではないが override も安定して反映されない）。
+    physical.key:
+      support: unsupported
+      evidence: "Cowork 実測 2026-07-17〜19 cover n=4"
+      note: >-
+        キー変更（override）はこのモードでは届かない — 原曲キーへ強く
+        アンカーされ、override 指定の有無によらず原曲の調から動かなかった。
+        「届くか」（override 追従性=unsupported）と「保たれるか」（原曲キーの
+        保存性=有利）は別軸: キー保持（不変）に有利という保存側の性質は
+        identity anchor の evidence を参照（`arrange/identity.py` の
+        harmony domain preservation）。
+    physical.valley_depth_target:
+      support: unsupported
+      evidence: "Cowork 実測 2026-07-17〜19 cover n=3 rounds"
+      note: >-
+        3 ラウンドとも生成器側でダイナミクスが圧縮され、valley_depth_target
+        override はプロンプト不可侵（cover 経路にこのチャネル自体が無い）。
+  prompt_only:
+    physical.time_signature:
+      support: experimental
+      evidence: "Cowork 実測 2026-07-17〜19 prompt_only n=4"
+      note: >-
+        3/4 指定 4 本中 2/4 が成功、残り 2/4 は 4/4 のまま — 分散が大きく
+        安定した保証チャネルとは言えない。
+    physical.bpm:
+      support: experimental
+      evidence: "Cowork 実測 2026-07-17〜19 prompt_only n=4"
+      note: >-
+        152 bpm 指定 4 本中 3 本が 152 付近へ着地。cover よりは届くが
+        全数一致ではない。
+    physical.key:
+      support: experimental
+      evidence: "Cowork 実測 2026-07-17〜19 prompt_only n=4"
+      note: >-
+        cover より分散が増え、ジャンル慣用句が調をマイナー化方向へ引く
+        （例: 和風タグ指定でマイナー化）交絡を実測。
+    physical.valley_depth_target:
+      support: unsupported
+      evidence: "Cowork 実測 2026-07-17〜19 prompt_only n=4"
+      note: "prompt_only でも valley_depth_target を受け取るチャネルが存在しない。"

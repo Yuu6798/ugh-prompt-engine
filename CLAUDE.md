@@ -176,7 +176,7 @@ src/svp_rpe/
 ├── control/                    # grip 効果量 (制御トラック K 系列)
 ├── calibration/                # ジャンル/楽器語彙コーパス校正 (genre-calibrate / genre-audit)
 ├── arrange/                    # ArrangementSpec: 決定論的 override/resolve/compile + identity/capability/observation sidecar (AR 系列。models/resolver/bundle/contract/identity/capabilities/observe/package/verify/pathsafe/loader)
-├── recast/                    # RecastProject: 既存 sidecar (CompositionScore/IdentityManifest/ArrangementSpec/InputCapabilityProfile) への参照+実行方針のみのワークスペース定義 (recast-project/0.1。models/loader。PR1 = schema+loader+fixture、CLI 配線・mode_overrides 消費は PR2 以降)
+├── recast/                    # RecastProject: 既存 sidecar (CompositionScore/IdentityManifest/ArrangementSpec/InputCapabilityProfile) への参照+実行方針のみのワークスペース定義 (recast-project/0.1。models/loader/plan/state/backend/report + backends/(manual/deterministic/musicgen)。PR1 = schema+loader+fixture、PR2 = `svprpe recast plan`/`status` CLI + 状態機械 (recast-state/0.1) + mode_overrides (★invocation_mode 軸、mode-overrides/0.1)、PR3 = BackendInvoker 抽象 + manual 注文書(6ファイル) + deterministic backend(in-process 演奏者) + `svprpe recast run` CLI、PR5 = `svprpe recast ingest` の observe→report 拡張 (recast-report/0.1。単一同一性スコアなし・identity_assessment は enabled:false 予約) + `svprpe recast init` (音源からの project 雛形生成、対話式 semantic.core/avoid)、PR6 = golden path fixture (`examples/recast/golden_project/`: 1作品×1編曲×2backend×2take の CI 全経路回帰) + `observation.anchors` 配線 (非空なら観測/レポートを列挙 anchor に絞り込み・未知 id は観測経路 (`observe_generated_artifact`) + `recast ingest` の設定エラーとして fail-closed))
 ├── batch/                     # バッチ処理
 │   ├── runner.py              # batch コマンド本体
 │   └── discovery.py           # 入力ファイル発見
@@ -239,7 +239,7 @@ examples/                      # sample_input/ + expected_output/
 | [`docs/wi1_d1_thresholds.md`](docs/wi1_d1_thresholds.md) | WI1 逸脱分布と D-1 閾値 Design Memo: MusicGen 無人 n=20 の structure/harmony 逸脱分布、§4 編集分解アルゴリズム、§5 D-1 分類規約 v0（within 14/outside 6）、harmony は v0 未分類 |
 | [`docs/wi2_discrimination_harness.md`](docs/wi2_discrimination_harness.md) | WI2 弁別判定ハーネス: 4 セル 13 clips の MusicGen 弁別バッチ、identity-rank 5 軸判定、cell P のチャネル死 byte 証明、順位表決定論再現 12/12、弁別成立は bpm のみ（structure/harmony/brightness は非弁別、key は不安定） |
 | [`docs/wi3_human_calibration.md`](docs/wi3_human_calibration.md) | WI3 人間校正 v0: 事前登録 12 ペア判定（基準器 n=1・ブラインド seed 8400）、identity proxy v0 は空集合（採用 0/5 軸）、同一スコア再生成ペアすら「別の曲」判定、誤り 3 件は P3 same 誤予測（機構は bpm アトラクタ/長さバイアス/平行調流れの軸別）、実 Suno ペア(P5)は第 2 トランシェへ繰延 |
-| [`docs/recast_phase0_melody_spike.md`](docs/recast_phase0_melody_spike.md) | Recast Phase 0 メロディ類似度スパイク: 決定論 pyin ノート抽出が縮退し同曲/異曲分布が重複（ゲート不成立）→ PR4 hard anchor は chords+structure に差し替え、melody は `not_observed`（既存 D-1 `no_sensor`、新語彙なし） |
+| [`docs/recast_phase0_melody_spike.md`](docs/recast_phase0_melody_spike.md) / [`docs/recast_workspace.md`](docs/recast_workspace.md) | Recast Phase 0 メロディ類似度スパイク（決定論 pyin ノート抽出が縮退し同曲/異曲分布が重複でゲート不成立→ PR4 hard anchor は chords+structure、melody は `not_observed`）と recast トラック総括（PR0–PR6: recast-project/0.1 スキーマ・状態機械・CLI フロー init→plan→run→ingest→status、invocation_mode 軸、「約束するのは測定できるものだけ」D-1 準拠、golden path の回し方） |
 
 ## ドキュメント管理ポリシー
 

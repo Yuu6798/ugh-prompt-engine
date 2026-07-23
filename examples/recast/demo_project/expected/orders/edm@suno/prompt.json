@@ -1,0 +1,20 @@
+{
+  "content_digest": "9329b2054fd2af05c598e339ef7b7416486fb54dd31bc14af4bbe1ad83593e99",
+  "generator": "suno",
+  "invocation_mode": "prompt_only",
+  "package_sha256": "2279e4581d20ca692becce7d7c89f0c0c11285a43ce21603914b2388b2e5fe32",
+  "prompt": {
+    "negative_tags": [
+      "bright festival EDM",
+      "comic vocal delivery"
+    ],
+    "section_tags": "[Intro: low density, sub bass only]\n[Verse: sparse drums, short phrases, clear rests]\n[Chorus: full energy, wide stereo, focused layers]\n[Bridge: no kick, no bass, minimal texture]",
+    "tags": [
+      "melodic_edm",
+      "progressive_house",
+      "bright",
+      "wide_stereo"
+    ],
+    "text": "132 BPM. Brightness bright. Introspective night drive atmosphere. melodic_edm / progressive_house track. C minor. 4/4 time. Wide stereo. Active rate 0.90-0.93. Valley depth 0.15-0.25."
+  }
+}

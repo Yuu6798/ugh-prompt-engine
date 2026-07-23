@@ -27,11 +27,16 @@ from svp_rpe.arrange.pathsafe import (
     resolve_confined,
     validate_relative_locator,
 )
-from svp_rpe.recast.models import RecastError, RecastProject, RecastReferenceError
+from svp_rpe.recast.models import (
+    ModeOverridesConfig,
+    RecastError,
+    RecastProject,
+    RecastReferenceError,
+)
 
-# capability_profile の名前参照規約: スラッシュ・拡張子を含まない裸の識別子。
-# マッチしない値（`foo.yaml` / `sub/foo` 等）は相対パス参照として扱う。
-_CAPABILITY_PROFILE_NAME_PATTERN = re.compile(r"^[a-z0-9_-]+$")
+# capability_profile / mode_overrides の名前参照規約: スラッシュ・拡張子を含まない
+# 裸の識別子。マッチしない値（`foo.yaml` / `sub/foo` 等）は相対パス参照として扱う。
+_NAMED_CONFIG_PATTERN = re.compile(r"^[a-z0-9_-]+$")
 
 
 @dataclass(frozen=True)
@@ -95,7 +100,7 @@ def load_recast_project(path: Path | str) -> LoadedRecastProject:
             target=f"backends.{backend_name}.capability_profile",
         )
         if backend.mode_overrides is not None:
-            mode_override_paths[backend_name] = _resolve_sidecar_reference(
+            mode_override_paths[backend_name] = _resolve_mode_overrides(
                 backend.mode_overrides,
                 project_dir,
                 project_path=project_path,
@@ -165,8 +170,8 @@ def _resolve_capability_profile(
     local→packaged フォールバックパターン）。マッチしなければ project_dir
     相対のパス参照として通常の封じ込め+存在チェックへフォールバックする。
     """
-    if _CAPABILITY_PROFILE_NAME_PATTERN.match(value):
-        resolved = _find_named_capability_profile(value)
+    if _NAMED_CONFIG_PATTERN.match(value):
+        resolved = _find_named_config(value, subdir="capability_profiles")
         if resolved is None:
             raise RecastReferenceError(
                 f"recast project {project_path}: {target} names capability profile "
@@ -177,30 +182,65 @@ def _resolve_capability_profile(
     return _resolve_sidecar_reference(value, project_dir, project_path=project_path, target=target)
 
 
-def _find_named_capability_profile(name: str) -> Optional[Path]:
-    for candidate in _local_capability_profile_paths(name):
+def _resolve_mode_overrides(
+    value: str, project_dir: Path, *, project_path: Path, target: str
+) -> Path:
+    """mode_overrides 参照を解決する。
+
+    `_resolve_capability_profile` と同じ名前参照規約: `^[a-z0-9_-]+$` にマッチする
+    裸の識別子は `config/mode_overrides/<name>.yaml` の名前参照として扱い（repo
+    checkout → パッケージ同梱の順）、マッチしなければ project_dir 相対のパス参照
+    として通常の封じ込め+存在チェックへフォールバックする。
+    """
+    if _NAMED_CONFIG_PATTERN.match(value):
+        resolved = _find_named_config(value, subdir="mode_overrides")
+        if resolved is None:
+            raise RecastReferenceError(
+                f"recast project {project_path}: {target} names mode overrides "
+                f"{value!r}, which was not found under config/mode_overrides/ "
+                f"(repo checkout or packaged svp_rpe.config.mode_overrides)"
+            )
+        return resolved
+    return _resolve_sidecar_reference(value, project_dir, project_path=project_path, target=target)
+
+
+def _find_named_config(name: str, *, subdir: str) -> Optional[Path]:
+    for candidate in _local_config_paths(name, subdir=subdir):
         if candidate.is_file():
             return candidate
-    return _packaged_capability_profile_path(name)
+    return _packaged_config_path(name, subdir=subdir)
 
 
-def _local_capability_profile_paths(name: str) -> list[Path]:
+def _local_config_paths(name: str, *, subdir: str) -> list[Path]:
     # svp_rpe/recast/loader.py -> parents[3] == repo root (utils/config_loader.py と同じ深さ)。
     repo_root = Path(__file__).resolve().parents[3]
     return [
-        repo_root / "config" / "capability_profiles" / f"{name}.yaml",
-        Path.cwd() / "config" / "capability_profiles" / f"{name}.yaml",
+        repo_root / "config" / subdir / f"{name}.yaml",
+        Path.cwd() / "config" / subdir / f"{name}.yaml",
     ]
 
 
-def _packaged_capability_profile_path(name: str) -> Optional[Path]:
+def _packaged_config_path(name: str, *, subdir: str) -> Optional[Path]:
     try:
-        resource = files("svp_rpe.config.capability_profiles").joinpath(f"{name}.yaml")
+        resource = files(f"svp_rpe.config.{subdir}").joinpath(f"{name}.yaml")
     except ModuleNotFoundError:
         return None
     if not resource.is_file():
         return None
     return Path(str(resource))
+
+
+def load_mode_overrides(path: Path | str) -> ModeOverridesConfig:
+    """mode-overrides/0.1 YAML を単一 read でロード・検証する。"""
+    mode_overrides_path = Path(path)
+    try:
+        raw_bytes = mode_overrides_path.read_bytes()
+    except OSError as exc:
+        raise RecastError(f"mode overrides unreadable at {mode_overrides_path}: {exc}") from exc
+    data = yaml.safe_load(raw_bytes)
+    if not isinstance(data, dict):
+        raise RecastError(f"mode overrides must be a mapping: {mode_overrides_path}")
+    return ModeOverridesConfig.model_validate(data)
 
 
 def _resolve_builds_root(value: str, project_dir: Path, *, project_path: Path) -> Path:

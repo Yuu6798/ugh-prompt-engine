@@ -25,6 +25,26 @@ backends:
     capability_profile: "suno"
     invocation: manual
     invocation_mode: prompt_only
+    # ★invocation_mode 軸の実測サポート状況（PR2, config/mode_overrides/suno.yaml）。
+    # capability_profile とは別軸・別スキーマ: 「チャネルが存在するか」ではなく
+    # 「invocation_mode（cover/prompt_only）ごとに override が実際に届くか」。
+    mode_overrides: "suno"
+  # PR3: recast run の local invocation 経路（CI-safe in-process 演奏者）。
+  # 注意（実装ノート・PR3 逸脱事項）: このデモ composition_score.yaml は
+  # rendering.target_backend: "external" を宣言しており、resolve_backend_descriptor
+  # により常に profile_key="suno" を要求する（package.py の generator 一致検査は
+  # capability_mode に関わらず無条件）。よって variant "edm" に対し
+  # backend "deterministic"（capability_profile 側 generator="deterministic"）で
+  # `recast plan`/`recast run` を実行すると常に blocked_capability に到達する
+  # （generator mismatch）— これは実装のバグではなく、target_backend が
+  # score-level の静的宣言であり backend 選択と独立である、という既存アーキテクチャの
+  # 制約を正直に表す。deterministic backend を実際に compiled/verified まで
+  # 到達させる E2E 経路は tests/test_recast_backend.py が別の一時 fixture
+  # （rendering.target_backend: "deterministic" を宣言する variant）で検証する。
+  deterministic:
+    capability_profile: "deterministic"
+    invocation: local
+    invocation_mode: prompt_only
 
 policy:
   capability_mode: advisory

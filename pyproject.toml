@@ -83,6 +83,7 @@ where = ["src"]
 "svp_rpe.config.domain_profiles" = ["*.yaml"]
 "svp_rpe.config.device_profiles" = ["*.yaml"]
 "svp_rpe.config.capability_profiles" = ["*.yaml"]
+"svp_rpe.config.mode_overrides" = ["*.yaml"]
 "svp_rpe.roundtrip.data" = ["*.json"]
 
 [tool.pytest.ini_options]

@@ -1,0 +1,9 @@
+{
+  "schema": "chord-sequence/0.1",
+  "chords": [
+    {"root": "C", "quality": "minor"},
+    {"root": "G#", "quality": "major"},
+    {"root": "A#", "quality": "major"},
+    {"root": "C", "quality": "minor"}
+  ]
+}
