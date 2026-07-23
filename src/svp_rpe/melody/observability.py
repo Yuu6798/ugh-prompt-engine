@@ -400,7 +400,7 @@ def assess_observability(
             thresholds,
         )
 
-    voiced_coverage = _voiced_coverage(observation, thresholds)
+    voiced_coverage = _voiced_coverage(observation, thresholds, notes)
     confidence_mean, low_confidence_rate = _confidence_stats(observation, notes, thresholds)
     note_count = len(notes)
     phrase_count = _phrase_count(notes, thresholds.phrase_gap_sec)
@@ -459,18 +459,56 @@ def assess_observability(
 
 
 def _voiced_coverage(
-    observation: MelodyObservation, thresholds: ObservabilityThresholds
+    observation: MelodyObservation,
+    thresholds: ObservabilityThresholds,
+    notes: Sequence[MelodyNote],
 ) -> float:
-    """有声フレーム（hz>0 かつ confidence>=floor）が全フレームに占める割合。"""
-    total = len(observation.frame_hz)
-    if total == 0:
+    """旋律が観測区間をどれだけ占めるか（[0, 1]）。
+
+    フレーム系抽出器（pyin / CREPE / Melodia）では有声フレーム（hz>0 かつ
+    confidence>=floor）が全フレームに占める割合。ノート系抽出器（basic-pitch:
+    フレーム無し）ではフレーム割合を計算できないので、**ノート区間の合併長 /
+    総尺**で被覆を代用する（フレーム被覆ゲートで note-only 表現を一律 0.0 に
+    落とさないため — さもないと full_mix の basic_pitch 経路が構造的に永久
+    insufficient になる）。
+    """
+    total_frames = len(observation.frame_hz)
+    if total_frames > 0:
+        voiced = sum(
+            1
+            for hz, conf in zip(observation.frame_hz, observation.frame_confidence)
+            if hz > 0.0 and conf >= thresholds.voiced_confidence_floor
+        )
+        return voiced / total_frames
+    # note-only 表現: ノート区間合併長 / 総尺。
+    if not notes:
         return 0.0
-    voiced = sum(
-        1
-        for hz, conf in zip(observation.frame_hz, observation.frame_confidence)
-        if hz > 0.0 and conf >= thresholds.voiced_confidence_floor
+    span_end = observation.total_duration_sec
+    if span_end is None or span_end <= 0.0:
+        span_end = max(n.end_sec for n in notes)
+    if span_end <= 0.0:
+        return 0.0
+    covered = _union_length(
+        [(max(0.0, n.start_sec), min(span_end, n.end_sec)) for n in notes]
     )
-    return voiced / total
+    return max(0.0, min(1.0, covered / span_end))
+
+
+def _union_length(intervals: Sequence[Tuple[float, float]]) -> float:
+    """区間の合併長（重なりを二重計上しない）。ポリフォニックなノート重なり対応。"""
+    spans = sorted((s, e) for s, e in intervals if e > s)
+    if not spans:
+        return 0.0
+    total = 0.0
+    cur_start, cur_end = spans[0]
+    for start, end in spans[1:]:
+        if start > cur_end:
+            total += cur_end - cur_start
+            cur_start, cur_end = start, end
+        else:
+            cur_end = max(cur_end, end)
+    total += cur_end - cur_start
+    return total
 
 
 def _confidence_stats(

@@ -139,7 +139,11 @@ external_fixtures:
 # （Demucs / CREPE / Essentia）のバージョン・ハッシュ・取得元は、実推論を回す
 # slow/manual lane の dated 実測時に記録する（本環境では未導入のため TBD）。
 provenance:
-  synthesis_specs: synthesis_specs.yaml   # sha256 は tests/test_melody_observability.py で照合
+  synthesis_specs: synthesis_specs.yaml
+  # synthesis_specs.yaml の sha256 pin（波形の pin）。仕様を変えたらこの値を
+  # 新しい digest へ更新すること（dated 再実測の規律）。
+  # tests/test_melody_observability.py が実ファイルとの完全一致を機械検証する。
+  synthesis_specs_sha256: "ac8573fcc015005bdf058bab317d2d51467187d7da4d99eadd6fd197cf0fa030"
   model_weights:
     demucs: "TBD at slow-lane run (htdemucs_ft weights version/hash)"
     crepe: "TBD at slow-lane run (crepe wheel model-*.h5 version/hash)"

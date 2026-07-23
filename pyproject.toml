@@ -111,3 +111,14 @@ markers = [
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+# Pin the lint rule SET to ruff's classic stable defaults so linting is
+# version-independent. The CI `dev` extra installs `ruff>=0.1` unpinned, and
+# newer ruff releases expand the *default* selection (FURB / UP / PERF / ...),
+# which would otherwise silently flag thousands of pre-existing lines repo-wide
+# and break CI on a mere toolchain bump — unrelated to any diff. Selecting the
+# historical defaults explicitly keeps behavior deterministic across ruff
+# versions. Adopting additional rule families is then a deliberate, reviewable
+# change to this list rather than an accident of `pip install`.
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

@@ -146,10 +146,14 @@ def extract_basic_pitch_observation(
         )
         for event in annotations.note_events
     )
+    # note-only 表現の被覆分母（総尺）。フレームが無いので最終ノート終端で近似する
+    # （observability._voiced_coverage がノート区間合併長 / 総尺で被覆を代用する）。
+    total_duration = round(max((n.end_sec for n in notes), default=0.0), 4)
     return MelodyObservation(
         route=route,
         source_model="spotify:basic_pitch",
         notes=notes,
+        total_duration_sec=total_duration,
     )
 
 

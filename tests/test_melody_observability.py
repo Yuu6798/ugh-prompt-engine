@@ -173,6 +173,31 @@ def test_note_level_extractor_uses_note_confidence():
     assert report.confidence_mean == pytest.approx(0.8)
 
 
+def test_note_only_observation_gets_nonzero_coverage_and_can_be_sufficient():
+    """note-only 表現（basic-pitch）が被覆 0.0 で一律 insufficient にならない（回帰）。
+
+    フレームを持たないノート系抽出器でも、ノート区間合併長 / 総尺で被覆を代用し、
+    密なノート列は sufficient になれる（full_mix の basic_pitch 経路が構造的に
+    永久 insufficient になる不具合の回帰テスト）。
+    """
+    th = _default_thresholds()
+    notes = []
+    # 2 フレーズ・各 6 音（フレーズ間に 0.8s ギャップ）。
+    for phrase_start in (0.0, 4.0):
+        for i in range(6):
+            start = phrase_start + i * 0.5
+            notes.append(MelodyNote(start_sec=start, end_sec=start + 0.45, pitch_midi=60 + i, confidence=0.85))
+    obs = MelodyObservation(
+        route="basic_pitch_direct",
+        source_model="test",
+        notes=tuple(notes),
+        total_duration_sec=max(n.end_sec for n in notes),
+    )
+    report = assess_observability(obs, th)
+    assert report.voiced_coverage > 0.0
+    assert report.status == "sufficient", report.reasons
+
+
 def test_cross_extractor_agreement_identical_and_disjoint():
     a = [MelodyNote(0, 1, 60, 0.9), MelodyNote(1, 2, 62, 0.9), MelodyNote(2, 3, 64, 0.9)]
     b_same = list(a)
@@ -277,12 +302,20 @@ def test_registry_and_specs_are_consistent():
 
 
 def test_synthesis_specs_provenance_pin():
-    """synthesis_specs.yaml の pin（波形の pin）。仕様変更時にこのテストが赤くなる。"""
-    digest = hashlib.sha256(SPECS_PATH.read_bytes()).hexdigest()
-    # 仕様を意図的に変えたらこの pin を新値へ更新すること（dated 再実測の規律）。
-    assert len(digest) == 64  # 存在と可読性の最小 pin（値の固定は下の完全一致で担保）
+    """synthesis_specs.yaml の完全 digest pin（波形の pin）。
+
+    registry.yaml の `provenance.synthesis_specs_sha256` に固定した digest と実
+    ファイルの sha256 の**完全一致**を機械検証する。仕様を変えると digest が変わり
+    このテストが赤くなるので、無言の stale（数値だけ据え置き）が起きず、pin 更新 +
+    dated 再実測が強制される（設計 §5 事前登録厳守 / AGENTS §8 provenance）。
+    """
+    actual = hashlib.sha256(SPECS_PATH.read_bytes()).hexdigest()
     registry = yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))
-    assert registry["provenance"]["synthesis_specs"] == "synthesis_specs.yaml"
+    pinned = registry["provenance"]["synthesis_specs_sha256"]
+    assert actual == pinned, (
+        f"synthesis_specs.yaml digest changed: {actual} != pinned {pinned}. "
+        "仕様を変更したなら registry.yaml の synthesis_specs_sha256 を更新すること。"
+    )
 
 
 def test_build_signal_is_deterministic():
