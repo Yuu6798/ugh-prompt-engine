@@ -23,11 +23,7 @@ from typer.testing import CliRunner
 
 from svp_rpe.cli import app
 from svp_rpe.recast import load_recast_project
-from svp_rpe.recast.backend import (
-    load_backend_capability_profile,
-    resolve_invoker,
-    run_context_from_plan_artifacts,
-)
+from svp_rpe.recast.backend import resolve_invoker, run_context_from_plan_artifacts
 from svp_rpe.recast.plan import build_recast_plan_artifacts
 from svp_rpe.recast.state import load_recast_state
 
@@ -115,12 +111,14 @@ def _synthesize_deterministic_take(project_path: Path) -> tuple[Path, str]:
         loaded, variant="deterministic_e2e", backend="deterministic", publish=True
     )
     assert artifacts.result.plan.state_reached == "verified", artifacts.result.text
-    profile = load_backend_capability_profile(loaded, "deterministic")
+    # `profile` は plan 段（single-read 束）の `artifacts.profile` をそのまま
+    # 使う — `load_backend_capability_profile` での再 read は行わない（Codex
+    # P2 review round 12, PR3 #208 指摘24。`tests/test_recast_run_cli.py`
+    # 505 行目付近と同じ precedent）。
     ctx = run_context_from_plan_artifacts(
-        loaded, variant="deterministic_e2e", backend="deterministic",
-        artifacts=artifacts, profile=profile,
+        loaded, variant="deterministic_e2e", backend="deterministic", artifacts=artifacts
     )
-    invoker = resolve_invoker(artifacts.backend_ref, profile)
+    invoker = resolve_invoker(artifacts.backend_ref, ctx.profile)
     prepared = invoker.prepare(ctx)
     take = invoker.invoke(prepared)
     return take.audio_path, take.sha256
