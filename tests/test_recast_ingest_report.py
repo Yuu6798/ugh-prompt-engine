@@ -521,6 +521,92 @@ def test_observe_generated_artifact_anchor_scope_skips_excluded_anchors(
     assert observation.report.anchors[0].sensor.available is True
 
 
+def test_observe_generated_artifact_rejects_unknown_anchor_scope_id(tmp_path: Path) -> None:
+    """Codex P2（#210 round 9 指摘11）: `anchor_scope` に typo/削除済み id
+    （manifest に存在しない id）が含まれる場合、フィルタへそのまま通すと
+    単に「該当なし」として静かに消え、ゼロ anchor の report が組み立て可能に
+    なってしまう。`observe_generated_artifact` はフィルタ適用前に
+    `anchor_scope ⊆ manifest anchor id 集合` を検証し、外れている id を
+    列挙した `ValueError` で拒否する（report は一切構築されない）。"""
+    project_path = _copy_demo_project(tmp_path, label="unknown-scope")
+
+    plan_result = runner.invoke(
+        app,
+        [
+            "recast", "plan", str(project_path),
+            "--variant", "edm", "--backend", "suno",
+        ],
+    )
+    assert plan_result.exit_code == 0, plan_result.output
+
+    loaded = load_recast_project(project_path)
+    package_path = resolve_packages_dir(loaded, "edm", "suno") / "performance_package.json"
+    audio_path = tmp_path / "fake-take-unknown-scope.wav"
+    audio_path.write_bytes(b"RIFF....WAVEfake-audio-bytes-for-unknown-scope-test")
+
+    with pytest.raises(ValueError, match="harmnoy"):
+        observe_generated_artifact(
+            package_path=package_path,
+            manifest_path=loaded.identity_manifest_path,
+            audio_path=audio_path,
+            # "harmnoy" は実在する "harmony" の typo — manifest 側に存在しない。
+            anchor_scope={"harmnoy"},
+        )
+
+
+def test_ingest_rejects_unknown_observation_anchor_id_as_config_error_not_observation_incomplete(
+    tmp_path: Path,
+) -> None:
+    """Codex P2（#210 round 9 指摘11）の CLI 経路: `project.yaml` の
+    `observation.anchors` に typo/削除済み id が混入している場合、
+    `recast ingest` は既存の `observation_incomplete`（観測実行時の実測失敗
+    用の state）を記録せず、`generated` を記録した直後（observe 呼び出しの
+    手前）で plain な設定エラーとして exit 1 する。`recast_report.json`/
+    `recast_summary.md` は一切書かれない。"""
+    project_path = _copy_demo_project(tmp_path, label="unknown-anchor-cli")
+    text = project_path.read_text(encoding="utf-8")
+    text = text.replace(_OBSERVATION_DISABLED_BLOCK, _OBSERVATION_ENABLED_BLOCK, 1)
+    # "harmnoy" は実在する "harmony" の typo — manifest（lyrics/melody/harmony
+    # の3 anchor）には存在しない。
+    text = text.replace(
+        "observation:\n  enabled: true\n  anchors: []\n",
+        'observation:\n  enabled: true\n  anchors: ["harmnoy"]\n',
+        1,
+    )
+    project_path.write_text(text, encoding="utf-8")
+
+    run_result = runner.invoke(
+        app, ["recast", "run", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert run_result.exit_code == 0, run_result.output
+
+    takes_dir = project_path.parent / "builds" / "takes" / "edm@suno"
+    takes_dir.mkdir(parents=True, exist_ok=True)
+    audio_path = takes_dir / "take-01.wav"
+    audio_path.write_bytes(b"RIFF....WAVEfake-audio-bytes")
+
+    ingest_result = runner.invoke(
+        app,
+        [
+            "recast", "ingest", str(project_path),
+            "--variant", "edm", "--backend", "suno",
+            "--audio", str(audio_path),
+        ],
+    )
+    assert ingest_result.exit_code == 1, ingest_result.output
+    assert "harmnoy" in ingest_result.output
+
+    state_file = load_recast_state(project_path.parent)
+    run = state_file.runs["edm@suno"]
+    # `generated` は observe 呼び出しの手前で既に記録済み（take の collect
+    # 自体は成功している）— 設定エラーは state を `observation_incomplete`
+    # へは進めない（観測実行時の実測失敗とは別種のエラーであるため）。
+    assert run.state == "generated"
+
+    reports_dir = project_path.parent / "builds" / "reports" / "edm@suno"
+    assert not reports_dir.exists()
+
+
 def test_ingest_records_observation_incomplete_when_package_changes_after_publish(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

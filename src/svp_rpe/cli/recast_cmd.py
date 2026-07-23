@@ -920,6 +920,39 @@ def recast_ingest_cmd(
         else None
     )
 
+    # 未知 id の事前検査（Codex P2, #210 round 9 指摘11）: typo/削除済み
+    # anchor を含む `observation.anchors` は設定ミスであり、実行時の観測
+    # 失敗（`observation_incomplete`）とは別種のエラーとして扱う —
+    # `observe_generated_artifact` 自身の同型ガード（防御的多重化・
+    # `svprpe observe` 単体実行など他呼び出し元向け）とは別に、ここでは
+    # state を一切変更せず（`observation_incomplete` を記録しない）plain
+    # な Error + exit 1 とする。manifest の実 YAML 構造が壊れている場合は
+    # ここでは判定せず、通常どおり `observe_generated_artifact` 側の
+    # fail-closed 検証（`observation_incomplete` 経由）に委ねる。
+    if anchor_scope is not None:
+        manifest_bytes_for_scope_check = loaded.identity_manifest_path.read_bytes()
+        try:
+            raw_manifest_for_scope_check = yaml.safe_load(manifest_bytes_for_scope_check)
+        except yaml.YAMLError:
+            raw_manifest_for_scope_check = None
+        if isinstance(raw_manifest_for_scope_check, dict) and isinstance(
+            raw_manifest_for_scope_check.get("anchors"), list
+        ):
+            known_anchor_ids = {
+                entry.get("id")
+                for entry in raw_manifest_for_scope_check["anchors"]
+                if isinstance(entry, dict)
+            }
+            unknown_anchor_ids = anchor_scope - known_anchor_ids
+            if unknown_anchor_ids:
+                typer.echo(
+                    "Error: project.yaml observation.anchors contains anchor id(s) "
+                    f"not present in the identity manifest: {sorted(unknown_anchor_ids)} "
+                    f"(known anchor ids: {sorted(known_anchor_ids)})",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+
     try:
         # `expected_audio_sha256=take.sha256`（Codex P2, #210 round 2 指摘2）:
         # `collect()`/`invoke()` が確定させた take の sha256 を、
