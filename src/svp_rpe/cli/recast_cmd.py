@@ -1280,6 +1280,43 @@ def recast_ingest_cmd(
         console.print(f"[green]Ingested take: {take.audio_path} (sha256={take.sha256})[/green]")
 
     if not loaded.project.observation.enabled:
+        # 観測無効化時の再観測（Codex P2 review 4 巡目, PR #212 指摘）:
+        # `is_reobserve` かつ `observation.enabled: false` の場合、ここで
+        # 単に案内を出して exit するだけだと、state が `observed`/
+        # `reported` のまま（古い `observation_digest` pin を抱えたまま）
+        # 残り続ける。`recast status` は observed/reported の run にだけ
+        # `observation_digest` 突合を課すため、state が変わらない限り
+        # 恒久的に stale 表示 → ingest 再実行 → この early-exit → 何も
+        # 変わらない、という無限ループになる。observation を無効化した
+        # 時点で「この report はもう現在の観測方針を反映していない」と
+        # みなし、state を `generated` へ撤回する（`_REOBSERVABLE_STATES`
+        # に generated が含まれるため、以降 observation.enabled を true へ
+        # 戻せば同じ take でそのまま再観測できる）。既存の report/summary
+        # ファイル自体は disk から削除しない（証跡保全 — 他の recast 公開
+        # サイトと同じ「無条件削除しない」規律）。
+        if is_reobserve:
+            revert_note = "観測が無効化されたため report を撤回（generated へ復帰）"
+            try:
+                record_state(
+                    loaded.project_dir,
+                    variant,
+                    backend,
+                    "generated",
+                    note=revert_note,
+                    inputs_digest=artifacts.result.inputs_digest,
+                    plan_sha256=plan_sha256,
+                    observation_digest=current_observation_digest,
+                    protected_inputs=prepared.protected_input_paths,
+                )
+            except (OSError, ValueError) as exc:
+                typer.echo(f"Error: {exc}", err=True)
+                raise typer.Exit(code=1) from exc
+            console.print(
+                f"[yellow]{revert_note}。"
+                f"{resolve_reports_dir(loaded, variant, backend)} 配下の既存 "
+                "report/summary は削除されていません（証跡として残ります）が、"
+                "この run の現在の状態はもう表しません。[/yellow]"
+            )
         console.print(
             "Next step: project.yaml の observation.enabled が無効です。"
             "svprpe observe <package.json> <audio> --manifest <identity.yaml> "

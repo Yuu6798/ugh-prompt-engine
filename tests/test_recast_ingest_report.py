@@ -385,6 +385,99 @@ def test_recast_ingest_reobserve_rejects_audio_that_does_not_match_existing_take
 
 
 @pytest.mark.slow
+def test_recast_ingest_reverts_to_generated_when_observation_disabled_after_reported(
+    tmp_path: Path,
+) -> None:
+    """観測無効化時の再観測（Codex P2 review 4 巡目, PR #212 指摘）:
+
+    `reported` 到達後に `observation.enabled` を `false` へ変更すると、
+    `recast status` は `observation_digest` 不一致で stale 表示になる。同一
+    take（`--audio` に既存 `take-01.wav` を再指定）で `recast ingest` を
+    再実行すると（`is_reobserve`、observation が無効なので observe→report
+    へは進まない）、take を再 collect せず state を `generated` へ撤回し
+    （report/summary ファイルは disk から削除しない）、`recast status` は
+    再び安定する（stale 表示が消える）。その後 `observation.enabled: true`
+    へ戻して同じ take で再度 ingest すれば、observe→report をやり直し
+    `reported` へ復帰する。"""
+    project_path = _copy_e2e_project(tmp_path, label="disable_reenable")
+    _add_manual_deterministic_backend_and_enable_observation(project_path)
+
+    audio_path, audio_sha256 = _synthesize_deterministic_take(project_path)
+    reports_dir, _ = _run_manual_ingest(project_path, audio_path)
+
+    run_key = "deterministic_e2e@deterministic_manual"
+    state_reported = load_recast_state(project_path.parent)
+    assert state_reported.runs[run_key].state == "reported"
+
+    # observation.enabled: true -> false
+    project_text = project_path.read_text(encoding="utf-8")
+    assert _OBSERVATION_ENABLED_BLOCK in project_text  # sanity
+    project_text = project_text.replace(
+        _OBSERVATION_ENABLED_BLOCK, _OBSERVATION_DISABLED_BLOCK, 1
+    )
+    project_path.write_text(project_text, encoding="utf-8")
+
+    status_stale = runner.invoke(app, ["recast", "status", str(project_path)])
+    assert status_stale.exit_code == 0, status_stale.output
+    assert "stale" in status_stale.output
+
+    takes_dir = project_path.parent / "builds" / "takes" / run_key
+    existing_take_path = takes_dir / "take-01.wav"
+    assert existing_take_path.is_file()
+
+    revert_result = runner.invoke(
+        app,
+        [
+            "recast", "ingest", str(project_path),
+            "--variant", "deterministic_e2e", "--backend", "deterministic_manual",
+            "--audio", str(existing_take_path),
+        ],
+    )
+    assert revert_result.exit_code == 0, revert_result.output
+    assert "report を撤回" in revert_result.output
+
+    state_after_revert = load_recast_state(project_path.parent)
+    run_after_revert = state_after_revert.runs[run_key]
+    assert run_after_revert.state == "generated"
+
+    # 既存 report/summary は削除されない（証跡保全）。
+    assert (reports_dir / "recast_report.json").is_file()
+    assert (reports_dir / "recast_summary.md").is_file()
+
+    # state が generated へ戻ったため、status は再び安定する（observation_digest
+    # 突合は observed/reported の run にしか課されない）。
+    status_after_revert = runner.invoke(app, ["recast", "status", str(project_path)])
+    assert status_after_revert.exit_code == 0, status_after_revert.output
+    assert "stale" not in status_after_revert.output
+
+    # observation.enabled: false -> true（元の全 anchor 設定へ）。
+    project_text2 = project_path.read_text(encoding="utf-8")
+    assert _OBSERVATION_DISABLED_BLOCK in project_text2  # sanity
+    project_text2 = project_text2.replace(
+        _OBSERVATION_DISABLED_BLOCK, _OBSERVATION_ENABLED_BLOCK, 1
+    )
+    project_path.write_text(project_text2, encoding="utf-8")
+
+    reobserve_result = runner.invoke(
+        app,
+        [
+            "recast", "ingest", str(project_path),
+            "--variant", "deterministic_e2e", "--backend", "deterministic_manual",
+            "--audio", str(existing_take_path),
+        ],
+    )
+    assert reobserve_result.exit_code == 0, reobserve_result.output
+
+    state_final = load_recast_state(project_path.parent)
+    assert state_final.runs[run_key].state == "reported"
+
+    refreshed_report = json.loads(
+        (reports_dir / "recast_report.json").read_text(encoding="utf-8")
+    )
+    assert refreshed_report["take"]["sha256"] == audio_sha256
+
+
+@pytest.mark.slow
 def test_ingest_observe_report_e2e_is_byte_identical_across_reruns(tmp_path: Path) -> None:
     """report/summary の決定論: 独立したプロジェクトコピーで同じ操作をもう一度
     実行し、`recast_report.json`/`recast_summary.md` が byte-for-byte 一致する
