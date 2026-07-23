@@ -813,6 +813,69 @@ def test_recast_status_reports_stale_after_plan_overwritten_by_other_run(
     assert "再実行" in status_result.output
 
 
+def test_recast_status_reports_stale_after_order_file_edited(tmp_path: Path) -> None:
+    """`recast run` で manual backend（`edm@suno`）が `awaiting_generation` に
+    達し注文書 6 ファイルを公開した後、`prompt.json` が発行後に編集された
+    場合、`recast status` は stale（注文書が発行後に変更/欠落）と表示し、
+    `svprpe recast ingest` を次の一手として案内しないことを検証する（Codex
+    P2 review round 10 指摘12）: `recast ingest` 自身は元々 collect 前に
+    `orders_digest` を突合して拒否するが、`recast status` はその突合を
+    行わずに無条件で ingest を勧めていたため、外部生成（Suno 等）を注文書
+    どおりでない状態のまま無駄撃ちさせる誘因になっていた。"""
+    project_path = _copy_demo_project(tmp_path)
+    plan_result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert plan_result.exit_code == 0, plan_result.output
+
+    run_result = runner.invoke(
+        app, ["recast", "run", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert run_result.exit_code == 0, run_result.output
+
+    prompt_path = project_path.parent / "builds" / "orders" / "edm@suno" / "prompt.json"
+    assert prompt_path.is_file()
+    prompt_path.write_text(
+        prompt_path.read_text(encoding="utf-8") + "\n# tampered after publish\n",
+        encoding="utf-8",
+    )
+
+    status_result = runner.invoke(app, ["recast", "status", str(project_path)])
+
+    assert status_result.exit_code == 0, status_result.output
+    assert "stale" in status_result.output
+    assert "注文書" in status_result.output
+    assert "再実行" in status_result.output
+    # ingest への案内（次の一手）は出ない — 無駄な外部生成を誘発しない。
+    assert "svprpe recast ingest" not in status_result.output
+
+
+def test_recast_status_reports_stale_when_order_dir_missing(tmp_path: Path) -> None:
+    """注文書ディレクトリごと欠落している場合（誤って削除等）も同様に
+    stale 表示になることを検証する（`compute_orders_digest` の `OSError` を
+    `_orders_digest_matches` が fail-closed で吸収する経路）。"""
+    project_path = _copy_demo_project(tmp_path)
+    plan_result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert plan_result.exit_code == 0, plan_result.output
+
+    run_result = runner.invoke(
+        app, ["recast", "run", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert run_result.exit_code == 0, run_result.output
+
+    orders_dir = project_path.parent / "builds" / "orders" / "edm@suno"
+    assert orders_dir.is_dir()
+    shutil.rmtree(orders_dir)
+
+    status_result = runner.invoke(app, ["recast", "status", str(project_path)])
+
+    assert status_result.exit_code == 0, status_result.output
+    assert "stale" in status_result.output
+    assert "svprpe recast ingest" not in status_result.output
+
+
 def test_recast_help_lists_plan_and_status() -> None:
     result = runner.invoke(app, ["recast", "--help"])
 

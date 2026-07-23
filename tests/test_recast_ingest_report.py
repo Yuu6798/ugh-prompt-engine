@@ -557,12 +557,18 @@ def test_observe_generated_artifact_rejects_unknown_anchor_scope_id(tmp_path: Pa
 def test_ingest_rejects_unknown_observation_anchor_id_as_config_error_not_observation_incomplete(
     tmp_path: Path,
 ) -> None:
-    """Codex P2（#210 round 9 指摘11）の CLI 経路: `project.yaml` の
-    `observation.anchors` に typo/削除済み id が混入している場合、
-    `recast ingest` は既存の `observation_incomplete`（観測実行時の実測失敗
-    用の state）を記録せず、`generated` を記録した直後（observe 呼び出しの
-    手前）で plain な設定エラーとして exit 1 する。`recast_report.json`/
-    `recast_summary.md` は一切書かれない。"""
+    """Codex P2（#210 round 9 指摘11、round 10 指摘13 でチェック位置を前倒し）
+    の CLI 経路: `project.yaml` の `observation.anchors` に typo/削除済み id
+    が混入している場合、`recast ingest` は既存の `observation_incomplete`
+    （観測実行時の実測失敗用の state）を記録しないだけでなく、`generated`
+    （take の collect）へも一切進まない — スコープ検証を他の precheck 群
+    （inputs_digest/plan_sha256/orders_digest）と同じ「collect・publish・
+    state 記録より前」の位置へ移動したため、typo な設定のまま ingest を
+    叩いても state は `awaiting_generation` のまま変化せず、plain な設定
+    エラーとして exit 1 する（typo 修正後、同じ take でそのまま ingest を
+    やり直せる — 旧位置だと `generated` が先に確定してしまい再 ingest
+    できなかった）。`recast_report.json`/`recast_summary.md` は一切書かれ
+    ない。"""
     project_path = _copy_demo_project(tmp_path, label="unknown-anchor-cli")
     text = project_path.read_text(encoding="utf-8")
     text = text.replace(_OBSERVATION_DISABLED_BLOCK, _OBSERVATION_ENABLED_BLOCK, 1)
@@ -598,13 +604,37 @@ def test_ingest_rejects_unknown_observation_anchor_id_as_config_error_not_observ
 
     state_file = load_recast_state(project_path.parent)
     run = state_file.runs["edm@suno"]
-    # `generated` は observe 呼び出しの手前で既に記録済み（take の collect
-    # 自体は成功している）— 設定エラーは state を `observation_incomplete`
-    # へは進めない（観測実行時の実測失敗とは別種のエラーであるため）。
-    assert run.state == "generated"
+    # スコープ検証は collect/publish/state 記録より前で走るため、typo な
+    # 設定のまま ingest を叩いても take の collect 自体に到達せず、state は
+    # `recast run` が記録した `awaiting_generation` のまま変化しない。
+    assert run.state == "awaiting_generation"
 
     reports_dir = project_path.parent / "builds" / "reports" / "edm@suno"
     assert not reports_dir.exists()
+
+    # typo 修正後、同じ awaiting_generation run に対してそのまま ingest を
+    # やり直せる（旧位置だと `generated` が先に確定し、orders_digest
+    # precheck が次回 ingest を弾いていた）— 少なくとも「設定 typo による
+    # 拒否」を二度と踏まないことを、typo 修正後の 2 回目呼び出しがもう
+    # unknown anchor id のエラーメッセージを出さないことで確認する（実
+    # 抽出の成否はこのテストの関心事ではないため、状態機械のゲートを
+    # 通過できたかどうかのみを見る）。
+    text = project_path.read_text(encoding="utf-8")
+    text = text.replace(
+        'observation:\n  enabled: true\n  anchors: ["harmnoy"]\n',
+        'observation:\n  enabled: true\n  anchors: ["harmony"]\n',
+        1,
+    )
+    project_path.write_text(text, encoding="utf-8")
+    retry_result = runner.invoke(
+        app,
+        [
+            "recast", "ingest", str(project_path),
+            "--variant", "edm", "--backend", "suno",
+            "--audio", str(audio_path),
+        ],
+    )
+    assert "not present in the identity manifest" not in retry_result.output
 
 
 def test_ingest_records_observation_incomplete_when_package_changes_after_publish(
