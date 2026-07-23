@@ -298,6 +298,52 @@ def _publish_recast_plan(
     return plan_path, plan_sha256
 
 
+# `recast plan` の再実行が降格させてはいけない進行状態（Codex P2 review,
+# PR #212 指摘・recast_cmd.py:372 参照）。plan パイプライン
+# （`build_recast_plan_artifacts`）自体は `compiled`/`verified`/`blocked_*`
+# までしか到達しない — これらより先（生成段）に進んだ run を、入力が
+# 実際には無変更のまま plan だけ再実行しただけで verified/compiled へ巻き
+# 戻すのは、生成済み/収蔵済み take を無意味に失わせる（orders_digest も
+# 一緒に失われ、次の `recast ingest` が拒否される）。
+_PROGRESSED_RUN_STATES = frozenset(
+    {"awaiting_generation", "generated", "observed", "reported"}
+)
+
+
+def _find_progressed_run_to_preserve(
+    loaded: Any, variant: str, backend: str, *, inputs_digest: str, plan_sha256: str
+) -> Optional[Any]:
+    """`recast plan` の再実行前に、既存 run エントリが「進行状態」
+    （`_PROGRESSED_RUN_STATES`）かつ入力・plan が実際には無変更（再計算した
+    `inputs_digest` と公開した `plan_sha256` の両方が既存エントリと一致）で
+    あれば、それをそのまま返す（呼び出し側はこれが非 None なら `record_state`
+    を呼ばず既存エントリを温存する）。
+
+    根拠: `observation` 節の分離（PR #212 の別指摘）と同じ精神 —
+    plan パイプラインは入力一式（project/score/identity_manifest/
+    arrangement spec/capability profile/mode_overrides/device profile）の
+    純関数であり、`inputs_digest` が不変なら実際の解決結果（anchors/
+    changed_fields/blocked 等）も不変で `plan_sha256`（決定論的 canonical
+    JSON の hash）も同じ bytes になるはず。両方が一致する場合に限り「plan は
+    診断として再実行されただけで、注文書・生成物の正当性には一切影響しない」
+    と判断できる — 入力が実際に変わっていれば（どちらかが不一致）従来どおり
+    plan 段の状態で上書きする（古い注文はどのみち stale で無効なため、
+    降格が正しい）。
+
+    `orders_digest` はこの判定に含めない: 一致条件が満たされる時点で
+    `record_state` 自体を呼ばないため、既存エントリの `orders_digest` は
+    その他のフィールド（`note`/`history` 等）ごと無条件で温存される。"""
+    from svp_rpe.recast.state import load_recast_state
+
+    state_file = load_recast_state(loaded.project_dir)
+    existing = state_file.runs.get(f"{variant}@{backend}")
+    if existing is None or existing.state not in _PROGRESSED_RUN_STATES:
+        return None
+    if existing.inputs_digest != inputs_digest or existing.plan_sha256 != plan_sha256:
+        return None
+    return existing
+
+
 @recast_app.command("plan")
 def recast_plan_cmd(
     project_yaml: str = typer.Argument(..., help="Path to RecastProject YAML"),
@@ -364,20 +410,36 @@ def recast_plan_cmd(
 
     # 状態記録は plan JSON の publish が成功した後にのみ行う（Codex P2 #207）:
     # 書き込み失敗時に stale な recast_state.json を残さないための順序保証。
-    try:
-        record_state(
-            loaded.project_dir,
-            variant,
-            backend,
-            result.plan.state_reached,
-            _plan_state_note(result),
-            inputs_digest=result.inputs_digest,
-            plan_sha256=plan_sha256,
-            protected_inputs=result.protected_inputs,
+    #
+    # 入力・plan が実際には無変更のまま `recast plan` を再実行しただけの
+    # 場合、既存 run が進行状態（awaiting_generation 以降）に到達済みなら
+    # それを保持し record_state を呼ばない（Codex P2 review, PR #212 指摘・
+    # `_find_progressed_run_to_preserve` docstring 参照 — plan パイプライン
+    # 自体は compiled/verified までしか到達しないため、無条件に record_state
+    # すると生成済み/収蔵済み take の pin（orders_digest 含む）を失う）。
+    preserved_run = _find_progressed_run_to_preserve(
+        loaded, variant, backend, inputs_digest=result.inputs_digest, plan_sha256=plan_sha256
+    )
+    if preserved_run is not None:
+        console.print(
+            f"[cyan]既存の進行状態を保持しました: {preserved_run.state}"
+            "（入力・plan は無変更のため降格しません。recast_plan.json のみ再公開）[/cyan]"
         )
-    except (OSError, ValueError) as exc:
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
+    else:
+        try:
+            record_state(
+                loaded.project_dir,
+                variant,
+                backend,
+                result.plan.state_reached,
+                _plan_state_note(result),
+                inputs_digest=result.inputs_digest,
+                plan_sha256=plan_sha256,
+                protected_inputs=result.protected_inputs,
+            )
+        except (OSError, ValueError) as exc:
+            typer.echo(f"Error: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
 
     anchors_table = Table(title=f"Anchors: {variant}@{backend}")
     anchors_table.add_column("anchor_id")

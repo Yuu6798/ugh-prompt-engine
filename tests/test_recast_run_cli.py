@@ -393,6 +393,111 @@ def test_recast_ingest_rejects_when_non_observation_project_field_edited(
     assert "stale" in result.output
 
 
+# --- recast plan re-run: progressed run preservation (Codex P2, PR #212) -----
+
+
+def test_recast_plan_rerun_preserves_awaiting_generation_state(tmp_path: Path) -> None:
+    """Codex P2 review（PR #212 指摘・recast_cmd.py:372）の回復フロー受け入れ
+    条件: 入力が実際には無変更のまま `recast plan` を再実行しても、既に
+    `awaiting_generation`（注文書発行済み）へ到達した run は verified へ
+    降格させない — state・orders_digest とも保持され、同じ take で
+    `recast ingest` がそのまま成功することを検証する。"""
+    project_path = _copy_demo_project(tmp_path)
+    run_result = runner.invoke(
+        app, ["recast", "run", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert run_result.exit_code == 0, run_result.output
+
+    state_before = load_recast_state(project_path.parent)
+    run_before = state_before.runs["edm@suno"]
+    assert run_before.state == "awaiting_generation"
+    assert run_before.orders_digest is not None
+
+    # 入力を一切変更せずに `recast plan` を再実行する（例: 状態を見るためだけ
+    # に誤って plan を叩き直してしまうオペレーションミスを模す）。
+    plan_result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert plan_result.exit_code == 0, plan_result.output
+    assert "既存の進行状態を保持しました" in plan_result.output
+
+    state_after = load_recast_state(project_path.parent)
+    run_after = state_after.runs["edm@suno"]
+    assert run_after.state == "awaiting_generation"
+    assert run_after.orders_digest == run_before.orders_digest
+    assert run_after.inputs_digest == run_before.inputs_digest
+    assert run_after.plan_sha256 == run_before.plan_sha256
+
+    # 同じ take で ingest がそのまま成功する（orders_digest が保持されている
+    # ため、pin なし stale 拒否にならない）。
+    takes_dir = project_path.parent / "builds" / "takes" / "edm@suno"
+    takes_dir.mkdir(parents=True, exist_ok=True)
+    audio_path = takes_dir / "take-01.wav"
+    audio_path.write_bytes(b"RIFF....WAVEfake-audio-bytes")
+
+    ingest_result = runner.invoke(
+        app,
+        [
+            "recast",
+            "ingest",
+            str(project_path),
+            "--variant",
+            "edm",
+            "--backend",
+            "suno",
+            "--audio",
+            str(audio_path),
+        ],
+    )
+    assert ingest_result.exit_code == 0, ingest_result.output
+    assert "stale" not in ingest_result.output
+
+    final_state = load_recast_state(project_path.parent)
+    assert final_state.runs["edm@suno"].state == "generated"
+
+
+def test_recast_plan_rerun_after_project_edit_still_downgrades_awaiting_generation(
+    tmp_path: Path,
+) -> None:
+    """負のコントロール: 実際に入力（project.yaml の observation 以外の
+    フィールド、例 `project.id`）が変わった場合は、`awaiting_generation`
+    へ到達済みの run であっても `recast plan` の再実行で従来どおり plan 段の
+    状態（verified 等）へ上書きされる —「進行状態の保持」は入力・plan が
+    真に無変更の場合のみに限定されることを確認する回帰テスト。
+
+    score 自体の編集は identity manifest の source sha256 pin と衝突し
+    `blocked_verification` になってしまう（別シナリオ）ため、ここでは
+    plan 到達状態そのものには影響しない project.yaml 側のフィールド編集を使う
+    （`_project_identity_digest_component` が `observation` 節だけを除外
+    することの確認も兼ねる）。"""
+    project_path = _copy_demo_project(tmp_path)
+    run_result = runner.invoke(
+        app, ["recast", "run", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert run_result.exit_code == 0, run_result.output
+    assert load_recast_state(project_path.parent).runs["edm@suno"].state == (
+        "awaiting_generation"
+    )
+
+    project_text = project_path.read_text(encoding="utf-8")
+    updated_text = project_text.replace(
+        'id: "midnight-signal-demo"', 'id: "midnight-signal-demo-renamed"', 1
+    )
+    assert updated_text != project_text  # sanity
+    project_path.write_text(updated_text, encoding="utf-8")
+
+    plan_result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert plan_result.exit_code == 0, plan_result.output
+    assert "既存の進行状態を保持しました" not in plan_result.output
+
+    state_after = load_recast_state(project_path.parent)
+    run_after = state_after.runs["edm@suno"]
+    assert run_after.state != "awaiting_generation"
+    assert run_after.orders_digest is None
+
+
 def test_recast_ingest_rejects_when_plan_artifact_is_stale(tmp_path: Path) -> None:
     project_path = _copy_demo_project(tmp_path)
     run_result = runner.invoke(
