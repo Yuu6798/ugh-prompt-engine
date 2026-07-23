@@ -367,6 +367,34 @@ def test_waveform_pin_matches_generated_samples():
         )
 
 
+def test_synthetic_report_pins_and_verifies_waveform_bytes(monkeypatch):
+    """synthetic report は各 fixture の waveform_sha256 を pin し、drift を fail-closed。
+
+    registry_sha256 だけでは synthesis_specs / build_signal の drift を検出できず、
+    dated Go/No-Go の音が再現・stale 検出不能になる（Codex 指摘・AGENTS §8）。
+    external audio_sha256 と対称に、観測した raw float32 サンプルの hash を report へ
+    載せ、registry provenance pin と照合することを固定する。
+    """
+    import scripts.run_melody_observability as harness
+
+    registry = yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))
+    pinned = registry["provenance"]["waveform_sha256"]
+    results = harness.run_synthetic(_default_thresholds())
+    for fid, info in results["fixtures"].items():
+        assert info["waveform_sha256"] == pinned[fid]
+
+    # build_signal を drift させると（registry pin と不一致）fail-closed で reject。
+    real_build = harness.build_signal
+
+    def drifted_build(fid, specs):
+        y, sr = real_build(fid, specs)
+        return np.asarray(y, dtype=np.float32) + np.float32(0.01), sr
+
+    monkeypatch.setattr(harness, "build_signal", drifted_build)
+    with pytest.raises(ValueError, match="waveform sha256 mismatch"):
+        harness.run_synthetic(_default_thresholds())
+
+
 def test_harness_rejects_unknown_registry_schema(tmp_path):
     """未知の registry schema_version は fail-closed（v0.1 解釈で publish しない）。"""
     import scripts.run_melody_observability as harness

@@ -31,6 +31,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List
 
+import numpy as np
 import soundfile as sf
 import yaml
 
@@ -285,6 +286,13 @@ def run_synthetic(
             "全ての spec id を registry へ事前登録すること（input_kind 推論は禁止）。"
         )
 
+    # 合成波形の provenance pin（registry.provenance.waveform_sha256）。external モードの
+    # audio_sha256 と対称に、synthetic Go/No-Go も「どの音を観測したか」を report へ pin
+    # する。registry_sha256 だけでは synthesis_specs.yaml / build_signal が drift しても
+    # 検出できず、dated な gate 行が再現・stale 検出不能になる（Codex 指摘・AGENTS §8）。
+    # 各 fixture の raw float32 サンプル hash を registry pin と照合し fail-closed。
+    waveform_pins: Dict[str, str] = registry.get("provenance", {}).get("waveform_sha256", {})
+
     results: Dict[str, Any] = {
         "mode": "synthetic",
         "registry_sha256": registry_sha256,
@@ -300,6 +308,24 @@ def run_synthetic(
     with tempfile.TemporaryDirectory(prefix="melody-bench-") as tmp:
         for fid in specs["fixtures"]:
             y, sr = build_signal(fid, specs)
+            # raw float32 サンプルの hash（registry pin と同一定義: soundfile の
+            # コンテナエンコードに依存しない生サンプル指紋）。spec/builder drift 検出。
+            waveform_sha256 = hashlib.sha256(
+                np.asarray(y, dtype=np.float32).tobytes()
+            ).hexdigest()
+            expected_wf = waveform_pins.get(fid)
+            if expected_wf is None:
+                raise ValueError(
+                    f"synthetic fixture {fid!r} lacks a registry provenance.waveform_sha256 "
+                    "pin (fail-closed 事前登録)"
+                )
+            if expected_wf != waveform_sha256:
+                raise ValueError(
+                    f"synthetic fixture {fid!r} waveform sha256 mismatch: "
+                    f"{waveform_sha256} != registry {expected_wf}. "
+                    "synthesis_specs.yaml / build_signal が drift している — registry の "
+                    "waveform_sha256 を更新し dated 再実測すること。"
+                )
             wav_path = Path(tmp) / f"{fid}.wav"
             sf.write(wav_path, y, sr, subtype="FLOAT")
             input_kind = fixture_kinds[fid]
@@ -307,6 +333,7 @@ def run_synthetic(
             results["fixtures"][fid] = {
                 "input_kind": input_kind,
                 "expect_status": expect.get(fid),
+                "waveform_sha256": waveform_sha256,  # 観測した音の pin（external audio_sha256 と対称）
                 "routes": rows,
             }
     return results
