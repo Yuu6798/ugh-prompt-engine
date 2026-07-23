@@ -686,3 +686,26 @@ def test_mode_support_falls_back_to_unknown_for_undeclared_path() -> None:
 
 def test_mode_support_falls_back_to_unknown_when_no_config() -> None:
     assert mode_support_for_path("physical.bpm", "cover", None) == "unknown"
+
+
+# --- collect_protected_input_paths: unknown variant/backend (Codex P2, #210 round 14 指摘19) ---
+
+
+def test_collect_protected_input_paths_rejects_unknown_variant(tmp_path: Path) -> None:
+    """`collect_protected_input_paths` 自身も未知 variant を actionable な
+    `RecastError` で拒否する（defense in depth — CLI の
+    `_validate_variant_backend_declared` を経由しないプログラム的呼び出し
+    向け。従来は `loaded.arrangement_paths[variant]` の生 `KeyError` だった）。"""
+    project_path = _copy_demo_project(tmp_path)
+    loaded = load_recast_project(project_path)
+
+    with pytest.raises(RecastError, match="unknown variant 'does-not-exist'"):
+        collect_protected_input_paths(loaded, "does-not-exist", "suno")
+
+
+def test_collect_protected_input_paths_rejects_unknown_backend(tmp_path: Path) -> None:
+    project_path = _copy_demo_project(tmp_path)
+    loaded = load_recast_project(project_path)
+
+    with pytest.raises(RecastError, match="unknown backend 'does-not-exist'"):
+        collect_protected_input_paths(loaded, "edm", "does-not-exist")

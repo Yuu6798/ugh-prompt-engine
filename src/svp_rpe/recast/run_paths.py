@@ -87,7 +87,29 @@ def collect_protected_input_paths(
     破損 manifest が参照する artifact パスは特定できないため衝突ガードの
     対象に含められないが、それは診断側の blocked_verification が既に
     「この manifest は信頼できない」と報告済みであり、この関数の責務ではない）。
+
+    未知の `variant`/`backend`（Codex P2 review round 14, PR5 #210 指摘19,
+    defense in depth）: `loaded.arrangement_paths[variant]`/`loaded.
+    capability_profile_paths[backend]` は元々 dict 添字で、typo を含む
+    未知名では生 `KeyError` を送出していた。呼び出し側（CLI）は
+    `_validate_variant_backend_declared` で preflight 前に typo を拒否する
+    ようになったが、本関数自身も CLI を経由しない将来の呼び出し元
+    （プログラム的呼び出し等）向けに、同じ検証を actionable な
+    `RecastError` として重ねて行う（メッセージは `recast/plan.py` の
+    `build_recast_plan_artifacts` と同一文言）。
     """
+    project = loaded.project
+    if variant not in project.variants:
+        raise RecastError(
+            f"recast project '{project.project.id}': unknown variant {variant!r} "
+            f"(declared: {sorted(project.variants)})"
+        )
+    if backend not in project.backends:
+        raise RecastError(
+            f"recast project '{project.project.id}': unknown backend {backend!r} "
+            f"(declared: {sorted(project.backends)})"
+        )
+
     paths: list[Path] = [
         loaded.path,
         loaded.score_path,
