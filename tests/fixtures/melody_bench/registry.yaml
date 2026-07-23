@@ -1,0 +1,147 @@
+# melody_bench/registry.yaml — 主旋律観測ベンチマークの事前登録レジストリ（M0）
+#
+# `docs/melody_observability.md`（M0/M1 設計）が定める事前登録の single source of
+# truth。ここで固定した閾値・分割・規則は M1 で fixture に合わせて後から緩めない
+# （事前登録厳守）。観測ゲート指標の算出は
+# `src/svp_rpe/melody/observability.py`（`ObservabilityThresholds.from_registry`）。
+#
+# 重要: このレジストリは「melody preserved を保証する」ためのものではない。
+# 「どの入力 × 抽出器 × 前処理なら旋律をそもそも観測できるか」を測る観測ゲートの
+# 事前登録である。preserved 判定・類似度比較（M3）・正解精度評価 RPA/RCA（M2）・
+# Recast 配線（M4）は本レジストリの射程外。
+
+schema_version: "melody-bench/0.1"
+registered_utc: "2026-07-23"
+
+# ---------------------------------------------------------------------------
+# 観測ゲート閾値（事前登録・M1 で緩めない）
+# ---------------------------------------------------------------------------
+# 根拠: Phase 0 スパイク（docs/recast_phase0_melody_spike.md）で pyin が合成和音
+# パッドに対し 1–4 音へ縮退した実測。旋律として観測が成立する下限を「≥8 音・
+# ≥2 フレーズ・有声被覆 ≥30%・平均信頼 ≥0.45・低信頼率 ≤55%・オクターブ誤り率
+# ≤35%」と置く。単一持続音／和音パッド／被覆不足はこの下限で insufficient に落ちる。
+observation_gate:
+  min_voiced_coverage: 0.30       # 対象区間で有声 F0 が得られたフレーム割合の下限
+  min_note_count: 8               # 導出ノート数の下限（和音パッドの 1–4 音を弾く）
+  min_phrase_count: 2             # フレーズ数の下限（単一持続音を弾く）
+  min_confidence_mean: 0.45       # 有声フレーム平均信頼度の下限
+  max_low_confidence_rate: 0.55   # low_confidence_floor 未満フレーム割合の上限
+  max_octave_jump_rate: 0.35      # 連続ノート遷移のオクターブ級ジャンプ割合の上限
+  voiced_confidence_floor: 0.30   # このフレーム信頼度以上を「有声」とみなす
+  low_confidence_floor: 0.50      # このフレーム信頼度未満を「低信頼」と数える
+  # cross_extractor_agreement は M1 では任意計測（null = ゲート条件に用いない）。
+  # 2 抽出器のノート系列一致度で「観測できた場合の弁別可能性」の目安を採るが、
+  # 弁別の本評価は M3。
+  min_cross_extractor_agreement: null
+  # ノート導出パラメータ（フレーム → ノート）。Phase 0 スパイクと同値。
+  note_min_run_frames: 3
+  median_filter_frames: 5
+  phrase_gap_sec: 0.6
+  octave_jump_semitones: 11.0
+
+# ---------------------------------------------------------------------------
+# 分離判定（M1 では観測できた場合の弁別可能性の目安。本評価は M3）
+# ---------------------------------------------------------------------------
+separation_gate:
+  # 同曲変形ペアと異曲 negative の cross_extractor_agreement / 旋律類似度の
+  # 最低分離幅（同曲 min − 異曲 max）。M1 の主目的はゲート成立であり、この幅は
+  # 記録するが M1 の Go/No-Go 条件にはしない。
+  min_same_minus_cross_margin: 0.15
+
+# ---------------------------------------------------------------------------
+# hold-out 分割（閾値調整用と最終確認用を分離）
+# ---------------------------------------------------------------------------
+# 上の observation_gate は tuning_split の観測のみを見て M0 で固定した。
+# holdout_split は M1 の最終確認（Go/No-Go）でのみ観測し、閾値調整には使わない。
+splits:
+  tuning:
+    - synth_mono_phrased      # 正の対照（観測できるべき）
+    - synth_chord_pad         # 負の対照（観測できないべき → not_observed）
+  holdout:
+    - synth_mono_two_phrase   # 正の対照 hold-out
+    - synth_unison_drone      # 負の対照 hold-out（単一持続音）
+
+# ---------------------------------------------------------------------------
+# 昇格の一方向規則（proposal「採用しない方針」= pYIN 救済禁止と同型）
+# ---------------------------------------------------------------------------
+one_way_rule: >
+  一度 not_observed（全経路 insufficient）に落ちた入力帯を、閾値・係数の後付け
+  調整だけで採用へ戻してはならない。再採用には新しい入力（例: Demucs 後の実
+  vocals stem）または新しい抽出器経路での dated 再実測を要する。M1 全滅時に M2 へ
+  自動進行しない（明示的な Go 判定を要求する）。
+
+# ---------------------------------------------------------------------------
+# fixture カテゴリ
+# ---------------------------------------------------------------------------
+# 設計 §3.1: 正解つきクリーン素材（少数）と 正解なし実素材（観測可能性のみ）を
+# 別カテゴリとして明示し、混同しない。本レジストリに committed で載るのは、
+# 決定論合成できる CI 安全な合成素材（正解=合成仕様そのもの）のみ。実ボーカル／
+# Suno 実素材（正解 MIDI なし）は machine-dependent（実音源）なので slow/manual
+# lane で外部投入し、ここには波形を committed しない。
+fixtures:
+  # --- カテゴリ A: 正解つきクリーン合成素材（CI 安全・決定論合成） ---
+  - id: synth_mono_phrased
+    category: clean_synthetic_with_truth
+    input_kind: clear_lead
+    melody_present: true
+    expect_status: sufficient        # 正の対照: 観測できるべき
+    spec: synthesis_specs.yaml#synth_mono_phrased
+    note: 3 フレーズの単旋律サイン波列。単旋律抽出器の上限（正の対照）。
+  - id: synth_mono_two_phrase
+    category: clean_synthetic_with_truth
+    input_kind: clear_lead
+    melody_present: true
+    expect_status: sufficient
+    spec: synthesis_specs.yaml#synth_mono_two_phrase
+    note: 2 フレーズの単旋律（hold-out 正の対照）。
+  - id: synth_chord_pad
+    category: clean_synthetic_no_melody
+    input_kind: chord_pad_no_melody
+    melody_present: false
+    expect_status: insufficient      # 負の対照: 観測できないべき → not_observed
+    spec: synthesis_specs.yaml#synth_chord_pad
+    note: 持続三和音パッド（旋律なし）。誤検出を not_observed へ落とす対照。
+  - id: synth_unison_drone
+    category: clean_synthetic_no_melody
+    input_kind: chord_pad_no_melody
+    melody_present: false
+    expect_status: insufficient
+    spec: synthesis_specs.yaml#synth_unison_drone
+    note: 単一持続音ドローン（hold-out 負の対照）。
+
+# ---------------------------------------------------------------------------
+# カテゴリ B: 正解なし実素材（観測可能性のみ・machine-dependent）
+# ---------------------------------------------------------------------------
+# ここには波形を committed しない。slow/manual lane で下記 id に実ファイルを割り当て、
+# `scripts/run_melody_observability.py --external <manifest>` で観測可能性のみを測る。
+# RPA/RCA（正解精度）には使わない（設計 §7 禁止事項）。
+external_fixtures:
+  - id: suno_vocals_stem
+    category: real_no_truth
+    input_kind: vocal_track
+    note: >
+      Suno 出力（歌入り実ミックス）の Demucs vocals stem。Recast の実利用入力
+      そのもの＝最も現実的な標的。正解 MIDI を持たないため観測可能性のみ。
+  - id: real_vocal_plus_backing
+    category: real_no_truth
+    input_kind: full_mix
+    note: ボーカル + 伴奏の実ミックス。混合音源での劣化を観測。
+  - id: real_lead_synth
+    category: real_no_truth
+    input_kind: clear_lead
+    note: リードシンセ + 伴奏の実素材。非ボーカル経路。
+
+# ---------------------------------------------------------------------------
+# provenance（AGENTS §8）
+# ---------------------------------------------------------------------------
+# 合成 fixture の入力指紋は synthesis_specs.yaml の sha256 で固定される
+# （波形は spec の決定論関数なので spec pin = 波形 pin）。実素材・モデル重み
+# （Demucs / CREPE / Essentia）のバージョン・ハッシュ・取得元は、実推論を回す
+# slow/manual lane の dated 実測時に記録する（本環境では未導入のため TBD）。
+provenance:
+  synthesis_specs: synthesis_specs.yaml   # sha256 は tests/test_melody_observability.py で照合
+  model_weights:
+    demucs: "TBD at slow-lane run (htdemucs_ft weights version/hash)"
+    crepe: "TBD at slow-lane run (crepe wheel model-*.h5 version/hash)"
+    essentia_melodia: "TBD at slow-lane run (essentia version; rule-based, no learned weights)"
+  random_seed: 0   # 合成・ペア生成の乱数 seed（決定論固定）
