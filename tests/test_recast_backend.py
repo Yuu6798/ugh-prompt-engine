@@ -857,6 +857,87 @@ def test_manual_collect_take_json_base_exception_during_rename_still_rolls_back(
     assert not (prepared.takes_dir / "take.json").exists()
 
 
+def test_manual_collect_replaces_stale_extension_when_switching_formats(tmp_path: Path) -> None:
+    """Codex P2 review（PR #212 指摘・manual.py:464）: 同一 (variant, backend)
+    を別の受理拡張子（wav→mp3）で再収蔵すると、旧拡張子の `take-01.<旧ext>`
+    が `takes_dir` に残存し続け、再観測経路（`_load_existing_take_for_
+    reobserve`）の「`take-01.*` がちょうど 1 件」検証が恒久的に失敗していた。
+    `take-01.<新ext>` の publish と同じ atomic 操作で旧拡張子ファイルを
+    bundle 完全置換として除去し、`takes_dir` が「新 take-01.<ext> +
+    take.json のみ」の整合状態になることを検証する。"""
+    project_path = _copy_demo_project(tmp_path)
+    _loaded, invoker, prepared = _prepare_manual(project_path)
+
+    wav_supplied = tmp_path / "external_take.wav"
+    wav_supplied.write_bytes(b"RIFF....WAVEfake-audio-bytes")
+    invoker.collect(prepared, wav_supplied)
+    assert (prepared.takes_dir / "take-01.wav").is_file()
+
+    mp3_supplied = tmp_path / "external_take.mp3"
+    mp3_supplied.write_bytes(b"ID3fake-mp3-bytes")
+    take = invoker.collect(prepared, mp3_supplied)
+
+    assert take.audio_path == prepared.takes_dir / "take-01.mp3"
+    assert not (prepared.takes_dir / "take-01.wav").exists()
+    remaining_takes = sorted(p.name for p in prepared.takes_dir.glob("take-01.*"))
+    assert remaining_takes == ["take-01.mp3"]
+    assert (prepared.takes_dir / "take.json").is_file()
+
+    take_json = json.loads((prepared.takes_dir / "take.json").read_text(encoding="utf-8"))
+    assert take_json["sha256"] == take.sha256
+    assert take_json["original_filename"] == "external_take.mp3"
+
+
+def test_manual_collect_stale_extension_removal_rolls_back_on_publish_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """旧拡張子ファイルの除去（`atomic_publish_bytes_bundle` の
+    `stale_filenames`）は既存の snapshot/rollback 機構をそのまま共有する —
+    公開フェーズの途中（`take-01.mp3` 公開成功後・`take.json` 公開前）に
+    失敗を注入しても、`take-01.wav`/`take.json` とも元の bytes へ完全に
+    復元され、新しい `take-01.mp3` は残らないことを検証する。"""
+    import os
+
+    project_path = _copy_demo_project(tmp_path)
+    _loaded, invoker, prepared = _prepare_manual(project_path)
+
+    wav_supplied = tmp_path / "external_take.wav"
+    wav_supplied.write_bytes(b"RIFF....WAVEfake-audio-bytes")
+    invoker.collect(prepared, wav_supplied)
+    original_wav_bytes = (prepared.takes_dir / "take-01.wav").read_bytes()
+    original_take_json_bytes = (prepared.takes_dir / "take.json").read_bytes()
+
+    mp3_supplied = tmp_path / "external_take.mp3"
+    mp3_supplied.write_bytes(b"ID3fake-mp3-bytes")
+
+    real_replace = os.replace
+    target_take_json = prepared.takes_dir / "take.json"
+    failure_injected = False
+
+    def flaky_replace(src: object, dst: object) -> None:
+        nonlocal failure_injected
+        # 公開フェーズの最終 rename（`staging_dir/take.json` → `takes_dir/
+        # take.json`）だけを狙って 1 回だけ失敗させる — snapshot フェーズの
+        # 退避先は `staging_dir/take.json.prev`（別パス）のため誤爆せず、
+        # rollback フェーズの復元 rename（同じ最終パスへ書き戻す）を再度
+        # 妨害しないよう 1 回限りにする。
+        if not failure_injected and Path(src).name == "take.json" and Path(dst) == target_take_json:
+            failure_injected = True
+            raise OSError("simulated failure while publishing take.json")
+        real_replace(src, dst)
+
+    monkeypatch.setattr("os.replace", flaky_replace)
+
+    with pytest.raises(OSError):
+        invoker.collect(prepared, mp3_supplied)
+
+    assert (prepared.takes_dir / "take-01.wav").is_file()
+    assert (prepared.takes_dir / "take-01.wav").read_bytes() == original_wav_bytes
+    assert not (prepared.takes_dir / "take-01.mp3").exists()
+    assert (prepared.takes_dir / "take.json").is_file()
+    assert (prepared.takes_dir / "take.json").read_bytes() == original_take_json_bytes
+
+
 def test_manual_orders_publish_base_exception_during_rename_still_rolls_back(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

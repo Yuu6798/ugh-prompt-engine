@@ -613,6 +613,87 @@ def test_recast_plan_rerun_after_project_edit_still_downgrades_awaiting_generati
     assert run_after.orders_digest is None
 
 
+# --- recast ingest: cross-extension re-collect (Codex P2, PR #212, manual.py:464) -----
+
+
+def test_recast_ingest_replaces_stale_extension_after_reissued_orders_cli_flow(
+    tmp_path: Path,
+) -> None:
+    """Codex P2 review（PR #212 指摘・manual.py:464）CLI 受け入れ条件: wav で
+    ingest → 注文書再発行（`recast run` 再実行、正規フロー）→ mp3 で再 ingest
+    すると、`takes_dir` に mp3 + `take.json` のみが残り（旧 wav は残存しない）、
+    再観測経路（`_load_existing_take_for_reobserve`）が「`take-01.*` が
+    ちょうど 1 件」の前提を保てることを検証する。"""
+    project_path = _copy_demo_project(tmp_path)
+    takes_dir = project_path.parent / "builds" / "takes" / "edm@suno"
+
+    # 1 巡目: wav で ingest。
+    run_result_1 = runner.invoke(
+        app, ["recast", "run", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert run_result_1.exit_code == 0, run_result_1.output
+    wav_audio = tmp_path / "external-take.wav"
+    wav_audio.write_bytes(b"RIFF....WAVEfake-audio-bytes")
+    ingest_wav_result = runner.invoke(
+        app,
+        [
+            "recast", "ingest", str(project_path),
+            "--variant", "edm", "--backend", "suno",
+            "--audio", str(wav_audio),
+        ],
+    )
+    assert ingest_wav_result.exit_code == 0, ingest_wav_result.output
+    assert (takes_dir / "take-01.wav").is_file()
+
+    # 2 巡目: 注文書を再発行（正規フロー — `recast run` は状態に関わらず常に
+    # 新しい注文書を publish し awaiting_generation を記録する）してから、
+    # 別拡張子（mp3）で ingest する。
+    run_result_2 = runner.invoke(
+        app, ["recast", "run", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert run_result_2.exit_code == 0, run_result_2.output
+    assert load_recast_state(project_path.parent).runs["edm@suno"].state == (
+        "awaiting_generation"
+    )
+    mp3_audio = tmp_path / "external-take.mp3"
+    mp3_audio.write_bytes(b"ID3fake-mp3-bytes")
+    ingest_mp3_result = runner.invoke(
+        app,
+        [
+            "recast", "ingest", str(project_path),
+            "--variant", "edm", "--backend", "suno",
+            "--audio", str(mp3_audio),
+        ],
+    )
+    assert ingest_mp3_result.exit_code == 0, ingest_mp3_result.output
+
+    # takes_dir は新 take-01.mp3 + take.json のみ（旧 take-01.wav は残存しない）。
+    assert not (takes_dir / "take-01.wav").exists()
+    assert (takes_dir / "take-01.mp3").is_file()
+    remaining_takes = sorted(p.name for p in takes_dir.glob("take-01.*"))
+    assert remaining_takes == ["take-01.mp3"]
+    assert (takes_dir / "take.json").is_file()
+
+    state_after_mp3 = load_recast_state(project_path.parent)
+    assert state_after_mp3.runs["edm@suno"].state == "generated"
+
+    # 再観測経路が「take-01.* がちょうど 1 件」の前提を保てる（旧拡張子が
+    # 残存していれば `_load_existing_take_for_reobserve` が候補 2 件で
+    # fail-closed 拒否していたはずの回帰確認）。demo fixture は
+    # observation.enabled: false のため observe→report へは進まないが、
+    # is_reobserve 経路自体（既存 take の特定・sha256 突合）は必ず通過する。
+    reobserve_result = runner.invoke(
+        app,
+        [
+            "recast", "ingest", str(project_path),
+            "--variant", "edm", "--backend", "suno",
+            "--audio", str(mp3_audio),
+        ],
+    )
+    assert reobserve_result.exit_code == 0, reobserve_result.output
+    assert "expected exactly one existing take" not in reobserve_result.output
+
+
 # --- recast plan per-run publish (Codex P2, PR #212, recast_cmd.py:884) -----
 
 

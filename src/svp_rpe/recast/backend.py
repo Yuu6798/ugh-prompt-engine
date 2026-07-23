@@ -226,6 +226,7 @@ def atomic_publish_bytes_bundle(
     contents: dict[str, bytes],
     *,
     protected_inputs: list[Path],
+    stale_filenames: tuple[str, ...] = (),
 ) -> None:
     """複数バイナリファイルを「全部揃って初めて意味を持つ 1 組」として atomic
     publish する（binary 版 `cli/builds_root.py:_publish_artifacts_atomically`
@@ -247,19 +248,36 @@ def atomic_publish_bytes_bundle(
     publish し、途中失敗時は（ステージング中の失敗はもちろん、`os.replace`
     による最終 publish 中の失敗も）ロールバックして `output_dir` を呼び出し前
     と同じ状態に戻す。
+
+    `stale_filenames`（Codex P2 review, PR #212 指摘）: `contents` には含め
+    ないが、`output_dir` に存在すれば bundle publish の一部として除去する
+    ファイル名の集合（`contents` と重複するキーは無視 — 上書き publish の
+    通常経路に任せる）。既存の snapshot/rollback 機構をそのまま再利用する:
+    存在すれば snapshot（`output_dir` から staging 側の `.prev` へ
+    `os.replace`）するだけで新しい bytes を書き戻さない — 成功時は
+    `TemporaryDirectory` のクリーンアップで snapshot ごと消え、失敗時は
+    既存の rollback ループ（`snapshots` の全エントリを元位置へ復元）が
+    `contents` 由来かどうかを区別せず一律に復元するため、追加のロールバック
+    分岐は不要（`ManualInvoker.collect` が受理拡張子（wav/mp3）を跨いで
+    take を再収蔵する際、旧拡張子の `take-01.<旧ext>` を新 `take-01.<新ext>`
+    と同じ atomic 操作で除去する用途 — 除去前に `takes_dir` が「新
+    take-01.<ext> + take.json のみ」の整合状態になることを、record_state
+    より前に保証する）。
     """
     import os
     import tempfile
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    stale_only = [name for name in stale_filenames if name not in contents]
+
     if protected_inputs:
         resolved_inputs = {path.resolve() for path in protected_inputs}
-        for filename in contents:
+        for filename in list(contents) + stale_only:
             target = output_dir / filename
             if target.resolve() in resolved_inputs:
                 raise ValueError(f"output path collides with a protected input path: {target}")
-            if target.is_dir():
+            if filename in contents and target.is_dir():
                 raise ValueError(f"output path is an existing directory: {target}")
 
     with tempfile.TemporaryDirectory(dir=output_dir) as staging:
@@ -270,7 +288,7 @@ def atomic_publish_bytes_bundle(
         snapshots: dict[str, Path] = {}
         published: list[str] = []
         try:
-            for filename in contents:
+            for filename in list(contents) + stale_only:
                 target = output_dir / filename
                 if target.exists():
                     previous = staging_dir / f"{filename}.prev"
@@ -288,7 +306,8 @@ def atomic_publish_bytes_bundle(
             # 複数ファイル bundle publisher だけが `except OSError` に留まって
             # いた。`OSError` のみだと非 `OSError` の中断シグナルで rollback を
             # 素通りし、snapshot ごと失われた「半端に publish 済み」の状態が
-            # 残り得た）。
+            # 残り得た）。`stale_filenames` の snapshot もここで一律に復元される
+            # （`snapshots` は `contents` 由来か `stale_only` 由来かを区別しない）。
             for filename in published:
                 try:
                     os.unlink(output_dir / filename)

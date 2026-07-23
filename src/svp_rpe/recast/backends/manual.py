@@ -458,10 +458,26 @@ class ManualInvoker:
         # （project/score/manifest/arrangement/capability_profile/
         # mode_overrides/anchor artifact・source）とは衝突しないことを保証する
         # （Codex P2 review, PR3 #208 指摘 6: 従来 collect() は一切渡していなかった）。
+        #
+        # `stale_filenames`（Codex P2 review, PR #212 指摘）: 受理拡張子
+        # （wav/mp3）を跨いで同じ (variant, backend) を再 ingest すると、
+        # 従来は新 `take-01.<新ext>` + `take.json` のみが公開され、旧
+        # `take-01.<旧ext>` が `takes_dir` に残存し続けていた
+        # （`_load_existing_take_for_reobserve` の「take-01.* がちょうど 1 件」
+        # 検証が恒久的に失敗する原因）。`take-01.<新ext>` の publish と同じ
+        # atomic 操作の一部として、他の受理拡張子ぶんの旧ファイルを bundle
+        # 完全置換として除去する（存在すれば snapshot→削除、失敗時は
+        # `atomic_publish_bytes_bundle` の既存 rollback で復元）。
+        stale_filenames = tuple(
+            f"take-01{other_extension}"
+            for other_extension in _ACCEPTED_AUDIO_EXTENSIONS
+            if other_extension != extension
+        )
         atomic_publish_bytes_bundle(
             prepared.takes_dir,
             {take_filename: data, "take.json": take_record.encode("utf-8")},
             protected_inputs=prepared.protected_input_paths,
+            stale_filenames=stale_filenames,
         )
 
         note: Optional[str] = f"collected from {supplied_audio.name}"
