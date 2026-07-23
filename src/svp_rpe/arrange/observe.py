@@ -1844,6 +1844,14 @@ def observe_generated_artifact(
     `None`（省略時）は絞り込みを行わない（`svprpe observe` 単体実行や
     `observation.anchors` 未設定時と同じ、従来どおり全 manifest anchor を
     観測する挙動）。
+
+    `anchor_scope` に manifest 側に存在しない id（typo・削除済み anchor 等）
+    が含まれる場合は `ValueError`（Codex P2, #210 round 9 指摘11）:
+    フィルタは「一致する id だけ残す」実装のため、未知 id はそのまま通すと
+    単に無視され、`anchor_scope=["harmnoy"]`（typo）のような設定ミスが
+    ゼロ anchor の report/summary を「成功」として publish してしまう。
+    フィルタ適用前に `anchor_scope ⊆ manifest anchor id 集合` を検証し、
+    外れている id を列挙して拒否する（report は一切構築されない）。
     """
     import hashlib
     import os
@@ -1887,6 +1895,26 @@ def observe_generated_artifact(
         if isinstance(raw_manifest_data, dict) and isinstance(
             raw_manifest_data.get("anchors"), list
         ):
+            manifest_anchor_id_set = {
+                entry.get("id")
+                for entry in raw_manifest_data["anchors"]
+                if isinstance(entry, dict)
+            }
+            # 未知 id の fail-closed 検査（Codex P2, #210 round 9 指摘11）:
+            # typo/削除済み id を含む `anchor_scope` は、以下のフィルタに
+            # そのまま通すと単に「該当なし」として静かに消え、ゼロ anchor の
+            # report/summary が publish されてしまう（observation.enabled の
+            # ユーザー期待から外れた誤った「成功」）。フィルタ適用前に
+            # `scope_ids` が実際の manifest anchor id 集合の部分集合である
+            # ことを検証し、外れている id があれば列挙して `ValueError` で
+            # 拒否する — 設定ミスとして扱い、report は一切構築しない。
+            unknown_scope_ids = scope_ids - manifest_anchor_id_set
+            if unknown_scope_ids:
+                raise ValueError(
+                    "anchor_scope contains anchor id(s) not present in the identity "
+                    f"manifest: {sorted(unknown_scope_ids)} (known anchor ids: "
+                    f"{sorted(manifest_anchor_id_set)})"
+                )
             raw_manifest_data = dict(raw_manifest_data)
             raw_manifest_data["anchors"] = [
                 entry
