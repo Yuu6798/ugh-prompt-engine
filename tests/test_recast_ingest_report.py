@@ -605,6 +605,58 @@ def test_ingest_rejects_unknown_observation_anchor_id_as_config_error_not_observ
     assert "not present in the identity manifest" not in retry_result.output
 
 
+def test_ingest_ignores_stale_observation_anchors_when_observation_disabled(
+    tmp_path: Path,
+) -> None:
+    """Codex P2（#211 追加指摘）: `observation.enabled: false` の project は
+    元々 collect→`generated` で停止する契約（observe 自体に進まない）ため、
+    `observation.anchors` に typo/削除済み id が残っていても無関係のはず
+    だが、unknown-anchor precheck（round 9/10）が `observation.enabled` を
+    見ずに無条件で先走っていたため、observation が無効なのに「anchor id が
+    manifest に存在しない」という誤ったエラーで collect 前に拒否していた。
+    `observation.enabled: false` + typo な `observation.anchors` の project
+    で ingest が正常に collect 成功・`generated` で停止し、observe/report
+    には一切進まないことを検証する。"""
+    project_path = _copy_demo_project(tmp_path, label="disabled-typo-anchors")
+    text = project_path.read_text(encoding="utf-8")
+    # "harmnoy" は実在する "harmony" の typo — manifest には存在しない。
+    # observation.enabled は false のまま（デフォルト値を変更しない）。
+    text = text.replace(
+        _OBSERVATION_DISABLED_BLOCK,
+        'observation:\n  enabled: false\n  anchors: ["harmnoy"]\n',
+        1,
+    )
+    project_path.write_text(text, encoding="utf-8")
+
+    run_result = runner.invoke(
+        app, ["recast", "run", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert run_result.exit_code == 0, run_result.output
+
+    takes_dir = project_path.parent / "builds" / "takes" / "edm@suno"
+    takes_dir.mkdir(parents=True, exist_ok=True)
+    audio_path = takes_dir / "take-01.wav"
+    audio_path.write_bytes(b"RIFF....WAVEfake-audio-bytes")
+
+    ingest_result = runner.invoke(
+        app,
+        [
+            "recast", "ingest", str(project_path),
+            "--variant", "edm", "--backend", "suno",
+            "--audio", str(audio_path),
+        ],
+    )
+    assert ingest_result.exit_code == 0, ingest_result.output
+    assert "not present in the identity manifest" not in ingest_result.output
+
+    state_file = load_recast_state(project_path.parent)
+    run = state_file.runs["edm@suno"]
+    assert run.state == "generated"
+
+    reports_dir = project_path.parent / "builds" / "reports" / "edm@suno"
+    assert not reports_dir.exists()
+
+
 def test_ingest_records_observation_incomplete_when_package_changes_after_publish(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
