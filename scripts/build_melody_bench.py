@@ -108,22 +108,29 @@ def main() -> int:
     args = parser.parse_args()
 
     specs = load_specs(args.specs)
-    args.out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = args.out_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     # 成果物一式（全 WAV + manifest）を staging に完成させ、out_dir へ os.replace で
     # 公開する。既存 out_dir へ直接書くと、途中で中断された場合に新 WAV と旧
     # manifest.json（や WAV の部分集合）が混在した半端な成果物を下流の手動確認が
     # 消費しうる（Codex 指摘・AGENTS §8）。manifest を最後に move するため、
     # manifest が存在する時点では必ず全 WAV が配置済みである。
+    #
+    # staging は **out_dir と同一ファイルシステム**（out_dir.parent 直下）に作る。
+    # 既定 temp（/tmp）に置くと、out_dir が別マウントの成果物ボリューム等のとき
+    # os.replace が EXDEV で失敗し公開できない（Codex 指摘）。
     manifest: Dict[str, Dict[str, Any]] = {}
-    with tempfile.TemporaryDirectory(prefix="melody-bench-stage-") as tmp:
+    with tempfile.TemporaryDirectory(
+        prefix=f".{out_dir.name}.stage-", dir=out_dir.parent
+    ) as tmp:
         staging = Path(tmp)
         staged: List[Tuple[Path, Path]] = []
         for fid, (y, sr) in build_all(specs).items():
             staged_wav = staging / f"{fid}.wav"
             sf.write(staged_wav, y, sr, subtype="FLOAT")
             digest = hashlib.sha256(staged_wav.read_bytes()).hexdigest()
-            final_wav = args.out_dir / f"{fid}.wav"
+            final_wav = out_dir / f"{fid}.wav"
             staged.append((staged_wav, final_wav))
             manifest[fid] = {"path": str(final_wav), "sample_rate": sr, "sha256": digest}
         staged_manifest = staging / "manifest.json"
@@ -132,8 +139,8 @@ def main() -> int:
         )
         for staged_wav, final_wav in staged:
             os.replace(staged_wav, final_wav)
-        os.replace(staged_manifest, args.out_dir / "manifest.json")
-    print(f"wrote {len(manifest)} fixtures + manifest to {args.out_dir}")
+        os.replace(staged_manifest, out_dir / "manifest.json")
+    print(f"wrote {len(manifest)} fixtures + manifest to {out_dir}")
     return 0
 
 

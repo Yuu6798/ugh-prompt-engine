@@ -427,6 +427,8 @@ def test_build_bench_publishes_atomically(tmp_path, monkeypatch):
     seen: dict = {}
 
     def tracking_replace(a, b):
+        # EXDEV 回避: staging(src) は out_dir と同一 fs（out_dir.parent 直下）にある。
+        assert out_dir.parent in Path(a).parents, (a, out_dir.parent)
         if str(b).endswith("manifest.json"):
             seen["wavs"] = sorted(p.name for p in out_dir.glob("*.wav"))
         return real_replace(a, b)
@@ -459,6 +461,8 @@ def test_pair_generation_is_atomic_manifest_last(tmp_path, monkeypatch):
     seen_when_manifest_published: dict = {}
 
     def tracking_replace(a, b):
+        # EXDEV 回避: staging(src) は out_dir と同一 fs（out_dir.parent 直下）にある。
+        assert out_dir.parent in Path(a).parents, (a, out_dir.parent)
         # manifest を公開する瞬間、out_dir に既に全 variant が存在していること。
         if str(b).endswith("__pairs_manifest.json"):
             seen_when_manifest_published["variants"] = sorted(

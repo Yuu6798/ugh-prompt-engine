@@ -79,7 +79,8 @@ def main() -> int:
     # 凍結して decode する。hash と decode で別々に open すると、間に source が
     # 再生成・差し替えされた場合に manifest の source_sha256 が実際に変形を生んだ
     # 音と食い違う（Codex 指摘。external audio bytes 凍結と同型・AGENTS §8）。
-    args.out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = args.out_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
     stem = args.input.stem
     source_bytes = args.input.read_bytes()
     source_sha256 = hashlib.sha256(source_bytes).hexdigest()
@@ -89,16 +90,25 @@ def main() -> int:
     # manifest が食い違う半端な成果物が下流に見える（Codex 指摘・AGENTS §8）。
     # 最終 rename は per-file atomic で、manifest を**最後**に move するため、
     # manifest が存在する時点では必ず全 variant が配置済みである。
-    with tempfile.TemporaryDirectory(prefix="melody-pairs-src-") as tmp:
-        frozen = Path(tmp) / args.input.name
+    #
+    # temp は 2 つに分ける:
+    #  - src_tmp（既定 /tmp 可）: source の凍結コピー（librosa が読むだけ・out_dir の
+    #    fs に載る必要なし）。
+    #  - stage_tmp（out_dir.parent 直下 = out_dir と同一 fs）: 公開対象の variant。
+    #    既定 temp に置くと out_dir が別マウントのとき os.replace が EXDEV で失敗する
+    #    ため、rename が同一 fs 内で成立するよう out_dir の親に作る（Codex 指摘）。
+    with tempfile.TemporaryDirectory(prefix="melody-pairs-src-") as src_tmp, \
+            tempfile.TemporaryDirectory(
+                prefix=f".{stem}.stage-", dir=out_dir.parent
+            ) as stage_tmp:
+        frozen = Path(src_tmp) / args.input.name
         frozen.write_bytes(source_bytes)
         y, sr = librosa.load(frozen, sr=None, mono=True)
 
         variants = make_variants(
             y, sr, semitones=args.semitones, time_rates=args.time_rates
         )
-        staging = Path(tmp) / "staging"
-        staging.mkdir()
+        staging = Path(stage_tmp)
         manifest: Dict[str, Any] = {
             "source": str(args.input),
             "source_sha256": source_sha256,
@@ -110,7 +120,7 @@ def main() -> int:
             filename = f"{stem}__{name}.wav"
             staged_path = staging / filename
             sf.write(staged_path, wav, sr, subtype="FLOAT")
-            final_path = args.out_dir / filename
+            final_path = out_dir / filename
             staged[name] = (staged_path, final_path)
             manifest["variants"][name] = {"path": str(final_path), "sha256": _sha256(staged_path)}
         manifest_name = f"{stem}__pairs_manifest.json"
@@ -121,9 +131,9 @@ def main() -> int:
         # 公開: 全 variant を先に配置し、最後に manifest を配置する。
         for staged_path, final_path in staged.values():
             os.replace(staged_path, final_path)
-        os.replace(staged_manifest, args.out_dir / manifest_name)
+        os.replace(staged_manifest, out_dir / manifest_name)
     print(
-        f"wrote {len(variants)} variants for {stem} to {args.out_dir}; "
+        f"wrote {len(variants)} variants for {stem} to {out_dir}; "
         "positive pairs = base×variant (same song), negative pairs = across different sources"
     )
     return 0
