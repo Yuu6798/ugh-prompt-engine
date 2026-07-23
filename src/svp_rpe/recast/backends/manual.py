@@ -28,6 +28,7 @@ import shlex
 from pathlib import Path
 from typing import List, Optional
 
+from svp_rpe.arrange.bundle import compute_content_digest
 from svp_rpe.arrange.package import ChannelArtifactReference
 from svp_rpe.arrange.section_map import (
     parse_section_map_artifact_0_1,
@@ -45,6 +46,49 @@ from svp_rpe.recast.models import RecastError
 _ACCEPTED_AUDIO_EXTENSIONS = (".wav", ".mp3")
 _LYRICS_ANCHOR_PLACEHOLDER = "(歌詞アンカーなし)\n"
 _SECTION_TAGS_PLACEHOLDER = "(section tags なし)\n"
+
+# 注文書 6 ファイルの正典ファイル名一覧（`ManualInvoker.prepare()` が公開する
+# 集合と同一 — single source of truth）。`compute_orders_digest` が読む対象、
+# かつ `prepare()` 内の `contents` dict のキー集合が drift しないことを
+# sanity assert で保証する（Codex P2 review round 13, PR3 #208 指摘28）。
+MANUAL_ORDER_FILENAMES: tuple[str, ...] = (
+    "prompt.json",
+    "lyrics.txt",
+    "section_tags.txt",
+    "expected_artifacts.json",
+    "next_command.txt",
+    "order_sheet.md",
+)
+
+
+def compute_orders_digest(order_dir: Path) -> str:
+    """`order_dir` 配下の注文書 6 ファイル（`MANUAL_ORDER_FILENAMES`）の
+    content digest（`compute_content_digest({filename: sha256, ...})` —
+    `PerformancePackage.content_digest`/`CompiledPerformancePackage.report.
+    content_digest` と同じ定義式を re-use）を計算する。
+
+    `recast run`（manual invocation）が注文書公開直後にこの値を
+    `RecastRunState.orders_digest` へ pin し、`recast ingest` が collect 前に
+    disk 上の現在の 6 ファイルから再計算して突合する（Codex P2 review
+    round 13, PR3 #208 指摘28: `ManualInvoker.prepare()` は呼ぶ度に同じ 6
+    ファイルを無条件に再公開する — `recast ingest` が単純にもう一度
+    `prepare()` を呼ぶと、`run` 後に人手で編集された注文書（例:
+    `prompt.json` の書き換え）が黙って rebuild 結果で上書きされ、「編集済み
+    注文で生成された音声」が正規の注文書由来として受理されてしまう —
+    編集の痕跡そのものが `prepare()` の再公開で消える。pin と再計算の突合に
+    より、ingest はもはや `prepare()` を呼ばず disk 上の 6 ファイルをそのまま
+    証拠として残す）。
+
+    いずれかのファイルが存在しない/読めない場合は `OSError`（呼び出し側が
+    fail-closed に「pin 突合失敗」として扱う — 個別ファイルの欠落を
+    区別して報告する必要はない、全欠落・一部欠落いずれも同じ「注文書が
+    公開時点と異なる」という結論になるため）。
+    """
+    hashes = {
+        filename: hashlib.sha256((order_dir / filename).read_bytes()).hexdigest()
+        for filename in MANUAL_ORDER_FILENAMES
+    }
+    return compute_content_digest(hashes)
 
 
 def _canonical_json(payload: dict) -> str:
@@ -339,6 +383,10 @@ class ManualInvoker:
             "next_command.txt": next_command,
             "order_sheet.md": _order_sheet_md(ctx, prepared, next_command),
         }
+        # `MANUAL_ORDER_FILENAMES`（`compute_orders_digest` が読む対象集合）と
+        # drift しないことを構造的に保証する（Codex P2 review round 13, PR3
+        # #208 指摘28）。
+        assert set(contents) == set(MANUAL_ORDER_FILENAMES)
         # 出力パスが project.yaml/score/identity manifest/arrangement/
         # capability_profile/mode_overrides/manifest 側 anchor artifact・source
         # のいずれとも衝突しないことを保証する（Codex P2 review, PR3 #208
