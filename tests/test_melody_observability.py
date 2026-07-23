@@ -327,6 +327,65 @@ def test_build_signal_is_deterministic():
 
 
 # --------------------------------------------------------------------------- #
+# 抽出層 / ハーネス（CI 安全）
+# --------------------------------------------------------------------------- #
+def test_audio_duration_reads_real_clip_length(tmp_path):
+    """note-only coverage の分母は実音声尺（最終ノート終端でなく）を用いる。"""
+    from svp_rpe.melody.extractors import _audio_duration_sec
+
+    sr = 22050
+    wav = tmp_path / "clip.wav"
+    sf.write(wav, np.zeros(int(sr * 2.5), dtype=np.float32), sr, subtype="FLOAT")
+    assert _audio_duration_sec(str(wav)) == pytest.approx(2.5, abs=0.01)
+    assert _audio_duration_sec(str(tmp_path / "missing.wav")) is None
+
+
+def test_synthetic_harness_fails_closed_on_unregistered_spec(monkeypatch):
+    """registry 未登録の合成 spec id は Go/No-Go に紛れ込ませず fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    specs = bench.load_specs()
+    bogus = {**specs, "fixtures": {**specs["fixtures"], "bogus_unregistered": {
+        "kind": "chord_pad", "duration_sec": 1.0, "chords": [[60]]}}}
+    monkeypatch.setattr(harness, "load_specs", lambda: bogus)
+    with pytest.raises(ValueError, match="without a registry.yaml"):
+        harness.run_synthetic(_default_thresholds())
+
+
+def test_external_harness_records_and_verifies_audio_hash(tmp_path):
+    """external モードは audio_sha256 / manifest_sha256 を記録し不一致で fail-closed。"""
+    import json as _json
+
+    import scripts.run_melody_observability as harness
+
+    sr = 22050
+    t = np.linspace(0, 1.0, sr, endpoint=False)
+    wav = tmp_path / "ext.wav"
+    sf.write(wav, (0.3 * np.sin(2 * np.pi * 220 * t)).astype(np.float32), sr, subtype="FLOAT")
+    manifest = tmp_path / "ext.json"
+    manifest.write_text(
+        _json.dumps([{"id": "clip_a", "path": str(wav), "input_kind": "clear_lead"}]),
+        encoding="utf-8",
+    )
+    results = harness.run_external(manifest, _default_thresholds())
+    entry = results["fixtures"]["clip_a"]
+    assert len(entry["audio_sha256"]) == 64
+    assert entry["audio_path"] == str(wav)
+    assert len(results["manifest_sha256"]) == 64
+
+    # 期待 hash 不一致は fail-closed。
+    manifest.write_text(
+        _json.dumps(
+            [{"id": "clip_a", "path": str(wav), "input_kind": "clear_lead",
+              "audio_sha256": "0" * 64}]
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="sha256 mismatch"):
+        harness.run_external(manifest, _default_thresholds())
+
+
+# --------------------------------------------------------------------------- #
 # slow lane: 合成 → 実 pyin 抽出の統合（正/負の対照）
 # --------------------------------------------------------------------------- #
 @pytest.mark.slow

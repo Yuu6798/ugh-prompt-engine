@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 import tempfile
@@ -107,13 +108,23 @@ def run_synthetic(thresholds: ObservabilityThresholds) -> Dict[str, Any]:
     fixture_kinds = {f["id"]: f["input_kind"] for f in registry["fixtures"]}
     expect = {f["id"]: f.get("expect_status") for f in registry["fixtures"]}
 
+    # fail-closed: 全ての合成 spec id は registry に事前登録されていなければならない。
+    # 未登録 id を既定の input_kind へ黙って分類すると、事前登録の期待値を持たない
+    # ケースが Go/No-Go 出力へ紛れ込む（設計 §5 事前登録厳守）。推論せず reject する。
+    unregistered = [fid for fid in specs["fixtures"] if fid not in fixture_kinds]
+    if unregistered:
+        raise ValueError(
+            f"synthesis spec ids without a registry.yaml fixtures entry: {unregistered}. "
+            "全ての spec id を registry へ事前登録すること（input_kind 推論は禁止）。"
+        )
+
     results: Dict[str, Any] = {"mode": "synthetic", "fixtures": {}}
     with tempfile.TemporaryDirectory(prefix="melody-bench-") as tmp:
         for fid in specs["fixtures"]:
             y, sr = build_signal(fid, specs)
             wav_path = Path(tmp) / f"{fid}.wav"
             sf.write(wav_path, y, sr, subtype="FLOAT")
-            input_kind = fixture_kinds.get(fid, "clear_lead")
+            input_kind = fixture_kinds[fid]
             rows = _run_routes_on_file(str(wav_path), input_kind, thresholds)
             results["fixtures"][fid] = {
                 "input_kind": input_kind,
@@ -123,16 +134,41 @@ def run_synthetic(thresholds: ObservabilityThresholds) -> Dict[str, Any]:
     return results
 
 
+def _sha256_file(path: str) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
 def run_external(manifest_path: Path, thresholds: ObservabilityThresholds) -> Dict[str, Any]:
-    """外部素材 manifest（[{id, path, input_kind}]）の観測可能性を測る。"""
+    """外部素材 manifest（[{id, path, input_kind, audio_sha256?}]）の観測可能性を測る。
+
+    provenance（AGENTS §8）: どの bytes を観測したかを後の slow-lane 実測が証明
+    できるよう、各素材の実パスと content hash（audio_sha256）を出力へ記録する。
+    manifest が期待 hash を持つ場合は照合し、不一致なら fail-closed で reject
+    （同一 id で別 WAV が差し替わる silent swap を防ぐ）。manifest 自体の hash も
+    記録する。
+    """
     with open(manifest_path, "r", encoding="utf-8") as handle:
         entries = json.load(handle)
-    results: Dict[str, Any] = {"mode": "external", "fixtures": {}}
+    results: Dict[str, Any] = {
+        "mode": "external",
+        "manifest_path": str(manifest_path),
+        "manifest_sha256": _sha256_file(str(manifest_path)),
+        "fixtures": {},
+    }
     for entry in entries:
+        audio_sha256 = _sha256_file(entry["path"])
+        expected = entry.get("audio_sha256")
+        if expected is not None and expected != audio_sha256:
+            raise ValueError(
+                f"external audio {entry['id']!r} sha256 mismatch: "
+                f"{audio_sha256} != manifest {expected}"
+            )
         rows = _run_routes_on_file(entry["path"], entry["input_kind"], thresholds)
         results["fixtures"][entry["id"]] = {
             "input_kind": entry["input_kind"],
             "expect_status": None,  # 正解なし実素材（観測可能性のみ）
+            "audio_path": entry["path"],
+            "audio_sha256": audio_sha256,
             "routes": rows,
         }
     return results

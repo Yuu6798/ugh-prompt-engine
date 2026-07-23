@@ -146,15 +146,30 @@ def extract_basic_pitch_observation(
         )
         for event in annotations.note_events
     )
-    # note-only 表現の被覆分母（総尺）。フレームが無いので最終ノート終端で近似する
-    # （observability._voiced_coverage がノート区間合併長 / 総尺で被覆を代用する）。
-    total_duration = round(max((n.end_sec for n in notes), default=0.0), 4)
+    # note-only 表現の被覆分母（総尺）は**実音声の尺**を用いる。最終ノート終端で
+    # 近似すると、末尾の無音や無ピッチ伴奏が切り捨てられ、曲頭に旋律が偏った素材でも
+    # coverage が過大評価され min_voiced_coverage を誤って通過しうる（Codex 指摘）。
+    # librosa.get_duration(path=...) はヘッダ読みで済む場合が多く安価。読めなければ
+    # 最終ノート終端へフォールバックする。
+    total_duration = _audio_duration_sec(audio_path)
+    if total_duration is None:
+        total_duration = round(max((n.end_sec for n in notes), default=0.0), 4)
     return MelodyObservation(
         route=route,
         source_model="spotify:basic_pitch",
         notes=notes,
         total_duration_sec=total_duration,
     )
+
+
+def _audio_duration_sec(audio_path: str) -> "float | None":
+    """音声ファイルの実尺（秒）を安価に読む。失敗時は None。"""
+    try:
+        import librosa
+
+        return round(float(librosa.get_duration(path=audio_path)), 4)
+    except Exception:
+        return None
 
 
 def _load_route_waveform(
