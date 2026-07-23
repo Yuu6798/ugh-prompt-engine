@@ -1,0 +1,45 @@
+# PR6: golden path fixture 専用の IdentityManifest（1 作品 × 1 編曲 ×
+# deterministic backend × 2 take の CI 全経路回帰 — 指示書 PR6）。
+#
+# `examples/recast/e2e_project/` と同一 base score（"Midnight Signal"、
+# `composition_score.yaml` は同一 bytes）に対する harmony/structure anchor
+# のため、`source`/各 anchor の sha256 も e2e_project/demo_project と同一。
+# golden_project は e2e_project の「deterministic backend のみ」を「local
+# (deterministic) + manual (deterministic_manual) の 2 backend」へ拡張し、
+# `observation.enabled: true` で観測→レポートの全経路（recast plan → run →
+# ingest → recast_report.json/recast_summary.md）を CI で毎回回帰する。
+schema_version: "identity-manifest/0.1"
+meta:
+  work_id: "midnight-signal"
+  version: "0.1"
+source:
+  locator: composition_score.yaml
+  sha256: "37854f54b42a1c4d424f357148d3d10f347e238ec72a42d1248bea2203f97d0b"
+  rights_basis: original
+  note: >-
+    合成 fixture 作品・音源なし。locator は base Composition Score 自身であり、
+    生成済み音声への参照ではない。
+anchors:
+  - id: harmony
+    domain: harmony
+    # AR4 (Design Memo D-4): 正典進行は performer.py の C minor 既定進行
+    # (MINOR_PROGRESSION, transpose=0 の FAITHFUL_TAKE) と一致させてある。
+    # artifact_type は chord_sequence_json だが ARTIFACT_TYPE_CHANNEL では
+    # チャネル未対応 (None) のため、delivery は常に unknown — 「delivery と
+    # observation は別軸」の実証(observe は delivery 状態と無関係に測定する)。
+    artifact: identity/chord_progression.json
+    artifact_type: chord_sequence_json
+    media_type: application/json
+    format_version: "chord-sequence/0.1"
+    sha256: "180464a881ac63131c0a0fcdf812e0cc7bfd8dc1e9947698a5d5c65c89245299"
+    required: true
+  - id: structure
+    domain: structure
+    # 正典は composition_score.yaml の structure 欄のセクション名を機械転記
+    # したもの（intro/verse/chorus/bridge）。
+    artifact: identity/section_map.json
+    artifact_type: section_map
+    media_type: application/json
+    format_version: "section-map/0.1"
+    sha256: "1fc7e8dabf83c691758114128fdd36b7679dd61175d8492afae3f97577047eb1"
+    required: true

@@ -1,0 +1,123 @@
+{
+  "anchors": [
+    {
+      "adherence_status": "not_observed",
+      "anchor_id": "harmony",
+      "coverage": "not_observed",
+      "determination": "deferred",
+      "domain": "harmony",
+      "measurements": {
+        "canonical_length": 4,
+        "chord_sequence_match_rate": 0.0455,
+        "collapsed_match_fraction": 0.0,
+        "collapsed_observed_length": 9,
+        "full_cycles": 0,
+        "matched_cycle_prefix_length": 0,
+        "observed_length": 22,
+        "repeated_chord_sequence_match_rate": 0.0,
+        "unmatched_tail_head": [
+          [
+            "C",
+            "major"
+          ],
+          [
+            "C",
+            "minor"
+          ],
+          [
+            "G#",
+            "major"
+          ],
+          [
+            "A#",
+            "major"
+          ],
+          [
+            "C",
+            "minor"
+          ],
+          [
+            "G#",
+            "major"
+          ],
+          [
+            "A#",
+            "major"
+          ],
+          [
+            "C",
+            "minor"
+          ]
+        ],
+        "unmatched_tail_length": 9
+      },
+      "policy_mode": "hard",
+      "sensor": {
+        "available": true,
+        "name": "chord_sequence_match"
+      }
+    },
+    {
+      "adherence_status": "not_observed",
+      "anchor_id": "structure",
+      "coverage": "not_observed",
+      "determination": "deferred",
+      "domain": "structure",
+      "measurements": {
+        "canonical_length": 4,
+        "canonical_sections": [
+          "intro",
+          "verse",
+          "chorus",
+          "bridge"
+        ],
+        "observed_length": 8,
+        "observed_sections": [
+          "intro",
+          "bridge",
+          "verse",
+          "verse",
+          "verse",
+          "chorus",
+          "chorus",
+          "outro"
+        ],
+        "observed_sections_raw": [
+          "Intro",
+          "Bridge",
+          "Verse",
+          "Verse2",
+          "Verse3",
+          "Chorus",
+          "Chorus",
+          "Outro"
+        ],
+        "position_match_rate": 0.125,
+        "sequence_exact_match": false
+      },
+      "policy_mode": "hard",
+      "sensor": {
+        "available": true,
+        "name": "section_sequence_match"
+      }
+    }
+  ],
+  "backend": "deterministic_manual",
+  "coverage": {
+    "not_observed": 2,
+    "verified": 0,
+    "violated": 0
+  },
+  "identity_assessment": {
+    "enabled": false
+  },
+  "package_sha256": "066c5933c75fa865147e66b3fcb388e8c9bf0fb98b160a495b70ce66c18603ff",
+  "project_id": "midnight-signal-golden",
+  "schema_version": "recast-report/0.1",
+  "take": {
+    "path": "builds/takes/golden@deterministic_manual/take-01.wav",
+    "sha256": "7c6a6f44b3414c68da5d6115087c232d890a4d68618f213ec7ebf6cfab011fe9"
+  },
+  "variant": "golden",
+  "work_id": "midnight-signal"
+}

@@ -1,0 +1,103 @@
+{
+  "anchors": [
+    {
+      "adherence_status": "not_observed",
+      "anchor_id": "harmony",
+      "coverage": "not_observed",
+      "determination": "deferred",
+      "domain": "harmony",
+      "measurements": {
+        "canonical_length": 4,
+        "chord_sequence_match_rate": 0.0833,
+        "collapsed_match_fraction": 0.7,
+        "collapsed_observed_length": 10,
+        "full_cycles": 2,
+        "matched_cycle_prefix_length": 7,
+        "observed_length": 24,
+        "repeated_chord_sequence_match_rate": 0.0,
+        "unmatched_tail_head": [
+          [
+            "C",
+            "major"
+          ],
+          [
+            "C",
+            "minor"
+          ],
+          [
+            "C",
+            "major"
+          ]
+        ],
+        "unmatched_tail_length": 3
+      },
+      "policy_mode": "hard",
+      "sensor": {
+        "available": true,
+        "name": "chord_sequence_match"
+      }
+    },
+    {
+      "adherence_status": "not_observed",
+      "anchor_id": "structure",
+      "coverage": "not_observed",
+      "determination": "deferred",
+      "domain": "structure",
+      "measurements": {
+        "canonical_length": 4,
+        "canonical_sections": [
+          "intro",
+          "verse",
+          "chorus",
+          "bridge"
+        ],
+        "observed_length": 8,
+        "observed_sections": [
+          "intro",
+          "verse",
+          "verse",
+          "bridge",
+          "verse",
+          "chorus",
+          "chorus",
+          "outro"
+        ],
+        "observed_sections_raw": [
+          "Intro",
+          "Verse",
+          "Verse2",
+          "Bridge",
+          "Verse3",
+          "Chorus",
+          "Chorus",
+          "Outro"
+        ],
+        "position_match_rate": 0.375,
+        "sequence_exact_match": false
+      },
+      "policy_mode": "hard",
+      "sensor": {
+        "available": true,
+        "name": "section_sequence_match"
+      }
+    }
+  ],
+  "backend": "deterministic",
+  "coverage": {
+    "not_observed": 2,
+    "verified": 0,
+    "violated": 0
+  },
+  "identity_assessment": {
+    "enabled": false
+  },
+  "package_sha256": "066c5933c75fa865147e66b3fcb388e8c9bf0fb98b160a495b70ce66c18603ff",
+  "project_id": "midnight-signal-golden",
+  "schema_version": "recast-report/0.1",
+  "take": {
+    "path": "builds/takes/golden@deterministic/take-01.wav",
+    "sha256": "7a20b1e1131bdc3cd72444ab5d50eede157f6adbf78e8bb57180601af2ca478c"
+  },
+  "variant": "golden",
+  "work_id": "midnight-signal"
+}

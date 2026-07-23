@@ -3,6 +3,10 @@
 - generator: suno
 - invocation_mode: prompt_only
 
+## 作業ディレクトリ（cwd）
+
+このファイルおよび `next_command.txt` 内の相対パス（project 引数・`--audio`）はすべて **project.yaml のあるディレクトリ**（この注文書（`edm@suno/`）から見て `../../..`）を基準にしている。以下のコマンドは必ずそのディレクトリで実行すること。
+
 ## 手順（prompt_only: テキストのみで生成）
 
 参照音声は使わず、`prompt.json` のテキスト + `lyrics.txt` の歌詞 + `section_tags.txt` のタグのみで生成してください。
@@ -19,9 +23,10 @@
 
 ## 出力音源の保存
 
-生成した音源を `builds/takes/edm@suno/take-01.wav`（または `.mp3`）として保存し、以下のコマンドで取り込んでください:
+生成した音源を `builds/takes/edm@suno/take-01.wav`（または `.mp3`）として保存し、project ディレクトリ（上記「作業ディレクトリ」参照）へ移動したうえで以下のコマンドで取り込んでください:
 
 ```
+cd ../../..  # この注文書ディレクトリから project.yaml のあるディレクトリへ
 svprpe recast ingest project.yaml --variant edm --backend suno --audio builds/takes/edm@suno/take-01.wav
 ```
 

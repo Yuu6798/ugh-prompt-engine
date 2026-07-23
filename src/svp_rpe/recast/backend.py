@@ -22,28 +22,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Optional, Protocol
+from typing import Dict, Literal, Optional, Protocol
 
 import yaml
 
 from svp_rpe.arrange.capabilities import InputCapabilityProfile
-from svp_rpe.arrange.identity import IdentityManifest
 from svp_rpe.arrange.package import CompiledPerformancePackage, PerformancePackage
 from svp_rpe.compose.models import CompositionScore
 from svp_rpe.recast.loader import LoadedRecastProject
 from svp_rpe.recast.models import BackendRef, InvocationKind, InvocationMode, RecastError
 from svp_rpe.recast.plan import RecastPlanArtifacts, RecastPlanResult, build_recast_plan_artifacts
-from svp_rpe.recast.run_paths import (
-    collect_protected_input_paths,
-    resolve_orders_dir,
-    resolve_takes_dir,
-)
-
-# `collect_protected_input_paths`（`recast/run_paths.py` が single source —
-# `plan.py` も同じ関数を必要とし、`plan.py` → `backend.py` の逆方向 import は
-# 循環するため。PR3 #208 指摘 6/7 対応）は `svp_rpe.recast.backend` からも
-# 従来どおり参照できるよう re-export しておく（本行はただの import 文であり、
-# 明示 import には `__all__` は影響しない）。
+from svp_rpe.recast.run_paths import resolve_orders_dir, resolve_takes_dir
 
 
 class RecastBackendUnavailable(RecastError):
@@ -63,6 +52,20 @@ class RecastRunContext:
     plan_result: RecastPlanResult
     compiled: CompiledPerformancePackage
     derived_score: CompositionScore
+    # `lyrics_text`/`section_map` anchor の hash 照合済み bytes（anchor_id
+    # キー）。plan 段（`build_recast_plan_artifacts`）が single-read で 1 回
+    # だけ読んだものをそのまま引き回す — `ManualInvoker.prepare()` の注文書
+    # 描画（`lyrics.txt`/`section_tags.txt`）がこれを使い、artifact ファイルを
+    # 再 read しない（Codex P2 review round 11, PR3 #208 指摘22: 従来は
+    # 注文書描画時に `resolve_confined(...).read_text()` で disk から再 read
+    # しており、plan 段の hash 検証とファイル内容が乖離し得る TOCTOU があった）。
+    channel_artifact_bytes: Dict[str, bytes]
+    # `IdentityManifest.source` の locator/sha256（plan 段の single-read 束が
+    # 既に hash 照合込みで parse 済みの値をそのまま引き回す）。`ManualInvoker`
+    # の cover モード注文書がこれを使い、`identity.yaml` を再 read/再 parse
+    # しない（Codex P2 review round 12, PR3 #208 指摘26）。
+    identity_source_locator: str
+    identity_source_sha256: str
 
 
 def load_backend_capability_profile(
@@ -70,9 +73,12 @@ def load_backend_capability_profile(
 ) -> InputCapabilityProfile:
     """`loaded.capability_profile_paths[backend]` から `InputCapabilityProfile` を読む。
 
-    `recast/plan.py` の step 6 と同じ読み込み経路（evidence 検証は plan 段が
-    既に行っている前提で、ここでは再検証しない — 呼び出し側は plan が
-    `compiled`/`verified` に到達した後にのみこれを呼ぶ）。
+    スタンドアロンの読み込みヘルパー（`recast/plan.py` の step 6 と同じ読み込み
+    経路）— `recast run`/`recast ingest` CLI はもはやこれを呼ばない（Codex P2
+    review round 12, PR3 #208 指摘24: `run_context_from_plan_artifacts` は
+    plan 段が single-read 束で既に parse・validate 済みの `RecastPlanArtifacts.
+    profile` を使う。本関数は plan 束を経由しないスタンドアロン用途
+    （単体テストや、plan を経由しない診断ツール等）向けに残す）。
     """
     profile_path = loaded.capability_profile_paths[backend]
     data = yaml.safe_load(profile_path.read_bytes())
@@ -87,25 +93,41 @@ def run_context_from_plan_artifacts(
     variant: str,
     backend: str,
     artifacts: RecastPlanArtifacts,
-    profile: InputCapabilityProfile,
 ) -> RecastRunContext:
     """既に計算済みの `RecastPlanArtifacts` から `RecastRunContext` を組み立てる
-    （plan パイプラインの再計算をしない、`recast run` CLI の主経路）。"""
+    （plan パイプラインの再計算をしない、`recast run` CLI の主経路）。
+
+    `profile`/`identity_source_locator`/`identity_source_sha256` は
+    `artifacts`（plan 段の single-read 束）からそのまま複製する — 呼び出し側が
+    別途 `load_backend_capability_profile`/identity manifest 読み込みを行って
+    独自の値を渡す経路はもう存在しない（Codex P2 review round 12, PR3 #208
+    指摘24/26: 再 read すると plan 段の診断と実際に invoke/注文書へ使われる
+    値が実行中の入力変化で乖離し得た）。
+    """
     if artifacts.compiled is None or artifacts.derived_score is None:
         raise RecastError(
             f"recast run: {variant}@{backend} did not reach a compiled performance "
             f"package (state_reached={artifacts.result.plan.state_reached!r}); resolve "
             "the blocking diagnostics reported by 'recast plan' first"
         )
+    # `compiled`/`derived_score` が非 None ならば、plan.py の同一 finalize 呼び出し
+    # （step 6 の profile 解決 → step 7 の compile → 最終 success return）が
+    # 必ずこれらも設定済み（plan.py 側の不変条件 — 別途 None チェックはしない）。
+    assert artifacts.profile is not None
+    assert artifacts.identity_source_locator is not None
+    assert artifacts.identity_source_sha256 is not None
     return RecastRunContext(
         loaded=loaded,
         variant=variant,
         backend=backend,
         backend_ref=artifacts.backend_ref,
-        profile=profile,
+        profile=artifacts.profile,
         plan_result=artifacts.result,
         compiled=artifacts.compiled,
         derived_score=artifacts.derived_score,
+        channel_artifact_bytes=artifacts.channel_artifact_bytes,
+        identity_source_locator=artifacts.identity_source_locator,
+        identity_source_sha256=artifacts.identity_source_sha256,
     )
 
 
@@ -114,11 +136,15 @@ def build_recast_run_context(
 ) -> RecastRunContext:
     """`build_recast_plan_artifacts` を 1 回だけ呼び、`RecastRunContext` を組み立てる
     利便関数（テスト・非 CLI 呼び出し向け）。`recast run` CLI は plan 診断表示を
-    共有するため `run_context_from_plan_artifacts` を直接使う。"""
-    artifacts = build_recast_plan_artifacts(loaded, variant=variant, backend=backend)
-    profile = load_backend_capability_profile(loaded, backend)
+    共有するため `run_context_from_plan_artifacts` を直接使う。`publish=True`
+    で呼ぶ — CLI の `recast run` と同じく package/report を builds_root へ
+    永続公開する経路を再現する（PR3 #208 指摘19: `build_recast_plan_
+    artifacts` は `publish` が必須引数になった）。"""
+    artifacts = build_recast_plan_artifacts(
+        loaded, variant=variant, backend=backend, publish=True
+    )
     return run_context_from_plan_artifacts(
-        loaded, variant=variant, backend=backend, artifacts=artifacts, profile=profile
+        loaded, variant=variant, backend=backend, artifacts=artifacts
     )
 
 
@@ -128,38 +154,25 @@ def build_recast_run_context(
 resolve_order_dir = resolve_orders_dir
 
 
-def read_identity_source(loaded: LoadedRecastProject) -> tuple[str, str]:
-    """`IdentityManifest.source` の locator + sha256 を読む（軽量パースのみ —
-    plan 段が既に artifact hash 照合済みのため、ここでは anchor bytes の再読み・
-    再照合は行わない。cover モードの注文書に「参照音声はこれ」と示すためだけの
-    情報用途）。"""
-    data = yaml.safe_load(loaded.identity_manifest_path.read_bytes())
-    if not isinstance(data, dict):
-        raise RecastError(
-            f"identity manifest must be a mapping: {loaded.identity_manifest_path}"
-        )
-    manifest = IdentityManifest.model_validate(data)
-    return manifest.source.locator, manifest.source.sha256
-
-
 def base_prepared_invocation(ctx: RecastRunContext) -> PreparedInvocation:
     """3 つの具象 invoker（manual/deterministic/musicgen）が共有する
     `PreparedInvocation` の共通フィールド組み立て（order_dir/takes_dir の解決 +
     package/derived_score/sha256 pin + identity source 参照 +
     `protected_input_paths`）。
 
-    `protected_input_paths` はここで 1 回だけ計算し（`collect_protected_input_paths`,
-    `recast/run_paths.py`）`PreparedInvocation` に固定する — orders/takes 双方の
-    公開サイト（`ManualInvoker.prepare`/`collect`、`DeterministicInvoker.invoke`）
-    が `ctx`/`loaded` を持たない `prepared` だけから同じ衝突ガード対象を読める
-    ようにするため（PR3 #208 指摘 6: 従来 `collect()`/`invoke()` は
-    `protected_inputs` を一切渡していなかった — signature 上 `ctx` を持たない
-    ためその場で計算できなかった、という抜け穴を構造的に塞ぐ）。
+    identity source 参照（`identity_source_locator`/`sha256`）と
+    `protected_input_paths` はどちらも `ctx`（`RecastPlanArtifacts` 由来の
+    `RecastRunContext`）からそのまま複製する — `identity.yaml` の再 read/
+    再 parse は一切しない（Codex P2 review round 12, PR3 #208 指摘26: 従来は
+    `read_identity_source(ctx.loaded)` と `collect_protected_input_paths
+    (ctx.loaded, ...)` がそれぞれ独立に identity manifest を再 read/再 parse
+    しており、plan 段が読んだ内容（`recast_plan.json` の診断が前提とする値）
+    と実行中に乖離し得た。`ctx.plan_result.protected_inputs` は plan.py の
+    single-read 束から副作用なく再構成済みの同じ集合 — `RecastPlanResult.
+    protected_inputs` docstring 参照）。
     """
     order_dir = resolve_order_dir(ctx.loaded, ctx.variant, ctx.backend)
     takes_dir = resolve_takes_dir(ctx.loaded, ctx.variant, ctx.backend)
-    identity_source_locator, identity_source_sha256 = read_identity_source(ctx.loaded)
-    protected_input_paths = collect_protected_input_paths(ctx.loaded, ctx.variant, ctx.backend)
     return PreparedInvocation(
         variant=ctx.variant,
         backend_name=ctx.backend,
@@ -172,9 +185,10 @@ def base_prepared_invocation(ctx: RecastRunContext) -> PreparedInvocation:
         content_digest=ctx.compiled.report.content_digest,
         order_dir=order_dir,
         takes_dir=takes_dir,
-        identity_source_locator=identity_source_locator,
-        identity_source_sha256=identity_source_sha256,
-        protected_input_paths=protected_input_paths,
+        identity_source_locator=ctx.identity_source_locator,
+        identity_source_sha256=ctx.identity_source_sha256,
+        protected_input_paths=ctx.plan_result.protected_inputs,
+        channel_artifact_bytes=ctx.channel_artifact_bytes,
     )
 
 
@@ -265,7 +279,16 @@ def atomic_publish_bytes_bundle(
             for filename in contents:
                 os.replace(staging_dir / filename, output_dir / filename)
                 published.append(filename)
-        except OSError:
+        except BaseException:
+            # `except BaseException`（`except OSError` ではなく）: rename 中に
+            # `KeyboardInterrupt`/`SystemExit` が飛んでも rollback を必ず通す
+            # （Codex P2 review round 7, PR3 #208 指摘 14: 単一ファイル atomic
+            # writer 群 — `_write_recast_plan_atomically` / `_write_recast_state_
+            # atomically` 等 — は元から `except BaseException` で統一されており、
+            # 複数ファイル bundle publisher だけが `except OSError` に留まって
+            # いた。`OSError` のみだと非 `OSError` の中断シグナルで rollback を
+            # 素通りし、snapshot ごと失われた「半端に publish 済み」の状態が
+            # 残り得た）。
             for filename in published:
                 try:
                     os.unlink(output_dir / filename)
@@ -297,6 +320,10 @@ class PreparedInvocation:
     identity_source_locator: str
     identity_source_sha256: str
     protected_input_paths: list[Path]
+    # `RecastRunContext.channel_artifact_bytes` の docstring 参照（Codex P2
+    # review round 11, PR3 #208 指摘22）: `ManualInvoker.prepare()` の注文書
+    # 描画がこの pin 済み bytes を使い、artifact ファイルを再 read しない。
+    channel_artifact_bytes: Dict[str, bytes]
 
 
 @dataclass(frozen=True)

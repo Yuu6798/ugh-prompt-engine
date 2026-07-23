@@ -144,8 +144,9 @@ from __future__ import annotations
 import json
 import math
 import re
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Generic, Literal, Optional, TypeVar
+from typing import Callable, Collection, Generic, Literal, Optional, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -153,6 +154,7 @@ from svp_rpe.arrange.identity import (
     AnchorDomain,
     IdentityAnchor,
     IdentityManifest,
+    parse_identity_manifest_with_artifacts,
     _resolve_confined,
 )
 from svp_rpe.arrange.models import JsonValue
@@ -1752,4 +1754,259 @@ def build_observation_report(
             path=generated_artifact_path, sha256=audio_sha256
         ),
         anchors=anchors,
+    )
+
+
+@dataclass(frozen=True)
+class GeneratedArtifactObservation:
+    """`observe_generated_artifact` の戻り値: 検証済み `package`/`manifest` +
+    組み立て済み `report`（呼び出し側が `package.anchor_statuses` の
+    `requested_mode` 等、report 以外の情報も必要とする場合の再取得を避ける）。"""
+
+    package: PerformancePackage
+    manifest: IdentityManifest
+    report: ObservationReport
+
+
+def observe_generated_artifact(
+    *,
+    package_path: Path,
+    manifest_path: Path,
+    audio_path: Path,
+    generated_artifact_path: Optional[str] = None,
+    expected_audio_sha256: Optional[str] = None,
+    expected_package_sha256: Optional[str] = None,
+    anchor_scope: Optional[Collection[str]] = None,
+) -> GeneratedArtifactObservation:
+    """`package_path`/`manifest_path`/`audio_path` から provenance chain を検証し、
+    `build_observation_report` を呼ぶ非-CLI 経路（PR5: `recast ingest` の
+    observe→report 拡張が使う。`cli/observe_cmd.py` の `observe` コマンドとは
+    独立に実装する — あちらは `-o` 出力パスの衝突検査など CLI 固有の関心事を
+    持つため、無理に共有関数へ括り出すと責務が混ざる。検証内容だけは同一に
+    保つ: D-3 provenance chain（`--manifest` sha256 == `package.inputs.
+    identity_manifest.sha256`）+ `package.work_id`/`manifest.meta.work_id` の
+    一致 + `package.anchor_statuses`/`manifest.anchors` の anchor_id 集合一致。
+
+    失敗はすべて `OSError` / `ValueError` / `pydantic.ValidationError` /
+    `IdentityManifestError` をそのまま送出する（ラップしない — 呼び出し側が
+    自分の Error 表示・state 記録規約で捕捉する）。`generated_artifact_path`
+    は report の `generated_artifact.path` に記録する文字列（省略時は
+    `str(audio_path)` — CLI 実行時の絶対パスが漏れないよう、呼び出し側は
+    project 相対パスを渡すこと）。
+
+    `expected_audio_sha256`（Codex P2, #210 round 2 指摘2）: 呼び出し側が
+    別時点で既に確定させた `audio_path` の sha256（`recast ingest` では
+    `collect()`/`invoke()` が返す `GeneratedTake.sha256`）。渡された場合、
+    この関数が `audio_path` を読んだ直後（抽出より前）に、そこで実際に
+    読んだ bytes の sha256 と突き合わせる — collect 完了から本関数の読み
+    出しまでの間に `audio_path` が別 bytes へ差し替わっていた場合、
+    「観測していない take を collect 時 hash で証明する」report が組み
+    立てられる前に `ValueError` で fail-closed する（report は一切構築
+    されない — 無駄な抽出も走らせない、最短経路での検出）。省略時
+    （`None`）はこの突合を行わない（`svprpe observe` 単体実行など、
+    collect 時点の pin を持たない呼び出し元向け）。
+
+    `expected_package_sha256`（Codex P2, #210 round 3 指摘5）:
+    `expected_audio_sha256` と同型の pin だが `package_path` 側に対する
+    もの — 呼び出し側が rebuild で確定させた package の sha256（`recast
+    ingest` では publish 直後の `artifacts.compiled.report.package_sha256`）。
+    渡された場合、`package_path` を読んだ直後（D-3 provenance chain の
+    検証より前）に、実際に読んだ bytes の sha256 と突き合わせる — 公開から
+    この関数の読み出しまでの間に `package_path` が別の自己整合な package
+    （＝ D-3 の内部整合チェックだけを通過し得る、別 sha256 の
+    performance_package.json）へ差し替えられていた場合でも、観測・report
+    記録の前に `ValueError` で fail-closed する（take 側の突合と対になる
+    契約 — `audio_path` だけでなく `package_path` も呼び出し側が最後に
+    確定させた bytes から動いていないことを保証する）。省略時（`None`）は
+    この突合を行わない。
+
+    `audio_path` の TOCTOU 対策として、`is_*_sensor_anchor` のいずれかが
+    manifest 中に存在する場合のみ一時スナップショットへコピーしてから
+    抽出する（`build_observation_report`/`observe` コマンドと同じ規律 —
+    「report に記録する sha256」と「実際に測定した bytes」を同一にする）。
+
+    `anchor_scope`（Codex P2, #211 — `recast ingest` の `project.yaml`
+    `observation.anchors` を実装した後続 PR が持ち込んだ観測経路の指摘。
+    根本の観測経路は本関数であり、修正はここへ一元化する）: 非 `None` の
+    場合、観測対象を `anchor_scope` に含まれる anchor id のみへ絞る。
+    絞り込みは manifest の**生 bytes を parse する前**に行う — スコープ外の
+    anchor は `parse_identity_manifest_with_artifacts` の hash 照合ループへ
+    一切現れないため、その artifact の破損・不在は無関係になる（事前検証
+    ゼロ）。`build_observation_report` はスコープ後の `loaded_manifest.anchors`
+    のみを反復するため、learned センサー推論（lyrics/melody）もスコープ外
+    anchor に対しては一切呼ばれない — `build_observation_report`/`observe.py`
+    の観測ループ自体は変更しない（この関数の呼び出し前処理だけで完結する
+    「薄い拡張」）。D-3 の `package.anchor_statuses`/`manifest.anchors`
+    anchor_id 集合一致チェックは、スコープ適用時は両側を `anchor_scope` へ
+    絞ってから比較する（スコープ外 anchor の package 側欠落/余剰では拒否
+    しない — package 自体は元の完全な manifest に対して compile された
+    ものであり、観測時にどの部分集合を見るかとは独立な話であるため）。
+    `None`（省略時）は絞り込みを行わない（`svprpe observe` 単体実行や
+    `observation.anchors` 未設定時と同じ、従来どおり全 manifest anchor を
+    観測する挙動）。
+
+    `anchor_scope` に manifest 側に存在しない id（typo・削除済み anchor 等）
+    が含まれる場合は `ValueError`（Codex P2, #210 round 9 指摘11）:
+    フィルタは「一致する id だけ残す」実装のため、未知 id はそのまま通すと
+    単に無視され、`anchor_scope=["harmnoy"]`（typo）のような設定ミスが
+    ゼロ anchor の report/summary を「成功」として publish してしまう。
+    フィルタ適用前に `anchor_scope ⊆ manifest anchor id 集合` を検証し、
+    外れている id を列挙して拒否する（report は一切構築されない）。
+    """
+    import hashlib
+    import os
+    import tempfile
+
+    import yaml
+
+    package_bytes = package_path.read_bytes()
+    if expected_package_sha256 is not None:
+        actual_package_sha256 = hashlib.sha256(package_bytes).hexdigest()
+        if actual_package_sha256 != expected_package_sha256:
+            raise ValueError(
+                f"package at {package_path} changed since publish (TOCTOU): expected "
+                f"sha256 {expected_package_sha256}, got {actual_package_sha256}"
+            )
+    package = PerformancePackage.model_validate_json(package_bytes)
+
+    manifest_bytes = manifest_path.read_bytes()
+    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    if manifest_sha256 != package.inputs.identity_manifest.sha256:
+        raise ValueError(
+            "identity manifest sha256 does not match "
+            f"package.inputs.identity_manifest.sha256: {manifest_sha256} != "
+            f"{package.inputs.identity_manifest.sha256}"
+        )
+
+    # スコープ適用（Codex P2, #211）: `anchor_scope` が非 None の場合、
+    # `parse_identity_manifest_with_artifacts` に渡す bytes 自体をスコープ外
+    # anchor を除いた「合成 manifest」へ差し替える — 除外 anchor はこの後の
+    # hash 照合ループへ一切現れない（事前検証ゼロ）。manifest の実 YAML
+    # 構造が壊れている場合はここでフィルタせず素通しし、通常どおり
+    # `parse_identity_manifest_with_artifacts` 自身の fail-closed 検証に
+    # 委ねる（ここで独自にエラー分類しない）。
+    scoped_manifest_bytes = manifest_bytes
+    if anchor_scope is not None:
+        scope_ids = set(anchor_scope)
+        try:
+            raw_manifest_data = yaml.safe_load(manifest_bytes)
+        except yaml.YAMLError:
+            raw_manifest_data = None
+        if isinstance(raw_manifest_data, dict) and isinstance(
+            raw_manifest_data.get("anchors"), list
+        ):
+            manifest_anchor_id_set = {
+                entry.get("id")
+                for entry in raw_manifest_data["anchors"]
+                if isinstance(entry, dict)
+            }
+            # 未知 id の fail-closed 検査（Codex P2, #210 round 9 指摘11）:
+            # typo/削除済み id を含む `anchor_scope` は、以下のフィルタに
+            # そのまま通すと単に「該当なし」として静かに消え、ゼロ anchor の
+            # report/summary が publish されてしまう（observation.enabled の
+            # ユーザー期待から外れた誤った「成功」）。フィルタ適用前に
+            # `scope_ids` が実際の manifest anchor id 集合の部分集合である
+            # ことを検証し、外れている id があれば列挙して `ValueError` で
+            # 拒否する — 設定ミスとして扱い、report は一切構築しない。
+            unknown_scope_ids = scope_ids - manifest_anchor_id_set
+            if unknown_scope_ids:
+                raise ValueError(
+                    "anchor_scope contains anchor id(s) not present in the identity "
+                    f"manifest: {sorted(unknown_scope_ids)} (known anchor ids: "
+                    f"{sorted(manifest_anchor_id_set)})"
+                )
+            raw_manifest_data = dict(raw_manifest_data)
+            raw_manifest_data["anchors"] = [
+                entry
+                for entry in raw_manifest_data["anchors"]
+                if isinstance(entry, dict) and entry.get("id") in scope_ids
+            ]
+            scoped_manifest_bytes = yaml.safe_dump(
+                raw_manifest_data, sort_keys=False, allow_unicode=True
+            ).encode("utf-8")
+
+    loaded_manifest, artifact_bytes_by_id = parse_identity_manifest_with_artifacts(
+        scoped_manifest_bytes,
+        manifest_path,
+        collect=lambda anchor: (
+            is_harmony_sensor_anchor(anchor)
+            or is_structure_sensor_anchor(anchor)
+            or is_lyrics_sensor_anchor(anchor)
+            or is_melody_sensor_anchor(anchor)
+        ),
+    )
+
+    if package.work_id != loaded_manifest.meta.work_id:
+        raise ValueError(
+            "package.work_id does not match manifest.meta.work_id: "
+            f"{package.work_id!r} != {loaded_manifest.meta.work_id!r}"
+        )
+
+    package_anchor_ids = {status.anchor_id for status in package.anchor_statuses}
+    manifest_anchor_ids = {anchor.id for anchor in loaded_manifest.anchors}
+    # スコープ適用時は package 側 id 集合も同じスコープへ絞ってから比較する
+    # （Codex P2, #211: 「anchor id set 突合がある場合は両側を同じ集合に」）
+    # — package 自体は元の完全な manifest に対して compile されたものであり、
+    # スコープ外 anchor の package 側欠落/余剰は観測スコープの選択と無関係。
+    effective_package_anchor_ids = (
+        package_anchor_ids & set(anchor_scope)
+        if anchor_scope is not None
+        else package_anchor_ids
+    )
+    if effective_package_anchor_ids != manifest_anchor_ids:
+        missing_from_package = sorted(manifest_anchor_ids - effective_package_anchor_ids)
+        extra_in_package = sorted(effective_package_anchor_ids - manifest_anchor_ids)
+        details = []
+        if missing_from_package:
+            details.append(f"missing from package.anchor_statuses: {missing_from_package}")
+        if extra_in_package:
+            details.append(f"extra in package.anchor_statuses: {extra_in_package}")
+        raise ValueError(
+            "package.anchor_statuses anchor_id set does not match "
+            "manifest.anchors id set (" + "; ".join(details) + ")"
+        )
+
+    audio_bytes = audio_path.read_bytes()
+    audio_sha256 = hashlib.sha256(audio_bytes).hexdigest()
+    if expected_audio_sha256 is not None and audio_sha256 != expected_audio_sha256:
+        raise ValueError(
+            f"audio at {audio_path} changed since collection (TOCTOU): expected sha256 "
+            f"{expected_audio_sha256}, got {audio_sha256}"
+        )
+    package_sha256 = hashlib.sha256(package_bytes).hexdigest()
+
+    needs_extraction = any(
+        is_harmony_sensor_anchor(anchor)
+        or is_structure_sensor_anchor(anchor)
+        or is_lyrics_sensor_anchor(anchor)
+        or is_melody_sensor_anchor(anchor)
+        for anchor in loaded_manifest.anchors
+    )
+    snapshot_path: Optional[Path] = None
+    try:
+        if needs_extraction:
+            snapshot_fd, snapshot_name = tempfile.mkstemp(suffix=audio_path.suffix or ".wav")
+            snapshot_path = Path(snapshot_name)
+            with os.fdopen(snapshot_fd, "wb") as snapshot_file:
+                snapshot_file.write(audio_bytes)
+            measurement_audio_path = snapshot_path
+        else:
+            measurement_audio_path = audio_path
+
+        report = build_observation_report(
+            package=package,
+            manifest=loaded_manifest,
+            manifest_path=manifest_path,
+            artifact_bytes=artifact_bytes_by_id,
+            audio_path=measurement_audio_path,
+            package_sha256=package_sha256,
+            audio_sha256=audio_sha256,
+            generated_artifact_path=generated_artifact_path or str(audio_path),
+        )
+    finally:
+        if snapshot_path is not None:
+            snapshot_path.unlink(missing_ok=True)
+
+    return GeneratedArtifactObservation(
+        package=package, manifest=loaded_manifest, report=report
     )

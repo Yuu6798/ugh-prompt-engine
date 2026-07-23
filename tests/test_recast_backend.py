@@ -12,7 +12,6 @@ from svp_rpe.recast import RecastError, load_recast_project
 from svp_rpe.recast.backend import (
     RecastBackendUnavailable,
     build_recast_run_context,
-    load_backend_capability_profile,
     resolve_invoker,
     run_context_from_plan_artifacts,
 )
@@ -267,6 +266,396 @@ def test_next_command_txt_is_shell_quoted_for_project_filename_with_space(
     assert state_file.runs["edm@suno"].state == "generated"
 
 
+def test_order_sheet_cd_line_is_shell_quoted_for_project_filename_with_space(
+    tmp_path: Path,
+) -> None:
+    """Codex P2 review round 14（PR3 #208 — #210 側にも同内容の指摘）:
+    `order_sheet.md` のコマンドブロック先頭 `cd <cwd_from_order_dir>` が
+    未クオートだった — `_next_command_text`（指摘11 で対応済み）の
+    `--audio`/project 引数と同じコマンドブロック内にある隣接行なのに、
+    そちらだけ `shlex.join` によるクオートが漏れていた。`shlex.join(["cd",
+    cwd_from_order_dir])` でクオートし、空白入り project ファイル名の
+    project で `order_sheet.md` の `cd` 行が `shlex.split` で厳密に 2
+    トークン（`["cd", <単一パス>]`）に戻ることを検証する。"""
+    import shlex
+
+    dest = tmp_path / "demo_project"
+    dest.mkdir()
+    shutil.copy(DEMO_PROJECT / "project.yaml", dest / "my project.yaml")
+    shutil.copy(DEMO_PROJECT / "composition_score.yaml", dest / "composition_score.yaml")
+    shutil.copy(DEMO_PROJECT / "identity.yaml", dest / "identity.yaml")
+    shutil.copytree(DEMO_PROJECT / "identity", dest / "identity")
+    shutil.copytree(DEMO_PROJECT / "arrangements", dest / "arrangements")
+    project_path = dest / "my project.yaml"
+
+    loaded = load_recast_project(project_path)
+    ctx = build_recast_run_context(loaded, variant="edm", backend="suno")
+    invoker = resolve_invoker(ctx.backend_ref, ctx.profile)
+    prepared = invoker.prepare(ctx)
+
+    order_sheet = (prepared.order_dir / "order_sheet.md").read_text(encoding="utf-8")
+    cd_lines = [line for line in order_sheet.splitlines() if line.startswith("cd ")]
+    assert len(cd_lines) == 1
+    # 末尾のシェルコメント（`  # ...`）はコマンド本体ではないため
+    # shlex.split の対象から外す。
+    command_part = cd_lines[0].split("  #", 1)[0]
+    tokens = shlex.split(command_part)
+    assert tokens[0] == "cd"
+    assert len(tokens) == 2  # ["cd", <単一パス>] — 空白でトークン分割されない
+
+
+# --- manual: multi-anchor channel artifact rendering ----------------------------
+
+
+def _add_second_lyrics_anchor(project_path: Path, *, content: bytes) -> None:
+    """demo project の identity manifest に 2 件目の lyrics anchor
+    （id=`lyrics_alt`）を追加する（Codex P2 ninth round #207 指摘18 の
+    回帰テスト用フィクスチャ構築）。`identity/lyrics_alt.txt` を書き、
+    identity.yaml の anchors・arrangements/edm.yaml の
+    preservation.identity_anchors 両方に登録する（`build_preservation_
+    contract` は `required: true` な anchor 全てに policy を要求する既存
+    契約 — demo project の他 3 anchor と同じ規約）。"""
+    import hashlib
+
+    project_dir = project_path.parent
+    artifact_path = project_dir / "identity" / "lyrics_alt.txt"
+    artifact_path.write_bytes(content)
+    sha256 = hashlib.sha256(content).hexdigest()
+
+    identity_path = project_dir / "identity.yaml"
+    identity_text = identity_path.read_text(encoding="utf-8")
+    anchor_block = (
+        "  - id: lyrics_alt\n"
+        "    domain: lyrics\n"
+        "    artifact: identity/lyrics_alt.txt\n"
+        "    artifact_type: lyrics_text\n"
+        "    media_type: text/plain\n"
+        f'    sha256: "{sha256}"\n'
+        "    required: true\n"
+    )
+    # 既存の "lyrics" anchor 直後（"melody" anchor の手前）へ挿入する —
+    # 宣言順 = lyrics → lyrics_alt → melody → harmony となり、レンダリング順が
+    # 宣言順を保存しているかどうかを意味のある形で検証できる。
+    updated_identity = identity_text.replace(
+        "    required: true\n  - id: melody\n",
+        "    required: true\n" + anchor_block + "  - id: melody\n",
+        1,
+    )
+    assert updated_identity != identity_text  # sanity
+    identity_path.write_text(updated_identity, encoding="utf-8")
+
+    arrangement_path = project_dir / "arrangements" / "edm.yaml"
+    arrangement_text = arrangement_path.read_text(encoding="utf-8")
+    updated_arrangement = arrangement_text.replace(
+        "  identity_anchors:\n",
+        "  identity_anchors:\n    lyrics_alt:\n      mode: hard\n      allow: []\n",
+        1,
+    )
+    assert updated_arrangement != arrangement_text  # sanity
+    arrangement_path.write_text(updated_arrangement, encoding="utf-8")
+
+
+def test_lyrics_text_renders_all_delivered_lyrics_anchors(tmp_path: Path) -> None:
+    """Codex P2 review round 9（PR3 #208 指摘18）: `build_performance_package`
+    は preserve される全 lyrics anchor を `channel_artifacts['lyrics_text']`
+    へ記録するが、`_lyrics_text` は従来 `refs[0]` のみを読んでおり、2 件目
+    以降の lyrics anchor（plan/package は delivered と報告している）を
+    黙って `lyrics.txt` から落としていた。2 件の lyrics anchor を preserve
+    する project で `lyrics.txt` に両方の内容が現れる（package 内の順を
+    保存し、複数件なので anchor_id 見出し付きで連結される）ことを検証する。"""
+    project_path = _copy_demo_project(tmp_path)
+    _add_second_lyrics_anchor(
+        project_path, content=b"Second lyric anchor content.\nLine two.\n"
+    )
+
+    _loaded, _invoker, prepared = _prepare_manual(project_path)
+
+    lyrics_text = (prepared.order_dir / "lyrics.txt").read_text(encoding="utf-8")
+    assert "# lyrics\n" in lyrics_text
+    assert "# lyrics_alt\n" in lyrics_text
+    assert "Second lyric anchor content." in lyrics_text
+    # 元の lyrics anchor の本文も引き続き含まれる。
+    original_lyrics = (project_path.parent / "identity" / "lyrics.txt").read_text(
+        encoding="utf-8"
+    )
+    assert original_lyrics.splitlines()[0] in lyrics_text
+    # package 内の順（identity.yaml の宣言順 = lyrics → lyrics_alt）を保存する。
+    assert lyrics_text.index("# lyrics\n") < lyrics_text.index("# lyrics_alt\n")
+
+
+def _add_section_map_v2_anchor(project_path: Path, *, sections: list[tuple[str, str]]) -> None:
+    """demo project の identity manifest へ `section-map/0.2` structure anchor
+    （`domain="structure"`, `artifact_type="section_map"`）を追加する（Codex P2
+    ninth round #207 指摘20 の回帰テスト用フィクスチャ構築 — `_add_second_
+    lyrics_anchor` と同型の手順）。"""
+    import hashlib
+    import json
+
+    project_dir = project_path.parent
+    payload = {
+        "schema_version": "section-map/0.2",
+        "sections": [{"id": entry_id, "label": label} for entry_id, label in sections],
+    }
+    content = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+    artifact_path = project_dir / "identity" / "section_tags.json"
+    artifact_path.write_bytes(content)
+    sha256 = hashlib.sha256(content).hexdigest()
+
+    identity_path = project_dir / "identity.yaml"
+    identity_text = identity_path.read_text(encoding="utf-8")
+    anchor_block = (
+        "  - id: structure_tags\n"
+        "    domain: structure\n"
+        "    artifact: identity/section_tags.json\n"
+        "    artifact_type: section_map\n"
+        "    media_type: application/json\n"
+        '    format_version: "section-map/0.2"\n'
+        f'    sha256: "{sha256}"\n'
+        "    required: true\n"
+    )
+    updated_identity = identity_text.replace(
+        "    required: true\n  - id: melody\n",
+        "    required: true\n" + anchor_block + "  - id: melody\n",
+        1,
+    )
+    assert updated_identity != identity_text  # sanity
+    identity_path.write_text(updated_identity, encoding="utf-8")
+
+    arrangement_path = project_dir / "arrangements" / "edm.yaml"
+    arrangement_text = arrangement_path.read_text(encoding="utf-8")
+    updated_arrangement = arrangement_text.replace(
+        "  identity_anchors:\n",
+        "  identity_anchors:\n    structure_tags:\n      mode: hard\n      allow: []\n",
+        1,
+    )
+    assert updated_arrangement != arrangement_text  # sanity
+    arrangement_path.write_text(updated_arrangement, encoding="utf-8")
+
+
+def test_section_tags_text_prefers_delivered_channel_artifact_over_prompt(
+    tmp_path: Path,
+) -> None:
+    """Codex P2 review round 9（PR3 #208 指摘20）: `_section_tags_text` は従来
+    `prompt.section_tags`（derived score 由来の advisory 値）を無条件に先に
+    採用しており、`channel_artifacts['section_tags']` に実際に delivered な
+    section_map（hard-preservation の実体）があってもそちらを一切読まなかった
+    — plan は delivered と報告するのに manual generator へ渡る
+    `section_tags.txt` には反映されない、指摘18 と同型の欠落だった。
+    delivered な section-map/0.2 anchor を preserve する project で
+    `section_tags.txt` がその artifact 由来の内容になり、
+    `prompt.section_tags`（demo デフォルトの `[Intro: ...]` 形式）ではない
+    ことを検証する。"""
+    project_path = _copy_demo_project(tmp_path)
+    _add_section_map_v2_anchor(
+        project_path, sections=[("intro", "Intro"), ("drop", "Drop")]
+    )
+
+    _loaded, _invoker, prepared = _prepare_manual(project_path)
+    assert "section_tags" in prepared.package.channel_artifacts  # delivered 前提の sanity
+
+    section_tags_text = (prepared.order_dir / "section_tags.txt").read_text(
+        encoding="utf-8"
+    )
+    assert section_tags_text == "intro:Intro, drop:Drop\n"
+    # 従来の prompt.section_tags 由来のプレースホルダ形式ではないことを確認。
+    assert "[Intro:" not in section_tags_text
+
+
+def test_lyrics_text_uses_plan_pinned_bytes_not_disk_reread_at_render_time(
+    tmp_path: Path,
+) -> None:
+    """Codex P2 review round 11（PR3 #208 指摘22）: `_lyrics_text` は従来
+    `resolve_confined(...).read_text()` で注文書描画のたびに artifact を
+    disk から再 read しており、plan 段（`build_recast_plan_artifacts`）の
+    hash 検証と実際に描画される中身が乖離し得る TOCTOU があった。plan
+    構築後・`prepare()` 呼び出し前に artifact ファイルの中身を書き換えても、
+    `lyrics.txt` には plan 段が pin した（書き換え前の）bytes がそのまま
+    反映されることを検証する。"""
+    project_path = _copy_demo_project(tmp_path)
+    loaded = load_recast_project(project_path)
+    ctx = build_recast_run_context(loaded, variant="edm", backend="suno")
+
+    lyrics_path = project_path.parent / "identity" / "lyrics.txt"
+    original_text = lyrics_path.read_text(encoding="utf-8")
+    lyrics_path.write_bytes(b"MUTATED AFTER PLAN BUILD, BEFORE RENDER\n")
+
+    invoker = resolve_invoker(ctx.backend_ref, ctx.profile)
+    prepared = invoker.prepare(ctx)
+
+    lyrics_text = (prepared.order_dir / "lyrics.txt").read_text(encoding="utf-8")
+    assert "MUTATED AFTER PLAN BUILD" not in lyrics_text
+    assert lyrics_text == (
+        original_text if original_text.endswith("\n") else original_text + "\n"
+    )
+
+
+def _add_malformed_section_map_anchor(project_path: Path, *, content: bytes) -> None:
+    """指摘23 回帰テスト用フィクスチャ: sha256 は content と一致する（plan 段の
+    hash 検証は通る）が、section-map v0.1/v0.2 いずれの schema にも parse
+    できない bytes を持つ section_tags anchor を追加する。`format_version` は
+    宣言しない — 宣言すると（`section-map/0.2` の場合）plan.py 側の
+    `_is_section_map_v2_structure_anchor`（AR2-3 の `section_ref` merge
+    resolution）がこの anchor を先に parse し、plan 段で blocked_verification
+    として弾かれてしまい `ManualInvoker.prepare()` まで到達しない
+    （= 本テストが検証したい manual.py 側の fail-closed 経路に届かない）。"""
+    import hashlib
+
+    project_dir = project_path.parent
+    artifact_path = project_dir / "identity" / "section_tags_broken.json"
+    artifact_path.write_bytes(content)
+    sha256 = hashlib.sha256(content).hexdigest()
+
+    identity_path = project_dir / "identity.yaml"
+    identity_text = identity_path.read_text(encoding="utf-8")
+    anchor_block = (
+        "  - id: structure_tags\n"
+        "    domain: structure\n"
+        "    artifact: identity/section_tags_broken.json\n"
+        "    artifact_type: section_map\n"
+        "    media_type: application/json\n"
+        f'    sha256: "{sha256}"\n'
+        "    required: true\n"
+    )
+    updated_identity = identity_text.replace(
+        "    required: true\n  - id: melody\n",
+        "    required: true\n" + anchor_block + "  - id: melody\n",
+        1,
+    )
+    assert updated_identity != identity_text  # sanity
+    identity_path.write_text(updated_identity, encoding="utf-8")
+
+    arrangement_path = project_dir / "arrangements" / "edm.yaml"
+    arrangement_text = arrangement_path.read_text(encoding="utf-8")
+    updated_arrangement = arrangement_text.replace(
+        "  identity_anchors:\n",
+        "  identity_anchors:\n    structure_tags:\n      mode: hard\n      allow: []\n",
+        1,
+    )
+    assert updated_arrangement != arrangement_text  # sanity
+    arrangement_path.write_text(updated_arrangement, encoding="utf-8")
+
+
+def test_section_tags_text_fails_closed_when_delivered_section_map_is_unparseable(
+    tmp_path: Path,
+) -> None:
+    """Codex P2 review round 11（PR3 #208 指摘23）: 配送済み
+    `channel_artifacts['section_tags']` ref が section-map v0.1/v0.2 いずれの
+    schema にも parse できない場合、従来は `_channel_artifact_refs_section_
+    tags_text` が黙って `None` を返し、呼び出し側が `prompt.section_tags`/
+    placeholder へ silent fallback していた — plan/package は delivered と
+    報告している hard anchor の実体が、気づかれないまま注文書から欠落する
+    事故を招く。1 件も解釈できない場合は `RecastError` で fail-closed し、
+    注文書（6 ファイルいずれも）を一切公開しないことを検証する。"""
+    project_path = _copy_demo_project(tmp_path)
+    _add_malformed_section_map_anchor(project_path, content=b"not valid json at all")
+
+    loaded = load_recast_project(project_path)
+    ctx = build_recast_run_context(loaded, variant="edm", backend="suno")
+    assert "section_tags" in ctx.compiled.package.channel_artifacts  # delivered 前提の sanity
+    invoker = resolve_invoker(ctx.backend_ref, ctx.profile)
+
+    with pytest.raises(RecastError, match="structure_tags"):
+        invoker.prepare(ctx)
+
+    order_dir = loaded.builds_root / "orders" / "edm@suno"
+    assert not order_dir.exists()
+
+
+def _add_one_valid_and_one_broken_section_map_anchor(project_path: Path) -> None:
+    """指摘25 回帰テスト用フィクスチャ: 2 件の delivered section_tags anchor を
+    追加する — 1 件は正常な `section-map/0.2`（id=`structure_tags_ok`）、もう
+    1 件は sha256 は正しいが schema として parse 不能（id=`structure_tags_
+    broken`、`_add_malformed_section_map_anchor` と同じ理由で `format_version`
+    は宣言しない）。"""
+    import hashlib
+    import json
+
+    project_dir = project_path.parent
+
+    ok_payload = {
+        "schema_version": "section-map/0.2",
+        "sections": [{"id": "intro", "label": "Intro"}, {"id": "drop", "label": "Drop"}],
+    }
+    ok_content = (json.dumps(ok_payload, ensure_ascii=False) + "\n").encode("utf-8")
+    ok_artifact_path = project_dir / "identity" / "section_tags_ok.json"
+    ok_artifact_path.write_bytes(ok_content)
+    ok_sha256 = hashlib.sha256(ok_content).hexdigest()
+
+    broken_content = b"not valid json at all"
+    broken_artifact_path = project_dir / "identity" / "section_tags_broken.json"
+    broken_artifact_path.write_bytes(broken_content)
+    broken_sha256 = hashlib.sha256(broken_content).hexdigest()
+
+    identity_path = project_dir / "identity.yaml"
+    identity_text = identity_path.read_text(encoding="utf-8")
+    anchor_block = (
+        "  - id: structure_tags_ok\n"
+        "    domain: structure\n"
+        "    artifact: identity/section_tags_ok.json\n"
+        "    artifact_type: section_map\n"
+        "    media_type: application/json\n"
+        '    format_version: "section-map/0.2"\n'
+        f'    sha256: "{ok_sha256}"\n'
+        "    required: true\n"
+        "  - id: structure_tags_broken\n"
+        "    domain: structure\n"
+        "    artifact: identity/section_tags_broken.json\n"
+        "    artifact_type: section_map\n"
+        "    media_type: application/json\n"
+        f'    sha256: "{broken_sha256}"\n'
+        "    required: true\n"
+    )
+    updated_identity = identity_text.replace(
+        "    required: true\n  - id: melody\n",
+        "    required: true\n" + anchor_block + "  - id: melody\n",
+        1,
+    )
+    assert updated_identity != identity_text  # sanity
+    identity_path.write_text(updated_identity, encoding="utf-8")
+
+    arrangement_path = project_dir / "arrangements" / "edm.yaml"
+    arrangement_text = arrangement_path.read_text(encoding="utf-8")
+    updated_arrangement = arrangement_text.replace(
+        "  identity_anchors:\n",
+        "  identity_anchors:\n"
+        "    structure_tags_ok:\n      mode: hard\n      allow: []\n"
+        "    structure_tags_broken:\n      mode: hard\n      allow: []\n",
+        1,
+    )
+    assert updated_arrangement != arrangement_text  # sanity
+    arrangement_path.write_text(updated_arrangement, encoding="utf-8")
+
+
+def test_section_tags_text_fails_closed_when_one_of_several_delivered_refs_is_unparseable(
+    tmp_path: Path,
+) -> None:
+    """Codex P2 review round 12（PR3 #208 指摘25）: round 11 の指摘23 修正は
+    「delivered な section_tags ref が**全滅**したときだけ」fail-closed して
+    おり、複数 delivered ref のうち一部だけが parse 不能な場合はその ref
+    だけを黙って読み飛ばし、残りの ref だけで「不完全だが動く」注文書を
+    出していた。2 件の delivered section_tags anchor（1 件は正常な
+    section-map/0.2、もう 1 件は schema として parse 不能）を preserve する
+    project で、`prepare()` が `RecastError` を送出し（正常な 1 件があっても
+    公開を拒否し）、注文書ディレクトリが一切作られないことを検証する。"""
+    project_path = _copy_demo_project(tmp_path)
+    _add_one_valid_and_one_broken_section_map_anchor(project_path)
+
+    loaded = load_recast_project(project_path)
+    ctx = build_recast_run_context(loaded, variant="edm", backend="suno")
+    section_tags_refs = ctx.compiled.package.channel_artifacts.get("section_tags", [])
+    assert {ref.anchor_id for ref in section_tags_refs} == {
+        "structure_tags_ok",
+        "structure_tags_broken",
+    }  # 2 件とも delivered 前提の sanity
+    invoker = resolve_invoker(ctx.backend_ref, ctx.profile)
+
+    with pytest.raises(RecastError, match="structure_tags_broken"):
+        invoker.prepare(ctx)
+
+    order_dir = loaded.builds_root / "orders" / "edm@suno"
+    assert not order_dir.exists()
+
+
 # --- manual: cover mode branch --------------------------------------------------
 
 
@@ -304,6 +693,48 @@ def test_manual_cover_mode_order_sheet_references_identity_source(tmp_path: Path
     assert prepared.identity_source_sha256 in order_sheet
     assert "physical.time_signature" in order_sheet
     assert "unsupported" in order_sheet  # cover の time_signature override は届かない実測
+
+
+def test_manual_cover_mode_order_sheet_uses_plan_pinned_identity_source_not_disk_reread(
+    tmp_path: Path,
+) -> None:
+    """Codex P2 review round 12（PR3 #208 指摘26）: `base_prepared_invocation`
+    は従来 `read_identity_source(ctx.loaded)` で注文書描画のたびに
+    `identity.yaml` を再 read/再 parse しており、plan 段（`build_recast_
+    plan_artifacts`）の hash 検証・診断が前提とした source メタデータと
+    実際に注文書へ書かれる中身が乖離し得る TOCTOU があった。plan 構築後・
+    `prepare()` 呼び出し前に `identity.yaml` の `source.locator`/`source.
+    sha256` を書き換えても、`order_sheet.md` には plan 段が pin した
+    （書き換え前の）値がそのまま反映されることを検証する。"""
+    project_path = _copy_demo_project(tmp_path)
+    project_text = project_path.read_text(encoding="utf-8")
+    project_text = project_text.replace("invocation_mode: prompt_only", "invocation_mode: cover")
+    project_path.write_text(project_text, encoding="utf-8")
+
+    loaded = load_recast_project(project_path)
+    ctx = build_recast_run_context(loaded, variant="edm", backend="suno")
+    assert ctx.backend_ref.invocation_mode == "cover"
+    original_locator = ctx.identity_source_locator
+    original_sha256 = ctx.identity_source_sha256
+
+    identity_path = project_path.parent / "identity.yaml"
+    identity_text = identity_path.read_text(encoding="utf-8")
+    mutated = identity_text.replace(
+        f'locator: {original_locator}\n  sha256: "{original_sha256}"',
+        'locator: mutated_after_plan_build.yaml\n  sha256: "' + ("f" * 64) + '"',
+        1,
+    )
+    assert mutated != identity_text  # sanity: replacement matched
+    identity_path.write_text(mutated, encoding="utf-8")
+
+    invoker = resolve_invoker(ctx.backend_ref, ctx.profile)
+    prepared = invoker.prepare(ctx)
+
+    order_sheet = (prepared.order_dir / "order_sheet.md").read_text(encoding="utf-8")
+    assert original_locator in order_sheet
+    assert original_sha256 in order_sheet
+    assert "mutated_after_plan_build.yaml" not in order_sheet
+    assert "f" * 64 not in order_sheet
 
 
 # --- manual: invoke/collect contract --------------------------------------------
@@ -386,6 +817,100 @@ def test_manual_collect_take_json_failure_leaves_no_orphaned_audio(
 
     assert not (prepared.takes_dir / "take-01.wav").exists()
     assert not (prepared.takes_dir / "take.json").exists()
+
+
+class _InjectedBaseException(BaseException):
+    """`Exception` を継承しない注入用テスト例外（`KeyboardInterrupt`/
+    `SystemExit` と同じ `BaseException` 直下の系統を模す — PR3 #208 指摘 14）。"""
+
+
+def test_manual_collect_take_json_base_exception_during_rename_still_rolls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 review round 7（PR3 #208 指摘 14）: `atomic_publish_bytes_bundle`
+    の rename フェーズが従来 `except OSError` のみだったため、rename 中に
+    `KeyboardInterrupt`/`SystemExit` 系（`Exception` を継承しない
+    `BaseException`）が飛ぶと rollback を素通りし、snapshot ごと失われた
+    「半端に publish 済み」の状態が残り得た。`os.replace` の `take.json` 側
+    最終 rename に `Exception` を継承しない例外を注入し、それでも
+    `take-01.wav`/`take.json` が残らない（rollback が効く）ことを検証する。"""
+    import os
+
+    project_path = _copy_demo_project(tmp_path)
+    _loaded, invoker, prepared = _prepare_manual(project_path)
+    supplied = tmp_path / "external_take.wav"
+    supplied.write_bytes(b"RIFF....WAVEfake-audio-bytes")
+
+    real_replace = os.replace
+
+    def flaky_replace(src: object, dst: object) -> None:
+        if str(dst).endswith("take.json"):
+            raise _InjectedBaseException("simulated KeyboardInterrupt-like interruption")
+        real_replace(src, dst)
+
+    monkeypatch.setattr("os.replace", flaky_replace)
+
+    with pytest.raises(_InjectedBaseException):
+        invoker.collect(prepared, supplied)
+
+    assert not (prepared.takes_dir / "take-01.wav").exists()
+    assert not (prepared.takes_dir / "take.json").exists()
+
+
+def test_manual_orders_publish_base_exception_during_rename_still_rolls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 review round 9（PR3 #208 指摘17）: 注文書 6 ファイルの公開が
+    `cli/builds_root.py:_publish_artifacts_atomically`（rename フェーズの
+    rollback が `except OSError` のみ）に依存していたため、rename 中の
+    `KeyboardInterrupt`/`SystemExit` 系で 6 ファイルの一部だけが更新された
+    状態が残り得た。`prepare()` を先に 1 回成功させて 6 ファイルの baseline を
+    作り、2 回目の `prepare()` で最後（辞書順で最後 = `order_sheet.md`）の
+    最終 rename にだけ `Exception` を継承しない例外を注入する — snapshot
+    フェーズは既存の 6 ファイル全てを退避済みのため、rollback が
+    `except BaseException` で正しく機能していれば 6 ファイル全てが baseline
+    と byte-identical に復元される（rollback が旧 `except OSError` のままなら
+    一部ファイルが欠落する）。"""
+    import os
+
+    project_path = _copy_demo_project(tmp_path)
+    loaded, invoker, prepared_first = _prepare_manual(project_path)
+
+    order_filenames = (
+        "prompt.json",
+        "lyrics.txt",
+        "section_tags.txt",
+        "expected_artifacts.json",
+        "next_command.txt",
+        "order_sheet.md",
+    )
+    baseline = {
+        name: (prepared_first.order_dir / name).read_bytes() for name in order_filenames
+    }
+
+    ctx = build_recast_run_context(loaded, variant="edm", backend="suno")
+    real_replace = os.replace
+    calls = {"failed_once": False}
+
+    def flaky_replace(src: object, dst: object) -> None:
+        if (
+            str(dst).endswith("order_sheet.md")
+            and not str(dst).endswith(".prev")
+            and not calls["failed_once"]
+        ):
+            calls["failed_once"] = True
+            raise _InjectedBaseException("simulated KeyboardInterrupt-like interruption")
+        real_replace(src, dst)
+
+    monkeypatch.setattr("os.replace", flaky_replace)
+
+    with pytest.raises(_InjectedBaseException):
+        invoker.prepare(ctx)
+
+    for name, expected_bytes in baseline.items():
+        actual_path = prepared_first.order_dir / name
+        assert actual_path.is_file(), f"{name} missing after rollback"
+        assert actual_path.read_bytes() == expected_bytes, f"{name} not restored to baseline"
 
 
 # --- manual: orders publish collision guard --------------------------------------
@@ -511,7 +1036,7 @@ def test_build_recast_plan_rejects_capability_profile_colliding_with_packages_ou
     project_path.write_text(updated, encoding="utf-8")
 
     loaded = load_recast_project(project_path)
-    artifacts = build_recast_plan_artifacts(loaded, variant="edm", backend="suno")
+    artifacts = build_recast_plan_artifacts(loaded, variant="edm", backend="suno", publish=True)
 
     assert artifacts.result.plan.state_reached == "blocked_capability"
     assert artifacts.result.plan.blocked is not None
@@ -573,6 +1098,49 @@ def test_atomic_publish_text_bundle_partial_failure_restores_old_files(
     assert (output_dir / "compilation_report.json").read_text(encoding="utf-8") == "old-report"
 
 
+def test_atomic_publish_text_bundle_base_exception_during_rename_still_rolls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 review round 7（PR3 #208 指摘 14）: `_atomic_publish_text_bundle`
+    の rename フェーズが従来 `except OSError` のみだったため、rename 中に
+    `Exception` を継承しない `BaseException`（`KeyboardInterrupt`/`SystemExit`
+    系）が飛ぶと rollback を素通りしていた。`compilation_report.json` 側の
+    最終 rename に `Exception` を継承しない例外を注入しても、両ファイルとも
+    旧内容へロールバックされる（rollback が確実に効く）ことを検証する。"""
+    import os
+
+    from svp_rpe.recast.plan import _atomic_publish_text_bundle
+
+    output_dir = tmp_path / "packages" / "edm@suno"
+    output_dir.mkdir(parents=True)
+    (output_dir / "performance_package.json").write_text("old-package", encoding="utf-8")
+    (output_dir / "compilation_report.json").write_text("old-report", encoding="utf-8")
+
+    real_replace = os.replace
+    calls = {"failed_once": False}
+
+    def flaky_replace(src: object, dst: object) -> None:
+        if str(dst) == str(output_dir / "compilation_report.json") and not calls["failed_once"]:
+            calls["failed_once"] = True
+            raise _InjectedBaseException("simulated KeyboardInterrupt-like interruption")
+        real_replace(src, dst)
+
+    monkeypatch.setattr("os.replace", flaky_replace)
+
+    with pytest.raises(_InjectedBaseException):
+        _atomic_publish_text_bundle(
+            output_dir,
+            {
+                "performance_package.json": b"new-package",
+                "compilation_report.json": b"new-report",
+            },
+            protected_inputs=[],
+        )
+
+    assert (output_dir / "performance_package.json").read_text(encoding="utf-8") == "old-package"
+    assert (output_dir / "compilation_report.json").read_text(encoding="utf-8") == "old-report"
+
+
 def test_published_package_json_bytes_sha256_matches_recorded_package_sha256(
     tmp_path: Path,
 ) -> None:
@@ -588,7 +1156,7 @@ def test_published_package_json_bytes_sha256_matches_recorded_package_sha256(
     経路への置換自体は Windows 上の newline 変換を構造的に排除する）。"""
     project_path = _copy_demo_project(tmp_path)
     loaded = load_recast_project(project_path)
-    artifacts = build_recast_plan_artifacts(loaded, variant="edm", backend="suno")
+    artifacts = build_recast_plan_artifacts(loaded, variant="edm", backend="suno", publish=True)
 
     assert artifacts.result.plan.state_reached == "verified"
     package_dir = project_path.parent / "builds" / "packages" / "edm@suno"
@@ -764,11 +1332,44 @@ def test_run_context_from_plan_artifacts_raises_when_not_compiled(tmp_path: Path
         encoding="utf-8",
     )
     loaded = load_recast_project(project_path)
-    artifacts = build_recast_plan_artifacts(loaded, variant="edm", backend="suno")
+    artifacts = build_recast_plan_artifacts(loaded, variant="edm", backend="suno", publish=True)
     assert artifacts.result.plan.state_reached == "blocked_authoring"
-    profile = load_backend_capability_profile(loaded, "suno")
 
     with pytest.raises(RecastError):
         run_context_from_plan_artifacts(
-            loaded, variant="edm", backend="suno", artifacts=artifacts, profile=profile
+            loaded, variant="edm", backend="suno", artifacts=artifacts
         )
+
+
+def test_run_context_from_plan_artifacts_reuses_plan_profile_without_reload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 review round 12（PR3 #208 指摘24）: `run_context_from_plan_
+    artifacts` はもはや `load_backend_capability_profile` を呼ばない —
+    plan 段（`build_recast_plan_artifacts`）が single-read 束で既に
+    parse・validate 済みの `artifacts.profile` をそのまま `RecastRunContext.
+    profile` へ複製する（従来は独立に capability_profile YAML を再 read/
+    再 parse しており、plan の診断が前提とした profile と実行時に invoker
+    解決・注文書メタデータへ使われる profile が乖離し得た）。
+    `load_backend_capability_profile` を呼んだら即座に失敗するようパッチ
+    しても `run_context_from_plan_artifacts` が成功し、`ctx.profile` が
+    `artifacts.profile` とオブジェクト同一であることを検証する。"""
+    import svp_rpe.recast.backend as backend_module
+
+    def _fail_if_called(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError(
+            "load_backend_capability_profile must not be called by "
+            "run_context_from_plan_artifacts (Codex P2 review round 12, 指摘24)"
+        )
+
+    monkeypatch.setattr(backend_module, "load_backend_capability_profile", _fail_if_called)
+
+    project_path = _copy_demo_project(tmp_path)
+    loaded = load_recast_project(project_path)
+    artifacts = build_recast_plan_artifacts(loaded, variant="edm", backend="suno", publish=True)
+    assert artifacts.profile is not None  # sanity: plan 段の single-read 束で parse 済み
+
+    ctx = run_context_from_plan_artifacts(
+        loaded, variant="edm", backend="suno", artifacts=artifacts
+    )
+    assert ctx.profile is artifacts.profile

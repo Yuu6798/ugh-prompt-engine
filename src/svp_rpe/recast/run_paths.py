@@ -18,7 +18,9 @@ from pathlib import Path
 
 import yaml
 
-from svp_rpe.arrange.identity import IdentityManifest
+from pydantic import ValidationError
+
+from svp_rpe.arrange.identity import IdentityManifest, IdentityManifestError
 from svp_rpe.arrange.pathsafe import resolve_confined
 from svp_rpe.recast.loader import LoadedRecastProject
 from svp_rpe.recast.models import RecastError
@@ -45,6 +47,13 @@ def resolve_packages_dir(loaded: LoadedRecastProject, variant: str, backend: str
     return loaded.builds_root / "packages" / run_key(variant, backend)
 
 
+def resolve_reports_dir(loaded: LoadedRecastProject, variant: str, backend: str) -> Path:
+    """PR5: `recast ingest` の observe→report 段が `recast_report.json` /
+    `recast_summary.md` を公開する先（packages/orders/takes と同じ命名規約
+    — この 3 種に加える 4 種目の per-(variant, backend) 出力ディレクトリ）。"""
+    return loaded.builds_root / "reports" / run_key(variant, backend)
+
+
 def collect_protected_input_paths(
     loaded: LoadedRecastProject, variant: str, backend: str
 ) -> list[Path]:
@@ -66,7 +75,41 @@ def collect_protected_input_paths(
     集合であり、公開先ディレクトリが異なる限り（orders/takes/packages は
     `run_paths.py` の命名規約により常に別ディレクトリ）他ステージの出力との
     衝突はディレクトリ構造上そもそも起こらない。
+
+    identity manifest 自体は無条件で対象パスに含めるが、その中身の
+    parse/validate（YAML 破損・schema 不正・source/anchor artifact の解決）が
+    失敗した場合は例外を送出せず、manifest が参照する source/anchor artifact
+    パスの追加だけを諦めて続行する（Codex P2 review round 7, PR3 #208 指摘 13:
+    本関数は `build_recast_plan_artifacts` が既に blocked_verification として
+    診断・finalize 済みの入力を、publish 直前の衝突ガードとして**再 parse**
+    する呼ばれ方をする — ここで例外を送出すると「blocked plan でも publish
+    される」契約が崩れ、CLI が捕捉しない例外で top-level Error に落ちる。
+    破損 manifest が参照する artifact パスは特定できないため衝突ガードの
+    対象に含められないが、それは診断側の blocked_verification が既に
+    「この manifest は信頼できない」と報告済みであり、この関数の責務ではない）。
+
+    未知の `variant`/`backend`（Codex P2 review round 14, PR5 #210 指摘19,
+    defense in depth）: `loaded.arrangement_paths[variant]`/`loaded.
+    capability_profile_paths[backend]` は元々 dict 添字で、typo を含む
+    未知名では生 `KeyError` を送出していた。呼び出し側（CLI）は
+    `_validate_variant_backend_declared` で preflight 前に typo を拒否する
+    ようになったが、本関数自身も CLI を経由しない将来の呼び出し元
+    （プログラム的呼び出し等）向けに、同じ検証を actionable な
+    `RecastError` として重ねて行う（メッセージは `recast/plan.py` の
+    `build_recast_plan_artifacts` と同一文言）。
     """
+    project = loaded.project
+    if variant not in project.variants:
+        raise RecastError(
+            f"recast project '{project.project.id}': unknown variant {variant!r} "
+            f"(declared: {sorted(project.variants)})"
+        )
+    if backend not in project.backends:
+        raise RecastError(
+            f"recast project '{project.project.id}': unknown backend {backend!r} "
+            f"(declared: {sorted(project.backends)})"
+        )
+
     paths: list[Path] = [
         loaded.path,
         loaded.score_path,
@@ -79,14 +122,18 @@ def collect_protected_input_paths(
         paths.append(mode_override_path)
 
     manifest_dir = loaded.identity_manifest_path.resolve().parent
-    manifest_data = yaml.safe_load(loaded.identity_manifest_path.read_bytes())
-    if not isinstance(manifest_data, dict):
-        raise RecastError(
-            f"identity manifest must be a mapping: {loaded.identity_manifest_path}"
-        )
-    manifest = IdentityManifest.model_validate(manifest_data)
-    paths.append(resolve_confined(manifest.source.locator, manifest_dir))
-    for anchor in manifest.anchors:
-        paths.append(resolve_confined(anchor.artifact, manifest_dir))
+    try:
+        manifest_bytes = loaded.identity_manifest_path.read_bytes()
+        manifest_data = yaml.safe_load(manifest_bytes)
+        if not isinstance(manifest_data, dict):
+            raise RecastError(
+                f"identity manifest must be a mapping: {loaded.identity_manifest_path}"
+            )
+        manifest = IdentityManifest.model_validate(manifest_data)
+        paths.append(resolve_confined(manifest.source.locator, manifest_dir))
+        for anchor in manifest.anchors:
+            paths.append(resolve_confined(anchor.artifact, manifest_dir))
+    except (OSError, RecastError, IdentityManifestError, ValidationError, ValueError, yaml.YAMLError):
+        return paths
 
     return paths

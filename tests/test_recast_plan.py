@@ -14,6 +14,7 @@ from svp_rpe.recast.plan import (
     RecastPlanResult,
     _normalize_diagnostic,
     build_recast_plan,
+    build_recast_plan_artifacts,
     mode_support_for_path,
 )
 from svp_rpe.recast.run_paths import collect_protected_input_paths
@@ -110,6 +111,47 @@ def test_unknown_backend_raises_recast_error(tmp_path: Path) -> None:
         build_recast_plan(loaded, variant="edm", backend="does-not-exist")
 
 
+def test_unknown_observation_anchor_does_not_block_plan(tmp_path: Path) -> None:
+    """`observation.anchors` に identity manifest 側に無い anchor id（typo 等）
+    を列挙していても、plan 段はそれを検証しない（PR6 の当初実装は plan 段で
+    即時 `RecastError` を送出していたが、その後 `observe_generated_artifact` +
+    `cli.recast_cmd.recast_ingest_cmd`（Codex P2, #210 round 9 指摘11）へ
+    一本化した — plan/run が manual backend を `awaiting_generation`/
+    `generated` まで進められることを優先し、観測スコープの妥当性は ingest の
+    observe 直前でのみ検証する。plan.py の設計判断ログ参照）。"""
+    project_path = _copy_demo_project(tmp_path)
+    text = project_path.read_text(encoding="utf-8")
+    assert "observation:\n  enabled: false\n  anchors: []\n" in text  # sanity
+    text = text.replace(
+        "observation:\n  enabled: false\n  anchors: []\n",
+        "observation:\n  enabled: false\n  anchors: [does-not-exist]\n",
+        1,
+    )
+    project_path.write_text(text, encoding="utf-8")
+    loaded = load_recast_project(project_path)
+
+    result = build_recast_plan(loaded, variant="edm", backend="suno")
+    assert result.plan.blocked is None
+    assert result.plan.state_reached == "verified"
+
+
+def test_known_observation_anchor_subset_is_accepted(tmp_path: Path) -> None:
+    """`observation.anchors` が manifest に実在する anchor id の部分集合でも
+    plan 段は通常どおり評価される。"""
+    project_path = _copy_demo_project(tmp_path)
+    text = project_path.read_text(encoding="utf-8")
+    text = text.replace(
+        "observation:\n  enabled: false\n  anchors: []\n",
+        "observation:\n  enabled: false\n  anchors: [harmony]\n",
+        1,
+    )
+    project_path.write_text(text, encoding="utf-8")
+    loaded = load_recast_project(project_path)
+
+    result = build_recast_plan(loaded, variant="edm", backend="suno")
+    assert result.plan.state_reached == "verified"
+
+
 # --- byte-pin snapshot ---------------------------------------------------------
 
 
@@ -150,16 +192,20 @@ def test_build_recast_plan_reads_each_bundle_input_exactly_once(
     monkeypatch カウンタで検証する。
 
     identity manifest と score は、束の外側にある別の single-read 規律を持つ
-    副系（`verify_package` 自身の独立した V3 再検証、PR3 の
-    `collect_protected_input_paths` 衝突ガード）からも読まれるため 1 回では
-    収まらない（1 回に固定すると無関係な副系の実装詳細でテストが壊れやすく
-    なるため、正確な期待値をここに明記する — これらの副系自体は本ゲートの
+    副系（`verify_package` 自身の独立した V3 再検証）からも読まれるため 1 回
+    では収まらない（1 回に固定すると無関係な副系の実装詳細でテストが壊れ
+    やすくなるため、正確な期待値をここに明記する — この副系自体は本ゲートの
     対象外の正当な read）:
     - identity manifest: 束（1 回）+ `verify_package` の V3 再検証（manifest
       ファイル自体の read は 1 回、`manifest_bytes` を渡してパースし直す
-      だけ）+ PR3 `collect_protected_input_paths`（packages 公開前の衝突
-      ガードが対象パス一式を得るため、束と別目的で manifest を再読込する
-      — #208 指摘 2/6/7）… 計 3 回。
+      だけ）… 計 2 回。PR3 の packages 公開前衝突ガード（`protected_inputs`）は
+      束が既に読んだ/parse 済みの manifest オブジェクトから副作用なく再構成
+      するため追加 read は発生しない（Codex P2 review round 7, PR3 #208
+      指摘 13 — 従来は `collect_protected_input_paths` を独立に呼んで
+      manifest を再 parse しており、それが計 3 回目の read だったが、
+      再 parse 自体が「blocked plan でも publish される」契約を壊す不具合
+      だったため single-read 束からの再構成へ置き換えた副次効果でここも
+      1 回減った）。
     - score: demo fixture の identity `source.locator` が
       `composition_score.yaml` 自身を指すため、束の直接 read（1 回）+ 束内の
       `parse_identity_manifest_with_artifacts` が source artifact として
@@ -188,7 +234,7 @@ def test_build_recast_plan_reads_each_bundle_input_exactly_once(
     assert _count(loaded.capability_profile_paths["suno"]) == 1
     assert _count(loaded.mode_override_paths["suno"]) == 1
     assert _count(Path("config/device_profiles/suno.yaml")) == 1
-    assert _count(loaded.identity_manifest_path) == 3
+    assert _count(loaded.identity_manifest_path) == 2
     assert _count(loaded.score_path) == 3
 
 
@@ -233,6 +279,47 @@ def test_normalize_diagnostic_leaves_bare_project_dir_relative() -> None:
     normalized = _normalize_diagnostic(text, project_dir)
     assert "/tmp/x/demo_project" not in normalized
     assert normalized.endswith(".")
+
+
+def test_normalize_diagnostic_relativizes_windows_drive_letter_paths() -> None:
+    """Windows 実行時は `project_dir` 自身がバックスラッシュ区切りの文字列
+    になる（`str(Path)` は OS ネイティブの区切り文字を使う）。`Path` は
+    POSIX ランナー上でもバックスラッシュを含む文字列をそのまま保持する
+    （PosixPath はバックスラッシュを区切り文字として解釈しない）ため、実際の
+    OS に依存しない純文字列テストとして Windows 風パスを検証できる
+    （Codex P2 thirteenth round #207, 指摘20: 旧実装は POSIX の `/...`
+    トークンしか認識せず、ドライブレター形式の絶対パスがマスク・相対化
+    されずそのまま漏れていた）。project 配下相対化の出力は常に POSIX 区切り
+    （`/`）へ正規化される。"""
+    project_dir = Path("C:\\tmp\\demo_project")
+    text = (
+        "identity manifest 'w': anchor 'lyrics' sha256 mismatch at "
+        "C:\\tmp\\demo_project\\identity\\lyrics.txt: expected a, got b"
+    )
+    normalized = _normalize_diagnostic(text, project_dir)
+    assert "identity/lyrics.txt" in normalized
+    assert "C:\\tmp\\demo_project" not in normalized
+    assert "\\" not in normalized  # 相対化された locator は POSIX 区切りのみ
+
+
+def test_normalize_diagnostic_masks_external_windows_drive_letter_path() -> None:
+    """project_dir 外を指す Windows ドライブレター絶対パスは `<external-path>`
+    へマスクされる（Codex P2 thirteenth round #207, 指摘20）。"""
+    project_dir = Path("C:\\tmp\\demo_project")
+    text = "escaped containment to D:\\other\\place\\evil.yaml during resolve"
+    normalized = _normalize_diagnostic(text, project_dir)
+    assert "D:\\other" not in normalized
+    assert "<external-path>" in normalized
+
+
+def test_normalize_diagnostic_masks_external_unc_path() -> None:
+    """project_dir 外を指す UNC パス（`\\\\server\\share\\...`）も
+    `<external-path>` へマスクされる（Codex P2 thirteenth round #207, 指摘20）。"""
+    project_dir = Path("C:\\tmp\\demo_project")
+    text = "escaped containment to \\\\server\\share\\evil.yaml during resolve"
+    normalized = _normalize_diagnostic(text, project_dir)
+    assert "\\\\server" not in normalized
+    assert "<external-path>" in normalized
 
 
 # --- scenario (a): blocked_authoring via unresolved TODO sentinel --------------
@@ -422,6 +509,63 @@ def test_unsupported_changed_field_blocks_capability_in_strict_mode(tmp_path: Pa
     assert state_file.runs["edm@suno"].state == "blocked_capability"
 
 
+def test_strict_mode_gate_does_not_publish_packages(tmp_path: Path) -> None:
+    """Codex P2 review round 11（PR3 #208 指摘21）: `publish=True` で
+    verification 自体は通っても、strict の mode gate（changed_fields の
+    unsupported）で最終的に blocked_capability へ降格するケースでは、
+    package/report を builds_root へ永続公開してはいけない — 従来は
+    verification の**前**に永続公開していたため、blocked な plan なのに
+    「使えそうな成果物」が builds_root に残ってしまっていた。本テストは
+    `publish=True` を直接使い、`build_recast_plan_artifacts` 呼び出し後も
+    `builds_root/packages/edm@suno/` が一切作られないことを検証する。"""
+    project_path = _cover_key_override_project(tmp_path, capability_mode="strict")
+    loaded = load_recast_project(project_path)
+    package_dir = loaded.builds_root / "packages" / "edm@suno"
+    assert not loaded.builds_root.exists()  # デモ fixture は builds/ を同梱しない
+
+    artifacts = build_recast_plan_artifacts(loaded, variant="edm", backend="suno", publish=True)
+
+    assert artifacts.result.plan.state_reached == "blocked_capability"
+    assert not package_dir.exists()  # gate 通過前なので packages は publish されない
+
+
+def test_strict_mode_gate_does_not_overwrite_existing_packages(tmp_path: Path) -> None:
+    """`test_strict_mode_gate_does_not_publish_packages` の変種: 既に旧
+    package/report が `builds_root/packages/edm@suno/` に存在する状態
+    （advisory で一度 verified に到達した後、strict へ切り替えて同じ
+    unsupported changed field で mode gate に引っかかるケースを模す）で、
+    strict の mode gate により blocked_capability へ降格した場合に、その
+    既存内容が上書きされない（旧内容のまま残る）ことを検証する。"""
+    project_path = _cover_key_override_project(tmp_path, capability_mode="advisory")
+    loaded = load_recast_project(project_path)
+
+    # advisory では unsupported changed field があっても verified まで到達し、
+    # publish=True で旧 package/report が実際に公開される。
+    first = build_recast_plan_artifacts(loaded, variant="edm", backend="suno", publish=True)
+    assert first.result.plan.state_reached == "verified"
+    package_dir = loaded.builds_root / "packages" / "edm@suno"
+    old_package_bytes = (package_dir / "performance_package.json").read_bytes()
+    old_report_bytes = (package_dir / "compilation_report.json").read_bytes()
+
+    # capability_mode を strict へ切り替え、同じ unsupported changed field で
+    # 今度は mode gate に引っかからせる。
+    project_text = project_path.read_text(encoding="utf-8")
+    updated = project_text.replace("capability_mode: advisory", "capability_mode: strict")
+    assert updated != project_text  # sanity
+    project_path.write_text(updated, encoding="utf-8")
+    loaded_strict = load_recast_project(project_path)
+
+    second = build_recast_plan_artifacts(
+        loaded_strict, variant="edm", backend="suno", publish=True
+    )
+    assert second.result.plan.state_reached == "blocked_capability"
+
+    # 既存の package/report は一切上書きされていない（旧 verified 時点の
+    # bytes のまま）。
+    assert (package_dir / "performance_package.json").read_bytes() == old_package_bytes
+    assert (package_dir / "compilation_report.json").read_bytes() == old_report_bytes
+
+
 def test_unsupported_changed_field_warns_but_verifies_in_advisory_mode(tmp_path: Path) -> None:
     project_path = _cover_key_override_project(tmp_path, capability_mode="advisory")
     loaded = load_recast_project(project_path)
@@ -583,3 +727,26 @@ def test_mode_support_falls_back_to_unknown_for_undeclared_path() -> None:
 
 def test_mode_support_falls_back_to_unknown_when_no_config() -> None:
     assert mode_support_for_path("physical.bpm", "cover", None) == "unknown"
+
+
+# --- collect_protected_input_paths: unknown variant/backend (Codex P2, #210 round 14 指摘19) ---
+
+
+def test_collect_protected_input_paths_rejects_unknown_variant(tmp_path: Path) -> None:
+    """`collect_protected_input_paths` 自身も未知 variant を actionable な
+    `RecastError` で拒否する（defense in depth — CLI の
+    `_validate_variant_backend_declared` を経由しないプログラム的呼び出し
+    向け。従来は `loaded.arrangement_paths[variant]` の生 `KeyError` だった）。"""
+    project_path = _copy_demo_project(tmp_path)
+    loaded = load_recast_project(project_path)
+
+    with pytest.raises(RecastError, match="unknown variant 'does-not-exist'"):
+        collect_protected_input_paths(loaded, "does-not-exist", "suno")
+
+
+def test_collect_protected_input_paths_rejects_unknown_backend(tmp_path: Path) -> None:
+    project_path = _copy_demo_project(tmp_path)
+    loaded = load_recast_project(project_path)
+
+    with pytest.raises(RecastError, match="unknown backend 'does-not-exist'"):
+        collect_protected_input_paths(loaded, "edm", "does-not-exist")

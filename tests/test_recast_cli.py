@@ -108,6 +108,152 @@ def test_recast_verification_staging_bytes_match_report_package_sha256(
     assert hashlib.sha256(package_bytes).hexdigest() == report_data["package_sha256"]
 
 
+def test_recast_plan_verification_staging_uses_builds_root(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """検証ステージング（`tempfile.TemporaryDirectory`）は project の builds_root
+    配下に確保されることを検証する（Codex P2 twelfth round #207: 既定の system
+    temp（`dir` 省略時）は project files と別ドライブに配置されうる — Windows で
+    システムドライブと project ドライブが異なる場合、直後の `os.path.relpath`
+    （project files ↔ staging dir）が同一ドライブ前提のため ValueError を送出し、
+    本来 valid な plan を偽の `blocked_capability` にしてしまう。`builds_root` は
+    loader が project_dir 配下に confine 済みで project files と常に同一
+    ドライブにある）。
+
+    pr2 は thirteenth round #207 指摘21（`build_recast_plan` が builds_root を
+    mkdir しており「ディスクへ副作用を持たない純粋関数」契約に反する）で
+    staging 先を project_dir へ変更したが、PR3 の `build_recast_plan_artifacts`
+    はそもそも「plan JSON の publish/state 記録だけが CLI 側の責務」という
+    契約であり、package/report の builds_root への永続公開は本関数自身が
+    意図して持つ副作用（本モジュール上部の docstring 参照）。PR3 は pr2 の
+    「検証専用の使い捨て staging」ではなく「永続 `packages_dir`
+    （`builds_root/packages/<variant>@<backend>/`）＋その配下の
+    `_atomic_publish_text_bundle` 内部 staging」という別設計で、pr2 が
+    懸念する同ドライブ要件（指摘19）を構造的に満たす（#208 指摘 3）。
+
+    Codex P2 review round 11（PR3 #208 指摘21）: 検証・mode gate を通過する
+    前に packages を永続公開しないよう、`tempfile.TemporaryDirectory` の
+    呼び出しが 2 段になった — (1) 検証専用 staging（`packages_dir` の**兄弟**
+    ディレクトリ、`dir=builds_root/packages`。深さを `packages_dir` と揃える
+    ことで `artifact_base_locator` が公開後と同一の値になる）と、(2) 検証・
+    mode gate 通過後にのみ実行される `_atomic_publish_text_bundle` 自身の
+    内部 staging（`dir=packages_dir`）。`tempfile.TemporaryDirectory` を実
+    クラス継承のスタブに monkeypatch し、この 2 回の呼び出しの `dir` kwarg が
+    それぞれ意図した場所（builds_root 配下・project files と常に同一
+    ドライブ）であることを検証する。公開後の `packages_dir` は "検証専用の
+    空 staging" ではなく最終成果物 2 ファイルが永続する場所のため、
+    「cleanup 後に空」ではなく「最終ファイル 2 つのみで staging 残骸がない」
+    ことを確認する。"""
+    import tempfile as tempfile_module
+
+    import svp_rpe.recast.plan as recast_plan_module
+
+    project_path = _copy_demo_project(tmp_path)
+    builds_root = project_path.parent / "builds"
+    assert not builds_root.exists()  # デモ fixture は builds/ を同梱しない
+
+    real_temporary_directory = tempfile_module.TemporaryDirectory
+    captured_dir_args: list[object] = []
+
+    class _CapturingTemporaryDirectory(real_temporary_directory):  # type: ignore[misc]
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            captured_dir_args.append(kwargs.get("dir"))
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(
+        recast_plan_module.tempfile, "TemporaryDirectory", _CapturingTemporaryDirectory
+    )
+
+    result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert result.exit_code == 0, result.output
+
+    package_dir = builds_root / "packages" / "edm@suno"
+    packages_parent_dir = builds_root / "packages"
+    assert len(captured_dir_args) == 2
+    # (1) 検証専用 staging: packages_dir の兄弟（packages_dir の親配下）。
+    assert Path(str(captured_dir_args[0])).resolve() == packages_parent_dir.resolve()
+    # (2) 検証・mode gate 通過後の実 publish: _atomic_publish_text_bundle 自身の
+    # 内部 staging（packages_dir そのもの配下）。
+    assert Path(str(captured_dir_args[1])).resolve() == package_dir.resolve()
+    # builds_root 配下（project_dir に confine 済み）にあるため、project files
+    # と常に同一ドライブであることが構造的に保証される。
+    assert package_dir.resolve().is_relative_to(builds_root.resolve())
+
+    # 公開後は最終ファイル 2 つのみが残り、staging 残骸（`.prev`/一時ディレクトリ
+    # 等）は無い。
+    assert sorted(p.name for p in package_dir.iterdir()) == [
+        "compilation_report.json",
+        "performance_package.json",
+    ]
+
+    plan_path = project_path.parent / "recast_plan.json"
+    plan_text = plan_path.read_text(encoding="utf-8")
+    assert str(builds_root) not in plan_text  # staging パスが永続出力に混入しない
+
+
+def test_build_recast_plan_does_not_create_builds_root(tmp_path: Path) -> None:
+    """`build_recast_plan`（`build_recast_plan_artifacts(..., publish=False)`
+    の薄いラッパー）を API 直呼びし、`compiled`/`verified` 到達時にも
+    `builds_root` へ一切触れない（ディレクトリすら作られない）ことを検証する
+    （Codex P2 review round 10, PR3 #208 指摘19: 読み取り専用を謳う
+    `build_recast_plan()` が内部で package/report を永続公開しており、
+    pr2 由来の「診断のみの純粋関数」契約に反していた。`publish` を
+    `build_recast_plan_artifacts` の必須引数として切り出し、
+    `build_recast_plan` は常に `publish=False` で呼ぶよう固定した — 公開を
+    伴う経路は `svprpe recast plan`/`run`/`ingest` の 3 CLI コマンドが直接
+    `build_recast_plan_artifacts(..., publish=True)` を呼ぶ形に限定する）。
+    `policy.require_verified_package` が真の demo project でも、検証用の
+    package/report は project_dir 配下の ephemeral tempdir だけに書かれ、
+    関数を抜けると跡形も残らない。"""
+    from svp_rpe.recast import load_recast_project
+    from svp_rpe.recast.plan import build_recast_plan
+
+    project_path = _copy_demo_project(tmp_path)
+    loaded = load_recast_project(project_path)
+    builds_root = loaded.builds_root
+    assert not builds_root.exists()  # デモ fixture は builds/ を同梱しない
+
+    result = build_recast_plan(loaded, variant="edm", backend="suno")
+
+    assert result.plan.state_reached == "verified"
+    assert not builds_root.exists()  # build_recast_plan はディスクへ書き込まない
+
+
+def test_build_recast_plan_writes_nothing_when_verification_not_required(
+    tmp_path: Path,
+) -> None:
+    """`policy.require_verified_package: false` の project では
+    `build_recast_plan`（`publish=False`）が検証用の ephemeral tempdir すら
+    作らない — 真の意味で一切ディスクへ書き込まない純粋関数であることを
+    検証する（Codex P2 review round 10, PR3 #208 指摘19: `require_verified_
+    package` が真の場合のみ verify_package 用に ephemeral tempdir へ書く
+    設計だが、偽の場合は compile 結果を in-memory のまま使い、
+    ディスク書き込みが一切発生しないことも回帰対象に含める）。project_dir
+    直下のエントリ集合が呼び出し前後で完全に不変であることを確認する。"""
+    from svp_rpe.recast import load_recast_project
+    from svp_rpe.recast.plan import build_recast_plan
+
+    project_path = _copy_demo_project(tmp_path)
+    project_text = project_path.read_text(encoding="utf-8")
+    updated = project_text.replace(
+        "require_verified_package: true", "require_verified_package: false"
+    )
+    assert updated != project_text  # sanity
+    project_path.write_text(updated, encoding="utf-8")
+
+    project_dir = project_path.parent
+    before_entries = {entry.name for entry in project_dir.iterdir()}
+
+    loaded = load_recast_project(project_path)
+    result = build_recast_plan(loaded, variant="edm", backend="suno")
+
+    assert result.plan.state_reached == "compiled"
+    after_entries = {entry.name for entry in project_dir.iterdir()}
+    assert after_entries == before_entries  # 新規ファイル/ディレクトリが一切増えない
+
+
 def test_recast_plan_matches_committed_snapshot_via_cli(tmp_path: Path) -> None:
     project_path = _copy_demo_project(tmp_path)
 
@@ -169,6 +315,40 @@ def test_recast_plan_blocks_authoring_on_corrupted_score(tmp_path: Path) -> None
     assert "blocked_authoring" in status_result.output
 
 
+def test_recast_status_after_corrupted_score_plan_is_not_stale(tmp_path: Path) -> None:
+    """破損 score で `recast plan` が blocked_authoring を publish した直後、
+    同一入力に対する `recast status` が stale と誤判定しないことを検証する
+    （Codex P2 thirteenth round #207, 指摘22: device profile digest
+    component の失敗表現が、resolution が None になった実際の原因
+    （score_parse_error / spec_read_error）ではなく常に `resolve_error`
+    （score 破損時は未設定=None のまま）を参照していたため、
+    `"NoneType: None"` という無意味な固定文字列を digest へ焼き込んでいた。
+    `recast status` が使う独立の `compute_recast_inputs_digest` は実際の
+    例外を捕捉するため digest が食い違い、plan/state 発行直後の同一入力
+    ですら stale と誤判定していた）。
+
+    `test_recast_plan_blocks_authoring_on_corrupted_score` は state 列に
+    常に表示される `state_reached`（blocked_authoring）の存在だけを見ており
+    stale ノートの有無を区別しないため、この回帰を検出できなかった —
+    ここでは note に `"stale"` が **含まれない** ことを明示的に検証する。"""
+    project_path = _copy_demo_project(tmp_path)
+    score_path = project_path.parent / "composition_score.yaml"
+    score_path.write_text("not-a-mapping\n", encoding="utf-8")
+
+    plan_result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert plan_result.exit_code == 1
+    plan_path = project_path.parent / "recast_plan.json"
+    data = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert data["state_reached"] == "blocked_authoring"
+
+    status_result = runner.invoke(app, ["recast", "status", str(project_path)])
+    assert status_result.exit_code == 0, status_result.output
+    assert "blocked_authoring" in status_result.output
+    assert "stale" not in status_result.output
+
+
 def test_recast_plan_blocks_capability_on_corrupted_capability_profile(tmp_path: Path) -> None:
     """capability_profile の YAML 破損は identity manifest / arrangement spec の
     同種の失敗（blocked_verification / blocked_authoring）と一貫させ
@@ -228,6 +408,47 @@ def test_recast_plan_blocks_capability_on_corrupted_mode_overrides(tmp_path: Pat
     assert "blocked_capability" in status_result.output
 
 
+def test_recast_plan_preflight_rejects_when_score_aliases_state_output(tmp_path: Path) -> None:
+    """Codex P2 review round 15（PR3 #208 指摘30, recast_cmd.py:196）:
+    project.yaml の `work.score` が誤って `<project_dir>/recast_state.json`
+    を指すよう構成された project では、従来 `build_recast_plan_artifacts
+    (publish=True)` による packages/ への公開が `record_state` 自身の
+    alias 衝突ガードより**先に**走ってしまい、`record_state` が最終的に
+    衝突を検出して拒否しても「plan/state のどちらにも対応しない成果物」が
+    builds_root に残っていた。plan 束を構築する前の preflight
+    （`_preflight_reject_plan_state_output_collision`）が packages/ 公開に
+    到達する前に拒否し、`builds_root` が一切作られない（入力も不変の）
+    ことを検証する。"""
+    project_path = _copy_demo_project(tmp_path)
+    project_dir = project_path.parent
+
+    # `_resolve_sidecar_reference`（loader.py）は参照ファイルの実在のみ検証し
+    # 中身は問わない — score の内容 parse に到達する前に preflight が拒否
+    # するはずなので、プレースホルダの中身で十分。
+    (project_dir / "recast_state.json").write_bytes(b"placeholder\n")
+    project_text = project_path.read_text(encoding="utf-8")
+    updated = project_text.replace(
+        "  score: composition_score.yaml\n", "  score: recast_state.json\n", 1
+    )
+    assert updated != project_text  # sanity: replacement matched
+    project_path.write_text(updated, encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+
+    assert result.exit_code == 1
+    assert "collides with a protected input path" in result.output
+
+    # builds_root（packages/ を含む）が一切作られない — preflight が plan 束の
+    # 構築（＝ packages/ 公開）より前に拒否するため。
+    assert not (project_dir / "builds").exists()
+    # recast_plan.json も書かれない。recast_state.json は上で用意した
+    # プレースホルダ（= score 自身）のまま一切書き換わらない。
+    assert not (project_dir / "recast_plan.json").exists()
+    assert (project_dir / "recast_state.json").read_bytes() == b"placeholder\n"
+
+
 def test_recast_plan_blocks_capability_on_corrupted_device_profile(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -262,6 +483,80 @@ def test_recast_plan_blocks_capability_on_corrupted_device_profile(
     assert plan_path.is_file()
     data = json.loads(plan_path.read_text(encoding="utf-8"))
     assert data["state_reached"] == "blocked_capability"
+
+    status_result = runner.invoke(app, ["recast", "status", str(project_path)])
+    assert status_result.exit_code == 0, status_result.output
+    assert "blocked_capability" in status_result.output
+
+
+def test_recast_plan_publishes_blocked_verification_on_corrupted_identity_manifest(
+    tmp_path: Path,
+) -> None:
+    """Codex P2 review round 7（PR3 #208 指摘 13）: identity manifest（`work.
+    identity_manifest`）の YAML 破損は `build_recast_plan_artifacts` の
+    single-read 束が既に捕捉し `blocked_verification` として finalize
+    済みだが、従来の `_publish_recast_plan` は publish 前ガードとして独立に
+    `collect_protected_input_paths` を呼んでおり、これが manifest を**再
+    parse**して同じ YAML 破損に遭遇し、`_publish_recast_plan`/`record_state`
+    が捕捉しない例外（`RecastError`/`yaml.YAMLError` 等、`(OSError,
+    ValueError)` の catch に入らない型）を送出していた — 「blocked でも plan
+    は公開される」契約が崩れ、`recast plan` が recast_plan.json/state を
+    一切書かずに CLI top-level Error で落ちる回帰があった（本テストはこの
+    回帰の再発防止）。`recast plan` が exit 1 で `blocked_verification` を
+    正常に publish し、state にも記録されることを検証する。"""
+    project_path = _copy_demo_project(tmp_path)
+    identity_path = project_path.parent / "identity.yaml"
+    identity_path.write_text("not-a-mapping\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output  # 未捕捉例外で top-level Error に落ちていない
+    plan_path = project_path.parent / "recast_plan.json"
+    assert plan_path.is_file()
+    data = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert data["state_reached"] == "blocked_verification"
+
+    status_result = runner.invoke(app, ["recast", "status", str(project_path)])
+    assert status_result.exit_code == 0, status_result.output
+    assert "blocked_verification" in status_result.output
+
+
+def test_recast_plan_blocks_capability_on_mode_overrides_generator_mismatch(
+    tmp_path: Path,
+) -> None:
+    """mode_overrides.generator と capability profile.generator の不一致も
+    blocked_capability として recast_plan.json に publish + state 記録される
+    ことを検証する（Codex P2 twelfth round #207: eighth round で一度スコープ外に
+    した箇所の再指摘 — 以前は raise していたため CLI が top-level Error で落ち、
+    plan/state が一切書かれなかった）。
+
+    backend の capability_profile を `"suno"` から `"musicgen"`（packaged
+    config/capability_profiles/musicgen.yaml, generator=musicgen）へ差し替え、
+    mode_overrides はデモ既定の `"suno"`（config/mode_overrides/suno.yaml,
+    generator=suno）のまま残すことで両者を不一致にする。"""
+    project_path = _copy_demo_project(tmp_path)
+    project_text = project_path.read_text(encoding="utf-8")
+    mutated = project_text.replace(
+        'capability_profile: "suno"', 'capability_profile: "musicgen"'
+    )
+    assert mutated != project_text  # sanity: the replacement actually matched
+    project_path.write_text(mutated, encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+
+    assert result.exit_code == 1
+    plan_path = project_path.parent / "recast_plan.json"
+    assert plan_path.is_file()
+    data = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert data["state_reached"] == "blocked_capability"
+    reasons = " ".join(data["blocked"]["reasons"])
+    assert "musicgen" in reasons
+    assert "suno" in reasons
 
     status_result = runner.invoke(app, ["recast", "status", str(project_path)])
     assert status_result.exit_code == 0, status_result.output
@@ -331,6 +626,12 @@ def test_recast_plan_rejects_score_aliased_to_recast_plan_output(tmp_path: Path)
 
 
 def test_recast_plan_unknown_variant_exits_nonzero_without_writing_plan(tmp_path: Path) -> None:
+    """Codex P2（#210 round 14 指摘19）: `--variant` の typo は preflight
+    （`_preflight_reject_plan_state_output_collision` 内の
+    `collect_protected_input_paths` が `loaded.arrangement_paths[variant]`
+    を dict 添字で引く）より前に、`_validate_variant_backend_declared` が
+    `RecastError` として actionable に拒否する（生 `KeyError` の内部エラー
+    ではない — `"Traceback" not in result.output` で機械的に確認）。"""
     project_path = _copy_demo_project(tmp_path)
 
     result = runner.invoke(
@@ -339,6 +640,25 @@ def test_recast_plan_unknown_variant_exits_nonzero_without_writing_plan(tmp_path
     )
 
     assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    assert "unknown variant 'does-not-exist'" in result.output
+    assert not (project_path.parent / "recast_plan.json").exists()
+
+
+def test_recast_plan_unknown_backend_exits_nonzero_without_writing_plan(tmp_path: Path) -> None:
+    """指摘19 の backend 側: `--backend` の typo も同様に actionable な
+    `RecastError`（`loaded.capability_profile_paths[backend]` の生
+    `KeyError` ではない）で拒否される。"""
+    project_path = _copy_demo_project(tmp_path)
+
+    result = runner.invoke(
+        app,
+        ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "does-not-exist"],
+    )
+
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    assert "unknown backend 'does-not-exist'" in result.output
     assert not (project_path.parent / "recast_plan.json").exists()
 
 
@@ -516,6 +836,69 @@ def test_recast_status_reports_stale_after_plan_overwritten_by_other_run(
     assert status_result.exit_code == 0, status_result.output
     assert "stale" in status_result.output
     assert "再実行" in status_result.output
+
+
+def test_recast_status_reports_stale_after_order_file_edited(tmp_path: Path) -> None:
+    """`recast run` で manual backend（`edm@suno`）が `awaiting_generation` に
+    達し注文書 6 ファイルを公開した後、`prompt.json` が発行後に編集された
+    場合、`recast status` は stale（注文書が発行後に変更/欠落）と表示し、
+    `svprpe recast ingest` を次の一手として案内しないことを検証する（Codex
+    P2 review round 10 指摘12）: `recast ingest` 自身は元々 collect 前に
+    `orders_digest` を突合して拒否するが、`recast status` はその突合を
+    行わずに無条件で ingest を勧めていたため、外部生成（Suno 等）を注文書
+    どおりでない状態のまま無駄撃ちさせる誘因になっていた。"""
+    project_path = _copy_demo_project(tmp_path)
+    plan_result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert plan_result.exit_code == 0, plan_result.output
+
+    run_result = runner.invoke(
+        app, ["recast", "run", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert run_result.exit_code == 0, run_result.output
+
+    prompt_path = project_path.parent / "builds" / "orders" / "edm@suno" / "prompt.json"
+    assert prompt_path.is_file()
+    prompt_path.write_text(
+        prompt_path.read_text(encoding="utf-8") + "\n# tampered after publish\n",
+        encoding="utf-8",
+    )
+
+    status_result = runner.invoke(app, ["recast", "status", str(project_path)])
+
+    assert status_result.exit_code == 0, status_result.output
+    assert "stale" in status_result.output
+    assert "注文書" in status_result.output
+    assert "再実行" in status_result.output
+    # ingest への案内（次の一手）は出ない — 無駄な外部生成を誘発しない。
+    assert "svprpe recast ingest" not in status_result.output
+
+
+def test_recast_status_reports_stale_when_order_dir_missing(tmp_path: Path) -> None:
+    """注文書ディレクトリごと欠落している場合（誤って削除等）も同様に
+    stale 表示になることを検証する（`compute_orders_digest` の `OSError` を
+    `_orders_digest_matches` が fail-closed で吸収する経路）。"""
+    project_path = _copy_demo_project(tmp_path)
+    plan_result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert plan_result.exit_code == 0, plan_result.output
+
+    run_result = runner.invoke(
+        app, ["recast", "run", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert run_result.exit_code == 0, run_result.output
+
+    orders_dir = project_path.parent / "builds" / "orders" / "edm@suno"
+    assert orders_dir.is_dir()
+    shutil.rmtree(orders_dir)
+
+    status_result = runner.invoke(app, ["recast", "status", str(project_path)])
+
+    assert status_result.exit_code == 0, status_result.output
+    assert "stale" in status_result.output
+    assert "svprpe recast ingest" not in status_result.output
 
 
 def test_recast_help_lists_plan_and_status() -> None:

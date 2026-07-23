@@ -10,11 +10,7 @@ from typer.testing import CliRunner
 
 from svp_rpe.cli import app
 from svp_rpe.recast import load_recast_project
-from svp_rpe.recast.backend import (
-    load_backend_capability_profile,
-    resolve_invoker,
-    run_context_from_plan_artifacts,
-)
+from svp_rpe.recast.backend import resolve_invoker, run_context_from_plan_artifacts
 from svp_rpe.recast.plan import build_recast_plan_artifacts
 from svp_rpe.recast.state import load_recast_state
 
@@ -194,8 +190,12 @@ def test_recast_ingest_transitions_awaiting_generation_to_generated(tmp_path: Pa
         ],
     )
     assert ingest_result.exit_code == 0, ingest_result.output
-    # 未実装コマンド名（svprpe observe/report 等）を案内しない（正直な次の一手）。
-    assert "svprpe observe" not in ingest_result.output
+    # demo fixture の project.yaml は observation.enabled: false のため、
+    # ingest は observe/report 段へ進まず `generated` で止まる（PR5: 有効化
+    # されたプロジェクトの ingest→observe→report 経路は
+    # tests/test_recast_ingest_report.py が別途検証する）。無効時の次の一手は
+    # 実在する `svprpe observe` コマンドへの手動フォールバック案内であり、
+    # 存在しない `svprpe recast report` サブコマンドは案内しない。
     assert "svprpe recast report" not in ingest_result.output
 
     state_file = load_recast_state(project_path.parent)
@@ -362,6 +362,306 @@ def test_recast_ingest_rejects_when_pin_is_missing(tmp_path: Path) -> None:
     assert "pin" in status_result.output
 
 
+def test_recast_ingest_rejects_when_inputs_swapped_during_rebuild(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 eighth round #207 指摘16（recast_cmd.py:555）: `recast ingest`
+    の precheck（`compute_recast_inputs_digest` vs 記録済み pin）と、その直後の
+    plan rebuild（`build_recast_plan_artifacts`）は別々の入力読み取りであり
+    atomic ではない。precheck を通過させた**後**・rebuild が実際に入力を読む
+    **直前**に composition_score.yaml を差し替えることで、この窓を再現する
+    — rebuild は新しい（差し替え後の）入力から新しい plan/inputs_digest を
+    構築してしまうが、その新 digest は記録済み pin（旧入力に対する digest）
+    とは一致しないはずで、publish/collect の前に検出・拒否されるべきである。
+    `svp_rpe.recast.plan.build_recast_plan_artifacts` をラップして「呼び出し
+    直前に score を書き換えてから本物を呼ぶ」スタブに monkeypatch する —
+    `recast_ingest_cmd` はこれをローカル `from ... import` で毎回名前解決する
+    ため、定義元モジュールの属性を差し替えれば意図した箇所を確実に横取り
+    できる。"""
+    import svp_rpe.recast.plan as recast_plan_module
+
+    project_path = _copy_demo_project(tmp_path)
+    run_result = runner.invoke(
+        app, ["recast", "run", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert run_result.exit_code == 0, run_result.output
+
+    project_dir = project_path.parent
+    plan_path = project_dir / "recast_plan.json"
+    plan_bytes_before = plan_path.read_bytes()
+    state_before = load_recast_state(project_dir)
+    assert state_before.runs["edm@suno"].state == "awaiting_generation"
+
+    # `recast run` が plan 段（`build_recast_plan_artifacts(..., publish=True)`）
+    # で既に公開済みの package（Codex P2, #210 round 3 指摘4 の対象そのもの）。
+    package_path = project_dir / "builds" / "packages" / "edm@suno" / "performance_package.json"
+    assert package_path.is_file()  # sanity: recast run が公開済み
+    package_bytes_before = package_path.read_bytes()
+
+    takes_dir = project_dir / "builds" / "takes" / "edm@suno"
+    takes_dir.mkdir(parents=True, exist_ok=True)
+    audio_path = takes_dir / "take-01.wav"
+    audio_path.write_bytes(b"RIFF....WAVEfake-audio-bytes")
+
+    score_path = project_dir / "composition_score.yaml"
+    original_score_text = score_path.read_text(encoding="utf-8")
+    swapped_score_text = original_score_text.replace(
+        'core: "introspective night drive"', 'core: "swapped during rebuild window"'
+    )
+    assert swapped_score_text != original_score_text  # sanity
+
+    real_build_recast_plan_artifacts = recast_plan_module.build_recast_plan_artifacts
+
+    def _swap_inputs_then_build(*args: object, **kwargs: object):
+        # precheck は既に通過済み（この関数に到達した時点）— rebuild が実際に
+        # composition_score.yaml を読む直前に差し替える。
+        score_path.write_text(swapped_score_text, encoding="utf-8")
+        return real_build_recast_plan_artifacts(*args, **kwargs)
+
+    monkeypatch.setattr(
+        recast_plan_module, "build_recast_plan_artifacts", _swap_inputs_then_build
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "recast",
+            "ingest",
+            str(project_path),
+            "--variant",
+            "edm",
+            "--backend",
+            "suno",
+            "--audio",
+            str(audio_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "stale" in result.output.lower()
+
+    # 旧 plan は非破壊（rebuild 済みの新入力向け plan で上書き publish されない）。
+    assert plan_path.read_bytes() == plan_bytes_before
+
+    # 旧 package も非破壊（Codex P2, #210 round 3 指摘4: rebuild を
+    # `publish=False` で行い、digest 突合を通過するまで package を
+    # publish しないことの機械 assert — 従来は rebuild 自体が
+    # `publish=True` で走っていたため、この後の digest 拒否より前に
+    # 差し替え後の入力で package が上書きされてしまっていた）。
+    assert package_path.read_bytes() == package_bytes_before
+
+    # take は収蔵されない（旧注文向け音声が新 plan の generated として記録されない）。
+    assert not (takes_dir / "take.json").exists()
+
+    # state も awaiting_generation のまま（generated へ誤って遷移しない）。
+    state_after = load_recast_state(project_dir)
+    assert state_after.runs["edm@suno"].state == "awaiting_generation"
+
+
+def test_recast_ingest_does_not_overwrite_packages_when_inputs_swapped_during_rebuild(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 review round 13（PR3 #208 指摘27, recast_cmd.py:577）: `recast
+    ingest` の rebuild が `publish=True` のままだと、rebuild 直後の digest
+    再突合で reject される swapped-input なケースでも `builds/packages/
+    <variant>@<backend>/` が新しい（差し替え後の）入力の compile 結果で
+    上書きされてしまう — pr5 #210 の同型修正（127891c）に実装形を寄せ、
+    `publish=False` で rebuild → digest 再突合 → 通過後にのみ in-memory の
+    `artifacts.compiled` を公開する経路に変更した（二重コンパイルなし）。
+    `test_recast_ingest_rejects_when_inputs_swapped_during_rebuild` と同じ
+    swap 注入手法を使い、reject 後も packages/ の旧
+    performance_package.json/compilation_report.json の bytes が一切
+    変わらないことを検証する。"""
+    import svp_rpe.recast.plan as recast_plan_module
+
+    project_path = _copy_demo_project(tmp_path)
+    run_result = runner.invoke(
+        app, ["recast", "run", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert run_result.exit_code == 0, run_result.output
+
+    project_dir = project_path.parent
+    package_dir = project_dir / "builds" / "packages" / "edm@suno"
+    package_bytes_before = (package_dir / "performance_package.json").read_bytes()
+    report_bytes_before = (package_dir / "compilation_report.json").read_bytes()
+
+    takes_dir = project_dir / "builds" / "takes" / "edm@suno"
+    takes_dir.mkdir(parents=True, exist_ok=True)
+    audio_path = takes_dir / "take-01.wav"
+    audio_path.write_bytes(b"RIFF....WAVEfake-audio-bytes")
+
+    score_path = project_dir / "composition_score.yaml"
+    original_score_text = score_path.read_text(encoding="utf-8")
+    swapped_score_text = original_score_text.replace(
+        'core: "introspective night drive"', 'core: "swapped during rebuild window"'
+    )
+    assert swapped_score_text != original_score_text  # sanity
+
+    real_build_recast_plan_artifacts = recast_plan_module.build_recast_plan_artifacts
+
+    def _swap_inputs_then_build(*args: object, **kwargs: object):
+        # precheck（inputs_digest/plan_sha256/orders_digest）は既に通過済み
+        # （この関数に到達した時点）— rebuild が実際に composition_score.yaml
+        # を読む直前に差し替える。
+        score_path.write_text(swapped_score_text, encoding="utf-8")
+        return real_build_recast_plan_artifacts(*args, **kwargs)
+
+    monkeypatch.setattr(
+        recast_plan_module, "build_recast_plan_artifacts", _swap_inputs_then_build
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "recast",
+            "ingest",
+            str(project_path),
+            "--variant",
+            "edm",
+            "--backend",
+            "suno",
+            "--audio",
+            str(audio_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "stale" in result.output.lower()
+
+    # 旧 packages は非破壊（rebuild 済みの新入力向け compile 結果で上書き
+    # publish されない — 指摘27 の中核検証）。
+    assert (package_dir / "performance_package.json").read_bytes() == package_bytes_before
+    assert (package_dir / "compilation_report.json").read_bytes() == report_bytes_before
+
+    state_after = load_recast_state(project_dir)
+    assert state_after.runs["edm@suno"].state == "awaiting_generation"
+
+
+def test_recast_ingest_rejects_when_order_file_edited_after_run(tmp_path: Path) -> None:
+    """Codex P2 review round 13（PR3 #208 指摘28, recast_cmd.py:622）: `recast
+    run` が公開した注文書 6 ファイルのうち 1 つ（`prompt.json`）を人手で編集
+    してから `recast ingest` を呼ぶと、従来は `invoker.prepare(ctx)` の
+    無条件再公開が編集を黙って rebuild 結果で上書きし、「編集済み注文で
+    生成された音声」を正規の注文書由来として受理してしまっていた。
+    orders_digest 突合により ingest が拒否され、かつ注文書が republish
+    されない（編集した bytes がそのまま残る — 証拠保全）ことを検証する。"""
+    project_path = _copy_demo_project(tmp_path)
+    run_result = runner.invoke(
+        app, ["recast", "run", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert run_result.exit_code == 0, run_result.output
+
+    project_dir = project_path.parent
+    order_dir = project_dir / "builds" / "orders" / "edm@suno"
+    prompt_json_path = order_dir / "prompt.json"
+    original_prompt_bytes = prompt_json_path.read_bytes()
+    tampered_bytes = original_prompt_bytes.replace(b'"text"', b'"TAMPERED_text"', 1)
+    assert tampered_bytes != original_prompt_bytes  # sanity: replacement matched
+    prompt_json_path.write_bytes(tampered_bytes)
+
+    takes_dir = project_dir / "builds" / "takes" / "edm@suno"
+    takes_dir.mkdir(parents=True, exist_ok=True)
+    audio_path = takes_dir / "take-01.wav"
+    audio_path.write_bytes(b"RIFF....WAVEfake-audio-bytes")
+
+    result = runner.invoke(
+        app,
+        [
+            "recast",
+            "ingest",
+            str(project_path),
+            "--variant",
+            "edm",
+            "--backend",
+            "suno",
+            "--audio",
+            str(audio_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "orders_digest" in result.output.lower() or "order files changed" in result.output.lower()
+
+    # republish されない: 編集した bytes がそのまま残っている（証拠保全 —
+    # 指摘28 の中核検証）。
+    assert prompt_json_path.read_bytes() == tampered_bytes
+
+    # take も収蔵されない・state も awaiting_generation のまま。
+    assert not (takes_dir / "take.json").exists()
+    state_after = load_recast_state(project_dir)
+    assert state_after.runs["edm@suno"].state == "awaiting_generation"
+
+
+def test_recast_ingest_republished_package_locator_matches_run_and_verifies_at_published_position(
+    tmp_path: Path,
+) -> None:
+    """Codex P2 review round 14（PR3 #208 指摘29, recast_cmd.py:659）:
+    `recast ingest` の `publish=False` 再ビルド（指摘27）は project_dir 直下の
+    ephemeral tempdir で compile しており、`resolve_packages_dir(...)` とは
+    深さが食い違う `artifact_base.locator` を焼き込んでいた。突合通過後に
+    その bytes をそのまま実公開先へ publish すると、`recast run` が公開した
+    （正しい深さの）値を**誤った深さの値で上書き**してしまう — 入力は
+    run/ingest 間で一切変わっていないにも関わらず。
+
+    `recast run` → `recast ingest` の順で実行し、両方が公開した
+    `performance_package.json` の `artifact_base.locator` が byte 一致する
+    こと、かつ ingest 後に published 位置（`builds/packages/edm@suno/`）で
+    `verify_package` を直接呼んで pass することを検証する（locator が
+    実際にその場所から manifest 参照 artifact を正しく解決できることの
+    実地証明 — 文字列比較だけでは「両方とも同じ間違った値」を見逃す）。"""
+    from svp_rpe.arrange.verify import verify_package
+
+    project_path = _copy_demo_project(tmp_path)
+    project_dir = project_path.parent
+
+    run_result = runner.invoke(
+        app, ["recast", "run", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert run_result.exit_code == 0, run_result.output
+
+    package_dir = project_dir / "builds" / "packages" / "edm@suno"
+    package_path = package_dir / "performance_package.json"
+
+    def _lyrics_locator() -> str:
+        # `artifact_base` は package top-level ではなく、各 channel_artifacts
+        # entry（ここでは demo project が唯一持つ "lyrics_text" channel）に
+        # 付く（`ChannelArtifactReference.artifact_base`）。
+        payload = json.loads(package_path.read_text(encoding="utf-8"))
+        return payload["channel_artifacts"]["lyrics_text"][0]["artifact_base"]["locator"]
+
+    locator_after_run = _lyrics_locator()
+
+    verify_after_run = verify_package(package_path, project_dir / "identity.yaml")
+    assert verify_after_run.ok, verify_after_run.checks  # sanity: run 直後は当然 pass する
+
+    takes_dir = project_dir / "builds" / "takes" / "edm@suno"
+    takes_dir.mkdir(parents=True, exist_ok=True)
+    audio_path = takes_dir / "take-01.wav"
+    audio_path.write_bytes(b"RIFF....WAVEfake-audio-bytes")
+
+    ingest_result = runner.invoke(
+        app,
+        [
+            "recast",
+            "ingest",
+            str(project_path),
+            "--variant",
+            "edm",
+            "--backend",
+            "suno",
+            "--audio",
+            str(audio_path),
+        ],
+    )
+    assert ingest_result.exit_code == 0, ingest_result.output
+
+    locator_after_ingest = _lyrics_locator()
+    assert locator_after_ingest == locator_after_run
+
+    verify_after_ingest = verify_package(package_path, project_dir / "identity.yaml")
+    assert verify_after_ingest.ok, verify_after_ingest.checks
+
+
 def test_recast_help_lists_ingest() -> None:
     result = runner.invoke(app, ["recast", "--help"])
 
@@ -407,18 +707,16 @@ def test_e2e_manual_awaiting_generation_then_ingest_cli_reaches_generated(
     # (Suno UI, not this repo's own CLI) must not do.
     loaded = load_recast_project(project_path)
     det_artifacts = build_recast_plan_artifacts(
-        loaded, variant="edm_deterministic", backend="deterministic"
+        loaded, variant="edm_deterministic", backend="deterministic", publish=True
     )
     assert det_artifacts.result.plan.state_reached in ("compiled", "verified")
-    det_profile = load_backend_capability_profile(loaded, "deterministic")
     det_ctx = run_context_from_plan_artifacts(
         loaded,
         variant="edm_deterministic",
         backend="deterministic",
         artifacts=det_artifacts,
-        profile=det_profile,
     )
-    det_invoker = resolve_invoker(det_artifacts.backend_ref, det_profile)
+    det_invoker = resolve_invoker(det_artifacts.backend_ref, det_ctx.profile)
     det_prepared = det_invoker.prepare(det_ctx)
     det_take = det_invoker.invoke(det_prepared)
     assert det_take.audio_path.is_file()
