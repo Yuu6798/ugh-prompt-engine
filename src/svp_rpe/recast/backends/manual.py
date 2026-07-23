@@ -361,7 +361,16 @@ def _order_sheet_md(ctx: RecastRunContext, prepared: PreparedInvocation, next_co
         "以下のコマンドで取り込んでください:",
         "",
         "```",
-        f"cd {cwd_from_order_dir}  # この注文書ディレクトリから project.yaml のあるディレクトリへ",
+        # `cwd_from_order_dir` は `builds_root` が project_dir の厳密な祖先
+        # である限り現状は常に `..` の並びのみになる（空白等を含まない）が、
+        # `_next_command_text` の `--audio`/project 引数（実際に空白を含み
+        # 得る）と隣接する同じコマンドブロック内の行であり、`shlex.join` で
+        # 一貫してクオートしておく方が copy-paste 安全性の前提を 1 箇所で
+        # 説明できる（Codex P2 review round 14, PR3 #208 — #210 側にも同内容の
+        # 指摘。未クオートのままだと将来 `builds_root` の解決規則が変わった
+        # 場合に無防備になる）。`shlex.split` で `["cd", <単一パス>]` の
+        # 2 トークンに戻ることをテストで検証する契約。
+        f"{shlex.join(['cd', cwd_from_order_dir])}  # この注文書ディレクトリから project.yaml のあるディレクトリへ",
         next_command.rstrip("\n"),
         "```",
         "",

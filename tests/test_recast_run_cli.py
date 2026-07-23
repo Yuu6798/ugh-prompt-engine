@@ -575,6 +575,76 @@ def test_recast_ingest_rejects_when_order_file_edited_after_run(tmp_path: Path) 
     assert state_after.runs["edm@suno"].state == "awaiting_generation"
 
 
+def test_recast_ingest_republished_package_locator_matches_run_and_verifies_at_published_position(
+    tmp_path: Path,
+) -> None:
+    """Codex P2 review round 14（PR3 #208 指摘29, recast_cmd.py:659）:
+    `recast ingest` の `publish=False` 再ビルド（指摘27）は project_dir 直下の
+    ephemeral tempdir で compile しており、`resolve_packages_dir(...)` とは
+    深さが食い違う `artifact_base.locator` を焼き込んでいた。突合通過後に
+    その bytes をそのまま実公開先へ publish すると、`recast run` が公開した
+    （正しい深さの）値を**誤った深さの値で上書き**してしまう — 入力は
+    run/ingest 間で一切変わっていないにも関わらず。
+
+    `recast run` → `recast ingest` の順で実行し、両方が公開した
+    `performance_package.json` の `artifact_base.locator` が byte 一致する
+    こと、かつ ingest 後に published 位置（`builds/packages/edm@suno/`）で
+    `verify_package` を直接呼んで pass することを検証する（locator が
+    実際にその場所から manifest 参照 artifact を正しく解決できることの
+    実地証明 — 文字列比較だけでは「両方とも同じ間違った値」を見逃す）。"""
+    from svp_rpe.arrange.verify import verify_package
+
+    project_path = _copy_demo_project(tmp_path)
+    project_dir = project_path.parent
+
+    run_result = runner.invoke(
+        app, ["recast", "run", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert run_result.exit_code == 0, run_result.output
+
+    package_dir = project_dir / "builds" / "packages" / "edm@suno"
+    package_path = package_dir / "performance_package.json"
+
+    def _lyrics_locator() -> str:
+        # `artifact_base` は package top-level ではなく、各 channel_artifacts
+        # entry（ここでは demo project が唯一持つ "lyrics_text" channel）に
+        # 付く（`ChannelArtifactReference.artifact_base`）。
+        payload = json.loads(package_path.read_text(encoding="utf-8"))
+        return payload["channel_artifacts"]["lyrics_text"][0]["artifact_base"]["locator"]
+
+    locator_after_run = _lyrics_locator()
+
+    verify_after_run = verify_package(package_path, project_dir / "identity.yaml")
+    assert verify_after_run.ok, verify_after_run.checks  # sanity: run 直後は当然 pass する
+
+    takes_dir = project_dir / "builds" / "takes" / "edm@suno"
+    takes_dir.mkdir(parents=True, exist_ok=True)
+    audio_path = takes_dir / "take-01.wav"
+    audio_path.write_bytes(b"RIFF....WAVEfake-audio-bytes")
+
+    ingest_result = runner.invoke(
+        app,
+        [
+            "recast",
+            "ingest",
+            str(project_path),
+            "--variant",
+            "edm",
+            "--backend",
+            "suno",
+            "--audio",
+            str(audio_path),
+        ],
+    )
+    assert ingest_result.exit_code == 0, ingest_result.output
+
+    locator_after_ingest = _lyrics_locator()
+    assert locator_after_ingest == locator_after_run
+
+    verify_after_ingest = verify_package(package_path, project_dir / "identity.yaml")
+    assert verify_after_ingest.ok, verify_after_ingest.checks
+
+
 def test_recast_help_lists_ingest() -> None:
     result = runner.invoke(app, ["recast", "--help"])
 
