@@ -12,7 +12,6 @@ from svp_rpe.recast import RecastError, load_recast_project
 from svp_rpe.recast.backend import (
     RecastBackendUnavailable,
     build_recast_run_context,
-    load_backend_capability_profile,
     resolve_invoker,
     run_context_from_plan_artifacts,
 )
@@ -524,6 +523,101 @@ def test_section_tags_text_fails_closed_when_delivered_section_map_is_unparseabl
     assert not order_dir.exists()
 
 
+def _add_one_valid_and_one_broken_section_map_anchor(project_path: Path) -> None:
+    """指摘25 回帰テスト用フィクスチャ: 2 件の delivered section_tags anchor を
+    追加する — 1 件は正常な `section-map/0.2`（id=`structure_tags_ok`）、もう
+    1 件は sha256 は正しいが schema として parse 不能（id=`structure_tags_
+    broken`、`_add_malformed_section_map_anchor` と同じ理由で `format_version`
+    は宣言しない）。"""
+    import hashlib
+    import json
+
+    project_dir = project_path.parent
+
+    ok_payload = {
+        "schema_version": "section-map/0.2",
+        "sections": [{"id": "intro", "label": "Intro"}, {"id": "drop", "label": "Drop"}],
+    }
+    ok_content = (json.dumps(ok_payload, ensure_ascii=False) + "\n").encode("utf-8")
+    ok_artifact_path = project_dir / "identity" / "section_tags_ok.json"
+    ok_artifact_path.write_bytes(ok_content)
+    ok_sha256 = hashlib.sha256(ok_content).hexdigest()
+
+    broken_content = b"not valid json at all"
+    broken_artifact_path = project_dir / "identity" / "section_tags_broken.json"
+    broken_artifact_path.write_bytes(broken_content)
+    broken_sha256 = hashlib.sha256(broken_content).hexdigest()
+
+    identity_path = project_dir / "identity.yaml"
+    identity_text = identity_path.read_text(encoding="utf-8")
+    anchor_block = (
+        "  - id: structure_tags_ok\n"
+        "    domain: structure\n"
+        "    artifact: identity/section_tags_ok.json\n"
+        "    artifact_type: section_map\n"
+        "    media_type: application/json\n"
+        '    format_version: "section-map/0.2"\n'
+        f'    sha256: "{ok_sha256}"\n'
+        "    required: true\n"
+        "  - id: structure_tags_broken\n"
+        "    domain: structure\n"
+        "    artifact: identity/section_tags_broken.json\n"
+        "    artifact_type: section_map\n"
+        "    media_type: application/json\n"
+        f'    sha256: "{broken_sha256}"\n'
+        "    required: true\n"
+    )
+    updated_identity = identity_text.replace(
+        "    required: true\n  - id: melody\n",
+        "    required: true\n" + anchor_block + "  - id: melody\n",
+        1,
+    )
+    assert updated_identity != identity_text  # sanity
+    identity_path.write_text(updated_identity, encoding="utf-8")
+
+    arrangement_path = project_dir / "arrangements" / "edm.yaml"
+    arrangement_text = arrangement_path.read_text(encoding="utf-8")
+    updated_arrangement = arrangement_text.replace(
+        "  identity_anchors:\n",
+        "  identity_anchors:\n"
+        "    structure_tags_ok:\n      mode: hard\n      allow: []\n"
+        "    structure_tags_broken:\n      mode: hard\n      allow: []\n",
+        1,
+    )
+    assert updated_arrangement != arrangement_text  # sanity
+    arrangement_path.write_text(updated_arrangement, encoding="utf-8")
+
+
+def test_section_tags_text_fails_closed_when_one_of_several_delivered_refs_is_unparseable(
+    tmp_path: Path,
+) -> None:
+    """Codex P2 review round 12（PR3 #208 指摘25）: round 11 の指摘23 修正は
+    「delivered な section_tags ref が**全滅**したときだけ」fail-closed して
+    おり、複数 delivered ref のうち一部だけが parse 不能な場合はその ref
+    だけを黙って読み飛ばし、残りの ref だけで「不完全だが動く」注文書を
+    出していた。2 件の delivered section_tags anchor（1 件は正常な
+    section-map/0.2、もう 1 件は schema として parse 不能）を preserve する
+    project で、`prepare()` が `RecastError` を送出し（正常な 1 件があっても
+    公開を拒否し）、注文書ディレクトリが一切作られないことを検証する。"""
+    project_path = _copy_demo_project(tmp_path)
+    _add_one_valid_and_one_broken_section_map_anchor(project_path)
+
+    loaded = load_recast_project(project_path)
+    ctx = build_recast_run_context(loaded, variant="edm", backend="suno")
+    section_tags_refs = ctx.compiled.package.channel_artifacts.get("section_tags", [])
+    assert {ref.anchor_id for ref in section_tags_refs} == {
+        "structure_tags_ok",
+        "structure_tags_broken",
+    }  # 2 件とも delivered 前提の sanity
+    invoker = resolve_invoker(ctx.backend_ref, ctx.profile)
+
+    with pytest.raises(RecastError, match="structure_tags_broken"):
+        invoker.prepare(ctx)
+
+    order_dir = loaded.builds_root / "orders" / "edm@suno"
+    assert not order_dir.exists()
+
+
 # --- manual: cover mode branch --------------------------------------------------
 
 
@@ -561,6 +655,48 @@ def test_manual_cover_mode_order_sheet_references_identity_source(tmp_path: Path
     assert prepared.identity_source_sha256 in order_sheet
     assert "physical.time_signature" in order_sheet
     assert "unsupported" in order_sheet  # cover の time_signature override は届かない実測
+
+
+def test_manual_cover_mode_order_sheet_uses_plan_pinned_identity_source_not_disk_reread(
+    tmp_path: Path,
+) -> None:
+    """Codex P2 review round 12（PR3 #208 指摘26）: `base_prepared_invocation`
+    は従来 `read_identity_source(ctx.loaded)` で注文書描画のたびに
+    `identity.yaml` を再 read/再 parse しており、plan 段（`build_recast_
+    plan_artifacts`）の hash 検証・診断が前提とした source メタデータと
+    実際に注文書へ書かれる中身が乖離し得る TOCTOU があった。plan 構築後・
+    `prepare()` 呼び出し前に `identity.yaml` の `source.locator`/`source.
+    sha256` を書き換えても、`order_sheet.md` には plan 段が pin した
+    （書き換え前の）値がそのまま反映されることを検証する。"""
+    project_path = _copy_demo_project(tmp_path)
+    project_text = project_path.read_text(encoding="utf-8")
+    project_text = project_text.replace("invocation_mode: prompt_only", "invocation_mode: cover")
+    project_path.write_text(project_text, encoding="utf-8")
+
+    loaded = load_recast_project(project_path)
+    ctx = build_recast_run_context(loaded, variant="edm", backend="suno")
+    assert ctx.backend_ref.invocation_mode == "cover"
+    original_locator = ctx.identity_source_locator
+    original_sha256 = ctx.identity_source_sha256
+
+    identity_path = project_path.parent / "identity.yaml"
+    identity_text = identity_path.read_text(encoding="utf-8")
+    mutated = identity_text.replace(
+        f'locator: {original_locator}\n  sha256: "{original_sha256}"',
+        'locator: mutated_after_plan_build.yaml\n  sha256: "' + ("f" * 64) + '"',
+        1,
+    )
+    assert mutated != identity_text  # sanity: replacement matched
+    identity_path.write_text(mutated, encoding="utf-8")
+
+    invoker = resolve_invoker(ctx.backend_ref, ctx.profile)
+    prepared = invoker.prepare(ctx)
+
+    order_sheet = (prepared.order_dir / "order_sheet.md").read_text(encoding="utf-8")
+    assert original_locator in order_sheet
+    assert original_sha256 in order_sheet
+    assert "mutated_after_plan_build.yaml" not in order_sheet
+    assert "f" * 64 not in order_sheet
 
 
 # --- manual: invoke/collect contract --------------------------------------------
@@ -1160,9 +1296,42 @@ def test_run_context_from_plan_artifacts_raises_when_not_compiled(tmp_path: Path
     loaded = load_recast_project(project_path)
     artifacts = build_recast_plan_artifacts(loaded, variant="edm", backend="suno", publish=True)
     assert artifacts.result.plan.state_reached == "blocked_authoring"
-    profile = load_backend_capability_profile(loaded, "suno")
 
     with pytest.raises(RecastError):
         run_context_from_plan_artifacts(
-            loaded, variant="edm", backend="suno", artifacts=artifacts, profile=profile
+            loaded, variant="edm", backend="suno", artifacts=artifacts
         )
+
+
+def test_run_context_from_plan_artifacts_reuses_plan_profile_without_reload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 review round 12（PR3 #208 指摘24）: `run_context_from_plan_
+    artifacts` はもはや `load_backend_capability_profile` を呼ばない —
+    plan 段（`build_recast_plan_artifacts`）が single-read 束で既に
+    parse・validate 済みの `artifacts.profile` をそのまま `RecastRunContext.
+    profile` へ複製する（従来は独立に capability_profile YAML を再 read/
+    再 parse しており、plan の診断が前提とした profile と実行時に invoker
+    解決・注文書メタデータへ使われる profile が乖離し得た）。
+    `load_backend_capability_profile` を呼んだら即座に失敗するようパッチ
+    しても `run_context_from_plan_artifacts` が成功し、`ctx.profile` が
+    `artifacts.profile` とオブジェクト同一であることを検証する。"""
+    import svp_rpe.recast.backend as backend_module
+
+    def _fail_if_called(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError(
+            "load_backend_capability_profile must not be called by "
+            "run_context_from_plan_artifacts (Codex P2 review round 12, 指摘24)"
+        )
+
+    monkeypatch.setattr(backend_module, "load_backend_capability_profile", _fail_if_called)
+
+    project_path = _copy_demo_project(tmp_path)
+    loaded = load_recast_project(project_path)
+    artifacts = build_recast_plan_artifacts(loaded, variant="edm", backend="suno", publish=True)
+    assert artifacts.profile is not None  # sanity: plan 段の single-read 束で parse 済み
+
+    ctx = run_context_from_plan_artifacts(
+        loaded, variant="edm", backend="suno", artifacts=artifacts
+    )
+    assert ctx.profile is artifacts.profile

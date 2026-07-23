@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Literal, Optional, Sequence
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from svp_rpe.arrange.identity import AnchorDomain
 from svp_rpe.arrange.models import JsonValue, PreservationMode
@@ -113,6 +113,19 @@ class IdentityAssessment(RecastReportModel):
     enabled: bool = False
 
 
+def _tally_anchor_coverage(anchors: List[RecastReportAnchor]) -> RecastReportCoverage:
+    """`anchors[].coverage` から 3 カウント（verified/violated/not_observed）を
+    集計する — `build_recast_report`（発行時）と `RecastReport` の読み戻し
+    validator（下記）の両方が同じ集計ロジックを共有する single source
+    （Codex P2, #210 round 5 指摘7: 手編集/別生成の report で `coverage` が
+    per-anchor 値と独立に食い違うのを防ぐには、両者を同一関数で計算するのが
+    最も drift しにくい）。"""
+    counts: Dict[CoverageStatus, int] = {"verified": 0, "violated": 0, "not_observed": 0}
+    for anchor in anchors:
+        counts[anchor.coverage] += 1
+    return RecastReportCoverage(**counts)
+
+
 class RecastReport(RecastReportModel):
     """`svprpe recast ingest` の観測段が発行する recast-report/0.1 本体。"""
 
@@ -126,6 +139,24 @@ class RecastReport(RecastReportModel):
     anchors: List[RecastReportAnchor]
     coverage: RecastReportCoverage
     identity_assessment: IdentityAssessment = Field(default_factory=IdentityAssessment)
+
+    @model_validator(mode="after")
+    def _validate_coverage_matches_anchors(self) -> "RecastReport":
+        """`coverage` は `anchors[].coverage` から再計算した値と一致しなければ
+        ならない（Codex P2, #210 round 5 指摘7）: 手編集や別経路で生成された
+        report が `violated: 0` を主張しつつ実際には `violated` な anchor 行を
+        持つ、といった不整合を summary の「次の一手」選択（`render_recast_
+        summary_markdown` は `coverage` だけを見て分岐する）が素通ししてしまう
+        のを防ぐ。構築時（`build_recast_report`）は常にこの再計算結果
+        そのものを `coverage` として渡すため、正常な発行経路は自然にこの
+        validator を通過する（builder→dump→validate の読み戻し規律）。"""
+        expected = _tally_anchor_coverage(self.anchors)
+        if self.coverage != expected:
+            raise ValueError(
+                "RecastReport.coverage does not match anchors[].coverage tally: "
+                f"declared={self.coverage!r}, recomputed={expected!r}"
+            )
+        return self
 
 
 def build_recast_report(
@@ -162,12 +193,10 @@ def build_recast_report(
     allowed_anchor_ids = set(observation_anchors) if observation_anchors else None
 
     anchors: List[RecastReportAnchor] = []
-    counts: Dict[CoverageStatus, int] = {"verified": 0, "violated": 0, "not_observed": 0}
     for observation in report.anchors:
         if allowed_anchor_ids is not None and observation.anchor_id not in allowed_anchor_ids:
             continue
         coverage = _coverage_for(observation.adherence_status)
-        counts[coverage] += 1
         anchors.append(
             RecastReportAnchor(
                 anchor_id=observation.anchor_id,
@@ -190,7 +219,7 @@ def build_recast_report(
         take=RecastReportTake(path=take_path_relative, sha256=take_sha256),
         package_sha256=report.package_sha256,
         anchors=anchors,
-        coverage=RecastReportCoverage(**counts),
+        coverage=_tally_anchor_coverage(anchors),
         identity_assessment=IdentityAssessment(enabled=False),
     )
 

@@ -122,22 +122,22 @@ def _lyrics_text(prepared: PreparedInvocation) -> str:
 
 def _channel_artifact_refs_section_tags_text(
     prepared: PreparedInvocation, refs: List[ChannelArtifactReference]
-) -> Optional[str]:
+) -> str:
     """`channel_artifacts["section_tags"]` の全 refs を package 内の順のまま
     描画する（Codex P2 ninth round #207 指摘18 と同じ全数描画の原則を
     section_tags にも適用）。単一 ref は従来どおり見出しなし、複数は
     `anchor_id` 見出しで連結する。
 
     plan 段の pin 済み bytes（`_pinned_artifact_bytes`、指摘22）から読む —
-    disk への再 read はしない。パース不能な ref（v0.1/v0.2 いずれの section
-    map schema にも該当しない）は個別には読み飛ばすが、**1 件も解釈できな
-    かった場合は `None` を返さず `RecastError` で fail-closed する**（Codex
-    P2 review round 11, PR3 #208 指摘23: 従来は 1 件も parse できないと
-    黙って `None` を返し、呼び出し側が prompt.section_tags や placeholder
-    へ silent fallback していた — refs が 1 件でも delivered と package が
-    報告している以上、それが注文書へ一切反映されないまま公開されるのは
-    hard anchor の欠落を隠蔽する。parse 可能な ref が 1 件でもあれば、
-    それらだけを描画する既存の寛容さは維持する）。"""
+    disk への再 read はしない。**delivered な ref が 1 件でも v0.1/v0.2
+    いずれの section map schema にも parse できなければ、他の ref が parse
+    できているかに関わらず `RecastError` で fail-closed する**（Codex P2
+    review round 12, PR3 #208 指摘25: round 11 の指摘23 修正は「全滅時のみ」
+    fail-closed しており、複数 delivered ref のうち 1 件でも parse 不能だと
+    その ref だけを黙って読み飛ばし、残り 1 件で「不完全だが動く」注文書を
+    出してしまっていた — 全 anchor が delivered と package が報告している
+    以上、そのうち 1 件でも注文書へ反映されないまま公開するのは指摘23と同型の
+    hard anchor 欠落の隠蔽であり、全滅時に限定してよい理由がない）。"""
 
     def _render_one(ref: ChannelArtifactReference) -> Optional[str]:
         raw = _pinned_artifact_bytes(prepared, ref)
@@ -154,26 +154,26 @@ def _channel_artifact_refs_section_tags_text(
         return None
 
     rendered_by_ref = [(ref, _render_one(ref)) for ref in refs]
-    if all(rendered is None for _ref, rendered in rendered_by_ref):
-        unparseable = ", ".join(
-            f"{ref.anchor_id} (format_version={ref.format_version!r})" for ref, _rendered in rendered_by_ref
+    unparseable_refs = [ref for ref, rendered in rendered_by_ref if rendered is None]
+    if unparseable_refs:
+        listing = ", ".join(
+            f"{ref.anchor_id} (format_version={ref.format_version!r})" for ref in unparseable_refs
         )
         raise RecastError(
             "recast order sheet: delivered section_tags channel artifact(s) failed to "
-            f"parse under both section-map/0.1 and section-map/0.2 schemas: {unparseable} "
+            f"parse under both section-map/0.1 and section-map/0.2 schemas: {listing} "
             "— refusing to publish an order sheet that silently drops a delivered hard "
             "anchor"
         )
 
     if len(refs) == 1:
         rendered = rendered_by_ref[0][1]
-        assert rendered is not None  # 上の all() ガードで単一件かつ None のケースは既に raise 済み
+        assert rendered is not None  # 上の unparseable_refs ガードで None は既に raise 済み
         return rendered + "\n"
 
     sections: list[str] = []
     for ref, rendered in rendered_by_ref:
-        if rendered is None:
-            continue
+        assert rendered is not None  # 同上
         sections.append(f"# {ref.anchor_id}\n\n{rendered}\n")
     return "\n".join(sections)
 

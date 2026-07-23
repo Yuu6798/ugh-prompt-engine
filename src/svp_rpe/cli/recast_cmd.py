@@ -337,11 +337,7 @@ def recast_run_cmd(
 
     from svp_rpe.arrange.resolver import ArrangementError
     from svp_rpe.recast import RecastError, load_recast_project
-    from svp_rpe.recast.backend import (
-        load_backend_capability_profile,
-        resolve_invoker,
-        run_context_from_plan_artifacts,
-    )
+    from svp_rpe.recast.backend import resolve_invoker, run_context_from_plan_artifacts
     from svp_rpe.recast.plan import _normalize_diagnostic, build_recast_plan_artifacts
     from svp_rpe.recast.state import record_state
 
@@ -399,11 +395,17 @@ def recast_run_cmd(
         raise typer.Exit(code=1)
 
     try:
-        profile = load_backend_capability_profile(loaded, backend)
+        # `profile` は plan 段（`build_recast_plan_artifacts`）が single-read 束で
+        # 既に parse・validate 済みの `artifacts.profile` をそのまま使う —
+        # `load_backend_capability_profile` で capability_profile YAML を再 read/
+        # 再 parse しない（Codex P2 review round 12, PR3 #208 指摘24: 従来は
+        # ここで独立に再 read しており、plan の診断（recast_plan.json）が前提と
+        # した profile と実際に invoke/注文書へ使われる profile が実行中の入力
+        # 変化で乖離し得た）。
         ctx = run_context_from_plan_artifacts(
-            loaded, variant=variant, backend=backend, artifacts=artifacts, profile=profile
+            loaded, variant=variant, backend=backend, artifacts=artifacts
         )
-        invoker = resolve_invoker(artifacts.backend_ref, profile)
+        invoker = resolve_invoker(artifacts.backend_ref, ctx.profile)
         prepared = invoker.prepare(ctx)
     except (OSError, ValueError, ValidationError, yaml.YAMLError, RecastError) as exc:
         typer.echo(f"Error: {exc}", err=True)
@@ -557,7 +559,6 @@ def recast_ingest_cmd(
     from svp_rpe.recast import RecastError, load_recast_project
     from svp_rpe.recast.backend import (
         atomic_publish_bytes_bundle,
-        load_backend_capability_profile,
         resolve_invoker,
         run_context_from_plan_artifacts,
     )
@@ -707,11 +708,13 @@ def recast_ingest_cmd(
         raise typer.Exit(code=1) from exc
 
     try:
-        profile = load_backend_capability_profile(loaded, backend)
+        # `profile` は plan 段が single-read 束で既に parse・validate 済みの
+        # `artifacts.profile` をそのまま使う（Codex P2 review round 12, PR3
+        # #208 指摘24 — 詳細は `recast run` 側の同型コメント参照）。
         ctx = run_context_from_plan_artifacts(
-            loaded, variant=variant, backend=backend, artifacts=artifacts, profile=profile
+            loaded, variant=variant, backend=backend, artifacts=artifacts
         )
-        invoker = resolve_invoker(artifacts.backend_ref, profile)
+        invoker = resolve_invoker(artifacts.backend_ref, ctx.profile)
         prepared = invoker.prepare(ctx)
         take = invoker.collect(prepared, Path(audio))
     except (OSError, ValueError, ValidationError, yaml.YAMLError, RecastError) as exc:
@@ -1127,10 +1130,15 @@ def recast_init_cmd(
         (staging_dir / "identity").mkdir(parents=True, exist_ok=True)
         (staging_dir / "arrangements").mkdir(parents=True, exist_ok=True)
 
-        composition_score_yaml = render_draft_score_yaml(score)
-        (staging_dir / "composition_score.yaml").write_text(
-            composition_score_yaml, encoding="utf-8"
-        )
+        # Codex P2（#210 round 4 指摘6）: hash 対象になる全ファイルは encode を
+        # **1 回だけ**行い、その同一 bytes を `write_bytes` と sha256 計算の
+        # 両方に使う（pr2 abc2350 と同原則 — 従来の `write_text(...,
+        # encoding="utf-8")` は Windows では既定の text-mode 改行変換で
+        # `"\n"` → `"\r\n"` に化け、encode 済み文字列から計算した sha256 と
+        # 実際にディスクへ書かれた bytes が乖離しうる）。hash 対象でない
+        # ファイルも一貫性のため同じ bytes 書き込み経路に揃える。
+        composition_score_bytes = render_draft_score_yaml(score).encode("utf-8")
+        (staging_dir / "composition_score.yaml").write_bytes(composition_score_bytes)
 
         identity_anchors: list[dict[str, Any]] = []
         identity_anchor_policies: dict[str, dict[str, Any]] = {}
@@ -1143,11 +1151,11 @@ def recast_init_cmd(
                     for event in bundle.physical.chord_events
                 ],
             }
-            chord_json = (
+            chord_json_bytes = (
                 json.dumps(chord_payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
-            )
-            (staging_dir / "identity" / "chord_progression.json").write_text(
-                chord_json, encoding="utf-8"
+            ).encode("utf-8")
+            (staging_dir / "identity" / "chord_progression.json").write_bytes(
+                chord_json_bytes
             )
             identity_anchors.append(
                 {
@@ -1157,7 +1165,7 @@ def recast_init_cmd(
                     "artifact_type": "chord_sequence_json",
                     "media_type": "application/json",
                     "format_version": CHORD_SEQUENCE_ARTIFACT_SCHEMA,
-                    "sha256": hashlib.sha256(chord_json.encode("utf-8")).hexdigest(),
+                    "sha256": hashlib.sha256(chord_json_bytes).hexdigest(),
                     "required": True,
                 }
             )
@@ -1168,12 +1176,10 @@ def recast_init_cmd(
                 "schema_version": SECTION_MAP_ARTIFACT_SCHEMA_0_1,
                 "sections": [marker.label for marker in bundle.physical.structure],
             }
-            section_json = (
+            section_json_bytes = (
                 json.dumps(section_payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
-            )
-            (staging_dir / "identity" / "section_map.json").write_text(
-                section_json, encoding="utf-8"
-            )
+            ).encode("utf-8")
+            (staging_dir / "identity" / "section_map.json").write_bytes(section_json_bytes)
             identity_anchors.append(
                 {
                     "id": "structure",
@@ -1182,7 +1188,7 @@ def recast_init_cmd(
                     "artifact_type": "section_map",
                     "media_type": "application/json",
                     "format_version": SECTION_MAP_ARTIFACT_SCHEMA_0_1,
-                    "sha256": hashlib.sha256(section_json.encode("utf-8")).hexdigest(),
+                    "sha256": hashlib.sha256(section_json_bytes).hexdigest(),
                     "required": True,
                 }
             )
@@ -1198,10 +1204,10 @@ def recast_init_cmd(
             },
             "anchors": identity_anchors,
         }
-        (staging_dir / "identity.yaml").write_text(
-            yaml.safe_dump(identity_payload, sort_keys=False, allow_unicode=True),
-            encoding="utf-8",
-        )
+        identity_yaml_bytes = yaml.safe_dump(
+            identity_payload, sort_keys=False, allow_unicode=True
+        ).encode("utf-8")
+        (staging_dir / "identity.yaml").write_bytes(identity_yaml_bytes)
 
         preservation_payload: dict[str, Any] = {"score_fields": {}}
         if identity_anchor_policies:
@@ -1215,10 +1221,10 @@ def recast_init_cmd(
             "target": {},
             "preservation": preservation_payload,
         }
-        (staging_dir / "arrangements" / "default.yaml").write_text(
-            yaml.safe_dump(arrangement_payload, sort_keys=False, allow_unicode=True),
-            encoding="utf-8",
-        )
+        arrangement_yaml_bytes = yaml.safe_dump(
+            arrangement_payload, sort_keys=False, allow_unicode=True
+        ).encode("utf-8")
+        (staging_dir / "arrangements" / "default.yaml").write_bytes(arrangement_yaml_bytes)
 
         project_payload: dict[str, Any] = {
             "schema_version": "recast-project/0.1",
@@ -1245,10 +1251,10 @@ def recast_init_cmd(
             },
             "observation": {"enabled": True, "anchors": []},
         }
-        (staging_dir / "project.yaml").write_text(
-            yaml.safe_dump(project_payload, sort_keys=False, allow_unicode=True),
-            encoding="utf-8",
-        )
+        project_yaml_bytes = yaml.safe_dump(
+            project_payload, sort_keys=False, allow_unicode=True
+        ).encode("utf-8")
+        (staging_dir / "project.yaml").write_bytes(project_yaml_bytes)
 
         try:
             loaded = load_recast_project(staging_dir / "project.yaml")

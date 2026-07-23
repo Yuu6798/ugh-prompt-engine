@@ -263,3 +263,68 @@ def test_recast_report_schema_version_defaults_to_current() -> None:
         }
     )
     assert report.schema_version == RECAST_REPORT_SCHEMA_VERSION
+
+
+# --- coverage/anchors consistency validator (Codex P2, #210 round 5 指摘7) -----
+
+
+def test_recast_report_round_trip_preserves_consistent_coverage() -> None:
+    """`build_recast_report` が発行する report は dump→`model_validate` の
+    読み戻しでも validator を素通りする（builder→dump→validate の読み戻し
+    規律 — 正常発行経路が誤って弾かれないことの機械 assert）。"""
+    report = _observation_report(
+        [
+            _anchor_observation("harmony", "harmony", "preserved", "exact_match"),
+            _anchor_observation("structure", "structure", "not_observed", "deferred"),
+        ]
+    )
+    package = _package(
+        [
+            PackageAnchorStatus.model_construct(anchor_id="harmony", requested_mode="hard"),
+            PackageAnchorStatus.model_construct(anchor_id="structure", requested_mode="hard"),
+        ]
+    )
+    recast_report = build_recast_report(
+        project_id="p",
+        variant="v",
+        backend="b",
+        package=package,
+        report=report,
+        take_path_relative="take.wav",
+        take_sha256="a" * 64,
+    )
+    round_tripped = RecastReport.model_validate(recast_report.model_dump(mode="json"))
+    assert round_tripped == recast_report
+
+
+def test_recast_report_rejects_coverage_inconsistent_with_anchor_rows() -> None:
+    """`coverage` が `anchors[].coverage` の実集計と食い違う（手編集/別生成の
+    report を想定 — ここでは `violated` を実際には 0 件なのに 1 件あると
+    偽装する）場合、読み戻し（`model_validate`）は fail-closed で拒否する。"""
+    payload = {
+        "schema_version": RECAST_REPORT_SCHEMA_VERSION,
+        "project_id": "p",
+        "variant": "v",
+        "backend": "b",
+        "work_id": "w",
+        "take": {"path": "take.wav", "sha256": "0" * 64},
+        "package_sha256": "0" * 64,
+        "anchors": [
+            {
+                "anchor_id": "harmony",
+                "domain": "harmony",
+                "policy_mode": "hard",
+                "adherence_status": "not_observed",
+                "determination": "deferred",
+                "sensor": {"name": "chord_sequence_match", "available": True},
+                "measurements": {},
+                "coverage": "not_observed",
+            }
+        ],
+        # 実際の anchor 行は not_observed=1 のみだが、coverage は
+        # violated=1（ずらした値）を主張する — 不整合。
+        "coverage": {"verified": 0, "violated": 1, "not_observed": 0},
+        "identity_assessment": {"enabled": False},
+    }
+    with pytest.raises(ValidationError):
+        RecastReport.model_validate(payload)
