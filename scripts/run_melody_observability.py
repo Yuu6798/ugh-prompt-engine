@@ -51,6 +51,20 @@ from svp_rpe.rpe.learned import LearnedModelUnavailable  # noqa: E402
 
 REGISTRY_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "registry.yaml"
 
+# 本ハーネスが解釈できる registry スキーマ契約。新スキーマで閾値の意味論が
+# 変わった場合に v0.1 の解釈で結果を publish しないよう、registry を消費する前に
+# fail-closed で検証する（Codex 指摘・AGENTS §8）。
+_EXPECTED_REGISTRY_SCHEMA = "melody-bench/0.1"
+
+
+def _require_registry_schema(registry: Dict[str, Any]) -> None:
+    version = registry.get("schema_version")
+    if version != _EXPECTED_REGISTRY_SCHEMA:
+        raise ValueError(
+            f"unsupported melody_bench registry schema_version {version!r}; "
+            f"expected {_EXPECTED_REGISTRY_SCHEMA} (fail-closed)"
+        )
+
 # 抽出器名 → PyPI distribution 名（provenance の installed version 採取用）。
 _EXTRACTOR_DIST = {
     "pyin": "librosa",
@@ -99,6 +113,7 @@ def _preprocessing_provenance(route: Any) -> "Dict[str, Any] | None":
 def load_thresholds(registry_path: Path = REGISTRY_PATH) -> ObservabilityThresholds:
     with open(registry_path, "r", encoding="utf-8") as handle:
         registry = yaml.safe_load(handle)
+    _require_registry_schema(registry)
     return ObservabilityThresholds.from_registry(registry["observation_gate"])
 
 
@@ -178,6 +193,7 @@ def run_synthetic(thresholds: ObservabilityThresholds) -> Dict[str, Any]:
     specs = load_specs()
     with open(REGISTRY_PATH, "r", encoding="utf-8") as handle:
         registry = yaml.safe_load(handle)
+    _require_registry_schema(registry)
     fixture_kinds = {f["id"]: f["input_kind"] for f in registry["fixtures"]}
     expect = {f["id"]: f.get("expect_status") for f in registry["fixtures"]}
 
@@ -225,6 +241,7 @@ def run_external(manifest_path: Path, thresholds: ObservabilityThresholds) -> Di
     entries = json.loads(manifest_bytes)
     with open(REGISTRY_PATH, "r", encoding="utf-8") as handle:
         registry = yaml.safe_load(handle)
+    _require_registry_schema(registry)
 
     # fail-closed: 各 manifest entry の id は registry.yaml の external_fixtures に
     # 事前登録され、input_kind も登録値と一致していなければならない。typo や

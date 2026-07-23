@@ -13,6 +13,7 @@ CI 安全（重依存なし）で回る層:
 from __future__ import annotations
 
 import hashlib
+import os
 import sys
 from pathlib import Path
 
@@ -199,6 +200,27 @@ def test_note_only_observation_gets_nonzero_coverage_and_can_be_sufficient():
     assert report.status == "sufficient", report.reasons
 
 
+def test_agreement_fails_closed_when_unavailable():
+    """min_cross_extractor_agreement 設定時、agreement が採れなければ insufficient。"""
+    from dataclasses import replace
+
+    base = _default_thresholds()
+    th = replace(base, min_cross_extractor_agreement=0.5)
+    # 十分に密で他条件は満たすフレーム系観測（agreement は reference なしで None）。
+    midis = [60, 62, 64, 65, 67, 69, 71, 72] + [None] * 20 + [67, 65, 64, 62, 60, 59]
+    times, hz, conf = _frame_track_from_midi(midis)
+    obs = MelodyObservation(
+        route="basic_pitch_direct",
+        source_model="test",
+        frame_times=tuple(times),
+        frame_hz=tuple(hz),
+        frame_confidence=tuple(conf),
+    )
+    report = assess_observability(obs, th)  # reference_notes 無し → agreement None
+    assert report.status == "insufficient"
+    assert any("cross_extractor_agreement unavailable" in r for r in report.reasons)
+
+
 def test_cross_extractor_agreement_identical_and_disjoint():
     a = [MelodyNote(0, 1, 60, 0.9), MelodyNote(1, 2, 62, 0.9), MelodyNote(2, 3, 64, 0.9)]
     b_same = list(a)
@@ -339,6 +361,53 @@ def test_waveform_pin_matches_generated_samples():
             f"波形が変化: {fid} {actual} != pinned {pinned[fid]}. "
             "spec か builder を変更したなら registry の waveform_sha256 を更新すること。"
         )
+
+
+def test_harness_rejects_unknown_registry_schema(tmp_path):
+    """未知の registry schema_version は fail-closed（v0.1 解釈で publish しない）。"""
+    import scripts.run_melody_observability as harness
+
+    good = yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))
+    good["schema_version"] = "melody-bench/9.9"
+    bad = tmp_path / "registry.yaml"
+    bad.write_text(yaml.safe_dump(good, allow_unicode=True), encoding="utf-8")
+    with pytest.raises(ValueError, match="unsupported melody_bench registry schema_version"):
+        harness.load_thresholds(bad)
+
+
+def test_pair_generation_is_atomic_manifest_last(tmp_path, monkeypatch):
+    """pair 生成は staging→公開で、manifest 出現時に全 variant が揃っている。"""
+    import scripts.make_melody_pairs as pairs
+
+    sr = 22050
+    t = np.linspace(0, 1.0, sr, endpoint=False)
+    src = tmp_path / "src.wav"
+    sf.write(src, (0.3 * np.sin(2 * np.pi * 330 * t)).astype(np.float32), sr, subtype="FLOAT")
+    out_dir = tmp_path / "out"
+
+    real_replace = os.replace
+    seen_when_manifest_published: dict = {}
+
+    def tracking_replace(a, b):
+        # manifest を公開する瞬間、out_dir に既に全 variant が存在していること。
+        if str(b).endswith("__pairs_manifest.json"):
+            seen_when_manifest_published["variants"] = sorted(
+                p.name for p in out_dir.glob("*.wav")
+            )
+        return real_replace(a, b)
+
+    monkeypatch.setattr(pairs.os, "replace", tracking_replace)
+    monkeypatch.setattr(
+        sys, "argv",
+        ["make_melody_pairs", "--input", str(src), "--out-dir", str(out_dir),
+         "--semitones", "2", "--time-rates", "1.05"],
+    )
+    pairs.main()
+    # 公開順序: manifest 出現時に base + pitch + time の 3 variant が揃っている。
+    assert seen_when_manifest_published["variants"] == [
+        "src__base.wav", "src__pitch_+2st.wav", "src__time_x1.05.wav"
+    ]
+    assert (out_dir / "src__pairs_manifest.json").exists()
 
 
 def test_build_signal_is_deterministic():

@@ -433,15 +433,20 @@ def assess_observability(
             f"octave_jump_rate {octave_jump_rate:.3f} > max "
             f"{thresholds.max_octave_jump_rate:.3f}"
         )
-    if (
-        thresholds.min_cross_extractor_agreement is not None
-        and agreement is not None
-        and agreement < thresholds.min_cross_extractor_agreement
-    ):
-        reasons.append(
-            f"cross_extractor_agreement {agreement:.3f} < min "
-            f"{thresholds.min_cross_extractor_agreement:.3f}"
-        )
+    if thresholds.min_cross_extractor_agreement is not None:
+        # 閾値が設定されているのに一致度が採れない（補助抽出器が未導入 / ノート
+        # 無しで agreement=None）場合は fail-closed。required な一致が確立され
+        # ないまま sufficient を通さない（Codex 指摘）。
+        if agreement is None:
+            reasons.append(
+                "cross_extractor_agreement unavailable but min "
+                f"{thresholds.min_cross_extractor_agreement:.3f} required"
+            )
+        elif agreement < thresholds.min_cross_extractor_agreement:
+            reasons.append(
+                f"cross_extractor_agreement {agreement:.3f} < min "
+                f"{thresholds.min_cross_extractor_agreement:.3f}"
+            )
 
     status = "sufficient" if not reasons else "insufficient"
     return MelodyObservabilityReport(

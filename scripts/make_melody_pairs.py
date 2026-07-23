@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List
@@ -83,6 +84,11 @@ def main() -> int:
     source_bytes = args.input.read_bytes()
     source_sha256 = hashlib.sha256(source_bytes).hexdigest()
 
+    # 成果物一式を staging ディレクトリに完成させてから out_dir へ os.replace で
+    # 公開する。既存 out_dir へ直接書くと、途中で中断された場合に variant WAV と
+    # manifest が食い違う半端な成果物が下流に見える（Codex 指摘・AGENTS §8）。
+    # 最終 rename は per-file atomic で、manifest を**最後**に move するため、
+    # manifest が存在する時点では必ず全 variant が配置済みである。
     with tempfile.TemporaryDirectory(prefix="melody-pairs-src-") as tmp:
         frozen = Path(tmp) / args.input.name
         frozen.write_bytes(source_bytes)
@@ -91,19 +97,31 @@ def main() -> int:
         variants = make_variants(
             y, sr, semitones=args.semitones, time_rates=args.time_rates
         )
+        staging = Path(tmp) / "staging"
+        staging.mkdir()
         manifest: Dict[str, Any] = {
             "source": str(args.input),
             "source_sha256": source_sha256,
             "sample_rate": sr,
             "variants": {},
         }
+        staged: Dict[str, tuple[Path, Path]] = {}
         for name, wav in variants.items():
-            out_path = args.out_dir / f"{stem}__{name}.wav"
-            sf.write(out_path, wav, sr, subtype="FLOAT")
-            manifest["variants"][name] = {"path": str(out_path), "sha256": _sha256(out_path)}
-        (args.out_dir / f"{stem}__pairs_manifest.json").write_text(
+            filename = f"{stem}__{name}.wav"
+            staged_path = staging / filename
+            sf.write(staged_path, wav, sr, subtype="FLOAT")
+            final_path = args.out_dir / filename
+            staged[name] = (staged_path, final_path)
+            manifest["variants"][name] = {"path": str(final_path), "sha256": _sha256(staged_path)}
+        manifest_name = f"{stem}__pairs_manifest.json"
+        staged_manifest = staging / manifest_name
+        staged_manifest.write_text(
             json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
         )
+        # 公開: 全 variant を先に配置し、最後に manifest を配置する。
+        for staged_path, final_path in staged.values():
+            os.replace(staged_path, final_path)
+        os.replace(staged_manifest, args.out_dir / manifest_name)
     print(
         f"wrote {len(variants)} variants for {stem} to {args.out_dir}; "
         "positive pairs = base×variant (same song), negative pairs = across different sources"
