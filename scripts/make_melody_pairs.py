@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -73,31 +74,36 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    # source の生バイト hash を pin する。librosa が decode し soundfile が
-    # 再エンコードする**前**の原本バイトを固定しないと、後で source が差し替え・
-    # 編集されても controlled-pair provenance がどの入力から生成されたかを証明
-    # できない（AGENTS §8）。
-    source_sha256 = _sha256(args.input)
-    y, sr = librosa.load(args.input, sr=None, mono=True)
+    # source の生バイトを一度だけ読んで hash し、その**同じバイト列**を temp file へ
+    # 凍結して decode する。hash と decode で別々に open すると、間に source が
+    # 再生成・差し替えされた場合に manifest の source_sha256 が実際に変形を生んだ
+    # 音と食い違う（Codex 指摘。external audio bytes 凍結と同型・AGENTS §8）。
     args.out_dir.mkdir(parents=True, exist_ok=True)
     stem = args.input.stem
+    source_bytes = args.input.read_bytes()
+    source_sha256 = hashlib.sha256(source_bytes).hexdigest()
 
-    variants = make_variants(
-        y, sr, semitones=args.semitones, time_rates=args.time_rates
-    )
-    manifest: Dict[str, Any] = {
-        "source": str(args.input),
-        "source_sha256": source_sha256,
-        "sample_rate": sr,
-        "variants": {},
-    }
-    for name, wav in variants.items():
-        out_path = args.out_dir / f"{stem}__{name}.wav"
-        sf.write(out_path, wav, sr, subtype="FLOAT")
-        manifest["variants"][name] = {"path": str(out_path), "sha256": _sha256(out_path)}
-    (args.out_dir / f"{stem}__pairs_manifest.json").write_text(
-        json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
-    )
+    with tempfile.TemporaryDirectory(prefix="melody-pairs-src-") as tmp:
+        frozen = Path(tmp) / args.input.name
+        frozen.write_bytes(source_bytes)
+        y, sr = librosa.load(frozen, sr=None, mono=True)
+
+        variants = make_variants(
+            y, sr, semitones=args.semitones, time_rates=args.time_rates
+        )
+        manifest: Dict[str, Any] = {
+            "source": str(args.input),
+            "source_sha256": source_sha256,
+            "sample_rate": sr,
+            "variants": {},
+        }
+        for name, wav in variants.items():
+            out_path = args.out_dir / f"{stem}__{name}.wav"
+            sf.write(out_path, wav, sr, subtype="FLOAT")
+            manifest["variants"][name] = {"path": str(out_path), "sha256": _sha256(out_path)}
+        (args.out_dir / f"{stem}__pairs_manifest.json").write_text(
+            json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
+        )
     print(
         f"wrote {len(variants)} variants for {stem} to {args.out_dir}; "
         "positive pairs = base×variant (same song), negative pairs = across different sources"

@@ -472,6 +472,29 @@ def test_route_assist_populates_cross_extractor_agreement(monkeypatch, tmp_path)
     assert "extractor_version" in row and "assist_extractor_version" in row
 
 
+def test_separation_route_records_preprocessing_provenance(monkeypatch, tmp_path):
+    """demucs_vocals_then_* 行は分離 provenance（model/version）を記録する。"""
+    import scripts.run_melody_observability as harness
+    from svp_rpe.melody.routing import MelodyRoute
+
+    # demucs 未導入なら observe_via_route が LearnedModelUnavailable を投げる経路でも
+    # preprocessing provenance が行に載ることを検証する（CI 安全）。
+    route = MelodyRoute("demucs_vocals_then_crepe", "demucs_vocals", "crepe")
+    monkeypatch.setattr(harness, "select_routes", lambda kind: [route])
+
+    def raise_unavailable(audio_path, r):
+        raise LearnedModelUnavailable("demucs not installed")
+
+    monkeypatch.setattr(harness, "observe_via_route", raise_unavailable)
+    rows = harness._run_routes_on_file("x.wav", "vocal_track", _default_thresholds())
+    assert len(rows) == 1
+    assert rows[0]["outcome"] == "unavailable"
+    prov = rows[0]["preprocessing"]
+    assert prov["preprocessing"] == "demucs_vocals"
+    assert prov["separation_model"] == "htdemucs_ft"
+    assert "separation_version" in prov
+
+
 def test_external_manifest_hash_matches_parsed_bytes(tmp_path):
     """manifest_sha256 は parse したのと同じ bytes の hash である。"""
     import json as _json

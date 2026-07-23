@@ -60,17 +60,40 @@ _EXTRACTOR_DIST = {
 }
 
 
-def _extractor_version(extractor: str) -> "str | None":
-    """抽出器の installed package version を best-effort で返す（未導入なら None）。"""
+def _dist_version(dist: str) -> "str | None":
+    """PyPI distribution の installed version を best-effort で返す（未導入なら None）。"""
     import importlib.metadata as _md
 
-    dist = _EXTRACTOR_DIST.get(extractor)
-    if not dist:
-        return None
     try:
         return _md.version(dist)
     except Exception:
         return None
+
+
+def _extractor_version(extractor: str) -> "str | None":
+    """抽出器の installed package version を best-effort で返す（未導入なら None）。"""
+    dist = _EXTRACTOR_DIST.get(extractor)
+    return _dist_version(dist) if dist else None
+
+
+def _preprocessing_provenance(route: Any) -> "Dict[str, Any] | None":
+    """分離前処理（Demucs）の provenance。分離不要な経路は None。
+
+    同一 audio_sha256 でも Demucs のパッケージ/モデル/重みが違えば vocals stem が
+    変わり下流のピッチ結果も変わるため、`requires_separation` 行に分離器の
+    モデル名と installed version を記録する（Codex 指摘・AGENTS §8）。
+    stem hash レベルの provenance は observe_via_route が stem を露出する必要が
+    あり、Demucs 不在では検証できないため本 PR では見送る。
+    """
+    if not getattr(route, "requires_separation", False):
+        return None
+    from svp_rpe.io.source_separator import DEFAULT_MODEL
+
+    return {
+        "preprocessing": route.preprocessing,
+        "separation_model": DEFAULT_MODEL,
+        "separation_version": _dist_version("demucs"),
+    }
 
 
 def load_thresholds(registry_path: Path = REGISTRY_PATH) -> ObservabilityThresholds:
@@ -97,18 +120,20 @@ def _run_routes_on_file(
                 }
             )
             continue
+        preprocessing = _preprocessing_provenance(route)
         try:
             observation = observe_via_route(audio_path, route)
         except LearnedModelUnavailable as exc:
-            rows.append(
-                {
-                    "route": route.name,
-                    "extractor": route.extractor,
-                    "outcome": "unavailable",
-                    "detail": str(exc).splitlines()[0],
-                    "report": None,
-                }
-            )
+            unavailable_row: Dict[str, Any] = {
+                "route": route.name,
+                "extractor": route.extractor,
+                "outcome": "unavailable",
+                "detail": str(exc).splitlines()[0],
+                "report": None,
+            }
+            if preprocessing is not None:
+                unavailable_row["preprocessing"] = preprocessing
+            rows.append(unavailable_row)
             continue
         # assist 抽出器が宣言されていれば（full_mix の basic-pitch × Melodia など）、
         # 補助抽出器を同一音声に走らせて reference notes を採り、cross_extractor_
@@ -138,6 +163,8 @@ def _run_routes_on_file(
             "source_model": observation.source_model,
             "extractor_version": _extractor_version(route.extractor),
         }
+        if preprocessing is not None:
+            row["preprocessing"] = preprocessing
         if route.assist:
             row["assist_extractor"] = route.assist
             row["assist_status"] = assist_status
