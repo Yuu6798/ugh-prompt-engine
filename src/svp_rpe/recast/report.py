@@ -187,6 +187,33 @@ class RecastReport(RecastReportModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_unique_anchor_ids(self) -> "RecastReport":
+        """`arrange/observe.py:ObservationReport._validate_unique_anchor_ids`
+        / `arrange/identity.py:IdentityManifest._validate_unique_anchor_ids`
+        と同型（Codex P2, #210 round 11 指摘14）: identity/observation の
+        両 sidecar が持つ「anchor_id は重複しない」不変条件を `RecastReport`
+        だけが欠いていた。重複を許すと、例えば harmony を 2 行（両方
+        `coverage="verified"`）に複製した report が `coverage` 集計
+        （`_tally_anchor_coverage`）上は辻褄が合う（2 verified）ため、上の
+        `_validate_coverage_matches_anchors` を素通りしてしまう —
+        「harmony が 2 回観測された」という虚偽の被覆を検出できない。
+        `build_recast_report` は `report.anchors`（`ObservationReport` 側で
+        既に一意性が保証された集合）から 1 対 1 で構築するため、正常な
+        発行経路は自然にこの validator を通過する（builder→dump→validate
+        の読み戻し規律）。"""
+        seen: set[str] = set()
+        duplicates: set[str] = set()
+        for anchor in self.anchors:
+            if anchor.anchor_id in seen:
+                duplicates.add(anchor.anchor_id)
+            seen.add(anchor.anchor_id)
+        if duplicates:
+            raise ValueError(
+                f"duplicate anchor_id(s) in recast report: {', '.join(sorted(duplicates))}"
+            )
+        return self
+
 
 def build_recast_report(
     *,
