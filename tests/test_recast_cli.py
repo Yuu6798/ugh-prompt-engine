@@ -408,6 +408,47 @@ def test_recast_plan_blocks_capability_on_corrupted_mode_overrides(tmp_path: Pat
     assert "blocked_capability" in status_result.output
 
 
+def test_recast_plan_preflight_rejects_when_score_aliases_state_output(tmp_path: Path) -> None:
+    """Codex P2 review round 15（PR3 #208 指摘30, recast_cmd.py:196）:
+    project.yaml の `work.score` が誤って `<project_dir>/recast_state.json`
+    を指すよう構成された project では、従来 `build_recast_plan_artifacts
+    (publish=True)` による packages/ への公開が `record_state` 自身の
+    alias 衝突ガードより**先に**走ってしまい、`record_state` が最終的に
+    衝突を検出して拒否しても「plan/state のどちらにも対応しない成果物」が
+    builds_root に残っていた。plan 束を構築する前の preflight
+    （`_preflight_reject_plan_state_output_collision`）が packages/ 公開に
+    到達する前に拒否し、`builds_root` が一切作られない（入力も不変の）
+    ことを検証する。"""
+    project_path = _copy_demo_project(tmp_path)
+    project_dir = project_path.parent
+
+    # `_resolve_sidecar_reference`（loader.py）は参照ファイルの実在のみ検証し
+    # 中身は問わない — score の内容 parse に到達する前に preflight が拒否
+    # するはずなので、プレースホルダの中身で十分。
+    (project_dir / "recast_state.json").write_bytes(b"placeholder\n")
+    project_text = project_path.read_text(encoding="utf-8")
+    updated = project_text.replace(
+        "  score: composition_score.yaml\n", "  score: recast_state.json\n", 1
+    )
+    assert updated != project_text  # sanity: replacement matched
+    project_path.write_text(updated, encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+
+    assert result.exit_code == 1
+    assert "collides with a protected input path" in result.output
+
+    # builds_root（packages/ を含む）が一切作られない — preflight が plan 束の
+    # 構築（＝ packages/ 公開）より前に拒否するため。
+    assert not (project_dir / "builds").exists()
+    # recast_plan.json も書かれない。recast_state.json は上で用意した
+    # プレースホルダ（= score 自身）のまま一切書き換わらない。
+    assert not (project_dir / "recast_plan.json").exists()
+    assert (project_dir / "recast_state.json").read_bytes() == b"placeholder\n"
+
+
 def test_recast_plan_blocks_capability_on_corrupted_device_profile(
     tmp_path: Path, monkeypatch
 ) -> None:
