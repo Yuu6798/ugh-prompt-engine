@@ -167,7 +167,7 @@ class RecastPlan(RecastModel):
     であれば常に同じ JSON bytes になる（snapshot 比較の前提）。
     """
 
-    schema_version: Literal["recast-plan/0.1"] = RECAST_PLAN_SCHEMA_VERSION
+    schema_version: Literal["recast-plan/0.1"]
     project_id: str
     variant: str
     backend: str
@@ -1204,6 +1204,7 @@ def build_recast_plan_artifacts(
             mode_overrides_declared=mode_overrides_declared,
         )
         plan = RecastPlan(
+            schema_version=RECAST_PLAN_SCHEMA_VERSION,
             project_id=project.project.id,
             variant=variant,
             backend=backend,

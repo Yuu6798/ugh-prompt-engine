@@ -108,7 +108,7 @@ class RecastStateFile(RecastStateModel):
     pydantic の `ValidationError` により fail-closed で拒否される
     （他 recast loader と同じ「ラップしない」規約）。"""
 
-    schema_version: Literal["recast-state/0.1"] = RECAST_STATE_SCHEMA_VERSION
+    schema_version: Literal["recast-state/0.1"]
     runs: Dict[str, RecastRunState] = Field(default_factory=dict)
 
 
@@ -134,7 +134,7 @@ def load_recast_state(project_dir: Path | str) -> RecastStateFile:
     """
     path = _state_path(project_dir)
     if not path.is_file():
-        return RecastStateFile()
+        return RecastStateFile(schema_version=RECAST_STATE_SCHEMA_VERSION)
     raw_bytes = path.read_bytes()
     data = json.loads(raw_bytes)
     if not isinstance(data, dict):

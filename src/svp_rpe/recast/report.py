@@ -129,9 +129,17 @@ class RecastReportCoverage(RecastReportModel):
 
 class IdentityAssessment(RecastReportModel):
     """予約フィールド: 単一の同一性スコアは本 PR の管轄外（D-1 継承）。
-    将来 Design Memo が閾値付き判定を定義するまで `enabled=false` のみ。"""
+    将来 Design Memo が閾値付き判定を定義するまで `enabled=false` のみ。
 
-    enabled: bool = False
+    `enabled` は `Literal[False]`（Codex P2, #210 round 8 指摘10）: `bool` の
+    ままだと手編集/別経路の report が `enabled: true` を主張してもそのまま
+    受理されてしまうが、`render_recast_summary_markdown` は無条件で
+    `enabled: false` 固定文言を描画するため、report と summary が矛盾した
+    ままレビューへ出回る。ツールが実際には計算していない同一性評価を
+    掲示できないよう、読み込み時に fail-closed で強制する（WI4 の閾値
+    Design Memo が `enabled=true` を許す新スキーマを定義するまで不変）。"""
+
+    enabled: Literal[False] = False
 
 
 def _tally_anchor_coverage(anchors: List[RecastReportAnchor]) -> RecastReportCoverage:
@@ -150,7 +158,7 @@ def _tally_anchor_coverage(anchors: List[RecastReportAnchor]) -> RecastReportCov
 class RecastReport(RecastReportModel):
     """`svprpe recast ingest` の観測段が発行する recast-report/0.1 本体。"""
 
-    schema_version: Literal["recast-report/0.1"] = RECAST_REPORT_SCHEMA_VERSION
+    schema_version: Literal["recast-report/0.1"]
     project_id: str
     variant: str
     backend: str
