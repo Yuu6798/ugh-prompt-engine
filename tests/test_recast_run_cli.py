@@ -275,6 +275,124 @@ def test_recast_ingest_rejects_when_inputs_are_stale(tmp_path: Path) -> None:
     assert "ingest" not in status_result.output
 
 
+def test_recast_ingest_succeeds_with_same_take_after_observation_anchors_typo_fixed(
+    tmp_path: Path,
+) -> None:
+    """Codex P2 review（PR #212 指摘・plan.py:783）の回復フロー受け入れ条件:
+    `observation.anchors` の typo 修正（注文書・生成音声のいずれにも影響しない
+    編集）だけでは `inputs_digest` は変化せず、`recast run` 済みの
+    `awaiting_generation` run を stale 化させない — 同じ take で `recast
+    ingest` がそのまま成功することを検証する。
+
+    `_project_identity_digest_component` が `observation` 節を除いた
+    canonical 射影を使うようになる前は、project.yaml の raw bytes 全体を
+    ハッシュしていたため、この typo 修正だけで stale 判定され、注文書と
+    無関係な理由で `recast run` の再実行を強いられていた（fix 前の挙動は
+    `test_recast_ingest_rejects_when_inputs_are_stale` と同型の「project.yaml
+    が変わったら常に stale」だった）。"""
+    project_path = _copy_demo_project(tmp_path)
+
+    # 「typo」を模す: observation.anchors に typo 済みの anchor id を持たせた
+    # 状態で run する（demo fixture は既定で observation.enabled: false /
+    # anchors: [] のため、まず typo 版を書き込む）。
+    project_text = project_path.read_text(encoding="utf-8")
+    typo_project_text = project_text.replace(
+        "observation:\n  enabled: false\n  anchors: []\n",
+        'observation:\n  enabled: false\n  anchors: ["harmny"]\n',
+        1,
+    )
+    assert typo_project_text != project_text  # sanity
+    project_path.write_text(typo_project_text, encoding="utf-8")
+
+    run_result = runner.invoke(
+        app, ["recast", "run", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert run_result.exit_code == 0, run_result.output
+
+    takes_dir = project_path.parent / "builds" / "takes" / "edm@suno"
+    takes_dir.mkdir(parents=True, exist_ok=True)
+    audio_path = takes_dir / "take-01.wav"
+    audio_bytes = b"RIFF....WAVEfake-audio-bytes"
+    audio_path.write_bytes(audio_bytes)
+
+    # typo を修正する（注文書・音源のいずれにも影響しない project.yaml 編集）。
+    fixed_project_text = typo_project_text.replace(
+        'anchors: ["harmny"]', 'anchors: ["harmony"]', 1
+    )
+    assert fixed_project_text != typo_project_text  # sanity
+    project_path.write_text(fixed_project_text, encoding="utf-8")
+
+    ingest_result = runner.invoke(
+        app,
+        [
+            "recast",
+            "ingest",
+            str(project_path),
+            "--variant",
+            "edm",
+            "--backend",
+            "suno",
+            "--audio",
+            str(audio_path),
+        ],
+    )
+
+    assert ingest_result.exit_code == 0, ingest_result.output
+    assert "stale" not in ingest_result.output
+
+    state_file = load_recast_state(project_path.parent)
+    run = state_file.runs["edm@suno"]
+    assert run.state == "generated"
+
+    # 同じ take(同一 bytes)がそのまま収蔵されている(再生成を強いられていない)。
+    take_json = json.loads((takes_dir / "take.json").read_text(encoding="utf-8"))
+    assert take_json["source"] == "manual"
+    ingested_audio = (takes_dir / "take-01.wav").read_bytes()
+    assert ingested_audio == audio_bytes
+
+
+def test_recast_ingest_rejects_when_non_observation_project_field_edited(
+    tmp_path: Path,
+) -> None:
+    """`observation` 以外の project.yaml フィールド（例: `project.id`）の編集は
+    従来どおり stale 判定される — `_project_identity_digest_component` が
+    落とすのは `observation` 節だけで、それ以外は依然として raw な差分検出の
+    対象であることを確認する回帰テスト（PR #212 指摘の対応範囲確認）。"""
+    project_path = _copy_demo_project(tmp_path)
+    run_result = runner.invoke(
+        app, ["recast", "run", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert run_result.exit_code == 0, run_result.output
+
+    project_text = project_path.read_text(encoding="utf-8")
+    updated_text = project_text.replace(
+        'id: "midnight-signal-demo"', 'id: "midnight-signal-demo-renamed"', 1
+    )
+    assert updated_text != project_text  # sanity
+    project_path.write_text(updated_text, encoding="utf-8")
+
+    audio_path = tmp_path / "external.wav"
+    audio_path.write_bytes(b"RIFF....WAVEfake-audio-bytes")
+
+    result = runner.invoke(
+        app,
+        [
+            "recast",
+            "ingest",
+            str(project_path),
+            "--variant",
+            "edm",
+            "--backend",
+            "suno",
+            "--audio",
+            str(audio_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "stale" in result.output
+
+
 def test_recast_ingest_rejects_when_plan_artifact_is_stale(tmp_path: Path) -> None:
     project_path = _copy_demo_project(tmp_path)
     run_result = runner.invoke(

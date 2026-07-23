@@ -3,7 +3,10 @@
 `build_recast_plan` は `LoadedRecastProject`（PR1 の loader が解決した参照一式）+
 `variant` + `backend` から、以下を 1 パイプラインとして評価する:
 
-0. single-read 束: 入力一式（project は loader 済み sha を再利用/score/
+0. single-read 束: 入力一式（project は `_project_identity_digest_component`
+   経由で `observation` 節を除いた canonical 射影の digest（Codex P2 review,
+   PR #212 指摘: observation 編集だけで take を stale 化させないため。
+   `compute_recast_inputs_digest` と同一 single source）/score/
    identity_manifest/arrangement spec/capability profile/mode_overrides/
    device profile）を **各 1 回だけ `read_bytes()`** し、その同一 bytes から
    `inputs_digest`（`arrange.bundle.compute_content_digest` 流用）の hash 計算と
@@ -52,6 +55,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import json
 import os
 import re
 import tempfile
@@ -764,23 +768,52 @@ def _device_profile_digest_component(
     return {"device_profile": hashlib.sha256(profile_bytes).hexdigest()}
 
 
+def _project_identity_digest_component(project: RecastProject) -> str:
+    """`RecastProject` の inputs_digest 用 identity 成分:
+    `observation` 節を除いた canonical projection の sha256。
+
+    `observation`（`ObservationConfig.enabled`/`anchors`）は生成後の
+    observe/report 段（`recast/report.py` の D-1 coverage 写像、
+    `arrange/observe.py:observe_generated_artifact`）にのみ作用し、
+    注文書（`ManualInvoker`）・`PerformancePackage`・生成音源のいずれの
+    同一性にも寄与しない — take を生成する `recast run`/`ManualInvoker.
+    collect()` は `observation` を一切参照しない。よって project 全体の
+    raw bytes ではなく `observation` を落とした canonical 射影を使うことで、
+    observation 設定のみの編集（例: anchor id の typo 修正）は
+    `inputs_digest` を変化させない（Codex P2 review, PR #212 指摘: 以前は
+    project 全体の raw bytes を使っていたため、注文書・生成音声に一切
+    影響しない observation 編集だけで `awaiting_generation` な run が
+    stale 拒否され、正当な take を失って `recast run` の再実行を強いられて
+    いた）。`RecastProject.model_dump()` は pydantic の deterministic
+    field order で決定論的だが、`json.dumps(sort_keys=True)` でさらに
+    key 順を固定してから hash する（`compute_content_digest` と同じ
+    canonical JSON 規約）。"""
+    payload = project.model_dump(mode="json", exclude_none=True)
+    payload.pop("observation", None)
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def compute_recast_inputs_digest(
     loaded: LoadedRecastProject, *, variant: str, backend: str
 ) -> str:
-    """`(variant, backend)` run が参照する入力一式の raw bytes sha256 を
-    canonical digest へ合成する（`arrange.bundle.compute_content_digest` 流用）。
+    """`(variant, backend)` run が参照する入力一式の digest を canonical
+    digest へ合成する（`arrange.bundle.compute_content_digest` 流用）。
 
     `loaded` はロード時点で score/identity_manifest/arrangement/capability_profile
     の実在を検証済みのため、これらは読み取りをガードしない（`build_recast_plan` の
-    既存ステップ 3/6 の raw read と同じ規約）。identity manifest が参照する
-    source/anchor artifact は `_identity_reference_digest_components` が、
-    実際に使われる device profile は `_device_profile_digest_component` が
-    それぞれ fail-closed に折り込む（読めない/破損していても例外を送出しない）。
+    既存ステップ 3/6 の raw read と同じ規約）。project 自体の成分は
+    `_project_identity_digest_component`（`observation` 節を除いた canonical
+    射影）を使う — `build_recast_plan_artifacts` の single-read 束と同一
+    single source（下記参照）。identity manifest が参照する source/anchor
+    artifact は `_identity_reference_digest_components` が、実際に使われる
+    device profile は `_device_profile_digest_component` がそれぞれ
+    fail-closed に折り込む（読めない/破損していても例外を送出しない）。
     `recast plan` はこの digest を state へ永続化し、`recast status` は現在の
     入力から再計算した digest と突き合わせて stale run（永続化後に入力または
     参照先 artifact が変更された run）を検出する。"""
     components: Dict[str, str] = {
-        "project": loaded.sha256,
+        "project": _project_identity_digest_component(loaded.project),
         "score": sha256_file(loaded.score_path),
         "identity_manifest": sha256_file(loaded.identity_manifest_path),
         "arrangement_spec": sha256_file(loaded.arrangement_paths[variant]),
@@ -967,7 +1000,9 @@ def build_recast_plan_artifacts(
     # ======================================================================
     # single-read bundle: 全入力ファイルをここで 1 回ずつ read_bytes する。
     # ======================================================================
-    digest_components: Dict[str, str] = {"project": loaded.sha256}
+    digest_components: Dict[str, str] = {
+        "project": _project_identity_digest_component(project)
+    }
 
     # --- score ---------------------------------------------------------------
     score_bytes = loaded.score_path.read_bytes()
