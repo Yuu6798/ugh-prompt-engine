@@ -71,6 +71,21 @@ musicgen = ["transformers", "torch", "scipy", "sentencepiece"]
 # ".[lyrics]"` alone must stand up the default (separation-included) path;
 # `--lyrics-no-separate` remains the demucs-free runtime opt-out.
 lyrics = ["faster-whisper>=1.0", "demucs>=4.0"]
+# crepe (MARL) — MIT-licensed convolutional monophonic F0 estimator, one of
+# the melody-observability track's slow-lane extractors
+# (rpe/learned/crepe_adapter.py). PyPI distribution and import name are both
+# "crepe". Pretrained weights ship inside the wheel; do NOT bundle them into
+# this repo. Pulls in tensorflow — CI never installs this extra
+# (the full test suite MUST pass without it; the observability harness's
+# default pyin route needs only core librosa). See docs/melody_observability.md.
+crepe = ["crepe>=0.0.12"]
+# essentia (MTG) — Melodia predominant-melody F0 for full mixes
+# (rpe/learned/melodia_adapter.py). ⚠ Essentia is AGPL-3.0 (copyleft): this
+# extra MUST stay out of the standard install / dev / CI and is opt-in ONLY in
+# the slow/manual lane, a stronger constraint than the MIT/Apache/CC0 extras.
+# PyPI distribution and import name are both "essentia". See the melodia
+# adapter's module-docstring license note and docs/melody_observability.md.
+melodia = ["essentia"]
 
 [project.scripts]
 svprpe = "svp_rpe.cli:app"
