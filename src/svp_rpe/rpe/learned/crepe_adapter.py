@@ -1,11 +1,12 @@
 """rpe/learned/crepe_adapter.py — CREPE 単旋律 F0 抽出アダプタ。
 
-Optional via the `crepe` extra. CREPE（Kim et al. 2018, MIT ライセンス）は
-畳み込み F0 推定器で、フレーム単位に (time, frequency_hz, confidence) を返す。
-本アダプタはそれを melody 観測ゲートの共通 F0 トラック
+Manual / external integration only（**published extra なし**）。CREPE（Kim et al.
+2018）は畳み込み F0 推定器で、フレーム単位に (time, frequency_hz, confidence) を
+返す。本アダプタはそれを melody 観測ゲートの共通 F0 トラック
 （`melody.observability.MelodyObservation` の frame_* フィールド）へ渡せる素の
 tuple 形で返す。決定論 RPE フィールドへは一切書き込まない
-（`docs/learned_models_policy.md` Section 2）。
+（`docs/learned_models_policy.md` Section 2）。使う場合は slow/manual lane で
+手動 `pip install crepe` する（下記ライセンス注意）。`_INSTALL_HINT` と同じ方針。
 
 Upstream API note (crepe >= 0.0.12):
     `crepe.predict(audio, sr, viterbi=True, step_size=10, verbose=0)` は
@@ -14,11 +15,19 @@ Upstream API note (crepe >= 0.0.12):
     デコードで滑らかな系列にする（決定論・乱数なし）。CREPE は内部で 16 kHz へ
     リサンプルするため、入力 sample rate をそのまま渡してよい。
 
-License note:
-    CREPE のコードは MIT。事前学習済みモデル重みは pip パッケージに同梱され
-    （`crepe` の PyPI wheel が model-*.h5 を含む）、上流 README に基づき研究利用
-    可能。重みの由来検証は導入時（実推論を回す環境）に行う slow-lane の課題で
-    あり、本アダプタは重みを同梱しない。
+License note（設計 §4 ライセンス方針・Codex 指摘）:
+    CREPE の**コード**は MIT だが、事前学習済みモデル重み（model-*.h5、pip wheel
+    同梱）の**重みライセンスは別途 inspect して pin していない**。
+    `docs/learned_models_policy.md` §4 は「permissive なコードライセンスは permissive
+    な重みを含意しない。上流重みはコードと別に inspect し、各 `LearnedModelInfo` は
+    具体的な `weights_license` を pin せよ」と要求する。この pin が付くまで、
+    installable な `[crepe]` extra を publish すると重み由来が未検証の runtime 依存を
+    宣言することになり方針に反する。よって CREPE は Melodia と同様の **MANUAL /
+    external 統合**（published extra なし）とし、`weights_license` は「未検証」を
+    fail-closed で明示する。重みライセンスの実確認と pin は machine-dependent な
+    slow-lane 課題（CLAUDE.md レビュー振り分けの Codex/User 側）であり、確認後に
+    `docs/learned_models_policy.md` へ記録した上で extra 昇格を検討する。本アダプタは
+    重みを同梱しない。
 
 Determinism: `viterbi=True` の CREPE 推論は RPE の他 learned アダプタと同じく
 same-machine 決定論契約（TF カーネル選択でクロスマシンの浮動小数点経路は変わり
@@ -49,11 +58,26 @@ _MODEL_TASK = "pitch"
 _MODEL_PROVIDER = "marl/crepe"
 _SOURCE_MODEL = "crepe:predict"
 _CODE_LICENSE = "MIT (marl/crepe code; model weights bundled in the pip wheel)"
-_WEIGHTS_LICENSE = "bundled with the crepe pip wheel; provenance verified at adoption time"
+# fail-closed: 重みライセンスを別途 inspect して pin するまで「未検証」を明示する
+# （false permissive を主張しない・policy §4）。実確認後に具体ライセンスへ差し替える。
+_WEIGHTS_LICENSE = (
+    "UNVERIFIED — bundled model-*.h5 weights license not yet separately inspected "
+    "and pinned (docs/learned_models_policy.md §4); CREPE kept as manual integration "
+    "until a machine-dependent verification pins it"
+)
 
+# NOTE: there is deliberately no published `[crepe]` extra — CREPE's bundled
+# weights license is not yet inspected/pinned (see the module docstring's
+# license note) and docs/learned_models_policy.md §4 forbids advertising a
+# runtime dependency with unverified weights provenance. CREPE is a MANUAL /
+# external integration like Melodia: install it by hand in the slow/manual
+# lane. This hint therefore points to a direct install, not an extra.
 _INSTALL_HINT = (
-    "crepe is not installed. Install it via the optional `crepe` extra:\n"
-    '    pip install -e ".[crepe]"'
+    "crepe is not installed. CREPE is a manual/external integration only "
+    "(no published extra): its bundled model weights license is not yet "
+    "separately inspected and pinned (docs/learned_models_policy.md §4). "
+    "Install it by hand in the slow/manual lane:\n"
+    "    pip install crepe"
 )
 
 
