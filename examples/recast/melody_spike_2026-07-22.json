@@ -1,0 +1,509 @@
+{
+  "audio": {
+    "S1:base": {
+      "contour_frame_count": 1938,
+      "interval_count": 0,
+      "intervals": [],
+      "melody_contour_none": false,
+      "note_count": 1,
+      "notes": [
+        68
+      ],
+      "sample_count": 3969000,
+      "wav_sha256": "24053fe910d4ca8b1e5a3d67a7d3134d6e72e663c0ac623288a288c7990207e4"
+    },
+    "S1:transposed_down": {
+      "contour_frame_count": 2297,
+      "interval_count": 3,
+      "intervals": [
+        -4,
+        2,
+        2
+      ],
+      "melody_contour_none": false,
+      "note_count": 4,
+      "notes": [
+        68,
+        64,
+        66,
+        68
+      ],
+      "sample_count": 4704000,
+      "wav_sha256": "e616e518141f2d66c93352092af284376c53329b83f8894bfb9ca334d266cd46"
+    },
+    "S1:transposed_up": {
+      "contour_frame_count": 1622,
+      "interval_count": 2,
+      "intervals": [
+        -2,
+        2
+      ],
+      "melody_contour_none": false,
+      "note_count": 3,
+      "notes": [
+        63,
+        61,
+        63
+      ],
+      "sample_count": 3320472,
+      "wav_sha256": "6301c90259ccc33b8d459d5b7e65bf0257c3890dbdbf4540cdb310f74d91e8c6"
+    },
+    "S2:base": {
+      "contour_frame_count": 2477,
+      "interval_count": 3,
+      "intervals": [
+        -3,
+        -4,
+        2
+      ],
+      "melody_contour_none": false,
+      "note_count": 4,
+      "notes": [
+        68,
+        65,
+        61,
+        63
+      ],
+      "sample_count": 5071500,
+      "wav_sha256": "d2e3dc3f131d3e37d46900b8b9316fb169d56c93c3635b8c7d7be9107a6106b2"
+    },
+    "S2:transposed_down": {
+      "contour_frame_count": 3128,
+      "interval_count": 2,
+      "intervals": [
+        -3,
+        -4
+      ],
+      "melody_contour_none": false,
+      "note_count": 3,
+      "notes": [
+        64,
+        61,
+        69
+      ],
+      "sample_count": 6406105,
+      "wav_sha256": "3d1b0d057e132ab182583ae0368fdc666544924acfc9a670df236709822de171"
+    },
+    "S2:transposed_up": {
+      "contour_frame_count": 1965,
+      "interval_count": 2,
+      "intervals": [
+        -4,
+        2
+      ],
+      "melody_contour_none": false,
+      "note_count": 3,
+      "notes": [
+        68,
+        64,
+        66
+      ],
+      "sample_count": 4023669,
+      "wav_sha256": "86baf8577ecf3c72262b69b282452fb004f59f01d58f730c88b705d479a091b2"
+    },
+    "S3:base": {
+      "contour_frame_count": 1034,
+      "interval_count": 2,
+      "intervals": [
+        3,
+        -5
+      ],
+      "melody_contour_none": false,
+      "note_count": 3,
+      "notes": [
+        64,
+        67,
+        62
+      ],
+      "sample_count": 2116800,
+      "wav_sha256": "f0b6df1f85d81dd2044e9da361b705cdad21a4a08a972e65380aac5724f00189"
+    },
+    "S3:transposed_down": {
+      "contour_frame_count": 1193,
+      "interval_count": 1,
+      "intervals": [
+        -5
+      ],
+      "melody_contour_none": false,
+      "note_count": 2,
+      "notes": [
+        68,
+        63
+      ],
+      "sample_count": 2442463,
+      "wav_sha256": "a61e17626d7446f274b31fc9bc0a178ca55b72ca3c623c8431c624818d563c51"
+    },
+    "S3:transposed_up": {
+      "contour_frame_count": 886,
+      "interval_count": 2,
+      "intervals": [
+        -4,
+        2
+      ],
+      "melody_contour_none": false,
+      "note_count": 3,
+      "notes": [
+        67,
+        63,
+        65
+      ],
+      "sample_count": 1814400,
+      "wav_sha256": "5d1a1ba82b24c2f6ffcf48015a46ccff07f00714c277053672c74ea7366c3ca9"
+    }
+  },
+  "schema_version": "1.0",
+  "scores": {
+    "S1": {
+      "bpm": 128,
+      "chord_progression": [],
+      "key": "C minor",
+      "structure_bars": [
+        {
+          "bars": 8,
+          "section": "intro"
+        },
+        {
+          "bars": 16,
+          "section": "verse"
+        },
+        {
+          "bars": 16,
+          "section": "chorus"
+        },
+        {
+          "bars": 8,
+          "section": "bridge"
+        }
+      ],
+      "title": "Midnight Signal"
+    },
+    "S2": {
+      "bpm": 96,
+      "chord_progression": [
+        {
+          "quality": "major",
+          "root": "G#"
+        },
+        {
+          "quality": "minor",
+          "root": "F"
+        },
+        {
+          "quality": "major",
+          "root": "C#"
+        },
+        {
+          "quality": "major",
+          "root": "D#"
+        }
+      ],
+      "key": "Ab major",
+      "structure_bars": [
+        {
+          "bars": 8,
+          "section": "intro"
+        },
+        {
+          "bars": 12,
+          "section": "verse"
+        },
+        {
+          "bars": 20,
+          "section": "chorus"
+        },
+        {
+          "bars": 6,
+          "section": "bridge"
+        }
+      ],
+      "title": "Amber Static"
+    },
+    "S3": {
+      "bpm": 150,
+      "chord_progression": [
+        {
+          "quality": "minor",
+          "root": "E"
+        },
+        {
+          "quality": "major",
+          "root": "C"
+        },
+        {
+          "quality": "major",
+          "root": "G"
+        },
+        {
+          "quality": "major",
+          "root": "D"
+        }
+      ],
+      "key": "E minor",
+      "structure_bars": [
+        {
+          "bars": 4,
+          "section": "intro"
+        },
+        {
+          "bars": 10,
+          "section": "verse"
+        },
+        {
+          "bars": 12,
+          "section": "chorus"
+        },
+        {
+          "bars": 4,
+          "section": "bridge"
+        }
+      ],
+      "title": "Glass Sprint"
+    }
+  },
+  "similarity_pairs": [
+    {
+      "a": "S2:base",
+      "b": "S2:transposed_up",
+      "category": "same_song_variant",
+      "dtw_path_len": 3,
+      "dtw_total_cost": 1.0,
+      "lcs_len": 2,
+      "sim_dtw": 0.75,
+      "sim_lcs": 0.6667
+    },
+    {
+      "a": "S2:base",
+      "b": "S2:transposed_down",
+      "category": "same_song_variant",
+      "dtw_path_len": 3,
+      "dtw_total_cost": 6.0,
+      "lcs_len": 2,
+      "sim_dtw": 0.3333,
+      "sim_lcs": 0.6667
+    },
+    {
+      "a": "S3:base",
+      "b": "S3:transposed_up",
+      "category": "same_song_variant",
+      "dtw_path_len": 2,
+      "dtw_total_cost": 10.0,
+      "lcs_len": 0,
+      "sim_dtw": 0.1667,
+      "sim_lcs": 0.0
+    },
+    {
+      "a": "S3:base",
+      "b": "S3:transposed_down",
+      "category": "same_song_variant",
+      "dtw_path_len": 2,
+      "dtw_total_cost": 4.0,
+      "lcs_len": 1,
+      "sim_dtw": 0.3333,
+      "sim_lcs": 0.5
+    },
+    {
+      "a": "S2:base",
+      "b": "S1:transposed_up",
+      "category": "cross_song",
+      "dtw_path_len": 3,
+      "dtw_total_cost": 3.0,
+      "lcs_len": 1,
+      "sim_dtw": 0.5,
+      "sim_lcs": 0.3333
+    },
+    {
+      "a": "S2:base",
+      "b": "S1:transposed_down",
+      "category": "cross_song",
+      "dtw_path_len": 4,
+      "dtw_total_cost": 1.0,
+      "lcs_len": 2,
+      "sim_dtw": 0.8,
+      "sim_lcs": 0.6667
+    },
+    {
+      "a": "S2:base",
+      "b": "S3:base",
+      "category": "cross_song",
+      "dtw_path_len": 3,
+      "dtw_total_cost": 12.0,
+      "lcs_len": 0,
+      "sim_dtw": 0.2,
+      "sim_lcs": 0.0
+    },
+    {
+      "a": "S2:base",
+      "b": "S3:transposed_up",
+      "category": "cross_song",
+      "dtw_path_len": 3,
+      "dtw_total_cost": 1.0,
+      "lcs_len": 2,
+      "sim_dtw": 0.75,
+      "sim_lcs": 0.6667
+    },
+    {
+      "a": "S2:base",
+      "b": "S3:transposed_down",
+      "category": "cross_song",
+      "dtw_path_len": 3,
+      "dtw_total_cost": 8.0,
+      "lcs_len": 0,
+      "sim_dtw": 0.2727,
+      "sim_lcs": 0.0
+    },
+    {
+      "a": "S3:base",
+      "b": "S1:transposed_up",
+      "category": "cross_song",
+      "dtw_path_len": 2,
+      "dtw_total_cost": 10.0,
+      "lcs_len": 0,
+      "sim_dtw": 0.1667,
+      "sim_lcs": 0.0
+    },
+    {
+      "a": "S3:base",
+      "b": "S1:transposed_down",
+      "category": "cross_song",
+      "dtw_path_len": 3,
+      "dtw_total_cost": 11.0,
+      "lcs_len": 0,
+      "sim_dtw": 0.2143,
+      "sim_lcs": 0.0
+    },
+    {
+      "a": "S3:base",
+      "b": "S2:base",
+      "category": "cross_song",
+      "dtw_path_len": 3,
+      "dtw_total_cost": 12.0,
+      "lcs_len": 0,
+      "sim_dtw": 0.2,
+      "sim_lcs": 0.0
+    },
+    {
+      "a": "S3:base",
+      "b": "S2:transposed_up",
+      "category": "cross_song",
+      "dtw_path_len": 2,
+      "dtw_total_cost": 10.0,
+      "lcs_len": 0,
+      "sim_dtw": 0.1667,
+      "sim_lcs": 0.0
+    },
+    {
+      "a": "S3:base",
+      "b": "S2:transposed_down",
+      "category": "cross_song",
+      "dtw_path_len": 2,
+      "dtw_total_cost": 7.0,
+      "lcs_len": 0,
+      "sim_dtw": 0.2222,
+      "sim_lcs": 0.0
+    }
+  ],
+  "skips": [
+    {
+      "note_count": 1,
+      "reason": "insufficient_notes_for_intervals",
+      "take": "S1:base"
+    },
+    {
+      "category": "same_song_variant",
+      "pair": [
+        "S1:base",
+        "S1:transposed_up"
+      ],
+      "reason": "similarity_skipped_empty_intervals"
+    },
+    {
+      "category": "same_song_variant",
+      "pair": [
+        "S1:base",
+        "S1:transposed_down"
+      ],
+      "reason": "similarity_skipped_empty_intervals"
+    },
+    {
+      "category": "cross_song",
+      "pair": [
+        "S1:base",
+        "S2:base"
+      ],
+      "reason": "similarity_skipped_empty_intervals"
+    },
+    {
+      "category": "cross_song",
+      "pair": [
+        "S1:base",
+        "S2:transposed_up"
+      ],
+      "reason": "similarity_skipped_empty_intervals"
+    },
+    {
+      "category": "cross_song",
+      "pair": [
+        "S1:base",
+        "S2:transposed_down"
+      ],
+      "reason": "similarity_skipped_empty_intervals"
+    },
+    {
+      "category": "cross_song",
+      "pair": [
+        "S1:base",
+        "S3:base"
+      ],
+      "reason": "similarity_skipped_empty_intervals"
+    },
+    {
+      "category": "cross_song",
+      "pair": [
+        "S1:base",
+        "S3:transposed_up"
+      ],
+      "reason": "similarity_skipped_empty_intervals"
+    },
+    {
+      "category": "cross_song",
+      "pair": [
+        "S1:base",
+        "S3:transposed_down"
+      ],
+      "reason": "similarity_skipped_empty_intervals"
+    },
+    {
+      "category": "cross_song",
+      "pair": [
+        "S2:base",
+        "S1:base"
+      ],
+      "reason": "similarity_skipped_empty_intervals"
+    },
+    {
+      "category": "cross_song",
+      "pair": [
+        "S3:base",
+        "S1:base"
+      ],
+      "reason": "similarity_skipped_empty_intervals"
+    }
+  ],
+  "styles": {
+    "base": {
+      "bpm_bias": 0.0,
+      "seed": 20,
+      "transpose": 0
+    },
+    "transposed_down": {
+      "bpm_bias": -20.0,
+      "seed": 22,
+      "transpose": -4
+    },
+    "transposed_up": {
+      "bpm_bias": 25.0,
+      "seed": 21,
+      "transpose": 3
+    }
+  }
+}
