@@ -592,6 +592,20 @@ def test_audio_duration_reads_real_clip_length(tmp_path):
     assert _audio_duration_sec(str(tmp_path / "missing.wav")) is None
 
 
+def test_synthetic_harness_requires_expect_status(monkeypatch, tmp_path):
+    """expect_status 欠落/不正の synthetic fixture は fail-closed（None 素通り禁止）。"""
+    import scripts.run_melody_observability as harness
+
+    registry = yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))
+    # 1 つの fixture から expect_status を落とす。
+    del registry["fixtures"][0]["expect_status"]
+    bad = tmp_path / "registry.yaml"
+    bad.write_text(yaml.safe_dump(registry, allow_unicode=True), encoding="utf-8")
+    monkeypatch.setattr(harness, "REGISTRY_PATH", bad)
+    with pytest.raises(ValueError, match="invalid/missing expect_status"):
+        harness.run_synthetic(_default_thresholds())
+
+
 def test_synthetic_harness_fails_closed_on_unregistered_spec(monkeypatch):
     """registry 未登録の合成 spec id は Go/No-Go に紛れ込ませず fail-closed。"""
     import scripts.run_melody_observability as harness

@@ -236,7 +236,19 @@ def run_synthetic(thresholds: ObservabilityThresholds) -> Dict[str, Any]:
         registry = yaml.safe_load(handle)
     _require_registry_schema(registry)
     fixture_kinds = _unique_id_map(registry["fixtures"], "fixtures")
-    expect = {f["id"]: f.get("expect_status") for f in registry["fixtures"]}
+    # expect_status を全 synthetic fixture に必須化（fail-closed）。`.get` で欠落を
+    # 黙って None にすると、期待値を持たない fixture が Go/No-Go JSON に紛れ込み、
+    # registry の typo/記入漏れが publish 前に検出されない（Codex 指摘・設計 §5）。
+    _VALID_EXPECT = {"sufficient", "insufficient"}
+    expect: Dict[str, str] = {}
+    for fixture in registry["fixtures"]:
+        status = fixture.get("expect_status")
+        if status not in _VALID_EXPECT:
+            raise ValueError(
+                f"synthetic fixture {fixture['id']!r} has invalid/missing expect_status "
+                f"{status!r}; must be one of {sorted(_VALID_EXPECT)} (fail-closed 事前登録)"
+            )
+        expect[fixture["id"]] = status
 
     # fail-closed: 全ての合成 spec id は registry に事前登録されていなければならない。
     # 未登録 id を既定の input_kind へ黙って分類すると、事前登録の期待値を持たない
