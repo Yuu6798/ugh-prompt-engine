@@ -435,6 +435,17 @@ def test_pair_generation_fails_closed_on_stem_collision(tmp_path, monkeypatch):
     # 同一ソースの再生成は冪等に成功する（衝突ではない）。
     _run(src_a)
 
+    # pin 無し/破損 manifest は同一由来を証明できないので fail-closed。
+    (out_dir / "song__pairs_manifest.json").write_text("{ broken json", encoding="utf-8")
+    with pytest.raises(ValueError, match="stem collision"):
+        _run(src_a)
+
+    # manifest 欠落だが variant WAV の残骸がある場合も証明できず fail-closed。
+    (out_dir / "song__pairs_manifest.json").unlink()
+    assert list(out_dir.glob("song__*.wav"))  # 残骸が存在する前提。
+    with pytest.raises(ValueError, match="stem collision"):
+        _run(src_a)
+
 
 def test_unique_id_map_rejects_duplicate_registry_ids():
     """registry の重複 fixture id は last-wins でなく fail-closed で reject。"""

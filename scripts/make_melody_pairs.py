@@ -88,23 +88,33 @@ def main() -> int:
     # stem 衝突の fail-closed: 出力ファイル名は入力の basename（stem）だけから導くため、
     # 別ディレクトリの同名ソース（例 artist_a/song.wav と artist_b/song.wav）を同じ
     # out_dir へ生成すると後の run が前の `song__*` を黙って上書きし、additive な
-    # negative ペア構築を壊す（Codex 指摘・AGENTS §8）。既存 manifest の source_sha256 が
-    # 現ソースと異なる場合は別ソースの衝突とみなして reject する。同一 source_sha256
-    # なら同一ソースの冪等再生成なので許可する。
+    # negative ペア構築を壊す（Codex 指摘・AGENTS §8）。
+    #
+    # 既存の `<stem>__*` 成果物（manifest または variant WAV）が out_dir にあり、かつ
+    # それが**現ソースと同一だと証明できない**場合は fail-closed で reject する。証明
+    # できるのは既存 manifest の source_sha256 が現ソースと一致するときだけ（= 同一
+    # ソースの冪等再生成）。manifest が無い/破損/pin 無し（prior_sha=None）や別ソース
+    # （sha 不一致）は、prior 成果物が同一由来だと証明できないので上書きしない。
     existing_manifest = out_dir / f"{stem}__pairs_manifest.json"
+    existing_targets = list(out_dir.glob(f"{stem}__*.wav"))
     if existing_manifest.exists():
-        try:
-            prior_sha = json.loads(existing_manifest.read_text(encoding="utf-8")).get(
-                "source_sha256"
-            )
-        except (ValueError, OSError):
-            prior_sha = None
-        if prior_sha is not None and prior_sha != source_sha256:
+        existing_targets.append(existing_manifest)
+    if existing_targets:
+        prior_sha = None
+        if existing_manifest.exists():
+            try:
+                prior_sha = json.loads(existing_manifest.read_text(encoding="utf-8")).get(
+                    "source_sha256"
+                )
+            except (ValueError, OSError):
+                prior_sha = None
+        if prior_sha != source_sha256:
             raise ValueError(
-                f"pair output stem collision in {out_dir}: {existing_manifest.name} already "
-                f"exists for a DIFFERENT source (source_sha256 {prior_sha} != {source_sha256}). "
-                "同名 basename の別ソースは別 --out-dir へ出力すること（stem 名前空間の衝突を "
-                "上書きしない fail-closed）。"
+                f"pair output stem collision in {out_dir}: existing '{stem}__*' artifacts "
+                f"cannot be proven to come from this source "
+                f"(existing source_sha256 {prior_sha!r} != {source_sha256}). "
+                "別ソース / pin 無し・破損 manifest / manifest 欠落の残骸は上書きしない "
+                "fail-closed。別 --out-dir へ出力するか、既存の残骸を除去すること。"
             )
 
     # 成果物一式を staging ディレクトリに完成させてから out_dir へ os.replace で
