@@ -1266,6 +1266,7 @@ def recast_init_cmd(
     an aborted interactive prompt, a schema error, ...) leaves `--project-dir`
     untouched, never a half-initialized directory that then blocks a retry.
     """
+    import shlex
     import shutil
 
     import yaml
@@ -1546,7 +1547,14 @@ def recast_init_cmd(
             "composition_score.yaml を編集するか --interactive で再実行するまで "
             "svprpe recast plan は blocked_authoring になります。[/yellow]"
         )
-    console.print(
-        "Next step: svprpe recast plan "
-        f"{dest_dir / 'project.yaml'} --variant default --backend suno"
+    # Codex P2 review round 13 (#210 指摘18): `--project-dir` は空白/シェル
+    # メタ文字を含み得るため、生パス補間ではなく `shlex.join`（`recast/
+    # backends/manual.py:_next_command_text` と同型）で copy-paste 実行可能な
+    # コマンド文字列を組み立てる。
+    next_command = shlex.join(
+        [
+            "svprpe", "recast", "plan", str(dest_dir / "project.yaml"),
+            "--variant", "default", "--backend", "suno",
+        ]
     )
+    console.print(f"Next step: {next_command}")

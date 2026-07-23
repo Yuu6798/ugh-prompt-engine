@@ -308,6 +308,57 @@ def test_recast_init_no_interactive_generates_full_project_with_todo_core(
 
 
 @pytest.mark.slow
+def test_recast_init_next_step_command_is_shlex_quoted_for_dest_dir_with_spaces(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2（#210 round 13 指摘18）: `--project-dir` が空白を含む場合でも
+    `recast init` が表示する「Next step」コマンドが copy-paste でそのまま
+    実行可能であることを検証する。生パス補間（`f"{dest_dir / ...}"` を
+    そのまま埋め込む）だと空白入りパスがトークン境界として誤解釈される —
+    `shlex.split` で round-trip（元の実行可能引数列に戻る）することを実測
+    することで、表示文字列が実際に shlex 済みであることを機械的に確認する
+    （`recast/backends/manual.py:_next_command_text` の契約と対称）。
+
+    rich の `Console` は非 tty 実行時も既定の折返し幅（既定 80）で長い行を
+    複数行へ折り返すため、`width` を広げてから実行し「Next step:」行を
+    1 行のまま取得できるようにする（テスト方法上の都合であり、本体側の
+    表示ロジックとは無関係）。"""
+    import shlex
+
+    from svp_rpe.cli._app import console
+
+    monkeypatch.setattr(console, "width", 400)
+
+    project_dir = tmp_path / "my project dir"
+
+    result = runner.invoke(
+        app,
+        [
+            "recast", "init", str(SAMPLE_AUDIO),
+            "--project-dir", str(project_dir),
+            "--no-interactive",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    next_step_line = next(
+        line for line in result.output.splitlines() if line.startswith("Next step:")
+    )
+    command_text = next_step_line.removeprefix("Next step:").strip()
+    tokens = shlex.split(command_text)
+    assert tokens == [
+        "svprpe", "recast", "plan", str(project_dir / "project.yaml"),
+        "--variant", "default", "--backend", "suno",
+    ]
+
+    # そのコマンドが実際に実行可能であることも確認する（表示だけでなく
+    # 実効性の実測 — round 13 指摘の「copy-paste 実行不能」の反証）。
+    plan_result = runner.invoke(app, tokens[1:])
+    assert plan_result.exit_code == 1  # semantic.core が TODO のまま → blocked_authoring
+    assert "blocked_authoring" in plan_result.output
+
+
+@pytest.mark.slow
 def test_recast_init_interactive_fills_semantic_core_and_avoid(tmp_path: Path) -> None:
     project_dir = tmp_path / "proj"
 
