@@ -471,10 +471,14 @@ def test_build_bench_publishes_atomically(tmp_path, monkeypatch):
     seen: dict = {}
 
     def tracking_replace(a, b):
-        # EXDEV 回避: staging(src) は out_dir と同一 fs（out_dir.parent 直下）にある。
-        assert out_dir.parent in Path(a).parents, (a, out_dir.parent)
-        if str(b).endswith("manifest.json"):
-            seen["wavs"] = sorted(p.name for p in out_dir.glob("*.wav"))
+        # 本スクリプトの公開 op（dst が out_dir 直下）に限って EXDEV 回避を検証する。
+        # os.replace のグローバル monkeypatch は numba の JIT キャッシュ書き込み等
+        # 無関係な os.replace も拾うため、dst で自分の公開だけに絞る。
+        if Path(b).parent == out_dir:
+            # staging(src) は out_dir と同一 fs（out_dir.parent 直下）にある。
+            assert out_dir.parent in Path(a).parents, (a, out_dir.parent)
+            if str(b).endswith("manifest.json"):
+                seen["wavs"] = sorted(p.name for p in out_dir.glob("*.wav"))
         return real_replace(a, b)
 
     monkeypatch.setattr(bench_mod.os, "replace", tracking_replace)
@@ -505,13 +509,17 @@ def test_pair_generation_is_atomic_manifest_last(tmp_path, monkeypatch):
     seen_when_manifest_published: dict = {}
 
     def tracking_replace(a, b):
-        # EXDEV 回避: staging(src) は out_dir と同一 fs（out_dir.parent 直下）にある。
-        assert out_dir.parent in Path(a).parents, (a, out_dir.parent)
-        # manifest を公開する瞬間、out_dir に既に全 variant が存在していること。
-        if str(b).endswith("__pairs_manifest.json"):
-            seen_when_manifest_published["variants"] = sorted(
-                p.name for p in out_dir.glob("*.wav")
-            )
+        # 本スクリプトの公開 op（dst が out_dir 直下）に限って検証する。os.replace の
+        # グローバル monkeypatch は librosa/numba の JIT キャッシュ書き込み等
+        # 無関係な os.replace も拾うため、dst で自分の公開だけに絞る。
+        if Path(b).parent == out_dir:
+            # EXDEV 回避: staging(src) は out_dir と同一 fs（out_dir.parent 直下）。
+            assert out_dir.parent in Path(a).parents, (a, out_dir.parent)
+            # manifest を公開する瞬間、out_dir に既に全 variant が存在していること。
+            if str(b).endswith("__pairs_manifest.json"):
+                seen_when_manifest_published["variants"] = sorted(
+                    p.name for p in out_dir.glob("*.wav")
+                )
         return real_replace(a, b)
 
     monkeypatch.setattr(pairs.os, "replace", tracking_replace)
