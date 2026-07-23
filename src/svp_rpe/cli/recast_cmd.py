@@ -60,6 +60,31 @@ def _read_plan_sha256(path: Path) -> Optional[str]:
         return None
 
 
+def _orders_digest_matches(
+    loaded: Any, variant: str, backend: str, recorded_orders_digest: Optional[str]
+) -> bool:
+    """`recast status`（Codex P2 review round 10 指摘12）: `awaiting_generation`
+    の manual backend run に対し、注文書ディレクトリの現在の
+    `compute_orders_digest` を再計算し `recorded_orders_digest`（`recast run`
+    が pin した値）と突き合わせる。`recorded_orders_digest` が `None`（pin
+    なし・旧 state）、orders ディレクトリが読めない（不在・欠落ファイル
+    等）、または digest が不一致のいずれでも `False`（stale）を返す —
+    `recast ingest` 自身の collect 前 precheck（本ファイル内、同じ
+    `compute_orders_digest`/`resolve_orders_dir` を使う）と同じ fail-closed
+    判定を、実行前に status で先出しする。"""
+    from svp_rpe.recast.backends.manual import compute_orders_digest
+    from svp_rpe.recast.run_paths import resolve_orders_dir
+
+    if recorded_orders_digest is None:
+        return False
+    order_dir = resolve_orders_dir(loaded, variant, backend)
+    try:
+        current_orders_digest = compute_orders_digest(order_dir)
+    except (OSError, ValueError):
+        return False
+    return current_orders_digest == recorded_orders_digest
+
+
 _SLUG_SANITIZE_RE = re.compile(r"[^a-z0-9]+")
 _SLUG_MULTI_DASH_RE = re.compile(r"-{2,}")
 
@@ -772,6 +797,56 @@ def recast_ingest_cmd(
         )
         raise typer.Exit(code=1)
 
+    # `observation.anchors`（Codex P2, #211）: 非空なら観測対象を絞る。空
+    # （既定）は「絞り込みなし」— 従来どおり全 manifest anchor を観測する。
+    anchor_scope = (
+        set(loaded.project.observation.anchors)
+        if loaded.project.observation.anchors
+        else None
+    )
+
+    # 未知 id の事前検査（Codex P2, #210 round 9 指摘11; round 10 指摘13で
+    # ここ＝collect/publish/record_state より前へ前倒し）: typo/削除済み
+    # anchor を含む `observation.anchors` は設定ミスであり、実行時の観測
+    # 失敗（`observation_incomplete`）とは別種のエラーとして扱う。これを
+    # `invoker.collect()`/`record_state("generated")` の後（旧位置）に置くと、
+    # 設定 typo であっても take の収蔵（外部生成音声の take-01.wav への
+    # copy）と `generated` への state 遷移が先に確定してしまい、typo 修正後に
+    # `awaiting_generation` からの再 ingest ができなくなる（take はもう
+    # awaiting_generation の注文に対応しない、かつ orders_digest precheck が
+    # 次回 ingest を弾く）。他の precheck 群（inputs_digest/plan_sha256/
+    # orders_digest）と同じ「何も書かず exit」位置へ揃えることで、typo
+    # 修正後にそのまま同じ take で ingest をやり直せる。
+    # `observe_generated_artifact` 自身の同型ガード（防御的多重化・
+    # `svprpe observe` 単体実行など他呼び出し元向け）とは別に、ここでは
+    # state を一切変更せず（`observation_incomplete` を記録しない）plain
+    # な Error + exit 1 とする。manifest の実 YAML 構造が壊れている場合は
+    # ここでは判定せず、通常どおり `observe_generated_artifact` 側の
+    # fail-closed 検証（`observation_incomplete` 経由）に委ねる。
+    if anchor_scope is not None:
+        manifest_bytes_for_scope_check = loaded.identity_manifest_path.read_bytes()
+        try:
+            raw_manifest_for_scope_check = yaml.safe_load(manifest_bytes_for_scope_check)
+        except yaml.YAMLError:
+            raw_manifest_for_scope_check = None
+        if isinstance(raw_manifest_for_scope_check, dict) and isinstance(
+            raw_manifest_for_scope_check.get("anchors"), list
+        ):
+            known_anchor_ids = {
+                entry.get("id")
+                for entry in raw_manifest_for_scope_check["anchors"]
+                if isinstance(entry, dict)
+            }
+            unknown_anchor_ids = anchor_scope - known_anchor_ids
+            if unknown_anchor_ids:
+                typer.echo(
+                    "Error: project.yaml observation.anchors contains anchor id(s) "
+                    f"not present in the identity manifest: {sorted(unknown_anchor_ids)} "
+                    f"(known anchor ids: {sorted(known_anchor_ids)})",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+
     # `publish=False`（Codex P2 review round 13, PR3 #208 指摘27; pr5 #210
     # round 3 指摘4 の同型修正 127891c と実装形を寄せてある）: 突合前に
     # `builds/packages/<variant>@<backend>/` を上書きしない。下の digest
@@ -903,46 +978,6 @@ def recast_ingest_cmd(
     # `artifacts.compiled is not None` を要求している（さもなくば RecastError
     # で既に exit 1 済み）ため、ここへ到達する時点で常に non-None。
     assert artifacts.compiled is not None
-    # `observation.anchors`（Codex P2, #211）: 非空なら観測対象を絞る。空
-    # （既定）は「絞り込みなし」— 従来どおり全 manifest anchor を観測する。
-    anchor_scope = (
-        set(loaded.project.observation.anchors)
-        if loaded.project.observation.anchors
-        else None
-    )
-
-    # 未知 id の事前検査（Codex P2, #210 round 9 指摘11）: typo/削除済み
-    # anchor を含む `observation.anchors` は設定ミスであり、実行時の観測
-    # 失敗（`observation_incomplete`）とは別種のエラーとして扱う —
-    # `observe_generated_artifact` 自身の同型ガード（防御的多重化・
-    # `svprpe observe` 単体実行など他呼び出し元向け）とは別に、ここでは
-    # state を一切変更せず（`observation_incomplete` を記録しない）plain
-    # な Error + exit 1 とする。manifest の実 YAML 構造が壊れている場合は
-    # ここでは判定せず、通常どおり `observe_generated_artifact` 側の
-    # fail-closed 検証（`observation_incomplete` 経由）に委ねる。
-    if anchor_scope is not None:
-        manifest_bytes_for_scope_check = loaded.identity_manifest_path.read_bytes()
-        try:
-            raw_manifest_for_scope_check = yaml.safe_load(manifest_bytes_for_scope_check)
-        except yaml.YAMLError:
-            raw_manifest_for_scope_check = None
-        if isinstance(raw_manifest_for_scope_check, dict) and isinstance(
-            raw_manifest_for_scope_check.get("anchors"), list
-        ):
-            known_anchor_ids = {
-                entry.get("id")
-                for entry in raw_manifest_for_scope_check["anchors"]
-                if isinstance(entry, dict)
-            }
-            unknown_anchor_ids = anchor_scope - known_anchor_ids
-            if unknown_anchor_ids:
-                typer.echo(
-                    "Error: project.yaml observation.anchors contains anchor id(s) "
-                    f"not present in the identity manifest: {sorted(unknown_anchor_ids)} "
-                    f"(known anchor ids: {sorted(known_anchor_ids)})",
-                    err=True,
-                )
-                raise typer.Exit(code=1)
 
     try:
         # `expected_audio_sha256=take.sha256`（Codex P2, #210 round 2 指摘2）:
@@ -1095,6 +1130,20 @@ def recast_status_cmd(
     `plan_sha256` のいずれかが `None`（旧形式/手動コピーされた state 等）の
     場合も「未確認だからスキップ」ではなく stale（pin なし）として表示する
     （Codex P2 review round 4, PR3 #208 指摘 9）。
+
+    `awaiting_generation` の manual backend run については、加えて
+    `orders_digest` も検査する（Codex P2 review round 10 指摘12）:
+    `recast run` が発行した注文書（`order_sheet.md`/`prompt.json` 等 6
+    ファイル）が発行後に編集・削除されていても、従来は次の一手として
+    無条件に `svprpe recast ingest` を案内していた — 注文書どおりに生成
+    していない（または生成すらできない）音声に対して外部生成を無駄撃ち
+    させる誘因になる。`resolve_orders_dir` 配下から現在の
+    `compute_orders_digest` を再計算し、`run.orders_digest` との不一致・
+    `run.orders_digest` 自体が `None`（pin なし）・orders ディレクトリ不在の
+    いずれかであれば stale として表示し、ingest 案内を出さない（既存の
+    inputs_digest/plan_sha256 stale 群と同型）。`recast ingest` 自身は元々
+    同じ突合を collect 前に行っているため、この表示は「実行すれば起きる
+    こと」の先出しに過ぎない（挙動追加ではない）。
     """
     from svp_rpe.recast import RecastError, load_recast_project
     from svp_rpe.recast.plan import RECAST_PLAN_FILENAME, compute_recast_inputs_digest
@@ -1138,6 +1187,16 @@ def recast_status_cmd(
                 elif run.plan_sha256 != current_plan_sha256:
                     note = "stale（plan 成果物が変更/不在）— svprpe recast plan 再実行が必要"
                     next_step = replan_step
+                elif (
+                    state == "awaiting_generation"
+                    and loaded.project.backends[backend].invocation == "manual"
+                    and not _orders_digest_matches(loaded, variant, backend, run.orders_digest)
+                ):
+                    note = (
+                        "stale（注文書が発行後に変更/欠落）— "
+                        "svprpe recast run 再実行が必要"
+                    )
+                    next_step = _NEXT_STEP_BY_STATE["verified"]
                 else:
                     next_step = _NEXT_STEP_BY_STATE.get(state, "-")
             label = f"{state} {note}".strip()
