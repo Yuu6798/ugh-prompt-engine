@@ -149,6 +149,17 @@ def run_external(manifest_path: Path, thresholds: ObservabilityThresholds) -> Di
     """
     with open(manifest_path, "r", encoding="utf-8") as handle:
         entries = json.load(handle)
+    with open(REGISTRY_PATH, "r", encoding="utf-8") as handle:
+        registry = yaml.safe_load(handle)
+
+    # fail-closed: 各 manifest entry の id は registry.yaml の external_fixtures に
+    # 事前登録され、input_kind も登録値と一致していなければならない。typo や
+    # ミスラベル（例: suno_vocals_stem を clear_lead と誤記）で誤った経路集合を
+    # 走らせ、未登録/不整合な fixture の下に一見妥当な観測を publish するのを防ぐ
+    # （合成側 fail-closed と対称・設計 §5）。
+    registered = {f["id"]: f["input_kind"] for f in registry.get("external_fixtures", [])}
+    seen_ids: set[str] = set()
+
     results: Dict[str, Any] = {
         "mode": "external",
         "manifest_path": str(manifest_path),
@@ -156,6 +167,20 @@ def run_external(manifest_path: Path, thresholds: ObservabilityThresholds) -> Di
         "fixtures": {},
     }
     for entry in entries:
+        entry_id = entry["id"]
+        if entry_id in seen_ids:
+            raise ValueError(f"duplicate external fixture id {entry_id!r} in manifest")
+        seen_ids.add(entry_id)
+        if entry_id not in registered:
+            raise ValueError(
+                f"external fixture id {entry_id!r} is not pre-registered in "
+                "registry.yaml external_fixtures (fail-closed)"
+            )
+        if entry["input_kind"] != registered[entry_id]:
+            raise ValueError(
+                f"external fixture {entry_id!r} input_kind {entry['input_kind']!r} "
+                f"!= registered {registered[entry_id]!r}"
+            )
         audio_sha256 = _sha256_file(entry["path"])
         expected = entry.get("audio_sha256")
         if expected is not None and expected != audio_sha256:

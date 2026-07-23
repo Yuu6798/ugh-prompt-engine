@@ -73,6 +73,11 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    # source の生バイト hash を pin する。librosa が decode し soundfile が
+    # 再エンコードする**前**の原本バイトを固定しないと、後で source が差し替え・
+    # 編集されても controlled-pair provenance がどの入力から生成されたかを証明
+    # できない（AGENTS §8）。
+    source_sha256 = _sha256(args.input)
     y, sr = librosa.load(args.input, sr=None, mono=True)
     args.out_dir.mkdir(parents=True, exist_ok=True)
     stem = args.input.stem
@@ -80,7 +85,12 @@ def main() -> int:
     variants = make_variants(
         y, sr, semitones=args.semitones, time_rates=args.time_rates
     )
-    manifest: Dict[str, Any] = {"source": str(args.input), "sample_rate": sr, "variants": {}}
+    manifest: Dict[str, Any] = {
+        "source": str(args.input),
+        "source_sha256": source_sha256,
+        "sample_rate": sr,
+        "variants": {},
+    }
     for name, wav in variants.items():
         out_path = args.out_dir / f"{stem}__{name}.wav"
         sf.write(out_path, wav, sr, subtype="FLOAT")

@@ -13,6 +13,7 @@ CI 安全（重依存なし）で回る層:
 from __future__ import annotations
 
 import hashlib
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -363,12 +364,13 @@ def test_external_harness_records_and_verifies_audio_hash(tmp_path):
     wav = tmp_path / "ext.wav"
     sf.write(wav, (0.3 * np.sin(2 * np.pi * 220 * t)).astype(np.float32), sr, subtype="FLOAT")
     manifest = tmp_path / "ext.json"
+    # real_lead_synth は registry の external_fixtures に clear_lead で登録済み。
     manifest.write_text(
-        _json.dumps([{"id": "clip_a", "path": str(wav), "input_kind": "clear_lead"}]),
+        _json.dumps([{"id": "real_lead_synth", "path": str(wav), "input_kind": "clear_lead"}]),
         encoding="utf-8",
     )
     results = harness.run_external(manifest, _default_thresholds())
-    entry = results["fixtures"]["clip_a"]
+    entry = results["fixtures"]["real_lead_synth"]
     assert len(entry["audio_sha256"]) == 64
     assert entry["audio_path"] == str(wav)
     assert len(results["manifest_sha256"]) == 64
@@ -376,13 +378,63 @@ def test_external_harness_records_and_verifies_audio_hash(tmp_path):
     # 期待 hash 不一致は fail-closed。
     manifest.write_text(
         _json.dumps(
-            [{"id": "clip_a", "path": str(wav), "input_kind": "clear_lead",
+            [{"id": "real_lead_synth", "path": str(wav), "input_kind": "clear_lead",
               "audio_sha256": "0" * 64}]
         ),
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="sha256 mismatch"):
         harness.run_external(manifest, _default_thresholds())
+
+
+def test_external_harness_rejects_unregistered_and_mismatched_ids(tmp_path):
+    """external mode は registry 未登録 id / input_kind 不整合を fail-closed。"""
+    import json as _json
+
+    import scripts.run_melody_observability as harness
+
+    sr = 22050
+    wav = tmp_path / "ext.wav"
+    sf.write(wav, np.zeros(sr, dtype=np.float32), sr, subtype="FLOAT")
+
+    unregistered = tmp_path / "u.json"
+    unregistered.write_text(
+        _json.dumps([{"id": "not_registered", "path": str(wav), "input_kind": "clear_lead"}]),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="not pre-registered"):
+        harness.run_external(unregistered, _default_thresholds())
+
+    # suno_vocals_stem は vocal_track 登録。clear_lead と誤記すれば reject。
+    mismatched = tmp_path / "m.json"
+    mismatched.write_text(
+        _json.dumps([{"id": "suno_vocals_stem", "path": str(wav), "input_kind": "clear_lead"}]),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="input_kind"):
+        harness.run_external(mismatched, _default_thresholds())
+
+
+def test_pair_manifest_pins_source_sha256(tmp_path, monkeypatch):
+    """controlled-pair manifest が source の生バイト sha256 を pin する。"""
+    import json as _json
+
+    import scripts.make_melody_pairs as pairs
+
+    sr = 22050
+    t = np.linspace(0, 1.0, sr, endpoint=False)
+    src = tmp_path / "src.wav"
+    sf.write(src, (0.3 * np.sin(2 * np.pi * 330 * t)).astype(np.float32), sr, subtype="FLOAT")
+    out_dir = tmp_path / "out"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["make_melody_pairs", "--input", str(src), "--out-dir", str(out_dir),
+         "--semitones", "2", "--time-rates", "1.05"],
+    )
+    pairs.main()
+    manifest = _json.loads((out_dir / "src__pairs_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["source_sha256"] == hashlib.sha256(src.read_bytes()).hexdigest()
 
 
 # --------------------------------------------------------------------------- #
