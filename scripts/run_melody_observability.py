@@ -67,6 +67,27 @@ def _require_registry_schema(registry: Dict[str, Any]) -> None:
         )
 
 
+def _load_registry(registry_path: "Path | None" = None) -> "tuple[Dict[str, Any], str]":
+    """registry の bytes を**一度だけ**読み、hash し、同じ buffer から parse する。
+
+    thresholds（observation_gate）と fixture metadata（fixtures / external_fixtures）
+    を別々に open すると、間に registry が書き換わった場合に食い違う（TOCTOU）。
+    さらに publish 済み report が registry hash / 閾値スナップショットを pin しないと、
+    passing（reasons が空の sufficient）行がどのゲート値・登録で出たか後から証明
+    できない。single read で consistency を保証し、`registry_sha256` を返して report に
+    pin できるようにする（Codex 指摘・AGENTS §8。manifest/audio bytes 凍結と同型）。
+
+    `registry_path` 未指定時はモジュール globals の `REGISTRY_PATH` を**呼び出し時**に
+    解決する（default 引数に束縛するとテストの monkeypatch が効かない）。
+    """
+    if registry_path is None:
+        registry_path = REGISTRY_PATH
+    data = Path(registry_path).read_bytes()
+    registry = yaml.safe_load(data)
+    _require_registry_schema(registry)
+    return registry, hashlib.sha256(data).hexdigest()
+
+
 def _atomic_write_text(path: Path, text: str) -> None:
     """`text` を `path` へ atomic に書く（同一ディレクトリの temp file → os.replace）。
 
@@ -152,9 +173,7 @@ def _preprocessing_provenance(route: Any) -> "Dict[str, Any] | None":
 
 
 def load_thresholds(registry_path: Path = REGISTRY_PATH) -> ObservabilityThresholds:
-    with open(registry_path, "r", encoding="utf-8") as handle:
-        registry = yaml.safe_load(handle)
-    _require_registry_schema(registry)
+    registry, _ = _load_registry(registry_path)
     return ObservabilityThresholds.from_registry(registry["observation_gate"])
 
 
@@ -230,11 +249,15 @@ def _run_routes_on_file(
     return rows
 
 
-def run_synthetic(thresholds: ObservabilityThresholds) -> Dict[str, Any]:
+def run_synthetic(
+    thresholds: "ObservabilityThresholds | None" = None,
+) -> Dict[str, Any]:
     specs = load_specs()
-    with open(REGISTRY_PATH, "r", encoding="utf-8") as handle:
-        registry = yaml.safe_load(handle)
-    _require_registry_schema(registry)
+    # registry を single read（bytes→hash→parse）。thresholds も fixture metadata も
+    # この同じ read から作り、registry_sha256 を report に pin する。
+    registry, registry_sha256 = _load_registry()
+    if thresholds is None:
+        thresholds = ObservabilityThresholds.from_registry(registry["observation_gate"])
     fixture_kinds = _unique_id_map(registry["fixtures"], "fixtures")
     # expect_status を全 synthetic fixture に必須化（fail-closed）。`.get` で欠落を
     # 黙って None にすると、期待値を持たない fixture が Go/No-Go JSON に紛れ込み、
@@ -260,7 +283,12 @@ def run_synthetic(thresholds: ObservabilityThresholds) -> Dict[str, Any]:
             "全ての spec id を registry へ事前登録すること（input_kind 推論は禁止）。"
         )
 
-    results: Dict[str, Any] = {"mode": "synthetic", "fixtures": {}}
+    results: Dict[str, Any] = {
+        "mode": "synthetic",
+        "registry_sha256": registry_sha256,
+        "observation_gate": registry["observation_gate"],  # 閾値スナップショット pin
+        "fixtures": {},
+    }
     with tempfile.TemporaryDirectory(prefix="melody-bench-") as tmp:
         for fid in specs["fixtures"]:
             y, sr = build_signal(fid, specs)
@@ -276,7 +304,9 @@ def run_synthetic(thresholds: ObservabilityThresholds) -> Dict[str, Any]:
     return results
 
 
-def run_external(manifest_path: Path, thresholds: ObservabilityThresholds) -> Dict[str, Any]:
+def run_external(
+    manifest_path: Path, thresholds: "ObservabilityThresholds | None" = None
+) -> Dict[str, Any]:
     """外部素材 manifest（[{id, path, input_kind, audio_sha256?}]）の観測可能性を測る。
 
     provenance（AGENTS §8）: どの bytes を観測したかを後の slow-lane 実測が証明
@@ -292,9 +322,11 @@ def run_external(manifest_path: Path, thresholds: ObservabilityThresholds) -> Di
     manifest_bytes = Path(manifest_path).read_bytes()
     manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
     entries = json.loads(manifest_bytes)
-    with open(REGISTRY_PATH, "r", encoding="utf-8") as handle:
-        registry = yaml.safe_load(handle)
-    _require_registry_schema(registry)
+    # registry を single read（bytes→hash→parse）。thresholds も external_fixtures も
+    # 同じ read から作り、registry_sha256 を report に pin する。
+    registry, registry_sha256 = _load_registry()
+    if thresholds is None:
+        thresholds = ObservabilityThresholds.from_registry(registry["observation_gate"])
 
     # fail-closed: 各 manifest entry の id は registry.yaml の external_fixtures に
     # 事前登録され、input_kind も登録値と一致していなければならない。typo や
@@ -313,6 +345,8 @@ def run_external(manifest_path: Path, thresholds: ObservabilityThresholds) -> Di
         "mode": "external",
         "manifest_path": str(manifest_path),
         "manifest_sha256": manifest_sha256,
+        "registry_sha256": registry_sha256,
+        "observation_gate": registry["observation_gate"],  # 閾値スナップショット pin
         "fixtures": {},
     }
     with tempfile.TemporaryDirectory(prefix="melody-ext-") as tmp:
@@ -383,11 +417,12 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    thresholds = load_thresholds()
+    # thresholds は run_synthetic / run_external が registry の single read から
+    # 構築する（別途 load_thresholds を呼ぶと registry を二重 read してしまう）。
     if args.external is not None:
-        results = run_external(args.external, thresholds)
+        results = run_external(args.external)
     else:
-        results = run_synthetic(thresholds)
+        results = run_synthetic()
 
     for line in summarize(results):
         print(line)

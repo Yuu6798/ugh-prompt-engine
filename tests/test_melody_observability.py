@@ -618,6 +618,21 @@ def test_synthetic_harness_fails_closed_on_unregistered_spec(monkeypatch):
         harness.run_synthetic(_default_thresholds())
 
 
+def test_report_pins_registry_hash_and_gate_snapshot(tmp_path):
+    """report は registry_sha256 と observation_gate スナップショットを pin する。"""
+    import json as _json
+
+    import scripts.run_melody_observability as harness
+
+    manifest = tmp_path / "empty.json"
+    manifest.write_text(_json.dumps([]), encoding="utf-8")
+    results = harness.run_external(manifest)  # audio 無し・registry pin のみ検証
+    reg_bytes = Path(harness.REGISTRY_PATH).read_bytes()
+    assert results["registry_sha256"] == hashlib.sha256(reg_bytes).hexdigest()
+    # 閾値スナップショットが report に載る（passing 行の再現性）。
+    assert results["observation_gate"]["min_note_count"] == 8
+
+
 def test_external_harness_records_and_verifies_audio_hash(tmp_path):
     """external モードは audio_sha256 / manifest_sha256 を記録し不一致で fail-closed。"""
     import json as _json
