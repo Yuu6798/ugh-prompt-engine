@@ -243,6 +243,23 @@ class RecastPlanArtifacts:
     # のときのみ意味を持つ（`ManualInvoker.prepare()` が注文書描画に使う —
     # Codex P2 review round 11, PR3 #208 指摘22）。
     channel_artifact_bytes: Dict[str, bytes] = field(default_factory=dict)
+    # plan 段の single-read 束が既に parse・validate 済みの `InputCapabilityProfile`
+    # （`compiled` が非 None のときのみ非 None）。`recast run`/`ingest` CLI の
+    # invoker 解決・`RecastRunContext.profile` はこれをそのまま使い、
+    # `load_backend_capability_profile` で capability_profile YAML を再 read/
+    # 再 parse しない（Codex P2 review round 12, PR3 #208 指摘24: 従来は plan
+    # 段が読んだのと独立に run/ingest 側が再 read しており、実行中に
+    # capability_profile が差し替わると plan の診断（`recast_plan.json`）と
+    # 実際に invoke/注文書へ使われる profile が乖離し得た）。
+    profile: Optional[InputCapabilityProfile] = None
+    # `IdentityManifest.source` の locator/sha256（plan 段の single-read 束が
+    # 既に hash 照合込みで parse 済みの `manifest.source` から複製したもの、
+    # `compiled` が非 None のときのみ非 None）。`ManualInvoker` の cover モード
+    # 注文書（参照音声メタデータ）はこれを使い、`backend.py:read_identity_
+    # source` で identity manifest を再 read/再 parse しない（Codex P2 review
+    # round 12, PR3 #208 指摘26）。
+    identity_source_locator: Optional[str] = None
+    identity_source_sha256: Optional[str] = None
 
 
 def _parse_yaml_mapping(raw_bytes: bytes, label: str, path_str: str) -> Dict[str, Any]:
@@ -1082,6 +1099,9 @@ def build_recast_plan_artifacts(
         profile_sha256: Optional[str] = None,
         derived_score_sha256: Optional[str] = None,
         channel_artifact_bytes: Optional[Dict[str, bytes]] = None,
+        profile: Optional[InputCapabilityProfile] = None,
+        identity_source_locator: Optional[str] = None,
+        identity_source_sha256: Optional[str] = None,
     ) -> RecastPlanArtifacts:
         # 診断文字列（例外メッセージ由来の blocked.reasons / warnings）を
         # project 相対へ正規化してから plan へ載せる（Codex P2 seventh round
@@ -1135,6 +1155,9 @@ def build_recast_plan_artifacts(
             profile_sha256=profile_sha256,
             derived_score_sha256=derived_score_sha256,
             channel_artifact_bytes=channel_artifact_bytes or {},
+            profile=profile,
+            identity_source_locator=identity_source_locator,
+            identity_source_sha256=identity_source_sha256,
         )
 
     # --- step 2a: score の YAML 破損・schema 不正チェック --------------------
@@ -1426,4 +1449,7 @@ def build_recast_plan_artifacts(
         profile_sha256=profile_sha256,
         derived_score_sha256=derived_score_sha256,
         channel_artifact_bytes=channel_artifact_bytes,
+        profile=profile,
+        identity_source_locator=manifest.source.locator,
+        identity_source_sha256=manifest.source.sha256,
     )
