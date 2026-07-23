@@ -131,9 +131,14 @@ python scripts/run_melody_observability.py --out melody_obs.json
 
 # 実利用入力帯（Suno vocals stem 等の外部素材）
 #   ext.json = [{"id": "...", "path": "...wav", "input_kind": "vocal_track"}, ...]
+# vocal_track 経路のみ（Demucs vocals → pyin/CREPE）:
 pip install -e ".[separate,crepe]"       # Demucs + CREPE（MIT/Apache 系）
+# full_mix 経路（登録 fixture real_vocal_plus_backing）は basic_pitch_direct を含む。
+# basic-pitch は `pitch` extra（Apache-2.0・Python<3.12）。full_mix も測るなら追加:
+pip install -e ".[separate,crepe,pitch]"  # + basic-pitch（Python<3.12）
 # ※ Melodia を使う場合のみ（AGPL-3.0 を受容できる環境のみ・published extra なし）:
 #     pip install essentia   # 手動 install。詳細は §5 ライセンス
+# 上記を入れないと該当経路は unavailable として正直に記録される（fail ではない）。
 python scripts/run_melody_observability.py --external ext.json --out ext_obs.json
 ```
 
