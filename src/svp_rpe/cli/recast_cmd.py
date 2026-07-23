@@ -818,53 +818,62 @@ def recast_ingest_cmd(
 
     # `observation.anchors`（Codex P2, #211）: 非空なら観測対象を絞る。空
     # （既定）は「絞り込みなし」— 従来どおり全 manifest anchor を観測する。
-    anchor_scope = (
-        set(loaded.project.observation.anchors)
-        if loaded.project.observation.anchors
-        else None
-    )
+    # スコープ構築・未知 id precheck とも `observation.enabled == true` の
+    # ときのみ行う（Codex P2, #211 追加指摘）: `observation.enabled: false`
+    # の project は元々 collect→`generated` で停止する契約（下の
+    # `if not loaded.project.observation.enabled:` 分岐）で observe 自体に
+    # 進まないため、`observation.anchors` の内容は無関係のはずが、無条件に
+    # 先走らせると stale/typo な `observation.anchors` が残っているだけで
+    # （observation 自体は無効なのに）collect 前に fail してしまっていた。
+    anchor_scope: Optional[set[str]] = None
+    if loaded.project.observation.enabled:
+        anchor_scope = (
+            set(loaded.project.observation.anchors)
+            if loaded.project.observation.anchors
+            else None
+        )
 
-    # 未知 id の事前検査（Codex P2, #210 round 9 指摘11; round 10 指摘13で
-    # ここ＝collect/publish/record_state より前へ前倒し）: typo/削除済み
-    # anchor を含む `observation.anchors` は設定ミスであり、実行時の観測
-    # 失敗（`observation_incomplete`）とは別種のエラーとして扱う。これを
-    # `invoker.collect()`/`record_state("generated")` の後（旧位置）に置くと、
-    # 設定 typo であっても take の収蔵（外部生成音声の take-01.wav への
-    # copy）と `generated` への state 遷移が先に確定してしまい、typo 修正後に
-    # `awaiting_generation` からの再 ingest ができなくなる（take はもう
-    # awaiting_generation の注文に対応しない、かつ orders_digest precheck が
-    # 次回 ingest を弾く）。他の precheck 群（inputs_digest/plan_sha256/
-    # orders_digest）と同じ「何も書かず exit」位置へ揃えることで、typo
-    # 修正後にそのまま同じ take で ingest をやり直せる。
-    # `observe_generated_artifact` 自身の同型ガード（防御的多重化・
-    # `svprpe observe` 単体実行など他呼び出し元向け）とは別に、ここでは
-    # state を一切変更せず（`observation_incomplete` を記録しない）plain
-    # な Error + exit 1 とする。manifest の実 YAML 構造が壊れている場合は
-    # ここでは判定せず、通常どおり `observe_generated_artifact` 側の
-    # fail-closed 検証（`observation_incomplete` 経由）に委ねる。
-    if anchor_scope is not None:
-        manifest_bytes_for_scope_check = loaded.identity_manifest_path.read_bytes()
-        try:
-            raw_manifest_for_scope_check = yaml.safe_load(manifest_bytes_for_scope_check)
-        except yaml.YAMLError:
-            raw_manifest_for_scope_check = None
-        if isinstance(raw_manifest_for_scope_check, dict) and isinstance(
-            raw_manifest_for_scope_check.get("anchors"), list
-        ):
-            known_anchor_ids = {
-                entry.get("id")
-                for entry in raw_manifest_for_scope_check["anchors"]
-                if isinstance(entry, dict)
-            }
-            unknown_anchor_ids = anchor_scope - known_anchor_ids
-            if unknown_anchor_ids:
-                typer.echo(
-                    "Error: project.yaml observation.anchors contains anchor id(s) "
-                    f"not present in the identity manifest: {sorted(unknown_anchor_ids)} "
-                    f"(known anchor ids: {sorted(known_anchor_ids)})",
-                    err=True,
-                )
-                raise typer.Exit(code=1)
+        # 未知 id の事前検査（Codex P2, #210 round 9 指摘11; round 10 指摘13で
+        # ここ＝collect/publish/record_state より前へ前倒し）: typo/削除済み
+        # anchor を含む `observation.anchors` は設定ミスであり、実行時の観測
+        # 失敗（`observation_incomplete`）とは別種のエラーとして扱う。これを
+        # `invoker.collect()`/`record_state("generated")` の後（旧位置）に置くと、
+        # 設定 typo であっても take の収蔵（外部生成音声の take-01.wav への
+        # copy）と `generated` への state 遷移が先に確定してしまい、typo 修正後に
+        # `awaiting_generation` からの再 ingest ができなくなる（take はもう
+        # awaiting_generation の注文に対応しない、かつ orders_digest precheck が
+        # 次回 ingest を弾く）。他の precheck 群（inputs_digest/plan_sha256/
+        # orders_digest）と同じ「何も書かず exit」位置へ揃えることで、typo
+        # 修正後にそのまま同じ take で ingest をやり直せる。
+        # `observe_generated_artifact` 自身の同型ガード（防御的多重化・
+        # `svprpe observe` 単体実行など他呼び出し元向け）とは別に、ここでは
+        # state を一切変更せず（`observation_incomplete` を記録しない）plain
+        # な Error + exit 1 とする。manifest の実 YAML 構造が壊れている場合は
+        # ここでは判定せず、通常どおり `observe_generated_artifact` 側の
+        # fail-closed 検証（`observation_incomplete` 経由）に委ねる。
+        if anchor_scope is not None:
+            manifest_bytes_for_scope_check = loaded.identity_manifest_path.read_bytes()
+            try:
+                raw_manifest_for_scope_check = yaml.safe_load(manifest_bytes_for_scope_check)
+            except yaml.YAMLError:
+                raw_manifest_for_scope_check = None
+            if isinstance(raw_manifest_for_scope_check, dict) and isinstance(
+                raw_manifest_for_scope_check.get("anchors"), list
+            ):
+                known_anchor_ids = {
+                    entry.get("id")
+                    for entry in raw_manifest_for_scope_check["anchors"]
+                    if isinstance(entry, dict)
+                }
+                unknown_anchor_ids = anchor_scope - known_anchor_ids
+                if unknown_anchor_ids:
+                    typer.echo(
+                        "Error: project.yaml observation.anchors contains anchor id(s) "
+                        f"not present in the identity manifest: {sorted(unknown_anchor_ids)} "
+                        f"(known anchor ids: {sorted(known_anchor_ids)})",
+                        err=True,
+                    )
+                    raise typer.Exit(code=1)
 
     # `publish=False`（Codex P2 review round 13, PR3 #208 指摘27; pr5 #210
     # round 3 指摘4 の同型修正 127891c と実装形を寄せてある）: 突合前に
