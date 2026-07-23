@@ -126,7 +126,8 @@ python scripts/run_melody_observability.py --out melody_obs.json
 # 実利用入力帯（Suno vocals stem 等の外部素材）
 #   ext.json = [{"id": "...", "path": "...wav", "input_kind": "vocal_track"}, ...]
 pip install -e ".[separate,crepe]"       # Demucs + CREPE（MIT/Apache 系）
-# ※ Melodia を使う場合のみ: pip install -e ".[melodia]"（Essentia = AGPL-3.0）
+# ※ Melodia を使う場合のみ（AGPL-3.0 を受容できる環境のみ・published extra なし）:
+#     pip install essentia   # 手動 install。詳細は §5 ライセンス
 python scripts/run_melody_observability.py --external ext.json --out ext_obs.json
 ```
 
@@ -147,14 +148,19 @@ python scripts/run_melody_observability.py --external ext.json --out ext_obs.jso
 
 ## 5. 規律（設計 §5 準拠）
 
-- **slow-lane 隔離**: Demucs/CREPE/Melodia/Essentia は全て optional extra。標準 CI は
-  重依存なしで green（ハーネス既定の pyin 経路は core librosa のみ）。
+- **slow-lane 隔離**: Demucs/CREPE は optional extra（`separate` / `crepe`）。
+  Melodia は下記ライセンス理由で published extra を持たず manual/external 統合。
+  標準 CI は重依存なしで green（ハーネス既定の pyin 経路は core librosa のみ）。
 - **learned 隔離**: 抽出結果を決定論 RPE（`PhysicalRPE.melody_contour` 等）へ
   混ぜない。本トラックは観測レポート（`MelodyObservabilityReport`）のみを返す。
-- **ライセンス**: CREPE=MIT / basic-pitch=Apache-2.0 / Demucs=optional。
-  **Essentia(Melodia)=AGPL-3.0** はコピーレフトのため標準 install/CI に含めず
-  slow/manual lane のみ opt-in（他 extra より一段強い制約。`melodia_adapter.py`
-  モジュール docstring に明記）。
+- **ライセンス**: CREPE=MIT（`crepe` extra）/ basic-pitch=Apache-2.0 / Demucs=
+  `separate` extra。**Essentia(Melodia)=AGPL-3.0** はコピーレフトで、
+  `docs/learned_models_policy.md` の「runtime 依存は permissive のみ」方針が
+  例外を認めていない。よって **published extra は用意せず**（`[melodia]` extra は
+  存在しない）、AGPL を受容するユーザが slow/manual lane で `pip install essentia`
+  を手動実行したときだけアダプタが拾う external 統合とする（advertised 依存面を
+  canonical policy と矛盾させない。first-class extra への昇格は policy への
+  approved exception 記載が前提）。
 - **事前登録厳守 / not_observed の正直さ**: 旋律不在・被覆不足・抽出器不一致は
   全て not_observed（判断不能であって保存されたではない）。preserved と偽称しない。
 

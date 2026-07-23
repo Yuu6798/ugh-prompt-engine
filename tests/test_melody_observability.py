@@ -371,8 +371,8 @@ def test_external_harness_records_and_verifies_audio_hash(tmp_path):
     )
     results = harness.run_external(manifest, _default_thresholds())
     entry = results["fixtures"]["real_lead_synth"]
-    assert len(entry["audio_sha256"]) == 64
-    assert entry["audio_path"] == str(wav)
+    assert entry["audio_sha256"] == hashlib.sha256(wav.read_bytes()).hexdigest()
+    assert entry["audio_path"] == str(wav.resolve())
     assert len(results["manifest_sha256"]) == 64
 
     # 期待 hash 不一致は fail-closed。
@@ -385,6 +385,30 @@ def test_external_harness_records_and_verifies_audio_hash(tmp_path):
     )
     with pytest.raises(ValueError, match="sha256 mismatch"):
         harness.run_external(manifest, _default_thresholds())
+
+
+def test_external_harness_resolves_relative_paths_against_manifest(tmp_path):
+    """external の相対 path は manifest ディレクトリ基準で解決し正規化して記録する。"""
+    import json as _json
+
+    import scripts.run_melody_observability as harness
+
+    manifest_dir = tmp_path / "bundle"
+    manifest_dir.mkdir()
+    sr = 22050
+    t = np.linspace(0, 1.0, sr, endpoint=False)
+    wav = manifest_dir / "clip.wav"
+    sf.write(wav, (0.3 * np.sin(2 * np.pi * 220 * t)).astype(np.float32), sr, subtype="FLOAT")
+    manifest = manifest_dir / "m.json"
+    # 相対 path "clip.wav"（cwd でなく manifest_dir 基準で解決されるべき）。
+    manifest.write_text(
+        _json.dumps([{"id": "real_lead_synth", "path": "clip.wav", "input_kind": "clear_lead"}]),
+        encoding="utf-8",
+    )
+    results = harness.run_external(manifest, _default_thresholds())
+    entry = results["fixtures"]["real_lead_synth"]
+    assert entry["audio_path"] == str(wav.resolve())
+    assert entry["audio_sha256"] == hashlib.sha256(wav.read_bytes()).hexdigest()
 
 
 def test_external_harness_rejects_unregistered_and_mismatched_ids(tmp_path):

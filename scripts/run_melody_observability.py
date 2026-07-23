@@ -160,42 +160,61 @@ def run_external(manifest_path: Path, thresholds: ObservabilityThresholds) -> Di
     registered = {f["id"]: f["input_kind"] for f in registry.get("external_fixtures", [])}
     seen_ids: set[str] = set()
 
+    # 相対 path は manifest の位置を基準に解決する。cwd 基準だと、可搬 manifest を
+    # 別ディレクトリから起動したとき launch dir の同名ファイルを観測して一見妥当な
+    # 結果を publish しうる（Codex 指摘）。解決後の正規化パスを記録する。
+    manifest_dir = Path(manifest_path).resolve().parent
+
     results: Dict[str, Any] = {
         "mode": "external",
         "manifest_path": str(manifest_path),
         "manifest_sha256": _sha256_file(str(manifest_path)),
         "fixtures": {},
     }
-    for entry in entries:
-        entry_id = entry["id"]
-        if entry_id in seen_ids:
-            raise ValueError(f"duplicate external fixture id {entry_id!r} in manifest")
-        seen_ids.add(entry_id)
-        if entry_id not in registered:
-            raise ValueError(
-                f"external fixture id {entry_id!r} is not pre-registered in "
-                "registry.yaml external_fixtures (fail-closed)"
-            )
-        if entry["input_kind"] != registered[entry_id]:
-            raise ValueError(
-                f"external fixture {entry_id!r} input_kind {entry['input_kind']!r} "
-                f"!= registered {registered[entry_id]!r}"
-            )
-        audio_sha256 = _sha256_file(entry["path"])
-        expected = entry.get("audio_sha256")
-        if expected is not None and expected != audio_sha256:
-            raise ValueError(
-                f"external audio {entry['id']!r} sha256 mismatch: "
-                f"{audio_sha256} != manifest {expected}"
-            )
-        rows = _run_routes_on_file(entry["path"], entry["input_kind"], thresholds)
-        results["fixtures"][entry["id"]] = {
-            "input_kind": entry["input_kind"],
-            "expect_status": None,  # 正解なし実素材（観測可能性のみ）
-            "audio_path": entry["path"],
-            "audio_sha256": audio_sha256,
-            "routes": rows,
-        }
+    with tempfile.TemporaryDirectory(prefix="melody-ext-") as tmp:
+        for entry in entries:
+            entry_id = entry["id"]
+            if entry_id in seen_ids:
+                raise ValueError(f"duplicate external fixture id {entry_id!r} in manifest")
+            seen_ids.add(entry_id)
+            if entry_id not in registered:
+                raise ValueError(
+                    f"external fixture id {entry_id!r} is not pre-registered in "
+                    "registry.yaml external_fixtures (fail-closed)"
+                )
+            if entry["input_kind"] != registered[entry_id]:
+                raise ValueError(
+                    f"external fixture {entry_id!r} input_kind {entry['input_kind']!r} "
+                    f"!= registered {registered[entry_id]!r}"
+                )
+
+            raw_path = Path(entry["path"])
+            resolved = raw_path if raw_path.is_absolute() else (manifest_dir / raw_path)
+            resolved = resolved.resolve()
+
+            # 観測する bytes と pin する hash を一致させる: entry のバイト列を一度だけ
+            # 読み、その hash を取り、**同じバイト列**を temp file へ凍結して観測する。
+            # 別々に 2 回 open すると、間にファイルが再生成・差し替えられた場合に pin
+            # と観測波形がズレる TOCTOU が残る（Codex 指摘）。
+            data = resolved.read_bytes()
+            audio_sha256 = hashlib.sha256(data).hexdigest()
+            expected = entry.get("audio_sha256")
+            if expected is not None and expected != audio_sha256:
+                raise ValueError(
+                    f"external audio {entry_id!r} sha256 mismatch: "
+                    f"{audio_sha256} != manifest {expected}"
+                )
+            frozen = Path(tmp) / f"{entry_id}{resolved.suffix or '.wav'}"
+            frozen.write_bytes(data)
+
+            rows = _run_routes_on_file(str(frozen), entry["input_kind"], thresholds)
+            results["fixtures"][entry_id] = {
+                "input_kind": entry["input_kind"],
+                "expect_status": None,  # 正解なし実素材（観測可能性のみ）
+                "audio_path": str(resolved),  # 正規化パス
+                "audio_sha256": audio_sha256,
+                "routes": rows,
+            }
     return results
 
 

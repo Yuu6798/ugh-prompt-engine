@@ -79,13 +79,15 @@ lyrics = ["faster-whisper>=1.0", "demucs>=4.0"]
 # (the full test suite MUST pass without it; the observability harness's
 # default pyin route needs only core librosa). See docs/melody_observability.md.
 crepe = ["crepe>=0.0.12"]
-# essentia (MTG) — Melodia predominant-melody F0 for full mixes
-# (rpe/learned/melodia_adapter.py). ⚠ Essentia is AGPL-3.0 (copyleft): this
-# extra MUST stay out of the standard install / dev / CI and is opt-in ONLY in
-# the slow/manual lane, a stronger constraint than the MIT/Apache/CC0 extras.
-# PyPI distribution and import name are both "essentia". See the melodia
-# adapter's module-docstring license note and docs/melody_observability.md.
-melodia = ["essentia"]
+# NOTE: there is deliberately NO `melodia` extra. The Melodia adapter
+# (rpe/learned/melodia_adapter.py) depends on Essentia, which is AGPL-3.0 —
+# docs/learned_models_policy.md restricts runtime dependencies to permissive
+# licenses and does not grant an AGPL exception. Publishing an installable
+# `[melodia]` extra would make this package's advertised dependency surface
+# contradict that canonical policy, so Melodia is left as a MANUAL / external
+# integration: a user who accepts the AGPL terms installs `essentia` by hand
+# and the adapter picks it up. Promoting it to a first-class extra requires an
+# approved exception recorded in docs/learned_models_policy.md first.
 
 [project.scripts]
 svprpe = "svp_rpe.cli:app"

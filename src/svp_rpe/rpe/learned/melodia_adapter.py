@@ -58,10 +58,18 @@ _CODE_LICENSE = (
     "opt-in only in the slow/manual lane (see module docstring license note)"
 )
 
+# NOTE: there is deliberately no published `[melodia]` extra — Essentia is
+# AGPL-3.0 and docs/learned_models_policy.md restricts runtime deps to
+# permissive licenses (see the module docstring's license note). Melodia is a
+# MANUAL / external integration: a user who accepts the AGPL terms installs
+# essentia by hand. This hint therefore points to a direct install, not an
+# extra, so the advertised dependency surface stays consistent with the policy.
 _INSTALL_HINT = (
-    "essentia is not installed. Install it via the optional `melodia` extra "
-    "(AGPL-3.0 — opt-in only, never in CI):\n"
-    '    pip install -e ".[melodia]"'
+    "essentia is not installed. Melodia is a manual/external integration only "
+    "(no published extra): Essentia is AGPL-3.0 and is excluded from the "
+    "packaged extras by docs/learned_models_policy.md. If you accept the AGPL "
+    "terms, install it by hand in the slow/manual lane:\n"
+    "    pip install essentia"
 )
 
 
