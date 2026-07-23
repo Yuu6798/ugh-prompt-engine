@@ -442,3 +442,66 @@ def test_recast_report_round_trip_preserves_unique_anchor_ids() -> None:
     )
     round_tripped = RecastReport.model_validate(recast_report.model_dump(mode="json"))
     assert [a.anchor_id for a in round_tripped.anchors] == ["harmony", "structure"]
+
+
+# --- take.path relative-locator validation (Codex P2, #210 round 12 指摘15) ---
+
+
+@pytest.mark.parametrize(
+    "bad_path",
+    [
+        "/etc/passwd",
+        "C:\\Windows\\System32\\take.wav",
+        "../outside/take.wav",
+        "..\\outside\\take.wav",
+        "builds/../../outside.wav",
+    ],
+)
+def test_recast_report_take_rejects_absolute_or_traversal_path(bad_path: str) -> None:
+    """`RecastReportTake.path` は project 相対の locator でなければならない
+    （Codex P2, #210 round 12 指摘15）: 絶対パスや `../`/`..\\` traversal を
+    schema 検証なしで受理すると、手編集/別経路の report が project 外の
+    ファイルを「証明済み take」として `recast_summary.md` に表示できて
+    しまう。"""
+    with pytest.raises(ValidationError):
+        RecastReportTake(path=bad_path, sha256="0" * 64)
+
+
+def test_recast_report_take_accepts_project_relative_path() -> None:
+    """正常な読み戻し: `build_recast_report`/呼び出し側が渡す project 相対
+    パス（`os.path.relpath` 由来、内部の `..` 相殺を含む場合がある）は
+    validator を通過する。"""
+    take = RecastReportTake(
+        path="builds/takes/edm@suno/take-01.wav", sha256="0" * 64
+    )
+    assert take.path == "builds/takes/edm@suno/take-01.wav"
+
+    # `a/../b` のような内部相殺（net-upward にならない）は許可される
+    # （`validate_relative_locator` の lexical 判定契約どおり）。
+    canceling = RecastReportTake(
+        path="builds/takes/../takes/edm@suno/take-01.wav", sha256="0" * 64
+    )
+    assert canceling.path == "builds/takes/../takes/edm@suno/take-01.wav"
+
+
+def test_recast_report_round_trip_preserves_relative_take_path() -> None:
+    """`build_recast_report` が発行する report（`take_path_relative` は常に
+    project 相対）は dump→`model_validate` で pass する（round 12 の
+    validator が正常経路を誤って弾かないことの機械 assert）。"""
+    report = _observation_report(
+        [_anchor_observation("harmony", "harmony", "preserved", "exact_match")]
+    )
+    package = _package(
+        [PackageAnchorStatus.model_construct(anchor_id="harmony", requested_mode="hard")]
+    )
+    recast_report = build_recast_report(
+        project_id="p",
+        variant="v",
+        backend="b",
+        package=package,
+        report=report,
+        take_path_relative="builds/takes/edm@suno/take-01.wav",
+        take_sha256="a" * 64,
+    )
+    round_tripped = RecastReport.model_validate(recast_report.model_dump(mode="json"))
+    assert round_tripped.take.path == "builds/takes/edm@suno/take-01.wav"

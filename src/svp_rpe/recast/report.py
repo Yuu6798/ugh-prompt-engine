@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from svp_rpe.arrange.identity import AnchorDomain
 from svp_rpe.arrange.models import JsonValue, PreservationMode
@@ -40,6 +40,7 @@ from svp_rpe.arrange.observe import (
     SensorRecord,
 )
 from svp_rpe.arrange.package import PerformancePackage
+from svp_rpe.arrange.pathsafe import PathConfinementError, validate_relative_locator
 
 RECAST_REPORT_SCHEMA_VERSION = "recast-report/0.1"
 RECAST_REPORT_FILENAME = "recast_report.json"
@@ -81,6 +82,28 @@ class RecastReportTake(RecastReportModel):
 
     path: str
     sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @field_validator("path")
+    @classmethod
+    def _validate_relative_path(cls, value: str) -> str:
+        """`path` は project 相対の locator（Codex P2, #210 round 12 指摘15）:
+        絶対パスや `../`/`..\\` traversal を schema 検証なしで受理すると、
+        手編集/別経路の report が project 外のファイルを「証明済み take」と
+        して `recast_summary.md` に表示できてしまう（sha256 突合は行われる
+        が、そもそも project 外を指すパス文字列自体を拒否すべき）。
+        `arrange/pathsafe.py::validate_relative_locator`（lexical・base 不要
+        — filesystem へ触れずに絶対パス/net-upward `..` を判定する）を適用
+        する。`build_recast_report`（発行時）は常に `os.path.relpath` で
+        project_dir 相対の文字列を渡すため、正常な発行経路は自然にこの
+        validator を通過する（builder→dump→validate の読み戻し規律）。"""
+        try:
+            validate_relative_locator(value)
+        except PathConfinementError as exc:
+            raise ValueError(
+                f"RecastReportTake.path must be a project-relative path without "
+                f"parent traversal: {value!r} ({exc})"
+            ) from exc
+        return value
 
 
 class RecastReportAnchor(RecastReportModel):
