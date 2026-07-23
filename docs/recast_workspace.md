@@ -168,10 +168,20 @@ pytest tests/test_recast_golden_path.py -m slow -q   # 全経路回帰（数分�
 ## 7. `observation.anchors` 配線（PR6）
 
 `project.yaml` の `observation.anchors`（非空リスト）は観測・レポートを
-その anchor 集合へ絞り込む（空リスト = 全 anchor、既定）。未知 anchor id
-（identity manifest に存在しない id）を宣言した project は `recast plan`/
-`run`/`ingest` の plan 段（identity manifest ロード直後）で `RecastError` に
-より fail-closed する — `ObservationConfig.anchors` の重複拒否と同じ即時
-失敗の規律。実装は `recast/report.py:build_recast_report` の
-`observation_anchors` 引数（純粋なフィルタリング）+ `recast/plan.py` の
-manifest ロード直後の集合検証。
+その anchor 集合へ絞り込む（空リスト = 全 anchor、既定）。実装は
+`recast/report.py:build_recast_report` の `observation_anchors` 引数（純粋な
+フィルタリング）。
+
+未知 anchor id（identity manifest に存在しない id、typo/削除済み anchor 等）
+は観測経路そのもの（`arrange/observe.py:observe_generated_artifact`）で
+fail-closed する（Codex P2, #210 round 9 指摘11）: フィルタは「一致する id
+だけ残す」実装のため、未知 id をそのまま通すと単に無視され、ゼロ anchor の
+report/summary が「成功」として publish されてしまう — フィルタ適用前に
+`anchor_scope ⊆ manifest anchor id 集合` を検証し、外れている id を列挙した
+`ValueError` で拒否する。`recast ingest`（`cli/recast_cmd.py`）はこれとは
+別に、take 収蔵で `generated` を記録した直後・observe 呼び出しの手前でも
+同型の事前検査を行い、設定ミスを plain な Error + exit 1（state は
+`generated` のまま — 実行時の観測失敗用の `observation_incomplete` とは
+区別）として扱う。**`recast plan`/`run` はこの検証を行わない** — manual
+backend が注文書公開・`awaiting_generation`・`generated` まで進めることを
+優先し、観測スコープの妥当性は ingest の observe 直前でのみ判定する。
