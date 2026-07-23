@@ -79,7 +79,7 @@ hold-out 分割（`splits`）で閾値調整用（tuning）と最終確認用（
 | `vocal_track` | pyin_direct / demucs_vocals_then_pyin / **demucs_vocals_then_crepe** / **demucs_vocals_then_melodia** |
 | `clear_lead` | pyin_direct / melodia_direct / crepe_direct |
 | `full_mix` | demucs_vocals_then_crepe / melodia_direct / basic_pitch_direct（melodia 補助） |
-| `chord_pad_no_melody` | not_applicable（`applies=False` → 抽出せず not_observed） |
+| `chord_pad_no_melody` | not_applicable（`applies=False` → 抽出せず not_observed）+ pyin_negative_control（診断: pyin を当てゲートが insufficient で弾くことを実証） |
 
 入力種別は fixture メタデータで与える（自動判定は M1 の非目標）。
 
@@ -103,6 +103,12 @@ hold-out 分割（`splits`）で閾値調整用（tuning）と最終確認用（
 `low_confidence_rate` で落ちる。ドローンは高信頼だが単一持続音なので
 `note_count`/`phrase_count` で落ちる（信頼度が高くても「旋律」でないことを正しく
 not_observed へ）。**ゲート機構が観測可能/不可能を分離することを実測で確認した。**
+
+負の対照は routing 短絡（`not_applicable`）で not_observed に落とすだけでなく、
+診断経路 `pyin_negative_control` で pyin を実際に当て、committed ハーネス
+（`run_melody_observability.py` 既定・CI 安全）の出力にも `insufficient` として
+現れる。これにより「ゲートが抽出器の false positive を弾く」ことが routing 短絡の
+陰に隠れず harness 出力で自己実証される（負の対照の本来の役割）。
 
 この結果は `tests/test_melody_observability.py`（`slow` マーカー）が回帰として固定
 する。閾値は tuning split の観測のみで M0 に固定し、holdout split

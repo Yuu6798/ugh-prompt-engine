@@ -250,11 +250,15 @@ def test_select_routes_covers_all_input_kinds():
         assert routes, kind
 
 
-def test_chord_pad_routing_short_circuits_to_not_observed():
-    routes = select_routes("chord_pad_no_melody")
-    assert len(routes) == 1
-    assert routes[0].applies is False
-    assert routes[0].extractor == "none"
+def test_chord_pad_routing_has_short_circuit_and_diagnostic():
+    """負の対照は routing 短絡 + 診断用 pyin 経路の両方を持つ。"""
+    routes = {r.name: r for r in select_routes("chord_pad_no_melody")}
+    # routing 短絡（旋律不在の宣言的 not_observed）。
+    assert routes["not_applicable"].applies is False
+    assert routes["not_applicable"].extractor == "none"
+    # 診断経路（ゲートが false positive を弾くことを実証する）。
+    assert routes["pyin_negative_control"].applies is True
+    assert routes["pyin_negative_control"].extractor == "pyin"
 
 
 def test_vocal_track_routes_include_demucs_and_crepe():
@@ -677,6 +681,27 @@ def test_pair_manifest_pins_source_sha256(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------- #
 # slow lane: 合成 → 実 pyin 抽出の統合（正/負の対照）
 # --------------------------------------------------------------------------- #
+@pytest.mark.slow
+def test_harness_synthetic_exercises_negative_controls():
+    """committed ハーネス（run_synthetic）が負の対照に pyin を当て insufficient を出す。
+
+    負の対照が routing 短絡だけで処理されると、ゲートが抽出器 false positive を弾く
+    様子が harness 出力に現れない。診断経路 `pyin_negative_control` により、和音
+    パッド/ドローンに pyin を実際に当てて `insufficient` を記録することを検証する。
+    """
+    import scripts.run_melody_observability as harness
+
+    results = harness.run_synthetic(_default_thresholds())
+    for fid in ("synth_chord_pad", "synth_unison_drone"):
+        rows = {r["route"]: r for r in results["fixtures"][fid]["routes"]}
+        # routing 短絡は残る。
+        assert rows["not_applicable"]["outcome"] == "not_observed_by_routing"
+        # 診断 pyin 経路がゲートを実行し insufficient を出す。
+        diag = rows["pyin_negative_control"]
+        assert diag["outcome"] == "insufficient", diag
+        assert diag["report"]["status"] == "insufficient"
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize(
     "fixture_id,expect",

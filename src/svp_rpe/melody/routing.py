@@ -94,6 +94,13 @@ _ROUTES: Dict[str, List[MelodyRoute]] = {
     ],
     "chord_pad_no_melody": [
         MelodyRoute("not_applicable", _PRE_NONE, _EXT_NONE, applies=False),
+        # 負の対照の診断経路: 旋律不在入力に pyin を実際に当て、ゲートが
+        # insufficient で弾くことを committed ハーネス（CI 安全な pyin 経路）でも
+        # 実証する。routing 短絡（not_applicable）だけだと抽出器の false positive
+        # 耐性が harness 出力に現れず隠れるため、明示的な負の対照経路を持つ
+        # （設計 §4.1 / Codex 指摘）。実運用の旋律不在入力でもゲートで弾かれる
+        # ことを示す belt-and-suspenders でもある。
+        MelodyRoute("pyin_negative_control", _PRE_NONE, _EXT_PYIN),
     ],
 }
 
