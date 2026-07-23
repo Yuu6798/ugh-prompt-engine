@@ -146,7 +146,7 @@ import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Generic, Literal, Optional, TypeVar
+from typing import Callable, Collection, Generic, Literal, Optional, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -1776,6 +1776,7 @@ def observe_generated_artifact(
     generated_artifact_path: Optional[str] = None,
     expected_audio_sha256: Optional[str] = None,
     expected_package_sha256: Optional[str] = None,
+    anchor_scope: Optional[Collection[str]] = None,
 ) -> GeneratedArtifactObservation:
     """`package_path`/`manifest_path`/`audio_path` から provenance chain を検証し、
     `build_observation_report` を呼ぶ非-CLI 経路（PR5: `recast ingest` の
@@ -1823,10 +1824,32 @@ def observe_generated_artifact(
     manifest 中に存在する場合のみ一時スナップショットへコピーしてから
     抽出する（`build_observation_report`/`observe` コマンドと同じ規律 —
     「report に記録する sha256」と「実際に測定した bytes」を同一にする）。
+
+    `anchor_scope`（Codex P2, #211 — `recast ingest` の `project.yaml`
+    `observation.anchors` を実装した後続 PR が持ち込んだ観測経路の指摘。
+    根本の観測経路は本関数であり、修正はここへ一元化する）: 非 `None` の
+    場合、観測対象を `anchor_scope` に含まれる anchor id のみへ絞る。
+    絞り込みは manifest の**生 bytes を parse する前**に行う — スコープ外の
+    anchor は `parse_identity_manifest_with_artifacts` の hash 照合ループへ
+    一切現れないため、その artifact の破損・不在は無関係になる（事前検証
+    ゼロ）。`build_observation_report` はスコープ後の `loaded_manifest.anchors`
+    のみを反復するため、learned センサー推論（lyrics/melody）もスコープ外
+    anchor に対しては一切呼ばれない — `build_observation_report`/`observe.py`
+    の観測ループ自体は変更しない（この関数の呼び出し前処理だけで完結する
+    「薄い拡張」）。D-3 の `package.anchor_statuses`/`manifest.anchors`
+    anchor_id 集合一致チェックは、スコープ適用時は両側を `anchor_scope` へ
+    絞ってから比較する（スコープ外 anchor の package 側欠落/余剰では拒否
+    しない — package 自体は元の完全な manifest に対して compile された
+    ものであり、観測時にどの部分集合を見るかとは独立な話であるため）。
+    `None`（省略時）は絞り込みを行わない（`svprpe observe` 単体実行や
+    `observation.anchors` 未設定時と同じ、従来どおり全 manifest anchor を
+    観測する挙動）。
     """
     import hashlib
     import os
     import tempfile
+
+    import yaml
 
     package_bytes = package_path.read_bytes()
     if expected_package_sha256 is not None:
@@ -1847,8 +1870,35 @@ def observe_generated_artifact(
             f"{package.inputs.identity_manifest.sha256}"
         )
 
+    # スコープ適用（Codex P2, #211）: `anchor_scope` が非 None の場合、
+    # `parse_identity_manifest_with_artifacts` に渡す bytes 自体をスコープ外
+    # anchor を除いた「合成 manifest」へ差し替える — 除外 anchor はこの後の
+    # hash 照合ループへ一切現れない（事前検証ゼロ）。manifest の実 YAML
+    # 構造が壊れている場合はここでフィルタせず素通しし、通常どおり
+    # `parse_identity_manifest_with_artifacts` 自身の fail-closed 検証に
+    # 委ねる（ここで独自にエラー分類しない）。
+    scoped_manifest_bytes = manifest_bytes
+    if anchor_scope is not None:
+        scope_ids = set(anchor_scope)
+        try:
+            raw_manifest_data = yaml.safe_load(manifest_bytes)
+        except yaml.YAMLError:
+            raw_manifest_data = None
+        if isinstance(raw_manifest_data, dict) and isinstance(
+            raw_manifest_data.get("anchors"), list
+        ):
+            raw_manifest_data = dict(raw_manifest_data)
+            raw_manifest_data["anchors"] = [
+                entry
+                for entry in raw_manifest_data["anchors"]
+                if isinstance(entry, dict) and entry.get("id") in scope_ids
+            ]
+            scoped_manifest_bytes = yaml.safe_dump(
+                raw_manifest_data, sort_keys=False, allow_unicode=True
+            ).encode("utf-8")
+
     loaded_manifest, artifact_bytes_by_id = parse_identity_manifest_with_artifacts(
-        manifest_bytes,
+        scoped_manifest_bytes,
         manifest_path,
         collect=lambda anchor: (
             is_harmony_sensor_anchor(anchor)
@@ -1866,9 +1916,18 @@ def observe_generated_artifact(
 
     package_anchor_ids = {status.anchor_id for status in package.anchor_statuses}
     manifest_anchor_ids = {anchor.id for anchor in loaded_manifest.anchors}
-    if package_anchor_ids != manifest_anchor_ids:
-        missing_from_package = sorted(manifest_anchor_ids - package_anchor_ids)
-        extra_in_package = sorted(package_anchor_ids - manifest_anchor_ids)
+    # スコープ適用時は package 側 id 集合も同じスコープへ絞ってから比較する
+    # （Codex P2, #211: 「anchor id set 突合がある場合は両側を同じ集合に」）
+    # — package 自体は元の完全な manifest に対して compile されたものであり、
+    # スコープ外 anchor の package 側欠落/余剰は観測スコープの選択と無関係。
+    effective_package_anchor_ids = (
+        package_anchor_ids & set(anchor_scope)
+        if anchor_scope is not None
+        else package_anchor_ids
+    )
+    if effective_package_anchor_ids != manifest_anchor_ids:
+        missing_from_package = sorted(manifest_anchor_ids - effective_package_anchor_ids)
+        extra_in_package = sorted(effective_package_anchor_ids - manifest_anchor_ids)
         details = []
         if missing_from_package:
             details.append(f"missing from package.anchor_statuses: {missing_from_package}")

@@ -903,6 +903,13 @@ def recast_ingest_cmd(
     # `artifacts.compiled is not None` を要求している（さもなくば RecastError
     # で既に exit 1 済み）ため、ここへ到達する時点で常に non-None。
     assert artifacts.compiled is not None
+    # `observation.anchors`（Codex P2, #211）: 非空なら観測対象を絞る。空
+    # （既定）は「絞り込みなし」— 従来どおり全 manifest anchor を観測する。
+    anchor_scope = (
+        set(loaded.project.observation.anchors)
+        if loaded.project.observation.anchors
+        else None
+    )
 
     try:
         # `expected_audio_sha256=take.sha256`（Codex P2, #210 round 2 指摘2）:
@@ -924,6 +931,7 @@ def recast_ingest_cmd(
             generated_artifact_path=take_relative,
             expected_audio_sha256=take.sha256,
             expected_package_sha256=artifacts.compiled.report.package_sha256,
+            anchor_scope=anchor_scope,
         )
     except (OSError, ValueError, ValidationError, IdentityManifestError) as exc:
         obs_note = _normalize_diagnostic(f"observation failed: {exc}", loaded.project_dir)
