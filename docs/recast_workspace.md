@@ -179,9 +179,13 @@ fail-closed する（Codex P2, #210 round 9 指摘11）: フィルタは「一�
 report/summary が「成功」として publish されてしまう — フィルタ適用前に
 `anchor_scope ⊆ manifest anchor id 集合` を検証し、外れている id を列挙した
 `ValueError` で拒否する。`recast ingest`（`cli/recast_cmd.py`）はこれとは
-別に、take 収蔵で `generated` を記録した直後・observe 呼び出しの手前でも
-同型の事前検査を行い、設定ミスを plain な Error + exit 1（state は
-`generated` のまま — 実行時の観測失敗用の `observation_incomplete` とは
-区別）として扱う。**`recast plan`/`run` はこの検証を行わない** — manual
-backend が注文書公開・`awaiting_generation`・`generated` まで進めることを
-優先し、観測スコープの妥当性は ingest の observe 直前でのみ判定する。
+別に、コマンド冒頭（他の precheck 群 — `inputs_digest`/`plan_sha256`/
+`orders_digest` — と同じ位置、すなわち take 収蔵・publish・state 記録の
+**前**）でも同型の事前検査を行い、設定ミスを plain な Error + exit 1
+（state は `awaiting_generation` のまま変更しない — 実行時の観測失敗用の
+`observation_incomplete` とは区別）として扱う（Codex P2, #210 round 10
+指摘13: 当初は take 収蔵/`generated` 記録の**後**に検査していたため、
+typo 修正後に `awaiting_generation` から同じ take で ingest をやり直せ
+なかった — この前倒しで解消）。**`recast plan`/`run` はこの検証を行わない**
+— manual backend が注文書公開・`awaiting_generation` まで進めることを
+優先し、観測スコープの妥当性は ingest 冒頭でのみ判定する。

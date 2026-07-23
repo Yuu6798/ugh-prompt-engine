@@ -664,16 +664,20 @@ def recast_ingest_cmd(
     `recast_report.json`/`recast_summary.md`（coverage 集計も含む）をその
     anchor 集合へ絞り込む（`recast.report.build_recast_report` の
     `observation_anchors` 引数）。空リスト（既定）は絞り込みなし＝全 anchor。
-    未知 anchor id（identity manifest に存在しない id）を宣言した project は
-    `generated` を記録した直後・observe 呼び出しの手前（下記参照）で設定
-    エラーとして拒否される（Codex P2, #210 round 9 指摘11 — `recast plan`/
-    `recast run` の plan 段はこの検証を行わない。manual backend が注文書
-    公開・`awaiting_generation`・`generated` まで進めることを優先し、観測
-    スコープの妥当性は ingest の observe 直前でのみ判定する設計）。plain な
-    Error + exit 1 とし、`observation_incomplete`（観測実行時の実測失敗用の
-    state）は記録しない（state は `generated` のまま — 設定ミスと実行時
-    失敗を state レベルで区別する）。`observe_generated_artifact` 自身にも
-    同型の防御的ガードがある（`svprpe observe` 単体実行など他呼び出し元向け）。
+    未知 anchor id（identity manifest に存在しない id）を宣言した project は、
+    本コマンド冒頭の他 precheck 群（inputs_digest/plan_sha256/orders_digest、
+    下記参照）と同じ「collect/publish/record_state より前・何も書かず exit」
+    位置で設定エラーとして拒否される（Codex P2, #210 round 9 指摘11 → round
+    10 指摘13 でこの位置へ前倒し — 旧位置（collect 後）だと typo 修正後に
+    `awaiting_generation` から同じ take で再 ingest できなくなっていた）。
+    `recast plan`/`recast run` の plan 段はこの検証を行わない — manual
+    backend が注文書公開・`awaiting_generation` まで進めることを優先し、
+    観測スコープの妥当性は ingest 冒頭でのみ判定する設計。plain な Error +
+    exit 1 とし、state は `awaiting_generation` のまま変更しない
+    （`observation_incomplete`— 観測実行時の実測失敗用の state — は記録
+    しない。設定ミスと実行時失敗を state レベルで区別する）。
+    `observe_generated_artifact` 自身にも同型の防御的ガードがある
+    （`svprpe observe` 単体実行など他呼び出し元向け）。
     """
     import yaml
     from pydantic import ValidationError
