@@ -17,6 +17,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -107,14 +109,30 @@ def main() -> int:
 
     specs = load_specs(args.specs)
     args.out_dir.mkdir(parents=True, exist_ok=True)
+
+    # 成果物一式（全 WAV + manifest）を staging に完成させ、out_dir へ os.replace で
+    # 公開する。既存 out_dir へ直接書くと、途中で中断された場合に新 WAV と旧
+    # manifest.json（や WAV の部分集合）が混在した半端な成果物を下流の手動確認が
+    # 消費しうる（Codex 指摘・AGENTS §8）。manifest を最後に move するため、
+    # manifest が存在する時点では必ず全 WAV が配置済みである。
     manifest: Dict[str, Dict[str, Any]] = {}
-    for fid, (y, sr) in build_all(specs).items():
-        wav_path = args.out_dir / f"{fid}.wav"
-        sf.write(wav_path, y, sr, subtype="FLOAT")
-        digest = hashlib.sha256(wav_path.read_bytes()).hexdigest()
-        manifest[fid] = {"path": str(wav_path), "sample_rate": sr, "sha256": digest}
-    manifest_path = args.out_dir / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    with tempfile.TemporaryDirectory(prefix="melody-bench-stage-") as tmp:
+        staging = Path(tmp)
+        staged: List[Tuple[Path, Path]] = []
+        for fid, (y, sr) in build_all(specs).items():
+            staged_wav = staging / f"{fid}.wav"
+            sf.write(staged_wav, y, sr, subtype="FLOAT")
+            digest = hashlib.sha256(staged_wav.read_bytes()).hexdigest()
+            final_wav = args.out_dir / f"{fid}.wav"
+            staged.append((staged_wav, final_wav))
+            manifest[fid] = {"path": str(final_wav), "sample_rate": sr, "sha256": digest}
+        staged_manifest = staging / "manifest.json"
+        staged_manifest.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
+        )
+        for staged_wav, final_wav in staged:
+            os.replace(staged_wav, final_wav)
+        os.replace(staged_manifest, args.out_dir / "manifest.json")
     print(f"wrote {len(manifest)} fixtures + manifest to {args.out_dir}")
     return 0
 

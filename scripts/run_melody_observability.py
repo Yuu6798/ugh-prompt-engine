@@ -65,6 +65,22 @@ def _require_registry_schema(registry: Dict[str, Any]) -> None:
             f"expected {_EXPECTED_REGISTRY_SCHEMA} (fail-closed)"
         )
 
+
+def _unique_id_map(entries: List[Dict[str, Any]], where: str) -> Dict[str, str]:
+    """`entries` の id → input_kind マップを、重複 id を fail-closed で作る。
+
+    dict 内包表記は重複 id を黙って last-wins で上書きするため、事前登録が
+    曖昧（同一 id に別 input_kind）でも slow-lane 実行が通ってしまう。重複を
+    検出して reject し、曖昧な事前登録の下に観測を publish させない（Codex 指摘）。
+    """
+    ids = [entry["id"] for entry in entries]
+    duplicates = sorted({i for i in ids if ids.count(i) > 1})
+    if duplicates:
+        raise ValueError(
+            f"duplicate fixture id(s) in registry.yaml {where}: {duplicates} (fail-closed)"
+        )
+    return {entry["id"]: entry["input_kind"] for entry in entries}
+
 # 抽出器名 → PyPI distribution 名（provenance の installed version 採取用）。
 _EXTRACTOR_DIST = {
     "pyin": "librosa",
@@ -194,7 +210,7 @@ def run_synthetic(thresholds: ObservabilityThresholds) -> Dict[str, Any]:
     with open(REGISTRY_PATH, "r", encoding="utf-8") as handle:
         registry = yaml.safe_load(handle)
     _require_registry_schema(registry)
-    fixture_kinds = {f["id"]: f["input_kind"] for f in registry["fixtures"]}
+    fixture_kinds = _unique_id_map(registry["fixtures"], "fixtures")
     expect = {f["id"]: f.get("expect_status") for f in registry["fixtures"]}
 
     # fail-closed: 全ての合成 spec id は registry に事前登録されていなければならない。
@@ -248,7 +264,7 @@ def run_external(manifest_path: Path, thresholds: ObservabilityThresholds) -> Di
     # ミスラベル（例: suno_vocals_stem を clear_lead と誤記）で誤った経路集合を
     # 走らせ、未登録/不整合な fixture の下に一見妥当な観測を publish するのを防ぐ
     # （合成側 fail-closed と対称・設計 §5）。
-    registered = {f["id"]: f["input_kind"] for f in registry.get("external_fixtures", [])}
+    registered = _unique_id_map(registry.get("external_fixtures", []), "external_fixtures")
     seen_ids: set[str] = set()
 
     # 相対 path は manifest の位置を基準に解決する。cwd 基準だと、可搬 manifest を

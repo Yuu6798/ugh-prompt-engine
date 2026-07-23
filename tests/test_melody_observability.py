@@ -375,6 +375,48 @@ def test_harness_rejects_unknown_registry_schema(tmp_path):
         harness.load_thresholds(bad)
 
 
+def test_unique_id_map_rejects_duplicate_registry_ids():
+    """registry の重複 fixture id は last-wins でなく fail-closed で reject。"""
+    import scripts.run_melody_observability as harness
+
+    entries = [
+        {"id": "suno_vocals_stem", "input_kind": "vocal_track"},
+        {"id": "suno_vocals_stem", "input_kind": "clear_lead"},  # 重複・別 kind
+    ]
+    with pytest.raises(ValueError, match="duplicate fixture id"):
+        harness._unique_id_map(entries, "external_fixtures")
+    # 重複なしは通常の map を返す。
+    ok = harness._unique_id_map([{"id": "a", "input_kind": "clear_lead"}], "fixtures")
+    assert ok == {"a": "clear_lead"}
+
+
+def test_build_bench_publishes_atomically(tmp_path, monkeypatch):
+    """build_melody_bench.main は staging→公開で manifest を最後に配置する。"""
+    import scripts.build_melody_bench as bench_mod
+
+    out_dir = tmp_path / "bench"
+    real_replace = os.replace
+    seen: dict = {}
+
+    def tracking_replace(a, b):
+        if str(b).endswith("manifest.json"):
+            seen["wavs"] = sorted(p.name for p in out_dir.glob("*.wav"))
+        return real_replace(a, b)
+
+    monkeypatch.setattr(bench_mod.os, "replace", tracking_replace)
+    monkeypatch.setattr(
+        sys, "argv", ["build_melody_bench", "--out-dir", str(out_dir)]
+    )
+    bench_mod.main()
+    specs = bench.load_specs()
+    expected_wavs = sorted(f"{fid}.wav" for fid in specs["fixtures"])
+    # manifest 公開時に全 WAV が揃っている。
+    assert seen["wavs"] == expected_wavs
+    assert (out_dir / "manifest.json").exists()
+    for fid in specs["fixtures"]:
+        assert (out_dir / f"{fid}.wav").exists()
+
+
 def test_pair_generation_is_atomic_manifest_last(tmp_path, monkeypatch):
     """pair 生成は staging→公開で、manifest 出現時に全 variant が揃っている。"""
     import scripts.make_melody_pairs as pairs
