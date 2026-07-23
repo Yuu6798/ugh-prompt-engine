@@ -805,16 +805,19 @@ def _add_cover_backend(project_path: Path) -> None:
     project_path.write_text(mutated, encoding="utf-8")
 
 
-def test_recast_status_reports_stale_after_plan_overwritten_by_other_run(
+def test_recast_status_does_not_go_stale_after_plan_run_for_another_backend(
     tmp_path: Path,
 ) -> None:
-    """`recast_plan.json` は project 単位で単一ファイル — 別の (variant, backend)
-    向けに `recast plan` を再実行すると同じファイルが上書きされる。元の run
-    （`edm@suno`）の state はまだ `verified` のままだが、その `plan_sha256` は
-    もはや現在の `recast_plan.json`（`edm@suno_cover` 分）と一致しない。
-    `recast status` はこれを検出して stale 表示にすることを検証する（Codex P2
-    fourth round #207: 生成物の削除・破損・別 run による上書きへの fail-closed
-    fallback）。"""
+    """`recast_plan.json` は正典 per-run 位置（`<builds_root>/plans/
+    <variant>@<backend>/recast_plan.json`）へ公開される — 別の (variant,
+    backend) 向けに `recast plan` を再実行しても、元の run（`edm@suno`）の
+    正典 plan ファイルは無変更のままであり、`recast status` は元の run を
+    stale 表示しないことを検証する（Codex P2 review, PR #212 指摘: 従来は
+    project 直下の単一 `recast_plan.json` を突合対象にしていたため、別
+    (variant, backend) の plan 実行だけで無関係の run が stale 誤判定されて
+    いた回帰）。project 直下の `recast_plan.json`（便宜コピー）は最後に
+    評価した run の内容で上書きされるが、これは pin・突合対象ではないため
+    無関係。"""
     project_path = _copy_demo_project(tmp_path)
     _add_cover_backend(project_path)
 
@@ -823,13 +826,45 @@ def test_recast_status_reports_stale_after_plan_overwritten_by_other_run(
     )
     assert first.exit_code == 0, first.output
 
-    # 2 回目の実行結果（verified/blocked）は問わない — recast_plan.json が
-    # 別内容で上書きされることだけがこのテストの前提。
+    # 2 回目の実行結果（verified/blocked）は問わない — 便宜コピー
+    # （project 直下の recast_plan.json）が別内容で上書きされることだけが
+    # このテストの前提（正典 per-run ファイルは互いに独立したディレクトリ）。
     runner.invoke(
         app,
         ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno_cover"],
     )
-    assert (project_path.parent / "recast_plan.json").is_file()
+    assert (project_path.parent / "recast_plan.json").is_file()  # 便宜コピー（上書き済み）
+    assert (
+        project_path.parent / "builds" / "plans" / "edm@suno" / "recast_plan.json"
+    ).is_file()  # 正典 per-run ファイル（edm@suno 分・無変更）
+
+    status_result = runner.invoke(app, ["recast", "status", str(project_path)])
+
+    assert status_result.exit_code == 0, status_result.output
+    assert "stale" not in status_result.output
+
+
+def test_recast_status_reports_stale_after_canonical_plan_artifact_deleted(
+    tmp_path: Path,
+) -> None:
+    """正典 per-run plan ファイル（`<builds_root>/plans/<variant>@<backend>/
+    recast_plan.json`）自体が削除された場合は、従来どおり `recast status` が
+    stale 表示することを確認する回帰テスト（Codex P2 fourth round #207:
+    生成物の削除・破損への fail-closed fallback — per-run 化後もこの安全弁は
+    保持されている）。project 直下の便宜コピーは無変更のまま残るが、それは
+    突合対象ではないため stale 判定には影響しない。"""
+    project_path = _copy_demo_project(tmp_path)
+    plan_result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert plan_result.exit_code == 0, plan_result.output
+
+    canonical_plan_path = (
+        project_path.parent / "builds" / "plans" / "edm@suno" / "recast_plan.json"
+    )
+    assert canonical_plan_path.is_file()
+    canonical_plan_path.unlink()
+    assert (project_path.parent / "recast_plan.json").is_file()  # 便宜コピーは無変更のまま残る
 
     status_result = runner.invoke(app, ["recast", "status", str(project_path)])
 

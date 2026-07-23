@@ -186,8 +186,10 @@ def _validate_variant_backend_declared(loaded: Any, variant: str, backend: str) 
 
 
 def _preflight_reject_plan_state_output_collision(loaded: Any, variant: str, backend: str) -> None:
-    """`<project_dir>/recast_plan.json`/`recast_state.json`（`recast plan`/
-    `run`/`ingest` が最終的に書き込む 2 つの出力ファイル）が、この
+    """`<project_dir>/recast_plan.json`（便宜コピー）/
+    `<builds_root>/plans/<variant>@<backend>/recast_plan.json`（正典
+    per-run 公開先、Codex P2 review, PR #212 指摘）/`recast_state.json`
+    （`recast plan`/`run`/`ingest` が最終的に書き込む出力ファイル群）が、この
     (variant, backend) run の保護対象入力パス一式（`collect_protected_
     input_paths`）のいずれかと alias していないかを、**plan 束を構築する
     （＝ `publish=True` で packages/ へ公開する）前**に検査する（Codex P2
@@ -220,7 +222,7 @@ def _preflight_reject_plan_state_output_collision(loaded: Any, variant: str, bac
     として維持する。
     """
     from svp_rpe.recast.plan import RECAST_PLAN_FILENAME
-    from svp_rpe.recast.run_paths import collect_protected_input_paths
+    from svp_rpe.recast.run_paths import collect_protected_input_paths, resolve_plans_dir
     from svp_rpe.recast.state import RECAST_STATE_FILENAME
 
     resolved_inputs = {
@@ -229,6 +231,7 @@ def _preflight_reject_plan_state_output_collision(loaded: Any, variant: str, bac
     }
     for output_path in (
         loaded.project_dir / RECAST_PLAN_FILENAME,
+        resolve_plans_dir(loaded, variant, backend) / RECAST_PLAN_FILENAME,
         loaded.project_dir / RECAST_STATE_FILENAME,
     ):
         if output_path.resolve() in resolved_inputs:
@@ -240,11 +243,24 @@ def _preflight_reject_plan_state_output_collision(loaded: Any, variant: str, bac
 
 
 def _publish_recast_plan(
-    loaded: Any, plan: Any, *, protected_inputs: list[Path]
+    loaded: Any, plan: Any, *, variant: str, backend: str, protected_inputs: list[Path]
 ) -> tuple[Path, str]:
-    """`plan`（`RecastPlan`）を `<project_dir>/recast_plan.json` へ canonical
-    形式（sorted keys, 2-space indent, trailing newline — deterministic）で
-    atomic 公開し、publish したバイト列自身の sha256（`plan_sha256`）を返す。
+    """`plan`（`RecastPlan`）を正典の per-run 位置
+    `<builds_root>/plans/<variant>@<backend>/recast_plan.json`
+    （`resolve_plans_dir` — packages/orders/takes/reports と同じ命名規約）へ
+    canonical 形式（sorted keys, 2-space indent, trailing newline —
+    deterministic）で atomic 公開し、publish したバイト列自身の sha256
+    （`plan_sha256`）を返す。加えて `<project_dir>/recast_plan.json` へも
+    同じ bytes を「最新診断の便宜コピー」として書き続けるが、こちらは
+    pin・突合対象ではない（人がその場で最新の診断を覗くための利便性のみ）。
+
+    レイアウト変更の経緯（Codex P2 review 3 巡目, PR #212 指摘）: 従来は
+    project 直下の単一ファイルを正典としていたため、ある (variant, backend)
+    の `recast plan`/`run` が別の (variant, backend) の plan で同じファイルを
+    上書きし、前者が `awaiting_generation` のまま `plan_sha256` 突合に落ちて
+    正当な外部生成 take を stale 拒否していた。`recast status`/`recast
+    ingest` の `plan_sha256` 突合はこの正典 per-run ファイルへ向ける
+    （`recast_status_cmd`/`recast_ingest_cmd` 側の呼び出し箇所参照）。
 
     `recast plan`/`recast run`/`recast ingest` の 3 コマンドすべてが計画
     パイプラインを評価するたびに使う single source（Codex P2 fourth round
@@ -257,9 +273,10 @@ def _publish_recast_plan(
 
     `protected_inputs` は呼び出し側が `RecastPlanResult.protected_inputs`
     （plan 段の single-read 束から副作用なく再構成済みの集合）から渡す
-    必須引数（デフォルト値なし）。公開前にこの集合との alias 検査を行い、
-    衝突時は何も書かずに `ValueError` を送出する（fail-closed — 他公開サイト
-    と同じ契約、Codex P2 review round 5, PR3 #208 指摘 10）。
+    必須引数（デフォルト値なし）。公開前に**両方の公開先**（正典 per-run
+    ファイル + 便宜コピー）とこの集合との alias 検査を行い、いずれかが
+    衝突すれば何も書かずに `ValueError` を送出する（fail-closed — 他公開
+    サイトと同じ契約、Codex P2 review round 5, PR3 #208 指摘 10）。
 
     ここで独自に `collect_protected_input_paths` を呼んで identity manifest
     を**再 parse**しないのが要点（Codex P2 review round 7, PR3 #208 指摘 13:
@@ -275,13 +292,19 @@ def _publish_recast_plan(
     で書いており、Windows では改行が `"\n"` → `"\r\n"` に変換される。
     `plan_sha256` は encode 済み bytes から計算していたため、記録した hash
     と実際にディスクへ書かれた bytes が乖離し、publish 直後の `recast
-    status` が偽 stale を報告しうる欠陥があった）。
+    status` が偽 stale を報告しうる欠陥があった）。同じ bytes を 2 箇所へ
+    書くため、この保証は便宜コピー側にも自動的に及ぶ。
     """
     from svp_rpe.recast.plan import RECAST_PLAN_FILENAME
+    from svp_rpe.recast.run_paths import resolve_plans_dir
 
-    plan_path = loaded.project_dir / RECAST_PLAN_FILENAME
-    if plan_path.resolve() in {candidate.resolve() for candidate in protected_inputs}:
-        raise ValueError(f"output path collides with a protected input path: {plan_path}")
+    canonical_plan_path = resolve_plans_dir(loaded, variant, backend) / RECAST_PLAN_FILENAME
+    convenience_plan_path = loaded.project_dir / RECAST_PLAN_FILENAME
+
+    resolved_protected = {candidate.resolve() for candidate in protected_inputs}
+    for candidate_path in (canonical_plan_path, convenience_plan_path):
+        if candidate_path.resolve() in resolved_protected:
+            raise ValueError(f"output path collides with a protected input path: {candidate_path}")
 
     canonical = (
         json.dumps(
@@ -293,9 +316,12 @@ def _publish_recast_plan(
         + "\n"
     )
     canonical_bytes = canonical.encode("utf-8")
-    _write_recast_plan_atomically(plan_path, canonical_bytes)
+    _write_recast_plan_atomically(canonical_plan_path, canonical_bytes)
     plan_sha256 = hashlib.sha256(canonical_bytes).hexdigest()
-    return plan_path, plan_sha256
+    # 便宜コピー: pin・突合対象ではないが、正典と同じ bytes を project 直下
+    # にも書いておく（人がその場で最新診断を覗くための利便性のみ）。
+    _write_recast_plan_atomically(convenience_plan_path, canonical_bytes)
+    return canonical_plan_path, plan_sha256
 
 
 # `recast plan` の再実行が降格させてはいけない進行状態（Codex P2 review,
@@ -402,7 +428,11 @@ def recast_plan_cmd(
     # ようにする）。
     try:
         plan_path, plan_sha256 = _publish_recast_plan(
-            loaded, result.plan, protected_inputs=result.protected_inputs
+            loaded,
+            result.plan,
+            variant=variant,
+            backend=backend,
+            protected_inputs=result.protected_inputs,
         )
     except (OSError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
@@ -550,7 +580,11 @@ def recast_run_cmd(
     protected_inputs = artifacts.result.protected_inputs
     try:
         _plan_path, plan_sha256 = _publish_recast_plan(
-            loaded, artifacts.result.plan, protected_inputs=protected_inputs
+            loaded,
+            artifacts.result.plan,
+            variant=variant,
+            backend=backend,
+            protected_inputs=protected_inputs,
         )
     except (OSError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
@@ -818,6 +852,7 @@ def recast_ingest_cmd(
     from svp_rpe.recast.run_paths import (
         resolve_orders_dir,
         resolve_packages_dir,
+        resolve_plans_dir,
         resolve_reports_dir,
     )
     from svp_rpe.recast.state import load_recast_state, record_state
@@ -873,7 +908,13 @@ def recast_ingest_cmd(
         )
         raise typer.Exit(code=1)
 
-    current_plan_sha256 = _read_plan_sha256(loaded.project_dir / RECAST_PLAN_FILENAME)
+    # 正典 per-run plan ファイル（`resolve_plans_dir` — Codex P2 review,
+    # PR #212 指摘）へ突合する。project 直下の `recast_plan.json` は便宜
+    # コピーに過ぎず、別 (variant, backend) の plan/run で上書きされ得るため
+    # pin 突合には使わない。
+    current_plan_sha256 = _read_plan_sha256(
+        resolve_plans_dir(loaded, variant, backend) / RECAST_PLAN_FILENAME
+    )
     if run.plan_sha256 is None:
         typer.echo(
             f"Error: {run_key} has no recorded plan_sha256 (stale — no pin). "
@@ -1049,7 +1090,11 @@ def recast_ingest_cmd(
 
     try:
         _plan_path, plan_sha256 = _publish_recast_plan(
-            loaded, artifacts.result.plan, protected_inputs=artifacts.result.protected_inputs
+            loaded,
+            artifacts.result.plan,
+            variant=variant,
+            backend=backend,
+            protected_inputs=artifacts.result.protected_inputs,
         )
     except (OSError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
@@ -1260,13 +1305,19 @@ def recast_status_cmd(
     mode_overrides/device profile）が記録済み run の `inputs_digest` と一致しない
     場合、その run は stale（`recast plan` 再実行が必要）として表示する — 旧
     state をそのまま信用して次の一手（例: 生成に進む）を勧めない（Codex P2
-    #207）。加えて、記録済み `plan_sha256` を現在の `recast_plan.json` の
-    bytes（不在/読取失敗を含む）と突き合わせる — publish 後に plan 成果物が
-    削除・破損・別 (variant,backend) の plan で上書きされた場合も同様に stale
-    表示へ倒す（Codex P2 fourth round #207: fail-closed）。`inputs_digest`/
-    `plan_sha256` のいずれかが `None`（旧形式/手動コピーされた state 等）の
-    場合も「未確認だからスキップ」ではなく stale（pin なし）として表示する
-    （Codex P2 review round 4, PR3 #208 指摘 9）。
+    #207）。加えて、記録済み `plan_sha256` を、正典 per-run plan ファイル
+    （`<builds_root>/plans/<variant>@<backend>/recast_plan.json` —
+    `resolve_plans_dir`）の現在の bytes（不在/読取失敗を含む）と (variant,
+    backend) ごとに突き合わせる — publish 後に plan 成果物が削除・破損した
+    場合も同様に stale 表示へ倒す（Codex P2 fourth round #207: fail-closed）。
+    この突合は per-run ファイルへ向けるため、別の (variant, backend) に
+    対する `recast plan`/`run` を実行しても無関係の run は stale 化しない
+    （Codex P2 review, PR #212 指摘: 従来 project 直下の単一 `recast_plan.json`
+    を突合対象にしていたため、別 run の plan 実行だけで正当な run が
+    stale 誤判定されていた）。`inputs_digest`/`plan_sha256` のいずれかが
+    `None`（旧形式/手動コピーされた state 等）の場合も「未確認だからスキップ」
+    ではなく stale（pin なし）として表示する（Codex P2 review round 4, PR3
+    #208 指摘 9）。
 
     `awaiting_generation` の manual backend run については、加えて
     `orders_digest` も検査する（Codex P2 review round 10 指摘12）:
@@ -1284,6 +1335,7 @@ def recast_status_cmd(
     """
     from svp_rpe.recast import RecastError, load_recast_project
     from svp_rpe.recast.plan import RECAST_PLAN_FILENAME, compute_recast_inputs_digest
+    from svp_rpe.recast.run_paths import resolve_plans_dir
     from svp_rpe.recast.state import load_recast_state
 
     try:
@@ -1299,8 +1351,6 @@ def recast_status_cmd(
     table.add_column("next step")
 
     replan_step = _NEXT_STEP_BY_STATE["draft"]
-    plan_path = loaded.project_dir / RECAST_PLAN_FILENAME
-    current_plan_sha256 = _read_plan_sha256(plan_path)
     for variant in sorted(loaded.project.variants):
         for backend in sorted(loaded.project.backends):
             key = f"{variant}@{backend}"
@@ -1314,6 +1364,11 @@ def recast_status_cmd(
                 note = run.note or ""
                 current_digest = compute_recast_inputs_digest(
                     loaded, variant=variant, backend=backend
+                )
+                # 正典 per-run plan ファイルへ突合する（(variant, backend)
+                # ごとに独立 — Codex P2 review, PR #212 指摘参照）。
+                current_plan_sha256 = _read_plan_sha256(
+                    resolve_plans_dir(loaded, variant, backend) / RECAST_PLAN_FILENAME
                 )
                 if run.inputs_digest is None or run.plan_sha256 is None:
                     note = "stale（pin なし）— svprpe recast plan 再実行が必要"

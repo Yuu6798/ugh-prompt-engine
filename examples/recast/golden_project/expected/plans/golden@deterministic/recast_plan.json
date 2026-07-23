@@ -1,0 +1,44 @@
+{
+  "anchors": [
+    {
+      "anchor_id": "harmony",
+      "delivery": "unknown",
+      "domain": "harmony",
+      "policy_mode": "hard",
+      "sensor_available": true
+    },
+    {
+      "anchor_id": "structure",
+      "delivery": "unsupported",
+      "domain": "structure",
+      "policy_mode": "hard",
+      "sensor_available": true
+    }
+  ],
+  "backend": "deterministic",
+  "capability_mode": "advisory",
+  "changed_fields": [
+    {
+      "mode_support": "unknown",
+      "path": "physical.bpm",
+      "preservation_mode": "free"
+    },
+    {
+      "mode_support": "unknown",
+      "path": "rendering.target_backend",
+      "preservation_mode": "free"
+    }
+  ],
+  "invocation": "local",
+  "invocation_mode": "prompt_only",
+  "project_id": "midnight-signal-golden",
+  "recommendation": "run へ進行可。",
+  "schema_version": "recast-plan/0.1",
+  "state_reached": "verified",
+  "variant": "golden",
+  "warnings": [
+    "anchor 'harmony': no channel mapping defined",
+    "anchor 'structure': channel 'section_tags' is unsupported",
+    "style_prompt channel is unsupported; prompt payload omitted"
+  ]
+}

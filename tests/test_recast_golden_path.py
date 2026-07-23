@@ -20,9 +20,11 @@ local フロー（take-01）は `recast run` が `generated` までしか進め�
 分の report も作る — 「両 take の report まで」という指示書の要求を満たす。
 
 committed 固定は「軽量成果物+sha256 pin」方式（wav はコミットしない）:
-`examples/recast/golden_project/expected/` に `recast_plan.json`（project 単一
-ファイル — 最後に publish された plan、この flow では
-`golden@deterministic_manual`）/ 注文書 6 ファイル/ 両 backend の
+`examples/recast/golden_project/expected/` に `recast_plan.json`（project 直下
+の便宜コピー — 最後に publish された plan、この flow では
+`golden@deterministic_manual`）/ `plans/golden@<backend>/recast_plan.json`
+（両 backend の正典 per-run plan ファイル、Codex P2 review・PR #212 指摘で
+per-run 公開先へ変更）/ 注文書 6 ファイル/ 両 backend の
 `recast_report.json`+`recast_summary.md`/ 両 take の sha256 pin
 （`expected/takes.json`）を commit し、本テストが全経路を実行して byte 一致
 （JSON/md）+ take sha256 一致を検証する。
@@ -278,9 +280,20 @@ def _assert_matches_committed_expected(result: GoldenPathResult) -> None:
     assert result.take01_sha256 == expected_takes["deterministic"]["sha256"]
     assert result.take02_sha256 == expected_takes["deterministic_manual"]["sha256"]
 
+    # project 直下の便宜コピー（最後に評価された run — この flow では
+    # `golden@deterministic_manual`）と、両 backend の正典 per-run plan
+    # ファイル（`<builds_root>/plans/golden@<backend>/recast_plan.json`）の
+    # 両方を pin と突き合わせる（Codex P2 review, PR #212 指摘: 正典公開先が
+    # per-run 化されたため、その committed fixture も追加した）。
     _assert_bytes_match_expected(
         result.project_dir / RECAST_PLAN_FILENAME, EXPECTED / RECAST_PLAN_FILENAME
     )
+    for backend in ("deterministic", "deterministic_manual"):
+        plans_dir = result.project_dir / "builds" / "plans" / f"golden@{backend}"
+        expected_plans_dir = EXPECTED / "plans" / f"golden@{backend}"
+        _assert_bytes_match_expected(
+            plans_dir / RECAST_PLAN_FILENAME, expected_plans_dir / RECAST_PLAN_FILENAME
+        )
 
     order_dir = result.project_dir / "builds" / "orders" / "golden@deterministic_manual"
     expected_order_dir = EXPECTED / "orders" / "golden@deterministic_manual"
@@ -339,6 +352,13 @@ def test_golden_path_is_deterministic_across_independent_reruns(tmp_path: Path) 
     plan_a = (result_a.project_dir / RECAST_PLAN_FILENAME).read_bytes()
     plan_b = (result_b.project_dir / RECAST_PLAN_FILENAME).read_bytes()
     assert plan_a == plan_b
+
+    for backend in ("deterministic", "deterministic_manual"):
+        plans_dir_a = result_a.project_dir / "builds" / "plans" / f"golden@{backend}"
+        plans_dir_b = result_b.project_dir / "builds" / "plans" / f"golden@{backend}"
+        assert (plans_dir_a / RECAST_PLAN_FILENAME).read_bytes() == (
+            plans_dir_b / RECAST_PLAN_FILENAME
+        ).read_bytes()
 
     for backend in ("deterministic", "deterministic_manual"):
         reports_dir_a = result_a.project_dir / "builds" / "reports" / f"golden@{backend}"

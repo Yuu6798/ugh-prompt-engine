@@ -54,6 +54,25 @@ def resolve_reports_dir(loaded: LoadedRecastProject, variant: str, backend: str)
     return loaded.builds_root / "reports" / run_key(variant, backend)
 
 
+def resolve_plans_dir(loaded: LoadedRecastProject, variant: str, backend: str) -> Path:
+    """`recast plan`/`run`/`ingest` が正典の `recast_plan.json` を公開する先
+    （packages/orders/takes/reports と同じ per-(variant, backend) 命名規約
+    — この 4 種に加える 5 種目の per-(variant, backend) 出力ディレクトリ）。
+
+    Codex P2 review, PR #212 指摘: 従来 `recast_plan.json` は project 直下の
+    単一ファイルで、別の (variant, backend) に対する `recast plan`/`run` が
+    同じファイルを上書きしていた。その結果、ある run が `awaiting_generation`
+    のまま別 run の plan を実行しただけで、前者の `plan_sha256` pin が
+    「現在の recast_plan.json」と一致しなくなり、`recast ingest` が正当な
+    外部生成 take を stale 拒否していた。plan 成果物を他の 4 種と同じ
+    per-(variant, backend) ディレクトリへ公開することで、`plan_sha256` の
+    記録・`recast status`/`recast ingest` の突合はこの正典ファイルへ向ける
+    — project 直下の `recast_plan.json` は「最新診断の便宜コピー」として
+    書き続けるが、pin・突合対象からは外す（`cli/recast_cmd.py:
+    _publish_recast_plan` docstring 参照）。"""
+    return loaded.builds_root / "plans" / run_key(variant, backend)
+
+
 def collect_protected_input_paths(
     loaded: LoadedRecastProject, variant: str, backend: str
 ) -> list[Path]:

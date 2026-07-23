@@ -79,10 +79,17 @@ svprpe recast ingest <project.yaml> --variant V --backend B --audio <file>  # ma
 svprpe recast status <project.yaml>                       # 全 (variant, backend) の到達状態 + 次の一手
 ```
 
-`plan`/`run`/`ingest` は毎回 `recast_plan.json`（project 直下・単一ファイル、
-最後に評価した (variant, backend) の診断で上書きされる）を publish し、
-`inputs_digest`/`plan_sha256` を state へ pin する。`ingest` はこの pin を
-`awaiting_generation` を信用する前に fail-closed 突合する（stale 検出）。
+`plan`/`run`/`ingest` は毎回正典 `recast_plan.json` を
+`<builds_root>/plans/<variant>@<backend>/`（packages/orders/takes/reports と
+同じ per-(variant, backend) 命名規約）へ publish し、`inputs_digest`/
+`plan_sha256` をこの正典ファイルへ pin する。`ingest`/`status` はこの pin を
+`awaiting_generation` を信用する前に fail-closed 突合する（stale 検出）ため、
+別の (variant, backend) に対する `plan`/`run` を実行しても無関係の run は
+stale 化しない。project 直下の `recast_plan.json` は「最後に評価した
+(variant, backend) の診断」を映す便宜コピーとしても書き続けるが、pin・突合
+対象ではない（2026-07-23 改訂: 従来は project 直下の単一ファイルを正典と
+していたため、別 run の plan 実行だけで正当な `awaiting_generation` run が
+stale 誤判定されていた — Codex P2 review, PR #212 指摘）。
 
 ## 5. 「約束するのは測定できるものだけ」
 
@@ -151,8 +158,8 @@ fixture。CI 全経路回帰は `tests/test_recast_golden_path.py`
    `observation.enabled: true` のため ingest が observe→report まで自動継続）
 
 committed 固定は「軽量成果物 + sha256 pin」方式（wav はコミットしない）:
-`examples/recast/golden_project/expected/` に `recast_plan.json`（project
-単一ファイル・最後に評価された `golden@deterministic_manual` の診断）/
+`examples/recast/golden_project/expected/` に `plans/<variant>@<backend>/
+recast_plan.json`（正典 per-run ファイル、両 backend 分をそれぞれ commit）/
 注文書 6 ファイル/ 両 backend の `recast_report.json` + `recast_summary.md`/
 両 take の sha256 pin（`expected/takes.json`）を commit し、テストが全経路を
 実行して byte 一致（JSON/md）+ take sha256 一致を検証する。両 take とも
