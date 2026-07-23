@@ -1,17 +1,21 @@
 """rpe/learned/melodia_adapter.py — Essentia PredominantPitchMelodia F0 抽出。
 
-Optional via the `melodia` extra. Melodia（Salamon & Gómez 2012）はポリフォニック
-混合音源から支配的旋律 F0 を推定するアルゴリズムで、Essentia の
-`PredominantPitchMelodia` として実装されている。フレーム単位に
-(pitch_hz, pitchConfidence) を返し、本アダプタはそれを melody 観測ゲートの共通
-F0 トラックへ渡せる素の tuple 形で返す。決定論 RPE フィールドへは書き込まない。
+Manual / external integration only（**published extra なし**）。Melodia
+（Salamon & Gómez 2012）はポリフォニック混合音源から支配的旋律 F0 を推定する
+アルゴリズムで、Essentia の `PredominantPitchMelodia` として実装されている。
+フレーム単位に (pitch_hz, pitchConfidence) を返し、本アダプタはそれを melody
+観測ゲートの共通 F0 トラックへ渡せる素の tuple 形で返す。決定論 RPE フィールドへは
+書き込まない。Essentia は AGPL-3.0 のため `pyproject.toml` は `[melodia]` extra を
+**publish しない**（下記ライセンス注意）。使う場合は AGPL を受容の上 slow/manual
+lane で手動 `pip install essentia` する。`_INSTALL_HINT` と同じ方針。
 
 ⚠ ライセンス注意（設計 §5「Essentia/Melodia はライセンス確認の上 optional」）:
     **Essentia は AGPL-3.0**（コピーレフト）である。本リポジトリの MIT ライセンスと
     両立させるには、Essentia を **標準 install / CI に絶対に含めず**、実推論を回す
-    slow/manual lane の環境でのみ opt-in する必要がある。`melodia` extra は既定の
-    `dev` にも含めない。この隔離は他の optional 抽出器（MIT/Apache/CC0）より一段
-    強い制約であり、`docs/learned_models_policy.md` の許容ライセンス方針の
+    slow/manual lane の環境でのみ opt-in する必要がある。よって `pyproject.toml` は
+    `[melodia]` extra を **publish せず**（`dev` にも含めない）、手動 install に限る。
+    この隔離は他の optional 抽出器（MIT/Apache/CC0）より一段強い制約であり、
+    `docs/learned_models_policy.md` の許容ライセンス方針の
     例外として明示記録する。Melodia アルゴリズム自体の特許・利用条件も導入時に
     実確認する（本アダプタは重みを持たないルールベース算法だが、Essentia 経由の
     配布ライセンスが AGPL である事実が律速）。
