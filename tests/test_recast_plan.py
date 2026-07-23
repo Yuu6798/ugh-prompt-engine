@@ -111,6 +111,47 @@ def test_unknown_backend_raises_recast_error(tmp_path: Path) -> None:
         build_recast_plan(loaded, variant="edm", backend="does-not-exist")
 
 
+def test_unknown_observation_anchor_does_not_block_plan(tmp_path: Path) -> None:
+    """`observation.anchors` に identity manifest 側に無い anchor id（typo 等）
+    を列挙していても、plan 段はそれを検証しない（PR6 の当初実装は plan 段で
+    即時 `RecastError` を送出していたが、その後 `observe_generated_artifact` +
+    `cli.recast_cmd.recast_ingest_cmd`（Codex P2, #210 round 9 指摘11）へ
+    一本化した — plan/run が manual backend を `awaiting_generation`/
+    `generated` まで進められることを優先し、観測スコープの妥当性は ingest の
+    observe 直前でのみ検証する。plan.py の設計判断ログ参照）。"""
+    project_path = _copy_demo_project(tmp_path)
+    text = project_path.read_text(encoding="utf-8")
+    assert "observation:\n  enabled: false\n  anchors: []\n" in text  # sanity
+    text = text.replace(
+        "observation:\n  enabled: false\n  anchors: []\n",
+        "observation:\n  enabled: false\n  anchors: [does-not-exist]\n",
+        1,
+    )
+    project_path.write_text(text, encoding="utf-8")
+    loaded = load_recast_project(project_path)
+
+    result = build_recast_plan(loaded, variant="edm", backend="suno")
+    assert result.plan.blocked is None
+    assert result.plan.state_reached == "verified"
+
+
+def test_known_observation_anchor_subset_is_accepted(tmp_path: Path) -> None:
+    """`observation.anchors` が manifest に実在する anchor id の部分集合でも
+    plan 段は通常どおり評価される。"""
+    project_path = _copy_demo_project(tmp_path)
+    text = project_path.read_text(encoding="utf-8")
+    text = text.replace(
+        "observation:\n  enabled: false\n  anchors: []\n",
+        "observation:\n  enabled: false\n  anchors: [harmony]\n",
+        1,
+    )
+    project_path.write_text(text, encoding="utf-8")
+    loaded = load_recast_project(project_path)
+
+    result = build_recast_plan(loaded, variant="edm", backend="suno")
+    assert result.plan.state_reached == "verified"
+
+
 # --- byte-pin snapshot ---------------------------------------------------------
 
 

@@ -59,6 +59,7 @@ _BACKENDS_WITH_MANUAL_DETERMINISTIC_BLOCK = (
 
 _OBSERVATION_DISABLED_BLOCK = "observation:\n  enabled: false\n  anchors: []\n"
 _OBSERVATION_ENABLED_BLOCK = "observation:\n  enabled: true\n  anchors: []\n"
+_OBSERVATION_ENABLED_HARMONY_ONLY_BLOCK = "observation:\n  enabled: true\n  anchors: [harmony]\n"
 
 
 def _copy_demo_project(tmp_path: Path, *, label: str) -> Path:
@@ -231,6 +232,37 @@ def test_ingest_observe_report_e2e_reaches_reported(tmp_path: Path) -> None:
     assert "structure" in summary
     assert "enabled: false" in summary  # identity_assessment: no single score
     assert "svprpe recast report" not in ingest_info["output"]
+
+
+@pytest.mark.slow
+def test_ingest_observe_report_e2e_narrows_to_declared_observation_anchors(
+    tmp_path: Path,
+) -> None:
+    """PR6: `observation.anchors: [harmony]` の project は `recast_report.json`
+    を harmony のみへ絞り込む — `structure`（e2e_project の manifest が持つ
+    もう一方の anchor）は report に現れず、coverage もその 1 anchor 分のみ集計
+    される（`test_ingest_observe_report_e2e_reaches_reported` の全 anchor 経路
+    との対照）。"""
+    project_path = _copy_e2e_project(tmp_path, label="anchors_subset")
+    text = project_path.read_text(encoding="utf-8")
+    assert _BACKENDS_DETERMINISTIC_BLOCK in text  # sanity: fixture との drift 検出
+    text = text.replace(
+        _BACKENDS_DETERMINISTIC_BLOCK, _BACKENDS_WITH_MANUAL_DETERMINISTIC_BLOCK, 1
+    )
+    assert _OBSERVATION_DISABLED_BLOCK in text  # sanity: fixture との drift 検出
+    text = text.replace(_OBSERVATION_DISABLED_BLOCK, _OBSERVATION_ENABLED_HARMONY_ONLY_BLOCK, 1)
+    project_path.write_text(text, encoding="utf-8")
+
+    audio_path, _ = _synthesize_deterministic_take(project_path)
+    reports_dir, _ = _run_manual_ingest(project_path, audio_path)
+
+    report = json.loads((reports_dir / "recast_report.json").read_text(encoding="utf-8"))
+    assert [a["anchor_id"] for a in report["anchors"]] == ["harmony"]
+    assert report["coverage"] == {"verified": 0, "violated": 0, "not_observed": 1}
+
+    summary = (reports_dir / "recast_summary.md").read_text(encoding="utf-8")
+    assert "harmony" in summary
+    assert "structure" not in summary
 
 
 @pytest.mark.slow

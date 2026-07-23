@@ -702,6 +702,25 @@ def recast_ingest_cmd(
     When `observation.enabled` is false this command stops at `generated`,
     unchanged from PR3/PR4 behavior — `svprpe observe` remains available as a
     manual fallback either way.
+
+    Scope (PR6): `observation.anchors`（非空リスト）を宣言した project は
+    `recast_report.json`/`recast_summary.md`（coverage 集計も含む）をその
+    anchor 集合へ絞り込む（`recast.report.build_recast_report` の
+    `observation_anchors` 引数）。空リスト（既定）は絞り込みなし＝全 anchor。
+    未知 anchor id（identity manifest に存在しない id）を宣言した project は、
+    本コマンド冒頭の他 precheck 群（inputs_digest/plan_sha256/orders_digest、
+    下記参照）と同じ「collect/publish/record_state より前・何も書かず exit」
+    位置で設定エラーとして拒否される（Codex P2, #210 round 9 指摘11 → round
+    10 指摘13 でこの位置へ前倒し — 旧位置（collect 後）だと typo 修正後に
+    `awaiting_generation` から同じ take で再 ingest できなくなっていた）。
+    `recast plan`/`recast run` の plan 段はこの検証を行わない — manual
+    backend が注文書公開・`awaiting_generation` まで進めることを優先し、
+    観測スコープの妥当性は ingest 冒頭でのみ判定する設計。plain な Error +
+    exit 1 とし、state は `awaiting_generation` のまま変更しない
+    （`observation_incomplete`— 観測実行時の実測失敗用の state — は記録
+    しない。設定ミスと実行時失敗を state レベルで区別する）。
+    `observe_generated_artifact` 自身にも同型の防御的ガードがある
+    （`svprpe observe` 単体実行など他呼び出し元向け）。
     """
     import yaml
     from pydantic import ValidationError
@@ -1102,6 +1121,7 @@ def recast_ingest_cmd(
         report=observation.report,
         take_path_relative=take_relative,
         take_sha256=take.sha256,
+        observation_anchors=loaded.project.observation.anchors,
     )
     summary_markdown = render_recast_summary_markdown(recast_report)
     report_json_bytes = (

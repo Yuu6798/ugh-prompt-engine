@@ -1286,6 +1286,18 @@ def build_recast_plan_artifacts(
     assert manifest is not None  # 上の 2 ガードで None のケースは既に return 済み
     manifest_by_id = {anchor.id: anchor for anchor in manifest.anchors}
 
+    # 注: `observation.anchors` の未知 anchor id 検証は本 plan 段では行わない
+    # （PR6 当初実装はここで即時 `RecastError` を送出していたが、その後の
+    # `svp_rpe.arrange.observe.observe_generated_artifact` +
+    # `cli.recast_cmd.recast_ingest_cmd`（Codex P2, #210 round 9 指摘11）へ
+    # 一本化した — plan 段で fail すると manual backend が `awaiting_generation`
+    # /`generated` にすら到達できず、「注文書は出したが観測設定が誤っている」
+    # という状態を state として残せなくなる。ingest 側は `generated` を記録
+    # した直後・observe 呼び出しの手前でこの検証を行い、設定ミスとして
+    # plain error + exit 1（state は `generated` のまま、`observation_incomplete`
+    # とは区別）とする。plan/run はこの anchor id 検証を行わず観測スコープの
+    # 妥当性に関知しない）。
+
     # --- step 4+5: arrangement resolve + preservation contract -------------
     if spec_read_error is not None:
         return _finalize(

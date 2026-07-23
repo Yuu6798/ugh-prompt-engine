@@ -1,0 +1,12 @@
+{
+  "deterministic": {
+    "path": "builds/takes/golden@deterministic/take-01.wav",
+    "sha256": "7a20b1e1131bdc3cd72444ab5d50eede157f6adbf78e8bb57180601af2ca478c",
+    "style": "recast_deterministic (seed=12, PR3 DeterministicInvoker fixed style)"
+  },
+  "deterministic_manual": {
+    "path": "builds/takes/golden@deterministic_manual/take-01.wav",
+    "sha256": "7c6a6f44b3414c68da5d6115087c232d890a4d68618f213ec7ebf6cfab011fe9",
+    "style": "recast_golden_take2 (seed=99, manual-flow stand-in take)"
+  }
+}

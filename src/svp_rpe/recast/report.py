@@ -27,7 +27,7 @@ Design Memo が `observation-report/0.2` を定義するまで到達不能（マ
 """
 from __future__ import annotations
 
-from typing import Dict, List, Literal, Optional
+from typing import Dict, List, Literal, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -247,6 +247,7 @@ def build_recast_report(
     report: ObservationReport,
     take_path_relative: str,
     take_sha256: str,
+    observation_anchors: Sequence[str] = (),
 ) -> RecastReport:
     """`ObservationReport`（`observe_generated_artifact` が組み立てた計器出力）+
     `package`（`anchor_statuses[].requested_mode` 由来の policy_mode）から
@@ -255,13 +256,25 @@ def build_recast_report(
 
     anchor の順序は `report.anchors`（= manifest.anchors の宣言順）をそのまま
     保つ — 決定論契約（同一 checkout + 同一観測結果なら常に同じ順序）。
+
+    `observation_anchors`（`RecastProject.observation.anchors`、PR6）が非空の
+    場合、`report.anchors` をその集合に絞り込んでから `RecastReport` を組み立てる
+    — coverage 集計もこの絞り込み後の部分集合に対して行う。空（既定）は
+    「絞り込みなし＝全 anchor」という `ObservationConfig.anchors` の既存契約
+    （schema 側の docstring 参照）をそのまま踏襲する。未知 anchor id を渡した
+    場合の fail-closed 検証は呼び出し側の責務（`recast/plan.py` の
+    `build_recast_plan_artifacts` が manifest ロード直後に行う — 本関数は
+    純粋なフィルタリングのみで、ここでは検証しない）。
     """
     policy_by_anchor: Dict[str, Optional[PreservationMode]] = {
         status.anchor_id: status.requested_mode for status in package.anchor_statuses
     }
+    allowed_anchor_ids = set(observation_anchors) if observation_anchors else None
 
     anchors: List[RecastReportAnchor] = []
     for observation in report.anchors:
+        if allowed_anchor_ids is not None and observation.anchor_id not in allowed_anchor_ids:
+            continue
         coverage = _coverage_for(observation.adherence_status)
         anchors.append(
             RecastReportAnchor(
