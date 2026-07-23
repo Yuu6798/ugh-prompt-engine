@@ -509,8 +509,9 @@ def test_build_bench_publishes_atomically(tmp_path, monkeypatch):
         # os.replace のグローバル monkeypatch は numba の JIT キャッシュ書き込み等
         # 無関係な os.replace も拾うため、dst で自分の公開だけに絞る。
         if Path(b).parent == out_dir:
-            # staging(src) は out_dir と同一 fs（out_dir.parent 直下）にある。
-            assert out_dir.parent in Path(a).parents, (a, out_dir.parent)
+            # staging(src) は out_dir の**中**にある（symlink/マウント構成に依らず
+            # rename が同一 fs で成立するよう、宛先と同じ out_dir を親に持つ）。
+            assert out_dir in Path(a).parents, (a, out_dir)
             if str(b).endswith("manifest.json"):
                 seen["wavs"] = sorted(p.name for p in out_dir.glob("*.wav"))
         return real_replace(a, b)
@@ -547,8 +548,9 @@ def test_pair_generation_is_atomic_manifest_last(tmp_path, monkeypatch):
         # グローバル monkeypatch は librosa/numba の JIT キャッシュ書き込み等
         # 無関係な os.replace も拾うため、dst で自分の公開だけに絞る。
         if Path(b).parent == out_dir:
-            # EXDEV 回避: staging(src) は out_dir と同一 fs（out_dir.parent 直下）。
-            assert out_dir.parent in Path(a).parents, (a, out_dir.parent)
+            # EXDEV 回避: staging(src) は out_dir の**中**（宛先と同じ out_dir を親に持つ
+            # ため symlink/マウント構成に依らず rename が同一 fs で成立する）。
+            assert out_dir in Path(a).parents, (a, out_dir)
             # manifest を公開する瞬間、out_dir に既に全 variant が存在していること。
             if str(b).endswith("__pairs_manifest.json"):
                 seen_when_manifest_published["variants"] = sorted(
@@ -631,6 +633,35 @@ def test_report_pins_registry_hash_and_gate_snapshot(tmp_path):
     assert results["registry_sha256"] == hashlib.sha256(reg_bytes).hexdigest()
     # 閾値スナップショットが report に載る（passing 行の再現性）。
     assert results["observation_gate"]["min_note_count"] == 8
+    # 由来（registry 派生）が明示される。
+    assert results["thresholds_source"] == "registry"
+
+
+def test_report_pins_actual_thresholds_not_registry_when_overridden(tmp_path):
+    """thresholds override 時、report は registry snapshot でなく**実際に使った**閾値を載せる。
+
+    override で判定しつつ registry の gate を載せると、report が使っていない gate を
+    主張してしまう（Codex 指摘・AGENTS §8）。observation_gate は assess に渡した
+    thresholds そのもの・thresholds_source は "override" を記録することを固定する。
+    """
+    import dataclasses
+    import json as _json
+
+    import scripts.run_melody_observability as harness
+
+    # registry の min_note_count(=8) と明確に異なる override。
+    override = dataclasses.replace(_default_thresholds(), min_note_count=3)
+    manifest = tmp_path / "empty.json"
+    manifest.write_text(_json.dumps([]), encoding="utf-8")
+    results = harness.run_external(manifest, override)
+    assert results["thresholds_source"] == "override"
+    # report が主張する gate = 実際に使った override（registry の 8 ではない）。
+    assert results["observation_gate"]["min_note_count"] == 3
+    assert results["observation_gate"] == dataclasses.asdict(override)
+    # synthetic モードでも同様。
+    syn = harness.run_synthetic(override)
+    assert syn["thresholds_source"] == "override"
+    assert syn["observation_gate"]["min_note_count"] == 3
 
 
 def test_external_harness_records_and_verifies_audio_hash(tmp_path):

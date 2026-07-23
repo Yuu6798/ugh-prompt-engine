@@ -27,6 +27,7 @@ import json
 import os
 import sys
 import tempfile
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -256,6 +257,7 @@ def run_synthetic(
     # registry を single read（bytes→hash→parse）。thresholds も fixture metadata も
     # この同じ read から作り、registry_sha256 を report に pin する。
     registry, registry_sha256 = _load_registry()
+    thresholds_source = "registry" if thresholds is None else "override"
     if thresholds is None:
         thresholds = ObservabilityThresholds.from_registry(registry["observation_gate"])
     fixture_kinds = _unique_id_map(registry["fixtures"], "fixtures")
@@ -286,7 +288,13 @@ def run_synthetic(
     results: Dict[str, Any] = {
         "mode": "synthetic",
         "registry_sha256": registry_sha256,
-        "observation_gate": registry["observation_gate"],  # 閾値スナップショット pin
+        "thresholds_source": thresholds_source,
+        # ★実際に assess へ渡した閾値そのものを pin する。registry スナップショットを
+        # そのまま載せると、caller が thresholds override を渡した場合に「載っているゲート」
+        # と「判定に使ったゲート」が食い違い、report が使っていないゲートを主張する
+        # （Codex 指摘・AGENTS §8）。asdict は default 値込みの解決済み全フィールドを返す
+        # ため registry snapshot より厳密。thresholds_source で由来（registry/override）も明示。
+        "observation_gate": asdict(thresholds),
         "fixtures": {},
     }
     with tempfile.TemporaryDirectory(prefix="melody-bench-") as tmp:
@@ -325,6 +333,7 @@ def run_external(
     # registry を single read（bytes→hash→parse）。thresholds も external_fixtures も
     # 同じ read から作り、registry_sha256 を report に pin する。
     registry, registry_sha256 = _load_registry()
+    thresholds_source = "registry" if thresholds is None else "override"
     if thresholds is None:
         thresholds = ObservabilityThresholds.from_registry(registry["observation_gate"])
 
@@ -346,7 +355,10 @@ def run_external(
         "manifest_path": str(manifest_path),
         "manifest_sha256": manifest_sha256,
         "registry_sha256": registry_sha256,
-        "observation_gate": registry["observation_gate"],  # 閾値スナップショット pin
+        "thresholds_source": thresholds_source,
+        # ★実際に assess へ渡した閾値そのものを pin（override 時も嘘をつかない）。
+        # 詳細は run_synthetic の同フィールド注記を参照（Codex 指摘・AGENTS §8）。
+        "observation_gate": asdict(thresholds),
         "fixtures": {},
     }
     with tempfile.TemporaryDirectory(prefix="melody-ext-") as tmp:

@@ -134,13 +134,17 @@ def main() -> int:
     #
     # temp は 2 つに分ける:
     #  - src_tmp（既定 /tmp 可）: source の凍結コピー（librosa が読むだけ・out_dir の
-    #    fs に載る必要なし）。
-    #  - stage_tmp（out_dir.parent 直下 = out_dir と同一 fs）: 公開対象の variant。
-    #    既定 temp に置くと out_dir が別マウントのとき os.replace が EXDEV で失敗する
-    #    ため、rename が同一 fs 内で成立するよう out_dir の親に作る（Codex 指摘）。
+    #    fs に載る必要なし。rename 元にはならない）。
+    #  - stage_tmp（**out_dir の中**の隠し temp サブディレクトリ）: 公開対象の variant。
+    #    既定 temp に置くと out_dir が別マウントのとき os.replace が EXDEV で失敗する。
+    #    out_dir.parent 直下でも不十分で、out_dir が**別 fs を指す symlink**のとき宛先は
+    #    symlink を辿って target fs に解決される一方 staging は字面上の親 fs に載り EXDEV が
+    #    残る（Codex 指摘）。staging を out_dir 内に置けば staging も宛先も同じ out_dir
+    #    （symlink 先の実ディレクトリ）を親に持ち、rename は symlink/マウント構成によらず必ず
+    #    同一 fs で成立する。隠し prefix + manifest 駆動消費なので途中成果物は下流から不可視。
     with tempfile.TemporaryDirectory(prefix="melody-pairs-src-") as src_tmp, \
             tempfile.TemporaryDirectory(
-                prefix=f".{stem}.stage-", dir=out_dir.parent
+                prefix=f".{stem}.stage-", dir=out_dir
             ) as stage_tmp:
         frozen = Path(src_tmp) / args.input.name
         frozen.write_bytes(source_bytes)

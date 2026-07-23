@@ -117,12 +117,17 @@ def main() -> int:
     # 消費しうる（Codex 指摘・AGENTS §8）。manifest を最後に move するため、
     # manifest が存在する時点では必ず全 WAV が配置済みである。
     #
-    # staging は **out_dir と同一ファイルシステム**（out_dir.parent 直下）に作る。
-    # 既定 temp（/tmp）に置くと、out_dir が別マウントの成果物ボリューム等のとき
-    # os.replace が EXDEV で失敗し公開できない（Codex 指摘）。
+    # staging は **out_dir の中**（隠し temp サブディレクトリ）に作る。既定 temp（/tmp）
+    # に置くと out_dir が別マウントのとき os.replace が EXDEV で失敗する。out_dir.parent
+    # 直下でも不十分で、out_dir が**別 fs を指す symlink**のとき os.replace の宛先は
+    # symlink を辿って target fs 上に解決される一方、staging は symlink の字面上の親 fs に
+    # 載るため EXDEV が残る（Codex 指摘）。staging を out_dir 内に置けば、staging も宛先も
+    # 同じ out_dir（symlink 先の実ディレクトリ）を親に持つため、rename は symlink/マウント
+    # 構成によらず必ず同一 fs で成立する。隠し prefix + manifest 駆動消費なので途中成果物は
+    # 下流から不可視。
     manifest: Dict[str, Dict[str, Any]] = {}
     with tempfile.TemporaryDirectory(
-        prefix=f".{out_dir.name}.stage-", dir=out_dir.parent
+        prefix=f".{out_dir.name}.stage-", dir=out_dir
     ) as tmp:
         staging = Path(tmp)
         staged: List[Tuple[Path, Path]] = []
