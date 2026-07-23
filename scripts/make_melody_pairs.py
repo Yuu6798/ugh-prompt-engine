@@ -95,8 +95,17 @@ def main() -> int:
     # できるのは既存 manifest の source_sha256 が現ソースと一致するときだけ（= 同一
     # ソースの冪等再生成）。manifest が無い/破損/pin 無し（prior_sha=None）や別ソース
     # （sha 不一致）は、prior 成果物が同一由来だと証明できないので上書きしない。
+    # 既存 `<stem>__*` 成果物の探索は **literal 一致**で行う。`stem` に glob
+    # メタ文字（例 song[1]）が含まれると `glob(f"{stem}__*.wav")` は文字クラスと
+    # 解釈され `song[1]__base.wav` を取りこぼし、fail-closed を素通りして残骸を
+    # 上書きしてしまう（Codex 指摘）。iterdir + startswith で literal 照合する。
+    variant_prefix = f"{stem}__"
     existing_manifest = out_dir / f"{stem}__pairs_manifest.json"
-    existing_targets = list(out_dir.glob(f"{stem}__*.wav"))
+    existing_targets = [
+        p
+        for p in out_dir.iterdir()
+        if p.suffix == ".wav" and p.name.startswith(variant_prefix)
+    ]
     if existing_manifest.exists():
         existing_targets.append(existing_manifest)
     if existing_targets:

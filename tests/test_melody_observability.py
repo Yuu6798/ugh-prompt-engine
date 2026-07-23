@@ -447,6 +447,40 @@ def test_pair_generation_fails_closed_on_stem_collision(tmp_path, monkeypatch):
         _run(src_a)
 
 
+def test_pair_generation_collision_handles_glob_metachar_stem(tmp_path, monkeypatch):
+    """glob メタ文字を含む stem でも WAV 残骸を literal 照合して fail-closed。"""
+    import scripts.make_melody_pairs as pairs
+
+    sr = 22050
+    t = np.linspace(0, 1.0, sr, endpoint=False)
+    out_dir = tmp_path / "out"
+
+    def _write(path, freq):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        sf.write(path, (0.3 * np.sin(2 * np.pi * freq * t)).astype(np.float32), sr, subtype="FLOAT")
+
+    # basename に glob メタ文字 `[` `]` を含む同名別ソース。
+    src_a = tmp_path / "a" / "song[1].wav"
+    src_b = tmp_path / "b" / "song[1].wav"
+    _write(src_a, 330.0)
+    _write(src_b, 440.0)
+
+    def _run(src):
+        monkeypatch.setattr(
+            sys, "argv",
+            ["make_melody_pairs", "--input", str(src), "--out-dir", str(out_dir),
+             "--semitones", "2", "--time-rates", "1.05"],
+        )
+        return pairs.main()
+
+    _run(src_a)
+    # manifest を消し WAV 残骸だけ残す（literal 照合できないと取りこぼす条件）。
+    (out_dir / "song[1]__pairs_manifest.json").unlink()
+    assert any(p.name.startswith("song[1]__") for p in out_dir.iterdir())
+    with pytest.raises(ValueError, match="stem collision"):
+        _run(src_b)
+
+
 def test_unique_id_map_rejects_duplicate_registry_ids():
     """registry の重複 fixture id は last-wins でなく fail-closed で reject。"""
     import scripts.run_melody_observability as harness
