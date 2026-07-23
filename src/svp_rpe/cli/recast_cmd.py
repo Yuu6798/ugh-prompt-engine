@@ -150,6 +150,41 @@ def _print_plan_warnings(plan: Any) -> None:
         console.print(f"  - {warning}")
 
 
+def _validate_variant_backend_declared(loaded: Any, variant: str, backend: str) -> None:
+    """`variant`/`backend` が project.yaml に宣言されていることを確認する
+    （Codex P2 review round 14, PR5 #210 指摘19）。
+
+    `plan`/`run`/`ingest` の 3 CLI コマンドはいずれも preflight
+    （`_preflight_reject_plan_state_output_collision`）を最初に呼ぶが、その
+    内部の `collect_protected_input_paths` は `loaded.arrangement_paths
+    [variant]`/`loaded.capability_profile_paths[backend]` を dict 添字で直接
+    引く。`--variant`/`--backend` に typo があると、この preflight が
+    `build_recast_plan_artifacts` 内の既存 actionable な検証（`recast/
+    plan.py` の `if variant not in project.variants: raise RecastError(...)`
+    等）へ到達する前に生 `KeyError` を送出し、CLI の except 節が拾わない
+    内部エラー（traceback 付き）に落ちてしまう。
+
+    この関数を preflight の**前**に呼び、`recast/plan.py` と同一文言の
+    `RecastError` を actionable に送出する（呼び出し側の既存
+    `except (..., RecastError, ...)` にそのまま乗る — 新しい except 節は
+    不要）。`collect_protected_input_paths` 自身にも同型の検証を追加した
+    （defense in depth — 本関数を経由しない将来の呼び出し経路への備え）。
+    """
+    from svp_rpe.recast import RecastError
+
+    project = loaded.project
+    if variant not in project.variants:
+        raise RecastError(
+            f"recast project '{project.project.id}': unknown variant {variant!r} "
+            f"(declared: {sorted(project.variants)})"
+        )
+    if backend not in project.backends:
+        raise RecastError(
+            f"recast project '{project.project.id}': unknown backend {backend!r} "
+            f"(declared: {sorted(project.backends)})"
+        )
+
+
 def _preflight_reject_plan_state_output_collision(loaded: Any, variant: str, backend: str) -> None:
     """`<project_dir>/recast_plan.json`/`recast_state.json`（`recast plan`/
     `run`/`ingest` が最終的に書き込む 2 つの出力ファイル）が、この
@@ -287,6 +322,11 @@ def recast_plan_cmd(
 
     try:
         loaded = load_recast_project(project_yaml)
+        # `--variant`/`--backend` の宣言確認（Codex P2 review round 14,
+        # PR5 #210 指摘19 — `_validate_variant_backend_declared` docstring
+        # 参照）: 直後の preflight が dict 添字で生 KeyError を送出する前に、
+        # typo を actionable な RecastError として拒否する。
+        _validate_variant_backend_declared(loaded, variant, backend)
         # packages/ への publish=True 公開前の preflight（Codex P2 review
         # round 15, PR3 #208 指摘30 — `_preflight_reject_plan_state_output_
         # collision` docstring 参照）: plan 束を構築する前に、この run が
@@ -429,6 +469,9 @@ def recast_run_cmd(
 
     try:
         loaded = load_recast_project(project_yaml)
+        # `--variant`/`--backend` の宣言確認（Codex P2 review round 14,
+        # PR5 #210 指摘19 — `recast plan` 側の同型コメント参照）。
+        _validate_variant_backend_declared(loaded, variant, backend)
         # packages/ への publish=True 公開前の preflight（Codex P2 review
         # round 15, PR3 #208 指摘30 — `recast plan` 側の同型コメント参照）。
         _preflight_reject_plan_state_output_collision(loaded, variant, backend)
@@ -719,6 +762,9 @@ def recast_ingest_cmd(
 
     try:
         loaded = load_recast_project(project_yaml)
+        # `--variant`/`--backend` の宣言確認（Codex P2 review round 14,
+        # PR5 #210 指摘19 — `recast plan` 側の同型コメント参照）。
+        _validate_variant_backend_declared(loaded, variant, backend)
         # packages/ への公開（指摘27 対応で `publish=False` 再ビルド後の
         # 直接 `_atomic_publish_text_bundle` 呼び出し）前の preflight
         # （Codex P2 review round 15, PR3 #208 指摘30 — `recast plan` 側の

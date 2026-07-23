@@ -626,6 +626,12 @@ def test_recast_plan_rejects_score_aliased_to_recast_plan_output(tmp_path: Path)
 
 
 def test_recast_plan_unknown_variant_exits_nonzero_without_writing_plan(tmp_path: Path) -> None:
+    """Codex P2（#210 round 14 指摘19）: `--variant` の typo は preflight
+    （`_preflight_reject_plan_state_output_collision` 内の
+    `collect_protected_input_paths` が `loaded.arrangement_paths[variant]`
+    を dict 添字で引く）より前に、`_validate_variant_backend_declared` が
+    `RecastError` として actionable に拒否する（生 `KeyError` の内部エラー
+    ではない — `"Traceback" not in result.output` で機械的に確認）。"""
     project_path = _copy_demo_project(tmp_path)
 
     result = runner.invoke(
@@ -634,6 +640,25 @@ def test_recast_plan_unknown_variant_exits_nonzero_without_writing_plan(tmp_path
     )
 
     assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    assert "unknown variant 'does-not-exist'" in result.output
+    assert not (project_path.parent / "recast_plan.json").exists()
+
+
+def test_recast_plan_unknown_backend_exits_nonzero_without_writing_plan(tmp_path: Path) -> None:
+    """指摘19 の backend 側: `--backend` の typo も同様に actionable な
+    `RecastError`（`loaded.capability_profile_paths[backend]` の生
+    `KeyError` ではない）で拒否される。"""
+    project_path = _copy_demo_project(tmp_path)
+
+    result = runner.invoke(
+        app,
+        ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "does-not-exist"],
+    )
+
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    assert "unknown backend 'does-not-exist'" in result.output
     assert not (project_path.parent / "recast_plan.json").exists()
 
 
