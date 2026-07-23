@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -64,6 +65,30 @@ def _require_registry_schema(registry: Dict[str, Any]) -> None:
             f"unsupported melody_bench registry schema_version {version!r}; "
             f"expected {_EXPECTED_REGISTRY_SCHEMA} (fail-closed)"
         )
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """`text` を `path` へ atomic に書く（同一ディレクトリの temp file → os.replace）。
+
+    `write_text` は最終パスを直接 truncate してから書くため、書き込み途中の中断や
+    disk error で partial な report が残り、既存の完全な成果物を破壊しうる
+    （後の provenance / Go-No-Go 読み手が corrupt 出力を消費する）。同一ディレクトリ
+    （= 同一FS）の temp file へ全 bytes を書き切ってから os.replace で publish する
+    （Codex 指摘・AGENTS §8）。
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def _unique_id_map(entries: List[Dict[str, Any]], where: str) -> Dict[str, str]:
@@ -355,7 +380,9 @@ def main() -> int:
     for line in summarize(results):
         print(line)
     if args.out is not None:
-        args.out.write_text(json.dumps(results, indent=2, sort_keys=True), encoding="utf-8")
+        _atomic_write_text(
+            args.out, json.dumps(results, indent=2, sort_keys=True)
+        )
         print(f"\nwrote {args.out}")
     return 0
 

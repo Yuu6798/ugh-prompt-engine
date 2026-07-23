@@ -379,6 +379,30 @@ def test_harness_rejects_unknown_registry_schema(tmp_path):
         harness.load_thresholds(bad)
 
 
+def test_atomic_write_text_preserves_prior_on_failure(tmp_path, monkeypatch):
+    """--out の atomic 書き込み: 失敗時に既存 report を破壊せず temp を残さない。"""
+    import scripts.run_melody_observability as harness
+
+    out = tmp_path / "report.json"
+    out.write_text('{"prev": true}', encoding="utf-8")
+
+    # os.replace を失敗させて中断を模す。
+    def boom(a, b):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(harness.os, "replace", boom)
+    with pytest.raises(OSError):
+        harness._atomic_write_text(out, '{"new": true}')
+    # 既存 report は無傷、temp file は残らない。
+    assert out.read_text(encoding="utf-8") == '{"prev": true}'
+    assert not list(tmp_path.glob(".report.json.*.tmp"))
+
+    # 正常系: os.replace を戻し、完全な内容で置換される。
+    monkeypatch.undo()
+    harness._atomic_write_text(out, '{"new": true}')
+    assert out.read_text(encoding="utf-8") == '{"new": true}'
+
+
 def test_unique_id_map_rejects_duplicate_registry_ids():
     """registry の重複 fixture id は last-wins でなく fail-closed で reject。"""
     import scripts.run_melody_observability as harness
