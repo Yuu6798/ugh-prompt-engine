@@ -91,6 +91,17 @@ stale 化しない。project 直下の `recast_plan.json` は「最後に評価�
 していたため、別 run の plan 実行だけで正当な `awaiting_generation` run が
 stale 誤判定されていた — Codex P2 review, PR #212 指摘）。
 
+`inputs_digest`（生成系: 注文書・音源の同一性）は意図的に `observation` 節を
+除外している一方、`observed`/`reported` の run は別途 `observation_digest`
+（`observation` 節の canonical digest）を pin する二層構成（2026-07-23 改訂・
+Codex P2 review, PR #212 指摘）。`observation.enabled`/`observation.anchors`
+編集後に `recast status` が該当 run を「stale（observation 設定が report 生成
+時から変更）」と表示したら、`recast ingest` を**同一 take**（`--audio` に
+既存 `<builds_root>/takes/<variant>@<backend>/take-01.*` をそのまま指定）で
+再実行すると take を再収蔵せず observe→report だけをやり直せる（再観測。
+`generated`/`observed`/`reported` いずれの状態からも実行可 — `awaiting_
+generation` 専用の `orders_digest` 突合はこの経路では対象外）。
+
 ## 5. 「約束するのは測定できるものだけ」
 
 D-1（`docs/wi1_d1_thresholds.md` 系列の裁定）を継承する:

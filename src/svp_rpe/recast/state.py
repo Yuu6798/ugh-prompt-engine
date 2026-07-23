@@ -92,6 +92,20 @@ class RecastRunState(RecastStateModel):
     規約（本フィールド追加前の state・local backend の run は `None` — local
     backend は注文書を publish しないため意図的に無関係で常に `None`）。
     manual invocation の run で `None` の場合は同じく stale（pin なし）扱い。
+
+    `observation_digest`: `observed`/`reported` を記録した時点の
+    `project.yaml` `observation` 節（`ObservationConfig`）の canonical
+    projection digest（`recast.plan.compute_observation_digest`）。
+    `inputs_digest` は生成系（注文書・音源）の同一性判定であり、意図的に
+    `observation` 節を除外している（observation 編集だけで take を stale
+    化させないため）— しかし report にとっては observation 節こそが直接の
+    入力（D-1 coverage の絞り込み対象そのもの）であり、report 生成後に
+    設定が変わっても `inputs_digest` は不変のまま report だけが古い設定を
+    反映し続けてしまう。この digest は `inputs_digest` とは独立の第二の pin
+    として `observed`/`reported` の run にのみ意味を持つ（`generated` 以前の
+    run は report を持たないため常に `None`）。`inputs_digest` と同じ
+    optional 後方互換規約（`None` は「未確認」ではなく stale 扱い、Codex P2
+    review, PR #212 指摘）。
     """
 
     state: RecastState
@@ -101,6 +115,7 @@ class RecastRunState(RecastStateModel):
     inputs_digest: Optional[str] = None
     plan_sha256: Optional[str] = None
     orders_digest: Optional[str] = None
+    observation_digest: Optional[str] = None
 
 
 class RecastStateFile(RecastStateModel):
@@ -176,18 +191,20 @@ def record_state(
     inputs_digest: Optional[str] = None,
     plan_sha256: Optional[str] = None,
     orders_digest: Optional[str] = None,
+    observation_digest: Optional[str] = None,
     protected_inputs: List[Path],
 ) -> RecastStateFile:
     """`(variant, backend)` 実行の到達状態を記録し、更新後の `RecastStateFile` を返す。
 
     再実行冪等: 直前の記録済み状態が `state` + `note` + `inputs_digest` +
-    `plan_sha256` + `orders_digest` の組で完全一致する場合は history に
-    重複追加せず、ファイルも書き換えない（呼び出し側から見て純粋な no-op —
-    `updated_at` も更新しない）。
-    `inputs_digest` / `plan_sha256` / `orders_digest` も同一性判定に含める理由: これらが変わっても
-    偶然 state/note が同じになるケースで古いまま no-op してしまうと
-    `recast status` の stale 検出が機能しなくなるため。それ以外は history へ
-    1 件追記し、atomic write で publish する。
+    `plan_sha256` + `orders_digest` + `observation_digest` の組で完全一致
+    する場合は history に重複追加せず、ファイルも書き換えない（呼び出し側
+    から見て純粋な no-op — `updated_at` も更新しない）。
+    `inputs_digest` / `plan_sha256` / `orders_digest` / `observation_digest`
+    も同一性判定に含める理由: これらが変わっても偶然 state/note が同じに
+    なるケースで古いまま no-op してしまうと `recast status` の stale 検出が
+    機能しなくなるため。それ以外は history へ 1 件追記し、atomic write で
+    publish する。
 
     `protected_inputs` は必須（デフォルト値なし — Codex P2 review round 5,
     PR3 #208 指摘 10: `recast/plan.py:_publish_recast_plan` と同じ理由で、
@@ -206,6 +223,7 @@ def record_state(
         and existing.inputs_digest == inputs_digest
         and existing.plan_sha256 == plan_sha256
         and existing.orders_digest == orders_digest
+        and existing.observation_digest == observation_digest
     ):
         return state_file
 
@@ -227,6 +245,7 @@ def record_state(
         inputs_digest=inputs_digest,
         plan_sha256=plan_sha256,
         orders_digest=orders_digest,
+        observation_digest=observation_digest,
     )
     new_state_file = RecastStateFile(schema_version=RECAST_STATE_SCHEMA_VERSION, runs=new_runs)
 

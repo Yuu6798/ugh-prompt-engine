@@ -122,6 +122,7 @@ from svp_rpe.recast.models import (
     InvocationKind,
     InvocationMode,
     ModeOverridesConfig,
+    ObservationConfig,
     OverrideSupport,
     RecastError,
     RecastModel,
@@ -809,6 +810,32 @@ def _project_identity_digest_component(project: RecastProject, *, variant: str, 
         "backends": {backend: payload["backends"][backend]},
     }
     canonical = json.dumps(projected, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def compute_observation_digest(observation: ObservationConfig) -> str:
+    """`project.yaml` の `observation` 節（`ObservationConfig`）の canonical
+    projection の sha256 — `observed`/`reported` を記録する際に
+    `recast/state.py:RecastRunState.observation_digest` へ pin する値の
+    single source（`recast ingest` の record_state 呼び出しと `recast
+    status` の再計算の両方がこの関数を共有する）。
+
+    二層 pin の設計（Codex P2 review, PR #212 指摘）: `_project_identity_
+    digest_component`（`inputs_digest` の project 成分）は意図的に
+    `observation` 節を除外している — 生成系（注文書・
+    `PerformancePackage`・音源）の同一性には `observation` が一切寄与しない
+    ため、observation 設定だけの編集（typo 修正・anchors 絞り込みの変更等）
+    が `awaiting_generation` な run を stale 化させないための設計判断
+    （前指摘対応、`_project_identity_digest_component` docstring 参照）。
+    しかし report にとっては `observation` 節こそが直接の入力（D-1
+    coverage の絞り込み対象そのもの、`recast/report.py:build_recast_report`
+    の `observation_anchors` 引数）であり、report 生成後に `observation`
+    設定が変わっても `inputs_digest` は不変のままのため、この digest なしでは
+    report が古い設定を反映したまま fresh 表示され続けてしまう。この digest
+    は `inputs_digest` とは独立の第二の pin として `observed`/`reported` の
+    run にのみ意味を持つ。"""
+    payload = observation.model_dump(mode="json", exclude_none=True)
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 

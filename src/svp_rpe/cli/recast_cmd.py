@@ -516,6 +516,13 @@ def recast_plan_cmd(
 
 _COMPILED_OR_BETTER_STATES = frozenset({"compiled", "verified"})
 
+# `recast ingest` の再観測経路（Codex P2 review, PR #212 指摘）が受理する
+# 到達済み状態。この状態にある run は take が既に収蔵済みであり、
+# 収蔵済み take の再 collect は行わず observation 設定の再評価だけを行う
+# （`recast_ingest_cmd` 内の `is_reobserve` 分岐参照）。`awaiting_generation`
+# は対象外（そちらは従来どおり「未収蔵の take を collect する」新規 ingest）。
+_REOBSERVABLE_STATES = frozenset({"generated", "observed", "reported"})
+
 
 @recast_app.command("run")
 def recast_run_cmd(
@@ -719,6 +726,81 @@ def recast_run_cmd(
     console.print(f"[green]Generated take: {take.audio_path} (sha256={take.sha256})[/green]")
 
 
+def _load_existing_take_for_reobserve(loaded: Any, variant: str, backend: str, supplied_audio: Path) -> Any:
+    """再観測（`is_reobserve`、Codex P2 review, PR #212 指摘）専用: 収蔵済みの
+    take を再 collect せず、disk 上の `take.json`（`ManualInvoker.collect`/
+    `DeterministicInvoker.invoke` が publish 時に書く provenance）から情報を
+    読み出して `GeneratedTake` を再構成する。
+
+    fail-closed 契約（いずれも `RecastError` を送出 — 呼び出し側の既存
+    `except (..., RecastError, ...)` にそのまま乗る）:
+    - `takes_dir` に `take-01.*`（`take.json` を除く）がちょうど 1 件
+      見つからない場合（take 自体が欠落/複数ある壊れた状態からの再観測は
+      許さない — 通常の `awaiting_generation` → ingest 経路で正規に
+      collect し直すべき）
+    - `take.json` が読めない/`sha256` フィールドが無い場合
+    - disk 上の take 音声の実 sha256 が `take.json` の宣言 sha256 と一致
+      しない場合（collect 後の改変を許さない — 既存の inputs_digest/
+      plan_sha256 pin と同じ fail-closed 精神）
+    - `--audio` に渡された供給ファイルの sha256 が上記の実 sha256 と一致
+      しない場合（再観測は「同じ take」に対してのみ許す — 別音源を
+      `is_reobserve` 経路経由で忍び込ませ、orders_digest/collect の正規
+      ガードを迂回させない。呼び出し側は次のコマンドの `--audio` に
+      既存 take のパスをそのまま渡せばよい）
+    """
+    from svp_rpe.recast import RecastError
+    from svp_rpe.recast.backend import GeneratedTake
+    from svp_rpe.recast.run_paths import resolve_takes_dir
+
+    takes_dir = resolve_takes_dir(loaded, variant, backend)
+    candidates = sorted(p for p in takes_dir.glob("take-01.*") if p.name != "take.json")
+    if len(candidates) != 1:
+        raise RecastError(
+            f"cannot re-observe {variant}@{backend}: expected exactly one existing take "
+            f"(take-01.*) under {takes_dir}, found {len(candidates)}"
+        )
+    existing_audio_path = candidates[0]
+
+    take_json_path = takes_dir / "take.json"
+    try:
+        take_record = json.loads(take_json_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise RecastError(
+            f"cannot re-observe {variant}@{backend}: unreadable {take_json_path}: {exc}"
+        ) from exc
+    declared_sha256 = take_record.get("sha256") if isinstance(take_record, dict) else None
+    if not isinstance(declared_sha256, str):
+        raise RecastError(
+            f"cannot re-observe {variant}@{backend}: {take_json_path} has no sha256 field"
+        )
+
+    actual_sha256 = hashlib.sha256(existing_audio_path.read_bytes()).hexdigest()
+    if actual_sha256 != declared_sha256:
+        raise RecastError(
+            f"cannot re-observe {variant}@{backend}: existing take at {existing_audio_path} "
+            "does not match its recorded take.json sha256 (tampered after collection)"
+        )
+
+    supplied_sha256 = hashlib.sha256(supplied_audio.read_bytes()).hexdigest()
+    if supplied_sha256 != actual_sha256:
+        raise RecastError(
+            f"cannot re-observe {variant}@{backend}: supplied --audio "
+            f"(sha256={supplied_sha256}) does not match the already-collected take "
+            f"(sha256={actual_sha256}). Re-observation must reference the same take — "
+            f"point --audio at {existing_audio_path}."
+        )
+
+    source = take_record.get("source")
+    backend_name = take_record.get("backend_name")
+    return GeneratedTake(
+        audio_path=existing_audio_path,
+        sha256=actual_sha256,
+        source=source if source in ("local", "manual") else "manual",
+        backend_name=backend_name if isinstance(backend_name, str) else backend,
+        note="re-observed (same take, no re-collection)",
+    )
+
+
 @recast_app.command("ingest")
 def recast_ingest_cmd(
     project_yaml: str = typer.Argument(..., help="Path to RecastProject YAML"),
@@ -817,6 +899,28 @@ def recast_ingest_cmd(
     しない。設定ミスと実行時失敗を state レベルで区別する）。
     `observe_generated_artifact` 自身にも同型の防御的ガードがある
     （`svprpe observe` 単体実行など他呼び出し元向け）。
+
+    Scope（再観測、Codex P2 review, PR #212 指摘）: `(variant, backend)` が
+    `generated`/`observed`/`reported`（`_REOBSERVABLE_STATES`）のいずれかの
+    場合、本コマンドは take を再 collect せず「同一 take での再観測」経路
+    として動作する（`is_reobserve`）。`inputs_digest`/`plan_sha256` の
+    precheck は従来どおり通過が必須だが、`orders_digest` 突合はスキップ
+    する（take を再 collect しないため注文書とは無関係。local backend の
+    run は元々 `orders_digest` を持たないため、この経路が無ければ local
+    backend は再観測できなかった）。代わりに、供給された `--audio` の
+    sha256 が disk 上の既存 take（`take.json` 経由で検証）と一致すること
+    を要求する（`_load_existing_take_for_reobserve`）— 別音源をこの経路
+    経由で忍び込ませることはできない。一致すれば `packages/`/正典
+    `recast_plan.json` を再公開し（入力の drift を検出する既存の TOCTOU
+    再チェックも維持）、observe→report を実行し直して `observed`/
+    `reported` を `observation_digest`（現在の `observation` 節の digest）
+    付きで再記録する。動機: `_project_identity_digest_component` が
+    `inputs_digest` から `observation` 節を意図的に除外しているため
+    （前指摘の回復フローを壊さないため）、`observation.enabled`/
+    `observation.anchors` の変更だけでは `inputs_digest` は変化しない —
+    しかし report は observation 節を直接反映するため、この再観測経路が
+    無いと `recast status` の stale 表示（`observation_digest` 不一致）が
+    行き止まりになってしまう。
     """
     import yaml
     from pydantic import ValidationError
@@ -841,6 +945,7 @@ def recast_ingest_cmd(
         _atomic_publish_text_bundle,
         _normalize_diagnostic,
         build_recast_plan_artifacts,
+        compute_observation_digest,
         compute_recast_inputs_digest,
     )
     from svp_rpe.recast.report import (
@@ -874,11 +979,19 @@ def recast_ingest_cmd(
 
     run_key = f"{variant}@{backend}"
     run = state_file.runs.get(run_key)
-    if run is None or run.state != "awaiting_generation":
+    # 再観測（Codex P2 review, PR #212 指摘）: `generated`/`observed`/
+    # `reported` の run は、収蔵済みの take を collect し直さず observation
+    # 設定だけを再評価して report を更新する経路として ingest を再利用できる
+    # （下記 `--audio` 一致検査を通過した場合のみ — `_REOBSERVABLE_STATES`
+    # docstring 参照）。
+    is_reobserve = run is not None and run.state in _REOBSERVABLE_STATES
+    if run is None or (run.state != "awaiting_generation" and not is_reobserve):
         current_state = run.state if run is not None else "draft"
         typer.echo(
-            f"Error: {run_key} is at state {current_state!r}, not 'awaiting_generation'. "
-            "Run 'svprpe recast run' first to publish order files for a manual backend.",
+            f"Error: {run_key} is at state {current_state!r}, not 'awaiting_generation' "
+            f"(or one of {sorted(_REOBSERVABLE_STATES)} for re-observation with the same "
+            "take). Run 'svprpe recast run' first to publish order files for a manual "
+            "backend.",
             err=True,
         )
         raise typer.Exit(code=1)
@@ -937,33 +1050,47 @@ def recast_ingest_cmd(
     # republish（＝再公開そのものが編集痕跡を消してしまう）は一切行わず、
     # ここで即座に exit する — 以降のどの publish/collect/record_state にも
     # 到達しない。
-    order_dir = resolve_orders_dir(loaded, variant, backend)
-    if run.orders_digest is None:
-        typer.echo(
-            f"Error: {run_key} has no recorded orders_digest (stale — no pin). "
-            "Re-run 'svprpe recast plan' / 'svprpe recast run' first.",
-            err=True,
-        )
-        raise typer.Exit(code=1)
-    try:
-        current_orders_digest = compute_orders_digest(order_dir)
-    except OSError as exc:
-        typer.echo(
-            f"Error: {run_key} order files are missing or unreadable at {order_dir} "
-            f"(cannot verify orders_digest, not re-publishing): {exc}",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
-    if current_orders_digest != run.orders_digest:
-        typer.echo(
-            f"Error: {run_key} order files changed since they were published by "
-            "'svprpe recast run' (orders_digest mismatch — an order file was edited after "
-            "publication). Not re-publishing (would erase the evidence of the edit). "
-            "Re-run 'svprpe recast run' to publish a fresh order for the current inputs "
-            "before generating and ingesting audio.",
-            err=True,
-        )
-        raise typer.Exit(code=1)
+    #
+    # 再観測（`is_reobserve`）では対象外: take を再 collect しない（既存
+    # take をそのまま使う）ため注文書そのものとは無関係。local backend の
+    # run は元々 orders_digest を持たない（常に `None`）ため、これを
+    # チェックすると再観測が local backend で常に拒否されてしまう。
+    if not is_reobserve:
+        order_dir = resolve_orders_dir(loaded, variant, backend)
+        if run.orders_digest is None:
+            typer.echo(
+                f"Error: {run_key} has no recorded orders_digest (stale — no pin). "
+                "Re-run 'svprpe recast plan' / 'svprpe recast run' first.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        try:
+            current_orders_digest = compute_orders_digest(order_dir)
+        except OSError as exc:
+            typer.echo(
+                f"Error: {run_key} order files are missing or unreadable at {order_dir} "
+                f"(cannot verify orders_digest, not re-publishing): {exc}",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+        if current_orders_digest != run.orders_digest:
+            typer.echo(
+                f"Error: {run_key} order files changed since they were published by "
+                "'svprpe recast run' (orders_digest mismatch — an order file was edited "
+                "after publication). Not re-publishing (would erase the evidence of the "
+                "edit). Re-run 'svprpe recast run' to publish a fresh order for the current "
+                "inputs before generating and ingesting audio.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+    # `observation` 節全体の pin（Codex P2 review, PR #212 指摘）:
+    # `observed`/`reported` を記録する際にこの digest を併せて永続化する —
+    # `inputs_digest` は生成系の同一性判定であり `observation` 節を意図的に
+    # 除外しているため、report にとっての直接の入力である `observation` 節
+    # 自体は別の pin（`RecastRunState.observation_digest`）で追跡する
+    # （single source: `recast/plan.py:compute_observation_digest`）。
+    current_observation_digest = compute_observation_digest(loaded.project.observation)
 
     # `observation.anchors`（Codex P2, #211）: 非空なら観測対象を絞る。空
     # （既定）は「絞り込みなし」— 従来どおり全 manifest anchor を観測する。
@@ -1116,27 +1243,41 @@ def recast_ingest_cmd(
         # 呼ばないことで、万一ここより後で drift が生じても再公開そのものが
         # 証拠を上書きすることはない。
         prepared = base_prepared_invocation(ctx)
-        take = invoker.collect(prepared, Path(audio))
+        # 再観測（`is_reobserve`）: 収蔵済みの take を再 collect せず、disk 上
+        # の provenance（`take.json`）から同じ take を再構成する。供給された
+        # `--audio` が既存 take と一致しない場合は `RecastError`（`_load_
+        # existing_take_for_reobserve` docstring 参照）— 別音源をこの経路
+        # 経由で忍び込ませ、orders_digest/collect の正規ガードを迂回させない。
+        if is_reobserve:
+            take = _load_existing_take_for_reobserve(loaded, variant, backend, Path(audio))
+        else:
+            take = invoker.collect(prepared, Path(audio))
     except (OSError, ValueError, ValidationError, yaml.YAMLError, RecastError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
-    note = f"{os.path.relpath(take.audio_path, loaded.project_dir)} sha256={take.sha256}"
-    try:
-        record_state(
-            loaded.project_dir,
-            variant,
-            backend,
-            "generated",
-            note=note,
-            inputs_digest=artifacts.result.inputs_digest,
-            plan_sha256=plan_sha256,
-            protected_inputs=prepared.protected_input_paths,
+    if is_reobserve:
+        console.print(
+            f"[cyan]Re-observing existing take: {take.audio_path} "
+            f"(sha256={take.sha256})[/cyan]"
         )
-    except (OSError, ValueError) as exc:
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
-    console.print(f"[green]Ingested take: {take.audio_path} (sha256={take.sha256})[/green]")
+    else:
+        note = f"{os.path.relpath(take.audio_path, loaded.project_dir)} sha256={take.sha256}"
+        try:
+            record_state(
+                loaded.project_dir,
+                variant,
+                backend,
+                "generated",
+                note=note,
+                inputs_digest=artifacts.result.inputs_digest,
+                plan_sha256=plan_sha256,
+                protected_inputs=prepared.protected_input_paths,
+            )
+        except (OSError, ValueError) as exc:
+            typer.echo(f"Error: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        console.print(f"[green]Ingested take: {take.audio_path} (sha256={take.sha256})[/green]")
 
     if not loaded.project.observation.enabled:
         console.print(
@@ -1193,6 +1334,7 @@ def recast_ingest_cmd(
                 note=obs_note,
                 inputs_digest=artifacts.result.inputs_digest,
                 plan_sha256=plan_sha256,
+                observation_digest=current_observation_digest,
                 protected_inputs=prepared.protected_input_paths,
             )
         except (OSError, ValueError) as record_exc:
@@ -1214,6 +1356,7 @@ def recast_ingest_cmd(
             note=observed_note,
             inputs_digest=artifacts.result.inputs_digest,
             plan_sha256=plan_sha256,
+            observation_digest=current_observation_digest,
             protected_inputs=prepared.protected_input_paths,
         )
     except (OSError, ValueError) as exc:
@@ -1262,6 +1405,7 @@ def recast_ingest_cmd(
                 note=obs_note,
                 inputs_digest=artifacts.result.inputs_digest,
                 plan_sha256=plan_sha256,
+                observation_digest=current_observation_digest,
                 protected_inputs=prepared.protected_input_paths,
             )
         except (OSError, ValueError) as record_exc:
@@ -1280,6 +1424,7 @@ def recast_ingest_cmd(
             note=reported_note,
             inputs_digest=artifacts.result.inputs_digest,
             plan_sha256=plan_sha256,
+            observation_digest=current_observation_digest,
             protected_inputs=prepared.protected_input_paths,
         )
     except (OSError, ValueError) as exc:
@@ -1332,9 +1477,28 @@ def recast_status_cmd(
     inputs_digest/plan_sha256 stale 群と同型）。`recast ingest` 自身は元々
     同じ突合を collect 前に行っているため、この表示は「実行すれば起きる
     こと」の先出しに過ぎない（挙動追加ではない）。
+
+    `observed`/`reported` の run については、加えて `observation_digest`
+    （project.yaml `observation` 節の canonical digest、
+    `recast.plan.compute_observation_digest`）を検査する（Codex P2 review,
+    PR #212 指摘）: `inputs_digest` は意図的に `observation` 節を除外して
+    いる（生成系＝注文書・音源の同一性には無関係なため）が、report にとって
+    `observation` 節は直接の入力（D-1 coverage の絞り込み対象）であり、
+    report 生成後に設定が変わると report だけが古い設定を反映したまま fresh
+    表示され続けてしまう。`run.observation_digest` が現在の `observation`
+    設定から再計算した digest と一致しない（または pin 自体が `None`）
+    場合は stale（observation 設定が report 生成時から変更）と表示し、
+    `reported`/`observed` の次の一手（summary 確認案内）を出さず、代わりに
+    同一 take での再観測（`recast_ingest_cmd` の再実行 — `awaiting_
+    generation` 以外の状態でも take が既存 pin と一致すれば再観測のみを
+    行う、下記 docstring 参照）を案内する。
     """
     from svp_rpe.recast import RecastError, load_recast_project
-    from svp_rpe.recast.plan import RECAST_PLAN_FILENAME, compute_recast_inputs_digest
+    from svp_rpe.recast.plan import (
+        RECAST_PLAN_FILENAME,
+        compute_observation_digest,
+        compute_recast_inputs_digest,
+    )
     from svp_rpe.recast.run_paths import resolve_plans_dir
     from svp_rpe.recast.state import load_recast_state
 
@@ -1351,6 +1515,16 @@ def recast_status_cmd(
     table.add_column("next step")
 
     replan_step = _NEXT_STEP_BY_STATE["draft"]
+    # project 全体で単一の observation 節（variant/backend に依存しない）
+    # のためループ外で 1 回だけ計算する（`current_digest`/
+    # `current_plan_sha256` は (variant, backend) ごとに異なるためループ
+    # 内で計算する既存規約とは対照的）。
+    current_observation_digest = compute_observation_digest(loaded.project.observation)
+    reobserve_step = (
+        "svprpe recast ingest <project.yaml> --variant <variant> --backend <backend> "
+        "--audio <builds_root>/takes/<variant>@<backend>/take-01.* "
+        "（同一 take で再観測。observation 設定変更後の report 更新）"
+    )
     for variant in sorted(loaded.project.variants):
         for backend in sorted(loaded.project.backends):
             key = f"{variant}@{backend}"
@@ -1389,6 +1563,15 @@ def recast_status_cmd(
                         "svprpe recast run 再実行が必要"
                     )
                     next_step = _NEXT_STEP_BY_STATE["verified"]
+                elif state in ("observed", "reported") and (
+                    run.observation_digest is None
+                    or run.observation_digest != current_observation_digest
+                ):
+                    note = (
+                        "stale（observation 設定が report 生成時から変更）— "
+                        "再観測（ingest の再実行）が必要"
+                    )
+                    next_step = reobserve_step
                 else:
                     next_step = _NEXT_STEP_BY_STATE.get(state, "-")
             label = f"{state} {note}".strip()

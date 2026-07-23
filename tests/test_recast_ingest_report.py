@@ -266,6 +266,125 @@ def test_ingest_observe_report_e2e_narrows_to_declared_observation_anchors(
 
 
 @pytest.mark.slow
+def test_recast_status_stale_observation_then_reobserve_refreshes_report(
+    tmp_path: Path,
+) -> None:
+    """Codex P2 review（PR #212 指摘・plan.py:807）の受け入れ条件:
+
+    ① `reported` 到達後に `observation.anchors` を編集すると、
+       `recast status` は該当 run を stale（observation 設定が report 生成時
+       から変更）と表示し、`reported` の通常の次の一手（summary 確認案内）は
+       出さない — `inputs_digest` は observation 節を意図的に除外している
+       ため無変化のままだが、report にとって observation 節は直接の入力
+       であるため、この digest 抜きでは stale が検出できない。
+    ② 同一 take（`--audio` に既存の `take-01.wav` を再指定）で `recast
+       ingest` を再実行すると、take を再 collect せずに observe→report を
+       やり直し、`reported` へ復帰する（新しい report は絞り込み後の
+       anchors のみを反映する）。
+    ③ `observation` 設定を変更しなければ、`recast status` は従来どおり
+       fresh（stale 表示なし）のままである。
+    """
+    project_path = _copy_e2e_project(tmp_path, label="reobserve")
+    _add_manual_deterministic_backend_and_enable_observation(project_path)
+
+    audio_path, audio_sha256 = _synthesize_deterministic_take(project_path)
+    reports_dir, _ = _run_manual_ingest(project_path, audio_path)
+
+    run_key = "deterministic_e2e@deterministic_manual"
+    state_after_first_report = load_recast_state(project_path.parent)
+    assert state_after_first_report.runs[run_key].state == "reported"
+    observation_digest_before = state_after_first_report.runs[run_key].observation_digest
+    assert observation_digest_before is not None
+
+    # ③ observation 設定を変更していない時点では fresh のまま。
+    status_before = runner.invoke(app, ["recast", "status", str(project_path)])
+    assert status_before.exit_code == 0, status_before.output
+    assert "stale" not in status_before.output
+
+    # observation.anchors を [] → [harmony] へ変更する（report にとっての
+    # 入力そのものの変更 — inputs_digest は不変のまま）。
+    project_text = project_path.read_text(encoding="utf-8")
+    assert _OBSERVATION_ENABLED_BLOCK in project_text  # sanity
+    project_text = project_text.replace(
+        _OBSERVATION_ENABLED_BLOCK, _OBSERVATION_ENABLED_HARMONY_ONLY_BLOCK, 1
+    )
+    project_path.write_text(project_text, encoding="utf-8")
+
+    # ① stale 表示 + summary 案内なし。
+    status_after_edit = runner.invoke(app, ["recast", "status", str(project_path)])
+    assert status_after_edit.exit_code == 0, status_after_edit.output
+    assert "stale" in status_after_edit.output
+    assert "再観測" in status_after_edit.output
+    assert "recast_summary.md を確認" not in status_after_edit.output
+
+    # ② 同一 take（--audio に既存 take-01.wav をそのまま再指定）で再観測。
+    takes_dir = project_path.parent / "builds" / "takes" / run_key
+    existing_take_path = takes_dir / "take-01.wav"
+    assert existing_take_path.is_file()
+    reobserve_result = runner.invoke(
+        app,
+        [
+            "recast", "ingest", str(project_path),
+            "--variant", "deterministic_e2e", "--backend", "deterministic_manual",
+            "--audio", str(existing_take_path),
+        ],
+    )
+    assert reobserve_result.exit_code == 0, reobserve_result.output
+    assert "Re-observing existing take" in reobserve_result.output
+
+    state_after_reobserve = load_recast_state(project_path.parent)
+    run_after_reobserve = state_after_reobserve.runs[run_key]
+    assert run_after_reobserve.state == "reported"
+    assert run_after_reobserve.observation_digest is not None
+    assert run_after_reobserve.observation_digest != observation_digest_before
+
+    # 同じ take（sha256 不変・再 collect されていない）のまま report だけが
+    # 絞り込み後の観測設定を反映する。
+    refreshed_report = json.loads((reports_dir / "recast_report.json").read_text(encoding="utf-8"))
+    assert refreshed_report["take"]["sha256"] == audio_sha256
+    assert [a["anchor_id"] for a in refreshed_report["anchors"]] == ["harmony"]
+    assert refreshed_report["coverage"] == {"verified": 0, "violated": 0, "not_observed": 1}
+
+    # ③ 再観測後は fresh に戻る。
+    status_after_reobserve = runner.invoke(app, ["recast", "status", str(project_path)])
+    assert status_after_reobserve.exit_code == 0, status_after_reobserve.output
+    assert "stale" not in status_after_reobserve.output
+
+
+@pytest.mark.slow
+def test_recast_ingest_reobserve_rejects_audio_that_does_not_match_existing_take(
+    tmp_path: Path,
+) -> None:
+    """再観測経路（`is_reobserve`）は「同一 take」に対してのみ許される —
+    `--audio` に別音源を渡した場合は take を差し替えず `RecastError` で拒否
+    する（`_load_existing_take_for_reobserve` の fail-closed 契約）。"""
+    project_path = _copy_e2e_project(tmp_path, label="reobserve_mismatch")
+    _add_manual_deterministic_backend_and_enable_observation(project_path)
+
+    audio_path, _ = _synthesize_deterministic_take(project_path)
+    _run_manual_ingest(project_path, audio_path)
+
+    different_audio = project_path.parent / "different-take.wav"
+    different_audio.write_bytes(b"RIFF....WAVEnot-the-same-audio-bytes")
+
+    result = runner.invoke(
+        app,
+        [
+            "recast", "ingest", str(project_path),
+            "--variant", "deterministic_e2e", "--backend", "deterministic_manual",
+            "--audio", str(different_audio),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "does not match the already-collected take" in result.output
+
+    # 拒否された場合、state は変更されない（reported のまま）。
+    state_file = load_recast_state(project_path.parent)
+    assert state_file.runs["deterministic_e2e@deterministic_manual"].state == "reported"
+
+
+@pytest.mark.slow
 def test_ingest_observe_report_e2e_is_byte_identical_across_reruns(tmp_path: Path) -> None:
     """report/summary の決定論: 独立したプロジェクトコピーで同じ操作をもう一度
     実行し、`recast_report.json`/`recast_summary.md` が byte-for-byte 一致する
