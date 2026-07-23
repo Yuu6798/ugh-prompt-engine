@@ -41,7 +41,7 @@ if str(ROOT / "scripts") not in sys.path:
 
 from build_melody_bench import build_signal, load_specs  # noqa: E402
 
-from svp_rpe.melody.extractors import observe_via_route  # noqa: E402
+from svp_rpe.melody.extractors import observe_assist_notes, observe_via_route  # noqa: E402
 from svp_rpe.melody.observability import (  # noqa: E402
     ObservabilityThresholds,
     assess_observability,
@@ -89,15 +89,31 @@ def _run_routes_on_file(
                 }
             )
             continue
-        report = assess_observability(observation, thresholds)
-        rows.append(
-            {
-                "route": route.name,
-                "extractor": route.extractor,
-                "outcome": report.status,
-                "report": report.to_dict(),
-            }
+        # assist 抽出器が宣言されていれば（full_mix の basic-pitch × Melodia など）、
+        # 補助抽出器を同一音声に走らせて reference notes を採り、cross_extractor_
+        # agreement を実測する（設計 §4.2「一致時のみ」）。assist が未導入なら
+        # agreement は null のまま（graceful・slow-lane 隔離）。
+        reference_notes = None
+        assist_status = None
+        if route.assist:
+            try:
+                reference_notes = observe_assist_notes(audio_path, route, thresholds)
+                assist_status = "measured"
+            except LearnedModelUnavailable:
+                assist_status = "unavailable"
+        report = assess_observability(
+            observation, thresholds, reference_notes=reference_notes
         )
+        row: Dict[str, Any] = {
+            "route": route.name,
+            "extractor": route.extractor,
+            "outcome": report.status,
+            "report": report.to_dict(),
+        }
+        if route.assist:
+            row["assist_extractor"] = route.assist
+            row["assist_status"] = assist_status
+        rows.append(row)
     return rows
 
 
@@ -134,10 +150,6 @@ def run_synthetic(thresholds: ObservabilityThresholds) -> Dict[str, Any]:
     return results
 
 
-def _sha256_file(path: str) -> str:
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
-
 def run_external(manifest_path: Path, thresholds: ObservabilityThresholds) -> Dict[str, Any]:
     """外部素材 manifest（[{id, path, input_kind, audio_sha256?}]）の観測可能性を測る。
 
@@ -147,8 +159,13 @@ def run_external(manifest_path: Path, thresholds: ObservabilityThresholds) -> Di
     （同一 id で別 WAV が差し替わる silent swap を防ぐ）。manifest 自体の hash も
     記録する。
     """
-    with open(manifest_path, "r", encoding="utf-8") as handle:
-        entries = json.load(handle)
+    # manifest の bytes を一度だけ読み、その bytes を hash し、同じ buffer から
+    # JSON を parse する。別々に open すると、pin する manifest_sha256 と実際に
+    # entries を供給した manifest がズレる TOCTOU が残る（Codex 指摘。audio bytes
+    # の凍結と同型）。
+    manifest_bytes = Path(manifest_path).read_bytes()
+    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    entries = json.loads(manifest_bytes)
     with open(REGISTRY_PATH, "r", encoding="utf-8") as handle:
         registry = yaml.safe_load(handle)
 
@@ -168,7 +185,7 @@ def run_external(manifest_path: Path, thresholds: ObservabilityThresholds) -> Di
     results: Dict[str, Any] = {
         "mode": "external",
         "manifest_path": str(manifest_path),
-        "manifest_sha256": _sha256_file(str(manifest_path)),
+        "manifest_sha256": manifest_sha256,
         "fixtures": {},
     }
     with tempfile.TemporaryDirectory(prefix="melody-ext-") as tmp:

@@ -411,6 +411,59 @@ def test_external_harness_resolves_relative_paths_against_manifest(tmp_path):
     assert entry["audio_sha256"] == hashlib.sha256(wav.read_bytes()).hexdigest()
 
 
+def test_route_assist_populates_cross_extractor_agreement(monkeypatch, tmp_path):
+    """assist を宣言した経路は補助抽出器を走らせ cross_extractor_agreement を実測する。"""
+    import scripts.run_melody_observability as harness
+    from svp_rpe.melody.observability import MelodyObservation
+    from svp_rpe.melody.routing import MelodyRoute
+
+    main_notes = tuple(
+        MelodyNote(i * 0.5, i * 0.5 + 0.4, 60 + i, 0.9) for i in range(10)
+    )
+    assist_notes = tuple(
+        MelodyNote(i * 0.5, i * 0.5 + 0.4, 60 + i, 0.9) for i in range(10)
+    )
+
+    def fake_observe(audio_path, route):
+        # 主経路 = ノート系観測、assist 経路名には "__assist_" が入る。
+        if "__assist_" in route.name:
+            return MelodyObservation(route=route.name, source_model="assist", notes=assist_notes)
+        return MelodyObservation(route=route.name, source_model="main", notes=main_notes)
+
+    monkeypatch.setattr(harness, "observe_via_route", fake_observe)
+    monkeypatch.setattr(
+        "svp_rpe.melody.extractors.observe_via_route", fake_observe
+    )
+
+    route = MelodyRoute("basic_pitch_direct", "none", "basic_pitch", assist="melodia")
+    # select_routes をこの単一 route に差し替えて 1 経路だけ回す。
+    monkeypatch.setattr(harness, "select_routes", lambda kind: [route])
+    result = harness._run_routes_on_file("x.wav", "full_mix", _default_thresholds())
+    assert len(result) == 1
+    row = result[0]
+    assert row["assist_extractor"] == "melodia"
+    assert row["assist_status"] == "measured"
+    assert row["report"]["cross_extractor_agreement"] == pytest.approx(1.0)
+
+
+def test_external_manifest_hash_matches_parsed_bytes(tmp_path):
+    """manifest_sha256 は parse したのと同じ bytes の hash である。"""
+    import json as _json
+
+    import scripts.run_melody_observability as harness
+
+    sr = 22050
+    wav = tmp_path / "ext.wav"
+    sf.write(wav, np.zeros(sr, dtype=np.float32), sr, subtype="FLOAT")
+    manifest = tmp_path / "m.json"
+    manifest.write_text(
+        _json.dumps([{"id": "real_lead_synth", "path": str(wav), "input_kind": "clear_lead"}]),
+        encoding="utf-8",
+    )
+    results = harness.run_external(manifest, _default_thresholds())
+    assert results["manifest_sha256"] == hashlib.sha256(manifest.read_bytes()).hexdigest()
+
+
 def test_external_harness_rejects_unregistered_and_mismatched_ids(tmp_path):
     """external mode は registry 未登録 id / input_kind 不整合を fail-closed。"""
     import json as _json

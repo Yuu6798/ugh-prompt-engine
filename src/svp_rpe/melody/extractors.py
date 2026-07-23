@@ -15,7 +15,12 @@ from typing import TYPE_CHECKING, Tuple
 
 import numpy as np
 
-from svp_rpe.melody.observability import MelodyNote, MelodyObservation
+from svp_rpe.melody.observability import (
+    MelodyNote,
+    MelodyObservation,
+    ObservabilityThresholds,
+    notes_from_frames,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from svp_rpe.melody.routing import MelodyRoute
@@ -26,6 +31,7 @@ __all__ = [
     "extract_melodia_observation",
     "extract_basic_pitch_observation",
     "observe_via_route",
+    "observe_assist_notes",
 ]
 
 _PYIN_SOURCE_MODEL = "librosa:pyin"
@@ -215,3 +221,43 @@ def observe_via_route(audio_path: str, route: "MelodyRoute") -> MelodyObservatio
     if route.extractor == "melodia":
         return extract_melodia_observation(waveform, sample_rate, route=route.name)
     raise ValueError(f"unsupported extractor for route {route.name!r}: {route.extractor!r}")
+
+
+def _observation_notes(
+    observation: MelodyObservation, thresholds: ObservabilityThresholds
+) -> list:
+    """観測からノート系列を取り出す（ノート系はそのまま、フレーム系は導出）。"""
+    if observation.notes:
+        return list(observation.notes)
+    return notes_from_frames(
+        observation.frame_times,
+        observation.frame_hz,
+        observation.frame_confidence,
+        thresholds,
+    )
+
+
+def observe_assist_notes(
+    audio_path: str, route: "MelodyRoute", thresholds: ObservabilityThresholds
+) -> list:
+    """route の assist 抽出器を同一音声（同一前処理）に走らせ reference notes を返す。
+
+    full_mix の basic-pitch × Melodia のように、主抽出器と別の補助抽出器の
+    cross_extractor_agreement を実測するための reference notes を供給する
+    （設計 §4.2「一致時のみ」）。assist 抽出器が未導入なら
+    `LearnedModelUnavailable` が伝播し、呼び出し側で agreement を null に落とす。
+
+    前処理は主経路と同一（`route.preprocessing`）を用いる — 分離が要る経路では
+    同じ vocals stem 上で両抽出器を比較する。
+    """
+    if not route.assist:
+        return []
+    from svp_rpe.melody.routing import MelodyRoute
+
+    assist_route = MelodyRoute(
+        name=f"{route.name}__assist_{route.assist}",
+        preprocessing=route.preprocessing,
+        extractor=route.assist,
+    )
+    assist_observation = observe_via_route(audio_path, assist_route)
+    return _observation_notes(assist_observation, thresholds)
