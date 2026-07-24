@@ -598,9 +598,12 @@ def evaluate_m1_real_go_bar(
     - ``surviving`` = pos_sufficient >= min_positive_sufficient かつ
       neg_false_positive <= max_negative_false_positive
 
-    verdict は、surviving な route が 1 本でもあれば ``"go"``、無ければ
-    ``"no_go"``。"partial" 帯の解釈は人間の記録判断に委ねる（判定に必要な
-    per-route データを返り値にすべて含める）。
+    verdict は 3 値: surviving な route が 1 本でもあれば ``"go"``。無い場合、少なく
+    とも 1 経路が全 fixture×route で実測（gate outcome）済みなら ``"no_go"``（測った
+    上でバー未達）、どの経路も完全実測されていなければ ``"inconclusive"``（未測定を
+    測定未達と偽らない・optional 依存欠如で全経路 unavailable の report 等）。
+    "partial" 帯の解釈は人間の記録判断に委ねる（判定に必要な per-route データを
+    返り値にすべて含める）。
     """
     if not reports:
         raise ValueError("evaluate_m1_real_go_bar: reports is empty (fail-closed)")
@@ -908,8 +911,25 @@ def evaluate_m1_real_go_bar(
             surviving_routes.append(route)
 
     surviving_routes.sort()
+    # 確定的な no_go は「少なくとも 1 経路を全 fixture×route で実測（gate outcome）した
+    # 上でバー未達」のときだけ出せる。optional 依存（Demucs/CREPE/Essentia）欠如で全経路が
+    # unavailable な report は、どの経路も完全実測されていないので no_go（＝測って落ちた）
+    # と偽らず inconclusive を返す（設計 §4「全滅を確認していないので not_observed も宣言
+    # しない」・未測定と測定未達を混同しない・Codex 指摘）。
+    fully_measured_routes = [
+        route
+        for route, info in routes_out.items()
+        if not info["positive_unmeasured_ids"] and not info["negative_unmeasured_ids"]
+    ]
+    if surviving_routes:
+        verdict = "go"
+    elif fully_measured_routes:
+        verdict = "no_go"
+    else:
+        verdict = "inconclusive"
     return {
-        "verdict": "go" if surviving_routes else "no_go",
+        "verdict": verdict,
+        "fully_measured_routes": sorted(fully_measured_routes),
         "registry_sha256": ref_registry_sha256,
         "n_reports": len(reports),
         "surviving_routes": surviving_routes,
@@ -1012,6 +1032,15 @@ def main() -> int:
             reports.append(json.loads(data))
             report_pins.append(
                 {"path": str(path), "sha256": hashlib.sha256(data).hexdigest()}
+            )
+        # --out が入力 report のいずれかに解決されると、verdict の書き込みが pin 済みの
+        # report を上書きし、report_pins の hash が実体と不一致になり slow-lane repeat を
+        # 破壊する。書き込み前にパス衝突を fail-closed（Codex 指摘）。report_paths は
+        # 既に resolve 済み。
+        if args.out is not None and Path(args.out).resolve() in set(report_paths):
+            raise ValueError(
+                f"--out {args.out} は入力 report path のいずれかと衝突する; verdict の書き込みが "
+                "pin 済み report を破壊するため拒否する (fail-closed)"
             )
         verdict = evaluate_m1_real_go_bar(
             reports, registry, registry_sha256=registry_sha256

@@ -1154,7 +1154,8 @@ def test_evaluate_go_bar_route_unmeasured_on_negative_does_not_survive():
     report1 = _make_go_bar_report(outcomes)
     report2 = _make_go_bar_report(outcomes)
     verdict = harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
-    assert verdict["verdict"] == "no_go"
+    # どの経路も全 fixture×route で実測されていない（本命は negative 未観測）→ inconclusive。
+    assert verdict["verdict"] == "inconclusive"
     assert _GO_BAR_ROUTE not in verdict["surviving_routes"]
     assert verdict["routes"][_GO_BAR_ROUTE]["pos_sufficient"] == 4
     assert (
@@ -1204,7 +1205,8 @@ def test_evaluate_go_bar_route_unmeasured_on_positive_does_not_survive():
     report1 = _make_go_bar_report(outcomes)
     report2 = _make_go_bar_report(outcomes)
     verdict = harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
-    assert verdict["verdict"] == "no_go"
+    # 本命経路は waltz が未観測で完全実測でない・他経路も unavailable → inconclusive。
+    assert verdict["verdict"] == "inconclusive"
     assert _GO_BAR_ROUTE not in verdict["surviving_routes"]
     # pos_sufficient は 3 だが未観測 positive があるため survive しない。
     assert verdict["routes"][_GO_BAR_ROUTE]["pos_sufficient"] == 3
@@ -1473,6 +1475,48 @@ def test_evaluate_go_bar_fails_closed_on_extractor_label_mismatch():
                 row["extractor"] = "pyin"
     with pytest.raises(ValueError, match="すり替え"):
         harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_inconclusive_when_all_routes_unavailable():
+    """optional 依存欠如で全経路 unavailable の report は no_go でなく inconclusive。"""
+    import scripts.run_melody_observability as harness
+
+    # どの fixture も gate outcome を出さない（全 4 経路 auto-fill unavailable）。
+    outcomes = {fid: {} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {}
+    report1 = _make_go_bar_report(outcomes)
+    report2 = _make_go_bar_report(outcomes)
+    verdict = harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
+    # 測っていない（no_go=測って落ちた ではない）→ inconclusive。
+    assert verdict["verdict"] == "inconclusive"
+    assert verdict["surviving_routes"] == []
+    assert verdict["fully_measured_routes"] == []
+
+
+def test_evaluate_go_bar_cli_rejects_out_colliding_with_report(tmp_path, monkeypatch):
+    """--out が入力 report path と衝突したら書き込み前に fail-closed（report を破壊しない）。"""
+    import json as _json
+
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    reg_sha = hashlib.sha256(REGISTRY_PATH.read_bytes()).hexdigest()
+    r1 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    r2 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    run1 = tmp_path / "run1.json"
+    run1.write_text(_json.dumps(r1), encoding="utf-8")
+    run2 = tmp_path / "run2.json"
+    run2.write_text(_json.dumps(r2), encoding="utf-8")
+    monkeypatch.setattr(
+        sys, "argv",
+        ["run_melody_observability", "--evaluate-go-bar", str(run1), str(run2), "--out", str(run1)],
+    )
+    with pytest.raises(ValueError, match="衝突"):
+        harness.main()
+    # run1 は verdict で上書きされず無傷。
+    assert _json.loads(run1.read_text(encoding="utf-8")) == r1
 
 
 # --------------------------------------------------------------------------- #
