@@ -1406,11 +1406,14 @@ def main() -> int:
         print(line)
     if args.out is not None:
         # evaluate-go-bar 側と対称に、--out が入力/重要 artifact を上書き破壊するのを
-        # 書き込み前に fail-closed。保護対象: 凍結 registry（両モード）、manifest 本体、
-        # 各 source audio（external モードで results に resolved audio_path が載る）。
-        # 例: `--external manifest.json --out manifest.json` は manifest を、
+        # 書き込み前に fail-closed。保護対象: 凍結 registry（両モード）、この harness
+        # スクリプト自身（report を生成している generator コード。`--external manifest.json
+        # --out scripts/run_melody_observability.py` の typo で harness 自体を JSON で
+        # atomic 上書きさせない・evaluate 分岐が評価器コードを守るのと対称・#47）、
+        # manifest 本体、各 source audio（external モードで results に resolved audio_path
+        # が載る）。例: `--external manifest.json --out manifest.json` は manifest を、
         # `--out <source>.wav` は再現に必要な source audio を破壊する（Codex 指摘）。
-        protected_paths = {REGISTRY_PATH.resolve()}
+        protected_paths = {REGISTRY_PATH.resolve(), Path(__file__).resolve()}
         if args.external is not None:
             protected_paths.add(Path(args.external).resolve())
         else:
@@ -1428,8 +1431,9 @@ def main() -> int:
                 protected_paths.add(Path(audio_path).resolve())
         if Path(args.out).resolve() in protected_paths:
             raise ValueError(
-                f"--out {args.out} は保護対象パス（registry / manifest / source audio）と "
-                "衝突する; 書き込みが再現に必要な入力を破壊するため拒否する (fail-closed)"
+                f"--out {args.out} は保護対象パス（registry / harness / manifest / "
+                "source audio）と衝突する; 書き込みが再現に必要な入力/生成コードを破壊するため "
+                "拒否する (fail-closed)"
             )
         _atomic_write_text(
             args.out, json.dumps(results, indent=2, sort_keys=True)

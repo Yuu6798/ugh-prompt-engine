@@ -2129,6 +2129,46 @@ def test_synthetic_cli_rejects_out_overwriting_builder(monkeypatch):
     assert builder_path.read_bytes() == before
 
 
+def test_report_mode_cli_rejects_out_overwriting_harness_source(monkeypatch, tmp_path):
+    """非 evaluate モードの --out が harness 自身を指したら fail-closed（#47）。
+
+    `--external manifest.json --out scripts/run_melody_observability.py` の typo で
+    report を生成している harness スクリプト自体を JSON で atomic 上書きさせない
+    （evaluate 分岐が評価器コードを守るのと対称）。synthetic / external 両分岐で守る。
+    """
+    import json as _json
+
+    import scripts.run_melody_observability as harness
+
+    harness_path = Path(harness.__file__)
+
+    # synthetic 分岐（run_synthetic をスタブ化し protected 判定だけ検証）。
+    monkeypatch.setattr(
+        harness, "run_synthetic", lambda: {"mode": "synthetic", "fixtures": {}}
+    )
+    monkeypatch.setattr(
+        sys, "argv", ["run_melody_observability", "--out", str(harness_path)]
+    )
+    before = harness_path.read_bytes()
+    with pytest.raises(ValueError, match="保護対象"):
+        harness.main()
+    assert harness_path.read_bytes() == before  # harness コードは無傷。
+
+    # external 分岐（軽量 manifest。run_external をスタブ化）。
+    monkeypatch.setattr(
+        harness, "run_external", lambda *a, **k: {"mode": "external", "fixtures": {}}
+    )
+    manifest = tmp_path / "m.json"
+    manifest.write_text(_json.dumps([]), encoding="utf-8")
+    monkeypatch.setattr(
+        sys, "argv",
+        ["run_melody_observability", "--external", str(manifest), "--out", str(harness_path)],
+    )
+    with pytest.raises(ValueError, match="保護対象"):
+        harness.main()
+    assert harness_path.read_bytes() == before  # harness コードは無傷。
+
+
 # --------------------------------------------------------------------------- #
 # slow lane: 合成 → 実 pyin 抽出の統合（正/負の対照）
 # --------------------------------------------------------------------------- #
