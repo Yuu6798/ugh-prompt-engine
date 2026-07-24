@@ -1348,9 +1348,14 @@ def main() -> int:
         if args.external is not None:
             protected_paths.add(Path(args.external).resolve())
         else:
-            # synthetic モードは synthesis_specs.yaml を load_specs() で読む committed
-            # fixture 入力なので保護する（`--out .../synthesis_specs.yaml` で破壊させない）。
+            # synthetic モードは synthesis_specs.yaml を load_specs() で読み、
+            # build_melody_bench.py（builder コード）で波形を生成する committed 入力なので
+            # 両方保護する（`--out .../synthesis_specs.yaml` や `--out .../build_melody_bench.py`
+            # で generator を上書き破壊させない・#38/#43 と対称）。
+            import build_melody_bench as _bench
+
             protected_paths.add(SPECS_PATH.resolve())
+            protected_paths.add(Path(_bench.__file__).resolve())
         for info in results.get("fixtures", {}).values():
             audio_path = info.get("audio_path")
             if audio_path:

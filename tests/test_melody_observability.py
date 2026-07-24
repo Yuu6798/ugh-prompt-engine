@@ -1970,6 +1970,24 @@ def test_synthetic_cli_rejects_out_overwriting_synthesis_specs(monkeypatch):
     assert SPECS_PATH.read_bytes() == before
 
 
+def test_synthetic_cli_rejects_out_overwriting_builder(monkeypatch):
+    """default synthetic モードの --out が build_melody_bench.py（builder）を指したら fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    monkeypatch.setattr(
+        harness, "run_synthetic", lambda: {"mode": "synthetic", "fixtures": {}}
+    )
+    builder_path = Path(bench.__file__)
+    monkeypatch.setattr(
+        sys, "argv", ["run_melody_observability", "--out", str(builder_path)]
+    )
+    before = builder_path.read_bytes()
+    with pytest.raises(ValueError, match="保護対象"):
+        harness.main()
+    # builder コードは無傷。
+    assert builder_path.read_bytes() == before
+
+
 # --------------------------------------------------------------------------- #
 # slow lane: 合成 → 実 pyin 抽出の統合（正/負の対照）
 # --------------------------------------------------------------------------- #
