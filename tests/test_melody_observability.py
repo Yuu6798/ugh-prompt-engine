@@ -1072,6 +1072,45 @@ def test_evaluate_go_bar_rejects_empty_and_non_external():
         harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
 
 
+def test_evaluate_go_bar_fails_closed_below_repeats_min():
+    """単一 report（n=1 < 凍結 repeats_min=2）は verdict を出さず fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    report1 = _make_go_bar_report(outcomes)
+    # 単一 report では repeats_min=2 を満たさない（1 回実行の go verdict を弾く）。
+    with pytest.raises(ValueError, match="repeats_min"):
+        harness.evaluate_m1_real_go_bar([report1], _go_bar_registry())
+
+
+def test_evaluate_go_bar_fails_closed_on_stale_reports_vs_loaded_registry():
+    """report 同士は一致するが loaded registry の hash と食い違えば fail-closed。
+
+    古い registry で測った stale な report 2 本が互いに一致しても、いまバーを load
+    した registry の hash（authoritative reference）と紐づかなければ判定できない
+    （バーの焼き込み保証・Codex 指摘）。
+    """
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    # 両 report とも同じ「古い」registry hash で相互一致している。
+    report1 = _make_go_bar_report(outcomes, registry_sha256="0" * 64)
+    report2 = _make_go_bar_report(outcomes, registry_sha256="0" * 64)
+    # loaded registry の authoritative hash（今日のバー）と食い違う → fail-closed。
+    with pytest.raises(ValueError, match="registry_sha256"):
+        harness.evaluate_m1_real_go_bar(
+            [report1, report2], _go_bar_registry(), registry_sha256="9" * 64
+        )
+    # pin が loaded hash と一致すれば判定に到達し、verdict はその hash に紐づく。
+    verdict = harness.evaluate_m1_real_go_bar(
+        [report1, report2], _go_bar_registry(), registry_sha256="0" * 64
+    )
+    assert verdict["registry_sha256"] == "0" * 64
+    assert verdict["verdict"] == "go"
+
+
 # --------------------------------------------------------------------------- #
 # slow lane: 合成 → 実 pyin 抽出の統合（正/負の対照）
 # --------------------------------------------------------------------------- #

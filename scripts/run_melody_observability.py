@@ -468,20 +468,34 @@ def _is_ever_sufficient(reports: List[Dict[str, Any]], fixture_id: str, route: s
 
 
 def evaluate_m1_real_go_bar(
-    reports: List[Dict[str, Any]], registry: Dict[str, Any]
+    reports: List[Dict[str, Any]],
+    registry: Dict[str, Any],
+    registry_sha256: "str | None" = None,
 ) -> Dict[str, Any]:
     """凍結済み `registry["m1_real_go_bar"]` を `reports`（external モード n>=2 回）へ機械適用する。
 
     本関数は事前登録済みバー（≥3/4 sufficient・偽陽性 0）を**そのまま機械算出するだけ**
     で、閾値を緩めたり実測データを見て調整したりしない（`one_way_rule` の延長・設計 §5）。
 
+    `registry_sha256` を渡した場合（CLI 経路では `_load_registry()` が返す、いま
+    バーを load した registry の hash）、それを authoritative reference として全
+    report の pin と照合する。これがないと、古い registry で測った stale な report
+    同士が互いに一致しさえすれば今日の `m1_real_go_bar` で評価され、verdict が測定
+    時と別の凍結バーに紐づいてしまう（Codex 指摘・バーの焼き込み保証）。None の
+    場合（survivor ロジックの純粋単体テスト等）は report 間の相互一致で代替する。
+
     fail-closed 条件（誤った Go 判定を出さないための拒否）:
 
     - `reports` が空
     - いずれかの report の `mode` が ``"external"`` でない（synthetic report を
       混ぜて判定できない）
-    - 複数 report 間で `registry_sha256` または `observation_gate` が食い違う
-      （異なる凍結バー・閾値下で測定した report を混ぜて判定するのは無効）
+    - `len(reports) < m1_real_go_bar.repeats_min`（凍結ルールは n>=2 を要求する。
+      CLI の ``nargs="+"`` で単一 report が渡っても 1 回実行の verdict を publish
+      しない・Codex 指摘）
+    - `registry_sha256` 指定時、いずれかの report の pin がその hash と不一致
+      （渡されない場合は複数 report 間の `registry_sha256` 相互一致を要求）
+    - 複数 report 間で `observation_gate` が食い違う（異なる閾値下で測定した
+      report を混ぜて判定するのは無効）
     - `m1_real_go_bar` の positive_ids / negative_ids のいずれかが、**いずれかの**
       report の fixtures に欠けている（全 pre-registered fixture を n>=2 で測定
       してからでないと verdict を主張できない）
@@ -516,26 +530,43 @@ def evaluate_m1_real_go_bar(
                 "expected 'external' (fail-closed; M1-real Go bar は external 実測のみを対象とする)"
             )
 
-    ref_registry_sha256 = reports[0]["registry_sha256"]
+    bar = registry["m1_real_go_bar"]
+    positive_ids: List[str] = list(bar["positive_ids"])
+    negative_ids: List[str] = list(bar["negative_ids"])
+    min_positive_sufficient = bar["min_positive_sufficient"]
+    max_negative_false_positive = bar["max_negative_false_positive"]
+    repeats_min = bar["repeats_min"]
+
+    # 凍結ルールが要求する繰返し回数（n>=2）未満の report で verdict を出さない。
+    # CLI は nargs="+" で単一 report も受けるため、ここで弾かないと 1 回実行の観測が
+    # go verdict を publish しうる（Codex 指摘・事前登録厳守）。
+    if len(reports) < repeats_min:
+        raise ValueError(
+            f"evaluate_m1_real_go_bar: got {len(reports)} report(s) but the frozen "
+            f"m1_real_go_bar requires repeats_min={repeats_min} (n>=2); "
+            "1 回の実行だけで verdict を publish しない (fail-closed)"
+        )
+
+    # 凍結バーを load した registry の hash（渡された場合）を authoritative reference と
+    # する。渡されない場合は report 間の相互一致で代替する。いずれの report の pin も
+    # reference と一致しなければ fail-closed（測定時と別の凍結バーで判定しない）。
+    ref_registry_sha256 = (
+        registry_sha256 if registry_sha256 is not None else reports[0]["registry_sha256"]
+    )
     ref_observation_gate = reports[0]["observation_gate"]
-    for idx, report in enumerate(reports[1:], start=1):
+    _ref_label = "loaded registry" if registry_sha256 is not None else "reports[0]"
+    for idx, report in enumerate(reports):
         if report["registry_sha256"] != ref_registry_sha256:
             raise ValueError(
-                "evaluate_m1_real_go_bar: reports disagree on registry_sha256 "
-                f"(reports[0]={ref_registry_sha256!r} vs reports[{idx}]={report['registry_sha256']!r}); "
-                "異なる凍結バー下で測定した report を混ぜて判定できない (fail-closed)"
+                f"evaluate_m1_real_go_bar: reports[{idx}] registry_sha256 "
+                f"{report['registry_sha256']!r} != {_ref_label} {ref_registry_sha256!r}; "
+                "測定時と別の凍結バー/registry の下で判定できない (fail-closed)"
             )
         if report["observation_gate"] != ref_observation_gate:
             raise ValueError(
                 f"evaluate_m1_real_go_bar: reports disagree on observation_gate at reports[{idx}]; "
                 "異なる閾値スナップショット下で測定した report を混ぜて判定できない (fail-closed)"
             )
-
-    bar = registry["m1_real_go_bar"]
-    positive_ids: List[str] = list(bar["positive_ids"])
-    negative_ids: List[str] = list(bar["negative_ids"])
-    min_positive_sufficient = bar["min_positive_sufficient"]
-    max_negative_false_positive = bar["max_negative_false_positive"]
 
     for fixture_id in positive_ids + negative_ids:
         missing_in = [
@@ -648,11 +679,13 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.evaluate_go_bar is not None:
-        registry, _ = _load_registry()
+        registry, registry_sha256 = _load_registry()
         reports = [
             json.loads(path.read_text(encoding="utf-8")) for path in args.evaluate_go_bar
         ]
-        verdict = evaluate_m1_real_go_bar(reports, registry)
+        verdict = evaluate_m1_real_go_bar(
+            reports, registry, registry_sha256=registry_sha256
+        )
         for line in summarize_go_bar(verdict):
             print(line)
         if args.out is not None:
