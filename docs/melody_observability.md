@@ -196,3 +196,168 @@ python scripts/run_melody_observability.py --external ext.json --out ext_obs.jso
 
 §4.1 の数値は上記環境の pyin 経路実測。異バージョン環境での再実行は本記録の検証
 範囲外であり、差異が出ても「壊れた」ではなく新しい日付の再実測として記録する。
+
+## 6. M1-real 事前登録（実測待ち・2026-07-24）
+
+§4.2 で繰延した実利用入力帯（Suno vocals stem 相当の実ボーカル曲）の slow-lane
+実測に向け、**測定を見る前に**合否バーと素材を凍結した（`one_way_rule` と同型の
+規律）。本節はワイヤリングと事前登録のみを記録する — 測定値・Go/No-Go 判定は
+**含まない**（machine-dependent・slow/manual lane へ繰延）。
+
+### 6.1 凍結した Go bar
+
+`tests/fixtures/melody_bench/registry.yaml` の `m1_real_go_bar`（`registered_utc:
+"2026-07-24"`）:
+
+- positive 4 本中 **≥3 本**で `status=sufficient` を返す経路が 1 本以上存在
+  （`min_positive_sufficient: 3` / `total_positive: 4`）
+- その経路が全 negative で **偽陽性ゼロ**（`max_negative_false_positive: 0`）
+- 各素材×経路は **n≥2** 回実行して確認（`repeats_min: 2`。決定論抽出器なら一致する
+  はずで、実行揺れの有無自体も記録に値する）
+
+`external_fixtures` に登録した M1-real 素材（`category: real_no_truth`、全て
+`input_kind: vocal_track`）:
+
+| id | source | 役割 |
+|---|---|---|
+| `real_vocal_jrock` | kane_y2 | positive |
+| `real_vocal_futurepop` | sev4_x2 | positive |
+| `real_vocal_band` | kaze_k2 | positive |
+| `real_vocal_waltz` | crslv2_w3 | positive（3拍子・器楽厚めの難所） |
+| `real_instrumental_negative` | （自作曲の器楽区間） | negative（誤検出ガード） |
+
+判定は `scripts/run_melody_observability.py` の `evaluate_m1_real_go_bar` が
+この凍結バーから機械算出する（目視で緩めない）。
+
+### 6.2 vocal_song → vocal_track 写像
+
+設計上の `vocal_song` ラベルは `src/svp_rpe/melody/routing.py` の `INPUT_KINDS`
+（`vocal_track` / `clear_lead` / `full_mix` / `chord_pad_no_melody`）に存在しない。
+5 本すべてを `vocal_track` へ写像した。§3 の経路表のとおり、`vocal_track` は
+`demucs_vocals_then_crepe` と `demucs_vocals_then_melodia` の**両方**（§3.2 の
+本命経路）を持つ唯一のバケットであり、設計の狙い（Demucs 分離後の単旋律抽出器）
+と一致する。
+
+### 6.3 走らせるべき経路行列
+
+`vocal_track` の経路候補（§3 table 再掲）: `pyin_direct`（baseline sep 無し）/
+`demucs_vocals_then_pyin`（sep→pyin）/ `demucs_vocals_then_crepe`（sep→crepe・
+本命）/ `demucs_vocals_then_melodia`（sep→melodia・本命）。設計 §3.2 に準拠し、
+この 4 経路すべてを 5 素材（positive 4 + negative 1）× n≥2 で回す。
+
+### 6.4 slow-lane 実行レシピ（Cowork/User が実行）
+
+```bash
+# pitch 依存（pyin baseline は追加依存なしで動く。crepe/melodia は §5 manual）
+pip install -e ".[pitch]"
+# pip install crepe        # CREPE（manual/external 統合・§5）
+# pip install essentia     # Melodia を測るなら（AGPL-3.0 を受容できる環境のみ）
+#
+# ★分離経路（`.[separate]`）は現状**入れない**。理由: 評価器は measured な demucs 経路に
+#   preprocessing.stem_sha256 / separation_weights_sha256 を必須化する（#54）が、ハーネスは
+#   まだこれらを emit しない（weights hash の emit は実 Demucs を要する machine-dependent な
+#   未配線 slow-lane 課題・§6.5）。`.[separate]` を入れると分離経路が measured になり、
+#   stem/weights 欠落で --evaluate-go-bar が fail-closed する。分離経路の Go を測るには先に
+#   emit 配線が必要。それまでは分離経路を unavailable（→inconclusive・非ブロッキング）に留め、
+#   Go は非分離の pyin_direct 経路で成立させる。
+
+# tests/fixtures/melody_bench/external_manifest.example.json をコピーし、
+# REPLACE を実ファイルパスへ書き換える（audio_sha256 は null のままでよい・
+# ハーネスが実測して記録する）。
+
+# n>=2 回、それぞれ別ファイルへ観測表を書き出す（run_id はハーネスが自動発行）。
+python scripts/run_melody_observability.py --external manifest.json --out run1.json
+python scripts/run_melody_observability.py --external manifest.json --out run2.json
+
+# ★凍結素材 audio pin の記録（#53。評価器は Go 判定 publish に必須）。run1.json 等の
+#   fixtures.<id>.audio_sha256 は run 出力に実測記録される。これを registry.yaml の
+#   external_fixtures[].expected_audio_sha256 へ転記して registry を更新し、（registry が
+#   変わるので）上の run1/run2 生成を更新後 registry で**やり直す**。この記録前に
+#   --evaluate-go-bar を回すと expected_audio_sha256 欠落で fail-closed する。
+#   ※ 生成と評価は同一 checkout で行う（#55: report の generator_code_sha256 は現 checkout の
+#     _generator_code_sha256() と一致必須。間で routing/gate/extractor を変えると stale 扱い）。
+
+# 凍結バーを機械適用して Go/No-Go を得る（分離経路は上記により inconclusive、Go は pyin_direct）。
+python scripts/run_melody_observability.py --evaluate-go-bar run1.json run2.json --out verdict.json
+```
+
+`verdict` は三値: **`go`**（生き残り経路あり）/ **`no_go`**（**全**候補経路を全
+fixture×route で実測した上でどれも生き残らなかった＝強化版 No-Go・設計 §4.4）/
+**`inconclusive`**（1 つでも未測定の候補経路がある＝optional 依存欠如で本命経路が
+`unavailable` 等・「生き残りなし」を証明できておらず「測定未達」と偽らない）。
+`--evaluate-go-bar` は入力 report を凍結 registry と多重に照合し（registry_sha256 /
+observation_gate 一致・凍結 kind と route matrix・素材別性・model provenance・繰返し
+独立性）、いずれかが破れれば fail-closed で verdict を出さない。`verdict.json` は消費した
+report の `report_pins` を記録する。
+
+決定論パイプラインでは同一素材の抽出は bit 単位で同一結果を返すため、n≥2 の repeats が
+意味を持つのは**独立した実行**の揺れを見るときだけ（設計 §3.1）。そこで `--external`
+実行は毎回新規の **`run_id`** を発行し、評価器は全 report が非空 `run_id` を持ち相互に
+distinct であることを要求する。これがないと run1.json を run2.json へコピーするだけで
+別パス・同一 bytes として path-dedup を通過し、1 回の抽出が `repeats_min=2` を満たして
+しまう（`audio_sha256` の一致＝同一素材とは直交する軸で、素材は同一・実行は独立を要求）。
+`verdict.json` は消費した `run_ids` も転記する。
+
+report/manifest の JSON は**重複 object キーを拒否する hook**（`object_pairs_hook`）で
+parse する。標準 `json.loads` は重複キーを last-wins で黙って畳むため、失敗版→合格版の
+2 重 `fixtures.<id>` を持つ stale/手書き report は、矛盾する bytes を content hash で
+pin しつつ合格版だけ採点して go を publish しうる。hook は全ネスト階層の object で
+呼ばれるので、fixture id・route payload いずれの階層の重複キーも採点前に fail-closed で
+弾く（#46）。
+
+report は route 行・gate metrics を産出した generator コードの digest を
+**`generator_code_sha256`** に載せる。評価器はこれが全 report に存在し repeats 間で一致
+することを要求する。verdict の `evaluator_code_sha256`（判定コードの digest）と対を成す
+生成側 provenance で、extractor/gate コードが変わった後に古い report bytes が渡される
+stale extraction を機械検出可能にする（従来は registry と評価器コードしか pin されず
+検出不能だった）。同じパス集合（`_generator_code_paths()`）が `--out` 衝突保護でも使われ、
+生成直後の generator コード上書き破壊を両モードで防ぐ（#47/#49/#50/#51）。
+
+この generator コード集合は**ハードコードのモジュール一覧ではなく、seed（harness ＋ melody
+抽出/経路/観測 ＋ learned adapter / source separator）から AST で import を辿った first-party
+推移閉包**として算出する。`ast.walk` は関数内 import も拾うため、pyin baseline が遅延 import
+する `rpe.physical_features` の `PYIN_*` 定数・`_highpass_melody_signal` のような、hand-list が
+取りこぼしがちな依存も自動で含む（#52）。`test_generator_code_paths_is_import_closed` が
+「集合が import 閉包として閉じている」不変条件を CI で守り、将来 generator 系に遅延 import を
+足して集合が不完全化しても検出する。
+
+`report_pins` の **`sha256` が content-addressed の replay anchor** で、各 report の
+内容を一意に pin する（同名 basename でも内容が違えば別 sha256 として list に共存・
+区別される）。`path` は人間可読の**非権威的 hint** に徹する（repo 内なら repo 相対、
+repo 外なら basename）——slow-lane report は machine-dependent な transient artifact
+（§6.5・commit しない）で検証時には存在しないため、provenance の同一性は path でなく
+sha256 で担保する。検証は「pin した sha256 の report 集合を同一凍結 registry の下で
+再評価して同じ verdict を得る」ことで行い、path で元ファイルを open して replay する
+ものではない。
+
+### 6.5 状態
+
+本節はワイヤリング + 事前登録のみ。実音声 + Demucs/CREPE/Essentia を要する
+実測は **machine-dependent** であり slow/manual lane（Cowork/User）へ繰延する。
+測定値・dated 実測記録・Go/No-Go 判定は本節時点では **未確定（PENDING）** —
+実測が済むまでここに数値や verdict を書き加えてはならない（一方向規律）。
+
+**繰延している machine-dependent 課題**（値の **emit/記録** が machine-dependent。ただし
+評価器の**要求は machine-independent** で、Go 判定を publish する scoring 時点でこれらの
+pin を必須化する = 記録が済むまで Go を出さない fail-closed 規律。「約束するのは測定できる
+ものだけ」の D-1 準拠）:
+
+- **分離経路の stem/weights hash**（#54）: Demucs vocals stem の sha256・分離器重みの hash は
+  実 Demucs を要するため未 emit。評価器は **measured な分離経路には `preprocessing.stem_sha256`
+  と `separation_weights_sha256` を必須**とし、無ければ provenance 不足で fail-closed（同一
+  `htdemucs_ft`/version でも別 weights/再生成 stem なら前処理入力が変わるため、これらの pin
+  なしに分離経路を stable Go survivor に数えない）。したがって分離経路の Go は emit 配線
+  （`_preprocessing_provenance` が stem を露出して hash）を slow-lane で追加してから。
+- **学習抽出器の weights hash**（#59）: CREPE/basic-pitch/Melodia のモデル重み hash は
+  実モデルを要するため未 emit。評価器は **measured な学習抽出器経路には `extractor_weights_sha256`
+  を必須**とし、無ければ fail-closed（同一 package version でも別 bundled/local weights だと
+  モデル入力が変わるため、pin なしに学習抽出器経路を stable Go survivor に数えない・分離側と対称）。
+  したがって本命 `demucs_vocals_then_crepe` 等の Go は weights emit 配線を slow-lane で追加してから。
+  pyin は DSP で重みなしのため対象外（現状 Go 可能な経路）。
+- **frozen 素材の expected audio hash**（#53）: real_vocal_* は自作 Suno 曲で **非 commit**
+  （波形は repo に置かない）、その expected audio sha256 は slow-lane 生成時に決まる
+  dated pin。PR 時に registry へ固定できない（audio が repo に存在しない・初回生成前は
+  hash 未知）。評価器は **全 go-bar fixture に registry の `expected_audio_sha256` を必須**とし、
+  report の audio_sha256 と一致要求する（未記録だと manifest が frozen id を誤った audio に
+  向けても両 repeats で一致してしまい、一度も pin されていない material に Go が出る）。
+  operator が初回生成後に実測 hash を registry へ記録してからでないと scoring で Go を出さない。

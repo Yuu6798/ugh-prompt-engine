@@ -31,6 +31,7 @@ __all__ = [
     "MelodyObservabilityReport",
     "notes_from_frames",
     "cross_extractor_agreement",
+    "gate_reasons",
     "assess_observability",
 ]
 
@@ -175,18 +176,19 @@ class MelodyObservabilityReport:
         return self.status == "sufficient"
 
     def to_dict(self) -> Dict[str, Any]:
+        # gate metrics は**丸めず**厳密値を保存する。丸め（4 桁）だと真値が閾値の近傍で
+        # 境界を跨ぎ、丸め済み metrics からの status 再導出（go-bar revalidation）が原判定と
+        # 食い違って false-positive/隠蔽の余地を生む。厳密値なら `gate_reasons` による
+        # 再導出が status と厳密一致し、両方向の改竄検出が曖昧さなく成立する（Codex 指摘）。
+        # report は機械 artifact なので厳密 float の可読性低下は許容。
         return {
-            "voiced_coverage": round(self.voiced_coverage, 4),
+            "voiced_coverage": self.voiced_coverage,
             "note_count": self.note_count,
             "phrase_count": self.phrase_count,
-            "confidence_mean": round(self.confidence_mean, 4),
-            "low_confidence_rate": round(self.low_confidence_rate, 4),
-            "octave_jump_rate": round(self.octave_jump_rate, 4),
-            "cross_extractor_agreement": (
-                None
-                if self.cross_extractor_agreement is None
-                else round(self.cross_extractor_agreement, 4)
-            ),
+            "confidence_mean": self.confidence_mean,
+            "low_confidence_rate": self.low_confidence_rate,
+            "octave_jump_rate": self.octave_jump_rate,
+            "cross_extractor_agreement": self.cross_extractor_agreement,
             "status": self.status,
             "route": self.route,
             "reasons": list(self.reasons),
@@ -369,6 +371,64 @@ def _lcs_length(a: Sequence[int], b: Sequence[int]) -> int:
     return prev[-1]
 
 
+def gate_reasons(
+    thresholds: ObservabilityThresholds,
+    *,
+    voiced_coverage: float,
+    note_count: int,
+    phrase_count: int,
+    confidence_mean: float,
+    low_confidence_rate: float,
+    octave_jump_rate: float,
+    cross_extractor_agreement: Optional[float],
+) -> List[str]:
+    """観測ゲート指標と閾値から未達理由のリストを返す（空なら sufficient）。
+
+    ゲート判定の single source of truth。`assess_observability` の判定部と、
+    report payload のメトリクスから status を再導出する検証（例:
+    `scripts/run_melody_observability.py` の go-bar 検証）の双方が本関数を共有し、
+    しきい値ロジックがドリフトしないようにする。純関数（副作用なし）。
+    """
+    reasons: List[str] = []
+    if voiced_coverage < thresholds.min_voiced_coverage:
+        reasons.append(
+            f"voiced_coverage {voiced_coverage:.3f} < min {thresholds.min_voiced_coverage:.3f}"
+        )
+    if note_count < thresholds.min_note_count:
+        reasons.append(f"note_count {note_count} < min {thresholds.min_note_count}")
+    if phrase_count < thresholds.min_phrase_count:
+        reasons.append(f"phrase_count {phrase_count} < min {thresholds.min_phrase_count}")
+    if confidence_mean < thresholds.min_confidence_mean:
+        reasons.append(
+            f"confidence_mean {confidence_mean:.3f} < min {thresholds.min_confidence_mean:.3f}"
+        )
+    if low_confidence_rate > thresholds.max_low_confidence_rate:
+        reasons.append(
+            f"low_confidence_rate {low_confidence_rate:.3f} > max "
+            f"{thresholds.max_low_confidence_rate:.3f}"
+        )
+    if octave_jump_rate > thresholds.max_octave_jump_rate:
+        reasons.append(
+            f"octave_jump_rate {octave_jump_rate:.3f} > max "
+            f"{thresholds.max_octave_jump_rate:.3f}"
+        )
+    if thresholds.min_cross_extractor_agreement is not None:
+        # 閾値が設定されているのに一致度が採れない（補助抽出器が未導入 / ノート
+        # 無しで agreement=None）場合は fail-closed。required な一致が確立され
+        # ないまま sufficient を通さない（Codex 指摘）。
+        if cross_extractor_agreement is None:
+            reasons.append(
+                "cross_extractor_agreement unavailable but min "
+                f"{thresholds.min_cross_extractor_agreement:.3f} required"
+            )
+        elif cross_extractor_agreement < thresholds.min_cross_extractor_agreement:
+            reasons.append(
+                f"cross_extractor_agreement {cross_extractor_agreement:.3f} < min "
+                f"{thresholds.min_cross_extractor_agreement:.3f}"
+            )
+    return reasons
+
+
 def assess_observability(
     observation: MelodyObservation,
     thresholds: ObservabilityThresholds,
@@ -410,44 +470,16 @@ def assess_observability(
     if reference_notes is not None:
         agreement = cross_extractor_agreement(notes, reference_notes)
 
-    reasons: List[str] = []
-    if voiced_coverage < thresholds.min_voiced_coverage:
-        reasons.append(
-            f"voiced_coverage {voiced_coverage:.3f} < min {thresholds.min_voiced_coverage:.3f}"
-        )
-    if note_count < thresholds.min_note_count:
-        reasons.append(f"note_count {note_count} < min {thresholds.min_note_count}")
-    if phrase_count < thresholds.min_phrase_count:
-        reasons.append(f"phrase_count {phrase_count} < min {thresholds.min_phrase_count}")
-    if confidence_mean < thresholds.min_confidence_mean:
-        reasons.append(
-            f"confidence_mean {confidence_mean:.3f} < min {thresholds.min_confidence_mean:.3f}"
-        )
-    if low_confidence_rate > thresholds.max_low_confidence_rate:
-        reasons.append(
-            f"low_confidence_rate {low_confidence_rate:.3f} > max "
-            f"{thresholds.max_low_confidence_rate:.3f}"
-        )
-    if octave_jump_rate > thresholds.max_octave_jump_rate:
-        reasons.append(
-            f"octave_jump_rate {octave_jump_rate:.3f} > max "
-            f"{thresholds.max_octave_jump_rate:.3f}"
-        )
-    if thresholds.min_cross_extractor_agreement is not None:
-        # 閾値が設定されているのに一致度が採れない（補助抽出器が未導入 / ノート
-        # 無しで agreement=None）場合は fail-closed。required な一致が確立され
-        # ないまま sufficient を通さない（Codex 指摘）。
-        if agreement is None:
-            reasons.append(
-                "cross_extractor_agreement unavailable but min "
-                f"{thresholds.min_cross_extractor_agreement:.3f} required"
-            )
-        elif agreement < thresholds.min_cross_extractor_agreement:
-            reasons.append(
-                f"cross_extractor_agreement {agreement:.3f} < min "
-                f"{thresholds.min_cross_extractor_agreement:.3f}"
-            )
-
+    reasons = gate_reasons(
+        thresholds,
+        voiced_coverage=voiced_coverage,
+        note_count=note_count,
+        phrase_count=phrase_count,
+        confidence_mean=confidence_mean,
+        low_confidence_rate=low_confidence_rate,
+        octave_jump_rate=octave_jump_rate,
+        cross_extractor_agreement=agreement,
+    )
     status = "sufficient" if not reasons else "insufficient"
     return MelodyObservabilityReport(
         voiced_coverage=voiced_coverage,

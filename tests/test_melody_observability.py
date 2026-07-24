@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import os
 import sys
+import uuid
 from pathlib import Path
 
 import numpy as np
@@ -878,6 +879,1823 @@ def test_pair_manifest_pins_source_sha256(tmp_path, monkeypatch):
     pairs.main()
     manifest = _json.loads((out_dir / "src__pairs_manifest.json").read_text(encoding="utf-8"))
     assert manifest["source_sha256"] == hashlib.sha256(src.read_bytes()).hexdigest()
+
+
+# --------------------------------------------------------------------------- #
+# M1-real Go bar 事前登録 + 機械評価器（CI 安全・機械依存の実測は含まない）
+# --------------------------------------------------------------------------- #
+# 凍結した M1-real 素材 ID（docs/melody_observability.md §6.1 と registry.yaml の
+# single source of truth を CI で pin する）。registry.yaml の m1_real_go_bar を
+# 事故で編集（positive の 1 本入替・negative の差し替え等）したら CI が赤くなり、
+# 意図的変更（M2 等）でのみ本定数と registry を同時更新する（Codex 指摘: 凍結 ID を
+# ランタイムにハードコードして registry と二重 SSOT 化する代わりに、registry を
+# guard するテストとして pin する）。
+_FROZEN_GO_BAR_POSITIVE_IDS = {
+    "real_vocal_jrock",
+    "real_vocal_futurepop",
+    "real_vocal_band",
+    "real_vocal_waltz",
+}
+_FROZEN_GO_BAR_NEGATIVE_IDS = {"real_instrumental_negative"}
+
+
+def test_registry_has_m1_real_go_bar_preregistered():
+    """m1_real_go_bar が凍結どおり登録され、正確な 4 positive + 1 negative が vocal_track で揃う。"""
+    registry = yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))
+    bar = registry["m1_real_go_bar"]
+    assert bar["min_positive_sufficient"] == 3
+    assert bar["max_negative_false_positive"] == 0
+    assert bar["total_positive"] == 4
+    assert len(bar["positive_ids"]) == 4
+    assert len(bar["negative_ids"]) == 1
+    # 正確な凍結 ID 集合を pin（本数だけでなく id 名まで固定し、別 fixture への
+    # 事故的すり替えを CI で検出する）。
+    assert set(bar["positive_ids"]) == _FROZEN_GO_BAR_POSITIVE_IDS
+    assert set(bar["negative_ids"]) == _FROZEN_GO_BAR_NEGATIVE_IDS
+
+    external_by_id = registry["external_fixtures"]
+    ids_seen = [f["id"] for f in external_by_id]
+    # 各 go-bar positive/negative id はちょうど 1 回だけ登録される。
+    for fid in bar["positive_ids"] + bar["negative_ids"]:
+        assert ids_seen.count(fid) == 1, fid
+
+    by_id = {f["id"]: f for f in external_by_id}
+    for fid in bar["positive_ids"] + bar["negative_ids"]:
+        assert fid in by_id, fid
+        assert by_id[fid]["input_kind"] == "vocal_track", fid
+
+
+_CURRENT_GEN_SHA_CACHE: "str | None" = None
+
+
+def _current_generator_code_sha256() -> str:
+    """現 checkout の generator コード digest（#55。評価器の現一致要求に合わせる）。session 内キャッシュ。"""
+    global _CURRENT_GEN_SHA_CACHE
+    if _CURRENT_GEN_SHA_CACHE is None:
+        import scripts.run_melody_observability as harness
+
+        _CURRENT_GEN_SHA_CACHE = harness._generator_code_sha256()
+    return _CURRENT_GEN_SHA_CACHE
+
+
+def _make_go_bar_report(
+    route_outcomes: "dict[str, dict[str, str]]",
+    registry_sha256: str = "f" * 64,
+    default_outcome: str = "unavailable",
+    run_id: "str | None" = None,
+    generator_code_sha256: "str | None" = None,
+) -> "dict":
+    """{fixture_id: {route_name: outcome}} から external report dict を組み立てる。
+
+    evaluate_m1_real_go_bar のテスト専用ヘルパー。observation_gate は実際の
+    registry 由来の thresholds snapshot（asdict）を使う（本物の external report
+    形状に合わせる）。
+    """
+    import dataclasses
+
+    thresholds = _default_thresholds()
+    # 完全な vocal_track matrix を模す: 明示されない経路は unavailable で埋める
+    # （評価器の full-matrix 完全性チェックを満たしつつ、未指定経路は未観測扱い）。
+    route_objs = select_routes("vocal_track")
+    vocal_track_routes = [r.name for r in route_objs]
+    route_extractor = {r.name: r.extractor for r in route_objs}
+
+    def _row(route, outcome):
+        # measured（gate outcome）な行は harness と同じ provenance / 根拠 report を持つ。
+        # 抽出器は凍結 route 定義に合わせ（評価器の extractor 照合に一致）、分離経路は
+        # separation provenance も付ける（provenance 完全性チェックに合わせる）。
+        row = {
+            "route": route,
+            "extractor": route_extractor.get(route, "crepe"),
+            "outcome": outcome,
+            "report": None,
+        }
+        if outcome in ("sufficient", "insufficient"):
+            # 根拠 report payload。凍結ゲート（min_note_count 8/min_phrase_count 2 等）
+            # に対し metrics から再導出した status が outcome と一致するよう構築する。
+            if outcome == "sufficient":
+                row["report"] = {
+                    "status": "sufficient", "route": route, "voiced_coverage": 0.7,
+                    "note_count": 12, "phrase_count": 3, "confidence_mean": 0.9,
+                    "low_confidence_rate": 0.05, "octave_jump_rate": 0.0,
+                    "cross_extractor_agreement": None,
+                }
+            else:
+                row["report"] = {
+                    "status": "insufficient", "route": route, "voiced_coverage": 0.7,
+                    "note_count": 1, "phrase_count": 1, "confidence_mean": 0.9,
+                    "low_confidence_rate": 0.05, "octave_jump_rate": 0.0,
+                    "cross_extractor_agreement": None,
+                }
+            row["source_model"] = f"{route}:model"
+            row["extractor_version"] = "0.0.13"
+            # #59: measured 学習抽出器（crepe/basic_pitch/melodia）は重み hash 必須。
+            # repeats 間で一致させるため extractor 由来の決定論値を使う。
+            if route_extractor.get(route) in ("crepe", "basic_pitch", "melodia"):
+                row["extractor_weights_sha256"] = hashlib.sha256(
+                    f"{route_extractor.get(route)}:weights".encode()
+                ).hexdigest()
+            if route.startswith("demucs_vocals_"):
+                row["preprocessing"] = {
+                    "preprocessing": "demucs_vocals",
+                    "separation_model": "htdemucs_ft",
+                    "separation_version": "4.0.1",
+                    # #54: measured 分離経路は stem/weights hash 必須。repeats 間で一致させる
+                    # ため route 由来の決定論値を使う（同一 fixture の 2 repeats で同値）。
+                    "stem_sha256": hashlib.sha256(f"{route}:stem".encode()).hexdigest(),
+                    "separation_weights_sha256": hashlib.sha256(
+                        b"htdemucs_ft:4.0.1:weights"
+                    ).hexdigest(),
+                }
+        return row
+
+    fixtures = {}
+    for fixture_id, routes in route_outcomes.items():
+        full_routes = {name: default_outcome for name in vocal_track_routes}
+        full_routes.update(routes)
+        fixtures[fixture_id] = {
+            "input_kind": "vocal_track",
+            "expect_status": None,
+            "audio_path": f"/fake/{fixture_id}.wav",
+            # fixture ごとに別素材を模す（id 由来の決定論 hash・repeats 間で同一）。
+            "audio_sha256": hashlib.sha256(fixture_id.encode()).hexdigest(),
+            "routes": [_row(route, outcome) for route, outcome in full_routes.items()],
+        }
+    return {
+        "mode": "external",
+        "manifest_path": "fake_manifest.json",
+        "manifest_sha256": "0" * 64,
+        "registry_sha256": registry_sha256,
+        "thresholds_source": "registry",
+        "observation_gate": dataclasses.asdict(thresholds),
+        # 各 report は既定で独立した run_id を持つ（run_external が実行ごとに発行する
+        # のを模す）。テストで偽 repeats（コピー）を模すときは明示的に同一値を渡す。
+        "run_id": run_id if run_id is not None else uuid.uuid4().hex,
+        # generator code provenance（#50/#55）。既定は現 checkout の実 digest（評価器は
+        # repeats 間一致に加え現 checkout との一致も要求するため・#55）。stale/差異ケースは
+        # 明示的に別値を渡す。
+        "generator_code_sha256": (
+            generator_code_sha256
+            if generator_code_sha256 is not None
+            else _current_generator_code_sha256()
+        ),
+        "fixtures": fixtures,
+    }
+
+
+_GO_BAR_POSITIVES = (
+    "real_vocal_jrock",
+    "real_vocal_futurepop",
+    "real_vocal_band",
+    "real_vocal_waltz",
+)
+_GO_BAR_NEGATIVE = "real_instrumental_negative"
+_GO_BAR_ROUTE = "demucs_vocals_then_crepe"
+
+
+def _go_bar_registry():
+    reg = yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))
+    # #53: go-bar fixture は scoring 時に expected_audio_sha256 必須。real registry は
+    # slow-lane 記録前なので未設定。happy path 用に、`_make_go_bar_report` が付ける
+    # report の audio_sha256（= sha256(fixture_id)）と一致する値を注入する。
+    go_bar_ids = set(_GO_BAR_POSITIVES) | {_GO_BAR_NEGATIVE}
+    for entry in reg.get("external_fixtures", []):
+        if entry["id"] in go_bar_ids:
+            entry["expected_audio_sha256"] = hashlib.sha256(entry["id"].encode()).hexdigest()
+    return reg
+
+
+def test_evaluate_go_bar_go_when_survivor():
+    """3/4 positive が両 report で安定 sufficient・negative は insufficient → go。"""
+    import scripts.run_melody_observability as harness
+
+    def route_outcomes(waltz_outcome="insufficient"):
+        outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+        outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: waltz_outcome}
+        outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+        return outcomes
+
+    report1 = _make_go_bar_report(route_outcomes())
+    report2 = _make_go_bar_report(route_outcomes())
+    verdict = harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
+    assert verdict["verdict"] == "go"
+    assert _GO_BAR_ROUTE in verdict["surviving_routes"]
+    assert verdict["routes"][_GO_BAR_ROUTE]["pos_sufficient"] == 3
+    assert verdict["routes"][_GO_BAR_ROUTE]["neg_false_positive"] == 0
+
+
+def test_evaluate_go_bar_verdict_pins_evaluator_code_digest():
+    """verdict が verdict を解釈したコード（評価器+依存モジュール）の digest を pin する。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+    verdict = harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+    assert verdict["verdict"] == "go"
+    # コード digest が載り、実モジュールの再計算 digest と一致する。
+    assert len(verdict["evaluator_code_sha256"]) == 64
+    assert verdict["evaluator_code_sha256"] == harness._evaluator_code_sha256()
+
+
+def test_evaluate_go_bar_no_go_below_threshold():
+    """crepe sufficient が 2/4 positive のみ → no_go、surviving_routes は空。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {
+        "real_vocal_jrock": {_GO_BAR_ROUTE: "sufficient"},
+        "real_vocal_futurepop": {_GO_BAR_ROUTE: "sufficient"},
+        "real_vocal_band": {_GO_BAR_ROUTE: "insufficient"},
+        "real_vocal_waltz": {_GO_BAR_ROUTE: "insufficient"},
+        _GO_BAR_NEGATIVE: {_GO_BAR_ROUTE: "insufficient"},
+    }
+    # 確定 no_go には全経路の実測が要る（default_outcome=insufficient で 4 経路 measured）。
+    report1 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    report2 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    verdict = harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
+    assert verdict["verdict"] == "no_go"
+    assert verdict["surviving_routes"] == []
+    assert verdict["routes"][_GO_BAR_ROUTE]["pos_sufficient"] == 2
+
+
+def test_evaluate_go_bar_false_positive_disqualifies():
+    """positive 4/4 だが negative でも sufficient を出す route は失格 → no_go。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "sufficient"}  # 偽陽性
+    report1 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    report2 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    verdict = harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
+    assert verdict["verdict"] == "no_go"
+    assert verdict["surviving_routes"] == []
+    assert verdict["routes"][_GO_BAR_ROUTE]["pos_sufficient"] == 4
+    assert verdict["routes"][_GO_BAR_ROUTE]["neg_false_positive"] == 1
+
+
+def test_evaluate_go_bar_instability_not_counted():
+    """report 間で outcome が食い違う positive は stably_sufficient にならず no_go。"""
+    import scripts.run_melody_observability as harness
+
+    stable_outcomes = {
+        "real_vocal_jrock": {_GO_BAR_ROUTE: "sufficient"},
+        "real_vocal_futurepop": {_GO_BAR_ROUTE: "sufficient"},
+        "real_vocal_waltz": {_GO_BAR_ROUTE: "insufficient"},
+        _GO_BAR_NEGATIVE: {_GO_BAR_ROUTE: "insufficient"},
+    }
+    report1 = _make_go_bar_report(
+        {**stable_outcomes, "real_vocal_band": {_GO_BAR_ROUTE: "sufficient"}},
+        default_outcome="insufficient",
+    )
+    report2 = _make_go_bar_report(
+        {**stable_outcomes, "real_vocal_band": {_GO_BAR_ROUTE: "insufficient"}},
+        default_outcome="insufficient",
+    )
+    verdict = harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
+    # jrock/futurepop の 2 本のみ安定 sufficient（<3）→ no_go。
+    assert verdict["verdict"] == "no_go"
+    assert verdict["routes"][_GO_BAR_ROUTE]["pos_sufficient"] == 2
+    assert "real_vocal_band" in verdict["routes"][_GO_BAR_ROUTE]["unstable_positive_ids"]
+
+
+def test_evaluate_go_bar_fails_closed_on_missing_fixture():
+    """事前登録済み fixture が report から丸ごと欠けていたら id を名指しして ValueError。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    del outcomes["real_vocal_waltz"]  # 1 本まるごと欠落。
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    report1 = _make_go_bar_report(outcomes)
+    report2 = _make_go_bar_report(outcomes)
+    with pytest.raises(ValueError, match="real_vocal_waltz"):
+        harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_fails_closed_on_registry_mismatch():
+    """report 間で registry_sha256 が食い違えば fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    report1 = _make_go_bar_report(outcomes, registry_sha256="a" * 64)
+    report2 = _make_go_bar_report(outcomes, registry_sha256="b" * 64)
+    with pytest.raises(ValueError, match="registry_sha256"):
+        harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_rejects_empty_and_non_external():
+    """空の reports、および mode!='external' な report は fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    with pytest.raises(ValueError, match="reports is empty"):
+        harness.evaluate_m1_real_go_bar([], _go_bar_registry())
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    report1 = _make_go_bar_report(outcomes)
+    report2 = _make_go_bar_report(outcomes)
+    report2["mode"] = "synthetic"
+    with pytest.raises(ValueError, match="mode"):
+        harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_fails_closed_below_repeats_min():
+    """単一 report（n=1 < 凍結 repeats_min=2）は verdict を出さず fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    report1 = _make_go_bar_report(outcomes)
+    # 単一 report では repeats_min=2 を満たさない（1 回実行の go verdict を弾く）。
+    with pytest.raises(ValueError, match="repeats_min"):
+        harness.evaluate_m1_real_go_bar([report1], _go_bar_registry())
+
+
+def test_evaluate_go_bar_fails_closed_on_stale_reports_vs_loaded_registry():
+    """report 同士は一致するが loaded registry の hash と食い違えば fail-closed。
+
+    古い registry で測った stale な report 2 本が互いに一致しても、いまバーを load
+    した registry の hash（authoritative reference）と紐づかなければ判定できない
+    （バーの焼き込み保証・Codex 指摘）。
+    """
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    # 両 report とも同じ「古い」registry hash で相互一致している。
+    report1 = _make_go_bar_report(outcomes, registry_sha256="0" * 64)
+    report2 = _make_go_bar_report(outcomes, registry_sha256="0" * 64)
+    # loaded registry の authoritative hash（今日のバー）と食い違う → fail-closed。
+    with pytest.raises(ValueError, match="registry_sha256"):
+        harness.evaluate_m1_real_go_bar(
+            [report1, report2], _go_bar_registry(), registry_sha256="9" * 64
+        )
+    # pin が loaded hash と一致すれば判定に到達し、verdict はその hash に紐づく。
+    verdict = harness.evaluate_m1_real_go_bar(
+        [report1, report2], _go_bar_registry(), registry_sha256="0" * 64
+    )
+    assert verdict["registry_sha256"] == "0" * 64
+    assert verdict["verdict"] == "go"
+
+
+def test_evaluate_go_bar_route_unmeasured_on_negative_does_not_survive():
+    """positive を満たしても negative でその経路が未観測なら survive させない。
+
+    偽陽性ゼロは「negative で実測して sufficient が出なかった」で初めて certify できる。
+    negative がその経路を一度も測っていない（neg_false_positive==0 だが未観測）状態を
+    Go と誤認しない（Codex 指摘・fail-closed）。
+    """
+    import scripts.run_melody_observability as harness
+
+    # positive 4/4 は本命経路で sufficient。だが negative は別経路しか測っておらず
+    # 本命経路が未観測（欠落）。
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {"pyin_direct": "insufficient"}  # 本命経路は未観測
+    report1 = _make_go_bar_report(outcomes)
+    report2 = _make_go_bar_report(outcomes)
+    verdict = harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
+    # どの経路も全 fixture×route で実測されていない（本命は negative 未観測）→ inconclusive。
+    assert verdict["verdict"] == "inconclusive"
+    assert _GO_BAR_ROUTE not in verdict["surviving_routes"]
+    assert verdict["routes"][_GO_BAR_ROUTE]["pos_sufficient"] == 4
+    assert (
+        _GO_BAR_NEGATIVE
+        in verdict["routes"][_GO_BAR_ROUTE]["negative_unmeasured_ids"]
+    )
+
+
+def test_evaluate_go_bar_fails_closed_on_audio_pin_mismatch_or_missing():
+    """同一 fixture id の audio_sha256 が report 間で不一致/欠落なら fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+
+    # 同一 id で別素材（audio_sha256 が run 間で食い違う）→ 同一素材の n>=2 と見なせない。
+    report1 = _make_go_bar_report(outcomes)
+    report2 = _make_go_bar_report(outcomes)
+    report2["fixtures"]["real_vocal_jrock"]["audio_sha256"] = "a" * 64
+    with pytest.raises(ValueError, match="audio_sha256"):
+        harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
+
+    # audio_sha256 欠落（None）も素材同一性を pin できず fail-closed。
+    report3 = _make_go_bar_report(outcomes)
+    report4 = _make_go_bar_report(outcomes)
+    report4["fixtures"]["real_vocal_band"]["audio_sha256"] = None
+    with pytest.raises(ValueError, match="audio_sha256"):
+        harness.evaluate_m1_real_go_bar([report3, report4], _go_bar_registry())
+
+
+def test_evaluate_go_bar_fails_closed_on_duplicate_or_missing_run_id():
+    """report 間で run_id が重複/欠落なら fail-closed（コピー由来の偽 repeats を弾く）。
+
+    決定論パイプラインでは n>=2 が意味を持つのは独立実行のときだけ。run1.json を別パスへ
+    コピーすると別パス・同一 bytes で path-dedup（#6）を通過し、1 回の抽出で repeats_min=2 を
+    偽装できてしまう。run_external が実行ごとに発行する run_id の存在＋相互 distinct を要求する
+    ことでこれを弾く（#45）。素材同一性（audio_sha256 一致）とは直交する軸。
+    """
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+
+    # 同一 run_id（run1.json → run2.json コピー相当）→ 独立した n>=2 repeats と見なせない。
+    report1 = _make_go_bar_report(outcomes, run_id="deadbeef" * 4)
+    report2 = _make_go_bar_report(outcomes, run_id="deadbeef" * 4)
+    with pytest.raises(ValueError, match="run_id"):
+        harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
+
+    # run_id 欠落（None / 空文字）も独立性を pin できず fail-closed。
+    report3 = _make_go_bar_report(outcomes)
+    report4 = _make_go_bar_report(outcomes)
+    del report4["run_id"]
+    with pytest.raises(ValueError, match="run_id"):
+        harness.evaluate_m1_real_go_bar([report3, report4], _go_bar_registry())
+
+    report5 = _make_go_bar_report(outcomes, run_id="")
+    report6 = _make_go_bar_report(outcomes)
+    with pytest.raises(ValueError, match="run_id"):
+        harness.evaluate_m1_real_go_bar([report5, report6], _go_bar_registry())
+
+
+def test_evaluate_go_bar_carries_run_ids_in_verdict():
+    """独立 run_id を持つ正常な報告群は verdict へ run_ids を転記する（provenance 証跡）。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    report1 = _make_go_bar_report(outcomes, run_id="a1" * 16)
+    report2 = _make_go_bar_report(outcomes, run_id="b2" * 16)
+    verdict = harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
+    assert verdict["run_ids"] == sorted(["a1" * 16, "b2" * 16])
+
+
+def test_run_external_stamps_distinct_run_id(monkeypatch, tmp_path):
+    """run_external は実行ごとに新規 run_id を発行する（コピーでなく別実行の証跡）。"""
+    import dataclasses
+    import json
+
+    import scripts.run_melody_observability as harness
+
+    # 経路実行と registry load をスタブ化し、run_id 発行だけを軽量に検証する。
+    monkeypatch.setattr(harness, "_run_routes_on_file", lambda *a, **k: [])
+    monkeypatch.setattr(
+        harness,
+        "_load_registry",
+        lambda: (
+            {
+                "observation_gate": dataclasses.asdict(_default_thresholds()),
+                "external_fixtures": [
+                    {"id": "real_vocal_jrock", "input_kind": "vocal_track"}
+                ],
+            },
+            "0" * 64,
+        ),
+    )
+    audio = tmp_path / "x.wav"
+    audio.write_bytes(b"RIFFfake")
+    manifest = tmp_path / "m.json"
+    manifest.write_text(
+        json.dumps([{"id": "real_vocal_jrock", "path": "x.wav", "input_kind": "vocal_track"}])
+    )
+    r1 = harness.run_external(manifest)
+    r2 = harness.run_external(manifest)
+    assert r1["run_id"] and r2["run_id"]
+    assert r1["run_id"] != r2["run_id"]
+    # generator_code_sha256 は実 generator コードの digest で、実行間で安定（#50）。
+    assert r1["generator_code_sha256"] == r2["generator_code_sha256"]
+    assert r1["generator_code_sha256"] == harness._generator_code_sha256()
+
+
+def test_run_external_records_resolved_manifest_path(monkeypatch, tmp_path):
+    """run_external は相対 manifest 引数でも resolve 済み絶対パスを記録する（#64）。
+
+    verbatim（相対）だと別 cwd からの --evaluate-go-bar で #63 の manifest 衝突ガードが
+    誤解決するため、生成時に絶対パスへ resolve して pin する（audio_path と同型）。
+    """
+    import dataclasses
+    import json
+    import os
+
+    import scripts.run_melody_observability as harness
+
+    monkeypatch.setattr(harness, "_run_routes_on_file", lambda *a, **k: [])
+    monkeypatch.setattr(
+        harness,
+        "_load_registry",
+        lambda: (
+            {
+                "observation_gate": dataclasses.asdict(_default_thresholds()),
+                "external_fixtures": [
+                    {"id": "real_vocal_jrock", "input_kind": "vocal_track"}
+                ],
+            },
+            "0" * 64,
+        ),
+    )
+    audio = tmp_path / "x.wav"
+    audio.write_bytes(b"RIFFfake")
+    (tmp_path / "m.json").write_text(
+        json.dumps([{"id": "real_vocal_jrock", "path": "x.wav", "input_kind": "vocal_track"}])
+    )
+    monkeypatch.chdir(tmp_path)
+    results = harness.run_external(Path("m.json"))  # 相対で渡す。
+    assert os.path.isabs(results["manifest_path"])
+    assert results["manifest_path"] == str((tmp_path / "m.json").resolve())
+
+
+def test_generator_code_paths_include_melody_and_adapters():
+    """_generator_code_paths は harness ＋ melody モジュール ＋ 下流 learned adapter ＋
+    pyin baseline が依存する physical_features を含む（#50/#51/#52）。"""
+    import svp_rpe.io.source_separator as _sep
+    import svp_rpe.melody.extractors as _extractors
+    import svp_rpe.melody.observability as _obs
+    import svp_rpe.melody.routing as _routing
+    import svp_rpe.rpe.learned.basic_pitch_adapter as _bp
+    import svp_rpe.rpe.learned.crepe_adapter as _crepe
+    import svp_rpe.rpe.learned.melodia_adapter as _melodia
+    import svp_rpe.rpe.learned.source_separation_adapter as _srcsep
+    import svp_rpe.rpe.physical_features as _phys
+
+    import scripts.run_melody_observability as harness
+
+    paths = set(harness._generator_code_paths())
+    assert Path(harness.__file__).resolve() in paths
+    for mod in (_extractors, _obs, _routing, _crepe, _melodia, _bp, _srcsep, _sep, _phys):
+        assert Path(mod.__file__).resolve() in paths
+
+
+def test_generator_code_paths_is_import_closed():
+    """_generator_code_paths が first-party import 閉包として閉じている（#52 遅延 import 穴の構造的封鎖）。
+
+    返り値の各ファイルの import（関数内含む）を AST で辿り、first-party の import target が
+    すべて集合内にあることを確認する。将来 generator 系モジュールに遅延 import を足して集合が
+    不完全になれば、この不変条件が破れて CI が Codex より先に気づく（hand-list の取りこぼしを
+    構造的に防ぐ）。
+    """
+    import ast
+
+    import scripts.run_melody_observability as harness
+
+    paths = set(harness._generator_code_paths())
+    assert paths, "generator code path set is empty"
+    for f in paths:
+        tree = ast.parse(f.read_text(encoding="utf-8"))
+        candidates: set = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    candidates.add(alias.name)
+            elif isinstance(node, ast.ImportFrom):
+                if node.level == 0 and node.module:
+                    candidates.add(node.module)
+                    for alias in node.names:
+                        candidates.add(f"{node.module}.{alias.name}")
+        for name in candidates:
+            target = harness._first_party_module_file(name)
+            if target is not None:
+                assert target in paths, (
+                    f"{f.name} imports first-party {name!r} which is not in "
+                    "_generator_code_paths() (import closure incomplete)"
+                )
+
+
+def test_evaluate_go_bar_fails_closed_on_missing_or_differing_generator_code(monkeypatch):
+    """generator_code_sha256 が欠落/repeats 間不一致なら fail-closed（#50）。
+
+    route 行・gate metrics を産出した generator コードの digest が無い、または別 checkout の
+    generator で測った run（digest 不一致）を混ぜたら、stale extraction を素通りさせないため
+    verdict を出さない（verdict の evaluator_code_sha256 と対の生成側 provenance）。
+    """
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+
+    # 欠落 → fail-closed。
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+    del r2["generator_code_sha256"]
+    with pytest.raises(ValueError, match="generator_code_sha256"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+    # repeats 間で不一致（別 generator stack）→ fail-closed。
+    r3 = _make_go_bar_report(outcomes, generator_code_sha256="a" * 64)
+    r4 = _make_go_bar_report(outcomes, generator_code_sha256="b" * 64)
+    with pytest.raises(ValueError, match="generator_code_sha256"):
+        harness.evaluate_m1_real_go_bar([r3, r4], _go_bar_registry())
+
+
+def test_evaluate_go_bar_carries_generator_code_sha256_in_verdict():
+    """repeats 一致かつ現 checkout 一致の generator_code_sha256 を verdict へ転記する（#50/#55）。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    current = harness._generator_code_sha256()
+    r1 = _make_go_bar_report(outcomes, generator_code_sha256=current)
+    r2 = _make_go_bar_report(outcomes, generator_code_sha256=current)
+    verdict = harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+    assert verdict["generator_code_sha256"] == current
+
+
+def test_evaluate_go_bar_fails_closed_on_stale_generator_code():
+    """repeats 間で一致していても現 checkout の generator digest と不一致なら fail-closed（#55）。
+
+    生成後に routing/gate/extractor が変わった stale report 同士が互いに一致するだけで今日の
+    評価器で Go を publish するのを防ぐ（現行 Go verdict は現コードで生成した report のみ）。
+    """
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    # 両 report が同一の「古い」digest を持つ（repeats 間一致だが現 checkout と別物）。
+    stale = "a" * 64
+    assert stale != harness._generator_code_sha256()
+    r1 = _make_go_bar_report(outcomes, generator_code_sha256=stale)
+    r2 = _make_go_bar_report(outcomes, generator_code_sha256=stale)
+    with pytest.raises(ValueError, match="stale report|current"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_requires_expected_audio_sha256_for_every_fixture():
+    """go-bar fixture が registry に expected_audio_sha256 を持たなければ fail-closed（#53）。
+
+    未記録だと manifest が frozen id を誤った audio に向けても両 repeats で一致してしまい、
+    事前登録素材として一度も pin されていない material に Go が出る。scoring 時点で必須化。
+    """
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+
+    # 素の real registry（expected_audio_sha256 未記録）→ Go を出さず fail-closed。
+    bare_reg = yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))
+    with pytest.raises(ValueError, match="expected_audio_sha256"):
+        harness.evaluate_m1_real_go_bar([r1, r2], bare_reg)
+
+    # 1 本だけ欠落しても fail-closed（`_go_bar_registry` は全 fixture に注入するので、
+    # negative の 1 本を消して部分欠落を作る）。
+    reg = _go_bar_registry()
+    for entry in reg["external_fixtures"]:
+        if entry["id"] == _GO_BAR_NEGATIVE:
+            entry.pop("expected_audio_sha256", None)
+    with pytest.raises(ValueError, match="expected_audio_sha256"):
+        harness.evaluate_m1_real_go_bar([r1, r2], reg)
+
+
+def test_evaluate_go_bar_requires_stem_and_weights_for_measured_separation(monkeypatch):
+    """measured 分離経路が stem/weights hash を欠けば stable Go に数えず fail-closed（#54）。
+
+    同一 htdemucs_ft/version でも別 cached weights や再生成 stem bytes だと実際の前処理入力が
+    変わるため、これらの pin なしに分離経路を Go survivor に数えない。
+    """
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+    # 本命の分離経路（measured/sufficient）から stem/weights を除去 → provenance 不足で fail-closed。
+    for report in (r1, r2):
+        for row in report["fixtures"]["real_vocal_jrock"]["routes"]:
+            if row["route"] == _GO_BAR_ROUTE:
+                row["preprocessing"] = {
+                    "preprocessing": "demucs_vocals",
+                    "separation_model": "htdemucs_ft",
+                    "separation_version": "4.0.1",
+                }
+    with pytest.raises(ValueError, match="stem_sha256/separation_weights_sha256"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_requires_extractor_weights_for_measured_learned_route():
+    """measured 学習抽出器経路が extractor_weights_sha256 を欠けば fail-closed（#59）。
+
+    本命 demucs_vocals_then_crepe（extractor=crepe・学習モデル）は、同一 package version でも
+    別 bundled/local weights だとモデル入力が変わる。weights hash なしに Go survivor に数えない
+    （分離側 stem/weights と対称）。pyin など非学習経路は重みなしのため対象外。
+    """
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+    # 本命 crepe 経路（measured/sufficient）から extractor_weights_sha256 を除去 → fail-closed。
+    for report in (r1, r2):
+        for row in report["fixtures"]["real_vocal_jrock"]["routes"]:
+            if row["route"] == _GO_BAR_ROUTE:
+                row.pop("extractor_weights_sha256", None)
+    with pytest.raises(ValueError, match="extractor_weights_sha256"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
+def test_yaml_load_rejects_duplicate_registry_keys(tmp_path, monkeypatch):
+    """registry.yaml の重複 mapping キーを parse 時点で fail-closed（#60・JSON #46 と対称）。"""
+    import scripts.run_melody_observability as harness
+
+    # ヘルパー単体: 重複キー → raise、正常 → parse。
+    with pytest.raises(ValueError, match="duplicate YAML mapping key"):
+        harness._yaml_load_no_dup_keys("a: 1\na: 2\n", what="t")
+    assert harness._yaml_load_no_dup_keys("a: 1\nb: 2\n", what="t") == {"a": 1, "b": 2}
+
+    # _load_registry 経由: 実 registry に重複 m1_real_go_bar block を注入 → fail-closed。
+    reg_text = REGISTRY_PATH.read_text(encoding="utf-8")
+    dup_reg = tmp_path / "registry.yaml"
+    dup_reg.write_text(reg_text + "\nm1_real_go_bar: {duplicated: true}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="duplicate YAML mapping key"):
+        harness._load_registry(dup_reg)
+
+
+def test_evaluate_go_bar_rejects_placeholder_weight_pins():
+    """weights/stem/audio hash が真の sha256 でない（TBD 等）なら fail-closed（#61）。"""
+    import scripts.run_melody_observability as harness
+
+    assert harness._is_sha256("a" * 64) and not harness._is_sha256("TBD")
+    # #62: 末尾改行付き 65 文字は真の digest でない（fullmatch で弾く）。
+    assert not harness._is_sha256("a" * 64 + "\n")
+    assert not harness._is_sha256("a" * 63) and not harness._is_sha256("A" * 64)
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+
+    # 学習抽出器の weights を placeholder に（両 repeats 同値でも真の sha256 でない）。
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+    for report in (r1, r2):
+        for row in report["fixtures"]["real_vocal_jrock"]["routes"]:
+            if row["route"] == _GO_BAR_ROUTE:
+                row["extractor_weights_sha256"] = "TBD"
+    with pytest.raises(ValueError, match="extractor_weights_sha256"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+    # 分離 stem を placeholder に。
+    r3 = _make_go_bar_report(outcomes)
+    r4 = _make_go_bar_report(outcomes)
+    for report in (r3, r4):
+        for row in report["fixtures"]["real_vocal_jrock"]["routes"]:
+            if row["route"] == _GO_BAR_ROUTE:
+                row["preprocessing"]["stem_sha256"] = "not-a-real-hash"
+    with pytest.raises(ValueError, match="stem_sha256/separation_weights_sha256"):
+        harness.evaluate_m1_real_go_bar([r3, r4], _go_bar_registry())
+
+    # expected_audio_sha256 を placeholder に。
+    r5 = _make_go_bar_report(outcomes)
+    r6 = _make_go_bar_report(outcomes)
+    reg = _go_bar_registry()
+    for entry in reg["external_fixtures"]:
+        if entry["id"] == "real_vocal_jrock":
+            entry["expected_audio_sha256"] = "TBD"
+    # report の audio も placeholder に合わせて一致させても、真の sha256 でないので弾く。
+    for report in (r5, r6):
+        report["fixtures"]["real_vocal_jrock"]["audio_sha256"] = "TBD"
+    with pytest.raises(ValueError, match="sha256"):
+        harness.evaluate_m1_real_go_bar([r5, r6], reg)
+
+
+def test_json_loads_rejects_duplicate_object_keys():
+    """`_json_loads_no_dup_keys` は任意ネスト階層の重複 object キーを弾く（#46）。"""
+    import scripts.run_melody_observability as harness
+
+    # top-level 重複。
+    with pytest.raises(ValueError, match="duplicate JSON object key"):
+        harness._json_loads_no_dup_keys('{"k": 1, "k": 2}', what="report x")
+    # ネスト（fixtures 相当）階層の重複 = 失敗版→合格版で失敗 repeat を隠すケース。
+    nested = (
+        '{"fixtures": {"real_vocal_jrock": {"outcome": "insufficient"}, '
+        '"real_vocal_jrock": {"outcome": "sufficient"}}}'
+    )
+    with pytest.raises(ValueError, match="duplicate JSON object key"):
+        harness._json_loads_no_dup_keys(nested, what="report y")
+    # 正常な JSON はそのまま parse される。
+    assert harness._json_loads_no_dup_keys('{"a": 1, "b": {"c": 2}}', what="ok") == {
+        "a": 1,
+        "b": {"c": 2},
+    }
+
+
+def test_evaluate_go_bar_cli_rejects_report_with_duplicate_fixture_key(tmp_path, monkeypatch):
+    """--evaluate-go-bar が重複 fixture キーを持つ report を parse 時点で fail-closed（#46）。
+
+    json.loads は last-wins で畳むため、失敗版→合格版の 2 重 `real_vocal_jrock` を
+    採点前に弾かないと、矛盾する bytes を pin しつつ合格版だけ採点して go を publish
+    しうる。dup-key 拒否 hook で採点前に弾くことを end-to-end で確認する。
+    """
+    import json as _json
+
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    reg_sha = hashlib.sha256(REGISTRY_PATH.read_bytes()).hexdigest()
+    r1 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    r2 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    # r1 の raw JSON に、本物の real_vocal_jrock の前へ失敗版 stub を注入して重複キーを作る。
+    stub = (
+        '"real_vocal_jrock": {"input_kind": "vocal_track", "expect_status": null, '
+        '"audio_path": "x", "audio_sha256": "0", "routes": []}, '
+    )
+    dup_raw = _json.dumps(r1).replace('"fixtures": {', '"fixtures": {' + stub, 1)
+    run1 = tmp_path / "run1.json"
+    run1.write_text(dup_raw, encoding="utf-8")
+    run2 = tmp_path / "run2.json"
+    run2.write_text(_json.dumps(r2), encoding="utf-8")
+    out = tmp_path / "verdict.json"
+    monkeypatch.setattr(
+        sys, "argv",
+        ["run_melody_observability", "--evaluate-go-bar", str(run1), str(run2), "--out", str(out)],
+    )
+    with pytest.raises(ValueError, match="duplicate JSON object key"):
+        harness.main()
+    assert not out.exists()  # 採点前に弾くので verdict は書かれない。
+
+
+def test_evaluate_go_bar_fails_closed_on_expected_audio_sha256_mismatch():
+    """registry に expected_audio_sha256 があれば report の audio と一致要求（forward-compat）。
+
+    frozen 素材の expected audio hash の **記録**（emit）は slow-lane 生成時の
+    machine-dependent な dated pin だが、記録されて registry に載れば評価器は照合し、
+    manifest typo/差替で別素材に verdict を出すのを弾く（存在すれば比較・未記録なら no-op）。
+    """
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+    # real_vocal_jrock に事前登録 expected_audio_sha256 を pin（report の実 hash と別値）。
+    reg = _go_bar_registry()
+    for entry in reg["external_fixtures"]:
+        if entry["id"] == "real_vocal_jrock":
+            entry["expected_audio_sha256"] = "e" * 64
+    with pytest.raises(ValueError, match="expected_audio_sha256"):
+        harness.evaluate_m1_real_go_bar([r1, r2], reg)
+
+
+def test_evaluate_go_bar_route_unmeasured_on_positive_does_not_survive():
+    """positive の 1 本でその経路が未観測なら、残り 3 本が sufficient でも survive させない。
+
+    「≥3/4 sufficient」は 4 本すべてを実測した上での 3 本以上を意味する。1 本が
+    unavailable/欠落なら matrix 未完で go を publish しない（Codex 指摘・negative 側と対称）。
+    """
+    import scripts.run_melody_observability as harness
+
+    # jrock/futurepop/band は本命経路で sufficient、waltz はその経路が未観測（別経路のみ）。
+    outcomes = {
+        "real_vocal_jrock": {_GO_BAR_ROUTE: "sufficient"},
+        "real_vocal_futurepop": {_GO_BAR_ROUTE: "sufficient"},
+        "real_vocal_band": {_GO_BAR_ROUTE: "sufficient"},
+        "real_vocal_waltz": {"pyin_direct": "insufficient"},  # 本命経路は未観測
+        _GO_BAR_NEGATIVE: {_GO_BAR_ROUTE: "insufficient"},
+    }
+    report1 = _make_go_bar_report(outcomes)
+    report2 = _make_go_bar_report(outcomes)
+    verdict = harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
+    # 本命経路は waltz が未観測で完全実測でない・他経路も unavailable → inconclusive。
+    assert verdict["verdict"] == "inconclusive"
+    assert _GO_BAR_ROUTE not in verdict["surviving_routes"]
+    # pos_sufficient は 3 だが未観測 positive があるため survive しない。
+    assert verdict["routes"][_GO_BAR_ROUTE]["pos_sufficient"] == 3
+    assert (
+        "real_vocal_waltz"
+        in verdict["routes"][_GO_BAR_ROUTE]["positive_unmeasured_ids"]
+    )
+
+
+def test_resolve_unique_report_paths_rejects_duplicates(tmp_path):
+    """同一 report ファイルの二重指定はパス正規化して fail-closed（内容一致では弾かない）。"""
+    import scripts.run_melody_observability as harness
+
+    run1 = tmp_path / "run1.json"
+    run1.write_text("[]", encoding="utf-8")
+    run2 = tmp_path / "run2.json"
+    run2.write_text("[]", encoding="utf-8")
+
+    # 同一ファイルを 2 回（resolve 後に一致）→ fail-closed。
+    with pytest.raises(ValueError, match="duplicate report path"):
+        harness._resolve_unique_report_paths([run1, run1])
+    # ./run1.json のような別表記でも resolve で同一と判定して弾く。
+    with pytest.raises(ValueError, match="duplicate report path"):
+        harness._resolve_unique_report_paths([run1, tmp_path / "." / "run1.json"])
+    # 別パス（内容が同一でも）は正当な n>=2 繰返しなので通す。
+    resolved = harness._resolve_unique_report_paths([run1, run2])
+    assert resolved == [run1.resolve(), run2.resolve()]
+
+
+def test_evaluate_go_bar_fails_closed_on_incomplete_route_matrix():
+    """truncated report（vocal_track 4 経路の一部が丸ごと欠落）は fail-closed。
+
+    candidate_routes は「存在する経路」からしか作られないため、ある経路が全 fixture
+    から欠けても未観測として弾かれない。期待経路集合（select_routes）と突き合わせて
+    欠落を検出する（Codex 指摘・docs §6.3 の完全 matrix）。
+    """
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    report1 = _make_go_bar_report(outcomes)
+    report2 = _make_go_bar_report(outcomes)
+    # truncate: 1 fixture から本命経路以外の全 route row を削り、pyin_direct のみ残す。
+    for report in (report1, report2):
+        rows = report["fixtures"]["real_vocal_jrock"]["routes"]
+        report["fixtures"]["real_vocal_jrock"]["routes"] = [
+            row for row in rows if row["route"] == _GO_BAR_ROUTE
+        ]
+    with pytest.raises(ValueError, match="missing route"):
+        harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_fails_closed_on_overridden_or_tampered_gate():
+    """override ゲート / 凍結ゲートと不一致な observation_gate の report は fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+
+    # thresholds_source=override（緩いゲートで測定した可能性）→ fail-closed。
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+    r1["thresholds_source"] = "override"
+    with pytest.raises(ValueError, match="thresholds_source"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+    # observation_gate が凍結ゲートと不一致（両 report で一致していても）→ fail-closed。
+    r3 = _make_go_bar_report(outcomes)
+    r4 = _make_go_bar_report(outcomes)
+    r3["observation_gate"] = {**r3["observation_gate"], "min_note_count": 3}
+    r4["observation_gate"] = {**r4["observation_gate"], "min_note_count": 3}
+    with pytest.raises(ValueError, match="observation_gate"):
+        harness.evaluate_m1_real_go_bar([r3, r4], _go_bar_registry())
+
+
+def test_evaluate_go_bar_fails_closed_on_mislabeled_input_kind():
+    """report が fixture を registry 凍結 kind と別の input_kind と誤申告したら fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+    # registry では vocal_track。report が clear_lead と誤申告（易しい matrix へのすり替え）。
+    for report in (r1, r2):
+        report["fixtures"]["real_vocal_jrock"]["input_kind"] = "clear_lead"
+    with pytest.raises(ValueError, match="input_kind"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_fails_closed_on_duplicate_audio_across_fixtures():
+    """別素材であるべき go-bar fixture が同一 audio_sha256 を指したら fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+    # jrock と futurepop が同一 WAV を指す（実質 1 素材で ≥3/4 を満たすのを防ぐ）。
+    for report in (r1, r2):
+        report["fixtures"]["real_vocal_jrock"]["audio_sha256"] = "c" * 64
+        report["fixtures"]["real_vocal_futurepop"]["audio_sha256"] = "c" * 64
+    # #53 の expected_audio 一致チェックを通した上で cross-fixture 重複を検出させるため、
+    # 両 fixture の registry expected を共有値に合わせる（重複検出は expected 検証の後段）。
+    reg = _go_bar_registry()
+    for entry in reg["external_fixtures"]:
+        if entry["id"] in ("real_vocal_jrock", "real_vocal_futurepop"):
+            entry["expected_audio_sha256"] = "c" * 64
+    with pytest.raises(ValueError, match="same audio_sha256"):
+        harness.evaluate_m1_real_go_bar([r1, r2], reg)
+
+
+def test_evaluate_go_bar_fails_closed_on_provenance_mismatch():
+    """同一 fixture×route の model provenance が repeats 間で食い違えば fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+
+    def _set_source_model(report, fid, route, model):
+        for row in report["fixtures"][fid]["routes"]:
+            if row["route"] == route:
+                row["source_model"] = model
+
+    # 同一 route を別バージョンの抽出器 model で測った 2 run（マシン跨ぎ/アップグレード）。
+    _set_source_model(r1, "real_vocal_jrock", _GO_BAR_ROUTE, "crepe-0.0.13")
+    _set_source_model(r2, "real_vocal_jrock", _GO_BAR_ROUTE, "crepe-0.0.14")
+    with pytest.raises(ValueError, match="model provenance"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_fails_closed_on_missing_provenance_fields():
+    """measured route が provenance を欠く（全 None 署名）と fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+    # provenance を pin しない古い/手書き report を模す: 両 report で jrock の
+    # measured route から source_model を削る（全 None 署名同士は一致してしまう）。
+    for report in (r1, r2):
+        for row in report["fixtures"]["real_vocal_jrock"]["routes"]:
+            if row["route"] == _GO_BAR_ROUTE:
+                row.pop("source_model", None)
+    with pytest.raises(ValueError, match="lacks provenance"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_ignores_routes_outside_frozen_matrix():
+    """report に混入した非登録経路は candidate に入らず verdict に効かない。
+
+    正規の vocal_track 4 経路が 1 本も survive していないのに、混入した架空経路で
+    go が出ないことを確認する（Codex 指摘）。
+    """
+    import scripts.run_melody_observability as harness
+
+    # 正規 4 経路は全 fixture で insufficient（誰も survive しない・全経路 measured）。
+    outcomes = {fid: {_GO_BAR_ROUTE: "insufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    r2 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    # 非登録の架空経路を positive に混入（sufficient）＋ negative に insufficient。
+    for report in (r1, r2):
+        for fid in _GO_BAR_POSITIVES:
+            report["fixtures"][fid]["routes"].append(
+                {"route": "bogus_route", "extractor": "x", "outcome": "sufficient",
+                 "report": None, "source_model": "x", "extractor_version": "1"}
+            )
+        report["fixtures"][_GO_BAR_NEGATIVE]["routes"].append(
+            {"route": "bogus_route", "extractor": "x", "outcome": "insufficient",
+             "report": None, "source_model": "x", "extractor_version": "1"}
+        )
+    verdict = harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+    assert verdict["verdict"] == "no_go"
+    assert "bogus_route" not in verdict["routes"]
+    assert verdict["surviving_routes"] == []
+
+
+def test_evaluate_go_bar_fails_closed_on_duplicate_route_rows():
+    """同一 fixture に同名 route 行が重複したら fail-closed（last-wins 隠蔽を防ぐ）。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+    # jrock に本命経路の行を重複追加（後勝ちで失敗/未観測を隠す想定）。
+    for report in (r1, r2):
+        report["fixtures"]["real_vocal_jrock"]["routes"].append(
+            {"route": _GO_BAR_ROUTE, "extractor": "crepe", "outcome": "sufficient",
+             "report": None, "source_model": "demucs_vocals+crepe", "extractor_version": "0.0.13",
+             "preprocessing": {"preprocessing": "demucs_vocals",
+                               "separation_model": "htdemucs_ft", "separation_version": "4.0.1"}}
+        )
+    with pytest.raises(ValueError, match="duplicate route row"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_cli_pins_report_hashes(tmp_path, monkeypatch):
+    """--evaluate-go-bar の verdict.json が消費した report の content hash を pin する。"""
+    import json as _json
+
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    # CLI は _load_registry の実 hash を authoritative reference として渡すため、
+    # report の registry_sha256 を実ファイル hash に合わせる。
+    reg_sha = hashlib.sha256(REGISTRY_PATH.read_bytes()).hexdigest()
+    # slow-lane 記録後の registry 状態（expected_audio_sha256 済み・#53）を模す。CLI は
+    # _load_registry を呼ぶので、pin 注入済み registry と実 hash を返すよう差し替える。
+    monkeypatch.setattr(harness, "_load_registry", lambda: (_go_bar_registry(), reg_sha))
+    r1 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    r2 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    run1 = tmp_path / "run1.json"
+    run1.write_text(_json.dumps(r1), encoding="utf-8")
+    run2 = tmp_path / "run2.json"
+    run2.write_text(_json.dumps(r2), encoding="utf-8")
+    out = tmp_path / "verdict.json"
+    # 相対パスで渡す（tmp_path を cwd に）。report_pins は resolve せず渡された相対
+    # パスをそのまま載せ、verdict.json を可搬に保つことを検証する。
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys, "argv",
+        ["run_melody_observability", "--evaluate-go-bar", "run1.json", "run2.json",
+         "--out", str(out)],
+    )
+    assert harness.main() == 0
+    verdict = _json.loads(out.read_text(encoding="utf-8"))
+    assert verdict["verdict"] == "go"
+    pins = {p["sha256"] for p in verdict["report_pins"]}
+    assert pins == {
+        hashlib.sha256(run1.read_bytes()).hexdigest(),
+        hashlib.sha256(run2.read_bytes()).hexdigest(),
+    }
+    assert len(verdict["report_pins"]) == 2
+    # path は resolve 済み絶対でなく、渡された相対パスのまま（可搬・非 machine-local）。
+    assert {p["path"] for p in verdict["report_pins"]} == {"run1.json", "run2.json"}
+
+
+def test_evaluate_go_bar_fails_closed_on_duplicate_or_overlapping_bar_ids():
+    """凍結バーの positive_ids 重複 / positive-negative overlap は fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+
+    # positive_ids に typo 重複 → 1 素材の二重計上を防ぐため fail-closed。
+    reg_dup = _go_bar_registry()
+    reg_dup["m1_real_go_bar"]["positive_ids"] = (
+        list(reg_dup["m1_real_go_bar"]["positive_ids"]) + ["real_vocal_jrock"]
+    )
+    with pytest.raises(ValueError, match="positive_ids"):
+        harness.evaluate_m1_real_go_bar([r1, r2], reg_dup)
+
+    # positive と negative が同一素材を共有 → fail-closed。
+    reg_overlap = _go_bar_registry()
+    reg_overlap["m1_real_go_bar"]["negative_ids"] = ["real_vocal_jrock"]
+    with pytest.raises(ValueError, match="重複"):
+        harness.evaluate_m1_real_go_bar([r1, r2], reg_overlap)
+
+
+def test_evaluate_go_bar_fails_closed_on_bar_cardinality_mismatch():
+    """凍結バーの positive 本数が total_positive と不一致 / negative 空は fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+
+    # positive を 1 本落とす（3 本 != total_positive 4）→ 「3/3 で go」を防ぐ fail-closed。
+    reg_short = _go_bar_registry()
+    reg_short["m1_real_go_bar"]["positive_ids"] = list(
+        reg_short["m1_real_go_bar"]["positive_ids"]
+    )[:3]
+    with pytest.raises(ValueError, match="total_positive"):
+        harness.evaluate_m1_real_go_bar([r1, r2], reg_short)
+
+    # negative_ids を空に → 偽陽性ガードなしで go を防ぐ fail-closed。
+    reg_no_neg = _go_bar_registry()
+    reg_no_neg["m1_real_go_bar"]["negative_ids"] = []
+    with pytest.raises(ValueError, match="negative_ids"):
+        harness.evaluate_m1_real_go_bar([r1, r2], reg_no_neg)
+
+
+def test_evaluate_go_bar_fails_closed_on_repeats_min_below_two():
+    """凍結バーの repeats_min が 2 未満（typo で 1 等）なら fail-closed（n>=2 仕様）。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+    reg = _go_bar_registry()
+    reg["m1_real_go_bar"]["repeats_min"] = 1
+    with pytest.raises(ValueError, match="repeats_min"):
+        harness.evaluate_m1_real_go_bar([r1, r2], reg)
+
+
+def test_evaluate_go_bar_fails_closed_on_incoherent_pass_fail_thresholds():
+    """pass/fail 閾値の semantic 自己整合違反（min=0 / 偽陽性ガード空洞化）は fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+
+    # min_positive_sufficient=0 → 0 本 sufficient で go できてしまう。
+    reg0 = _go_bar_registry()
+    reg0["m1_real_go_bar"]["min_positive_sufficient"] = 0
+    with pytest.raises(ValueError, match="min_positive_sufficient"):
+        harness.evaluate_m1_real_go_bar([r1, r2], reg0)
+
+    # max_negative_false_positive=1 で negative 1 本 → 全 negative で偽陽性でも pass（空洞化）。
+    reg_vac = _go_bar_registry()
+    reg_vac["m1_real_go_bar"]["max_negative_false_positive"] = 1
+    with pytest.raises(ValueError, match="max_negative_false_positive"):
+        harness.evaluate_m1_real_go_bar([r1, r2], reg_vac)
+
+
+def test_evaluate_go_bar_compares_stem_hash_across_repeats_when_present():
+    """measured 分離経路の stem_sha256 は必須で、repeats 間で不一致なら fail-closed（#54）。
+
+    stem/weights hash の **emit** は実 Demucs を要する machine-dependent な slow-lane 課題
+    だが、**要求**（measured 分離経路は stem/weights を pin しないと stable Go に数えない）は
+    machine-independent。ここでは同一 model/version でも別 stem なら別 run として弾くことを確認。
+    """
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    r2 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+
+    def _set_stem(report, stem):
+        for row in report["fixtures"]["real_vocal_jrock"]["routes"]:
+            if row["route"] == _GO_BAR_ROUTE:
+                row["preprocessing"] = {**row["preprocessing"], "stem_sha256": stem}
+
+    # 同一 model/version だが別 vocals stem（再生成・別 weights 相当）を repeats 間で。
+    _set_stem(r1, "a" * 64)
+    _set_stem(r2, "b" * 64)
+    with pytest.raises(ValueError, match="model provenance"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_fails_closed_on_extractor_label_mismatch():
+    """route ラベルと実測 extractor がすり替わっていたら fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+    # 本命経路（crepe ラベル）を実際は pyin で測ったと偽装（両 report で一致させる）。
+    for report in (r1, r2):
+        for row in report["fixtures"]["real_vocal_jrock"]["routes"]:
+            if row["route"] == _GO_BAR_ROUTE:
+                row["extractor"] = "pyin"
+    with pytest.raises(ValueError, match="すり替え"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_fails_closed_on_preprocessing_on_direct_route():
+    """分離不要な直接経路（pyin_direct）が preprocessing を持てば fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    r2 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    # pyin_direct（分離不要）行に demucs preprocessing を捏造。
+    for report in (r1, r2):
+        for row in report["fixtures"]["real_vocal_jrock"]["routes"]:
+            if row["route"] == "pyin_direct":
+                row["preprocessing"] = {
+                    "preprocessing": "demucs_vocals",
+                    "separation_model": "htdemucs_ft",
+                    "separation_version": "4.0.1",
+                }
+    with pytest.raises(ValueError, match="preprocessing"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_inconclusive_when_all_routes_unavailable():
+    """optional 依存欠如で全経路 unavailable の report は no_go でなく inconclusive。"""
+    import scripts.run_melody_observability as harness
+
+    # どの fixture も gate outcome を出さない（全 4 経路 auto-fill unavailable）。
+    outcomes = {fid: {} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {}
+    report1 = _make_go_bar_report(outcomes)
+    report2 = _make_go_bar_report(outcomes)
+    verdict = harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
+    # 測っていない（no_go=測って落ちた ではない）→ inconclusive。
+    assert verdict["verdict"] == "inconclusive"
+    assert verdict["surviving_routes"] == []
+    assert verdict["fully_measured_routes"] == []
+
+
+def test_evaluate_go_bar_inconclusive_when_only_baseline_measured():
+    """pyin_direct のみ実測・本命経路が unavailable なら no_go でなく inconclusive。
+
+    強化版 No-Go は全候補経路の完全実測を要する。baseline だけ測って本命
+    （Demucs/CREPE/Melodia）が未導入の report で「生き残りなし＝no_go」と偽らない。
+    """
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {"pyin_direct": "insufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {"pyin_direct": "insufficient"}
+    r1 = _make_go_bar_report(outcomes)  # 他 3 経路は default unavailable
+    r2 = _make_go_bar_report(outcomes)
+    verdict = harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+    assert verdict["verdict"] == "inconclusive"
+    assert verdict["surviving_routes"] == []
+    assert verdict["fully_measured_routes"] == ["pyin_direct"]
+
+
+def test_evaluate_go_bar_fails_closed_on_outcome_report_status_mismatch():
+    """measured 行の outcome が根拠 report.status と食い違えば fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    r2 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    # outcome だけ sufficient に改竄し、根拠 report.status は insufficient のまま食い違わせる。
+    for report in (r1, r2):
+        for row in report["fixtures"]["real_vocal_jrock"]["routes"]:
+            if row["route"] == _GO_BAR_ROUTE:
+                row["report"] = {"status": "insufficient"}
+    with pytest.raises(ValueError, match="matching report payload"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_fails_closed_on_metrics_gate_inconsistency():
+    """outcome/report.status を sufficient に揃えても payload metrics が凍結ゲート未満なら fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    r2 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    # status/outcome は sufficient のまま、payload metrics を凍結ゲート未満へ改竄
+    # （note_count 1 < min 8 / phrase_count 1 < min 2）。再導出 status=insufficient と食い違う。
+    for report in (r1, r2):
+        for row in report["fixtures"]["real_vocal_jrock"]["routes"]:
+            if row["route"] == _GO_BAR_ROUTE:
+                row["report"] = {**row["report"], "note_count": 1, "phrase_count": 1}
+    with pytest.raises(ValueError, match="metrics"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_fails_closed_on_negative_insufficient_hiding_passing_metrics():
+    """negative で outcome=insufficient なのに metrics が明確に passing なら fail-closed。
+
+    direction 限定にすると、negative 側の「実は sufficient（偽陽性）を insufficient と
+    ラベルして隠す」改竄を見逃す。丸め許容誤差込みの両方向照合で捕捉する（Codex 指摘）。
+    """
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    r2 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    # negative 本命経路: outcome/status=insufficient のまま metrics は**明確に** passing
+    # （丸め幅外・実際は sufficient で route が negative で偽陽性を出しているのを隠蔽）。
+    for report in (r1, r2):
+        for row in report["fixtures"][_GO_BAR_NEGATIVE]["routes"]:
+            if row["route"] == _GO_BAR_ROUTE:
+                row["report"] = {
+                    "status": "insufficient", "route": _GO_BAR_ROUTE,
+                    "voiced_coverage": 0.9, "note_count": 12, "phrase_count": 3,
+                    "confidence_mean": 0.9, "low_confidence_rate": 0.05,
+                    "octave_jump_rate": 0.0, "cross_extractor_agreement": None,
+                }
+    with pytest.raises(ValueError, match="食い違い"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_fails_closed_on_report_route_mismatch():
+    """report payload の route が行 route と食い違えば fail-closed（別経路 payload のすり替え）。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    r2 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    # jrock 本命経路の report payload の route を別経路（pyin_direct）へ貼り替え。
+    for report in (r1, r2):
+        for row in report["fixtures"]["real_vocal_jrock"]["routes"]:
+            if row["route"] == _GO_BAR_ROUTE:
+                row["report"] = {**row["report"], "route": "pyin_direct"}
+    with pytest.raises(ValueError, match="payload route"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_fails_closed_on_source_model_route_contradiction():
+    """extractor ラベルを偽装しても source_model が別抽出器ファミリなら fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    r2 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    # 本命 crepe 経路（extractor は crepe のまま）だが source_model は pyin ファミリ。
+    for report in (r1, r2):
+        for row in report["fixtures"]["real_vocal_jrock"]["routes"]:
+            if row["route"] == _GO_BAR_ROUTE:
+                row["source_model"] = "librosa:pyin"
+    with pytest.raises(ValueError, match="source_model"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_fails_closed_on_non_finite_or_out_of_range_metric():
+    """NaN/Infinity や範囲外の payload metric は再導出前に fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+
+    # NaN（NaN < min は False で passing すり抜けを狙う）。
+    r1 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    r2 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    for report in (r1, r2):
+        for row in report["fixtures"]["real_vocal_jrock"]["routes"]:
+            if row["route"] == _GO_BAR_ROUTE:
+                row["report"] = {**row["report"], "voiced_coverage": float("nan")}
+    with pytest.raises(ValueError, match="有限値でない"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+    # 範囲外（confidence_mean > 1）。
+    r3 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    r4 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    for report in (r3, r4):
+        for row in report["fixtures"]["real_vocal_jrock"]["routes"]:
+            if row["route"] == _GO_BAR_ROUTE:
+                row["report"] = {**row["report"], "confidence_mean": 1.5}
+    with pytest.raises(ValueError, match="有限値でない"):
+        harness.evaluate_m1_real_go_bar([r3, r4], _go_bar_registry())
+
+
+def test_evaluate_go_bar_cli_rejects_out_colliding_with_report(tmp_path, monkeypatch):
+    """--out が入力 report path と衝突したら書き込み前に fail-closed（report を破壊しない）。"""
+    import json as _json
+
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    reg_sha = hashlib.sha256(REGISTRY_PATH.read_bytes()).hexdigest()
+    r1 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    r2 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    run1 = tmp_path / "run1.json"
+    run1.write_text(_json.dumps(r1), encoding="utf-8")
+    run2 = tmp_path / "run2.json"
+    run2.write_text(_json.dumps(r2), encoding="utf-8")
+    monkeypatch.setattr(
+        sys, "argv",
+        ["run_melody_observability", "--evaluate-go-bar", str(run1), str(run2), "--out", str(run1)],
+    )
+    with pytest.raises(ValueError, match="衝突"):
+        harness.main()
+    # run1 は verdict で上書きされず無傷。
+    assert _json.loads(run1.read_text(encoding="utf-8")) == r1
+
+
+def test_evaluate_go_bar_cli_rejects_out_overwriting_registry(tmp_path, monkeypatch):
+    """--out が凍結 registry を指したら書き込み前に fail-closed（registry を破壊しない）。"""
+    import json as _json
+
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    reg_sha = hashlib.sha256(REGISTRY_PATH.read_bytes()).hexdigest()
+    r1 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    r2 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    run1 = tmp_path / "run1.json"
+    run1.write_text(_json.dumps(r1), encoding="utf-8")
+    run2 = tmp_path / "run2.json"
+    run2.write_text(_json.dumps(r2), encoding="utf-8")
+    # --out が凍結 registry を指す（typo）→ 書き込み前に fail-closed。
+    monkeypatch.setattr(
+        sys, "argv",
+        ["run_melody_observability", "--evaluate-go-bar", str(run1), str(run2),
+         "--out", str(REGISTRY_PATH)],
+    )
+    before = REGISTRY_PATH.read_bytes()
+    with pytest.raises(ValueError, match="保護対象"):
+        harness.main()
+    # 凍結 registry は verdict で上書きされず無傷。
+    assert REGISTRY_PATH.read_bytes() == before
+
+
+def test_evaluate_go_bar_cli_rejects_out_overwriting_evaluator_code(tmp_path, monkeypatch):
+    """--out が評価器コード（evaluator_code_sha256 で hash 済み）を指したら fail-closed。"""
+    import json as _json
+
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    reg_sha = hashlib.sha256(REGISTRY_PATH.read_bytes()).hexdigest()
+    r1 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    r2 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    run1 = tmp_path / "run1.json"
+    run1.write_text(_json.dumps(r1), encoding="utf-8")
+    run2 = tmp_path / "run2.json"
+    run2.write_text(_json.dumps(r2), encoding="utf-8")
+    code_path = harness._evaluator_code_paths()[0]  # 評価器ソースの 1 つ。
+    monkeypatch.setattr(
+        sys, "argv",
+        ["run_melody_observability", "--evaluate-go-bar", str(run1), str(run2),
+         "--out", str(code_path)],
+    )
+    before = code_path.read_bytes()
+    with pytest.raises(ValueError, match="保護対象"):
+        harness.main()
+    # 評価器コードは verdict で上書きされず無傷。
+    assert code_path.read_bytes() == before
+
+
+def test_evaluate_go_bar_cli_rejects_out_overwriting_generator_code(tmp_path, monkeypatch):
+    """--out が generator コード（評価器 paths に無い extractors 等）を指したら fail-closed（#57）。
+
+    verdict は #55 で report の generator_code_sha256 が現 checkout と一致することを要求する
+    ＝generator sources は verdict の provenance 入力。digest 検証直後にその source を verdict
+    JSON で上書き破壊させない（`_generator_code_paths()` を evaluate 分岐の保護集合に含める）。
+    """
+    import json as _json
+
+    import svp_rpe.melody.extractors as _extractors
+
+    import scripts.run_melody_observability as harness
+
+    # extractors は generator paths にあり evaluator paths に無い（この非対称が #57 の穴）。
+    gen_path = Path(_extractors.__file__)
+    assert gen_path.resolve() in set(harness._generator_code_paths())
+    assert gen_path.resolve() not in set(harness._evaluator_code_paths())
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    reg_sha = hashlib.sha256(REGISTRY_PATH.read_bytes()).hexdigest()
+    r1 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    r2 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    run1 = tmp_path / "run1.json"
+    run1.write_text(_json.dumps(r1), encoding="utf-8")
+    run2 = tmp_path / "run2.json"
+    run2.write_text(_json.dumps(r2), encoding="utf-8")
+    monkeypatch.setattr(
+        sys, "argv",
+        ["run_melody_observability", "--evaluate-go-bar", str(run1), str(run2),
+         "--out", str(gen_path)],
+    )
+    before = gen_path.read_bytes()
+    with pytest.raises(ValueError, match="保護対象"):
+        harness.main()
+    assert gen_path.read_bytes() == before  # generator コードは無傷。
+
+
+def test_evaluate_go_bar_cli_rejects_out_overwriting_report_source_audio(tmp_path, monkeypatch):
+    """--evaluate-go-bar の --out が report fixture の source audio を指したら fail-closed（#48）。
+
+    report を pin/採点した直後に、その report の repeat/検証に必要な slow-lane source
+    音源を verdict JSON で破壊するのを防ぐ（external モードの同名保護と対称）。
+    """
+    import json as _json
+
+    import scripts.run_melody_observability as harness
+
+    # 実在の source WAV を用意し、r1 の fixture audio_path をそこへ向ける。
+    sr = 22050
+    t = np.linspace(0, 1.0, sr, endpoint=False)
+    wav = tmp_path / "real_vocal_jrock_source.wav"
+    sf.write(wav, (0.3 * np.sin(2 * np.pi * 220 * t)).astype(np.float32), sr, subtype="FLOAT")
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    reg_sha = hashlib.sha256(REGISTRY_PATH.read_bytes()).hexdigest()
+    r1 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    r1["fixtures"]["real_vocal_jrock"]["audio_path"] = str(wav)
+    r2 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    run1 = tmp_path / "run1.json"
+    run1.write_text(_json.dumps(r1), encoding="utf-8")
+    run2 = tmp_path / "run2.json"
+    run2.write_text(_json.dumps(r2), encoding="utf-8")
+    monkeypatch.setattr(
+        sys, "argv",
+        ["run_melody_observability", "--evaluate-go-bar", str(run1), str(run2),
+         "--out", str(wav)],
+    )
+    before = wav.read_bytes()
+    with pytest.raises(ValueError, match="保護対象"):
+        harness.main()
+    # source audio は verdict で上書きされず無傷。
+    assert wav.read_bytes() == before
+
+
+def test_evaluate_go_bar_cli_rejects_out_overwriting_report_manifest(tmp_path, monkeypatch):
+    """--evaluate-go-bar の --out が report が pin する manifest を指したら fail-closed（#63）。
+
+    `--out manifest.json` の typo で、report がどの素材集合から生成されたかを証明する
+    manifest（manifest_sha256 の元）を verdict JSON で破壊するのを防ぐ。
+    """
+    import json as _json
+
+    import scripts.run_melody_observability as harness
+
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(_json.dumps([{"id": "real_vocal_jrock"}]), encoding="utf-8")
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    reg_sha = hashlib.sha256(REGISTRY_PATH.read_bytes()).hexdigest()
+    r1 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    r2 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    # 両 report が同 manifest を pin（run_external が manifest_path を記録するのを模す）。
+    r1["manifest_path"] = str(manifest)
+    r2["manifest_path"] = str(manifest)
+    run1 = tmp_path / "run1.json"
+    run1.write_text(_json.dumps(r1), encoding="utf-8")
+    run2 = tmp_path / "run2.json"
+    run2.write_text(_json.dumps(r2), encoding="utf-8")
+    monkeypatch.setattr(
+        sys, "argv",
+        ["run_melody_observability", "--evaluate-go-bar", str(run1), str(run2),
+         "--out", str(manifest)],
+    )
+    before = manifest.read_bytes()
+    with pytest.raises(ValueError, match="保護対象"):
+        harness.main()
+    assert manifest.read_bytes() == before  # manifest は無傷。
+
+
+def test_external_cli_rejects_out_colliding_with_manifest_or_source(tmp_path, monkeypatch):
+    """--external の --out が manifest / source audio を指したら書き込み前に fail-closed。"""
+    import json as _json
+
+    import scripts.run_melody_observability as harness
+
+    sr = 22050
+    t = np.linspace(0, 1.0, sr, endpoint=False)
+    wav = tmp_path / "clip.wav"
+    sf.write(wav, (0.3 * np.sin(2 * np.pi * 220 * t)).astype(np.float32), sr, subtype="FLOAT")
+    manifest = tmp_path / "m.json"
+    manifest.write_text(
+        _json.dumps([{"id": "real_lead_synth", "path": str(wav), "input_kind": "clear_lead"}]),
+        encoding="utf-8",
+    )
+
+    # --out == manifest → 拒否・manifest 無傷。
+    monkeypatch.setattr(
+        sys, "argv",
+        ["run_melody_observability", "--external", str(manifest), "--out", str(manifest)],
+    )
+    manifest_before = manifest.read_bytes()
+    with pytest.raises(ValueError, match="保護対象"):
+        harness.main()
+    assert manifest.read_bytes() == manifest_before
+
+    # --out == source audio → 拒否・audio 無傷。
+    monkeypatch.setattr(
+        sys, "argv",
+        ["run_melody_observability", "--external", str(manifest), "--out", str(wav)],
+    )
+    wav_before = wav.read_bytes()
+    with pytest.raises(ValueError, match="保護対象"):
+        harness.main()
+    assert wav.read_bytes() == wav_before
+
+
+def test_synthetic_cli_rejects_out_overwriting_synthesis_specs(monkeypatch):
+    """default synthetic モードの --out が synthesis_specs.yaml を指したら fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    # run_synthetic を軽量スタブ化（実抽出を回さず protected 判定だけ検証）。
+    monkeypatch.setattr(
+        harness, "run_synthetic", lambda: {"mode": "synthetic", "fixtures": {}}
+    )
+    monkeypatch.setattr(
+        sys, "argv", ["run_melody_observability", "--out", str(SPECS_PATH)]
+    )
+    before = SPECS_PATH.read_bytes()
+    with pytest.raises(ValueError, match="保護対象"):
+        harness.main()
+    # committed synthesis_specs.yaml は無傷。
+    assert SPECS_PATH.read_bytes() == before
+
+
+def test_synthetic_cli_rejects_out_overwriting_builder(monkeypatch):
+    """default synthetic モードの --out が build_melody_bench.py（builder）を指したら fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    monkeypatch.setattr(
+        harness, "run_synthetic", lambda: {"mode": "synthetic", "fixtures": {}}
+    )
+    builder_path = Path(bench.__file__)
+    monkeypatch.setattr(
+        sys, "argv", ["run_melody_observability", "--out", str(builder_path)]
+    )
+    before = builder_path.read_bytes()
+    with pytest.raises(ValueError, match="保護対象"):
+        harness.main()
+    # builder コードは無傷。
+    assert builder_path.read_bytes() == before
+
+
+def test_report_mode_cli_rejects_out_overwriting_harness_source(monkeypatch, tmp_path):
+    """非 evaluate モードの --out が harness 自身を指したら fail-closed（#47）。
+
+    `--external manifest.json --out scripts/run_melody_observability.py` の typo で
+    report を生成している harness スクリプト自体を JSON で atomic 上書きさせない
+    （evaluate 分岐が評価器コードを守るのと対称）。synthetic / external 両分岐で守る。
+    """
+    import json as _json
+
+    import scripts.run_melody_observability as harness
+
+    harness_path = Path(harness.__file__)
+
+    # synthetic 分岐（run_synthetic をスタブ化し protected 判定だけ検証）。
+    monkeypatch.setattr(
+        harness, "run_synthetic", lambda: {"mode": "synthetic", "fixtures": {}}
+    )
+    monkeypatch.setattr(
+        sys, "argv", ["run_melody_observability", "--out", str(harness_path)]
+    )
+    before = harness_path.read_bytes()
+    with pytest.raises(ValueError, match="保護対象"):
+        harness.main()
+    assert harness_path.read_bytes() == before  # harness コードは無傷。
+
+    # external 分岐（軽量 manifest。run_external をスタブ化）。
+    monkeypatch.setattr(
+        harness, "run_external", lambda *a, **k: {"mode": "external", "fixtures": {}}
+    )
+    manifest = tmp_path / "m.json"
+    manifest.write_text(_json.dumps([]), encoding="utf-8")
+    monkeypatch.setattr(
+        sys, "argv",
+        ["run_melody_observability", "--external", str(manifest), "--out", str(harness_path)],
+    )
+    with pytest.raises(ValueError, match="保護対象"):
+        harness.main()
+    assert harness_path.read_bytes() == before  # harness コードは無傷。
+
+
+def test_report_mode_cli_rejects_out_overwriting_generator_modules(monkeypatch, tmp_path):
+    """非 evaluate モードの --out が generator モジュール/adapter を指したら fail-closed（#49/#51）。
+
+    report 生成は extractors / observability / routing を使って route matrix・gate を組み、
+    optional 経路では下流 learned adapter / source_separator まで到達する。
+    `--external m.json --out src/svp_rpe/rpe/learned/crepe_adapter.py` の typo でその
+    generator コードを JSON で atomic 上書き破壊させない（`_generator_code_paths()` で
+    harness ＋ melody モジュール ＋ adapter を一括保護）。
+    """
+    import json as _json
+
+    import svp_rpe.io.source_separator as _sep
+    import svp_rpe.melody.extractors as _extractors
+    import svp_rpe.melody.observability as _obs
+    import svp_rpe.melody.routing as _routing
+    import svp_rpe.rpe.learned.basic_pitch_adapter as _bp
+    import svp_rpe.rpe.learned.crepe_adapter as _crepe
+    import svp_rpe.rpe.learned.melodia_adapter as _melodia
+    import svp_rpe.rpe.learned.source_separation_adapter as _srcsep
+    import svp_rpe.rpe.physical_features as _phys
+
+    import scripts.run_melody_observability as harness
+
+    module_paths = [
+        Path(_extractors.__file__),
+        Path(_obs.__file__),
+        Path(_routing.__file__),
+        Path(_crepe.__file__),
+        Path(_melodia.__file__),
+        Path(_bp.__file__),
+        Path(_srcsep.__file__),
+        Path(_sep.__file__),
+        Path(_phys.__file__),
+    ]
+    # `_generator_code_paths()` がこれら全モジュール（+ harness）を含むことを直接確認。
+    protected = set(harness._generator_code_paths())
+    for mp in module_paths:
+        assert mp.resolve() in protected
+
+    manifest = tmp_path / "m.json"
+    manifest.write_text(_json.dumps([]), encoding="utf-8")
+    monkeypatch.setattr(
+        harness, "run_synthetic", lambda: {"mode": "synthetic", "fixtures": {}}
+    )
+    monkeypatch.setattr(
+        harness, "run_external", lambda *a, **k: {"mode": "external", "fixtures": {}}
+    )
+    for mp in module_paths:
+        before = mp.read_bytes()
+        # synthetic 分岐。
+        monkeypatch.setattr(
+            sys, "argv", ["run_melody_observability", "--out", str(mp)]
+        )
+        with pytest.raises(ValueError, match="保護対象"):
+            harness.main()
+        assert mp.read_bytes() == before  # generator モジュールは無傷。
+        # external 分岐。
+        monkeypatch.setattr(
+            sys, "argv",
+            ["run_melody_observability", "--external", str(manifest), "--out", str(mp)],
+        )
+        with pytest.raises(ValueError, match="保護対象"):
+            harness.main()
+        assert mp.read_bytes() == before
 
 
 # --------------------------------------------------------------------------- #
