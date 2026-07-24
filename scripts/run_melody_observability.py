@@ -500,6 +500,22 @@ def _route_provenance(row: Dict[str, Any]) -> "tuple":
     )
 
 
+def _evaluator_code_paths() -> "List[Path]":
+    """verdict を解釈するコード（評価器＋依存モジュール）の resolved パス集合。
+
+    `_evaluator_code_sha256`（provenance digest）と `--out` 衝突保護の双方が同じ集合を
+    共有し、hash した直後にそのコードを --out で上書き破壊するのを防ぐ。
+    """
+    import svp_rpe.melody.observability as _obs
+    import svp_rpe.melody.routing as _routing
+
+    return [
+        Path(__file__).resolve(),
+        Path(_obs.__file__).resolve(),
+        Path(_routing.__file__).resolve(),
+    ]
+
+
 def _evaluator_code_sha256() -> str:
     """verdict を解釈するコード（評価器＋依存モジュール）の digest。
 
@@ -509,12 +525,8 @@ def _evaluator_code_sha256() -> str:
     verdict に載せることで、別 checkout で候補経路や scoring が変わったのに同じ report_pins/
     registry_sha256 で別結果になる stale を検出可能にする（Codex 指摘・AGENTS §8）。
     """
-    import svp_rpe.melody.observability as _obs
-    import svp_rpe.melody.routing as _routing
-
     digest = hashlib.sha256()
-    module_paths = [Path(__file__), Path(_obs.__file__), Path(_routing.__file__)]
-    for path in sorted(module_paths, key=lambda p: p.name):
+    for path in sorted(_evaluator_code_paths(), key=lambda p: p.name):
         digest.update(path.name.encode("utf-8"))
         digest.update(b"\0")
         digest.update(path.read_bytes())
@@ -1293,8 +1305,14 @@ def main() -> int:
         #     不一致になり slow-lane repeat を破壊する）
         #   - 凍結 registry（`--out .../registry.yaml` の typo で、verdict 生成直後に
         #     凍結 Go-bar registry を上書き破壊するのを防ぐ）
-        # report_paths / REGISTRY_PATH は resolve 済み集合で比較する。
-        protected_paths = set(report_paths) | {REGISTRY_PATH.resolve()}
+        #   - 評価器コード（evaluator_code_sha256 で hash 済み＝provenance 入力。--out で
+        #     上書きすると verdict が pin したコード artifact を破壊し replay 不能になる）
+        # report_paths / REGISTRY_PATH / 評価器コードは resolve 済み集合で比較する。
+        protected_paths = (
+            set(report_paths)
+            | {REGISTRY_PATH.resolve()}
+            | set(_evaluator_code_paths())
+        )
         if args.out is not None and Path(args.out).resolve() in protected_paths:
             raise ValueError(
                 f"--out {args.out} は保護対象パス（入力 report / 凍結 registry）と衝突する; "
