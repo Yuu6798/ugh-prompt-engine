@@ -1324,6 +1324,64 @@ def test_run_external_stamps_distinct_run_id(monkeypatch, tmp_path):
     assert r1["run_id"] != r2["run_id"]
 
 
+def test_json_loads_rejects_duplicate_object_keys():
+    """`_json_loads_no_dup_keys` は任意ネスト階層の重複 object キーを弾く（#46）。"""
+    import scripts.run_melody_observability as harness
+
+    # top-level 重複。
+    with pytest.raises(ValueError, match="duplicate JSON object key"):
+        harness._json_loads_no_dup_keys('{"k": 1, "k": 2}', what="report x")
+    # ネスト（fixtures 相当）階層の重複 = 失敗版→合格版で失敗 repeat を隠すケース。
+    nested = (
+        '{"fixtures": {"real_vocal_jrock": {"outcome": "insufficient"}, '
+        '"real_vocal_jrock": {"outcome": "sufficient"}}}'
+    )
+    with pytest.raises(ValueError, match="duplicate JSON object key"):
+        harness._json_loads_no_dup_keys(nested, what="report y")
+    # 正常な JSON はそのまま parse される。
+    assert harness._json_loads_no_dup_keys('{"a": 1, "b": {"c": 2}}', what="ok") == {
+        "a": 1,
+        "b": {"c": 2},
+    }
+
+
+def test_evaluate_go_bar_cli_rejects_report_with_duplicate_fixture_key(tmp_path, monkeypatch):
+    """--evaluate-go-bar が重複 fixture キーを持つ report を parse 時点で fail-closed（#46）。
+
+    json.loads は last-wins で畳むため、失敗版→合格版の 2 重 `real_vocal_jrock` を
+    採点前に弾かないと、矛盾する bytes を pin しつつ合格版だけ採点して go を publish
+    しうる。dup-key 拒否 hook で採点前に弾くことを end-to-end で確認する。
+    """
+    import json as _json
+
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    reg_sha = hashlib.sha256(REGISTRY_PATH.read_bytes()).hexdigest()
+    r1 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    r2 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    # r1 の raw JSON に、本物の real_vocal_jrock の前へ失敗版 stub を注入して重複キーを作る。
+    stub = (
+        '"real_vocal_jrock": {"input_kind": "vocal_track", "expect_status": null, '
+        '"audio_path": "x", "audio_sha256": "0", "routes": []}, '
+    )
+    dup_raw = _json.dumps(r1).replace('"fixtures": {', '"fixtures": {' + stub, 1)
+    run1 = tmp_path / "run1.json"
+    run1.write_text(dup_raw, encoding="utf-8")
+    run2 = tmp_path / "run2.json"
+    run2.write_text(_json.dumps(r2), encoding="utf-8")
+    out = tmp_path / "verdict.json"
+    monkeypatch.setattr(
+        sys, "argv",
+        ["run_melody_observability", "--evaluate-go-bar", str(run1), str(run2), "--out", str(out)],
+    )
+    with pytest.raises(ValueError, match="duplicate JSON object key"):
+        harness.main()
+    assert not out.exists()  # 採点前に弾くので verdict は書かれない。
+
+
 def test_evaluate_go_bar_fails_closed_on_expected_audio_sha256_mismatch():
     """registry に expected_audio_sha256 があれば report の audio と一致要求（forward-compat）。
 

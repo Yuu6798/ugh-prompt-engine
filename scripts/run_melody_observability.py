@@ -98,6 +98,32 @@ def _load_registry(registry_path: "Path | None" = None) -> "tuple[Dict[str, Any]
     return registry, hashlib.sha256(data).hexdigest()
 
 
+def _json_loads_no_dup_keys(data: "bytes | str", *, what: str) -> Any:
+    """duplicate object key を拒否して JSON を parse する（fail-closed・#46）。
+
+    Python 標準の `json.loads` は同一 object 内の重複キーを last-wins で黙って畳む。
+    stale/手書きの report/manifest が同一キーを複数持つと（例: `fixtures` に
+    `real_vocal_jrock` を失敗版→合格版の 2 回）、verdict は矛盾する bytes を content
+    hash で pin しつつ**最後の 1 レコードだけ**を採点し、失敗 repeat を隠したまま go を
+    publish しうる。`object_pairs_hook` は JSON 中の**全 object**（fixture id・route
+    payload 等あらゆるネスト階層）で呼ばれるため、どの階層の重複キーも弾ける
+    （Codex 指摘）。
+    """
+
+    def _reject_dupes(pairs: "List[tuple]") -> Dict[str, Any]:
+        result: Dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(
+                    f"{what}: duplicate JSON object key {key!r}; stale/手書き artifact が "
+                    "失敗レコードを last-wins で隠す穴を弾く (fail-closed)"
+                )
+            result[key] = value
+        return result
+
+    return json.loads(data, object_pairs_hook=_reject_dupes)
+
+
 def _atomic_write_text(path: Path, text: str) -> None:
     """`text` を `path` へ atomic に書く（同一ディレクトリの temp file → os.replace）。
 
@@ -377,7 +403,9 @@ def run_external(
     # の凍結と同型）。
     manifest_bytes = Path(manifest_path).read_bytes()
     manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
-    entries = json.loads(manifest_bytes)
+    # report と対称に、manifest の重複 object キー（同一 entry 内の二重 input_kind 等で
+    # 経路集合をすり替える stale/手書き）も弾く（#46）。
+    entries = _json_loads_no_dup_keys(manifest_bytes, what="external manifest")
     # registry を single read（bytes→hash→parse）。thresholds も external_fixtures も
     # 同じ read から作り、registry_sha256 を report に pin する。
     registry, registry_sha256 = _load_registry()
@@ -1329,7 +1357,7 @@ def main() -> int:
         report_pins = []
         for resolved in report_paths:
             data = resolved.read_bytes()
-            reports.append(json.loads(data))
+            reports.append(_json_loads_no_dup_keys(data, what=f"report {resolved.name}"))
             try:
                 pin_path = str(resolved.relative_to(ROOT))
             except ValueError:

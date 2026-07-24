@@ -282,6 +282,13 @@ distinct であることを要求する。これがないと run1.json を run2.
 しまう（`audio_sha256` の一致＝同一素材とは直交する軸で、素材は同一・実行は独立を要求）。
 `verdict.json` は消費した `run_ids` も転記する。
 
+report/manifest の JSON は**重複 object キーを拒否する hook**（`object_pairs_hook`）で
+parse する。標準 `json.loads` は重複キーを last-wins で黙って畳むため、失敗版→合格版の
+2 重 `fixtures.<id>` を持つ stale/手書き report は、矛盾する bytes を content hash で
+pin しつつ合格版だけ採点して go を publish しうる。hook は全ネスト階層の object で
+呼ばれるので、fixture id・route payload いずれの階層の重複キーも採点前に fail-closed で
+弾く（#46）。
+
 `report_pins` の **`sha256` が content-addressed の replay anchor** で、各 report の
 内容を一意に pin する（同名 basename でも内容が違えば別 sha256 として list に共存・
 区別される）。`path` は人間可読の**非権威的 hint** に徹する（repo 内なら repo 相対、
