@@ -773,6 +773,10 @@ def evaluate_m1_real_go_bar(
     - 同一 fixture id の `audio_sha256` が report 間で欠落・不一致（manifest は
       ``audio_sha256: null`` を許すが、同一 id で別素材を使った 2 run を「同一素材の
       n>=2 repeats」と見なせない・Codex 指摘）
+    - いずれかの go-bar fixture が registry に `expected_audio_sha256` を持たない、または
+      report の `audio_sha256` がそれと不一致（未記録だと manifest が frozen id を誤った
+      audio に向けても両 repeats で一致してしまい未 pin material に Go が出る。scoring 時点で
+      必須化し、slow-lane で凍結素材 hash を記録してからでないと Go を出さない・#53・Codex 指摘）
     - いずれかの report の `thresholds_source` が ``"registry"`` でない、または
       `observation_gate` が凍結 registry の解決ゲートと不一致（override（緩い）ゲートで
       測定した report では凍結バーの判定を publish しない・Codex 指摘）
@@ -793,9 +797,11 @@ def evaluate_m1_real_go_bar(
     - いずれかの fixture の routes に同名 route 行が重複（last-wins で失敗/未観測行を
       隠蔽させない・Codex 指摘）
     - measured（gate outcome）な route 行が provenance フィールド（source_model /
-      extractor_version、分離経路は separation_model/version）を欠く、または同一
-      fixture×route の provenance が repeats 間で不一致（欠落を「一致」と扱わず、別
-      model stack の run を n>=2 と誤認しない・設計 §2.3・Codex 指摘）
+      extractor_version、分離経路は separation_model/version に加え `stem_sha256` と
+      `separation_weights_sha256`）を欠く、または同一 fixture×route の provenance が
+      repeats 間で不一致（欠落を「一致」と扱わず、別 model stack の run を n>=2 と誤認しない。
+      分離経路は同一 model/version でも別 weights/再生成 stem なら前処理入力が変わるため、
+      stem/weights hash なしに分離経路を stable Go survivor に数えない・設計 §2.3・#54・Codex 指摘）
     - measured な route 行の `extractor` / preprocessing が凍結 route 定義
       （`select_routes`）と不一致、または `source_model` が期待抽出器ファミリのトークンを
       含まない（経路ラベル/provenance と実測抽出器のすり替えを許さない・Codex 指摘）
@@ -1063,15 +1069,23 @@ def evaluate_m1_real_go_bar(
                 "repeats と見なせない (fail-closed)"
             )
         fixture_audio_hash[fixture_id] = audio_hashes[0]
-        # 素材同一性の pin（forward-compat）。frozen real_vocal_* は自作 Suno 曲で
-        # 非 commit（設計 §6.5・波形は repo に置かない）、その expected audio hash は
-        # slow-lane 生成時に決まる dated pin（§2.3・deliverable 2/3）で PR 時に repo へ
-        # 固定できない。registry の external_fixtures エントリに `expected_audio_sha256`
-        # が**存在すれば**（＝slow-lane 実測後に operator が記録したら）report の
-        # audio_sha256 と一致することを要求し、manifest typo/差替で別素材に verdict を
-        # 出すのを弾く。未記録なら no-op（emit は machine-dependent・Codex 指摘）。
+        # 素材同一性の pin。frozen real_vocal_* は自作 Suno 曲で非 commit（設計 §6.5・
+        # 波形は repo に置かない）、その expected audio hash は slow-lane 生成時に決まる
+        # dated pin（§2.3・deliverable 2/3）で PR 時に repo へ固定できない。しかし **Go 判定を
+        # publish する scoring 時点では必須**とする（#53）: expected_audio_sha256 が無いと、
+        # manifest が frozen id を誤った audio に向けても（両 repeats で同じ誤り素材なら）
+        # per-report audio_sha256 は互いに一致し distinct-fixture チェックも通り、事前登録
+        # 素材として一度も pin されていない material に Go が出てしまう。operator が slow-lane
+        # で凍結素材の hash を registry に記録してから scoring する規律を強制する（Codex 指摘）。
         expected_audio = registered_external.get(fixture_id, {}).get("expected_audio_sha256")
-        if expected_audio is not None and fixture_audio_hash[fixture_id] != expected_audio:
+        if not expected_audio:
+            raise ValueError(
+                f"evaluate_m1_real_go_bar: go-bar fixture {fixture_id!r} は registry に "
+                "expected_audio_sha256 を持たない; 事前登録素材との binding なしに Go を "
+                "publish しない。slow-lane で operator が凍結素材の hash を記録し registry を "
+                "更新してから scoring する (fail-closed・#53)"
+            )
+        if fixture_audio_hash[fixture_id] != expected_audio:
             raise ValueError(
                 f"evaluate_m1_real_go_bar: fixture {fixture_id!r} audio_sha256 "
                 f"{fixture_audio_hash[fixture_id]} != registry expected_audio_sha256 "
@@ -1115,12 +1129,28 @@ def evaluate_m1_real_go_bar(
                     missing_fields.append("extractor_version")
                 if route in separation_routes:
                     preprocessing = row.get("preprocessing")
-                    if (
-                        not isinstance(preprocessing, dict)
-                        or not preprocessing.get("separation_model")
-                        or not preprocessing.get("separation_version")
-                    ):
+                    if not isinstance(preprocessing, dict):
                         missing_fields.append("preprocessing.separation_model/version")
+                        missing_fields.append(
+                            "preprocessing.stem_sha256/separation_weights_sha256"
+                        )
+                    else:
+                        if not preprocessing.get("separation_model") or not preprocessing.get(
+                            "separation_version"
+                        ):
+                            missing_fields.append("preprocessing.separation_model/version")
+                        # measured な分離経路は、同一 htdemucs_ft/version でも別 cached weights や
+                        # 再生成 stem bytes だと実際の前処理入力が変わる。stem_sha256 と
+                        # separation_weights_sha256 を必須化し、これらの pin なしに分離経路を
+                        # stable Go survivor に数えない（未 emit の分離経路は provenance 不足で
+                        # 弾かれ、pyin 等の非分離経路や slow-lane での hash 記録後にのみ Go 可能。
+                        # emit 自体は machine-dependent だが要求は machine-independent・#54）。
+                        if not preprocessing.get("stem_sha256") or not preprocessing.get(
+                            "separation_weights_sha256"
+                        ):
+                            missing_fields.append(
+                                "preprocessing.stem_sha256/separation_weights_sha256"
+                            )
                 if missing_fields:
                     raise ValueError(
                         f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} in "

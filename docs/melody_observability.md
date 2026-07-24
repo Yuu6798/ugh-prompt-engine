@@ -321,16 +321,21 @@ sha256 で担保する。検証は「pin した sha256 の report 集合を同�
 測定値・dated 実測記録・Go/No-Go 判定は本節時点では **未確定（PENDING）** —
 実測が済むまでここに数値や verdict を書き加えてはならない（一方向規律）。
 
-**繰延している machine-dependent 課題**（いずれも評価器は forward-compat 済みで、
-slow-lane 実測時に値が記録されれば自動で穴が閉じる。値の **emit/記録** が machine-dependent）:
+**繰延している machine-dependent 課題**（値の **emit/記録** が machine-dependent。ただし
+評価器の**要求は machine-independent** で、Go 判定を publish する scoring 時点でこれらの
+pin を必須化する = 記録が済むまで Go を出さない fail-closed 規律。「約束するのは測定できる
+ものだけ」の D-1 準拠）:
 
-- **分離経路の stem/weights hash**: Demucs vocals stem の sha256・分離器重みの hash は
-  実 Demucs を要するため未 emit。評価器 `_route_provenance` は
-  `preprocessing.stem_sha256` / `separation_weights_sha256` が**存在すれば** repeats 間で
-  比較する。emit 配線（`_preprocessing_provenance` が stem を露出して hash）は実測時に追加。
-- **frozen 素材の expected audio hash**: real_vocal_* は自作 Suno 曲で **非 commit**
+- **分離経路の stem/weights hash**（#54）: Demucs vocals stem の sha256・分離器重みの hash は
+  実 Demucs を要するため未 emit。評価器は **measured な分離経路には `preprocessing.stem_sha256`
+  と `separation_weights_sha256` を必須**とし、無ければ provenance 不足で fail-closed（同一
+  `htdemucs_ft`/version でも別 weights/再生成 stem なら前処理入力が変わるため、これらの pin
+  なしに分離経路を stable Go survivor に数えない）。したがって分離経路の Go は emit 配線
+  （`_preprocessing_provenance` が stem を露出して hash）を slow-lane で追加してから。
+- **frozen 素材の expected audio hash**（#53）: real_vocal_* は自作 Suno 曲で **非 commit**
   （波形は repo に置かない）、その expected audio sha256 は slow-lane 生成時に決まる
   dated pin。PR 時に registry へ固定できない（audio が repo に存在しない・初回生成前は
-  hash 未知）。評価器は registry の external_fixtures エントリに `expected_audio_sha256`
-  が**存在すれば** report の audio_sha256 と一致要求する。operator が初回生成後に
-  実測 hash を registry へ記録すれば、manifest typo/差替で別素材に verdict を出す穴が閉じる。
+  hash 未知）。評価器は **全 go-bar fixture に registry の `expected_audio_sha256` を必須**とし、
+  report の audio_sha256 と一致要求する（未記録だと manifest が frozen id を誤った audio に
+  向けても両 repeats で一致してしまい、一度も pin されていない material に Go が出る）。
+  operator が初回生成後に実測 hash を registry へ記録してからでないと scoring で Go を出さない。

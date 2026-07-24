@@ -981,6 +981,12 @@ def _make_go_bar_report(
                     "preprocessing": "demucs_vocals",
                     "separation_model": "htdemucs_ft",
                     "separation_version": "4.0.1",
+                    # #54: measured 分離経路は stem/weights hash 必須。repeats 間で一致させる
+                    # ため route 由来の決定論値を使う（同一 fixture の 2 repeats で同値）。
+                    "stem_sha256": hashlib.sha256(f"{route}:stem".encode()).hexdigest(),
+                    "separation_weights_sha256": hashlib.sha256(
+                        b"htdemucs_ft:4.0.1:weights"
+                    ).hexdigest(),
                 }
         return row
 
@@ -1023,7 +1029,15 @@ _GO_BAR_ROUTE = "demucs_vocals_then_crepe"
 
 
 def _go_bar_registry():
-    return yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))
+    reg = yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))
+    # #53: go-bar fixture は scoring 時に expected_audio_sha256 必須。real registry は
+    # slow-lane 記録前なので未設定。happy path 用に、`_make_go_bar_report` が付ける
+    # report の audio_sha256（= sha256(fixture_id)）と一致する値を注入する。
+    go_bar_ids = set(_GO_BAR_POSITIVES) | {_GO_BAR_NEGATIVE}
+    for entry in reg.get("external_fixtures", []):
+        if entry["id"] in go_bar_ids:
+            entry["expected_audio_sha256"] = hashlib.sha256(entry["id"].encode()).hexdigest()
+    return reg
 
 
 def test_evaluate_go_bar_go_when_survivor():
@@ -1424,6 +1438,61 @@ def test_evaluate_go_bar_carries_generator_code_sha256_in_verdict():
     assert verdict["generator_code_sha256"] == "c" * 64
 
 
+def test_evaluate_go_bar_requires_expected_audio_sha256_for_every_fixture():
+    """go-bar fixture が registry に expected_audio_sha256 を持たなければ fail-closed（#53）。
+
+    未記録だと manifest が frozen id を誤った audio に向けても両 repeats で一致してしまい、
+    事前登録素材として一度も pin されていない material に Go が出る。scoring 時点で必須化。
+    """
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+
+    # 素の real registry（expected_audio_sha256 未記録）→ Go を出さず fail-closed。
+    bare_reg = yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))
+    with pytest.raises(ValueError, match="expected_audio_sha256"):
+        harness.evaluate_m1_real_go_bar([r1, r2], bare_reg)
+
+    # 1 本だけ欠落しても fail-closed（`_go_bar_registry` は全 fixture に注入するので、
+    # negative の 1 本を消して部分欠落を作る）。
+    reg = _go_bar_registry()
+    for entry in reg["external_fixtures"]:
+        if entry["id"] == _GO_BAR_NEGATIVE:
+            entry.pop("expected_audio_sha256", None)
+    with pytest.raises(ValueError, match="expected_audio_sha256"):
+        harness.evaluate_m1_real_go_bar([r1, r2], reg)
+
+
+def test_evaluate_go_bar_requires_stem_and_weights_for_measured_separation(monkeypatch):
+    """measured 分離経路が stem/weights hash を欠けば stable Go に数えず fail-closed（#54）。
+
+    同一 htdemucs_ft/version でも別 cached weights や再生成 stem bytes だと実際の前処理入力が
+    変わるため、これらの pin なしに分離経路を Go survivor に数えない。
+    """
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+    # 本命の分離経路（measured/sufficient）から stem/weights を除去 → provenance 不足で fail-closed。
+    for report in (r1, r2):
+        for row in report["fixtures"]["real_vocal_jrock"]["routes"]:
+            if row["route"] == _GO_BAR_ROUTE:
+                row["preprocessing"] = {
+                    "preprocessing": "demucs_vocals",
+                    "separation_model": "htdemucs_ft",
+                    "separation_version": "4.0.1",
+                }
+    with pytest.raises(ValueError, match="stem_sha256/separation_weights_sha256"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
 def test_json_loads_rejects_duplicate_object_keys():
     """`_json_loads_no_dup_keys` は任意ネスト階層の重複 object キーを弾く（#46）。"""
     import scripts.run_melody_observability as harness
@@ -1627,8 +1696,14 @@ def test_evaluate_go_bar_fails_closed_on_duplicate_audio_across_fixtures():
     for report in (r1, r2):
         report["fixtures"]["real_vocal_jrock"]["audio_sha256"] = "c" * 64
         report["fixtures"]["real_vocal_futurepop"]["audio_sha256"] = "c" * 64
+    # #53 の expected_audio 一致チェックを通した上で cross-fixture 重複を検出させるため、
+    # 両 fixture の registry expected を共有値に合わせる（重複検出は expected 検証の後段）。
+    reg = _go_bar_registry()
+    for entry in reg["external_fixtures"]:
+        if entry["id"] in ("real_vocal_jrock", "real_vocal_futurepop"):
+            entry["expected_audio_sha256"] = "c" * 64
     with pytest.raises(ValueError, match="same audio_sha256"):
-        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+        harness.evaluate_m1_real_go_bar([r1, r2], reg)
 
 
 def test_evaluate_go_bar_fails_closed_on_provenance_mismatch():
@@ -1732,6 +1807,9 @@ def test_evaluate_go_bar_cli_pins_report_hashes(tmp_path, monkeypatch):
     # CLI は _load_registry の実 hash を authoritative reference として渡すため、
     # report の registry_sha256 を実ファイル hash に合わせる。
     reg_sha = hashlib.sha256(REGISTRY_PATH.read_bytes()).hexdigest()
+    # slow-lane 記録後の registry 状態（expected_audio_sha256 済み・#53）を模す。CLI は
+    # _load_registry を呼ぶので、pin 注入済み registry と実 hash を返すよう差し替える。
+    monkeypatch.setattr(harness, "_load_registry", lambda: (_go_bar_registry(), reg_sha))
     r1 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
     r2 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
     run1 = tmp_path / "run1.json"
@@ -1845,10 +1923,11 @@ def test_evaluate_go_bar_fails_closed_on_incoherent_pass_fail_thresholds():
 
 
 def test_evaluate_go_bar_compares_stem_hash_across_repeats_when_present():
-    """preprocessing に stem_sha256 があれば repeats 間で比較し、不一致は fail-closed。
+    """measured 分離経路の stem_sha256 は必須で、repeats 間で不一致なら fail-closed（#54）。
 
     stem/weights hash の **emit** は実 Demucs を要する machine-dependent な slow-lane 課題
-    だが、評価器は「存在すれば比較」で forward-compat（emit されたら自動で穴が塞がる）。
+    だが、**要求**（measured 分離経路は stem/weights を pin しないと stable Go に数えない）は
+    machine-independent。ここでは同一 model/version でも別 stem なら別 run として弾くことを確認。
     """
     import scripts.run_melody_observability as harness
 
