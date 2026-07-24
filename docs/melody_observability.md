@@ -289,14 +289,21 @@ pin しつつ合格版だけ採点して go を publish しうる。hook は全�
 呼ばれるので、fixture id・route payload いずれの階層の重複キーも採点前に fail-closed で
 弾く（#46）。
 
-report は route 行・gate metrics を産出した generator コード（harness ＋ melody
-抽出/経路/観測 ＋ 下流 learned adapter / source separator）の digest を
+report は route 行・gate metrics を産出した generator コードの digest を
 **`generator_code_sha256`** に載せる。評価器はこれが全 report に存在し repeats 間で一致
 することを要求する。verdict の `evaluator_code_sha256`（判定コードの digest）と対を成す
 生成側 provenance で、extractor/gate コードが変わった後に古い report bytes が渡される
 stale extraction を機械検出可能にする（従来は registry と評価器コードしか pin されず
 検出不能だった）。同じパス集合（`_generator_code_paths()`）が `--out` 衝突保護でも使われ、
 生成直後の generator コード上書き破壊を両モードで防ぐ（#47/#49/#50/#51）。
+
+この generator コード集合は**ハードコードのモジュール一覧ではなく、seed（harness ＋ melody
+抽出/経路/観測 ＋ learned adapter / source separator）から AST で import を辿った first-party
+推移閉包**として算出する。`ast.walk` は関数内 import も拾うため、pyin baseline が遅延 import
+する `rpe.physical_features` の `PYIN_*` 定数・`_highpass_melody_signal` のような、hand-list が
+取りこぼしがちな依存も自動で含む（#52）。`test_generator_code_paths_is_import_closed` が
+「集合が import 閉包として閉じている」不変条件を CI で守り、将来 generator 系に遅延 import を
+足して集合が不完全化しても検出する。
 
 `report_pins` の **`sha256` が content-addressed の replay anchor** で、各 report の
 内容を一意に pin する（同名 basename でも内容が違えば別 sha256 として list に共存・

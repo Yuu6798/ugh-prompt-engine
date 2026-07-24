@@ -1331,7 +1331,8 @@ def test_run_external_stamps_distinct_run_id(monkeypatch, tmp_path):
 
 
 def test_generator_code_paths_include_melody_and_adapters():
-    """_generator_code_paths は harness ＋ melody モジュール ＋ 下流 learned adapter を含む（#50/#51）。"""
+    """_generator_code_paths は harness ＋ melody モジュール ＋ 下流 learned adapter ＋
+    pyin baseline が依存する physical_features を含む（#50/#51/#52）。"""
     import svp_rpe.io.source_separator as _sep
     import svp_rpe.melody.extractors as _extractors
     import svp_rpe.melody.observability as _obs
@@ -1340,13 +1341,49 @@ def test_generator_code_paths_include_melody_and_adapters():
     import svp_rpe.rpe.learned.crepe_adapter as _crepe
     import svp_rpe.rpe.learned.melodia_adapter as _melodia
     import svp_rpe.rpe.learned.source_separation_adapter as _srcsep
+    import svp_rpe.rpe.physical_features as _phys
 
     import scripts.run_melody_observability as harness
 
     paths = set(harness._generator_code_paths())
     assert Path(harness.__file__).resolve() in paths
-    for mod in (_extractors, _obs, _routing, _crepe, _melodia, _bp, _srcsep, _sep):
+    for mod in (_extractors, _obs, _routing, _crepe, _melodia, _bp, _srcsep, _sep, _phys):
         assert Path(mod.__file__).resolve() in paths
+
+
+def test_generator_code_paths_is_import_closed():
+    """_generator_code_paths が first-party import 閉包として閉じている（#52 遅延 import 穴の構造的封鎖）。
+
+    返り値の各ファイルの import（関数内含む）を AST で辿り、first-party の import target が
+    すべて集合内にあることを確認する。将来 generator 系モジュールに遅延 import を足して集合が
+    不完全になれば、この不変条件が破れて CI が Codex より先に気づく（hand-list の取りこぼしを
+    構造的に防ぐ）。
+    """
+    import ast
+
+    import scripts.run_melody_observability as harness
+
+    paths = set(harness._generator_code_paths())
+    assert paths, "generator code path set is empty"
+    for f in paths:
+        tree = ast.parse(f.read_text(encoding="utf-8"))
+        candidates: set = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    candidates.add(alias.name)
+            elif isinstance(node, ast.ImportFrom):
+                if node.level == 0 and node.module:
+                    candidates.add(node.module)
+                    for alias in node.names:
+                        candidates.add(f"{node.module}.{alias.name}")
+        for name in candidates:
+            target = harness._first_party_module_file(name)
+            if target is not None:
+                assert target in paths, (
+                    f"{f.name} imports first-party {name!r} which is not in "
+                    "_generator_code_paths() (import closure incomplete)"
+                )
 
 
 def test_evaluate_go_bar_fails_closed_on_missing_or_differing_generator_code(monkeypatch):
@@ -2290,6 +2327,7 @@ def test_report_mode_cli_rejects_out_overwriting_generator_modules(monkeypatch, 
     import svp_rpe.rpe.learned.crepe_adapter as _crepe
     import svp_rpe.rpe.learned.melodia_adapter as _melodia
     import svp_rpe.rpe.learned.source_separation_adapter as _srcsep
+    import svp_rpe.rpe.physical_features as _phys
 
     import scripts.run_melody_observability as harness
 
@@ -2302,6 +2340,7 @@ def test_report_mode_cli_rejects_out_overwriting_generator_modules(monkeypatch, 
         Path(_bp.__file__),
         Path(_srcsep.__file__),
         Path(_sep.__file__),
+        Path(_phys.__file__),
     ]
     # `_generator_code_paths()` がこれら全モジュール（+ harness）を含むことを直接確認。
     protected = set(harness._generator_code_paths())

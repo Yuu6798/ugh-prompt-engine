@@ -558,22 +558,61 @@ def _evaluator_code_paths() -> "List[Path]":
     ]
 
 
-def _generator_code_paths() -> "List[Path]":
-    """report を生成するコード一式の resolved パス集合（harness ＋ melody 抽出/経路/観測 ＋
-    下流 learned adapter / source separator）。
+# first-party コードのルート（この 2 つの配下のファイルだけを generator 閉包に含める）。
+_FIRST_PARTY_ROOTS: "tuple[Path, ...]" = (SRC.resolve(), (ROOT / "scripts").resolve())
 
-    非 evaluate モード（`--external` / synthetic）は `_run_routes_on_file` 経由で
-    `svp_rpe.melody.extractors`（`observe_via_route` / `observe_assist_notes`）・
-    `observability`（`assess_observability` / gate）・`routing`（`select_routes` の
-    route matrix）を使い、optional 経路では further `rpe.learned.{crepe,melodia,
-    basic_pitch,source_separation}_adapter` と `io.source_separator` まで到達して route 行と
-    gate outcome を組み立てる。これらは report の provenance を成す生成コードなので、
-    (1) `generator_code_sha256`（#50）で report にその digest を pin し、(2) `--out` 衝突
-    保護（#47/#49/#51）で生成直後の上書き破壊を防ぐ、双方が同じ集合を共有する
-    （evaluate 分岐の `_evaluator_code_paths` と対称）。adapter モジュールは optional な
-    重み依存を内部で import-guard するため、重い依存が無くてもモジュール自体は import でき、
-    digest はどのマシンでも決定論的に安定する（Codex 指摘）。
+
+def _first_party_module_file(module_name: str) -> "Path | None":
+    """`module_name` が first-party（`src/svp_rpe` or `scripts` 配下）なら resolved パスを返す。
+
+    stdlib / third-party / 見つからない名前は None。optional 重み依存（`crepe` 等）は
+    first-party 外に解決されるか未インストールで None になるため閉包に混入せず、digest は
+    どのマシンでも決定論的に安定する。
     """
+    import importlib.util
+
+    try:
+        spec = importlib.util.find_spec(module_name)
+    except (ImportError, ValueError, AttributeError, ModuleNotFoundError):
+        return None
+    if spec is None or spec.origin in (None, "built-in", "frozen"):
+        return None
+    path = Path(spec.origin).resolve()
+    if any(_is_relative_to(path, root) for root in _FIRST_PARTY_ROOTS):
+        return path
+    return None
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    """`path` が `root` 配下か（Path.is_relative_to は 3.9+ だが明示実装で意図を固定）。"""
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _generator_code_paths() -> "List[Path]":
+    """report を生成するコード一式の resolved パス集合（first-party 推移 import 閉包）。
+
+    非 evaluate モード（`--external` / synthetic）は `_run_routes_on_file` 経由で melody 抽出/
+    経路/観測 ＋ optional 経路の learned adapter / source separator ＋ **それらが（関数内
+    import 含め）依存する first-party モジュール**（例: pyin baseline が使う
+    `rpe.physical_features` の `PYIN_*` 定数・`_highpass_melody_signal`）まで到達して route 行と
+    gate outcome を組み立てる。これらは report の provenance を成す生成コードなので、
+    (1) `generator_code_sha256`（#50）で report にその digest を pin し、(2) `--out` 衝突保護
+    （#47/#49/#51）で生成直後の上書き破壊を防ぐ、双方が同じ集合を共有する（evaluate 分岐の
+    `_evaluator_code_paths` と対称）。
+
+    集合は**ハードコードした seed リストではなく、seed から AST で import を辿った first-party
+    推移閉包**として算出する。`ast.walk` は関数内 import（`extract_pyin_observation` の
+    `physical_features` 遅延 import 等）も拾うため、hand-list が遅延 import を取りこぼして
+    provenance/保護が不完全になる穴（#49/#51/#52 の反復）を構造的に塞ぐ（Codex 指摘）。
+    """
+    import ast
+
+    # seed = harness ＋ 既知の generator 入口モジュール。閉包が万一取りこぼしても、これらは
+    # 常に含まれる floor（後方互換の下限保証）。
     import svp_rpe.io.source_separator as _sep
     import svp_rpe.melody.extractors as _extractors
     import svp_rpe.melody.observability as _obs
@@ -583,10 +622,37 @@ def _generator_code_paths() -> "List[Path]":
     import svp_rpe.rpe.learned.melodia_adapter as _melodia
     import svp_rpe.rpe.learned.source_separation_adapter as _srcsep
 
-    modules = [_extractors, _obs, _routing, _crepe, _melodia, _bp, _srcsep, _sep]
-    paths = {Path(__file__).resolve()}
-    paths.update(Path(m.__file__).resolve() for m in modules)
-    return sorted(paths)
+    seed_modules = [_extractors, _obs, _routing, _crepe, _melodia, _bp, _srcsep, _sep]
+    stack: List[Path] = [Path(__file__).resolve()]
+    stack.extend(Path(m.__file__).resolve() for m in seed_modules)
+
+    resolved: set[Path] = set()
+    while stack:
+        file = stack.pop()
+        if file in resolved or not file.exists():
+            continue
+        resolved.add(file)
+        try:
+            tree = ast.parse(file.read_text(encoding="utf-8"))
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+        candidates: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    candidates.add(alias.name)
+            elif isinstance(node, ast.ImportFrom):
+                # 相対 import は非採用（本リポジトリは絶対 import 規約）。node.module は
+                # import 元モジュール、`module.name` は submodule 候補（`from pkg import sub`）。
+                if node.level == 0 and node.module:
+                    candidates.add(node.module)
+                    for alias in node.names:
+                        candidates.add(f"{node.module}.{alias.name}")
+        for name in candidates:
+            target = _first_party_module_file(name)
+            if target is not None and target not in resolved:
+                stack.append(target)
+    return sorted(resolved)
 
 
 def _generator_code_sha256() -> str:
