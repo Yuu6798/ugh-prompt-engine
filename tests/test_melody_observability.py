@@ -1792,6 +1792,35 @@ def test_evaluate_go_bar_cli_rejects_out_colliding_with_report(tmp_path, monkeyp
     assert _json.loads(run1.read_text(encoding="utf-8")) == r1
 
 
+def test_evaluate_go_bar_cli_rejects_out_overwriting_registry(tmp_path, monkeypatch):
+    """--out が凍結 registry を指したら書き込み前に fail-closed（registry を破壊しない）。"""
+    import json as _json
+
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    reg_sha = hashlib.sha256(REGISTRY_PATH.read_bytes()).hexdigest()
+    r1 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    r2 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    run1 = tmp_path / "run1.json"
+    run1.write_text(_json.dumps(r1), encoding="utf-8")
+    run2 = tmp_path / "run2.json"
+    run2.write_text(_json.dumps(r2), encoding="utf-8")
+    # --out が凍結 registry を指す（typo）→ 書き込み前に fail-closed。
+    monkeypatch.setattr(
+        sys, "argv",
+        ["run_melody_observability", "--evaluate-go-bar", str(run1), str(run2),
+         "--out", str(REGISTRY_PATH)],
+    )
+    before = REGISTRY_PATH.read_bytes()
+    with pytest.raises(ValueError, match="保護対象"):
+        harness.main()
+    # 凍結 registry は verdict で上書きされず無傷。
+    assert REGISTRY_PATH.read_bytes() == before
+
+
 # --------------------------------------------------------------------------- #
 # slow lane: 合成 → 実 pyin 抽出の統合（正/負の対照）
 # --------------------------------------------------------------------------- #

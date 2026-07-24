@@ -1240,14 +1240,18 @@ def main() -> int:
             report_pins.append(
                 {"path": pin_path, "sha256": hashlib.sha256(data).hexdigest()}
             )
-        # --out が入力 report のいずれかに解決されると、verdict の書き込みが pin 済みの
-        # report を上書きし、report_pins の hash が実体と不一致になり slow-lane repeat を
-        # 破壊する。書き込み前にパス衝突を fail-closed（Codex 指摘）。report_paths は
-        # 既に resolve 済み。
-        if args.out is not None and Path(args.out).resolve() in set(report_paths):
+        # --out が保護対象パスに解決されると verdict の書き込みが重要 artifact を破壊する
+        # ため、書き込み前にパス衝突を fail-closed（Codex 指摘）。保護対象:
+        #   - 入力 report（pin 済み report を上書きすると report_pins の hash が実体と
+        #     不一致になり slow-lane repeat を破壊する）
+        #   - 凍結 registry（`--out .../registry.yaml` の typo で、verdict 生成直後に
+        #     凍結 Go-bar registry を上書き破壊するのを防ぐ）
+        # report_paths / REGISTRY_PATH は resolve 済み集合で比較する。
+        protected_paths = set(report_paths) | {REGISTRY_PATH.resolve()}
+        if args.out is not None and Path(args.out).resolve() in protected_paths:
             raise ValueError(
-                f"--out {args.out} は入力 report path のいずれかと衝突する; verdict の書き込みが "
-                "pin 済み report を破壊するため拒否する (fail-closed)"
+                f"--out {args.out} は保護対象パス（入力 report / 凍結 registry）と衝突する; "
+                "verdict の書き込みが重要 artifact を破壊するため拒否する (fail-closed)"
             )
         verdict = evaluate_m1_real_go_bar(
             reports, registry, registry_sha256=registry_sha256
