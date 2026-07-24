@@ -53,6 +53,7 @@ from svp_rpe.melody.extractors import observe_assist_notes, observe_via_route  #
 from svp_rpe.melody.observability import (  # noqa: E402
     ObservabilityThresholds,
     assess_observability,
+    gate_reasons,
 )
 from svp_rpe.melody.routing import select_routes  # noqa: E402
 from svp_rpe.rpe.learned import LearnedModelUnavailable  # noqa: E402
@@ -573,8 +574,10 @@ def evaluate_m1_real_go_bar(
       model stack の run を n>=2 と誤認しない・設計 §2.3・Codex 指摘）
     - measured な route 行の `extractor` / preprocessing が凍結 route 定義
       （`select_routes`）と不一致（経路ラベルと実測抽出器のすり替えを許さない・Codex 指摘）
-    - measured な route 行が根拠 report payload を欠く、または `report.status` が
-      `outcome` と不一致（outcome だけ改竄して metrics と食い違わせるのを許さない・Codex 指摘）
+    - measured な route 行が根拠 report payload / gate metrics を欠く、`report.status`
+      が `outcome` と不一致、または payload metrics から凍結ゲートで **再導出** した
+      status が `outcome` と不一致（outcome/status だけ改竄し metrics を未達のまま残す
+      のを許さない・`gate_reasons` を assess_observability と共有・Codex 指摘）
 
     候補経路は positive fixture の registry 凍結 kind が規定する matrix に限定し、
     report に混入した非登録経路は verdict に効かせない（Codex 指摘）。
@@ -672,9 +675,8 @@ def evaluate_m1_real_go_bar(
     # では、両 report が run_external(..., thresholds=override) で同じ緩いゲートを使った
     # 場合に registry_sha256 が一致したまま通過し、凍結ゲート外の測定で verdict を publish
     # できてしまう（Codex 指摘）。
-    frozen_gate = asdict(
-        ObservabilityThresholds.from_registry(registry["observation_gate"])
-    )
+    frozen_thresholds = ObservabilityThresholds.from_registry(registry["observation_gate"])
+    frozen_gate = asdict(frozen_thresholds)
     for idx, report in enumerate(reports):
         if report["registry_sha256"] != ref_registry_sha256:
             raise ValueError(
@@ -801,6 +803,40 @@ def evaluate_m1_real_go_bar(
                         f"reports[{idx}] outcome {row['outcome']!r} lacks a matching report "
                         "payload (report.status); outcome と metrics の食い違いを許さない "
                         "(fail-closed)"
+                    )
+                # status 文字列一致だけでは、outcome/report.status を両方 sufficient に
+                # 改竄しつつ payload metrics（note_count 等）を凍結ゲート未満に残せる。
+                # 凍結ゲート（frozen_thresholds）に対し payload metrics から status を
+                # **再導出**して outcome と一致するか検証する（gate_reasons は
+                # assess_observability と同じ single source of truth・Codex 指摘）。
+                _METRIC_KEYS = (
+                    "voiced_coverage", "note_count", "phrase_count",
+                    "confidence_mean", "low_confidence_rate", "octave_jump_rate",
+                )
+                missing_metrics = [k for k in _METRIC_KEYS if k not in report_payload]
+                if missing_metrics:
+                    raise ValueError(
+                        f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} in "
+                        f"reports[{idx}] report payload lacks gate metrics {missing_metrics} "
+                        "(fail-closed)"
+                    )
+                recomputed_reasons = gate_reasons(
+                    frozen_thresholds,
+                    voiced_coverage=report_payload["voiced_coverage"],
+                    note_count=report_payload["note_count"],
+                    phrase_count=report_payload["phrase_count"],
+                    confidence_mean=report_payload["confidence_mean"],
+                    low_confidence_rate=report_payload["low_confidence_rate"],
+                    octave_jump_rate=report_payload["octave_jump_rate"],
+                    cross_extractor_agreement=report_payload.get("cross_extractor_agreement"),
+                )
+                recomputed_status = "sufficient" if not recomputed_reasons else "insufficient"
+                if recomputed_status != row["outcome"]:
+                    raise ValueError(
+                        f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} in "
+                        f"reports[{idx}] outcome {row['outcome']!r} but payload metrics imply "
+                        f"{recomputed_status!r} under the frozen gate {recomputed_reasons}; "
+                        "metrics とゲート判定の食い違いを許さない (fail-closed)"
                     )
                 # 行が凍結 route 定義（select_routes）の抽出器/前処理と一致することを要求。
                 # 経路名だけ `demucs_vocals_then_crepe` を名乗り実際は pyin/librosa で測った

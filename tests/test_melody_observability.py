@@ -936,7 +936,20 @@ def _make_go_bar_report(
             "report": None,
         }
         if outcome in ("sufficient", "insufficient"):
-            row["report"] = {"status": outcome}  # report.status == outcome（harness と同型）
+            # 根拠 report payload。凍結ゲート（min_note_count 8/min_phrase_count 2 等）
+            # に対し metrics から再導出した status が outcome と一致するよう構築する。
+            if outcome == "sufficient":
+                row["report"] = {
+                    "status": "sufficient", "voiced_coverage": 0.7, "note_count": 12,
+                    "phrase_count": 3, "confidence_mean": 0.9, "low_confidence_rate": 0.05,
+                    "octave_jump_rate": 0.0, "cross_extractor_agreement": None,
+                }
+            else:
+                row["report"] = {
+                    "status": "insufficient", "voiced_coverage": 0.7, "note_count": 1,
+                    "phrase_count": 1, "confidence_mean": 0.9, "low_confidence_rate": 0.05,
+                    "octave_jump_rate": 0.0, "cross_extractor_agreement": None,
+                }
             row["source_model"] = f"{route}:model"
             row["extractor_version"] = "0.0.13"
             if route.startswith("demucs_vocals_"):
@@ -1531,6 +1544,25 @@ def test_evaluate_go_bar_fails_closed_on_outcome_report_status_mismatch():
             if row["route"] == _GO_BAR_ROUTE:
                 row["report"] = {"status": "insufficient"}
     with pytest.raises(ValueError, match="matching report payload"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_fails_closed_on_metrics_gate_inconsistency():
+    """outcome/report.status を sufficient に揃えても payload metrics が凍結ゲート未満なら fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    r2 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    # status/outcome は sufficient のまま、payload metrics を凍結ゲート未満へ改竄
+    # （note_count 1 < min 8 / phrase_count 1 < min 2）。再導出 status=insufficient と食い違う。
+    for report in (r1, r2):
+        for row in report["fixtures"]["real_vocal_jrock"]["routes"]:
+            if row["route"] == _GO_BAR_ROUTE:
+                row["report"] = {**row["report"], "note_count": 1, "phrase_count": 1}
+    with pytest.raises(ValueError, match="metrics"):
         harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
 
 
