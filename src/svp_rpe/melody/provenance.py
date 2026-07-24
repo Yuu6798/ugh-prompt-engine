@@ -46,12 +46,18 @@ class ExtractorWeights:
     files: Tuple[str, ...]
 
 
-def extractor_weights_fingerprint(extractor: str) -> Optional[ExtractorWeights]:
+def extractor_weights_fingerprint(
+    extractor: str, *, use_cache: bool = True
+) -> Optional[ExtractorWeights]:
     """`extractor` が読むモデル artifact の指紋（無い/取れないなら None）。
 
     抽出そのものは行わない（artifact の解決と hash のみ）。依存未導入・artifact
     未特定は `LearnedModelUnavailable` として adapter 側から上がってくるので、
     ここで握って `None` に落とす（観測 run 自体は落とさない）。
+
+    `use_cache=False` は digest の memo を迂回して実バイトを読み直す。推論の前後で
+    artifact が差し替わっていないかを検証する post-pass に使う（size/mtime が偶然
+    一致する差し替えでも検出できるようにするため・Codex #217）。
     """
     try:
         if extractor == "crepe":
@@ -61,7 +67,7 @@ def extractor_weights_fingerprint(extractor: str) -> Optional[ExtractorWeights]:
             return ExtractorWeights(
                 extractor=extractor,
                 kind=KIND_MODEL_WEIGHTS,
-                sha256=sha256_of_files(files),
+                sha256=sha256_of_files(files, use_cache=use_cache),
                 files=tuple(p.name for p in files),
             )
         if extractor == "basic_pitch":
@@ -71,7 +77,7 @@ def extractor_weights_fingerprint(extractor: str) -> Optional[ExtractorWeights]:
             return ExtractorWeights(
                 extractor=extractor,
                 kind=KIND_MODEL_WEIGHTS,
-                sha256=sha256_of_files(files, root=root),
+                sha256=sha256_of_files(files, root=root, use_cache=use_cache),
                 files=tuple(sorted(p.name for p in files)),
             )
         if extractor == "melodia":
@@ -81,7 +87,7 @@ def extractor_weights_fingerprint(extractor: str) -> Optional[ExtractorWeights]:
             return ExtractorWeights(
                 extractor=extractor,
                 kind=KIND_LIBRARY_BINARY,
-                sha256=sha256_of_files(files, root=root),
+                sha256=sha256_of_files(files, root=root, use_cache=use_cache),
                 files=tuple(sorted(p.name for p in files)),
             )
     except (LearnedModelUnavailable, OSError):

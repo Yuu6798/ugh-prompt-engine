@@ -220,16 +220,41 @@ def _load_route_waveform(
     return np.asarray(waveform, dtype=np.float32), int(sample_rate)
 
 
-def _record_extractor_weights(provenance: "Dict[str, Any]", extractor: str) -> None:
-    """`extractor` が読んだモデル artifact の指紋を provenance へ書く（取れなければ無記入）。"""
+def _extractor_fingerprint(extractor: str, *, use_cache: bool = True):
+    """`extractor` のモデル artifact 指紋（推論はしない）。取れなければ None。"""
     from svp_rpe.melody.provenance import extractor_weights_fingerprint
 
-    fingerprint = extractor_weights_fingerprint(extractor)
-    if fingerprint is None:
+    return extractor_weights_fingerprint(extractor, use_cache=use_cache)
+
+
+def _verify_and_record_extractor_weights(
+    provenance: "Dict[str, Any]", extractor: str, before
+) -> None:
+    """推論**前**に採った指紋 `before` を推論後に再検証して provenance へ書く。
+
+    推論中に別プロセスが重み/バイナリを差し替えると、推論後にだけ指紋を採る実装では
+    「観測を生んだ artifact」ではなく**差し替え後の bytes**を pin してしまい、2 repeats
+    が同じ（新しい）pin を共有したまま Go バーを満たしうる（Codex #217）。前後の指紋が
+    食い違えば観測を返さず `LearnedModelUnavailable` に落とす（route は unavailable と
+    して記録され run は完走する）。再検証は memo を迂回して実バイトを読む。
+    """
+    from svp_rpe.rpe.learned import LearnedModelUnavailable
+
+    after = _extractor_fingerprint(extractor, use_cache=False)
+    before_sha = before.sha256 if before is not None else None
+    after_sha = after.sha256 if after is not None else None
+    if before_sha != after_sha:
+        raise LearnedModelUnavailable(
+            f"{extractor} model artifact changed during inference "
+            f"(before={before_sha}, after={after_sha}); 観測を生んだ artifact と pin が "
+            "対応しないため unavailable として扱う"
+            "（モデルの provisioning/更新と実測 run を同時に走らせないこと）"
+        )
+    if after is None:
         return
-    provenance["extractor_weights_sha256"] = fingerprint.sha256
-    provenance["extractor_weights_kind"] = fingerprint.kind
-    provenance["extractor_weights_files"] = list(fingerprint.files)
+    provenance["extractor_weights_sha256"] = after.sha256
+    provenance["extractor_weights_kind"] = after.kind
+    provenance["extractor_weights_files"] = list(after.files)
 
 
 def observe_via_route_with_provenance(
@@ -255,11 +280,14 @@ def observe_via_route_with_provenance(
 
     # basic-pitch は自前で path を読む（前処理は経路上 none のみを想定）。
     if route.extractor == "basic_pitch":
+        before = _extractor_fingerprint(route.extractor)
         observation = extract_basic_pitch_observation(audio_path, route=route.name)
-        _record_extractor_weights(provenance, route.extractor)
+        _verify_and_record_extractor_weights(provenance, route.extractor, before)
         return observation, provenance
 
     waveform, sample_rate = _load_route_waveform(audio_path, route, provenance)
+    # 推論**前**に artifact を pin し、推論後に再検証する（TOCTOU・#217）。
+    before = _extractor_fingerprint(route.extractor)
     if route.extractor == "pyin":
         observation = extract_pyin_observation(waveform, sample_rate, route=route.name)
     elif route.extractor == "crepe":
@@ -270,7 +298,7 @@ def observe_via_route_with_provenance(
         raise ValueError(
             f"unsupported extractor for route {route.name!r}: {route.extractor!r}"
         )
-    _record_extractor_weights(provenance, route.extractor)
+    _verify_and_record_extractor_weights(provenance, route.extractor, before)
     return observation, provenance
 
 
@@ -328,9 +356,11 @@ def observe_assist_notes(
         preprocessing=route.preprocessing,
         extractor=route.assist,
     )
-    assist_observation = observe_via_route(audio_path, assist_route)
-    assist_provenance: Dict[str, Any] = {}
-    _record_extractor_weights(assist_provenance, route.assist)
+    # assist 側も推論前後の指紋検証つき経路（`observe_via_route_with_provenance`）を
+    # 通す。検証済みの指紋がそのまま assist の pin になる（#217）。
+    assist_observation, assist_provenance = observe_via_route_with_provenance(
+        audio_path, assist_route
+    )
     return (
         _observation_notes(assist_observation, thresholds),
         assist_observation.source_model,

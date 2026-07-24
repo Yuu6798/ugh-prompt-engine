@@ -680,6 +680,38 @@ def test_separation_route_row_emits_stem_and_weights_pins(monkeypatch, tmp_path)
     assert "extractor_weights_sha256" not in rows[0]
 
 
+def test_observe_route_rejects_extractor_artifact_swapped_during_inference(
+    monkeypatch, tmp_path
+):
+    """推論中に抽出器 artifact が差し替わったら観測を返さず unavailable（#217）。
+
+    推論後にだけ指紋を採ると、観測を生んだ artifact ではなく**差し替え後の bytes**を
+    pin してしまい、2 repeats が同じ新 pin を共有したまま Go バーを満たしうる。
+    """
+    from svp_rpe.melody.extractors import observe_via_route_with_provenance
+    from svp_rpe.melody.routing import MelodyRoute
+    from svp_rpe.rpe.learned import crepe_adapter
+
+    weights = tmp_path / "model-full.h5"
+    weights.write_bytes(b"crepe-weights-v1")
+    monkeypatch.setattr(crepe_adapter, "crepe_weight_files", lambda *a, **k: [weights])
+
+    def swap_then_extract(y, sr, **kwargs):
+        # 推論の最中に別プロセスが重みを差し替えた状況を模す。
+        weights.write_bytes(b"crepe-weights-v2-replacement")
+        return MelodyObservation(route="crepe_direct", source_model="crepe:predict")
+
+    monkeypatch.setattr(
+        "svp_rpe.melody.extractors.extract_crepe_observation", swap_then_extract
+    )
+    sr = 22050
+    wav = tmp_path / "lead.wav"
+    sf.write(wav, np.zeros(sr, dtype=np.float32), sr, subtype="FLOAT")
+    route = MelodyRoute("crepe_direct", "none", "crepe")
+    with pytest.raises(LearnedModelUnavailable, match="changed during inference"):
+        observe_via_route_with_provenance(str(wav), route)
+
+
 def test_extractor_weights_fingerprint_is_none_for_dsp_and_missing_deps():
     """pyin（DSP）と未導入 optional 抽出器では指紋なし（推測 digest を作らない）。"""
     from svp_rpe.melody.provenance import extractor_weights_fingerprint
@@ -719,7 +751,7 @@ def test_route_row_records_extractor_weights_pin(monkeypatch, tmp_path):
         extractor="pyin", kind="model_weights", sha256="a" * 64, files=("fake.bin",)
     )
     monkeypatch.setattr(
-        melody_provenance, "extractor_weights_fingerprint", lambda extractor: fake
+        melody_provenance, "extractor_weights_fingerprint", lambda extractor, **_: fake
     )
     sr = 22050
     t = np.linspace(0, 1.5, int(sr * 1.5), endpoint=False)
@@ -1192,16 +1224,22 @@ def test_route_assist_populates_cross_extractor_agreement(monkeypatch, tmp_path)
             return MelodyObservation(route=route.name, source_model="assist", notes=assist_notes)
         return MelodyObservation(route=route.name, source_model="main", notes=main_notes)
 
-    def fake_observe_with_provenance(audio_path, route):
-        return fake_observe(audio_path, route), {}
-
     # assist（melodia）の artifact 指紋が取れる環境を模す（本環境は essentia 未導入）。
     from svp_rpe.melody import provenance as melody_provenance
+
+    def fake_observe_with_provenance(audio_path, route):
+        # 実経路と同じく、検証済み指紋を provenance に載せて返す。
+        fingerprint = melody_provenance.extractor_weights_fingerprint(route.extractor)
+        return fake_observe(audio_path, route), {
+            "extractor_weights_sha256": fingerprint.sha256,
+            "extractor_weights_kind": fingerprint.kind,
+            "extractor_weights_files": list(fingerprint.files),
+        }
 
     monkeypatch.setattr(
         melody_provenance,
         "extractor_weights_fingerprint",
-        lambda extractor: melody_provenance.ExtractorWeights(
+        lambda extractor, **_: melody_provenance.ExtractorWeights(
             extractor=extractor,
             kind="library_binary",
             sha256=hashlib.sha256(f"{extractor}:binary".encode()).hexdigest(),
@@ -1212,8 +1250,10 @@ def test_route_assist_populates_cross_extractor_agreement(monkeypatch, tmp_path)
     monkeypatch.setattr(
         harness, "observe_via_route_with_provenance", fake_observe_with_provenance
     )
+    # assist は extractors 側の provenance つき経路（推論前後の指紋検証込み）を通る。
     monkeypatch.setattr(
-        "svp_rpe.melody.extractors.observe_via_route", fake_observe
+        "svp_rpe.melody.extractors.observe_via_route_with_provenance",
+        fake_observe_with_provenance,
     )
 
     route = MelodyRoute("basic_pitch_direct", "none", "basic_pitch", assist="melodia")
@@ -1569,7 +1609,7 @@ def test_measured_separation_route_with_emitted_pins_can_survive_go_bar(monkeypa
     monkeypatch.setattr(
         melody_provenance,
         "extractor_weights_fingerprint",
-        lambda extractor: melody_provenance.ExtractorWeights(
+        lambda extractor, **_: melody_provenance.ExtractorWeights(
             extractor="crepe",
             kind="model_weights",
             sha256=hashlib.sha256(b"crepe:model-full.h5").hexdigest(),
