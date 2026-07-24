@@ -1,0 +1,50 @@
+# melody_bench/synthesis_specs.yaml — CI 安全な合成 fixture の決定論合成仕様（M0）
+#
+# ここに載る仕様は `scripts/build_melody_bench.py:build_signal` の決定論関数の入力
+# であり、波形はこの仕様の関数なので「仕様の pin = 波形の pin」である（バイナリ
+# WAV を committed しない Phase 0 スパイクと同じ provenance 方針）。乱数は用いない。
+#
+# 単位: MIDI ノート番号（60 = C4, 69 = A4/440Hz）、秒。sample_rate は全 fixture 共通。
+# `kind: monophonic` は各フレーズを note_dur_sec のサイン波 + note_gap_sec の無音で
+# 鳴らし、フレーズ間に phrase_gap_sec の無音を挟む（正の対照 = 観測できるべき）。
+# `kind: chord_pad` は chords の全 MIDI を duration_sec 持続で重ねる（負の対照 =
+# 旋律なし → not_observed に落ちるべき）。
+
+sample_rate: 22050
+amplitude: 0.3
+
+fixtures:
+  # 正の対照（tuning）: 3 フレーズの単旋律。単旋律抽出器の上限。
+  synth_mono_phrased:
+    kind: monophonic
+    note_dur_sec: 0.35
+    note_gap_sec: 0.06
+    phrase_gap_sec: 0.8
+    phrases:
+      - [60, 62, 64, 65, 67]
+      - [67, 65, 64, 62, 60]
+      - [64, 65, 67, 69, 71]
+
+  # 正の対照（holdout）: 2 フレーズの単旋律。
+  synth_mono_two_phrase:
+    kind: monophonic
+    note_dur_sec: 0.35
+    note_gap_sec: 0.06
+    phrase_gap_sec: 0.8
+    phrases:
+      - [69, 67, 65, 64, 62]
+      - [62, 64, 65, 67, 69]
+
+  # 負の対照（tuning）: 持続三和音パッド（C major）。旋律なし。
+  synth_chord_pad:
+    kind: chord_pad
+    duration_sec: 4.0
+    chords:
+      - [60, 64, 67]
+
+  # 負の対照（holdout）: 単一持続音ドローン。
+  synth_unison_drone:
+    kind: chord_pad
+    duration_sec: 4.0
+    chords:
+      - [57]

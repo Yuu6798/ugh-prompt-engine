@@ -71,6 +71,28 @@ musicgen = ["transformers", "torch", "scipy", "sentencepiece"]
 # ".[lyrics]"` alone must stand up the default (separation-included) path;
 # `--lyrics-no-separate` remains the demucs-free runtime opt-out.
 lyrics = ["faster-whisper>=1.0", "demucs>=4.0"]
+# NOTE: there is deliberately NO `crepe` extra. CREPE's *code* is MIT, but its
+# pretrained model weights (model-*.h5) ship inside the wheel and their license
+# has not been separately inspected and pinned. docs/learned_models_policy.md §4
+# requires upstream weights to be audited independently of the code license and
+# each LearnedModelInfo to pin a concrete `weights_license` — a permissive code
+# license does not imply permissive weights. Verifying/pinning the bundled CREPE
+# weight license is a machine-dependent slow-lane step (Codex/User per CLAUDE.md
+# review routing). Until that pin exists, publishing an installable `[crepe]`
+# extra would advertise a runtime dependency whose weights provenance is
+# unverified, contradicting the policy. So CREPE is kept as a MANUAL / external
+# integration exactly like Melodia (rpe/learned/crepe_adapter.py): install
+# `crepe` by hand in the slow/manual lane. Promoting it to a first-class extra
+# requires the weights-license pin recorded in docs/learned_models_policy.md.
+# NOTE: there is deliberately NO `melodia` extra. The Melodia adapter
+# (rpe/learned/melodia_adapter.py) depends on Essentia, which is AGPL-3.0 —
+# docs/learned_models_policy.md restricts runtime dependencies to permissive
+# licenses and does not grant an AGPL exception. Publishing an installable
+# `[melodia]` extra would make this package's advertised dependency surface
+# contradict that canonical policy, so Melodia is left as a MANUAL / external
+# integration: a user who accepts the AGPL terms installs `essentia` by hand
+# and the adapter picks it up. Promoting it to a first-class extra requires an
+# approved exception recorded in docs/learned_models_policy.md first.
 
 [project.scripts]
 svprpe = "svp_rpe.cli:app"
@@ -96,3 +118,14 @@ markers = [
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+# Pin the lint rule SET to ruff's classic stable defaults so linting is
+# version-independent. The CI `dev` extra installs `ruff>=0.1` unpinned, and
+# newer ruff releases expand the *default* selection (FURB / UP / PERF / ...),
+# which would otherwise silently flag thousands of pre-existing lines repo-wide
+# and break CI on a mere toolchain bump — unrelated to any diff. Selecting the
+# historical defaults explicitly keeps behavior deterministic across ruff
+# versions. Adopting additional rule families is then a deliberate, reviewable
+# change to this list rather than an accident of `pip install`.
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
