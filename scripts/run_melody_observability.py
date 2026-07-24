@@ -1444,6 +1444,21 @@ def evaluate_m1_real_go_bar(
                     and not _is_sha256(row.get("assist_extractor_weights_sha256"))
                 ):
                     missing_fields.append("assist_extractor_weights_sha256")
+                # 推論コード pin（#217）。ハーネスは measured 行に必ず emit する
+                # （抽出器自身 + backend の閉包。pyin も librosa を pin）。registry の
+                # code_sha256 が未記録の間これを要求しないと、手書き report が
+                # extractor_code_sha256 等を削っても `_route_provenance` は「両方欠落 =
+                # 一致」として通し、推論コード未 pin のまま go を publish できてしまう。
+                if not _is_sha256(row.get("extractor_code_sha256")):
+                    missing_fields.append("extractor_code_sha256")
+                if row.get("assist_status") == "measured" and not _is_sha256(
+                    row.get("assist_extractor_code_sha256")
+                ):
+                    missing_fields.append("assist_extractor_code_sha256")
+                if route in separation_routes and not _is_sha256(
+                    (row.get("preprocessing") or {}).get("separation_code_sha256")
+                ):
+                    missing_fields.append("preprocessing.separation_code_sha256")
                 if missing_fields:
                     raise ValueError(
                         f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} in "

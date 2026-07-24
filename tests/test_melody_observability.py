@@ -1727,6 +1727,11 @@ def _make_go_bar_report(
                 }
             row["source_model"] = f"{route}:model"
             row["extractor_version"] = "0.0.13"
+            # #217: measured 行は推論コード pin も必須（抽出器自身 + backend の閉包）。
+            row["extractor_code_sha256"] = hashlib.sha256(
+                f"{route_extractor.get(route)}:code".encode()
+            ).hexdigest()
+            row["extractor_code_packages"] = [str(route_extractor.get(route))]
             # #59: measured 学習抽出器（crepe/basic_pitch/melodia）は重み hash 必須。
             # repeats 間で一致させるため extractor 由来の決定論値を使う。
             if route_extractor.get(route) in ("crepe", "basic_pitch", "melodia"):
@@ -1744,6 +1749,9 @@ def _make_go_bar_report(
                 row["assist_extractor_weights_sha256"] = hashlib.sha256(
                     f"{route_assist[route]}:assist-weights".encode()
                 ).hexdigest()
+                row["assist_extractor_code_sha256"] = hashlib.sha256(
+                    f"{route_assist[route]}:assist-code".encode()
+                ).hexdigest()
             if route.startswith("demucs_vocals_"):
                 row["preprocessing"] = {
                     "preprocessing": "demucs_vocals",
@@ -1755,6 +1763,11 @@ def _make_go_bar_report(
                     "separation_weights_sha256": hashlib.sha256(
                         b"htdemucs_ft:4.0.1:weights"
                     ).hexdigest(),
+                    # #217: 分離側の推論コード pin（demucs + torch の閉包）。
+                    "separation_code_sha256": hashlib.sha256(
+                        b"demucs+torch:code"
+                    ).hexdigest(),
+                    "separation_code_packages": ["demucs", "torch"],
                 }
         return row
 
@@ -2067,6 +2080,49 @@ def test_evaluate_go_bar_rejects_mismatched_recorded_extractor_version():
     registry = _registry_with_weight_pin("crepe", recorded, version="0.0.99")
     with pytest.raises(ValueError, match="model_weights.crepe.version"):
         harness.evaluate_m1_real_go_bar(reports, registry)
+
+
+@pytest.mark.parametrize(
+    "strip, expected",
+    [
+        ("extractor_code_sha256", "extractor_code_sha256"),
+        ("separation_code_sha256", "preprocessing.separation_code_sha256"),
+    ],
+)
+def test_evaluate_go_bar_requires_code_pins_on_measured_rows(strip, expected):
+    """measured 行は推論コード pin を必須（registry 未記録でも要求する・#217）。
+
+    要求しないと、手書き report が code pin を削っても `_route_provenance` は
+    「両方欠落 = 一致」として通し、推論コード未 pin のまま go を publish できる。
+    """
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    reports = [_make_go_bar_report(outcomes) for _ in range(2)]
+    for report in reports:
+        for info in report["fixtures"].values():
+            for row in info["routes"]:
+                if row["route"] != _GO_BAR_ROUTE:
+                    continue
+                if strip == "extractor_code_sha256":
+                    row.pop("extractor_code_sha256", None)
+                else:
+                    row.get("preprocessing", {}).pop("separation_code_sha256", None)
+    with pytest.raises(ValueError, match=expected.replace(".", r"\.")):
+        harness.evaluate_m1_real_go_bar(reports, _go_bar_registry())
+
+
+def test_evaluate_go_bar_requires_assist_code_pin_when_measured():
+    """assist が measured なら assist の推論コード pin も必須（#217）。"""
+    import scripts.run_melody_observability as harness
+
+    reports = _full_mix_go_bar_reports(
+        mutate=lambda row: row.pop("assist_extractor_code_sha256", None)
+    )
+    with pytest.raises(ValueError, match="assist_extractor_code_sha256"):
+        harness.evaluate_m1_real_go_bar(reports, _go_bar_registry(input_kind="full_mix"))
 
 
 def test_evaluate_go_bar_rejects_mismatched_recorded_code_pin():
