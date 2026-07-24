@@ -597,6 +597,42 @@ def test_isolate_vocals_with_provenance_emits_stem_and_weights_hashes(monkeypatc
     assert "htdemucs_ft.yaml" in result.weights_filenames
 
 
+def test_isolate_vocals_rejects_weights_swapped_during_separation(monkeypatch, tmp_path):
+    """分離中に重みが差し替わったら stem を返さず unavailable（TOCTOU・Codex #217）。
+
+    hash を採った後に別プロセスが cache を provisioning/更新すると、pin は旧 bytes を
+    指しつつ stem は新 bytes 由来になりうる。対応しない pin を publish するより、
+    その経路を unavailable として記録する方が正しい。
+    """
+    adapter, weights_dir = _provision_gate(monkeypatch, tmp_path, weights_present=True)
+    sr = 16000
+    vocals = np.zeros(sr, dtype=np.float32)
+
+    def swap_then_separate(*args, **kwargs):
+        # 分離の最中に別プロセスが cache を差し替えた状況を模す。
+        target = weights_dir / adapter._expected_weight_filenames("htdemucs_ft")[0]
+        target.write_bytes(b"replacement-checkpoint-bytes")
+        return _fake_stem_bundle(vocals, sr)
+
+    monkeypatch.setattr(adapter, "separate_stems", swap_then_separate)
+    with pytest.raises(LearnedModelUnavailable, match="changed during separation"):
+        adapter.isolate_vocals_with_provenance("whatever.wav")
+
+
+def test_isolate_vocals_reports_unavailable_when_weights_vanish_mid_run(monkeypatch, tmp_path):
+    """分離中に重みが消えた場合も pin を出さず unavailable（run は完走する）。"""
+    adapter, weights_dir = _provision_gate(monkeypatch, tmp_path, weights_present=True)
+    sr = 16000
+
+    def delete_then_separate(*args, **kwargs):
+        (weights_dir / adapter._expected_weight_filenames("htdemucs_ft")[0]).unlink()
+        return _fake_stem_bundle(np.zeros(sr, dtype=np.float32), sr)
+
+    monkeypatch.setattr(adapter, "separate_stems", delete_then_separate)
+    with pytest.raises(LearnedModelUnavailable, match="disappeared during separation"):
+        adapter.isolate_vocals_with_provenance("whatever.wav")
+
+
 def test_separation_weights_pin_covers_bag_metadata(monkeypatch, tmp_path):
     """同一チェックポイントでも bag YAML が違えば weights pin が変わる（Codex #217）。
 

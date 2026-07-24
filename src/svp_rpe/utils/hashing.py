@@ -39,12 +39,18 @@ def sha256_of_float32(samples: "np.ndarray") -> str:
     return hashlib.sha256(np.ascontiguousarray(samples, dtype=np.float32).tobytes()).hexdigest()
 
 
-def file_sha256(path: Union[str, Path]) -> str:
-    """1 ファイルの sha256（chunk 読み・(path, size, mtime) で memoize）。"""
+def file_sha256(path: Union[str, Path], *, use_cache: bool = True) -> str:
+    """1 ファイルの sha256（chunk 読み・(path, size, mtime) で memoize）。
+
+    `use_cache=False` は memo を**読まずに**必ず実バイトを読み直す。使用時点での
+    再検証（TOCTOU 検出: hash した後に別プロセスが同じ path のファイルを差し替えた
+    可能性を潰す）に使う — size/mtime が偶然一致する差し替えでも検出できるように、
+    キャッシュ判定そのものを迂回する。
+    """
     resolved = Path(path).resolve()
     stat = resolved.stat()
     key = (str(resolved), stat.st_size, stat.st_mtime_ns)
-    cached = _FILE_DIGEST_CACHE.get(key)
+    cached = _FILE_DIGEST_CACHE.get(key) if use_cache else None
     if cached is not None:
         return cached
     digest = hashlib.sha256()
@@ -57,7 +63,10 @@ def file_sha256(path: Union[str, Path]) -> str:
 
 
 def sha256_of_files(
-    paths: Iterable[Union[str, Path]], *, root: Union[str, Path, None] = None
+    paths: Iterable[Union[str, Path]],
+    *,
+    root: Union[str, Path, None] = None,
+    use_cache: bool = True,
 ) -> str:
     """複数ファイルを 1 本の digest に畳む（名前 + NUL + 内容 digest、名前順）。
 
@@ -81,7 +90,7 @@ def sha256_of_files(
                 label = resolved.name
         else:
             label = resolved.name
-        entries.append((label, file_sha256(resolved)))
+        entries.append((label, file_sha256(resolved, use_cache=use_cache)))
     entries.sort()
     combined = hashlib.sha256()
     for name, digest in entries:

@@ -413,10 +413,14 @@ def isolate_vocals_with_provenance(
     入らない（D-1）。それでも重み取得に起因する例外が漏れた場合は
     `LearnedModelUnavailable` へ写像し、`--external` run を落とさない。
 
+    分離**後**に重みを再 hash して pin と一致することを確認する（TOCTOU）。別プロセスが
+    実行中に cache を差し替えると、pin は旧 bytes・stem は新 bytes 由来という乖離が
+    起きうるため、一致しなければ stem を返さず `LearnedModelUnavailable` にする。
+
     Raises
     ------
     LearnedModelUnavailable
-        demucs 未導入 / 重み未取得 / 重み取得起因の失敗のとき。
+        demucs 未導入 / 重み未取得 / 重み取得起因の失敗 / 実行中に重みが変化したとき。
     """
     weights = resolve_separation_weights(model)
     try:
@@ -427,6 +431,25 @@ def isolate_vocals_with_provenance(
         # 重み取得に起因する失敗（CDN 遮断・cache 破損・torch hub の RuntimeError）を
         # 他の optional 抽出器と同じ失敗形へ写像する。元例外は `from exc` で連鎖を保つ。
         raise LearnedModelUnavailable(_weights_failure_message(exc)) from exc
+    # 使用時点での再検証（TOCTOU・Codex #217）。hash を採ってから demucs が独立に
+    # 同じファイルを開くまでの間に、別プロセスが cache を provisioning / upgrade /
+    # 差し替えすると、pin は旧 bytes を指しつつ stem は新 bytes 由来になりうる。
+    # 分離後にもう一度（memo を迂回して）実バイトを読み、pin と一致しなければ
+    # **stem を返さない** — 対応しない pin を publish するより unavailable が正しい。
+    try:
+        post_sha256 = sha256_of_files(weights.paths, use_cache=False)
+    except OSError as exc:
+        raise LearnedModelUnavailable(
+            f"demucs weights disappeared during separation ({type(exc).__name__}: {exc}); "
+            "pin と stem の対応を保証できないため unavailable として扱う"
+        ) from exc
+    if post_sha256 != weights.sha256:
+        raise LearnedModelUnavailable(
+            "demucs weights changed during separation "
+            f"(before={weights.sha256}, after={post_sha256}); "
+            "pin が stem を生んだモデル入力と対応しないため unavailable として扱う"
+            "（重みの provisioning/更新と実測 run を同時に走らせないこと）"
+        )
     waveform = np.asarray(bundle.stems["vocals"], dtype=np.float32)
     return VocalsSeparation(
         waveform=waveform,

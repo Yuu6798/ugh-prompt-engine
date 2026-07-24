@@ -333,6 +333,12 @@ torch を import できないときも env 由来へ落ちる（重み未取得�
 必須にしないため）。重みが未取得のときのエラーメッセージには、どちらの経路で解決したかも
 出る。
 
+**実行中の重み差し替え**（TOCTOU）: hash を採ってから demucs が独立に同じファイルを開く
+までの間に、別プロセスが cache を provisioning / 更新 / 差し替えると、pin は旧 bytes を
+指しつつ stem は新 bytes 由来になりうる。分離後に重みを再 hash（memo 迂回）して pin と
+一致することを確認し、食い違えば **stem を返さず `unavailable`** にする（対応しない pin を
+publish するより測定未達の方が正しい）。重みの provisioning と実測 run は同時に走らせないこと。
+
 第 3 状態を「利用可能」と誤認すると、遮断環境では torch hub の download が
 `urllib.error.URLError` を投げて `--external` run 全体が落ち、部分行も report も
 残らなかった（旧レシピが `.[separate]` を入れるなと書いていたのはこの穴の回避策）。
