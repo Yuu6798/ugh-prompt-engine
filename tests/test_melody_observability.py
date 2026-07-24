@@ -1561,6 +1561,67 @@ def test_evaluate_go_bar_requires_extractor_weights_for_measured_learned_route()
         harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
 
 
+def test_yaml_load_rejects_duplicate_registry_keys(tmp_path, monkeypatch):
+    """registry.yaml の重複 mapping キーを parse 時点で fail-closed（#60・JSON #46 と対称）。"""
+    import scripts.run_melody_observability as harness
+
+    # ヘルパー単体: 重複キー → raise、正常 → parse。
+    with pytest.raises(ValueError, match="duplicate YAML mapping key"):
+        harness._yaml_load_no_dup_keys("a: 1\na: 2\n", what="t")
+    assert harness._yaml_load_no_dup_keys("a: 1\nb: 2\n", what="t") == {"a": 1, "b": 2}
+
+    # _load_registry 経由: 実 registry に重複 m1_real_go_bar block を注入 → fail-closed。
+    reg_text = REGISTRY_PATH.read_text(encoding="utf-8")
+    dup_reg = tmp_path / "registry.yaml"
+    dup_reg.write_text(reg_text + "\nm1_real_go_bar: {duplicated: true}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="duplicate YAML mapping key"):
+        harness._load_registry(dup_reg)
+
+
+def test_evaluate_go_bar_rejects_placeholder_weight_pins():
+    """weights/stem/audio hash が真の sha256 でない（TBD 等）なら fail-closed（#61）。"""
+    import scripts.run_melody_observability as harness
+
+    assert harness._is_sha256("a" * 64) and not harness._is_sha256("TBD")
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+
+    # 学習抽出器の weights を placeholder に（両 repeats 同値でも真の sha256 でない）。
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+    for report in (r1, r2):
+        for row in report["fixtures"]["real_vocal_jrock"]["routes"]:
+            if row["route"] == _GO_BAR_ROUTE:
+                row["extractor_weights_sha256"] = "TBD"
+    with pytest.raises(ValueError, match="extractor_weights_sha256"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+    # 分離 stem を placeholder に。
+    r3 = _make_go_bar_report(outcomes)
+    r4 = _make_go_bar_report(outcomes)
+    for report in (r3, r4):
+        for row in report["fixtures"]["real_vocal_jrock"]["routes"]:
+            if row["route"] == _GO_BAR_ROUTE:
+                row["preprocessing"]["stem_sha256"] = "not-a-real-hash"
+    with pytest.raises(ValueError, match="stem_sha256/separation_weights_sha256"):
+        harness.evaluate_m1_real_go_bar([r3, r4], _go_bar_registry())
+
+    # expected_audio_sha256 を placeholder に。
+    r5 = _make_go_bar_report(outcomes)
+    r6 = _make_go_bar_report(outcomes)
+    reg = _go_bar_registry()
+    for entry in reg["external_fixtures"]:
+        if entry["id"] == "real_vocal_jrock":
+            entry["expected_audio_sha256"] = "TBD"
+    # report の audio も placeholder に合わせて一致させても、真の sha256 でないので弾く。
+    for report in (r5, r6):
+        report["fixtures"]["real_vocal_jrock"]["audio_sha256"] = "TBD"
+    with pytest.raises(ValueError, match="sha256"):
+        harness.evaluate_m1_real_go_bar([r5, r6], reg)
+
+
 def test_json_loads_rejects_duplicate_object_keys():
     """`_json_loads_no_dup_keys` は任意ネスト階層の重複 object キーを弾く（#46）。"""
     import scripts.run_melody_observability as harness

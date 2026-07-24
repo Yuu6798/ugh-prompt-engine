@@ -31,6 +31,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import sys
 import tempfile
 import uuid
@@ -93,9 +94,46 @@ def _load_registry(registry_path: "Path | None" = None) -> "tuple[Dict[str, Any]
     if registry_path is None:
         registry_path = REGISTRY_PATH
     data = Path(registry_path).read_bytes()
-    registry = yaml.safe_load(data)
+    registry = _yaml_load_no_dup_keys(data, what="registry.yaml")
     _require_registry_schema(registry)
     return registry, hashlib.sha256(data).hexdigest()
+
+
+class _NoDupSafeLoader(yaml.SafeLoader):
+    """重複 mapping キーを拒否する SafeLoader（#60。JSON 側 #46 と対称）。"""
+
+
+def _no_dup_construct_mapping(loader: "yaml.SafeLoader", node: Any, deep: bool = False) -> Dict[Any, Any]:
+    mapping: Dict[Any, Any] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            raise ValueError(
+                f"duplicate YAML mapping key {key!r}; stale/手書き registry が "
+                "last-wins で pre-registration block（m1_real_go_bar/observation_gate 等）を "
+                "隠す穴を弾く (fail-closed)"
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_NoDupSafeLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_dup_construct_mapping
+)
+
+
+def _yaml_load_no_dup_keys(data: "bytes | str", *, what: str) -> Any:
+    """重複 mapping キーを拒否して YAML を parse する（#60）。
+
+    PyYAML の `safe_load` は同一 mapping 内の重複キーを last-wins で黙って畳む。stale/手書きの
+    registry.yaml が同一キー（例: `m1_real_go_bar` や `observation_gate` を 2 回）を持つと、
+    registry_sha256 は矛盾する pre-registration bytes を pin しつつ評価器は最後の block だけを
+    採点しうる。report/manifest の JSON dup-key 拒否（#46）と対称に registry でも弾く。
+    """
+    try:
+        return yaml.load(data, Loader=_NoDupSafeLoader)  # noqa: S506 (dup-key 拒否付き SafeLoader)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"{what}: YAML parse error: {exc}") from exc
 
 
 def _json_loads_no_dup_keys(data: "bytes | str", *, what: str) -> Any:
@@ -513,6 +551,16 @@ def _fixture_route_rows(report: Dict[str, Any], fixture_id: str) -> Dict[str, Di
 # pyin は librosa DSP で重みなし。none は抽出器を当てない短絡。
 _LEARNED_EXTRACTORS: "frozenset[str]" = frozenset({"crepe", "basic_pitch", "melodia"})
 
+# provenance hash フィールドは真の sha256（64 桁 lowercase hex）でなければならない（#61）。
+# 「TBD」等のプレースホルダを truthy として受理すると、両 repeats が同一 placeholder のとき
+# model 入力が pin 済みと誤認され、content hash なしに Go を publish しうる。
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _is_sha256(value: Any) -> bool:
+    """`value` が真の sha256 digest（64 桁 lowercase hex）文字列なら True（#61）。"""
+    return isinstance(value, str) and bool(_SHA256_RE.match(value))
+
 
 def _route_provenance(row: Dict[str, Any]) -> "tuple":
     """route 行の model provenance 署名（source_model / extractor_version / 重み / 分離器）を返す。
@@ -812,7 +860,8 @@ def evaluate_m1_real_go_bar(
       欠く、または同一 fixture×route の provenance が repeats 間で不一致（欠落を「一致」と扱わず、
       別 model stack の run を n>=2 と誤認しない。同一 model/version でも別 weights/再生成 stem なら
       入力が変わるため、weights/stem hash なしに学習抽出器・分離経路を stable Go survivor に
-      数えない・設計 §2.3・#54/#59・Codex 指摘）
+      数えない・設計 §2.3・#54/#59・Codex 指摘）。weights/stem/audio の各 hash は真の sha256
+      （64 桁 hex）でなければならず、`"TBD"` 等のプレースホルダは pin と見なさず弾く（#61）
     - measured な route 行の `extractor` / preprocessing が凍結 route 定義
       （`select_routes`）と不一致、または `source_model` が期待抽出器ファミリのトークンを
       含まない（経路ラベル/provenance と実測抽出器のすり替えを許さない・Codex 指摘）
@@ -1086,6 +1135,12 @@ def evaluate_m1_real_go_bar(
                     f"evaluate_m1_real_go_bar: fixture {fixture_id!r} in reports[{idx}] lacks "
                     "audio_sha256; 素材の同一性を pin できず verdict を出せない (fail-closed)"
                 )
+            if not _is_sha256(audio_sha256):
+                raise ValueError(
+                    f"evaluate_m1_real_go_bar: fixture {fixture_id!r} in reports[{idx}] "
+                    f"audio_sha256 {audio_sha256!r} は真の sha256（64 桁 hex）でない; "
+                    "プレースホルダ pin を受理しない (fail-closed・#61)"
+                )
             audio_hashes.append(audio_sha256)
         if len(set(audio_hashes)) > 1:
             raise ValueError(
@@ -1109,6 +1164,12 @@ def evaluate_m1_real_go_bar(
                 "expected_audio_sha256 を持たない; 事前登録素材との binding なしに Go を "
                 "publish しない。slow-lane で operator が凍結素材の hash を記録し registry を "
                 "更新してから scoring する (fail-closed・#53)"
+            )
+        if not _is_sha256(expected_audio):
+            raise ValueError(
+                f"evaluate_m1_real_go_bar: go-bar fixture {fixture_id!r} の registry "
+                f"expected_audio_sha256 {expected_audio!r} は真の sha256（64 桁 hex）でない; "
+                "プレースホルダ pin を受理しない (fail-closed・#61)"
             )
         if fixture_audio_hash[fixture_id] != expected_audio:
             raise ValueError(
@@ -1170,9 +1231,11 @@ def evaluate_m1_real_go_bar(
                         # stable Go survivor に数えない（未 emit の分離経路は provenance 不足で
                         # 弾かれ、pyin 等の非分離経路や slow-lane での hash 記録後にのみ Go 可能。
                         # emit 自体は machine-dependent だが要求は machine-independent・#54）。
-                        if not preprocessing.get("stem_sha256") or not preprocessing.get(
-                            "separation_weights_sha256"
-                        ):
+                        # 真の sha256（64 桁 hex）を要求する。「TBD」等のプレースホルダを
+                        # truthy として受理すると両 repeats 同値で pin 済みと誤認される（#61）。
+                        if not _is_sha256(
+                            preprocessing.get("stem_sha256")
+                        ) or not _is_sha256(preprocessing.get("separation_weights_sha256")):
                             missing_fields.append(
                                 "preprocessing.stem_sha256/separation_weights_sha256"
                             )
@@ -1181,11 +1244,12 @@ def evaluate_m1_real_go_bar(
                 # 必須化し、これなしに学習抽出器経路を stable Go survivor に数えない（分離側の
                 # stem/weights と対称・#59）。凍結 route 定義の extractor で判定する（行の自己申告
                 # でなく・extractor は別途 route 定義と一致確認済み）。pyin は DSP で重みなしなので対象外。
+                # 真の sha256 を要求（プレースホルダを弾く・#61）。
                 route_def = expected_route_by_name.get(route)
                 if (
                     route_def is not None
                     and route_def.extractor in _LEARNED_EXTRACTORS
-                    and not row.get("extractor_weights_sha256")
+                    and not _is_sha256(row.get("extractor_weights_sha256"))
                 ):
                     missing_fields.append("extractor_weights_sha256")
                 if missing_fields:
