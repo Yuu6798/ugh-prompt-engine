@@ -552,6 +552,28 @@ def _evaluator_code_paths() -> "List[Path]":
     ]
 
 
+def _generator_code_paths() -> "List[Path]":
+    """report を生成するコード（harness ＋ 依存 melody モジュール）の resolved パス集合。
+
+    非 evaluate モード（`--external` / synthetic）は `_run_routes_on_file` 経由で
+    `svp_rpe.melody.extractors`（`observe_via_route` / `observe_assist_notes`）・
+    `observability`（`assess_observability` / gate）・`routing`（`select_routes` の
+    route matrix）を使って route 行と gate outcome を組み立てる。これらは report の
+    provenance を成す生成コードなので、`--out src/svp_rpe/melody/extractors.py` の typo で
+    生成直後に上書き破壊させない（evaluate 分岐が評価器コードを守るのと対称・#47/#49）。
+    """
+    import svp_rpe.melody.extractors as _extractors
+    import svp_rpe.melody.observability as _obs
+    import svp_rpe.melody.routing as _routing
+
+    return [
+        Path(__file__).resolve(),
+        Path(_extractors.__file__).resolve(),
+        Path(_obs.__file__).resolve(),
+        Path(_routing.__file__).resolve(),
+    ]
+
+
 def _evaluator_code_sha256() -> str:
     """verdict を解釈するコード（評価器＋依存モジュール）の digest。
 
@@ -1417,14 +1439,15 @@ def main() -> int:
         print(line)
     if args.out is not None:
         # evaluate-go-bar 側と対称に、--out が入力/重要 artifact を上書き破壊するのを
-        # 書き込み前に fail-closed。保護対象: 凍結 registry（両モード）、この harness
-        # スクリプト自身（report を生成している generator コード。`--external manifest.json
-        # --out scripts/run_melody_observability.py` の typo で harness 自体を JSON で
-        # atomic 上書きさせない・evaluate 分岐が評価器コードを守るのと対称・#47）、
-        # manifest 本体、各 source audio（external モードで results に resolved audio_path
-        # が載る）。例: `--external manifest.json --out manifest.json` は manifest を、
-        # `--out <source>.wav` は再現に必要な source audio を破壊する（Codex 指摘）。
-        protected_paths = {REGISTRY_PATH.resolve(), Path(__file__).resolve()}
+        # 書き込み前に fail-closed。保護対象: 凍結 registry（両モード）、report を生成する
+        # コード一式（`_generator_code_paths()`＝この harness ＋ 依存 melody モジュール
+        # extractors/observability/routing。`--external m.json --out
+        # src/svp_rpe/melody/extractors.py` の typo で route matrix/gate を組む generator
+        # コードを JSON で atomic 上書きさせない・evaluate 分岐が評価器コードを守るのと
+        # 対称・#47/#49）、manifest 本体、各 source audio（external モードで results に
+        # resolved audio_path が載る）。例: `--external manifest.json --out manifest.json`
+        # は manifest を、`--out <source>.wav` は再現に必要な source audio を破壊する。
+        protected_paths = {REGISTRY_PATH.resolve()} | set(_generator_code_paths())
         if args.external is not None:
             protected_paths.add(Path(args.external).resolve())
         else:
@@ -1442,9 +1465,9 @@ def main() -> int:
                 protected_paths.add(Path(audio_path).resolve())
         if Path(args.out).resolve() in protected_paths:
             raise ValueError(
-                f"--out {args.out} は保護対象パス（registry / harness / manifest / "
-                "source audio）と衝突する; 書き込みが再現に必要な入力/生成コードを破壊するため "
-                "拒否する (fail-closed)"
+                f"--out {args.out} は保護対象パス（registry / generator コード（harness ＋ "
+                "melody modules）/ manifest / source audio）と衝突する; 書き込みが再現に必要な "
+                "入力/生成コードを破壊するため拒否する (fail-closed)"
             )
         _atomic_write_text(
             args.out, json.dumps(results, indent=2, sort_keys=True)

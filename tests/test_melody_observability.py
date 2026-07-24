@@ -2208,6 +2208,59 @@ def test_report_mode_cli_rejects_out_overwriting_harness_source(monkeypatch, tmp
     assert harness_path.read_bytes() == before  # harness コードは無傷。
 
 
+def test_report_mode_cli_rejects_out_overwriting_generator_modules(monkeypatch, tmp_path):
+    """非 evaluate モードの --out が melody generator モジュールを指したら fail-closed（#49）。
+
+    report 生成は extractors / observability / routing を使って route matrix・gate を
+    組む。`--external m.json --out src/svp_rpe/melody/extractors.py` の typo でその
+    generator コードを JSON で atomic 上書き破壊させない（`_generator_code_paths()` で
+    harness ＋ 3 モジュールを一括保護）。
+    """
+    import json as _json
+
+    import svp_rpe.melody.extractors as _extractors
+    import svp_rpe.melody.observability as _obs
+    import svp_rpe.melody.routing as _routing
+
+    import scripts.run_melody_observability as harness
+
+    module_paths = [
+        Path(_extractors.__file__),
+        Path(_obs.__file__),
+        Path(_routing.__file__),
+    ]
+    # `_generator_code_paths()` がこの 3 モジュール（+ harness）を含むことを直接確認。
+    protected = set(harness._generator_code_paths())
+    for mp in module_paths:
+        assert mp.resolve() in protected
+
+    manifest = tmp_path / "m.json"
+    manifest.write_text(_json.dumps([]), encoding="utf-8")
+    monkeypatch.setattr(
+        harness, "run_synthetic", lambda: {"mode": "synthetic", "fixtures": {}}
+    )
+    monkeypatch.setattr(
+        harness, "run_external", lambda *a, **k: {"mode": "external", "fixtures": {}}
+    )
+    for mp in module_paths:
+        before = mp.read_bytes()
+        # synthetic 分岐。
+        monkeypatch.setattr(
+            sys, "argv", ["run_melody_observability", "--out", str(mp)]
+        )
+        with pytest.raises(ValueError, match="保護対象"):
+            harness.main()
+        assert mp.read_bytes() == before  # generator モジュールは無傷。
+        # external 分岐。
+        monkeypatch.setattr(
+            sys, "argv",
+            ["run_melody_observability", "--external", str(manifest), "--out", str(mp)],
+        )
+        with pytest.raises(ValueError, match="保護対象"):
+            harness.main()
+        assert mp.read_bytes() == before
+
+
 # --------------------------------------------------------------------------- #
 # slow lane: 合成 → 実 pyin 抽出の統合（正/負の対照）
 # --------------------------------------------------------------------------- #
