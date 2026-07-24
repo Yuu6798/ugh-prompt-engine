@@ -564,8 +564,10 @@ def evaluate_m1_real_go_bar(
       Codex 指摘）
     - 別素材であるべき go-bar fixture が同一 `audio_sha256` を共有（fixture 間で素材が
       重複すると「4 別素材の ≥3/4」が実質 1 素材で満たされる・Codex 指摘）
-    - `m1_real_go_bar` の positive_ids / negative_ids が非一意、または両者が重複
-      （凍結バー自身の typo で 1 素材を二重計上させない・Codex 指摘）
+    - `m1_real_go_bar` の positive_ids / negative_ids が非一意、両者が重複、
+      positive 本数が `total_positive` と不一致、または negative_ids が空
+      （凍結バー自身の typo で 1 素材の二重計上・素材数不足・偽陽性ガード欠落を許さない・
+      Codex 指摘）
     - いずれかの fixture の routes に同名 route 行が重複（last-wins で失敗/未観測行を
       隠蔽させない・Codex 指摘）
     - measured（gate outcome）な route 行が provenance フィールド（source_model /
@@ -647,6 +649,22 @@ def evaluate_m1_real_go_bar(
         raise ValueError(
             f"evaluate_m1_real_go_bar: positive_ids と negative_ids が重複 {overlap}; "
             "同一素材を positive と negative の両方に使えない (fail-closed)"
+        )
+    # 凍結バーの cardinality 整合。positive_ids の本数は total_positive と一致し、
+    # negative_ids は非空でなければならない。registry の typo で positive を 1 本落とすと
+    # 「3/3 で go」、negative_ids が空だと偽陽性ガードなしで go が通る（total_positive は
+    # 出力に echo されるだけで scoring には効かない）ため fail-closed（Codex 指摘・
+    # docs §6.1 の 4 素材 + negative バーを守る config 整合）。
+    total_positive = bar["total_positive"]
+    if len(positive_ids) != total_positive:
+        raise ValueError(
+            f"evaluate_m1_real_go_bar: positive_ids 数 {len(positive_ids)} != "
+            f"total_positive {total_positive}; 凍結バーの素材数が食い違う (fail-closed)"
+        )
+    if not negative_ids:
+        raise ValueError(
+            "evaluate_m1_real_go_bar: negative_ids が空; 偽陽性ガードなしで verdict を "
+            "出せない (fail-closed)"
         )
     # registry の external_fixtures が凍結した id → input_kind。report 自己申告の kind を
     # 信用せず、これを真として matrix を評価する（Codex 指摘）。

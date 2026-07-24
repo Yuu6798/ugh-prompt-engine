@@ -1480,6 +1480,30 @@ def test_evaluate_go_bar_fails_closed_on_duplicate_or_overlapping_bar_ids():
         harness.evaluate_m1_real_go_bar([r1, r2], reg_overlap)
 
 
+def test_evaluate_go_bar_fails_closed_on_bar_cardinality_mismatch():
+    """凍結バーの positive 本数が total_positive と不一致 / negative 空は fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+
+    # positive を 1 本落とす（3 本 != total_positive 4）→ 「3/3 で go」を防ぐ fail-closed。
+    reg_short = _go_bar_registry()
+    reg_short["m1_real_go_bar"]["positive_ids"] = list(
+        reg_short["m1_real_go_bar"]["positive_ids"]
+    )[:3]
+    with pytest.raises(ValueError, match="total_positive"):
+        harness.evaluate_m1_real_go_bar([r1, r2], reg_short)
+
+    # negative_ids を空に → 偽陽性ガードなしで go を防ぐ fail-closed。
+    reg_no_neg = _go_bar_registry()
+    reg_no_neg["m1_real_go_bar"]["negative_ids"] = []
+    with pytest.raises(ValueError, match="negative_ids"):
+        harness.evaluate_m1_real_go_bar([r1, r2], reg_no_neg)
+
+
 def test_evaluate_go_bar_fails_closed_on_extractor_label_mismatch():
     """route ラベルと実測 extractor がすり替わっていたら fail-closed。"""
     import scripts.run_melody_observability as harness
