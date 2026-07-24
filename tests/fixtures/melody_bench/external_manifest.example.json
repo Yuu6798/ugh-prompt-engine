@@ -1,0 +1,7 @@
+[
+  {"id": "real_vocal_jrock", "path": "REPLACE/kane_y2_vocals.wav", "input_kind": "vocal_track", "audio_sha256": null},
+  {"id": "real_vocal_futurepop", "path": "REPLACE/sev4_x2_vocals.wav", "input_kind": "vocal_track", "audio_sha256": null},
+  {"id": "real_vocal_band", "path": "REPLACE/kaze_k2_vocals.wav", "input_kind": "vocal_track", "audio_sha256": null},
+  {"id": "real_vocal_waltz", "path": "REPLACE/crslv2_w3_vocals.wav", "input_kind": "vocal_track", "audio_sha256": null},
+  {"id": "real_instrumental_negative", "path": "REPLACE/instrumental_region.wav", "input_kind": "vocal_track", "audio_sha256": null}
+]

@@ -14,10 +14,15 @@
 - 外部素材（`--external <manifest.json>`）: 正解 MIDI を持たない実素材
   （Suno vocals stem 等）の観測可能性のみを測る slow/manual lane 用。
 
+さらに `--evaluate-go-bar <report.json> [...]` は、上記 external モードで得た
+report（n>=2 の繰り返し実行）に対し registry.yaml の凍結済み `m1_real_go_bar` を
+機械適用し Go/No-Go を出す（抽出は行わない・独立モード）。
+
 使い方::
 
     python scripts/run_melody_observability.py --out /tmp/melody_obs.json
     python scripts/run_melody_observability.py --external ext.json --out /tmp/ext_obs.json
+    python scripts/run_melody_observability.py --evaluate-go-bar run1.json run2.json --out verdict.json
 """
 from __future__ import annotations
 
@@ -435,6 +440,164 @@ def run_external(
     return results
 
 
+def _fixture_route_outcomes(report: Dict[str, Any], fixture_id: str) -> Dict[str, str]:
+    """`report` 中の `fixture_id` について route 名 → outcome の map を返す。"""
+    info = report["fixtures"][fixture_id]
+    return {row["route"]: row["outcome"] for row in info["routes"]}
+
+
+def _is_stably_sufficient(reports: List[Dict[str, Any]], fixture_id: str, route: str) -> bool:
+    """全 report でその route が観測され、かつ全て outcome=='sufficient' なら True。
+
+    route が一部の report に存在しない、または unavailable 等の非観測 outcome を
+    1 回でも含む場合は False（実行揺れ・環境差を素通りさせない）。
+    """
+    for report in reports:
+        outcomes = _fixture_route_outcomes(report, fixture_id)
+        if outcomes.get(route) != "sufficient":
+            return False
+    return True
+
+
+def _is_ever_sufficient(reports: List[Dict[str, Any]], fixture_id: str, route: str) -> bool:
+    """いずれか 1 つの report で outcome=='sufficient' なら True（保守的な偽陽性判定）。"""
+    return any(
+        _fixture_route_outcomes(report, fixture_id).get(route) == "sufficient"
+        for report in reports
+    )
+
+
+def evaluate_m1_real_go_bar(
+    reports: List[Dict[str, Any]], registry: Dict[str, Any]
+) -> Dict[str, Any]:
+    """凍結済み `registry["m1_real_go_bar"]` を `reports`（external モード n>=2 回）へ機械適用する。
+
+    本関数は事前登録済みバー（≥3/4 sufficient・偽陽性 0）を**そのまま機械算出するだけ**
+    で、閾値を緩めたり実測データを見て調整したりしない（`one_way_rule` の延長・設計 §5）。
+
+    fail-closed 条件（誤った Go 判定を出さないための拒否）:
+
+    - `reports` が空
+    - いずれかの report の `mode` が ``"external"`` でない（synthetic report を
+      混ぜて判定できない）
+    - 複数 report 間で `registry_sha256` または `observation_gate` が食い違う
+      （異なる凍結バー・閾値下で測定した report を混ぜて判定するのは無効）
+    - `m1_real_go_bar` の positive_ids / negative_ids のいずれかが、**いずれかの**
+      report の fixtures に欠けている（全 pre-registered fixture を n>=2 で測定
+      してからでないと verdict を主張できない）
+
+    ゲート outcome は ``"sufficient"`` / ``"insufficient"`` のみを指す
+    （``"unavailable"`` / ``"not_observed_by_routing"`` / ``"not_applicable"`` は
+    非観測として扱い、stably/ever のいずれの sufficient にも数えない）。
+
+    各候補 route（positive fixture 群で観測された route 名の和集合）について:
+
+    - ``stably_sufficient``: 全 report でその route が観測され、かつ全て
+      outcome=='sufficient'
+    - ``ever_sufficient``: いずれか 1 回でも outcome=='sufficient'
+      （偽陽性判定は保守的に「1 回でも旋律を幻視したら失格」とする）
+    - ``pos_sufficient`` = positive_ids のうち stably_sufficient な数
+    - ``neg_false_positive`` = negative_ids のうち ever_sufficient な数
+    - ``surviving`` = pos_sufficient >= min_positive_sufficient かつ
+      neg_false_positive <= max_negative_false_positive
+
+    verdict は、surviving な route が 1 本でもあれば ``"go"``、無ければ
+    ``"no_go"``。"partial" 帯の解釈は人間の記録判断に委ねる（判定に必要な
+    per-route データを返り値にすべて含める）。
+    """
+    if not reports:
+        raise ValueError("evaluate_m1_real_go_bar: reports is empty (fail-closed)")
+
+    for idx, report in enumerate(reports):
+        mode = report.get("mode")
+        if mode != "external":
+            raise ValueError(
+                f"evaluate_m1_real_go_bar: reports[{idx}] has mode {mode!r}, "
+                "expected 'external' (fail-closed; M1-real Go bar は external 実測のみを対象とする)"
+            )
+
+    ref_registry_sha256 = reports[0]["registry_sha256"]
+    ref_observation_gate = reports[0]["observation_gate"]
+    for idx, report in enumerate(reports[1:], start=1):
+        if report["registry_sha256"] != ref_registry_sha256:
+            raise ValueError(
+                "evaluate_m1_real_go_bar: reports disagree on registry_sha256 "
+                f"(reports[0]={ref_registry_sha256!r} vs reports[{idx}]={report['registry_sha256']!r}); "
+                "異なる凍結バー下で測定した report を混ぜて判定できない (fail-closed)"
+            )
+        if report["observation_gate"] != ref_observation_gate:
+            raise ValueError(
+                f"evaluate_m1_real_go_bar: reports disagree on observation_gate at reports[{idx}]; "
+                "異なる閾値スナップショット下で測定した report を混ぜて判定できない (fail-closed)"
+            )
+
+    bar = registry["m1_real_go_bar"]
+    positive_ids: List[str] = list(bar["positive_ids"])
+    negative_ids: List[str] = list(bar["negative_ids"])
+    min_positive_sufficient = bar["min_positive_sufficient"]
+    max_negative_false_positive = bar["max_negative_false_positive"]
+
+    for fixture_id in positive_ids + negative_ids:
+        missing_in = [
+            idx for idx, report in enumerate(reports) if fixture_id not in report.get("fixtures", {})
+        ]
+        if missing_in:
+            raise ValueError(
+                f"evaluate_m1_real_go_bar: required fixture {fixture_id!r} missing from "
+                f"reports{missing_in}; 全事前登録 fixture を n>=2 で測定してからでないと "
+                "verdict を主張できない (fail-closed)"
+            )
+
+    candidate_routes: set[str] = set()
+    for report in reports:
+        for fixture_id in positive_ids:
+            candidate_routes.update(_fixture_route_outcomes(report, fixture_id))
+
+    routes_out: Dict[str, Dict[str, Any]] = {}
+    surviving_routes: List[str] = []
+    for route in sorted(candidate_routes):
+        pos_sufficient = sum(
+            1 for fid in positive_ids if _is_stably_sufficient(reports, fid, route)
+        )
+        neg_false_positive = sum(
+            1 for fid in negative_ids if _is_ever_sufficient(reports, fid, route)
+        )
+        unstable_positive_ids = sorted(
+            fid
+            for fid in positive_ids
+            if _is_ever_sufficient(reports, fid, route)
+            and not _is_stably_sufficient(reports, fid, route)
+        )
+        surviving = (
+            pos_sufficient >= min_positive_sufficient
+            and neg_false_positive <= max_negative_false_positive
+        )
+        routes_out[route] = {
+            "pos_sufficient": pos_sufficient,
+            "neg_false_positive": neg_false_positive,
+            "unstable_positive_ids": unstable_positive_ids,
+        }
+        if surviving:
+            surviving_routes.append(route)
+
+    surviving_routes.sort()
+    return {
+        "verdict": "go" if surviving_routes else "no_go",
+        "registry_sha256": ref_registry_sha256,
+        "n_reports": len(reports),
+        "surviving_routes": surviving_routes,
+        "bar": {
+            "min_positive_sufficient": min_positive_sufficient,
+            "max_negative_false_positive": max_negative_false_positive,
+            "total_positive": bar["total_positive"],
+            "repeats_min": bar["repeats_min"],
+        },
+        "routes": dict(sorted(routes_out.items())),
+        "positive_ids": positive_ids,
+        "negative_ids": negative_ids,
+    }
+
+
 def summarize(results: Dict[str, Any]) -> List[str]:
     lines = [f"# melody observability ({results['mode']} mode)"]
     for fid, info in results["fixtures"].items():
@@ -448,13 +611,54 @@ def summarize(results: Dict[str, Any]) -> List[str]:
     return lines
 
 
+def summarize_go_bar(verdict: Dict[str, Any]) -> List[str]:
+    lines = [f"# M1-real Go bar evaluation: {verdict['verdict'].upper()}"]
+    lines.append(
+        f"registry_sha256={verdict['registry_sha256']}  n_reports={verdict['n_reports']}"
+    )
+    lines.append(f"bar: {verdict['bar']}")
+    lines.append(f"surviving_routes: {verdict['surviving_routes']}")
+    lines.append("routes:")
+    for name, info in verdict["routes"].items():
+        lines.append(
+            f"  - {name:<28} pos_sufficient={info['pos_sufficient']} "
+            f"neg_false_positive={info['neg_false_positive']} "
+            f"unstable_positive_ids={info['unstable_positive_ids']}"
+        )
+    return lines
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, help="観測表 JSON の出力先")
     parser.add_argument(
         "--external", type=Path, help="外部素材 manifest（正解なし実素材の観測可能性）"
     )
+    parser.add_argument(
+        "--evaluate-go-bar",
+        type=Path,
+        nargs="+",
+        metavar="REPORT_JSON",
+        help=(
+            "凍結済み M1-real Go bar (registry.yaml の m1_real_go_bar) を external "
+            "report JSON（n>=2 の繰り返し実行）から機械評価する。抽出は行わず、"
+            "--external/synthetic 実行とは独立したモード（同時指定時はこちらのみ実行）"
+        ),
+    )
     args = parser.parse_args()
+
+    if args.evaluate_go_bar is not None:
+        registry, _ = _load_registry()
+        reports = [
+            json.loads(path.read_text(encoding="utf-8")) for path in args.evaluate_go_bar
+        ]
+        verdict = evaluate_m1_real_go_bar(reports, registry)
+        for line in summarize_go_bar(verdict):
+            print(line)
+        if args.out is not None:
+            _atomic_write_text(args.out, json.dumps(verdict, indent=2, sort_keys=True))
+            print(f"\nwrote {args.out}")
+        return 0
 
     # thresholds は run_synthetic / run_external が registry の single read から
     # 構築する（別途 load_thresholds を呼ぶと registry を二重 read してしまう）。

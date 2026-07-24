@@ -71,6 +71,30 @@ one_way_rule: >
   自動進行しない（明示的な Go 判定を要求する）。
 
 # ---------------------------------------------------------------------------
+# M1-real Go bar（実測前に凍結・machine-dependent slow-lane 用）
+# ---------------------------------------------------------------------------
+# 下記 external_fixtures の M1-real 素材（real_vocal_* 4 本 + real_instrumental_
+# negative 1 本）に対する Go/No-Go の合否バーを、実測を見る前にここで凍結する
+# （one_way_rule と同型の一方向規律）。判定は
+# `scripts/run_melody_observability.py` の `evaluate_m1_real_go_bar` が
+# このバーから機械算出し、各 report の `registry_sha256` に紐づく。実データを見て
+# から閾値・バーを緩めてはならない。
+m1_real_go_bar:
+  registered_utc: "2026-07-24"
+  positive_ids: [real_vocal_jrock, real_vocal_futurepop, real_vocal_band, real_vocal_waltz]
+  negative_ids: [real_instrumental_negative]
+  total_positive: 4
+  min_positive_sufficient: 3        # ≥3/4 が sufficient
+  max_negative_false_positive: 0    # 偽陽性ゼロ
+  repeats_min: 2                     # 各素材×経路 n≥2（実行揺れ確認・決定論なら一致）
+  rule: >
+    本Go = positive 4 本中 ≥3 本で status=sufficient を返す経路が 1 本以上存在し、かつ
+    その経路が全 negative で insufficient（偽陽性ゼロ）。この (≥3/4, 偽陽性0) を実測前に
+    凍結する。実データを見てから閾値・バーを緩めてはならない（observation_gate の一方向
+    規則の延長）。判定は scripts/run_melody_observability.py の evaluate_m1_real_go_bar で
+    凍結バーから機械算出する（目視で緩めない）。
+
+# ---------------------------------------------------------------------------
 # fixture カテゴリ
 # ---------------------------------------------------------------------------
 # 設計 §3.1: 正解つきクリーン素材（少数）と 正解なし実素材（観測可能性のみ）を
@@ -130,6 +154,44 @@ external_fixtures:
     category: real_no_truth
     input_kind: clear_lead
     note: リードシンセ + 伴奏の実素材。非ボーカル経路。
+
+  # --- M1-real 事前登録（2026-07-24・machine-dependent slow-lane 実測待ち） ---
+  # 設計の vocal_song ラベルは routing.py の INPUT_KINDS に存在しないため、
+  # 本命経路（demucs_vocals_then_crepe / demucs_vocals_then_melodia）を両方持つ
+  # vocal_track へ写像する（docs/melody_observability.md §6 参照）。
+  - id: real_vocal_jrock
+    category: real_no_truth
+    input_kind: vocal_track
+    source: kane_y2
+    expect_status: sufficient
+    note: J-rock 系ボーカル曲。Demucs vocals 分離後 sufficient を期待。
+  - id: real_vocal_futurepop
+    category: real_no_truth
+    input_kind: vocal_track
+    source: sev4_x2
+    expect_status: sufficient
+    note: future-pop 系ボーカル曲。
+  - id: real_vocal_band
+    category: real_no_truth
+    input_kind: vocal_track
+    source: kaze_k2
+    expect_status: sufficient
+    note: バンド系ボーカル曲。
+  - id: real_vocal_waltz
+    category: real_no_truth
+    input_kind: vocal_track
+    source: crslv2_w3
+    expect_status: sufficient
+    note: 3拍子・器楽厚めボーカル曲（難所）。
+  - id: real_instrumental_negative
+    category: real_no_truth
+    input_kind: vocal_track
+    expect_status: insufficient
+    note: >
+      自作曲の器楽のみ区間（ボーカル旋律なし）。vocal_track として本命経路
+      （Demucs→CREPE/Melodia）を通し、旋律不在で偽陽性（sufficient）を出さないことを
+      実証する誤検出ガード。この経路が negative で sufficient を返したら不採用
+      （一方向規則）。
 
 # ---------------------------------------------------------------------------
 # provenance（AGENTS §8）

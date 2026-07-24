@@ -881,6 +881,198 @@ def test_pair_manifest_pins_source_sha256(tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
+# M1-real Go bar 事前登録 + 機械評価器（CI 安全・機械依存の実測は含まない）
+# --------------------------------------------------------------------------- #
+def test_registry_has_m1_real_go_bar_preregistered():
+    """m1_real_go_bar が凍結どおり登録され、4 positive + 1 negative が vocal_track で揃う。"""
+    registry = yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))
+    bar = registry["m1_real_go_bar"]
+    assert bar["min_positive_sufficient"] == 3
+    assert bar["max_negative_false_positive"] == 0
+    assert bar["total_positive"] == 4
+    assert len(bar["positive_ids"]) == 4
+    assert len(bar["negative_ids"]) == 1
+
+    external_by_id = registry["external_fixtures"]
+    ids_seen = [f["id"] for f in external_by_id]
+    # 各 go-bar positive/negative id はちょうど 1 回だけ登録される。
+    for fid in bar["positive_ids"] + bar["negative_ids"]:
+        assert ids_seen.count(fid) == 1, fid
+
+    by_id = {f["id"]: f for f in external_by_id}
+    for fid in bar["positive_ids"] + bar["negative_ids"]:
+        assert fid in by_id, fid
+        assert by_id[fid]["input_kind"] == "vocal_track", fid
+
+
+def _make_go_bar_report(
+    route_outcomes: "dict[str, dict[str, str]]",
+    registry_sha256: str = "f" * 64,
+) -> "dict":
+    """{fixture_id: {route_name: outcome}} から external report dict を組み立てる。
+
+    evaluate_m1_real_go_bar のテスト専用ヘルパー。observation_gate は実際の
+    registry 由来の thresholds snapshot（asdict）を使う（本物の external report
+    形状に合わせる）。
+    """
+    import dataclasses
+
+    thresholds = _default_thresholds()
+    fixtures = {}
+    for fixture_id, routes in route_outcomes.items():
+        fixtures[fixture_id] = {
+            "input_kind": "vocal_track",
+            "expect_status": None,
+            "audio_path": f"/fake/{fixture_id}.wav",
+            "audio_sha256": "0" * 64,
+            "routes": [
+                {"route": route, "extractor": "crepe", "outcome": outcome, "report": None}
+                for route, outcome in routes.items()
+            ],
+        }
+    return {
+        "mode": "external",
+        "manifest_path": "fake_manifest.json",
+        "manifest_sha256": "0" * 64,
+        "registry_sha256": registry_sha256,
+        "thresholds_source": "registry",
+        "observation_gate": dataclasses.asdict(thresholds),
+        "fixtures": fixtures,
+    }
+
+
+_GO_BAR_POSITIVES = (
+    "real_vocal_jrock",
+    "real_vocal_futurepop",
+    "real_vocal_band",
+    "real_vocal_waltz",
+)
+_GO_BAR_NEGATIVE = "real_instrumental_negative"
+_GO_BAR_ROUTE = "demucs_vocals_then_crepe"
+
+
+def _go_bar_registry():
+    return yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))
+
+
+def test_evaluate_go_bar_go_when_survivor():
+    """3/4 positive が両 report で安定 sufficient・negative は insufficient → go。"""
+    import scripts.run_melody_observability as harness
+
+    def route_outcomes(waltz_outcome="insufficient"):
+        outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+        outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: waltz_outcome}
+        outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+        return outcomes
+
+    report1 = _make_go_bar_report(route_outcomes())
+    report2 = _make_go_bar_report(route_outcomes())
+    verdict = harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
+    assert verdict["verdict"] == "go"
+    assert _GO_BAR_ROUTE in verdict["surviving_routes"]
+    assert verdict["routes"][_GO_BAR_ROUTE]["pos_sufficient"] == 3
+    assert verdict["routes"][_GO_BAR_ROUTE]["neg_false_positive"] == 0
+
+
+def test_evaluate_go_bar_no_go_below_threshold():
+    """crepe sufficient が 2/4 positive のみ → no_go、surviving_routes は空。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {
+        "real_vocal_jrock": {_GO_BAR_ROUTE: "sufficient"},
+        "real_vocal_futurepop": {_GO_BAR_ROUTE: "sufficient"},
+        "real_vocal_band": {_GO_BAR_ROUTE: "insufficient"},
+        "real_vocal_waltz": {_GO_BAR_ROUTE: "insufficient"},
+        _GO_BAR_NEGATIVE: {_GO_BAR_ROUTE: "insufficient"},
+    }
+    report1 = _make_go_bar_report(outcomes)
+    report2 = _make_go_bar_report(outcomes)
+    verdict = harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
+    assert verdict["verdict"] == "no_go"
+    assert verdict["surviving_routes"] == []
+    assert verdict["routes"][_GO_BAR_ROUTE]["pos_sufficient"] == 2
+
+
+def test_evaluate_go_bar_false_positive_disqualifies():
+    """positive 4/4 だが negative でも sufficient を出す route は失格 → no_go。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "sufficient"}  # 偽陽性
+    report1 = _make_go_bar_report(outcomes)
+    report2 = _make_go_bar_report(outcomes)
+    verdict = harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
+    assert verdict["verdict"] == "no_go"
+    assert verdict["surviving_routes"] == []
+    assert verdict["routes"][_GO_BAR_ROUTE]["pos_sufficient"] == 4
+    assert verdict["routes"][_GO_BAR_ROUTE]["neg_false_positive"] == 1
+
+
+def test_evaluate_go_bar_instability_not_counted():
+    """report 間で outcome が食い違う positive は stably_sufficient にならず no_go。"""
+    import scripts.run_melody_observability as harness
+
+    stable_outcomes = {
+        "real_vocal_jrock": {_GO_BAR_ROUTE: "sufficient"},
+        "real_vocal_futurepop": {_GO_BAR_ROUTE: "sufficient"},
+        "real_vocal_waltz": {_GO_BAR_ROUTE: "insufficient"},
+        _GO_BAR_NEGATIVE: {_GO_BAR_ROUTE: "insufficient"},
+    }
+    report1 = _make_go_bar_report(
+        {**stable_outcomes, "real_vocal_band": {_GO_BAR_ROUTE: "sufficient"}}
+    )
+    report2 = _make_go_bar_report(
+        {**stable_outcomes, "real_vocal_band": {_GO_BAR_ROUTE: "insufficient"}}
+    )
+    verdict = harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
+    # jrock/futurepop の 2 本のみ安定 sufficient（<3）→ no_go。
+    assert verdict["verdict"] == "no_go"
+    assert verdict["routes"][_GO_BAR_ROUTE]["pos_sufficient"] == 2
+    assert "real_vocal_band" in verdict["routes"][_GO_BAR_ROUTE]["unstable_positive_ids"]
+
+
+def test_evaluate_go_bar_fails_closed_on_missing_fixture():
+    """事前登録済み fixture が report から丸ごと欠けていたら id を名指しして ValueError。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    del outcomes["real_vocal_waltz"]  # 1 本まるごと欠落。
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    report1 = _make_go_bar_report(outcomes)
+    report2 = _make_go_bar_report(outcomes)
+    with pytest.raises(ValueError, match="real_vocal_waltz"):
+        harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_fails_closed_on_registry_mismatch():
+    """report 間で registry_sha256 が食い違えば fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    report1 = _make_go_bar_report(outcomes, registry_sha256="a" * 64)
+    report2 = _make_go_bar_report(outcomes, registry_sha256="b" * 64)
+    with pytest.raises(ValueError, match="registry_sha256"):
+        harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_rejects_empty_and_non_external():
+    """空の reports、および mode!='external' な report は fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    with pytest.raises(ValueError, match="reports is empty"):
+        harness.evaluate_m1_real_go_bar([], _go_bar_registry())
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    report1 = _make_go_bar_report(outcomes)
+    report2 = _make_go_bar_report(outcomes)
+    report2["mode"] = "synthetic"
+    with pytest.raises(ValueError, match="mode"):
+        harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
+
+
+# --------------------------------------------------------------------------- #
 # slow lane: 合成 → 実 pyin 抽出の統合（正/負の対照）
 # --------------------------------------------------------------------------- #
 @pytest.mark.slow

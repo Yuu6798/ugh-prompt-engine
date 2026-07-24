@@ -196,3 +196,78 @@ python scripts/run_melody_observability.py --external ext.json --out ext_obs.jso
 
 §4.1 の数値は上記環境の pyin 経路実測。異バージョン環境での再実行は本記録の検証
 範囲外であり、差異が出ても「壊れた」ではなく新しい日付の再実測として記録する。
+
+## 6. M1-real 事前登録（実測待ち・2026-07-24）
+
+§4.2 で繰延した実利用入力帯（Suno vocals stem 相当の実ボーカル曲）の slow-lane
+実測に向け、**測定を見る前に**合否バーと素材を凍結した（`one_way_rule` と同型の
+規律）。本節はワイヤリングと事前登録のみを記録する — 測定値・Go/No-Go 判定は
+**含まない**（machine-dependent・slow/manual lane へ繰延）。
+
+### 6.1 凍結した Go bar
+
+`tests/fixtures/melody_bench/registry.yaml` の `m1_real_go_bar`（`registered_utc:
+"2026-07-24"`）:
+
+- positive 4 本中 **≥3 本**で `status=sufficient` を返す経路が 1 本以上存在
+  （`min_positive_sufficient: 3` / `total_positive: 4`）
+- その経路が全 negative で **偽陽性ゼロ**（`max_negative_false_positive: 0`）
+- 各素材×経路は **n≥2** 回実行して確認（`repeats_min: 2`。決定論抽出器なら一致する
+  はずで、実行揺れの有無自体も記録に値する）
+
+`external_fixtures` に登録した M1-real 素材（`category: real_no_truth`、全て
+`input_kind: vocal_track`）:
+
+| id | source | 役割 |
+|---|---|---|
+| `real_vocal_jrock` | kane_y2 | positive |
+| `real_vocal_futurepop` | sev4_x2 | positive |
+| `real_vocal_band` | kaze_k2 | positive |
+| `real_vocal_waltz` | crslv2_w3 | positive（3拍子・器楽厚めの難所） |
+| `real_instrumental_negative` | （自作曲の器楽区間） | negative（誤検出ガード） |
+
+判定は `scripts/run_melody_observability.py` の `evaluate_m1_real_go_bar` が
+この凍結バーから機械算出する（目視で緩めない）。
+
+### 6.2 vocal_song → vocal_track 写像
+
+設計上の `vocal_song` ラベルは `src/svp_rpe/melody/routing.py` の `INPUT_KINDS`
+（`vocal_track` / `clear_lead` / `full_mix` / `chord_pad_no_melody`）に存在しない。
+5 本すべてを `vocal_track` へ写像した。§3 の経路表のとおり、`vocal_track` は
+`demucs_vocals_then_crepe` と `demucs_vocals_then_melodia` の**両方**（§3.2 の
+本命経路）を持つ唯一のバケットであり、設計の狙い（Demucs 分離後の単旋律抽出器）
+と一致する。
+
+### 6.3 走らせるべき経路行列
+
+`vocal_track` の経路候補（§3 table 再掲）: `pyin_direct`（baseline sep 無し）/
+`demucs_vocals_then_pyin`（sep→pyin）/ `demucs_vocals_then_crepe`（sep→crepe・
+本命）/ `demucs_vocals_then_melodia`（sep→melodia・本命）。設計 §3.2 に準拠し、
+この 4 経路すべてを 5 素材（positive 4 + negative 1）× n≥2 で回す。
+
+### 6.4 slow-lane 実行レシピ（Cowork/User が実行）
+
+```bash
+# 重依存導入（Melodia を含めるなら essentia は AGPL-3.0・標準 CI/install には含めない）
+pip install -e ".[separate,pitch]"
+# pip install crepe        # CREPE（manual/external 統合・§5）
+# pip install essentia     # Melodia を測るなら（AGPL-3.0 を受容できる環境のみ）
+
+# tests/fixtures/melody_bench/external_manifest.example.json をコピーし、
+# REPLACE を実ファイルパスへ書き換える（audio_sha256 は null のままでよい・
+# ハーネスが実測して記録する）。
+
+# n>=2 回、それぞれ別ファイルへ観測表を書き出す。
+python scripts/run_melody_observability.py --external manifest.json --out run1.json
+python scripts/run_melody_observability.py --external manifest.json --out run2.json
+
+# 凍結バーを機械適用して Go/No-Go を得る。
+python scripts/run_melody_observability.py --evaluate-go-bar run1.json run2.json --out verdict.json
+```
+
+### 6.5 状態
+
+本節はワイヤリング + 事前登録のみ。実音声 + Demucs/CREPE/Essentia を要する
+実測は **machine-dependent** であり slow/manual lane（Cowork/User）へ繰延する。
+測定値・dated 実測記録・Go/No-Go 判定は本節時点では **未確定（PENDING）** —
+実測が済むまでここに数値や verdict を書き加えてはならない（一方向規律）。
