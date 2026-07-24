@@ -1225,6 +1225,28 @@ def test_evaluate_go_bar_fails_closed_on_audio_pin_mismatch_or_missing():
         harness.evaluate_m1_real_go_bar([report3, report4], _go_bar_registry())
 
 
+def test_evaluate_go_bar_fails_closed_on_expected_audio_sha256_mismatch():
+    """registry に expected_audio_sha256 があれば report の audio と一致要求（forward-compat）。
+
+    frozen 素材の expected audio hash の **記録**（emit）は slow-lane 生成時の
+    machine-dependent な dated pin だが、記録されて registry に載れば評価器は照合し、
+    manifest typo/差替で別素材に verdict を出すのを弾く（存在すれば比較・未記録なら no-op）。
+    """
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+    # real_vocal_jrock に事前登録 expected_audio_sha256 を pin（report の実 hash と別値）。
+    reg = _go_bar_registry()
+    for entry in reg["external_fixtures"]:
+        if entry["id"] == "real_vocal_jrock":
+            entry["expected_audio_sha256"] = "e" * 64
+    with pytest.raises(ValueError, match="expected_audio_sha256"):
+        harness.evaluate_m1_real_go_bar([r1, r2], reg)
+
+
 def test_evaluate_go_bar_route_unmeasured_on_positive_does_not_survive():
     """positive の 1 本でその経路が未観測なら、残り 3 本が sufficient でも survive させない。
 
@@ -1819,6 +1841,43 @@ def test_evaluate_go_bar_cli_rejects_out_overwriting_registry(tmp_path, monkeypa
         harness.main()
     # 凍結 registry は verdict で上書きされず無傷。
     assert REGISTRY_PATH.read_bytes() == before
+
+
+def test_external_cli_rejects_out_colliding_with_manifest_or_source(tmp_path, monkeypatch):
+    """--external の --out が manifest / source audio を指したら書き込み前に fail-closed。"""
+    import json as _json
+
+    import scripts.run_melody_observability as harness
+
+    sr = 22050
+    t = np.linspace(0, 1.0, sr, endpoint=False)
+    wav = tmp_path / "clip.wav"
+    sf.write(wav, (0.3 * np.sin(2 * np.pi * 220 * t)).astype(np.float32), sr, subtype="FLOAT")
+    manifest = tmp_path / "m.json"
+    manifest.write_text(
+        _json.dumps([{"id": "real_lead_synth", "path": str(wav), "input_kind": "clear_lead"}]),
+        encoding="utf-8",
+    )
+
+    # --out == manifest → 拒否・manifest 無傷。
+    monkeypatch.setattr(
+        sys, "argv",
+        ["run_melody_observability", "--external", str(manifest), "--out", str(manifest)],
+    )
+    manifest_before = manifest.read_bytes()
+    with pytest.raises(ValueError, match="保護対象"):
+        harness.main()
+    assert manifest.read_bytes() == manifest_before
+
+    # --out == source audio → 拒否・audio 無傷。
+    monkeypatch.setattr(
+        sys, "argv",
+        ["run_melody_observability", "--external", str(manifest), "--out", str(wav)],
+    )
+    wav_before = wav.read_bytes()
+    with pytest.raises(ValueError, match="保護対象"):
+        harness.main()
+    assert wav.read_bytes() == wav_before
 
 
 # --------------------------------------------------------------------------- #

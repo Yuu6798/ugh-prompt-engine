@@ -724,6 +724,8 @@ def evaluate_m1_real_go_bar(
     registered_kinds = _unique_id_map(
         registry.get("external_fixtures", []), "external_fixtures"
     )
+    # id → 登録エントリ全体。expected_audio_sha256（存在すれば）で素材同一性を照合する。
+    registered_external = {e["id"]: e for e in registry.get("external_fixtures", [])}
 
     # 凍結ルールが要求する繰返し回数（n>=2）未満の report で verdict を出さない。
     # CLI は nargs="+" で単一 report も受けるため、ここで弾かないと 1 回実行の観測が
@@ -813,6 +815,20 @@ def evaluate_m1_real_go_bar(
                 "repeats と見なせない (fail-closed)"
             )
         fixture_audio_hash[fixture_id] = audio_hashes[0]
+        # 素材同一性の pin（forward-compat）。frozen real_vocal_* は自作 Suno 曲で
+        # 非 commit（設計 §6.5・波形は repo に置かない）、その expected audio hash は
+        # slow-lane 生成時に決まる dated pin（§2.3・deliverable 2/3）で PR 時に repo へ
+        # 固定できない。registry の external_fixtures エントリに `expected_audio_sha256`
+        # が**存在すれば**（＝slow-lane 実測後に operator が記録したら）report の
+        # audio_sha256 と一致することを要求し、manifest typo/差替で別素材に verdict を
+        # 出すのを弾く。未記録なら no-op（emit は machine-dependent・Codex 指摘）。
+        expected_audio = registered_external.get(fixture_id, {}).get("expected_audio_sha256")
+        if expected_audio is not None and fixture_audio_hash[fixture_id] != expected_audio:
+            raise ValueError(
+                f"evaluate_m1_real_go_bar: fixture {fixture_id!r} audio_sha256 "
+                f"{fixture_audio_hash[fixture_id]} != registry expected_audio_sha256 "
+                f"{expected_audio}; 事前登録素材と別の audio で測定している (fail-closed)"
+            )
         # registry が凍結した input_kind（report 自己申告でなく）で回すべき経路集合。
         registry_kind = registered_kinds.get(fixture_id)
         if registry_kind is None:
@@ -1274,6 +1290,23 @@ def main() -> int:
     for line in summarize(results):
         print(line)
     if args.out is not None:
+        # evaluate-go-bar 側と対称に、--out が入力/重要 artifact を上書き破壊するのを
+        # 書き込み前に fail-closed。保護対象: 凍結 registry（両モード）、manifest 本体、
+        # 各 source audio（external モードで results に resolved audio_path が載る）。
+        # 例: `--external manifest.json --out manifest.json` は manifest を、
+        # `--out <source>.wav` は再現に必要な source audio を破壊する（Codex 指摘）。
+        protected_paths = {REGISTRY_PATH.resolve()}
+        if args.external is not None:
+            protected_paths.add(Path(args.external).resolve())
+        for info in results.get("fixtures", {}).values():
+            audio_path = info.get("audio_path")
+            if audio_path:
+                protected_paths.add(Path(audio_path).resolve())
+        if Path(args.out).resolve() in protected_paths:
+            raise ValueError(
+                f"--out {args.out} は保護対象パス（registry / manifest / source audio）と "
+                "衝突する; 書き込みが再現に必要な入力を破壊するため拒否する (fail-closed)"
+            )
         _atomic_write_text(
             args.out, json.dumps(results, indent=2, sort_keys=True)
         )

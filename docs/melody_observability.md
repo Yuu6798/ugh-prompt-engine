@@ -290,9 +290,16 @@ sha256 で担保する。検証は「pin した sha256 の report 集合を同�
 測定値・dated 実測記録・Go/No-Go 判定は本節時点では **未確定（PENDING）** —
 実測が済むまでここに数値や verdict を書き加えてはならない（一方向規律）。
 
-**繰延している machine-dependent 課題**: 分離経路 provenance の **stem/weights hash の
-emit**（Demucs vocals stem の sha256・分離器重みの hash）は実 Demucs を要するため未実装。
-評価器 `_route_provenance` は `preprocessing.stem_sha256` / `separation_weights_sha256` が
-**存在すれば** repeats 間で比較する forward-compat 済みなので、slow-lane harness がこれらを
-emit するようになれば「同一 version・別 weights/再生成 stem」の穴は自動で閉じる。emit の
-配線（`_preprocessing_provenance` が stem を露出して hash する）は実測時に追加する。
+**繰延している machine-dependent 課題**（いずれも評価器は forward-compat 済みで、
+slow-lane 実測時に値が記録されれば自動で穴が閉じる。値の **emit/記録** が machine-dependent）:
+
+- **分離経路の stem/weights hash**: Demucs vocals stem の sha256・分離器重みの hash は
+  実 Demucs を要するため未 emit。評価器 `_route_provenance` は
+  `preprocessing.stem_sha256` / `separation_weights_sha256` が**存在すれば** repeats 間で
+  比較する。emit 配線（`_preprocessing_provenance` が stem を露出して hash）は実測時に追加。
+- **frozen 素材の expected audio hash**: real_vocal_* は自作 Suno 曲で **非 commit**
+  （波形は repo に置かない）、その expected audio sha256 は slow-lane 生成時に決まる
+  dated pin。PR 時に registry へ固定できない（audio が repo に存在しない・初回生成前は
+  hash 未知）。評価器は registry の external_fixtures エントリに `expected_audio_sha256`
+  が**存在すれば** report の audio_sha256 と一致要求する。operator が初回生成後に
+  実測 hash を registry へ記録すれば、manifest typo/差替で別素材に verdict を出す穴が閉じる。
