@@ -1185,13 +1185,17 @@ def main() -> int:
         # 「どの report が判定を生んだか」を content hash で pin しないと、公開後に
         # run1/run2.json が差し替え・編集されても verdict 単体から検出できない
         # （verdict は n_reports/registry_sha256 しか持たない・Codex 指摘・AGENTS §8）。
+        # 衝突/重複検出には resolve 済みパスを使うが、report_pins には**渡された元の
+        # （多くは checkout 相対の）パス**を記録する。resolve 済み絶対パス（/tmp/... 等）を
+        # 載せると verdict.json が machine-local になり、別 checkout の検証者が pin した
+        # 入力を手動パス変換なしに replay できない（sha256 は同じでも非可搬・Codex 指摘）。
         reports = []
         report_pins = []
-        for path in report_paths:
-            data = path.read_bytes()
+        for original, resolved in zip(args.evaluate_go_bar, report_paths):
+            data = resolved.read_bytes()
             reports.append(json.loads(data))
             report_pins.append(
-                {"path": str(path), "sha256": hashlib.sha256(data).hexdigest()}
+                {"path": str(original), "sha256": hashlib.sha256(data).hexdigest()}
             )
         # --out が入力 report のいずれかに解決されると、verdict の書き込みが pin 済みの
         # report を上書きし、report_pins の hash が実体と不一致になり slow-lane repeat を

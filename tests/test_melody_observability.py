@@ -1460,9 +1460,13 @@ def test_evaluate_go_bar_cli_pins_report_hashes(tmp_path, monkeypatch):
     run2 = tmp_path / "run2.json"
     run2.write_text(_json.dumps(r2), encoding="utf-8")
     out = tmp_path / "verdict.json"
+    # 相対パスで渡す（tmp_path を cwd に）。report_pins は resolve せず渡された相対
+    # パスをそのまま載せ、verdict.json を可搬に保つことを検証する。
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
         sys, "argv",
-        ["run_melody_observability", "--evaluate-go-bar", str(run1), str(run2), "--out", str(out)],
+        ["run_melody_observability", "--evaluate-go-bar", "run1.json", "run2.json",
+         "--out", str(out)],
     )
     assert harness.main() == 0
     verdict = _json.loads(out.read_text(encoding="utf-8"))
@@ -1473,6 +1477,8 @@ def test_evaluate_go_bar_cli_pins_report_hashes(tmp_path, monkeypatch):
         hashlib.sha256(run2.read_bytes()).hexdigest(),
     }
     assert len(verdict["report_pins"]) == 2
+    # path は resolve 済み絶対でなく、渡された相対パスのまま（可搬・非 machine-local）。
+    assert {p["path"] for p in verdict["report_pins"]} == {"run1.json", "run2.json"}
 
 
 def test_evaluate_go_bar_fails_closed_on_duplicate_or_overlapping_bar_ids():
