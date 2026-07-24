@@ -860,6 +860,16 @@ def evaluate_m1_real_go_bar(
                                 f"reports[{idx}] preprocessing {pp_label!r} != frozen "
                                 f"{expected_route.preprocessing!r} (fail-closed)"
                             )
+                    elif row.get("preprocessing"):
+                        # 分離不要な直接経路（例 pyin_direct）が preprocessing を持つのは、
+                        # 生の直接経路を測らずに分離後の観測を direct baseline として計上
+                        # させるすり替え。harness は非分離経路に preprocessing を書かない
+                        # ので、存在＝stale/手書き report として弾く（Codex 指摘・対称）。
+                        raise ValueError(
+                            f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} in "
+                            f"reports[{idx}] は分離不要（frozen preprocessing={expected_route.preprocessing!r}）"
+                            "なのに preprocessing を持つ (fail-closed)"
+                        )
             if len({_route_provenance(row) for row in rows}) > 1:
                 raise ValueError(
                     f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} has "

@@ -1495,6 +1495,28 @@ def test_evaluate_go_bar_fails_closed_on_extractor_label_mismatch():
         harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
 
 
+def test_evaluate_go_bar_fails_closed_on_preprocessing_on_direct_route():
+    """分離不要な直接経路（pyin_direct）が preprocessing を持てば fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    r2 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    # pyin_direct（分離不要）行に demucs preprocessing を捏造。
+    for report in (r1, r2):
+        for row in report["fixtures"]["real_vocal_jrock"]["routes"]:
+            if row["route"] == "pyin_direct":
+                row["preprocessing"] = {
+                    "preprocessing": "demucs_vocals",
+                    "separation_model": "htdemucs_ft",
+                    "separation_version": "4.0.1",
+                }
+    with pytest.raises(ValueError, match="preprocessing"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
 def test_evaluate_go_bar_inconclusive_when_all_routes_unavailable():
     """optional 依存欠如で全経路 unavailable の report は no_go でなく inconclusive。"""
     import scripts.run_melody_observability as harness
