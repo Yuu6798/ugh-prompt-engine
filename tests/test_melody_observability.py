@@ -41,6 +41,21 @@ REGISTRY_PATH = BENCH_DIR / "registry.yaml"
 SPECS_PATH = BENCH_DIR / "synthesis_specs.yaml"
 
 
+@pytest.fixture(autouse=True)
+def _reset_extractor_load_time_pins():
+    """抽出器 artifact の load-time pin をテスト間で持ち越さない。
+
+    pin は「このプロセスがモデルをロードした時点の artifact」を表すプロセス内状態で、
+    在来の in-memory model cache（CREPE 等）と対応する。1 プロセスで複数の artifact
+    構成を模す pytest では、各テストを新プロセス相当の状態から始める。
+    """
+    from svp_rpe.melody.provenance import reset_load_time_pins
+
+    reset_load_time_pins()
+    yield
+    reset_load_time_pins()
+
+
 # --------------------------------------------------------------------------- #
 # ヘルパー
 # --------------------------------------------------------------------------- #
@@ -587,10 +602,11 @@ def test_isolate_vocals_with_provenance_emits_stem_and_weights_hashes(monkeypatc
     result = adapter.isolate_vocals_with_provenance("whatever.wav")
     assert result.sample_rate == sr
     assert result.stem_sha256 == sha256_of_float32(vocals)
-    # モデル入力 = チェックポイント + bag 定義 YAML（signature 選択・weights・segment）。
+    # モデル入力 = チェックポイント + bag 定義 YAML（signature 選択・weights・segment）
+    # + files.txt（signature → ファイル名の対応表。どの .th を読むかを決める）。
     expected_files = [
         weights_dir / name for name in adapter._expected_weight_filenames("htdemucs_ft")
-    ] + [tmp_path / "remote" / "htdemucs_ft.yaml"]
+    ] + [tmp_path / "remote" / "htdemucs_ft.yaml", tmp_path / "remote" / "files.txt"]
     assert result.weights_sha256 == sha256_of_files(expected_files)
     assert len(result.weights_sha256) == 64
     assert set(result.weights_filenames) == {p.name for p in expected_files}
@@ -629,8 +645,74 @@ def test_isolate_vocals_reports_unavailable_when_weights_vanish_mid_run(monkeypa
         return _fake_stem_bundle(np.zeros(sr, dtype=np.float32), sr)
 
     monkeypatch.setattr(adapter, "separate_stems", delete_then_separate)
-    with pytest.raises(LearnedModelUnavailable, match="disappeared during separation"):
+    # 再解決が先に失敗するので "unresolvable"（消失も差し替えも pin を出さない点は同じ）。
+    with pytest.raises(LearnedModelUnavailable, match="unresolvable during separation"):
         adapter.isolate_vocals_with_provenance("whatever.wav")
+
+
+def test_isolate_vocals_rejects_checkpoint_selection_change_mid_run(monkeypatch, tmp_path):
+    """分離中にメタデータが差し替わり別 checkpoint 集合が選ばれたら unavailable（#217）。
+
+    files.txt / bag YAML が変わると「どの .th を読むか」自体が変わる。旧集合を再 hash
+    するだけでは、別集合で分離したのに pin は旧集合、という食い違いを見逃す。
+    """
+    adapter, weights_dir = _provision_gate(monkeypatch, tmp_path, weights_present=True)
+    sr = 16000
+    other_name = "aaaaaaaa-bbbbbbbb.th"
+    (weights_dir / other_name).write_bytes(b"already-present-other-checkpoint")
+
+    def rewrite_metadata_then_separate(*args, **kwargs):
+        # bag が別 signature を選ぶよう remote メタデータを差し替える（新 .th は実在）。
+        remote = tmp_path / "remote"
+        (remote / "files.txt").write_text(
+            "root: hybrid_transformer/\naaaaaaaa-bbbbbbbb.th\n", encoding="utf-8"
+        )
+        (remote / "htdemucs_ft.yaml").write_text(
+            yaml.safe_dump({"models": ["aaaaaaaa"], "segment": 40}), encoding="utf-8"
+        )
+        return _fake_stem_bundle(np.zeros(sr, dtype=np.float32), sr)
+
+    monkeypatch.setattr(adapter, "separate_stems", rewrite_metadata_then_separate)
+    with pytest.raises(LearnedModelUnavailable, match="checkpoint selection changed"):
+        adapter.isolate_vocals_with_provenance("whatever.wav")
+
+
+def test_extractor_pin_is_bound_to_first_load_in_process(monkeypatch, tmp_path):
+    """初回ロード後に artifact が差し替わったら、以降の観測は pin を出さず unavailable。
+
+    CREPE はロード済みモデルをプロセス global に cache するため、ディスクの pre/post が
+    新 bytes で一致していても推論は旧 in-memory モデルのままでありうる（Codex #217）。
+    """
+    from svp_rpe.melody.extractors import observe_via_route_with_provenance
+    from svp_rpe.melody.routing import MelodyRoute
+    from svp_rpe.rpe.learned import crepe_adapter
+
+    weights = tmp_path / "model-full.h5"
+    weights.write_bytes(b"crepe-weights-v1")
+    monkeypatch.setattr(crepe_adapter, "crepe_weight_files", lambda *a, **k: [weights])
+    monkeypatch.setattr(
+        "svp_rpe.melody.extractors.extract_crepe_observation",
+        lambda y, sr, **kwargs: MelodyObservation(
+            route="crepe_direct", source_model="crepe:predict"
+        ),
+    )
+    sr = 22050
+    wav = tmp_path / "lead.wav"
+    sf.write(wav, np.zeros(sr, dtype=np.float32), sr, subtype="FLOAT")
+    route = MelodyRoute("crepe_direct", "none", "crepe")
+
+    # 1 回目: load-time pin が確定する。
+    _, provenance = observe_via_route_with_provenance(str(wav), route)
+    first_pin = provenance["extractor_weights_sha256"]
+
+    # 推論の外で artifact が差し替わる（cache 済みモデルは旧のまま）。
+    weights.write_bytes(b"crepe-weights-v2-replacement")
+    with pytest.raises(LearnedModelUnavailable, match="since it was first loaded"):
+        observe_via_route_with_provenance(str(wav), route)
+
+    from svp_rpe.melody.provenance import load_time_pin
+
+    assert load_time_pin("crepe") == first_pin  # pin は初回ロード時のまま
 
 
 def test_separation_weights_pin_covers_bag_metadata(monkeypatch, tmp_path):

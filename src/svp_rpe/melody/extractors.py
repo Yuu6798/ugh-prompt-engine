@@ -238,6 +238,7 @@ def _verify_and_record_extractor_weights(
     食い違えば観測を返さず `LearnedModelUnavailable` に落とす（route は unavailable と
     して記録され run は完走する）。再検証は memo を迂回して実バイトを読む。
     """
+    from svp_rpe.melody.provenance import load_time_pin, record_load_time_pin
     from svp_rpe.rpe.learned import LearnedModelUnavailable
 
     after = _extractor_fingerprint(extractor, use_cache=False)
@@ -252,6 +253,18 @@ def _verify_and_record_extractor_weights(
         )
     if after is None:
         return
+    # プロセス内 load-time pin との照合（#217）。CREPE 等はロード済みモデルを global に
+    # cache するため、初回ロード後に artifact が差し替わると「ディスクは新 bytes・推論は
+    # 旧 in-memory モデル」になりうる。ディスクの pre/post 一致だけでは検出できないので、
+    # 最初に観測した digest を保持して照合し、食い違えば fail-closed にする。
+    pinned = record_load_time_pin(extractor, after.sha256)
+    if pinned != after.sha256:
+        raise LearnedModelUnavailable(
+            f"{extractor} model artifact changed since it was first loaded in this process "
+            f"(load_time={pinned}, now={after.sha256}); ロード済みモデルが cache されている"
+            "場合、推論は旧 artifact のままでありうるため pin を publish しない"
+            f"（現在の load-time pin: {load_time_pin(extractor)}）"
+        )
     provenance["extractor_weights_sha256"] = after.sha256
     provenance["extractor_weights_kind"] = after.kind
     provenance["extractor_weights_files"] = list(after.files)

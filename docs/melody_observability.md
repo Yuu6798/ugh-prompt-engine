@@ -339,7 +339,16 @@ torch を import できないときも env 由来へ落ちる（重み未取得�
 指しつつ成果物は新 bytes 由来になりうる。分離（Demucs）でも抽出器（CREPE / Melodia /
 basic-pitch）でも **推論前に指紋を採り、推論後に memo を迂回して再検証**し、食い違えば
 **成果物を返さず `unavailable`** にする（対応しない pin を publish するより測定未達の方が
-正しい）。モデルの provisioning / 更新と実測 run は同時に走らせないこと。
+正しい）。モデルの provisioning / 更新と実測 run は同時に走らせないこと。関連して:
+
+- **選択集合の再解決**: 分離側は checkpoint を再 hash するだけでなく、`files.txt` と
+  bag YAML を pin 対象に含めた上で**分離後に集合を解決し直して比較**する。メタデータが
+  差し替わると「どの `.th` を読むか」自体が変わり、旧集合を再 hash するだけでは
+  「別集合で分離したのに pin は旧集合」を見逃すため。
+- **in-memory model cache**: CREPE 等はロード済みモデルをプロセス global に cache する。
+  初回ロード後に artifact が差し替わると、ディスクの pre/post は新 bytes で一致するのに
+  推論は旧モデルのまま、という状態がありうる。プロセス内の **load-time pin**（最初に
+  観測した digest）と照合し、食い違えば pin を publish せず `unavailable` にする。
 
 第 3 状態を「利用可能」と誤認すると、遮断環境では torch hub の download が
 `urllib.error.URLError` を投げて `--external` run 全体が落ち、部分行も report も

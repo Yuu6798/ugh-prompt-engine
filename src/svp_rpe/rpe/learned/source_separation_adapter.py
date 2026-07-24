@@ -337,12 +337,19 @@ def locate_separation_weights(model: str = DEFAULT_MODEL) -> List[Path]:
             f"{'CLI 子プロセス（env 由来解決）' if _uses_cli_separation() else 'API（in-process hub dir）'}、"
             f"探索したディレクトリ: {[str(d) for d in search_dirs]}"
         )
-    # bag 定義 YAML（demucs パッケージ同梱）も実行時のモデル入力なので pin 対象に含める。
+    # demucs 同梱の remote メタデータも実行時のモデル入力なので pin 対象に含める:
+    #   - bag 定義 YAML: signature 選択・per-source weights・segment
+    #   - files.txt: signature → チェックポイントファイル名の対応表（どの .th を読むかを決める）
+    # これらが差し替わると「選ばれるチェックポイント集合」自体が変わるため、bytes を
+    # pin しないと『別の集合で分離したのに同じ pin』が成立しうる（Codex #217）。
     remote_dir = _demucs_remote_dir()
     if remote_dir is not None:
         bag_yaml = _bag_metadata_file(remote_dir, model)
         if bag_yaml is not None:
             found.append(bag_yaml)
+        files_txt = remote_dir / "files.txt"
+        if files_txt.is_file():
+            found.append(files_txt)
     return found
 
 
@@ -436,13 +443,29 @@ def isolate_vocals_with_provenance(
     # 差し替えすると、pin は旧 bytes を指しつつ stem は新 bytes 由来になりうる。
     # 分離後にもう一度（memo を迂回して）実バイトを読み、pin と一致しなければ
     # **stem を返さない** — 対応しない pin を publish するより unavailable が正しい。
+    # 再解決も行う（#217）: メタデータ（files.txt / bag YAML）が実行中に差し替わると
+    # **選ばれるチェックポイント集合そのもの**が変わりうる。旧集合を再 hash するだけでは
+    # 「別の集合で分離したのに pin は旧集合」を見逃すので、集合を解決し直して比較する。
     try:
-        post_sha256 = sha256_of_files(weights.paths, use_cache=False)
+        post_paths = locate_separation_weights(model)
+        post_sha256 = sha256_of_files(post_paths, use_cache=False)
+    except LearnedModelUnavailable as exc:
+        raise LearnedModelUnavailable(
+            f"demucs weights became unresolvable during separation ({exc}); "
+            "pin と stem の対応を保証できないため unavailable として扱う"
+        ) from exc
     except OSError as exc:
         raise LearnedModelUnavailable(
             f"demucs weights disappeared during separation ({type(exc).__name__}: {exc}); "
             "pin と stem の対応を保証できないため unavailable として扱う"
         ) from exc
+    if [str(p) for p in post_paths] != [str(p) for p in weights.paths]:
+        raise LearnedModelUnavailable(
+            "demucs checkpoint selection changed during separation "
+            f"(before={[p.name for p in weights.paths]}, after={[p.name for p in post_paths]}); "
+            "メタデータ差し替えで別のチェックポイント集合が選ばれた可能性があるため "
+            "unavailable として扱う"
+        )
     if post_sha256 != weights.sha256:
         raise LearnedModelUnavailable(
             "demucs weights changed during separation "
