@@ -674,6 +674,20 @@ def evaluate_m1_real_go_bar(
                 f"reports{missing_in}; 全事前登録 fixture を n>=2 で測定してからでないと "
                 "verdict を主張できない (fail-closed)"
             )
+        # route 名の重複を fail-closed。route 名 → outcome/row の map は dict 内包で
+        # last-wins になるため、同一 fixture に同名 route 行が 2 つあると（後勝ちで）
+        # 失敗/未観測行を後続の passing 行が隠蔽しうる。harness（_run_routes_on_file）は
+        # select_routes を各 1 回しか回さず重複を出さないので、重複＝stale/手書き report
+        # の証拠として弾く（Codex 指摘）。
+        for idx, report in enumerate(reports):
+            route_names = [row["route"] for row in report["fixtures"][fixture_id]["routes"]]
+            duplicate_routes = sorted({r for r in route_names if route_names.count(r) > 1})
+            if duplicate_routes:
+                raise ValueError(
+                    f"evaluate_m1_real_go_bar: fixture {fixture_id!r} in reports[{idx}] has "
+                    f"duplicate route row(s) {duplicate_routes}; last-wins で失敗/未観測行を "
+                    "隠蔽させない (fail-closed)"
+                )
         # 各 fixture の n>=2 repeats が**同一素材**（同一 audio bytes）であることを
         # audio_sha256 の一致で保証する。manifest は audio_sha256: null を許すが
         # harness は run ごとに実測 hash を記録するため、同一 id で別 audio を使った
@@ -938,12 +952,22 @@ def main() -> int:
     if args.evaluate_go_bar is not None:
         registry, registry_sha256 = _load_registry()
         report_paths = _resolve_unique_report_paths(args.evaluate_go_bar)
-        reports = [
-            json.loads(path.read_text(encoding="utf-8")) for path in report_paths
-        ]
+        # 消費する report の raw bytes を hash し、その同じ bytes を parse する。verdict に
+        # 「どの report が判定を生んだか」を content hash で pin しないと、公開後に
+        # run1/run2.json が差し替え・編集されても verdict 単体から検出できない
+        # （verdict は n_reports/registry_sha256 しか持たない・Codex 指摘・AGENTS §8）。
+        reports = []
+        report_pins = []
+        for path in report_paths:
+            data = path.read_bytes()
+            reports.append(json.loads(data))
+            report_pins.append(
+                {"path": str(path), "sha256": hashlib.sha256(data).hexdigest()}
+            )
         verdict = evaluate_m1_real_go_bar(
             reports, registry, registry_sha256=registry_sha256
         )
+        verdict["report_pins"] = report_pins
         for line in summarize_go_bar(verdict):
             print(line)
         if args.out is not None:

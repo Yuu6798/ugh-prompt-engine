@@ -1372,6 +1372,60 @@ def test_evaluate_go_bar_ignores_routes_outside_frozen_matrix():
     assert verdict["surviving_routes"] == []
 
 
+def test_evaluate_go_bar_fails_closed_on_duplicate_route_rows():
+    """同一 fixture に同名 route 行が重複したら fail-closed（last-wins 隠蔽を防ぐ）。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+    # jrock に本命経路の行を重複追加（後勝ちで失敗/未観測を隠す想定）。
+    for report in (r1, r2):
+        report["fixtures"]["real_vocal_jrock"]["routes"].append(
+            {"route": _GO_BAR_ROUTE, "extractor": "crepe", "outcome": "sufficient",
+             "report": None, "source_model": "demucs_vocals+crepe", "extractor_version": "0.0.13",
+             "preprocessing": {"preprocessing": "demucs_vocals",
+                               "separation_model": "htdemucs_ft", "separation_version": "4.0.1"}}
+        )
+    with pytest.raises(ValueError, match="duplicate route row"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_cli_pins_report_hashes(tmp_path, monkeypatch):
+    """--evaluate-go-bar の verdict.json が消費した report の content hash を pin する。"""
+    import json as _json
+
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    # CLI は _load_registry の実 hash を authoritative reference として渡すため、
+    # report の registry_sha256 を実ファイル hash に合わせる。
+    reg_sha = hashlib.sha256(REGISTRY_PATH.read_bytes()).hexdigest()
+    r1 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    r2 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    run1 = tmp_path / "run1.json"
+    run1.write_text(_json.dumps(r1), encoding="utf-8")
+    run2 = tmp_path / "run2.json"
+    run2.write_text(_json.dumps(r2), encoding="utf-8")
+    out = tmp_path / "verdict.json"
+    monkeypatch.setattr(
+        sys, "argv",
+        ["run_melody_observability", "--evaluate-go-bar", str(run1), str(run2), "--out", str(out)],
+    )
+    assert harness.main() == 0
+    verdict = _json.loads(out.read_text(encoding="utf-8"))
+    assert verdict["verdict"] == "go"
+    pins = {p["sha256"] for p in verdict["report_pins"]}
+    assert pins == {
+        hashlib.sha256(run1.read_bytes()).hexdigest(),
+        hashlib.sha256(run2.read_bytes()).hexdigest(),
+    }
+    assert len(verdict["report_pins"]) == 2
+
+
 # --------------------------------------------------------------------------- #
 # slow lane: 合成 → 実 pyin 抽出の統合（正/負の対照）
 # --------------------------------------------------------------------------- #
