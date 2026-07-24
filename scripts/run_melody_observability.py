@@ -554,12 +554,16 @@ _LEARNED_EXTRACTORS: "frozenset[str]" = frozenset({"crepe", "basic_pitch", "melo
 # provenance hash フィールドは真の sha256（64 桁 lowercase hex）でなければならない（#61）。
 # 「TBD」等のプレースホルダを truthy として受理すると、両 repeats が同一 placeholder のとき
 # model 入力が pin 済みと誤認され、content hash なしに Go を publish しうる。
-_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 
 def _is_sha256(value: Any) -> bool:
-    """`value` が真の sha256 digest（64 桁 lowercase hex）文字列なら True（#61）。"""
-    return isinstance(value, str) and bool(_SHA256_RE.match(value))
+    """`value` が真の sha256 digest（ちょうど 64 桁 lowercase hex）文字列なら True（#61/#62）。
+
+    `fullmatch` で全体一致を要求する。`re.match` + `$` は末尾改行を許すため
+    ``"aaaa...\\n"`` のような 65 文字 pin が通ってしまう（Codex 指摘・#62）。
+    """
+    return isinstance(value, str) and bool(_SHA256_RE.fullmatch(value))
 
 
 def _route_provenance(row: Dict[str, Any]) -> "tuple":

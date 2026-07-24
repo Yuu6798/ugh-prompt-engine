@@ -1583,6 +1583,9 @@ def test_evaluate_go_bar_rejects_placeholder_weight_pins():
     import scripts.run_melody_observability as harness
 
     assert harness._is_sha256("a" * 64) and not harness._is_sha256("TBD")
+    # #62: 末尾改行付き 65 文字は真の digest でない（fullmatch で弾く）。
+    assert not harness._is_sha256("a" * 64 + "\n")
+    assert not harness._is_sha256("a" * 63) and not harness._is_sha256("A" * 64)
 
     outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
     outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
