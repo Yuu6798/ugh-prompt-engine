@@ -1373,16 +1373,27 @@ def main() -> int:
         #     凍結 Go-bar registry を上書き破壊するのを防ぐ）
         #   - 評価器コード（evaluator_code_sha256 で hash 済み＝provenance 入力。--out で
         #     上書きすると verdict が pin したコード artifact を破壊し replay 不能になる）
-        # report_paths / REGISTRY_PATH / 評価器コードは resolve 済み集合で比較する。
+        #   - 各 report の fixture が指す source audio（`--out <source>.wav` の typo で、
+        #     report を pin/採点した直後に、その report の repeat/検証に必要な slow-lane
+        #     source 音源を破壊するのを防ぐ・external モードの同名保護と対称・#48）
+        # report_paths / REGISTRY_PATH / 評価器コード / audio は resolve 済み集合で比較する。
+        report_audio_paths = {
+            Path(info["audio_path"]).resolve()
+            for report in reports
+            for info in report.get("fixtures", {}).values()
+            if info.get("audio_path")
+        }
         protected_paths = (
             set(report_paths)
             | {REGISTRY_PATH.resolve()}
             | set(_evaluator_code_paths())
+            | report_audio_paths
         )
         if args.out is not None and Path(args.out).resolve() in protected_paths:
             raise ValueError(
-                f"--out {args.out} は保護対象パス（入力 report / 凍結 registry）と衝突する; "
-                "verdict の書き込みが重要 artifact を破壊するため拒否する (fail-closed)"
+                f"--out {args.out} は保護対象パス（入力 report / 凍結 registry / 評価器コード / "
+                "report source audio）と衝突する; verdict の書き込みが重要 artifact を破壊する "
+                "ため拒否する (fail-closed)"
             )
         verdict = evaluate_m1_real_go_bar(
             reports, registry, registry_sha256=registry_sha256

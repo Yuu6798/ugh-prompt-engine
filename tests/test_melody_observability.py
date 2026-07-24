@@ -2056,6 +2056,45 @@ def test_evaluate_go_bar_cli_rejects_out_overwriting_evaluator_code(tmp_path, mo
     assert code_path.read_bytes() == before
 
 
+def test_evaluate_go_bar_cli_rejects_out_overwriting_report_source_audio(tmp_path, monkeypatch):
+    """--evaluate-go-bar の --out が report fixture の source audio を指したら fail-closed（#48）。
+
+    report を pin/採点した直後に、その report の repeat/検証に必要な slow-lane source
+    音源を verdict JSON で破壊するのを防ぐ（external モードの同名保護と対称）。
+    """
+    import json as _json
+
+    import scripts.run_melody_observability as harness
+
+    # 実在の source WAV を用意し、r1 の fixture audio_path をそこへ向ける。
+    sr = 22050
+    t = np.linspace(0, 1.0, sr, endpoint=False)
+    wav = tmp_path / "real_vocal_jrock_source.wav"
+    sf.write(wav, (0.3 * np.sin(2 * np.pi * 220 * t)).astype(np.float32), sr, subtype="FLOAT")
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    reg_sha = hashlib.sha256(REGISTRY_PATH.read_bytes()).hexdigest()
+    r1 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    r1["fixtures"]["real_vocal_jrock"]["audio_path"] = str(wav)
+    r2 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    run1 = tmp_path / "run1.json"
+    run1.write_text(_json.dumps(r1), encoding="utf-8")
+    run2 = tmp_path / "run2.json"
+    run2.write_text(_json.dumps(r2), encoding="utf-8")
+    monkeypatch.setattr(
+        sys, "argv",
+        ["run_melody_observability", "--evaluate-go-bar", str(run1), str(run2),
+         "--out", str(wav)],
+    )
+    before = wav.read_bytes()
+    with pytest.raises(ValueError, match="保護対象"):
+        harness.main()
+    # source audio は verdict で上書きされず無傷。
+    assert wav.read_bytes() == before
+
+
 def test_external_cli_rejects_out_colliding_with_manifest_or_source(tmp_path, monkeypatch):
     """--external の --out が manifest / source audio を指したら書き込み前に fail-closed。"""
     import json as _json
