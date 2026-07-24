@@ -989,6 +989,12 @@ def _make_go_bar_report(
                 }
             row["source_model"] = f"{route}:model"
             row["extractor_version"] = "0.0.13"
+            # #59: measured 学習抽出器（crepe/basic_pitch/melodia）は重み hash 必須。
+            # repeats 間で一致させるため extractor 由来の決定論値を使う。
+            if route_extractor.get(route) in ("crepe", "basic_pitch", "melodia"):
+                row["extractor_weights_sha256"] = hashlib.sha256(
+                    f"{route_extractor.get(route)}:weights".encode()
+                ).hexdigest()
             if route.startswith("demucs_vocals_"):
                 row["preprocessing"] = {
                     "preprocessing": "demucs_vocals",
@@ -1529,6 +1535,29 @@ def test_evaluate_go_bar_requires_stem_and_weights_for_measured_separation(monke
                     "separation_version": "4.0.1",
                 }
     with pytest.raises(ValueError, match="stem_sha256/separation_weights_sha256"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_requires_extractor_weights_for_measured_learned_route():
+    """measured 学習抽出器経路が extractor_weights_sha256 を欠けば fail-closed（#59）。
+
+    本命 demucs_vocals_then_crepe（extractor=crepe・学習モデル）は、同一 package version でも
+    別 bundled/local weights だとモデル入力が変わる。weights hash なしに Go survivor に数えない
+    （分離側 stem/weights と対称）。pyin など非学習経路は重みなしのため対象外。
+    """
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+    # 本命 crepe 経路（measured/sufficient）から extractor_weights_sha256 を除去 → fail-closed。
+    for report in (r1, r2):
+        for row in report["fixtures"]["real_vocal_jrock"]["routes"]:
+            if row["route"] == _GO_BAR_ROUTE:
+                row.pop("extractor_weights_sha256", None)
+    with pytest.raises(ValueError, match="extractor_weights_sha256"):
         harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
 
 

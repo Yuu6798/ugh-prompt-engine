@@ -348,6 +348,12 @@ pin を必須化する = 記録が済むまで Go を出さない fail-closed �
   `htdemucs_ft`/version でも別 weights/再生成 stem なら前処理入力が変わるため、これらの pin
   なしに分離経路を stable Go survivor に数えない）。したがって分離経路の Go は emit 配線
   （`_preprocessing_provenance` が stem を露出して hash）を slow-lane で追加してから。
+- **学習抽出器の weights hash**（#59）: CREPE/basic-pitch/Melodia のモデル重み hash は
+  実モデルを要するため未 emit。評価器は **measured な学習抽出器経路には `extractor_weights_sha256`
+  を必須**とし、無ければ fail-closed（同一 package version でも別 bundled/local weights だと
+  モデル入力が変わるため、pin なしに学習抽出器経路を stable Go survivor に数えない・分離側と対称）。
+  したがって本命 `demucs_vocals_then_crepe` 等の Go は weights emit 配線を slow-lane で追加してから。
+  pyin は DSP で重みなしのため対象外（現状 Go 可能な経路）。
 - **frozen 素材の expected audio hash**（#53）: real_vocal_* は自作 Suno 曲で **非 commit**
   （波形は repo に置かない）、その expected audio sha256 は slow-lane 生成時に決まる
   dated pin。PR 時に registry へ固定できない（audio が repo に存在しない・初回生成前は

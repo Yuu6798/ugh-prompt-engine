@@ -509,18 +509,23 @@ def _fixture_route_rows(report: Dict[str, Any], fixture_id: str) -> Dict[str, Di
     return {row["route"]: row for row in info["routes"]}
 
 
+# 学習モデル重みを持つ抽出器（measured 行は extractor_weights_sha256 を必須化・#59）。
+# pyin は librosa DSP で重みなし。none は抽出器を当てない短絡。
+_LEARNED_EXTRACTORS: "frozenset[str]" = frozenset({"crepe", "basic_pitch", "melodia"})
+
+
 def _route_provenance(row: Dict[str, Any]) -> "tuple":
-    """route 行の model provenance 署名（source_model / extractor_version / 分離器）を返す。
+    """route 行の model provenance 署名（source_model / extractor_version / 重み / 分離器）を返す。
 
     n>=2 の repeats を「安定」と数える前に、抽出器/分離器の model stack が同一である
     ことを証明するために使う。マシン跨ぎや途中の CREPE/Demucs/Essentia アップグレードで
     provenance が変われば、同一 stack 下の再現でないので repeats と見なせない（Codex 指摘・
     設計 §2.3 provenance pin）。分離前処理は separation_model/version に加え、存在すれば
     分離器の重み hash（separation_weights_sha256）と vocals stem hash（stem_sha256）まで
-    見る。同一 htdemucs_ft/version でも別 weights や再生成 stem なら別 run として弾く
-    （これらの hash の **emit** は実 Demucs を要する machine-dependent な slow-lane 課題で
-    現状 harness は未出力。評価器は「存在すれば比較」で forward-compat とし、emit されたら
-    自動で穴が塞がる・Codex 指摘）。
+    見る。同様に学習抽出器（CREPE/basic-pitch/Melodia）の **重み hash**
+    （extractor_weights_sha256）も署名に含め、同一 package version でも別 bundled/local
+    weights なら別 run として弾く（#59）。これらの hash の **emit** は実モデルを要する
+    machine-dependent な slow-lane 課題で現状 harness は未出力（§6.5）。
     """
     preprocessing = row.get("preprocessing")
     if isinstance(preprocessing, dict):
@@ -536,6 +541,7 @@ def _route_provenance(row: Dict[str, Any]) -> "tuple":
     return (
         row.get("source_model"),
         row.get("extractor_version"),
+        row.get("extractor_weights_sha256"),
         row.get("assist_source_model"),
         row.get("assist_extractor_version"),
         separation,
@@ -801,11 +807,12 @@ def evaluate_m1_real_go_bar(
     - いずれかの fixture の routes に同名 route 行が重複（last-wins で失敗/未観測行を
       隠蔽させない・Codex 指摘）
     - measured（gate outcome）な route 行が provenance フィールド（source_model /
-      extractor_version、分離経路は separation_model/version に加え `stem_sha256` と
-      `separation_weights_sha256`）を欠く、または同一 fixture×route の provenance が
-      repeats 間で不一致（欠落を「一致」と扱わず、別 model stack の run を n>=2 と誤認しない。
-      分離経路は同一 model/version でも別 weights/再生成 stem なら前処理入力が変わるため、
-      stem/weights hash なしに分離経路を stable Go survivor に数えない・設計 §2.3・#54・Codex 指摘）
+      extractor_version、学習抽出器（CREPE/basic-pitch/Melodia）は `extractor_weights_sha256`、
+      分離経路は separation_model/version に加え `stem_sha256` と `separation_weights_sha256`）を
+      欠く、または同一 fixture×route の provenance が repeats 間で不一致（欠落を「一致」と扱わず、
+      別 model stack の run を n>=2 と誤認しない。同一 model/version でも別 weights/再生成 stem なら
+      入力が変わるため、weights/stem hash なしに学習抽出器・分離経路を stable Go survivor に
+      数えない・設計 §2.3・#54/#59・Codex 指摘）
     - measured な route 行の `extractor` / preprocessing が凍結 route 定義
       （`select_routes`）と不一致、または `source_model` が期待抽出器ファミリのトークンを
       含まない（経路ラベル/provenance と実測抽出器のすり替えを許さない・Codex 指摘）
@@ -1169,6 +1176,18 @@ def evaluate_m1_real_go_bar(
                             missing_fields.append(
                                 "preprocessing.stem_sha256/separation_weights_sha256"
                             )
+                # measured な学習抽出器（CREPE/basic-pitch/Melodia）は、同一 package version
+                # でも別 bundled/local weights だとモデル入力が変わる。extractor_weights_sha256 を
+                # 必須化し、これなしに学習抽出器経路を stable Go survivor に数えない（分離側の
+                # stem/weights と対称・#59）。凍結 route 定義の extractor で判定する（行の自己申告
+                # でなく・extractor は別途 route 定義と一致確認済み）。pyin は DSP で重みなしなので対象外。
+                route_def = expected_route_by_name.get(route)
+                if (
+                    route_def is not None
+                    and route_def.extractor in _LEARNED_EXTRACTORS
+                    and not row.get("extractor_weights_sha256")
+                ):
+                    missing_fields.append("extractor_weights_sha256")
                 if missing_fields:
                     raise ValueError(
                         f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} in "
