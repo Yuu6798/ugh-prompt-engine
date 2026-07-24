@@ -918,8 +918,13 @@ def _make_go_bar_report(
     import dataclasses
 
     thresholds = _default_thresholds()
+    # 完全な vocal_track matrix を模す: 明示されない経路は unavailable で埋める
+    # （評価器の full-matrix 完全性チェックを満たしつつ、未指定経路は未観測扱い）。
+    vocal_track_routes = [r.name for r in select_routes("vocal_track")]
     fixtures = {}
     for fixture_id, routes in route_outcomes.items():
+        full_routes = {name: "unavailable" for name in vocal_track_routes}
+        full_routes.update(routes)
         fixtures[fixture_id] = {
             "input_kind": "vocal_track",
             "expect_status": None,
@@ -927,7 +932,7 @@ def _make_go_bar_report(
             "audio_sha256": "0" * 64,
             "routes": [
                 {"route": route, "extractor": "crepe", "outcome": outcome, "report": None}
-                for route, outcome in routes.items()
+                for route, outcome in full_routes.items()
             ],
         }
     return {
@@ -1205,6 +1210,29 @@ def test_resolve_unique_report_paths_rejects_duplicates(tmp_path):
     # 別パス（内容が同一でも）は正当な n>=2 繰返しなので通す。
     resolved = harness._resolve_unique_report_paths([run1, run2])
     assert resolved == [run1.resolve(), run2.resolve()]
+
+
+def test_evaluate_go_bar_fails_closed_on_incomplete_route_matrix():
+    """truncated report（vocal_track 4 経路の一部が丸ごと欠落）は fail-closed。
+
+    candidate_routes は「存在する経路」からしか作られないため、ある経路が全 fixture
+    から欠けても未観測として弾かれない。期待経路集合（select_routes）と突き合わせて
+    欠落を検出する（Codex 指摘・docs §6.3 の完全 matrix）。
+    """
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    report1 = _make_go_bar_report(outcomes)
+    report2 = _make_go_bar_report(outcomes)
+    # truncate: 1 fixture から本命経路以外の全 route row を削り、pyin_direct のみ残す。
+    for report in (report1, report2):
+        rows = report["fixtures"]["real_vocal_jrock"]["routes"]
+        report["fixtures"]["real_vocal_jrock"]["routes"] = [
+            row for row in rows if row["route"] == _GO_BAR_ROUTE
+        ]
+    with pytest.raises(ValueError, match="missing route"):
+        harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
 
 
 # --------------------------------------------------------------------------- #

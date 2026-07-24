@@ -520,6 +520,9 @@ def evaluate_m1_real_go_bar(
     - 同一 fixture id の `audio_sha256` が report 間で欠落・不一致（manifest は
       ``audio_sha256: null`` を許すが、同一 id で別素材を使った 2 run を「同一素材の
       n>=2 repeats」と見なせない・Codex 指摘）
+    - いずれかの fixture が、その input_kind で回すべき全経路（`select_routes`）を
+      report に持たない（stale/truncated report で一部経路が丸ごと欠けると、残った
+      経路だけで go が出うる・docs §6.3 の完全 matrix を要求・Codex 指摘）
 
     ゲート outcome は ``"sufficient"`` / ``"insufficient"`` のみを指す
     （``"unavailable"`` / ``"not_observed_by_routing"`` / ``"not_applicable"`` は
@@ -624,6 +627,23 @@ def evaluate_m1_real_go_bar(
                 f"across reports {sorted(set(audio_hashes))}; 別素材を同一 id の n>=2 "
                 "repeats と見なせない (fail-closed)"
             )
+        # 完全 route matrix の存在確認。candidate_routes は「report に既に存在する経路」
+        # からしか作らないため、stale/truncated report である経路が全 positive から
+        # 丸ごと欠けても未観測として弾かれず baseline 経路単独で go が出うる。事前登録の
+        # input_kind で回すべき全経路（select_routes）と突き合わせ、欠落を fail-closed
+        # にする（Codex 指摘・docs §6.3 の vocal_track 4 経路 matrix を全 fixture × n>=2）。
+        for idx, report in enumerate(reports):
+            fixture_kind = report["fixtures"][fixture_id]["input_kind"]
+            expected_routes = {r.name for r in select_routes(fixture_kind)}
+            present_routes = set(_fixture_route_outcomes(report, fixture_id))
+            missing_routes = sorted(expected_routes - present_routes)
+            if missing_routes:
+                raise ValueError(
+                    f"evaluate_m1_real_go_bar: fixture {fixture_id!r} in reports[{idx}] is "
+                    f"missing route(s) {missing_routes} of the pre-registered {fixture_kind} "
+                    f"matrix {sorted(expected_routes)}; truncated/stale report では全 fixture が "
+                    "全経路を測っていないと verdict を主張できない (fail-closed)"
+                )
 
     candidate_routes: set[str] = set()
     for report in reports:
