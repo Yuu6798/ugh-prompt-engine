@@ -642,6 +642,26 @@ def _registry_weight_pin(registry: Dict[str, Any], key: str) -> "str | None":
     return recorded
 
 
+def _registry_weight_version(registry: Dict[str, Any], key: str) -> "str | None":
+    """registry に記録された実装バージョン（未記録なら None・不正型は fail-closed）。
+
+    重み bytes が同一でも実装（demucs / crepe / essentia のリリース）が違えば結果は
+    変わりうるので、`version` も記録されているなら pin として扱う（#217）。
+    """
+    entry = (registry.get("provenance") or {}).get("model_weights", {}).get(key)
+    if not isinstance(entry, dict):
+        return None  # 型不正は `_registry_weight_pin` 側が fail-closed で弾く
+    recorded = entry.get("version")
+    if recorded is None:
+        return None
+    if not isinstance(recorded, str) or not recorded:
+        raise ValueError(
+            f"evaluate_m1_real_go_bar: registry provenance.model_weights.{key}.version "
+            f"{recorded!r} は非空文字列でなければならない (fail-closed)"
+        )
+    return recorded
+
+
 def _require_recorded_weight_pin(
     *,
     registry: Dict[str, Any],
@@ -651,17 +671,32 @@ def _require_recorded_weight_pin(
     fixture_id: str,
     route: str,
     idx: int,
+    row_version: Any = None,
+    version_field: "str | None" = None,
 ) -> None:
-    """registry 記録済みの重み pin と行の pin が一致することを要求する（#217）。"""
+    """registry 記録済みの重み pin / version と行の値が一致することを要求する（#217）。
+
+    重み hash は「同じ bytes か」を、version は「同じ実装リリースか」を保証する。
+    片方だけでは、同一 bytes を別リリースが読んだ run（version は repeats 間で一致
+    しさえすれば通ってしまう）を registry の dated 記録と結びつけられない。
+    """
     recorded = _registry_weight_pin(registry, registry_key)
-    if recorded is None:
-        return
-    if row_pin != recorded:
+    if recorded is not None and row_pin != recorded:
         raise ValueError(
             f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} in "
             f"reports[{idx}] {field}={row_pin!r} != registry provenance.model_weights."
             f"{registry_key}.sha256 {recorded!r}; 記録済みの model 入力と別の重みで測った "
             "report に Go を出さない (fail-closed)"
+        )
+    if version_field is None:
+        return
+    recorded_version = _registry_weight_version(registry, registry_key)
+    if recorded_version is not None and row_version != recorded_version:
+        raise ValueError(
+            f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} in "
+            f"reports[{idx}] {version_field}={row_version!r} != registry "
+            f"provenance.model_weights.{registry_key}.version {recorded_version!r}; "
+            "記録済みの実装リリースと別の版で測った report に Go を出さない (fail-closed)"
         )
 
 
@@ -1396,6 +1431,10 @@ def evaluate_m1_real_go_bar(
                             fixture_id=fixture_id,
                             route=route,
                             idx=idx,
+                            row_version=(row.get("preprocessing") or {}).get(
+                                "separation_version"
+                            ),
+                            version_field="preprocessing.separation_version",
                         )
                     extractor_key = _REGISTRY_WEIGHT_KEY_BY_EXTRACTOR.get(
                         route_def.extractor
@@ -1409,6 +1448,8 @@ def evaluate_m1_real_go_bar(
                             fixture_id=fixture_id,
                             route=route,
                             idx=idx,
+                            row_version=row.get("extractor_version"),
+                            version_field="extractor_version",
                         )
                     assist_key = _REGISTRY_WEIGHT_KEY_BY_EXTRACTOR.get(route_def.assist)
                     if assist_key is not None and row.get("assist_status") == "measured":
@@ -1420,6 +1461,8 @@ def evaluate_m1_real_go_bar(
                             fixture_id=fixture_id,
                             route=route,
                             idx=idx,
+                            row_version=row.get("assist_extractor_version"),
+                            version_field="assist_extractor_version",
                         )
                 # gate outcome は assess_observability(...).status 由来。measured 行は
                 # その根拠 report payload を持ち、report.status が outcome と一致しなければ

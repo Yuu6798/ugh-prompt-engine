@@ -280,9 +280,10 @@ python -c "import json; from svp_rpe.rpe.learned.source_separation_adapter impor
 #   この version / sha256 を registry.yaml の provenance.model_weights.demucs へ記録する
 #   （crepe / melodia / basic_pitch の重み pin は run 出力 report の
 #    routes[].extractor_weights_sha256）。★記録した pin は飾りではない: 評価器は
-#    **記録済み（非 null）の pin と report 行の pin の一致を必須化**し、食い違えば
-#    fail-closed で Go を出さない（#217）。未記録（null）の間は要求しないので、
-#    記録前の run はこれまでどおり進む。
+#    **記録済み（非 null）の sha256 と version の双方について report 行の値との一致を
+#    必須化**し、食い違えば fail-closed で Go を出さない（#217。sha256=同じ bytes か、
+#    version=同じ実装リリースか）。未記録（null）の間は要求しないので、記録前の run は
+#    これまでどおり進む。
 
 # tests/fixtures/melody_bench/external_manifest.example.json をコピーし、
 # REPLACE を実ファイルパスへ書き換える（audio_sha256 は null のままでよい・

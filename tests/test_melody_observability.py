@@ -1705,10 +1705,14 @@ def test_evaluate_go_bar_allows_unavailable_assist_without_pin():
     assert verdict["verdict"] == "go"
 
 
-def _registry_with_weight_pin(key: str, sha256, input_kind: "str | None" = None):
-    """registry の provenance.model_weights.<key>.sha256 を差し替えた go-bar registry。"""
+def _registry_with_weight_pin(
+    key: str, sha256, input_kind: "str | None" = None, version: "str | None" = None
+):
+    """registry の provenance.model_weights.<key> の pin を差し替えた go-bar registry。"""
     reg = _go_bar_registry(input_kind=input_kind)
     reg["provenance"]["model_weights"][key]["sha256"] = sha256
+    if version is not None:
+        reg["provenance"]["model_weights"][key]["version"] = version
     return reg
 
 
@@ -1768,6 +1772,52 @@ def test_evaluate_go_bar_rejects_mismatched_recorded_assist_pin():
             _full_mix_go_bar_reports(),
             _registry_with_weight_pin("essentia_melodia", other, input_kind="full_mix"),
         )
+
+
+def test_evaluate_go_bar_rejects_mismatched_recorded_version():
+    """重み bytes が一致しても、記録済み実装バージョンと食い違えば fail-closed（#217）。
+
+    同一 bytes を別リリース（別 demucs / crepe / essentia）が読んだ run は、version が
+    repeats 間で一致しさえすれば従来は通っていた。registry の dated 記録と結びつかない。
+    """
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    reports = [_make_go_bar_report(outcomes) for _ in range(2)]
+    recorded = hashlib.sha256(b"htdemucs_ft:4.0.1:weights").hexdigest()
+    # sha256 は一致、version だけ registry と食い違う（行は "4.0.1"）。
+    registry = _registry_with_weight_pin("demucs", recorded, version="4.1.0")
+    with pytest.raises(ValueError, match="model_weights.demucs.version"):
+        harness.evaluate_m1_real_go_bar(reports, registry)
+
+
+def test_evaluate_go_bar_accepts_matching_recorded_version():
+    """記録済み version と行の version が一致すれば通る（#217）。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    reports = [_make_go_bar_report(outcomes) for _ in range(2)]
+    recorded = hashlib.sha256(b"htdemucs_ft:4.0.1:weights").hexdigest()
+    registry = _registry_with_weight_pin("demucs", recorded, version="4.0.1")
+    assert harness.evaluate_m1_real_go_bar(reports, registry)["verdict"] == "go"
+
+
+def test_evaluate_go_bar_rejects_mismatched_recorded_extractor_version():
+    """crepe の記録済み version と行の extractor_version の不一致も fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    reports = [_make_go_bar_report(outcomes) for _ in range(2)]
+    recorded = hashlib.sha256(b"crepe:weights").hexdigest()
+    registry = _registry_with_weight_pin("crepe", recorded, version="0.0.99")
+    with pytest.raises(ValueError, match="model_weights.crepe.version"):
+        harness.evaluate_m1_real_go_bar(reports, registry)
 
 
 def test_evaluate_go_bar_rejects_placeholder_registry_weight_pin():

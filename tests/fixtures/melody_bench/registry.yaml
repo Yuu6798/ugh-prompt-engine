@@ -228,10 +228,11 @@ provenance:
   #   crepe / basic_pitch / essentia_melodia
   #           … run 出力 report の routes[].extractor_weights_sha256（ハーネスが実測 emit）
   # ここに記録した値と report の pin が食い違えば、別 model stack の run を混ぜた証拠になる
-  # ——評価器は **記録済み（非 null）の pin と行の pin の一致を必須化**し、食い違えば
-  # fail-closed で Go を出さない（#217）。未記録（null）の間は要求しないので、記録前の
-  # slow-lane run はこれまでどおり進む。プレースホルダ文字列（"TBD" 等）は記録済みと
-  # 見なさず fail-closed で弾く（#61 と同型）。
+  # ——評価器は **記録済み（非 null）の sha256 と version の双方について行の値との一致を
+  # 必須化**し、食い違えば fail-closed で Go を出さない（#217。sha256=「同じ bytes か」、
+  # version=「同じ実装リリースか」。同一 bytes を別リリースが読んだ run を弾くため両方見る）。
+  # 未記録（null）の間は要求しないので、記録前の slow-lane run はこれまでどおり進む。
+  # プレースホルダ文字列（"TBD" 等）は記録済みと見なさず fail-closed で弾く（#61 と同型）。
   model_weights:
     demucs:
       role: source_separation (vocals stem)
