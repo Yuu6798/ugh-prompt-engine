@@ -1111,6 +1111,53 @@ def test_evaluate_go_bar_fails_closed_on_stale_reports_vs_loaded_registry():
     assert verdict["verdict"] == "go"
 
 
+def test_evaluate_go_bar_route_unmeasured_on_negative_does_not_survive():
+    """positive を満たしても negative でその経路が未観測なら survive させない。
+
+    偽陽性ゼロは「negative で実測して sufficient が出なかった」で初めて certify できる。
+    negative がその経路を一度も測っていない（neg_false_positive==0 だが未観測）状態を
+    Go と誤認しない（Codex 指摘・fail-closed）。
+    """
+    import scripts.run_melody_observability as harness
+
+    # positive 4/4 は本命経路で sufficient。だが negative は別経路しか測っておらず
+    # 本命経路が未観測（欠落）。
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {"pyin_direct": "insufficient"}  # 本命経路は未観測
+    report1 = _make_go_bar_report(outcomes)
+    report2 = _make_go_bar_report(outcomes)
+    verdict = harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
+    assert verdict["verdict"] == "no_go"
+    assert _GO_BAR_ROUTE not in verdict["surviving_routes"]
+    assert verdict["routes"][_GO_BAR_ROUTE]["pos_sufficient"] == 4
+    assert (
+        _GO_BAR_NEGATIVE
+        in verdict["routes"][_GO_BAR_ROUTE]["negative_unmeasured_ids"]
+    )
+
+
+def test_evaluate_go_bar_fails_closed_on_audio_pin_mismatch_or_missing():
+    """同一 fixture id の audio_sha256 が report 間で不一致/欠落なら fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+
+    # 同一 id で別素材（audio_sha256 が run 間で食い違う）→ 同一素材の n>=2 と見なせない。
+    report1 = _make_go_bar_report(outcomes)
+    report2 = _make_go_bar_report(outcomes)
+    report2["fixtures"]["real_vocal_jrock"]["audio_sha256"] = "a" * 64
+    with pytest.raises(ValueError, match="audio_sha256"):
+        harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
+
+    # audio_sha256 欠落（None）も素材同一性を pin できず fail-closed。
+    report3 = _make_go_bar_report(outcomes)
+    report4 = _make_go_bar_report(outcomes)
+    report4["fixtures"]["real_vocal_band"]["audio_sha256"] = None
+    with pytest.raises(ValueError, match="audio_sha256"):
+        harness.evaluate_m1_real_go_bar([report3, report4], _go_bar_registry())
+
+
 # --------------------------------------------------------------------------- #
 # slow lane: 合成 → 実 pyin 抽出の統合（正/負の対照）
 # --------------------------------------------------------------------------- #

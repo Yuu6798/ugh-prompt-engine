@@ -467,6 +467,24 @@ def _is_ever_sufficient(reports: List[Dict[str, Any]], fixture_id: str, route: s
     )
 
 
+# ゲート判定が下りた outcome（観測が成立し sufficient/insufficient を返した）。
+# unavailable / not_observed_by_routing / not_applicable は「未観測」で、これらは
+# その経路でゲートが実行されていないことを意味する。
+_GATE_OUTCOMES = frozenset({"sufficient", "insufficient"})
+
+
+def _is_measured(reports: List[Dict[str, Any]], fixture_id: str, route: str) -> bool:
+    """全 report でその route が gate outcome（sufficient/insufficient）で観測されたか。
+
+    route が一部の report で欠落・未観測（unavailable 等）なら False。負の対照で
+    「その経路を一度も測っていない」状態を「偽陽性なし」と誤認しないための判定に使う。
+    """
+    for report in reports:
+        if _fixture_route_outcomes(report, fixture_id).get(route) not in _GATE_OUTCOMES:
+            return False
+    return True
+
+
 def evaluate_m1_real_go_bar(
     reports: List[Dict[str, Any]],
     registry: Dict[str, Any],
@@ -499,10 +517,16 @@ def evaluate_m1_real_go_bar(
     - `m1_real_go_bar` の positive_ids / negative_ids のいずれかが、**いずれかの**
       report の fixtures に欠けている（全 pre-registered fixture を n>=2 で測定
       してからでないと verdict を主張できない）
+    - 同一 fixture id の `audio_sha256` が report 間で欠落・不一致（manifest は
+      ``audio_sha256: null`` を許すが、同一 id で別素材を使った 2 run を「同一素材の
+      n>=2 repeats」と見なせない・Codex 指摘）
 
     ゲート outcome は ``"sufficient"`` / ``"insufficient"`` のみを指す
     （``"unavailable"`` / ``"not_observed_by_routing"`` / ``"not_applicable"`` は
-    非観測として扱い、stably/ever のいずれの sufficient にも数えない）。
+    非観測として扱い、stably/ever のいずれの sufficient にも数えない）。survive には
+    さらに **全 negative でその経路が実測（gate outcome）済み**であることを要求する
+    （negative で未観測の経路は「偽陽性なし」を証明できていないため survive させない・
+    ``negative_unmeasured_ids`` に記録・Codex 指摘）。
 
     各候補 route（positive fixture 群で観測された route 名の和集合）について:
 
@@ -578,6 +602,25 @@ def evaluate_m1_real_go_bar(
                 f"reports{missing_in}; 全事前登録 fixture を n>=2 で測定してからでないと "
                 "verdict を主張できない (fail-closed)"
             )
+        # 各 fixture の n>=2 repeats が**同一素材**（同一 audio bytes）であることを
+        # audio_sha256 の一致で保証する。manifest は audio_sha256: null を許すが
+        # harness は run ごとに実測 hash を記録するため、同一 id で別 audio を使った
+        # 2 run を「同一素材の n>=2 repeats」と誤認しないよう fail-closed（Codex 指摘）。
+        audio_hashes = []
+        for idx, report in enumerate(reports):
+            audio_sha256 = report["fixtures"][fixture_id].get("audio_sha256")
+            if not audio_sha256:
+                raise ValueError(
+                    f"evaluate_m1_real_go_bar: fixture {fixture_id!r} in reports[{idx}] lacks "
+                    "audio_sha256; 素材の同一性を pin できず verdict を出せない (fail-closed)"
+                )
+            audio_hashes.append(audio_sha256)
+        if len(set(audio_hashes)) > 1:
+            raise ValueError(
+                f"evaluate_m1_real_go_bar: fixture {fixture_id!r} has differing audio_sha256 "
+                f"across reports {sorted(set(audio_hashes))}; 別素材を同一 id の n>=2 "
+                "repeats と見なせない (fail-closed)"
+            )
 
     candidate_routes: set[str] = set()
     for report in reports:
@@ -599,14 +642,24 @@ def evaluate_m1_real_go_bar(
             if _is_ever_sufficient(reports, fid, route)
             and not _is_stably_sufficient(reports, fid, route)
         )
+        # 偽陽性ゼロは「negative でその経路を実際に測って sufficient が出なかった」で
+        # 初めて certify できる。全 report で未観測（欠落/unavailable 等）の negative が
+        # あれば、その経路は偽陽性なしを証明できていないので survive させない
+        # （neg_false_positive==0 を「測っていない」と「幻視しなかった」で混同しない・
+        # Codex 指摘）。
+        negative_unmeasured_ids = sorted(
+            fid for fid in negative_ids if not _is_measured(reports, fid, route)
+        )
         surviving = (
             pos_sufficient >= min_positive_sufficient
             and neg_false_positive <= max_negative_false_positive
+            and not negative_unmeasured_ids
         )
         routes_out[route] = {
             "pos_sufficient": pos_sufficient,
             "neg_false_positive": neg_false_positive,
             "unstable_positive_ids": unstable_positive_ids,
+            "negative_unmeasured_ids": negative_unmeasured_ids,
         }
         if surviving:
             surviving_routes.append(route)
