@@ -561,6 +561,15 @@ def evaluate_m1_real_go_bar(
       （`select_routes`）を report に持たない（stale/truncated report で一部経路が
       丸ごと欠けると、残った経路だけで go が出うる・docs §6.3 の完全 matrix を要求・
       Codex 指摘）
+    - 別素材であるべき go-bar fixture が同一 `audio_sha256` を共有（fixture 間で素材が
+      重複すると「4 別素材の ≥3/4」が実質 1 素材で満たされる・Codex 指摘）
+    - measured（gate outcome）な route 行が provenance フィールド（source_model /
+      extractor_version、分離経路は separation_model/version）を欠く、または同一
+      fixture×route の provenance が repeats 間で不一致（欠落を「一致」と扱わず、別
+      model stack の run を n>=2 と誤認しない・設計 §2.3・Codex 指摘）
+
+    候補経路は positive fixture の registry 凍結 kind が規定する matrix に限定し、
+    report に混入した非登録経路は verdict に効かせない（Codex 指摘）。
 
     ゲート outcome は ``"sufficient"`` / ``"insufficient"`` のみを指す
     （``"unavailable"`` / ``"not_observed_by_routing"`` / ``"not_applicable"`` は
@@ -685,20 +694,53 @@ def evaluate_m1_real_go_bar(
                 "repeats と見なせない (fail-closed)"
             )
         fixture_audio_hash[fixture_id] = audio_hashes[0]
-        # model provenance の一致確認。各 report に共通して存在する route について、
-        # 抽出器/分離器の provenance 署名（source_model / version / separation_*）が
-        # repeats 間で一致することを要求する。マシン跨ぎや途中のモデルアップグレードで
-        # provenance が変われば、同一 stack 下の再現でないので repeats と見なせない
-        # （Codex 指摘・設計 §2.3）。
+        # registry が凍結した input_kind（report 自己申告でなく）で回すべき経路集合。
+        registry_kind = registered_kinds.get(fixture_id)
+        if registry_kind is None:
+            raise ValueError(
+                f"evaluate_m1_real_go_bar: fixture {fixture_id!r} は registry.yaml の "
+                "external_fixtures に未登録 (fail-closed)"
+            )
+        expected_route_objs = select_routes(registry_kind)
+        expected_routes = {r.name for r in expected_route_objs}
+        separation_routes = {r.name for r in expected_route_objs if r.requires_separation}
+        # model provenance の完全性 + 一致確認。各 report に共通して存在する route に
+        # ついて、(a) measured（gate outcome）な行は provenance フィールドが実在する
+        # ことを要求し（欠落した古い/手書き report が全 None 署名で一致扱いになる穴を
+        # 塞ぐ）、(b) provenance 署名（source_model / version / separation_*）が repeats
+        # 間で一致することを要求する（別 model stack の run を n>=2 と誤認しない）。
+        # 設計 §2.3 の Demucs/CREPE/Melodia バージョン pin 要件（Codex 指摘）。
         common_routes = set(_fixture_route_rows(reports[0], fixture_id))
         for report in reports[1:]:
             common_routes &= set(_fixture_route_rows(report, fixture_id))
         for route in sorted(common_routes):
-            signatures = {
-                _route_provenance(_fixture_route_rows(report, fixture_id)[route])
-                for report in reports
-            }
-            if len(signatures) > 1:
+            rows = [_fixture_route_rows(report, fixture_id)[route] for report in reports]
+            for idx, row in enumerate(rows):
+                # 未観測（unavailable/not_applicable 等）は抽出器を回していないので
+                # provenance を要求しない。measured な行のみ pin を必須化する。
+                if row.get("outcome") not in _GATE_OUTCOMES:
+                    continue
+                missing_fields = []
+                if not row.get("source_model"):
+                    missing_fields.append("source_model")
+                if not row.get("extractor_version"):
+                    missing_fields.append("extractor_version")
+                if route in separation_routes:
+                    preprocessing = row.get("preprocessing")
+                    if (
+                        not isinstance(preprocessing, dict)
+                        or not preprocessing.get("separation_model")
+                        or not preprocessing.get("separation_version")
+                    ):
+                        missing_fields.append("preprocessing.separation_model/version")
+                if missing_fields:
+                    raise ValueError(
+                        f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} in "
+                        f"reports[{idx}] is measured but lacks provenance {missing_fields}; "
+                        "provenance を pin しない report では同一 model stack の n>=2 を証明できない "
+                        "(fail-closed)"
+                    )
+            if len({_route_provenance(row) for row in rows}) > 1:
                 raise ValueError(
                     f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} has "
                     "differing model provenance (source_model/extractor_version/separation) "
@@ -710,13 +752,6 @@ def evaluate_m1_real_go_bar(
         # 凍結した input_kind**（report 自己申告でなく）で回すべき全経路（select_routes）
         # と突き合わせ、欠落を fail-closed にする（Codex 指摘・docs §6.3 の vocal_track
         # 4 経路 matrix を全 fixture × n>=2）。
-        registry_kind = registered_kinds.get(fixture_id)
-        if registry_kind is None:
-            raise ValueError(
-                f"evaluate_m1_real_go_bar: fixture {fixture_id!r} は registry.yaml の "
-                "external_fixtures に未登録 (fail-closed)"
-            )
-        expected_routes = {r.name for r in select_routes(registry_kind)}
         for idx, report in enumerate(reports):
             report_kind = report["fixtures"][fixture_id]["input_kind"]
             if report_kind != registry_kind:
@@ -751,10 +786,16 @@ def evaluate_m1_real_go_bar(
             f"{collided}; 別素材であるべき fixture が同一 WAV を指している (fail-closed)"
         )
 
+    # 候補経路は positive fixture の**registry 凍結 kind**が規定する matrix に限定する。
+    # report 内容の union から作ると、stale/手書き report が正規 4 経路に加えて非登録の
+    # 経路（例 clear_lead 用 crepe_direct）を混入させたとき、凍結 §6.3 経路が 1 本も
+    # survive していなくてもその混入経路で go が出うる。凍結 matrix だけを候補にする
+    # ことで、混入経路は verdict に一切効かない（Codex 指摘）。
     candidate_routes: set[str] = set()
-    for report in reports:
-        for fixture_id in positive_ids:
-            candidate_routes.update(_fixture_route_outcomes(report, fixture_id))
+    for fixture_id in positive_ids:
+        candidate_routes.update(
+            r.name for r in select_routes(registered_kinds[fixture_id])
+        )
 
     routes_out: Dict[str, Dict[str, Any]] = {}
     surviving_routes: List[str] = []

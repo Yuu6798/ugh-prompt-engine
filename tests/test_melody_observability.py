@@ -921,6 +921,22 @@ def _make_go_bar_report(
     # 完全な vocal_track matrix を模す: 明示されない経路は unavailable で埋める
     # （評価器の full-matrix 完全性チェックを満たしつつ、未指定経路は未観測扱い）。
     vocal_track_routes = [r.name for r in select_routes("vocal_track")]
+
+    def _row(route, outcome):
+        # measured（gate outcome）な行は harness と同じ provenance を持つ。分離経路は
+        # separation provenance も付ける（評価器の provenance 完全性チェックに合わせる）。
+        row = {"route": route, "extractor": "crepe", "outcome": outcome, "report": None}
+        if outcome in ("sufficient", "insufficient"):
+            row["source_model"] = "demucs_vocals+crepe"
+            row["extractor_version"] = "0.0.13"
+            if route.startswith("demucs_vocals_"):
+                row["preprocessing"] = {
+                    "preprocessing": "demucs_vocals",
+                    "separation_model": "htdemucs_ft",
+                    "separation_version": "4.0.1",
+                }
+        return row
+
     fixtures = {}
     for fixture_id, routes in route_outcomes.items():
         full_routes = {name: "unavailable" for name in vocal_track_routes}
@@ -931,10 +947,7 @@ def _make_go_bar_report(
             "audio_path": f"/fake/{fixture_id}.wav",
             # fixture ごとに別素材を模す（id 由来の決定論 hash・repeats 間で同一）。
             "audio_sha256": hashlib.sha256(fixture_id.encode()).hexdigest(),
-            "routes": [
-                {"route": route, "extractor": "crepe", "outcome": outcome, "report": None}
-                for route, outcome in full_routes.items()
-            ],
+            "routes": [_row(route, outcome) for route, outcome in full_routes.items()],
         }
     return {
         "mode": "external",
@@ -1309,6 +1322,54 @@ def test_evaluate_go_bar_fails_closed_on_provenance_mismatch():
     _set_source_model(r2, "real_vocal_jrock", _GO_BAR_ROUTE, "crepe-0.0.14")
     with pytest.raises(ValueError, match="model provenance"):
         harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_fails_closed_on_missing_provenance_fields():
+    """measured route が provenance を欠く（全 None 署名）と fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+    # provenance を pin しない古い/手書き report を模す: 両 report で jrock の
+    # measured route から source_model を削る（全 None 署名同士は一致してしまう）。
+    for report in (r1, r2):
+        for row in report["fixtures"]["real_vocal_jrock"]["routes"]:
+            if row["route"] == _GO_BAR_ROUTE:
+                row.pop("source_model", None)
+    with pytest.raises(ValueError, match="lacks provenance"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_ignores_routes_outside_frozen_matrix():
+    """report に混入した非登録経路は candidate に入らず verdict に効かない。
+
+    正規の vocal_track 4 経路が 1 本も survive していないのに、混入した架空経路で
+    go が出ないことを確認する（Codex 指摘）。
+    """
+    import scripts.run_melody_observability as harness
+
+    # 正規経路は全 fixture で insufficient（誰も survive しない）。
+    outcomes = {fid: {_GO_BAR_ROUTE: "insufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+    # 非登録の架空経路を positive に混入（sufficient）＋ negative に insufficient。
+    for report in (r1, r2):
+        for fid in _GO_BAR_POSITIVES:
+            report["fixtures"][fid]["routes"].append(
+                {"route": "bogus_route", "extractor": "x", "outcome": "sufficient",
+                 "report": None, "source_model": "x", "extractor_version": "1"}
+            )
+        report["fixtures"][_GO_BAR_NEGATIVE]["routes"].append(
+            {"route": "bogus_route", "extractor": "x", "outcome": "insufficient",
+             "report": None, "source_model": "x", "extractor_version": "1"}
+        )
+    verdict = harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+    assert verdict["verdict"] == "no_go"
+    assert "bogus_route" not in verdict["routes"]
+    assert verdict["surviving_routes"] == []
 
 
 # --------------------------------------------------------------------------- #
