@@ -613,6 +613,37 @@ def test_isolate_vocals_with_provenance_emits_stem_and_weights_hashes(monkeypatc
     assert "htdemucs_ft.yaml" in result.weights_filenames
 
 
+def test_malformed_bag_metadata_becomes_unavailable_not_a_crash(monkeypatch, tmp_path):
+    """壊れた bag YAML は run を落とさず unavailable になる（graceful 契約・#217）。
+
+    `_run_routes_on_file` は `LearnedModelUnavailable` しか catch しないので、素の
+    `yaml.YAMLError` / `OSError` が貫通すると `--external` run 全体が落ちる。
+    """
+    adapter, _ = _provision_gate(monkeypatch, tmp_path, weights_present=True)
+    (tmp_path / "remote" / "htdemucs_ft.yaml").write_text(
+        "models: [unclosed\n", encoding="utf-8"
+    )
+    with pytest.raises(LearnedModelUnavailable, match="resolution failed"):
+        adapter.ensure_separation_available()
+
+
+def test_unreadable_weight_file_becomes_unavailable_not_a_crash(monkeypatch, tmp_path):
+    """discovery 後に読めなくなった重みも unavailable へ写像する（graceful 契約・#217）。"""
+    adapter, weights_dir = _provision_gate(monkeypatch, tmp_path, weights_present=True)
+
+    real_locate = adapter.locate_separation_weights
+
+    def locate_then_delete(model=adapter.DEFAULT_MODEL):
+        found = real_locate(model)
+        # discovery と hashing の間にファイルが消える状況を模す。
+        (weights_dir / adapter._expected_weight_filenames("htdemucs_ft")[0]).unlink()
+        return found
+
+    monkeypatch.setattr(adapter, "locate_separation_weights", locate_then_delete)
+    with pytest.raises(LearnedModelUnavailable, match="hashing failed"):
+        adapter.resolve_separation_weights()
+
+
 def test_isolate_vocals_rejects_weights_swapped_during_separation(monkeypatch, tmp_path):
     """分離中に重みが差し替わったら stem を返さず unavailable（TOCTOU・Codex #217）。
 
@@ -707,8 +738,16 @@ def test_extractor_pin_is_bound_to_first_load_in_process(monkeypatch, tmp_path):
 
     # 推論の外で artifact が差し替わる（cache 済みモデルは旧のまま）。
     weights.write_bytes(b"crepe-weights-v2-replacement")
+    # 2 回目は **推論に入る前** に弾かれる（pin の bind が推論前だから）。
+    inference_calls = []
+    monkeypatch.setattr(
+        "svp_rpe.melody.extractors.extract_crepe_observation",
+        lambda y, sr, **kwargs: inference_calls.append(1)
+        or MelodyObservation(route="crepe_direct", source_model="crepe:predict"),
+    )
     with pytest.raises(LearnedModelUnavailable, match="since it was first loaded"):
         observe_via_route_with_provenance(str(wav), route)
+    assert inference_calls == []  # 旧 cache モデルでの推論を走らせない
 
     from svp_rpe.melody.provenance import load_time_pin
 

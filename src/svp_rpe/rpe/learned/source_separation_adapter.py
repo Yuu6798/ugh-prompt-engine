@@ -291,6 +291,23 @@ def _torch_hub_checkpoint_dirs() -> List[Path]:
     return [_env_derived_checkpoint_dir()]
 
 
+def _as_unavailable(what: str, exc: BaseException) -> LearnedModelUnavailable:
+    """解決/hash 中の想定外例外を `LearnedModelUnavailable` へ写像する（graceful 契約）。
+
+    `_run_routes_on_file` は `LearnedModelUnavailable` **だけ**を catch して route を
+    `unavailable` に落とす。壊れた cache / 不正な bag YAML / 読めなくなったファイルが
+    素の `OSError` / `yaml.YAMLError` 等として貫通すると、**`--external` run 全体が落ちる**
+    （部分行も report も残らない）——D-1 が塞いだはずの失敗形が別経路で復活する
+    （Codex #217）。ここで一律に写像し、原因は型と 1 行目で診断可能にする。
+    """
+    first_line = str(exc).splitlines()[0] if str(exc) else ""
+    return LearnedModelUnavailable(
+        f"demucs weights {what} failed ({type(exc).__name__}: {first_line}); "
+        "重み cache / パッケージメタデータが壊れている可能性がある。分離経路を "
+        "unavailable として扱う（run は完走する）"
+    )
+
+
 def locate_separation_weights(model: str = DEFAULT_MODEL) -> List[Path]:
     """`model` の**モデル入力ファイル**がローカルに実在することを確認してパスを返す。
 
@@ -314,6 +331,16 @@ def locate_separation_weights(model: str = DEFAULT_MODEL) -> List[Path]:
     """
     if not _has_demucs():
         raise LearnedModelUnavailable(_INSTALL_HINT)
+    try:
+        return _locate_separation_weights(model)
+    except LearnedModelUnavailable:
+        raise
+    except Exception as exc:  # 壊れた cache / 不正な remote メタデータ等
+        raise _as_unavailable("resolution", exc) from exc
+
+
+def _locate_separation_weights(model: str) -> List[Path]:
+    """`locate_separation_weights` の本体（例外写像は呼び出し側が行う）。"""
     filenames = _expected_weight_filenames(model)
     search_dirs = _torch_hub_checkpoint_dirs()
     found: List[Path] = []
@@ -362,10 +389,14 @@ def resolve_separation_weights(model: str = DEFAULT_MODEL) -> SeparationWeights:
         demucs 未導入・期待ファイル名を解決できない・重みが未取得のとき。
     """
     found = locate_separation_weights(model)
+    try:
+        digest = sha256_of_files(found)
+    except Exception as exc:  # discovery と hash の間に消える/読めなくなる場合
+        raise _as_unavailable("hashing", exc) from exc
     return SeparationWeights(
         model=model,
         paths=tuple(found),
-        sha256=sha256_of_files(found),
+        sha256=digest,
         version=_demucs_version(),
     )
 
@@ -454,10 +485,11 @@ def isolate_vocals_with_provenance(
             f"demucs weights became unresolvable during separation ({exc}); "
             "pin と stem の対応を保証できないため unavailable として扱う"
         ) from exc
-    except OSError as exc:
+    except Exception as exc:
         raise LearnedModelUnavailable(
-            f"demucs weights disappeared during separation ({type(exc).__name__}: {exc}); "
-            "pin と stem の対応を保証できないため unavailable として扱う"
+            f"demucs weights disappeared or became unreadable during separation "
+            f"({type(exc).__name__}: {exc}); pin と stem の対応を保証できないため "
+            "unavailable として扱う"
         ) from exc
     if [str(p) for p in post_paths] != [str(p) for p in weights.paths]:
         raise LearnedModelUnavailable(

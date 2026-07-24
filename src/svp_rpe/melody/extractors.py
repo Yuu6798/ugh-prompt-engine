@@ -227,6 +227,32 @@ def _extractor_fingerprint(extractor: str, *, use_cache: bool = True):
     return extractor_weights_fingerprint(extractor, use_cache=use_cache)
 
 
+def _bind_load_time_pin(extractor: str, before) -> None:
+    """推論**前**に load-time pin を確定（初回）または照合する（#217）。
+
+    pin を推論後に初期化すると、「このプロセスで既に CREPE がロード済み → その後
+    artifact が差し替わった」場合に、**差し替え後の digest を初回 pin として記録**して
+    しまい、旧 in-memory モデルが生んだ観測に新しい pin が付く。ロード境界に最も近い
+    ——推論が始まる直前——で bind し、食い違えば**推論そのものを行わない**。
+
+    残る限界（docs §6.4 に明記）: このプロセスで **本経路を通らずに** モデルが
+    ロードされていた場合、そのロード時点の digest は原理的に知りようがない。ハーネスは
+    抽出器を本経路からしか呼ばず、slow-lane は 1 run = 1 プロセスで回すことで満たす。
+    """
+    from svp_rpe.melody.provenance import record_load_time_pin
+    from svp_rpe.rpe.learned import LearnedModelUnavailable
+
+    if before is None:
+        return
+    pinned = record_load_time_pin(extractor, before.sha256)
+    if pinned != before.sha256:
+        raise LearnedModelUnavailable(
+            f"{extractor} model artifact changed since it was first loaded in this process "
+            f"(load_time={pinned}, now={before.sha256}); ロード済みモデルが cache されている"
+            "場合、推論は旧 artifact のままでありうるため推論を行わない"
+        )
+
+
 def _verify_and_record_extractor_weights(
     provenance: "Dict[str, Any]", extractor: str, before
 ) -> None:
@@ -238,7 +264,7 @@ def _verify_and_record_extractor_weights(
     食い違えば観測を返さず `LearnedModelUnavailable` に落とす（route は unavailable と
     して記録され run は完走する）。再検証は memo を迂回して実バイトを読む。
     """
-    from svp_rpe.melody.provenance import load_time_pin, record_load_time_pin
+    from svp_rpe.melody.provenance import load_time_pin
     from svp_rpe.rpe.learned import LearnedModelUnavailable
 
     after = _extractor_fingerprint(extractor, use_cache=False)
@@ -253,17 +279,15 @@ def _verify_and_record_extractor_weights(
         )
     if after is None:
         return
-    # プロセス内 load-time pin との照合（#217）。CREPE 等はロード済みモデルを global に
-    # cache するため、初回ロード後に artifact が差し替わると「ディスクは新 bytes・推論は
-    # 旧 in-memory モデル」になりうる。ディスクの pre/post 一致だけでは検出できないので、
-    # 最初に観測した digest を保持して照合し、食い違えば fail-closed にする。
-    pinned = record_load_time_pin(extractor, after.sha256)
-    if pinned != after.sha256:
+    # プロセス内 load-time pin との照合（#217）。pin は推論**前**に `_bind_load_time_pin`
+    # で確定済みなので、ここは「推論後もその pin と一致しているか」の最終確認に徹する
+    # （推論後に初期化すると、旧 in-memory モデルが生んだ観測へ新 digest を pin しうる）。
+    pinned = load_time_pin(extractor)
+    if pinned is not None and pinned != after.sha256:
         raise LearnedModelUnavailable(
             f"{extractor} model artifact changed since it was first loaded in this process "
             f"(load_time={pinned}, now={after.sha256}); ロード済みモデルが cache されている"
             "場合、推論は旧 artifact のままでありうるため pin を publish しない"
-            f"（現在の load-time pin: {load_time_pin(extractor)}）"
         )
     provenance["extractor_weights_sha256"] = after.sha256
     provenance["extractor_weights_kind"] = after.kind
@@ -294,13 +318,16 @@ def observe_via_route_with_provenance(
     # basic-pitch は自前で path を読む（前処理は経路上 none のみを想定）。
     if route.extractor == "basic_pitch":
         before = _extractor_fingerprint(route.extractor)
+        _bind_load_time_pin(route.extractor, before)
         observation = extract_basic_pitch_observation(audio_path, route=route.name)
         _verify_and_record_extractor_weights(provenance, route.extractor, before)
         return observation, provenance
 
     waveform, sample_rate = _load_route_waveform(audio_path, route, provenance)
-    # 推論**前**に artifact を pin し、推論後に再検証する（TOCTOU・#217）。
+    # 推論**前**に artifact を pin（load-time pin の bind 込み）し、推論後に再検証する
+    # （TOCTOU・#217）。bind が食い違えば推論そのものを行わない。
     before = _extractor_fingerprint(route.extractor)
+    _bind_load_time_pin(route.extractor, before)
     if route.extractor == "pyin":
         observation = extract_pyin_observation(waveform, sample_rate, route=route.name)
     elif route.extractor == "crepe":

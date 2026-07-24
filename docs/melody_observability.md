@@ -348,7 +348,17 @@ basic-pitch）でも **推論前に指紋を採り、推論後に memo を迂回
 - **in-memory model cache**: CREPE 等はロード済みモデルをプロセス global に cache する。
   初回ロード後に artifact が差し替わると、ディスクの pre/post は新 bytes で一致するのに
   推論は旧モデルのまま、という状態がありうる。プロセス内の **load-time pin**（最初に
-  観測した digest）と照合し、食い違えば pin を publish せず `unavailable` にする。
+  観測した digest）を**推論前に bind**し、食い違えば**推論そのものを行わず** `unavailable`
+  にする（推論後に pin を初期化すると、旧モデルが生んだ観測へ新 digest が付く）。
+  残る限界: **本経路を通らずに**モデルがロードされていた場合、そのロード時点の digest は
+  原理的に知りようがない。ハーネスは抽出器を本経路からしか呼ばないので、slow-lane は
+  **1 run = 1 プロセス**で回すこと（レシピどおり run1/run2 を別コマンドで実行すれば満たす）。
+
+なお、これらの解決・hash 段で起きる想定外の失敗（壊れた cache・不正な bag YAML・
+discovery 後に読めなくなったファイル）も `LearnedModelUnavailable` へ写像する。
+`_run_routes_on_file` は `LearnedModelUnavailable` だけを catch して route を
+`unavailable` に落とすので、素の `OSError` / `yaml.YAMLError` が貫通すると
+**run 全体が落ちて部分行も report も残らない**（D-1 が塞いだ失敗形の再来）。
 
 第 3 状態を「利用可能」と誤認すると、遮断環境では torch hub の download が
 `urllib.error.URLError` を投げて `--external` run 全体が落ち、部分行も report も
