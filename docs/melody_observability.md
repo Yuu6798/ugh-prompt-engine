@@ -475,6 +475,12 @@ pin を必須化する = 記録が済むまで Go を出さない fail-closed �
   Demucs は torch が実行するため、抽出器パッケージだけでは patch を検出できない）:
   crepe→`crepe`+`tensorflow`/`keras`、basic_pitch→`basic_pitch`+TF/ONNX/CoreML/TFLite、
   melodia→`essentia`（ネイティブ実装が算法そのもの）、pyin→`librosa`+`scipy`、
+  加えて **`soundfile` は全抽出器の閉包に入る**（`librosa.load` は WAV/FLAC を
+  soundfile 経由でデコードし、合成経路は `sf.write` で観測対象そのものを書く。
+  デコードの実体は同梱の **libsndfile ネイティブ共有ライブラリ**なので、単一モジュール
+  配布の同梱物 `_soundfile.py` / `_soundfile_data/` まで hash 対象に含める。
+  単一モジュール（site-packages 直下の 1 ファイル）は親ディレクトリを rglob すると
+  site-packages 全体を巻き込むため、パッケージとは別扱いにする）、
   分離→`demucs`+`torch`。加えて **`librosa` は全抽出器の閉包に入る** — 本アダプタ層が
   非分離経路の波形 decode・Melodia 入力のリサンプル・basic-pitch の被覆分母となる実尺取得に
   librosa を使うため、patch された librosa は抽出器へ渡る波形やゲート指標を変えるのに
@@ -484,9 +490,11 @@ pin を必須化する = 記録が済むまで Go を出さない fail-closed �
   `librosa.pyin` へ渡すため、patch された scipy はフィルタ後の波形＝F0＝ゲート判定を変える。import できなかった backend は飛ばし、**実際に覆った名前**を
   `extractor_code_packages` / `separation_code_packages` に列挙する（被覆の正直会計）。
   コード hash の解決は `importlib.util.find_spec` で**モジュールを実行せず**場所だけを
-  引くので、bind を**当該パッケージの import より前**に置ける。ハーネスは run の最初に
-  `bind_inference_code_pins()` を呼び、`_generator_code_sha256()` の閉包探索（`io.source_separator`
-  経由で demucs を import する）より前に全 pin を固定する。route 内でも、artifact 解決
+  引くので、bind を**当該パッケージの import より前**に置ける。ハーネスは
+  `bind_inference_code_pins()` を **モジュール本体の import 列より前**（`soundfile` /
+  `build_melody_bench` / `melody.extractors` を引く前）で呼び、run の入口でも呼ぶ。
+  これで `_generator_code_sha256()` の閉包探索（`io.source_separator` 経由で demucs と
+  soundfile を import する）より前に全 pin が固定される。route 内でも、artifact 解決
   （third-party を import する）より**前**にコード pin を bind する。import 後に hash すると「cache 済みの旧コードが実行され、
   hash は新ファイルを見る」窓が開くため。残る限界: 本経路より前に**別の経路や別トラックが
   同じパッケージを import 済み**なら、その時点の digest は知りようがない（load-time pin と

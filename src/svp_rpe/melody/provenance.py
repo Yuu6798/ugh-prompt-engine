@@ -187,7 +187,7 @@ _EXTRACTOR_CODE_PACKAGES = {
     # CREPE は 16kHz 以外の入力を **内部で `resampy`** によりリサンプルしてから
     # モデルへ渡す。patch された resampy はモデルに届くサンプルを変えるのに、
     # crepe/TF/weights/version のどの pin も動かない（Codex #217）。
-    "crepe": ("crepe", "tensorflow", "keras", "librosa", "resampy"),
+    "crepe": ("crepe", "tensorflow", "keras", "librosa", "resampy", "soundfile"),
     "basic_pitch": (
         "basic_pitch",
         "tensorflow",
@@ -196,15 +196,16 @@ _EXTRACTOR_CODE_PACKAGES = {
         "coremltools",
         "tflite_runtime",
         "librosa",
+        "soundfile",
     ),
-    "melodia": ("essentia", "librosa"),
+    "melodia": ("essentia", "librosa", "soundfile"),
     # pyin は **scipy を直接実行する**: `extract_pyin_observation` が
     # `_highpass_melody_signal`（`scipy.signal.butter` / `sosfiltfilt`）で波形を
     # 前処理してから `librosa.pyin` へ渡す（physical_features.py:1170-1182）。
     # patch された scipy はフィルタ後の波形＝F0 トラック＝ゲート判定を変えるのに、
     # librosa の pin も version も動かない（Codex #217）。汎用数値基盤を線の外に
     # 置く原則の例外は「本層のコードが直接呼ぶ」ことを根拠とする。
-    "pyin": ("librosa", "scipy"),
+    "pyin": ("librosa", "scipy", "soundfile"),
 }
 
 # 分離器（Demucs）の推論を実行するパッケージ群。
@@ -222,6 +223,38 @@ _CODE_SUFFIXES = (".py", ".so", ".pyd", ".dylib")
 STATE_OK = "ok"
 STATE_ABSENT = "absent"
 STATE_UNHASHABLE = "unhashable"
+
+
+# 単一モジュール配布の同梱物（モジュール名 → 兄弟のモジュール名 / データディレクトリ名）。
+# `soundfile` は `soundfile.py` 単体 + cffi バインディング `_soundfile.py` +
+# `_soundfile_data/`（**libsndfile 本体のネイティブ共有ライブラリ**）で構成される。
+# デコードの実体は libsndfile なので、これを外すと「別ビルドの libsndfile が返した
+# サンプル」を pin 済みとして扱ってしまう（Codex #217）。
+_MODULE_COMPANIONS = {
+    "soundfile": ("_soundfile.py", "_soundfile_data"),
+}
+
+
+def _module_companion_files(package: str, root: Path) -> "list[Path]":
+    """単一モジュール配布の同梱物（兄弟モジュール / データディレクトリ）を集める。
+
+    データディレクトリは**拡張子で絞らない**（`libsndfile_x86_64.so` のように
+    プラットフォーム名や `.so.1` 形式の版番号が付き、`_CODE_SUFFIXES` で漏れるため）。
+    """
+    files: "list[Path]" = []
+    for name in _MODULE_COMPANIONS.get(package, ()):
+        target = root / name
+        if target.is_file():
+            files.append(target)
+        elif target.is_dir():
+            files.extend(
+                sorted(
+                    path
+                    for path in target.rglob("*")
+                    if path.is_file() and "__pycache__" not in path.parts
+                )
+            )
+    return files
 
 
 def package_code_state(
@@ -251,17 +284,30 @@ def package_code_state(
     if not origin or origin in ("built-in", "frozen"):
         # namespace / zip import 等。**導入されている**のに hash 対象を特定できない。
         return STATE_UNHASHABLE, None
-    root = Path(origin).resolve().parent
-    try:
-        files = sorted(
-            path
-            for path in root.rglob("*")
-            if path.is_file()
-            and path.suffix in _CODE_SUFFIXES
-            and "__pycache__" not in path.parts
-        )
-    except OSError:
-        return STATE_UNHASHABLE, None
+    origin_path = Path(origin).resolve()
+    if getattr(spec, "submodule_search_locations", None) is None:
+        # **単一モジュール**（`soundfile.py` のように site-packages 直下に 1 ファイル）。
+        # パッケージと同じく親ディレクトリを rglob すると **site-packages 全体**を
+        # hash してしまい、無関係な install で pin が動く（かつ極端に遅い）。
+        # モジュール本体と、規約で決まる同梱物（`_soundfile.py` /
+        # `_soundfile_data/` の libsndfile 等）だけを対象にする（Codex #217）。
+        root = origin_path.parent
+        try:
+            files = [origin_path] + _module_companion_files(package, root)
+        except OSError:
+            return STATE_UNHASHABLE, None
+    else:
+        root = origin_path.parent
+        try:
+            files = sorted(
+                path
+                for path in root.rglob("*")
+                if path.is_file()
+                and path.suffix in _CODE_SUFFIXES
+                and "__pycache__" not in path.parts
+            )
+        except OSError:
+            return STATE_UNHASHABLE, None
     if not files:
         return STATE_UNHASHABLE, None
     try:

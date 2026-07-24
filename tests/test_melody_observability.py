@@ -405,6 +405,10 @@ def _stub_extractor_code_pin(monkeypatch, digest: "str | None" = None):
         "extractor_code_fingerprint",
         lambda extractor, **kwargs: (value, ("stub_package",)),
     )
+    # 差し替え後の環境を「新プロセス」として扱う。ハーネスは import 時に実 digest で
+    # load-time pin を bind するので、stub 導入後に reset しないと「プロセス内で
+    # コードが差し替わった」判定に落ちる（本番の fail-closed 挙動そのもの）。
+    melody_provenance.reset_load_time_pins()
     return value
 
 
@@ -430,6 +434,10 @@ def _provision_gate(monkeypatch, tmp_path, *, weights_present: bool):
             tuple(packages),
         ),
     )
+    # stub 導入後の環境を「新プロセス」として扱う。ハーネスは import 時に実 digest で
+    # load-time pin を bind するので、reset しないと「プロセス内でコードが差し替わった」
+    # 判定（本番の fail-closed 挙動）に落ちる。
+    _melody_provenance.reset_load_time_pins()
     monkeypatch.setattr(adapter, "_demucs_remote_dir", lambda: _fake_remote_dir(tmp_path))
     weights_dir = tmp_path / "checkpoints"
     weights_dir.mkdir(exist_ok=True)
@@ -2162,7 +2170,7 @@ def test_route_rows_record_third_party_code_hash(monkeypatch, tmp_path):
     assert rows[0]["extractor_code_sha256"] == extractor_code_sha256("pyin")
     assert harness._is_sha256(rows[0]["extractor_code_sha256"])
     # pin が何を覆ったか（抽出器自身 + 実在した backend）を行に列挙する。
-    assert rows[0]["extractor_code_packages"] == ["librosa", "scipy"]
+    assert rows[0]["extractor_code_packages"] == ["librosa", "scipy", "soundfile"]
 
 
 def test_code_pin_covers_inference_backends(monkeypatch):
@@ -2308,6 +2316,75 @@ def test_pyin_code_closure_covers_scipy():
 
     digest, covered = melody_provenance.extractor_code_fingerprint("pyin")
     assert "scipy" in covered and harness_is_sha256(digest)
+
+
+def test_soundfile_code_closure_covers_libsndfile():
+    """全抽出器の閉包に `soundfile`（= libsndfile）が入る（#217）。
+
+    WAV/FLAC は `librosa.load` が soundfile 経由でデコードし、合成経路は `sf.write` で
+    観測対象そのものを書く。デコードの実体は同梱のネイティブ共有ライブラリなので、
+    単一モジュール配布の同梱物（`_soundfile.py` / `_soundfile_data/`）まで覆う。
+    """
+    import importlib.util
+
+    from svp_rpe.melody import provenance as melody_provenance
+
+    for extractor, packages in melody_provenance._EXTRACTOR_CODE_PACKAGES.items():
+        assert "soundfile" in packages, extractor
+
+    state, digest = melody_provenance.package_code_state("soundfile")
+    assert state == melody_provenance.STATE_OK and harness_is_sha256(digest)
+
+    # 単一モジュールは **site-packages 全体**を hash しない（親 rglob との差で確認）。
+    root = Path(importlib.util.find_spec("soundfile").origin).resolve().parent
+    siblings = len([p for p in root.glob("*") if p.is_file() and p.suffix == ".py"])
+    assert siblings > 2  # site-packages 直下に無関係な .py が並ぶ環境であること
+    companions = melody_provenance._module_companion_files("soundfile", root)
+    assert companions, "libsndfile 同梱物（_soundfile.py / _soundfile_data）が見つからない"
+    # 同梱ネイティブライブラリ（`libsndfile_x86_64.so` 等）は拡張子で絞らずに拾う。
+    assert any("libsndfile" in p.name for p in companions)
+
+
+def test_module_companion_change_moves_the_pin(monkeypatch, tmp_path):
+    """同梱 libsndfile が差し替わったら pin が動く（#217）。"""
+    import importlib.util
+
+    from svp_rpe.melody import provenance as melody_provenance
+
+    fake_root = tmp_path / "site-packages"
+    (fake_root / "_soundfile_data").mkdir(parents=True)
+    module = fake_root / "soundfile.py"
+    module.write_text("# soundfile\n")
+    (fake_root / "_soundfile.py").write_text("# cffi bindings\n")
+    lib = fake_root / "_soundfile_data" / "libsndfile_x86_64.so"
+    lib.write_bytes(b"libsndfile-v1")
+    (fake_root / "unrelated.py").write_text("# 別パッケージ（巻き込んではならない）\n")
+
+    class _Spec:
+        origin = str(module)
+        submodule_search_locations = None
+
+    monkeypatch.setattr(
+        importlib.util, "find_spec", lambda name, *a, **k: _Spec() if name == "soundfile" else None
+    )
+    before = melody_provenance.package_code_state("soundfile", use_cache=False)
+    lib.write_bytes(b"libsndfile-v2-different-build")
+    after = melody_provenance.package_code_state("soundfile", use_cache=False)
+    assert before[0] == after[0] == melody_provenance.STATE_OK
+    assert before[1] != after[1]
+
+    # 無関係な兄弟 .py を書き換えても pin は動かない（site-packages 全体を見ていない）。
+    (fake_root / "unrelated.py").write_text("# patched\n")
+    assert melody_provenance.package_code_state("soundfile", use_cache=False)[1] == after[1]
+
+
+def test_harness_binds_code_pins_before_importing_soundfile():
+    """ハーネスは `soundfile` を import する**前**に pin を bind する（#217）。"""
+    source = (ROOT / "scripts" / "run_melody_observability.py").read_text()
+    bind_call = source.index("\nbind_inference_code_pins()")
+    assert bind_call < source.index("import soundfile as sf")
+    assert bind_call < source.index("from build_melody_bench import")
+    assert bind_call < source.index("from svp_rpe.melody.extractors import")
 
 
 def test_finder_failure_is_unhashable_not_absent(monkeypatch):
