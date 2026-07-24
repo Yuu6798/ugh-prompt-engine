@@ -2445,6 +2445,43 @@ def test_evaluate_go_bar_cli_rejects_out_overwriting_report_source_audio(tmp_pat
     assert wav.read_bytes() == before
 
 
+def test_evaluate_go_bar_cli_rejects_out_overwriting_report_manifest(tmp_path, monkeypatch):
+    """--evaluate-go-bar の --out が report が pin する manifest を指したら fail-closed（#63）。
+
+    `--out manifest.json` の typo で、report がどの素材集合から生成されたかを証明する
+    manifest（manifest_sha256 の元）を verdict JSON で破壊するのを防ぐ。
+    """
+    import json as _json
+
+    import scripts.run_melody_observability as harness
+
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(_json.dumps([{"id": "real_vocal_jrock"}]), encoding="utf-8")
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    reg_sha = hashlib.sha256(REGISTRY_PATH.read_bytes()).hexdigest()
+    r1 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    r2 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    # 両 report が同 manifest を pin（run_external が manifest_path を記録するのを模す）。
+    r1["manifest_path"] = str(manifest)
+    r2["manifest_path"] = str(manifest)
+    run1 = tmp_path / "run1.json"
+    run1.write_text(_json.dumps(r1), encoding="utf-8")
+    run2 = tmp_path / "run2.json"
+    run2.write_text(_json.dumps(r2), encoding="utf-8")
+    monkeypatch.setattr(
+        sys, "argv",
+        ["run_melody_observability", "--evaluate-go-bar", str(run1), str(run2),
+         "--out", str(manifest)],
+    )
+    before = manifest.read_bytes()
+    with pytest.raises(ValueError, match="保護対象"):
+        harness.main()
+    assert manifest.read_bytes() == before  # manifest は無傷。
+
+
 def test_external_cli_rejects_out_colliding_with_manifest_or_source(tmp_path, monkeypatch):
     """--external の --out が manifest / source audio を指したら書き込み前に fail-closed。"""
     import json as _json

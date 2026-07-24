@@ -1664,12 +1664,23 @@ def main() -> int:
         #   - 各 report の fixture が指す source audio（`--out <source>.wav` の typo で、
         #     report を pin/採点した直後に、その report の repeat/検証に必要な slow-lane
         #     source 音源を破壊するのを防ぐ・external モードの同名保護と対称・#48）
-        # report_paths / REGISTRY_PATH / 評価器コード / audio は resolve 済み集合で比較する。
+        #   - 各 report が pin する manifest（`--out manifest.json` の typo で、report が
+        #     どの素材集合から生成されたかを証明する manifest を破壊するのを防ぐ・#63）
+        # report_paths / REGISTRY_PATH / 評価器・generator コード / audio / manifest は
+        # resolve 済み集合で比較する。
         report_audio_paths = {
             Path(info["audio_path"]).resolve()
             for report in reports
             for info in report.get("fixtures", {}).values()
             if info.get("audio_path")
+        }
+        # 各 report が pin する manifest（manifest_sha256 の元）も保護（#48 の source audio と
+        # 同型・#63）。`--out manifest.json` の typo で、report を pin/採点した直後に、その
+        # report がどの素材集合から生成されたかを証明する manifest を破壊させない。
+        report_manifest_paths = {
+            Path(report["manifest_path"]).resolve()
+            for report in reports
+            if report.get("manifest_path")
         }
         # 評価器コードに加え generator コードも保護（#57）。verdict は #55 で report の
         # generator_code_sha256 が現 checkout の `_generator_code_sha256()` と一致することを
@@ -1683,12 +1694,13 @@ def main() -> int:
             | set(_evaluator_code_paths())
             | set(_generator_code_paths())
             | report_audio_paths
+            | report_manifest_paths
         )
         if args.out is not None and Path(args.out).resolve() in protected_paths:
             raise ValueError(
                 f"--out {args.out} は保護対象パス（入力 report / 凍結 registry / 評価器コード / "
-                "generator コード / report source audio）と衝突する; verdict の書き込みが重要 "
-                "artifact を破壊するため拒否する (fail-closed)"
+                "generator コード / report source audio / report manifest）と衝突する; verdict の "
+                "書き込みが重要 artifact を破壊するため拒否する (fail-closed)"
             )
         verdict = evaluate_m1_real_go_bar(
             reports, registry, registry_sha256=registry_sha256
