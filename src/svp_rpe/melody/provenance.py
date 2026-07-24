@@ -31,8 +31,10 @@ from svp_rpe.rpe.learned import LearnedModelUnavailable
 from svp_rpe.utils.hashing import sha256_of_files
 
 __all__ = [
+    "ARTIFACT_BEARING_EXTRACTORS",
     "ExtractorWeights",
     "extractor_weights_fingerprint",
+    "require_extractor_weights_fingerprint",
     "record_load_time_pin",
     "load_time_pin",
     "reset_load_time_pins",
@@ -40,6 +42,11 @@ __all__ = [
 
 KIND_MODEL_WEIGHTS = "model_weights"
 KIND_LIBRARY_BINARY = "library_binary"
+
+# モデル artifact を**必ず持つ**抽出器（評価器が `extractor_weights_sha256` を必須とする
+# 集合と一致）。これらで指紋が取れないのは「重みが無い」ではなく **provisioning 失敗**
+# なので、観測を続けさせない（Codex #217）。pyin は DSP で artifact を持たない。
+ARTIFACT_BEARING_EXTRACTORS = frozenset({"crepe", "basic_pitch", "melodia"})
 
 # プロセス内で最初に観測した artifact digest（extractor → sha256）。
 # CREPE は `crepe.core.models` にロード済みモデルを**プロセス global で cache** する。
@@ -76,38 +83,76 @@ def extractor_weights_fingerprint(
     一致する差し替えでも検出できるようにするため・Codex #217）。
     """
     try:
-        if extractor == "crepe":
-            from svp_rpe.rpe.learned.crepe_adapter import crepe_weight_files
-
-            files = crepe_weight_files()
-            return ExtractorWeights(
-                extractor=extractor,
-                kind=KIND_MODEL_WEIGHTS,
-                sha256=sha256_of_files(files, use_cache=use_cache),
-                files=tuple(p.name for p in files),
-            )
-        if extractor == "basic_pitch":
-            from svp_rpe.rpe.learned.basic_pitch_adapter import basic_pitch_weight_files
-
-            files, root = basic_pitch_weight_files()
-            return ExtractorWeights(
-                extractor=extractor,
-                kind=KIND_MODEL_WEIGHTS,
-                sha256=sha256_of_files(files, root=root, use_cache=use_cache),
-                files=tuple(sorted(p.name for p in files)),
-            )
-        if extractor == "melodia":
-            from svp_rpe.rpe.learned.melodia_adapter import melodia_implementation_files
-
-            files, root = melodia_implementation_files()
-            return ExtractorWeights(
-                extractor=extractor,
-                kind=KIND_LIBRARY_BINARY,
-                sha256=sha256_of_files(files, root=root, use_cache=use_cache),
-                files=tuple(sorted(p.name for p in files)),
-            )
+        return _resolve_fingerprint(extractor, use_cache=use_cache)
     except (LearnedModelUnavailable, OSError):
         return None
+
+
+def require_extractor_weights_fingerprint(
+    extractor: str, *, use_cache: bool = True
+) -> Optional[ExtractorWeights]:
+    """artifact を持つ抽出器では、指紋を採れないことを `LearnedModelUnavailable` にする。
+
+    `extractor_weights_fingerprint` は解決失敗を `None` に畳むため、そのまま推論へ
+    進むと (a) 未 cache の抽出器が生の I/O 例外を投げて `--external` run 全体を落とす、
+    (b) cache 済みの抽出器が **評価器が要求する hash を欠いた measured 行**を返し、
+    後続の Go-bar 評価が「その経路だけ unavailable」ではなく丸ごと fail-closed する、
+    のいずれかになる（Codex #217）。artifact を持つ抽出器は provisioning 失敗として
+    早期に落とし、当該 route だけを `unavailable` にする。
+
+    `pyin` 等の artifact を持たない経路は従来どおり `None` を返す（評価器も要求しない）。
+    """
+    if extractor not in ARTIFACT_BEARING_EXTRACTORS:
+        return extractor_weights_fingerprint(extractor, use_cache=use_cache)
+    try:
+        fingerprint = _resolve_fingerprint(extractor, use_cache=use_cache)
+    except OSError as exc:
+        raise LearnedModelUnavailable(
+            f"{extractor} model artifact is unreadable ({type(exc).__name__}: {exc}); "
+            "pin を出せない経路で観測しないため unavailable として扱う"
+        ) from exc
+    if fingerprint is None:  # pragma: no cover - 上の集合と _resolve の分岐は対応済み
+        raise LearnedModelUnavailable(
+            f"{extractor} model artifact could not be resolved; "
+            "pin を出せない経路で観測しないため unavailable として扱う"
+        )
+    return fingerprint
+
+
+def _resolve_fingerprint(
+    extractor: str, *, use_cache: bool = True
+) -> Optional[ExtractorWeights]:
+    """指紋の解決本体（失敗を畳まず送出する）。"""
+    if extractor == "crepe":
+        from svp_rpe.rpe.learned.crepe_adapter import crepe_weight_files
+
+        files = crepe_weight_files()
+        return ExtractorWeights(
+            extractor=extractor,
+            kind=KIND_MODEL_WEIGHTS,
+            sha256=sha256_of_files(files, use_cache=use_cache),
+            files=tuple(f.name for f in files),
+        )
+    if extractor == "basic_pitch":
+        from svp_rpe.rpe.learned.basic_pitch_adapter import basic_pitch_weight_files
+
+        files, root = basic_pitch_weight_files()
+        return ExtractorWeights(
+            extractor=extractor,
+            kind=KIND_MODEL_WEIGHTS,
+            sha256=sha256_of_files(files, root=root, use_cache=use_cache),
+            files=tuple(sorted(f.name for f in files)),
+        )
+    if extractor == "melodia":
+        from svp_rpe.rpe.learned.melodia_adapter import melodia_implementation_files
+
+        files, root = melodia_implementation_files()
+        return ExtractorWeights(
+            extractor=extractor,
+            kind=KIND_LIBRARY_BINARY,
+            sha256=sha256_of_files(files, root=root, use_cache=use_cache),
+            files=tuple(sorted(f.name for f in files)),
+        )
     # pyin / none: 重みを持たない DSP 経路（評価器も pin を要求しない）。
     return None
 

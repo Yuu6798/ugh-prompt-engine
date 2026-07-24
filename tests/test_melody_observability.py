@@ -833,6 +833,54 @@ def test_observe_route_rejects_extractor_artifact_swapped_during_inference(
         observe_via_route_with_provenance(str(wav), route)
 
 
+def test_learned_route_without_artifact_becomes_unavailable(monkeypatch, tmp_path):
+    """artifact を解決できない学習抽出器は推論せず unavailable（route 単位・#217）。
+
+    `None` のまま推論へ進むと、生の I/O 例外で run 全体が落ちるか、評価器が要求する
+    hash を欠いた measured 行が出て Go-bar 評価が丸ごと fail-closed する。
+    """
+    import scripts.run_melody_observability as harness
+    from svp_rpe.melody.routing import MelodyRoute
+    from svp_rpe.rpe.learned import crepe_adapter
+
+    def missing_weights(*a, **k):
+        raise LearnedModelUnavailable("crepe weights model-full.h5 not found")
+
+    monkeypatch.setattr(crepe_adapter, "crepe_weight_files", missing_weights)
+    inference_calls = []
+    monkeypatch.setattr(
+        "svp_rpe.melody.extractors.extract_crepe_observation",
+        lambda y, sr, **kwargs: inference_calls.append(1)
+        or MelodyObservation(route="crepe_direct", source_model="crepe:predict"),
+    )
+    sr = 22050
+    wav = tmp_path / "lead.wav"
+    sf.write(wav, np.zeros(sr, dtype=np.float32), sr, subtype="FLOAT")
+    route = MelodyRoute("crepe_direct", "none", "crepe")
+    monkeypatch.setattr(harness, "select_routes", lambda kind: [route])
+
+    rows = harness._run_routes_on_file(str(wav), "clear_lead", _default_thresholds())
+    assert rows[0]["outcome"] == "unavailable"  # run は完走し、この経路だけ落ちる
+    assert inference_calls == []  # pin を出せない経路で推論しない
+
+
+def test_pyin_route_still_runs_without_any_artifact(monkeypatch, tmp_path):
+    """artifact を持たない pyin は指紋なしでも従来どおり観測できる（対称性の確認）。"""
+    import scripts.run_melody_observability as harness
+    from svp_rpe.melody.routing import MelodyRoute
+
+    sr = 22050
+    t = np.linspace(0, 1.5, int(sr * 1.5), endpoint=False)
+    wav = tmp_path / "lead.wav"
+    sf.write(wav, (0.4 * np.sin(2 * np.pi * 330 * t)).astype(np.float32), sr, subtype="FLOAT")
+    route = MelodyRoute("pyin_direct", "none", "pyin")
+    monkeypatch.setattr(harness, "select_routes", lambda kind: [route])
+
+    rows = harness._run_routes_on_file(str(wav), "clear_lead", _default_thresholds())
+    assert rows[0]["outcome"] in ("sufficient", "insufficient")
+    assert "extractor_weights_sha256" not in rows[0]
+
+
 def test_extractor_weights_fingerprint_is_none_for_dsp_and_missing_deps():
     """pyin（DSP）と未導入 optional 抽出器では指紋なし（推測 digest を作らない）。"""
     from svp_rpe.melody.provenance import extractor_weights_fingerprint

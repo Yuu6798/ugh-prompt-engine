@@ -449,8 +449,11 @@ pin を必須化する = 記録が済むまで Go を出さない fail-closed �
   Melodia は**学習重みを持たない DSP 算法**なので、pin するのは essentia のネイティブ
   拡張バイナリで、`extractor_weights_kind: library_binary` として「重みでないものを重みと
   主張しない」正直会計にする。pyin は DSP で重みなしのため無記入（評価器も要求しない）。
-  依存未導入・artifact 未特定のときは推測 digest を作らず無記入（評価器が pin 欠落で
-  fail-closed する）。**assist 抽出器**（full_mix の `basic_pitch_direct` × Melodia など）も
+  依存未導入・artifact 未特定のときは推測 digest を作らない。**artifact を持つ抽出器**
+  （CREPE / basic-pitch / Melodia）では指紋を採れないこと自体が provisioning 失敗なので、
+  推論へ進まず当該 route を `unavailable` にする（そのまま進むと、生の I/O 例外で run
+  全体が落ちるか、評価器が要求する hash を欠いた measured 行が出て Go-bar 評価が丸ごと
+  fail-closed する）。pyin は artifact を持たないので従来どおり無記入で観測する。**assist 抽出器**（full_mix の `basic_pitch_direct` × Melodia など）も
   同様に `assist_extractor_weights_sha256` を emit する — `cross_extractor_agreement` は
   assist のモデル入力に依存する gate metric なので、主抽出器と同じく pin する（Codex #217）。
   評価器は `assist_status == "measured"` の行にこの pin を必須とし、provenance 署名にも

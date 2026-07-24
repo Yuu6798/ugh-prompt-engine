@@ -220,10 +220,22 @@ def _load_route_waveform(
     return np.asarray(waveform, dtype=np.float32), int(sample_rate)
 
 
-def _extractor_fingerprint(extractor: str, *, use_cache: bool = True):
-    """`extractor` のモデル artifact 指紋（推論はしない）。取れなければ None。"""
-    from svp_rpe.melody.provenance import extractor_weights_fingerprint
+def _extractor_fingerprint(extractor: str, *, use_cache: bool = True, require: bool = False):
+    """`extractor` のモデル artifact 指紋（推論はしない）。取れなければ None。
 
+    `require=True` は**推論前**の解決に使う: artifact を持つ抽出器
+    （CREPE / basic-pitch / Melodia）で指紋が採れないのは provisioning 失敗なので、
+    `LearnedModelUnavailable` として当該 route だけを `unavailable` に落とす
+    （そのまま推論へ進むと、生の I/O 例外で run 全体が落ちるか、評価器が要求する
+    hash を欠いた measured 行が出て Go-bar 評価が丸ごと fail-closed する・#217）。
+    """
+    from svp_rpe.melody.provenance import (
+        extractor_weights_fingerprint,
+        require_extractor_weights_fingerprint,
+    )
+
+    if require:
+        return require_extractor_weights_fingerprint(extractor, use_cache=use_cache)
     return extractor_weights_fingerprint(extractor, use_cache=use_cache)
 
 
@@ -317,7 +329,7 @@ def observe_via_route_with_provenance(
 
     # basic-pitch は自前で path を読む（前処理は経路上 none のみを想定）。
     if route.extractor == "basic_pitch":
-        before = _extractor_fingerprint(route.extractor)
+        before = _extractor_fingerprint(route.extractor, require=True)
         _bind_load_time_pin(route.extractor, before)
         observation = extract_basic_pitch_observation(audio_path, route=route.name)
         _verify_and_record_extractor_weights(provenance, route.extractor, before)
@@ -326,7 +338,7 @@ def observe_via_route_with_provenance(
     waveform, sample_rate = _load_route_waveform(audio_path, route, provenance)
     # 推論**前**に artifact を pin（load-time pin の bind 込み）し、推論後に再検証する
     # （TOCTOU・#217）。bind が食い違えば推論そのものを行わない。
-    before = _extractor_fingerprint(route.extractor)
+    before = _extractor_fingerprint(route.extractor, require=True)
     _bind_load_time_pin(route.extractor, before)
     if route.extractor == "pyin":
         observation = extract_pyin_observation(waveform, sample_rate, route=route.name)
