@@ -311,6 +311,13 @@ python scripts/run_melody_observability.py --evaluate-go-bar run1.json run2.json
 ——「pin とモデル入力の乖離」が生じるため（Codex #217 指摘）。置き場所を変えるなら
 `TORCH_HOME` を使う（torch/demucs と本ゲートが同じ規約で解決する）。
 
+正確には、torch が import できる環境では **プロセスの active hub dir**
+（`torch.hub.get_dir()`）だけを見る。`torch.hub.set_dir()` を呼んだプロセスでは
+`TORCH_HOME` と食い違いうるため、env 由来のパスを併記すると demucs が読まない
+ファイルを hash しうる。env 由来（`TORCH_HOME` / `XDG_CACHE_HOME`）の解決へ落ちるのは
+torch を import できないときだけで、これは重み未取得判定に torch の import を
+必須にしないための代替である。
+
 第 3 状態を「利用可能」と誤認すると、遮断環境では torch hub の download が
 `urllib.error.URLError` を投げて `--external` run 全体が落ち、部分行も report も
 残らなかった（旧レシピが `.[separate]` を入れるなと書いていたのはこの穴の回避策）。

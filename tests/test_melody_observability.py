@@ -425,11 +425,24 @@ def test_weight_search_is_confined_to_the_dir_demucs_loads_from(monkeypatch, tmp
     という乖離（separation_weights_sha256 が stem を作っていない重みを指す）が起きる。
     `TORCH_HOME` は torch/demucs と同じ規約で解決されるので置き場所変更の正規口になる。
     """
+    import types
+
     from svp_rpe.rpe.learned import source_separation_adapter as adapter
 
+    # torch 非導入時: env 由来の解決（torch/demucs と同じ規約）へフォールバックする。
+    monkeypatch.setitem(sys.modules, "torch", None)
     monkeypatch.setenv("TORCH_HOME", str(tmp_path / "torchhome"))
-    dirs = adapter._torch_hub_checkpoint_dirs()
-    assert tmp_path / "torchhome" / "hub" / "checkpoints" in dirs
+    assert adapter._torch_hub_checkpoint_dirs() == [
+        tmp_path / "torchhome" / "hub" / "checkpoints"
+    ]
+
+    # torch 導入時: active hub dir（torch.hub.get_dir()）**だけ**を見る。
+    # set_dir() 等で TORCH_HOME と食い違っても、demucs が読まない場所は探索しない。
+    active = tmp_path / "active_hub"
+    stub = types.ModuleType("torch")
+    stub.hub = types.SimpleNamespace(get_dir=lambda: str(active))
+    monkeypatch.setitem(sys.modules, "torch", stub)
+    assert adapter._torch_hub_checkpoint_dirs() == [active / "checkpoints"]
     # 任意ディレクトリ指定の口（引数・専用環境変数）を持たない。
     assert not hasattr(adapter, "WEIGHTS_DIR_ENV")
     import inspect

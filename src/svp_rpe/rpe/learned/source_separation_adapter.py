@@ -231,28 +231,24 @@ def _torch_hub_checkpoint_dirs() -> List[Path]:
     その乖離を作るので**持たない** — 置き場所を変えたい場合は torch ネイティブの
     `TORCH_HOME` を使う（demucs も本ゲートも同じ規約で解決する）。
 
-    torch が import できればそれを優先し（`torch.hub.set_dir()` の効果も反映
-    される）、できなくても `TORCH_HOME` / `XDG_CACHE_HOME` から同じ規約でパスを
-    組む（重み未取得判定のために torch の import を必須にしない）。
+    torch が import できるときは `torch.hub.get_dir()` **だけ**を見る（プロセスの
+    active hub dir が唯一の真実。`torch.hub.set_dir()` を呼んだプロセスでは
+    `TORCH_HOME` と食い違いうるので、env 由来のパスを併記すると demucs が読まない
+    ファイルを hash しうる・Codex #217）。env 由来（`TORCH_HOME` /
+    `XDG_CACHE_HOME`）へ落ちるのは **torch を import できないときだけ**で、これは
+    重み未取得判定のために torch の import を必須にしないための代替解決である。
     """
-    dirs: List[Path] = []
     try:  # pragma: no cover - torch は optional
         import torch
 
-        dirs.append(Path(torch.hub.get_dir()) / "checkpoints")
+        return [Path(torch.hub.get_dir()) / "checkpoints"]
     except Exception:
         pass
     torch_home = os.environ.get("TORCH_HOME")
     if torch_home:
-        dirs.append(Path(torch_home).expanduser() / "hub" / "checkpoints")
-    else:
-        cache_home = os.environ.get("XDG_CACHE_HOME") or "~/.cache"
-        dirs.append(Path(cache_home).expanduser() / "torch" / "hub" / "checkpoints")
-    unique: List[Path] = []
-    for path in dirs:
-        if path not in unique:
-            unique.append(path)
-    return unique
+        return [Path(torch_home).expanduser() / "hub" / "checkpoints"]
+    cache_home = os.environ.get("XDG_CACHE_HOME") or "~/.cache"
+    return [Path(cache_home).expanduser() / "torch" / "hub" / "checkpoints"]
 
 
 def locate_separation_weights(model: str = DEFAULT_MODEL) -> List[Path]:
