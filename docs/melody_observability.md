@@ -453,7 +453,14 @@ pin を必須化する = 記録が済むまで Go を出さない fail-closed �
   （CREPE / basic-pitch / Melodia）では指紋を採れないこと自体が provisioning 失敗なので、
   推論へ進まず当該 route を `unavailable` にする（そのまま進むと、生の I/O 例外で run
   全体が落ちるか、評価器が要求する hash を欠いた measured 行が出て Go-bar 評価が丸ごと
-  fail-closed する）。pyin は artifact を持たないので従来どおり無記入で観測する。**assist 抽出器**（full_mix の `basic_pitch_direct` × Melodia など）も
+  fail-closed する）。pyin は artifact を持たないので従来どおり無記入で観測する。
+- **推論コードの pin**（`extractor_code_sha256` / `preprocessing.separation_code_sha256`）:
+  重み hash と distribution version は「同じ bytes か / 同じリリースか」しか保証せず、
+  **同一 version のままローカル patch / repack された**パッケージは素通りする
+  （`generator_code_sha256` は first-party しか覆わない）。実際に推論した third-party
+  パッケージ（CREPE / basic-pitch / essentia / demucs、pyin なら librosa）の
+  `.py` + ネイティブ拡張を hash して行に載せ、provenance 署名（repeats 一致）に含める。
+  registry に `code_sha256` を記録した場合は行との一致も必須化する。**assist 抽出器**（full_mix の `basic_pitch_direct` × Melodia など）も
   同様に `assist_extractor_weights_sha256` を emit する — `cross_extractor_agreement` は
   assist のモデル入力に依存する gate metric なので、主抽出器と同じく pin する（Codex #217）。
   評価器は `assist_status == "measured"` の行にこの pin を必須とし、provenance 署名にも

@@ -344,6 +344,7 @@ def _run_routes_on_file(
             "extractor_weights_sha256",
             "extractor_weights_kind",
             "extractor_weights_files",
+            "extractor_code_sha256",
         ):
             if key in route_provenance:
                 row[key] = route_provenance[key]
@@ -361,6 +362,7 @@ def _run_routes_on_file(
                 "extractor_weights_sha256",
                 "extractor_weights_kind",
                 "extractor_weights_files",
+                "extractor_code_sha256",
             ):
                 if key in assist_provenance:
                     row[f"assist_{key}"] = assist_provenance[key]
@@ -642,6 +644,23 @@ def _registry_weight_pin(registry: Dict[str, Any], key: str) -> "str | None":
     return recorded
 
 
+def _registry_code_pin(registry: Dict[str, Any], key: str) -> "str | None":
+    """registry に記録された**推論コード**の hash（未記録なら None・不正値は fail-closed）。"""
+    entry = (registry.get("provenance") or {}).get("model_weights", {}).get(key)
+    if not isinstance(entry, dict):
+        return None  # 型不正は `_registry_weight_pin` 側が fail-closed で弾く
+    recorded = entry.get("code_sha256")
+    if recorded is None:
+        return None
+    if not _is_sha256(recorded):
+        raise ValueError(
+            f"evaluate_m1_real_go_bar: registry provenance.model_weights.{key}.code_sha256 "
+            f"{recorded!r} は真の sha256（64 桁 hex）でない; プレースホルダ pin を受理しない "
+            "(fail-closed・#61)"
+        )
+    return recorded
+
+
 def _registry_weight_version(registry: Dict[str, Any], key: str) -> "str | None":
     """registry に記録された実装バージョン（未記録なら None・不正型は fail-closed）。
 
@@ -673,6 +692,8 @@ def _require_recorded_weight_pin(
     idx: int,
     row_version: Any = None,
     version_field: "str | None" = None,
+    row_code: Any = None,
+    code_field: "str | None" = None,
 ) -> None:
     """registry 記録済みの重み pin / version と行の値が一致することを要求する（#217）。
 
@@ -690,6 +711,14 @@ def _require_recorded_weight_pin(
         )
     if version_field is None:
         return
+    recorded_code = _registry_code_pin(registry, registry_key)
+    if recorded_code is not None and row_code != recorded_code:
+        raise ValueError(
+            f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} in "
+            f"reports[{idx}] {code_field}={row_code!r} != registry "
+            f"provenance.model_weights.{registry_key}.code_sha256 {recorded_code!r}; "
+            "記録済みの推論コードと別の実装で測った report に Go を出さない (fail-closed)"
+        )
     recorded_version = _registry_weight_version(registry, registry_key)
     if recorded_version is not None and row_version != recorded_version:
         raise ValueError(
@@ -723,9 +752,10 @@ def _route_provenance(row: Dict[str, Any]) -> "tuple":
             preprocessing.get("separation_version"),
             preprocessing.get("separation_weights_sha256"),
             preprocessing.get("stem_sha256"),
+            preprocessing.get("separation_code_sha256"),
         )
     else:
-        separation = (preprocessing, None, None, None, None)
+        separation = (preprocessing, None, None, None, None, None)
     return (
         row.get("source_model"),
         row.get("extractor_version"),
@@ -736,6 +766,10 @@ def _route_provenance(row: Dict[str, Any]) -> "tuple":
         # assist のモデル入力に依存する gate metric なので、同一 assist source_model/version
         # でも別ビルド/重みなら同一 model stack の repeats と見なせない。
         row.get("assist_extractor_weights_sha256"),
+        # 推論した third-party コードの hash も署名に含める（#217）。同一 version の
+        # patch 済みパッケージは weights/version 比較を素通りするため。
+        row.get("extractor_code_sha256"),
+        row.get("assist_extractor_code_sha256"),
         separation,
     )
 
@@ -1435,6 +1469,10 @@ def evaluate_m1_real_go_bar(
                                 "separation_version"
                             ),
                             version_field="preprocessing.separation_version",
+                            row_code=(row.get("preprocessing") or {}).get(
+                                "separation_code_sha256"
+                            ),
+                            code_field="preprocessing.separation_code_sha256",
                         )
                     extractor_key = _REGISTRY_WEIGHT_KEY_BY_EXTRACTOR.get(
                         route_def.extractor
@@ -1450,6 +1488,8 @@ def evaluate_m1_real_go_bar(
                             idx=idx,
                             row_version=row.get("extractor_version"),
                             version_field="extractor_version",
+                            row_code=row.get("extractor_code_sha256"),
+                            code_field="extractor_code_sha256",
                         )
                     assist_key = _REGISTRY_WEIGHT_KEY_BY_EXTRACTOR.get(route_def.assist)
                     if assist_key is not None and row.get("assist_status") == "measured":
@@ -1463,6 +1503,8 @@ def evaluate_m1_real_go_bar(
                             idx=idx,
                             row_version=row.get("assist_extractor_version"),
                             version_field="assist_extractor_version",
+                            row_code=row.get("assist_extractor_code_sha256"),
+                            code_field="assist_extractor_code_sha256",
                         )
                 # gate outcome は assess_observability(...).status 由来。measured 行は
                 # その根拠 report payload を持ち、report.status が outcome と一致しなければ

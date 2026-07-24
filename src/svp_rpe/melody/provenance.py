@@ -25,6 +25,7 @@ emit しないケース（`None` を返す）:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, Tuple
 
 from svp_rpe.rpe.learned import LearnedModelUnavailable
@@ -35,6 +36,8 @@ __all__ = [
     "ExtractorWeights",
     "extractor_weights_fingerprint",
     "require_extractor_weights_fingerprint",
+    "extractor_code_sha256",
+    "package_code_sha256",
     "record_load_time_pin",
     "load_time_pin",
     "reset_load_time_pins",
@@ -155,6 +158,63 @@ def _resolve_fingerprint(
         )
     # pyin / none: 重みを持たない DSP 経路（評価器も pin を要求しない）。
     return None
+
+
+# 抽出器 → 推論コードを提供する third-party パッケージ（import 名）。
+# 重み hash と distribution version は「同じ bytes か / 同じリリースか」しか保証せず、
+# **同一 version のままローカルで patch / repack された**パッケージは素通りする
+# （`_generator_code_paths()` は first-party しか含めない）。実際に推論した third-party
+# コードの content hash も pin する（Codex #217）。
+_EXTRACTOR_CODE_PACKAGE = {
+    "crepe": "crepe",
+    "basic_pitch": "basic_pitch",
+    "melodia": "essentia",
+    "pyin": "librosa",
+}
+
+# コードとみなす拡張子（Python source + ネイティブ拡張）。モデル artifact（.h5 等）は
+# `extractor_weights_sha256` 側で別途 pin するので、二重計上せず責務を分ける。
+_CODE_SUFFIXES = (".py", ".so", ".pyd", ".dylib")
+
+
+def package_code_sha256(package: str, *, use_cache: bool = True) -> Optional[str]:
+    """`package`（third-party）の推論コード一式の content hash（取れなければ None）。
+
+    パッケージディレクトリ配下の `.py` / ネイティブ拡張を再帰的に hash する。
+    同一 version のまま patch された install を、version 比較では検出できないため
+    （Codex #217）。名前はパッケージ root からの相対 POSIX パスで安定させる。
+    """
+    import importlib
+
+    try:
+        module = importlib.import_module(package)
+    except Exception:
+        return None
+    module_file = getattr(module, "__file__", None)
+    if not module_file:
+        return None
+    root = Path(module_file).resolve().parent
+    files = sorted(
+        path
+        for path in root.rglob("*")
+        if path.is_file()
+        and path.suffix in _CODE_SUFFIXES
+        and "__pycache__" not in path.parts
+    )
+    if not files:
+        return None
+    try:
+        return sha256_of_files(files, root=root, use_cache=use_cache)
+    except OSError:
+        return None
+
+
+def extractor_code_sha256(extractor: str, *, use_cache: bool = True) -> Optional[str]:
+    """`extractor` の推論を提供する third-party パッケージのコード hash。"""
+    package = _EXTRACTOR_CODE_PACKAGE.get(extractor)
+    if package is None:
+        return None
+    return package_code_sha256(package, use_cache=use_cache)
 
 
 def record_load_time_pin(extractor: str, sha256: str) -> str:

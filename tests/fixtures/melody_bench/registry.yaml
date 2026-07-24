@@ -228,9 +228,10 @@ provenance:
   #   crepe / basic_pitch / essentia_melodia
   #           … run 出力 report の routes[].extractor_weights_sha256（ハーネスが実測 emit）
   # ここに記録した値と report の pin が食い違えば、別 model stack の run を混ぜた証拠になる
-  # ——評価器は **記録済み（非 null）の sha256 と version の双方について行の値との一致を
-  # 必須化**し、食い違えば fail-closed で Go を出さない（#217。sha256=「同じ bytes か」、
-  # version=「同じ実装リリースか」。同一 bytes を別リリースが読んだ run を弾くため両方見る）。
+  # ——評価器は **記録済み（非 null）の sha256 / version / code_sha256 それぞれについて
+  # 行の値との一致を必須化**し、食い違えば fail-closed で Go を出さない（#217。sha256=「同じ bytes か」、
+  # version=「同じ実装リリースか」、code_sha256=「同じ推論コードか」。同一 version のまま
+  # ローカル patch された install は sha256/version では素通りするため code も見る）。
   # 未記録（null）の間は要求しないので、記録前の slow-lane run はこれまでどおり進む。
   # プレースホルダ文字列（"TBD" 等）は記録済みと見なさず fail-closed で弾く（#61 と同型）。
   model_weights:
@@ -240,6 +241,8 @@ provenance:
       source: 事前取得（実行時DL禁止）
       version: null          # 例: "4.1.0"（installed demucs version）
       sha256: null           # describe_separation_weights()["sha256"]（bag 4 ckpt の合成 digest）
+      code_sha256: null      # 推論コード（demucs パッケージの .py/.so）の hash。report の
+                             # preprocessing.separation_code_sha256 と一致要求される
       license: null          # 上流重みライセンスを実確認して記録（policy §4: コード≠重み）
     crepe:
       role: melody_f0_extractor
@@ -247,6 +250,8 @@ provenance:
       source: 事前取得（実行時DL禁止・pip wheel 同梱）
       version: null
       sha256: null           # report の routes[].extractor_weights_sha256（kind=model_weights）
+      code_sha256: null      # 推論コード（crepe パッケージ）の hash = report の
+                             # routes[].extractor_code_sha256
       license: null          # UNVERIFIED（crepe_adapter の weights_license 注記参照）
     basic_pitch:
       role: melody_note_extractor
@@ -254,6 +259,7 @@ provenance:
       source: 事前取得（実行時DL禁止・pip wheel 同梱）
       version: null
       sha256: null           # report の routes[].extractor_weights_sha256（kind=model_weights）
+      code_sha256: null      # 推論コード（basic_pitch パッケージ）の hash
       license: Apache-2.0 (code); model artifact は上流確認が必要
     essentia_melodia:
       role: melody_f0_extractor (DSP)
@@ -263,5 +269,6 @@ provenance:
       # Melodia は学習重みを持たない DSP 算法。pin するのは実装バイナリの指紋で、
       # report 側は kind=library_binary として明示する（重みでないものを重みと主張しない）。
       sha256: null
+      code_sha256: null      # 推論コード（essentia パッケージ）の hash
       license: AGPL-3.0 (essentia; manual/external 統合)
   random_seed: 0   # 合成・ペア生成の乱数 seed（決定論固定）

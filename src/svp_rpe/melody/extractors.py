@@ -209,6 +209,11 @@ def _load_route_waveform(
                 "separation_weights_files": list(separation.weights_filenames),
                 "stem_sha256": separation.stem_sha256,
             }
+            from svp_rpe.melody.provenance import package_code_sha256
+
+            separation_code = package_code_sha256("demucs")
+            if separation_code is not None:
+                provenance["preprocessing"]["separation_code_sha256"] = separation_code
         return (
             np.asarray(separation.waveform, dtype=np.float32),
             int(separation.sample_rate),
@@ -263,6 +268,20 @@ def _bind_load_time_pin(extractor: str, before) -> None:
             f"(load_time={pinned}, now={before.sha256}); ロード済みモデルが cache されている"
             "場合、推論は旧 artifact のままでありうるため推論を行わない"
         )
+
+
+def _record_extractor_code(provenance: "Dict[str, Any]", extractor: str) -> None:
+    """推論を提供した third-party パッケージのコード hash を記録する（#217）。
+
+    重み hash と distribution version は「同じ bytes か / 同じリリースか」しか保証せず、
+    **同一 version のままローカルで patch された**パッケージ（`_generator_code_paths()`
+    は first-party しか含めない）は素通りする。実際に推論したコードも pin する。
+    """
+    from svp_rpe.melody.provenance import extractor_code_sha256
+
+    digest = extractor_code_sha256(extractor)
+    if digest is not None:
+        provenance["extractor_code_sha256"] = digest
 
 
 def _verify_and_record_extractor_weights(
@@ -333,6 +352,7 @@ def observe_via_route_with_provenance(
         _bind_load_time_pin(route.extractor, before)
         observation = extract_basic_pitch_observation(audio_path, route=route.name)
         _verify_and_record_extractor_weights(provenance, route.extractor, before)
+        _record_extractor_code(provenance, route.extractor)
         return observation, provenance
 
     waveform, sample_rate = _load_route_waveform(audio_path, route, provenance)
@@ -351,6 +371,7 @@ def observe_via_route_with_provenance(
             f"unsupported extractor for route {route.name!r}: {route.extractor!r}"
         )
     _verify_and_record_extractor_weights(provenance, route.extractor, before)
+    _record_extractor_code(provenance, route.extractor)
     return observation, provenance
 
 

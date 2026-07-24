@@ -1989,6 +1989,44 @@ def test_evaluate_go_bar_rejects_mismatched_recorded_extractor_version():
         harness.evaluate_m1_real_go_bar(reports, registry)
 
 
+def test_evaluate_go_bar_rejects_mismatched_recorded_code_pin():
+    """記録済み推論コード hash と行の code hash が食い違えば fail-closed（#217）。
+
+    同一 version のままローカル patch された install は sha256/version 比較を素通り
+    するので、実際に推論した third-party コードも突合する。
+    """
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    reports = [_make_go_bar_report(outcomes) for _ in range(2)]
+    registry = _go_bar_registry()
+    registry["provenance"]["model_weights"]["demucs"]["code_sha256"] = hashlib.sha256(
+        b"patched-demucs-source"
+    ).hexdigest()
+    with pytest.raises(ValueError, match="model_weights.demucs.code_sha256"):
+        harness.evaluate_m1_real_go_bar(reports, registry)
+
+
+def test_route_rows_record_third_party_code_hash(monkeypatch, tmp_path):
+    """行に推論コード hash（pyin なら librosa）が載る（#217）。"""
+    import scripts.run_melody_observability as harness
+    from svp_rpe.melody.provenance import extractor_code_sha256
+    from svp_rpe.melody.routing import MelodyRoute
+
+    sr = 22050
+    t = np.linspace(0, 1.5, int(sr * 1.5), endpoint=False)
+    wav = tmp_path / "lead.wav"
+    sf.write(wav, (0.4 * np.sin(2 * np.pi * 330 * t)).astype(np.float32), sr, subtype="FLOAT")
+    route = MelodyRoute("pyin_direct", "none", "pyin")
+    monkeypatch.setattr(harness, "select_routes", lambda kind: [route])
+
+    rows = harness._run_routes_on_file(str(wav), "clear_lead", _default_thresholds())
+    assert rows[0]["extractor_code_sha256"] == extractor_code_sha256("pyin")
+    assert harness._is_sha256(rows[0]["extractor_code_sha256"])
+
+
 def test_evaluate_go_bar_rejects_placeholder_registry_weight_pin():
     """registry の重み pin が非 null かつ sha256 でなければ記録済みと見なさず fail-closed。"""
     import scripts.run_melody_observability as harness
