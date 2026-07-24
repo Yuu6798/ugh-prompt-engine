@@ -33,6 +33,7 @@ import math
 import os
 import sys
 import tempfile
+import uuid
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List
@@ -406,6 +407,13 @@ def run_external(
         # ★実際に assess へ渡した閾値そのものを pin（override 時も嘘をつかない）。
         # 詳細は run_synthetic の同フィールド注記を参照（Codex 指摘・AGENTS §8）。
         "observation_gate": asdict(thresholds),
+        # ★この 1 回の external 実行を一意に識別する run provenance。決定論パイプラインでは
+        # n>=2 の repeats が意味を持つのは**独立した実行**の揺れを見るとき（設計 §3.1
+        # 「実行揺れ確認」）だけで、run1.json を run2.json へコピーすれば別パス・同一 bytes で
+        # path-dedup（#6）を通過し 1 回の抽出が repeats_min=2 を満たしてしまう。各実行で
+        # 新規発行する run_id を評価器が「存在必須・report 間で相互に distinct」と要求する
+        # ことで、コピー由来の偽 repeats を弾く（Codex 指摘・#45）。
+        "run_id": uuid.uuid4().hex,
         "fixtures": {},
     }
     with tempfile.TemporaryDirectory(prefix="melody-ext-") as tmp:
@@ -597,6 +605,11 @@ def evaluate_m1_real_go_bar(
     - `len(reports) < m1_real_go_bar.repeats_min`（凍結ルールは n>=2 を要求する。
       CLI の ``nargs="+"`` で単一 report が渡っても 1 回実行の verdict を publish
       しない・Codex 指摘）
+    - いずれかの report が非空 str の `run_id` を欠く、または report 間で `run_id` が
+      重複（決定論パイプラインでは n>=2 が意味を持つのは独立実行のときだけで、run1.json を
+      別パスへコピーすれば path-dedup を通過し 1 回の抽出で repeats_min を満たせてしまう。
+      run_external が実行ごとに発行する run_id の存在＋相互 distinct を要求してコピー由来の
+      偽 repeats を弾く・#45・Codex 指摘）
     - `registry_sha256` 指定時、いずれかの report の pin がその hash と不一致
       （渡されない場合は複数 report 間の `registry_sha256` 相互一致を要求）
     - 複数 report 間で `observation_gate` が食い違う（異なる閾値下で測定した
@@ -769,6 +782,29 @@ def evaluate_m1_real_go_bar(
             f"evaluate_m1_real_go_bar: got {len(reports)} report(s) but the frozen "
             f"m1_real_go_bar requires repeats_min={repeats_min} (n>=2); "
             "1 回の実行だけで verdict を publish しない (fail-closed)"
+        )
+
+    # run provenance の存在 + 相互 distinct 性。決定論パイプラインでは同一素材の抽出は
+    # bit 単位で同一結果を返すため、n>=2 が意味を持つのは**独立した実行**の揺れを見るとき
+    # だけ（設計 §3.1）。run_external は実行ごとに新規 run_id を発行するので、report 間で
+    # run_id が欠落・重複していたら、それは 1 回の実行結果を別パスへコピーして n>=2 を
+    # 偽装した証拠（別パス・同一 bytes は path-dedup #6 を通過する）として弾く（Codex 指摘・
+    # #45）。audio_sha256 の一致（同一素材）とは直交する軸で、素材は同一・実行は独立を要求。
+    run_ids: List[str] = []
+    for idx, report in enumerate(reports):
+        run_id = report.get("run_id")
+        if not run_id or not isinstance(run_id, str):
+            raise ValueError(
+                f"evaluate_m1_real_go_bar: reports[{idx}] lacks a non-empty string run_id; "
+                "各 external 実行の独立性を pin できず、コピー由来の偽 repeats を排除できない "
+                "(fail-closed)"
+            )
+        run_ids.append(run_id)
+    duplicate_run_ids = sorted({r for r in run_ids if run_ids.count(r) > 1})
+    if duplicate_run_ids:
+        raise ValueError(
+            f"evaluate_m1_real_go_bar: reports share run_id(s) {duplicate_run_ids}; "
+            "同一実行の複製を独立した n>=2 repeats と見なせない (fail-closed)"
         )
 
     # 凍結バーを load した registry の hash（渡された場合）を authoritative reference と
@@ -1187,6 +1223,8 @@ def evaluate_m1_real_go_bar(
         # 検出可能にする（Codex 指摘・AGENTS §8）。
         "evaluator_code_sha256": _evaluator_code_sha256(),
         "n_reports": len(reports),
+        # 各 report の run provenance を verdict へ転記（独立実行だった証跡・#45）。
+        "run_ids": sorted(run_ids),
         "surviving_routes": surviving_routes,
         "bar": {
             "min_positive_sufficient": min_positive_sufficient,

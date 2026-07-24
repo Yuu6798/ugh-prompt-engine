@@ -274,6 +274,14 @@ observation_gate 一致・凍結 kind と route matrix・素材別性・model pr
 独立性）、いずれかが破れれば fail-closed で verdict を出さない。`verdict.json` は消費した
 report の `report_pins` を記録する。
 
+決定論パイプラインでは同一素材の抽出は bit 単位で同一結果を返すため、n≥2 の repeats が
+意味を持つのは**独立した実行**の揺れを見るときだけ（設計 §3.1）。そこで `--external`
+実行は毎回新規の **`run_id`** を発行し、評価器は全 report が非空 `run_id` を持ち相互に
+distinct であることを要求する。これがないと run1.json を run2.json へコピーするだけで
+別パス・同一 bytes として path-dedup を通過し、1 回の抽出が `repeats_min=2` を満たして
+しまう（`audio_sha256` の一致＝同一素材とは直交する軸で、素材は同一・実行は独立を要求）。
+`verdict.json` は消費した `run_ids` も転記する。
+
 `report_pins` の **`sha256` が content-addressed の replay anchor** で、各 report の
 内容を一意に pin する（同名 basename でも内容が違えば別 sha256 として list に共存・
 区別される）。`path` は人間可読の**非権威的 hint** に徹する（repo 内なら repo 相対、

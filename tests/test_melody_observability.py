@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import os
 import sys
+import uuid
 from pathlib import Path
 
 import numpy as np
@@ -928,6 +929,7 @@ def _make_go_bar_report(
     route_outcomes: "dict[str, dict[str, str]]",
     registry_sha256: str = "f" * 64,
     default_outcome: str = "unavailable",
+    run_id: "str | None" = None,
 ) -> "dict":
     """{fixture_id: {route_name: outcome}} から external report dict を組み立てる。
 
@@ -1000,6 +1002,9 @@ def _make_go_bar_report(
         "registry_sha256": registry_sha256,
         "thresholds_source": "registry",
         "observation_gate": dataclasses.asdict(thresholds),
+        # 各 report は既定で独立した run_id を持つ（run_external が実行ごとに発行する
+        # のを模す）。テストで偽 repeats（コピー）を模すときは明示的に同一値を渡す。
+        "run_id": run_id if run_id is not None else uuid.uuid4().hex,
         "fixtures": fixtures,
     }
 
@@ -1239,6 +1244,84 @@ def test_evaluate_go_bar_fails_closed_on_audio_pin_mismatch_or_missing():
     report4["fixtures"]["real_vocal_band"]["audio_sha256"] = None
     with pytest.raises(ValueError, match="audio_sha256"):
         harness.evaluate_m1_real_go_bar([report3, report4], _go_bar_registry())
+
+
+def test_evaluate_go_bar_fails_closed_on_duplicate_or_missing_run_id():
+    """report 間で run_id が重複/欠落なら fail-closed（コピー由来の偽 repeats を弾く）。
+
+    決定論パイプラインでは n>=2 が意味を持つのは独立実行のときだけ。run1.json を別パスへ
+    コピーすると別パス・同一 bytes で path-dedup（#6）を通過し、1 回の抽出で repeats_min=2 を
+    偽装できてしまう。run_external が実行ごとに発行する run_id の存在＋相互 distinct を要求する
+    ことでこれを弾く（#45）。素材同一性（audio_sha256 一致）とは直交する軸。
+    """
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+
+    # 同一 run_id（run1.json → run2.json コピー相当）→ 独立した n>=2 repeats と見なせない。
+    report1 = _make_go_bar_report(outcomes, run_id="deadbeef" * 4)
+    report2 = _make_go_bar_report(outcomes, run_id="deadbeef" * 4)
+    with pytest.raises(ValueError, match="run_id"):
+        harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
+
+    # run_id 欠落（None / 空文字）も独立性を pin できず fail-closed。
+    report3 = _make_go_bar_report(outcomes)
+    report4 = _make_go_bar_report(outcomes)
+    del report4["run_id"]
+    with pytest.raises(ValueError, match="run_id"):
+        harness.evaluate_m1_real_go_bar([report3, report4], _go_bar_registry())
+
+    report5 = _make_go_bar_report(outcomes, run_id="")
+    report6 = _make_go_bar_report(outcomes)
+    with pytest.raises(ValueError, match="run_id"):
+        harness.evaluate_m1_real_go_bar([report5, report6], _go_bar_registry())
+
+
+def test_evaluate_go_bar_carries_run_ids_in_verdict():
+    """独立 run_id を持つ正常な報告群は verdict へ run_ids を転記する（provenance 証跡）。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    report1 = _make_go_bar_report(outcomes, run_id="a1" * 16)
+    report2 = _make_go_bar_report(outcomes, run_id="b2" * 16)
+    verdict = harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
+    assert verdict["run_ids"] == sorted(["a1" * 16, "b2" * 16])
+
+
+def test_run_external_stamps_distinct_run_id(monkeypatch, tmp_path):
+    """run_external は実行ごとに新規 run_id を発行する（コピーでなく別実行の証跡）。"""
+    import dataclasses
+    import json
+
+    import scripts.run_melody_observability as harness
+
+    # 経路実行と registry load をスタブ化し、run_id 発行だけを軽量に検証する。
+    monkeypatch.setattr(harness, "_run_routes_on_file", lambda *a, **k: [])
+    monkeypatch.setattr(
+        harness,
+        "_load_registry",
+        lambda: (
+            {
+                "observation_gate": dataclasses.asdict(_default_thresholds()),
+                "external_fixtures": [
+                    {"id": "real_vocal_jrock", "input_kind": "vocal_track"}
+                ],
+            },
+            "0" * 64,
+        ),
+    )
+    audio = tmp_path / "x.wav"
+    audio.write_bytes(b"RIFFfake")
+    manifest = tmp_path / "m.json"
+    manifest.write_text(
+        json.dumps([{"id": "real_vocal_jrock", "path": "x.wav", "input_kind": "vocal_track"}])
+    )
+    r1 = harness.run_external(manifest)
+    r2 = harness.run_external(manifest)
+    assert r1["run_id"] and r2["run_id"]
+    assert r1["run_id"] != r2["run_id"]
 
 
 def test_evaluate_go_bar_fails_closed_on_expected_audio_sha256_mismatch():
