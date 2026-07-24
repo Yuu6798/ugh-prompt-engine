@@ -38,6 +38,7 @@ __all__ = [
     "require_extractor_weights_fingerprint",
     "extractor_code_sha256",
     "extractor_code_fingerprint",
+    "extractor_code_packages_for",
     "package_code_sha256",
     "packages_code_sha256",
     "SEPARATION_CODE_PACKAGES",
@@ -252,6 +253,11 @@ def packages_code_sha256(
     if not covered:
         return None, ()
     return digest.hexdigest(), tuple(covered)
+
+
+def extractor_code_packages_for(extractor: str) -> "tuple":
+    """`extractor` の推論を実行するパッケージ名（未定義なら空 tuple）。"""
+    return _EXTRACTOR_CODE_PACKAGES.get(extractor, ())
 
 
 def extractor_code_sha256(extractor: str, *, use_cache: bool = True) -> Optional[str]:

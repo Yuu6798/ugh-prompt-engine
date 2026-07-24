@@ -395,6 +395,19 @@ def test_expected_weight_filenames_fails_closed_without_remote_metadata(monkeypa
         adapter._expected_weight_filenames("htdemucs_ft")
 
 
+def _stub_extractor_code_pin(monkeypatch, digest: "str | None" = None):
+    """抽出器の推論コード pin を解決できる環境（= 導入済み）を模す。"""
+    from svp_rpe.melody import provenance as melody_provenance
+
+    value = digest or hashlib.sha256(b"extractor:code").hexdigest()
+    monkeypatch.setattr(
+        melody_provenance,
+        "extractor_code_fingerprint",
+        lambda extractor, **kwargs: (value, ("stub_package",)),
+    )
+    return value
+
+
 def _provision_gate(monkeypatch, tmp_path, *, weights_present: bool):
     """demucs 導入済を装い、torch hub cache を tmp_path に差し替える（実在有無を切替）。
 
@@ -406,6 +419,17 @@ def _provision_gate(monkeypatch, tmp_path, *, weights_present: bool):
 
     monkeypatch.setattr(source_separator, "_HAS_DEMUCS", True)
     monkeypatch.setattr(adapter, "_demucs_version", lambda: "4.1.0")
+    # 分離コード pin（demucs/torch）も解決できる環境を模す（本環境は未導入）。
+    from svp_rpe.melody import provenance as _melody_provenance
+
+    monkeypatch.setattr(
+        _melody_provenance,
+        "packages_code_sha256",
+        lambda packages, **kwargs: (
+            hashlib.sha256(b"demucs+torch:code").hexdigest(),
+            tuple(packages),
+        ),
+    )
     monkeypatch.setattr(adapter, "_demucs_remote_dir", lambda: _fake_remote_dir(tmp_path))
     weights_dir = tmp_path / "checkpoints"
     weights_dir.mkdir(exist_ok=True)
@@ -721,6 +745,7 @@ def test_extractor_pin_is_bound_to_first_load_in_process(monkeypatch, tmp_path):
     weights = tmp_path / "model-full.h5"
     weights.write_bytes(b"crepe-weights-v1")
     monkeypatch.setattr(crepe_adapter, "crepe_weight_files", lambda *a, **k: [weights])
+    _stub_extractor_code_pin(monkeypatch)
     monkeypatch.setattr(
         "svp_rpe.melody.extractors.extract_crepe_observation",
         lambda y, sr, **kwargs: MelodyObservation(
@@ -816,6 +841,7 @@ def test_observe_route_rejects_extractor_artifact_swapped_during_inference(
     weights = tmp_path / "model-full.h5"
     weights.write_bytes(b"crepe-weights-v1")
     monkeypatch.setattr(crepe_adapter, "crepe_weight_files", lambda *a, **k: [weights])
+    _stub_extractor_code_pin(monkeypatch)
 
     def swap_then_extract(y, sr, **kwargs):
         # 推論の最中に別プロセスが重みを差し替えた状況を模す。
@@ -879,6 +905,60 @@ def test_pyin_route_still_runs_without_any_artifact(monkeypatch, tmp_path):
     rows = harness._run_routes_on_file(str(wav), "clear_lead", _default_thresholds())
     assert rows[0]["outcome"] in ("sufficient", "insufficient")
     assert "extractor_weights_sha256" not in rows[0]
+
+
+def test_route_without_resolvable_code_pin_becomes_unavailable(monkeypatch, tmp_path):
+    """推論コードを pin できない経路は観測せず unavailable（#217）。
+
+    registry の `code_sha256` 未記録の間、評価器はコード hash を要求しない。無記入の
+    まま measured 行を出すと、推論コードが未 pin のまま go を publish できてしまう。
+    """
+    import scripts.run_melody_observability as harness
+    from svp_rpe.melody import provenance as melody_provenance
+    from svp_rpe.melody.routing import MelodyRoute
+
+    # zip/namespace レイアウト等でコード hash が採れない状況を模す。
+    monkeypatch.setattr(
+        melody_provenance, "extractor_code_fingerprint", lambda extractor, **k: (None, ())
+    )
+    sr = 22050
+    t = np.linspace(0, 1.0, sr, endpoint=False)
+    wav = tmp_path / "lead.wav"
+    sf.write(wav, (0.4 * np.sin(2 * np.pi * 330 * t)).astype(np.float32), sr, subtype="FLOAT")
+    route = MelodyRoute("pyin_direct", "none", "pyin")
+    monkeypatch.setattr(harness, "select_routes", lambda kind: [route])
+
+    rows = harness._run_routes_on_file(str(wav), "clear_lead", _default_thresholds())
+    assert rows[0]["outcome"] == "unavailable"
+    assert "could not be fingerprinted" in rows[0]["detail"]
+
+
+def test_separation_code_pin_is_bound_before_separation(monkeypatch, tmp_path):
+    """分離中にコードが差し替わったら stem を返さず unavailable（#217）。"""
+    from svp_rpe.melody import provenance as melody_provenance
+    from svp_rpe.melody.extractors import observe_via_route_with_provenance
+    from svp_rpe.melody.routing import MelodyRoute
+
+    adapter, _ = _provision_gate(monkeypatch, tmp_path, weights_present=True)
+    sr = 22050
+    vocals = np.zeros(sr, dtype=np.float32)
+    monkeypatch.setattr(
+        adapter, "separate_stems", lambda *a, **k: _fake_stem_bundle(vocals, sr)
+    )
+    digests = iter(
+        [
+            (hashlib.sha256(b"demucs-v1").hexdigest(), ("demucs", "torch")),  # 分離前
+            (hashlib.sha256(b"demucs-v2").hexdigest(), ("demucs", "torch")),  # 分離後
+        ]
+    )
+    monkeypatch.setattr(
+        melody_provenance, "packages_code_sha256", lambda packages, **k: next(digests)
+    )
+    wav = tmp_path / "mix.wav"
+    sf.write(wav, vocals, sr, subtype="FLOAT")
+    route = MelodyRoute("demucs_vocals_then_pyin", "demucs_vocals", "pyin")
+    with pytest.raises(LearnedModelUnavailable, match="code changed during separation"):
+        observe_via_route_with_provenance(str(wav), route)
 
 
 def test_extractor_weights_fingerprint_is_none_for_dsp_and_missing_deps():

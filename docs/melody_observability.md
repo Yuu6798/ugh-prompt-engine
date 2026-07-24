@@ -469,7 +469,11 @@ pin を必須化する = 記録が済むまで Go を出さない fail-closed �
   `extractor_code_packages` / `separation_code_packages` に列挙する（被覆の正直会計）。
   コード pin も weights と同様に**推論前に bind → 推論後に memo 迂回で再検証**する
   （import 済みモジュールはプロセスに cache され、途中で差し替えても実行は旧コードのまま
-  でありうるため）。**assist 抽出器**（full_mix の `basic_pitch_direct` × Melodia など）も
+  でありうるため）。**分離（Demucs）側も同じ**で、分離前に bind し分離後に再検証する。
+  推論を行うパッケージのコード hash を**採れない**場合（zip/namespace レイアウト、
+  ロード済みファイルが読めない等）は、無記入で measured 行を出さず `unavailable` にする
+  —— registry の `code_sha256` 未記録の間は評価器がコード hash を要求しないため、無記入を
+  許すと推論コードが未 pin のまま go を publish できてしまう。**assist 抽出器**（full_mix の `basic_pitch_direct` × Melodia など）も
   同様に `assist_extractor_weights_sha256` を emit する — `cross_extractor_agreement` は
   assist のモデル入力に依存する gate metric なので、主抽出器と同じく pin する（Codex #217）。
   評価器は `assist_status == "measured"` の行にこの pin を必須とし、provenance 署名にも

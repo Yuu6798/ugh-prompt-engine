@@ -195,11 +195,32 @@ def _load_route_waveform(
     に書き込む（D-2）。**波形本体は載せない** — 出すのは hash だけ。
     """
     if route.requires_separation:
+        from svp_rpe.melody.provenance import (
+            SEPARATION_CODE_PACKAGES,
+            packages_code_sha256,
+        )
         from svp_rpe.rpe.learned.source_separation_adapter import (
             isolate_vocals_with_provenance,
         )
 
+        # 分離**前**にコード pin を bind（抽出器側と同型・#217）。import 済みの
+        # demucs/torch はプロセスに cache されるので、後から採ると「旧コードが作った
+        # stem に新 digest を pin する」ことになる。
+        before_code, _ = packages_code_sha256(SEPARATION_CODE_PACKAGES)
+        _bind_code_pin("separation", before_code, required=True)
         separation = isolate_vocals_with_provenance(audio_path)
+        # 分離**後**に memo 迂回で再 hash して一致を確認する。
+        after_code, covered_code = packages_code_sha256(
+            SEPARATION_CODE_PACKAGES, use_cache=False
+        )
+        if before_code != after_code:
+            from svp_rpe.rpe.learned import LearnedModelUnavailable
+
+            raise LearnedModelUnavailable(
+                "separation inference code changed during separation "
+                f"(before={before_code}, after={after_code}); stem を生んだコードと pin が "
+                "対応しないため unavailable として扱う"
+            )
         if provenance is not None:
             provenance["preprocessing"] = {
                 "preprocessing": route.preprocessing,
@@ -209,16 +230,10 @@ def _load_route_waveform(
                 "separation_weights_files": list(separation.weights_filenames),
                 "stem_sha256": separation.stem_sha256,
             }
-            from svp_rpe.melody.provenance import (
-                SEPARATION_CODE_PACKAGES,
-                packages_code_sha256,
-            )
-
-            # 分離も backend（torch）まで含めて pin する（#217）。
-            separation_code, covered = packages_code_sha256(SEPARATION_CODE_PACKAGES)
-            if separation_code is not None:
-                provenance["preprocessing"]["separation_code_sha256"] = separation_code
-                provenance["preprocessing"]["separation_code_packages"] = list(covered)
+            # 分離も backend（torch）まで含めて pin する（#217）。値は分離前に採り、
+            # 分離後の再検証を通過した digest（= stem を生んだコード）。
+            provenance["preprocessing"]["separation_code_sha256"] = after_code
+            provenance["preprocessing"]["separation_code_packages"] = list(covered_code)
         return (
             np.asarray(separation.waveform, dtype=np.float32),
             int(separation.sample_rate),
@@ -282,17 +297,37 @@ def _extractor_code_fingerprint(extractor: str, *, use_cache: bool = True):
     return extractor_code_fingerprint(extractor, use_cache=use_cache)
 
 
-def _bind_code_pin(extractor: str, before_code: "str | None") -> None:
+def _code_pin_required(extractor: str) -> bool:
+    """`extractor` に推論を行うパッケージが定義されているか（= コード pin 必須か）。"""
+    from svp_rpe.melody.provenance import extractor_code_packages_for
+
+    return bool(extractor_code_packages_for(extractor))
+
+
+def _bind_code_pin(
+    extractor: str, before_code: "str | None", *, required: bool = False
+) -> None:
     """推論**前**のコード hash をプロセス内 pin として確定 / 照合する（#217）。
 
     import 済みモジュールはプロセスに cache されるため、途中でパッケージファイルが
     差し替わっても**実行されるのは古いコード**でありうる。重み側の load-time pin と
     同型に、推論前に bind して食い違えば推論を行わない。
+
+    `required=True`（実際に推論を行うパッケージがある経路）で digest を採れない場合
+    ——zip/namespace レイアウトや、ロード済みファイルが読めなくなった場合——は
+    `LearnedModelUnavailable` にする。評価器は registry の `code_sha256` が未記録の間は
+    コード hash を要求しないので、無記入のまま measured 行を出すと**推論コードが未 pin の
+    まま go を publish**できてしまう（Codex #217）。
     """
     from svp_rpe.melody.provenance import record_load_time_pin
     from svp_rpe.rpe.learned import LearnedModelUnavailable
 
     if before_code is None:
+        if required:
+            raise LearnedModelUnavailable(
+                f"{extractor} inference code could not be fingerprinted; "
+                "推論コードを pin できない経路で観測しないため unavailable として扱う"
+            )
         return
     pinned = record_load_time_pin(f"{extractor}:code", before_code)
     if pinned != before_code:
@@ -395,7 +430,7 @@ def observe_via_route_with_provenance(
         before = _extractor_fingerprint(route.extractor, require=True)
         _bind_load_time_pin(route.extractor, before)
         before_code, _ = _extractor_code_fingerprint(route.extractor)
-        _bind_code_pin(route.extractor, before_code)
+        _bind_code_pin(route.extractor, before_code, required=_code_pin_required(route.extractor))
         observation = extract_basic_pitch_observation(audio_path, route=route.name)
         _verify_and_record_extractor_weights(provenance, route.extractor, before)
         _verify_and_record_extractor_code(provenance, route.extractor, before_code)
@@ -407,7 +442,7 @@ def observe_via_route_with_provenance(
     before = _extractor_fingerprint(route.extractor, require=True)
     _bind_load_time_pin(route.extractor, before)
     before_code, _ = _extractor_code_fingerprint(route.extractor)
-    _bind_code_pin(route.extractor, before_code)
+    _bind_code_pin(route.extractor, before_code, required=_code_pin_required(route.extractor))
     if route.extractor == "pyin":
         observation = extract_pyin_observation(waveform, sample_rate, route=route.name)
     elif route.extractor == "crepe":
