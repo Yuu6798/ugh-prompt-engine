@@ -48,7 +48,7 @@ if str(SRC) not in sys.path:
 if str(ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts"))
 
-from build_melody_bench import build_signal, load_specs  # noqa: E402
+from build_melody_bench import SPECS_PATH, build_signal, load_specs  # noqa: E402
 
 from svp_rpe.melody.extractors import observe_assist_notes, observe_via_route  # noqa: E402
 from svp_rpe.melody.observability import (  # noqa: E402
@@ -1298,6 +1298,10 @@ def main() -> int:
         protected_paths = {REGISTRY_PATH.resolve()}
         if args.external is not None:
             protected_paths.add(Path(args.external).resolve())
+        else:
+            # synthetic モードは synthesis_specs.yaml を load_specs() で読む committed
+            # fixture 入力なので保護する（`--out .../synthesis_specs.yaml` で破壊させない）。
+            protected_paths.add(SPECS_PATH.resolve())
         for info in results.get("fixtures", {}).values():
             audio_path = info.get("audio_path")
             if audio_path:

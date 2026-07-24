@@ -1880,6 +1880,24 @@ def test_external_cli_rejects_out_colliding_with_manifest_or_source(tmp_path, mo
     assert wav.read_bytes() == wav_before
 
 
+def test_synthetic_cli_rejects_out_overwriting_synthesis_specs(monkeypatch):
+    """default synthetic モードの --out が synthesis_specs.yaml を指したら fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    # run_synthetic を軽量スタブ化（実抽出を回さず protected 判定だけ検証）。
+    monkeypatch.setattr(
+        harness, "run_synthetic", lambda: {"mode": "synthetic", "fixtures": {}}
+    )
+    monkeypatch.setattr(
+        sys, "argv", ["run_melody_observability", "--out", str(SPECS_PATH)]
+    )
+    before = SPECS_PATH.read_bytes()
+    with pytest.raises(ValueError, match="保護対象"):
+        harness.main()
+    # committed synthesis_specs.yaml は無傷。
+    assert SPECS_PATH.read_bytes() == before
+
+
 # --------------------------------------------------------------------------- #
 # slow lane: 合成 → 実 pyin 抽出の統合（正/負の対照）
 # --------------------------------------------------------------------------- #
