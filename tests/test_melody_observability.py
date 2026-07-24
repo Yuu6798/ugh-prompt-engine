@@ -940,15 +940,17 @@ def _make_go_bar_report(
             # に対し metrics から再導出した status が outcome と一致するよう構築する。
             if outcome == "sufficient":
                 row["report"] = {
-                    "status": "sufficient", "voiced_coverage": 0.7, "note_count": 12,
-                    "phrase_count": 3, "confidence_mean": 0.9, "low_confidence_rate": 0.05,
-                    "octave_jump_rate": 0.0, "cross_extractor_agreement": None,
+                    "status": "sufficient", "route": route, "voiced_coverage": 0.7,
+                    "note_count": 12, "phrase_count": 3, "confidence_mean": 0.9,
+                    "low_confidence_rate": 0.05, "octave_jump_rate": 0.0,
+                    "cross_extractor_agreement": None,
                 }
             else:
                 row["report"] = {
-                    "status": "insufficient", "voiced_coverage": 0.7, "note_count": 1,
-                    "phrase_count": 1, "confidence_mean": 0.9, "low_confidence_rate": 0.05,
-                    "octave_jump_rate": 0.0, "cross_extractor_agreement": None,
+                    "status": "insufficient", "route": route, "voiced_coverage": 0.7,
+                    "note_count": 1, "phrase_count": 1, "confidence_mean": 0.9,
+                    "low_confidence_rate": 0.05, "octave_jump_rate": 0.0,
+                    "cross_extractor_agreement": None,
                 }
             row["source_model"] = f"{route}:model"
             row["extractor_version"] = "0.0.13"
@@ -1585,6 +1587,24 @@ def test_evaluate_go_bar_fails_closed_on_metrics_gate_inconsistency():
             if row["route"] == _GO_BAR_ROUTE:
                 row["report"] = {**row["report"], "note_count": 1, "phrase_count": 1}
     with pytest.raises(ValueError, match="metrics"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_fails_closed_on_report_route_mismatch():
+    """report payload の route が行 route と食い違えば fail-closed（別経路 payload のすり替え）。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    r2 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    # jrock 本命経路の report payload の route を別経路（pyin_direct）へ貼り替え。
+    for report in (r1, r2):
+        for row in report["fixtures"]["real_vocal_jrock"]["routes"]:
+            if row["route"] == _GO_BAR_ROUTE:
+                row["report"] = {**row["report"], "route": "pyin_direct"}
+    with pytest.raises(ValueError, match="payload route"):
         harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
 
 

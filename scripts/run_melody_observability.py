@@ -575,9 +575,10 @@ def evaluate_m1_real_go_bar(
     - measured な route 行の `extractor` / preprocessing が凍結 route 定義
       （`select_routes`）と不一致（経路ラベルと実測抽出器のすり替えを許さない・Codex 指摘）
     - measured な route 行が根拠 report payload / gate metrics を欠く、`report.status`
-      が `outcome` と不一致、または payload metrics から凍結ゲートで **再導出** した
-      status が `outcome` と不一致（outcome/status だけ改竄し metrics を未達のまま残す
-      のを許さない・`gate_reasons` を assess_observability と共有・Codex 指摘）
+      が `outcome` と不一致、payload metrics から凍結ゲートで **再導出** した status が
+      `outcome` と不一致、または payload 自身の `route` が行の route と不一致（outcome/
+      status だけ改竄し metrics を未達のまま残す／別経路の passing payload を貼るのを
+      許さない・`gate_reasons` を assess_observability と共有・Codex 指摘）
 
     候補経路は positive fixture の registry 凍結 kind が規定する matrix に限定し、
     report に混入した非登録経路は verdict に効かせない（Codex 指摘）。
@@ -802,6 +803,17 @@ def evaluate_m1_real_go_bar(
                         f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} in "
                         f"reports[{idx}] outcome {row['outcome']!r} lacks a matching report "
                         "payload (report.status); outcome と metrics の食い違いを許さない "
+                        "(fail-closed)"
+                    )
+                # report payload 自身の route が行の route と一致することを要求。別経路の
+                # passing payload（例 pyin_direct）を demucs_vocals_then_crepe 行に貼って
+                # その経路で測ったように計上させるすり替えを弾く（Codex 指摘・harness は
+                # observation.route=route.name で書くので実 report では常に一致）。
+                if report_payload.get("route") != row["route"]:
+                    raise ValueError(
+                        f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} in "
+                        f"reports[{idx}] report payload route {report_payload.get('route')!r} != "
+                        f"row route {row['route']!r}; 別経路の観測 payload のすり替えを許さない "
                         "(fail-closed)"
                     )
                 # status 文字列一致だけでは、outcome/report.status を両方 sufficient に
