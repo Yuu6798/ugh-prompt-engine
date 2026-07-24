@@ -520,9 +520,15 @@ def evaluate_m1_real_go_bar(
     - 同一 fixture id の `audio_sha256` が report 間で欠落・不一致（manifest は
       ``audio_sha256: null`` を許すが、同一 id で別素材を使った 2 run を「同一素材の
       n>=2 repeats」と見なせない・Codex 指摘）
-    - いずれかの fixture が、その input_kind で回すべき全経路（`select_routes`）を
-      report に持たない（stale/truncated report で一部経路が丸ごと欠けると、残った
-      経路だけで go が出うる・docs §6.3 の完全 matrix を要求・Codex 指摘）
+    - いずれかの report の `thresholds_source` が ``"registry"`` でない、または
+      `observation_gate` が凍結 registry の解決ゲートと不一致（override（緩い）ゲートで
+      測定した report では凍結バーの判定を publish しない・Codex 指摘）
+    - いずれかの fixture の report 自己申告 `input_kind` が registry の凍結 kind と
+      不一致（易しい matrix へのすり替えを防ぐ・Codex 指摘）
+    - いずれかの fixture が、**registry の凍結 input_kind** で回すべき全経路
+      （`select_routes`）を report に持たない（stale/truncated report で一部経路が
+      丸ごと欠けると、残った経路だけで go が出うる・docs §6.3 の完全 matrix を要求・
+      Codex 指摘）
 
     ゲート outcome は ``"sufficient"`` / ``"insufficient"`` のみを指す
     （``"unavailable"`` / ``"not_observed_by_routing"`` / ``"not_applicable"`` は
@@ -566,6 +572,11 @@ def evaluate_m1_real_go_bar(
     min_positive_sufficient = bar["min_positive_sufficient"]
     max_negative_false_positive = bar["max_negative_false_positive"]
     repeats_min = bar["repeats_min"]
+    # registry の external_fixtures が凍結した id → input_kind。report 自己申告の kind を
+    # 信用せず、これを真として matrix を評価する（Codex 指摘）。
+    registered_kinds = _unique_id_map(
+        registry.get("external_fixtures", []), "external_fixtures"
+    )
 
     # 凍結ルールが要求する繰返し回数（n>=2）未満の report で verdict を出さない。
     # CLI は nargs="+" で単一 report も受けるため、ここで弾かないと 1 回実行の観測が
@@ -583,8 +594,15 @@ def evaluate_m1_real_go_bar(
     ref_registry_sha256 = (
         registry_sha256 if registry_sha256 is not None else reports[0]["registry_sha256"]
     )
-    ref_observation_gate = reports[0]["observation_gate"]
     _ref_label = "loaded registry" if registry_sha256 is not None else "reports[0]"
+    # 凍結 registry が解決する observation_gate。report の gate はこれと完全一致し、かつ
+    # override 由来でない（thresholds_source == "registry"）ことを要求する。相互一致だけ
+    # では、両 report が run_external(..., thresholds=override) で同じ緩いゲートを使った
+    # 場合に registry_sha256 が一致したまま通過し、凍結ゲート外の測定で verdict を publish
+    # できてしまう（Codex 指摘）。
+    frozen_gate = asdict(
+        ObservabilityThresholds.from_registry(registry["observation_gate"])
+    )
     for idx, report in enumerate(reports):
         if report["registry_sha256"] != ref_registry_sha256:
             raise ValueError(
@@ -592,10 +610,16 @@ def evaluate_m1_real_go_bar(
                 f"{report['registry_sha256']!r} != {_ref_label} {ref_registry_sha256!r}; "
                 "測定時と別の凍結バー/registry の下で判定できない (fail-closed)"
             )
-        if report["observation_gate"] != ref_observation_gate:
+        if report.get("thresholds_source") != "registry":
             raise ValueError(
-                f"evaluate_m1_real_go_bar: reports disagree on observation_gate at reports[{idx}]; "
-                "異なる閾値スナップショット下で測定した report を混ぜて判定できない (fail-closed)"
+                f"evaluate_m1_real_go_bar: reports[{idx}] thresholds_source="
+                f"{report.get('thresholds_source')!r} != 'registry'; override ゲートで測定した "
+                "report では凍結バーの判定を publish できない (fail-closed)"
+            )
+        if report["observation_gate"] != frozen_gate:
+            raise ValueError(
+                f"evaluate_m1_real_go_bar: reports[{idx}] observation_gate が凍結 registry の "
+                "解決ゲートと一致しない; 凍結ゲート外で測定した report では判定できない (fail-closed)"
             )
 
     for fixture_id in positive_ids + negative_ids:
@@ -629,18 +653,31 @@ def evaluate_m1_real_go_bar(
             )
         # 完全 route matrix の存在確認。candidate_routes は「report に既に存在する経路」
         # からしか作らないため、stale/truncated report である経路が全 positive から
-        # 丸ごと欠けても未観測として弾かれず baseline 経路単独で go が出うる。事前登録の
-        # input_kind で回すべき全経路（select_routes）と突き合わせ、欠落を fail-closed
-        # にする（Codex 指摘・docs §6.3 の vocal_track 4 経路 matrix を全 fixture × n>=2）。
+        # 丸ごと欠けても未観測として弾かれず baseline 経路単独で go が出うる。**registry が
+        # 凍結した input_kind**（report 自己申告でなく）で回すべき全経路（select_routes）
+        # と突き合わせ、欠落を fail-closed にする（Codex 指摘・docs §6.3 の vocal_track
+        # 4 経路 matrix を全 fixture × n>=2）。
+        registry_kind = registered_kinds.get(fixture_id)
+        if registry_kind is None:
+            raise ValueError(
+                f"evaluate_m1_real_go_bar: fixture {fixture_id!r} は registry.yaml の "
+                "external_fixtures に未登録 (fail-closed)"
+            )
+        expected_routes = {r.name for r in select_routes(registry_kind)}
         for idx, report in enumerate(reports):
-            fixture_kind = report["fixtures"][fixture_id]["input_kind"]
-            expected_routes = {r.name for r in select_routes(fixture_kind)}
+            report_kind = report["fixtures"][fixture_id]["input_kind"]
+            if report_kind != registry_kind:
+                raise ValueError(
+                    f"evaluate_m1_real_go_bar: fixture {fixture_id!r} in reports[{idx}] declares "
+                    f"input_kind {report_kind!r} != registry frozen {registry_kind!r}; "
+                    "report 自己申告の kind で易しい matrix にすり替えさせない (fail-closed)"
+                )
             present_routes = set(_fixture_route_outcomes(report, fixture_id))
             missing_routes = sorted(expected_routes - present_routes)
             if missing_routes:
                 raise ValueError(
                     f"evaluate_m1_real_go_bar: fixture {fixture_id!r} in reports[{idx}] is "
-                    f"missing route(s) {missing_routes} of the pre-registered {fixture_kind} "
+                    f"missing route(s) {missing_routes} of the pre-registered {registry_kind} "
                     f"matrix {sorted(expected_routes)}; truncated/stale report では全 fixture が "
                     "全経路を測っていないと verdict を主張できない (fail-closed)"
                 )

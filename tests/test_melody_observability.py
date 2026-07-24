@@ -1235,6 +1235,44 @@ def test_evaluate_go_bar_fails_closed_on_incomplete_route_matrix():
         harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
 
 
+def test_evaluate_go_bar_fails_closed_on_overridden_or_tampered_gate():
+    """override ゲート / 凍結ゲートと不一致な observation_gate の report は fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+
+    # thresholds_source=override（緩いゲートで測定した可能性）→ fail-closed。
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+    r1["thresholds_source"] = "override"
+    with pytest.raises(ValueError, match="thresholds_source"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+    # observation_gate が凍結ゲートと不一致（両 report で一致していても）→ fail-closed。
+    r3 = _make_go_bar_report(outcomes)
+    r4 = _make_go_bar_report(outcomes)
+    r3["observation_gate"] = {**r3["observation_gate"], "min_note_count": 3}
+    r4["observation_gate"] = {**r4["observation_gate"], "min_note_count": 3}
+    with pytest.raises(ValueError, match="observation_gate"):
+        harness.evaluate_m1_real_go_bar([r3, r4], _go_bar_registry())
+
+
+def test_evaluate_go_bar_fails_closed_on_mislabeled_input_kind():
+    """report が fixture を registry 凍結 kind と別の input_kind と誤申告したら fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+    # registry では vocal_track。report が clear_lead と誤申告（易しい matrix へのすり替え）。
+    for report in (r1, r2):
+        report["fixtures"]["real_vocal_jrock"]["input_kind"] = "clear_lead"
+    with pytest.raises(ValueError, match="input_kind"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
 # --------------------------------------------------------------------------- #
 # slow lane: 合成 → 実 pyin 抽出の統合（正/負の対照）
 # --------------------------------------------------------------------------- #
