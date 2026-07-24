@@ -38,6 +38,7 @@ from __future__ import annotations
 import importlib
 import importlib.metadata as _pkg_metadata
 import sys
+from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
 import numpy as np
@@ -51,7 +52,12 @@ __all__ = [
     "ensure_crepe_available",
     "extract_crepe_f0",
     "crepe_model_info",
+    "crepe_weight_files",
 ]
+
+# `crepe.predict` の既定 capacity。重み（model-*.h5）は wheel 同梱で、capacity ごとに
+# 別ファイル。実際に読むのは既定の "full" なので、その 1 本を weights pin の対象にする。
+_DEFAULT_CAPACITY = "full"
 
 _MODULE_NAME = "crepe"
 _MODEL_TASK = "pitch"
@@ -106,6 +112,34 @@ def _detect_crepe_version() -> Optional[str]:
         return _pkg_metadata.version(_MODULE_NAME)
     except _pkg_metadata.PackageNotFoundError:
         return None
+
+
+def crepe_weight_files(capacity: str = _DEFAULT_CAPACITY) -> List[Path]:
+    """CREPE が推論で読む重みファイル（`crepe/model-<capacity>.h5`）のパス。
+
+    M1-real の provenance 要求（`extractor_weights_sha256`・#59）を満たすため、
+    「同一 package version でも別 bundled weights なら別 run」を content hash で
+    区別できるように、実際に読まれる重みファイルを返す。
+
+    Raises
+    ------
+    LearnedModelUnavailable
+        `crepe` 未導入、または同梱重みが見つからないとき（pin できない状態を
+        「重みなし」と偽らず fail させ、呼び出し側で emit を落とす）。
+    """
+    crepe_module = _load_crepe_module()
+    module_file = getattr(crepe_module, "__file__", None)
+    if not module_file:
+        raise LearnedModelUnavailable("crepe package location is unknown; weights を pin できない")
+    package_dir = Path(module_file).resolve().parent
+    weights = package_dir / f"model-{capacity}.h5"
+    if not weights.is_file():
+        candidates = sorted(package_dir.glob("model-*.h5"))
+        raise LearnedModelUnavailable(
+            f"crepe weights {weights} not found (found: {[p.name for p in candidates]}); "
+            "重みを pin できないため extractor_weights_sha256 を emit しない"
+        )
+    return [weights]
 
 
 def crepe_model_info() -> LearnedModelInfo:

@@ -132,7 +132,7 @@ python scripts/run_melody_observability.py --out melody_obs.json
 # 実利用入力帯（Suno vocals stem 等の外部素材）
 #   ext.json = [{"id": "...", "path": "...wav", "input_kind": "vocal_track"}, ...]
 # vocal_track 経路（Demucs vocals → pyin/CREPE）:
-pip install -e ".[separate]"      # Demucs（`separate` extra）
+pip install -e ".[separate]"      # Demucs（`separate` extra）※重みは事前取得が必要・§6.4
 pip install crepe                 # CREPE = manual/external 統合（published extra なし・§5）
 # full_mix 経路（登録 fixture real_vocal_plus_backing）は basic_pitch_direct を含む。
 # basic-pitch は `pitch` extra（Apache-2.0・Python<3.12）。full_mix も測るなら追加:
@@ -252,14 +252,27 @@ python scripts/run_melody_observability.py --external ext.json --out ext_obs.jso
 pip install -e ".[pitch]"
 # pip install crepe        # CREPE（manual/external 統合・§5）
 # pip install essentia     # Melodia を測るなら（AGPL-3.0 を受容できる環境のみ）
+
+# ★分離経路（本命 demucs_vocals_then_*）を測るなら `.[separate]` を入れる。
+#   ハーネスは分離が走った行に preprocessing.stem_sha256 /
+#   separation_weights_sha256 を emit し、学習抽出器行に extractor_weights_sha256 を
+#   emit するので、評価器の #54/#59 要求と噛み合う（旧レシピの「入れるな」回避は撤去）。
+pip install -e ".[separate]"
+
+# ★重みは**事前取得**する（ハーネスは実行時 DL を一切行わない）。未取得のまま走らせても
+#   CDN へは触れず、分離経路が unavailable として記録され run は完走する（→ inconclusive）。
+#   取得方法 A: 明示的な一度きりの provisioning（download はこのコマンドの中だけで起きる）
+python -c "import demucs.pretrained as p; p.get_model('htdemucs_ft')"
+#   取得方法 B: 遮断環境では別マシンで取得した .th を
+#              ~/.cache/torch/hub/checkpoints/ へ配置（または任意ディレクトリに置いて
+#              SVP_RPE_DEMUCS_WEIGHTS_DIR=<dir> を設定する）
 #
-# ★分離経路（`.[separate]`）は現状**入れない**。理由: 評価器は measured な demucs 経路に
-#   preprocessing.stem_sha256 / separation_weights_sha256 を必須化する（#54）が、ハーネスは
-#   まだこれらを emit しない（weights hash の emit は実 Demucs を要する machine-dependent な
-#   未配線 slow-lane 課題・§6.5）。`.[separate]` を入れると分離経路が measured になり、
-#   stem/weights 欠落で --evaluate-go-bar が fail-closed する。分離経路の Go を測るには先に
-#   emit 配線が必要。それまでは分離経路を unavailable（→inconclusive・非ブロッキング）に留め、
-#   Go は非分離の pyin_direct 経路で成立させる。
+#   取得できたことの確認と、registry へ記録する dated pin の採取:
+python -c "import json; from svp_rpe.rpe.learned.source_separation_adapter import \
+  describe_separation_weights as d; print(json.dumps(d(), indent=2, ensure_ascii=False))"
+#   → {"model": "htdemucs_ft", "version": "...", "sha256": "...", "files": [...]}
+#   この version / sha256 を registry.yaml の provenance.model_weights.demucs へ記録する
+#   （crepe / melodia の重み pin は run 出力 report の routes[].extractor_weights_sha256）。
 
 # tests/fixtures/melody_bench/external_manifest.example.json をコピーし、
 # REPLACE を実ファイルパスへ書き換える（audio_sha256 は null のままでよい・
@@ -277,9 +290,32 @@ python scripts/run_melody_observability.py --external manifest.json --out run2.j
 #   ※ 生成と評価は同一 checkout で行う（#55: report の generator_code_sha256 は現 checkout の
 #     _generator_code_sha256() と一致必須。間で routing/gate/extractor を変えると stale 扱い）。
 
-# 凍結バーを機械適用して Go/No-Go を得る（分離経路は上記により inconclusive、Go は pyin_direct）。
+# 凍結バーを機械適用して Go/No-Go を得る（重み事前取得済みなら分離経路も採点対象）。
 python scripts/run_melody_observability.py --evaluate-go-bar run1.json run2.json --out verdict.json
 ```
+
+**重みプロビジョニングの 3 状態**（可用性は import 可否の 2 値ではない）:
+
+| 状態 | 挙動 |
+|---|---|
+| demucs 未導入 | 分離経路 = `unavailable`（`separate` extra の install hint） |
+| 導入済 + 重み取得済 | 分離経路が measured。stem/weights pin つきで Go 候補になれる |
+| 導入済 + **重み未取得** | 分離経路 = `unavailable`（`demucs weights not provisioned: <expected paths>`）。**実行時 DL は行わない**（リトライもミラーもしない）ので run は完走し、部分行と report は残る |
+
+第 3 状態を「利用可能」と誤認すると、遮断環境では torch hub の download が
+`urllib.error.URLError` を投げて `--external` run 全体が落ち、部分行も report も
+残らなかった（旧レシピが `.[separate]` を入れるなと書いていたのはこの穴の回避策）。
+現在は `ensure_separation_available()` が **重みのローカル実在まで**検査し、
+分離実行前に必ずこの門を通す。門をすり抜けた重み取得起因の失敗
+（`URLError` / `HTTPError` / `OSError` / torch hub の `RuntimeError`）も
+`LearnedModelUnavailable` へ写像するので、run が落ちることはない。
+
+**pyin_direct だけで Go が出た場合の扱い**: 分離なし full-mix の pyin は Phase 0
+スパイクと 2026-07-24 のスモーク実測（`voiced_coverage 0.181 / confidence 0.023`）の
+両方で不成立側の証拠がある。したがって pyin_direct 単独の Go は M1-real の本Go として
+扱わず、**それ自体が驚くべき結果**として dated 記録し、素材・区間を疑って再確認する。
+逆に、分離経路が `unavailable` で verdict が `inconclusive` になったものを「No-Go」と
+読み替えてはならない（測定未達を測定結果と偽らない）。
 
 `verdict` は三値: **`go`**（生き残り経路あり）/ **`no_go`**（**全**候補経路を全
 fixture×route で実測した上でどれも生き残らなかった＝強化版 No-Go・設計 §4.4）/
@@ -342,18 +378,21 @@ sha256 で担保する。検証は「pin した sha256 の report 集合を同�
 pin を必須化する = 記録が済むまで Go を出さない fail-closed 規律。「約束するのは測定できる
 ものだけ」の D-1 準拠）:
 
-- **分離経路の stem/weights hash**（#54）: Demucs vocals stem の sha256・分離器重みの hash は
-  実 Demucs を要するため未 emit。評価器は **measured な分離経路には `preprocessing.stem_sha256`
-  と `separation_weights_sha256` を必須**とし、無ければ provenance 不足で fail-closed（同一
-  `htdemucs_ft`/version でも別 weights/再生成 stem なら前処理入力が変わるため、これらの pin
-  なしに分離経路を stable Go survivor に数えない）。したがって分離経路の Go は emit 配線
-  （`_preprocessing_provenance` が stem を露出して hash）を slow-lane で追加してから。
-- **学習抽出器の weights hash**（#59）: CREPE/basic-pitch/Melodia のモデル重み hash は
-  実モデルを要するため未 emit。評価器は **measured な学習抽出器経路には `extractor_weights_sha256`
-  を必須**とし、無ければ fail-closed（同一 package version でも別 bundled/local weights だと
-  モデル入力が変わるため、pin なしに学習抽出器経路を stable Go survivor に数えない・分離側と対称）。
-  したがって本命 `demucs_vocals_then_crepe` 等の Go は weights emit 配線を slow-lane で追加してから。
-  pyin は DSP で重みなしのため対象外（現状 Go 可能な経路）。
+- **分離経路の stem/weights hash**（#54）: **emit 配線済み**（2026-07-24）。分離が実際に
+  走った行には `preprocessing.stem_sha256`（vocals stem の float32 生サンプル hash）と
+  `separation_weights_sha256`（実際に読んだチェックポイントの hash）が載る
+  （`isolate_vocals_with_provenance` → `observe_via_route_with_provenance` → 行）。
+  評価器の必須要求（同一 `htdemucs_ft`/version でも別 weights/再生成 stem なら前処理入力が
+  変わる）はそのままで、**要求を満たす値を実測時に刻めるようになった**のが変更点。
+  実際の値は machine-dependent（実 Demucs + 実素材）なので依然 slow-lane で採る。
+- **学習抽出器の weights hash**（#59）: **emit 配線済み**（2026-07-24）。CREPE は
+  `crepe/model-<capacity>.h5`、basic-pitch は `ICASSP_2022_MODEL_PATH` の artifact を
+  hash して `extractor_weights_sha256`（`extractor_weights_kind: model_weights`）に載せる。
+  Melodia は**学習重みを持たない DSP 算法**なので、pin するのは essentia のネイティブ
+  拡張バイナリで、`extractor_weights_kind: library_binary` として「重みでないものを重みと
+  主張しない」正直会計にする。pyin は DSP で重みなしのため無記入（評価器も要求しない）。
+  依存未導入・artifact 未特定のときは推測 digest を作らず無記入（評価器が pin 欠落で
+  fail-closed する）。
 - **frozen 素材の expected audio hash**（#53）: real_vocal_* は自作 Suno 曲で **非 commit**
   （波形は repo に置かない）、その expected audio sha256 は slow-lane 生成時に決まる
   dated pin。PR 時に registry へ固定できない（audio が repo に存在しない・初回生成前は

@@ -218,8 +218,38 @@ provenance:
     synth_mono_two_phrase: "df3b5a083d68e02a8d3eaeff9bcd761cd66fa3696fbc1758f66784c11f2fda03"
     synth_chord_pad: "eec32a54eb987725202797dc80183ca44240295b66f0f260074cf5bed6abaa64"
     synth_unison_drone: "1a3c83a827a043d1cd3295a3e26456a0f329a21ca6722cdb7df57ccb4f7cf401"
+  # モデル入力（重み）の dated 記録欄。**実行時 DL を行わない**規律のもと、重みは
+  # slow-lane で事前取得し、その時点の version / sha256 をここへ記録する
+  # （取得・記録手順は docs/melody_observability.md §6.4）。`sha256: null` は
+  # 「未記録」を意味する（プレースホルダ文字列を pin と誤認させないため null で置く）。
+  # 記録値の採り方:
+  #   demucs  … python -c "from svp_rpe.rpe.learned.source_separation_adapter import
+  #             describe_separation_weights as d; import json; print(json.dumps(d(), indent=2))"
+  #   crepe / basic_pitch / essentia_melodia
+  #           … run 出力 report の routes[].extractor_weights_sha256（ハーネスが実測 emit）
+  # ここに記録した値と report の pin が食い違えば、別 model stack の run を混ぜた証拠になる。
   model_weights:
-    demucs: "TBD at slow-lane run (htdemucs_ft weights version/hash)"
-    crepe: "TBD at slow-lane run (crepe wheel model-*.h5 version/hash)"
-    essentia_melodia: "TBD at slow-lane run (essentia version; rule-based, no learned weights)"
+    demucs:
+      role: source_separation (vocals stem)
+      model: htdemucs_ft
+      source: 事前取得（実行時DL禁止）
+      version: null          # 例: "4.1.0"（installed demucs version）
+      sha256: null           # describe_separation_weights()["sha256"]（bag 4 ckpt の合成 digest）
+      license: null          # 上流重みライセンスを実確認して記録（policy §4: コード≠重み）
+    crepe:
+      role: melody_f0_extractor
+      model: model-full.h5 (wheel 同梱)
+      source: 事前取得（実行時DL禁止・pip wheel 同梱）
+      version: null
+      sha256: null           # report の routes[].extractor_weights_sha256（kind=model_weights）
+      license: null          # UNVERIFIED（crepe_adapter の weights_license 注記参照）
+    essentia_melodia:
+      role: melody_f0_extractor (DSP)
+      model: PredominantPitchMelodia
+      source: 事前取得（実行時DL禁止・pip wheel 同梱バイナリ）
+      version: null
+      # Melodia は学習重みを持たない DSP 算法。pin するのは実装バイナリの指紋で、
+      # report 側は kind=library_binary として明示する（重みでないものを重みと主張しない）。
+      sha256: null
+      license: AGPL-3.0 (essentia; manual/external 統合)
   random_seed: 0   # 合成・ペア生成の乱数 seed（決定論固定）

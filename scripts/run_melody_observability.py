@@ -52,7 +52,10 @@ if str(ROOT / "scripts") not in sys.path:
 
 from build_melody_bench import SPECS_PATH, build_signal, load_specs  # noqa: E402
 
-from svp_rpe.melody.extractors import observe_assist_notes, observe_via_route  # noqa: E402
+from svp_rpe.melody.extractors import (  # noqa: E402
+    observe_assist_notes,
+    observe_via_route_with_provenance,
+)
 from svp_rpe.melody.observability import (  # noqa: E402
     ObservabilityThresholds,
     assess_observability,
@@ -240,13 +243,16 @@ def _extractor_version(extractor: str) -> "str | None":
 
 
 def _preprocessing_provenance(route: Any) -> "Dict[str, Any] | None":
-    """分離前処理（Demucs）の provenance。分離不要な経路は None。
+    """分離前処理（Demucs）の provenance 下地。分離不要な経路は None。
 
     同一 audio_sha256 でも Demucs のパッケージ/モデル/重みが違えば vocals stem が
     変わり下流のピッチ結果も変わるため、`requires_separation` 行に分離器の
     モデル名と installed version を記録する（Codex 指摘・AGENTS §8）。
-    stem hash レベルの provenance は observe_via_route が stem を露出する必要が
-    あり、Demucs 不在では検証できないため本 PR では見送る。
+
+    ここで作るのは**分離が走らなかった行**（unavailable 等）でも記録できる静的な
+    下地で、実際に分離が走った行では `observe_via_route_with_provenance` が返す
+    実測 pin（`stem_sha256` / `separation_weights_sha256`）を上書きマージする
+    （D-2・#54）。
     """
     if not getattr(route, "requires_separation", False):
         return None
@@ -284,7 +290,9 @@ def _run_routes_on_file(
             continue
         preprocessing = _preprocessing_provenance(route)
         try:
-            observation = observe_via_route(audio_path, route)
+            observation, route_provenance = observe_via_route_with_provenance(
+                audio_path, route
+            )
         except LearnedModelUnavailable as exc:
             unavailable_row: Dict[str, Any] = {
                 "route": route.name,
@@ -325,6 +333,19 @@ def _run_routes_on_file(
             "source_model": observation.source_model,
             "extractor_version": _extractor_version(route.extractor),
         }
+        # 実測 pin（D-2）: 分離が実際に走った行には stem/weights hash が付く。
+        # 学習抽出器（CREPE/basic-pitch）と Melodia の実装バイナリ指紋は
+        # extractor_weights_* として行へ載る（pyin は重みなしで無記入）。
+        emitted_preprocessing = route_provenance.get("preprocessing")
+        if emitted_preprocessing:
+            preprocessing = {**(preprocessing or {}), **emitted_preprocessing}
+        for key in (
+            "extractor_weights_sha256",
+            "extractor_weights_kind",
+            "extractor_weights_files",
+        ):
+            if key in route_provenance:
+                row[key] = route_provenance[key]
         if preprocessing is not None:
             row["preprocessing"] = preprocessing
         if route.assist:

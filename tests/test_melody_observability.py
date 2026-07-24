@@ -298,18 +298,328 @@ def test_adapters_raise_learned_unavailable_when_missing():
 
 
 def test_observe_via_route_propagates_unavailable_for_demucs(tmp_path):
-    """Demucs 経路は demucs 未導入なら LearnedModelUnavailable を伝播する。"""
+    """Demucs 経路は「未導入」「導入済だが重み未取得」の両方で LearnedModelUnavailable。
+
+    可用性は 2 値（import 可否）でなく 3 値である（D-1）。重みが実在する環境
+    （＝分離が本当に走れる第 2 状態）でのみ skip し、「導入済だが重み未取得」は
+    skip ではなく**合格経路**として扱う。
+    """
     from svp_rpe.melody.extractors import observe_via_route
     from svp_rpe.melody.routing import MelodyRoute
+    from svp_rpe.rpe.learned import source_separation_adapter as adapter
 
     wav = tmp_path / "x.wav"
     sf.write(wav, np.zeros(2048, dtype=np.float32), 22050, subtype="FLOAT")
     route = MelodyRoute("demucs_vocals_then_crepe", "demucs_vocals", "crepe")
     try:
-        observe_via_route(str(wav), route)
+        adapter.resolve_separation_weights()
     except LearnedModelUnavailable:
+        # 未導入 or 重み未取得: 分離経路は優雅に落ちなければならない。
+        with pytest.raises(LearnedModelUnavailable):
+            observe_via_route(str(wav), route)
         return
-    pytest.skip("demucs installed; separation path did not raise")
+    pytest.skip("demucs installed with provisioned weights; separation path can actually run")
+
+
+# --------------------------------------------------------------------------- #
+# D-1: 重みプロビジョニング・ゲート（導入済だが重み未取得 → unavailable）
+# --------------------------------------------------------------------------- #
+_FAKE_FILES_TXT = """\
+# comment line
+root: v3/
+0d19c1c6-0f06f20e.th
+root: hybrid_transformer/
+f7e0c4bc-ba3fe64a.th
+d12395a8-e57c48e6.th
+"""
+
+
+def test_parse_remote_files_maps_signature_to_cached_filename():
+    """demucs remote/files.txt を signature → root 付き相対パスへ parse する。"""
+    from svp_rpe.rpe.learned.source_separation_adapter import _parse_remote_files
+
+    catalogue = _parse_remote_files(_FAKE_FILES_TXT)
+    assert catalogue["f7e0c4bc"] == "hybrid_transformer/f7e0c4bc-ba3fe64a.th"
+    assert catalogue["0d19c1c6"] == "v3/0d19c1c6-0f06f20e.th"
+
+
+def _fake_remote_dir(tmp_path, *, model="htdemucs_ft", signatures=("f7e0c4bc", "d12395a8")):
+    """demucs 同梱 remote メタデータ（files.txt + bag yaml）の最小複製を作る。"""
+    remote = tmp_path / "remote"
+    remote.mkdir(exist_ok=True)
+    (remote / "files.txt").write_text(_FAKE_FILES_TXT, encoding="utf-8")
+    (remote / f"{model}.yaml").write_text(
+        yaml.safe_dump({"models": list(signatures), "segment": 40}), encoding="utf-8"
+    )
+    return remote
+
+
+def test_expected_weight_filenames_resolves_bag_checkpoints(monkeypatch, tmp_path):
+    """bag モデル（htdemucs_ft）は yaml の全 signature 分のファイル名へ解決される。"""
+    from svp_rpe.rpe.learned import source_separation_adapter as adapter
+
+    monkeypatch.setattr(adapter, "_demucs_remote_dir", lambda: _fake_remote_dir(tmp_path))
+    assert adapter._expected_weight_filenames("htdemucs_ft") == [
+        "f7e0c4bc-ba3fe64a.th",
+        "d12395a8-e57c48e6.th",
+    ]
+
+
+def test_expected_weight_filenames_fails_closed_without_remote_metadata(monkeypatch):
+    """remote メタデータが読めなければ「解決不能」で fail-closed（走らせて DL しない）。"""
+    from svp_rpe.rpe.learned import source_separation_adapter as adapter
+
+    monkeypatch.setattr(adapter, "_demucs_remote_dir", lambda: None)
+    with pytest.raises(LearnedModelUnavailable, match="remote metadata"):
+        adapter._expected_weight_filenames("htdemucs_ft")
+
+
+def _provision_gate(monkeypatch, tmp_path, *, weights_present: bool):
+    """demucs 導入済を装い、重み探索先を tmp_path に閉じ込める（実在有無を切替）。
+
+    戻り値は (adapter, weights_dir)。
+    """
+    from svp_rpe.io import source_separator
+    from svp_rpe.rpe.learned import source_separation_adapter as adapter
+
+    monkeypatch.setattr(source_separator, "_HAS_DEMUCS", True)
+    monkeypatch.setattr(adapter, "_demucs_version", lambda: "4.1.0")
+    monkeypatch.setattr(adapter, "_demucs_remote_dir", lambda: _fake_remote_dir(tmp_path))
+    weights_dir = tmp_path / "checkpoints"
+    weights_dir.mkdir()
+    monkeypatch.setenv(adapter.WEIGHTS_DIR_ENV, str(weights_dir))
+    # torch hub cache へ落ちないよう、探索先を明示ディレクトリのみに閉じる。
+    monkeypatch.setattr(adapter, "_torch_hub_checkpoint_dirs", list)
+    if weights_present:
+        for name in adapter._expected_weight_filenames("htdemucs_ft"):
+            (weights_dir / name).write_bytes(b"fake-checkpoint:" + name.encode())
+    return adapter, weights_dir
+
+
+def _forbid_network(monkeypatch):
+    """ネットワーク呼び出し（urlopen / socket connect）を即失敗させる番人を仕掛ける。"""
+    import socket
+    import urllib.request
+
+    def boom(*args, **kwargs):  # pragma: no cover - 発火したらテスト失敗
+        raise AssertionError("network access attempted (runtime weight download)")
+
+    monkeypatch.setattr(urllib.request, "urlopen", boom)
+    monkeypatch.setattr(socket.socket, "connect", boom)
+    monkeypatch.setattr(socket, "create_connection", boom)
+
+
+def test_ensure_separation_available_fails_closed_when_weights_not_provisioned(
+    monkeypatch, tmp_path
+):
+    """demucs 導入済でも重み未取得なら LearnedModelUnavailable（第 3 状態・D-1）。"""
+    adapter, _ = _provision_gate(monkeypatch, tmp_path, weights_present=False)
+    _forbid_network(monkeypatch)
+    with pytest.raises(LearnedModelUnavailable, match="weights not provisioned"):
+        adapter.ensure_separation_available()
+
+
+def test_demucs_missing_behaviour_is_unchanged(monkeypatch):
+    """demucs 未導入時は従来どおり `separate` extra の install hint で落ちる（挙動不変）。"""
+    from svp_rpe.io import source_separator
+    from svp_rpe.rpe.learned import source_separation_adapter as adapter
+
+    monkeypatch.setattr(source_separator, "_HAS_DEMUCS", False)
+    with pytest.raises(LearnedModelUnavailable, match=r"demucs is not installed"):
+        adapter.ensure_separation_available()
+    with pytest.raises(LearnedModelUnavailable, match=r"demucs is not installed"):
+        adapter.isolate_vocals("whatever.wav")
+
+
+def test_isolate_vocals_does_not_run_or_download_when_weights_missing(monkeypatch, tmp_path):
+    """重み未取得時は分離器も呼ばれずネットワークにも触れない（実行時 DL を試みない）。"""
+    adapter, _ = _provision_gate(monkeypatch, tmp_path, weights_present=False)
+    _forbid_network(monkeypatch)
+
+    def forbidden_separate(*args, **kwargs):  # pragma: no cover - 発火したらテスト失敗
+        raise AssertionError("separate_stems must not run without provisioned weights")
+
+    monkeypatch.setattr(adapter, "separate_stems", forbidden_separate)
+    with pytest.raises(LearnedModelUnavailable, match="weights not provisioned"):
+        adapter.isolate_vocals("whatever.wav")
+
+
+def test_isolate_vocals_maps_weight_download_failure_to_unavailable(monkeypatch, tmp_path):
+    """重み取得起因の例外（URLError 等）は LearnedModelUnavailable へ写像し連鎖を保つ。"""
+    import urllib.error
+
+    adapter, _ = _provision_gate(monkeypatch, tmp_path, weights_present=True)
+
+    def raise_urlerror(*args, **kwargs):
+        raise urllib.error.URLError("Tunnel connection failed: 403 Forbidden")
+
+    monkeypatch.setattr(adapter, "separate_stems", raise_urlerror)
+    with pytest.raises(LearnedModelUnavailable) as excinfo:
+        adapter.isolate_vocals("whatever.wav")
+    assert "403 Forbidden" in str(excinfo.value)
+    assert isinstance(excinfo.value.__cause__, urllib.error.URLError)
+
+
+def test_external_run_completes_with_unavailable_rows_when_weights_missing(
+    monkeypatch, tmp_path
+):
+    """重み未取得環境でも --external run は完走し、分離経路行が unavailable になる。
+
+    D-1 以前は URLError が `run_external` を貫通し、部分行も report も残らなかった。
+    """
+    import json as _json
+
+    import scripts.run_melody_observability as harness
+
+    _provision_gate(monkeypatch, tmp_path, weights_present=False)
+    _forbid_network(monkeypatch)
+
+    sr = 22050
+    t = np.linspace(0, 1.0, sr, endpoint=False)
+    wav = tmp_path / "clip.wav"
+    sf.write(wav, (0.3 * np.sin(2 * np.pi * 220 * t)).astype(np.float32), sr, subtype="FLOAT")
+    manifest = tmp_path / "m.json"
+    manifest.write_text(
+        _json.dumps([{"id": "suno_vocals_stem", "path": str(wav), "input_kind": "vocal_track"}]),
+        encoding="utf-8",
+    )
+
+    results = harness.run_external(manifest, _default_thresholds())
+    rows = {row["route"]: row for row in results["fixtures"]["suno_vocals_stem"]["routes"]}
+    # 完走している = vocal_track の全 4 経路が行として残る。
+    assert set(rows) == {r.name for r in select_routes("vocal_track")}
+    for name, row in rows.items():
+        if name.startswith("demucs_vocals_"):
+            assert row["outcome"] == "unavailable"
+            assert "weights not provisioned" in row["detail"]
+            # 分離が走っていない行なので stem/weights pin は付かない（嘘をつかない）。
+            assert "stem_sha256" not in row["preprocessing"]
+    # 非分離の baseline は実測されている（run が途中で落ちていない証拠）。
+    assert rows["pyin_direct"]["outcome"] in ("sufficient", "insufficient")
+
+
+# --------------------------------------------------------------------------- #
+# D-2: stem / weights hash の emit
+# --------------------------------------------------------------------------- #
+def _fake_stem_bundle(waveform, sr):
+    from svp_rpe.io.source_separator import StemBundle
+
+    return StemBundle(
+        source_path="fake.wav",
+        model_name="htdemucs_ft",
+        sample_rate=sr,
+        duration_sec=round(len(waveform) / sr, 4),
+        stems={
+            "vocals": np.asarray(waveform, dtype=np.float32),
+            "drums": np.zeros(4, dtype=np.float32),
+            "bass": np.zeros(4, dtype=np.float32),
+            "other": np.zeros(4, dtype=np.float32),
+        },
+    )
+
+
+def test_isolate_vocals_with_provenance_emits_stem_and_weights_hashes(monkeypatch, tmp_path):
+    """分離が走った経路は stem（float32 生サンプル）と重みの sha256 を返す（D-2）。"""
+    from svp_rpe.utils.hashing import sha256_of_files, sha256_of_float32
+
+    adapter, weights_dir = _provision_gate(monkeypatch, tmp_path, weights_present=True)
+    sr = 16000
+    vocals = (0.2 * np.sin(np.linspace(0, 20, sr))).astype(np.float32)
+    monkeypatch.setattr(
+        adapter, "separate_stems", lambda *a, **k: _fake_stem_bundle(vocals, sr)
+    )
+
+    result = adapter.isolate_vocals_with_provenance("whatever.wav")
+    assert result.sample_rate == sr
+    assert result.stem_sha256 == sha256_of_float32(vocals)
+    expected_files = [
+        weights_dir / name for name in adapter._expected_weight_filenames("htdemucs_ft")
+    ]
+    assert result.weights_sha256 == sha256_of_files(expected_files)
+    assert len(result.weights_sha256) == 64
+    assert set(result.weights_filenames) == {p.name for p in expected_files}
+
+
+def test_separation_route_row_emits_stem_and_weights_pins(monkeypatch, tmp_path):
+    """harness の分離経路行に stem_sha256 / separation_weights_sha256 が載る（#54 と噛み合う）。"""
+    import scripts.run_melody_observability as harness
+    from svp_rpe.melody.routing import MelodyRoute
+
+    adapter, _ = _provision_gate(monkeypatch, tmp_path, weights_present=True)
+    sr = 22050
+    t = np.linspace(0, 1.5, int(sr * 1.5), endpoint=False)
+    vocals = (0.4 * np.sin(2 * np.pi * 330 * t)).astype(np.float32)
+    monkeypatch.setattr(
+        adapter, "separate_stems", lambda *a, **k: _fake_stem_bundle(vocals, sr)
+    )
+
+    wav = tmp_path / "mix.wav"
+    sf.write(wav, vocals, sr, subtype="FLOAT")
+    route = MelodyRoute("demucs_vocals_then_pyin", "demucs_vocals", "pyin")
+    monkeypatch.setattr(harness, "select_routes", lambda kind: [route])
+    rows = harness._run_routes_on_file(str(wav), "vocal_track", _default_thresholds())
+
+    prov = rows[0]["preprocessing"]
+    assert prov["preprocessing"] == "demucs_vocals"
+    assert prov["separation_model"] == "htdemucs_ft"
+    assert harness._is_sha256(prov["stem_sha256"])
+    assert harness._is_sha256(prov["separation_weights_sha256"])
+    # pyin は重みなし: extractor_weights_sha256 を捏造しない。
+    assert "extractor_weights_sha256" not in rows[0]
+
+
+def test_extractor_weights_fingerprint_is_none_for_dsp_and_missing_deps():
+    """pyin（DSP）と未導入 optional 抽出器では指紋なし（推測 digest を作らない）。"""
+    from svp_rpe.melody.provenance import extractor_weights_fingerprint
+
+    assert extractor_weights_fingerprint("pyin") is None
+    assert extractor_weights_fingerprint("none") is None
+    for extractor in ("crepe", "basic_pitch", "melodia"):
+        fingerprint = extractor_weights_fingerprint(extractor)
+        if fingerprint is not None:  # pragma: no cover - optional 依存導入済み環境
+            assert len(fingerprint.sha256) == 64
+
+
+def test_extractor_weights_fingerprint_hashes_crepe_weights(monkeypatch, tmp_path):
+    """CREPE の重みファイルが実在すれば model_weights kind の content hash を返す。"""
+    from svp_rpe.melody.provenance import extractor_weights_fingerprint
+    from svp_rpe.rpe.learned import crepe_adapter
+    from svp_rpe.utils.hashing import sha256_of_files
+
+    weights = tmp_path / "model-full.h5"
+    weights.write_bytes(b"fake-crepe-weights")
+    monkeypatch.setattr(crepe_adapter, "crepe_weight_files", lambda *a, **k: [weights])
+
+    fingerprint = extractor_weights_fingerprint("crepe")
+    assert fingerprint is not None
+    assert fingerprint.kind == "model_weights"
+    assert fingerprint.sha256 == sha256_of_files([weights])
+    assert fingerprint.files == ("model-full.h5",)
+
+
+def test_route_row_records_extractor_weights_pin(monkeypatch, tmp_path):
+    """指紋が取れる抽出器では extractor_weights_* が行へ載る（#59 と噛み合う）。"""
+    import scripts.run_melody_observability as harness
+    from svp_rpe.melody import provenance as melody_provenance
+    from svp_rpe.melody.routing import MelodyRoute
+
+    fake = melody_provenance.ExtractorWeights(
+        extractor="pyin", kind="model_weights", sha256="a" * 64, files=("fake.bin",)
+    )
+    monkeypatch.setattr(
+        melody_provenance, "extractor_weights_fingerprint", lambda extractor: fake
+    )
+    sr = 22050
+    t = np.linspace(0, 1.5, int(sr * 1.5), endpoint=False)
+    wav = tmp_path / "lead.wav"
+    sf.write(wav, (0.4 * np.sin(2 * np.pi * 330 * t)).astype(np.float32), sr, subtype="FLOAT")
+    route = MelodyRoute("pyin_direct", "none", "pyin")
+    monkeypatch.setattr(harness, "select_routes", lambda kind: [route])
+
+    rows = harness._run_routes_on_file(str(wav), "clear_lead", _default_thresholds())
+    assert rows[0]["extractor_weights_sha256"] == "a" * 64
+    assert rows[0]["extractor_weights_kind"] == "model_weights"
+    assert rows[0]["extractor_weights_files"] == ["fake.bin"]
 
 
 # --------------------------------------------------------------------------- #
@@ -770,7 +1080,12 @@ def test_route_assist_populates_cross_extractor_agreement(monkeypatch, tmp_path)
             return MelodyObservation(route=route.name, source_model="assist", notes=assist_notes)
         return MelodyObservation(route=route.name, source_model="main", notes=main_notes)
 
-    monkeypatch.setattr(harness, "observe_via_route", fake_observe)
+    def fake_observe_with_provenance(audio_path, route):
+        return fake_observe(audio_path, route), {}
+
+    monkeypatch.setattr(
+        harness, "observe_via_route_with_provenance", fake_observe_with_provenance
+    )
     monkeypatch.setattr(
         "svp_rpe.melody.extractors.observe_via_route", fake_observe
     )
@@ -803,7 +1118,7 @@ def test_separation_route_records_preprocessing_provenance(monkeypatch, tmp_path
     def raise_unavailable(audio_path, r):
         raise LearnedModelUnavailable("demucs not installed")
 
-    monkeypatch.setattr(harness, "observe_via_route", raise_unavailable)
+    monkeypatch.setattr(harness, "observe_via_route_with_provenance", raise_unavailable)
     rows = harness._run_routes_on_file("x.wav", "vocal_track", _default_thresholds())
     assert len(rows) == 1
     assert rows[0]["outcome"] == "unavailable"
@@ -1082,6 +1397,63 @@ def test_evaluate_go_bar_go_when_survivor():
     assert _GO_BAR_ROUTE in verdict["surviving_routes"]
     assert verdict["routes"][_GO_BAR_ROUTE]["pos_sufficient"] == 3
     assert verdict["routes"][_GO_BAR_ROUTE]["neg_false_positive"] == 0
+
+
+def test_measured_separation_route_with_emitted_pins_can_survive_go_bar(monkeypatch, tmp_path):
+    """ハーネスが emit した stem/weights pin は評価器の #54/#59 要求を満たす（D-2 の狙い）。
+
+    D-2 以前は、分離経路を measured にすると必ず provenance 不足で fail-closed し、
+    本命経路（demucs_vocals_then_crepe）は Go 候補にすらなれなかった（デッドロック）。
+    実際の emit 経路が返す pin をそのまま go-bar report へ載せ、verdict が go に
+    なることで「鍵と鍵穴が噛み合う」ことを示す。
+    """
+    import scripts.run_melody_observability as harness
+    from svp_rpe.melody import provenance as melody_provenance
+    from svp_rpe.melody.routing import MelodyRoute
+
+    adapter, _ = _provision_gate(monkeypatch, tmp_path, weights_present=True)
+    sr = 22050
+    t = np.linspace(0, 1.5, int(sr * 1.5), endpoint=False)
+    vocals = (0.4 * np.sin(2 * np.pi * 330 * t)).astype(np.float32)
+    monkeypatch.setattr(
+        adapter, "separate_stems", lambda *a, **k: _fake_stem_bundle(vocals, sr)
+    )
+    monkeypatch.setattr(
+        melody_provenance,
+        "extractor_weights_fingerprint",
+        lambda extractor: melody_provenance.ExtractorWeights(
+            extractor="crepe",
+            kind="model_weights",
+            sha256=hashlib.sha256(b"crepe:model-full.h5").hexdigest(),
+            files=("model-full.h5",),
+        ),
+    )
+    wav = tmp_path / "mix.wav"
+    sf.write(wav, vocals, sr, subtype="FLOAT")
+    # 本命経路名で emit を採る（抽出器は CI 安全な pyin を使い、weights 指紋は上で mock）。
+    route = MelodyRoute(_GO_BAR_ROUTE, "demucs_vocals", "pyin")
+    monkeypatch.setattr(harness, "select_routes", lambda kind: [route])
+    emitted = harness._run_routes_on_file(str(wav), "vocal_track", _default_thresholds())[0]
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    monkeypatch.undo()  # select_routes を実物へ戻して評価器の凍結 matrix を使う
+    reports = [_make_go_bar_report(outcomes) for _ in range(2)]
+    for report in reports:
+        for info in report["fixtures"].values():
+            for row in info["routes"]:
+                if row["route"] == _GO_BAR_ROUTE and row["outcome"] in (
+                    "sufficient",
+                    "insufficient",
+                ):
+                    # 実 emit 由来の pin へ差し替える（repeats 間で同値 = 決定論）。
+                    row["preprocessing"] = dict(emitted["preprocessing"])
+                    row["extractor_weights_sha256"] = emitted["extractor_weights_sha256"]
+
+    verdict = harness.evaluate_m1_real_go_bar(reports, _go_bar_registry())
+    assert verdict["verdict"] == "go"
+    assert _GO_BAR_ROUTE in verdict["surviving_routes"]
 
 
 def test_evaluate_go_bar_verdict_pins_evaluator_code_digest():

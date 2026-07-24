@@ -151,7 +151,7 @@ src/svp_rpe/
 │   ├── section_features.py    # セクション粒度特徴
 │   ├── valley.py              # valley 検出 (--valley-method)
 │   └── learned/               # 学習モデルアダプタ (basic_pitch / beat_this / panns / lyrics_adapter / crepe / melodia / source_separation)
-├── melody/                    # 主旋律観測センサー M0/M1 (observability=観測ゲート・比較を呼ばない / routing=入力種別→抽出経路 / extractors=波形→MelodyObservation。docs/melody_observability.md)
+├── melody/                    # 主旋律観測センサー M0/M1 (observability=観測ゲート・比較を呼ばない / routing=入力種別→抽出経路 / extractors=波形→MelodyObservation / provenance=抽出器が読んだ重み artifact の content pin。docs/melody_observability.md)
 ├── svp/                       # SVP 生成層
 │   ├── models.py              # SVPBundle, MinimalSVP
 │   ├── generator.py           # RPE → SVP 変換
@@ -183,7 +183,7 @@ src/svp_rpe/
 │   └── discovery.py           # 入力ファイル発見
 └── utils/
     ├── config_loader.py       # YAML config loading
-    └── clamp.py                # float クランプ共通化 (max(lo,min(hi,v)); 旧 8 重複 _clamp の集約先)
+    └── clamp.py / hashing.py    # float クランプ共通化 (max(lo,min(hi,v)); 旧 8 重複 _clamp の集約先) / content pin 共通化 (波形の float32 生サンプル hash・複数ファイル→1 digest の weights hash)
 
 config/                        # リポジトリ直下 + src/svp_rpe/config/ に同梱コピー (同期)
 ├── pro_baseline.yaml          # RPE Pro baseline values
@@ -239,7 +239,7 @@ tests/ / docs/ / examples/     # pytest / design documents / sample_input/ + exp
 | [`docs/wi2_discrimination_harness.md`](docs/wi2_discrimination_harness.md) | WI2 弁別判定ハーネス: 4 セル 13 clips の MusicGen 弁別バッチ、identity-rank 5 軸判定、cell P のチャネル死 byte 証明、順位表決定論再現 12/12、弁別成立は bpm のみ（structure/harmony/brightness は非弁別、key は不安定） |
 | [`docs/wi3_human_calibration.md`](docs/wi3_human_calibration.md) | WI3 人間校正 v0: 事前登録 12 ペア判定（基準器 n=1・ブラインド seed 8400）、identity proxy v0 は空集合（採用 0/5 軸）、同一スコア再生成ペアすら「別の曲」判定、誤り 3 件は P3 same 誤予測（機構は bpm アトラクタ/長さバイアス/平行調流れの軸別）、実 Suno ペア(P5)は第 2 トランシェへ繰延 |
 | [`docs/recast_phase0_melody_spike.md`](docs/recast_phase0_melody_spike.md) / [`docs/recast_workspace.md`](docs/recast_workspace.md) | Recast Phase 0 メロディ類似度スパイク（決定論 pyin ノート抽出が縮退し同曲/異曲分布が重複でゲート不成立→ PR4 hard anchor は chords+structure、melody は `not_observed`）と recast トラック総括（PR0–PR6: recast-project/0.1 スキーマ・状態機械・CLI フロー init→plan→run→ingest→status、invocation_mode 軸、「約束するのは測定できるものだけ」D-1 準拠、golden path の回し方） |
-| [`docs/melody_observability.md`](docs/melody_observability.md) | 主旋律観測センサー M0/M1（成立帯域の発見）: 比較の前に観測を問う観測ゲート（`melody/observability.py`: `MelodyObservation`→`MelodyObservabilityReport`・note/phrase/被覆/信頼/オクターブ誤り、比較を呼ばない）+ 入力種別→抽出経路 routing（`melody/routing.py`）+ optional 抽出器（CREPE=コード MIT だが同梱重み未 inspect/未 pin のため manual・extra 非公開/Melodia=**AGPL** essentia も manual/Demucs vocals ラッパ=`separate` extra、未導入時 `LearnedModelUnavailable`）。M0=事前登録 registry+合成 fixture+ペア生成。M1c Go/No-Go=pyin 経路のゲート機構を実測確立（正=sufficient/和音パッド=insufficient）、実利用入力帯（Suno vocals stem）は machine-dependent で slow-lane 繰延・M2 非自動進行 |
+| [`docs/melody_observability.md`](docs/melody_observability.md) | 主旋律観測センサー M0/M1（成立帯域の発見）: 比較の前に観測を問う観測ゲート（`melody/observability.py`: `MelodyObservation`→`MelodyObservabilityReport`・note/phrase/被覆/信頼/オクターブ誤り、比較を呼ばない）+ 入力種別→抽出経路 routing（`melody/routing.py`）+ optional 抽出器（CREPE=コード MIT だが同梱重み未 inspect/未 pin のため manual・extra 非公開/Melodia=**AGPL** essentia も manual/Demucs vocals ラッパ=`separate` extra、未導入時 `LearnedModelUnavailable`）。M0=事前登録 registry+合成 fixture+ペア生成。M1c Go/No-Go=pyin 経路のゲート機構を実測確立（正=sufficient/和音パッド=insufficient）、実利用入力帯（Suno vocals stem）は machine-dependent で slow-lane 繰延・M2 非自動進行。M1-real 実測配線=重みプロビジョニング・ゲート（可用性は 3 値: 未導入/取得済/**導入済だが重み未取得**→ unavailable・実行時 DL 禁止）+ stem/weights hash emit（評価器の #54/#59 要求に噛み合う pin を実測時に刻む） |
 
 ## ドキュメント管理ポリシー
 

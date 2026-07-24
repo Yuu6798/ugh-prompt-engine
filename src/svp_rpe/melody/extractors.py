@@ -11,7 +11,7 @@ Demucs 分離は optional extra 越しの learned adapter へ遅延ディスパ�
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Tuple
 
 import numpy as np
 
@@ -31,6 +31,7 @@ __all__ = [
     "extract_melodia_observation",
     "extract_basic_pitch_observation",
     "observe_via_route",
+    "observe_via_route_with_provenance",
     "observe_assist_notes",
 ]
 
@@ -179,18 +180,39 @@ def _audio_duration_sec(audio_path: str) -> "float | None":
 
 
 def _load_route_waveform(
-    audio_path: str, route: "MelodyRoute"
+    audio_path: str,
+    route: "MelodyRoute",
+    provenance: "Dict[str, Any] | None" = None,
 ) -> Tuple[np.ndarray, int]:
     """経路の前処理に従い波形を用意する（Demucs 分離 or 素の decode）。
 
     ``requires_separation`` の経路は learned adapter の
-    `isolate_vocals` に委譲し、未導入なら `LearnedModelUnavailable` が伝播する。
+    `isolate_vocals_with_provenance` に委譲し、未導入・**重み未取得**なら
+    `LearnedModelUnavailable` が伝播する（D-1 の重みプロビジョニング・ゲート）。
+
+    `provenance` dict を渡すと、分離経路では前処理成果物の指紋
+    （`stem_sha256` / `separation_weights_sha256`）を ``provenance["preprocessing"]``
+    に書き込む（D-2）。**波形本体は載せない** — 出すのは hash だけ。
     """
     if route.requires_separation:
-        from svp_rpe.rpe.learned.source_separation_adapter import isolate_vocals
+        from svp_rpe.rpe.learned.source_separation_adapter import (
+            isolate_vocals_with_provenance,
+        )
 
-        waveform, sample_rate = isolate_vocals(audio_path)
-        return np.asarray(waveform, dtype=np.float32), int(sample_rate)
+        separation = isolate_vocals_with_provenance(audio_path)
+        if provenance is not None:
+            provenance["preprocessing"] = {
+                "preprocessing": route.preprocessing,
+                "separation_model": separation.model,
+                "separation_version": separation.version,
+                "separation_weights_sha256": separation.weights_sha256,
+                "separation_weights_files": list(separation.weights_filenames),
+                "stem_sha256": separation.stem_sha256,
+            }
+        return (
+            np.asarray(separation.waveform, dtype=np.float32),
+            int(separation.sample_rate),
+        )
 
     import librosa
 
@@ -198,29 +220,71 @@ def _load_route_waveform(
     return np.asarray(waveform, dtype=np.float32), int(sample_rate)
 
 
+def _record_extractor_weights(provenance: "Dict[str, Any]", extractor: str) -> None:
+    """`extractor` が読んだモデル artifact の指紋を provenance へ書く（取れなければ無記入）。"""
+    from svp_rpe.melody.provenance import extractor_weights_fingerprint
+
+    fingerprint = extractor_weights_fingerprint(extractor)
+    if fingerprint is None:
+        return
+    provenance["extractor_weights_sha256"] = fingerprint.sha256
+    provenance["extractor_weights_kind"] = fingerprint.kind
+    provenance["extractor_weights_files"] = list(fingerprint.files)
+
+
+def observe_via_route_with_provenance(
+    audio_path: str, route: "MelodyRoute"
+) -> "Tuple[MelodyObservation, Dict[str, Any]]":
+    """`observe_via_route` に加え、観測が読んだ入力の content pin を返す（D-2）。
+
+    返す provenance dict（空もありうる）:
+
+    - ``preprocessing``: 分離経路のみ。``stem_sha256`` /
+      ``separation_weights_sha256`` / model / version / 重みファイル名。
+    - ``extractor_weights_sha256`` / ``extractor_weights_kind`` /
+      ``extractor_weights_files``: 学習抽出器（CREPE / basic-pitch）と
+      実装バイナリ pin（Melodia）。pyin は重みなしのため無記入。
+
+    評価器（`evaluate_m1_real_go_bar`）はこれらの pin を measured 行に必須とする
+    （#54 / #59）ので、この emit が無いと分離経路・学習抽出器経路は Go 候補に
+    なれない。
+    """
+    provenance: Dict[str, Any] = {}
+    if not route.applies:
+        return MelodyObservation(route=route.name, source_model="none"), provenance
+
+    # basic-pitch は自前で path を読む（前処理は経路上 none のみを想定）。
+    if route.extractor == "basic_pitch":
+        observation = extract_basic_pitch_observation(audio_path, route=route.name)
+        _record_extractor_weights(provenance, route.extractor)
+        return observation, provenance
+
+    waveform, sample_rate = _load_route_waveform(audio_path, route, provenance)
+    if route.extractor == "pyin":
+        observation = extract_pyin_observation(waveform, sample_rate, route=route.name)
+    elif route.extractor == "crepe":
+        observation = extract_crepe_observation(waveform, sample_rate, route=route.name)
+    elif route.extractor == "melodia":
+        observation = extract_melodia_observation(waveform, sample_rate, route=route.name)
+    else:
+        raise ValueError(
+            f"unsupported extractor for route {route.name!r}: {route.extractor!r}"
+        )
+    _record_extractor_weights(provenance, route.extractor)
+    return observation, provenance
+
+
 def observe_via_route(audio_path: str, route: "MelodyRoute") -> MelodyObservation:
     """1 経路を audio ファイルへ適用して `MelodyObservation` を返す。
 
     ``applies=False`` の経路（旋律不在入力）は抽出器を一切呼ばず、空観測を
     返す（呼び出し側で `not_observed` へ落とす）。それ以外は前処理（必要なら
-    Demucs 分離）→ 抽出器ディスパッチ。optional 依存が未導入なら
-    `LearnedModelUnavailable` が伝播する（slow-lane 隔離）。
+    Demucs 分離）→ 抽出器ディスパッチ。optional 依存が未導入・分離器の重みが
+    未取得なら `LearnedModelUnavailable` が伝播する（slow-lane 隔離・D-1）。
+
+    provenance を要らない呼び出し側向けの薄いラッパ。
     """
-    if not route.applies:
-        return MelodyObservation(route=route.name, source_model="none")
-
-    # basic-pitch は自前で path を読む（前処理は経路上 none のみを想定）。
-    if route.extractor == "basic_pitch":
-        return extract_basic_pitch_observation(audio_path, route=route.name)
-
-    waveform, sample_rate = _load_route_waveform(audio_path, route)
-    if route.extractor == "pyin":
-        return extract_pyin_observation(waveform, sample_rate, route=route.name)
-    if route.extractor == "crepe":
-        return extract_crepe_observation(waveform, sample_rate, route=route.name)
-    if route.extractor == "melodia":
-        return extract_melodia_observation(waveform, sample_rate, route=route.name)
-    raise ValueError(f"unsupported extractor for route {route.name!r}: {route.extractor!r}")
+    return observe_via_route_with_provenance(audio_path, route)[0]
 
 
 def _observation_notes(
