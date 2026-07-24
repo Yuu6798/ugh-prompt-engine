@@ -41,6 +41,7 @@ __all__ = [
     "extractor_code_packages_for",
     "package_code_sha256",
     "packages_code_sha256",
+    "package_code_state",
     "SEPARATION_CODE_PACKAGES",
     "record_load_time_pin",
     "load_time_pin",
@@ -197,6 +198,48 @@ SEPARATION_CODE_PACKAGES = ("demucs", "torch")
 _CODE_SUFFIXES = (".py", ".so", ".pyd", ".dylib")
 
 
+# パッケージのコード hash 解決結果。`absent`（未導入 = optional backend が無いだけ）と
+# `unhashable`（**導入済みで推論に使われうるのに hash できない**）を区別する（Codex #217）。
+# 後者を skip して他のパッケージだけで digest を作ると、実行された実装の一部を覆わない
+# pin を「揃っている」として publish してしまう。
+STATE_OK = "ok"
+STATE_ABSENT = "absent"
+STATE_UNHASHABLE = "unhashable"
+
+
+def package_code_state(
+    package: str, *, use_cache: bool = True
+) -> "tuple[str, Optional[str]]":
+    """`package` のコード hash を (state, digest) で返す（state は上記 3 値）。"""
+    import importlib
+
+    try:
+        module = importlib.import_module(package)
+    except Exception:
+        return STATE_ABSENT, None
+    module_file = getattr(module, "__file__", None)
+    if not module_file:
+        # namespace / zip import 等。**導入されている**のに hash 対象を特定できない。
+        return STATE_UNHASHABLE, None
+    root = Path(module_file).resolve().parent
+    try:
+        files = sorted(
+            path
+            for path in root.rglob("*")
+            if path.is_file()
+            and path.suffix in _CODE_SUFFIXES
+            and "__pycache__" not in path.parts
+        )
+    except OSError:
+        return STATE_UNHASHABLE, None
+    if not files:
+        return STATE_UNHASHABLE, None
+    try:
+        return STATE_OK, sha256_of_files(files, root=root, use_cache=use_cache)
+    except OSError:
+        return STATE_UNHASHABLE, None
+
+
 def package_code_sha256(package: str, *, use_cache: bool = True) -> Optional[str]:
     """`package`（third-party）の推論コード一式の content hash（取れなければ None）。
 
@@ -204,29 +247,7 @@ def package_code_sha256(package: str, *, use_cache: bool = True) -> Optional[str
     同一 version のまま patch された install を、version 比較では検出できないため
     （Codex #217）。名前はパッケージ root からの相対 POSIX パスで安定させる。
     """
-    import importlib
-
-    try:
-        module = importlib.import_module(package)
-    except Exception:
-        return None
-    module_file = getattr(module, "__file__", None)
-    if not module_file:
-        return None
-    root = Path(module_file).resolve().parent
-    files = sorted(
-        path
-        for path in root.rglob("*")
-        if path.is_file()
-        and path.suffix in _CODE_SUFFIXES
-        and "__pycache__" not in path.parts
-    )
-    if not files:
-        return None
-    try:
-        return sha256_of_files(files, root=root, use_cache=use_cache)
-    except OSError:
-        return None
+    return package_code_state(package, use_cache=use_cache)[1]
 
 
 def packages_code_sha256(
@@ -242,9 +263,17 @@ def packages_code_sha256(
     covered = []
     digest = hashlib.sha256()
     for package in packages:
-        package_digest = package_code_sha256(package, use_cache=use_cache)
-        if package_digest is None:
-            continue
+        state, package_digest = package_code_state(package, use_cache=use_cache)
+        if state == STATE_ABSENT:
+            continue  # 未導入の optional backend は「実行されていない」ので対象外
+        if state == STATE_UNHASHABLE:
+            # **導入済み = 実行されうる**のに hash できない。skip して他だけで digest を
+            # 作ると、実行された実装の一部を覆わない pin を「揃っている」と誤認する。
+            raise LearnedModelUnavailable(
+                f"inference package {package!r} is installed but its code cannot be "
+                "fingerprinted (namespace/zip layout or unreadable files); "
+                "実装の一部を覆わない pin を publish しないため unavailable として扱う"
+            )
         covered.append(package)
         digest.update(package.encode("utf-8"))
         digest.update(b"\0")

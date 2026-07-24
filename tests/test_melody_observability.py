@@ -655,15 +655,15 @@ def test_unreadable_weight_file_becomes_unavailable_not_a_crash(monkeypatch, tmp
     """discovery 後に読めなくなった重みも unavailable へ写像する（graceful 契約・#217）。"""
     adapter, weights_dir = _provision_gate(monkeypatch, tmp_path, weights_present=True)
 
-    real_locate = adapter.locate_separation_weights
+    real_locate = adapter._locate_with_metadata
 
     def locate_then_delete(model=adapter.DEFAULT_MODEL):
-        found = real_locate(model)
+        found, snapshot = real_locate(model)
         # discovery と hashing の間にファイルが消える状況を模す。
         (weights_dir / adapter._expected_weight_filenames("htdemucs_ft")[0]).unlink()
-        return found
+        return found, snapshot
 
-    monkeypatch.setattr(adapter, "locate_separation_weights", locate_then_delete)
+    monkeypatch.setattr(adapter, "_locate_with_metadata", locate_then_delete)
     with pytest.raises(LearnedModelUnavailable, match="hashing failed"):
         adapter.resolve_separation_weights()
 
@@ -2119,11 +2119,11 @@ def test_code_pin_covers_inference_backends(monkeypatch):
 
     hashed = []
 
-    def fake_package_hash(package, *, use_cache=True):
+    def fake_package_state(package, *, use_cache=True):
         hashed.append(package)
-        return hashlib.sha256(package.encode()).hexdigest()
+        return melody_provenance.STATE_OK, hashlib.sha256(package.encode()).hexdigest()
 
-    monkeypatch.setattr(melody_provenance, "package_code_sha256", fake_package_hash)
+    monkeypatch.setattr(melody_provenance, "package_code_state", fake_package_state)
     digest, covered = melody_provenance.extractor_code_fingerprint("basic_pitch")
     assert "tensorflow" in hashed and "basic_pitch" in hashed
     assert "tensorflow" in covered and "basic_pitch" in covered
@@ -2136,6 +2136,40 @@ def harness_is_sha256(value):
     import scripts.run_melody_observability as harness
 
     return harness._is_sha256(value)
+
+
+def test_partially_unhashable_inference_stack_fails_closed(monkeypatch):
+    """導入済みなのに hash できないパッケージがあれば部分被覆の pin を出さない（#217）。
+
+    未導入の optional backend（absent）は「実行されていない」ので飛ばしてよいが、
+    導入済み（= 実行されうる）のに namespace/zip や読み取り不能で hash できない場合に
+    skip すると、実行された実装の一部を覆わない pin を「揃っている」と誤認する。
+    """
+    from svp_rpe.melody import provenance as melody_provenance
+
+    def mixed_state(package, *, use_cache=True):
+        if package == "tensorflow":  # 導入済みだが hash 不能
+            return melody_provenance.STATE_UNHASHABLE, None
+        if package == "basic_pitch":
+            return melody_provenance.STATE_OK, hashlib.sha256(b"bp").hexdigest()
+        return melody_provenance.STATE_ABSENT, None
+
+    monkeypatch.setattr(melody_provenance, "package_code_state", mixed_state)
+    with pytest.raises(LearnedModelUnavailable, match="cannot be fingerprinted"):
+        melody_provenance.extractor_code_fingerprint("basic_pitch")
+
+    # 未導入だけ（absent）なら従来どおり飛ばして digest を作る。
+    monkeypatch.setattr(
+        melody_provenance,
+        "package_code_state",
+        lambda package, **k: (
+            (melody_provenance.STATE_OK, hashlib.sha256(b"bp").hexdigest())
+            if package == "basic_pitch"
+            else (melody_provenance.STATE_ABSENT, None)
+        ),
+    )
+    digest, covered = melody_provenance.extractor_code_fingerprint("basic_pitch")
+    assert covered == ("basic_pitch",) and harness_is_sha256(digest)
 
 
 def test_observe_route_rejects_inference_code_swapped_during_run(monkeypatch, tmp_path):

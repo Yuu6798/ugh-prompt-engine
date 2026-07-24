@@ -57,7 +57,11 @@ from svp_rpe.io.source_separator import (
     separate_stems,
 )
 from svp_rpe.rpe.learned import LearnedModelUnavailable
-from svp_rpe.utils.hashing import sha256_of_files, sha256_of_float32
+from svp_rpe.utils.hashing import (
+    combine_named_digests,
+    file_sha256,
+    sha256_of_float32,
+)
 
 __all__ = [
     "LearnedModelUnavailable",
@@ -85,10 +89,13 @@ class SeparationWeights:
     paths: Tuple[Path, ...]
     sha256: str
     version: Optional[str]
+    # digest に含めたメタデータ（bag YAML / files.txt）の名前。pin が何を覆ったかを
+    # report 側で明示するために保持する。
+    metadata_names: Tuple[str, ...] = ()
 
     @property
     def filenames(self) -> Tuple[str, ...]:
-        return tuple(p.name for p in self.paths)
+        return tuple(p.name for p in self.paths) + self.metadata_names
 
 
 @dataclass(frozen=True)
@@ -166,17 +173,28 @@ def _parse_remote_files(text: str) -> Dict[str, str]:
     return models
 
 
-def _model_signatures(remote_dir: Path, model: str) -> List[str]:
+def _model_signatures(
+    remote_dir: Path, model: str, snapshot: "Optional[_MetadataSnapshot]" = None
+) -> List[str]:
     """`model` が要求するチェックポイント signature 一覧。
 
     bag（`htdemucs_ft.yaml` の `models:` リスト）なら列挙された signature 群、
-    単体モデル名（= signature 自身）ならそれ 1 本。
+    単体モデル名（= signature 自身）ならそれ 1 本。`snapshot` を渡した場合はその
+    bytes から parse する（選択と hash が同じ bytes を見る・#217）。
     """
     bag_yaml = remote_dir / f"{model}.yaml"
-    if bag_yaml.is_file():
+    snapshot_bytes = None
+    if snapshot is not None:
+        snapshot_bytes = dict(snapshot.entries).get(bag_yaml.name)
+    if snapshot_bytes is not None or bag_yaml.is_file():
         import yaml
 
-        spec = yaml.safe_load(bag_yaml.read_text(encoding="utf-8")) or {}
+        raw = (
+            snapshot_bytes.decode("utf-8")
+            if snapshot_bytes is not None
+            else bag_yaml.read_text(encoding="utf-8")
+        )
+        spec = yaml.safe_load(raw) or {}
         signatures = spec.get("models") or []
         if not signatures:
             raise LearnedModelUnavailable(
@@ -185,6 +203,38 @@ def _model_signatures(remote_dir: Path, model: str) -> List[str]:
             )
         return [str(sig) for sig in signatures]
     return [model]
+
+
+@dataclass(frozen=True)
+class _MetadataSnapshot:
+    """demucs remote メタデータの**一度きりの読み取り**（選択と hash で共有する）。
+
+    `files.txt` / bag YAML を選択時と hash 時で別々に read すると、その間の差し替えで
+    「旧選択を検証しつつ新メタデータで分離する」ズレが生じる（Codex #217）。bytes を
+    1 度だけ読み、parse も digest も**同じ bytes**から作ることでこの窓を閉じる。
+    """
+
+    entries: Tuple[Tuple[str, bytes], ...]  # (表示名, bytes)
+
+    @property
+    def digests(self) -> Tuple[Tuple[str, str], ...]:
+        import hashlib as _hashlib
+
+        return tuple(
+            (name, _hashlib.sha256(data).hexdigest()) for name, data in self.entries
+        )
+
+
+def _read_metadata_snapshot(remote_dir: Path, model: str) -> _MetadataSnapshot:
+    """`files.txt` と bag YAML を一度だけ読んでスナップショットにする。"""
+    entries = []
+    files_txt = remote_dir / "files.txt"
+    if files_txt.is_file():
+        entries.append((files_txt.name, files_txt.read_bytes()))
+    bag_yaml = remote_dir / f"{model}.yaml"
+    if bag_yaml.is_file():
+        entries.append((bag_yaml.name, bag_yaml.read_bytes()))
+    return _MetadataSnapshot(entries=tuple(entries))
 
 
 def _bag_metadata_file(remote_dir: Path, model: str) -> Optional[Path]:
@@ -199,7 +249,9 @@ def _bag_metadata_file(remote_dir: Path, model: str) -> Optional[Path]:
     return bag_yaml if bag_yaml.is_file() else None
 
 
-def _expected_weight_filenames(model: str) -> List[str]:
+def _expected_weight_filenames(
+    model: str, snapshot: "Optional[_MetadataSnapshot]" = None
+) -> List[str]:
     """`model` の実行に必要なチェックポイントのファイル名（torch hub cache 上の名前）。
 
     解決できない場合は `LearnedModelUnavailable`（fail-closed）。「解決できないから
@@ -219,9 +271,15 @@ def _expected_weight_filenames(model: str) -> List[str]:
             "重み取得状況を検証できないため分離経路を unavailable として扱う"
             "（実行時 DL は行わない）"
         )
-    catalogue = _parse_remote_files(files_txt.read_text(encoding="utf-8"))
+    snapshot_map = dict(snapshot.entries) if snapshot is not None else {}
+    files_txt_bytes = snapshot_map.get(files_txt.name)
+    catalogue = _parse_remote_files(
+        files_txt_bytes.decode("utf-8")
+        if files_txt_bytes is not None
+        else files_txt.read_text(encoding="utf-8")
+    )
     filenames: List[str] = []
-    for sig in _model_signatures(remote_dir, model):
+    for sig in _model_signatures(remote_dir, model, snapshot):
         relative = catalogue.get(sig)
         if relative is None:
             raise LearnedModelUnavailable(
@@ -341,7 +399,20 @@ def locate_separation_weights(model: str = DEFAULT_MODEL) -> List[Path]:
 
 def _locate_separation_weights(model: str) -> List[Path]:
     """`locate_separation_weights` の本体（例外写像は呼び出し側が行う）。"""
-    filenames = _expected_weight_filenames(model)
+    return _locate_with_metadata(model)[0]
+
+
+def _locate_with_metadata(
+    model: str,
+) -> "Tuple[List[Path], Optional[_MetadataSnapshot]]":
+    """チェックポイント実在確認 + **一度だけ読んだ**メタデータのスナップショットを返す。
+
+    選択（どの `.th` を読むか）と pin（何を hash するか）が同じ bytes を見るように、
+    メタデータは 1 回の read で確定させる（Codex #217）。
+    """
+    remote_dir = _demucs_remote_dir()
+    snapshot = _read_metadata_snapshot(remote_dir, model) if remote_dir else None
+    filenames = _expected_weight_filenames(model, snapshot)
     search_dirs = _torch_hub_checkpoint_dirs()
     found: List[Path] = []
     missing: List[str] = []
@@ -364,20 +435,9 @@ def _locate_separation_weights(model: str) -> List[Path]:
             f"{'CLI 子プロセス（env 由来解決）' if _uses_cli_separation() else 'API（in-process hub dir）'}、"
             f"探索したディレクトリ: {[str(d) for d in search_dirs]}"
         )
-    # demucs 同梱の remote メタデータも実行時のモデル入力なので pin 対象に含める:
-    #   - bag 定義 YAML: signature 選択・per-source weights・segment
-    #   - files.txt: signature → チェックポイントファイル名の対応表（どの .th を読むかを決める）
-    # これらが差し替わると「選ばれるチェックポイント集合」自体が変わるため、bytes を
-    # pin しないと『別の集合で分離したのに同じ pin』が成立しうる（Codex #217）。
-    remote_dir = _demucs_remote_dir()
-    if remote_dir is not None:
-        bag_yaml = _bag_metadata_file(remote_dir, model)
-        if bag_yaml is not None:
-            found.append(bag_yaml)
-        files_txt = remote_dir / "files.txt"
-        if files_txt.is_file():
-            found.append(files_txt)
-    return found
+    # メタデータ（bag YAML / files.txt）も実行時のモデル入力だが、**再 read せず**
+    # スナップショットの digest を使う（選択と pin が同じ bytes を見る・#217）。
+    return found, snapshot
 
 
 def resolve_separation_weights(model: str = DEFAULT_MODEL) -> SeparationWeights:
@@ -388,16 +448,30 @@ def resolve_separation_weights(model: str = DEFAULT_MODEL) -> SeparationWeights:
     LearnedModelUnavailable
         demucs 未導入・期待ファイル名を解決できない・重みが未取得のとき。
     """
-    found = locate_separation_weights(model)
+    if not _has_demucs():
+        raise LearnedModelUnavailable(_INSTALL_HINT)
     try:
-        digest = sha256_of_files(found)
+        found, snapshot = _locate_with_metadata(model)
+    except LearnedModelUnavailable:
+        raise
+    except Exception as exc:
+        raise _as_unavailable("resolution", exc) from exc
+    try:
+        # checkpoint はファイルから、メタデータは**一度だけ読んだ bytes** から digest を
+        # 作り、同一規則で 1 本に畳む（メタデータの二重 read による TOCTOU を閉じる）。
+        entries = [(path.name, file_sha256(path)) for path in found]
+        if snapshot is not None:
+            entries.extend(snapshot.digests)
+        digest = combine_named_digests(entries)
     except Exception as exc:  # discovery と hash の間に消える/読めなくなる場合
         raise _as_unavailable("hashing", exc) from exc
+    metadata_names = tuple(name for name, _ in snapshot.entries) if snapshot else ()
     return SeparationWeights(
         model=model,
         paths=tuple(found),
         sha256=digest,
         version=_demucs_version(),
+        metadata_names=metadata_names,
     )
 
 
@@ -478,8 +552,14 @@ def isolate_vocals_with_provenance(
     # **選ばれるチェックポイント集合そのもの**が変わりうる。旧集合を再 hash するだけでは
     # 「別の集合で分離したのに pin は旧集合」を見逃すので、集合を解決し直して比較する。
     try:
-        post_paths = locate_separation_weights(model)
-        post_sha256 = sha256_of_files(post_paths, use_cache=False)
+        post_paths, post_snapshot = _locate_with_metadata(model)
+        # 事前と同一規則で再計算する（checkpoint はファイル・メタデータはスナップショット）。
+        post_entries = [
+            (path.name, file_sha256(path, use_cache=False)) for path in post_paths
+        ]
+        if post_snapshot is not None:
+            post_entries.extend(post_snapshot.digests)
+        post_sha256 = combine_named_digests(post_entries)
     except LearnedModelUnavailable as exc:
         raise LearnedModelUnavailable(
             f"demucs weights became unresolvable during separation ({exc}); "

@@ -313,6 +313,14 @@ python scripts/run_melody_observability.py --evaluate-go-bar run1.json run2.json
 | 導入済 + 重み取得済 | 分離経路が measured。stem/weights pin つきで Go 候補になれる |
 | 導入済 + **重み未取得** | 分離経路 = `unavailable`（`demucs weights not provisioned: <expected paths>`）。**実行時 DL は行わない**（リトライもミラーもしない）ので run は完走し、部分行と report は残る |
 
+**メタデータのスナップショット**: `files.txt` / bag YAML は選択（どの `.th` を読むか）と
+pin（何を hash するか）の両方に効くので、**1 回の read で確定**させ、parse も digest も
+同じ bytes から作る（別々に read すると、その間の差し替えで「旧選択を検証しつつ新メタデータで
+分離する」ズレが生じる）。残る限界: demucs 自身に本スナップショットを消費させることは
+できない（`repo=` 経由にすると「実際に読む場所以外を参照する」構図に戻るため採らない）ので、
+実行中にパッケージを書き換えられた場合の検出は分離後の再解決（→ `unavailable`）による
+事後検出になる。重みの provisioning / パッケージ更新と実測 run は同時に走らせないこと。
+
 検査するのは **demucs が実際に読む場所**（torch hub の checkpoints cache）だけで、
 独自の探索パスは持たない。別ディレクトリを探索して hash する設計にすると、demucs は
 既定 cache から読み、`separation_weights_sha256` は stem を作っていない重みを指す
@@ -471,7 +479,11 @@ pin を必須化する = 記録が済むまで Go を出さない fail-closed �
   （import 済みモジュールはプロセスに cache され、途中で差し替えても実行は旧コードのまま
   でありうるため）。**分離（Demucs）側も同じ**で、分離前に bind し分離後に再検証する。
   推論を行うパッケージのコード hash を**採れない**場合（zip/namespace レイアウト、
-  ロード済みファイルが読めない等）は、無記入で measured 行を出さず `unavailable` にする
+  ロード済みファイルが読めない等）は、無記入で measured 行を出さず `unavailable` にする。
+  **部分被覆も同様**: 未導入の optional backend（`absent`）は「実行されていない」ので
+  飛ばしてよいが、**導入済み（= 実行されうる）なのに hash できない**（`unhashable`）
+  パッケージがあれば、他だけで digest を作らず fail-closed にする（実行された実装の一部を
+  覆わない pin を「揃っている」と誤認しないため）
   —— registry の `code_sha256` 未記録の間は評価器がコード hash を要求しないため、無記入を
   許すと推論コードが未 pin のまま go を publish できてしまう。**assist 抽出器**（full_mix の `basic_pitch_direct` × Melodia など）も
   同様に `assist_extractor_weights_sha256` を emit する — `cross_extractor_agreement` は

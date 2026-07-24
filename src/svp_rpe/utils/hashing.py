@@ -26,7 +26,12 @@ from typing import Dict, Iterable, List, Tuple, Union
 
 import numpy as np
 
-__all__ = ["sha256_of_float32", "sha256_of_files", "file_sha256"]
+__all__ = [
+    "sha256_of_float32",
+    "sha256_of_files",
+    "file_sha256",
+    "combine_named_digests",
+]
 
 _READ_CHUNK = 1 << 20  # 1 MiB
 
@@ -91,9 +96,19 @@ def sha256_of_files(
         else:
             label = resolved.name
         entries.append((label, file_sha256(resolved, use_cache=use_cache)))
-    entries.sort()
+    return combine_named_digests(entries)
+
+
+def combine_named_digests(entries: Iterable[Tuple[str, str]]) -> str:
+    """(名前, digest) の集合を 1 本の digest へ畳む（名前順・名前 + NUL + digest）。
+
+    `sha256_of_files` と**同一の合成規則**。ファイルから読んだ digest と、既に
+    メモリ上にあるスナップショット（例: 一度だけ読んだ demucs メタデータ bytes）の
+    digest を混ぜて畳むために公開する（同じ bytes を 2 度読まないための TOCTOU 対策）。
+    """
+    ordered = sorted(entries)
     combined = hashlib.sha256()
-    for name, digest in entries:
+    for name, digest in ordered:
         combined.update(name.encode("utf-8"))
         combined.update(b"\0")
         combined.update(digest.encode("ascii"))
