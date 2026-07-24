@@ -929,7 +929,8 @@ def _make_go_bar_report(
             "input_kind": "vocal_track",
             "expect_status": None,
             "audio_path": f"/fake/{fixture_id}.wav",
-            "audio_sha256": "0" * 64,
+            # fixture ごとに別素材を模す（id 由来の決定論 hash・repeats 間で同一）。
+            "audio_sha256": hashlib.sha256(fixture_id.encode()).hexdigest(),
             "routes": [
                 {"route": route, "extractor": "crepe", "outcome": outcome, "report": None}
                 for route, outcome in full_routes.items()
@@ -1270,6 +1271,43 @@ def test_evaluate_go_bar_fails_closed_on_mislabeled_input_kind():
     for report in (r1, r2):
         report["fixtures"]["real_vocal_jrock"]["input_kind"] = "clear_lead"
     with pytest.raises(ValueError, match="input_kind"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_fails_closed_on_duplicate_audio_across_fixtures():
+    """別素材であるべき go-bar fixture が同一 audio_sha256 を指したら fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+    # jrock と futurepop が同一 WAV を指す（実質 1 素材で ≥3/4 を満たすのを防ぐ）。
+    for report in (r1, r2):
+        report["fixtures"]["real_vocal_jrock"]["audio_sha256"] = "c" * 64
+        report["fixtures"]["real_vocal_futurepop"]["audio_sha256"] = "c" * 64
+    with pytest.raises(ValueError, match="same audio_sha256"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_fails_closed_on_provenance_mismatch():
+    """同一 fixture×route の model provenance が repeats 間で食い違えば fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+
+    def _set_source_model(report, fid, route, model):
+        for row in report["fixtures"][fid]["routes"]:
+            if row["route"] == route:
+                row["source_model"] = model
+
+    # 同一 route を別バージョンの抽出器 model で測った 2 run（マシン跨ぎ/アップグレード）。
+    _set_source_model(r1, "real_vocal_jrock", _GO_BAR_ROUTE, "crepe-0.0.13")
+    _set_source_model(r2, "real_vocal_jrock", _GO_BAR_ROUTE, "crepe-0.0.14")
+    with pytest.raises(ValueError, match="model provenance"):
         harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
 
 

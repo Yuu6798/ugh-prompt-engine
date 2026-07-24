@@ -446,6 +446,38 @@ def _fixture_route_outcomes(report: Dict[str, Any], fixture_id: str) -> Dict[str
     return {row["route"]: row["outcome"] for row in info["routes"]}
 
 
+def _fixture_route_rows(report: Dict[str, Any], fixture_id: str) -> Dict[str, Dict[str, Any]]:
+    """`report` 中の `fixture_id` について route 名 → 行 dict 全体の map を返す。"""
+    info = report["fixtures"][fixture_id]
+    return {row["route"]: row for row in info["routes"]}
+
+
+def _route_provenance(row: Dict[str, Any]) -> "tuple":
+    """route 行の model provenance 署名（source_model / extractor_version / 分離器）を返す。
+
+    n>=2 の repeats を「安定」と数える前に、抽出器/分離器の model stack が同一である
+    ことを証明するために使う。マシン跨ぎや途中の CREPE/Demucs/Essentia アップグレードで
+    provenance が変われば、同一 stack 下の再現でないので repeats と見なせない（Codex 指摘・
+    設計 §2.3 provenance pin）。分離前処理は separation_model/version まで見る。
+    """
+    preprocessing = row.get("preprocessing")
+    if isinstance(preprocessing, dict):
+        separation = (
+            preprocessing.get("preprocessing"),
+            preprocessing.get("separation_model"),
+            preprocessing.get("separation_version"),
+        )
+    else:
+        separation = (preprocessing, None, None)
+    return (
+        row.get("source_model"),
+        row.get("extractor_version"),
+        row.get("assist_source_model"),
+        row.get("assist_extractor_version"),
+        separation,
+    )
+
+
 def _is_stably_sufficient(reports: List[Dict[str, Any]], fixture_id: str, route: str) -> bool:
     """全 report でその route が観測され、かつ全て outcome=='sufficient' なら True。
 
@@ -622,6 +654,7 @@ def evaluate_m1_real_go_bar(
                 "解決ゲートと一致しない; 凍結ゲート外で測定した report では判定できない (fail-closed)"
             )
 
+    fixture_audio_hash: Dict[str, str] = {}
     for fixture_id in positive_ids + negative_ids:
         missing_in = [
             idx for idx, report in enumerate(reports) if fixture_id not in report.get("fixtures", {})
@@ -651,6 +684,26 @@ def evaluate_m1_real_go_bar(
                 f"across reports {sorted(set(audio_hashes))}; 別素材を同一 id の n>=2 "
                 "repeats と見なせない (fail-closed)"
             )
+        fixture_audio_hash[fixture_id] = audio_hashes[0]
+        # model provenance の一致確認。各 report に共通して存在する route について、
+        # 抽出器/分離器の provenance 署名（source_model / version / separation_*）が
+        # repeats 間で一致することを要求する。マシン跨ぎや途中のモデルアップグレードで
+        # provenance が変われば、同一 stack 下の再現でないので repeats と見なせない
+        # （Codex 指摘・設計 §2.3）。
+        common_routes = set(_fixture_route_rows(reports[0], fixture_id))
+        for report in reports[1:]:
+            common_routes &= set(_fixture_route_rows(report, fixture_id))
+        for route in sorted(common_routes):
+            signatures = {
+                _route_provenance(_fixture_route_rows(report, fixture_id)[route])
+                for report in reports
+            }
+            if len(signatures) > 1:
+                raise ValueError(
+                    f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} has "
+                    "differing model provenance (source_model/extractor_version/separation) "
+                    "across reports; 別 model stack の run を n>=2 repeats と見なせない (fail-closed)"
+                )
         # 完全 route matrix の存在確認。candidate_routes は「report に既に存在する経路」
         # からしか作らないため、stale/truncated report である経路が全 positive から
         # 丸ごと欠けても未観測として弾かれず baseline 経路単独で go が出うる。**registry が
@@ -681,6 +734,22 @@ def evaluate_m1_real_go_bar(
                     f"matrix {sorted(expected_routes)}; truncated/stale report では全 fixture が "
                     "全経路を測っていないと verdict を主張できない (fail-closed)"
                 )
+
+    # go-bar の全 fixture が**互いに別素材**であることを保証する。per-fixture の
+    # audio_sha256 一致（上）は同一 id の repeats 同一性を見るだけで、異なる id が
+    # 同じ WAV を指しても弾かない。3 つの positive が同じ易しい WAV なら「4 別素材」
+    # でなく実質 1 素材で ≥3/4 を満たしてしまう（凍結バーは 4 別素材を前提）。
+    # fixture 間で audio_sha256 の重複を fail-closed（Codex 指摘）。
+    hash_to_fixtures: Dict[str, List[str]] = {}
+    for fixture_id, audio_sha256 in fixture_audio_hash.items():
+        hash_to_fixtures.setdefault(audio_sha256, []).append(fixture_id)
+    collisions = {h: fids for h, fids in hash_to_fixtures.items() if len(fids) > 1}
+    if collisions:
+        collided = sorted(fid for fids in collisions.values() for fid in fids)
+        raise ValueError(
+            f"evaluate_m1_real_go_bar: distinct go-bar fixtures share the same audio_sha256 "
+            f"{collided}; 別素材であるべき fixture が同一 WAV を指している (fail-closed)"
+        )
 
     candidate_routes: set[str] = set()
     for report in reports:
