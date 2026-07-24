@@ -411,7 +411,11 @@ pin を必須化する = 記録が済むまで Go を出さない fail-closed �
   拡張バイナリで、`extractor_weights_kind: library_binary` として「重みでないものを重みと
   主張しない」正直会計にする。pyin は DSP で重みなしのため無記入（評価器も要求しない）。
   依存未導入・artifact 未特定のときは推測 digest を作らず無記入（評価器が pin 欠落で
-  fail-closed する）。
+  fail-closed する）。**assist 抽出器**（full_mix の `basic_pitch_direct` × Melodia など）も
+  同様に `assist_extractor_weights_sha256` を emit する — `cross_extractor_agreement` は
+  assist のモデル入力に依存する gate metric なので、主抽出器と同じく pin する（Codex #217）。
+  評価器は `assist_status == "measured"` の行にこの pin を必須とし、provenance 署名にも
+  含める（assist が `unavailable` の行は agreement が null なので要求しない）。
 - **frozen 素材の expected audio hash**（#53）: real_vocal_* は自作 Suno 曲で **非 commit**
   （波形は repo に置かない）、その expected audio sha256 は slow-lane 生成時に決まる
   dated pin。PR 時に registry へ固定できない（audio が repo に存在しない・初回生成前は

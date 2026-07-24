@@ -1148,6 +1148,20 @@ def test_route_assist_populates_cross_extractor_agreement(monkeypatch, tmp_path)
     def fake_observe_with_provenance(audio_path, route):
         return fake_observe(audio_path, route), {}
 
+    # assist（melodia）の artifact 指紋が取れる環境を模す（本環境は essentia 未導入）。
+    from svp_rpe.melody import provenance as melody_provenance
+
+    monkeypatch.setattr(
+        melody_provenance,
+        "extractor_weights_fingerprint",
+        lambda extractor: melody_provenance.ExtractorWeights(
+            extractor=extractor,
+            kind="library_binary",
+            sha256=hashlib.sha256(f"{extractor}:binary".encode()).hexdigest(),
+            files=("_essentia.so",),
+        ),
+    )
+
     monkeypatch.setattr(
         harness, "observe_via_route_with_provenance", fake_observe_with_provenance
     )
@@ -1168,6 +1182,12 @@ def test_route_assist_populates_cross_extractor_agreement(monkeypatch, tmp_path)
     assert row["source_model"] == "main"
     assert row["assist_source_model"] == "assist"
     assert "extractor_version" in row and "assist_extractor_version" in row
+    # assist の artifact 指紋も行へ載る（agreement は assist のモデル入力に依存する・#217）。
+    assert row["assist_extractor_weights_sha256"] == hashlib.sha256(
+        b"melodia:binary"
+    ).hexdigest()
+    assert row["assist_extractor_weights_kind"] == "library_binary"
+    assert row["assist_extractor_weights_files"] == ["_essentia.so"]
 
 
 def test_separation_route_records_preprocessing_provenance(monkeypatch, tmp_path):
@@ -1324,6 +1344,7 @@ def _make_go_bar_report(
     default_outcome: str = "unavailable",
     run_id: "str | None" = None,
     generator_code_sha256: "str | None" = None,
+    input_kind: str = "vocal_track",
 ) -> "dict":
     """{fixture_id: {route_name: outcome}} から external report dict を組み立てる。
 
@@ -1336,9 +1357,10 @@ def _make_go_bar_report(
     thresholds = _default_thresholds()
     # 完全な vocal_track matrix を模す: 明示されない経路は unavailable で埋める
     # （評価器の full-matrix 完全性チェックを満たしつつ、未指定経路は未観測扱い）。
-    route_objs = select_routes("vocal_track")
+    route_objs = select_routes(input_kind)
     vocal_track_routes = [r.name for r in route_objs]
     route_extractor = {r.name: r.extractor for r in route_objs}
+    route_assist = {r.name: r.assist for r in route_objs}
 
     def _row(route, outcome):
         # measured（gate outcome）な行は harness と同じ provenance / 根拠 report を持つ。
@@ -1375,6 +1397,17 @@ def _make_go_bar_report(
                 row["extractor_weights_sha256"] = hashlib.sha256(
                     f"{route_extractor.get(route)}:weights".encode()
                 ).hexdigest()
+            # assist を宣言する経路（full_mix の basic_pitch_direct × melodia など）は
+            # assist provenance も持つ。agreement が assist のモデル入力に依存するため、
+            # 評価器は measured な assist に artifact hash を要求する（#217）。
+            if route_assist.get(route):
+                row["assist_extractor"] = route_assist[route]
+                row["assist_status"] = "measured"
+                row["assist_source_model"] = f"{route_assist[route]}:assist"
+                row["assist_extractor_version"] = "2.1"
+                row["assist_extractor_weights_sha256"] = hashlib.sha256(
+                    f"{route_assist[route]}:assist-weights".encode()
+                ).hexdigest()
             if route.startswith("demucs_vocals_"):
                 row["preprocessing"] = {
                     "preprocessing": "demucs_vocals",
@@ -1394,7 +1427,7 @@ def _make_go_bar_report(
         full_routes = {name: default_outcome for name in vocal_track_routes}
         full_routes.update(routes)
         fixtures[fixture_id] = {
-            "input_kind": "vocal_track",
+            "input_kind": input_kind,
             "expect_status": None,
             "audio_path": f"/fake/{fixture_id}.wav",
             # fixture ごとに別素材を模す（id 由来の決定論 hash・repeats 間で同一）。
@@ -1433,7 +1466,7 @@ _GO_BAR_NEGATIVE = "real_instrumental_negative"
 _GO_BAR_ROUTE = "demucs_vocals_then_crepe"
 
 
-def _go_bar_registry():
+def _go_bar_registry(input_kind: "str | None" = None):
     reg = yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))
     # #53: go-bar fixture は scoring 時に expected_audio_sha256 必須。real registry は
     # slow-lane 記録前なので未設定。happy path 用に、`_make_go_bar_report` が付ける
@@ -1442,6 +1475,9 @@ def _go_bar_registry():
     for entry in reg.get("external_fixtures", []):
         if entry["id"] in go_bar_ids:
             entry["expected_audio_sha256"] = hashlib.sha256(entry["id"].encode()).hexdigest()
+            # assist 経路を含む matrix（full_mix）で評価器規則を検証するための上書き。
+            if input_kind is not None:
+                entry["input_kind"] = input_kind
     return reg
 
 
@@ -1519,6 +1555,67 @@ def test_measured_separation_route_with_emitted_pins_can_survive_go_bar(monkeypa
     verdict = harness.evaluate_m1_real_go_bar(reports, _go_bar_registry())
     assert verdict["verdict"] == "go"
     assert _GO_BAR_ROUTE in verdict["surviving_routes"]
+
+
+def _full_mix_go_bar_reports(mutate=None):
+    """assist 経路を含む full_mix matrix の go-bar report を n=2 で作る。"""
+    assist_route = "basic_pitch_direct"
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    reports = [
+        _make_go_bar_report(outcomes, default_outcome="insufficient", input_kind="full_mix")
+        for _ in range(2)
+    ]
+    if mutate is not None:
+        for report in reports:
+            for info in report["fixtures"].values():
+                for row in info["routes"]:
+                    if row["route"] == assist_route:
+                        mutate(row)
+    return reports
+
+
+def test_evaluate_go_bar_accepts_assist_route_with_artifact_pin():
+    """assist が measured でも artifact hash が揃っていれば provenance 検査を通る（#217）。"""
+    import scripts.run_melody_observability as harness
+
+    verdict = harness.evaluate_m1_real_go_bar(
+        _full_mix_go_bar_reports(), _go_bar_registry(input_kind="full_mix")
+    )
+    assert verdict["verdict"] == "go"
+    assert _GO_BAR_ROUTE in verdict["surviving_routes"]
+
+
+def test_evaluate_go_bar_requires_assist_weights_when_assist_measured():
+    """measured な assist に artifact hash が無ければ fail-closed（#217）。
+
+    cross_extractor_agreement は assist のモデル入力に依存する gate metric なので、
+    assist 側が未 pin のまま「同一 model stack の n>=2」を主張させない。
+    """
+    import scripts.run_melody_observability as harness
+
+    reports = _full_mix_go_bar_reports(
+        mutate=lambda row: row.pop("assist_extractor_weights_sha256", None)
+    )
+    with pytest.raises(ValueError, match="assist_extractor_weights_sha256"):
+        harness.evaluate_m1_real_go_bar(reports, _go_bar_registry(input_kind="full_mix"))
+
+
+def test_evaluate_go_bar_allows_unavailable_assist_without_pin():
+    """assist が unavailable の行は agreement が null なので pin を要求しない（#217）。"""
+    import scripts.run_melody_observability as harness
+
+    def _drop_assist(row):
+        row.pop("assist_extractor_weights_sha256", None)
+        row["assist_status"] = "unavailable"
+        row["assist_source_model"] = None
+
+    verdict = harness.evaluate_m1_real_go_bar(
+        _full_mix_go_bar_reports(mutate=_drop_assist),
+        _go_bar_registry(input_kind="full_mix"),
+    )
+    assert verdict["verdict"] == "go"
 
 
 def test_evaluate_go_bar_verdict_pins_evaluator_code_digest():

@@ -312,9 +312,10 @@ def _run_routes_on_file(
         reference_notes = None
         assist_status = None
         assist_source_model = None
+        assist_provenance: Dict[str, Any] = {}
         if route.assist:
             try:
-                reference_notes, assist_source_model = observe_assist_notes(
+                reference_notes, assist_source_model, assist_provenance = observe_assist_notes(
                     audio_path, route, thresholds
                 )
                 assist_status = "measured"
@@ -353,6 +354,16 @@ def _run_routes_on_file(
             row["assist_status"] = assist_status
             row["assist_source_model"] = assist_source_model
             row["assist_extractor_version"] = _extractor_version(route.assist)
+            # assist のモデル artifact 指紋（#217）。cross_extractor_agreement は assist の
+            # モデル入力に依存する gate metric なので、主抽出器と同様に pin する（同一
+            # package version でも別ビルド/重みなら別 run）。
+            for key in (
+                "extractor_weights_sha256",
+                "extractor_weights_kind",
+                "extractor_weights_files",
+            ):
+                if key in assist_provenance:
+                    row[f"assist_{key}"] = assist_provenance[key]
         rows.append(row)
     return rows
 
@@ -600,8 +611,10 @@ def _route_provenance(row: Dict[str, Any]) -> "tuple":
     分離器の重み hash（separation_weights_sha256）と vocals stem hash（stem_sha256）まで
     見る。同様に学習抽出器（CREPE/basic-pitch/Melodia）の **重み hash**
     （extractor_weights_sha256）も署名に含め、同一 package version でも別 bundled/local
-    weights なら別 run として弾く（#59）。これらの hash の **emit** は実モデルを要する
-    machine-dependent な slow-lane 課題で現状 harness は未出力（§6.5）。
+    weights なら別 run として弾く（#59）。assist 抽出器の artifact 指紋
+    （assist_extractor_weights_sha256）も同様に含める — cross_extractor_agreement は
+    assist のモデル入力に依存する gate metric だから（#217）。これらの hash は harness が
+    実測時に emit する（値そのものは実モデルを要する machine-dependent・§6.5）。
     """
     preprocessing = row.get("preprocessing")
     if isinstance(preprocessing, dict):
@@ -620,6 +633,10 @@ def _route_provenance(row: Dict[str, Any]) -> "tuple":
         row.get("extractor_weights_sha256"),
         row.get("assist_source_model"),
         row.get("assist_extractor_version"),
+        # assist のモデル artifact 指紋も署名に含める（#217）: cross_extractor_agreement は
+        # assist のモデル入力に依存する gate metric なので、同一 assist source_model/version
+        # でも別ビルド/重みなら同一 model stack の repeats と見なせない。
+        row.get("assist_extractor_weights_sha256"),
         separation,
     )
 
@@ -1280,6 +1297,18 @@ def evaluate_m1_real_go_bar(
                     and not _is_sha256(row.get("extractor_weights_sha256"))
                 ):
                     missing_fields.append("extractor_weights_sha256")
+                # assist が**実際に走った**行（assist_status=="measured"）は、その
+                # cross_extractor_agreement が assist のモデル入力に依存する。凍結 route 定義の
+                # assist が学習/バイナリ artifact を持つなら assist 側の hash も必須化する
+                # （主抽出器の #59 と対称・#217）。assist が unavailable の行は agreement が
+                # null なので要求しない。
+                if (
+                    route_def is not None
+                    and route_def.assist in _LEARNED_EXTRACTORS
+                    and row.get("assist_status") == "measured"
+                    and not _is_sha256(row.get("assist_extractor_weights_sha256"))
+                ):
+                    missing_fields.append("assist_extractor_weights_sha256")
                 if missing_fields:
                     raise ValueError(
                         f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} in "
