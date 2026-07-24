@@ -930,6 +930,7 @@ def _make_go_bar_report(
     registry_sha256: str = "f" * 64,
     default_outcome: str = "unavailable",
     run_id: "str | None" = None,
+    generator_code_sha256: str = "g" * 64,
 ) -> "dict":
     """{fixture_id: {route_name: outcome}} から external report dict を組み立てる。
 
@@ -1005,6 +1006,8 @@ def _make_go_bar_report(
         # 各 report は既定で独立した run_id を持つ（run_external が実行ごとに発行する
         # のを模す）。テストで偽 repeats（コピー）を模すときは明示的に同一値を渡す。
         "run_id": run_id if run_id is not None else uuid.uuid4().hex,
+        # generator code provenance（#50）。既定で repeats 間一致（同一 generator stack）。
+        "generator_code_sha256": generator_code_sha256,
         "fixtures": fixtures,
     }
 
@@ -1322,6 +1325,66 @@ def test_run_external_stamps_distinct_run_id(monkeypatch, tmp_path):
     r2 = harness.run_external(manifest)
     assert r1["run_id"] and r2["run_id"]
     assert r1["run_id"] != r2["run_id"]
+    # generator_code_sha256 は実 generator コードの digest で、実行間で安定（#50）。
+    assert r1["generator_code_sha256"] == r2["generator_code_sha256"]
+    assert r1["generator_code_sha256"] == harness._generator_code_sha256()
+
+
+def test_generator_code_paths_include_melody_and_adapters():
+    """_generator_code_paths は harness ＋ melody モジュール ＋ 下流 learned adapter を含む（#50/#51）。"""
+    import svp_rpe.io.source_separator as _sep
+    import svp_rpe.melody.extractors as _extractors
+    import svp_rpe.melody.observability as _obs
+    import svp_rpe.melody.routing as _routing
+    import svp_rpe.rpe.learned.basic_pitch_adapter as _bp
+    import svp_rpe.rpe.learned.crepe_adapter as _crepe
+    import svp_rpe.rpe.learned.melodia_adapter as _melodia
+    import svp_rpe.rpe.learned.source_separation_adapter as _srcsep
+
+    import scripts.run_melody_observability as harness
+
+    paths = set(harness._generator_code_paths())
+    assert Path(harness.__file__).resolve() in paths
+    for mod in (_extractors, _obs, _routing, _crepe, _melodia, _bp, _srcsep, _sep):
+        assert Path(mod.__file__).resolve() in paths
+
+
+def test_evaluate_go_bar_fails_closed_on_missing_or_differing_generator_code(monkeypatch):
+    """generator_code_sha256 が欠落/repeats 間不一致なら fail-closed（#50）。
+
+    route 行・gate metrics を産出した generator コードの digest が無い、または別 checkout の
+    generator で測った run（digest 不一致）を混ぜたら、stale extraction を素通りさせないため
+    verdict を出さない（verdict の evaluator_code_sha256 と対の生成側 provenance）。
+    """
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+
+    # 欠落 → fail-closed。
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+    del r2["generator_code_sha256"]
+    with pytest.raises(ValueError, match="generator_code_sha256"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+    # repeats 間で不一致（別 generator stack）→ fail-closed。
+    r3 = _make_go_bar_report(outcomes, generator_code_sha256="a" * 64)
+    r4 = _make_go_bar_report(outcomes, generator_code_sha256="b" * 64)
+    with pytest.raises(ValueError, match="generator_code_sha256"):
+        harness.evaluate_m1_real_go_bar([r3, r4], _go_bar_registry())
+
+
+def test_evaluate_go_bar_carries_generator_code_sha256_in_verdict():
+    """repeats 一致した generator_code_sha256 を verdict へ転記する（#50 provenance）。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes, generator_code_sha256="c" * 64)
+    r2 = _make_go_bar_report(outcomes, generator_code_sha256="c" * 64)
+    verdict = harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+    assert verdict["generator_code_sha256"] == "c" * 64
 
 
 def test_json_loads_rejects_duplicate_object_keys():
@@ -2209,18 +2272,24 @@ def test_report_mode_cli_rejects_out_overwriting_harness_source(monkeypatch, tmp
 
 
 def test_report_mode_cli_rejects_out_overwriting_generator_modules(monkeypatch, tmp_path):
-    """非 evaluate モードの --out が melody generator モジュールを指したら fail-closed（#49）。
+    """非 evaluate モードの --out が generator モジュール/adapter を指したら fail-closed（#49/#51）。
 
-    report 生成は extractors / observability / routing を使って route matrix・gate を
-    組む。`--external m.json --out src/svp_rpe/melody/extractors.py` の typo でその
+    report 生成は extractors / observability / routing を使って route matrix・gate を組み、
+    optional 経路では下流 learned adapter / source_separator まで到達する。
+    `--external m.json --out src/svp_rpe/rpe/learned/crepe_adapter.py` の typo でその
     generator コードを JSON で atomic 上書き破壊させない（`_generator_code_paths()` で
-    harness ＋ 3 モジュールを一括保護）。
+    harness ＋ melody モジュール ＋ adapter を一括保護）。
     """
     import json as _json
 
+    import svp_rpe.io.source_separator as _sep
     import svp_rpe.melody.extractors as _extractors
     import svp_rpe.melody.observability as _obs
     import svp_rpe.melody.routing as _routing
+    import svp_rpe.rpe.learned.basic_pitch_adapter as _bp
+    import svp_rpe.rpe.learned.crepe_adapter as _crepe
+    import svp_rpe.rpe.learned.melodia_adapter as _melodia
+    import svp_rpe.rpe.learned.source_separation_adapter as _srcsep
 
     import scripts.run_melody_observability as harness
 
@@ -2228,8 +2297,13 @@ def test_report_mode_cli_rejects_out_overwriting_generator_modules(monkeypatch, 
         Path(_extractors.__file__),
         Path(_obs.__file__),
         Path(_routing.__file__),
+        Path(_crepe.__file__),
+        Path(_melodia.__file__),
+        Path(_bp.__file__),
+        Path(_srcsep.__file__),
+        Path(_sep.__file__),
     ]
-    # `_generator_code_paths()` がこの 3 モジュール（+ harness）を含むことを直接確認。
+    # `_generator_code_paths()` がこれら全モジュール（+ harness）を含むことを直接確認。
     protected = set(harness._generator_code_paths())
     for mp in module_paths:
         assert mp.resolve() in protected

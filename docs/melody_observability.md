@@ -289,6 +289,15 @@ pin しつつ合格版だけ採点して go を publish しうる。hook は全�
 呼ばれるので、fixture id・route payload いずれの階層の重複キーも採点前に fail-closed で
 弾く（#46）。
 
+report は route 行・gate metrics を産出した generator コード（harness ＋ melody
+抽出/経路/観測 ＋ 下流 learned adapter / source separator）の digest を
+**`generator_code_sha256`** に載せる。評価器はこれが全 report に存在し repeats 間で一致
+することを要求する。verdict の `evaluator_code_sha256`（判定コードの digest）と対を成す
+生成側 provenance で、extractor/gate コードが変わった後に古い report bytes が渡される
+stale extraction を機械検出可能にする（従来は registry と評価器コードしか pin されず
+検出不能だった）。同じパス集合（`_generator_code_paths()`）が `--out` 衝突保護でも使われ、
+生成直後の generator コード上書き破壊を両モードで防ぐ（#47/#49/#50/#51）。
+
 `report_pins` の **`sha256` が content-addressed の replay anchor** で、各 report の
 内容を一意に pin する（同名 basename でも内容が違えば別 sha256 として list に共存・
 区別される）。`path` は人間可読の**非権威的 hint** に徹する（repo 内なら repo 相対、

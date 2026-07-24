@@ -350,6 +350,8 @@ def run_synthetic(
         # （Codex 指摘・AGENTS §8）。asdict は default 値込みの解決済み全フィールドを返す
         # ため registry snapshot より厳密。thresholds_source で由来（registry/override）も明示。
         "observation_gate": asdict(thresholds),
+        # route 行・gate metrics を産出した generator コードの digest（external と対称・#50）。
+        "generator_code_sha256": _generator_code_sha256(),
         "fixtures": {},
     }
     with tempfile.TemporaryDirectory(prefix="melody-bench-") as tmp:
@@ -442,6 +444,10 @@ def run_external(
         # 新規発行する run_id を評価器が「存在必須・report 間で相互に distinct」と要求する
         # ことで、コピー由来の偽 repeats を弾く（Codex 指摘・#45）。
         "run_id": uuid.uuid4().hex,
+        # ★この report の route 行・gate metrics を産出した generator コードの digest（#50）。
+        # 評価器は repeats 間で一致を要求し、extractor/gate コード変更後の stale extraction を
+        # 機械検出可能にする（verdict の evaluator_code_sha256 と対称・Codex 指摘）。
+        "generator_code_sha256": _generator_code_sha256(),
         "fixtures": {},
     }
     with tempfile.TemporaryDirectory(prefix="melody-ext-") as tmp:
@@ -553,25 +559,52 @@ def _evaluator_code_paths() -> "List[Path]":
 
 
 def _generator_code_paths() -> "List[Path]":
-    """report を生成するコード（harness ＋ 依存 melody モジュール）の resolved パス集合。
+    """report を生成するコード一式の resolved パス集合（harness ＋ melody 抽出/経路/観測 ＋
+    下流 learned adapter / source separator）。
 
     非 evaluate モード（`--external` / synthetic）は `_run_routes_on_file` 経由で
     `svp_rpe.melody.extractors`（`observe_via_route` / `observe_assist_notes`）・
     `observability`（`assess_observability` / gate）・`routing`（`select_routes` の
-    route matrix）を使って route 行と gate outcome を組み立てる。これらは report の
-    provenance を成す生成コードなので、`--out src/svp_rpe/melody/extractors.py` の typo で
-    生成直後に上書き破壊させない（evaluate 分岐が評価器コードを守るのと対称・#47/#49）。
+    route matrix）を使い、optional 経路では further `rpe.learned.{crepe,melodia,
+    basic_pitch,source_separation}_adapter` と `io.source_separator` まで到達して route 行と
+    gate outcome を組み立てる。これらは report の provenance を成す生成コードなので、
+    (1) `generator_code_sha256`（#50）で report にその digest を pin し、(2) `--out` 衝突
+    保護（#47/#49/#51）で生成直後の上書き破壊を防ぐ、双方が同じ集合を共有する
+    （evaluate 分岐の `_evaluator_code_paths` と対称）。adapter モジュールは optional な
+    重み依存を内部で import-guard するため、重い依存が無くてもモジュール自体は import でき、
+    digest はどのマシンでも決定論的に安定する（Codex 指摘）。
     """
+    import svp_rpe.io.source_separator as _sep
     import svp_rpe.melody.extractors as _extractors
     import svp_rpe.melody.observability as _obs
     import svp_rpe.melody.routing as _routing
+    import svp_rpe.rpe.learned.basic_pitch_adapter as _bp
+    import svp_rpe.rpe.learned.crepe_adapter as _crepe
+    import svp_rpe.rpe.learned.melodia_adapter as _melodia
+    import svp_rpe.rpe.learned.source_separation_adapter as _srcsep
 
-    return [
-        Path(__file__).resolve(),
-        Path(_extractors.__file__).resolve(),
-        Path(_obs.__file__).resolve(),
-        Path(_routing.__file__).resolve(),
-    ]
+    modules = [_extractors, _obs, _routing, _crepe, _melodia, _bp, _srcsep, _sep]
+    paths = {Path(__file__).resolve()}
+    paths.update(Path(m.__file__).resolve() for m in modules)
+    return sorted(paths)
+
+
+def _generator_code_sha256() -> str:
+    """report を生成したコードの digest（#50。verdict の `evaluator_code_sha256` と対称）。
+
+    report の route 行・gate metrics は harness ＋ melody 抽出/経路/観測 ＋ learned adapter が
+    産出する。この digest を report に載せることで、extractor/gate コードが変わった後に古い
+    report bytes が `--evaluate-go-bar` へ渡されても（従来は registry と評価器コードしか pin
+    されず）検出できなかった stale extraction を機械検出可能にする。評価器は repeats 間で
+    この digest の一致を要求する（別 checkout の generator で測った report を混ぜない・
+    Codex 指摘・AGENTS §8）。
+    """
+    digest = hashlib.sha256()
+    for path in sorted(_generator_code_paths(), key=lambda p: p.name):
+        digest.update(path.name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
 
 
 def _evaluator_code_sha256() -> str:
@@ -660,6 +693,10 @@ def evaluate_m1_real_go_bar(
       別パスへコピーすれば path-dedup を通過し 1 回の抽出で repeats_min を満たせてしまう。
       run_external が実行ごとに発行する run_id の存在＋相互 distinct を要求してコピー由来の
       偽 repeats を弾く・#45・Codex 指摘）
+    - いずれかの report が非空 str の `generator_code_sha256` を欠く、または report 間で
+      それが不一致（route 行・gate metrics を産出した generator コードの digest。別 checkout
+      の extractor/gate コードで測った stale extraction を混ぜて判定しない・verdict の
+      `evaluator_code_sha256` と対の生成側 provenance・#50・Codex 指摘）
     - `registry_sha256` 指定時、いずれかの report の pin がその hash と不一致
       （渡されない場合は複数 report 間の `registry_sha256` 相互一致を要求）
     - 複数 report 間で `observation_gate` が食い違う（異なる閾値下で測定した
@@ -856,6 +893,31 @@ def evaluate_m1_real_go_bar(
             f"evaluate_m1_real_go_bar: reports share run_id(s) {duplicate_run_ids}; "
             "同一実行の複製を独立した n>=2 repeats と見なせない (fail-closed)"
         )
+
+    # generator code provenance の存在 + repeats 間一致（#50）。route 行・gate metrics を
+    # 産出した generator コード（harness ＋ melody 抽出/経路/観測 ＋ learned adapter）の digest
+    # が report に無い、または repeats 間で食い違うなら、extractor/gate コードが変わった後の
+    # stale extraction を混ぜている疑いがあり verdict を出さない。verdict の
+    # evaluator_code_sha256（判定コードの digest）と対を成す生成側の provenance で、run_id
+    # （実行の独立性）とも直交する（別 checkout の generator で測った run を n>=2 と見なさない・
+    # Codex 指摘・AGENTS §8）。
+    generator_code_sha256s: List[str] = []
+    for idx, report in enumerate(reports):
+        gen_sha = report.get("generator_code_sha256")
+        if not gen_sha or not isinstance(gen_sha, str):
+            raise ValueError(
+                f"evaluate_m1_real_go_bar: reports[{idx}] lacks a non-empty string "
+                "generator_code_sha256; route 行を産出した generator コードの provenance を "
+                "pin できず stale extraction を検出できない (fail-closed)"
+            )
+        generator_code_sha256s.append(gen_sha)
+    if len(set(generator_code_sha256s)) > 1:
+        raise ValueError(
+            "evaluate_m1_real_go_bar: reports の generator_code_sha256 が repeats 間で不一致 "
+            f"{sorted(set(generator_code_sha256s))}; 別 checkout の generator コードで測った "
+            "run を同一 stack の n>=2 repeats と見なせない (fail-closed)"
+        )
+    generator_code_sha256 = generator_code_sha256s[0]
 
     # 凍結バーを load した registry の hash（渡された場合）を authoritative reference と
     # する。渡されない場合は report 間の相互一致で代替する。いずれの report の pin も
@@ -1272,6 +1334,9 @@ def evaluate_m1_real_go_bar(
         # 論理が変われば同じ report_pins/registry_sha256 でも別 verdict になりうる stale を
         # 検出可能にする（Codex 指摘・AGENTS §8）。
         "evaluator_code_sha256": _evaluator_code_sha256(),
+        # report を産出した generator コードの digest（repeats 間で一致済み・#50）。verdict の
+        # 評価器コード digest（現在の判定コード）と対を成す生成側 provenance。
+        "generator_code_sha256": generator_code_sha256,
         "n_reports": len(reports),
         # 各 report の run provenance を verdict へ転記（独立実行だった証跡・#45）。
         "run_ids": sorted(run_ids),
