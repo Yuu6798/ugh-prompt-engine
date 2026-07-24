@@ -563,10 +563,16 @@ def evaluate_m1_real_go_bar(
       Codex 指摘）
     - 別素材であるべき go-bar fixture が同一 `audio_sha256` を共有（fixture 間で素材が
       重複すると「4 別素材の ≥3/4」が実質 1 素材で満たされる・Codex 指摘）
+    - `m1_real_go_bar` の positive_ids / negative_ids が非一意、または両者が重複
+      （凍結バー自身の typo で 1 素材を二重計上させない・Codex 指摘）
+    - いずれかの fixture の routes に同名 route 行が重複（last-wins で失敗/未観測行を
+      隠蔽させない・Codex 指摘）
     - measured（gate outcome）な route 行が provenance フィールド（source_model /
       extractor_version、分離経路は separation_model/version）を欠く、または同一
       fixture×route の provenance が repeats 間で不一致（欠落を「一致」と扱わず、別
       model stack の run を n>=2 と誤認しない・設計 §2.3・Codex 指摘）
+    - measured な route 行の `extractor` / preprocessing が凍結 route 定義
+      （`select_routes`）と不一致（経路ラベルと実測抽出器のすり替えを許さない・Codex 指摘）
 
     候補経路は positive fixture の registry 凍結 kind が規定する matrix に限定し、
     report に混入した非登録経路は verdict に効かせない（Codex 指摘）。
@@ -613,6 +619,26 @@ def evaluate_m1_real_go_bar(
     min_positive_sufficient = bar["min_positive_sufficient"]
     max_negative_false_positive = bar["max_negative_false_positive"]
     repeats_min = bar["repeats_min"]
+    # 凍結バー自身の整合性: positive_ids / negative_ids は互いに重複なし・disjoint で
+    # なければならない。registry の typo で positive_ids に同一 id が 2 回入ると、
+    # fixture_audio_hash は id で 1 素材に畳まれる一方で pos_sufficient はリストを
+    # そのまま数え、1 素材が二重計上されて 4 未満の別素材で ≥3/4 を満たしうる
+    # （Codex 指摘・凍結バーの well-formed 性を守る config 整合チェック）。
+    if len(set(positive_ids)) != len(positive_ids):
+        raise ValueError(
+            f"evaluate_m1_real_go_bar: m1_real_go_bar.positive_ids に重複 {positive_ids}; "
+            "1 素材の二重計上を防ぐため一意でなければならない (fail-closed)"
+        )
+    if len(set(negative_ids)) != len(negative_ids):
+        raise ValueError(
+            f"evaluate_m1_real_go_bar: m1_real_go_bar.negative_ids に重複 {negative_ids} (fail-closed)"
+        )
+    overlap = sorted(set(positive_ids) & set(negative_ids))
+    if overlap:
+        raise ValueError(
+            f"evaluate_m1_real_go_bar: positive_ids と negative_ids が重複 {overlap}; "
+            "同一素材を positive と negative の両方に使えない (fail-closed)"
+        )
     # registry の external_fixtures が凍結した id → input_kind。report 自己申告の kind を
     # 信用せず、これを真として matrix を評価する（Codex 指摘）。
     registered_kinds = _unique_id_map(
@@ -717,6 +743,7 @@ def evaluate_m1_real_go_bar(
             )
         expected_route_objs = select_routes(registry_kind)
         expected_routes = {r.name for r in expected_route_objs}
+        expected_route_by_name = {r.name: r for r in expected_route_objs}
         separation_routes = {r.name for r in expected_route_objs if r.requires_separation}
         # model provenance の完全性 + 一致確認。各 report に共通して存在する route に
         # ついて、(a) measured（gate outcome）な行は provenance フィールドが実在する
@@ -754,6 +781,28 @@ def evaluate_m1_real_go_bar(
                         "provenance を pin しない report では同一 model stack の n>=2 を証明できない "
                         "(fail-closed)"
                     )
+                # 行が凍結 route 定義（select_routes）の抽出器/前処理と一致することを要求。
+                # 経路名だけ `demucs_vocals_then_crepe` を名乗り実際は pyin/librosa で測った
+                # 行が CREPE 経路として計上されるすり替えを防ぐ（Codex 指摘・手書き report
+                # 対策）。expected 集合外の経路（candidate に効かない混入行）は検査しない。
+                expected_route = expected_route_by_name.get(route)
+                if expected_route is not None:
+                    if row.get("extractor") != expected_route.extractor:
+                        raise ValueError(
+                            f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} in "
+                            f"reports[{idx}] measured with extractor {row.get('extractor')!r} != "
+                            f"frozen {expected_route.extractor!r}; 経路ラベルと実測抽出器の"
+                            "すり替えを許さない (fail-closed)"
+                        )
+                    if expected_route.requires_separation:
+                        pp = row.get("preprocessing")
+                        pp_label = pp.get("preprocessing") if isinstance(pp, dict) else None
+                        if pp_label != expected_route.preprocessing:
+                            raise ValueError(
+                                f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} in "
+                                f"reports[{idx}] preprocessing {pp_label!r} != frozen "
+                                f"{expected_route.preprocessing!r} (fail-closed)"
+                            )
             if len({_route_provenance(row) for row in rows}) > 1:
                 raise ValueError(
                     f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} has "

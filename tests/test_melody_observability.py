@@ -920,14 +920,22 @@ def _make_go_bar_report(
     thresholds = _default_thresholds()
     # 完全な vocal_track matrix を模す: 明示されない経路は unavailable で埋める
     # （評価器の full-matrix 完全性チェックを満たしつつ、未指定経路は未観測扱い）。
-    vocal_track_routes = [r.name for r in select_routes("vocal_track")]
+    route_objs = select_routes("vocal_track")
+    vocal_track_routes = [r.name for r in route_objs]
+    route_extractor = {r.name: r.extractor for r in route_objs}
 
     def _row(route, outcome):
-        # measured（gate outcome）な行は harness と同じ provenance を持つ。分離経路は
-        # separation provenance も付ける（評価器の provenance 完全性チェックに合わせる）。
-        row = {"route": route, "extractor": "crepe", "outcome": outcome, "report": None}
+        # measured（gate outcome）な行は harness と同じ provenance を持つ。抽出器は
+        # 凍結 route 定義に合わせ（評価器の extractor 照合に一致）、分離経路は
+        # separation provenance も付ける（provenance 完全性チェックに合わせる）。
+        row = {
+            "route": route,
+            "extractor": route_extractor.get(route, "crepe"),
+            "outcome": outcome,
+            "report": None,
+        }
         if outcome in ("sufficient", "insufficient"):
-            row["source_model"] = "demucs_vocals+crepe"
+            row["source_model"] = f"{route}:model"
             row["extractor_version"] = "0.0.13"
             if route.startswith("demucs_vocals_"):
                 row["preprocessing"] = {
@@ -1424,6 +1432,47 @@ def test_evaluate_go_bar_cli_pins_report_hashes(tmp_path, monkeypatch):
         hashlib.sha256(run2.read_bytes()).hexdigest(),
     }
     assert len(verdict["report_pins"]) == 2
+
+
+def test_evaluate_go_bar_fails_closed_on_duplicate_or_overlapping_bar_ids():
+    """凍結バーの positive_ids 重複 / positive-negative overlap は fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+
+    # positive_ids に typo 重複 → 1 素材の二重計上を防ぐため fail-closed。
+    reg_dup = _go_bar_registry()
+    reg_dup["m1_real_go_bar"]["positive_ids"] = (
+        list(reg_dup["m1_real_go_bar"]["positive_ids"]) + ["real_vocal_jrock"]
+    )
+    with pytest.raises(ValueError, match="positive_ids"):
+        harness.evaluate_m1_real_go_bar([r1, r2], reg_dup)
+
+    # positive と negative が同一素材を共有 → fail-closed。
+    reg_overlap = _go_bar_registry()
+    reg_overlap["m1_real_go_bar"]["negative_ids"] = ["real_vocal_jrock"]
+    with pytest.raises(ValueError, match="重複"):
+        harness.evaluate_m1_real_go_bar([r1, r2], reg_overlap)
+
+
+def test_evaluate_go_bar_fails_closed_on_extractor_label_mismatch():
+    """route ラベルと実測 extractor がすり替わっていたら fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+    # 本命経路（crepe ラベル）を実際は pyin で測ったと偽装（両 report で一致させる）。
+    for report in (r1, r2):
+        for row in report["fixtures"]["real_vocal_jrock"]["routes"]:
+            if row["route"] == _GO_BAR_ROUTE:
+                row["extractor"] = "pyin"
+    with pytest.raises(ValueError, match="すり替え"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
 
 
 # --------------------------------------------------------------------------- #
