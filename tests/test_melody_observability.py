@@ -925,12 +925,25 @@ def test_registry_has_m1_real_go_bar_preregistered():
         assert by_id[fid]["input_kind"] == "vocal_track", fid
 
 
+_CURRENT_GEN_SHA_CACHE: "str | None" = None
+
+
+def _current_generator_code_sha256() -> str:
+    """現 checkout の generator コード digest（#55。評価器の現一致要求に合わせる）。session 内キャッシュ。"""
+    global _CURRENT_GEN_SHA_CACHE
+    if _CURRENT_GEN_SHA_CACHE is None:
+        import scripts.run_melody_observability as harness
+
+        _CURRENT_GEN_SHA_CACHE = harness._generator_code_sha256()
+    return _CURRENT_GEN_SHA_CACHE
+
+
 def _make_go_bar_report(
     route_outcomes: "dict[str, dict[str, str]]",
     registry_sha256: str = "f" * 64,
     default_outcome: str = "unavailable",
     run_id: "str | None" = None,
-    generator_code_sha256: str = "g" * 64,
+    generator_code_sha256: "str | None" = None,
 ) -> "dict":
     """{fixture_id: {route_name: outcome}} から external report dict を組み立てる。
 
@@ -1012,8 +1025,14 @@ def _make_go_bar_report(
         # 各 report は既定で独立した run_id を持つ（run_external が実行ごとに発行する
         # のを模す）。テストで偽 repeats（コピー）を模すときは明示的に同一値を渡す。
         "run_id": run_id if run_id is not None else uuid.uuid4().hex,
-        # generator code provenance（#50）。既定で repeats 間一致（同一 generator stack）。
-        "generator_code_sha256": generator_code_sha256,
+        # generator code provenance（#50/#55）。既定は現 checkout の実 digest（評価器は
+        # repeats 間一致に加え現 checkout との一致も要求するため・#55）。stale/差異ケースは
+        # 明示的に別値を渡す。
+        "generator_code_sha256": (
+            generator_code_sha256
+            if generator_code_sha256 is not None
+            else _current_generator_code_sha256()
+        ),
         "fixtures": fixtures,
     }
 
@@ -1427,15 +1446,35 @@ def test_evaluate_go_bar_fails_closed_on_missing_or_differing_generator_code(mon
 
 
 def test_evaluate_go_bar_carries_generator_code_sha256_in_verdict():
-    """repeats 一致した generator_code_sha256 を verdict へ転記する（#50 provenance）。"""
+    """repeats 一致かつ現 checkout 一致の generator_code_sha256 を verdict へ転記する（#50/#55）。"""
     import scripts.run_melody_observability as harness
 
     outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
     outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
-    r1 = _make_go_bar_report(outcomes, generator_code_sha256="c" * 64)
-    r2 = _make_go_bar_report(outcomes, generator_code_sha256="c" * 64)
+    current = harness._generator_code_sha256()
+    r1 = _make_go_bar_report(outcomes, generator_code_sha256=current)
+    r2 = _make_go_bar_report(outcomes, generator_code_sha256=current)
     verdict = harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
-    assert verdict["generator_code_sha256"] == "c" * 64
+    assert verdict["generator_code_sha256"] == current
+
+
+def test_evaluate_go_bar_fails_closed_on_stale_generator_code():
+    """repeats 間で一致していても現 checkout の generator digest と不一致なら fail-closed（#55）。
+
+    生成後に routing/gate/extractor が変わった stale report 同士が互いに一致するだけで今日の
+    評価器で Go を publish するのを防ぐ（現行 Go verdict は現コードで生成した report のみ）。
+    """
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    # 両 report が同一の「古い」digest を持つ（repeats 間一致だが現 checkout と別物）。
+    stale = "a" * 64
+    assert stale != harness._generator_code_sha256()
+    r1 = _make_go_bar_report(outcomes, generator_code_sha256=stale)
+    r2 = _make_go_bar_report(outcomes, generator_code_sha256=stale)
+    with pytest.raises(ValueError, match="stale report|current"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
 
 
 def test_evaluate_go_bar_requires_expected_audio_sha256_for_every_fixture():

@@ -257,9 +257,18 @@ pip install -e ".[separate,pitch]"
 # REPLACE を実ファイルパスへ書き換える（audio_sha256 は null のままでよい・
 # ハーネスが実測して記録する）。
 
-# n>=2 回、それぞれ別ファイルへ観測表を書き出す。
+# n>=2 回、それぞれ別ファイルへ観測表を書き出す（run_id はハーネスが自動発行）。
 python scripts/run_melody_observability.py --external manifest.json --out run1.json
 python scripts/run_melody_observability.py --external manifest.json --out run2.json
+
+# ★凍結素材 pin の記録（#53/#54。評価器は Go 判定 publish に必須）。run1.json 等の
+#   fixtures.<id>.audio_sha256 と、demucs 経路の preprocessing.stem_sha256 /
+#   separation_weights_sha256 は run 出力に実測記録される。これらを
+#   registry.yaml の external_fixtures[].expected_audio_sha256 へ転記して registry を更新し、
+#   （registry が変わるので）上の run1/run2 生成を更新後 registry で**やり直す**。
+#   この記録前に --evaluate-go-bar を回すと expected_audio_sha256 欠落で fail-closed になる。
+#   ※ 生成と評価は同一 checkout で行う（#55: report の generator_code_sha256 は現 checkout の
+#     _generator_code_sha256() と一致必須。間で routing/gate/extractor を変えると stale 扱い）。
 
 # 凍結バーを機械適用して Go/No-Go を得る。
 python scripts/run_melody_observability.py --evaluate-go-bar run1.json run2.json --out verdict.json

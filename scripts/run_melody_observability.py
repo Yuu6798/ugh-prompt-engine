@@ -763,6 +763,10 @@ def evaluate_m1_real_go_bar(
       それが不一致（route 行・gate metrics を産出した generator コードの digest。別 checkout
       の extractor/gate コードで測った stale extraction を混ぜて判定しない・verdict の
       `evaluator_code_sha256` と対の生成側 provenance・#50・Codex 指摘）
+    - report の `generator_code_sha256`（repeats 間一致済み）が現 checkout の
+      `_generator_code_sha256()` と不一致（生成後に routing/gate/extractor が変わった stale
+      report 同士が互いに一致するだけで今日の評価器で Go を publish するのを防ぐ。現行 Go
+      verdict は現コードで生成した report にのみ出す・#55・Codex 指摘）
     - `registry_sha256` 指定時、いずれかの report の pin がその hash と不一致
       （渡されない場合は複数 report 間の `registry_sha256` 相互一致を要求）
     - 複数 report 間で `observation_gate` が食い違う（異なる閾値下で測定した
@@ -990,6 +994,20 @@ def evaluate_m1_real_go_bar(
             "run を同一 stack の n>=2 repeats と見なせない (fail-closed)"
         )
     generator_code_sha256 = generator_code_sha256s[0]
+    # 現 checkout の generator コード digest との一致（#55）。上の repeats 間一致だけでは、
+    # 生成後に routing/gate/extractor が変わった stale report 同士が互いに一致しさえすれば
+    # 今日の評価器/registry で Go を publish できてしまう（route 行は現コードと別物）。verdict の
+    # evaluator_code_sha256 が現評価器コードで status を再導出するのと対称に、generator digest も
+    # 現 checkout と一致することを要求し、現行 Go verdict は現コードで生成した report にのみ出す
+    # （一致しなければ生成時コードの historical attestation であって現 verdict ではない・Codex 指摘）。
+    current_generator_code_sha256 = _generator_code_sha256()
+    if generator_code_sha256 != current_generator_code_sha256:
+        raise ValueError(
+            f"evaluate_m1_real_go_bar: report generator_code_sha256 {generator_code_sha256} != "
+            f"current {current_generator_code_sha256}; 生成後に generator コード（routing/gate/"
+            "extractor）が変わった stale report。現行 Go verdict は現 checkout のコードで生成した "
+            "report にのみ出す (fail-closed・#55)"
+        )
 
     # 凍結バーを load した registry の hash（渡された場合）を authoritative reference と
     # する。渡されない場合は report 間の相互一致で代替する。いずれの report の pin も
