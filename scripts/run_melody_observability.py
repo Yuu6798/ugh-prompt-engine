@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import sys
 import tempfile
@@ -141,6 +142,19 @@ _EXTRACTOR_DIST = {
     "crepe": "crepe",
     "melodia": "essentia",
     "basic_pitch": "basic-pitch",
+}
+
+# 抽出器名 → source_model に含まれるべきトークン（各 extractor モジュールの
+# source_model 定数と対応。librosa:pyin / crepe:predict /
+# essentia:PredominantPitchMelodia / spotify:basic_pitch）。measured 行の source_model が
+# 期待抽出器ファミリのトークンを（大小無視で）含まなければ、別抽出器の payload を
+# 貼ったすり替えとして弾く（source_model は #17 の extractor ラベルと違い、実測に
+# 使った抽出器を暴く唯一の provenance フィールド・Codex 指摘）。
+_EXTRACTOR_SOURCE_MODEL_TOKEN = {
+    "pyin": "pyin",
+    "crepe": "crepe",
+    "melodia": "melodia",
+    "basic_pitch": "basic_pitch",
 }
 
 
@@ -575,7 +589,10 @@ def evaluate_m1_real_go_bar(
       fixture×route の provenance が repeats 間で不一致（欠落を「一致」と扱わず、別
       model stack の run を n>=2 と誤認しない・設計 §2.3・Codex 指摘）
     - measured な route 行の `extractor` / preprocessing が凍結 route 定義
-      （`select_routes`）と不一致（経路ラベルと実測抽出器のすり替えを許さない・Codex 指摘）
+      （`select_routes`）と不一致、または `source_model` が期待抽出器ファミリのトークンを
+      含まない（経路ラベル/provenance と実測抽出器のすり替えを許さない・Codex 指摘）
+    - payload の gate metric が非有限（NaN/Infinity）または範囲外（率/被覆は [0,1]、
+      ノート数は非負 int でない）（`NaN < min` を利用した passing すり抜けを許さない・Codex 指摘）
     - measured な route 行が根拠 report payload / gate metrics を欠く、`report.status`
       が `outcome` と不一致、payload metrics から凍結ゲートで **再導出** した status が
       `outcome` と不一致、または payload 自身の `route` が行の route と不一致（outcome/
@@ -850,6 +867,42 @@ def evaluate_m1_real_go_bar(
                         f"reports[{idx}] report payload lacks gate metrics {missing_metrics} "
                         "(fail-closed)"
                     )
+                # 数値の健全性検証。json.loads は NaN/Infinity を受理し、`NaN < min` は
+                # False になるため、非有限や範囲外の metric を混ぜても gate_reasons が
+                # sufficient を再導出しうる。再導出の前に、率/被覆は [0,1] の有限値、
+                # ノート数は非負 int であることを要求する（Codex 指摘・手書き report 対策）。
+                for _key in ("voiced_coverage", "confidence_mean", "low_confidence_rate", "octave_jump_rate"):
+                    _val = report_payload[_key]
+                    if (
+                        isinstance(_val, bool)
+                        or not isinstance(_val, (int, float))
+                        or not math.isfinite(_val)
+                        or not (0.0 <= _val <= 1.0)
+                    ):
+                        raise ValueError(
+                            f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} in "
+                            f"reports[{idx}] metric {_key}={_val!r} は [0,1] の有限値でない "
+                            "(fail-closed)"
+                        )
+                for _key in ("note_count", "phrase_count"):
+                    _val = report_payload[_key]
+                    if isinstance(_val, bool) or not isinstance(_val, int) or _val < 0:
+                        raise ValueError(
+                            f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} in "
+                            f"reports[{idx}] metric {_key}={_val!r} は非負整数でない (fail-closed)"
+                        )
+                _agreement = report_payload.get("cross_extractor_agreement")
+                if _agreement is not None and (
+                    isinstance(_agreement, bool)
+                    or not isinstance(_agreement, (int, float))
+                    or not math.isfinite(_agreement)
+                    or not (0.0 <= _agreement <= 1.0)
+                ):
+                    raise ValueError(
+                        f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} in "
+                        f"reports[{idx}] cross_extractor_agreement={_agreement!r} は "
+                        "None か [0,1] の有限値でない (fail-closed)"
+                    )
                 recomputed_reasons = gate_reasons(
                     frozen_thresholds,
                     voiced_coverage=report_payload["voiced_coverage"],
@@ -880,6 +933,18 @@ def evaluate_m1_real_go_bar(
                             f"reports[{idx}] measured with extractor {row.get('extractor')!r} != "
                             f"frozen {expected_route.extractor!r}; 経路ラベルと実測抽出器の"
                             "すり替えを許さない (fail-closed)"
+                        )
+                    # source_model が期待抽出器ファミリと矛盾しないことを要求。extractor
+                    # ラベルを crepe に偽装しても source_model=librosa:pyin のままなら、
+                    # 別抽出器の payload を貼ったすり替えとして弾く（Codex 指摘）。
+                    expected_token = _EXTRACTOR_SOURCE_MODEL_TOKEN.get(expected_route.extractor)
+                    source_model = row.get("source_model") or ""
+                    if expected_token is not None and expected_token not in source_model.lower():
+                        raise ValueError(
+                            f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} in "
+                            f"reports[{idx}] source_model {row.get('source_model')!r} は期待抽出器 "
+                            f"{expected_route.extractor!r}（token {expected_token!r}）と矛盾する; "
+                            "別抽出器の payload のすり替えを許さない (fail-closed)"
                         )
                     if expected_route.requires_separation:
                         pp = row.get("preprocessing")

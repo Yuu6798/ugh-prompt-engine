@@ -1651,6 +1651,53 @@ def test_evaluate_go_bar_fails_closed_on_report_route_mismatch():
         harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
 
 
+def test_evaluate_go_bar_fails_closed_on_source_model_route_contradiction():
+    """extractor ラベルを偽装しても source_model が別抽出器ファミリなら fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    r2 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    # 本命 crepe 経路（extractor は crepe のまま）だが source_model は pyin ファミリ。
+    for report in (r1, r2):
+        for row in report["fixtures"]["real_vocal_jrock"]["routes"]:
+            if row["route"] == _GO_BAR_ROUTE:
+                row["source_model"] = "librosa:pyin"
+    with pytest.raises(ValueError, match="source_model"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
+def test_evaluate_go_bar_fails_closed_on_non_finite_or_out_of_range_metric():
+    """NaN/Infinity や範囲外の payload metric は再導出前に fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+
+    # NaN（NaN < min は False で passing すり抜けを狙う）。
+    r1 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    r2 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    for report in (r1, r2):
+        for row in report["fixtures"]["real_vocal_jrock"]["routes"]:
+            if row["route"] == _GO_BAR_ROUTE:
+                row["report"] = {**row["report"], "voiced_coverage": float("nan")}
+    with pytest.raises(ValueError, match="有限値でない"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+    # 範囲外（confidence_mean > 1）。
+    r3 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    r4 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    for report in (r3, r4):
+        for row in report["fixtures"]["real_vocal_jrock"]["routes"]:
+            if row["route"] == _GO_BAR_ROUTE:
+                row["report"] = {**row["report"], "confidence_mean": 1.5}
+    with pytest.raises(ValueError, match="有限値でない"):
+        harness.evaluate_m1_real_go_bar([r3, r4], _go_bar_registry())
+
+
 def test_evaluate_go_bar_cli_rejects_out_colliding_with_report(tmp_path, monkeypatch):
     """--out が入力 report path と衝突したら書き込み前に fail-closed（report を破壊しない）。"""
     import json as _json
