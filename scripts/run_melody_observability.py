@@ -1185,17 +1185,24 @@ def main() -> int:
         # 「どの report が判定を生んだか」を content hash で pin しないと、公開後に
         # run1/run2.json が差し替え・編集されても verdict 単体から検出できない
         # （verdict は n_reports/registry_sha256 しか持たない・Codex 指摘・AGENTS §8）。
-        # 衝突/重複検出には resolve 済みパスを使うが、report_pins には**渡された元の
-        # （多くは checkout 相対の）パス**を記録する。resolve 済み絶対パス（/tmp/... 等）を
-        # 載せると verdict.json が machine-local になり、別 checkout の検証者が pin した
-        # 入力を手動パス変換なしに replay できない（sha256 は同じでも非可搬・Codex 指摘）。
+        # 衝突/重複検出には resolve 済みパスを使うが、report_pins には**可搬な**パスを
+        # 記録する: repo 内なら repo 相対、repo 外（/tmp scratchpad 等の transient な
+        # slow-lane artifact）なら basename のみ。渡された生 arg を verbatim に載せると、
+        # 絶対/scratchpad パス（本リポジトリの scratchpad 慣行は /tmp）で verdict.json が
+        # machine-local になり、別 checkout の検証者が sha256 一致でも手動パス変換なしに
+        # replay できない。sha256 が content-addressed の真の anchor で、path は可搬 hint
+        # に徹する（Codex 指摘・AGENTS §8）。
         reports = []
         report_pins = []
-        for original, resolved in zip(args.evaluate_go_bar, report_paths):
+        for resolved in report_paths:
             data = resolved.read_bytes()
             reports.append(json.loads(data))
+            try:
+                pin_path = str(resolved.relative_to(ROOT))
+            except ValueError:
+                pin_path = resolved.name  # repo 外 = 可搬 hint として basename のみ
             report_pins.append(
-                {"path": str(original), "sha256": hashlib.sha256(data).hexdigest()}
+                {"path": pin_path, "sha256": hashlib.sha256(data).hexdigest()}
             )
         # --out が入力 report のいずれかに解決されると、verdict の書き込みが pin 済みの
         # report を上書きし、report_pins の hash が実体と不一致になり slow-lane repeat を
