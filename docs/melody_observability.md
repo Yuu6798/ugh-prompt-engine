@@ -272,7 +272,16 @@ fixture×route で実測した上でどれも生き残らなかった＝強化�
 `--evaluate-go-bar` は入力 report を凍結 registry と多重に照合し（registry_sha256 /
 observation_gate 一致・凍結 kind と route matrix・素材別性・model provenance・繰返し
 独立性）、いずれかが破れれば fail-closed で verdict を出さない。`verdict.json` は消費した
-report の content hash（`report_pins`）も記録する。
+report の `report_pins` を記録する。
+
+`report_pins` の **`sha256` が content-addressed の replay anchor** で、各 report の
+内容を一意に pin する（同名 basename でも内容が違えば別 sha256 として list に共存・
+区別される）。`path` は人間可読の**非権威的 hint** に徹する（repo 内なら repo 相対、
+repo 外なら basename）——slow-lane report は machine-dependent な transient artifact
+（§6.5・commit しない）で検証時には存在しないため、provenance の同一性は path でなく
+sha256 で担保する。検証は「pin した sha256 の report 集合を同一凍結 registry の下で
+再評価して同じ verdict を得る」ことで行い、path で元ファイルを open して replay する
+ものではない。
 
 ### 6.5 状態
 
