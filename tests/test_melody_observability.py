@@ -375,9 +375,10 @@ def test_expected_weight_filenames_fails_closed_without_remote_metadata(monkeypa
 
 
 def _provision_gate(monkeypatch, tmp_path, *, weights_present: bool):
-    """demucs 導入済を装い、重み探索先を tmp_path に閉じ込める（実在有無を切替）。
+    """demucs 導入済を装い、torch hub cache を tmp_path に差し替える（実在有無を切替）。
 
-    戻り値は (adapter, weights_dir)。
+    戻り値は (adapter, weights_dir)。探索先は「demucs が実際に読む場所」だけなので、
+    テストもそこ（`_torch_hub_checkpoint_dirs`）を差し替えて分岐を作る。
     """
     from svp_rpe.io import source_separator
     from svp_rpe.rpe.learned import source_separation_adapter as adapter
@@ -386,10 +387,8 @@ def _provision_gate(monkeypatch, tmp_path, *, weights_present: bool):
     monkeypatch.setattr(adapter, "_demucs_version", lambda: "4.1.0")
     monkeypatch.setattr(adapter, "_demucs_remote_dir", lambda: _fake_remote_dir(tmp_path))
     weights_dir = tmp_path / "checkpoints"
-    weights_dir.mkdir()
-    monkeypatch.setenv(adapter.WEIGHTS_DIR_ENV, str(weights_dir))
-    # torch hub cache へ落ちないよう、探索先を明示ディレクトリのみに閉じる。
-    monkeypatch.setattr(adapter, "_torch_hub_checkpoint_dirs", list)
+    weights_dir.mkdir(exist_ok=True)
+    monkeypatch.setattr(adapter, "_torch_hub_checkpoint_dirs", lambda: [weights_dir])
     if weights_present:
         for name in adapter._expected_weight_filenames("htdemucs_ft"):
             (weights_dir / name).write_bytes(b"fake-checkpoint:" + name.encode())
@@ -417,6 +416,32 @@ def test_ensure_separation_available_fails_closed_when_weights_not_provisioned(
     _forbid_network(monkeypatch)
     with pytest.raises(LearnedModelUnavailable, match="weights not provisioned"):
         adapter.ensure_separation_available()
+
+
+def test_weight_search_is_confined_to_the_dir_demucs_loads_from(monkeypatch, tmp_path):
+    """探索先は torch hub cache のみ（pin した bytes = モデル入力になった bytes）。
+
+    任意ディレクトリを探索すると、そこを hash しつつ demucs は既定 cache から読む、
+    という乖離（separation_weights_sha256 が stem を作っていない重みを指す）が起きる。
+    `TORCH_HOME` は torch/demucs と同じ規約で解決されるので置き場所変更の正規口になる。
+    """
+    from svp_rpe.rpe.learned import source_separation_adapter as adapter
+
+    monkeypatch.setenv("TORCH_HOME", str(tmp_path / "torchhome"))
+    dirs = adapter._torch_hub_checkpoint_dirs()
+    assert tmp_path / "torchhome" / "hub" / "checkpoints" in dirs
+    # 任意ディレクトリ指定の口（引数・専用環境変数）を持たない。
+    assert not hasattr(adapter, "WEIGHTS_DIR_ENV")
+    import inspect
+
+    for func in (
+        adapter.locate_separation_weights,
+        adapter.resolve_separation_weights,
+        adapter.ensure_separation_available,
+        adapter.describe_separation_weights,
+        adapter.isolate_vocals_with_provenance,
+    ):
+        assert "weights_dir" not in inspect.signature(func).parameters
 
 
 def test_demucs_missing_behaviour_is_unchanged(monkeypatch):

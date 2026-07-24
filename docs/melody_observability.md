@@ -264,8 +264,11 @@ pip install -e ".[separate]"
 #   取得方法 A: 明示的な一度きりの provisioning（download はこのコマンドの中だけで起きる）
 python -c "import demucs.pretrained as p; p.get_model('htdemucs_ft')"
 #   取得方法 B: 遮断環境では別マシンで取得した .th を
-#              ~/.cache/torch/hub/checkpoints/ へ配置（または任意ディレクトリに置いて
-#              SVP_RPE_DEMUCS_WEIGHTS_DIR=<dir> を設定する）
+#              ~/.cache/torch/hub/checkpoints/ へ配置する。別の置き場所にしたい場合は
+#              torch ネイティブの TORCH_HOME=<dir> を設定する（demucs も本ゲートも
+#              同じ規約で解決するので、pin する重みと demucs が読む重みが必ず一致する。
+#              独自の探索パスは意図的に持たない — 別ディレクトリを hash しつつ demucs が
+#              既定 cache から読む乖離を作らないため）
 #
 #   取得できたことの確認と、registry へ記録する dated pin の採取:
 python -c "import json; from svp_rpe.rpe.learned.source_separation_adapter import \
@@ -301,6 +304,12 @@ python scripts/run_melody_observability.py --evaluate-go-bar run1.json run2.json
 | demucs 未導入 | 分離経路 = `unavailable`（`separate` extra の install hint） |
 | 導入済 + 重み取得済 | 分離経路が measured。stem/weights pin つきで Go 候補になれる |
 | 導入済 + **重み未取得** | 分離経路 = `unavailable`（`demucs weights not provisioned: <expected paths>`）。**実行時 DL は行わない**（リトライもミラーもしない）ので run は完走し、部分行と report は残る |
+
+検査するのは **demucs が実際に読む場所**（torch hub の checkpoints cache）だけで、
+独自の探索パスは持たない。別ディレクトリを探索して hash する設計にすると、demucs は
+既定 cache から読み、`separation_weights_sha256` は stem を作っていない重みを指す
+——「pin とモデル入力の乖離」が生じるため（Codex #217 指摘）。置き場所を変えるなら
+`TORCH_HOME` を使う（torch/demucs と本ゲートが同じ規約で解決する）。
 
 第 3 状態を「利用可能」と誤認すると、遮断環境では torch hub の download が
 `urllib.error.URLError` を投げて `--external` run 全体が落ち、部分行も report も

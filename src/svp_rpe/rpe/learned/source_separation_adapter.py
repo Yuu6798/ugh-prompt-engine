@@ -18,7 +18,11 @@ M1a）。
     `unavailable` → verdict `inconclusive`）へ落とす門を持つ:
 
     - `ensure_separation_available()` が `DEFAULT_MODEL` の要求チェックポイントの
-      **ローカル実在**まで検査する。
+      **ローカル実在**まで検査する。探索先は **demucs が実際に読む場所**
+      （torch hub の checkpoints cache）だけで、任意ディレクトリは探索しない
+      — 別の場所を hash して demucs は既定 cache から読む、という「pin と
+      モデル入力の乖離」を構造的に作らないため（置き場所を変えるなら torch
+      ネイティブの `TORCH_HOME` を使う。demucs も本ゲートも同じ規約で解決する）。
     - `isolate_vocals()` は分離実行**前**に必ずこの門を通し、さらに重み取得起因の
       失敗（`URLError` / `HTTPError` / `OSError` / torch hub の `RuntimeError`）を
       `LearnedModelUnavailable` へ写像する。
@@ -59,7 +63,6 @@ __all__ = [
     "LearnedModelUnavailable",
     "SeparationWeights",
     "VocalsSeparation",
-    "WEIGHTS_DIR_ENV",
     "describe_separation_weights",
     "ensure_separation_available",
     "isolate_vocals",
@@ -72,9 +75,6 @@ _INSTALL_HINT = (
     "demucs is not installed. Install it via the optional `separate` extra:\n"
     '    pip install -e ".[separate]"'
 )
-
-# 重みの明示指定パス（torch hub cache 以外に事前取得した場合）。
-WEIGHTS_DIR_ENV = "SVP_RPE_DEMUCS_WEIGHTS_DIR"
 
 
 @dataclass(frozen=True)
@@ -221,11 +221,19 @@ def _expected_weight_filenames(model: str) -> List[str]:
 
 
 def _torch_hub_checkpoint_dirs() -> List[Path]:
-    """torch hub のチェックポイント cache 候補（`torch.hub.get_dir()/checkpoints`）。
+    """torch hub のチェックポイント cache（`torch.hub.get_dir()/checkpoints`）。
 
-    torch が import できればそれを優先し、できなくても `TORCH_HOME` /
-    `XDG_CACHE_HOME` から同じ規約でパスを組む（重み未取得判定のために torch の
-    import を必須にしない）。
+    **ここが唯一の探索先**である。`separate_stems` は demucs の既定 repo
+    （`RemoteRepo` → `torch.hub.load_state_dict_from_url`）で重みを読むので、
+    分離器が実際に読む場所以外を探索すると「pin した bytes」と「モデル入力に
+    なった bytes」が乖離しうる（別ディレクトリに置いた別版 .th を hash しつつ、
+    demucs は hub cache の別ファイルで分離する）。任意ディレクトリの探索は
+    その乖離を作るので**持たない** — 置き場所を変えたい場合は torch ネイティブの
+    `TORCH_HOME` を使う（demucs も本ゲートも同じ規約で解決する）。
+
+    torch が import できればそれを優先し（`torch.hub.set_dir()` の効果も反映
+    される）、できなくても `TORCH_HOME` / `XDG_CACHE_HOME` から同じ規約でパスを
+    組む（重み未取得判定のために torch の import を必須にしない）。
     """
     dirs: List[Path] = []
     try:  # pragma: no cover - torch は optional
@@ -247,26 +255,12 @@ def _torch_hub_checkpoint_dirs() -> List[Path]:
     return unique
 
 
-def _weights_search_dirs(weights_dir: Union[str, Path, None]) -> List[Path]:
-    """重みを探すディレクトリ（明示指定 → 環境変数 → torch hub cache）。"""
-    dirs: List[Path] = []
-    if weights_dir is not None:
-        dirs.append(Path(weights_dir).expanduser())
-    env_dir = os.environ.get(WEIGHTS_DIR_ENV)
-    if env_dir:
-        dirs.append(Path(env_dir).expanduser())
-    dirs.extend(_torch_hub_checkpoint_dirs())
-    unique: List[Path] = []
-    for path in dirs:
-        if path not in unique:
-            unique.append(path)
-    return unique
-
-
-def locate_separation_weights(
-    model: str = DEFAULT_MODEL, *, weights_dir: Union[str, Path, None] = None
-) -> List[Path]:
+def locate_separation_weights(model: str = DEFAULT_MODEL) -> List[Path]:
     """`model` のチェックポイントがローカルに**実在する**ことを確認してパスを返す。
+
+    探索先は `_torch_hub_checkpoint_dirs()`（= `separate_stems` が実際に重みを
+    読む場所）のみ。ここで返すパスがそのまま `separation_weights_sha256` の
+    hash 対象になるので、「pin した bytes = モデル入力になった bytes」が保たれる。
 
     hash は取らない（`ensure_separation_available` の probe を I/O 軽量に保つ）。
 
@@ -280,7 +274,7 @@ def locate_separation_weights(
     if not _has_demucs():
         raise LearnedModelUnavailable(_INSTALL_HINT)
     filenames = _expected_weight_filenames(model)
-    search_dirs = _weights_search_dirs(weights_dir)
+    search_dirs = _torch_hub_checkpoint_dirs()
     found: List[Path] = []
     missing: List[str] = []
     for filename in filenames:
@@ -297,14 +291,13 @@ def locate_separation_weights(
         raise LearnedModelUnavailable(
             f"demucs weights not provisioned: {expected}; 事前取得が必要"
             "（実行時 DL は行わない）。取得手順は docs/melody_observability.md §6.4。"
-            f"探索したディレクトリ: {[str(d) for d in search_dirs]}"
+            "重みは demucs が読む torch hub cache に置くこと（別の場所へ置きたい場合は "
+            f"TORCH_HOME を設定する）。探索したディレクトリ: {[str(d) for d in search_dirs]}"
         )
     return found
 
 
-def resolve_separation_weights(
-    model: str = DEFAULT_MODEL, *, weights_dir: Union[str, Path, None] = None
-) -> SeparationWeights:
+def resolve_separation_weights(model: str = DEFAULT_MODEL) -> SeparationWeights:
     """`locate_separation_weights` + content hash（provenance pin つきで返す）。
 
     Raises
@@ -312,7 +305,7 @@ def resolve_separation_weights(
     LearnedModelUnavailable
         demucs 未導入・期待ファイル名を解決できない・重みが未取得のとき。
     """
-    found = locate_separation_weights(model, weights_dir=weights_dir)
+    found = locate_separation_weights(model)
     return SeparationWeights(
         model=model,
         paths=tuple(found),
@@ -321,27 +314,23 @@ def resolve_separation_weights(
     )
 
 
-def ensure_separation_available(
-    model: str = DEFAULT_MODEL, *, weights_dir: Union[str, Path, None] = None
-) -> None:
+def ensure_separation_available(model: str = DEFAULT_MODEL) -> None:
     """Demucs が **実際に走れる**かを事前に確認し、無理なら `LearnedModelUnavailable`。
 
     「import できる」だけでは不十分で、`model` のチェックポイントがローカルに
     取得済みであることまで検査する（D-1: 導入済 + 重み未取得 = 第 3 状態）。
     実分離は走らせない・download もしない・hash も取らない軽量 probe。
     """
-    locate_separation_weights(model, weights_dir=weights_dir)
+    locate_separation_weights(model)
 
 
-def describe_separation_weights(
-    model: str = DEFAULT_MODEL, *, weights_dir: Union[str, Path, None] = None
-) -> Dict[str, Any]:
+def describe_separation_weights(model: str = DEFAULT_MODEL) -> Dict[str, Any]:
     """事前取得した重みの provenance 記録用サマリ（registry へ転記する dated 欄）。
 
     `docs/melody_observability.md` §6.4 の重み取得手順で、operator が
     `registry.yaml` の `provenance.model_weights.demucs` を埋めるために使う。
     """
-    weights = resolve_separation_weights(model, weights_dir=weights_dir)
+    weights = resolve_separation_weights(model)
     return {
         "model": weights.model,
         "version": weights.version,
@@ -367,7 +356,6 @@ def isolate_vocals_with_provenance(
     *,
     model: str = DEFAULT_MODEL,
     device: str = "cpu",
-    weights_dir: Union[str, Path, None] = None,
 ) -> VocalsSeparation:
     """vocals stem を分離し、stem / weights の content pin つきで返す。
 
@@ -381,7 +369,7 @@ def isolate_vocals_with_provenance(
     LearnedModelUnavailable
         demucs 未導入 / 重み未取得 / 重み取得起因の失敗のとき。
     """
-    weights = resolve_separation_weights(model, weights_dir=weights_dir)
+    weights = resolve_separation_weights(model)
     try:
         bundle = separate_stems(audio_path, model=model, device=device)
     except SeparatorNotAvailableError as exc:
