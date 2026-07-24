@@ -432,10 +432,14 @@ def observe_via_route_with_provenance(
 
     # basic-pitch は自前で path を読む（前処理は経路上 none のみを想定）。
     if route.extractor == "basic_pitch":
-        before = _extractor_fingerprint(route.extractor, require=True)
-        _bind_load_time_pin(route.extractor, before)
+        # コード pin を**先に** bind する（#217）: artifact 解決は third-party を
+        # import して cache するため、後から hash すると「cache 済みの旧コードが推論し、
+        # hash は新ファイルを見る」窓が開く。`find_spec` 経由の code 解決は import を
+        # 起こさないので、この順序なら import より前に digest を固定できる。
         before_code, _ = _extractor_code_fingerprint(route.extractor)
         _bind_code_pin(route.extractor, before_code, required=_code_pin_required(route.extractor))
+        before = _extractor_fingerprint(route.extractor, require=True)
+        _bind_load_time_pin(route.extractor, before)
         observation = extract_basic_pitch_observation(audio_path, route=route.name)
         _verify_and_record_extractor_weights(provenance, route.extractor, before)
         _verify_and_record_extractor_code(provenance, route.extractor, before_code)
@@ -444,10 +448,11 @@ def observe_via_route_with_provenance(
     waveform, sample_rate = _load_route_waveform(audio_path, route, provenance)
     # 推論**前**に artifact を pin（load-time pin の bind 込み）し、推論後に再検証する
     # （TOCTOU・#217）。bind が食い違えば推論そのものを行わない。
-    before = _extractor_fingerprint(route.extractor, require=True)
-    _bind_load_time_pin(route.extractor, before)
+    # コード pin を artifact 解決（import を起こす）より**前**に bind する（#217）。
     before_code, _ = _extractor_code_fingerprint(route.extractor)
     _bind_code_pin(route.extractor, before_code, required=_code_pin_required(route.extractor))
+    before = _extractor_fingerprint(route.extractor, require=True)
+    _bind_load_time_pin(route.extractor, before)
     if route.extractor == "pyin":
         observation = extract_pyin_observation(waveform, sample_rate, route=route.name)
     elif route.extractor == "crepe":

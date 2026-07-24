@@ -43,6 +43,7 @@ __all__ = [
     "packages_code_sha256",
     "package_code_state",
     "SEPARATION_CODE_PACKAGES",
+    "bind_inference_code_pins",
     "record_load_time_pin",
     "load_time_pin",
     "reset_load_time_pins",
@@ -320,6 +321,32 @@ def extractor_code_fingerprint(
     if packages is None:
         return None, ()
     return packages_code_sha256(packages, use_cache=use_cache)
+
+
+def bind_inference_code_pins() -> "dict":
+    """推論パッケージのコード pin を**プロセス起動直後**に確定する（#217）。
+
+    ハーネスは route を回す前に `_generator_code_sha256()` を計算し、その閉包探索が
+    `svp_rpe.io.source_separator` を import → `demucs.api` を cache する。route 内で
+    bind すると、その import より後になり「cache 済みの旧コードが分離し、hash は新
+    ファイルを見る」窓が残る。run の最初にここを呼べば、**どの optional runtime を
+    import するより前**に digest が固定される（`find_spec` なので import を起こさない）。
+
+    未導入（absent）は飛ばし、hash 不能（unhashable）はここでは握って進む
+    ——実際にその経路を使う時点の `_bind_code_pin(required=True)` が fail-closed する。
+    戻り値は bind した {key: digest}（診断用）。
+    """
+    bound = {}
+    targets = {"separation": SEPARATION_CODE_PACKAGES}
+    targets.update(_EXTRACTOR_CODE_PACKAGES)
+    for name, packages in targets.items():
+        try:
+            digest, _ = packages_code_sha256(packages)
+        except LearnedModelUnavailable:
+            continue
+        if digest is not None:
+            bound[f"{name}:code"] = record_load_time_pin(f"{name}:code", digest)
+    return bound
 
 
 def record_load_time_pin(extractor: str, sha256: str) -> str:

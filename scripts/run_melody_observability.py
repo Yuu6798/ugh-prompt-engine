@@ -56,6 +56,7 @@ from svp_rpe.melody.extractors import (  # noqa: E402
     observe_assist_notes,
     observe_via_route_with_provenance,
 )
+from svp_rpe.melody.provenance import bind_inference_code_pins  # noqa: E402
 from svp_rpe.melody.observability import (  # noqa: E402
     ObservabilityThresholds,
     assess_observability,
@@ -375,6 +376,10 @@ def _run_routes_on_file(
 def run_synthetic(
     thresholds: "ObservabilityThresholds | None" = None,
 ) -> Dict[str, Any]:
+    # 推論パッケージのコード pin を**最初に**確定する（#217）。`_generator_code_sha256()`
+    # の閉包探索が optional runtime（demucs 等）を import して cache する前に digest を
+    # 固定しないと、「cache 済みの旧コードが推論し hash は新ファイルを見る」窓が残る。
+    bind_inference_code_pins()
     specs = load_specs()
     # registry を single read（bytes→hash→parse）。thresholds も fixture metadata も
     # この同じ read から作り、registry_sha256 を report に pin する。
@@ -477,6 +482,8 @@ def run_external(
     # JSON を parse する。別々に open すると、pin する manifest_sha256 と実際に
     # entries を供給した manifest がズレる TOCTOU が残る（Codex 指摘。audio bytes
     # の凍結と同型）。
+    # route を回す前・generator digest を採る前にコード pin を確定する（#217）。
+    bind_inference_code_pins()
     manifest_bytes = Path(manifest_path).read_bytes()
     manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
     # report と対称に、manifest の重複 object キー（同一 entry 内の二重 input_kind 等で

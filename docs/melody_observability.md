@@ -482,8 +482,10 @@ pin を必須化する = 記録が済むまで Go を出さない fail-closed �
   線の外に置く。import できなかった backend は飛ばし、**実際に覆った名前**を
   `extractor_code_packages` / `separation_code_packages` に列挙する（被覆の正直会計）。
   コード hash の解決は `importlib.util.find_spec` で**モジュールを実行せず**場所だけを
-  引くので、bind を**当該パッケージの import より前**に置ける（分離経路は demucs を
-  import する前に bind する）。import 後に hash すると「cache 済みの旧コードが実行され、
+  引くので、bind を**当該パッケージの import より前**に置ける。ハーネスは run の最初に
+  `bind_inference_code_pins()` を呼び、`_generator_code_sha256()` の閉包探索（`io.source_separator`
+  経由で demucs を import する）より前に全 pin を固定する。route 内でも、artifact 解決
+  （third-party を import する）より**前**にコード pin を bind する。import 後に hash すると「cache 済みの旧コードが実行され、
   hash は新ファイルを見る」窓が開くため。残る限界: 本経路より前に**別の経路や別トラックが
   同じパッケージを import 済み**なら、その時点の digest は知りようがない（load-time pin と
   同じ制約で、slow-lane は 1 run = 1 プロセスで回すことで満たす）。

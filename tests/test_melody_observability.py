@@ -2193,6 +2193,39 @@ def test_code_pin_covers_inference_backends(monkeypatch):
     assert "torch" in melody_provenance.SEPARATION_CODE_PACKAGES
 
 
+def test_harness_binds_code_pins_before_generator_hashing(monkeypatch, tmp_path):
+    """ハーネスは generator digest（= optional runtime を import する）より前に bind する。
+
+    `_generator_code_paths()` は `io.source_separator` を import して demucs を cache
+    するので、その後に bind すると旧コードが推論しつつ新 digest を pin しうる（#217）。
+    """
+    import json as _json
+
+    import scripts.run_melody_observability as harness
+    from svp_rpe.melody import provenance as melody_provenance
+
+    order = []
+    real_bind = melody_provenance.bind_inference_code_pins
+    monkeypatch.setattr(
+        harness, "bind_inference_code_pins", lambda: (order.append("bind"), real_bind())[1]
+    )
+    real_gen = harness._generator_code_sha256
+    monkeypatch.setattr(
+        harness, "_generator_code_sha256", lambda: (order.append("generator"), real_gen())[1]
+    )
+
+    sr = 22050
+    wav = tmp_path / "clip.wav"
+    sf.write(wav, np.zeros(sr, dtype=np.float32), sr, subtype="FLOAT")
+    manifest = tmp_path / "m.json"
+    manifest.write_text(
+        _json.dumps([{"id": "real_lead_synth", "path": str(wav), "input_kind": "clear_lead"}]),
+        encoding="utf-8",
+    )
+    harness.run_external(manifest, _default_thresholds())
+    assert order and order[0] == "bind"  # bind が generator hash より先
+
+
 def test_package_code_state_does_not_import_the_package():
     """コード hash の解決は **import を起こさない**（bind を import より前に置ける・#217）。
 
