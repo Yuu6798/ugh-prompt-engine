@@ -524,9 +524,12 @@ def evaluate_m1_real_go_bar(
     ゲート outcome は ``"sufficient"`` / ``"insufficient"`` のみを指す
     （``"unavailable"`` / ``"not_observed_by_routing"`` / ``"not_applicable"`` は
     非観測として扱い、stably/ever のいずれの sufficient にも数えない）。survive には
-    さらに **全 negative でその経路が実測（gate outcome）済み**であることを要求する
-    （negative で未観測の経路は「偽陽性なし」を証明できていないため survive させない・
-    ``negative_unmeasured_ids`` に記録・Codex 指摘）。
+    さらに **全 positive・全 negative でその経路が実測（gate outcome）済み**である
+    ことを要求する（未観測の positive/negative がある経路は matrix 未完 or 偽陽性
+    未証明で survive させない・``positive_unmeasured_ids`` / ``negative_unmeasured_ids``
+    に記録・Codex 指摘）。なお `--evaluate-go-bar` CLI は同一 report ファイルの二重
+    指定を resolve 済みパスの重複として弾き、1 回の実行で repeats_min を満たせない
+    （`_resolve_unique_report_paths`）。
 
     各候補 route（positive fixture 群で観測された route 名の和集合）について:
 
@@ -642,6 +645,14 @@ def evaluate_m1_real_go_bar(
             if _is_ever_sufficient(reports, fid, route)
             and not _is_stably_sufficient(reports, fid, route)
         )
+        # 「≥3/4 sufficient」は 4 本すべてを実測した上での 3 本以上を意味する。
+        # ある positive がその経路で未観測（欠落/unavailable 等）なら、matrix は
+        # 未完（全 5 fixture × n>=2 を回していない）であり、残りの sufficient が
+        # 偶々バーを満たしても go を publish しない（未観測を「測って落ちた」と
+        # 混同しない・Codex 指摘。negative 側と対称）。
+        positive_unmeasured_ids = sorted(
+            fid for fid in positive_ids if not _is_measured(reports, fid, route)
+        )
         # 偽陽性ゼロは「negative でその経路を実際に測って sufficient が出なかった」で
         # 初めて certify できる。全 report で未観測（欠落/unavailable 等）の negative が
         # あれば、その経路は偽陽性なしを証明できていないので survive させない
@@ -653,12 +664,14 @@ def evaluate_m1_real_go_bar(
         surviving = (
             pos_sufficient >= min_positive_sufficient
             and neg_false_positive <= max_negative_false_positive
+            and not positive_unmeasured_ids
             and not negative_unmeasured_ids
         )
         routes_out[route] = {
             "pos_sufficient": pos_sufficient,
             "neg_false_positive": neg_false_positive,
             "unstable_positive_ids": unstable_positive_ids,
+            "positive_unmeasured_ids": positive_unmeasured_ids,
             "negative_unmeasured_ids": negative_unmeasured_ids,
         }
         if surviving:
@@ -680,6 +693,30 @@ def evaluate_m1_real_go_bar(
         "positive_ids": positive_ids,
         "negative_ids": negative_ids,
     }
+
+
+def _resolve_unique_report_paths(paths: List[Path]) -> List[Path]:
+    """`--evaluate-go-bar` の report パスを正規化し、同一ファイルの二重指定を fail-closed。
+
+    同じ ``run1.json`` を 2 回渡すと、1 回の実 slow-lane run だけで
+    ``repeats_min=2`` を満たせてしまう（Codex 指摘）。resolve 後の絶対パスで重複を
+    検出して弾く。内容ではなくパス同一性で判定する点が重要——決定論パイプラインの
+    正当な n>=2 繰返しは別パス（run1/run2）に置かれ内容が一致するのが正常であり、
+    内容重複で弾くと真の繰返しを誤って拒否してしまうため。
+    """
+    resolved = [Path(p).resolve() for p in paths]
+    seen: set[Path] = set()
+    duplicates: List[str] = []
+    for path in resolved:
+        if path in seen:
+            duplicates.append(str(path))
+        seen.add(path)
+    if duplicates:
+        raise ValueError(
+            f"--evaluate-go-bar received duplicate report path(s): {sorted(set(duplicates))}; "
+            "同一 report を複数回渡して repeats_min を満たすことはできない (fail-closed)"
+        )
+    return resolved
 
 
 def summarize(results: Dict[str, Any]) -> List[str]:
@@ -733,8 +770,9 @@ def main() -> int:
 
     if args.evaluate_go_bar is not None:
         registry, registry_sha256 = _load_registry()
+        report_paths = _resolve_unique_report_paths(args.evaluate_go_bar)
         reports = [
-            json.loads(path.read_text(encoding="utf-8")) for path in args.evaluate_go_bar
+            json.loads(path.read_text(encoding="utf-8")) for path in report_paths
         ]
         verdict = evaluate_m1_real_go_bar(
             reports, registry, registry_sha256=registry_sha256

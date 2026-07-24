@@ -1158,6 +1158,55 @@ def test_evaluate_go_bar_fails_closed_on_audio_pin_mismatch_or_missing():
         harness.evaluate_m1_real_go_bar([report3, report4], _go_bar_registry())
 
 
+def test_evaluate_go_bar_route_unmeasured_on_positive_does_not_survive():
+    """positive の 1 本でその経路が未観測なら、残り 3 本が sufficient でも survive させない。
+
+    「≥3/4 sufficient」は 4 本すべてを実測した上での 3 本以上を意味する。1 本が
+    unavailable/欠落なら matrix 未完で go を publish しない（Codex 指摘・negative 側と対称）。
+    """
+    import scripts.run_melody_observability as harness
+
+    # jrock/futurepop/band は本命経路で sufficient、waltz はその経路が未観測（別経路のみ）。
+    outcomes = {
+        "real_vocal_jrock": {_GO_BAR_ROUTE: "sufficient"},
+        "real_vocal_futurepop": {_GO_BAR_ROUTE: "sufficient"},
+        "real_vocal_band": {_GO_BAR_ROUTE: "sufficient"},
+        "real_vocal_waltz": {"pyin_direct": "insufficient"},  # 本命経路は未観測
+        _GO_BAR_NEGATIVE: {_GO_BAR_ROUTE: "insufficient"},
+    }
+    report1 = _make_go_bar_report(outcomes)
+    report2 = _make_go_bar_report(outcomes)
+    verdict = harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
+    assert verdict["verdict"] == "no_go"
+    assert _GO_BAR_ROUTE not in verdict["surviving_routes"]
+    # pos_sufficient は 3 だが未観測 positive があるため survive しない。
+    assert verdict["routes"][_GO_BAR_ROUTE]["pos_sufficient"] == 3
+    assert (
+        "real_vocal_waltz"
+        in verdict["routes"][_GO_BAR_ROUTE]["positive_unmeasured_ids"]
+    )
+
+
+def test_resolve_unique_report_paths_rejects_duplicates(tmp_path):
+    """同一 report ファイルの二重指定はパス正規化して fail-closed（内容一致では弾かない）。"""
+    import scripts.run_melody_observability as harness
+
+    run1 = tmp_path / "run1.json"
+    run1.write_text("[]", encoding="utf-8")
+    run2 = tmp_path / "run2.json"
+    run2.write_text("[]", encoding="utf-8")
+
+    # 同一ファイルを 2 回（resolve 後に一致）→ fail-closed。
+    with pytest.raises(ValueError, match="duplicate report path"):
+        harness._resolve_unique_report_paths([run1, run1])
+    # ./run1.json のような別表記でも resolve で同一と判定して弾く。
+    with pytest.raises(ValueError, match="duplicate report path"):
+        harness._resolve_unique_report_paths([run1, tmp_path / "." / "run1.json"])
+    # 別パス（内容が同一でも）は正当な n>=2 繰返しなので通す。
+    resolved = harness._resolve_unique_report_paths([run1, run2])
+    assert resolved == [run1.resolve(), run2.resolve()]
+
+
 # --------------------------------------------------------------------------- #
 # slow lane: 合成 → 実 pyin 抽出の統合（正/負の対照）
 # --------------------------------------------------------------------------- #
