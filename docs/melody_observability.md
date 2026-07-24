@@ -467,7 +467,10 @@ pin を必須化する = 記録が済むまで Go を出さない fail-closed �
   **同一 version のままローカル patch / repack された**パッケージは素通りする
   （`generator_code_sha256` は first-party しか覆わない）。実際に推論した third-party
   パッケージの `.py` + ネイティブ拡張を hash して行に載せ、provenance 署名（repeats 一致）に
-  含める。registry に `code_sha256` を記録した場合は行との一致も必須化する。
+  含める。評価器は **measured 行に推論コード pin を必須**とする（主・assist・分離の
+  それぞれ。registry の `code_sha256` が未記録でも要求する — 要求しないと、手書き report が
+  pin を削っても「両方欠落 = 一致」として通り、推論コード未 pin のまま go を publish できる）。
+  registry に `code_sha256` を記録した場合は行との一致も追加で必須化する。
   **実行 backend も覆う**（CREPE / basic-pitch は TensorFlow がモデルグラフを実行し、
   Demucs は torch が実行するため、抽出器パッケージだけでは patch を検出できない）:
   crepe→`crepe`+`tensorflow`/`keras`、basic_pitch→`basic_pitch`+TF/ONNX/CoreML/TFLite、
@@ -484,8 +487,8 @@ pin を必須化する = 記録が済むまで Go を出さない fail-closed �
   飛ばしてよいが、**導入済み（= 実行されうる）なのに hash できない**（`unhashable`）
   パッケージがあれば、他だけで digest を作らず fail-closed にする（実行された実装の一部を
   覆わない pin を「揃っている」と誤認しないため）
-  —— registry の `code_sha256` 未記録の間は評価器がコード hash を要求しないため、無記入を
-  許すと推論コードが未 pin のまま go を publish できてしまう。**assist 抽出器**（full_mix の `basic_pitch_direct` × Melodia など）も
+  —— 評価器は measured 行に code pin を必須とするので、無記入の行は Go-bar 評価で
+  fail-closed になる（route 単位で `unavailable` に落とす方が、report 全体を弾くより正しい）。**assist 抽出器**（full_mix の `basic_pitch_direct` × Melodia など）も
   同様に `assist_extractor_weights_sha256` を emit する — `cross_extractor_agreement` は
   assist のモデル入力に依存する gate metric なので、主抽出器と同じく pin する（Codex #217）。
   評価器は `assist_status == "measured"` の行にこの pin を必須とし、provenance 署名にも
