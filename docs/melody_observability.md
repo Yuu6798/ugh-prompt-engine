@@ -314,12 +314,20 @@ python scripts/run_melody_observability.py --evaluate-go-bar run1.json run2.json
 ——「pin とモデル入力の乖離」が生じるため（Codex #217 指摘）。置き場所を変えるなら
 `TORCH_HOME` を使う（torch/demucs と本ゲートが同じ規約で解決する）。
 
-正確には、torch が import できる環境では **プロセスの active hub dir**
-（`torch.hub.get_dir()`）だけを見る。`torch.hub.set_dir()` を呼んだプロセスでは
-`TORCH_HOME` と食い違いうるため、env 由来のパスを併記すると demucs が読まない
-ファイルを hash しうる。env 由来（`TORCH_HOME` / `XDG_CACHE_HOME`）の解決へ落ちるのは
-torch を import できないときだけで、これは重み未取得判定に torch の import を
-必須にしないための代替である。
+正確には、探索先は `separate_stems` がどちらの経路で分離するかで決まる:
+
+- **API 経路（プロセス内分離。`demucs.api` が import できる）**: **active hub dir**
+  （`torch.hub.get_dir()`）だけを見る。`torch.hub.set_dir()` を呼んだプロセスでは
+  `TORCH_HOME` と食い違いうるため、env 由来のパスを併記すると demucs が読まない
+  ファイルを hash しうる。
+- **CLI 経路（`python -m demucs` の子プロセスへフォールバック）**: 子は `os.environ` を
+  継承するだけで親の `torch.hub.set_dir()` は届かないため、**env 由来の解決**
+  （`TORCH_HOME` → `XDG_CACHE_HOME` → `~/.cache`）を見る。ここで親の active hub dir を
+  見ると、子が実際に読む cache と pin が乖離する。
+
+torch を import できないときも env 由来へ落ちる（重み未取得判定に torch の import を
+必須にしないため）。重みが未取得のときのエラーメッセージには、どちらの経路で解決したかも
+出る。
 
 第 3 状態を「利用可能」と誤認すると、遮断環境では torch hub の download が
 `urllib.error.URLError` を投げて `--external` run 全体が落ち、部分行も report も

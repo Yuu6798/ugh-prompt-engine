@@ -433,6 +433,7 @@ def test_weight_search_is_confined_to_the_dir_demucs_loads_from(monkeypatch, tmp
     """
     import types
 
+    from svp_rpe.io import source_separator
     from svp_rpe.rpe.learned import source_separation_adapter as adapter
 
     # torch 非導入時: env 由来の解決（torch/demucs と同じ規約）へフォールバックする。
@@ -442,13 +443,23 @@ def test_weight_search_is_confined_to_the_dir_demucs_loads_from(monkeypatch, tmp
         tmp_path / "torchhome" / "hub" / "checkpoints"
     ]
 
-    # torch 導入時: active hub dir（torch.hub.get_dir()）**だけ**を見る。
-    # set_dir() 等で TORCH_HOME と食い違っても、demucs が読まない場所は探索しない。
+    # API 経路（プロセス内分離）＋ torch 導入時: active hub dir（torch.hub.get_dir()）
+    # **だけ**を見る。set_dir() 等で TORCH_HOME と食い違っても、demucs が読まない場所は
+    # 探索しない。
     active = tmp_path / "active_hub"
     stub = types.ModuleType("torch")
     stub.hub = types.SimpleNamespace(get_dir=lambda: str(active))
     monkeypatch.setitem(sys.modules, "torch", stub)
+    monkeypatch.setattr(source_separator, "_DemucsAPI", object())
     assert adapter._torch_hub_checkpoint_dirs() == [active / "checkpoints"]
+
+    # CLI 経路（`python -m demucs` の子プロセス）: 子は os.environ を継承するだけで
+    # 親の torch.hub.set_dir() は届かないので、親の active hub dir ではなく **env 由来**
+    # の解決を見る（そうしないと子が読む cache と pin が乖離する・Codex #217）。
+    monkeypatch.setattr(source_separator, "_DemucsAPI", None)
+    assert adapter._torch_hub_checkpoint_dirs() == [
+        tmp_path / "torchhome" / "hub" / "checkpoints"
+    ]
     # 任意ディレクトリ指定の口（引数・専用環境変数）を持たない。
     assert not hasattr(adapter, "WEIGHTS_DIR_ENV")
     import inspect

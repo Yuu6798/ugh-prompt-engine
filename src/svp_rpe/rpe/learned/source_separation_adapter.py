@@ -232,6 +232,32 @@ def _expected_weight_filenames(model: str) -> List[str]:
     return filenames
 
 
+def _uses_cli_separation() -> bool:
+    """`separate_stems` が**子プロセス**（`python -m demucs`）経路を採るか。
+
+    `io.source_separator.separate_stems` は demucs API が import できればプロセス内で
+    分離し、できなければ CLI へフォールバックする。CLI 経路の子プロセスは
+    `os.environ` を継承するだけなので、**親プロセスの `torch.hub.set_dir()` は届かない**
+    （子は `TORCH_HOME` / 既定 cache から解決する）。重みの探索先はこの分岐で変わる。
+    """
+    from svp_rpe.io import source_separator
+
+    return getattr(source_separator, "_DemucsAPI", None) is None
+
+
+def _env_derived_checkpoint_dir() -> Path:
+    """torch の規約（`TORCH_HOME` → `XDG_CACHE_HOME` → `~/.cache`）で組む cache パス。
+
+    子プロセス（CLI 経路）や torch を import できない場合に、実際に読まれる場所を
+    親プロセスの in-process 状態に依存せず再現するための解決。
+    """
+    torch_home = os.environ.get("TORCH_HOME")
+    if torch_home:
+        return Path(torch_home).expanduser() / "hub" / "checkpoints"
+    cache_home = os.environ.get("XDG_CACHE_HOME") or "~/.cache"
+    return Path(cache_home).expanduser() / "torch" / "hub" / "checkpoints"
+
+
 def _torch_hub_checkpoint_dirs() -> List[Path]:
     """torch hub のチェックポイント cache（`torch.hub.get_dir()/checkpoints`）。
 
@@ -243,24 +269,26 @@ def _torch_hub_checkpoint_dirs() -> List[Path]:
     その乖離を作るので**持たない** — 置き場所を変えたい場合は torch ネイティブの
     `TORCH_HOME` を使う（demucs も本ゲートも同じ規約で解決する）。
 
-    torch が import できるときは `torch.hub.get_dir()` **だけ**を見る（プロセスの
-    active hub dir が唯一の真実。`torch.hub.set_dir()` を呼んだプロセスでは
-    `TORCH_HOME` と食い違いうるので、env 由来のパスを併記すると demucs が読まない
-    ファイルを hash しうる・Codex #217）。env 由来（`TORCH_HOME` /
-    `XDG_CACHE_HOME`）へ落ちるのは **torch を import できないときだけ**で、これは
-    重み未取得判定のために torch の import を必須にしないための代替解決である。
-    """
-    try:  # pragma: no cover - torch は optional
-        import torch
+    どこを見るかは `separate_stems` がどちらの経路で分離するかで決まる:
 
-        return [Path(torch.hub.get_dir()) / "checkpoints"]
-    except Exception:
-        pass
-    torch_home = os.environ.get("TORCH_HOME")
-    if torch_home:
-        return [Path(torch_home).expanduser() / "hub" / "checkpoints"]
-    cache_home = os.environ.get("XDG_CACHE_HOME") or "~/.cache"
-    return [Path(cache_home).expanduser() / "torch" / "hub" / "checkpoints"]
+    - **API 経路（プロセス内）**: `torch.hub.get_dir()` **だけ**を見る（active hub dir が
+      唯一の真実。`torch.hub.set_dir()` を呼んだプロセスでは `TORCH_HOME` と食い違い
+      うるので、env 由来のパスを併記すると demucs が読まないファイルを hash しうる）。
+    - **CLI 経路（子プロセス `python -m demucs`）**: 子は `os.environ` を継承するだけで
+      親の `torch.hub.set_dir()` は届かないので、**env 由来の解決**（子が実際に使う
+      規約）を見る。親の active hub dir を見ると、子が読む cache と乖離する。
+
+    torch を import できないときも env 由来へ落ちる（重み未取得判定のために torch の
+    import を必須にしないための代替解決）。いずれも Codex #217 の指摘。
+    """
+    if not _uses_cli_separation():
+        try:  # pragma: no cover - torch は optional
+            import torch
+
+            return [Path(torch.hub.get_dir()) / "checkpoints"]
+        except Exception:
+            pass
+    return [_env_derived_checkpoint_dir()]
 
 
 def locate_separation_weights(model: str = DEFAULT_MODEL) -> List[Path]:
@@ -305,7 +333,9 @@ def locate_separation_weights(model: str = DEFAULT_MODEL) -> List[Path]:
             f"demucs weights not provisioned: {expected}; 事前取得が必要"
             "（実行時 DL は行わない）。取得手順は docs/melody_observability.md §6.4。"
             "重みは demucs が読む torch hub cache に置くこと（別の場所へ置きたい場合は "
-            f"TORCH_HOME を設定する）。探索したディレクトリ: {[str(d) for d in search_dirs]}"
+            "TORCH_HOME を設定する）。分離経路="
+            f"{'CLI 子プロセス（env 由来解決）' if _uses_cli_separation() else 'API（in-process hub dir）'}、"
+            f"探索したディレクトリ: {[str(d) for d in search_dirs]}"
         )
     # bag 定義 YAML（demucs パッケージ同梱）も実行時のモデル入力なので pin 対象に含める。
     remote_dir = _demucs_remote_dir()
