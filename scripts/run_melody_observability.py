@@ -604,9 +604,11 @@ def evaluate_m1_real_go_bar(
       ノート数は非負 int でない）（`NaN < min` を利用した passing すり抜けを許さない・Codex 指摘）
     - measured な route 行が根拠 report payload / gate metrics を欠く、`report.status`
       が `outcome` と不一致、payload metrics から凍結ゲートで **再導出** した status が
-      `outcome` と不一致、または payload 自身の `route` が行の route と不一致（outcome/
-      status だけ改竄し metrics を未達のまま残す／別経路の passing payload を貼るのを
-      許さない・`gate_reasons` を assess_observability と共有・Codex 指摘）
+      `outcome`='sufficient' なのに 'insufficient'（＝sufficient の水増し。丸め起因の
+      逆方向 false-positive を避けるため方向限定）、または payload 自身の `route` が行の
+      route と不一致（outcome/status だけ改竄し metrics を未達のまま残す／別経路の
+      passing payload を貼るのを許さない・`gate_reasons` を assess_observability と共有・
+      Codex 指摘）
 
     候補経路は positive fixture の registry 凍結 kind が規定する matrix に限定し、
     report に混入した非登録経路は verdict に効かせない（Codex 指摘）。
@@ -966,12 +968,20 @@ def evaluate_m1_real_go_bar(
                     cross_extractor_agreement=report_payload.get("cross_extractor_agreement"),
                 )
                 recomputed_status = "sufficient" if not recomputed_reasons else "insufficient"
-                if recomputed_status != row["outcome"]:
+                # **方向限定**で照合する。改竄で危険なのは「outcome=sufficient なのに
+                # metrics が凍結ゲート未達」（go への水増し）方向だけなので、そこだけ
+                # fail-closed にする。逆方向（outcome=insufficient・recompute=sufficient）は
+                # 改竄の利得がなく、かつ to_dict の 4 桁丸めで failing 値が閾値を上に跨ぐ
+                # （例 voiced_coverage 0.29996→0.3）と正当な insufficient report をここで
+                # 誤って tampered 扱いする false-positive の在り処なので、flag しない
+                # （Codex 指摘。丸めは危険方向には出ない=passing 値は ≤4 桁閾値の安全側に
+                # 留まる）。
+                if row["outcome"] == "sufficient" and recomputed_status == "insufficient":
                     raise ValueError(
                         f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} in "
-                        f"reports[{idx}] outcome {row['outcome']!r} but payload metrics imply "
-                        f"{recomputed_status!r} under the frozen gate {recomputed_reasons}; "
-                        "metrics とゲート判定の食い違いを許さない (fail-closed)"
+                        f"reports[{idx}] outcome 'sufficient' but payload metrics imply "
+                        f"'insufficient' under the frozen gate {recomputed_reasons}; "
+                        "sufficient の水増しを許さない (fail-closed)"
                     )
                 # 行が凍結 route 定義（select_routes）の抽出器/前処理と一致することを要求。
                 # 経路名だけ `demucs_vocals_then_crepe` を名乗り実際は pyin/librosa で測った
