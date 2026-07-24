@@ -908,6 +908,7 @@ def test_registry_has_m1_real_go_bar_preregistered():
 def _make_go_bar_report(
     route_outcomes: "dict[str, dict[str, str]]",
     registry_sha256: str = "f" * 64,
+    default_outcome: str = "unavailable",
 ) -> "dict":
     """{fixture_id: {route_name: outcome}} から external report dict を組み立てる。
 
@@ -925,8 +926,8 @@ def _make_go_bar_report(
     route_extractor = {r.name: r.extractor for r in route_objs}
 
     def _row(route, outcome):
-        # measured（gate outcome）な行は harness と同じ provenance を持つ。抽出器は
-        # 凍結 route 定義に合わせ（評価器の extractor 照合に一致）、分離経路は
+        # measured（gate outcome）な行は harness と同じ provenance / 根拠 report を持つ。
+        # 抽出器は凍結 route 定義に合わせ（評価器の extractor 照合に一致）、分離経路は
         # separation provenance も付ける（provenance 完全性チェックに合わせる）。
         row = {
             "route": route,
@@ -935,6 +936,7 @@ def _make_go_bar_report(
             "report": None,
         }
         if outcome in ("sufficient", "insufficient"):
+            row["report"] = {"status": outcome}  # report.status == outcome（harness と同型）
             row["source_model"] = f"{route}:model"
             row["extractor_version"] = "0.0.13"
             if route.startswith("demucs_vocals_"):
@@ -947,7 +949,7 @@ def _make_go_bar_report(
 
     fixtures = {}
     for fixture_id, routes in route_outcomes.items():
-        full_routes = {name: "unavailable" for name in vocal_track_routes}
+        full_routes = {name: default_outcome for name in vocal_track_routes}
         full_routes.update(routes)
         fixtures[fixture_id] = {
             "input_kind": "vocal_track",
@@ -1012,8 +1014,9 @@ def test_evaluate_go_bar_no_go_below_threshold():
         "real_vocal_waltz": {_GO_BAR_ROUTE: "insufficient"},
         _GO_BAR_NEGATIVE: {_GO_BAR_ROUTE: "insufficient"},
     }
-    report1 = _make_go_bar_report(outcomes)
-    report2 = _make_go_bar_report(outcomes)
+    # 確定 no_go には全経路の実測が要る（default_outcome=insufficient で 4 経路 measured）。
+    report1 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    report2 = _make_go_bar_report(outcomes, default_outcome="insufficient")
     verdict = harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
     assert verdict["verdict"] == "no_go"
     assert verdict["surviving_routes"] == []
@@ -1026,8 +1029,8 @@ def test_evaluate_go_bar_false_positive_disqualifies():
 
     outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
     outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "sufficient"}  # 偽陽性
-    report1 = _make_go_bar_report(outcomes)
-    report2 = _make_go_bar_report(outcomes)
+    report1 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    report2 = _make_go_bar_report(outcomes, default_outcome="insufficient")
     verdict = harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
     assert verdict["verdict"] == "no_go"
     assert verdict["surviving_routes"] == []
@@ -1046,10 +1049,12 @@ def test_evaluate_go_bar_instability_not_counted():
         _GO_BAR_NEGATIVE: {_GO_BAR_ROUTE: "insufficient"},
     }
     report1 = _make_go_bar_report(
-        {**stable_outcomes, "real_vocal_band": {_GO_BAR_ROUTE: "sufficient"}}
+        {**stable_outcomes, "real_vocal_band": {_GO_BAR_ROUTE: "sufficient"}},
+        default_outcome="insufficient",
     )
     report2 = _make_go_bar_report(
-        {**stable_outcomes, "real_vocal_band": {_GO_BAR_ROUTE: "insufficient"}}
+        {**stable_outcomes, "real_vocal_band": {_GO_BAR_ROUTE: "insufficient"}},
+        default_outcome="insufficient",
     )
     verdict = harness.evaluate_m1_real_go_bar([report1, report2], _go_bar_registry())
     # jrock/futurepop の 2 本のみ安定 sufficient（<3）→ no_go。
@@ -1360,11 +1365,11 @@ def test_evaluate_go_bar_ignores_routes_outside_frozen_matrix():
     """
     import scripts.run_melody_observability as harness
 
-    # 正規経路は全 fixture で insufficient（誰も survive しない）。
+    # 正規 4 経路は全 fixture で insufficient（誰も survive しない・全経路 measured）。
     outcomes = {fid: {_GO_BAR_ROUTE: "insufficient"} for fid in _GO_BAR_POSITIVES}
     outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
-    r1 = _make_go_bar_report(outcomes)
-    r2 = _make_go_bar_report(outcomes)
+    r1 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    r2 = _make_go_bar_report(outcomes, default_outcome="insufficient")
     # 非登録の架空経路を positive に混入（sufficient）＋ negative に insufficient。
     for report in (r1, r2):
         for fid in _GO_BAR_POSITIVES:
@@ -1491,6 +1496,42 @@ def test_evaluate_go_bar_inconclusive_when_all_routes_unavailable():
     assert verdict["verdict"] == "inconclusive"
     assert verdict["surviving_routes"] == []
     assert verdict["fully_measured_routes"] == []
+
+
+def test_evaluate_go_bar_inconclusive_when_only_baseline_measured():
+    """pyin_direct のみ実測・本命経路が unavailable なら no_go でなく inconclusive。
+
+    強化版 No-Go は全候補経路の完全実測を要する。baseline だけ測って本命
+    （Demucs/CREPE/Melodia）が未導入の report で「生き残りなし＝no_go」と偽らない。
+    """
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {"pyin_direct": "insufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {"pyin_direct": "insufficient"}
+    r1 = _make_go_bar_report(outcomes)  # 他 3 経路は default unavailable
+    r2 = _make_go_bar_report(outcomes)
+    verdict = harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+    assert verdict["verdict"] == "inconclusive"
+    assert verdict["surviving_routes"] == []
+    assert verdict["fully_measured_routes"] == ["pyin_direct"]
+
+
+def test_evaluate_go_bar_fails_closed_on_outcome_report_status_mismatch():
+    """measured 行の outcome が根拠 report.status と食い違えば fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    r2 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    # outcome だけ sufficient に改竄し、根拠 report.status は insufficient のまま食い違わせる。
+    for report in (r1, r2):
+        for row in report["fixtures"]["real_vocal_jrock"]["routes"]:
+            if row["route"] == _GO_BAR_ROUTE:
+                row["report"] = {"status": "insufficient"}
+    with pytest.raises(ValueError, match="matching report payload"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
 
 
 def test_evaluate_go_bar_cli_rejects_out_colliding_with_report(tmp_path, monkeypatch):

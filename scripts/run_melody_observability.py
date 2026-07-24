@@ -573,6 +573,8 @@ def evaluate_m1_real_go_bar(
       model stack の run を n>=2 と誤認しない・設計 §2.3・Codex 指摘）
     - measured な route 行の `extractor` / preprocessing が凍結 route 定義
       （`select_routes`）と不一致（経路ラベルと実測抽出器のすり替えを許さない・Codex 指摘）
+    - measured な route 行が根拠 report payload を欠く、または `report.status` が
+      `outcome` と不一致（outcome だけ改竄して metrics と食い違わせるのを許さない・Codex 指摘）
 
     候補経路は positive fixture の registry 凍結 kind が規定する matrix に限定し、
     report に混入した非登録経路は verdict に効かせない（Codex 指摘）。
@@ -598,12 +600,12 @@ def evaluate_m1_real_go_bar(
     - ``surviving`` = pos_sufficient >= min_positive_sufficient かつ
       neg_false_positive <= max_negative_false_positive
 
-    verdict は 3 値: surviving な route が 1 本でもあれば ``"go"``。無い場合、少なく
-    とも 1 経路が全 fixture×route で実測（gate outcome）済みなら ``"no_go"``（測った
-    上でバー未達）、どの経路も完全実測されていなければ ``"inconclusive"``（未測定を
-    測定未達と偽らない・optional 依存欠如で全経路 unavailable の report 等）。
-    "partial" 帯の解釈は人間の記録判断に委ねる（判定に必要な per-route データを
-    返り値にすべて含める）。
+    verdict は 3 値: surviving な route が 1 本でもあれば ``"go"``。無い場合、**全**
+    候補経路が全 fixture×route で実測（gate outcome）済みなら ``"no_go"``（強化版
+    No-Go・設計 §4.4「全経路」）、1 つでも未測定の候補経路があれば ``"inconclusive"``
+    （その経路がバーを満たす可能性を排除できておらず「生き残りなし」を証明していない・
+    optional 依存欠如の unavailable 等）。"partial" 帯の解釈は人間の記録判断に委ねる
+    （判定に必要な per-route データを返り値にすべて含める）。
     """
     if not reports:
         raise ValueError("evaluate_m1_real_go_bar: reports is empty (fail-closed)")
@@ -758,6 +760,10 @@ def evaluate_m1_real_go_bar(
         for report in reports[1:]:
             common_routes &= set(_fixture_route_rows(report, fixture_id))
         for route in sorted(common_routes):
+            # 凍結 matrix 外の混入経路は verdict に効かない（candidate_routes は凍結
+            # matrix 限定）ので provenance/報告 payload 検証の対象外。
+            if route not in expected_routes:
+                continue
             rows = [_fixture_route_rows(report, fixture_id)[route] for report in reports]
             for idx, row in enumerate(rows):
                 # 未観測（unavailable/not_applicable 等）は抽出器を回していないので
@@ -782,6 +788,18 @@ def evaluate_m1_real_go_bar(
                         f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} in "
                         f"reports[{idx}] is measured but lacks provenance {missing_fields}; "
                         "provenance を pin しない report では同一 model stack の n>=2 を証明できない "
+                        "(fail-closed)"
+                    )
+                # gate outcome は assess_observability(...).status 由来。measured 行は
+                # その根拠 report payload を持ち、report.status が outcome と一致しなければ
+                # ならない。outcome だけ insufficient→sufficient に改竄しても metrics は
+                # 失敗のまま、という食い違いを弾く（Codex 指摘・手書き report 対策）。
+                report_payload = row.get("report")
+                if not isinstance(report_payload, dict) or report_payload.get("status") != row["outcome"]:
+                    raise ValueError(
+                        f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} in "
+                        f"reports[{idx}] outcome {row['outcome']!r} lacks a matching report "
+                        "payload (report.status); outcome と metrics の食い違いを許さない "
                         "(fail-closed)"
                     )
                 # 行が凍結 route 定義（select_routes）の抽出器/前処理と一致することを要求。
@@ -911,19 +929,20 @@ def evaluate_m1_real_go_bar(
             surviving_routes.append(route)
 
     surviving_routes.sort()
-    # 確定的な no_go は「少なくとも 1 経路を全 fixture×route で実測（gate outcome）した
-    # 上でバー未達」のときだけ出せる。optional 依存（Demucs/CREPE/Essentia）欠如で全経路が
-    # unavailable な report は、どの経路も完全実測されていないので no_go（＝測って落ちた）
-    # と偽らず inconclusive を返す（設計 §4「全滅を確認していないので not_observed も宣言
-    # しない」・未測定と測定未達を混同しない・Codex 指摘）。
+    # 確定的な no_go（強化版 No-Go・設計 §4.4）は「**全**候補経路を全 fixture×route で
+    # 実測（gate outcome）した上でどれも生き残らなかった」ときだけ出せる。ある候補経路が
+    # 未測定（optional 依存欠如で unavailable 等）なら、その経路が凍結バーを満たす可能性を
+    # 排除できていないので「生き残りなし＝no_go」を証明したことにならない。未測定を測定
+    # 未達と偽らず inconclusive を返す（Codex 指摘）。
     fully_measured_routes = [
         route
         for route, info in routes_out.items()
         if not info["positive_unmeasured_ids"] and not info["negative_unmeasured_ids"]
     ]
+    all_candidates_measured = len(fully_measured_routes) == len(routes_out)
     if surviving_routes:
         verdict = "go"
-    elif fully_measured_routes:
+    elif all_candidates_measured:
         verdict = "no_go"
     else:
         verdict = "inconclusive"

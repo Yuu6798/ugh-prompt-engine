@@ -265,9 +265,10 @@ python scripts/run_melody_observability.py --external manifest.json --out run2.j
 python scripts/run_melody_observability.py --evaluate-go-bar run1.json run2.json --out verdict.json
 ```
 
-`verdict` は三値: **`go`**（生き残り経路あり）/ **`no_go`**（少なくとも 1 経路を全
-fixture×route で実測した上でバー未達）/ **`inconclusive`**（どの経路も完全実測されて
-いない＝optional 依存欠如で全経路 `unavailable` 等・「未測定」を「測定未達」と偽らない）。
+`verdict` は三値: **`go`**（生き残り経路あり）/ **`no_go`**（**全**候補経路を全
+fixture×route で実測した上でどれも生き残らなかった＝強化版 No-Go・設計 §4.4）/
+**`inconclusive`**（1 つでも未測定の候補経路がある＝optional 依存欠如で本命経路が
+`unavailable` 等・「生き残りなし」を証明できておらず「測定未達」と偽らない）。
 `--evaluate-go-bar` は入力 report を凍結 registry と多重に照合し（registry_sha256 /
 observation_gate 一致・凍結 kind と route matrix・素材別性・model provenance・繰返し
 独立性）、いずれかが破れれば fail-closed で verdict を出さない。`verdict.json` は消費した
