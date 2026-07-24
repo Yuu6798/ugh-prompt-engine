@@ -1629,6 +1629,83 @@ def test_evaluate_go_bar_allows_unavailable_assist_without_pin():
     assert verdict["verdict"] == "go"
 
 
+def _registry_with_weight_pin(key: str, sha256, input_kind: "str | None" = None):
+    """registry の provenance.model_weights.<key>.sha256 を差し替えた go-bar registry。"""
+    reg = _go_bar_registry(input_kind=input_kind)
+    reg["provenance"]["model_weights"][key]["sha256"] = sha256
+    return reg
+
+
+def test_evaluate_go_bar_accepts_matching_recorded_weight_pin():
+    """registry 記録済みの重み pin と行の pin が一致すれば通る（#217）。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    reports = [_make_go_bar_report(outcomes) for _ in range(2)]
+    # `_make_go_bar_report` が分離行に書く決定論値と同じ digest を registry へ記録する。
+    recorded = hashlib.sha256(b"htdemucs_ft:4.0.1:weights").hexdigest()
+    verdict = harness.evaluate_m1_real_go_bar(
+        reports, _registry_with_weight_pin("demucs", recorded)
+    )
+    assert verdict["verdict"] == "go"
+
+
+def test_evaluate_go_bar_rejects_mismatched_recorded_separation_pin():
+    """registry 記録済み demucs pin と行の pin が食い違えば fail-closed（#217）。
+
+    記録と scoring が接続していないと、registry が主張する model 入力とは別の
+    （内部的には整合した）重みで測った 2 run が go を publish できてしまう。
+    """
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    reports = [_make_go_bar_report(outcomes) for _ in range(2)]
+    other = hashlib.sha256(b"another-demucs-cache").hexdigest()
+    with pytest.raises(ValueError, match="model_weights.demucs.sha256"):
+        harness.evaluate_m1_real_go_bar(reports, _registry_with_weight_pin("demucs", other))
+
+
+def test_evaluate_go_bar_rejects_mismatched_recorded_extractor_pin():
+    """registry 記録済み crepe pin と行の extractor_weights_sha256 の不一致も fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    reports = [_make_go_bar_report(outcomes) for _ in range(2)]
+    other = hashlib.sha256(b"another-crepe-weights").hexdigest()
+    with pytest.raises(ValueError, match="model_weights.crepe.sha256"):
+        harness.evaluate_m1_real_go_bar(reports, _registry_with_weight_pin("crepe", other))
+
+
+def test_evaluate_go_bar_rejects_mismatched_recorded_assist_pin():
+    """assist（Melodia）の記録済み pin と行の assist pin の不一致も fail-closed（#217）。"""
+    import scripts.run_melody_observability as harness
+
+    other = hashlib.sha256(b"another-essentia-build").hexdigest()
+    with pytest.raises(ValueError, match="model_weights.essentia_melodia.sha256"):
+        harness.evaluate_m1_real_go_bar(
+            _full_mix_go_bar_reports(),
+            _registry_with_weight_pin("essentia_melodia", other, input_kind="full_mix"),
+        )
+
+
+def test_evaluate_go_bar_rejects_placeholder_registry_weight_pin():
+    """registry の重み pin が非 null かつ sha256 でなければ記録済みと見なさず fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    reports = [_make_go_bar_report(outcomes) for _ in range(2)]
+    with pytest.raises(ValueError, match="真の sha256"):
+        harness.evaluate_m1_real_go_bar(reports, _registry_with_weight_pin("demucs", "TBD"))
+
+
 def test_evaluate_go_bar_verdict_pins_evaluator_code_digest():
     """verdict が verdict を解釈したコード（評価器+依存モジュール）の digest を pin する。"""
     import scripts.run_melody_observability as harness

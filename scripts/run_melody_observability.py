@@ -601,6 +601,70 @@ def _is_sha256(value: Any) -> bool:
     return isinstance(value, str) and bool(_SHA256_RE.fullmatch(value))
 
 
+# registry.provenance.model_weights のキー ↔ 行の pin フィールドの対応（#217）。
+# registry に **記録済み**（非 null）の重み pin があるなら、scoring 対象の report が
+# その model 入力で測られたことを要求する（記録が report に接続していなければ、dated
+# registry pin は飾りになる）。null = 未記録なので要求しない（slow-lane の記録前は
+# 従来どおり進める。プレースホルダ文字列は下の `_registry_weight_pin` が弾く）。
+_REGISTRY_SEPARATION_WEIGHT_KEY = "demucs"
+_REGISTRY_WEIGHT_KEY_BY_EXTRACTOR: Dict[str, str] = {
+    "crepe": "crepe",
+    "melodia": "essentia_melodia",
+    "basic_pitch": "basic_pitch",
+}
+
+
+def _registry_weight_pin(registry: Dict[str, Any], key: str) -> "str | None":
+    """registry に記録された model 重み pin（未記録なら None・不正値は fail-closed）。
+
+    `provenance.model_weights.<key>.sha256` を読む。null（未記録）は None を返し、
+    要求を課さない。非 null なのに真の sha256 でない（`"TBD"` 等のプレースホルダや
+    旧形式の自由文）場合は、記録済みと誤認させないため `ValueError`（#61 と同型）。
+    """
+    entry = (registry.get("provenance") or {}).get("model_weights", {}).get(key)
+    if entry is None:
+        return None
+    if not isinstance(entry, dict):
+        raise ValueError(
+            f"evaluate_m1_real_go_bar: registry provenance.model_weights.{key} は "
+            "role/source/version/sha256/license の mapping でなければならない "
+            f"(got {type(entry).__name__}; fail-closed)"
+        )
+    recorded = entry.get("sha256")
+    if recorded is None:
+        return None
+    if not _is_sha256(recorded):
+        raise ValueError(
+            f"evaluate_m1_real_go_bar: registry provenance.model_weights.{key}.sha256 "
+            f"{recorded!r} は真の sha256（64 桁 hex）でない; プレースホルダを記録済み pin と "
+            "見なさない (fail-closed・#61)"
+        )
+    return recorded
+
+
+def _require_recorded_weight_pin(
+    *,
+    registry: Dict[str, Any],
+    registry_key: str,
+    row_pin: Any,
+    field: str,
+    fixture_id: str,
+    route: str,
+    idx: int,
+) -> None:
+    """registry 記録済みの重み pin と行の pin が一致することを要求する（#217）。"""
+    recorded = _registry_weight_pin(registry, registry_key)
+    if recorded is None:
+        return
+    if row_pin != recorded:
+        raise ValueError(
+            f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} in "
+            f"reports[{idx}] {field}={row_pin!r} != registry provenance.model_weights."
+            f"{registry_key}.sha256 {recorded!r}; 記録済みの model 入力と別の重みで測った "
+            "report に Go を出さない (fail-closed)"
+        )
+
+
 def _route_provenance(row: Dict[str, Any]) -> "tuple":
     """route 行の model provenance 署名（source_model / extractor_version / 重み / 分離器）を返す。
 
@@ -1316,6 +1380,47 @@ def evaluate_m1_real_go_bar(
                         "provenance を pin しない report では同一 model stack の n>=2 を証明できない "
                         "(fail-closed)"
                     )
+                # registry に**記録済み**の重み pin があるなら、行の pin と一致することを
+                # 要求する（#217）。一致要求がないと、registry が主張する model 入力とは
+                # 別の（内部的には整合した）重みで測った 2 run が go を publish でき、dated
+                # registry pin が scoring に接続しない。未記録（null）なら要求しない。
+                if route_def is not None:
+                    if route_def.requires_separation:
+                        _require_recorded_weight_pin(
+                            registry=registry,
+                            registry_key=_REGISTRY_SEPARATION_WEIGHT_KEY,
+                            row_pin=(row.get("preprocessing") or {}).get(
+                                "separation_weights_sha256"
+                            ),
+                            field="preprocessing.separation_weights_sha256",
+                            fixture_id=fixture_id,
+                            route=route,
+                            idx=idx,
+                        )
+                    extractor_key = _REGISTRY_WEIGHT_KEY_BY_EXTRACTOR.get(
+                        route_def.extractor
+                    )
+                    if extractor_key is not None:
+                        _require_recorded_weight_pin(
+                            registry=registry,
+                            registry_key=extractor_key,
+                            row_pin=row.get("extractor_weights_sha256"),
+                            field="extractor_weights_sha256",
+                            fixture_id=fixture_id,
+                            route=route,
+                            idx=idx,
+                        )
+                    assist_key = _REGISTRY_WEIGHT_KEY_BY_EXTRACTOR.get(route_def.assist)
+                    if assist_key is not None and row.get("assist_status") == "measured":
+                        _require_recorded_weight_pin(
+                            registry=registry,
+                            registry_key=assist_key,
+                            row_pin=row.get("assist_extractor_weights_sha256"),
+                            field="assist_extractor_weights_sha256",
+                            fixture_id=fixture_id,
+                            route=route,
+                            idx=idx,
+                        )
                 # gate outcome は assess_observability(...).status 由来。measured 行は
                 # その根拠 report payload を持ち、report.status が outcome と一致しなければ
                 # ならない。outcome だけ insufficient→sufficient に改竄しても metrics は

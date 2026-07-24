@@ -227,7 +227,11 @@ provenance:
   #             describe_separation_weights as d; import json; print(json.dumps(d(), indent=2))"
   #   crepe / basic_pitch / essentia_melodia
   #           … run 出力 report の routes[].extractor_weights_sha256（ハーネスが実測 emit）
-  # ここに記録した値と report の pin が食い違えば、別 model stack の run を混ぜた証拠になる。
+  # ここに記録した値と report の pin が食い違えば、別 model stack の run を混ぜた証拠になる
+  # ——評価器は **記録済み（非 null）の pin と行の pin の一致を必須化**し、食い違えば
+  # fail-closed で Go を出さない（#217）。未記録（null）の間は要求しないので、記録前の
+  # slow-lane run はこれまでどおり進む。プレースホルダ文字列（"TBD" 等）は記録済みと
+  # 見なさず fail-closed で弾く（#61 と同型）。
   model_weights:
     demucs:
       role: source_separation (vocals stem)
@@ -243,6 +247,13 @@ provenance:
       version: null
       sha256: null           # report の routes[].extractor_weights_sha256（kind=model_weights）
       license: null          # UNVERIFIED（crepe_adapter の weights_license 注記参照）
+    basic_pitch:
+      role: melody_note_extractor
+      model: ICASSP_2022_MODEL_PATH (wheel 同梱)
+      source: 事前取得（実行時DL禁止・pip wheel 同梱）
+      version: null
+      sha256: null           # report の routes[].extractor_weights_sha256（kind=model_weights）
+      license: Apache-2.0 (code); model artifact は上流確認が必要
     essentia_melodia:
       role: melody_f0_extractor (DSP)
       model: PredominantPitchMelodia
