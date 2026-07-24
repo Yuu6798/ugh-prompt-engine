@@ -586,9 +586,11 @@ def evaluate_m1_real_go_bar(
     - 別素材であるべき go-bar fixture が同一 `audio_sha256` を共有（fixture 間で素材が
       重複すると「4 別素材の ≥3/4」が実質 1 素材で満たされる・Codex 指摘）
     - `m1_real_go_bar` の positive_ids / negative_ids が非一意、両者が重複、
-      positive 本数が `total_positive` と不一致、negative_ids が空、または
-      `repeats_min < 2`（凍結バー自身の typo で 1 素材の二重計上・素材数不足・
-      偽陽性ガード欠落・n<2 の verdict を許さない・Codex 指摘）
+      positive 本数が `total_positive` と不一致、negative_ids が空、`repeats_min < 2`、
+      `min_positive_sufficient` が [1, total_positive] 外、または
+      `max_negative_false_positive` が [0, len(negatives)) 外（凍結バー自身の typo で
+      二重計上・素材数不足・偽陽性ガード欠落/空洞化・n<2 の verdict を許さない。具体的
+      凍結値 min=3/max=0 は事前登録テストで pin・#26 参照・Codex 指摘）
     - いずれかの fixture の routes に同名 route 行が重複（last-wins で失敗/未観測行を
       隠蔽させない・Codex 指摘）
     - measured（gate outcome）な route 行が provenance フィールド（source_model /
@@ -697,6 +699,25 @@ def evaluate_m1_real_go_bar(
         raise ValueError(
             f"evaluate_m1_real_go_bar: m1_real_go_bar.repeats_min {repeats_min} < 2; "
             "M1-real 仕様は n>=2 を要求する (fail-closed)"
+        )
+    # pass/fail 閾値の semantic 自己整合。具体的凍結値（≥3/4 → min 3・偽陽性0 → max 0）は
+    # 事前登録テスト（test_registry_has_m1_real_go_bar_preregistered が ==3/==0 を assert）が
+    # registry SSOT を guard するので、ここでは値の pin（ランタイム二重 SSOT・#26 参照）は
+    # せず、どの bar でも成り立つべき普遍不変条件だけを fail-closed で守る:
+    #   - min_positive_sufficient は 1..total_positive（0 は「0 本 sufficient で go」、
+    #     total 超過は go 不能の無意味設定）
+    #   - max_negative_false_positive は 0..len(negatives)-1（len(neg) 以上だと全 negative で
+    #     偽陽性を出しても pass し、偽陽性ガードが空洞化する）（Codex 指摘）。
+    if not (1 <= min_positive_sufficient <= total_positive):
+        raise ValueError(
+            f"evaluate_m1_real_go_bar: min_positive_sufficient {min_positive_sufficient} は "
+            f"[1, total_positive={total_positive}] の範囲外 (fail-closed)"
+        )
+    if not (0 <= max_negative_false_positive < len(negative_ids)):
+        raise ValueError(
+            f"evaluate_m1_real_go_bar: max_negative_false_positive {max_negative_false_positive} は "
+            f"[0, len(negative_ids)={len(negative_ids)}) の範囲外; 偽陽性ガードが空洞化する "
+            "(fail-closed)"
         )
     # registry の external_fixtures が凍結した id → input_kind。report 自己申告の kind を
     # 信用せず、これを真として matrix を評価する（Codex 指摘）。

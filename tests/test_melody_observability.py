@@ -1543,6 +1543,28 @@ def test_evaluate_go_bar_fails_closed_on_repeats_min_below_two():
         harness.evaluate_m1_real_go_bar([r1, r2], reg)
 
 
+def test_evaluate_go_bar_fails_closed_on_incoherent_pass_fail_thresholds():
+    """pass/fail 閾値の semantic 自己整合違反（min=0 / 偽陽性ガード空洞化）は fail-closed。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+
+    # min_positive_sufficient=0 → 0 本 sufficient で go できてしまう。
+    reg0 = _go_bar_registry()
+    reg0["m1_real_go_bar"]["min_positive_sufficient"] = 0
+    with pytest.raises(ValueError, match="min_positive_sufficient"):
+        harness.evaluate_m1_real_go_bar([r1, r2], reg0)
+
+    # max_negative_false_positive=1 で negative 1 本 → 全 negative で偽陽性でも pass（空洞化）。
+    reg_vac = _go_bar_registry()
+    reg_vac["m1_real_go_bar"]["max_negative_false_positive"] = 1
+    with pytest.raises(ValueError, match="max_negative_false_positive"):
+        harness.evaluate_m1_real_go_bar([r1, r2], reg_vac)
+
+
 def test_evaluate_go_bar_compares_stem_hash_across_repeats_when_present():
     """preprocessing に stem_sha256 があれば repeats 間で比較し、不一致は fail-closed。
 
