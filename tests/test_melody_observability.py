@@ -883,8 +883,23 @@ def test_pair_manifest_pins_source_sha256(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------- #
 # M1-real Go bar 事前登録 + 機械評価器（CI 安全・機械依存の実測は含まない）
 # --------------------------------------------------------------------------- #
+# 凍結した M1-real 素材 ID（docs/melody_observability.md §6.1 と registry.yaml の
+# single source of truth を CI で pin する）。registry.yaml の m1_real_go_bar を
+# 事故で編集（positive の 1 本入替・negative の差し替え等）したら CI が赤くなり、
+# 意図的変更（M2 等）でのみ本定数と registry を同時更新する（Codex 指摘: 凍結 ID を
+# ランタイムにハードコードして registry と二重 SSOT 化する代わりに、registry を
+# guard するテストとして pin する）。
+_FROZEN_GO_BAR_POSITIVE_IDS = {
+    "real_vocal_jrock",
+    "real_vocal_futurepop",
+    "real_vocal_band",
+    "real_vocal_waltz",
+}
+_FROZEN_GO_BAR_NEGATIVE_IDS = {"real_instrumental_negative"}
+
+
 def test_registry_has_m1_real_go_bar_preregistered():
-    """m1_real_go_bar が凍結どおり登録され、4 positive + 1 negative が vocal_track で揃う。"""
+    """m1_real_go_bar が凍結どおり登録され、正確な 4 positive + 1 negative が vocal_track で揃う。"""
     registry = yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))
     bar = registry["m1_real_go_bar"]
     assert bar["min_positive_sufficient"] == 3
@@ -892,6 +907,10 @@ def test_registry_has_m1_real_go_bar_preregistered():
     assert bar["total_positive"] == 4
     assert len(bar["positive_ids"]) == 4
     assert len(bar["negative_ids"]) == 1
+    # 正確な凍結 ID 集合を pin（本数だけでなく id 名まで固定し、別 fixture への
+    # 事故的すり替えを CI で検出する）。
+    assert set(bar["positive_ids"]) == _FROZEN_GO_BAR_POSITIVE_IDS
+    assert set(bar["negative_ids"]) == _FROZEN_GO_BAR_NEGATIVE_IDS
 
     external_by_id = registry["external_fixtures"]
     ids_seen = [f["id"] for f in external_by_id]
