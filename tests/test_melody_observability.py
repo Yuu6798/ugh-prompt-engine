@@ -2183,6 +2183,9 @@ def test_code_pin_covers_inference_backends(monkeypatch):
     digest, covered = melody_provenance.extractor_code_fingerprint("basic_pitch")
     assert "tensorflow" in hashed and "basic_pitch" in hashed
     assert "tensorflow" in covered and "basic_pitch" in covered
+    # 本アダプタが推論前に使う前処理ライブラリ（librosa）も閉包に含む（#217）。
+    assert "librosa" in covered
+    assert "librosa" in melody_provenance.extractor_code_packages_for("melodia")
     assert harness_is_sha256(digest)
     # 分離側も backend（torch）を含む。
     assert "torch" in melody_provenance.SEPARATION_CODE_PACKAGES

@@ -170,14 +170,20 @@ def _resolve_fingerprint(
 # **同一 version のままローカルで patch / repack された**パッケージは素通りする
 # （`_generator_code_paths()` は first-party しか含めない）。実際に推論した third-party
 # コードの content hash も pin する（Codex #217）。
-# 抽出器 → 推論を実行するパッケージ群（自身 + **バックエンド**）。basic-pitch / CREPE は
+# 抽出器 → 推論を実行するパッケージ群（自身 + **バックエンド** + **本アダプタが推論前に
+# 適用する前処理ライブラリ**）。basic-pitch / CREPE は
 # TensorFlow(/Keras) がモデルグラフを実行するので、ローカル patch された backend は
 # 抽出器パッケージだけを hash しても検出できない（Codex #217）。Melodia は essentia の
 # ネイティブ実装自身が算法、pyin は librosa 自身が算法（numpy/scipy は汎用数値基盤で
 # 「モデルを走らせる backend」ではないため線をここで引く）。
 # import できないものは飛ばし、**実際に覆った名前を report に列挙**する（被覆の正直会計）。
+# **librosa は全経路に入る**: 本アダプタ層が librosa を使って (a) 非分離経路の波形
+# decode（`_load_route_waveform`）、(b) Melodia 入力のリサンプル、(c) basic-pitch の
+# 被覆分母となる実尺取得（`librosa.get_duration`）を行うため。patch された librosa は
+# 抽出器へ渡る波形やゲート指標を変えるのに、source audio hash も抽出器 pin も version も
+# 動かない（Codex #217）。numpy/scipy は汎用数値基盤として線の外に置く。
 _EXTRACTOR_CODE_PACKAGES = {
-    "crepe": ("crepe", "tensorflow", "keras"),
+    "crepe": ("crepe", "tensorflow", "keras", "librosa"),
     "basic_pitch": (
         "basic_pitch",
         "tensorflow",
@@ -185,8 +191,9 @@ _EXTRACTOR_CODE_PACKAGES = {
         "onnxruntime",
         "coremltools",
         "tflite_runtime",
+        "librosa",
     ),
-    "melodia": ("essentia",),
+    "melodia": ("essentia", "librosa"),
     "pyin": ("librosa",),
 }
 

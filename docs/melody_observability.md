@@ -474,9 +474,12 @@ pin を必須化する = 記録が済むまで Go を出さない fail-closed �
   **実行 backend も覆う**（CREPE / basic-pitch は TensorFlow がモデルグラフを実行し、
   Demucs は torch が実行するため、抽出器パッケージだけでは patch を検出できない）:
   crepe→`crepe`+`tensorflow`/`keras`、basic_pitch→`basic_pitch`+TF/ONNX/CoreML/TFLite、
-  melodia→`essentia`（ネイティブ実装が算法そのもの）、pyin→`librosa`（同左。numpy/scipy は
-  汎用数値基盤であって「モデルを走らせる backend」ではないので線をここで引く）、
-  分離→`demucs`+`torch`。import できなかった backend は飛ばし、**実際に覆った名前**を
+  melodia→`essentia`（ネイティブ実装が算法そのもの）、pyin→`librosa`（同左）、
+  分離→`demucs`+`torch`。加えて **`librosa` は全抽出器の閉包に入る** — 本アダプタ層が
+  非分離経路の波形 decode・Melodia 入力のリサンプル・basic-pitch の被覆分母となる実尺取得に
+  librosa を使うため、patch された librosa は抽出器へ渡る波形やゲート指標を変えるのに
+  source audio hash も抽出器 pin も version も動かない。numpy/scipy は汎用数値基盤として
+  線の外に置く。import できなかった backend は飛ばし、**実際に覆った名前**を
   `extractor_code_packages` / `separation_code_packages` に列挙する（被覆の正直会計）。
   コード pin も weights と同様に**推論前に bind → 推論後に memo 迂回で再検証**する
   （import 済みモジュールはプロセスに cache され、途中で差し替えても実行は旧コードのまま
