@@ -248,10 +248,18 @@ python scripts/run_melody_observability.py --external ext.json --out ext_obs.jso
 ### 6.4 slow-lane 実行レシピ（Cowork/User が実行）
 
 ```bash
-# 重依存導入（Melodia を含めるなら essentia は AGPL-3.0・標準 CI/install には含めない）
-pip install -e ".[separate,pitch]"
+# pitch 依存（pyin baseline は追加依存なしで動く。crepe/melodia は §5 manual）
+pip install -e ".[pitch]"
 # pip install crepe        # CREPE（manual/external 統合・§5）
 # pip install essentia     # Melodia を測るなら（AGPL-3.0 を受容できる環境のみ）
+#
+# ★分離経路（`.[separate]`）は現状**入れない**。理由: 評価器は measured な demucs 経路に
+#   preprocessing.stem_sha256 / separation_weights_sha256 を必須化する（#54）が、ハーネスは
+#   まだこれらを emit しない（weights hash の emit は実 Demucs を要する machine-dependent な
+#   未配線 slow-lane 課題・§6.5）。`.[separate]` を入れると分離経路が measured になり、
+#   stem/weights 欠落で --evaluate-go-bar が fail-closed する。分離経路の Go を測るには先に
+#   emit 配線が必要。それまでは分離経路を unavailable（→inconclusive・非ブロッキング）に留め、
+#   Go は非分離の pyin_direct 経路で成立させる。
 
 # tests/fixtures/melody_bench/external_manifest.example.json をコピーし、
 # REPLACE を実ファイルパスへ書き換える（audio_sha256 は null のままでよい・
@@ -261,16 +269,15 @@ pip install -e ".[separate,pitch]"
 python scripts/run_melody_observability.py --external manifest.json --out run1.json
 python scripts/run_melody_observability.py --external manifest.json --out run2.json
 
-# ★凍結素材 pin の記録（#53/#54。評価器は Go 判定 publish に必須）。run1.json 等の
-#   fixtures.<id>.audio_sha256 と、demucs 経路の preprocessing.stem_sha256 /
-#   separation_weights_sha256 は run 出力に実測記録される。これらを
-#   registry.yaml の external_fixtures[].expected_audio_sha256 へ転記して registry を更新し、
-#   （registry が変わるので）上の run1/run2 生成を更新後 registry で**やり直す**。
-#   この記録前に --evaluate-go-bar を回すと expected_audio_sha256 欠落で fail-closed になる。
+# ★凍結素材 audio pin の記録（#53。評価器は Go 判定 publish に必須）。run1.json 等の
+#   fixtures.<id>.audio_sha256 は run 出力に実測記録される。これを registry.yaml の
+#   external_fixtures[].expected_audio_sha256 へ転記して registry を更新し、（registry が
+#   変わるので）上の run1/run2 生成を更新後 registry で**やり直す**。この記録前に
+#   --evaluate-go-bar を回すと expected_audio_sha256 欠落で fail-closed する。
 #   ※ 生成と評価は同一 checkout で行う（#55: report の generator_code_sha256 は現 checkout の
 #     _generator_code_sha256() と一致必須。間で routing/gate/extractor を変えると stale 扱い）。
 
-# 凍結バーを機械適用して Go/No-Go を得る。
+# 凍結バーを機械適用して Go/No-Go を得る（分離経路は上記により inconclusive、Go は pyin_direct）。
 python scripts/run_melody_observability.py --evaluate-go-bar run1.json run2.json --out verdict.json
 ```
 

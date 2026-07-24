@@ -1584,17 +1584,24 @@ def main() -> int:
             for info in report.get("fixtures", {}).values()
             if info.get("audio_path")
         }
+        # 評価器コードに加え generator コードも保護（#57）。verdict は #55 で report の
+        # generator_code_sha256 が現 checkout の `_generator_code_sha256()` と一致することを
+        # 要求する＝generator sources は verdict の provenance 入力。`--out
+        # src/svp_rpe/melody/extractors.py`（`_generator_code_paths()` にあり
+        # `_evaluator_code_paths()` に無いファイル）で、digest 検証直後にその generator source を
+        # verdict JSON で上書き破壊させない（生成側 report モードの保護と対称）。
         protected_paths = (
             set(report_paths)
             | {REGISTRY_PATH.resolve()}
             | set(_evaluator_code_paths())
+            | set(_generator_code_paths())
             | report_audio_paths
         )
         if args.out is not None and Path(args.out).resolve() in protected_paths:
             raise ValueError(
                 f"--out {args.out} は保護対象パス（入力 report / 凍結 registry / 評価器コード / "
-                "report source audio）と衝突する; verdict の書き込みが重要 artifact を破壊する "
-                "ため拒否する (fail-closed)"
+                "generator コード / report source audio）と衝突する; verdict の書き込みが重要 "
+                "artifact を破壊するため拒否する (fail-closed)"
             )
         verdict = evaluate_m1_real_go_bar(
             reports, registry, registry_sha256=registry_sha256

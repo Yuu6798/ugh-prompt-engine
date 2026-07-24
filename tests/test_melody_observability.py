@@ -2274,6 +2274,45 @@ def test_evaluate_go_bar_cli_rejects_out_overwriting_evaluator_code(tmp_path, mo
     assert code_path.read_bytes() == before
 
 
+def test_evaluate_go_bar_cli_rejects_out_overwriting_generator_code(tmp_path, monkeypatch):
+    """--out が generator コード（評価器 paths に無い extractors 等）を指したら fail-closed（#57）。
+
+    verdict は #55 で report の generator_code_sha256 が現 checkout と一致することを要求する
+    ＝generator sources は verdict の provenance 入力。digest 検証直後にその source を verdict
+    JSON で上書き破壊させない（`_generator_code_paths()` を evaluate 分岐の保護集合に含める）。
+    """
+    import json as _json
+
+    import svp_rpe.melody.extractors as _extractors
+
+    import scripts.run_melody_observability as harness
+
+    # extractors は generator paths にあり evaluator paths に無い（この非対称が #57 の穴）。
+    gen_path = Path(_extractors.__file__)
+    assert gen_path.resolve() in set(harness._generator_code_paths())
+    assert gen_path.resolve() not in set(harness._evaluator_code_paths())
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    reg_sha = hashlib.sha256(REGISTRY_PATH.read_bytes()).hexdigest()
+    r1 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    r2 = _make_go_bar_report(outcomes, registry_sha256=reg_sha)
+    run1 = tmp_path / "run1.json"
+    run1.write_text(_json.dumps(r1), encoding="utf-8")
+    run2 = tmp_path / "run2.json"
+    run2.write_text(_json.dumps(r2), encoding="utf-8")
+    monkeypatch.setattr(
+        sys, "argv",
+        ["run_melody_observability", "--evaluate-go-bar", str(run1), str(run2),
+         "--out", str(gen_path)],
+    )
+    before = gen_path.read_bytes()
+    with pytest.raises(ValueError, match="保護対象"):
+        harness.main()
+    assert gen_path.read_bytes() == before  # generator コードは無傷。
+
+
 def test_evaluate_go_bar_cli_rejects_out_overwriting_report_source_audio(tmp_path, monkeypatch):
     """--evaluate-go-bar の --out が report fixture の source audio を指したら fail-closed（#48）。
 
