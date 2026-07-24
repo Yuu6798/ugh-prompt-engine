@@ -198,7 +198,13 @@ _EXTRACTOR_CODE_PACKAGES = {
         "librosa",
     ),
     "melodia": ("essentia", "librosa"),
-    "pyin": ("librosa",),
+    # pyin は **scipy を直接実行する**: `extract_pyin_observation` が
+    # `_highpass_melody_signal`（`scipy.signal.butter` / `sosfiltfilt`）で波形を
+    # 前処理してから `librosa.pyin` へ渡す（physical_features.py:1170-1182）。
+    # patch された scipy はフィルタ後の波形＝F0 トラック＝ゲート判定を変えるのに、
+    # librosa の pin も version も動かない（Codex #217）。汎用数値基盤を線の外に
+    # 置く原則の例外は「本層のコードが直接呼ぶ」ことを根拠とする。
+    "pyin": ("librosa", "scipy"),
 }
 
 # 分離器（Demucs）の推論を実行するパッケージ群。
@@ -233,7 +239,12 @@ def package_code_state(
     try:
         spec = importlib.util.find_spec(package)
     except Exception:
-        return STATE_ABSENT, None
+        # finder 自体の失敗（sys.modules に載っているが `__spec__` が無い =`ValueError`、
+        # meta path finder の例外等）。**未導入なら top-level 名は None を返す**ので、
+        # 例外は「導入されている可能性があるのに解決できない」状態を意味する。
+        # absent として skip すると、実行されうる実装を覆わない digest を「揃った」と
+        # 見なして publish してしまうため unhashable = fail-closed に倒す（Codex #217）。
+        return STATE_UNHASHABLE, None
     if spec is None:
         return STATE_ABSENT, None
     origin = getattr(spec, "origin", None)

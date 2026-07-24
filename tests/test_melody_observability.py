@@ -2162,7 +2162,7 @@ def test_route_rows_record_third_party_code_hash(monkeypatch, tmp_path):
     assert rows[0]["extractor_code_sha256"] == extractor_code_sha256("pyin")
     assert harness._is_sha256(rows[0]["extractor_code_sha256"])
     # pin が何を覆ったか（抽出器自身 + 実在した backend）を行に列挙する。
-    assert rows[0]["extractor_code_packages"] == ["librosa"]
+    assert rows[0]["extractor_code_packages"] == ["librosa", "scipy"]
 
 
 def test_code_pin_covers_inference_backends(monkeypatch):
@@ -2287,6 +2287,54 @@ def test_partially_unhashable_inference_stack_fails_closed(monkeypatch):
     )
     digest, covered = melody_provenance.extractor_code_fingerprint("basic_pitch")
     assert covered == ("basic_pitch",) and harness_is_sha256(digest)
+
+
+def test_pyin_code_closure_covers_scipy():
+    """pyin は scipy を **直接** 実行するのでコード pin の閉包に含める（#217）。
+
+    `extract_pyin_observation` は `_highpass_melody_signal`
+    （`scipy.signal.butter` / `sosfiltfilt`）で前処理した波形を `librosa.pyin` へ渡す。
+    patch された scipy はフィルタ後の波形＝F0＝ゲート判定を変えるのに、librosa の
+    pin も version も動かない。
+    """
+    import inspect
+
+    from svp_rpe.melody import provenance as melody_provenance
+    from svp_rpe.melody.extractors import extract_pyin_observation
+
+    assert "scipy" in melody_provenance._EXTRACTOR_CODE_PACKAGES["pyin"]
+    # 前提（scipy を直接呼ぶ前処理を通す）が実装に残っていることを固定する。
+    assert "_highpass_melody_signal" in inspect.getsource(extract_pyin_observation)
+
+    digest, covered = melody_provenance.extractor_code_fingerprint("pyin")
+    assert "scipy" in covered and harness_is_sha256(digest)
+
+
+def test_finder_failure_is_unhashable_not_absent(monkeypatch):
+    """`find_spec` の例外は absent でなく unhashable = fail-closed（#217）。
+
+    top-level 名は **未導入なら None** が返る。例外は「導入されているかもしれないのに
+    解決できない」状態（sys.modules 上で `__spec__` 欠落 → `ValueError` 等）なので、
+    absent として skip すると実行されうる実装を覆わない digest を publish しうる。
+    """
+    import importlib.util
+
+    from svp_rpe.melody import provenance as melody_provenance
+
+    real_find_spec = importlib.util.find_spec
+
+    def raising_find_spec(name, *args, **kwargs):
+        if name == "librosa":
+            raise ValueError("librosa.__spec__ is None")
+        return real_find_spec(name, *args, **kwargs)
+
+    monkeypatch.setattr(importlib.util, "find_spec", raising_find_spec)
+    assert melody_provenance.package_code_state("librosa") == (
+        melody_provenance.STATE_UNHASHABLE,
+        None,
+    )
+    with pytest.raises(LearnedModelUnavailable, match="cannot be fingerprinted"):
+        melody_provenance.extractor_code_fingerprint("pyin")
 
 
 def test_observe_route_rejects_inference_code_swapped_during_run(monkeypatch, tmp_path):

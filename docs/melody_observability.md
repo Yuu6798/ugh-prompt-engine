@@ -474,12 +474,14 @@ pin を必須化する = 記録が済むまで Go を出さない fail-closed �
   **実行 backend も覆う**（CREPE / basic-pitch は TensorFlow がモデルグラフを実行し、
   Demucs は torch が実行するため、抽出器パッケージだけでは patch を検出できない）:
   crepe→`crepe`+`tensorflow`/`keras`、basic_pitch→`basic_pitch`+TF/ONNX/CoreML/TFLite、
-  melodia→`essentia`（ネイティブ実装が算法そのもの）、pyin→`librosa`（同左）、
+  melodia→`essentia`（ネイティブ実装が算法そのもの）、pyin→`librosa`+`scipy`、
   分離→`demucs`+`torch`。加えて **`librosa` は全抽出器の閉包に入る** — 本アダプタ層が
   非分離経路の波形 decode・Melodia 入力のリサンプル・basic-pitch の被覆分母となる実尺取得に
   librosa を使うため、patch された librosa は抽出器へ渡る波形やゲート指標を変えるのに
   source audio hash も抽出器 pin も version も動かない。numpy/scipy は汎用数値基盤として
-  線の外に置く。import できなかった backend は飛ばし、**実際に覆った名前**を
+  線の外に置くのが原則だが、**本層のコードが直接呼ぶ場合は閉包に入れる** — pyin は
+  `_highpass_melody_signal`（`scipy.signal.butter` / `sosfiltfilt`）で前処理してから
+  `librosa.pyin` へ渡すため、patch された scipy はフィルタ後の波形＝F0＝ゲート判定を変える。import できなかった backend は飛ばし、**実際に覆った名前**を
   `extractor_code_packages` / `separation_code_packages` に列挙する（被覆の正直会計）。
   コード hash の解決は `importlib.util.find_spec` で**モジュールを実行せず**場所だけを
   引くので、bind を**当該パッケージの import より前**に置ける。ハーネスは run の最初に
@@ -494,6 +496,10 @@ pin を必須化する = 記録が済むまで Go を出さない fail-closed �
   でありうるため）。**分離（Demucs）側も同じ**で、分離前に bind し分離後に再検証する。
   推論を行うパッケージのコード hash を**採れない**場合（zip/namespace レイアウト、
   ロード済みファイルが読めない等）は、無記入で measured 行を出さず `unavailable` にする。
+  `find_spec` 自体が例外を投げた場合（`sys.modules` にあるが `__spec__` 欠落 =`ValueError`、
+  meta path finder の失敗等）も `unhashable` として fail-closed に倒す — top-level 名は
+  **未導入なら `None` が返る**ので、例外は「導入されているかもしれないのに解決できない」
+  を意味し、absent として skip すると実行されうる実装を覆わない pin を publish しうる。
   **部分被覆も同様**: 未導入の optional backend（`absent`）は「実行されていない」ので
   飛ばしてよいが、**導入済み（= 実行されうる）なのに hash できない**（`unhashable`）
   パッケージがあれば、他だけで digest を作らず fail-closed にする（実行された実装の一部を
