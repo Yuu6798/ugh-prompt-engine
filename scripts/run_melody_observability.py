@@ -54,7 +54,7 @@ from svp_rpe.melody.extractors import observe_assist_notes, observe_via_route  #
 from svp_rpe.melody.observability import (  # noqa: E402
     ObservabilityThresholds,
     assess_observability,
-    gate_status_from_rounded_metrics,
+    gate_reasons,
 )
 from svp_rpe.melody.routing import select_routes  # noqa: E402
 from svp_rpe.rpe.learned import LearnedModelUnavailable  # noqa: E402
@@ -500,6 +500,27 @@ def _route_provenance(row: Dict[str, Any]) -> "tuple":
     )
 
 
+def _evaluator_code_sha256() -> str:
+    """verdict を解釈するコード（評価器＋依存モジュール）の digest。
+
+    verdict は入力 report（report_pins）と registry を pin するが、それらを解釈する
+    **コード**（`evaluate_m1_real_go_bar` / `select_routes` の route matrix / `gate_reasons`
+    の閾値ロジック）が変われば、同じ pin から別 verdict が再導出されうる。この digest を
+    verdict に載せることで、別 checkout で候補経路や scoring が変わったのに同じ report_pins/
+    registry_sha256 で別結果になる stale を検出可能にする（Codex 指摘・AGENTS §8）。
+    """
+    import svp_rpe.melody.observability as _obs
+    import svp_rpe.melody.routing as _routing
+
+    digest = hashlib.sha256()
+    module_paths = [Path(__file__), Path(_obs.__file__), Path(_routing.__file__)]
+    for path in sorted(module_paths, key=lambda p: p.name):
+        digest.update(path.name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
 def _is_stably_sufficient(reports: List[Dict[str, Any]], fixture_id: str, route: str) -> bool:
     """全 report でその route が観測され、かつ全て outcome=='sufficient' なら True。
 
@@ -603,12 +624,11 @@ def evaluate_m1_real_go_bar(
     - payload の gate metric が非有限（NaN/Infinity）または範囲外（率/被覆は [0,1]、
       ノート数は非負 int でない）（`NaN < min` を利用した passing すり抜けを許さない・Codex 指摘）
     - measured な route 行が根拠 report payload / gate metrics を欠く、`report.status`
-      が `outcome` と不一致、payload metrics を凍結ゲートで丸め許容誤差込みに三値判定
-      した結果が `outcome` と**確定的に**食い違う（曖昧＝真値が閾値 ±5e-5 内で 4 桁丸めが
-      境界を跨ぐケースは除外し false-positive を避ける。両方向を照合し、outcome=sufficient
-      の水増しも outcome=insufficient で隠した実 sufficient＝特に negative の偽陽性隠蔽も
-      弾く）、または payload 自身の `route` が行の route と不一致（`gate_status_from_
-      rounded_metrics` を用い assess_observability と閾値ロジックを共有・Codex 指摘）
+      が `outcome` と不一致、payload metrics から凍結ゲートで**厳密に**再導出した status が
+      `outcome` と**両方向いずれかで**不一致（`to_dict` が metrics を丸めず厳密値を保存する
+      ため丸め起因の曖昧さは無く、outcome=sufficient の水増しも outcome=insufficient で隠した
+      実 sufficient＝特に negative の偽陽性隠蔽も曖昧さなく弾く）、または payload 自身の
+      `route` が行の route と不一致（`gate_reasons` を assess_observability と共有・Codex 指摘）
 
     候補経路は positive fixture の registry 凍結 kind が規定する matrix に限定し、
     report に混入した非登録経路は verdict に効かせない（Codex 指摘）。
@@ -954,14 +974,15 @@ def evaluate_m1_real_go_bar(
                         f"reports[{idx}] cross_extractor_agreement={_agreement!r} は "
                         "None か [0,1] の有限値でない (fail-closed)"
                     )
-                # 凍結ゲートに対し丸め許容誤差込みで status を三値判定（sufficient /
-                # insufficient / ambiguous）。曖昧（真値が閾値の ±5e-5 内で 4 桁丸めが境界を
-                # 跨ぎうる）なら flag しない。確定した不整合は**両方向とも**弾く:
-                #   - outcome=sufficient なのに確定 insufficient → go への水増し
-                #   - outcome=insufficient なのに確定 sufficient → 特に negative で「実は
-                #     偽陽性」を隠蔽（neg_false_positive は outcome 文字列を信用するため）
-                # blanket exemption（片方向のみ照合）だと後者を見逃す（Codex 指摘）。
-                revalidated_status = gate_status_from_rounded_metrics(
+                # 凍結ゲートに対し payload metrics から status を**厳密に**再導出して
+                # outcome と照合する（両方向）。report.to_dict() が metrics を丸めなくなった
+                # ため（厳密値保存）、gate_reasons による再導出は原判定と厳密一致し、丸め起因
+                # の曖昧さ・false-positive が消える。確定した不整合を両方向とも弾く:
+                #   - outcome=sufficient なのに再導出 insufficient → go への水増し
+                #   - outcome=insufficient なのに再導出 sufficient → 特に negative で「実は
+                #     偽陽性」を outcome 文字列で隠蔽（neg_false_positive 対策）
+                # （Codex 指摘・gate_reasons を assess_observability と共有）。
+                revalidated_reasons = gate_reasons(
                     frozen_thresholds,
                     voiced_coverage=report_payload["voiced_coverage"],
                     note_count=report_payload["note_count"],
@@ -971,11 +992,12 @@ def evaluate_m1_real_go_bar(
                     octave_jump_rate=report_payload["octave_jump_rate"],
                     cross_extractor_agreement=report_payload.get("cross_extractor_agreement"),
                 )
-                if revalidated_status != "ambiguous" and revalidated_status != row["outcome"]:
+                revalidated_status = "sufficient" if not revalidated_reasons else "insufficient"
+                if revalidated_status != row["outcome"]:
                     raise ValueError(
                         f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} in "
                         f"reports[{idx}] outcome {row['outcome']!r} だが payload metrics は凍結"
-                        f"ゲートで {revalidated_status!r} を示す（丸め許容誤差外の確定した不整合）; "
+                        f"ゲートで {revalidated_status!r} を示す {revalidated_reasons}; "
                         "status と metrics の食い違いを許さない (fail-closed)"
                     )
                 # 行が凍結 route 定義（select_routes）の抽出器/前処理と一致することを要求。
@@ -1148,6 +1170,10 @@ def evaluate_m1_real_go_bar(
         "verdict": verdict,
         "fully_measured_routes": sorted(fully_measured_routes),
         "registry_sha256": ref_registry_sha256,
+        # verdict を解釈したコードの digest。別 checkout で route matrix / scoring / ゲート
+        # 論理が変われば同じ report_pins/registry_sha256 でも別 verdict になりうる stale を
+        # 検出可能にする（Codex 指摘・AGENTS §8）。
+        "evaluator_code_sha256": _evaluator_code_sha256(),
         "n_reports": len(reports),
         "surviving_routes": surviving_routes,
         "bar": {

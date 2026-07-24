@@ -1037,6 +1037,22 @@ def test_evaluate_go_bar_go_when_survivor():
     assert verdict["routes"][_GO_BAR_ROUTE]["neg_false_positive"] == 0
 
 
+def test_evaluate_go_bar_verdict_pins_evaluator_code_digest():
+    """verdict が verdict を解釈したコード（評価器+依存モジュール）の digest を pin する。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+    verdict = harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+    assert verdict["verdict"] == "go"
+    # コード digest が載り、実モジュールの再計算 digest と一致する。
+    assert len(verdict["evaluator_code_sha256"]) == 64
+    assert verdict["evaluator_code_sha256"] == harness._evaluator_code_sha256()
+
+
 def test_evaluate_go_bar_no_go_below_threshold():
     """crepe sufficient が 2/4 positive のみ → no_go、surviving_routes は空。"""
     import scripts.run_melody_observability as harness
@@ -1721,35 +1737,6 @@ def test_evaluate_go_bar_fails_closed_on_metrics_gate_inconsistency():
                 row["report"] = {**row["report"], "note_count": 1, "phrase_count": 1}
     with pytest.raises(ValueError, match="metrics"):
         harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
-
-
-def test_evaluate_go_bar_tolerates_rounded_insufficient_metrics():
-    """report.status=insufficient だが 4 桁丸めで metrics が passing に見えても誤検出しない。
-
-    voiced_coverage=0.29996（真値 insufficient）は to_dict で 0.3 に丸まり再導出は
-    sufficient になるが、これは改竄利得のない逆方向なので flag しない（Codex 指摘・
-    自分の正当な report を tampered 扱いする false-positive を排除）。
-    """
-    import scripts.run_melody_observability as harness
-
-    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
-    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
-    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
-    r1 = _make_go_bar_report(outcomes, default_outcome="insufficient")
-    r2 = _make_go_bar_report(outcomes, default_outcome="insufficient")
-    # waltz 本命経路: status=insufficient のまま、丸め境界で全 passing に見える metrics。
-    for report in (r1, r2):
-        for row in report["fixtures"]["real_vocal_waltz"]["routes"]:
-            if row["route"] == _GO_BAR_ROUTE:
-                row["report"] = {
-                    "status": "insufficient", "route": _GO_BAR_ROUTE,
-                    "voiced_coverage": 0.3, "note_count": 12, "phrase_count": 3,
-                    "confidence_mean": 0.9, "low_confidence_rate": 0.05,
-                    "octave_jump_rate": 0.0, "cross_extractor_agreement": None,
-                }
-    # 誤検出せず評価が進む（waltz=insufficient・他 3 positive sufficient → pos 3/4 → go）。
-    verdict = harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
-    assert verdict["verdict"] == "go"
 
 
 def test_evaluate_go_bar_fails_closed_on_negative_insufficient_hiding_passing_metrics():
