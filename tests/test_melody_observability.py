@@ -347,10 +347,16 @@ def _fake_remote_dir(tmp_path, *, model="htdemucs_ft", signatures=("f7e0c4bc", "
     """demucs 同梱 remote メタデータ（files.txt + bag yaml）の最小複製を作る。"""
     remote = tmp_path / "remote"
     remote.mkdir(exist_ok=True)
-    (remote / "files.txt").write_text(_FAKE_FILES_TXT, encoding="utf-8")
-    (remote / f"{model}.yaml").write_text(
-        yaml.safe_dump({"models": list(signatures), "segment": 40}), encoding="utf-8"
-    )
+    # 既存ファイルは上書きしない: `_demucs_remote_dir` は呼ばれるたびにこの関数を通るため、
+    # 上書きするとテストが加えた編集（bag YAML の差し替え等）を消してしまう。
+    files_txt = remote / "files.txt"
+    if not files_txt.exists():
+        files_txt.write_text(_FAKE_FILES_TXT, encoding="utf-8")
+    bag_yaml = remote / f"{model}.yaml"
+    if not bag_yaml.exists():
+        bag_yaml.write_text(
+            yaml.safe_dump({"models": list(signatures), "segment": 40}), encoding="utf-8"
+        )
     return remote
 
 
@@ -570,12 +576,33 @@ def test_isolate_vocals_with_provenance_emits_stem_and_weights_hashes(monkeypatc
     result = adapter.isolate_vocals_with_provenance("whatever.wav")
     assert result.sample_rate == sr
     assert result.stem_sha256 == sha256_of_float32(vocals)
+    # モデル入力 = チェックポイント + bag 定義 YAML（signature 選択・weights・segment）。
     expected_files = [
         weights_dir / name for name in adapter._expected_weight_filenames("htdemucs_ft")
-    ]
+    ] + [tmp_path / "remote" / "htdemucs_ft.yaml"]
     assert result.weights_sha256 == sha256_of_files(expected_files)
     assert len(result.weights_sha256) == 64
     assert set(result.weights_filenames) == {p.name for p in expected_files}
+    assert "htdemucs_ft.yaml" in result.weights_filenames
+
+
+def test_separation_weights_pin_covers_bag_metadata(monkeypatch, tmp_path):
+    """同一チェックポイントでも bag YAML が違えば weights pin が変わる（Codex #217）。
+
+    bag YAML は実行時のモデル入力（signature 選択・per-source weights・segment）で、
+    同じ `.th` でも別の vocals stem を生む。pin が .th だけを覆っていると、別構成の
+    分離器が同一 separation_weights_sha256 を名乗れてしまう。
+    """
+    adapter, _ = _provision_gate(monkeypatch, tmp_path, weights_present=True)
+    before = adapter.resolve_separation_weights().sha256
+
+    bag_yaml = tmp_path / "remote" / "htdemucs_ft.yaml"
+    spec = yaml.safe_load(bag_yaml.read_text(encoding="utf-8"))
+    spec["segment"] = 20  # signature はそのまま、構成だけ差し替える
+    bag_yaml.write_text(yaml.safe_dump(spec), encoding="utf-8")
+
+    after = adapter.resolve_separation_weights().sha256
+    assert before != after
 
 
 def test_separation_route_row_emits_stem_and_weights_pins(monkeypatch, tmp_path):

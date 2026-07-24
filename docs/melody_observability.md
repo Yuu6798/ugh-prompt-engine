@@ -274,6 +274,9 @@ python -c "import demucs.pretrained as p; p.get_model('htdemucs_ft')"
 python -c "import json; from svp_rpe.rpe.learned.source_separation_adapter import \
   describe_separation_weights as d; print(json.dumps(d(), indent=2, ensure_ascii=False))"
 #   → {"model": "htdemucs_ft", "version": "...", "sha256": "...", "files": [...]}
+#   sha256 は checkpoint（.th）だけでなく **bag 定義 YAML**（htdemucs_ft.yaml）も覆う。
+#   bag YAML は signature 選択・per-source weights・segment を持つ実行時のモデル入力で、
+#   同じ .th でも構成が違えば別の stem が出るため（Codex #217）。
 #   この version / sha256 を registry.yaml の provenance.model_weights.demucs へ記録する
 #   （crepe / melodia の重み pin は run 出力 report の routes[].extractor_weights_sha256）。
 

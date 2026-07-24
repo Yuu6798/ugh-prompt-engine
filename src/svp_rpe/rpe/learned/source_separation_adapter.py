@@ -187,6 +187,18 @@ def _model_signatures(remote_dir: Path, model: str) -> List[str]:
     return [model]
 
 
+def _bag_metadata_file(remote_dir: Path, model: str) -> Optional[Path]:
+    """bag モデルの定義 YAML（`htdemucs_ft.yaml`）。単体モデルなら None。
+
+    bag YAML は **実行時のモデル入力**である: 使用する checkpoint signature を選び、
+    `weights`（ソース別重み付け）や `segment` など `BagOfModels` 構築時に読まれる
+    フィールドを持つ。同じ `.th` でも bag メタデータが違えば別の vocals stem が出る
+    ため、`separation_weights_sha256` の hash 対象に含める（Codex #217）。
+    """
+    bag_yaml = remote_dir / f"{model}.yaml"
+    return bag_yaml if bag_yaml.is_file() else None
+
+
 def _expected_weight_filenames(model: str) -> List[str]:
     """`model` の実行に必要なチェックポイントのファイル名（torch hub cache 上の名前）。
 
@@ -252,11 +264,16 @@ def _torch_hub_checkpoint_dirs() -> List[Path]:
 
 
 def locate_separation_weights(model: str = DEFAULT_MODEL) -> List[Path]:
-    """`model` のチェックポイントがローカルに**実在する**ことを確認してパスを返す。
+    """`model` の**モデル入力ファイル**がローカルに実在することを確認してパスを返す。
 
-    探索先は `_torch_hub_checkpoint_dirs()`（= `separate_stems` が実際に重みを
-    読む場所）のみ。ここで返すパスがそのまま `separation_weights_sha256` の
-    hash 対象になるので、「pin した bytes = モデル入力になった bytes」が保たれる。
+    返すのは (1) チェックポイント（`.th`）と (2) bag モデルの定義 YAML。後者も
+    `BagOfModels` 構築時に読まれる実行時入力（signature 選択・`weights`・`segment`）
+    なので、同じ `.th` でも bag メタデータが違えば別の stem が出る。両方を pin 対象に
+    含めることで `separation_weights_sha256` が分離器の構成まで識別する（Codex #217）。
+
+    チェックポイントの探索先は `_torch_hub_checkpoint_dirs()`（= `separate_stems` が
+    実際に重みを読む場所）のみ。ここで返すパスがそのまま hash 対象になるので、
+    「pin した bytes = モデル入力になった bytes」が保たれる。
 
     hash は取らない（`ensure_separation_available` の probe を I/O 軽量に保つ）。
 
@@ -290,6 +307,12 @@ def locate_separation_weights(model: str = DEFAULT_MODEL) -> List[Path]:
             "重みは demucs が読む torch hub cache に置くこと（別の場所へ置きたい場合は "
             f"TORCH_HOME を設定する）。探索したディレクトリ: {[str(d) for d in search_dirs]}"
         )
+    # bag 定義 YAML（demucs パッケージ同梱）も実行時のモデル入力なので pin 対象に含める。
+    remote_dir = _demucs_remote_dir()
+    if remote_dir is not None:
+        bag_yaml = _bag_metadata_file(remote_dir, model)
+        if bag_yaml is not None:
+            found.append(bag_yaml)
     return found
 
 
