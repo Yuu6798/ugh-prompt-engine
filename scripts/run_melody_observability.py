@@ -468,7 +468,10 @@ def run_external(
 
     results: Dict[str, Any] = {
         "mode": "external",
-        "manifest_path": str(manifest_path),
+        # ★resolve 済み絶対パスを記録する（audio_path と同型）。verbatim（相対）だと、
+        # 後で別 cwd から --evaluate-go-bar したとき #63 の manifest 衝突ガードが
+        # evaluator の cwd 基準で誤解決し、生成時の manifest を守れない（#64・Codex 指摘）。
+        "manifest_path": str(Path(manifest_path).resolve()),
         "manifest_sha256": manifest_sha256,
         "registry_sha256": registry_sha256,
         "thresholds_source": thresholds_source,

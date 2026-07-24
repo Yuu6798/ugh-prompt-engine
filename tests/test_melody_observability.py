@@ -1369,6 +1369,43 @@ def test_run_external_stamps_distinct_run_id(monkeypatch, tmp_path):
     assert r1["generator_code_sha256"] == harness._generator_code_sha256()
 
 
+def test_run_external_records_resolved_manifest_path(monkeypatch, tmp_path):
+    """run_external は相対 manifest 引数でも resolve 済み絶対パスを記録する（#64）。
+
+    verbatim（相対）だと別 cwd からの --evaluate-go-bar で #63 の manifest 衝突ガードが
+    誤解決するため、生成時に絶対パスへ resolve して pin する（audio_path と同型）。
+    """
+    import dataclasses
+    import json
+    import os
+
+    import scripts.run_melody_observability as harness
+
+    monkeypatch.setattr(harness, "_run_routes_on_file", lambda *a, **k: [])
+    monkeypatch.setattr(
+        harness,
+        "_load_registry",
+        lambda: (
+            {
+                "observation_gate": dataclasses.asdict(_default_thresholds()),
+                "external_fixtures": [
+                    {"id": "real_vocal_jrock", "input_kind": "vocal_track"}
+                ],
+            },
+            "0" * 64,
+        ),
+    )
+    audio = tmp_path / "x.wav"
+    audio.write_bytes(b"RIFFfake")
+    (tmp_path / "m.json").write_text(
+        json.dumps([{"id": "real_vocal_jrock", "path": "x.wav", "input_kind": "vocal_track"}])
+    )
+    monkeypatch.chdir(tmp_path)
+    results = harness.run_external(Path("m.json"))  # 相対で渡す。
+    assert os.path.isabs(results["manifest_path"])
+    assert results["manifest_path"] == str((tmp_path / "m.json").resolve())
+
+
 def test_generator_code_paths_include_melody_and_adapters():
     """_generator_code_paths は harness ＋ melody モジュール ＋ 下流 learned adapter ＋
     pyin baseline が依存する physical_features を含む（#50/#51/#52）。"""
