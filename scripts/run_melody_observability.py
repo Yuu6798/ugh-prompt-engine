@@ -54,7 +54,7 @@ from svp_rpe.melody.extractors import observe_assist_notes, observe_via_route  #
 from svp_rpe.melody.observability import (  # noqa: E402
     ObservabilityThresholds,
     assess_observability,
-    gate_reasons,
+    gate_status_from_rounded_metrics,
 )
 from svp_rpe.melody.routing import select_routes  # noqa: E402
 from svp_rpe.rpe.learned import LearnedModelUnavailable  # noqa: E402
@@ -603,12 +603,12 @@ def evaluate_m1_real_go_bar(
     - payload の gate metric が非有限（NaN/Infinity）または範囲外（率/被覆は [0,1]、
       ノート数は非負 int でない）（`NaN < min` を利用した passing すり抜けを許さない・Codex 指摘）
     - measured な route 行が根拠 report payload / gate metrics を欠く、`report.status`
-      が `outcome` と不一致、payload metrics から凍結ゲートで **再導出** した status が
-      `outcome`='sufficient' なのに 'insufficient'（＝sufficient の水増し。丸め起因の
-      逆方向 false-positive を避けるため方向限定）、または payload 自身の `route` が行の
-      route と不一致（outcome/status だけ改竄し metrics を未達のまま残す／別経路の
-      passing payload を貼るのを許さない・`gate_reasons` を assess_observability と共有・
-      Codex 指摘）
+      が `outcome` と不一致、payload metrics を凍結ゲートで丸め許容誤差込みに三値判定
+      した結果が `outcome` と**確定的に**食い違う（曖昧＝真値が閾値 ±5e-5 内で 4 桁丸めが
+      境界を跨ぐケースは除外し false-positive を避ける。両方向を照合し、outcome=sufficient
+      の水増しも outcome=insufficient で隠した実 sufficient＝特に negative の偽陽性隠蔽も
+      弾く）、または payload 自身の `route` が行の route と不一致（`gate_status_from_
+      rounded_metrics` を用い assess_observability と閾値ロジックを共有・Codex 指摘）
 
     候補経路は positive fixture の registry 凍結 kind が規定する matrix に限定し、
     report に混入した非登録経路は verdict に効かせない（Codex 指摘）。
@@ -905,11 +905,8 @@ def evaluate_m1_real_go_bar(
                         f"row route {row['route']!r}; 別経路の観測 payload のすり替えを許さない "
                         "(fail-closed)"
                     )
-                # status 文字列一致だけでは、outcome/report.status を両方 sufficient に
-                # 改竄しつつ payload metrics（note_count 等）を凍結ゲート未満に残せる。
-                # 凍結ゲート（frozen_thresholds）に対し payload metrics から status を
-                # **再導出**して outcome と一致するか検証する（gate_reasons は
-                # assess_observability と同じ single source of truth・Codex 指摘）。
+                # status と payload metrics の整合を凍結ゲートで revalidate する。
+                # outcome/report.status を改竄しつつ metrics を残す手書き report を弾く。
                 _METRIC_KEYS = (
                     "voiced_coverage", "note_count", "phrase_count",
                     "confidence_mean", "low_confidence_rate", "octave_jump_rate",
@@ -922,9 +919,9 @@ def evaluate_m1_real_go_bar(
                         "(fail-closed)"
                     )
                 # 数値の健全性検証。json.loads は NaN/Infinity を受理し、`NaN < min` は
-                # False になるため、非有限や範囲外の metric を混ぜても gate_reasons が
-                # sufficient を再導出しうる。再導出の前に、率/被覆は [0,1] の有限値、
-                # ノート数は非負 int であることを要求する（Codex 指摘・手書き report 対策）。
+                # False になるため、非有限や範囲外の metric を混ぜても sufficient を再導出
+                # しうる。判定の前に、率/被覆は [0,1] の有限値、ノート数は非負 int である
+                # ことを要求する（Codex 指摘・手書き report 対策）。
                 for _key in ("voiced_coverage", "confidence_mean", "low_confidence_rate", "octave_jump_rate"):
                     _val = report_payload[_key]
                     if (
@@ -957,7 +954,14 @@ def evaluate_m1_real_go_bar(
                         f"reports[{idx}] cross_extractor_agreement={_agreement!r} は "
                         "None か [0,1] の有限値でない (fail-closed)"
                     )
-                recomputed_reasons = gate_reasons(
+                # 凍結ゲートに対し丸め許容誤差込みで status を三値判定（sufficient /
+                # insufficient / ambiguous）。曖昧（真値が閾値の ±5e-5 内で 4 桁丸めが境界を
+                # 跨ぎうる）なら flag しない。確定した不整合は**両方向とも**弾く:
+                #   - outcome=sufficient なのに確定 insufficient → go への水増し
+                #   - outcome=insufficient なのに確定 sufficient → 特に negative で「実は
+                #     偽陽性」を隠蔽（neg_false_positive は outcome 文字列を信用するため）
+                # blanket exemption（片方向のみ照合）だと後者を見逃す（Codex 指摘）。
+                revalidated_status = gate_status_from_rounded_metrics(
                     frozen_thresholds,
                     voiced_coverage=report_payload["voiced_coverage"],
                     note_count=report_payload["note_count"],
@@ -967,21 +971,12 @@ def evaluate_m1_real_go_bar(
                     octave_jump_rate=report_payload["octave_jump_rate"],
                     cross_extractor_agreement=report_payload.get("cross_extractor_agreement"),
                 )
-                recomputed_status = "sufficient" if not recomputed_reasons else "insufficient"
-                # **方向限定**で照合する。改竄で危険なのは「outcome=sufficient なのに
-                # metrics が凍結ゲート未達」（go への水増し）方向だけなので、そこだけ
-                # fail-closed にする。逆方向（outcome=insufficient・recompute=sufficient）は
-                # 改竄の利得がなく、かつ to_dict の 4 桁丸めで failing 値が閾値を上に跨ぐ
-                # （例 voiced_coverage 0.29996→0.3）と正当な insufficient report をここで
-                # 誤って tampered 扱いする false-positive の在り処なので、flag しない
-                # （Codex 指摘。丸めは危険方向には出ない=passing 値は ≤4 桁閾値の安全側に
-                # 留まる）。
-                if row["outcome"] == "sufficient" and recomputed_status == "insufficient":
+                if revalidated_status != "ambiguous" and revalidated_status != row["outcome"]:
                     raise ValueError(
                         f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} in "
-                        f"reports[{idx}] outcome 'sufficient' but payload metrics imply "
-                        f"'insufficient' under the frozen gate {recomputed_reasons}; "
-                        "sufficient の水増しを許さない (fail-closed)"
+                        f"reports[{idx}] outcome {row['outcome']!r} だが payload metrics は凍結"
+                        f"ゲートで {revalidated_status!r} を示す（丸め許容誤差外の確定した不整合）; "
+                        "status と metrics の食い違いを許さない (fail-closed)"
                     )
                 # 行が凍結 route 定義（select_routes）の抽出器/前処理と一致することを要求。
                 # 経路名だけ `demucs_vocals_then_crepe` を名乗り実際は pyin/librosa で測った

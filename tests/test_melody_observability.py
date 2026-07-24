@@ -1752,6 +1752,33 @@ def test_evaluate_go_bar_tolerates_rounded_insufficient_metrics():
     assert verdict["verdict"] == "go"
 
 
+def test_evaluate_go_bar_fails_closed_on_negative_insufficient_hiding_passing_metrics():
+    """negative で outcome=insufficient なのに metrics が明確に passing なら fail-closed。
+
+    direction 限定にすると、negative 側の「実は sufficient（偽陽性）を insufficient と
+    ラベルして隠す」改竄を見逃す。丸め許容誤差込みの両方向照合で捕捉する（Codex 指摘）。
+    """
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    r2 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    # negative 本命経路: outcome/status=insufficient のまま metrics は**明確に** passing
+    # （丸め幅外・実際は sufficient で route が negative で偽陽性を出しているのを隠蔽）。
+    for report in (r1, r2):
+        for row in report["fixtures"][_GO_BAR_NEGATIVE]["routes"]:
+            if row["route"] == _GO_BAR_ROUTE:
+                row["report"] = {
+                    "status": "insufficient", "route": _GO_BAR_ROUTE,
+                    "voiced_coverage": 0.9, "note_count": 12, "phrase_count": 3,
+                    "confidence_mean": 0.9, "low_confidence_rate": 0.05,
+                    "octave_jump_rate": 0.0, "cross_extractor_agreement": None,
+                }
+    with pytest.raises(ValueError, match="食い違い"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
 def test_evaluate_go_bar_fails_closed_on_report_route_mismatch():
     """report payload の route が行 route と食い違えば fail-closed（別経路 payload のすり替え）。"""
     import scripts.run_melody_observability as harness

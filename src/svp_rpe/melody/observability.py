@@ -32,6 +32,7 @@ __all__ = [
     "notes_from_frames",
     "cross_extractor_agreement",
     "gate_reasons",
+    "gate_status_from_rounded_metrics",
     "assess_observability",
 ]
 
@@ -426,6 +427,73 @@ def gate_reasons(
                 f"{thresholds.min_cross_extractor_agreement:.3f}"
             )
     return reasons
+
+
+# report.to_dict() は float metrics を 4 桁に丸める。丸めの最大誤差 = 0.5 * 1e-4。
+_ROUND_TOL = 5e-5
+
+
+def gate_status_from_rounded_metrics(
+    thresholds: ObservabilityThresholds,
+    *,
+    voiced_coverage: float,
+    note_count: int,
+    phrase_count: int,
+    confidence_mean: float,
+    low_confidence_rate: float,
+    octave_jump_rate: float,
+    cross_extractor_agreement: Optional[float],
+    tol: float = _ROUND_TOL,
+) -> str:
+    """4 桁丸め済み metrics から status を許容誤差込みで三値判定する。
+
+    返り値: ``"sufficient"`` / ``"insufficient"`` / ``"ambiguous"``。
+
+    `report.to_dict()` は float metrics を 4 桁に丸めるため、真値が閾値の ±tol 以内だと
+    丸めで境界を跨ぎうる（例 voiced_coverage 0.29996 → 0.3）。各条件を「明確に pass /
+    明確に fail / 曖昧（丸め幅内）」に三分し、1 つでも**明確 fail** なら
+    ``"insufficient"``、全て**明確 pass** なら ``"sufficient"``、どれかが曖昧で明確 fail が
+    無ければ ``"ambiguous"`` を返す。丸め済み report の revalidation で、丸め起因の
+    誤判定を避けつつ、閾値から明確に外れた status 改竄を（両方向とも）捕捉するために使う。
+    整数 metric（note_count/phrase_count）は丸めが無いので厳密比較。
+    """
+    definite_fail = False
+    ambiguous = False
+    if note_count < thresholds.min_note_count:
+        definite_fail = True
+    if phrase_count < thresholds.min_phrase_count:
+        definite_fail = True
+    # min-threshold（value >= threshold で pass）。
+    for value, threshold in (
+        (voiced_coverage, thresholds.min_voiced_coverage),
+        (confidence_mean, thresholds.min_confidence_mean),
+    ):
+        if value < threshold - tol:
+            definite_fail = True
+        elif value < threshold + tol:
+            ambiguous = True
+    # max-threshold（value <= threshold で pass）。
+    for value, threshold in (
+        (low_confidence_rate, thresholds.max_low_confidence_rate),
+        (octave_jump_rate, thresholds.max_octave_jump_rate),
+    ):
+        if value > threshold + tol:
+            definite_fail = True
+        elif value > threshold - tol:
+            ambiguous = True
+    if thresholds.min_cross_extractor_agreement is not None:
+        threshold = thresholds.min_cross_extractor_agreement
+        if cross_extractor_agreement is None:
+            definite_fail = True  # required but unavailable
+        elif cross_extractor_agreement < threshold - tol:
+            definite_fail = True
+        elif cross_extractor_agreement < threshold + tol:
+            ambiguous = True
+    if definite_fail:
+        return "insufficient"
+    if ambiguous:
+        return "ambiguous"
+    return "sufficient"
 
 
 def assess_observability(
