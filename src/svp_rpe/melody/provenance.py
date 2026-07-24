@@ -37,7 +37,10 @@ __all__ = [
     "extractor_weights_fingerprint",
     "require_extractor_weights_fingerprint",
     "extractor_code_sha256",
+    "extractor_code_fingerprint",
     "package_code_sha256",
+    "packages_code_sha256",
+    "SEPARATION_CODE_PACKAGES",
     "record_load_time_pin",
     "load_time_pin",
     "reset_load_time_pins",
@@ -165,12 +168,28 @@ def _resolve_fingerprint(
 # **同一 version のままローカルで patch / repack された**パッケージは素通りする
 # （`_generator_code_paths()` は first-party しか含めない）。実際に推論した third-party
 # コードの content hash も pin する（Codex #217）。
-_EXTRACTOR_CODE_PACKAGE = {
-    "crepe": "crepe",
-    "basic_pitch": "basic_pitch",
-    "melodia": "essentia",
-    "pyin": "librosa",
+# 抽出器 → 推論を実行するパッケージ群（自身 + **バックエンド**）。basic-pitch / CREPE は
+# TensorFlow(/Keras) がモデルグラフを実行するので、ローカル patch された backend は
+# 抽出器パッケージだけを hash しても検出できない（Codex #217）。Melodia は essentia の
+# ネイティブ実装自身が算法、pyin は librosa 自身が算法（numpy/scipy は汎用数値基盤で
+# 「モデルを走らせる backend」ではないため線をここで引く）。
+# import できないものは飛ばし、**実際に覆った名前を report に列挙**する（被覆の正直会計）。
+_EXTRACTOR_CODE_PACKAGES = {
+    "crepe": ("crepe", "tensorflow", "keras"),
+    "basic_pitch": (
+        "basic_pitch",
+        "tensorflow",
+        "keras",
+        "onnxruntime",
+        "coremltools",
+        "tflite_runtime",
+    ),
+    "melodia": ("essentia",),
+    "pyin": ("librosa",),
 }
+
+# 分離器（Demucs）の推論を実行するパッケージ群。
+SEPARATION_CODE_PACKAGES = ("demucs", "torch")
 
 # コードとみなす拡張子（Python source + ネイティブ拡張）。モデル artifact（.h5 等）は
 # `extractor_weights_sha256` 側で別途 pin するので、二重計上せず責務を分ける。
@@ -209,12 +228,45 @@ def package_code_sha256(package: str, *, use_cache: bool = True) -> Optional[str
         return None
 
 
+def packages_code_sha256(
+    packages: "tuple", *, use_cache: bool = True
+) -> "tuple[Optional[str], tuple]":
+    """複数パッケージのコード hash を 1 本へ畳み、(digest, 覆った名前) を返す。
+
+    import できないパッケージは飛ばす（optional backend は環境によって異なるため）。
+    覆った名前を返すのは、pin が**何を含んでいるか**を report 側で明示するため。
+    """
+    import hashlib
+
+    covered = []
+    digest = hashlib.sha256()
+    for package in packages:
+        package_digest = package_code_sha256(package, use_cache=use_cache)
+        if package_digest is None:
+            continue
+        covered.append(package)
+        digest.update(package.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(package_digest.encode("ascii"))
+        digest.update(b"\0")
+    if not covered:
+        return None, ()
+    return digest.hexdigest(), tuple(covered)
+
+
 def extractor_code_sha256(extractor: str, *, use_cache: bool = True) -> Optional[str]:
-    """`extractor` の推論を提供する third-party パッケージのコード hash。"""
-    package = _EXTRACTOR_CODE_PACKAGE.get(extractor)
-    if package is None:
-        return None
-    return package_code_sha256(package, use_cache=use_cache)
+    """`extractor` の推論を実行するパッケージ群（自身 + backend）のコード hash。"""
+    return extractor_code_fingerprint(extractor, use_cache=use_cache)[0]
+
+
+def extractor_code_fingerprint(
+    extractor: str, *, use_cache: bool = True
+) -> "tuple[Optional[str], tuple]":
+    """`extractor` のコード hash と、実際に覆ったパッケージ名を返す。"""
+    packages = _EXTRACTOR_CODE_PACKAGES.get(extractor)
+    if packages is None:
+        return None, ()
+    return packages_code_sha256(packages, use_cache=use_cache)
 
 
 def record_load_time_pin(extractor: str, sha256: str) -> str:

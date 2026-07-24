@@ -2025,6 +2025,63 @@ def test_route_rows_record_third_party_code_hash(monkeypatch, tmp_path):
     rows = harness._run_routes_on_file(str(wav), "clear_lead", _default_thresholds())
     assert rows[0]["extractor_code_sha256"] == extractor_code_sha256("pyin")
     assert harness._is_sha256(rows[0]["extractor_code_sha256"])
+    # pin が何を覆ったか（抽出器自身 + 実在した backend）を行に列挙する。
+    assert rows[0]["extractor_code_packages"] == ["librosa"]
+
+
+def test_code_pin_covers_inference_backends(monkeypatch):
+    """コード pin は抽出器自身だけでなく**実行 backend** も覆う（#217）。
+
+    basic-pitch / CREPE は TensorFlow がモデルグラフを実行するので、抽出器パッケージ
+    だけを hash してもローカル patch された backend を検出できない。
+    """
+    from svp_rpe.melody import provenance as melody_provenance
+
+    hashed = []
+
+    def fake_package_hash(package, *, use_cache=True):
+        hashed.append(package)
+        return hashlib.sha256(package.encode()).hexdigest()
+
+    monkeypatch.setattr(melody_provenance, "package_code_sha256", fake_package_hash)
+    digest, covered = melody_provenance.extractor_code_fingerprint("basic_pitch")
+    assert "tensorflow" in hashed and "basic_pitch" in hashed
+    assert "tensorflow" in covered and "basic_pitch" in covered
+    assert harness_is_sha256(digest)
+    # 分離側も backend（torch）を含む。
+    assert "torch" in melody_provenance.SEPARATION_CODE_PACKAGES
+
+
+def harness_is_sha256(value):
+    import scripts.run_melody_observability as harness
+
+    return harness._is_sha256(value)
+
+
+def test_observe_route_rejects_inference_code_swapped_during_run(monkeypatch, tmp_path):
+    """推論中にコードが差し替わったら観測を返さず unavailable（#217）。"""
+    from svp_rpe.melody import provenance as melody_provenance
+    from svp_rpe.melody.extractors import observe_via_route_with_provenance
+    from svp_rpe.melody.routing import MelodyRoute
+
+    digests = iter(
+        [
+            hashlib.sha256(b"librosa-v1").hexdigest(),  # 推論前
+            hashlib.sha256(b"librosa-v2").hexdigest(),  # 推論後（差し替え）
+        ]
+    )
+    monkeypatch.setattr(
+        melody_provenance,
+        "extractor_code_fingerprint",
+        lambda extractor, **kwargs: (next(digests), ("librosa",)),
+    )
+    sr = 22050
+    t = np.linspace(0, 1.0, sr, endpoint=False)
+    wav = tmp_path / "lead.wav"
+    sf.write(wav, (0.4 * np.sin(2 * np.pi * 330 * t)).astype(np.float32), sr, subtype="FLOAT")
+    route = MelodyRoute("pyin_direct", "none", "pyin")
+    with pytest.raises(LearnedModelUnavailable, match="code changed during inference"):
+        observe_via_route_with_provenance(str(wav), route)
 
 
 def test_evaluate_go_bar_rejects_placeholder_registry_weight_pin():

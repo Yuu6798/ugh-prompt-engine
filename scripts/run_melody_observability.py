@@ -345,6 +345,7 @@ def _run_routes_on_file(
             "extractor_weights_kind",
             "extractor_weights_files",
             "extractor_code_sha256",
+            "extractor_code_packages",
         ):
             if key in route_provenance:
                 row[key] = route_provenance[key]
@@ -363,6 +364,7 @@ def _run_routes_on_file(
                 "extractor_weights_kind",
                 "extractor_weights_files",
                 "extractor_code_sha256",
+                "extractor_code_packages",
             ):
                 if key in assist_provenance:
                     row[f"assist_{key}"] = assist_provenance[key]

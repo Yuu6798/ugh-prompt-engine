@@ -458,9 +458,18 @@ pin を必須化する = 記録が済むまで Go を出さない fail-closed �
   重み hash と distribution version は「同じ bytes か / 同じリリースか」しか保証せず、
   **同一 version のままローカル patch / repack された**パッケージは素通りする
   （`generator_code_sha256` は first-party しか覆わない）。実際に推論した third-party
-  パッケージ（CREPE / basic-pitch / essentia / demucs、pyin なら librosa）の
-  `.py` + ネイティブ拡張を hash して行に載せ、provenance 署名（repeats 一致）に含める。
-  registry に `code_sha256` を記録した場合は行との一致も必須化する。**assist 抽出器**（full_mix の `basic_pitch_direct` × Melodia など）も
+  パッケージの `.py` + ネイティブ拡張を hash して行に載せ、provenance 署名（repeats 一致）に
+  含める。registry に `code_sha256` を記録した場合は行との一致も必須化する。
+  **実行 backend も覆う**（CREPE / basic-pitch は TensorFlow がモデルグラフを実行し、
+  Demucs は torch が実行するため、抽出器パッケージだけでは patch を検出できない）:
+  crepe→`crepe`+`tensorflow`/`keras`、basic_pitch→`basic_pitch`+TF/ONNX/CoreML/TFLite、
+  melodia→`essentia`（ネイティブ実装が算法そのもの）、pyin→`librosa`（同左。numpy/scipy は
+  汎用数値基盤であって「モデルを走らせる backend」ではないので線をここで引く）、
+  分離→`demucs`+`torch`。import できなかった backend は飛ばし、**実際に覆った名前**を
+  `extractor_code_packages` / `separation_code_packages` に列挙する（被覆の正直会計）。
+  コード pin も weights と同様に**推論前に bind → 推論後に memo 迂回で再検証**する
+  （import 済みモジュールはプロセスに cache され、途中で差し替えても実行は旧コードのまま
+  でありうるため）。**assist 抽出器**（full_mix の `basic_pitch_direct` × Melodia など）も
   同様に `assist_extractor_weights_sha256` を emit する — `cross_extractor_agreement` は
   assist のモデル入力に依存する gate metric なので、主抽出器と同じく pin する（Codex #217）。
   評価器は `assist_status == "measured"` の行にこの pin を必須とし、provenance 署名にも
