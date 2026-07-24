@@ -2186,9 +2186,34 @@ def test_code_pin_covers_inference_backends(monkeypatch):
     # 本アダプタが推論前に使う前処理ライブラリ（librosa）も閉包に含む（#217）。
     assert "librosa" in covered
     assert "librosa" in melody_provenance.extractor_code_packages_for("melodia")
+    # CREPE は内部で resampy によりリサンプルするので閉包に含む（#217）。
+    assert "resampy" in melody_provenance.extractor_code_packages_for("crepe")
     assert harness_is_sha256(digest)
     # 分離側も backend（torch）を含む。
     assert "torch" in melody_provenance.SEPARATION_CODE_PACKAGES
+
+
+def test_package_code_state_does_not_import_the_package():
+    """コード hash の解決は **import を起こさない**（bind を import より前に置ける・#217）。
+
+    `import_module` で解決すると、hash より先にモジュールが cache され「旧コードが
+    実行され hash は新ファイルを見る」窓ができる。`find_spec` は実行しない。
+    """
+    import subprocess
+    import sys
+
+    # 未 import の状態から package_code_state を呼び、sys.modules に載らないことを見る。
+    code = (
+        "import sys;"
+        "from svp_rpe.melody.provenance import package_code_state as s;"
+        "assert 'soundfile' not in sys.modules;"
+        "state, digest = s('soundfile');"
+        "print(state, 'soundfile' in sys.modules)"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True, cwd=str(ROOT)
+    ).stdout.strip()
+    assert out == "ok False"
 
 
 def harness_is_sha256(value):

@@ -183,7 +183,10 @@ def _resolve_fingerprint(
 # 抽出器へ渡る波形やゲート指標を変えるのに、source audio hash も抽出器 pin も version も
 # 動かない（Codex #217）。numpy/scipy は汎用数値基盤として線の外に置く。
 _EXTRACTOR_CODE_PACKAGES = {
-    "crepe": ("crepe", "tensorflow", "keras", "librosa"),
+    # CREPE は 16kHz 以外の入力を **内部で `resampy`** によりリサンプルしてから
+    # モデルへ渡す。patch された resampy はモデルに届くサンプルを変えるのに、
+    # crepe/TF/weights/version のどの pin も動かない（Codex #217）。
+    "crepe": ("crepe", "tensorflow", "keras", "librosa", "resampy"),
     "basic_pitch": (
         "basic_pitch",
         "tensorflow",
@@ -217,18 +220,26 @@ STATE_UNHASHABLE = "unhashable"
 def package_code_state(
     package: str, *, use_cache: bool = True
 ) -> "tuple[str, Optional[str]]":
-    """`package` のコード hash を (state, digest) で返す（state は上記 3 値）。"""
-    import importlib
+    """`package` のコード hash を (state, digest) で返す（state は上記 3 値）。
+
+    **import を起こさずに** `importlib.util.find_spec` で場所だけを解決する（Codex #217）。
+    `import_module` で解決すると、hash より先にモジュールが読み込まれて cache され、
+    「import 済みの旧コードが実行され、hash は新ファイルを見る」窓ができる。find_spec は
+    モジュールを実行しないので、bind を**あらゆる import より前**に置ける。
+    """
+    import importlib.util
 
     try:
-        module = importlib.import_module(package)
+        spec = importlib.util.find_spec(package)
     except Exception:
         return STATE_ABSENT, None
-    module_file = getattr(module, "__file__", None)
-    if not module_file:
+    if spec is None:
+        return STATE_ABSENT, None
+    origin = getattr(spec, "origin", None)
+    if not origin or origin in ("built-in", "frozen"):
         # namespace / zip import 等。**導入されている**のに hash 対象を特定できない。
         return STATE_UNHASHABLE, None
-    root = Path(module_file).resolve().parent
+    root = Path(origin).resolve().parent
     try:
         files = sorted(
             path

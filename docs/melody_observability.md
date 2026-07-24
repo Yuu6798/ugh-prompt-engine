@@ -481,6 +481,12 @@ pin を必須化する = 記録が済むまで Go を出さない fail-closed �
   source audio hash も抽出器 pin も version も動かない。numpy/scipy は汎用数値基盤として
   線の外に置く。import できなかった backend は飛ばし、**実際に覆った名前**を
   `extractor_code_packages` / `separation_code_packages` に列挙する（被覆の正直会計）。
+  コード hash の解決は `importlib.util.find_spec` で**モジュールを実行せず**場所だけを
+  引くので、bind を**当該パッケージの import より前**に置ける（分離経路は demucs を
+  import する前に bind する）。import 後に hash すると「cache 済みの旧コードが実行され、
+  hash は新ファイルを見る」窓が開くため。残る限界: 本経路より前に**別の経路や別トラックが
+  同じパッケージを import 済み**なら、その時点の digest は知りようがない（load-time pin と
+  同じ制約で、slow-lane は 1 run = 1 プロセスで回すことで満たす）。
   コード pin も weights と同様に**推論前に bind → 推論後に memo 迂回で再検証**する
   （import 済みモジュールはプロセスに cache され、途中で差し替えても実行は旧コードのまま
   でありうるため）。**分離（Demucs）側も同じ**で、分離前に bind し分離後に再検証する。
