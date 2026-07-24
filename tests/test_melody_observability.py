@@ -1529,6 +1529,46 @@ def test_evaluate_go_bar_fails_closed_on_bar_cardinality_mismatch():
         harness.evaluate_m1_real_go_bar([r1, r2], reg_no_neg)
 
 
+def test_evaluate_go_bar_fails_closed_on_repeats_min_below_two():
+    """凍結バーの repeats_min が 2 未満（typo で 1 等）なら fail-closed（n>=2 仕様）。"""
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes)
+    r2 = _make_go_bar_report(outcomes)
+    reg = _go_bar_registry()
+    reg["m1_real_go_bar"]["repeats_min"] = 1
+    with pytest.raises(ValueError, match="repeats_min"):
+        harness.evaluate_m1_real_go_bar([r1, r2], reg)
+
+
+def test_evaluate_go_bar_compares_stem_hash_across_repeats_when_present():
+    """preprocessing に stem_sha256 があれば repeats 間で比較し、不一致は fail-closed。
+
+    stem/weights hash の **emit** は実 Demucs を要する machine-dependent な slow-lane 課題
+    だが、評価器は「存在すれば比較」で forward-compat（emit されたら自動で穴が塞がる）。
+    """
+    import scripts.run_melody_observability as harness
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    r1 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+    r2 = _make_go_bar_report(outcomes, default_outcome="insufficient")
+
+    def _set_stem(report, stem):
+        for row in report["fixtures"]["real_vocal_jrock"]["routes"]:
+            if row["route"] == _GO_BAR_ROUTE:
+                row["preprocessing"] = {**row["preprocessing"], "stem_sha256": stem}
+
+    # 同一 model/version だが別 vocals stem（再生成・別 weights 相当）を repeats 間で。
+    _set_stem(r1, "a" * 64)
+    _set_stem(r2, "b" * 64)
+    with pytest.raises(ValueError, match="model provenance"):
+        harness.evaluate_m1_real_go_bar([r1, r2], _go_bar_registry())
+
+
 def test_evaluate_go_bar_fails_closed_on_extractor_label_mismatch():
     """route ラベルと実測 extractor がすり替わっていたら fail-closed。"""
     import scripts.run_melody_observability as harness

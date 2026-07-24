@@ -289,3 +289,10 @@ sha256 で担保する。検証は「pin した sha256 の report 集合を同�
 実測は **machine-dependent** であり slow/manual lane（Cowork/User）へ繰延する。
 測定値・dated 実測記録・Go/No-Go 判定は本節時点では **未確定（PENDING）** —
 実測が済むまでここに数値や verdict を書き加えてはならない（一方向規律）。
+
+**繰延している machine-dependent 課題**: 分離経路 provenance の **stem/weights hash の
+emit**（Demucs vocals stem の sha256・分離器重みの hash）は実 Demucs を要するため未実装。
+評価器 `_route_provenance` は `preprocessing.stem_sha256` / `separation_weights_sha256` が
+**存在すれば** repeats 間で比較する forward-compat 済みなので、slow-lane harness がこれらを
+emit するようになれば「同一 version・別 weights/再生成 stem」の穴は自動で閉じる。emit の
+配線（`_preprocessing_provenance` が stem を露出して hash する）は実測時に追加する。

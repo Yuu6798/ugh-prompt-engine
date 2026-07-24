@@ -473,7 +473,12 @@ def _route_provenance(row: Dict[str, Any]) -> "tuple":
     n>=2 の repeats を「安定」と数える前に、抽出器/分離器の model stack が同一である
     ことを証明するために使う。マシン跨ぎや途中の CREPE/Demucs/Essentia アップグレードで
     provenance が変われば、同一 stack 下の再現でないので repeats と見なせない（Codex 指摘・
-    設計 §2.3 provenance pin）。分離前処理は separation_model/version まで見る。
+    設計 §2.3 provenance pin）。分離前処理は separation_model/version に加え、存在すれば
+    分離器の重み hash（separation_weights_sha256）と vocals stem hash（stem_sha256）まで
+    見る。同一 htdemucs_ft/version でも別 weights や再生成 stem なら別 run として弾く
+    （これらの hash の **emit** は実 Demucs を要する machine-dependent な slow-lane 課題で
+    現状 harness は未出力。評価器は「存在すれば比較」で forward-compat とし、emit されたら
+    自動で穴が塞がる・Codex 指摘）。
     """
     preprocessing = row.get("preprocessing")
     if isinstance(preprocessing, dict):
@@ -481,9 +486,11 @@ def _route_provenance(row: Dict[str, Any]) -> "tuple":
             preprocessing.get("preprocessing"),
             preprocessing.get("separation_model"),
             preprocessing.get("separation_version"),
+            preprocessing.get("separation_weights_sha256"),
+            preprocessing.get("stem_sha256"),
         )
     else:
-        separation = (preprocessing, None, None)
+        separation = (preprocessing, None, None, None, None)
     return (
         row.get("source_model"),
         row.get("extractor_version"),
@@ -579,9 +586,9 @@ def evaluate_m1_real_go_bar(
     - 別素材であるべき go-bar fixture が同一 `audio_sha256` を共有（fixture 間で素材が
       重複すると「4 別素材の ≥3/4」が実質 1 素材で満たされる・Codex 指摘）
     - `m1_real_go_bar` の positive_ids / negative_ids が非一意、両者が重複、
-      positive 本数が `total_positive` と不一致、または negative_ids が空
-      （凍結バー自身の typo で 1 素材の二重計上・素材数不足・偽陽性ガード欠落を許さない・
-      Codex 指摘）
+      positive 本数が `total_positive` と不一致、negative_ids が空、または
+      `repeats_min < 2`（凍結バー自身の typo で 1 素材の二重計上・素材数不足・
+      偽陽性ガード欠落・n<2 の verdict を許さない・Codex 指摘）
     - いずれかの fixture の routes に同名 route 行が重複（last-wins で失敗/未観測行を
       隠蔽させない・Codex 指摘）
     - measured（gate outcome）な route 行が provenance フィールド（source_model /
@@ -682,6 +689,14 @@ def evaluate_m1_real_go_bar(
         raise ValueError(
             "evaluate_m1_real_go_bar: negative_ids が空; 偽陽性ガードなしで verdict を "
             "出せない (fail-closed)"
+        )
+    # repeats_min の下限。M1-real 仕様は n>=2 の繰返しを要求するので、registry の typo で
+    # repeats_min が 2 未満に下がっても単一 report の verdict を通さない（凍結バーの
+    # cardinality 整合と同型の config 整合・Codex 指摘）。
+    if repeats_min < 2:
+        raise ValueError(
+            f"evaluate_m1_real_go_bar: m1_real_go_bar.repeats_min {repeats_min} < 2; "
+            "M1-real 仕様は n>=2 を要求する (fail-closed)"
         )
     # registry の external_fixtures が凍結した id → input_kind。report 自己申告の kind を
     # 信用せず、これを真として matrix を評価する（Codex 指摘）。
