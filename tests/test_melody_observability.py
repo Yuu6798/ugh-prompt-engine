@@ -2732,6 +2732,53 @@ def test_static_elf_returns_complete_dynamic_info(tmp_path):
     assert melody_provenance._ffmpeg_library_closure(static_elf) == []
 
 
+def test_undecodable_input_fails_closed_instead_of_audioread(tmp_path):
+    """soundfile で読めない入力は観測せず unavailable（audioread へ落とさない・#217）。
+
+    `librosa.load` は soundfile が開けない入力で audioread（裏は未 pin の FFmpeg /
+    GStreamer）へフォールバックする。その実装はコード pin の閉包に入っていないので、
+    別ビルドのデコーダがサンプルを変えても pin が動かない。
+    """
+    from svp_rpe.melody.extractors import _load_route_waveform, _require_soundfile_decodable
+    from svp_rpe.melody.routing import MelodyRoute
+
+    bogus = tmp_path / "clip.m4a"
+    bogus.write_bytes(b"\x00\x00\x00\x20ftypM4A not really audio")
+    with pytest.raises(LearnedModelUnavailable, match="pinned soundfile stack"):
+        _require_soundfile_decodable(str(bogus))
+    with pytest.raises(LearnedModelUnavailable, match="pinned soundfile stack"):
+        _load_route_waveform(str(bogus), MelodyRoute("pyin_direct", "none", "pyin"))
+
+    # 尺（被覆の分母）も audioread 由来の値を採らない。
+    from svp_rpe.melody.extractors import _audio_duration_sec
+
+    assert _audio_duration_sec(str(bogus)) is None
+
+
+def test_stripped_dynamic_elf_is_not_treated_as_static(tmp_path):
+    """セクションヘッダを持たない動的 ELF を「静的」と誤認しない（#217）。
+
+    強く strip されたバイナリはセクションヘッダを持たないが、ローダは `PT_DYNAMIC`
+    で依存を解決する。静的リンクの確証は「`PT_DYNAMIC` が無いこと」で得る。
+    """
+    import struct
+
+    from svp_rpe.melody import provenance as melody_provenance
+
+    # 実 ELF（python 本体）からセクションヘッダを落とし、PT_DYNAMIC だけ残す。
+    blob = bytearray(Path(sys.executable).read_bytes())
+    struct.pack_into("<Q", blob, 0x28, 0)  # e_shoff = 0
+    struct.pack_into("<HH", blob, 0x3A, 0, 0)  # e_shentsize = e_shnum = 0
+    stripped = tmp_path / "ffmpeg-stripped"
+    stripped.write_bytes(bytes(blob))
+
+    info = melody_provenance._elf_dynamic_info(stripped)
+    assert info is not None
+    needed, _rpath, _runpath = info
+    # 依存が読めている = 「セクションが無い → 静的」と誤認していない。
+    assert any(name.startswith("libc.so") for name in needed)
+
+
 def test_non_elf_binary_fails_closed(tmp_path):
     """非 ELF（Mach-O / PE / ラッパ）は closure を読めないので fail-closed（#217）。
 

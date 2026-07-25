@@ -475,6 +475,10 @@ pin を必須化する = 記録が済むまで Go を出さない fail-closed �
   Demucs は torch が実行するため、抽出器パッケージだけでは patch を検出できない）:
   crepe→`crepe`+`tensorflow`/`keras`、basic_pitch→`basic_pitch`+TF/ONNX/CoreML/TFLite、
   melodia→`essentia`（ネイティブ実装が算法そのもの）、pyin→`librosa`+`scipy`、
+  入力は **pin 済みの soundfile スタックで読めるものだけ**を観測する
+  （`librosa.load` / `get_duration` は soundfile が開けない入力で audioread＝裏は
+  未 pin の FFmpeg / GStreamer へフォールバックするため、入口で `sf.info` を通して
+  fail-closed にする。尺＝被覆の分母も audioread 由来の値を採らない）。
   加えて **`soundfile` は全抽出器の閉包に入る**（`librosa.load` は WAV/FLAC を
   soundfile 経由でデコードし、合成経路は `sf.write` で観測対象そのものを書く。
   デコードの実体は **libsndfile ネイティブ共有ライブラリ**なので、単一モジュール
@@ -511,7 +515,11 @@ pin を必須化する = 記録が済むまで Go を出さない fail-closed �
   「同名のシステムライブラリを hash したが、デコードしたのは同梱版」になる。
   線は **FFmpeg 自身のライブラリ**まで
   （libc/libm 等の OS 基盤まで広げると「環境全体が推論スタック」になり誰も守れない）。
-  静的リンク（依存が無いことを**読んで確認**できる ELF）では closure は空。一方
+  依存の解決は**プログラムヘッダの `PT_DYNAMIC`** を読む（強く strip された
+  バイナリはセクションヘッダを持たないが、ローダは `PT_DYNAMIC` で解決するため、
+  セクションが無いことを「静的リンク」の証拠にしない。静的の確証は `PT_DYNAMIC` が
+  存在しないこと）。静的リンク（依存が無いことを**読んで確認**できる ELF）では
+  closure は空。一方
   **非 ELF**（Mach-O / PE / ラッパスクリプト）は closure を読めないので fail-closed
   ——「読めなかった」を「依存なし」と主張しない。結果として分離経路の pin は現状
   **Linux/ELF 限定**で成立する、

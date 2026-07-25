@@ -170,11 +170,17 @@ def extract_basic_pitch_observation(
 
 
 def _audio_duration_sec(audio_path: str) -> "float | None":
-    """音声ファイルの実尺（秒）を安価に読む。失敗時は None。"""
-    try:
-        import librosa
+    """音声ファイルの実尺（秒）を安価に読む。失敗時は None。
 
-        return round(float(librosa.get_duration(path=audio_path)), 4)
+    尺は note-only 経路の被覆分母（＝ゲート指標）なので、`librosa.get_duration` が
+    audioread（未 pin の FFmpeg/GStreamer）へフォールバックした値は採らない。
+    pin 済みの soundfile スタックで読めなければ None を返す（#217）。
+    """
+    try:
+        import soundfile as sf
+
+        info = sf.info(audio_path)
+        return round(float(info.frames) / float(info.samplerate), 4)
     except Exception:
         return None
 
@@ -242,8 +248,32 @@ def _load_route_waveform(
 
     import librosa
 
+    _require_soundfile_decodable(audio_path)
     waveform, sample_rate = librosa.load(audio_path, sr=None, mono=True)
     return np.asarray(waveform, dtype=np.float32), int(sample_rate)
+
+
+def _require_soundfile_decodable(audio_path: str) -> None:
+    """pin 済みの soundfile スタックで読める入力だけを通す（#217）。
+
+    `librosa.load` は soundfile が開けない入力（AAC/M4A、codec 非対応ビルドの MP3 等）
+    で **audioread へフォールバック**し、その裏の FFmpeg / GStreamer がデコードする。
+    その実装はコード pin の閉包に入っていないので、別ビルドのデコーダがサンプルを
+    変えても pin は動かない。入口で弾いて「pin が覆うデコーダで読めた入力」だけを
+    観測対象にする（fail-closed）。
+    """
+    import soundfile as sf
+
+    try:
+        sf.info(audio_path)
+    except Exception as exc:
+        from svp_rpe.rpe.learned import LearnedModelUnavailable
+
+        raise LearnedModelUnavailable(
+            f"{audio_path!r} is not decodable by the pinned soundfile stack "
+            f"({type(exc).__name__}: {exc}); audioread フォールバック（未 pin の "
+            "FFmpeg/GStreamer）でデコードしないため unavailable として扱う"
+        ) from exc
 
 
 def _extractor_fingerprint(extractor: str, *, use_cache: bool = True, require: bool = False):

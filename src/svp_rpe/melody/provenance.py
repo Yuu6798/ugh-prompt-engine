@@ -704,8 +704,14 @@ def _needed_sonames(path: Path) -> "Optional[list[str]]":
 def _elf_dynamic_info(path: Path) -> "Optional[tuple]":
     """ELF の `.dynamic` から `(DT_NEEDED, DT_RPATH, DT_RUNPATH)` を読む。
 
-    実行も dlopen もせず、ヘッダとセクションを直接読むだけ（Codex #217）。
-    ELF でなければ `None`（macOS / Windows / 静的リンクのテキストラッパ等）。
+    実行も dlopen もせず、ヘッダとセグメントを直接読むだけ（Codex #217）。
+    **セクションヘッダではなくプログラムヘッダ（`PT_DYNAMIC`）を読む** — 強く strip
+    されたバイナリはセクションヘッダを持たないが、ローダは `PT_DYNAMIC` で依存を解決
+    するため、セクションが無いことを「静的リンク」の証拠にしてはならない（Codex #217）。
+    静的リンクの確証は「`PT_DYNAMIC` が存在しないこと」で得る。
+
+    ELF でない、または動的リンクなのに解決できない場合は `None`（呼び出し側が
+    fail-closed に倒す）。
     """
     import struct
 
@@ -716,56 +722,52 @@ def _elf_dynamic_info(path: Path) -> "Optional[tuple]":
     if len(blob) < 64 or blob[:4] != b"\x7fELF":
         return None
     is_64 = blob[4] == 2
-    little = blob[5] == 1
-    endian = "<" if little else ">"
+    endian = "<" if blob[5] == 1 else ">"
     try:
         if is_64:
-            e_shoff, = struct.unpack_from(endian + "Q", blob, 0x28)
-            e_shentsize, e_shnum = struct.unpack_from(endian + "HH", blob, 0x3A)
+            e_phoff, = struct.unpack_from(endian + "Q", blob, 0x20)
+            e_phentsize, e_phnum = struct.unpack_from(endian + "HH", blob, 0x36)
         else:
-            e_shoff, = struct.unpack_from(endian + "I", blob, 0x20)
-            e_shentsize, e_shnum = struct.unpack_from(endian + "HH", blob, 0x2E)
+            e_phoff, = struct.unpack_from(endian + "I", blob, 0x1C)
+            e_phentsize, e_phnum = struct.unpack_from(endian + "HH", blob, 0x2A)
     except struct.error:
         return None
-    dynamic = None
-    dynstr = None
-    for index in range(e_shnum):
-        offset = e_shoff + index * e_shentsize
+
+    loads: "list[tuple]" = []  # (vaddr, filesz, offset)
+    dynamic: "Optional[tuple]" = None  # (offset, filesz)
+    for index in range(e_phnum):
+        base = e_phoff + index * e_phentsize
         try:
+            p_type, = struct.unpack_from(endian + "I", blob, base)
             if is_64:
-                sh_type, = struct.unpack_from(endian + "I", blob, offset + 4)
-                sh_offset, sh_size = struct.unpack_from(endian + "QQ", blob, offset + 0x18)
+                p_offset, p_vaddr = struct.unpack_from(endian + "QQ", blob, base + 0x08)
+                p_filesz, = struct.unpack_from(endian + "Q", blob, base + 0x20)
             else:
-                sh_type, = struct.unpack_from(endian + "I", blob, offset + 4)
-                sh_offset, sh_size = struct.unpack_from(endian + "II", blob, offset + 0x10)
+                p_offset, p_vaddr = struct.unpack_from(endian + "II", blob, base + 0x04)
+                p_filesz, = struct.unpack_from(endian + "I", blob, base + 0x10)
         except struct.error:
             return None
-        if sh_type == 6:  # SHT_DYNAMIC
-            dynamic = (sh_offset, sh_size)
-        elif sh_type == 3 and dynstr is None:  # SHT_STRTAB（.dynstr を含む）
-            dynstr = (sh_offset, sh_size)
-        elif sh_type == 11:  # SHT_DYNSYM → 直後の strtab が .dynstr
-            try:
-                sh_link, = struct.unpack_from(endian + "I", blob, offset + (0x28 if is_64 else 0x18))
-            except struct.error:
-                return None
-            link_offset = e_shoff + sh_link * e_shentsize
-            try:
-                if is_64:
-                    dynstr = struct.unpack_from(endian + "QQ", blob, link_offset + 0x18)
-                else:
-                    dynstr = struct.unpack_from(endian + "II", blob, link_offset + 0x10)
-            except struct.error:
-                return None
-    if dynamic is None or dynstr is None:
-        # 静的リンク ELF（`.dynamic` を持たない）。呼び出し側は 3 要素 tuple を前提に
-        # 添字アクセスするので、空リストではなく**完全な形**を返す（Codex #217）。
+        if p_type == 1:  # PT_LOAD
+            loads.append((p_vaddr, p_filesz, p_offset))
+        elif p_type == 2:  # PT_DYNAMIC
+            dynamic = (p_offset, p_filesz)
+    if dynamic is None:
+        # `PT_DYNAMIC` が無い = 静的リンク（依存が無いことを**読んで確認**できた）。
         return [], (), ()
+
+    def _vaddr_to_offset(vaddr: int) -> Optional[int]:
+        for seg_vaddr, seg_filesz, seg_offset in loads:
+            if seg_vaddr <= vaddr < seg_vaddr + seg_filesz:
+                return seg_offset + (vaddr - seg_vaddr)
+        return None
+
     entry_size = 16 if is_64 else 8
     fmt = endian + ("Qq" if is_64 else "Ii")
     needed_offsets: "list[int]" = []
     rpath_offsets: "list[int]" = []
     runpath_offsets: "list[int]" = []
+    strtab_vaddr: Optional[int] = None
+    strsz = 0
     dyn_offset, dyn_size = dynamic
     for position in range(dyn_offset, dyn_offset + dyn_size, entry_size):
         try:
@@ -776,11 +778,20 @@ def _elf_dynamic_info(path: Path) -> "Optional[tuple]":
             break
         if tag == 1:  # DT_NEEDED
             needed_offsets.append(value)
+        elif tag == 5:  # DT_STRTAB
+            strtab_vaddr = value
+        elif tag == 10:  # DT_STRSZ
+            strsz = value
         elif tag == 15:  # DT_RPATH
             rpath_offsets.append(value)
         elif tag == 29:  # DT_RUNPATH
             runpath_offsets.append(value)
-    str_offset, str_size = dynstr
+    if strtab_vaddr is None:
+        return None  # 動的リンクなのに文字列表を引けない = fail-closed
+    str_offset = _vaddr_to_offset(strtab_vaddr)
+    if str_offset is None:
+        return None
+    str_size = strsz or (len(blob) - str_offset)
 
     def _string(value: int) -> Optional[str]:
         start = str_offset + value
@@ -803,7 +814,6 @@ def _elf_dynamic_info(path: Path) -> "Optional[tuple]":
         return tuple(entries)
 
     return names, _paths(rpath_offsets), _paths(runpath_offsets)
-
 
 def _separation_audio_executables() -> "tuple[tuple, bool]":
     """Demucs がデコードに使う実行ファイル名と、それが必須かを返す。
