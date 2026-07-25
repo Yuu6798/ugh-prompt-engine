@@ -30,7 +30,14 @@ def _sha256(path: Path) -> str:
 def test_verdict_report_pins_match_committed_reports() -> None:
     verdict = json.loads(VERDICT.read_text())
     pins = verdict["report_pins"]
-    assert pins, "verdict に report_pins が無い"
+    # pin 集合の完全性: n_reports / run_ids と件数が一致し、path・digest とも重複なし。
+    # 片方の pin を消す / 複製する編集で「n=2 の repeats に見える単一 report」を作らせない。
+    assert len(pins) == verdict["n_reports"] == len(verdict["run_ids"]), (
+        f"pin 数 {len(pins)} が n_reports={verdict['n_reports']} / "
+        f"run_ids={len(verdict['run_ids'])} と一致しない"
+    )
+    assert len({Path(p["path"]).name for p in pins}) == len(pins), "pin の path が重複"
+    assert len({p["sha256"] for p in pins}) == len(pins), "pin の digest が重複"
     for pin in pins:
         # 生成時の path は basename（生成場所相対）。commit 済みコピーは verdict と
         # 同じディレクトリに同名で置く規約。
