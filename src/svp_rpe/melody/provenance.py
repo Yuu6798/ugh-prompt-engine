@@ -344,37 +344,35 @@ def _system_library_path(soname: str) -> Optional[Path]:
 def _resolve_soname_without_loading(
     soname_file: str,
     *,
-    origin: "Optional[Path]" = None,
-    rpath: "tuple" = (),
-    runpath: "tuple" = (),
+    rpath_dirs: "tuple" = (),
+    runpath_dirs: "tuple" = (),
 ) -> Optional[Path]:
     """soname（`libsndfile.so.1`）→ 実体パス。**dlopen を起こさない**。
 
     glibc ローダと同じ探索順を辿る（Codex #217）:
 
-    1. 参照元オブジェクトの `DT_RPATH`（**`DT_RUNPATH` が無いときだけ**有効）
+    1. `DT_RPATH`（**`DT_RUNPATH` が無いときだけ**有効。祖先から継承した分を含む）
     2. `LD_LIBRARY_PATH`
     3. 参照元オブジェクトの `DT_RUNPATH`
     4. `ldconfig -p` キャッシュ（cache を読むだけでライブラリはロードしない）
 
-    `$ORIGIN` は参照元オブジェクトのディレクトリへ展開する（conda / アプリ同梱ビルドは
-    ここに同梱 `libav*` を置くため、無視すると同名のシステムライブラリを掴む）。
+    `rpath_dirs` / `runpath_dirs` は **展開済みのディレクトリ**を受け取る（`$ORIGIN` は
+    それを宣言したオブジェクトからの相対なので、展開は収集側の責務）。
     """
     import os
     import subprocess
 
-    search: "list[str]" = []
-    if not runpath:
-        search.extend(rpath)
+    search: "list[Path]" = []
+    if not runpath_dirs:
+        search.extend(rpath_dirs)
     search.extend(
-        entry for entry in os.environ.get("LD_LIBRARY_PATH", "").split(os.pathsep) if entry
+        Path(entry)
+        for entry in os.environ.get("LD_LIBRARY_PATH", "").split(os.pathsep)
+        if entry
     )
-    search.extend(runpath)
-    for entry in search:
-        expanded = _expand_loader_path(entry, origin)
-        if expanded is None:
-            continue
-        candidate = expanded / soname_file
+    search.extend(runpath_dirs)
+    for directory in search:
+        candidate = directory / soname_file
         if candidate.is_file():
             return candidate.resolve()
     for ldconfig in ("ldconfig", "/sbin/ldconfig"):
@@ -595,18 +593,23 @@ def _ffmpeg_library_closure(executable: Path) -> "list[Path]":
     root_info = _elf_dynamic_info(executable)
     if root_info is None:
         return []
-    # (soname, 参照元オブジェクト, その rpath, その runpath)
-    pending = [(name, executable, root_info[1], root_info[2]) for name in root_info[0]]
+    # (soname, 参照元の rpath ディレクトリ（継承込み）, その runpath ディレクトリ)
+    pending = [
+        (name, _object_rpath_dirs(executable, root_info, ()), _object_runpath_dirs(
+            executable, root_info
+        ))
+        for name in root_info[0]
+    ]
     seen = set()
     while pending:
-        soname, origin, rpath, runpath = pending.pop()
+        soname, rpath_dirs, runpath_dirs = pending.pop()
         if soname in seen:
             continue
         seen.add(soname)
         if not soname.startswith(_FFMPEG_LIBRARY_PREFIXES):
             continue  # OS 基盤ライブラリは線の外（上のコメント参照）
         path = _resolve_soname_without_loading(
-            soname, origin=origin, rpath=rpath, runpath=runpath
+            soname, rpath_dirs=rpath_dirs, runpath_dirs=runpath_dirs
         )
         if path is None:
             raise LearnedModelUnavailable(
@@ -615,23 +618,79 @@ def _ffmpeg_library_closure(executable: Path) -> "list[Path]":
             )
         resolved[soname] = path
         info = _elf_dynamic_info(path)
-        if info is not None:
-            pending.extend((name, path, info[1], info[2]) for name in info[0])
+        if info is None:
+            continue
+        # `DT_RPATH` は **依存の依存にも継承される**（`DT_RUNPATH` は継承しない）。
+        # 同梱 FFmpeg が実行ファイルの RPATH で libavformat を掴み、その libavformat が
+        # 自前のパスを持たずに libavcodec を要求する構成では、ローダは継承 RPATH の
+        # 同梱ディレクトリを使う。継承しないとシステム版を掴む（Codex #217）。
+        child_rpath = _object_rpath_dirs(path, info, rpath_dirs)
+        child_runpath = _object_runpath_dirs(path, info)
+        pending.extend((name, child_rpath, child_runpath) for name in info[0])
     return [resolved[name] for name in sorted(resolved)]
 
 
+def _object_rpath_dirs(obj: Path, info: "tuple", inherited: "tuple") -> "tuple":
+    """`obj` の `DT_RPATH` を展開し、祖先から継承した分を後ろに連ねる。"""
+    own = _expand_loader_paths(info[1], obj)
+    if own is None:
+        raise LearnedModelUnavailable(
+            f"DT_RPATH of {str(obj)!r} contains loader tokens that cannot be expanded; "
+            "実際にロードされるライブラリを特定できないため unavailable として扱う"
+        )
+    return own + tuple(inherited)
+
+
+def _object_runpath_dirs(obj: Path, info: "tuple") -> "tuple":
+    """`obj` の `DT_RUNPATH` を展開する（継承しない）。"""
+    own = _expand_loader_paths(info[2], obj)
+    if own is None:
+        raise LearnedModelUnavailable(
+            f"DT_RUNPATH of {str(obj)!r} contains loader tokens that cannot be expanded; "
+            "実際にロードされるライブラリを特定できないため unavailable として扱う"
+        )
+    return own
+
+
 def _expand_loader_path(entry: str, origin: "Optional[Path]") -> Optional[Path]:
-    """`$ORIGIN` 等のローダ変数を展開する（展開できなければ None）。"""
-    if "$ORIGIN" in entry or "${ORIGIN}" in entry:
-        if origin is None:
-            return None
+    """ローダ変数（`$ORIGIN` / `$LIB` / `$PLATFORM`）を展開する。
+
+    展開できなければ `None`。呼び出し側はそれを **fail-closed** として扱う
+    ——「展開できない候補を飛ばして ldconfig に落ちる」と、実際にはローダが同梱
+    ライブラリを読んでいるのに同名のシステムライブラリを pin しうる（Codex #217）。
+    """
+    import os
+    import sys
+
+    if origin is not None:
         base = str(origin.resolve().parent)
         entry = entry.replace("${ORIGIN}", base).replace("$ORIGIN", base)
-    if "$" in entry:
-        # `$LIB` / `$PLATFORM` は環境依存で確定できない。推測で別ファイルを pin する
-        # より、この候補を飛ばして後段（ldconfig）に委ねる方が正直（Codex #217）。
+    elif "$ORIGIN" in entry or "${ORIGIN}" in entry:
         return None
+    lib = "lib64" if sys.maxsize > 2**32 else "lib"
+    entry = entry.replace("${LIB}", lib).replace("$LIB", lib)
+    try:
+        platform = os.uname().machine
+    except AttributeError:  # pragma: no cover - 非 POSIX
+        platform = ""
+    if platform:
+        entry = entry.replace("${PLATFORM}", platform).replace("$PLATFORM", platform)
+    if "$" in entry:
+        return None  # 未知のトークン: 推測せず fail-closed
     return Path(entry)
+
+
+def _expand_loader_paths(
+    entries: "tuple", origin: "Optional[Path]"
+) -> "Optional[tuple]":
+    """ローダ探索パス列を展開する（1 つでも展開できなければ None = fail-closed）。"""
+    expanded = []
+    for entry in entries:
+        path = _expand_loader_path(entry, origin)
+        if path is None:
+            return None
+        expanded.append(path)
+    return tuple(expanded)
 
 
 def _needed_sonames(path: Path) -> "Optional[list[str]]":
@@ -697,7 +756,9 @@ def _elf_dynamic_info(path: Path) -> "Optional[tuple]":
             except struct.error:
                 return None
     if dynamic is None or dynstr is None:
-        return []
+        # 静的リンク ELF（`.dynamic` を持たない）。呼び出し側は 3 要素 tuple を前提に
+        # 添字アクセスするので、空リストではなく**完全な形**を返す（Codex #217）。
+        return [], (), ()
     entry_size = 16 if is_64 else 8
     fmt = endian + ("Qq" if is_64 else "Ii")
     needed_offsets: "list[int]" = []

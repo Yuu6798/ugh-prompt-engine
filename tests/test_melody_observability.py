@@ -2609,28 +2609,126 @@ def test_loader_search_order_honors_runpath_and_origin(monkeypatch, tmp_path):
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Cache())
     monkeypatch.delenv("LD_LIBRARY_PATH", raising=False)
 
+    expand = melody_provenance._expand_loader_paths
+    bundled_dirs = expand(("$ORIGIN",), origin)
+    assert bundled_dirs == (bundled_dir,)
+
     # RUNPATH の $ORIGIN が ldconfig キャッシュより先に効く。
     assert melody_provenance._resolve_soname_without_loading(
-        "libavcodec.so.60", origin=origin, runpath=("$ORIGIN",)
+        "libavcodec.so.60", runpath_dirs=bundled_dirs
     ) == bundled.resolve()
     # RPATH も同様（RUNPATH が無いときのみ有効）。
     assert melody_provenance._resolve_soname_without_loading(
-        "libavcodec.so.60", origin=origin, rpath=("${ORIGIN}",)
+        "libavcodec.so.60", rpath_dirs=expand(("${ORIGIN}",), origin)
     ) == bundled.resolve()
     # RUNPATH がある場合、RPATH は無効（glibc の規則）。
     assert melody_provenance._resolve_soname_without_loading(
-        "libavcodec.so.60", origin=origin, rpath=("$ORIGIN",), runpath=(str(system_dir),)
+        "libavcodec.so.60", rpath_dirs=bundled_dirs, runpath_dirs=(system_dir,)
     ) == system.resolve()
     # LD_LIBRARY_PATH は RUNPATH より先。
     monkeypatch.setenv("LD_LIBRARY_PATH", str(system_dir))
     assert melody_provenance._resolve_soname_without_loading(
-        "libavcodec.so.60", origin=origin, runpath=("$ORIGIN",)
+        "libavcodec.so.60", runpath_dirs=bundled_dirs
     ) == system.resolve()
     # どれも当たらなければ ldconfig キャッシュ。
     monkeypatch.delenv("LD_LIBRARY_PATH", raising=False)
     assert melody_provenance._resolve_soname_without_loading(
         "libavcodec.so.60"
     ) == system.resolve()
+
+
+def test_loader_tokens_expand_or_fail_closed(monkeypatch, tmp_path):
+    """`$LIB` / `$PLATFORM` は展開し、未知トークンは fail-closed（#217）。
+
+    展開できない候補を飛ばして ldconfig に落ちると、ローダは同梱ライブラリを読んで
+    いるのに同名のシステムライブラリを pin しうる。
+    """
+    import os
+    import sys as _sys
+
+    from svp_rpe.melody import provenance as melody_provenance
+
+    origin = tmp_path / "bundle" / "bin" / "ffmpeg"
+    origin.parent.mkdir(parents=True)
+    origin.write_bytes(b"ffmpeg")
+    lib = "lib64" if _sys.maxsize > 2**32 else "lib"
+    machine = os.uname().machine
+
+    assert melody_provenance._expand_loader_path("$ORIGIN/../$LIB", origin) == Path(
+        f"{origin.parent}/../{lib}"
+    )
+    assert melody_provenance._expand_loader_path("/opt/$PLATFORM/lib", origin) == Path(
+        f"/opt/{machine}/lib"
+    )
+    # 未知トークンは None（= 呼び出し側が fail-closed）。
+    assert melody_provenance._expand_loader_path("/opt/$UNKNOWN/lib", origin) is None
+    assert melody_provenance._expand_loader_paths(("/a", "/$UNKNOWN"), origin) is None
+
+    # closure は展開できない RUNPATH を持つオブジェクトで fail-closed になる。
+    monkeypatch.setattr(
+        melody_provenance,
+        "_elf_dynamic_info",
+        lambda path: (["libavcodec.so.60"], (), ("/opt/$UNKNOWN",)),
+    )
+    with pytest.raises(LearnedModelUnavailable, match="cannot be expanded"):
+        melody_provenance._ffmpeg_library_closure(origin)
+
+
+def test_transitive_resolution_inherits_ancestor_rpath(monkeypatch, tmp_path):
+    """`DT_RPATH` は依存の依存にも継承される（`DT_RUNPATH` は継承しない・#217）。"""
+    from svp_rpe.melody import provenance as melody_provenance
+
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    for name in ("libavformat.so.60", "libavcodec.so.60"):
+        (bundle / name).write_bytes(name.encode())
+    system_dir = tmp_path / "usr-lib"
+    system_dir.mkdir()
+    (system_dir / "libavcodec.so.60").write_bytes(b"system-avcodec")
+
+    ffmpeg = tmp_path / "ffmpeg"
+    ffmpeg.write_bytes(b"ffmpeg")
+    info = {
+        "ffmpeg": (["libavformat.so.60"], (str(bundle),), ()),  # 実行ファイルの RPATH
+        "libavformat.so.60": (["libavcodec.so.60"], (), ()),  # 自前のパスは持たない
+        "libavcodec.so.60": ([], (), ()),
+    }
+    monkeypatch.setattr(
+        melody_provenance, "_elf_dynamic_info", lambda path: info.get(path.name)
+    )
+
+    class _Cache:
+        stdout = f"\tlibavcodec.so.60 (libc6,x86-64) => {system_dir / 'libavcodec.so.60'}\n"
+
+    import subprocess
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Cache())
+    monkeypatch.delenv("LD_LIBRARY_PATH", raising=False)
+
+    closure = melody_provenance._ffmpeg_library_closure(ffmpeg)
+    # 継承した RPATH の同梱版が選ばれる（システム版ではない）。
+    assert closure == [
+        (bundle / "libavcodec.so.60").resolve(),
+        (bundle / "libavformat.so.60").resolve(),
+    ]
+
+
+def test_static_elf_returns_complete_dynamic_info(tmp_path):
+    """`.dynamic` を持たない静的 ELF でも 3 要素 tuple を返す（#217）。"""
+    from svp_rpe.melody import provenance as melody_provenance
+
+    static_elf = tmp_path / "ffmpeg-static"
+    # 最小の ELF ヘッダ（セクション 0 個 = SHT_DYNAMIC なし）。
+    header = bytearray(64)
+    header[0:4] = b"\x7fELF"
+    header[4] = 2  # ELFCLASS64
+    header[5] = 1  # little endian
+    static_elf.write_bytes(bytes(header))
+
+    info = melody_provenance._elf_dynamic_info(static_elf)
+    assert info == ([], (), ())
+    # closure 側も添字アクセスで落ちない。
+    assert melody_provenance._ffmpeg_library_closure(static_elf) == []
 
 
 def test_needed_sonames_reads_real_elf_without_executing_it():
