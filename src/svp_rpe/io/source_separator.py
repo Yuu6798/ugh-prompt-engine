@@ -110,7 +110,18 @@ def _deterministic_rng(device: str = "cpu") -> Iterator[None]:
                 if torch_device.type != "cpu":
                     backend = getattr(torch, torch_device.type, None)
                     if backend is not None and hasattr(backend, "manual_seed"):
-                        backend.manual_seed(SEPARATION_RNG_SEED)
+                        # `torch.cuda.manual_seed` 等は **current device** だけを seed する。
+                        # `cuda:1` を要求されたのに current が 0 のままだと、fork した
+                        # device 1 は seed されず、fork していない device 0 が書き換わって
+                        # 復元されない（要求 device の外に副作用を出す）。要求 index の
+                        # device context に入ってから seed する。
+                        device_ctx = getattr(backend, "device", None)
+                        if callable(device_ctx):
+                            with device_ctx(index):
+                                backend.manual_seed(SEPARATION_RNG_SEED)
+                        else:
+                            # index を持たない backend（例: mps）は current 概念が無い。
+                            backend.manual_seed(SEPARATION_RNG_SEED)
             yield
     finally:
         random.setstate(random_state)

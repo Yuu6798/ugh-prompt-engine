@@ -296,6 +296,57 @@ def test_deterministic_rng_does_not_touch_accelerators_for_cpu(
     assert "device_type" not in seen["kwargs"]
 
 
+def test_deterministic_rng_seeds_the_requested_accelerator_index(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`cuda:1` を要求したら device 1 を fork し、device 1 の context で seed すること。
+
+    `torch.cuda.manual_seed` は current device だけを seed するので、context に入らずに
+    呼ぶと「fork した device 1 は未 seed / fork していない current device が書き換わって
+    復元されない」という二重の誤りになる。GPU が無い環境でも配線は検証できるよう、
+    backend をスタブして呼び出し順を観察する。
+    """
+    torch = pytest.importorskip("torch")
+
+    events: list[object] = []
+    real_fork_rng = torch.random.fork_rng
+
+    def spy_fork_rng(devices=None, **kwargs):
+        events.append(("fork_rng", devices, kwargs.get("device_type")))
+        # 実 CUDA を触らせない: CPU だけ fork する本物へ委譲する。
+        return real_fork_rng(devices=[])
+
+    class FakeDeviceContext:
+        def __init__(self, index):
+            self.index = index
+
+        def __enter__(self):
+            events.append(("enter_device", self.index))
+            return self
+
+        def __exit__(self, *exc):
+            events.append(("exit_device", self.index))
+            return False
+
+    class FakeCudaBackend:
+        device = FakeDeviceContext
+
+        @staticmethod
+        def manual_seed(seed):
+            events.append(("manual_seed", seed))
+
+    monkeypatch.setattr(torch.random, "fork_rng", spy_fork_rng)
+    monkeypatch.setattr(torch, "cuda", FakeCudaBackend)
+
+    with source_separator._deterministic_rng("cuda:1"):
+        pass
+
+    assert ("fork_rng", [1], "cuda") in events
+    # seed は device context の内側で呼ばれる（current device を書き換えて帰らない）。
+    seed_at = events.index(("manual_seed", source_separator.SEPARATION_RNG_SEED))
+    assert events.index(("enter_device", 1)) < seed_at < events.index(("exit_device", 1))
+
+
 @pytest.mark.slow
 def test_real_demucs_separation_is_bitwise_reproducible(tmp_path: Path) -> None:
     """受け入れ条件: 同一入力を 2 回分離して vocals stem の sha256 が一致すること。
