@@ -265,7 +265,7 @@ def _expected_artifacts_json(prepared: PreparedInvocation) -> str:
 
 def _next_command_text(ctx: RecastRunContext, prepared: PreparedInvocation) -> str:
     project_relative = ctx.loaded.path.name
-    takes_relative = os.path.relpath(prepared.takes_dir, ctx.loaded.project_dir)
+    takes_relative = Path(os.path.relpath(prepared.takes_dir, ctx.loaded.project_dir)).as_posix()
     audio_relative = f"{takes_relative}/take-01.wav"
     # Codex P2 review round 5（PR3 #208 指摘 11）: 動的引数（project パス名 /
     # variant / backend / audio 相対パス）は project_dir 自体や builds_root の
@@ -299,14 +299,16 @@ def _order_sheet_md(ctx: RecastRunContext, prepared: PreparedInvocation, next_co
         for change in ctx.plan_result.plan.changed_fields
         if change.note is not None
     ]
-    takes_relative = os.path.relpath(prepared.takes_dir, ctx.loaded.project_dir)
+    takes_relative = Path(os.path.relpath(prepared.takes_dir, ctx.loaded.project_dir)).as_posix()
     # 注文書内の相対パス（project 引数・`--audio`）の前提 cwd を明示する
     # （Codex P2 eighth round #207 指摘15: manual.py:118 — 前提 cwd がどこにも
     # 明示されておらず、注文書だけを見た運用者が誤った場所で `next_command.txt`
     # を実行すると相対パス解決に失敗した）。order_dir から project_dir への
     # 相対パスは checkout-stable（builds_root は project_dir 配下に confine
     # 済み — loader `_resolve_builds_root`）なので絶対パスを焼き込まずに済む。
-    cwd_from_order_dir = os.path.relpath(ctx.loaded.project_dir, prepared.order_dir)
+    cwd_from_order_dir = Path(
+        os.path.relpath(ctx.loaded.project_dir, prepared.order_dir)
+    ).as_posix()
 
     lines: list[str] = [
         f"# Recast order sheet: {prepared.variant}@{prepared.backend_name}",

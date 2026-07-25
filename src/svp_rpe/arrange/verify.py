@@ -94,7 +94,14 @@ def _regular_file_error(path: Path, *, label: str) -> Optional[str]:
 def _eq_check(group: str, label: str, actual: object, expected: object) -> VerifyCheck:
     if actual == expected:
         return VerifyCheck(group, label, True)
-    return VerifyCheck(group, label, False, f"expected {expected!r}, got {actual!r}")
+    expected_display = str(expected) if isinstance(expected, Path) else repr(expected)
+    actual_display = str(actual) if isinstance(actual, Path) else repr(actual)
+    return VerifyCheck(
+        group,
+        label,
+        False,
+        f"expected {expected_display}, got {actual_display}",
+    )
 
 
 def _v1_load_package(
