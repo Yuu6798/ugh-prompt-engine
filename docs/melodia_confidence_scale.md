@@ -1,8 +1,20 @@
 # Melodia 信頼度スケールと凍結ゲートの衝突（M1-real 診断・2026-07-25）
 
 M1-real 実測（PR #220）で Melodia 経路が**M1-real 全 5 素材 × 両 run で
-`voiced_coverage 0.000`** を返した件の診断記録。結論は「Melodia アダプタのバグでも
-噛み合わせ問題でもなく、**抽出器の信頼度セマンティクスと凍結ゲート閾値の衝突**」である。
+`voiced_coverage 0.000`** を返した件の診断記録。結論は **「凍結ゲート閾値 ×
+アダプタ設定 × Melodia の信頼度値域」の三者関係**である:
+
+- demucs stem の噛み合わせ問題では**ない**（§2.4。実経路の stem を直接測ると
+  Melodia 自身が 48.1% のフレームに音高を出し、同一 stem で pyin は床を越える）
+- sampleRate / dtype の取り違えでも**ない**（§2.1。検出音は ±0.1 cent で正確）
+- 現在の値域が床の外にあるのは、**アダプタが Essentia 既定
+  `magnitudeCompression=1.0` を使っている条件下での**事実である（§2.5 の掃引。
+  0.8 で実経路 2548 フレーム、0.5 で 28633 フレームが床を越える）。したがって
+  「凍結床が Melodia の値域と噛み合わない」だけでなく **アダプタ設定も主因たりうる**
+
+> 初版はこれを「アダプタのバグでも噛み合わせでもなく、値域と床の衝突」という
+> 二者関係として記述していた。§2.5 の掃引でパラメータ非依存の主張が反証されたため
+> 撤回してある（経緯は §4）。
 
 **証跡の所在**: 実測 report（run×2・素材 id・hash・route 別出力）は PR #220 の
 `docs/measurements/m1real_2026-07/` にあり、**本 PR の checkout には存在しない**
@@ -216,29 +228,34 @@ for name in ("demucs_vocals_then_melodia", "demucs_vocals_then_pyin"):
   この帯では clamp が効き始める
 
 掃引の再現手順（`extract_melodia_f0` は `PredominantPitchMelodia` を既定構成で作るため
-パラメータを渡せない。掃引は Essentia を直接叩く。上表の値はすべて下記で出したもの）:
+パラメータを渡せない。掃引は Essentia を直接叩く。上表の値はすべて下記 1 本で出る）:
 
 ```python
 import sys; sys.path.insert(0, "scripts"); sys.path.insert(0, "src")
 import numpy as np, yaml, librosa
 import essentia.standard as es
 from build_melody_bench import build_signal
+from svp_rpe.melody.routing import select_routes
+from svp_rpe.melody.extractors import _load_route_waveform
 
-# (a) 合成素材（checkout で完結）
-specs = yaml.safe_load(open("tests/fixtures/melody_bench/synthesis_specs.yaml"))
-y, sr = build_signal("synth_mono_phrased", specs)
-sig = np.asarray(librosa.resample(y.astype(np.float32), orig_sr=sr, target_sr=44100),
-                 dtype=np.float32)
-
-def probe(**kw):
+def probe(sig, **kw):
+    """上表の全列を返す: (conf_max, conf_mean, conf>=0.30 の数, pitch 検出数, frames)。"""
     pitch, conf = es.PredominantPitchMelodia(sampleRate=44100, **kw)(sig)
     conf, pitch = np.asarray(conf), np.asarray(pitch)
-    return conf.max(), int((conf >= 0.30).sum()), int((pitch > 0).sum())
+    return (round(float(conf.max()), 4), round(float(conf.mean()), 4),
+            int((conf >= 0.30).sum()), int((pitch > 0).sum()), conf.size)
 
-print("default", probe())
+# --- (a) 合成素材（checkout で完結） ---
+specs = yaml.safe_load(open("tests/fixtures/melody_bench/synthesis_specs.yaml"))
+y, sr = build_signal("synth_mono_phrased", specs)
+synth = np.asarray(librosa.resample(y.astype(np.float32), orig_sr=sr, target_sr=44100),
+                   dtype=np.float32)
+
+print("default", probe(synth))
 for vt in (-1.0, 0.0, 0.2, 1.0, 1.4):
     for gu in (False, True):
-        print("voicingTolerance", vt, "guessUnvoiced", gu, probe(voicingTolerance=vt, guessUnvoiced=gu))
+        print("voicingTolerance", vt, "guessUnvoiced", gu,
+              probe(synth, voicingTolerance=vt, guessUnvoiced=gu))
 for key, values in {
     "magnitudeCompression": (0.5, 0.8, 1.0),
     "harmonicWeight": (0.5, 0.8, 0.99),
@@ -250,24 +267,20 @@ for key, values in {
     "pitchContinuity": (10.0, 27.5629, 60.0),
 }.items():
     for v in values:
-        print(key, v, probe(**{key: v}))
-```
+        print(key, v, probe(synth, **{key: v}))
 
-実経路 stem 上の掃引（§2.4 の stem をそのまま使う。分離をやり直さない）:
-
-```python
-from svp_rpe.melody.routing import select_routes
-from svp_rpe.melody.extractors import _load_route_waveform
-
+# --- (b) 実経路 stem（§2.4 と同一波形。分離はやり直さない） ---
 prov = {}
 routes = {r.name: r for r in select_routes("vocal_track")}
-wav, sr = _load_route_waveform("kane_y2.mp3", routes["demucs_vocals_then_melodia"], prov)
+wav, stem_sr = _load_route_waveform("kane_y2.mp3",
+                                    routes["demucs_vocals_then_melodia"], prov)
 assert prov["preprocessing"]["stem_sha256"] == (
     "77244a534e748cf32aae79cdae4a6b110167c1ea85a4b7131ffbdcd08c104033"
 ), "stem mismatch (fail-closed)"
-sig = np.asarray(wav, dtype=np.float32)          # stem は既に 44.1 kHz mono
+stem = np.asarray(wav, dtype=np.float32)      # stem は既に 44.1 kHz mono
+assert stem_sr == 44100, stem_sr
 for mc in (1.0, 0.8, 0.5):
-    print("magnitudeCompression", mc, probe(magnitudeCompression=mc))
+    print("magnitudeCompression", mc, probe(stem, magnitudeCompression=mc))
 ```
 
 > **この掃引結果は「どの値を採るべきか」を意味しない。** 床を越える値を実測後に
