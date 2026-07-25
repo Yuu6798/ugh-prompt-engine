@@ -107,6 +107,18 @@ PR #221 の決定論設定（`shifts=0`）。前者は「レビュー対象 comm
 | 抽出区間 | 先頭 30 秒、44.1 kHz mono float32 |
 | **デコード後サンプル sha256** | `5b33ddae06e93b10914dc37a99cb0be30d572c9b1da9edf97b49ccab235be8a1` |
 | demucs version / 重み sha256 | `4.1.0` / `bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86` |
+| torch version | `2.13.0+cu130`（CPU 実行） |
+| **分離実行閉包の合成 sha256** | `abd45077483f03d2604a666d986c2550eb9fea092ea2ac292d07a41ef428758e` |
+
+分離実行閉包 = `demucs` / `torch` / `numpy` の distribution 所有ファイル（§6 と同一の
+合成方法）。重みだけでなく**推論コード側**も stem を左右するため、版だけでなく artifact
+まで pin する。デコーダ（mp3 → float32）は、デコード後サンプル列の sha256 を直接
+pin してあるので、そちらが一致すれば decoder 差は排除される（不一致なら fail-closed）。
+
+> **「再現可能」の適用範囲**: `shifts=0` の行が再現するのは **この分離実行閉包の下で**
+> という条件付きである（同一 closure なら stem sha256 まで一致することを実測で確認済み）。
+> closure が違えば stem は変わりうるので、下記手順は抽出に入る前に closure と stem の
+> 両方を照合して停止する。
 
 > **入力は WAV のバイト列で pin できない**（実測で判明）。`soundfile` が書く WAV は
 > 同一サンプル列・同一プロセス内でもコンテナのバイト列が run 毎に変わる（可変メタデータ）。
@@ -143,6 +155,11 @@ from svp_rpe.rpe.learned.melodia_adapter import extract_melodia_f0
 
 SAMPLES_SHA = "5b33ddae06e93b10914dc37a99cb0be30d572c9b1da9edf97b49ccab235be8a1"
 STEM_SHA = "72097ac0461e49061b78ea0b25edfb876914eb77866a0caed8bab494aa53e280"
+
+SEPARATION_SHA = "abd45077483f03d2604a666d986c2550eb9fea092ea2ac292d07a41ef428758e"
+# §6 の dist_digest を流用（demucs / torch / numpy の artifact 一致を先に確認する）
+if dist_digest(["demucs", "torch", "numpy"]) != SEPARATION_SHA:
+    raise SystemExit("separation closure mismatch (fail-closed)")
 
 y, sr = librosa.load("kane_y2.mp3", sr=44100, mono=True)
 y = y[: 44100 * 30].astype(np.float32)
@@ -295,17 +312,26 @@ backend にも依存する。実測時の数値ランタイム閉包:
 | `numba` | `0.66.0` |
 | `llvmlite` | `0.48.0` |
 
-version 文字列だけでは不十分（同一 version でも別ビルドの wheel は native バイナリが
-異なり、リサンプル / pyin の出力が変わりうる。essentia のバイナリを hash しているのと
-同じ失敗モード）。閉包の **native 拡張の合成指紋**も pin する:
+version 文字列だけでは不十分（同一 version でも別ビルドの wheel は中身が異なり、
+リサンプル / pyin の出力が変わりうる。essentia のバイナリを hash しているのと同じ
+失敗モード）。**各 distribution が所有するファイル**の合成指紋も pin する:
 
 | 項目 | 値 |
 |---|---|
-| 対象 | 上表 7 パッケージ配下の `*.so`（555 ファイル） |
-| 合成 sha256 | `f0a8bd766d720fb3b0bd66b3b647ed33be1ebdd5c517611b4944b09496310bb2` |
+| 対象 | 上表 7 distribution の所有ファイル（`importlib.metadata` の RECORD 由来・`.pyc` 除く。計 3404 ファイル / 372 MB） |
+| 合成 sha256 | `5a27a0b1679e5562cc9a3dcb3aee524297a7a2c9df3bf16d7046c288048ca64b` |
 
-（合成方法 = パッケージ順に、パッケージ相対 POSIX パス + `\0` + そのファイルの sha256
-ダイジェストを順次 feed した sha256。照合は下記スクリプトで約 4 秒。）
+合成方法 = distribution 名の昇順に `[name]` を feed し、各所有ファイルについて
+RECORD 上の相対パス + `\0` + そのファイルの sha256 ダイジェストを feed した sha256。
+
+> **なぜ「モジュールの親ディレクトリを走査」ではないか**（実測で判明した失敗）:
+> `soundfile` 0.14 は dist-packages 直下の**単一ファイルモジュール**
+> （`soundfile.py`）なので、`Path(soundfile.__file__).parent` は site-packages
+> そのものになる。親ディレクトリを再帰走査すると torch や tensorflow など**無関係な
+> パッケージまで指紋に混ざり**、それらを入れ替えただけで一致しなくなる。逆に
+> `librosa` は native 拡張を持たないため、`*.so` だけを見る方式では
+> `librosa.pyin` / `librosa.resample` の**実装 Python ソースが一度も hash されない**。
+> distribution 所有ファイルを列挙すれば、完全かつ環境の他パッケージから独立になる。
 
 ```bash
 pip install -e ".[dev]"                 # src レイアウトなので svp_rpe を import 可能にする
@@ -347,21 +373,29 @@ if drift:
     print("numerical runtime version drift (fail-closed):", drift)
     raise SystemExit(1)
 
-# version が同じでも別ビルドなら数値が動くので、native 拡張の合成指紋まで照合する。
-import importlib
-from pathlib import Path
-CLOSURE_NATIVE_SHA = "f0a8bd766d720fb3b0bd66b3b647ed33be1ebdd5c517611b4944b09496310bb2"
-h = hashlib.sha256()
-for pkg in ("numpy", "scipy", "soxr", "llvmlite", "numba", "soundfile", "librosa"):
-    root = Path(importlib.import_module(pkg).__file__).resolve().parent
-    for f in sorted(root.rglob("*.so")):
-        if not f.is_file():
-            continue
-        h.update(f.relative_to(root).as_posix().encode())
-        h.update(b"\0")
-        h.update(hashlib.sha256(f.read_bytes()).digest())
-if h.hexdigest() != CLOSURE_NATIVE_SHA:
-    print("numerical runtime binary drift (fail-closed):", h.hexdigest())
+# version が同じでも別ビルドなら数値が動くので、distribution 所有ファイルの
+# 合成指紋まで照合する（環境の他パッケージには依存しない）。
+def dist_digest(names):
+    h = hashlib.sha256()
+    for name in sorted(names):
+        dist = meta.distribution(name)
+        h.update(f"[{name}]".encode())
+        for f in sorted(dist.files or [], key=str):
+            if f.suffix == ".pyc":
+                continue
+            try:
+                data = dist.locate_file(f).read_bytes()
+            except OSError:
+                continue
+            h.update(str(f).encode())
+            h.update(b"\0")
+            h.update(hashlib.sha256(data).digest())
+    return h.hexdigest()
+
+NUMERICAL_SHA = "5a27a0b1679e5562cc9a3dcb3aee524297a7a2c9df3bf16d7046c288048ca64b"
+got = dist_digest(CLOSURE)
+if got != NUMERICAL_SHA:
+    print("numerical runtime artifact drift (fail-closed):", got)
     raise SystemExit(1)
 print("essentia build and numerical runtime match the recorded diagnosis environment")
 PY
