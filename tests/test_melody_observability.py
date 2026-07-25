@@ -12,6 +12,7 @@ CI 安全（重依存なし）で回る層:
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import os
 import sys
@@ -1852,11 +1853,26 @@ _GO_BAR_NEGATIVE = "real_instrumental_negative"
 _GO_BAR_ROUTE = "demucs_vocals_then_crepe"
 
 
-def _go_bar_registry(input_kind: "str | None" = None):
-    reg = yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))
-    # #53: go-bar fixture は scoring 時に expected_audio_sha256 必須。real registry は
-    # slow-lane 記録前なので未設定。happy path 用に、`_make_go_bar_report` が付ける
-    # report の audio_sha256（= sha256(fixture_id)）と一致する値を注入する。
+def _go_bar_registry(
+    input_kind: "str | None" = None,
+    source_registry: "dict | None" = None,
+):
+    reg = copy.deepcopy(
+        source_registry
+        if source_registry is not None
+        else yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))
+    )
+    # 本番 registry の dated 状態から単体テストを隔離する。slow-lane で記録される
+    # version/hash は `_make_go_bar_report` の決定論ダミーとは別物なので、テスト用 copy
+    # では未記録状態を明示的に所有する。個別の一致/不一致テストだけが必要な pin を注入する。
+    for entry in reg["provenance"]["model_weights"].values():
+        entry["version"] = None
+        entry["sha256"] = None
+        entry["code_sha256"] = None
+
+    # #53: go-bar fixture は scoring 時に expected_audio_sha256 必須。happy path 用に、
+    # `_make_go_bar_report` が付ける report の audio_sha256（= sha256(fixture_id)）と
+    # 一致する値を注入する。
     go_bar_ids = set(_GO_BAR_POSITIVES) | {_GO_BAR_NEGATIVE}
     for entry in reg.get("external_fixtures", []):
         if entry["id"] in go_bar_ids:
@@ -1865,6 +1881,44 @@ def _go_bar_registry(input_kind: "str | None" = None):
             if input_kind is not None:
                 entry["input_kind"] = input_kind
     return reg
+
+
+def test_go_bar_registry_is_independent_of_recorded_production_pins():
+    """slow-lane 記録後の本番 registry でもテスト用台帳は自己完結する。"""
+    import scripts.run_melody_observability as harness
+
+    recorded_registry = yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))
+    go_bar_ids = set(_GO_BAR_POSITIVES) | {_GO_BAR_NEGATIVE}
+    for entry in recorded_registry["external_fixtures"]:
+        if entry["id"] in go_bar_ids:
+            entry["expected_audio_sha256"] = hashlib.sha256(
+                f"recorded:{entry['id']}".encode()
+            ).hexdigest()
+    for index, entry in enumerate(
+        recorded_registry["provenance"]["model_weights"].values()
+    ):
+        entry["version"] = f"recorded-{index}"
+        entry["sha256"] = hashlib.sha256(f"recorded-weights:{index}".encode()).hexdigest()
+        entry["code_sha256"] = hashlib.sha256(
+            f"recorded-code:{index}".encode()
+        ).hexdigest()
+
+    registry = _go_bar_registry(source_registry=recorded_registry)
+    assert all(
+        entry[field] is None
+        for entry in registry["provenance"]["model_weights"].values()
+        for field in ("version", "sha256", "code_sha256")
+    )
+    assert all(
+        entry["sha256"] is not None
+        for entry in recorded_registry["provenance"]["model_weights"].values()
+    )
+
+    outcomes = {fid: {_GO_BAR_ROUTE: "sufficient"} for fid in _GO_BAR_POSITIVES}
+    outcomes["real_vocal_waltz"] = {_GO_BAR_ROUTE: "insufficient"}
+    outcomes[_GO_BAR_NEGATIVE] = {_GO_BAR_ROUTE: "insufficient"}
+    reports = [_make_go_bar_report(outcomes) for _ in range(2)]
+    assert harness.evaluate_m1_real_go_bar(reports, registry)["verdict"] == "go"
 
 
 def test_evaluate_go_bar_go_when_survivor():

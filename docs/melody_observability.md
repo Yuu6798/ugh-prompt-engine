@@ -251,7 +251,10 @@ python scripts/run_melody_observability.py --external ext.json --out ext_obs.jso
 # pitch 依存（pyin baseline は追加依存なしで動く。crepe/melodia は §5 manual）
 pip install -e ".[pitch]"
 # pip install crepe        # CREPE（manual/external 統合・§5）
+# pip install tensorflow   # CREPE の未宣言 runtime 依存（CPU 版で可）
 # pip install essentia     # Melodia を測るなら（AGPL-3.0 を受容できる環境のみ）
+# Windows は Essentia wheel がなく build 不能。Melodia unavailable の環境では no_go は出せず、
+# 三値 verdict は go または inconclusive のみ（全経路実測を要する no_go の定義による）。
 
 # ★分離経路（本命 demucs_vocals_then_*）を測るなら `.[separate]` を入れる。
 #   ハーネスは分離が走った行に preprocessing.stem_sha256 /
