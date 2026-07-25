@@ -72,6 +72,12 @@ def _deterministic_rng() -> Iterator[None]:
     プロセス全体の RNG を書き換えたまま帰ると呼び出し側の乱数列を壊すので、
     前の state を退避して `finally` で必ず復元する（グローバル副作用を残さない）。
     torch は optional 依存なので、入っていなければ stdlib のみを固定する。
+
+    torch 側は `torch.random.fork_rng` に委ねる。`torch.manual_seed` は CPU だけでなく
+    **全 CUDA デバイスの generator も seed する**ため、`torch.set_rng_state`（CPU のみ）で
+    戻すと CUDA 側の乱数列を呼び出し側から奪ったままになる。fork_rng に device を明示して
+    渡せば CPU と該当 CUDA generator の両方が復元される（devices を明示するのは、
+    None 既定だと CUDA 初期化済みプロセスで警告付きの全列挙になるため）。
     """
     random_state = random.getstate()
     random.seed(SEPARATION_RNG_SEED)
@@ -79,16 +85,17 @@ def _deterministic_rng() -> Iterator[None]:
         import torch  # pragma: no cover - torch は optional
     except ImportError:
         torch = None  # type: ignore[assignment]
-    torch_state = None
-    if torch is not None:  # pragma: no cover - torch 導入環境のみ
-        torch_state = torch.get_rng_state()
-        torch.manual_seed(SEPARATION_RNG_SEED)
     try:
-        yield
+        with contextlib.ExitStack() as stack:
+            if torch is not None:  # pragma: no cover - torch 導入環境のみ
+                devices = (
+                    list(range(torch.cuda.device_count())) if torch.cuda.is_available() else []
+                )
+                stack.enter_context(torch.random.fork_rng(devices=devices))
+                torch.manual_seed(SEPARATION_RNG_SEED)
+            yield
     finally:
         random.setstate(random_state)
-        if torch is not None and torch_state is not None:  # pragma: no cover
-            torch.set_rng_state(torch_state)
 
 
 class SeparatorNotAvailableError(RuntimeError):

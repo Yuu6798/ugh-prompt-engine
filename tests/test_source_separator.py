@@ -11,6 +11,8 @@ import pytest
 import soundfile as sf
 
 import svp_rpe.io.source_separator as source_separator
+from svp_rpe.rpe.learned import LearnedModelUnavailable
+from svp_rpe.rpe.learned.source_separation_adapter import ensure_separation_available
 from svp_rpe.io.source_separator import (
     DEFAULT_SHIFTS,
     REQUIRED_STEMS,
@@ -247,14 +249,39 @@ def test_deterministic_rng_restores_global_state() -> None:
     assert restored == expected
 
 
+def test_deterministic_rng_restores_torch_state() -> None:
+    """torch の RNG も奪ったまま帰らないこと（fork_rng に委ねている）。"""
+    torch = pytest.importorskip("torch")
+
+    torch.manual_seed(1234)
+    expected = torch.rand(3)
+
+    torch.manual_seed(1234)
+    with source_separator._deterministic_rng():
+        torch.rand(1)
+    restored = torch.rand(3)
+
+    assert torch.equal(restored, expected)
+
+
 @pytest.mark.slow
 def test_real_demucs_separation_is_bitwise_reproducible(tmp_path: Path) -> None:
     """受け入れ条件: 同一入力を 2 回分離して vocals stem の sha256 が一致すること。
 
     実 demucs（`separate` extra）と事前取得済み重みを要する machine-dependent テスト。
-    未導入環境では skip する。`shifts` を既定の 1 に戻すとここが落ちる。
+    `shifts` を既定の 1 に戻すとここが落ちる。
+
+    demucs が入っていても**重みが未取得なら skip** する。nightly の core-extras は
+    `lyrics` extra 経由で demucs を入れたうえで slow 含む全件を回すが、重みは
+    provisioning しない。import 可否だけで判定すると、そこで `separate_stems` が
+    torch hub の実行時ダウンロードに落ちて workflow の install-only/no-inference
+    契約を破る。可用性は「未導入 / 取得済 / 導入済だが重み未取得」の 3 値で見る。
     """
     pytest.importorskip("demucs.api")
+    try:
+        ensure_separation_available()
+    except LearnedModelUnavailable as exc:
+        pytest.skip(f"demucs weights are not provisioned locally: {exc}")
 
     sample_rate = 44100
     t = np.arange(sample_rate * 2, dtype=np.float32) / sample_rate
