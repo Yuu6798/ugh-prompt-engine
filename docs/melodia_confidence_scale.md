@@ -89,115 +89,61 @@ cent 単位で合うことはない）。一方で **被覆は 15 note-event 中
 「0 か 0.2947 の 2 値」は合成純音（定振幅）に固有の縮退であり、一般的な挙動ではない。
 一般的な挙動は「**分布はするが 0.30 に届かない**」である。
 
-### 2.4 実 demucs vocals stem 上の pre-gate 出力（本命経路そのもの）
+### 2.4 実経路 `demucs_vocals_then_melodia` の pre-gate 出力
 
 「stem がそもそも使える音高を含まない」ことと「音高はあるが confidence が床未満」は
-post-gate の症状が同じなので、**実際の `demucs_vocals_then_melodia` 経路の stem** 上で
-gate を通す前の値を直接測った。
+post-gate の症状が同じなので、gate を通す前の値を直接測った。
 
-**2 つの分離設定で測ってある**: 本 doc の checkout の実経路（`shifts` 既定 = 1・非決定論）と、
-PR #221 の決定論設定（`shifts=0`）。前者は「レビュー対象 commit の経路そのもの」を測るため、
-後者は「pin 可能な波形で測る」ためで、**結論はどちらでも同じ**。
-
-共通の入力 pin:
+測定は **harness の実経路をそのまま呼ぶ**（`melody.extractors.observe_via_route_with_provenance`
+に `routing.select_routes("vocal_track")` の経路を渡す）。前処理・分離・pin 付与はすべて
+経路実装のものを使い、doc 側でパイプラインを組み直さない — 自前で組むと「decode して
+mono 化して 30 秒に切ってから WAV を書く」等、実経路と違う前処理を測ることになる
+（実経路は凍結した元ファイルをそのまま Demucs へ渡す）。
 
 | 項目 | 値 |
 |---|---|
-| 元素材 | `kane_y2.mp3`（sha256 `8eb0237c1e8aaad41762923f436cfbafa33a246e6dc15ce3e1beed8dbd347752`） |
-| 抽出区間 | 先頭 30 秒、44.1 kHz mono float32 |
-| **デコード後サンプル sha256** | `5b33ddae06e93b10914dc37a99cb0be30d572c9b1da9edf97b49ccab235be8a1` |
-| demucs version / 重み sha256 | `4.1.0` / `bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86` |
-| torch version | `2.13.0+cu130`（CPU 実行） |
-| **分離実行閉包の合成 sha256** | `8a595143a47e42be591d16f2c2f501b71ac7e192975dce25c5985ce261a48d8e` |
+| 入力 | `kane_y2.mp3` **全長**（fixture `real_vocal_jrock`） |
+| 入力 sha256 | `8eb0237c1e8aaad41762923f436cfbafa33a246e6dc15ce3e1beed8dbd347752` |
+| 分離 | `htdemucs_ft` v4.1.0（`shifts=0`・現在の実経路） |
+| **vocals stem sha256**（harness emit） | `77244a534e748cf32aae79cdae4a6b110167c1ea85a4b7131ffbdcd08c104033` |
+| melodia 実装バイナリ pin | `b29c5aea8acf1229fb546cd6f573872310a30845a2263aa687921b3075a34aaa`（kind=`library_binary`） |
 
-分離実行閉包 = `demucs` / `torch` / `numpy` の distribution 所有ファイル（§6 と同一の
-合成方法）。重みだけでなく**推論コード側**も stem を左右するため、版だけでなく artifact
-まで pin する。デコーダ（mp3 → float32）は、デコード後サンプル列の sha256 を直接
-pin してあるので、そちらが一致すれば decoder 差は排除される（不一致なら fail-closed）。
+pre-gate 出力（**同一 stem** に対する 2 経路）:
 
-> **「再現可能」の適用範囲**: `shifts=0` の行が再現するのは **この分離実行閉包の下で**
-> という条件付きである（同一 closure なら stem sha256 まで一致することを実測で確認済み）。
-> closure が違えば stem は変わりうるので、下記手順は抽出に入る前に closure と stem の
-> 両方を照合して停止する。
-
-> **入力は WAV のバイト列で pin できない**（実測で判明）。`soundfile` が書く WAV は
-> 同一サンプル列・同一プロセス内でもコンテナのバイト列が run 毎に変わる（可変メタデータ）。
-> 一方 **デコード後の float32 サンプル列は完全に再現する**ので、pin はそちらに置く。
-> 実際、WAV bytes が違っても `shifts=0` の stem sha256 は一致することを確認済み。
-
-分離設定別の結果:
-
-| 分離設定 | stem sha256 | frames | melodia pitch 検出 | melodia conf max | melodia conf ≥ 0.30 |
+| 経路 | frames | pitch 検出 | conf max | conf mean | conf ≥ 0.30 |
 |---|---|---|---|---|---|
-| `shifts=1`（本 commit の実経路）run1 | `2c39028bcf34d4a6…` | 10337 | 5105 (49.4%) | 0.1487 | **0** |
-| `shifts=1`（同）run2 | `216ae8264987d953…` | 10337 | 5015 (48.5%) | 0.1602 | **0** |
-| `shifts=0`（PR #221・**再現可能**） | `72097ac0461e49061b78ea0b25edfb876914eb77866a0caed8bab494aa53e280` | 10337 | 4531 (43.8%) | 0.1601 | **0** |
+| `demucs_vocals_then_melodia` | 56543 | **27171 (48.1%)** | 0.2216 | 0.0630 | **0** |
+| `demucs_vocals_then_pyin`（対照） | 3534 | 2144 (60.7%) | 1.0000 | 0.2448 | **1100** |
 
-同一 stem（`shifts=0`）に対する pyin 対照: `frames=646 / voiced=97 / conf max 0.9459 /
-conf ≥ 0.30 が 55`。
+**stem は「音高が取れない」状態ではない** — Melodia 自身が 48.1% のフレームに音高を
+出しており、**同一 stem**（`stem_sha256` が両経路で一致）で pyin は 1100 フレームが
+床を越える。したがって post-gate の全ゼロは「stem が壊れている」ためではなく
+confidence の値域に帰属する。
 
-`shifts=1` の 2 run で stem hash が異なるのは、この commit の経路が非決定論であることの
-直接証拠でもある（PR #221 が解く問題）。
+pin は harness が経路実行時に emit したもので、`observe_via_route_with_provenance` は
+third-party を import する**前**にコード pin を bind し、推論後に再検証する（#217）。
+doc 側で別途 artifact を hash し直すより、この経路自身の pin を引用する方が
+「測った経路」と「pin した対象」が一致する。
 
-**stem は「音高が取れない」状態ではない** — 3 通りの stem すべてで Melodia 自身が
-43.8–49.4% のフレームに音高を出しており、同じ stem で pyin は conf 0.9459 まで達して
-55 フレームが床を越える。したがって post-gate の全ゼロは「stem が壊れている」ためでは
-なく confidence の値域に帰属する。この結論は**レビュー対象 commit の実経路
-（`shifts=1`）でも成立している**。
-
-再現手順（`shifts=0` 経路。pin 不一致なら抽出前に停止する）:
+再現手順:
 
 ```python
-import hashlib, sys, numpy as np, librosa, soundfile as sf, demucs.api, tempfile
-from pathlib import Path
-sys.path.insert(0, "src")
-from svp_rpe.rpe.learned.melodia_adapter import extract_melodia_f0
+import sys; sys.path.insert(0, "src")
+import numpy as np
+from svp_rpe.melody.routing import select_routes
+from svp_rpe.melody.extractors import observe_via_route_with_provenance
 
-SAMPLES_SHA = "5b33ddae06e93b10914dc37a99cb0be30d572c9b1da9edf97b49ccab235be8a1"
-STEM_SHA = "72097ac0461e49061b78ea0b25edfb876914eb77866a0caed8bab494aa53e280"
-
-SEPARATION_SHA = "8a595143a47e42be591d16f2c2f501b71ac7e192975dce25c5985ce261a48d8e"
-
-import importlib.metadata as meta   # 本スニペット単体で完結させる（§6 と同一実装）
-
-def dist_digest(names):
-    h = hashlib.sha256()
-    for name in sorted(names):
-        dist = meta.distribution(name)
-        h.update(f"[{name}]".encode())
-        for f in sorted(dist.files or [], key=str):
-            rel = str(f)
-            if rel.startswith("..") or ".dist-info/" in rel or f.suffix == ".pyc":
-                continue
-            try:
-                data = dist.locate_file(f).read_bytes()
-            except OSError:
-                continue
-            h.update(rel.encode()); h.update(b"\0")
-            h.update(hashlib.sha256(data).digest())
-    return h.hexdigest()
-
-if dist_digest(["demucs", "torch", "numpy"]) != SEPARATION_SHA:
-    raise SystemExit("separation closure mismatch (fail-closed)")
-
-y, sr = librosa.load("kane_y2.mp3", sr=44100, mono=True)
-y = y[: 44100 * 30].astype(np.float32)
-got = hashlib.sha256(y.tobytes()).hexdigest()
-if got != SAMPLES_SHA:                      # 素材 / デコーダ違い
-    raise SystemExit(f"decoded samples mismatch (fail-closed): {got}")
-
-tmp = Path(tempfile.mkdtemp()) / "ex.wav"   # WAV bytes は pin しない（上記注記）
-sf.write(tmp, y, sr, subtype="FLOAT")
-sep = demucs.api.Separator(model="htdemucs_ft", device="cpu", shifts=0)
-_, stems = sep.separate_audio_file(tmp)
-voc = np.asarray(stems["vocals"], dtype=np.float32)
-voc = voc.mean(axis=0) if voc.ndim == 2 else voc
-got = hashlib.sha256(voc.tobytes()).hexdigest()
-if got != STEM_SHA:                         # demucs ビルド / 重み違い
-    raise SystemExit(f"stem mismatch (fail-closed): {got}")
-
-t, hz, cf = extract_melodia_f0(voc, sep.samplerate)[:3]   # ここから §2.4 の数値
+routes = {r.name: r for r in select_routes("vocal_track")}
+obs, prov = observe_via_route_with_provenance("kane_y2.mp3", routes["demucs_vocals_then_melodia"])
+assert prov["preprocessing"]["stem_sha256"] == (
+    "77244a534e748cf32aae79cdae4a6b110167c1ea85a4b7131ffbdcd08c104033"
+), "stem mismatch (fail-closed)"
+cf = np.array(obs.frame_confidence)
+print(cf.max(), int((cf >= 0.30).sum()), cf.size)
 ```
+
+（`kane_y2.mp3` は commit しない M1-real 素材。sha256 は上表。demucs 重みが
+未取得なら経路が `LearnedModelUnavailable` で止まる＝実行時 DL は起きない。）
 
 ### 2.3 pyin との対比（同一入力 `synth_mono_phrased`）
 
@@ -246,8 +192,8 @@ insufficient に固定されない。
 確立した事実は次の 2 点に限る:
 
 1. **測定した全入力**（`synth_mono_phrased` / `kane_y2` 生 mp3 / `crslv2_w3` 生 mp3 /
-   `kane_y2` の demucs vocals stem / M1-real 5 素材）で Melodia の confidence は 0.30 に
-   届かず、有声フレーム数が 0 になった
+   実経路 `demucs_vocals_then_melodia` の vocals stem / M1-real 5 素材）で Melodia の
+   confidence は 0.30 に届かず、有声フレーム数が 0 になった
 2. その値域は pyin の `voiced_prob`（max 1.0 / mean 0.64）と**同一の床で裁けるスケールではない**
 
 「実制作音楽の実用帯でこの床を越える入力があるか」は未測定であり、
@@ -261,8 +207,8 @@ Cowork 指定の切り分け基準に対する結論:
 |---|---|
 | アダプタ設定バグのうち **sampleRate / dtype の取り違え** | **否**。44.1 kHz へリサンプル済み・mono float32 で、検出音は ±0.1 cent の精度（取り違えなら周波数が系統的にずれる） |
 | アダプタ設定バグのうち **パラメータ最適化不足** | **未棄却**。§2.1 の被覆は 15 note-event 中 3。ただし被覆を上げても confidence の値域が床の外にある事実は変わらないため、本件の主因ではない |
-| demucs stem との噛み合わせ問題 | **否**。§2.4 で本命経路の stem を直接測り、`shifts=1`（本 commit の実経路・2 run）と `shifts=0`（PR #221）の 3 通りの stem すべてで Melodia 自身が 43.8–49.4% のフレームに音高を出し、同一 stem で pyin は 55 フレームが床を越えることを確認した（stem 側の欠陥では説明できない） |
-| 凍結閾値と抽出器の信頼度セマンティクスの衝突 | **是**。`voiced_confidence_floor 0.30` が Melodia の値域（**全実測入力の conf max が 0.1487–0.2947**）の外にある |
+| demucs stem との噛み合わせ問題 | **否**。§2.4 で実経路 `demucs_vocals_then_melodia` を全長素材に対して回し、Melodia 自身が 48.1% のフレームに音高を出すこと、**同一 stem** で pyin は 1100 フレームが床を越えることを確認した（stem 側の欠陥では説明できない） |
+| 凍結閾値と抽出器の信頼度セマンティクスの衝突 | **是**。`voiced_confidence_floor 0.30` が Melodia の値域（**全実測入力の conf max が 0.1487–0.2947**。実経路 = 0.2216）の外にある |
 
 なお「パラメータ最適化不足」は本件と**独立に残る課題**である（被覆 3/15 は
 それ自体が低い）。ただし床の問題を解かない限り、被覆をいくら上げても
@@ -454,4 +400,4 @@ PY
 - 実測記録: `docs/measurements/m1real_2026-07/`（PR #220）
 - 観測ゲート設計: [`docs/melody_observability.md`](melody_observability.md)
 - 凍結レジストリ: `tests/fixtures/melody_bench/registry.yaml`（`observation_gate` / `one_way_rule`）
-- 決定論化 PR-A: demucs `shifts=0`（本件とは独立の別要因）
+- 決定論化 PR-A: demucs `shifts=0`（#221・マージ済み。本件とは独立の別要因）
