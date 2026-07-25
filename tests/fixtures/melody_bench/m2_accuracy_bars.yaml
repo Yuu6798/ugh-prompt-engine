@@ -1,0 +1,56 @@
+# melody_bench/m2_accuracy_bars.yaml — M2 精度検証の事前登録バー（一方向規律）
+# （設計: docs/DESIGN_M2_extraction_accuracy.md §4）。
+#
+# `tests/fixtures/melody_bench/registry.yaml` とは意図的に**別ファイル**にしている。
+# registry.yaml は `docs/measurements/m1real_2026-07/m1real_verdict.json` の
+# `registry_sha256` で bytes 全体を hash pin されており（
+# `tests/test_m1real_committed_record.py::test_verdict_registry_pin_matches_frozen_registry`
+# が CI で強制、実測 2026-07-25 時点で pin と実ファイル sha256 は一致 =
+# ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481）。ここへ
+# `m2_accuracy_bars` を追記すると registry.yaml の bytes が変わり、この commit 済み
+# M1-real verdict の pin が壊れる（is not a M2 concern to re-litigate: 「pin を足す
+# なら再実測して verdict を作り直す」という運用コストを支払わずに済ませるのが本
+# ファイル分離の目的）。
+#
+# よって `m1_real_go_bar`（registry.yaml 内）と**同じ一方向規律**
+# （registered_utc つき・実測前凍結・実測後に緩めない）を、この独立ファイルへ適用
+# する。自身の sha256 は `scripts/run_melody_accuracy.py` が精度 run の provenance
+# （`bars_sha256`）へ pin する。
+
+schema_version: "m2-accuracy-bars/0.1"
+registered_utc: "2026-07-25"
+
+m2_accuracy_bars:
+  tolerance_cents: 50            # mir_eval 標準（設計 §4 と同値）
+  S_direct:                       # 抽出器の健全性バー（落ちたら経路自体を疑う）
+    min_rpa: 0.90
+    max_vfa: 0.15
+  V_direct:                       # 実声・分離なし（M2c で初適用）
+    min_rpa: 0.80
+    max_octave_gap: 0.05         # RCA - RPA
+  V_fullstack:                    # 実運用帯（分離込み）・「校正済み」昇格バー（M2c）
+    min_rpa: 0.65
+    max_octave_gap: 0.10
+    max_vfa: 0.25
+  S_fullstack: {}                 # バーなし・診断記録のみ（Demucs は合成音色に対し分布外）
+  repeats_min: 2                   # 決定論確認（shifts=0 後は bit 一致するはず）
+  one_way_rule: >
+    バーを実測後に緩めない。落ちた帯の再挑戦は経路/実装の変更 + dated 再実測のみ。
+
+# ---------------------------------------------------------------------------
+# provenance（AGENTS §8。registry.yaml の provenance 節と対称）
+# ---------------------------------------------------------------------------
+provenance:
+  specs: m2_accuracy_specs.yaml
+  # m2_accuracy_specs.yaml の完全 digest pin。仕様を変えたらこの値を更新すること
+  # （dated 再実測の規律。`tests/test_melody_accuracy.py` が実ファイルとの完全
+  # 一致を機械検証する）。
+  specs_sha256: "b5f7df0b3e3eb6d9fe0272cc96a057fa1e9560867804f5d7c519f49dfd68387c"
+  # 合成波形の pin（registry.yaml の provenance.waveform_sha256 と対称）。値 =
+  # sha256(build_signal(fid).y を float32 化した tobytes())。m2_s_fullstack_mix は
+  # melody + accompaniment_gain * accompaniment を harness（run_melody_accuracy.py）
+  # が生サンプルで加算ミックスした後の float32 tobytes()。builder / spec / ミックス式
+  # のいずれかが drift すればこの pin が食い違い dated 再実測を強制する。
+  waveform_sha256:
+    m2_s_direct_melody: "e9a6d018b911f68843d66c9069b69fe590d9b26c52e835b9f23504af02d53d70"
+    m2_s_fullstack_mix: "9a0c7e453451157a28ba1778fc4db540c672a4451bafb02246a8f1a28f1dd9a3"
