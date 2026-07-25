@@ -400,7 +400,10 @@ def _normalize_diagnostic(text: str, project_dir: Path) -> str:
     locator は常に POSIX 区切り（`/`）へ正規化する（`recast_plan.json` の
     「同一 checkout なら常に同じ bytes」契約は OS を跨いでも成立させたい
     ため、区切り文字の違いを出力から消す）。"""
-    project_dir_pattern = re.escape(str(project_dir))
+    project_dir_forms = {str(project_dir), project_dir.as_posix()}
+    project_dir_pattern = "(?:" + "|".join(
+        re.escape(value) for value in sorted(project_dir_forms, key=len, reverse=True)
+    ) + ")"
 
     def _relativize(match: "re.Match[str]") -> str:
         # マッチした相対 locator 部分（project_dir + 区切り文字の直後から

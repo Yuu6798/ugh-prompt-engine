@@ -1,0 +1,2 @@
+# Content-addressed fixtures hash repository bytes, so text checkouts must be stable.
+* text=auto eol=lf
