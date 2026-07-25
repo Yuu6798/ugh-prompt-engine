@@ -36,6 +36,7 @@ import sys
 import tempfile
 import uuid
 from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -430,6 +431,8 @@ def run_synthetic(
 
     results: Dict[str, Any] = {
         "mode": "synthetic",
+        # ★観測を実施した UTC 時刻（external と対称）。詳細は run_external の同フィールド注記。
+        "recorded_utc": _recorded_utc(),
         "registry_sha256": registry_sha256,
         "thresholds_source": thresholds_source,
         # ★実際に assess へ渡した閾値そのものを pin する。registry スナップショットを
@@ -520,10 +523,22 @@ def run_external(
 
     results: Dict[str, Any] = {
         "mode": "external",
+        # ★観測を実施した UTC 時刻。report は dated record を名乗るが、run_id は不透明で
+        # 時刻を含まず、registry の pin は事前登録日のままなので、squash / export 後は
+        # commit timestamp も provenance として当てにならない。「この外部素材と重みの
+        # bytes をいつ観測したか」「後の再実測と区別できるか」を report 自身に持たせる。
+        # 決定論の対象外（run 毎に必ず変わる）なので、評価器の repeats 同一性判定
+        # （run_id の distinct 要求・_route_provenance の署名）には一切用いない。
+        "recorded_utc": _recorded_utc(),
         # ★resolve 済み絶対パスを記録する（audio_path と同型）。verbatim（相対）だと、
         # 後で別 cwd から --evaluate-go-bar したとき #63 の manifest 衝突ガードが
         # evaluator の cwd 基準で誤解決し、生成時の manifest を守れない（#64・Codex 指摘）。
         "manifest_path": str(Path(manifest_path).resolve()),
+        # ★上の絶対パスは衝突ガード専用で、別 checkout からは辿れない machine-local な値。
+        # 監査用に checkout 安定な論理パスを**併記**する（絶対パスの置換ではない: 置換すると
+        # #63/#64 のガードが evaluator の cwd 基準で誤解決して退行する）。repo 配下に無い
+        # manifest では None（外部素材の manifest は repo 外に置かれうる）。
+        "manifest_path_relative": _repo_relative_path(manifest_path),
         "manifest_sha256": manifest_sha256,
         "registry_sha256": registry_sha256,
         "thresholds_source": thresholds_source,
@@ -583,7 +598,12 @@ def run_external(
             results["fixtures"][entry_id] = {
                 "input_kind": entry["input_kind"],
                 "expect_status": None,  # 正解なし実素材（観測可能性のみ）
-                "audio_path": str(resolved),  # 正規化パス
+                "audio_path": str(resolved),  # 正規化パス（#48 の衝突ガード入力）
+                # ★manifest が宣言した相対パスをそのまま併記する。上の絶対パスは
+                # originating host でしか意味を持たないが、こちらは manifest と組で
+                # 「どの素材か」を checkout 非依存に指す（波形は意図的に uncommitted
+                # なので、素材の同一性保証は audio_sha256 が担う）。
+                "audio_path_in_manifest": str(raw_path),
                 "audio_sha256": audio_sha256,
                 "routes": rows,
             }
@@ -903,6 +923,33 @@ def _generator_code_paths() -> "List[Path]":
             if target is not None and target not in resolved:
                 stack.append(target)
     return sorted(resolved)
+
+
+def _recorded_utc() -> str:
+    """観測を実施した時刻（UTC・ISO 8601・秒精度）。
+
+    report が名乗る "dated record" の日付そのもの。`run_id` は不透明で時刻を含まず、
+    registry の pin は事前登録日のままなので、これが無いと「いつ観測したか」は
+    commit timestamp 頼りになる（squash / export で失われる）。
+
+    **決定論の対象外**である点に注意: 同一入力でも run 毎に必ず変わるため、評価器の
+    repeats 同一性判定には用いない（`_route_provenance` の署名にも含めない）。
+    """
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _repo_relative_path(path: "str | Path") -> "str | None":
+    """`path` を repo root 相対で返す（repo 配下に無ければ None）。
+
+    report に載る絶対パスは originating host でしか解決できない。監査側が別 checkout
+    から artifact を辿れるよう、repo 配下のものだけ checkout 安定な論理パスを併記する。
+    絶対パス側を置き換えないのは、あちらが `--out` 衝突ガード（#63/#64）の入力であり、
+    相対値だと evaluator の cwd 基準で誤解決するため。
+    """
+    try:
+        return Path(path).resolve().relative_to(ROOT).as_posix()
+    except ValueError:
+        return None
 
 
 def _generator_code_sha256() -> str:

@@ -1468,6 +1468,71 @@ def test_external_harness_records_and_verifies_audio_hash(tmp_path):
         harness.run_external(manifest, _default_thresholds())
 
 
+def test_external_report_records_measured_utc_and_portable_paths(tmp_path):
+    """report が観測 UTC 時刻と checkout 安定な論理パスを持つこと（#220 レビュー対応）。
+
+    絶対パス（`manifest_path` / `audio_path`）は `--out` 衝突ガード（#63/#64）の入力なので
+    残したまま、監査用の論理パスを**併記**する形を固定する。置換してしまうと evaluator の
+    cwd 基準で誤解決してガードが退行する。
+    """
+    import json as _json
+    from datetime import datetime
+
+    import scripts.run_melody_observability as harness
+
+    manifest_dir = tmp_path / "bundle"
+    manifest_dir.mkdir()
+    sr = 22050
+    t = np.linspace(0, 1.0, sr, endpoint=False)
+    wav = manifest_dir / "clip.wav"
+    sf.write(wav, (0.3 * np.sin(2 * np.pi * 220 * t)).astype(np.float32), sr, subtype="FLOAT")
+    manifest = manifest_dir / "m.json"
+    manifest.write_text(
+        _json.dumps([{"id": "real_lead_synth", "path": "clip.wav", "input_kind": "clear_lead"}]),
+        encoding="utf-8",
+    )
+
+    results = harness.run_external(manifest, _default_thresholds())
+
+    # 観測時刻: UTC 付き ISO 8601 としてパースできること。
+    recorded = datetime.fromisoformat(results["recorded_utc"])
+    assert recorded.utcoffset() is not None
+    assert recorded.utcoffset().total_seconds() == 0
+
+    # 絶対パスは維持（衝突ガードの入力）。
+    assert results["manifest_path"] == str(manifest.resolve())
+    entry = results["fixtures"]["real_lead_synth"]
+    assert entry["audio_path"] == str(wav.resolve())
+
+    # 論理パスを併記。manifest は repo 外（tmp_path）なので repo 相対は None。
+    assert results["manifest_path_relative"] is None
+    assert entry["audio_path_in_manifest"] == "clip.wav"
+
+    # repo 配下の manifest なら repo root 相対を持つ。
+    assert harness._repo_relative_path(harness.REGISTRY_PATH) == (
+        "tests/fixtures/melody_bench/registry.yaml"
+    )
+
+
+def test_recorded_utc_is_not_part_of_repeats_identity(tmp_path):
+    """`recorded_utc` が repeats 同一性判定に混入しないこと。
+
+    run 毎に必ず変わる値なので、provenance 署名に入れると n>=2 の repeats が常に
+    fail-closed になる。署名の構成要素から独立していることを固定する。
+    """
+    import scripts.run_melody_observability as harness
+
+    row = {
+        "source_model": "librosa:pyin",
+        "extractor_version": "0.11.0",
+        "extractor_code_sha256": "a" * 64,
+    }
+    baseline = harness._route_provenance(row)
+    assert harness._route_provenance({**row, "recorded_utc": "2026-07-25T00:00:00+00:00"}) == (
+        baseline
+    )
+
+
 def test_external_harness_resolves_relative_paths_against_manifest(tmp_path):
     """external の相対 path は manifest ディレクトリ基準で解決し正規化して記録する。"""
     import json as _json
