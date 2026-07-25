@@ -1468,6 +1468,136 @@ def test_external_harness_records_and_verifies_audio_hash(tmp_path):
         harness.run_external(manifest, _default_thresholds())
 
 
+def test_external_report_records_measured_utc_and_portable_paths(tmp_path):
+    """report が観測 UTC 時刻と checkout 安定な論理パスを持つこと（#220 レビュー対応）。
+
+    絶対パス（`manifest_path` / `audio_path`）は `--out` 衝突ガード（#63/#64）の入力なので
+    残したまま、監査用の論理パスを**併記**する形を固定する。置換してしまうと evaluator の
+    cwd 基準で誤解決してガードが退行する。
+    """
+    import json as _json
+    from datetime import datetime
+
+    import scripts.run_melody_observability as harness
+
+    manifest_dir = tmp_path / "bundle"
+    manifest_dir.mkdir()
+    sr = 22050
+    t = np.linspace(0, 1.0, sr, endpoint=False)
+    wav = manifest_dir / "clip.wav"
+    sf.write(wav, (0.3 * np.sin(2 * np.pi * 220 * t)).astype(np.float32), sr, subtype="FLOAT")
+    manifest = manifest_dir / "m.json"
+    manifest.write_text(
+        _json.dumps([{"id": "real_lead_synth", "path": "clip.wav", "input_kind": "clear_lead"}]),
+        encoding="utf-8",
+    )
+
+    results = harness.run_external(manifest, _default_thresholds())
+
+    # 観測時刻: UTC 付き ISO 8601 としてパースできること。
+    recorded = datetime.fromisoformat(results["recorded_utc"])
+    assert recorded.utcoffset() is not None
+    assert recorded.utcoffset().total_seconds() == 0
+
+    # dated record の主タイムスタンプは観測**完了**時に刻む（日境界をまたぐ run で
+    # 前日を主張しないため）。開始時刻は別フィールドに残す。
+    started = datetime.fromisoformat(results["started_utc"])
+    assert started <= recorded
+
+    # 絶対パスは維持（衝突ガードの入力）。
+    assert results["manifest_path"] == str(manifest.resolve())
+    entry = results["fixtures"]["real_lead_synth"]
+    assert entry["audio_path"] == str(wav.resolve())
+
+    # 論理パスを併記。manifest は repo 外（tmp_path）なので repo 相対は None。
+    assert results["manifest_path_relative"] is None
+    assert entry["audio_path_in_manifest"] == "clip.wav"
+
+    # repo 配下の manifest なら repo root 相対を持つ。
+    assert harness._repo_relative_path(harness.REGISTRY_PATH) == (
+        "tests/fixtures/melody_bench/registry.yaml"
+    )
+
+
+def test_audio_path_hint_is_none_for_absolute_manifest_entries(tmp_path):
+    """manifest entry が絶対パスなら可搬 hint は None（machine-local 値を載せない）。
+
+    `audio_path_in_manifest` は「checkout 非依存」を名乗るフィールドなので、絶対パスを
+    そのまま入れると名前と中身が食い違う。素材の同定は `audio_sha256` が担う。
+    """
+    import json as _json
+    from pathlib import PurePosixPath, PureWindowsPath
+
+    import scripts.run_melody_observability as harness
+
+    sr = 22050
+    t = np.linspace(0, 1.0, sr, endpoint=False)
+    wav = tmp_path / "abs.wav"
+    sf.write(wav, (0.3 * np.sin(2 * np.pi * 220 * t)).astype(np.float32), sr, subtype="FLOAT")
+    manifest = tmp_path / "m.json"
+    manifest.write_text(
+        _json.dumps(
+            [{"id": "real_lead_synth", "path": str(wav.resolve()), "input_kind": "clear_lead"}]
+        ),
+        encoding="utf-8",
+    )
+
+    results = harness.run_external(manifest, _default_thresholds())
+    entry = results["fixtures"]["real_lead_synth"]
+    assert entry["audio_path_in_manifest"] is None
+    assert entry["audio_path"] == str(wav.resolve())  # 衝突ガード用の絶対パスは残る
+
+    # 相対パスは POSIX 正規化する（Windows の `\` 区切りを載せない）。
+    assert harness._manifest_relative_hint(PurePosixPath("audio/clip.wav")) == "audio/clip.wav"
+    assert (
+        harness._manifest_relative_hint(PureWindowsPath(r"audio\clip.wav")) == "audio/clip.wav"
+    )
+
+
+def test_evaluate_go_bar_requires_valid_recorded_utc(tmp_path):
+    """`recorded_utc` の欠落・非 UTC・未来値は verdict を出さず fail-closed。"""
+    from datetime import datetime, timedelta, timezone
+
+    import scripts.run_melody_observability as harness
+
+    registry, _ = harness._load_registry()
+
+    def _evaluate(value):
+        report = {"mode": "external", "recorded_utc": value}
+        harness.evaluate_m1_real_go_bar([report], registry)
+
+    with pytest.raises(ValueError, match="recorded_utc が無い"):
+        _evaluate(None)
+    with pytest.raises(ValueError, match="ISO 8601 として"):
+        _evaluate("not-a-timestamp")
+    with pytest.raises(ValueError, match="UTC でない"):
+        _evaluate("2026-07-25T00:00:00")  # tz なし
+    with pytest.raises(ValueError, match="UTC でない"):
+        _evaluate("2026-07-25T00:00:00+09:00")  # offset != 0
+    future = (datetime.now(timezone.utc) + timedelta(days=1)).replace(microsecond=0).isoformat()
+    with pytest.raises(ValueError, match="未来の時刻"):
+        _evaluate(future)
+
+
+def test_recorded_utc_is_not_part_of_repeats_identity(tmp_path):
+    """`recorded_utc` が repeats 同一性判定に混入しないこと。
+
+    run 毎に必ず変わる値なので、provenance 署名に入れると n>=2 の repeats が常に
+    fail-closed になる。署名の構成要素から独立していることを固定する。
+    """
+    import scripts.run_melody_observability as harness
+
+    row = {
+        "source_model": "librosa:pyin",
+        "extractor_version": "0.11.0",
+        "extractor_code_sha256": "a" * 64,
+    }
+    baseline = harness._route_provenance(row)
+    assert harness._route_provenance({**row, "recorded_utc": "2026-07-25T00:00:00+00:00"}) == (
+        baseline
+    )
+
+
 def test_external_harness_resolves_relative_paths_against_manifest(tmp_path):
     """external の相対 path は manifest ディレクトリ基準で解決し正規化して記録する。"""
     import json as _json
@@ -1712,6 +1842,15 @@ def _current_generator_code_sha256() -> str:
     return _CURRENT_GEN_SHA_CACHE
 
 
+def _fixed_recorded_utc() -> str:
+    """テスト report 用の固定 `recorded_utc`（過去の UTC 時刻）。
+
+    評価器は「必須・UTC・未来でない」ことだけを要求するので、決定論のため固定値を使う
+    （`datetime.now` を使うとテスト間で値が揺れる）。
+    """
+    return "2026-07-25T00:00:00+00:00"
+
+
 def _make_go_bar_report(
     route_outcomes: "dict[str, dict[str, str]]",
     registry_sha256: str = "f" * 64,
@@ -1826,6 +1965,9 @@ def _make_go_bar_report(
         "manifest_path": "fake_manifest.json",
         "manifest_sha256": "0" * 64,
         "registry_sha256": registry_sha256,
+        # dated-record 契約（評価器が UTC timestamp を必須化する）を満たす既定値。
+        # run_external が観測完了時に刻むのを模す。欠落/不正ケースは専用テストで検証する。
+        "recorded_utc": _fixed_recorded_utc(),
         "thresholds_source": "registry",
         "observation_gate": dataclasses.asdict(thresholds),
         # 各 report は既定で独立した run_id を持つ（run_external が実行ごとに発行する
