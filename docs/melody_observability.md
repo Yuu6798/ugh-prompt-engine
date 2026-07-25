@@ -497,7 +497,13 @@ pin を必須化する = 記録が済むまで Go を出さない fail-closed �
   API は別デコーダへフォールバックし**その実行ファイルは結果に影響しえない**ので covered
   から外して続行する＝実行されていないものを pin したことにしない。CLI/API の判定は
   demucs を import せずに行い、判定が外れても分離後の再 hash が実測値で計算されるため
-  before/after 比較が拾う）、
+  before/after 比較が拾う）。**FFmpeg は実行ファイルだけでなくデコード実装の共有
+  ライブラリ（`libavformat` / `libavcodec` / `libswresample` 等）も pin する** —
+  distro 版は実装がそちらにあるため。解決は ELF の `DT_NEEDED` を読んで推移的に行い
+  （`ldd` は対象を実行しうるので使わない）、線は **FFmpeg 自身のライブラリ**まで
+  （libc/libm 等の OS 基盤まで広げると「環境全体が推論スタック」になり誰も守れない）。
+  静的リンクや非 ELF（macOS / Windows）では closure は空＝読めなかったものを pin した
+  ことにしない、
   CREPE は既定の `viterbi=True` が **`hmmlearn`** の HMM デコードで F0 系列の選択を
   決めるので閉包に含める、**librosa 経由で必ず実行される数値バックエンド
   （`soxr` / `numba` / `llvmlite`）も全閉包に入れる**（`librosa.resample` の既定

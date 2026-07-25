@@ -2502,7 +2502,7 @@ def test_separation_pin_covers_audio_executables(monkeypatch, tmp_path):
 
     digest, covered = melody_provenance.separation_code_fingerprint(use_cache=False)
     assert harness_is_sha256(digest)
-    assert covered[-2:] == ("ffmpeg", "ffprobe")
+    assert covered[-2:] == ("ffmpeg", "ffprobe")  # ダミーは非 ELF なので closure は空
 
     # FFmpeg のビルドが変われば pin が動く。
     (bin_dir / "ffmpeg").write_text("#!/bin/sh\n# other build\n", encoding="utf-8")
@@ -2537,6 +2537,56 @@ def test_separation_pin_covers_audio_executables(monkeypatch, tmp_path):
     )
     with pytest.raises(LearnedModelUnavailable, match="could not be resolved"):
         melody_provenance.separation_code_fingerprint(use_cache=False)
+
+
+def test_ffmpeg_shared_libraries_are_pinned(monkeypatch, tmp_path):
+    """FFmpeg のデコード実装（libav* / libsw*）も分離 pin に畳む（#217）。
+
+    distro 版 FFmpeg は実装を共有ライブラリに持つので、`/usr/bin/ffmpeg` の hash だけでは
+    `libavcodec` 差し替えを検出できない。解決は **実行も dlopen もせず** ELF の
+    `DT_NEEDED` を読んで行う。
+    """
+    from svp_rpe.melody import provenance as melody_provenance
+
+    lib_dir = tmp_path / "lib"
+    lib_dir.mkdir()
+    libavformat = lib_dir / "libavformat.so.60"
+    libavcodec = lib_dir / "libavcodec.so.60"
+    libavformat.write_bytes(b"avformat-v1")
+    libavcodec.write_bytes(b"avcodec-v1")
+
+    needed = {
+        "ffmpeg": ["libavformat.so.60", "libc.so.6"],  # libc は線の外
+        "libavformat.so.60": ["libavcodec.so.60"],  # 推移的にたどる
+        "libavcodec.so.60": [],
+    }
+    monkeypatch.setattr(
+        melody_provenance, "_needed_sonames", lambda path: needed.get(path.name, [])
+    )
+    monkeypatch.setattr(
+        melody_provenance,
+        "_resolve_soname_without_loading",
+        lambda soname: lib_dir / soname,
+    )
+
+    closure = melody_provenance._ffmpeg_library_closure(Path("ffmpeg"))
+    assert closure == [libavcodec, libavformat]  # libc は含まない
+
+    # 解決できない FFmpeg ライブラリがあれば fail-closed。
+    monkeypatch.setattr(
+        melody_provenance, "_resolve_soname_without_loading", lambda soname: None
+    )
+    with pytest.raises(LearnedModelUnavailable, match="could not be located"):
+        melody_provenance._ffmpeg_library_closure(Path("ffmpeg"))
+
+
+def test_needed_sonames_reads_real_elf_without_executing_it():
+    """`DT_NEEDED` の読み取りは実 ELF で動き、非 ELF では None（#217）。"""
+    from svp_rpe.melody.provenance import _needed_sonames
+
+    names = _needed_sonames(Path(sys.executable))
+    assert names is not None and any(n.startswith("libc.so") for n in names)
+    assert _needed_sonames(ROOT / "pyproject.toml") is None
 
 
 def test_separation_executable_probe_reports_required_by_path(monkeypatch):

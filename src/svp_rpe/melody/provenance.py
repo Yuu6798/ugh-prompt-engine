@@ -532,7 +532,141 @@ def separation_code_fingerprint(*, use_cache: bool = True) -> "tuple[Optional[st
         folded.update(tool_digest.encode("ascii"))
         folded.update(b"\0")
         names.append(tool)
+        # 実行ファイル本体だけでは足りない: distro 版 FFmpeg はデコード実装を
+        # `libavformat` / `libavcodec` / `libswresample` 等の共有ライブラリに持つ。
+        for library in _ffmpeg_library_closure(Path(resolved)):
+            try:
+                library_digest = file_sha256(library, use_cache=use_cache)
+            except OSError as exc:
+                raise LearnedModelUnavailable(
+                    f"FFmpeg shared library {str(library)!r} could not be fingerprinted "
+                    f"({type(exc).__name__}: {exc}); unavailable として扱う"
+                ) from exc
+            folded.update(library.name.encode("utf-8"))
+            folded.update(b"\0")
+            folded.update(library_digest.encode("ascii"))
+            folded.update(b"\0")
+            names.append(library.name)
     return folded.hexdigest(), tuple(names)
+
+
+# FFmpeg 自身のデコード実装を提供する共有ライブラリ群の名前規約。
+# libc/libm 等の OS 基盤まで広げると「環境全体が推論スタック」になって誰も守れない線に
+# なるので、**デコードの実装そのもの**（FFmpeg のライブラリ）で線を引く（Codex #217）。
+_FFMPEG_LIBRARY_PREFIXES = ("libav", "libsw", "libpostproc")
+
+
+def _ffmpeg_library_closure(executable: Path) -> "list[Path]":
+    """`executable` が動的リンクする FFmpeg ライブラリ群を**実行せずに**解決する。
+
+    ELF の `DT_NEEDED` を読んで soname を集め（推移的にたどる）、ローダと同じ探索順で
+    実体パスへ解決する（`ldd` は対象を実行しうるので使わない・#217 と同じ規律）。
+    静的リンク（自己完結ビルド）や ELF でない実行形式（macOS / Windows）では空を返す
+    ——「読めなかったもの」を pin したことにしない。解決できない FFmpeg ライブラリが
+    あれば `LearnedModelUnavailable`（デコード実装の一部を覆わない pin は出さない）。
+    """
+    resolved: "dict[str, Path]" = {}
+    pending = list(_needed_sonames(executable) or ())
+    seen = set()
+    while pending:
+        soname = pending.pop()
+        if soname in seen:
+            continue
+        seen.add(soname)
+        if not soname.startswith(_FFMPEG_LIBRARY_PREFIXES):
+            continue  # OS 基盤ライブラリは線の外（上のコメント参照）
+        path = _resolve_soname_without_loading(soname)
+        if path is None:
+            raise LearnedModelUnavailable(
+                f"FFmpeg shared library {soname!r} could not be located; "
+                "デコード実装の一部を覆わない pin を publish しないため unavailable として扱う"
+            )
+        resolved[soname] = path
+        pending.extend(_needed_sonames(path) or ())
+    return [resolved[name] for name in sorted(resolved)]
+
+
+def _needed_sonames(path: Path) -> "Optional[list[str]]":
+    """ELF の `DT_NEEDED` を読み、依存 soname を返す（ELF でなければ None）。
+
+    実行も dlopen もせず、ヘッダとセクションを直接読むだけ（Codex #217）。
+    """
+    import struct
+
+    try:
+        blob = path.read_bytes()
+    except OSError:
+        return None
+    if len(blob) < 64 or blob[:4] != b"\x7fELF":
+        return None
+    is_64 = blob[4] == 2
+    little = blob[5] == 1
+    endian = "<" if little else ">"
+    try:
+        if is_64:
+            e_shoff, = struct.unpack_from(endian + "Q", blob, 0x28)
+            e_shentsize, e_shnum = struct.unpack_from(endian + "HH", blob, 0x3A)
+        else:
+            e_shoff, = struct.unpack_from(endian + "I", blob, 0x20)
+            e_shentsize, e_shnum = struct.unpack_from(endian + "HH", blob, 0x2E)
+    except struct.error:
+        return None
+    dynamic = None
+    dynstr = None
+    for index in range(e_shnum):
+        offset = e_shoff + index * e_shentsize
+        try:
+            if is_64:
+                sh_type, = struct.unpack_from(endian + "I", blob, offset + 4)
+                sh_offset, sh_size = struct.unpack_from(endian + "QQ", blob, offset + 0x18)
+            else:
+                sh_type, = struct.unpack_from(endian + "I", blob, offset + 4)
+                sh_offset, sh_size = struct.unpack_from(endian + "II", blob, offset + 0x10)
+        except struct.error:
+            return None
+        if sh_type == 6:  # SHT_DYNAMIC
+            dynamic = (sh_offset, sh_size)
+        elif sh_type == 3 and dynstr is None:  # SHT_STRTAB（.dynstr を含む）
+            dynstr = (sh_offset, sh_size)
+        elif sh_type == 11:  # SHT_DYNSYM → 直後の strtab が .dynstr
+            try:
+                sh_link, = struct.unpack_from(endian + "I", blob, offset + (0x28 if is_64 else 0x18))
+            except struct.error:
+                return None
+            link_offset = e_shoff + sh_link * e_shentsize
+            try:
+                if is_64:
+                    dynstr = struct.unpack_from(endian + "QQ", blob, link_offset + 0x18)
+                else:
+                    dynstr = struct.unpack_from(endian + "II", blob, link_offset + 0x10)
+            except struct.error:
+                return None
+    if dynamic is None or dynstr is None:
+        return []
+    entry_size = 16 if is_64 else 8
+    fmt = endian + ("Qq" if is_64 else "Ii")
+    needed_offsets = []
+    dyn_offset, dyn_size = dynamic
+    for position in range(dyn_offset, dyn_offset + dyn_size, entry_size):
+        try:
+            tag, value = struct.unpack_from(fmt, blob, position)
+        except struct.error:
+            break
+        if tag == 0:  # DT_NULL
+            break
+        if tag == 1:  # DT_NEEDED
+            needed_offsets.append(value)
+    str_offset, str_size = dynstr
+    names = []
+    for value in needed_offsets:
+        start = str_offset + value
+        if not (str_offset <= start < str_offset + str_size):
+            continue
+        end = blob.find(b"\0", start)
+        if end == -1:
+            continue
+        names.append(blob[start:end].decode("utf-8", errors="replace"))
+    return names
 
 
 def _separation_audio_executables() -> "tuple[tuple, bool]":
