@@ -1,0 +1,1088 @@
+{
+  "fixtures": {
+    "real_instrumental_negative": {
+      "audio_path": "/home/user/ugh-prompt-engine/m1real_package/audio/kane_y2_instrumental_neg.wav",
+      "audio_sha256": "6882e035c61a1c7b1df795f703cec369775637f1a4a3728a2e08ea579c80ebf3",
+      "expect_status": null,
+      "input_kind": "vocal_track",
+      "routes": [
+        {
+          "extractor": "pyin",
+          "extractor_code_packages": [
+            "librosa",
+            "scipy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "07f43915f950d810d5d27239f842b8c3cd6e36a67a0c7c86d0689d3edc0a854a",
+          "extractor_version": "0.11.0",
+          "outcome": "insufficient",
+          "report": {
+            "confidence_mean": 0.5577619047619047,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 0.42857142857142855,
+            "note_count": 1,
+            "octave_jump_rate": 0.0,
+            "phrase_count": 1,
+            "reasons": [
+              "voiced_coverage 0.041 < min 0.300",
+              "note_count 1 < min 8",
+              "phrase_count 1 < min 2"
+            ],
+            "route": "pyin_direct",
+            "status": "insufficient",
+            "voiced_coverage": 0.040697674418604654
+          },
+          "route": "pyin_direct",
+          "source_model": "librosa:pyin"
+        },
+        {
+          "extractor": "pyin",
+          "extractor_code_packages": [
+            "librosa",
+            "scipy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "07f43915f950d810d5d27239f842b8c3cd6e36a67a0c7c86d0689d3edc0a854a",
+          "extractor_version": "0.11.0",
+          "outcome": "insufficient",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_code_packages": [
+              "demucs",
+              "torch",
+              "numpy"
+            ],
+            "separation_code_sha256": "6328a424c2b46d8945e3c0c8c44c556c19be327030f5d4175df3ef28efc1e178",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0",
+            "separation_weights_files": [
+              "f7e0c4bc-ba3fe64a.th",
+              "d12395a8-e57c48e6.th",
+              "92cfc3b6-ef3bcb9c.th",
+              "04573f0d-f3cf25b2.th",
+              "files.txt",
+              "htdemucs_ft.yaml"
+            ],
+            "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+            "stem_sha256": "82d9cf77adc3812e924a7f3561f8afad8c700540cd9f7d01b0fba287182cddc6"
+          },
+          "report": {
+            "confidence_mean": 0.0,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 1.0,
+            "note_count": 0,
+            "octave_jump_rate": 0.0,
+            "phrase_count": 0,
+            "reasons": [
+              "voiced_coverage 0.000 < min 0.300",
+              "note_count 0 < min 8",
+              "phrase_count 0 < min 2",
+              "confidence_mean 0.000 < min 0.450",
+              "low_confidence_rate 1.000 > max 0.550"
+            ],
+            "route": "demucs_vocals_then_pyin",
+            "status": "insufficient",
+            "voiced_coverage": 0.0
+          },
+          "route": "demucs_vocals_then_pyin",
+          "source_model": "librosa:pyin"
+        },
+        {
+          "extractor": "crepe",
+          "extractor_code_packages": [
+            "crepe",
+            "tensorflow",
+            "keras",
+            "hmmlearn",
+            "librosa",
+            "resampy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "bbd952ef8525501dfc81e74d538e9dc8de0392b74db82ae71c661d451d6f82f0",
+          "extractor_version": "0.0.16",
+          "extractor_weights_files": [
+            "model-full.h5"
+          ],
+          "extractor_weights_kind": "model_weights",
+          "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55",
+          "outcome": "insufficient",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_code_packages": [
+              "demucs",
+              "torch",
+              "numpy"
+            ],
+            "separation_code_sha256": "6328a424c2b46d8945e3c0c8c44c556c19be327030f5d4175df3ef28efc1e178",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0",
+            "separation_weights_files": [
+              "f7e0c4bc-ba3fe64a.th",
+              "d12395a8-e57c48e6.th",
+              "92cfc3b6-ef3bcb9c.th",
+              "04573f0d-f3cf25b2.th",
+              "files.txt",
+              "htdemucs_ft.yaml"
+            ],
+            "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+            "stem_sha256": "806a285f97e5e3062fe18e37851a30322bfc6c8580c3384b7aad36fd811050b2"
+          },
+          "report": {
+            "confidence_mean": 0.5044982035928137,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 0.5583832335329342,
+            "note_count": 95,
+            "octave_jump_rate": 0.0851063829787234,
+            "phrase_count": 7,
+            "reasons": [
+              "low_confidence_rate 0.558 > max 0.550"
+            ],
+            "route": "demucs_vocals_then_crepe",
+            "status": "insufficient",
+            "voiced_coverage": 0.30349840981372106
+          },
+          "route": "demucs_vocals_then_crepe",
+          "source_model": "crepe:predict"
+        },
+        {
+          "extractor": "melodia",
+          "extractor_code_packages": [
+            "essentia",
+            "librosa",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "879d82db6e6486a8162458cd554a9496f1e3719e743631e5255cd84203b46f4e",
+          "extractor_version": "2.1b6.dev1389",
+          "extractor_weights_files": [
+            "_essentia.cpython-311-x86_64-linux-gnu.so"
+          ],
+          "extractor_weights_kind": "library_binary",
+          "extractor_weights_sha256": "b29c5aea8acf1229fb546cd6f573872310a30845a2263aa687921b3075a34aaa",
+          "outcome": "insufficient",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_code_packages": [
+              "demucs",
+              "torch",
+              "numpy"
+            ],
+            "separation_code_sha256": "6328a424c2b46d8945e3c0c8c44c556c19be327030f5d4175df3ef28efc1e178",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0",
+            "separation_weights_files": [
+              "f7e0c4bc-ba3fe64a.th",
+              "d12395a8-e57c48e6.th",
+              "92cfc3b6-ef3bcb9c.th",
+              "04573f0d-f3cf25b2.th",
+              "files.txt",
+              "htdemucs_ft.yaml"
+            ],
+            "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+            "stem_sha256": "22abc41cc1a4d7c20471235ac0fa14bbc256a6ea842f981d2352efba5dc340c8"
+          },
+          "report": {
+            "confidence_mean": 0.0,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 1.0,
+            "note_count": 0,
+            "octave_jump_rate": 0.0,
+            "phrase_count": 0,
+            "reasons": [
+              "voiced_coverage 0.000 < min 0.300",
+              "note_count 0 < min 8",
+              "phrase_count 0 < min 2",
+              "confidence_mean 0.000 < min 0.450",
+              "low_confidence_rate 1.000 > max 0.550"
+            ],
+            "route": "demucs_vocals_then_melodia",
+            "status": "insufficient",
+            "voiced_coverage": 0.0
+          },
+          "route": "demucs_vocals_then_melodia",
+          "source_model": "essentia:PredominantPitchMelodia"
+        }
+      ]
+    },
+    "real_vocal_band": {
+      "audio_path": "/home/user/ugh-prompt-engine/m1real_package/audio/kaze_k2.mp3",
+      "audio_sha256": "06d9fedf7fa776d71d9aa227439370eabc4a62eb7c0f06fc7e1ca2f5ea31d820",
+      "expect_status": null,
+      "input_kind": "vocal_track",
+      "routes": [
+        {
+          "extractor": "pyin",
+          "extractor_code_packages": [
+            "librosa",
+            "scipy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "07f43915f950d810d5d27239f842b8c3cd6e36a67a0c7c86d0689d3edc0a854a",
+          "extractor_version": "0.11.0",
+          "outcome": "insufficient",
+          "report": {
+            "confidence_mean": 0.44185789473684256,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 0.8,
+            "note_count": 9,
+            "octave_jump_rate": 0.0,
+            "phrase_count": 6,
+            "reasons": [
+              "voiced_coverage 0.025 < min 0.300",
+              "confidence_mean 0.442 < min 0.450",
+              "low_confidence_rate 0.800 > max 0.550"
+            ],
+            "route": "pyin_direct",
+            "status": "insufficient",
+            "voiced_coverage": 0.02542826552462527
+          },
+          "route": "pyin_direct",
+          "source_model": "librosa:pyin"
+        },
+        {
+          "extractor": "pyin",
+          "extractor_code_packages": [
+            "librosa",
+            "scipy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "07f43915f950d810d5d27239f842b8c3cd6e36a67a0c7c86d0689d3edc0a854a",
+          "extractor_version": "0.11.0",
+          "outcome": "insufficient",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_code_packages": [
+              "demucs",
+              "torch",
+              "numpy"
+            ],
+            "separation_code_sha256": "6328a424c2b46d8945e3c0c8c44c556c19be327030f5d4175df3ef28efc1e178",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0",
+            "separation_weights_files": [
+              "f7e0c4bc-ba3fe64a.th",
+              "d12395a8-e57c48e6.th",
+              "92cfc3b6-ef3bcb9c.th",
+              "04573f0d-f3cf25b2.th",
+              "files.txt",
+              "htdemucs_ft.yaml"
+            ],
+            "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+            "stem_sha256": "92e0d8c74bca690a6127457e2c53505c1501039abaf274bea8947d64bc913f2b"
+          },
+          "report": {
+            "confidence_mean": 0.640615347334412,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 0.3376413570274637,
+            "note_count": 77,
+            "octave_jump_rate": 0.05263157894736842,
+            "phrase_count": 29,
+            "reasons": [
+              "voiced_coverage 0.180 < min 0.300"
+            ],
+            "route": "demucs_vocals_then_pyin",
+            "status": "insufficient",
+            "voiced_coverage": 0.18025626092020966
+          },
+          "route": "demucs_vocals_then_pyin",
+          "source_model": "librosa:pyin"
+        },
+        {
+          "extractor": "crepe",
+          "extractor_code_packages": [
+            "crepe",
+            "tensorflow",
+            "keras",
+            "hmmlearn",
+            "librosa",
+            "resampy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "bbd952ef8525501dfc81e74d538e9dc8de0392b74db82ae71c661d451d6f82f0",
+          "extractor_version": "0.0.16",
+          "extractor_weights_files": [
+            "model-full.h5"
+          ],
+          "extractor_weights_kind": "model_weights",
+          "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55",
+          "outcome": "sufficient",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_code_packages": [
+              "demucs",
+              "torch",
+              "numpy"
+            ],
+            "separation_code_sha256": "6328a424c2b46d8945e3c0c8c44c556c19be327030f5d4175df3ef28efc1e178",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0",
+            "separation_weights_files": [
+              "f7e0c4bc-ba3fe64a.th",
+              "d12395a8-e57c48e6.th",
+              "92cfc3b6-ef3bcb9c.th",
+              "04573f0d-f3cf25b2.th",
+              "files.txt",
+              "htdemucs_ft.yaml"
+            ],
+            "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+            "stem_sha256": "936034088e0c43bfb621e4c53920efe6ce05e64aa36343acb46dc5baf51d6bf2"
+          },
+          "report": {
+            "confidence_mean": 0.7204741513850945,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 0.20610612563402264,
+            "note_count": 880,
+            "octave_jump_rate": 0.06257110352673492,
+            "phrase_count": 26,
+            "reasons": [],
+            "route": "demucs_vocals_then_crepe",
+            "status": "sufficient",
+            "voiced_coverage": 0.6430005017561465
+          },
+          "route": "demucs_vocals_then_crepe",
+          "source_model": "crepe:predict"
+        },
+        {
+          "extractor": "melodia",
+          "extractor_code_packages": [
+            "essentia",
+            "librosa",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "879d82db6e6486a8162458cd554a9496f1e3719e743631e5255cd84203b46f4e",
+          "extractor_version": "2.1b6.dev1389",
+          "extractor_weights_files": [
+            "_essentia.cpython-311-x86_64-linux-gnu.so"
+          ],
+          "extractor_weights_kind": "library_binary",
+          "extractor_weights_sha256": "b29c5aea8acf1229fb546cd6f573872310a30845a2263aa687921b3075a34aaa",
+          "outcome": "insufficient",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_code_packages": [
+              "demucs",
+              "torch",
+              "numpy"
+            ],
+            "separation_code_sha256": "6328a424c2b46d8945e3c0c8c44c556c19be327030f5d4175df3ef28efc1e178",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0",
+            "separation_weights_files": [
+              "f7e0c4bc-ba3fe64a.th",
+              "d12395a8-e57c48e6.th",
+              "92cfc3b6-ef3bcb9c.th",
+              "04573f0d-f3cf25b2.th",
+              "files.txt",
+              "htdemucs_ft.yaml"
+            ],
+            "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+            "stem_sha256": "42394c8245fd80124daff828c08cb0b48953868fae799d90a17ccd4d9ff2d3b5"
+          },
+          "report": {
+            "confidence_mean": 0.0,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 1.0,
+            "note_count": 0,
+            "octave_jump_rate": 0.0,
+            "phrase_count": 0,
+            "reasons": [
+              "voiced_coverage 0.000 < min 0.300",
+              "note_count 0 < min 8",
+              "phrase_count 0 < min 2",
+              "confidence_mean 0.000 < min 0.450",
+              "low_confidence_rate 1.000 > max 0.550"
+            ],
+            "route": "demucs_vocals_then_melodia",
+            "status": "insufficient",
+            "voiced_coverage": 0.0
+          },
+          "route": "demucs_vocals_then_melodia",
+          "source_model": "essentia:PredominantPitchMelodia"
+        }
+      ]
+    },
+    "real_vocal_futurepop": {
+      "audio_path": "/home/user/ugh-prompt-engine/m1real_package/audio/sev4_x2.mp3",
+      "audio_sha256": "abd7f01d0da59dbbde7e6864525a3526d4fcba33489b2a6774c7620fd72d94e2",
+      "expect_status": null,
+      "input_kind": "vocal_track",
+      "routes": [
+        {
+          "extractor": "pyin",
+          "extractor_code_packages": [
+            "librosa",
+            "scipy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "07f43915f950d810d5d27239f842b8c3cd6e36a67a0c7c86d0689d3edc0a854a",
+          "extractor_version": "0.11.0",
+          "outcome": "insufficient",
+          "report": {
+            "confidence_mean": 0.5109094202898535,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 0.6038647342995169,
+            "note_count": 58,
+            "octave_jump_rate": 0.08771929824561403,
+            "phrase_count": 23,
+            "reasons": [
+              "voiced_coverage 0.096 < min 0.300",
+              "low_confidence_rate 0.604 > max 0.550"
+            ],
+            "route": "pyin_direct",
+            "status": "insufficient",
+            "voiced_coverage": 0.09563409563409564
+          },
+          "route": "pyin_direct",
+          "source_model": "librosa:pyin"
+        },
+        {
+          "extractor": "pyin",
+          "extractor_code_packages": [
+            "librosa",
+            "scipy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "07f43915f950d810d5d27239f842b8c3cd6e36a67a0c7c86d0689d3edc0a854a",
+          "extractor_version": "0.11.0",
+          "outcome": "insufficient",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_code_packages": [
+              "demucs",
+              "torch",
+              "numpy"
+            ],
+            "separation_code_sha256": "6328a424c2b46d8945e3c0c8c44c556c19be327030f5d4175df3ef28efc1e178",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0",
+            "separation_weights_files": [
+              "f7e0c4bc-ba3fe64a.th",
+              "d12395a8-e57c48e6.th",
+              "92cfc3b6-ef3bcb9c.th",
+              "04573f0d-f3cf25b2.th",
+              "files.txt",
+              "htdemucs_ft.yaml"
+            ],
+            "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+            "stem_sha256": "32536aaedb9b26d8ae11fd3c523bcbd5e7275102c2bc6f821101811d939fd21a"
+          },
+          "report": {
+            "confidence_mean": 0.6245241379310377,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 0.3486590038314176,
+            "note_count": 106,
+            "octave_jump_rate": 0.009523809523809525,
+            "phrase_count": 35,
+            "reasons": [
+              "voiced_coverage 0.197 < min 0.300"
+            ],
+            "route": "demucs_vocals_then_pyin",
+            "status": "insufficient",
+            "voiced_coverage": 0.19683257918552036
+          },
+          "route": "demucs_vocals_then_pyin",
+          "source_model": "librosa:pyin"
+        },
+        {
+          "extractor": "crepe",
+          "extractor_code_packages": [
+            "crepe",
+            "tensorflow",
+            "keras",
+            "hmmlearn",
+            "librosa",
+            "resampy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "bbd952ef8525501dfc81e74d538e9dc8de0392b74db82ae71c661d451d6f82f0",
+          "extractor_version": "0.0.16",
+          "extractor_weights_files": [
+            "model-full.h5"
+          ],
+          "extractor_weights_kind": "model_weights",
+          "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55",
+          "outcome": "sufficient",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_code_packages": [
+              "demucs",
+              "torch",
+              "numpy"
+            ],
+            "separation_code_sha256": "6328a424c2b46d8945e3c0c8c44c556c19be327030f5d4175df3ef28efc1e178",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0",
+            "separation_weights_files": [
+              "f7e0c4bc-ba3fe64a.th",
+              "d12395a8-e57c48e6.th",
+              "92cfc3b6-ef3bcb9c.th",
+              "04573f0d-f3cf25b2.th",
+              "files.txt",
+              "htdemucs_ft.yaml"
+            ],
+            "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+            "stem_sha256": "b4abbc673c29fbfa4f348617cb73d8bef20dd32b4a6fe1c17e7b6debb0f33fdb"
+          },
+          "report": {
+            "confidence_mean": 0.7488761281746295,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 0.15287203526201637,
+            "note_count": 892,
+            "octave_jump_rate": 0.0718294051627385,
+            "phrase_count": 9,
+            "reasons": [],
+            "route": "demucs_vocals_then_crepe",
+            "status": "sufficient",
+            "voiced_coverage": 0.7737238131326801
+          },
+          "route": "demucs_vocals_then_crepe",
+          "source_model": "crepe:predict"
+        },
+        {
+          "extractor": "melodia",
+          "extractor_code_packages": [
+            "essentia",
+            "librosa",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "879d82db6e6486a8162458cd554a9496f1e3719e743631e5255cd84203b46f4e",
+          "extractor_version": "2.1b6.dev1389",
+          "extractor_weights_files": [
+            "_essentia.cpython-311-x86_64-linux-gnu.so"
+          ],
+          "extractor_weights_kind": "library_binary",
+          "extractor_weights_sha256": "b29c5aea8acf1229fb546cd6f573872310a30845a2263aa687921b3075a34aaa",
+          "outcome": "insufficient",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_code_packages": [
+              "demucs",
+              "torch",
+              "numpy"
+            ],
+            "separation_code_sha256": "6328a424c2b46d8945e3c0c8c44c556c19be327030f5d4175df3ef28efc1e178",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0",
+            "separation_weights_files": [
+              "f7e0c4bc-ba3fe64a.th",
+              "d12395a8-e57c48e6.th",
+              "92cfc3b6-ef3bcb9c.th",
+              "04573f0d-f3cf25b2.th",
+              "files.txt",
+              "htdemucs_ft.yaml"
+            ],
+            "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+            "stem_sha256": "9a4e14de8b45e7614ecaeb34b405cb7a7927d93f256712f68aa83bfc8e1e2238"
+          },
+          "report": {
+            "confidence_mean": 0.0,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 1.0,
+            "note_count": 0,
+            "octave_jump_rate": 0.0,
+            "phrase_count": 0,
+            "reasons": [
+              "voiced_coverage 0.000 < min 0.300",
+              "note_count 0 < min 8",
+              "phrase_count 0 < min 2",
+              "confidence_mean 0.000 < min 0.450",
+              "low_confidence_rate 1.000 > max 0.550"
+            ],
+            "route": "demucs_vocals_then_melodia",
+            "status": "insufficient",
+            "voiced_coverage": 0.0
+          },
+          "route": "demucs_vocals_then_melodia",
+          "source_model": "essentia:PredominantPitchMelodia"
+        }
+      ]
+    },
+    "real_vocal_jrock": {
+      "audio_path": "/home/user/ugh-prompt-engine/m1real_package/audio/kane_y2.mp3",
+      "audio_sha256": "8eb0237c1e8aaad41762923f436cfbafa33a246e6dc15ce3e1beed8dbd347752",
+      "expect_status": null,
+      "input_kind": "vocal_track",
+      "routes": [
+        {
+          "extractor": "pyin",
+          "extractor_code_packages": [
+            "librosa",
+            "scipy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "07f43915f950d810d5d27239f842b8c3cd6e36a67a0c7c86d0689d3edc0a854a",
+          "extractor_version": "0.11.0",
+          "outcome": "insufficient",
+          "report": {
+            "confidence_mean": 0.5174673992673994,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 0.5384615384615384,
+            "note_count": 28,
+            "octave_jump_rate": 0.0,
+            "phrase_count": 15,
+            "reasons": [
+              "voiced_coverage 0.071 < min 0.300"
+            ],
+            "route": "pyin_direct",
+            "status": "insufficient",
+            "voiced_coverage": 0.07098283931357255
+          },
+          "route": "pyin_direct",
+          "source_model": "librosa:pyin"
+        },
+        {
+          "extractor": "pyin",
+          "extractor_code_packages": [
+            "librosa",
+            "scipy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "07f43915f950d810d5d27239f842b8c3cd6e36a67a0c7c86d0689d3edc0a854a",
+          "extractor_version": "0.11.0",
+          "outcome": "sufficient",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_code_packages": [
+              "demucs",
+              "torch",
+              "numpy"
+            ],
+            "separation_code_sha256": "6328a424c2b46d8945e3c0c8c44c556c19be327030f5d4175df3ef28efc1e178",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0",
+            "separation_weights_files": [
+              "f7e0c4bc-ba3fe64a.th",
+              "d12395a8-e57c48e6.th",
+              "92cfc3b6-ef3bcb9c.th",
+              "04573f0d-f3cf25b2.th",
+              "files.txt",
+              "htdemucs_ft.yaml"
+            ],
+            "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+            "stem_sha256": "a3261a127123bbdc7057ae1bd875ecb2e71255b449ef1057a5b54b3c907d9fcf"
+          },
+          "report": {
+            "confidence_mean": 0.7116002717391386,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 0.20652173913043478,
+            "note_count": 107,
+            "octave_jump_rate": 0.09433962264150944,
+            "phrase_count": 29,
+            "reasons": [],
+            "route": "demucs_vocals_then_pyin",
+            "status": "sufficient",
+            "voiced_coverage": 0.31239388794567063
+          },
+          "route": "demucs_vocals_then_pyin",
+          "source_model": "librosa:pyin"
+        },
+        {
+          "extractor": "crepe",
+          "extractor_code_packages": [
+            "crepe",
+            "tensorflow",
+            "keras",
+            "hmmlearn",
+            "librosa",
+            "resampy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "bbd952ef8525501dfc81e74d538e9dc8de0392b74db82ae71c661d451d6f82f0",
+          "extractor_version": "0.0.16",
+          "extractor_weights_files": [
+            "model-full.h5"
+          ],
+          "extractor_weights_kind": "model_weights",
+          "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55",
+          "outcome": "sufficient",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_code_packages": [
+              "demucs",
+              "torch",
+              "numpy"
+            ],
+            "separation_code_sha256": "6328a424c2b46d8945e3c0c8c44c556c19be327030f5d4175df3ef28efc1e178",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0",
+            "separation_weights_files": [
+              "f7e0c4bc-ba3fe64a.th",
+              "d12395a8-e57c48e6.th",
+              "92cfc3b6-ef3bcb9c.th",
+              "04573f0d-f3cf25b2.th",
+              "files.txt",
+              "htdemucs_ft.yaml"
+            ],
+            "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+            "stem_sha256": "c9b43f7fabea20e424c3676bb936deb6dc9bb98127e7793e108a98290a08f8eb"
+          },
+          "report": {
+            "confidence_mean": 0.746000926627922,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 0.16376042456406367,
+            "note_count": 850,
+            "octave_jump_rate": 0.09305064782096584,
+            "phrase_count": 20,
+            "reasons": [],
+            "route": "demucs_vocals_then_crepe",
+            "status": "sufficient",
+            "voiced_coverage": 0.7233122105776262
+          },
+          "route": "demucs_vocals_then_crepe",
+          "source_model": "crepe:predict"
+        },
+        {
+          "extractor": "melodia",
+          "extractor_code_packages": [
+            "essentia",
+            "librosa",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "879d82db6e6486a8162458cd554a9496f1e3719e743631e5255cd84203b46f4e",
+          "extractor_version": "2.1b6.dev1389",
+          "extractor_weights_files": [
+            "_essentia.cpython-311-x86_64-linux-gnu.so"
+          ],
+          "extractor_weights_kind": "library_binary",
+          "extractor_weights_sha256": "b29c5aea8acf1229fb546cd6f573872310a30845a2263aa687921b3075a34aaa",
+          "outcome": "insufficient",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_code_packages": [
+              "demucs",
+              "torch",
+              "numpy"
+            ],
+            "separation_code_sha256": "6328a424c2b46d8945e3c0c8c44c556c19be327030f5d4175df3ef28efc1e178",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0",
+            "separation_weights_files": [
+              "f7e0c4bc-ba3fe64a.th",
+              "d12395a8-e57c48e6.th",
+              "92cfc3b6-ef3bcb9c.th",
+              "04573f0d-f3cf25b2.th",
+              "files.txt",
+              "htdemucs_ft.yaml"
+            ],
+            "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+            "stem_sha256": "f9d9d0f8399d18669974a8c3ed3ca53ec5de04b6c64e83cc60fc3e9b9b4c7f5f"
+          },
+          "report": {
+            "confidence_mean": 0.0,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 1.0,
+            "note_count": 0,
+            "octave_jump_rate": 0.0,
+            "phrase_count": 0,
+            "reasons": [
+              "voiced_coverage 0.000 < min 0.300",
+              "note_count 0 < min 8",
+              "phrase_count 0 < min 2",
+              "confidence_mean 0.000 < min 0.450",
+              "low_confidence_rate 1.000 > max 0.550"
+            ],
+            "route": "demucs_vocals_then_melodia",
+            "status": "insufficient",
+            "voiced_coverage": 0.0
+          },
+          "route": "demucs_vocals_then_melodia",
+          "source_model": "essentia:PredominantPitchMelodia"
+        }
+      ]
+    },
+    "real_vocal_waltz": {
+      "audio_path": "/home/user/ugh-prompt-engine/m1real_package/audio/crslv2_w3.mp3",
+      "audio_sha256": "40a9f0e79ef2636fa717946d2c0b0480b3703ab8417299705b4927b1d9e20f10",
+      "expect_status": null,
+      "input_kind": "vocal_track",
+      "routes": [
+        {
+          "extractor": "pyin",
+          "extractor_code_packages": [
+            "librosa",
+            "scipy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "07f43915f950d810d5d27239f842b8c3cd6e36a67a0c7c86d0689d3edc0a854a",
+          "extractor_version": "0.11.0",
+          "outcome": "sufficient",
+          "report": {
+            "confidence_mean": 0.5875878066914576,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 0.4275092936802974,
+            "note_count": 197,
+            "octave_jump_rate": 0.14795918367346939,
+            "phrase_count": 60,
+            "reasons": [],
+            "route": "pyin_direct",
+            "status": "sufficient",
+            "voiced_coverage": 0.3023151269948303
+          },
+          "route": "pyin_direct",
+          "source_model": "librosa:pyin"
+        },
+        {
+          "extractor": "pyin",
+          "extractor_code_packages": [
+            "librosa",
+            "scipy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "07f43915f950d810d5d27239f842b8c3cd6e36a67a0c7c86d0689d3edc0a854a",
+          "extractor_version": "0.11.0",
+          "outcome": "insufficient",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_code_packages": [
+              "demucs",
+              "torch",
+              "numpy"
+            ],
+            "separation_code_sha256": "6328a424c2b46d8945e3c0c8c44c556c19be327030f5d4175df3ef28efc1e178",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0",
+            "separation_weights_files": [
+              "f7e0c4bc-ba3fe64a.th",
+              "d12395a8-e57c48e6.th",
+              "92cfc3b6-ef3bcb9c.th",
+              "04573f0d-f3cf25b2.th",
+              "files.txt",
+              "htdemucs_ft.yaml"
+            ],
+            "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+            "stem_sha256": "6c1100c9efa5506bb2669737c2e28fce7a6f7c44617e28741663672ca811bbfe"
+          },
+          "report": {
+            "confidence_mean": 0.6653564695009317,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 0.28373382624768945,
+            "note_count": 150,
+            "octave_jump_rate": 0.03355704697986577,
+            "phrase_count": 44,
+            "reasons": [
+              "voiced_coverage 0.265 < min 0.300"
+            ],
+            "route": "demucs_vocals_then_pyin",
+            "status": "insufficient",
+            "voiced_coverage": 0.26467710371819964
+          },
+          "route": "demucs_vocals_then_pyin",
+          "source_model": "librosa:pyin"
+        },
+        {
+          "extractor": "crepe",
+          "extractor_code_packages": [
+            "crepe",
+            "tensorflow",
+            "keras",
+            "hmmlearn",
+            "librosa",
+            "resampy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "bbd952ef8525501dfc81e74d538e9dc8de0392b74db82ae71c661d451d6f82f0",
+          "extractor_version": "0.0.16",
+          "extractor_weights_files": [
+            "model-full.h5"
+          ],
+          "extractor_weights_kind": "model_weights",
+          "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55",
+          "outcome": "sufficient",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_code_packages": [
+              "demucs",
+              "torch",
+              "numpy"
+            ],
+            "separation_code_sha256": "6328a424c2b46d8945e3c0c8c44c556c19be327030f5d4175df3ef28efc1e178",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0",
+            "separation_weights_files": [
+              "f7e0c4bc-ba3fe64a.th",
+              "d12395a8-e57c48e6.th",
+              "92cfc3b6-ef3bcb9c.th",
+              "04573f0d-f3cf25b2.th",
+              "files.txt",
+              "htdemucs_ft.yaml"
+            ],
+            "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+            "stem_sha256": "395f252573d18c2bab6b0b58f2e3ce76fced32ee35f63e29c77bf58d98d5f947"
+          },
+          "report": {
+            "confidence_mean": 0.7643712960981525,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 0.15022469505670874,
+            "note_count": 1029,
+            "octave_jump_rate": 0.07392996108949416,
+            "phrase_count": 8,
+            "reasons": [],
+            "route": "demucs_vocals_then_crepe",
+            "status": "sufficient",
+            "voiced_coverage": 0.7384250724255992
+          },
+          "route": "demucs_vocals_then_crepe",
+          "source_model": "crepe:predict"
+        },
+        {
+          "extractor": "melodia",
+          "extractor_code_packages": [
+            "essentia",
+            "librosa",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "879d82db6e6486a8162458cd554a9496f1e3719e743631e5255cd84203b46f4e",
+          "extractor_version": "2.1b6.dev1389",
+          "extractor_weights_files": [
+            "_essentia.cpython-311-x86_64-linux-gnu.so"
+          ],
+          "extractor_weights_kind": "library_binary",
+          "extractor_weights_sha256": "b29c5aea8acf1229fb546cd6f573872310a30845a2263aa687921b3075a34aaa",
+          "outcome": "insufficient",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_code_packages": [
+              "demucs",
+              "torch",
+              "numpy"
+            ],
+            "separation_code_sha256": "6328a424c2b46d8945e3c0c8c44c556c19be327030f5d4175df3ef28efc1e178",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0",
+            "separation_weights_files": [
+              "f7e0c4bc-ba3fe64a.th",
+              "d12395a8-e57c48e6.th",
+              "92cfc3b6-ef3bcb9c.th",
+              "04573f0d-f3cf25b2.th",
+              "files.txt",
+              "htdemucs_ft.yaml"
+            ],
+            "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+            "stem_sha256": "32cc43baa9ca35b512c1cd685d19e6709e02efa30d9c1b3daa8a282562ebc35d"
+          },
+          "report": {
+            "confidence_mean": 0.0,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 1.0,
+            "note_count": 0,
+            "octave_jump_rate": 0.0,
+            "phrase_count": 0,
+            "reasons": [
+              "voiced_coverage 0.000 < min 0.300",
+              "note_count 0 < min 8",
+              "phrase_count 0 < min 2",
+              "confidence_mean 0.000 < min 0.450",
+              "low_confidence_rate 1.000 > max 0.550"
+            ],
+            "route": "demucs_vocals_then_melodia",
+            "status": "insufficient",
+            "voiced_coverage": 0.0
+          },
+          "route": "demucs_vocals_then_melodia",
+          "source_model": "essentia:PredominantPitchMelodia"
+        }
+      ]
+    }
+  },
+  "generator_code_sha256": "b7a133dcc95996a1f06c1dd145a8e4b5bc691c2e4c547629532f830de12822e5",
+  "manifest_path": "/home/user/ugh-prompt-engine/m1real_package/manifest.json",
+  "manifest_sha256": "a1f6cf740ba66f0b6cef2c70d99a9ae12a521973dbae5b68910423f60101ff5c",
+  "mode": "external",
+  "observation_gate": {
+    "low_confidence_floor": 0.5,
+    "max_low_confidence_rate": 0.55,
+    "max_octave_jump_rate": 0.35,
+    "median_filter_frames": 5,
+    "min_confidence_mean": 0.45,
+    "min_cross_extractor_agreement": null,
+    "min_note_count": 8,
+    "min_phrase_count": 2,
+    "min_voiced_coverage": 0.3,
+    "note_min_run_frames": 3,
+    "octave_jump_semitones": 11.0,
+    "phrase_gap_sec": 0.6,
+    "voiced_confidence_floor": 0.3
+  },
+  "registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+  "run_id": "e48756b5129545cdaee943e3221c8a19",
+  "thresholds_source": "registry"
+}
