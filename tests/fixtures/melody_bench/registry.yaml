@@ -164,29 +164,34 @@ external_fixtures:
     input_kind: vocal_track
     source: kane_y2
     expect_status: sufficient
+    expected_audio_sha256: "8eb0237c1e8aaad41762923f436cfbafa33a246e6dc15ce3e1beed8dbd347752"
     note: J-rock 系ボーカル曲。Demucs vocals 分離後 sufficient を期待。
   - id: real_vocal_futurepop
     category: real_no_truth
     input_kind: vocal_track
     source: sev4_x2
     expect_status: sufficient
+    expected_audio_sha256: "abd7f01d0da59dbbde7e6864525a3526d4fcba33489b2a6774c7620fd72d94e2"
     note: future-pop 系ボーカル曲。
   - id: real_vocal_band
     category: real_no_truth
     input_kind: vocal_track
     source: kaze_k2
     expect_status: sufficient
+    expected_audio_sha256: "06d9fedf7fa776d71d9aa227439370eabc4a62eb7c0f06fc7e1ca2f5ea31d820"
     note: バンド系ボーカル曲。
   - id: real_vocal_waltz
     category: real_no_truth
     input_kind: vocal_track
     source: crslv2_w3
     expect_status: sufficient
+    expected_audio_sha256: "40a9f0e79ef2636fa717946d2c0b0480b3703ab8417299705b4927b1d9e20f10"
     note: 3拍子・器楽厚めボーカル曲（難所）。
   - id: real_instrumental_negative
     category: real_no_truth
     input_kind: vocal_track
     expect_status: insufficient
+    expected_audio_sha256: "6882e035c61a1c7b1df795f703cec369775637f1a4a3728a2e08ea579c80ebf3"
     note: >
       自作曲の器楽のみ区間（ボーカル旋律なし）。vocal_track として本命経路
       （Demucs→CREPE/Melodia）を通し、旋律不在で偽陽性（sufficient）を出さないことを
