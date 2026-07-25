@@ -168,7 +168,7 @@ checkout だけで再現する。§2.2 の実音源 2 行は **repo に commit �
 
 | 項目 | 値 |
 |---|---|
-| pip version | `2.1b6.dev1389` |
+| essentia pip version | `2.1b6.dev1389` |
 | `essentia.__version__` | `2.1-beta6-dev` |
 | 実装バイナリ | `_essentia.cpython-311-x86_64-linux-gnu.so` |
 | バイナリ sha256 | `07852d293d1e15aaf740ef807dcb85f07240318460dc179c5117c9a81e5cc16d` |
@@ -178,9 +178,27 @@ Melodia は学習重みを持たない DSP 算法なので、pin すべきモデ
 そのものである（`melodia_adapter.melodia_implementation_files()` が返す指紋。
 `extractor_weights_kind: library_binary` として report に載る値と同一定義）。
 
+**essentia だけでは足りない**: `extract_melodia_f0` は 22.05 kHz の fixture を
+`librosa.resample` で 44.1 kHz へ上げてから Essentia に渡し、§2.3 の pyin baseline は
+librosa 実装そのものである。したがって数値は librosa / numpy / scipy / リサンプル
+backend にも依存する。実測時の数値ランタイム閉包:
+
+| パッケージ | version |
+|---|---|
+| `librosa` | `0.11.0` |
+| `numpy` | `2.4.6` |
+| `scipy` | `1.17.1` |
+| `soundfile` | `0.14.0` |
+| `soxr` | `1.1.0` |
+| `numba` | `0.66.0` |
+| `llvmlite` | `0.48.0` |
+
 ```bash
 pip install -e ".[dev]"                 # src レイアウトなので svp_rpe を import 可能にする
 pip install "essentia==2.1b6.dev1389"   # AGPL-3.0。標準 install / CI には含めない
+# 数値ランタイム閉包も実測時の値へ固定する（librosa の resample / pyin が数値に効く）
+pip install "librosa==0.11.0" "numpy==2.4.6" "scipy==1.17.1" \
+            "soundfile==0.14.0" "soxr==1.1.0" "numba==0.66.0" "llvmlite==0.48.0"
 
 # 実装バイナリ指紋の照合。**不一致なら以降の測定に進まない**（別ビルドの数値を
 # 本ドキュメントの記録値と比較すると、実装 drift を scale 衝突と誤診する）。
@@ -188,6 +206,8 @@ python - <<'PY'
 import hashlib, sys
 sys.path.insert(0, "src")
 from svp_rpe.rpe.learned.melodia_adapter import melodia_implementation_files
+
+import importlib.metadata as meta
 
 EXPECTED = {
     "_essentia.cpython-311-x86_64-linux-gnu.so":
@@ -200,18 +220,40 @@ if actual != EXPECTED:
     print("  expected:", EXPECTED)
     print("  actual  :", actual)
     raise SystemExit(1)
-print("essentia build matches the recorded diagnosis build")
+
+# 数値ランタイム閉包も照合する（essentia の hash が合っても librosa/numpy/scipy が
+# 変われば confidence 値は動きうる）。
+CLOSURE = {
+    "librosa": "0.11.0", "numpy": "2.4.6", "scipy": "1.17.1",
+    "soundfile": "0.14.0", "soxr": "1.1.0",
+    "numba": "0.66.0", "llvmlite": "0.48.0",
+}
+drift = {p: (v, meta.version(p)) for p, v in CLOSURE.items() if meta.version(p) != v}
+if drift:
+    print("numerical runtime drift (fail-closed):", drift)
+    raise SystemExit(1)
+print("essentia build and numerical runtime match the recorded diagnosis environment")
 PY
 python - <<'PY'
 import sys, numpy as np, yaml
 sys.path.insert(0,'scripts'); sys.path.insert(0,'src')
 from build_melody_bench import build_signal
 from svp_rpe.rpe.learned.melodia_adapter import extract_melodia_f0
+from svp_rpe.melody.extractors import extract_pyin_observation
 specs = yaml.safe_load(open('tests/fixtures/melody_bench/synthesis_specs.yaml'))
 y, sr = build_signal('synth_mono_phrased', specs)
+
+# §2.1: Melodia
 t, hz, cf, _ = extract_melodia_f0(y, sr)
-cf = np.array(cf)
-print("conf max:", cf.max(), "frames >= 0.30:", int((cf >= 0.30).sum()), "/", cf.size)
+cf, hz = np.array(cf), np.array(hz)
+print("melodia: frames=%d pitch_nonzero=%d conf_max=%.4f conf_mean=%.4f frames>=0.30=%d"
+      % (cf.size, int((hz > 0).sum()), cf.max(), cf.mean(), int((cf >= 0.30).sum())))
+
+# §2.3: pyin baseline（同一入力。スケールの対比がこの診断の中心証拠）
+obs = extract_pyin_observation(y, sr)
+pc, ph = np.array(obs.frame_confidence), np.array(obs.frame_hz)
+print("pyin   : frames=%d conf_max=%.4f conf_mean=%.4f voiced_conf_mean=%.4f frames>=0.30=%d"
+      % (pc.size, pc.max(), pc.mean(), pc[ph > 0].mean(), int((pc >= 0.30).sum())))
 PY
 ```
 
