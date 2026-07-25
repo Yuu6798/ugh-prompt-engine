@@ -7,7 +7,9 @@ M1-real 実測（PR #220）で Melodia 経路が**M1-real 全 5 素材 × 両 ru
 **証跡の所在**: 実測 report（run×2・素材 id・hash・route 別出力）は PR #220 の
 `docs/measurements/m1real_2026-07/` にあり、**本 PR の checkout には存在しない**
 （#220 は未マージ）。本ドキュメント単体で checkout から監査できるのは §2 の
-実測値（合成素材 1 本 + 実音源 2 本を本 PR 提出時に再測したもの・§6 で再現可能）である。
+実測値（合成素材 1 本 + 実音源 2 本を本 PR 提出時に再測したもの）である。うち **checkout から
+再現できるのは合成素材の行だけ**で、実音源 2 本は意図的に uncommitted な machine-dependent
+素材のため、§2.2 に sha256 を pin して同定可能にしてある（波形は別途受領が必要・§6 参照）。
 #220 マージ後に report を参照できるようになる。
 
 本ドキュメントは**診断のみ**を記録する。正規化の決め方は事前登録マター（go-bar の結果を
@@ -58,6 +60,14 @@ t, hz, cf, _ = extract_melodia_f0(y, sr)
 | `kane_y2.mp3` | 10337 | 4147 (40%) | 51 | 0.1760 | 0.0480 | **0** |
 | `crslv2_w3.mp3` | 10337 | 2920 (28%) | 36 | 0.2541 | 0.0470 | **0** |
 
+素材の同定用 pin（波形は repo に commit しない M1-real 素材。`registry.yaml` の
+`external_fixtures[].expected_audio_sha256` と同一値）:
+
+| 素材 | fixture id | sha256 |
+|---|---|---|
+| `kane_y2.mp3` | `real_vocal_jrock` | `8eb0237c1e8aaad41762923f436cfbafa33a246e6dc15ce3e1beed8dbd347752` |
+| `crslv2_w3.mp3` | `real_vocal_waltz` | `40a9f0e79ef2636fa717946d2c0b0480b3703ab8417299705b4927b1d9e20f10` |
+
 実音源では confidence が連続的に分布する（unique 値 51 / 36）ため、2.1 の
 「0 か 0.2947 の 2 値」は合成純音（定振幅）に固有の縮退であり、一般的な挙動ではない。
 一般的な挙動は「**分布はするが 0.30 に届かない**」である。
@@ -82,11 +92,14 @@ if hz > 0.0 and conf >= thresholds.voiced_confidence_floor
 ```
 
 凍結値は `observation_gate.voiced_confidence_floor: 0.30`（`registry.yaml`）。
-Melodia の confidence は入力によらずこの床を越えないため、**有声フレーム数が常に 0** に
-なる。voiced_coverage / note_count / phrase_count / confidence_mean は
-すべて有声フレーム集合から導出されるので、連鎖的に 0 になり
+**測定した全入力で** Melodia の confidence はこの床を越えなかったため、それらの入力では
+**有声フレーム数が 0** になった。voiced_coverage / note_count / phrase_count /
+confidence_mean はすべて有声フレーム集合から導出されるので、連鎖的に 0 になり
 `low_confidence_rate` は 1.000 になる。観測された 5 つの reason は
 すべてこの単一原因の派生である。
+
+床を越える入力があればその入力では有声フレームが残るので、上の帰結は
+「confidence が床未満に収まる入力」に限る（§3.1 参照）。
 
 したがって Melodia 経路は、**信頼度が 0.30 に届かない入力に対しては**、旋律を
 正しく取れていても構造的に insufficient を返す。M1-real の実測値は「Melodia が旋律を
@@ -141,6 +154,14 @@ Cowork 指定の切り分け基準に対する結論:
 
 ## 6. 再現手順
 
+**再現できる範囲**: 下記手順は §2.1（合成素材 `synth_mono_phrased`）と §2.3（pyin 対比）を
+checkout だけで再現する。§2.2 の実音源 2 行は **repo に commit しない machine-dependent
+素材**を要するため、この checkout からは再現できない（素材を受領し §2.2 の sha256 と
+一致することを確認した上で、同じ `extract_melodia_f0` 呼び出しを当てれば再現する）。
+診断の結論は合成素材だけでも成立する — §2.1 は「クリーンな単旋律ですら床に届かない」を
+示しており、これが「アダプタ設定バグ」「demucs stem との噛み合わせ」の 2 仮説を棄却する。
+実音源 2 行は「合成純音固有の縮退ではない」ことを補強する追加証拠である。
+
 §2 の数値は下記のビルドで得たものである。`PredominantPitchMelodia` の confidence 値は
 別リリース・別ビルドで変わりうるため、**version とビルド指紋を pin しないと
 「実装 drift」と「診断した scale 衝突」を区別できない**。
@@ -158,15 +179,28 @@ Melodia は学習重みを持たない DSP 算法なので、pin すべきモデ
 `extractor_weights_kind: library_binary` として report に載る値と同一定義）。
 
 ```bash
+pip install -e ".[dev]"                 # src レイアウトなので svp_rpe を import 可能にする
 pip install "essentia==2.1b6.dev1389"   # AGPL-3.0。標準 install / CI には含めない
 
-# 実装バイナリ指紋の照合（別ビルドなら数値が変わりうる）
+# 実装バイナリ指紋の照合。**不一致なら以降の測定に進まない**（別ビルドの数値を
+# 本ドキュメントの記録値と比較すると、実装 drift を scale 衝突と誤診する）。
 python - <<'PY'
-import hashlib
+import hashlib, sys
+sys.path.insert(0, "src")
 from svp_rpe.rpe.learned.melodia_adapter import melodia_implementation_files
+
+EXPECTED = {
+    "_essentia.cpython-311-x86_64-linux-gnu.so":
+        "07852d293d1e15aaf740ef807dcb85f07240318460dc179c5117c9a81e5cc16d",
+}
 files, _ = melodia_implementation_files()
-for f in files:
-    print(f.name, hashlib.sha256(f.read_bytes()).hexdigest())
+actual = {f.name: hashlib.sha256(f.read_bytes()).hexdigest() for f in files}
+if actual != EXPECTED:
+    print("essentia build mismatch (fail-closed):")
+    print("  expected:", EXPECTED)
+    print("  actual  :", actual)
+    raise SystemExit(1)
+print("essentia build matches the recorded diagnosis build")
 PY
 python - <<'PY'
 import sys, numpy as np, yaml
