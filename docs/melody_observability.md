@@ -477,10 +477,20 @@ pin を必須化する = 記録が済むまで Go を出さない fail-closed �
   melodia→`essentia`（ネイティブ実装が算法そのもの）、pyin→`librosa`+`scipy`、
   加えて **`soundfile` は全抽出器の閉包に入る**（`librosa.load` は WAV/FLAC を
   soundfile 経由でデコードし、合成経路は `sf.write` で観測対象そのものを書く。
-  デコードの実体は同梱の **libsndfile ネイティブ共有ライブラリ**なので、単一モジュール
+  デコードの実体は **libsndfile ネイティブ共有ライブラリ**なので、単一モジュール
   配布の同梱物 `_soundfile.py` / `_soundfile_data/` まで hash 対象に含める。
   単一モジュール（site-packages 直下の 1 ファイル）は親ディレクトリを rglob すると
-  site-packages 全体を巻き込むため、パッケージとは別扱いにする）、
+  site-packages 全体を巻き込むため、パッケージとは別扱いにする。
+  **同梱ネイティブを持たない install 形態**（distro / source ビルド）は
+  システムの libsndfile を dlopen するので、`ctypes.util.find_library` +
+  `/proc/self/maps` で実体パスを解決して hash する。解決できなければ wrapper だけの
+  pin を publish せず fail-closed）、
+  **分離（CLI 経路）は `ffmpeg` / `ffprobe` の実行ファイルも同じ digest に畳む**
+  （`_demucs_subprocess_env()` が両者の PATH 実在を必須にしており、別ビルドの FFmpeg は
+  分離へ入る波形を変えるのに demucs/torch の pin も weights pin も動かない。API 経路
+  （in-process）は FFmpeg を経由しないので対象外＝実行されていないものを pin したこと
+  にしない。CLI/API の判定は demucs を import せずに行い、判定が外れても分離後の
+  再 hash が実測値で計算されるため before/after 比較が拾う）、
   分離→`demucs`+`torch`。加えて **`librosa` は全抽出器の閉包に入る** — 本アダプタ層が
   非分離経路の波形 decode・Melodia 入力のリサンプル・basic-pitch の被覆分母となる実尺取得に
   librosa を使うため、patch された librosa は抽出器へ渡る波形やゲート指標を変えるのに

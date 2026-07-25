@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from svp_rpe.rpe.learned import LearnedModelUnavailable
-from svp_rpe.utils.hashing import sha256_of_files
+from svp_rpe.utils.hashing import file_sha256, sha256_of_files
 
 __all__ = [
     "ARTIFACT_BEARING_EXTRACTORS",
@@ -43,6 +43,7 @@ __all__ = [
     "packages_code_sha256",
     "package_code_state",
     "SEPARATION_CODE_PACKAGES",
+    "separation_code_fingerprint",
     "bind_inference_code_pins",
     "record_load_time_pin",
     "load_time_pin",
@@ -234,6 +235,16 @@ _MODULE_COMPANIONS = {
     "soundfile": ("_soundfile.py", "_soundfile_data"),
 }
 
+# 単一モジュールが **同梱ネイティブを持たない install 形態**（distro / source ビルド）で
+# dlopen するシステム共有ライブラリ（モジュール名 → `ctypes.util.find_library` 名）。
+# wheel なら `_soundfile_data/libsndfile*.so` が同梱されるが、`apt install python3-soundfile`
+# 等では soundfile.py が **システムの libsndfile** を読む。デコードの実体はそちらなので、
+# 同梱物が無い形態で「wrapper だけ pin」して済ませると、別ビルドの libsndfile が返した
+# サンプルに同一 provenance が付く（Codex #217）。解決できなければ unhashable = fail-closed。
+_MODULE_SYSTEM_LIBRARIES = {
+    "soundfile": ("sndfile",),
+}
+
 
 def _module_companion_files(package: str, root: Path) -> "list[Path]":
     """単一モジュール配布の同梱物（兄弟モジュール / データディレクトリ）を集める。
@@ -242,19 +253,69 @@ def _module_companion_files(package: str, root: Path) -> "list[Path]":
     プラットフォーム名や `.so.1` 形式の版番号が付き、`_CODE_SUFFIXES` で漏れるため）。
     """
     files: "list[Path]" = []
+    bundled_native = False
     for name in _MODULE_COMPANIONS.get(package, ()):
         target = root / name
         if target.is_file():
             files.append(target)
         elif target.is_dir():
-            files.extend(
-                sorted(
-                    path
-                    for path in target.rglob("*")
-                    if path.is_file() and "__pycache__" not in path.parts
-                )
+            found = sorted(
+                path
+                for path in target.rglob("*")
+                if path.is_file() and "__pycache__" not in path.parts
             )
+            files.extend(found)
+            bundled_native = bundled_native or any(_is_native_library(p) for p in found)
+    if bundled_native:
+        return files
+    # 同梱ネイティブが無い install 形態 → 実際に dlopen されるシステムライブラリを解決する。
+    for soname in _MODULE_SYSTEM_LIBRARIES.get(package, ()):
+        resolved = _system_library_path(soname)
+        if resolved is None:
+            raise OSError(f"system library lib{soname} could not be resolved for {package}")
+        files.append(resolved)
     return files
+
+
+def _is_native_library(path: Path) -> bool:
+    """`libsndfile.so.1` / `.dylib` / `.dll` のようなネイティブ共有ライブラリか。"""
+    name = path.name
+    return ".so" in name or name.endswith((".dylib", ".dll", ".pyd"))
+
+
+def _system_library_path(soname: str) -> Optional[Path]:
+    """`ctypes.util.find_library(soname)` が指すライブラリの実体パスを解決する。
+
+    `find_library` は Linux では soname（`libsndfile.so.1`）しか返さないため、
+    実体パスは dlopen 後の `/proc/self/maps` から引く（macOS は絶対パスが返る）。
+    dlopen 自体は Python の import ではないので、コード pin を import より前に
+    bind する規律とは衝突しない（同じライブラリを後で soundfile が読む）。
+    """
+    import ctypes.util
+
+    found = ctypes.util.find_library(soname)
+    if not found:
+        return None
+    candidate = Path(found)
+    if candidate.is_absolute() and candidate.is_file():
+        return candidate.resolve()
+    try:
+        ctypes.CDLL(found)
+    except OSError:
+        return None
+    maps = Path("/proc/self/maps")
+    if not maps.is_file():  # pragma: no cover - 非 Linux
+        return None
+    try:
+        for line in maps.read_text(errors="replace").splitlines():
+            path_field = line.split(" ", 5)[-1].strip()
+            if path_field.endswith(found) or f"/{found}" in path_field:
+                resolved = Path(path_field)
+                if resolved.is_file():
+                    return resolved.resolve()
+    except OSError:  # pragma: no cover - /proc 読み取り失敗
+        return None
+    return None
 
 
 def package_code_state(
@@ -360,6 +421,76 @@ def packages_code_sha256(
     return digest.hexdigest(), tuple(covered)
 
 
+def separation_code_fingerprint(*, use_cache: bool = True) -> "tuple[Optional[str], tuple]":
+    """分離（Demucs）が実行するコードの hash と、覆った名前を返す。
+
+    パッケージ（demucs / torch）に加え、**CLI 経路のときだけ** `python -m demucs` が
+    デコードに使う `ffmpeg` / `ffprobe` の実行ファイルも hash する（Codex #217）。
+    `_demucs_subprocess_env()` は両者の PATH 実在を必須にしており、別ビルドの FFmpeg は
+    分離へ入る波形そのものを変えるのに、demucs/torch の pin も model version も
+    weights pin も動かない。API 経路（in-process）は FFmpeg を経由しないので対象外
+    ——「実行されていないものを pin したことにしない」正直会計。
+
+    実行ファイルを解決できない / 読めない場合は `LearnedModelUnavailable`（fail-closed）。
+    """
+    import hashlib
+    import shutil
+
+    digest, covered = packages_code_sha256(SEPARATION_CODE_PACKAGES, use_cache=use_cache)
+    executables = _cli_separation_executables()
+    if not executables:
+        return digest, covered
+    folded = hashlib.sha256()
+    folded.update((digest or "").encode("ascii"))
+    folded.update(b"\0")
+    names = list(covered)
+    for tool in executables:
+        resolved = shutil.which(tool)
+        if resolved is None:
+            raise LearnedModelUnavailable(
+                f"Demucs CLI separation requires {tool!r} on PATH but it could not be "
+                "resolved; pin を出せない経路で分離しないため unavailable として扱う"
+            )
+        try:
+            tool_digest = file_sha256(Path(resolved), use_cache=use_cache)
+        except OSError as exc:
+            raise LearnedModelUnavailable(
+                f"Demucs CLI executable {resolved!r} could not be fingerprinted "
+                f"({type(exc).__name__}: {exc}); unavailable として扱う"
+            ) from exc
+        folded.update(tool.encode("utf-8"))
+        folded.update(b"\0")
+        folded.update(tool_digest.encode("ascii"))
+        folded.update(b"\0")
+        names.append(tool)
+    return folded.hexdigest(), tuple(names)
+
+
+def _cli_separation_executables() -> "tuple":
+    """CLI 経路で demucs に渡す実行ファイル名（API 経路なら空）。
+
+    **判定のために demucs を import しない**（それでは pre-import bind の意味が消える）。
+    `io.source_separator` が既に読み込まれていればその実測値を使い、まだなら
+    `find_spec("demucs.api")` の有無で代替する。代替判定が外れた場合（spec はあるが
+    import に失敗して CLI へ落ちる等）は、分離**後**の再 hash が実測値で計算されて
+    digest が食い違うため、既存の before/after 比較が fail-closed で拾う。
+    """
+    import importlib.util
+    import sys
+
+    module = sys.modules.get("svp_rpe.io.source_separator")
+    if module is not None:
+        if getattr(module, "_DemucsAPI", None) is not None:
+            return ()
+        return ("ffmpeg", "ffprobe")
+    try:
+        if importlib.util.find_spec("demucs.api") is not None:
+            return ()
+    except Exception:
+        return ()
+    return ("ffmpeg", "ffprobe")
+
+
 def extractor_code_packages_for(extractor: str) -> "tuple":
     """`extractor` の推論を実行するパッケージ名（未定義なら空 tuple）。"""
     return _EXTRACTOR_CODE_PACKAGES.get(extractor, ())
@@ -394,9 +525,13 @@ def bind_inference_code_pins() -> "dict":
     戻り値は bind した {key: digest}（診断用）。
     """
     bound = {}
-    targets = {"separation": SEPARATION_CODE_PACKAGES}
-    targets.update(_EXTRACTOR_CODE_PACKAGES)
-    for name, packages in targets.items():
+    try:
+        separation_digest, _ = separation_code_fingerprint()
+    except LearnedModelUnavailable:
+        separation_digest = None
+    if separation_digest is not None:
+        bound["separation:code"] = record_load_time_pin("separation:code", separation_digest)
+    for name, packages in _EXTRACTOR_CODE_PACKAGES.items():
         try:
             digest, _ = packages_code_sha256(packages)
         except LearnedModelUnavailable:

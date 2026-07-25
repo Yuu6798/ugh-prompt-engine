@@ -195,18 +195,16 @@ def _load_route_waveform(
     に書き込む（D-2）。**波形本体は載せない** — 出すのは hash だけ。
     """
     if route.requires_separation:
-        from svp_rpe.melody.provenance import (
-            SEPARATION_CODE_PACKAGES,
-            packages_code_sha256,
-        )
+        from svp_rpe.melody.provenance import separation_code_fingerprint
 
         # ★ demucs を **import する前に** コード pin を bind する（#217）。
         # `source_separation_adapter` の import は `io.source_separator` 経由で
         # `demucs.api` / `demucs.separate` を読み込み、プロセスに cache する。import
         # 後に hash すると「cache 済みの旧コードが分離し、hash は新ファイルを見る」窓が
         # 開く。`packages_code_sha256` は `find_spec` で**モジュールを実行せず**場所だけ
-        # 解決するので、この順序なら import より前に digest を確定できる。
-        before_code, _ = packages_code_sha256(SEPARATION_CODE_PACKAGES)
+        # 解決するので、この順序なら import より前に digest を確定できる。CLI 経路では
+        # `ffmpeg` / `ffprobe` の実行ファイルも同じ digest に畳む（#217）。
+        before_code, _ = separation_code_fingerprint()
         _bind_code_pin("separation", before_code, required=True)
 
         from svp_rpe.rpe.learned.source_separation_adapter import (  # noqa: E402
@@ -215,9 +213,7 @@ def _load_route_waveform(
 
         separation = isolate_vocals_with_provenance(audio_path)
         # 分離**後**に memo 迂回で再 hash して一致を確認する。
-        after_code, covered_code = packages_code_sha256(
-            SEPARATION_CODE_PACKAGES, use_cache=False
-        )
+        after_code, covered_code = separation_code_fingerprint(use_cache=False)
         if before_code != after_code:
             from svp_rpe.rpe.learned import LearnedModelUnavailable
 

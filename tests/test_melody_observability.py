@@ -412,6 +412,23 @@ def _stub_extractor_code_pin(monkeypatch, digest: "str | None" = None):
     return value
 
 
+def _provide_cli_audio_tools(monkeypatch, tmp_path):
+    """CLI 経路の `ffmpeg` / `ffprobe` を PATH 上に用意する（実行はしない）。
+
+    CLI 経路の分離 pin は実行ファイルの content hash も畳む（#217）。テスト環境に
+    実 FFmpeg は無いので、内容を持つダミーを置いて「解決できる環境」を模す。
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    for tool in ("ffmpeg", "ffprobe"):
+        target = bin_dir / tool
+        if not target.exists():
+            target.write_text(f"#!/bin/sh\n# fake {tool}\n", encoding="utf-8")
+            target.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ.get('PATH', '')}")
+    return bin_dir
+
+
 def _provision_gate(monkeypatch, tmp_path, *, weights_present: bool):
     """demucs 導入済を装い、torch hub cache を tmp_path に差し替える（実在有無を切替）。
 
@@ -422,6 +439,7 @@ def _provision_gate(monkeypatch, tmp_path, *, weights_present: bool):
     from svp_rpe.rpe.learned import source_separation_adapter as adapter
 
     monkeypatch.setattr(source_separator, "_HAS_DEMUCS", True)
+    _provide_cli_audio_tools(monkeypatch, tmp_path)
     monkeypatch.setattr(adapter, "_demucs_version", lambda: "4.1.0")
     # 分離コード pin（demucs/torch）も解決できる環境を模す（本環境は未導入）。
     from svp_rpe.melody import provenance as _melody_provenance
@@ -2376,6 +2394,91 @@ def test_module_companion_change_moves_the_pin(monkeypatch, tmp_path):
     # 無関係な兄弟 .py を書き換えても pin は動かない（site-packages 全体を見ていない）。
     (fake_root / "unrelated.py").write_text("# patched\n")
     assert melody_provenance.package_code_state("soundfile", use_cache=False)[1] == after[1]
+
+
+def test_system_libsndfile_is_pinned_when_no_bundled_native(monkeypatch, tmp_path):
+    """同梱ネイティブが無い install 形態では**システム libsndfile** を pin する（#217）。
+
+    distro / source ビルドの soundfile は `_soundfile_data` を持たず、システムの
+    共有ライブラリを dlopen する。wrapper だけ pin すると、別ビルドの libsndfile が
+    返したサンプルに同一 provenance が付く。
+    """
+    from svp_rpe.melody import provenance as melody_provenance
+
+    root = tmp_path / "site-packages"
+    root.mkdir()
+    (root / "soundfile.py").write_text("# distro build\n")
+    (root / "_soundfile.py").write_text("# cffi bindings\n")
+    system_lib = tmp_path / "usr-lib" / "libsndfile.so.1"
+    system_lib.parent.mkdir()
+    system_lib.write_bytes(b"system-libsndfile-v1")
+
+    monkeypatch.setattr(
+        melody_provenance, "_system_library_path", lambda soname: system_lib
+    )
+    files = melody_provenance._module_companion_files("soundfile", root)
+    assert system_lib in files
+
+    # 解決できなければ fail-closed（wrapper だけの pin を publish しない）。
+    monkeypatch.setattr(melody_provenance, "_system_library_path", lambda soname: None)
+    with pytest.raises(OSError, match="libsndfile"):
+        melody_provenance._module_companion_files("soundfile", root)
+
+
+def test_separation_pin_covers_cli_audio_executables(monkeypatch, tmp_path):
+    """CLI 経路では `ffmpeg` / `ffprobe` の実行ファイルも分離 pin に畳む（#217）。
+
+    `_demucs_subprocess_env()` は両者を必須にしており、別ビルドの FFmpeg は分離へ
+    入る波形そのものを変えるのに demucs/torch の pin も weights pin も動かない。
+    """
+    from svp_rpe.melody import provenance as melody_provenance
+
+    monkeypatch.setattr(
+        melody_provenance,
+        "packages_code_sha256",
+        lambda packages, **k: (hashlib.sha256(b"demucs+torch").hexdigest(), tuple(packages)),
+    )
+    monkeypatch.setattr(
+        melody_provenance, "_cli_separation_executables", lambda: ("ffmpeg", "ffprobe")
+    )
+    bin_dir = _provide_cli_audio_tools(monkeypatch, tmp_path)
+
+    digest, covered = melody_provenance.separation_code_fingerprint(use_cache=False)
+    assert harness_is_sha256(digest)
+    assert covered[-2:] == ("ffmpeg", "ffprobe")
+
+    # FFmpeg のビルドが変われば pin が動く。
+    (bin_dir / "ffmpeg").write_text("#!/bin/sh\n# other build\n", encoding="utf-8")
+    moved, _ = melody_provenance.separation_code_fingerprint(use_cache=False)
+    assert moved != digest
+
+    # API 経路（in-process）は FFmpeg を経由しないので対象外。
+    monkeypatch.setattr(melody_provenance, "_cli_separation_executables", lambda: ())
+    api_digest, api_covered = melody_provenance.separation_code_fingerprint(use_cache=False)
+    assert "ffmpeg" not in api_covered and api_digest != moved
+
+    # 解決できなければ fail-closed（未 pin の実行ファイルで分離させない）。
+    monkeypatch.setattr(
+        melody_provenance, "_cli_separation_executables", lambda: ("ffmpeg-missing",)
+    )
+    with pytest.raises(LearnedModelUnavailable, match="could not be resolved"):
+        melody_provenance.separation_code_fingerprint(use_cache=False)
+
+
+def test_cli_separation_probe_does_not_import_demucs():
+    """CLI 判定は demucs を import しない（pre-import bind を壊さない・#217）。"""
+    import subprocess
+
+    code = (
+        "import sys;"
+        "from svp_rpe.melody.provenance import _cli_separation_executables as p;"
+        "p();"
+        "print('demucs' in sys.modules, 'svp_rpe.io.source_separator' in sys.modules)"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True, cwd=str(ROOT)
+    ).stdout.strip()
+    assert out == "False False"
 
 
 def test_harness_binds_code_pins_before_importing_soundfile():
