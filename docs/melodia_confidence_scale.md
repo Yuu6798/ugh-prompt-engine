@@ -120,12 +120,29 @@ pre-gate 出力（**同一 stem** に対する 2 経路）:
 床を越える。したがって post-gate の全ゼロは「stem が壊れている」ためではなく
 confidence の値域に帰属する。
 
-pin は harness が経路実行時に emit したもので、`observe_via_route_with_provenance` は
-third-party を import する**前**にコード pin を bind し、推論後に再検証する（#217）。
-doc 側で別途 artifact を hash し直すより、この経路自身の pin を引用する方が
-「測った経路」と「pin した対象」が一致する。
+pin は harness が経路実行時に emit したものである。`observe_via_route_with_provenance` は
+**demucs / essentia など重い third-party を import する前**に `find_spec` でコード pin を
+bind し、推論後に再検証する（#217）。doc 側で別途 artifact を hash し直すより、この経路
+自身の pin を引用する方が「測った経路」と「pin した対象」が一致する。
+
+ただしこの境界は **numpy には及ばない**: `svp_rpe.melody.extractors` 自身が
+module-level で numpy を import するため、numpy は pin の bind より前にプロセスへ
+load 済みになる。numpy は melodia のコード閉包に含まれるので、「閉包の全構成要素が
+import 前に pin される」とは言えない（bind されるのは demucs / essentia 等の遅延
+import 対象）。この窓は「実行中に site-packages が差し替わる」場合にのみ問題になる。
 
 再現手順:
+
+**first-party コードの pin**: この測定は `src/` `scripts/` `tests/` `config/` が
+**main の `b1675f35f4dbdd1cf2c2019814d86b0511bc35bb` と同一**の状態で行った（本 PR の
+差分は `docs/` と `README.md` のみ）。第三者の digest がすべて一致しても first-party が
+変われば数値は動くので、再現時はこの commit を checkout するか、下記で差分がないことを
+確認する:
+
+```bash
+git diff --quiet b1675f35f4dbdd1cf2c2019814d86b0511bc35bb -- src scripts tests config \
+  || { echo "first-party drift (fail-closed)"; exit 1; }
+```
 
 ```python
 import sys; sys.path.insert(0, "src")
@@ -133,13 +150,17 @@ import numpy as np
 from svp_rpe.melody.routing import select_routes
 from svp_rpe.melody.extractors import observe_via_route_with_provenance
 
+STEM_SHA = "77244a534e748cf32aae79cdae4a6b110167c1ea85a4b7131ffbdcd08c104033"
 routes = {r.name: r for r in select_routes("vocal_track")}
-obs, prov = observe_via_route_with_provenance("kane_y2.mp3", routes["demucs_vocals_then_melodia"])
-assert prov["preprocessing"]["stem_sha256"] == (
-    "77244a534e748cf32aae79cdae4a6b110167c1ea85a4b7131ffbdcd08c104033"
-), "stem mismatch (fail-closed)"
-cf = np.array(obs.frame_confidence)
-print(cf.max(), int((cf >= 0.30).sum()), cf.size)
+
+for name in ("demucs_vocals_then_melodia", "demucs_vocals_then_pyin"):
+    obs, prov = observe_via_route_with_provenance("kane_y2.mp3", routes[name])
+    # 両経路が **同一 stem** を観測していることが対照の前提（fail-closed）。
+    assert prov["preprocessing"]["stem_sha256"] == STEM_SHA, f"{name}: stem mismatch"
+    cf = np.array(obs.frame_confidence)
+    hz = np.array(obs.frame_hz)
+    print(f"{name}: frames={cf.size} pitch={int((hz > 0).sum())} "
+          f"conf_max={cf.max():.4f} ge030={int((cf >= 0.30).sum())}")
 ```
 
 （`kane_y2.mp3` は commit しない M1-real 素材。sha256 は上表。demucs 重みが
@@ -259,8 +280,24 @@ demucs を通らないので stem 噛み合わせ仮説には触れられず、�
 | Python | 3.11.15（Linux x86_64） |
 
 Melodia は学習重みを持たない DSP 算法なので、pin すべきモデル入力は実装バイナリ
-そのものである（`melodia_adapter.melodia_implementation_files()` が返す指紋。
-`extractor_weights_kind: library_binary` として report に載る値と同一定義）。
+そのものである（`melodia_adapter.melodia_implementation_files()` が返すファイル）。
+
+**digest は 2 層あり、値が違う**ので取り違えないこと:
+
+| 層 | 値 | 定義 |
+|---|---|---|
+| raw（上表・§6 で照合する値） | `07852d29…c16d` | バイナリ 1 本の素の sha256 |
+| folded（report の `extractor_weights_sha256`・§2.4 の値） | `b29c5aea…4aaa` | `utils.hashing.sha256_of_files` が「root 相対パス + NUL + 各ファイルの sha256」を名前順に畳んだ digest |
+
+§6 は raw を照合する（1 バイナリなので直接比較できる）。report 側と突き合わせたい
+場合は folded を計算する:
+
+```python
+from svp_rpe.rpe.learned.melodia_adapter import melodia_implementation_files
+from svp_rpe.utils.hashing import sha256_of_files
+files, root = melodia_implementation_files()
+assert sha256_of_files(files, root=root) == "b29c5aea8acf1229fb546cd6f573872310a30845a2263aa687921b3075a34aaa"
+```
 
 **essentia だけでは足りない**: `extract_melodia_f0` は 22.05 kHz の fixture を
 `librosa.resample` で 44.1 kHz へ上げてから Essentia に渡し、§2.3 の pyin baseline は
