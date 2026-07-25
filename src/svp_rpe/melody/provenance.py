@@ -585,14 +585,22 @@ def _ffmpeg_library_closure(executable: Path) -> "list[Path]":
     「同名のシステムライブラリを hash したが、デコードしたのは同梱版」になりうる
     （Codex #217）。
 
-    静的リンク（自己完結ビルド）や ELF でない実行形式（macOS / Windows）では空を返す
-    ——「読めなかったもの」を pin したことにしない。解決できない FFmpeg ライブラリが
-    あれば `LearnedModelUnavailable`（デコード実装の一部を覆わない pin は出さない）。
+    静的リンク（自己完結ビルドの ELF）は依存が無いことを**読んで確認**できるので空を返す。
+    一方、**非 ELF**（Mach-O / PE / ラッパスクリプト）は closure を読めないため
+    `LearnedModelUnavailable` に落とす——「読めなかった」を「依存なし」と主張しない。
+    解決できない FFmpeg ライブラリがある場合も同様（デコード実装の一部を覆わない pin は
+    出さない）。この結果、分離経路の pin は現状 **Linux/ELF 限定**で成立する。
     """
     resolved: "dict[str, Path]" = {}
     root_info = _elf_dynamic_info(executable)
     if root_info is None:
-        return []
+        # 非 ELF（Mach-O / PE / ラッパスクリプト）。依存 closure を読めないので
+        # 「空 = 依存なし」と主張できない——動的リンクなら libav* の差し替えが
+        # pin に写らない（Codex #217）。読めないものを覆ったことにせず落とす。
+        raise LearnedModelUnavailable(
+            f"dependency closure of {str(executable)!r} cannot be read (non-ELF binary); "
+            "デコード実装を覆う pin を出せないため unavailable として扱う"
+        )
     # (soname, 参照元の rpath ディレクトリ（継承込み）, その runpath ディレクトリ)
     pending = [
         (name, _object_rpath_dirs(executable, root_info, ()), _object_runpath_dirs(
@@ -653,30 +661,24 @@ def _object_runpath_dirs(obj: Path, info: "tuple") -> "tuple":
 
 
 def _expand_loader_path(entry: str, origin: "Optional[Path]") -> Optional[Path]:
-    """ローダ変数（`$ORIGIN` / `$LIB` / `$PLATFORM`）を展開する。
+    """ローダ変数を展開する（展開できるのは `$ORIGIN` のみ）。
 
     展開できなければ `None`。呼び出し側はそれを **fail-closed** として扱う
     ——「展開できない候補を飛ばして ldconfig に落ちる」と、実際にはローダが同梱
     ライブラリを読んでいるのに同名のシステムライブラリを pin しうる（Codex #217）。
     """
-    import os
-    import sys
-
     if origin is not None:
         base = str(origin.resolve().parent)
         entry = entry.replace("${ORIGIN}", base).replace("$ORIGIN", base)
     elif "$ORIGIN" in entry or "${ORIGIN}" in entry:
         return None
-    lib = "lib64" if sys.maxsize > 2**32 else "lib"
-    entry = entry.replace("${LIB}", lib).replace("$LIB", lib)
-    try:
-        platform = os.uname().machine
-    except AttributeError:  # pragma: no cover - 非 POSIX
-        platform = ""
-    if platform:
-        entry = entry.replace("${PLATFORM}", platform).replace("$PLATFORM", platform)
     if "$" in entry:
-        return None  # 未知のトークン: 推測せず fail-closed
+        # `$LIB` / `$PLATFORM` は **ローダが決める値**で、外から確定できない
+        # （Debian の `$LIB` は `lib/x86_64-linux-gnu`、`$PLATFORM` は `haswell` の
+        # ように CPU チューニング名になりうる。ポインタ幅や `uname().machine` からの
+        # 推測は外れる・Codex #217）。外すと同名のシステムライブラリを掴むので、
+        # 推測せず fail-closed に倒す。
+        return None
     return Path(entry)
 
 
@@ -828,11 +830,24 @@ def _separation_audio_executables() -> "tuple[tuple, bool]":
             return (), False
         return tools, getattr(module, "_DemucsAPI", None) is None
     try:
-        if importlib.util.find_spec("demucs") is None:
-            return (), False
-        return tools, importlib.util.find_spec("demucs.api") is None
+        spec = importlib.util.find_spec("demucs")
     except Exception:
         return (), False
+    if spec is None:
+        return (), False
+    # **`find_spec("demucs.api")` は使わない**: サブモジュールの探索は親パッケージを
+    # import して実行するため、pin を bind する前に demucs が cache されてしまう
+    # （Codex #217）。API の有無はパッケージディレクトリ上の `api.py` の実在で判定する
+    # （ファイルを読むだけで import を起こさない）。
+    locations = list(getattr(spec, "submodule_search_locations", None) or ())
+    if not locations:
+        origin = getattr(spec, "origin", None)
+        locations = [str(Path(origin).parent)] if origin else []
+    has_api = any(
+        (Path(location) / "api.py").is_file() or (Path(location) / "api").is_dir()
+        for location in locations
+    )
+    return tools, not has_api
 
 
 def extractor_code_packages_for(extractor: str) -> "tuple":

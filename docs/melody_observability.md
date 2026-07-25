@@ -502,17 +502,19 @@ pin を必須化する = 記録が済むまで Go を出さない fail-closed �
   distro 版は実装がそちらにあるため。解決は ELF の `DT_NEEDED` を読んで推移的に行い
   （`ldd` は対象を実行しうるので使わない）、探索は glibc ローダと同じ順
   （`DT_RPATH`（`DT_RUNPATH` が無いときのみ）→ `LD_LIBRARY_PATH` → `DT_RUNPATH` →
-  `ldconfig` キャッシュ。`$ORIGIN` は参照元オブジェクトのディレクトリへ、`$LIB` /
-  `$PLATFORM` も展開し、**未知トークンが残れば fail-closed**——展開できない候補を
-  飛ばして ldconfig に落ちると同名のシステムライブラリを掴む。`DT_RPATH` は
-  `DT_RUNPATH` と違い**依存の依存にも継承される**ので、closure は祖先の RPATH を
-  引き継いで解決する）で行う
+  `ldconfig` キャッシュ。展開するのは `$ORIGIN`（参照元オブジェクトのディレクトリ）
+  だけで、**`$LIB` / `$PLATFORM` はローダが決める値**（Debian の `lib/x86_64-linux-gnu` /
+  `haswell` 等）なので推測せず fail-closed——展開できない候補を飛ばして ldconfig に
+  落ちると同名のシステムライブラリを掴む。`DT_RPATH` は `DT_RUNPATH` と違い
+  **依存の依存にも継承される**ので、closure は祖先の RPATH を引き継いで解決する）で行う
   ——conda / アプリ同梱ビルドは同名の `libav*` を同梱位置から読むため、これを見ないと
   「同名のシステムライブラリを hash したが、デコードしたのは同梱版」になる。
   線は **FFmpeg 自身のライブラリ**まで
   （libc/libm 等の OS 基盤まで広げると「環境全体が推論スタック」になり誰も守れない）。
-  静的リンクや非 ELF（macOS / Windows）では closure は空＝読めなかったものを pin した
-  ことにしない、
+  静的リンク（依存が無いことを**読んで確認**できる ELF）では closure は空。一方
+  **非 ELF**（Mach-O / PE / ラッパスクリプト）は closure を読めないので fail-closed
+  ——「読めなかった」を「依存なし」と主張しない。結果として分離経路の pin は現状
+  **Linux/ELF 限定**で成立する、
   CREPE は既定の `viterbi=True` が **`hmmlearn`** の HMM デコードで F0 系列の選択を
   決めるので閉包に含める、**librosa 経由で必ず実行される数値バックエンド
   （`soxr` / `numba` / `llvmlite`）も全閉包に入れる**（`librosa.resample` の既定

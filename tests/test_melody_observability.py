@@ -423,10 +423,21 @@ def _provide_cli_audio_tools(monkeypatch, tmp_path):
     for tool in ("ffmpeg", "ffprobe"):
         target = bin_dir / tool
         if not target.exists():
-            target.write_text(f"#!/bin/sh\n# fake {tool}\n", encoding="utf-8")
+            # 非 ELF は closure を読めず fail-closed になるので、依存なしの
+            # **静的 ELF** を模す（`_minimal_static_elf` は 3 要素 tuple を返す形）。
+            target.write_bytes(_minimal_static_elf(tool.encode()))
             target.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ.get('PATH', '')}")
     return bin_dir
+
+
+def _minimal_static_elf(payload: bytes = b"") -> bytes:
+    """依存を持たない最小の 64bit ELF（セクション 0 個）+ 任意のペイロード。"""
+    header = bytearray(64)
+    header[0:4] = b"\x7fELF"
+    header[4] = 2  # ELFCLASS64
+    header[5] = 1  # little endian
+    return bytes(header) + payload
 
 
 def _provision_gate(monkeypatch, tmp_path, *, weights_present: bool):
@@ -2505,7 +2516,7 @@ def test_separation_pin_covers_audio_executables(monkeypatch, tmp_path):
     assert covered[-2:] == ("ffmpeg", "ffprobe")  # ダミーは非 ELF なので closure は空
 
     # FFmpeg のビルドが変われば pin が動く。
-    (bin_dir / "ffmpeg").write_text("#!/bin/sh\n# other build\n", encoding="utf-8")
+    (bin_dir / "ffmpeg").write_bytes(_minimal_static_elf(b"other-build"))
     moved, _ = melody_provenance.separation_code_fingerprint(use_cache=False)
     assert moved != digest
 
@@ -2638,29 +2649,24 @@ def test_loader_search_order_honors_runpath_and_origin(monkeypatch, tmp_path):
 
 
 def test_loader_tokens_expand_or_fail_closed(monkeypatch, tmp_path):
-    """`$LIB` / `$PLATFORM` は展開し、未知トークンは fail-closed（#217）。
+    """確定できないローダトークンは fail-closed（#217）。
 
     展開できない候補を飛ばして ldconfig に落ちると、ローダは同梱ライブラリを読んで
     いるのに同名のシステムライブラリを pin しうる。
     """
-    import os
-    import sys as _sys
-
     from svp_rpe.melody import provenance as melody_provenance
 
     origin = tmp_path / "bundle" / "bin" / "ffmpeg"
     origin.parent.mkdir(parents=True)
     origin.write_bytes(b"ffmpeg")
-    lib = "lib64" if _sys.maxsize > 2**32 else "lib"
-    machine = os.uname().machine
-
-    assert melody_provenance._expand_loader_path("$ORIGIN/../$LIB", origin) == Path(
-        f"{origin.parent}/../{lib}"
+    # `$ORIGIN` だけは確定できるので展開する。
+    assert melody_provenance._expand_loader_path("$ORIGIN/../lib", origin) == Path(
+        f"{origin.parent}/../lib"
     )
-    assert melody_provenance._expand_loader_path("/opt/$PLATFORM/lib", origin) == Path(
-        f"/opt/{machine}/lib"
-    )
-    # 未知トークンは None（= 呼び出し側が fail-closed）。
+    # `$LIB` / `$PLATFORM` は **ローダが決める値**（Debian は `lib/x86_64-linux-gnu` /
+    # `haswell` 等）で外から確定できない。推測せず fail-closed。
+    assert melody_provenance._expand_loader_path("$ORIGIN/../$LIB", origin) is None
+    assert melody_provenance._expand_loader_path("/opt/$PLATFORM/lib", origin) is None
     assert melody_provenance._expand_loader_path("/opt/$UNKNOWN/lib", origin) is None
     assert melody_provenance._expand_loader_paths(("/a", "/$UNKNOWN"), origin) is None
 
@@ -2718,17 +2724,65 @@ def test_static_elf_returns_complete_dynamic_info(tmp_path):
     from svp_rpe.melody import provenance as melody_provenance
 
     static_elf = tmp_path / "ffmpeg-static"
-    # 最小の ELF ヘッダ（セクション 0 個 = SHT_DYNAMIC なし）。
-    header = bytearray(64)
-    header[0:4] = b"\x7fELF"
-    header[4] = 2  # ELFCLASS64
-    header[5] = 1  # little endian
-    static_elf.write_bytes(bytes(header))
+    static_elf.write_bytes(_minimal_static_elf())
 
     info = melody_provenance._elf_dynamic_info(static_elf)
     assert info == ([], (), ())
-    # closure 側も添字アクセスで落ちない。
+    # closure 側も添字アクセスで落ちない（依存が無いことを**読んで確認**できている）。
     assert melody_provenance._ffmpeg_library_closure(static_elf) == []
+
+
+def test_non_elf_binary_fails_closed(tmp_path):
+    """非 ELF（Mach-O / PE / ラッパ）は closure を読めないので fail-closed（#217）。
+
+    「読めなかった」を「依存なし」と主張すると、動的リンクの libav* 差し替えが
+    pin に写らない。
+    """
+    from svp_rpe.melody import provenance as melody_provenance
+
+    wrapper = tmp_path / "ffmpeg"
+    wrapper.write_text("#!/bin/sh\nexec /opt/ffmpeg \"$@\"\n", encoding="utf-8")
+    with pytest.raises(LearnedModelUnavailable, match="cannot be read"):
+        melody_provenance._ffmpeg_library_closure(wrapper)
+
+
+def test_api_probe_does_not_import_demucs_parent(monkeypatch, tmp_path):
+    """API 有無の判定に `find_spec(\"demucs.api\")` を使わない（親を import する・#217）。
+
+    サブモジュールの探索は親パッケージを実行するため、pin を bind する前に demucs が
+    cache される。`api.py` の実在で判定すればファイルを読むだけで済む。
+    """
+    import importlib.util
+    import sys as _sys
+
+    from svp_rpe.melody import provenance as melody_provenance
+
+    pkg = tmp_path / "demucs"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("# demucs\n")
+
+    class _Spec:
+        origin = str(pkg / "__init__.py")
+        submodule_search_locations = [str(pkg)]
+
+    def guarded_find_spec(name, *args, **kwargs):
+        assert "." not in name, f"submodule find_spec imports the parent: {name}"
+        return _Spec() if name == "demucs" else None
+
+    monkeypatch.setattr(importlib.util, "find_spec", guarded_find_spec)
+    monkeypatch.delitem(_sys.modules, "svp_rpe.io.source_separator", raising=False)
+
+    # api.py が無い = CLI 経路（required=True）。
+    assert melody_provenance._separation_audio_executables() == (
+        ("ffmpeg", "ffprobe"),
+        True,
+    )
+    # api.py があれば API 経路（required=False）。
+    (pkg / "api.py").write_text("# api\n")
+    assert melody_provenance._separation_audio_executables() == (
+        ("ffmpeg", "ffprobe"),
+        False,
+    )
 
 
 def test_needed_sonames_reads_real_elf_without_executing_it():
