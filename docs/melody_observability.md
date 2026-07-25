@@ -485,12 +485,17 @@ pin を必須化する = 記録が済むまで Go を出さない fail-closed �
   システムの libsndfile を dlopen するので、`ctypes.util.find_library` +
   `/proc/self/maps` で実体パスを解決して hash する。解決できなければ wrapper だけの
   pin を publish せず fail-closed）、
-  **分離（CLI 経路）は `ffmpeg` / `ffprobe` の実行ファイルも同じ digest に畳む**
-  （`_demucs_subprocess_env()` が両者の PATH 実在を必須にしており、別ビルドの FFmpeg は
-  分離へ入る波形を変えるのに demucs/torch の pin も weights pin も動かない。API 経路
-  （in-process）は FFmpeg を経由しないので対象外＝実行されていないものを pin したこと
-  にしない。CLI/API の判定は demucs を import せずに行い、判定が外れても分離後の
-  再 hash が実測値で計算されるため before/after 比較が拾う）、
+  **分離は `ffmpeg` / `ffprobe` の実行ファイルも同じ digest に畳む**
+  （CLI（`python -m demucs`）も API（`Separator.separate_audio_file()` の `AudioFile`
+  読み出し）も外部 FFmpeg を叩くため経路で区別しない。別ビルドの FFmpeg は分離へ入る
+  波形を変えるのに demucs/torch の pin も weights pin も動かない。PATH 不在時の扱いだけ
+  経路で分かれる: CLI は `_demucs_subprocess_env()` が実在を必須にするので fail-closed、
+  API は別デコーダへフォールバックし**その実行ファイルは結果に影響しえない**ので covered
+  から外して続行する＝実行されていないものを pin したことにしない。CLI/API の判定は
+  demucs を import せずに行い、判定が外れても分離後の再 hash が実測値で計算されるため
+  before/after 比較が拾う）、
+  CREPE は既定の `viterbi=True` が **`hmmlearn`** の HMM デコードで F0 系列の選択を
+  決めるので閉包に含める、
   分離→`demucs`+`torch`。加えて **`librosa` は全抽出器の閉包に入る** — 本アダプタ層が
   非分離経路の波形 decode・Melodia 入力のリサンプル・basic-pitch の被覆分母となる実尺取得に
   librosa を使うため、patch された librosa は抽出器へ渡る波形やゲート指標を変えるのに

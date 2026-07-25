@@ -2425,11 +2425,12 @@ def test_system_libsndfile_is_pinned_when_no_bundled_native(monkeypatch, tmp_pat
         melody_provenance._module_companion_files("soundfile", root)
 
 
-def test_separation_pin_covers_cli_audio_executables(monkeypatch, tmp_path):
-    """CLI 経路では `ffmpeg` / `ffprobe` の実行ファイルも分離 pin に畳む（#217）。
+def test_separation_pin_covers_audio_executables(monkeypatch, tmp_path):
+    """`ffmpeg` / `ffprobe` の実行ファイルも分離 pin に畳む（CLI / API 両経路・#217）。
 
-    `_demucs_subprocess_env()` は両者を必須にしており、別ビルドの FFmpeg は分離へ
-    入る波形そのものを変えるのに demucs/torch の pin も weights pin も動かない。
+    CLI は `python -m demucs`、API は `Separator.separate_audio_file()` の `AudioFile`
+    読み出しがどちらも外部 FFmpeg を叩く。別ビルドの FFmpeg は分離へ入る波形そのものを
+    変えるのに demucs/torch の pin も weights pin も動かない。
     """
     from svp_rpe.melody import provenance as melody_provenance
 
@@ -2439,7 +2440,9 @@ def test_separation_pin_covers_cli_audio_executables(monkeypatch, tmp_path):
         lambda packages, **k: (hashlib.sha256(b"demucs+torch").hexdigest(), tuple(packages)),
     )
     monkeypatch.setattr(
-        melody_provenance, "_cli_separation_executables", lambda: ("ffmpeg", "ffprobe")
+        melody_provenance,
+        "_separation_audio_executables",
+        lambda: (("ffmpeg", "ffprobe"), True),
     )
     bin_dir = _provide_cli_audio_tools(monkeypatch, tmp_path)
 
@@ -2452,17 +2455,67 @@ def test_separation_pin_covers_cli_audio_executables(monkeypatch, tmp_path):
     moved, _ = melody_provenance.separation_code_fingerprint(use_cache=False)
     assert moved != digest
 
-    # API 経路（in-process）は FFmpeg を経由しないので対象外。
-    monkeypatch.setattr(melody_provenance, "_cli_separation_executables", lambda: ())
-    api_digest, api_covered = melody_provenance.separation_code_fingerprint(use_cache=False)
-    assert "ffmpeg" not in api_covered and api_digest != moved
-
-    # 解決できなければ fail-closed（未 pin の実行ファイルで分離させない）。
+    # API 経路も同じ実行ファイルを叩くので pin する（required だけが違う）。
     monkeypatch.setattr(
-        melody_provenance, "_cli_separation_executables", lambda: ("ffmpeg-missing",)
+        melody_provenance,
+        "_separation_audio_executables",
+        lambda: (("ffmpeg", "ffprobe"), False),
+    )
+    api_digest, api_covered = melody_provenance.separation_code_fingerprint(use_cache=False)
+    assert api_covered[-2:] == ("ffmpeg", "ffprobe") and api_digest == moved
+
+    # API 経路 + FFmpeg 不在 = 実行されえないので covered から外して続行（fail-closed にしない）。
+    monkeypatch.setattr(
+        melody_provenance,
+        "_separation_audio_executables",
+        lambda: (("ffmpeg-missing",), False),
+    )
+    fallback_digest, fallback_covered = melody_provenance.separation_code_fingerprint(
+        use_cache=False
+    )
+    assert "ffmpeg-missing" not in fallback_covered and harness_is_sha256(fallback_digest)
+
+    # CLI 経路で解決できなければ fail-closed（未 pin の実行ファイルで分離させない）。
+    monkeypatch.setattr(
+        melody_provenance,
+        "_separation_audio_executables",
+        lambda: (("ffmpeg-missing",), True),
     )
     with pytest.raises(LearnedModelUnavailable, match="could not be resolved"):
         melody_provenance.separation_code_fingerprint(use_cache=False)
+
+
+def test_separation_executable_probe_reports_required_by_path(monkeypatch):
+    """実行ファイルの `required` は経路で決まる（CLI=必須 / API=フォールバック可・#217）。"""
+    import sys as _sys
+
+    from svp_rpe.melody import provenance as melody_provenance
+
+    class _Module:
+        _HAS_DEMUCS = True
+        _DemucsAPI = None
+
+    monkeypatch.setitem(_sys.modules, "svp_rpe.io.source_separator", _Module())
+    assert melody_provenance._separation_audio_executables() == (("ffmpeg", "ffprobe"), True)
+
+    _Module._DemucsAPI = object()
+    assert melody_provenance._separation_audio_executables() == (("ffmpeg", "ffprobe"), False)
+
+    # demucs 未導入なら分離自体が起きないので pin 対象もない。
+    _Module._HAS_DEMUCS = False
+    assert melody_provenance._separation_audio_executables() == ((), False)
+
+
+def test_crepe_closure_covers_viterbi_decoder():
+    """CREPE の既定 `viterbi=True` は `hmmlearn` を実行するので閉包に入れる（#217）。"""
+    import inspect
+
+    from svp_rpe.melody import provenance as melody_provenance
+    from svp_rpe.rpe.learned import crepe_adapter
+
+    assert "hmmlearn" in melody_provenance._EXTRACTOR_CODE_PACKAGES["crepe"]
+    # 前提（既定で Viterbi デコードを通す）が実装に残っていることを固定する。
+    assert "viterbi: bool = True" in inspect.getsource(crepe_adapter.extract_crepe_f0)
 
 
 def test_cli_separation_probe_does_not_import_demucs():
@@ -2471,7 +2524,7 @@ def test_cli_separation_probe_does_not_import_demucs():
 
     code = (
         "import sys;"
-        "from svp_rpe.melody.provenance import _cli_separation_executables as p;"
+        "from svp_rpe.melody.provenance import _separation_audio_executables as p;"
         "p();"
         "print('demucs' in sys.modules, 'svp_rpe.io.source_separator' in sys.modules)"
     )

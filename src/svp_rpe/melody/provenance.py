@@ -192,7 +192,18 @@ _EXTRACTOR_CODE_PACKAGES = {
     # CREPE は 16kHz 以外の入力を **内部で `resampy`** によりリサンプルしてから
     # モデルへ渡す。patch された resampy はモデルに届くサンプルを変えるのに、
     # crepe/TF/weights/version のどの pin も動かない（Codex #217）。
-    "crepe": ("crepe", "tensorflow", "keras", "librosa", "resampy", "soundfile", "numpy"),
+    # `predict(..., viterbi=True)`（本アダプタの既定）は CREPE 内部で **`hmmlearn`** の
+    # HMM デコードを走らせ、F0 系列の選択そのものを決める（Codex #217）。
+    "crepe": (
+        "crepe",
+        "tensorflow",
+        "keras",
+        "hmmlearn",
+        "librosa",
+        "resampy",
+        "soundfile",
+        "numpy",
+    ),
     "basic_pitch": (
         "basic_pitch",
         "tensorflow",
@@ -436,20 +447,27 @@ def packages_code_sha256(
 def separation_code_fingerprint(*, use_cache: bool = True) -> "tuple[Optional[str], tuple]":
     """分離（Demucs）が実行するコードの hash と、覆った名前を返す。
 
-    パッケージ（demucs / torch）に加え、**CLI 経路のときだけ** `python -m demucs` が
-    デコードに使う `ffmpeg` / `ffprobe` の実行ファイルも hash する（Codex #217）。
-    `_demucs_subprocess_env()` は両者の PATH 実在を必須にしており、別ビルドの FFmpeg は
-    分離へ入る波形そのものを変えるのに、demucs/torch の pin も model version も
-    weights pin も動かない。API 経路（in-process）は FFmpeg を経由しないので対象外
-    ——「実行されていないものを pin したことにしない」正直会計。
+    パッケージ（demucs / torch / numpy）に加え、Demucs がデコードに使う
+    `ffmpeg` / `ffprobe` の実行ファイルも hash する（Codex #217）。**CLI 経路
+    （`python -m demucs`）と API 経路（`Separator.separate_audio_file()` の
+    `AudioFile` 読み出し）のどちらも外部 FFmpeg を叩く**ため、経路で区別しない。
+    別ビルドの FFmpeg は分離へ入る波形そのものを変えるのに、demucs/torch の pin も
+    model version も weights pin も動かない。
 
-    実行ファイルを解決できない / 読めない場合は `LearnedModelUnavailable`（fail-closed）。
+    PATH に無い場合の扱いは経路で分かれる（正直会計）:
+
+    - CLI 経路: `_demucs_subprocess_env()` が実在を必須にしているので
+      `LearnedModelUnavailable`（fail-closed）。
+    - API 経路: FFmpeg 不在なら demucs 側が別デコーダへフォールバックし、
+      **その実行ファイルは結果に影響しえない**ので covered から外して続行する。
+
+    解決できたのに読めない場合は、どちらの経路でも fail-closed。
     """
     import hashlib
     import shutil
 
     digest, covered = packages_code_sha256(SEPARATION_CODE_PACKAGES, use_cache=use_cache)
-    executables = _cli_separation_executables()
+    executables, required = _separation_audio_executables()
     if not executables:
         return digest, covered
     folded = hashlib.sha256()
@@ -459,6 +477,8 @@ def separation_code_fingerprint(*, use_cache: bool = True) -> "tuple[Optional[st
     for tool in executables:
         resolved = shutil.which(tool)
         if resolved is None:
+            if not required:
+                continue  # API 経路 + FFmpeg 不在 = 実行されないので pin 対象外
             raise LearnedModelUnavailable(
                 f"Demucs CLI separation requires {tool!r} on PATH but it could not be "
                 "resolved; pin を出せない経路で分離しないため unavailable として扱う"
@@ -467,7 +487,7 @@ def separation_code_fingerprint(*, use_cache: bool = True) -> "tuple[Optional[st
             tool_digest = file_sha256(Path(resolved), use_cache=use_cache)
         except OSError as exc:
             raise LearnedModelUnavailable(
-                f"Demucs CLI executable {resolved!r} could not be fingerprinted "
+                f"Demucs audio executable {resolved!r} could not be fingerprinted "
                 f"({type(exc).__name__}: {exc}); unavailable として扱う"
             ) from exc
         folded.update(tool.encode("utf-8"))
@@ -478,29 +498,36 @@ def separation_code_fingerprint(*, use_cache: bool = True) -> "tuple[Optional[st
     return folded.hexdigest(), tuple(names)
 
 
-def _cli_separation_executables() -> "tuple":
-    """CLI 経路で demucs に渡す実行ファイル名（API 経路なら空）。
+def _separation_audio_executables() -> "tuple[tuple, bool]":
+    """Demucs がデコードに使う実行ファイル名と、それが必須かを返す。
+
+    戻り値は `(名前, required)`。**CLI / API どちらの経路も FFmpeg を叩く**ので名前は
+    共通で、`required` だけが経路で変わる（CLI は `_demucs_subprocess_env()` が実在を
+    必須にする / API は不在ならフォールバックするので必須でない）。
 
     **判定のために demucs を import しない**（それでは pre-import bind の意味が消える）。
     `io.source_separator` が既に読み込まれていればその実測値を使い、まだなら
     `find_spec("demucs.api")` の有無で代替する。代替判定が外れた場合（spec はあるが
     import に失敗して CLI へ落ちる等）は、分離**後**の再 hash が実測値で計算されて
     digest が食い違うため、既存の before/after 比較が fail-closed で拾う。
+
+    demucs 自体を解決できない環境では空を返す（分離が起きないので pin 対象もない）。
     """
     import importlib.util
     import sys
 
+    tools = ("ffmpeg", "ffprobe")
     module = sys.modules.get("svp_rpe.io.source_separator")
     if module is not None:
-        if getattr(module, "_DemucsAPI", None) is not None:
-            return ()
-        return ("ffmpeg", "ffprobe")
+        if not getattr(module, "_HAS_DEMUCS", False):
+            return (), False
+        return tools, getattr(module, "_DemucsAPI", None) is None
     try:
-        if importlib.util.find_spec("demucs.api") is not None:
-            return ()
+        if importlib.util.find_spec("demucs") is None:
+            return (), False
+        return tools, importlib.util.find_spec("demucs.api") is None
     except Exception:
-        return ()
-    return ("ffmpeg", "ffprobe")
+        return (), False
 
 
 def extractor_code_packages_for(extractor: str) -> "tuple":
