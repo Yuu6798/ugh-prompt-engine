@@ -188,6 +188,15 @@ def _resolve_fingerprint(
 # `extractors.py` は `asarray` / `isfinite` / `where` / `nan_to_num` で観測値そのものを
 # 組み立て、分離側も stem を numpy で正規化する。patch された numpy は観測とゲート指標を
 # 変えるのに、抽出器 pin も weights pin も version も動かない。
+# librosa 経由で**必ず実行される数値バックエンド**（Codex #217）。
+# - `soxr`: `librosa.resample` の既定 `res_type="soxr_hq"` は SoXR のネイティブ実装が
+#   リサンプルそのもの（Melodia は 44.1kHz へ、CREPE 経路も内部で resample が走る）。
+# - `numba` / `llvmlite`: librosa の JIT カーネル（`librosa.sequence.viterbi` 等の
+#   pyin 経路を含む）と `resampy` のリサンプルカーネルを **JIT でコンパイルして実行**する。
+# 別ビルド / patch されたこれらは抽出器に届くサンプルと F0 系列を変えるのに、抽出器 pin も
+# weights pin も version も動かないので、librosa を含む全閉包に足す。
+_LIBROSA_BACKENDS = ("soxr", "numba", "llvmlite")
+
 _EXTRACTOR_CODE_PACKAGES = {
     # CREPE は 16kHz 以外の入力を **内部で `resampy`** によりリサンプルしてから
     # モデルへ渡す。patch された resampy はモデルに届くサンプルを変えるのに、
@@ -203,7 +212,8 @@ _EXTRACTOR_CODE_PACKAGES = {
         "resampy",
         "soundfile",
         "numpy",
-    ),
+    )
+    + _LIBROSA_BACKENDS,
     "basic_pitch": (
         "basic_pitch",
         "tensorflow",
@@ -214,15 +224,16 @@ _EXTRACTOR_CODE_PACKAGES = {
         "librosa",
         "soundfile",
         "numpy",
-    ),
-    "melodia": ("essentia", "librosa", "soundfile", "numpy"),
+    )
+    + _LIBROSA_BACKENDS,
+    "melodia": ("essentia", "librosa", "soundfile", "numpy") + _LIBROSA_BACKENDS,
     # pyin は **scipy を直接実行する**: `extract_pyin_observation` が
     # `_highpass_melody_signal`（`scipy.signal.butter` / `sosfiltfilt`）で波形を
     # 前処理してから `librosa.pyin` へ渡す（physical_features.py:1170-1182）。
     # patch された scipy はフィルタ後の波形＝F0 トラック＝ゲート判定を変えるのに、
     # librosa の pin も version も動かない（Codex #217）。汎用数値基盤を線の外に
     # 置く原則の例外は「本層のコードが直接呼ぶ」ことを根拠とする。
-    "pyin": ("librosa", "scipy", "soundfile", "numpy"),
+    "pyin": ("librosa", "scipy", "soundfile", "numpy") + _LIBROSA_BACKENDS,
 }
 
 # 分離器（Demucs）の推論を実行するパッケージ群。

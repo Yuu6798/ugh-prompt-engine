@@ -495,7 +495,11 @@ pin を必須化する = 記録が済むまで Go を出さない fail-closed �
   demucs を import せずに行い、判定が外れても分離後の再 hash が実測値で計算されるため
   before/after 比較が拾う）、
   CREPE は既定の `viterbi=True` が **`hmmlearn`** の HMM デコードで F0 系列の選択を
-  決めるので閉包に含める、
+  決めるので閉包に含める、**librosa 経由で必ず実行される数値バックエンド
+  （`soxr` / `numba` / `llvmlite`）も全閉包に入れる**（`librosa.resample` の既定
+  `res_type="soxr_hq"` は SoXR のネイティブ実装がリサンプルそのもの、librosa の JIT
+  カーネル（`librosa.sequence.viterbi` 等）と resampy のリサンプルカーネルは
+  numba/llvmlite がコンパイルして実行する）、
   分離→`demucs`+`torch`。加えて **`librosa` は全抽出器の閉包に入る** — 本アダプタ層が
   非分離経路の波形 decode・Melodia 入力のリサンプル・basic-pitch の被覆分母となる実尺取得に
   librosa を使うため、patch された librosa は抽出器へ渡る波形やゲート指標を変えるのに

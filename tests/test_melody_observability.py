@@ -2188,7 +2188,15 @@ def test_route_rows_record_third_party_code_hash(monkeypatch, tmp_path):
     assert rows[0]["extractor_code_sha256"] == extractor_code_sha256("pyin")
     assert harness._is_sha256(rows[0]["extractor_code_sha256"])
     # pin が何を覆ったか（抽出器自身 + 実在した backend）を行に列挙する。
-    assert rows[0]["extractor_code_packages"] == ["librosa", "scipy", "soundfile", "numpy"]
+    assert rows[0]["extractor_code_packages"] == [
+        "librosa",
+        "scipy",
+        "soundfile",
+        "numpy",
+        "soxr",
+        "numba",
+        "llvmlite",
+    ]
 
 
 def test_code_pin_covers_inference_backends(monkeypatch):
@@ -2504,6 +2512,24 @@ def test_separation_executable_probe_reports_required_by_path(monkeypatch):
     # demucs 未導入なら分離自体が起きないので pin 対象もない。
     _Module._HAS_DEMUCS = False
     assert melody_provenance._separation_audio_executables() == ((), False)
+
+
+def test_librosa_numeric_backends_are_pinned_in_every_closure():
+    """librosa 経由で実行される SoXR / JIT バックエンドも全閉包に入れる（#217）。
+
+    `librosa.resample` の既定は `res_type="soxr_hq"`（Melodia の 44.1kHz 変換など）で、
+    librosa の JIT カーネル（`librosa.sequence.viterbi` 等）と resampy のリサンプル
+    カーネルは numba/llvmlite がコンパイルして実行する。
+    """
+    from svp_rpe.melody import provenance as melody_provenance
+
+    for extractor, packages in melody_provenance._EXTRACTOR_CODE_PACKAGES.items():
+        assert "librosa" in packages, extractor  # 前提: 全閉包が librosa を通る
+        for backend in melody_provenance._LIBROSA_BACKENDS:
+            assert backend in packages, (extractor, backend)
+
+    digest, covered = melody_provenance.extractor_code_fingerprint("melodia")
+    assert "soxr" in covered and "numba" in covered
 
 
 def test_crepe_closure_covers_viterbi_decoder():
