@@ -347,6 +347,107 @@ def test_deterministic_rng_seeds_the_requested_accelerator_index(
     assert events.index(("enter_device", 1)) < seed_at < events.index(("exit_device", 1))
 
 
+def test_deterministic_rng_resolves_unindexed_accelerator_to_current_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """index 無しの `device="cuda"` は backend の current device に解決すること。
+
+    PyTorch では index 省略は current device を意味する。0 に決め打つと、呼び出し側が
+    `torch.cuda.set_device(1)` している状況で「demucs は device 1 で走るのに fork/seed
+    したのは device 0」という取り違えになり、決定論も副作用なしの契約も破れる。
+    """
+    torch = pytest.importorskip("torch")
+
+    events: list[object] = []
+    real_fork_rng = torch.random.fork_rng
+
+    def spy_fork_rng(devices=None, **kwargs):
+        events.append(("fork_rng", devices, kwargs.get("device_type")))
+        return real_fork_rng(devices=[])
+
+    class FakeDeviceContext:
+        def __init__(self, index):
+            self.index = index
+
+        def __enter__(self):
+            events.append(("enter_device", self.index))
+            return self
+
+        def __exit__(self, *exc):
+            events.append(("exit_device", self.index))
+            return False
+
+    class FakeCudaBackend:
+        device = FakeDeviceContext
+
+        @staticmethod
+        def current_device():
+            return 1  # 呼び出し側が set_device(1) 済みの状況を模す
+
+        @staticmethod
+        def manual_seed(seed):
+            events.append(("manual_seed", seed))
+
+    monkeypatch.setattr(torch.random, "fork_rng", spy_fork_rng)
+    monkeypatch.setattr(torch, "cuda", FakeCudaBackend)
+
+    with source_separator._deterministic_rng("cuda"):  # index 無し
+        pass
+
+    assert ("fork_rng", [1], "cuda") in events
+    assert ("enter_device", 1) in events
+
+
+def test_deterministic_rng_snapshots_single_device_backend_without_index(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """mps のような単一デバイス backend は index 付き fork に頼らず明示退避・復元する。
+
+    `torch.mps` は `current_device` も `device` context も持たない。index 付きの汎用
+    fork 経路に載せず、backend 自身の `get_rng_state` / `set_rng_state` で 1 本だけ
+    退避・復元する（seed したまま帰らない）。
+    """
+    torch = pytest.importorskip("torch")
+
+    events: list[object] = []
+    real_fork_rng = torch.random.fork_rng
+    sentinel = object()
+
+    def spy_fork_rng(devices=None, **kwargs):
+        events.append(("fork_rng", devices, kwargs.get("device_type")))
+        return real_fork_rng(devices=[])
+
+    class FakeMpsBackend:
+        """`current_device` / `device` を持たない = 単一デバイス backend。"""
+
+        @staticmethod
+        def get_rng_state():
+            events.append(("get_rng_state",))
+            return sentinel
+
+        @staticmethod
+        def set_rng_state(state):
+            events.append(("set_rng_state", state is sentinel))
+
+        @staticmethod
+        def manual_seed(seed):
+            events.append(("manual_seed", seed))
+
+    monkeypatch.setattr(torch.random, "fork_rng", spy_fork_rng)
+    monkeypatch.setattr(torch, "mps", FakeMpsBackend, raising=False)
+
+    with source_separator._deterministic_rng("mps"):
+        pass
+
+    # index 付き fork は使わない（CPU のみ fork）。
+    assert ("fork_rng", [], None) in events
+    assert not any(evt[0] == "fork_rng" and evt[1] for evt in events if evt[0] == "fork_rng")
+    # 退避 → seed → 復元 の順で、復元は退避した state で行われる。
+    assert events.index(("get_rng_state",)) < events.index(
+        ("manual_seed", source_separator.SEPARATION_RNG_SEED)
+    ) < events.index(("set_rng_state", True))
+
+
 @pytest.mark.slow
 def test_real_demucs_separation_is_bitwise_reproducible(tmp_path: Path) -> None:
     """受け入れ条件: 同一入力を 2 回分離して vocals stem の sha256 が一致すること。
