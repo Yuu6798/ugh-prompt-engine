@@ -264,6 +264,38 @@ def test_deterministic_rng_restores_torch_state() -> None:
     assert torch.equal(restored, expected)
 
 
+def test_deterministic_rng_does_not_touch_accelerators_for_cpu(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CPU 分離では accelerator を列挙も seed もしないこと。
+
+    `fork_rng(devices=None)` は全デバイスを列挙・初期化するため、CPU 分離でも CUDA
+    context が作られて起動コストが増える／触れない GPU で失敗する。`torch.manual_seed`
+    も CPU 以外の backend まで seed してしまうので、どちらも使わない。
+    """
+    torch = pytest.importorskip("torch")
+
+    seen: dict[str, object] = {}
+    real_fork_rng = torch.random.fork_rng
+
+    def spy_fork_rng(devices=None, **kwargs):
+        seen["devices"] = devices
+        seen["kwargs"] = kwargs
+        return real_fork_rng(devices=devices, **kwargs)
+
+    def forbidden_manual_seed(seed):  # pragma: no cover - 呼ばれたら失敗させる
+        raise AssertionError("torch.manual_seed seeds every backend; must not be used")
+
+    monkeypatch.setattr(torch.random, "fork_rng", spy_fork_rng)
+    monkeypatch.setattr(torch, "manual_seed", forbidden_manual_seed)
+
+    with source_separator._deterministic_rng("cpu"):
+        pass
+
+    assert seen["devices"] == []
+    assert "device_type" not in seen["kwargs"]
+
+
 @pytest.mark.slow
 def test_real_demucs_separation_is_bitwise_reproducible(tmp_path: Path) -> None:
     """受け入れ条件: 同一入力を 2 回分離して vocals stem の sha256 が一致すること。

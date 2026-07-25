@@ -66,18 +66,24 @@ SEPARATION_RNG_SEED = 0
 
 
 @contextlib.contextmanager
-def _deterministic_rng() -> Iterator[None]:
+def _deterministic_rng(device: str = "cpu") -> Iterator[None]:
     """分離の間だけ stdlib `random` と torch の RNG を固定 seed に据える。
 
     プロセス全体の RNG を書き換えたまま帰ると呼び出し側の乱数列を壊すので、
     前の state を退避して `finally` で必ず復元する（グローバル副作用を残さない）。
     torch は optional 依存なので、入っていなければ stdlib のみを固定する。
 
-    torch 側は `torch.random.fork_rng` に委ねる。`torch.manual_seed` は CPU だけでなく
-    **全 CUDA デバイスの generator も seed する**ため、`torch.set_rng_state`（CPU のみ）で
-    戻すと CUDA 側の乱数列を呼び出し側から奪ったままになる。fork_rng に device を明示して
-    渡せば CPU と該当 CUDA generator の両方が復元される（devices を明示するのは、
-    None 既定だと CUDA 初期化済みプロセスで警告付きの全列挙になるため）。
+    torch 側は **`device` が指す backend だけ**を対象にする。`torch.manual_seed` は CPU に
+    加えて CUDA / MPS / XPU 等の全 accelerator generator も seed するため、これを使うと
+    分離が触ってもいない backend の乱数列を呼び出し側から奪う。よって CPU は
+    `torch.default_generator`（CPU 専用）で seed し、accelerator を要求されたときだけ
+    その backend の `manual_seed` を呼ぶ。
+
+    退避・復元は `torch.random.fork_rng` に委ねる（CPU state は常に fork される）。
+    `devices` は必ず明示する: `None` 既定だと **全デバイスを列挙・初期化**するため、
+    `device="cpu"` の分離でも CUDA context が作られ、起動コスト増や
+    「使っていない GPU が触れず失敗」を招く。CPU 分離では `devices=[]` を渡して
+    accelerator に一切触らない。
     """
     random_state = random.getstate()
     random.seed(SEPARATION_RNG_SEED)
@@ -88,11 +94,23 @@ def _deterministic_rng() -> Iterator[None]:
     try:
         with contextlib.ExitStack() as stack:
             if torch is not None:  # pragma: no cover - torch 導入環境のみ
-                devices = (
-                    list(range(torch.cuda.device_count())) if torch.cuda.is_available() else []
-                )
-                stack.enter_context(torch.random.fork_rng(devices=devices))
-                torch.manual_seed(SEPARATION_RNG_SEED)
+                torch_device = torch.device(device)
+                if torch_device.type == "cpu":
+                    # accelerator を列挙も初期化もしない（CPU state は常に fork される）。
+                    stack.enter_context(torch.random.fork_rng(devices=[]))
+                else:
+                    index = 0 if torch_device.index is None else torch_device.index
+                    stack.enter_context(
+                        torch.random.fork_rng(
+                            devices=[index], device_type=torch_device.type
+                        )
+                    )
+                # CPU generator のみを seed（torch.manual_seed だと全 backend に及ぶ）。
+                torch.default_generator.manual_seed(SEPARATION_RNG_SEED)
+                if torch_device.type != "cpu":
+                    backend = getattr(torch, torch_device.type, None)
+                    if backend is not None and hasattr(backend, "manual_seed"):
+                        backend.manual_seed(SEPARATION_RNG_SEED)
             yield
     finally:
         random.setstate(random_state)
@@ -213,7 +231,7 @@ def _separate_stems_with_api(
     separator_cls = _get_demucs_separator_class()
     # shifts は明示する（既定 1 = ランダムシフト平均で stem が run 毎に変わる）。
     separator = separator_cls(model=model, device=device, shifts=DEFAULT_SHIFTS)
-    with _deterministic_rng():
+    with _deterministic_rng(device):
         _, separated = separator.separate_audio_file(source_path)
 
     if not isinstance(separated, dict):
