@@ -41,6 +41,27 @@ DEFAULT_SAMPLE_RATE = 44100
 STEM_NAMES = ("vocals", "drums", "bass", "other")
 REQUIRED_STEMS = frozenset(STEM_NAMES)
 
+# Demucs の "random shift trick"（randomized equivariant stabilization）を無効化する。
+#
+# `demucs.apply.apply_model` は `shifts > 0` のとき stdlib の `random.randint(0, max_shift)`
+# で mix を 0–0.5 秒のランダム量だけ時間シフトし、逆シフトした出力を `shifts` 回平均する
+# （demucs 4.1.0 `apply.py`）。API (`demucs.api.Separator`) と CLI (`python -m demucs`) の
+# **既定はどちらも 1** なので、既定のままでは同一入力を 2 回分離しただけで stem の bytes が
+# 変わる。M1-real の go-bar 評価器は vocals stem の hash (`stem_sha256`) を repeats の
+# 同一性署名 (`_route_provenance`) に含めるため、この非決定性は「別 model stack の run」として
+# fail-closed を招く（実測 2026-07-25: demucs を通る 15 経路すべてが `stem_sha256` のみ不一致、
+# 分離を通らない経路は完全一致）。
+#
+# `shifts=0` はシフト分岐自体をスキップさせるので、乱数を一切引かずに決定論化できる。
+# 平均を取らなくなる分だけ分離品質は理論上わずかに落ちるが、計器としての再現性を優先する
+# （観測値が run 毎に変わる計器は pin できない）。
+#
+# **決定論の根拠は `shifts=0` であり、RNG の seed 固定には依存しない。** 実測でも
+# 「shifts=0 + seed なし」で同一入力の再分離が bit 一致する。したがって本モジュールは
+# stdlib `random` や torch のプロセスグローバル generator を一切 seed しない（public API が
+# 多スレッドで呼ばれたとき、無関係なスレッドの乱数列を奪う副作用の方が害になる）。
+# この不変条件は `test_real_demucs_separation_is_bitwise_reproducible` が守る。
+DEFAULT_SHIFTS = 0
 
 class SeparatorNotAvailableError(RuntimeError):
     """Raised when source separation is requested without Demucs installed."""
@@ -155,7 +176,8 @@ def _separate_stems_with_api(
     device: str,
 ) -> StemBundle:
     separator_cls = _get_demucs_separator_class()
-    separator = separator_cls(model=model, device=device)
+    # shifts は明示する（既定 1 = ランダムシフト平均で stem が run 毎に変わる）。
+    separator = separator_cls(model=model, device=device, shifts=DEFAULT_SHIFTS)
     _, separated = separator.separate_audio_file(source_path)
 
     if not isinstance(separated, dict):
@@ -215,6 +237,9 @@ def _separate_stems_with_cli(
             model,
             "-d",
             device,
+            # API 経路と同値に固定する（CLI 既定も 1 なので、片方だけ直すと経路差で再発する）。
+            "--shifts",
+            str(DEFAULT_SHIFTS),
             "--float32",
             "--filename",
             "{stem}.{ext}",
