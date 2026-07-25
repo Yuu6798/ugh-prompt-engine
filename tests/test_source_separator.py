@@ -235,6 +235,7 @@ def test_cli_separation_pins_shifts_to_zero(
     assert command[command.index("--shifts") + 1] == "0"
 
 
+@pytest.mark.slow
 def test_real_demucs_separation_is_bitwise_reproducible(tmp_path: Path) -> None:
     """受け入れ条件: 同一入力を 2 回分離して vocals stem の sha256 が一致すること。
 
