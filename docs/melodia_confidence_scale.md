@@ -259,7 +259,9 @@ def probe(sig, **kw):
     """上表の全列を返す（raw = Essentia 生出力 / clamped = アダプタが報告する値）。"""
     pitch, conf = es.PredominantPitchMelodia(sampleRate=44100, **kw)(sig)
     conf, pitch = np.asarray(conf), np.asarray(pitch)
-    cl = np.array([clamp(float(c)) for c in conf])   # extract_melodia_f0 と同じ [0,1]
+    # extract_melodia_f0 と同一のフレーム毎変換: round(clamp(c), 4)。丸めを省くと
+    # 0.30 直下で 0.3000 に丸まる値の扱いが経路とズレ、ge030 / mean が一致しなくなる。
+    cl = np.array([round(clamp(float(c)), 4) for c in conf])
     return dict(raw_max=round(float(conf.max()), 4), raw_mean=round(float(conf.mean()), 4),
                 clamped_max=round(float(cl.max()), 4), clamped_mean=round(float(cl.mean()), 4),
                 ge030=int((cl >= 0.30).sum()), pitch=int((pitch > 0).sum()), frames=conf.size)
