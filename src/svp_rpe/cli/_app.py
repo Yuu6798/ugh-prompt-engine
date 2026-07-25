@@ -1,6 +1,8 @@
 """Shared Typer app, console, and CLI-wide option definitions for svp_rpe.cli."""
 from __future__ import annotations
 
+import sys
+from collections.abc import Iterable
 from typing import Annotated
 
 import click
@@ -8,6 +10,24 @@ import typer
 from rich.console import Console
 
 from svp_rpe.eval.scorer_rpe import BASELINE_CONFIGS
+
+
+def _configure_windows_utf8_output(platform: str, streams: Iterable[object]) -> None:
+    """Keep Rich/Typer help renderable on Windows legacy code-page streams."""
+    if platform != "win32":
+        return
+    for stream in streams:
+        reconfigure = getattr(stream, "reconfigure", None)
+        if not callable(reconfigure):
+            continue
+        try:
+            reconfigure(encoding="utf-8")
+        except (OSError, ValueError):
+            # Embedded hosts and closed streams may reject reconfiguration.
+            continue
+
+
+_configure_windows_utf8_output(sys.platform, (sys.stdout, sys.stderr))
 
 app = typer.Typer(
     name="svprpe",

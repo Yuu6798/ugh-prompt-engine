@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 import svp_rpe.batch.runner as batch_runner
 import svp_rpe.rpe.extractor as extractor
 from svp_rpe.cli import app
+from svp_rpe.cli._app import _configure_windows_utf8_output
 from svp_rpe.rpe.models import (
     DeltaEProfile,
     GrvAnchor,
@@ -30,6 +31,36 @@ def test_help():
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
     assert "SVP-RPE" in result.output
+
+
+def test_windows_cli_streams_are_reconfigured_to_utf8() -> None:
+    class RecordingStream:
+        encoding: str | None = None
+
+        def reconfigure(self, *, encoding: str) -> None:
+            self.encoding = encoding
+
+    stdout = RecordingStream()
+    stderr = RecordingStream()
+
+    _configure_windows_utf8_output("win32", (stdout, object(), stderr))
+
+    assert stdout.encoding == "utf-8"
+    assert stderr.encoding == "utf-8"
+
+
+def test_non_windows_cli_streams_are_not_reconfigured() -> None:
+    class RecordingStream:
+        called = False
+
+        def reconfigure(self, *, encoding: str) -> None:
+            self.called = True
+
+    stream = RecordingStream()
+
+    _configure_windows_utf8_output("linux", (stream,))
+
+    assert stream.called is False
 
 
 def test_extract_with_real_audio(sine_wave_mono):
