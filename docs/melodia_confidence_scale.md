@@ -211,17 +211,33 @@ for name in ("demucs_vocals_then_melodia", "demucs_vocals_then_pyin"):
 
 実経路の vocals stem（§2.4 と同一 stem `77244a53…4033`）:
 
-| `magnitudeCompression` | conf max | conf mean | conf ≥ 0.30 | pitch 検出 |
-|---|---|---|---|---|
-| **1.0（アダプタ既定＝ Essentia 既定）** | 0.2216 | 0.0630 | **0** / 56543 | 27171 |
-| 0.8 | 0.3833 | 0.1227 | 2548 | 27778 |
-| 0.5 | **1.1586** | 0.3882 | **28633** | 29125 |
+下表の conf は **Essentia の生出力（raw）** と、**アダプタの `clamp` を通した値
+（= 経路が実際に報告する値）** を併記する。`extract_melodia_f0` は confidence を
+[0, 1] へクランプしてから `MelodyObservation` を作るので、raw が 1 を超える帯では
+両者が食い違う（この掃引は Essentia を直接叩いており、アダプタは
+`magnitudeCompression` を渡せないため raw で測っている）。
+
+| `magnitudeCompression` | raw max | raw mean | **clamped max**（経路報告値） | **clamped mean** | conf ≥ 0.30 | pitch 検出 |
+|---|---|---|---|---|---|---|
+| **1.0（アダプタ既定＝ Essentia 既定）** | 0.2216 | 0.0630 | 0.2216 | 0.0630 | **0** / 56543 | 27171 |
+| 0.8 | 0.3833 | 0.1227 | 0.3833 | 0.1227 | 2548 | 27778 |
+| 0.5 | **1.1586** | 0.3882 | **1.0000** | 0.3875 | **28633** | 29125 |
+
+clamp が実際に効くのは `0.5` の行だけで（raw 1.1586 → 1.0000、mean 0.3882 → 0.3875）、
+床超えフレーム数は clamp の前後で変わらない（床 0.30 は clamp 境界より下にあるため）。
 
 読み取れること:
 
-- **被覆と値域は独立ではない**が、独立でない軸は 1 つだけだった。`voicingTolerance` /
-  `guessUnvoiced` は被覆を 5 倍にしても conf max を 1 ケタも動かさない一方、
-  `magnitudeCompression` は**値域そのものを動かす**（salience の圧縮指数）
+- **被覆と値域は独立ではない**。`voicingTolerance` / `guessUnvoiced` は被覆を 5 倍に
+  しても conf max を動かさない（0.2947 のまま）一方、`magnitudeCompression` は
+  **値域そのものを大きく動かす**（salience の圧縮指数）
+- ただし **「値域に効くのは `magnitudeCompression` だけ」とは言えない**。
+  `harmonicWeight` / `numberHarmonics` / `magnitudeThreshold` /
+  `peakDistributionThreshold` / `peakFrameThreshold` も conf max を 0.2260–0.2968 の
+  範囲で動かしており、値域の関数ではある。**掃引した値の範囲では床 0.30 を越えな
+  かった**だけである。正しい要約は「**床を越えた唯一のパラメータが
+  `magnitudeCompression` だった**」であって、他パラメータの寄与がゼロという主張では
+  ない（事前登録で他の設定を検討対象から外す根拠にはならない）
 - 現在の値域が床の外にあるのは **アダプタが Essentia 既定 `magnitudeCompression=1.0`
   を使っているため**であり、Melodia という算法の不変の性質ではない
 - `0.5` では salience が 1 を超える（1.1586）。アダプタは `clamp` で [0,1] へ丸めるので、
@@ -237,13 +253,16 @@ import essentia.standard as es
 from build_melody_bench import build_signal
 from svp_rpe.melody.routing import select_routes
 from svp_rpe.melody.extractors import _load_route_waveform
+from svp_rpe.utils.clamp import clamp
 
 def probe(sig, **kw):
-    """上表の全列を返す: (conf_max, conf_mean, conf>=0.30 の数, pitch 検出数, frames)。"""
+    """上表の全列を返す（raw = Essentia 生出力 / clamped = アダプタが報告する値）。"""
     pitch, conf = es.PredominantPitchMelodia(sampleRate=44100, **kw)(sig)
     conf, pitch = np.asarray(conf), np.asarray(pitch)
-    return (round(float(conf.max()), 4), round(float(conf.mean()), 4),
-            int((conf >= 0.30).sum()), int((pitch > 0).sum()), conf.size)
+    cl = np.array([clamp(float(c)) for c in conf])   # extract_melodia_f0 と同じ [0,1]
+    return dict(raw_max=round(float(conf.max()), 4), raw_mean=round(float(conf.mean()), 4),
+                clamped_max=round(float(cl.max()), 4), clamped_mean=round(float(cl.mean()), 4),
+                ge030=int((cl >= 0.30).sum()), pitch=int((pitch > 0).sum()), frames=conf.size)
 
 # --- (a) 合成素材（checkout で完結） ---
 specs = yaml.safe_load(open("tests/fixtures/melody_bench/synthesis_specs.yaml"))
