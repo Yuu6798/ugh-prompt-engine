@@ -1,0 +1,20 @@
+{
+  "model": "htdemucs_ft",
+  "version": "4.1.0",
+  "sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "files": [
+    "f7e0c4bc-ba3fe64a.th",
+    "d12395a8-e57c48e6.th",
+    "92cfc3b6-ef3bcb9c.th",
+    "04573f0d-f3cf25b2.th",
+    "files.txt",
+    "htdemucs_ft.yaml"
+  ],
+  "paths": [
+    "/root/.cache/torch/hub/checkpoints/f7e0c4bc-ba3fe64a.th",
+    "/root/.cache/torch/hub/checkpoints/d12395a8-e57c48e6.th",
+    "/root/.cache/torch/hub/checkpoints/92cfc3b6-ef3bcb9c.th",
+    "/root/.cache/torch/hub/checkpoints/04573f0d-f3cf25b2.th"
+  ],
+  "source": "事前取得（実行時DL禁止）"
+}

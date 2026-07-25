@@ -1,0 +1,71 @@
+# run1 vs run2 の route provenance 差分（_route_provenance 署名の構成要素のみ）
+# run1 run_id=e48756b5129545cdaee943e3221c8a19  run2 run_id=a7160db93b3c400682585c1b3bad383c
+# registry_sha256: MATCH
+# generator_code_sha256: MATCH
+# manifest_sha256: MATCH
+
+[real_instrumental_negative] demucs_vocals_then_crepe: SIGNATURE-DIFFER  (outcome run1=insufficient run2=insufficient)
+    preprocessing.stem_sha256:
+        run1=806a285f97e5e3062fe18e37851a30322bfc6c8580c3384b7aad36fd811050b2
+        run2=3c084fbf7ffee986f58970dfd88dda84f00421d0b460744bfcc66fbcb1e97d1d
+[real_instrumental_negative] demucs_vocals_then_melodia: SIGNATURE-DIFFER  (outcome run1=insufficient run2=insufficient)
+    preprocessing.stem_sha256:
+        run1=22abc41cc1a4d7c20471235ac0fa14bbc256a6ea842f981d2352efba5dc340c8
+        run2=ceed7b61b8bafd334c14428b53028ca5768ba7f09e088f3cb172f7a4833f7b04
+[real_instrumental_negative] demucs_vocals_then_pyin: SIGNATURE-DIFFER  (outcome run1=insufficient run2=insufficient)
+    preprocessing.stem_sha256:
+        run1=82d9cf77adc3812e924a7f3561f8afad8c700540cd9f7d01b0fba287182cddc6
+        run2=e43d73fa962f68bd959fbd9f6f3ffe07cb94dbf0104bb5f2e7904bac2ab101b3
+[real_instrumental_negative] pyin_direct: SIGNATURE-MATCH  (outcome run1=insufficient run2=insufficient)
+[real_vocal_band] demucs_vocals_then_crepe: SIGNATURE-DIFFER  (outcome run1=sufficient run2=sufficient)
+    preprocessing.stem_sha256:
+        run1=936034088e0c43bfb621e4c53920efe6ce05e64aa36343acb46dc5baf51d6bf2
+        run2=d86c3fea052ea0a79b5de192315b96d3e637292e80e24d356c19e5551322e1ac
+[real_vocal_band] demucs_vocals_then_melodia: SIGNATURE-DIFFER  (outcome run1=insufficient run2=insufficient)
+    preprocessing.stem_sha256:
+        run1=42394c8245fd80124daff828c08cb0b48953868fae799d90a17ccd4d9ff2d3b5
+        run2=1c197637843b382675a8f85d5b094394a2e9e305e084c3f8d8fc6c3598f5e41c
+[real_vocal_band] demucs_vocals_then_pyin: SIGNATURE-DIFFER  (outcome run1=insufficient run2=insufficient)
+    preprocessing.stem_sha256:
+        run1=92e0d8c74bca690a6127457e2c53505c1501039abaf274bea8947d64bc913f2b
+        run2=dfaa6f33a9be3a422233a4f88b5a7c06cc4e12076d2f713cc2cf52d455e3f7cb
+[real_vocal_band] pyin_direct: SIGNATURE-MATCH  (outcome run1=insufficient run2=insufficient)
+[real_vocal_futurepop] demucs_vocals_then_crepe: SIGNATURE-DIFFER  (outcome run1=sufficient run2=sufficient)
+    preprocessing.stem_sha256:
+        run1=b4abbc673c29fbfa4f348617cb73d8bef20dd32b4a6fe1c17e7b6debb0f33fdb
+        run2=23f0fcbc6fe2a46afbd993bd957e4f0099098c7d3bb8ef8f39564e663f284613
+[real_vocal_futurepop] demucs_vocals_then_melodia: SIGNATURE-DIFFER  (outcome run1=insufficient run2=insufficient)
+    preprocessing.stem_sha256:
+        run1=9a4e14de8b45e7614ecaeb34b405cb7a7927d93f256712f68aa83bfc8e1e2238
+        run2=32b52a7fbfd2dab0e8bf4823707029c8e41dcd83fbad941097e5c41c986f81eb
+[real_vocal_futurepop] demucs_vocals_then_pyin: SIGNATURE-DIFFER  (outcome run1=insufficient run2=insufficient)
+    preprocessing.stem_sha256:
+        run1=32536aaedb9b26d8ae11fd3c523bcbd5e7275102c2bc6f821101811d939fd21a
+        run2=6be3e7b03a275f4077795b2827ab482f0b45be43f4a429cf01800415dda5b06d
+[real_vocal_futurepop] pyin_direct: SIGNATURE-MATCH  (outcome run1=insufficient run2=insufficient)
+[real_vocal_jrock] demucs_vocals_then_crepe: SIGNATURE-DIFFER  (outcome run1=sufficient run2=sufficient)
+    preprocessing.stem_sha256:
+        run1=c9b43f7fabea20e424c3676bb936deb6dc9bb98127e7793e108a98290a08f8eb
+        run2=ed8a92b2763a43af9843894a972d6df6ea169cc4955e82015dcf738905c8c694
+[real_vocal_jrock] demucs_vocals_then_melodia: SIGNATURE-DIFFER  (outcome run1=insufficient run2=insufficient)
+    preprocessing.stem_sha256:
+        run1=f9d9d0f8399d18669974a8c3ed3ca53ec5de04b6c64e83cc60fc3e9b9b4c7f5f
+        run2=847d7f7483374f5492af388229ed1720aaac0fbda633bfe16a79d0f4f405e630
+[real_vocal_jrock] demucs_vocals_then_pyin: SIGNATURE-DIFFER  (outcome run1=sufficient run2=sufficient)
+    preprocessing.stem_sha256:
+        run1=a3261a127123bbdc7057ae1bd875ecb2e71255b449ef1057a5b54b3c907d9fcf
+        run2=b5585be8686a53b0dac28d53f655396f9db948bd7317e5182e289b1e3f58d1c3
+[real_vocal_jrock] pyin_direct: SIGNATURE-MATCH  (outcome run1=insufficient run2=insufficient)
+[real_vocal_waltz] demucs_vocals_then_crepe: SIGNATURE-DIFFER  (outcome run1=sufficient run2=sufficient)
+    preprocessing.stem_sha256:
+        run1=395f252573d18c2bab6b0b58f2e3ce76fced32ee35f63e29c77bf58d98d5f947
+        run2=c2cedfae5651827a7c40733cc7fa6167ab7d50560bb80538f5c8b4663f509756
+[real_vocal_waltz] demucs_vocals_then_melodia: SIGNATURE-DIFFER  (outcome run1=insufficient run2=insufficient)
+    preprocessing.stem_sha256:
+        run1=32cc43baa9ca35b512c1cd685d19e6709e02efa30d9c1b3daa8a282562ebc35d
+        run2=681cd71716f82008a94a5b8d8905c4c479bcff6dc0bcc9a137998088bf9abb13
+[real_vocal_waltz] demucs_vocals_then_pyin: SIGNATURE-DIFFER  (outcome run1=insufficient run2=insufficient)
+    preprocessing.stem_sha256:
+        run1=6c1100c9efa5506bb2669737c2e28fce7a6f7c44617e28741663672ca811bbfe
+        run2=54f34bde580158e754ff281385492521adb6e9d01dba6f2849199f095fdc2329
+[real_vocal_waltz] pyin_direct: SIGNATURE-MATCH  (outcome run1=sufficient run2=sufficient)
