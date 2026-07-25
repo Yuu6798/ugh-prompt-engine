@@ -7,8 +7,8 @@ M1-real 実測（PR #220）で Melodia 経路が**M1-real 全 5 素材 × 両 ru
 **証跡の所在**: 実測 report（run×2・素材 id・hash・route 別出力）は PR #220 の
 `docs/measurements/m1real_2026-07/` にあり、**本 PR の checkout には存在しない**
 （#220 は未マージ）。本ドキュメント単体で checkout から監査できるのは §2 の
-実測値（合成素材 1 本 + 実音源 2 本を本 PR 提出時に再測したもの）である。うち **checkout から
-再現できるのは合成素材の行だけ**で、実音源 2 本は意図的に uncommitted な machine-dependent
+実測値（合成素材 1 本 + 生 mp3 2 本 + demucs vocals stem 1 本を本 PR 提出時に測ったもの）
+である。うち **checkout から再現できるのは合成素材の行だけ**で、実音源 2 本は意図的に uncommitted な machine-dependent
 素材のため、§2.2 に sha256 を pin して同定可能にしてある（波形は別途受領が必要・§6 参照）。
 #220 マージ後に report を参照できるようになる。
 
@@ -46,12 +46,25 @@ t, hz, cf, _ = extract_melodia_f0(y, sr)
 |---|---|
 | frames | 2947 |
 | pitch 検出フレーム | 360 / 2947 |
-| 検出 pitch の中央値 | 349.23 Hz（F4）、max 392.00 Hz（G4） |
 | confidence max | **0.2947** |
 | confidence >= 0.30 のフレーム | **0 / 2947** |
 
-**Melodia は音高を正しく取れている**（F4/G4 は合成仕様どおりの実在音高）。
-にもかかわらず confidence が一度も 0.30 に届かない。
+検出音を合成仕様の全音と突き合わせた結果（`synthesis_specs.yaml#synth_mono_phrased` は
+3 フレーズ・計 15 note-event・音名集合 {60, 62, 64, 65, 67, 69, 71} = C4–B4）:
+
+| 項目 | 実測 |
+|---|---|
+| 検出できた音名 | 62 (D4) / 65 (F4) / 67 (G4) の **3 音のみ**（各 120 フレーム） |
+| 未検出の音名 | 60 (C4) / 64 (E4) / 69 (A4) / 71 (B4) |
+| 誤検出（仕様に無い音） | なし |
+| 検出音の周波数誤差 | D4 −0.1 cent / F4 +0.0 cent / G4 +0.0 cent |
+| 検出できた note-event 数 | 15 中 3（各音名 1 回分＝120 フレーム × 3） |
+
+**読み取れること**: Melodia が音高を出した箇所は **±0.1 cent の精度で正しい**。これは
+sampleRate の取り違えや dtype の誤解釈を否定する（それらは周波数を系統的にずらすので、
+cent 単位で合うことはない）。一方で **被覆は 15 note-event 中 3** にとどまり、
+「パラメータが本素材に最適でない」可能性は否定できない（§4 参照）。
+にもかかわらず confidence は一度も 0.30 に届かない。
 
 ### 2.2 実音源（Melodia 本来の設計対象＝ポリフォニック混合、先頭 30 秒）
 
@@ -60,8 +73,12 @@ t, hz, cf, _ = extract_melodia_f0(y, sr)
 | `kane_y2.mp3` | 10337 | 4147 (40%) | 51 | 0.1760 | 0.0480 | **0** |
 | `crslv2_w3.mp3` | 10337 | 2920 (28%) | 36 | 0.2541 | 0.0470 | **0** |
 
-素材の同定用 pin（波形は repo に commit しない M1-real 素材。`registry.yaml` の
-`external_fixtures[].expected_audio_sha256` と同一値）:
+素材の同定用 pin（波形は repo に commit しない M1-real 素材）。**本 commit 時点では
+ドキュメント上の pin にとどまる**: これらの digest を `registry.yaml` の
+`external_fixtures[].expected_audio_sha256` へ刻む変更は PR #220 にあり未マージなので、
+現 checkout の registry には当該フィールドが無い（凍結 provenance ゲートには未接続。
+`evaluate_m1_real_go_bar` は go-bar fixture がこのフィールドを欠くと fail-closed する）。
+#220 マージ後に registry pin と同一値になる:
 
 | 素材 | fixture id | sha256 |
 |---|---|---|
@@ -71,6 +88,23 @@ t, hz, cf, _ = extract_melodia_f0(y, sr)
 実音源では confidence が連続的に分布する（unique 値 51 / 36）ため、2.1 の
 「0 か 0.2947 の 2 値」は合成純音（定振幅）に固有の縮退であり、一般的な挙動ではない。
 一般的な挙動は「**分布はするが 0.30 に届かない**」である。
+
+### 2.4 実 demucs vocals stem 上の pre-gate 出力（本命経路そのもの）
+
+「stem がそもそも使える音高を含まない」ことと「音高はあるが confidence が床未満」は
+post-gate の症状が同じなので、**実際の `demucs_vocals_then_melodia` 経路の stem** 上で
+gate を通す前の値を直接測った（`kane_y2.mp3` 先頭 30 秒を `separate_stems` で分離した
+vocals stem。分離は本 doc の branch では非決定論なので、下記は 1 回の分離に対する値）。
+
+| 抽出器 | frames | pitch 検出 | conf max | conf mean | conf ≥ 0.30 |
+|---|---|---|---|---|---|
+| melodia | 10337 | **4929 (47.7%)** | 0.1485 | 0.0184 | **0** |
+| pyin（対照・同一 stem） | 646 | 97 | 0.9459 | 0.0735 | **55** |
+
+**stem は「音高が取れない」状態ではない** — Melodia 自身が 47.7% のフレームに音高を
+出しており（中央値 744.3 Hz、p10–p90 = 442.6–1209.1 Hz）、同じ stem で pyin は
+conf 0.9459 まで達して 55 フレームが床を越える。したがって post-gate の全ゼロは
+「stem が壊れている」ためではなく confidence の値域に帰属する。
 
 ### 2.3 pyin との対比（同一入力 `synth_mono_phrased`）
 
@@ -109,7 +143,8 @@ confidence_mean はすべて有声フレーム集合から導出されるので�
 ### 3.1 主張の適用範囲（重要）
 
 「Melodia の confidence は**入力によらず** 0.30 を越えない」とは主張できない。
-根拠は測定した 3 入力（合成 1 + 実音源 2）と M1-real の 5 素材で 0.30 未達だったことのみで、
+根拠は測定した 4 入力（合成 1 + 生 mp3 2 + demucs vocals stem 1）と M1-real の 5 素材で
+0.30 未達だったことのみで、
 上限の普遍的な証明ではない。実際 `melodia_adapter.py` の docstring は raw salience が
 稀に 1 を超えうると記し（clamp 前）、本ドキュメント §5 も理論上限が定まらないと述べている。
 confidence が 0.30 に達する入力があれば、その入力では有声フレームが残り、経路は
@@ -117,8 +152,9 @@ insufficient に固定されない。
 
 確立した事実は次の 2 点に限る:
 
-1. **測定した全入力**（`synth_mono_phrased` / `kane_y2` / `crslv2_w3` / M1-real 5 素材）で
-   Melodia の confidence は 0.30 に届かず、有声フレーム数が 0 になった
+1. **測定した全入力**（`synth_mono_phrased` / `kane_y2` 生 mp3 / `crslv2_w3` 生 mp3 /
+   `kane_y2` の demucs vocals stem / M1-real 5 素材）で Melodia の confidence は 0.30 に
+   届かず、有声フレーム数が 0 になった
 2. その値域は pyin の `voiced_prob`（max 1.0 / mean 0.64）と**同一の床で裁けるスケールではない**
 
 「実制作音楽の実用帯でこの床を越える入力があるか」は未測定であり、
@@ -130,9 +166,14 @@ Cowork 指定の切り分け基準に対する結論:
 
 | 仮説 | 判定 |
 |---|---|
-| アダプタ設定バグ（sampleRate / dtype / パラメータ） | **否**。44.1 kHz へリサンプル済み、mono float32、音高は正しく取れている |
-| demucs stem との噛み合わせ問題 | **否**。分離を通さない合成素材・生 mp3 でも同じく全フレームが床未満 |
-| 凍結閾値と抽出器の信頼度セマンティクスの衝突 | **是**。`voiced_confidence_floor 0.30` が Melodia の値域（実測 max 0.176–0.295）の外にある |
+| アダプタ設定バグのうち **sampleRate / dtype の取り違え** | **否**。44.1 kHz へリサンプル済み・mono float32 で、検出音は ±0.1 cent の精度（取り違えなら周波数が系統的にずれる） |
+| アダプタ設定バグのうち **パラメータ最適化不足** | **未棄却**。§2.1 の被覆は 15 note-event 中 3。ただし被覆を上げても confidence の値域が床の外にある事実は変わらないため、本件の主因ではない |
+| demucs stem との噛み合わせ問題 | **否**。§2.4 で本命経路の stem を直接測り、Melodia 自身が 47.7% のフレームに音高を出し、同一 stem で pyin は 55 フレームが床を越えることを確認した（stem 側の欠陥では説明できない） |
+| 凍結閾値と抽出器の信頼度セマンティクスの衝突 | **是**。`voiced_confidence_floor 0.30` が Melodia の値域（実測 max 0.1485–0.2947）の外にある |
+
+なお「パラメータ最適化不足」は本件と**独立に残る課題**である（被覆 3/15 は
+それ自体が低い）。ただし床の問題を解かない限り、被覆をいくら上げても
+post-gate は 0 のままなので、対処順序は床の定義が先になる。
 
 ## 5. 未決事項（事前登録マター・実装しない）
 
@@ -155,8 +196,9 @@ Cowork 指定の切り分け基準に対する結論:
 ## 6. 再現手順
 
 **再現できる範囲**: 下記手順は §2.1（合成素材 `synth_mono_phrased`）と §2.3（pyin 対比）を
-checkout だけで再現する。§2.2 の実音源 2 行は **repo に commit しない machine-dependent
-素材**を要するため、この checkout からは再現できない（素材を受領し §2.2 の sha256 と
+checkout だけで再現する。§2.2 / §2.4 の実音源由来の行は **repo に commit しない
+machine-dependent 素材**（および §2.4 は demucs 重み）を要するため、この checkout からは
+再現できない（素材を受領し §2.2 の sha256 と
 一致することを確認した上で、同じ `extract_melodia_f0` 呼び出しを当てれば再現する）。
 診断の結論は合成素材だけでも成立する — §2.1 は「クリーンな単旋律ですら床に届かない」を
 示しており、これが「アダプタ設定バグ」「demucs stem との噛み合わせ」の 2 仮説を棄却する。
