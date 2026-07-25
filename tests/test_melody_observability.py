@@ -2188,7 +2188,7 @@ def test_route_rows_record_third_party_code_hash(monkeypatch, tmp_path):
     assert rows[0]["extractor_code_sha256"] == extractor_code_sha256("pyin")
     assert harness._is_sha256(rows[0]["extractor_code_sha256"])
     # pin が何を覆ったか（抽出器自身 + 実在した backend）を行に列挙する。
-    assert rows[0]["extractor_code_packages"] == ["librosa", "scipy", "soundfile"]
+    assert rows[0]["extractor_code_packages"] == ["librosa", "scipy", "soundfile", "numpy"]
 
 
 def test_code_pin_covers_inference_backends(monkeypatch):
@@ -2481,10 +2481,70 @@ def test_cli_separation_probe_does_not_import_demucs():
     assert out == "False False"
 
 
+def test_native_library_scan_covers_versioned_and_windows_libraries(monkeypatch, tmp_path):
+    """版番号付き `.so.1` / `.dll` もパッケージ走査で hash 対象にする（#217）。
+
+    TensorFlow / PyTorch は `libc10.so` / `lib*.so.1` / `*.dll` 形のバックエンド
+    ライブラリを推論時にロードする。4 拡張子だけの走査では差し替えを検出できない。
+    """
+    import importlib.util
+
+    from svp_rpe.melody import provenance as melody_provenance
+
+    assert melody_provenance._is_native_library(Path("libsndfile.so.1"))
+    assert melody_provenance._is_native_library(Path("torch_cpu.dll"))
+    assert melody_provenance._is_native_library(Path("libsndfile.1.dylib"))
+    assert not melody_provenance._is_native_library(Path("notes.software.txt"))
+
+    pkg = tmp_path / "fakepkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("# pkg\n")
+    versioned = pkg / "libbackend.so.1"
+    versioned.write_bytes(b"backend-v1")
+
+    class _Spec:
+        origin = str(pkg / "__init__.py")
+        submodule_search_locations = [str(pkg)]
+
+    monkeypatch.setattr(
+        importlib.util, "find_spec", lambda name, *a, **k: _Spec() if name == "fakepkg" else None
+    )
+    before = melody_provenance.package_code_state("fakepkg", use_cache=False)
+    versioned.write_bytes(b"backend-v2-swapped")
+    after = melody_provenance.package_code_state("fakepkg", use_cache=False)
+    assert before[0] == after[0] == melody_provenance.STATE_OK
+    assert before[1] != after[1]
+
+
+def test_numpy_is_pinned_in_every_inference_closure():
+    """numpy も本層のコードが直接呼ぶので全閉包に入れる（#217）。"""
+    from svp_rpe.melody import provenance as melody_provenance
+
+    for extractor, packages in melody_provenance._EXTRACTOR_CODE_PACKAGES.items():
+        assert "numpy" in packages, extractor
+    assert "numpy" in melody_provenance.SEPARATION_CODE_PACKAGES
+
+
+def test_provenance_import_closure_does_not_import_numpy():
+    """provenance の import 閉包は numpy を引かない（bind を numpy import より前に置ける）。"""
+    import subprocess
+
+    code = (
+        "import sys;"
+        "import svp_rpe.melody.provenance;"
+        "print('numpy' in sys.modules, 'soundfile' in sys.modules, 'librosa' in sys.modules)"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True, cwd=str(ROOT)
+    ).stdout.strip()
+    assert out == "False False False"
+
+
 def test_harness_binds_code_pins_before_importing_soundfile():
-    """ハーネスは `soundfile` を import する**前**に pin を bind する（#217）。"""
+    """ハーネスは `numpy` / `soundfile` を import する**前**に pin を bind する（#217）。"""
     source = (ROOT / "scripts" / "run_melody_observability.py").read_text()
     bind_call = source.index("\nbind_inference_code_pins()")
+    assert bind_call < source.index("import numpy as np")
     assert bind_call < source.index("import soundfile as sf")
     assert bind_call < source.index("from build_melody_bench import")
     assert bind_call < source.index("from svp_rpe.melody.extractors import")

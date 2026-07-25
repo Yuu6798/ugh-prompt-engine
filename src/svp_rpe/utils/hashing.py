@@ -22,9 +22,10 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple, Union
+from typing import TYPE_CHECKING, Dict, Iterable, List, Tuple, Union
 
-import numpy as np
+if TYPE_CHECKING:  # pragma: no cover - 型注釈専用
+    import numpy as np
 
 __all__ = [
     "sha256_of_float32",
@@ -40,7 +41,14 @@ _FILE_DIGEST_CACHE: Dict[Tuple[str, int, int], str] = {}
 
 
 def sha256_of_float32(samples: "np.ndarray") -> str:
-    """波形を float32 の生サンプル bytes として hash する。"""
+    """波形を float32 の生サンプル bytes として hash する。
+
+    numpy は**関数内 import** にしている。本モジュールは `melody/provenance` の
+    import 閉包に入るため、module レベルで numpy を引くと「numpy のコード pin を
+    bind する前に numpy が import されて cache される」窓が開く（Codex #217）。
+    """
+    import numpy as np
+
     return hashlib.sha256(np.ascontiguousarray(samples, dtype=np.float32).tobytes()).hexdigest()
 
 

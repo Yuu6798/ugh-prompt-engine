@@ -24,6 +24,7 @@ emit しないケース（`None` を返す）:
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple
@@ -183,12 +184,15 @@ def _resolve_fingerprint(
 # decode（`_load_route_waveform`）、(b) Melodia 入力のリサンプル、(c) basic-pitch の
 # 被覆分母となる実尺取得（`librosa.get_duration`）を行うため。patch された librosa は
 # 抽出器へ渡る波形やゲート指標を変えるのに、source audio hash も抽出器 pin も version も
-# 動かない（Codex #217）。numpy/scipy は汎用数値基盤として線の外に置く。
+# 動かない（Codex #217）。**numpy / scipy も本層のコードが直接呼ぶので閉包に入れる** —
+# `extractors.py` は `asarray` / `isfinite` / `where` / `nan_to_num` で観測値そのものを
+# 組み立て、分離側も stem を numpy で正規化する。patch された numpy は観測とゲート指標を
+# 変えるのに、抽出器 pin も weights pin も version も動かない。
 _EXTRACTOR_CODE_PACKAGES = {
     # CREPE は 16kHz 以外の入力を **内部で `resampy`** によりリサンプルしてから
     # モデルへ渡す。patch された resampy はモデルに届くサンプルを変えるのに、
     # crepe/TF/weights/version のどの pin も動かない（Codex #217）。
-    "crepe": ("crepe", "tensorflow", "keras", "librosa", "resampy", "soundfile"),
+    "crepe": ("crepe", "tensorflow", "keras", "librosa", "resampy", "soundfile", "numpy"),
     "basic_pitch": (
         "basic_pitch",
         "tensorflow",
@@ -198,23 +202,27 @@ _EXTRACTOR_CODE_PACKAGES = {
         "tflite_runtime",
         "librosa",
         "soundfile",
+        "numpy",
     ),
-    "melodia": ("essentia", "librosa", "soundfile"),
+    "melodia": ("essentia", "librosa", "soundfile", "numpy"),
     # pyin は **scipy を直接実行する**: `extract_pyin_observation` が
     # `_highpass_melody_signal`（`scipy.signal.butter` / `sosfiltfilt`）で波形を
     # 前処理してから `librosa.pyin` へ渡す（physical_features.py:1170-1182）。
     # patch された scipy はフィルタ後の波形＝F0 トラック＝ゲート判定を変えるのに、
     # librosa の pin も version も動かない（Codex #217）。汎用数値基盤を線の外に
     # 置く原則の例外は「本層のコードが直接呼ぶ」ことを根拠とする。
-    "pyin": ("librosa", "scipy", "soundfile"),
+    "pyin": ("librosa", "scipy", "soundfile", "numpy"),
 }
 
 # 分離器（Demucs）の推論を実行するパッケージ群。
-SEPARATION_CODE_PACKAGES = ("demucs", "torch")
+SEPARATION_CODE_PACKAGES = ("demucs", "torch", "numpy")
 
 # コードとみなす拡張子（Python source + ネイティブ拡張）。モデル artifact（.h5 等）は
 # `extractor_weights_sha256` 側で別途 pin するので、二重計上せず責務を分ける。
 _CODE_SUFFIXES = (".py", ".so", ".pyd", ".dylib")
+
+# ネイティブ共有ライブラリ名の規約（版番号付き `.so.1` / macOS の `.1.dylib` / Windows）。
+_NATIVE_LIBRARY_RE = re.compile(r"\.(so|dylib|dll|pyd)(\.\d+)*$")
 
 
 # パッケージのコード hash 解決結果。`absent`（未導入 = optional backend が無いだけ）と
@@ -278,9 +286,13 @@ def _module_companion_files(package: str, root: Path) -> "list[Path]":
 
 
 def _is_native_library(path: Path) -> bool:
-    """`libsndfile.so.1` / `.dylib` / `.dll` のようなネイティブ共有ライブラリか。"""
-    name = path.name
-    return ".so" in name or name.endswith((".dylib", ".dll", ".pyd"))
+    """`libsndfile.so.1` / `libc10.so` / `.dylib` / `.dll` 等のネイティブ共有ライブラリか。
+
+    **版番号付き（`lib*.so.1`）と Windows の `.dll`** を拾うのが要点（Codex #217）。
+    TensorFlow / PyTorch はこの形のバックエンドライブラリを推論時にロードするため、
+    `_CODE_SUFFIXES` の 4 拡張子だけで走査すると差し替えを検出できない。
+    """
+    return bool(_NATIVE_LIBRARY_RE.search(path.name))
 
 
 def _system_library_path(soname: str) -> Optional[Path]:
@@ -364,7 +376,7 @@ def package_code_state(
                 path
                 for path in root.rglob("*")
                 if path.is_file()
-                and path.suffix in _CODE_SUFFIXES
+                and (path.suffix in _CODE_SUFFIXES or _is_native_library(path))
                 and "__pycache__" not in path.parts
             )
         except OSError:

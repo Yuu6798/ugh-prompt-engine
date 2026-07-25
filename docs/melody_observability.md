@@ -495,9 +495,15 @@ pin を必須化する = 記録が済むまで Go を出さない fail-closed �
   非分離経路の波形 decode・Melodia 入力のリサンプル・basic-pitch の被覆分母となる実尺取得に
   librosa を使うため、patch された librosa は抽出器へ渡る波形やゲート指標を変えるのに
   source audio hash も抽出器 pin も version も動かない。numpy/scipy は汎用数値基盤として
-  線の外に置くのが原則だが、**本層のコードが直接呼ぶ場合は閉包に入れる** — pyin は
-  `_highpass_melody_signal`（`scipy.signal.butter` / `sosfiltfilt`）で前処理してから
-  `librosa.pyin` へ渡すため、patch された scipy はフィルタ後の波形＝F0＝ゲート判定を変える。import できなかった backend は飛ばし、**実際に覆った名前**を
+  線の外に置くのが原則だったが、**本層のコードが直接呼ぶ以上どちらも閉包に入れる** —
+  pyin は `_highpass_melody_signal`（`scipy.signal.butter` / `sosfiltfilt`）で前処理して
+  から `librosa.pyin` へ渡し、`extractors.py` は `asarray` / `isfinite` / `where` /
+  `nan_to_num` で観測値そのものを組み立て、分離側も stem を numpy で正規化する。
+  patch された scipy / numpy は観測とゲート指標を変えるのに、抽出器 pin も weights pin も
+  version も動かない。numpy を bind より前に import しないため、`utils/hashing.py` の
+  numpy は関数内 import に落としてある（provenance の import 閉包は numpy を引かない）。
+  パッケージ走査は `.py` / `.so` / `.pyd` / `.dylib` に加え、**版番号付き `lib*.so.1` と
+  Windows の `.dll`** も拾う（TensorFlow / PyTorch のバックエンドライブラリはこの形）。import できなかった backend は飛ばし、**実際に覆った名前**を
   `extractor_code_packages` / `separation_code_packages` に列挙する（被覆の正直会計）。
   コード hash の解決は `importlib.util.find_spec` で**モジュールを実行せず**場所だけを
   引くので、bind を**当該パッケージの import より前**に置ける。ハーネスは

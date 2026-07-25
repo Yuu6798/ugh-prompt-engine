@@ -39,9 +39,6 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List
 
-import numpy as np
-import yaml
-
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
@@ -56,10 +53,13 @@ from svp_rpe.melody.provenance import bind_inference_code_pins  # noqa: E402
 # import は、走らせれば当該モジュールをプロセスに cache する。cache 後に hash すると
 # 「cache 済みの旧コードが実行され、hash は新ファイルを見る」窓が開くため、ここが
 # 最も早い bind 地点になる（`find_spec` なので bind 自体は import を起こさない）。
-# `svp_rpe.melody.provenance` の import 閉包は soundfile / librosa / scipy を引かない。
+# `svp_rpe.melody.provenance` の import 閉包は numpy / soundfile / librosa / scipy を
+# 引かない（`utils.hashing` の numpy は関数内 import に落としてある）。
 bind_inference_code_pins()
 
+import numpy as np  # noqa: E402
 import soundfile as sf  # noqa: E402
+import yaml  # noqa: E402
 from build_melody_bench import SPECS_PATH, build_signal, load_specs  # noqa: E402
 
 from svp_rpe.melody.extractors import (  # noqa: E402
