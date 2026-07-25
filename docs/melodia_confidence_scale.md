@@ -215,6 +215,61 @@ for name in ("demucs_vocals_then_melodia", "demucs_vocals_then_pyin"):
 - `0.5` では salience が 1 を超える（1.1586）。アダプタは `clamp` で [0,1] へ丸めるので、
   この帯では clamp が効き始める
 
+掃引の再現手順（`extract_melodia_f0` は `PredominantPitchMelodia` を既定構成で作るため
+パラメータを渡せない。掃引は Essentia を直接叩く。上表の値はすべて下記で出したもの）:
+
+```python
+import sys; sys.path.insert(0, "scripts"); sys.path.insert(0, "src")
+import numpy as np, yaml, librosa
+import essentia.standard as es
+from build_melody_bench import build_signal
+
+# (a) 合成素材（checkout で完結）
+specs = yaml.safe_load(open("tests/fixtures/melody_bench/synthesis_specs.yaml"))
+y, sr = build_signal("synth_mono_phrased", specs)
+sig = np.asarray(librosa.resample(y.astype(np.float32), orig_sr=sr, target_sr=44100),
+                 dtype=np.float32)
+
+def probe(**kw):
+    pitch, conf = es.PredominantPitchMelodia(sampleRate=44100, **kw)(sig)
+    conf, pitch = np.asarray(conf), np.asarray(pitch)
+    return conf.max(), int((conf >= 0.30).sum()), int((pitch > 0).sum())
+
+print("default", probe())
+for vt in (-1.0, 0.0, 0.2, 1.0, 1.4):
+    for gu in (False, True):
+        print("voicingTolerance", vt, "guessUnvoiced", gu, probe(voicingTolerance=vt, guessUnvoiced=gu))
+for key, values in {
+    "magnitudeCompression": (0.5, 0.8, 1.0),
+    "harmonicWeight": (0.5, 0.8, 0.99),
+    "numberHarmonics": (1, 10, 20),
+    "magnitudeThreshold": (10, 40, 80),
+    "peakDistributionThreshold": (0.5, 0.9, 1.3),
+    "peakFrameThreshold": (0.0, 0.5, 0.9),
+    "minDuration": (10, 100, 300),
+    "pitchContinuity": (10.0, 27.5629, 60.0),
+}.items():
+    for v in values:
+        print(key, v, probe(**{key: v}))
+```
+
+実経路 stem 上の掃引（§2.4 の stem をそのまま使う。分離をやり直さない）:
+
+```python
+from svp_rpe.melody.routing import select_routes
+from svp_rpe.melody.extractors import _load_route_waveform
+
+prov = {}
+routes = {r.name: r for r in select_routes("vocal_track")}
+wav, sr = _load_route_waveform("kane_y2.mp3", routes["demucs_vocals_then_melodia"], prov)
+assert prov["preprocessing"]["stem_sha256"] == (
+    "77244a534e748cf32aae79cdae4a6b110167c1ea85a4b7131ffbdcd08c104033"
+), "stem mismatch (fail-closed)"
+sig = np.asarray(wav, dtype=np.float32)          # stem は既に 44.1 kHz mono
+for mc in (1.0, 0.8, 0.5):
+    print("magnitudeCompression", mc, probe(magnitudeCompression=mc))
+```
+
 > **この掃引結果は「どの値を採るべきか」を意味しない。** 床を越える値を実測後に
 > 選ぶのは事前登録規律（`one_way_rule`）が禁じる後付け調整そのものである。
 > 掃引は「値域が設定の関数である」という**事実**の記録であり、値の選定は §5 の
