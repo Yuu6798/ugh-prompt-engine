@@ -244,8 +244,8 @@ provenance:
       role: source_separation (vocals stem)
       model: htdemucs_ft
       source: 事前取得（実行時DL禁止）
-      version: null          # 例: "4.1.0"（installed demucs version）
-      sha256: null           # describe_separation_weights()["sha256"]（bag 4 ckpt の合成 digest）
+      version: "4.1.0"       # 例: "4.1.0"（installed demucs version）
+      sha256: "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86"  # describe_separation_weights()["sha256"]（bag 4 ckpt の合成 digest）
       code_sha256: null      # 推論コード（demucs パッケージの .py/.so）の hash。report の
                              # preprocessing.separation_code_sha256 と一致要求される
       license: null          # 上流重みライセンスを実確認して記録（policy §4: コード≠重み）
