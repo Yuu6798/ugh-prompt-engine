@@ -431,8 +431,8 @@ def run_synthetic(
 
     results: Dict[str, Any] = {
         "mode": "synthetic",
-        # ★観測を実施した UTC 時刻（external と対称）。詳細は run_external の同フィールド注記。
-        "recorded_utc": _recorded_utc(),
+        # ★観測を開始した UTC 時刻（external と対称）。詳細は run_external の同フィールド注記。
+        "started_utc": _utc_now(),
         "registry_sha256": registry_sha256,
         "thresholds_source": thresholds_source,
         # ★実際に assess へ渡した閾値そのものを pin する。registry スナップショットを
@@ -476,6 +476,8 @@ def run_synthetic(
                 "waveform_sha256": waveform_sha256,  # 観測した音の pin（external audio_sha256 と対称）
                 "routes": rows,
             }
+    # ★全 fixture の観測が終わった時点で刻む（external と対称・理由は同所の注記）。
+    results["recorded_utc"] = _utc_now()
     return results
 
 
@@ -523,13 +525,11 @@ def run_external(
 
     results: Dict[str, Any] = {
         "mode": "external",
-        # ★観測を実施した UTC 時刻。report は dated record を名乗るが、run_id は不透明で
-        # 時刻を含まず、registry の pin は事前登録日のままなので、squash / export 後は
-        # commit timestamp も provenance として当てにならない。「この外部素材と重みの
-        # bytes をいつ観測したか」「後の再実測と区別できるか」を report 自身に持たせる。
-        # 決定論の対象外（run 毎に必ず変わる）なので、評価器の repeats 同一性判定
-        # （run_id の distinct 要求・_route_provenance の署名）には一切用いない。
-        "recorded_utc": _recorded_utc(),
+        # ★観測を**開始**した UTC 時刻。dated record の主タイムスタンプは観測完了時に
+        # 刻む `recorded_utc`（下の finalize 参照）で、こちらは所要時間の手掛かりとして残す。
+        # 開始時刻だけを dated record にすると、実測が UTC 日境界をまたいだとき
+        # （M1-real の 1 run は実測 55 分）report が前日を主張しうる。
+        "started_utc": _utc_now(),
         # ★resolve 済み絶対パスを記録する（audio_path と同型）。verbatim（相対）だと、
         # 後で別 cwd から --evaluate-go-bar したとき #63 の manifest 衝突ガードが
         # evaluator の cwd 基準で誤解決し、生成時の manifest を守れない（#64・Codex 指摘）。
@@ -599,14 +599,23 @@ def run_external(
                 "input_kind": entry["input_kind"],
                 "expect_status": None,  # 正解なし実素材（観測可能性のみ）
                 "audio_path": str(resolved),  # 正規化パス（#48 の衝突ガード入力）
-                # ★manifest が宣言した相対パスをそのまま併記する。上の絶対パスは
-                # originating host でしか意味を持たないが、こちらは manifest と組で
+                # ★manifest が宣言した相対パスを **POSIX 正規化して** 併記する。上の絶対
+                # パスは originating host でしか意味を持たないが、こちらは manifest と組で
                 # 「どの素材か」を checkout 非依存に指す（波形は意図的に uncommitted
-                # なので、素材の同一性保証は audio_sha256 が担う）。
-                "audio_path_in_manifest": str(raw_path),
+                # なので、素材の同一性保証は audio_sha256 が担う）。manifest entry が
+                # 絶対パスの場合は machine-local 値になってしまうので None を入れる
+                # （可搬と称して可搬でない値を載せない。素材の同定は audio_sha256 が担う）。
+                "audio_path_in_manifest": _manifest_relative_hint(raw_path),
                 "audio_sha256": audio_sha256,
                 "routes": rows,
             }
+    # ★dated record の主タイムスタンプ。全 fixture の観測が終わった時点で刻む。
+    # report は dated record を名乗るが、run_id は不透明で時刻を含まず、registry の pin は
+    # 事前登録日のままなので、squash / export 後は commit timestamp も provenance として
+    # 当てにならない。「この外部素材と重みの bytes をいつ観測したか」「後の再実測と
+    # 区別できるか」を report 自身に持たせる。決定論の対象外（run 毎に必ず変わる）なので、
+    # repeats 同一性判定（run_id の distinct 要求・_route_provenance の署名）には用いない。
+    results["recorded_utc"] = _utc_now()
     return results
 
 
@@ -925,17 +934,66 @@ def _generator_code_paths() -> "List[Path]":
     return sorted(resolved)
 
 
-def _recorded_utc() -> str:
-    """観測を実施した時刻（UTC・ISO 8601・秒精度）。
+def _utc_now() -> str:
+    """現在時刻（UTC・ISO 8601・秒精度）。
 
-    report が名乗る "dated record" の日付そのもの。`run_id` は不透明で時刻を含まず、
-    registry の pin は事前登録日のままなので、これが無いと「いつ観測したか」は
-    commit timestamp 頼りになる（squash / export で失われる）。
+    report の `started_utc`（観測開始）と `recorded_utc`（観測完了 = dated record の
+    主タイムスタンプ）の両方に使う。`run_id` は不透明で時刻を含まず、registry の pin は
+    事前登録日のままなので、これが無いと「いつ観測したか」は commit timestamp 頼りに
+    なる（squash / export で失われる）。
 
     **決定論の対象外**である点に注意: 同一入力でも run 毎に必ず変わるため、評価器の
     repeats 同一性判定には用いない（`_route_provenance` の署名にも含めない）。
     """
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _parse_recorded_utc(value: Any, *, where: str) -> datetime:
+    """report の `recorded_utc` を UTC timestamp として検証してパースする（fail-closed）。
+
+    dated-record 契約を評価器側で強制する。欠落・不正形式・非 UTC・未来値のいずれも
+    verdict を出さない: 手組み / 切り詰めた report は `generator_code_sha256` を現
+    checkout の値に合わせるだけで間接的な stale 検出をすり抜けられるため、
+    「いつ観測したか」を評価器が読まないままだと契約が名目だけになる。
+    """
+    if not isinstance(value, str) or not value:
+        raise ValueError(
+            f"evaluate_m1_real_go_bar: {where} に recorded_utc が無い（または文字列でない）; "
+            "dated record を名乗る report は観測時刻を必須とする (fail-closed)"
+        )
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(
+            f"evaluate_m1_real_go_bar: {where} の recorded_utc {value!r} は ISO 8601 として "
+            f"解釈できない (fail-closed): {exc}"
+        ) from exc
+    offset = parsed.utcoffset()
+    if offset is None or offset.total_seconds() != 0:
+        raise ValueError(
+            f"evaluate_m1_real_go_bar: {where} の recorded_utc {value!r} は UTC でない"
+            "（tz 無しまたは offset≠0）; ローカル時刻を dated record として受け付けない "
+            "(fail-closed)"
+        )
+    if parsed > datetime.now(timezone.utc):
+        raise ValueError(
+            f"evaluate_m1_real_go_bar: {where} の recorded_utc {value!r} は未来の時刻; "
+            "観測していない時点を dated record として主張させない (fail-closed)"
+        )
+    return parsed
+
+
+def _manifest_relative_hint(raw_path: Path) -> "str | None":
+    """manifest entry の宣言パスを可搬な POSIX 相対パスとして返す（不可なら None）。
+
+    絶対パスの entry は machine-local な値になるため None を返す。`str(Path(...))` は
+    Windows で区切りを `\\` に書き換えるので、`as_posix()` で正規化して platform 間で
+    同じ値にする。「可搬」と称するフィールドに可搬でない値を載せないための正規化で、
+    素材の同定自体は `audio_sha256` が担う。
+    """
+    if raw_path.is_absolute():
+        return None
+    return raw_path.as_posix()
 
 
 def _repo_relative_path(path: "str | Path") -> "str | None":
@@ -1158,6 +1216,10 @@ def evaluate_m1_real_go_bar(
                 f"evaluate_m1_real_go_bar: reports[{idx}] has mode {mode!r}, "
                 "expected 'external' (fail-closed; M1-real Go bar は external 実測のみを対象とする)"
             )
+        # dated-record 契約を評価器側で強制する。欠落・不正形式・非 UTC・未来値は verdict を
+        # 出さない（手組み report は generator_code_sha256 を現 checkout に合わせるだけで
+        # 間接的な stale 検出をすり抜けるため、時刻を評価器が読まないと契約が名目だけになる）。
+        _parse_recorded_utc(report.get("recorded_utc"), where=f"reports[{idx}]")
 
     bar = registry["m1_real_go_bar"]
     positive_ids: List[str] = list(bar["positive_ids"])
