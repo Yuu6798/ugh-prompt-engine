@@ -95,47 +95,72 @@ cent 単位で合うことはない）。一方で **被覆は 15 note-event 中
 post-gate の症状が同じなので、**実際の `demucs_vocals_then_melodia` 経路の stem** 上で
 gate を通す前の値を直接測った。
 
-分離は **`shifts=0`（PR #221 の決定論設定）** で行い、測った波形そのものを pin してある
-（既定の `shifts=1` はランダムシフト平均で stem が run 毎に変わるため、pin できない値を
-根拠にしないための措置）:
+**2 つの分離設定で測ってある**: 本 doc の checkout の実経路（`shifts` 既定 = 1・非決定論）と、
+PR #221 の決定論設定（`shifts=0`）。前者は「レビュー対象 commit の経路そのもの」を測るため、
+後者は「pin 可能な波形で測る」ためで、**結論はどちらでも同じ**。
+
+共通の入力 pin:
 
 | 項目 | 値 |
 |---|---|
-| 入力 | `kane_y2.mp3` 先頭 30 秒を 44.1 kHz mono float32 WAV 化 |
-| 入力 WAV sha256 | `e64010b25ab390c3bf2220be5fdacb31861e767438bfd565a3fa48b9e389c77f` |
-| 分離器 | `demucs.api.Separator(model="htdemucs_ft", device="cpu", shifts=0)` |
-| demucs version | `4.1.0` |
-| demucs 重み sha256 | `bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86` |
-| **vocals stem sha256** | `72097ac0461e49061b78ea0b25edfb876914eb77866a0caed8bab494aa53e280` |
+| 元素材 | `kane_y2.mp3`（sha256 `8eb0237c1e8aaad41762923f436cfbafa33a246e6dc15ce3e1beed8dbd347752`） |
+| 抽出区間 | 先頭 30 秒、44.1 kHz mono float32 |
+| **デコード後サンプル sha256** | `5b33ddae06e93b10914dc37a99cb0be30d572c9b1da9edf97b49ccab235be8a1` |
+| demucs version / 重み sha256 | `4.1.0` / `bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86` |
 
-（stem hash は float32 生サンプルの `tobytes()` に対する sha256。report の
-`preprocessing.stem_sha256` と同一定義。）
+> **入力は WAV のバイト列で pin できない**（実測で判明）。`soundfile` が書く WAV は
+> 同一サンプル列・同一プロセス内でもコンテナのバイト列が run 毎に変わる（可変メタデータ）。
+> 一方 **デコード後の float32 サンプル列は完全に再現する**ので、pin はそちらに置く。
+> 実際、WAV bytes が違っても `shifts=0` の stem sha256 は一致することを確認済み。
 
-この stem に対する pre-gate 出力:
+分離設定別の結果:
 
-| 抽出器 | frames | pitch 検出 | conf max | conf mean | conf ≥ 0.30 |
+| 分離設定 | stem sha256 | frames | melodia pitch 検出 | melodia conf max | melodia conf ≥ 0.30 |
 |---|---|---|---|---|---|
-| melodia | 10337 | **4531 (43.8%)** | 0.1601 | 0.0173 | **0** |
-| pyin（対照・同一 stem） | 646 | 97 | 0.9459 | 0.0724 | **55** |
+| `shifts=1`（本 commit の実経路）run1 | `2c39028bcf34d4a6…` | 10337 | 5105 (49.4%) | 0.1487 | **0** |
+| `shifts=1`（同）run2 | `216ae8264987d953…` | 10337 | 5015 (48.5%) | 0.1602 | **0** |
+| `shifts=0`（PR #221・**再現可能**） | `72097ac0461e49061b78ea0b25edfb876914eb77866a0caed8bab494aa53e280` | 10337 | 4531 (43.8%) | 0.1601 | **0** |
 
-**stem は「音高が取れない」状態ではない** — Melodia 自身が 43.8% のフレームに音高を
-出しており、同じ stem で pyin は conf 0.9459 まで達して 55 フレームが床を越える。
-したがって post-gate の全ゼロは「stem が壊れている」ためではなく confidence の値域に
-帰属する。
+同一 stem（`shifts=0`）に対する pyin 対照: `frames=646 / voiced=97 / conf max 0.9459 /
+conf ≥ 0.30 が 55`。
 
-再現手順（`shifts=0` なので上記 stem sha256 が再現する。実素材と demucs 重みは別途必要）:
+`shifts=1` の 2 run で stem hash が異なるのは、この commit の経路が非決定論であることの
+直接証拠でもある（PR #221 が解く問題）。
+
+**stem は「音高が取れない」状態ではない** — 3 通りの stem すべてで Melodia 自身が
+43.8–49.4% のフレームに音高を出しており、同じ stem で pyin は conf 0.9459 まで達して
+55 フレームが床を越える。したがって post-gate の全ゼロは「stem が壊れている」ためでは
+なく confidence の値域に帰属する。この結論は**レビュー対象 commit の実経路
+（`shifts=1`）でも成立している**。
+
+再現手順（`shifts=0` 経路。pin 不一致なら抽出前に停止する）:
 
 ```python
-import hashlib, numpy as np, librosa, soundfile as sf, demucs.api
+import hashlib, sys, numpy as np, librosa, soundfile as sf, demucs.api, tempfile
+from pathlib import Path
+sys.path.insert(0, "src")
 from svp_rpe.rpe.learned.melodia_adapter import extract_melodia_f0
-y, sr = librosa.load('kane_y2.mp3', sr=44100, mono=True)
-sf.write('ex.wav', y[:44100*30].astype(np.float32), sr, subtype='FLOAT')
-sep = demucs.api.Separator(model='htdemucs_ft', device='cpu', shifts=0)
-_, stems = sep.separate_audio_file('ex.wav')
-voc = np.asarray(stems['vocals'], dtype=np.float32)
+
+SAMPLES_SHA = "5b33ddae06e93b10914dc37a99cb0be30d572c9b1da9edf97b49ccab235be8a1"
+STEM_SHA = "72097ac0461e49061b78ea0b25edfb876914eb77866a0caed8bab494aa53e280"
+
+y, sr = librosa.load("kane_y2.mp3", sr=44100, mono=True)
+y = y[: 44100 * 30].astype(np.float32)
+got = hashlib.sha256(y.tobytes()).hexdigest()
+if got != SAMPLES_SHA:                      # 素材 / デコーダ違い
+    raise SystemExit(f"decoded samples mismatch (fail-closed): {got}")
+
+tmp = Path(tempfile.mkdtemp()) / "ex.wav"   # WAV bytes は pin しない（上記注記）
+sf.write(tmp, y, sr, subtype="FLOAT")
+sep = demucs.api.Separator(model="htdemucs_ft", device="cpu", shifts=0)
+_, stems = sep.separate_audio_file(tmp)
+voc = np.asarray(stems["vocals"], dtype=np.float32)
 voc = voc.mean(axis=0) if voc.ndim == 2 else voc
-print(hashlib.sha256(voc.tobytes()).hexdigest())   # 上表の stem sha256 と一致すること
-t, hz, cf, _ = extract_melodia_f0(voc, sep.samplerate)
+got = hashlib.sha256(voc.tobytes()).hexdigest()
+if got != STEM_SHA:                         # demucs ビルド / 重み違い
+    raise SystemExit(f"stem mismatch (fail-closed): {got}")
+
+t, hz, cf = extract_melodia_f0(voc, sep.samplerate)[:3]   # ここから §2.4 の数値
 ```
 
 ### 2.3 pyin との対比（同一入力 `synth_mono_phrased`）
@@ -200,7 +225,7 @@ Cowork 指定の切り分け基準に対する結論:
 |---|---|
 | アダプタ設定バグのうち **sampleRate / dtype の取り違え** | **否**。44.1 kHz へリサンプル済み・mono float32 で、検出音は ±0.1 cent の精度（取り違えなら周波数が系統的にずれる） |
 | アダプタ設定バグのうち **パラメータ最適化不足** | **未棄却**。§2.1 の被覆は 15 note-event 中 3。ただし被覆を上げても confidence の値域が床の外にある事実は変わらないため、本件の主因ではない |
-| demucs stem との噛み合わせ問題 | **否**。§2.4 で本命経路の stem を直接測り、Melodia 自身が 47.7% のフレームに音高を出し、同一 stem で pyin は 55 フレームが床を越えることを確認した（stem 側の欠陥では説明できない） |
+| demucs stem との噛み合わせ問題 | **否**。§2.4 で本命経路の stem を直接測り、`shifts=1`（本 commit の実経路・2 run）と `shifts=0`（PR #221）の 3 通りの stem すべてで Melodia 自身が 43.8–49.4% のフレームに音高を出し、同一 stem で pyin は 55 フレームが床を越えることを確認した（stem 側の欠陥では説明できない） |
 | 凍結閾値と抽出器の信頼度セマンティクスの衝突 | **是**。`voiced_confidence_floor 0.30` が Melodia の値域（実測 max 0.1485–0.2947）の外にある |
 
 なお「パラメータ最適化不足」は本件と**独立に残る課題**である（被覆 3/15 は
@@ -270,6 +295,18 @@ backend にも依存する。実測時の数値ランタイム閉包:
 | `numba` | `0.66.0` |
 | `llvmlite` | `0.48.0` |
 
+version 文字列だけでは不十分（同一 version でも別ビルドの wheel は native バイナリが
+異なり、リサンプル / pyin の出力が変わりうる。essentia のバイナリを hash しているのと
+同じ失敗モード）。閉包の **native 拡張の合成指紋**も pin する:
+
+| 項目 | 値 |
+|---|---|
+| 対象 | 上表 7 パッケージ配下の `*.so`（555 ファイル） |
+| 合成 sha256 | `f0a8bd766d720fb3b0bd66b3b647ed33be1ebdd5c517611b4944b09496310bb2` |
+
+（合成方法 = パッケージ順に、パッケージ相対 POSIX パス + `\0` + そのファイルの sha256
+ダイジェストを順次 feed した sha256。照合は下記スクリプトで約 4 秒。）
+
 ```bash
 pip install -e ".[dev]"                 # src レイアウトなので svp_rpe を import 可能にする
 pip install "essentia==2.1b6.dev1389"   # AGPL-3.0。標準 install / CI には含めない
@@ -307,7 +344,24 @@ CLOSURE = {
 }
 drift = {p: (v, meta.version(p)) for p, v in CLOSURE.items() if meta.version(p) != v}
 if drift:
-    print("numerical runtime drift (fail-closed):", drift)
+    print("numerical runtime version drift (fail-closed):", drift)
+    raise SystemExit(1)
+
+# version が同じでも別ビルドなら数値が動くので、native 拡張の合成指紋まで照合する。
+import importlib
+from pathlib import Path
+CLOSURE_NATIVE_SHA = "f0a8bd766d720fb3b0bd66b3b647ed33be1ebdd5c517611b4944b09496310bb2"
+h = hashlib.sha256()
+for pkg in ("numpy", "scipy", "soxr", "llvmlite", "numba", "soundfile", "librosa"):
+    root = Path(importlib.import_module(pkg).__file__).resolve().parent
+    for f in sorted(root.rglob("*.so")):
+        if not f.is_file():
+            continue
+        h.update(f.relative_to(root).as_posix().encode())
+        h.update(b"\0")
+        h.update(hashlib.sha256(f.read_bytes()).digest())
+if h.hexdigest() != CLOSURE_NATIVE_SHA:
+    print("numerical runtime binary drift (fail-closed):", h.hexdigest())
     raise SystemExit(1)
 print("essentia build and numerical runtime match the recorded diagnosis environment")
 PY
