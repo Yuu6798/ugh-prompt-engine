@@ -6,27 +6,6 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-TEXT_SUFFIXES = {
-    ".cfg",
-    ".css",
-    ".csv",
-    ".html",
-    ".ini",
-    ".js",
-    ".json",
-    ".md",
-    ".ps1",
-    ".py",
-    ".sh",
-    ".svg",
-    ".toml",
-    ".ts",
-    ".txt",
-    ".xml",
-    ".yaml",
-    ".yml",
-}
-CONTENT_ADDRESSED_PREFIXES = ("config/", "examples/", "src/svp_rpe/config/")
 
 
 def test_text_checkouts_are_normalized_to_lf() -> None:
@@ -38,19 +17,28 @@ def test_text_checkouts_are_normalized_to_lf() -> None:
 
 def test_worktree_has_no_stale_crlf_text_checkouts() -> None:
     """Detect old Windows worktrees that predate the repository LF policy."""
-    result = subprocess.run(
+    tracked = subprocess.run(
         ["git", "ls-files", "-z"],
         cwd=ROOT,
         check=True,
         capture_output=True,
-    )
-    tracked = result.stdout.decode("utf-8").split("\0")
+    ).stdout
+    attributes = subprocess.run(
+        ["git", "check-attr", "--stdin", "-z", "text", "eol"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        input=tracked,
+    ).stdout.decode("utf-8").split("\0")
+    by_path: dict[str, dict[str, str]] = {}
+    for index in range(0, len(attributes) - 2, 3):
+        relative, attribute, value = attributes[index : index + 3]
+        by_path.setdefault(relative, {})[attribute] = value
+
     stale = [
         relative
-        for relative in tracked
-        if relative
-        and relative.startswith(CONTENT_ADDRESSED_PREFIXES)
-        and Path(relative).suffix.lower() in TEXT_SUFFIXES
+        for relative, attrs in by_path.items()
+        if attrs == {"text": "auto", "eol": "lf"}
         and b"\r\n" in (ROOT / relative).read_bytes()
     ]
 
