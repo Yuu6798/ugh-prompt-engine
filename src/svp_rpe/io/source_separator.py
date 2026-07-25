@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import contextlib
 import os
-import random
 import shutil
 import subprocess
 import sys
@@ -60,8 +59,9 @@ REQUIRED_STEMS = frozenset(STEM_NAMES)
 # （観測値が run 毎に変わる計器は pin できない）。
 DEFAULT_SHIFTS = 0
 
-# 決定論化の防御的措置として分離中だけ固定 seed を敷く際の値。`DEFAULT_SHIFTS = 0` で
-# 既知の乱数消費は無くなるが、上流実装が将来別の乱数を引いても stem が揺れないようにする。
+# 決定論化の防御的措置として分離中だけ torch の RNG に敷く固定 seed。`DEFAULT_SHIFTS = 0`
+# で既知の乱数消費は無くなるが、上流実装が将来別の乱数を引いても stem が揺れないようにする。
+# stdlib `random` はグローバル seed しない（`_deterministic_rng` の docstring 参照）。
 SEPARATION_RNG_SEED = 0
 
 
@@ -87,6 +87,18 @@ def _single_device_rng(backend: Any) -> Iterator[None]:
         setter(state)
 
 
+def _is_single_device_backend(backend: Any) -> bool:
+    """`backend` が index の概念を持たない単一デバイス backend か（例: mps）。
+
+    判定は **backend の能力**で行い、要求文字列に index が書かれているかでは決めない。
+    `mps` と `mps:0` は同じデバイスを指す綴り違いなので、index の有無で経路が変わると
+    `mps:0` だけが index 付きの汎用 fork へ流れて非対称になる（Codex 指摘）。
+    """
+    return not callable(getattr(backend, "current_device", None)) and not callable(
+        getattr(backend, "device", None)
+    )
+
+
 def _resolve_device_index(backend: Any, torch_device: Any) -> "int | None":
     """要求 device の index を解決する（単一デバイス backend では None）。
 
@@ -95,22 +107,33 @@ def _resolve_device_index(backend: Any, torch_device: Any) -> "int | None":
     device 1 で走るのに fork/seed したのは device 0」という取り違えになり、決定論も
     副作用なしの契約も両方破れる。よって index 省略時は backend の
     `current_device()` で解決する。
+
+    単一デバイス backend では、要求文字列が `mps:0` のように index 付きでも None を
+    返す（`_is_single_device_backend` 参照。綴りで経路を変えない）。
     """
+    if _is_single_device_backend(backend):
+        return None
     if torch_device.index is not None:
         return int(torch_device.index)
     current = getattr(backend, "current_device", None)
     if callable(current):
         return int(current())
-    return None  # mps 等の単一デバイス backend（index の概念なし）
+    return None
 
 
 @contextlib.contextmanager
 def _deterministic_rng(device: str = "cpu") -> Iterator[None]:
-    """分離の間だけ stdlib `random` と torch の RNG を固定 seed に据える。
+    """分離の間だけ torch の RNG を固定 seed に据え、抜けるとき必ず元へ戻す。
 
-    プロセス全体の RNG を書き換えたまま帰ると呼び出し側の乱数列を壊すので、
-    前の state を退避して `finally` で必ず復元する（グローバル副作用を残さない）。
-    torch は optional 依存なので、入っていなければ stdlib のみを固定する。
+    決定論の主機構は `DEFAULT_SHIFTS = 0`（乱数を引く分岐に入らない）で、ここは
+    上流実装が将来別の乱数を引いた場合への防御的措置である。torch は optional 依存なので、
+    入っていなければ何もしない。
+
+    **stdlib `random` はグローバル seed しない**。`random.seed()` はプロセス全体の
+    generator を即座に差し替えるため、`separate_stems`（public API）が多スレッド環境で
+    呼ばれると無関係なスレッドが seed 済み列を観測し、その draw が後の復元で捨てられる。
+    `shifts=0` で既知の stdlib 乱数消費は無くなっているので、この危険を負う理由がない
+    （Codex 指摘）。
 
     torch 側は **`device` が指す backend だけ**を対象にする。`torch.manual_seed` は CPU に
     加えて CUDA / MPS / XPU 等の全 accelerator generator も seed するため、これを使うと
@@ -130,57 +153,50 @@ def _deterministic_rng(device: str = "cpu") -> Iterator[None]:
     - index を持つ accelerator（``cuda`` / ``xpu``）… index を解決（省略時は
       `current_device()`）して `devices=[index]` で fork し、`backend.device(index)`
       context の中で `backend.manual_seed`（current device しか seed しない API のため）
-    - 単一デバイス accelerator（``mps``）… `devices=[]` で CPU のみ fork し、backend の
-      `get_rng_state` / `set_rng_state` で単一 generator を明示退避・復元する
+    - 単一デバイス accelerator（``mps`` / ``mps:0``）… `devices=[]` で CPU のみ fork し、
+      backend の `get_rng_state` / `set_rng_state` で単一 generator を明示退避・復元する
+
+    残る制約（torch の RNG もプロセスグローバルであることに由来）: 同一プロセスで分離を
+    並行実行すると、torch 側の seed 窓が重なりうる。決定論自体は `shifts=0` が担保する
+    ので実害は防御層の弱まりに留まるが、厳密な隔離が必要なら呼び出し側で直列化すること。
     """
-    random_state = random.getstate()
-    random.seed(SEPARATION_RNG_SEED)
     try:
         import torch  # pragma: no cover - torch は optional
     except ImportError:
         torch = None  # type: ignore[assignment]
-    try:
-        with contextlib.ExitStack() as stack:
-            if torch is not None:  # pragma: no cover - torch 導入環境のみ
-                torch_device = torch.device(device)
-                backend = (
-                    None
-                    if torch_device.type == "cpu"
-                    else getattr(torch, torch_device.type, None)
+
+    with contextlib.ExitStack() as stack:
+        if torch is not None:  # pragma: no cover - torch 導入環境のみ
+            torch_device = torch.device(device)
+            backend = (
+                None if torch_device.type == "cpu" else getattr(torch, torch_device.type, None)
+            )
+            index = None if backend is None else _resolve_device_index(backend, torch_device)
+            if backend is None or index is None:
+                # CPU、または index の概念を持たない単一デバイス backend。
+                # accelerator を列挙も初期化もしない（CPU state は常に fork される）。
+                stack.enter_context(torch.random.fork_rng(devices=[]))
+                if backend is not None:
+                    stack.enter_context(_single_device_rng(backend))
+            else:
+                stack.enter_context(
+                    torch.random.fork_rng(devices=[index], device_type=torch_device.type)
                 )
-                index = (
-                    None if backend is None else _resolve_device_index(backend, torch_device)
-                )
-                if backend is None or index is None:
-                    # CPU、または index の概念を持たない単一デバイス backend。
-                    # accelerator を列挙も初期化もしない（CPU state は常に fork される）。
-                    stack.enter_context(torch.random.fork_rng(devices=[]))
-                    if backend is not None:
-                        stack.enter_context(_single_device_rng(backend))
-                else:
-                    stack.enter_context(
-                        torch.random.fork_rng(
-                            devices=[index], device_type=torch_device.type
-                        )
-                    )
-                # CPU generator のみを seed（torch.manual_seed だと全 backend に及ぶ）。
-                torch.default_generator.manual_seed(SEPARATION_RNG_SEED)
-                if backend is not None and hasattr(backend, "manual_seed"):
-                    # `torch.cuda.manual_seed` 等は **current device** だけを seed する。
-                    # `cuda:1` を要求されたのに current が 0 のままだと、fork した
-                    # device 1 は seed されず、fork していない device 0 が書き換わって
-                    # 復元されない（要求 device の外に副作用を出す）。要求 index の
-                    # device context に入ってから seed する。
-                    device_ctx = getattr(backend, "device", None)
-                    if index is not None and callable(device_ctx):
-                        with device_ctx(index):
-                            backend.manual_seed(SEPARATION_RNG_SEED)
-                    else:
-                        # 単一デバイス backend（mps 等）は current の概念が無い。
+            # CPU generator のみを seed（torch.manual_seed だと全 backend に及ぶ）。
+            torch.default_generator.manual_seed(SEPARATION_RNG_SEED)
+            if backend is not None and hasattr(backend, "manual_seed"):
+                # `torch.cuda.manual_seed` 等は **current device** だけを seed する。
+                # `cuda:1` を要求されたのに current が 0 のままだと、fork した device 1 は
+                # seed されず、fork していない device 0 が書き換わって復元されない
+                # （要求 device の外に副作用を出す）。要求 index の context に入って seed する。
+                device_ctx = getattr(backend, "device", None)
+                if index is not None and callable(device_ctx):
+                    with device_ctx(index):
                         backend.manual_seed(SEPARATION_RNG_SEED)
-            yield
-    finally:
-        random.setstate(random_state)
+                else:
+                    # 単一デバイス backend（mps 等）は current の概念が無い。
+                    backend.manual_seed(SEPARATION_RNG_SEED)
+        yield
 
 
 class SeparatorNotAvailableError(RuntimeError):

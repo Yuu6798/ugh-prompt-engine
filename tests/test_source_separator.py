@@ -236,17 +236,44 @@ def test_cli_separation_pins_shifts_to_zero(
     assert command[command.index("--shifts") + 1] == "0"
 
 
-def test_deterministic_rng_restores_global_state() -> None:
-    """分離用の seed 固定がプロセス全体の乱数列を書き換えたまま帰らないこと。"""
+def test_deterministic_rng_does_not_touch_stdlib_random() -> None:
+    """stdlib `random` のプロセスグローバル state を一切触らないこと。
+
+    `random.seed()` は即座にプロセス全体の generator を差し替えるため、public API が
+    多スレッド環境で呼ばれると無関係なスレッドが seed 済み列を観測し、その draw が
+    後の復元で捨てられる。`shifts=0` で既知の stdlib 乱数消費は無くなっているので、
+    この危険を負う理由がない（seed も復元もしないのが正しい）。
+    """
     random.seed(1234)
     expected = [random.random() for _ in range(3)]
 
+    # context の内側で draw しても、外側から見た列は「context が無かった場合」と同一。
     random.seed(1234)
     with source_separator._deterministic_rng():
-        random.random()
-    restored = [random.random() for _ in range(3)]
+        pass
+    assert [random.random() for _ in range(3)] == expected
 
-    assert restored == expected
+    # context に入ること自体が state を進めない（入前後で next draw が変わらない）。
+    random.seed(99)
+    before = random.getstate()
+    with source_separator._deterministic_rng():
+        pass
+    assert random.getstate() == before
+
+
+def test_deterministic_rng_is_reentrant_for_overlapping_calls() -> None:
+    """入れ子（= 重なる）呼び出しでも torch state が入前の値へ戻ること。"""
+    torch = pytest.importorskip("torch")
+
+    torch.manual_seed(4321)
+    expected = torch.rand(3)
+
+    torch.manual_seed(4321)
+    with source_separator._deterministic_rng():
+        with source_separator._deterministic_rng():
+            torch.rand(1)
+        torch.rand(1)
+    assert torch.equal(torch.rand(3), expected)
 
 
 def test_deterministic_rng_restores_torch_state() -> None:
@@ -435,6 +462,17 @@ def test_deterministic_rng_snapshots_single_device_backend_without_index(
 
     monkeypatch.setattr(torch.random, "fork_rng", spy_fork_rng)
     monkeypatch.setattr(torch, "mps", FakeMpsBackend, raising=False)
+
+    # `mps` と `mps:0` は同じデバイスの綴り違い。index が書かれていても経路は同じ。
+    for spelling in ("mps", "mps:0"):
+        events.clear()
+        with source_separator._deterministic_rng(spelling):
+            pass
+        assert ("fork_rng", [], None) in events, spelling
+        assert all(not evt[1] for evt in events if evt[0] == "fork_rng"), spelling
+        assert events.index(("get_rng_state",)) < events.index(
+            ("manual_seed", source_separator.SEPARATION_RNG_SEED)
+        ) < events.index(("set_rng_state", True)), spelling
 
     with source_separator._deterministic_rng("mps"):
         pass
