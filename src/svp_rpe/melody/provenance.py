@@ -320,10 +320,15 @@ def _is_native_library(path: Path) -> bool:
 def _system_library_path(soname: str) -> Optional[Path]:
     """`ctypes.util.find_library(soname)` が指すライブラリの実体パスを解決する。
 
-    `find_library` は Linux では soname（`libsndfile.so.1`）しか返さないため、
-    実体パスは dlopen 後の `/proc/self/maps` から引く（macOS は絶対パスが返る）。
-    dlopen 自体は Python の import ではないので、コード pin を import より前に
-    bind する規律とは衝突しない（同じライブラリを後で soundfile が読む）。
+    **ロードせずに**解決するのが要点（Codex #217）。dlopen で解決すると、その時点で
+    ライブラリがプロセスへ mmap され（`CDLL` オブジェクトを捨てても mapping は残る）、
+    直後に同じファイルが in-place で書き換えられた場合、実行は**ロード済みの旧コード**
+    のまま pre/post の指紋だけが新 bytes を指す——つまり「その観測を生んでいないコード」
+    の pin が付く。ローダと同じ探索順（`LD_LIBRARY_PATH` → `ldconfig` キャッシュ）を
+    自前で辿ってパスだけを得る。
+
+    `find_library` は Linux では soname（`libsndfile.so.1`）しか返さない（macOS は
+    絶対パスを返すのでそのまま使える）。解決できなければ `None` = fail-closed。
     """
     import ctypes.util
 
@@ -333,22 +338,43 @@ def _system_library_path(soname: str) -> Optional[Path]:
     candidate = Path(found)
     if candidate.is_absolute() and candidate.is_file():
         return candidate.resolve()
-    try:
-        ctypes.CDLL(found)
-    except OSError:
-        return None
-    maps = Path("/proc/self/maps")
-    if not maps.is_file():  # pragma: no cover - 非 Linux
-        return None
-    try:
-        for line in maps.read_text(errors="replace").splitlines():
-            path_field = line.split(" ", 5)[-1].strip()
-            if path_field.endswith(found) or f"/{found}" in path_field:
-                resolved = Path(path_field)
-                if resolved.is_file():
-                    return resolved.resolve()
-    except OSError:  # pragma: no cover - /proc 読み取り失敗
-        return None
+    return _resolve_soname_without_loading(found)
+
+
+def _resolve_soname_without_loading(soname_file: str) -> Optional[Path]:
+    """soname（`libsndfile.so.1`）→ 実体パス。**dlopen を起こさない**。
+
+    ローダの探索順に合わせて `LD_LIBRARY_PATH` を先に見て、次に `ldconfig -p` の
+    キャッシュを引く（`ldconfig` は cache を読むだけでライブラリをロードしない）。
+    """
+    import os
+    import subprocess
+
+    for entry in os.environ.get("LD_LIBRARY_PATH", "").split(os.pathsep):
+        if not entry:
+            continue
+        candidate = Path(entry) / soname_file
+        if candidate.is_file():
+            return candidate.resolve()
+    for ldconfig in ("ldconfig", "/sbin/ldconfig"):
+        try:
+            output = subprocess.run(
+                [ldconfig, "-p"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            ).stdout
+        except (OSError, subprocess.SubprocessError):  # pragma: no cover - 環境依存
+            continue
+        for line in output.splitlines():
+            name, _, path_field = line.partition(" => ")
+            if name.strip().split(" ", 1)[0] != soname_file:
+                continue
+            resolved = Path(path_field.strip())
+            if resolved.is_file():
+                return resolved.resolve()
+        break
     return None
 
 

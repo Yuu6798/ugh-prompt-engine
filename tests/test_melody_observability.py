@@ -2433,6 +2433,52 @@ def test_system_libsndfile_is_pinned_when_no_bundled_native(monkeypatch, tmp_pat
         melody_provenance._module_companion_files("soundfile", root)
 
 
+def test_system_library_is_resolved_without_loading_it(monkeypatch, tmp_path):
+    """システムライブラリの解決で **dlopen を起こさない**（#217）。
+
+    dlopen すると `CDLL` を捨てても mapping はプロセスに残り、直後に同じファイルが
+    書き換えられると「実行はロード済みの旧コード / 指紋は新 bytes」になる。
+    ローダと同じ探索順（LD_LIBRARY_PATH → ldconfig キャッシュ）をパスだけ辿る。
+    """
+    import ctypes
+    import ctypes.util
+    import subprocess
+
+    from svp_rpe.melody import provenance as melody_provenance
+
+    def boom(*args, **kwargs):  # pragma: no cover - 発火したらテスト失敗
+        raise AssertionError("library was loaded into the process before hashing")
+
+    monkeypatch.setattr(ctypes, "CDLL", boom)
+    monkeypatch.setattr(ctypes.util, "find_library", lambda name: "libsndfile.so.1")
+
+    lib_dir = tmp_path / "lib"
+    lib_dir.mkdir()
+    lib = lib_dir / "libsndfile.so.1"
+    lib.write_bytes(b"system-libsndfile")
+
+    # 1) LD_LIBRARY_PATH をローダと同じく先に見る。
+    monkeypatch.setenv("LD_LIBRARY_PATH", str(lib_dir))
+    assert melody_provenance._system_library_path("sndfile") == lib.resolve()
+
+    # 2) 無ければ ldconfig キャッシュ（ロードせずパスを引くだけ）。
+    monkeypatch.setenv("LD_LIBRARY_PATH", "")
+    cache_line = f"\tlibsndfile.so.1 (libc6,x86-64) => {lib}\n"
+
+    class _Completed:
+        stdout = cache_line
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Completed())
+    assert melody_provenance._system_library_path("sndfile") == lib.resolve()
+
+    # 3) どちらでも解決できなければ None = fail-closed。
+    class _Empty:
+        stdout = ""
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Empty())
+    assert melody_provenance._system_library_path("sndfile") is None
+
+
 def test_separation_pin_covers_audio_executables(monkeypatch, tmp_path):
     """`ffmpeg` / `ffprobe` の実行ファイルも分離 pin に畳む（CLI / API 両経路・#217）。
 

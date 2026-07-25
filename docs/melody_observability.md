@@ -482,9 +482,13 @@ pin を必須化する = 記録が済むまで Go を出さない fail-closed �
   単一モジュール（site-packages 直下の 1 ファイル）は親ディレクトリを rglob すると
   site-packages 全体を巻き込むため、パッケージとは別扱いにする。
   **同梱ネイティブを持たない install 形態**（distro / source ビルド）は
-  システムの libsndfile を dlopen するので、`ctypes.util.find_library` +
-  `/proc/self/maps` で実体パスを解決して hash する。解決できなければ wrapper だけの
-  pin を publish せず fail-closed）、
+  システムの libsndfile を読むので、`ctypes.util.find_library` +
+  ローダと同じ探索順（`LD_LIBRARY_PATH` → `ldconfig -p` キャッシュ）で実体パスを
+  解決して hash する。**解決に dlopen を使わない**のが要点 — ロードすると `CDLL` を
+  捨てても mapping はプロセスに残り、直後にファイルが in-place で書き換えられた場合
+  「実行はロード済みの旧コード / 指紋は新 bytes」になり、その観測を生んでいない
+  コードの pin が付く。解決できなければ wrapper だけの pin を publish せず
+  fail-closed）、
   **分離は `ffmpeg` / `ffprobe` の実行ファイルも同じ digest に畳む**
   （CLI（`python -m demucs`）も API（`Separator.separate_audio_file()` の `AudioFile`
   読み出し）も外部 FFmpeg を叩くため経路で区別しない。別ビルドの FFmpeg は分離へ入る
