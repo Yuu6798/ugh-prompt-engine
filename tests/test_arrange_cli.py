@@ -104,11 +104,11 @@ def test_bundle_sha256_and_paths_match_independent_recomputation(tmp_path: Path)
 
     assert bundle["schema_version"] == "arrangement-bundle/0.2"
     assert bundle["arrangement_id"] == "arr-test"
-    assert bundle["source_score"]["path"] == str(SAMPLE_PATH)
+    assert bundle["source_score"]["path"] == SAMPLE_PATH.as_posix()
     assert bundle["source_score"]["sha256"] == hashlib.sha256(
         SAMPLE_PATH.read_bytes()
     ).hexdigest()
-    assert bundle["arrangement_spec"]["path"] == str(spec_path)
+    assert bundle["arrangement_spec"]["path"] == spec_path.as_posix()
     assert bundle["arrangement_spec"]["sha256"] == hashlib.sha256(
         spec_path.read_bytes()
     ).hexdigest()

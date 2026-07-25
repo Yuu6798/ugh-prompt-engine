@@ -141,18 +141,20 @@ def _parse_arrangement_spec(raw_bytes: bytes, path_str: str) -> ArrangementSpec:
 def compile_arrangement(score_path: Path | str, spec_path: Path | str) -> CompiledArrangement:
     """Base Score + ArrangementSpec から derived score / bundle / diff をメモリ上に構築する。
 
-    CLI 非経由でもテスト可能な core API。`score_path` / `spec_path` は CLI に渡された
-    文字列表現をそのまま provenance record の ``path`` として保持する（絶対パス化しない）。
+    CLI 非経由でもテスト可能な core API。`score_path` / `spec_path` は絶対パス化せず、
+    provenance record の ``path`` では区切りを POSIX 形式に正規化する。
     各入力ファイルは 1 回だけ読み、sha256 計算とパースに同一バイト列を使う。
     失敗時（存在しない入力・invalid YAML・未知 key・hard conflict・最終 Score validation
     失敗等）は read / parse / `resolve_arrangement` が送出する例外がそのまま伝播する
     （本関数はラップしない。存在しない入力は `read_bytes` の `FileNotFoundError`）。
     """
-    score_path_str = str(score_path)
-    spec_path_str = str(spec_path)
+    score_path_obj = Path(score_path)
+    spec_path_obj = Path(spec_path)
+    score_path_str = score_path_obj.as_posix()
+    spec_path_str = spec_path_obj.as_posix()
 
-    score_bytes = Path(score_path).read_bytes()
-    spec_bytes = Path(spec_path).read_bytes()
+    score_bytes = score_path_obj.read_bytes()
+    spec_bytes = spec_path_obj.read_bytes()
 
     source = _parse_composition_score(score_bytes, score_path_str)
     spec = _parse_arrangement_spec(spec_bytes, spec_path_str)

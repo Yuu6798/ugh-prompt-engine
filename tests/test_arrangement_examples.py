@@ -118,8 +118,8 @@ def test_both_bundles_share_source_score_sha256_matching_independent_recomputati
     assert edm_bundle["source_score"]["sha256"] == independent_sha256
     assert jazz_bundle["source_score"]["sha256"] == independent_sha256
     assert edm_bundle["source_score"]["sha256"] == jazz_bundle["source_score"]["sha256"]
-    assert edm_bundle["source_score"]["path"] == str(BASE_SCORE)
-    assert jazz_bundle["source_score"]["path"] == str(BASE_SCORE)
+    assert edm_bundle["source_score"]["path"] == BASE_SCORE.as_posix()
+    assert jazz_bundle["source_score"]["path"] == BASE_SCORE.as_posix()
 
 
 # --- 4. field-level diff の説明力 --------------------------------------------------
