@@ -151,12 +151,27 @@ from svp_rpe.melody.routing import select_routes
 from svp_rpe.melody.extractors import observe_via_route_with_provenance
 
 STEM_SHA = "77244a534e748cf32aae79cdae4a6b110167c1ea85a4b7131ffbdcd08c104033"
+# 抽出器側の pin。stem が同一でも抽出器実装が違えば conf 値と 1100 フレーム対照は動く。
+EXPECTED = {
+    "demucs_vocals_then_melodia": {
+        "extractor_code_sha256":
+            "879d82db6e6486a8162458cd554a9496f1e3719e743631e5255cd84203b46f4e",
+        "extractor_weights_sha256":   # folded（§6 の raw とは別値・§6 の表を参照）
+            "b29c5aea8acf1229fb546cd6f573872310a30845a2263aa687921b3075a34aaa",
+    },
+    "demucs_vocals_then_pyin": {
+        "extractor_code_sha256":
+            "07f43915f950d810d5d27239f842b8c3cd6e36a67a0c7c86d0689d3edc0a854a",
+    },
+}
 routes = {r.name: r for r in select_routes("vocal_track")}
 
 for name in ("demucs_vocals_then_melodia", "demucs_vocals_then_pyin"):
     obs, prov = observe_via_route_with_provenance("kane_y2.mp3", routes[name])
     # 両経路が **同一 stem** を観測していることが対照の前提（fail-closed）。
     assert prov["preprocessing"]["stem_sha256"] == STEM_SHA, f"{name}: stem mismatch"
+    for key, want in EXPECTED[name].items():
+        assert prov.get(key) == want, f"{name}: {key} mismatch -> {prov.get(key)}"
     cf = np.array(obs.frame_confidence)
     hz = np.array(obs.frame_hz)
     print(f"{name}: frames={cf.size} pitch={int((hz > 0).sum())} "
@@ -165,6 +180,45 @@ for name in ("demucs_vocals_then_melodia", "demucs_vocals_then_pyin"):
 
 （`kane_y2.mp3` は commit しない M1-real 素材。sha256 は上表。demucs 重みが
 未取得なら経路が `LearnedModelUnavailable` で止まる＝実行時 DL は起きない。）
+
+### 2.5 パラメータ掃引 — **値域はアダプタ設定の関数だった**
+
+「被覆を上げても confidence の値域は動かない」という当初の主張を検証するため、
+`PredominantPitchMelodia` のパラメータを掃引した。結果、**主張は誤りだった**。
+
+合成素材（`synth_mono_phrased`・checkout で再現可能）:
+
+| 変えたパラメータ | conf max | conf ≥ 0.30 |
+|---|---|---|
+| 既定 | 0.2947 | 0 |
+| `voicingTolerance` −1.0 / 0.0 / 0.2 / 1.0 / 1.4 | 0.2947（不変） | 0 |
+| `guessUnvoiced` True（被覆 360 → 1812 フレーム） | 0.2947（不変） | 0 |
+| `harmonicWeight` / `numberHarmonics` / `magnitudeThreshold` / `peakDistributionThreshold` / `peakFrameThreshold` / `minDuration` / `pitchContinuity` | 0.2260–0.2968 | 0 |
+| **`magnitudeCompression` 0.8** | **0.3735** | **976** |
+| **`magnitudeCompression` 0.5** | **0.5377** | **1363** |
+
+実経路の vocals stem（§2.4 と同一 stem `77244a53…4033`）:
+
+| `magnitudeCompression` | conf max | conf mean | conf ≥ 0.30 | pitch 検出 |
+|---|---|---|---|---|
+| **1.0（アダプタ既定＝ Essentia 既定）** | 0.2216 | 0.0630 | **0** / 56543 | 27171 |
+| 0.8 | 0.3833 | 0.1227 | 2548 | 27778 |
+| 0.5 | **1.1586** | 0.3882 | **28633** | 29125 |
+
+読み取れること:
+
+- **被覆と値域は独立ではない**が、独立でない軸は 1 つだけだった。`voicingTolerance` /
+  `guessUnvoiced` は被覆を 5 倍にしても conf max を 1 ケタも動かさない一方、
+  `magnitudeCompression` は**値域そのものを動かす**（salience の圧縮指数）
+- 現在の値域が床の外にあるのは **アダプタが Essentia 既定 `magnitudeCompression=1.0`
+  を使っているため**であり、Melodia という算法の不変の性質ではない
+- `0.5` では salience が 1 を超える（1.1586）。アダプタは `clamp` で [0,1] へ丸めるので、
+  この帯では clamp が効き始める
+
+> **この掃引結果は「どの値を採るべきか」を意味しない。** 床を越える値を実測後に
+> 選ぶのは事前登録規律（`one_way_rule`）が禁じる後付け調整そのものである。
+> 掃引は「値域が設定の関数である」という**事実**の記録であり、値の選定は §5 の
+> 未決事項に属する。
 
 ### 2.3 pyin との対比（同一入力 `synth_mono_phrased`）
 
@@ -217,6 +271,9 @@ insufficient に固定されない。
    confidence は 0.30 に届かず、有声フレーム数が 0 になった
 2. その値域は pyin の `voiced_prob`（max 1.0 / mean 0.64）と**同一の床で裁けるスケールではない**
 
+いずれも **アダプタ現行設定（Essentia 既定 `magnitudeCompression=1.0`）の下での**
+事実である。§2.5 のとおり、この 1 パラメータを変えると値域は床を越える。
+
 「実制作音楽の実用帯でこの床を越える入力があるか」は未測定であり、
 床の妥当性判断には別途 corpus 規模の測定を要する。
 
@@ -227,13 +284,17 @@ Cowork 指定の切り分け基準に対する結論:
 | 仮説 | 判定 |
 |---|---|
 | アダプタ設定バグのうち **sampleRate / dtype の取り違え** | **否**。44.1 kHz へリサンプル済み・mono float32 で、検出音は ±0.1 cent の精度（取り違えなら周波数が系統的にずれる） |
-| アダプタ設定バグのうち **パラメータ最適化不足** | **未棄却**。§2.1 の被覆は 15 note-event 中 3。ただし被覆を上げても confidence の値域が床の外にある事実は変わらないため、本件の主因ではない |
+| アダプタ設定バグのうち **パラメータ設定** | **主因たりうる（当初の棄却は撤回）**。§2.5 の掃引で `magnitudeCompression` が値域そのものを動かすことが判明した（既定 1.0 では実経路 conf max 0.2216 / 床超え 0 だが、0.8 で 0.3833 / 2548 フレーム、0.5 で 1.1586 / 28633 フレーム）。§2.1 の被覆 3/15 も未解決 |
 | demucs stem との噛み合わせ問題 | **否**。§2.4 で実経路 `demucs_vocals_then_melodia` を全長素材に対して回し、Melodia 自身が 48.1% のフレームに音高を出すこと、**同一 stem** で pyin は 1100 フレームが床を越えることを確認した（stem 側の欠陥では説明できない） |
 | 凍結閾値と抽出器の信頼度セマンティクスの衝突 | **是**。`voiced_confidence_floor 0.30` が Melodia の値域（**全実測入力の conf max が 0.1487–0.2947**。実経路 = 0.2216）の外にある |
 
-なお「パラメータ最適化不足」は本件と**独立に残る課題**である（被覆 3/15 は
-それ自体が低い）。ただし床の問題を解かない限り、被覆をいくら上げても
-post-gate は 0 のままなので、対処順序は床の定義が先になる。
+**当初この doc は「被覆を上げても値域は動かないので、パラメータは主因でない」と
+書いていたが、それは掃引せずに述べた誤りだった**（§2.5 で撤回）。正しくは:
+
+- 現象「Melodia の conf が床に届かない」は、**アダプタが Essentia 既定
+  `magnitudeCompression=1.0` を使っている条件下での**事実である
+- したがって根本原因は「凍結床 vs Melodia の値域」の二者だけでなく、
+  **「凍結床 vs アダプタ設定 vs Melodia の値域」の三者関係**として扱う必要がある
 
 ## 5. 未決事項（事前登録マター・実装しない）
 
@@ -244,12 +305,17 @@ post-gate は 0 のままなので、対処順序は床の定義が先になる�
 
 決めるべき論点だけを挙げる:
 
+- **アダプタ設定を動かす選択肢**（§2.5 の新事実）。`magnitudeCompression` は凍結対象
+  （閾値・バー）ではなく抽出器側の設定なので、変更自体は `one_way_rule` の文言には
+  直接触れない。**ただし「床を越える値」を実測後に選べば、規律が防ごうとしている
+  後付け調整そのものになる**。値を先に事前登録してから測り直す手順が要る
 - 床を「抽出器ごとの値域に対する相対量」として定義し直すのか、抽出器側で
   confidence を確率スケールへ正規化するのか（どちらも**新たな事前登録**を要する）
 - 正規化する場合、その写像は実データを見ずに定義できるか（Melodia の salience は
-  上限が理論的に定まらないため、経験的な正規化は実データ依存になりうる）
+  上限が理論的に定まらず、`magnitudeCompression=0.5` では実際に 1 を超える）
 - Melodia 経路を M1-real の候補経路から外す選択肢（`registry.yaml` の route matrix は
   `input_kind` から機械的に決まるため、外すこと自体が凍結内容の変更になる）
+- §2.1 の被覆 3/15 は上記と独立に残る課題
 
 いずれも凍結バー・閾値の定義に触れるため、Cowork の設計判断を待つ。
 
