@@ -108,7 +108,7 @@ PR #221 の決定論設定（`shifts=0`）。前者は「レビュー対象 comm
 | **デコード後サンプル sha256** | `5b33ddae06e93b10914dc37a99cb0be30d572c9b1da9edf97b49ccab235be8a1` |
 | demucs version / 重み sha256 | `4.1.0` / `bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86` |
 | torch version | `2.13.0+cu130`（CPU 実行） |
-| **分離実行閉包の合成 sha256** | `abd45077483f03d2604a666d986c2550eb9fea092ea2ac292d07a41ef428758e` |
+| **分離実行閉包の合成 sha256** | `8a595143a47e42be591d16f2c2f501b71ac7e192975dce25c5985ce261a48d8e` |
 
 分離実行閉包 = `demucs` / `torch` / `numpy` の distribution 所有ファイル（§6 と同一の
 合成方法）。重みだけでなく**推論コード側**も stem を左右するため、版だけでなく artifact
@@ -156,8 +156,27 @@ from svp_rpe.rpe.learned.melodia_adapter import extract_melodia_f0
 SAMPLES_SHA = "5b33ddae06e93b10914dc37a99cb0be30d572c9b1da9edf97b49ccab235be8a1"
 STEM_SHA = "72097ac0461e49061b78ea0b25edfb876914eb77866a0caed8bab494aa53e280"
 
-SEPARATION_SHA = "abd45077483f03d2604a666d986c2550eb9fea092ea2ac292d07a41ef428758e"
-# §6 の dist_digest を流用（demucs / torch / numpy の artifact 一致を先に確認する）
+SEPARATION_SHA = "8a595143a47e42be591d16f2c2f501b71ac7e192975dce25c5985ce261a48d8e"
+
+import importlib.metadata as meta   # 本スニペット単体で完結させる（§6 と同一実装）
+
+def dist_digest(names):
+    h = hashlib.sha256()
+    for name in sorted(names):
+        dist = meta.distribution(name)
+        h.update(f"[{name}]".encode())
+        for f in sorted(dist.files or [], key=str):
+            rel = str(f)
+            if rel.startswith("..") or ".dist-info/" in rel or f.suffix == ".pyc":
+                continue
+            try:
+                data = dist.locate_file(f).read_bytes()
+            except OSError:
+                continue
+            h.update(rel.encode()); h.update(b"\0")
+            h.update(hashlib.sha256(data).digest())
+    return h.hexdigest()
+
 if dist_digest(["demucs", "torch", "numpy"]) != SEPARATION_SHA:
     raise SystemExit("separation closure mismatch (fail-closed)")
 
@@ -243,7 +262,7 @@ Cowork 指定の切り分け基準に対する結論:
 | アダプタ設定バグのうち **sampleRate / dtype の取り違え** | **否**。44.1 kHz へリサンプル済み・mono float32 で、検出音は ±0.1 cent の精度（取り違えなら周波数が系統的にずれる） |
 | アダプタ設定バグのうち **パラメータ最適化不足** | **未棄却**。§2.1 の被覆は 15 note-event 中 3。ただし被覆を上げても confidence の値域が床の外にある事実は変わらないため、本件の主因ではない |
 | demucs stem との噛み合わせ問題 | **否**。§2.4 で本命経路の stem を直接測り、`shifts=1`（本 commit の実経路・2 run）と `shifts=0`（PR #221）の 3 通りの stem すべてで Melodia 自身が 43.8–49.4% のフレームに音高を出し、同一 stem で pyin は 55 フレームが床を越えることを確認した（stem 側の欠陥では説明できない） |
-| 凍結閾値と抽出器の信頼度セマンティクスの衝突 | **是**。`voiced_confidence_floor 0.30` が Melodia の値域（実測 max 0.1485–0.2947）の外にある |
+| 凍結閾値と抽出器の信頼度セマンティクスの衝突 | **是**。`voiced_confidence_floor 0.30` が Melodia の値域（**全実測入力の conf max が 0.1487–0.2947**）の外にある |
 
 なお「パラメータ最適化不足」は本件と**独立に残る課題**である（被覆 3/15 は
 それ自体が低い）。ただし床の問題を解かない限り、被覆をいくら上げても
@@ -318,11 +337,17 @@ version 文字列だけでは不十分（同一 version でも別ビルドの wh
 
 | 項目 | 値 |
 |---|---|
-| 対象 | 上表 7 distribution の所有ファイル（`importlib.metadata` の RECORD 由来・`.pyc` 除く。計 3404 ファイル / 372 MB） |
-| 合成 sha256 | `5a27a0b1679e5562cc9a3dcb3aee524297a7a2c9df3bf16d7046c288048ca64b` |
+| 対象 | 上表 7 distribution の所有ファイル（`importlib.metadata` の RECORD 由来。計 3339 ファイル） |
+| 除外 | `../../../bin/*`（インストーラ生成の entry point。shebang に絶対 interpreter パスを埋める）、`*.dist-info/*`（RECORD 等の install メタデータ）、`*.pyc` |
+| 合成 sha256 | `8528c163104a9d92409b46d92ab5b50256333c3b64f730854c30740c79597055` |
 
 合成方法 = distribution 名の昇順に `[name]` を feed し、各所有ファイルについて
 RECORD 上の相対パス + `\0` + そのファイルの sha256 ダイジェストを feed した sha256。
+
+除外規則は **machine 非依存性のために必要**である: 生成 entry point（例 numpy の
+`../../../bin/f2py`）は shebang に venv の絶対パスを埋め込み、`RECORD` は install 先に
+依存するため、同一 wheel でも checkout / venv の場所が違うだけで不一致になる。
+指紋の対象は wheel 由来の不変ファイルに限る。
 
 > **なぜ「モジュールの親ディレクトリを走査」ではないか**（実測で判明した失敗）:
 > `soundfile` 0.14 は dist-packages 直下の**単一ファイルモジュール**
@@ -381,18 +406,20 @@ def dist_digest(names):
         dist = meta.distribution(name)
         h.update(f"[{name}]".encode())
         for f in sorted(dist.files or [], key=str):
-            if f.suffix == ".pyc":
+            rel = str(f)
+            # インストーラ生成物 / install メタデータは環境依存なので除外する。
+            if rel.startswith("..") or ".dist-info/" in rel or f.suffix == ".pyc":
                 continue
             try:
                 data = dist.locate_file(f).read_bytes()
             except OSError:
                 continue
-            h.update(str(f).encode())
+            h.update(rel.encode())
             h.update(b"\0")
             h.update(hashlib.sha256(data).digest())
     return h.hexdigest()
 
-NUMERICAL_SHA = "5a27a0b1679e5562cc9a3dcb3aee524297a7a2c9df3bf16d7046c288048ca64b"
+NUMERICAL_SHA = "8528c163104a9d92409b46d92ab5b50256333c3b64f730854c30740c79597055"
 got = dist_digest(CLOSURE)
 if got != NUMERICAL_SHA:
     print("numerical runtime artifact drift (fail-closed):", got)
