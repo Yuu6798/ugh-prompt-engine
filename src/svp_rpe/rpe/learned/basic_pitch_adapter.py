@@ -49,6 +49,7 @@ __all__ = [
     "LearnedModelUnavailable",
     "LearnedModelIncompatible",
     "extract_basic_pitch_annotations",
+    "basic_pitch_weight_files",
 ]
 
 
@@ -95,6 +96,44 @@ def _detect_basic_pitch_version() -> Optional[str]:
         return _pkg_metadata.version("basic-pitch")
     except _pkg_metadata.PackageNotFoundError:
         return None
+
+
+def basic_pitch_weight_files() -> "tuple[list[Path], Optional[Path]]":
+    """basic-pitch が読むモデル artifact のファイル一覧と、その root ディレクトリ。
+
+    upstream は `basic_pitch.ICASSP_2022_MODEL_PATH` で既定モデルを指す。TF
+    SavedModel（ディレクトリ）/ ONNX / TFLite のいずれの形態もありうるので、
+    ディレクトリなら再帰的に全ファイル、単一ファイルならそれ 1 本を返す
+    （root は SavedModel 内の相対パスで label するため）。
+
+    Raises
+    ------
+    LearnedModelUnavailable
+        `basic_pitch` 未導入、またはモデル artifact を特定できないとき。
+    """
+    try:
+        package = importlib.import_module(_BASIC_PITCH_PACKAGE)
+    except ImportError as exc:
+        raise LearnedModelUnavailable(_INSTALL_HINT) from exc
+    model_path = getattr(package, "ICASSP_2022_MODEL_PATH", None)
+    if model_path is None:
+        raise LearnedModelUnavailable(
+            "basic_pitch.ICASSP_2022_MODEL_PATH not found; "
+            "モデル artifact を特定できないため weights を pin できない"
+        )
+    path = Path(str(model_path))
+    if path.is_dir():
+        files = sorted(p for p in path.rglob("*") if p.is_file())
+        if not files:
+            raise LearnedModelUnavailable(
+                f"basic_pitch model directory {path} is empty; weights を pin できない"
+            )
+        return files, path
+    if path.is_file():
+        return [path], path.parent
+    raise LearnedModelUnavailable(
+        f"basic_pitch model artifact {path} not found; weights を pin できない"
+    )
 
 
 def extract_basic_pitch_annotations(

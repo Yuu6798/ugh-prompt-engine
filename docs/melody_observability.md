@@ -132,7 +132,7 @@ python scripts/run_melody_observability.py --out melody_obs.json
 # 実利用入力帯（Suno vocals stem 等の外部素材）
 #   ext.json = [{"id": "...", "path": "...wav", "input_kind": "vocal_track"}, ...]
 # vocal_track 経路（Demucs vocals → pyin/CREPE）:
-pip install -e ".[separate]"      # Demucs（`separate` extra）
+pip install -e ".[separate]"      # Demucs（`separate` extra）※重みは事前取得が必要・§6.4
 pip install crepe                 # CREPE = manual/external 統合（published extra なし・§5）
 # full_mix 経路（登録 fixture real_vocal_plus_backing）は basic_pitch_direct を含む。
 # basic-pitch は `pitch` extra（Apache-2.0・Python<3.12）。full_mix も測るなら追加:
@@ -252,14 +252,38 @@ python scripts/run_melody_observability.py --external ext.json --out ext_obs.jso
 pip install -e ".[pitch]"
 # pip install crepe        # CREPE（manual/external 統合・§5）
 # pip install essentia     # Melodia を測るなら（AGPL-3.0 を受容できる環境のみ）
+
+# ★分離経路（本命 demucs_vocals_then_*）を測るなら `.[separate]` を入れる。
+#   ハーネスは分離が走った行に preprocessing.stem_sha256 /
+#   separation_weights_sha256 を emit し、学習抽出器行に extractor_weights_sha256 を
+#   emit するので、評価器の #54/#59 要求と噛み合う（旧レシピの「入れるな」回避は撤去）。
+pip install -e ".[separate]"
+
+# ★重みは**事前取得**する（ハーネスは実行時 DL を一切行わない）。未取得のまま走らせても
+#   CDN へは触れず、分離経路が unavailable として記録され run は完走する（→ inconclusive）。
+#   取得方法 A: 明示的な一度きりの provisioning（download はこのコマンドの中だけで起きる）
+python -c "import demucs.pretrained as p; p.get_model('htdemucs_ft')"
+#   取得方法 B: 遮断環境では別マシンで取得した .th を
+#              ~/.cache/torch/hub/checkpoints/ へ配置する。別の置き場所にしたい場合は
+#              torch ネイティブの TORCH_HOME=<dir> を設定する（demucs も本ゲートも
+#              同じ規約で解決するので、pin する重みと demucs が読む重みが必ず一致する。
+#              独自の探索パスは意図的に持たない — 別ディレクトリを hash しつつ demucs が
+#              既定 cache から読む乖離を作らないため）
 #
-# ★分離経路（`.[separate]`）は現状**入れない**。理由: 評価器は measured な demucs 経路に
-#   preprocessing.stem_sha256 / separation_weights_sha256 を必須化する（#54）が、ハーネスは
-#   まだこれらを emit しない（weights hash の emit は実 Demucs を要する machine-dependent な
-#   未配線 slow-lane 課題・§6.5）。`.[separate]` を入れると分離経路が measured になり、
-#   stem/weights 欠落で --evaluate-go-bar が fail-closed する。分離経路の Go を測るには先に
-#   emit 配線が必要。それまでは分離経路を unavailable（→inconclusive・非ブロッキング）に留め、
-#   Go は非分離の pyin_direct 経路で成立させる。
+#   取得できたことの確認と、registry へ記録する dated pin の採取:
+python -c "import json; from svp_rpe.rpe.learned.source_separation_adapter import \
+  describe_separation_weights as d; print(json.dumps(d(), indent=2, ensure_ascii=False))"
+#   → {"model": "htdemucs_ft", "version": "...", "sha256": "...", "files": [...]}
+#   sha256 は checkpoint（.th）だけでなく **bag 定義 YAML**（htdemucs_ft.yaml）も覆う。
+#   bag YAML は signature 選択・per-source weights・segment を持つ実行時のモデル入力で、
+#   同じ .th でも構成が違えば別の stem が出るため（Codex #217）。
+#   この version / sha256 を registry.yaml の provenance.model_weights.demucs へ記録する
+#   （crepe / melodia / basic_pitch の重み pin は run 出力 report の
+#    routes[].extractor_weights_sha256）。★記録した pin は飾りではない: 評価器は
+#    **記録済み（非 null）の sha256 と version の双方について report 行の値との一致を
+#    必須化**し、食い違えば fail-closed で Go を出さない（#217。sha256=同じ bytes か、
+#    version=同じ実装リリースか）。未記録（null）の間は要求しないので、記録前の run は
+#    これまでどおり進む。
 
 # tests/fixtures/melody_bench/external_manifest.example.json をコピーし、
 # REPLACE を実ファイルパスへ書き換える（audio_sha256 は null のままでよい・
@@ -277,9 +301,87 @@ python scripts/run_melody_observability.py --external manifest.json --out run2.j
 #   ※ 生成と評価は同一 checkout で行う（#55: report の generator_code_sha256 は現 checkout の
 #     _generator_code_sha256() と一致必須。間で routing/gate/extractor を変えると stale 扱い）。
 
-# 凍結バーを機械適用して Go/No-Go を得る（分離経路は上記により inconclusive、Go は pyin_direct）。
+# 凍結バーを機械適用して Go/No-Go を得る（重み事前取得済みなら分離経路も採点対象）。
 python scripts/run_melody_observability.py --evaluate-go-bar run1.json run2.json --out verdict.json
 ```
+
+**重みプロビジョニングの 3 状態**（可用性は import 可否の 2 値ではない）:
+
+| 状態 | 挙動 |
+|---|---|
+| demucs 未導入 | 分離経路 = `unavailable`（`separate` extra の install hint） |
+| 導入済 + 重み取得済 | 分離経路が measured。stem/weights pin つきで Go 候補になれる |
+| 導入済 + **重み未取得** | 分離経路 = `unavailable`（`demucs weights not provisioned: <expected paths>`）。**実行時 DL は行わない**（リトライもミラーもしない）ので run は完走し、部分行と report は残る |
+
+**メタデータのスナップショット**: `files.txt` / bag YAML は選択（どの `.th` を読むか）と
+pin（何を hash するか）の両方に効くので、**1 回の read で確定**させ、parse も digest も
+同じ bytes から作る（別々に read すると、その間の差し替えで「旧選択を検証しつつ新メタデータで
+分離する」ズレが生じる）。残る限界: demucs 自身に本スナップショットを消費させることは
+できない（`repo=` 経由にすると「実際に読む場所以外を参照する」構図に戻るため採らない）ので、
+実行中にパッケージを書き換えられた場合の検出は分離後の再解決（→ `unavailable`）による
+事後検出になる。重みの provisioning / パッケージ更新と実測 run は同時に走らせないこと。
+
+検査するのは **demucs が実際に読む場所**（torch hub の checkpoints cache）だけで、
+独自の探索パスは持たない。別ディレクトリを探索して hash する設計にすると、demucs は
+既定 cache から読み、`separation_weights_sha256` は stem を作っていない重みを指す
+——「pin とモデル入力の乖離」が生じるため（Codex #217 指摘）。置き場所を変えるなら
+`TORCH_HOME` を使う（torch/demucs と本ゲートが同じ規約で解決する）。
+
+正確には、探索先は `separate_stems` がどちらの経路で分離するかで決まる:
+
+- **API 経路（プロセス内分離。`demucs.api` が import できる）**: **active hub dir**
+  （`torch.hub.get_dir()`）だけを見る。`torch.hub.set_dir()` を呼んだプロセスでは
+  `TORCH_HOME` と食い違いうるため、env 由来のパスを併記すると demucs が読まない
+  ファイルを hash しうる。
+- **CLI 経路（`python -m demucs` の子プロセスへフォールバック）**: 子は `os.environ` を
+  継承するだけで親の `torch.hub.set_dir()` は届かないため、**env 由来の解決**
+  （`TORCH_HOME` → `XDG_CACHE_HOME` → `~/.cache`）を見る。ここで親の active hub dir を
+  見ると、子が実際に読む cache と pin が乖離する。
+
+torch を import できないときも env 由来へ落ちる（重み未取得判定に torch の import を
+必須にしないため）。重みが未取得のときのエラーメッセージには、どちらの経路で解決したかも
+出る。
+
+**実行中の artifact 差し替え**（TOCTOU）: hash を採ってからモデルが独立に同じファイルを
+開くまでの間に、別プロセスが provisioning / 更新 / 差し替えを行うと、pin は旧 bytes を
+指しつつ成果物は新 bytes 由来になりうる。分離（Demucs）でも抽出器（CREPE / Melodia /
+basic-pitch）でも **推論前に指紋を採り、推論後に memo を迂回して再検証**し、食い違えば
+**成果物を返さず `unavailable`** にする（対応しない pin を publish するより測定未達の方が
+正しい）。モデルの provisioning / 更新と実測 run は同時に走らせないこと。関連して:
+
+- **選択集合の再解決**: 分離側は checkpoint を再 hash するだけでなく、`files.txt` と
+  bag YAML を pin 対象に含めた上で**分離後に集合を解決し直して比較**する。メタデータが
+  差し替わると「どの `.th` を読むか」自体が変わり、旧集合を再 hash するだけでは
+  「別集合で分離したのに pin は旧集合」を見逃すため。
+- **in-memory model cache**: CREPE 等はロード済みモデルをプロセス global に cache する。
+  初回ロード後に artifact が差し替わると、ディスクの pre/post は新 bytes で一致するのに
+  推論は旧モデルのまま、という状態がありうる。プロセス内の **load-time pin**（最初に
+  観測した digest）を**推論前に bind**し、食い違えば**推論そのものを行わず** `unavailable`
+  にする（推論後に pin を初期化すると、旧モデルが生んだ観測へ新 digest が付く）。
+  残る限界: **本経路を通らずに**モデルがロードされていた場合、そのロード時点の digest は
+  原理的に知りようがない。ハーネスは抽出器を本経路からしか呼ばないので、slow-lane は
+  **1 run = 1 プロセス**で回すこと（レシピどおり run1/run2 を別コマンドで実行すれば満たす）。
+
+なお、これらの解決・hash 段で起きる想定外の失敗（壊れた cache・不正な bag YAML・
+discovery 後に読めなくなったファイル）も `LearnedModelUnavailable` へ写像する。
+`_run_routes_on_file` は `LearnedModelUnavailable` だけを catch して route を
+`unavailable` に落とすので、素の `OSError` / `yaml.YAMLError` が貫通すると
+**run 全体が落ちて部分行も report も残らない**（D-1 が塞いだ失敗形の再来）。
+
+第 3 状態を「利用可能」と誤認すると、遮断環境では torch hub の download が
+`urllib.error.URLError` を投げて `--external` run 全体が落ち、部分行も report も
+残らなかった（旧レシピが `.[separate]` を入れるなと書いていたのはこの穴の回避策）。
+現在は `ensure_separation_available()` が **重みのローカル実在まで**検査し、
+分離実行前に必ずこの門を通す。門をすり抜けた重み取得起因の失敗
+（`URLError` / `HTTPError` / `OSError` / torch hub の `RuntimeError`）も
+`LearnedModelUnavailable` へ写像するので、run が落ちることはない。
+
+**pyin_direct だけで Go が出た場合の扱い**: 分離なし full-mix の pyin は Phase 0
+スパイクと 2026-07-24 のスモーク実測（`voiced_coverage 0.181 / confidence 0.023`）の
+両方で不成立側の証拠がある。したがって pyin_direct 単独の Go は M1-real の本Go として
+扱わず、**それ自体が驚くべき結果**として dated 記録し、素材・区間を疑って再確認する。
+逆に、分離経路が `unavailable` で verdict が `inconclusive` になったものを「No-Go」と
+読み替えてはならない（測定未達を測定結果と偽らない）。
 
 `verdict` は三値: **`go`**（生き残り経路あり）/ **`no_go`**（**全**候補経路を全
 fixture×route で実測した上でどれも生き残らなかった＝強化版 No-Go・設計 §4.4）/
@@ -342,18 +444,134 @@ sha256 で担保する。検証は「pin した sha256 の report 集合を同�
 pin を必須化する = 記録が済むまで Go を出さない fail-closed 規律。「約束するのは測定できる
 ものだけ」の D-1 準拠）:
 
-- **分離経路の stem/weights hash**（#54）: Demucs vocals stem の sha256・分離器重みの hash は
-  実 Demucs を要するため未 emit。評価器は **measured な分離経路には `preprocessing.stem_sha256`
-  と `separation_weights_sha256` を必須**とし、無ければ provenance 不足で fail-closed（同一
-  `htdemucs_ft`/version でも別 weights/再生成 stem なら前処理入力が変わるため、これらの pin
-  なしに分離経路を stable Go survivor に数えない）。したがって分離経路の Go は emit 配線
-  （`_preprocessing_provenance` が stem を露出して hash）を slow-lane で追加してから。
-- **学習抽出器の weights hash**（#59）: CREPE/basic-pitch/Melodia のモデル重み hash は
-  実モデルを要するため未 emit。評価器は **measured な学習抽出器経路には `extractor_weights_sha256`
-  を必須**とし、無ければ fail-closed（同一 package version でも別 bundled/local weights だと
-  モデル入力が変わるため、pin なしに学習抽出器経路を stable Go survivor に数えない・分離側と対称）。
-  したがって本命 `demucs_vocals_then_crepe` 等の Go は weights emit 配線を slow-lane で追加してから。
-  pyin は DSP で重みなしのため対象外（現状 Go 可能な経路）。
+- **分離経路の stem/weights hash**（#54）: **emit 配線済み**（2026-07-24）。分離が実際に
+  走った行には `preprocessing.stem_sha256`（vocals stem の float32 生サンプル hash）と
+  `separation_weights_sha256`（実際に読んだチェックポイントの hash）が載る
+  （`isolate_vocals_with_provenance` → `observe_via_route_with_provenance` → 行）。
+  評価器の必須要求（同一 `htdemucs_ft`/version でも別 weights/再生成 stem なら前処理入力が
+  変わる）はそのままで、**要求を満たす値を実測時に刻めるようになった**のが変更点。
+  実際の値は machine-dependent（実 Demucs + 実素材）なので依然 slow-lane で採る。
+- **学習抽出器の weights hash**（#59）: **emit 配線済み**（2026-07-24）。CREPE は
+  `crepe/model-<capacity>.h5`、basic-pitch は `ICASSP_2022_MODEL_PATH` の artifact を
+  hash して `extractor_weights_sha256`（`extractor_weights_kind: model_weights`）に載せる。
+  Melodia は**学習重みを持たない DSP 算法**なので、pin するのは essentia のネイティブ
+  拡張バイナリで、`extractor_weights_kind: library_binary` として「重みでないものを重みと
+  主張しない」正直会計にする。pyin は DSP で重みなしのため無記入（評価器も要求しない）。
+  依存未導入・artifact 未特定のときは推測 digest を作らない。**artifact を持つ抽出器**
+  （CREPE / basic-pitch / Melodia）では指紋を採れないこと自体が provisioning 失敗なので、
+  推論へ進まず当該 route を `unavailable` にする（そのまま進むと、生の I/O 例外で run
+  全体が落ちるか、評価器が要求する hash を欠いた measured 行が出て Go-bar 評価が丸ごと
+  fail-closed する）。pyin は artifact を持たないので従来どおり無記入で観測する。
+- **推論コードの pin**（`extractor_code_sha256` / `preprocessing.separation_code_sha256`）:
+  重み hash と distribution version は「同じ bytes か / 同じリリースか」しか保証せず、
+  **同一 version のままローカル patch / repack された**パッケージは素通りする
+  （`generator_code_sha256` は first-party しか覆わない）。実際に推論した third-party
+  パッケージの `.py` + ネイティブ拡張を hash して行に載せ、provenance 署名（repeats 一致）に
+  含める。評価器は **measured 行に推論コード pin を必須**とする（主・assist・分離の
+  それぞれ。registry の `code_sha256` が未記録でも要求する — 要求しないと、手書き report が
+  pin を削っても「両方欠落 = 一致」として通り、推論コード未 pin のまま go を publish できる）。
+  registry に `code_sha256` を記録した場合は行との一致も追加で必須化する。
+  **実行 backend も覆う**（CREPE / basic-pitch は TensorFlow がモデルグラフを実行し、
+  Demucs は torch が実行するため、抽出器パッケージだけでは patch を検出できない）:
+  crepe→`crepe`+`tensorflow`/`keras`、basic_pitch→`basic_pitch`+TF/ONNX/CoreML/TFLite、
+  melodia→`essentia`（ネイティブ実装が算法そのもの）、pyin→`librosa`+`scipy`、
+  入力は **pin 済みの soundfile スタックで読めるものだけ**を観測する
+  （`librosa.load` / `get_duration` は soundfile が開けない入力で audioread＝裏は
+  未 pin の FFmpeg / GStreamer へフォールバックするため、入口で `sf.info` を通して
+  fail-closed にする。尺＝被覆の分母も audioread 由来の値を採らない）。
+  加えて **`soundfile` は全抽出器の閉包に入る**（`librosa.load` は WAV/FLAC を
+  soundfile 経由でデコードし、合成経路は `sf.write` で観測対象そのものを書く。
+  デコードの実体は **libsndfile ネイティブ共有ライブラリ**なので、単一モジュール
+  配布の同梱物 `_soundfile.py` / `_soundfile_data/` まで hash 対象に含める。
+  単一モジュール（site-packages 直下の 1 ファイル）は親ディレクトリを rglob すると
+  site-packages 全体を巻き込むため、パッケージとは別扱いにする。
+  **同梱ネイティブを持たない install 形態**（distro / source ビルド）は
+  システムの libsndfile を読むので、`ctypes.util.find_library` +
+  ローダと同じ探索順（`LD_LIBRARY_PATH` → `ldconfig -p` キャッシュ）で実体パスを
+  解決して hash する。**解決に dlopen を使わない**のが要点 — ロードすると `CDLL` を
+  捨てても mapping はプロセスに残り、直後にファイルが in-place で書き換えられた場合
+  「実行はロード済みの旧コード / 指紋は新 bytes」になり、その観測を生んでいない
+  コードの pin が付く。解決できなければ wrapper だけの pin を publish せず
+  fail-closed）、
+  **分離は `ffmpeg` / `ffprobe` の実行ファイルも同じ digest に畳む**
+  （CLI（`python -m demucs`）も API（`Separator.separate_audio_file()` の `AudioFile`
+  読み出し）も外部 FFmpeg を叩くため経路で区別しない。別ビルドの FFmpeg は分離へ入る
+  波形を変えるのに demucs/torch の pin も weights pin も動かない。PATH 不在時の扱いだけ
+  経路で分かれる: CLI は `_demucs_subprocess_env()` が実在を必須にするので fail-closed、
+  API は別デコーダへフォールバックし**その実行ファイルは結果に影響しえない**ので covered
+  から外して続行する＝実行されていないものを pin したことにしない。CLI/API の判定は
+  demucs を import せずに行い、判定が外れても分離後の再 hash が実測値で計算されるため
+  before/after 比較が拾う）。**FFmpeg は実行ファイルだけでなくデコード実装の共有
+  ライブラリ（`libavformat` / `libavcodec` / `libswresample` 等）も pin する** —
+  distro 版は実装がそちらにあるため。解決は ELF の `DT_NEEDED` を読んで推移的に行い
+  （`ldd` は対象を実行しうるので使わない）、探索は glibc ローダと同じ順
+  （`DT_RPATH`（`DT_RUNPATH` が無いときのみ）→ `LD_LIBRARY_PATH` → `DT_RUNPATH` →
+  `ldconfig` キャッシュ。展開するのは `$ORIGIN`（参照元オブジェクトのディレクトリ）
+  だけで、**`$LIB` / `$PLATFORM` はローダが決める値**（Debian の `lib/x86_64-linux-gnu` /
+  `haswell` 等）なので推測せず fail-closed——展開できない候補を飛ばして ldconfig に
+  落ちると同名のシステムライブラリを掴む。`DT_RPATH` は `DT_RUNPATH` と違い
+  **依存の依存にも継承される**ので、closure は祖先の RPATH を引き継いで解決する）で行う
+  ——conda / アプリ同梱ビルドは同名の `libav*` を同梱位置から読むため、これを見ないと
+  「同名のシステムライブラリを hash したが、デコードしたのは同梱版」になる。
+  線は **FFmpeg 自身のライブラリ**まで
+  （libc/libm 等の OS 基盤まで広げると「環境全体が推論スタック」になり誰も守れない）。
+  依存の解決は**プログラムヘッダの `PT_DYNAMIC`** を読む（強く strip された
+  バイナリはセクションヘッダを持たないが、ローダは `PT_DYNAMIC` で解決するため、
+  セクションが無いことを「静的リンク」の証拠にしない。静的の確証は `PT_DYNAMIC` が
+  存在しないこと）。静的リンク（依存が無いことを**読んで確認**できる ELF）では
+  closure は空。一方
+  **非 ELF**（Mach-O / PE / ラッパスクリプト）は closure を読めないので fail-closed
+  ——「読めなかった」を「依存なし」と主張しない。結果として分離経路の pin は現状
+  **Linux/ELF 限定**で成立する、
+  CREPE は既定の `viterbi=True` が **`hmmlearn`** の HMM デコードで F0 系列の選択を
+  決めるので閉包に含める、**librosa 経由で必ず実行される数値バックエンド
+  （`soxr` / `numba` / `llvmlite`）も全閉包に入れる**（`librosa.resample` の既定
+  `res_type="soxr_hq"` は SoXR のネイティブ実装がリサンプルそのもの、librosa の JIT
+  カーネル（`librosa.sequence.viterbi` 等）と resampy のリサンプルカーネルは
+  numba/llvmlite がコンパイルして実行する）、
+  分離→`demucs`+`torch`。加えて **`librosa` は全抽出器の閉包に入る** — 本アダプタ層が
+  非分離経路の波形 decode・Melodia 入力のリサンプル・basic-pitch の被覆分母となる実尺取得に
+  librosa を使うため、patch された librosa は抽出器へ渡る波形やゲート指標を変えるのに
+  source audio hash も抽出器 pin も version も動かない。numpy/scipy は汎用数値基盤として
+  線の外に置くのが原則だったが、**本層のコードが直接呼ぶ以上どちらも閉包に入れる** —
+  pyin は `_highpass_melody_signal`（`scipy.signal.butter` / `sosfiltfilt`）で前処理して
+  から `librosa.pyin` へ渡し、`extractors.py` は `asarray` / `isfinite` / `where` /
+  `nan_to_num` で観測値そのものを組み立て、分離側も stem を numpy で正規化する。
+  patch された scipy / numpy は観測とゲート指標を変えるのに、抽出器 pin も weights pin も
+  version も動かない。numpy を bind より前に import しないため、`utils/hashing.py` の
+  numpy は関数内 import に落としてある（provenance の import 閉包は numpy を引かない）。
+  パッケージ走査は `.py` / `.so` / `.pyd` / `.dylib` に加え、**版番号付き `lib*.so.1` と
+  Windows の `.dll`** も拾う（TensorFlow / PyTorch のバックエンドライブラリはこの形）。import できなかった backend は飛ばし、**実際に覆った名前**を
+  `extractor_code_packages` / `separation_code_packages` に列挙する（被覆の正直会計）。
+  コード hash の解決は `importlib.util.find_spec` で**モジュールを実行せず**場所だけを
+  引くので、bind を**当該パッケージの import より前**に置ける。ハーネスは
+  `bind_inference_code_pins()` を **モジュール本体の import 列より前**（`soundfile` /
+  `build_melody_bench` / `melody.extractors` を引く前）で呼び、run の入口でも呼ぶ。
+  これで `_generator_code_sha256()` の閉包探索（`io.source_separator` 経由で demucs と
+  soundfile を import する）より前に全 pin が固定される。route 内でも、artifact 解決
+  （third-party を import する）より**前**にコード pin を bind する。import 後に hash すると「cache 済みの旧コードが実行され、
+  hash は新ファイルを見る」窓が開くため。残る限界: 本経路より前に**別の経路や別トラックが
+  同じパッケージを import 済み**なら、その時点の digest は知りようがない（load-time pin と
+  同じ制約で、slow-lane は 1 run = 1 プロセスで回すことで満たす）。
+  コード pin も weights と同様に**推論前に bind → 推論後に memo 迂回で再検証**する
+  （import 済みモジュールはプロセスに cache され、途中で差し替えても実行は旧コードのまま
+  でありうるため）。**分離（Demucs）側も同じ**で、分離前に bind し分離後に再検証する。
+  推論を行うパッケージのコード hash を**採れない**場合（zip/namespace レイアウト、
+  ロード済みファイルが読めない等）は、無記入で measured 行を出さず `unavailable` にする。
+  `find_spec` 自体が例外を投げた場合（`sys.modules` にあるが `__spec__` 欠落 =`ValueError`、
+  meta path finder の失敗等）も `unhashable` として fail-closed に倒す — top-level 名は
+  **未導入なら `None` が返る**ので、例外は「導入されているかもしれないのに解決できない」
+  を意味し、absent として skip すると実行されうる実装を覆わない pin を publish しうる。
+  **部分被覆も同様**: 未導入の optional backend（`absent`）は「実行されていない」ので
+  飛ばしてよいが、**導入済み（= 実行されうる）なのに hash できない**（`unhashable`）
+  パッケージがあれば、他だけで digest を作らず fail-closed にする（実行された実装の一部を
+  覆わない pin を「揃っている」と誤認しないため）
+  —— 評価器は measured 行に code pin を必須とするので、無記入の行は Go-bar 評価で
+  fail-closed になる（route 単位で `unavailable` に落とす方が、report 全体を弾くより正しい）。**assist 抽出器**（full_mix の `basic_pitch_direct` × Melodia など）も
+  同様に `assist_extractor_weights_sha256` を emit する — `cross_extractor_agreement` は
+  assist のモデル入力に依存する gate metric なので、主抽出器と同じく pin する（Codex #217）。
+  評価器は `assist_status == "measured"` の行にこの pin を必須とし、provenance 署名にも
+  含める（assist が `unavailable` の行は agreement が null なので要求しない）。
 - **frozen 素材の expected audio hash**（#53）: real_vocal_* は自作 Suno 曲で **非 commit**
   （波形は repo に置かない）、その expected audio sha256 は slow-lane 生成時に決まる
   dated pin。PR 時に registry へ固定できない（audio が repo に存在しない・初回生成前は

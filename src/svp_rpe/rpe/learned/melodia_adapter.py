@@ -45,6 +45,7 @@ __all__ = [
     "LearnedModelIncompatible",
     "ensure_melodia_available",
     "extract_melodia_f0",
+    "melodia_implementation_files",
     "melodia_model_info",
 ]
 
@@ -99,6 +100,46 @@ def _detect_essentia_version() -> Optional[str]:
         return _pkg_metadata.version(_MODULE_NAME)
     except _pkg_metadata.PackageNotFoundError:
         return None
+
+
+def melodia_implementation_files() -> "tuple[list, object]":
+    """Melodia の実装バイナリ（essentia のネイティブ拡張）のファイル一覧と root。
+
+    PredominantPitchMelodia は**学習重みを持たない DSP 算法**なので、pin すべき
+    「モデル入力」は重みファイルでなく実装バイナリそのものである（同一 pip
+    version でも別ビルドなら数値が変わりうる）。呼び出し側はこれを
+    `extractor_weights_sha256` に載せ、`extractor_weights_kind` で
+    ``library_binary``（重みではなく実装指紋）であることを明示する。
+
+    Raises
+    ------
+    LearnedModelUnavailable
+        `essentia` 未導入、またはネイティブ拡張を特定できないとき。
+    """
+    from pathlib import Path
+
+    try:
+        package = importlib.import_module(_MODULE_NAME)
+    except ImportError as exc:
+        raise LearnedModelUnavailable(_INSTALL_HINT) from exc
+    module_file = getattr(package, "__file__", None)
+    if not module_file:
+        raise LearnedModelUnavailable(
+            "essentia package location is unknown; 実装バイナリを pin できない"
+        )
+    package_dir = Path(module_file).resolve().parent
+    binaries = sorted(
+        p
+        for pattern in ("*.so", "*.pyd", "*.dylib")
+        for p in package_dir.glob(pattern)
+        if p.is_file()
+    )
+    if not binaries:
+        raise LearnedModelUnavailable(
+            f"essentia native extension not found under {package_dir}; "
+            "実装バイナリを pin できないため extractor_weights_sha256 を emit しない"
+        )
+    return binaries, package_dir
 
 
 def melodia_model_info() -> LearnedModelInfo:

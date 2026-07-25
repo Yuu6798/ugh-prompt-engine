@@ -39,10 +39,6 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List
 
-import numpy as np
-import soundfile as sf
-import yaml
-
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
@@ -50,9 +46,26 @@ if str(SRC) not in sys.path:
 if str(ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts"))
 
+from svp_rpe.melody.provenance import bind_inference_code_pins  # noqa: E402
+
+# 推論コードの pin を **本モジュールが何かを import するより前**に確定する（#217）。
+# `soundfile`（= libsndfile。WAV/FLAC のデコード実体）や `build_melody_bench` 経由の
+# import は、走らせれば当該モジュールをプロセスに cache する。cache 後に hash すると
+# 「cache 済みの旧コードが実行され、hash は新ファイルを見る」窓が開くため、ここが
+# 最も早い bind 地点になる（`find_spec` なので bind 自体は import を起こさない）。
+# `svp_rpe.melody.provenance` の import 閉包は numpy / soundfile / librosa / scipy を
+# 引かない（`utils.hashing` の numpy は関数内 import に落としてある）。
+bind_inference_code_pins()
+
+import numpy as np  # noqa: E402
+import soundfile as sf  # noqa: E402
+import yaml  # noqa: E402
 from build_melody_bench import SPECS_PATH, build_signal, load_specs  # noqa: E402
 
-from svp_rpe.melody.extractors import observe_assist_notes, observe_via_route  # noqa: E402
+from svp_rpe.melody.extractors import (  # noqa: E402
+    observe_assist_notes,
+    observe_via_route_with_provenance,
+)
 from svp_rpe.melody.observability import (  # noqa: E402
     ObservabilityThresholds,
     assess_observability,
@@ -240,13 +253,16 @@ def _extractor_version(extractor: str) -> "str | None":
 
 
 def _preprocessing_provenance(route: Any) -> "Dict[str, Any] | None":
-    """分離前処理（Demucs）の provenance。分離不要な経路は None。
+    """分離前処理（Demucs）の provenance 下地。分離不要な経路は None。
 
     同一 audio_sha256 でも Demucs のパッケージ/モデル/重みが違えば vocals stem が
     変わり下流のピッチ結果も変わるため、`requires_separation` 行に分離器の
     モデル名と installed version を記録する（Codex 指摘・AGENTS §8）。
-    stem hash レベルの provenance は observe_via_route が stem を露出する必要が
-    あり、Demucs 不在では検証できないため本 PR では見送る。
+
+    ここで作るのは**分離が走らなかった行**（unavailable 等）でも記録できる静的な
+    下地で、実際に分離が走った行では `observe_via_route_with_provenance` が返す
+    実測 pin（`stem_sha256` / `separation_weights_sha256`）を上書きマージする
+    （D-2・#54）。
     """
     if not getattr(route, "requires_separation", False):
         return None
@@ -284,7 +300,9 @@ def _run_routes_on_file(
             continue
         preprocessing = _preprocessing_provenance(route)
         try:
-            observation = observe_via_route(audio_path, route)
+            observation, route_provenance = observe_via_route_with_provenance(
+                audio_path, route
+            )
         except LearnedModelUnavailable as exc:
             unavailable_row: Dict[str, Any] = {
                 "route": route.name,
@@ -304,9 +322,10 @@ def _run_routes_on_file(
         reference_notes = None
         assist_status = None
         assist_source_model = None
+        assist_provenance: Dict[str, Any] = {}
         if route.assist:
             try:
-                reference_notes, assist_source_model = observe_assist_notes(
+                reference_notes, assist_source_model, assist_provenance = observe_assist_notes(
                     audio_path, route, thresholds
                 )
                 assist_status = "measured"
@@ -325,6 +344,21 @@ def _run_routes_on_file(
             "source_model": observation.source_model,
             "extractor_version": _extractor_version(route.extractor),
         }
+        # 実測 pin（D-2）: 分離が実際に走った行には stem/weights hash が付く。
+        # 学習抽出器（CREPE/basic-pitch）と Melodia の実装バイナリ指紋は
+        # extractor_weights_* として行へ載る（pyin は重みなしで無記入）。
+        emitted_preprocessing = route_provenance.get("preprocessing")
+        if emitted_preprocessing:
+            preprocessing = {**(preprocessing or {}), **emitted_preprocessing}
+        for key in (
+            "extractor_weights_sha256",
+            "extractor_weights_kind",
+            "extractor_weights_files",
+            "extractor_code_sha256",
+            "extractor_code_packages",
+        ):
+            if key in route_provenance:
+                row[key] = route_provenance[key]
         if preprocessing is not None:
             row["preprocessing"] = preprocessing
         if route.assist:
@@ -332,6 +366,18 @@ def _run_routes_on_file(
             row["assist_status"] = assist_status
             row["assist_source_model"] = assist_source_model
             row["assist_extractor_version"] = _extractor_version(route.assist)
+            # assist のモデル artifact 指紋（#217）。cross_extractor_agreement は assist の
+            # モデル入力に依存する gate metric なので、主抽出器と同様に pin する（同一
+            # package version でも別ビルド/重みなら別 run）。
+            for key in (
+                "extractor_weights_sha256",
+                "extractor_weights_kind",
+                "extractor_weights_files",
+                "extractor_code_sha256",
+                "extractor_code_packages",
+            ):
+                if key in assist_provenance:
+                    row[f"assist_{key}"] = assist_provenance[key]
         rows.append(row)
     return rows
 
@@ -339,6 +385,10 @@ def _run_routes_on_file(
 def run_synthetic(
     thresholds: "ObservabilityThresholds | None" = None,
 ) -> Dict[str, Any]:
+    # 推論パッケージのコード pin を**最初に**確定する（#217）。`_generator_code_sha256()`
+    # の閉包探索が optional runtime（demucs 等）を import して cache する前に digest を
+    # 固定しないと、「cache 済みの旧コードが推論し hash は新ファイルを見る」窓が残る。
+    bind_inference_code_pins()
     specs = load_specs()
     # registry を single read（bytes→hash→parse）。thresholds も fixture metadata も
     # この同じ read から作り、registry_sha256 を report に pin する。
@@ -441,6 +491,8 @@ def run_external(
     # JSON を parse する。別々に open すると、pin する manifest_sha256 と実際に
     # entries を供給した manifest がズレる TOCTOU が残る（Codex 指摘。audio bytes
     # の凍結と同型）。
+    # route を回す前・generator digest を採る前にコード pin を確定する（#217）。
+    bind_inference_code_pins()
     manifest_bytes = Path(manifest_path).read_bytes()
     manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
     # report と対称に、manifest の重複 object キー（同一 entry 内の二重 input_kind 等で
@@ -569,6 +621,132 @@ def _is_sha256(value: Any) -> bool:
     return isinstance(value, str) and bool(_SHA256_RE.fullmatch(value))
 
 
+# registry.provenance.model_weights のキー ↔ 行の pin フィールドの対応（#217）。
+# registry に **記録済み**（非 null）の重み pin があるなら、scoring 対象の report が
+# その model 入力で測られたことを要求する（記録が report に接続していなければ、dated
+# registry pin は飾りになる）。null = 未記録なので要求しない（slow-lane の記録前は
+# 従来どおり進める。プレースホルダ文字列は下の `_registry_weight_pin` が弾く）。
+_REGISTRY_SEPARATION_WEIGHT_KEY = "demucs"
+_REGISTRY_WEIGHT_KEY_BY_EXTRACTOR: Dict[str, str] = {
+    "crepe": "crepe",
+    "melodia": "essentia_melodia",
+    "basic_pitch": "basic_pitch",
+}
+
+
+def _registry_weight_pin(registry: Dict[str, Any], key: str) -> "str | None":
+    """registry に記録された model 重み pin（未記録なら None・不正値は fail-closed）。
+
+    `provenance.model_weights.<key>.sha256` を読む。null（未記録）は None を返し、
+    要求を課さない。非 null なのに真の sha256 でない（`"TBD"` 等のプレースホルダや
+    旧形式の自由文）場合は、記録済みと誤認させないため `ValueError`（#61 と同型）。
+    """
+    entry = (registry.get("provenance") or {}).get("model_weights", {}).get(key)
+    if entry is None:
+        return None
+    if not isinstance(entry, dict):
+        raise ValueError(
+            f"evaluate_m1_real_go_bar: registry provenance.model_weights.{key} は "
+            "role/source/version/sha256/license の mapping でなければならない "
+            f"(got {type(entry).__name__}; fail-closed)"
+        )
+    recorded = entry.get("sha256")
+    if recorded is None:
+        return None
+    if not _is_sha256(recorded):
+        raise ValueError(
+            f"evaluate_m1_real_go_bar: registry provenance.model_weights.{key}.sha256 "
+            f"{recorded!r} は真の sha256（64 桁 hex）でない; プレースホルダを記録済み pin と "
+            "見なさない (fail-closed・#61)"
+        )
+    return recorded
+
+
+def _registry_code_pin(registry: Dict[str, Any], key: str) -> "str | None":
+    """registry に記録された**推論コード**の hash（未記録なら None・不正値は fail-closed）。"""
+    entry = (registry.get("provenance") or {}).get("model_weights", {}).get(key)
+    if not isinstance(entry, dict):
+        return None  # 型不正は `_registry_weight_pin` 側が fail-closed で弾く
+    recorded = entry.get("code_sha256")
+    if recorded is None:
+        return None
+    if not _is_sha256(recorded):
+        raise ValueError(
+            f"evaluate_m1_real_go_bar: registry provenance.model_weights.{key}.code_sha256 "
+            f"{recorded!r} は真の sha256（64 桁 hex）でない; プレースホルダ pin を受理しない "
+            "(fail-closed・#61)"
+        )
+    return recorded
+
+
+def _registry_weight_version(registry: Dict[str, Any], key: str) -> "str | None":
+    """registry に記録された実装バージョン（未記録なら None・不正型は fail-closed）。
+
+    重み bytes が同一でも実装（demucs / crepe / essentia のリリース）が違えば結果は
+    変わりうるので、`version` も記録されているなら pin として扱う（#217）。
+    """
+    entry = (registry.get("provenance") or {}).get("model_weights", {}).get(key)
+    if not isinstance(entry, dict):
+        return None  # 型不正は `_registry_weight_pin` 側が fail-closed で弾く
+    recorded = entry.get("version")
+    if recorded is None:
+        return None
+    if not isinstance(recorded, str) or not recorded:
+        raise ValueError(
+            f"evaluate_m1_real_go_bar: registry provenance.model_weights.{key}.version "
+            f"{recorded!r} は非空文字列でなければならない (fail-closed)"
+        )
+    return recorded
+
+
+def _require_recorded_weight_pin(
+    *,
+    registry: Dict[str, Any],
+    registry_key: str,
+    row_pin: Any,
+    field: str,
+    fixture_id: str,
+    route: str,
+    idx: int,
+    row_version: Any = None,
+    version_field: "str | None" = None,
+    row_code: Any = None,
+    code_field: "str | None" = None,
+) -> None:
+    """registry 記録済みの重み pin / version と行の値が一致することを要求する（#217）。
+
+    重み hash は「同じ bytes か」を、version は「同じ実装リリースか」を保証する。
+    片方だけでは、同一 bytes を別リリースが読んだ run（version は repeats 間で一致
+    しさえすれば通ってしまう）を registry の dated 記録と結びつけられない。
+    """
+    recorded = _registry_weight_pin(registry, registry_key)
+    if recorded is not None and row_pin != recorded:
+        raise ValueError(
+            f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} in "
+            f"reports[{idx}] {field}={row_pin!r} != registry provenance.model_weights."
+            f"{registry_key}.sha256 {recorded!r}; 記録済みの model 入力と別の重みで測った "
+            "report に Go を出さない (fail-closed)"
+        )
+    if version_field is None:
+        return
+    recorded_code = _registry_code_pin(registry, registry_key)
+    if recorded_code is not None and row_code != recorded_code:
+        raise ValueError(
+            f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} in "
+            f"reports[{idx}] {code_field}={row_code!r} != registry "
+            f"provenance.model_weights.{registry_key}.code_sha256 {recorded_code!r}; "
+            "記録済みの推論コードと別の実装で測った report に Go を出さない (fail-closed)"
+        )
+    recorded_version = _registry_weight_version(registry, registry_key)
+    if recorded_version is not None and row_version != recorded_version:
+        raise ValueError(
+            f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} in "
+            f"reports[{idx}] {version_field}={row_version!r} != registry "
+            f"provenance.model_weights.{registry_key}.version {recorded_version!r}; "
+            "記録済みの実装リリースと別の版で測った report に Go を出さない (fail-closed)"
+        )
+
+
 def _route_provenance(row: Dict[str, Any]) -> "tuple":
     """route 行の model provenance 署名（source_model / extractor_version / 重み / 分離器）を返す。
 
@@ -579,8 +757,10 @@ def _route_provenance(row: Dict[str, Any]) -> "tuple":
     分離器の重み hash（separation_weights_sha256）と vocals stem hash（stem_sha256）まで
     見る。同様に学習抽出器（CREPE/basic-pitch/Melodia）の **重み hash**
     （extractor_weights_sha256）も署名に含め、同一 package version でも別 bundled/local
-    weights なら別 run として弾く（#59）。これらの hash の **emit** は実モデルを要する
-    machine-dependent な slow-lane 課題で現状 harness は未出力（§6.5）。
+    weights なら別 run として弾く（#59）。assist 抽出器の artifact 指紋
+    （assist_extractor_weights_sha256）も同様に含める — cross_extractor_agreement は
+    assist のモデル入力に依存する gate metric だから（#217）。これらの hash は harness が
+    実測時に emit する（値そのものは実モデルを要する machine-dependent・§6.5）。
     """
     preprocessing = row.get("preprocessing")
     if isinstance(preprocessing, dict):
@@ -590,15 +770,24 @@ def _route_provenance(row: Dict[str, Any]) -> "tuple":
             preprocessing.get("separation_version"),
             preprocessing.get("separation_weights_sha256"),
             preprocessing.get("stem_sha256"),
+            preprocessing.get("separation_code_sha256"),
         )
     else:
-        separation = (preprocessing, None, None, None, None)
+        separation = (preprocessing, None, None, None, None, None)
     return (
         row.get("source_model"),
         row.get("extractor_version"),
         row.get("extractor_weights_sha256"),
         row.get("assist_source_model"),
         row.get("assist_extractor_version"),
+        # assist のモデル artifact 指紋も署名に含める（#217）: cross_extractor_agreement は
+        # assist のモデル入力に依存する gate metric なので、同一 assist source_model/version
+        # でも別ビルド/重みなら同一 model stack の repeats と見なせない。
+        row.get("assist_extractor_weights_sha256"),
+        # 推論した third-party コードの hash も署名に含める（#217）。同一 version の
+        # patch 済みパッケージは weights/version 比較を素通りするため。
+        row.get("extractor_code_sha256"),
+        row.get("assist_extractor_code_sha256"),
         separation,
     )
 
@@ -1259,6 +1448,33 @@ def evaluate_m1_real_go_bar(
                     and not _is_sha256(row.get("extractor_weights_sha256"))
                 ):
                     missing_fields.append("extractor_weights_sha256")
+                # assist が**実際に走った**行（assist_status=="measured"）は、その
+                # cross_extractor_agreement が assist のモデル入力に依存する。凍結 route 定義の
+                # assist が学習/バイナリ artifact を持つなら assist 側の hash も必須化する
+                # （主抽出器の #59 と対称・#217）。assist が unavailable の行は agreement が
+                # null なので要求しない。
+                if (
+                    route_def is not None
+                    and route_def.assist in _LEARNED_EXTRACTORS
+                    and row.get("assist_status") == "measured"
+                    and not _is_sha256(row.get("assist_extractor_weights_sha256"))
+                ):
+                    missing_fields.append("assist_extractor_weights_sha256")
+                # 推論コード pin（#217）。ハーネスは measured 行に必ず emit する
+                # （抽出器自身 + backend の閉包。pyin も librosa を pin）。registry の
+                # code_sha256 が未記録の間これを要求しないと、手書き report が
+                # extractor_code_sha256 等を削っても `_route_provenance` は「両方欠落 =
+                # 一致」として通し、推論コード未 pin のまま go を publish できてしまう。
+                if not _is_sha256(row.get("extractor_code_sha256")):
+                    missing_fields.append("extractor_code_sha256")
+                if row.get("assist_status") == "measured" and not _is_sha256(
+                    row.get("assist_extractor_code_sha256")
+                ):
+                    missing_fields.append("assist_extractor_code_sha256")
+                if route in separation_routes and not _is_sha256(
+                    (row.get("preprocessing") or {}).get("separation_code_sha256")
+                ):
+                    missing_fields.append("preprocessing.separation_code_sha256")
                 if missing_fields:
                     raise ValueError(
                         f"evaluate_m1_real_go_bar: fixture {fixture_id!r} route {route!r} in "
@@ -1266,6 +1482,63 @@ def evaluate_m1_real_go_bar(
                         "provenance を pin しない report では同一 model stack の n>=2 を証明できない "
                         "(fail-closed)"
                     )
+                # registry に**記録済み**の重み pin があるなら、行の pin と一致することを
+                # 要求する（#217）。一致要求がないと、registry が主張する model 入力とは
+                # 別の（内部的には整合した）重みで測った 2 run が go を publish でき、dated
+                # registry pin が scoring に接続しない。未記録（null）なら要求しない。
+                if route_def is not None:
+                    if route_def.requires_separation:
+                        _require_recorded_weight_pin(
+                            registry=registry,
+                            registry_key=_REGISTRY_SEPARATION_WEIGHT_KEY,
+                            row_pin=(row.get("preprocessing") or {}).get(
+                                "separation_weights_sha256"
+                            ),
+                            field="preprocessing.separation_weights_sha256",
+                            fixture_id=fixture_id,
+                            route=route,
+                            idx=idx,
+                            row_version=(row.get("preprocessing") or {}).get(
+                                "separation_version"
+                            ),
+                            version_field="preprocessing.separation_version",
+                            row_code=(row.get("preprocessing") or {}).get(
+                                "separation_code_sha256"
+                            ),
+                            code_field="preprocessing.separation_code_sha256",
+                        )
+                    extractor_key = _REGISTRY_WEIGHT_KEY_BY_EXTRACTOR.get(
+                        route_def.extractor
+                    )
+                    if extractor_key is not None:
+                        _require_recorded_weight_pin(
+                            registry=registry,
+                            registry_key=extractor_key,
+                            row_pin=row.get("extractor_weights_sha256"),
+                            field="extractor_weights_sha256",
+                            fixture_id=fixture_id,
+                            route=route,
+                            idx=idx,
+                            row_version=row.get("extractor_version"),
+                            version_field="extractor_version",
+                            row_code=row.get("extractor_code_sha256"),
+                            code_field="extractor_code_sha256",
+                        )
+                    assist_key = _REGISTRY_WEIGHT_KEY_BY_EXTRACTOR.get(route_def.assist)
+                    if assist_key is not None and row.get("assist_status") == "measured":
+                        _require_recorded_weight_pin(
+                            registry=registry,
+                            registry_key=assist_key,
+                            row_pin=row.get("assist_extractor_weights_sha256"),
+                            field="assist_extractor_weights_sha256",
+                            fixture_id=fixture_id,
+                            route=route,
+                            idx=idx,
+                            row_version=row.get("assist_extractor_version"),
+                            version_field="assist_extractor_version",
+                            row_code=row.get("assist_extractor_code_sha256"),
+                            code_field="assist_extractor_code_sha256",
+                        )
                 # gate outcome は assess_observability(...).status 由来。measured 行は
                 # その根拠 report payload を持ち、report.status が outcome と一致しなければ
                 # ならない。outcome だけ insufficient→sufficient に改竄しても metrics は

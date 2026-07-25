@@ -11,7 +11,7 @@ Demucs 分離は optional extra 越しの learned adapter へ遅延ディスパ�
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Tuple
 
 import numpy as np
 
@@ -31,6 +31,7 @@ __all__ = [
     "extract_melodia_observation",
     "extract_basic_pitch_observation",
     "observe_via_route",
+    "observe_via_route_with_provenance",
     "observe_assist_notes",
 ]
 
@@ -169,33 +170,328 @@ def extract_basic_pitch_observation(
 
 
 def _audio_duration_sec(audio_path: str) -> "float | None":
-    """音声ファイルの実尺（秒）を安価に読む。失敗時は None。"""
-    try:
-        import librosa
+    """音声ファイルの実尺（秒）を安価に読む。失敗時は None。
 
-        return round(float(librosa.get_duration(path=audio_path)), 4)
+    尺は note-only 経路の被覆分母（＝ゲート指標）なので、`librosa.get_duration` が
+    audioread（未 pin の FFmpeg/GStreamer）へフォールバックした値は採らない。
+    pin 済みの soundfile スタックで読めなければ None を返す（#217）。
+    """
+    try:
+        import soundfile as sf
+
+        info = sf.info(audio_path)
+        return round(float(info.frames) / float(info.samplerate), 4)
     except Exception:
         return None
 
 
 def _load_route_waveform(
-    audio_path: str, route: "MelodyRoute"
+    audio_path: str,
+    route: "MelodyRoute",
+    provenance: "Dict[str, Any] | None" = None,
 ) -> Tuple[np.ndarray, int]:
     """経路の前処理に従い波形を用意する（Demucs 分離 or 素の decode）。
 
     ``requires_separation`` の経路は learned adapter の
-    `isolate_vocals` に委譲し、未導入なら `LearnedModelUnavailable` が伝播する。
+    `isolate_vocals_with_provenance` に委譲し、未導入・**重み未取得**なら
+    `LearnedModelUnavailable` が伝播する（D-1 の重みプロビジョニング・ゲート）。
+
+    `provenance` dict を渡すと、分離経路では前処理成果物の指紋
+    （`stem_sha256` / `separation_weights_sha256`）を ``provenance["preprocessing"]``
+    に書き込む（D-2）。**波形本体は載せない** — 出すのは hash だけ。
     """
     if route.requires_separation:
-        from svp_rpe.rpe.learned.source_separation_adapter import isolate_vocals
+        from svp_rpe.melody.provenance import separation_code_fingerprint
 
-        waveform, sample_rate = isolate_vocals(audio_path)
-        return np.asarray(waveform, dtype=np.float32), int(sample_rate)
+        # ★ demucs を **import する前に** コード pin を bind する（#217）。
+        # `source_separation_adapter` の import は `io.source_separator` 経由で
+        # `demucs.api` / `demucs.separate` を読み込み、プロセスに cache する。import
+        # 後に hash すると「cache 済みの旧コードが分離し、hash は新ファイルを見る」窓が
+        # 開く。`packages_code_sha256` は `find_spec` で**モジュールを実行せず**場所だけ
+        # 解決するので、この順序なら import より前に digest を確定できる。CLI 経路では
+        # `ffmpeg` / `ffprobe` の実行ファイルも同じ digest に畳む（#217）。
+        before_code, _ = separation_code_fingerprint()
+        _bind_code_pin("separation", before_code, required=True)
+
+        from svp_rpe.rpe.learned.source_separation_adapter import (  # noqa: E402
+            isolate_vocals_with_provenance,
+        )
+
+        separation = isolate_vocals_with_provenance(audio_path)
+        # 分離**後**に memo 迂回で再 hash して一致を確認する。
+        after_code, covered_code = separation_code_fingerprint(use_cache=False)
+        if before_code != after_code:
+            from svp_rpe.rpe.learned import LearnedModelUnavailable
+
+            raise LearnedModelUnavailable(
+                "separation inference code changed during separation "
+                f"(before={before_code}, after={after_code}); stem を生んだコードと pin が "
+                "対応しないため unavailable として扱う"
+            )
+        if provenance is not None:
+            provenance["preprocessing"] = {
+                "preprocessing": route.preprocessing,
+                "separation_model": separation.model,
+                "separation_version": separation.version,
+                "separation_weights_sha256": separation.weights_sha256,
+                "separation_weights_files": list(separation.weights_filenames),
+                "stem_sha256": separation.stem_sha256,
+            }
+            # 分離も backend（torch）まで含めて pin する（#217）。値は分離前に採り、
+            # 分離後の再検証を通過した digest（= stem を生んだコード）。
+            provenance["preprocessing"]["separation_code_sha256"] = after_code
+            provenance["preprocessing"]["separation_code_packages"] = list(covered_code)
+        return (
+            np.asarray(separation.waveform, dtype=np.float32),
+            int(separation.sample_rate),
+        )
 
     import librosa
 
+    _require_soundfile_decodable(audio_path)
     waveform, sample_rate = librosa.load(audio_path, sr=None, mono=True)
     return np.asarray(waveform, dtype=np.float32), int(sample_rate)
+
+
+def _require_soundfile_decodable(audio_path: str) -> None:
+    """pin 済みの soundfile スタックで読める入力だけを通す（#217）。
+
+    `librosa.load` は soundfile が開けない入力（AAC/M4A、codec 非対応ビルドの MP3 等）
+    で **audioread へフォールバック**し、その裏の FFmpeg / GStreamer がデコードする。
+    その実装はコード pin の閉包に入っていないので、別ビルドのデコーダがサンプルを
+    変えても pin は動かない。入口で弾いて「pin が覆うデコーダで読めた入力」だけを
+    観測対象にする（fail-closed）。
+    """
+    import soundfile as sf
+
+    try:
+        sf.info(audio_path)
+    except Exception as exc:
+        from svp_rpe.rpe.learned import LearnedModelUnavailable
+
+        raise LearnedModelUnavailable(
+            f"{audio_path!r} is not decodable by the pinned soundfile stack "
+            f"({type(exc).__name__}: {exc}); audioread フォールバック（未 pin の "
+            "FFmpeg/GStreamer）でデコードしないため unavailable として扱う"
+        ) from exc
+
+
+def _extractor_fingerprint(extractor: str, *, use_cache: bool = True, require: bool = False):
+    """`extractor` のモデル artifact 指紋（推論はしない）。取れなければ None。
+
+    `require=True` は**推論前**の解決に使う: artifact を持つ抽出器
+    （CREPE / basic-pitch / Melodia）で指紋が採れないのは provisioning 失敗なので、
+    `LearnedModelUnavailable` として当該 route だけを `unavailable` に落とす
+    （そのまま推論へ進むと、生の I/O 例外で run 全体が落ちるか、評価器が要求する
+    hash を欠いた measured 行が出て Go-bar 評価が丸ごと fail-closed する・#217）。
+    """
+    from svp_rpe.melody.provenance import (
+        extractor_weights_fingerprint,
+        require_extractor_weights_fingerprint,
+    )
+
+    if require:
+        return require_extractor_weights_fingerprint(extractor, use_cache=use_cache)
+    return extractor_weights_fingerprint(extractor, use_cache=use_cache)
+
+
+def _bind_load_time_pin(extractor: str, before) -> None:
+    """推論**前**に load-time pin を確定（初回）または照合する（#217）。
+
+    pin を推論後に初期化すると、「このプロセスで既に CREPE がロード済み → その後
+    artifact が差し替わった」場合に、**差し替え後の digest を初回 pin として記録**して
+    しまい、旧 in-memory モデルが生んだ観測に新しい pin が付く。ロード境界に最も近い
+    ——推論が始まる直前——で bind し、食い違えば**推論そのものを行わない**。
+
+    残る限界（docs §6.4 に明記）: このプロセスで **本経路を通らずに** モデルが
+    ロードされていた場合、そのロード時点の digest は原理的に知りようがない。ハーネスは
+    抽出器を本経路からしか呼ばず、slow-lane は 1 run = 1 プロセスで回すことで満たす。
+    """
+    from svp_rpe.melody.provenance import record_load_time_pin
+    from svp_rpe.rpe.learned import LearnedModelUnavailable
+
+    if before is None:
+        return
+    pinned = record_load_time_pin(extractor, before.sha256)
+    if pinned != before.sha256:
+        raise LearnedModelUnavailable(
+            f"{extractor} model artifact changed since it was first loaded in this process "
+            f"(load_time={pinned}, now={before.sha256}); ロード済みモデルが cache されている"
+            "場合、推論は旧 artifact のままでありうるため推論を行わない"
+        )
+
+
+def _extractor_code_fingerprint(extractor: str, *, use_cache: bool = True):
+    """推論を実行するパッケージ群（抽出器自身 + backend）のコード hash と被覆名。"""
+    from svp_rpe.melody.provenance import extractor_code_fingerprint
+
+    return extractor_code_fingerprint(extractor, use_cache=use_cache)
+
+
+def _code_pin_required(extractor: str) -> bool:
+    """`extractor` に推論を行うパッケージが定義されているか（= コード pin 必須か）。"""
+    from svp_rpe.melody.provenance import extractor_code_packages_for
+
+    return bool(extractor_code_packages_for(extractor))
+
+
+def _bind_code_pin(
+    extractor: str, before_code: "str | None", *, required: bool = False
+) -> None:
+    """推論**前**のコード hash をプロセス内 pin として確定 / 照合する（#217）。
+
+    import 済みモジュールはプロセスに cache されるため、途中でパッケージファイルが
+    差し替わっても**実行されるのは古いコード**でありうる。重み側の load-time pin と
+    同型に、推論前に bind して食い違えば推論を行わない。
+
+    `required=True`（実際に推論を行うパッケージがある経路）で digest を採れない場合
+    ——zip/namespace レイアウトや、ロード済みファイルが読めなくなった場合——は
+    `LearnedModelUnavailable` にする。評価器は registry の `code_sha256` が未記録の間は
+    コード hash を要求しないので、無記入のまま measured 行を出すと**推論コードが未 pin の
+    まま go を publish**できてしまう（Codex #217）。
+    """
+    from svp_rpe.melody.provenance import record_load_time_pin
+    from svp_rpe.rpe.learned import LearnedModelUnavailable
+
+    if before_code is None:
+        if required:
+            raise LearnedModelUnavailable(
+                f"{extractor} inference code could not be fingerprinted; "
+                "推論コードを pin できない経路で観測しないため unavailable として扱う"
+            )
+        return
+    pinned = record_load_time_pin(f"{extractor}:code", before_code)
+    if pinned != before_code:
+        raise LearnedModelUnavailable(
+            f"{extractor} inference code changed since it was first imported in this "
+            f"process (load_time={pinned}, now={before_code}); import 済みモジュールは "
+            "旧コードのままでありうるため推論を行わない"
+        )
+
+
+def _verify_and_record_extractor_code(
+    provenance: "Dict[str, Any]", extractor: str, before_code: "str | None"
+) -> None:
+    """推論前に採ったコード hash を推論後に再検証して記録する（TOCTOU・#217）。
+
+    重み hash と distribution version は「同じ bytes か / 同じリリースか」しか保証せず、
+    **同一 version のままローカルで patch された**パッケージ（`_generator_code_paths()`
+    は first-party しか含めない）は素通りする。実際に推論したコードも pin し、推論中の
+    差し替えは memo 迂回の再 hash で検出して `unavailable` に落とす。
+    """
+    from svp_rpe.rpe.learned import LearnedModelUnavailable
+
+    after_code, covered = _extractor_code_fingerprint(extractor, use_cache=False)
+    if before_code != after_code:
+        raise LearnedModelUnavailable(
+            f"{extractor} inference code changed during inference "
+            f"(before={before_code}, after={after_code}); 観測を生んだコードと pin が "
+            "対応しないため unavailable として扱う"
+        )
+    if after_code is None:
+        return
+    provenance["extractor_code_sha256"] = after_code
+    provenance["extractor_code_packages"] = list(covered)
+
+
+def _verify_and_record_extractor_weights(
+    provenance: "Dict[str, Any]", extractor: str, before
+) -> None:
+    """推論**前**に採った指紋 `before` を推論後に再検証して provenance へ書く。
+
+    推論中に別プロセスが重み/バイナリを差し替えると、推論後にだけ指紋を採る実装では
+    「観測を生んだ artifact」ではなく**差し替え後の bytes**を pin してしまい、2 repeats
+    が同じ（新しい）pin を共有したまま Go バーを満たしうる（Codex #217）。前後の指紋が
+    食い違えば観測を返さず `LearnedModelUnavailable` に落とす（route は unavailable と
+    して記録され run は完走する）。再検証は memo を迂回して実バイトを読む。
+    """
+    from svp_rpe.melody.provenance import load_time_pin
+    from svp_rpe.rpe.learned import LearnedModelUnavailable
+
+    after = _extractor_fingerprint(extractor, use_cache=False)
+    before_sha = before.sha256 if before is not None else None
+    after_sha = after.sha256 if after is not None else None
+    if before_sha != after_sha:
+        raise LearnedModelUnavailable(
+            f"{extractor} model artifact changed during inference "
+            f"(before={before_sha}, after={after_sha}); 観測を生んだ artifact と pin が "
+            "対応しないため unavailable として扱う"
+            "（モデルの provisioning/更新と実測 run を同時に走らせないこと）"
+        )
+    if after is None:
+        return
+    # プロセス内 load-time pin との照合（#217）。pin は推論**前**に `_bind_load_time_pin`
+    # で確定済みなので、ここは「推論後もその pin と一致しているか」の最終確認に徹する
+    # （推論後に初期化すると、旧 in-memory モデルが生んだ観測へ新 digest を pin しうる）。
+    pinned = load_time_pin(extractor)
+    if pinned is not None and pinned != after.sha256:
+        raise LearnedModelUnavailable(
+            f"{extractor} model artifact changed since it was first loaded in this process "
+            f"(load_time={pinned}, now={after.sha256}); ロード済みモデルが cache されている"
+            "場合、推論は旧 artifact のままでありうるため pin を publish しない"
+        )
+    provenance["extractor_weights_sha256"] = after.sha256
+    provenance["extractor_weights_kind"] = after.kind
+    provenance["extractor_weights_files"] = list(after.files)
+
+
+def observe_via_route_with_provenance(
+    audio_path: str, route: "MelodyRoute"
+) -> "Tuple[MelodyObservation, Dict[str, Any]]":
+    """`observe_via_route` に加え、観測が読んだ入力の content pin を返す（D-2）。
+
+    返す provenance dict（空もありうる）:
+
+    - ``preprocessing``: 分離経路のみ。``stem_sha256`` /
+      ``separation_weights_sha256`` / model / version / 重みファイル名。
+    - ``extractor_weights_sha256`` / ``extractor_weights_kind`` /
+      ``extractor_weights_files``: 学習抽出器（CREPE / basic-pitch）と
+      実装バイナリ pin（Melodia）。pyin は重みなしのため無記入。
+
+    評価器（`evaluate_m1_real_go_bar`）はこれらの pin を measured 行に必須とする
+    （#54 / #59）ので、この emit が無いと分離経路・学習抽出器経路は Go 候補に
+    なれない。
+    """
+    provenance: Dict[str, Any] = {}
+    if not route.applies:
+        return MelodyObservation(route=route.name, source_model="none"), provenance
+
+    # basic-pitch は自前で path を読む（前処理は経路上 none のみを想定）。
+    if route.extractor == "basic_pitch":
+        # コード pin を**先に** bind する（#217）: artifact 解決は third-party を
+        # import して cache するため、後から hash すると「cache 済みの旧コードが推論し、
+        # hash は新ファイルを見る」窓が開く。`find_spec` 経由の code 解決は import を
+        # 起こさないので、この順序なら import より前に digest を固定できる。
+        before_code, _ = _extractor_code_fingerprint(route.extractor)
+        _bind_code_pin(route.extractor, before_code, required=_code_pin_required(route.extractor))
+        before = _extractor_fingerprint(route.extractor, require=True)
+        _bind_load_time_pin(route.extractor, before)
+        observation = extract_basic_pitch_observation(audio_path, route=route.name)
+        _verify_and_record_extractor_weights(provenance, route.extractor, before)
+        _verify_and_record_extractor_code(provenance, route.extractor, before_code)
+        return observation, provenance
+
+    waveform, sample_rate = _load_route_waveform(audio_path, route, provenance)
+    # 推論**前**に artifact を pin（load-time pin の bind 込み）し、推論後に再検証する
+    # （TOCTOU・#217）。bind が食い違えば推論そのものを行わない。
+    # コード pin を artifact 解決（import を起こす）より**前**に bind する（#217）。
+    before_code, _ = _extractor_code_fingerprint(route.extractor)
+    _bind_code_pin(route.extractor, before_code, required=_code_pin_required(route.extractor))
+    before = _extractor_fingerprint(route.extractor, require=True)
+    _bind_load_time_pin(route.extractor, before)
+    if route.extractor == "pyin":
+        observation = extract_pyin_observation(waveform, sample_rate, route=route.name)
+    elif route.extractor == "crepe":
+        observation = extract_crepe_observation(waveform, sample_rate, route=route.name)
+    elif route.extractor == "melodia":
+        observation = extract_melodia_observation(waveform, sample_rate, route=route.name)
+    else:
+        raise ValueError(
+            f"unsupported extractor for route {route.name!r}: {route.extractor!r}"
+        )
+    _verify_and_record_extractor_weights(provenance, route.extractor, before)
+    _verify_and_record_extractor_code(provenance, route.extractor, before_code)
+    return observation, provenance
 
 
 def observe_via_route(audio_path: str, route: "MelodyRoute") -> MelodyObservation:
@@ -203,24 +499,12 @@ def observe_via_route(audio_path: str, route: "MelodyRoute") -> MelodyObservatio
 
     ``applies=False`` の経路（旋律不在入力）は抽出器を一切呼ばず、空観測を
     返す（呼び出し側で `not_observed` へ落とす）。それ以外は前処理（必要なら
-    Demucs 分離）→ 抽出器ディスパッチ。optional 依存が未導入なら
-    `LearnedModelUnavailable` が伝播する（slow-lane 隔離）。
+    Demucs 分離）→ 抽出器ディスパッチ。optional 依存が未導入・分離器の重みが
+    未取得なら `LearnedModelUnavailable` が伝播する（slow-lane 隔離・D-1）。
+
+    provenance を要らない呼び出し側向けの薄いラッパ。
     """
-    if not route.applies:
-        return MelodyObservation(route=route.name, source_model="none")
-
-    # basic-pitch は自前で path を読む（前処理は経路上 none のみを想定）。
-    if route.extractor == "basic_pitch":
-        return extract_basic_pitch_observation(audio_path, route=route.name)
-
-    waveform, sample_rate = _load_route_waveform(audio_path, route)
-    if route.extractor == "pyin":
-        return extract_pyin_observation(waveform, sample_rate, route=route.name)
-    if route.extractor == "crepe":
-        return extract_crepe_observation(waveform, sample_rate, route=route.name)
-    if route.extractor == "melodia":
-        return extract_melodia_observation(waveform, sample_rate, route=route.name)
-    raise ValueError(f"unsupported extractor for route {route.name!r}: {route.extractor!r}")
+    return observe_via_route_with_provenance(audio_path, route)[0]
 
 
 def _observation_notes(
@@ -239,20 +523,24 @@ def _observation_notes(
 
 def observe_assist_notes(
     audio_path: str, route: "MelodyRoute", thresholds: ObservabilityThresholds
-) -> "tuple[list, str | None]":
-    """route の assist 抽出器を同一音声（同一前処理）に走らせ (notes, source_model)。
+) -> "tuple[list, str | None, Dict[str, Any]]":
+    """route の assist 抽出器を同一音声（同一前処理）に走らせ (notes, source_model, provenance)。
 
     full_mix の basic-pitch × Melodia のように、主抽出器と別の補助抽出器の
     cross_extractor_agreement を実測するための reference notes と、その補助抽出器の
-    provenance（source_model）を返す（設計 §4.2「一致時のみ」）。assist 抽出器が
-    未導入なら `LearnedModelUnavailable` が伝播し、呼び出し側で agreement を null に
-    落とす。
+    provenance（source_model + モデル artifact の指紋）を返す（設計 §4.2「一致時のみ」）。
+    assist 抽出器が未導入なら `LearnedModelUnavailable` が伝播し、呼び出し側で
+    agreement を null に落とす。
+
+    `cross_extractor_agreement` は **assist 抽出器のモデル入力に依存する gate metric**
+    なので、主抽出器と同様に重み/実装バイナリを pin する（別 Essentia ビルドで測った
+    run を同一 model stack と誤認しない・Codex #217）。
 
     前処理は主経路と同一（`route.preprocessing`）を用いる — 分離が要る経路では
     同じ vocals stem 上で両抽出器を比較する。
     """
     if not route.assist:
-        return [], None
+        return [], None, {}
     from svp_rpe.melody.routing import MelodyRoute
 
     assist_route = MelodyRoute(
@@ -260,5 +548,13 @@ def observe_assist_notes(
         preprocessing=route.preprocessing,
         extractor=route.assist,
     )
-    assist_observation = observe_via_route(audio_path, assist_route)
-    return _observation_notes(assist_observation, thresholds), assist_observation.source_model
+    # assist 側も推論前後の指紋検証つき経路（`observe_via_route_with_provenance`）を
+    # 通す。検証済みの指紋がそのまま assist の pin になる（#217）。
+    assist_observation, assist_provenance = observe_via_route_with_provenance(
+        audio_path, assist_route
+    )
+    return (
+        _observation_notes(assist_observation, thresholds),
+        assist_observation.source_model,
+        assist_provenance,
+    )
