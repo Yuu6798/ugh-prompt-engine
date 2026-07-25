@@ -502,6 +502,90 @@ def _evaluator_code_sha256() -> str:
     return _generator_code_sha256()
 
 
+def _row_model_stack_signature(row: Dict[str, Any]) -> Tuple[Any, ...]:
+    """measured row の model stack 署名（`run_melody_observability._route_provenance` と同型）。
+
+    n>=2 の repeats を「同一実行スタック下の再現」と数える前に、抽出器・分離器の
+    model stack が同一であることを証明するために使う。同一 package version でも
+    別 bundled/local weights や patch 済みコードなら、別 stack の run であって
+    repeats ではない（#59/#217 と同じ規律）。
+    """
+    preprocessing = row.get("provenance_preprocessing")
+    if isinstance(preprocessing, dict):
+        separation: Tuple[Any, ...] = (
+            preprocessing.get("preprocessing"),
+            preprocessing.get("separation_model"),
+            preprocessing.get("separation_version"),
+            preprocessing.get("separation_weights_sha256"),
+            preprocessing.get("stem_sha256"),
+            preprocessing.get("separation_code_sha256"),
+        )
+    else:
+        separation = (preprocessing, None, None, None, None, None)
+    return (
+        row.get("source_model"),
+        row.get("provenance_extractor_version"),
+        row.get("provenance_extractor_weights_sha256"),
+        row.get("provenance_extractor_code_sha256"),
+        separation,
+    )
+
+
+def _require_homogeneous_model_stack(category: str, rows: List[Dict[str, Any]]) -> Tuple[Any, ...]:
+    """measured rows が完全な provenance pin を持ち、repeats 間で同一 stack か検証する。
+
+    設計 §4 の `repeats_min` は「同じ実行スタックで測り直しても同じ結論になる」ことの
+    証拠なので、別の CREPE 重み・別ビルドの推論コードで測った 2 本を repeats として
+    数えると、その pass は再現性を示していない（Codex P1 指摘）。`generator_code_sha256`
+    はハーネス自身の digest なので、下流の学習モデル stack の差はそこに現れない
+    ——ゆえに row が emit した抽出器/分離器の pin を別途突き合わせる。
+    """
+    for idx, row in enumerate(rows):
+        for key in ("provenance_extractor_weights_sha256", "provenance_extractor_code_sha256"):
+            value = row.get(key)
+            if not value or not isinstance(value, str):
+                raise ValueError(
+                    f"evaluate_m2_bars: category {category!r} rows[{idx}] は measured なのに "
+                    f"{key} を欠く; 学習モデル入力を pin できない row を repeats として "
+                    "数えない (fail-closed)"
+                )
+    signatures = [_row_model_stack_signature(row) for row in rows]
+    if len({json.dumps(sig, sort_keys=True, default=str) for sig in signatures}) > 1:
+        raise ValueError(
+            f"evaluate_m2_bars: category {category!r} の rows が別 model stack で測られている "
+            f"（extractor/分離器の重み・コード・version 署名が repeats 間で不一致）; "
+            "同一 stack 下の再現でない run を repeats と見なさない (fail-closed)"
+        )
+    return signatures[0]
+
+
+def _require_frozen_tolerance(reports: List[Dict[str, Any]], bar_block: Dict[str, Any]) -> float:
+    """各 report の `tolerance_cents` が凍結値と厳密一致することを要求する（fail-closed）。
+
+    `run_accuracy` は診断用に `tolerance_cents` の override を受けるが、緩い許容幅で
+    測った row にバーを適用すると、**バーファイルを一切触らずに**「実測後にバーを
+    緩める」のと同じ結果が得られてしまう（例: 500 cent ずれた推定を 600 cent 許容で
+    測れば min_rpa を満たす）。`bars_sha256` は override では変わらないので、
+    ここで報告値そのものを突き合わせるのが唯一の関所になる（Codex P1 指摘・
+    設計 §4 の一方向規律）。
+    """
+    frozen = float(bar_block.get("tolerance_cents", DEFAULT_TOLERANCE_CENTS))
+    for idx, report in enumerate(reports):
+        reported = report.get("tolerance_cents")
+        if reported is None:
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{idx}] が tolerance_cents を欠く; "
+                "どの許容幅で測ったか不明な row にバーを適用しない (fail-closed)"
+            )
+        if float(reported) != frozen:
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{idx}] の tolerance_cents {reported!r} が凍結値 "
+                f"{frozen} と不一致; 別の許容幅で測った row に凍結バーを適用しない "
+                "（バーファイルを触らずにバーを緩める経路を塞ぐ・fail-closed）"
+            )
+    return frozen
+
+
 def _require_matching_generator_code(reports: List[Dict[str, Any]]) -> str:
     """report の `generator_code_sha256` を 3 段で照合する（fail-closed）。
 
@@ -547,6 +631,7 @@ def evaluate_m2_bars(
     bars: Dict[str, Any],
     *,
     bars_sha256: str,
+    report_pins: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """n>=`repeats_min` の run report に凍結バーを機械適用する（設計 §4/§6）。
 
@@ -563,6 +648,12 @@ def evaluate_m2_bars(
     - S_direct: 全 measured repeats が `min_rpa`/`max_vfa` を満たせば pass。
       1 本でも `unavailable` なら（repeats_min 未達として）verdict は出さず
       `status="insufficient_repeats"`。
+    - 各 report の `tolerance_cents` は凍結値と厳密一致でなければならない
+      （`_require_frozen_tolerance`）。
+    - measured rows は抽出器/分離器の pin を完備し、repeats 間で同一 model stack で
+      なければならない（`_require_homogeneous_model_stack`）。
+    - `report_pins` を渡すと、verdict が消費した report ファイルの sha256 を記録する
+      （後から report が編集・差し替えられたことを検出できるようにする）。
     - S_fullstack: バーが空（`{}`）なので判定せず、`status="diagnostic_only"`
       として計測値のみ記録する（設計 §8: S_fullstack の低値を理由に crepe を
       責めない）。
@@ -572,6 +663,11 @@ def evaluate_m2_bars(
 
     if not reports:
         raise ValueError("evaluate_m2_bars: reports must be non-empty")
+    if report_pins is not None and len(report_pins) != len(reports):
+        raise ValueError(
+            f"evaluate_m2_bars: report_pins 件数 {len(report_pins)} が reports 件数 "
+            f"{len(reports)} と一致しない (fail-closed)"
+        )
 
     run_ids: List[str] = []
     for idx, report in enumerate(reports):
@@ -597,17 +693,21 @@ def evaluate_m2_bars(
         )
 
     generator_code_sha256 = _require_matching_generator_code(reports)
+    tolerance_cents = _require_frozen_tolerance(reports, bar_block)
 
     verdict: Dict[str, Any] = {
         "verdict_recorded_utc": _utc_now(),
         "bars_sha256": bars_sha256,
         "generator_code_sha256": generator_code_sha256,
         "evaluator_code_sha256": _evaluator_code_sha256(),
+        "tolerance_cents": tolerance_cents,
         "n_reports": len(reports),
         "run_ids": sorted(run_ids),
         "repeats_min": repeats_min,
         "categories": {},
     }
+    if report_pins is not None:
+        verdict["report_pins"] = report_pins
 
     all_categories = sorted({cat for report in reports for cat in report.get("categories", {})})
     for category in all_categories:
@@ -619,6 +719,10 @@ def evaluate_m2_bars(
             cat_result["status"] = "insufficient_repeats"
             verdict["categories"][category] = cat_result
             continue
+
+        # repeats として数える前に、同一 model stack で測られたことを証明する
+        # （別重み/別ビルドの 2 本は「再現」ではない・Codex P1）。
+        _require_homogeneous_model_stack(category, rows)
 
         bar = bar_block.get(category, {})
         metrics_list = [row["metrics"] for row in rows]
@@ -674,18 +778,47 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.evaluate:
+        # `--out` が入力（report / bars / specs）を指していないか **書く前に** 確認する。
+        # 上書きすると verdict の証拠そのもの（repeat evidence・凍結設定）が消え、
+        # report_pins の hash も実体と食い違う（Codex P2 指摘）。
+        protected = {Path(p).resolve() for p in args.evaluate}
+        protected.add(Path(args.bars).resolve())
+        protected.add(Path(args.specs).resolve())
+        if Path(args.out).resolve() in protected:
+            raise SystemExit(
+                f"--out {args.out} は評価入力（report / bars / specs）と同じパスを指している; "
+                "provenance 入力を verdict で上書きしない (fail-closed)"
+            )
+
         reports = []
+        report_pins: List[Dict[str, Any]] = []
         for report_path in args.evaluate:
             data = Path(report_path).read_bytes()
             reports.append(_json_loads_no_dup_keys(data, what=str(report_path)))
+            # parse したのと **同じ bytes** を hash する（read と hash の間に差し替えが
+            # 入る TOCTOU を避ける）。パスは checkout 非依存の論理パスを併記する。
+            report_pins.append(
+                {
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                    "path_relative": _repo_relative_path(report_path),
+                    "path_name": Path(report_path).name,
+                }
+            )
         bars, bars_sha256 = load_bars(args.bars)
-        verdict = evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+        verdict = evaluate_m2_bars(
+            reports, bars, bars_sha256=bars_sha256, report_pins=report_pins
+        )
         _atomic_write_text(args.out, json.dumps(verdict, indent=2, sort_keys=True))
         print(f"wrote verdict to {args.out}")
         for category, result in verdict["categories"].items():
             print(f"  {category}: {result['status']}")
         return 0
 
+    if Path(args.out).resolve() in {Path(args.bars).resolve(), Path(args.specs).resolve()}:
+        raise SystemExit(
+            f"--out {args.out} は凍結入力（bars / specs）と同じパスを指している; "
+            "事前登録ファイルを run report で上書きしない (fail-closed)"
+        )
     result = run_accuracy(specs_path=args.specs, bars_path=args.bars)
     _atomic_write_text(args.out, json.dumps(result, indent=2, sort_keys=True))
     print(f"wrote run report to {args.out}")

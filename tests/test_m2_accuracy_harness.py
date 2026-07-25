@@ -255,6 +255,102 @@ def test_evaluate_m2_bars_rejects_stale_generator_code_sha256() -> None:
         harness.evaluate_m2_bars([report1, report2], bars, bars_sha256=bars_sha256)
 
 
+def test_evaluate_m2_bars_rejects_tolerance_override_against_frozen_bar() -> None:
+    """凍結値と違う許容幅で測った row にバーを適用しない（バー緩和の抜け道を塞ぐ）。
+
+    600 cent 許容なら 500 cent ずれた推定でも min_rpa=0.90 を満たしてしまうが、
+    `bars_sha256` は override では変わらないため、report の tolerance そのものを
+    突き合わせるのが唯一の関所になる。
+    """
+    kwargs = dict(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=500.0))
+    report1 = harness.run_accuracy(tolerance_cents=600.0, **kwargs)
+    report2 = harness.run_accuracy(tolerance_cents=600.0, **kwargs)
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+
+    # 緩い許容幅では S_direct のバーを満たしてしまうことを先に示す（抜け道の実在）。
+    assert report1["categories"]["S_direct"]["metrics"]["raw_pitch_accuracy"] >= 0.90
+
+    with pytest.raises(ValueError, match="tolerance_cents"):
+        harness.evaluate_m2_bars([report1, report2], bars, bars_sha256=bars_sha256)
+
+
+def test_evaluate_m2_bars_rejects_heterogeneous_model_stack() -> None:
+    """別の抽出器重み/コードで測った 2 本を repeats として数えない。"""
+    report1 = harness.run_accuracy(
+        categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+    )
+    report2 = harness.run_accuracy(
+        categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+    )
+    report2["categories"]["S_direct"]["provenance_extractor_weights_sha256"] = "other-weights"
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="model stack"):
+        harness.evaluate_m2_bars([report1, report2], bars, bars_sha256=bars_sha256)
+
+
+def test_evaluate_m2_bars_rejects_measured_row_without_weight_pin() -> None:
+    """measured なのに重み pin を欠く row は repeats として数えない。"""
+    report1 = harness.run_accuracy(
+        categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+    )
+    report2 = harness.run_accuracy(
+        categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+    )
+    del report2["categories"]["S_direct"]["provenance_extractor_weights_sha256"]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="provenance_extractor_weights_sha256"):
+        harness.evaluate_m2_bars([report1, report2], bars, bars_sha256=bars_sha256)
+
+
+def test_evaluate_m2_bars_records_report_pins_when_supplied() -> None:
+    report1 = harness.run_accuracy(
+        categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+    )
+    report2 = harness.run_accuracy(
+        categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+    )
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    pins = [{"sha256": "a" * 64, "path_name": "r1.json"}, {"sha256": "b" * 64, "path_name": "r2.json"}]
+    verdict = harness.evaluate_m2_bars(
+        [report1, report2], bars, bars_sha256=bars_sha256, report_pins=pins
+    )
+    assert verdict["report_pins"] == pins
+    assert verdict["tolerance_cents"] == 50.0
+
+    with pytest.raises(ValueError, match="report_pins 件数"):
+        harness.evaluate_m2_bars(
+            [report1, report2], bars, bars_sha256=bars_sha256, report_pins=pins[:1]
+        )
+
+
+def test_cli_rejects_out_path_colliding_with_protected_inputs(tmp_path, monkeypatch) -> None:
+    """`--out` が report / bars / specs を指したら書く前に停止する。"""
+    report_path = tmp_path / "run1.json"
+    report = harness.run_accuracy(
+        categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+    )
+    report_path.write_text(json.dumps(report))
+
+    # evaluate モード: --out が入力 report を指す。
+    monkeypatch.setattr(
+        sys, "argv",
+        ["run_melody_accuracy.py", "--evaluate", str(report_path), "--out", str(report_path)],
+    )
+    with pytest.raises(SystemExit, match="評価入力"):
+        harness.main()
+    # 入力が破壊されていないこと。
+    assert json.loads(report_path.read_text())["run_id"] == report["run_id"]
+
+    # run モード: --out が凍結 bars を指す。
+    monkeypatch.setattr(
+        sys, "argv", ["run_melody_accuracy.py", "--out", str(BARS_PATH)]
+    )
+    before = BARS_PATH.read_bytes()
+    with pytest.raises(SystemExit, match="凍結入力"):
+        harness.main()
+    assert BARS_PATH.read_bytes() == before
+
+
 def test_evaluate_m2_bars_records_generator_code_sha256_in_verdict() -> None:
     report1 = harness.run_accuracy(
         categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
