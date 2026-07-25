@@ -1,8 +1,14 @@
 # Melodia 信頼度スケールと凍結ゲートの衝突（M1-real 診断・2026-07-25）
 
-M1-real 実測（PR #220）で Melodia 経路が**全 6 素材 × 両 run で `voiced_coverage 0.000`**
-を返した件の診断記録。結論は「Melodia アダプタのバグでも噛み合わせ問題でもなく、
-**抽出器の信頼度セマンティクスと凍結ゲート閾値の衝突**」である。
+M1-real 実測（PR #220）で Melodia 経路が**M1-real 全 5 素材 × 両 run で
+`voiced_coverage 0.000`** を返した件の診断記録。結論は「Melodia アダプタのバグでも
+噛み合わせ問題でもなく、**抽出器の信頼度セマンティクスと凍結ゲート閾値の衝突**」である。
+
+**証跡の所在**: 実測 report（run×2・素材 id・hash・route 別出力）は PR #220 の
+`docs/measurements/m1real_2026-07/` にあり、**本 PR の checkout には存在しない**
+（#220 は未マージ）。本ドキュメント単体で checkout から監査できるのは §2 の
+実測値（合成素材 1 本 + 実音源 2 本を本 PR 提出時に再測したもの・§6 で再現可能）である。
+#220 マージ後に report を参照できるようになる。
 
 本ドキュメントは**診断のみ**を記録する。正規化の決め方は事前登録マター（go-bar の結果を
 見る前に定義する必要がある）なので、ここでは方式を提案も実装もしない。
@@ -82,9 +88,28 @@ Melodia の confidence は入力によらずこの床を越えないため、**�
 `low_confidence_rate` は 1.000 になる。観測された 5 つの reason は
 すべてこの単一原因の派生である。
 
-したがって Melodia 経路は**入力が何であれ構造的に insufficient を返す**。
-M1-real の実測値は「Melodia が旋律を観測できなかった」ことを意味しない
-（2.1 / 2.2 のとおり音高自体は取れている）。**計器が接続されていなかった**。
+したがって Melodia 経路は、**信頼度が 0.30 に届かない入力に対しては**、旋律を
+正しく取れていても構造的に insufficient を返す。M1-real の実測値は「Melodia が旋律を
+観測できなかった」ことを意味しない（2.1 / 2.2 のとおり音高自体は取れている）。
+**計器が接続されていなかった**。
+
+### 3.1 主張の適用範囲（重要）
+
+「Melodia の confidence は**入力によらず** 0.30 を越えない」とは主張できない。
+根拠は測定した 3 入力（合成 1 + 実音源 2）と M1-real の 5 素材で 0.30 未達だったことのみで、
+上限の普遍的な証明ではない。実際 `melodia_adapter.py` の docstring は raw salience が
+稀に 1 を超えうると記し（clamp 前）、本ドキュメント §5 も理論上限が定まらないと述べている。
+confidence が 0.30 に達する入力があれば、その入力では有声フレームが残り、経路は
+insufficient に固定されない。
+
+確立した事実は次の 2 点に限る:
+
+1. **測定した全入力**（`synth_mono_phrased` / `kane_y2` / `crslv2_w3` / M1-real 5 素材）で
+   Melodia の confidence は 0.30 に届かず、有声フレーム数が 0 になった
+2. その値域は pyin の `voiced_prob`（max 1.0 / mean 0.64）と**同一の床で裁けるスケールではない**
+
+「実制作音楽の実用帯でこの床を越える入力があるか」は未測定であり、
+床の妥当性判断には別途 corpus 規模の測定を要する。
 
 ## 4. 三分岐の判定
 
@@ -116,8 +141,33 @@ Cowork 指定の切り分け基準に対する結論:
 
 ## 6. 再現手順
 
+§2 の数値は下記のビルドで得たものである。`PredominantPitchMelodia` の confidence 値は
+別リリース・別ビルドで変わりうるため、**version とビルド指紋を pin しないと
+「実装 drift」と「診断した scale 衝突」を区別できない**。
+
+| 項目 | 値 |
+|---|---|
+| pip version | `2.1b6.dev1389` |
+| `essentia.__version__` | `2.1-beta6-dev` |
+| 実装バイナリ | `_essentia.cpython-311-x86_64-linux-gnu.so` |
+| バイナリ sha256 | `07852d293d1e15aaf740ef807dcb85f07240318460dc179c5117c9a81e5cc16d` |
+| Python | 3.11.15（Linux x86_64） |
+
+Melodia は学習重みを持たない DSP 算法なので、pin すべきモデル入力は実装バイナリ
+そのものである（`melodia_adapter.melodia_implementation_files()` が返す指紋。
+`extractor_weights_kind: library_binary` として report に載る値と同一定義）。
+
 ```bash
-pip install essentia            # AGPL-3.0。標準 install / CI には含めない
+pip install "essentia==2.1b6.dev1389"   # AGPL-3.0。標準 install / CI には含めない
+
+# 実装バイナリ指紋の照合（別ビルドなら数値が変わりうる）
+python - <<'PY'
+import hashlib
+from svp_rpe.rpe.learned.melodia_adapter import melodia_implementation_files
+files, _ = melodia_implementation_files()
+for f in files:
+    print(f.name, hashlib.sha256(f.read_bytes()).hexdigest())
+PY
 python - <<'PY'
 import sys, numpy as np, yaml
 sys.path.insert(0,'scripts'); sys.path.insert(0,'src')
