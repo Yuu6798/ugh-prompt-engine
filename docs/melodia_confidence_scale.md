@@ -93,18 +93,50 @@ cent 単位で合うことはない）。一方で **被覆は 15 note-event 中
 
 「stem がそもそも使える音高を含まない」ことと「音高はあるが confidence が床未満」は
 post-gate の症状が同じなので、**実際の `demucs_vocals_then_melodia` 経路の stem** 上で
-gate を通す前の値を直接測った（`kane_y2.mp3` 先頭 30 秒を `separate_stems` で分離した
-vocals stem。分離は本 doc の branch では非決定論なので、下記は 1 回の分離に対する値）。
+gate を通す前の値を直接測った。
+
+分離は **`shifts=0`（PR #221 の決定論設定）** で行い、測った波形そのものを pin してある
+（既定の `shifts=1` はランダムシフト平均で stem が run 毎に変わるため、pin できない値を
+根拠にしないための措置）:
+
+| 項目 | 値 |
+|---|---|
+| 入力 | `kane_y2.mp3` 先頭 30 秒を 44.1 kHz mono float32 WAV 化 |
+| 入力 WAV sha256 | `e64010b25ab390c3bf2220be5fdacb31861e767438bfd565a3fa48b9e389c77f` |
+| 分離器 | `demucs.api.Separator(model="htdemucs_ft", device="cpu", shifts=0)` |
+| demucs version | `4.1.0` |
+| demucs 重み sha256 | `bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86` |
+| **vocals stem sha256** | `72097ac0461e49061b78ea0b25edfb876914eb77866a0caed8bab494aa53e280` |
+
+（stem hash は float32 生サンプルの `tobytes()` に対する sha256。report の
+`preprocessing.stem_sha256` と同一定義。）
+
+この stem に対する pre-gate 出力:
 
 | 抽出器 | frames | pitch 検出 | conf max | conf mean | conf ≥ 0.30 |
 |---|---|---|---|---|---|
-| melodia | 10337 | **4929 (47.7%)** | 0.1485 | 0.0184 | **0** |
-| pyin（対照・同一 stem） | 646 | 97 | 0.9459 | 0.0735 | **55** |
+| melodia | 10337 | **4531 (43.8%)** | 0.1601 | 0.0173 | **0** |
+| pyin（対照・同一 stem） | 646 | 97 | 0.9459 | 0.0724 | **55** |
 
-**stem は「音高が取れない」状態ではない** — Melodia 自身が 47.7% のフレームに音高を
-出しており（中央値 744.3 Hz、p10–p90 = 442.6–1209.1 Hz）、同じ stem で pyin は
-conf 0.9459 まで達して 55 フレームが床を越える。したがって post-gate の全ゼロは
-「stem が壊れている」ためではなく confidence の値域に帰属する。
+**stem は「音高が取れない」状態ではない** — Melodia 自身が 43.8% のフレームに音高を
+出しており、同じ stem で pyin は conf 0.9459 まで達して 55 フレームが床を越える。
+したがって post-gate の全ゼロは「stem が壊れている」ためではなく confidence の値域に
+帰属する。
+
+再現手順（`shifts=0` なので上記 stem sha256 が再現する。実素材と demucs 重みは別途必要）:
+
+```python
+import hashlib, numpy as np, librosa, soundfile as sf, demucs.api
+from svp_rpe.rpe.learned.melodia_adapter import extract_melodia_f0
+y, sr = librosa.load('kane_y2.mp3', sr=44100, mono=True)
+sf.write('ex.wav', y[:44100*30].astype(np.float32), sr, subtype='FLOAT')
+sep = demucs.api.Separator(model='htdemucs_ft', device='cpu', shifts=0)
+_, stems = sep.separate_audio_file('ex.wav')
+voc = np.asarray(stems['vocals'], dtype=np.float32)
+voc = voc.mean(axis=0) if voc.ndim == 2 else voc
+print(hashlib.sha256(voc.tobytes()).hexdigest())   # 上表の stem sha256 と一致すること
+t, hz, cf, _ = extract_melodia_f0(voc, sep.samplerate)
+```
 
 ### 2.3 pyin との対比（同一入力 `synth_mono_phrased`）
 
@@ -200,9 +232,12 @@ checkout だけで再現する。§2.2 / §2.4 の実音源由来の行は **rep
 machine-dependent 素材**（および §2.4 は demucs 重み）を要するため、この checkout からは
 再現できない（素材を受領し §2.2 の sha256 と
 一致することを確認した上で、同じ `extract_melodia_f0` 呼び出しを当てれば再現する）。
-診断の結論は合成素材だけでも成立する — §2.1 は「クリーンな単旋律ですら床に届かない」を
-示しており、これが「アダプタ設定バグ」「demucs stem との噛み合わせ」の 2 仮説を棄却する。
-実音源 2 行は「合成純音固有の縮退ではない」ことを補強する追加証拠である。
+**合成素材だけでは 2 仮説を棄却できない**点に注意する。checkout で再現できる §2.1 が
+単独で示すのは「クリーンな単旋律でも confidence が床に届かない」ことと「出た音高は
+±0.1 cent で正確（= sampleRate / dtype の取り違えではない）」までである。合成素材は
+demucs を通らないので stem 噛み合わせ仮説には触れられず、被覆 3/15 のためパラメータ
+最適化不足も棄却できない。stem 仮説の棄却は §2.4（実 stem 上の pre-gate 測定）に、
+値域の一般性は §2.2 に依存しており、どちらも machine-dependent 素材を要する。
 
 §2 の数値は下記のビルドで得たものである。`PredominantPitchMelodia` の confidence 値は
 別リリース・別ビルドで変わりうるため、**version とビルド指紋を pin しないと
