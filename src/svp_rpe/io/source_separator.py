@@ -5,12 +5,15 @@ package install and CI path do not require torch/Demucs.
 """
 from __future__ import annotations
 
+import contextlib
 import os
+import random
 import shutil
 import subprocess
 import sys
 import tempfile
 import warnings
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +43,52 @@ DEFAULT_MODEL = "htdemucs_ft"
 DEFAULT_SAMPLE_RATE = 44100
 STEM_NAMES = ("vocals", "drums", "bass", "other")
 REQUIRED_STEMS = frozenset(STEM_NAMES)
+
+# Demucs の "random shift trick"（randomized equivariant stabilization）を無効化する。
+#
+# `demucs.apply.apply_model` は `shifts > 0` のとき stdlib の `random.randint(0, max_shift)`
+# で mix を 0–0.5 秒のランダム量だけ時間シフトし、逆シフトした出力を `shifts` 回平均する
+# （demucs 4.1.0 `apply.py`）。API (`demucs.api.Separator`) と CLI (`python -m demucs`) の
+# **既定はどちらも 1** なので、既定のままでは同一入力を 2 回分離しただけで stem の bytes が
+# 変わる。M1-real の go-bar 評価器は vocals stem の hash (`stem_sha256`) を repeats の
+# 同一性署名 (`_route_provenance`) に含めるため、この非決定性は「別 model stack の run」として
+# fail-closed を招く（実測 2026-07-25: demucs を通る 15 経路すべてが `stem_sha256` のみ不一致、
+# 分離を通らない経路は完全一致）。
+#
+# `shifts=0` はシフト分岐自体をスキップさせるので、乱数を一切引かずに決定論化できる。
+# 平均を取らなくなる分だけ分離品質は理論上わずかに落ちるが、計器としての再現性を優先する
+# （観測値が run 毎に変わる計器は pin できない）。
+DEFAULT_SHIFTS = 0
+
+# 決定論化の防御的措置として分離中だけ固定 seed を敷く際の値。`DEFAULT_SHIFTS = 0` で
+# 既知の乱数消費は無くなるが、上流実装が将来別の乱数を引いても stem が揺れないようにする。
+SEPARATION_RNG_SEED = 0
+
+
+@contextlib.contextmanager
+def _deterministic_rng() -> Iterator[None]:
+    """分離の間だけ stdlib `random` と torch の RNG を固定 seed に据える。
+
+    プロセス全体の RNG を書き換えたまま帰ると呼び出し側の乱数列を壊すので、
+    前の state を退避して `finally` で必ず復元する（グローバル副作用を残さない）。
+    torch は optional 依存なので、入っていなければ stdlib のみを固定する。
+    """
+    random_state = random.getstate()
+    random.seed(SEPARATION_RNG_SEED)
+    try:
+        import torch  # pragma: no cover - torch は optional
+    except ImportError:
+        torch = None  # type: ignore[assignment]
+    torch_state = None
+    if torch is not None:  # pragma: no cover - torch 導入環境のみ
+        torch_state = torch.get_rng_state()
+        torch.manual_seed(SEPARATION_RNG_SEED)
+    try:
+        yield
+    finally:
+        random.setstate(random_state)
+        if torch is not None and torch_state is not None:  # pragma: no cover
+            torch.set_rng_state(torch_state)
 
 
 class SeparatorNotAvailableError(RuntimeError):
@@ -155,8 +204,10 @@ def _separate_stems_with_api(
     device: str,
 ) -> StemBundle:
     separator_cls = _get_demucs_separator_class()
-    separator = separator_cls(model=model, device=device)
-    _, separated = separator.separate_audio_file(source_path)
+    # shifts は明示する（既定 1 = ランダムシフト平均で stem が run 毎に変わる）。
+    separator = separator_cls(model=model, device=device, shifts=DEFAULT_SHIFTS)
+    with _deterministic_rng():
+        _, separated = separator.separate_audio_file(source_path)
 
     if not isinstance(separated, dict):
         raise ValueError("Demucs separator returned an invalid stem mapping")
@@ -215,6 +266,9 @@ def _separate_stems_with_cli(
             model,
             "-d",
             device,
+            # API 経路と同値に固定する（CLI 既定も 1 なので、片方だけ直すと経路差で再発する）。
+            "--shifts",
+            str(DEFAULT_SHIFTS),
             "--float32",
             "--filename",
             "{stem}.{ext}",
