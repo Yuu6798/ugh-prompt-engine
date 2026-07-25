@@ -35,12 +35,15 @@ def test_worktree_has_no_stale_crlf_text_checkouts() -> None:
         relative, attribute, value = attributes[index : index + 3]
         by_path.setdefault(relative, {})[attribute] = value
 
-    stale = [
-        relative
-        for relative, attrs in by_path.items()
-        if attrs == {"text": "auto", "eol": "lf"}
-        and b"\r\n" in (ROOT / relative).read_bytes()
-    ]
+    stale: list[str] = []
+    for relative, attrs in by_path.items():
+        if attrs != {"text": "auto", "eol": "lf"}:
+            continue
+        content = (ROOT / relative).read_bytes()
+        # Git's text=auto binary heuristic treats a NUL in the first 8 KiB as
+        # binary. Do the same so CRLF-shaped bytes inside WAV/etc. are ignored.
+        if b"\0" not in content[:8000] and b"\r\n" in content:
+            stale.append(relative)
 
     assert not stale, (
         "tracked text files are still checked out as CRLF, so content-addressed "
