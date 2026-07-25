@@ -1,0 +1,12 @@
+$ python scripts/run_melody_observability.py --evaluate-go-bar docs/measurements/m1real_2026-07/m1real_run1.json docs/measurements/m1real_2026-07/m1real_run2.json --out m1real_verdict.json
+Traceback (most recent call last):
+  File "/home/user/ugh-prompt-engine/scripts/run_melody_observability.py", line 2041, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/home/user/ugh-prompt-engine/scripts/run_melody_observability.py", line 1981, in main
+    verdict = evaluate_m1_real_go_bar(
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/ugh-prompt-engine/scripts/run_melody_observability.py", line 1685, in evaluate_m1_real_go_bar
+    raise ValueError(
+ValueError: evaluate_m1_real_go_bar: fixture 'real_vocal_jrock' route 'demucs_vocals_then_crepe' has differing model provenance (source_model/extractor_version/separation) across reports; 別 model stack の run を n>=2 repeats と見なせない (fail-closed)
+EXIT=1 (fail-closed; verdict JSON は生成されない)

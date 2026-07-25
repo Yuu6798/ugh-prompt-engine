@@ -1,0 +1,34 @@
+# melody observability (external mode)
+
+## real_vocal_jrock  (input_kind=vocal_track, expect=None)
+  - pyin_direct                  [pyin       ] -> insufficient  reasons=voiced_coverage 0.071 < min 0.300
+  - demucs_vocals_then_pyin      [pyin       ] -> sufficient
+  - demucs_vocals_then_crepe     [crepe      ] -> sufficient
+  - demucs_vocals_then_melodia   [melodia    ] -> insufficient  reasons=voiced_coverage 0.000 < min 0.300; note_count 0 < min 8; phrase_count 0 < min 2; confidence_mean 0.000 < min 0.450; low_confidence_rate 1.000 > max 0.550
+
+## real_vocal_futurepop  (input_kind=vocal_track, expect=None)
+  - pyin_direct                  [pyin       ] -> insufficient  reasons=voiced_coverage 0.096 < min 0.300; low_confidence_rate 0.604 > max 0.550
+  - demucs_vocals_then_pyin      [pyin       ] -> insufficient  reasons=voiced_coverage 0.197 < min 0.300
+  - demucs_vocals_then_crepe     [crepe      ] -> sufficient
+  - demucs_vocals_then_melodia   [melodia    ] -> insufficient  reasons=voiced_coverage 0.000 < min 0.300; note_count 0 < min 8; phrase_count 0 < min 2; confidence_mean 0.000 < min 0.450; low_confidence_rate 1.000 > max 0.550
+
+## real_vocal_band  (input_kind=vocal_track, expect=None)
+  - pyin_direct                  [pyin       ] -> insufficient  reasons=voiced_coverage 0.025 < min 0.300; confidence_mean 0.442 < min 0.450; low_confidence_rate 0.800 > max 0.550
+  - demucs_vocals_then_pyin      [pyin       ] -> insufficient  reasons=voiced_coverage 0.180 < min 0.300
+  - demucs_vocals_then_crepe     [crepe      ] -> sufficient
+  - demucs_vocals_then_melodia   [melodia    ] -> insufficient  reasons=voiced_coverage 0.000 < min 0.300; note_count 0 < min 8; phrase_count 0 < min 2; confidence_mean 0.000 < min 0.450; low_confidence_rate 1.000 > max 0.550
+
+## real_vocal_waltz  (input_kind=vocal_track, expect=None)
+  - pyin_direct                  [pyin       ] -> sufficient
+  - demucs_vocals_then_pyin      [pyin       ] -> insufficient  reasons=voiced_coverage 0.265 < min 0.300
+  - demucs_vocals_then_crepe     [crepe      ] -> sufficient
+  - demucs_vocals_then_melodia   [melodia    ] -> insufficient  reasons=voiced_coverage 0.000 < min 0.300; note_count 0 < min 8; phrase_count 0 < min 2; confidence_mean 0.000 < min 0.450; low_confidence_rate 1.000 > max 0.550
+
+## real_instrumental_negative  (input_kind=vocal_track, expect=None)
+  - pyin_direct                  [pyin       ] -> insufficient  reasons=voiced_coverage 0.041 < min 0.300; note_count 1 < min 8; phrase_count 1 < min 2
+  - demucs_vocals_then_pyin      [pyin       ] -> insufficient  reasons=voiced_coverage 0.000 < min 0.300; note_count 0 < min 8; phrase_count 0 < min 2; confidence_mean 0.000 < min 0.450; low_confidence_rate 1.000 > max 0.550
+  - demucs_vocals_then_crepe     [crepe      ] -> insufficient  reasons=low_confidence_rate 0.558 > max 0.550
+  - demucs_vocals_then_melodia   [melodia    ] -> insufficient  reasons=voiced_coverage 0.000 < min 0.300; note_count 0 < min 8; phrase_count 0 < min 2; confidence_mean 0.000 < min 0.450; low_confidence_rate 1.000 > max 0.550
+
+wrote m1real_run1.json
+EXIT=0

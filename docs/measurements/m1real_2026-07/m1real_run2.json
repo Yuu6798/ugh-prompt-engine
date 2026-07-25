@@ -1,0 +1,852 @@
+{
+  "fixtures": {
+    "real_instrumental_negative": {
+      "audio_path": "/home/user/ugh-prompt-engine/m1real_package/audio/kane_y2_instrumental_neg.wav",
+      "audio_path_in_manifest": "audio/kane_y2_instrumental_neg.wav",
+      "audio_sha256": "6882e035c61a1c7b1df795f703cec369775637f1a4a3728a2e08ea579c80ebf3",
+      "expect_status": null,
+      "input_kind": "vocal_track",
+      "routes": [
+        {
+          "extractor": "pyin",
+          "extractor_code_packages": [
+            "librosa",
+            "scipy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "07f43915f950d810d5d27239f842b8c3cd6e36a67a0c7c86d0689d3edc0a854a",
+          "extractor_version": "0.11.0",
+          "outcome": "insufficient",
+          "report": {
+            "confidence_mean": 0.5577619047619047,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 0.42857142857142855,
+            "note_count": 1,
+            "octave_jump_rate": 0.0,
+            "phrase_count": 1,
+            "reasons": [
+              "voiced_coverage 0.041 < min 0.300",
+              "note_count 1 < min 8",
+              "phrase_count 1 < min 2"
+            ],
+            "route": "pyin_direct",
+            "status": "insufficient",
+            "voiced_coverage": 0.040697674418604654
+          },
+          "route": "pyin_direct",
+          "source_model": "librosa:pyin"
+        },
+        {
+          "extractor": "pyin",
+          "extractor_code_packages": [
+            "librosa",
+            "scipy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "07f43915f950d810d5d27239f842b8c3cd6e36a67a0c7c86d0689d3edc0a854a",
+          "extractor_version": "0.11.0",
+          "outcome": "insufficient",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_code_packages": [
+              "demucs",
+              "torch",
+              "numpy"
+            ],
+            "separation_code_sha256": "6328a424c2b46d8945e3c0c8c44c556c19be327030f5d4175df3ef28efc1e178",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0",
+            "separation_weights_files": [
+              "f7e0c4bc-ba3fe64a.th",
+              "d12395a8-e57c48e6.th",
+              "92cfc3b6-ef3bcb9c.th",
+              "04573f0d-f3cf25b2.th",
+              "files.txt",
+              "htdemucs_ft.yaml"
+            ],
+            "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+            "stem_sha256": "9a399628de844898b883156b600e8820502c22cd0014c74042371d8a6a651eb0"
+          },
+          "report": {
+            "confidence_mean": 0.0,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 1.0,
+            "note_count": 0,
+            "octave_jump_rate": 0.0,
+            "phrase_count": 0,
+            "reasons": [
+              "voiced_coverage 0.000 < min 0.300",
+              "note_count 0 < min 8",
+              "phrase_count 0 < min 2",
+              "confidence_mean 0.000 < min 0.450",
+              "low_confidence_rate 1.000 > max 0.550"
+            ],
+            "route": "demucs_vocals_then_pyin",
+            "status": "insufficient",
+            "voiced_coverage": 0.0
+          },
+          "route": "demucs_vocals_then_pyin",
+          "source_model": "librosa:pyin"
+        },
+        {
+          "extractor": "crepe",
+          "extractor_code_packages": [
+            "crepe",
+            "tensorflow",
+            "keras",
+            "hmmlearn",
+            "librosa",
+            "resampy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "bbd952ef8525501dfc81e74d538e9dc8de0392b74db82ae71c661d451d6f82f0",
+          "extractor_version": "0.0.16",
+          "extractor_weights_files": [
+            "model-full.h5"
+          ],
+          "extractor_weights_kind": "model_weights",
+          "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55",
+          "outcome": "insufficient",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_code_packages": [
+              "demucs",
+              "torch",
+              "numpy"
+            ],
+            "separation_code_sha256": "6328a424c2b46d8945e3c0c8c44c556c19be327030f5d4175df3ef28efc1e178",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0",
+            "separation_weights_files": [
+              "f7e0c4bc-ba3fe64a.th",
+              "d12395a8-e57c48e6.th",
+              "92cfc3b6-ef3bcb9c.th",
+              "04573f0d-f3cf25b2.th",
+              "files.txt",
+              "htdemucs_ft.yaml"
+            ],
+            "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+            "stem_sha256": "9a399628de844898b883156b600e8820502c22cd0014c74042371d8a6a651eb0"
+          },
+          "report": {
+            "confidence_mean": 0.5016437106918238,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 0.5801886792452831,
+            "note_count": 92,
+            "octave_jump_rate": 0.0989010989010989,
+            "phrase_count": 7,
+            "reasons": [
+              "voiced_coverage 0.289 < min 0.300",
+              "low_confidence_rate 0.580 > max 0.550"
+            ],
+            "route": "demucs_vocals_then_crepe",
+            "status": "insufficient",
+            "voiced_coverage": 0.2889595638346206
+          },
+          "route": "demucs_vocals_then_crepe",
+          "source_model": "crepe:predict"
+        },
+        {
+          "detail": "essentia is not installed. Melodia is a manual/external integration only (no published extra): Essentia is AGPL-3.0 and is excluded from the packaged extras by docs/learned_models_policy.md. If you accept the AGPL terms, install it by hand in the slow/manual lane:",
+          "extractor": "melodia",
+          "outcome": "unavailable",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0"
+          },
+          "report": null,
+          "route": "demucs_vocals_then_melodia"
+        }
+      ]
+    },
+    "real_vocal_band": {
+      "audio_path": "/home/user/ugh-prompt-engine/m1real_package/audio/kaze_k2.mp3",
+      "audio_path_in_manifest": "audio/kaze_k2.mp3",
+      "audio_sha256": "06d9fedf7fa776d71d9aa227439370eabc4a62eb7c0f06fc7e1ca2f5ea31d820",
+      "expect_status": null,
+      "input_kind": "vocal_track",
+      "routes": [
+        {
+          "extractor": "pyin",
+          "extractor_code_packages": [
+            "librosa",
+            "scipy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "07f43915f950d810d5d27239f842b8c3cd6e36a67a0c7c86d0689d3edc0a854a",
+          "extractor_version": "0.11.0",
+          "outcome": "insufficient",
+          "report": {
+            "confidence_mean": 0.44185789473684256,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 0.8,
+            "note_count": 9,
+            "octave_jump_rate": 0.0,
+            "phrase_count": 6,
+            "reasons": [
+              "voiced_coverage 0.025 < min 0.300",
+              "confidence_mean 0.442 < min 0.450",
+              "low_confidence_rate 0.800 > max 0.550"
+            ],
+            "route": "pyin_direct",
+            "status": "insufficient",
+            "voiced_coverage": 0.02542826552462527
+          },
+          "route": "pyin_direct",
+          "source_model": "librosa:pyin"
+        },
+        {
+          "extractor": "pyin",
+          "extractor_code_packages": [
+            "librosa",
+            "scipy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "07f43915f950d810d5d27239f842b8c3cd6e36a67a0c7c86d0689d3edc0a854a",
+          "extractor_version": "0.11.0",
+          "outcome": "insufficient",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_code_packages": [
+              "demucs",
+              "torch",
+              "numpy"
+            ],
+            "separation_code_sha256": "6328a424c2b46d8945e3c0c8c44c556c19be327030f5d4175df3ef28efc1e178",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0",
+            "separation_weights_files": [
+              "f7e0c4bc-ba3fe64a.th",
+              "d12395a8-e57c48e6.th",
+              "92cfc3b6-ef3bcb9c.th",
+              "04573f0d-f3cf25b2.th",
+              "files.txt",
+              "htdemucs_ft.yaml"
+            ],
+            "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+            "stem_sha256": "fd2a4eb9b66323544b6789baa6b71693e5272a53766adbdb52f6f835debf4e48"
+          },
+          "report": {
+            "confidence_mean": 0.6384446570972908,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 0.34768740031897927,
+            "note_count": 78,
+            "octave_jump_rate": 0.06493506493506493,
+            "phrase_count": 29,
+            "reasons": [
+              "voiced_coverage 0.183 < min 0.300"
+            ],
+            "route": "demucs_vocals_then_pyin",
+            "status": "insufficient",
+            "voiced_coverage": 0.18258590564938848
+          },
+          "route": "demucs_vocals_then_pyin",
+          "source_model": "librosa:pyin"
+        },
+        {
+          "extractor": "crepe",
+          "extractor_code_packages": [
+            "crepe",
+            "tensorflow",
+            "keras",
+            "hmmlearn",
+            "librosa",
+            "resampy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "bbd952ef8525501dfc81e74d538e9dc8de0392b74db82ae71c661d451d6f82f0",
+          "extractor_version": "0.0.16",
+          "extractor_weights_files": [
+            "model-full.h5"
+          ],
+          "extractor_weights_kind": "model_weights",
+          "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55",
+          "outcome": "sufficient",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_code_packages": [
+              "demucs",
+              "torch",
+              "numpy"
+            ],
+            "separation_code_sha256": "6328a424c2b46d8945e3c0c8c44c556c19be327030f5d4175df3ef28efc1e178",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0",
+            "separation_weights_files": [
+              "f7e0c4bc-ba3fe64a.th",
+              "d12395a8-e57c48e6.th",
+              "92cfc3b6-ef3bcb9c.th",
+              "04573f0d-f3cf25b2.th",
+              "files.txt",
+              "htdemucs_ft.yaml"
+            ],
+            "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+            "stem_sha256": "fd2a4eb9b66323544b6789baa6b71693e5272a53766adbdb52f6f835debf4e48"
+          },
+          "report": {
+            "confidence_mean": 0.7214092599881907,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 0.20556976973036803,
+            "note_count": 860,
+            "octave_jump_rate": 0.059371362048894066,
+            "phrase_count": 19,
+            "reasons": [],
+            "route": "demucs_vocals_then_crepe",
+            "status": "sufficient",
+            "voiced_coverage": 0.6373557451078776
+          },
+          "route": "demucs_vocals_then_crepe",
+          "source_model": "crepe:predict"
+        },
+        {
+          "detail": "essentia is not installed. Melodia is a manual/external integration only (no published extra): Essentia is AGPL-3.0 and is excluded from the packaged extras by docs/learned_models_policy.md. If you accept the AGPL terms, install it by hand in the slow/manual lane:",
+          "extractor": "melodia",
+          "outcome": "unavailable",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0"
+          },
+          "report": null,
+          "route": "demucs_vocals_then_melodia"
+        }
+      ]
+    },
+    "real_vocal_futurepop": {
+      "audio_path": "/home/user/ugh-prompt-engine/m1real_package/audio/sev4_x2.mp3",
+      "audio_path_in_manifest": "audio/sev4_x2.mp3",
+      "audio_sha256": "abd7f01d0da59dbbde7e6864525a3526d4fcba33489b2a6774c7620fd72d94e2",
+      "expect_status": null,
+      "input_kind": "vocal_track",
+      "routes": [
+        {
+          "extractor": "pyin",
+          "extractor_code_packages": [
+            "librosa",
+            "scipy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "07f43915f950d810d5d27239f842b8c3cd6e36a67a0c7c86d0689d3edc0a854a",
+          "extractor_version": "0.11.0",
+          "outcome": "insufficient",
+          "report": {
+            "confidence_mean": 0.5109094202898535,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 0.6038647342995169,
+            "note_count": 58,
+            "octave_jump_rate": 0.08771929824561403,
+            "phrase_count": 23,
+            "reasons": [
+              "voiced_coverage 0.096 < min 0.300",
+              "low_confidence_rate 0.604 > max 0.550"
+            ],
+            "route": "pyin_direct",
+            "status": "insufficient",
+            "voiced_coverage": 0.09563409563409564
+          },
+          "route": "pyin_direct",
+          "source_model": "librosa:pyin"
+        },
+        {
+          "extractor": "pyin",
+          "extractor_code_packages": [
+            "librosa",
+            "scipy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "07f43915f950d810d5d27239f842b8c3cd6e36a67a0c7c86d0689d3edc0a854a",
+          "extractor_version": "0.11.0",
+          "outcome": "insufficient",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_code_packages": [
+              "demucs",
+              "torch",
+              "numpy"
+            ],
+            "separation_code_sha256": "6328a424c2b46d8945e3c0c8c44c556c19be327030f5d4175df3ef28efc1e178",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0",
+            "separation_weights_files": [
+              "f7e0c4bc-ba3fe64a.th",
+              "d12395a8-e57c48e6.th",
+              "92cfc3b6-ef3bcb9c.th",
+              "04573f0d-f3cf25b2.th",
+              "files.txt",
+              "htdemucs_ft.yaml"
+            ],
+            "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+            "stem_sha256": "615709658f019b3311b2e72a1d541819d58fa5317a966aecd9b38f61a284583b"
+          },
+          "report": {
+            "confidence_mean": 0.6216843037974714,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 0.3518987341772152,
+            "note_count": 109,
+            "octave_jump_rate": 0.0,
+            "phrase_count": 38,
+            "reasons": [
+              "voiced_coverage 0.199 < min 0.300"
+            ],
+            "route": "demucs_vocals_then_pyin",
+            "status": "insufficient",
+            "voiced_coverage": 0.19859225741578682
+          },
+          "route": "demucs_vocals_then_pyin",
+          "source_model": "librosa:pyin"
+        },
+        {
+          "extractor": "crepe",
+          "extractor_code_packages": [
+            "crepe",
+            "tensorflow",
+            "keras",
+            "hmmlearn",
+            "librosa",
+            "resampy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "bbd952ef8525501dfc81e74d538e9dc8de0392b74db82ae71c661d451d6f82f0",
+          "extractor_version": "0.0.16",
+          "extractor_weights_files": [
+            "model-full.h5"
+          ],
+          "extractor_weights_kind": "model_weights",
+          "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55",
+          "outcome": "sufficient",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_code_packages": [
+              "demucs",
+              "torch",
+              "numpy"
+            ],
+            "separation_code_sha256": "6328a424c2b46d8945e3c0c8c44c556c19be327030f5d4175df3ef28efc1e178",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0",
+            "separation_weights_files": [
+              "f7e0c4bc-ba3fe64a.th",
+              "d12395a8-e57c48e6.th",
+              "92cfc3b6-ef3bcb9c.th",
+              "04573f0d-f3cf25b2.th",
+              "files.txt",
+              "htdemucs_ft.yaml"
+            ],
+            "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+            "stem_sha256": "615709658f019b3311b2e72a1d541819d58fa5317a966aecd9b38f61a284583b"
+          },
+          "report": {
+            "confidence_mean": 0.750292906707787,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 0.1491553935655709,
+            "note_count": 889,
+            "octave_jump_rate": 0.07995495495495496,
+            "phrase_count": 14,
+            "reasons": [],
+            "route": "demucs_vocals_then_crepe",
+            "status": "sufficient",
+            "voiced_coverage": 0.7723163535971418
+          },
+          "route": "demucs_vocals_then_crepe",
+          "source_model": "crepe:predict"
+        },
+        {
+          "detail": "essentia is not installed. Melodia is a manual/external integration only (no published extra): Essentia is AGPL-3.0 and is excluded from the packaged extras by docs/learned_models_policy.md. If you accept the AGPL terms, install it by hand in the slow/manual lane:",
+          "extractor": "melodia",
+          "outcome": "unavailable",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0"
+          },
+          "report": null,
+          "route": "demucs_vocals_then_melodia"
+        }
+      ]
+    },
+    "real_vocal_jrock": {
+      "audio_path": "/home/user/ugh-prompt-engine/m1real_package/audio/kane_y2.mp3",
+      "audio_path_in_manifest": "audio/kane_y2.mp3",
+      "audio_sha256": "8eb0237c1e8aaad41762923f436cfbafa33a246e6dc15ce3e1beed8dbd347752",
+      "expect_status": null,
+      "input_kind": "vocal_track",
+      "routes": [
+        {
+          "extractor": "pyin",
+          "extractor_code_packages": [
+            "librosa",
+            "scipy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "07f43915f950d810d5d27239f842b8c3cd6e36a67a0c7c86d0689d3edc0a854a",
+          "extractor_version": "0.11.0",
+          "outcome": "insufficient",
+          "report": {
+            "confidence_mean": 0.5174673992673994,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 0.5384615384615384,
+            "note_count": 28,
+            "octave_jump_rate": 0.0,
+            "phrase_count": 15,
+            "reasons": [
+              "voiced_coverage 0.071 < min 0.300"
+            ],
+            "route": "pyin_direct",
+            "status": "insufficient",
+            "voiced_coverage": 0.07098283931357255
+          },
+          "route": "pyin_direct",
+          "source_model": "librosa:pyin"
+        },
+        {
+          "extractor": "pyin",
+          "extractor_code_packages": [
+            "librosa",
+            "scipy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "07f43915f950d810d5d27239f842b8c3cd6e36a67a0c7c86d0689d3edc0a854a",
+          "extractor_version": "0.11.0",
+          "outcome": "sufficient",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_code_packages": [
+              "demucs",
+              "torch",
+              "numpy"
+            ],
+            "separation_code_sha256": "6328a424c2b46d8945e3c0c8c44c556c19be327030f5d4175df3ef28efc1e178",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0",
+            "separation_weights_files": [
+              "f7e0c4bc-ba3fe64a.th",
+              "d12395a8-e57c48e6.th",
+              "92cfc3b6-ef3bcb9c.th",
+              "04573f0d-f3cf25b2.th",
+              "files.txt",
+              "htdemucs_ft.yaml"
+            ],
+            "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+            "stem_sha256": "77244a534e748cf32aae79cdae4a6b110167c1ea85a4b7131ffbdcd08c104033"
+          },
+          "report": {
+            "confidence_mean": 0.6995691674291026,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 0.23147301006404392,
+            "note_count": 114,
+            "octave_jump_rate": 0.09734513274336283,
+            "phrase_count": 32,
+            "reasons": [],
+            "route": "demucs_vocals_then_pyin",
+            "status": "sufficient",
+            "voiced_coverage": 0.30928126768534236
+          },
+          "route": "demucs_vocals_then_pyin",
+          "source_model": "librosa:pyin"
+        },
+        {
+          "extractor": "crepe",
+          "extractor_code_packages": [
+            "crepe",
+            "tensorflow",
+            "keras",
+            "hmmlearn",
+            "librosa",
+            "resampy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "bbd952ef8525501dfc81e74d538e9dc8de0392b74db82ae71c661d451d6f82f0",
+          "extractor_version": "0.0.16",
+          "extractor_weights_files": [
+            "model-full.h5"
+          ],
+          "extractor_weights_kind": "model_weights",
+          "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55",
+          "outcome": "sufficient",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_code_packages": [
+              "demucs",
+              "torch",
+              "numpy"
+            ],
+            "separation_code_sha256": "6328a424c2b46d8945e3c0c8c44c556c19be327030f5d4175df3ef28efc1e178",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0",
+            "separation_weights_files": [
+              "f7e0c4bc-ba3fe64a.th",
+              "d12395a8-e57c48e6.th",
+              "92cfc3b6-ef3bcb9c.th",
+              "04573f0d-f3cf25b2.th",
+              "files.txt",
+              "htdemucs_ft.yaml"
+            ],
+            "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+            "stem_sha256": "77244a534e748cf32aae79cdae4a6b110167c1ea85a4b7131ffbdcd08c104033"
+          },
+          "report": {
+            "confidence_mean": 0.7420042608842427,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 0.16461356733040838,
+            "note_count": 864,
+            "octave_jump_rate": 0.09038238702201622,
+            "phrase_count": 17,
+            "reasons": [],
+            "route": "demucs_vocals_then_crepe",
+            "status": "sufficient",
+            "voiced_coverage": 0.7221545210821351
+          },
+          "route": "demucs_vocals_then_crepe",
+          "source_model": "crepe:predict"
+        },
+        {
+          "detail": "essentia is not installed. Melodia is a manual/external integration only (no published extra): Essentia is AGPL-3.0 and is excluded from the packaged extras by docs/learned_models_policy.md. If you accept the AGPL terms, install it by hand in the slow/manual lane:",
+          "extractor": "melodia",
+          "outcome": "unavailable",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0"
+          },
+          "report": null,
+          "route": "demucs_vocals_then_melodia"
+        }
+      ]
+    },
+    "real_vocal_waltz": {
+      "audio_path": "/home/user/ugh-prompt-engine/m1real_package/audio/crslv2_w3.mp3",
+      "audio_path_in_manifest": "audio/crslv2_w3.mp3",
+      "audio_sha256": "40a9f0e79ef2636fa717946d2c0b0480b3703ab8417299705b4927b1d9e20f10",
+      "expect_status": null,
+      "input_kind": "vocal_track",
+      "routes": [
+        {
+          "extractor": "pyin",
+          "extractor_code_packages": [
+            "librosa",
+            "scipy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "07f43915f950d810d5d27239f842b8c3cd6e36a67a0c7c86d0689d3edc0a854a",
+          "extractor_version": "0.11.0",
+          "outcome": "sufficient",
+          "report": {
+            "confidence_mean": 0.5875878066914576,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 0.4275092936802974,
+            "note_count": 197,
+            "octave_jump_rate": 0.14795918367346939,
+            "phrase_count": 60,
+            "reasons": [],
+            "route": "pyin_direct",
+            "status": "sufficient",
+            "voiced_coverage": 0.3023151269948303
+          },
+          "route": "pyin_direct",
+          "source_model": "librosa:pyin"
+        },
+        {
+          "extractor": "pyin",
+          "extractor_code_packages": [
+            "librosa",
+            "scipy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "07f43915f950d810d5d27239f842b8c3cd6e36a67a0c7c86d0689d3edc0a854a",
+          "extractor_version": "0.11.0",
+          "outcome": "insufficient",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_code_packages": [
+              "demucs",
+              "torch",
+              "numpy"
+            ],
+            "separation_code_sha256": "6328a424c2b46d8945e3c0c8c44c556c19be327030f5d4175df3ef28efc1e178",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0",
+            "separation_weights_files": [
+              "f7e0c4bc-ba3fe64a.th",
+              "d12395a8-e57c48e6.th",
+              "92cfc3b6-ef3bcb9c.th",
+              "04573f0d-f3cf25b2.th",
+              "files.txt",
+              "htdemucs_ft.yaml"
+            ],
+            "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+            "stem_sha256": "1e7a2218a1418b14f1851666c32b380d14aff3f65905bb7f6092487ee41cd13b"
+          },
+          "report": {
+            "confidence_mean": 0.6644385753931616,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 0.28307123034227566,
+            "note_count": 152,
+            "octave_jump_rate": 0.026490066225165563,
+            "phrase_count": 42,
+            "reasons": [
+              "voiced_coverage 0.264 < min 0.300"
+            ],
+            "route": "demucs_vocals_then_pyin",
+            "status": "insufficient",
+            "voiced_coverage": 0.26443248532289626
+          },
+          "route": "demucs_vocals_then_pyin",
+          "source_model": "librosa:pyin"
+        },
+        {
+          "extractor": "crepe",
+          "extractor_code_packages": [
+            "crepe",
+            "tensorflow",
+            "keras",
+            "hmmlearn",
+            "librosa",
+            "resampy",
+            "soundfile",
+            "numpy",
+            "soxr",
+            "numba",
+            "llvmlite"
+          ],
+          "extractor_code_sha256": "bbd952ef8525501dfc81e74d538e9dc8de0392b74db82ae71c661d451d6f82f0",
+          "extractor_version": "0.0.16",
+          "extractor_weights_files": [
+            "model-full.h5"
+          ],
+          "extractor_weights_kind": "model_weights",
+          "extractor_weights_sha256": "fb369944d4feb5964cae189dceba1e554d6471f0be712aad61fc087afaef4a55",
+          "outcome": "sufficient",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_code_packages": [
+              "demucs",
+              "torch",
+              "numpy"
+            ],
+            "separation_code_sha256": "6328a424c2b46d8945e3c0c8c44c556c19be327030f5d4175df3ef28efc1e178",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0",
+            "separation_weights_files": [
+              "f7e0c4bc-ba3fe64a.th",
+              "d12395a8-e57c48e6.th",
+              "92cfc3b6-ef3bcb9c.th",
+              "04573f0d-f3cf25b2.th",
+              "files.txt",
+              "htdemucs_ft.yaml"
+            ],
+            "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+            "stem_sha256": "1e7a2218a1418b14f1851666c32b380d14aff3f65905bb7f6092487ee41cd13b"
+          },
+          "report": {
+            "confidence_mean": 0.7648672315978435,
+            "cross_extractor_agreement": null,
+            "low_confidence_rate": 0.15368043087971275,
+            "note_count": 1015,
+            "octave_jump_rate": 0.0621301775147929,
+            "phrase_count": 11,
+            "reasons": [],
+            "route": "demucs_vocals_then_crepe",
+            "status": "sufficient",
+            "voiced_coverage": 0.7334737951013959
+          },
+          "route": "demucs_vocals_then_crepe",
+          "source_model": "crepe:predict"
+        },
+        {
+          "detail": "essentia is not installed. Melodia is a manual/external integration only (no published extra): Essentia is AGPL-3.0 and is excluded from the packaged extras by docs/learned_models_policy.md. If you accept the AGPL terms, install it by hand in the slow/manual lane:",
+          "extractor": "melodia",
+          "outcome": "unavailable",
+          "preprocessing": {
+            "preprocessing": "demucs_vocals",
+            "separation_model": "htdemucs_ft",
+            "separation_version": "4.1.0"
+          },
+          "report": null,
+          "route": "demucs_vocals_then_melodia"
+        }
+      ]
+    }
+  },
+  "generator_code_sha256": "d98e8f40e1e8385ae47fa37c70bf2485c74f320335565fb30f7357d10d9f9dd3",
+  "manifest_path": "/home/user/ugh-prompt-engine/m1real_package/manifest.json",
+  "manifest_path_relative": "m1real_package/manifest.json",
+  "manifest_sha256": "a1f6cf740ba66f0b6cef2c70d99a9ae12a521973dbae5b68910423f60101ff5c",
+  "mode": "external",
+  "observation_gate": {
+    "low_confidence_floor": 0.5,
+    "max_low_confidence_rate": 0.55,
+    "max_octave_jump_rate": 0.35,
+    "median_filter_frames": 5,
+    "min_confidence_mean": 0.45,
+    "min_cross_extractor_agreement": null,
+    "min_note_count": 8,
+    "min_phrase_count": 2,
+    "min_voiced_coverage": 0.3,
+    "note_min_run_frames": 3,
+    "octave_jump_semitones": 11.0,
+    "phrase_gap_sec": 0.6,
+    "voiced_confidence_floor": 0.3
+  },
+  "recorded_utc": "2026-07-25T20:24:04+00:00",
+  "registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+  "run_id": "cd7c32ebf35f4898b04f68a844158c3e",
+  "started_utc": "2026-07-25T19:10:46+00:00",
+  "thresholds_source": "registry"
+}

@@ -1,0 +1,81 @@
+{
+  "bar": {
+    "max_negative_false_positive": 0,
+    "min_positive_sufficient": 3,
+    "repeats_min": 2,
+    "total_positive": 4
+  },
+  "evaluator_code_sha256": "2b6c07a71f0ac05e1fbee29004556cf626d92a599961b056a30cba6263c4afd3",
+  "fully_measured_routes": [
+    "demucs_vocals_then_crepe",
+    "demucs_vocals_then_pyin",
+    "pyin_direct"
+  ],
+  "generator_code_sha256": "d98e8f40e1e8385ae47fa37c70bf2485c74f320335565fb30f7357d10d9f9dd3",
+  "n_reports": 2,
+  "negative_ids": [
+    "real_instrumental_negative"
+  ],
+  "positive_ids": [
+    "real_vocal_jrock",
+    "real_vocal_futurepop",
+    "real_vocal_band",
+    "real_vocal_waltz"
+  ],
+  "registry_sha256": "ccd365041d840c0ebdefec2b24b1aed2153958182e1b024c5824038d911ae481",
+  "report_pins": [
+    {
+      "path": "m1real_run1.json",
+      "sha256": "7de2a909850d9d326314cb8c38a31f6d0d4b71a0d986d1ed0dd5b92d9e8a8adc"
+    },
+    {
+      "path": "m1real_run2.json",
+      "sha256": "cd6b91a175188f5444545ac73b998dda78467d9be571f19e8d06adbd090a821b"
+    }
+  ],
+  "routes": {
+    "demucs_vocals_then_crepe": {
+      "neg_false_positive": 0,
+      "negative_unmeasured_ids": [],
+      "pos_sufficient": 4,
+      "positive_unmeasured_ids": [],
+      "unstable_positive_ids": []
+    },
+    "demucs_vocals_then_melodia": {
+      "neg_false_positive": 0,
+      "negative_unmeasured_ids": [
+        "real_instrumental_negative"
+      ],
+      "pos_sufficient": 0,
+      "positive_unmeasured_ids": [
+        "real_vocal_band",
+        "real_vocal_futurepop",
+        "real_vocal_jrock",
+        "real_vocal_waltz"
+      ],
+      "unstable_positive_ids": []
+    },
+    "demucs_vocals_then_pyin": {
+      "neg_false_positive": 0,
+      "negative_unmeasured_ids": [],
+      "pos_sufficient": 1,
+      "positive_unmeasured_ids": [],
+      "unstable_positive_ids": []
+    },
+    "pyin_direct": {
+      "neg_false_positive": 0,
+      "negative_unmeasured_ids": [],
+      "pos_sufficient": 1,
+      "positive_unmeasured_ids": [],
+      "unstable_positive_ids": []
+    }
+  },
+  "run_ids": [
+    "59c6fc74174e4cc7b61cb403d0679bd5",
+    "cd7c32ebf35f4898b04f68a844158c3e"
+  ],
+  "surviving_routes": [
+    "demucs_vocals_then_crepe"
+  ],
+  "verdict": "go"
+}
