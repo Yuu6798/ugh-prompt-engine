@@ -341,19 +341,40 @@ def _system_library_path(soname: str) -> Optional[Path]:
     return _resolve_soname_without_loading(found)
 
 
-def _resolve_soname_without_loading(soname_file: str) -> Optional[Path]:
+def _resolve_soname_without_loading(
+    soname_file: str,
+    *,
+    origin: "Optional[Path]" = None,
+    rpath: "tuple" = (),
+    runpath: "tuple" = (),
+) -> Optional[Path]:
     """soname（`libsndfile.so.1`）→ 実体パス。**dlopen を起こさない**。
 
-    ローダの探索順に合わせて `LD_LIBRARY_PATH` を先に見て、次に `ldconfig -p` の
-    キャッシュを引く（`ldconfig` は cache を読むだけでライブラリをロードしない）。
+    glibc ローダと同じ探索順を辿る（Codex #217）:
+
+    1. 参照元オブジェクトの `DT_RPATH`（**`DT_RUNPATH` が無いときだけ**有効）
+    2. `LD_LIBRARY_PATH`
+    3. 参照元オブジェクトの `DT_RUNPATH`
+    4. `ldconfig -p` キャッシュ（cache を読むだけでライブラリはロードしない）
+
+    `$ORIGIN` は参照元オブジェクトのディレクトリへ展開する（conda / アプリ同梱ビルドは
+    ここに同梱 `libav*` を置くため、無視すると同名のシステムライブラリを掴む）。
     """
     import os
     import subprocess
 
-    for entry in os.environ.get("LD_LIBRARY_PATH", "").split(os.pathsep):
-        if not entry:
+    search: "list[str]" = []
+    if not runpath:
+        search.extend(rpath)
+    search.extend(
+        entry for entry in os.environ.get("LD_LIBRARY_PATH", "").split(os.pathsep) if entry
+    )
+    search.extend(runpath)
+    for entry in search:
+        expanded = _expand_loader_path(entry, origin)
+        if expanded is None:
             continue
-        candidate = Path(entry) / soname_file
+        candidate = expanded / soname_file
         if candidate.is_file():
             return candidate.resolve()
     for ldconfig in ("ldconfig", "/sbin/ldconfig"):
@@ -561,35 +582,69 @@ def _ffmpeg_library_closure(executable: Path) -> "list[Path]":
 
     ELF の `DT_NEEDED` を読んで soname を集め（推移的にたどる）、ローダと同じ探索順で
     実体パスへ解決する（`ldd` は対象を実行しうるので使わない・#217 と同じ規律）。
+    **各オブジェクトの `DT_RPATH` / `DT_RUNPATH`（`$ORIGIN` 展開込み）を尊重する** —
+    conda やアプリ同梱の FFmpeg は同じ soname の同梱 `libav*` を読むので、これを見ないと
+    「同名のシステムライブラリを hash したが、デコードしたのは同梱版」になりうる
+    （Codex #217）。
+
     静的リンク（自己完結ビルド）や ELF でない実行形式（macOS / Windows）では空を返す
     ——「読めなかったもの」を pin したことにしない。解決できない FFmpeg ライブラリが
     あれば `LearnedModelUnavailable`（デコード実装の一部を覆わない pin は出さない）。
     """
     resolved: "dict[str, Path]" = {}
-    pending = list(_needed_sonames(executable) or ())
+    root_info = _elf_dynamic_info(executable)
+    if root_info is None:
+        return []
+    # (soname, 参照元オブジェクト, その rpath, その runpath)
+    pending = [(name, executable, root_info[1], root_info[2]) for name in root_info[0]]
     seen = set()
     while pending:
-        soname = pending.pop()
+        soname, origin, rpath, runpath = pending.pop()
         if soname in seen:
             continue
         seen.add(soname)
         if not soname.startswith(_FFMPEG_LIBRARY_PREFIXES):
             continue  # OS 基盤ライブラリは線の外（上のコメント参照）
-        path = _resolve_soname_without_loading(soname)
+        path = _resolve_soname_without_loading(
+            soname, origin=origin, rpath=rpath, runpath=runpath
+        )
         if path is None:
             raise LearnedModelUnavailable(
                 f"FFmpeg shared library {soname!r} could not be located; "
                 "デコード実装の一部を覆わない pin を publish しないため unavailable として扱う"
             )
         resolved[soname] = path
-        pending.extend(_needed_sonames(path) or ())
+        info = _elf_dynamic_info(path)
+        if info is not None:
+            pending.extend((name, path, info[1], info[2]) for name in info[0])
     return [resolved[name] for name in sorted(resolved)]
 
 
+def _expand_loader_path(entry: str, origin: "Optional[Path]") -> Optional[Path]:
+    """`$ORIGIN` 等のローダ変数を展開する（展開できなければ None）。"""
+    if "$ORIGIN" in entry or "${ORIGIN}" in entry:
+        if origin is None:
+            return None
+        base = str(origin.resolve().parent)
+        entry = entry.replace("${ORIGIN}", base).replace("$ORIGIN", base)
+    if "$" in entry:
+        # `$LIB` / `$PLATFORM` は環境依存で確定できない。推測で別ファイルを pin する
+        # より、この候補を飛ばして後段（ldconfig）に委ねる方が正直（Codex #217）。
+        return None
+    return Path(entry)
+
+
 def _needed_sonames(path: Path) -> "Optional[list[str]]":
-    """ELF の `DT_NEEDED` を読み、依存 soname を返す（ELF でなければ None）。
+    """ELF の `DT_NEEDED` を読み、依存 soname を返す（ELF でなければ None）。"""
+    info = _elf_dynamic_info(path)
+    return None if info is None else info[0]
+
+
+def _elf_dynamic_info(path: Path) -> "Optional[tuple]":
+    """ELF の `.dynamic` から `(DT_NEEDED, DT_RPATH, DT_RUNPATH)` を読む。
 
     実行も dlopen もせず、ヘッダとセクションを直接読むだけ（Codex #217）。
+    ELF でなければ `None`（macOS / Windows / 静的リンクのテキストラッパ等）。
     """
     import struct
 
@@ -645,7 +700,9 @@ def _needed_sonames(path: Path) -> "Optional[list[str]]":
         return []
     entry_size = 16 if is_64 else 8
     fmt = endian + ("Qq" if is_64 else "Ii")
-    needed_offsets = []
+    needed_offsets: "list[int]" = []
+    rpath_offsets: "list[int]" = []
+    runpath_offsets: "list[int]" = []
     dyn_offset, dyn_size = dynamic
     for position in range(dyn_offset, dyn_offset + dyn_size, entry_size):
         try:
@@ -656,17 +713,33 @@ def _needed_sonames(path: Path) -> "Optional[list[str]]":
             break
         if tag == 1:  # DT_NEEDED
             needed_offsets.append(value)
+        elif tag == 15:  # DT_RPATH
+            rpath_offsets.append(value)
+        elif tag == 29:  # DT_RUNPATH
+            runpath_offsets.append(value)
     str_offset, str_size = dynstr
-    names = []
-    for value in needed_offsets:
+
+    def _string(value: int) -> Optional[str]:
         start = str_offset + value
         if not (str_offset <= start < str_offset + str_size):
-            continue
+            return None
         end = blob.find(b"\0", start)
         if end == -1:
-            continue
-        names.append(blob[start:end].decode("utf-8", errors="replace"))
-    return names
+            return None
+        return blob[start:end].decode("utf-8", errors="replace")
+
+    names = [text for text in map(_string, needed_offsets) if text]
+
+    def _paths(offsets: "list[int]") -> "tuple":
+        entries: "list[str]" = []
+        for value in offsets:
+            text = _string(value)
+            if not text:
+                continue
+            entries.extend(part for part in text.split(":") if part)
+        return tuple(entries)
+
+    return names, _paths(rpath_offsets), _paths(runpath_offsets)
 
 
 def _separation_audio_executables() -> "tuple[tuple, bool]":

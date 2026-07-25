@@ -2561,12 +2561,14 @@ def test_ffmpeg_shared_libraries_are_pinned(monkeypatch, tmp_path):
         "libavcodec.so.60": [],
     }
     monkeypatch.setattr(
-        melody_provenance, "_needed_sonames", lambda path: needed.get(path.name, [])
+        melody_provenance,
+        "_elf_dynamic_info",
+        lambda path: (needed.get(path.name, []), (), ()),
     )
     monkeypatch.setattr(
         melody_provenance,
         "_resolve_soname_without_loading",
-        lambda soname: lib_dir / soname,
+        lambda soname, **kwargs: lib_dir / soname,
     )
 
     closure = melody_provenance._ffmpeg_library_closure(Path("ffmpeg"))
@@ -2574,10 +2576,61 @@ def test_ffmpeg_shared_libraries_are_pinned(monkeypatch, tmp_path):
 
     # 解決できない FFmpeg ライブラリがあれば fail-closed。
     monkeypatch.setattr(
-        melody_provenance, "_resolve_soname_without_loading", lambda soname: None
+        melody_provenance, "_resolve_soname_without_loading", lambda soname, **kwargs: None
     )
     with pytest.raises(LearnedModelUnavailable, match="could not be located"):
         melody_provenance._ffmpeg_library_closure(Path("ffmpeg"))
+
+
+def test_loader_search_order_honors_runpath_and_origin(monkeypatch, tmp_path):
+    """`DT_RPATH` / `DT_RUNPATH`（`$ORIGIN` 展開）をローダと同じ順で尊重する（#217）。
+
+    conda / アプリ同梱の FFmpeg は同名の `libav*` を同梱ディレクトリから読む。これを
+    見ないと「同名のシステムライブラリを hash したが、デコードしたのは同梱版」になる。
+    """
+    import subprocess
+
+    from svp_rpe.melody import provenance as melody_provenance
+
+    bundled_dir = tmp_path / "bundle" / "lib"
+    bundled_dir.mkdir(parents=True)
+    bundled = bundled_dir / "libavcodec.so.60"
+    bundled.write_bytes(b"bundled")
+    system_dir = tmp_path / "usr-lib"
+    system_dir.mkdir()
+    system = system_dir / "libavcodec.so.60"
+    system.write_bytes(b"system")
+    origin = tmp_path / "bundle" / "lib" / "libavformat.so.60"
+    origin.write_bytes(b"avformat")
+
+    class _Cache:
+        stdout = f"\tlibavcodec.so.60 (libc6,x86-64) => {system}\n"
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Cache())
+    monkeypatch.delenv("LD_LIBRARY_PATH", raising=False)
+
+    # RUNPATH の $ORIGIN が ldconfig キャッシュより先に効く。
+    assert melody_provenance._resolve_soname_without_loading(
+        "libavcodec.so.60", origin=origin, runpath=("$ORIGIN",)
+    ) == bundled.resolve()
+    # RPATH も同様（RUNPATH が無いときのみ有効）。
+    assert melody_provenance._resolve_soname_without_loading(
+        "libavcodec.so.60", origin=origin, rpath=("${ORIGIN}",)
+    ) == bundled.resolve()
+    # RUNPATH がある場合、RPATH は無効（glibc の規則）。
+    assert melody_provenance._resolve_soname_without_loading(
+        "libavcodec.so.60", origin=origin, rpath=("$ORIGIN",), runpath=(str(system_dir),)
+    ) == system.resolve()
+    # LD_LIBRARY_PATH は RUNPATH より先。
+    monkeypatch.setenv("LD_LIBRARY_PATH", str(system_dir))
+    assert melody_provenance._resolve_soname_without_loading(
+        "libavcodec.so.60", origin=origin, runpath=("$ORIGIN",)
+    ) == system.resolve()
+    # どれも当たらなければ ldconfig キャッシュ。
+    monkeypatch.delenv("LD_LIBRARY_PATH", raising=False)
+    assert melody_provenance._resolve_soname_without_loading(
+        "libavcodec.so.60"
+    ) == system.resolve()
 
 
 def test_needed_sonames_reads_real_elf_without_executing_it():
