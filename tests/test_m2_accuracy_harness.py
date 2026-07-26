@@ -34,6 +34,9 @@ SPECS_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2_accuracy_specs.y
 # プレースホルダとして拒否する規律のため、決定論の digest を使う。
 FAKE_WEIGHTS_SHA256 = "bf6875a563be64dafa0c8e16f4b6093f55e15ba38f5c7a8844eaa61141dc805e"
 FAKE_CODE_SHA256 = "cffe5426ffd1a5c4a1530e74529ccd0b0cec63fcd07165c3c8564c5cedb770d9"
+FAKE_SEP_WEIGHTS_SHA256 = hashlib.sha256(b"fake-separation-weights").hexdigest()
+FAKE_SEP_CODE_SHA256 = hashlib.sha256(b"fake-separation-code").hexdigest()
+FAKE_STEM_SHA256 = hashlib.sha256(b"fake-stem").hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -66,10 +69,20 @@ def _make_fake_runner(shift_cents: float = 0.0):
             frame_confidence=tuple(1.0 if hz > 0.0 else 0.0 for hz in shifted),
             total_duration_sec=times[-1] if times else 0.0,
         )
-        provenance = {
+        provenance: Dict[str, Any] = {
             "extractor_weights_sha256": FAKE_WEIGHTS_SHA256,
             "extractor_code_sha256": FAKE_CODE_SHA256,
         }
+        if route.preprocessing:
+            # 分離経路は分離器と stem も pin されていなければ evaluate が弾く。
+            provenance["preprocessing"] = {
+                "preprocessing": route.preprocessing,
+                "separation_model": "fake-htdemucs",
+                "separation_version": "0.0-fake",
+                "separation_weights_sha256": FAKE_SEP_WEIGHTS_SHA256,
+                "separation_code_sha256": FAKE_SEP_CODE_SHA256,
+                "stem_sha256": FAKE_STEM_SHA256,
+            }
         return observation, provenance
 
     return _runner
@@ -199,8 +212,13 @@ def test_run_accuracy_records_preloaded_seed_modules() -> None:
     preloaded = report["preloaded_seed_modules"]
     assert isinstance(preloaded, list)
     assert all(isinstance(name, str) for name in preloaded)
-    # 監視対象は first-party 閉包の seed に加えてスコアラー（mir_eval）。
-    assert set(preloaded) <= set(harness._SEED_MODULE_NAMES) | {"mir_eval"}
+    # 監視対象は digest 閉包（推移的モジュール含む）+ ランタイムパッケージから導出。
+    allowed = (
+        set(harness._closure_module_names())
+        | set(harness._SEED_MODULE_NAMES)
+        | set(harness._RUNTIME_PACKAGE_NAMES)
+    )
+    assert set(preloaded) <= allowed, sorted(set(preloaded) - allowed)
 
 
 def test_evaluate_m2_bars_rejects_preloaded_module_reports() -> None:
@@ -665,6 +683,68 @@ def test_evaluate_m2_bars_rejects_unknown_outcome() -> None:
     reports[0]["categories"]["S_direct"]["outcome"] = "failed"
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="未知の outcome"):
+        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+
+
+def test_preloaded_watch_set_covers_the_digest_closure() -> None:
+    """監視集合が digest 閉包（推移的モジュール含む）とランタイムパッケージを覆う。"""
+    closure = set(harness._closure_module_names())
+    # 閉包は seed だけでなく推移的な first-party モジュールも含む。
+    assert "svp_rpe.melody.accuracy" in closure
+    assert any(name.startswith("svp_rpe.utils") for name in closure), sorted(closure)
+    # 監視対象は閉包 + ランタイムパッケージから導出される。
+    for name in ("mir_eval", "crepe", "demucs"):
+        assert name in harness._RUNTIME_PACKAGE_NAMES
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expect"),
+    [
+        (lambda m: m.update(median_cent_error=-1.0), "定義域"),
+        (lambda m: m.update(voiced_chroma_correct_frame_count=-5), "が負"),
+        (lambda m: m.update(voiced_chroma_correct_frame_count=1.5), "整数でない"),
+        (lambda m: m.update(median_cent_error=None), "矛盾"),
+        (lambda m: m.update(tolerance_cents=600.0), "凍結値"),
+    ],
+)
+def test_evaluate_m2_bars_enforces_metrics_contract(mutate, expect) -> None:
+    """誤差モデルの不変条件（中央値・母数・ネスト tolerance）を evaluate で再検査する。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    mutate(reports[0]["categories"]["S_direct"]["metrics"])
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match=expect):
+        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+
+
+@pytest.mark.parametrize(
+    "missing_key",
+    ["separation_weights_sha256", "separation_code_sha256", "stem_sha256"],
+)
+def test_evaluate_m2_bars_requires_separation_digests_for_fullstack(missing_key) -> None:
+    """分離経路は分離器と stem も pin されていなければ証拠にしない。"""
+    reports = [
+        _fake_run(categories=("S_fullstack",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    for report in reports:
+        del report["categories"]["S_fullstack"]["provenance_preprocessing"][missing_key]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match=missing_key):
+        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+
+
+def test_evaluate_m2_bars_requires_preprocessing_block_for_fullstack() -> None:
+    reports = [
+        _fake_run(categories=("S_fullstack",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    for report in reports:
+        del report["categories"]["S_fullstack"]["provenance_preprocessing"]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="provenance_preprocessing"):
         harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
 
 

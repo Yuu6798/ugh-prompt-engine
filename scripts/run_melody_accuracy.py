@@ -183,15 +183,49 @@ def _generator_code_sha256() -> str:
     return digest.hexdigest()
 
 
+# run 中に実際の推論を担うランタイムパッケージ（登録済み route が実行しうるもの）。
+# digest の対象外（third-party）だが、事前ロード済みなら「メモリ上の旧実装が推論し、
+# row の code pin は新しいディスクを指す」窓が開くため、監視対象に含める。
+_RUNTIME_PACKAGE_NAMES: "Tuple[str, ...]" = ("mir_eval", "crepe", "demucs", "torch", "torchaudio")
+
+
+def _closure_module_names() -> List[str]:
+    """`_generator_code_paths()` が hash する全ファイルを import 名へ逆写像する。
+
+    seed 名だけを監視すると、閉包に入っている推移的モジュール（`svp_rpe.utils.hashing`
+    など）の事前ロードを見逃す（Codex P1）。digest の対象と監視対象を同じ集合から
+    導出することで、この非対称が構造的に生じないようにする。
+    """
+    names: List[str] = []
+    for path in _generator_code_paths():
+        for root in _FIRST_PARTY_ROOTS:
+            try:
+                rel = path.relative_to(root)
+            except ValueError:
+                continue
+            parts = list(rel.parts)
+            if parts[-1] == "__init__.py":
+                parts = parts[:-1]
+            else:
+                parts[-1] = parts[-1][: -len(".py")]
+            if parts:
+                names.append(".".join(parts))
+            break
+    return sorted(set(names))
+
+
 def _preloaded_seed_modules() -> List[str]:
-    """本ハーネスが読み込まれる時点で既に import 済みだった閉包モジュール。
+    """本ハーネスが読み込まれる時点で既に import 済みだった監視対象モジュール。
 
     非空なら「メモリ上のコード」と「今 hash したディスクの bytes」が食い違いうる
     ——別経路が先に古い checkout のモジュールを読み込んでいた可能性を排除できない
     （Codex P1）。CLI から素で起動した実測 run では空になる。ここに載った run は
     `evaluate` が publish 不可として弾く。
+
+    監視集合は **digest 閉包そのもの**（推移的モジュールを含む）+ 推論を担う
+    ランタイムパッケージから導出する。seed 名だけでは閉包の一部を見逃す。
     """
-    watched = list(_SEED_MODULE_NAMES) + ["mir_eval"]
+    watched = set(_closure_module_names()) | set(_SEED_MODULE_NAMES) | set(_RUNTIME_PACKAGE_NAMES)
     return sorted(name for name in watched if name in sys.modules)
 
 
@@ -851,6 +885,30 @@ def _require_homogeneous_model_stack(category: str, rows: List[Dict[str, Any]]) 
                     f"{value!r} が真の sha256（64 桁 lowercase hex）でない; プレースホルダを "
                     "記録済み model pin と見なさない (fail-closed)"
                 )
+    # 分離を要する route（S_fullstack の demucs→crepe）は、分離器と **その出力 stem** も
+    # pin されていなければ「Demucs の実行が未 pin のまま」証拠束になる。両 report が
+    # 揃って欠いていると署名比較も素通りするため、存在自体を要求する（Codex P2）。
+    if _CATEGORY_SPECS.get(category, {}).get("kind") == "fullstack":
+        for idx, row in enumerate(rows):
+            preprocessing = row.get("provenance_preprocessing")
+            if not isinstance(preprocessing, dict):
+                raise ValueError(
+                    f"evaluate_m2_bars: category {category!r} rows[{idx}] は分離経路なのに "
+                    "provenance_preprocessing を欠く; 分離の実行を pin できない row を "
+                    "証拠にしない (fail-closed)"
+                )
+            for key in (
+                "separation_weights_sha256",
+                "separation_code_sha256",
+                "stem_sha256",
+            ):
+                if not _is_sha256(preprocessing.get(key)):
+                    raise ValueError(
+                        f"evaluate_m2_bars: category {category!r} rows[{idx}] の "
+                        f"preprocessing.{key} {preprocessing.get(key)!r} が真の sha256 でない; "
+                        "分離器・分離出力が未 pin の row を証拠にしない (fail-closed)"
+                    )
+
     signatures = [_row_model_stack_signature(row) for row in rows]
     if len({json.dumps(sig, sort_keys=True, default=str) for sig in signatures}) > 1:
         raise ValueError(
@@ -918,6 +976,76 @@ _METRIC_RANGES: Dict[str, Tuple[float, float]] = {
     "overall_accuracy": (0.0, 1.0),
     "octave_gap": (-1.0, 1.0),
 }
+
+
+def _require_metrics_contract(
+    category: str, metrics_list: List[Dict[str, Any]], *, tolerance_cents: float
+) -> None:
+    """`MelodyAccuracyResult` が保証する不変条件を evaluate 側で再検査する（fail-closed）。
+
+    範囲表（`_METRIC_RANGES`）は連続指標しか見ておらず、誤差モデルの中心値
+    （`median_cent_error`）・その母数（`voiced_chroma_correct_frame_count`）・row に
+    転記された `tolerance_cents` が素通りしていた（Codex P2）。負の中央値や非整数の
+    フレーム数、report の凍結 tolerance と食い違うネスト値のような **builder が
+    絶対に出さない値** が verdict に写ることを防ぐ。
+    """
+    import math
+
+    for repeat_idx, metrics in enumerate(metrics_list):
+        where = f"category {category!r} repeat[{repeat_idx}]"
+
+        count = metrics.get("voiced_chroma_correct_frame_count")
+        if isinstance(count, bool) or not isinstance(count, int):
+            raise ValueError(
+                f"evaluate_m2_bars: {where} の voiced_chroma_correct_frame_count "
+                f"{count!r} が整数でない (fail-closed)"
+            )
+        if count < 0:
+            raise ValueError(
+                f"evaluate_m2_bars: {where} の voiced_chroma_correct_frame_count "
+                f"{count!r} が負 (fail-closed)"
+            )
+
+        median = metrics.get("median_cent_error")
+        if median is not None:
+            if isinstance(median, bool) or not isinstance(median, (int, float)):
+                raise ValueError(
+                    f"evaluate_m2_bars: {where} の median_cent_error {median!r} が "
+                    "数値でも None でもない (fail-closed)"
+                )
+            if not math.isfinite(float(median)):
+                raise ValueError(
+                    f"evaluate_m2_bars: {where} の median_cent_error が非有限"
+                    f"（{median!r}）(fail-closed)"
+                )
+            if float(median) < 0.0 or float(median) >= tolerance_cents:
+                # chroma 一致フレームの残差なので、定義上 [0, tolerance) に入る。
+                raise ValueError(
+                    f"evaluate_m2_bars: {where} の median_cent_error {median!r} が "
+                    f"定義域 [0, {tolerance_cents}) の外; chroma 一致フレームの残差として "
+                    "ありえない値 (fail-closed)"
+                )
+
+        # count と median は「どちらも無い / どちらも有る」でなければならない
+        # （builder は該当フレーム 0 件のとき median=None・count=0 を返す）。
+        if (count == 0) != (median is None):
+            raise ValueError(
+                f"evaluate_m2_bars: {where} の median_cent_error {median!r} と "
+                f"voiced_chroma_correct_frame_count {count!r} が矛盾; 該当フレーム 0 件なら "
+                "median は None、非 0 なら median は数値 (fail-closed)"
+            )
+
+        nested_tolerance = metrics.get("tolerance_cents")
+        if nested_tolerance is None:
+            raise ValueError(
+                f"evaluate_m2_bars: {where} の metrics が tolerance_cents を欠く (fail-closed)"
+            )
+        if float(nested_tolerance) != float(tolerance_cents):
+            raise ValueError(
+                f"evaluate_m2_bars: {where} の metrics.tolerance_cents {nested_tolerance!r} が "
+                f"report の凍結値 {tolerance_cents} と不一致; 指標がどの許容幅で算出されたか "
+                "が report の申告と食い違う (fail-closed)"
+            )
 
 
 def _require_finite_metrics(category: str, metrics_list: List[Dict[str, Any]]) -> None:
@@ -1218,6 +1346,7 @@ def evaluate_m2_bars(
         bar = bar_block.get(category, {})
         metrics_list = [row["metrics"] for row in rows]
         _require_finite_metrics(category, metrics_list)
+        _require_metrics_contract(category, metrics_list, tolerance_cents=tolerance_cents)
         cat_result["metrics"] = metrics_list
 
         # bars.yaml の `repeats_min` は決定論確認（「shifts=0 後は bit 一致するはず」）
