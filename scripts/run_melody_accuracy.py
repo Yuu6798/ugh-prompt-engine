@@ -2681,6 +2681,18 @@ def evaluate_m2_bars(
             "ディスク bytes の一致を保証できないプロセスから verdict を publish しない "
             "— 素の CLI から評価し直すこと (fail-closed)"
         )
+    # 評価器**自身**にも直接ソース実行を要求する（Codex P2 第 37 巡）。preload ゲートは
+    # 依存モジュールしか覆わず、`python -m run_melody_accuracy --evaluate` は評価器
+    # モジュール自身を stale .pyc から実行しうる——その場合、report が現行ソースでも
+    # 旧評価ロジックがバーを適用し、verdict は現行ディスクの evaluator_code_sha256 を
+    # 名乗る（実行後のソース再 hash では検出できない）。
+    if not _HARNESS_LOADED_AS_MAIN:
+        raise RuntimeError(
+            "evaluate_m2_bars: 評価器が直接パスの script 実行でない（import / python -m "
+            "経由）; 評価器自身の stale .pyc の余地を残す実行形態から verdict を publish "
+            "しない — python scripts/run_melody_accuracy.py --evaluate ... で評価すること "
+            "(fail-closed)"
+        )
     bars_data = bars.verify(bars_sha256)
     bar_block = bars_data["m2_accuracy_bars"]
     repeats_min = int(bar_block.get("repeats_min", 2))

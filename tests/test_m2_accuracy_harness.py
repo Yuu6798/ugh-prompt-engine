@@ -2663,6 +2663,26 @@ def test_fresh_process_report_provenance_gates() -> None:
             )
 
 
+def test_evaluate_refuses_import_style_evaluator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """評価器自身が直接ソース実行でなければ publish を拒否する（Codex P2 第 37 巡）。
+
+    preload ゲートは依存モジュールしか覆わず、`python -m ... --evaluate` は評価器
+    モジュール自身を stale .pyc から実行しうる。
+    """
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    monkeypatch.setattr(harness, "_HARNESS_LOADED_AS_MAIN", False)
+    with pytest.raises(RuntimeError, match="評価器が直接パスの script 実行でない"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
 def test_loaded_as_main_detection_is_structural(tmp_path: Path) -> None:
     """`__name__` だけでなく `__spec__ is None` を要求する（Codex P2 第 35 巡）。
 
