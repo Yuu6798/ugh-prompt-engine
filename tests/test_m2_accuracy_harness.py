@@ -1305,16 +1305,148 @@ def test_load_bars_rejects_thresholds_on_diagnostic_only_category(tmp_path: Path
         harness.load_bars(path)
 
 
+def _artifact_from_yaml_text(text: str) -> Tuple[Any, str]:
+    """`load_bars` の検証を通さずに **整合した** BarsArtifact を組む（テスト専用）。
+
+    raw / digest / parsed data は互いに整合させる（束縛検査は通る）ので、
+    `load_bars` の loader 検査より後ろにある関所を単体で試せる。
+    """
+    raw = text.encode("utf-8")
+    data = harness._yaml_load_no_dup_keys(raw, what="m2_accuracy_bars.yaml")
+    sha256 = hashlib.sha256(raw).hexdigest()
+    return harness.BarsArtifact(data, sha256, raw), sha256
+
+
 def test_evaluate_m2_bars_refuses_diagnostic_only_for_gated_category() -> None:
-    """bars dict を手で組む経路でも、空バーの S_direct を diagnostic_only にしない。"""
+    """`load_bars` を経由しない経路でも、空バーの S_direct を diagnostic_only にしない。"""
+    raw = BARS_PATH.read_text(encoding="utf-8")
+    patched = raw.replace(
+        "  S_direct:                       # 抽出器の健全性バー（落ちたら経路自体を疑う）\n"
+        "    min_rpa: 0.90\n"
+        "    max_vfa: 0.15\n",
+        "  S_direct: {}\n",
+    )
+    assert patched != raw
+    bars, bars_sha256 = _artifact_from_yaml_text(patched)
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    for report in reports:  # 手組み bars に合わせて pin を揃える（関門を先に通す）
+        report["bars_sha256"] = bars_sha256
+    with pytest.raises(ValueError, match="診断専用ではない"):
+        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+
+
+# ---------------------------------------------------------------------------
+# バー digest と parsed data の束縛（Codex P2）
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_m2_bars_rejects_bars_mutated_after_load() -> None:
+    """閾値を下げたまま元の凍結 digest を名乗る verdict を publish させない。"""
     reports = [
         _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
         for _ in range(2)
     ]
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
-    bars["m2_accuracy_bars"]["S_direct"] = {}  # load_bars を通さない直接呼び出し
-    with pytest.raises(ValueError, match="診断専用ではない"):
+    bars["m2_accuracy_bars"]["S_direct"]["min_rpa"] = 0.01  # 凍結バーの実質的な緩和
+    with pytest.raises(ValueError, match="load 後に変異"):
         harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+
+
+def test_evaluate_m2_bars_rejects_plain_dict_bars() -> None:
+    """parsed 閾値と digest が切り離された入力（素の dict）は受理しない。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="BarsArtifact でなければならない"):
+        harness.evaluate_m2_bars(reports, dict(bars.data), bars_sha256=bars_sha256)
+
+
+def test_evaluate_m2_bars_rejects_mismatched_bars_sha256_argument() -> None:
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    bars, _bars_sha256 = harness.load_bars(BARS_PATH)
+    other = hashlib.sha256(b"another-bars").hexdigest()
+    for report in reports:
+        report["bars_sha256"] = other
+    with pytest.raises(ValueError, match="アーティファクトの digest"):
+        harness.evaluate_m2_bars(reports, bars, bars_sha256=other)
+
+
+def test_bars_artifact_detects_digest_tampering() -> None:
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    tampered = harness.BarsArtifact(
+        bars.data, hashlib.sha256(b"wrong").hexdigest(), BARS_PATH.read_bytes()
+    )
+    with pytest.raises(ValueError, match="raw bytes の hash"):
+        tampered.verify()
+    # 正しいアーティファクトは verify を通り、parsed data をそのまま返す。
+    assert bars.verify(bars_sha256) is bars.data
+
+
+# ---------------------------------------------------------------------------
+# repeats_min の下限（Codex P2）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad", ["1", "0"])
+def test_load_bars_rejects_repeats_min_below_two(tmp_path: Path, bad: str) -> None:
+    """`repeats_min: 1` は単一 report での pass を許すため loader で弾く。"""
+    raw = BARS_PATH.read_text(encoding="utf-8")
+    patched = raw.replace("repeats_min: 2", f"repeats_min: {bad}")
+    assert patched != raw
+    path = tmp_path / "bars_repeats_one.yaml"
+    path.write_text(patched, encoding="utf-8")
+    with pytest.raises(ValueError, match="repeats_min"):
+        harness.load_bars(path)
+
+
+def test_registered_bars_require_two_repeats() -> None:
+    bars, _ = harness.load_bars(BARS_PATH)
+    assert int(bars["m2_accuracy_bars"]["repeats_min"]) >= 2
+
+
+# ---------------------------------------------------------------------------
+# CLI: evaluate モードへ --specs を転送する（Codex P2）
+# ---------------------------------------------------------------------------
+
+
+def test_cli_evaluate_forwards_specs_path(tmp_path: Path, monkeypatch) -> None:
+    """`--specs` が evaluate へ渡らないと、カスタム spec の report が pin 不一致で落ちる。"""
+    custom_specs = tmp_path / "custom_specs.yaml"
+    custom_specs.write_text(SPECS_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps({"stub": True}), encoding="utf-8")
+    out_path = tmp_path / "verdict.json"
+
+    captured: Dict[str, Any] = {}
+
+    def _fake_evaluate(reports, bars, **kwargs):
+        captured["specs_path"] = kwargs.get("specs_path")
+        return {"categories": {}}
+
+    monkeypatch.setattr(harness, "evaluate_m2_bars", _fake_evaluate)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--evaluate",
+            str(report_path),
+            "--out",
+            str(out_path),
+            "--specs",
+            str(custom_specs),
+        ],
+    )
+    assert harness.main() == 0
+    assert captured["specs_path"] == custom_specs
 
 
 def test_s_fullstack_remains_diagnostic_only() -> None:

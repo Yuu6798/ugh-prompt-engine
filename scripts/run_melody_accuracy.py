@@ -534,8 +534,86 @@ def load_specs(path: Path = SPECS_PATH) -> Tuple[Dict[str, Any], str]:
     return specs, hashlib.sha256(data).hexdigest()
 
 
-def load_bars(path: Path = BARS_PATH) -> Tuple[Dict[str, Any], str]:
-    """m2_accuracy_bars.yaml を single read で (parsed dict, sha256) として返す。"""
+class BarsArtifact:
+    """凍結バーの **digest と parsed data を束ねた** 不透明アーティファクト。
+
+    `(parsed_dict, sha256)` を別々に返すと、呼び出し側が dict を書き換えたまま元の
+    digest を渡せる——例えば `S_direct.min_rpa` を下げて評価すれば、凍結バーで fail
+    する report が pass になり、verdict は「無変更の凍結アーティファクトの hash」を
+    名乗る（Codex P2）。そこで raw bytes を保持し、`verify()` が
+
+    1. raw の再 hash が記録 digest と一致すること
+    2. raw を**再 parse** した結果が保持している parsed data と一致すること
+       （= load 後に mapping が変異していないこと）
+
+    を確認したうえで parsed data を返す。`evaluate_m2_bars` はこの検証を通した
+    data しか見ない。
+
+    既存の `bars, bars_sha256 = load_bars(...)` / `bars["m2_accuracy_bars"]` という
+    呼び出し形を保つため、Mapping 相当の read アクセスは data へ委譲する。
+    """
+
+    __slots__ = ("_data", "_sha256", "_raw")
+
+    def __init__(self, data: Dict[str, Any], sha256: str, raw: bytes) -> None:
+        self._data = data
+        self._sha256 = sha256
+        self._raw = raw
+
+    @property
+    def data(self) -> Dict[str, Any]:
+        return self._data
+
+    @property
+    def sha256(self) -> str:
+        return self._sha256
+
+    # --- read-only Mapping 委譲（呼び出し側の `bars[...]` / `bars.get(...)` 用）---
+    def __getitem__(self, key: str) -> Any:
+        return self._data[key]
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._data
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self._data.get(key, default)
+
+    def verify(self, expected_sha256: Optional[str] = None) -> Dict[str, Any]:
+        """digest と parsed data の束縛を検証して parsed data を返す（fail-closed）。"""
+        actual = hashlib.sha256(self._raw).hexdigest()
+        if actual != self._sha256:
+            raise ValueError(
+                f"BarsArtifact: 記録 digest {self._sha256!r} が raw bytes の hash "
+                f"{actual!r} と不一致 (fail-closed)"
+            )
+        if expected_sha256 is not None and expected_sha256 != self._sha256:
+            raise ValueError(
+                f"BarsArtifact: 渡された bars_sha256 {expected_sha256!r} が "
+                f"アーティファクトの digest {self._sha256!r} と不一致; 別世代の bars の "
+                "hash を verdict に名乗らせない (fail-closed)"
+            )
+        reparsed = _yaml_load_no_dup_keys(self._raw, what="m2_accuracy_bars.yaml")
+        if reparsed != self._data:
+            raise ValueError(
+                "BarsArtifact: parsed バーが load 後に変異している（raw bytes の再 parse と "
+                "不一致）; 閾値を書き換えたまま元の凍結 digest を名乗る verdict を publish "
+                "しない (fail-closed)"
+            )
+        return self._data
+
+
+def load_bars(path: Path = BARS_PATH) -> Tuple[BarsArtifact, str]:
+    """m2_accuracy_bars.yaml を single read で (BarsArtifact, sha256) として返す。
+
+    read → hash → parse を 1 操作にまとめ、その 3 つを `BarsArtifact` に束ねる
+    （digest と parsed data が切り離されないようにする。Codex P2）。
+    """
     data = Path(path).read_bytes()
     bars = _yaml_load_no_dup_keys(data, what="m2_accuracy_bars.yaml")
     version = bars.get("schema_version")
@@ -547,7 +625,8 @@ def load_bars(path: Path = BARS_PATH) -> Tuple[Dict[str, Any], str]:
     if "m2_accuracy_bars" not in bars:
         raise ValueError("m2_accuracy_bars.yaml is missing the 'm2_accuracy_bars' block")
     _require_well_formed_bars(bars["m2_accuracy_bars"])
-    return bars, hashlib.sha256(data).hexdigest()
+    sha256 = hashlib.sha256(data).hexdigest()
+    return BarsArtifact(bars, sha256, data), sha256
 
 
 # バー閾値の値域。`min_*` は下限、`max_*` は上限として judge 側で使う。
@@ -579,8 +658,16 @@ def _require_well_formed_bars(bar_block: Dict[str, Any]) -> None:
     repeats_min = bar_block.get("repeats_min", 2)
     if isinstance(repeats_min, bool) or not isinstance(repeats_min, int):
         raise ValueError(f"m2_accuracy_bars: repeats_min {repeats_min!r} が整数でない")
-    if repeats_min < 1:
-        raise ValueError(f"m2_accuracy_bars: repeats_min {repeats_min!r} が 1 未満 (fail-closed)")
+    if repeats_min < 2:
+        # `repeats_min: 1` を許すと単一 report が「不十分な repeats」検査を素通りし、
+        # `_repeats_bit_identical` も singleton を自明に一致と見なすため、**一度も
+        # 測り直していない** S_direct pass が publish できる（Codex P2）。ハーネスが
+        # 掲げる n>=2 の決定論契約（設計 §4）を loader 段階で強制する。
+        raise ValueError(
+            f"m2_accuracy_bars: repeats_min {repeats_min!r} が 2 未満; 決定論確認は "
+            "n>=2 の測り直しを要件とする（単一 report の bit 一致は自明に成立する）"
+            " (fail-closed)"
+        )
 
     # 有声判定閾値も凍結バーの一部（実測後に動かして VFA を改善させない）。
     floor = bar_block.get("est_voiced_confidence_floor")
@@ -1568,7 +1655,17 @@ def evaluate_m2_bars(
       として計測値のみ記録する（設計 §8: S_fullstack の低値を理由に crepe を
       責めない）。
     """
-    bar_block = bars["m2_accuracy_bars"]
+    # digest と parsed data の束縛を検証してから閾値を読む。素の dict（手組み・load 後に
+    # 変異させた mapping）は受理しない——閾値を書き換えたまま元の凍結 digest を名乗る
+    # verdict を publish させないため（Codex P2）。
+    if not isinstance(bars, BarsArtifact):
+        raise ValueError(
+            "evaluate_m2_bars: bars は load_bars() が返す BarsArtifact でなければならない"
+            f"（受け取った型: {type(bars).__name__}）; parsed 閾値と digest が切り離された "
+            "入力は評価しない (fail-closed)"
+        )
+    bars_data = bars.verify(bars_sha256)
+    bar_block = bars_data["m2_accuracy_bars"]
     repeats_min = int(bar_block.get("repeats_min", 2))
 
     if not reports:
@@ -1607,7 +1704,7 @@ def evaluate_m2_bars(
     # 凍結 spec を evaluate 側でも読み、bars の pin と report の申告の両方に照合する。
     # 母数の上界を row の自己申告から取らず、ここから組み直すために必要（Codex P2）。
     specs, specs_sha256 = load_specs(specs_path)
-    _require_specs_pin(specs_sha256, bars)
+    _require_specs_pin(specs_sha256, bars_data)
     for idx, report in enumerate(reports):
         reported_specs = report.get("specs_sha256")
         if reported_specs != specs_sha256:
@@ -1662,14 +1759,16 @@ def evaluate_m2_bars(
 
         # repeats として数える前に (a) row が本当にその事前登録 fixture・経路の観測か、
         # (b) 同一 model stack で測られたか を証明する（Codex P1×2）。
-        _require_registered_row_identity(category, rows, bars)
+        _require_registered_row_identity(category, rows, bars_data)
         _require_homogeneous_model_stack(category, rows)
 
         bar = bar_block.get(category, {})
         metrics_list = [row["metrics"] for row in rows]
         _require_finite_metrics(category, metrics_list)
         _require_metrics_contract(category, metrics_list, tolerance_cents=tolerance_cents)
-        expected_frames, expected_voiced = _registered_reference_counts(category, bars, specs)
+        expected_frames, expected_voiced = _registered_reference_counts(
+            category, bars_data, specs
+        )
         _require_reference_bounded_counts(
             category,
             rows,
@@ -1791,7 +1890,14 @@ def main() -> int:
             )
         bars, bars_sha256 = load_bars(args.bars)
         verdict = evaluate_m2_bars(
-            reports, bars, bars_sha256=bars_sha256, report_pins=report_pins
+            reports,
+            bars,
+            bars_sha256=bars_sha256,
+            report_pins=report_pins,
+            # `--specs` を転送しないと、カスタム spec + それに対応する pin を持つ bars で
+            # 測った report を評価するとき committed 既定 spec を読み直して pin 不一致で
+            # 落ちる（= evaluate モードで `--specs` が無効だった。Codex P2）。
+            specs_path=args.specs,
         )
         _atomic_write_text(args.out, json.dumps(verdict, indent=2, sort_keys=True))
         print(f"wrote verdict to {args.out}")
