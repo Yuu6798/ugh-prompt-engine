@@ -75,8 +75,26 @@ def _make_fake_runner(shift_cents: float = 0.0):
     return _runner
 
 
+def _fake_run(**kwargs: Any) -> Dict[str, Any]:
+    """フェイク抽出器で run し、**機構テスト用に** publish 可能な体裁へ整える。
+
+    `run_accuracy(route_runner=...)` が刻む `route_runner_injected=True` は、
+    evaluate 側で「フェイク抽出器の出力を実測記録として publish しない」関所に
+    使われる。ここで False に落とすのは、その関所の**先にある**検査（バー適用・
+    provenance 照合・決定論比較）を単体で確かめるためのテスト専用の操作であり、
+    注入 report が素のままでは拒否されることは
+    `test_evaluate_m2_bars_rejects_injected_runner_reports` が固定する。
+    """
+    report = harness.run_accuracy(**kwargs)
+    report["route_runner_injected"] = False
+    # pytest では閉包モジュールが先に import 済みなので、実測 run と同じ体裁に揃える
+    # （事前ロード run が素のままでは拒否されることは別テストが固定する）。
+    report["preloaded_seed_modules"] = []
+    return report
+
+
 def test_run_accuracy_with_fake_extractor_reports_measured_categories() -> None:
-    report = harness.run_accuracy(route_runner=_make_fake_runner(shift_cents=10.0))
+    report = _fake_run(route_runner=_make_fake_runner(shift_cents=10.0))
 
     assert report["mode"] == "synthetic_accuracy"
     assert set(report["categories"]) == {"S_direct", "S_fullstack"}
@@ -88,7 +106,7 @@ def test_run_accuracy_with_fake_extractor_reports_measured_categories() -> None:
 
 
 def test_run_accuracy_provenance_fields() -> None:
-    report = harness.run_accuracy(route_runner=_make_fake_runner())
+    report = _fake_run(route_runner=_make_fake_runner())
 
     # recorded_utc: dated record 契約（UTC・ISO8601・未来でない）。
     parsed = harness._parse_recorded_utc(report["recorded_utc"], where="report")
@@ -115,8 +133,8 @@ def test_run_accuracy_provenance_fields() -> None:
 
 
 def test_run_accuracy_two_repeats_are_bit_identical_for_deterministic_fake() -> None:
-    report1 = harness.run_accuracy(route_runner=_make_fake_runner(shift_cents=5.0))
-    report2 = harness.run_accuracy(route_runner=_make_fake_runner(shift_cents=5.0))
+    report1 = _fake_run(route_runner=_make_fake_runner(shift_cents=5.0))
+    report2 = _fake_run(route_runner=_make_fake_runner(shift_cents=5.0))
     for category in report1["categories"]:
         assert report1["categories"][category]["metrics"] == report2["categories"][category]["metrics"]
     # run_id は不透明で毎回発行されるため異なる（デザイン通り。#217 と同型）。
@@ -136,6 +154,7 @@ def test_run_accuracy_real_extractor_falls_back_to_unavailable_when_uninstalled(
         pass
 
     report = harness.run_accuracy()
+    assert report["route_runner_injected"] is False
     for category, row in report["categories"].items():
         assert row["outcome"] == "unavailable", (category, row)
         assert "detail" in row
@@ -146,14 +165,98 @@ def test_run_accuracy_unknown_category_is_rejected() -> None:
         harness.run_accuracy(categories=("S_direct", "bogus_category"))
 
 
+def test_run_accuracy_marks_injected_runner_in_report() -> None:
+    report = harness.run_accuracy(
+        categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+    )
+    assert report["route_runner_injected"] is True
+
+
+def test_evaluate_m2_bars_rejects_injected_runner_reports() -> None:
+    """フェイク抽出器の出力は、他の全検査を通っても publish 可能な実測にしない。"""
+    reports = [
+        harness.run_accuracy(
+            categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+        )
+        for _ in range(2)
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="route_runner 注入"):
+        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+
+
+def test_run_accuracy_records_preloaded_seed_modules() -> None:
+    """「ハーネス読み込み時点で閉包モジュールが既にロード済みだったか」が report に載る。
+
+    値そのものは import 順序に依存する（このテストファイルは harness を先に import
+    するので通常は空）。ここで固定するのは、フィールドが必ず存在し、実際の判定に
+    使える形（文字列のリスト）で記録されることまで。非空だった場合に evaluate が
+    拒否することは `test_evaluate_m2_bars_rejects_preloaded_module_reports` が固定する。
+    """
+    report = harness.run_accuracy(
+        categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+    )
+    preloaded = report["preloaded_seed_modules"]
+    assert isinstance(preloaded, list)
+    assert all(isinstance(name, str) for name in preloaded)
+    assert set(preloaded) <= set(harness._SEED_MODULE_NAMES)
+
+
+def test_evaluate_m2_bars_rejects_preloaded_module_reports() -> None:
+    """閉包モジュールが事前ロード済みのプロセスで作られた run は publish 不可。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    reports[0]["preloaded_seed_modules"] = ["svp_rpe.melody.extractors"]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="事前ロード済み"):
+        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+
+
+def test_evaluate_m2_bars_rejects_report_without_preloaded_field() -> None:
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    del reports[1]["preloaded_seed_modules"]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="preloaded_seed_modules"):
+        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+
+
+def test_mir_eval_paths_are_protected_from_out(monkeypatch) -> None:
+    """provenance のために hash する mir_eval のファイルも `--out` から守る。"""
+    paths = harness._mir_eval_paths()
+    assert paths, "mir_eval のファイルが解決できない（テストの前提が drift）"
+    target = paths[0]
+    before = target.read_bytes()
+    monkeypatch.setattr(sys, "argv", ["run_melody_accuracy.py", "--out", str(target)])
+    with pytest.raises(SystemExit, match="provenance"):
+        harness.main()
+    assert target.read_bytes() == before
+
+
+def test_evaluate_m2_bars_rejects_report_without_injection_flag() -> None:
+    """規律より前に作られた（または手組みの）report を黙って通さない。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    del reports[0]["route_runner_injected"]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="route_runner_injected"):
+        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+
+
 # ---------------------------------------------------------------------------
 # evaluate phase
 # ---------------------------------------------------------------------------
 
 
 def test_evaluate_m2_bars_full_cycle_pass_and_diagnostic_only() -> None:
-    report1 = harness.run_accuracy(route_runner=_make_fake_runner(shift_cents=10.0))
-    report2 = harness.run_accuracy(route_runner=_make_fake_runner(shift_cents=10.0))
+    report1 = _fake_run(route_runner=_make_fake_runner(shift_cents=10.0))
+    report2 = _fake_run(route_runner=_make_fake_runner(shift_cents=10.0))
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
 
     verdict = harness.evaluate_m2_bars([report1, report2], bars, bars_sha256=bars_sha256)
@@ -168,10 +271,10 @@ def test_evaluate_m2_bars_full_cycle_pass_and_diagnostic_only() -> None:
 
 def test_evaluate_m2_bars_fails_when_rpa_bar_not_met() -> None:
     # S_direct のバーは min_rpa=0.90。500 cent の大きなずれを与えて RPA を落とす。
-    report1 = harness.run_accuracy(
+    report1 = _fake_run(
         categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=500.0)
     )
-    report2 = harness.run_accuracy(
+    report2 = _fake_run(
         categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=500.0)
     )
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
@@ -181,7 +284,7 @@ def test_evaluate_m2_bars_fails_when_rpa_bar_not_met() -> None:
 
 
 def test_evaluate_m2_bars_insufficient_repeats_when_only_one_report() -> None:
-    report = harness.run_accuracy(
+    report = _fake_run(
         categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
     )
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
@@ -190,7 +293,7 @@ def test_evaluate_m2_bars_insufficient_repeats_when_only_one_report() -> None:
 
 
 def test_evaluate_m2_bars_rejects_duplicate_run_id() -> None:
-    report = harness.run_accuracy(
+    report = _fake_run(
         categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
     )
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
@@ -199,7 +302,7 @@ def test_evaluate_m2_bars_rejects_duplicate_run_id() -> None:
 
 
 def test_evaluate_m2_bars_rejects_missing_recorded_utc() -> None:
-    report = harness.run_accuracy(
+    report = _fake_run(
         categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
     )
     bad = dict(report)
@@ -210,10 +313,10 @@ def test_evaluate_m2_bars_rejects_missing_recorded_utc() -> None:
 
 
 def test_evaluate_m2_bars_rejects_mismatched_bars_sha256() -> None:
-    report1 = harness.run_accuracy(
+    report1 = _fake_run(
         categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
     )
-    report2 = dict(harness.run_accuracy(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)))
+    report2 = dict(_fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)))
     report2["bars_sha256"] = "0" * 64
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="bars_sha256"):
@@ -221,7 +324,7 @@ def test_evaluate_m2_bars_rejects_mismatched_bars_sha256() -> None:
 
 
 def test_evaluate_m2_bars_rejects_missing_generator_code_sha256() -> None:
-    report = harness.run_accuracy(
+    report = _fake_run(
         categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
     )
     bad = dict(report)
@@ -232,11 +335,11 @@ def test_evaluate_m2_bars_rejects_missing_generator_code_sha256() -> None:
 
 
 def test_evaluate_m2_bars_rejects_generator_code_mismatch_between_repeats() -> None:
-    report1 = harness.run_accuracy(
+    report1 = _fake_run(
         categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
     )
     report2 = dict(
-        harness.run_accuracy(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
     )
     report2["generator_code_sha256"] = "0" * 64
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
@@ -247,10 +350,10 @@ def test_evaluate_m2_bars_rejects_generator_code_mismatch_between_repeats() -> N
 def test_evaluate_m2_bars_rejects_stale_generator_code_sha256() -> None:
     """現 checkout と違う generator digest の report にバーを適用しない（stale 拒否）。"""
     report1 = dict(
-        harness.run_accuracy(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
     )
     report2 = dict(
-        harness.run_accuracy(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
     )
     stale = "1" * 64
     report1["generator_code_sha256"] = stale
@@ -268,8 +371,8 @@ def test_evaluate_m2_bars_rejects_tolerance_override_against_frozen_bar() -> Non
     突き合わせるのが唯一の関所になる。
     """
     kwargs = dict(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=500.0))
-    report1 = harness.run_accuracy(tolerance_cents=600.0, **kwargs)
-    report2 = harness.run_accuracy(tolerance_cents=600.0, **kwargs)
+    report1 = _fake_run(tolerance_cents=600.0, **kwargs)
+    report2 = _fake_run(tolerance_cents=600.0, **kwargs)
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
 
     # 緩い許容幅では S_direct のバーを満たしてしまうことを先に示す（抜け道の実在）。
@@ -281,10 +384,10 @@ def test_evaluate_m2_bars_rejects_tolerance_override_against_frozen_bar() -> Non
 
 def test_evaluate_m2_bars_rejects_heterogeneous_model_stack() -> None:
     """別の抽出器重み/コードで測った 2 本を repeats として数えない。"""
-    report1 = harness.run_accuracy(
+    report1 = _fake_run(
         categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
     )
-    report2 = harness.run_accuracy(
+    report2 = _fake_run(
         categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
     )
     # 真の sha256 だが別の値 = 「別の重みで測った」ケース（pin 形式は正しい）。
@@ -298,10 +401,10 @@ def test_evaluate_m2_bars_rejects_heterogeneous_model_stack() -> None:
 
 def test_evaluate_m2_bars_rejects_measured_row_without_weight_pin() -> None:
     """measured なのに重み pin を欠く row は repeats として数えない。"""
-    report1 = harness.run_accuracy(
+    report1 = _fake_run(
         categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
     )
-    report2 = harness.run_accuracy(
+    report2 = _fake_run(
         categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
     )
     del report2["categories"]["S_direct"]["provenance_extractor_weights_sha256"]
@@ -311,10 +414,10 @@ def test_evaluate_m2_bars_rejects_measured_row_without_weight_pin() -> None:
 
 
 def test_evaluate_m2_bars_records_report_pins_when_supplied() -> None:
-    report1 = harness.run_accuracy(
+    report1 = _fake_run(
         categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
     )
-    report2 = harness.run_accuracy(
+    report2 = _fake_run(
         categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
     )
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
@@ -360,7 +463,7 @@ def test_generator_digest_changes_when_extraction_module_changes(tmp_path, monke
 def test_evaluate_m2_bars_rejects_placeholder_model_pin() -> None:
     """`"TBD"` 等のプレースホルダは、両 repeats で同一でも model pin と見なさない。"""
     reports = [
-        harness.run_accuracy(
+        _fake_run(
             categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
         )
         for _ in range(2)
@@ -382,7 +485,7 @@ def test_atomic_write_text_publishes_exact_utf8_bytes(tmp_path) -> None:
 
 def test_run_report_pins_the_mir_eval_scorer() -> None:
     """指標を計算した mir_eval の version / code hash が report に載る。"""
-    report = harness.run_accuracy(
+    report = _fake_run(
         categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
     )
     assert report["mir_eval_version"]
@@ -392,7 +495,7 @@ def test_run_report_pins_the_mir_eval_scorer() -> None:
 def test_evaluate_m2_bars_rejects_divergent_mir_eval_pins() -> None:
     """別リリースの mir_eval で測った 2 本を同一 stack の repeats と数えない。"""
     reports = [
-        harness.run_accuracy(
+        _fake_run(
             categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
         )
         for _ in range(2)
@@ -405,7 +508,7 @@ def test_evaluate_m2_bars_rejects_divergent_mir_eval_pins() -> None:
 
 def test_evaluate_m2_bars_rejects_missing_mir_eval_pin() -> None:
     reports = [
-        harness.run_accuracy(
+        _fake_run(
             categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
         )
         for _ in range(2)
@@ -420,7 +523,7 @@ def test_evaluate_m2_bars_rejects_missing_mir_eval_pin() -> None:
 def test_evaluate_m2_bars_fails_when_deterministic_repeats_diverge() -> None:
     """同一 stack なのに metrics が食い違う repeats は、個々がバー内でも pass にしない。"""
     reports = [
-        harness.run_accuracy(
+        _fake_run(
             categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
         )
         for _ in range(2)
@@ -438,7 +541,7 @@ def test_evaluate_m2_bars_fails_when_deterministic_repeats_diverge() -> None:
 
 def test_evaluate_m2_bars_records_bit_identical_repeats_on_pass() -> None:
     reports = [
-        harness.run_accuracy(
+        _fake_run(
             categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
         )
         for _ in range(2)
@@ -454,15 +557,46 @@ def test_run_accuracy_detects_source_change_during_execution(monkeypatch) -> Non
     """実行中にディスクのソースが差し替わったら fail-closed（旧コードを走らせた run）。"""
     monkeypatch.setattr(harness, "_LOADED_GENERATOR_CODE_SHA256", "0" * 64)
     with pytest.raises(RuntimeError, match="実行中に変化"):
-        harness.run_accuracy(
+        _fake_run(
             categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
         )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expect"),
+    [
+        ("  S_direct:\n    min_rpa: .nan\n", "非有限"),
+        ("  S_direct:\n    min_rpa: 1.5\n", "定義域"),
+        ("  S_direct:\n    min_rpa: 0.90\n    bogus_key: 1\n", "未知の閾値キー"),
+    ],
+)
+def test_load_bars_rejects_malformed_thresholds(mutation, expect, tmp_path) -> None:
+    """バー自身が未定義値なら読み込み時点で弾く（NaN のバーは比較が常に False）。"""
+    original = BARS_PATH.read_text()
+    broken = original.replace("  S_direct:                       # 抽出器の健全性バー（落ちたら経路自体を疑う）\n    min_rpa: 0.90\n    max_vfa: 0.15\n", mutation)
+    assert broken != original, "fixture の該当ブロックが見つからない（テストの前提が drift）"
+    path = tmp_path / "broken_bars.yaml"
+    path.write_text(broken)
+    with pytest.raises(ValueError, match=expect):
+        harness.load_bars(path)
+
+
+def test_evaluate_m2_bars_rejects_unknown_outcome() -> None:
+    """`"failed"` 等の未知 outcome を measured 扱いにしない。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    reports[0]["categories"]["S_direct"]["outcome"] = "failed"
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="未知の outcome"):
+        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
 
 
 def test_evaluate_m2_bars_rejects_nan_metrics_instead_of_passing() -> None:
     """NaN は全比較が False になり pass を偽造するため、閾値判定前に拒否する。"""
     reports = [
-        harness.run_accuracy(
+        _fake_run(
             categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
         )
         for _ in range(2)
@@ -481,7 +615,7 @@ def test_json_loader_rejects_nan_literal() -> None:
 
 def test_evaluate_m2_bars_rejects_metric_outside_domain() -> None:
     reports = [
-        harness.run_accuracy(
+        _fake_run(
             categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
         )
         for _ in range(2)
@@ -503,7 +637,7 @@ def test_evaluate_m2_bars_rejects_metric_outside_domain() -> None:
 def test_evaluate_m2_bars_rejects_row_identity_mismatch(field: str, bogus: str) -> None:
     """ラベルだけが S_direct の row（別 fixture/経路・編集済み）にバーを適用しない。"""
     reports = [
-        harness.run_accuracy(
+        _fake_run(
             categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
         )
         for _ in range(2)
@@ -516,7 +650,7 @@ def test_evaluate_m2_bars_rejects_row_identity_mismatch(field: str, bogus: str) 
 
 def test_evaluate_m2_bars_rejects_unregistered_category_label() -> None:
     reports = [
-        harness.run_accuracy(
+        _fake_run(
             categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
         )
         for _ in range(2)
@@ -531,7 +665,7 @@ def test_evaluate_m2_bars_rejects_unregistered_category_label() -> None:
 def test_cli_rejects_out_path_colliding_with_protected_inputs(tmp_path, monkeypatch) -> None:
     """`--out` が report / bars / specs を指したら書く前に停止する。"""
     report_path = tmp_path / "run1.json"
-    report = harness.run_accuracy(
+    report = _fake_run(
         categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
     )
     report_path.write_text(json.dumps(report))
@@ -573,7 +707,7 @@ def test_cli_rejects_out_path_overwriting_hashed_sources(source_rel, tmp_path, m
     report_path = tmp_path / "run1.json"
     report_path.write_text(
         json.dumps(
-            harness.run_accuracy(
+            _fake_run(
                 categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
             )
         )
@@ -589,10 +723,10 @@ def test_cli_rejects_out_path_overwriting_hashed_sources(source_rel, tmp_path, m
 
 
 def test_evaluate_m2_bars_records_generator_code_sha256_in_verdict() -> None:
-    report1 = harness.run_accuracy(
+    report1 = _fake_run(
         categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
     )
-    report2 = harness.run_accuracy(
+    report2 = _fake_run(
         categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
     )
     bars, bars_sha256 = harness.load_bars(BARS_PATH)

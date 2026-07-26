@@ -55,6 +55,157 @@ if str(SRC) not in sys.path:
 if str(ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts"))
 
+# --- provenance pin（あらゆる first-party import より前に確定させる・#217）--------
+# ここから下の import が走る前にディスク状態を pin する。import 後に計算すると、
+# 別経路で先に読み込まれていた旧モジュールが実行される一方 hash は新しいディスクを
+# 見る、という窓が開く（Codex P1）。閉包計算は find_spec のみで import を起こさない。
+_FIRST_PARTY_ROOTS: "Tuple[Path, ...]" = (SRC.resolve(), (ROOT / "scripts").resolve())
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _first_party_module_file(module_name: str) -> "Path | None":
+    """`module_name` が first-party（`src/svp_rpe` or `scripts` 配下）なら resolved パスを返す。
+
+    stdlib / third-party / 解決不能な名前は None。optional 重み依存（crepe 等）は
+    first-party 外へ解決されるか未導入で None になるため閉包に混入せず、digest は
+    どのマシンでも決定論的に安定する。
+    """
+    import importlib.util
+
+    try:
+        spec = importlib.util.find_spec(module_name)
+    except (ImportError, ValueError, AttributeError, ModuleNotFoundError):
+        return None
+    if spec is None or spec.origin in (None, "built-in", "frozen"):
+        return None
+    path = Path(spec.origin).resolve()
+    if any(_is_relative_to(path, root) for root in _FIRST_PARTY_ROOTS):
+        return path
+    return None
+
+
+_SEED_MODULE_NAMES: "Tuple[str, ...]" = (
+    "svp_rpe.melody.accuracy",
+    "svp_rpe.melody.extractors",
+    "svp_rpe.melody.observability",
+    "svp_rpe.melody.routing",
+    "svp_rpe.rpe.learned.crepe_adapter",
+    "svp_rpe.rpe.learned.source_separation_adapter",
+    "svp_rpe.io.source_separator",
+)
+
+
+def _generator_code_paths() -> List[Path]:
+    """観測を実際に産む first-party 呼び出しグラフの閉包（AST import 走査）。
+
+    本ハーネスと `accuracy.py` だけを hash すると、`melody/extractors.py` /
+    `melody/routing.py` / `rpe/learned/crepe_adapter.py` などが変わっても digest が
+    動かず、旧コードで測った row を現行バーの証拠として通してしまう（Codex P1）。
+    row の `extractor_code_sha256` はサードパーティ推論パッケージの pin であって、
+    この first-party オーケストレーションは覆わない。
+
+    **seed をモジュール名で持ち、`find_spec` で場所だけ解決する**（`provenance.
+    package_code_state` と同じ #217 の規律）。seed をモジュールオブジェクトで受け取ると
+    閉包計算のために import が起き、「import 済みの旧コードが実行され hash は新しい
+    ディスクを見る」窓ができてしまう。名前解決なら本関数を**あらゆる first-party
+    import より前**に呼べる。
+
+    `run_melody_observability._generator_code_paths` と同型だが、あちらを import すると
+    M1 ハーネスのコードが本閉包に入り、M1 側の変更で M2 の report が stale 化する
+    （逆も同様）ため、独立に実装する。
+    """
+    stack: List[Path] = [Path(__file__).resolve()]
+    for name in _SEED_MODULE_NAMES:
+        target = _first_party_module_file(name)
+        if target is not None:
+            stack.append(target)
+
+    resolved: "set[Path]" = set()
+    while stack:
+        file = stack.pop()
+        if file in resolved or not file.exists():
+            continue
+        resolved.add(file)
+        try:
+            tree = ast.parse(file.read_text(encoding="utf-8"))
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+        candidates: "set[str]" = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    candidates.add(alias.name)
+            elif isinstance(node, ast.ImportFrom):
+                # 相対 import は非採用（本リポジトリは絶対 import 規約）。
+                if node.level == 0 and node.module:
+                    candidates.add(node.module)
+                    for alias in node.names:
+                        candidates.add(f"{node.module}.{alias.name}")
+        for name in candidates:
+            target = _first_party_module_file(name)
+            if target is not None and target not in resolved:
+                stack.append(target)
+    return sorted(resolved)
+
+
+def _generator_code_sha256() -> str:
+    """観測を産む first-party コード閉包の digest。
+
+    学習モデル本体（重み）の pin は対象にしない——そちらは row の
+    `provenance_extractor_weights_sha256` / `preprocessing.*` が担う。ここが pin する
+    のは「row を産んだ first-party のロジック（指標算出・route 選択・抽出器
+    オーケストレーション・ミックス式）」である。
+    """
+    digest = hashlib.sha256()
+    for path in _generator_code_paths():
+        # repo 相対パスを混ぜ、同名ファイルの取り違えを防ぐ（checkout 非依存）。
+        try:
+            label = path.relative_to(ROOT).as_posix()
+        except ValueError:
+            label = path.name
+        digest.update(label.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def _preloaded_seed_modules() -> List[str]:
+    """本ハーネスが読み込まれる時点で既に import 済みだった閉包モジュール。
+
+    非空なら「メモリ上のコード」と「今 hash したディスクの bytes」が食い違いうる
+    ——別経路が先に古い checkout のモジュールを読み込んでいた可能性を排除できない
+    （Codex P1）。CLI から素で起動した実測 run では空になる。ここに載った run は
+    `evaluate` が publish 不可として弾く。
+    """
+    return sorted(name for name in _SEED_MODULE_NAMES if name in sys.modules)
+
+
+# 閉包 digest と事前ロード状況を **あらゆる first-party import より前に** 確定させる。
+# `_generator_code_paths` は find_spec のみで import を起こさないので、この位置で呼べる
+# （`provenance.package_code_state` と同じ #217 の規律）。以降 `run_accuracy` はこの値を
+# pin として使い、実行後に再計算して一致を確認する（`_require_unchanged_since_load`）。
+_PRELOADED_SEED_MODULES = _preloaded_seed_modules()
+_LOADED_GENERATOR_CODE_SHA256 = _generator_code_sha256()
+
+
+def _require_unchanged_since_load() -> None:
+    """ディスク上の first-party ソースがロード時から変わっていないことを要求する。"""
+    current = _generator_code_sha256()
+    if current != _LOADED_GENERATOR_CODE_SHA256:
+        raise RuntimeError(
+            f"first-party ソースが実行中に変化した（load 時 {_LOADED_GENERATOR_CODE_SHA256!r} "
+            f"→ 現在 {current!r}）; 走っているのは import 済みの旧コードなので、この run の "
+            "provenance は信用できない — プロセスを再起動して測り直すこと (fail-closed)"
+        )
+
+
 from svp_rpe.melody.provenance import bind_inference_code_pins, package_code_sha256  # noqa: E402
 
 # 推論コードの pin を本モジュールが soundfile/build_melody_bench を import するより
@@ -76,6 +227,37 @@ from svp_rpe.melody.extractors import observe_via_route_with_provenance  # noqa:
 from svp_rpe.melody.observability import MelodyObservation  # noqa: E402
 from svp_rpe.melody.routing import MelodyRoute, select_routes  # noqa: E402
 from svp_rpe.rpe.learned import LearnedModelUnavailable  # noqa: E402
+
+def _scorer_pins() -> Dict[str, Any]:
+    """指標を計算した mir_eval（third-party スコアラー）の version / code pin。
+
+    `generator_code_sha256` は first-party 閉包に限っている（third-party を混ぜると
+    環境差で digest が揺れる）ため、mir_eval の実装差はそこに現れない。一方
+    `mir_eval>=0.7` は上限が無く、別リリースで測った row を同一 stack の repeats と
+    数えれば「別の指標実装の出力」を再現性の証拠にしてしまう（Codex P1）。
+    そこで row ではなく report レベルで、実際に呼んだスコアラーを pin する。
+    """
+    import mir_eval
+
+    return {
+        "mir_eval_version": getattr(mir_eval, "__version__", None),
+        "mir_eval_code_sha256": package_code_sha256("mir_eval"),
+    }
+
+
+def _mir_eval_paths() -> List[Path]:
+    """provenance のために hash する mir_eval のファイル群（`--out` 保護用）。"""
+    import importlib.util
+
+    try:
+        spec = importlib.util.find_spec("mir_eval")
+    except (ImportError, ValueError, AttributeError, ModuleNotFoundError):
+        return []
+    if spec is None or spec.origin in (None, "built-in", "frozen"):
+        return []
+    root = Path(spec.origin).resolve().parent
+    return sorted(p.resolve() for p in root.rglob("*.py"))
+
 
 SPECS_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2_accuracy_specs.yaml"
 BARS_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2_accuracy_bars.yaml"
@@ -278,7 +460,66 @@ def load_bars(path: Path = BARS_PATH) -> Tuple[Dict[str, Any], str]:
         )
     if "m2_accuracy_bars" not in bars:
         raise ValueError("m2_accuracy_bars.yaml is missing the 'm2_accuracy_bars' block")
+    _require_well_formed_bars(bars["m2_accuracy_bars"])
     return bars, hashlib.sha256(data).hexdigest()
+
+
+# バー閾値の値域。`min_*` は下限、`max_*` は上限として judge 側で使う。
+_BAR_THRESHOLD_RANGES: Dict[str, Tuple[float, float]] = {
+    "min_rpa": (0.0, 1.0),
+    "max_vfa": (0.0, 1.0),
+    "max_octave_gap": (-1.0, 1.0),
+}
+
+
+def _require_well_formed_bars(bar_block: Dict[str, Any]) -> None:
+    """凍結バー自身の型・有限性・定義域を検証する（fail-closed）。
+
+    metrics 側の NaN は塞いだが、**バー側**にも同じ穴がある: `min_rpa: .nan` を
+    書いた bars を `--bars` で渡すと `raw_pitch_accuracy < NaN` が常に False になり、
+    「未定義のバー」の下で pass が publish できてしまう（Codex P1）。閾値は判定の
+    基準そのものなので、読み込み時点で弾く。
+    """
+    import math
+
+    tolerance = bar_block.get("tolerance_cents", DEFAULT_TOLERANCE_CENTS)
+    if isinstance(tolerance, bool) or not isinstance(tolerance, (int, float)):
+        raise ValueError(f"m2_accuracy_bars: tolerance_cents {tolerance!r} が数値でない")
+    if not math.isfinite(float(tolerance)) or float(tolerance) <= 0.0:
+        raise ValueError(
+            f"m2_accuracy_bars: tolerance_cents {tolerance!r} が非有限または非正 (fail-closed)"
+        )
+
+    repeats_min = bar_block.get("repeats_min", 2)
+    if isinstance(repeats_min, bool) or not isinstance(repeats_min, int):
+        raise ValueError(f"m2_accuracy_bars: repeats_min {repeats_min!r} が整数でない")
+    if repeats_min < 1:
+        raise ValueError(f"m2_accuracy_bars: repeats_min {repeats_min!r} が 1 未満 (fail-closed)")
+
+    for category, bar in bar_block.items():
+        if not isinstance(bar, dict):
+            continue
+        for key, value in bar.items():
+            if key not in _BAR_THRESHOLD_RANGES:
+                raise ValueError(
+                    f"m2_accuracy_bars: category {category!r} に未知の閾値キー {key!r}; "
+                    f"評価器が解釈できない閾値を黙って無視しない (fail-closed)"
+                )
+            low, high = _BAR_THRESHOLD_RANGES[key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(
+                    f"m2_accuracy_bars: category {category!r} の {key} {value!r} が数値でない"
+                )
+            if not math.isfinite(float(value)):
+                raise ValueError(
+                    f"m2_accuracy_bars: category {category!r} の {key} が非有限（{value!r}）; "
+                    "未定義のバーは比較が常に False になり pass を偽造する (fail-closed)"
+                )
+            if not (low <= float(value) <= high):
+                raise ValueError(
+                    f"m2_accuracy_bars: category {category!r} の {key} {value!r} が "
+                    f"定義域 [{low}, {high}] の外 (fail-closed)"
+                )
 
 
 def _require_specs_pin(specs_sha256: str, bars: Dict[str, Any]) -> None:
@@ -407,145 +648,6 @@ def _select_named_route(input_kind: str, route_name: str) -> MelodyRoute:
 # ---------------------------------------------------------------------------
 
 
-_FIRST_PARTY_ROOTS: "Tuple[Path, ...]" = (SRC.resolve(), (ROOT / "scripts").resolve())
-
-
-def _is_relative_to(path: Path, root: Path) -> bool:
-    try:
-        path.relative_to(root)
-        return True
-    except ValueError:
-        return False
-
-
-def _first_party_module_file(module_name: str) -> "Path | None":
-    """`module_name` が first-party（`src/svp_rpe` or `scripts` 配下）なら resolved パスを返す。
-
-    stdlib / third-party / 解決不能な名前は None。optional 重み依存（crepe 等）は
-    first-party 外へ解決されるか未導入で None になるため閉包に混入せず、digest は
-    どのマシンでも決定論的に安定する。
-    """
-    import importlib.util
-
-    try:
-        spec = importlib.util.find_spec(module_name)
-    except (ImportError, ValueError, AttributeError, ModuleNotFoundError):
-        return None
-    if spec is None or spec.origin in (None, "built-in", "frozen"):
-        return None
-    path = Path(spec.origin).resolve()
-    if any(_is_relative_to(path, root) for root in _FIRST_PARTY_ROOTS):
-        return path
-    return None
-
-
-def _generator_code_paths() -> List[Path]:
-    """観測を実際に産む first-party 呼び出しグラフの閉包（AST import 走査）。
-
-    本ハーネスと `accuracy.py` だけを hash すると、`melody/extractors.py` /
-    `melody/routing.py` / `rpe/learned/crepe_adapter.py` などが変わっても digest が
-    動かず、旧コードで測った row を現行バーの証拠として通してしまう（Codex P1）。
-    row の `extractor_code_sha256` はサードパーティ推論パッケージの pin であって、
-    この first-party オーケストレーションは覆わない。
-
-    `run_melody_observability._generator_code_paths` と同型だが、あちらを import すると
-    M1 ハーネスのコードが本閉包に入り、M1 側の変更で M2 の report が stale 化する
-    （逆も同様）ため、独立に実装する。
-    """
-    import svp_rpe.io.source_separator as _sep
-    import svp_rpe.melody.accuracy as _accuracy
-    import svp_rpe.melody.extractors as _extractors
-    import svp_rpe.melody.observability as _obs
-    import svp_rpe.melody.routing as _routing
-    import svp_rpe.rpe.learned.crepe_adapter as _crepe
-    import svp_rpe.rpe.learned.source_separation_adapter as _srcsep
-
-    seed_modules = [_accuracy, _extractors, _obs, _routing, _crepe, _srcsep, _sep]
-    stack: List[Path] = [Path(__file__).resolve()]
-    stack.extend(Path(m.__file__).resolve() for m in seed_modules)
-
-    resolved: "set[Path]" = set()
-    while stack:
-        file = stack.pop()
-        if file in resolved or not file.exists():
-            continue
-        resolved.add(file)
-        try:
-            tree = ast.parse(file.read_text(encoding="utf-8"))
-        except (SyntaxError, UnicodeDecodeError):
-            continue
-        candidates: "set[str]" = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    candidates.add(alias.name)
-            elif isinstance(node, ast.ImportFrom):
-                # 相対 import は非採用（本リポジトリは絶対 import 規約）。
-                if node.level == 0 and node.module:
-                    candidates.add(node.module)
-                    for alias in node.names:
-                        candidates.add(f"{node.module}.{alias.name}")
-        for name in candidates:
-            target = _first_party_module_file(name)
-            if target is not None and target not in resolved:
-                stack.append(target)
-    return sorted(resolved)
-
-
-def _scorer_pins() -> Dict[str, Any]:
-    """指標を計算した mir_eval（third-party スコアラー）の version / code pin。
-
-    `generator_code_sha256` は first-party 閉包に限っている（third-party を混ぜると
-    環境差で digest が揺れる）ため、mir_eval の実装差はそこに現れない。一方
-    `mir_eval>=0.7` は上限が無く、別リリースで測った row を同一 stack の repeats と
-    数えれば「別の指標実装の出力」を再現性の証拠にしてしまう（Codex P1）。
-    そこで row ではなく report レベルで、実際に呼んだスコアラーを pin する。
-    """
-    import mir_eval
-
-    return {
-        "mir_eval_version": getattr(mir_eval, "__version__", None),
-        "mir_eval_code_sha256": package_code_sha256("mir_eval"),
-    }
-
-
-def _generator_code_sha256() -> str:
-    """観測を産む first-party コード閉包の digest。
-
-    学習モデル本体（重み）の pin は対象にしない——そちらは row の
-    `provenance_extractor_weights_sha256` / `preprocessing.*` が担う。ここが pin する
-    のは「row を産んだ first-party のロジック（指標算出・route 選択・抽出器
-    オーケストレーション・ミックス式）」である。
-    """
-    digest = hashlib.sha256()
-    for path in _generator_code_paths():
-        # repo 相対パスを混ぜ、同名ファイルの取り違えを防ぐ（checkout 非依存）。
-        label = _repo_relative_path(path) or path.name
-        digest.update(label.encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-    return digest.hexdigest()
-
-
-# first-party 閉包の digest を **import 完了直後に** 確定させる。以降 `run_accuracy` は
-# この値を pin として使い、実行後に再計算して一致を確認する（`_require_unchanged_since_load`）。
-# こうしないと、モジュールを import 済みのプロセスでソースが差し替わった場合に、
-# Python はメモリ上の旧コードを実行しながらディスクの新しい bytes を pin してしまい、
-# report が「その metrics を産んでいないコード」を指す（Codex P1）。
-_LOADED_GENERATOR_CODE_SHA256 = _generator_code_sha256()
-
-
-def _require_unchanged_since_load() -> None:
-    """ディスク上の first-party ソースがロード時から変わっていないことを要求する。"""
-    current = _generator_code_sha256()
-    if current != _LOADED_GENERATOR_CODE_SHA256:
-        raise RuntimeError(
-            f"first-party ソースが実行中に変化した（load 時 {_LOADED_GENERATOR_CODE_SHA256!r} "
-            f"→ 現在 {current!r}）; 走っているのは import 済みの旧コードなので、この run の "
-            "provenance は信用できない — プロセスを再起動して測り直すこと (fail-closed)"
-        )
-
-
 def run_accuracy(
     *,
     categories: "tuple[str, ...]" = ("S_direct", "S_fullstack"),
@@ -567,6 +669,11 @@ def run_accuracy(
     未知の `categories` 値は `_CATEGORY_SPECS` に無ければ fail-fast。
     """
     bind_inference_code_pins()
+    # 注入された runner は正解 F0 と「それらしい」hash を自由に返せる（テストの
+    # フェイク抽出器がまさにそれ）。実抽出器を一切走らせずにバーを満たす row を
+    # 作れてしまうので、report 自身に注入の事実を刻み、evaluate はそれを
+    # 「publish 不可」として弾く（Codex P1）。
+    runner_injected = route_runner is not None
     runner: RouteRunner = route_runner or observe_via_route_with_provenance
 
     specs, specs_sha256 = load_specs(specs_path)
@@ -595,6 +702,8 @@ def run_accuracy(
         "bars_path_relative": _repo_relative_path(bars_path),
         "tolerance_cents": effective_tolerance,
         "generator_code_sha256": _LOADED_GENERATOR_CODE_SHA256,
+        "route_runner_injected": runner_injected,
+        "preloaded_seed_modules": list(_PRELOADED_SEED_MODULES),
         "categories": {},
     }
     results.update(_scorer_pins())
@@ -814,6 +923,46 @@ def _require_finite_metrics(category: str, metrics_list: List[Dict[str, Any]]) -
                 )
 
 
+def _require_publishable_runs(reports: List[Dict[str, Any]]) -> None:
+    """注入 runner で作られた report を verdict の証拠にしない（fail-closed）。
+
+    `run_accuracy(route_runner=...)` は抽出器非依存インターフェースの検証用の口で、
+    呼び出し側は正解 F0 と真の sha256 形式の任意 hash を返せる。それでも row には
+    登録済み route 名と既定の generator digest が載るため、他の全チェックを通過して
+    **CREPE を一度も走らせずに** S_direct pass を publish できてしまう（Codex P1）。
+    唯一の確実な区別は「実抽出器を使ったか」なので、run 側が刻んだ事実を関所にする。
+
+    `route_runner_injected` フィールド自体が欠けている report も拒否する（この規律
+    より前に作られた、あるいは手組みの report を黙って通さない）。
+    """
+    for idx, report in enumerate(reports):
+        injected = report.get("route_runner_injected")
+        if injected is None:
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{idx}] が route_runner_injected を欠く; "
+                "実抽出器で測ったことを確認できない report を証拠にしない (fail-closed)"
+            )
+        if injected:
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{idx}] は route_runner 注入で作られている; "
+                "フェイク抽出器の出力は publish 可能な実測記録として扱わない "
+                "(fail-closed)"
+            )
+        preloaded = report.get("preloaded_seed_modules")
+        if preloaded is None:
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{idx}] が preloaded_seed_modules を欠く; "
+                "pin が実行バイトを束縛していたか確認できない (fail-closed)"
+            )
+        if preloaded:
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{idx}] は閉包モジュールが事前ロード済みの "
+                f"プロセスで作られている {sorted(preloaded)}; メモリ上のコードと pin した "
+                "ディスク bytes が食い違いうるため publish 可能な実測にしない "
+                "（素の CLI 実行で測り直すこと・fail-closed）"
+            )
+
+
 def _require_homogeneous_scorer(reports: List[Dict[str, Any]]) -> Dict[str, Any]:
     """全 report が同一の mir_eval スコアラーで測られたことを要求する（fail-closed）。
 
@@ -985,6 +1134,7 @@ def evaluate_m2_bars(
             "同一 run のコピーを複数 repeats として扱えない (fail-closed)"
         )
 
+    _require_publishable_runs(reports)
     generator_code_sha256 = _require_matching_generator_code(reports)
     tolerance_cents = _require_frozen_tolerance(reports, bar_block)
     scorer_pins = _require_homogeneous_scorer(reports)
@@ -1011,7 +1161,18 @@ def evaluate_m2_bars(
         outcomes = {row["outcome"] for row in rows}
         cat_result: Dict[str, Any] = {"n_rows": len(rows), "outcomes": sorted(outcomes)}
 
-        if len(rows) < repeats_min or "unavailable" in outcomes:
+        # scored row は `outcome == "measured"` だけ。`"unavailable"` 以外の未知値
+        # （`"failed"` / `"error"` 等）を measured 扱いにすると、失敗した観測が
+        # metrics を持っているだけで pass を得られる（Codex P1）。
+        unknown_outcomes = sorted(o for o in outcomes if o not in {"measured", "unavailable"})
+        if unknown_outcomes:
+            raise ValueError(
+                f"evaluate_m2_bars: category {category!r} に未知の outcome "
+                f"{unknown_outcomes}; scored row は outcome='measured' のみ "
+                "(fail-closed)"
+            )
+
+        if len(rows) < repeats_min or "measured" not in outcomes or "unavailable" in outcomes:
             cat_result["status"] = "insufficient_repeats"
             verdict["categories"][category] = cat_result
             continue
@@ -1096,6 +1257,7 @@ def main() -> int:
         # 「hash してから同じファイルを JSON で潰す」ことになり、artifact が自分が
         # 記録した bytes を破壊し次回実行も壊れる（Codex P2）。
         protected.update(_generator_code_paths())
+        protected.update(_mir_eval_paths())
         if Path(args.out).resolve() in protected:
             raise SystemExit(
                 f"--out {args.out} は評価入力（report / bars / specs / provenance 対象の "
@@ -1128,6 +1290,7 @@ def main() -> int:
 
     run_protected = {Path(args.bars).resolve(), Path(args.specs).resolve()}
     run_protected.update(_generator_code_paths())
+    run_protected.update(_mir_eval_paths())
     if Path(args.out).resolve() in run_protected:
         raise SystemExit(
             f"--out {args.out} は凍結入力（bars / specs）または provenance 対象のソースと "
