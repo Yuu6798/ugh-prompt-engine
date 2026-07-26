@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
@@ -1263,9 +1264,11 @@ def test_crepe_style_run_would_saturate_vfa_without_the_encoding() -> None:
 
 def test_load_bars_requires_registered_est_voiced_confidence_floor(tmp_path: Path) -> None:
     raw = BARS_PATH.read_text(encoding="utf-8")
-    stripped = "\n".join(
-        line for line in raw.splitlines() if "est_voiced_confidence_floor" not in line
-    )
+    # 閾値の**宣言行だけ**を落とす（amendments の `added:` 記録は残す——そちらを消すと
+    # 登録日検査が先に落ちて、この関所を確かめられない）。
+    stripped = raw.replace("  est_voiced_confidence_floor: 0.30\n", "")
+    assert stripped != raw
+    assert "added: [est_voiced_confidence_floor]" in stripped
     path = tmp_path / "bars_without_floor.yaml"
     path.write_text(stripped, encoding="utf-8")
     with pytest.raises(ValueError, match="est_voiced_confidence_floor が無い"):
@@ -1750,3 +1753,80 @@ def test_measured_rows_satisfy_the_rca_numerator_identity() -> None:
         assert row["metrics"]["voiced_chroma_correct_frame_count"] == pytest.approx(
             implied, abs=1.0
         ), (category, row["metrics"], voiced)
+
+
+# ---------------------------------------------------------------------------
+# verdict の schema discriminator（Codex P2）
+# ---------------------------------------------------------------------------
+
+
+def test_verdict_declares_its_schema_version() -> None:
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    verdict = harness.evaluate_m2_bars(
+        [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+    )
+    assert verdict["schema_version"] == harness._EXPECTED_VERDICT_SCHEMA
+
+
+# ---------------------------------------------------------------------------
+# バー artifact の登録日（Codex P2）: 「実測前に凍結した」主張の土台。
+# ---------------------------------------------------------------------------
+
+
+def test_registered_bars_carry_a_valid_registration_date() -> None:
+    bars, _ = harness.load_bars(BARS_PATH)
+    assert harness._parse_registered_utc(
+        bars["registered_utc"], where="test"
+    ) <= datetime.now(timezone.utc)
+
+
+@pytest.mark.parametrize(
+    ("replacement", "expect"),
+    [
+        ('registered_utc: "2026-07-25"\n', "registered_utc が無い"),          # 欠落
+        ('registered_utc: "not-a-date"\n', "でもない"),                        # 不正形式
+        ('registered_utc: "2099-01-01"\n', "未来"),                            # 未来
+        ('registered_utc: "2026-07-25T00:00:00+09:00"\n', "UTC でない"),       # 非 UTC
+    ],
+)
+def test_load_bars_rejects_undated_or_invalid_registration(
+    tmp_path: Path, replacement: str, expect: str
+) -> None:
+    raw = BARS_PATH.read_text(encoding="utf-8")
+    if expect == "registered_utc が無い":
+        patched = raw.replace('registered_utc: "2026-07-25"\n', "", 1)
+    else:
+        patched = raw.replace('registered_utc: "2026-07-25"\n', replacement, 1)
+    assert patched != raw
+    path = tmp_path / "bars_bad_registration.yaml"
+    path.write_text(patched, encoding="utf-8")
+    with pytest.raises(ValueError, match=expect):
+        harness.load_bars(path)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expect"),
+    [
+        # amendment が元の凍結より前 = 履歴の捏造
+        (lambda raw: raw.replace('- registered_utc: "2026-07-26"', '- registered_utc: "2026-07-01"'),
+         "より前"),
+        # amendment の日付が未来
+        (lambda raw: raw.replace('- registered_utc: "2026-07-26"', '- registered_utc: "2099-01-01"'),
+         "未来"),
+        # 何を追加したか辿れない amendment
+        (lambda raw: raw.replace("    added: [est_voiced_confidence_floor]\n", "    added: []\n"),
+         "added"),
+    ],
+)
+def test_load_bars_validates_amendment_dates(tmp_path: Path, mutate, expect: str) -> None:
+    raw = BARS_PATH.read_text(encoding="utf-8")
+    patched = mutate(raw)
+    assert patched != raw
+    path = tmp_path / "bars_bad_amendment.yaml"
+    path.write_text(patched, encoding="utf-8")
+    with pytest.raises(ValueError, match=expect):
+        harness.load_bars(path)

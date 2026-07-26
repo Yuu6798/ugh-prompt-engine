@@ -343,6 +343,9 @@ _EXPECTED_BARS_SCHEMA = "m2-accuracy-bars/0.1"
 _EXPECTED_REPORT_SCHEMA = "m2-accuracy-report/0.1"
 # 合成仕様のスキーマ discriminator（同じ規律を specs にも適用・Codex P2）。
 _EXPECTED_SPECS_SCHEMA = "m2-accuracy-specs/0.1"
+# publish される verdict 自身の discriminator。保存済み verdict を後から読む側が、
+# 新形式/非互換形式を fail-closed で拒否できるようにする（Codex P2）。
+_EXPECTED_VERDICT_SCHEMA = "m2-accuracy-verdict/0.1"
 
 # バーを持たず「診断記録のみ」で良いカテゴリ（設計 §3/§8: Demucs は合成音色に対し
 # 分布外なので S_fullstack の低値を理由に crepe を責めない）。**この集合の外の
@@ -506,6 +509,84 @@ def _parse_recorded_utc(value: Any, *, where: str) -> datetime:
             "観測していない時点を dated record として主張させない (fail-closed)"
         )
     return parsed
+
+
+def _parse_registered_utc(value: Any, *, where: str) -> datetime:
+    """凍結アーティファクトの **登録日** を検証してパースする（fail-closed）。
+
+    「実測前に凍結した」というバーの主張は、この登録記録の上に全部乗っている。
+    `registered_utc` が欠落・不正形式・未来なら、`--bars` で渡した artifact が
+    「事前登録済み」を名乗って証拠チェーンに入れてしまう（Codex P2）。
+
+    受理する形は `YYYY-MM-DD`（UTC 深夜と解釈）または UTC の ISO 8601 timestamp。
+    `_parse_recorded_utc`（report の観測時刻用）とは別関数にしてある——あちらは
+    秒精度の timestamp と tz 明示を要求するが、登録日は日付粒度で運用しているため。
+    """
+    from datetime import date as _date
+
+    if not isinstance(value, str) or not value:
+        raise ValueError(
+            f"{where}: registered_utc が無い（または文字列でない）; 事前登録の記録が "
+            "無い artifact を凍結バーとして受理しない (fail-closed)"
+        )
+    parsed: Optional[datetime] = None
+    try:
+        # 日付のみ（運用上の既定形）。`fromisoformat` は `YYYY-MM-DD` を厳密に読む。
+        parsed = datetime.combine(_date.fromisoformat(value), datetime.min.time(), timezone.utc)
+    except ValueError:
+        try:
+            candidate = datetime.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError(
+                f"{where}: registered_utc {value!r} は日付 (YYYY-MM-DD) でも ISO 8601 "
+                f"timestamp でもない (fail-closed): {exc}"
+            ) from exc
+        offset = candidate.utcoffset()
+        if offset is None or offset.total_seconds() != 0:
+            raise ValueError(
+                f"{where}: registered_utc {value!r} は UTC でない（tz 無しまたは "
+                "offset≠0）(fail-closed)"
+            )
+        parsed = candidate
+    if parsed > datetime.now(timezone.utc):
+        raise ValueError(
+            f"{where}: registered_utc {value!r} が未来; まだ到来していない時点の "
+            "「事前登録」を主張させない (fail-closed)"
+        )
+    return parsed
+
+
+def _require_dated_registration(bars: Dict[str, Any]) -> None:
+    """バー artifact の登録日と、追加登録（amendments）の日付を検証する（fail-closed）。"""
+    registered = _parse_registered_utc(
+        bars.get("registered_utc"), where="m2_accuracy_bars.yaml"
+    )
+    amendments = bars.get("amendments")
+    if amendments is None:
+        return
+    if not isinstance(amendments, list) or not amendments:
+        raise ValueError(
+            f"m2_accuracy_bars.yaml: amendments {amendments!r} が非空リストでない "
+            "(fail-closed)"
+        )
+    for idx, amendment in enumerate(amendments):
+        where = f"m2_accuracy_bars.yaml amendments[{idx}]"
+        if not isinstance(amendment, dict):
+            raise ValueError(f"{where}: mapping でない（{amendment!r}）(fail-closed)")
+        amended = _parse_registered_utc(amendment.get("registered_utc"), where=where)
+        if amended < registered:
+            # 追加登録が元の凍結より前、という記録は成立しない（履歴の捏造を弾く）。
+            raise ValueError(
+                f"{where}: registered_utc {amendment.get('registered_utc')!r} が "
+                f"artifact の registered_utc {bars.get('registered_utc')!r} より前 "
+                "(fail-closed)"
+            )
+        added = amendment.get("added")
+        if not isinstance(added, list) or not added:
+            raise ValueError(
+                f"{where}: added {added!r} が非空リストでない; 何を追加登録したか "
+                "辿れない amendment を受理しない (fail-closed)"
+            )
 
 
 def _repo_relative_path(path: "str | Path") -> "str | None":
@@ -707,6 +788,8 @@ def load_bars(path: Path = BARS_PATH) -> Tuple[BarsArtifact, str]:
         )
     if "m2_accuracy_bars" not in bars:
         raise ValueError("m2_accuracy_bars.yaml is missing the 'm2_accuracy_bars' block")
+    # 「実測前に凍結した」という主張の土台なので、閾値そのものより前に登録日を検証する。
+    _require_dated_registration(bars)
     _require_well_formed_bars(bars["m2_accuracy_bars"])
     sha256 = hashlib.sha256(data).hexdigest()
     return BarsArtifact(bars, sha256, data), sha256
@@ -1828,6 +1911,7 @@ def evaluate_m2_bars(
     scorer_pins = _require_homogeneous_scorer(reports)
 
     verdict: Dict[str, Any] = {
+        "schema_version": _EXPECTED_VERDICT_SCHEMA,
         "verdict_recorded_utc": _utc_now(),
         "bars_sha256": bars_sha256,
         "generator_code_sha256": generator_code_sha256,
