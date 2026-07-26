@@ -483,29 +483,33 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def _parse_recorded_utc(value: Any, *, where: str) -> datetime:
-    """report の `recorded_utc` を UTC timestamp として検証してパースする（fail-closed）。"""
+def _parse_recorded_utc(value: Any, *, where: str, field: str = "recorded_utc") -> datetime:
+    """report の観測時刻フィールドを UTC timestamp として検証してパースする（fail-closed）。
+
+    `recorded_utc`（完了時刻）と `started_utc`（開始時刻）が同じ契約
+    （UTC・ISO 8601・未来でない）を共有する。
+    """
     if not isinstance(value, str) or not value:
         raise ValueError(
-            f"evaluate_m2_bars: {where} に recorded_utc が無い（または文字列でない）; "
+            f"evaluate_m2_bars: {where} に {field} が無い（または文字列でない）; "
             "dated record を名乗る report は観測時刻を必須とする (fail-closed)"
         )
     try:
         parsed = datetime.fromisoformat(value)
     except ValueError as exc:
         raise ValueError(
-            f"evaluate_m2_bars: {where} の recorded_utc {value!r} は ISO 8601 として "
+            f"evaluate_m2_bars: {where} の {field} {value!r} は ISO 8601 として "
             f"解釈できない (fail-closed): {exc}"
         ) from exc
     offset = parsed.utcoffset()
     if offset is None or offset.total_seconds() != 0:
         raise ValueError(
-            f"evaluate_m2_bars: {where} の recorded_utc {value!r} は UTC でない"
+            f"evaluate_m2_bars: {where} の {field} {value!r} は UTC でない"
             "（tz 無しまたは offset≠0）(fail-closed)"
         )
     if parsed > datetime.now(timezone.utc):
         raise ValueError(
-            f"evaluate_m2_bars: {where} の recorded_utc {value!r} は未来の時刻; "
+            f"evaluate_m2_bars: {where} の {field} {value!r} は未来の時刻; "
             "観測していない時点を dated record として主張させない (fail-closed)"
         )
     return parsed
@@ -1930,6 +1934,26 @@ def evaluate_m2_bars(
     run_ids: List[str] = []
     for idx, report in enumerate(reports):
         recorded = _parse_recorded_utc(report.get("recorded_utc"), where=f"reports[{idx}]")
+        # 完了時刻だけでは「登録前に測り始め、登録後に完了した」run が通る（Codex P2）。
+        # 測定は開始から完了まで一貫して登録済みバーの下で行われた必要があるので、
+        # `started_utc` にも同じ契約 + 登録時点以降 + 完了時刻以前を要求する。
+        started = _parse_recorded_utc(
+            report.get("started_utc"), where=f"reports[{idx}]", field="started_utc"
+        )
+        if started > recorded:
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{idx}] の started_utc "
+                f"{report.get('started_utc')!r} が recorded_utc "
+                f"{report.get('recorded_utc')!r} より後; 開始が完了より後の測定記録は "
+                "成立しない (fail-closed)"
+            )
+        if started < latest_registration:
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{idx}] の started_utc "
+                f"{report.get('started_utc')!r} が、適用するバーの最新登録時点 "
+                f"{latest_registration.isoformat()} より前; 測定の開始時点で存在しなかった "
+                "閾値を事前登録として提示させない (fail-closed)"
+            )
         if recorded < latest_registration:
             raise ValueError(
                 f"evaluate_m2_bars: reports[{idx}] の recorded_utc "

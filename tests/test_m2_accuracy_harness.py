@@ -1913,9 +1913,11 @@ def test_evaluate_m2_bars_rejects_reports_predating_bar_registration() -> None:
         for _ in range(2)
     ]
     for report in reports:
-        report["recorded_utc"] = "2026-07-25T12:00:00+00:00"  # 最新 amendment (07-26) より前
+        # 開始・完了とも最新 amendment (07-26) より前（順序検査ではなく登録時点検査に到達させる）。
+        report["started_utc"] = "2026-07-25T11:00:00+00:00"
+        report["recorded_utc"] = "2026-07-25T12:00:00+00:00"
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
-    with pytest.raises(ValueError, match="最新登録時点"):
+    with pytest.raises(ValueError, match="測定の開始時点|最新登録時点"):
         harness.evaluate_m2_bars(
             [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
         )
@@ -1932,3 +1934,59 @@ def test_fresh_reports_postdate_the_bar_registration() -> None:
         [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
     )
     assert verdict["categories"]["S_direct"]["status"] == "pass"
+
+
+# ---------------------------------------------------------------------------
+# 第 16 巡: 測定開始時点の検証（Codex P2）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expect"),
+    [
+        # 登録（07-26）前に測り始め、登録後に完了した run — 完了時刻だけでは通っていた。
+        (lambda r: r.update(started_utc="2026-07-25T23:00:00+00:00"), "測定の開始時点"),
+        # 開始が完了より後 = 成立しない測定記録。
+        (lambda r: r.update(started_utc="2099-01-01T00:00:00+00:00"), "未来"),
+        (lambda r: r.pop("started_utc"), "started_utc が無い"),
+        (lambda r: r.update(started_utc="not-a-timestamp"), "ISO 8601"),
+    ],
+)
+def test_evaluate_m2_bars_validates_measurement_start(mutate, expect) -> None:
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    mutate(reports[0])
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match=expect):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+def test_evaluate_m2_bars_rejects_start_after_completion() -> None:
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    # 開始を完了の 1 秒後へ（未来チェックに当たらない過去の時刻同士で順序だけ壊す）。
+    recorded = reports[0]["recorded_utc"]
+    from datetime import datetime, timedelta
+    late = (datetime.fromisoformat(recorded) + timedelta(seconds=1)).isoformat()
+    reports[0]["started_utc"] = late
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="より後"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+def test_design_doc_referenced_by_the_m2_layer_is_committed() -> None:
+    """コード・fixture が引く設計書パスが実在する（参照だけの幽霊 doc を残さない）。"""
+    doc = ROOT / "docs" / "DESIGN_M2_extraction_accuracy.md"
+    assert doc.is_file()
+    text = doc.read_text(encoding="utf-8")
+    # 引用されている節が実在することまで確認（§2 指標 / §4 バー / §7 PR 分割 / §8 禁止事項）。
+    for marker in ("## 2. 指標", "## 4. 事前登録バー", "## 7. PR 分割", "## 8. やってはいけないこと"):
+        assert marker in text, marker
