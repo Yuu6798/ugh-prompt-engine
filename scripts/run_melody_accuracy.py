@@ -1508,6 +1508,13 @@ def run_accuracy(
             y, sr, waveform_sha256 = _build_category_waveform(category, category_spec, specs, bars)
             wav_path = Path(tmp) / f"{category}.wav"
             wav_path.write_bytes(_serialize_wav_float32(y, sr))
+            # hash・デコードの前にファイル自体を read-only にする。ディレクトリ 0500 は
+            # rename/unlink を塞ぐが、**既存 inode への in-place 上書き**は owner-writable
+            # (0644) のファイルなら rename も chmod も要さず、pre-hash 後に書き換え →
+            # デコーダに消費させ → post-hash 前に復元、が fd hash / inode 検査を素通り
+            # する（Codex P2 第 39 巡）。0400 なら明示 chmod なしに書けない——明示
+            # chmod まで行う同権限者はプロセスメモリも書ける = 既定の境界外。
+            os.chmod(wav_path, 0o400)
             # `waveform_sha256` は合成直後の in-memory 配列 `y` の pin だが、抽出器が
             # 実際に消費するのは直列化された WAV。直列化/デコードの欠陥や並行差し替えで
             # 両者が乖離すると「測っていない bytes の正解」に対する採点を受理してしまう

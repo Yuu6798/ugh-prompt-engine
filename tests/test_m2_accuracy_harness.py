@@ -20,7 +20,7 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Tuple
 
 import pytest
 
@@ -2763,6 +2763,19 @@ def test_reverification_uses_frozen_specs_bytes(
         )
     assert captured["specs_path"].resolve() != harness.SPECS_PATH.resolve()
     assert captured["bytes"] == specs_raw
+
+
+def test_input_wav_is_read_only_during_extraction() -> None:
+    """抽出器がデコードする時点で WAV は 0400（in-place 上書きの遮断・Codex P2 第 39 巡）。"""
+    modes: List[int] = []
+    inner = _make_fake_runner(shift_cents=10.0)
+
+    def _capture_mode(audio_path: str, route: Any) -> Any:
+        modes.append(os.stat(audio_path).st_mode & 0o777)
+        return inner(audio_path, route)
+
+    harness.run_accuracy(categories=("S_direct",), route_runner=_capture_mode)
+    assert modes == [0o400]
 
 
 def test_wav_serialization_is_deterministic() -> None:
