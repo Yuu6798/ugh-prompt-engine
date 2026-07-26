@@ -25,6 +25,12 @@
 #
 # 単位・規約は synthesis_specs.yaml と同一（MIDI ノート番号、秒）。
 
+# 合成仕様のスキーマ discriminator。`sample_rate` / `amplitude` / `fixtures` が
+# 残ったまま意味論が変わっても、バージョンが無いと loader が新旧を区別できず
+# 現行の合成セマンティクスで解釈してしまう（Codex P2）。bars / run report と同じ
+# 規律を specs にも適用し、未知/欠落は fixture 定義を処理する前に弾く。
+schema_version: "m2-accuracy-specs/0.1"
+
 sample_rate: 22050
 amplitude: 0.3
 

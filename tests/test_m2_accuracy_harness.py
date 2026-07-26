@@ -108,6 +108,17 @@ def _fake_run(**kwargs: Any) -> Dict[str, Any]:
     return report
 
 
+def _as_report_artifact(report: Dict[str, Any]) -> Any:
+    """dict の report を、raw/digest/parsed が整合した `ReportArtifact` へ包む。
+
+    `evaluate_m2_bars` は pin と評価対象を束縛するため `ReportArtifact` しか受理しない。
+    テストが report を編集して下流の関所を試す場合も、**編集後の内容を serialize した
+    bytes** から組めば束縛は保たれ、狙った関所まで到達できる。
+    """
+    raw = json.dumps(report, sort_keys=True).encode("utf-8")
+    return harness.ReportArtifact.from_bytes(raw, path=None)
+
+
 def test_run_accuracy_with_fake_extractor_reports_measured_categories() -> None:
     report = _fake_run(route_runner=_make_fake_runner(shift_cents=10.0))
 
@@ -197,7 +208,9 @@ def test_evaluate_m2_bars_rejects_injected_runner_reports() -> None:
     ]
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="route_runner 注入"):
-        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
 
 
 def test_run_accuracy_records_preloaded_seed_modules() -> None:
@@ -232,7 +245,9 @@ def test_evaluate_m2_bars_rejects_preloaded_module_reports() -> None:
     reports[0]["preloaded_seed_modules"] = ["svp_rpe.melody.extractors"]
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="事前ロード済み"):
-        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
 
 
 def test_evaluate_m2_bars_rejects_report_without_preloaded_field() -> None:
@@ -243,7 +258,9 @@ def test_evaluate_m2_bars_rejects_report_without_preloaded_field() -> None:
     del reports[1]["preloaded_seed_modules"]
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="preloaded_seed_modules"):
-        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
 
 
 def test_mir_eval_paths_are_protected_from_out(monkeypatch) -> None:
@@ -267,7 +284,9 @@ def test_evaluate_m2_bars_rejects_report_without_injection_flag() -> None:
     del reports[0]["route_runner_injected"]
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="route_runner_injected"):
-        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -280,7 +299,11 @@ def test_evaluate_m2_bars_full_cycle_pass_and_diagnostic_only() -> None:
     report2 = _fake_run(route_runner=_make_fake_runner(shift_cents=10.0))
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
 
-    verdict = harness.evaluate_m2_bars([report1, report2], bars, bars_sha256=bars_sha256)
+    verdict = harness.evaluate_m2_bars(
+            [_as_report_artifact(report1), _as_report_artifact(report2)],
+            bars,
+            bars_sha256=bars_sha256,
+        )
 
     assert verdict["n_reports"] == 2
     assert len(set(verdict["run_ids"])) == 2
@@ -299,7 +322,11 @@ def test_evaluate_m2_bars_fails_when_rpa_bar_not_met() -> None:
         categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=500.0)
     )
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
-    verdict = harness.evaluate_m2_bars([report1, report2], bars, bars_sha256=bars_sha256)
+    verdict = harness.evaluate_m2_bars(
+            [_as_report_artifact(report1), _as_report_artifact(report2)],
+            bars,
+            bars_sha256=bars_sha256,
+        )
     assert verdict["categories"]["S_direct"]["status"] == "fail"
     assert verdict["categories"]["S_direct"]["failures"]
 
@@ -309,7 +336,9 @@ def test_evaluate_m2_bars_insufficient_repeats_when_only_one_report() -> None:
         categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
     )
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
-    verdict = harness.evaluate_m2_bars([report], bars, bars_sha256=bars_sha256)
+    verdict = harness.evaluate_m2_bars(
+        [_as_report_artifact(report)], bars, bars_sha256=bars_sha256
+    )
     assert verdict["categories"]["S_direct"]["status"] == "insufficient_repeats"
 
 
@@ -319,7 +348,11 @@ def test_evaluate_m2_bars_rejects_duplicate_run_id() -> None:
     )
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="run_id"):
-        harness.evaluate_m2_bars([report, report], bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(report), _as_report_artifact(report)],
+            bars,
+            bars_sha256=bars_sha256,
+        )
 
 
 def test_evaluate_m2_bars_rejects_missing_recorded_utc() -> None:
@@ -330,7 +363,9 @@ def test_evaluate_m2_bars_rejects_missing_recorded_utc() -> None:
     del bad["recorded_utc"]
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="recorded_utc"):
-        harness.evaluate_m2_bars([bad], bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(bad)], bars, bars_sha256=bars_sha256
+        )
 
 
 def test_evaluate_m2_bars_rejects_mismatched_bars_sha256() -> None:
@@ -341,7 +376,11 @@ def test_evaluate_m2_bars_rejects_mismatched_bars_sha256() -> None:
     report2["bars_sha256"] = "0" * 64
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="bars_sha256"):
-        harness.evaluate_m2_bars([report1, report2], bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(report1), _as_report_artifact(report2)],
+            bars,
+            bars_sha256=bars_sha256,
+        )
 
 
 def test_evaluate_m2_bars_rejects_missing_generator_code_sha256() -> None:
@@ -352,7 +391,9 @@ def test_evaluate_m2_bars_rejects_missing_generator_code_sha256() -> None:
     del bad["generator_code_sha256"]
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="generator_code_sha256"):
-        harness.evaluate_m2_bars([bad], bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(bad)], bars, bars_sha256=bars_sha256
+        )
 
 
 def test_evaluate_m2_bars_rejects_generator_code_mismatch_between_repeats() -> None:
@@ -365,7 +406,11 @@ def test_evaluate_m2_bars_rejects_generator_code_mismatch_between_repeats() -> N
     report2["generator_code_sha256"] = "0" * 64
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="repeats 間で不一致"):
-        harness.evaluate_m2_bars([report1, report2], bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(report1), _as_report_artifact(report2)],
+            bars,
+            bars_sha256=bars_sha256,
+        )
 
 
 def test_evaluate_m2_bars_rejects_stale_generator_code_sha256() -> None:
@@ -381,7 +426,11 @@ def test_evaluate_m2_bars_rejects_stale_generator_code_sha256() -> None:
     report2["generator_code_sha256"] = stale
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="現 checkout"):
-        harness.evaluate_m2_bars([report1, report2], bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(report1), _as_report_artifact(report2)],
+            bars,
+            bars_sha256=bars_sha256,
+        )
 
 
 def test_evaluate_m2_bars_rejects_tolerance_override_against_frozen_bar() -> None:
@@ -400,7 +449,11 @@ def test_evaluate_m2_bars_rejects_tolerance_override_against_frozen_bar() -> Non
     assert report1["categories"]["S_direct"]["metrics"]["raw_pitch_accuracy"] >= 0.90
 
     with pytest.raises(ValueError, match="tolerance_cents"):
-        harness.evaluate_m2_bars([report1, report2], bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(report1), _as_report_artifact(report2)],
+            bars,
+            bars_sha256=bars_sha256,
+        )
 
 
 def test_evaluate_m2_bars_rejects_heterogeneous_model_stack() -> None:
@@ -417,7 +470,11 @@ def test_evaluate_m2_bars_rejects_heterogeneous_model_stack() -> None:
     ).hexdigest()
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="model stack"):
-        harness.evaluate_m2_bars([report1, report2], bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(report1), _as_report_artifact(report2)],
+            bars,
+            bars_sha256=bars_sha256,
+        )
 
 
 def test_evaluate_m2_bars_rejects_measured_row_without_weight_pin() -> None:
@@ -431,10 +488,15 @@ def test_evaluate_m2_bars_rejects_measured_row_without_weight_pin() -> None:
     del report2["categories"]["S_direct"]["provenance_extractor_weights_sha256"]
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="provenance_extractor_weights_sha256"):
-        harness.evaluate_m2_bars([report1, report2], bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(report1), _as_report_artifact(report2)],
+            bars,
+            bars_sha256=bars_sha256,
+        )
 
 
-def test_evaluate_m2_bars_records_report_pins_when_supplied() -> None:
+def test_evaluate_m2_bars_derives_report_pins_from_evaluated_bytes() -> None:
+    """pin は呼び出し側の申告ではなく、実際に評価した bytes から導出される。"""
     report1 = _fake_run(
         categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
     )
@@ -442,17 +504,48 @@ def test_evaluate_m2_bars_records_report_pins_when_supplied() -> None:
         categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
     )
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
-    pins = [{"sha256": "a" * 64, "path_name": "r1.json"}, {"sha256": "b" * 64, "path_name": "r2.json"}]
-    verdict = harness.evaluate_m2_bars(
-        [report1, report2], bars, bars_sha256=bars_sha256, report_pins=pins
-    )
-    assert verdict["report_pins"] == pins
+    artifacts = [_as_report_artifact(report1), _as_report_artifact(report2)]
+    verdict = harness.evaluate_m2_bars(artifacts, bars, bars_sha256=bars_sha256)
+    assert verdict["report_pins"] == [a.pin() for a in artifacts]
+    assert [pin["sha256"] for pin in verdict["report_pins"]] == [a.sha256 for a in artifacts]
     assert verdict["tolerance_cents"] == 50.0
 
-    with pytest.raises(ValueError, match="report_pins 件数"):
-        harness.evaluate_m2_bars(
-            [report1, report2], bars, bars_sha256=bars_sha256, report_pins=pins[:1]
-        )
+
+def test_evaluate_m2_bars_rejects_plain_dict_reports() -> None:
+    """parsed 内容と digest が切り離された report（素の dict）は受理しない。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    # **意図的に** 素の dict を渡す（artifact に包まない）。
+    with pytest.raises(ValueError, match="ReportArtifact"):
+        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+
+
+def test_evaluate_m2_bars_rejects_report_mutated_after_load() -> None:
+    """元ファイルの hash を pin しながら別内容を判定する経路を塞ぐ。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    artifacts = [_as_report_artifact(r) for r in reports]
+    # load 後に parsed mapping だけを書き換える（raw bytes と digest は元のまま）。
+    artifacts[0].data["categories"]["S_direct"]["metrics"]["raw_pitch_accuracy"] = 0.99
+    with pytest.raises(ValueError, match="load 後に変異"):
+        harness.evaluate_m2_bars(artifacts, bars, bars_sha256=bars_sha256)
+
+
+def test_load_report_binds_bytes_digest_and_parsed_data(tmp_path: Path) -> None:
+    report = _fake_run(categories=("S_direct",), route_runner=_make_fake_runner())
+    path = tmp_path / "r1.json"
+    raw = json.dumps(report, indent=2, sort_keys=True).encode("utf-8")
+    path.write_bytes(raw)
+    artifact = harness.load_report(path)
+    assert artifact.sha256 == hashlib.sha256(raw).hexdigest()
+    assert artifact.verify() == report
+    assert artifact.pin()["path_name"] == "r1.json"
 
 
 def test_generator_digest_covers_first_party_extraction_path() -> None:
@@ -493,7 +586,9 @@ def test_evaluate_m2_bars_rejects_placeholder_model_pin() -> None:
         report["categories"]["S_direct"]["provenance_extractor_weights_sha256"] = "TBD"
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="真の sha256"):
-        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
 
 
 def test_atomic_write_text_publishes_exact_utf8_bytes(tmp_path) -> None:
@@ -524,7 +619,9 @@ def test_evaluate_m2_bars_rejects_divergent_mir_eval_pins() -> None:
     reports[1]["mir_eval_version"] = "0.999"
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="mir_eval pin"):
-        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
 
 
 def test_evaluate_m2_bars_rejects_missing_mir_eval_pin() -> None:
@@ -538,7 +635,9 @@ def test_evaluate_m2_bars_rejects_missing_mir_eval_pin() -> None:
         del report["mir_eval_version"]
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="mir_eval_version"):
-        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
 
 
 def test_evaluate_m2_bars_fails_when_deterministic_repeats_diverge() -> None:
@@ -556,7 +655,9 @@ def test_evaluate_m2_bars_fails_when_deterministic_repeats_diverge() -> None:
     metrics["raw_pitch_accuracy"] = 0.95
     metrics["octave_gap"] = metrics["raw_chroma_accuracy"] - metrics["raw_pitch_accuracy"]
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
-    verdict = harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+    verdict = harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
     s_direct = verdict["categories"]["S_direct"]
     assert s_direct["repeats_bit_identical"] is False
     assert s_direct["status"] == "fail", s_direct
@@ -571,7 +672,9 @@ def test_evaluate_m2_bars_records_bit_identical_repeats_on_pass() -> None:
         for _ in range(2)
     ]
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
-    verdict = harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+    verdict = harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
     assert verdict["categories"]["S_direct"]["repeats_bit_identical"] is True
     assert verdict["categories"]["S_direct"]["status"] == "pass"
     assert verdict["mir_eval_version"] == reports[0]["mir_eval_version"]
@@ -688,7 +791,9 @@ def test_evaluate_m2_bars_rejects_unknown_outcome() -> None:
     reports[0]["categories"]["S_direct"]["outcome"] = "failed"
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="未知の outcome"):
-        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
 
 
 def test_preloaded_watch_set_covers_the_digest_closure() -> None:
@@ -787,7 +892,9 @@ def test_evaluate_m2_bars_enforces_metrics_contract(mutate, expect) -> None:
     mutate(reports[0]["categories"]["S_direct"]["metrics"])
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match=expect):
-        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
 
 
 @pytest.mark.parametrize(
@@ -804,7 +911,9 @@ def test_evaluate_m2_bars_requires_separation_digests_for_fullstack(missing_key)
         del report["categories"]["S_fullstack"]["provenance_preprocessing"][missing_key]
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match=missing_key):
-        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
 
 
 def test_evaluate_m2_bars_requires_preprocessing_block_for_fullstack() -> None:
@@ -816,7 +925,9 @@ def test_evaluate_m2_bars_requires_preprocessing_block_for_fullstack() -> None:
         del report["categories"]["S_fullstack"]["provenance_preprocessing"]
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="provenance_preprocessing"):
-        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
 
 
 def test_evaluate_m2_bars_rejects_nan_metrics_instead_of_passing() -> None:
@@ -830,7 +941,9 @@ def test_evaluate_m2_bars_rejects_nan_metrics_instead_of_passing() -> None:
     reports[0]["categories"]["S_direct"]["metrics"]["raw_pitch_accuracy"] = float("nan")
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="非有限"):
-        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
 
 
 def test_json_loader_rejects_nan_literal() -> None:
@@ -849,7 +962,9 @@ def test_evaluate_m2_bars_rejects_metric_outside_domain() -> None:
     reports[1]["categories"]["S_direct"]["metrics"]["voicing_false_alarm"] = 1.5
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="定義域"):
-        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
 
 
 @pytest.mark.parametrize(
@@ -871,7 +986,9 @@ def test_evaluate_m2_bars_rejects_row_identity_mismatch(field: str, bogus: str) 
     reports[0]["categories"]["S_direct"][field] = bogus
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match=field):
-        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
 
 
 def test_evaluate_m2_bars_rejects_unregistered_category_label() -> None:
@@ -885,7 +1002,9 @@ def test_evaluate_m2_bars_rejects_unregistered_category_label() -> None:
         report["categories"]["S_bogus"] = dict(report["categories"]["S_direct"])
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="未知の category"):
-        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
 
 
 def test_cli_rejects_out_path_colliding_with_protected_inputs(tmp_path, monkeypatch) -> None:
@@ -956,7 +1075,11 @@ def test_evaluate_m2_bars_records_generator_code_sha256_in_verdict() -> None:
         categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
     )
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
-    verdict = harness.evaluate_m2_bars([report1, report2], bars, bars_sha256=bars_sha256)
+    verdict = harness.evaluate_m2_bars(
+            [_as_report_artifact(report1), _as_report_artifact(report2)],
+            bars,
+            bars_sha256=bars_sha256,
+        )
     assert verdict["generator_code_sha256"] == report1["generator_code_sha256"]
 
 
@@ -1178,7 +1301,9 @@ def test_evaluate_m2_bars_requires_frozen_est_voicing_floor(mutate, expect) -> N
     mutate(reports[0])
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match=expect):
-        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
 
 
 def test_verdict_records_the_frozen_est_voicing_floor() -> None:
@@ -1187,7 +1312,9 @@ def test_verdict_records_the_frozen_est_voicing_floor() -> None:
         for _ in range(2)
     ]
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
-    verdict = harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+    verdict = harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
     assert verdict["est_voiced_confidence_floor"] == pytest.approx(
         float(bars["m2_accuracy_bars"]["est_voiced_confidence_floor"])
     )
@@ -1227,7 +1354,9 @@ def test_evaluate_m2_bars_bounds_median_sample_count_by_reference(mutate, expect
         mutate(report["categories"]["S_direct"])
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match=expect):
-        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
 
 
 def test_evaluate_m2_bars_rejects_more_voiced_than_total_reference_frames() -> None:
@@ -1240,7 +1369,9 @@ def test_evaluate_m2_bars_rejects_more_voiced_than_total_reference_frames() -> N
         row["ref_frame_count"] = row["ref_voiced_frame_count"] - 1
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="ref_frame_count"):
-        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
 
 
 def test_reference_counts_are_recomputed_from_the_frozen_specs() -> None:
@@ -1252,7 +1383,9 @@ def test_reference_counts_are_recomputed_from_the_frozen_specs() -> None:
         for _ in range(2)
     ]
     expected = harness._registered_reference_counts("S_direct", bars, specs)
-    verdict = harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+    verdict = harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
     recorded = verdict["categories"]["S_direct"]["reference_frame_counts"]
     assert (recorded["ref_frame_count"], recorded["ref_voiced_frame_count"]) == expected
     assert recorded["source"] == "recomputed_from_frozen_specs"
@@ -1269,7 +1402,9 @@ def test_evaluate_m2_bars_rejects_reports_declaring_another_specs_generation() -
     reports[0]["specs_sha256"] = hashlib.sha256(b"another-specs").hexdigest()
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="specs_sha256"):
-        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1335,7 +1470,9 @@ def test_evaluate_m2_bars_refuses_diagnostic_only_for_gated_category() -> None:
     for report in reports:  # 手組み bars に合わせて pin を揃える（関門を先に通す）
         report["bars_sha256"] = bars_sha256
     with pytest.raises(ValueError, match="診断専用ではない"):
-        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1352,7 +1489,9 @@ def test_evaluate_m2_bars_rejects_bars_mutated_after_load() -> None:
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     bars["m2_accuracy_bars"]["S_direct"]["min_rpa"] = 0.01  # 凍結バーの実質的な緩和
     with pytest.raises(ValueError, match="load 後に変異"):
-        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
 
 
 def test_evaluate_m2_bars_rejects_plain_dict_bars() -> None:
@@ -1363,7 +1502,11 @@ def test_evaluate_m2_bars_rejects_plain_dict_bars() -> None:
     ]
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="BarsArtifact でなければならない"):
-        harness.evaluate_m2_bars(reports, dict(bars.data), bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports],
+            dict(bars.data),
+            bars_sha256=bars_sha256,
+        )
 
 
 def test_evaluate_m2_bars_rejects_mismatched_bars_sha256_argument() -> None:
@@ -1376,7 +1519,9 @@ def test_evaluate_m2_bars_rejects_mismatched_bars_sha256_argument() -> None:
     for report in reports:
         report["bars_sha256"] = other
     with pytest.raises(ValueError, match="アーティファクトの digest"):
-        harness.evaluate_m2_bars(reports, bars, bars_sha256=other)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=other
+        )
 
 
 def test_bars_artifact_detects_digest_tampering() -> None:
@@ -1456,7 +1601,9 @@ def test_s_fullstack_remains_diagnostic_only() -> None:
         for _ in range(2)
     ]
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
-    verdict = harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+    verdict = harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
     assert verdict["categories"]["S_fullstack"]["status"] == "diagnostic_only"
 
 
@@ -1485,7 +1632,9 @@ def test_evaluate_m2_bars_rejects_unknown_report_schema(mutate, expect) -> None:
     mutate(reports[0])
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match=expect):
-        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
 
 
 def test_measured_rows_report_counts_within_the_reference_bound() -> None:
@@ -1517,7 +1666,9 @@ def test_evaluate_m2_bars_refuses_to_publish_when_first_party_source_changed(
         harness, "_LOADED_GENERATOR_CODE_SHA256", hashlib.sha256(b"stale").hexdigest()
     )
     with pytest.raises(RuntimeError, match="first-party ソースが実行中に変化した"):
-        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
 
 
 def test_evaluate_m2_bars_refuses_to_publish_when_scorer_changed(
@@ -1534,4 +1685,68 @@ def test_evaluate_m2_bars_refuses_to_publish_when_scorer_changed(
         {"mir_eval_version": "0.0-stale", "mir_eval_code_sha256": None},
     )
     with pytest.raises(RuntimeError, match="mir_eval が実行中に差し替わった"):
-        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+# ---------------------------------------------------------------------------
+# 合成仕様のスキーマ discriminator（Codex P2）
+# ---------------------------------------------------------------------------
+
+
+def test_registered_specs_declare_their_schema_version() -> None:
+    specs, _ = harness.load_specs(SPECS_PATH)
+    assert specs["schema_version"] == harness._EXPECTED_SPECS_SCHEMA
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda text: text.replace('schema_version: "m2-accuracy-specs/0.1"\n', ""),
+        lambda text: text.replace("m2-accuracy-specs/0.1", "m2-accuracy-specs/9.9"),
+    ],
+)
+def test_load_specs_rejects_missing_or_unknown_schema_version(tmp_path: Path, mutate) -> None:
+    raw = SPECS_PATH.read_text(encoding="utf-8")
+    patched = mutate(raw)
+    assert patched != raw
+    path = tmp_path / "specs_bad_schema.yaml"
+    path.write_text(patched, encoding="utf-8")
+    with pytest.raises(ValueError, match="schema_version"):
+        harness.load_specs(path)
+
+
+# ---------------------------------------------------------------------------
+# 母数と RCA の整合（Codex P2）: 母数は RCA の分子そのもの。
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_m2_bars_ties_chroma_correct_count_to_rca() -> None:
+    """`RCA=1.0` かつ `count=1` のような矛盾した誤差モデルを受理しない。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    for report in reports:  # bit 一致は保ったまま母数だけ矛盾させる
+        metrics = report["categories"]["S_direct"]["metrics"]
+        assert metrics["raw_chroma_accuracy"] == pytest.approx(1.0)
+        metrics["voiced_chroma_correct_frame_count"] = 1
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="復元される分子"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+def test_measured_rows_satisfy_the_rca_numerator_identity() -> None:
+    """実 run の値は恒等式 `count == RCA × 有声フレーム数` を満たす（偽陽性なし）。"""
+    specs, _ = harness.load_specs(SPECS_PATH)
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    report = _fake_run(route_runner=_make_fake_runner(shift_cents=10.0))
+    for category, row in report["categories"].items():
+        _frames, voiced = harness._registered_reference_counts(category, bars.data, specs)
+        implied = float(row["metrics"]["raw_chroma_accuracy"]) * voiced
+        assert row["metrics"]["voiced_chroma_correct_frame_count"] == pytest.approx(
+            implied, abs=1.0
+        ), (category, row["metrics"], voiced)

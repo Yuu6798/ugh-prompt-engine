@@ -341,6 +341,8 @@ _EXPECTED_BARS_SCHEMA = "m2-accuracy-bars/0.1"
 # フィールドが残っていると、evaluate が新旧を区別せず旧セマンティクスで解釈しうる
 # （Codex P2）。bars と同じ規律を report にも適用し、未知/欠落は評価前に弾く。
 _EXPECTED_REPORT_SCHEMA = "m2-accuracy-report/0.1"
+# 合成仕様のスキーマ discriminator（同じ規律を specs にも適用・Codex P2）。
+_EXPECTED_SPECS_SCHEMA = "m2-accuracy-specs/0.1"
 
 # バーを持たず「診断記録のみ」で良いカテゴリ（設計 §3/§8: Demucs は合成音色に対し
 # 分布外なので S_fullstack の低値を理由に crepe を責めない）。**この集合の外の
@@ -528,6 +530,15 @@ def load_specs(path: Path = SPECS_PATH) -> Tuple[Dict[str, Any], str]:
     """m2_accuracy_specs.yaml を single read で (parsed dict, sha256) として返す。"""
     data = Path(path).read_bytes()
     specs = _yaml_load_no_dup_keys(data, what="m2_accuracy_specs.yaml")
+    # スキーマ discriminator を **fixture 定義を処理する前に** 検査する（bars/report と
+    # 同じ規律）。`sample_rate` / `amplitude` / `fixtures` が残ったまま合成の意味論が
+    # 変わった artifact を現行セマンティクスで解釈しない（Codex P2）。
+    version = specs.get("schema_version")
+    if version != _EXPECTED_SPECS_SCHEMA:
+        raise ValueError(
+            f"unsupported m2_accuracy_specs schema_version {version!r}; "
+            f"expected {_EXPECTED_SPECS_SCHEMA} (fail-closed)"
+        )
     for required in ("sample_rate", "amplitude", "fixtures"):
         if required not in specs:
             raise ValueError(f"m2_accuracy_specs.yaml is missing required key {required!r}")
@@ -606,6 +617,78 @@ class BarsArtifact:
                 "しない (fail-closed)"
             )
         return self._data
+
+
+class ReportArtifact:
+    """run report の **raw bytes / digest / parsed data を束ねた** アーティファクト。
+
+    `report_pins` を呼び出し側から受け取ると、「元ファイルの hash を記録しつつ、
+    メモリ上では別内容（バーを満たす metrics に書き換えた mapping）を評価する」ことが
+    できてしまう——verdict は無変更のファイルを pin しながら、別のものを判定した
+    ことになる（Codex P2）。そこで `BarsArtifact` と同じ single-read 束縛を report にも
+    適用し、pin は **評価した bytes から evaluate 側が導出**する。
+    """
+
+    __slots__ = ("_data", "_sha256", "_raw", "_path")
+
+    def __init__(
+        self, data: Dict[str, Any], sha256: str, raw: bytes, path: "str | Path | None" = None
+    ) -> None:
+        self._data = data
+        self._sha256 = sha256
+        self._raw = raw
+        self._path = path
+
+    @classmethod
+    def from_bytes(cls, raw: bytes, *, path: "str | Path | None" = None) -> "ReportArtifact":
+        """read 済みの bytes から parse して束ねる（read と hash/parse を分離しない）。"""
+        data = _json_loads_no_dup_keys(raw, what=str(path) if path is not None else "report")
+        return cls(data, hashlib.sha256(raw).hexdigest(), raw, path)
+
+    @property
+    def data(self) -> Dict[str, Any]:
+        return self._data
+
+    @property
+    def sha256(self) -> str:
+        return self._sha256
+
+    @property
+    def path(self) -> "str | Path | None":
+        return self._path
+
+    def verify(self) -> Dict[str, Any]:
+        """digest と parsed data の束縛を検証して parsed data を返す（fail-closed）。"""
+        actual = hashlib.sha256(self._raw).hexdigest()
+        if actual != self._sha256:
+            raise ValueError(
+                f"ReportArtifact: 記録 digest {self._sha256!r} が raw bytes の hash "
+                f"{actual!r} と不一致 (fail-closed)"
+            )
+        reparsed = _json_loads_no_dup_keys(
+            self._raw, what=str(self._path) if self._path is not None else "report"
+        )
+        if reparsed != self._data:
+            raise ValueError(
+                "ReportArtifact: parsed report が load 後に変異している（raw bytes の "
+                "再 parse と不一致）; 元ファイルの hash を pin しながら別内容を判定した "
+                "verdict を publish しない (fail-closed)"
+            )
+        return self._data
+
+    def pin(self) -> Dict[str, Any]:
+        """verdict へ記録する pin（**評価した bytes** の digest と論理パス）。"""
+        return {
+            "sha256": self._sha256,
+            "path_relative": _repo_relative_path(self._path) if self._path is not None else None,
+            "path_name": Path(self._path).name if self._path is not None else None,
+        }
+
+
+def load_report(path: "str | Path") -> ReportArtifact:
+    """run report を single read で `ReportArtifact` として読む（read → hash → parse）。"""
+    raw = Path(path).read_bytes()
+    return ReportArtifact.from_bytes(raw, path=path)
 
 
 def load_bars(path: Path = BARS_PATH) -> Tuple[BarsArtifact, str]:
@@ -1293,6 +1376,25 @@ def _require_reference_bounded_counts(
                 "を超える（有声かつ chroma 一致フレーム数は正解の有声フレーム数を"
                 "超えられない）(fail-closed)"
             )
+        # 母数は RCA の**分子そのもの**（RCA = 有声かつ chroma 一致フレーム数 / 有声
+        # フレーム数）。上界だけを見ていると `RCA=1.0` かつ `count=1` のような矛盾した
+        # 誤差モデルが bit 一致のまま publish できる（Codex P2）。分母は凍結 spec から
+        # 再計算した値なので、比を復元して報告 RCA と突き合わせられる。
+        if expected_voiced_frame_count > 0:
+            rca = float(row["metrics"]["raw_chroma_accuracy"])
+            implied = rca * expected_voiced_frame_count
+            # 許容は 1 フレーム。mir_eval は chroma 判定に `floor(x+0.5)`、本モジュールの
+            # 中央値算出は `round(x)` を使うため、差がちょうど 600 cent の同点フレームで
+            # 最大 1 フレームずれうる（実測では全ケース厳密一致・shift 0/10/30/49/60/
+            # 700/1200/1220 cent と混在パターン、600 cent 同点を含む）。
+            if abs(count - implied) > 1.0 + 1e-9:
+                raise ValueError(
+                    f"evaluate_m2_bars: {where} の voiced_chroma_correct_frame_count "
+                    f"{count} が raw_chroma_accuracy {rca!r} から復元される分子 "
+                    f"{implied:.4f}（= RCA × 有声フレーム数 {expected_voiced_frame_count}）"
+                    "と 1 フレーム以上食い違う; 母数は RCA の分子そのものなので、"
+                    "この組は mir_eval が返さない (fail-closed)"
+                )
 
 
 def _require_metrics_contract(
@@ -1623,11 +1725,10 @@ def _require_matching_generator_code(reports: List[Dict[str, Any]]) -> str:
 
 
 def evaluate_m2_bars(
-    reports: List[Dict[str, Any]],
-    bars: Dict[str, Any],
+    reports: "List[ReportArtifact]",
+    bars: BarsArtifact,
     *,
     bars_sha256: str,
-    report_pins: Optional[List[Dict[str, Any]]] = None,
     specs_path: Path = SPECS_PATH,
 ) -> Dict[str, Any]:
     """n>=`repeats_min` の run report に凍結バーを機械適用する（設計 §4/§6）。
@@ -1649,8 +1750,9 @@ def evaluate_m2_bars(
       （`_require_frozen_tolerance`）。
     - measured rows は抽出器/分離器の pin を完備し、repeats 間で同一 model stack で
       なければならない（`_require_homogeneous_model_stack`）。
-    - `report_pins` を渡すと、verdict が消費した report ファイルの sha256 を記録する
-      （後から report が編集・差し替えられたことを検出できるようにする）。
+    - `reports` は `load_report()` が返す `ReportArtifact` の列。verdict の
+      `report_pins` は **実際に評価した bytes** から本関数が導出する（呼び出し側の
+      pin を信用しない。後から report が編集・差し替えられたことを検出できる）。
     - S_fullstack: バーが空（`{}`）なので判定せず、`status="diagnostic_only"`
       として計測値のみ記録する（設計 §8: S_fullstack の低値を理由に crepe を
       責めない）。
@@ -1668,13 +1770,20 @@ def evaluate_m2_bars(
     bar_block = bars_data["m2_accuracy_bars"]
     repeats_min = int(bar_block.get("repeats_min", 2))
 
+    # report も同じ single-read 束縛を要求し、pin は評価した bytes から導出する。
+    for idx, artifact in enumerate(reports):
+        if not isinstance(artifact, ReportArtifact):
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{idx}] は load_report() が返す ReportArtifact "
+                f"でなければならない（受け取った型: {type(artifact).__name__}）; parsed "
+                "内容と digest が切り離された入力は評価しない (fail-closed)"
+            )
+    report_artifacts: "List[ReportArtifact]" = list(reports)
+    report_pins = [artifact.pin() for artifact in report_artifacts]
+    reports = [artifact.verify() for artifact in report_artifacts]
+
     if not reports:
         raise ValueError("evaluate_m2_bars: reports must be non-empty")
-    if report_pins is not None and len(report_pins) != len(reports):
-        raise ValueError(
-            f"evaluate_m2_bars: report_pins 件数 {len(report_pins)} が reports 件数 "
-            f"{len(reports)} と一致しない (fail-closed)"
-        )
 
     run_ids: List[str] = []
     for idx, report in enumerate(reports):
@@ -1732,8 +1841,7 @@ def evaluate_m2_bars(
         "repeats_min": repeats_min,
         "categories": {},
     }
-    if report_pins is not None:
-        verdict["report_pins"] = report_pins
+    verdict["report_pins"] = report_pins
 
     all_categories = sorted({cat for report in reports for cat in report.get("categories", {})})
     for category in all_categories:
@@ -1874,26 +1982,15 @@ def main() -> int:
                 "ソース）と同じパスを指している; 入力を verdict で上書きしない (fail-closed)"
             )
 
-        reports = []
-        report_pins: List[Dict[str, Any]] = []
-        for report_path in args.evaluate:
-            data = Path(report_path).read_bytes()
-            reports.append(_json_loads_no_dup_keys(data, what=str(report_path)))
-            # parse したのと **同じ bytes** を hash する（read と hash の間に差し替えが
-            # 入る TOCTOU を避ける）。パスは checkout 非依存の論理パスを併記する。
-            report_pins.append(
-                {
-                    "sha256": hashlib.sha256(data).hexdigest(),
-                    "path_relative": _repo_relative_path(report_path),
-                    "path_name": Path(report_path).name,
-                }
-            )
+        # read → hash → parse を `load_report` の 1 操作にまとめる（read と hash の間に
+        # 差し替えが入る TOCTOU を避け、pin と評価対象を束縛する）。pin は
+        # `evaluate_m2_bars` が **評価した bytes** から導出するのでここでは組まない。
+        reports = [load_report(report_path) for report_path in args.evaluate]
         bars, bars_sha256 = load_bars(args.bars)
         verdict = evaluate_m2_bars(
             reports,
             bars,
             bars_sha256=bars_sha256,
-            report_pins=report_pins,
             # `--specs` を転送しないと、カスタム spec + それに対応する pin を持つ bars で
             # 測った report を評価するとき committed 既定 spec を読み直して pin 不一致で
             # 落ちる（= evaluate モードで `--specs` が無効だった。Codex P2）。
