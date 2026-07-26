@@ -2765,6 +2765,42 @@ def test_cli_run_categories_flag_limits_run(
     assert set(report["categories"]) == {"S_direct"}
 
 
+def test_cli_rejects_out_inside_git_metadata(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`--out .git/HEAD` 等は attestation の入力 = checkout の制御ファイルを潰す。
+
+    保護集合はファイル単位で git ディレクトリを含まない（Codex P2 第 31 巡）。
+    run / evaluate 両モードで git メタデータ内への出力を丸ごと拒否する。
+    """
+    dummy_report = tmp_path / "r.json"
+    dummy_report.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--out",
+            str(harness.ROOT / ".git" / "HEAD"),
+            "--evaluate",
+            str(dummy_report),
+        ],
+    )
+    with pytest.raises(SystemExit, match="git メタデータ"):
+        harness.main()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--out",
+            str(harness.ROOT / ".git" / "refs" / "heads" / "fake"),
+        ],
+    )
+    with pytest.raises(SystemExit, match="git メタデータ"):
+        harness.main()
+
+
 def test_cli_evaluate_rejects_categories_flag(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -2817,6 +2817,44 @@ def evaluate_m2_bars(
 # ---------------------------------------------------------------------------
 
 
+def _require_out_outside_git_metadata(out: Path) -> None:
+    """`--out` が git メタデータディレクトリ内を指すことを拒否する（fail-closed）。
+
+    事前登録の立証（`_bars_registration_attestation`）は HEAD・refs・objects を入力
+    として読むが、`--out .git/HEAD` 等は既存の保護集合（ファイル単位）に載らず、
+    `_atomic_write_text` が checkout を破壊しつつ「立証に使った入力を成果物で潰す」
+    ことになる（Codex P2 第 31 巡）。git ディレクトリはいかなる場合も正当な出力先
+    ではないため、run/evaluate 両モードで丸ごと拒否する。worktree では `.git` が
+    ファイルで実体が別位置にあるため `--absolute-git-dir` / `--git-common-dir` の
+    両方を解決する（解決できない環境でも既定位置 `ROOT/.git` は守る）。
+    """
+    metadata_dirs: List[Path] = [(ROOT / ".git").resolve()]
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(ROOT), "rev-parse", "--absolute-git-dir", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        proc = None
+    if proc is not None and proc.returncode == 0:
+        for line in proc.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            candidate = Path(line)
+            if not candidate.is_absolute():
+                candidate = ROOT / candidate
+            metadata_dirs.append(candidate.resolve())
+    resolved = Path(out).resolve()
+    for directory in metadata_dirs:
+        if resolved == directory or directory in resolved.parents:
+            raise SystemExit(
+                f"--out {out} は git メタデータ（{directory}）内を指している; 事前登録の "
+                "立証が読む入力・checkout の制御ファイルを成果物で上書きしない (fail-closed)"
+            )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True, help="出力 JSON の書き出し先")
@@ -2837,6 +2875,7 @@ def main() -> int:
         "evaluate の測り直しプロセスが 1 カテゴリ run に使う）",
     )
     args = parser.parse_args()
+    _require_out_outside_git_metadata(args.out)
 
     if args.evaluate:
         if args.categories:
