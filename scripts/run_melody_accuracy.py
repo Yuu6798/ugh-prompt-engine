@@ -1609,9 +1609,10 @@ def _reverify_category_measurement(
     *,
     bars: "BarsArtifact",
     specs_path: Path,
+    repeats: int,
     verification_runner: Optional[RouteRunner] = None,
 ) -> None:
-    """評価器自身が同じ凍結 fixture を**測り直し**、全 repeat と bit 一致を要求する。
+    """評価器自身が同じ凍結 fixture を **`repeats` 回独立に測り直し**、bit 一致を要求する。
 
     環境 pin の照合（`_require_execution_evidence`）は「そのスタックが導入されて
     いる」ことまでしか証明しない——導入済みの機で pin を写し取りつつ metrics を
@@ -1627,25 +1628,48 @@ def _reverify_category_measurement(
     置くと、捏造 report と同じフェイクランナーで測り直し検証ごと再現させて pass を
     publish できる（Codex P1 第 22 巡）。機構テストは monkeypatch（プロセスメモリ
     への同権限書き込み = preload ゲート群と同じ境界外）で本 helper を差し替える。
+
+    測り直しは 1 回でなく **`repeats`（= 凍結 bars の `repeats_min`）回**行う。
+    run_id は self-reported なので、1 つの report をコピーして run_id だけ差し替えれば
+    重複検査を通り、「n>=2 の独立実測」を 1 回の実測で名乗れてしまう（Codex P2
+    第 23 巡）。決定論契約下では本物の 2 run とコピーは bit 一致ゆえ観測不能なので、
+    提出側の独立性を認証する代わりに、**評価器自身が要求本数の独立実行**を行い、
+    相互 bit 一致（= 決定論契約がこの環境で実際に成立していること）を publish の
+    条件にする。verdict の repeats 契約は evaluator 側の実行に根拠を持つ。
     """
+    if repeats < 2:
+        raise ValueError(
+            f"_reverify_category_measurement: repeats {repeats!r} が 2 未満; 決定論確認は "
+            "n>=2 の独立実行を要件とする (fail-closed)"
+        )
+    verification_metrics: List[Dict[str, Any]] = []
     with tempfile.TemporaryDirectory(prefix="m2-reverify-") as tmp:
         bars_path = Path(tmp) / "m2_accuracy_bars.yaml"
         bars_path.write_bytes(bars.raw)
-        verification = run_accuracy(
-            categories=(category,),
-            route_runner=verification_runner,
-            specs_path=specs_path,
-            bars_path=bars_path,
-        )
-    vrow = verification["categories"][category]
-    if vrow.get("outcome") != "measured":
+        for _ in range(repeats):
+            verification = run_accuracy(
+                categories=(category,),
+                route_runner=verification_runner,
+                specs_path=specs_path,
+                bars_path=bars_path,
+            )
+            vrow = verification["categories"][category]
+            if vrow.get("outcome") != "measured":
+                raise RuntimeError(
+                    f"evaluate_m2_bars: category {category!r} を評価環境で再実行できない "
+                    f"（outcome={vrow.get('outcome')!r}: {vrow.get('detail', '')}）; 測り直しに "
+                    "よる検証なしで report の metrics を publish しない — 実測を行った "
+                    "slow-lane 機で評価すること (fail-closed)"
+                )
+            verification_metrics.append(vrow["metrics"])
+    if not _repeats_bit_identical(verification_metrics):
         raise RuntimeError(
-            f"evaluate_m2_bars: category {category!r} を評価環境で再実行できない "
-            f"（outcome={vrow.get('outcome')!r}: {vrow.get('detail', '')}）; 測り直しに "
-            "よる検証なしで report の metrics を publish しない — 実測を行った "
-            "slow-lane 機で評価すること (fail-closed)"
+            f"evaluate_m2_bars: category {category!r} の評価器自身による {repeats} 回の "
+            "測り直しが相互に bit 一致しない; 決定論契約（shifts=0）がこの環境で成立して "
+            "いないため、いかなる repeats も決定論の証拠として publish できない "
+            "(fail-closed)"
         )
-    vmetrics = vrow["metrics"]
+    vmetrics = verification_metrics[0]
     for idx, row in enumerate(rows):
         if row["metrics"] != vmetrics:
             raise ValueError(
@@ -2010,6 +2034,14 @@ def _require_homogeneous_scorer(reports: List[Dict[str, Any]]) -> Dict[str, Any]
     `mir_eval>=0.7` は上限が無く、別リリースは RPA/RCA/VR/VFA の定義や境界処理が
     変わりうる。`generator_code_sha256` は first-party 閉包なので third-party の差を
     捉えない——よってスコアラー自身の pin を report レベルで突き合わせる（Codex P1）。
+
+    相互一致だけでは足りない: 両 report が同じ捏造/stale pin を名乗れば通り、verdict
+    はその pin を転記するので「一度も走っていないスコアラー実装」を主張する成果物が
+    publish できる（Codex P2 第 23 巡）。抽出器 pin の `_require_execution_evidence`
+    と同じく、**評価環境から use_cache=False で再計算した実スコアラー pin** との
+    一致を publish 条件にする（report 内に無い・書き換えられない証拠）。測り直し
+    検証は評価環境の mir_eval で行われるため、この照合により「metrics を検証した
+    実装」と「verdict が名乗る実装」が同一であることが保証される。
     """
     pins: List[Tuple[Any, Any]] = []
     for idx, report in enumerate(reports):
@@ -2032,6 +2064,15 @@ def _require_homogeneous_scorer(reports: List[Dict[str, Any]]) -> Dict[str, Any]
             f"evaluate_m2_bars: reports の mir_eval pin が repeats 間で不一致 "
             f"{sorted(set(pins))}; 別の指標実装で測った run を同一 stack の repeats と "
             "見なさない (fail-closed)"
+        )
+    environment = _scorer_pins(use_cache=False)
+    expected = (environment["mir_eval_version"], environment["mir_eval_code_sha256"])
+    if pins[0] != expected:
+        raise ValueError(
+            f"evaluate_m2_bars: reports の mir_eval pin {pins[0]!r} が評価環境から "
+            f"再計算した実スコアラー pin {expected!r} と一致しない; この環境の "
+            "mir_eval で測られていない（または pin を捏造した）row を、その pin を "
+            "名乗る verdict の証拠にしない (fail-closed)"
         )
     return {"mir_eval_version": pins[0][0], "mir_eval_code_sha256": pins[0][1]}
 
@@ -2374,14 +2415,17 @@ def evaluate_m2_bars(
                 _CATEGORY_SPECS[category]["route_name"],
             ),
         )
-        # 測り直しによる検証: 評価器自身が同じ fixture を測り、全 repeat と bit 一致
-        # することを要求する（導入証明でなく実行証明・Codex P1 第 21 巡）。検証用
+        # 測り直しによる検証: 評価器自身が同じ fixture を repeats_min 回独立に測り、
+        # 相互 bit 一致 + 全 report row との bit 一致を要求する（導入証明でなく実行
+        # 証明・Codex P1 第 21 巡。run_id はコピーで水増しできるため、repeats 契約の
+        # 根拠を提出側でなく evaluator 側の独立実行に置く・Codex P2 第 23 巡）。検証用
         # ランナーの注入口は公開 API に置かない（Codex P1 第 22 巡）——常に実抽出器。
         _reverify_category_measurement(
             category,
             rows,
             bars=bars,
             specs_path=specs_path,
+            repeats=repeats_min,
         )
 
         bar = bar_block.get(category, {})

@@ -2369,6 +2369,88 @@ def test_reverification_passes_when_metrics_reproduce(
     assert verdict["categories"]["S_direct"]["status"] == "pass"
 
 
+def test_reverification_runs_repeats_min_independent_measurements(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """repeats 契約の根拠は evaluator 側の独立実行 — 要求本数だけ実際に測り直す。
+
+    run_id は self-reported なので、1 report のコピー + run_id 差し替えで「n>=2 の
+    独立実測」を名乗れる（Codex P2 第 23 巡）。決定論契約下でコピーと本物の 2 run は
+    観測不能に等価なため、評価器が repeats_min 回の独立実行を自分で行う。
+    """
+    calls = {"n": 0}
+    inner = _make_fake_runner(shift_cents=10.0)
+
+    def _counting(audio_path: str, route: Any) -> Any:
+        calls["n"] += 1
+        return inner(audio_path, route)
+
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=inner) for _ in range(2)
+    ]
+    # コピー + run_id 差し替えの水増し repeats を模す（重複検査は通る）。
+    forged = json.loads(json.dumps(reports[0]))
+    forged["run_id"] = reports[0]["run_id"] + "-copy"
+    reports[1] = forged
+    monkeypatch.setattr(
+        harness, "_reverify_category_measurement", _reverify_via(_counting)
+    )
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    verdict = harness.evaluate_m2_bars(
+        [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+    )
+    assert verdict["categories"]["S_direct"]["status"] == "pass"
+    # S_direct 1 カテゴリ × repeats_min(=2) 回の独立実行。
+    assert calls["n"] == verdict["repeats_min"] == 2
+
+
+def test_reverification_rejects_nondeterministic_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """評価器自身の測り直し同士が bit 一致しなければ、決定論の証拠として publish しない。"""
+    calls = {"n": 0}
+
+    def _flaky(audio_path: str, route: Any) -> Any:
+        calls["n"] += 1
+        shift = 10.0 if calls["n"] % 2 == 1 else 20.0
+        return _make_fake_runner(shift_cents=shift)(audio_path, route)
+
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    monkeypatch.setattr(
+        harness, "_reverify_category_measurement", _reverify_via(_flaky)
+    )
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(RuntimeError, match="相互に bit 一致しない"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+def test_scorer_pins_must_match_evaluator_environment() -> None:
+    """report 同士で相互一致する捏造 mir_eval pin を verdict に転記させない。
+
+    相互比較だけでは、両 report が同じ捏造 pin を名乗れば通り、verdict は「一度も
+    走っていないスコアラー実装」を主張できる（Codex P2 第 23 巡）。評価環境から
+    再計算した実スコアラー pin との一致を要求する。
+    """
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    fabricated = hashlib.sha256(b"scorer-that-never-ran").hexdigest()
+    for report in reports:
+        report["mir_eval_version"] = "9.99.9"
+        report["mir_eval_code_sha256"] = fabricated
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="実スコアラー pin"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
 def test_evaluate_m2_bars_has_no_verification_runner_seam() -> None:
     """検証用ランナーの注入口が公開 API に無いこと自体を回帰テストで固定する。
 
