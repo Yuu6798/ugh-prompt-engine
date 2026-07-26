@@ -1,0 +1,78 @@
+# melody_bench/m2_accuracy_specs.yaml — M2a カテゴリ S（正解つき決定論合成）専用の
+# 合成仕様（設計: docs/DESIGN_M2_extraction_accuracy.md §3, §7 M2a 行）。
+#
+# `synthesis_specs.yaml`（M0/M1）とは意図的に**別ファイル**にしている。
+# `synthesis_specs.yaml` は `tests/fixtures/melody_bench/registry.yaml` の
+# `provenance.synthesis_specs_sha256` で完全 digest pin されており（凍結済み
+# `docs/measurements/m1real_2026-07/m1real_verdict.json` の `registry_sha256` が
+# その registry.yaml 自体を hash pin する）、`tests/test_melody_observability.py` と
+# `tests/test_m1real_committed_record.py` が両方ともこの凍結チェーンを CI で強制する。
+# もし `synthesis_specs.yaml` に M2 用の spec を追記すると、そのファイルの sha256 が
+# 変わり `test_melody_observability.py::test_synthesis_specs_digest_matches_registry_pin`
+# 系のテストが壊れ、`registry.yaml` 側の pin を更新すればさらに commit 済み M1-real
+# verdict の `registry_sha256` 照合（`tests/test_m1real_committed_record.py`）も壊れる
+# （実測 UTC 確認済み: 2026-07-25 時点で両ファイルとも凍結済み・pin 一致）。
+# 加えて `scripts/run_melody_observability.py:run_synthetic` は
+# `synthesis_specs.yaml` の全 spec id が `registry.yaml` の `fixtures` に事前登録
+# されていることを fail-closed で要求するため、そちらにも波及する。
+#
+# よって M2 のカテゴリ S spec は「`synthesis_specs.yaml` と**同じ流儀**（同じ
+# schema・同じ決定論規律・sha256 pin）」を、独立した新規ファイルとして満たす。
+# 波形は `scripts/build_melody_bench.py`（未変更・既存の `monophonic`/`chord_pad`
+# kind のみ使用）が決定論生成する。sha256 pin は
+# `tests/fixtures/melody_bench/m2_accuracy_bars.yaml` の `provenance` 節に置く
+# （registry.yaml と対称の構造）。
+#
+# 単位・規約は synthesis_specs.yaml と同一（MIDI ノート番号、秒）。
+
+# 合成仕様のスキーマ discriminator。`sample_rate` / `amplitude` / `fixtures` が
+# 残ったまま意味論が変わっても、バージョンが無いと loader が新旧を区別できず
+# 現行の合成セマンティクスで解釈してしまう（Codex P2）。bars / run report と同じ
+# 規律を specs にも適用し、未知/欠落は fixture 定義を処理する前に弾く。
+schema_version: "m2-accuracy-specs/0.1"
+
+sample_rate: 22050
+amplitude: 0.3
+
+fixtures:
+  # --- S-direct: 旋律トラック単体（crepe 直・分離なし。抽出器そのものの上限測定） ---
+  m2_s_direct_melody:
+    kind: monophonic
+    note_dur_sec: 0.3
+    note_gap_sec: 0.05
+    phrase_gap_sec: 0.6
+    phrases:
+      - [60, 62, 64, 65, 67]
+      - [67, 65, 64, 62, 60]
+    # 総尺 = 2 phrases * 5 notes * (0.3+0.05) + 2*0.6 = 4.7 sec（名目値）。
+    # 実尺は builder と同じ整数標本量子化を経るため厳密には 4.7s ではない
+    # （note_gap 0.05s @ 22050Hz は端数標本になる）。正解の区間境界・総尺は
+    # `accuracy.monophonic_total_samples` / `monophonic_total_duration_sec` が
+    # builder と同一の `int(round(sample_rate * dur_sec))` で算出する。
+
+  # --- S-fullstack: 旋律+伴奏ミックス用の伴奏パート（診断記録のみ・バーなし） ---
+  # `_build_chord_pad` は `chords` の先頭要素のみ持続させる（build_melody_bench.py
+  # 既存仕様、本 spec もそれに合わせる）。duration_sec は melody の総尺 4.7s 以上を
+  # 確保する（伴奏が旋律より短いと mix の後半が無伴奏になり「フルスタック」の
+  # 前提が崩れるため）。
+  m2_s_fullstack_accompaniment:
+    kind: chord_pad
+    duration_sec: 5.0
+    chords:
+      - [48, 52, 55]     # C3 major（低域の持続和音・旋律帯域 60-71 と重複を避ける）
+
+# composites: build_signal() が直接知らない「複数 fixture のミックス」を、
+# ハーネス（scripts/run_melody_accuracy.py）側で合成するための参照情報。
+# S_fullstack の正解 f0 はミックス後の音ではなく **melody 単体 spec の導出**
+# （= 上の m2_s_direct_melody を `accuracy.reference_f0_from_monophonic_spec` に
+# 通した結果）を使う——「正解 = spec そのもの」は伴奏を混ぜても変わらない
+# （Demucs が実音楽分布外の合成音色をどう分離するかを見るのが S_fullstack の
+# 目的であり、正解自体は変えない）。
+composites:
+  m2_s_fullstack_mix:
+    melody: m2_s_direct_melody
+    accompaniment: m2_s_fullstack_accompaniment
+    # 伴奏ゲイン（旋律に対する相対振幅）。1.0 未満にして伴奏が旋律を圧倒しない
+    # よう控えめに混ぜる（診断記録のみの帯なので合否には影響しないが、Demucs
+    # 入力として「伴奏つきミックス」らしい構成にする）。決定論定数。
+    accompaniment_gain: 0.5
