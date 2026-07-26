@@ -40,6 +40,7 @@ import argparse
 import ast
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -1232,11 +1233,24 @@ def _est_freqs_with_voicing(
     凍結値で、実測後に動かさない（一方向規律）。
     """
     signed: List[float] = []
-    for hz, confidence in zip(observation.frame_hz, observation.frame_confidence):
+    for index, (hz, confidence) in enumerate(
+        zip(observation.frame_hz, observation.frame_confidence)
+    ):
+        value = float(confidence)
+        # 閾値比較の前に confidence 自体の定義域を検証する。`NaN >= floor` は False
+        # なので、非有限の confidence は黙って「無声と予測」（負周波数）へ変換され、
+        # 不正な観測が VFA を人工的に下げて凍結バーを通しうる（Codex P2 第 30 巡）。
+        # 抽出器の契約違反は fail-closed に倒し、voicing 判定に変換しない。
+        if not math.isfinite(value) or not (0.0 <= value <= 1.0):
+            raise ValueError(
+                f"_est_freqs_with_voicing: frame_confidence[{index}] {confidence!r} が "
+                "非有限または [0, 1] の外; 抽出器の契約違反を voicing 判定へ変換しない "
+                "(fail-closed)"
+            )
         magnitude = abs(float(hz))
         if magnitude == 0.0:
             signed.append(0.0)
-        elif float(confidence) >= confidence_floor:
+        elif value >= confidence_floor:
             signed.append(magnitude)
         else:
             signed.append(-magnitude)
@@ -1674,9 +1688,17 @@ def _bars_registration_attestation(
     bars 内の `registered_utc` は自己申告であり、「未来でない」ことしか検査できない
     ——実測を見てから閾値を作り、日付を過去へ backdate した bars でも通る（Codex P2
     第 28 巡）。そこで、この **正確な bytes（blob）が履歴に最初に現れた commit の
-    committer 日時**を立証値とする。履歴は append-only なので、この日時より前に
-    bytes が存在した証明にはならないが、**「遅くともこの時点で凍結されていた」**
-    ことの上界になる——測定開始がこの後なら、閾値は測定より先に確定していた。
+    committer 日時**を立証値とする。
+
+    立証範囲の正直会計（Codex P2 第 30 巡）: この立証が**証明する**のは「blob が
+    HEAD の祖先 commit に存在する = 内容がその commit の一部として共有履歴に入って
+    いる」ことまで。committer 日時は commit 作成者が任意に設定できる
+    （`GIT_COMMITTER_DATE`）ため、**履歴に commit を書ける同権限者に対する時刻順序の
+    証明ではない**（preload ゲート群と同じ境界の外）。report は commit されないので
+    「子孫 artifact に対する ancestry 順序」も構成できない。順序比較は (a) 誠実な
+    ミス（登録前に測り始めた run の混入）の検出と、(b) 履歴を書けない偽造者に対する
+    防御として fail-closed で維持し、verdict の attestation にはこの限界を
+    `ordering_is_proof: false` として明記する——日時順序を証明として名乗らない。
 
     立証できない（リポジトリ外・履歴に無い blob・git 不能）バーは fail-closed。
     """
@@ -1723,6 +1745,10 @@ def _bars_registration_attestation(
         "first_commit": first_commit,
         "committed_utc": committed.isoformat(),
         "source": "git_history_first_blob_occurrence",
+        # 内容の立証（blob が HEAD 祖先に存在）と、日時順序の非証明性を分けて記録する。
+        "content_evidence": "blob_in_head_ancestry",
+        "ordering_evidence": "committer_date",
+        "ordering_is_proof": False,
     }
     return attestation, committed
 
@@ -1732,10 +1758,13 @@ def _require_attested_registration(
     raw: bytes,
     started_by_index: List[Tuple[int, datetime]],
 ) -> Dict[str, Any]:
-    """全 report の測定開始が bars の**履歴上の登録時点**以後であることを要求する。
+    """全 report の測定開始が bars の**履歴上の登録時点**より厳密に後であることを要求する。
 
-    自己申告 `registered_utc` に対する検査（`_parse_registered_utc` 系）は残すが、
-    publish の根拠はこちら——backdate された bars は「履歴に現れた時点」を偽れない。
+    自己申告 `registered_utc` に対する検査（`_parse_registered_utc` 系）に、履歴由来の
+    committer 日時との順序検査を重ねる。この順序検査は誠実なミス検出 + 履歴を書けない
+    偽造者への防御であり、**履歴に commit を書ける同権限者への証明ではない**
+    （committer 日時は作成者設定値。`_bars_registration_attestation` の正直会計を参照。
+    Codex P2 第 30 巡）——verdict の attestation は `ordering_is_proof: false` を明記する。
     """
     attestation, committed = _bars_registration_attestation(bars_path, raw)
     for idx, started in started_by_index:

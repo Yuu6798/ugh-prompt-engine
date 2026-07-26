@@ -1300,6 +1300,24 @@ def test_est_freqs_with_voicing_encodes_confidence_as_mir_eval_sign() -> None:
     assert signed == (440.0, -440.0, 0.0, 220.0)
 
 
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), -0.1, 1.5])
+def test_est_freqs_with_voicing_rejects_invalid_confidence(bad: float) -> None:
+    """非有限 / [0,1] 外の confidence を voicing 判定へ黙って変換しない。
+
+    `NaN >= floor` は False なので、不正な confidence は「無声と予測」（負周波数）に
+    化け、VFA を人工的に下げて凍結バーを通しうる（Codex P2 第 30 巡）。
+    """
+    observation = MelodyObservation(
+        route="crepe_direct",
+        source_model="fake",
+        frame_times=(0.0, 0.01),
+        frame_hz=(440.0, 440.0),
+        frame_confidence=(0.9, bad),
+    )
+    with pytest.raises(ValueError, match=r"frame_confidence\[1\]"):
+        harness._est_freqs_with_voicing(observation, confidence_floor=0.30)
+
+
 def test_crepe_style_run_does_not_pin_vfa_at_one() -> None:
     """CREPE 型の出力（無声でも正の F0）で VFA が飽和しないこと。
 
@@ -2495,6 +2513,12 @@ def test_bars_registration_attestation_finds_committed_blob() -> None:
     assert re.fullmatch(r"[0-9a-f]{40}", attestation["first_commit"])
     assert committed.tzinfo is not None
     assert attestation["committed_utc"] == committed.isoformat()
+    # 正直会計: 立証は「blob が HEAD 祖先に存在する」ことまで。committer 日時は
+    # 作成者設定値（GIT_COMMITTER_DATE）なので、順序を証明として名乗らない
+    # （Codex P2 第 30 巡）。
+    assert attestation["content_evidence"] == "blob_in_head_ancestry"
+    assert attestation["ordering_evidence"] == "committer_date"
+    assert attestation["ordering_is_proof"] is False
 
 
 def test_bars_registration_attestation_rejects_uncommitted_bytes(tmp_path: Path) -> None:
