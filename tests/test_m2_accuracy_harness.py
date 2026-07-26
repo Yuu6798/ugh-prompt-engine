@@ -17,6 +17,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Tuple
@@ -2762,6 +2763,48 @@ def test_reverification_uses_frozen_specs_bytes(
         )
     assert captured["specs_path"].resolve() != harness.SPECS_PATH.resolve()
     assert captured["bytes"] == specs_raw
+
+
+def test_wav_serialization_is_deterministic() -> None:
+    """直列化 WAV は同一 (y, sr) → 同一 bytes（libsndfile の PEAK timestamp を排除）。
+
+    `sf.write` は float WAV の PEAK チャンクに壁時計を書くため bytes が秒単位で
+    揺れ、`input_wav_sha256` を測り直しへ束縛できなかった（Codex P2 第 38 巡）。
+    自前の最小 RIFF 直列化が決定論で、libsndfile で bit 一致に読み戻せることを固定。
+    """
+    import numpy as np
+    import soundfile as sf
+
+    y = (np.sin(np.linspace(0.0, 20.0, 2000)) * 0.3).astype(np.float32)
+    first = harness._serialize_wav_float32(y, 22050)
+    second = harness._serialize_wav_float32(y, 22050)
+    assert first == second
+    wav_path = Path(tempfile.mkdtemp(prefix="m2-wavdet-")) / "probe.wav"
+    wav_path.write_bytes(first)
+    readback, sr = sf.read(str(wav_path), dtype="float32")
+    assert sr == 22050
+    assert np.asarray(readback, dtype=np.float32).tobytes() == y.tobytes()
+
+
+def test_reverification_rejects_forged_input_wav_pin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """metrics が再現しても、直列化 WAV pin を偽った row は publish しない。
+
+    waveform_sha256 だけの照合では、編集・stale な input_wav_sha256 を持つ report が
+    「抽出器が消費した bytes」を偽って名乗るまま通った（Codex P2 第 38 巡）。
+    """
+    inner = _make_fake_runner(shift_cents=10.0)
+    reports = [_fake_run(categories=("S_direct",), route_runner=inner) for _ in range(2)]
+    reports[0]["categories"]["S_direct"]["input_wav_sha256"] = "a" * 64
+    monkeypatch.setattr(
+        harness, "_reverify_category_measurement", _reverify_via(inner)
+    )
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="input_wav_sha256"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
 
 
 def test_reverification_rejects_stack_drift_during_reverification(

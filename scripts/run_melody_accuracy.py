@@ -1336,6 +1336,37 @@ def _est_freqs_with_voicing(
     return tuple(signed)
 
 
+def _serialize_wav_float32(y: "np.ndarray", sample_rate: int) -> bytes:
+    """モノラル float32 波形を**決定論的な** RIFF/WAVE bytes へ直列化する。
+
+    `sf.write(..., subtype="FLOAT")`（libsndfile）は float WAV に PEAK チャンクを
+    書き、そこに**壁時計タイムスタンプ**が入るため、同一波形でも直列化 bytes が
+    秒単位で変わる（実測: 2 run の WAV は offset 60 の timestamp 1 byte だけ相違）。
+    それでは `input_wav_sha256` を評価器の測り直しへ束縛できない（Codex P2 第 38 巡）
+    ため、fmt(IEEE float)/fact/data のみの最小 RIFF を自前で構成する——同一
+    (y, sample_rate) → 同一 bytes。デコード互換性は既存の readback 検証
+    （libsndfile で読み戻して波形 pin と bit 一致）が毎 run 確認する。
+    """
+    import struct
+
+    samples = np.asarray(y, dtype=np.float32)
+    if samples.ndim != 1:
+        raise ValueError(
+            f"_serialize_wav_float32: モノラル 1-D 波形のみ対応（shape {samples.shape!r}）"
+        )
+    data = samples.tobytes()
+    rate = int(sample_rate)
+    fmt_body = struct.pack("<HHIIHH", 3, 1, rate, rate * 4, 4, 32)  # WAVE_FORMAT_IEEE_FLOAT
+    fact_body = struct.pack("<I", samples.size)
+    payload = (
+        b"WAVE"
+        + b"fmt " + struct.pack("<I", len(fmt_body)) + fmt_body
+        + b"fact" + struct.pack("<I", len(fact_body)) + fact_body
+        + b"data" + struct.pack("<I", len(data)) + data
+    )
+    return b"RIFF" + struct.pack("<I", len(payload)) + payload
+
+
 def _select_named_route(input_kind: str, route_name: str) -> MelodyRoute:
     for route in select_routes(input_kind):
         if route.name == route_name:
@@ -1476,7 +1507,7 @@ def run_accuracy(
             category_spec = _CATEGORY_SPECS[category]
             y, sr, waveform_sha256 = _build_category_waveform(category, category_spec, specs, bars)
             wav_path = Path(tmp) / f"{category}.wav"
-            sf.write(wav_path, y, sr, subtype="FLOAT")
+            wav_path.write_bytes(_serialize_wav_float32(y, sr))
             # `waveform_sha256` は合成直後の in-memory 配列 `y` の pin だが、抽出器が
             # 実際に消費するのは直列化された WAV。直列化/デコードの欠陥や並行差し替えで
             # 両者が乖離すると「測っていない bytes の正解」に対する採点を受理してしまう
@@ -2080,6 +2111,9 @@ def _reverify_category_measurement(
     # 「同じ測定の再現」と数えない・Codex P2 第 34 巡）。提出 row の waveform は
     # `_require_registered_row_identity` で bars の登録 pin と照合済み。
     expected_waveform = rows[0].get("waveform_sha256") if rows else None
+    verification_wav = (
+        verification_rows[0].get("input_wav_sha256") if verification_rows else None
+    )
     for vidx, vrow in enumerate(verification_rows):
         if vrow.get("waveform_sha256") != expected_waveform:
             raise ValueError(
@@ -2087,6 +2121,23 @@ def _reverify_category_measurement(
                 f"waveform_sha256 {vrow.get('waveform_sha256')!r} が提出 row の "
                 f"{expected_waveform!r} と不一致; 別 fixture を測った検証 run を同じ "
                 "測定の再現と数えない (fail-closed)"
+            )
+        if vrow.get("input_wav_sha256") != verification_wav:
+            raise RuntimeError(
+                f"evaluate_m2_bars: category {category!r} の測り直し {vidx} 回目の "
+                f"input_wav_sha256 が検証 run 間で不一致; 直列化 WAV の決定論が "
+                "この環境で成立していない (fail-closed)"
+            )
+    # 提出 row の直列化 WAV pin も評価器自身の測り直しへ束縛する（Codex P2 第 38 巡）:
+    # waveform_sha256 だけの照合では、編集・stale な input_wav_sha256 を持つ report が
+    # 「抽出器が実際に消費した bytes を偽って名乗る」まま publish されえた。
+    for idx, row in enumerate(rows):
+        if row.get("input_wav_sha256") != verification_wav:
+            raise ValueError(
+                f"evaluate_m2_bars: category {category!r} rows[{idx}] の input_wav_sha256 "
+                f"{row.get('input_wav_sha256')!r} が評価器の測り直し {verification_wav!r} "
+                "と不一致; 抽出器が消費した直列化 WAV を偽って名乗る row を publish "
+                "しない (fail-closed)"
             )
     if not _repeats_bit_identical(verification_metrics):
         raise RuntimeError(
