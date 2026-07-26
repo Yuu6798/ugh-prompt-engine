@@ -99,6 +99,14 @@ def _force_fresh_bytecode() -> None:
 
 _force_fresh_bytecode()
 
+# 本ハーネスが「直接パスの top-level script」として実行されたか。CPython は直接
+# 実行される script に .pyc を**使わない**（毎回ソースからコンパイルする）ため、
+# この形の実行だけが「実行 bytecode = ディスクのソース bytes」を構造的に保証する。
+# import 経由（`python -m` / `import` + 呼び出し）は stale .pyc から実行されうる
+# （Codex P2 第 34 巡）ので、run report に記録し evaluate が publishable 要件として
+# True を要求する。
+_HARNESS_LOADED_AS_MAIN: bool = __name__ == "__main__"
+
 # 本ハーネスが読み込まれた瞬間の sys.modules。**この行より上に first-party / 計測
 # 関連の import は 1 つも無い**ため、ここに写っている名前は「別経路が先に読み込んだ
 # もの」だけである。監視集合（`_runtime_package_names`）は登録表からの導出のために
@@ -810,6 +818,17 @@ def _repo_relative_path(path: "str | Path") -> "str | None":
 
 def load_specs(path: Path = SPECS_PATH) -> Tuple[Dict[str, Any], str]:
     """m2_accuracy_specs.yaml を single read で (parsed dict, sha256) として返す。"""
+    specs, sha256, _raw = load_specs_with_raw(path)
+    return specs, sha256
+
+
+def load_specs_with_raw(path: Path = SPECS_PATH) -> Tuple[Dict[str, Any], str, bytes]:
+    """`load_specs` + 検証済み raw bytes（測り直し子プロセスへの凍結転写用）。
+
+    evaluate は raw を保持し、測り直し子には**この bytes の複製**を渡す——`--specs`
+    の実パスを渡すと、評価器が読んだ後にファイルが差し替えられた場合に子が別 fixture
+    を測ってしまう（Codex P2 第 34 巡）。
+    """
     data = Path(path).read_bytes()
     specs = _yaml_load_no_dup_keys(data, what="m2_accuracy_specs.yaml")
     # スキーマ discriminator を **fixture 定義を処理する前に** 検査する（bars/report と
@@ -824,7 +843,7 @@ def load_specs(path: Path = SPECS_PATH) -> Tuple[Dict[str, Any], str]:
     for required in ("sample_rate", "amplitude", "fixtures"):
         if required not in specs:
             raise ValueError(f"m2_accuracy_specs.yaml is missing required key {required!r}")
-    return specs, hashlib.sha256(data).hexdigest()
+    return specs, hashlib.sha256(data).hexdigest(), data
 
 
 class BarsArtifact:
@@ -1429,6 +1448,7 @@ def run_accuracy(
         "generator_code_sha256": _LOADED_GENERATOR_CODE_SHA256,
         "route_runner_injected": runner_injected,
         "preloaded_seed_modules": list(_PRELOADED_SEED_MODULES),
+        "harness_loaded_as_main": _HARNESS_LOADED_AS_MAIN,
         "categories": {},
     }
     results.update(_LOADED_SCORER_PINS)
@@ -1825,7 +1845,9 @@ def _require_attested_registration(
     return attestation
 
 
-def _require_fresh_process_report_provenance(report: Dict[str, Any], category: str) -> None:
+def _require_fresh_process_report_provenance(
+    report: Dict[str, Any], category: str, *, expected_specs_sha256: str
+) -> None:
     """測り直し子プロセスの report が「本評価環境・現行コード・現行スコアラー」の
     実行であることを、metrics 比較より前に要求する（fail-closed）。
 
@@ -1868,6 +1890,18 @@ def _require_fresh_process_report_provenance(report: Dict[str, Any], category: s
             f"が評価環境の {expected_scorer!r} と不一致; 測り直し中に mir_eval が変わって "
             "いる (fail-closed)"
         )
+    if report.get("harness_loaded_as_main") is not True:
+        raise RuntimeError(
+            f"category {category!r} の測り直し report が直接パスの script 実行でない; "
+            "stale .pyc の余地を残す実行形態の測り直しを証拠にしない (fail-closed)"
+        )
+    reported_specs = report.get("specs_sha256")
+    if reported_specs != expected_specs_sha256:
+        raise RuntimeError(
+            f"category {category!r} の測り直し report の specs_sha256 {reported_specs!r} "
+            f"が評価器の読んだ凍結 specs {expected_specs_sha256!r} と不一致; 別 fixture を "
+            "測った検証 run を証拠にしない (fail-closed)"
+        )
 
 
 def _run_verification_in_fresh_process(
@@ -1877,13 +1911,16 @@ def _run_verification_in_fresh_process(
     tmp_dir: Path,
     specs_path: Path,
     bars_path: Path,
+    expected_specs_sha256: str,
 ) -> Dict[str, Any]:
     """測り直し 1 回分を新規プロセス（素の CLI run）で実行し、その category row を返す。
 
     プロセス境界により各 repeat は import・重みロード・モデル初期化から独立に行われ、
     相互 bit 一致は「run 間決定論」の実証になる（Codex P2 第 24 巡）。子プロセスは
     素の CLI なので preload ゲート群も自然に通る。失敗（非ゼロ exit / report 欠落）は
-    「再実行できない環境」として fail-closed。
+    「再実行できない環境」として fail-closed。`specs_path` は評価器が読んだ bytes の
+    凍結複製（temp 配下）であり、子 report の `specs_sha256` も `expected_specs_sha256`
+    と照合する（Codex P2 第 34 巡）。
     """
     report_path = tmp_dir / f"verification_{index}.json"
     command = [
@@ -1915,9 +1952,11 @@ def _run_verification_in_fresh_process(
         )
     verification = load_report(report_path).data
     # metrics だけ取り出して report を捨てない: report レベルの provenance
-    # （素の CLI・現行 first-party コード・現行スコアラー）をここで検証する
-    # （Codex P2 第 27 巡）。
-    _require_fresh_process_report_provenance(verification, category)
+    # （素の CLI・現行 first-party コード・現行スコアラー・凍結 specs）をここで
+    # 検証する（Codex P2 第 27/34 巡）。
+    _require_fresh_process_report_provenance(
+        verification, category, expected_specs_sha256=expected_specs_sha256
+    )
     row = verification.get("categories", {}).get(category)
     if not isinstance(row, dict):
         raise RuntimeError(
@@ -1932,11 +1971,17 @@ def _reverify_category_measurement(
     rows: List[Dict[str, Any]],
     *,
     bars: "BarsArtifact",
-    specs_path: Path,
+    specs_raw: bytes,
     repeats: int,
     verification_runner: Optional[RouteRunner] = None,
 ) -> None:
     """評価器自身が同じ凍結 fixture を **`repeats` 回独立に測り直し**、bit 一致を要求する。
+
+    fixture の同一性も凍結する（Codex P2 第 34 巡）: 子に `--specs` の実パスを渡すと
+    「評価器が読んで hash した後にファイルが差し替えられ、子は別 fixture を測る」
+    TOCTOU が生じるため、**評価器が読んだ specs bytes の複製**を bars と同じ temp 配下へ
+    書いて子に渡し、子 report の `specs_sha256` と検証 row の `waveform_sha256` も
+    提出 row と照合する。
 
     環境 pin の照合（`_require_execution_evidence`）は「そのスタックが導入されて
     いる」ことまでしか証明しない——導入済みの機で pin を写し取りつつ metrics を
@@ -1976,15 +2021,18 @@ def _reverify_category_measurement(
         )
     verification_metrics: List[Dict[str, Any]] = []
     verification_rows: List[Dict[str, Any]] = []
+    expected_specs_sha256 = hashlib.sha256(specs_raw).hexdigest()
     with tempfile.TemporaryDirectory(prefix="m2-reverify-") as tmp:
         bars_path = Path(tmp) / "m2_accuracy_bars.yaml"
         bars_path.write_bytes(bars.raw)
+        specs_copy = Path(tmp) / "m2_accuracy_specs.yaml"
+        specs_copy.write_bytes(specs_raw)
         for index in range(repeats):
             if verification_runner is not None:
                 verification = run_accuracy(
                     categories=(category,),
                     route_runner=verification_runner,
-                    specs_path=specs_path,
+                    specs_path=specs_copy,
                     bars_path=bars_path,
                 )
                 vrow = verification["categories"][category]
@@ -1993,8 +2041,9 @@ def _reverify_category_measurement(
                     category,
                     index,
                     tmp_dir=Path(tmp),
-                    specs_path=specs_path,
+                    specs_path=specs_copy,
                     bars_path=bars_path,
+                    expected_specs_sha256=expected_specs_sha256,
                 )
             if vrow.get("outcome") != "measured":
                 raise RuntimeError(
@@ -2009,6 +2058,18 @@ def _reverify_category_measurement(
     # 差し替わった場合、metrics が一致しても「別スタックの実行」であり、verdict が
     # 名乗る stack の証拠にならない（Codex P2 第 27 巡）。
     _require_homogeneous_model_stack(category, rows + verification_rows)
+    # 検証 row の波形 pin も提出 row と一致すること（別 fixture を測った検証 run を
+    # 「同じ測定の再現」と数えない・Codex P2 第 34 巡）。提出 row の waveform は
+    # `_require_registered_row_identity` で bars の登録 pin と照合済み。
+    expected_waveform = rows[0].get("waveform_sha256") if rows else None
+    for vidx, vrow in enumerate(verification_rows):
+        if vrow.get("waveform_sha256") != expected_waveform:
+            raise ValueError(
+                f"evaluate_m2_bars: category {category!r} の測り直し {vidx} 回目の "
+                f"waveform_sha256 {vrow.get('waveform_sha256')!r} が提出 row の "
+                f"{expected_waveform!r} と不一致; 別 fixture を測った検証 run を同じ "
+                "測定の再現と数えない (fail-closed)"
+            )
     if not _repeats_bit_identical(verification_metrics):
         raise RuntimeError(
             f"evaluate_m2_bars: category {category!r} の評価器自身による {repeats} 回の "
@@ -2373,6 +2434,20 @@ def _require_publishable_runs(reports: List[Dict[str, Any]]) -> None:
                 "ディスク bytes が食い違いうるため publish 可能な実測にしない "
                 "（素の CLI 実行で測り直すこと・fail-closed）"
             )
+        loaded_as_main = report.get("harness_loaded_as_main")
+        if loaded_as_main is None:
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{idx}] が harness_loaded_as_main を欠く; "
+                "ハーネス自身がソースから実行されたか確認できない report を証拠に "
+                "しない (fail-closed)"
+            )
+        if loaded_as_main is not True:
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{idx}] は import 経由で実行されたハーネスの "
+                "report; 直接パスの script 実行だけが .pyc を経由せずソースから実行 "
+                "される（stale bytecode の余地を残さない）ため、publish 可能な実測は "
+                "素の CLI 起動に限る (fail-closed)"
+            )
 
 
 def _require_homogeneous_scorer(reports: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -2685,7 +2760,9 @@ def evaluate_m2_bars(
     _require_publishable_runs(reports)
     # 凍結 spec を evaluate 側でも読み、bars の pin と report の申告の両方に照合する。
     # 母数の上界を row の自己申告から取らず、ここから組み直すために必要（Codex P2）。
-    specs, specs_sha256 = load_specs(specs_path)
+    # raw bytes も保持する——測り直し子には実パスでなくこの bytes の複製を渡す
+    # （評価後のファイル差し替え TOCTOU の遮断・Codex P2 第 34 巡）。
+    specs, specs_sha256, specs_raw = load_specs_with_raw(specs_path)
     _require_specs_pin(specs_sha256, bars_data)
     for idx, report in enumerate(reports):
         reported_specs = report.get("specs_sha256")
@@ -2782,7 +2859,7 @@ def evaluate_m2_bars(
             category,
             rows,
             bars=bars,
-            specs_path=specs_path,
+            specs_raw=specs_raw,
             repeats=repeats_min,
         )
 

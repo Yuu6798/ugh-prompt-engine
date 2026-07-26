@@ -57,6 +57,9 @@ def _clean_evaluator_preload(monkeypatch: pytest.MonkeyPatch):
     """
     monkeypatch.setattr(harness, "_PRELOADED_SEED_MODULES", [])
     monkeypatch.setattr(harness, "_environment_execution_pins", _fake_environment_pins)
+    # ハーネスはテストから import されるため直接パス実行フラグは False になる。
+    # 素の CLI 起動相当へ正規化する（False の拒否自体は専用テストが固定する）。
+    monkeypatch.setattr(harness, "_HARNESS_LOADED_AS_MAIN", True)
     # 測り直し検証（実抽出器の再実行）も同様に正規化する。素の CI では実抽出器が
     # 無く「再実行できない」拒否になる（正しい挙動・専用テストで固定）ため、機構
     # テストが評価段へ到達できるようここでは no-op にする。実検証の合否は
@@ -2614,6 +2617,7 @@ def test_fresh_process_verification_gets_fresh_bytecode_env(
             tmp_dir=tmp_path,
             specs_path=harness.SPECS_PATH,
             bars_path=harness.BARS_PATH,
+            expected_specs_sha256=hashlib.sha256(b"unused").hexdigest(),
         )
     assert captured["env"]["PYTHONDONTWRITEBYTECODE"] == "1"
     assert captured["env"]["PYTHONPYCACHEPREFIX"].startswith(str(tmp_path))
@@ -2627,6 +2631,7 @@ def test_fresh_process_report_provenance_gates() -> None:
     （Codex P2 第 27 巡）。
     """
     scorer = harness._scorer_pins(use_cache=False)
+    frozen_specs = hashlib.sha256(b"frozen-specs").hexdigest()
     base = {
         "schema_version": harness._EXPECTED_REPORT_SCHEMA,
         "route_runner_injected": False,
@@ -2634,17 +2639,80 @@ def test_fresh_process_report_provenance_gates() -> None:
         "generator_code_sha256": harness._LOADED_GENERATOR_CODE_SHA256,
         "mir_eval_version": scorer["mir_eval_version"],
         "mir_eval_code_sha256": scorer["mir_eval_code_sha256"],
+        "harness_loaded_as_main": True,
+        "specs_sha256": frozen_specs,
     }
-    harness._require_fresh_process_report_provenance(dict(base), "S_direct")  # 健全なら通る
+    harness._require_fresh_process_report_provenance(
+        dict(base), "S_direct", expected_specs_sha256=frozen_specs
+    )  # 健全なら通る
     for mutation, pattern in [
         ({"route_runner_injected": True}, "注入ランナー"),
         ({"preloaded_seed_modules": ["svp_rpe"]}, "事前ロード"),
         ({"generator_code_sha256": "0" * 64}, "generator_code_sha256"),
         ({"mir_eval_code_sha256": "1" * 64}, "スコアラー pin"),
         ({"schema_version": "m2-accuracy-report/9.9"}, "schema_version"),
+        ({"harness_loaded_as_main": False}, "直接パス"),
+        ({"specs_sha256": hashlib.sha256(b"other").hexdigest()}, "凍結 specs"),
     ]:
         with pytest.raises(RuntimeError, match=pattern):
-            harness._require_fresh_process_report_provenance({**base, **mutation}, "S_direct")
+            harness._require_fresh_process_report_provenance(
+                {**base, **mutation}, "S_direct", expected_specs_sha256=frozen_specs
+            )
+
+
+def test_evaluate_rejects_import_style_harness_runs() -> None:
+    """import 経由で実行されたハーネスの report は publish 不可（stale .pyc の余地）。
+
+    直接パスの script 実行だけが .pyc を経由せずソースから実行される
+    （Codex P2 第 34 巡）。
+    """
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    reports[0]["harness_loaded_as_main"] = False
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="import 経由"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+    for report in reports:
+        report.pop("harness_loaded_as_main", None)
+    with pytest.raises(ValueError, match="harness_loaded_as_main"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+def test_reverification_uses_frozen_specs_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """測り直しは `--specs` の実パスでなく、評価器が読んだ bytes の凍結複製を測る。
+
+    実パスを渡すと「評価器が読んで hash した後の差し替え」を子が測る TOCTOU が残る
+    （Codex P2 第 34 巡）。
+    """
+    captured: Dict[str, Any] = {}
+
+    def _capture_run_accuracy(**kwargs: Any) -> Dict[str, Any]:
+        captured["specs_path"] = Path(kwargs["specs_path"])
+        captured["bytes"] = Path(kwargs["specs_path"]).read_bytes()
+        raise RuntimeError("stop-after-capture")
+
+    monkeypatch.setattr(harness, "run_accuracy", _capture_run_accuracy)
+    bars, _bars_sha256 = harness.load_bars(BARS_PATH)
+    specs_raw = harness.SPECS_PATH.read_bytes()
+    with pytest.raises(RuntimeError, match="stop-after-capture"):
+        _ORIG_REVERIFY(
+            "S_direct",
+            [],
+            bars=bars,
+            specs_raw=specs_raw,
+            repeats=2,
+            verification_runner=_make_fake_runner(shift_cents=10.0),
+        )
+    assert captured["specs_path"].resolve() != harness.SPECS_PATH.resolve()
+    assert captured["bytes"] == specs_raw
 
 
 def test_reverification_rejects_stack_drift_during_reverification(
