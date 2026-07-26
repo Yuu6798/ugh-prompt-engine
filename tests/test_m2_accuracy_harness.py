@@ -1206,11 +1206,19 @@ def test_verdict_records_the_frozen_est_voicing_floor() -> None:
             "を超える",
         ),
         (lambda row: row.update(ref_frame_count="470"), "整数でない"),
-        (lambda row: row.update(ref_voiced_frame_count=-1), "が負"),
+        (lambda row: row.update(ref_voiced_frame_count=-1), "不一致"),
+        # 母数と上界を**揃えて**膨らませても、上界は凍結 spec から再計算されるので通らない。
+        (
+            lambda row: (
+                row["metrics"].update(voiced_chroma_correct_frame_count=1_000_000_000),
+                row.update(ref_frame_count=1_000_000_000, ref_voiced_frame_count=1_000_000_000),
+            ),
+            "不一致",
+        ),
     ],
 )
 def test_evaluate_m2_bars_bounds_median_sample_count_by_reference(mutate, expect) -> None:
-    """`voiced_chroma_correct_frame_count` は正解フレーム数を超えられない。"""
+    """`voiced_chroma_correct_frame_count` は凍結 spec 由来の正解フレーム数を超えられない。"""
     reports = [
         _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
         for _ in range(2)
@@ -1232,6 +1240,119 @@ def test_evaluate_m2_bars_rejects_more_voiced_than_total_reference_frames() -> N
         row["ref_frame_count"] = row["ref_voiced_frame_count"] - 1
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="ref_frame_count"):
+        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+
+
+def test_reference_counts_are_recomputed_from_the_frozen_specs() -> None:
+    """上界は row の自己申告ではなく凍結 spec から組み直した値である。"""
+    specs, _ = harness.load_specs(SPECS_PATH)
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    expected = harness._registered_reference_counts("S_direct", bars, specs)
+    verdict = harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+    recorded = verdict["categories"]["S_direct"]["reference_frame_counts"]
+    assert (recorded["ref_frame_count"], recorded["ref_voiced_frame_count"]) == expected
+    assert recorded["source"] == "recomputed_from_frozen_specs"
+    # run 側が row に刻んだ値とも一致する（run と evaluate が同じ関数を使う）。
+    row = reports[0]["categories"]["S_direct"]
+    assert (row["ref_frame_count"], row["ref_voiced_frame_count"]) == expected
+
+
+def test_evaluate_m2_bars_rejects_reports_declaring_another_specs_generation() -> None:
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    reports[0]["specs_sha256"] = hashlib.sha256(b"another-specs").hexdigest()
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="specs_sha256"):
+        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+
+
+# ---------------------------------------------------------------------------
+# 空バーで受け入れゲートを無効化させない（Codex P2）
+# ---------------------------------------------------------------------------
+
+
+def test_load_bars_rejects_empty_gate_for_non_diagnostic_category(tmp_path: Path) -> None:
+    """`--bars` が S_direct の閾値を落としただけで判定が消える経路を塞ぐ。"""
+    raw = BARS_PATH.read_text(encoding="utf-8")
+    patched = raw.replace(
+        "  S_direct:                       # 抽出器の健全性バー（落ちたら経路自体を疑う）\n"
+        "    min_rpa: 0.90\n"
+        "    max_vfa: 0.15\n",
+        "  S_direct: {}\n",
+    )
+    assert patched != raw
+    path = tmp_path / "bars_empty_s_direct.yaml"
+    path.write_text(patched, encoding="utf-8")
+    with pytest.raises(ValueError, match="空/欠落"):
+        harness.load_bars(path)
+
+
+def test_load_bars_rejects_thresholds_on_diagnostic_only_category(tmp_path: Path) -> None:
+    raw = BARS_PATH.read_text(encoding="utf-8")
+    patched = raw.replace(
+        "  S_fullstack: {}", "  S_fullstack:\n    min_rpa: 0.10"
+    )
+    assert patched != raw
+    path = tmp_path / "bars_gated_fullstack.yaml"
+    path.write_text(patched, encoding="utf-8")
+    with pytest.raises(ValueError, match="診断専用"):
+        harness.load_bars(path)
+
+
+def test_evaluate_m2_bars_refuses_diagnostic_only_for_gated_category() -> None:
+    """bars dict を手で組む経路でも、空バーの S_direct を diagnostic_only にしない。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    bars["m2_accuracy_bars"]["S_direct"] = {}  # load_bars を通さない直接呼び出し
+    with pytest.raises(ValueError, match="診断専用ではない"):
+        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+
+
+def test_s_fullstack_remains_diagnostic_only() -> None:
+    """診断専用カテゴリは従来どおり判定せず記録のみ（設計 §8）。"""
+    reports = [
+        _fake_run(categories=("S_fullstack",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    verdict = harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+    assert verdict["categories"]["S_fullstack"]["status"] == "diagnostic_only"
+
+
+# ---------------------------------------------------------------------------
+# run report の schema discriminator（Codex P2）
+# ---------------------------------------------------------------------------
+
+
+def test_run_report_declares_its_schema_version() -> None:
+    report = _fake_run(categories=("S_direct",), route_runner=_make_fake_runner())
+    assert report["schema_version"] == harness._EXPECTED_REPORT_SCHEMA
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expect"),
+    [
+        (lambda r: r.pop("schema_version"), "schema_version を欠く"),
+        (lambda r: r.update(schema_version="m2-accuracy-report/9.9"), "未知"),
+    ],
+)
+def test_evaluate_m2_bars_rejects_unknown_report_schema(mutate, expect) -> None:
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    mutate(reports[0])
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match=expect):
         harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
 
 

@@ -337,6 +337,18 @@ SPECS_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2_accuracy_specs.y
 BARS_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2_accuracy_bars.yaml"
 
 _EXPECTED_BARS_SCHEMA = "m2-accuracy-bars/0.1"
+# run report 自身のスキーマ discriminator。report の形が変わっても現在検査している
+# フィールドが残っていると、evaluate が新旧を区別せず旧セマンティクスで解釈しうる
+# （Codex P2）。bars と同じ規律を report にも適用し、未知/欠落は評価前に弾く。
+_EXPECTED_REPORT_SCHEMA = "m2-accuracy-report/0.1"
+
+# バーを持たず「診断記録のみ」で良いカテゴリ（設計 §3/§8: Demucs は合成音色に対し
+# 分布外なので S_fullstack の低値を理由に crepe を責めない）。**この集合の外の
+# カテゴリが空バーで来たら fail-closed** ——`--bars` が S_direct を落としただけで
+# 必須の受け入れゲートが黙って無効化されるのを防ぐ（Codex P2）。
+_DIAGNOSTIC_ONLY_CATEGORIES: "frozenset[str]" = frozenset({"S_fullstack"})
+# 受け入れゲートを持つカテゴリに最低限必須の閾値キー。
+_REQUIRED_BAR_KEYS: "Tuple[str, ...]" = ("min_rpa",)
 
 # カテゴリ → (fixture/composite id, select_routes 用 input_kind, 期待する route 名)。
 # route 名は `svp_rpe.melody.routing._ROUTES` の既存表から**そのまま**選ぶ
@@ -586,6 +598,31 @@ def _require_well_formed_bars(bar_block: Dict[str, Any]) -> None:
             f"m2_accuracy_bars: est_voiced_confidence_floor {floor!r} が非有限または "
             "[0, 1] の外 (fail-closed)"
         )
+
+    # 受け入れゲートを持つべきカテゴリのバーが空/欠落だと、`evaluate_m2_bars` の
+    # 「バーなし → diagnostic_only」分岐に落ちて RPA/VFA 判定が黙って消える。
+    # 事前登録されたカテゴリのうち診断専用でないものは、閾値の存在を要求する。
+    for category in sorted(_CATEGORY_SPECS):
+        if category in _DIAGNOSTIC_ONLY_CATEGORIES:
+            if bar_block.get(category):
+                raise ValueError(
+                    f"m2_accuracy_bars: category {category!r} は診断専用（設計 §8）なので "
+                    f"閾値を持てない: {bar_block.get(category)!r} (fail-closed)"
+                )
+            continue
+        bar = bar_block.get(category)
+        if not isinstance(bar, dict) or not bar:
+            raise ValueError(
+                f"m2_accuracy_bars: category {category!r} の閾値が空/欠落（{bar!r}）; "
+                "受け入れゲートを持つカテゴリを diagnostic_only へ落として判定を無効化 "
+                "させない (fail-closed)"
+            )
+        missing = [key for key in _REQUIRED_BAR_KEYS if key not in bar]
+        if missing:
+            raise ValueError(
+                f"m2_accuracy_bars: category {category!r} が必須閾値 {missing} を欠く "
+                "(fail-closed)"
+            )
 
     for category, bar in bar_block.items():
         if not isinstance(bar, dict):
@@ -877,6 +914,7 @@ def run_accuracy(
     # ロード時に確定した digest を使う（実行中にディスクのソースが変わっても、
     # 実際に走っているのは import 済みのコードなので、そちらを pin する）。
     results: Dict[str, Any] = {
+        "schema_version": _EXPECTED_REPORT_SCHEMA,
         "mode": "synthetic_accuracy",
         "started_utc": _utc_now(),
         "run_id": uuid.uuid4().hex,
@@ -1104,42 +1142,69 @@ _METRIC_RANGES: Dict[str, Tuple[float, float]] = {
 }
 
 
-def _require_reference_bounded_counts(category: str, rows: List[Dict[str, Any]]) -> None:
-    """誤差モデルの母数が、独立に記録された正解フレーム数を超えないことを要求する。
+def _registered_reference_counts(
+    category: str, bars: Dict[str, Any], specs: Dict[str, Any]
+) -> Tuple[int, int]:
+    """凍結 spec / 波形から `(ref_frame_count, ref_voiced_frame_count)` を**再計算**する。
+
+    row の自己申告値を上界に使うと、母数と上界を**揃えて**膨らませた 2 本の report が
+    そのまま通る（Codex P2）。正解フレーム数は凍結 spec の決定論的な関数なので、
+    evaluate 側で独立に組み直せる——`_build_category_waveform` を通すため、
+    「凍結 spec が今も bars の `waveform_sha256` pin と同じ波形をレンダするか」も
+    同時に確認される（drift していればここで落ちる）。
+    """
+    category_spec = _CATEGORY_SPECS[category]
+    y, sr, _waveform_sha256 = _build_category_waveform(category, category_spec, specs, bars)
+    ref_times, ref_freqs = _reference_for_category(
+        category_spec, specs, total_duration_sec=float(len(y)) / float(sr)
+    )
+    return len(ref_times), sum(1 for f in ref_freqs if f > 0.0)
+
+
+def _require_reference_bounded_counts(
+    category: str,
+    rows: List[Dict[str, Any]],
+    *,
+    expected_frame_count: int,
+    expected_voiced_frame_count: int,
+) -> None:
+    """誤差モデルの母数を、**再計算した**正解フレーム数で抑える（fail-closed）。
 
     `voiced_chroma_correct_frame_count` は「有声かつ chroma 一致フレーム」の数なので、
     定義上 `ref_voiced_frame_count` 以下（したがって `ref_frame_count` 以下）である。
     型と符号だけを見ていると 10 億のような値が bit 一致のまま pass の verdict へ
-    転記され、ありえない標本数の誤差モデルを publish できた（Codex P2）。row 側の
-    正解フレーム数は `_require_registered_row_identity` が固定した波形から run 時に
-    数えた独立な値なので、これを上界として使える。
+    転記される（Codex P2）。上界は row ではなく `_registered_reference_counts` が
+    凍結 spec から組み直した値を使う——row の自己申告を上界にすると、母数と上界を
+    揃えて書き換えるだけで迂回できるため（Codex P2 の追撃指摘）。
+
+    row 側の `ref_*_frame_count` は凍結 spec の決定論的関数なので、再計算値との
+    **厳密一致**を要求する（不一致は drift か改竄のいずれかで、どちらも証拠にしない）。
     """
     for idx, row in enumerate(rows):
         where = f"category {category!r} rows[{idx}]"
-        metrics = row["metrics"]
-        count = int(metrics["voiced_chroma_correct_frame_count"])
-        for field in ("ref_frame_count", "ref_voiced_frame_count"):
-            bound = row.get(field)
-            if isinstance(bound, bool) or not isinstance(bound, int):
+        for field, expected in (
+            ("ref_frame_count", expected_frame_count),
+            ("ref_voiced_frame_count", expected_voiced_frame_count),
+        ):
+            reported = row.get(field)
+            if isinstance(reported, bool) or not isinstance(reported, int):
                 raise ValueError(
-                    f"evaluate_m2_bars: {where} の {field} {bound!r} が整数でない; "
+                    f"evaluate_m2_bars: {where} の {field} {reported!r} が整数でない; "
                     "誤差モデルの母数を検算できない row を証拠にしない (fail-closed)"
                 )
-            if bound < 0:
+            if reported != expected:
                 raise ValueError(
-                    f"evaluate_m2_bars: {where} の {field} {bound!r} が負 (fail-closed)"
+                    f"evaluate_m2_bars: {where} の {field} {reported} が凍結 spec から"
+                    f"再計算した値 {expected} と不一致（正解フレーム数は spec の決定論的関数"
+                    "なので、食い違いは drift か改竄のいずれか）(fail-closed)"
                 )
-            if count > bound:
-                raise ValueError(
-                    f"evaluate_m2_bars: {where} の voiced_chroma_correct_frame_count "
-                    f"{count} が {field} {bound} を超える; 有声かつ chroma 一致フレーム数は "
-                    "正解フレーム数を超えられない (fail-closed)"
-                )
-        if row["ref_voiced_frame_count"] > row["ref_frame_count"]:
+        count = int(row["metrics"]["voiced_chroma_correct_frame_count"])
+        if count > expected_voiced_frame_count:
             raise ValueError(
-                f"evaluate_m2_bars: {where} の ref_voiced_frame_count "
-                f"{row['ref_voiced_frame_count']} が ref_frame_count "
-                f"{row['ref_frame_count']} を超える (fail-closed)"
+                f"evaluate_m2_bars: {where} の voiced_chroma_correct_frame_count "
+                f"{count} が凍結 spec 由来の有声フレーム数 {expected_voiced_frame_count} "
+                "を超える（有声かつ chroma 一致フレーム数は正解の有声フレーム数を"
+                "超えられない）(fail-closed)"
             )
 
 
@@ -1270,6 +1335,30 @@ def _require_finite_metrics(category: str, metrics_list: List[Dict[str, Any]]) -
                     f"evaluate_m2_bars: category {category!r} repeat[{repeat_idx}] の "
                     f"{field} {value!r} が定義域 [{low}, {high}] の外 (fail-closed)"
                 )
+
+
+def _require_report_schema(reports: List[Dict[str, Any]]) -> None:
+    """各 report が既知の `schema_version` を名乗ることを要求する（fail-closed）。
+
+    bars には schema discriminator があるのに report には無く、フォーマットが変わっても
+    現在検査しているフィールドが残っていれば evaluate が旧セマンティクスで解釈できて
+    しまう（Codex P2）。未知バージョンも欠落も、意味論の食い違いを黙って飲まないため
+    等しく拒否する。
+    """
+    for idx, report in enumerate(reports):
+        version = report.get("schema_version")
+        if version is None:
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{idx}] が schema_version を欠く; どの世代の "
+                f"report 形式か判別できない artifact を評価しない "
+                f"（期待値 {_EXPECTED_REPORT_SCHEMA!r}・fail-closed）"
+            )
+        if version != _EXPECTED_REPORT_SCHEMA:
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{idx}] の schema_version {version!r} が "
+                f"未知; 期待値は {_EXPECTED_REPORT_SCHEMA!r}（旧/新形式を現行セマンティクス "
+                "で解釈しない・fail-closed）"
+            )
 
 
 def _require_publishable_runs(reports: List[Dict[str, Any]]) -> None:
@@ -1452,6 +1541,7 @@ def evaluate_m2_bars(
     *,
     bars_sha256: str,
     report_pins: Optional[List[Dict[str, Any]]] = None,
+    specs_path: Path = SPECS_PATH,
 ) -> Dict[str, Any]:
     """n>=`repeats_min` の run report に凍結バーを機械適用する（設計 §4/§6）。
 
@@ -1512,7 +1602,20 @@ def evaluate_m2_bars(
             "同一 run のコピーを複数 repeats として扱えない (fail-closed)"
         )
 
+    _require_report_schema(reports)
     _require_publishable_runs(reports)
+    # 凍結 spec を evaluate 側でも読み、bars の pin と report の申告の両方に照合する。
+    # 母数の上界を row の自己申告から取らず、ここから組み直すために必要（Codex P2）。
+    specs, specs_sha256 = load_specs(specs_path)
+    _require_specs_pin(specs_sha256, bars)
+    for idx, report in enumerate(reports):
+        reported_specs = report.get("specs_sha256")
+        if reported_specs != specs_sha256:
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{idx}] の specs_sha256 {reported_specs!r} が "
+                f"評価に使う spec {specs_sha256!r} と不一致; 別世代の合成仕様で測った row に "
+                "凍結バーを適用しない (fail-closed)"
+            )
     generator_code_sha256 = _require_matching_generator_code(reports)
     tolerance_cents = _require_frozen_tolerance(reports, bar_block)
     est_voiced_floor = _require_frozen_est_voicing_floor(reports, bar_block)
@@ -1566,7 +1669,18 @@ def evaluate_m2_bars(
         metrics_list = [row["metrics"] for row in rows]
         _require_finite_metrics(category, metrics_list)
         _require_metrics_contract(category, metrics_list, tolerance_cents=tolerance_cents)
-        _require_reference_bounded_counts(category, rows)
+        expected_frames, expected_voiced = _registered_reference_counts(category, bars, specs)
+        _require_reference_bounded_counts(
+            category,
+            rows,
+            expected_frame_count=expected_frames,
+            expected_voiced_frame_count=expected_voiced,
+        )
+        cat_result["reference_frame_counts"] = {
+            "ref_frame_count": expected_frames,
+            "ref_voiced_frame_count": expected_voiced,
+            "source": "recomputed_from_frozen_specs",
+        }
         cat_result["metrics"] = metrics_list
 
         # bars.yaml の `repeats_min` は決定論確認（「shifts=0 後は bit 一致するはず」）
@@ -1576,6 +1690,14 @@ def evaluate_m2_bars(
 
         if not bar:
             # S_fullstack: バーなし・診断記録のみ（設計 §3/§8）。
+            # `load_bars` が空バーを診断専用カテゴリに限っているが、`evaluate_m2_bars` を
+            # 直接呼ぶ経路（bars dict を手で組む）はそこを通らないため独立に要求する。
+            if category not in _DIAGNOSTIC_ONLY_CATEGORIES:
+                raise ValueError(
+                    f"evaluate_m2_bars: category {category!r} は診断専用ではないのに閾値が "
+                    f"空; 受け入れゲートを diagnostic_only へ落として無効化させない "
+                    f"（診断専用は {sorted(_DIAGNOSTIC_ONLY_CATEGORIES)} のみ・fail-closed）"
+                )
             cat_result["status"] = "diagnostic_only"
             verdict["categories"][category] = cat_result
             continue
