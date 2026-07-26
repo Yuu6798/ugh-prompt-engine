@@ -52,10 +52,26 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
-if str(SRC) not in sys.path:
+
+
+def _force_checkout_roots_first() -> None:
+    """本 checkout の src / scripts を sys.path の先頭へ**無条件に**移動する。
+
+    `if str(SRC) not in sys.path` の存在チェックだけでは、PYTHONPATH に別 checkout の
+    src が先・本 checkout の src が後ろで並ぶ環境で前置がスキップされ、**実行は別
+    checkout のモジュール・hash は ROOT 配下のファイル**という乖離が生じる（Codex P1
+    第 25 巡）。preload ゲートは import 済みの場合しか捕まえず、測り直しサブプロセスも
+    同じ環境を継承して同様に乖離するため一致してしまう。既存の出現を取り除いた上で
+    先頭へ挿入し、モジュールスナップショット凍結より前に順序を確定させる。
+    """
+    for entry in (str(SRC), str(ROOT / "scripts")):
+        while entry in sys.path:
+            sys.path.remove(entry)
     sys.path.insert(0, str(SRC))
-if str(ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts"))
+
+
+_force_checkout_roots_first()
 
 # 本ハーネスが読み込まれた瞬間の sys.modules。**この行より上に first-party / 計測
 # 関連の import は 1 つも無い**ため、ここに写っている名前は「別経路が先に読み込んだ

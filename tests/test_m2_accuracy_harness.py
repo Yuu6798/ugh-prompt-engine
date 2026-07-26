@@ -2526,6 +2526,26 @@ def test_runtime_input_paths_cover_native_extensions(
     assert (pkg / "notes.txt").resolve() not in paths
 
 
+def test_checkout_roots_are_forced_ahead_of_foreign_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """別 checkout が sys.path で先行していても、本 checkout の root を先頭へ移す。
+
+    存在チェックだけの前置は「別 checkout の src が先・本 checkout の src が後」の
+    環境で実行と hash の乖離を許す（Codex P1 第 25 巡）。
+    """
+    src = str(harness.SRC)
+    scripts = str(harness.ROOT / "scripts")
+    foreign = "/nonexistent/other-checkout/src"
+    monkeypatch.setattr(sys, "path", [foreign, "/somewhere/else", src, scripts])
+    harness._force_checkout_roots_first()
+    assert sys.path[0] == scripts
+    assert sys.path[1] == src
+    assert sys.path.index(src) < sys.path.index(foreign)
+    assert sys.path.count(src) == 1
+    assert sys.path.count(scripts) == 1
+
+
 def test_runtime_input_paths_cover_decoder_executables(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
