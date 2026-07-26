@@ -501,16 +501,30 @@ def _runtime_input_paths() -> "set[Path]":
             paths.update(p.resolve() for p in _ffmpeg_library_closure(Path(resolved)))
         except Exception:
             continue  # closure を読めない環境では fingerprint 側も失敗 = 読まれない
+    # 配布メタデータ（dist-info）は mir_eval 特例でなく **全 runtime パッケージ**分を
+    # 保護する。run は `separation_version`（demucs）等のために importlib.metadata を
+    # 読むので、mir_eval だけの列挙では pin の実読集合より狭い（Codex P2 第 36 巡）。
+    # import 名 ≠ 配布名のケースに備え packages_distributions の写像も引く。
     import importlib.metadata
 
     try:
-        dist = importlib.metadata.distribution("mir_eval")
+        dist_map = importlib.metadata.packages_distributions()
+    except Exception:
+        dist_map = {}
+    dist_names: "set[str]" = set()
+    for name in _runtime_package_names():
+        top = name.split(".")[0]
+        dist_names.add(top)
+        dist_names.update(dist_map.get(top, ()))
+    for dist_name in sorted(dist_names):
+        try:
+            dist = importlib.metadata.distribution(dist_name)
+        except Exception:
+            continue  # 未導入の配布は読まれない = 入力でない
         for record in dist.files or ():
             located = Path(str(dist.locate_file(record)))
             if located.is_file():
                 paths.add(located.resolve())
-    except Exception:
-        pass
     return paths
 
 

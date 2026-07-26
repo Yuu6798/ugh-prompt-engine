@@ -2905,6 +2905,26 @@ def test_runtime_input_paths_cover_scorer_distribution_metadata() -> None:
     assert metadata_files[0] in paths
 
 
+def test_runtime_input_paths_cover_runtime_distribution_metadata() -> None:
+    """配布メタデータの保護は mir_eval 特例でなく全 runtime パッケージ分（Codex P2 第 36 巡）。
+
+    run は separation_version（demucs）等のために importlib.metadata を読む。
+    導入済みの runtime パッケージ（例: numpy）の dist-info が保護集合に入ることを固定。
+    """
+    import importlib.metadata
+
+    assert "numpy" in set(harness._runtime_package_names())
+    dist = importlib.metadata.distribution("numpy")
+    metadata_files = [
+        Path(str(dist.locate_file(record))).resolve()
+        for record in (dist.files or ())
+        if str(record).endswith("METADATA")
+    ]
+    assert metadata_files, "numpy の dist-info METADATA が見つからない（前提の drift）"
+    paths = harness._runtime_input_paths()
+    assert metadata_files[0] in paths
+
+
 def test_cli_run_categories_flag_limits_run(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
