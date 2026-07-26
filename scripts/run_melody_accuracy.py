@@ -73,21 +73,28 @@ def _is_relative_to(path: Path, root: Path) -> bool:
 def _first_party_module_file(module_name: str) -> "Path | None":
     """`module_name` が first-party（`src/svp_rpe` or `scripts` 配下）なら resolved パスを返す。
 
-    stdlib / third-party / 解決不能な名前は None。optional 重み依存（crepe 等）は
-    first-party 外へ解決されるか未導入で None になるため閉包に混入せず、digest は
+    **`importlib.util.find_spec` は使わない**。ドット名を渡すと親パッケージを
+    *実行* するため（`svp_rpe.melody.accuracy` の解決で `svp_rpe.melody.__init__` が
+    走り、それが `observability` / `routing` を import する）、hash より前に import が
+    起きて「旧モジュールが実行され digest は新しいディスクを見る」窓が開く
+    （Codex P1・実測で確認）。first-party のルートは既知なので、ドット名を
+    ディレクトリ階層へ直接写して存在確認する——これなら import はゼロ。
+
+    stdlib / third-party / 解決不能な名前は None（ルート外なので写像が当たらない）。
+    optional 重み依存（crepe 等）も None になるため閉包に混入せず、digest は
     どのマシンでも決定論的に安定する。
     """
-    import importlib.util
-
-    try:
-        spec = importlib.util.find_spec(module_name)
-    except (ImportError, ValueError, AttributeError, ModuleNotFoundError):
+    parts = module_name.split(".")
+    if not all(parts):
         return None
-    if spec is None or spec.origin in (None, "built-in", "frozen"):
-        return None
-    path = Path(spec.origin).resolve()
-    if any(_is_relative_to(path, root) for root in _FIRST_PARTY_ROOTS):
-        return path
+    for root in _FIRST_PARTY_ROOTS:
+        base = root.joinpath(*parts)
+        module_file = base.with_suffix(".py")
+        if module_file.is_file():
+            return module_file.resolve()
+        package_init = base / "__init__.py"
+        if package_init.is_file():
+            return package_init.resolve()
     return None
 
 
@@ -205,7 +212,9 @@ def _require_unchanged_since_load() -> None:
             f"→ 現在 {current!r}）; 走っているのは import 済みの旧コードなので、この run の "
             "provenance は信用できない — プロセスを再起動して測り直すこと (fail-closed)"
         )
-    current_scorer = _scorer_pins()
+    # キャッシュは (size, mtime_ns) を鍵にするので、それらを保ったまま差し替えられた
+    # bytes を見逃す。実行後の検証は必ず再 hash する（Codex P1）。
+    current_scorer = _scorer_pins(use_cache=False)
     if current_scorer != _LOADED_SCORER_PINS:
         raise RuntimeError(
             f"mir_eval が実行中に差し替わった（load 時 {_LOADED_SCORER_PINS!r} → 現在 "
@@ -224,7 +233,7 @@ bind_inference_code_pins()
 # スコアラー（mir_eval）の pin も **実際に import される前に** 確定させる。
 # `_scorer_pins()` は importlib.metadata と find_spec だけを使うので import を
 # 起こさない。first-party 閉包と同じ load-time 束縛を third-party にも適用する。
-def _scorer_pins() -> Dict[str, Any]:
+def _scorer_pins(*, use_cache: bool = True) -> Dict[str, Any]:
     """指標を計算した mir_eval（third-party スコアラー）の version / code pin。
 
     `generator_code_sha256` は first-party 閉包に限っている（third-party を混ぜると
@@ -247,7 +256,7 @@ def _scorer_pins() -> Dict[str, Any]:
         version = None
     return {
         "mir_eval_version": version,
-        "mir_eval_code_sha256": package_code_sha256("mir_eval"),
+        "mir_eval_code_sha256": package_code_sha256("mir_eval", use_cache=use_cache),
     }
 
 

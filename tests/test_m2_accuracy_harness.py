@@ -554,6 +554,60 @@ def test_evaluate_m2_bars_records_bit_identical_repeats_on_pass() -> None:
     assert verdict["mir_eval_version"] == reports[0]["mir_eval_version"]
 
 
+def test_module_file_resolution_imports_nothing(monkeypatch) -> None:
+    """seed パス解決が親パッケージを実行しない（find_spec を使っていたら失敗する）。
+
+    `importlib.util.find_spec("svp_rpe.melody.accuracy")` は `svp_rpe.melody.__init__`
+    を実行し、それが `observability` / `routing` を import する。hash より前に import が
+    起きると「旧モジュールが実行され digest は新しいディスクを見る」窓が開くため、
+    パス解決は純粋なファイルシステム写像でなければならない。
+    """
+    watched = [
+        "svp_rpe",
+        "svp_rpe.melody",
+        "svp_rpe.melody.accuracy",
+        "svp_rpe.melody.observability",
+        "svp_rpe.melody.routing",
+    ]
+    for name in watched:
+        monkeypatch.delitem(sys.modules, name, raising=False)
+
+    resolved = harness._first_party_module_file("svp_rpe.melody.accuracy")
+    assert resolved is not None
+    assert resolved.name == "accuracy.py"
+    assert not any(name in sys.modules for name in watched), sorted(
+        name for name in watched if name in sys.modules
+    )
+
+
+def test_generator_code_paths_imports_nothing(monkeypatch) -> None:
+    """閉包計算そのものも import を起こさない（load-time pin の前提）。"""
+    watched = [
+        "svp_rpe",
+        "svp_rpe.melody",
+        "svp_rpe.melody.accuracy",
+        "svp_rpe.melody.extractors",
+        "svp_rpe.melody.observability",
+        "svp_rpe.melody.routing",
+    ]
+    for name in watched:
+        monkeypatch.delitem(sys.modules, name, raising=False)
+
+    paths = harness._generator_code_paths()
+    assert {p.name for p in paths} >= {"run_melody_accuracy.py", "accuracy.py", "routing.py"}
+    assert not any(name in sys.modules for name in watched), sorted(
+        name for name in watched if name in sys.modules
+    )
+
+
+def test_scorer_pins_rehash_bypasses_cache() -> None:
+    """post-run 検証は再 hash する（size/mtime 据え置きの差し替えを見逃さない）。"""
+    cached = harness._scorer_pins()
+    fresh = harness._scorer_pins(use_cache=False)
+    assert cached == fresh
+    assert harness._is_sha256(fresh["mir_eval_code_sha256"])
+
+
 def test_scorer_pins_do_not_import_mir_eval(monkeypatch) -> None:
     """スコアラー pin は import を起こさずに取れる（load-time 束縛の前提）。"""
     monkeypatch.delitem(sys.modules, "mir_eval", raising=False)
