@@ -151,7 +151,16 @@ def _json_loads_no_dup_keys(data: "bytes | str", *, what: str) -> Any:
             result[key] = value
         return result
 
-    return json.loads(data, object_pairs_hook=_reject_dupes)
+    def _reject_non_finite(token: str) -> Any:
+        # Python の json は既定で NaN / Infinity / -Infinity を受理するが、NaN は
+        # あらゆる比較が False になるため、閾値判定を素通りして pass を生む
+        # （`NaN < min_rpa` も `NaN > max_vfa` も False）。artifact 段階で弾く。
+        raise ValueError(
+            f"{what}: JSON に非有限リテラル {token!r} が含まれる; 未定義の測定値を "
+            "凍結バー判定へ通さない (fail-closed)"
+        )
+
+    return json.loads(data, object_pairs_hook=_reject_dupes, parse_constant=_reject_non_finite)
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
@@ -559,6 +568,101 @@ def _require_homogeneous_model_stack(category: str, rows: List[Dict[str, Any]]) 
     return signatures[0]
 
 
+def _require_registered_row_identity(
+    category: str, rows: List[Dict[str, Any]], bars: Dict[str, Any]
+) -> None:
+    """row の同一性（category ラベル / route / input_kind / 波形）を事前登録と突き合わせる。
+
+    `category` は report が名乗るラベルにすぎないので、evaluate はそれを信用できない
+    ——`S_direct` と書かれた row が実際には別 fixture・別経路の観測でも、ラベルだけで
+    凍結 S_direct バーの pass を publish できてしまう（Codex P1）。report bytes を
+    hash しても「誤った証拠を保存する」だけなので、evaluate 側で独立に
+    `_CATEGORY_SPECS` と bars の `provenance.waveform_sha256` を関所にする。
+
+    run 側（`_build_category_waveform`）も同じ pin を照合するが、そちらは「実測時に
+    正しい波形を合成したか」の検査で、こちらは「提出された row が本当にその fixture の
+    観測か」の検査である（手組み・編集済み report は run 側の検査を経由しない）。
+    """
+    category_spec = _CATEGORY_SPECS.get(category)
+    if category_spec is None:
+        raise ValueError(
+            f"evaluate_m2_bars: 未知の category {category!r}; 事前登録された "
+            f"{sorted(_CATEGORY_SPECS)} のみ評価する (fail-closed)"
+        )
+    pin_key = (
+        category_spec["fixture_id"]
+        if category_spec["kind"] == "direct"
+        else category_spec["composite_id"]
+    )
+    expected_waveform = bars.get("provenance", {}).get("waveform_sha256", {}).get(pin_key)
+    if not expected_waveform:
+        raise ValueError(
+            f"evaluate_m2_bars: category {category!r} (pin key {pin_key!r}) の "
+            "waveform_sha256 pin が bars に無い (fail-closed)"
+        )
+    for idx, row in enumerate(rows):
+        for field, expected in (
+            ("route", category_spec["route_name"]),
+            ("input_kind", category_spec["input_kind"]),
+            ("waveform_sha256", expected_waveform),
+        ):
+            actual = row.get(field)
+            if actual != expected:
+                raise ValueError(
+                    f"evaluate_m2_bars: category {category!r} rows[{idx}] の {field} "
+                    f"{actual!r} が事前登録値 {expected!r} と不一致; ラベルだけが "
+                    f"{category!r} の row（別 fixture/別経路の観測、または編集済み "
+                    "report）に凍結バーを適用しない (fail-closed)"
+                )
+
+
+# 指標の値域（mir_eval の定義域）。閾値判定の前に有限性と範囲を検査する。
+_METRIC_RANGES: Dict[str, Tuple[float, float]] = {
+    "raw_pitch_accuracy": (0.0, 1.0),
+    "raw_chroma_accuracy": (0.0, 1.0),
+    "voicing_recall": (0.0, 1.0),
+    "voicing_false_alarm": (0.0, 1.0),
+    "overall_accuracy": (0.0, 1.0),
+    "octave_gap": (-1.0, 1.0),
+}
+
+
+def _require_finite_metrics(category: str, metrics_list: List[Dict[str, Any]]) -> None:
+    """閾値判定の前に、指標が有限な数値かつ定義域内であることを要求する（fail-closed）。
+
+    `NaN` はあらゆる比較が False を返すため、`< min_rpa` も `> max_vfa` も成立せず
+    「失敗が無い」＝ pass として通ってしまう（Codex P1）。JSON loader 側でも
+    非有限リテラルを弾いているが、`evaluate_m2_bars` を直接呼ぶ経路のために
+    ここでも独立に検査する（二重防御）。
+    """
+    import math
+
+    for repeat_idx, metrics in enumerate(metrics_list):
+        for field, (low, high) in _METRIC_RANGES.items():
+            if field not in metrics:
+                raise ValueError(
+                    f"evaluate_m2_bars: category {category!r} repeat[{repeat_idx}] の "
+                    f"metrics が {field} を欠く (fail-closed)"
+                )
+            value = metrics[field]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(
+                    f"evaluate_m2_bars: category {category!r} repeat[{repeat_idx}] の "
+                    f"{field} {value!r} が数値でない (fail-closed)"
+                )
+            if not math.isfinite(float(value)):
+                raise ValueError(
+                    f"evaluate_m2_bars: category {category!r} repeat[{repeat_idx}] の "
+                    f"{field} が非有限（{value!r}）; 未定義の測定値は比較が常に False に "
+                    "なり pass を偽造するため拒否する (fail-closed)"
+                )
+            if not (low <= float(value) <= high):
+                raise ValueError(
+                    f"evaluate_m2_bars: category {category!r} repeat[{repeat_idx}] の "
+                    f"{field} {value!r} が定義域 [{low}, {high}] の外 (fail-closed)"
+                )
+
+
 def _require_frozen_tolerance(reports: List[Dict[str, Any]], bar_block: Dict[str, Any]) -> float:
     """各 report の `tolerance_cents` が凍結値と厳密一致することを要求する（fail-closed）。
 
@@ -720,12 +824,14 @@ def evaluate_m2_bars(
             verdict["categories"][category] = cat_result
             continue
 
-        # repeats として数える前に、同一 model stack で測られたことを証明する
-        # （別重み/別ビルドの 2 本は「再現」ではない・Codex P1）。
+        # repeats として数える前に (a) row が本当にその事前登録 fixture・経路の観測か、
+        # (b) 同一 model stack で測られたか を証明する（Codex P1×2）。
+        _require_registered_row_identity(category, rows, bars)
         _require_homogeneous_model_stack(category, rows)
 
         bar = bar_block.get(category, {})
         metrics_list = [row["metrics"] for row in rows]
+        _require_finite_metrics(category, metrics_list)
         cat_result["metrics"] = metrics_list
 
         if not bar:

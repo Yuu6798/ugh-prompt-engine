@@ -323,6 +323,75 @@ def test_evaluate_m2_bars_records_report_pins_when_supplied() -> None:
         )
 
 
+def test_evaluate_m2_bars_rejects_nan_metrics_instead_of_passing() -> None:
+    """NaN は全比較が False になり pass を偽造するため、閾値判定前に拒否する。"""
+    reports = [
+        harness.run_accuracy(
+            categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+        )
+        for _ in range(2)
+    ]
+    reports[0]["categories"]["S_direct"]["metrics"]["raw_pitch_accuracy"] = float("nan")
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="非有限"):
+        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+
+
+def test_json_loader_rejects_nan_literal() -> None:
+    """`json.loads` 既定で通る NaN リテラルを artifact 段階で弾く。"""
+    with pytest.raises(ValueError, match="非有限リテラル"):
+        harness._json_loads_no_dup_keys('{"raw_pitch_accuracy": NaN}', what="test")
+
+
+def test_evaluate_m2_bars_rejects_metric_outside_domain() -> None:
+    reports = [
+        harness.run_accuracy(
+            categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+        )
+        for _ in range(2)
+    ]
+    reports[1]["categories"]["S_direct"]["metrics"]["voicing_false_alarm"] = 1.5
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="定義域"):
+        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+
+
+@pytest.mark.parametrize(
+    ("field", "bogus"),
+    [
+        ("route", "some_other_route"),
+        ("input_kind", "full_mix"),
+        ("waveform_sha256", "f" * 64),
+    ],
+)
+def test_evaluate_m2_bars_rejects_row_identity_mismatch(field: str, bogus: str) -> None:
+    """ラベルだけが S_direct の row（別 fixture/経路・編集済み）にバーを適用しない。"""
+    reports = [
+        harness.run_accuracy(
+            categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+        )
+        for _ in range(2)
+    ]
+    reports[0]["categories"]["S_direct"][field] = bogus
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match=field):
+        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+
+
+def test_evaluate_m2_bars_rejects_unregistered_category_label() -> None:
+    reports = [
+        harness.run_accuracy(
+            categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+        )
+        for _ in range(2)
+    ]
+    for report in reports:
+        report["categories"]["S_bogus"] = dict(report["categories"]["S_direct"])
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="未知の category"):
+        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+
+
 def test_cli_rejects_out_path_colliding_with_protected_inputs(tmp_path, monkeypatch) -> None:
     """`--out` が report / bars / specs を指したら書く前に停止する。"""
     report_path = tmp_path / "run1.json"
