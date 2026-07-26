@@ -34,6 +34,7 @@ OA をそのまま採用し、再実装・改変はしない**。本モジュー
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from fractions import Fraction
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -376,14 +377,25 @@ def reference_f0_from_monophonic_spec(
     rate = _validated_sample_rate(sample_rate)
 
     sample_intervals = monophonic_note_sample_intervals(spec, sample_rate=rate)
-    duration = monophonic_total_duration_sec(spec, sample_rate=rate)
+    target_samples = monophonic_total_samples(spec, sample_rate=rate)
     if total_duration_sec is not None:
-        duration = max(duration, float(total_duration_sec))
+        # 伴奏ミックスの実尺（len(y)/sr 由来の float）を標本数へ戻す。round は
+        # 「整数標本数 / rate の float 往復」誤差の吸収であり、量子化の再導入ではない。
+        target_samples = max(target_samples, int(round(float(total_duration_sec) * rate)))
 
-    n_frames = max(0, int(round(duration / hop_sec)))
+    # 1 フレームあたりの標本数（有理数・厳密）。**`Fraction(str(hop_sec))`** を使う——
+    # `Fraction(hop_sec)` は 10 進の要求値ではなく binary float の近似値を厳密化して
+    # しまい（例: 0.03 → 0.0299999...）、フレーム標本位置が本来の境界の直下/直上へ
+    # 無限小ずれて境界フレームの帰属が float 近似の方向に依存する（Codex 指摘。
+    # 例: hop 0.03 × 100Hz でフレーム 1 が標本 3 でなく 2.9999... に落ち、標本 3 で
+    # 始まる次ノートでなく直前ノートへ誤帰属）。
+    samples_per_frame = Fraction(str(hop_sec)) * rate
+    # フレーム数は **ceiling**: 標本位置が総標本数の内側（position < target_samples）に
+    # ある時刻をすべて含める。`round(duration / hop)` は端数下半分の尾（例: 14ms
+    # fixture × 10ms hop の t=10ms フレーム）を黙って落とし、フレーム総数と voicing
+    # 指標を歪める（Codex 指摘）。
+    n_frames = max(0, math.ceil(Fraction(target_samples) / samples_per_frame))
     times: List[float] = [round(i * hop_sec, 6) for i in range(n_frames)]
-    # 1 フレームあたりの標本数（有理数・厳密）。
-    samples_per_frame = Fraction(hop_sec) * rate
     freqs: List[float] = []
     for i in range(n_frames):
         position = samples_per_frame * i

@@ -190,8 +190,13 @@ def test_reference_f0_from_monophonic_spec_frame_grid() -> None:
     times, freqs = reference_f0_from_monophonic_spec(
         _TEST_SPEC, sample_rate=_TEST_SR, hop_sec=DEFAULT_HOP_SEC
     )
-    duration = monophonic_total_duration_sec(_TEST_SPEC, sample_rate=_TEST_SR)
-    expected_n_frames = int(round(duration / DEFAULT_HOP_SEC))
+    # フレーム数 = 標本位置が総標本数の内側にある時刻の個数（ceiling。round は
+    # 端数下半分の尾を落とす）。hop は 10 進表現（1/100 秒）で厳密に数える。
+    from fractions import Fraction
+
+    total = monophonic_total_samples(_TEST_SPEC, sample_rate=_TEST_SR)
+    spf = Fraction(str(DEFAULT_HOP_SEC)) * _TEST_SR
+    expected_n_frames = math.ceil(Fraction(total) / spf)
     assert len(times) == expected_n_frames == len(freqs)
     assert times[0] == 0.0
     assert times[1] == pytest.approx(DEFAULT_HOP_SEC)
@@ -268,3 +273,39 @@ def test_midi_to_hz_a4_is_440() -> None:
     assert midi_to_hz(69.0) == pytest.approx(440.0)
     assert midi_to_hz(81.0) == pytest.approx(880.0)  # +1 octave
     assert not math.isnan(midi_to_hz(60.0))
+
+
+# ---------------------------------------------------------------------------
+# 第 19 巡: フレームグリッドの ceiling / hop の 10 進厳密表現（Codex P2×2）
+# ---------------------------------------------------------------------------
+
+
+def test_reference_grid_covers_the_waveform_tail_with_ceiling() -> None:
+    """14ms fixture × 10ms hop → 2 フレーム（round だと t=0.01 の尾が落ちる）。"""
+    spec = {"kind": "monophonic", "note_dur_sec": 0.014, "phrases": [[60]]}
+    times, freqs = reference_f0_from_monophonic_spec(spec, sample_rate=1000, hop_sec=0.01)
+    assert len(times) == 2  # round(1.4)=1 だった
+    assert times == (0.0, 0.01)
+    assert freqs[0] == pytest.approx(midi_to_hz(60))
+    assert freqs[1] == pytest.approx(midi_to_hz(60))  # 標本 10 < 14 なので有声
+
+
+def test_reference_grid_excludes_position_exactly_at_duration() -> None:
+    """総標本数ちょうどの位置のフレームは含めない（position < total の半開区間）。"""
+    spec = {"kind": "monophonic", "note_dur_sec": 0.02, "phrases": [[60]]}
+    times, _freqs = reference_f0_from_monophonic_spec(spec, sample_rate=1000, hop_sec=0.01)
+    # 20 標本、hop=10 標本 → 位置 0, 10 のみ（位置 20 は範囲外）。
+    assert times == (0.0, 0.01)
+
+
+def test_hop_uses_decimal_representation_not_binary_float() -> None:
+    """hop 0.03 × 100Hz: フレーム 1 は厳密に標本 3 = 次ノートの先頭（Codex 指摘の例）。
+
+    `Fraction(0.03)` は binary float の近似（2.9999...）を厳密化してしまい、
+    フレーム 1 が直前ノート（標本 [0,3)）へ誤帰属していた。
+    """
+    spec = {"kind": "monophonic", "note_dur_sec": 0.03, "phrases": [[60, 62]]}
+    times, freqs = reference_f0_from_monophonic_spec(spec, sample_rate=100, hop_sec=0.03)
+    assert len(freqs) == 2
+    assert freqs[0] == pytest.approx(midi_to_hz(60))
+    assert freqs[1] == pytest.approx(midi_to_hz(62))  # 標本 3 = 2 番目のノートの先頭

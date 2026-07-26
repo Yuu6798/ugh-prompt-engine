@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1017,7 +1018,7 @@ def test_evaluate_m2_bars_rejects_unregistered_category_label() -> None:
     for report in reports:
         report["categories"]["S_bogus"] = dict(report["categories"]["S_direct"])
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
-    with pytest.raises(ValueError, match="未知の category"):
+    with pytest.raises(ValueError, match="未知の category|未登録の category"):
         harness.evaluate_m2_bars(
             [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
         )
@@ -2060,3 +2061,96 @@ def test_run_accuracy_rejects_wav_swapped_during_extraction() -> None:
 
     with pytest.raises(RuntimeError, match="差し替えられた"):
         harness.run_accuracy(categories=("S_direct",), route_runner=_swapping_runner)
+
+
+# ---------------------------------------------------------------------------
+# 第 19 巡: 未登録カテゴリの前段拒否 / WAV inode 束縛 / est-unvoiced と恒等式
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_m2_bars_rejects_unknown_category_before_shortcuts() -> None:
+    """未知カテゴリ（unavailable row のみ）を insufficient_repeats として記録させない。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    for report in reports:
+        report["categories"]["X"] = {"outcome": "unavailable", "detail": "forbidden"}
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="未登録の category"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+def test_run_accuracy_rejects_wav_renamed_during_extraction() -> None:
+    """rename による差し替え（inode 変更）も post 検査で落ちる。
+
+    保持 fd の re-hash は inode の中身しか見ないため、rename には path↔inode の
+    照合が要る。temp dir は抽出中 0o500 だが、テストは意図的に chmod で緩めて
+    rename を通す = 「明示 chmod まで行う攻撃者」でも検出はされることの確認。
+    """
+
+    def _renaming_runner(audio_path: str, route):
+        result = _make_fake_runner(shift_cents=10.0)(audio_path, route)
+        path = Path(audio_path)
+        os.chmod(path.parent, 0o700)  # 0o500 の rename 阻止を意図的に解除
+        replacement = path.parent / "replacement.wav"
+        replacement.write_bytes(path.read_bytes())
+        os.replace(replacement, path)  # 同内容だが別 inode
+        return result
+
+    with pytest.raises(RuntimeError, match="別 inode"):
+        harness.run_accuracy(categories=("S_direct",), route_runner=_renaming_runner)
+
+
+def test_low_confidence_frames_do_not_break_the_rca_identity() -> None:
+    """est-unvoiced（負値エンコード）でも count == RCA × voiced の恒等式は成立する。
+
+    mir_eval の RPA/RCA は MIREX 規約どおり推定 voicing を無視する（実ソースで
+    `raw_chroma_accuracy` は est_voicing を計算に使わない）ため、低信頼フレームを
+    負値化しても分子の母集団は変わらない。第 19 巡で「est_voicing を mask に含める
+    べき」という指摘があったが、それを採ると mir_eval と母集団がずれて恒等式が
+    壊れる——本テストはその反証を固定する。
+    """
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    floor = float(bars["m2_accuracy_bars"]["est_voiced_confidence_floor"])
+    # 有声フレームの半分を低信頼（floor 未満）にする CREPE 型 runner。
+    specs, _ = harness.load_specs(SPECS_PATH)
+
+    def _half_confident_runner(audio_path: str, route):
+        observation, provenance = _make_fake_runner(shift_cents=10.0)(audio_path, route)
+        confidences = list(observation.frame_confidence)
+        flip = True
+        for i, c in enumerate(confidences):
+            if c > 0.0:
+                confidences[i] = floor / 2.0 if flip else 0.95
+                flip = not flip
+        return (
+            MelodyObservation(
+                route=observation.route,
+                source_model=observation.source_model,
+                frame_times=observation.frame_times,
+                frame_hz=observation.frame_hz,
+                frame_confidence=tuple(confidences),
+                total_duration_sec=observation.total_duration_sec,
+            ),
+            provenance,
+        )
+
+    report = _fake_run(categories=("S_direct",), route_runner=_half_confident_runner)
+    row = report["categories"]["S_direct"]
+    metrics = row["metrics"]
+    # RPA/RCA は voicing 非依存なので満点のまま、VR だけが半減する。
+    assert metrics["raw_chroma_accuracy"] == pytest.approx(1.0)
+    assert metrics["voicing_recall"] == pytest.approx(0.5, abs=0.01)
+    implied = metrics["raw_chroma_accuracy"] * row["ref_voiced_frame_count"]
+    assert metrics["voiced_chroma_correct_frame_count"] == pytest.approx(implied, abs=0.5)
+    # evaluate の恒等式関門も通る（= 実 run が偽陽性で落ちない）。
+    report2 = _fake_run(categories=("S_direct",), route_runner=_half_confident_runner)
+    verdict = harness.evaluate_m2_bars(
+        [_as_report_artifact(report), _as_report_artifact(report2)],
+        bars,
+        bars_sha256=bars_sha256,
+    )
+    assert verdict["categories"]["S_direct"]["status"] == "pass"

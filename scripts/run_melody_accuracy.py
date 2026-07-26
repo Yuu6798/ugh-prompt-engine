@@ -40,6 +40,7 @@ import argparse
 import ast
 import hashlib
 import json
+import os
 import re
 import sys
 import tempfile
@@ -954,6 +955,23 @@ def _require_specs_pin(specs_sha256: str, bars: Dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _sha256_of_fd(fd: int) -> str:
+    """開いている fd の中身全体を先頭から hash する（path 再 open ではなく inode を読む）。
+
+    path 経由の再 read では「digest の後に別ファイルへ差し替え、デコーダに読ませ、
+    元へ戻す」replace-and-restore の窓が残る（Codex P2）。保持した fd は inode に
+    束縛されるため、pre/post の hash が**同じ bytes 列**を指すことが保証される。
+    """
+    os.lseek(fd, 0, os.SEEK_SET)
+    digest = hashlib.sha256()
+    while True:
+        chunk = os.read(fd, 1 << 20)
+        if not chunk:
+            break
+        digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _waveform_sha256(y: np.ndarray) -> str:
     """raw float32 サンプルの sha256（registry.yaml の waveform_sha256 と同一定義）。"""
     return hashlib.sha256(np.asarray(y, dtype=np.float32).tobytes()).hexdigest()
@@ -1238,38 +1256,71 @@ def run_accuracy(
                     f"{_waveform_sha256(readback_y)} vs {waveform_sha256}）; 抽出器が "
                     "消費する bytes を pin が記述していない (fail-closed)"
                 )
-            input_wav_sha256 = hashlib.sha256(wav_path.read_bytes()).hexdigest()
-            total_duration_sec = float(len(y)) / float(sr)
-            ref_times, ref_freqs = _reference_for_category(
-                category_spec, specs, total_duration_sec=total_duration_sec
-            )
-            route = _select_named_route(category_spec["input_kind"], category_spec["route_name"])
-
-            row: Dict[str, Any] = {
-                "route": route.name,
-                "extractor": route.extractor,
-                "input_kind": category_spec["input_kind"],
-                "waveform_sha256": waveform_sha256,
-                "input_wav_sha256": input_wav_sha256,
-                "ref_frame_count": len(ref_times),
-                "ref_voiced_frame_count": sum(1 for f in ref_freqs if f > 0.0),
-            }
+            # pre/post hash は **保持した fd（= inode）** から読む。path の再 read だと
+            # 「digest 後に別ファイルへ atomic rename → デコーダに消費させ → 元へ戻す」
+            # replace-and-restore の窓で pre/post とも一致してしまう（Codex P2）。
+            # 併せて抽出中は temp ディレクトリを 0o500 にし、同 uid プロセスでも明示的な
+            # chmod なしには rename/unlink できないようにする（明示 chmod まで行う
+            # 同権限攻撃者はプロセスメモリも書ける = preload ゲート群と同じ境界外）。
+            wav_fd = os.open(wav_path, os.O_RDONLY)
             try:
-                observation, route_provenance = runner(str(wav_path), route)
-            except LearnedModelUnavailable as exc:
-                row["outcome"] = "unavailable"
-                row["detail"] = str(exc).splitlines()[0]
-                results["categories"][category] = row
-                continue
-            # 抽出の前後で WAV の bytes が不変であることを要求する（測定中の並行差し替え
-            # を検出。pre = 読み戻し検証時の digest / post = ここ）。
-            wav_after_sha256 = hashlib.sha256(wav_path.read_bytes()).hexdigest()
-            if wav_after_sha256 != input_wav_sha256:
-                raise RuntimeError(
-                    f"category {category!r}: 抽出中に入力 WAV が差し替えられた "
-                    f"（{input_wav_sha256} → {wav_after_sha256}）; 測っていない bytes の "
-                    "正解に対する採点を publish しない (fail-closed)"
+                input_wav_sha256 = _sha256_of_fd(wav_fd)
+                fd_stat = os.fstat(wav_fd)
+                path_stat = os.stat(wav_path)
+                if (fd_stat.st_dev, fd_stat.st_ino) != (path_stat.st_dev, path_stat.st_ino):
+                    raise RuntimeError(
+                        f"category {category!r}: 入力 WAV の path が hash した inode を指して "
+                        "いない (fail-closed)"
+                    )
+                total_duration_sec = float(len(y)) / float(sr)
+                ref_times, ref_freqs = _reference_for_category(
+                    category_spec, specs, total_duration_sec=total_duration_sec
                 )
+                route = _select_named_route(
+                    category_spec["input_kind"], category_spec["route_name"]
+                )
+
+                row: Dict[str, Any] = {
+                    "route": route.name,
+                    "extractor": route.extractor,
+                    "input_kind": category_spec["input_kind"],
+                    "waveform_sha256": waveform_sha256,
+                    "input_wav_sha256": input_wav_sha256,
+                    "ref_frame_count": len(ref_times),
+                    "ref_voiced_frame_count": sum(1 for f in ref_freqs if f > 0.0),
+                }
+                os.chmod(tmp, 0o500)
+                try:
+                    try:
+                        observation, route_provenance = runner(str(wav_path), route)
+                    except LearnedModelUnavailable as exc:
+                        row["outcome"] = "unavailable"
+                        row["detail"] = str(exc).splitlines()[0]
+                        results["categories"][category] = row
+                        continue
+                finally:
+                    os.chmod(tmp, 0o700)
+                # post: 同じ inode の bytes が不変（in-place 改変の検出）かつ path が
+                # 今も同じ inode を指す（rename 差し替えの検出）ことを要求する。
+                wav_after_sha256 = _sha256_of_fd(wav_fd)
+                if wav_after_sha256 != input_wav_sha256:
+                    raise RuntimeError(
+                        f"category {category!r}: 抽出中に入力 WAV が差し替えられた "
+                        f"（{input_wav_sha256} → {wav_after_sha256}）; 測っていない bytes の "
+                        "正解に対する採点を publish しない (fail-closed)"
+                    )
+                path_stat_after = os.stat(wav_path)
+                if (fd_stat.st_dev, fd_stat.st_ino) != (
+                    path_stat_after.st_dev,
+                    path_stat_after.st_ino,
+                ):
+                    raise RuntimeError(
+                        f"category {category!r}: 抽出中に入力 WAV の path が別 inode へ "
+                        "差し替えられた; 測っていない bytes の正解に対する採点を publish "
+                        "しない (fail-closed)"
+                    )
+            finally:
+                os.close(wav_fd)
 
             # 抽出器の frame_hz をそのまま渡さない: CREPE は無声フレームでも最尤 F0 を
             # 正値で返すため、confidence を mir_eval の符号規約へ変換してから採点する
@@ -2062,6 +2113,17 @@ def evaluate_m2_bars(
         raise ValueError(
             "evaluate_m2_bars: どの report にもカテゴリの測定 row が無い; 測定ゼロの "
             "verdict を publish しない (fail-closed)"
+        )
+    # 未登録カテゴリは **どの分岐にも入る前に** 拒否する。per-category ループ内の
+    # `_require_registered_row_identity` は insufficient_repeats のショートカットより
+    # 後にあるため、未知カテゴリ（例: 設計 §8 が禁じる X）を `unavailable` row だけで
+    # 提出すると、拒否される前に verdict へ記録されてしまう（Codex P2）。
+    unknown_categories = sorted(set(all_categories) - set(_CATEGORY_SPECS))
+    if unknown_categories:
+        raise ValueError(
+            f"evaluate_m2_bars: 未登録の category {unknown_categories} が report に含まれる; "
+            f"事前登録された {sorted(_CATEGORY_SPECS)} 以外は insufficient_repeats としてすら "
+            "verdict に記録しない (fail-closed)"
         )
     for category in all_categories:
         rows = [report["categories"][category] for report in reports if category in report["categories"]]
