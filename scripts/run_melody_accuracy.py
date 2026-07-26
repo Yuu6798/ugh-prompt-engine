@@ -104,8 +104,12 @@ _force_fresh_bytecode()
 # この形の実行だけが「実行 bytecode = ディスクのソース bytes」を構造的に保証する。
 # import 経由（`python -m` / `import` + 呼び出し）は stale .pyc から実行されうる
 # （Codex P2 第 34 巡）ので、run report に記録し evaluate が publishable 要件として
-# True を要求する。
-_HARNESS_LOADED_AS_MAIN: bool = __name__ == "__main__"
+# True を要求する。判定は `__name__` だけでは足りない——**`python -m` も
+# `__name__ == "__main__"` になる**が、`-m` は import 機構（= .pyc キャッシュ）を
+# 通る（Codex P2 第 35 巡・実測確認済みの指摘）。直接ファイル実行では `__main__` の
+# `__spec__` が None、`-m` では ModuleSpec が設定される、という CPython の公式な
+# 区別で構造的に判定する。
+_HARNESS_LOADED_AS_MAIN: bool = __name__ == "__main__" and globals().get("__spec__") is None
 
 # 本ハーネスが読み込まれた瞬間の sys.modules。**この行より上に first-party / 計測
 # 関連の import は 1 つも無い**ため、ここに写っている名前は「別経路が先に読み込んだ

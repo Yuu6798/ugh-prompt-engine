@@ -15,6 +15,7 @@ import importlib
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -83,6 +84,8 @@ def _clean_evaluator_preload(monkeypatch: pytest.MonkeyPatch):
 
 _ORIG_REVERIFY = harness._reverify_category_measurement
 _ORIG_ATTEST = harness._require_attested_registration
+# autouse fixture が True へ正規化する前の実値（本テストファイルは import 形 = False）。
+_ORIG_LOADED_AS_MAIN = harness._HARNESS_LOADED_AS_MAIN
 
 
 def _fake_environment_pins(route) -> Dict[str, Any]:
@@ -2658,6 +2661,32 @@ def test_fresh_process_report_provenance_gates() -> None:
             harness._require_fresh_process_report_provenance(
                 {**base, **mutation}, "S_direct", expected_specs_sha256=frozen_specs
             )
+
+
+def test_loaded_as_main_detection_is_structural(tmp_path: Path) -> None:
+    """`__name__` だけでなく `__spec__ is None` を要求する（Codex P2 第 35 巡）。
+
+    `python -m` も `__name__ == "__main__"` になるが import 機構（= .pyc キャッシュ）
+    を通る。直接ファイル実行では `__main__.__spec__` が None、`-m` では ModuleSpec が
+    設定される、という CPython の区別を実サブプロセスで確認する。
+    """
+    assert _ORIG_LOADED_AS_MAIN is False  # 本テストファイルは import 形なので False
+    probe = tmp_path / "m2probe.py"
+    probe.write_text(
+        'print(__name__ == "__main__" and globals().get("__spec__") is None)\n',
+        encoding="utf-8",
+    )
+    direct = subprocess.run(
+        [sys.executable, str(probe)], capture_output=True, text=True
+    )
+    assert direct.stdout.strip() == "True"
+    via_module = subprocess.run(
+        [sys.executable, "-m", "m2probe"],
+        capture_output=True,
+        text=True,
+        cwd=str(tmp_path),
+    )
+    assert via_module.stdout.strip() == "False"
 
 
 def test_evaluate_rejects_import_style_harness_runs() -> None:
