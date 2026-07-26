@@ -1446,6 +1446,86 @@ def _require_homogeneous_model_stack(category: str, rows: List[Dict[str, Any]]) 
     return signatures[0]
 
 
+def _environment_execution_pins(route: MelodyRoute) -> Dict[str, Any]:
+    """評価環境自身から、route の実行スタックの pin を**再計算**する（実行証拠）。
+
+    report が自己申告する `route_runner_injected` は report bytes ごと書き換えられる
+    ため、単独では publish 可否の根拠にならない（Codex P1: digest の束縛は「その
+    bytes がどう作られたか」を認証しない）。そこで publish 判定の根拠を、
+    **評価器プロセスが自分の環境から `use_cache=False` で再計算した pin** と row の
+    pin の一致に置く。これは report 内に書かれていない・書き換えられない証拠で、
+    偽造 report は評価環境に実在する CREPE/Demucs スタックの pin を言い当てない限り
+    通らない（同一スタックを導入して pin を写し取る同権限攻撃者は、プロセスメモリも
+    書ける = preload ゲート群と同じ境界外）。
+    """
+    from svp_rpe.melody.provenance import (
+        extractor_code_sha256,
+        extractor_weights_fingerprint,
+        separation_code_fingerprint,
+    )
+
+    pins: Dict[str, Any] = {}
+    pins["extractor_code_sha256"] = extractor_code_sha256(route.extractor, use_cache=False)
+    weights = extractor_weights_fingerprint(route.extractor, use_cache=False)
+    pins["extractor_weights_sha256"] = weights.sha256 if weights is not None else None
+    if route.requires_separation:
+        sep_code, _covered = separation_code_fingerprint(use_cache=False)
+        pins["separation_code_sha256"] = sep_code
+        try:
+            from svp_rpe.rpe.learned.source_separation_adapter import (
+                resolve_separation_weights,
+            )
+
+            pins["separation_weights_sha256"] = resolve_separation_weights().sha256
+        except Exception:
+            pins["separation_weights_sha256"] = None
+    return pins
+
+
+def _require_execution_evidence(
+    category: str, rows: List[Dict[str, Any]], route: MelodyRoute
+) -> None:
+    """row の pin が **評価環境から再計算した実行証拠** と一致することを要求する。
+
+    再計算できない環境（抽出器スタック未導入 = pin が None）からは verdict を
+    publish しない——実測を行った slow-lane 機で評価する運用（設計 §5）を
+    fail-closed に強制する形になる。
+    """
+    expected = _environment_execution_pins(route)
+    for key, value in expected.items():
+        if value is None:
+            raise RuntimeError(
+                f"evaluate_m2_bars: 評価環境で category {category!r} の実行証拠 "
+                f"（{key}）を再計算できない（抽出器スタック未導入/重み未取得）; "
+                "report の自己申告だけを根拠に publish しない — 実測を行った "
+                "slow-lane 機で評価すること (fail-closed)"
+            )
+    for idx, row in enumerate(rows):
+        actual_pairs = [
+            ("extractor_code_sha256", row.get("provenance_extractor_code_sha256")),
+            ("extractor_weights_sha256", row.get("provenance_extractor_weights_sha256")),
+        ]
+        if route.requires_separation:
+            preprocessing = row.get("provenance_preprocessing") or {}
+            actual_pairs.extend(
+                [
+                    ("separation_code_sha256", preprocessing.get("separation_code_sha256")),
+                    (
+                        "separation_weights_sha256",
+                        preprocessing.get("separation_weights_sha256"),
+                    ),
+                ]
+            )
+        for key, actual in actual_pairs:
+            if actual != expected[key]:
+                raise ValueError(
+                    f"evaluate_m2_bars: category {category!r} rows[{idx}] の {key} "
+                    f"{actual!r} が評価環境から再計算した実行証拠 {expected[key]!r} と "
+                    "一致しない; この環境の実スタックで測られていない row を証拠に "
+                    "しない (fail-closed)"
+                )
+
+
 def _require_registered_row_identity(
     category: str, rows: List[Dict[str, Any]], bars: Dict[str, Any]
 ) -> None:
@@ -2150,6 +2230,17 @@ def evaluate_m2_bars(
         # (b) 同一 model stack で測られたか を証明する（Codex P1×2）。
         _require_registered_row_identity(category, rows, bars_data)
         _require_homogeneous_model_stack(category, rows)
+        # 実行証拠: row の pin が評価環境から再計算したスタック pin と一致すること。
+        # report の自己申告フラグ（route_runner_injected 等）は bytes ごと書き換え
+        # られるため、publish 可否の最終根拠はこの環境照合に置く（Codex P1）。
+        _require_execution_evidence(
+            category,
+            rows,
+            _select_named_route(
+                _CATEGORY_SPECS[category]["input_kind"],
+                _CATEGORY_SPECS[category]["route_name"],
+            ),
+        )
 
         bar = bar_block.get(category, {})
         metrics_list = [row["metrics"] for row in rows]

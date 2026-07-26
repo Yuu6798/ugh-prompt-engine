@@ -45,8 +45,28 @@ def _clean_evaluator_preload(monkeypatch: pytest.MonkeyPatch):
     `preloaded_seed_modules` を正規化するのと同じテスト専用の操作。非空のとき
     evaluate が拒否すること自体は
     `test_evaluate_m2_bars_rejects_preloaded_evaluator_process` が固定する。
+
+    併せて `_environment_execution_pins`（実行証拠の再計算）を、フェイク抽出器の
+    pin と一致する値へ差し替える。CI 環境は CREPE/Demucs 未導入なので素のままだと
+    「実行証拠を再計算できない」として全 evaluate テストが正しく拒否される——
+    その拒否自体は `test_evaluate_m2_bars_refuses_without_execution_evidence` が
+    固定し、ここでは機構テストが評価段へ到達できるよう slow-lane 機相当の環境を
+    模す。
     """
     monkeypatch.setattr(harness, "_PRELOADED_SEED_MODULES", [])
+    monkeypatch.setattr(harness, "_environment_execution_pins", _fake_environment_pins)
+
+
+def _fake_environment_pins(route) -> Dict[str, Any]:
+    """フェイク抽出器の pin と一致する「評価環境の実行証拠」（slow-lane 機の模擬）。"""
+    pins: Dict[str, Any] = {
+        "extractor_code_sha256": FAKE_CODE_SHA256,
+        "extractor_weights_sha256": FAKE_WEIGHTS_SHA256,
+    }
+    if route.requires_separation:
+        pins["separation_code_sha256"] = FAKE_SEP_CODE_SHA256
+        pins["separation_weights_sha256"] = FAKE_SEP_WEIGHTS_SHA256
+    return pins
 
 
 FAKE_WEIGHTS_SHA256 = "bf6875a563be64dafa0c8e16f4b6093f55e15ba38f5c7a8844eaa61141dc805e"
@@ -2154,3 +2174,86 @@ def test_low_confidence_frames_do_not_break_the_rca_identity() -> None:
         bars_sha256=bars_sha256,
     )
     assert verdict["categories"]["S_direct"]["status"] == "pass"
+
+
+# ---------------------------------------------------------------------------
+# 第 20 巡: publish 可否の根拠を評価環境の実行証拠へ（Codex P1）
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_m2_bars_refuses_without_execution_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """抽出器スタックを再計算できない環境（pin が None）からは publish しない。
+
+    CI 環境（CREPE/Demucs 未導入）の素の挙動そのもの。実測を行った slow-lane 機で
+    評価する運用を fail-closed に強制する。
+    """
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+
+    def _no_evidence(route):
+        return {"extractor_code_sha256": None, "extractor_weights_sha256": None}
+
+    monkeypatch.setattr(harness, "_environment_execution_pins", _no_evidence)
+    with pytest.raises(RuntimeError, match="実行証拠"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+def test_forged_injected_flag_cannot_pass_the_execution_evidence_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """指摘のシナリオそのもの: 注入 run のフラグを False へ書き換えて serialize しても、
+    row の pin が評価環境の実スタック pin と一致しない限り publish できない。
+
+    `route_runner_injected` は report bytes の一部なので書き換え可能（指摘のとおり）。
+    最終根拠は環境照合であり、偽造 report はフェイク pin（FAKE_*）を持つ一方、
+    評価環境の実行証拠は別の値（ここでは実スタック相当の別 sha256）になるため落ちる。
+    """
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]  # _fake_run が injected=False へ正規化 = 指摘の「フラグ書き換え」を既に実施した状態
+
+    real_code = hashlib.sha256(b"real-installed-crepe-code").hexdigest()
+    real_weights = hashlib.sha256(b"real-installed-crepe-weights").hexdigest()
+
+    def _real_environment(route):
+        return {
+            "extractor_code_sha256": real_code,
+            "extractor_weights_sha256": real_weights,
+        }
+
+    monkeypatch.setattr(harness, "_environment_execution_pins", _real_environment)
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="実行証拠.*一致しない"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+def test_execution_evidence_gate_checks_separation_pins_for_fullstack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reports = [
+        _fake_run(categories=("S_fullstack",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+
+    def _mismatched_separation(route):
+        pins = _fake_environment_pins(route)
+        if route.requires_separation:
+            pins["separation_weights_sha256"] = hashlib.sha256(b"other-demucs").hexdigest()
+        return pins
+
+    monkeypatch.setattr(harness, "_environment_execution_pins", _mismatched_separation)
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="separation_weights_sha256"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
