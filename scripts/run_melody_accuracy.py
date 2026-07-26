@@ -334,6 +334,44 @@ def _mir_eval_paths() -> List[Path]:
     return sorted(p.resolve() for p in root.rglob("*.py"))
 
 
+def _runtime_input_paths() -> "set[Path]":
+    """route が実行時に読む third-party 推論コード + モデル重みの実パス（`--out` 保護用）。
+
+    保護集合が bars / specs / first-party 閉包 / mir_eval 止まりだと、`--out` が
+    CREPE/Demucs の重みや推論コードを指した場合に「読んで hash した入力を report で
+    潰す」ことになる（Codex P2。PR Notes で M2b へ繰延していた項目）。未導入の
+    パッケージ・未取得の重みは解決できない = 入力として読まれることも無いので skip。
+    """
+    import importlib.util
+
+    paths: "set[Path]" = set()
+    for name in _runtime_package_names():
+        try:
+            spec = importlib.util.find_spec(name)
+        except (ImportError, ValueError, AttributeError, ModuleNotFoundError):
+            continue
+        if spec is None or spec.origin in (None, "built-in", "frozen"):
+            continue
+        root = Path(spec.origin).resolve().parent
+        try:
+            paths.update(p.resolve() for p in root.rglob("*.py"))
+        except OSError:
+            continue
+    try:
+        from svp_rpe.rpe.learned.crepe_adapter import crepe_weight_files
+
+        paths.update(p.resolve() for p in crepe_weight_files())
+    except Exception:
+        pass
+    try:
+        from svp_rpe.rpe.learned.source_separation_adapter import locate_separation_weights
+
+        paths.update(p.resolve() for p in locate_separation_weights())
+    except Exception:
+        pass
+    return paths
+
+
 SPECS_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2_accuracy_specs.yaml"
 BARS_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2_accuracy_bars.yaml"
 
@@ -687,6 +725,10 @@ class BarsArtifact:
     @property
     def sha256(self) -> str:
         return self._sha256
+
+    @property
+    def raw(self) -> bytes:
+        return self._raw
 
     # --- read-only Mapping 委譲（呼び出し側の `bars[...]` / `bars.get(...)` 用）---
     def __getitem__(self, key: str) -> Any:
@@ -1526,6 +1568,54 @@ def _require_execution_evidence(
                 )
 
 
+def _reverify_category_measurement(
+    category: str,
+    rows: List[Dict[str, Any]],
+    *,
+    bars: "BarsArtifact",
+    specs_path: Path,
+    verification_runner: Optional[RouteRunner],
+) -> None:
+    """評価器自身が同じ凍結 fixture を**測り直し**、全 repeat と bit 一致を要求する。
+
+    環境 pin の照合（`_require_execution_evidence`）は「そのスタックが導入されて
+    いる」ことまでしか証明しない——導入済みの機で pin を写し取りつつ metrics を
+    捏造した report は通ってしまう（Codex P1 第 21 巡）。決定論パイプライン
+    （shifts=0・PR #221）の帰結として、正しい report の metrics は**評価器が同じ
+    fixture を自分で測り直した結果と bit 一致する**はずなので、それを publish の
+    最終条件にする。捏造 metrics は真の抽出出力と一致しない限り通らない——一致する
+    ならそれは捏造ではない。
+
+    `verification_runner=None`（CLI の既定）は実抽出器で測り直す。スタックが無く
+    再実行できない環境では publish を拒否する（slow-lane 機での評価を強制）。
+    """
+    with tempfile.TemporaryDirectory(prefix="m2-reverify-") as tmp:
+        bars_path = Path(tmp) / "m2_accuracy_bars.yaml"
+        bars_path.write_bytes(bars.raw)
+        verification = run_accuracy(
+            categories=(category,),
+            route_runner=verification_runner,
+            specs_path=specs_path,
+            bars_path=bars_path,
+        )
+    vrow = verification["categories"][category]
+    if vrow.get("outcome") != "measured":
+        raise RuntimeError(
+            f"evaluate_m2_bars: category {category!r} を評価環境で再実行できない "
+            f"（outcome={vrow.get('outcome')!r}: {vrow.get('detail', '')}）; 測り直しに "
+            "よる検証なしで report の metrics を publish しない — 実測を行った "
+            "slow-lane 機で評価すること (fail-closed)"
+        )
+    vmetrics = vrow["metrics"]
+    for idx, row in enumerate(rows):
+        if row["metrics"] != vmetrics:
+            raise ValueError(
+                f"evaluate_m2_bars: category {category!r} rows[{idx}] の metrics が "
+                "評価器自身の測り直しと bit 一致しない; 決定論パイプライン（shifts=0）の "
+                "下で再現しない row を publish しない (fail-closed)"
+            )
+
+
 def _require_registered_row_identity(
     category: str, rows: List[Dict[str, Any]], bars: Dict[str, Any]
 ) -> None:
@@ -1664,8 +1754,12 @@ def _require_reference_bounded_counts(
             # strict `<`・nonzero フィルタも同一）。よって正当な 1 フレーム差は存在せず、
             # 許容 1 は「RCA=1.0 のまま count を total−1 に書き換えた」矛盾 row を
             # 通してしまう。fp 誤差は eps × count のオーダー（≪ 0.5）なので 0.5 を
-            # 境界にすれば整数として厳密一致のみ受理する。
-            if abs(count - implied) > 0.5:
+            # 境界にすれば整数として厳密一致のみ受理する……つもりだったが、境界
+            # ちょうど（RCA=(k−0.5)/N で diff が厳密に 0.5）の書き換えが通る
+            # （Codex P2 第 21 巡）。mir_eval の分子は整数なので RCA×N は整数の
+            # fp 誤差近傍（≦ N·eps ≈ 1e-13）にしか落ちない——許容は純粋な fp
+            # マージン 1e-6 のみとする。
+            if abs(count - implied) > 1e-6:
                 raise ValueError(
                     f"evaluate_m2_bars: {where} の voiced_chroma_correct_frame_count "
                     f"{count} が raw_chroma_accuracy {rca!r} から復元される分子 "
@@ -2017,6 +2111,7 @@ def evaluate_m2_bars(
     *,
     bars_sha256: str,
     specs_path: Path = SPECS_PATH,
+    verification_runner: Optional[RouteRunner] = None,
 ) -> Dict[str, Any]:
     """n>=`repeats_min` の run report に凍結バーを機械適用する（設計 §4/§6）。
 
@@ -2241,6 +2336,15 @@ def evaluate_m2_bars(
                 _CATEGORY_SPECS[category]["route_name"],
             ),
         )
+        # 測り直しによる検証: 評価器自身が同じ fixture を測り、全 repeat と bit 一致
+        # することを要求する（導入証明でなく実行証明・Codex P1 第 21 巡）。
+        _reverify_category_measurement(
+            category,
+            rows,
+            bars=bars,
+            specs_path=specs_path,
+            verification_runner=verification_runner,
+        )
 
         bar = bar_block.get(category, {})
         metrics_list = [row["metrics"] for row in rows]
@@ -2348,6 +2452,7 @@ def main() -> int:
         # 記録した bytes を破壊し次回実行も壊れる（Codex P2）。
         protected.update(_generator_code_paths())
         protected.update(_mir_eval_paths())
+        protected.update(_runtime_input_paths())
         if Path(args.out).resolve() in protected:
             raise SystemExit(
                 f"--out {args.out} は評価入力（report / bars / specs / provenance 対象の "
@@ -2377,6 +2482,7 @@ def main() -> int:
     run_protected = {Path(args.bars).resolve(), Path(args.specs).resolve()}
     run_protected.update(_generator_code_paths())
     run_protected.update(_mir_eval_paths())
+    run_protected.update(_runtime_input_paths())
     if Path(args.out).resolve() in run_protected:
         raise SystemExit(
             f"--out {args.out} は凍結入力（bars / specs）または provenance 対象のソースと "

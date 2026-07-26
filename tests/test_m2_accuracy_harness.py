@@ -55,6 +55,16 @@ def _clean_evaluator_preload(monkeypatch: pytest.MonkeyPatch):
     """
     monkeypatch.setattr(harness, "_PRELOADED_SEED_MODULES", [])
     monkeypatch.setattr(harness, "_environment_execution_pins", _fake_environment_pins)
+    # 測り直し検証（実抽出器の再実行）も同様に正規化する。素の CI では実抽出器が
+    # 無く「再実行できない」拒否になる（正しい挙動・専用テストで固定）ため、機構
+    # テストが評価段へ到達できるようここでは no-op にする。実検証の合否は
+    # `_ORIG_REVERIFY` を戻す専用テスト群が固定する。
+    monkeypatch.setattr(
+        harness, "_reverify_category_measurement", lambda *args, **kwargs: None
+    )
+
+
+_ORIG_REVERIFY = harness._reverify_category_measurement
 
 
 def _fake_environment_pins(route) -> Dict[str, Any]:
@@ -1998,7 +2008,9 @@ def test_evaluate_m2_bars_rejects_start_after_completion() -> None:
     late = (datetime.fromisoformat(recorded) + timedelta(seconds=1)).isoformat()
     reports[0]["started_utc"] = late
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
-    with pytest.raises(ValueError, match="より後"):
+    # recorded が「今」に近い場合、+1 秒は未来検査（同じく fail-closed）に先に当たる。
+    # どちらの関門でも拒否されることが本質なので両方を受理する。
+    with pytest.raises(ValueError, match="より後|未来"):
         harness.evaluate_m2_bars(
             [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
         )
@@ -2257,3 +2269,98 @@ def test_execution_evidence_gate_checks_separation_pins_for_fullstack(
         harness.evaluate_m2_bars(
             [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
         )
+
+
+# ---------------------------------------------------------------------------
+# 第 21 巡: 分数分子の拒否 / 測り直し検証 / runtime 入力の --out 保護
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_m2_bars_rejects_fractional_rca_numerator() -> None:
+    """RCA=(k−0.5)/N の境界書き換え（diff がちょうど 0.5）を受理しない。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    for report in reports:
+        row = report["categories"]["S_direct"]
+        n = row["ref_voiced_frame_count"]
+        k = row["metrics"]["voiced_chroma_correct_frame_count"]
+        forged = (k - 0.5) / n
+        row["metrics"]["raw_chroma_accuracy"] = forged
+        row["metrics"]["raw_pitch_accuracy"] = forged  # 他の関係式（gap=RCA−RPA）を整合
+        row["metrics"]["octave_gap"] = 0.0
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="一致しない"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+def test_reverification_rejects_metrics_that_do_not_reproduce(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """導入済み機で pin を写し取った捏造 metrics も、測り直しと不一致なら publish 不可。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    monkeypatch.setattr(harness, "_reverify_category_measurement", _ORIG_REVERIFY)
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="測り直しと bit 一致しない"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports],
+            bars,
+            bars_sha256=bars_sha256,
+            # 検証側の「真の抽出出力」を報告側（shift 10・median 10 cent）と異なる
+            # 値（shift 20・median 20 cent）にする = 捏造が再現しない状況。
+            verification_runner=_make_fake_runner(shift_cents=20.0),
+        )
+
+
+def test_reverification_passes_when_metrics_reproduce(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    monkeypatch.setattr(harness, "_reverify_category_measurement", _ORIG_REVERIFY)
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    verdict = harness.evaluate_m2_bars(
+        [_as_report_artifact(r) for r in reports],
+        bars,
+        bars_sha256=bars_sha256,
+        verification_runner=_make_fake_runner(shift_cents=10.0),
+    )
+    assert verdict["categories"]["S_direct"]["status"] == "pass"
+
+
+def test_reverification_refuses_when_stack_cannot_rerun(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """実抽出器で測り直せない環境（素の CI）からは publish しない。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    monkeypatch.setattr(harness, "_reverify_category_measurement", _ORIG_REVERIFY)
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(RuntimeError, match="再実行できない"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports],
+            bars,
+            bars_sha256=bars_sha256,
+            # verification_runner を渡さない = 実抽出器（CI では unavailable）。
+        )
+
+
+def test_runtime_input_paths_cover_provisioned_weights(monkeypatch: pytest.MonkeyPatch) -> None:
+    """重みが解決できる環境では、そのパスが --out 保護集合に入る。"""
+    fake_weight = Path("/nonexistent/crepe/model-full.h5")
+
+    import svp_rpe.rpe.learned.crepe_adapter as crepe_adapter
+
+    monkeypatch.setattr(crepe_adapter, "crepe_weight_files", lambda *a, **k: [fake_weight])
+    paths = harness._runtime_input_paths()
+    assert fake_weight.resolve() in paths
