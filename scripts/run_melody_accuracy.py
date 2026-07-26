@@ -42,6 +42,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import uuid
@@ -391,6 +392,40 @@ def _runtime_input_paths() -> "set[Path]":
         from svp_rpe.rpe.learned.source_separation_adapter import locate_separation_weights
 
         paths.update(p.resolve() for p in locate_separation_weights())
+    except Exception:
+        pass
+    # `separation_code_fingerprint` が読む FFmpeg/ffprobe 実行ファイル + libav* closure
+    # と、`_scorer_pins` の version pin が読む mir_eval 配布メタデータ（dist-info）も
+    # 保護する。パッケージツリー + 重みだけでは pin の実読集合より狭い（Codex P2
+    # 第 24 巡）。demucs 未導入なら executables は空 = 読まれないので対象外。
+    import shutil
+
+    from svp_rpe.melody.provenance import (
+        _ffmpeg_library_closure,
+        _separation_audio_executables,
+    )
+
+    try:
+        tools, _required = _separation_audio_executables()
+    except Exception:
+        tools = ()
+    for tool in tools:
+        resolved = shutil.which(tool)
+        if resolved is None:
+            continue
+        paths.add(Path(resolved).resolve())
+        try:
+            paths.update(p.resolve() for p in _ffmpeg_library_closure(Path(resolved)))
+        except Exception:
+            continue  # closure を読めない環境では fingerprint 側も失敗 = 読まれない
+    import importlib.metadata
+
+    try:
+        dist = importlib.metadata.distribution("mir_eval")
+        for record in dist.files or ():
+            located = Path(str(dist.locate_file(record)))
+            if located.is_file():
+                paths.add(located.resolve())
     except Exception:
         pass
     return paths
@@ -1603,6 +1638,52 @@ def _require_execution_evidence(
                 )
 
 
+def _run_verification_in_fresh_process(
+    category: str,
+    index: int,
+    *,
+    tmp_dir: Path,
+    specs_path: Path,
+    bars_path: Path,
+) -> Dict[str, Any]:
+    """測り直し 1 回分を新規プロセス（素の CLI run）で実行し、その category row を返す。
+
+    プロセス境界により各 repeat は import・重みロード・モデル初期化から独立に行われ、
+    相互 bit 一致は「run 間決定論」の実証になる（Codex P2 第 24 巡）。子プロセスは
+    素の CLI なので preload ゲート群も自然に通る。失敗（非ゼロ exit / report 欠落）は
+    「再実行できない環境」として fail-closed。
+    """
+    report_path = tmp_dir / f"verification_{index}.json"
+    command = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--out",
+        str(report_path),
+        "--categories",
+        category,
+        "--specs",
+        str(Path(specs_path).resolve()),
+        "--bars",
+        str(Path(bars_path).resolve()),
+    ]
+    proc = subprocess.run(command, capture_output=True, text=True)
+    if proc.returncode != 0 or not report_path.is_file():
+        tail = " / ".join((proc.stderr or "").strip().splitlines()[-3:])
+        raise RuntimeError(
+            f"evaluate_m2_bars: category {category!r} の測り直しプロセスが失敗した "
+            f"(exit={proc.returncode}: {tail}); 評価環境で再実行できないため publish "
+            "しない (fail-closed)"
+        )
+    verification = load_report(report_path).data
+    row = verification.get("categories", {}).get(category)
+    if not isinstance(row, dict):
+        raise RuntimeError(
+            f"evaluate_m2_bars: 測り直しプロセスの report に category {category!r} の "
+            "row が無い; 評価環境で再実行できないため publish しない (fail-closed)"
+        )
+    return row
+
+
 def _reverify_category_measurement(
     category: str,
     rows: List[Dict[str, Any]],
@@ -1636,6 +1717,14 @@ def _reverify_category_measurement(
     提出側の独立性を認証する代わりに、**評価器自身が要求本数の独立実行**を行い、
     相互 bit 一致（= 決定論契約がこの環境で実際に成立していること）を publish の
     条件にする。verdict の repeats 契約は evaluator 側の実行に根拠を持つ。
+
+    実抽出器の測り直し（`verification_runner=None`）は **repeat ごとに新規プロセス**
+    （素の CLI）で行う。同一プロセス内の反復は CREPE/TensorFlow のグローバル・
+    ロード済み重み・モデルキャッシュを共有するため、「プロセス内初期化の後だけ
+    安定する」結果でも bit 一致してしまい、契約が謳う **run 間**（プロセス間）
+    決定論を実証しない（Codex P2 第 24 巡）。注入ランナー（monkeypatch 経由の
+    テスト seam）はプロセス境界を越えられないため in-process のまま——その seam
+    自体が境界外であることは第 22 巡の整理のとおり。
     """
     if repeats < 2:
         raise ValueError(
@@ -1646,14 +1735,23 @@ def _reverify_category_measurement(
     with tempfile.TemporaryDirectory(prefix="m2-reverify-") as tmp:
         bars_path = Path(tmp) / "m2_accuracy_bars.yaml"
         bars_path.write_bytes(bars.raw)
-        for _ in range(repeats):
-            verification = run_accuracy(
-                categories=(category,),
-                route_runner=verification_runner,
-                specs_path=specs_path,
-                bars_path=bars_path,
-            )
-            vrow = verification["categories"][category]
+        for index in range(repeats):
+            if verification_runner is not None:
+                verification = run_accuracy(
+                    categories=(category,),
+                    route_runner=verification_runner,
+                    specs_path=specs_path,
+                    bars_path=bars_path,
+                )
+                vrow = verification["categories"][category]
+            else:
+                vrow = _run_verification_in_fresh_process(
+                    category,
+                    index,
+                    tmp_dir=Path(tmp),
+                    specs_path=specs_path,
+                    bars_path=bars_path,
+                )
             if vrow.get("outcome") != "measured":
                 raise RuntimeError(
                     f"evaluate_m2_bars: category {category!r} を評価環境で再実行できない "
@@ -2520,9 +2618,18 @@ def main() -> int:
     )
     parser.add_argument("--bars", type=Path, default=BARS_PATH)
     parser.add_argument("--specs", type=Path, default=SPECS_PATH)
+    parser.add_argument(
+        "--categories",
+        nargs="+",
+        metavar="CATEGORY",
+        help="run phase で測るカテゴリの部分集合（既定: 事前登録された全カテゴリ。"
+        "evaluate の測り直しプロセスが 1 カテゴリ run に使う）",
+    )
     args = parser.parse_args()
 
     if args.evaluate:
+        if args.categories:
+            raise SystemExit("--categories は run phase 専用（evaluate は report 側の row を評価する）")
         # `--out` が入力（report / bars / specs）を指していないか **書く前に** 確認する。
         # 上書きすると verdict の証拠そのもの（repeat evidence・凍結設定）が消え、
         # report_pins の hash も実体と食い違う（Codex P2 指摘）。
@@ -2570,7 +2677,10 @@ def main() -> int:
             f"--out {args.out} は凍結入力（bars / specs）または provenance 対象のソースと "
             "同じパスを指している; これらを run report で上書きしない (fail-closed)"
         )
-    result = run_accuracy(specs_path=args.specs, bars_path=args.bars)
+    run_kwargs: Dict[str, Any] = {}
+    if args.categories:
+        run_kwargs["categories"] = tuple(args.categories)
+    result = run_accuracy(specs_path=args.specs, bars_path=args.bars, **run_kwargs)
     _atomic_write_text(args.out, json.dumps(result, indent=2, sort_keys=True))
     print(f"wrote run report to {args.out}")
     for category, row in result["categories"].items():

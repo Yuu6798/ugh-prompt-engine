@@ -2524,3 +2524,82 @@ def test_runtime_input_paths_cover_native_extensions(
     assert (pkg / "_ext.so").resolve() in paths
     assert (pkg / "libm2fake.so.1").resolve() in paths
     assert (pkg / "notes.txt").resolve() not in paths
+
+
+def test_runtime_input_paths_cover_decoder_executables(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`separation_code_fingerprint` が読む FFmpeg 実行ファイル + libav* closure も保護する。
+
+    パッケージツリー + 重みだけでは、pin が実際に読む集合（デコーダ実行ファイルと
+    その共有ライブラリ）より狭い（Codex P2 第 24 巡）。
+    """
+    import svp_rpe.melody.provenance as provenance
+
+    fake_ffmpeg = tmp_path / "ffmpeg"
+    fake_ffmpeg.write_bytes(b"fake executable")
+    fake_lib = tmp_path / "libavformat.so.60"
+    fake_lib.write_bytes(b"fake library")
+    monkeypatch.setattr(
+        provenance, "_separation_audio_executables", lambda: (("ffmpeg",), True)
+    )
+    monkeypatch.setattr(provenance, "_ffmpeg_library_closure", lambda exe: [fake_lib])
+    monkeypatch.setattr(
+        "shutil.which", lambda tool: str(fake_ffmpeg) if tool == "ffmpeg" else None
+    )
+    paths = harness._runtime_input_paths()
+    assert fake_ffmpeg.resolve() in paths
+    assert fake_lib.resolve() in paths
+
+
+def test_runtime_input_paths_cover_scorer_distribution_metadata() -> None:
+    """`_scorer_pins` の version pin が読む mir_eval 配布メタデータも保護する。"""
+    import importlib.metadata
+
+    dist = importlib.metadata.distribution("mir_eval")
+    metadata_files = [
+        Path(str(dist.locate_file(record))).resolve()
+        for record in (dist.files or ())
+        if str(record).endswith("METADATA")
+    ]
+    assert metadata_files, "mir_eval の dist-info METADATA が見つからない（前提の drift）"
+    paths = harness._runtime_input_paths()
+    assert metadata_files[0] in paths
+
+
+def test_cli_run_categories_flag_limits_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`--categories` が run をカテゴリ部分集合へ絞る（測り直しプロセスの前提）。"""
+    out = tmp_path / "report.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_melody_accuracy.py", "--out", str(out), "--categories", "S_direct"],
+    )
+    assert harness.main() == 0
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert set(report["categories"]) == {"S_direct"}
+
+
+def test_cli_evaluate_rejects_categories_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """evaluate モードで `--categories` は不正（report 側の row を評価するため）。"""
+    report = tmp_path / "r.json"
+    report.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--out",
+            str(tmp_path / "v.json"),
+            "--evaluate",
+            str(report),
+            "--categories",
+            "S_direct",
+        ],
+    )
+    with pytest.raises(SystemExit, match="run phase 専用"):
+        harness.main()
