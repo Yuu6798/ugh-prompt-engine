@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import math
 import sys
+from fractions import Fraction
 from pathlib import Path
 
 import numpy as np
@@ -212,6 +213,31 @@ def test_reference_f0_from_monophonic_spec_frame_grid() -> None:
     # frame at t=1.0 は phrase_gap 区間（0.70〜1.30）内 → 無声
     idx_in_phrase_gap = int(round(1.0 / DEFAULT_HOP_SEC))
     assert freqs[idx_in_phrase_gap] == 0.0
+
+
+def test_reference_f0_times_preserve_sub_microsecond_hop() -> None:
+    """出力タイムスタンプは固定 6 桁丸めせず、厳密有理グリッドの最近接 float を返す。
+
+    hop 4e-7 s では 6 桁丸めが複数フレームを同一時刻へ潰し、mir_eval が非増加
+    グリッドとして拒否する。周波数の帰属に使った標本位置と同じグリッドから
+    タイムスタンプを作ることを固定する（Codex 指摘）。
+    """
+    spec = {
+        "kind": "monophonic",
+        "note_dur_sec": 0.001,
+        "note_gap_sec": 0.0,
+        "phrase_gap_sec": 0.0,
+        "phrases": [[60]],
+    }
+    times, freqs = reference_f0_from_monophonic_spec(
+        spec, sample_rate=1000, hop_sec=0.0000004
+    )
+    # 1 標本（0.001s × 1000Hz）/ (4e-4 標本/frame) = 2500 フレーム。
+    assert len(times) == 2500
+    assert times[0] == 0.0
+    assert times[1] == float(Fraction("0.0000004"))  # 旧実装の round(…, 6) では 0.0
+    assert all(later > earlier for earlier, later in zip(times, times[1:]))
+    assert set(freqs) == {midi_to_hz(60)}
 
 
 def test_reference_f0_from_monophonic_spec_rejects_chord_pad() -> None:

@@ -389,13 +389,19 @@ def reference_f0_from_monophonic_spec(
     # 無限小ずれて境界フレームの帰属が float 近似の方向に依存する（Codex 指摘。
     # 例: hop 0.03 × 100Hz でフレーム 1 が標本 3 でなく 2.9999... に落ち、標本 3 で
     # 始まる次ノートでなく直前ノートへ誤帰属）。
-    samples_per_frame = Fraction(str(hop_sec)) * rate
+    hop_fraction = Fraction(str(hop_sec))
+    samples_per_frame = hop_fraction * rate
     # フレーム数は **ceiling**: 標本位置が総標本数の内側（position < target_samples）に
     # ある時刻をすべて含める。`round(duration / hop)` は端数下半分の尾（例: 14ms
     # fixture × 10ms hop の t=10ms フレーム）を黙って落とし、フレーム総数と voicing
     # 指標を歪める（Codex 指摘）。
     n_frames = max(0, math.ceil(Fraction(target_samples) / samples_per_frame))
-    times: List[float] = [round(i * hop_sec, 6) for i in range(n_frames)]
+    # 出力タイムスタンプも周波数の帰属に使ったのと**同じ厳密有理グリッド**から作る
+    # （各時刻 = `i * hop` の厳密有理数の最近接 float）。固定 6 桁丸めはマイクロ秒
+    # 未満の hop（例: 4e-7 s）で複数フレームを同一時刻へ潰して mir_eval が非増加
+    # グリッドとして拒否するうえ、より大きな端数でも「ノート帰属に使った標本位置」
+    # からタイムスタンプがずれる（Codex 指摘）。
+    times: List[float] = [float(hop_fraction * i) for i in range(n_frames)]
     freqs: List[float] = []
     for i in range(n_frames):
         position = samples_per_frame * i

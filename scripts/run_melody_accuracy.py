@@ -1666,6 +1666,51 @@ def _require_execution_evidence(
                 )
 
 
+def _require_fresh_process_report_provenance(report: Dict[str, Any], category: str) -> None:
+    """測り直し子プロセスの report が「本評価環境・現行コード・現行スコアラー」の
+    実行であることを、metrics 比較より前に要求する（fail-closed）。
+
+    親プロセスが `_require_execution_evidence` で pin を取った後に推論コード/重みが
+    差し替わると、子プロセスは新しいスタックで測る。metrics だけ比較して report を
+    捨てると、変わったスタックが同じ（または捏造に合わせた）metrics を出した場合に
+    「以前のスタックを名乗る verdict」が通る（Codex P2 第 27 巡）。report レベルの
+    provenance をここで、row レベルの model stack は `_require_homogeneous_model_stack`
+    で提出 row と突き合わせる。
+    """
+    schema = report.get("schema_version")
+    if schema != _EXPECTED_REPORT_SCHEMA:
+        raise RuntimeError(
+            f"category {category!r} の測り直し report の schema_version {schema!r} が "
+            f"{_EXPECTED_REPORT_SCHEMA!r} でない (fail-closed)"
+        )
+    if report.get("route_runner_injected"):
+        raise RuntimeError(
+            f"category {category!r} の測り直し report が注入ランナーの実行を名乗っている; "
+            "実抽出器による測り直しでない (fail-closed)"
+        )
+    if report.get("preloaded_seed_modules") != []:
+        raise RuntimeError(
+            f"category {category!r} の測り直し子プロセスに事前ロードがある "
+            f"({report.get('preloaded_seed_modules')!r}); 素の CLI 実行でない (fail-closed)"
+        )
+    generator = report.get("generator_code_sha256")
+    if generator != _LOADED_GENERATOR_CODE_SHA256:
+        raise RuntimeError(
+            f"category {category!r} の測り直し report の generator_code_sha256 "
+            f"{generator!r} が評価器の {_LOADED_GENERATOR_CODE_SHA256!r} と不一致; "
+            "測り直し中に first-party コードが変わっている (fail-closed)"
+        )
+    scorer = _scorer_pins(use_cache=False)
+    reported_scorer = (report.get("mir_eval_version"), report.get("mir_eval_code_sha256"))
+    expected_scorer = (scorer["mir_eval_version"], scorer["mir_eval_code_sha256"])
+    if reported_scorer != expected_scorer:
+        raise RuntimeError(
+            f"category {category!r} の測り直し report のスコアラー pin {reported_scorer!r} "
+            f"が評価環境の {expected_scorer!r} と不一致; 測り直し中に mir_eval が変わって "
+            "いる (fail-closed)"
+        )
+
+
 def _run_verification_in_fresh_process(
     category: str,
     index: int,
@@ -1703,6 +1748,10 @@ def _run_verification_in_fresh_process(
             "しない (fail-closed)"
         )
     verification = load_report(report_path).data
+    # metrics だけ取り出して report を捨てない: report レベルの provenance
+    # （素の CLI・現行 first-party コード・現行スコアラー）をここで検証する
+    # （Codex P2 第 27 巡）。
+    _require_fresh_process_report_provenance(verification, category)
     row = verification.get("categories", {}).get(category)
     if not isinstance(row, dict):
         raise RuntimeError(
@@ -1760,6 +1809,7 @@ def _reverify_category_measurement(
             "n>=2 の独立実行を要件とする (fail-closed)"
         )
     verification_metrics: List[Dict[str, Any]] = []
+    verification_rows: List[Dict[str, Any]] = []
     with tempfile.TemporaryDirectory(prefix="m2-reverify-") as tmp:
         bars_path = Path(tmp) / "m2_accuracy_bars.yaml"
         bars_path.write_bytes(bars.raw)
@@ -1787,7 +1837,12 @@ def _reverify_category_measurement(
                     "よる検証なしで report の metrics を publish しない — 実測を行った "
                     "slow-lane 機で評価すること (fail-closed)"
                 )
+            verification_rows.append(vrow)
             verification_metrics.append(vrow["metrics"])
+    # 検証 row の model stack を提出 row と突き合わせる: 測り直し中に重み/推論コードが
+    # 差し替わった場合、metrics が一致しても「別スタックの実行」であり、verdict が
+    # 名乗る stack の証拠にならない（Codex P2 第 27 巡）。
+    _require_homogeneous_model_stack(category, rows + verification_rows)
     if not _repeats_bit_identical(verification_metrics):
         raise RuntimeError(
             f"evaluate_m2_bars: category {category!r} の評価器自身による {repeats} 回の "

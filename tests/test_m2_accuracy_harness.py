@@ -2473,6 +2473,59 @@ def test_scorer_pins_must_match_evaluator_environment() -> None:
         )
 
 
+def test_fresh_process_report_provenance_gates() -> None:
+    """測り直し子プロセスの report は「素の CLI・現行コード・現行スコアラー」を要求。
+
+    metrics だけ取り出して report を捨てると、測り直し中に差し替わったスタックが
+    同じ metrics を出した場合に「以前のスタックを名乗る verdict」が通る
+    （Codex P2 第 27 巡）。
+    """
+    scorer = harness._scorer_pins(use_cache=False)
+    base = {
+        "schema_version": harness._EXPECTED_REPORT_SCHEMA,
+        "route_runner_injected": False,
+        "preloaded_seed_modules": [],
+        "generator_code_sha256": harness._LOADED_GENERATOR_CODE_SHA256,
+        "mir_eval_version": scorer["mir_eval_version"],
+        "mir_eval_code_sha256": scorer["mir_eval_code_sha256"],
+    }
+    harness._require_fresh_process_report_provenance(dict(base), "S_direct")  # 健全なら通る
+    for mutation, pattern in [
+        ({"route_runner_injected": True}, "注入ランナー"),
+        ({"preloaded_seed_modules": ["svp_rpe"]}, "事前ロード"),
+        ({"generator_code_sha256": "0" * 64}, "generator_code_sha256"),
+        ({"mir_eval_code_sha256": "1" * 64}, "スコアラー pin"),
+        ({"schema_version": "m2-accuracy-report/9.9"}, "schema_version"),
+    ]:
+        with pytest.raises(RuntimeError, match=pattern):
+            harness._require_fresh_process_report_provenance({**base, **mutation}, "S_direct")
+
+
+def test_reverification_rejects_stack_drift_during_reverification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """測り直しの実行スタックが提出 row と異なれば、metrics が一致しても拒否する。"""
+    inner = _make_fake_runner(shift_cents=10.0)
+
+    def _drifted(audio_path: str, route: Any) -> Any:
+        observation, provenance = inner(audio_path, route)
+        provenance = dict(provenance)
+        provenance["extractor_weights_sha256"] = "a" * 64  # 別重みで測った検証 run を模す
+        return observation, provenance
+
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=inner) for _ in range(2)
+    ]
+    monkeypatch.setattr(
+        harness, "_reverify_category_measurement", _reverify_via(_drifted)
+    )
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="別 model stack"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
 def test_evaluate_m2_bars_has_no_verification_runner_seam() -> None:
     """検証用ランナーの注入口が公開 API に無いこと自体を回帰テストで固定する。
 
