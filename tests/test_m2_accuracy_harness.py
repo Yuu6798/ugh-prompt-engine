@@ -11,6 +11,7 @@ CI 安全性: 実抽出器（crepe / demucs）を一切必要としない。run/
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import os
 import sys
@@ -813,9 +814,10 @@ def test_run_accuracy_detects_source_change_during_execution(monkeypatch) -> Non
 @pytest.mark.parametrize(
     ("mutation", "expect"),
     [
-        ("  S_direct:\n    min_rpa: .nan\n", "非有限"),
-        ("  S_direct:\n    min_rpa: 1.5\n", "定義域"),
-        ("  S_direct:\n    min_rpa: 0.90\n    bogus_key: 1\n", "未知の閾値キー"),
+        # max_vfa は残す（落とすと必須キー検査が先に発火し、狙いの検査に届かない）。
+        ("  S_direct:\n    min_rpa: .nan\n    max_vfa: 0.15\n", "非有限"),
+        ("  S_direct:\n    min_rpa: 1.5\n    max_vfa: 0.15\n", "定義域"),
+        ("  S_direct:\n    min_rpa: 0.90\n    max_vfa: 0.15\n    bogus_key: 1\n", "未知の閾値キー"),
     ],
 )
 def test_load_bars_rejects_malformed_thresholds(mutation, expect, tmp_path) -> None:
@@ -1474,6 +1476,21 @@ def test_load_bars_rejects_empty_gate_for_non_diagnostic_category(tmp_path: Path
     path = tmp_path / "bars_empty_s_direct.yaml"
     path.write_text(patched, encoding="utf-8")
     with pytest.raises(ValueError, match="空/欠落"):
+        harness.load_bars(path)
+
+
+def test_load_bars_rejects_partial_gate_missing_max_vfa(tmp_path: Path) -> None:
+    """min_rpa だけの部分バーで凍結済み max_vfa ゲートが黙って消える経路を塞ぐ。
+
+    設計 §4 の S_direct 登録は min_rpa と max_vfa の対。片方だけ残した bars は
+    「バーを触らずにゲートの一部を無効化する」のと同じ（Codex P2 第 22 巡）。
+    """
+    raw = BARS_PATH.read_text(encoding="utf-8")
+    patched = raw.replace("    max_vfa: 0.15\n", "")
+    assert patched != raw
+    path = tmp_path / "bars_partial_s_direct.yaml"
+    path.write_text(patched, encoding="utf-8")
+    with pytest.raises(ValueError, match=r"max_vfa"):
         harness.load_bars(path)
 
 
@@ -2297,6 +2314,20 @@ def test_evaluate_m2_bars_rejects_fractional_rca_numerator() -> None:
         )
 
 
+def _reverify_via(runner: Any) -> Any:
+    """`_ORIG_REVERIFY` を検証用フェイクランナー付きで呼ぶラッパを返す（テスト専用）。
+
+    公開 API（`evaluate_m2_bars`）に注入口は無い（Codex P1 第 22 巡）ので、機構
+    テストは monkeypatch（プロセスメモリへの同権限書き込み = 境界外）で「真の抽出
+    出力がこうだった環境」を模す。
+    """
+
+    def _patched(category: str, rows: Any, **kwargs: Any) -> None:
+        _ORIG_REVERIFY(category, rows, verification_runner=runner, **kwargs)
+
+    return _patched
+
+
 def test_reverification_rejects_metrics_that_do_not_reproduce(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2305,16 +2336,17 @@ def test_reverification_rejects_metrics_that_do_not_reproduce(
         _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
         for _ in range(2)
     ]
-    monkeypatch.setattr(harness, "_reverify_category_measurement", _ORIG_REVERIFY)
+    # 検証側の「真の抽出出力」を報告側（shift 10・median 10 cent）と異なる
+    # 値（shift 20・median 20 cent）にする = 捏造が再現しない状況。
+    monkeypatch.setattr(
+        harness,
+        "_reverify_category_measurement",
+        _reverify_via(_make_fake_runner(shift_cents=20.0)),
+    )
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="測り直しと bit 一致しない"):
         harness.evaluate_m2_bars(
-            [_as_report_artifact(r) for r in reports],
-            bars,
-            bars_sha256=bars_sha256,
-            # 検証側の「真の抽出出力」を報告側（shift 10・median 10 cent）と異なる
-            # 値（shift 20・median 20 cent）にする = 捏造が再現しない状況。
-            verification_runner=_make_fake_runner(shift_cents=20.0),
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
         )
 
 
@@ -2325,15 +2357,36 @@ def test_reverification_passes_when_metrics_reproduce(
         _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
         for _ in range(2)
     ]
-    monkeypatch.setattr(harness, "_reverify_category_measurement", _ORIG_REVERIFY)
+    monkeypatch.setattr(
+        harness,
+        "_reverify_category_measurement",
+        _reverify_via(_make_fake_runner(shift_cents=10.0)),
+    )
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     verdict = harness.evaluate_m2_bars(
-        [_as_report_artifact(r) for r in reports],
-        bars,
-        bars_sha256=bars_sha256,
-        verification_runner=_make_fake_runner(shift_cents=10.0),
+        [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
     )
     assert verdict["categories"]["S_direct"]["status"] == "pass"
+
+
+def test_evaluate_m2_bars_has_no_verification_runner_seam() -> None:
+    """検証用ランナーの注入口が公開 API に無いこと自体を回帰テストで固定する。
+
+    kwarg が存在すると、捏造 report と同じフェイクランナーで測り直し検証ごと
+    再現させ、CREPE を走らせずに pass を publish できる（Codex P1 第 22 巡）。
+    """
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(TypeError, match="verification_runner"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports],
+            bars,
+            bars_sha256=bars_sha256,
+            verification_runner=_make_fake_runner(shift_cents=10.0),
+        )
 
 
 def test_reverification_refuses_when_stack_cannot_rerun(
@@ -2364,3 +2417,28 @@ def test_runtime_input_paths_cover_provisioned_weights(monkeypatch: pytest.Monke
     monkeypatch.setattr(crepe_adapter, "crepe_weight_files", lambda *a, **k: [fake_weight])
     paths = harness._runtime_input_paths()
     assert fake_weight.resolve() in paths
+
+
+def test_runtime_input_paths_cover_native_extensions(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """保護集合は `.py` に限らず、pin が hash するネイティブ拡張も覆う。
+
+    `provenance.package_code_state` は `.so`/`.pyd`/`.dylib` と版番号付き共有
+    ライブラリ（`lib*.so.1` 等）も hash 対象にするのに、`--out` 保護が `*.py`
+    止まりだと「pin 済みの実行コードを report で潰す」穴が残る（Codex P2 第 22 巡）。
+    """
+    pkg = tmp_path / "m2fakepkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "_ext.so").write_bytes(b"native")
+    (pkg / "libm2fake.so.1").write_bytes(b"versioned native")
+    (pkg / "notes.txt").write_text("not code", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    monkeypatch.setattr(harness, "_runtime_package_names", lambda: {"m2fakepkg"})
+    paths = harness._runtime_input_paths()
+    assert (pkg / "__init__.py").resolve() in paths
+    assert (pkg / "_ext.so").resolve() in paths
+    assert (pkg / "libm2fake.so.1").resolve() in paths
+    assert (pkg / "notes.txt").resolve() not in paths

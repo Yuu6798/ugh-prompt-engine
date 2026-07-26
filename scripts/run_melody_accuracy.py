@@ -341,8 +341,19 @@ def _runtime_input_paths() -> "set[Path]":
     CREPE/Demucs の重みや推論コードを指した場合に「読んで hash した入力を report で
     潰す」ことになる（Codex P2。PR Notes で M2b へ繰延していた項目）。未導入の
     パッケージ・未取得の重みは解決できない = 入力として読まれることも無いので skip。
+
+    ファイル集合は `provenance.package_code_state` と同じ規約で列挙する（`.py` だけ
+    でなくネイティブ拡張 `.so`/`.pyd`/`.dylib`・版番号付き共有ライブラリも対象。
+    pin が hash する集合より保護集合が狭いと、`--out` が NumPy 等の `.so` を指した
+    ときに「pin 済みの実行コードを report で潰す」穴が残る — Codex P2 第 22 巡）。
     """
     import importlib.util
+
+    from svp_rpe.melody.provenance import (
+        _CODE_SUFFIXES,
+        _is_native_library,
+        _module_companion_files,
+    )
 
     paths: "set[Path]" = set()
     for name in _runtime_package_names():
@@ -352,9 +363,22 @@ def _runtime_input_paths() -> "set[Path]":
             continue
         if spec is None or spec.origin in (None, "built-in", "frozen"):
             continue
-        root = Path(spec.origin).resolve().parent
+        origin_path = Path(spec.origin).resolve()
+        root = origin_path.parent
         try:
-            paths.update(p.resolve() for p in root.rglob("*.py"))
+            if getattr(spec, "submodule_search_locations", None) is None:
+                # 単一モジュール: 親 dir を rglob すると site-packages 全体を巻き込む。
+                # provenance と同じく本体 + 規約同梱物のみ。
+                paths.add(origin_path)
+                paths.update(p.resolve() for p in _module_companion_files(name, root))
+            else:
+                paths.update(
+                    p.resolve()
+                    for p in root.rglob("*")
+                    if p.is_file()
+                    and (p.suffix in _CODE_SUFFIXES or _is_native_library(p))
+                    and "__pycache__" not in p.parts
+                )
         except OSError:
             continue
     try:
@@ -391,8 +415,13 @@ _EXPECTED_VERDICT_SCHEMA = "m2-accuracy-verdict/0.1"
 # カテゴリが空バーで来たら fail-closed** ——`--bars` が S_direct を落としただけで
 # 必須の受け入れゲートが黙って無効化されるのを防ぐ（Codex P2）。
 _DIAGNOSTIC_ONLY_CATEGORIES: "frozenset[str]" = frozenset({"S_fullstack"})
-# 受け入れゲートを持つカテゴリに最低限必須の閾値キー。
-_REQUIRED_BAR_KEYS: "Tuple[str, ...]" = ("min_rpa",)
+# 受け入れゲートを持つカテゴリごとに、設計 §4 で事前登録した**完全な**閾値キー集合。
+# `("min_rpa",)` の一律最低要件では `S_direct: {min_rpa: ...}` だけのバーが通り、
+# 凍結済みの max_vfa ゲートが黙って無効化される（Codex P2 第 22 巡）。ここに無い
+# ゲート付きカテゴリは loader が fail-closed で拒否する。
+_REQUIRED_BAR_KEYS_BY_CATEGORY: Dict[str, Tuple[str, ...]] = {
+    "S_direct": ("min_rpa", "max_vfa"),
+}
 
 # カテゴリ → (fixture/composite id, select_routes 用 input_kind, 期待する route 名)。
 # route 名は `svp_rpe.melody.routing._ROUTES` の既存表から**そのまま**選ぶ
@@ -940,11 +969,17 @@ def _require_well_formed_bars(bar_block: Dict[str, Any]) -> None:
                 "受け入れゲートを持つカテゴリを diagnostic_only へ落として判定を無効化 "
                 "させない (fail-closed)"
             )
-        missing = [key for key in _REQUIRED_BAR_KEYS if key not in bar]
+        required = _REQUIRED_BAR_KEYS_BY_CATEGORY.get(category)
+        if required is None:
+            raise ValueError(
+                f"m2_accuracy_bars: category {category!r} は受け入れゲートを持つが必須 "
+                "閾値キー集合が事前登録されていない (fail-closed)"
+            )
+        missing = [key for key in required if key not in bar]
         if missing:
             raise ValueError(
-                f"m2_accuracy_bars: category {category!r} が必須閾値 {missing} を欠く "
-                "(fail-closed)"
+                f"m2_accuracy_bars: category {category!r} が必須閾値 {missing} を欠く; "
+                "部分的なバーは事前登録されたゲートの一部を黙って無効化する (fail-closed)"
             )
 
     for category, bar in bar_block.items():
@@ -1574,7 +1609,7 @@ def _reverify_category_measurement(
     *,
     bars: "BarsArtifact",
     specs_path: Path,
-    verification_runner: Optional[RouteRunner],
+    verification_runner: Optional[RouteRunner] = None,
 ) -> None:
     """評価器自身が同じ凍結 fixture を**測り直し**、全 repeat と bit 一致を要求する。
 
@@ -1586,8 +1621,12 @@ def _reverify_category_measurement(
     最終条件にする。捏造 metrics は真の抽出出力と一致しない限り通らない——一致する
     ならそれは捏造ではない。
 
-    `verification_runner=None`（CLI の既定）は実抽出器で測り直す。スタックが無く
-    再実行できない環境では publish を拒否する（slow-lane 機での評価を強制）。
+    `verification_runner=None` は実抽出器で測り直す。スタックが無く再実行できない
+    環境では publish を拒否する（slow-lane 機での評価を強制）。この引数は
+    `evaluate_m2_bars` の公開シグネチャには**存在しない**——注入口を公開 API に
+    置くと、捏造 report と同じフェイクランナーで測り直し検証ごと再現させて pass を
+    publish できる（Codex P1 第 22 巡）。機構テストは monkeypatch（プロセスメモリ
+    への同権限書き込み = preload ゲート群と同じ境界外）で本 helper を差し替える。
     """
     with tempfile.TemporaryDirectory(prefix="m2-reverify-") as tmp:
         bars_path = Path(tmp) / "m2_accuracy_bars.yaml"
@@ -2111,7 +2150,6 @@ def evaluate_m2_bars(
     *,
     bars_sha256: str,
     specs_path: Path = SPECS_PATH,
-    verification_runner: Optional[RouteRunner] = None,
 ) -> Dict[str, Any]:
     """n>=`repeats_min` の run report に凍結バーを機械適用する（設計 §4/§6）。
 
@@ -2337,13 +2375,13 @@ def evaluate_m2_bars(
             ),
         )
         # 測り直しによる検証: 評価器自身が同じ fixture を測り、全 repeat と bit 一致
-        # することを要求する（導入証明でなく実行証明・Codex P1 第 21 巡）。
+        # することを要求する（導入証明でなく実行証明・Codex P1 第 21 巡）。検証用
+        # ランナーの注入口は公開 API に置かない（Codex P1 第 22 巡）——常に実抽出器。
         _reverify_category_measurement(
             category,
             rows,
             bars=bars,
             specs_path=specs_path,
-            verification_runner=verification_runner,
         )
 
         bar = bar_block.get(category, {})
