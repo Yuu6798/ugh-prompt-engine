@@ -1178,6 +1178,14 @@ def run_accuracy(
     bars, bars_sha256 = load_bars(bars_path)
     _require_specs_pin(specs_sha256, bars)
 
+    if not categories:
+        # 空選択を許すと CREPE を一度も呼ばずに `route_runner_injected=False` かつ
+        # provenance 完備の「測定ゼロ report」が作れ、evaluate の全関所を素通りして
+        # `categories={}` の schema-valid な verdict が publish できてしまう（Codex P2）。
+        raise ValueError(
+            "run_accuracy: categories が空; 少なくとも 1 つの登録済みカテゴリを測定"
+            "しない report は publishable な実測記録になれない (fail-closed)"
+        )
     unknown = [c for c in categories if c not in _CATEGORY_SPECS]
     if unknown:
         raise ValueError(f"unknown accuracy categories: {unknown}; expected one of {list(_CATEGORY_SPECS)}")
@@ -2019,6 +2027,13 @@ def evaluate_m2_bars(
     verdict["report_pins"] = report_pins
 
     all_categories = sorted({cat for report in reports for cat in report.get("categories", {})})
+    if not all_categories:
+        # run 側でも空選択は弾くが、手組み report が `categories: {}` を名乗る経路の
+        # ために evaluate でも独立に要求する（測定が 1 つも無い verdict は証拠でない）。
+        raise ValueError(
+            "evaluate_m2_bars: どの report にもカテゴリの測定 row が無い; 測定ゼロの "
+            "verdict を publish しない (fail-closed)"
+        )
     for category in all_categories:
         rows = [report["categories"][category] for report in reports if category in report["categories"]]
         outcomes = {row["outcome"] for row in rows}

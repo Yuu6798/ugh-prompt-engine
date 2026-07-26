@@ -1990,3 +1990,29 @@ def test_design_doc_referenced_by_the_m2_layer_is_committed() -> None:
     # 引用されている節が実在することまで確認（§2 指標 / §4 バー / §7 PR 分割 / §8 禁止事項）。
     for marker in ("## 2. 指標", "## 4. 事前登録バー", "## 7. PR 分割", "## 8. やってはいけないこと"):
         assert marker in text, marker
+
+
+# ---------------------------------------------------------------------------
+# 第 17 巡: 空カテゴリ選択の拒否（Codex P2）
+# ---------------------------------------------------------------------------
+
+
+def test_run_accuracy_rejects_empty_category_selection() -> None:
+    """CREPE を呼ばない「測定ゼロ report」を publishable にしない。"""
+    with pytest.raises(ValueError, match="categories が空"):
+        harness.run_accuracy(categories=(), route_runner=_make_fake_runner())
+
+
+def test_evaluate_m2_bars_rejects_reports_without_any_category_rows() -> None:
+    """手組みで `categories: {}` を名乗る report にも evaluate 側で独立に落とす。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    for report in reports:
+        report["categories"] = {}
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="測定ゼロ"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
