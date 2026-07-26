@@ -1765,8 +1765,9 @@ def test_measured_rows_satisfy_the_rca_numerator_identity() -> None:
     for category, row in report["categories"].items():
         _frames, voiced = harness._registered_reference_counts(category, bars.data, specs)
         implied = float(row["metrics"]["raw_chroma_accuracy"]) * voiced
+        # 恒等式は厳密（fp 誤差のみ）。1 フレーム許容は第 18 巡で撤回した。
         assert row["metrics"]["voiced_chroma_correct_frame_count"] == pytest.approx(
-            implied, abs=1.0
+            implied, abs=0.5
         ), (category, row["metrics"], voiced)
 
 
@@ -2016,3 +2017,46 @@ def test_evaluate_m2_bars_rejects_reports_without_any_category_rows() -> None:
         harness.evaluate_m2_bars(
             [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
         )
+
+
+# ---------------------------------------------------------------------------
+# 第 18 巡: RCA 分子の厳密一致 / WAV 直列化と pin の束縛（Codex P2×2）
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_m2_bars_rejects_off_by_one_rca_numerator() -> None:
+    """`RCA=1.0` のまま count を total−1 にした矛盾 row（旧・1 フレーム許容の穴）を拒否。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    for report in reports:  # bit 一致は保ったまま両 repeats を同じ矛盾値へ
+        row = report["categories"]["S_direct"]
+        assert row["metrics"]["raw_chroma_accuracy"] == pytest.approx(1.0)
+        row["metrics"]["voiced_chroma_correct_frame_count"] = (
+            row["ref_voiced_frame_count"] - 1
+        )
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="一致しない"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+def test_run_rows_pin_the_serialized_wav_bytes() -> None:
+    """row が in-memory 波形 pin に加えて、抽出器が消費した WAV bytes の pin を持つ。"""
+    report = _fake_run(categories=("S_direct",), route_runner=_make_fake_runner())
+    row = report["categories"]["S_direct"]
+    assert harness._is_sha256(row["input_wav_sha256"])
+    assert row["input_wav_sha256"] != row["waveform_sha256"]  # bytes 形式が違う（WAV コンテナ vs 生サンプル）
+
+
+def test_run_accuracy_rejects_wav_swapped_during_extraction() -> None:
+    """抽出中に入力 WAV を差し替えると publish 前に落ちる（pre/post digest 束縛）。"""
+
+    def _swapping_runner(audio_path: str, route):
+        Path(audio_path).write_bytes(b"not-a-wav-anymore")
+        return _make_fake_runner(shift_cents=10.0)(audio_path, route)
+
+    with pytest.raises(RuntimeError, match="差し替えられた"):
+        harness.run_accuracy(categories=("S_direct",), route_runner=_swapping_runner)

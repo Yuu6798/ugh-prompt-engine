@@ -1225,6 +1225,20 @@ def run_accuracy(
             y, sr, waveform_sha256 = _build_category_waveform(category, category_spec, specs, bars)
             wav_path = Path(tmp) / f"{category}.wav"
             sf.write(wav_path, y, sr, subtype="FLOAT")
+            # `waveform_sha256` は合成直後の in-memory 配列 `y` の pin だが、抽出器が
+            # 実際に消費するのは直列化された WAV。直列化/デコードの欠陥や並行差し替えで
+            # 両者が乖離すると「測っていない bytes の正解」に対する採点を受理してしまう
+            # （Codex P2）。書き出した WAV を読み戻して pin と bit 一致することを要求し、
+            # さらにファイル bytes の digest を取り、抽出後に不変を再確認する。
+            readback_y, readback_sr = sf.read(wav_path, dtype="float32")
+            if readback_sr != sr or _waveform_sha256(readback_y) != waveform_sha256:
+                raise RuntimeError(
+                    f"category {category!r}: 直列化した WAV の読み戻しが pin した波形と "
+                    f"一致しない（sr {readback_sr} vs {sr} / sha256 "
+                    f"{_waveform_sha256(readback_y)} vs {waveform_sha256}）; 抽出器が "
+                    "消費する bytes を pin が記述していない (fail-closed)"
+                )
+            input_wav_sha256 = hashlib.sha256(wav_path.read_bytes()).hexdigest()
             total_duration_sec = float(len(y)) / float(sr)
             ref_times, ref_freqs = _reference_for_category(
                 category_spec, specs, total_duration_sec=total_duration_sec
@@ -1236,6 +1250,7 @@ def run_accuracy(
                 "extractor": route.extractor,
                 "input_kind": category_spec["input_kind"],
                 "waveform_sha256": waveform_sha256,
+                "input_wav_sha256": input_wav_sha256,
                 "ref_frame_count": len(ref_times),
                 "ref_voiced_frame_count": sum(1 for f in ref_freqs if f > 0.0),
             }
@@ -1246,6 +1261,15 @@ def run_accuracy(
                 row["detail"] = str(exc).splitlines()[0]
                 results["categories"][category] = row
                 continue
+            # 抽出の前後で WAV の bytes が不変であることを要求する（測定中の並行差し替え
+            # を検出。pre = 読み戻し検証時の digest / post = ここ）。
+            wav_after_sha256 = hashlib.sha256(wav_path.read_bytes()).hexdigest()
+            if wav_after_sha256 != input_wav_sha256:
+                raise RuntimeError(
+                    f"category {category!r}: 抽出中に入力 WAV が差し替えられた "
+                    f"（{input_wav_sha256} → {wav_after_sha256}）; 測っていない bytes の "
+                    "正解に対する採点を publish しない (fail-closed)"
+                )
 
             # 抽出器の frame_hz をそのまま渡さない: CREPE は無声フレームでも最尤 F0 を
             # 正値で返すため、confidence を mir_eval の符号規約へ変換してから採点する
@@ -1501,17 +1525,22 @@ def _require_reference_bounded_counts(
         if expected_voiced_frame_count > 0:
             rca = float(row["metrics"]["raw_chroma_accuracy"])
             implied = rca * expected_voiced_frame_count
-            # 許容は 1 フレーム。mir_eval は chroma 判定に `floor(x+0.5)`、本モジュールの
-            # 中央値算出は `round(x)` を使うため、差がちょうど 600 cent の同点フレームで
-            # 最大 1 フレームずれうる（実測では全ケース厳密一致・shift 0/10/30/49/60/
-            # 700/1200/1220 cent と混在パターン、600 cent 同点を含む）。
-            if abs(count - implied) > 1.0 + 1e-9:
+            # **厳密な整数一致**を要求する（許容は浮動小数点誤差のみ）。以前の
+            # 「1 フレーム許容」は誤りだった（Codex 指摘で撤回）: mir_eval の
+            # `floor(x+0.5)` と本モジュールの `round(x)` が分岐するのは差がちょうど
+            # 600+1200k cent の同点だけで、そこは残差 600 のため凍結 50 cent 許容の下で
+            # **両式とも reject** する（mir_eval 実ソースで確認・比較演算子も同じ
+            # strict `<`・nonzero フィルタも同一）。よって正当な 1 フレーム差は存在せず、
+            # 許容 1 は「RCA=1.0 のまま count を total−1 に書き換えた」矛盾 row を
+            # 通してしまう。fp 誤差は eps × count のオーダー（≪ 0.5）なので 0.5 を
+            # 境界にすれば整数として厳密一致のみ受理する。
+            if abs(count - implied) > 0.5:
                 raise ValueError(
                     f"evaluate_m2_bars: {where} の voiced_chroma_correct_frame_count "
                     f"{count} が raw_chroma_accuracy {rca!r} から復元される分子 "
                     f"{implied:.4f}（= RCA × 有声フレーム数 {expected_voiced_frame_count}）"
-                    "と 1 フレーム以上食い違う; 母数は RCA の分子そのものなので、"
-                    "この組は mir_eval が返さない (fail-closed)"
+                    "と一致しない; 母数は RCA の分子そのものなので、この組は mir_eval が "
+                    "返さない (fail-closed)"
                 )
 
 
