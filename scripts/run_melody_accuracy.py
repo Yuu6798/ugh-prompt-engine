@@ -244,11 +244,23 @@ def _preloaded_seed_modules() -> List[str]:
     監視集合は **digest 閉包そのもの**（推移的モジュールを含む）+ 推論を担う
     ランタイムパッケージから導出する。seed 名だけでは閉包の一部を見逃す。
 
+    さらに **祖先パッケージ**（`svp_rpe` / `svp_rpe.melody` 等）も監視する。
+    `sys.path` の並べ替え（`_force_checkout_roots_first`）は import 済みパッケージの
+    `__path__` を書き換えないため、別 checkout のトップレベル `svp_rpe` だけを先に
+    import されると、以後の `svp_rpe.melody.*` はその外部 `__path__` から実行される
+    のに、子モジュール名しか監視しない集合ではゲートが空のままになる（Codex P1
+    第 26 巡）。同 checkout の親キャッシュでも stale メモリ窓は同型に生じるため、
+    パス照合ではなく他のゲートと同じ無条件拒否に倒す。
+
     判定は `_SYS_MODULES_AT_LOAD`（本モジュールの先頭で凍結した sys.modules）に対して
     行う。現在の `sys.modules` を見ると、監視集合を導出するための
     `svp_rpe.melody.provenance` import 自体が「事前ロード」として写り込む。
     """
     watched = set(_closure_module_names()) | set(_SEED_MODULE_NAMES) | set(_runtime_package_names())
+    for name in tuple(watched):
+        parts = name.split(".")
+        for depth in range(1, len(parts)):
+            watched.add(".".join(parts[:depth]))
     return sorted(name for name in watched if name in _SYS_MODULES_AT_LOAD)
 
 

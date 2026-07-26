@@ -911,6 +911,28 @@ def test_preloaded_seed_modules_read_the_frozen_snapshot_not_live_sys_modules(
     assert harness._preloaded_seed_modules() == ["svp_rpe.melody.provenance"]
 
 
+def test_preloaded_parent_packages_are_watched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """トップレベル `svp_rpe` だけの事前 import も preload ゲートに掛かる。
+
+    sys.path の並べ替えは import 済み親パッケージの `__path__` を書き換えないため、
+    別 checkout の `svp_rpe` が先にキャッシュされていると子モジュールは外部
+    checkout から実行される。子モジュール名だけの監視ではこの親キャッシュが
+    素通りする（Codex P1 第 26 巡）。
+    """
+    monkeypatch.setattr(harness, "_SYS_MODULES_AT_LOAD", frozenset({"svp_rpe"}))
+    assert harness._preloaded_seed_modules() == ["svp_rpe"]
+    monkeypatch.setattr(
+        harness, "_SYS_MODULES_AT_LOAD", frozenset({"svp_rpe.melody"})
+    )
+    assert harness._preloaded_seed_modules() == ["svp_rpe.melody"]
+    monkeypatch.setattr(
+        harness, "_SYS_MODULES_AT_LOAD", frozenset({"svp_rpe.rpe.learned"})
+    )
+    assert harness._preloaded_seed_modules() == ["svp_rpe.rpe.learned"]
+
+
 @pytest.mark.parametrize(
     ("mutate", "expect"),
     [
