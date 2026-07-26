@@ -19,9 +19,30 @@
 
 schema_version: "m2-accuracy-bars/0.1"
 registered_utc: "2026-07-25"
+# 追加登録の履歴（一方向規律の監査用）。既存の閾値は一切動かしていない。
+# - 2026-07-26: `est_voiced_confidence_floor` を新規登録（下記コメント参照）。
+#   この時点で M2 の実測記録は 1 件も無い（M2b は CREPE 重みのプロビジョニング待ち）
+#   ので、「実測を見てから閾値を追加した」ケースには当たらない。
+amendments:
+  - registered_utc: "2026-07-26"
+    added: [est_voiced_confidence_floor]
+    reason: >
+      CREPE は無声フレームでも最尤 F0 を正値で返すため、frame_confidence を
+      mir_eval の推定 voicing へ変換する閾値が必要（未変換では VFA が事実上 1.0）。
+      実測前の追加であり、既存バーの緩和ではない。
 
 m2_accuracy_bars:
   tolerance_cents: 50            # mir_eval 標準（設計 §4 と同値）
+  # 抽出器の frame_confidence を mir_eval の「推定側 voicing」へ変換する閾値。
+  # CREPE は無声フレームでも最尤 F0 を正値で返し、有声判定は confidence に委ねる
+  # （`rpe/learned/crepe_adapter.extract_crepe_f0` の契約）。この閾値なしに
+  # frame_hz をそのまま渡すと、正解が無音の全フレームが「推定は有声」と数えられ
+  # VFA が事実上 1.0 に張り付き、精度の良い CREPE run でも max_vfa を落とす
+  # （Codex P1）。値 0.30 は M1 の registry.yaml が既に事前登録している
+  # `voiced_confidence_floor: 0.30`（同じ「この信頼度以上を有声とみなす」閾値）に
+  # 合わせる——観測層（M1）と精度層（M2）で有声の定義が食い違わないようにする。
+  # 一方向規律の対象: 実測後にこの値を動かして VFA を改善してはならない。
+  est_voiced_confidence_floor: 0.30
   S_direct:                       # 抽出器の健全性バー（落ちたら経路自体を疑う）
     min_rpa: 0.90
     max_vfa: 0.15

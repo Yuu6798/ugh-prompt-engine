@@ -1011,3 +1011,274 @@ def test_m2_accuracy_specs_uses_only_existing_builder_kinds() -> None:
     specs, _ = harness.load_specs(SPECS_PATH)
     for fixture_id, spec in specs["fixtures"].items():
         assert spec["kind"] in ("monophonic", "chord_pad"), (fixture_id, spec["kind"])
+
+
+# ---------------------------------------------------------------------------
+# 推定 voicing の符号化（Codex P1）: CREPE は無声フレームでも最尤 F0 を正値で返す。
+# frame_hz をそのまま採点すると VFA が事実上 1.0 に張り付く。
+# ---------------------------------------------------------------------------
+
+
+def _make_crepe_style_runner(*, voiced_confidence: float, unvoiced_confidence: float):
+    """CREPE の契約を模したフェイク抽出器。
+
+    `extract_crepe_f0` と同じく **全フレームで正の最尤 F0** を返し、有声の証拠は
+    `frame_confidence` に分離する（正解が無音の区間でも直前のノートの F0 を返し続ける
+    ——CREPE の実挙動を保守的に模した最悪ケース）。
+    """
+    specs, _ = harness.load_specs(SPECS_PATH)
+
+    def _runner(audio_path: str, route) -> Tuple[MelodyObservation, Dict[str, Any]]:
+        category_spec = next(
+            cs for cs in harness._CATEGORY_SPECS.values() if cs["route_name"] == route.name
+        )
+        melody_id = (
+            category_spec["fixture_id"]
+            if category_spec["kind"] == "direct"
+            else specs["composites"][category_spec["composite_id"]]["melody"]
+        )
+        times, freqs = reference_f0_from_monophonic_spec(
+            specs["fixtures"][melody_id], sample_rate=int(specs["sample_rate"])
+        )
+        # 無声フレームも「直前の有声 F0」で埋める（0 を返さない = CREPE の契約）。
+        filled: list = []
+        last = 440.0
+        confidences: list = []
+        for hz in freqs:
+            if hz > 0.0:
+                last = hz
+                filled.append(hz)
+                confidences.append(voiced_confidence)
+            else:
+                filled.append(last)
+                confidences.append(unvoiced_confidence)
+        observation = MelodyObservation(
+            route=route.name,
+            source_model="fake:crepe-style",
+            frame_times=times,
+            frame_hz=tuple(filled),
+            frame_confidence=tuple(confidences),
+            total_duration_sec=times[-1] if times else 0.0,
+        )
+        provenance: Dict[str, Any] = {
+            "extractor_weights_sha256": FAKE_WEIGHTS_SHA256,
+            "extractor_code_sha256": FAKE_CODE_SHA256,
+        }
+        if route.preprocessing:
+            provenance["preprocessing"] = {
+                "preprocessing": route.preprocessing,
+                "separation_model": "fake-htdemucs",
+                "separation_version": "0.0-fake",
+                "separation_weights_sha256": FAKE_SEP_WEIGHTS_SHA256,
+                "separation_code_sha256": FAKE_SEP_CODE_SHA256,
+                "stem_sha256": FAKE_STEM_SHA256,
+            }
+        return observation, provenance
+
+    return _runner
+
+
+def test_est_freqs_with_voicing_encodes_confidence_as_mir_eval_sign() -> None:
+    """confidence < floor のフレームは負値（mir_eval の「無声だが推定値はこれ」）。"""
+    observation = MelodyObservation(
+        route="crepe_direct",
+        source_model="fake",
+        frame_times=(0.0, 0.01, 0.02, 0.03),
+        frame_hz=(440.0, 440.0, 0.0, 220.0),
+        frame_confidence=(0.9, 0.1, 0.9, 0.30),
+    )
+    signed = harness._est_freqs_with_voicing(observation, confidence_floor=0.30)
+    # 閾値以上は正、未満は負、hz==0 は 0.0（推定値そのものが無い）、境界は有声側。
+    assert signed == (440.0, -440.0, 0.0, 220.0)
+
+
+def test_crepe_style_run_does_not_pin_vfa_at_one() -> None:
+    """CREPE 型の出力（無声でも正の F0）で VFA が飽和しないこと。
+
+    これが Codex P1 の核心: 変換前は正解が無音の全フレームが false alarm に数えられ、
+    凍結 `max_vfa: 0.15` を精度の良い run でも落としていた。
+    """
+    bars, _ = harness.load_bars(BARS_PATH)
+    floor = float(bars["m2_accuracy_bars"]["est_voiced_confidence_floor"])
+    report = _fake_run(
+        categories=("S_direct",),
+        route_runner=_make_crepe_style_runner(
+            voiced_confidence=0.95, unvoiced_confidence=floor / 2.0
+        ),
+    )
+    row = report["categories"]["S_direct"]
+    metrics = row["metrics"]
+
+    # 有声フレームは全て正解 → RPA は 1.0（符号化は RPA/RCA を変えない）。
+    assert metrics["raw_pitch_accuracy"] == pytest.approx(1.0)
+    # 無声フレームは負値化され false alarm にならない。
+    assert metrics["voicing_false_alarm"] == pytest.approx(0.0, abs=1e-9)
+    assert metrics["voicing_recall"] == pytest.approx(1.0)
+    assert metrics["voicing_false_alarm"] <= bars["m2_accuracy_bars"]["S_direct"]["max_vfa"]
+    # 推定側の有声フレーム数が正解の有声フレーム数と一致する（監査可能な記録）。
+    assert row["est_voiced_frame_count"] == row["ref_voiced_frame_count"]
+    assert row["est_frame_count"] == row["ref_frame_count"]
+
+
+def test_crepe_style_run_would_saturate_vfa_without_the_encoding() -> None:
+    """符号化を外した場合（= 修正前の挙動）に VFA が飽和することを対照で示す。"""
+    from svp_rpe.melody.accuracy import evaluate_melody_accuracy
+
+    specs, _ = harness.load_specs(SPECS_PATH)
+    times, ref_freqs = reference_f0_from_monophonic_spec(
+        specs["fixtures"]["m2_s_direct_melody"], sample_rate=int(specs["sample_rate"])
+    )
+    filled: list = []
+    last = 440.0
+    for hz in ref_freqs:
+        if hz > 0.0:
+            last = hz
+        filled.append(last)
+    unencoded = evaluate_melody_accuracy(times, ref_freqs, times, tuple(filled))
+    assert unencoded.voicing_false_alarm == pytest.approx(1.0)
+
+
+def test_load_bars_requires_registered_est_voiced_confidence_floor(tmp_path: Path) -> None:
+    raw = BARS_PATH.read_text(encoding="utf-8")
+    stripped = "\n".join(
+        line for line in raw.splitlines() if "est_voiced_confidence_floor" not in line
+    )
+    path = tmp_path / "bars_without_floor.yaml"
+    path.write_text(stripped, encoding="utf-8")
+    with pytest.raises(ValueError, match="est_voiced_confidence_floor が無い"):
+        harness.load_bars(path)
+
+
+@pytest.mark.parametrize("bad", ["1.5", "-0.1", ".nan", "'0.3'"])
+def test_load_bars_rejects_out_of_domain_est_voiced_confidence_floor(
+    tmp_path: Path, bad: str
+) -> None:
+    raw = BARS_PATH.read_text(encoding="utf-8")
+    patched = raw.replace("est_voiced_confidence_floor: 0.30", f"est_voiced_confidence_floor: {bad}")
+    assert patched != raw
+    path = tmp_path / "bars_bad_floor.yaml"
+    path.write_text(patched, encoding="utf-8")
+    with pytest.raises(ValueError, match="est_voiced_confidence_floor"):
+        harness.load_bars(path)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expect"),
+    [
+        (lambda r: r.pop("est_voiced_confidence_floor"), "を欠く"),
+        (lambda r: r.update(est_voiced_confidence_floor=0.05), "凍結値"),
+    ],
+)
+def test_evaluate_m2_bars_requires_frozen_est_voicing_floor(mutate, expect) -> None:
+    """緩い有声判定閾値で測った row に凍結 max_vfa を適用させない。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    mutate(reports[0])
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match=expect):
+        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+
+
+def test_verdict_records_the_frozen_est_voicing_floor() -> None:
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    verdict = harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+    assert verdict["est_voiced_confidence_floor"] == pytest.approx(
+        float(bars["m2_accuracy_bars"]["est_voiced_confidence_floor"])
+    )
+
+
+# ---------------------------------------------------------------------------
+# 誤差モデルの母数の上界（Codex P2）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expect"),
+    [
+        (
+            lambda row: row["metrics"].update(voiced_chroma_correct_frame_count=1_000_000_000),
+            "を超える",
+        ),
+        (lambda row: row.update(ref_frame_count="470"), "整数でない"),
+        (lambda row: row.update(ref_voiced_frame_count=-1), "が負"),
+    ],
+)
+def test_evaluate_m2_bars_bounds_median_sample_count_by_reference(mutate, expect) -> None:
+    """`voiced_chroma_correct_frame_count` は正解フレーム数を超えられない。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    for report in reports:  # repeats 間の bit 一致は保ったまま母数だけ不正にする
+        mutate(report["categories"]["S_direct"])
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match=expect):
+        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+
+
+def test_evaluate_m2_bars_rejects_more_voiced_than_total_reference_frames() -> None:
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    for report in reports:
+        row = report["categories"]["S_direct"]
+        row["ref_frame_count"] = row["ref_voiced_frame_count"] - 1
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="ref_frame_count"):
+        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+
+
+def test_measured_rows_report_counts_within_the_reference_bound() -> None:
+    """実際の run が出す母数が上界内に収まる（検査が偽陽性を出さないことの確認）。"""
+    report = _fake_run(route_runner=_make_fake_runner(shift_cents=10.0))
+    for category, row in report["categories"].items():
+        count = row["metrics"]["voiced_chroma_correct_frame_count"]
+        assert 0 < count <= row["ref_voiced_frame_count"] <= row["ref_frame_count"], (
+            category,
+            row["metrics"],
+        )
+
+
+# ---------------------------------------------------------------------------
+# verdict publish 前の load-time pin 検証（Codex P1）
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_m2_bars_refuses_to_publish_when_first_party_source_changed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """メモリ上の旧 evaluator が走りつつ新しいディスク bytes を名乗る窓を塞ぐ。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    monkeypatch.setattr(
+        harness, "_LOADED_GENERATOR_CODE_SHA256", hashlib.sha256(b"stale").hexdigest()
+    )
+    with pytest.raises(RuntimeError, match="first-party ソースが実行中に変化した"):
+        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+
+
+def test_evaluate_m2_bars_refuses_to_publish_when_scorer_changed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    monkeypatch.setattr(
+        harness,
+        "_LOADED_SCORER_PINS",
+        {"mir_eval_version": "0.0-stale", "mir_eval_code_sha256": None},
+    )
+    with pytest.raises(RuntimeError, match="mir_eval が実行中に差し替わった"):
+        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)

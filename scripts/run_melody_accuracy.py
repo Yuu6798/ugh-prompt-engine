@@ -570,6 +570,23 @@ def _require_well_formed_bars(bar_block: Dict[str, Any]) -> None:
     if repeats_min < 1:
         raise ValueError(f"m2_accuracy_bars: repeats_min {repeats_min!r} が 1 未満 (fail-closed)")
 
+    # 有声判定閾値も凍結バーの一部（実測後に動かして VFA を改善させない）。
+    floor = bar_block.get("est_voiced_confidence_floor")
+    if floor is None:
+        raise ValueError(
+            "m2_accuracy_bars: est_voiced_confidence_floor が無い; 抽出器の "
+            "frame_confidence を推定 voicing へ変換する閾値は事前登録が必須 (fail-closed)"
+        )
+    if isinstance(floor, bool) or not isinstance(floor, (int, float)):
+        raise ValueError(
+            f"m2_accuracy_bars: est_voiced_confidence_floor {floor!r} が数値でない"
+        )
+    if not math.isfinite(float(floor)) or not (0.0 <= float(floor) <= 1.0):
+        raise ValueError(
+            f"m2_accuracy_bars: est_voiced_confidence_floor {floor!r} が非有限または "
+            "[0, 1] の外 (fail-closed)"
+        )
+
     for category, bar in bar_block.items():
         if not isinstance(bar, dict):
             continue
@@ -715,6 +732,42 @@ def _reference_for_category(
 # ---------------------------------------------------------------------------
 
 
+def _est_freqs_with_voicing(
+    observation: MelodyObservation, *, confidence_floor: float
+) -> Tuple[float, ...]:
+    """抽出器の (frame_hz, frame_confidence) を mir_eval の推定 voicing 表現へ変換する。
+
+    CREPE（`crepe_adapter.extract_crepe_f0`）は**無声フレームでも最尤 F0 を正値で
+    返す**契約で、有声の証拠は `frame_confidence` に分離されている。`frame_hz` を
+    そのまま mir_eval に渡すと「推定は全フレーム有声」と解釈され、正解が無音の
+    フレームすべてが false alarm に数えられて VFA が事実上 1.0 に張り付く——精度の
+    良い CREPE run でも凍結 `max_vfa` を落とす（Codex P1）。
+
+    変換は mir_eval が文書化している符号規約に従う（`to_cent_voicing` の docstring:
+    ``est_voicing`` を渡さない場合、**負の周波数**は「無声と予測したが、有声なら
+    この推定値」を意味する）。したがって:
+
+    - ``confidence >= confidence_floor`` → ``+|hz|``（有声と予測）
+    - ``confidence <  confidence_floor`` → ``-|hz|``（無声と予測・推定値は保持）
+    - ``hz == 0``                        → ``0.0``（推定値そのものが無い）
+
+    負値化は**ピッチ推定値を捨てない**ため、RPA/RCA（推定 voicing を見ない MIREX
+    定義）は変換前と一致し、VR/VFA/OA だけが正しくなる。閾値は
+    `m2_accuracy_bars.yaml` の `est_voiced_confidence_floor` として事前登録された
+    凍結値で、実測後に動かさない（一方向規律）。
+    """
+    signed: List[float] = []
+    for hz, confidence in zip(observation.frame_hz, observation.frame_confidence):
+        magnitude = abs(float(hz))
+        if magnitude == 0.0:
+            signed.append(0.0)
+        elif float(confidence) >= confidence_floor:
+            signed.append(magnitude)
+        else:
+            signed.append(-magnitude)
+    return tuple(signed)
+
+
 def _select_named_route(input_kind: str, route_name: str) -> MelodyRoute:
     for route in select_routes(input_kind):
         if route.name == route_name:
@@ -817,6 +870,9 @@ def run_accuracy(
         if tolerance_cents is not None
         else float(bars["m2_accuracy_bars"].get("tolerance_cents", DEFAULT_TOLERANCE_CENTS))
     )
+    # 有声判定閾値は override を持たない（凍結バーからのみ読む）。`load_bars` が
+    # 存在と定義域を検査済み。
+    est_voiced_floor = float(bars["m2_accuracy_bars"]["est_voiced_confidence_floor"])
 
     # ロード時に確定した digest を使う（実行中にディスクのソースが変わっても、
     # 実際に走っているのは import 済みのコードなので、そちらを pin する）。
@@ -829,6 +885,7 @@ def run_accuracy(
         "specs_path_relative": _repo_relative_path(specs_path),
         "bars_path_relative": _repo_relative_path(bars_path),
         "tolerance_cents": effective_tolerance,
+        "est_voiced_confidence_floor": est_voiced_floor,
         "generator_code_sha256": _LOADED_GENERATOR_CODE_SHA256,
         "route_runner_injected": runner_injected,
         "preloaded_seed_modules": list(_PRELOADED_SEED_MODULES),
@@ -864,15 +921,23 @@ def run_accuracy(
                 results["categories"][category] = row
                 continue
 
+            # 抽出器の frame_hz をそのまま渡さない: CREPE は無声フレームでも最尤 F0 を
+            # 正値で返すため、confidence を mir_eval の符号規約へ変換してから採点する
+            # （`_est_freqs_with_voicing`・Codex P1）。
+            est_freqs = _est_freqs_with_voicing(
+                observation, confidence_floor=est_voiced_floor
+            )
             metrics: MelodyAccuracyResult = evaluate_melody_accuracy(
                 ref_times,
                 ref_freqs,
                 observation.frame_times,
-                observation.frame_hz,
+                est_freqs,
                 tolerance_cents=effective_tolerance,
             )
             row["outcome"] = "measured"
             row["metrics"] = metrics.to_dict()
+            row["est_frame_count"] = len(est_freqs)
+            row["est_voiced_frame_count"] = sum(1 for f in est_freqs if f > 0.0)
             row["source_model"] = observation.source_model
             for key, value in route_provenance.items():
                 row[f"provenance_{key}"] = value
@@ -1037,6 +1102,45 @@ _METRIC_RANGES: Dict[str, Tuple[float, float]] = {
     "overall_accuracy": (0.0, 1.0),
     "octave_gap": (-1.0, 1.0),
 }
+
+
+def _require_reference_bounded_counts(category: str, rows: List[Dict[str, Any]]) -> None:
+    """誤差モデルの母数が、独立に記録された正解フレーム数を超えないことを要求する。
+
+    `voiced_chroma_correct_frame_count` は「有声かつ chroma 一致フレーム」の数なので、
+    定義上 `ref_voiced_frame_count` 以下（したがって `ref_frame_count` 以下）である。
+    型と符号だけを見ていると 10 億のような値が bit 一致のまま pass の verdict へ
+    転記され、ありえない標本数の誤差モデルを publish できた（Codex P2）。row 側の
+    正解フレーム数は `_require_registered_row_identity` が固定した波形から run 時に
+    数えた独立な値なので、これを上界として使える。
+    """
+    for idx, row in enumerate(rows):
+        where = f"category {category!r} rows[{idx}]"
+        metrics = row["metrics"]
+        count = int(metrics["voiced_chroma_correct_frame_count"])
+        for field in ("ref_frame_count", "ref_voiced_frame_count"):
+            bound = row.get(field)
+            if isinstance(bound, bool) or not isinstance(bound, int):
+                raise ValueError(
+                    f"evaluate_m2_bars: {where} の {field} {bound!r} が整数でない; "
+                    "誤差モデルの母数を検算できない row を証拠にしない (fail-closed)"
+                )
+            if bound < 0:
+                raise ValueError(
+                    f"evaluate_m2_bars: {where} の {field} {bound!r} が負 (fail-closed)"
+                )
+            if count > bound:
+                raise ValueError(
+                    f"evaluate_m2_bars: {where} の voiced_chroma_correct_frame_count "
+                    f"{count} が {field} {bound} を超える; 有声かつ chroma 一致フレーム数は "
+                    "正解フレーム数を超えられない (fail-closed)"
+                )
+        if row["ref_voiced_frame_count"] > row["ref_frame_count"]:
+            raise ValueError(
+                f"evaluate_m2_bars: {where} の ref_voiced_frame_count "
+                f"{row['ref_voiced_frame_count']} が ref_frame_count "
+                f"{row['ref_frame_count']} を超える (fail-closed)"
+            )
 
 
 def _require_metrics_contract(
@@ -1246,6 +1350,35 @@ def _repeats_bit_identical(metrics_list: List[Dict[str, Any]]) -> bool:
     return len(canonical) <= 1
 
 
+def _require_frozen_est_voicing_floor(
+    reports: List[Dict[str, Any]], bar_block: Dict[str, Any]
+) -> float:
+    """各 report の `est_voiced_confidence_floor` が凍結値と厳密一致することを要求する。
+
+    有声判定閾値は VFA/VR/OA を直接動かすので、緩い閾値で測った row に凍結
+    `max_vfa` を適用すると「バーファイルを触らずにバーを緩める」のと同じ結果になる
+    （`_require_frozen_tolerance` と同型の関所）。閾値を欠く report は、そもそも
+    CREPE の confidence を推定 voicing へ変換していない旧世代の run である可能性が
+    あるため受理しない。
+    """
+    frozen = float(bar_block["est_voiced_confidence_floor"])
+    for idx, report in enumerate(reports):
+        reported = report.get("est_voiced_confidence_floor")
+        if reported is None:
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{idx}] が est_voiced_confidence_floor を欠く; "
+                "推定 voicing をどの閾値で決めたか不明な row にバーを適用しない "
+                "(fail-closed)"
+            )
+        if float(reported) != frozen:
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{idx}] の est_voiced_confidence_floor "
+                f"{reported!r} が凍結値 {frozen} と不一致; 別の有声判定閾値で測った row に "
+                "凍結バーを適用しない (fail-closed)"
+            )
+    return frozen
+
+
 def _require_frozen_tolerance(reports: List[Dict[str, Any]], bar_block: Dict[str, Any]) -> float:
     """各 report の `tolerance_cents` が凍結値と厳密一致することを要求する（fail-closed）。
 
@@ -1382,6 +1515,7 @@ def evaluate_m2_bars(
     _require_publishable_runs(reports)
     generator_code_sha256 = _require_matching_generator_code(reports)
     tolerance_cents = _require_frozen_tolerance(reports, bar_block)
+    est_voiced_floor = _require_frozen_est_voicing_floor(reports, bar_block)
     scorer_pins = _require_homogeneous_scorer(reports)
 
     verdict: Dict[str, Any] = {
@@ -1390,6 +1524,7 @@ def evaluate_m2_bars(
         "generator_code_sha256": generator_code_sha256,
         "evaluator_code_sha256": _evaluator_code_sha256(),
         "tolerance_cents": tolerance_cents,
+        "est_voiced_confidence_floor": est_voiced_floor,
         "mir_eval_version": scorer_pins["mir_eval_version"],
         "mir_eval_code_sha256": scorer_pins["mir_eval_code_sha256"],
         "n_reports": len(reports),
@@ -1431,6 +1566,7 @@ def evaluate_m2_bars(
         metrics_list = [row["metrics"] for row in rows]
         _require_finite_metrics(category, metrics_list)
         _require_metrics_contract(category, metrics_list, tolerance_cents=tolerance_cents)
+        _require_reference_bounded_counts(category, rows)
         cat_result["metrics"] = metrics_list
 
         # bars.yaml の `repeats_min` は決定論確認（「shifts=0 後は bit 一致するはず」）
@@ -1470,6 +1606,13 @@ def evaluate_m2_bars(
         cat_result["failures"] = failures
         verdict["categories"][category] = cat_result
 
+    # verdict を返す（= publish する）直前に、load 時に pin したコードが
+    # 実行中に差し替わっていないことを確認する。`_require_matching_generator_code`
+    # は report が申告した digest を突き合わせるだけなので、**評価側**のプロセスが
+    # 「メモリ上の旧 evaluator を走らせつつ、新しいディスク bytes を
+    # `evaluator_code_sha256` として名乗る」窓が残っていた（Codex P1）。run phase と
+    # 同じ post-execution 検査を evaluate phase にも及ぼす。
+    _require_unchanged_since_load()
     return verdict
 
 
