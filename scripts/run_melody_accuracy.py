@@ -1739,10 +1739,15 @@ def _require_attested_registration(
     """
     attestation, committed = _bars_registration_attestation(bars_path, raw)
     for idx, started in started_by_index:
-        if started < committed:
+        # 等値も拒否する: `_utc_now()` も git の %cI も秒精度なので、同一秒内では
+        # 「commit より前に測定を開始した」ケースと順序を区別できない（Codex P2
+        # 第 29 巡）。秒精度の証拠で事前登録を主張できるのは、開始が厳密に後の秒に
+        # ある場合だけ。
+        if started <= committed:
             raise ValueError(
                 f"evaluate_m2_bars: reports[{idx}] の started_utc {started.isoformat()} が、"
-                f"bars が git 履歴に現れた登録時点 {committed.isoformat()} より前; "
+                f"bars が git 履歴に現れた登録時点 {committed.isoformat()} より後でない"
+                "（同一秒を含む）; 秒精度の証拠では同一秒内の順序を立証できず、"
                 "自己申告 registered_utc の backdate では事前登録を名乗れない "
                 "(fail-closed)"
             )

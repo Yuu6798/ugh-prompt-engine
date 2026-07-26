@@ -2528,6 +2528,10 @@ def test_attested_registration_rejects_measurements_before_history(
     early = datetime(2026, 7, 26, 11, 0, 0, tzinfo=timezone.utc)
     with pytest.raises(ValueError, match="履歴に現れた登録時点"):
         _ORIG_ATTEST(BARS_PATH, BARS_PATH.read_bytes(), [(0, early)])
+    # 同一秒も拒否: _utc_now() と git %cI は秒精度で、同一秒内では「commit より前に
+    # 開始した」ケースと順序を区別できない（Codex P2 第 29 巡）。
+    with pytest.raises(ValueError, match="同一秒"):
+        _ORIG_ATTEST(BARS_PATH, BARS_PATH.read_bytes(), [(0, committed)])
     late = datetime(2026, 7, 26, 13, 0, 0, tzinfo=timezone.utc)
     attestation = _ORIG_ATTEST(BARS_PATH, BARS_PATH.read_bytes(), [(0, late)])
     assert attestation["first_commit"] == "f" * 40
