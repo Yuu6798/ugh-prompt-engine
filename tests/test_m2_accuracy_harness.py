@@ -199,7 +199,8 @@ def test_run_accuracy_records_preloaded_seed_modules() -> None:
     preloaded = report["preloaded_seed_modules"]
     assert isinstance(preloaded, list)
     assert all(isinstance(name, str) for name in preloaded)
-    assert set(preloaded) <= set(harness._SEED_MODULE_NAMES)
+    # 監視対象は first-party 閉包の seed に加えてスコアラー（mir_eval）。
+    assert set(preloaded) <= set(harness._SEED_MODULE_NAMES) | {"mir_eval"}
 
 
 def test_evaluate_m2_bars_rejects_preloaded_module_reports() -> None:
@@ -551,6 +552,26 @@ def test_evaluate_m2_bars_records_bit_identical_repeats_on_pass() -> None:
     assert verdict["categories"]["S_direct"]["repeats_bit_identical"] is True
     assert verdict["categories"]["S_direct"]["status"] == "pass"
     assert verdict["mir_eval_version"] == reports[0]["mir_eval_version"]
+
+
+def test_scorer_pins_do_not_import_mir_eval(monkeypatch) -> None:
+    """スコアラー pin は import を起こさずに取れる（load-time 束縛の前提）。"""
+    monkeypatch.delitem(sys.modules, "mir_eval", raising=False)
+    pins = harness._scorer_pins()
+    assert pins["mir_eval_version"]
+    assert harness._is_sha256(pins["mir_eval_code_sha256"])
+    assert "mir_eval" not in sys.modules
+
+
+def test_run_accuracy_detects_scorer_change_during_execution(monkeypatch) -> None:
+    """実行中に mir_eval が差し替わったら fail-closed（旧スコアラーで測った run）。"""
+    monkeypatch.setattr(
+        harness, "_LOADED_SCORER_PINS", {"mir_eval_version": "0.0", "mir_eval_code_sha256": "0" * 64}
+    )
+    with pytest.raises(RuntimeError, match="mir_eval が実行中に差し替わった"):
+        harness.run_accuracy(
+            categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+        )
 
 
 def test_run_accuracy_detects_source_change_during_execution(monkeypatch) -> None:

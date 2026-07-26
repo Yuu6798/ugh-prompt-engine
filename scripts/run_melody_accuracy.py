@@ -184,7 +184,8 @@ def _preloaded_seed_modules() -> List[str]:
     （Codex P1）。CLI から素で起動した実測 run では空になる。ここに載った run は
     `evaluate` が publish 不可として弾く。
     """
-    return sorted(name for name in _SEED_MODULE_NAMES if name in sys.modules)
+    watched = list(_SEED_MODULE_NAMES) + ["mir_eval"]
+    return sorted(name for name in watched if name in sys.modules)
 
 
 # 閉包 digest と事前ロード状況を **あらゆる first-party import より前に** 確定させる。
@@ -196,13 +197,21 @@ _LOADED_GENERATOR_CODE_SHA256 = _generator_code_sha256()
 
 
 def _require_unchanged_since_load() -> None:
-    """ディスク上の first-party ソースがロード時から変わっていないことを要求する。"""
+    """ロード時に pin したコード（first-party 閉包・スコアラー）の不変を要求する。"""
     current = _generator_code_sha256()
     if current != _LOADED_GENERATOR_CODE_SHA256:
         raise RuntimeError(
             f"first-party ソースが実行中に変化した（load 時 {_LOADED_GENERATOR_CODE_SHA256!r} "
             f"→ 現在 {current!r}）; 走っているのは import 済みの旧コードなので、この run の "
             "provenance は信用できない — プロセスを再起動して測り直すこと (fail-closed)"
+        )
+    current_scorer = _scorer_pins()
+    if current_scorer != _LOADED_SCORER_PINS:
+        raise RuntimeError(
+            f"mir_eval が実行中に差し替わった（load 時 {_LOADED_SCORER_PINS!r} → 現在 "
+            f"{current_scorer!r}）; 指標を産んだのは import 済みの旧スコアラーなので、"
+            "この run の pin は測定を代表しない — プロセスを再起動して測り直すこと "
+            "(fail-closed)"
         )
 
 
@@ -211,6 +220,38 @@ from svp_rpe.melody.provenance import bind_inference_code_pins, package_code_sha
 # 推論コードの pin を本モジュールが soundfile/build_melody_bench を import するより
 # 前に確定する（run_melody_observability.py と同じ理由・#217）。
 bind_inference_code_pins()
+
+# スコアラー（mir_eval）の pin も **実際に import される前に** 確定させる。
+# `_scorer_pins()` は importlib.metadata と find_spec だけを使うので import を
+# 起こさない。first-party 閉包と同じ load-time 束縛を third-party にも適用する。
+def _scorer_pins() -> Dict[str, Any]:
+    """指標を計算した mir_eval（third-party スコアラー）の version / code pin。
+
+    `generator_code_sha256` は first-party 閉包に限っている（third-party を混ぜると
+    環境差で digest が揺れる）ため、mir_eval の実装差はそこに現れない。一方
+    `mir_eval>=0.7` は上限が無く、別リリースで測った row を同一 stack の repeats と
+    数えれば「別の指標実装の出力」を再現性の証拠にしてしまう（Codex P1）。
+    そこで row ではなく report レベルで、実際に呼んだスコアラーを pin する。
+
+    **import を起こさずに** 取る: version は `importlib.metadata`（配布メタデータを
+    読むだけ）、コード hash は `package_code_sha256`（find_spec で場所だけ解決）。
+    `import mir_eval` してから hash すると、先に読み込まれていた旧モジュールが実行
+    される一方で hash は新しいディスクを見る窓が開く——first-party 閉包と同じ #217 の
+    規律を third-party スコアラーにも適用する（Codex P1）。
+    """
+    import importlib.metadata
+
+    try:
+        version = importlib.metadata.version("mir_eval")
+    except importlib.metadata.PackageNotFoundError:
+        version = None
+    return {
+        "mir_eval_version": version,
+        "mir_eval_code_sha256": package_code_sha256("mir_eval"),
+    }
+
+
+_LOADED_SCORER_PINS = _scorer_pins()
 
 import numpy as np  # noqa: E402
 import soundfile as sf  # noqa: E402
@@ -227,23 +268,6 @@ from svp_rpe.melody.extractors import observe_via_route_with_provenance  # noqa:
 from svp_rpe.melody.observability import MelodyObservation  # noqa: E402
 from svp_rpe.melody.routing import MelodyRoute, select_routes  # noqa: E402
 from svp_rpe.rpe.learned import LearnedModelUnavailable  # noqa: E402
-
-def _scorer_pins() -> Dict[str, Any]:
-    """指標を計算した mir_eval（third-party スコアラー）の version / code pin。
-
-    `generator_code_sha256` は first-party 閉包に限っている（third-party を混ぜると
-    環境差で digest が揺れる）ため、mir_eval の実装差はそこに現れない。一方
-    `mir_eval>=0.7` は上限が無く、別リリースで測った row を同一 stack の repeats と
-    数えれば「別の指標実装の出力」を再現性の証拠にしてしまう（Codex P1）。
-    そこで row ではなく report レベルで、実際に呼んだスコアラーを pin する。
-    """
-    import mir_eval
-
-    return {
-        "mir_eval_version": getattr(mir_eval, "__version__", None),
-        "mir_eval_code_sha256": package_code_sha256("mir_eval"),
-    }
-
 
 def _mir_eval_paths() -> List[Path]:
     """provenance のために hash する mir_eval のファイル群（`--out` 保護用）。"""
@@ -706,7 +730,7 @@ def run_accuracy(
         "preloaded_seed_modules": list(_PRELOADED_SEED_MODULES),
         "categories": {},
     }
-    results.update(_scorer_pins())
+    results.update(_LOADED_SCORER_PINS)
 
     with tempfile.TemporaryDirectory(prefix="melody-accuracy-") as tmp:
         for category in categories:
