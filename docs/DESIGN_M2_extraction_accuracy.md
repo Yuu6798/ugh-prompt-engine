@@ -43,6 +43,12 @@ M3 の比較器はこの誤差を**許容するように**設計されなけれ�
 **`mir_eval.melody`（MIT ライセンス・純 Python・バージョン pin）を採用。** 自作指標は作らない
 （比較可能性と実装検証コストのため。mir_eval は MIREX 系研究の標準実装）。
 
+**スコアラー pin の閉包（M2b 前提整備）**: `mir_eval.melody.evaluate` / `to_cent_voicing`
+は内部で `scipy.interpolate` と numpy を直接 import して実行するため、
+`run_melody_accuracy._scorer_pins()` は mir_eval だけでなく scipy / numpy の
+version + code sha256 も記録する（`_SCORER_RUNTIME_PACKAGES`）。librosa 系 backend
+（抽出器オーケストレーション側の閉包）はスコアラー経路に無いため対象外。
+
 | 指標 | 意味 |
 |---|---|
 | RPA (Raw Pitch Accuracy) | 有声フレームのうちピッチが ±50 cent 以内で当たった割合 |

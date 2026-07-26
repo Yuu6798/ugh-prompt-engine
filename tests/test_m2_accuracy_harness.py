@@ -812,6 +812,36 @@ def test_scorer_pins_do_not_import_mir_eval(monkeypatch) -> None:
     assert "mir_eval" not in sys.modules
 
 
+def test_scorer_pins_cover_scipy_and_numpy_execution_closure() -> None:
+    """`mir_eval.melody` が直接実行する scipy/numpy も version + code pin を持つ（#217）。
+
+    `mir_eval/melody.py` が `scipy.interpolate` を、`mir_eval/melody.py` /
+    `mir_eval/util.py` が numpy を直接 import して実行するため、patch された
+    scipy/numpy は RPA/RCA/median cent error を変えるのに、mir_eval 単体の pin は
+    動かない。閉包を `_SCORER_RUNTIME_PACKAGES` へ拡張したことを固定する。
+    """
+    pins = harness._scorer_pins()
+    for name in ("mir_eval", "scipy", "numpy"):
+        assert name in harness._SCORER_RUNTIME_PACKAGES
+        assert pins[f"{name}_version"], f"{name}_version が空 (pins={pins!r})"
+        assert harness._is_sha256(pins[f"{name}_code_sha256"]), (
+            f"{name}_code_sha256 が真の sha256 でない (pins={pins!r})"
+        )
+
+
+def test_scorer_runtime_packages_are_always_in_runtime_package_names() -> None:
+    """スコアラー閉包は route の抽出器選択に関係なく `_runtime_package_names()` に入る。
+
+    scipy は `melody/provenance._EXTRACTOR_CODE_PACKAGES` の `pyin` route にしか
+    登録が無い。本ハーネスの既定カテゴリは `crepe_direct` /
+    `demucs_vocals_then_crepe` route を使うため、抽出器登録表からの導出だけに頼ると
+    scipy が監視集合から漏れる——mir_eval が直接実行するにもかかわらず。
+    """
+    runtime = set(harness._runtime_package_names())
+    for name in harness._SCORER_RUNTIME_PACKAGES:
+        assert name in runtime, sorted(runtime)
+
+
 def test_run_accuracy_detects_scorer_change_during_execution(monkeypatch) -> None:
     """実行中に mir_eval が差し替わったら fail-closed（旧スコアラーで測った run）。"""
     monkeypatch.setattr(
@@ -882,11 +912,17 @@ def test_preloaded_watch_set_covers_the_digest_closure() -> None:
 
 
 def test_runtime_package_names_are_derived_from_the_provenance_registry() -> None:
-    """監視集合は手書きではなく登録表から導出される（登録表を絞れば集合も縮む）。"""
+    """監視集合は手書きではなく登録表から導出される（登録表を絞れば集合も縮む）。
+
+    スコアラー閉包（`_SCORER_RUNTIME_PACKAGES` = mir_eval + scipy + numpy）は route の
+    抽出器選択に関係なく常にシードへ入る——scipy は `pyin` route の登録表にしか
+    載っておらず、選ばれる route が非 pyin（crepe 系）だと抽出器由来の集合だけでは
+    scipy が欠落するため。
+    """
     from svp_rpe.melody import provenance
 
     runtime = set(harness._runtime_package_names())
-    expected = {"mir_eval"}
+    expected = set(harness._SCORER_RUNTIME_PACKAGES)
     for category_spec in harness._CATEGORY_SPECS.values():
         route = harness._select_named_route(
             category_spec["input_kind"], category_spec["route_name"]

@@ -356,17 +356,32 @@ from svp_rpe.melody.provenance import bind_inference_code_pins, package_code_sha
 # 前に確定する（run_melody_observability.py と同じ理由・#217）。
 bind_inference_code_pins()
 
-# スコアラー（mir_eval）の pin も **実際に import される前に** 確定させる。
-# `_scorer_pins()` は importlib.metadata と find_spec だけを使うので import を
-# 起こさない。first-party 閉包と同じ load-time 束縛を third-party にも適用する。
+# スコアラー（mir_eval + それが直接実行する数値実装）の pin も **実際に import
+# される前に** 確定させる。`_scorer_pins()` は importlib.metadata と find_spec だけを
+# 使うので import を起こさない。first-party 閉包と同じ load-time 束縛を third-party
+# にも適用する。
+#
+# 閉包の線引き（#217 一軸「pin が実際に実行された実装に接続しているか」）: 本ハーネスが
+# 呼ぶ `mir_eval.melody.evaluate` / `to_cent_voicing` は `mir_eval/melody.py` が
+# `scipy.interpolate` を、`mir_eval/melody.py` と `mir_eval/util.py` が numpy を
+# **直接 import して実行**するため、patch された scipy/numpy は RPA/RCA/median cent
+# error を変えるのに mir_eval 単体の pin は動かない。よって mir_eval が直接 import
+# する数値実装（scipy, numpy）までを閉包に含める。librosa 系 backend
+# （`_EXTRACTOR_CODE_PACKAGES` が抽出器ごとに保持する librosa/resampy/soxr/numba 等）は
+# 抽出器オーケストレーションの閉包であって **スコアラー経路には無い**ため、ここには
+# 含めない（二重計上・責務混在を避ける）。
+_SCORER_RUNTIME_PACKAGES: "Tuple[str, ...]" = ("mir_eval", "scipy", "numpy")
+
+
 def _scorer_pins(*, use_cache: bool = True) -> Dict[str, Any]:
-    """指標を計算した mir_eval（third-party スコアラー）の version / code pin。
+    """指標を計算したスコアラー閉包（mir_eval + scipy + numpy）の version / code pin。
 
     `generator_code_sha256` は first-party 閉包に限っている（third-party を混ぜると
-    環境差で digest が揺れる）ため、mir_eval の実装差はそこに現れない。一方
+    環境差で digest が揺れる）ため、third-party の実装差はそこに現れない。一方
     `mir_eval>=0.7` は上限が無く、別リリースで測った row を同一 stack の repeats と
-    数えれば「別の指標実装の出力」を再現性の証拠にしてしまう（Codex P1）。
-    そこで row ではなく report レベルで、実際に呼んだスコアラーを pin する。
+    数えれば「別の指標実装の出力」を再現性の証拠にしてしまう（Codex P1）。そこで
+    row ではなく report レベルで、実際に呼んだスコアラー閉包（`_SCORER_RUNTIME_PACKAGES`）
+    を pin する。キーは加算的な flat 形式（`{package}_version` / `{package}_code_sha256`）。
 
     **import を起こさずに** 取る: version は `importlib.metadata`（配布メタデータを
     読むだけ）、コード hash は `package_code_sha256`（find_spec で場所だけ解決）。
@@ -376,14 +391,15 @@ def _scorer_pins(*, use_cache: bool = True) -> Dict[str, Any]:
     """
     import importlib.metadata
 
-    try:
-        version = importlib.metadata.version("mir_eval")
-    except importlib.metadata.PackageNotFoundError:
-        version = None
-    return {
-        "mir_eval_version": version,
-        "mir_eval_code_sha256": package_code_sha256("mir_eval", use_cache=use_cache),
-    }
+    pins: Dict[str, Any] = {}
+    for name in _SCORER_RUNTIME_PACKAGES:
+        try:
+            version = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            version = None
+        pins[f"{name}_version"] = version
+        pins[f"{name}_code_sha256"] = package_code_sha256(name, use_cache=use_cache)
+    return pins
 
 
 _LOADED_SCORER_PINS = _scorer_pins()
@@ -405,17 +421,26 @@ from svp_rpe.melody.routing import MelodyRoute, select_routes  # noqa: E402
 from svp_rpe.rpe.learned import LearnedModelUnavailable  # noqa: E402
 
 def _mir_eval_paths() -> List[Path]:
-    """provenance のために hash する mir_eval のファイル群（`--out` 保護用）。"""
+    """provenance のために hash するスコアラー閉包のファイル群（`--out` 保護用）。
+
+    関数名は歴史的経緯で `mir_eval` のままだが、`_scorer_pins()` が pin する閉包
+    全体（`_SCORER_RUNTIME_PACKAGES` = mir_eval + scipy + numpy）を回って一般化する。
+    `_scorer_pins()` の pin 対象より保護集合が狭いと、`--out` が scipy/numpy の
+    ソースを指したときに「pin 済みの実行コードを report で潰す」穴が残る。
+    """
     import importlib.util
 
-    try:
-        spec = importlib.util.find_spec("mir_eval")
-    except (ImportError, ValueError, AttributeError, ModuleNotFoundError):
-        return []
-    if spec is None or spec.origin in (None, "built-in", "frozen"):
-        return []
-    root = Path(spec.origin).resolve().parent
-    return sorted(p.resolve() for p in root.rglob("*.py"))
+    paths: "set[Path]" = set()
+    for name in _SCORER_RUNTIME_PACKAGES:
+        try:
+            spec = importlib.util.find_spec(name)
+        except (ImportError, ValueError, AttributeError, ModuleNotFoundError):
+            continue
+        if spec is None or spec.origin in (None, "built-in", "frozen"):
+            continue
+        root = Path(spec.origin).resolve().parent
+        paths.update(p.resolve() for p in root.rglob("*.py"))
+    return sorted(paths)
 
 
 def _runtime_input_paths() -> "set[Path]":
@@ -1391,13 +1416,20 @@ def _runtime_package_names() -> "Tuple[str, ...]":
     third-party は `generator_code_sha256`（first-party 閉包）の対象外だが、事前
     ロード済みなら「メモリ上の旧実装が推論し、row の code pin は新しいディスクを
     指す」窓が開くため、監視対象に含める。
+
+    スコアラー閉包（`_SCORER_RUNTIME_PACKAGES`）は route の抽出器選択に関係なく
+    **常に**監視対象へ加える——scipy は `pyin` route の `_EXTRACTOR_CODE_PACKAGES`
+    にしか登録が無く、選ばれた route が `crepe_direct` / `demucs_vocals_then_crepe`
+    等の非 pyin 経路だと抽出器由来の監視集合には scipy が入らない。しかしスコアラー
+    自身（mir_eval）は route の選択に関わらず必ず scipy/numpy を実行するので、
+    抽出器登録表への偶然の相乗りに頼らず、スコアラー由来として独立に含める。
     """
     from svp_rpe.melody.provenance import (
         SEPARATION_CODE_PACKAGES,
         extractor_code_packages_for,
     )
 
-    names = {"mir_eval"}
+    names = set(_SCORER_RUNTIME_PACKAGES)
     for category, category_spec in _CATEGORY_SPECS.items():
         route = _select_named_route(category_spec["input_kind"], category_spec["route_name"])
         packages = extractor_code_packages_for(route.extractor)
