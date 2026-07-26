@@ -14,6 +14,7 @@ import hashlib
 import importlib
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -63,9 +64,22 @@ def _clean_evaluator_preload(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         harness, "_reverify_category_measurement", lambda *args, **kwargs: None
     )
+    # 事前登録の git 立証も正規化する。機構テストは tmp の bars（履歴に無い blob）を
+    # 多用するため、素のままだと全 evaluate テストが立証不能拒否になる（正しい挙動・
+    # 専用テスト群 `test_bars_registration_attestation_*` が実 gate を固定する）。
+    monkeypatch.setattr(
+        harness,
+        "_require_attested_registration",
+        lambda *args, **kwargs: {
+            "first_commit": "0" * 40,
+            "committed_utc": "2026-07-25T00:00:00+00:00",
+            "source": "test_fixture_stub",
+        },
+    )
 
 
 _ORIG_REVERIFY = harness._reverify_category_measurement
+_ORIG_ATTEST = harness._require_attested_registration
 
 
 def _fake_environment_pins(route) -> Dict[str, Any]:
@@ -2471,6 +2485,52 @@ def test_scorer_pins_must_match_evaluator_environment() -> None:
         harness.evaluate_m2_bars(
             [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
         )
+
+
+def test_bars_registration_attestation_finds_committed_blob() -> None:
+    """commit 済み凍結バーは git 履歴で立証でき、登録時点（commit 日時）が得られる。"""
+    attestation, committed = harness._bars_registration_attestation(
+        BARS_PATH, BARS_PATH.read_bytes()
+    )
+    assert re.fullmatch(r"[0-9a-f]{40}", attestation["first_commit"])
+    assert committed.tzinfo is not None
+    assert attestation["committed_utc"] == committed.isoformat()
+
+
+def test_bars_registration_attestation_rejects_uncommitted_bytes(tmp_path: Path) -> None:
+    """履歴に無い blob（事後選択したバー）は自己申告 registered_utc では立証できない。
+
+    実測を見てから閾値を作り日付を backdate した bars は「未来でない」検査を通るが、
+    git 履歴（不可変）に現れた時点は偽れない（Codex P2 第 28 巡）。
+    """
+    tampered = BARS_PATH.read_bytes() + b"# post-selected\n"
+    path = tmp_path / "m2_accuracy_bars.yaml"
+    path.write_bytes(tampered)
+    # リポジトリ外パス → 立証不能
+    with pytest.raises(RuntimeError, match="リポジトリ外"):
+        harness._bars_registration_attestation(path, tampered)
+    # リポジトリ内パスでも、履歴に無い bytes は立証不能
+    with pytest.raises(RuntimeError, match="どの commit にも"):
+        harness._bars_registration_attestation(BARS_PATH, tampered)
+
+
+def test_attested_registration_rejects_measurements_before_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """測定開始が bars の履歴登録時点より前なら publish しない（backdate 封じ）。"""
+    committed = datetime(2026, 7, 26, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        harness,
+        "_bars_registration_attestation",
+        lambda *a, **k: ({"first_commit": "f" * 40, "committed_utc": committed.isoformat()},
+                         committed),
+    )
+    early = datetime(2026, 7, 26, 11, 0, 0, tzinfo=timezone.utc)
+    with pytest.raises(ValueError, match="履歴に現れた登録時点"):
+        _ORIG_ATTEST(BARS_PATH, BARS_PATH.read_bytes(), [(0, early)])
+    late = datetime(2026, 7, 26, 13, 0, 0, tzinfo=timezone.utc)
+    attestation = _ORIG_ATTEST(BARS_PATH, BARS_PATH.read_bytes(), [(0, late)])
+    assert attestation["first_commit"] == "f" * 40
 
 
 def test_fresh_process_report_provenance_gates() -> None:

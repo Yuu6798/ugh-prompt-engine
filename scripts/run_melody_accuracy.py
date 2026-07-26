@@ -1666,6 +1666,89 @@ def _require_execution_evidence(
                 )
 
 
+def _bars_registration_attestation(
+    bars_path: "str | Path", raw: bytes
+) -> Tuple[Dict[str, Any], datetime]:
+    """供給された bars bytes の事前登録を **git 履歴（不可変の記録）** で立証する。
+
+    bars 内の `registered_utc` は自己申告であり、「未来でない」ことしか検査できない
+    ——実測を見てから閾値を作り、日付を過去へ backdate した bars でも通る（Codex P2
+    第 28 巡）。そこで、この **正確な bytes（blob）が履歴に最初に現れた commit の
+    committer 日時**を立証値とする。履歴は append-only なので、この日時より前に
+    bytes が存在した証明にはならないが、**「遅くともこの時点で凍結されていた」**
+    ことの上界になる——測定開始がこの後なら、閾値は測定より先に確定していた。
+
+    立証できない（リポジトリ外・履歴に無い blob・git 不能）バーは fail-closed。
+    """
+    try:
+        rel = Path(bars_path).resolve().relative_to(ROOT)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"evaluate_m2_bars: bars {bars_path!r} がリポジトリ外; 事前登録を git 履歴で "
+            "立証できないバーで verdict を publish しない (fail-closed)"
+        ) from exc
+
+    def _git(*args: str, stdin: "bytes | None" = None) -> bytes:
+        proc = subprocess.run(
+            ["git", "-C", str(ROOT), *args], capture_output=True, input=stdin
+        )
+        if proc.returncode != 0:
+            stderr = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
+            raise RuntimeError(
+                f"evaluate_m2_bars: git {' '.join(args)} が失敗 ({stderr}); 事前登録を "
+                "git 履歴で立証できない環境から publish しない (fail-closed)"
+            )
+        return proc.stdout
+
+    blob = _git("hash-object", "--stdin", stdin=raw).decode("ascii").strip()
+    rev_list = _git("rev-list", "HEAD", "--", rel.as_posix()).decode("ascii").split()
+    first_commit: Optional[str] = None
+    for commit in reversed(rev_list):  # 最古 → 最新の順に、blob が最初に現れた commit
+        try:
+            commit_blob = _git("rev-parse", f"{commit}:{rel.as_posix()}").decode("ascii").strip()
+        except RuntimeError:
+            continue  # その commit に path が無い（削除期間等）
+        if commit_blob == blob:
+            first_commit = commit
+            break
+    if first_commit is None:
+        raise RuntimeError(
+            f"evaluate_m2_bars: 供給された bars（blob {blob}）が git 履歴のどの commit にも "
+            "存在しない; 自己申告の registered_utc だけでは事前登録を名乗れない "
+            "（commit 済みの凍結バーで評価すること・fail-closed）"
+        )
+    committed_iso = _git("show", "-s", "--format=%cI", first_commit).decode("ascii").strip()
+    committed = datetime.fromisoformat(committed_iso).astimezone(timezone.utc)
+    attestation = {
+        "first_commit": first_commit,
+        "committed_utc": committed.isoformat(),
+        "source": "git_history_first_blob_occurrence",
+    }
+    return attestation, committed
+
+
+def _require_attested_registration(
+    bars_path: "str | Path",
+    raw: bytes,
+    started_by_index: List[Tuple[int, datetime]],
+) -> Dict[str, Any]:
+    """全 report の測定開始が bars の**履歴上の登録時点**以後であることを要求する。
+
+    自己申告 `registered_utc` に対する検査（`_parse_registered_utc` 系）は残すが、
+    publish の根拠はこちら——backdate された bars は「履歴に現れた時点」を偽れない。
+    """
+    attestation, committed = _bars_registration_attestation(bars_path, raw)
+    for idx, started in started_by_index:
+        if started < committed:
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{idx}] の started_utc {started.isoformat()} が、"
+                f"bars が git 履歴に現れた登録時点 {committed.isoformat()} より前; "
+                "自己申告 registered_utc の backdate では事前登録を名乗れない "
+                "(fail-closed)"
+            )
+    return attestation
+
+
 def _require_fresh_process_report_provenance(report: Dict[str, Any], category: str) -> None:
     """測り直し子プロセスの report が「本評価環境・現行コード・現行スコアラー」の
     実行であることを、metrics 比較より前に要求する（fail-closed）。
@@ -2372,6 +2455,7 @@ def evaluate_m2_bars(
     *,
     bars_sha256: str,
     specs_path: Path = SPECS_PATH,
+    bars_path: Path = BARS_PATH,
 ) -> Dict[str, Any]:
     """n>=`repeats_min` の run report に凍結バーを機械適用する（設計 §4/§6）。
 
@@ -2455,6 +2539,7 @@ def evaluate_m2_bars(
             latest_registration = amended
 
     run_ids: List[str] = []
+    started_by_index: List[Tuple[int, datetime]] = []
     for idx, report in enumerate(reports):
         recorded = _parse_recorded_utc(report.get("recorded_utc"), where=f"reports[{idx}]")
         # 完了時刻だけでは「登録前に測り始め、登録後に完了した」run が通る（Codex P2）。
@@ -2485,6 +2570,7 @@ def evaluate_m2_bars(
                 "閾値の下での実測を名乗れない（実測後に選んだ閾値を事前登録として "
                 "提示する経路を塞ぐ・fail-closed）"
             )
+        started_by_index.append((idx, started))
         run_id = report.get("run_id")
         if not run_id or not isinstance(run_id, str):
             raise ValueError(
@@ -2504,6 +2590,13 @@ def evaluate_m2_bars(
             f"evaluate_m2_bars: reports share run_id(s) {duplicate_run_ids}; "
             "同一 run のコピーを複数 repeats として扱えない (fail-closed)"
         )
+
+    # 事前登録の立証: 自己申告の `registered_utc` は backdate できるため、供給された
+    # bars bytes が git 履歴（不可変）に最初に現れた commit 日時を立証し、全測定の
+    # 開始がその後であることを publish 条件にする（Codex P2 第 28 巡）。
+    registration_attestation = _require_attested_registration(
+        bars_path, bars.raw, started_by_index
+    )
 
     _require_report_schema(reports)
     _require_publishable_runs(reports)
@@ -2537,6 +2630,7 @@ def evaluate_m2_bars(
         "n_reports": len(reports),
         "run_ids": sorted(run_ids),
         "repeats_min": repeats_min,
+        "registration_attestation": registration_attestation,
         "categories": {},
     }
     verdict["report_pins"] = report_pins
@@ -2744,6 +2838,8 @@ def main() -> int:
             # 測った report を評価するとき committed 既定 spec を読み直して pin 不一致で
             # 落ちる（= evaluate モードで `--specs` が無効だった。Codex P2）。
             specs_path=args.specs,
+            # 事前登録の git 立証（Codex P2 第 28 巡）は供給された bars の実パスに対して行う。
+            bars_path=args.bars,
         )
         _atomic_write_text(args.out, json.dumps(verdict, indent=2, sort_keys=True))
         print(f"wrote verdict to {args.out}")
