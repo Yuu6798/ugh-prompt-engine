@@ -33,6 +33,21 @@ SPECS_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2_accuracy_specs.y
 
 # フェイク抽出器の model pin。真の sha256（64 桁 hex）でなければ evaluate が
 # プレースホルダとして拒否する規律のため、決定論の digest を使う。
+@pytest.fixture(autouse=True)
+def _clean_evaluator_preload(monkeypatch: pytest.MonkeyPatch):
+    """pytest プロセスの事前ロードを、テストに限り「素の CLI 起動」相当へ正規化する。
+
+    pytest では他のテストファイルが svp_rpe モジュールを先に import しているため、
+    本ハーネスの load 時点で `_PRELOADED_SEED_MODULES` が非空になる。evaluate は
+    それを fail-closed で拒否する（正しい挙動）ので、機構テストが評価段まで到達
+    できるようここで空へ正規化する——`_fake_run` が report 側の
+    `preloaded_seed_modules` を正規化するのと同じテスト専用の操作。非空のとき
+    evaluate が拒否すること自体は
+    `test_evaluate_m2_bars_rejects_preloaded_evaluator_process` が固定する。
+    """
+    monkeypatch.setattr(harness, "_PRELOADED_SEED_MODULES", [])
+
+
 FAKE_WEIGHTS_SHA256 = "bf6875a563be64dafa0c8e16f4b6093f55e15ba38f5c7a8844eaa61141dc805e"
 FAKE_CODE_SHA256 = "cffe5426ffd1a5c4a1530e74529ccd0b0cec63fcd07165c3c8564c5cedb770d9"
 FAKE_SEP_WEIGHTS_SHA256 = hashlib.sha256(b"fake-separation-weights").hexdigest()
@@ -1830,3 +1845,90 @@ def test_load_bars_validates_amendment_dates(tmp_path: Path, mutate, expect: str
     path.write_text(patched, encoding="utf-8")
     with pytest.raises(ValueError, match=expect):
         harness.load_bars(path)
+
+
+# ---------------------------------------------------------------------------
+# 第 15 巡: evaluate プロセスの preload ゲート / 型強制の拒否 / 登録日前の report
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_m2_bars_rejects_preloaded_evaluator_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """監視モジュールが先に import 済みのプロセスから verdict を publish しない。
+
+    ディスク不変の検査（`_require_unchanged_since_load`）では捕まらないケース:
+    旧モジュールを import → checkout 更新 → ハーネス import では、load 時 digest も
+    実行後 digest も**新しい**ディスクを見るのに、評価はキャッシュ済みの旧コードで
+    走る。run 側は `preloaded_seed_modules` の拒否で守られているが、evaluate 側の
+    プロセス自身にも同じゲートが要る（Codex P1）。
+    """
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    monkeypatch.setattr(
+        harness, "_PRELOADED_SEED_MODULES", ["svp_rpe.melody.accuracy"]
+    )
+    with pytest.raises(RuntimeError, match="先に import 済み"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expect"),
+    [
+        # 文字列 "50" は float("50") で黙って正規化されていた（Codex P2）。
+        (lambda r: r.update(tolerance_cents="50"), "数値でない"),
+        (lambda r: r.update(est_voiced_confidence_floor="0.30"), "数値でない"),
+        (lambda r: r["categories"]["S_direct"]["metrics"].update(tolerance_cents="50.0"),
+         "数値でない"),
+        (lambda r: r.update(tolerance_cents=True), "数値でない"),  # bool は int の subclass
+    ],
+)
+def test_evaluate_m2_bars_rejects_coerced_numeric_fields(mutate, expect) -> None:
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    mutate(reports[0])
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match=expect):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+def test_evaluate_m2_bars_rejects_reports_predating_bar_registration() -> None:
+    """バーの最新登録時点より前に測ったと申告する report を証拠にしない。
+
+    例: `est_voiced_confidence_floor` は 2026-07-26 に追加登録された。2026-07-25 の
+    recorded_utc を名乗る report がその閾値の下で pass するのは、実測後に選んだ
+    閾値を「事前登録済み」として提示するのと同じ（Codex P2）。
+    """
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    for report in reports:
+        report["recorded_utc"] = "2026-07-25T12:00:00+00:00"  # 最新 amendment (07-26) より前
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="最新登録時点"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+def test_fresh_reports_postdate_the_bar_registration() -> None:
+    """実 run の recorded_utc は登録時点以降なので、この関所は偽陽性を出さない。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    verdict = harness.evaluate_m2_bars(
+        [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+    )
+    assert verdict["categories"]["S_direct"]["status"] == "pass"

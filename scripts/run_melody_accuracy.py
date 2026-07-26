@@ -511,6 +511,29 @@ def _parse_recorded_utc(value: Any, *, where: str) -> datetime:
     return parsed
 
 
+def _require_reported_number(value: Any, *, where: str, field: str) -> float:
+    """report 由来の数値フィールドを **型強制せずに** 検証して float で返す。
+
+    `float("50")` は通ってしまうため、`float(...)` で比較する実装は文字列などの
+    型崩れした値を黙って正規化し、malformed な report が pass の verdict へ
+    そのまま転記される（Codex P2）。`MelodyAccuracyResult.to_dict()` は数値を保証
+    するので、数値でないこと自体が「builder が出していない row」の証拠になる。
+    bool は int のサブクラスなので明示的に除外する。
+    """
+    import math
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(
+            f"evaluate_m2_bars: {where} の {field} {value!r} が数値でない; 型強制で "
+            "正規化せず、builder が出さない値を拒否する (fail-closed)"
+        )
+    if not math.isfinite(float(value)):
+        raise ValueError(
+            f"evaluate_m2_bars: {where} の {field} が非有限（{value!r}）(fail-closed)"
+        )
+    return float(value)
+
+
 def _parse_registered_utc(value: Any, *, where: str) -> datetime:
     """凍結アーティファクトの **登録日** を検証してパースする（fail-closed）。
 
@@ -1565,7 +1588,10 @@ def _require_metrics_contract(
             raise ValueError(
                 f"evaluate_m2_bars: {where} の metrics が tolerance_cents を欠く (fail-closed)"
             )
-        if float(nested_tolerance) != float(tolerance_cents):
+        nested_tolerance = _require_reported_number(
+            nested_tolerance, where=where, field="metrics.tolerance_cents"
+        )
+        if nested_tolerance != float(tolerance_cents):
             raise ValueError(
                 f"evaluate_m2_bars: {where} の metrics.tolerance_cents {nested_tolerance!r} が "
                 f"report の凍結値 {tolerance_cents} と不一致; 指標がどの許容幅で算出されたか "
@@ -1731,7 +1757,10 @@ def _require_frozen_est_voicing_floor(
                 "推定 voicing をどの閾値で決めたか不明な row にバーを適用しない "
                 "(fail-closed)"
             )
-        if float(reported) != frozen:
+        reported = _require_reported_number(
+            reported, where=f"reports[{idx}]", field="est_voiced_confidence_floor"
+        )
+        if reported != frozen:
             raise ValueError(
                 f"evaluate_m2_bars: reports[{idx}] の est_voiced_confidence_floor "
                 f"{reported!r} が凍結値 {frozen} と不一致; 別の有声判定閾値で測った row に "
@@ -1758,7 +1787,10 @@ def _require_frozen_tolerance(reports: List[Dict[str, Any]], bar_block: Dict[str
                 f"evaluate_m2_bars: reports[{idx}] が tolerance_cents を欠く; "
                 "どの許容幅で測ったか不明な row にバーを適用しない (fail-closed)"
             )
-        if float(reported) != frozen:
+        reported = _require_reported_number(
+            reported, where=f"reports[{idx}]", field="tolerance_cents"
+        )
+        if reported != frozen:
             raise ValueError(
                 f"evaluate_m2_bars: reports[{idx}] の tolerance_cents {reported!r} が凍結値 "
                 f"{frozen} と不一致; 別の許容幅で測った row に凍結バーを適用しない "
@@ -1849,6 +1881,19 @@ def evaluate_m2_bars(
             f"（受け取った型: {type(bars).__name__}）; parsed 閾値と digest が切り離された "
             "入力は評価しない (fail-closed)"
         )
+    # **評価プロセス自身**にも run と同じ preload ゲートを適用する（Codex P1）。
+    # 監視対象モジュールが本ハーネスより先に import 済みのプロセスでは、checkout を
+    # 更新してからハーネスを import すると「load 時 digest は新ディスクを hash する
+    # 一方、評価はキャッシュ済みの旧モジュールで走る」ため、
+    # `_require_unchanged_since_load()`（ディスク不変の検査）では捕まらない。
+    # その verdict の `evaluator_code_sha256` は実行されていないコードを名乗る。
+    if _PRELOADED_SEED_MODULES:
+        raise RuntimeError(
+            f"evaluate_m2_bars: 監視対象モジュールが本ハーネスより先に import 済み "
+            f"（{_PRELOADED_SEED_MODULES}）; メモリ上のコードと load 時に hash した "
+            "ディスク bytes の一致を保証できないプロセスから verdict を publish しない "
+            "— 素の CLI から評価し直すこと (fail-closed)"
+        )
     bars_data = bars.verify(bars_sha256)
     bar_block = bars_data["m2_accuracy_bars"]
     repeats_min = int(bar_block.get("repeats_min", 2))
@@ -1868,9 +1913,31 @@ def evaluate_m2_bars(
     if not reports:
         raise ValueError("evaluate_m2_bars: reports must be non-empty")
 
+    # 適用するバーの **最新の登録時点**（初回凍結 + amendments の最大値）。これより
+    # 前に測ったと申告する report は、その閾値がまだ存在しなかった時点の観測なので
+    # 「事前登録済みバーの下での実測」を名乗れない——実測を見てから選んだ閾値を
+    # 事前登録として提示する経路になる（Codex P2）。
+    latest_registration = _parse_registered_utc(
+        bars_data.get("registered_utc"), where="m2_accuracy_bars.yaml"
+    )
+    for amendment in bars_data.get("amendments") or []:
+        amended = _parse_registered_utc(
+            amendment.get("registered_utc"), where="m2_accuracy_bars.yaml amendments"
+        )
+        if amended > latest_registration:
+            latest_registration = amended
+
     run_ids: List[str] = []
     for idx, report in enumerate(reports):
-        _parse_recorded_utc(report.get("recorded_utc"), where=f"reports[{idx}]")
+        recorded = _parse_recorded_utc(report.get("recorded_utc"), where=f"reports[{idx}]")
+        if recorded < latest_registration:
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{idx}] の recorded_utc "
+                f"{report.get('recorded_utc')!r} が、適用するバーの最新登録時点 "
+                f"{latest_registration.isoformat()} より前; その時点に存在しなかった "
+                "閾値の下での実測を名乗れない（実測後に選んだ閾値を事前登録として "
+                "提示する経路を塞ぐ・fail-closed）"
+            )
         run_id = report.get("run_id")
         if not run_id or not isinstance(run_id, str):
             raise ValueError(
