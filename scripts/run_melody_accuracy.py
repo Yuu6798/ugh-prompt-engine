@@ -74,6 +74,31 @@ def _force_checkout_roots_first() -> None:
 
 _force_checkout_roots_first()
 
+
+def _force_fresh_bytecode() -> None:
+    """以後の import を「ディスク上のソース bytes からの再コンパイル」に固定する。
+
+    CPython の既定の `.pyc` 検証はタイムスタンプ + サイズなので、first-party の
+    `.py` を同サイズ・同 mtime で差し替えると **stale bytecode が実行される一方、
+    pin（`_generator_code_sha256`）は新しいソースを hash する**乖離が生じる
+    （Codex P2 第 33 巡）。存在しない一意な `pycache_prefix` を設定して既存
+    `__pycache__` を参照させず（キャッシュ不在 = 必ずソースからコンパイル）、
+    `dont_write_bytecode` で書き込みも止める（一時 prefix への堆積を防ぐ）。
+
+    本モジュール自身の bytecode はこのコードが走る時点で既にロード済み = ここでは
+    束縛できないが、publish の最終根拠である測り直し子プロセスには
+    `_run_verification_in_fresh_process` が同じ環境変数を渡すため、そこでは
+    ハーネス自身も含めてソースから再コンパイルされる。stale bytecode で測った
+    親 run は、子プロセスの fresh 実行と bit 一致しない限り publish されない。
+    """
+    sys.pycache_prefix = str(
+        Path(tempfile.gettempdir()) / f"m2-pyc-{os.getpid()}-{uuid.uuid4().hex}"
+    )
+    sys.dont_write_bytecode = True
+
+
+_force_fresh_bytecode()
+
 # 本ハーネスが読み込まれた瞬間の sys.modules。**この行より上に first-party / 計測
 # 関連の import は 1 つも無い**ため、ここに写っている名前は「別経路が先に読み込んだ
 # もの」だけである。監視集合（`_runtime_package_names`）は登録表からの導出のために
@@ -1873,7 +1898,14 @@ def _run_verification_in_fresh_process(
         "--bars",
         str(Path(bars_path).resolve()),
     ]
-    proc = subprocess.run(command, capture_output=True, text=True)
+    # 子プロセスには fresh な bytecode キャッシュ空間を渡す: 既定のタイムスタンプ
+    # 検証 .pyc は同サイズ・同 mtime の差し替えで stale bytecode を再利用しうる
+    # （Codex P2 第 33 巡）。ハーネス自身を含む全 first-party がソースから
+    # 再コンパイルされ、実行 bytecode が hash 対象のソース bytes に束縛される。
+    env = dict(os.environ)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PYTHONPYCACHEPREFIX"] = str(tmp_dir / f"pyc-fresh-{index}")
+    proc = subprocess.run(command, capture_output=True, text=True, env=env)
     if proc.returncode != 0 or not report_path.is_file():
         tail = " / ".join((proc.stderr or "").strip().splitlines()[-3:])
         raise RuntimeError(

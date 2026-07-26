@@ -2577,6 +2577,48 @@ def test_attested_registration_rejects_measurements_before_history(
     assert attestation["first_commit"] == "f" * 40
 
 
+def test_harness_forces_fresh_bytecode_for_subsequent_imports() -> None:
+    """ハーネス import 以降のモジュールはソースから再コンパイルされる。
+
+    既定のタイムスタンプ検証 .pyc は、同サイズ・同 mtime 差し替えで stale bytecode を
+    実行しつつ pin は新ソースを hash する乖離を許す（Codex P2 第 33 巡）。存在しない
+    一意な pycache_prefix = キャッシュ不在で必ずソースからコンパイルさせる。
+    """
+    assert sys.dont_write_bytecode is True
+    assert sys.pycache_prefix is not None
+    assert "m2-pyc-" in sys.pycache_prefix
+    assert not Path(sys.pycache_prefix).exists()
+
+
+def test_fresh_process_verification_gets_fresh_bytecode_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """測り直し子プロセスにも fresh な bytecode キャッシュ空間を渡す。"""
+    captured: Dict[str, Any] = {}
+
+    def _fake_run(command: Any, capture_output: bool = True, text: bool = True, env: Any = None):
+        captured["env"] = env
+
+        class _Result:
+            returncode = 1
+            stderr = "boom"
+            stdout = ""
+
+        return _Result()
+
+    monkeypatch.setattr(harness.subprocess, "run", _fake_run)
+    with pytest.raises(RuntimeError, match="測り直しプロセスが失敗"):
+        harness._run_verification_in_fresh_process(
+            "S_direct",
+            0,
+            tmp_dir=tmp_path,
+            specs_path=harness.SPECS_PATH,
+            bars_path=harness.BARS_PATH,
+        )
+    assert captured["env"]["PYTHONDONTWRITEBYTECODE"] == "1"
+    assert captured["env"]["PYTHONPYCACHEPREFIX"].startswith(str(tmp_path))
+
+
 def test_fresh_process_report_provenance_gates() -> None:
     """測り直し子プロセスの report は「素の CLI・現行コード・現行スコアラー」を要求。
 
