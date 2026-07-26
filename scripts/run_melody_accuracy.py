@@ -37,8 +37,10 @@ RPA/RCA/VR/VFA/OA + 中央値 cent 誤差を算出する。**旋律同士の比�
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
+import re
 import sys
 import tempfile
 import uuid
@@ -164,22 +166,43 @@ def _json_loads_no_dup_keys(data: "bytes | str", *, what: str) -> Any:
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
-    """`text` を `path` へ atomic に書く（同一ディレクトリの temp file → os.replace）。"""
+    """`text` を UTF-8 bytes として `path` へ atomic に書く（temp file → os.replace）。
+
+    テキストモードで開くとプラットフォーム依存の改行変換が入り、同じ文字列を書いても
+    publish される bytes が環境で変わる（後段の provenance hash が別値になる）。
+    ここで一度だけ encode し、binary モードで書くことで「ハーネスが選んだ bytes 列」と
+    「実際に publish された bytes 列」を一致させる（Codex P1 指摘）。
+    """
     import os
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    payload = text.encode("utf-8")
     fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
     tmp_path = Path(tmp_name)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(text)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp_path, path)
     except BaseException:
         tmp_path.unlink(missing_ok=True)
         raise
+
+
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def _is_sha256(value: Any) -> bool:
+    """`value` が真の sha256 digest（ちょうど 64 桁 lowercase hex）文字列なら True。
+
+    `fullmatch` で全体一致を要求する（`re.match` + `$` は末尾改行を許し 65 文字 pin が
+    通る）。`run_melody_observability._is_sha256` と同じ規約だが、あちらを import すると
+    M1 ハーネスのコードが本ハーネスの provenance 閉包に入り、M1 側の変更で M2 の
+    report が stale 化してしまうため独立に持つ。
+    """
+    return isinstance(value, str) and bool(_SHA256_RE.fullmatch(value))
 
 
 def _utc_now() -> str:
@@ -384,22 +407,104 @@ def _select_named_route(input_kind: str, route_name: str) -> MelodyRoute:
 # ---------------------------------------------------------------------------
 
 
-def _generator_code_sha256() -> str:
-    """本ハーネス自身（M2a の新規 2 モジュール）の digest。
+_FIRST_PARTY_ROOTS: "Tuple[Path, ...]" = (SRC.resolve(), (ROOT / "scripts").resolve())
 
-    実抽出器（crepe 等）の重み/コード pin は `observe_via_route_with_provenance`
-    が返す provenance dict（`extractor_weights_sha256` / `extractor_code_sha256` /
-    `preprocessing.*`）としてこのハーネスがそのまま row へ転記する——ここで作る
-    digest は「row の外形（メトリクス算出ロジック・route 選択）を生んだのはどの
-    コードか」を pin するもので、下流の学習モデル本体は対象にしない
-    （学習モデル本体の pin は既存 `melody/provenance.py` の責務のまま）。
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _first_party_module_file(module_name: str) -> "Path | None":
+    """`module_name` が first-party（`src/svp_rpe` or `scripts` 配下）なら resolved パスを返す。
+
+    stdlib / third-party / 解決不能な名前は None。optional 重み依存（crepe 等）は
+    first-party 外へ解決されるか未導入で None になるため閉包に混入せず、digest は
+    どのマシンでも決定論的に安定する。
+    """
+    import importlib.util
+
+    try:
+        spec = importlib.util.find_spec(module_name)
+    except (ImportError, ValueError, AttributeError, ModuleNotFoundError):
+        return None
+    if spec is None or spec.origin in (None, "built-in", "frozen"):
+        return None
+    path = Path(spec.origin).resolve()
+    if any(_is_relative_to(path, root) for root in _FIRST_PARTY_ROOTS):
+        return path
+    return None
+
+
+def _generator_code_paths() -> List[Path]:
+    """観測を実際に産む first-party 呼び出しグラフの閉包（AST import 走査）。
+
+    本ハーネスと `accuracy.py` だけを hash すると、`melody/extractors.py` /
+    `melody/routing.py` / `rpe/learned/crepe_adapter.py` などが変わっても digest が
+    動かず、旧コードで測った row を現行バーの証拠として通してしまう（Codex P1）。
+    row の `extractor_code_sha256` はサードパーティ推論パッケージの pin であって、
+    この first-party オーケストレーションは覆わない。
+
+    `run_melody_observability._generator_code_paths` と同型だが、あちらを import すると
+    M1 ハーネスのコードが本閉包に入り、M1 側の変更で M2 の report が stale 化する
+    （逆も同様）ため、独立に実装する。
+    """
+    import svp_rpe.io.source_separator as _sep
+    import svp_rpe.melody.accuracy as _accuracy
+    import svp_rpe.melody.extractors as _extractors
+    import svp_rpe.melody.observability as _obs
+    import svp_rpe.melody.routing as _routing
+    import svp_rpe.rpe.learned.crepe_adapter as _crepe
+    import svp_rpe.rpe.learned.source_separation_adapter as _srcsep
+
+    seed_modules = [_accuracy, _extractors, _obs, _routing, _crepe, _srcsep, _sep]
+    stack: List[Path] = [Path(__file__).resolve()]
+    stack.extend(Path(m.__file__).resolve() for m in seed_modules)
+
+    resolved: "set[Path]" = set()
+    while stack:
+        file = stack.pop()
+        if file in resolved or not file.exists():
+            continue
+        resolved.add(file)
+        try:
+            tree = ast.parse(file.read_text(encoding="utf-8"))
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+        candidates: "set[str]" = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    candidates.add(alias.name)
+            elif isinstance(node, ast.ImportFrom):
+                # 相対 import は非採用（本リポジトリは絶対 import 規約）。
+                if node.level == 0 and node.module:
+                    candidates.add(node.module)
+                    for alias in node.names:
+                        candidates.add(f"{node.module}.{alias.name}")
+        for name in candidates:
+            target = _first_party_module_file(name)
+            if target is not None and target not in resolved:
+                stack.append(target)
+    return sorted(resolved)
+
+
+def _generator_code_sha256() -> str:
+    """観測を産む first-party コード閉包の digest。
+
+    学習モデル本体（重み）の pin は対象にしない——そちらは row の
+    `provenance_extractor_weights_sha256` / `preprocessing.*` が担う。ここが pin する
+    のは「row を産んだ first-party のロジック（指標算出・route 選択・抽出器
+    オーケストレーション・ミックス式）」である。
     """
     digest = hashlib.sha256()
-    for path in sorted(
-        [Path(__file__).resolve(), (SRC / "svp_rpe" / "melody" / "accuracy.py").resolve()],
-        key=lambda p: p.name,
-    ):
-        digest.update(path.name.encode("utf-8"))
+    for path in _generator_code_paths():
+        # repo 相対パスを混ぜ、同名ファイルの取り違えを防ぐ（checkout 非依存）。
+        label = _repo_relative_path(path) or path.name
+        digest.update(label.encode("utf-8"))
         digest.update(b"\0")
         digest.update(path.read_bytes())
     return digest.hexdigest()
@@ -552,11 +657,14 @@ def _require_homogeneous_model_stack(category: str, rows: List[Dict[str, Any]]) 
     for idx, row in enumerate(rows):
         for key in ("provenance_extractor_weights_sha256", "provenance_extractor_code_sha256"):
             value = row.get(key)
-            if not value or not isinstance(value, str):
+            if not _is_sha256(value):
+                # 非空文字列で足りるとすると `"TBD"` / `"fake-..."` のようなプレースホルダが
+                # 「pin 済み」を名乗れてしまい、しかも両 repeats で同一なら署名比較も
+                # 素通りする（Codex P1）。真の 64 桁 hex を要求する。
                 raise ValueError(
-                    f"evaluate_m2_bars: category {category!r} rows[{idx}] は measured なのに "
-                    f"{key} を欠く; 学習モデル入力を pin できない row を repeats として "
-                    "数えない (fail-closed)"
+                    f"evaluate_m2_bars: category {category!r} rows[{idx}] の {key} "
+                    f"{value!r} が真の sha256（64 桁 lowercase hex）でない; プレースホルダを "
+                    "記録済み model pin と見なさない (fail-closed)"
                 )
     signatures = [_row_model_stack_signature(row) for row in rows]
     if len({json.dumps(sig, sort_keys=True, default=str) for sig in signatures}) > 1:
@@ -890,10 +998,14 @@ def main() -> int:
         protected = {Path(p).resolve() for p in args.evaluate}
         protected.add(Path(args.bars).resolve())
         protected.add(Path(args.specs).resolve())
+        # provenance のために hash する first-party ソースも保護する。これを許すと
+        # 「hash してから同じファイルを JSON で潰す」ことになり、artifact が自分が
+        # 記録した bytes を破壊し次回実行も壊れる（Codex P2）。
+        protected.update(_generator_code_paths())
         if Path(args.out).resolve() in protected:
             raise SystemExit(
-                f"--out {args.out} は評価入力（report / bars / specs）と同じパスを指している; "
-                "provenance 入力を verdict で上書きしない (fail-closed)"
+                f"--out {args.out} は評価入力（report / bars / specs / provenance 対象の "
+                "ソース）と同じパスを指している; 入力を verdict で上書きしない (fail-closed)"
             )
 
         reports = []
@@ -920,10 +1032,12 @@ def main() -> int:
             print(f"  {category}: {result['status']}")
         return 0
 
-    if Path(args.out).resolve() in {Path(args.bars).resolve(), Path(args.specs).resolve()}:
+    run_protected = {Path(args.bars).resolve(), Path(args.specs).resolve()}
+    run_protected.update(_generator_code_paths())
+    if Path(args.out).resolve() in run_protected:
         raise SystemExit(
-            f"--out {args.out} は凍結入力（bars / specs）と同じパスを指している; "
-            "事前登録ファイルを run report で上書きしない (fail-closed)"
+            f"--out {args.out} は凍結入力（bars / specs）または provenance 対象のソースと "
+            "同じパスを指している; これらを run report で上書きしない (fail-closed)"
         )
     result = run_accuracy(specs_path=args.specs, bars_path=args.bars)
     _atomic_write_text(args.out, json.dumps(result, indent=2, sort_keys=True))

@@ -30,6 +30,11 @@ from svp_rpe.melody.accuracy import reference_f0_from_monophonic_spec  # noqa: E
 BARS_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2_accuracy_bars.yaml"
 SPECS_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2_accuracy_specs.yaml"
 
+# フェイク抽出器の model pin。真の sha256（64 桁 hex）でなければ evaluate が
+# プレースホルダとして拒否する規律のため、決定論の digest を使う。
+FAKE_WEIGHTS_SHA256 = "bf6875a563be64dafa0c8e16f4b6093f55e15ba38f5c7a8844eaa61141dc805e"
+FAKE_CODE_SHA256 = "cffe5426ffd1a5c4a1530e74529ccd0b0cec63fcd07165c3c8564c5cedb770d9"
+
 
 # ---------------------------------------------------------------------------
 # フェイク抽出器: spec 由来の正解を「+shift_cents だけずれた」決定論 f0 として返す。
@@ -62,8 +67,8 @@ def _make_fake_runner(shift_cents: float = 0.0):
             total_duration_sec=times[-1] if times else 0.0,
         )
         provenance = {
-            "extractor_weights_sha256": "fake-weights-sha256",
-            "extractor_code_sha256": "fake-code-sha256",
+            "extractor_weights_sha256": FAKE_WEIGHTS_SHA256,
+            "extractor_code_sha256": FAKE_CODE_SHA256,
         }
         return observation, provenance
 
@@ -78,8 +83,8 @@ def test_run_accuracy_with_fake_extractor_reports_measured_categories() -> None:
     for category, row in report["categories"].items():
         assert row["outcome"] == "measured", (category, row)
         assert row["metrics"]["raw_pitch_accuracy"] == pytest.approx(1.0)
-        assert row["provenance_extractor_weights_sha256"] == "fake-weights-sha256"
-        assert row["provenance_extractor_code_sha256"] == "fake-code-sha256"
+        assert row["provenance_extractor_weights_sha256"] == FAKE_WEIGHTS_SHA256
+        assert row["provenance_extractor_code_sha256"] == FAKE_CODE_SHA256
 
 
 def test_run_accuracy_provenance_fields() -> None:
@@ -106,7 +111,7 @@ def test_run_accuracy_provenance_fields() -> None:
 
     # weights/code hash（フェイク抽出器が返した provenance がそのまま転記される）。
     for row in report["categories"].values():
-        assert row["provenance_extractor_weights_sha256"] == "fake-weights-sha256"
+        assert row["provenance_extractor_weights_sha256"] == FAKE_WEIGHTS_SHA256
 
 
 def test_run_accuracy_two_repeats_are_bit_identical_for_deterministic_fake() -> None:
@@ -282,7 +287,10 @@ def test_evaluate_m2_bars_rejects_heterogeneous_model_stack() -> None:
     report2 = harness.run_accuracy(
         categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
     )
-    report2["categories"]["S_direct"]["provenance_extractor_weights_sha256"] = "other-weights"
+    # 真の sha256 だが別の値 = 「別の重みで測った」ケース（pin 形式は正しい）。
+    report2["categories"]["S_direct"]["provenance_extractor_weights_sha256"] = hashlib.sha256(
+        b"other-weights"
+    ).hexdigest()
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="model stack"):
         harness.evaluate_m2_bars([report1, report2], bars, bars_sha256=bars_sha256)
@@ -321,6 +329,55 @@ def test_evaluate_m2_bars_records_report_pins_when_supplied() -> None:
         harness.evaluate_m2_bars(
             [report1, report2], bars, bars_sha256=bars_sha256, report_pins=pins[:1]
         )
+
+
+def test_generator_digest_covers_first_party_extraction_path() -> None:
+    """digest の閉包が抽出経路の first-party コードを含む（ハーネス 2 本だけでない）。"""
+    paths = {p.name for p in harness._generator_code_paths()}
+    for expected in ("run_melody_accuracy.py", "accuracy.py", "extractors.py", "routing.py"):
+        assert expected in paths, (expected, sorted(paths))
+    # third-party（crepe / numpy 等）は閉包に混ぜない（環境差で digest が揺れるため）。
+    for path in harness._generator_code_paths():
+        assert any(
+            harness._is_relative_to(path, root) for root in harness._FIRST_PARTY_ROOTS
+        ), path
+
+
+def test_generator_digest_changes_when_extraction_module_changes(tmp_path, monkeypatch) -> None:
+    """`melody/extractors.py` が変われば digest が動く（旧 row の stale 検出が効く）。"""
+    before = harness._generator_code_sha256()
+    extractors_path = ROOT / "src" / "svp_rpe" / "melody" / "extractors.py"
+    original = extractors_path.read_bytes()
+    try:
+        extractors_path.write_bytes(original + b"\n# provenance drift probe\n")
+        after = harness._generator_code_sha256()
+    finally:
+        extractors_path.write_bytes(original)
+    assert before != after
+    assert harness._generator_code_sha256() == before
+
+
+def test_evaluate_m2_bars_rejects_placeholder_model_pin() -> None:
+    """`"TBD"` 等のプレースホルダは、両 repeats で同一でも model pin と見なさない。"""
+    reports = [
+        harness.run_accuracy(
+            categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+        )
+        for _ in range(2)
+    ]
+    for report in reports:
+        report["categories"]["S_direct"]["provenance_extractor_weights_sha256"] = "TBD"
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="真の sha256"):
+        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+
+
+def test_atomic_write_text_publishes_exact_utf8_bytes(tmp_path) -> None:
+    """publish される bytes が、ハーネスが選んだ encode 結果と完全一致する。"""
+    target = tmp_path / "out.json"
+    payload = '{"a": 1}\n{"b": "\\u00e9"}\n'
+    harness._atomic_write_text(target, payload)
+    assert target.read_bytes() == payload.encode("utf-8")
 
 
 def test_evaluate_m2_bars_rejects_nan_metrics_instead_of_passing() -> None:
@@ -418,6 +475,38 @@ def test_cli_rejects_out_path_colliding_with_protected_inputs(tmp_path, monkeypa
     with pytest.raises(SystemExit, match="凍結入力"):
         harness.main()
     assert BARS_PATH.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "source_rel",
+    ["scripts/run_melody_accuracy.py", "src/svp_rpe/melody/accuracy.py"],
+)
+def test_cli_rejects_out_path_overwriting_hashed_sources(source_rel, tmp_path, monkeypatch) -> None:
+    """provenance のために hash するソースを `--out` で潰させない（run/evaluate 両モード）。"""
+    source_path = ROOT / source_rel
+    before = source_path.read_bytes()
+
+    monkeypatch.setattr(sys, "argv", ["run_melody_accuracy.py", "--out", str(source_path)])
+    with pytest.raises(SystemExit, match="provenance"):
+        harness.main()
+    assert source_path.read_bytes() == before
+
+    report_path = tmp_path / "run1.json"
+    report_path.write_text(
+        json.dumps(
+            harness.run_accuracy(
+                categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+            )
+        )
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_melody_accuracy.py", "--evaluate", str(report_path), "--out", str(source_path)],
+    )
+    with pytest.raises(SystemExit, match="provenance"):
+        harness.main()
+    assert source_path.read_bytes() == before
 
 
 def test_evaluate_m2_bars_records_generator_code_sha256_in_verdict() -> None:
