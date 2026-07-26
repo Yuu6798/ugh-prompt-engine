@@ -55,7 +55,7 @@ if str(SRC) not in sys.path:
 if str(ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts"))
 
-from svp_rpe.melody.provenance import bind_inference_code_pins  # noqa: E402
+from svp_rpe.melody.provenance import bind_inference_code_pins, package_code_sha256  # noqa: E402
 
 # 推論コードの pin を本モジュールが soundfile/build_melody_bench を import するより
 # 前に確定する（run_melody_observability.py と同じ理由・#217）。
@@ -492,6 +492,23 @@ def _generator_code_paths() -> List[Path]:
     return sorted(resolved)
 
 
+def _scorer_pins() -> Dict[str, Any]:
+    """指標を計算した mir_eval（third-party スコアラー）の version / code pin。
+
+    `generator_code_sha256` は first-party 閉包に限っている（third-party を混ぜると
+    環境差で digest が揺れる）ため、mir_eval の実装差はそこに現れない。一方
+    `mir_eval>=0.7` は上限が無く、別リリースで測った row を同一 stack の repeats と
+    数えれば「別の指標実装の出力」を再現性の証拠にしてしまう（Codex P1）。
+    そこで row ではなく report レベルで、実際に呼んだスコアラーを pin する。
+    """
+    import mir_eval
+
+    return {
+        "mir_eval_version": getattr(mir_eval, "__version__", None),
+        "mir_eval_code_sha256": package_code_sha256("mir_eval"),
+    }
+
+
 def _generator_code_sha256() -> str:
     """観測を産む first-party コード閉包の digest。
 
@@ -508,6 +525,25 @@ def _generator_code_sha256() -> str:
         digest.update(b"\0")
         digest.update(path.read_bytes())
     return digest.hexdigest()
+
+
+# first-party 閉包の digest を **import 完了直後に** 確定させる。以降 `run_accuracy` は
+# この値を pin として使い、実行後に再計算して一致を確認する（`_require_unchanged_since_load`）。
+# こうしないと、モジュールを import 済みのプロセスでソースが差し替わった場合に、
+# Python はメモリ上の旧コードを実行しながらディスクの新しい bytes を pin してしまい、
+# report が「その metrics を産んでいないコード」を指す（Codex P1）。
+_LOADED_GENERATOR_CODE_SHA256 = _generator_code_sha256()
+
+
+def _require_unchanged_since_load() -> None:
+    """ディスク上の first-party ソースがロード時から変わっていないことを要求する。"""
+    current = _generator_code_sha256()
+    if current != _LOADED_GENERATOR_CODE_SHA256:
+        raise RuntimeError(
+            f"first-party ソースが実行中に変化した（load 時 {_LOADED_GENERATOR_CODE_SHA256!r} "
+            f"→ 現在 {current!r}）; 走っているのは import 済みの旧コードなので、この run の "
+            "provenance は信用できない — プロセスを再起動して測り直すこと (fail-closed)"
+        )
 
 
 def run_accuracy(
@@ -547,6 +583,8 @@ def run_accuracy(
         else float(bars["m2_accuracy_bars"].get("tolerance_cents", DEFAULT_TOLERANCE_CENTS))
     )
 
+    # ロード時に確定した digest を使う（実行中にディスクのソースが変わっても、
+    # 実際に走っているのは import 済みのコードなので、そちらを pin する）。
     results: Dict[str, Any] = {
         "mode": "synthetic_accuracy",
         "started_utc": _utc_now(),
@@ -556,9 +594,10 @@ def run_accuracy(
         "specs_path_relative": _repo_relative_path(specs_path),
         "bars_path_relative": _repo_relative_path(bars_path),
         "tolerance_cents": effective_tolerance,
-        "generator_code_sha256": _generator_code_sha256(),
+        "generator_code_sha256": _LOADED_GENERATOR_CODE_SHA256,
         "categories": {},
     }
+    results.update(_scorer_pins())
 
     with tempfile.TemporaryDirectory(prefix="melody-accuracy-") as tmp:
         for category in categories:
@@ -602,6 +641,10 @@ def run_accuracy(
                 row[f"provenance_{key}"] = value
             results["categories"][category] = row
 
+    # 実行中にディスク上の first-party ソースが差し替わっていないか確認する。
+    # 差し替わっていれば「report が pin した digest」と「次回 import されるコード」が
+    # 食い違い、後続の evaluate が誤った provenance を受理しうる（Codex P1）。
+    _require_unchanged_since_load()
     results["recorded_utc"] = _utc_now()
     return results
 
@@ -771,6 +814,44 @@ def _require_finite_metrics(category: str, metrics_list: List[Dict[str, Any]]) -
                 )
 
 
+def _require_homogeneous_scorer(reports: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """全 report が同一の mir_eval スコアラーで測られたことを要求する（fail-closed）。
+
+    `mir_eval>=0.7` は上限が無く、別リリースは RPA/RCA/VR/VFA の定義や境界処理が
+    変わりうる。`generator_code_sha256` は first-party 閉包なので third-party の差を
+    捉えない——よってスコアラー自身の pin を report レベルで突き合わせる（Codex P1）。
+    """
+    pins: List[Tuple[Any, Any]] = []
+    for idx, report in enumerate(reports):
+        version = report.get("mir_eval_version")
+        code = report.get("mir_eval_code_sha256")
+        if not version or not isinstance(version, str):
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{idx}] が mir_eval_version を欠く; "
+                "どの指標実装で測ったか不明な row にバーを適用しない (fail-closed)"
+            )
+        if not _is_sha256(code):
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{idx}] の mir_eval_code_sha256 {code!r} が "
+                "真の sha256 でない; スコアラー実装を pin できない row を受理しない "
+                "(fail-closed)"
+            )
+        pins.append((version, code))
+    if len(set(pins)) > 1:
+        raise ValueError(
+            f"evaluate_m2_bars: reports の mir_eval pin が repeats 間で不一致 "
+            f"{sorted(set(pins))}; 別の指標実装で測った run を同一 stack の repeats と "
+            "見なさない (fail-closed)"
+        )
+    return {"mir_eval_version": pins[0][0], "mir_eval_code_sha256": pins[0][1]}
+
+
+def _repeats_bit_identical(metrics_list: List[Dict[str, Any]]) -> bool:
+    """repeats の metrics が完全一致か（bars の `repeats_min` 契約 = 決定論確認）。"""
+    canonical = {json.dumps(m, sort_keys=True) for m in metrics_list}
+    return len(canonical) <= 1
+
+
 def _require_frozen_tolerance(reports: List[Dict[str, Any]], bar_block: Dict[str, Any]) -> float:
     """各 report の `tolerance_cents` が凍結値と厳密一致することを要求する（fail-closed）。
 
@@ -906,6 +987,7 @@ def evaluate_m2_bars(
 
     generator_code_sha256 = _require_matching_generator_code(reports)
     tolerance_cents = _require_frozen_tolerance(reports, bar_block)
+    scorer_pins = _require_homogeneous_scorer(reports)
 
     verdict: Dict[str, Any] = {
         "verdict_recorded_utc": _utc_now(),
@@ -913,6 +995,8 @@ def evaluate_m2_bars(
         "generator_code_sha256": generator_code_sha256,
         "evaluator_code_sha256": _evaluator_code_sha256(),
         "tolerance_cents": tolerance_cents,
+        "mir_eval_version": scorer_pins["mir_eval_version"],
+        "mir_eval_code_sha256": scorer_pins["mir_eval_code_sha256"],
         "n_reports": len(reports),
         "run_ids": sorted(run_ids),
         "repeats_min": repeats_min,
@@ -942,6 +1026,11 @@ def evaluate_m2_bars(
         _require_finite_metrics(category, metrics_list)
         cat_result["metrics"] = metrics_list
 
+        # bars.yaml の `repeats_min` は決定論確認（「shifts=0 後は bit 一致するはず」）
+        # であって「たまたま両方バー内」ではない。乖離はバーの有無と独立に記録する。
+        bit_identical = _repeats_bit_identical(metrics_list)
+        cat_result["repeats_bit_identical"] = bit_identical
+
         if not bar:
             # S_fullstack: バーなし・診断記録のみ（設計 §3/§8）。
             cat_result["status"] = "diagnostic_only"
@@ -949,6 +1038,11 @@ def evaluate_m2_bars(
             continue
 
         failures: List[str] = []
+        if not bit_identical:
+            failures.append(
+                "repeats metrics diverge under one pinned stack; bars.yaml の repeats_min は "
+                "決定論確認であり bit 一致を要求する（個々がバー内でも pass にしない）"
+            )
         for repeat_idx, metrics in enumerate(metrics_list):
             if "min_rpa" in bar and metrics["raw_pitch_accuracy"] < bar["min_rpa"]:
                 failures.append(

@@ -380,6 +380,85 @@ def test_atomic_write_text_publishes_exact_utf8_bytes(tmp_path) -> None:
     assert target.read_bytes() == payload.encode("utf-8")
 
 
+def test_run_report_pins_the_mir_eval_scorer() -> None:
+    """指標を計算した mir_eval の version / code hash が report に載る。"""
+    report = harness.run_accuracy(
+        categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+    )
+    assert report["mir_eval_version"]
+    assert harness._is_sha256(report["mir_eval_code_sha256"])
+
+
+def test_evaluate_m2_bars_rejects_divergent_mir_eval_pins() -> None:
+    """別リリースの mir_eval で測った 2 本を同一 stack の repeats と数えない。"""
+    reports = [
+        harness.run_accuracy(
+            categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+        )
+        for _ in range(2)
+    ]
+    reports[1]["mir_eval_version"] = "0.999"
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="mir_eval pin"):
+        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+
+
+def test_evaluate_m2_bars_rejects_missing_mir_eval_pin() -> None:
+    reports = [
+        harness.run_accuracy(
+            categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+        )
+        for _ in range(2)
+    ]
+    for report in reports:
+        del report["mir_eval_version"]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="mir_eval_version"):
+        harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+
+
+def test_evaluate_m2_bars_fails_when_deterministic_repeats_diverge() -> None:
+    """同一 stack なのに metrics が食い違う repeats は、個々がバー内でも pass にしない。"""
+    reports = [
+        harness.run_accuracy(
+            categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+        )
+        for _ in range(2)
+    ]
+    metrics = reports[1]["categories"]["S_direct"]["metrics"]
+    # 0.95 はバー（min_rpa=0.90）を満たすが、repeat[0] の 1.0 とは一致しない。
+    metrics["raw_pitch_accuracy"] = 0.95
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    verdict = harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+    s_direct = verdict["categories"]["S_direct"]
+    assert s_direct["repeats_bit_identical"] is False
+    assert s_direct["status"] == "fail", s_direct
+    assert any("bit 一致" in f for f in s_direct["failures"]), s_direct["failures"]
+
+
+def test_evaluate_m2_bars_records_bit_identical_repeats_on_pass() -> None:
+    reports = [
+        harness.run_accuracy(
+            categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+        )
+        for _ in range(2)
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    verdict = harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
+    assert verdict["categories"]["S_direct"]["repeats_bit_identical"] is True
+    assert verdict["categories"]["S_direct"]["status"] == "pass"
+    assert verdict["mir_eval_version"] == reports[0]["mir_eval_version"]
+
+
+def test_run_accuracy_detects_source_change_during_execution(monkeypatch) -> None:
+    """実行中にディスクのソースが差し替わったら fail-closed（旧コードを走らせた run）。"""
+    monkeypatch.setattr(harness, "_LOADED_GENERATOR_CODE_SHA256", "0" * 64)
+    with pytest.raises(RuntimeError, match="実行中に変化"):
+        harness.run_accuracy(
+            categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+        )
+
+
 def test_evaluate_m2_bars_rejects_nan_metrics_instead_of_passing() -> None:
     """NaN は全比較が False になり pass を偽造するため、閾値判定前に拒否する。"""
     reports = [
