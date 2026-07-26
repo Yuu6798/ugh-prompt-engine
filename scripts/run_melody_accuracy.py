@@ -153,12 +153,29 @@ def _generator_code_paths() -> List[Path]:
     `run_melody_observability._generator_code_paths` と同型だが、あちらを import すると
     M1 ハーネスのコードが本閉包に入り、M1 側の変更で M2 の report が stale 化する
     （逆も同様）ため、独立に実装する。
+
+    **祖先パッケージの `__init__.py` も閉包に含める**（Codex P2 第 32 巡）:
+    `svp_rpe.melody.accuracy` の import は `svp_rpe/__init__.py` と
+    `svp_rpe/melody/__init__.py` を必ず実行するが、AST 走査は明示 import された
+    名前しか辿らないため、祖先 initializer の変更が digest に写らず「別の
+    first-party bytes を実行したのに同一 generator provenance」を主張できた。
+    ドット名を解決するたびに、その全祖先の `__init__.py` も対象に加える。
     """
+
+    def _files_with_ancestors(module_name: str) -> List[Path]:
+        parts = module_name.split(".")
+        files: List[Path] = []
+        if not all(parts):
+            return files
+        for depth in range(1, len(parts) + 1):
+            target = _first_party_module_file(".".join(parts[:depth]))
+            if target is not None:
+                files.append(target)
+        return files
+
     stack: List[Path] = [Path(__file__).resolve()]
     for name in _SEED_MODULE_NAMES:
-        target = _first_party_module_file(name)
-        if target is not None:
-            stack.append(target)
+        stack.extend(_files_with_ancestors(name))
 
     resolved: "set[Path]" = set()
     while stack:
@@ -182,9 +199,9 @@ def _generator_code_paths() -> List[Path]:
                     for alias in node.names:
                         candidates.add(f"{node.module}.{alias.name}")
         for name in candidates:
-            target = _first_party_module_file(name)
-            if target is not None and target not in resolved:
-                stack.append(target)
+            for target in _files_with_ancestors(name):
+                if target not in resolved:
+                    stack.append(target)
     return sorted(resolved)
 
 

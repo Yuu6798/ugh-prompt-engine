@@ -925,6 +925,22 @@ def test_preloaded_seed_modules_read_the_frozen_snapshot_not_live_sys_modules(
     assert harness._preloaded_seed_modules() == ["svp_rpe.melody.provenance"]
 
 
+def test_generator_closure_includes_ancestor_package_initializers() -> None:
+    """import が必ず実行する祖先 `__init__.py` も generator digest の対象。
+
+    AST 走査は明示 import された名前しか辿らないため、`svp_rpe/__init__.py` 等の
+    変更が digest に写らず「別の first-party bytes を実行したのに同一 generator
+    provenance」を主張できた（Codex P2 第 32 巡）。
+    """
+    paths = set(harness._generator_code_paths())
+    src = harness.SRC.resolve()
+    assert (src / "svp_rpe" / "__init__.py") in paths
+    assert (src / "svp_rpe" / "melody" / "__init__.py") in paths
+    assert (src / "svp_rpe" / "rpe" / "__init__.py") in paths
+    assert (src / "svp_rpe" / "rpe" / "learned" / "__init__.py") in paths
+    assert (src / "svp_rpe" / "io" / "__init__.py") in paths
+
+
 def test_preloaded_parent_packages_are_watched(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
