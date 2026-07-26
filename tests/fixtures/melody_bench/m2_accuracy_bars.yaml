@@ -45,7 +45,7 @@ provenance:
   # m2_accuracy_specs.yaml の完全 digest pin。仕様を変えたらこの値を更新すること
   # （dated 再実測の規律。`tests/test_melody_accuracy.py` が実ファイルとの完全
   # 一致を機械検証する）。
-  specs_sha256: "b5f7df0b3e3eb6d9fe0272cc96a057fa1e9560867804f5d7c519f49dfd68387c"
+  specs_sha256: "5138a80dcbb4999edad2326bd1dcebd106ac6d61284038b0dba4dbfad3a73bd4"
   # 合成波形の pin（registry.yaml の provenance.waveform_sha256 と対称）。値 =
   # sha256(build_signal(fid).y を float32 化した tobytes())。m2_s_fullstack_mix は
   # melody + accompaniment_gain * accompaniment を harness（run_melody_accuracy.py）

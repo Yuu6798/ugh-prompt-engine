@@ -38,8 +38,11 @@ fixtures:
     phrases:
       - [60, 62, 64, 65, 67]
       - [67, 65, 64, 62, 60]
-    # 総尺 = 2 phrases * 5 notes * (0.3+0.05) + 2*0.6 = 4.7 sec
-    # （`accuracy.monophonic_total_duration_sec` が同じ式で算出・テストで固定）。
+    # 総尺 = 2 phrases * 5 notes * (0.3+0.05) + 2*0.6 = 4.7 sec（名目値）。
+    # 実尺は builder と同じ整数標本量子化を経るため厳密には 4.7s ではない
+    # （note_gap 0.05s @ 22050Hz は端数標本になる）。正解の区間境界・総尺は
+    # `accuracy.monophonic_total_samples` / `monophonic_total_duration_sec` が
+    # builder と同一の `int(round(sample_rate * dur_sec))` で算出する。
 
   # --- S-fullstack: 旋律+伴奏ミックス用の伴奏パート（診断記録のみ・バーなし） ---
   # `_build_chord_pad` は `chords` の先頭要素のみ持続させる（build_melody_bench.py

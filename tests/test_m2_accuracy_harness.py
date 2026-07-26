@@ -57,7 +57,9 @@ def _make_fake_runner(shift_cents: float = 0.0):
             if category_spec["kind"] == "direct"
             else specs["composites"][category_spec["composite_id"]]["melody"]
         )
-        times, freqs = reference_f0_from_monophonic_spec(specs["fixtures"][melody_id])
+        times, freqs = reference_f0_from_monophonic_spec(
+            specs["fixtures"][melody_id], sample_rate=int(specs["sample_rate"])
+        )
         shifted = tuple(
             (0.0 if hz == 0.0 else hz * (2.0 ** (shift_cents / 1200.0))) for hz in freqs
         )
@@ -216,7 +218,7 @@ def test_run_accuracy_records_preloaded_seed_modules() -> None:
     allowed = (
         set(harness._closure_module_names())
         | set(harness._SEED_MODULE_NAMES)
-        | set(harness._RUNTIME_PACKAGE_NAMES)
+        | set(harness._runtime_package_names())
     )
     assert set(preloaded) <= allowed, sorted(set(preloaded) - allowed)
 
@@ -549,7 +551,10 @@ def test_evaluate_m2_bars_fails_when_deterministic_repeats_diverge() -> None:
     ]
     metrics = reports[1]["categories"]["S_direct"]["metrics"]
     # 0.95 はバー（min_rpa=0.90）を満たすが、repeat[0] の 1.0 とは一致しない。
+    # `octave_gap` は導出フィールド（RCA - RPA）なので、row 単体としては整合させる
+    # ——ここで検証したいのは「row 内の矛盾」ではなく「repeats 間の不一致」の検出。
     metrics["raw_pitch_accuracy"] = 0.95
+    metrics["octave_gap"] = metrics["raw_chroma_accuracy"] - metrics["raw_pitch_accuracy"]
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     verdict = harness.evaluate_m2_bars(reports, bars, bars_sha256=bars_sha256)
     s_direct = verdict["categories"]["S_direct"]
@@ -692,9 +697,64 @@ def test_preloaded_watch_set_covers_the_digest_closure() -> None:
     # 閉包は seed だけでなく推移的な first-party モジュールも含む。
     assert "svp_rpe.melody.accuracy" in closure
     assert any(name.startswith("svp_rpe.utils") for name in closure), sorted(closure)
-    # 監視対象は閉包 + ランタイムパッケージから導出される。
-    for name in ("mir_eval", "crepe", "demucs"):
-        assert name in harness._RUNTIME_PACKAGE_NAMES
+    # 監視対象は閉包 + ランタイムパッケージから導出される。ランタイム側は登録表
+    # （provenance）由来なので、crepe 実行スタックの backend も分離器も落ちない。
+    runtime = set(harness._runtime_package_names())
+    for name in ("mir_eval", "crepe", "tensorflow", "keras", "hmmlearn", "librosa", "resampy"):
+        assert name in runtime, sorted(runtime)
+    for name in ("demucs", "torch"):
+        assert name in runtime, sorted(runtime)
+
+
+def test_runtime_package_names_are_derived_from_the_provenance_registry() -> None:
+    """監視集合は手書きではなく登録表から導出される（登録表を絞れば集合も縮む）。"""
+    from svp_rpe.melody import provenance
+
+    runtime = set(harness._runtime_package_names())
+    expected = {"mir_eval"}
+    for category_spec in harness._CATEGORY_SPECS.values():
+        route = harness._select_named_route(
+            category_spec["input_kind"], category_spec["route_name"]
+        )
+        expected.update(provenance.extractor_code_packages_for(route.extractor))
+        if route.requires_separation:
+            expected.update(provenance.SEPARATION_CODE_PACKAGES)
+    assert runtime == expected
+
+
+def test_runtime_package_names_fail_closed_on_unregistered_extractor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """登録表に載っていない抽出器の route は、黙って監視漏れにせず落とす。"""
+    from svp_rpe.melody import provenance
+
+    monkeypatch.setattr(provenance, "extractor_code_packages_for", lambda _extractor: ())
+    with pytest.raises(RuntimeError, match="未登録"):
+        harness._runtime_package_names()
+
+
+def test_preloaded_seed_modules_read_the_frozen_snapshot_not_live_sys_modules(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """事前ロード判定はモジュール先頭で凍結したスナップショットに対して行う。
+
+    監視集合の導出には `svp_rpe.melody.provenance`（= digest 閉包の一員）の import が
+    必要なので、現在の `sys.modules` を見る実装は自分の import を「事前ロード」として
+    数えてしまい、素の CLI run まで publish 不可になる。凍結スナップショットを空に
+    差し替えれば、live な sys.modules を読む実装だけが非空を返す。
+    """
+    assert "svp_rpe.melody.provenance" in set(harness._closure_module_names())
+    assert "svp_rpe.melody.provenance" in sys.modules  # 監視集合の導出で必ず読まれる
+
+    monkeypatch.setattr(harness, "_SYS_MODULES_AT_LOAD", frozenset())
+    assert harness._preloaded_seed_modules() == []
+
+    monkeypatch.setattr(
+        harness,
+        "_SYS_MODULES_AT_LOAD",
+        frozenset({"svp_rpe.melody.provenance", "zzz_not_a_watched_module"}),
+    )
+    assert harness._preloaded_seed_modules() == ["svp_rpe.melody.provenance"]
 
 
 @pytest.mark.parametrize(
@@ -705,10 +765,21 @@ def test_preloaded_watch_set_covers_the_digest_closure() -> None:
         (lambda m: m.update(voiced_chroma_correct_frame_count=1.5), "整数でない"),
         (lambda m: m.update(median_cent_error=None), "矛盾"),
         (lambda m: m.update(tolerance_cents=600.0), "凍結値"),
+        # 導出フィールド octave_gap を独立に書き換えた row（RPA 0.91 / RCA 0.10 /
+        # gap 0.0 のような不可能な誤差モデル）は関係式で弾く。
+        (
+            lambda m: m.update(raw_pitch_accuracy=0.91, raw_chroma_accuracy=0.95, octave_gap=0.0),
+            "一致しない",
+        ),
+        # 関係式に整合させても RCA < RPA（gap<0）は mir_eval が返さない組。
+        (
+            lambda m: m.update(raw_pitch_accuracy=0.91, raw_chroma_accuracy=0.10, octave_gap=-0.81),
+            "下回る",
+        ),
     ],
 )
 def test_evaluate_m2_bars_enforces_metrics_contract(mutate, expect) -> None:
-    """誤差モデルの不変条件（中央値・母数・ネスト tolerance）を evaluate で再検査する。"""
+    """誤差モデルの不変条件（中央値・母数・ネスト tolerance・導出関係）を再検査する。"""
     reports = [
         _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
         for _ in range(2)

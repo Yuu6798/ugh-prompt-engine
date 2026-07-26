@@ -9,20 +9,34 @@
 2. mir_eval 外で追加算出する「有声かつ chroma 一致フレームの絶対 cent 誤差の
    中央値」の手計算一致。
 3. spec → 10ms hop f0 系列の決定論導出（同一 spec → bit 一致）。
+4. 正解の区間境界が `scripts/build_melody_bench.py` が実際にレンダする**整数標本
+   境界**と一致すること（秒の累積和では量子化端数がドリフトし、境界フレームの
+   有声/無声・音高ラベルが実波形とずれる）。
 """
 from __future__ import annotations
 
 import math
+import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
 
-from svp_rpe.melody.accuracy import (
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+import build_melody_bench as builder  # noqa: E402
+
+from svp_rpe.melody.accuracy import (  # noqa: E402
     DEFAULT_HOP_SEC,
     evaluate_melody_accuracy,
     midi_to_hz,
     monophonic_note_intervals,
+    monophonic_note_sample_intervals,
     monophonic_total_duration_sec,
+    monophonic_total_samples,
     reference_f0_from_monophonic_spec,
 )
 
@@ -112,33 +126,71 @@ _TEST_SPEC = {
     "phrase_gap_sec": 0.6,
     "phrases": [[60, 62], [64]],
 }
+_TEST_SR = 22050
+
+# builder の `_tone` / `_rest` と同一の式（`int(round(sample_rate * dur_sec))`）。
+# 期待値を秒（0.3 / 0.05 / 0.6）から手計算で書き下すと、まさに本テストが守りたい
+# 量子化端数を落としてしまうため、標本数はここでも同じ式で導出する。
+_NOTE_N = int(round(_TEST_SR * 0.3))
+_GAP_N = int(round(_TEST_SR * 0.05))
+_PHRASE_N = int(round(_TEST_SR * 0.6))
 
 
-def test_monophonic_note_intervals_matches_builder_segment_order() -> None:
-    intervals = monophonic_note_intervals(_TEST_SPEC)
-    # phrase 1: note60 [0,0.3), gap→0.35; note62 [0.35,0.65), gap→0.70; phrase_gap→1.30
-    # phrase 2: note64 [1.30,1.60), gap→1.65; phrase_gap→2.25
+def test_monophonic_note_sample_intervals_matches_builder_segment_order() -> None:
+    intervals = monophonic_note_sample_intervals(_TEST_SPEC, sample_rate=_TEST_SR)
+    # phrase 1: note60 [0,N), gap; note62 [N+G, 2N+G), gap; phrase_gap
+    # phrase 2: note64 [2(N+G)+P, 2(N+G)+P+N), gap; phrase_gap
     assert len(intervals) == 3
-    assert intervals[0] == pytest.approx((0.0, 0.3, midi_to_hz(60)))
-    assert intervals[1] == pytest.approx((0.35, 0.65, midi_to_hz(62)))
-    assert intervals[2] == pytest.approx((1.30, 1.60, midi_to_hz(64)))
+    assert intervals[0] == (0, _NOTE_N, midi_to_hz(60))
+    assert intervals[1] == (_NOTE_N + _GAP_N, 2 * _NOTE_N + _GAP_N, midi_to_hz(62))
+    third_start = 2 * (_NOTE_N + _GAP_N) + _PHRASE_N
+    assert intervals[2] == (third_start, third_start + _NOTE_N, midi_to_hz(64))
 
 
-def test_monophonic_total_duration_matches_note_intervals_tail() -> None:
-    duration = monophonic_total_duration_sec(_TEST_SPEC)
-    assert duration == pytest.approx(2.25)
+def test_monophonic_note_intervals_are_sample_boundaries_in_seconds() -> None:
+    intervals = monophonic_note_intervals(_TEST_SPEC, sample_rate=_TEST_SR)
+    expected = [
+        (start / _TEST_SR, end / _TEST_SR, hz)
+        for start, end, hz in monophonic_note_sample_intervals(_TEST_SPEC, sample_rate=_TEST_SR)
+    ]
+    assert intervals == expected
+
+
+def test_monophonic_total_samples_matches_rendered_waveform_length() -> None:
+    specs = {"sample_rate": _TEST_SR, "amplitude": 0.3, "fixtures": {"t": _TEST_SPEC}}
+    y, sr = builder.build_signal("t", specs)
+    assert sr == _TEST_SR
+    assert len(y) == monophonic_total_samples(_TEST_SPEC, sample_rate=_TEST_SR)
+    assert monophonic_total_duration_sec(_TEST_SPEC, sample_rate=_TEST_SR) == pytest.approx(
+        len(y) / _TEST_SR
+    )
+
+
+def test_monophonic_note_sample_intervals_locate_rendered_tone_and_silence() -> None:
+    """区間内は鳴っており、区間直後の note_gap 標本は厳密な無音である。"""
+    specs = {"sample_rate": _TEST_SR, "amplitude": 0.3, "fixtures": {"t": _TEST_SPEC}}
+    y, _sr = builder.build_signal("t", specs)
+    for start, end, _hz in monophonic_note_sample_intervals(_TEST_SPEC, sample_rate=_TEST_SR):
+        assert np.any(np.asarray(y[start:end]) != 0.0)
+        assert np.all(np.asarray(y[end : end + _GAP_N]) == 0.0)
 
 
 def test_reference_f0_from_monophonic_spec_is_deterministic_bit_exact() -> None:
-    first_times, first_freqs = reference_f0_from_monophonic_spec(_TEST_SPEC)
-    second_times, second_freqs = reference_f0_from_monophonic_spec(_TEST_SPEC)
+    first_times, first_freqs = reference_f0_from_monophonic_spec(
+        _TEST_SPEC, sample_rate=_TEST_SR
+    )
+    second_times, second_freqs = reference_f0_from_monophonic_spec(
+        _TEST_SPEC, sample_rate=_TEST_SR
+    )
     assert first_times == second_times
     assert first_freqs == second_freqs
 
 
 def test_reference_f0_from_monophonic_spec_frame_grid() -> None:
-    times, freqs = reference_f0_from_monophonic_spec(_TEST_SPEC, hop_sec=DEFAULT_HOP_SEC)
-    duration = monophonic_total_duration_sec(_TEST_SPEC)
+    times, freqs = reference_f0_from_monophonic_spec(
+        _TEST_SPEC, sample_rate=_TEST_SR, hop_sec=DEFAULT_HOP_SEC
+    )
+    duration = monophonic_total_duration_sec(_TEST_SPEC, sample_rate=_TEST_SR)
     expected_n_frames = int(round(duration / DEFAULT_HOP_SEC))
     assert len(times) == expected_n_frames == len(freqs)
     assert times[0] == 0.0
@@ -159,7 +211,57 @@ def test_reference_f0_from_monophonic_spec_frame_grid() -> None:
 
 def test_reference_f0_from_monophonic_spec_rejects_chord_pad() -> None:
     with pytest.raises(ValueError, match="monophonic"):
-        reference_f0_from_monophonic_spec({"kind": "chord_pad", "duration_sec": 1.0, "chords": [[60]]})
+        reference_f0_from_monophonic_spec(
+            {"kind": "chord_pad", "duration_sec": 1.0, "chords": [[60]]},
+            sample_rate=_TEST_SR,
+        )
+
+
+def test_reference_f0_from_monophonic_spec_rejects_nonpositive_sample_rate() -> None:
+    with pytest.raises(ValueError, match="sample_rate must be positive"):
+        reference_f0_from_monophonic_spec(_TEST_SPEC, sample_rate=0)
+
+
+# ---------------------------------------------------------------------------
+# 量子化ドリフト回帰（Codex 指摘）: セグメント長が整数標本にならない spec では、
+# 秒を累積する実装の区間境界が実波形の標本境界とずれ、境界フレームのラベルが
+# 実際にレンダされた音と食い違う。
+# ---------------------------------------------------------------------------
+
+# 1000Hz で note_dur 0.0105s = 10.5 標本 → builder は int(round(...)) = 10 標本を
+# レンダする（= 0.010s）。秒累積の実装では 1 番目のノートが [0, 0.0105) まで伸び、
+# t=0.01 のフレームを 60 番と誤ラベルするが、実波形ではその標本は既に 2 番目の
+# ノート（62 番）である。
+_QUANTIZATION_SPEC = {
+    "kind": "monophonic",
+    "note_dur_sec": 0.0105,
+    "phrases": [[60, 62]],
+}
+_QUANTIZATION_SR = 1000
+
+
+def test_reference_labels_follow_rendered_sample_boundaries_not_accumulated_seconds() -> None:
+    specs = {
+        "sample_rate": _QUANTIZATION_SR,
+        "amplitude": 0.3,
+        "fixtures": {"q": _QUANTIZATION_SPEC},
+    }
+    y, sr = builder.build_signal("q", specs)
+    # builder は各ノートを 10 標本（0.0105s 相当の 10.5 標本ではない）でレンダする。
+    assert (sr, len(y)) == (_QUANTIZATION_SR, 20)
+
+    intervals = monophonic_note_sample_intervals(
+        _QUANTIZATION_SPEC, sample_rate=_QUANTIZATION_SR
+    )
+    assert [(start, end) for start, end, _hz in intervals] == [(0, 10), (10, 20)]
+
+    _times, freqs = reference_f0_from_monophonic_spec(
+        _QUANTIZATION_SPEC, sample_rate=_QUANTIZATION_SR, hop_sec=0.01
+    )
+    assert len(freqs) == 2
+    assert freqs[0] == pytest.approx(midi_to_hz(60))
+    # 秒累積の実装ならここが midi 60 になる（実波形は既に 62 番）。
+    assert freqs[1] == pytest.approx(midi_to_hz(62))
 
 
 def test_midi_to_hz_a4_is_440() -> None:

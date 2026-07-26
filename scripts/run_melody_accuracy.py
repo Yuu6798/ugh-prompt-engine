@@ -55,6 +55,13 @@ if str(SRC) not in sys.path:
 if str(ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts"))
 
+# 本ハーネスが読み込まれた瞬間の sys.modules。**この行より上に first-party / 計測
+# 関連の import は 1 つも無い**ため、ここに写っている名前は「別経路が先に読み込んだ
+# もの」だけである。監視集合（`_runtime_package_names`）は登録表からの導出のために
+# `svp_rpe.melody.provenance` を import するので、集合の導出より前にスナップショット
+# を凍結しておかないと、自分の import が「事前ロード」として写り込む（自己汚染）。
+_SYS_MODULES_AT_LOAD: "frozenset[str]" = frozenset(sys.modules)
+
 # --- provenance pin（あらゆる first-party import より前に確定させる・#217）--------
 # ここから下の import が走る前にディスク状態を pin する。import 後に計算すると、
 # 別経路で先に読み込まれていた旧モジュールが実行される一方 hash は新しいディスクを
@@ -183,12 +190,6 @@ def _generator_code_sha256() -> str:
     return digest.hexdigest()
 
 
-# run 中に実際の推論を担うランタイムパッケージ（登録済み route が実行しうるもの）。
-# digest の対象外（third-party）だが、事前ロード済みなら「メモリ上の旧実装が推論し、
-# row の code pin は新しいディスクを指す」窓が開くため、監視対象に含める。
-_RUNTIME_PACKAGE_NAMES: "Tuple[str, ...]" = ("mir_eval", "crepe", "demucs", "torch", "torchaudio")
-
-
 def _closure_module_names() -> List[str]:
     """`_generator_code_paths()` が hash する全ファイルを import 名へ逆写像する。
 
@@ -224,16 +225,22 @@ def _preloaded_seed_modules() -> List[str]:
 
     監視集合は **digest 閉包そのもの**（推移的モジュールを含む）+ 推論を担う
     ランタイムパッケージから導出する。seed 名だけでは閉包の一部を見逃す。
+
+    判定は `_SYS_MODULES_AT_LOAD`（本モジュールの先頭で凍結した sys.modules）に対して
+    行う。現在の `sys.modules` を見ると、監視集合を導出するための
+    `svp_rpe.melody.provenance` import 自体が「事前ロード」として写り込む。
     """
-    watched = set(_closure_module_names()) | set(_SEED_MODULE_NAMES) | set(_RUNTIME_PACKAGE_NAMES)
-    return sorted(name for name in watched if name in sys.modules)
+    watched = set(_closure_module_names()) | set(_SEED_MODULE_NAMES) | set(_runtime_package_names())
+    return sorted(name for name in watched if name in _SYS_MODULES_AT_LOAD)
 
 
-# 閉包 digest と事前ロード状況を **あらゆる first-party import より前に** 確定させる。
-# `_generator_code_paths` は find_spec のみで import を起こさないので、この位置で呼べる
+# 閉包 digest を **あらゆる first-party import より前に** 確定させる。
+# `_generator_code_paths` は find_spec を使わずパス写像だけなので import を起こさない
 # （`provenance.package_code_state` と同じ #217 の規律）。以降 `run_accuracy` はこの値を
 # pin として使い、実行後に再計算して一致を確認する（`_require_unchanged_since_load`）。
-_PRELOADED_SEED_MODULES = _preloaded_seed_modules()
+# 事前ロード一覧（`_PRELOADED_SEED_MODULES`）は監視集合の導出に登録表の import を要する
+# ため、下の import 群が済んだ後で確定させる——判定基準の `_SYS_MODULES_AT_LOAD` は
+# 既に凍結済みなので、評価位置が後になっても値は変わらない。
 _LOADED_GENERATOR_CODE_SHA256 = _generator_code_sha256()
 
 
@@ -685,6 +692,10 @@ def _reference_for_category(
     """category の正解 f0 系列。S_direct/S_fullstack とも melody spec 単体が正解
 
     （「正解 = spec そのもの」は伴奏を混ぜても変わらない。設計 §3 カテゴリ S）。
+
+    `sample_rate` は specs の合成レートをそのまま渡す——正解の区間境界は
+    `build_melody_bench.py` が実際にレンダする整数標本境界と一致させる必要があり、
+    秒の累積では量子化端数がずれる（Codex 指摘）。
     """
     melody_fixture_id = (
         category_spec["fixture_id"]
@@ -692,7 +703,11 @@ def _reference_for_category(
         else specs["composites"][category_spec["composite_id"]]["melody"]
     )
     melody_spec = specs["fixtures"][melody_fixture_id]
-    return reference_f0_from_monophonic_spec(melody_spec, total_duration_sec=total_duration_sec)
+    return reference_f0_from_monophonic_spec(
+        melody_spec,
+        sample_rate=int(specs["sample_rate"]),
+        total_duration_sec=total_duration_sec,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -708,6 +723,52 @@ def _select_named_route(input_kind: str, route_name: str) -> MelodyRoute:
         f"route {route_name!r} not found among select_routes({input_kind!r}) candidates; "
         "melody/routing.py の経路表が drift した可能性がある (fail-closed)"
     )
+
+
+def _runtime_package_names() -> "Tuple[str, ...]":
+    """本ハーネスの route が推論で実行しうる third-party パッケージ名（+ スコアラー）。
+
+    手書きリストでは実行スタックの一部（`tensorflow` / `keras` / `hmmlearn` /
+    `librosa` / `resampy` / numba backends / 分離器の `torch` 等）を必ず取りこぼす
+    （Codex P1）。リポジトリは `melody/provenance` にその完全集合を既に持っている
+    ——抽出器側は `_EXTRACTOR_CODE_PACKAGES`（`extractor_code_packages_for` 経由）、
+    分離器側は `SEPARATION_CODE_PACKAGES`——ので、**実際に選ばれる route から
+    登録表を引いて導出**する。抽出器名も分離要否も `_CATEGORY_SPECS` の route
+    そのものから読むため、カテゴリを増やしてもこの集合が置き去りにならない。
+
+    third-party は `generator_code_sha256`（first-party 閉包）の対象外だが、事前
+    ロード済みなら「メモリ上の旧実装が推論し、row の code pin は新しいディスクを
+    指す」窓が開くため、監視対象に含める。
+    """
+    from svp_rpe.melody.provenance import (
+        SEPARATION_CODE_PACKAGES,
+        extractor_code_packages_for,
+    )
+
+    names = {"mir_eval"}
+    for category, category_spec in _CATEGORY_SPECS.items():
+        route = _select_named_route(category_spec["input_kind"], category_spec["route_name"])
+        packages = extractor_code_packages_for(route.extractor)
+        if not packages:
+            raise RuntimeError(
+                f"category {category!r} の抽出器 {route.extractor!r} が "
+                "melody/provenance._EXTRACTOR_CODE_PACKAGES に未登録; 監視集合を手書きで "
+                "補うと実行スタックを取りこぼすため fail-closed"
+            )
+        names.update(packages)
+        if route.requires_separation:
+            if not SEPARATION_CODE_PACKAGES:
+                raise RuntimeError(
+                    "melody/provenance.SEPARATION_CODE_PACKAGES が空; 分離経路の実行 "
+                    "スタックを監視できないため fail-closed"
+                )
+            names.update(SEPARATION_CODE_PACKAGES)
+    return tuple(sorted(names))
+
+
+# 事前ロード一覧の確定（判定基準の `_SYS_MODULES_AT_LOAD` はモジュール先頭で凍結済み
+# なので、監視集合の導出に登録表の import を要するこの位置で評価しても値は変わらない）。
+_PRELOADED_SEED_MODULES = _preloaded_seed_modules()
 
 
 # ---------------------------------------------------------------------------
@@ -1033,6 +1094,29 @@ def _require_metrics_contract(
                 f"evaluate_m2_bars: {where} の median_cent_error {median!r} と "
                 f"voiced_chroma_correct_frame_count {count!r} が矛盾; 該当フレーム 0 件なら "
                 "median は None、非 0 なら median は数値 (fail-closed)"
+            )
+
+        # 導出フィールドは独立値としてではなく **関係** として検査する。
+        # `octave_gap == RCA - RPA` を要求しないと、RPA 0.91 / RCA 0.10 / gap 0.0 の
+        # ような不可能な誤差モデルが通り、max_octave_gap のバーも迂回される（Codex P2）。
+        rpa = float(metrics["raw_pitch_accuracy"])
+        rca = float(metrics["raw_chroma_accuracy"])
+        gap = float(metrics["octave_gap"])
+        if abs(gap - (rca - rpa)) > 1e-9:
+            raise ValueError(
+                f"evaluate_m2_bars: {where} の octave_gap {gap!r} が "
+                f"raw_chroma_accuracy - raw_pitch_accuracy ({rca - rpa!r}) と一致しない; "
+                "導出フィールドが独立に書き換えられた row を受理しない (fail-closed)"
+            )
+        # chroma 一致は pitch 一致の必要条件（オクターブ補正後の残差 < tolerance は
+        # 補正前に一致していれば必ず成立する）なので、mir_eval は常に RCA >= RPA を
+        # 返す。関係式だけを見ると RPA 0.91 / RCA 0.10 / gap -0.81 のように**整合的に
+        # 書き換えた**不可能な row が残るため、符号そのものも要求する。
+        if gap < -1e-9:
+            raise ValueError(
+                f"evaluate_m2_bars: {where} の raw_chroma_accuracy {rca!r} が "
+                f"raw_pitch_accuracy {rpa!r} を下回る（octave_gap {gap!r}）; chroma 一致は "
+                "pitch 一致の必要条件なので mir_eval はこの組を返さない (fail-closed)"
             )
 
         nested_tolerance = metrics.get("tolerance_cents")
