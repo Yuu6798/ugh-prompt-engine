@@ -372,6 +372,18 @@ bind_inference_code_pins()
 # 含めない（二重計上・責務混在を避ける）。
 _SCORER_RUNTIME_PACKAGES: "Tuple[str, ...]" = ("mir_eval", "scipy", "numpy")
 
+# `_scorer_dist_native_sha256` が同梱ネイティブ実体の**非空**を要求するパッケージ
+# （Codex P1 5 巡目）。numpy/scipy は BLAS/LAPACK 等の数値バックエンドのネイティブ
+# 実行が本質で、pip wheel（manylinux/macOS/Windows いずれも）は必ず同梱ネイティブ
+# （`numpy.libs/` 等）を持つ。RECORD にネイティブが 1 つも無いのに寛容に「空集合 =
+# 同梱ネイティブなし」の空入力 digest を有効な pin として通すと、conda/distro/
+# ソースビルドのように wheel の外（RECORD が把握しない場所）で外部 BLAS に
+# 動的リンクした install が、「実行された数値バックエンドの閉包」を一切覆わない
+# まま「揃っている」と誤認される。mir_eval（純 Python・数値実行を持たない）は
+# この集合に含めない——空 = 空入力 digest のままで正当（数値実行は必須化された
+# numpy/scipy 側が担う）。
+_SCORER_NATIVE_BACKEND_REQUIRED = frozenset({"numpy", "scipy"})
+
 
 def _scorer_dist_native_sha256(name: str, *, use_cache: bool = True) -> str:
     """`name` の wheel 同梱ネイティブ実体（パッケージ本体ディレクトリ **外**）の pin。
@@ -386,11 +398,19 @@ def _scorer_dist_native_sha256(name: str, *, use_cache: bool = True) -> str:
     `importlib.metadata.distribution(name).files`（RECORD = 配布が自己申告する
     所有ファイル一覧）からネイティブ拡張子のファイルを列挙し、パッケージ本体
     ディレクトリの**外**にあるものだけを対象にする（本体配下は `package_code_sha256`
-    側が既に hash 済みで、含めると二重計上になる）。空集合（mir_eval のような純
-    Python 配布、または同梱ネイティブを持たない install 形態）は空入力の sha256 を
-    返す——「無い」と「hash できない」を区別するため、RECORD 自体が引けない・列挙した
-    パスが実在しない場合は例外で fail-closed にする（「覆えない閉包を覆ったと
-    主張しない」#217 原則）。**import を起こさない**（RECORD 読みと `find_spec` のみ）。
+    側が既に hash 済みで、含めると二重計上になる）。空集合は `name` が
+    `_SCORER_NATIVE_BACKEND_REQUIRED` に無ければ（mir_eval のような純 Python 配布）
+    空入力の sha256 を返す——「無い」と「hash できない」を区別するため、RECORD 自体が
+    引けない・列挙したパスが実在しない場合は例外で fail-closed にする（「覆えない
+    閉包を覆ったと主張しない」#217 原則）。**import を起こさない**（RECORD 読みと
+    `find_spec` のみ）。
+
+    **非 wheel 数値バックエンドの fail-closed（Codex P1 5 巡目）**: numpy/scipy
+    （`_SCORER_NATIVE_BACKEND_REQUIRED`）は BLAS/LAPACK 等の数値実行が本質で、pip
+    wheel は必ず同梱ネイティブを持つ。この 2 つで natives が空なのは
+    conda/distro/ソースビルドのように wheel の外（RECORD が把握しない場所）で外部
+    バックエンドに動的リンクしている疑いで、フル ELF 依存閉包を解決する代わりに
+    fail-closed に倒す（実測は wheel ベース環境に限定する正直会計）。
 
     **distribution/import 所有権検証（Codex P1 4 巡目）**: `importlib.metadata` の
     メタデータ側（`distribution().files` = RECORD）と `find_spec` の実行側は、
@@ -479,6 +499,21 @@ def _scorer_dist_native_sha256(name: str, *, use_cache: bool = True) -> str:
                 f"{located} が存在しない; 覆えない閉包を覆ったと主張しない (fail-closed)"
             )
         natives.add(located)
+
+    if not natives and name in _SCORER_NATIVE_BACKEND_REQUIRED:
+        # 数値バックエンドの closure を立証できない（Codex P1 5 巡目）: wheel install
+        # なら必ず `.libs`/DLL が RECORD 経由で見つかるはずなので、ここに来るのは
+        # conda/distro パッケージやソースビルドで外部 BLAS/LAPACK に動的リンクした
+        # install（RECORD がその外部ライブラリを把握しない）を意味する。フル ELF
+        # 依存閉包の解決（`ldd` 相当の再帰的動的リンク解決）は実装せず、「実測は
+        # wheel ベース環境に限定する」正直会計として fail-closed に倒す。
+        raise RuntimeError(
+            f"evaluate_m2_bars: distribution {name!r} の RECORD にネイティブ実体が "
+            "1 つも無い; 数値バックエンドの閉包を立証できない（非 wheel インストール "
+            "— conda/distro/ソースビルド等で外部 BLAS/LAPACK にリンクしている疑い）; "
+            "覆えない閉包を覆ったと主張しない (fail-closed)。wheel ベースの環境で "
+            "実測すること"
+        )
 
     return sha256_of_files(sorted(natives), use_cache=use_cache)
 

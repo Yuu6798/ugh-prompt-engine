@@ -1034,6 +1034,61 @@ def test_scorer_dist_native_sha256_fails_closed_when_record_lacks_init(
         harness._scorer_dist_native_sha256("numpy")
 
 
+def test_scorer_dist_native_sha256_fails_closed_for_non_wheel_numeric_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """numpy/scipy の RECORD にネイティブ実体が 1 つも無ければ fail-closed（Codex P1 5 巡目）。
+
+    conda/distro パッケージやソースビルドは wheel と異なり `numpy.libs/` のような
+    同梱ネイティブを持たず、外部 BLAS/LAPACK に動的リンクする——RECORD はその外部
+    ライブラリを把握しないため natives が空になる。これを「同梱ネイティブなし」と
+    寛容に空入力 digest で通すと、実行された数値バックエンドの閉包を一切覆わない
+    install が「揃っている」と誤認されるため、`_SCORER_NATIVE_BACKEND_REQUIRED`
+    （numpy/scipy）はこの空集合を fail-closed で拒否する。所有権検証（4 巡目）は
+    通す（`__init__.py` は実際の find_spec origin を指す）ことで、この新しい
+    チェックだけを単体で踏ませる。
+    """
+    import importlib.metadata
+    import importlib.util
+
+    real_distribution = importlib.metadata.distribution
+    real_spec = importlib.util.find_spec("numpy")
+    assert real_spec is not None and real_spec.origin
+    real_init = Path(real_spec.origin).resolve()
+
+    class _NoNativeRecord(str):
+        pass
+
+    class _NoNativeDistribution:
+        files = [_NoNativeRecord("numpy/__init__.py"), _NoNativeRecord("numpy/version.py")]
+
+        def locate_file(self, record: Any) -> str:
+            if str(record) == "numpy/__init__.py":
+                return str(real_init)
+            return f"/nonexistent/{record}"
+
+    def _fake_distribution(name: str) -> Any:
+        if name == "numpy":
+            return _NoNativeDistribution()
+        return real_distribution(name)
+
+    monkeypatch.setattr(importlib.metadata, "distribution", _fake_distribution)
+    with pytest.raises(RuntimeError, match="非 wheel"):
+        harness._scorer_dist_native_sha256("numpy")
+
+
+def test_scorer_dist_native_sha256_still_allows_empty_natives_for_mir_eval() -> None:
+    """mir_eval（純 Python・`_SCORER_NATIVE_BACKEND_REQUIRED` の対象外）は natives が
+    空でも従来どおり空入力 sha256 で正当（Codex P1 5 巡目: 数値バックエンド必須化は
+    numpy/scipy 限定で、mir_eval 自身は数値実行を持たない）。
+    """
+    import hashlib
+
+    assert "mir_eval" not in harness._SCORER_NATIVE_BACKEND_REQUIRED
+    empty_input_sha256 = hashlib.sha256(b"").hexdigest()
+    assert harness._scorer_dist_native_sha256("mir_eval") == empty_input_sha256
+
+
 def test_scorer_runtime_packages_are_always_in_runtime_package_names() -> None:
     """スコアラー閉包は route の抽出器選択に関係なく `_runtime_package_names()` に入る。
 
