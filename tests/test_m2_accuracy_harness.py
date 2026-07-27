@@ -1089,6 +1089,296 @@ def test_scorer_dist_native_sha256_still_allows_empty_natives_for_mir_eval() -> 
     assert harness._scorer_dist_native_sha256("mir_eval") == empty_input_sha256
 
 
+def test_is_os_baseline_library_covers_glibc_family_and_excludes_others() -> None:
+    """OS 基盤 whitelist（Codex P1 6 巡目 P1-A）は glibc 族 + libgcc_s/libstdc++/libz のみ。"""
+    for soname in (
+        "libc.so.6",
+        "libm.so.6",
+        "libpthread.so.0",
+        "libdl.so.2",
+        "librt.so.1",
+        "libgcc_s.so.1",
+        "libstdc++.so.6",
+        "libz.so.1",
+        "ld-linux-x86-64.so.2",
+    ):
+        assert harness._is_os_baseline_library(soname), soname
+    for soname in ("libopenblas.so.0", "libgfortran-abc123.so.5", "libfoo.so.1", "libmkl_core.so"):
+        assert not harness._is_os_baseline_library(soname), soname
+
+
+def test_verify_scorer_dt_needed_closure_passes_for_real_wheel_numpy_and_scipy() -> None:
+    """DT_NEEDED 閉包検証が実環境の wheel numpy/scipy で通ること（回帰・Codex P1 6 巡目 P1-A）。
+
+    `_scorer_dist_native_sha256` 経由で `_verify_scorer_dt_needed_closure` /
+    `_reject_pre_bound_native_mappings` の両方が実行される。実装時の実測で numpy/scipy
+    の同梱ネイティブ（`.libs/`）が `libz.so.1` へ動的リンクすることを確認したため
+    whitelist に `libz` を含めている——この回帰が崩れたら whitelist の想定が崩れた合図。
+    """
+    for name in ("numpy", "scipy"):
+        digest = harness._scorer_dist_native_sha256(name)
+        assert harness._is_sha256(digest)
+
+
+def test_verify_scorer_dt_needed_closure_fails_closed_on_unparseable_root(
+    tmp_path: Path,
+) -> None:
+    """seed の native 拡張モジュールが ELF としてパース不能なら fail-closed。"""
+    package_root = tmp_path / "fakepkg_unparseable"
+    package_root.mkdir()
+    (package_root / "_ext.cpython-311-x86_64-linux-gnu.so").write_bytes(
+        b"definitely-not-elf-bytes"
+    )
+    with pytest.raises(RuntimeError, match="DT_NEEDED を読めない"):
+        harness._verify_scorer_dt_needed_closure(
+            "numpy", package_root=package_root, natives=set()
+        )
+
+
+def test_verify_scorer_dt_needed_closure_skips_os_baseline_sonames(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """OS 基盤 soname は resolve を呼ばれずに探索を打ち切る（余計な fail-closed を防ぐ）。"""
+    import svp_rpe.melody.provenance as provenance
+
+    package_root = tmp_path / "fakepkg_baseline"
+    package_root.mkdir()
+    ext = package_root / "_ext.cpython-311-x86_64-linux-gnu.so"
+    ext.write_bytes(b"not-a-real-elf")
+
+    def _fake_elf_dynamic_info(path: Any) -> Any:
+        if Path(path).name == ext.name:
+            return (["libc.so.6", "libstdc++.so.6", "libz.so.1"], (), ())
+        return None
+
+    def _fail_if_called(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("OS baseline soname は resolve されてはならない")
+
+    monkeypatch.setattr(provenance, "_elf_dynamic_info", _fake_elf_dynamic_info)
+    monkeypatch.setattr(provenance, "_resolve_soname_without_loading", _fail_if_called)
+    harness._verify_scorer_dt_needed_closure(
+        "numpy", package_root=package_root, natives=set()
+    )
+
+
+def test_verify_scorer_dt_needed_closure_fails_closed_when_soname_unresolvable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """DT_NEEDED の soname が解決できなければ fail-closed（覆えない閉包を主張しない）。"""
+    import svp_rpe.melody.provenance as provenance
+
+    package_root = tmp_path / "fakepkg_unresolvable"
+    package_root.mkdir()
+    ext = package_root / "_ext.cpython-311-x86_64-linux-gnu.so"
+    ext.write_bytes(b"not-a-real-elf")
+
+    def _fake_elf_dynamic_info(path: Any) -> Any:
+        if Path(path).name == ext.name:
+            return (["libmissing.so.9"], (), ())
+        return None
+
+    monkeypatch.setattr(provenance, "_elf_dynamic_info", _fake_elf_dynamic_info)
+    monkeypatch.setattr(provenance, "_resolve_soname_without_loading", lambda *a, **k: None)
+    with pytest.raises(RuntimeError, match="解決できない"):
+        harness._verify_scorer_dt_needed_closure(
+            "numpy", package_root=package_root, natives=set()
+        )
+
+
+def test_verify_scorer_dt_needed_closure_fails_closed_on_external_resolution(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """DT_NEEDED が distribution 外部（BLAS/LAPACK/MKL 等）へ解決されたら fail-closed。
+
+    「natives が非空」の cardinality 検査だけでは見逃す部分ベンダリング
+    ——同梱ネイティブが一部あるのに、実際に実行される実装が外部の system-wide
+    ライブラリに動的リンクしている——を模す（Codex P1 6 巡目 P1-A の主眼）。
+    """
+    import svp_rpe.melody.provenance as provenance
+
+    package_root = tmp_path / "fakepkg_external"
+    package_root.mkdir()
+    ext = package_root / "_ext.cpython-311-x86_64-linux-gnu.so"
+    ext.write_bytes(b"not-a-real-elf")
+
+    def _fake_elf_dynamic_info(path: Any) -> Any:
+        if Path(path).name == ext.name:
+            return (["libfakeexternalblas.so.1"], (), ())
+        return None
+
+    def _fake_resolve(soname: str, *, rpath_dirs: Any = (), runpath_dirs: Any = ()) -> Any:
+        if soname == "libfakeexternalblas.so.1":
+            return Path("/usr/lib/x86_64-linux-gnu/libfakeexternalblas.so.1")
+        return None
+
+    monkeypatch.setattr(provenance, "_elf_dynamic_info", _fake_elf_dynamic_info)
+    monkeypatch.setattr(provenance, "_resolve_soname_without_loading", _fake_resolve)
+    with pytest.raises(RuntimeError, match="外部数値バックエンド"):
+        harness._verify_scorer_dt_needed_closure(
+            "numpy", package_root=package_root, natives=set()
+        )
+
+
+def test_reject_ld_preload_before_scorer_bind_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`LD_PRELOAD` が非空ならスコアラー pin の束縛前に fail-closed（Codex P1 6 巡目 P1-B）。"""
+    monkeypatch.setenv("LD_PRELOAD", "/tmp/whatever-fake-preload.so")
+    with pytest.raises(RuntimeError, match="LD_PRELOAD"):
+        harness._reject_ld_preload_before_scorer_bind()
+    with pytest.raises(RuntimeError, match="LD_PRELOAD"):
+        harness._scorer_pins()
+
+
+def test_reject_ld_preload_absent_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`LD_PRELOAD` が未設定なら束縛前チェックは何もしない（回帰）。"""
+    monkeypatch.delenv("LD_PRELOAD", raising=False)
+    harness._reject_ld_preload_before_scorer_bind()  # 例外が出ないことが期待値
+
+
+def test_parse_proc_self_maps_native_libraries_fails_closed_when_unreadable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`/proc/self/maps` を読めない環境（非 Linux 等）は fail-closed（Codex P1 6 巡目 P1-B）。"""
+    import pathlib
+
+    real_read_text = pathlib.Path.read_text
+
+    def _fake_read_text(self: Path, *args: Any, **kwargs: Any) -> str:
+        if str(self) == "/proc/self/maps":
+            raise OSError("simulated: no such platform file")
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "read_text", _fake_read_text)
+    with pytest.raises(RuntimeError, match="/proc/self/maps"):
+        harness._parse_proc_self_maps_native_libraries()
+
+
+def test_parse_proc_self_maps_native_libraries_parses_synthetic_maps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """偽 `/proc/self/maps` テキストからネイティブ共有ライブラリのパスだけを拾う。"""
+    import pathlib
+
+    real_read_text = pathlib.Path.read_text
+    fake_maps = "\n".join(
+        [
+            "7f0000000000-7f0000010000 r-xp 00000000 00:00 0                          [heap]",
+            "7f0000010000-7f0000020000 r-xp 00000000 08:01 123   "
+            "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "7f0000020000-7f0000030000 r-xp 00000000 08:01 456   "
+            "/some/where/libopenblas-fake.so.0",
+            "7f0000030000-7f0000040000 r-xp 00000000 08:01 789   "
+            "/usr/lib/x86_64-linux-gnu/libnotnative.txt",
+        ]
+    )
+
+    def _fake_read_text(self: Path, *args: Any, **kwargs: Any) -> str:
+        if str(self) == "/proc/self/maps":
+            return fake_maps
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "read_text", _fake_read_text)
+    names = {p.name for p in harness._parse_proc_self_maps_native_libraries()}
+    assert "libc.so.6" in names
+    assert "libopenblas-fake.so.0" in names
+    assert "libnotnative.txt" not in names
+
+
+def test_reject_pre_bound_native_mappings_flags_external_blas_family(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """所有パス外の BLAS 系マッピング（bytes も pin 対象と不一致）は fail-closed。"""
+    fake_external = tmp_path / "libopenblas-shadow.so.0"
+    fake_external.write_bytes(b"malicious-blas-bytes")
+    monkeypatch.setattr(
+        harness, "_parse_proc_self_maps_native_libraries", lambda: [fake_external.resolve()]
+    )
+    with pytest.raises(RuntimeError, match="BLAS"):
+        harness._reject_pre_bound_native_mappings(
+            "numpy", package_root=tmp_path / "numpy_root_nonexistent", natives=set()
+        )
+
+
+def test_reject_pre_bound_native_mappings_ignores_os_baseline_mapping(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """glibc 族・`ld.so` 等の OS 基盤マッピングは所有パス外でも対象外（設計どおり）。"""
+    unrelated_libc = tmp_path / "somewhere" / "libc.so.6"
+    unrelated_libc.parent.mkdir()
+    unrelated_libc.write_bytes(b"not-really-libc-but-named-like-it")
+    monkeypatch.setattr(
+        harness, "_parse_proc_self_maps_native_libraries", lambda: [unrelated_libc.resolve()]
+    )
+    harness._reject_pre_bound_native_mappings(
+        "numpy", package_root=tmp_path / "numpy_root_nonexistent", natives=set()
+    )  # 例外が出ないことが期待値
+
+
+def test_reject_pre_bound_native_mappings_allows_scorer_owned_mapping(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """package_root 配下からのマッピングは所有物として許容する。"""
+    package_root = tmp_path / "numpy"
+    package_root.mkdir()
+    owned_ext = package_root / "_core.cpython-311-x86_64-linux-gnu.so"
+    owned_ext.write_bytes(b"ext")
+    monkeypatch.setattr(
+        harness, "_parse_proc_self_maps_native_libraries", lambda: [owned_ext.resolve()]
+    )
+    harness._reject_pre_bound_native_mappings(
+        "numpy", package_root=package_root, natives=set()
+    )  # 例外が出ないことが期待値
+
+
+def test_reject_pre_bound_native_mappings_allows_byte_identical_duplicate_vendoring(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """basename・所在が pin 対象と食い違っても bytes が一致すれば良性（Codex P1 6 巡目 P1-B）。
+
+    実装時の実測で判明した良性の衝突: numpy と scipy が同一 gfortran ビルドを
+    それぞれ `.libs/` へ同梱すると、auditwheel の content-hash 命名規約により
+    **同じ basename・同じ bytes** のファイルが 2 か所に存在する。ELF ローダは
+    `DT_SONAME` 単位でロード済み実体を再利用するため、どちらの物理コピーが実際に
+    マップされてもおかしくない——bytes が一致する限り fail-closed にしない。
+    """
+    package_root = tmp_path / "scipy"
+    package_root.mkdir()
+    pinned = tmp_path / "scipy.libs" / "libgfortran-abc123.so.5.0.0"
+    pinned.parent.mkdir()
+    pinned.write_bytes(b"identical-gfortran-bytes")
+    mapped_elsewhere = tmp_path / "numpy.libs" / "libgfortran-abc123.so.5.0.0"
+    mapped_elsewhere.parent.mkdir()
+    mapped_elsewhere.write_bytes(b"identical-gfortran-bytes")  # 同一 bytes・別ディレクトリ
+    monkeypatch.setattr(
+        harness, "_parse_proc_self_maps_native_libraries", lambda: [mapped_elsewhere.resolve()]
+    )
+    harness._reject_pre_bound_native_mappings(
+        "scipy", package_root=package_root, natives={pinned.resolve()}
+    )  # 例外が出ないことが期待値
+
+
+def test_reject_pre_bound_native_mappings_flags_content_mismatch_for_pin_target_basename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """同名 pin 対象でも bytes が違えばすり替えの疑いとして fail-closed。"""
+    package_root = tmp_path / "scipy"
+    package_root.mkdir()
+    pinned = tmp_path / "scipy.libs" / "libgfortran-abc123.so.5.0.0"
+    pinned.parent.mkdir()
+    pinned.write_bytes(b"legit-bytes")
+    shadow = tmp_path / "elsewhere" / "libgfortran-abc123.so.5.0.0"
+    shadow.parent.mkdir()
+    shadow.write_bytes(b"tampered-bytes")
+    monkeypatch.setattr(
+        harness, "_parse_proc_self_maps_native_libraries", lambda: [shadow.resolve()]
+    )
+    with pytest.raises(RuntimeError, match="別所在"):
+        harness._reject_pre_bound_native_mappings(
+            "scipy", package_root=package_root, natives={pinned.resolve()}
+        )
+
+
 def test_scorer_runtime_packages_are_always_in_runtime_package_names() -> None:
     """スコアラー閉包は route の抽出器選択に関係なく `_runtime_package_names()` に入る。
 

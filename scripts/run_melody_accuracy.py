@@ -384,6 +384,301 @@ _SCORER_RUNTIME_PACKAGES: "Tuple[str, ...]" = ("mir_eval", "scipy", "numpy")
 # numpy/scipy 側が担う）。
 _SCORER_NATIVE_BACKEND_REQUIRED = frozenset({"numpy", "scipy"})
 
+# glibc 族 + コンパイラランタイムの OS 基盤 whitelist（Codex P1 6 巡目 P1-A）。
+# `_ffmpeg_library_closure`（`svp_rpe/melody/provenance.py`）の「OS 基盤へ広げない」
+# 線（#217）をこの DT_NEEDED 検証にも踏襲する: これらはあらゆる ELF プロセスが暗黙に
+# 持つ土台であって numpy/scipy が数値バックエンドとして選んだ実装ではないため、
+# 閉包の境界としてここで探索を止める（含めると「環境全体が推論スタック」になり
+# 誰も守れない線になる）。`libz`（zlib）は auditwheel の manylinux policy
+# （`policy.json` の `lib_whitelist`）が「常に存在すると仮定してよい外部ライブラリ」
+# として明記する対象で、実測でも scipy 同梱の `libgfortran*.so`（`.libs/`）が
+# `libz.so.1` へ動的リンクすることを確認済み（本 review 対応時の実環境）。numpy/scipy
+# が選んだ数値実装ではなく、manylinux ホイールの前提とする OS 基盤の一部として同じ
+# 線引きに含める。
+_OS_BASELINE_LIBRARY_RE = re.compile(
+    r"^(libc|libm|libpthread|libdl|librt|libgcc_s|libstdc\+\+|libz)\.so(\.\d+)*$"
+    r"|^ld(-linux[-\w]*|64)\.so(\.\d+)*$"
+)
+
+# BLAS/LAPACK 系数値バックエンドの命名規約（Codex P1 6 巡目 P1-B）。`/proc/self/maps`
+# 上でこのパターンに一致し、かつ scorer package の所有パス外にあるマッピングは
+# 「束縛前に既にロード済みの外部数値バックエンド」の疑いとして扱う。
+_BLAS_FAMILY_LIBRARY_RE = re.compile(
+    r"^lib(openblas|blas|lapack|cblas|mkl)[.\-_0-9a-zA-Z]*\.so(\.\d+)*$",
+    re.IGNORECASE,
+)
+
+
+def _is_os_baseline_library(soname: str) -> bool:
+    """`soname` が glibc 族 / libgcc_s / libstdc++ の OS 基盤ライブラリか。"""
+    return bool(_OS_BASELINE_LIBRARY_RE.match(soname))
+
+
+def _owned_by_scorer_distribution(path: Path, *, package_root: Path, natives: "set[Path]") -> bool:
+    """`path` が `name` distribution の所有物（package_root 配下 or RECORD 由来 natives）か。
+
+    P1-A（DT_NEEDED 閉包）・P1-B（事前ロード済みマッピング）の双方が同じ「所有」の
+    定義を共有する——閉包検証で「揃っている」と認めた実体だけが、事前ロード検査でも
+    正当な mapping として扱われる。
+    """
+    if path in natives:
+        return True
+    try:
+        path.relative_to(package_root)
+        return True
+    except ValueError:
+        return False
+
+
+def _verify_scorer_dt_needed_closure(
+    name: str, *, package_root: Path, natives: "set[Path]"
+) -> None:
+    """`name`（numpy/scipy）の DT_NEEDED 閉包が外部数値バックエンドへ抜けていないか検証する。
+
+    （Codex P1 6 巡目 P1-A）`_scorer_dist_native_sha256` の「RECORD にネイティブ実体が
+    非空」検査は **cardinality**（1 つでもあれば通す）しか見ないため、部分ベンダリング
+    ——同梱ネイティブが一部あるものの、実際に実行される BLAS/LAPACK 実装は RECORD が
+    把握しない外部の system-wide ライブラリに動的リンクしている——を見逃す。
+
+    起点は **package 本体配下のネイティブ拡張モジュール**（`import numpy` /
+    `import scipy` が実際に dlopen する root）に限る——`.libs` 側のファイル
+    （`libgfortran*` 等）自身は auditwheel 同梱の慣例で **自身の `DT_RPATH` を持たない**
+    ことが多く、実行時にそれでも兄弟ライブラリ（`libquadmath*` 等）を解決できるのは
+    ELF ローダが **`DT_RPATH`（`DT_RUNPATH` と違い）を依存の依存にまで継承する**
+    ためである（`_ffmpeg_library_closure` と同じ規律・#217）。`.libs` ファイルを
+    独立した起点として `rpath=()` で解決すると、この継承されたはずの RPATH が
+    無いために実在する兄弟ライブラリの解決に失敗し、実際には閉じている依存を
+    「解決不能」と誤検出する（本 P1-A の実装中に実測で確認: scipy 同梱
+    `libgfortran-8f1e9814.so.5.0.0` は自身に RPATH を持たないが、これを要求する
+    scipy 拡張モジュールの RPATH `$ORIGIN/../../scipy.libs` を継承して初めて同梱
+    `libquadmath-828275a7.so.0.0.0` を見つけられる）。
+
+    各 soname の解決先が
+
+    1. 同一 distribution の所有ファイル（package_root 配下 or `natives` 集合内）
+       → 揃っている。その実体もさらに DT_NEEDED を持ちうるので、自身の RPATH に
+       起点から継承した RPATH を連ねて再帰的に検証を続ける（二重ベンダリングされた
+       外部依存を見逃さないため）。
+    2. OS 基盤 whitelist（`_is_os_baseline_library`）→ 揃っている。ここで探索を
+       打ち切る（OS 基盤自身の依存まで遡る必要はない）。
+
+    のどちらでもなければ `RuntimeError` で fail-closed にする（soname・解決先パスの
+    両方をメッセージに残す）。package_root 起点の walk で `natives` の**全ファイルに
+    到達する**のが通常形（実測: 本環境の numpy/scipy はいずれも 100% 到達）。それでも
+    到達しないファイルが残る場合（未参照の同梱物等）は、そのファイル自身を追加の
+    起点として（自身の RPATH のみで）同じ検証にかける——「到達しないので見ない」を
+    許さない防御的な最終手段。
+
+    **dlopen は使わない**（#217 規律）——`svp_rpe.melody.provenance` が
+    `_ffmpeg_library_closure` で確立した ELF プログラムヘッダ直読み
+    （`_elf_dynamic_info`）と RPATH/RUNPATH 展開（`_object_rpath_dirs` /
+    `_object_runpath_dirs`）+ ldconfig キャッシュ相当の解決（`_resolve_soname_without_
+    loading`）をそのまま再利用する。非 ELF・パース不能な実体に当たった場合も、覆えない
+    閉包を覆ったと主張しないため fail-closed にする。
+    """
+    from svp_rpe.melody.provenance import (
+        _elf_dynamic_info,
+        _is_native_library,
+        _object_rpath_dirs,
+        _object_runpath_dirs,
+        _resolve_soname_without_loading,
+    )
+
+    roots: "list[Path]" = []
+    if package_root.is_dir():
+        roots.extend(
+            sorted(
+                path
+                for path in package_root.rglob("*")
+                if path.is_file()
+                and "__pycache__" not in path.parts
+                and _is_native_library(path)
+            )
+        )
+
+    visited: "set[Path]" = set()
+    # (対象ファイル, 継承 RPATH ディレクトリ) の pending 群。継承 RUNPATH は無い
+    # （DT_RUNPATH は依存の依存へ継承しない・#217 と同じ ffmpeg closure の規律）。
+    pending_roots: "list[tuple[Path, tuple]]" = [(root, ()) for root in roots]
+
+    def _walk(obj: Path, inherited_rpath: "tuple") -> None:
+        if obj in visited:
+            return
+        visited.add(obj)
+        info = _elf_dynamic_info(obj)
+        if info is None:
+            raise RuntimeError(
+                f"evaluate_m2_bars: {name!r} の native 実体 {obj} の DT_NEEDED を読めない"
+                "（非 ELF、または ELF ヘッダをパースできない）; 数値バックエンドの依存"
+                "閉包を覆えないため、覆ったと主張しない (fail-closed)"
+            )
+        own_rpath = _object_rpath_dirs(obj, info, inherited_rpath)
+        own_runpath = _object_runpath_dirs(obj, info)
+        for soname in info[0]:
+            if _is_os_baseline_library(soname):
+                continue  # OS 基盤: 線の外（#217 と同じ判断）。ここで探索を打ち切る。
+            resolved = _resolve_soname_without_loading(
+                soname, rpath_dirs=own_rpath, runpath_dirs=own_runpath
+            )
+            if resolved is None:
+                raise RuntimeError(
+                    f"evaluate_m2_bars: {name!r} の native 実体 {obj} が要求する soname "
+                    f"{soname!r} を解決できない; 数値バックエンドの依存閉包を覆えないため "
+                    "fail-closed"
+                )
+            if not _owned_by_scorer_distribution(
+                resolved, package_root=package_root, natives=natives
+            ):
+                raise RuntimeError(
+                    f"evaluate_m2_bars: {name!r} の native 実体 {obj} が要求する soname "
+                    f"{soname!r} が distribution 外部の {resolved} に解決された; 外部数値"
+                    "バックエンド（BLAS/LAPACK/MKL 等）への部分ベンダリングの疑いがあり、"
+                    "覆えない閉包を覆ったと主張しない (fail-closed)"
+                )
+            _walk(resolved, own_rpath)
+
+    for root, inherited in pending_roots:
+        _walk(root, inherited)
+
+    # 未到達の natives（auditwheel 同梱物の中で package_root 起点の walk が
+    # 実際に触れなかったもの）が残っていれば、それ自身を起点として追加検証する。
+    for leftover in sorted(natives - visited):
+        _walk(leftover, ())
+
+
+def _reject_ld_preload_before_scorer_bind() -> None:
+    """`LD_PRELOAD` が設定されたままスコアラー pin を束縛しない（Codex P1 6 巡目 P1-B）。
+
+    `LD_PRELOAD` は soname 解決より前にローダへ割り込み、実際にシンボルを提供する
+    実体をディスク上の「正規の」numpy/scipy 同梱ネイティブとは無関係な場所へすり替え
+    うる——`_scorer_dist_native_sha256` はディスクの bytes を hash するだけなので、
+    その bytes が「実際に実行された数値バックエンド」であるという保証が `LD_PRELOAD`
+    下では成立しない（#217 の事前ロード窓の native 版: メモリ上の実装をディスク hash
+    で検出できない）。値の中身を精査して無害と判定する経路は用意しない——
+    「実測は LD_PRELOAD の外側で行う」という運用上の要求に倒す (fail-closed)。
+    """
+    if os.environ.get("LD_PRELOAD"):
+        raise RuntimeError(
+            "evaluate_m2_bars: LD_PRELOAD が設定された状態でスコアラー pin を束縛しよう"
+            "とした; ディスク hash が実行中の数値バックエンドを代表する保証がない "
+            "(fail-closed)。LD_PRELOAD を外した状態で測り直すこと"
+        )
+
+
+def _parse_proc_self_maps_native_libraries() -> "list[Path]":
+    """`/proc/self/maps` からマップ済みのネイティブ共有ライブラリの実パスを列挙する。
+
+    （Codex P1 6 巡目 P1-B）dlopen して確認するのではなく、**既にプロセスへ mmap
+    されているファイル**を読むだけ（#217 の dlopen 回避規律）。`LD_PRELOAD` を外した
+    後でも、束縛前に sitecustomize 等が数値バックエンドを先読みしていれば、ディスク
+    hash は正規の実体と一致するのに実際に実行されるのはメモリ上の別実装——メモリ
+    mapping はディスク hash では検出できないので、専用にここで読む。読めない環境
+    （非 Linux 等）は「事前ロードが無い」ことを立証できないため fail-closed にする。
+    """
+    from svp_rpe.melody.provenance import _is_native_library
+
+    maps_path = Path("/proc/self/maps")
+    try:
+        text = maps_path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise RuntimeError(
+            "evaluate_m2_bars: /proc/self/maps を読めない（非 Linux 等）; 束縛前にロード"
+            "済みの数値バックエンドが無いことを立証できないため fail-closed "
+            f"({type(exc).__name__}: {exc})"
+        ) from exc
+
+    paths: "set[Path]" = set()
+    for line in text.splitlines():
+        fields = line.split(None, 5)
+        if len(fields) < 6:
+            continue
+        candidate = fields[5].strip()
+        if not candidate or candidate.startswith("["):
+            continue  # `[heap]` / `[stack]` 等の疑似マッピングは実ファイルでない
+        path = Path(candidate)
+        if not _is_native_library(path):
+            continue
+        paths.add(path.resolve() if path.exists() else path)
+    return sorted(paths)
+
+
+def _reject_pre_bound_native_mappings(
+    name: str, *, package_root: Path, natives: "set[Path]", use_cache: bool = True
+) -> None:
+    """`name` の pin 束縛前に、外部/別所在の数値バックエンドが既にロード済みでないか検証する。
+
+    （Codex P1 6 巡目 P1-B）`LD_PRELOAD` 環境変数チェック（`_reject_ld_preload_before_
+    scorer_bind`）だけでは、環境変数が既にクリアされた後で実体だけがメモリに残る
+    ケースや、`LD_PRELOAD` を経由しない `sitecustomize.py` 等の先読みを捉えられない。
+    `/proc/self/maps` を実際に読み、`name` distribution の所有パス（package_root /
+    RECORD 由来 `.libs`）の**外**からマップされたライブラリのうち、次のいずれかに
+    該当するものを検査する:
+
+    1. basename が BLAS 系命名規約（`_BLAS_FAMILY_LIBRARY_RE`）に一致する。
+    2. basename が pin 対象 `natives` のいずれかと一致する。
+
+    **bytes が一致すれば揃っている**——本実装中の実測で判明した良性の衝突がある:
+    auditwheel は同梱ネイティブのファイル名にビルド内容の hash を含めるため
+    （例 `libgfortran-040039e1-0352e75f.so.5.0.0`）、numpy と scipy が同一の
+    gfortran ビルドを別々の `.libs/` ディレクトリへ同梱すると、**同じ basename・
+    同じ bytes** のファイルが 2 か所に存在する。ELF ローダは `DT_SONAME` 単位で
+    ロード済み実体を再利用するため、片方の distribution 経由で既に読み込まれた
+    実体を、もう片方が指す別所在の同名ファイルの代わりに使い回すのは通常運転
+    ——bytes が同一である限り、どちらの物理コピーを指しても pin は変わらない
+    （#217「pin は bytes を代表する」の原則そのもの）。よって path が違っても
+    `file_sha256` で bytes が一致すれば通す。**bytes が違う**、または比較対象が
+    無い（basename が `natives` に無い外部由来）場合にのみ `RuntimeError` で
+    fail-closed にする——それが実際の脅威（LD_PRELOAD/sitecustomize による
+    別実装のすり替え）に対応する。
+
+    glibc 族・`ld.so` 等の OS 基盤マッピングは対象外（`_is_native_library` は拾うが、
+    上記いずれのパターンにも一致しないため自然に除外される）。
+    """
+    from svp_rpe.utils.hashing import file_sha256
+
+    mapped = _parse_proc_self_maps_native_libraries()
+    natives_by_basename: "dict[str, list[Path]]" = {}
+    for path in natives:
+        natives_by_basename.setdefault(path.name, []).append(path)
+
+    def _content_matches_a_native(mapped_path: Path, candidates: "list[Path]") -> bool:
+        if not candidates or not mapped_path.is_file():
+            return False
+        try:
+            mapped_digest = file_sha256(mapped_path, use_cache=use_cache)
+        except OSError:
+            return False
+        for candidate in candidates:
+            try:
+                if file_sha256(candidate, use_cache=use_cache) == mapped_digest:
+                    return True
+            except OSError:
+                continue
+        return False
+
+    for mapped_path in mapped:
+        basename = mapped_path.name
+        if _owned_by_scorer_distribution(mapped_path, package_root=package_root, natives=natives):
+            continue
+        is_blas_family = bool(_BLAS_FAMILY_LIBRARY_RE.match(basename))
+        candidates = natives_by_basename.get(basename, [])
+        if not is_blas_family and not candidates:
+            continue  # BLAS 命名規約にも pin 対象 basename にも該当しない一般ライブラリ
+        if _content_matches_a_native(mapped_path, candidates):
+            continue  # bytes 一致 = 良性の重複ベンダリング（上記 docstring 参照）
+        if is_blas_family:
+            raise RuntimeError(
+                f"evaluate_m2_bars: {name!r} の pin 束縛前に BLAS 系ライブラリ "
+                f"{mapped_path} が distribution の所有パス外からプロセスへ既にロード"
+                "済み（bytes も pin 対象と不一致）; ディスク hash と実行中の実装が"
+                "一致する保証がない (fail-closed)"
+            )
+        raise RuntimeError(
+            f"evaluate_m2_bars: {name!r} の pin 対象ネイティブ {basename!r} と同名だが"
+            f" 別所在 {mapped_path} からロード済みのマッピングを検出（bytes も不一致）;"
+            " ディスク hash が実行中の実装を覆う保証がない (fail-closed)"
+        )
+
 
 def _scorer_dist_native_sha256(name: str, *, use_cache: bool = True) -> str:
     """`name` の wheel 同梱ネイティブ実体（パッケージ本体ディレクトリ **外**）の pin。
@@ -409,8 +704,22 @@ def _scorer_dist_native_sha256(name: str, *, use_cache: bool = True) -> str:
     （`_SCORER_NATIVE_BACKEND_REQUIRED`）は BLAS/LAPACK 等の数値実行が本質で、pip
     wheel は必ず同梱ネイティブを持つ。この 2 つで natives が空なのは
     conda/distro/ソースビルドのように wheel の外（RECORD が把握しない場所）で外部
-    バックエンドに動的リンクしている疑いで、フル ELF 依存閉包を解決する代わりに
-    fail-closed に倒す（実測は wheel ベース環境に限定する正直会計）。
+    バックエンドに動的リンクしている疑いで、fail-closed に倒す（実測は wheel ベース
+    環境に限定する正直会計）。
+
+    **DT_NEEDED 閉包の包含証明（Codex P1 6 巡目 P1-A）**: 上の「natives 非空」検査は
+    cardinality しか見ないため、部分ベンダリング（同梱ネイティブが一部あるが実際の
+    BLAS/LAPACK 実装は外部の system-wide ライブラリに動的リンクしている）を見逃す。
+    natives が非空でも `_verify_scorer_dt_needed_closure` で実際の `DT_NEEDED` soname
+    を解決し、閉包全体が「distribution の所有物」か「OS 基盤」のどちらかで説明できる
+    ことを検証する（5 巡目時点の「フル ELF 依存閉包の解決は実装しない」という限定は
+    ここで解消済み）。
+
+    **束縛前ロード済みマッピングの拒否（Codex P1 6 巡目 P1-B）**: `LD_PRELOAD` や
+    `sitecustomize` がこの pin 束縛より前に数値バックエンドを先読みしていると、
+    ディスク hash は正規の実体と一致するのに実行はメモリ上の別実装が担いうる——
+    `_reject_pre_bound_native_mappings` が `/proc/self/maps` を読み、束縛対象の
+    natives と所在が食い違う BLAS 系マッピングを検出する。
 
     **distribution/import 所有権検証（Codex P1 4 巡目）**: `importlib.metadata` の
     メタデータ側（`distribution().files` = RECORD）と `find_spec` の実行側は、
@@ -515,6 +824,16 @@ def _scorer_dist_native_sha256(name: str, *, use_cache: bool = True) -> str:
             "実測すること"
         )
 
+    if name in _SCORER_NATIVE_BACKEND_REQUIRED:
+        # Codex P1 6 巡目: P1-B（束縛前ロード済みマッピングの拒否）→ P1-A（DT_NEEDED
+        # 閉包の包含証明）の順で検証する。ディスク上の実体を hash する前に、まず
+        # 「メモリ上の実行がその実体と一致する保証があるか」を確かめるのが筋が通る
+        # 順序（P1-A は disk-only の静的解析で、P1-B が拾う実行時の先読みまでは覆わない）。
+        _reject_pre_bound_native_mappings(
+            name, package_root=package_root, natives=natives, use_cache=use_cache
+        )
+        _verify_scorer_dt_needed_closure(name, package_root=package_root, natives=natives)
+
     return sha256_of_files(sorted(natives), use_cache=use_cache)
 
 
@@ -536,8 +855,15 @@ def _scorer_pins(*, use_cache: bool = True) -> Dict[str, Any]:
     先に読み込まれていた旧モジュールが実行される一方で hash は新しいディスクを見る
     窓が開く——first-party 閉包と同じ #217 の規律を third-party スコアラーにも
     適用する（Codex P1）。
+
+    **束縛の前に**（Codex P1 6 巡目 P1-B）`_reject_ld_preload_before_scorer_bind` で
+    `LD_PRELOAD` の非空を拒否する。値そのものの精査経路は用意しない——`LD_PRELOAD`
+    が立っている限り、以降どの pin を計算してもディスク hash が実行中の実装を代表
+    する保証がないため、計算に入る前に fail-closed で止める。
     """
     import importlib.metadata
+
+    _reject_ld_preload_before_scorer_bind()
 
     pins: Dict[str, Any] = {}
     for name in _SCORER_RUNTIME_PACKAGES:
