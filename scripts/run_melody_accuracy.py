@@ -373,6 +373,73 @@ bind_inference_code_pins()
 _SCORER_RUNTIME_PACKAGES: "Tuple[str, ...]" = ("mir_eval", "scipy", "numpy")
 
 
+def _scorer_dist_native_sha256(name: str, *, use_cache: bool = True) -> str:
+    """`name` の wheel 同梱ネイティブ実体（パッケージ本体ディレクトリ **外**）の pin。
+
+    numpy/scipy の一般的な wheel install は OpenBLAS 等の実行ネイティブ実体を
+    パッケージ本体ディレクトリの兄弟（`numpy.libs/` / `scipy.libs/`）に置く。
+    `package_code_sha256` は `find_spec` の場所（`numpy/__init__.py` を含む
+    ディレクトリ）配下しか rglob しないため、この兄弟ディレクトリを差し替えても
+    version pin・code pin のどちらも動かない——スコアラーは異なる bytes を実行するのに
+    閉包が同一と誤認される（Codex P1 2 巡目）。
+
+    `importlib.metadata.distribution(name).files`（RECORD = 配布が自己申告する
+    所有ファイル一覧）からネイティブ拡張子のファイルを列挙し、パッケージ本体
+    ディレクトリの**外**にあるものだけを対象にする（本体配下は `package_code_sha256`
+    側が既に hash 済みで、含めると二重計上になる）。空集合（mir_eval のような純
+    Python 配布、または同梱ネイティブを持たない install 形態）は空入力の sha256 を
+    返す——「無い」と「hash できない」を区別するため、RECORD 自体が引けない・列挙した
+    パスが実在しない場合は例外で fail-closed にする（「覆えない閉包を覆ったと
+    主張しない」#217 原則）。**import を起こさない**（RECORD 読みと `find_spec` のみ）。
+    """
+    import importlib.metadata
+    import importlib.util
+
+    from svp_rpe.melody.provenance import _is_native_library
+    from svp_rpe.utils.hashing import sha256_of_files
+
+    try:
+        dist = importlib.metadata.distribution(name)
+    except importlib.metadata.PackageNotFoundError:
+        # 配布自体が無い = 未導入。version pin と同じ規約で None にはできない
+        # （戻り値は str 限定）ため、「同梱ネイティブが実行されることもない」= 空入力
+        # sha256 を返す（fail-closed 対象は「導入されているのに解決できない」場合）。
+        return hashlib.sha256(b"").hexdigest()
+    if dist.files is None:
+        raise RuntimeError(
+            f"evaluate_m2_bars: distribution {name!r} の RECORD (files) が取得できない; "
+            "wheel 同梱ネイティブ実体を覆えない閉包を覆ったと主張しない (fail-closed)"
+        )
+
+    package_root: Optional[Path] = None
+    try:
+        spec = importlib.util.find_spec(name)
+    except Exception:
+        spec = None
+    if spec is not None and getattr(spec, "origin", None) not in (None, "built-in", "frozen"):
+        package_root = Path(spec.origin).resolve().parent
+
+    natives: "set[Path]" = set()
+    for record in dist.files:
+        if not _is_native_library(Path(str(record))):
+            continue
+        located = Path(str(dist.locate_file(record))).resolve()
+        if package_root is not None:
+            try:
+                located.relative_to(package_root)
+                continue  # 本体ディレクトリ配下は package_code_sha256 側が既に hash 済み
+            except ValueError:
+                pass
+        if not located.is_file():
+            raise RuntimeError(
+                f"evaluate_m2_bars: distribution {name!r} の RECORD が指すネイティブ実体 "
+                f"{located} が存在しない; 覆えない閉包を覆ったと主張しない (fail-closed)"
+            )
+        natives.add(located)
+
+    return sha256_of_files(sorted(natives), use_cache=use_cache)
+
+
 def _scorer_pins(*, use_cache: bool = True) -> Dict[str, Any]:
     """指標を計算したスコアラー閉包（mir_eval + scipy + numpy）の version / code pin。
 
@@ -381,13 +448,16 @@ def _scorer_pins(*, use_cache: bool = True) -> Dict[str, Any]:
     `mir_eval>=0.7` は上限が無く、別リリースで測った row を同一 stack の repeats と
     数えれば「別の指標実装の出力」を再現性の証拠にしてしまう（Codex P1）。そこで
     row ではなく report レベルで、実際に呼んだスコアラー閉包（`_SCORER_RUNTIME_PACKAGES`）
-    を pin する。キーは加算的な flat 形式（`{package}_version` / `{package}_code_sha256`）。
+    を pin する。キーは加算的な flat 形式（`{package}_version` / `{package}_code_sha256` /
+    `{package}_dist_native_sha256`）。3 つ目は numpy/scipy の wheel が同梱する
+    `{package}.libs/`（OpenBLAS 等）を覆う（Codex P1 2 巡目・`_scorer_dist_native_sha256`）。
 
     **import を起こさずに** 取る: version は `importlib.metadata`（配布メタデータを
-    読むだけ）、コード hash は `package_code_sha256`（find_spec で場所だけ解決）。
-    `import mir_eval` してから hash すると、先に読み込まれていた旧モジュールが実行
-    される一方で hash は新しいディスクを見る窓が開く——first-party 閉包と同じ #217 の
-    規律を third-party スコアラーにも適用する（Codex P1）。
+    読むだけ）、コード hash は `package_code_sha256`（find_spec で場所だけ解決）、
+    同梱ネイティブ hash は RECORD 読みのみ。`import mir_eval` してから hash すると、
+    先に読み込まれていた旧モジュールが実行される一方で hash は新しいディスクを見る
+    窓が開く——first-party 閉包と同じ #217 の規律を third-party スコアラーにも
+    適用する（Codex P1）。
     """
     import importlib.metadata
 
@@ -399,6 +469,7 @@ def _scorer_pins(*, use_cache: bool = True) -> Dict[str, Any]:
             version = None
         pins[f"{name}_version"] = version
         pins[f"{name}_code_sha256"] = package_code_sha256(name, use_cache=use_cache)
+        pins[f"{name}_dist_native_sha256"] = _scorer_dist_native_sha256(name, use_cache=use_cache)
     return pins
 
 
@@ -705,22 +776,26 @@ def _is_sha256(value: Any) -> bool:
 
 def _validated_scorer_pin_tuple(
     mapping: Dict[str, Any], *, context: str
-) -> "Tuple[Tuple[str, str], ...]":
+) -> "Tuple[Tuple[str, str, str], ...]":
     """report/environment の mapping からスコアラー閉包全体の pin をタプル化する。
 
     `_SCORER_RUNTIME_PACKAGES`（mir_eval + scipy + numpy、Codex P1）を順に回り、
-    各 `{name}_version` が非空文字列・`{name}_code_sha256` が真の sha256 であることを
-    fail-closed に検証する。旧実装は `mir_eval_version`/`mir_eval_code_sha256` の 2
-    キーしか見なかったため、異なる（あるいは patch された）scipy/numpy で測った
-    report が同一スコアラー stack として混ざり受理されてしまっていた（Codex P1）。
+    各 `{name}_version` が非空文字列・`{name}_code_sha256` / `{name}_dist_native_sha256`
+    が真の sha256 であることを fail-closed に検証する。旧実装は `mir_eval_version`/
+    `mir_eval_code_sha256` の 2 キーしか見なかったため、異なる（あるいは patch された）
+    scipy/numpy で測った report が同一スコアラー stack として混ざり受理されてしまって
+    いた（Codex P1）。`{name}_dist_native_sha256`（Codex P1 2 巡目）は numpy/scipy の
+    wheel が本体ディレクトリの兄弟（`{name}.libs/`）に置く OpenBLAS 等のネイティブ
+    実体を覆う——`{name}_code_sha256` は本体ディレクトリ配下しか rglob しないため、
+    この兄弟ディレクトリの差し替えは version/code pin のどちらにも現れない。
     `_require_homogeneous_scorer` / `_require_fresh_process_report_provenance` /
     verdict 転記の 3 箇所がこのヘルパーで一般化された同じ検証・同じ順序を共有する。
 
-    戻り値は `_SCORER_RUNTIME_PACKAGES` の順で `(version, code_sha256)` を並べた
-    タプル（等価比較・集合化に使える）。`context` はエラーメッセージに出す呼び出し元
-    識別子（例: `"reports[3]"` や `"測り直し report"`）。
+    戻り値は `_SCORER_RUNTIME_PACKAGES` の順で `(version, code_sha256, dist_native_sha256)`
+    を並べたタプル（等価比較・集合化に使える）。`context` はエラーメッセージに出す
+    呼び出し元識別子（例: `"reports[3]"` や `"測り直し report"`）。
     """
-    pins: List[Tuple[str, str]] = []
+    pins: List[Tuple[str, str, str]] = []
     for name in _SCORER_RUNTIME_PACKAGES:
         version = mapping.get(f"{name}_version")
         if not version or not isinstance(version, str):
@@ -735,7 +810,14 @@ def _validated_scorer_pin_tuple(
                 f"真の sha256 でない; {name} 実装を pin できない row を受理しない "
                 "(fail-closed)"
             )
-        pins.append((version, code))
+        dist_native = mapping.get(f"{name}_dist_native_sha256")
+        if not _is_sha256(dist_native):
+            raise ValueError(
+                f"evaluate_m2_bars: {context} の {name}_dist_native_sha256 {dist_native!r} "
+                f"が真の sha256 でない; {name} の wheel 同梱ネイティブ実体を pin できない "
+                "row を受理しない (fail-closed)"
+            )
+        pins.append((version, code, dist_native))
     return tuple(pins)
 
 
@@ -2636,9 +2718,10 @@ def _require_homogeneous_scorer(reports: List[Dict[str, Any]]) -> Dict[str, Any]
             "pin を名乗る verdict の証拠にしない (fail-closed)"
         )
     result: Dict[str, Any] = {}
-    for name, (version, code) in zip(_SCORER_RUNTIME_PACKAGES, pins[0]):
+    for name, (version, code, dist_native) in zip(_SCORER_RUNTIME_PACKAGES, pins[0]):
         result[f"{name}_version"] = version
         result[f"{name}_code_sha256"] = code
+        result[f"{name}_dist_native_sha256"] = dist_native
     return result
 
 

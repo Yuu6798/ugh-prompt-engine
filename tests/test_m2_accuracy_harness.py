@@ -788,10 +788,11 @@ def test_evaluate_m2_bars_records_bit_identical_repeats_on_pass() -> None:
 
 
 def test_verdict_carries_the_full_scorer_pin_closure() -> None:
-    """verdict は mir_eval だけでなく scipy/numpy の pin も 6 キー全部を運ぶ（Codex P1）。
+    """verdict は mir_eval だけでなく scipy/numpy の pin も 9 キー全部を運ぶ（Codex P1）。
 
     旧実装は `mir_eval_version`/`mir_eval_code_sha256` の 2 キーしか転記せず、verdict
-    単体からは scipy/numpy が何で測られたか読み取れなかった。
+    単体からは scipy/numpy が何で測られたか読み取れなかった。`{name}_dist_native_sha256`
+    （wheel 同梱ネイティブ実体・Codex P1 2 巡目）も同じく全パッケージ分転記される。
     """
     reports = [
         _fake_run(
@@ -807,6 +808,11 @@ def test_verdict_carries_the_full_scorer_pin_closure() -> None:
         assert verdict[f"{name}_version"] == reports[0][f"{name}_version"]
         assert harness._is_sha256(verdict[f"{name}_code_sha256"])
         assert verdict[f"{name}_code_sha256"] == reports[0][f"{name}_code_sha256"]
+        assert harness._is_sha256(verdict[f"{name}_dist_native_sha256"])
+        assert (
+            verdict[f"{name}_dist_native_sha256"]
+            == reports[0][f"{name}_dist_native_sha256"]
+        )
 
 
 def test_module_file_resolution_imports_nothing(monkeypatch) -> None:
@@ -887,6 +893,70 @@ def test_scorer_pins_cover_scipy_and_numpy_execution_closure() -> None:
         assert harness._is_sha256(pins[f"{name}_code_sha256"]), (
             f"{name}_code_sha256 が真の sha256 でない (pins={pins!r})"
         )
+
+
+def test_scorer_pins_cover_wheel_bundled_native_libraries() -> None:
+    """numpy/scipy の wheel 同梱ネイティブ実体（`{name}.libs/`）も pin される（Codex P1 2 巡目）。
+
+    OpenBLAS 等は `numpy/__init__.py` を含むディレクトリの**兄弟**（`numpy.libs/`）に
+    置かれるため、`{name}_code_sha256`（本体ディレクトリ配下のみ rglob）はこれを
+    覆わない。`{name}_dist_native_sha256` が全パッケージに存在し真の sha256 であること、
+    mir_eval（純 Python）は空入力 sha256 と一致すること、numpy はこの環境の wheel
+    install で `numpy.libs/` が実在するはずなので空入力 sha256 と**異なる**ことを固定する。
+    """
+    import hashlib
+
+    empty_input_sha256 = hashlib.sha256(b"").hexdigest()
+    pins = harness._scorer_pins()
+    for name in harness._SCORER_RUNTIME_PACKAGES:
+        key = f"{name}_dist_native_sha256"
+        assert key in pins, f"{key} が pins に無い (pins={pins!r})"
+        assert harness._is_sha256(pins[key]), f"{key} が真の sha256 でない (pins={pins!r})"
+
+    # (c) mir_eval は純 Python 配布 = 同梱ネイティブ集合が空 = 空入力 sha256 と一致する。
+    assert pins["mir_eval_dist_native_sha256"] == empty_input_sha256
+
+    # (b) numpy はこの環境（wheel install）では numpy.libs/ が実在するはず。実在しない
+    # 環境（source ビルド等）ではこの前提が崩れるため skip する。
+    import importlib.metadata
+
+    try:
+        numpy_dist = importlib.metadata.distribution("numpy")
+    except importlib.metadata.PackageNotFoundError:
+        pytest.skip("numpy が未導入")
+    numpy_libs_present = any(
+        str(record).split("/")[0].endswith(".libs") for record in (numpy_dist.files or ())
+    )
+    if not numpy_libs_present:
+        pytest.skip("この環境の numpy install に .libs 同梱ネイティブが無い")
+    assert pins["numpy_dist_native_sha256"] != empty_input_sha256
+
+
+def test_scorer_dist_native_sha256_fails_closed_when_record_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RECORD (`distribution().files`) が引けない導入済みパッケージは fail-closed（Codex P1 2 巡目）。
+
+    「覆えない閉包を覆ったと主張しない」(#217) 原則: 未導入（`PackageNotFoundError`）は
+    「同梱ネイティブが実行されることもない」= 空入力 sha256 で正しいが、**導入済みなのに
+    RECORD が読めない**場合に skip すると、実行されうる同梱ネイティブを覆わない pin を
+    「揃っている」と誤認する。
+    """
+    import importlib.metadata
+
+    class _RecordlessDistribution:
+        files = None
+
+    real_distribution = importlib.metadata.distribution
+
+    def _fake_distribution(name: str) -> Any:
+        if name == "numpy":
+            return _RecordlessDistribution()
+        return real_distribution(name)
+
+    monkeypatch.setattr(importlib.metadata, "distribution", _fake_distribution)
+    with pytest.raises(RuntimeError, match="RECORD"):
+        harness._scorer_dist_native_sha256("numpy")
 
 
 def test_scorer_runtime_packages_are_always_in_runtime_package_names() -> None:
