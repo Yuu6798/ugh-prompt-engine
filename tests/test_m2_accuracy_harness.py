@@ -69,6 +69,13 @@ def _clean_evaluator_preload(monkeypatch: pytest.MonkeyPatch):
     # 追記し続けないよう、テストごとに空へ差し替える（テスト分離。凍結タプル
     # `_PRE_BOUND_SCORER_NATIVE_MAPPINGS` 自体は上ですでに独立して正規化済み）。
     monkeypatch.setattr(harness, "_PRE_BOUND_NATIVE_MAPPING_LOG", [])
+    # `_NON_STANDARD_IMPORT_HOOKS` も同じ理由で正規化する（セルフレビュー H3）: pytest
+    # 自身が `sys.meta_path` へ `_pytest.assertion.rewrite.AssertionRewritingHook` を
+    # 挿すため、素のままだと evaluate の非標準 import hook ゲートが機構テストの前に
+    # 発火してしまう。非空のとき拒否すること自体は
+    # `test_evaluate_m2_bars_rejects_non_standard_import_hooks_evaluator_process` が
+    # 固定する。
+    monkeypatch.setattr(harness, "_NON_STANDARD_IMPORT_HOOKS", ())
     monkeypatch.setattr(harness, "_environment_execution_pins", _fake_environment_pins)
     # ハーネスはテストから import されるため直接パス実行フラグは False になる。
     # 素の CLI 起動相当へ正規化する（False の拒否自体は専用テストが固定する）。
@@ -188,6 +195,9 @@ def _fake_run(**kwargs: Any) -> Dict[str, Any]:
     # 同様に scorer ネイティブの pre-bind も正規化する（Codex P1 7 巡目。非空のとき
     # evaluate が拒否すること自体は専用テストが固定する）。
     report["pre_bound_scorer_native_mappings"] = []
+    # 同様に非標準 import hook も正規化する（セルフレビュー H3。非空のとき evaluate が
+    # 拒否すること自体は専用テストが固定する）。
+    report["non_standard_import_hooks"] = []
     return report
 
 
@@ -960,6 +970,98 @@ def test_scorer_pins_cover_scipy_and_numpy_execution_closure() -> None:
         )
 
 
+def test_scorer_runtime_packages_cover_observed_mir_eval_import_closure() -> None:
+    """H1 完全性テスト: 実測した `mir_eval.melody` の import 閉包が宣言済み集合に収まる。
+
+    holes.md H1 の手作業列挙（grep ベース）は `decorator`/`threadpoolctl` を発見した
+    が、実行可能な形で検証していなかった。本テストは fresh subprocess で
+    `import mir_eval.melody` 前後の `sys.modules` 差分を取り、新たに現れた
+    third-party トップレベル配布が `_SCORER_RUNTIME_PACKAGES` の package_root /
+    RECORD 由来ネイティブ companion（例: charset_normalizer の mypyc `.so` が
+    site-packages 直下の兄弟ファイルにある）/ stdlib のいずれかで説明できることを
+    assert する——将来 mir_eval/scipy が新しい third-party 依存を牽引するように
+    なったら、`_SCORER_RUNTIME_PACKAGES` を直さない限りこのテストが割れる構造にする。
+
+    Cython ランタイムが sys.modules へ注入する `spec` 無しの疑似モジュール
+    （`cython_runtime` / `_cython_<version>`）は、別ファイルとして差し替え可能な
+    独立の実体を持たないため対象外にする。
+    """
+    script = f"""
+import sys, sysconfig, importlib.util, importlib.metadata, re, json
+from pathlib import Path
+
+before = set(sys.modules)
+import mir_eval.melody
+after = set(sys.modules)
+new = after - before
+tops = sorted(set(n.split(".")[0] for n in new))
+
+declared = {harness._SCORER_RUNTIME_PACKAGES!r}
+
+stdlib_names = set(sys.stdlib_module_names)
+stdlib_paths = [sysconfig.get_paths().get(k) for k in ("stdlib", "platstdlib")]
+stdlib_paths = [Path(p).resolve() for p in stdlib_paths if p]
+
+declared_roots = {{}}
+declared_native_companions = set()
+for name in declared:
+    spec = importlib.util.find_spec(name)
+    if spec and spec.origin:
+        origin = Path(spec.origin).resolve()
+        declared_roots[name] = origin.parent if origin.name == "__init__.py" else origin
+    try:
+        dist = importlib.metadata.distribution(name)
+    except importlib.metadata.PackageNotFoundError:
+        continue
+    for record in (dist.files or ()):
+        try:
+            located = Path(str(dist.locate_file(record))).resolve()
+        except Exception:
+            continue
+        declared_native_companions.add(located)
+
+pseudo_allow = re.compile(r"^(cython_runtime|_cython_[0-9_]+)$")
+
+undeclared = []
+for name in tops:
+    if name in declared or name in stdlib_names or pseudo_allow.match(name):
+        continue
+    try:
+        spec = importlib.util.find_spec(name)
+    except Exception:
+        spec = None
+    origin = getattr(spec, "origin", None) if spec else None
+    if origin is None:
+        undeclared.append([name, "NO_ORIGIN"])
+        continue
+    origin_p = Path(origin).resolve()
+    if any(str(origin_p).startswith(str(p)) for p in stdlib_paths):
+        continue
+    if origin_p in declared_native_companions:
+        continue
+    covered = False
+    for droot in declared_roots.values():
+        try:
+            origin_p.relative_to(droot)
+            covered = True
+            break
+        except ValueError:
+            pass
+    if covered:
+        continue
+    undeclared.append([name, str(origin_p)])
+
+print(json.dumps(undeclared))
+"""
+    proc = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    undeclared = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert undeclared == [], (
+        f"mir_eval.melody の import 閉包に未宣言の third-party が現れた: {undeclared}; "
+        "_SCORER_RUNTIME_PACKAGES を更新すること"
+    )
+
+
 def test_scorer_pins_cover_wheel_bundled_native_libraries() -> None:
     """numpy/scipy の wheel 同梱ネイティブ実体（`{name}.libs/`）も pin される（Codex P1 2 巡目）。
 
@@ -1154,6 +1256,160 @@ def test_scorer_dist_native_sha256_still_allows_empty_natives_for_mir_eval() -> 
     assert harness._scorer_dist_native_sha256("mir_eval") == empty_input_sha256
 
 
+@pytest.mark.parametrize("name", ["numpy", "scipy"])
+def test_scorer_dist_native_sha256_fails_closed_when_required_package_missing(
+    name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """数値バックエンド必須パッケージが未導入なら fail-closed（セルフレビュー H12）。
+
+    従来は distribution 不在（`PackageNotFoundError`）を「未導入 = 同梱ネイティブが
+    実行されることもない」として空入力 sha256 を返していたが、これは
+    `_SCORER_NATIVE_BACKEND_REQUIRED`（natives 必ず立証する）の意図をこの分岐だけ
+    免れていた——`run_accuracy` が native ゲートを丸ごと skip したまま完走できる
+    非対称を塞ぐ。
+    """
+    import importlib.metadata
+
+    real_distribution = importlib.metadata.distribution
+
+    def _fake_distribution(pkg: str) -> Any:
+        if pkg == name:
+            raise importlib.metadata.PackageNotFoundError(pkg)
+        return real_distribution(pkg)
+
+    monkeypatch.setattr(importlib.metadata, "distribution", _fake_distribution)
+    with pytest.raises(RuntimeError, match="数値バックエンド必須パッケージ"):
+        harness._scorer_dist_native_sha256(name)
+
+
+def test_scorer_dist_native_sha256_still_allows_missing_mir_eval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """mir_eval（数値バックエンド必須の対象外）は未導入でも空入力 sha256 のまま（回帰）。"""
+    import hashlib
+    import importlib.metadata
+
+    real_distribution = importlib.metadata.distribution
+
+    def _fake_distribution(pkg: str) -> Any:
+        if pkg == "mir_eval":
+            raise importlib.metadata.PackageNotFoundError(pkg)
+        return real_distribution(pkg)
+
+    monkeypatch.setattr(importlib.metadata, "distribution", _fake_distribution)
+    assert harness._scorer_dist_native_sha256("mir_eval") == hashlib.sha256(b"").hexdigest()
+
+
+def test_scorer_dist_native_sha256_still_allows_missing_threadpoolctl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """threadpoolctl（単一モジュール配布・数値バックエンド必須の対象外）でも同様に回帰する。"""
+    import hashlib
+    import importlib.metadata
+
+    real_distribution = importlib.metadata.distribution
+
+    def _fake_distribution(pkg: str) -> Any:
+        if pkg == "threadpoolctl":
+            raise importlib.metadata.PackageNotFoundError(pkg)
+        return real_distribution(pkg)
+
+    monkeypatch.setattr(importlib.metadata, "distribution", _fake_distribution)
+    assert harness._scorer_dist_native_sha256("threadpoolctl") == hashlib.sha256(b"").hexdigest()
+
+
+def test_reject_sourceless_scorer_code_passes_for_real_environment() -> None:
+    """H2 の sourceless `.pyc` 検査が実環境の全 scorer パッケージで通ること（回帰）。
+
+    `_scorer_dist_native_sha256` から自動的に呼ばれるため、単独のパスの存在は
+    `test_scorer_pins_cover_wheel_bundled_native_libraries` 等が間接的に固定するが、
+    ここでは検査の実行自体を明示的に固定する。
+    """
+    for name in harness._SCORER_RUNTIME_PACKAGES:
+        harness._scorer_dist_native_sha256(name)  # 例外が出ないことが期待値
+
+
+def test_reject_sourceless_scorer_code_fails_closed_on_sourceless_top_level(
+    tmp_path: Path,
+) -> None:
+    """`find_spec` の origin 自体が `.pyc`（トップレベルの `.py` が削除された）なら fail-closed。"""
+    with pytest.raises(RuntimeError, match="sourceless"):
+        harness._reject_sourceless_scorer_code(
+            "fakepkg",
+            origin=tmp_path / "fakepkg" / "__init__.pyc",
+            package_root=tmp_path / "fakepkg",
+            is_package=True,
+        )
+
+
+def test_reject_sourceless_scorer_code_ignores_single_module_without_rglob(
+    tmp_path: Path,
+) -> None:
+    """単一モジュール配布はトップレベル origin だけ検査し、rglob はしない（サブモジュール無し）。"""
+    origin = tmp_path / "threadpoolctl.py"
+    origin.write_text("# not empty", encoding="utf-8")
+    harness._reject_sourceless_scorer_code(
+        "threadpoolctl", origin=origin, package_root=origin, is_package=False
+    )  # 例外が出ないことが期待値
+
+
+def test_reject_sourceless_scorer_code_fails_closed_on_orphan_pycache(
+    tmp_path: Path,
+) -> None:
+    """`__pycache__` 内に対応する `.py` の無い `.pyc`（stale cache/捏造）があれば fail-closed。
+
+    holes.md H2 の実測手口: `mir_eval/melody.py` を削除して `.pyc` だけを残す状況を
+    単体化する。
+    """
+    package_root = tmp_path / "fakepkg"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    pycache = package_root / "__pycache__"
+    pycache.mkdir()
+    (pycache / "melody.cpython-311.pyc").write_bytes(b"poisoned-bytecode")
+    # 対応する fakepkg/melody.py は存在しない（削除済みを模す）。
+    with pytest.raises(RuntimeError, match="sourceless"):
+        harness._reject_sourceless_scorer_code(
+            "fakepkg",
+            origin=package_root / "__init__.py",
+            package_root=package_root,
+            is_package=True,
+        )
+
+
+def test_reject_sourceless_scorer_code_fails_closed_on_orphan_bare_pyc(
+    tmp_path: Path,
+) -> None:
+    """`__pycache__` の外に直置きされた orphan `.pyc`（`SourcelessFileLoader` 経路）も fail-closed。"""
+    package_root = tmp_path / "fakepkg"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "inner.pyc").write_bytes(b"poisoned-bytecode")
+    with pytest.raises(RuntimeError, match="sourceless"):
+        harness._reject_sourceless_scorer_code(
+            "fakepkg",
+            origin=package_root / "__init__.py",
+            package_root=package_root,
+            is_package=True,
+        )
+
+
+def test_reject_sourceless_scorer_code_allows_pyc_with_sibling_source(
+    tmp_path: Path,
+) -> None:
+    """通常の（対応する `.py` がある）bytecode cache は無害——orphan だけを狙う。"""
+    package_root = tmp_path / "fakepkg"
+    package_root.mkdir()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "inner.py").write_text("", encoding="utf-8")
+    pycache = package_root / "__pycache__"
+    pycache.mkdir()
+    (pycache / "inner.cpython-311.pyc").write_bytes(b"normal-bytecode-cache")
+    harness._reject_sourceless_scorer_code(
+        "fakepkg", origin=package_root / "__init__.py", package_root=package_root, is_package=True
+    )  # 例外が出ないことが期待値
+
+
 def test_is_os_baseline_library_covers_glibc_family_and_excludes_others() -> None:
     """OS 基盤 whitelist（Codex P1 6 巡目 P1-A）は glibc 族 + libgcc_s/libstdc++/libz のみ。"""
     for soname in (
@@ -1301,7 +1557,49 @@ def test_reject_ld_preload_absent_is_noop(monkeypatch: pytest.MonkeyPatch) -> No
     harness._reject_ld_preload_before_scorer_bind()  # 例外が出ないことが期待値
 
 
-def test_parse_proc_self_maps_native_libraries_fails_closed_when_unreadable(
+@pytest.mark.parametrize("env_var", ["LD_PRELOAD", "LD_AUDIT", "LD_DYNAMIC_WEAK"])
+def test_reject_ld_preload_sibling_env_vars_fail_closed(
+    env_var: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`LD_AUDIT`/`LD_DYNAMIC_WEAK` も `LD_PRELOAD` と同格の割り込み経路（セルフレビュー H4）。"""
+    for name in harness._LD_PRELOAD_SIBLING_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(env_var, "/tmp/whatever-fake-interposer.so")
+    with pytest.raises(RuntimeError, match=env_var):
+        harness._reject_ld_preload_before_scorer_bind()
+
+
+def test_reject_ld_so_preload_file_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`/etc/ld.so.preload` が存在し非空なら fail-closed（セルフレビュー H4）。"""
+    import pathlib
+
+    for name in harness._LD_PRELOAD_SIBLING_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    real_read_bytes = pathlib.Path.read_bytes
+
+    def _fake_read_bytes(self: Path, *args: Any, **kwargs: Any) -> bytes:
+        if str(self) == "/etc/ld.so.preload":
+            return b"/tmp/evil.so\n"
+        return real_read_bytes(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "read_bytes", _fake_read_bytes)
+    with pytest.raises(RuntimeError, match="ld.so.preload"):
+        harness._reject_ld_preload_before_scorer_bind()
+
+
+def test_reject_ld_so_preload_absent_file_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`/etc/ld.so.preload` が存在しない（大半の環境）なら束縛前チェックは何もしない。"""
+    for name in harness._LD_PRELOAD_SIBLING_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    assert not Path("/etc/ld.so.preload").exists(), (
+        "この実行環境には /etc/ld.so.preload が実在する（テスト前提の drift）"
+    )
+    harness._reject_ld_preload_before_scorer_bind()  # 例外が出ないことが期待値
+
+
+def test_parse_proc_self_maps_executable_mappings_fails_closed_when_unreadable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """`/proc/self/maps` を読めない環境（非 Linux 等）は fail-closed（Codex P1 6 巡目 P1-B）。"""
@@ -1316,25 +1614,32 @@ def test_parse_proc_self_maps_native_libraries_fails_closed_when_unreadable(
 
     monkeypatch.setattr(pathlib.Path, "read_text", _fake_read_text)
     with pytest.raises(RuntimeError, match="/proc/self/maps"):
-        harness._parse_proc_self_maps_native_libraries()
+        harness._parse_proc_self_maps_executable_mappings()
 
 
-def test_parse_proc_self_maps_native_libraries_parses_synthetic_maps(
+def test_parse_proc_self_maps_executable_mappings_parses_synthetic_maps(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """偽 `/proc/self/maps` テキストからネイティブ共有ライブラリのパスだけを拾う。"""
+    """偽 `/proc/self/maps` テキストから実行可能マッピングだけを、`(deleted)` を剥がして拾う。
+
+    （セルフレビュー H5/H6）権限フィールドを先に見るため、拡張子の有無や `(deleted)`
+    注記は無関係にまず候補へ入る——分類は呼び出し側（`_reject_pre_bound_native_
+    mappings`）の責務。非実行可能（`r--p` のみ）マッピングと `[heap]` は対象外。
+    """
     import pathlib
 
     real_read_text = pathlib.Path.read_text
     fake_maps = "\n".join(
         [
-            "7f0000000000-7f0000010000 r-xp 00000000 00:00 0                          [heap]",
+            "7f0000000000-7f0000010000 r--p 00000000 00:00 0                          [heap]",
             "7f0000010000-7f0000020000 r-xp 00000000 08:01 123   "
             "/usr/lib/x86_64-linux-gnu/libc.so.6",
             "7f0000020000-7f0000030000 r-xp 00000000 08:01 456   "
             "/some/where/libopenblas-fake.so.0",
-            "7f0000030000-7f0000040000 r-xp 00000000 08:01 789   "
-            "/usr/lib/x86_64-linux-gnu/libnotnative.txt",
+            "7f0000030000-7f0000040000 r--p 00000000 08:01 789   "
+            "/usr/lib/x86_64-linux-gnu/libnotexec.so.1",
+            "7f0000040000-7f0000050000 r-xp 00000000 08:01 999   "
+            "/usr/.../libc.so.6 (deleted)",
         ]
     )
 
@@ -1344,10 +1649,13 @@ def test_parse_proc_self_maps_native_libraries_parses_synthetic_maps(
         return real_read_text(self, *args, **kwargs)
 
     monkeypatch.setattr(pathlib.Path, "read_text", _fake_read_text)
-    names = {p.name for p in harness._parse_proc_self_maps_native_libraries()}
-    assert "libc.so.6" in names
-    assert "libopenblas-fake.so.0" in names
-    assert "libnotnative.txt" not in names
+    mappings = harness._parse_proc_self_maps_executable_mappings()
+    by_path = dict(mappings)
+    assert by_path["/usr/lib/x86_64-linux-gnu/libc.so.6"] is False
+    assert by_path["/some/where/libopenblas-fake.so.0"] is False
+    assert "/usr/lib/x86_64-linux-gnu/libnotexec.so.1" not in by_path  # 非実行可能
+    assert "[heap]" not in by_path  # パスフィールドが無い匿名マッピング
+    assert by_path["/usr/.../libc.so.6"] is True  # (deleted) を剥がした上で deleted=True
 
 
 def test_reject_pre_bound_native_mappings_flags_external_blas_family(
@@ -1357,7 +1665,31 @@ def test_reject_pre_bound_native_mappings_flags_external_blas_family(
     fake_external = tmp_path / "libopenblas-shadow.so.0"
     fake_external.write_bytes(b"malicious-blas-bytes")
     monkeypatch.setattr(
-        harness, "_parse_proc_self_maps_native_libraries", lambda: [fake_external.resolve()]
+        harness,
+        "_parse_proc_self_maps_executable_mappings",
+        lambda: [(str(fake_external.resolve()), False)],
+    )
+    with pytest.raises(RuntimeError, match="BLAS"):
+        harness._reject_pre_bound_native_mappings(
+            "numpy", package_root=tmp_path / "numpy_root_nonexistent", natives=set()
+        )
+
+
+def test_reject_pre_bound_native_mappings_flags_libscipy_openblas_naming(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`libscipy_openblas*` 命名（セルフレビュー H5 の実測反証）も BLAS 系として検出する。
+
+    6 巡目時点の正規表現は "lib" 直後が "scipy_" のため実環境の主流命名
+    （`numpy.libs/libscipy_openblas64_-…so` 等）にマッチしなかった——是正後の
+    regex がこの命名も拾うことを固定する。
+    """
+    fake_external = tmp_path / "libscipy_openblas64_-deadbeef.so"
+    fake_external.write_bytes(b"malicious-blas-bytes")
+    monkeypatch.setattr(
+        harness,
+        "_parse_proc_self_maps_executable_mappings",
+        lambda: [(str(fake_external.resolve()), False)],
     )
     with pytest.raises(RuntimeError, match="BLAS"):
         harness._reject_pre_bound_native_mappings(
@@ -1373,12 +1705,14 @@ def test_reject_pre_bound_native_mappings_ignores_os_baseline_mapping(
     unrelated_libc.parent.mkdir()
     unrelated_libc.write_bytes(b"not-really-libc-but-named-like-it")
     monkeypatch.setattr(
-        harness, "_parse_proc_self_maps_native_libraries", lambda: [unrelated_libc.resolve()]
+        harness,
+        "_parse_proc_self_maps_executable_mappings",
+        lambda: [(str(unrelated_libc.resolve()), False)],
     )
     recorded = harness._reject_pre_bound_native_mappings(
         "numpy", package_root=tmp_path / "numpy_root_nonexistent", natives=set()
     )  # 例外が出ないことが期待値
-    assert recorded == []  # scorer と無関係なので記録もしない
+    assert recorded == []  # OS 基盤なので記録もしない
 
 
 def test_reject_pre_bound_native_mappings_allows_scorer_owned_mapping(
@@ -1396,7 +1730,9 @@ def test_reject_pre_bound_native_mappings_allows_scorer_owned_mapping(
     owned_ext = package_root / "_core.cpython-311-x86_64-linux-gnu.so"
     owned_ext.write_bytes(b"ext")
     monkeypatch.setattr(
-        harness, "_parse_proc_self_maps_native_libraries", lambda: [owned_ext.resolve()]
+        harness,
+        "_parse_proc_self_maps_executable_mappings",
+        lambda: [(str(owned_ext.resolve()), False)],
     )
     recorded = harness._reject_pre_bound_native_mappings(
         "numpy", package_root=package_root, natives=set()
@@ -1425,7 +1761,9 @@ def test_reject_pre_bound_native_mappings_allows_byte_identical_duplicate_vendor
     mapped_elsewhere.parent.mkdir()
     mapped_elsewhere.write_bytes(b"identical-gfortran-bytes")  # 同一 bytes・別ディレクトリ
     monkeypatch.setattr(
-        harness, "_parse_proc_self_maps_native_libraries", lambda: [mapped_elsewhere.resolve()]
+        harness,
+        "_parse_proc_self_maps_executable_mappings",
+        lambda: [(str(mapped_elsewhere.resolve()), False)],
     )
     recorded = harness._reject_pre_bound_native_mappings(
         "scipy", package_root=package_root, natives={pinned.resolve()}
@@ -1447,11 +1785,231 @@ def test_reject_pre_bound_native_mappings_flags_content_mismatch_for_pin_target_
     shadow.parent.mkdir()
     shadow.write_bytes(b"tampered-bytes")
     monkeypatch.setattr(
-        harness, "_parse_proc_self_maps_native_libraries", lambda: [shadow.resolve()]
+        harness,
+        "_parse_proc_self_maps_executable_mappings",
+        lambda: [(str(shadow.resolve()), False)],
     )
     with pytest.raises(RuntimeError, match="別所在"):
         harness._reject_pre_bound_native_mappings(
             "scipy", package_root=package_root, natives={pinned.resolve()}
+        )
+
+
+def test_reject_pre_bound_native_mappings_flags_unexplained_default_deny(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """H5 default-deny: 所有・OS基盤・first-party 連鎖のどれでもないマッピングは記録対象。
+
+    BLAS 命名にも pin 対象 basename にも一致しない、無関係を装った任意名ライブラリ
+    （`RTLD_GLOBAL` dlopen によるシンボル割り込みの疑い）も、6 巡目までは無条件で
+    見逃していた——default-deny 反転後は記録（実測経路で fail-closed）対象になる。
+    """
+    fake_arbitrary = tmp_path / "libtotally_unrelated_name.so.1"
+    fake_arbitrary.write_bytes(b"whatever")
+    monkeypatch.setattr(
+        harness,
+        "_parse_proc_self_maps_executable_mappings",
+        lambda: [(str(fake_arbitrary.resolve()), False)],
+    )
+    recorded = harness._reject_pre_bound_native_mappings(
+        "numpy", package_root=tmp_path / "numpy_root_nonexistent", natives=set()
+    )  # 例外は出ない（記録して実測経路に委ねる）
+    assert recorded == [str(fake_arbitrary.resolve())]
+
+
+def test_reject_pre_bound_native_mappings_allows_sibling_scorer_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """numpy⇔scipy 相互の `.libs/` 実体は互いの pre-bind 検査で誤検出しない（実測で判明）。
+
+    numpy/scipy が両方 import 済みの環境（demucs/crepe 経由等）で `scipy` の検査を
+    行うと、`numpy.libs/` 由来のファイルが既にマップされていることがある——これを
+    「所有パス外の BLAS 系ライブラリ」と誤認しないことを固定する。
+    """
+    scipy_root = tmp_path / "scipy"
+    scipy_root.mkdir()
+    numpy_root = tmp_path / "numpy"
+    numpy_root.mkdir()
+    numpy_libs = tmp_path / "numpy.libs"
+    numpy_libs.mkdir()
+    sibling_native = numpy_libs / "libscipy_openblas64_-cafef00d.so"
+    sibling_native.write_bytes(b"numpys-own-openblas")
+    monkeypatch.setattr(
+        harness,
+        "_parse_proc_self_maps_executable_mappings",
+        lambda: [(str(sibling_native.resolve()), False)],
+    )
+    monkeypatch.setattr(
+        harness,
+        "_sibling_scorer_backend_roots",
+        lambda exclude: [numpy_root, numpy_libs],
+    )
+    recorded = harness._reject_pre_bound_native_mappings(
+        "scipy", package_root=scipy_root, natives=set()
+    )  # 例外が出ないことが期待値
+    assert recorded == []  # 兄弟 scorer パッケージの所有物なので記録もしない
+
+
+def test_reject_pre_bound_native_mappings_allows_first_party_bind_chain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """本ハーネス自身が束縛前に import する first-party 依存（pydantic_core 等）は許容する。"""
+    package_root = tmp_path / "numpy"
+    package_root.mkdir()
+    pydantic_root = tmp_path / "pydantic_core"
+    pydantic_root.mkdir()
+    native = pydantic_root / "_pydantic_core.cpython-311-x86_64-linux-gnu.so"
+    native.write_bytes(b"pydantic-native")
+    monkeypatch.setattr(
+        harness,
+        "_parse_proc_self_maps_executable_mappings",
+        lambda: [(str(native.resolve()), False)],
+    )
+    monkeypatch.setattr(
+        harness, "_first_party_bind_chain_native_roots", lambda: [pydantic_root]
+    )
+    recorded = harness._reject_pre_bound_native_mappings(
+        "numpy", package_root=package_root, natives=set()
+    )  # 例外が出ないことが期待値
+    assert recorded == []
+
+
+def test_reject_pre_bound_native_mappings_allows_stdlib_prefix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """stdlib C 拡張（`lib-dynload/*.so` 等）は default-deny の許容クラス。"""
+    package_root = tmp_path / "numpy"
+    package_root.mkdir()
+    stdlib_dir = tmp_path / "stdlib_prefix"
+    lib_dynload = stdlib_dir / "lib-dynload"
+    lib_dynload.mkdir(parents=True)
+    ext = lib_dynload / "_bz2.cpython-311-x86_64-linux-gnu.so"
+    ext.write_bytes(b"stdlib-ext")
+    monkeypatch.setattr(
+        harness,
+        "_parse_proc_self_maps_executable_mappings",
+        lambda: [(str(ext.resolve()), False)],
+    )
+    monkeypatch.setattr(harness, "_stdlib_prefixes", lambda: [stdlib_dir.resolve()])
+    recorded = harness._reject_pre_bound_native_mappings(
+        "numpy", package_root=package_root, natives=set()
+    )  # 例外が出ないことが期待値
+    assert recorded == []
+
+
+def test_reject_pre_bound_native_mappings_flags_deleted_non_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`(deleted)` かつ OS 基盤でない実行マッピングは即 fail-closed（セルフレビュー H6）。
+
+    削除済み実体は hash 突合が原理的に不能——bytes 一致による救済の余地が無い。
+    """
+    monkeypatch.setattr(
+        harness,
+        "_parse_proc_self_maps_executable_mappings",
+        lambda: [("/usr/lib/x86_64-linux-gnu/libscipy_openblas_evil.so", True)],
+    )
+    with pytest.raises(RuntimeError, match="削除済み"):
+        harness._reject_pre_bound_native_mappings(
+            "numpy", package_root=tmp_path / "numpy_root_nonexistent", natives=set()
+        )
+
+
+def test_reject_pre_bound_native_mappings_allows_deleted_os_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`(deleted)` でも OS ツールチェーン（`apt upgrade` 置換等）は良性の通常運転。"""
+    monkeypatch.setattr(
+        harness,
+        "_parse_proc_self_maps_executable_mappings",
+        lambda: [("/usr/lib/x86_64-linux-gnu/libc.so.6", True)],
+    )
+    recorded = harness._reject_pre_bound_native_mappings(
+        "numpy", package_root=tmp_path / "numpy_root_nonexistent", natives=set()
+    )  # 例外が出ないことが期待値
+    assert recorded == []
+
+
+def test_reject_pre_bound_native_mappings_flags_memfd_fileless_mapping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`memfd:` 由来の fileless 実行マッピングは即 fail-closed（セルフレビュー H6）。"""
+    monkeypatch.setattr(
+        harness,
+        "_parse_proc_self_maps_executable_mappings",
+        lambda: [("/memfd:pwn", True)],
+    )
+    with pytest.raises(RuntimeError, match="memfd"):
+        harness._reject_pre_bound_native_mappings(
+            "numpy", package_root=tmp_path / "numpy_root_nonexistent", natives=set()
+        )
+
+
+def test_reject_pre_bound_native_mappings_flags_extensionless_executable_mapping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """拡張子なしの実行マッピング（本プロセスの解釈系実行ファイル以外）は fail-closed。"""
+    monkeypatch.setattr(
+        harness,
+        "_parse_proc_self_maps_executable_mappings",
+        lambda: [("/tmp/blob-without-extension", False)],
+    )
+    with pytest.raises(RuntimeError, match="拡張子なし"):
+        harness._reject_pre_bound_native_mappings(
+            "numpy", package_root=tmp_path / "numpy_root_nonexistent", natives=set()
+        )
+
+
+def test_reject_pre_bound_native_mappings_allows_interpreter_executable_itself(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """本プロセスの解釈系実行ファイル自身（拡張子なし）は許容する。
+
+    `/proc/self/maps` はカーネルが解決した実ファイルパスを報告する（`sys.executable`
+    がシンボリックリンク経由の起動コマンドでも、maps 上は解決済みの実体パスになる）
+    ため、テストでも `.resolve()` 後の文字列を使う。
+    """
+    import sys as _sys
+
+    resolved_executable = str(Path(_sys.executable).resolve())
+    monkeypatch.setattr(
+        harness,
+        "_parse_proc_self_maps_executable_mappings",
+        lambda: [(resolved_executable, False)],
+    )
+    recorded = harness._reject_pre_bound_native_mappings(
+        "numpy", package_root=tmp_path / "numpy_root_nonexistent", natives=set()
+    )  # 例外が出ないことが期待値
+    assert recorded == []
+
+
+def test_reject_pre_bound_native_mappings_allows_kernel_anonymous_mapping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`[vdso]`/`[vsyscall]` はカーネル注入の無害な匿名実行マッピング（セルフレビュー H11）。"""
+    monkeypatch.setattr(
+        harness,
+        "_parse_proc_self_maps_executable_mappings",
+        lambda: [("[vdso]", False), ("[vsyscall]", False)],
+    )
+    recorded = harness._reject_pre_bound_native_mappings(
+        "numpy", package_root=tmp_path / "numpy_root_nonexistent", natives=set()
+    )  # 例外が出ないことが期待値
+    assert recorded == []
+
+
+def test_reject_pre_bound_native_mappings_flags_non_allowlisted_anonymous_mapping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """許容外の匿名実行マッピングは JIT/手動 mmap ロードの疑いとして fail-closed（H11）。"""
+    monkeypatch.setattr(
+        harness,
+        "_parse_proc_self_maps_executable_mappings",
+        lambda: [("[some_unexpected_anon_region]", False)],
+    )
+    with pytest.raises(RuntimeError, match="匿名実行マッピング"):
+        harness._reject_pre_bound_native_mappings(
+            "numpy", package_root=tmp_path / "numpy_root_nonexistent", natives=set()
         )
 
 
@@ -2692,6 +3250,272 @@ def test_evaluate_m2_bars_rejects_pre_bound_scorer_native_mappings_evaluator_pro
         )
 
 
+def test_evaluate_m2_bars_rejects_non_standard_import_hooks_evaluator_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """評価器プロセス自身が非標準 import hook を検出したら publish しない（セルフレビュー H3）。
+
+    `_clean_evaluator_preload` が `_NON_STANDARD_IMPORT_HOOKS` をテストごとに空へ
+    正規化するため、ここでは直接 monkeypatch で非空にし実測経路の拒否を確認する。
+    """
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    monkeypatch.setattr(
+        harness, "_NON_STANDARD_IMPORT_HOOKS", ("meta_path:evil.EvilFinder",)
+    )
+    with pytest.raises(RuntimeError, match="非標準の import hook"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+def test_evaluate_m2_bars_rejects_evaluator_process_running_with_optimize_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """評価器プロセス自身が `-O`/`-OO` 実行なら publish しない（セルフレビュー H9）。"""
+    import types
+
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    monkeypatch.setattr(sys, "flags", types.SimpleNamespace(optimize=1))
+    with pytest.raises(RuntimeError, match="-O/-OO"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+def test_non_standard_import_hooks_detects_injected_meta_path_finder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_non_standard_import_hooks` が標準 3 finder 以外を検出する（セルフレビュー H3 単体）。"""
+
+    class _EvilFinder:
+        pass
+
+    monkeypatch.setattr(sys, "meta_path", [*sys.meta_path, _EvilFinder()])
+    findings = harness._non_standard_import_hooks()
+    assert any("EvilFinder" in f for f in findings), findings
+
+
+def test_non_standard_import_hooks_allows_distutils_hack_finder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """実測で確認済みの `_distutils_hack.DistutilsMetaFinder` は許容する（H3 の教訓）。"""
+
+    class _FakeDistutilsMetaFinder:
+        pass
+
+    _FakeDistutilsMetaFinder.__module__ = "_distutils_hack"
+    _FakeDistutilsMetaFinder.__qualname__ = "DistutilsMetaFinder"
+    monkeypatch.setattr(sys, "meta_path", [*sys.meta_path, _FakeDistutilsMetaFinder()])
+    findings = harness._non_standard_import_hooks()
+    assert not any("DistutilsMetaFinder" in f for f in findings), findings
+
+
+def test_non_standard_import_hooks_clean_in_real_environment() -> None:
+    """実環境（本プロセス）の meta_path/path_hooks/path_importer_cache は非標準ゼロ（回帰）。
+
+    pytest 自身が挿す assertion-rewrite finder は autouse fixture が正規化しない限り
+    非空になる——本テストは fixture 正規化「後」の値（モジュール属性）ではなく
+    `_non_standard_import_hooks()` を直接呼ぶため、pytest 由来の非標準 1 件
+    （`_pytest.assertion.rewrite.AssertionRewritingHook`）を許容した上で検証する。
+    """
+    findings = harness._non_standard_import_hooks()
+    assert all("AssertionRewritingHook" in f for f in findings), findings
+
+
+def test_qualname_of_distinguishes_classes_functions_and_instances() -> None:
+    """`_qualname_of` がクラス・関数・インスタンスのどれでも正しい qualname を返す（回帰）。
+
+    実装中に実測で踏んだ不具合: 関数を先に `type()` へ通すと `builtins.function` に
+    潰れ、`FileFinder.path_hook` の closure が標準 hook と認識されなくなっていた。
+    """
+
+    def _sample_function() -> None:
+        pass
+
+    class _SampleClass:
+        pass
+
+    # クラスオブジェクト自体・関数・インスタンスのいずれも自身の qualname を返す
+    # （`type()` に通してから読むと関数が `builtins.function` に潰れる不具合の回帰）。
+    expected_class_qualname = f"{_SampleClass.__module__}.{_SampleClass.__qualname__}"
+    expected_function_qualname = f"{_sample_function.__module__}.{_sample_function.__qualname__}"
+    assert harness._qualname_of(_SampleClass) == expected_class_qualname
+    assert harness._qualname_of(_sample_function) == expected_function_qualname
+    assert harness._qualname_of(_SampleClass()) == expected_class_qualname
+    assert harness._qualname_of(_sample_function) != "builtins.function"
+
+
+def test_run_accuracy_records_numeric_runtime_config_and_execution_paths() -> None:
+    """H7/H9: report に実行時数値構成・実行パス・-O フラグが記録される。"""
+    report = harness.run_accuracy(
+        categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+    )
+    config = report["numeric_runtime_config"]
+    assert set(config) == {"env", "cpu_count", "sched_affinity_count"}
+    assert isinstance(config["env"], dict)
+    assert report["sys_flags_optimize"] == 0
+    paths = report["execution_paths"]
+    assert set(paths) == {"sys_path", "PYTHONPATH", "LD_LIBRARY_PATH", "sys_executable"}
+    assert isinstance(paths["sys_path"], list)
+
+
+def test_require_homogeneous_numeric_runtime_config_passes_when_identical() -> None:
+    """repeats 間で numeric_runtime_config が一致していれば通る（H7）。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    result = harness._require_homogeneous_numeric_runtime_config(reports)
+    assert result == reports[0]["numeric_runtime_config"]
+
+
+def test_require_homogeneous_numeric_runtime_config_rejects_mismatch() -> None:
+    """repeats 間で numeric_runtime_config が食い違えば fail-closed（H7）。
+
+    実測済みの事故（`median_cent_error` のバッチ間往復 1.352838 ↔ 1.353400）は
+    スレッド数等の実行時構成差が原因と推定される——この検査はその条件付き bit 一致を
+    「決定論の証拠」として誤って verdict に載せないための同質性ゲート。
+    """
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    reports[1]["numeric_runtime_config"] = dict(
+        reports[1]["numeric_runtime_config"], cpu_count=1
+    )
+    with pytest.raises(ValueError, match="numeric_runtime_config"):
+        harness._require_homogeneous_numeric_runtime_config(reports)
+
+
+def test_require_homogeneous_numeric_runtime_config_rejects_missing_field() -> None:
+    """`numeric_runtime_config` を欠く report は publish 可能な実測にしない（H7）。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    del reports[1]["numeric_runtime_config"]
+    with pytest.raises(ValueError, match="numeric_runtime_config"):
+        harness._require_homogeneous_numeric_runtime_config(reports)
+
+
+def test_evaluate_m2_bars_rejects_repeats_with_mismatched_numeric_runtime_config() -> None:
+    """evaluate 全体でも numeric_runtime_config の repeats 間不一致を fail-closed にする（H7）。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    reports[1]["numeric_runtime_config"] = dict(
+        reports[1]["numeric_runtime_config"], sched_affinity_count=1
+    )
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="numeric_runtime_config"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+def test_evaluate_m2_bars_rejects_reports_with_optimize_flag() -> None:
+    """report が `sys_flags_optimize != 0` を名乗るなら publish 可能な実測にしない（H9）。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    reports[0]["sys_flags_optimize"] = 2
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="-O/-OO"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+def test_evaluate_m2_bars_rejects_reports_missing_optimize_flag_field() -> None:
+    """`sys_flags_optimize` を欠く report は publish 可能な実測にしない（H9）。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    del reports[0]["sys_flags_optimize"]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="sys_flags_optimize"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+def test_evaluate_m2_bars_rejects_reports_with_non_standard_import_hooks() -> None:
+    """report が非標準 import hook を名乗るなら publish 可能な実測にしない（H3）。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    reports[0]["non_standard_import_hooks"] = ["meta_path:evil.EvilFinder"]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="非標準の import hook"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+def test_evaluate_m2_bars_rejects_reports_missing_non_standard_import_hooks_field() -> None:
+    """`non_standard_import_hooks` を欠く report は publish 可能な実測にしない（H3）。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    del reports[0]["non_standard_import_hooks"]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="non_standard_import_hooks"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+def test_require_scorer_modules_match_pinned_origin_passes_in_real_environment() -> None:
+    """H8: 実環境で import 済み scorer module の origin が束縛時と一致する（回帰）。"""
+    import numpy  # noqa: F401
+    import scipy  # noqa: F401
+
+    harness._require_scorer_modules_match_pinned_origin()  # 例外が出ないことが期待値
+
+
+def test_require_scorer_modules_match_pinned_origin_fails_closed_on_origin_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """swap-and-restore の疑い（import 済み module の origin が束縛時と別）は fail-closed（H8）。"""
+    monkeypatch.setitem(
+        harness._SCORER_PINNED_ORIGINS, "numpy", "/totally/different/path/numpy/__init__.py"
+    )
+    with pytest.raises(RuntimeError, match="束縛時に解決した"):
+        harness._require_scorer_modules_match_pinned_origin()
+
+
+def test_require_scorer_modules_match_pinned_origin_fails_closed_on_non_source_loader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """import 済み module の loader が `SourceFileLoader` でなければ fail-closed（H8・H2 の実行時版）。"""
+    import types as _types
+
+    class _FakeLoader:
+        pass
+
+    fake_module = _types.SimpleNamespace(
+        __spec__=_types.SimpleNamespace(
+            origin=harness._SCORER_PINNED_ORIGINS["numpy"], loader=_FakeLoader()
+        )
+    )
+    monkeypatch.setitem(sys.modules, "numpy", fake_module)
+    with pytest.raises(RuntimeError, match="loader"):
+        harness._require_scorer_modules_match_pinned_origin()
+
+
 @pytest.mark.parametrize(
     ("mutate", "expect"),
     [
@@ -3340,6 +4164,8 @@ def test_fresh_process_report_provenance_gates() -> None:
         **scorer,
         "harness_loaded_as_main": True,
         "pre_bound_scorer_native_mappings": [],
+        "non_standard_import_hooks": [],
+        "sys_flags_optimize": 0,
         "specs_sha256": frozen_specs,
     }
     harness._require_fresh_process_report_provenance(
@@ -3359,6 +4185,10 @@ def test_fresh_process_report_provenance_gates() -> None:
         # (e) scorer ネイティブが束縛前に既にロード済みだった子プロセスも拒否する
         # （Codex P1 7 巡目）: mmap 済み実体は disk hash で検出できない。
         ({"pre_bound_scorer_native_mappings": ["/fake/libopenblas-shadow.so.0"]}, "束縛前"),
+        # (f) 非標準 import hook が束縛前に存在した子プロセスも拒否する（セルフレビュー H3）。
+        ({"non_standard_import_hooks": ["meta_path:evil.EvilFinder"]}, "非標準の import hook"),
+        # (g) -O/-OO 実行の子プロセスも拒否する（セルフレビュー H9）。
+        ({"sys_flags_optimize": 1}, r"-O/-OO"),
         ({"specs_sha256": hashlib.sha256(b"other").hexdigest()}, "凍結 specs"),
     ]:
         with pytest.raises(RuntimeError, match=pattern):

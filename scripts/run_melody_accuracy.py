@@ -329,6 +329,68 @@ def _preloaded_seed_modules() -> List[str]:
 _LOADED_GENERATOR_CODE_SHA256 = _generator_code_sha256()
 
 
+_ALLOWED_SCORER_LOADER_QUALNAME = "_frozen_importlib_external.SourceFileLoader"
+
+
+def _require_scorer_modules_match_pinned_origin() -> None:
+    """post-run: import 済み scorer module の実行対象が束縛時の origin と一致するかを検証する。
+
+    （セルフレビュー H8）束縛（`_scorer_pins()`）は `import numpy`/`mir_eval` より前に
+    行われる正しい順序だが、束縛後に「実行された module オブジェクトが pin した
+    ファイル由来か」を確認する仕掛けがこれまで無かった。`_require_unchanged_since_
+    load()`（ディスクの再 hash）は**ディスク上の bytes**しか見ないため、以下は
+    素通りする: (a) hash 後・import 前に site-packages を差し替え、import 後に
+    元へ戻す（swap-and-restore）——pre/post の digest は一致するが実行だけが別
+    bytes。入力 WAV に対しては fd hash + `chmod 0400`（`_sha256_of_fd` 経由）で
+    この窓を塞いだが、コードに対しては同じ防御が無かった。
+
+    ここでは import 済み（`sys.modules` に載っている）scorer module について
+    `__spec__.origin` が束縛時に `find_spec` で解決した origin
+    （`_SCORER_PINNED_ORIGINS`）と一致することを要求する。加えて `__spec__.loader`
+    の型が `SourceFileLoader` であることも要求する（H2 の sourceless `.pyc` 検査を
+    ディスク走査だけでなく実行時の loader 型でも defense-in-depth する）。
+
+    **境界の正直会計**: この検査は「読み込まれた module オブジェクトの出自」しか
+    見ない。sitecustomize 等がロード**後**に `mir_eval.melody.evaluate` 自体を
+    monkeypatch（メモリ上の関数オブジェクト差し替え）する攻撃は、`__spec__.origin`
+    が無傷のまま起こりうるため対象外——同 uid 攻撃者がプロセスメモリを直接書ける
+    境界は本 PR が既に明示的に線引き済み（fd hash 保護と同じ前提）。まだ import
+    されていないパッケージ（run 経路によっては charset_normalizer 等が実際には
+    呼ばれないことがありうる）は静かにスキップする——import されていない module は
+    実行されてもいないので、origin の不一致という懸念自体が発生しない。
+    """
+    for name in _SCORER_RUNTIME_PACKAGES:
+        module = sys.modules.get(name)
+        if module is None:
+            continue
+        pinned_origin = _SCORER_PINNED_ORIGINS.get(name)
+        if pinned_origin is None:
+            continue  # 束縛時点で origin を解決できなかった（walk 対象外）
+        module_spec = getattr(module, "__spec__", None)
+        module_origin = getattr(module_spec, "origin", None) if module_spec else None
+        if not module_origin or module_origin in ("built-in", "frozen"):
+            raise RuntimeError(
+                f"evaluate_m2_bars: import 済み {name!r} の __spec__.origin を解決でき"
+                "ない; 束縛時の origin と突き合わせられないため fail-closed"
+            )
+        actual_origin = str(Path(module_origin).resolve())
+        if actual_origin != pinned_origin:
+            raise RuntimeError(
+                f"evaluate_m2_bars: import 済み {name!r} の実行対象 {actual_origin} が"
+                f" 束縛時に解決した {pinned_origin} と別; swap-and-restore の疑いがあり"
+                "pin が実行された bytes を代表する保証がない (fail-closed)"
+            )
+        loader = getattr(module_spec, "loader", None)
+        loader_qualname = _qualname_of(loader) if loader is not None else None
+        if loader_qualname != _ALLOWED_SCORER_LOADER_QUALNAME:
+            raise RuntimeError(
+                f"evaluate_m2_bars: import 済み {name!r} の loader が "
+                f"{loader_qualname!r}（期待: {_ALLOWED_SCORER_LOADER_QUALNAME!r}）; "
+                "sourceless .pyc 等の非標準 loader 経路で実行された疑いがあり "
+                "fail-closed"
+            )
+
+
 def _require_unchanged_since_load() -> None:
     """ロード時に pin したコード（first-party 閉包・スコアラー）の不変を要求する。"""
     current = _generator_code_sha256()
@@ -348,6 +410,8 @@ def _require_unchanged_since_load() -> None:
             "この run の pin は測定を代表しない — プロセスを再起動して測り直すこと "
             "(fail-closed)"
         )
+    # H8: import 済み scorer module の実行対象が束縛時の origin と一致するかも検証する。
+    _require_scorer_modules_match_pinned_origin()
 
 
 from svp_rpe.melody.provenance import bind_inference_code_pins, package_code_sha256  # noqa: E402
@@ -370,7 +434,39 @@ bind_inference_code_pins()
 # （`_EXTRACTOR_CODE_PACKAGES` が抽出器ごとに保持する librosa/resampy/soxr/numba 等）は
 # 抽出器オーケストレーションの閉包であって **スコアラー経路には無い**ため、ここには
 # 含めない（二重計上・責務混在を避ける）。
-_SCORER_RUNTIME_PACKAGES: "Tuple[str, ...]" = ("mir_eval", "scipy", "numpy")
+#
+# **閉包拡張（セルフレビュー H1）**: 手書きの 3 パッケージ列挙は実測（fresh subprocess
+# の `import mir_eval.melody` 前後の sys.modules 差分を third-party distribution まで
+# 絞り込み）に対して不完全だった。実際に実行される third-party トップレベル配布:
+# `mir_eval/util.py:9` の `from decorator import decorator`（`melody.evaluate` が
+# `util.filter_kwargs` 経由で全指標に適用するラッパ実装そのもの）、`threadpoolctl`
+# （`scipy.io.wavfile` 系のロードで牽引される・BLAS スレッド数を実行時に書き換える
+# 実装）に加え、**本実測で新たに判明**した `charset_normalizer`
+# （`scipy._lib.array_api_compat.numpy` が `from numpy import *` で numpy の遅延
+# submodule `numpy.f2py` に触れ、`numpy/f2py/crackfortran.py` が
+# `try: import charset_normalizer except ImportError: charset_normalizer = None`
+# で読み込む——numpy 自身にとっては optional だが、本環境では実際に import され
+# real な third-party 実行 bytes になる）。3 つとも `numpy/` `scipy/` `mir_eval/`
+# の外に単体パッケージとして存在するため `package_code_sha256` の rglob に一切
+# 入らない（decorator/threadpoolctl は純 Python、charset_normalizer は mypyc
+# コンパイル済み `.so` を site-packages 直下の兄弟ファイルとして持つ——後述
+# `_SCORER_NATIVE_BACKEND_REQUIRED` 非対象でも `_scorer_dist_native_sha256` の
+# 汎用 RECORD 走査が自動的に拾う）。
+#
+# 「これで全部か」を手作業の再監査に頼らないため、
+# `test_scorer_runtime_packages_cover_observed_mir_eval_import_closure`
+# （fresh subprocess で実測し、観測された third-party トップレベルが
+# `_SCORER_RUNTIME_PACKAGES` の外に出ないことを assert）を追加する——将来 mir_eval /
+# scipy が新しい third-party 依存を牽引するようになったら、この定数を直さない限り
+# テストが割れる構造にする。
+_SCORER_RUNTIME_PACKAGES: "Tuple[str, ...]" = (
+    "mir_eval",
+    "scipy",
+    "numpy",
+    "decorator",
+    "threadpoolctl",
+    "charset_normalizer",
+)
 
 # `_scorer_dist_native_sha256` が同梱ネイティブ実体の**非空**を要求するパッケージ
 # （Codex P1 5 巡目）。numpy/scipy は BLAS/LAPACK 等の数値バックエンドのネイティブ
@@ -400,18 +496,153 @@ _OS_BASELINE_LIBRARY_RE = re.compile(
     r"|^ld(-linux[-\w]*|64)\.so(\.\d+)*$"
 )
 
-# BLAS/LAPACK 系数値バックエンドの命名規約（Codex P1 6 巡目 P1-B）。`/proc/self/maps`
-# 上でこのパターンに一致し、かつ scorer package の所有パス外にあるマッピングは
-# 「束縛前に既にロード済みの外部数値バックエンド」の疑いとして扱う。
+# BLAS/LAPACK 系数値バックエンドの命名規約（Codex P1 6 巡目 P1-B、セルフレビュー H5 で
+# 是正）。`/proc/self/maps` 上でこのパターンに一致し、かつ scorer package の所有パス外に
+# あるマッピングは「束縛前に既にロード済みの外部数値バックエンド」の疑いとして扱う。
+# **H5 実測反証**: 本環境で実際に実行される OpenBLAS の実体名は
+# `numpy.libs/libscipy_openblas64_-32a4b2a6.so` / `scipy.libs/libscipy_openblas-
+# 6cdc3b4a.so`（"scipy_openblas" という共有ブランディングの wheel、numpy 2.x /
+# scipy が共用）——旧正規表現は "lib" 直後が "scipy_" のため**どちらにもマッチしない**
+# ことを実測で確認した。`(scipy_)?` を任意プレフィックスとして許容する。この regex
+# 自体は H5 の default-deny（`_reject_pre_bound_native_mappings` 本体）の**多層防御**
+# として残す（default-deny だけで已に捕捉されるが、BLAS 命名に一致するものは
+# メッセージで名指しして原因究明を早める）。
 _BLAS_FAMILY_LIBRARY_RE = re.compile(
-    r"^lib(openblas|blas|lapack|cblas|mkl)[.\-_0-9a-zA-Z]*\.so(\.\d+)*$",
+    r"^lib(scipy_)?(openblas|blas|lapack|cblas|mkl)[.\-_0-9a-zA-Z]*\.so(\.\d+)*$",
     re.IGNORECASE,
 )
+
+# CPython の stdlib C 拡張・python 本体が動的リンクする OS ツールチェーンライブラリ
+# （セルフレビュー H5）。`_OS_BASELINE_LIBRARY_RE`（DT_NEEDED 検証専用、numpy/scipy 自身の
+# 閉包にしか使わない狭い集合）とは別に、`/proc/self/maps` の default-deny 検査
+# （`_reject_pre_bound_native_mappings`）はプロセス全体を見るため、Python 自身の stdlib
+# C 拡張（`_hashlib`→libcrypto、`_bz2`→libbz2、`_lzma`→liblzma、`_uuid`→libuuid、xml
+# 解析→libexpat 等）が動的リンクする、より広い「解釈系ツールチェーンの一部」を許容する
+# 必要がある——実測（fresh CLI で `bind_inference_code_pins()` 直後の maps）でこれらが
+# 現に写像されることを確認済み。
+_INTERPRETER_TOOLCHAIN_LIBRARY_RE = re.compile(
+    r"^(libc|libm|libpthread|libdl|librt|libgcc_s|libstdc\+\+|libz"
+    r"|libbz2|libcrypto|libexpat|liblzma|libuuid)\.so(\.\d+)*$"
+    r"|^ld(-linux[-\w]*|64)\.so(\.\d+)*$"
+)
+
+# 匿名（ファイル非バックエンド）実行マッピングのうち、カーネルが常に注入する無害な
+# 疑似マッピング（セルフレビュー H11）。実測（fresh CLI）で他の匿名実行マッピングが
+# 無いことを確認済み——これ以外の匿名実行マッピングは境界の外の脅威（JIT/手動 mmap
+# ロード）として fail-closed にする。
+_ANONYMOUS_EXECUTABLE_MAPPING_ALLOWLIST = frozenset({"[vdso]", "[vsyscall]"})
+
+# 束縛前に本ハーネス自身が import する first-party 依存の native 実体（セルフレビュー
+# H5）。`bind_inference_code_pins()`（本ファイル冒頭、scorer pin 束縛より前）が
+# `svp_rpe.melody.provenance` を import し、それが pydantic（`svp_rpe` の Model 基盤・
+# CLAUDE.md 記載）を牽引する——実測で `pydantic_core` の compiled 実体
+# （`_pydantic_core.cpython-*.so`）が束縛時点で既に mmap されていることを確認済み。
+# これは攻撃ではなく本ハーネス自身の正当な import 連鎖なので、default-deny の対象から
+# 除く。ハードコードされたファイル名ではなく `find_spec` 解決で判定するため、
+# pydantic のバージョン更新（ファイル名のハッシュ変化）に自動追随する。
+_FIRST_PARTY_BIND_CHAIN_PACKAGES: "Tuple[str, ...]" = ("pydantic_core", "pydantic")
 
 
 def _is_os_baseline_library(soname: str) -> bool:
     """`soname` が glibc 族 / libgcc_s / libstdc++ の OS 基盤ライブラリか。"""
     return bool(_OS_BASELINE_LIBRARY_RE.match(soname))
+
+
+def _is_interpreter_toolchain_library(basename: str) -> bool:
+    """`basename` が CPython 本体・stdlib C 拡張が動的リンクする OS ツールチェーンか。"""
+    return bool(_INTERPRETER_TOOLCHAIN_LIBRARY_RE.match(basename))
+
+
+def _sibling_scorer_backend_roots(exclude: str) -> "list[Path]":
+    """`_SCORER_NATIVE_BACKEND_REQUIRED` のうち `exclude` 以外のパッケージの許容ルート。
+
+    numpy/scipy は互いの BLAS 実体（`{pkg}.libs/`）を実行時に共有しうる——本実装中の
+    実測で判明: 両方が同一プロセスに import 済みだと、片方の pin 束縛検査
+    （例えば `scipy` 側）の時点で、もう片方（`numpy`）の `.libs/` 由来ファイルが
+    既に mmap されている（`numpy.libs/libscipy_openblas64_-…so` は `scipy` の
+    `natives`/`package_root` のどちらにも属さない）。これを「所有パス外の BLAS 系
+    ライブラリ」と誤認すると、pytest 等 numpy/scipy が両方 import 済みの環境で
+    default-deny が無関係な誤検出を起こす。`{pkg}.libs/` は auditwheel の同梱慣例
+    （`package_root` の兄弟ディレクトリ）なので、ディレクトリ名パターンから解決する
+    （RECORD の再走査はしない・find_spec のみで import を起こさない）。
+    """
+    import importlib.util
+
+    roots: "list[Path]" = []
+    for other in _SCORER_NATIVE_BACKEND_REQUIRED:
+        if other == exclude:
+            continue
+        try:
+            spec = importlib.util.find_spec(other)
+        except Exception:
+            continue
+        if spec is None or not getattr(spec, "origin", None):
+            continue
+        if spec.origin in ("built-in", "frozen"):
+            continue
+        package_root = Path(spec.origin).resolve().parent
+        roots.append(package_root)
+        libs_sibling = package_root.parent / f"{package_root.name}.libs"
+        if libs_sibling.is_dir():
+            roots.append(libs_sibling)
+    return roots
+
+
+def _first_party_bind_chain_native_roots() -> "list[Path]":
+    """束縛前に本ハーネス自身の import 連鎖が正当に mmap する native の許容ルート。
+
+    `_FIRST_PARTY_BIND_CHAIN_PACKAGES` の各パッケージを `find_spec` で解決し、その
+    package_root（単一モジュールならファイル自身）を返す。解決できない（未導入）
+    パッケージは静かに無視する——`pydantic`/`pydantic_core` はこのプロセスに存在する
+    ことが前提の許容であって、存在しないなら許容領域も無い（fail-closed 側に倒す
+    必要はない。単に「その分の許容が無い」だけ）。
+    """
+    import importlib.util
+
+    roots: "list[Path]" = []
+    for pkgname in _FIRST_PARTY_BIND_CHAIN_PACKAGES:
+        try:
+            spec = importlib.util.find_spec(pkgname)
+        except Exception:
+            continue
+        if spec is None or not getattr(spec, "origin", None):
+            continue
+        if spec.origin in ("built-in", "frozen"):
+            continue
+        origin = Path(spec.origin).resolve()
+        is_pkg = getattr(spec, "submodule_search_locations", None) is not None
+        roots.append(origin.parent if is_pkg else origin)
+    return roots
+
+
+def _stdlib_prefixes() -> "list[Path]":
+    """stdlib C 拡張（`lib-dynload/*.so` 等）の許容ルート（`sysconfig` の実測値）。
+
+    `_INTERPRETER_TOOLCHAIN_LIBRARY_RE` は OS 提供の共有ライブラリ（`libbz2.so` 等）
+    の basename だけを見るため、Python 自身の stdlib C 拡張モジュール
+    （`/usr/lib/python3.11/lib-dynload/_bz2.cpython-311-…so` 等、basename が
+    拡張モジュール名でありライブラリ名ではない）は別に許容する必要がある。ハード
+    コードパスではなく `sysconfig.get_paths()` から実測する——ディストリビューション
+    ごとにインストール prefix が異なるため。
+    """
+    import sysconfig
+
+    prefixes = []
+    for key in ("stdlib", "platstdlib"):
+        value = sysconfig.get_paths().get(key)
+        if value:
+            prefixes.append(Path(value).resolve())
+    return prefixes
+
+
+def _under_stdlib_prefix(path: Path, prefixes: "list[Path]") -> bool:
+    for prefix in prefixes:
+        try:
+            path.relative_to(prefix)
+            return True
+        except ValueError:
+            continue
+    return False
 
 
 def _owned_by_scorer_distribution(path: Path, *, package_root: Path, natives: "set[Path]") -> bool:
@@ -546,60 +777,203 @@ def _verify_scorer_dt_needed_closure(
         _walk(leftover, ())
 
 
-def _reject_ld_preload_before_scorer_bind() -> None:
-    """`LD_PRELOAD` が設定されたままスコアラー pin を束縛しない（Codex P1 6 巡目 P1-B）。
+_LD_PRELOAD_SIBLING_ENV_VARS: "Tuple[str, ...]" = ("LD_PRELOAD", "LD_AUDIT", "LD_DYNAMIC_WEAK")
 
-    `LD_PRELOAD` は soname 解決より前にローダへ割り込み、実際にシンボルを提供する
-    実体をディスク上の「正規の」numpy/scipy 同梱ネイティブとは無関係な場所へすり替え
-    うる——`_scorer_dist_native_sha256` はディスクの bytes を hash するだけなので、
-    その bytes が「実際に実行された数値バックエンド」であるという保証が `LD_PRELOAD`
-    下では成立しない（#217 の事前ロード窓の native 版: メモリ上の実装をディスク hash
-    で検出できない）。値の中身を精査して無害と判定する経路は用意しない——
-    「実測は LD_PRELOAD の外側で行う」という運用上の要求に倒す (fail-closed)。
+
+def _reject_ld_preload_before_scorer_bind() -> None:
+    """`LD_PRELOAD` 系の割り込み経路が設定されたままスコアラー pin を束縛しない。
+
+    （Codex P1 6 巡目 P1-B + セルフレビュー H4）`LD_PRELOAD` は soname 解決より前に
+    ローダへ割り込み、実際にシンボルを提供する実体をディスク上の「正規の」
+    numpy/scipy 同梱ネイティブとは無関係な場所へすり替えうる——`_scorer_dist_native_
+    sha256` はディスクの bytes を hash するだけなので、その bytes が「実際に実行
+    された数値バックエンド」であるという保証が `LD_PRELOAD` 下では成立しない
+    （#217 の事前ロード窓の native 版: メモリ上の実装をディスク hash で検出
+    できない）。
+
+    **兄弟経路（H4）**: `LD_AUDIT`（rtld-audit インタフェース。`la_symbind*` で
+    シンボル解決そのものを横取りでき、LD_PRELOAD と同等以上の割り込み能力を持つ）、
+    `LD_DYNAMIC_WEAK`（弱シンボルの優先順位を変え、後読みライブラリの実装で先読み
+    ライブラリの弱シンボルを上書きできる）も同じ脅威クラスとして拒否する。
+    `/etc/ld.so.preload`（環境変数を一切使わずに全プロセスへ preload を効かせる、
+    root 権限が要る代わりに本プロセスの環境だけを見ても検出できない経路）も存在
+    かつ非空なら同様に拒否する。値の中身を精査して無害と判定する経路は用意しない
+    ——「実測はこれらの割り込み経路の外側で行う」という運用上の要求に倒す
+    (fail-closed)。
+
+    `LD_LIBRARY_PATH` はここでは拒否しない（`_resolve_soname_without_loading` が
+    ローダと同じ探索順の一部として値そのものを使うため、存在自体を禁止すると通常の
+    運用を壊す）——ただし記録はする（H9・report の `sys_path_and_ld_env`）。
     """
-    if os.environ.get("LD_PRELOAD"):
+    non_empty_vars = [name for name in _LD_PRELOAD_SIBLING_ENV_VARS if os.environ.get(name)]
+    if non_empty_vars:
         raise RuntimeError(
-            "evaluate_m2_bars: LD_PRELOAD が設定された状態でスコアラー pin を束縛しよう"
-            "とした; ディスク hash が実行中の数値バックエンドを代表する保証がない "
-            "(fail-closed)。LD_PRELOAD を外した状態で測り直すこと"
+            f"evaluate_m2_bars: {non_empty_vars!r} が設定された状態でスコアラー pin を"
+            "束縛しようとした; ディスク hash が実行中の数値バックエンド/シンボル解決を"
+            "代表する保証がない (fail-closed)。これらの環境変数を外した状態で測り直す"
+            "こと"
+        )
+    preload_file = Path("/etc/ld.so.preload")
+    try:
+        preload_bytes = preload_file.read_bytes()
+    except FileNotFoundError:
+        preload_bytes = b""
+    except OSError as exc:
+        raise RuntimeError(
+            "evaluate_m2_bars: /etc/ld.so.preload の状態を確認できない "
+            f"({type(exc).__name__}: {exc}); 全プロセス preload が無いことを立証できない"
+            "ため fail-closed"
+        ) from exc
+    if preload_bytes.strip():
+        raise RuntimeError(
+            "evaluate_m2_bars: /etc/ld.so.preload が存在し非空; 環境変数を経由しない"
+            "全プロセス preload が設定された状態でスコアラー pin を束縛しようとした "
+            "(fail-closed)。/etc/ld.so.preload を空にした状態で測り直すこと"
         )
 
 
-def _parse_proc_self_maps_native_libraries() -> "list[Path]":
-    """`/proc/self/maps` からマップ済みのネイティブ共有ライブラリの実パスを列挙する。
+# H3: `sys.meta_path` / `sys.path_hooks` / `sys.path_importer_cache` の標準構成。
+# CPython の 3 標準 finder に加え、実測で `setuptools` の `distutils-precedence.pth`
+# （site 起動時に自動処理される、pip ベースのほぼ全環境に存在する慣行）が
+# `_distutils_hack.DistutilsMetaFinder` を無条件に `sys.meta_path` へ挿すことを
+# 確認した——「3 標準 finder だけ」という素朴な不変条件は fresh CLI でも成立しない
+# （H5 の BLAS 命名規約と同型の「推測で許可リストを作らず実測する」教訓）。
+_STANDARD_META_PATH_QUALNAMES = frozenset(
+    {
+        "_frozen_importlib.BuiltinImporter",
+        "_frozen_importlib.FrozenImporter",
+        "_frozen_importlib_external.PathFinder",
+    }
+)
+_ALLOWED_NON_STANDARD_META_PATH_QUALNAMES = frozenset(
+    {"_distutils_hack.DistutilsMetaFinder"}
+)
+_STANDARD_PATH_HOOK_QUALNAMES = frozenset({"zipimport.zipimporter"})
+_STANDARD_PATH_HOOK_QUALNAME_PREFIXES: "Tuple[str, ...]" = (
+    "_frozen_importlib_external.FileFinder.path_hook",
+)
+_STANDARD_PATH_IMPORTER_CACHE_QUALNAME = "_frozen_importlib_external.FileFinder"
 
-    （Codex P1 6 巡目 P1-B）dlopen して確認するのではなく、**既にプロセスへ mmap
-    されているファイル**を読むだけ（#217 の dlopen 回避規律）。`LD_PRELOAD` を外した
-    後でも、束縛前に sitecustomize 等が数値バックエンドを先読みしていれば、ディスク
-    hash は正規の実体と一致するのに実際に実行されるのはメモリ上の別実装——メモリ
-    mapping はディスク hash では検出できないので、専用にここで読む。読めない環境
-    （非 Linux 等）は「事前ロードが無い」ことを立証できないため fail-closed にする。
+
+def _qualname_of(obj: Any) -> str:
+    """クラスオブジェクト・関数・インスタンスのどれでも `module.qualname` を返す。
+
+    `sys.meta_path` の標準 finder はクラスオブジェクト自体が入り
+    （`<class '_frozen_importlib.BuiltinImporter'>`）、`sys.path_hooks` の標準 hook は
+    クラス（`zipimport.zipimporter`）または関数（`FileFinder.path_hook` の closure）
+    が入る——クラス・関数はどちらも `__module__`/`__qualname__` を**自身が直接**
+    持つので、それをそのまま使う。`_distutils_hack` 等のサードパーティ finder
+    （メタクラス経由ではない通常のインスタンス）は `__qualname__` を自身は持たない
+    ため、`type(obj)` にフォールバックする——`type(obj)` を先に取ると関数が
+    `<class 'function'>`（`builtins.function`）に潰れて全て同じ qualname になって
+    しまう（本実装中に実測で踏んだ不具合: `FileFinder.path_hook` の closure が
+    `path_hooks:builtins.function` に潰れ、標準 hook 判定に失敗した）。
     """
-    from svp_rpe.melody.provenance import _is_native_library
+    module = getattr(obj, "__module__", None)
+    qualname = getattr(obj, "__qualname__", None)
+    if module is None or qualname is None:
+        target = type(obj)
+        module = target.__module__
+        qualname = target.__qualname__
+    return f"{module}.{qualname}"
 
+
+def _non_standard_import_hooks() -> "List[str]":
+    """`sys.meta_path` / `sys.path_hooks` / `sys.path_importer_cache` の非標準構成を列挙する。
+
+    （セルフレビュー H3）pin の場所解決（`importlib.util.find_spec`）は必ず
+    `sys.meta_path` を経由する。`sys.meta_path` の先頭に、実 origin（pristine パス）
+    を持つ spec を返しつつ `get_source`/`get_data` だけ差し替える loader を挿す
+    finder を入れると、`find_spec(...).origin` は正規パスのまま・実行されるモジュール
+    の中身は攻撃者の bytes、を再現できる——ディスク hash は無傷のまま pin が完全に
+    一致する。numpy を **import しない**ので `_preloaded_seed_modules` の sys.modules
+    スナップショットにも native でないので LD_PRELOAD/maps 検査にも映らない
+    ——3 ゲートいずれの死角。
+
+    `.pth`/`sitecustomize.py`/`PYTHONSTARTUP` に依存しない site-packages 由来 finder
+    （pytest の assertion rewriting、coverage 等も同じ機構を使う）は import 文脈では
+    常態なので、`_PRELOADED_SEED_MODULES`/`_PRE_BOUND_SCORER_NATIVE_MAPPINGS` と同じ
+    2 段構え（記録のみ・実測経路でのみ fail-closed）をこの関数の呼び出し側で適用する。
+    """
+    findings: "List[str]" = []
+    for finder in sys.meta_path:
+        qualname = _qualname_of(finder)
+        if (
+            qualname in _STANDARD_META_PATH_QUALNAMES
+            or qualname in _ALLOWED_NON_STANDARD_META_PATH_QUALNAMES
+        ):
+            continue
+        findings.append(f"meta_path:{qualname}")
+    for hook in sys.path_hooks:
+        qualname = _qualname_of(hook)
+        if qualname in _STANDARD_PATH_HOOK_QUALNAMES:
+            continue
+        if any(qualname.startswith(prefix) for prefix in _STANDARD_PATH_HOOK_QUALNAME_PREFIXES):
+            continue
+        findings.append(f"path_hooks:{qualname}")
+    for key, value in sys.path_importer_cache.items():
+        if value is None:
+            continue
+        qualname = _qualname_of(value)
+        if qualname == _STANDARD_PATH_IMPORTER_CACHE_QUALNAME:
+            continue
+        findings.append(f"path_importer_cache[{key!r}]:{qualname}")
+    return sorted(findings)
+
+
+_DELETED_MAPPING_SUFFIX = " (deleted)"
+
+
+def _parse_proc_self_maps_executable_mappings() -> "list[tuple[str, bool]]":
+    """`/proc/self/maps` から実行可能（`x` 権限を含む）マッピングを列挙する。
+
+    （Codex P1 6 巡目 P1-B・セルフレビュー H5/H6/H11 で拡張再設計）dlopen して
+    確認するのではなく、**既にプロセスへ mmap されているファイル**を読むだけ
+    （#217 の dlopen 回避規律）。`LD_PRELOAD` を外した後でも、束縛前に
+    sitecustomize 等が数値バックエンドを先読みしていれば、ディスク hash は正規の
+    実体と一致するのに実際に実行されるのはメモリ上の別実装——メモリ mapping は
+    ディスク hash では検出できないので、専用にここで読む。読めない環境（非 Linux
+    等）は「事前ロードが無い」ことを立証できないため fail-closed にする。
+
+    **H5 で拡張したフィルタ規律**: 旧実装は `_is_native_library`（拡張子ベース）で
+    先に絞り込んでいたため、命名規約に依存しない攻撃（`(deleted)` 実体・`memfd:`
+    fileless ロード・拡張子なし実行マップ）を素通りさせていた（H6）。ここでは
+    **権限フィールド（`x` を含むか）を先に見る**——「実行されうるか」が本質であって
+    拡張子は関係が無い。呼び出し側（`_reject_pre_bound_native_mappings`）が拡張子・
+    `(deleted)`・匿名の別を判定する。
+
+    戻り値は `(raw_path, deleted)` のタプル列。`raw_path` は `(deleted)` サフィックス
+    を剥がした後の文字列（匿名マッピングは `[vdso]` 等の疑似名、ファイル無し実行
+    マッピングはそのままの文字列——`memfd:pwn` 等）。`deleted=True` は呼び出し側の
+    fail-closed 事由になる——削除済み実体は hash 突合が原理的に不能なため
+    （「覆えないものを覆ったと主張しない」#217 原則）。
+    """
     maps_path = Path("/proc/self/maps")
     try:
         text = maps_path.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         raise RuntimeError(
             "evaluate_m2_bars: /proc/self/maps を読めない（非 Linux 等）; 束縛前にロード"
-            "済みの数値バックエンドが無いことを立証できないため fail-closed "
+            "済みの実行可能マッピングが無いことを立証できないため fail-closed "
             f"({type(exc).__name__}: {exc})"
         ) from exc
 
-    paths: "set[Path]" = set()
+    mappings: "set[tuple[str, bool]]" = set()
     for line in text.splitlines():
         fields = line.split(None, 5)
-        if len(fields) < 6:
+        if len(fields) < 2:
             continue
-        candidate = fields[5].strip()
-        if not candidate or candidate.startswith("["):
-            continue  # `[heap]` / `[stack]` 等の疑似マッピングは実ファイルでない
-        path = Path(candidate)
-        if not _is_native_library(path):
+        perms = fields[1]
+        if "x" not in perms:
             continue
-        paths.add(path.resolve() if path.exists() else path)
-    return sorted(paths)
+        raw_path = fields[5].strip() if len(fields) >= 6 else ""
+        if not raw_path:
+            continue  # パスフィールドすら無い完全な匿名マッピング（通常は現れない）
+        deleted = raw_path.endswith(_DELETED_MAPPING_SUFFIX)
+        if deleted:
+            raw_path = raw_path[: -len(_DELETED_MAPPING_SUFFIX)]
+        mappings.add((raw_path, deleted))
+    return sorted(mappings)
 
 
 # `_reject_pre_bound_native_mappings` が「所有パス／bytes 一致で良性」と判定した
@@ -615,30 +989,62 @@ _PRE_BOUND_NATIVE_MAPPING_LOG: List[str] = []
 def _reject_pre_bound_native_mappings(
     name: str, *, package_root: Path, natives: "set[Path]", use_cache: bool = True
 ) -> "List[str]":
-    """`name` の pin 束縛前に、既にロード済みの数値バックエンドを検出・記録する。
+    """`name` の pin 束縛前に、既にロード済みの実行可能マッピングを検出・記録する。
 
-    （Codex P1 6/7 巡目 P1-B）`LD_PRELOAD` 環境変数チェック（`_reject_ld_preload_before_
-    scorer_bind`）だけでは、環境変数が既にクリアされた後で実体だけがメモリに残る
-    ケースや、`LD_PRELOAD` を経由しない `sitecustomize.py` 等の先読みを捉えられない。
-    `/proc/self/maps` を実際に読み、`name` distribution に関連するマッピング
-    （所有パス内、または basename が BLAS 系命名規約 `_BLAS_FAMILY_LIBRARY_RE` /
-    pin 対象 `natives` のいずれかに一致するもの）を検査する。
+    （Codex P1 6/7 巡目 P1-B、セルフレビュー H5/H6/H11 で default-deny へ再設計）
+    `LD_PRELOAD` 環境変数チェック（`_reject_ld_preload_before_scorer_bind`）だけでは、
+    環境変数が既にクリアされた後で実体だけがメモリに残るケースや、`LD_PRELOAD` を
+    経由しない `sitecustomize.py` 等の先読みを捉えられない。`/proc/self/maps` を
+    実際に読み、実行可能マッピングを 1 つずつ分類する。
 
-    **2 段構え（Codex P1 7 巡目・`_PRELOADED_SEED_MODULES` と同型）**: 6 巡目時点の
-    実装は「所有パス」「bytes 一致の良性重複」を単に `continue`（黙って見逃す）
-    していたが、これは pre-bind mmap による TOCTOU を見逃す——`dlopen` で既に mmap
-    された実体は、その**後**でディスク上のファイルが差し替えられても pre/post どちらの
-    hash も新 bytes を指す一方、実行はロード済みの旧 bytes のまま進む（#217 の事前
-    ロード窓の native 版・mmap 版）。この見逃しを「起きなかったこと」にせず、
-    `_PRE_BOUND_NATIVE_MAPPING_LOG`（→ 凍結タプル `_PRE_BOUND_SCORER_NATIVE_MAPPINGS`）
-    へ **記録**する。ただし記録そのものは raise しない——pytest 等の import 文脈では
-    `svp_rpe` 経由で numpy/scipy が本ハーネスの読み込みより先に import されているのが
-    常態で、その場合の記録が非空になるのは避けられない（`_PRELOADED_SEED_MODULES` が
-    同じ理由で load 時に raise しないのと同じ）。**実測経路**（`evaluate_m2_bars` の
-    評価器自身のゲート・report の `pre_bound_scorer_native_mappings` 検証）でのみ
-    非空を fail-closed にする。正規の fresh CLI は本モジュールが `import numpy` より
-    前に `_scorer_pins()` を束縛する（#217 の load-time 束縛規律）ため、その経路では
-    このログは必ず空になる。
+    **H5: 命名ホワイトリストから default-deny への反転**。6 巡目時点は「BLAS 命名
+    規約 (`_BLAS_FAMILY_LIBRARY_RE`) に一致」または「pin 対象 basename と一致」の
+    どちらかだけを検査し、それ以外は無条件に許容していた。実測反証: 本環境で実際に
+    実行される OpenBLAS 実体名 `libscipy_openblas64_-32a4b2a6.so` /
+    `libscipy_openblas-6cdc3b4a.so` はどちらの条件にも一致せず（"lib" 直後が
+    "scipy_"）、素通りしていた（regex 自体は是正済みだが、命名規約に依存する限り
+    次の亜種にも弱い）。ここでは反転する: 束縛時点（`import numpy` より前）で
+    写像されている実行可能な実体は「(a) scorer 所有（自身または兄弟 numpy⇔scipy）
+    (b) OS/解釈系ツールチェーン (c) stdlib C 拡張（`lib-dynload/*.so` 等、
+    `sysconfig` 実測の prefix 判定） (d) 本ハーネス自身の first-party import 連鎖
+    (`_first_party_bind_chain_native_roots`) (e) カーネル注入の無害な匿名マッピング」
+    のどれかであるべきという不変条件へ倒し、それ以外の**あらゆる**実行可能マッピング
+    を記録対象にする——BLAS 命名やネイティブ拡張子に一致するかは問わない。
+
+    **H6: `(deleted)` / `memfd:` / 拡張子なし実行マップ**。`_parse_proc_self_maps_
+    executable_mappings` は権限フィールド（`x`）だけで絞るため、これらも可視化
+    される。`(deleted)` 実体は OS ツールチェーン（`apt upgrade` 中の置換等、良性の
+    通常運転）以外は即 fail-closed にする——削除済み実体は hash 突合が原理的に
+    不能（「覆えないものを覆ったと主張しない」#217 原則）。`memfd:` 由来・拡張子なし
+    実行マップ（本ハーネスの解釈系実行ファイル自身を除く）も同様に即 fail-closed
+    にする——いずれも「無害な重複」を bytes 比較で救済する余地が無い
+    （比較対象のディスク実体が存在しない）。
+
+    **H11: 匿名実行マッピング**。`[vdso]`/`[vsyscall]` はカーネルが全プロセスへ
+    無条件に注入する疑似マッピングで、実測（fresh CLI）でもこれ以外の匿名実行
+    マッピングは存在しない——`_ANONYMOUS_EXECUTABLE_MAPPING_ALLOWLIST` に無い匿名
+    実行マッピングは JIT/手動 mmap ロードの疑いとして即 fail-closed にする。ただし
+    **境界の正直会計**（#217「覆えないことを明記する」規律・`ordering_is_proof`
+    と同じ様式）: この検査は file-backed mapping しか覆わない前提の延長であり、
+    プロセスメモリを直接書ける攻撃者（例えば mmap 済みページの実行時パッチ）は
+    そもそも境界の外——`_reject_pre_bound_native_mappings` 自体が「新規マッピング
+    の出現」を捕捉する仕組みであって、既存マッピングの内容改変は対象外。
+
+    **2 段構え（Codex P1 7 巡目・`_PRELOADED_SEED_MODULES` と同型）**は維持する:
+    6 巡目時点の実装は「所有パス」「bytes 一致の良性重複」を単に `continue`（黙って
+    見逃す）していたが、これは pre-bind mmap による TOCTOU を見逃す——`dlopen` で
+    既に mmap された実体は、その**後**でディスク上のファイルが差し替えられても
+    pre/post どちらの hash も新 bytes を指す一方、実行はロード済みの旧 bytes の
+    まま進む。この見逃しを「起きなかったこと」にせず、`_PRE_BOUND_NATIVE_MAPPING_
+    LOG`（→ 凍結タプル `_PRE_BOUND_SCORER_NATIVE_MAPPINGS`）へ**記録**する。ただし
+    記録そのものは raise しない——pytest 等の import 文脈では `svp_rpe` 経由で
+    numpy/scipy が本ハーネスの読み込みより先に import されているのが常態で、その
+    場合の記録が非空になるのは避けられない（`_PRELOADED_SEED_MODULES` が同じ理由で
+    load 時に raise しないのと同じ）。**実測経路**（`evaluate_m2_bars` の評価器
+    自身のゲート・report の `pre_bound_scorer_native_mappings` 検証）でのみ非空を
+    fail-closed にする。H6/H11 の即時 raise 条件（`(deleted)`・`memfd:`・拡張子なし・
+    非許容匿名）はこの 2 段構えの**外**——束縛時点で即座に fail-closed にする
+    （記録して後回しにするほど無害ではない）。
 
     **bytes が一致すれば「無害な重複」**——6 巡目の実装中の実測で判明した良性の衝突が
     ある: auditwheel は同梱ネイティブのファイル名にビルド内容の hash を含めるため
@@ -653,18 +1059,25 @@ def _reject_pre_bound_native_mappings(
     無い（basename が `natives` に無い外部由来）場合にのみ、6 巡目と同じく即
     `RuntimeError` で fail-closed にする（これは弱めていない）。
 
-    glibc 族・`ld.so` 等の OS 基盤マッピング、および `name` と無関係な一般ライブラリは
-    対象外（記録もしない）。
-
     戻り値: このパッケージについて記録した束縛前マッピングのパス文字列一覧
-    （raise しなかった owned / bytes 一致のケース）。
+    （raise しなかった owned / bytes 一致 / default-deny 対象のケース）。
     """
+    import sys
+
+    from svp_rpe.melody.provenance import _is_native_library
     from svp_rpe.utils.hashing import file_sha256
 
-    mapped = _parse_proc_self_maps_native_libraries()
+    mapped = _parse_proc_self_maps_executable_mappings()
     natives_by_basename: "dict[str, list[Path]]" = {}
     for path in natives:
         natives_by_basename.setdefault(path.name, []).append(path)
+    first_party_roots = _first_party_bind_chain_native_roots()
+    sibling_backend_roots = _sibling_scorer_backend_roots(name)
+    stdlib_prefixes = _stdlib_prefixes()
+    try:
+        interpreter_path = Path(sys.executable).resolve()
+    except OSError:
+        interpreter_path = None
 
     def _content_matches_a_native(mapped_path: Path, candidates: "list[Path]") -> bool:
         if not candidates or not mapped_path.is_file():
@@ -681,18 +1094,65 @@ def _reject_pre_bound_native_mappings(
                 continue
         return False
 
+    def _under_any_root(path: Path, roots: "list[Path]") -> bool:
+        for root in roots:
+            try:
+                path.relative_to(root if root.is_dir() else root.parent)
+                if root.is_dir() or path == root:
+                    return True
+            except ValueError:
+                continue
+        return False
+
     recorded: "List[str]" = []
-    for mapped_path in mapped:
+    for raw_path, deleted in mapped:
+        if raw_path.startswith("["):
+            if raw_path in _ANONYMOUS_EXECUTABLE_MAPPING_ALLOWLIST:
+                continue  # カーネル注入の無害な疑似マッピング（H11）
+            raise RuntimeError(
+                f"evaluate_m2_bars: {name!r} の pin 束縛前に許容外の匿名実行マッピング "
+                f"{raw_path!r} を検出; JIT/手動 mmap ロードの疑いがあり file-backed で"
+                "ないため hash 突合できない (fail-closed)"
+            )
+        if "memfd:" in raw_path:
+            raise RuntimeError(
+                f"evaluate_m2_bars: {name!r} の pin 束縛前に memfd 由来の fileless "
+                f"実行マッピング {raw_path!r} を検出; hash 突合できる実体が無い "
+                "(fail-closed)"
+            )
+        mapped_path = Path(raw_path)
         basename = mapped_path.name
+        if deleted:
+            if _is_interpreter_toolchain_library(basename):
+                continue  # OS ツールチェーンの置換（apt upgrade 等）は良性の通常運転
+            raise RuntimeError(
+                f"evaluate_m2_bars: {name!r} の pin 束縛前に削除済み実行マッピング "
+                f"{raw_path!r} (deleted) を検出; 削除済み実体は hash 突合が原理的に"
+                "不能で、覆えないものを覆ったと主張しない (fail-closed)"
+            )
+        if interpreter_path is not None and mapped_path == interpreter_path:
+            continue  # 本プロセスの解釈系実行ファイル自身
+        if not _is_native_library(mapped_path):
+            raise RuntimeError(
+                f"evaluate_m2_bars: {name!r} の pin 束縛前に拡張子なしの実行マッピング "
+                f"{raw_path!r} を検出; 命名規約に依存しない fileless/偽装ロードの疑いが"
+                "あり fail-closed"
+            )
         if _owned_by_scorer_distribution(mapped_path, package_root=package_root, natives=natives):
             # 所有パス内 = 良性だが、pre-bind mmap の TOCTOU 対象として記録する
             # （raise はしない・上記 docstring の 2 段構え）。
             recorded.append(str(mapped_path))
             continue
+        if _is_interpreter_toolchain_library(basename):
+            continue  # OS/解釈系ツールチェーン（H5 default-deny の許容クラス）
+        if _under_stdlib_prefix(mapped_path, stdlib_prefixes):
+            continue  # stdlib C 拡張（`lib-dynload/*.so` 等。H5 default-deny の許容クラス）
+        if _under_any_root(mapped_path, first_party_roots):
+            continue  # 本ハーネス自身の first-party import 連鎖（H5 default-deny）
+        if _under_any_root(mapped_path, sibling_backend_roots):
+            continue  # 兄弟 scorer パッケージ（numpy⇔scipy）の所有領域（H5 default-deny）
         is_blas_family = bool(_BLAS_FAMILY_LIBRARY_RE.match(basename))
         candidates = natives_by_basename.get(basename, [])
-        if not is_blas_family and not candidates:
-            continue  # BLAS 命名規約にも pin 対象 basename にも該当しない一般ライブラリ
         if _content_matches_a_native(mapped_path, candidates):
             recorded.append(str(mapped_path))  # bytes 一致 = 良性の重複ベンダリングだが記録
             continue
@@ -703,14 +1163,77 @@ def _reject_pre_bound_native_mappings(
                 "済み（bytes も pin 対象と不一致）; ディスク hash と実行中の実装が"
                 "一致する保証がない (fail-closed)"
             )
-        raise RuntimeError(
-            f"evaluate_m2_bars: {name!r} の pin 対象ネイティブ {basename!r} と同名だが"
-            f" 別所在 {mapped_path} からロード済みのマッピングを検出（bytes も不一致）;"
-            " ディスク hash が実行中の実装を覆う保証がない (fail-closed)"
-        )
+        if basename in natives_by_basename:
+            raise RuntimeError(
+                f"evaluate_m2_bars: {name!r} の pin 対象ネイティブ {basename!r} と同名だが"
+                f" 別所在 {mapped_path} からロード済みのマッピングを検出（bytes も不一致）;"
+                " ディスク hash が実行中の実装を覆う保証がない (fail-closed)"
+            )
+        # H5 default-deny: 上記のどの許容クラスにも該当しない実行可能マッピング。
+        # 即座には raise せず（pytest 等の import 文脈では他パッケージの正当な
+        # native も同様に写像されて当然のため）、記録して実測経路の判断に委ねる
+        # （上記 2 段構え docstring 参照）。
+        recorded.append(str(mapped_path))
 
     _PRE_BOUND_NATIVE_MAPPING_LOG.extend(recorded)
     return recorded
+
+
+def _reject_sourceless_scorer_code(
+    name: str, *, origin: Path, package_root: Path, is_package: bool
+) -> None:
+    """scorer モジュールに「対応する `.py` の無い `.pyc`」が無いことを要求する（セルフレビュー H2）。
+
+    `package_code_sha256`（`svp_rpe/melody/provenance.py` の `package_code_state`）は
+    `_CODE_SUFFIXES`（`.py`/`.so`/`.pyd`/`.dylib`）と native 名だけを rglob し、
+    `"__pycache__" not in path.parts` で除外する——**`.pyc` はどちらの経路でも
+    hash 対象にならない**。`_force_fresh_bytecode`（本ファイル冒頭）は
+    `sys.pycache_prefix` を非存在パスへ差し替えて **`SourceFileLoader` の
+    キャッシュ経路**由来の stale bytecode を封じるが、これは `.py` を実行する経路の
+    話であって、`.py` 自体が無く `.pyc` だけが置かれた場合（`SourcelessFileLoader` が
+    実行）は対象外——`mir_eval/melody.py` を削除して `mir_eval/melody.pyc`
+    （別ソースからコンパイル）を置くと、親 run・子測り直しプロセス・evaluate の
+    再計算が**全て同じ poisoned install** を読み、pin は完全に自己整合し bit 一致も
+    する。実行された bytes を 1 byte も覆わない digest が「揃っている」として通る。
+
+    ここでは 2 経路を検査する:
+
+    1. **`find_spec` の origin 自体が `.pyc`**（`.py` が削除され、トップレベル
+       モジュール/パッケージの `__init__` 自体が sourceless で解決された）→ 即
+       fail-closed。単一モジュール配布（`is_package=False`）はこれで十分
+       （サブモジュールを持たない）。
+    2. **パッケージ配下の任意の `.pyc`**（`is_package=True` のときのみ、`package_root`
+       を rglob）: `__pycache__` 内なら（`{module}.{tag}[.opt-N].pyc` の命名規約から
+       `module` 名を復元し）`__pycache__` の親に `{module}.py` が無ければ orphan
+       （stale cache または捏造）。`__pycache__` 外の直置き `.pyc`
+       （`SourcelessFileLoader` が実行しうる形）は同ディレクトリに同名 `.py` が
+       無ければ orphan。どちらも fail-closed にする——`.py` があれば通常の
+       `SourceFileLoader` 経路が優先され、隣の `.pyc` は実行されない（無害）。
+
+    より原理的な代替案（spec.loader の型を全 scorer モジュールについて要求する）は
+    H3（meta_path 検査）と同じフックで将来まとめられるが、ここでは
+    ディスク走査による直接検出で十分な実効性を持つ。
+    """
+    if origin.suffix == ".pyc":
+        raise RuntimeError(
+            f"evaluate_m2_bars: {name!r} の実行対象 {origin} が sourceless .pyc "
+            "（対応する .py が無い）; 実行された bytes を覆わない digest を「揃って"
+            "いる」と主張しない (fail-closed)。.py を復元して測り直すこと"
+        )
+    if not is_package:
+        return
+    for pyc_path in sorted(package_root.rglob("*.pyc")):
+        if "__pycache__" in pyc_path.parts:
+            module_stem = pyc_path.name.split(".")[0]
+            expected_source = pyc_path.parent.parent / f"{module_stem}.py"
+        else:
+            expected_source = pyc_path.with_suffix(".py")
+        if not expected_source.is_file():
+            raise RuntimeError(
+                f"evaluate_m2_bars: {name!r} 配下に対応する .py の無い sourceless "
+                f".pyc {pyc_path}（期待した source: {expected_source}）; 実行されうる "
+                "bytes を覆わない digest を「揃っている」と主張しない (fail-closed)"
+            )
 
 
 def _scorer_dist_native_sha256(name: str, *, use_cache: bool = True) -> str:
@@ -777,6 +1300,22 @@ def _scorer_dist_native_sha256(name: str, *, use_cache: bool = True) -> str:
     try:
         dist = importlib.metadata.distribution(name)
     except importlib.metadata.PackageNotFoundError:
+        if name in _SCORER_NATIVE_BACKEND_REQUIRED:
+            # 数値バックエンド必須パッケージ（Codex セルフレビュー H12）: dist-info が
+            # 無い（vendored copy・sys.path 直置き等）のに `run_accuracy` がそのまま
+            # 完走すると、run 側の native ゲート（natives 非空要求・DT_NEEDED 閉包・
+            # pre-bound マッピング検査）が丸ごと skip されたまま report が書ける。
+            # evaluate 側は `_validated_scorer_pin_tuple` の None version 拒否で結局
+            # publish 不可になるが、「run は成功するのに evaluate で初めて落ちる」
+            # 非対称と、「numpy/scipy は必ず立証する」という
+            # `_SCORER_NATIVE_BACKEND_REQUIRED` の意図をこの分岐だけ免れるのは筋が
+            # 通らない。束縛時点で落とす。
+            raise RuntimeError(
+                f"evaluate_m2_bars: 数値バックエンド必須パッケージ {name!r} の "
+                "distribution が見つからない（dist-info 無し・vendored copy や "
+                "sys.path 直置きの疑い）; 数値バックエンドの閉包を立証できないため "
+                "fail-closed。pip でインストールした環境で実測すること"
+            )
         # 配布自体が無い = 未導入。version pin と同じ規約で None にはできない
         # （戻り値は str 限定）ため、「同梱ネイティブが実行されることもない」= 空入力
         # sha256 を返す（fail-closed 対象は「導入されているのに解決できない」場合）。
@@ -800,18 +1339,26 @@ def _scorer_dist_native_sha256(name: str, *, use_cache: bool = True) -> str:
             "解決できない（namespace/zip import 等）; 実行される package を特定できない "
             "closure を覆ったと主張しない (fail-closed)"
         )
-    package_root = Path(spec.origin).resolve().parent
     executed_init = Path(spec.origin).resolve()
+    # 単一モジュール配布（`threadpoolctl.py` のように site-packages 直下に 1 ファイル。
+    # Codex セルフレビュー H1 で `_SCORER_RUNTIME_PACKAGES` に追加した threadpoolctl で
+    # 初めて踏む分岐）は、`package_root` を親ディレクトリ（site-packages 全体）にすると
+    # 「本体配下は既に hash 済み」判定が site-packages 全体を本体と誤認し、無関係な
+    # distribution の native まで二重計上除外してしまう
+    # （`provenance.package_code_state` の単一モジュール分岐と同じ理由・#217）。
+    # ファイル自身を「本体」の基準にする。
+    is_package = getattr(spec, "submodule_search_locations", None) is not None
+    package_root = executed_init.parent if is_package else executed_init
+    owning_record_name = f"{package_root.name}/__init__.py" if is_package else f"{name}.py"
 
-    # 所有権検証: RECORD（メタデータ側）が指す `{top}/__init__.py` の実パスと、
-    # find_spec（実行側）が指す origin が同一ファイルであることを要求する。
-    top = package_root.name
+    # 所有権検証: RECORD（メタデータ側）が指す本体ファイルの実パスと、find_spec
+    # （実行側）が指す origin が同一ファイルであることを要求する。
     owning_record = next(
-        (record for record in dist.files if str(record) == f"{top}/__init__.py"), None
+        (record for record in dist.files if str(record) == owning_record_name), None
     )
     if owning_record is None:
         raise RuntimeError(
-            f"evaluate_m2_bars: distribution {name!r} の RECORD に {top}/__init__.py が "
+            f"evaluate_m2_bars: distribution {name!r} の RECORD に {owning_record_name!r} が "
             "見つからない（editable install 等で所有権を立証できない）; 覆えない閉包を "
             "覆ったと主張しない (fail-closed)"
         )
@@ -825,16 +1372,25 @@ def _scorer_dist_native_sha256(name: str, *, use_cache: bool = True) -> str:
             " 実装を指すか保証できない (fail-closed)"
         )
 
+    # sourceless .pyc の fail-closed（セルフレビュー H2）: ownership 検証済みの
+    # origin/package_root を再利用する。
+    _reject_sourceless_scorer_code(
+        name, origin=executed_init, package_root=package_root, is_package=is_package
+    )
+
     natives: "set[Path]" = set()
     for record in dist.files:
         if not _is_native_library(Path(str(record))):
             continue
         located = Path(str(dist.locate_file(record))).resolve()
-        try:
-            located.relative_to(package_root)
-            continue  # 本体ディレクトリ配下は package_code_sha256 側が既に hash 済み
-        except ValueError:
-            pass
+        if is_package:
+            try:
+                located.relative_to(package_root)
+                continue  # 本体ディレクトリ配下は package_code_sha256 側が既に hash 済み
+            except ValueError:
+                pass
+        elif located == package_root:
+            continue  # 単一モジュール本体そのもの（ネイティブ拡張子は普通付かないが念のため）
         if not located.is_file():
             raise RuntimeError(
                 f"evaluate_m2_bars: distribution {name!r} の RECORD が指すネイティブ実体 "
@@ -910,7 +1466,33 @@ def _scorer_pins(*, use_cache: bool = True) -> Dict[str, Any]:
     return pins
 
 
+def _scorer_pinned_origins() -> Dict[str, str]:
+    """束縛時点で `find_spec` が解決した scorer 各パッケージの origin（実パス）。
+
+    （セルフレビュー H8）`_require_scorer_modules_match_pinned_origin` が post-run に
+    `sys.modules[name].__spec__.origin` と突き合わせる基準値。import を起こさない
+    （`find_spec` のみ）ので、`_scorer_pins()` と同じ load-time 束縛規律を保つ。
+    """
+    import importlib.util
+
+    origins: Dict[str, str] = {}
+    for name in _SCORER_RUNTIME_PACKAGES:
+        try:
+            spec = importlib.util.find_spec(name)
+        except Exception:
+            continue
+        if spec is None or not getattr(spec, "origin", None):
+            continue
+        if spec.origin in ("built-in", "frozen"):
+            continue
+        origins[name] = str(Path(spec.origin).resolve())
+    return origins
+
+
 _LOADED_SCORER_PINS = _scorer_pins()
+
+# H8: 束縛時点の origin を凍結する（post-run に実際の import 結果と突き合わせる基準値）。
+_SCORER_PINNED_ORIGINS: Dict[str, str] = _scorer_pinned_origins()
 
 # `_scorer_pins()` が numpy/scipy それぞれについて `_reject_pre_bound_native_mappings`
 # を実行済み（束縛前マッピングは `_PRE_BOUND_NATIVE_MAPPING_LOG` へ追記されている）。
@@ -918,6 +1500,11 @@ _LOADED_SCORER_PINS = _scorer_pins()
 # 「load 時 1 回だけ確定」規約。以降の再検証呼び出しがログへ追記し続けても、この
 # 凍結タプルは影響を受けない）。
 _PRE_BOUND_SCORER_NATIVE_MAPPINGS: "Tuple[str, ...]" = tuple(_PRE_BOUND_NATIVE_MAPPING_LOG)
+
+# H3: meta_path/path_hooks/path_importer_cache の非標準構成も同じ「load 時 1 回だけ
+# 確定」規約で凍結する（`_PRELOADED_SEED_MODULES` / `_PRE_BOUND_SCORER_NATIVE_MAPPINGS`
+# と同型）。
+_NON_STANDARD_IMPORT_HOOKS: "Tuple[str, ...]" = tuple(_non_standard_import_hooks())
 
 import numpy as np  # noqa: E402
 import soundfile as sf  # noqa: E402
@@ -2016,6 +2603,64 @@ def _runtime_package_names() -> "Tuple[str, ...]":
 # なので、監視集合の導出に登録表の import を要するこの位置で評価しても値は変わらない）。
 _PRELOADED_SEED_MODULES = _preloaded_seed_modules()
 
+# H7: 実行時数値構成として記録する環境変数の接頭辞。BLAS/LAPACK 実装（OpenBLAS/MKL/
+# GotoBLAS 系譜）のスレッド分割・CPU ターゲット選択・numpy の CPU 機能無効化・MKL の
+# 数値再現モードは、いずれも**バイト列は完全に不変のまま**縮約順序を変え、結果の
+# 数値を変える（実測: `median_cent_error` が 1.352838 ↔ 1.353400 でバッチ間往復した
+# 事故が実在する。本環境は `sched_getaffinity` = 4、これらの env は未設定）。
+_NUMERIC_RUNTIME_ENV_PREFIXES: "Tuple[str, ...]" = (
+    "OPENBLAS_",
+    "OMP_",
+    "MKL_",
+    "NPY_",
+    "GOTO_",
+)
+
+
+def _numeric_runtime_config() -> Dict[str, Any]:
+    """実行時数値構成（H7）: スレッド数・CPU 機能・env を記録する（バーには使わない）。
+
+    `_repeats_bit_identical`（後述）の bit 一致は「同一バッチ・同一環境・同一
+    スレッド数」でしか成立しない条件付きの性質であって、この構成が変われば
+    縮約順序が変わり数値が変わりうる——**バイト列は完全に不変のまま**。measured
+    子プロセスは親の環境をそのまま継承する（`os.environ` 経由）ため、環境起因の
+    数値差は親子間では原理的に検出できない（必ず同条件になる）。ここでは
+    repeats 間（同一バッチ内の独立 run 間）の**同質性**だけを要求する
+    （`_require_homogeneous_scorer` と同じ形）。バッチをまたぐ構成の違いまでは
+    覆わない——それは verdict の attestation に正直に書く（H7 の限界）。
+    """
+    env: Dict[str, Optional[str]] = {}
+    for key in sorted(os.environ):
+        if key.startswith(_NUMERIC_RUNTIME_ENV_PREFIXES):
+            env[key] = os.environ[key]
+    try:
+        affinity_count: Optional[int] = len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        affinity_count = None  # 非 Linux 等 sched_getaffinity 非対応環境
+    return {
+        "env": env,
+        "cpu_count": os.cpu_count(),
+        "sched_affinity_count": affinity_count,
+    }
+
+
+def _execution_paths() -> Dict[str, Any]:
+    """実行形態・解釈系パス（H9）を記録する（検証は記録のみ・fail-closed 対象外）。
+
+    `sys.path` / `PYTHONPATH` / `LD_LIBRARY_PATH` / `sys.executable` は差し替えれば
+    import 解決先を丸ごと変えられるが、拒否まではやり過ぎ（`PYTHONPATH` 依存の
+    正当な運用がある）——**記録のみ**で verdict の attestation から読めるようにする。
+    測り直し子プロセスは `env = dict(os.environ)` で親の環境をそのまま継承するため、
+    親子間でこれらの値が食い違うことは無い（＝この記録は「継承前提」で、子プロセス
+    側の独立検証ではない）。
+    """
+    return {
+        "sys_path": list(sys.path),
+        "PYTHONPATH": os.environ.get("PYTHONPATH"),
+        "LD_LIBRARY_PATH": os.environ.get("LD_LIBRARY_PATH"),
+        "sys_executable": sys.executable,
+    }
+
 
 # ---------------------------------------------------------------------------
 # run phase
@@ -2093,6 +2738,10 @@ def run_accuracy(
         "preloaded_seed_modules": list(_PRELOADED_SEED_MODULES),
         "harness_loaded_as_main": _HARNESS_LOADED_AS_MAIN,
         "pre_bound_scorer_native_mappings": list(_PRE_BOUND_SCORER_NATIVE_MAPPINGS),
+        "non_standard_import_hooks": list(_NON_STANDARD_IMPORT_HOOKS),
+        "numeric_runtime_config": _numeric_runtime_config(),
+        "sys_flags_optimize": sys.flags.optimize,
+        "execution_paths": _execution_paths(),
         "categories": {},
     }
     results.update(_LOADED_SCORER_PINS)
@@ -2531,6 +3180,19 @@ def _require_fresh_process_report_provenance(
             f"既にロード済みだった ({report.get('pre_bound_scorer_native_mappings')!r}); "
             "mmap 済み実体は disk hash で検出できないため素の CLI 実行の証拠にしない "
             "(fail-closed)"
+        )
+    if report.get("non_standard_import_hooks") != []:
+        raise RuntimeError(
+            f"category {category!r} の測り直し子プロセスに非標準の import hook がある "
+            f"({report.get('non_standard_import_hooks')!r}); find_spec の場所解決を "
+            "改変しうる finder が無いことを立証できないため素の CLI 実行の証拠にしない "
+            "(fail-closed)"
+        )
+    if report.get("sys_flags_optimize") != 0:
+        raise RuntimeError(
+            f"category {category!r} の測り直し子プロセスが -O/-OO 実行（sys.flags."
+            f"optimize={report.get('sys_flags_optimize')!r}）; 数値バックエンドの "
+            "assert ガードが除去された経路を証拠にしない (fail-closed)"
         )
     generator = report.get("generator_code_sha256")
     if generator != _LOADED_GENERATOR_CODE_SHA256:
@@ -3143,6 +3805,33 @@ def _require_publishable_runs(reports: List[Dict[str, Any]]) -> None:
                 "hash で検出できない（TOCTOU: mmap → 差し替え → hash）ため、publish "
                 "可能な実測にしない（素の CLI 実行で測り直すこと・fail-closed）"
             )
+        non_standard_hooks = report.get("non_standard_import_hooks")
+        if non_standard_hooks is None:
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{idx}] が non_standard_import_hooks を欠く; "
+                "find_spec の場所解決を改変しうる finder が無かったか確認できない "
+                "report を証拠にしない (fail-closed)"
+            )
+        if non_standard_hooks:
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{idx}] は非標準の import hook が束縛前に"
+                f"存在した {sorted(non_standard_hooks)}; find_spec の origin は無傷でも"
+                "実行される bytes が差し替えられうるため、publish 可能な実測にしない "
+                "（素の CLI 実行で測り直すこと・fail-closed）"
+            )
+        sys_flags_optimize = report.get("sys_flags_optimize")
+        if sys_flags_optimize is None:
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{idx}] が sys_flags_optimize を欠く; "
+                "-O/-OO 実行でなかったか確認できない report を証拠にしない (fail-closed)"
+            )
+        if sys_flags_optimize != 0:
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{idx}] は -O/-OO 実行（sys_flags_optimize="
+                f"{sys_flags_optimize!r}）; mir_eval の assert ガード（`validate_voicing`/"
+                "`validate` 等）が除去された経路を publish 可能な実測にしない "
+                "(fail-closed)"
+            )
 
 
 def _require_homogeneous_scorer(reports: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -3189,6 +3878,48 @@ def _require_homogeneous_scorer(reports: List[Dict[str, Any]]) -> Dict[str, Any]
         result[f"{name}_code_sha256"] = code
         result[f"{name}_dist_native_sha256"] = dist_native
     return result
+
+
+def _require_homogeneous_numeric_runtime_config(reports: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """全 report が同一の実行時数値構成（H7）で測られたことを要求する（fail-closed）。
+
+    BLAS/LAPACK のスレッド分割（`OPENBLAS_NUM_THREADS` 等）・CPU ターゲット選択
+    （`OPENBLAS_CORETYPE`）・numpy の CPU 機能無効化（`NPY_DISABLE_CPU_FEATURES`）・
+    MKL の数値再現モード（`MKL_CBWR`）は、**バイト列は完全に不変のまま**縮約順序を
+    変え、結果の数値を変えうる（実測済みの事故: `median_cent_error` が
+    1.352838 ↔ 1.353400 でバッチ間往復）。`_repeats_bit_identical` の bit 一致は
+    「同一バッチ・同一環境・同一スレッド数」でしか成立しない条件付きの性質であり、
+    この構成が repeats 間で食い違っていれば、その bit 一致は「決定論の証拠」を
+    僭称している——`_require_homogeneous_scorer`（スコアラー閉包 pin）と同じ形の
+    同質性検査をここでも適用する。
+
+    **統制はしない・記録の同質性だけを要求する**: `OPENBLAS_NUM_THREADS=1` 等を
+    強制する統制（holes.md 修正案 (a)）は、numpy import 前の環境変数設定という
+    より広い変更を要し、本コミットの対応範囲外——ここでは repeats 間の記録が
+    一致することだけを要求し、バッチをまたぐ構成の違い（例えば今回の verdict と
+    別の verdict の間で `cpu_count` が違う）までは覆わない（正直会計）。バー判定
+    には使わない（`_repeats_bit_identical` のバー適用パスに割り込まない）。
+    """
+    configs: List[Any] = []
+    for idx, report in enumerate(reports):
+        config = report.get("numeric_runtime_config")
+        if config is None:
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{idx}] が numeric_runtime_config を欠く; "
+                "実行時数値構成が repeats 間で揃っていたか確認できない report を証拠に"
+                "しない (fail-closed)"
+            )
+        configs.append(config)
+    first = configs[0]
+    for idx, config in enumerate(configs[1:], start=1):
+        if config != first:
+            raise ValueError(
+                f"evaluate_m2_bars: reports の numeric_runtime_config が repeats 間で"
+                f"不一致（reports[0]={first!r} vs reports[{idx}]={config!r}）; bit 一致が"
+                "「同一バッチ・同一環境」の条件を満たさない状態で決定論の証拠として"
+                "扱わない (fail-closed)"
+            )
+    return first
 
 
 def _repeats_bit_identical(metrics_list: List[Dict[str, Any]]) -> bool:
@@ -3367,6 +4098,27 @@ def evaluate_m2_bars(
             "できず、pin が実行中の実装を代表する保証がないプロセスから verdict を "
             "publish しない — 素の CLI から評価し直すこと (fail-closed)"
         )
+    # 評価器自身にも非標準 import hook のゲートを適用する（セルフレビュー H3・
+    # `_PRELOADED_SEED_MODULES` と同型）。正規の fresh CLI では標準 3 finder +
+    # `_distutils_hack`（実測で確認済みの許容例外）しか無いはずで、それ以外が
+    # 存在すれば find_spec の場所解決が改変されている疑いを持つ。
+    if _NON_STANDARD_IMPORT_HOOKS:
+        raise RuntimeError(
+            f"evaluate_m2_bars: 非標準の import hook が束縛前に存在した "
+            f"（{_NON_STANDARD_IMPORT_HOOKS}）; find_spec の場所解決が改変されている"
+            "疑いがあり、pin が実行中の実装を代表する保証がないプロセスから verdict を "
+            "publish しない — 素の CLI から評価し直すこと (fail-closed)"
+        )
+    # 評価器自身の実行形態（-O/-OO）も検査する（セルフレビュー H9）。third-party の
+    # assert ガード（mir_eval の `validate_voicing`/`validate` 等）が除去された状態で
+    # 評価しても、report 側の row の正当性検証が同じ弱化を受けている可能性がある。
+    if sys.flags.optimize != 0:
+        raise RuntimeError(
+            f"evaluate_m2_bars: 評価器プロセスが -O/-OO 実行（sys.flags.optimize="
+            f"{sys.flags.optimize!r}）; 数値バックエンド・mir_eval の assert ガードが"
+            "除去された状態で verdict を publish しない — 素の CLI（-O/-OO 無し）から"
+            "評価し直すこと (fail-closed)"
+        )
     # 評価器**自身**にも直接ソース実行を要求する（Codex P2 第 37 巡）。preload ゲートは
     # 依存モジュールしか覆わず、`python -m run_melody_accuracy --evaluate` は評価器
     # モジュール自身を stale .pyc から実行しうる——その場合、report が現行ソースでも
@@ -3492,6 +4244,7 @@ def evaluate_m2_bars(
     tolerance_cents = _require_frozen_tolerance(reports, bar_block)
     est_voiced_floor = _require_frozen_est_voicing_floor(reports, bar_block)
     scorer_pins = _require_homogeneous_scorer(reports)
+    numeric_runtime_config = _require_homogeneous_numeric_runtime_config(reports)
 
     verdict: Dict[str, Any] = {
         "schema_version": _EXPECTED_VERDICT_SCHEMA,
@@ -3502,6 +4255,7 @@ def evaluate_m2_bars(
         "tolerance_cents": tolerance_cents,
         "est_voiced_confidence_floor": est_voiced_floor,
         **scorer_pins,
+        "numeric_runtime_config": numeric_runtime_config,
         "n_reports": len(reports),
         "run_ids": sorted(run_ids),
         "repeats_min": repeats_min,
