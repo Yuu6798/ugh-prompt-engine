@@ -17,6 +17,7 @@ import os
 import re
 import subprocess
 import sys
+import sysconfig
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -417,6 +418,49 @@ def test_mir_eval_paths_are_protected_from_out(monkeypatch) -> None:
     with pytest.raises(SystemExit, match="provenance"):
         harness.main()
     assert target.read_bytes() == before
+
+
+def test_mir_eval_paths_limits_single_module_distribution_scan() -> None:
+    """単一モジュール配布（`threadpoolctl`）は本体ファイルだけに限定する（Codex 9 巡目 P2）。
+
+    修正前は `spec.origin.parent`（= site-packages 全体）を無条件に rglob しており、
+    `threadpoolctl` を `_SCORER_RUNTIME_PACKAGES` に追加したセルフレビュー H1 以降
+    site-packages 全体（他の無関係な distribution も含む数千ファイル）を巻き込んで
+    いた——`#217` の `soundfile.py` 単一モジュール事故と同型の再発。修正後の値
+    （本体ファイルだけ・site-packages 全体を含まない）をここで固定する。
+    """
+    paths = harness._mir_eval_paths()
+    threadpoolctl_paths = [p for p in paths if "threadpoolctl" in p.name]
+    assert threadpoolctl_paths == [
+        Path(__import__("threadpoolctl").__file__).resolve()
+    ], threadpoolctl_paths
+    # site-packages 全体を巻き込んでいない回帰確認: 明らかに無関係な distribution
+    # （threadpoolctl とも decorator/mir_eval/numpy/scipy/charset_normalizer とも
+    # 無関係）のファイルが混入していないこと。
+    unrelated_hits = [
+        p
+        for p in paths
+        if p not in threadpoolctl_paths
+        and not any(
+            marker in str(p)
+            for marker in (
+                "threadpoolctl",
+                "decorator",
+                "mir_eval",
+                "numpy",
+                "scipy",
+                "charset_normalizer",
+            )
+        )
+    ]
+    assert unrelated_hits == [], (
+        f"site-packages 全体を巻き込んでいる疑い（無関係ファイル {len(unrelated_hits)} 件）: "
+        f"{unrelated_hits[:5]}"
+    )
+    assert len(paths) < 5000, (
+        f"_mir_eval_paths() が {len(paths)} 件を返した; site-packages 全体走査の"
+        "再発が疑われる（回帰）"
+    )
 
 
 def test_evaluate_m2_bars_rejects_report_without_injection_flag() -> None:
@@ -1654,8 +1698,63 @@ def test_parse_proc_self_maps_executable_mappings_parses_synthetic_maps(
     assert by_path["/usr/lib/x86_64-linux-gnu/libc.so.6"] is False
     assert by_path["/some/where/libopenblas-fake.so.0"] is False
     assert "/usr/lib/x86_64-linux-gnu/libnotexec.so.1" not in by_path  # 非実行可能
-    assert "[heap]" not in by_path  # パスフィールドが無い匿名マッピング
+    assert "[heap]" not in by_path  # 非実行可能（r--p）なので対象外
     assert by_path["/usr/.../libc.so.6"] is True  # (deleted) を剥がした上で deleted=True
+
+
+def test_parse_proc_self_maps_executable_mappings_synthesizes_anonymous_tag_for_pathless_exec(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """パスフィールド自体が無い実行可能行（5 フィールド）も `[anonymous]` として拾う。
+
+    （Codex 9 巡目 P1）旧実装は `len(fields) < 6` の 5 フィールド行を権限検査より前に
+    `continue` で落としており、匿名 exec 領域が default-deny（H11）に一度も到達
+    しない穴だった。実測（fresh CLI の `/proc/self/maps`）でパス無し行に `x` を含む
+    ものは確認できなかったため、許容リスト化はせず `"[anonymous]"`
+    （`_ANONYMOUS_EXECUTABLE_MAPPING_ALLOWLIST` に無い名前）として default-deny に
+    合流させる。
+    """
+    import pathlib
+
+    real_read_text = pathlib.Path.read_text
+    fake_maps = "\n".join(
+        [
+            # パスフィールドが無い純粋な匿名 exec 領域（device 00:00, inode 0）。
+            "7f0000000000-7f0000010000 r-xp 00000000 00:00 0",
+            # 同型だが非実行可能（比較対照）。
+            "7f0000010000-7f0000020000 rw-p 00000000 00:00 0",
+        ]
+    )
+
+    def _fake_read_text(self: Path, *args: Any, **kwargs: Any) -> str:
+        if str(self) == "/proc/self/maps":
+            return fake_maps
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "read_text", _fake_read_text)
+    mappings = harness._parse_proc_self_maps_executable_mappings()
+    assert mappings == [("[anonymous]", False)]
+
+
+def test_reject_pre_bound_native_mappings_flags_pathless_anonymous_mapping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`"[anonymous]"`（パス無し実行マッピングの合成タグ）は許容リスト外として fail-closed。
+
+    （Codex 9 巡目 P1）`_parse_proc_self_maps_executable_mappings` が正しく
+    `"[anonymous]"` を返しても、分類側がこれを許容してしまえば意味が無い——
+    `_ANONYMOUS_EXECUTABLE_MAPPING_ALLOWLIST`（`[vdso]`/`[vsyscall]` のみ）に含まれ
+    ないことを固定する。
+    """
+    monkeypatch.setattr(
+        harness,
+        "_parse_proc_self_maps_executable_mappings",
+        lambda: [("[anonymous]", False)],
+    )
+    with pytest.raises(RuntimeError, match="匿名実行マッピング"):
+        harness._reject_pre_bound_native_mappings(
+            "numpy", package_root=tmp_path / "numpy_root_nonexistent", natives=set()
+        )
 
 
 def test_reject_pre_bound_native_mappings_flags_external_blas_family(
@@ -1983,6 +2082,67 @@ def test_reject_pre_bound_native_mappings_allows_interpreter_executable_itself(
     assert recorded == []
 
 
+def test_reject_pre_bound_native_mappings_allows_interpreter_shared_library(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--enable-shared` ビルドの CPython 自身の共有ライブラリ実体は許容する。
+
+    実行ファイル自身（`sys.executable`）とは別の実体（`libpython3.X.so.1.0` 等）が
+    stdlib prefix 外（例 hostedtoolcache の `lib/` 直下）に置かれる CI 実測
+    （PR #225 9 巡目: `test_reverification_refuses_when_stack_cannot_rerun` が
+    Python 3.12 の測り直し子プロセスで `libpython3.12.so.1.0` を default-deny 対象
+    として記録し失敗）を固定する。本環境が static ビルドで `_interpreter_shared_library_paths()`
+    が空の場合は、この許容クラスを経由せず素通しで通ることを確認する意味が薄れるため、
+    実体を monkeypatch で注入して常に検証可能にする。
+    """
+    fake_lib = tmp_path / "libpython3.99.so.1.0"
+    fake_lib.write_bytes(b"\x7fELF fake shared library")
+    monkeypatch.setattr(harness, "_interpreter_shared_library_paths", lambda: [fake_lib.resolve()])
+    monkeypatch.setattr(
+        harness,
+        "_parse_proc_self_maps_executable_mappings",
+        lambda: [(str(fake_lib.resolve()), False)],
+    )
+    recorded = harness._reject_pre_bound_native_mappings(
+        "numpy", package_root=tmp_path / "numpy_root_nonexistent", natives=set()
+    )  # 例外が出ないことが期待値
+    assert recorded == []
+
+
+def test_interpreter_shared_library_paths_resolves_via_sysconfig(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`sysconfig` の `LIBDIR`/`LDLIBRARY`/`INSTSONAME` からハードコードなしで解決する。"""
+    fake_lib = tmp_path / "libpython9.9.so.1.0"
+    fake_lib.write_bytes(b"fake")
+
+    original_get_config_var = sysconfig.get_config_var
+
+    def _fake_get_config_var(name: str) -> Any:
+        if name == "LIBDIR":
+            return str(tmp_path)
+        if name == "LDLIBRARY":
+            return fake_lib.name
+        if name == "INSTSONAME":
+            return None
+        return original_get_config_var(name)
+
+    monkeypatch.setattr(sysconfig, "get_config_var", _fake_get_config_var)
+    paths = harness._interpreter_shared_library_paths()
+    assert paths == [fake_lib.resolve()]
+
+    # static ビルド（LIBDIR はあるが実体が無い）では空を返す。
+    def _fake_get_config_var_missing(name: str) -> Any:
+        if name == "LIBDIR":
+            return str(tmp_path)
+        if name in ("LDLIBRARY", "INSTSONAME"):
+            return "libpython_does_not_exist.so"
+        return original_get_config_var(name)
+
+    monkeypatch.setattr(sysconfig, "get_config_var", _fake_get_config_var_missing)
+    assert harness._interpreter_shared_library_paths() == []
+
+
 def test_reject_pre_bound_native_mappings_allows_kernel_anonymous_mapping(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2011,6 +2171,59 @@ def test_reject_pre_bound_native_mappings_flags_non_allowlisted_anonymous_mappin
         harness._reject_pre_bound_native_mappings(
             "numpy", package_root=tmp_path / "numpy_root_nonexistent", natives=set()
         )
+
+
+def test_reject_pre_bound_native_mappings_records_anonymous_mapping_when_post_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`treat_anonymous_as_recorded=True` は run 完了後再検証限定の緩和（既定は変えない）。
+
+    `_require_unchanged_since_load()` は実抽出（CREPE/TensorFlow 等）が既に走った後の
+    自己整合性再検証で `_scorer_pins(treat_anonymous_as_recorded=True)` を呼ぶ——この
+    経路でのみ非許容匿名マッピングは即 raise せず記録に倒す（CI 実測: PR #225 9 巡目、
+    `test_cli_run_categories_flag_limits_run` が実 CREPE/TensorFlow 環境で
+    `'[anonymous]'` を検出して post-run 再検証がクラッシュしていた）。既定
+    （`treat_anonymous_as_recorded` 省略時 = False）は前のテストと同じ厳格挙動のまま
+    であることも併せて確認する。
+    """
+    monkeypatch.setattr(
+        harness,
+        "_parse_proc_self_maps_executable_mappings",
+        lambda: [("[some_jit_region_from_unrelated_library]", False)],
+    )
+    recorded = harness._reject_pre_bound_native_mappings(
+        "numpy",
+        package_root=tmp_path / "numpy_root_nonexistent",
+        natives=set(),
+        treat_anonymous_as_recorded=True,
+    )
+    assert recorded == ["[some_jit_region_from_unrelated_library]"]
+    # 既定（省略）は変わらず即 fail-closed。
+    with pytest.raises(RuntimeError, match="匿名実行マッピング"):
+        harness._reject_pre_bound_native_mappings(
+            "numpy", package_root=tmp_path / "numpy_root_nonexistent", natives=set()
+        )
+
+
+def test_require_unchanged_since_load_survives_post_execution_anonymous_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """post-run 再検証は非許容匿名マッピングだけでクラッシュしない（report pin は不変）。
+
+    CI 実測（PR #225 9 巡目・`test_cli_run_categories_flag_limits_run` が実 CREPE/
+    TensorFlow 環境で `run_accuracy()` 末尾の `_require_unchanged_since_load()` から
+    `'[anonymous]'` 検出で fail-closed していた）の直接再現: 実抽出後に生成された
+    無関係な JIT 匿名領域だけを `/proc/self/maps` の代わりに返しても、
+    `_require_unchanged_since_load()` は `treat_anonymous_as_recorded=True` 経由で
+    これを記録に倒すだけで raise しない——native hash 自体（disk 上の実体）は
+    monkeypatch 前と変わらないため、load 時に凍結した pin との一致比較も崩れない。
+    """
+    monkeypatch.setattr(
+        harness,
+        "_parse_proc_self_maps_executable_mappings",
+        lambda: [("[some_jit_region_from_unrelated_library]", False)],
+    )
+    harness._require_unchanged_since_load()  # 例外が出ないことが期待値
 
 
 def test_scorer_runtime_packages_are_always_in_runtime_package_names() -> None:
@@ -4426,6 +4639,75 @@ def test_reverification_refuses_when_stack_cannot_rerun(
             bars,
             bars_sha256=bars_sha256,
             # verification_runner を渡さない = 実抽出器（CI では unavailable）。
+        )
+
+
+def test_reverification_surfaces_cannot_rerun_when_prebound_mappings_are_clean(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """CI 相当条件の再現: pre-bound 記録が正しく空でも、実抽出器が無い環境では
+    「再実行できない」regex で fail-closed すること（skip ガードに隠れない形）。
+
+    `test_reverification_refuses_when_stack_cannot_rerun` はローカルに crepe が
+    導入済みだと skip され、この経路の回帰を検出できない——実際に CI
+    （Python 3.12、PR #225 9 巡目 commit 2ff56cf）はこの skip 無しの環境で走り、
+    `libpython3.12.so.1.0`（`--enable-shared` ビルドの CPython 自身の共有ライブラリ）が
+    `pre_bound_scorer_native_mappings` の default-deny 記録に混入し、本来期待される
+    「再実行できない」エラーより**先に**そのゲートで落ちた（
+    `_interpreter_shared_library_paths()` 追加で是正済み）。ここでは実際の子プロセス
+    起動を待たず、`subprocess.run` を差し替えて「pre-bound 記録が空の、しかし
+    outcome=unavailable の測り直し report」を直接返すことで、環境の実際のビルド形態
+    （`--enable-shared` か否か・crepe 有無）に関わらず、常にこの経路の regex を
+    固定する。
+    """
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    monkeypatch.setattr(harness, "_reverify_category_measurement", _ORIG_REVERIFY)
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    scorer = harness._scorer_pins(use_cache=False)
+
+    def _fake_subprocess_run(
+        command: Any, capture_output: bool = True, text: bool = True, env: Any = None
+    ) -> Any:
+        out_index = command.index("--out")
+        report_path = Path(command[out_index + 1])
+        specs_index = command.index("--specs")
+        specs_sha256 = hashlib.sha256(Path(command[specs_index + 1]).read_bytes()).hexdigest()
+        category_index = command.index("--categories")
+        category = command[category_index + 1]
+        canned = {
+            "schema_version": harness._EXPECTED_REPORT_SCHEMA,
+            "route_runner_injected": False,
+            "preloaded_seed_modules": [],
+            "generator_code_sha256": harness._LOADED_GENERATOR_CODE_SHA256,
+            **scorer,
+            "harness_loaded_as_main": True,
+            "pre_bound_scorer_native_mappings": [],
+            "non_standard_import_hooks": [],
+            "sys_flags_optimize": 0,
+            "specs_sha256": specs_sha256,
+            "categories": {
+                category: {"outcome": "unavailable", "detail": "crepe not installed (fake CI)"}
+            },
+        }
+        report_path.write_text(json.dumps(canned), encoding="utf-8")
+
+        class _Result:
+            returncode = 0
+            stderr = ""
+            stdout = ""
+
+        return _Result()
+
+    monkeypatch.setattr(harness.subprocess, "run", _fake_subprocess_run)
+    with pytest.raises(RuntimeError, match="再実行できない"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports],
+            bars,
+            bars_sha256=bars_sha256,
+            # verification_runner を渡さない = 実抽出器の測り直し経路（fake subprocess 経由）。
         )
 
 

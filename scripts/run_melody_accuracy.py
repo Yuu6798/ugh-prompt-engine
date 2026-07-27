@@ -402,6 +402,12 @@ def _require_unchanged_since_load() -> None:
         )
     # キャッシュは (size, mtime_ns) を鍵にするので、それらを保ったまま差し替えられた
     # bytes を見逃す。実行後の検証は必ず再 hash する（Codex P1）。
+    # この呼び出しは module load 時の 1 回目ではない（`_SCORER_PINS_INITIAL_BIND_
+    # COMPLETE` は既に True）ため、`_scorer_pins()` は匿名マッピングの即時 raise を
+    # 自動的に緩和する——run 完了後（実抽出済み）に走るため、CREPE/TensorFlow 等が
+    # 生成した正当な匿名 JIT 領域を「束縛前ロード済み」と誤認しない（Codex 9 巡目 CI
+    # 追加分・`_reject_pre_bound_native_mappings` docstring 参照）。report の pin
+    # 強度には影響しない。
     current_scorer = _scorer_pins(use_cache=False)
     if current_scorer != _LOADED_SCORER_PINS:
         raise RuntimeError(
@@ -643,6 +649,51 @@ def _under_stdlib_prefix(path: Path, prefixes: "list[Path]") -> bool:
         except ValueError:
             continue
     return False
+
+
+def _interpreter_shared_library_paths() -> "list[Path]":
+    """CPython 自身の共有ライブラリ実体（`--enable-shared` ビルドのみ存在）。
+
+    インタプリタの実行ファイル自身（`sys.executable`）は既に別経路（直接パス比較）で
+    許容されているが、`--enable-shared` でビルドされた CPython（GitHub Actions
+    `actions/setup-python` の hostedtoolcache ビルドが該当）は、実行ファイルとは
+    **別の実体**として `libpython3.X.so.1.0` 等を持つ。これは `_stdlib_prefixes()`
+    （`stdlib`/`platstdlib`、通常 `.../lib/python3.X/...`）にも
+    `_is_interpreter_toolchain_library`（OS ツールチェーンの basename 集合）にも
+    一致しない別ディレクトリ（例 `/opt/hostedtoolcache/Python/3.12.13/x64/lib/`、
+    `stdlib` の**親**であって `stdlib` 自身ではない）に置かれることを CI 実測で確認した
+    （PR #225 9 巡目 CI 失敗: `test_reverification_refuses_when_stack_cannot_rerun` が
+    Python 3.12 の測り直し子プロセスで `libpython3.12.so.1.0` を「所有パス外の
+    default-deny 対象」として記録し、`pre_bound_scorer_native_mappings == []` 要求に
+    失敗した）。
+
+    これは scorer（numpy/scipy）の native バックエンドとは無関係な、インタプリタ
+    そのものの一部であり、`sys.executable` 自身を許容する既存の判断と対称的に扱う
+    べき対象——ハードコードした名前パターンではなく `sysconfig` の
+    `INSTSONAME`/`LDLIBRARY`/`LIBDIR` の実測値から解決する（static ビルドでは
+    存在しないため、その場合は空リストを返し許容領域を増やさない）。
+    """
+    import sysconfig
+
+    libdir = sysconfig.get_config_var("LIBDIR")
+    if not libdir:
+        return []
+    libdir_path = Path(libdir)
+    if not libdir_path.is_dir():
+        return []
+    paths: "list[Path]" = []
+    seen: "set[Path]" = set()
+    for key in ("INSTSONAME", "LDLIBRARY"):
+        name = sysconfig.get_config_var(key)
+        if not name:
+            continue
+        candidate = (libdir_path / name).resolve()
+        if candidate in seen:
+            continue
+        if candidate.is_file():
+            paths.append(candidate)
+            seen.add(candidate)
+    return paths
 
 
 def _owned_by_scorer_distribution(path: Path, *, package_root: Path, natives: "set[Path]") -> bool:
@@ -943,10 +994,18 @@ def _parse_proc_self_maps_executable_mappings() -> "list[tuple[str, bool]]":
     `(deleted)`・匿名の別を判定する。
 
     戻り値は `(raw_path, deleted)` のタプル列。`raw_path` は `(deleted)` サフィックス
-    を剥がした後の文字列（匿名マッピングは `[vdso]` 等の疑似名、ファイル無し実行
-    マッピングはそのままの文字列——`memfd:pwn` 等）。`deleted=True` は呼び出し側の
-    fail-closed 事由になる——削除済み実体は hash 突合が原理的に不能なため
-    （「覆えないものを覆ったと主張しない」#217 原則）。
+    を剥がした後の文字列（named な匿名マッピングは `[vdso]` 等の疑似名、ファイル無し
+    実行マッピングはそのままの文字列——`memfd:pwn` 等）。**パスフィールド自体が無い
+    行**（5 フィールド、`00:00 0` のような device/inode でデバイスバッキング無しの
+    純粋な匿名 mmap 領域）も、実行可能（`x`）であれば `"[anonymous]"` という合成の
+    疑似名で表現する——`_ANONYMOUS_EXECUTABLE_MAPPING_ALLOWLIST`（`[vdso]`/
+    `[vsyscall]` のみ）に無いため、呼び出し側の default-deny へ自然に合流する
+    （Codex 9 巡目 P1: 旧実装はここで無条件に `continue` し、権限検査より前に
+    候補から落としていた——匿名 exec 領域が H11 の default-deny に一度も
+    到達しない穴だった。実測〈fresh CLI の `/proc/self/maps`〉でパス無し行に `x` を
+    含むものは確認できなかったため、推測で許容リスト化はせず fail-closed 側に倒す）。
+    `deleted=True` は呼び出し側の fail-closed 事由になる——削除済み実体は hash 突合
+    が原理的に不能なため（「覆えないものを覆ったと主張しない」#217 原則）。
     """
     maps_path = Path("/proc/self/maps")
     try:
@@ -968,7 +1027,10 @@ def _parse_proc_self_maps_executable_mappings() -> "list[tuple[str, bool]]":
             continue
         raw_path = fields[5].strip() if len(fields) >= 6 else ""
         if not raw_path:
-            continue  # パスフィールドすら無い完全な匿名マッピング（通常は現れない）
+            # パスフィールドすら無い純粋な匿名 exec 領域。`continue` で権限検査後の
+            # 候補から落とさず、named 匿名マッピングと同じ判定経路（許容リスト外は
+            # fail-closed）に合流させる（Codex 9 巡目 P1）。
+            raw_path = "[anonymous]"
         deleted = raw_path.endswith(_DELETED_MAPPING_SUFFIX)
         if deleted:
             raw_path = raw_path[: -len(_DELETED_MAPPING_SUFFIX)]
@@ -985,9 +1047,29 @@ def _parse_proc_self_maps_executable_mappings() -> "list[tuple[str, bool]]":
 # 影響しない——この可変ログ自体を読むのは凍結直後の 1 回だけでよい。
 _PRE_BOUND_NATIVE_MAPPING_LOG: List[str] = []
 
+# `_scorer_pins()` の**最初の**（load 時・`import numpy` 等より前の）呼び出しが完了した
+# かどうか（Codex 9 巡目 CI 追加分）。この 1 回目の呼び出しだけが H11 の「束縛前に
+# 何も先読みされていないはず」という不変条件が実際に成立する文脈——2 回目以降の
+# 呼び出し（`_require_unchanged_since_load` の post-run 再検証、
+# `_require_homogeneous_scorer`/`_require_fresh_process_report_provenance` の
+# 評価器側再計算等、呼び出し元は本ファイル内に複数ある）はいずれも「同じプロセスで
+# 既に実抽出（CREPE/TensorFlow 等）が走った後」でありうるため、その場合に生成される
+# 正当な匿名 JIT コード領域は初回束縛時の脅威モデルの対象外——`/proc/self/maps` だけ
+# では出所を区別できない（docstring 参照）。呼び出し元ごとに個別の引数を持ち回るのは
+# 実測で判明した該当箇所の多さ（`_require_homogeneous_scorer` だけでなく
+# `evaluate_m2_bars` の複数経路）に対して取りこぼしやすいため、`_scorer_pins`/
+# `_scorer_dist_native_sha256` の**既定値そのもの**をこのフラグから自動導出する
+# （テストが明示的に `treat_anonymous_as_recorded=` を渡した場合はそちらを優先）。
+_SCORER_PINS_INITIAL_BIND_COMPLETE = False
+
 
 def _reject_pre_bound_native_mappings(
-    name: str, *, package_root: Path, natives: "set[Path]", use_cache: bool = True
+    name: str,
+    *,
+    package_root: Path,
+    natives: "set[Path]",
+    use_cache: bool = True,
+    treat_anonymous_as_recorded: bool = False,
 ) -> "List[str]":
     """`name` の pin 束縛前に、既にロード済みの実行可能マッピングを検出・記録する。
 
@@ -1046,6 +1128,35 @@ def _reject_pre_bound_native_mappings(
     非許容匿名）はこの 2 段構えの**外**——束縛時点で即座に fail-closed にする
     （記録して後回しにするほど無害ではない）。
 
+    **`treat_anonymous_as_recorded`（Codex 9 巡目 CI 追加分）**: H11 の非許容匿名
+    実行マッピングは既定で即 fail-closed にするが、これは「束縛前（`import numpy` 等
+    より前）に既に何かがロードされている」という**初回束縛**の脅威モデルを前提に
+    している。`_scorer_pins()`/`_scorer_dist_native_sha256()` はこの同じ関数を
+    **初回束縛の 1 回だけでなく**、`_require_unchanged_since_load()` の post-run
+    自己整合性再検証、`_require_homogeneous_scorer`・`_require_fresh_process_
+    report_provenance` の評価器側スコアラー再計算等、**プロセス内の複数箇所**から
+    繰り返し呼ぶ（実測: 本ハーネスの `--categories S_direct` 実 CLI run で CREPE/
+    TensorFlow が一度でも import されると、以降このプロセス内で `_scorer_pins()`
+    を呼ぶあらゆる箇所——テストで言えば別の無関係なテストの `run_accuracy()`/
+    `evaluate_m2_bars()` 呼び出しも含む——が同じ匿名 JIT 領域（XLA/oneDNN 等）を
+    検出し fail-closed した。`/proc/self/maps` は匿名領域の生成元を区別できず、
+    「攻撃」と「無害な JIT」のどちらとも決定不能）。呼び出し元ごとに個別の引数を
+    持ち回るのは取りこぼしやすいため、`_scorer_pins`/`_scorer_dist_native_sha256`
+    の**既定値そのもの**をモジュール冒頭の `_SCORER_PINS_INITIAL_BIND_COMPLETE`
+    フラグ（`_scorer_pins()` の 1 回目の呼び出し完了後に一度だけ `True` へ切り替わる）
+    から自動導出する: 1 回目の呼び出し（load 時、`import numpy` 等より前）だけが
+    厳格（`False`、非許容匿名は即 raise）、2 回目以降は自動的に緩和（`True`、
+    `recorded` へ記録するだけ）される。**「実測経路」（`_require_fresh_process_
+    report_provenance` の report フィールド検査・`_require_publishable_runs`・
+    evaluate 自己ゲート）が読む report の `pre_bound_scorer_native_mappings`
+    フィールドは、load 時（`import numpy` より前）の 1 回目の呼び出し結果を凍結した
+    `_PRE_BOUND_SCORER_NATIVE_MAPPINGS` から取るため、この既定値変更の影響を一切
+    受けない**（弱めるのは「2 回目以降の内部再チェックがクラッシュするか」だけで、
+    publish 可否を左右する報告 pin の強度はそのまま）。`_reject_pre_bound_native_
+    mappings` 自体の引数既定値は `False`（ハードコード、フラグ非依存）のまま——
+    直接呼び出す全既存テストの厳格挙動はそのため変わらない。明示的に `True`/`False`
+    を渡した呼び出しは常にそちらが優先される。
+
     **bytes が一致すれば「無害な重複」**——6 巡目の実装中の実測で判明した良性の衝突が
     ある: auditwheel は同梱ネイティブのファイル名にビルド内容の hash を含めるため
     （例 `libgfortran-040039e1-0352e75f.so.5.0.0`）、numpy と scipy が同一の
@@ -1078,6 +1189,7 @@ def _reject_pre_bound_native_mappings(
         interpreter_path = Path(sys.executable).resolve()
     except OSError:
         interpreter_path = None
+    interpreter_shared_libraries = _interpreter_shared_library_paths()
 
     def _content_matches_a_native(mapped_path: Path, candidates: "list[Path]") -> bool:
         if not candidates or not mapped_path.is_file():
@@ -1109,6 +1221,15 @@ def _reject_pre_bound_native_mappings(
         if raw_path.startswith("["):
             if raw_path in _ANONYMOUS_EXECUTABLE_MAPPING_ALLOWLIST:
                 continue  # カーネル注入の無害な疑似マッピング（H11）
+            if treat_anonymous_as_recorded:
+                # run 完了後の自己整合性再検証（`_require_unchanged_since_load`）限定:
+                # 実抽出（CREPE/TensorFlow 等）が生成した正当な JIT 匿名領域と攻撃を
+                # 区別できないため、この呼び出し元だけは 2 段構え側（record）に倒す。
+                # report の `pre_bound_scorer_native_mappings` は load 時の 1 回目の
+                # 呼び出し結果を凍結済みで、この分岐を経由しないため実測経路の強度は
+                # 変わらない（docstring 参照）。
+                recorded.append(raw_path)
+                continue
             raise RuntimeError(
                 f"evaluate_m2_bars: {name!r} の pin 束縛前に許容外の匿名実行マッピング "
                 f"{raw_path!r} を検出; JIT/手動 mmap ロードの疑いがあり file-backed で"
@@ -1132,6 +1253,8 @@ def _reject_pre_bound_native_mappings(
             )
         if interpreter_path is not None and mapped_path == interpreter_path:
             continue  # 本プロセスの解釈系実行ファイル自身
+        if mapped_path in interpreter_shared_libraries:
+            continue  # `--enable-shared` ビルドの CPython 自身の共有ライブラリ実体
         if not _is_native_library(mapped_path):
             raise RuntimeError(
                 f"evaluate_m2_bars: {name!r} の pin 束縛前に拡張子なしの実行マッピング "
@@ -1236,7 +1359,12 @@ def _reject_sourceless_scorer_code(
             )
 
 
-def _scorer_dist_native_sha256(name: str, *, use_cache: bool = True) -> str:
+def _scorer_dist_native_sha256(
+    name: str,
+    *,
+    use_cache: bool = True,
+    treat_anonymous_as_recorded: "Optional[bool]" = None,
+) -> str:
     """`name` の wheel 同梱ネイティブ実体（パッケージ本体ディレクトリ **外**）の pin。
 
     numpy/scipy の一般的な wheel install は OpenBLAS 等の実行ネイティブ実体を
@@ -1418,15 +1546,26 @@ def _scorer_dist_native_sha256(name: str, *, use_cache: bool = True) -> str:
         # 閉包の包含証明）の順で検証する。ディスク上の実体を hash する前に、まず
         # 「メモリ上の実行がその実体と一致する保証があるか」を確かめるのが筋が通る
         # 順序（P1-A は disk-only の静的解析で、P1-B が拾う実行時の先読みまでは覆わない）。
+        resolved_treat_anonymous = (
+            _SCORER_PINS_INITIAL_BIND_COMPLETE
+            if treat_anonymous_as_recorded is None
+            else treat_anonymous_as_recorded
+        )
         _reject_pre_bound_native_mappings(
-            name, package_root=package_root, natives=natives, use_cache=use_cache
+            name,
+            package_root=package_root,
+            natives=natives,
+            use_cache=use_cache,
+            treat_anonymous_as_recorded=resolved_treat_anonymous,
         )
         _verify_scorer_dt_needed_closure(name, package_root=package_root, natives=natives)
 
     return sha256_of_files(sorted(natives), use_cache=use_cache)
 
 
-def _scorer_pins(*, use_cache: bool = True) -> Dict[str, Any]:
+def _scorer_pins(
+    *, use_cache: bool = True, treat_anonymous_as_recorded: "Optional[bool]" = None
+) -> Dict[str, Any]:
     """指標を計算したスコアラー閉包（mir_eval + scipy + numpy）の version / code pin。
 
     `generator_code_sha256` は first-party 閉包に限っている（third-party を混ぜると
@@ -1449,6 +1588,17 @@ def _scorer_pins(*, use_cache: bool = True) -> Dict[str, Any]:
     `LD_PRELOAD` の非空を拒否する。値そのものの精査経路は用意しない——`LD_PRELOAD`
     が立っている限り、以降どの pin を計算してもディスク hash が実行中の実装を代表
     する保証がないため、計算に入る前に fail-closed で止める。
+
+    `treat_anonymous_as_recorded`（Codex 9 巡目 CI 追加分）: 省略時（`None`）は
+    `_SCORER_PINS_INITIAL_BIND_COMPLETE`（本ファイル冒頭付近、`_scorer_pins()` の
+    最初の呼び出し完了後に一度だけ `True` へ切り替わる）から自動導出する——1 回目
+    の呼び出し（load 時、`import numpy` 等より前）だけが厳格（`False`）、2 回目
+    以降（`_require_unchanged_since_load` の post-run 再検証・
+    `_require_homogeneous_scorer`・`_require_fresh_process_report_provenance` 等、
+    実測で判明した呼び出し元の多さに対して個別の引数持ち回しは取りこぼしやすい）は
+    自動的に緩和される。明示的に `True`/`False` を渡せばそちらを優先する（既存の
+    直接呼び出しテストの厳格挙動はそのため変わらない）。詳細は
+    `_reject_pre_bound_native_mappings` の docstring 参照。
     """
     import importlib.metadata
 
@@ -1462,7 +1612,9 @@ def _scorer_pins(*, use_cache: bool = True) -> Dict[str, Any]:
             version = None
         pins[f"{name}_version"] = version
         pins[f"{name}_code_sha256"] = package_code_sha256(name, use_cache=use_cache)
-        pins[f"{name}_dist_native_sha256"] = _scorer_dist_native_sha256(name, use_cache=use_cache)
+        pins[f"{name}_dist_native_sha256"] = _scorer_dist_native_sha256(
+            name, use_cache=use_cache, treat_anonymous_as_recorded=treat_anonymous_as_recorded
+        )
     return pins
 
 
@@ -1490,6 +1642,12 @@ def _scorer_pinned_origins() -> Dict[str, str]:
 
 
 _LOADED_SCORER_PINS = _scorer_pins()
+
+# この 1 回目の呼び出しだけが「束縛前に何も先読みされていないはず」という H11 の
+# 不変条件が実際に成立する文脈（Codex 9 巡目 CI 追加分）。以降 `_scorer_pins()` を
+# 呼ぶすべての箇所（`treat_anonymous_as_recorded` を明示しない限り）は自動的に
+# 匿名マッピングの即時 raise を緩和する。
+_SCORER_PINS_INITIAL_BIND_COMPLETE = True
 
 # H8: 束縛時点の origin を凍結する（post-run に実際の import 結果と突き合わせる基準値）。
 _SCORER_PINNED_ORIGINS: Dict[str, str] = _scorer_pinned_origins()
@@ -1526,11 +1684,24 @@ def _mir_eval_paths() -> List[Path]:
     """provenance のために hash するスコアラー閉包のファイル群（`--out` 保護用）。
 
     関数名は歴史的経緯で `mir_eval` のままだが、`_scorer_pins()` が pin する閉包
-    全体（`_SCORER_RUNTIME_PACKAGES` = mir_eval + scipy + numpy）を回って一般化する。
+    全体（`_SCORER_RUNTIME_PACKAGES` = mir_eval + scipy + numpy + セルフレビュー H1 で
+    追加した decorator/threadpoolctl/charset_normalizer）を回って一般化する。
     `_scorer_pins()` の pin 対象より保護集合が狭いと、`--out` が scipy/numpy の
     ソースを指したときに「pin 済みの実行コードを report で潰す」穴が残る。
+
+    **単一モジュール配布の走査限定（Codex 9 巡目 P2）**: `threadpoolctl`
+    （`submodule_search_locations is None`）のように site-packages 直下に 1 ファイル
+    だけを置く配布で `spec.origin.parent` を無条件に rglob すると、**site-packages
+    全体**（他の無関係な distribution も含む数千ファイル）を巻き込む——`#217` の
+    「`soundfile.py` 単一モジュールで site-packages 全体を hash してしまう」不具合と
+    同型の再発（`_SCORER_RUNTIME_PACKAGES` に H1 で threadpoolctl を追加するまでは
+    このコード経路を single-file 配布が一度も通らず、潜在していた）。
+    `_runtime_input_paths()` が既に正しく実装している「単一モジュールは本体 +
+    `_module_companion_files` の同伴物だけに限定する」規約に揃える。
     """
     import importlib.util
+
+    from svp_rpe.melody.provenance import _module_companion_files
 
     paths: "set[Path]" = set()
     for name in _SCORER_RUNTIME_PACKAGES:
@@ -1540,8 +1711,18 @@ def _mir_eval_paths() -> List[Path]:
             continue
         if spec is None or spec.origin in (None, "built-in", "frozen"):
             continue
-        root = Path(spec.origin).resolve().parent
-        paths.update(p.resolve() for p in root.rglob("*.py"))
+        origin_path = Path(spec.origin).resolve()
+        root = origin_path.parent
+        if getattr(spec, "submodule_search_locations", None) is None:
+            # 単一モジュール: 親ディレクトリ（site-packages 全体）を rglob しない。
+            # 本体 + 規約で決まる同伴物だけを対象にする（Codex 9 巡目 P2）。
+            paths.add(origin_path)
+            try:
+                paths.update(p.resolve() for p in _module_companion_files(name, root))
+            except OSError:
+                continue
+        else:
+            paths.update(p.resolve() for p in root.rglob("*.py"))
     return sorted(paths)
 
 
