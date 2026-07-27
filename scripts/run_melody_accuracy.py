@@ -391,6 +391,20 @@ def _scorer_dist_native_sha256(name: str, *, use_cache: bool = True) -> str:
     返す——「無い」と「hash できない」を区別するため、RECORD 自体が引けない・列挙した
     パスが実在しない場合は例外で fail-closed にする（「覆えない閉包を覆ったと
     主張しない」#217 原則）。**import を起こさない**（RECORD 読みと `find_spec` のみ）。
+
+    **distribution/import 所有権検証（Codex P1 4 巡目）**: `importlib.metadata` の
+    メタデータ側（`distribution().files` = RECORD）と `find_spec` の実行側は、
+    shadow install・重複 site-packages（例: 別 sys.path エントリに同名パッケージが
+    2 つ）の環境では**別のインストールを指しうる**。version pin（`importlib.metadata`
+    由来）と code/native pin（`find_spec` 由来）が別インストールを指したまま一致比較
+    されると、pin 全体（version・code・native の 3 つとも）が「揃っている」ことの
+    保証を失う——#217 の場所軸（どのファイルを読んだか）が、そもそも同じ package の
+    2 つの見方の間で揃っていない。RECORD 内の `{top}/__init__.py`（`top` は
+    `find_spec` が解決したパッケージ本体ディレクトリ名）を `dist.locate_file` で
+    実パスへ解決し、`find_spec` の `origin` と一致することを要求する。RECORD に
+    `{top}/__init__.py` が無い（editable install 等で所有権を立証できない）場合も、
+    spec が解決できない（導入済みのはずなのに namespace/zip import 等で origin が
+    無い）場合も、検証不能を「揃っている」と主張しない fail-closed に倒す。
     """
     import importlib.metadata
     import importlib.util
@@ -411,25 +425,54 @@ def _scorer_dist_native_sha256(name: str, *, use_cache: bool = True) -> str:
             "wheel 同梱ネイティブ実体を覆えない閉包を覆ったと主張しない (fail-closed)"
         )
 
-    package_root: Optional[Path] = None
     try:
         spec = importlib.util.find_spec(name)
     except Exception:
         spec = None
-    if spec is not None and getattr(spec, "origin", None) not in (None, "built-in", "frozen"):
-        package_root = Path(spec.origin).resolve().parent
+    if spec is None or getattr(spec, "origin", None) in (None, "built-in", "frozen"):
+        # distribution は引けた（導入済み）のに実行対象を解決できない。「未導入」
+        # （distribution も引けない・上で空入力を返す分岐）とは区別し、こちらは
+        # 「導入済みだが実体不明」として skip せず raise する（#217）。
+        raise RuntimeError(
+            f"evaluate_m2_bars: distribution {name!r} は導入済みだが find_spec で実行対象を "
+            "解決できない（namespace/zip import 等）; 実行される package を特定できない "
+            "closure を覆ったと主張しない (fail-closed)"
+        )
+    package_root = Path(spec.origin).resolve().parent
+    executed_init = Path(spec.origin).resolve()
+
+    # 所有権検証: RECORD（メタデータ側）が指す `{top}/__init__.py` の実パスと、
+    # find_spec（実行側）が指す origin が同一ファイルであることを要求する。
+    top = package_root.name
+    owning_record = next(
+        (record for record in dist.files if str(record) == f"{top}/__init__.py"), None
+    )
+    if owning_record is None:
+        raise RuntimeError(
+            f"evaluate_m2_bars: distribution {name!r} の RECORD に {top}/__init__.py が "
+            "見つからない（editable install 等で所有権を立証できない）; 覆えない閉包を "
+            "覆ったと主張しない (fail-closed)"
+        )
+    owned_init = Path(str(dist.locate_file(owning_record))).resolve()
+    if owned_init != executed_init:
+        raise RuntimeError(
+            f"evaluate_m2_bars: distribution {name!r} のメタデータが指す package "
+            f"({owned_init}) と find_spec が実行する package ({executed_init}) が別;"
+            " distribution メタデータが実行される package を所有していない ="
+            " shadow/重複インストールの疑いがあり、version/native pin がどちらの"
+            " 実装を指すか保証できない (fail-closed)"
+        )
 
     natives: "set[Path]" = set()
     for record in dist.files:
         if not _is_native_library(Path(str(record))):
             continue
         located = Path(str(dist.locate_file(record))).resolve()
-        if package_root is not None:
-            try:
-                located.relative_to(package_root)
-                continue  # 本体ディレクトリ配下は package_code_sha256 側が既に hash 済み
-            except ValueError:
-                pass
+        try:
+            located.relative_to(package_root)
+            continue  # 本体ディレクトリ配下は package_code_sha256 側が既に hash 済み
+        except ValueError:
+            pass
         if not located.is_file():
             raise RuntimeError(
                 f"evaluate_m2_bars: distribution {name!r} の RECORD が指すネイティブ実体 "

@@ -3139,6 +3139,32 @@ def test_native_library_scan_covers_versioned_and_windows_libraries(monkeypatch,
     assert before[1] != after[1]
 
 
+def test_native_library_predicate_accepts_version_before_suffix_dylib_form():
+    """`libopenblas.0.dylib` のような「版番号が拡張子の前」形式も native と判定する。
+
+    Codex P1 3 巡目レビュー（scripts/run_melody_accuracy.py PR #225）で
+    「`_is_native_library` は `.dylib`/`.dylib.1` を受理するが `.0.dylib` を受理せず
+    macOS wheel の companion library が pin から漏れる」という懸念が挙がったが、
+    `_NATIVE_LIBRARY_RE = re.compile(r"\\.(so|dylib|dll|pyd)(\\.\\d+)*$")` は `search` で
+    適用されるため末尾が `.dylib`/`.so`/`.dll` でありさえすればマッチし、版番号が
+    前置されていても skip は起きない（実測で反証済み・PR #225 スレッド
+    `PRRT_kwDOSD2OOM6T77EV` で不採用と回答）。将来の regression 防止として、この
+    挙動自体を pin する。
+    """
+    from svp_rpe.melody import provenance as melody_provenance
+
+    version_before_suffix_cases = (
+        "libopenblas.0.dylib",
+        "libopenblas64_.0.dylib",
+        "libgfortran.5.dylib",
+        "libscipy_openblas64_-56d6093b.so",
+        "libgfortran-040039e1.so.5.0.0",
+        "msvcp140.dll",
+    )
+    for name in version_before_suffix_cases:
+        assert melody_provenance._is_native_library(Path(name)), name
+
+
 def test_numpy_is_pinned_in_every_inference_closure():
     """numpy も本層のコードが直接呼ぶので全閉包に入れる（#217）。"""
     from svp_rpe.melody import provenance as melody_provenance

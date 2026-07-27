@@ -959,6 +959,81 @@ def test_scorer_dist_native_sha256_fails_closed_when_record_unavailable(
         harness._scorer_dist_native_sha256("numpy")
 
 
+def test_scorer_pins_are_unchanged_by_ownership_verification() -> None:
+    """所有権検証（Codex P1 4 巡目）を追加しても、正常環境の 3 パッケージ pins は不変（回帰）。
+
+    `_scorer_dist_native_sha256` に distribution/find_spec 所有権チェックを追加した
+    ことで、shadow install の無い通常環境まで誤って fail-closed にしないことを固定する。
+    """
+    pins = harness._scorer_pins()
+    for name in harness._SCORER_RUNTIME_PACKAGES:
+        assert pins[f"{name}_version"], name
+        assert harness._is_sha256(pins[f"{name}_code_sha256"]), name
+        assert harness._is_sha256(pins[f"{name}_dist_native_sha256"]), name
+
+
+def test_scorer_dist_native_sha256_fails_closed_on_shadow_install(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """distribution メタデータと find_spec が別インストールを指す shadow 環境は拒否する
+    （Codex P1 4 巡目）。
+
+    RECORD（メタデータ側）が指す `{top}/__init__.py` の実パスと、`find_spec`（実行側）の
+    origin が別ファイルだと、version pin（メタデータ由来）と code/native pin（find_spec
+    由来）が別インストールを指したまま一致比較されうる——揃っているという保証を失う。
+    """
+    import importlib.metadata
+
+    class _ShadowRecord(str):
+        pass
+
+    class _ShadowDistribution:
+        files = [_ShadowRecord("numpy/__init__.py")]
+
+        def locate_file(self, record: Any) -> str:
+            return "/nonexistent/shadow-site-packages/numpy/__init__.py"
+
+    real_distribution = importlib.metadata.distribution
+
+    def _fake_distribution(name: str) -> Any:
+        if name == "numpy":
+            return _ShadowDistribution()
+        return real_distribution(name)
+
+    monkeypatch.setattr(importlib.metadata, "distribution", _fake_distribution)
+    with pytest.raises(RuntimeError, match="shadow|重複インストール"):
+        harness._scorer_dist_native_sha256("numpy")
+
+
+def test_scorer_dist_native_sha256_fails_closed_when_record_lacks_init(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RECORD に `{top}/__init__.py` が無い（editable install 等）場合も所有権を立証できず
+    fail-closed する（Codex P1 4 巡目）。
+    """
+    import importlib.metadata
+
+    class _NoInitRecord(str):
+        pass
+
+    class _NoInitDistribution:
+        files = [_NoInitRecord("numpy/version.py")]
+
+        def locate_file(self, record: Any) -> str:
+            return f"/nonexistent/{record}"
+
+    real_distribution = importlib.metadata.distribution
+
+    def _fake_distribution(name: str) -> Any:
+        if name == "numpy":
+            return _NoInitDistribution()
+        return real_distribution(name)
+
+    monkeypatch.setattr(importlib.metadata, "distribution", _fake_distribution)
+    with pytest.raises(RuntimeError, match="__init__.py"):
+        harness._scorer_dist_native_sha256("numpy")
+
+
 def test_scorer_runtime_packages_are_always_in_runtime_package_names() -> None:
     """スコアラー閉包は route の抽出器選択に関係なく `_runtime_package_names()` に入る。
 
