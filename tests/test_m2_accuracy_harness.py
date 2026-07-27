@@ -687,7 +687,28 @@ def test_evaluate_m2_bars_rejects_divergent_mir_eval_pins() -> None:
     ]
     reports[1]["mir_eval_version"] = "0.999"
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
-    with pytest.raises(ValueError, match="mir_eval pin"):
+    with pytest.raises(ValueError, match="スコアラー閉包 pin"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+def test_evaluate_m2_bars_rejects_divergent_scipy_pins() -> None:
+    """mir_eval が同一でも scipy の pin が repeats 間で不一致なら拒否する（Codex P1）。
+
+    `mir_eval.melody` は `scipy.interpolate` を直接実行するため、patch/別バージョンの
+    scipy は mir_eval 自体の pin を動かさずに RPA/RCA を変えうる——スコアラー閉包の
+    一部として scipy も揃える必要がある。
+    """
+    reports = [
+        _fake_run(
+            categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+        )
+        for _ in range(2)
+    ]
+    reports[1]["scipy_version"] = "0.999"
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="スコアラー閉包 pin"):
         harness.evaluate_m2_bars(
             [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
         )
@@ -704,6 +725,23 @@ def test_evaluate_m2_bars_rejects_missing_mir_eval_pin() -> None:
         del report["mir_eval_version"]
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="mir_eval_version"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+def test_evaluate_m2_bars_rejects_missing_scipy_pin() -> None:
+    """scorer 閉包 pin の欠落は package 名を問わず一律 fail-closed（Codex P1）。"""
+    reports = [
+        _fake_run(
+            categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+        )
+        for _ in range(2)
+    ]
+    for report in reports:
+        del report["scipy_version"]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="scipy_version"):
         harness.evaluate_m2_bars(
             [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
         )
@@ -747,6 +785,28 @@ def test_evaluate_m2_bars_records_bit_identical_repeats_on_pass() -> None:
     assert verdict["categories"]["S_direct"]["repeats_bit_identical"] is True
     assert verdict["categories"]["S_direct"]["status"] == "pass"
     assert verdict["mir_eval_version"] == reports[0]["mir_eval_version"]
+
+
+def test_verdict_carries_the_full_scorer_pin_closure() -> None:
+    """verdict は mir_eval だけでなく scipy/numpy の pin も 6 キー全部を運ぶ（Codex P1）。
+
+    旧実装は `mir_eval_version`/`mir_eval_code_sha256` の 2 キーしか転記せず、verdict
+    単体からは scipy/numpy が何で測られたか読み取れなかった。
+    """
+    reports = [
+        _fake_run(
+            categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+        )
+        for _ in range(2)
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    verdict = harness.evaluate_m2_bars(
+        [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+    )
+    for name in harness._SCORER_RUNTIME_PACKAGES:
+        assert verdict[f"{name}_version"] == reports[0][f"{name}_version"]
+        assert harness._is_sha256(verdict[f"{name}_code_sha256"])
+        assert verdict[f"{name}_code_sha256"] == reports[0][f"{name}_code_sha256"]
 
 
 def test_module_file_resolution_imports_nothing(monkeypatch) -> None:
@@ -2218,6 +2278,13 @@ def test_run_accuracy_rejects_wav_swapped_during_extraction() -> None:
     """抽出中に入力 WAV を差し替えると publish 前に落ちる（pre/post digest 束縛）。"""
 
     def _swapping_runner(audio_path: str, route):
+        # ハーネスは decode 前に WAV を 0o400（read-only）へ落とす（第 39 巡）。root
+        # ではパーミッションビットが素通りして書けてしまうが、非 root（CI runner）
+        # では素直に PermissionError になる。ここで検証したいのは read-only ビット
+        # そのものではなく差し替えを **hash 照合で検出できるか** なので、差し替え役
+        # （ファイル所有者）として明示 chmod してから書く——所有者による chmod は
+        # 想定する脅威モデルの範囲内（同権限者はプロセスメモリも書ける = 既定の境界外）。
+        os.chmod(audio_path, 0o644)
         Path(audio_path).write_bytes(b"not-a-wav-anymore")
         return _make_fake_runner(shift_cents=10.0)(audio_path, route)
 
@@ -2558,7 +2625,7 @@ def test_scorer_pins_must_match_evaluator_environment() -> None:
         report["mir_eval_version"] = "9.99.9"
         report["mir_eval_code_sha256"] = fabricated
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
-    with pytest.raises(ValueError, match="実スコアラー pin"):
+    with pytest.raises(ValueError, match="スコアラー閉包 pin"):
         harness.evaluate_m2_bars(
             [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
         )
@@ -2677,8 +2744,7 @@ def test_fresh_process_report_provenance_gates() -> None:
         "route_runner_injected": False,
         "preloaded_seed_modules": [],
         "generator_code_sha256": harness._LOADED_GENERATOR_CODE_SHA256,
-        "mir_eval_version": scorer["mir_eval_version"],
-        "mir_eval_code_sha256": scorer["mir_eval_code_sha256"],
+        **scorer,
         "harness_loaded_as_main": True,
         "specs_sha256": frozen_specs,
     }
@@ -2689,7 +2755,11 @@ def test_fresh_process_report_provenance_gates() -> None:
         ({"route_runner_injected": True}, "注入ランナー"),
         ({"preloaded_seed_modules": ["svp_rpe"]}, "事前ロード"),
         ({"generator_code_sha256": "0" * 64}, "generator_code_sha256"),
-        ({"mir_eval_code_sha256": "1" * 64}, "スコアラー pin"),
+        ({"mir_eval_code_sha256": "1" * 64}, "スコアラー閉包 pin"),
+        # (d) numpy pin の差でも fresh-process 照合が fail-closed すること（Codex P1）:
+        # mir_eval 単体の pin を旧実装のまま揃えても numpy が別 stack なら拒否する。
+        ({"numpy_code_sha256": "3" * 64}, "スコアラー閉包 pin"),
+        ({"scipy_version": "0.0-stale"}, "スコアラー閉包 pin"),
         ({"schema_version": "m2-accuracy-report/9.9"}, "schema_version"),
         ({"harness_loaded_as_main": False}, "直接パス"),
         ({"specs_sha256": hashlib.sha256(b"other").hexdigest()}, "凍結 specs"),
@@ -2904,7 +2974,19 @@ def test_evaluate_m2_bars_has_no_verification_runner_seam() -> None:
 def test_reverification_refuses_when_stack_cannot_rerun(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """実抽出器で測り直せない環境（素の CI）からは publish しない。"""
+    """実抽出器で測り直せない環境（素の CI）からは publish しない。
+
+    `test_run_accuracy_real_extractor_falls_back_to_unavailable_when_uninstalled`
+    と同じ理由で skip する: crepe が（手動導入や slow-lane 作業の副産物として）
+    実際にこの環境へ入っていると、`_ORIG_REVERIFY` は実抽出器で測り直しに成功して
+    しまい、この unavailable-path smoke test の前提が成立しない。
+    """
+    try:
+        import crepe  # noqa: F401
+
+        pytest.skip("crepe is installed in this environment; unavailable-path smoke test N/A")
+    except ImportError:
+        pass
     reports = [
         _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
         for _ in range(2)

@@ -703,6 +703,42 @@ def _is_sha256(value: Any) -> bool:
     return isinstance(value, str) and bool(_SHA256_RE.fullmatch(value))
 
 
+def _validated_scorer_pin_tuple(
+    mapping: Dict[str, Any], *, context: str
+) -> "Tuple[Tuple[str, str], ...]":
+    """report/environment の mapping からスコアラー閉包全体の pin をタプル化する。
+
+    `_SCORER_RUNTIME_PACKAGES`（mir_eval + scipy + numpy、Codex P1）を順に回り、
+    各 `{name}_version` が非空文字列・`{name}_code_sha256` が真の sha256 であることを
+    fail-closed に検証する。旧実装は `mir_eval_version`/`mir_eval_code_sha256` の 2
+    キーしか見なかったため、異なる（あるいは patch された）scipy/numpy で測った
+    report が同一スコアラー stack として混ざり受理されてしまっていた（Codex P1）。
+    `_require_homogeneous_scorer` / `_require_fresh_process_report_provenance` /
+    verdict 転記の 3 箇所がこのヘルパーで一般化された同じ検証・同じ順序を共有する。
+
+    戻り値は `_SCORER_RUNTIME_PACKAGES` の順で `(version, code_sha256)` を並べた
+    タプル（等価比較・集合化に使える）。`context` はエラーメッセージに出す呼び出し元
+    識別子（例: `"reports[3]"` や `"測り直し report"`）。
+    """
+    pins: List[Tuple[str, str]] = []
+    for name in _SCORER_RUNTIME_PACKAGES:
+        version = mapping.get(f"{name}_version")
+        if not version or not isinstance(version, str):
+            raise ValueError(
+                f"evaluate_m2_bars: {context} が {name}_version を欠く; "
+                "どの数値実装で測ったか不明な row にバーを適用しない (fail-closed)"
+            )
+        code = mapping.get(f"{name}_code_sha256")
+        if not _is_sha256(code):
+            raise ValueError(
+                f"evaluate_m2_bars: {context} の {name}_code_sha256 {code!r} が "
+                f"真の sha256 でない; {name} 実装を pin できない row を受理しない "
+                "(fail-closed)"
+            )
+        pins.append((version, code))
+    return tuple(pins)
+
+
 def _utc_now() -> str:
     """現在時刻（UTC・ISO 8601・秒精度）。run_melody_observability.py と同じ定義。"""
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -1969,14 +2005,17 @@ def _require_fresh_process_report_provenance(
             f"{generator!r} が評価器の {_LOADED_GENERATOR_CODE_SHA256!r} と不一致; "
             "測り直し中に first-party コードが変わっている (fail-closed)"
         )
-    scorer = _scorer_pins(use_cache=False)
-    reported_scorer = (report.get("mir_eval_version"), report.get("mir_eval_code_sha256"))
-    expected_scorer = (scorer["mir_eval_version"], scorer["mir_eval_code_sha256"])
+    reported_scorer = _validated_scorer_pin_tuple(
+        report, context=f"category {category!r} の測り直し report"
+    )
+    expected_scorer = _validated_scorer_pin_tuple(
+        _scorer_pins(use_cache=False), context="評価環境の再計算スコアラー pin"
+    )
     if reported_scorer != expected_scorer:
         raise RuntimeError(
-            f"category {category!r} の測り直し report のスコアラー pin {reported_scorer!r} "
-            f"が評価環境の {expected_scorer!r} と不一致; 測り直し中に mir_eval が変わって "
-            "いる (fail-closed)"
+            f"category {category!r} の測り直し report のスコアラー閉包 pin "
+            f"{reported_scorer!r} が評価環境の {expected_scorer!r} と不一致; 測り直し中に "
+            "mir_eval/scipy/numpy のいずれかが変わっている (fail-closed)"
         )
     if report.get("harness_loaded_as_main") is not True:
         raise RuntimeError(
@@ -2559,52 +2598,48 @@ def _require_publishable_runs(reports: List[Dict[str, Any]]) -> None:
 
 
 def _require_homogeneous_scorer(reports: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """全 report が同一の mir_eval スコアラーで測られたことを要求する（fail-closed）。
+    """全 report が同一のスコアラー閉包で測られたことを要求する（fail-closed）。
 
-    `mir_eval>=0.7` は上限が無く、別リリースは RPA/RCA/VR/VFA の定義や境界処理が
-    変わりうる。`generator_code_sha256` は first-party 閉包なので third-party の差を
-    捉えない——よってスコアラー自身の pin を report レベルで突き合わせる（Codex P1）。
+    `_SCORER_RUNTIME_PACKAGES`（mir_eval + scipy + numpy、Codex P1）は上限の無い
+    バージョン制約で運用されており、別リリースは RPA/RCA/VR/VFA の定義・境界処理・
+    数値実装が変わりうる。`generator_code_sha256` は first-party 閉包なので
+    third-party の差を捉えない——よってスコアラー閉包自身の pin を report レベルで
+    突き合わせる。mir_eval だけでなく mir_eval が直接 import して実行する
+    scipy/numpy まで揃えないと、patch された数値実装で測った row を同一 stack の
+    repeats と誤認する（Codex P1）。
 
-    相互一致だけでは足りない: 両 report が同じ捏造/stale pin を名乗れば通り、verdict
+    相互一致だけでは足りない: 全 report が同じ捏造/stale pin を名乗れば通り、verdict
     はその pin を転記するので「一度も走っていないスコアラー実装」を主張する成果物が
     publish できる（Codex P2 第 23 巡）。抽出器 pin の `_require_execution_evidence`
     と同じく、**評価環境から use_cache=False で再計算した実スコアラー pin** との
     一致を publish 条件にする（report 内に無い・書き換えられない証拠）。測り直し
-    検証は評価環境の mir_eval で行われるため、この照合により「metrics を検証した
-    実装」と「verdict が名乗る実装」が同一であることが保証される。
+    検証は評価環境の mir_eval/scipy/numpy で行われるため、この照合により「metrics を
+    検証した実装」と「verdict が名乗る実装」が同一であることが保証される。
     """
-    pins: List[Tuple[Any, Any]] = []
+    pins: List[Tuple[Tuple[str, str], ...]] = []
     for idx, report in enumerate(reports):
-        version = report.get("mir_eval_version")
-        code = report.get("mir_eval_code_sha256")
-        if not version or not isinstance(version, str):
-            raise ValueError(
-                f"evaluate_m2_bars: reports[{idx}] が mir_eval_version を欠く; "
-                "どの指標実装で測ったか不明な row にバーを適用しない (fail-closed)"
-            )
-        if not _is_sha256(code):
-            raise ValueError(
-                f"evaluate_m2_bars: reports[{idx}] の mir_eval_code_sha256 {code!r} が "
-                "真の sha256 でない; スコアラー実装を pin できない row を受理しない "
-                "(fail-closed)"
-            )
-        pins.append((version, code))
+        pins.append(_validated_scorer_pin_tuple(report, context=f"reports[{idx}]"))
     if len(set(pins)) > 1:
         raise ValueError(
-            f"evaluate_m2_bars: reports の mir_eval pin が repeats 間で不一致 "
-            f"{sorted(set(pins))}; 別の指標実装で測った run を同一 stack の repeats と "
-            "見なさない (fail-closed)"
+            f"evaluate_m2_bars: reports のスコアラー閉包 pin が repeats 間で不一致 "
+            f"{sorted(set(pins))}; 別の数値実装（mir_eval/scipy/numpy のいずれか）で "
+            "測った run を同一 stack の repeats と見なさない (fail-closed)"
         )
-    environment = _scorer_pins(use_cache=False)
-    expected = (environment["mir_eval_version"], environment["mir_eval_code_sha256"])
+    expected = _validated_scorer_pin_tuple(
+        _scorer_pins(use_cache=False), context="評価環境の再計算スコアラー pin"
+    )
     if pins[0] != expected:
         raise ValueError(
-            f"evaluate_m2_bars: reports の mir_eval pin {pins[0]!r} が評価環境から "
-            f"再計算した実スコアラー pin {expected!r} と一致しない; この環境の "
-            "mir_eval で測られていない（または pin を捏造した）row を、その pin を "
-            "名乗る verdict の証拠にしない (fail-closed)"
+            f"evaluate_m2_bars: reports のスコアラー閉包 pin {pins[0]!r} が評価環境から "
+            f"再計算した実スコアラー閉包 pin {expected!r} と一致しない; この環境の "
+            "mir_eval/scipy/numpy で測られていない（または pin を捏造した）row を、その "
+            "pin を名乗る verdict の証拠にしない (fail-closed)"
         )
-    return {"mir_eval_version": pins[0][0], "mir_eval_code_sha256": pins[0][1]}
+    result: Dict[str, Any] = {}
+    for name, (version, code) in zip(_SCORER_RUNTIME_PACKAGES, pins[0]):
+        result[f"{name}_version"] = version
+        result[f"{name}_code_sha256"] = code
+    return result
 
 
 def _repeats_bit_identical(metrics_list: List[Dict[str, Any]]) -> bool:
@@ -2905,8 +2940,7 @@ def evaluate_m2_bars(
         "evaluator_code_sha256": _evaluator_code_sha256(),
         "tolerance_cents": tolerance_cents,
         "est_voiced_confidence_floor": est_voiced_floor,
-        "mir_eval_version": scorer_pins["mir_eval_version"],
-        "mir_eval_code_sha256": scorer_pins["mir_eval_code_sha256"],
+        **scorer_pins,
         "n_reports": len(reports),
         "run_ids": sorted(run_ids),
         "repeats_min": repeats_min,
