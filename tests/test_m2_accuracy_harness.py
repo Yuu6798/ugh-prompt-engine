@@ -58,6 +58,17 @@ def _clean_evaluator_preload(monkeypatch: pytest.MonkeyPatch):
     模す。
     """
     monkeypatch.setattr(harness, "_PRELOADED_SEED_MODULES", [])
+    # `_PRE_BOUND_SCORER_NATIVE_MAPPINGS` も同じ理由で正規化する（Codex P1 7 巡目）:
+    # pytest プロセスは svp_rpe 経由で numpy/scipy が本ハーネスの束縛より先に import
+    # 済みなので、素のままだと `_PRE_BOUND_NATIVE_MAPPING_LOG` 由来の凍結タプルが
+    # 非空になり、evaluate の pre-bind ゲートが機構テストの前に発火してしまう。非空の
+    # とき拒否すること自体は
+    # `test_evaluate_m2_bars_rejects_pre_bound_scorer_native_mappings` が固定する。
+    monkeypatch.setattr(harness, "_PRE_BOUND_SCORER_NATIVE_MAPPINGS", ())
+    # 直接 `_reject_pre_bound_native_mappings` を呼ぶ単体テストが共有の可変ログへ
+    # 追記し続けないよう、テストごとに空へ差し替える（テスト分離。凍結タプル
+    # `_PRE_BOUND_SCORER_NATIVE_MAPPINGS` 自体は上ですでに独立して正規化済み）。
+    monkeypatch.setattr(harness, "_PRE_BOUND_NATIVE_MAPPING_LOG", [])
     monkeypatch.setattr(harness, "_environment_execution_pins", _fake_environment_pins)
     # ハーネスはテストから import されるため直接パス実行フラグは False になる。
     # 素の CLI 起動相当へ正規化する（False の拒否自体は専用テストが固定する）。
@@ -174,6 +185,9 @@ def _fake_run(**kwargs: Any) -> Dict[str, Any]:
     # pytest では閉包モジュールが先に import 済みなので、実測 run と同じ体裁に揃える
     # （事前ロード run が素のままでは拒否されることは別テストが固定する）。
     report["preloaded_seed_modules"] = []
+    # 同様に scorer ネイティブの pre-bind も正規化する（Codex P1 7 巡目。非空のとき
+    # evaluate が拒否すること自体は専用テストが固定する）。
+    report["pre_bound_scorer_native_mappings"] = []
     return report
 
 
@@ -327,6 +341,57 @@ def test_evaluate_m2_bars_rejects_report_without_preloaded_field() -> None:
     del reports[1]["preloaded_seed_modules"]
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="preloaded_seed_modules"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+def test_run_accuracy_records_pre_bound_scorer_native_mappings() -> None:
+    """「束縛前に scorer ネイティブが既にロード済みだったか」が report に載る（Codex P1 7 巡目）。
+
+    `_clean_evaluator_preload` がテストごとに `_PRE_BOUND_SCORER_NATIVE_MAPPINGS` を
+    空へ正規化するため、ここでは通常空になる。非空だった場合に evaluate が拒否する
+    ことは `test_evaluate_m2_bars_rejects_pre_bound_scorer_native_mappings_reports` /
+    `test_evaluate_m2_bars_rejects_pre_bound_scorer_native_mappings_evaluator_process`
+    が固定する。
+    """
+    report = harness.run_accuracy(
+        categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+    )
+    pre_bound = report["pre_bound_scorer_native_mappings"]
+    assert isinstance(pre_bound, list)
+    assert all(isinstance(path, str) for path in pre_bound)
+
+
+def test_evaluate_m2_bars_rejects_pre_bound_scorer_native_mappings_reports() -> None:
+    """scorer ネイティブが束縛前に既にロード済みだった run は publish 不可（Codex P1 7 巡目）。
+
+    mmap 済み実体は disk hash では検出できない（TOCTOU: mmap → 差し替え → hash）ため、
+    このフィールドが非空の report は「pin が実行 bytes を代表する」保証を持たない。
+    """
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    reports[0]["pre_bound_scorer_native_mappings"] = [
+        "/usr/local/lib/python3.11/dist-packages/numpy.libs/libopenblas-fake.so.0"
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="束縛前"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+def test_evaluate_m2_bars_rejects_report_without_pre_bound_scorer_native_mappings_field() -> None:
+    """規律より前に作られた（または手組みの）report を黙って通さない（Codex P1 7 巡目）。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    del reports[1]["pre_bound_scorer_native_mappings"]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="pre_bound_scorer_native_mappings"):
         harness.evaluate_m2_bars(
             [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
         )
@@ -1310,15 +1375,22 @@ def test_reject_pre_bound_native_mappings_ignores_os_baseline_mapping(
     monkeypatch.setattr(
         harness, "_parse_proc_self_maps_native_libraries", lambda: [unrelated_libc.resolve()]
     )
-    harness._reject_pre_bound_native_mappings(
+    recorded = harness._reject_pre_bound_native_mappings(
         "numpy", package_root=tmp_path / "numpy_root_nonexistent", natives=set()
     )  # 例外が出ないことが期待値
+    assert recorded == []  # scorer と無関係なので記録もしない
 
 
 def test_reject_pre_bound_native_mappings_allows_scorer_owned_mapping(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """package_root 配下からのマッピングは所有物として許容する。"""
+    """package_root 配下からのマッピングは所有物として許容する——ただし記録はする。
+
+    （Codex P1 7 巡目・2 段構え）「良性だから見ない」ではなく「良性だが記録する」。
+    raise しないが、束縛前に既にロード済みだった事実は戻り値（と `_PRE_BOUND_
+    NATIVE_MAPPING_LOG`）に残る——実測経路（`evaluate_m2_bars`）だけがこれを
+    fail-closed の材料にする。
+    """
     package_root = tmp_path / "numpy"
     package_root.mkdir()
     owned_ext = package_root / "_core.cpython-311-x86_64-linux-gnu.so"
@@ -1326,9 +1398,11 @@ def test_reject_pre_bound_native_mappings_allows_scorer_owned_mapping(
     monkeypatch.setattr(
         harness, "_parse_proc_self_maps_native_libraries", lambda: [owned_ext.resolve()]
     )
-    harness._reject_pre_bound_native_mappings(
+    recorded = harness._reject_pre_bound_native_mappings(
         "numpy", package_root=package_root, natives=set()
     )  # 例外が出ないことが期待値
+    assert recorded == [str(owned_ext.resolve())]
+    assert harness._PRE_BOUND_NATIVE_MAPPING_LOG == [str(owned_ext.resolve())]
 
 
 def test_reject_pre_bound_native_mappings_allows_byte_identical_duplicate_vendoring(
@@ -1353,9 +1427,11 @@ def test_reject_pre_bound_native_mappings_allows_byte_identical_duplicate_vendor
     monkeypatch.setattr(
         harness, "_parse_proc_self_maps_native_libraries", lambda: [mapped_elsewhere.resolve()]
     )
-    harness._reject_pre_bound_native_mappings(
+    recorded = harness._reject_pre_bound_native_mappings(
         "scipy", package_root=package_root, natives={pinned.resolve()}
     )  # 例外が出ないことが期待値
+    # bytes 一致でも「起きた」事実として記録する（Codex P1 7 巡目・2 段構え）。
+    assert recorded == [str(mapped_elsewhere.resolve())]
 
 
 def test_reject_pre_bound_native_mappings_flags_content_mismatch_for_pin_target_basename(
@@ -2589,6 +2665,33 @@ def test_evaluate_m2_bars_rejects_preloaded_evaluator_process(
         )
 
 
+def test_evaluate_m2_bars_rejects_pre_bound_scorer_native_mappings_evaluator_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """評価器プロセス自身が scorer ネイティブの束縛前ロードを検出したら publish しない。
+
+    （Codex P1 7 巡目・`_PRELOADED_SEED_MODULES` と同型の 2 段構え）正規の fresh CLI
+    では `_scorer_pins()` の束縛が numpy/scipy の import より先に走るため
+    `_PRE_BOUND_SCORER_NATIVE_MAPPINGS` は必ず空になる。実測経路（この評価器自身）の
+    シミュレーションとして、凍結タプルを直接 monkeypatch で非空にし、fail-closed を
+    確認する——mmap 済み実体は disk hash では検出できない (TOCTOU) ため。
+    """
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    monkeypatch.setattr(
+        harness,
+        "_PRE_BOUND_SCORER_NATIVE_MAPPINGS",
+        ("/usr/local/lib/python3.11/dist-packages/numpy.libs/libopenblas-fake.so.0",),
+    )
+    with pytest.raises(RuntimeError, match="束縛前"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
 @pytest.mark.parametrize(
     ("mutate", "expect"),
     [
@@ -3236,6 +3339,7 @@ def test_fresh_process_report_provenance_gates() -> None:
         "generator_code_sha256": harness._LOADED_GENERATOR_CODE_SHA256,
         **scorer,
         "harness_loaded_as_main": True,
+        "pre_bound_scorer_native_mappings": [],
         "specs_sha256": frozen_specs,
     }
     harness._require_fresh_process_report_provenance(
@@ -3252,6 +3356,9 @@ def test_fresh_process_report_provenance_gates() -> None:
         ({"scipy_version": "0.0-stale"}, "スコアラー閉包 pin"),
         ({"schema_version": "m2-accuracy-report/9.9"}, "schema_version"),
         ({"harness_loaded_as_main": False}, "直接パス"),
+        # (e) scorer ネイティブが束縛前に既にロード済みだった子プロセスも拒否する
+        # （Codex P1 7 巡目）: mmap 済み実体は disk hash で検出できない。
+        ({"pre_bound_scorer_native_mappings": ["/fake/libopenblas-shadow.so.0"]}, "束縛前"),
         ({"specs_sha256": hashlib.sha256(b"other").hexdigest()}, "凍結 specs"),
     ]:
         with pytest.raises(RuntimeError, match=pattern):

@@ -602,37 +602,62 @@ def _parse_proc_self_maps_native_libraries() -> "list[Path]":
     return sorted(paths)
 
 
+# `_reject_pre_bound_native_mappings` が「所有パス／bytes 一致で良性」と判定した
+# 束縛前マッピングを集約する可変ログ（Codex P1 7 巡目）。load 時の最初の `_scorer_pins()`
+# 呼び出し中に numpy/scipy 双方の呼び出しがここへ追記し、その直後に
+# `_PRE_BOUND_SCORER_NATIVE_MAPPINGS` としてタプルへ凍結する（`_PRELOADED_SEED_MODULES`
+# と同じ「load 時 1 回だけ確定」規約）。以降の再検証呼び出し（`_scorer_pins(use_cache=
+# False)`）でも同じ関数がここへ追記し続けるが、凍結済みタプルは新しいコピーなので
+# 影響しない——この可変ログ自体を読むのは凍結直後の 1 回だけでよい。
+_PRE_BOUND_NATIVE_MAPPING_LOG: List[str] = []
+
+
 def _reject_pre_bound_native_mappings(
     name: str, *, package_root: Path, natives: "set[Path]", use_cache: bool = True
-) -> None:
-    """`name` の pin 束縛前に、外部/別所在の数値バックエンドが既にロード済みでないか検証する。
+) -> "List[str]":
+    """`name` の pin 束縛前に、既にロード済みの数値バックエンドを検出・記録する。
 
-    （Codex P1 6 巡目 P1-B）`LD_PRELOAD` 環境変数チェック（`_reject_ld_preload_before_
+    （Codex P1 6/7 巡目 P1-B）`LD_PRELOAD` 環境変数チェック（`_reject_ld_preload_before_
     scorer_bind`）だけでは、環境変数が既にクリアされた後で実体だけがメモリに残る
     ケースや、`LD_PRELOAD` を経由しない `sitecustomize.py` 等の先読みを捉えられない。
-    `/proc/self/maps` を実際に読み、`name` distribution の所有パス（package_root /
-    RECORD 由来 `.libs`）の**外**からマップされたライブラリのうち、次のいずれかに
-    該当するものを検査する:
+    `/proc/self/maps` を実際に読み、`name` distribution に関連するマッピング
+    （所有パス内、または basename が BLAS 系命名規約 `_BLAS_FAMILY_LIBRARY_RE` /
+    pin 対象 `natives` のいずれかに一致するもの）を検査する。
 
-    1. basename が BLAS 系命名規約（`_BLAS_FAMILY_LIBRARY_RE`）に一致する。
-    2. basename が pin 対象 `natives` のいずれかと一致する。
+    **2 段構え（Codex P1 7 巡目・`_PRELOADED_SEED_MODULES` と同型）**: 6 巡目時点の
+    実装は「所有パス」「bytes 一致の良性重複」を単に `continue`（黙って見逃す）
+    していたが、これは pre-bind mmap による TOCTOU を見逃す——`dlopen` で既に mmap
+    された実体は、その**後**でディスク上のファイルが差し替えられても pre/post どちらの
+    hash も新 bytes を指す一方、実行はロード済みの旧 bytes のまま進む（#217 の事前
+    ロード窓の native 版・mmap 版）。この見逃しを「起きなかったこと」にせず、
+    `_PRE_BOUND_NATIVE_MAPPING_LOG`（→ 凍結タプル `_PRE_BOUND_SCORER_NATIVE_MAPPINGS`）
+    へ **記録**する。ただし記録そのものは raise しない——pytest 等の import 文脈では
+    `svp_rpe` 経由で numpy/scipy が本ハーネスの読み込みより先に import されているのが
+    常態で、その場合の記録が非空になるのは避けられない（`_PRELOADED_SEED_MODULES` が
+    同じ理由で load 時に raise しないのと同じ）。**実測経路**（`evaluate_m2_bars` の
+    評価器自身のゲート・report の `pre_bound_scorer_native_mappings` 検証）でのみ
+    非空を fail-closed にする。正規の fresh CLI は本モジュールが `import numpy` より
+    前に `_scorer_pins()` を束縛する（#217 の load-time 束縛規律）ため、その経路では
+    このログは必ず空になる。
 
-    **bytes が一致すれば揃っている**——本実装中の実測で判明した良性の衝突がある:
-    auditwheel は同梱ネイティブのファイル名にビルド内容の hash を含めるため
+    **bytes が一致すれば「無害な重複」**——6 巡目の実装中の実測で判明した良性の衝突が
+    ある: auditwheel は同梱ネイティブのファイル名にビルド内容の hash を含めるため
     （例 `libgfortran-040039e1-0352e75f.so.5.0.0`）、numpy と scipy が同一の
     gfortran ビルドを別々の `.libs/` ディレクトリへ同梱すると、**同じ basename・
     同じ bytes** のファイルが 2 か所に存在する。ELF ローダは `DT_SONAME` 単位で
     ロード済み実体を再利用するため、片方の distribution 経由で既に読み込まれた
     実体を、もう片方が指す別所在の同名ファイルの代わりに使い回すのは通常運転
     ——bytes が同一である限り、どちらの物理コピーを指しても pin は変わらない
-    （#217「pin は bytes を代表する」の原則そのもの）。よって path が違っても
-    `file_sha256` で bytes が一致すれば通す。**bytes が違う**、または比較対象が
-    無い（basename が `natives` に無い外部由来）場合にのみ `RuntimeError` で
-    fail-closed にする——それが実際の脅威（LD_PRELOAD/sitecustomize による
-    別実装のすり替え）に対応する。
+    （#217「pin は bytes を代表する」の原則そのもの）。これも「無害」ではあるが
+    「起きた」ことに変わりはないため記録対象にする——**bytes が違う**、または比較対象が
+    無い（basename が `natives` に無い外部由来）場合にのみ、6 巡目と同じく即
+    `RuntimeError` で fail-closed にする（これは弱めていない）。
 
-    glibc 族・`ld.so` 等の OS 基盤マッピングは対象外（`_is_native_library` は拾うが、
-    上記いずれのパターンにも一致しないため自然に除外される）。
+    glibc 族・`ld.so` 等の OS 基盤マッピング、および `name` と無関係な一般ライブラリは
+    対象外（記録もしない）。
+
+    戻り値: このパッケージについて記録した束縛前マッピングのパス文字列一覧
+    （raise しなかった owned / bytes 一致のケース）。
     """
     from svp_rpe.utils.hashing import file_sha256
 
@@ -656,16 +681,21 @@ def _reject_pre_bound_native_mappings(
                 continue
         return False
 
+    recorded: "List[str]" = []
     for mapped_path in mapped:
         basename = mapped_path.name
         if _owned_by_scorer_distribution(mapped_path, package_root=package_root, natives=natives):
+            # 所有パス内 = 良性だが、pre-bind mmap の TOCTOU 対象として記録する
+            # （raise はしない・上記 docstring の 2 段構え）。
+            recorded.append(str(mapped_path))
             continue
         is_blas_family = bool(_BLAS_FAMILY_LIBRARY_RE.match(basename))
         candidates = natives_by_basename.get(basename, [])
         if not is_blas_family and not candidates:
             continue  # BLAS 命名規約にも pin 対象 basename にも該当しない一般ライブラリ
         if _content_matches_a_native(mapped_path, candidates):
-            continue  # bytes 一致 = 良性の重複ベンダリング（上記 docstring 参照）
+            recorded.append(str(mapped_path))  # bytes 一致 = 良性の重複ベンダリングだが記録
+            continue
         if is_blas_family:
             raise RuntimeError(
                 f"evaluate_m2_bars: {name!r} の pin 束縛前に BLAS 系ライブラリ "
@@ -678,6 +708,9 @@ def _reject_pre_bound_native_mappings(
             f" 別所在 {mapped_path} からロード済みのマッピングを検出（bytes も不一致）;"
             " ディスク hash が実行中の実装を覆う保証がない (fail-closed)"
         )
+
+    _PRE_BOUND_NATIVE_MAPPING_LOG.extend(recorded)
+    return recorded
 
 
 def _scorer_dist_native_sha256(name: str, *, use_cache: bool = True) -> str:
@@ -878,6 +911,13 @@ def _scorer_pins(*, use_cache: bool = True) -> Dict[str, Any]:
 
 
 _LOADED_SCORER_PINS = _scorer_pins()
+
+# `_scorer_pins()` が numpy/scipy それぞれについて `_reject_pre_bound_native_mappings`
+# を実行済み（束縛前マッピングは `_PRE_BOUND_NATIVE_MAPPING_LOG` へ追記されている）。
+# ここで 1 度だけタプルへ凍結する（Codex P1 7 巡目・`_PRELOADED_SEED_MODULES` と同じ
+# 「load 時 1 回だけ確定」規約。以降の再検証呼び出しがログへ追記し続けても、この
+# 凍結タプルは影響を受けない）。
+_PRE_BOUND_SCORER_NATIVE_MAPPINGS: "Tuple[str, ...]" = tuple(_PRE_BOUND_NATIVE_MAPPING_LOG)
 
 import numpy as np  # noqa: E402
 import soundfile as sf  # noqa: E402
@@ -2052,6 +2092,7 @@ def run_accuracy(
         "route_runner_injected": runner_injected,
         "preloaded_seed_modules": list(_PRELOADED_SEED_MODULES),
         "harness_loaded_as_main": _HARNESS_LOADED_AS_MAIN,
+        "pre_bound_scorer_native_mappings": list(_PRE_BOUND_SCORER_NATIVE_MAPPINGS),
         "categories": {},
     }
     results.update(_LOADED_SCORER_PINS)
@@ -2483,6 +2524,13 @@ def _require_fresh_process_report_provenance(
         raise RuntimeError(
             f"category {category!r} の測り直し子プロセスに事前ロードがある "
             f"({report.get('preloaded_seed_modules')!r}); 素の CLI 実行でない (fail-closed)"
+        )
+    if report.get("pre_bound_scorer_native_mappings") != []:
+        raise RuntimeError(
+            f"category {category!r} の測り直し子プロセスは scorer ネイティブが束縛前に "
+            f"既にロード済みだった ({report.get('pre_bound_scorer_native_mappings')!r}); "
+            "mmap 済み実体は disk hash で検出できないため素の CLI 実行の証拠にしない "
+            "(fail-closed)"
         )
     generator = report.get("generator_code_sha256")
     if generator != _LOADED_GENERATOR_CODE_SHA256:
@@ -3081,6 +3129,20 @@ def _require_publishable_runs(reports: List[Dict[str, Any]]) -> None:
                 "される（stale bytecode の余地を残さない）ため、publish 可能な実測は "
                 "素の CLI 起動に限る (fail-closed)"
             )
+        pre_bound = report.get("pre_bound_scorer_native_mappings")
+        if pre_bound is None:
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{idx}] が pre_bound_scorer_native_mappings を "
+                "欠く; scorer ネイティブが束縛前にロード済みでなかったか確認できない "
+                "report を証拠にしない (fail-closed)"
+            )
+        if pre_bound:
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{idx}] は scorer ネイティブが束縛前に既に "
+                f"プロセスへロード済みだった {sorted(pre_bound)}; mmap 済み実体は disk "
+                "hash で検出できない（TOCTOU: mmap → 差し替え → hash）ため、publish "
+                "可能な実測にしない（素の CLI 実行で測り直すこと・fail-closed）"
+            )
 
 
 def _require_homogeneous_scorer(reports: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -3292,6 +3354,18 @@ def evaluate_m2_bars(
             f"（{_PRELOADED_SEED_MODULES}）; メモリ上のコードと load 時に hash した "
             "ディスク bytes の一致を保証できないプロセスから verdict を publish しない "
             "— 素の CLI から評価し直すこと (fail-closed)"
+        )
+    # 評価器自身にも scorer ネイティブの pre-bind ゲートを適用する（Codex P1 7 巡目・
+    # `_PRELOADED_SEED_MODULES` と同型）。正規の fresh CLI では `_scorer_pins()` の
+    # 束縛が numpy/scipy の import より先に走るため、`_PRE_BOUND_SCORER_NATIVE_MAPPINGS`
+    # は必ず空になる。非空は「束縛前に既に数値バックエンドがロード済みだった」証拠で、
+    # mmap 済み実体は disk hash では検出できない（TOCTOU: mmap → 差し替え → hash）。
+    if _PRE_BOUND_SCORER_NATIVE_MAPPINGS:
+        raise RuntimeError(
+            f"evaluate_m2_bars: scorer ネイティブが束縛前に既にロード済みだった "
+            f"（{_PRE_BOUND_SCORER_NATIVE_MAPPINGS}）; mmap 済み実体は disk hash で検出 "
+            "できず、pin が実行中の実装を代表する保証がないプロセスから verdict を "
+            "publish しない — 素の CLI から評価し直すこと (fail-closed)"
         )
     # 評価器**自身**にも直接ソース実行を要求する（Codex P2 第 37 巡）。preload ゲートは
     # 依存モジュールしか覆わず、`python -m run_melody_accuracy --evaluate` は評価器
