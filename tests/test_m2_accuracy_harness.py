@@ -2761,11 +2761,23 @@ def test_scorer_runtime_packages_are_always_in_runtime_package_names() -> None:
 
 
 def test_run_accuracy_detects_scorer_change_during_execution(monkeypatch) -> None:
-    """実行中に mir_eval が差し替わったら fail-closed（旧スコアラーで測った run）。"""
+    """実行中に mir_eval が差し替わったら fail-closed（旧スコアラーで測った run）。
+
+    Codex 12 巡目 P1（H14 対象範囲の一般化）以降、この改ざんは post-run の
+    `_require_unchanged_since_load`（旧: 唯一の検出経路・メッセージ「mir_eval が
+    実行中に差し替わった」）より**先に**、mid-run checkpoint
+    （`_require_scorer_native_unchanged_since_bind`。各カテゴリ処理直後に走り、
+    対象を `_SCORER_RUNTIME_PACKAGES` 全体——mir_eval を含む——へ一般化した）が
+    検出するようになった。検出そのものは失われておらず、むしろ検出タイミングが
+    早まっている（run 完走を待たず最初のカテゴリ処理直後に fail-closed）——
+    期待するメッセージを mid-run checkpoint 側の実文言に更新する。
+    """
     monkeypatch.setattr(
         harness, "_LOADED_SCORER_PINS", {"mir_eval_version": "0.0", "mir_eval_code_sha256": "0" * 64}
     )
-    with pytest.raises(RuntimeError, match="mir_eval が実行中に差し替わった"):
+    with pytest.raises(
+        RuntimeError, match=r"'mir_eval'.*コード実体（code pin）.*bind→import 窓で"
+    ):
         harness.run_accuracy(
             categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
         )
@@ -2830,6 +2842,144 @@ def test_require_scorer_native_unchanged_since_bind_skips_when_bind_pin_missing(
         harness,
         "_scorer_dist_native_sha256",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("呼ばれてはならない")),
+    )
+    harness._require_scorer_native_unchanged_since_bind()  # 例外が出ないことが期待値
+
+
+def test_require_scorer_native_unchanged_since_bind_fails_closed_on_code_pin_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex 12 巡目 P1: package-root native カーネル本体（code pin）が bind→import
+    窓で差し替えられた場合も fail-closed する。
+
+    12 巡目レビュー指摘: 旧実装はこの checkpoint で `{name}_dist_native_sha256`
+    （wheel 同梱 `.libs/`）しか再検証しておらず、docstring が名指しする実カーネル
+    本体（`numpy/_core/_multiarray_umath.cpython-*.so` 等・package root 配下）は
+    `{name}_code_sha256` が pin する対象だったが再検証されていなかった。ここでは
+    `package_code_sha256` の再計算結果だけを束縛時点の pin と食い違わせ（dist_native
+    側は変えない）、この checkpoint が検出できることを固定する。numpy（native 必須
+    パッケージ）だけを差し替え対象にすることで、native カーネル向けの文言分岐
+    （`_SCORER_NATIVE_BACKEND_REQUIRED` 判定）を経由することを保証する。
+    """
+    original = harness.package_code_sha256
+
+    def _fake(name: str, **kwargs: Any) -> Any:
+        if name == "numpy":
+            return "f" * 64
+        return original(name, **kwargs)
+
+    monkeypatch.setattr(harness, "package_code_sha256", _fake)
+    with pytest.raises(RuntimeError, match=r"'numpy'.*package-root native カーネル（code pin）"):
+        harness._require_scorer_native_unchanged_since_bind()
+
+
+def test_require_scorer_native_unchanged_since_bind_code_check_covers_non_native_packages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex 12 巡目 P1: code pin 再検証は `_SCORER_NATIVE_BACKEND_REQUIRED`
+    （numpy/scipy）に限らず、mir_eval のように「同梱ネイティブを持たない」
+    パッケージにも及ぶ（required/optional を区別しない対象範囲の一般化）。
+    """
+    assert "mir_eval" not in harness._SCORER_NATIVE_BACKEND_REQUIRED
+    assert "mir_eval" in sys.modules
+    original = harness.package_code_sha256
+
+    def _fake(name: str, **kwargs: Any) -> Any:
+        if name == "mir_eval":
+            return "f" * 64
+        return original(name, **kwargs)
+
+    monkeypatch.setattr(harness, "package_code_sha256", _fake)
+    with pytest.raises(RuntimeError, match=r"'mir_eval'.*code pin"):
+        harness._require_scorer_native_unchanged_since_bind()
+
+
+def test_require_scorer_native_unchanged_since_bind_skips_code_check_when_pin_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex 12 巡目 P1: 束縛時点で code pin できなかったパッケージは code 再検証を
+    静かにスキップする（`{name}_dist_native_sha256` の既存スキップ規約と対称）。
+    """
+    patched_pins = dict(harness._LOADED_SCORER_PINS)
+    for name in harness._SCORER_RUNTIME_PACKAGES:
+        patched_pins[f"{name}_code_sha256"] = None
+    monkeypatch.setattr(harness, "_LOADED_SCORER_PINS", patched_pins)
+    monkeypatch.setattr(
+        harness,
+        "package_code_sha256",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("呼ばれてはならない")),
+    )
+    harness._require_scorer_native_unchanged_since_bind()  # 例外が出ないことが期待値
+
+
+def test_scorer_dist_native_sha256_verify_pre_bind_gates_false_skips_gates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """セルフレビュー第三弾 H17: `verify_pre_bind_gates=False` は pre-bind gate
+    （`_reject_pre_bound_native_mappings` の maps スキャン + `_verify_scorer_
+    dt_needed_closure` の DT_NEEDED 再検証）を丸ごと skip し、純粋なディスク
+    hash 比較のみ行う。"""
+    monkeypatch.setattr(
+        harness,
+        "_reject_pre_bound_native_mappings",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("呼ばれてはならない")),
+    )
+    monkeypatch.setattr(
+        harness,
+        "_verify_scorer_dt_needed_closure",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("呼ばれてはならない")),
+    )
+    digest = harness._scorer_dist_native_sha256("numpy", use_cache=False, verify_pre_bind_gates=False)
+    assert harness._is_sha256(digest)
+
+
+def test_scorer_dist_native_sha256_verify_pre_bind_gates_true_still_runs_gates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """既定（`verify_pre_bind_gates=True`）は従来どおり pre-bind gate を実行する（回帰）。"""
+    called: List[str] = []
+    original = harness._reject_pre_bound_native_mappings
+
+    def _spy(*args: Any, **kwargs: Any) -> Any:
+        called.append("called")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(harness, "_reject_pre_bound_native_mappings", _spy)
+    harness._scorer_dist_native_sha256("numpy")  # 既定 True
+    assert called
+
+
+def test_require_scorer_native_unchanged_since_bind_does_not_invoke_pre_bind_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """セルフレビュー第三弾 H17: mid-run checkpoint は pre-bind gate
+    （`_reject_pre_bound_native_mappings`）を一切呼ばない（`verify_pre_bind_
+    gates=False` で渡している）ことを直接固定する。"""
+    monkeypatch.setattr(
+        harness,
+        "_reject_pre_bound_native_mappings",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("呼ばれてはならない")),
+    )
+    harness._require_scorer_native_unchanged_since_bind()  # 例外が出ないことが期待値
+
+
+def test_require_scorer_native_unchanged_since_bind_survives_unrelated_memfd_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """H17 の直接再現: mid-run checkpoint は pre-bind gate（maps スキャン）を
+    再実行しないため、numpy/scipy と無関係な `memfd:` マッピング（実測機で
+    numba/TensorFlow/torch 等が実抽出中に張る JIT 領域を模す）が
+    `/proc/self/maps` に現れていても mid-run では fail-closed しない。
+
+    旧実装（`_scorer_dist_native_sha256` 経由で pre-bind gate を mid-run でも
+    再実行）ではこの `memfd:` エントリだけで即 `RuntimeError` になっていた
+    （`test_reject_pre_bound_native_mappings_flags_memfd_fileless_mapping` が
+    `_reject_pre_bound_native_mappings` 単体でその即時 raise を固定している）。
+    """
+    monkeypatch.setattr(
+        harness,
+        "_parse_proc_self_maps_executable_mappings",
+        lambda: [("/memfd:jit-from-unrelated-backend", True)],
     )
     harness._require_scorer_native_unchanged_since_bind()  # 例外が出ないことが期待値
 

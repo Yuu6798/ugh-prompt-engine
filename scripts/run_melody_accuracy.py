@@ -711,6 +711,10 @@ def _require_unchanged_since_load() -> None:
 def _require_scorer_native_unchanged_since_bind() -> None:
     """import 直後・実行中に、scorer native（numpy/scipy の `.so`）が bind 時と変わっていないか検証する。
 
+    dist_native（wheel 同梱 `.libs/` の BLAS/LAPACK 等）と code
+    （package-root 配下の `.so` 本体を含む `{name}_code_sha256`）の両方を
+    use_cache=False で再 hash し、束縛時点の pin と突き合わせる（詳細後述）。
+
     （セルフレビュー第二弾 H14）P1-B の audit hook（`"compile"` イベント）は `.py`
     ソースの compile 呼び出しにしか届かない——numpy/scipy の実計算カーネル本体
     （`numpy/_core/_multiarray_umath.cpython-*.so` 等）は `ExtensionFileLoader` 経由の
@@ -735,20 +739,92 @@ def _require_scorer_native_unchanged_since_bind() -> None:
     ポイント**でこの関数を呼ぶことで、「bind から run 完了まで」だった窓を
     「bind から直後の import 完了まで」+「各カテゴリの処理直後」まで縮める。
 
+    **対象範囲（Codex 12 巡目 P1・dist_native と code の両方を再 hash する）**:
+    上のパラグラフが名指しする実カーネル本体（`numpy/_core/_multiarray_umath.
+    cpython-*.so` 等）は numpy/scipy の**パッケージディレクトリ配下**にあり、
+    hash 対象として拾うのは `{name}_dist_native_sha256`（wheel 同梱
+    `{name}.libs/` の BLAS/LAPACK 等・本体ディレクトリの**外**）ではなく
+    `{name}_code_sha256`（`package_code_sha256` が `_CODE_SUFFIXES`/
+    `_is_native_library` で本体ディレクトリを rglob する際に `.so` も対象に
+    含める）側である。旧実装はこの checkpoint で `dist_native_sha256` しか
+    再検証しておらず、package-root 配下のカーネル本体を bind→import 窓で
+    差し替え→この checkpoint 通過→最終 rehash 前に復元、で素通りできた
+    （docstring が「実計算カーネル本体を守る」と明言していた対象と、実際に
+    再検証していた pin の乖離）。このため本 checkpoint は `{name}_code_sha256`
+    も use_cache=False で再計算し、束縛時点の `_LOADED_SCORER_PINS` と突き合わせる。
+    対象は `_SCORER_NATIVE_BACKEND_REQUIRED`（numpy/scipy）に限らない——判断に
+    迷う場合は安全側に倒し、`_SCORER_RUNTIME_PACKAGES`（mir_eval/decorator/
+    threadpoolctl/charset_normalizer を含む）のうち import 済みかつ束縛時点で
+    pin できた（= 導入されていた）パッケージ全てを対象にする。required/optional
+    を区別する理由がない（同じ bind→import dlopen 窓の問題は原理上どのパッケージ
+    にも起こりうる）。`{name}_dist_native_sha256` の再検証は引き続き
+    `_SCORER_NATIVE_BACKEND_REQUIRED` 限定のまま（他パッケージはそもそも同梱
+    ネイティブを持たないことが多く、`_scorer_dist_native_sha256` 自体がその
+    集合外では空 digest を正当とみなす設計のため、対象を広げても意味がない）。
+
     **残る境界（意図的に閉じていない・正直会計)**: この方式は依然として離散的な
     時点サンプリングであり、native の dlopen 瞬間そのものを覗いてはいない——
     「チェックポイントとチェックポイントの間」に差し替え→復元が完結すれば
     理論上見逃す。`.py` の audit hook（compile イベントで実際に渡された bytes を
     直接見る）と比べて非対称な保護であることを明記する——native の完全な保護には
     fd 経由の mmap 実体読み戻しか、bind と import を不可分化する設計変更が必要。
+    この境界は `{name}_code_sha256` の再検証を追加した後も変わらない（対象集合の
+    漏れを塞いだだけで、離散サンプリングという原理的限界そのものは解消しない）。
+
+    **mid-run は直接 hash 比較のみ（セルフレビュー第三弾 H17）**: この checkpoint
+    は `run_accuracy()` の各カテゴリ処理**直後**という mid-run タイミングで走る。
+    `_scorer_dist_native_sha256` は既定で `_SCORER_NATIVE_BACKEND_REQUIRED` に
+    ついて `_reject_pre_bound_native_mappings`（`/proc/self/maps` の全域スキャン
+    ＝「束縛前に何かが先読みされていないか」を見る**初回束縛専用**のゲート）も
+    実行するが、これを mid-run で再実行すると、実測機（numba/pyin・librosa・
+    TensorFlow/basic_pitch・torch/demucs 等が実際に走る M2b S-fullstack のような
+    環境）で他ライブラリが実抽出中に張る `memfd:`/削除済み実体バックの JIT 領域を
+    「scorer 束縛前の先読み」と誤認し、numpy/scipy とは無関係なマッピングで
+    over-strict に fail-closed する（`memfd:`/`(deleted)` の即時 raise は
+    `treat_anonymous_as_recorded` の匿名緩和の対象外——fake-backend の CI では
+    JIT が走らないため不可視で、「CI green だが実測機で壊れる」型の欠陥だった）。
+    このため mid-run（本関数）は `_scorer_dist_native_sha256(..., verify_
+    pre_bind_gates=False)` を渡し、maps スキャン + DT_NEEDED 再検証を丸ごと
+    skip して、束縛時点の pin との**純粋なディスク hash 比較**だけを行う——
+    「native bytes が bind 時から変わったか」だけを見るのが mid-run の役割で、
+    「束縛前に何が起きていたか」を問う pre-bind gate は bind 時 1 回限定のまま
+    弱めない。
     """
-    for name in _SCORER_NATIVE_BACKEND_REQUIRED:
+    for name in _SCORER_RUNTIME_PACKAGES:
         if name not in sys.modules:
             continue  # まだ import されていない（この時点では検証しようがない）
+
+        expected_code = _LOADED_SCORER_PINS.get(f"{name}_code_sha256")
+        if expected_code is not None:
+            current_code = package_code_sha256(name, use_cache=False)
+            if current_code != expected_code:
+                # 対象を _SCORER_NATIVE_BACKEND_REQUIRED（numpy/scipy）以外にも一般化した
+                # ため（Codex 12 巡目 P1）、mir_eval/decorator のような純 Python 配布に
+                # 「native カーネル」という文言を使うと実態と食い違う——native/pure-Python
+                # の両方で正しい説明になるよう名乗りを出し分ける。
+                kind = (
+                    "package-root native カーネル（code pin）"
+                    if name in _SCORER_NATIVE_BACKEND_REQUIRED
+                    else "package-root コード実体（code pin）"
+                )
+                raise RuntimeError(
+                    f"evaluate_m2_bars: {name!r} の{kind}が bind→import 窓で"
+                    f"差し替えられた疑いがある（束縛時点の pin {expected_code!r} → "
+                    f"import 完了後の再 hash {current_code!r} が不一致・"
+                    "swap-and-restore・#217）— プロセスを再起動して測り直すこと "
+                    "(fail-closed)"
+                )
+
+        if name not in _SCORER_NATIVE_BACKEND_REQUIRED:
+            continue  # dist_native(.libs) 側の再検証対象は numpy/scipy のみ
         expected = _LOADED_SCORER_PINS.get(f"{name}_dist_native_sha256")
         if expected is None:
             continue  # 束縛時点で pin できなかった（他のゲートが別途 fail-closed 済み）
-        current = _scorer_dist_native_sha256(name, use_cache=False)
+        # H17: mid-run は pre-bind gate（maps スキャン + DT_NEEDED 再検証）を
+        # 再実行しない——純粋な hash 比較のみ（docstring 参照）。
+        current = _scorer_dist_native_sha256(
+            name, use_cache=False, verify_pre_bind_gates=False
+        )
         if current != expected:
             raise RuntimeError(
                 f"evaluate_m2_bars: {name!r} の native 実体が import 完了後の再"
@@ -1878,8 +1954,30 @@ def _scorer_dist_native_sha256(
     *,
     use_cache: bool = True,
     treat_anonymous_as_recorded: "Optional[bool]" = None,
+    verify_pre_bind_gates: bool = True,
 ) -> str:
     """`name` の wheel 同梱ネイティブ実体（パッケージ本体ディレクトリ **外**）の pin。
+
+    **`verify_pre_bind_gates`（セルフレビュー第三弾 H17）**: 既定 `True` は
+    `_SCORER_NATIVE_BACKEND_REQUIRED` について `_reject_pre_bound_native_mappings`
+    （`/proc/self/maps` の全域スキャン）と `_verify_scorer_dt_needed_closure` を
+    従来どおり実行する——これは「束縛前（`import numpy` 等より前）に何かが
+    先読みされていないか」を**プロセス全体**から検出する**初回束縛専用**のゲートで、
+    `treat_anonymous_as_recorded` の匿名マッピング緩和では救えない `memfd:`/
+    `(deleted)` 実行マッピングの即時 raise を含む（`_reject_pre_bound_native_
+    mappings` docstring 参照）。`_require_scorer_native_unchanged_since_bind`
+    の mid-run checkpoint（各カテゴリ抽出**後**に呼ばれる）がこの関数を
+    `use_cache=False` で再呼び出しすると、このゲートも一緒に再実行されてしまい、
+    実測機で numba（pyin/librosa）・TensorFlow（basic_pitch）・torch（demucs）が
+    実抽出中に張る `memfd:`/削除済み実体バックの JIT 領域を「scorer 束縛前の
+    先読み」と誤認して fail-closed する（numpy/scipy とは無関係なマッピングで
+    over-strict に落ちる liveness 欠陥）。mid-run で本来検証すべきは「native
+    bytes が bind 時から変わったか」という**純粋なディスク hash 比較**だけで
+    あり、プロセス全体の maps を再スキャンする必要は無い——
+    `verify_pre_bind_gates=False` を渡すと、この 2 つのゲート呼び出しを完全に
+    skip し、natives 集合の enumerate と hash 計算のみ行う。**初回束縛時
+    （`_scorer_pins()` の 1 回目の呼び出し）は必ず既定 `True` のまま呼ぶ**——
+    弱めるのは mid-run の再検証呼び出しだけで、初回のゲートは変わらず厳格。
 
     numpy/scipy の一般的な wheel install は OpenBLAS 等の実行ネイティブ実体を
     パッケージ本体ディレクトリの兄弟（`numpy.libs/` / `scipy.libs/`）に置く。
@@ -2055,11 +2153,20 @@ def _scorer_dist_native_sha256(
             "実測すること"
         )
 
-    if name in _SCORER_NATIVE_BACKEND_REQUIRED:
+    if name in _SCORER_NATIVE_BACKEND_REQUIRED and verify_pre_bind_gates:
         # Codex P1 6 巡目: P1-B（束縛前ロード済みマッピングの拒否）→ P1-A（DT_NEEDED
         # 閉包の包含証明）の順で検証する。ディスク上の実体を hash する前に、まず
         # 「メモリ上の実行がその実体と一致する保証があるか」を確かめるのが筋が通る
         # 順序（P1-A は disk-only の静的解析で、P1-B が拾う実行時の先読みまでは覆わない）。
+        #
+        # （セルフレビュー第三弾 H17）この 2 つは「束縛前に何が起きていたか」を
+        # 検証する初回束縛専用ゲートであり、`verify_pre_bind_gates=False`
+        # （mid-run checkpoint 経由）では丸ごと skip する——bytes hash が bind 時と
+        # 一致する（下の `return` で判定される）なら、その bytes に埋め込まれた
+        # DT_NEEDED soname も bind 時から変わりようがなく、P1-A の再検証は自明に
+        # 冗長。P1-B（maps スキャン）はプロセス全体を見る性質上、numpy/scipy と
+        # 無関係な JIT バックエンドの `memfd:`/削除済みマッピングまで拾って
+        # over-strict に fail-closed しうるため、mid-run では実行しない。
         resolved_treat_anonymous = (
             _SCORER_PINS_INITIAL_BIND_COMPLETE
             if treat_anonymous_as_recorded is None
