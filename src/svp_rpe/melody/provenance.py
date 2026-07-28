@@ -506,6 +506,23 @@ def _ldconfig_cache_paths_by_soname() -> "dict[str, frozenset]":
     cache に登録されているか」を検証できるよう、soname → 登録済み絶対パス集合の辞書を
     組み立てる。同一 soname が複数アーキ/hwcap variant で複数パスに解決されることが
     あるため値は集合（例: multilib 環境の同名 soname が i386/x86_64 の 2 パスを持つ）。
+
+    **キーの二重化（Codex P2 15 巡目・CI 実測で発覚）**: 呼び出し元には 2 種類ある。
+    (a) DT_NEEDED を辿る `_verify_scorer_dt_needed_closure` は ELF が要求する**論理
+    soname**（例 `libbz2.so.1.0`——ldconfig の左辺そのもの）を渡す。(b)
+    `/proc/self/maps` を走査する `_reject_pre_bound_native_mappings` は、マップ済み
+    実体の**解決済みファイルの basename**（例 `libbz2.so.1.0.4`——ldconfig の右辺
+    実体が指す実ファイル名。カーネルは symlink でなく実 inode のパスを maps に載せる
+    ため、末尾のパッチバージョンまで含む）しか持たない——DT_NEEDED を読んでいない
+    ので論理 soname を知らない。旧実装はキーを ldconfig の左辺（論理 soname）だけに
+    限定していたため、(b) の呼び出しが `libbz2.so.1.0.4` で引くと必ず miss し、CI の
+    クリーン環境（`libbz2.so.1.0.4`/`liblzma.so.5.4.5`/`libuuid.so.1.3.0`/
+    `libz.so.1.3` が起動時に読まれる標準構成）で正規システムライブラリを
+    default-deny してしまっていた。右辺の**解決済み実ファイルの basename**も
+    同じ集合へ追加のキーとして登録し、どちらの呼び出し元も同じ辞書で引けるようにする
+    （右辺・左辺のどちらでキーを引いても、指す**値**（解決済み絶対パス集合）は同じ
+    ——exact path 一致という安全性は変わらない。登録されていない custom ライブラリは
+    従来どおり両キーとも miss のまま default-deny）。
     """
     entries: "dict[str, set]" = {}
     for line in _ldconfig_cache_listing().splitlines():
@@ -516,7 +533,10 @@ def _ldconfig_cache_paths_by_soname() -> "dict[str, frozenset]":
             continue
         candidate = Path(path_field)
         if candidate.is_file():
-            entries.setdefault(soname, set()).add(candidate.resolve())
+            resolved = candidate.resolve()
+            entries.setdefault(soname, set()).add(resolved)
+            if resolved.name != soname:
+                entries.setdefault(resolved.name, set()).add(resolved)
     return {soname: frozenset(paths) for soname, paths in entries.items()}
 
 
@@ -532,6 +552,13 @@ def _is_ldconfig_registered_path(soname: str, resolved: Path) -> bool:
     （`_is_os_baseline_library`）ことも、ここでは信用の根拠にしない——解決先が
     cache 登録の正確なパスと一致することまで要求する（10 巡目 P1-A の soname 実解決 +
     13 巡目 P1-A の ldconfig 絶対パス化の精度向上版）。
+
+    `soname` 引数は ldconfig の**論理 soname**（`libbz2.so.1.0` 等、DT_NEEDED から
+    読む文字列）でも、解決済み実ファイルの**basename**（`libbz2.so.1.0.4` 等、
+    `/proc/self/maps` が載せる実 inode のパス由来）でも、どちらの形式で渡しても
+    正しく引ける（`_ldconfig_cache_paths_by_soname` がキーを二重化済み・Codex P2
+    15 巡目）——呼び出し元によって手元にあるのが論理 soname か解決済み basename か
+    異なるため。
     """
     return resolved in _ldconfig_cache_paths_by_soname().get(soname, frozenset())
 

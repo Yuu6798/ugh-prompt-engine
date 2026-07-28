@@ -1172,6 +1172,13 @@ def test_scorer_pins_records_absent_optional_closure_member(
     try/except ImportError 経由の任意 import（実測確認済み）——クリーン環境では
     未導入が正当であり、version 非空必須の旧実装はこの環境を fail-closed で
     割ってしまっていた。
+
+    presence の一次判定が「導入されているか」から「observed import closure に
+    participate したか」（`sys.modules`）へ移った（Codex 15 巡目 P2）ため、未導入を
+    模擬するにはまず `sys.modules` から取り除いて「participate していない」ことを
+    成立させる必要がある——`importlib.metadata.version` だけを差し替えても、この
+    プロセスで既に import 済み（＝participate 済み）なら旧同様に fail-fast する
+    （「participate したのに未導入を自称する」矛盾、後続テストで固定）。
     """
     import importlib.metadata
 
@@ -1183,6 +1190,7 @@ def test_scorer_pins_records_absent_optional_closure_member(
         return real_version(name)
 
     monkeypatch.setattr(importlib.metadata, "version", fake_version)
+    monkeypatch.delitem(sys.modules, "charset_normalizer", raising=False)
     pins = harness._scorer_pins(use_cache=False)
     assert pins["charset_normalizer_version"] is None
     assert pins["charset_normalizer_code_sha256"] is None
@@ -1191,6 +1199,33 @@ def test_scorer_pins_records_absent_optional_closure_member(
     # 必須メンバーはこの patch の影響を受けない。
     assert pins["mir_eval_version"]
     assert pins["numpy_version"]
+
+
+def test_scorer_pins_fails_closed_when_participated_but_metadata_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """sys.modules に participate 済みなのに配布メタデータが引けない矛盾は fail-closed
+    にする（Codex 15 巡目 P2）——実運用では起こりえない異常系だが、presence 判定の
+    前提（participate したなら導入されている）が壊れている状態を正直に検出する。
+    """
+    import importlib.metadata
+
+    try:
+        importlib.metadata.version("charset_normalizer")
+    except importlib.metadata.PackageNotFoundError:
+        pytest.skip("charset_normalizer 未導入のこの環境ではこの矛盾を模擬できない")
+
+    real_version = importlib.metadata.version
+
+    def fake_version(name: str) -> str:
+        if name == "charset_normalizer":
+            raise importlib.metadata.PackageNotFoundError(name)
+        return real_version(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", fake_version)
+    monkeypatch.setitem(sys.modules, "charset_normalizer", sys.modules[__name__])
+    with pytest.raises(RuntimeError, match="participate したのに importlib.metadata"):
+        harness._scorer_pins(use_cache=False)
 
 
 def test_scorer_pins_records_present_optional_closure_member() -> None:
@@ -1203,6 +1238,161 @@ def test_scorer_pins_records_present_optional_closure_member() -> None:
             assert isinstance(pins[f"{name}_version"], str) and pins[f"{name}_version"]
             assert harness._is_sha256(pins[f"{name}_code_sha256"])
             assert harness._is_sha256(pins[f"{name}_dist_native_sha256"])
+
+
+def test_scorer_optional_participated_reflects_sys_modules_membership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_scorer_optional_participated` は import 以外の副作用なしに `sys.modules` だけを見る
+    （Codex 15 巡目 P2 の presence 判定の基礎）。
+    """
+    monkeypatch.delitem(sys.modules, "threadpoolctl", raising=False)
+    assert harness._scorer_optional_participated("threadpoolctl") is False
+    monkeypatch.setitem(sys.modules, "threadpoolctl", sys.modules[__name__])
+    assert harness._scorer_optional_participated("threadpoolctl") is True
+
+
+def test_scorer_pins_records_absent_when_optional_installed_but_not_participated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """installed でも observed import closure に participate しなければ absent 記録
+    （Codex 15 巡目 P2）。
+
+    旧実装は presence を `importlib.metadata`（導入有無）だけで決めていたため、
+    installed でも「選択された mir_eval/scipy/numpy 経路がその run で一度も import
+    しない」場合まで一律 `present` として厳密 pin してしまい、同一環境で当該
+    パッケージが未導入の run の report と homogeneous-scorer gate で誤って「別閉包」
+    と判定されていた。`sys.modules` から一時的に取り除く（＝この観測時点では
+    participate していない）ことで installed-but-unused を模擬する——この模擬が
+    regression を検出できるのは実際に導入されている場合だけなので、未導入環境では
+    skip する。
+    """
+    import importlib.metadata
+
+    try:
+        importlib.metadata.version("threadpoolctl")
+    except importlib.metadata.PackageNotFoundError:
+        pytest.skip("threadpoolctl 未導入のこの環境では installed-but-unused を模擬できない")
+    monkeypatch.delitem(sys.modules, "threadpoolctl", raising=False)
+    assert harness._scorer_optional_participated("threadpoolctl") is False
+    pins = harness._scorer_pins(use_cache=False)
+    assert pins["threadpoolctl_version"] is None
+    assert pins["threadpoolctl_code_sha256"] is None
+    assert pins["threadpoolctl_dist_native_sha256"] is None
+    assert pins["threadpoolctl_closure_state"] == "absent"
+    # 必須メンバーはこの patch の影響を受けない（sys.modules から取り除いたのは
+    # threadpoolctl だけ）。
+    assert pins["mir_eval_version"]
+    assert pins["numpy_version"]
+
+
+def test_scorer_pins_records_present_when_optional_actually_imported() -> None:
+    """実際に import され `sys.modules` へ participate した optional は present で厳密 pin
+    される（Codex 15 巡目 P2）。installed だけでは足りず、observed import closure への
+    participate が presence の条件であることの正例。
+    """
+    import importlib
+
+    try:
+        importlib.import_module("charset_normalizer")
+    except ImportError:
+        pytest.skip("charset_normalizer 未導入のこの環境では participate を模擬できない")
+    assert harness._scorer_optional_participated("charset_normalizer") is True
+    pins = harness._scorer_pins(use_cache=False)
+    assert pins["charset_normalizer_closure_state"] == "present"
+    assert isinstance(pins["charset_normalizer_version"], str) and pins["charset_normalizer_version"]
+    assert harness._is_sha256(pins["charset_normalizer_code_sha256"])
+    assert harness._is_sha256(pins["charset_normalizer_dist_native_sha256"])
+
+
+def test_run_accuracy_report_records_final_optional_presence_from_observed_closure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`run_accuracy()` の report は load 時の暫定 absent でなく、ループ完了後に確定した
+    observed import closure を最終値として刻む（Codex 15 巡目 P2）。
+
+    `results` は構築時点（ループ開始前・`_LOADED_SCORER_PINS`）でいったん初期化される
+    ため、任意メンバーはロード時点で必ず absent の暫定値になっている——このテストは
+    その暫定値がループ完了後に上書きされることを固定する。
+    """
+    real_participated = harness._scorer_optional_participated
+
+    def fake_participated(name: str) -> bool:
+        if name == "threadpoolctl":
+            return True
+        return real_participated(name)
+
+    monkeypatch.setattr(harness, "_scorer_optional_participated", fake_participated)
+    report = harness.run_accuracy(
+        categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+    )
+    # モックにより「この run は participate した」ことにしたので、report は
+    # 実際の（導入済みなら）version/code/native で present になっているはず——
+    # load 時に刻まれる暫定 absent のままではない。
+    assert report["threadpoolctl_closure_state"] == "present"
+    assert isinstance(report["threadpoolctl_version"], str) and report["threadpoolctl_version"]
+    assert harness._is_sha256(report["threadpoolctl_code_sha256"])
+    assert harness._is_sha256(report["threadpoolctl_dist_native_sha256"])
+
+
+def test_homogeneous_scorer_gate_accepts_installed_but_unused_optional_matching_genuinely_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """installed-but-unused な report が、真に未導入な report と同じ absent 記録になり、
+    homogeneous-scorer gate（report 間 + 評価環境再計算の両方）を通ることを固定する
+    （Codex 15 巡目 P2: 旧実装は presence が installation ベースだったため、この 2 つの
+    report は「別閉包」として誤 reject されていた）。
+
+    `_scorer_optional_participated` を threadpoolctl だけ常に `False` へ差し替えることで
+    「installed だが観測閉包に一度も participate しない」を模擬する——これは report 生成
+    （`run_accuracy`）にも評価環境の再計算（`_require_homogeneous_scorer` の
+    `_scorer_pins(use_cache=False)`）にも一様に適用されるので、真に未導入な環境と
+    区別のつかない absent 記録になる。
+    """
+    real_participated = harness._scorer_optional_participated
+
+    def fake_participated(name: str) -> bool:
+        if name == "threadpoolctl":
+            return False
+        return real_participated(name)
+
+    monkeypatch.setattr(harness, "_scorer_optional_participated", fake_participated)
+
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    for report in reports:
+        assert report["threadpoolctl_closure_state"] == "absent"
+        assert report["threadpoolctl_version"] is None
+
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    verdict = harness.evaluate_m2_bars(
+        [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+    )
+    assert verdict["threadpoolctl_closure_state"] == "absent"
+    assert verdict["threadpoolctl_version"] is None
+
+
+def test_require_unchanged_since_load_tolerates_optional_absent_to_present_transition() -> None:
+    """任意メンバーが load 時 absent → post-run present へ遷移しても
+    swap-and-restore と誤認しない（Codex 15 巡目 P2）。
+
+    `_LOADED_SCORER_PINS` は load 時点（`import numpy` 等より前）に確定するため、
+    任意メンバーは必ず absent の暫定値を持つ。実際に participate（sys.modules へ
+    import）していれば post-run の再計算は present になるはずで、これは正当な
+    観測閉包の確定であって「実行中に差し替わった」ことの証拠ではない。
+    """
+    for name in harness._SCORER_RUNTIME_PACKAGES_OPTIONAL:
+        assert harness._LOADED_SCORER_PINS[f"{name}_closure_state"] == "absent", (
+            "load 時点では import numpy より前に呼ばれるため、任意メンバーは必ず "
+            f"absent のはず（{name} が違反）"
+        )
+    # 例外が出ないことが期待値（既に他のテストが mir_eval.melody 経由で
+    # participate 済みの状態でも、必須メンバー不変性チェックだけが働き、任意メンバー
+    # の absent→present 遷移では fail-closed しない）。
+    current = harness._require_unchanged_since_load()
+    assert isinstance(current, dict)
 
 
 def test_validated_scorer_pin_tuple_accepts_absent_optional_member() -> None:
@@ -2020,6 +2210,70 @@ def test_is_ldconfig_registered_path_requires_exact_cache_path_not_directory_mem
     assert not provenance._is_ldconfig_registered_path(
         "libm.so.6", custom_unregistered_libm.resolve()
     )
+
+
+def test_is_ldconfig_registered_path_matches_by_resolved_basename_too(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """論理 soname と解決済み実ファイルの basename が異なっても exact path 一致で
+    許容される（Codex P2 15 巡目・CI 実測: libbz2/liblzma/libuuid/libz）。
+
+    `ldconfig -p` は論理 soname（`libbz2.so.1.0`）を左辺、解決先の実ファイル
+    （`libbz2.so.1.0.4` 等、パッチバージョンまで含む）を右辺に持つ——両者の
+    basename は一致しない。`/proc/self/maps` を走査する
+    `_reject_pre_bound_native_mappings`（`_is_verified_interpreter_toolchain_
+    library` 経由）は DT_NEEDED を読んでいないため論理 soname を知らず、代わりに
+    マップ済み実体（＝解決済み実ファイル）の basename を渡す。旧実装はキーを論理
+    soname だけに限定していたため、この呼び出しが必ず miss し、CI のクリーン環境
+    （システム標準 C ライブラリが起動時に読まれる構成）で正規システムライブラリを
+    default-deny していた（f391b15 CI 失敗の実測: libbz2.so.1.0.4 等 4 種）。
+    """
+    import svp_rpe.melody.provenance as provenance
+
+    real_lib_dir = tmp_path / "usr_lib"
+    real_lib_dir.mkdir()
+    # 実ファイルは soname より詳細なパッチバージョンを持つ（実環境の libbz2 と同型）。
+    real_file = real_lib_dir / "libbz2.so.1.0.4"
+    real_file.write_bytes(b"real-libbz2-bytes")
+
+    fake_ldconfig_output = f"libbz2.so.1.0 (libc6,x86-64) => {real_file}\n"
+    monkeypatch.setattr(provenance, "_ldconfig_cache_listing", lambda: fake_ldconfig_output)
+
+    # 論理 soname（ldconfig 左辺）で引く従来の呼び出し方は引き続き通る。
+    assert provenance._is_ldconfig_registered_path("libbz2.so.1.0", real_file.resolve())
+    # `/proc/self/maps` 由来の解決済み実ファイル basename で引く呼び出し方
+    # （`_reject_pre_bound_native_mappings` の実際の使い方）も通るようになった。
+    assert provenance._is_ldconfig_registered_path("libbz2.so.1.0.4", real_file.resolve())
+    # 一方、cache に無い basename は従来どおり miss のまま（default-deny 継続）。
+    assert not provenance._is_ldconfig_registered_path(
+        "libbz2.so.9.9.9", real_file.resolve()
+    )
+
+
+def test_reject_pre_bound_native_mappings_allows_ci_standard_c_library_version_mismatch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """CI クリーン環境の標準 C ライブラリ（libbz2/liblzma/libuuid/libz）が起動時に
+    ロード済みでも default-deny しない（Codex P2 15 巡目・f391b15 CI 実測の回帰）。
+
+    `_is_verified_interpreter_toolchain_library` は basename が
+    `_is_interpreter_toolchain_library` の命名規約に一致し、かつ解決済みパスが
+    ldconfig cache 登録の exact path と一致することを要求する。ldconfig の論理
+    soname（`libbz2.so.1.0`）と実ファイルの basename（`libbz2.so.1.0.4`）が異なる
+    という、CI で実際に踏んだ構成を模擬する。
+    """
+    import svp_rpe.melody.provenance as provenance
+
+    real_lib_dir = tmp_path / "usr_lib"
+    real_lib_dir.mkdir()
+    real_file = real_lib_dir / "libbz2.so.1.0.4"
+    real_file.write_bytes(b"real-libbz2-bytes")
+
+    fake_ldconfig_output = f"libbz2.so.1.0 (libc6,x86-64) => {real_file}\n"
+    monkeypatch.setattr(provenance, "_ldconfig_cache_listing", lambda: fake_ldconfig_output)
+
+    assert harness._is_interpreter_toolchain_library("libbz2.so.1.0.4")
+    assert provenance._is_ldconfig_registered_path("libbz2.so.1.0.4", real_file.resolve())
 
 
 def test_verify_scorer_dt_needed_closure_fails_closed_when_soname_unresolvable(

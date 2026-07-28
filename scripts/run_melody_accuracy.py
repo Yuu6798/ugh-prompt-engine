@@ -679,8 +679,33 @@ def _require_scorer_compile_observation_covers_imported_modules(
         )
 
 
-def _require_unchanged_since_load() -> None:
-    """ロード時に pin したコード（first-party 閉包・スコアラー）の不変を要求する。"""
+def _scorer_pins_required_view(pins: Dict[str, Any]) -> Dict[str, Any]:
+    """`pins` から任意閉包メンバー（threadpoolctl/charset_normalizer）のフィールドを
+    除いた必須メンバーのみのビュー（Codex 15 巡目 P2）。
+
+    `_require_unchanged_since_load` の swap-and-restore 不変性検査専用。任意メンバーの
+    presence は「observed import closure に participate したか」（`sys.modules`）で
+    決まるため、1 回目の呼び出し（load 時、`import numpy` 等より前）は必ず absent の
+    暫定値になり、run が実際にそのメンバーへ participate すれば post-run の呼び出しで
+    present へ変わる——これは tamper（swap-and-restore）ではなく設計どおりの遷移
+    なので、この不変性検査からは除外する。必須メンバー（mir_eval/scipy/numpy/
+    decorator）の不変性は本関数の対象外にせず、従来どおり厳密に検査する。
+    """
+    return {
+        key: value
+        for key, value in pins.items()
+        if not any(key.startswith(f"{name}_") for name in _SCORER_RUNTIME_PACKAGES_OPTIONAL)
+    }
+
+
+def _require_unchanged_since_load() -> Dict[str, Any]:
+    """ロード時に pin したコード（first-party 閉包・スコアラー）の不変を要求する。
+
+    戻り値は post-run に再計算したスコアラー pin（`_scorer_pins(use_cache=False)`）
+    ——呼び出し側（`run_accuracy`）がこれを再利用して、任意閉包メンバーの
+    observed import closure に基づく最終 presence を report へ刻む（Codex 15 巡目
+    P2・二重再計算を避ける）。
+    """
     current = _generator_code_sha256()
     if current != _LOADED_GENERATOR_CODE_SHA256:
         raise RuntimeError(
@@ -697,7 +722,13 @@ def _require_unchanged_since_load() -> None:
     # 追加分・`_reject_pre_bound_native_mappings` docstring 参照）。report の pin
     # 強度には影響しない。
     current_scorer = _scorer_pins(use_cache=False)
-    if current_scorer != _LOADED_SCORER_PINS:
+    # Codex 15 巡目 P2: 任意閉包メンバーは load 時点で必ず absent（何も import
+    # されていない）なので、比較は必須メンバーのビューに限定する（docstring 参照）。
+    # 任意メンバーが実行中に absent → present へ遷移するのは正当な observed
+    # import closure の確定であり、swap-and-restore の証拠にしない。
+    if _scorer_pins_required_view(current_scorer) != _scorer_pins_required_view(
+        _LOADED_SCORER_PINS
+    ):
         raise RuntimeError(
             f"mir_eval が実行中に差し替わった（load 時 {_LOADED_SCORER_PINS!r} → 現在 "
             f"{current_scorer!r}）; 指標を産んだのは import 済みの旧スコアラーなので、"
@@ -706,6 +737,7 @@ def _require_unchanged_since_load() -> None:
         )
     # H8: import 済み scorer module の実行対象が束縛時の origin と一致するかも検証する。
     _require_scorer_modules_match_pinned_origin()
+    return current_scorer
 
 
 def _require_scorer_native_unchanged_since_bind() -> None:
@@ -2155,6 +2187,57 @@ def _scorer_dist_native_sha256(
     return sha256_of_files(sorted(natives), use_cache=use_cache)
 
 
+def _scorer_optional_participated(name: str) -> bool:
+    """任意閉包メンバー `name` がこのプロセスで実際に import され、observed import
+    closure に participate したか（Codex 15 巡目 P2）。
+
+    旧実装は presence を `importlib.metadata`（配布のインストール有無）だけで
+    決めていたため、installed でも「選択された mir_eval/scipy/numpy 経路がその run
+    で一度も import しない」場合まで一律 `present` として厳密 pin していた。結果、
+    同一の環境で当該パッケージが未導入の run の report が homogeneous-scorer gate
+    で「別閉包」と誤 reject されていた（同じ scorer 実装で測ったのに presence の
+    自己申告だけが食い違う）。`sys.modules` メンバシップは import 以外の副作用を
+    一切起こさない純粋な観測なので、これを observed import closure の判定に使う
+    ——`test_scorer_runtime_packages_cover_observed_mir_eval_import_closure` が
+    fresh subprocess で確認済みの「import 前後の sys.modules 差分」と同じ考え方を
+    プロセス内判定に転用する。
+    """
+    return name in sys.modules
+
+
+def _ensure_scorer_optional_closure_observed() -> None:
+    """observed import closure ベースの presence 判定を比較可能にするため、
+    `mir_eval.melody` の import 連鎖をこのプロセスで（未 import ならこの場で）
+    確定させる（Codex 15 巡目 P2）。
+
+    `_require_homogeneous_scorer` / `_require_fresh_process_report_provenance` は
+    「評価環境から再計算したスコアラー pin」と report の pin を突き合わせるが、
+    評価器プロセス自身は測り直しを常に別プロセス（`_run_verification_in_fresh_
+    process`）へ委譲し、`evaluate_melody_accuracy`/`mir_eval.melody` を自分では
+    一度も呼ばない。presence を素朴に `sys.modules` だけで判定すると、評価器
+    プロセスは常に「未 participate」＝absent になり、実際に participate した
+    （present な）report と恒常的に不一致になってしまう——これは observed-closure
+    化が意図した false rejection の解消ではなく、真逆の新しい false rejection
+    である。
+
+    `test_scorer_runtime_packages_cover_observed_mir_eval_import_closure` が
+    fresh subprocess で実測済みのとおり、threadpoolctl/charset_normalizer の
+    participate は `mir_eval.melody` を import するだけで（実際に評価関数へ
+    データを渡すかどうかに関わらず）決定論的に確定する——scorer 実装コードと
+    環境（scipy/numpy のバージョン・ビルド）だけに依存し、採点対象データには
+    依存しない。よって、ここでの明示的な import は「実行してもいない
+    participate を捏造する」ことにはならない: measured な行を 1 つでも持つ run の
+    プロセスは、その実行の中で既にこの import を行っている（`evaluate_melody_
+    accuracy` 内部の遅延 import）。この関数は、その run 自身は行わない評価器
+    プロセスで「observed closure を比較可能にする」ための前提整備であり、
+    import 以外の副作用（データ依存の計算）は一切起こさない。
+    """
+    if "mir_eval.melody" not in sys.modules:
+        import importlib
+
+        importlib.import_module("mir_eval.melody")
+
+
 def _scorer_pins(
     *, use_cache: bool = True, treat_anonymous_as_recorded: "Optional[bool]" = None
 ) -> Dict[str, Any]:
@@ -2187,6 +2270,19 @@ def _scorer_pins(
     が立っている限り、以降どの pin を計算してもディスク hash が実行中の実装を代表
     する保証がないため、計算に入る前に fail-closed で止める。
 
+    **任意メンバーの presence は「導入されているか」でなく「観測閉包に
+    participate したか」（Codex 15 巡目 P2）**: `_SCORER_RUNTIME_PACKAGES_OPTIONAL`
+    （threadpoolctl/charset_normalizer）は `_scorer_optional_participated()`
+    （`sys.modules` メンバシップ、import を起こさない純粋な観測）が `True` の
+    ときだけ present として厳密 pin する。1 回目の呼び出し（load 時、`import
+    numpy` 等より前）は必然的に何も import されていないので必ず absent の
+    暫定値になる——これは「2 段構え」の 1 段目（load 時記録）であり、確定した
+    presence ではない。実測経路（run 側は実際に指標計算を行った後、evaluate 側は
+    `_ensure_scorer_optional_closure_observed()` で observed closure を確定させた
+    後）で呼ぶ 2 回目以降が最終値になる。`_require_unchanged_since_load` は
+    この absent→present の遷移を swap-and-restore と誤認しないよう、load 時に
+    absent だった任意メンバーの 4 フィールドを比較対象から除外する。
+
     `treat_anonymous_as_recorded`（Codex 9 巡目 CI 追加分）: 省略時（`None`）は
     `_SCORER_PINS_INITIAL_BIND_COMPLETE`（本ファイル冒頭付近、`_scorer_pins()` の
     最初の呼び出し完了後に一度だけ `True` へ切り替わる）から自動導出する——1 回目
@@ -2204,31 +2300,50 @@ def _scorer_pins(
 
     pins: Dict[str, Any] = {}
     for name in _SCORER_RUNTIME_PACKAGES:
-        try:
-            version = importlib.metadata.version(name)
-        except importlib.metadata.PackageNotFoundError:
-            version = None
         is_optional = name in _SCORER_RUNTIME_PACKAGES_OPTIONAL
-        if is_optional and version is None:
-            # Codex 11 巡目 P1-B: 任意閉包メンバー（threadpoolctl/charset_normalizer）
-            # が未導入なのは、宣言依存でない以上クリーン環境の正当な状態——
-            # `{name}_version` の非空を必須にすると provenance 検証がクリーン CI を
-            # 割る。導入されていないという事実そのものを明示的に記録する
-            # （`{name}_closure_state = "absent"`）ことで、「無い」と「pin できない」
-            # を区別する（#217 原則をここにも適用）。
+        if is_optional and not _scorer_optional_participated(name):
+            # Codex 15 巡目 P2: presence を「導入されているか」（旧実装）ではなく
+            # 「この呼び出し時点でこのプロセスが実際に import し、observed import
+            # closure に participate したか」で判定する。未導入（そもそも import
+            # されようがない）と、導入済みだが選択された経路が一度も触れなかった
+            # （installed-but-unused）の両方を同じ absent 記録に正直に一本化する
+            # ——後者を旧実装のように present と誤記録すると、同じ scorer 実装で
+            # 測ったのに未導入環境の report と homogeneous-scorer gate で誤って
+            # 別閉包と判定される（false rejection、#217 原則の「pin が実際に
+            # 実行された実装に接続しているか」をここにも適用）。
+            # 「import されなければ absent で pin されない」ことは pin 回避の穴では
+            # ない: import closure は実測で確認済みの実行閉包そのもの
+            # （`test_scorer_runtime_packages_cover_observed_mir_eval_import_closure`）
+            # なので、実際に指標計算へ participate しない optional は materiality が
+            # ゼロであり、pin する必要そのものが無い。participate すれば必ず
+            # sys.modules に現れ、下の分岐で present として厳密 pin される。
             pins[f"{name}_version"] = None
             pins[f"{name}_code_sha256"] = None
             pins[f"{name}_dist_native_sha256"] = None
             pins[f"{name}_closure_state"] = "absent"
             continue
+        try:
+            version = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            version = None
+        if is_optional and version is None:
+            # participate した（sys.modules に現れた）のに配布メタデータが引けない
+            # のは「import されたのに未導入を自称する」矛盾——presence 判定の前提
+            # そのものが壊れているので fail-closed にする（実運用では起こりえない
+            # 異常系: 通常の pip/wheel install ではあり得ない）。
+            raise RuntimeError(
+                f"_scorer_pins: 任意メンバー {name!r} は sys.modules に存在し観測閉包に "
+                "participate したのに importlib.metadata.version が引けない; presence "
+                "判定の前提（import されたなら導入されている）が壊れている (fail-closed)"
+            )
         pins[f"{name}_version"] = version
         pins[f"{name}_code_sha256"] = package_code_sha256(name, use_cache=use_cache)
         pins[f"{name}_dist_native_sha256"] = _scorer_dist_native_sha256(
             name, use_cache=use_cache, treat_anonymous_as_recorded=treat_anonymous_as_recorded
         )
         if is_optional:
-            # 導入済みの任意メンバーは必須メンバーと全く同じ厳密さで完全 pin を要求
-            # する（「入っていれば通常運転どおり」・弱めない）。
+            # participate した任意メンバーは必須メンバーと全く同じ厳密さで完全 pin
+            # を要求する（「実際に使われていれば通常運転どおり」・弱めない）。
             pins[f"{name}_closure_state"] = "present"
     return pins
 
@@ -3841,7 +3956,23 @@ def run_accuracy(
     # 実行中にディスク上の first-party ソースが差し替わっていないか確認する。
     # 差し替わっていれば「report が pin した digest」と「次回 import されるコード」が
     # 食い違い、後続の evaluate が誤った provenance を受理しうる（Codex P1）。
-    _require_unchanged_since_load()
+    _post_run_scorer_pins = _require_unchanged_since_load()
+    # Codex 15 巡目 P2: `results` は構築時点（ループ開始前・`_LOADED_SCORER_PINS`）の
+    # スコアラー pin で初期化されているため、任意閉包メンバー（threadpoolctl/
+    # charset_normalizer）は load 時点で必ず absent の暫定値のまま残っている
+    # （load 時は `import numpy` 等より前なので、何も import されていない）。この
+    # run が実際に測定した（＝上のループが `evaluate_melody_accuracy` 経由で
+    # mir_eval.melody を import した）後に再計算した `_post_run_scorer_pins` の
+    # 任意メンバー分だけをここで上書きし、observed import closure を最終値として
+    # report に刻む。必須メンバー（mir_eval/scipy/numpy/decorator）は
+    # `_require_unchanged_since_load` が load 時と不変であることを既に検証済みなので
+    # 上書き不要（load-time-bound の値を保つ——ディスクが run 中に改変されても、
+    # 実際に実行されたのは import 済みの旧コードである、という #217 の規律を
+    # required メンバーについては維持する）。
+    for _optional_name in _SCORER_RUNTIME_PACKAGES_OPTIONAL:
+        for _suffix in ("_version", "_code_sha256", "_dist_native_sha256", "_closure_state"):
+            _key = f"{_optional_name}{_suffix}"
+            results[_key] = _post_run_scorer_pins[_key]
     # P1-B（Codex 10 巡目、11 巡目 P1-A で検出経路を是正）: audit hook が run 中に
     # 記録した「compile された source bytes が束縛時点の期待と不一致」の一覧を
     # report に刻む。この run の
@@ -4216,6 +4347,9 @@ def _require_fresh_process_report_provenance(
     reported_scorer = _validated_scorer_pin_tuple(
         report, context=f"category {category!r} の測り直し report"
     )
+    # Codex 15 巡目 P2: 任意閉包メンバーの presence 比較を observed-closure ベースへ
+    # 統一するため、評価環境側の再計算より前に閉包を観測可能にする（docstring 参照）。
+    _ensure_scorer_optional_closure_observed()
     expected_scorer = _validated_scorer_pin_tuple(
         _scorer_pins(use_cache=False), context="評価環境の再計算スコアラー pin"
     )
@@ -4891,6 +5025,9 @@ def _require_homogeneous_scorer(reports: List[Dict[str, Any]]) -> Dict[str, Any]
             f"{sorted(set(pins))}; 別の数値実装（mir_eval/scipy/numpy のいずれか）で "
             "測った run を同一 stack の repeats と見なさない (fail-closed)"
         )
+    # Codex 15 巡目 P2: 任意閉包メンバーの presence 比較を observed-closure ベースへ
+    # 統一するため、評価環境側の再計算より前に閉包を観測可能にする（docstring 参照）。
+    _ensure_scorer_optional_closure_observed()
     expected = _validated_scorer_pin_tuple(
         _scorer_pins(use_cache=False), context="評価環境の再計算スコアラー pin"
     )
