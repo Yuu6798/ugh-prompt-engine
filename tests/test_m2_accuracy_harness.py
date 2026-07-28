@@ -1,12 +1,12 @@
 """tests/test_m2_accuracy_harness.py — M2a `scripts/run_melody_accuracy.py` の単体テスト。
 
-対象: `docs/DESIGN_M2_extraction_accuracy.md`（M2a 行、設計 §7 受け入れ条件）。
+対象: `docs/DESIGN_M2_extraction_accuracy.md`（M2a 行、設計 §8 受け入れ条件）。
 
 CI 安全性: 実抽出器（crepe / demucs）を一切必要としない。run/evaluate の二相
 メカニズムはフェイク抽出器（決定論の f0 を返す `route_runner`）で検証し、
 「実抽出器が未導入なら unavailable として fail-closed に落ちる」経路のみ
 既定 runner（`observe_via_route_with_provenance`）を使った軽量スモークで確認する
-（設計 §7 M2a 行: 「crepe が CI 不可なら…ハーネス単体テスト」）。
+（設計 §8 M2a 行: 「crepe が CI 不可なら…ハーネス単体テスト」）。
 """
 from __future__ import annotations
 
@@ -1888,14 +1888,14 @@ def test_verify_scorer_dt_needed_closure_fails_closed_on_unparseable_root(
 def test_verify_scorer_dt_needed_closure_verifies_os_baseline_soname_resolution(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """OS 基盤 soname も実解決し、正規システムディレクトリ配下であることを要求する。
+    """OS 基盤 soname も実解決し、ldconfig cache 登録の exact path 一致を要求する。
 
     （Codex 10 巡目 P1-A）旧実装は「名前が基盤らしい」だけで無条件に `continue`
     （resolve すら呼ばない）していた——`LD_LIBRARY_PATH`/`DT_RPATH` が攻撃者の
     ディレクトリの同名ファイルを指しても検出できなかった。ここでは
-    `_resolve_soname_without_loading` が実際に**呼ばれ**、解決先がシステム
-    ディレクトリ配下であることを要求することを固定する（呼ばれないことを固定して
-    いた旧テストの前提は誤りだったため置き換える）。
+    `_resolve_soname_without_loading` が実際に**呼ばれ**、解決先が
+    `_is_ldconfig_registered_path`（Codex 14 巡目 P1-A: ディレクトリメンバシップ
+    から exact cache path 一致へ変更）を満たすことを要求することを固定する。
     """
     import svp_rpe.melody.provenance as provenance
 
@@ -1918,9 +1918,9 @@ def test_verify_scorer_dt_needed_closure_verifies_os_baseline_soname_resolution(
     monkeypatch.setattr(provenance, "_elf_dynamic_info", _fake_elf_dynamic_info)
     monkeypatch.setattr(provenance, "_resolve_soname_without_loading", _fake_resolve)
     monkeypatch.setattr(
-        harness,
-        "_system_library_directories",
-        lambda: frozenset({Path("/usr/lib/x86_64-linux-gnu")}),
+        provenance,
+        "_is_ldconfig_registered_path",
+        lambda soname, resolved: resolved == Path("/usr/lib/x86_64-linux-gnu") / soname,
     )
     harness._verify_scorer_dt_needed_closure(
         "numpy", package_root=package_root, natives=set()
@@ -1952,13 +1952,14 @@ def test_verify_scorer_dt_needed_closure_fails_closed_when_baseline_soname_unres
         )
 
 
-def test_verify_scorer_dt_needed_closure_fails_closed_when_baseline_soname_resolves_outside_system_dir(
+def test_verify_scorer_dt_needed_closure_fails_closed_when_baseline_soname_resolves_outside_ldconfig_cache(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """基盤 soname が正規システムディレクトリ外へ解決されたら fail-closed（Codex 10 巡目 P1-A）。
+    """基盤 soname の解決先が ldconfig cache の exact path と一致しなければ fail-closed。
 
     `LD_LIBRARY_PATH`/`DT_RPATH` が攻撃者の用意した別ディレクトリの同名ファイル
-    （`libc.so.6` 等）を指す実測相当のシナリオ。
+    （`libc.so.6` 等）を指す実測相当のシナリオ（Codex 10 巡目 P1-A・14 巡目 P1-A で
+    ディレクトリメンバシップから exact cache path 一致へ強化）。
     """
     import svp_rpe.melody.provenance as provenance
 
@@ -1980,15 +1981,45 @@ def test_verify_scorer_dt_needed_closure_fails_closed_when_baseline_soname_resol
 
     monkeypatch.setattr(provenance, "_elf_dynamic_info", _fake_elf_dynamic_info)
     monkeypatch.setattr(provenance, "_resolve_soname_without_loading", _fake_resolve)
-    monkeypatch.setattr(
-        harness,
-        "_system_library_directories",
-        lambda: frozenset({Path("/usr/lib/x86_64-linux-gnu")}),
-    )
-    with pytest.raises(RuntimeError, match="正規システムディレクトリ外"):
+    monkeypatch.setattr(provenance, "_is_ldconfig_registered_path", lambda soname, resolved: False)
+    with pytest.raises(RuntimeError, match="ldconfig cache 登録の exact path と"):
         harness._verify_scorer_dt_needed_closure(
             "numpy", package_root=package_root, natives=set()
         )
+
+
+def test_is_ldconfig_registered_path_requires_exact_cache_path_not_directory_membership(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`_is_ldconfig_registered_path` はディレクトリメンバシップでなく exact path 一致（Codex 14 巡目 P1-A）。
+
+    `/usr/local/lib` のようにベンダー/アプリライブラリが 1 つだけ ldconfig 登録された
+    「混在ディレクトリ」を模擬する: そのディレクトリに置かれた cache **未登録**の
+    custom `libm.so.6`（`LD_LIBRARY_PATH` 経由で解決されたと想定）は baseline と
+    認めてはならない——旧ディレクトリメンバシップ実装ならここを誤って許可した。
+    一方、cache に正確に登録されたライブラリは従来どおり baseline。
+    """
+    import svp_rpe.melody.provenance as provenance
+
+    mixed_dir = tmp_path / "usr_local_lib"
+    mixed_dir.mkdir()
+    registered_vendor_lib = mixed_dir / "libvendorthing.so.1"
+    registered_vendor_lib.write_bytes(b"vendor")
+    custom_unregistered_libm = mixed_dir / "libm.so.6"
+    custom_unregistered_libm.write_bytes(b"custom-unregistered")
+
+    fake_ldconfig_output = f"libvendorthing.so.1 (libc6,x86-64) => {registered_vendor_lib}\n"
+    monkeypatch.setattr(provenance, "_ldconfig_cache_listing", lambda: fake_ldconfig_output)
+
+    # cache に登録された soname はそのまま baseline。
+    assert provenance._is_ldconfig_registered_path(
+        "libvendorthing.so.1", registered_vendor_lib.resolve()
+    )
+    # 同じディレクトリに置かれていても、cache 未登録の soname/path は baseline でない
+    # ——ディレクトリメンバシップ判定ならここが誤って True になっていた。
+    assert not provenance._is_ldconfig_registered_path(
+        "libm.so.6", custom_unregistered_libm.resolve()
+    )
 
 
 def test_verify_scorer_dt_needed_closure_fails_closed_when_soname_unresolvable(
@@ -2527,20 +2558,23 @@ def test_reject_pre_bound_native_mappings_allows_sibling_scorer_backend(
     assert recorded == []  # 兄弟 scorer パッケージの所有物なので記録もしない
 
 
-def test_system_library_directories_covers_ldconfig_multiarch_dir() -> None:
-    """`_system_library_directories()` は実測（ldconfig）でマルチアーキ配置を拾う。
+def test_ldconfig_cache_paths_by_soname_covers_real_multiarch_libc() -> None:
+    """`_ldconfig_cache_paths_by_soname()` は実測（ldconfig）で実環境の libc を拾う。
 
     アーキテクチャ名（`x86_64-linux-gnu` 等）をハードコードせず、この計算機の
-    `ldconfig -p` キャッシュが実際に指すディレクトリから動的に確定することを固定
-    する（Codex 10 巡目 P1-A）。
+    `ldconfig -p` キャッシュが実際に指す soname → exact path を動的に確定することを
+    固定する（Codex 10 巡目 P1-A の後継。14 巡目 P1-A でディレクトリメンバシップから
+    exact path 一致へ切り替えたため、対象を `_system_library_directories()` から
+    `_ldconfig_cache_paths_by_soname()` へ置き換える）。
     """
-    directories = harness._system_library_directories()
-    assert directories, "システムライブラリディレクトリが 1 つも見つからない"
-    assert all(d.is_absolute() for d in directories)
-    # libc.so.6 は本ハーネスが動く Linux 環境に必ず存在する（既存テスト群の前提と同じ）。
+    import svp_rpe.melody.provenance as provenance
+
+    by_soname = provenance._ldconfig_cache_paths_by_soname()
+    assert by_soname, "ldconfig cache から soname が 1 つも見つからない"
     real_libc = Path("/usr/lib/x86_64-linux-gnu/libc.so.6")
     if real_libc.is_file():
-        assert real_libc.parent.resolve() in directories
+        assert real_libc.resolve() in by_soname.get("libc.so.6", frozenset())
+        assert provenance._is_ldconfig_registered_path("libc.so.6", real_libc.resolve())
 
 
 def test_ldconfig_invoked_from_trusted_absolute_path_ignores_path_hijack(
@@ -2549,10 +2583,10 @@ def test_ldconfig_invoked_from_trusted_absolute_path_ignores_path_hijack(
     """PATH 上の偽 ldconfig ではなく、信頼できる絶対パスの本物が実行される（Codex 13 巡目 P1-A）。
 
     `_ldconfig_cache_listing`（`svp_rpe.melody.provenance` の共有ヘルパー。
-    `_resolve_soname_without_loading` と `_system_library_directories`
-    （本ハーネス）の両方がこれ経由で ldconfig を呼ぶ）は非修飾コマンドを一切使わない
-    ため、PATH に別ディレクトリを吐く偽 `ldconfig` を先頭に置いても無視される
-    ことを固定する。
+    `_resolve_soname_without_loading` と `_ldconfig_cache_paths_by_soname`/
+    `_is_ldconfig_registered_path`（Codex 14 巡目 P1-A）の両方がこれ経由で
+    ldconfig を呼ぶ）は非修飾コマンドを一切使わないため、PATH に別ディレクトリを
+    吐く偽 `ldconfig` を先頭に置いても無視されることを固定する。
     """
     import svp_rpe.melody.provenance as provenance
 
@@ -2615,9 +2649,11 @@ def test_hardened_subprocess_env_strips_gconv_and_locale_vectors(
 ) -> None:
     """`GCONV_PATH`/`GLIBC_TUNABLES`/`LOCPATH` 等も硬化 env から除去する（Codex 13 巡目 H20）。
 
-    `_HARDENED_SUBPROCESS_ENV_BLOCKLIST`（P1-A の `LD_*` 除去を H20 で拡張）が
-    iconv/gconv モジュールロードや CPU dispatch を歪める既知ベクトルも塞ぐことを固定
-    する。ldconfig（P1-A）・git（H19）の両方の信頼実行が共有する。
+    14 巡目 P1-B で `_hardened_subprocess_env()` は blocklist（個別列挙して除去）から
+    allowlist（`_HARDENED_SUBPROCESS_ENV_ALLOWLIST` に明示したものだけ通す）へ反転
+    した——これらの変数はいずれも allowlist に**含まれない**ため、iconv/gconv
+    モジュールロードや CPU dispatch を歪める既知ベクトルは列挙に依らず一律で塞がれる。
+    ldconfig（P1-A）・git（H19）の両方の信頼実行が共有する。
     """
     import svp_rpe.melody.provenance as provenance
 
@@ -2630,9 +2666,10 @@ def test_hardened_subprocess_env_strips_gconv_and_locale_vectors(
     assert env.get("PATH") == provenance._TRUSTED_SUBPROCESS_PATH
     for var in leak_vars:
         assert var not in env, f"{var} が硬化 env に漏れている"
-    # 宣言（blocklist）と実装（strip 対象）が一致していること。
+    # Codex 14 巡目 P1-B: allowlist 方式へ反転したため、宣言（allowlist）に
+    # 含まれていない = 通らない、という向きで固定する。
     for var in leak_vars:
-        assert var in provenance._HARDENED_SUBPROCESS_ENV_BLOCKLIST
+        assert var not in provenance._HARDENED_SUBPROCESS_ENV_ALLOWLIST
 
 
 def test_trusted_ldconfig_fails_closed_when_no_absolute_candidate_exists(
@@ -2657,10 +2694,10 @@ def test_trusted_ldconfig_fails_closed_when_no_absolute_candidate_exists(
         provenance._resolve_soname_without_loading("libtotallymadeup.so.99")
 
 
-def test_system_library_directories_fails_closed_when_no_trusted_ldconfig(
+def test_ldconfig_cache_paths_by_soname_fails_closed_when_no_trusted_ldconfig(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`_system_library_directories()`（本ハーネス）も同じ fail-closed を継承する（P1-A）。
+    """`_ldconfig_cache_paths_by_soname()` も同じ fail-closed を継承する（P1-A の後継）。
 
     共有ヘルパー `_ldconfig_cache_listing` 経由なので、consumer 側で個別に
     ldconfig 存在チェックを実装し直す必要がないことを固定する。
@@ -2671,18 +2708,9 @@ def test_system_library_directories_fails_closed_when_no_trusted_ldconfig(
         provenance, "_TRUSTED_LDCONFIG_CANDIDATES", ("/nonexistent/ldconfig",)
     )
     with pytest.raises(RuntimeError, match="trusted ldconfig binary not found"):
-        harness._system_library_directories()
-
-
-def test_is_under_system_library_directory_basic() -> None:
-    """`_is_under_system_library_directory` は親ディレクトリの集合所属で判定する。"""
-    dirs = frozenset({Path("/usr/lib/x86_64-linux-gnu")})
-    assert harness._is_under_system_library_directory(
-        Path("/usr/lib/x86_64-linux-gnu/libc.so.6"), dirs
-    )
-    assert not harness._is_under_system_library_directory(
-        Path("/tmp/evil/libc.so.6"), dirs
-    )
+        provenance._ldconfig_cache_paths_by_soname()
+    with pytest.raises(RuntimeError, match="trusted ldconfig binary not found"):
+        provenance._is_ldconfig_registered_path("libc.so.6", Path("/usr/lib/libc.so.6"))
 
 
 def test_reject_pre_bound_native_mappings_allows_first_party_bind_chain(
@@ -5072,8 +5100,15 @@ def test_design_doc_referenced_by_the_m2_layer_is_committed() -> None:
     doc = ROOT / "docs" / "DESIGN_M2_extraction_accuracy.md"
     assert doc.is_file()
     text = doc.read_text(encoding="utf-8")
-    # 引用されている節が実在することまで確認（§2 指標 / §4 バー / §7 PR 分割 / §8 禁止事項）。
-    for marker in ("## 2. 指標", "## 4. 事前登録バー", "## 7. PR 分割", "## 8. やってはいけないこと"):
+    # 引用されている節が実在することまで確認
+    # （§2 指標 / §4 バー / §6 scorer pin 脅威モデル / §8 PR 分割 / §9 禁止事項）。
+    for marker in (
+        "## 2. 指標",
+        "## 4. 事前登録バー",
+        "## 6. Scorer pin の脅威モデルと境界",
+        "## 8. PR 分割",
+        "## 9. やってはいけないこと",
+    ):
         assert marker in text, marker
 
 
@@ -5563,6 +5598,75 @@ def test_git_invoked_from_trusted_absolute_path_ignores_path_hijack(
         assert executed != str(fake_git)
 
 
+def test_hardened_subprocess_env_strips_git_repository_overrides_via_allowlist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`GIT_DIR`/`GIT_WORK_TREE` 等の git repository override が硬化 env から消える（Codex 14 巡目 P1-B）。
+
+    13 巡目 H20 までの blocklist 方式は `LD_*`/`GCONV_PATH` 等を個別列挙して除去
+    するだけで、`GIT_DIR`/`GIT_WORK_TREE`/`GIT_OBJECT_DIRECTORY`/`GIT_INDEX_FILE`/
+    `GIT_ALTERNATE_OBJECT_DIRECTORIES`/`GIT_CONFIG` 等の git repository override は
+    素通りしていた——trusted `git -C ROOT` を呼んでも、これらが立っていれば git は
+    **foreign リポジトリ**を見る。allowlist 反転（既定ですべて落として明示的に信頼
+    する最小集合だけ通す）により、列挙していない任意の env（ここでは
+    `SOME_UNRELATED_VAR` も）が一律で漏れないことを固定する。
+    """
+    import svp_rpe.melody.provenance as provenance
+
+    git_override_vars = (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_INDEX_FILE",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_CONFIG",
+    )
+    for var in git_override_vars:
+        monkeypatch.setenv(var, "/tmp/evil_repo")
+    monkeypatch.setenv("SOME_UNRELATED_VAR", "should-not-leak")
+
+    env = provenance._hardened_subprocess_env()
+
+    assert env == {"PATH": provenance._TRUSTED_SUBPROCESS_PATH}
+    for var in git_override_vars:
+        assert var not in env, f"{var} が硬化 env に漏れている"
+    assert "SOME_UNRELATED_VAR" not in env
+
+
+def test_bars_registration_attestation_ignores_git_dir_override_and_sees_root_repo(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`GIT_DIR`/`GIT_WORK_TREE` を export しても trusted git は ROOT リポジトリを見る（Codex 14 巡目 P1-B）。
+
+    allowlist 反転前の blocklist は `GIT_DIR` 等を除去しなかったため、これらを export
+    した状態で trusted `git -C ROOT` を呼ぶと **foreign リポジトリ**（ここでは bars の
+    blob を含まない無関係な空リポジトリ）を見てしまい得た——事前登録の立証が ROOT の
+    履歴ではなく foreign リポジトリに対して行われる false attestation の入口になる。
+    ここでは GIT_DIR/GIT_WORK_TREE を無関係な空リポジトリへ向けても attestation が
+    ROOT の実履歴に対して成功することを固定する——foreign リポジトリを見ていたら、
+    そこに bars の blob が存在しないため必ず RuntimeError になる。
+    """
+    foreign_repo = tmp_path / "foreign_repo"
+    foreign_repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=foreign_repo, check=True)
+    subprocess.run(
+        ["git", "-C", str(foreign_repo), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(foreign_repo), "config", "user.name", "test"], check=True)
+    (foreign_repo / "unrelated.txt").write_text("nothing to do with bars\n")
+    subprocess.run(["git", "-C", str(foreign_repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(foreign_repo), "commit", "-q", "-m", "unrelated"], check=True)
+
+    monkeypatch.setenv("GIT_DIR", str(foreign_repo / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(foreign_repo))
+
+    attestation, _committed = harness._bars_registration_attestation(
+        BARS_PATH, BARS_PATH.read_bytes()
+    )
+    assert re.fullmatch(r"[0-9a-f]{40}", attestation["first_commit"])
+
+
 def test_bars_registration_attestation_fails_closed_when_no_trusted_git(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5989,9 +6093,10 @@ def test_reverification_surfaces_cannot_rerun_when_prebound_mappings_are_clean(
 
     def _fake_subprocess_run(command: Any, *args: Any, **kwargs: Any) -> Any:
         # `harness.subprocess.run` はこの子プロセス spawn 呼び出し**だけ**を偽装する
-        # 対象——`_system_library_directories()`（Codex 10 巡目 P1-A）が同じ
-        # `subprocess.run` 参照経由で `ldconfig -p` も呼ぶため、harness 自身の
-        # 子プロセス spawn（`sys.executable` 起動）以外は実関数へ委譲する。
+        # 対象——`_is_ldconfig_registered_path()`/`_ldconfig_cache_paths_by_soname()`
+        # （Codex 14 巡目 P1-A、10 巡目 P1-A の後継）が同じ `subprocess.run` 参照経由で
+        # `ldconfig -p` も呼ぶため、harness 自身の子プロセス spawn（`sys.executable`
+        # 起動）以外は実関数へ委譲する。
         if not (isinstance(command, list) and command and command[0] == sys.executable):
             return real_subprocess_run(command, *args, **kwargs)
         out_index = command.index("--out")

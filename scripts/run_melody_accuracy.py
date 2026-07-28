@@ -997,66 +997,17 @@ def _is_interpreter_toolchain_library(basename: str) -> bool:
     return bool(_INTERPRETER_TOOLCHAIN_LIBRARY_RE.match(basename))
 
 
-# 正規の OS システムライブラリディレクトリ集合（Codex 10 巡目 P1-A）。実測ベース:
-# ハードコードした `/lib`/`/usr/lib` 等の慣行パスに加え、`ldconfig -p`（本ファイルが
-# 既に `_resolve_soname_without_loading` で使う同じキャッシュ）が実際に列挙する
-# 各実体の親ディレクトリを収集する——`/lib` → `/usr/lib`（merged-usr symlink）や
-# マルチアーキ配置（`/usr/lib/x86_64-linux-gnu` 等）をアーキテクチャ名をハードコード
-# せずに実測から確定できる。
-_CANONICAL_SYSTEM_LIBRARY_DIRECTORIES: "Tuple[str, ...]" = (
-    "/lib",
-    "/lib64",
-    "/usr/lib",
-    "/usr/lib64",
-    "/usr/libx32",
-)
-
-
-def _system_library_directories() -> "frozenset[Path]":
-    """正規の OS システムライブラリディレクトリ（realpath 解決済み）の集合。
-
-    （Codex 10 巡目 P1-A）`_is_os_baseline_library`/`_is_interpreter_toolchain_library`
-    は soname/basename の**命名規約**だけで「基盤ライブラリだから安全」と判定していた
-    ——名前が `libm.so.6` であることは、実際にどこから解決されたかを何も保証しない。
-    `LD_LIBRARY_PATH` や（本ハーネス自身が拒否しない）`DT_RPATH` が、攻撃者の用意した
-    別ディレクトリの同名ファイルを「本物より先に」解決させうる。この集合は
-    「基盤ライブラリと自称するものが実際にどこにあるべきか」を検証するための正解
-    データで、ハードコードした慣行パス（`/lib`/`/usr/lib` 等、merged-usr の
-    symlink 先まで `.resolve()` する）に加えて、`ldconfig -p` キャッシュが実際に
-    指す各実体の親ディレクトリを実測で収集する——アーキテクチャ固有のマルチアーキ
-    サブディレクトリ名（`x86_64-linux-gnu` 等）をハードコードせずに、この計算機の
-    実際の配置から動的に確定するため。
-
-    （Codex 13 巡目 P1-A）ldconfig 呼び出しは `svp_rpe.melody.provenance` の
-    `_ldconfig_cache_listing` 共有ヘルパーへ委譲する——非修飾 `ldconfig` は PATH 上の
-    偽コマンドに差し替えられ、この関数が返す「正規システムディレクトリ」の正解
-    データ自体を汚染しうるため、信頼できる絶対パスからのみ起動する（他の consumer
-    は `_resolve_soname_without_loading`。どちらも同じ信頼実行を通る）。
-    """
-    from svp_rpe.melody.provenance import _ldconfig_cache_listing
-
-    directories: "set[Path]" = set()
-    for candidate in _CANONICAL_SYSTEM_LIBRARY_DIRECTORIES:
-        path = Path(candidate)
-        if path.is_dir():
-            directories.add(path.resolve())
-    output = _ldconfig_cache_listing()
-    for line in output.splitlines():
-        _, _, path_field = line.partition(" => ")
-        path_field = path_field.strip()
-        if not path_field:
-            continue
-        resolved_file = Path(path_field)
-        if resolved_file.is_file():
-            directories.add(resolved_file.parent.resolve())
-    return frozenset(directories)
-
-
-def _is_under_system_library_directory(
-    resolved: Path, system_library_directories: "frozenset[Path]"
-) -> bool:
-    """`resolved`（既に `.resolve()` 済みの実体パス）が正規システムディレクトリ配下か。"""
-    return resolved.parent.resolve() in system_library_directories
+# Codex 10 巡目 P1-A で導入した `_system_library_directories()`/
+# `_is_under_system_library_directory()`（正規システムライブラリ**ディレクトリ**の
+# 集合に対するメンバシップ判定）は Codex 14 巡目 P1-A で撤去した。ディレクトリ
+# メンバシップは、`/usr/local/lib` のようにベンダー/アプリライブラリが 1 つでも
+# ldconfig 登録されていると、その親ディレクトリ**全体**を baseline 化してしまい、
+# 同じディレクトリの cache 未登録 custom ライブラリ（`LD_LIBRARY_PATH` 経由で解決
+# されるもの）まで通過させる穴になる。両 consumer（`_verify_scorer_dt_needed_
+# closure` の DT_NEEDED 閉包検証・`_reject_pre_bound_native_mappings` の
+# `_is_verified_interpreter_toolchain_library`）は、いま `svp_rpe.melody.provenance`
+# の `_is_ldconfig_registered_path(soname, resolved)`（soname → ldconfig cache
+# 登録済み exact path の一致）を使う。
 
 
 def _sibling_scorer_backend_roots(exclude: str) -> "list[Path]":
@@ -1242,17 +1193,24 @@ def _verify_scorer_dt_needed_closure(
        起点から継承した RPATH を連ねて再帰的に検証を続ける（二重ベンダリングされた
        外部依存を見逃さないため）。
     2. OS 基盤 whitelist（`_is_os_baseline_library`）に soname が名前で一致し、
-       **かつ**実際に解決した先が正規システムディレクトリ配下（`_system_library_
-       directories()`・`_is_under_system_library_directory`）→ 揃っている。ここで
-       探索を打ち切る（OS 基盤自身の依存まで遡る必要はない）。**名前一致だけでは
-       信用しない（Codex 10 巡目 P1-A）**: 旧実装は基盤名に一致したら無条件で
-       `continue`（解決すらしない）していたため、`LD_LIBRARY_PATH`/`DT_RPATH` が
-       攻撃者の用意した別ディレクトリの同名ファイル（`libm.so.6` 等）を指しても
-       検出できなかった。ここでは非基盤 soname と同じ `_resolve_soname_without_
-       loading`（rpath → `LD_LIBRARY_PATH` → runpath → ldconfig）で実解決し、
-       解決先ディレクトリを検証する——所有権検証（`_owned_by_scorer_distribution`）
-       の代わりにシステムディレクトリ検証を使うのは、基盤ライブラリは定義上
-       distribution の所有物ではなく OS 自身の提供物だから。
+       **かつ**実際に解決した先が、その soname として ldconfig cache に登録された
+       **exact path** と一致する（`svp_rpe.melody.provenance` の
+       `_is_ldconfig_registered_path`）→ 揃っている。ここで探索を打ち切る（OS 基盤
+       自身の依存まで遡る必要はない）。**名前一致だけでは信用しない（Codex 10
+       巡目 P1-A）**: 旧実装は基盤名に一致したら無条件で `continue`（解決すら
+       しない）していたため、`LD_LIBRARY_PATH`/`DT_RPATH` が攻撃者の用意した別
+       ディレクトリの同名ファイル（`libm.so.6` 等）を指しても検出できなかった。
+       ここでは非基盤 soname と同じ `_resolve_soname_without_loading`（rpath →
+       `LD_LIBRARY_PATH` → runpath → ldconfig）で実解決し、解決先を検証する
+       ——所有権検証（`_owned_by_scorer_distribution`）の代わりに ldconfig cache
+       の exact path 一致を使うのは、基盤ライブラリは定義上 distribution の所有物
+       ではなく OS 自身の提供物だから。**「正規システムディレクトリ配下か」という
+       ディレクトリメンバシップ判定（旧 10 巡目実装）はここでは使わない（Codex 14
+       巡目 P1-A）**: `/usr/local/lib` のようにベンダー/アプリライブラリが 1 つでも
+       ldconfig 登録されているディレクトリでは、そのディレクトリ配下という条件
+       だけでは cache 未登録の custom ライブラリ（`LD_LIBRARY_PATH` 経由で同じ
+       ディレクトリへ解決されるもの）まで通してしまう。soname → cache 登録済み
+       exact path の対応を要求することで、この穴を塞ぐ。
 
     のどちらでもなければ `RuntimeError` で fail-closed にする（soname・解決先パスの
     両方をメッセージに残す）。package_root 起点の walk で `natives` の**全ファイルに
@@ -1270,6 +1228,7 @@ def _verify_scorer_dt_needed_closure(
     """
     from svp_rpe.melody.provenance import (
         _elf_dynamic_info,
+        _is_ldconfig_registered_path,
         _is_native_library,
         _object_rpath_dirs,
         _object_runpath_dirs,
@@ -1302,9 +1261,9 @@ def _verify_scorer_dt_needed_closure(
     pending_roots: "list[tuple[Path, tuple]]" = [(root, ()) for root in roots]
     # Codex 10 巡目 P1-A: 基盤 whitelist 名一致は「安全」の証拠にしない。実際に
     # 解決（rpath → LD_LIBRARY_PATH → runpath → ldconfig、既存 `_resolve_soname_
-    # without_loading` と同じ探索順）し、解決先が正規システムディレクトリ配下に
-    # あることまで検証する。
-    system_library_directories = _system_library_directories()
+    # without_loading` と同じ探索順）し、解決先が ldconfig cache 登録の exact path
+    # と一致することまで検証する（Codex 14 巡目 P1-A: ディレクトリメンバシップから
+    # exact path 一致へ変更。`_is_ldconfig_registered_path` docstring 参照）。
 
     def _walk(obj: Path, inherited_rpath: "tuple") -> None:
         # Codex 13 巡目 P1-B: path 単独ではなく (path, 継承 RPATH context) で dedup
@@ -1327,11 +1286,11 @@ def _verify_scorer_dt_needed_closure(
             if _is_os_baseline_library(soname):
                 # 名前が基盤らしいだけでは信用しない（Codex 10 巡目 P1-A）: この
                 # native 実体自身の RPATH/RUNPATH → LD_LIBRARY_PATH → ldconfig の
-                # 探索順で実解決し、解決先が正規システムディレクトリ配下にあることを
-                # 要求する。`LD_LIBRARY_PATH`/RPATH が攻撃者のディレクトリを指す
-                # 同名ファイルへ差し替えても、ここで検出する（システムディレクトリ
-                # 集合自体は ldconfig 実測 + 慣行パスから決まり、環境変数の影響を
-                # 受けない）。解決できた上でシステムディレクトリ配下と確認できれば
+                # 探索順で実解決し、解決先が ldconfig cache 登録の exact path と
+                # 一致することを要求する（Codex 14 巡目 P1-A。`_is_ldconfig_
+                # registered_path` docstring 参照）。`LD_LIBRARY_PATH`/RPATH が
+                # 攻撃者のディレクトリを指す同名ファイルへ差し替えても、ここで検出
+                # する。解決できた上で cache 登録の exact path と一致すれば
                 # 「揃っている」——OS 基盤自身の依存閉包までは遡らない（従来どおり
                 # ここで探索を打ち切る）。
                 resolved_baseline = _resolve_soname_without_loading(
@@ -1344,14 +1303,12 @@ def _verify_scorer_dt_needed_closure(
                         "実体の所在を立証しないまま「揃っている」と主張しない "
                         "(fail-closed)"
                     )
-                if not _is_under_system_library_directory(
-                    resolved_baseline, system_library_directories
-                ):
+                if not _is_ldconfig_registered_path(soname, resolved_baseline):
                     raise RuntimeError(
                         f"evaluate_m2_bars: {name!r} の native 実体 {obj} が要求する"
-                        f"基盤 soname {soname!r} が正規システムディレクトリ外の "
-                        f"{resolved_baseline} に解決された; LD_LIBRARY_PATH/RPATH が"
-                        "基盤 soname 解決を歪めている疑いがあり、覆えない閉包を"
+                        f"基盤 soname {soname!r} が ldconfig cache 登録の exact path と"
+                        f"一致しない {resolved_baseline} に解決された; LD_LIBRARY_PATH/"
+                        "RPATH が基盤 soname 解決を歪めている疑いがあり、覆えない閉包を"
                         "覆ったと主張しない (fail-closed)"
                     )
                 continue
@@ -1673,11 +1630,13 @@ def _reject_pre_bound_native_mappings(
     許容は `_is_interpreter_toolchain_library`（basename の命名規約）だけでは判定
     しない——`/tmp/evil/libz.so.1` のように所有権の無い場所に置かれた同名ファイルを
     basename だけで許容すると、default-deny の意味が失われる。
-    `_is_verified_interpreter_toolchain_library` で basename 一致に加えて実パスの
-    親ディレクトリが `_system_library_directories()`（ldconfig 実測 + 慣行パス）
-    配下であることまで要求する。DT_NEEDED 閉包側の `_is_os_baseline_library`
-    （P1-A、`_verify_scorer_dt_needed_closure` docstring 参照）と対をなす同じ設計
-    判断——「名前が基盤らしい」ことは「実体がそこにある」ことを何も保証しない。
+    `_is_verified_interpreter_toolchain_library` で basename 一致に加えて、実パスが
+    その basename（soname 相当）として ldconfig cache に登録された **exact path**
+    と一致することまで要求する（`svp_rpe.melody.provenance` の
+    `_is_ldconfig_registered_path`。Codex 14 巡目 P1-A でディレクトリメンバシップ
+    から反転）。DT_NEEDED 閉包側の `_is_os_baseline_library`（P1-A、
+    `_verify_scorer_dt_needed_closure` docstring 参照）と対をなす同じ設計判断
+    ——「名前が基盤らしい」ことは「実体がそこにある」ことを何も保証しない。
 
     **H6: `(deleted)` / `memfd:` / 拡張子なし実行マップ**。`_parse_proc_self_maps_
     executable_mappings` は権限フィールド（`x`）だけで絞るため、これらも可視化
@@ -1761,7 +1720,7 @@ def _reject_pre_bound_native_mappings(
     """
     import sys
 
-    from svp_rpe.melody.provenance import _is_native_library
+    from svp_rpe.melody.provenance import _is_ldconfig_registered_path, _is_native_library
     from svp_rpe.utils.hashing import file_sha256
 
     mapped = _parse_proc_self_maps_executable_mappings()
@@ -1776,20 +1735,22 @@ def _reject_pre_bound_native_mappings(
     except OSError:
         interpreter_path = None
     interpreter_shared_libraries = _interpreter_shared_library_paths()
-    system_library_directories = _system_library_directories()
     # Codex 10 巡目 P1-A（maps 側）: OS/解釈系ツールチェーンの許容も basename の
     # 命名規約だけでは判定しない。`/tmp/evil/libz.so.1` のように無関係な場所に
     # 置かれた同名ファイルが mmap されていても、旧実装は basename 一致だけで
-    # 許容していた——実パスが正規システムディレクトリ配下にあることまで要求する。
+    # 許容していた。Codex 14 巡目 P1-A: 実パスが正規システムディレクトリ配下にある
+    # ことを要求する旧チェック（ディレクトリメンバシップ）は撤去し、basename
+    # （soname 相当）が ldconfig cache に登録した **exact path** と一致することを
+    # 要求する（`_is_ldconfig_registered_path`）。
 
     def _is_verified_interpreter_toolchain_library(candidate_path: Path) -> bool:
         if not _is_interpreter_toolchain_library(candidate_path.name):
             return False
         try:
-            parent = candidate_path.parent.resolve()
+            resolved = candidate_path.resolve()
         except OSError:
             return False
-        return parent in system_library_directories
+        return _is_ldconfig_registered_path(candidate_path.name, resolved)
 
     def _content_matches_a_native(mapped_path: Path, candidates: "list[Path]") -> bool:
         if not candidates or not mapped_path.is_file():
@@ -2198,6 +2159,12 @@ def _scorer_pins(
     *, use_cache: bool = True, treat_anonymous_as_recorded: "Optional[bool]" = None
 ) -> Dict[str, Any]:
     """指標を計算したスコアラー閉包（mir_eval + scipy + numpy）の version / code pin。
+
+    **脅威モデル境界（Codex 14 巡目、決裁確定）**: この pin が守るのは受動的な
+    取り違え・環境ドリフト・偶発的差し替え（別バージョンの数値ライブラリ、wheel 外
+    BLAS、事前ロード等）の tamper-evidence であり、測定プロセスの env/PATH/
+    site-packages/ファイルシステムを能動的に制御できる攻撃者への完全防御ではない
+    （詳細: `docs/DESIGN_M2_extraction_accuracy.md` 「Scorer pin の脅威モデルと境界」）。
 
     `generator_code_sha256` は first-party 閉包に限っている（third-party を混ぜると
     環境差で digest が揺れる）ため、third-party の実装差はそこに現れない。一方

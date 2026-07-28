@@ -343,11 +343,12 @@ def _system_library_path(soname: str) -> Optional[Path]:
 
 # 信頼できる ldconfig 実行ファイルの絶対パス候補（Codex 13 巡目 P1-A）。PATH 経由の
 # 非修飾 `ldconfig` は、PATH 上に攻撃者が用意した同名コマンドがあればそれが実行され、
-# `libm.so.6` 等の基盤 soname を偽の canonical system-library ディレクトリへ解決させ
-# うる——`_is_under_system_library_directory`（`scripts/run_melody_accuracy.py`）が
-# 検証の正解データとして使う集合そのものが汚染される。glibc/util-linux が実際に
-# インストールする先はディストリビューションを問わずこの 4 箇所に限られるため、
-# 絶対パスで存在確認してから実行する（PATH フォールバックはしない = fail-closed）。
+# `libm.so.6` 等の基盤 soname を偽の cache へ解決させうる——`_is_ldconfig_registered_
+# path`（Codex 14 巡目 P1-A。`scripts/run_melody_accuracy.py` の consumer が使う、旧
+# `_is_under_system_library_directory` の後継）が検証の正解データとして使う ldconfig
+# cache そのものが汚染される。glibc/util-linux が実際にインストールする先は
+# ディストリビューションを問わずこの 4 箇所に限られるため、絶対パスで存在確認して
+# から実行する（PATH フォールバックはしない = fail-closed）。
 _TRUSTED_LDCONFIG_CANDIDATES: "Tuple[str, ...]" = (
     "/sbin/ldconfig",
     "/usr/sbin/ldconfig",
@@ -369,29 +370,33 @@ _TRUSTED_GIT_CANDIDATES: "Tuple[str, ...]" = (
 # のみ）。
 _TRUSTED_SUBPROCESS_PATH = "/sbin:/usr/sbin:/bin:/usr/bin"
 
-# 信頼実行するサブプロセス自身の動的リンク・ロケール/gconv モジュールロード・CPU
-# dispatch を歪めうる環境変数（Codex 13 巡目 P1-A + H20 拡張）。ldconfig/git のどちらも
-# 動的リンクされた ELF 実行ファイルである以上、これらが立っていると「信頼できる絶対
-# パスから起動した」つもりでも、起動されたプロセス自身が読み込む共有ライブラリ・
-# ロケールデータが差し替えられ、出力が歪みうる——`LD_*` 系（動的リンカ）に加えて
-# `GCONV_PATH`（iconv/gconv モジュールを攻撃者ディレクトリからロードさせる既知の
-# code-loading ベクトル）・`GLIBC_TUNABLES`（ローダ挙動/CPU dispatch を変える）・
-# `LOCPATH`/`NLSPATH`/`GETCONF_DIR`（同系のモジュール探索パス）を除去する。
-_HARDENED_SUBPROCESS_ENV_BLOCKLIST: "Tuple[str, ...]" = (
-    "LD_PRELOAD",
-    "LD_AUDIT",
-    "LD_LIBRARY_PATH",
-    "LD_DYNAMIC_WEAK",
-    "LD_ORIGIN_PATH",
-    "LD_BIND_NOW",
-    "LD_BIND_NOT",
-    "LD_PROFILE",
-    "GCONV_PATH",
-    "GLIBC_TUNABLES",
-    "LOCPATH",
-    "NLSPATH",
-    "GETCONF_DIR",
-)
+# 信頼実行するサブプロセス（ldconfig / git）に許可する環境変数名の allowlist
+# （Codex 14 巡目 P1-B。13 巡目 P1-A + H20 の blocklist 方式からの反転）。
+#
+# blocklist 方式（`LD_*`・`GCONV_PATH`・`GLIBC_TUNABLES`・`LOCPATH`/`NLSPATH`/
+# `GETCONF_DIR` を個別列挙して除去）は、ldconfig/git がどちらも動的リンクされた
+# ELF 実行ファイルである以上、これらが立っていると「信頼できる絶対パスから起動した」
+# つもりでも起動プロセス自身が読み込む共有ライブラリ・ロケールデータが差し替えられ
+# 出力が歪みうる、という脅威には対応していた。しかし **`GIT_DIR`/`GIT_WORK_TREE`/
+# `GIT_OBJECT_DIRECTORY`/`GIT_INDEX_FILE`/`GIT_ALTERNATE_OBJECT_DIRECTORIES`/
+# `GIT_CONFIG`** 等の git repository override は blocklist に無く素通りしていた
+# ——trusted `git -C ROOT` を呼んでも、これらが立っていれば git は **foreign
+# リポジトリ**を見る（`-C` はワーキングディレクトリを変えるだけで、環境変数による
+# repository 上書きには勝てない）。`_bars_registration_attestation`（事前登録の
+# git 履歴立証）・`_require_out_outside_git_metadata`（`--out` の git メタデータ
+# 保護）はどちらも trusted git の実行が **ROOT リポジトリ**を見ることに依存するため、
+# これは false attestation / 保護の空振りに直結する。個別列挙の blocklist は次に
+# 発見される override 変数を都度追加する後追い戦にしかならないため、既定で
+# **すべての環境変数を落とし**、明示的に信頼する最小集合だけを通す allowlist へ
+# 反転する。これにより `GIT_*`・`LD_*`・`GCONV_PATH`・`GLIBC_TUNABLES` 等を個別
+# 列挙せず一網打尽に除去する（防御意図はこの docstring に残す）。
+#
+# `PATH` は常に `_TRUSTED_SUBPROCESS_PATH` へ固定するため allowlist に含める必要は
+# ない。ロケール系（`LANG`/`LC_ALL`/`LC_*`）は意図的に**含めない**——本モジュールが
+# 解釈する ldconfig/git の出力（soname => path 一覧・hex ハッシュ・
+# `--format=%cI` の ISO 8601 日時）はいずれも locale に依存しないマシン可読形式で、
+# 通す必要が無い（通せば glibc のメッセージカタログ/gconv 経路を不必要に広げる）。
+_HARDENED_SUBPROCESS_ENV_ALLOWLIST: "Tuple[str, ...]" = ()
 
 
 def _trusted_executable(candidates: "Tuple[str, ...]", *, tool_name: str) -> str:
@@ -432,15 +437,24 @@ def _trusted_git_executable() -> str:
 def _hardened_subprocess_env() -> "dict[str, str]":
     """信頼実行するサブプロセス（ldconfig / git）に渡す最小化済み環境変数。
 
-    （Codex 13 巡目 P1-A、H19/H20 で一般化）`PATH` を最小のシステムディレクトリ集合へ
-    固定し、`_HARDENED_SUBPROCESS_ENV_BLOCKLIST` の環境変数を除去する。
+    （Codex 13 巡目 P1-A、H19/H20 で一般化、14 巡目 P1-B で allowlist へ反転）
+    既定で**すべての環境変数を落とし**、`_HARDENED_SUBPROCESS_ENV_ALLOWLIST` に
+    明示したものだけを元の環境から通す。`PATH` は allowlist に関わらず常に
+    `_TRUSTED_SUBPROCESS_PATH`（信頼固定値）へ上書きする。
+
+    blocklist 方式（`LD_*`/`GCONV_PATH` 等を個別列挙して除去する旧実装）は
+    `GIT_DIR`/`GIT_WORK_TREE` 等の git repository override を見落とし、trusted
+    `git -C ROOT` の実行結果を差し替えられる穴になっていた
+    （`_HARDENED_SUBPROCESS_ENV_ALLOWLIST` docstring 参照）。allowlist 反転により
+    列挙していない変数も含めて一網打尽に除去する。
     """
     import os
 
-    env = dict(os.environ)
-    env["PATH"] = _TRUSTED_SUBPROCESS_PATH
-    for var in _HARDENED_SUBPROCESS_ENV_BLOCKLIST:
-        env.pop(var, None)
+    env = {"PATH": _TRUSTED_SUBPROCESS_PATH}
+    for var in _HARDENED_SUBPROCESS_ENV_ALLOWLIST:
+        value = os.environ.get(var)
+        if value is not None:
+            env[var] = value
     return env
 
 
@@ -474,6 +488,52 @@ def _ldconfig_cache_listing() -> str:
         ).stdout
     except (OSError, subprocess.SubprocessError):  # pragma: no cover - 環境依存
         return ""
+
+
+def _ldconfig_cache_paths_by_soname() -> "dict[str, frozenset]":
+    """`ldconfig -p` の soname → 登録された解決先の絶対パス集合（Codex 14 巡目 P1-A）。
+
+    `scripts/run_melody_accuracy.py` の旧 `_system_library_directories()`/
+    `_is_under_system_library_directory()`（Codex 10 巡目 P1-A）は「ldconfig cache の
+    いずれかのエントリの親ディレクトリ」を baseline（正規システムライブラリ）集合と
+    みなしていた。この**ディレクトリメンバシップ**判定は、`/usr/local/lib` のように
+    ベンダー/アプリライブラリが 1 つでも ldconfig に登録されていると、その親ディレクトリ
+    **全体**が baseline 化してしまう——同じディレクトリに置かれた cache 未登録の
+    custom ライブラリ（`LD_LIBRARY_PATH` 経由で解決されるもの）まで、基盤ディレクトリ
+    配下というだけで通過させる穴になる（Codex 14 巡目 P1-A）。
+
+    ここでは「ディレクトリ配下か」ではなく「その soname が実際に指す**正確なパス**が
+    cache に登録されているか」を検証できるよう、soname → 登録済み絶対パス集合の辞書を
+    組み立てる。同一 soname が複数アーキ/hwcap variant で複数パスに解決されることが
+    あるため値は集合（例: multilib 環境の同名 soname が i386/x86_64 の 2 パスを持つ）。
+    """
+    entries: "dict[str, set]" = {}
+    for line in _ldconfig_cache_listing().splitlines():
+        name, _, path_field = line.partition(" => ")
+        soname = name.strip().split(" ", 1)[0]
+        path_field = path_field.strip()
+        if not soname or not path_field:
+            continue
+        candidate = Path(path_field)
+        if candidate.is_file():
+            entries.setdefault(soname, set()).add(candidate.resolve())
+    return {soname: frozenset(paths) for soname, paths in entries.items()}
+
+
+def _is_ldconfig_registered_path(soname: str, resolved: Path) -> bool:
+    """`resolved`（既に `.resolve()` 済みの実体パス）が `soname` として ldconfig
+    cache に登録された exact path のいずれかと一致するか（Codex 14 巡目 P1-A）。
+
+    baseline（OS 基盤 / 正規システムライブラリ）判定はこの exact path 一致でのみ
+    成立させる——ディレクトリメンバシップ（旧 `_is_under_system_library_directory`）
+    は、cache に無関係なライブラリが 1 つでも登録されたディレクトリ全体を baseline
+    化してしまい、同じディレクトリの cache 未登録 custom ライブラリ
+    （`LD_LIBRARY_PATH` 等で解決）まで通過させた。soname が命名規約上「基盤らしい」
+    （`_is_os_baseline_library`）ことも、ここでは信用の根拠にしない——解決先が
+    cache 登録の正確なパスと一致することまで要求する（10 巡目 P1-A の soname 実解決 +
+    13 巡目 P1-A の ldconfig 絶対パス化の精度向上版）。
+    """
+    return resolved in _ldconfig_cache_paths_by_soname().get(soname, frozenset())
 
 
 def _resolve_soname_without_loading(
