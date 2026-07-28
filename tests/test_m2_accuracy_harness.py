@@ -46,6 +46,15 @@ from svp_rpe.melody.accuracy import reference_f0_from_monophonic_spec  # noqa: E
 # モジュール collection 時点（＝各チャンクの新規プロセスの最初期）に 1 回だけ
 # 実 import を済ませ、以降の全テストが安定した状態から `_fake_run()` を呼べる
 # ようにする。
+#
+# **Codex 16 巡目 P2-B で `_numeric_runtime_config()` の捕捉タイミングを category
+# loop（scoring）完了後へ移した**ため、上記の順序 defect（1 回目=未ロード・2 回目=
+# ロード済み）は構造的に解消し、このプリロードは `numeric_runtime_config` の同質性
+# 目的にはもう必須ではない（`test_numeric_runtime_config_homogeneity_does_not_
+# depend_on_module_preimport` がプリロードの効果を一時的に打ち消しても同質性検査が
+# 通ることを固定している）。ただしモジュール collection 時点で既に import 済みで
+# あることを前提にした他のテスト（H13 origin 検査・H1 閉包完全性テスト等）が残って
+# いるため、このプリロード自体は保持する。
 import mir_eval.melody  # noqa: F401,E402
 
 BARS_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2_accuracy_bars.yaml"
@@ -1375,24 +1384,74 @@ def test_homogeneous_scorer_gate_accepts_installed_but_unused_optional_matching_
 
 
 def test_require_unchanged_since_load_tolerates_optional_absent_to_present_transition() -> None:
-    """任意メンバーが load 時 absent → post-run present へ遷移しても
-    swap-and-restore と誤認しない（Codex 15 巡目 P2）。
+    """任意メンバーの load 時点 closure_state がどちらであっても、post-run 再計算との
+    差は swap-and-restore と誤認しない（Codex 15 巡目 P2、16 巡目 P2-A 対応時に
+    前提を環境非依存へ改訂）。
 
-    `_LOADED_SCORER_PINS` は load 時点（`import numpy` 等より前）に確定するため、
-    任意メンバーは必ず absent の暫定値を持つ。実際に participate（sys.modules へ
-    import）していれば post-run の再計算は present になるはずで、これは正当な
-    観測閉包の確定であって「実行中に差し替わった」ことの証拠ではない。
+    `_LOADED_SCORER_PINS` は load 時点（`import numpy` 等の first-party import より
+    前）に確定するが、任意メンバー（threadpoolctl/charset_normalizer）の presence
+    は「このプロセスで**それ以前**に別の経路が import 済みだったか」に依存する——
+    同じソースコードでも、pytest セッション内の他のテストファイル・conftest の
+    import 順序次第で load 時点の closure_state は "absent" にも "present" にも
+    なりうる。旧テストは「load 時点は必ず absent」というローカル環境限定の前提を
+    固定 assert していたため、CI のクリーン環境（threadpoolctl が load 時点で
+    既に import 済み）で `assert 'present' == 'absent'` として落ちた（#225 レビュー
+    実測、PR #225）。`_scorer_pins_required_view` が任意メンバーのフィールドを
+    比較対象から除外するため、load 時点の closure_state の値そのものは
+    `_require_unchanged_since_load()` の判定に影響しない——ここでは「値がどちらで
+    あっても妥当な状態を持ち、かつ例外が出ない」という環境非依存の不変条件だけを
+    検証する。CI が実際に踏んだ「load 時点で既に present」という分岐を環境の
+    ambient import 状態に依存せず固定するのは
+    `test_require_unchanged_since_load_ignores_optional_closure_state_regardless_of_value`
+    （直後）が monkeypatch で担う。
     """
     for name in harness._SCORER_RUNTIME_PACKAGES_OPTIONAL:
-        assert harness._LOADED_SCORER_PINS[f"{name}_closure_state"] == "absent", (
-            "load 時点では import numpy より前に呼ばれるため、任意メンバーは必ず "
-            f"absent のはず（{name} が違反）"
+        assert harness._LOADED_SCORER_PINS[f"{name}_closure_state"] in ("absent", "present"), (
+            f"{name} の load 時点 closure_state が想定外の値"
         )
     # 例外が出ないことが期待値（既に他のテストが mir_eval.melody 経由で
     # participate 済みの状態でも、必須メンバー不変性チェックだけが働き、任意メンバー
     # の absent→present 遷移では fail-closed しない）。
     current = harness._require_unchanged_since_load()
     assert isinstance(current, dict)
+
+
+def test_require_unchanged_since_load_ignores_optional_closure_state_regardless_of_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_require_unchanged_since_load()` は `_LOADED_SCORER_PINS` の任意メンバー
+    closure_state が load 時点で "absent" だった場合・"present" だった場合の
+    **どちらでも** swap-and-restore と誤認しない（Codex 16 巡目 P2-A 対応・CI
+    クリーン環境の実測回帰、PR #225）。
+
+    ローカル環境の実際の import 順序（threadpoolctl が load 時点で absent か
+    present か）に検証結果を委ねると、CI クリーン環境固有の分岐（load 時点で
+    既に present）を手元では踏めないことがある——`_LOADED_SCORER_PINS` を
+    monkeypatch で両方向へ直接差し替え、環境の ambient 状態に依存せず両方の
+    分岐を固定する。
+    """
+    for simulated_state in ("absent", "present"):
+        patched = dict(harness._LOADED_SCORER_PINS)
+        for name in harness._SCORER_RUNTIME_PACKAGES_OPTIONAL:
+            if simulated_state == "absent":
+                patched[f"{name}_version"] = None
+                patched[f"{name}_code_sha256"] = None
+                patched[f"{name}_dist_native_sha256"] = None
+                patched[f"{name}_closure_state"] = "absent"
+            else:
+                # required view から除外されるフィールドなので、値そのものは
+                # 実導入状態と厳密に一致していなくてよい（比較に使われない）。
+                patched[f"{name}_version"] = patched.get(f"{name}_version") or "0.0.0"
+                patched[f"{name}_code_sha256"] = (
+                    patched.get(f"{name}_code_sha256") or hashlib.sha256(b"").hexdigest()
+                )
+                patched[f"{name}_dist_native_sha256"] = (
+                    patched.get(f"{name}_dist_native_sha256") or hashlib.sha256(b"").hexdigest()
+                )
+                patched[f"{name}_closure_state"] = "present"
+        monkeypatch.setattr(harness, "_LOADED_SCORER_PINS", patched)
+        current = harness._require_unchanged_since_load()
+        assert isinstance(current, dict), simulated_state
 
 
 def test_validated_scorer_pin_tuple_accepts_absent_optional_member() -> None:
@@ -4847,6 +4906,82 @@ def test_require_homogeneous_numeric_runtime_config_passes_when_identical() -> N
     ]
     result = harness._require_homogeneous_numeric_runtime_config(reports)
     assert result == reports[0]["numeric_runtime_config"]
+
+
+def test_run_accuracy_calls_numeric_runtime_config_after_scoring_pin_recompute(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex 16 巡目 P2-A/P2-B 回帰: `run_accuracy` は `_numeric_runtime_config()` を
+    `_require_unchanged_since_load()`（scoring 完了後の post-run スコアラー pin
+    再計算）より**後**に呼ぶ。
+
+    逆順（旧実装: category loop より前に `numeric_runtime_config` を確定）だと、
+    (1) P2-B: `evaluate_melody_accuracy` の遅延 mir_eval.melody import がロードする
+    scipy backend / スレッドプールが記録に反映されない、(2) P2-A: `_numeric_
+    runtime_config()` 自身の `_threadpool_runtime_info()` 呼び出しが
+    instrumentation として任意閉包メンバー（threadpoolctl）を import してしまい、
+    その import が `_scorer_optional_participated`（15 巡目 P2・素の `sys.modules`
+    メンバシップ判定）を介して post-run pin 再計算に「scoring 自身の participate」
+    として混入する——という 2 つの症状が同時に発生する。ここでは実際の
+    threadpoolctl import タイミングに依存せず、呼び出し順序そのものを直接固定する。
+    """
+    call_order: List[str] = []
+    real_numeric_runtime_config = harness._numeric_runtime_config
+    real_require_unchanged_since_load = harness._require_unchanged_since_load
+
+    def tracking_numeric_runtime_config() -> Dict[str, Any]:
+        call_order.append("numeric_runtime_config")
+        return real_numeric_runtime_config()
+
+    def tracking_require_unchanged_since_load() -> Dict[str, Any]:
+        call_order.append("require_unchanged_since_load")
+        return real_require_unchanged_since_load()
+
+    monkeypatch.setattr(harness, "_numeric_runtime_config", tracking_numeric_runtime_config)
+    monkeypatch.setattr(
+        harness, "_require_unchanged_since_load", tracking_require_unchanged_since_load
+    )
+
+    harness.run_accuracy(
+        categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+    )
+
+    assert call_order == ["require_unchanged_since_load", "numeric_runtime_config"], call_order
+
+
+def test_numeric_runtime_config_homogeneity_does_not_depend_on_module_preimport() -> None:
+    """Codex 16 巡目 P2-B 回帰: numeric_runtime_config の repeats 間同質性は、本ファイル
+    冒頭（L33 付近）の collection 時点 `import mir_eval.melody` プリロードに依存しない。
+
+    旧実装（category loop 前に numeric_runtime_config を捕捉）は、mir_eval/scipy が
+    このプロセスで**初めて**遅延 import されるタイミングに `_fake_run()` 呼び出しの
+    どちらが居合わせるかで `threadpool_info` のエントリ数が食い違い、同質性検査が
+    偽陽性で落ちる順序 defect を持っていた——本ファイル冒頭のプリロードは、collection
+    時点で 1 回だけ import を済ませることでこの defect を偶然隠蔽していた（隠蔽が
+    正しさの根拠になってはならない）。修正後は numeric_runtime_config を scoring
+    完了後に捕捉するため、mir_eval が「このテスト関数内で初めて import される」状態を
+    人為的に再現しても（＝プリロードの効果を一時的に打ち消しても）同質性検査が通る
+    ことを固定する。
+    """
+    removed_mir_eval_modules = {
+        name: sys.modules.pop(name)
+        for name in list(sys.modules)
+        if name == "mir_eval" or name.startswith("mir_eval.")
+    }
+    try:
+        reports = [
+            _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+            for _ in range(2)
+        ]
+    finally:
+        sys.modules.update(removed_mir_eval_modules)
+
+    result = harness._require_homogeneous_numeric_runtime_config(reports)
+    assert result == reports[0]["numeric_runtime_config"]
+    assert (
+        reports[0]["numeric_runtime_config"]["threadpool_info"]
+        == reports[1]["numeric_runtime_config"]["threadpool_info"]
+    )
 
 
 def test_require_homogeneous_numeric_runtime_config_rejects_mismatch() -> None:

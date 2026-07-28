@@ -2201,6 +2201,38 @@ def _scorer_optional_participated(name: str) -> bool:
     ——`test_scorer_runtime_packages_cover_observed_mir_eval_import_closure` が
     fresh subprocess で確認済みの「import 前後の sys.modules 差分」と同じ考え方を
     プロセス内判定に転用する。
+
+    **16 巡目 P2-A の教訓（設計メモ）**: 素の `sys.modules` メンバシップだけを見る
+    実装は、判定**時点**が「scoring そのものの import しか起きていない」ことに
+    依存する——`_numeric_runtime_config()`（計測 instrumentation。`_threadpool_
+    runtime_info()` 経由で threadpoolctl を import しうる）が scoring
+    （category loop）**より前**に呼ばれると、そのタイミング汚染が
+    `_require_unchanged_since_load()` の post-run pin 再計算に混入し、scoring
+    経路が一度も使わない任意メンバーまで present と誤判定してしまう（15 巡目 P2 が
+    解消したはずの false rejection が instrumentation import 経由で再発する）。
+
+    当初はこの関数自体に「scoring 呼び出し区間で新たに import されたか」を判定する
+    sys.modules baseline スナップショット機構を足す案を検討したが、`_fake_run()` が
+    同一プロセス内で `run_accuracy()` を複数回呼ぶテスト（本ファイルの評価テストの
+    大半が使う `reports = [_fake_run(...) for _ in range(2)]` パターン）や、評価器側
+    （`_require_homogeneous_scorer`/`_require_fresh_process_report_provenance`）が
+    baseline を持たず常に素の `sys.modules` を見る非対称性と衝突し、`repeats[0]`
+    （初回呼び出しで baseline 未汚染）と `repeats[1]`（前回呼び出しの import が
+    ambient に残り baseline 扱いされ absent 化）の presence が食い違って
+    `_require_homogeneous_scorer` の repeats 間・評価環境再計算比較が偽陽性で
+    fail-closed になる回帰を実測した（本番は repeat 毎に別プロセスなので本来
+    起きないが、in-process シミュレーションのテストでは頻発する）。
+
+    **採用した修正は本関数を変えず、呼び出し順序を直す（Codex 16 巡目 P2-B）
+    ことに一本化した**: `run_accuracy` は `_numeric_runtime_config()` を
+    category loop 完了後・かつ `_require_unchanged_since_load()`（本関数を介した
+    pin 再計算）の**後**に呼ぶ。これにより、pin 再計算の時点では instrumentation
+    による import がまだ一切発生していない——本関数が見る `sys.modules` は
+    「scoring 自身の import 実行結果」のみを反映し、`_numeric_runtime_config()`
+    が事後に行う（もし scoring が participate していなければ新規に起こる）
+    threadpoolctl import は、既に確定済みの pin へ影響しない。素の `sys.modules`
+    メンバシップという 15 巡目 P2 の判定方法自体は変えていないため、評価器側
+    （baseline を持たない）や `_fake_run()` の repeats 間比較とも矛盾しない。
     """
     return name in sys.modules
 
@@ -3713,6 +3745,21 @@ def _numeric_runtime_config() -> Dict[str, Any]:
     **拡張（H15）**: 記録に `numpy_simd_dispatch`（`_numpy_simd_dispatch_info`）と
     `threadpool_info`（`_threadpool_runtime_info`）を追加する。gate（同質性要求）
     ではなく record-completeness が主眼——双安定の原因帰属を可能にする。
+
+    **呼び出しタイミング（Codex 16 巡目 P2-B）**: `run_accuracy` は本関数を
+    **category loop（scoring）完了後・かつ `_require_unchanged_since_load()`
+    （post-run スコアラー pin 再計算）の後**に呼ぶ——2 つの理由がある。(1) loop 前に
+    呼ぶと、`evaluate_melody_accuracy` 内の遅延 `mir_eval.melody` import がロード
+    する scipy backend・それが追加する BLAS スレッドプールが `threadpool_info()`
+    の記録に反映されない（scoring が実際に生んだ数値バックエンド構成を clean
+    report が代表しない）。(2) `_require_unchanged_since_load()` より前に呼ぶと、
+    本関数自身の `_threadpool_runtime_info()` 呼び出しが（scoring がまだ import
+    していなければ）threadpoolctl を新規 import してしまい、その import が
+    `_scorer_optional_participated`（15 巡目 P2、素の `sys.modules` メンバシップ
+    判定）による post-run pin 再計算に「scoring 自身の participate」として混入する
+    （Codex 16 巡目 P2-A の症状。`_scorer_optional_participated` の docstring
+    参照）。両方とも「本関数を scoring 完了後・pin 確定後に呼ぶ」という単一の
+    呼び出し順序で同時に塞がる。
     """
     env: Dict[str, Optional[str]] = {}
     for key in sorted(os.environ):
@@ -3826,7 +3873,11 @@ def run_accuracy(
         "harness_loaded_as_main": _HARNESS_LOADED_AS_MAIN,
         "pre_bound_scorer_native_mappings": list(_PRE_BOUND_SCORER_NATIVE_MAPPINGS),
         "non_standard_import_hooks": list(_NON_STANDARD_IMPORT_HOOKS),
-        "numeric_runtime_config": _numeric_runtime_config(),
+        # `numeric_runtime_config` はここでは確定させない（Codex 16 巡目 P2-B）:
+        # category loop（scoring）完了後に一度だけ計算し、下で `results` へ書く。
+        # loop 前に計算すると `evaluate_melody_accuracy` の遅延 mir_eval.melody
+        # import がロードする scipy backend / 追加スレッドプールを記録が反映
+        # できない（docstring 参照）。
         "sys_flags_optimize": sys.flags.optimize,
         "execution_paths": _execution_paths(),
         "categories": {},
@@ -3957,6 +4008,14 @@ def run_accuracy(
     # 差し替わっていれば「report が pin した digest」と「次回 import されるコード」が
     # 食い違い、後続の evaluate が誤った provenance を受理しうる（Codex P1）。
     _post_run_scorer_pins = _require_unchanged_since_load()
+    # Codex 16 巡目 P2-B: `numeric_runtime_config` は category loop（scoring）完了後・
+    # かつ上の `_require_unchanged_since_load()`（post-run スコアラー pin 再計算）の
+    # **後**にここで確定させる（`_numeric_runtime_config` / `_scorer_optional_
+    # participated` の docstring 参照）。この呼び出し順序により、本関数自身の
+    # threadpoolctl import（scoring 自身がまだ import していなければ新規に起こる）は
+    # 上で既に確定済みの任意閉包メンバー presence（`_post_run_scorer_pins` 由来）へ
+    # 影響しない（Codex 16 巡目 P2-A の症状もこの順序で同時に塞がる）。
+    results["numeric_runtime_config"] = _numeric_runtime_config()
     # Codex 15 巡目 P2: `results` は構築時点（ループ開始前・`_LOADED_SCORER_PINS`）の
     # スコアラー pin で初期化されているため、任意閉包メンバー（threadpoolctl/
     # charset_normalizer）は load 時点で必ず absent の暫定値のまま残っている
