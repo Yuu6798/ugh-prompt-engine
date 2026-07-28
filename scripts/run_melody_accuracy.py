@@ -1026,34 +1026,29 @@ def _system_library_directories() -> "frozenset[Path]":
     指す各実体の親ディレクトリを実測で収集する——アーキテクチャ固有のマルチアーキ
     サブディレクトリ名（`x86_64-linux-gnu` 等）をハードコードせずに、この計算機の
     実際の配置から動的に確定するため。
+
+    （Codex 13 巡目 P1-A）ldconfig 呼び出しは `svp_rpe.melody.provenance` の
+    `_ldconfig_cache_listing` 共有ヘルパーへ委譲する——非修飾 `ldconfig` は PATH 上の
+    偽コマンドに差し替えられ、この関数が返す「正規システムディレクトリ」の正解
+    データ自体を汚染しうるため、信頼できる絶対パスからのみ起動する（他の consumer
+    は `_resolve_soname_without_loading`。どちらも同じ信頼実行を通る）。
     """
-    import subprocess
+    from svp_rpe.melody.provenance import _ldconfig_cache_listing
 
     directories: "set[Path]" = set()
     for candidate in _CANONICAL_SYSTEM_LIBRARY_DIRECTORIES:
         path = Path(candidate)
         if path.is_dir():
             directories.add(path.resolve())
-    for ldconfig in ("ldconfig", "/sbin/ldconfig"):
-        try:
-            output = subprocess.run(
-                [ldconfig, "-p"],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=30,
-            ).stdout
-        except (OSError, subprocess.SubprocessError):  # pragma: no cover - 環境依存
+    output = _ldconfig_cache_listing()
+    for line in output.splitlines():
+        _, _, path_field = line.partition(" => ")
+        path_field = path_field.strip()
+        if not path_field:
             continue
-        for line in output.splitlines():
-            _, _, path_field = line.partition(" => ")
-            path_field = path_field.strip()
-            if not path_field:
-                continue
-            resolved_file = Path(path_field)
-            if resolved_file.is_file():
-                directories.add(resolved_file.parent.resolve())
-        break
+        resolved_file = Path(path_field)
+        if resolved_file.is_file():
+            directories.add(resolved_file.parent.resolve())
     return frozenset(directories)
 
 
@@ -1293,7 +1288,15 @@ def _verify_scorer_dt_needed_closure(
             )
         )
 
-    visited: "set[Path]" = set()
+    # (対象ファイル, 継承 RPATH コンテキスト) をキーにした visited（Codex 13 巡目 P1-B）。
+    # 同一 owned native が異なる DT_RPATH/DT_RUNPATH を継承する 2 つの extension root
+    # から到達可能な場合、path だけで dedup すると最初にソートされた context の walk
+    # しか検証されない——別 context では transitive soname が external backend へ
+    # 解決されうるのに、後続の walk が skip されてしまう。継承 RPATH ディレクトリ列
+    # （`_object_rpath_dirs` が返す、正規化・順序保持済みのタプル）を path と組にした
+    # キーにすることで、context ごとに独立して soname 解決を再検証する。無限ループ
+    # 防止のため同一 (path, context) の再訪だけは引き続き skip する。
+    visited: "set[tuple[Path, tuple]]" = set()
     # (対象ファイル, 継承 RPATH ディレクトリ) の pending 群。継承 RUNPATH は無い
     # （DT_RUNPATH は依存の依存へ継承しない・#217 と同じ ffmpeg closure の規律）。
     pending_roots: "list[tuple[Path, tuple]]" = [(root, ()) for root in roots]
@@ -1304,9 +1307,13 @@ def _verify_scorer_dt_needed_closure(
     system_library_directories = _system_library_directories()
 
     def _walk(obj: Path, inherited_rpath: "tuple") -> None:
-        if obj in visited:
+        # Codex 13 巡目 P1-B: path 単独ではなく (path, 継承 RPATH context) で dedup
+        # する。同一 native でも継承 context が異なれば soname 解決先が変わりうる
+        # ため、context ごとに独立して検証する必要がある。
+        visit_key = (obj, inherited_rpath)
+        if visit_key in visited:
             return
-        visited.add(obj)
+        visited.add(visit_key)
         info = _elf_dynamic_info(obj)
         if info is None:
             raise RuntimeError(
@@ -1373,7 +1380,10 @@ def _verify_scorer_dt_needed_closure(
 
     # 未到達の natives（auditwheel 同梱物の中で package_root 起点の walk が
     # 実際に触れなかったもの）が残っていれば、それ自身を起点として追加検証する。
-    for leftover in sorted(natives - visited):
+    # visited は (path, context) キーになった（Codex 13 巡目 P1-B）ので、path だけの
+    # 集合に畳んでから差分を取る。
+    visited_paths = {visited_obj for visited_obj, _ in visited}
+    for leftover in sorted(natives - visited_paths):
         _walk(leftover, ())
 
 
@@ -4086,8 +4096,17 @@ def _bars_registration_attestation(
         ) from exc
 
     def _git(*args: str, stdin: "bytes | None" = None) -> bytes:
+        # Codex 13 巡目 H19: 非修飾 `git` は ldconfig（P1-A）と同じ PATH 注入クラス
+        # ——信頼できる絶対パスから、動的リンク/ロケール解決を歪めうる環境変数を
+        # 除去した最小 env で起動する（`svp_rpe.melody.provenance` の共有ヘルパー）。
+        from svp_rpe.melody.provenance import _hardened_subprocess_env, _trusted_git_executable
+
+        git_exe = _trusted_git_executable()
         proc = subprocess.run(
-            ["git", "-C", str(ROOT), *args], capture_output=True, input=stdin
+            [git_exe, "-C", str(ROOT), *args],
+            capture_output=True,
+            input=stdin,
+            env=_hardened_subprocess_env(),
         )
         if proc.returncode != 0:
             stderr = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
@@ -5508,13 +5527,21 @@ def _require_out_outside_git_metadata(out: Path) -> None:
     両方を解決する（解決できない環境でも既定位置 `ROOT/.git` は守る）。
     """
     metadata_dirs: List[Path] = [(ROOT / ".git").resolve()]
+    # Codex 13 巡目 H19: 非修飾 `git` は ldconfig（P1-A）と同じ PATH 注入クラス——
+    # 信頼できる絶対パス + 硬化 env で起動する。信頼できる git が見つからない場合も
+    # 既存どおり黙って degrade する（本関数はあくまで防御的な追加保護で、既定位置
+    # `ROOT/.git` の保護はこの解決に依存しないため fail-closed にはしない）。
+    from svp_rpe.melody.provenance import _hardened_subprocess_env, _trusted_git_executable
+
     try:
+        git_exe = _trusted_git_executable()
         proc = subprocess.run(
-            ["git", "-C", str(ROOT), "rev-parse", "--absolute-git-dir", "--git-common-dir"],
+            [git_exe, "-C", str(ROOT), "rev-parse", "--absolute-git-dir", "--git-common-dir"],
             capture_output=True,
             text=True,
+            env=_hardened_subprocess_env(),
         )
-    except OSError:
+    except (OSError, RuntimeError):
         proc = None
     if proc is not None and proc.returncode == 0:
         for line in proc.stdout.splitlines():

@@ -2049,6 +2049,90 @@ def test_verify_scorer_dt_needed_closure_fails_closed_on_external_resolution(
         )
 
 
+def test_verify_scorer_dt_needed_closure_revisits_shared_native_under_new_rpath_context(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """同一 owned native が異なる RPATH context で 2 extension root から到達可能なら
+    両方の context を検証する（Codex 13 巡目 P1-B）。
+
+    `_ext_a` と `_ext_b` は共に同じ同梱 native（`libcommon.so.1` の解決先＝
+    `shared_native`、package_root 配下なので owned）へリンクする。`shared_native`
+    自身は own RPATH を持たず（auditwheel `.libs` 慣例）、次の依存
+    `libbackend.so.1` の解決は**継承 RPATH**だけに依存する。`_ext_a` 経由の継承
+    context では `libbackend.so.1` は package_root 配下（owned）に解決され、
+    `_ext_b` 経由の継承 context では distribution 外部（unowned）に解決される
+    ——つまり「同じ path でも context が違えば解決結果が変わる」を模す。
+
+    path のみで dedup していた旧実装なら、`_ext_a` の walk で `shared_native` が
+    visited 済みになり、`_ext_b` からの再到達が skip されて外部解決を見逃す
+    （fail-closed に倒れない）。(path, context) dedup ならどちらの context も
+    walk され、`_ext_b` 側で fail-closed になる。
+    """
+    import svp_rpe.melody.provenance as provenance
+
+    package_root = tmp_path / "fakepkg_context"
+    package_root.mkdir()
+    ext_a = package_root / "_ext_a.cpython-311-x86_64-linux-gnu.so"
+    ext_b = package_root / "_ext_b.cpython-311-x86_64-linux-gnu.so"
+    ext_a.write_bytes(b"not-a-real-elf-a")
+    ext_b.write_bytes(b"not-a-real-elf-b")
+
+    shared_native = package_root / "fakepkg.libs" / "libcommon.so.1"  # owned (under package_root)
+    owned_backend = package_root / "fakepkg.libs" / "libbackend.so.1"  # owned
+    external_backend = tmp_path / "outside_distribution" / "libbackend.so.1"  # unowned
+
+    # RPATH マーカー（実ディレクトリである必要はない・`_elf_dynamic_info` を丸ごと
+    # 差し替えるので `_expand_loader_paths` は経由しない）。
+    owned_rpath_marker = package_root / "fakepkg.libs"
+    external_rpath_marker = tmp_path / "evil_inherited_rpath"
+
+    def _fake_elf_dynamic_info(path: Any) -> Any:
+        p = Path(path)
+        if p == ext_a:
+            # own RPATH = owned_rpath_marker（このルート経由で shared_native に
+            # 到達する呼び出しの継承 context になる）。
+            return (["libcommon.so.1"], (str(owned_rpath_marker),), ())
+        if p == ext_b:
+            # own RPATH = external_rpath_marker（別 context）。
+            return (["libcommon.so.1"], (str(external_rpath_marker),), ())
+        if p == shared_native:
+            # 自身の RPATH を持たない（auditwheel `.libs` 慣例）——継承 context のみで
+            # 次の依存を解決する。
+            return (["libbackend.so.1"], (), ())
+        if p == owned_backend:
+            # owned context 側の末端（これ以上の依存は無い）。
+            return ([], (), ())
+        return None
+
+    resolve_calls: "list[tuple[str, Any]]" = []
+
+    def _fake_resolve(soname: str, *, rpath_dirs: Any = (), runpath_dirs: Any = ()) -> Any:
+        resolve_calls.append((soname, tuple(rpath_dirs)))
+        if soname == "libcommon.so.1":
+            return shared_native
+        if soname == "libbackend.so.1":
+            if owned_rpath_marker in rpath_dirs:
+                return owned_backend
+            if external_rpath_marker in rpath_dirs:
+                return external_backend
+        return None
+
+    monkeypatch.setattr(provenance, "_elf_dynamic_info", _fake_elf_dynamic_info)
+    monkeypatch.setattr(provenance, "_resolve_soname_without_loading", _fake_resolve)
+
+    with pytest.raises(RuntimeError, match="外部数値バックエンド"):
+        harness._verify_scorer_dt_needed_closure(
+            "numpy", package_root=package_root, natives=set()
+        )
+
+    # shared_native への libbackend.so.1 解決が両方の context で試みられたこと
+    # （= (path, context) dedup で再訪が起きたこと）を固定する。path のみの dedup
+    # だったら external context 側の呼び出しは発生せず、この assert が落ちる。
+    backend_contexts = [rpath for soname, rpath in resolve_calls if soname == "libbackend.so.1"]
+    assert (owned_rpath_marker,) in backend_contexts
+    assert (external_rpath_marker,) in backend_contexts
+
+
 def test_reject_ld_preload_before_scorer_bind_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2457,6 +2541,137 @@ def test_system_library_directories_covers_ldconfig_multiarch_dir() -> None:
     real_libc = Path("/usr/lib/x86_64-linux-gnu/libc.so.6")
     if real_libc.is_file():
         assert real_libc.parent.resolve() in directories
+
+
+def test_ldconfig_invoked_from_trusted_absolute_path_ignores_path_hijack(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """PATH 上の偽 ldconfig ではなく、信頼できる絶対パスの本物が実行される（Codex 13 巡目 P1-A）。
+
+    `_ldconfig_cache_listing`（`svp_rpe.melody.provenance` の共有ヘルパー。
+    `_resolve_soname_without_loading` と `_system_library_directories`
+    （本ハーネス）の両方がこれ経由で ldconfig を呼ぶ）は非修飾コマンドを一切使わない
+    ため、PATH に別ディレクトリを吐く偽 `ldconfig` を先頭に置いても無視される
+    ことを固定する。
+    """
+    import svp_rpe.melody.provenance as provenance
+
+    fake_bin_dir = tmp_path / "evil_bin"
+    fake_bin_dir.mkdir()
+    fake_ldconfig = fake_bin_dir / "ldconfig"
+    fake_ldconfig.write_text("#!/bin/sh\necho 'FAKE_HIJACKED_LDCONFIG_OUTPUT'\n")
+    fake_ldconfig.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake_bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+
+    invoked_commands: "list[list[str]]" = []
+    real_subprocess_run = subprocess.run
+
+    def _spy_run(command: Any, *args: Any, **kwargs: Any) -> Any:
+        invoked_commands.append(list(command))
+        return real_subprocess_run(command, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", _spy_run)
+
+    output = provenance._ldconfig_cache_listing()
+
+    assert invoked_commands, "ldconfig の subprocess 呼び出しが発生していない"
+    executed = invoked_commands[0][0]
+    assert Path(executed).is_absolute(), f"非絶対パスで ldconfig を実行した: {executed}"
+    assert executed != str(fake_ldconfig)
+    assert executed in provenance._TRUSTED_LDCONFIG_CANDIDATES
+    assert "FAKE_HIJACKED_LDCONFIG_OUTPUT" not in output
+
+
+def test_ldconfig_subprocess_env_is_locked_to_trusted_path_and_strips_ld_vars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ldconfig サブプロセスの `PATH` を最小集合へ固定し、`LD_*` を除去する（P1-A）。"""
+    import svp_rpe.melody.provenance as provenance
+
+    monkeypatch.setenv("LD_PRELOAD", "/tmp/evil.so")
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/tmp/evil_lib")
+    monkeypatch.setenv("LD_AUDIT", "/tmp/evil_audit.so")
+
+    captured_env: "dict[str, Any]" = {}
+
+    class _Completed:
+        stdout = ""
+
+    def _spy_run(command: Any, *args: Any, **kwargs: Any) -> Any:
+        captured_env.update(kwargs.get("env") or {})
+        return _Completed()
+
+    monkeypatch.setattr(subprocess, "run", _spy_run)
+
+    provenance._ldconfig_cache_listing()
+
+    assert captured_env.get("PATH") == provenance._TRUSTED_SUBPROCESS_PATH
+    for var in ("LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT"):
+        assert var not in captured_env, f"{var} がサブプロセス env に漏れている"
+
+
+def test_hardened_subprocess_env_strips_gconv_and_locale_vectors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`GCONV_PATH`/`GLIBC_TUNABLES`/`LOCPATH` 等も硬化 env から除去する（Codex 13 巡目 H20）。
+
+    `_HARDENED_SUBPROCESS_ENV_BLOCKLIST`（P1-A の `LD_*` 除去を H20 で拡張）が
+    iconv/gconv モジュールロードや CPU dispatch を歪める既知ベクトルも塞ぐことを固定
+    する。ldconfig（P1-A）・git（H19）の両方の信頼実行が共有する。
+    """
+    import svp_rpe.melody.provenance as provenance
+
+    leak_vars = ("GCONV_PATH", "GLIBC_TUNABLES", "LOCPATH", "NLSPATH", "GETCONF_DIR")
+    for var in leak_vars:
+        monkeypatch.setenv(var, "/tmp/evil")
+
+    env = provenance._hardened_subprocess_env()
+
+    assert env.get("PATH") == provenance._TRUSTED_SUBPROCESS_PATH
+    for var in leak_vars:
+        assert var not in env, f"{var} が硬化 env に漏れている"
+    # 宣言（blocklist）と実装（strip 対象）が一致していること。
+    for var in leak_vars:
+        assert var in provenance._HARDENED_SUBPROCESS_ENV_BLOCKLIST
+
+
+def test_trusted_ldconfig_fails_closed_when_no_absolute_candidate_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """絶対パス候補が 1 つも実在しない環境なら PATH フォールバックせず fail-closed（P1-A）。"""
+    import svp_rpe.melody.provenance as provenance
+
+    monkeypatch.setattr(
+        provenance,
+        "_TRUSTED_LDCONFIG_CANDIDATES",
+        ("/nonexistent/sbin/ldconfig", "/nonexistent/usr/sbin/ldconfig"),
+    )
+    with pytest.raises(RuntimeError, match="trusted ldconfig binary not found"):
+        provenance._trusted_ldconfig_executable()
+    with pytest.raises(RuntimeError, match="trusted ldconfig binary not found"):
+        provenance._ldconfig_cache_listing()
+    # `_resolve_soname_without_loading` 経由でも同じ fail-closed が伝播すること
+    # （rpath/runpath/LD_LIBRARY_PATH のどれも当たらず ldconfig に落ちる経路）。
+    monkeypatch.delenv("LD_LIBRARY_PATH", raising=False)
+    with pytest.raises(RuntimeError, match="trusted ldconfig binary not found"):
+        provenance._resolve_soname_without_loading("libtotallymadeup.so.99")
+
+
+def test_system_library_directories_fails_closed_when_no_trusted_ldconfig(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_system_library_directories()`（本ハーネス）も同じ fail-closed を継承する（P1-A）。
+
+    共有ヘルパー `_ldconfig_cache_listing` 経由なので、consumer 側で個別に
+    ldconfig 存在チェックを実装し直す必要がないことを固定する。
+    """
+    import svp_rpe.melody.provenance as provenance
+
+    monkeypatch.setattr(
+        provenance, "_TRUSTED_LDCONFIG_CANDIDATES", ("/nonexistent/ldconfig",)
+    )
+    with pytest.raises(RuntimeError, match="trusted ldconfig binary not found"):
+        harness._system_library_directories()
 
 
 def test_is_under_system_library_directory_basic() -> None:
@@ -5308,6 +5523,77 @@ def test_bars_registration_attestation_rejects_uncommitted_bytes(tmp_path: Path)
     # リポジトリ内パスでも、履歴に無い bytes は立証不能
     with pytest.raises(RuntimeError, match="どの commit にも"):
         harness._bars_registration_attestation(BARS_PATH, tampered)
+
+
+def test_git_invoked_from_trusted_absolute_path_ignores_path_hijack(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """PATH 上の偽 git ではなく、信頼できる絶対パスの本物が実行される（Codex 13 巡目 H19）。
+
+    ldconfig（P1-A）と同じ PATH 注入クラス。`_bars_registration_attestation` の内部
+    `_git()` ヘルパーは非修飾コマンドを使わないため、PATH に偽 `git` を先頭に置いても
+    無視されることを固定する。
+    """
+    fake_bin_dir = tmp_path / "evil_bin"
+    fake_bin_dir.mkdir()
+    fake_git = fake_bin_dir / "git"
+    fake_git.write_text("#!/bin/sh\necho 'FAKE_HIJACKED_GIT_OUTPUT'\nexit 1\n")
+    fake_git.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake_bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+
+    invoked_commands: "list[list[str]]" = []
+    real_subprocess_run = subprocess.run
+
+    def _spy_run(command: Any, *args: Any, **kwargs: Any) -> Any:
+        invoked_commands.append(list(command))
+        return real_subprocess_run(command, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", _spy_run)
+
+    # 本物の git（絶対パス）が使われ、実リポジトリの立証が成功することを固定する
+    # （偽 git は `exit 1` するので、フェイクが使われていれば必ず RuntimeError になる）。
+    attestation, _committed = harness._bars_registration_attestation(
+        BARS_PATH, BARS_PATH.read_bytes()
+    )
+    assert re.fullmatch(r"[0-9a-f]{40}", attestation["first_commit"])
+    assert invoked_commands, "git の subprocess 呼び出しが発生していない"
+    for command in invoked_commands:
+        executed = command[0]
+        assert Path(executed).is_absolute(), f"非絶対パスで git を実行した: {executed}"
+        assert executed != str(fake_git)
+
+
+def test_bars_registration_attestation_fails_closed_when_no_trusted_git(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """絶対パス候補が 1 つも実在しない環境なら PATH フォールバックせず fail-closed（H19）。"""
+    import svp_rpe.melody.provenance as provenance
+
+    monkeypatch.setattr(
+        provenance, "_TRUSTED_GIT_CANDIDATES", ("/nonexistent/usr/bin/git",)
+    )
+    with pytest.raises(RuntimeError, match="trusted git binary not found"):
+        harness._bars_registration_attestation(BARS_PATH, BARS_PATH.read_bytes())
+
+
+def test_require_out_outside_git_metadata_degrades_gracefully_without_trusted_git(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`_require_out_outside_git_metadata` は信頼できる git が無くても既定保護を維持する。
+
+    本関数は attestation（fail-closed 対象）と違い防御的な追加保護であり、`ROOT/.git`
+    の既定保護はこの git 解決に依存しない——信頼できる git が無い環境でも黙って
+    degrade し、少なくとも `ROOT/.git` 配下は拒否し続けることを固定する（H19）。
+    """
+    import svp_rpe.melody.provenance as provenance
+
+    monkeypatch.setattr(
+        provenance, "_TRUSTED_GIT_CANDIDATES", ("/nonexistent/usr/bin/git",)
+    )
+    with pytest.raises(SystemExit, match="git メタデータ"):
+        harness._require_out_outside_git_metadata(harness.ROOT / ".git" / "HEAD")
+    # git メタデータ外の通常パスは従来どおり許可される（誤って全拒否に倒れない）。
+    harness._require_out_outside_git_metadata(tmp_path / "ordinary_report.json")
 
 
 def test_attested_registration_rejects_measurements_before_history(
