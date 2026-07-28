@@ -34,6 +34,20 @@ import run_melody_accuracy as harness  # noqa: E402
 from svp_rpe.melody.observability import MelodyObservation  # noqa: E402
 from svp_rpe.melody.accuracy import reference_f0_from_monophonic_spec  # noqa: E402
 
+# scipy/mir_eval.melody を collection 時点で 1 回だけ「予め」import しておく
+# （セルフレビュー第二弾 H15 の副作用対応）: `threadpool_info()`（`_numeric_
+# runtime_config` が記録）はプロセス全体で現在ロードされている BLAS 実体を都度
+# 走査するため、scipy が**このテストプロセス内で初めて**遅延 import される
+# タイミングに居合わせた `_fake_run()` 呼び出し同士では、記録される
+# `threadpool_info` のエントリ数が「scipy 未ロード→ロード後」で食い違い、
+# `_require_homogeneous_numeric_runtime_config` の repeats 間同質性検査が偽陽性で
+# 落ちる（`_fake_run()` は同一プロセス内で複数回 `run_accuracy()` を呼ぶテスト
+# 専用の簡略化のため、実運用の別プロセス per-repeat では起きない）。ここで
+# モジュール collection 時点（＝各チャンクの新規プロセスの最初期）に 1 回だけ
+# 実 import を済ませ、以降の全テストが安定した状態から `_fake_run()` を呼べる
+# ようにする。
+import mir_eval.melody  # noqa: F401,E402
+
 BARS_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2_accuracy_bars.yaml"
 SPECS_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2_accuracy_specs.yaml"
 
@@ -84,6 +98,15 @@ def _clean_evaluator_preload(monkeypatch: pytest.MonkeyPatch):
     # 系可変ログと同じ規律で空へ揃える。非空のとき evaluate が拒否すること自体は
     # `test_evaluate_m2_bars_rejects_scorer_load_time_hash_mismatches` が固定する。
     monkeypatch.setattr(harness, "_SCORER_LOAD_TIME_HASH_MISMATCHES", [])
+    # H16（セルフレビュー第二弾）の compile 観測 coverage 自己ゲートも同じ理由で
+    # 正規化する: pytest では mir_eval/scipy/numpy が本ハーネスの audit hook 設置
+    # より前に他のテストファイル経由で import 済みなのが常態——それらの compile は
+    # 本ハーネスの観測窓の外で起きているため、期待集合と観測集合が本質的に食い違う
+    # （正当な状態）。`_scorer_compile_expected_paths` を空へ差し替えて機構テストが
+    # 評価段へ到達できるようにする——非空のとき evaluate が拒否すること自体は
+    # `test_evaluate_m2_bars_rejects_uncovered_scorer_compile_observation_evaluator_process`
+    # が固定する。
+    monkeypatch.setattr(harness, "_scorer_compile_expected_paths", lambda: [])
     monkeypatch.setattr(harness, "_environment_execution_pins", _fake_environment_pins)
     # ハーネスはテストから import されるため直接パス実行フラグは False になる。
     # 素の CLI 起動相当へ正規化する（False の拒否自体は専用テストが固定する）。
@@ -111,6 +134,9 @@ def _clean_evaluator_preload(monkeypatch: pytest.MonkeyPatch):
 
 _ORIG_REVERIFY = harness._reverify_category_measurement
 _ORIG_ATTEST = harness._require_attested_registration
+# autouse fixture が `[]` へ正規化する前の実体（H16 の機構そのものをテストする際に
+# 明示的に復元して使う）。
+_ORIG_SCORER_COMPILE_EXPECTED_PATHS = harness._scorer_compile_expected_paths
 # autouse fixture が True へ正規化する前の実値（本テストファイルは import 形 = False）。
 _ORIG_LOADED_AS_MAIN = harness._HARNESS_LOADED_AS_MAIN
 
@@ -488,6 +514,124 @@ def test_evaluate_m2_bars_rejects_scorer_load_time_hash_mismatches_evaluator_pro
     ]
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(RuntimeError, match="swap-and-restore"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+def test_scorer_compile_expected_paths_reflects_currently_imported_modules() -> None:
+    """H16: 期待集合は「今 import 済みの scorer .py」を反映する（native 除く）。
+
+    autouse fixture が機構テスト用に `_scorer_compile_expected_paths` を `[]` へ
+    正規化するため、ここでは束縛時に捕まえておいた本物の関数を明示的に使う。
+    `mir_eval.melody` はモジュール collection 時点で既に import 済み（H15 の
+    warm-up）。
+    """
+    expected = _ORIG_SCORER_COMPILE_EXPECTED_PATHS()
+    assert any(p.endswith("melody.py") for p in expected)
+    assert all(p.endswith(".py") for p in expected)
+
+
+def test_require_scorer_compile_observation_covers_imported_modules_passes_when_covered() -> None:
+    """H16: 観測集合が期待集合を覆っていれば通る（健全系）。"""
+    report = {
+        "scorer_compile_expected_paths": ["/a/b.py", "/a/c.py"],
+        "scorer_compile_observed_paths": ["/a/b.py", "/a/c.py", "/a/extra.py"],
+    }
+    harness._require_scorer_compile_observation_covers_imported_modules(
+        report, context="test"
+    )  # 例外が出ないことが期待値
+
+
+def test_require_scorer_compile_observation_covers_imported_modules_fails_closed_when_missing() -> None:
+    """H16: 期待集合の一部が観測集合に無ければ fail-closed（H13 症状の直接検出）。"""
+    report = {
+        "scorer_compile_expected_paths": ["/a/b.py", "/a/c.py"],
+        "scorer_compile_observed_paths": ["/a/b.py"],
+    }
+    with pytest.raises(ValueError, match=r"/a/c\.py"):
+        harness._require_scorer_compile_observation_covers_imported_modules(
+            report, context="test"
+        )
+
+
+def test_require_scorer_compile_observation_covers_imported_modules_fails_closed_on_missing_fields() -> None:
+    """H16: 期待/観測フィールドいずれかの欠落も fail-closed（規律より前の report 等）。"""
+    with pytest.raises(ValueError, match="scorer_compile_expected_paths"):
+        harness._require_scorer_compile_observation_covers_imported_modules(
+            {"scorer_compile_observed_paths": []}, context="test"
+        )
+    with pytest.raises(ValueError, match="scorer_compile_expected_paths"):
+        harness._require_scorer_compile_observation_covers_imported_modules(
+            {"scorer_compile_expected_paths": []}, context="test"
+        )
+
+
+def test_require_scorer_compile_observation_covers_imported_modules_respects_exception_cls() -> None:
+    """H16: `exception_cls` で呼び出し元の既存の例外種別に揃えられる。"""
+    with pytest.raises(RuntimeError, match="scorer_compile_expected_paths"):
+        harness._require_scorer_compile_observation_covers_imported_modules(
+            {"scorer_compile_observed_paths": []},
+            context="test",
+            exception_cls=RuntimeError,
+        )
+
+
+def test_run_accuracy_records_scorer_compile_coverage_fields() -> None:
+    """H16: report が compile 観測/期待の両フィールドを型・構造として持つ（回帰）。
+
+    「期待集合が観測集合に完全に覆われる」こと自体は、pytest の共有プロセスでは
+    numpy 等が本ハーネスの audit hook 設置より前に**他のテストファイル経由で**
+    import 済みであることが多く（正当な "preloaded" 状態——実運用の単発 CLI 起動
+    では発生しない、`_PRELOADED_SEED_MODULES` が別途捕捉する対象）、
+    `run_accuracy()` 単体では保証されない——保証されるのは
+    `_PRELOADED_SEED_MODULES == []` 等が別ゲートで確認された文脈（evaluate 自己
+    ゲート・fresh-process 検証）でのみ。ここでは構造のみ固定し、実際の被覆検証は
+    `test_require_scorer_compile_observation_covers_imported_modules_*`
+    （合成 dict）と `test_evaluate_m2_bars_rejects_uncovered_scorer_compile_
+    observation_evaluator_process`（自己ゲート統合）が担う。
+    """
+    report = harness.run_accuracy(
+        categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+    )
+    assert isinstance(report["scorer_compile_observed_paths"], list)
+    assert isinstance(report["scorer_compile_expected_paths"], list)
+    assert all(isinstance(p, str) for p in report["scorer_compile_observed_paths"])
+    assert all(isinstance(p, str) for p in report["scorer_compile_expected_paths"])
+
+
+def test_evaluate_m2_bars_rejects_reports_with_uncovered_scorer_compile_observation() -> None:
+    """H16: 提出 report の compile 観測が期待集合を覆っていなければ publish 不可。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    reports[0]["scorer_compile_expected_paths"] = ["/definitely/not/observed.py"]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="compile を観測しなかった"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+def test_evaluate_m2_bars_rejects_uncovered_scorer_compile_observation_evaluator_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """H16: 評価器プロセス自身の compile 観測 coverage も自己ゲートで検査する。
+
+    `_clean_evaluator_preload` が `_scorer_compile_expected_paths` を `[]` へ正規化
+    するため、通常の機構テストはこの自己ゲートを素通りする——ここでは明示的に
+    「期待するが観測されていないファイルがある」状態を作って fail-closed を固定する。
+    """
+    monkeypatch.setattr(
+        harness, "_scorer_compile_expected_paths", lambda: ["/definitely/not/observed.py"]
+    )
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(RuntimeError, match="compile を観測しなかった"):
         harness.evaluate_m2_bars(
             [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
         )
@@ -1017,6 +1161,162 @@ def test_verdict_carries_the_full_scorer_pin_closure() -> None:
             verdict[f"{name}_dist_native_sha256"]
             == reports[0][f"{name}_dist_native_sha256"]
         )
+
+
+def test_scorer_pins_records_absent_optional_closure_member(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """任意閉包メンバー（threadpoolctl/charset_normalizer）未導入は明示的 absent 記録（Codex 11 巡目 P1-B）。
+
+    両者とも numpy/scipy/mir_eval のどの pyproject にも宣言依存として現れない
+    try/except ImportError 経由の任意 import（実測確認済み）——クリーン環境では
+    未導入が正当であり、version 非空必須の旧実装はこの環境を fail-closed で
+    割ってしまっていた。
+    """
+    import importlib.metadata
+
+    real_version = importlib.metadata.version
+
+    def fake_version(name: str) -> str:
+        if name == "charset_normalizer":
+            raise importlib.metadata.PackageNotFoundError(name)
+        return real_version(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", fake_version)
+    pins = harness._scorer_pins(use_cache=False)
+    assert pins["charset_normalizer_version"] is None
+    assert pins["charset_normalizer_code_sha256"] is None
+    assert pins["charset_normalizer_dist_native_sha256"] is None
+    assert pins["charset_normalizer_closure_state"] == "absent"
+    # 必須メンバーはこの patch の影響を受けない。
+    assert pins["mir_eval_version"]
+    assert pins["numpy_version"]
+
+
+def test_scorer_pins_records_present_optional_closure_member() -> None:
+    """任意閉包メンバーが導入済みなら必須メンバーと同じ完全 pin を要求する（弱めない）。"""
+    pins = harness._scorer_pins(use_cache=False)
+    for name in harness._SCORER_RUNTIME_PACKAGES_OPTIONAL:
+        state = pins[f"{name}_closure_state"]
+        assert state in ("present", "absent")
+        if state == "present":
+            assert isinstance(pins[f"{name}_version"], str) and pins[f"{name}_version"]
+            assert harness._is_sha256(pins[f"{name}_code_sha256"])
+            assert harness._is_sha256(pins[f"{name}_dist_native_sha256"])
+
+
+def test_validated_scorer_pin_tuple_accepts_absent_optional_member() -> None:
+    """absent（version/code/dist_native が揃って None）な任意メンバーはマーカーで通す。"""
+    mapping = dict(harness._scorer_pins(use_cache=False))
+    mapping["charset_normalizer_version"] = None
+    mapping["charset_normalizer_code_sha256"] = None
+    mapping["charset_normalizer_dist_native_sha256"] = None
+    mapping["charset_normalizer_closure_state"] = "absent"
+    tup = harness._validated_scorer_pin_tuple(mapping, context="test")
+    index = harness._SCORER_RUNTIME_PACKAGES.index("charset_normalizer")
+    assert tup[index] == harness._SCORER_ABSENT_OPTIONAL_PIN_MARKER
+
+
+def test_validated_scorer_pin_tuple_rejects_missing_closure_state_field() -> None:
+    """任意メンバーの `{name}_closure_state` 欠落は fail-closed（規律より前の report 等）。"""
+    mapping = dict(harness._scorer_pins(use_cache=False))
+    del mapping["charset_normalizer_closure_state"]
+    with pytest.raises(ValueError, match="charset_normalizer_closure_state"):
+        harness._validated_scorer_pin_tuple(mapping, context="test")
+
+
+def test_validated_scorer_pin_tuple_rejects_invalid_closure_state_value() -> None:
+    """`{name}_closure_state` が `present`/`absent` 以外なら fail-closed。"""
+    mapping = dict(harness._scorer_pins(use_cache=False))
+    mapping["charset_normalizer_closure_state"] = "maybe"
+    with pytest.raises(ValueError, match="charset_normalizer_closure_state"):
+        harness._validated_scorer_pin_tuple(mapping, context="test")
+
+
+def test_validated_scorer_pin_tuple_rejects_absent_state_with_partial_pin() -> None:
+    """absent と自称しつつ version 等が非 None（矛盾）なら fail-closed。"""
+    mapping = dict(harness._scorer_pins(use_cache=False))
+    mapping["charset_normalizer_closure_state"] = "absent"
+    # version はそのまま残す（= absent 自称と矛盾する部分 pin）。
+    with pytest.raises(ValueError, match="未導入と部分 pin が矛盾"):
+        harness._validated_scorer_pin_tuple(mapping, context="test")
+
+
+def test_require_homogeneous_scorer_rejects_absent_presence_mismatch_between_repeats() -> None:
+    """任意メンバーの有無自体が repeats 間で食い違えば fail-closed（Codex 11 巡目 P1-B）。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    reports[1]["charset_normalizer_version"] = None
+    reports[1]["charset_normalizer_code_sha256"] = None
+    reports[1]["charset_normalizer_dist_native_sha256"] = None
+    reports[1]["charset_normalizer_closure_state"] = "absent"
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="スコアラー閉包 pin が repeats 間で不一致"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+def test_verdict_transcribes_absent_optional_closure_member(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """評価環境で任意メンバーが absent なら、verdict も None + closure_state で正直記録する。
+
+    比較用の内部マーカー（`_SCORER_ABSENT_OPTIONAL_PIN_MARKER`）がそのまま verdict に
+    漏れないことを固定する。reports は現行の実環境（charset_normalizer 導入済み）で
+    素直に作った上で、`_require_homogeneous_scorer` が参照する「評価環境の再計算
+    スコアラー pin」だけを absent 相当へ差し替える——`importlib.metadata.version`
+    そのものを差し替えると、無関係な `_require_unchanged_since_load()`（束縛時
+    スコアラーとの不変性チェック）まで「実行中に差し替わった」と正しく検出して
+    しまい、本テストの主眼（verdict transcription）と無関係な経路で落ちるため。
+    """
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    for report in reports:
+        report["charset_normalizer_version"] = None
+        report["charset_normalizer_code_sha256"] = None
+        report["charset_normalizer_dist_native_sha256"] = None
+        report["charset_normalizer_closure_state"] = "absent"
+
+    real_scorer_pins = harness._scorer_pins
+
+    def fake_scorer_pins(**kwargs: Any) -> Dict[str, Any]:
+        pins = dict(real_scorer_pins(**kwargs))
+        pins["charset_normalizer_version"] = None
+        pins["charset_normalizer_code_sha256"] = None
+        pins["charset_normalizer_dist_native_sha256"] = None
+        pins["charset_normalizer_closure_state"] = "absent"
+        return pins
+
+    monkeypatch.setattr(harness, "_scorer_pins", fake_scorer_pins)
+    # 評価器自身の束縛時不変性チェックは本テストの主眼と無関係（上記 docstring 参照）
+    # なので no-op にする。
+    monkeypatch.setattr(harness, "_require_unchanged_since_load", lambda: None)
+
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    verdict = harness.evaluate_m2_bars(
+        [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+    )
+    assert verdict["charset_normalizer_version"] is None
+    assert verdict["charset_normalizer_code_sha256"] is None
+    assert verdict["charset_normalizer_dist_native_sha256"] is None
+    assert verdict["charset_normalizer_closure_state"] == "absent"
+    assert "__absent__" not in repr(verdict)
+
+
+def test_scorer_runtime_packages_required_optional_partition_is_disjoint_and_covers_all() -> None:
+    """required/optional の分割が全域を過不足なく覆う（Codex 11 巡目 P1-B）。"""
+    required = set(harness._SCORER_RUNTIME_PACKAGES_REQUIRED)
+    optional = set(harness._SCORER_RUNTIME_PACKAGES_OPTIONAL)
+    assert not (required & optional)
+    assert required | optional == set(harness._SCORER_RUNTIME_PACKAGES)
+    assert "decorator" in required  # mir_eval の宣言依存（実測確認済み）
+    assert "threadpoolctl" in optional
+    assert "charset_normalizer" in optional
 
 
 def test_module_file_resolution_imports_nothing(monkeypatch) -> None:
@@ -2480,6 +2780,60 @@ def test_run_accuracy_detects_source_change_during_execution(monkeypatch) -> Non
         )
 
 
+def test_require_scorer_native_unchanged_since_bind_passes_in_real_environment() -> None:
+    """H14: import 済み numpy/scipy の native 実体が束縛時点と一致する（回帰）。"""
+    harness._require_scorer_native_unchanged_since_bind()  # 例外が出ないことが期待値
+
+
+def test_require_scorer_native_unchanged_since_bind_skips_unimported_package(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """H14: まだ import されていないパッケージは静かにスキップする。"""
+    monkeypatch.delitem(sys.modules, "scipy", raising=False)
+    called_with: List[str] = []
+
+    def _fake_dist_native_sha256(name: str, **kwargs: Any) -> str:
+        called_with.append(name)
+        return harness._LOADED_SCORER_PINS[f"{name}_dist_native_sha256"]
+
+    monkeypatch.setattr(harness, "_scorer_dist_native_sha256", _fake_dist_native_sha256)
+    harness._require_scorer_native_unchanged_since_bind()  # 例外が出ないことが期待値
+    assert "scipy" not in called_with  # sys.modules に無いので検査自体が呼ばれない
+    assert "numpy" in called_with  # numpy は import 済みなので検査が走る
+
+
+def test_require_scorer_native_unchanged_since_bind_fails_closed_on_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """H14: import 完了後の再 hash が束縛時点の pin と食い違えば fail-closed。
+
+    holes2.md H14 が指摘した「bind→import の窓」の直接固定: `_scorer_dist_native_
+    sha256` の再計算結果が束縛時点の pin と異なる状況（native が差し替えられた
+    ふり）を模す。
+    """
+    monkeypatch.setattr(
+        harness, "_scorer_dist_native_sha256", lambda name, **k: "f" * 64
+    )
+    with pytest.raises(RuntimeError, match="import 完了後の再"):
+        harness._require_scorer_native_unchanged_since_bind()
+
+
+def test_require_scorer_native_unchanged_since_bind_skips_when_bind_pin_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """H14: 束縛時点で pin できなかったパッケージは（他ゲートに委ね）静かにスキップする。"""
+    patched_pins = dict(harness._LOADED_SCORER_PINS)
+    for name in harness._SCORER_NATIVE_BACKEND_REQUIRED:
+        patched_pins[f"{name}_dist_native_sha256"] = None
+    monkeypatch.setattr(harness, "_LOADED_SCORER_PINS", patched_pins)
+    monkeypatch.setattr(
+        harness,
+        "_scorer_dist_native_sha256",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("呼ばれてはならない")),
+    )
+    harness._require_scorer_native_unchanged_since_bind()  # 例外が出ないことが期待値
+
+
 @pytest.mark.parametrize(
     ("mutation", "expect"),
     [
@@ -3793,12 +4147,49 @@ def test_run_accuracy_records_numeric_runtime_config_and_execution_paths() -> No
         categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
     )
     config = report["numeric_runtime_config"]
-    assert set(config) == {"env", "cpu_count", "sched_affinity_count"}
+    # セルフレビュー第二弾 H15: numpy_simd_dispatch/threadpool_info を追加。
+    assert set(config) == {
+        "env",
+        "cpu_count",
+        "sched_affinity_count",
+        "numpy_simd_dispatch",
+        "threadpool_info",
+    }
     assert isinstance(config["env"], dict)
     assert report["sys_flags_optimize"] == 0
     paths = report["execution_paths"]
     assert set(paths) == {"sys_path", "PYTHONPATH", "LD_LIBRARY_PATH", "sys_executable"}
     assert isinstance(paths["sys_path"], list)
+
+
+def test_numeric_runtime_config_records_numpy_simd_dispatch_and_threadpool_info() -> None:
+    """H15: SIMD dispatch 集合・threadpoolctl 実行時構成が記録される（record-completeness）。
+
+    同一 env でも CPU が違えば別の SIMD カーネルが dispatch され、結果の数値が
+    揺れうる——観測済みの `median_cent_error` 双安定の原因帰属を可能にする記録
+    拡張（gate ではない）。
+    """
+    config = harness._numeric_runtime_config()
+    simd = config["numpy_simd_dispatch"]
+    assert simd is None or {"baseline", "found", "not_found"} <= set(simd)
+    threadpool = config["threadpool_info"]
+    assert threadpool is None or isinstance(threadpool, list)
+
+
+def test_require_homogeneous_numeric_runtime_config_rejects_simd_dispatch_mismatch() -> None:
+    """H15: numpy_simd_dispatch が repeats 間で食い違えば fail-closed（記録拡張は同質性検査対象）。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    reports[1]["numeric_runtime_config"] = dict(reports[1]["numeric_runtime_config"])
+    reports[1]["numeric_runtime_config"]["numpy_simd_dispatch"] = {
+        "baseline": ["X86_V2"],
+        "found": [],
+        "not_found": ["AVX512_ICL"],
+    }
+    with pytest.raises(ValueError, match="numeric_runtime_config が repeats 間で"):
+        harness._require_homogeneous_numeric_runtime_config(reports)
 
 
 def test_require_homogeneous_numeric_runtime_config_passes_when_identical() -> None:
@@ -3950,6 +4341,94 @@ def test_require_scorer_modules_match_pinned_origin_fails_closed_on_non_source_l
         harness._require_scorer_modules_match_pinned_origin()
 
 
+def test_require_scorer_kernel_submodules_match_pinned_origin_passes_in_real_environment() -> None:
+    """H13: `mir_eval.melody`/`mir_eval.util`（指標カーネル）の origin/loader も検査対象（回帰）。
+
+    `mir_eval.melody` はモジュール collection 時点で既に import 済み（H15 の
+    warm-up）。`mir_eval.util` はここで初めて import する。
+    """
+    import mir_eval.util  # noqa: F401
+
+    harness._require_scorer_modules_match_pinned_origin()  # 例外が出ないことが期待値
+
+
+def test_require_scorer_kernel_submodules_match_pinned_origin_fails_closed_on_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """H13: `mir_eval.melody` の origin 不一致（トップレベル `mir_eval` は無傷）も fail-closed。
+
+    holes2.md H13 が指摘した「H8 の origin 検査はトップレベル名のみで、指標を実際に
+    計算するサブモジュールは対象外」の直接再現——トップレベル `mir_eval` の origin は
+    無傷のまま、`mir_eval.melody`（RPA/RCA を実際に計算するファイル）だけが
+    swap-and-restore された状況を模す。
+    """
+    import types as _types
+
+    fake_module = _types.SimpleNamespace(
+        __spec__=_types.SimpleNamespace(
+            origin="/totally/different/path/mir_eval/melody.py",
+            loader=None,
+        )
+    )
+    monkeypatch.setitem(sys.modules, "mir_eval.melody", fake_module)
+    with pytest.raises(RuntimeError, match="束縛時に解決した"):
+        harness._require_scorer_modules_match_pinned_origin()
+
+
+def test_scorer_kernel_submodule_pinned_origins_resolves_without_import(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """H13: サブモジュール origin の事前解決は import を起こさない（束縛規律の維持）。"""
+    for name in ("mir_eval.melody", "mir_eval.util"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    origins = harness._scorer_kernel_submodule_pinned_origins()
+    assert "mir_eval.melody" not in sys.modules
+    assert "mir_eval.util" not in sys.modules
+    assert origins["mir_eval.melody"].endswith("melody.py")
+    assert origins["mir_eval.util"].endswith("util.py")
+
+
+def test_audit_scorer_source_load_time_hash_normalizes_symlinked_filename(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """H13: symlink 経由の未解決 `filename` でも resolved キーで一致検出する。
+
+    実測反証（holes2.md H13）: symlink 化 site-packages では compile イベントの
+    `filename` が未解決パスで渡り、`.resolve()` 済みキーの期待値表と文字列不一致
+    になって機構全体が無言 no-op になっていた。ここでは実体ファイル + symlink を
+    実際に用意し、symlink 経由の未解決パスを `filename` として hook に渡しても
+    正しく検出されることを固定する。
+    """
+    mismatches: List[str] = []
+    observed: "set[str]" = set()
+    monkeypatch.setattr(harness, "_SCORER_LOAD_TIME_HASH_MISMATCHES", mismatches)
+    monkeypatch.setattr(harness, "_SCORER_COMPILE_OBSERVED_PATHS", observed)
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    real_path = real_dir / "fake_scorer.py"
+    original_content = "x = 1\n"
+    real_path.write_text(original_content, encoding="utf-8")
+    expected = hashlib.sha256(original_content.encode("utf-8")).hexdigest()
+    # 期待値表のキーは resolve 済み（`_mir_eval_paths()` の実装と同じ規約）。
+    monkeypatch.setitem(
+        harness._SCORER_LOAD_TIME_EXPECTED_HASHES, str(real_path.resolve()), expected
+    )
+
+    link_dir = tmp_path / "link"
+    link_dir.symlink_to(real_dir)
+    unresolved_filename = str(link_dir / "fake_scorer.py")
+    assert unresolved_filename != str(real_path.resolve())  # 前提: 文字列としては不一致
+
+    malicious_content = "x = 2  # malicious\n"
+    harness._audit_scorer_source_load_time_hash(
+        "compile", (malicious_content, unresolved_filename)
+    )
+    assert len(mismatches) == 1, "symlink 経由の filename でも検出されるはず"
+    assert str(real_path.resolve()) in mismatches[0]
+    # H16 の観測集合にも resolved 形式で記録される。
+    assert str(real_path.resolve()) in observed
+
+
 def test_scorer_load_time_expected_hashes_covers_mir_eval_paths() -> None:
     """P1-B の期待値表は `_mir_eval_paths()` の全 `.py` ファイルを覆う（Codex 10 巡目）。
 
@@ -3995,7 +4474,7 @@ def test_audit_scorer_source_load_time_hash_ignores_unrelated_files(
 def test_audit_scorer_source_load_time_hash_allows_matching_compile(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """compile 時点の disk bytes が束縛時点の期待と一致すれば記録しない（健全系）。"""
+    """compile された source bytes が束縛時点の期待と一致すれば記録しない（健全系）。"""
     mismatches: List[str] = []
     monkeypatch.setattr(harness, "_SCORER_LOAD_TIME_HASH_MISMATCHES", mismatches)
     fake_path = tmp_path / "fake_scorer.py"
@@ -4007,17 +4486,37 @@ def test_audit_scorer_source_load_time_hash_allows_matching_compile(
     assert mismatches == []
 
 
+def test_audit_scorer_source_load_time_hash_hashes_bytes_source_directly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`source` が `bytes`（実測での実際の型）でもそのまま hash し、記録に反映する。"""
+    mismatches: List[str] = []
+    monkeypatch.setattr(harness, "_SCORER_LOAD_TIME_HASH_MISMATCHES", mismatches)
+    fake_path = tmp_path / "fake_scorer_bytes.py"
+    content_bytes = b"x = 1\n"
+    fake_path.write_bytes(content_bytes)
+    expected = hashlib.sha256(content_bytes).hexdigest()
+    monkeypatch.setitem(harness._SCORER_LOAD_TIME_EXPECTED_HASHES, str(fake_path), expected)
+    harness._audit_scorer_source_load_time_hash("compile", (content_bytes, str(fake_path)))
+    assert mismatches == []
+
+    malicious_bytes = b"x = 2  # malicious\n"
+    harness._audit_scorer_source_load_time_hash("compile", (malicious_bytes, str(fake_path)))
+    assert len(mismatches) == 1
+    assert str(fake_path) in mismatches[0]
+
+
 def test_audit_scorer_source_load_time_hash_detects_swap_and_restore(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """compile 瞬間の disk bytes が束縛時点の期待と食い違えば記録する（Codex 10 巡目 P1-B）。
+    """compile された source bytes が束縛時点の期待と食い違えば記録する（Codex 10 巡目 P1-B）。
 
     直接の再現: `_require_scorer_modules_match_pinned_origin`（H8）の docstring が
     指摘する「差し替え → import（compile） → 元へ復元」は origin パス比較を
-    素通りするが、compile 瞬間にディスクを読み直す本機構は素通りしない——ここでは
-    audit hook のコールバックを直接呼んで機構そのものを固定する（実際の
-    `sys.addaudithook` 経由の統合動作は round 10 の実測スモークテストで既に確認
-    済み）。
+    素通りするが、`args[0]`（compile された実際の source）を直接 hash する本機構は
+    素通りしない——ここでは audit hook のコールバックを直接呼んで機構そのものを
+    固定する（実際の `sys.addaudithook` 経由の統合動作は round 10 の実測スモーク
+    テストで既に確認済み）。
     """
     mismatches: List[str] = []
     monkeypatch.setattr(harness, "_SCORER_LOAD_TIME_HASH_MISMATCHES", mismatches)
@@ -4039,17 +4538,60 @@ def test_audit_scorer_source_load_time_hash_detects_swap_and_restore(
     assert len(mismatches) == 1
 
 
-def test_audit_scorer_source_load_time_hash_does_not_raise_on_unreadable_file(
+def test_audit_scorer_source_load_time_hash_detects_restore_before_hook_fires(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """読めないファイルは静かに諦める（audit hook 内で raise すると compile 自体を壊す）。"""
+    """hook 到達**前**に復元済みでも `args[0]` 方式なら検出する（Codex 11 巡目 P1-A）。
+
+    10 巡目時点の実装（audit イベント発火時にディスクを**読み直して** hash する）は
+    「差し替え → ローダが読取（compile へ渡す bytes 確定）→ ***攻撃者が本 hook の
+    実行前にディスクを元へ復元*** → 本 hook がディスクを再読」という順序では、
+    hook の再読が復元**後**に走るため常に無害な原本を見てしまい、swap-and-restore
+    を**検出できなかった**（この順序を再現すれば、旧実装は必ず見逃す）。
+
+    ここでは正にその順序を作る: `_audit_scorer_source_load_time_hash` を呼ぶ
+    **時点で、ディスク上は既に original_content へ復元済み**にしておく——それでも
+    `args[0]`（`source`。ローダが実際に compile へ渡した malicious bytes）を
+    直接 hash する現行実装は、ディスクの状態に一切依存せず不一致を検出できる
+    ことを固定する。
+    """
+    mismatches: List[str] = []
+    monkeypatch.setattr(harness, "_SCORER_LOAD_TIME_HASH_MISMATCHES", mismatches)
+    fake_path = tmp_path / "fake_scorer.py"
+    original_content = "x = 1\n"
+    fake_path.write_text(original_content, encoding="utf-8")
+    expected = hashlib.sha256(original_content.encode("utf-8")).hexdigest()
+    monkeypatch.setitem(harness._SCORER_LOAD_TIME_EXPECTED_HASHES, str(fake_path), expected)
+
+    # ディスクは既に（攻撃者によって）original へ復元済み——旧実装（ディスク再読）
+    # ならここで hook を呼んでも「一致」を見て何も記録できないはずの状態。
+    assert fake_path.read_text(encoding="utf-8") == original_content
+
+    # それでも、ローダが実際に compile へ渡した malicious な source（args[0]）を
+    # 直接渡して hook を呼ぶ——これが「hook 到達前に復元済み」の完全な再現。
+    malicious_content = "x = 2  # malicious, but disk is already restored\n"
+    harness._audit_scorer_source_load_time_hash("compile", (malicious_content, str(fake_path)))
+
+    # ディスクの状態（既に無害な原本）に関わらず、args[0] 方式は検出する。
+    assert len(mismatches) == 1
+    assert str(fake_path) in mismatches[0]
+    # ディスクは無害な原本のままであることの再確認（旧実装ならここで「一致」と
+    # 誤判定していたはずの状態）。
+    assert fake_path.read_text(encoding="utf-8") == original_content
+
+
+def test_audit_scorer_source_load_time_hash_ignores_unknown_source_type(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """未知の source 型（bytes/str 以外）は静かに諦める（audit hook 内で raise しない）。"""
     mismatches: List[str] = []
     monkeypatch.setattr(harness, "_SCORER_LOAD_TIME_HASH_MISMATCHES", mismatches)
     missing_path = tmp_path / "gone.py"
     monkeypatch.setitem(
         harness._SCORER_LOAD_TIME_EXPECTED_HASHES, str(missing_path), "0" * 64
     )
-    harness._audit_scorer_source_load_time_hash("compile", ("x = 1\n", str(missing_path)))
+    # AST 等、bytes/str のどちらでもない source（実測では未観測の防御的分岐）。
+    harness._audit_scorer_source_load_time_hash("compile", (object(), str(missing_path)))
     assert mismatches == []  # 例外も出ない・記録も増えない
 
 
@@ -4703,6 +5245,8 @@ def test_fresh_process_report_provenance_gates() -> None:
         "pre_bound_scorer_native_mappings": [],
         "non_standard_import_hooks": [],
         "scorer_load_time_hash_mismatches": [],
+        "scorer_compile_expected_paths": [],
+        "scorer_compile_observed_paths": [],
         "sys_flags_optimize": 0,
         "specs_sha256": frozen_specs,
     }
@@ -4730,6 +5274,12 @@ def test_fresh_process_report_provenance_gates() -> None:
         (
             {"scorer_load_time_hash_mismatches": ["/fake/numpy/core.py: mismatch"]},
             "swap-and-restore",
+        ),
+        # (i) compile 観測が期待集合を覆っていない子プロセスも拒否する
+        # （セルフレビュー第二弾 H16）。
+        (
+            {"scorer_compile_expected_paths": ["/definitely/not/observed.py"]},
+            "compile を観測しなかった",
         ),
         # (g) -O/-OO 実行の子プロセスも拒否する（セルフレビュー H9）。
         ({"sys_flags_optimize": 1}, r"-O/-OO"),
@@ -5024,6 +5574,8 @@ def test_reverification_surfaces_cannot_rerun_when_prebound_mappings_are_clean(
             "pre_bound_scorer_native_mappings": [],
             "non_standard_import_hooks": [],
             "scorer_load_time_hash_mismatches": [],
+            "scorer_compile_expected_paths": [],
+            "scorer_compile_observed_paths": [],
             "sys_flags_optimize": 0,
             "specs_sha256": specs_sha256,
             "categories": {

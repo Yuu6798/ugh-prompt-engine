@@ -331,24 +331,71 @@ _LOADED_GENERATOR_CODE_SHA256 = _generator_code_sha256()
 
 _ALLOWED_SCORER_LOADER_QUALNAME = "_frozen_importlib_external.SourceFileLoader"
 
+# セルフレビュー第二弾 H13: H8 の origin/loader 検査はトップレベルパッケージ名
+# （`_SCORER_RUNTIME_PACKAGES`）だけを見ていたが、実際に RPA/RCA/median cent error
+# を計算するのは `mir_eval` トップレベルの `__init__.py` ではなく、この 2 サブ
+# モジュール——トップレベルの origin/loader が無傷でも、これらの swap-and-restore
+# は検出できなかった。
+_SCORER_KERNEL_SUBMODULES: "Tuple[str, ...]" = ("mir_eval.melody", "mir_eval.util")
+
+
+def _check_module_matches_pinned_origin(name: str, *, pinned_origin: str) -> None:
+    """`name`（`sys.modules` に載っている前提）の origin/loader を束縛時の期待と照合する。
+
+    トップレベルパッケージ（`_require_scorer_modules_match_pinned_origin`）とカーネル
+    サブモジュール（`_require_scorer_kernel_submodules_match_pinned_origin`、
+    セルフレビュー第二弾 H13）の両方が共有する検査本体。`name` は `sys.modules` の
+    キー（ドット付きサブモジュール名も可）としてのみ使う——呼び出し側が既に
+    `sys.modules.get(name) is not None` を確認済みであることが前提。
+    """
+    module = sys.modules[name]
+    module_spec = getattr(module, "__spec__", None)
+    module_origin = getattr(module_spec, "origin", None) if module_spec else None
+    if not module_origin or module_origin in ("built-in", "frozen"):
+        raise RuntimeError(
+            f"evaluate_m2_bars: import 済み {name!r} の __spec__.origin を解決でき"
+            "ない; 束縛時の origin と突き合わせられないため fail-closed"
+        )
+    actual_origin = str(Path(module_origin).resolve())
+    if actual_origin != pinned_origin:
+        raise RuntimeError(
+            f"evaluate_m2_bars: import 済み {name!r} の実行対象 {actual_origin} が"
+            f" 束縛時に解決した {pinned_origin} と別; swap-and-restore の疑いがあり"
+            "pin が実行された bytes を代表する保証がない (fail-closed)"
+        )
+    loader = getattr(module_spec, "loader", None)
+    loader_qualname = _qualname_of(loader) if loader is not None else None
+    if loader_qualname != _ALLOWED_SCORER_LOADER_QUALNAME:
+        raise RuntimeError(
+            f"evaluate_m2_bars: import 済み {name!r} の loader が "
+            f"{loader_qualname!r}（期待: {_ALLOWED_SCORER_LOADER_QUALNAME!r}）; "
+            "sourceless .pyc 等の非標準 loader 経路で実行された疑いがあり "
+            "fail-closed"
+        )
+
 
 def _require_scorer_modules_match_pinned_origin() -> None:
     """post-run: import 済み scorer module の実行対象が束縛時の origin と一致するかを検証する。
 
-    （セルフレビュー H8）束縛（`_scorer_pins()`）は `import numpy`/`mir_eval` より前に
-    行われる正しい順序だが、束縛後に「実行された module オブジェクトが pin した
-    ファイル由来か」を確認する仕掛けがこれまで無かった。`_require_unchanged_since_
-    load()`（ディスクの再 hash）は**ディスク上の bytes**しか見ないため、以下は
-    素通りする: (a) hash 後・import 前に site-packages を差し替え、import 後に
-    元へ戻す（swap-and-restore）——pre/post の digest は一致するが実行だけが別
-    bytes。入力 WAV に対しては fd hash + `chmod 0400`（`_sha256_of_fd` 経由）で
-    この窓を塞いだが、コードに対しては同じ防御が無かった。
+    （セルフレビュー H8、第二弾 H13 でカーネルサブモジュールへ拡張）束縛
+    （`_scorer_pins()`）は `import numpy`/`mir_eval` より前に行われる正しい順序だが、
+    束縛後に「実行された module オブジェクトが pin したファイル由来か」を確認する
+    仕掛けがこれまで無かった。`_require_unchanged_since_load()`（ディスクの再
+    hash）は**ディスク上の bytes**しか見ないため、以下は素通りする: (a) hash 後・
+    import 前に site-packages を差し替え、import 後に元へ戻す（swap-and-restore）
+    ——pre/post の digest は一致するが実行だけが別 bytes。入力 WAV に対しては
+    fd hash + `chmod 0400`（`_sha256_of_fd` 経由）でこの窓を塞いだが、コードに
+    対しては同じ防御が無かった。
 
     ここでは import 済み（`sys.modules` に載っている）scorer module について
     `__spec__.origin` が束縛時に `find_spec` で解決した origin
     （`_SCORER_PINNED_ORIGINS`）と一致することを要求する。加えて `__spec__.loader`
     の型が `SourceFileLoader` であることも要求する（H2 の sourceless `.pyc` 検査を
     ディスク走査だけでなく実行時の loader 型でも defense-in-depth する）。
+    トップレベルパッケージに続けて `_SCORER_KERNEL_SUBMODULES`（`mir_eval.melody`/
+    `mir_eval.util`——実際に RPA/RCA/median cent error を計算するサブモジュール
+    そのもの）も同じ検査にかける——トップレベル `mir_eval/__init__.py` の origin が
+    無傷でも、指標カーネルの swap-and-restore は別途これで捕捉する。
 
     **境界の正直会計**: この検査は「読み込まれた module オブジェクトの出自」しか
     見ない。sitecustomize 等がロード**後**に `mir_eval.melody.evaluate` 自体を
@@ -360,62 +407,63 @@ def _require_scorer_modules_match_pinned_origin() -> None:
     実行されてもいないので、origin の不一致という懸念自体が発生しない。
     """
     for name in _SCORER_RUNTIME_PACKAGES:
-        module = sys.modules.get(name)
-        if module is None:
+        if name not in sys.modules:
             continue
         pinned_origin = _SCORER_PINNED_ORIGINS.get(name)
         if pinned_origin is None:
             continue  # 束縛時点で origin を解決できなかった（walk 対象外）
-        module_spec = getattr(module, "__spec__", None)
-        module_origin = getattr(module_spec, "origin", None) if module_spec else None
-        if not module_origin or module_origin in ("built-in", "frozen"):
-            raise RuntimeError(
-                f"evaluate_m2_bars: import 済み {name!r} の __spec__.origin を解決でき"
-                "ない; 束縛時の origin と突き合わせられないため fail-closed"
-            )
-        actual_origin = str(Path(module_origin).resolve())
-        if actual_origin != pinned_origin:
-            raise RuntimeError(
-                f"evaluate_m2_bars: import 済み {name!r} の実行対象 {actual_origin} が"
-                f" 束縛時に解決した {pinned_origin} と別; swap-and-restore の疑いがあり"
-                "pin が実行された bytes を代表する保証がない (fail-closed)"
-            )
-        loader = getattr(module_spec, "loader", None)
-        loader_qualname = _qualname_of(loader) if loader is not None else None
-        if loader_qualname != _ALLOWED_SCORER_LOADER_QUALNAME:
-            raise RuntimeError(
-                f"evaluate_m2_bars: import 済み {name!r} の loader が "
-                f"{loader_qualname!r}（期待: {_ALLOWED_SCORER_LOADER_QUALNAME!r}）; "
-                "sourceless .pyc 等の非標準 loader 経路で実行された疑いがあり "
-                "fail-closed"
-            )
+        _check_module_matches_pinned_origin(name, pinned_origin=pinned_origin)
+    for dotted in _SCORER_KERNEL_SUBMODULES:
+        if dotted not in sys.modules:
+            continue  # まだ import されていない（run 経路によってはありうる）
+        pinned_origin = _SCORER_KERNEL_SUBMODULE_PINNED_ORIGINS.get(dotted)
+        if pinned_origin is None:
+            continue  # 束縛時点でパス構築できなかった（mir_eval 自体が未解決等）
+        _check_module_matches_pinned_origin(dotted, pinned_origin=pinned_origin)
 
 
-# swap-and-restore への in-memory bytes 束縛（Codex 10 巡目 P1-B）。
+# swap-and-restore への in-memory bytes 束縛（Codex 10 巡目 P1-B、11 巡目 P1-A で
+# 検出経路を是正）。
 # `_require_scorer_modules_match_pinned_origin`（H8）は `__spec__.origin`（パス）の
 # 一致しか見ないため、「差し替え → import（compile）→ 元へ復元」という攻撃は
 # origin パスが無傷のまま素通りする——bind 時・post-run 時のどちらのディスク hash も
 # 「復元済みの原本」を見るだけで、実際に compile され実行された悪意ある bytes を
-# 一度も観測しない。この 2 点（束縛前・run 後）のスナップショット比較では原理的に
-# 塞げない窓を、**compile が実際に起きた瞬間**（`sys.addaudithook` の `"compile"`
-# イベント）に同期的にディスクを読み直すことで、TOCTOU 窓を「load 瞬間」まで縮める
-# （ゼロにはできない——攻撃者が「私たちの読み直し」と「実際に compile へ渡された
-# bytes」の間のナノ秒単位の窓に割り込む余地は理論上残るが、これは実行中のプロセス
-# メモリを直接操作できる攻撃者と同じ境界外の脅威であり、本 PR が他の箇所
-# （`_require_scorer_modules_match_pinned_origin` の docstring）で既に明示している
-# 境界と同じ）。
-
-# 束縛時点（compile 前）の「期待 sha256」。`_scorer_load_time_expected_hashes()` が
-# 実際に埋める（`_mir_eval_paths()` 定義後、束縛シーケンスの末尾で 1 回だけ）。
+# 一度も観測しない。
+#
+# **11 巡目 P1-A: ディスク再読ではなく compile イベントの source 引数そのものを
+# hash する**。10 巡目時点の実装は `"compile"` イベント発火時に**ディスクを
+# 読み直して** hash していたが、これは「差し替え → loader が読取 → 元へ復元 →
+# hook がディスクを再読」という順序では**復元後の bytes**を見てしまい、
+# swap-and-restore を検出できない（hook の再読はローダの読取より**後**に走る
+# ため、攻撃者が hook 発火前に復元を完了させれば素通りする）。`compile()` の
+# audit イベント引数 `args[0]`（`source`）は、ローダが実際に `compile()` へ
+# 渡した**その bytes そのもの**——実測（本ハーネス環境で `sys.addaudithook` の
+# `"compile"` イベントを実際に観測）で確認済み: `SourceFileLoader` 経由の
+# module compile では `source` は `bytes`（`get_data()` が返す生バイト列と同一、
+# デコード前）である。これを直接 hash すれば、ディスクの読み直しという中間
+# ステップ自体が不要になり、TOCTOU 窓は「ローダ自身の `get_data()` 呼び出しと
+# `compile()` 呼び出しの間」という CPython の import 機構内部の逐次呼び出し
+# だけに縮む（ここは同一 C 呼び出しシーケンス内でユーザーコードが割り込む余地が
+# 事実上無い）——ディスク再読方式が持っていた「hook 発火が復元後になりうる」
+# という窓を根本的に閉じる。
 _SCORER_LOAD_TIME_EXPECTED_HASHES: Dict[str, str] = {}
 
-# audit hook が検出した「compile 時点のディスク bytes が束縛時点の期待と不一致」の
+# audit hook が検出した「compile された source bytes が束縛時点の期待と不一致」の
 # 記録（2 段構え・`_PRE_BOUND_NATIVE_MAPPING_LOG` と同型）。audit hook 内から
 # raise すると CPython の仕様上その compile 自体を中断してしまう（正当な scorer
 # import を壊す）ため、ここには常に**記録するだけ**——fail-closed は実測経路
 # （`evaluate_m2_bars` 自己ゲート・report フィールド `scorer_load_time_hash_
 # mismatches`）に委ねる。
 _SCORER_LOAD_TIME_HASH_MISMATCHES: List[str] = []
+
+# セルフレビュー第二弾 H16: audit hook が実際に "compile" を観測した（かつ
+# `_SCORER_LOAD_TIME_EXPECTED_HASHES` に載っていた）ファイルの resolved パス集合。
+# H13（symlink 化 site-packages での照合ミス）や期待値表が何らかの理由で空/部分に
+# なった場合、`scorer_load_time_hash_mismatches` は「観測ゼロ」でも「無改変」でも
+# 同じく `[]` になり区別が付かない——`evaluate_m2_bars` はこの集合が「実際に import
+# された scorer モジュールの期待集合」を覆っていることを別途要求する
+# （`_require_scorer_compile_observation_covers_imported_modules`）。
+_SCORER_COMPILE_OBSERVED_PATHS: "set[str]" = set()
 
 
 def _scorer_load_time_expected_hashes() -> "Dict[str, str]":
@@ -448,11 +496,12 @@ def _scorer_load_time_expected_hashes() -> "Dict[str, str]":
 
 
 def _audit_scorer_source_load_time_hash(event: str, args: "Tuple[Any, ...]") -> None:
-    """`sys.addaudithook` コールバック: scorer `.py` の compile 瞬間にディスクを読み直す。
+    """`sys.addaudithook` コールバック: scorer `.py` の compile event の source bytes を直接 hash する。
 
-    （Codex 10 巡目 P1-B）`sys.addaudithook` で登録したフックは CPython の仕様上
-    **除去できない**——監視対象の import 経路を迂回させる手段が無く、`sys.meta_path`
-    改変（H3）とは異なる独立したタンパー耐性を持つ。
+    （Codex 10 巡目 P1-B、11 巡目 P1-A で検出経路を是正）`sys.addaudithook` で
+    登録したフックは CPython の仕様上**除去できない**——監視対象の import 経路を
+    迂回させる手段が無く、`sys.meta_path` 改変（H3）とは異なる独立したタンパー
+    耐性を持つ。
 
     **どのイベントを使うか**: `"compile"` イベント（`compile()` 組み込みが発火、
     引数は `(source, filename)`）を使う。実測で確認済み（本 review 対応時）:
@@ -463,6 +512,28 @@ def _audit_scorer_source_load_time_hash(event: str, args: "Tuple[Any, ...]") -> 
     ついて確実に発火する。`"import"` イベントは実測で `filename` 引数が常に
     `None` だったため（本 review 対応時の実測）、ファイル特定に使えず採用しない。
 
+    **11 巡目 P1-A: `source`（`args[0]`）を直接 hash する（ディスク再読は廃止）**。
+    10 巡目時点は `"compile"` 発火時にディスクを**読み直して** hash していたが、
+    「差し替え → ローダが `get_data()` で読取 → `compile()` 呼び出し → 元へ復元 →
+    本 hook がディスクを再読」という順序では、hook のディスク再読はローダの読取
+    より**後**に走るため、攻撃者が hook 発火前（同期呼び出しなので通常は
+    マイクロ秒単位だが、GC 一時停止やページフォルトで遅延しうる）に復元を完了
+    させれば**復元後の無害な bytes を見て素通りする**——ディスク再読方式は
+    「hook がいつ読むか」に依存する脆弱な設計だった。`compile()` の audit
+    イベント引数 `source` は、ローダが**実際に `compile()` へ渡した bytes その
+    もの**——実測（本ハーネス環境で `sys.addaudithook` の `"compile"` イベントを
+    実際に観測）で確認済み: `SourceFileLoader` 経由の module compile では
+    `source` は `bytes` 型（`get_data()` が返す生バイト列と同一、PEP 263
+    エンコーディング宣言に基づくデコード**前**）である。これを直接 hash すれば
+    ディスクの読み直しという中間ステップ自体が不要になり、TOCTOU 窓は「ローダの
+    `get_data()` 呼び出しと `compile()` 呼び出しの間」という CPython import
+    機構内部の逐次 C 呼び出しシーケンスだけに縮む——ここはユーザーコードが
+    割り込む余地が事実上無く、ディスク再読方式が持っていた「hook 発火の遅延」
+    という現実的な回避経路を根本的に閉じる。`str` で渡ってくる経路（実測では
+    未観測だが、将来の CPython 実装変化・非標準 loader 経由の可能性に備える）は
+    `surrogateescape` で bytes 化してから比較する——`file_sha256` が読む生ファイル
+    bytes と同じ意味論（デコード後の正規化を経ない生の内容）を保つため。
+
     **早期 return によるオーバーヘッド最小化（点 5）**: このフックは
     「compile」に限らずプロセス全体の**あらゆる** audit イベントで呼ばれる
     （`sys.addaudithook` は event 種別を絞れない）。まず `event != "compile"` で
@@ -470,9 +541,9 @@ def _audit_scorer_source_load_time_hash(event: str, args: "Tuple[Any, ...]") -> 
     キー（対象 .py ファイルの絶対パス文字列）と**完全一致**するかを見る——O(1)
     の辞書参照で、対象外の import（pytest 自身・stdlib・無関係な third-party 等、
     実測でプロセスあたり数千件規模）を追加のファイル I/O 無しに即座に弾く。
-    一致した場合のみ、ディスクを実際に読み直して sha256 する（対象ファイル数は
-    実際に compile された scorer ファイルの数に限られ、`_mir_eval_paths()` の
-    全数ではない）。
+    一致した場合のみ hash する（対象ファイル数は実際に compile された scorer
+    ファイルの数に限られ、`_mir_eval_paths()` の全数ではない）。ディスク I/O が
+    完全に無くなった分、10 巡目時点よりオーバーヘッドはさらに小さい。
 
     **raise しない（点 4）**: audit hook がここで例外を送出すると、CPython の
     仕様上その `compile()` 呼び出し自体が中断される——正当な scorer import を
@@ -498,17 +569,113 @@ def _audit_scorer_source_load_time_hash(event: str, args: "Tuple[Any, ...]") -> 
     source, filename = args
     if not isinstance(filename, str):
         return
-    expected = _SCORER_LOAD_TIME_EXPECTED_HASHES.get(filename)
+    # セルフレビュー第二弾 H13: `_SCORER_LOAD_TIME_EXPECTED_HASHES` のキーは
+    # `_mir_eval_paths()`（`Path.resolve()` 済み）由来だが、`"compile"` イベントの
+    # `filename` は loader が使う**未解決**パス——symlink 化された site-packages
+    # （venv `lib64 -> lib`・conda・Nix・Debian `dist-packages` 等、実測を行う
+    # slow-lane 機で一般的なトポロジ）では両者が文字列として一致せず、`.get()` が
+    # 常に None を返して本機構全体が無言で no-op になっていた（実測反証済み）。
+    # `os.path.realpath` で正規化してから引く——"compile" イベントは実際のモジュール
+    # import 数に比例した頻度でしか発火しない（プロセス全体のあらゆる audit イベント
+    # よりは遥かに少ない）ため、ここでの追加の path 解決コストは無視できる（点 5 の
+    # 「ディスク**内容**読み取りを対象外イベントに対して行わない」という設計目標とは
+    # 別軸——実体を読むわけではない、経路解決だけの軽い追加コスト）。
+    resolved_filename = os.path.realpath(filename)
+    expected = _SCORER_LOAD_TIME_EXPECTED_HASHES.get(resolved_filename)
     if expected is None:
         return  # scorer 閉包外の compile（大多数）。早期 return。
-    try:
-        observed = hashlib.sha256(Path(filename).read_bytes()).hexdigest()
-    except OSError:
-        return  # 読めない = 比較不能。ここで諦める（他ゲートに委ねる）。
+    # H16: 実際に compile を観測したファイルの集合を記録する（coverage 不変条件用）。
+    # 「照合ゼロ = 無言成功」を防ぐため、`evaluate_m2_bars` 側で sys.modules 由来の
+    # 期待集合との被覆関係を検証する。
+    _SCORER_COMPILE_OBSERVED_PATHS.add(resolved_filename)
+    if isinstance(source, (bytes, bytearray)):
+        source_bytes = bytes(source)
+    elif isinstance(source, str):
+        # 実測では未観測（`SourceFileLoader` は常に bytes を渡す）だが、将来の
+        # 実装変化・非標準 loader 経路に備えた防御的分岐。
+        source_bytes = source.encode("utf-8", errors="surrogateescape")
+    else:
+        return  # 未知の型（AST 等）は比較不能。ここで諦める（他ゲートに委ねる）。
+    observed = hashlib.sha256(source_bytes).hexdigest()
     if observed != expected:
         _SCORER_LOAD_TIME_HASH_MISMATCHES.append(
-            f"{filename}: compile 時点の disk bytes (sha256={observed}) が束縛時点の"
-            f"期待 (sha256={expected}) と不一致"
+            f"{resolved_filename}: compile された source bytes (sha256={observed}) が"
+            f"束縛時点の期待 (sha256={expected}) と不一致"
+        )
+
+
+def _scorer_compile_expected_paths() -> "List[str]":
+    """現在 import 済みの scorer `.py`（トップレベル + カーネルサブモジュール）の resolved origin 一覧。
+
+    （セルフレビュー第二弾 H16）audit hook が「実際に compile を観測した」集合
+    （`_SCORER_COMPILE_OBSERVED_PATHS`）と比較する期待側。native（`.so`）は
+    「compile」されない対象外（H14 が別途扱う——DT_NEEDED 閉包・pre-bound mapping
+    検査）。
+
+    **この関数単独の結果は無条件に安全ではない**: `_PRELOADED_SEED_MODULES`/
+    `_PRE_BOUND_SCORER_NATIVE_MAPPINGS` が両方とも空（= 束縛前に何も先読みされて
+    いない）ことが別ゲートで既に確認された文脈でのみ、「今 import 済みの scorer
+    モジュールは必ず束縛後に compile されたはず」という前提が成り立つ——正当な
+    preload シナリオ（例: pytest が他のテストで先に import 済み）では、compile が
+    本ハーネスの観測窓より前に起きているため、この関数の結果と観測集合が食い違う
+    のは当然であり誤検出になる。呼び出し側（`_require_fresh_process_report_
+    provenance`/`_require_publishable_runs`/`evaluate_m2_bars` 自己ゲート）は、
+    いずれも preloaded/pre-bound の空チェックの**後**でこの比較を行う——順序が
+    この前提を担保する。
+    """
+    expected: "List[str]" = []
+    for name in _SCORER_RUNTIME_PACKAGES:
+        module = sys.modules.get(name)
+        if module is None:
+            continue
+        spec = getattr(module, "__spec__", None)
+        origin = getattr(spec, "origin", None) if spec else None
+        if not origin or origin in ("built-in", "frozen"):
+            continue
+        origin_path = Path(origin).resolve()
+        if origin_path.suffix != ".py":
+            continue  # native 拡張子（単一モジュール配布の .so 等）は compile 対象外
+        expected.append(str(origin_path))
+    for dotted in _SCORER_KERNEL_SUBMODULES:
+        module = sys.modules.get(dotted)
+        if module is None:
+            continue
+        spec = getattr(module, "__spec__", None)
+        origin = getattr(spec, "origin", None) if spec else None
+        if not origin or origin in ("built-in", "frozen"):
+            continue
+        expected.append(str(Path(origin).resolve()))
+    return sorted(set(expected))
+
+
+def _require_scorer_compile_observation_covers_imported_modules(
+    report: Dict[str, Any], *, context: str, exception_cls: type = ValueError
+) -> None:
+    """report の compile 観測集合が「実際に import された scorer `.py`」を覆うことを要求する。
+
+    （セルフレビュー第二弾 H16）H13（symlink 化 site-packages での照合ミス）や、
+    期待値表が何らかの理由で空/部分になった場合、`scorer_load_time_hash_mismatches`
+    は「観測ゼロ」でも「無改変」でも同じく `[]` になり区別が付かない——「照合ゼロ =
+    無言成功」を、観測集合が期待集合を覆っていることの直接検証で潰す
+    （「覆えないものを覆ったと主張しない」#217 原則）。`exception_cls` は呼び出し元
+    （`_require_fresh_process_report_provenance` は `RuntimeError`・
+    `_require_publishable_runs` は `ValueError`）の既存の例外種別に揃えるため。
+    """
+    expected = report.get("scorer_compile_expected_paths")
+    observed = report.get("scorer_compile_observed_paths")
+    if expected is None or observed is None:
+        raise exception_cls(
+            f"evaluate_m2_bars: {context} が scorer_compile_expected_paths/"
+            "scorer_compile_observed_paths のいずれかを欠く; audit hook の被覆を"
+            "検証できない report を受理しない (fail-closed)"
+        )
+    missing = sorted(set(expected) - set(observed))
+    if missing:
+        raise exception_cls(
+            f"evaluate_m2_bars: {context} で import 済みの scorer .py のうち audit "
+            f"hook が compile を観測しなかったものがある {missing}; swap-and-restore "
+            "検出機構が機能していない疑いがあり、覆えないものを覆ったと主張しない "
+            "(fail-closed)"
         )
 
 
@@ -539,6 +706,57 @@ def _require_unchanged_since_load() -> None:
         )
     # H8: import 済み scorer module の実行対象が束縛時の origin と一致するかも検証する。
     _require_scorer_modules_match_pinned_origin()
+
+
+def _require_scorer_native_unchanged_since_bind() -> None:
+    """import 直後・実行中に、scorer native（numpy/scipy の `.so`）が bind 時と変わっていないか検証する。
+
+    （セルフレビュー第二弾 H14）P1-B の audit hook（`"compile"` イベント）は `.py`
+    ソースの compile 呼び出しにしか届かない——numpy/scipy の実計算カーネル本体
+    （`numpy/_core/_multiarray_umath.cpython-*.so` 等）は `ExtensionFileLoader` 経由の
+    dlopen で読まれ、`"compile"` は一切発火しない。この native 実体に対する保護は
+    pre（bind 時）/post（run 完了後の `_require_unchanged_since_load`）の 2 点
+    ディスク hash 比較のみで、これは P1-B の設計コメントが「.py では原理的に塞げ
+    ない」と明言していたのと**全く同じ**スナップショット比較——bind 後・
+    `import numpy` 前に `.so` を差し替え、dlopen が差し替え版を mmap し、その後
+    ディスク上だけ原本へ復元されると、pre/post のどちらの hash も原本を指す一方
+    実行は差し替え版のまま、という P1-B が `.py` に対して塞いだのと同型の窓が
+    native には残る。
+
+    **採用した方式（正直会計）**: native の dlopen には `"compile"` イベントに
+    相当する「実際にロードされる瞬間を覗くフック」が CPython に存在しない
+    （`/proc/self/map_files/` から開いている fd 経由で mmap 済み実体を読み戻す
+    方式も検討したが、実装・検証コストに対して本 PR の残作業量が既に大きいため、
+    より軽量な代替として**束縛直後の import 完了時点で即座に再 hash する**
+    追加チェックポイントを採る）。`import numpy as np`（本ファイル冒頭の唯一の
+    module-level import）の直後、および `run_accuracy()` の各カテゴリ処理直後
+    （scipy/mir_eval は `evaluate_melody_accuracy` 内で遅延 import されるため、
+    最初のカテゴリ処理が終わった時点で import が完了している）の**複数チェック
+    ポイント**でこの関数を呼ぶことで、「bind から run 完了まで」だった窓を
+    「bind から直後の import 完了まで」+「各カテゴリの処理直後」まで縮める。
+
+    **残る境界（意図的に閉じていない・正直会計)**: この方式は依然として離散的な
+    時点サンプリングであり、native の dlopen 瞬間そのものを覗いてはいない——
+    「チェックポイントとチェックポイントの間」に差し替え→復元が完結すれば
+    理論上見逃す。`.py` の audit hook（compile イベントで実際に渡された bytes を
+    直接見る）と比べて非対称な保護であることを明記する——native の完全な保護には
+    fd 経由の mmap 実体読み戻しか、bind と import を不可分化する設計変更が必要。
+    """
+    for name in _SCORER_NATIVE_BACKEND_REQUIRED:
+        if name not in sys.modules:
+            continue  # まだ import されていない（この時点では検証しようがない）
+        expected = _LOADED_SCORER_PINS.get(f"{name}_dist_native_sha256")
+        if expected is None:
+            continue  # 束縛時点で pin できなかった（他のゲートが別途 fail-closed 済み）
+        current = _scorer_dist_native_sha256(name, use_cache=False)
+        if current != expected:
+            raise RuntimeError(
+                f"evaluate_m2_bars: {name!r} の native 実体が import 完了後の再"
+                f"hash で束縛時点の pin（{expected!r}）と不一致（現在 {current!r}）; "
+                "bind と import の間に差し替えられ、dlopen が差し替え版を mmap した"
+                "疑いがある（swap-and-restore・#217）— プロセスを再起動して測り"
+                "直すこと (fail-closed)"
+            )
 
 
 from svp_rpe.melody.provenance import bind_inference_code_pins, package_code_sha256  # noqa: E402
@@ -586,13 +804,36 @@ bind_inference_code_pins()
 # `_SCORER_RUNTIME_PACKAGES` の外に出ないことを assert）を追加する——将来 mir_eval /
 # scipy が新しい third-party 依存を牽引するようになったら、この定数を直さない限り
 # テストが割れる構造にする。
-_SCORER_RUNTIME_PACKAGES: "Tuple[str, ...]" = (
+#
+# **必須/任意の分割（Codex 11 巡目 P1-B）**: `charset_normalizer` は numpy 自身の
+# `numpy/f2py/crackfortran.py` が `try: import charset_normalizer except
+# ImportError: charset_normalizer = None` で読む**任意 import**であり、
+# numpy/scipy/mir_eval のどの pyproject にも宣言依存として現れない——本実装環境に
+# たまたま入っているから観測された third-party であって、クリーンな最小インストール
+# （numpy/scipy/mir_eval の宣言依存だけを解決した環境）には存在しない正当な状態。
+# `threadpoolctl` も実測で確認済み（`importlib.metadata.distribution("scipy").
+# requires` を精査）: scipy の宣言依存には `extra == "test"` 限定でのみ現れ、通常の
+# 実行時依存ではない——実際の参照元（`scipy/io/_fast_matrix_market/__init__.py`）も
+# `try: import threadpoolctl ... except ImportError: pass`（「if available」と
+# 明記）の任意 import。両者とも「入っていれば pin する・入っていなくても閉包の
+# 欠落として fail-closed にしない」扱いが正しい。
+#
+# 一方 `decorator` は `mir_eval` の `importlib.metadata.distribution("mir_eval").
+# requires`（`numpy>=1.15.4` / `scipy>=1.4.0` / `decorator`、いずれも extra
+# マーカー無し）で実測確認済みの**宣言依存**——mir_eval が動く前提として常に
+# 存在するべき対象なので必須閉包に含める。
+_SCORER_RUNTIME_PACKAGES_REQUIRED: "Tuple[str, ...]" = (
     "mir_eval",
     "scipy",
     "numpy",
     "decorator",
+)
+_SCORER_RUNTIME_PACKAGES_OPTIONAL: "Tuple[str, ...]" = (
     "threadpoolctl",
     "charset_normalizer",
+)
+_SCORER_RUNTIME_PACKAGES: "Tuple[str, ...]" = (
+    _SCORER_RUNTIME_PACKAGES_REQUIRED + _SCORER_RUNTIME_PACKAGES_OPTIONAL
 )
 
 # `_scorer_dist_native_sha256` が同梱ネイティブ実体の**非空**を要求するパッケージ
@@ -1883,11 +2124,28 @@ def _scorer_pins(
             version = importlib.metadata.version(name)
         except importlib.metadata.PackageNotFoundError:
             version = None
+        is_optional = name in _SCORER_RUNTIME_PACKAGES_OPTIONAL
+        if is_optional and version is None:
+            # Codex 11 巡目 P1-B: 任意閉包メンバー（threadpoolctl/charset_normalizer）
+            # が未導入なのは、宣言依存でない以上クリーン環境の正当な状態——
+            # `{name}_version` の非空を必須にすると provenance 検証がクリーン CI を
+            # 割る。導入されていないという事実そのものを明示的に記録する
+            # （`{name}_closure_state = "absent"`）ことで、「無い」と「pin できない」
+            # を区別する（#217 原則をここにも適用）。
+            pins[f"{name}_version"] = None
+            pins[f"{name}_code_sha256"] = None
+            pins[f"{name}_dist_native_sha256"] = None
+            pins[f"{name}_closure_state"] = "absent"
+            continue
         pins[f"{name}_version"] = version
         pins[f"{name}_code_sha256"] = package_code_sha256(name, use_cache=use_cache)
         pins[f"{name}_dist_native_sha256"] = _scorer_dist_native_sha256(
             name, use_cache=use_cache, treat_anonymous_as_recorded=treat_anonymous_as_recorded
         )
+        if is_optional:
+            # 導入済みの任意メンバーは必須メンバーと全く同じ厳密さで完全 pin を要求
+            # する（「入っていれば通常運転どおり」・弱めない）。
+            pins[f"{name}_closure_state"] = "present"
     return pins
 
 
@@ -1914,6 +2172,31 @@ def _scorer_pinned_origins() -> Dict[str, str]:
     return origins
 
 
+def _scorer_kernel_submodule_pinned_origins() -> Dict[str, str]:
+    """束縛時点で確定する `_SCORER_KERNEL_SUBMODULES` の期待 origin（import を起こさない）。
+
+    （セルフレビュー第二弾 H13）`find_spec("mir_eval.melody")` はドット付き名前解決の
+    CPython 仕様上、親パッケージ `mir_eval` の import を引き起こす——`_scorer_pins()`/
+    `_scorer_pinned_origins()` が守る「束縛は import より前」の規律を破ってしまうため
+    使えない。代わりに、既に束縛済みでインポート無しに解決した
+    `_SCORER_PINNED_ORIGINS["mir_eval"]`（トップレベルの `find_spec` のみ）から
+    package_root を導出し、サブモジュール名をドット区切りでパス結合するだけの
+    純粋なファイルシステム操作（`.is_file()` の stat のみ・import なし）で期待パスを
+    構築する。
+    """
+    origins: Dict[str, str] = {}
+    for dotted in _SCORER_KERNEL_SUBMODULES:
+        top, _, rest = dotted.partition(".")
+        top_origin = _SCORER_PINNED_ORIGINS.get(top)
+        if top_origin is None:
+            continue
+        package_root = Path(top_origin).parent
+        candidate = package_root.joinpath(*rest.split(".")).with_suffix(".py")
+        if candidate.is_file():
+            origins[dotted] = str(candidate.resolve())
+    return origins
+
+
 _LOADED_SCORER_PINS = _scorer_pins()
 
 # この 1 回目の呼び出しだけが「束縛前に何も先読みされていないはず」という H11 の
@@ -1924,6 +2207,13 @@ _SCORER_PINS_INITIAL_BIND_COMPLETE = True
 
 # H8: 束縛時点の origin を凍結する（post-run に実際の import 結果と突き合わせる基準値）。
 _SCORER_PINNED_ORIGINS: Dict[str, str] = _scorer_pinned_origins()
+
+# 第二弾 H13: カーネルサブモジュール（`mir_eval.melody`/`mir_eval.util`）の期待
+# origin も同じタイミングで凍結する（`_SCORER_PINNED_ORIGINS` の直後——このヘルパー
+# 自身がその値に依存するため）。
+_SCORER_KERNEL_SUBMODULE_PINNED_ORIGINS: Dict[str, str] = (
+    _scorer_kernel_submodule_pinned_origins()
+)
 
 # `_scorer_pins()` が numpy/scipy それぞれについて `_reject_pre_bound_native_mappings`
 # を実行済み（束縛前マッピングは `_PRE_BOUND_NATIVE_MAPPING_LOG` へ追記されている）。
@@ -2001,6 +2291,13 @@ _SCORER_LOAD_TIME_EXPECTED_HASHES = _scorer_load_time_expected_hashes()
 sys.addaudithook(_audit_scorer_source_load_time_hash)
 
 import numpy as np  # noqa: E402
+
+# セルフレビュー第二弾 H14: numpy の native カーネル（`numpy/_core/_multiarray_
+# umath.cpython-*.so` 等）が bind から import 完了までの間に差し替えられていない
+# ことを、import 完了の直後にできるだけ早く確認する（`_require_scorer_native_
+# unchanged_since_bind` docstring 参照。境界の正直会計あり）。
+_require_scorer_native_unchanged_since_bind()
+
 import soundfile as sf  # noqa: E402
 import yaml  # noqa: E402
 from build_melody_bench import build_signal  # noqa: E402
@@ -2277,29 +2574,80 @@ def _is_sha256(value: Any) -> bool:
     return isinstance(value, str) and bool(_SHA256_RE.fullmatch(value))
 
 
+_SCORER_ABSENT_OPTIONAL_PIN_MARKER: "Tuple[str, str, str]" = (
+    "__absent__",
+    "__absent__",
+    "__absent__",
+)
+
+
 def _validated_scorer_pin_tuple(
     mapping: Dict[str, Any], *, context: str
 ) -> "Tuple[Tuple[str, str, str], ...]":
     """report/environment の mapping からスコアラー閉包全体の pin をタプル化する。
 
-    `_SCORER_RUNTIME_PACKAGES`（mir_eval + scipy + numpy、Codex P1）を順に回り、
-    各 `{name}_version` が非空文字列・`{name}_code_sha256` / `{name}_dist_native_sha256`
-    が真の sha256 であることを fail-closed に検証する。旧実装は `mir_eval_version`/
-    `mir_eval_code_sha256` の 2 キーしか見なかったため、異なる（あるいは patch された）
-    scipy/numpy で測った report が同一スコアラー stack として混ざり受理されてしまって
-    いた（Codex P1）。`{name}_dist_native_sha256`（Codex P1 2 巡目）は numpy/scipy の
-    wheel が本体ディレクトリの兄弟（`{name}.libs/`）に置く OpenBLAS 等のネイティブ
-    実体を覆う——`{name}_code_sha256` は本体ディレクトリ配下しか rglob しないため、
-    この兄弟ディレクトリの差し替えは version/code pin のどちらにも現れない。
+    `_SCORER_RUNTIME_PACKAGES`（mir_eval + scipy + numpy + decorator + 任意
+    threadpoolctl/charset_normalizer、Codex P1・11 巡目 P1-B で必須/任意分割）を
+    順に回る。旧実装は `mir_eval_version`/`mir_eval_code_sha256` の 2 キーしか
+    見なかったため、異なる（あるいは patch された）scipy/numpy で測った report が
+    同一スコアラー stack として混ざり受理されてしまっていた（Codex P1）。
+    `{name}_dist_native_sha256`（Codex P1 2 巡目）は numpy/scipy の wheel が本体
+    ディレクトリの兄弟（`{name}.libs/`）に置く OpenBLAS 等のネイティブ実体を覆う
+    ——`{name}_code_sha256` は本体ディレクトリ配下しか rglob しないため、この兄弟
+    ディレクトリの差し替えは version/code pin のどちらにも現れない。
     `_require_homogeneous_scorer` / `_require_fresh_process_report_provenance` /
     verdict 転記の 3 箇所がこのヘルパーで一般化された同じ検証・同じ順序を共有する。
 
+    **必須/任意の二値（Codex 11 巡目 P1-B）**: `_SCORER_RUNTIME_PACKAGES_REQUIRED`
+    （mir_eval/scipy/numpy/decorator——いずれも実際に import・実行される数値実装
+    または宣言依存）は従来どおり `{name}_version` の非空 str・
+    `{name}_code_sha256`/`{name}_dist_native_sha256` の真の sha256 を無条件に
+    要求する（弱めていない）。`_SCORER_RUNTIME_PACKAGES_OPTIONAL`（threadpoolctl/
+    charset_normalizer——いずれも宣言依存でない try/except ImportError 経由の
+    任意 import、実測確認済み）は `{name}_closure_state` を見る二値分岐にする:
+    `"absent"`（未導入。version/code/dist_native は揃って `None` でなければ
+    「導入されていないと自称するのに部分的な pin がある」矛盾として fail-closed）
+    なら `_SCORER_ABSENT_OPTIONAL_PIN_MARKER` という固定マーカーをタプルへ積む
+    （version 文字列にはなり得ない値なので、他のどんな真の pin とも衝突しない）。
+    `"present"`（導入済み）なら必須メンバーと全く同じ厳格な完全 pin を要求する。
+    `{name}_closure_state` 自体が欠けている（この規律より前の report・手組み
+    report）場合も fail-closed にする——absent/present のどちらを自称しているか
+    分からない row を「揃っている」と主張しない。
+
+    マーカーをタプルに含めることで、repeats 間・評価環境間で**任意メンバーの
+    有無自体が食い違えば**（例: 一方は threadpoolctl 導入済み・もう一方は未導入）
+    通常の pin 不一致と同じ経路で fail-closed になる——「別の閉包で測った run を
+    混ぜない」という不変条件は必須/任意を問わず維持される。
+
     戻り値は `_SCORER_RUNTIME_PACKAGES` の順で `(version, code_sha256, dist_native_sha256)`
-    を並べたタプル（等価比較・集合化に使える）。`context` はエラーメッセージに出す
-    呼び出し元識別子（例: `"reports[3]"` や `"測り直し report"`）。
+    （または任意メンバーの absent 時は固定マーカー）を並べたタプル（等価比較・
+    集合化に使える）。`context` はエラーメッセージに出す呼び出し元識別子
+    （例: `"reports[3]"` や `"測り直し report"`）。
     """
     pins: List[Tuple[str, str, str]] = []
     for name in _SCORER_RUNTIME_PACKAGES:
+        is_optional = name in _SCORER_RUNTIME_PACKAGES_OPTIONAL
+        if is_optional:
+            closure_state = mapping.get(f"{name}_closure_state")
+            if closure_state not in ("present", "absent"):
+                raise ValueError(
+                    f"evaluate_m2_bars: {context} が {name}_closure_state を欠くか"
+                    f"不正な値（{closure_state!r}）; 任意メンバー {name!r} の有無を"
+                    "自称しない row を受理しない (fail-closed)"
+                )
+            if closure_state == "absent":
+                version = mapping.get(f"{name}_version")
+                code = mapping.get(f"{name}_code_sha256")
+                dist_native = mapping.get(f"{name}_dist_native_sha256")
+                if version is not None or code is not None or dist_native is not None:
+                    raise ValueError(
+                        f"evaluate_m2_bars: {context} は {name!r} を absent と自称"
+                        f"しつつ version={version!r}/code={code!r}/"
+                        f"dist_native={dist_native!r} を持つ; 未導入と部分 pin が"
+                        "矛盾する row を受理しない (fail-closed)"
+                    )
+                pins.append(_SCORER_ABSENT_OPTIONAL_PIN_MARKER)
+                continue
         version = mapping.get(f"{name}_version")
         if not version or not isinstance(version, str):
             raise ValueError(
@@ -3080,17 +3428,79 @@ _PRELOADED_SEED_MODULES = _preloaded_seed_modules()
 # 数値再現モードは、いずれも**バイト列は完全に不変のまま**縮約順序を変え、結果の
 # 数値を変える（実測: `median_cent_error` が 1.352838 ↔ 1.353400 でバッチ間往復した
 # 事故が実在する。本環境は `sched_getaffinity` = 4、これらの env は未設定）。
+# **拡張（セルフレビュー第二弾 H15）**: `VECLIB_`（macOS Accelerate）/ `BLIS_` /
+# `NUMEXPR_` を接頭辞へ追加。
 _NUMERIC_RUNTIME_ENV_PREFIXES: "Tuple[str, ...]" = (
     "OPENBLAS_",
     "OMP_",
     "MKL_",
     "NPY_",
     "GOTO_",
+    "VECLIB_",
+    "BLIS_",
+    "NUMEXPR_",
+)
+
+# 接頭辞ではなく完全一致で記録する env（H15）: `GLIBC_TUNABLES`（glibc の SIMD
+# memcpy 選択等、`x86_64=hwcaps` 等の tunable 文字列を介して実行時分岐に影響）・
+# `LD_HWCAP_MASK`（BLAS の実行時 core 検出・ローダの hwcap 判定に影響しうる）。
+_NUMERIC_RUNTIME_ENV_EXACT_NAMES: "Tuple[str, ...]" = (
+    "GLIBC_TUNABLES",
+    "LD_HWCAP_MASK",
 )
 
 
+def _numpy_simd_dispatch_info() -> "Optional[Dict[str, Any]]":
+    """numpy が実際に dispatch した SIMD 拡張命令集合（セルフレビュー第二弾 H15）。
+
+    同一 env・同一 `numeric_runtime_config` の記録内容でも、実行した CPU が
+    違えば別の SIMD カーネル（別の縮約順序）が dispatch され、結果の数値が
+    揺れうる——観測済みの `median_cent_error` 双安定(1.352838 ↔ 1.353400) の
+    原因帰属に使える記録を残す（record-completeness が主眼、gate ではない）。
+    `np.show_runtime()` 相当のロジックを直接展開する（`show_runtime()` 自体は
+    `pprint` で標準出力へ印字するだけで値を返さないため、内部で読む
+    `__cpu_baseline__`/`__cpu_dispatch__`/`__cpu_features__` を直接読む）。
+    """
+    try:
+        from numpy._core._multiarray_umath import (
+            __cpu_baseline__,
+            __cpu_dispatch__,
+            __cpu_features__,
+        )
+    except ImportError:
+        try:
+            from numpy.core._multiarray_umath import (  # numpy < 2.0 系のパス
+                __cpu_baseline__,
+                __cpu_dispatch__,
+                __cpu_features__,
+            )
+        except ImportError:
+            return None
+    found = sorted(f for f in __cpu_dispatch__ if __cpu_features__.get(f))
+    not_found = sorted(f for f in __cpu_dispatch__ if not __cpu_features__.get(f))
+    return {"baseline": sorted(__cpu_baseline__), "found": found, "not_found": not_found}
+
+
+def _threadpool_runtime_info() -> "Optional[List[Dict[str, Any]]]":
+    """threadpoolctl 経由の実行時スレッドプール構成（セルフレビュー第二弾 H15）。
+
+    `threadpoolctl.threadpool_limits()` による**実行時**のスレッド数変更は
+    env には現れない——`threadpoolctl` 自体は任意閉包メンバー
+    （`_SCORER_RUNTIME_PACKAGES_OPTIONAL`）なので、未導入環境では `None`
+    （absent 相当）を返す——H(11B) の optional 閉包記録と同じ二値の考え方。
+    """
+    try:
+        from threadpoolctl import threadpool_info
+    except ImportError:
+        return None
+    try:
+        return threadpool_info()
+    except Exception:
+        return None
+
+
 def _numeric_runtime_config() -> Dict[str, Any]:
-    """実行時数値構成（H7）: スレッド数・CPU 機能・env を記録する（バーには使わない）。
+    """実行時数値構成（H7、第二弾 H15 で拡張）: スレッド数・CPU 機能・env を記録する（バーには使わない）。
 
     `_repeats_bit_identical`（後述）の bit 一致は「同一バッチ・同一環境・同一
     スレッド数」でしか成立しない条件付きの性質であって、この構成が変われば
@@ -3100,10 +3510,14 @@ def _numeric_runtime_config() -> Dict[str, Any]:
     repeats 間（同一バッチ内の独立 run 間）の**同質性**だけを要求する
     （`_require_homogeneous_scorer` と同じ形）。バッチをまたぐ構成の違いまでは
     覆わない——それは verdict の attestation に正直に書く（H7 の限界）。
+
+    **拡張（H15）**: 記録に `numpy_simd_dispatch`（`_numpy_simd_dispatch_info`）と
+    `threadpool_info`（`_threadpool_runtime_info`）を追加する。gate（同質性要求）
+    ではなく record-completeness が主眼——双安定の原因帰属を可能にする。
     """
     env: Dict[str, Optional[str]] = {}
     for key in sorted(os.environ):
-        if key.startswith(_NUMERIC_RUNTIME_ENV_PREFIXES):
+        if key.startswith(_NUMERIC_RUNTIME_ENV_PREFIXES) or key in _NUMERIC_RUNTIME_ENV_EXACT_NAMES:
             env[key] = os.environ[key]
     try:
         affinity_count: Optional[int] = len(os.sched_getaffinity(0))
@@ -3113,6 +3527,8 @@ def _numeric_runtime_config() -> Dict[str, Any]:
         "env": env,
         "cpu_count": os.cpu_count(),
         "sched_affinity_count": affinity_count,
+        "numpy_simd_dispatch": _numpy_simd_dispatch_info(),
+        "threadpool_info": _threadpool_runtime_info(),
     }
 
 
@@ -3331,17 +3747,29 @@ def run_accuracy(
             for key, value in route_provenance.items():
                 row[f"provenance_{key}"] = value
             results["categories"][category] = row
+            # H14（セルフレビュー第二弾）: 各カテゴリの処理直後にも scorer native の
+            # 即時再検証を挟む——scipy/mir_eval は `evaluate_melody_accuracy` 内で
+            # 遅延 import されるため、最初のカテゴリ処理が終わった時点で import が
+            # 完了している。以降のカテゴリでも繰り返し検証することで、run 全体を
+            # 通じた離散的なチェックポイントを増やす（境界は docstring 参照）。
+            _require_scorer_native_unchanged_since_bind()
 
     # 実行中にディスク上の first-party ソースが差し替わっていないか確認する。
     # 差し替わっていれば「report が pin した digest」と「次回 import されるコード」が
     # 食い違い、後続の evaluate が誤った provenance を受理しうる（Codex P1）。
     _require_unchanged_since_load()
-    # P1-B（Codex 10 巡目）: audit hook が run 中に記録した「compile 時点の
-    # disk bytes が束縛時点の期待と不一致」の一覧を report に刻む。この run の
+    # P1-B（Codex 10 巡目、11 巡目 P1-A で検出経路を是正）: audit hook が run 中に
+    # 記録した「compile された source bytes が束縛時点の期待と不一致」の一覧を
+    # report に刻む。この run の
     # 実行中に発生した compile イベントすべてを反映するため、ここ（実際の
     # extraction ループが終わった後）で読む——`results` 構築時点（ループ開始前）
     # で読むと、ループ中の compile イベントを一切反映できず常に空になってしまう。
     results["scorer_load_time_hash_mismatches"] = list(_SCORER_LOAD_TIME_HASH_MISMATCHES)
+    # H16（セルフレビュー第二弾）: 「実際に compile を観測した」集合と「今 import
+    # 済みの scorer .py」の期待集合を両方とも report に刻む——観測ゼロ（H13 症状）と
+    # 無改変を区別するための coverage 検証に使う。
+    results["scorer_compile_observed_paths"] = sorted(_SCORER_COMPILE_OBSERVED_PATHS)
+    results["scorer_compile_expected_paths"] = _scorer_compile_expected_paths()
     results["recorded_utc"] = _utc_now()
     return results
 
@@ -3670,10 +4098,15 @@ def _require_fresh_process_report_provenance(
         raise RuntimeError(
             f"category {category!r} の測り直し子プロセスが scorer .py の "
             f"swap-and-restore 痕跡を記録している "
-            f"({report.get('scorer_load_time_hash_mismatches')!r}); compile 時点の "
-            "disk bytes が束縛時点の期待と食い違うため素の CLI 実行の証拠にしない "
+            f"({report.get('scorer_load_time_hash_mismatches')!r}); compile された "
+            "source bytes が束縛時点の期待と食い違うため素の CLI 実行の証拠にしない "
             "(fail-closed)"
         )
+    _require_scorer_compile_observation_covers_imported_modules(
+        report,
+        context=f"category {category!r} の測り直し report",
+        exception_cls=RuntimeError,
+    )
     if report.get("sys_flags_optimize") != 0:
         raise RuntimeError(
             f"category {category!r} の測り直し子プロセスが -O/-OO 実行（sys.flags."
@@ -4315,10 +4748,13 @@ def _require_publishable_runs(reports: List[Dict[str, Any]]) -> None:
         if load_time_mismatches:
             raise ValueError(
                 f"evaluate_m2_bars: reports[{idx}] は scorer .py の swap-and-restore "
-                f"痕跡を記録している {sorted(load_time_mismatches)}; compile 時点の "
-                "disk bytes が束縛時点の期待と食い違うため、publish 可能な実測に "
+                f"痕跡を記録している {sorted(load_time_mismatches)}; compile された "
+                "source bytes が束縛時点の期待と食い違うため、publish 可能な実測に "
                 "しない（素の CLI 実行で測り直すこと・fail-closed）"
             )
+        _require_scorer_compile_observation_covers_imported_modules(
+            report, context=f"reports[{idx}]", exception_cls=ValueError
+        )
         sys_flags_optimize = report.get("sys_flags_optimize")
         if sys_flags_optimize is None:
             raise ValueError(
@@ -4373,10 +4809,22 @@ def _require_homogeneous_scorer(reports: List[Dict[str, Any]]) -> Dict[str, Any]
             "pin を名乗る verdict の証拠にしない (fail-closed)"
         )
     result: Dict[str, Any] = {}
-    for name, (version, code, dist_native) in zip(_SCORER_RUNTIME_PACKAGES, pins[0]):
+    for name, pin in zip(_SCORER_RUNTIME_PACKAGES, pins[0]):
+        is_optional = name in _SCORER_RUNTIME_PACKAGES_OPTIONAL
+        if is_optional and pin == _SCORER_ABSENT_OPTIONAL_PIN_MARKER:
+            # verdict にも比較用の内部マーカーをそのまま漏らさない——report と同じ
+            # 「None + closure_state」の正直記録に揃える（Codex 11 巡目 P1-B）。
+            result[f"{name}_version"] = None
+            result[f"{name}_code_sha256"] = None
+            result[f"{name}_dist_native_sha256"] = None
+            result[f"{name}_closure_state"] = "absent"
+            continue
+        version, code, dist_native = pin
         result[f"{name}_version"] = version
         result[f"{name}_code_sha256"] = code
         result[f"{name}_dist_native_sha256"] = dist_native
+        if is_optional:
+            result[f"{name}_closure_state"] = "present"
     return result
 
 
@@ -4609,9 +5057,23 @@ def evaluate_m2_bars(
     if _SCORER_LOAD_TIME_HASH_MISMATCHES:
         raise RuntimeError(
             f"evaluate_m2_bars: 評価器プロセス自身が scorer .py の swap-and-restore "
-            f"痕跡を記録済み（{_SCORER_LOAD_TIME_HASH_MISMATCHES}）; compile 時点の "
-            "disk bytes が束縛時点の期待と食い違うプロセスから verdict を publish "
+            f"痕跡を記録済み（{_SCORER_LOAD_TIME_HASH_MISMATCHES}）; compile された "
+            "source bytes が束縛時点の期待と食い違うプロセスから verdict を publish "
             "しない — 素の CLI から評価し直すこと (fail-closed)"
+        )
+    # H16（セルフレビュー第二弾）: 評価器プロセス自身についても、compile 観測集合が
+    # 「今 import 済みの scorer .py」の期待集合を覆っていることを要求する——上の
+    # ゲートと同じくライブの可変集合を直接参照する（束縛時点で凍結すると無意味）。
+    missing_compile_observations = sorted(
+        set(_scorer_compile_expected_paths()) - _SCORER_COMPILE_OBSERVED_PATHS
+    )
+    if missing_compile_observations:
+        raise RuntimeError(
+            "evaluate_m2_bars: 評価器プロセス自身で import 済みの scorer .py のうち "
+            f"audit hook が compile を観測しなかったものがある "
+            f"{missing_compile_observations}; swap-and-restore 検出機構が機能して"
+            "いない疑いがあり、覆えないものを覆ったと主張しない — 素の CLI から"
+            "評価し直すこと (fail-closed)"
         )
     # 評価器自身にも非標準 import hook のゲートを適用する（セルフレビュー H3・
     # `_PRELOADED_SEED_MODULES` と同型）。正規の fresh CLI では標準 3 finder +
