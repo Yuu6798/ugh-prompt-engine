@@ -4004,6 +4004,19 @@ def run_accuracy(
             # 通じた離散的なチェックポイントを増やす（境界は docstring 参照）。
             _require_scorer_native_unchanged_since_bind()
 
+    # 任意閉包メンバーの presence を「評価器プロセスと同じ観測条件」で確定させる
+    # （PR #225 CI 実測の回帰修正）。`threadpoolctl` は `import mir_eval.melody` の
+    # 連鎖（scipy 経由）で**実際にロードされる**正当な閉包メンバーだが、その import が
+    # 起きるのは `evaluate_melody_accuracy` が呼ばれた時——つまり measured な行を
+    # 1 つも持たない run（全カテゴリが unavailable/skip 等）では、この時点でも
+    # 未 import のままになりうる。評価器側は `_require_homogeneous_scorer` /
+    # `_require_fresh_process_report_provenance` で必ず
+    # `_ensure_scorer_optional_closure_observed()` を通してから再計算するため、
+    # run 側がこれを通さないと「子プロセス=absent / 評価環境=present」で恒常的に
+    # 食い違い fail-closed する（CI test 3.11 で実測・
+    # `test_reverification_refuses_when_stack_cannot_rerun` が別経路の失敗として顕在化）。
+    # 両者を同じ前提へ揃えるため、pin を再計算する直前にここでも観測を確定させる。
+    _ensure_scorer_optional_closure_observed()
     # 実行中にディスク上の first-party ソースが差し替わっていないか確認する。
     # 差し替わっていれば「report が pin した digest」と「次回 import されるコード」が
     # 食い違い、後続の evaluate が誤った provenance を受理しうる（Codex P1）。
