@@ -77,6 +77,13 @@ def _clean_evaluator_preload(monkeypatch: pytest.MonkeyPatch):
     # `test_evaluate_m2_bars_rejects_non_standard_import_hooks_evaluator_process` が
     # 固定する。
     monkeypatch.setattr(harness, "_NON_STANDARD_IMPORT_HOOKS", ())
+    # `_SCORER_LOAD_TIME_HASH_MISMATCHES` も同じ理由でテストごとに空へ正規化する
+    # （Codex 10 巡目 P1-B）: audit hook はプロセス生涯にわたって除去できず
+    # インストールされ続けるため、この可変リストは他のテスト（や本ファイル自身の
+    # import）が偶然記録した内容を引きずりうる——テスト分離のため、他の pre-bind
+    # 系可変ログと同じ規律で空へ揃える。非空のとき evaluate が拒否すること自体は
+    # `test_evaluate_m2_bars_rejects_scorer_load_time_hash_mismatches` が固定する。
+    monkeypatch.setattr(harness, "_SCORER_LOAD_TIME_HASH_MISMATCHES", [])
     monkeypatch.setattr(harness, "_environment_execution_pins", _fake_environment_pins)
     # ハーネスはテストから import されるため直接パス実行フラグは False になる。
     # 素の CLI 起動相当へ正規化する（False の拒否自体は専用テストが固定する）。
@@ -199,6 +206,9 @@ def _fake_run(**kwargs: Any) -> Dict[str, Any]:
     # 同様に非標準 import hook も正規化する（セルフレビュー H3。非空のとき evaluate が
     # 拒否すること自体は専用テストが固定する）。
     report["non_standard_import_hooks"] = []
+    # 同様に scorer .py の swap-and-restore 痕跡も正規化する（Codex 10 巡目 P1-B。
+    # 非空のとき evaluate が拒否すること自体は専用テストが固定する）。
+    report["scorer_load_time_hash_mismatches"] = []
     return report
 
 
@@ -403,6 +413,81 @@ def test_evaluate_m2_bars_rejects_report_without_pre_bound_scorer_native_mapping
     del reports[1]["pre_bound_scorer_native_mappings"]
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="pre_bound_scorer_native_mappings"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+def test_run_accuracy_records_scorer_load_time_hash_mismatches() -> None:
+    """「scorer .py の swap-and-restore 痕跡」が report に載る（Codex 10 巡目 P1-B）。
+
+    `_clean_evaluator_preload` がテストごとに `_SCORER_LOAD_TIME_HASH_MISMATCHES` を
+    空へ正規化するため、ここでは通常空になる。非空だった場合に evaluate が拒否する
+    ことは `test_evaluate_m2_bars_rejects_scorer_load_time_hash_mismatches_reports` /
+    `test_evaluate_m2_bars_rejects_scorer_load_time_hash_mismatches_evaluator_process`
+    が固定する。
+    """
+    report = harness.run_accuracy(
+        categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+    )
+    mismatches = report["scorer_load_time_hash_mismatches"]
+    assert isinstance(mismatches, list)
+    assert mismatches == []
+
+
+def test_evaluate_m2_bars_rejects_scorer_load_time_hash_mismatches_reports() -> None:
+    """scorer .py の swap-and-restore 痕跡がある run は publish 不可（Codex 10 巡目 P1-B）。
+
+    compile 時点の disk bytes が束縛時点の期待と食い違う report は「pin が実行 bytes
+    を代表する」保証を持たない。
+    """
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    reports[0]["scorer_load_time_hash_mismatches"] = [
+        "/usr/local/lib/python3.11/dist-packages/numpy/core/fake.py: mismatch"
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="swap-and-restore"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+def test_evaluate_m2_bars_rejects_report_without_scorer_load_time_hash_mismatches_field() -> None:
+    """規律より前に作られた（または手組みの）report を黙って通さない（Codex 10 巡目 P1-B）。"""
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    del reports[1]["scorer_load_time_hash_mismatches"]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="scorer_load_time_hash_mismatches"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+        )
+
+
+def test_evaluate_m2_bars_rejects_scorer_load_time_hash_mismatches_evaluator_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """評価器プロセス自身の swap-and-restore 痕跡も publish を拒否する（Codex 10 巡目 P1-B）。
+
+    `_PRE_BOUND_SCORER_NATIVE_MAPPINGS`/`_NON_STANDARD_IMPORT_HOOKS` と異なり、この
+    一覧は「load 時 1 回だけ確定」の凍結タプルではなく**ライブ**の可変リストを直接
+    参照する自己ゲート——束縛完了後に実際の compile イベントが起きて初めて増える
+    値なので、束縛時点で凍結すると恒常的に空になり無意味になる。
+    """
+    monkeypatch.setattr(
+        harness, "_SCORER_LOAD_TIME_HASH_MISMATCHES", ["/fake/scorer.py: mismatch"]
+    )
+    reports = [
+        _fake_run(categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0))
+        for _ in range(2)
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(RuntimeError, match="swap-and-restore"):
         harness.evaluate_m2_bars(
             [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
         )
@@ -1500,10 +1585,18 @@ def test_verify_scorer_dt_needed_closure_fails_closed_on_unparseable_root(
         )
 
 
-def test_verify_scorer_dt_needed_closure_skips_os_baseline_sonames(
+def test_verify_scorer_dt_needed_closure_verifies_os_baseline_soname_resolution(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """OS 基盤 soname は resolve を呼ばれずに探索を打ち切る（余計な fail-closed を防ぐ）。"""
+    """OS 基盤 soname も実解決し、正規システムディレクトリ配下であることを要求する。
+
+    （Codex 10 巡目 P1-A）旧実装は「名前が基盤らしい」だけで無条件に `continue`
+    （resolve すら呼ばない）していた——`LD_LIBRARY_PATH`/`DT_RPATH` が攻撃者の
+    ディレクトリの同名ファイルを指しても検出できなかった。ここでは
+    `_resolve_soname_without_loading` が実際に**呼ばれ**、解決先がシステム
+    ディレクトリ配下であることを要求することを固定する（呼ばれないことを固定して
+    いた旧テストの前提は誤りだったため置き換える）。
+    """
     import svp_rpe.melody.provenance as provenance
 
     package_root = tmp_path / "fakepkg_baseline"
@@ -1516,14 +1609,86 @@ def test_verify_scorer_dt_needed_closure_skips_os_baseline_sonames(
             return (["libc.so.6", "libstdc++.so.6", "libz.so.1"], (), ())
         return None
 
-    def _fail_if_called(*args: Any, **kwargs: Any) -> None:
-        raise AssertionError("OS baseline soname は resolve されてはならない")
+    resolved_calls: "list[str]" = []
+
+    def _fake_resolve(soname: str, *, rpath_dirs: Any = (), runpath_dirs: Any = ()) -> Any:
+        resolved_calls.append(soname)
+        return Path("/usr/lib/x86_64-linux-gnu") / soname
 
     monkeypatch.setattr(provenance, "_elf_dynamic_info", _fake_elf_dynamic_info)
-    monkeypatch.setattr(provenance, "_resolve_soname_without_loading", _fail_if_called)
+    monkeypatch.setattr(provenance, "_resolve_soname_without_loading", _fake_resolve)
+    monkeypatch.setattr(
+        harness,
+        "_system_library_directories",
+        lambda: frozenset({Path("/usr/lib/x86_64-linux-gnu")}),
+    )
     harness._verify_scorer_dt_needed_closure(
         "numpy", package_root=package_root, natives=set()
     )
+    assert sorted(resolved_calls) == ["libc.so.6", "libstdc++.so.6", "libz.so.1"]
+
+
+def test_verify_scorer_dt_needed_closure_fails_closed_when_baseline_soname_unresolvable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """基盤 soname が解決できなければ fail-closed（Codex 10 巡目 P1-A）。"""
+    import svp_rpe.melody.provenance as provenance
+
+    package_root = tmp_path / "fakepkg_baseline_unresolvable"
+    package_root.mkdir()
+    ext = package_root / "_ext.cpython-311-x86_64-linux-gnu.so"
+    ext.write_bytes(b"not-a-real-elf")
+
+    def _fake_elf_dynamic_info(path: Any) -> Any:
+        if Path(path).name == ext.name:
+            return (["libc.so.6"], (), ())
+        return None
+
+    monkeypatch.setattr(provenance, "_elf_dynamic_info", _fake_elf_dynamic_info)
+    monkeypatch.setattr(provenance, "_resolve_soname_without_loading", lambda *a, **k: None)
+    with pytest.raises(RuntimeError, match="基盤 soname .* を解決できない"):
+        harness._verify_scorer_dt_needed_closure(
+            "numpy", package_root=package_root, natives=set()
+        )
+
+
+def test_verify_scorer_dt_needed_closure_fails_closed_when_baseline_soname_resolves_outside_system_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """基盤 soname が正規システムディレクトリ外へ解決されたら fail-closed（Codex 10 巡目 P1-A）。
+
+    `LD_LIBRARY_PATH`/`DT_RPATH` が攻撃者の用意した別ディレクトリの同名ファイル
+    （`libc.so.6` 等）を指す実測相当のシナリオ。
+    """
+    import svp_rpe.melody.provenance as provenance
+
+    package_root = tmp_path / "fakepkg_baseline_hijacked"
+    package_root.mkdir()
+    ext = package_root / "_ext.cpython-311-x86_64-linux-gnu.so"
+    ext.write_bytes(b"not-a-real-elf")
+
+    def _fake_elf_dynamic_info(path: Any) -> Any:
+        if Path(path).name == ext.name:
+            return (["libc.so.6"], (), ())
+        return None
+
+    hijacked_dir = tmp_path / "evil_ld_library_path"
+    hijacked_dir.mkdir()
+
+    def _fake_resolve(soname: str, *, rpath_dirs: Any = (), runpath_dirs: Any = ()) -> Any:
+        return hijacked_dir / soname
+
+    monkeypatch.setattr(provenance, "_elf_dynamic_info", _fake_elf_dynamic_info)
+    monkeypatch.setattr(provenance, "_resolve_soname_without_loading", _fake_resolve)
+    monkeypatch.setattr(
+        harness,
+        "_system_library_directories",
+        lambda: frozenset({Path("/usr/lib/x86_64-linux-gnu")}),
+    )
+    with pytest.raises(RuntimeError, match="正規システムディレクトリ外"):
+        harness._verify_scorer_dt_needed_closure(
+            "numpy", package_root=package_root, natives=set()
+        )
 
 
 def test_verify_scorer_dt_needed_closure_fails_closed_when_soname_unresolvable(
@@ -1796,10 +1961,17 @@ def test_reject_pre_bound_native_mappings_flags_libscipy_openblas_naming(
         )
 
 
-def test_reject_pre_bound_native_mappings_ignores_os_baseline_mapping(
+def test_reject_pre_bound_native_mappings_flags_fake_libc_outside_system_directory(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """glibc 族・`ld.so` 等の OS 基盤マッピングは所有パス外でも対象外（設計どおり）。"""
+    """basename が `libc.so.6` でも、正規システムディレクトリ外なら許容しない（Codex 10 巡目 P1-A）。
+
+    旧実装は basename の命名規約一致だけで OS 基盤として無条件許容していた——
+    `/tmp/evil/libc.so.6` のように所有権の無い場所に置かれた同名ファイルも
+    素通りしていた（本テストは是正前の旧名 `test_reject_pre_bound_native_mappings_
+    ignores_os_baseline_mapping` が固定していた振る舞いそのものを反転する）。
+    ここでは default-deny の記録対象（即 raise ではない）に落ちることを固定する。
+    """
     unrelated_libc = tmp_path / "somewhere" / "libc.so.6"
     unrelated_libc.parent.mkdir()
     unrelated_libc.write_bytes(b"not-really-libc-but-named-like-it")
@@ -1810,8 +1982,30 @@ def test_reject_pre_bound_native_mappings_ignores_os_baseline_mapping(
     )
     recorded = harness._reject_pre_bound_native_mappings(
         "numpy", package_root=tmp_path / "numpy_root_nonexistent", natives=set()
+    )  # 例外は出ないが、default-deny の 2 段構え記録には入る
+    assert recorded == [str(unrelated_libc.resolve())]
+
+
+def test_reject_pre_bound_native_mappings_allows_real_os_baseline_mapping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """正規システムディレクトリ配下の OS 基盤マッピングは許容し記録もしない（回帰）。
+
+    `test_reject_pre_bound_native_mappings_allows_deleted_os_baseline` の
+    `deleted=False` 版——実パスの検証（P1-A）が正しく通ることを固定する。
+    """
+    real_libc = Path("/usr/lib/x86_64-linux-gnu/libc.so.6")
+    if not real_libc.is_file():
+        pytest.skip("この環境に /usr/lib/x86_64-linux-gnu/libc.so.6 が無い")
+    monkeypatch.setattr(
+        harness,
+        "_parse_proc_self_maps_executable_mappings",
+        lambda: [(str(real_libc), False)],
+    )
+    recorded = harness._reject_pre_bound_native_mappings(
+        "numpy", package_root=tmp_path / "numpy_root_nonexistent", natives=set()
     )  # 例外が出ないことが期待値
-    assert recorded == []  # OS 基盤なので記録もしない
+    assert recorded == []
 
 
 def test_reject_pre_bound_native_mappings_allows_scorer_owned_mapping(
@@ -1947,6 +2141,33 @@ def test_reject_pre_bound_native_mappings_allows_sibling_scorer_backend(
         "scipy", package_root=scipy_root, natives=set()
     )  # 例外が出ないことが期待値
     assert recorded == []  # 兄弟 scorer パッケージの所有物なので記録もしない
+
+
+def test_system_library_directories_covers_ldconfig_multiarch_dir() -> None:
+    """`_system_library_directories()` は実測（ldconfig）でマルチアーキ配置を拾う。
+
+    アーキテクチャ名（`x86_64-linux-gnu` 等）をハードコードせず、この計算機の
+    `ldconfig -p` キャッシュが実際に指すディレクトリから動的に確定することを固定
+    する（Codex 10 巡目 P1-A）。
+    """
+    directories = harness._system_library_directories()
+    assert directories, "システムライブラリディレクトリが 1 つも見つからない"
+    assert all(d.is_absolute() for d in directories)
+    # libc.so.6 は本ハーネスが動く Linux 環境に必ず存在する（既存テスト群の前提と同じ）。
+    real_libc = Path("/usr/lib/x86_64-linux-gnu/libc.so.6")
+    if real_libc.is_file():
+        assert real_libc.parent.resolve() in directories
+
+
+def test_is_under_system_library_directory_basic() -> None:
+    """`_is_under_system_library_directory` は親ディレクトリの集合所属で判定する。"""
+    dirs = frozenset({Path("/usr/lib/x86_64-linux-gnu")})
+    assert harness._is_under_system_library_directory(
+        Path("/usr/lib/x86_64-linux-gnu/libc.so.6"), dirs
+    )
+    assert not harness._is_under_system_library_directory(
+        Path("/tmp/evil/libc.so.6"), dirs
+    )
 
 
 def test_reject_pre_bound_native_mappings_allows_first_party_bind_chain(
@@ -3729,6 +3950,109 @@ def test_require_scorer_modules_match_pinned_origin_fails_closed_on_non_source_l
         harness._require_scorer_modules_match_pinned_origin()
 
 
+def test_scorer_load_time_expected_hashes_covers_mir_eval_paths() -> None:
+    """P1-B の期待値表は `_mir_eval_paths()` の全 `.py` ファイルを覆う（Codex 10 巡目）。
+
+    `_SCORER_LOAD_TIME_EXPECTED_HASHES` はモジュール load 時に 1 回だけ確定済み
+    （束縛シーケンスの一部）。ここでは束縛済みの値そのものを検証する——再計算すると
+    プロセス起動後にファイルが変わった環境差を拾ってしまうため、`_mir_eval_paths()`
+    が**今**返す集合とキー集合が一致するとは限らない点に注意し、`.py` の部分集合
+    関係とハッシュ形式だけを固定する。
+    """
+    py_paths = [p for p in harness._mir_eval_paths() if p.suffix == ".py"]
+    assert py_paths, "スコアラー閉包の .py ファイルが解決できない（テストの前提が drift）"
+    # 束縛時点でこれらの全ファイルがハッシュ済みであること（該当ファイルが束縛後に
+    # 消えていない限り）。
+    missing = [str(p) for p in py_paths if str(p) not in harness._SCORER_LOAD_TIME_EXPECTED_HASHES]
+    assert not missing, f"期待値表に無い .py ファイルがある: {missing[:5]}"
+    for digest in harness._SCORER_LOAD_TIME_EXPECTED_HASHES.values():
+        assert re.fullmatch(r"[0-9a-f]{64}", digest)
+
+
+def test_audit_scorer_source_load_time_hash_ignores_non_compile_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`"compile"` 以外のイベントは早期 return で無視する（Codex 10 巡目 P1-B・点 5）。"""
+    mismatches: List[str] = []
+    monkeypatch.setattr(harness, "_SCORER_LOAD_TIME_HASH_MISMATCHES", mismatches)
+    harness._audit_scorer_source_load_time_hash("open", ("/etc/passwd", "r", None))
+    harness._audit_scorer_source_load_time_hash("import", ("os", None, [], [], []))
+    assert mismatches == []
+
+
+def test_audit_scorer_source_load_time_hash_ignores_unrelated_files(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """期待値表に無いファイルの compile イベントは対象外（scorer 閉包外・大多数のケース）。"""
+    mismatches: List[str] = []
+    monkeypatch.setattr(harness, "_SCORER_LOAD_TIME_HASH_MISMATCHES", mismatches)
+    unrelated = tmp_path / "unrelated.py"
+    unrelated.write_text("y = 1\n", encoding="utf-8")
+    harness._audit_scorer_source_load_time_hash("compile", ("y = 1\n", str(unrelated)))
+    assert mismatches == []
+
+
+def test_audit_scorer_source_load_time_hash_allows_matching_compile(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """compile 時点の disk bytes が束縛時点の期待と一致すれば記録しない（健全系）。"""
+    mismatches: List[str] = []
+    monkeypatch.setattr(harness, "_SCORER_LOAD_TIME_HASH_MISMATCHES", mismatches)
+    fake_path = tmp_path / "fake_scorer.py"
+    content = "x = 1\n"
+    fake_path.write_text(content, encoding="utf-8")
+    expected = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    monkeypatch.setitem(harness._SCORER_LOAD_TIME_EXPECTED_HASHES, str(fake_path), expected)
+    harness._audit_scorer_source_load_time_hash("compile", (content, str(fake_path)))
+    assert mismatches == []
+
+
+def test_audit_scorer_source_load_time_hash_detects_swap_and_restore(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """compile 瞬間の disk bytes が束縛時点の期待と食い違えば記録する（Codex 10 巡目 P1-B）。
+
+    直接の再現: `_require_scorer_modules_match_pinned_origin`（H8）の docstring が
+    指摘する「差し替え → import（compile） → 元へ復元」は origin パス比較を
+    素通りするが、compile 瞬間にディスクを読み直す本機構は素通りしない——ここでは
+    audit hook のコールバックを直接呼んで機構そのものを固定する（実際の
+    `sys.addaudithook` 経由の統合動作は round 10 の実測スモークテストで既に確認
+    済み）。
+    """
+    mismatches: List[str] = []
+    monkeypatch.setattr(harness, "_SCORER_LOAD_TIME_HASH_MISMATCHES", mismatches)
+    fake_path = tmp_path / "fake_scorer.py"
+    original_content = "x = 1\n"
+    fake_path.write_text(original_content, encoding="utf-8")
+    expected = hashlib.sha256(original_content.encode("utf-8")).hexdigest()
+    monkeypatch.setitem(harness._SCORER_LOAD_TIME_EXPECTED_HASHES, str(fake_path), expected)
+
+    # 攻撃者が compile 直前に別 bytes を書き込んだ状態を模す。
+    malicious_content = "x = 2  # malicious\n"
+    fake_path.write_text(malicious_content, encoding="utf-8")
+    harness._audit_scorer_source_load_time_hash("compile", (malicious_content, str(fake_path)))
+    assert len(mismatches) == 1
+    assert str(fake_path) in mismatches[0]
+
+    # 攻撃者が元へ復元しても、記録は既に済んでいるため消えない（2 段構え）。
+    fake_path.write_text(original_content, encoding="utf-8")
+    assert len(mismatches) == 1
+
+
+def test_audit_scorer_source_load_time_hash_does_not_raise_on_unreadable_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """読めないファイルは静かに諦める（audit hook 内で raise すると compile 自体を壊す）。"""
+    mismatches: List[str] = []
+    monkeypatch.setattr(harness, "_SCORER_LOAD_TIME_HASH_MISMATCHES", mismatches)
+    missing_path = tmp_path / "gone.py"
+    monkeypatch.setitem(
+        harness._SCORER_LOAD_TIME_EXPECTED_HASHES, str(missing_path), "0" * 64
+    )
+    harness._audit_scorer_source_load_time_hash("compile", ("x = 1\n", str(missing_path)))
+    assert mismatches == []  # 例外も出ない・記録も増えない
+
+
 @pytest.mark.parametrize(
     ("mutate", "expect"),
     [
@@ -4378,6 +4702,7 @@ def test_fresh_process_report_provenance_gates() -> None:
         "harness_loaded_as_main": True,
         "pre_bound_scorer_native_mappings": [],
         "non_standard_import_hooks": [],
+        "scorer_load_time_hash_mismatches": [],
         "sys_flags_optimize": 0,
         "specs_sha256": frozen_specs,
     }
@@ -4400,6 +4725,12 @@ def test_fresh_process_report_provenance_gates() -> None:
         ({"pre_bound_scorer_native_mappings": ["/fake/libopenblas-shadow.so.0"]}, "束縛前"),
         # (f) 非標準 import hook が束縛前に存在した子プロセスも拒否する（セルフレビュー H3）。
         ({"non_standard_import_hooks": ["meta_path:evil.EvilFinder"]}, "非標準の import hook"),
+        # (h) scorer .py の swap-and-restore 痕跡を記録した子プロセスも拒否する
+        # （Codex 10 巡目 P1-B）。
+        (
+            {"scorer_load_time_hash_mismatches": ["/fake/numpy/core.py: mismatch"]},
+            "swap-and-restore",
+        ),
         # (g) -O/-OO 実行の子プロセスも拒否する（セルフレビュー H9）。
         ({"sys_flags_optimize": 1}, r"-O/-OO"),
         ({"specs_sha256": hashlib.sha256(b"other").hexdigest()}, "凍結 specs"),
@@ -4668,9 +4999,15 @@ def test_reverification_surfaces_cannot_rerun_when_prebound_mappings_are_clean(
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     scorer = harness._scorer_pins(use_cache=False)
 
-    def _fake_subprocess_run(
-        command: Any, capture_output: bool = True, text: bool = True, env: Any = None
-    ) -> Any:
+    real_subprocess_run = subprocess.run
+
+    def _fake_subprocess_run(command: Any, *args: Any, **kwargs: Any) -> Any:
+        # `harness.subprocess.run` はこの子プロセス spawn 呼び出し**だけ**を偽装する
+        # 対象——`_system_library_directories()`（Codex 10 巡目 P1-A）が同じ
+        # `subprocess.run` 参照経由で `ldconfig -p` も呼ぶため、harness 自身の
+        # 子プロセス spawn（`sys.executable` 起動）以外は実関数へ委譲する。
+        if not (isinstance(command, list) and command and command[0] == sys.executable):
+            return real_subprocess_run(command, *args, **kwargs)
         out_index = command.index("--out")
         report_path = Path(command[out_index + 1])
         specs_index = command.index("--specs")
@@ -4686,6 +5023,7 @@ def test_reverification_surfaces_cannot_rerun_when_prebound_mappings_are_clean(
             "harness_loaded_as_main": True,
             "pre_bound_scorer_native_mappings": [],
             "non_standard_import_hooks": [],
+            "scorer_load_time_hash_mismatches": [],
             "sys_flags_optimize": 0,
             "specs_sha256": specs_sha256,
             "categories": {
