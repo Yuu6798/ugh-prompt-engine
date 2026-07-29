@@ -43,6 +43,12 @@ M3 の比較器はこの誤差を**許容するように**設計されなけれ�
 **`mir_eval.melody`（MIT ライセンス・純 Python・バージョン pin）を採用。** 自作指標は作らない
 （比較可能性と実装検証コストのため。mir_eval は MIREX 系研究の標準実装）。
 
+**スコアラー pin の閉包（M2b 前提整備）**: `mir_eval.melody.evaluate` / `to_cent_voicing`
+は内部で `scipy.interpolate` と numpy を直接 import して実行するため、
+`run_melody_accuracy._scorer_pins()` は mir_eval だけでなく scipy / numpy の
+version + code sha256 も記録する（`_SCORER_RUNTIME_PACKAGES`）。librosa 系 backend
+（抽出器オーケストレーション側の閉包）はスコアラー経路に無いため対象外。
+
 | 指標 | 意味 |
 |---|---|
 | RPA (Raw Pitch Accuracy) | 有声フレームのうちピッチが ±50 cent 以内で当たった割合 |
@@ -127,7 +133,36 @@ m2_accuracy_bars:
 
 ---
 
-## 6. 判定分岐
+## 6. Scorer pin の脅威モデルと境界
+
+scorer pin（mir_eval/numpy/scipy 等の実行閉包の tamper-evidence）が**守る**のは、
+受動的な取り違え・環境ドリフト・偶発的差し替え——別バージョンの数値ライブラリ、
+wheel 外 BLAS、事前ロード、ビルド差、非決定的構成など「測定者が意図せず異なる
+実装で測ってしまう」事故。これらは version/code/native/dist hash + 実行時検証
+（DT_NEEDED 閉包・pre-bind/maps 検査・audit hook・mid-run 再検証）で fail-closed
+検出される。
+
+**守らない（脅威モデル境界）**: 測定プロセスの env/PATH/site-packages/ファイル
+システムを**能動的に制御できる攻撃者**。この能力を持つ攻撃者は scorer 実装を
+差し替えるより前に、より直接的に測定結果そのもの（report JSON・verdict）を偽造
+できる。scorer pin をこの攻撃者に完全防御しても、同能力の攻撃者が迂回する下流
+経路（結果ファイルの直接書き換え）が常に残り、防御の費用対効果が釣り合わない。
+したがって scorer pin は「能動的攻撃者への完全な tamper-proofing」ではなく
+「**受動的ドリフトの tamper-evidence**」と位置づける。
+
+境界の含意:
+- subprocess 硬化（ldconfig/git の絶対パス化・env allowlist）・native 閉包の
+  DT_NEEDED 検証などは、受動的ドリフトの検出精度を高める範囲で実装する
+  （実装済み・本 PR）。
+- 「能動的 env 制御攻撃者だけが到達できる残余経路」（稀な env 組み合わせ、
+  ローダ内部状態の TOCTOU、mmap 済みバイトの in-memory 改変など）は本境界内として
+  acknowledged-boundary に分類し、際限ない実装細部の追跡はしない。
+- 測定の真正性の最終担保は、この tamper-evidence に加えて「信頼された環境で
+  測定を実行する」運用規律（M1-real/M2 の slow-lane）に依存する。
+
+---
+
+## 7. 判定分岐
 
 - **calibrated（V_fullstack 通過)**: 誤差モデルを持って M3（正規化・対応・多軸比較）設計へ。
 - **部分成立**（V-direct は通るが V-fullstack が落ちる）: 「抽出器は健全・分離が汚す」の帯地図。
@@ -138,16 +173,16 @@ m2_accuracy_bars:
 
 ---
 
-## 7. PR 分割
+## 8. PR 分割
 
 | PR | 内容 | 受け入れ条件 |
 |---|---|---|
 | M2a | accuracy.py + ハーネス + バー凍結 + S fixture | mir_eval 一致テスト（既知入力で手計算値と一致）。バーが単一値で凍結。CI green（重依存なし） |
 | M2b | S 帯実測記録 | S-direct 合否 + S-fullstack 診断が dated JSON + pin 完備 |
 | M2c | V 帯実測記録 | ライセンス記録（原文引用+URL+日付）→ 実測 JSON。データセット非 commit |
-| M2d | 判定 + 誤差モデル doc | 分岐（§6)の明記。M3 への入力として cent/octave/voicing の実数値 |
+| M2d | 判定 + 誤差モデル doc | 分岐（§7)の明記。M3 への入力として cent/octave/voicing の実数値 |
 
-## 8. やってはいけないこと
+## 9. やってはいけないこと
 
 - 正解なし素材（自作 Suno 曲）で RPA/RCA を算出・主張する。
 - バー（§4)を実測後に緩める。S_fullstack の低値を理由に crepe を責める（分布外帯）。

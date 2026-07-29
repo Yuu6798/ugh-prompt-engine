@@ -2915,6 +2915,73 @@ def test_transitive_resolution_inherits_ancestor_rpath(monkeypatch, tmp_path):
     ]
 
 
+def test_ffmpeg_closure_revisits_shared_soname_under_new_rpath_context(monkeypatch, tmp_path):
+    """同一 soname が異なる継承 RPATH context から多重到達したら、両方の解決先を pin する。
+
+    （Codex 13 巡目 H18）harness `_verify_scorer_dt_needed_closure` の visited を
+    `(path, context)` にした是正（13 巡目 (B)）と同型の欠陥が、共有ヘルパー
+    `_ffmpeg_library_closure` の `seen`（soname のみキー）に残っていた。ここでは
+    `ffmpeg` が `libavformat.so.60` を**直接**要求する経路（context = `(marker_a,)`）と、
+    `libavdevice.so.60` 経由で**間接的に**要求する経路（context = `(marker_b, marker_a)`）
+    の 2 つから同一 soname `libavformat.so.60` に到達し、context によって解決先が
+    異なる（同梱版 vs vendor 版）ケースを模す。
+
+    soname のみで dedup していた旧実装なら、先に処理された context の解決だけが
+    `resolved` に残り、もう一方の context（別ファイルへの解決）は`seen`に阻まれて
+    一切検証されない——本来 pin すべき実体を見逃す。`(soname, rpath, runpath)` dedup
+    ならどちらの context も独立して解決され、両方のファイルが返り値に含まれる。
+    """
+    from svp_rpe.melody import provenance as melody_provenance
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    vendor_dir = tmp_path / "vendor"
+    vendor_dir.mkdir()
+
+    ffmpeg = tmp_path / "ffmpeg"
+    ffmpeg.write_bytes(b"ffmpeg")
+    avdevice = tmp_path / "libavdevice.so.60"
+    avdevice.write_bytes(b"avdevice")
+    bundled_avformat = bundle_dir / "libavformat.so.60"
+    bundled_avformat.write_bytes(b"bundled-avformat")
+    vendor_avformat = vendor_dir / "libavformat.so.60"
+    vendor_avformat.write_bytes(b"vendor-avformat")
+
+    marker_a = tmp_path / "marker_a"
+    marker_b = tmp_path / "marker_b"
+
+    # 実体パス（同名 `libavformat.so.60` が 2 箇所にあるので basename ではなく
+    # フルパスでキーにする）。
+    info_by_path = {
+        str(ffmpeg): (["libavformat.so.60", "libavdevice.so.60"], (str(marker_a),), ()),
+        str(avdevice): (["libavformat.so.60"], (str(marker_b),), ()),
+        str(bundled_avformat): ([], (), ()),
+        str(vendor_avformat): ([], (), ()),
+    }
+    monkeypatch.setattr(
+        melody_provenance, "_elf_dynamic_info", lambda path: info_by_path.get(str(path))
+    )
+
+    def _fake_resolve(soname, *, rpath_dirs=(), runpath_dirs=()):
+        if soname == "libavdevice.so.60":
+            return avdevice
+        if soname == "libavformat.so.60":
+            if rpath_dirs == (marker_a,):
+                return bundled_avformat  # 直接経路（context = ffmpeg 自身の RPATH）
+            if rpath_dirs == (marker_b, marker_a):
+                return vendor_avformat  # 間接経路（libavdevice 自身の RPATH + 継承）
+        return None
+
+    monkeypatch.setattr(melody_provenance, "_resolve_soname_without_loading", _fake_resolve)
+
+    closure = melody_provenance._ffmpeg_library_closure(ffmpeg)
+
+    # 両方の context の解決先が pin に含まれる（旧実装なら片方が欠落する）。
+    assert bundled_avformat in closure
+    assert vendor_avformat in closure
+    assert avdevice in closure
+
+
 def test_static_elf_returns_complete_dynamic_info(tmp_path):
     """`.dynamic` を持たない静的 ELF でも 3 要素 tuple を返す（#217）。"""
     from svp_rpe.melody import provenance as melody_provenance
@@ -3137,6 +3204,32 @@ def test_native_library_scan_covers_versioned_and_windows_libraries(monkeypatch,
     after = melody_provenance.package_code_state("fakepkg", use_cache=False)
     assert before[0] == after[0] == melody_provenance.STATE_OK
     assert before[1] != after[1]
+
+
+def test_native_library_predicate_accepts_version_before_suffix_dylib_form():
+    """`libopenblas.0.dylib` のような「版番号が拡張子の前」形式も native と判定する。
+
+    Codex P1 3 巡目レビュー（scripts/run_melody_accuracy.py PR #225）で
+    「`_is_native_library` は `.dylib`/`.dylib.1` を受理するが `.0.dylib` を受理せず
+    macOS wheel の companion library が pin から漏れる」という懸念が挙がったが、
+    `_NATIVE_LIBRARY_RE = re.compile(r"\\.(so|dylib|dll|pyd)(\\.\\d+)*$")` は `search` で
+    適用されるため末尾が `.dylib`/`.so`/`.dll` でありさえすればマッチし、版番号が
+    前置されていても skip は起きない（実測で反証済み・PR #225 スレッド
+    `PRRT_kwDOSD2OOM6T77EV` で不採用と回答）。将来の regression 防止として、この
+    挙動自体を pin する。
+    """
+    from svp_rpe.melody import provenance as melody_provenance
+
+    version_before_suffix_cases = (
+        "libopenblas.0.dylib",
+        "libopenblas64_.0.dylib",
+        "libgfortran.5.dylib",
+        "libscipy_openblas64_-56d6093b.so",
+        "libgfortran-040039e1.so.5.0.0",
+        "msvcp140.dll",
+    )
+    for name in version_before_suffix_cases:
+        assert melody_provenance._is_native_library(Path(name)), name
 
 
 def test_numpy_is_pinned_in_every_inference_closure():

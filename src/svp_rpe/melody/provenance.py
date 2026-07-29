@@ -341,6 +341,228 @@ def _system_library_path(soname: str) -> Optional[Path]:
     return _resolve_soname_without_loading(found)
 
 
+# 信頼できる ldconfig 実行ファイルの絶対パス候補（Codex 13 巡目 P1-A）。PATH 経由の
+# 非修飾 `ldconfig` は、PATH 上に攻撃者が用意した同名コマンドがあればそれが実行され、
+# `libm.so.6` 等の基盤 soname を偽の cache へ解決させうる——`_is_ldconfig_registered_
+# path`（Codex 14 巡目 P1-A。`scripts/run_melody_accuracy.py` の consumer が使う、旧
+# `_is_under_system_library_directory` の後継）が検証の正解データとして使う ldconfig
+# cache そのものが汚染される。glibc/util-linux が実際にインストールする先は
+# ディストリビューションを問わずこの 4 箇所に限られるため、絶対パスで存在確認して
+# から実行する（PATH フォールバックはしない = fail-closed）。
+_TRUSTED_LDCONFIG_CANDIDATES: "Tuple[str, ...]" = (
+    "/sbin/ldconfig",
+    "/usr/sbin/ldconfig",
+    "/bin/ldconfig",
+    "/usr/bin/ldconfig",
+)
+
+# `git` の信頼できる絶対パス候補（Codex 13 巡目 H19）。ldconfig と同じ「非修飾コマンド
+# は PATH 上の偽物が実行されうる」クラス。`scripts/run_melody_accuracy.py` の bars 事前
+# 登録立証（`_bars_registration_attestation`）と `--out` の git メタデータ保護
+# （`_require_out_outside_git_metadata`）が経由する。
+_TRUSTED_GIT_CANDIDATES: "Tuple[str, ...]" = (
+    "/usr/bin/git",
+    "/bin/git",
+    "/usr/local/bin/git",
+)
+
+# 信頼実行するサブプロセス（ldconfig / git）に固定する最小 PATH（システムディレクトリ
+# のみ）。
+_TRUSTED_SUBPROCESS_PATH = "/sbin:/usr/sbin:/bin:/usr/bin"
+
+# 信頼実行するサブプロセス（ldconfig / git）に許可する環境変数名の allowlist
+# （Codex 14 巡目 P1-B。13 巡目 P1-A + H20 の blocklist 方式からの反転）。
+#
+# blocklist 方式（`LD_*`・`GCONV_PATH`・`GLIBC_TUNABLES`・`LOCPATH`/`NLSPATH`/
+# `GETCONF_DIR` を個別列挙して除去）は、ldconfig/git がどちらも動的リンクされた
+# ELF 実行ファイルである以上、これらが立っていると「信頼できる絶対パスから起動した」
+# つもりでも起動プロセス自身が読み込む共有ライブラリ・ロケールデータが差し替えられ
+# 出力が歪みうる、という脅威には対応していた。しかし **`GIT_DIR`/`GIT_WORK_TREE`/
+# `GIT_OBJECT_DIRECTORY`/`GIT_INDEX_FILE`/`GIT_ALTERNATE_OBJECT_DIRECTORIES`/
+# `GIT_CONFIG`** 等の git repository override は blocklist に無く素通りしていた
+# ——trusted `git -C ROOT` を呼んでも、これらが立っていれば git は **foreign
+# リポジトリ**を見る（`-C` はワーキングディレクトリを変えるだけで、環境変数による
+# repository 上書きには勝てない）。`_bars_registration_attestation`（事前登録の
+# git 履歴立証）・`_require_out_outside_git_metadata`（`--out` の git メタデータ
+# 保護）はどちらも trusted git の実行が **ROOT リポジトリ**を見ることに依存するため、
+# これは false attestation / 保護の空振りに直結する。個別列挙の blocklist は次に
+# 発見される override 変数を都度追加する後追い戦にしかならないため、既定で
+# **すべての環境変数を落とし**、明示的に信頼する最小集合だけを通す allowlist へ
+# 反転する。これにより `GIT_*`・`LD_*`・`GCONV_PATH`・`GLIBC_TUNABLES` 等を個別
+# 列挙せず一網打尽に除去する（防御意図はこの docstring に残す）。
+#
+# `PATH` は常に `_TRUSTED_SUBPROCESS_PATH` へ固定するため allowlist に含める必要は
+# ない。ロケール系（`LANG`/`LC_ALL`/`LC_*`）は意図的に**含めない**——本モジュールが
+# 解釈する ldconfig/git の出力（soname => path 一覧・hex ハッシュ・
+# `--format=%cI` の ISO 8601 日時）はいずれも locale に依存しないマシン可読形式で、
+# 通す必要が無い（通せば glibc のメッセージカタログ/gconv 経路を不必要に広げる）。
+_HARDENED_SUBPROCESS_ENV_ALLOWLIST: "Tuple[str, ...]" = ()
+
+
+def _trusted_executable(candidates: "Tuple[str, ...]", *, tool_name: str) -> str:
+    """`candidates`（絶対パス）から実在する実行ファイルを選ぶ。無ければ fail-closed。
+
+    （Codex 13 巡目 P1-A、H19 で ldconfig 専用から一般化）候補を先頭から確認し、
+    最初に実在した絶対パスを使う——PATH 上の非修飾コマンドには一切フォールバック
+    しない。どの候補も存在しなければ `RuntimeError` で fail-closed にする。
+    """
+    for candidate in candidates:
+        path = Path(candidate)
+        if path.is_file():
+            return str(path)
+    raise RuntimeError(
+        f"trusted {tool_name} binary not found at any of {candidates!r}; "
+        f"PATH 上の非修飾 {tool_name} は信用しないため fail-closed"
+    )
+
+
+def _trusted_ldconfig_executable() -> str:
+    """信頼できる絶対パス候補から実在する ldconfig を選ぶ（`_trusted_executable` 経由）。
+
+    どの候補も存在しなければ「system-library 閉包を立証する土台（ldconfig
+    キャッシュ）自体が信頼できる経路でしか手に入らない」ため fail-closed にする。
+    """
+    return _trusted_executable(_TRUSTED_LDCONFIG_CANDIDATES, tool_name="ldconfig")
+
+
+def _trusted_git_executable() -> str:
+    """信頼できる絶対パス候補から実在する git を選ぶ（Codex 13 巡目 H19）。
+
+    どの候補も存在しなければ「bars 事前登録の立証・`--out` の git メタデータ保護が
+    信頼できる経路でしか成立しない」ため fail-closed にする。
+    """
+    return _trusted_executable(_TRUSTED_GIT_CANDIDATES, tool_name="git")
+
+
+def _hardened_subprocess_env() -> "dict[str, str]":
+    """信頼実行するサブプロセス（ldconfig / git）に渡す最小化済み環境変数。
+
+    （Codex 13 巡目 P1-A、H19/H20 で一般化、14 巡目 P1-B で allowlist へ反転）
+    既定で**すべての環境変数を落とし**、`_HARDENED_SUBPROCESS_ENV_ALLOWLIST` に
+    明示したものだけを元の環境から通す。`PATH` は allowlist に関わらず常に
+    `_TRUSTED_SUBPROCESS_PATH`（信頼固定値）へ上書きする。
+
+    blocklist 方式（`LD_*`/`GCONV_PATH` 等を個別列挙して除去する旧実装）は
+    `GIT_DIR`/`GIT_WORK_TREE` 等の git repository override を見落とし、trusted
+    `git -C ROOT` の実行結果を差し替えられる穴になっていた
+    （`_HARDENED_SUBPROCESS_ENV_ALLOWLIST` docstring 参照）。allowlist 反転により
+    列挙していない変数も含めて一網打尽に除去する。
+    """
+    import os
+
+    env = {"PATH": _TRUSTED_SUBPROCESS_PATH}
+    for var in _HARDENED_SUBPROCESS_ENV_ALLOWLIST:
+        value = os.environ.get(var)
+        if value is not None:
+            env[var] = value
+    return env
+
+
+def _ldconfig_cache_listing() -> str:
+    """`ldconfig -p` の出力（library => path 一覧）を信頼できる経路から取得する。
+
+    （Codex 13 巡目 P1-A）`_resolve_soname_without_loading`（本モジュール）と
+    `_system_library_directories`（`scripts/run_melody_accuracy.py`）の両方が経由する
+    共有ヘルパー。絶対パス候補から実在物を選び（`_trusted_ldconfig_executable` が
+    無ければここで `RuntimeError` が伝播し fail-closed）、サブプロセスの `PATH` を
+    最小集合へ固定し、動的リンク/ロケール解決を歪めうる環境変数を除去して起動する
+    （`_hardened_subprocess_env`）。
+
+    実行自体が失敗した場合（`OSError` / `SubprocessError`。ldconfig が古い / 権限が
+    無い等）は空文字列を返し、呼び出し側の探索（rpath/runpath/`LD_LIBRARY_PATH`）
+    だけで解決を続けさせる——これは「ldconfig 実行が通常の理由で失敗した」であって、
+    「信頼できる実行ファイルが存在しない」（fail-closed 対象）とは区別する。
+    """
+    import subprocess
+
+    ldconfig = _trusted_ldconfig_executable()
+    env = _hardened_subprocess_env()
+    try:
+        return subprocess.run(
+            [ldconfig, "-p"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+            env=env,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):  # pragma: no cover - 環境依存
+        return ""
+
+
+def _ldconfig_cache_paths_by_soname() -> "dict[str, frozenset]":
+    """`ldconfig -p` の soname → 登録された解決先の絶対パス集合（Codex 14 巡目 P1-A）。
+
+    `scripts/run_melody_accuracy.py` の旧 `_system_library_directories()`/
+    `_is_under_system_library_directory()`（Codex 10 巡目 P1-A）は「ldconfig cache の
+    いずれかのエントリの親ディレクトリ」を baseline（正規システムライブラリ）集合と
+    みなしていた。この**ディレクトリメンバシップ**判定は、`/usr/local/lib` のように
+    ベンダー/アプリライブラリが 1 つでも ldconfig に登録されていると、その親ディレクトリ
+    **全体**が baseline 化してしまう——同じディレクトリに置かれた cache 未登録の
+    custom ライブラリ（`LD_LIBRARY_PATH` 経由で解決されるもの）まで、基盤ディレクトリ
+    配下というだけで通過させる穴になる（Codex 14 巡目 P1-A）。
+
+    ここでは「ディレクトリ配下か」ではなく「その soname が実際に指す**正確なパス**が
+    cache に登録されているか」を検証できるよう、soname → 登録済み絶対パス集合の辞書を
+    組み立てる。同一 soname が複数アーキ/hwcap variant で複数パスに解決されることが
+    あるため値は集合（例: multilib 環境の同名 soname が i386/x86_64 の 2 パスを持つ）。
+
+    **キーの二重化（Codex P2 15 巡目・CI 実測で発覚）**: 呼び出し元には 2 種類ある。
+    (a) DT_NEEDED を辿る `_verify_scorer_dt_needed_closure` は ELF が要求する**論理
+    soname**（例 `libbz2.so.1.0`——ldconfig の左辺そのもの）を渡す。(b)
+    `/proc/self/maps` を走査する `_reject_pre_bound_native_mappings` は、マップ済み
+    実体の**解決済みファイルの basename**（例 `libbz2.so.1.0.4`——ldconfig の右辺
+    実体が指す実ファイル名。カーネルは symlink でなく実 inode のパスを maps に載せる
+    ため、末尾のパッチバージョンまで含む）しか持たない——DT_NEEDED を読んでいない
+    ので論理 soname を知らない。旧実装はキーを ldconfig の左辺（論理 soname）だけに
+    限定していたため、(b) の呼び出しが `libbz2.so.1.0.4` で引くと必ず miss し、CI の
+    クリーン環境（`libbz2.so.1.0.4`/`liblzma.so.5.4.5`/`libuuid.so.1.3.0`/
+    `libz.so.1.3` が起動時に読まれる標準構成）で正規システムライブラリを
+    default-deny してしまっていた。右辺の**解決済み実ファイルの basename**も
+    同じ集合へ追加のキーとして登録し、どちらの呼び出し元も同じ辞書で引けるようにする
+    （右辺・左辺のどちらでキーを引いても、指す**値**（解決済み絶対パス集合）は同じ
+    ——exact path 一致という安全性は変わらない。登録されていない custom ライブラリは
+    従来どおり両キーとも miss のまま default-deny）。
+    """
+    entries: "dict[str, set]" = {}
+    for line in _ldconfig_cache_listing().splitlines():
+        name, _, path_field = line.partition(" => ")
+        soname = name.strip().split(" ", 1)[0]
+        path_field = path_field.strip()
+        if not soname or not path_field:
+            continue
+        candidate = Path(path_field)
+        if candidate.is_file():
+            resolved = candidate.resolve()
+            entries.setdefault(soname, set()).add(resolved)
+            if resolved.name != soname:
+                entries.setdefault(resolved.name, set()).add(resolved)
+    return {soname: frozenset(paths) for soname, paths in entries.items()}
+
+
+def _is_ldconfig_registered_path(soname: str, resolved: Path) -> bool:
+    """`resolved`（既に `.resolve()` 済みの実体パス）が `soname` として ldconfig
+    cache に登録された exact path のいずれかと一致するか（Codex 14 巡目 P1-A）。
+
+    baseline（OS 基盤 / 正規システムライブラリ）判定はこの exact path 一致でのみ
+    成立させる——ディレクトリメンバシップ（旧 `_is_under_system_library_directory`）
+    は、cache に無関係なライブラリが 1 つでも登録されたディレクトリ全体を baseline
+    化してしまい、同じディレクトリの cache 未登録 custom ライブラリ
+    （`LD_LIBRARY_PATH` 等で解決）まで通過させた。soname が命名規約上「基盤らしい」
+    （`_is_os_baseline_library`）ことも、ここでは信用の根拠にしない——解決先が
+    cache 登録の正確なパスと一致することまで要求する（10 巡目 P1-A の soname 実解決 +
+    13 巡目 P1-A の ldconfig 絶対パス化の精度向上版）。
+
+    `soname` 引数は ldconfig の**論理 soname**（`libbz2.so.1.0` 等、DT_NEEDED から
+    読む文字列）でも、解決済み実ファイルの**basename**（`libbz2.so.1.0.4` 等、
+    `/proc/self/maps` が載せる実 inode のパス由来）でも、どちらの形式で渡しても
+    正しく引ける（`_ldconfig_cache_paths_by_soname` がキーを二重化済み・Codex P2
+    15 巡目）——呼び出し元によって手元にあるのが論理 soname か解決済み basename か
+    異なるため。
+    """
+    return resolved in _ldconfig_cache_paths_by_soname().get(soname, frozenset())
+
+
 def _resolve_soname_without_loading(
     soname_file: str,
     *,
@@ -354,13 +576,13 @@ def _resolve_soname_without_loading(
     1. `DT_RPATH`（**`DT_RUNPATH` が無いときだけ**有効。祖先から継承した分を含む）
     2. `LD_LIBRARY_PATH`
     3. 参照元オブジェクトの `DT_RUNPATH`
-    4. `ldconfig -p` キャッシュ（cache を読むだけでライブラリはロードしない）
+    4. `ldconfig -p` キャッシュ（cache を読むだけでライブラリはロードしない。信頼
+       できる絶対パスから起動する——`_ldconfig_cache_listing` 参照・Codex 13 巡目 P1-A）
 
     `rpath_dirs` / `runpath_dirs` は **展開済みのディレクトリ**を受け取る（`$ORIGIN` は
     それを宣言したオブジェクトからの相対なので、展開は収集側の責務）。
     """
     import os
-    import subprocess
 
     search: "list[Path]" = []
     if not runpath_dirs:
@@ -375,25 +597,14 @@ def _resolve_soname_without_loading(
         candidate = directory / soname_file
         if candidate.is_file():
             return candidate.resolve()
-    for ldconfig in ("ldconfig", "/sbin/ldconfig"):
-        try:
-            output = subprocess.run(
-                [ldconfig, "-p"],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=30,
-            ).stdout
-        except (OSError, subprocess.SubprocessError):  # pragma: no cover - 環境依存
+    output = _ldconfig_cache_listing()
+    for line in output.splitlines():
+        name, _, path_field = line.partition(" => ")
+        if name.strip().split(" ", 1)[0] != soname_file:
             continue
-        for line in output.splitlines():
-            name, _, path_field = line.partition(" => ")
-            if name.strip().split(" ", 1)[0] != soname_file:
-                continue
-            resolved = Path(path_field.strip())
-            if resolved.is_file():
-                return resolved.resolve()
-        break
+        resolved = Path(path_field.strip())
+        if resolved.is_file():
+            return resolved.resolve()
     return None
 
 
@@ -591,7 +802,6 @@ def _ffmpeg_library_closure(executable: Path) -> "list[Path]":
     解決できない FFmpeg ライブラリがある場合も同様（デコード実装の一部を覆わない pin は
     出さない）。この結果、分離経路の pin は現状 **Linux/ELF 限定**で成立する。
     """
-    resolved: "dict[str, Path]" = {}
     root_info = _elf_dynamic_info(executable)
     if root_info is None:
         # 非 ELF（Mach-O / PE / ラッパスクリプト）。依存 closure を読めないので
@@ -608,12 +818,24 @@ def _ffmpeg_library_closure(executable: Path) -> "list[Path]":
         ))
         for name in root_info[0]
     ]
-    seen = set()
+    # dedup キーは (soname, rpath_dirs, runpath_dirs)（Codex 13 巡目 H18・harness (B) と
+    # 同型の是正）。soname のみで dedup すると、同一 soname が異なる継承 RPATH context
+    # から多重到達したとき、先に pop された context でしか子 walk・解決を行わない——
+    # 別 context では transitive soname が bundled/system のどちらか一方にしか解決され
+    # ないケースを見逃す（harness `_verify_scorer_dt_needed_closure` が visited を
+    # `(path, context)` にした理由と同じ構造的欠陥）。ここでは soname が同じでも
+    # context ごとに独立して解決・子 walk を再検証し、`resolved` は soname ごとに
+    # **観測された全ての解決先の集合**を保持する（同名 soname が context で異なる実体へ
+    # 解決される場合、両方を pin に含める——「実際にロードされうる全ての実体」を
+    # 過小に覆わないため。単一実体しか観測されなければ通常どおり 1 件のみ）。
+    seen: "set[tuple[str, tuple, tuple]]" = set()
+    resolved_by_soname: "dict[str, set[Path]]" = {}
     while pending:
         soname, rpath_dirs, runpath_dirs = pending.pop()
-        if soname in seen:
+        visit_key = (soname, rpath_dirs, runpath_dirs)
+        if visit_key in seen:
             continue
-        seen.add(soname)
+        seen.add(visit_key)
         if not soname.startswith(_FFMPEG_LIBRARY_PREFIXES):
             continue  # OS 基盤ライブラリは線の外（上のコメント参照）
         path = _resolve_soname_without_loading(
@@ -624,7 +846,7 @@ def _ffmpeg_library_closure(executable: Path) -> "list[Path]":
                 f"FFmpeg shared library {soname!r} could not be located; "
                 "デコード実装の一部を覆わない pin を publish しないため unavailable として扱う"
             )
-        resolved[soname] = path
+        resolved_by_soname.setdefault(soname, set()).add(path)
         info = _elf_dynamic_info(path)
         if info is None:
             continue
@@ -635,7 +857,7 @@ def _ffmpeg_library_closure(executable: Path) -> "list[Path]":
         child_rpath = _object_rpath_dirs(path, info, rpath_dirs)
         child_runpath = _object_runpath_dirs(path, info)
         pending.extend((name, child_rpath, child_runpath) for name in info[0])
-    return [resolved[name] for name in sorted(resolved)]
+    return sorted({path for paths in resolved_by_soname.values() for path in paths})
 
 
 def _object_rpath_dirs(obj: Path, info: "tuple", inherited: "tuple") -> "tuple":
