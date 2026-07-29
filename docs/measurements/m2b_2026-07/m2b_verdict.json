@@ -1,0 +1,190 @@
+{
+  "bars_sha256": "50c83e6524a35c7080622c20715c0c2cc68d8d8e695d2766958d795eedec0085",
+  "categories": {
+    "S_direct": {
+      "failures": [
+        "repeat[0] voicing_false_alarm 0.2588 > max_vfa 0.15",
+        "repeat[1] voicing_false_alarm 0.2588 > max_vfa 0.15"
+      ],
+      "metrics": [
+        {
+          "median_cent_error": 1.353399997104134,
+          "octave_gap": 0.0,
+          "overall_accuracy": 0.9063829787234042,
+          "raw_chroma_accuracy": 1.0,
+          "raw_pitch_accuracy": 1.0,
+          "tolerance_cents": 50.0,
+          "voiced_chroma_correct_frame_count": 300,
+          "voicing_false_alarm": 0.25882352941176473,
+          "voicing_recall": 1.0
+        },
+        {
+          "median_cent_error": 1.353399997104134,
+          "octave_gap": 0.0,
+          "overall_accuracy": 0.9063829787234042,
+          "raw_chroma_accuracy": 1.0,
+          "raw_pitch_accuracy": 1.0,
+          "tolerance_cents": 50.0,
+          "voiced_chroma_correct_frame_count": 300,
+          "voicing_false_alarm": 0.25882352941176473,
+          "voicing_recall": 1.0
+        }
+      ],
+      "n_rows": 2,
+      "outcomes": [
+        "measured"
+      ],
+      "reference_frame_counts": {
+        "ref_frame_count": 470,
+        "ref_voiced_frame_count": 300,
+        "source": "recomputed_from_frozen_specs"
+      },
+      "repeats_bit_identical": true,
+      "status": "fail"
+    },
+    "S_fullstack": {
+      "metrics": [
+        {
+          "median_cent_error": 13.186966543285962,
+          "octave_gap": 0.0033333333333332993,
+          "overall_accuracy": 0.524,
+          "raw_chroma_accuracy": 0.6433333333333333,
+          "raw_pitch_accuracy": 0.64,
+          "tolerance_cents": 50.0,
+          "voiced_chroma_correct_frame_count": 193,
+          "voicing_false_alarm": 0.585,
+          "voicing_recall": 0.9033333333333333
+        },
+        {
+          "median_cent_error": 13.186966543285962,
+          "octave_gap": 0.0033333333333332993,
+          "overall_accuracy": 0.524,
+          "raw_chroma_accuracy": 0.6433333333333333,
+          "raw_pitch_accuracy": 0.64,
+          "tolerance_cents": 50.0,
+          "voiced_chroma_correct_frame_count": 193,
+          "voicing_false_alarm": 0.585,
+          "voicing_recall": 0.9033333333333333
+        }
+      ],
+      "n_rows": 2,
+      "outcomes": [
+        "measured"
+      ],
+      "reference_frame_counts": {
+        "ref_frame_count": 500,
+        "ref_voiced_frame_count": 300,
+        "source": "recomputed_from_frozen_specs"
+      },
+      "repeats_bit_identical": true,
+      "status": "diagnostic_only"
+    }
+  },
+  "charset_normalizer_closure_state": "present",
+  "charset_normalizer_code_sha256": "5409273d9f79112c8fadfbd886898056227f98a8076377d5fb477face38aa06e",
+  "charset_normalizer_dist_native_sha256": "3af1c1df93113ef54b5614b6e28373349c3ac95f431fe527d39dbdd47d1672ae",
+  "charset_normalizer_version": "3.4.6",
+  "decorator_code_sha256": "cfb55780cdc2e6c09ea44938cec712ce2236dca07938bc35cf3c9d612cf62abb",
+  "decorator_dist_native_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "decorator_version": "5.3.1",
+  "est_voiced_confidence_floor": 0.3,
+  "evaluator_code_sha256": "e79d945e6e0763464afd4f3e4bb4696837701c33ed747d09c64f8d324a65a635",
+  "generator_code_sha256": "e79d945e6e0763464afd4f3e4bb4696837701c33ed747d09c64f8d324a65a635",
+  "mir_eval_code_sha256": "ba8d61f4457c56d5248c11f5e912ebf36ec94c794450075998269715dcb6e8e4",
+  "mir_eval_dist_native_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "mir_eval_version": "0.8.2",
+  "n_reports": 2,
+  "numeric_runtime_config": {
+    "cpu_count": 4,
+    "env": {},
+    "numpy_simd_dispatch": {
+      "baseline": [
+        "X86_V2"
+      ],
+      "found": [
+        "AVX512_ICL",
+        "AVX512_SPR",
+        "X86_V3",
+        "X86_V4"
+      ],
+      "not_found": []
+    },
+    "sched_affinity_count": 4,
+    "threadpool_info": [
+      {
+        "architecture": "SkylakeX",
+        "filepath": "/usr/local/lib/python3.11/dist-packages/numpy.libs/libscipy_openblas64_-32a4b2a6.so",
+        "internal_api": "openblas",
+        "num_threads": 4,
+        "prefix": "libscipy_openblas",
+        "threading_layer": "pthreads",
+        "user_api": "blas",
+        "version": "0.3.31.188.0"
+      },
+      {
+        "filepath": "/usr/local/lib/python3.11/dist-packages/torch/lib/libgomp.so.1",
+        "internal_api": "openmp",
+        "num_threads": 4,
+        "prefix": "libgomp",
+        "user_api": "openmp",
+        "version": null
+      },
+      {
+        "architecture": "SkylakeX",
+        "filepath": "/usr/local/lib/python3.11/dist-packages/scipy.libs/libscipy_openblas-6cdc3b4a.so",
+        "internal_api": "openblas",
+        "num_threads": 4,
+        "prefix": "libscipy_openblas",
+        "threading_layer": "pthreads",
+        "user_api": "blas",
+        "version": "0.3.30"
+      },
+      {
+        "filepath": "/usr/local/lib/python3.11/dist-packages/scikit_learn.libs/libgomp-e985bcbb.so.1.0.0",
+        "internal_api": "openmp",
+        "num_threads": 4,
+        "prefix": "libgomp",
+        "user_api": "openmp",
+        "version": null
+      }
+    ]
+  },
+  "numpy_code_sha256": "083113f3fcb038f11fe373b090e69ec535b69fecd90275f4c374fafaf9db271a",
+  "numpy_dist_native_sha256": "b82638aabb2487f6f8ae88d9b24865a8f2be73fafd0341d6570be14bf3347185",
+  "numpy_version": "2.4.6",
+  "registration_attestation": {
+    "committed_utc": "2026-07-26T06:22:54+00:00",
+    "content_evidence": "blob_in_head_ancestry",
+    "first_commit": "ce683f845c5ab54d143dbcd4ae11b71cf1ee65e9",
+    "ordering_evidence": "committer_date",
+    "ordering_is_proof": false,
+    "source": "git_history_first_blob_occurrence"
+  },
+  "repeats_min": 2,
+  "report_pins": [
+    {
+      "path_name": "m2b_run1.json",
+      "path_relative": null,
+      "sha256": "6d2a623104dc216cfd096d6dbd3d6415e139c5ec9b2299859f7c18497b244f05"
+    },
+    {
+      "path_name": "m2b_run2.json",
+      "path_relative": null,
+      "sha256": "d2ad7260c4fb52e9146d0e0a77a09e8e2256c2b6706b340bae380cb90e6bec54"
+    }
+  ],
+  "run_ids": [
+    "b8d2938a4bad41168d5b2aca92aace0e",
+    "f45e1265240f42e194f62673974800e1"
+  ],
+  "schema_version": "m2-accuracy-verdict/0.1",
+  "scipy_code_sha256": "b180f6a6d3a723058e69aaf343a9be81301e600f9e270d5e6e19934af380bf92",
+  "scipy_dist_native_sha256": "a2e78745cf34fe1839c06747f5ee0d59b1c1c3fb122a30797e8a563d6ffc4a21",
+  "scipy_version": "1.17.1",
+  "threadpoolctl_closure_state": "present",
+  "threadpoolctl_code_sha256": "1ae1e64207a867ed8de3be66026e7047363c3db80407c4093fcfb6ad24c91461",
+  "threadpoolctl_dist_native_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "threadpoolctl_version": "3.6.0",
+  "tolerance_cents": 50.0,
+  "verdict_recorded_utc": "2026-07-29T08:46:23+00:00"
+}
