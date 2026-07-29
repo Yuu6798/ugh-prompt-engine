@@ -1,0 +1,3 @@
+wrote verdict to /tmp/claude-0/-home-user-ugh-prompt-engine/b7aaac30-6067-5684-8d6f-96a6d001486b/scratchpad/m2b_run7/m2b_verdict.json
+  S_direct: fail
+  S_fullstack: diagnostic_only
