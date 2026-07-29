@@ -3821,6 +3821,10 @@ def _parse_external_annotation_csv(raw: bytes, *, clip_id: str) -> Tuple[Tuple[f
     正解として静かに受理されてしまう（fail-closed の被覆漏れ）。frequency_hz 列は
     time_sec 列と同じく非有限値を明示的に拒否してから、**有限**値のみに対して
     「0 以下は無声」の正規化を適用する。
+
+    Codex 第 5 巡 P2: time_sec 列は非有限値の拒否に加え、**非負かつ厳密増加**である
+    ことも要求する（重複・逆順・負値は mir_eval へのネイティブタイムライン整列前提を
+    静かに壊す入力として fail-closed で拒否する）。
     """
     import io
 
@@ -3843,6 +3847,18 @@ def _parse_external_annotation_csv(raw: bytes, *, clip_id: str) -> Tuple[Tuple[f
         raise ValueError(
             f"external annotation for clip {clip_id!r}: time_sec に非有限値（NaN/inf、"
             "パース不能なセルの可能性）がある (fail-closed)"
+        )
+    if np.any(times < 0.0):
+        first_bad_index = int(np.argmax(times < 0.0))
+        raise ValueError(
+            f"external annotation for clip {clip_id!r}: time_sec に負値がある "
+            f"(index={first_bad_index}) (fail-closed)"
+        )
+    if times.shape[0] >= 2 and np.any(np.diff(times) <= 0.0):
+        first_bad_index = int(np.argmax(np.diff(times) <= 0.0)) + 1
+        raise ValueError(
+            f"external annotation for clip {clip_id!r}: time_sec が厳密増加でない "
+            f"（重複または減少、index={first_bad_index}） (fail-closed)"
         )
     if not np.all(np.isfinite(freqs)):
         raise ValueError(

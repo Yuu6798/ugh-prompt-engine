@@ -8083,6 +8083,13 @@ def test_parse_external_annotation_csv_still_treats_finite_nonpositive_freq_as_u
     assert times == (0.0, 0.01, 0.02, 0.03)
 
 
+def test_parse_external_annotation_csv_rejects_duplicate_timestamps() -> None:
+    """(Codex 第 5 巡 P2) time_sec に重複があれば厳密増加でないとして fail-closed。"""
+    csv_bytes = b"0.00,220.0\n0.01,330.0\n0.01,440.0\n0.02,550.0\n"
+    with pytest.raises(ValueError, match="time_sec が厳密増加でない"):
+        harness._parse_external_annotation_csv(csv_bytes, clip_id="clip001")
+
+
 # ---------------------------------------------------------------------------
 # M2c 52db2f7 review（Codex 第 4 巡 P2）。
 # ---------------------------------------------------------------------------
