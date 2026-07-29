@@ -35,11 +35,14 @@ RECORD_DIR = REPO / "docs" / "measurements" / "m2b_2026-07"
 VERDICT = RECORD_DIR / "m2b_verdict.json"
 BARS = REPO / "tests" / "fixtures" / "melody_bench" / "m2_accuracy_bars.yaml"
 SPECS = REPO / "tests" / "fixtures" / "melody_bench" / "m2_accuracy_specs.yaml"
-RUN_REPORTS = [RECORD_DIR / "m2b_run1.json", RECORD_DIR / "m2b_run2.json"]
 
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _pinned_report_paths(verdict: dict) -> list[Path]:
+    return [RECORD_DIR / pin["path_name"] for pin in verdict["report_pins"]]
 
 
 def test_verdict_report_pins_match_committed_reports() -> None:
@@ -75,9 +78,14 @@ def test_verdict_bars_pin_matches_frozen_bars() -> None:
 
 
 def test_run_reports_pin_frozen_bars_and_specs() -> None:
+    verdict = json.loads(VERDICT.read_text())
+    pins = verdict["report_pins"]
+    # dated 記録の固定集合の凍結: report を増減するなら新しい dated 記録 + 新 verdict を作る運用。
+    assert {pin["path_name"] for pin in pins} == {"m2b_run1.json", "m2b_run2.json"}
+
     bars_sha256 = _sha256(BARS)
     specs_sha256 = _sha256(SPECS)
-    for report_path in RUN_REPORTS:
+    for report_path in _pinned_report_paths(verdict):
         report = json.loads(report_path.read_text())
         assert report["bars_sha256"] == bars_sha256, (
             f"{report_path.name} の bars_sha256 が凍結 fixture と不一致"
@@ -97,8 +105,7 @@ def test_verdict_derived_fields_match_pinned_reports() -> None:
     再導出はせず、commit 済み JSON 同士の値比較のみを行う。
     """
     verdict = json.loads(VERDICT.read_text())
-    pins = verdict["report_pins"]
-    reports = [json.loads((RECORD_DIR / pin["path_name"]).read_text()) for pin in pins]
+    reports = [json.loads(path.read_text()) for path in _pinned_report_paths(verdict)]
 
     assert verdict["run_ids"] == [report["run_id"] for report in reports], (
         "verdict.run_ids が pin 順の report.run_id と不一致（pin 順序と run_ids の対応が崩れている）"
@@ -122,7 +129,10 @@ def test_verdict_derived_fields_match_pinned_reports() -> None:
         assert len(verdict_cat["metrics"]) == len(reports), (
             f"{category}: verdict.metrics の長さが n_reports と不一致"
         )
-        assert verdict_cat["repeats_bit_identical"] is (report_metrics[0] == report_metrics[1]), (
+        assert report_metrics, f"{category}: pinned reports に metrics がない"
+        assert verdict_cat["repeats_bit_identical"] is all(
+            metrics == report_metrics[0] for metrics in report_metrics
+        ), (
             f"{category}: repeats_bit_identical フラグが実際の repeat 間一致/不一致と矛盾"
         )
 
@@ -149,10 +159,12 @@ def test_verdict_is_the_committed_fail_and_diagnostic() -> None:
 
     s_direct = verdict["categories"]["S_direct"]
     assert s_direct["status"] == "fail"
-    assert s_direct["failures"], "S_direct の failures が空"
-    assert all("voicing_false_alarm" in failure for failure in s_direct["failures"]), (
-        "S_direct の fail 因子が voicing 単独でない（帰属の固定が崩れている）"
-    )
+    # dated 凍結記録なので期待値は verbatim 定数で凍結する。metrics+bars からの
+    # 再導出（evaluator のバー適用ロジックの複製）はしない。
+    assert s_direct["failures"] == [
+        "repeat[0] voicing_false_alarm 0.2588 > max_vfa 0.15",
+        "repeat[1] voicing_false_alarm 0.2588 > max_vfa 0.15",
+    ]
     assert s_direct["repeats_bit_identical"] is True
 
     s_fullstack = verdict["categories"]["S_fullstack"]
