@@ -28,8 +28,131 @@
 # 追記する。fixtures が空のままカテゴリ V_direct を要求する run/evaluate は
 # fail-closed で拒否される（`scripts/run_melody_accuracy.py` 側の規律。実測を見てから
 # 都合よく登録する経路を作らない）。
+#
+# 2026-07-29 vocadito (zenodo 5578807, CC BY 4.0, vocadito.zip
+# md5:dea40fd18f14d899643c4ba221b33a46) の 40 clip を実測前に事前登録
 
 schema_version: "m2c-external-fixtures/0.1"
 registered_utc: "2026-07-29"
 
-fixtures: {}
+fixtures:
+  vocadito_1:
+    expected_audio_sha256: "b509768315efad8120183b48e01d6090f1649d5bcc691241940dc7a100274ab8"
+    expected_annotation_sha256: "dd10beba57b94d37b1d3263f5deca3b780adc7ec90f1d43bb00099b02c2878e5"
+  vocadito_10:
+    expected_audio_sha256: "0978bde1c130ae26a9cfcd90012f12fdaf9877bbe45cf21c5237ba7ac9b8703b"
+    expected_annotation_sha256: "b62573c234fe091acdc7f7ac75259df12d5a8b2bd89f5b803bfc0f433c085e96"
+  vocadito_11:
+    expected_audio_sha256: "c4d669eca7e25c5037b191805b54b2c990d5e31bc77c9c77188b140100297197"
+    expected_annotation_sha256: "3649b1c134df2c7630e37f614adf05b67b186f3f494a8cc6551a12b3d8a593d1"
+  vocadito_12:
+    expected_audio_sha256: "5a342e32b20b3764a9ab9784abbf7bac6db69583ec529fc9027f96c69df04e00"
+    expected_annotation_sha256: "c58207b659b08a3ba35baeda01d3ac31231a4c8e5c3b3906ccdc37799e6d0b34"
+  vocadito_13:
+    expected_audio_sha256: "5a26861f99c4d02a3efe2355215de2774fb51257cc2d2bf6021827b64e25ec94"
+    expected_annotation_sha256: "db131bc7ac4413649c4c20a9938fc7af66a731367c769fcc91480a9f27d95847"
+  vocadito_14:
+    expected_audio_sha256: "a41e814df6ee5840f0beaea5da2ab3ad6b38be62b169da08962a722bcc06cdd1"
+    expected_annotation_sha256: "4d765f594d38e18ab514ab1afba93147ac6564be4cfc62f9c268de0e9949f88c"
+  vocadito_15:
+    expected_audio_sha256: "0bc39b00e14881b20756f48530a4688e1bb7aa1c24ee09d4351a327e3acce28d"
+    expected_annotation_sha256: "740a77c865d6dcdae2af05328230d88c97cc2d95a54a4ef44d1cde49a53afafa"
+  vocadito_16:
+    expected_audio_sha256: "595e80b5382812702e64d5b6a8f453d9744391166d47c7020cc1d6e71e310e25"
+    expected_annotation_sha256: "fb06556c007943d6d2793af5dd6ba0ac43a1ab5e1180777bfc795564028ea8cf"
+  vocadito_17:
+    expected_audio_sha256: "4b144cdbbcdb318f19c0aa5ac1e2675dbe8d6cb8941286d251959f25e4c96998"
+    expected_annotation_sha256: "d865f0cd526a030f19ba674ebf6c8956fdd8d8b4a0732a539fdb5a35ee86dc29"
+  vocadito_18:
+    expected_audio_sha256: "4f2a3712dd912b235990f3505593200172da3f386c80db91dfaeb04fc641c929"
+    expected_annotation_sha256: "83ad770e3afd14cad289bf4f7b2ec3a745c12d0fd047d031da70d8de24fda34b"
+  vocadito_19:
+    expected_audio_sha256: "8f6d828d65f723ca602abaf8b28a5e8bdc510d37951556b86ff8b6d07889af28"
+    expected_annotation_sha256: "12b8692cdc1d08d9813ce6c5d93105a43321155f78eeb331afd4a04df3cd58ce"
+  vocadito_2:
+    expected_audio_sha256: "8dcc99c3b08a9a5800b793e3d65cccfb4464961f15cf8ccde25bd4c8b853d519"
+    expected_annotation_sha256: "4d515029c036312e8d04545470c3d5dc5db3132dec54813624faee7d84cd6363"
+  vocadito_20:
+    expected_audio_sha256: "feb3c31e77b7779bdfb302c7819644535804f22a90a8e21f63c393d667ec5181"
+    expected_annotation_sha256: "e09cff1461c2d3ebedcd46093297c44bb00bc705d630d11a6b6e0b8323a047d9"
+  vocadito_21:
+    expected_audio_sha256: "d9d3c20794fd3b42e8f7693b91e8194844a6b80b3932ae4fc06d8e0e277687a7"
+    expected_annotation_sha256: "683af807f48f0a04718e02a45128fc2ee848307cd9b7eb0ac06de2218645791c"
+  vocadito_22:
+    expected_audio_sha256: "6629d0ecd7acddd1ce2877d00bc7ef80dc01fdd20f3225b9c2ed907da12f989e"
+    expected_annotation_sha256: "f6fbca9e262fe338f3ca8f99be5d08d8a4080a5b09337f4ba7f8366b0b159464"
+  vocadito_23:
+    expected_audio_sha256: "3cade4af7d869e3175e3684075782a23f6af936942a8684bfbb4fdbe3a4f10e7"
+    expected_annotation_sha256: "1bbb29db223ac10d5bf7219145deefe4336c3f46692bf8f5d3963077543f6930"
+  vocadito_24:
+    expected_audio_sha256: "22fb2df57dc7b68987cda67b30171c626a7818b9ab7db02185e8ea0a0a6db7ee"
+    expected_annotation_sha256: "e0b877b9679fcf7ee5eae7e41c8b1fd44328f681d2c9f2e2008f76559e0f54d4"
+  vocadito_25:
+    expected_audio_sha256: "cf155e4fd681331d34f316e421803255c449acb0393fa55cd23079ed103b37af"
+    expected_annotation_sha256: "bde7f5aca8cb7baacaed37d2e74178ba93b3c838280504dd488e47e2ab958e20"
+  vocadito_26:
+    expected_audio_sha256: "27fcfb7c6150b412be3f22199202dfc2aab46e59e16cddd675b71c8325b3f66d"
+    expected_annotation_sha256: "4ab0aef2a982eb729e24bca42941e5e453376c1aa5c802f0136c07ea45397d6b"
+  vocadito_27:
+    expected_audio_sha256: "6300e1fc5981ea458074a24a1c32a1011a095df4162fbc8911d6b0240d182419"
+    expected_annotation_sha256: "71d3640f13e4360837c9e77dfa611fcd599dd76c47aeb454cc51699c6261fc01"
+  vocadito_28:
+    expected_audio_sha256: "f50830862faff98314bb7b28de452754ef2d939e187a6d89e5fb1ad56749aeb6"
+    expected_annotation_sha256: "9bc2f3a1ececf51f4cde93010cfa75d2362ce971b27e91c2ca04d9161abbe346"
+  vocadito_29:
+    expected_audio_sha256: "46a831ed09f60728c6bfb051e27582d2d47021805ea8c4500bf4b2d6396a71cb"
+    expected_annotation_sha256: "f6c3f413e03265fdfbeb9b370ee4d2cabb1edfb0eec4eba7e41f6faaaf1b73fc"
+  vocadito_3:
+    expected_audio_sha256: "73b6fe13bc3435ae9173ee1bdec247e2943526c70cd9b69ab2b35002fa4cb04d"
+    expected_annotation_sha256: "18f48fc77df7dd43c1e4bc588a79482b1d330768d63b76b90e82998573582b6a"
+  vocadito_30:
+    expected_audio_sha256: "ce2128d9bfcd434a9c1507d1f2fcd504677e0b1e0fb5fe8bbe07406158df144f"
+    expected_annotation_sha256: "6f584e8d0aaf514efbb7986a049c01b0887491bf40bc43ec03a566c3a24f0924"
+  vocadito_31:
+    expected_audio_sha256: "c3e68dddd4d6a6d34d135042f76ed74cf4b85208c2483a2d4a331d717af99356"
+    expected_annotation_sha256: "33b5787525e86b1ef7851d8f4df257ece0c709315dd3ae18b83e7e05a42f3934"
+  vocadito_32:
+    expected_audio_sha256: "1776573e0a80e0618258501c1fa877a75c36c3368ab24014aaebb522f92768b7"
+    expected_annotation_sha256: "63ea4ef4788a54dc3ec9e3abb3a1b68bd5f47392d2d3359f36e5b131dc42f2fe"
+  vocadito_33:
+    expected_audio_sha256: "896ae8828bfdc7eefc46a4781c328b979f519fea310c04c32cf5859c54ba4c7a"
+    expected_annotation_sha256: "cf553bfb06c17445e36d24c9a1c13c6501d0ac0687aebc19c0e242b45d809dd4"
+  vocadito_34:
+    expected_audio_sha256: "60cefc716230c7783889b1b46f8dcfba48669cf5be6cddb522c04e810c8d38d8"
+    expected_annotation_sha256: "74e80a72860ff758162a015a213026939723ec4190635b17c9261d6b079d2740"
+  vocadito_35:
+    expected_audio_sha256: "85c1c4268527cc53240e9f4f0d557d92f3bf9856d6d42ca50e80c7cbb02bea72"
+    expected_annotation_sha256: "a2327fff128c5355ea4e6e9ca6f6fca04a8d04f5b4085cf082bd86952cebc1dc"
+  vocadito_36:
+    expected_audio_sha256: "2e4eacabc71019752feb17da9e1b0228b9b5ba0ae97ec41107f80dac65750dbb"
+    expected_annotation_sha256: "b9e8b5721a596f4f6272337072b976e0d8d92f9b5501f876a8f5afb6f46e8296"
+  vocadito_37:
+    expected_audio_sha256: "53cb202ddabf1cb7591be49da9160f508cb81c6078c50c7e41a13efe109a0622"
+    expected_annotation_sha256: "9d28fa1df8baf180fd35f5049c4cdd7a675b0a2c81857fa7893a04a39cbdfeb7"
+  vocadito_38:
+    expected_audio_sha256: "2113abf18ddfb0e789021b8e2a2e42743b80d82c51aaca5fe9d228636883a239"
+    expected_annotation_sha256: "59d2f8a9c8772e76021eeb61d69bee7f368f653ea323e7f6a4117cdd527463b0"
+  vocadito_39:
+    expected_audio_sha256: "23badef22642b2e00b676cf3b998d2f2d2d1ee9949888dcd6f038b0b6621b9db"
+    expected_annotation_sha256: "96c7462f7edcd3af715647b609a24559c60efabf0d6a77d6273062479991a6a6"
+  vocadito_4:
+    expected_audio_sha256: "fc07b202eb609c975d1549be5320db116a49be1bd1fc6904e70e31cd7e44ec23"
+    expected_annotation_sha256: "fb0a5b73a66edc0bac5aaec64f82eccd95d5a54781b354ab9020056803cf3d08"
+  vocadito_40:
+    expected_audio_sha256: "add1fc90659541163158bf025eeb0c09b7f738bdfcc812a835654ca1e8544b04"
+    expected_annotation_sha256: "4ba1a1c1a8e8b068cee17affee35df893270900964b4974b8457fefc4ce93e8e"
+  vocadito_5:
+    expected_audio_sha256: "7cecfd126a9437f88db0a297cdab3075bb38faeef10f1a98f22ba22a2a939220"
+    expected_annotation_sha256: "561eb6ac03530a3219cf1a8eab9f0c14b1c4571185f0e059b61643325e4642ca"
+  vocadito_6:
+    expected_audio_sha256: "13816752a6366f2d66f21e71a70d55e22b6a44f0d1712d97abff5390bc0c1f3b"
+    expected_annotation_sha256: "443e7f37172ef683f687fba39ab87710f22af2227e8fdb9031b2faa3002eb002"
+  vocadito_7:
+    expected_audio_sha256: "db9542f0626f4c43ab1e4f26ae9e40834bcfe5f061b07c75a3925d95aaa79676"
+    expected_annotation_sha256: "9dfd339c44bd32a8891288ea3625fcda703932fe76c4ce8f073c005874f63393"
+  vocadito_8:
+    expected_audio_sha256: "05ce2b3f1991035d08db269df1c39b198d9ddc22130ce88f9a8d97e46cd7a310"
+    expected_annotation_sha256: "d4865ca325062a0985f8c8cf099844d9430ad445668bbd8d6bc3f786a346b457"
+  vocadito_9:
+    expected_audio_sha256: "f980cc7df935c0c9e839b25759de72fadad6763c069be96645be46f8dd3ffd32"
+    expected_annotation_sha256: "b5936116058e717ec4fda99ddc323d471059debd9fb599809c59a41888c48126"
