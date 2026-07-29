@@ -6955,3 +6955,437 @@ def test_cli_evaluate_rejects_categories_flag(
     )
     with pytest.raises(SystemExit, match="run phase 専用"):
         harness.main()
+
+
+# ---------------------------------------------------------------------------
+# M2c: カテゴリ V_direct（外部素材）。fake external fixture 方式（実データ・実推論
+# なし・CI 安全）。design memo M2c PR-M2c-1 §テスト参照。
+# ---------------------------------------------------------------------------
+
+import numpy as _np  # noqa: E402
+
+_EXTERNAL_WAVEFORM = harness._serialize_wav_float32(
+    (_np.sin(_np.linspace(0.0, 40.0, 4410)) * 0.3).astype(_np.float32), 22050
+)
+_EXTERNAL_AUDIO_SHA256 = hashlib.sha256(_EXTERNAL_WAVEFORM).hexdigest()
+
+
+def _external_annotation_csv(times: "List[float]", freqs: "List[float]") -> bytes:
+    lines = [f"{t:.6f},{f:.6f}" for t, f in zip(times, freqs)]
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def _write_external_fixture_set(
+    tmp_path: Path, clip_specs: "Dict[str, Tuple[List[float], List[float]]]"
+) -> Tuple[Path, Path]:
+    """clip_specs = {clip_id: (times, freqs)}. manifest + 事前登録 fixtures yaml を書き、
+    (manifest_path, fixtures_path) を返す。全 clip は同じ（内容無関係な）音声 bytes を
+    共有する——fake runner は音声を読まず、annotation 由来の (times, freqs) だけを
+    使う（`_make_fake_external_runner` 参照）。
+    """
+    external_dir = tmp_path / "external"
+    external_dir.mkdir(exist_ok=True)
+    manifest_entries: List[Dict[str, str]] = []
+    fixture_lines = [
+        'schema_version: "m2c-external-fixtures/0.1"',
+        'registered_utc: "2026-07-29"',
+        "fixtures:",
+    ]
+    for clip_id, (times, freqs) in clip_specs.items():
+        audio_path = external_dir / f"{clip_id}.wav"
+        audio_path.write_bytes(_EXTERNAL_WAVEFORM)
+        annotation_bytes = _external_annotation_csv(times, freqs)
+        annotation_path = external_dir / f"{clip_id}.csv"
+        annotation_path.write_bytes(annotation_bytes)
+        annotation_sha256 = hashlib.sha256(annotation_bytes).hexdigest()
+        manifest_entries.append(
+            {
+                "id": clip_id,
+                "audio_path": f"external/{clip_id}.wav",
+                "annotation_path": f"external/{clip_id}.csv",
+            }
+        )
+        fixture_lines.append(f"  {clip_id}:")
+        fixture_lines.append(f'    expected_audio_sha256: "{_EXTERNAL_AUDIO_SHA256}"')
+        fixture_lines.append(f'    expected_annotation_sha256: "{annotation_sha256}"')
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest_entries), encoding="utf-8")
+    fixtures_path = tmp_path / "m2c_external_fixtures.yaml"
+    fixtures_path.write_text("\n".join(fixture_lines) + "\n", encoding="utf-8")
+    return manifest_path, fixtures_path
+
+
+def _write_empty_external_fixtures(tmp_path: Path) -> Path:
+    fixtures_path = tmp_path / "m2c_external_fixtures_empty.yaml"
+    fixtures_path.write_text(
+        'schema_version: "m2c-external-fixtures/0.1"\n'
+        'registered_utc: "2026-07-29"\n'
+        "fixtures: {}\n",
+        encoding="utf-8",
+    )
+    return fixtures_path
+
+
+def _make_fake_external_runner(
+    clip_refs: "Dict[str, Tuple[Tuple[float, ...], Tuple[float, ...]]]",
+    shift_cents: float = 0.0,
+):
+    """外部素材向けフェイク抽出器: 注釈由来の (times, freqs) を +shift_cents ずらして返す。
+
+    clip_id は `_build_external_clip_row` が凍結 WAV へ書く `<clip_id><suffix>` の
+    ファイル名（stem）から復元する。
+    """
+
+    def _runner(audio_path: str, route) -> Tuple[MelodyObservation, Dict[str, Any]]:
+        clip_id = Path(audio_path).stem
+        times, freqs = clip_refs[clip_id]
+        shifted = tuple(
+            (0.0 if hz == 0.0 else hz * (2.0 ** (shift_cents / 1200.0))) for hz in freqs
+        )
+        observation = MelodyObservation(
+            route=route.name,
+            source_model="fake:deterministic",
+            frame_times=times,
+            frame_hz=shifted,
+            frame_confidence=tuple(1.0 if hz > 0.0 else 0.0 for hz in shifted),
+            total_duration_sec=times[-1] if times else 0.0,
+        )
+        provenance: Dict[str, Any] = {
+            "extractor_weights_sha256": FAKE_WEIGHTS_SHA256,
+            "extractor_code_sha256": FAKE_CODE_SHA256,
+        }
+        return observation, provenance
+
+    return _runner
+
+
+_CLIP001_TIMES = [0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07]
+_CLIP001_FREQS = [220.0, 220.0, 220.0, 0.0, 0.0, 440.0, 440.0, 440.0]
+_CLIP002_TIMES = [0.0, 0.01, 0.02, 0.03, 0.04, 0.05]
+_CLIP002_FREQS = [330.0, 330.0, 330.0, 330.0, 0.0, 0.0]
+
+
+def test_run_accuracy_external_category_measured_with_per_clip_and_average(
+    tmp_path: Path,
+) -> None:
+    """(a) V_direct が fake route_runner で measured になり per-clip metrics + 平均集計が出る。"""
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path,
+        {
+            "clip001": (_CLIP001_TIMES, _CLIP001_FREQS),
+            "clip002": (_CLIP002_TIMES, _CLIP002_FREQS),
+        },
+    )
+    report = _fake_run(
+        categories=("V_direct",),
+        route_runner=_make_fake_external_runner(
+            {
+                "clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS)),
+                "clip002": (tuple(_CLIP002_TIMES), tuple(_CLIP002_FREQS)),
+            },
+            shift_cents=0.0,
+        ),
+        external_manifest_path=manifest_path,
+        external_fixtures_path=fixtures_path,
+    )
+    row = report["categories"]["V_direct"]
+    assert row["outcome"] == "measured"
+    assert [c["clip_id"] for c in row["clips"]] == ["clip001", "clip002"]  # clip_id ソート
+    for clip in row["clips"]:
+        assert clip["metrics"]["raw_pitch_accuracy"] == pytest.approx(1.0)
+    # カテゴリ metrics = clip ごとの算術平均（両 clip とも RPA=1.0 なので平均も 1.0）。
+    assert row["metrics"]["raw_pitch_accuracy"] == pytest.approx(1.0)
+    expected_avg_rpa = sum(c["metrics"]["raw_pitch_accuracy"] for c in row["clips"]) / 2
+    assert row["metrics"]["raw_pitch_accuracy"] == pytest.approx(expected_avg_rpa)
+    assert row["provenance_extractor_weights_sha256"] == FAKE_WEIGHTS_SHA256
+    assert row["provenance_extractor_code_sha256"] == FAKE_CODE_SHA256
+    assert row["external_manifest_sha256"] == hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    _, expected_fixtures_sha256 = harness.load_external_fixtures(fixtures_path)
+    assert row["external_fixtures_sha256"] == expected_fixtures_sha256
+
+
+def test_run_accuracy_external_category_average_is_arithmetic_mean_of_clips(
+    tmp_path: Path,
+) -> None:
+    """カテゴリ metrics の平均が、異なる精度の 2 clip で真の算術平均になること。"""
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path,
+        {
+            "clip001": (_CLIP001_TIMES, _CLIP001_FREQS),
+            "clip002": (_CLIP002_TIMES, _CLIP002_FREQS),
+        },
+    )
+
+    def _runner(audio_path: str, route) -> Tuple[MelodyObservation, Dict[str, Any]]:
+        clip_id = Path(audio_path).stem
+        # clip001 は無シフト（高精度）、clip002 は 500 cent ずらす（低精度）。
+        shift = 0.0 if clip_id == "clip001" else 500.0
+        return _make_fake_external_runner(
+            {
+                "clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS)),
+                "clip002": (tuple(_CLIP002_TIMES), tuple(_CLIP002_FREQS)),
+            },
+            shift_cents=shift,
+        )(audio_path, route)
+
+    report = _fake_run(
+        categories=("V_direct",),
+        route_runner=_runner,
+        external_manifest_path=manifest_path,
+        external_fixtures_path=fixtures_path,
+    )
+    row = report["categories"]["V_direct"]
+    clip_rpas = [c["metrics"]["raw_pitch_accuracy"] for c in row["clips"]]
+    assert row["metrics"]["raw_pitch_accuracy"] == pytest.approx(sum(clip_rpas) / len(clip_rpas))
+    assert clip_rpas[0] > clip_rpas[1]  # clip001（無シフト）> clip002（500 cent ずれ）
+
+
+def test_evaluate_m2_bars_applies_v_direct_bar_pass(tmp_path: Path) -> None:
+    """(b) evaluate で V_direct バーが機械適用される（pass 側: 無シフトで min_rpa を満たす）。"""
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    runner = _make_fake_external_runner(
+        {"clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS))}, shift_cents=0.0
+    )
+    reports = [
+        _fake_run(
+            categories=("V_direct",),
+            route_runner=runner,
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+        )
+        for _ in range(2)
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    verdict = harness.evaluate_m2_bars(
+        [_as_report_artifact(r) for r in reports],
+        bars,
+        bars_sha256=bars_sha256,
+        external_fixtures_path=fixtures_path,
+    )
+    v_direct = verdict["categories"]["V_direct"]
+    assert v_direct["status"] == "pass", v_direct
+    assert v_direct["repeats_bit_identical"] is True
+    assert v_direct["clip_ids"] == ["clip001"]
+
+
+def test_evaluate_m2_bars_applies_v_direct_bar_fail(tmp_path: Path) -> None:
+    """(b) evaluate で V_direct バーが機械適用される（fail 側: 500 cent ずれで min_rpa 割れ）。"""
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    runner = _make_fake_external_runner(
+        {"clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS))}, shift_cents=500.0
+    )
+    reports = [
+        _fake_run(
+            categories=("V_direct",),
+            route_runner=runner,
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+        )
+        for _ in range(2)
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    verdict = harness.evaluate_m2_bars(
+        [_as_report_artifact(r) for r in reports],
+        bars,
+        bars_sha256=bars_sha256,
+        external_fixtures_path=fixtures_path,
+    )
+    v_direct = verdict["categories"]["V_direct"]
+    assert v_direct["status"] == "fail", v_direct
+    assert v_direct["failures"]
+
+
+def test_evaluate_m2_bars_v_direct_clips_bit_identical_across_repeats(tmp_path: Path) -> None:
+    """(d) clips の repeats bit 一致判定。"""
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    runner = _make_fake_external_runner(
+        {"clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS))}, shift_cents=0.0
+    )
+    reports = [
+        _fake_run(
+            categories=("V_direct",),
+            route_runner=runner,
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+        )
+        for _ in range(2)
+    ]
+    assert reports[0]["categories"]["V_direct"]["clips"] == reports[1]["categories"]["V_direct"]["clips"]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    verdict = harness.evaluate_m2_bars(
+        [_as_report_artifact(r) for r in reports],
+        bars,
+        bars_sha256=bars_sha256,
+        external_fixtures_path=fixtures_path,
+    )
+    assert verdict["categories"]["V_direct"]["repeats_bit_identical"] is True
+
+
+def test_evaluate_m2_bars_v_direct_clips_not_bit_identical_fails(tmp_path: Path) -> None:
+    """clips が repeats 間で bit 一致しなければ fail（平均化で相殺されうる乖離も検出する）。"""
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    refs = {"clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS))}
+    report1 = _fake_run(
+        categories=("V_direct",),
+        route_runner=_make_fake_external_runner(refs, shift_cents=0.0),
+        external_manifest_path=manifest_path,
+        external_fixtures_path=fixtures_path,
+    )
+    report2 = _fake_run(
+        categories=("V_direct",),
+        route_runner=_make_fake_external_runner(refs, shift_cents=5.0),
+        external_manifest_path=manifest_path,
+        external_fixtures_path=fixtures_path,
+    )
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    verdict = harness.evaluate_m2_bars(
+        [_as_report_artifact(report1), _as_report_artifact(report2)],
+        bars,
+        bars_sha256=bars_sha256,
+        external_fixtures_path=fixtures_path,
+    )
+    v_direct = verdict["categories"]["V_direct"]
+    assert v_direct["repeats_bit_identical"] is False
+    assert v_direct["status"] == "fail"
+    assert any("diverge" in f for f in v_direct["failures"])
+
+
+def test_run_accuracy_external_category_requires_manifest() -> None:
+    """(c) fail-closed: manifest 欠落。"""
+    with pytest.raises(ValueError, match="external_manifest_path"):
+        harness.run_accuracy(categories=("V_direct",))
+
+
+def test_run_accuracy_external_category_rejects_empty_fixtures(tmp_path: Path) -> None:
+    """(c) fail-closed: fixtures 空。"""
+    manifest_path, _unused_fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    empty_fixtures_path = _write_empty_external_fixtures(tmp_path)
+    with pytest.raises(ValueError, match="fixtures が空"):
+        harness.run_accuracy(
+            categories=("V_direct",),
+            route_runner=_make_fake_external_runner(
+                {"clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS))}
+            ),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=empty_fixtures_path,
+        )
+
+
+def test_run_accuracy_external_category_rejects_unregistered_clip_id(tmp_path: Path) -> None:
+    """(c) fail-closed: manifest の clip id が fixtures 未登録。"""
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    # manifest を書き換え、fixtures に無い id を参照させる（ファイル自体は既存のまま）。
+    entries = json.loads(manifest_path.read_text(encoding="utf-8"))
+    entries[0]["id"] = "unregistered_clip"
+    manifest_path.write_text(json.dumps(entries), encoding="utf-8")
+    with pytest.raises(ValueError, match="事前登録されていない"):
+        harness.run_accuracy(
+            categories=("V_direct",),
+            route_runner=_make_fake_external_runner(
+                {"unregistered_clip": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS))}
+            ),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+        )
+
+
+def test_run_accuracy_external_category_rejects_audio_sha_mismatch(tmp_path: Path) -> None:
+    """(c) fail-closed: audio sha256 不一致。"""
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    # 登録済み expected_audio_sha256 を書き換えて不一致を起こす。
+    corrupted = fixtures_path.read_text(encoding="utf-8").replace(
+        _EXTERNAL_AUDIO_SHA256, "0" * 64
+    )
+    fixtures_path.write_text(corrupted, encoding="utf-8")
+    with pytest.raises(ValueError, match="audio sha256 mismatch"):
+        harness.run_accuracy(
+            categories=("V_direct",),
+            route_runner=_make_fake_external_runner(
+                {"clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS))}
+            ),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+        )
+
+
+def test_run_accuracy_external_category_rejects_annotation_sha_mismatch(tmp_path: Path) -> None:
+    """(c) fail-closed: annotation sha256 不一致。"""
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    expected_fixtures, _ = harness.load_external_fixtures(fixtures_path)
+    real_annotation_sha256 = expected_fixtures["fixtures"]["clip001"]["expected_annotation_sha256"]
+    corrupted = fixtures_path.read_text(encoding="utf-8").replace(
+        real_annotation_sha256, "1" * 64
+    )
+    fixtures_path.write_text(corrupted, encoding="utf-8")
+    with pytest.raises(ValueError, match="annotation sha256 mismatch"):
+        harness.run_accuracy(
+            categories=("V_direct",),
+            route_runner=_make_fake_external_runner(
+                {"clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS))}
+            ),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+        )
+
+
+def test_run_accuracy_external_category_rejects_path_escape(tmp_path: Path) -> None:
+    """(c) fail-closed: manifest entry のパスが manifest ディレクトリ外を指す。"""
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    entries = json.loads(manifest_path.read_text(encoding="utf-8"))
+    entries[0]["audio_path"] = "../outside.wav"
+    manifest_path.write_text(json.dumps(entries), encoding="utf-8")
+    with pytest.raises(ValueError, match="manifest 位置基準で解決できない"):
+        harness.run_accuracy(
+            categories=("V_direct",),
+            route_runner=_make_fake_external_runner(
+                {"clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS))}
+            ),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+        )
+
+
+def test_run_accuracy_external_category_rejects_absolute_manifest_path(tmp_path: Path) -> None:
+    """(c) fail-closed: manifest entry のパスが絶対パス。"""
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    entries = json.loads(manifest_path.read_text(encoding="utf-8"))
+    entries[0]["audio_path"] = str((tmp_path / "external" / "clip001.wav").resolve())
+    manifest_path.write_text(json.dumps(entries), encoding="utf-8")
+    with pytest.raises(ValueError, match="manifest 位置基準で解決できない"):
+        harness.run_accuracy(
+            categories=("V_direct",),
+            route_runner=_make_fake_external_runner(
+                {"clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS))}
+            ),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+        )
+
+
+def test_s_categories_still_default_and_unaffected_by_v_direct_addition() -> None:
+    """(e) S カテゴリの既定動作・row 形状は V_direct 追加の影響を受けない（回帰確認）。"""
+    report = _fake_run(route_runner=_make_fake_runner(shift_cents=10.0))
+    assert set(report["categories"]) == {"S_direct", "S_fullstack"}
+    for category, row in report["categories"].items():
+        assert "clips" not in row
+        assert row["outcome"] == "measured"

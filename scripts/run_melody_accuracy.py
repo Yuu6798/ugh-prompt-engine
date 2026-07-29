@@ -2533,6 +2533,7 @@ import soundfile as sf  # noqa: E402
 import yaml  # noqa: E402
 from build_melody_bench import build_signal  # noqa: E402
 
+from svp_rpe.arrange.pathsafe import PathConfinementError, resolve_confined  # noqa: E402
 from svp_rpe.melody.accuracy import (  # noqa: E402
     DEFAULT_TOLERANCE_CENTS,
     MelodyAccuracyResult,
@@ -2657,6 +2658,12 @@ def _runtime_input_paths() -> "set[Path]":
 
 SPECS_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2_accuracy_specs.yaml"
 BARS_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2_accuracy_bars.yaml"
+# M2c: カテゴリ V（実声・外部素材）の事前登録 content pin。`m2_accuracy_bars.yaml` /
+# `m2_accuracy_specs.yaml` とは意図的に別ファイル（同ファイル冒頭コメント参照・
+# registry.yaml 系の凍結チェーンを外部素材の追記で drift させないため）。
+EXTERNAL_FIXTURES_PATH = (
+    ROOT / "tests" / "fixtures" / "melody_bench" / "m2c_external_fixtures.yaml"
+)
 
 _EXPECTED_BARS_SCHEMA = "m2-accuracy-bars/0.1"
 # run report 自身のスキーマ discriminator。report の形が変わっても現在検査している
@@ -2668,6 +2675,8 @@ _EXPECTED_SPECS_SCHEMA = "m2-accuracy-specs/0.1"
 # publish される verdict 自身の discriminator。保存済み verdict を後から読む側が、
 # 新形式/非互換形式を fail-closed で拒否できるようにする（Codex P2）。
 _EXPECTED_VERDICT_SCHEMA = "m2-accuracy-verdict/0.1"
+# 外部素材の事前登録 pin ファイルのスキーマ discriminator（M2c、同じ規律）。
+_EXPECTED_EXTERNAL_FIXTURES_SCHEMA = "m2c-external-fixtures/0.1"
 
 # バーを持たず「診断記録のみ」で良いカテゴリ（設計 §3/§8: Demucs は合成音色に対し
 # 分布外なので S_fullstack の低値を理由に crepe を責めない）。**この集合の外の
@@ -2680,6 +2689,10 @@ _DIAGNOSTIC_ONLY_CATEGORIES: "frozenset[str]" = frozenset({"S_fullstack"})
 # ゲート付きカテゴリは loader が fail-closed で拒否する。
 _REQUIRED_BAR_KEYS_BY_CATEGORY: Dict[str, Tuple[str, ...]] = {
     "S_direct": ("min_rpa", "max_vfa"),
+    # M2c: V_direct（実声・分離なし）は S_direct と同じ「抽出器の健全性バー」の
+    # 精神だが、正解が外部注釈（自動生成ではない）なので max_vfa は事前登録しない
+    # （設計 Memo M2c・m2_accuracy_bars.yaml の V_direct 節参照）。
+    "V_direct": ("min_rpa", "max_octave_gap"),
 }
 
 # カテゴリ → (fixture/composite id, select_routes 用 input_kind, 期待する route 名)。
@@ -2700,6 +2713,17 @@ _CATEGORY_SPECS: Dict[str, Dict[str, str]] = {
         "composite_id": "m2_s_fullstack_mix",
         "input_kind": "full_mix",
         "route_name": "demucs_vocals_then_crepe",
+    },
+    # M2c: V_direct（実声・分離なし）は合成 spec ではなく `--external-manifest` が
+    # 指す外部素材（音声 + 注釈 CSV）に対して測る。`kind: "external"` の row は
+    # fixture_id/composite_id を持たず、`_build_category_waveform` /
+    # `_reference_for_category` の対象外（呼び出し側で kind 分岐する）。
+    # (input_kind, route) は S_direct と同一 — crepe_direct 経路自体は入力の
+    # 音楽的内容（合成旋律 vs 実声）を知らないため転用できる（設計 Memo M2c）。
+    "V_direct": {
+        "kind": "external",
+        "input_kind": "clear_lead",
+        "route_name": "crepe_direct",
     },
 }
 
@@ -3262,6 +3286,51 @@ def load_bars(path: Path = BARS_PATH) -> Tuple[BarsArtifact, str]:
     return BarsArtifact(bars, sha256, data), sha256
 
 
+def _require_valid_external_fixture_entry(clip_id: Any, entry: Any, *, where: str) -> None:
+    """`m2c_external_fixtures.yaml` の 1 fixture entry を検証する（fail-closed）。"""
+    if not isinstance(clip_id, str) or not clip_id:
+        raise ValueError(f"{where}: clip id {clip_id!r} が非空文字列でない (fail-closed)")
+    if not isinstance(entry, dict):
+        raise ValueError(f"{where}: fixtures[{clip_id!r}] が mapping でない (fail-closed)")
+    for key in ("expected_audio_sha256", "expected_annotation_sha256"):
+        value = entry.get(key)
+        if not _is_sha256(value):
+            raise ValueError(
+                f"{where}: fixtures[{clip_id!r}].{key} {value!r} が真の sha256（64 桁 "
+                "lowercase hex）でない (fail-closed)"
+            )
+
+
+def load_external_fixtures(path: Path = EXTERNAL_FIXTURES_PATH) -> Tuple[Dict[str, Any], str]:
+    """`m2c_external_fixtures.yaml` を single read で (parsed dict, sha256) として返す。
+
+    `load_bars` / `load_specs` と同じ read → hash → parse の単一操作規律。M2c-1 時点
+    では `fixtures` が空 dict でも正当（実データは M2c-2 で追記登録する）——空自体は
+    ここでは拒否せず、V_direct を要求する run/evaluate 側が「登録済み clip が無い」
+    ことを fail-closed で検出する。
+    """
+    data = Path(path).read_bytes()
+    fixtures_doc = _yaml_load_no_dup_keys(data, what="m2c_external_fixtures.yaml")
+    version = fixtures_doc.get("schema_version")
+    if version != _EXPECTED_EXTERNAL_FIXTURES_SCHEMA:
+        raise ValueError(
+            f"unsupported m2c_external_fixtures schema_version {version!r}; "
+            f"expected {_EXPECTED_EXTERNAL_FIXTURES_SCHEMA!r} (fail-closed)"
+        )
+    _parse_registered_utc(fixtures_doc.get("registered_utc"), where="m2c_external_fixtures.yaml")
+    fixtures = fixtures_doc.get("fixtures")
+    if not isinstance(fixtures, dict):
+        raise ValueError(
+            "m2c_external_fixtures.yaml: 'fixtures' が mapping でない (fail-closed)"
+        )
+    for clip_id, entry in fixtures.items():
+        _require_valid_external_fixture_entry(
+            clip_id, entry, where="m2c_external_fixtures.yaml"
+        )
+    sha256 = hashlib.sha256(data).hexdigest()
+    return fixtures_doc, sha256
+
+
 # バー閾値の値域。`min_*` は下限、`max_*` は上限として judge 側で使う。
 _BAR_THRESHOLD_RANGES: Dict[str, Tuple[float, float]] = {
     "min_rpa": (0.0, 1.0),
@@ -3602,6 +3671,325 @@ def _select_named_route(input_kind: str, route_name: str) -> MelodyRoute:
     )
 
 
+# ---------------------------------------------------------------------------
+# M2c: 外部素材（音声 + 注釈 CSV）manifest。カテゴリ V_direct 専用。
+# ---------------------------------------------------------------------------
+
+
+def _load_external_manifest(path: "str | Path") -> Tuple[List[Dict[str, Any]], str, Path]:
+    """外部素材 manifest（JSON 配列）を single read で読み、entries と束ねて返す。
+
+    manifest は `[{id, audio_path, annotation_path}, ...]`。read → hash → parse を
+    1 操作にまとめる（`load_bars`/`load_specs` と同じ TOCTOU 回避規律）。id は
+    manifest 内で相互に distinct でなければならない。
+    """
+    manifest_path = Path(path).resolve()
+    data = manifest_path.read_bytes()
+    manifest_sha256 = hashlib.sha256(data).hexdigest()
+    entries = _json_loads_no_dup_keys(data, what="external manifest")
+    if not isinstance(entries, list) or not entries:
+        raise ValueError(
+            "external manifest: 非空の JSON 配列でなければならない (fail-closed)"
+        )
+    seen_ids: "set[str]" = set()
+    for idx, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise ValueError(f"external manifest[{idx}]: mapping でない (fail-closed)")
+        for key in ("id", "audio_path", "annotation_path"):
+            value = entry.get(key)
+            if not isinstance(value, str) or not value:
+                raise ValueError(
+                    f"external manifest[{idx}].{key} {value!r} が非空文字列でない "
+                    "(fail-closed)"
+                )
+        clip_id = entry["id"]
+        if clip_id in seen_ids:
+            raise ValueError(
+                f"external manifest: duplicate clip id {clip_id!r} (fail-closed)"
+            )
+        seen_ids.add(clip_id)
+    return entries, manifest_sha256, manifest_path
+
+
+def _resolve_external_member_path(manifest_dir: Path, value: str, *, what: str) -> Path:
+    """manifest entry のパスを manifest 位置基準で解決する（既存 pathsafe 流儀）。
+
+    `svp_rpe.arrange.pathsafe.resolve_confined` を使い、絶対パス・ディレクトリ脱出
+    （`..` によるものだけでなくシンボリックリンク経由の脱出も含む）を fail-closed で
+    拒否する。
+    """
+    try:
+        return resolve_confined(value, manifest_dir)
+    except PathConfinementError as exc:
+        raise ValueError(
+            f"external manifest: {what} {value!r} を manifest 位置基準で解決できない "
+            f"（{exc.reason}）; manifest ディレクトリ外を指すパスは許容しない "
+            "(fail-closed)"
+        ) from exc
+
+
+def _parse_external_annotation_csv(raw: bytes, *, clip_id: str) -> Tuple[Tuple[float, ...], Tuple[float, ...]]:
+    """外部注釈 CSV を (times_sec, freqs_hz) へ変換する（ネイティブタイムラインのまま）。
+
+    1 列目 time_sec・2 列目 frequency_hz（3 列目以降は無視）。周波数が非有限または
+    0 以下（無声を表す一般的な慣例: 0 / 負値）のフレームは無声 = 0.0 へ正規化する。
+    10ms へのリサンプルは行わない——設計 §2 追記（M2c）: 「外部注釈はネイティブ
+    タイムラインのまま評価する（mir_eval が est を ref 基準へ整列。リサンプル補間と
+    いう新たな pin 対象を作らない。10ms 規約は合成正解の導出形式）」。
+    """
+    import io
+
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(
+            f"external annotation for clip {clip_id!r}: UTF-8 として decode できない "
+            "(fail-closed)"
+        ) from exc
+    data = np.genfromtxt(io.StringIO(text), delimiter=",", dtype=float, ndmin=2)
+    if data.size == 0 or data.ndim != 2 or data.shape[1] < 2:
+        raise ValueError(
+            f"external annotation for clip {clip_id!r}: 空、または 2 列（time_sec, "
+            "frequency_hz）未満の CSV (fail-closed)"
+        )
+    times = data[:, 0]
+    freqs = data[:, 1]
+    if not np.all(np.isfinite(times)):
+        raise ValueError(
+            f"external annotation for clip {clip_id!r}: time_sec に非有限値がある "
+            "(fail-closed)"
+        )
+    normalized_freqs = np.where(np.isfinite(freqs) & (freqs > 0.0), freqs, 0.0)
+    return (
+        tuple(float(t) for t in times),
+        tuple(float(f) for f in normalized_freqs),
+    )
+
+
+def _build_external_clip_row(
+    clip_id: str,
+    entry: Dict[str, Any],
+    *,
+    manifest_dir: Path,
+    fixtures: Dict[str, Any],
+    tolerance_cents: float,
+    est_voiced_floor: float,
+    route: MelodyRoute,
+    runner: RouteRunner,
+    tmp_dir: Path,
+) -> Dict[str, Any]:
+    """1 clip の外部素材を測り、per-clip row（設計 Memo M2c）を返す。"""
+    if clip_id not in fixtures:
+        raise ValueError(
+            f"external manifest: clip id {clip_id!r} が m2c_external_fixtures.yaml に "
+            "事前登録されていない (fail-closed)"
+        )
+    expected = fixtures[clip_id]
+
+    audio_path = _resolve_external_member_path(manifest_dir, entry["audio_path"], what="audio_path")
+    annotation_path = _resolve_external_member_path(
+        manifest_dir, entry["annotation_path"], what="annotation_path"
+    )
+
+    # 単一 read_bytes → sha256 計算 → fail-closed 照合（設計 Memo M2c）。
+    audio_bytes = audio_path.read_bytes()
+    audio_sha256 = hashlib.sha256(audio_bytes).hexdigest()
+    if audio_sha256 != expected["expected_audio_sha256"]:
+        raise ValueError(
+            f"external clip {clip_id!r}: audio sha256 mismatch ({audio_sha256} != "
+            f"registered {expected['expected_audio_sha256']}) (fail-closed)"
+        )
+    annotation_bytes = annotation_path.read_bytes()
+    annotation_sha256 = hashlib.sha256(annotation_bytes).hexdigest()
+    if annotation_sha256 != expected["expected_annotation_sha256"]:
+        raise ValueError(
+            f"external clip {clip_id!r}: annotation sha256 mismatch ({annotation_sha256} "
+            f"!= registered {expected['expected_annotation_sha256']}) (fail-closed)"
+        )
+
+    ref_times, ref_freqs = _parse_external_annotation_csv(annotation_bytes, clip_id=clip_id)
+
+    row: Dict[str, Any] = {
+        "clip_id": clip_id,
+        "audio_sha256": audio_sha256,
+        "annotation_sha256": annotation_sha256,
+        "ref_frame_count": len(ref_times),
+        "ref_voiced_frame_count": sum(1 for f in ref_freqs if f > 0.0),
+    }
+
+    suffix = audio_path.suffix or ".wav"
+    frozen_wav_path = tmp_dir / f"{clip_id}{suffix}"
+    frozen_wav_path.write_bytes(audio_bytes)
+    os.chmod(frozen_wav_path, 0o400)
+    wav_fd = os.open(frozen_wav_path, os.O_RDONLY)
+    try:
+        pre_sha256 = _sha256_of_fd(wav_fd)
+        if pre_sha256 != audio_sha256:
+            raise RuntimeError(
+                f"external clip {clip_id!r}: 凍結コピーの hash が読み込んだ bytes と "
+                "不一致 (fail-closed)"
+            )
+        try:
+            observation, route_provenance = runner(str(frozen_wav_path), route)
+        except LearnedModelUnavailable as exc:
+            row["outcome"] = "unavailable"
+            row["detail"] = str(exc).splitlines()[0]
+            return row
+        post_sha256 = _sha256_of_fd(wav_fd)
+        if post_sha256 != pre_sha256:
+            raise RuntimeError(
+                f"external clip {clip_id!r}: 抽出中に入力音声が差し替えられた "
+                f"（{pre_sha256} → {post_sha256}）; 測っていない bytes の正解に対する "
+                "採点を publish しない (fail-closed)"
+            )
+    finally:
+        os.close(wav_fd)
+
+    est_freqs = _est_freqs_with_voicing(observation, confidence_floor=est_voiced_floor)
+    metrics: MelodyAccuracyResult = evaluate_melody_accuracy(
+        ref_times,
+        ref_freqs,
+        observation.frame_times,
+        est_freqs,
+        tolerance_cents=tolerance_cents,
+    )
+    row["outcome"] = "measured"
+    row["metrics"] = metrics.to_dict()
+    row["est_frame_count"] = len(est_freqs)
+    row["est_voiced_frame_count"] = sum(1 for f in est_freqs if f > 0.0)
+    row["source_model"] = observation.source_model
+    for key, value in route_provenance.items():
+        row[f"provenance_{key}"] = value
+    return row
+
+
+def _average_external_clip_metrics(clip_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """measured clip 群の per-metric 算術平均（設計 Memo M2c: カテゴリ metrics）。
+
+    `tolerance_cents` は clip 間で共通の定数（run 全体で 1 つの許容幅）のはずなので
+    平均ではなく一致を要求する。`median_cent_error` は該当フレーム 0 件の clip
+    （None）を平均から除く——全 clip が None なら結果も None。
+    `voiced_chroma_correct_frame_count` は算術平均を float のまま保持する（カテゴリ
+    レベルの記録値であり、S カテゴリの「厳密整数」契約とは別の集計値）。
+    """
+    if not clip_rows:
+        raise ValueError("_average_external_clip_metrics: clip_rows が空 (fail-closed)")
+    tolerances = {float(c["metrics"]["tolerance_cents"]) for c in clip_rows}
+    if len(tolerances) > 1:
+        raise ValueError(
+            f"_average_external_clip_metrics: clip 間で tolerance_cents が不一致 "
+            f"{sorted(tolerances)} (fail-closed)"
+        )
+    averaged: Dict[str, Any] = {"tolerance_cents": next(iter(tolerances))}
+    numeric_keys = (
+        "raw_pitch_accuracy",
+        "raw_chroma_accuracy",
+        "octave_gap",
+        "voicing_recall",
+        "voicing_false_alarm",
+        "overall_accuracy",
+        "voiced_chroma_correct_frame_count",
+    )
+    for key in numeric_keys:
+        values = [float(c["metrics"][key]) for c in clip_rows]
+        averaged[key] = sum(values) / len(values)
+    median_values = [
+        float(c["metrics"]["median_cent_error"])
+        for c in clip_rows
+        if c["metrics"]["median_cent_error"] is not None
+    ]
+    averaged["median_cent_error"] = (
+        sum(median_values) / len(median_values) if median_values else None
+    )
+    return averaged
+
+
+def _run_external_category(
+    category: str,
+    category_spec: Dict[str, str],
+    *,
+    external_manifest_path: Path,
+    external_fixtures_path: Path,
+    tolerance_cents: float,
+    est_voiced_floor: float,
+    route: MelodyRoute,
+    runner: RouteRunner,
+    tmp_dir: Path,
+) -> Dict[str, Any]:
+    """カテゴリ V（外部素材）1 本の run report row を作る（設計 Memo M2c）。"""
+    fixtures_doc, fixtures_sha256 = load_external_fixtures(external_fixtures_path)
+    fixtures = fixtures_doc["fixtures"]
+    if not fixtures:
+        raise ValueError(
+            f"run_accuracy: category {category!r} を要求したが "
+            f"{external_fixtures_path} の fixtures が空; 事前登録済み clip なしに "
+            "外部素材カテゴリを測らない (fail-closed)"
+        )
+
+    entries, manifest_sha256, manifest_path = _load_external_manifest(external_manifest_path)
+    manifest_dir = manifest_path.parent
+
+    clip_rows: List[Dict[str, Any]] = []
+    for entry in sorted(entries, key=lambda e: e["id"]):
+        clip_row = _build_external_clip_row(
+            entry["id"],
+            entry,
+            manifest_dir=manifest_dir,
+            fixtures=fixtures,
+            tolerance_cents=tolerance_cents,
+            est_voiced_floor=est_voiced_floor,
+            route=route,
+            runner=runner,
+            tmp_dir=tmp_dir,
+        )
+        clip_rows.append(clip_row)
+
+    row: Dict[str, Any] = {
+        "route": route.name,
+        "extractor": route.extractor,
+        "input_kind": category_spec["input_kind"],
+        "external_manifest_sha256": manifest_sha256,
+        "external_manifest_path_relative": _repo_relative_path(manifest_path),
+        "external_fixtures_sha256": fixtures_sha256,
+    }
+
+    unavailable = [c for c in clip_rows if c.get("outcome") == "unavailable"]
+    if unavailable:
+        # 1 clip でも抽出器スタック未導入で unavailable なら、カテゴリ全体を
+        # unavailable として記録する（S カテゴリの route 単位 unavailable と対称）。
+        row["outcome"] = "unavailable"
+        row["detail"] = unavailable[0]["detail"]
+        row["clips"] = clip_rows
+        return row
+
+    row["outcome"] = "measured"
+    row["clips"] = clip_rows
+    row["metrics"] = _average_external_clip_metrics(clip_rows)
+    row["ref_frame_count"] = sum(c["ref_frame_count"] for c in clip_rows)
+    row["ref_voiced_frame_count"] = sum(c["ref_voiced_frame_count"] for c in clip_rows)
+    row["est_frame_count"] = sum(c["est_frame_count"] for c in clip_rows)
+    row["est_voiced_frame_count"] = sum(c["est_voiced_frame_count"] for c in clip_rows)
+    row["source_model"] = clip_rows[0]["source_model"]
+    for key in ("provenance_extractor_weights_sha256", "provenance_extractor_code_sha256"):
+        values = {c.get(key) for c in clip_rows}
+        if len(values) > 1:
+            raise RuntimeError(
+                f"run_accuracy: category {category!r} の clips が {key} で不一致 "
+                f"{sorted(v for v in values if v is not None)}; 同一 run 内で抽出器の "
+                "重み/コードが変わった (fail-closed)"
+            )
+        row[key] = clip_rows[0].get(key)
+    preprocessing_values = {json.dumps(c.get("provenance_preprocessing"), sort_keys=True) for c in clip_rows}
+    if len(preprocessing_values) > 1:
+        raise RuntimeError(
+            f"run_accuracy: category {category!r} の clips が provenance_preprocessing で "
+            "不一致 (fail-closed)"
+        )
+    if "provenance_preprocessing" in clip_rows[0]:
+        row["provenance_preprocessing"] = clip_rows[0]["provenance_preprocessing"]
+    return row
+
+
 def _runtime_package_names() -> "Tuple[str, ...]":
     """本ハーネスの route が推論で実行しうる third-party パッケージ名（+ スコアラー）。
 
@@ -3808,8 +4196,10 @@ def run_accuracy(
     specs_path: Path = SPECS_PATH,
     bars_path: Path = BARS_PATH,
     tolerance_cents: Optional[float] = None,
+    external_manifest_path: Optional[Path] = None,
+    external_fixtures_path: Path = EXTERNAL_FIXTURES_PATH,
 ) -> Dict[str, Any]:
-    """カテゴリ S（合成正解つき）の精度 run を実行し report dict を返す。
+    """カテゴリ S（合成正解つき）+ カテゴリ V（外部素材、M2c）の精度 run を実行し report dict を返す。
 
     `route_runner` は抽出器非依存インターフェース: ``(audio_path, route) ->
     (MelodyObservation, provenance_dict)``。既定は
@@ -3819,7 +4209,9 @@ def run_accuracy(
     テストはこれをフェイク抽出器（決定論の f0 を返す）に差し替えて run/evaluate
     の二相メカニズムだけを検証する。
 
-    未知の `categories` 値は `_CATEGORY_SPECS` に無ければ fail-fast。
+    未知の `categories` 値は `_CATEGORY_SPECS` に無ければ fail-fast。`categories` に
+    `kind: "external"` のカテゴリ（M2c 現在は V_direct のみ）が含まれる場合、
+    `external_manifest_path` の指定が必須（未指定は fail-closed）。
     """
     bind_inference_code_pins()
     # 注入された runner は正解 F0 と「それらしい」hash を自由に返せる（テストの
@@ -3844,6 +4236,14 @@ def run_accuracy(
     unknown = [c for c in categories if c not in _CATEGORY_SPECS]
     if unknown:
         raise ValueError(f"unknown accuracy categories: {unknown}; expected one of {list(_CATEGORY_SPECS)}")
+
+    external_categories = [c for c in categories if _CATEGORY_SPECS[c]["kind"] == "external"]
+    if external_categories and external_manifest_path is None:
+        raise ValueError(
+            f"run_accuracy: category(s) {external_categories} require external_manifest_path "
+            "(CLI: --external-manifest); 外部素材カテゴリを manifest なしに測らない "
+            "(fail-closed)"
+        )
 
     effective_tolerance = (
         tolerance_cents
@@ -3887,6 +4287,30 @@ def run_accuracy(
     with tempfile.TemporaryDirectory(prefix="melody-accuracy-") as tmp:
         for category in categories:
             category_spec = _CATEGORY_SPECS[category]
+
+            if category_spec["kind"] == "external":
+                # M2c: 外部素材カテゴリ（合成でなく `--external-manifest` が指す
+                # 実ファイル）。S カテゴリの specs 由来波形合成とは完全に別経路。
+                route = _select_named_route(
+                    category_spec["input_kind"], category_spec["route_name"]
+                )
+                assert external_manifest_path is not None  # 上で fail-closed 済み
+                row = _run_external_category(
+                    category,
+                    category_spec,
+                    external_manifest_path=external_manifest_path,
+                    external_fixtures_path=external_fixtures_path,
+                    tolerance_cents=effective_tolerance,
+                    est_voiced_floor=est_voiced_floor,
+                    route=route,
+                    runner=runner,
+                    tmp_dir=Path(tmp),
+                )
+                results["categories"][category] = row
+                if row.get("outcome") == "measured":
+                    _require_scorer_native_unchanged_since_bind()
+                continue
+
             y, sr, waveform_sha256 = _build_category_waveform(category, category_spec, specs, bars)
             wav_path = Path(tmp) / f"{category}.wav"
             wav_path.write_bytes(_serialize_wav_float32(y, sr))
@@ -4515,6 +4939,40 @@ def _reverify_category_measurement(
     specs_raw: bytes,
     repeats: int,
     verification_runner: Optional[RouteRunner] = None,
+    external_manifest_path: Optional[Path] = None,
+    external_fixtures_path: Path = EXTERNAL_FIXTURES_PATH,
+) -> None:
+    """`category` の kind に応じて S（specs 由来合成）/ V（外部素材、M2c）の測り直しへ振り分ける。
+
+    S カテゴリの挙動・シグネチャは変更しない。M2c で追加した外部素材カテゴリは
+    `_reverify_external_category_measurement` へ委譲する（`--external-manifest` が
+    評価に渡されていなければ fail-closed）。
+    """
+    category_spec = _CATEGORY_SPECS[category]
+    if category_spec["kind"] == "external":
+        _reverify_external_category_measurement(
+            category,
+            rows,
+            repeats=repeats,
+            verification_runner=verification_runner,
+            external_manifest_path=external_manifest_path,
+            external_fixtures_path=external_fixtures_path,
+        )
+        return
+    _reverify_direct_or_fullstack_category_measurement(
+        category, rows, bars=bars, specs_raw=specs_raw, repeats=repeats,
+        verification_runner=verification_runner,
+    )
+
+
+def _reverify_direct_or_fullstack_category_measurement(
+    category: str,
+    rows: List[Dict[str, Any]],
+    *,
+    bars: "BarsArtifact",
+    specs_raw: bytes,
+    repeats: int,
+    verification_runner: Optional[RouteRunner] = None,
 ) -> None:
     """評価器自身が同じ凍結 fixture を **`repeats` 回独立に測り直し**、bit 一致を要求する。
 
@@ -4648,6 +5106,132 @@ def _reverify_category_measurement(
             )
 
 
+def _run_external_verification_in_fresh_process(
+    category: str,
+    index: int,
+    *,
+    tmp_dir: Path,
+    external_manifest_path: Path,
+    expected_specs_sha256: str,
+) -> Dict[str, Any]:
+    """外部素材カテゴリ（M2c）の測り直し 1 回分を新規プロセス（素の CLI run）で実行する。
+
+    `_run_verification_in_fresh_process`（S カテゴリ）と同型。manifest は評価器の
+    実パスをそのまま子へ渡す——manifest が指す音声/注釈は登録済み sha256 と run 側が
+    fail-closed で照合するため、TOCTOU（子の実行前に差し替え）は測定失敗
+    （sha256 mismatch）として顕在化し、偽の pass を静かに通さない。
+    """
+    report_path = tmp_dir / f"verification_ext_{index}.json"
+    command = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--out",
+        str(report_path),
+        "--categories",
+        category,
+        "--external-manifest",
+        str(Path(external_manifest_path).resolve()),
+    ]
+    env = dict(os.environ)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PYTHONPYCACHEPREFIX"] = str(tmp_dir / f"pyc-fresh-ext-{index}")
+    proc = subprocess.run(command, capture_output=True, text=True, env=env)
+    if proc.returncode != 0 or not report_path.is_file():
+        tail = " / ".join((proc.stderr or "").strip().splitlines()[-3:])
+        raise RuntimeError(
+            f"evaluate_m2_bars: category {category!r} の測り直しプロセスが失敗した "
+            f"(exit={proc.returncode}: {tail}); 評価環境で再実行できないため publish "
+            "しない (fail-closed)"
+        )
+    verification = load_report(report_path).data
+    _require_fresh_process_report_provenance(
+        verification, category, expected_specs_sha256=expected_specs_sha256
+    )
+    row = verification.get("categories", {}).get(category)
+    if not isinstance(row, dict):
+        raise RuntimeError(
+            f"evaluate_m2_bars: 測り直しプロセスの report に category {category!r} の "
+            "row が無い; 評価環境で再実行できないため publish しない (fail-closed)"
+        )
+    return row
+
+
+def _reverify_external_category_measurement(
+    category: str,
+    rows: List[Dict[str, Any]],
+    *,
+    repeats: int,
+    verification_runner: Optional[RouteRunner],
+    external_manifest_path: Optional[Path],
+    external_fixtures_path: Path,
+) -> None:
+    """外部素材カテゴリ（M2c）を評価器自身が `repeats` 回独立に測り直す。
+
+    `_reverify_direct_or_fullstack_category_measurement` と同じ「評価器自身の測り
+    直しとの bit 一致を publish 条件にする」設計だが、比較対象は `row["clips"]`
+    （per-clip 全体）——averaged `row["metrics"]` だけの比較では、平均化で相殺される
+    clip 単位の乖離を見逃す（設計 Memo M2c の repeats bit 一致要件）。
+
+    M2c-1 時点では `m2c_external_fixtures.yaml` の `fixtures` が空のため、V_direct を
+    含む run は `_run_external_category` の fail-closed（登録済み clip なし）で本関数
+    に到達する前に落ちる——実データは M2c-2 で登録する。
+    """
+    if repeats < 2:
+        raise ValueError(
+            f"_reverify_external_category_measurement: repeats {repeats!r} が 2 未満; "
+            "決定論確認は n>=2 の独立実行を要件とする (fail-closed)"
+        )
+    if external_manifest_path is None:
+        raise RuntimeError(
+            f"evaluate_m2_bars: category {category!r} は外部素材カテゴリだが "
+            "--external-manifest が評価に渡されていない; 測り直しによる検証なしで "
+            "report の metrics を publish しない (fail-closed)"
+        )
+    specs, specs_sha256 = load_specs(SPECS_PATH)
+    verification_rows: List[Dict[str, Any]] = []
+    with tempfile.TemporaryDirectory(prefix="m2c-reverify-") as tmp:
+        for index in range(repeats):
+            if verification_runner is not None:
+                verification = run_accuracy(
+                    categories=(category,),
+                    route_runner=verification_runner,
+                    external_manifest_path=external_manifest_path,
+                    external_fixtures_path=external_fixtures_path,
+                )
+                vrow = verification["categories"][category]
+            else:
+                vrow = _run_external_verification_in_fresh_process(
+                    category,
+                    index,
+                    tmp_dir=Path(tmp),
+                    external_manifest_path=external_manifest_path,
+                    expected_specs_sha256=specs_sha256,
+                )
+            if vrow.get("outcome") != "measured":
+                raise RuntimeError(
+                    f"evaluate_m2_bars: category {category!r} を評価環境で再実行できない "
+                    f"（outcome={vrow.get('outcome')!r}: {vrow.get('detail', '')}）; 測り直しに "
+                    "よる検証なしで report の metrics を publish しない (fail-closed)"
+                )
+            verification_rows.append(vrow)
+    _require_homogeneous_model_stack(category, rows + verification_rows)
+    verification_clip_lists = [vrow["clips"] for vrow in verification_rows]
+    if len({json.dumps(c, sort_keys=True) for c in verification_clip_lists}) > 1:
+        raise RuntimeError(
+            f"evaluate_m2_bars: category {category!r} の評価器自身による {repeats} 回の "
+            "測り直しが clip 単位で相互に bit 一致しない; 決定論契約がこの環境で成立して "
+            "いないため publish できない (fail-closed)"
+        )
+    expected_clips = verification_clip_lists[0]
+    for idx, row in enumerate(rows):
+        if row.get("clips") != expected_clips:
+            raise ValueError(
+                f"evaluate_m2_bars: category {category!r} rows[{idx}] の clips が "
+                "評価器自身の測り直しと bit 一致しない; 決定論パイプラインの下で再現しない "
+                "row を publish しない (fail-closed)"
+            )
+
+
 def _require_registered_row_identity(
     category: str, rows: List[Dict[str, Any]], bars: Dict[str, Any]
 ) -> None:
@@ -4694,6 +5278,136 @@ def _require_registered_row_identity(
                     f"{category!r} の row（別 fixture/別経路の観測、または編集済み "
                     "report）に凍結バーを適用しない (fail-closed)"
                 )
+
+
+def _require_registered_row_identity_external(
+    category: str,
+    rows: List[Dict[str, Any]],
+    external_fixtures_data: Dict[str, Any],
+    external_fixtures_sha256: str,
+) -> str:
+    """外部素材カテゴリ（M2c）の row 同一性を事前登録 fixtures と突き合わせる。
+
+    `_require_registered_row_identity`（S カテゴリ・単一 fixture 波形）の外部素材版:
+    row / clip の route・input_kind・audio/annotation sha256 を、evaluate 側が
+    独立にロードした `m2c_external_fixtures.yaml`（`external_fixtures_data`）と
+    突き合わせる。加えて repeats（複数 report）間で同一 manifest を測ったことも
+    要求する（別 manifest を混ぜた repeats を「同じ測定の再現」と数えない）。
+
+    戻り値は repeats 間で共通の `external_manifest_sha256`（cat_result 記録用）。
+    """
+    category_spec = _CATEGORY_SPECS.get(category)
+    if category_spec is None or category_spec["kind"] != "external":
+        raise ValueError(
+            f"evaluate_m2_bars: category {category!r} は外部素材カテゴリでない "
+            "(fail-closed)"
+        )
+    fixtures = external_fixtures_data.get("fixtures", {})
+    manifest_shas: "set[str]" = set()
+    for idx, row in enumerate(rows):
+        for field, expected in (
+            ("route", category_spec["route_name"]),
+            ("input_kind", category_spec["input_kind"]),
+        ):
+            actual = row.get(field)
+            if actual != expected:
+                raise ValueError(
+                    f"evaluate_m2_bars: category {category!r} rows[{idx}] の {field} "
+                    f"{actual!r} が事前登録値 {expected!r} と不一致 (fail-closed)"
+                )
+        if row.get("external_fixtures_sha256") != external_fixtures_sha256:
+            raise ValueError(
+                f"evaluate_m2_bars: category {category!r} rows[{idx}] の "
+                f"external_fixtures_sha256 {row.get('external_fixtures_sha256')!r} が "
+                f"評価器の読んだ {external_fixtures_sha256!r} と不一致; 別世代の外部素材 "
+                "登録で測った row に凍結バーを適用しない (fail-closed)"
+            )
+        manifest_sha = row.get("external_manifest_sha256")
+        if not isinstance(manifest_sha, str) or not manifest_sha:
+            raise ValueError(
+                f"evaluate_m2_bars: category {category!r} rows[{idx}] が "
+                "external_manifest_sha256 を欠く (fail-closed)"
+            )
+        manifest_shas.add(manifest_sha)
+
+        clips = row.get("clips")
+        if not isinstance(clips, list) or not clips:
+            raise ValueError(
+                f"evaluate_m2_bars: category {category!r} rows[{idx}] の clips が "
+                "非空リストでない (fail-closed)"
+            )
+        for clip_idx, clip in enumerate(clips):
+            clip_id = clip.get("clip_id")
+            expected_clip = fixtures.get(clip_id)
+            if expected_clip is None:
+                raise ValueError(
+                    f"evaluate_m2_bars: category {category!r} rows[{idx}].clips[{clip_idx}] "
+                    f"の clip_id {clip_id!r} が m2c_external_fixtures.yaml に事前登録 "
+                    "されていない (fail-closed)"
+                )
+            for field, key in (
+                ("audio_sha256", "expected_audio_sha256"),
+                ("annotation_sha256", "expected_annotation_sha256"),
+            ):
+                actual = clip.get(field)
+                expected = expected_clip[key]
+                if actual != expected:
+                    raise ValueError(
+                        f"evaluate_m2_bars: category {category!r} rows[{idx}]."
+                        f"clips[{clip_idx}] ({clip_id!r}) の {field} {actual!r} が "
+                        f"事前登録値 {expected!r} と不一致 (fail-closed)"
+                    )
+    if len(manifest_shas) > 1:
+        raise ValueError(
+            f"evaluate_m2_bars: category {category!r} の repeats が別 manifest を測っている "
+            f"{sorted(manifest_shas)}; 別 manifest の run を同じ測定の repeats と見なさない "
+            "(fail-closed)"
+        )
+    return next(iter(manifest_shas))
+
+
+def _require_external_clip_bounded_counts(category: str, rows: List[Dict[str, Any]]) -> None:
+    """外部素材カテゴリ（M2c）の clip 単位で誤差モデルの母数の自己整合性を検査する。
+
+    `_require_reference_bounded_counts`（S カテゴリ）と同じ関係式（有声かつ chroma
+    一致フレーム数 <= 有声フレーム数、RCA×有声フレーム数 == 母数）を検査するが、
+    上界は**凍結 spec からの独立再計算ではなく clip 自身の自己申告値**
+    （`ref_frame_count`/`ref_voiced_frame_count`、run 時に注釈 CSV から算出）を使う
+    ——外部注釈は evaluate 側が独立に読める「凍結 spec」を持たないため（設計 Memo
+    M2c: 注釈ファイルの hash 一致は run 時点の fail-closed 照合が担う）。それでも
+    内部的にありえない値（型・符号・関係式の破綻）は本関数が拒否する。
+    """
+    for row_idx, row in enumerate(rows):
+        for clip_idx, clip in enumerate(row.get("clips", [])):
+            where = f"category {category!r} rows[{row_idx}].clips[{clip_idx}] ({clip.get('clip_id')!r})"
+            frame_count = clip.get("ref_frame_count")
+            voiced_count = clip.get("ref_voiced_frame_count")
+            for field, value in (("ref_frame_count", frame_count), ("ref_voiced_frame_count", voiced_count)):
+                if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                    raise ValueError(
+                        f"evaluate_m2_bars: {where} の {field} {value!r} が非負整数でない "
+                        "(fail-closed)"
+                    )
+            if voiced_count > frame_count:
+                raise ValueError(
+                    f"evaluate_m2_bars: {where} の ref_voiced_frame_count {voiced_count} が "
+                    f"ref_frame_count {frame_count} を超える (fail-closed)"
+                )
+            count = int(clip["metrics"]["voiced_chroma_correct_frame_count"])
+            if count > voiced_count:
+                raise ValueError(
+                    f"evaluate_m2_bars: {where} の voiced_chroma_correct_frame_count "
+                    f"{count} が ref_voiced_frame_count {voiced_count} を超える (fail-closed)"
+                )
+            if voiced_count > 0:
+                rca = float(clip["metrics"]["raw_chroma_accuracy"])
+                implied = rca * voiced_count
+                if abs(count - implied) > 1e-6:
+                    raise ValueError(
+                        f"evaluate_m2_bars: {where} の voiced_chroma_correct_frame_count "
+                        f"{count} が raw_chroma_accuracy {rca!r} から復元される分子 "
+                        f"{implied:.4f} と一致しない (fail-closed)"
+                    )
 
 
 # 指標の値域（mir_eval の定義域）。閾値判定の前に有限性と範囲を検査する。
@@ -5287,8 +6001,15 @@ def evaluate_m2_bars(
     bars_sha256: str,
     specs_path: Path = SPECS_PATH,
     bars_path: Path = BARS_PATH,
+    external_manifest_path: Optional[Path] = None,
+    external_fixtures_path: Path = EXTERNAL_FIXTURES_PATH,
 ) -> Dict[str, Any]:
     """n>=`repeats_min` の run report に凍結バーを機械適用する（設計 §4/§6）。
+
+    M2c: `reports` に外部素材カテゴリ（`kind: "external"`、現在は V_direct のみ）が
+    含まれ、かつその測り直し（`_reverify_category_measurement`）が実体で動く場合
+    （テストの `_reverify_category_measurement` monkeypatch が無い場合）、
+    `external_manifest_path` の指定が必須（未指定は fail-closed）。
 
     - 各 report は非空 str の `run_id` を持ち、report 間で相互に distinct
       でなければならない（コピー由来の水増し repeats を fail-closed で拒否）。
@@ -5519,6 +6240,11 @@ def evaluate_m2_bars(
                 f"評価に使う spec {specs_sha256!r} と不一致; 別世代の合成仕様で測った row に "
                 "凍結バーを適用しない (fail-closed)"
             )
+    # M2c: 外部素材カテゴリ（V_direct）の事前登録 pin。specs と同じく report の
+    # カテゴリ構成に関わらず無条件にロードする（specs と対称・軽量）。
+    external_fixtures_data, external_fixtures_sha256 = load_external_fixtures(
+        external_fixtures_path
+    )
     generator_code_sha256 = _require_matching_generator_code(reports)
     tolerance_cents = _require_frozen_tolerance(reports, bar_block)
     est_voiced_floor = _require_frozen_est_voicing_floor(reports, bar_block)
@@ -5539,6 +6265,7 @@ def evaluate_m2_bars(
         "run_ids": sorted(run_ids),
         "repeats_min": repeats_min,
         "registration_attestation": registration_attestation,
+        "external_fixtures_sha256": external_fixtures_sha256,
         "categories": {},
     }
     verdict["report_pins"] = report_pins
@@ -5583,9 +6310,16 @@ def evaluate_m2_bars(
             verdict["categories"][category] = cat_result
             continue
 
+        category_kind = _CATEGORY_SPECS[category]["kind"]
+
         # repeats として数える前に (a) row が本当にその事前登録 fixture・経路の観測か、
         # (b) 同一 model stack で測られたか を証明する（Codex P1×2）。
-        _require_registered_row_identity(category, rows, bars_data)
+        if category_kind == "external":
+            common_manifest_sha256 = _require_registered_row_identity_external(
+                category, rows, external_fixtures_data, external_fixtures_sha256
+            )
+        else:
+            _require_registered_row_identity(category, rows, bars_data)
         _require_homogeneous_model_stack(category, rows)
         # 実行証拠: row の pin が評価環境から再計算したスタック pin と一致すること。
         # report の自己申告フラグ（route_runner_injected 等）は bytes ごと書き換え
@@ -5603,37 +6337,62 @@ def evaluate_m2_bars(
         # 証明・Codex P1 第 21 巡。run_id はコピーで水増しできるため、repeats 契約の
         # 根拠を提出側でなく evaluator 側の独立実行に置く・Codex P2 第 23 巡）。検証用
         # ランナーの注入口は公開 API に置かない（Codex P1 第 22 巡）——常に実抽出器。
+        # M2c: 外部素材カテゴリは `_reverify_category_measurement` 内部で
+        # `--external-manifest` の要求（未指定 fail-closed）を含めて振り分ける。
         _reverify_category_measurement(
             category,
             rows,
             bars=bars,
             specs_raw=specs_raw,
             repeats=repeats_min,
+            external_manifest_path=external_manifest_path,
+            external_fixtures_path=external_fixtures_path,
         )
 
         bar = bar_block.get(category, {})
-        metrics_list = [row["metrics"] for row in rows]
-        _require_finite_metrics(category, metrics_list)
-        _require_metrics_contract(category, metrics_list, tolerance_cents=tolerance_cents)
-        expected_frames, expected_voiced = _registered_reference_counts(
-            category, bars_data, specs
-        )
-        _require_reference_bounded_counts(
-            category,
-            rows,
-            expected_frame_count=expected_frames,
-            expected_voiced_frame_count=expected_voiced,
-        )
-        cat_result["reference_frame_counts"] = {
-            "ref_frame_count": expected_frames,
-            "ref_voiced_frame_count": expected_voiced,
-            "source": "recomputed_from_frozen_specs",
-        }
-        cat_result["metrics"] = metrics_list
+
+        if category_kind == "external":
+            # M2c: 母数の独立再計算は「凍結 spec」ではなく clip 単位の自己整合性
+            # 検査（`_require_external_clip_bounded_counts`）に置き換える——外部注釈
+            # は evaluate 側が独立に再読込できる凍結 spec を持たない（run 時点の
+            # fail-closed hash 照合が音声/注釈 bytes の同一性を担保する）。
+            clip_metrics_list = [c["metrics"] for row in rows for c in row["clips"]]
+            _require_finite_metrics(category, clip_metrics_list)
+            _require_metrics_contract(category, clip_metrics_list, tolerance_cents=tolerance_cents)
+            _require_external_clip_bounded_counts(category, rows)
+            metrics_list = [row["metrics"] for row in rows]
+            _require_finite_metrics(category, metrics_list)
+            cat_result["external_manifest_sha256"] = common_manifest_sha256
+            cat_result["external_fixtures_sha256"] = external_fixtures_sha256
+            cat_result["clip_ids"] = sorted({c["clip_id"] for row in rows for c in row["clips"]})
+            cat_result["metrics"] = metrics_list
+            # clip 単位の全体一致（設計 Memo M2c: repeats bit 一致は clips で判定）。
+            # 平均化で相殺されうる clip 単位の乖離を、averaged metrics だけの比較より
+            # 厳しく検出する。
+            bit_identical = _repeats_bit_identical([row["clips"] for row in rows])
+        else:
+            metrics_list = [row["metrics"] for row in rows]
+            _require_finite_metrics(category, metrics_list)
+            _require_metrics_contract(category, metrics_list, tolerance_cents=tolerance_cents)
+            expected_frames, expected_voiced = _registered_reference_counts(
+                category, bars_data, specs
+            )
+            _require_reference_bounded_counts(
+                category,
+                rows,
+                expected_frame_count=expected_frames,
+                expected_voiced_frame_count=expected_voiced,
+            )
+            cat_result["reference_frame_counts"] = {
+                "ref_frame_count": expected_frames,
+                "ref_voiced_frame_count": expected_voiced,
+                "source": "recomputed_from_frozen_specs",
+            }
+            cat_result["metrics"] = metrics_list
+            bit_identical = _repeats_bit_identical(metrics_list)
 
         # bars.yaml の `repeats_min` は決定論確認（「shifts=0 後は bit 一致するはず」）
         # であって「たまたま両方バー内」ではない。乖離はバーの有無と独立に記録する。
-        bit_identical = _repeats_bit_identical(metrics_list)
         cat_result["repeats_bit_identical"] = bit_identical
 
         if not bar:
@@ -5756,18 +6515,29 @@ def main() -> int:
         help="run phase で測るカテゴリの部分集合（既定: 事前登録された全カテゴリ。"
         "evaluate の測り直しプロセスが 1 カテゴリ run に使う）",
     )
+    parser.add_argument(
+        "--external-manifest",
+        type=Path,
+        default=None,
+        metavar="MANIFEST.json",
+        help="外部素材カテゴリ（M2c: V_direct）が指す音声/注釈 manifest（JSON 配列 "
+        "[{id, audio_path, annotation_path}]）。V_direct を run/evaluate するには必須 "
+        "（未指定は fail-closed）。パスは manifest 位置基準で相対解決する",
+    )
     args = parser.parse_args()
     _require_out_outside_git_metadata(args.out)
 
     if args.evaluate:
         if args.categories:
             raise SystemExit("--categories は run phase 専用（evaluate は report 側の row を評価する）")
-        # `--out` が入力（report / bars / specs）を指していないか **書く前に** 確認する。
-        # 上書きすると verdict の証拠そのもの（repeat evidence・凍結設定）が消え、
-        # report_pins の hash も実体と食い違う（Codex P2 指摘）。
+        # `--out` が入力（report / bars / specs / 外部素材 manifest）を指していないか
+        # **書く前に** 確認する。上書きすると verdict の証拠そのもの（repeat
+        # evidence・凍結設定）が消え、report_pins の hash も実体と食い違う（Codex P2 指摘）。
         protected = {Path(p).resolve() for p in args.evaluate}
         protected.add(Path(args.bars).resolve())
         protected.add(Path(args.specs).resolve())
+        if args.external_manifest is not None:
+            protected.add(Path(args.external_manifest).resolve())
         # provenance のために hash する first-party ソースも保護する。これを許すと
         # 「hash してから同じファイルを JSON で潰す」ことになり、artifact が自分が
         # 記録した bytes を破壊し次回実行も壊れる（Codex P2）。
@@ -5776,8 +6546,9 @@ def main() -> int:
         protected.update(_runtime_input_paths())
         if Path(args.out).resolve() in protected:
             raise SystemExit(
-                f"--out {args.out} は評価入力（report / bars / specs / provenance 対象の "
-                "ソース）と同じパスを指している; 入力を verdict で上書きしない (fail-closed)"
+                f"--out {args.out} は評価入力（report / bars / specs / 外部素材 manifest / "
+                "provenance 対象のソース）と同じパスを指している; 入力を verdict で上書き "
+                "しない (fail-closed)"
             )
 
         # read → hash → parse を `load_report` の 1 操作にまとめる（read と hash の間に
@@ -5795,6 +6566,7 @@ def main() -> int:
             specs_path=args.specs,
             # 事前登録の git 立証（Codex P2 第 28 巡）は供給された bars の実パスに対して行う。
             bars_path=args.bars,
+            external_manifest_path=args.external_manifest,
         )
         _atomic_write_text(args.out, json.dumps(verdict, indent=2, sort_keys=True))
         print(f"wrote verdict to {args.out}")
@@ -5803,17 +6575,22 @@ def main() -> int:
         return 0
 
     run_protected = {Path(args.bars).resolve(), Path(args.specs).resolve()}
+    if args.external_manifest is not None:
+        run_protected.add(Path(args.external_manifest).resolve())
     run_protected.update(_generator_code_paths())
     run_protected.update(_mir_eval_paths())
     run_protected.update(_runtime_input_paths())
     if Path(args.out).resolve() in run_protected:
         raise SystemExit(
-            f"--out {args.out} は凍結入力（bars / specs）または provenance 対象のソースと "
-            "同じパスを指している; これらを run report で上書きしない (fail-closed)"
+            f"--out {args.out} は凍結入力（bars / specs / 外部素材 manifest）または "
+            "provenance 対象のソースと同じパスを指している; これらを run report で上書き "
+            "しない (fail-closed)"
         )
     run_kwargs: Dict[str, Any] = {}
     if args.categories:
         run_kwargs["categories"] = tuple(args.categories)
+    if args.external_manifest is not None:
+        run_kwargs["external_manifest_path"] = args.external_manifest
     result = run_accuracy(specs_path=args.specs, bars_path=args.bars, **run_kwargs)
     _atomic_write_text(args.out, json.dumps(result, indent=2, sort_keys=True))
     print(f"wrote run report to {args.out}")
