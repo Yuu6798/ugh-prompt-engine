@@ -2533,7 +2533,11 @@ import soundfile as sf  # noqa: E402
 import yaml  # noqa: E402
 from build_melody_bench import build_signal  # noqa: E402
 
-from svp_rpe.arrange.pathsafe import PathConfinementError, resolve_confined  # noqa: E402
+from svp_rpe.arrange.pathsafe import (  # noqa: E402
+    PathConfinementError,
+    resolve_confined,
+    validate_relative_locator,
+)
 from svp_rpe.melody.accuracy import (  # noqa: E402
     DEFAULT_TOLERANCE_CENTS,
     MelodyAccuracyResult,
@@ -2827,6 +2831,56 @@ def _is_sha256(value: Any) -> bool:
     report が stale 化してしまうため独立に持つ。
     """
     return isinstance(value, str) and bool(_SHA256_RE.fullmatch(value))
+
+
+# M2c PR-M2c-1 review（Codex 第 1 巡 P1）: clip id の安全な文字集合。英数字・`.`・
+# `_`・`-` のみを許し、パス区切り（`/`・`\`）・`..`・空文字列を排除する。id はそのまま
+# `tmp_dir / f"{clip_id}{suffix}"` としてファイル名の一部になる（`_build_external_
+# clip_row`）ため、字句レベルでこの集合に制限しておかないと、manifest/fixtures の
+# どちらか一方だけが悪意ある id（例: `"../../etc/passwd"`）を持ち込んだ場合に
+# tmp_dir 外への書き込みへ繋がりうる。`resolve_confined` による物理的な確認
+# （`_build_external_clip_row` 参照）は字句検証を迂回しうる環境依存の抜け穴
+# （シンボリックリンク等）への防御であって、字句検証の代わりにはしない——両方を
+# 独立に課す（pathsafe の「lexical + physical」二段防御と同じ設計）。
+_SAFE_EXTERNAL_ID_RE = re.compile(r"[A-Za-z0-9._-]+")
+
+
+def _require_safe_external_id(value: Any, *, where: str) -> str:
+    """外部素材の id（fixtures の clip id / manifest entry の id）を字句検証する。"""
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{where}: id {value!r} が非空文字列でない (fail-closed)")
+    if value in (".", "..") or not _SAFE_EXTERNAL_ID_RE.fullmatch(value):
+        raise ValueError(
+            f"{where}: id {value!r} が安全な文字集合（英数字・`.`・`_`・`-` のみ）に "
+            "一致しない、またはパス区切り/`..`/絶対パスを含む (fail-closed)"
+        )
+    return value
+
+
+def _require_exact_cohort_match(
+    fixture_ids: "set[str]", manifest_ids: "set[str]", *, where: str
+) -> None:
+    """M2c PR-M2c-1 review（Codex 第 1 巡 P2）: 登録 fixtures と manifest の id 集合の
+    **完全一致**を要求する（部分集合を fail-closed 拒否）。
+
+    バーは「登録済み cohort 全体」に対して事前登録された閾値なので、manifest が
+    登録済み clip の一部だけ（都合の良い clip だけ）を持ち込んで測ることも、逆に
+    未登録 clip を紛れ込ませることも許さない——`_build_external_clip_row` の
+    per-clip 未登録チェック（manifest ⊆ fixtures）だけでは fixtures ⊆ manifest 側が
+    抜けるため、両側を独立に要求する。run 側（`_run_external_category`）と evaluate
+    側（`_require_registered_row_identity_external`）の両方から呼ぶ——
+    fresh-process 再検証は run 側のこの関数をそのまま再実行するため、同じ条件を
+    自動的に継承する（再検証専用のコードパスは存在しない）。
+    """
+    if fixture_ids == manifest_ids:
+        return
+    missing_in_manifest = sorted(fixture_ids - manifest_ids)
+    unexpected_in_manifest = sorted(manifest_ids - fixture_ids)
+    raise ValueError(
+        f"{where}: id 集合が m2c_external_fixtures.yaml の登録 cohort と完全一致しない "
+        f"（部分 cohort は fail-closed 拒否）; missing_in_manifest={missing_in_manifest} "
+        f"unexpected_in_manifest={unexpected_in_manifest}"
+    )
 
 
 _SCORER_ABSENT_OPTIONAL_PIN_MARKER: "Tuple[str, str, str]" = (
@@ -3288,8 +3342,7 @@ def load_bars(path: Path = BARS_PATH) -> Tuple[BarsArtifact, str]:
 
 def _require_valid_external_fixture_entry(clip_id: Any, entry: Any, *, where: str) -> None:
     """`m2c_external_fixtures.yaml` の 1 fixture entry を検証する（fail-closed）。"""
-    if not isinstance(clip_id, str) or not clip_id:
-        raise ValueError(f"{where}: clip id {clip_id!r} が非空文字列でない (fail-closed)")
+    _require_safe_external_id(clip_id, where=where)
     if not isinstance(entry, dict):
         raise ValueError(f"{where}: fixtures[{clip_id!r}] が mapping でない (fail-closed)")
     for key in ("expected_audio_sha256", "expected_annotation_sha256"):
@@ -3301,13 +3354,15 @@ def _require_valid_external_fixture_entry(clip_id: Any, entry: Any, *, where: st
             )
 
 
-def load_external_fixtures(path: Path = EXTERNAL_FIXTURES_PATH) -> Tuple[Dict[str, Any], str]:
-    """`m2c_external_fixtures.yaml` を single read で (parsed dict, sha256) として返す。
+def load_external_fixtures_with_raw(
+    path: Path = EXTERNAL_FIXTURES_PATH,
+) -> Tuple[Dict[str, Any], str, bytes]:
+    """`load_external_fixtures` + 検証済み raw bytes（測り直し子プロセスへの凍結転写用）。
 
-    `load_bars` / `load_specs` と同じ read → hash → parse の単一操作規律。M2c-1 時点
-    では `fixtures` が空 dict でも正当（実データは M2c-2 で追記登録する）——空自体は
-    ここでは拒否せず、V_direct を要求する run/evaluate 側が「登録済み clip が無い」
-    ことを fail-closed で検出する。
+    `load_specs_with_raw` と対称: evaluate は raw を保持し、測り直し子には**この
+    bytes の複製**を渡す——`--external-fixtures` の実パスを渡すと、評価器が読んだ後に
+    ファイルが差し替えられた場合に子が別の登録集合を測ってしまう（Codex P2 第 34 巡・
+    `load_specs_with_raw` と同型の TOCTOU 回避）。
     """
     data = Path(path).read_bytes()
     fixtures_doc = _yaml_load_no_dup_keys(data, what="m2c_external_fixtures.yaml")
@@ -3328,6 +3383,18 @@ def load_external_fixtures(path: Path = EXTERNAL_FIXTURES_PATH) -> Tuple[Dict[st
             clip_id, entry, where="m2c_external_fixtures.yaml"
         )
     sha256 = hashlib.sha256(data).hexdigest()
+    return fixtures_doc, sha256, data
+
+
+def load_external_fixtures(path: Path = EXTERNAL_FIXTURES_PATH) -> Tuple[Dict[str, Any], str]:
+    """`m2c_external_fixtures.yaml` を single read で (parsed dict, sha256) として返す。
+
+    `load_bars` / `load_specs` と同じ read → hash → parse の単一操作規律。M2c-1 時点
+    では `fixtures` が空 dict でも正当（実データは M2c-2 で追記登録する）——空自体は
+    ここでは拒否せず、V_direct を要求する run/evaluate 側が「登録済み clip が無い」
+    ことを fail-closed で検出する。
+    """
+    fixtures_doc, sha256, _raw = load_external_fixtures_with_raw(path)
     return fixtures_doc, sha256
 
 
@@ -3703,6 +3770,7 @@ def _load_external_manifest(path: "str | Path") -> Tuple[List[Dict[str, Any]], s
                     "(fail-closed)"
                 )
         clip_id = entry["id"]
+        _require_safe_external_id(clip_id, where=f"external manifest[{idx}]")
         if clip_id in seen_ids:
             raise ValueError(
                 f"external manifest: duplicate clip id {clip_id!r} (fail-closed)"
@@ -3714,11 +3782,20 @@ def _load_external_manifest(path: "str | Path") -> Tuple[List[Dict[str, Any]], s
 def _resolve_external_member_path(manifest_dir: Path, value: str, *, what: str) -> Path:
     """manifest entry のパスを manifest 位置基準で解決する（既存 pathsafe 流儀）。
 
-    `svp_rpe.arrange.pathsafe.resolve_confined` を使い、絶対パス・ディレクトリ脱出
-    （`..` によるものだけでなくシンボリックリンク経由の脱出も含む）を fail-closed で
-    拒否する。
+    M2c PR-M2c-1 review（Codex 第 3 巡 P1）: `resolve_confined`（base-dependent・
+    filesystem に触れる物理検証）**単独**では、`manifest_dir` 内のシンボリックリンク
+    経由の入り組んだ経路（例: `link/../../outside`——`link` が base 内の別ディレクトリを
+    指す symlink で、その先から `..` を重ねて base 外へ出る形）を「最終的な解決先が
+    たまたま base 配下」と誤認しうる幾何を作り込める。`resolve_confined` を呼ぶ**前**に
+    `validate_relative_locator`（base に依存しない字句検証: 絶対パス・net-upward な
+    `..` を機械的に拒否）を通すことで、そもそも `..` を使った疑わしい構造の入力を
+    filesystem 解決の前段で弾く——pathsafe モジュール自身が想定する「lexical +
+    physical」二層防御（`_build_external_clip_row` の clip_id 経路 = 字句
+    `_require_safe_external_id` + 物理 `resolve_confined` と同型）を manifest member
+    パスにも揃える。
     """
     try:
+        validate_relative_locator(value)
         return resolve_confined(value, manifest_dir)
     except PathConfinementError as exc:
         raise ValueError(
@@ -3731,11 +3808,19 @@ def _resolve_external_member_path(manifest_dir: Path, value: str, *, what: str) 
 def _parse_external_annotation_csv(raw: bytes, *, clip_id: str) -> Tuple[Tuple[float, ...], Tuple[float, ...]]:
     """外部注釈 CSV を (times_sec, freqs_hz) へ変換する（ネイティブタイムラインのまま）。
 
-    1 列目 time_sec・2 列目 frequency_hz（3 列目以降は無視）。周波数が非有限または
+    1 列目 time_sec・2 列目 frequency_hz（3 列目以降は無視）。**有限**な frequency_hz が
     0 以下（無声を表す一般的な慣例: 0 / 負値）のフレームは無声 = 0.0 へ正規化する。
     10ms へのリサンプルは行わない——設計 §2 追記（M2c）: 「外部注釈はネイティブ
     タイムラインのまま評価する（mir_eval が est を ref 基準へ整列。リサンプル補間と
     いう新たな pin 対象を作らない。10ms 規約は合成正解の導出形式）」。
+
+    M2c §8 self-audit（Codex 第 3 巡）: `np.genfromtxt` はパース不能な非数値トークン
+    （例: 破損/誤フォーマットの CSV セル）を**例外を投げずに** `NaN` として黙って
+    埋める。「無声の慣例（有限の 0/負値）」と「パース失敗（NaN）」を同一視して両方
+    0.0 へ丸めると、破損した注釈ファイルが「全フレーム無声」という一見もっともらしい
+    正解として静かに受理されてしまう（fail-closed の被覆漏れ）。frequency_hz 列は
+    time_sec 列と同じく非有限値を明示的に拒否してから、**有限**値のみに対して
+    「0 以下は無声」の正規化を適用する。
     """
     import io
 
@@ -3756,10 +3841,16 @@ def _parse_external_annotation_csv(raw: bytes, *, clip_id: str) -> Tuple[Tuple[f
     freqs = data[:, 1]
     if not np.all(np.isfinite(times)):
         raise ValueError(
-            f"external annotation for clip {clip_id!r}: time_sec に非有限値がある "
-            "(fail-closed)"
+            f"external annotation for clip {clip_id!r}: time_sec に非有限値（NaN/inf、"
+            "パース不能なセルの可能性）がある (fail-closed)"
         )
-    normalized_freqs = np.where(np.isfinite(freqs) & (freqs > 0.0), freqs, 0.0)
+    if not np.all(np.isfinite(freqs)):
+        raise ValueError(
+            f"external annotation for clip {clip_id!r}: frequency_hz に非有限値（NaN/inf、"
+            "パース不能なセルの可能性）がある; 「無声の慣例（有限の 0/負値）」と "
+            "「パース失敗」を同一視しない (fail-closed)"
+        )
+    normalized_freqs = np.where(freqs > 0.0, freqs, 0.0)
     return (
         tuple(float(t) for t in times),
         tuple(float(f) for f in normalized_freqs),
@@ -3818,7 +3909,17 @@ def _build_external_clip_row(
     }
 
     suffix = audio_path.suffix or ".wav"
-    frozen_wav_path = tmp_dir / f"{clip_id}{suffix}"
+    # M2c PR-M2c-1 review（Codex 第 1 巡 P1）: clip_id は `_require_safe_external_id`
+    # で字句検証済みだが、tmp_dir への join 後も物理的に tmp_dir 配下へ収まることを
+    # `resolve_confined` で重ねて確認する（pathsafe の lexical + physical 二段防御と
+    # 同型。字句検証だけに頼らない防御的な二重化）。
+    try:
+        frozen_wav_path = resolve_confined(f"{clip_id}{suffix}", tmp_dir)
+    except PathConfinementError as exc:
+        raise RuntimeError(
+            f"external clip {clip_id!r}: 凍結コピー先 {clip_id}{suffix} が tmp_dir を "
+            f"脱出する（{exc.reason}）(fail-closed)"
+        ) from exc
     frozen_wav_path.write_bytes(audio_bytes)
     os.chmod(frozen_wav_path, 0o400)
     wav_fd = os.open(frozen_wav_path, os.O_RDONLY)
@@ -3829,12 +3930,22 @@ def _build_external_clip_row(
                 f"external clip {clip_id!r}: 凍結コピーの hash が読み込んだ bytes と "
                 "不一致 (fail-closed)"
             )
+        # M2c §8 self-audit（Codex 第 3 巡）: S カテゴリの run ループと同じ tmp_dir
+        # 0500/0700 の挟み込みをここにも適用する。凍結ファイル自体は 0400 だが、
+        # rename/unlink はディレクトリの書き込み権限で決まるため、ファイル権限だけでは
+        # 「抽出中に同 uid プロセスが rename で差し替える」ことを防げない
+        # （明示 chmod まで行う同権限攻撃者はプロセスメモリも書ける = preload ゲート群と
+        # 同じ境界外、という前例の整理どおり）。
+        os.chmod(tmp_dir, 0o500)
         try:
-            observation, route_provenance = runner(str(frozen_wav_path), route)
-        except LearnedModelUnavailable as exc:
-            row["outcome"] = "unavailable"
-            row["detail"] = str(exc).splitlines()[0]
-            return row
+            try:
+                observation, route_provenance = runner(str(frozen_wav_path), route)
+            except LearnedModelUnavailable as exc:
+                row["outcome"] = "unavailable"
+                row["detail"] = str(exc).splitlines()[0]
+                return row
+        finally:
+            os.chmod(tmp_dir, 0o700)
         post_sha256 = _sha256_of_fd(wav_fd)
         if post_sha256 != pre_sha256:
             raise RuntimeError(
@@ -3928,6 +4039,11 @@ def _run_external_category(
 
     entries, manifest_sha256, manifest_path = _load_external_manifest(external_manifest_path)
     manifest_dir = manifest_path.parent
+
+    _require_exact_cohort_match(
+        set(fixtures), {entry["id"] for entry in entries},
+        where=f"run_accuracy: category {category!r}",
+    )
 
     clip_rows: List[Dict[str, Any]] = []
     for entry in sorted(entries, key=lambda e: e["id"]):
@@ -4771,6 +4887,103 @@ def _require_attested_registration(
     return attestation
 
 
+def _external_fixtures_registration_attestation(
+    external_fixtures_path: "str | Path", raw: bytes
+) -> Tuple[Dict[str, Any], datetime]:
+    """供給された `m2c_external_fixtures.yaml` bytes の事前登録を git 履歴で立証する。
+
+    M2c PR-M2c-1 review（Codex 第 1 巡 P1）: `_bars_registration_attestation`
+    （bars.yaml 用）と**同じ機構**を外部素材の事前登録 pin ファイルへ対称適用する。
+    正直会計・limitation は bars 側と同一の文言を踏襲する: この立証が**証明する**の
+    は「blob が HEAD の祖先 commit に存在する」ことまで。committer 日時は commit
+    作成者が任意に設定できる（`GIT_COMMITTER_DATE`）ため、**履歴に commit を書ける
+    同権限者に対する時刻順序の証明ではない**（preload ゲート群と同じ境界の外）。
+    順序比較は (a) 誠実なミス（登録前に測り始めた run の混入）の検出と、(b) 履歴を
+    書けない偽造者に対する防御として fail-closed で維持し、attestation には
+    `ordering_is_proof: false` を明記する。
+
+    立証できない（リポジトリ外・履歴に無い blob・git 不能）fixtures は fail-closed。
+    """
+    try:
+        rel = Path(external_fixtures_path).resolve().relative_to(ROOT)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"evaluate_m2_bars: external fixtures {external_fixtures_path!r} がリポジトリ外; "
+            "事前登録を git 履歴で立証できない fixtures で verdict を publish しない "
+            "(fail-closed)"
+        ) from exc
+
+    def _git(*args: str, stdin: "bytes | None" = None) -> bytes:
+        # bars 側 `_bars_registration_attestation._git` と同じ硬化（Codex 13 巡目 H19）。
+        from svp_rpe.melody.provenance import _hardened_subprocess_env, _trusted_git_executable
+
+        git_exe = _trusted_git_executable()
+        proc = subprocess.run(
+            [git_exe, "-C", str(ROOT), *args],
+            capture_output=True,
+            input=stdin,
+            env=_hardened_subprocess_env(),
+        )
+        if proc.returncode != 0:
+            stderr = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
+            raise RuntimeError(
+                f"evaluate_m2_bars: git {' '.join(args)} が失敗 ({stderr}); 事前登録を "
+                "git 履歴で立証できない環境から publish しない (fail-closed)"
+            )
+        return proc.stdout
+
+    blob = _git("hash-object", "--stdin", stdin=raw).decode("ascii").strip()
+    rev_list = _git("rev-list", "HEAD", "--", rel.as_posix()).decode("ascii").split()
+    first_commit: Optional[str] = None
+    for commit in reversed(rev_list):  # 最古 → 最新の順に、blob が最初に現れた commit
+        try:
+            commit_blob = _git("rev-parse", f"{commit}:{rel.as_posix()}").decode("ascii").strip()
+        except RuntimeError:
+            continue  # その commit に path が無い（削除期間等）
+        if commit_blob == blob:
+            first_commit = commit
+            break
+    if first_commit is None:
+        raise RuntimeError(
+            f"evaluate_m2_bars: 供給された external fixtures（blob {blob}）が git 履歴の "
+            "どの commit にも存在しない; 自己申告の registered_utc だけでは事前登録を "
+            "名乗れない（commit 済みの凍結 fixtures で評価すること・fail-closed）"
+        )
+    committed_iso = _git("show", "-s", "--format=%cI", first_commit).decode("ascii").strip()
+    committed = datetime.fromisoformat(committed_iso).astimezone(timezone.utc)
+    attestation = {
+        "first_commit": first_commit,
+        "committed_utc": committed.isoformat(),
+        "source": "git_history_first_blob_occurrence",
+        "content_evidence": "blob_in_head_ancestry",
+        "ordering_evidence": "committer_date",
+        "ordering_is_proof": False,
+    }
+    return attestation, committed
+
+
+def _require_attested_external_fixtures_registration(
+    external_fixtures_path: "str | Path",
+    raw: bytes,
+    started_by_index: List[Tuple[int, datetime]],
+) -> Dict[str, Any]:
+    """外部素材カテゴリの全 row の測定開始が、fixtures の**履歴上の登録時点**より
+    厳密に後であることを要求する（`_require_attested_registration` と対称、M2c）。
+    """
+    attestation, committed = _external_fixtures_registration_attestation(
+        external_fixtures_path, raw
+    )
+    for idx, started in started_by_index:
+        if started <= committed:
+            raise ValueError(
+                f"evaluate_m2_bars: reports[{idx}] の started_utc {started.isoformat()} が、"
+                f"external fixtures が git 履歴に現れた登録時点 {committed.isoformat()} より"
+                "後でない（同一秒を含む）; 秒精度の証拠では同一秒内の順序を立証できず、"
+                "自己申告 registered_utc の backdate では事前登録を名乗れない (fail-closed)"
+            )
+    return attestation
+
+
 def _require_fresh_process_report_provenance(
     report: Dict[str, Any], category: str, *, expected_specs_sha256: str
 ) -> None:
@@ -4941,18 +5154,28 @@ def _reverify_category_measurement(
     verification_runner: Optional[RouteRunner] = None,
     external_manifest_path: Optional[Path] = None,
     external_fixtures_path: Path = EXTERNAL_FIXTURES_PATH,
+    external_fixtures_raw: Optional[bytes] = None,
 ) -> None:
     """`category` の kind に応じて S（specs 由来合成）/ V（外部素材、M2c）の測り直しへ振り分ける。
 
     S カテゴリの挙動・シグネチャは変更しない。M2c で追加した外部素材カテゴリは
     `_reverify_external_category_measurement` へ委譲する（`--external-manifest` が
-    評価に渡されていなければ fail-closed）。
+    評価に渡されていなければ fail-closed）。`external_fixtures_raw` は評価器が実際に
+    読んだ fixtures bytes（`bars`/`specs_raw` と同型の凍結複製用）。
     """
     category_spec = _CATEGORY_SPECS[category]
     if category_spec["kind"] == "external":
+        if external_fixtures_raw is None:
+            raise RuntimeError(
+                f"evaluate_m2_bars: category {category!r} は外部素材カテゴリだが "
+                "external_fixtures_raw が渡されていない (fail-closed)"
+            )
         _reverify_external_category_measurement(
             category,
             rows,
+            bars=bars,
+            specs_raw=specs_raw,
+            external_fixtures_raw=external_fixtures_raw,
             repeats=repeats,
             verification_runner=verification_runner,
             external_manifest_path=external_manifest_path,
@@ -5112,11 +5335,21 @@ def _run_external_verification_in_fresh_process(
     *,
     tmp_dir: Path,
     external_manifest_path: Path,
+    specs_path: Path,
+    bars_path: Path,
+    external_fixtures_path: Path,
     expected_specs_sha256: str,
 ) -> Dict[str, Any]:
     """外部素材カテゴリ（M2c）の測り直し 1 回分を新規プロセス（素の CLI run）で実行する。
 
-    `_run_verification_in_fresh_process`（S カテゴリ）と同型。manifest は評価器の
+    `_run_verification_in_fresh_process`（S カテゴリ）と同型・対称（M2c PR-M2c-1
+    review Codex 第 1 巡 P2）: 評価器が実際に受けた `--specs` / `--bars` /
+    `--external-fixtures` を子へ**明示的に**引き渡す（凍結複製・TOCTOU 回避は
+    呼び出し元 `_reverify_external_category_measurement` が用意する）。CLI 既定
+    （`SPECS_PATH`/`BARS_PATH`/`EXTERNAL_FIXTURES_PATH`）へ暗黙に頼ると、カスタム
+    `--specs`/`--bars`/`--external-fixtures` で評価した場合に子が別世代のファイルを
+    測り、`_require_fresh_process_report_provenance` の `specs_sha256` 照合で
+    （運が悪ければ）食い違わずに素通りしてしまう恐れがある。manifest は評価器の
     実パスをそのまま子へ渡す——manifest が指す音声/注釈は登録済み sha256 と run 側が
     fail-closed で照合するため、TOCTOU（子の実行前に差し替え）は測定失敗
     （sha256 mismatch）として顕在化し、偽の pass を静かに通さない。
@@ -5131,6 +5364,12 @@ def _run_external_verification_in_fresh_process(
         category,
         "--external-manifest",
         str(Path(external_manifest_path).resolve()),
+        "--specs",
+        str(Path(specs_path).resolve()),
+        "--bars",
+        str(Path(bars_path).resolve()),
+        "--external-fixtures",
+        str(Path(external_fixtures_path).resolve()),
     ]
     env = dict(os.environ)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -5160,6 +5399,9 @@ def _reverify_external_category_measurement(
     category: str,
     rows: List[Dict[str, Any]],
     *,
+    bars: "BarsArtifact",
+    specs_raw: bytes,
+    external_fixtures_raw: bytes,
     repeats: int,
     verification_runner: Optional[RouteRunner],
     external_manifest_path: Optional[Path],
@@ -5171,6 +5413,12 @@ def _reverify_external_category_measurement(
     直しとの bit 一致を publish 条件にする」設計だが、比較対象は `row["clips"]`
     （per-clip 全体）——averaged `row["metrics"]` だけの比較では、平均化で相殺される
     clip 単位の乖離を見逃す（設計 Memo M2c の repeats bit 一致要件）。
+
+    `bars`/`specs_raw`/`external_fixtures_raw` は**評価器が実際に読んだ bytes**を
+    tmp 配下へ凍結複製し、子プロセスへ実パスでなくその複製を渡す（S カテゴリの
+    `_reverify_direct_or_fullstack_category_measurement` と同型の TOCTOU 回避・
+    M2c PR-M2c-1 review Codex 第 1 巡 P2 で対称化）。`expected_specs_sha256` も
+    `specs_raw` から導出する（`SPECS_PATH` の暗黙再読込はしない）。
 
     M2c-1 時点では `m2c_external_fixtures.yaml` の `fixtures` が空のため、V_direct を
     含む run は `_run_external_category` の fail-closed（登録済み clip なし）で本関数
@@ -5187,16 +5435,33 @@ def _reverify_external_category_measurement(
             "--external-manifest が評価に渡されていない; 測り直しによる検証なしで "
             "report の metrics を publish しない (fail-closed)"
         )
-    specs, specs_sha256 = load_specs(SPECS_PATH)
+    expected_specs_sha256 = hashlib.sha256(specs_raw).hexdigest()
+    # M2c WIP e3810b0 review（Codex 第 2 巡 P2）: 測り直しが提出 report と**同じ
+    # manifest**を測ったことを束縛する。`_require_registered_row_identity_external`
+    # が提出 rows 間の `external_manifest_sha256` 一致を既に検証済みなので、その
+    # 代表値（`rows[0]`）を「測り直しが束縛すべき manifest」として使う——
+    # `external_manifest_path` 引数それ自体は呼び出し側が渡す値で、提出 report が
+    # 記録した manifest と独立に食い違いうる（例えば evaluate 呼び出し側が誤った
+    # パスを渡した場合）。差異は測り直し結果の bit 不一致として間接的に顕在化しうる
+    # が、原因を「別 manifest を測った」と即座に特定できるよう明示的に照合する。
+    expected_manifest_sha256 = rows[0].get("external_manifest_sha256") if rows else None
     verification_rows: List[Dict[str, Any]] = []
     with tempfile.TemporaryDirectory(prefix="m2c-reverify-") as tmp:
+        bars_path = Path(tmp) / "m2_accuracy_bars.yaml"
+        bars_path.write_bytes(bars.raw)
+        specs_copy = Path(tmp) / "m2_accuracy_specs.yaml"
+        specs_copy.write_bytes(specs_raw)
+        fixtures_copy = Path(tmp) / "m2c_external_fixtures.yaml"
+        fixtures_copy.write_bytes(external_fixtures_raw)
         for index in range(repeats):
             if verification_runner is not None:
                 verification = run_accuracy(
                     categories=(category,),
                     route_runner=verification_runner,
+                    specs_path=specs_copy,
+                    bars_path=bars_path,
                     external_manifest_path=external_manifest_path,
-                    external_fixtures_path=external_fixtures_path,
+                    external_fixtures_path=fixtures_copy,
                 )
                 vrow = verification["categories"][category]
             else:
@@ -5205,13 +5470,23 @@ def _reverify_external_category_measurement(
                     index,
                     tmp_dir=Path(tmp),
                     external_manifest_path=external_manifest_path,
-                    expected_specs_sha256=specs_sha256,
+                    specs_path=specs_copy,
+                    bars_path=bars_path,
+                    external_fixtures_path=fixtures_copy,
+                    expected_specs_sha256=expected_specs_sha256,
                 )
             if vrow.get("outcome") != "measured":
                 raise RuntimeError(
                     f"evaluate_m2_bars: category {category!r} を評価環境で再実行できない "
                     f"（outcome={vrow.get('outcome')!r}: {vrow.get('detail', '')}）; 測り直しに "
                     "よる検証なしで report の metrics を publish しない (fail-closed)"
+                )
+            if vrow.get("external_manifest_sha256") != expected_manifest_sha256:
+                raise RuntimeError(
+                    f"evaluate_m2_bars: category {category!r} の測り直し {index} 回目の "
+                    f"external_manifest_sha256 {vrow.get('external_manifest_sha256')!r} が "
+                    f"提出 report の {expected_manifest_sha256!r} と不一致; 別 manifest を "
+                    "測った検証 run を同じ測定の再現と数えない (fail-closed)"
                 )
             verification_rows.append(vrow)
     _require_homogeneous_model_stack(category, rows + verification_rows)
@@ -5336,6 +5611,12 @@ def _require_registered_row_identity_external(
                 f"evaluate_m2_bars: category {category!r} rows[{idx}] の clips が "
                 "非空リストでない (fail-closed)"
             )
+        # cohort 完全一致（run 側 `_run_external_category` と同じ関所を evaluate 側でも
+        # 独立に課す。手組み・編集済み report は run 側の検査を経由しないため）。
+        _require_exact_cohort_match(
+            set(fixtures), {c.get("clip_id") for c in clips},
+            where=f"evaluate_m2_bars: category {category!r} rows[{idx}]",
+        )
         for clip_idx, clip in enumerate(clips):
             clip_id = clip.get("clip_id")
             expected_clip = fixtures.get(clip_id)
@@ -5408,6 +5689,35 @@ def _require_external_clip_bounded_counts(category: str, rows: List[Dict[str, An
                         f"{count} が raw_chroma_accuracy {rca!r} から復元される分子 "
                         f"{implied:.4f} と一致しない (fail-closed)"
                     )
+
+
+def _require_external_row_metrics_match_clip_average(
+    category: str, rows: List[Dict[str, Any]]
+) -> None:
+    """外部素材カテゴリ（M2c）の row["metrics"]（カテゴリ集計値）が、`row["clips"]` から
+    評価器が**独立に再計算**した算術平均と完全一致することを要求する（fail-closed）。
+
+    M2c WIP e3810b0 review（Codex 第 2 巡 P1）: 集計値（`row["metrics"]`）を run 側
+    `_average_external_clip_metrics` が最初に書いた値のまま信頼すると、report が
+    `clips` はそのままに集計値だけを書き換えた（例: RPA を水増しする）改竄をバー適用
+    まで見逃す。S カテゴリの `_registered_reference_counts`（母数を凍結 spec から
+    再計算し、row の自己申告を信用しない）と同じ精神——外部素材カテゴリでは「集計は
+    ソース clips から導出されなければならない」という形で、evaluate 側が
+    `_average_external_clip_metrics` を clips に対して再適用し、報告値との厳密一致
+    （JSON ロード値の `==`。`_average_external_clip_metrics` の算出は clips の登場
+    順序に依存する合計/件数の商であり、JSON はリスト順序を保存するため、改竄が無い
+    限り浮動小数点は bit 一致する）を publish の条件にする。
+    """
+    for idx, row in enumerate(rows):
+        recomputed = _average_external_clip_metrics(row["clips"])
+        reported = row.get("metrics")
+        if reported != recomputed:
+            raise ValueError(
+                f"evaluate_m2_bars: category {category!r} rows[{idx}] の metrics "
+                f"{reported!r} が row['clips'] から再計算した平均 {recomputed!r} と "
+                "一致しない; 集計はソース clips から導出されなければならない "
+                "(fail-closed)"
+            )
 
 
 # 指標の値域（mir_eval の定義域）。閾値判定の前に有限性と範囲を検査する。
@@ -6241,10 +6551,43 @@ def evaluate_m2_bars(
                 "凍結バーを適用しない (fail-closed)"
             )
     # M2c: 外部素材カテゴリ（V_direct）の事前登録 pin。specs と同じく report の
-    # カテゴリ構成に関わらず無条件にロードする（specs と対称・軽量）。
-    external_fixtures_data, external_fixtures_sha256 = load_external_fixtures(
-        external_fixtures_path
+    # カテゴリ構成に関わらず無条件にロードする（specs と対称・軽量）。raw bytes も
+    # 保持する——測り直し子への凍結転写 + 事前登録の git 立証の両方に使う
+    # （`specs_raw`/`bars.raw` と同型の TOCTOU 回避）。
+    external_fixtures_data, external_fixtures_sha256, external_fixtures_raw = (
+        load_external_fixtures_with_raw(external_fixtures_path)
     )
+    # M2c PR-M2c-1 review（Codex 第 1 巡 P1）: 外部素材カテゴリ（`kind: "external"`）の
+    # 測定が 1 つでも報告されていれば、bars と同じ事前登録の git 立証を fixtures にも
+    # 課す。S オンリーの evaluate（fixtures 未使用）まで委縮させないよう、必要な時だけ
+    # 課す（bars は全 evaluate が必ず使うため無条件、fixtures は使う場合のみ）。
+    #
+    # M2c PR-M2c-1 review（Codex 第 3 巡 P2）: 「必要な時だけ」の判定は report **集合**
+    # 単位（`any(...)`）のままでよいが、`started_utc` の順序照合対象は report **単位**
+    # で絞る——バッチに外部カテゴリを一切測っていない report（例: S_direct のみの
+    # 旧い report）が混在すると、その report は fixtures の登録時点と無関係なのに、
+    # 集合レベルの判定だけで全 report の started_utc を fixtures 側 attestation の
+    # 順序チェックに巻き込むと、その report の started_utc が fixtures 登録前という
+    # 理由だけで evaluate 全体を誤って fail-closed 拒否してしまう（S-only report との
+    # 混在評価を誤 reject する）。fixtures の登録時点より後であることを要求すべきは、
+    # **実際に外部カテゴリの row を含む report** の started_utc のみに絞る。
+    categories_in_reports = {cat for report in reports for cat in report.get("categories", {})}
+    external_fixtures_attestation_required = any(
+        _CATEGORY_SPECS.get(cat, {}).get("kind") == "external" for cat in categories_in_reports
+    )
+    external_fixtures_registration_attestation: Optional[Dict[str, Any]] = None
+    if external_fixtures_attestation_required:
+        external_category_started_by_index = [
+            (idx, started)
+            for idx, started in started_by_index
+            if any(
+                _CATEGORY_SPECS.get(cat, {}).get("kind") == "external"
+                for cat in reports[idx].get("categories", {})
+            )
+        ]
+        external_fixtures_registration_attestation = _require_attested_external_fixtures_registration(
+            external_fixtures_path, external_fixtures_raw, external_category_started_by_index
+        )
     generator_code_sha256 = _require_matching_generator_code(reports)
     tolerance_cents = _require_frozen_tolerance(reports, bar_block)
     est_voiced_floor = _require_frozen_est_voicing_floor(reports, bar_block)
@@ -6266,6 +6609,7 @@ def evaluate_m2_bars(
         "repeats_min": repeats_min,
         "registration_attestation": registration_attestation,
         "external_fixtures_sha256": external_fixtures_sha256,
+        "external_fixtures_registration_attestation": external_fixtures_registration_attestation,
         "categories": {},
     }
     verdict["report_pins"] = report_pins
@@ -6347,6 +6691,7 @@ def evaluate_m2_bars(
             repeats=repeats_min,
             external_manifest_path=external_manifest_path,
             external_fixtures_path=external_fixtures_path,
+            external_fixtures_raw=external_fixtures_raw,
         )
 
         bar = bar_block.get(category, {})
@@ -6360,6 +6705,16 @@ def evaluate_m2_bars(
             _require_finite_metrics(category, clip_metrics_list)
             _require_metrics_contract(category, clip_metrics_list, tolerance_cents=tolerance_cents)
             _require_external_clip_bounded_counts(category, rows)
+            # M2c WIP e3810b0 review（Codex 第 2 巡 P1）: バー適用の前に、row["metrics"]
+            # （カテゴリ集計値）が `row["clips"]` から**評価器が独立に再計算**した平均と
+            # 完全一致することを要求する——run 側 `_average_external_clip_metrics` の
+            # 出力を row にそのまま書くだけの信頼では、report が clips はそのままに
+            # metrics だけ書き換えた（RPA を水増しする等）改竄を見逃す。S カテゴリの
+            # 「母数を凍結 spec から再計算し、row の自己申告を信用しない」規律
+            # （`_registered_reference_counts`/`_require_reference_bounded_counts`）と
+            # 同じ精神を、外部素材カテゴリでは「集計はソース clips から導出されなければ
+            # ならない」という形で適用する。
+            _require_external_row_metrics_match_clip_average(category, rows)
             metrics_list = [row["metrics"] for row in rows]
             _require_finite_metrics(category, metrics_list)
             cat_result["external_manifest_sha256"] = common_manifest_sha256
@@ -6496,6 +6851,35 @@ def _require_out_outside_git_metadata(out: Path) -> None:
             )
 
 
+def _external_manifest_protected_paths(
+    external_manifest_path: "str | Path", external_fixtures_path: "str | Path"
+) -> "set[Path]":
+    """M2c PR-M2c-1 review（Codex 第 1 巡 P1）: `--out` 保護集合を外部素材へ拡張する。
+
+    `--external-manifest` が指定されている run/evaluate では、evaluate が読む
+    fixtures yaml だけでなく、**manifest が指す全 member（音声/注釈の解決済みパス）**
+    も `--out` の書き込み対象から保護する必要がある——`--out` が manifest の指す
+    音声ファイルと同じパスを指せば、hash して照合した後の bytes を report/verdict の
+    書き出しで潰してしまう（既存の bars/specs/report 保護と同型の穴）。manifest 自体を
+    preflight でパースする（`_load_external_manifest` は構造・id を検証済みなので、
+    ここで初めて解決するのではなく既存の検証経路を再利用する）。
+    """
+    protected: "set[Path]" = {Path(external_fixtures_path).resolve()}
+    entries, _manifest_sha256, manifest_path = _load_external_manifest(external_manifest_path)
+    protected.add(manifest_path)
+    manifest_dir = manifest_path.parent
+    for entry in entries:
+        protected.add(
+            _resolve_external_member_path(manifest_dir, entry["audio_path"], what="audio_path")
+        )
+        protected.add(
+            _resolve_external_member_path(
+                manifest_dir, entry["annotation_path"], what="annotation_path"
+            )
+        )
+    return protected
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True, help="出力 JSON の書き出し先")
@@ -6512,8 +6896,10 @@ def main() -> int:
         "--categories",
         nargs="+",
         metavar="CATEGORY",
-        help="run phase で測るカテゴリの部分集合（既定: 事前登録された全カテゴリ。"
-        "evaluate の測り直しプロセスが 1 カテゴリ run に使う）",
+        help="run phase で測るカテゴリの部分集合（既定: --external-manifest 未指定なら "
+        "S_direct/S_fullstack のみ、指定時は事前登録された全カテゴリ = V_direct も含む "
+        "——manifest 供給が V_direct の実行可能条件を満たすため。evaluate の測り直し "
+        "プロセスが 1 カテゴリ run に使う）",
     )
     parser.add_argument(
         "--external-manifest",
@@ -6524,20 +6910,34 @@ def main() -> int:
         "[{id, audio_path, annotation_path}]）。V_direct を run/evaluate するには必須 "
         "（未指定は fail-closed）。パスは manifest 位置基準で相対解決する",
     )
+    parser.add_argument(
+        "--external-fixtures",
+        type=Path,
+        default=EXTERNAL_FIXTURES_PATH,
+        metavar="m2c_external_fixtures.yaml",
+        help="外部素材カテゴリの事前登録 pin ファイル（既定: 凍結 committed ファイル）。"
+        "測り直し子プロセスへの明示転送・`--out` 保護のためテストでの差し替えを想定",
+    )
     args = parser.parse_args()
     _require_out_outside_git_metadata(args.out)
 
     if args.evaluate:
         if args.categories:
             raise SystemExit("--categories は run phase 専用（evaluate は report 側の row を評価する）")
-        # `--out` が入力（report / bars / specs / 外部素材 manifest）を指していないか
-        # **書く前に** 確認する。上書きすると verdict の証拠そのもの（repeat
-        # evidence・凍結設定）が消え、report_pins の hash も実体と食い違う（Codex P2 指摘）。
+        # `--out` が入力（report / bars / specs / 外部素材 manifest+fixtures）を
+        # 指していないか **書く前に** 確認する。上書きすると verdict の証拠そのもの
+        # （repeat evidence・凍結設定）が消え、report_pins の hash も実体と食い違う
+        # （Codex P2 指摘）。
         protected = {Path(p).resolve() for p in args.evaluate}
         protected.add(Path(args.bars).resolve())
         protected.add(Path(args.specs).resolve())
+        protected.add(Path(args.external_fixtures).resolve())
         if args.external_manifest is not None:
-            protected.add(Path(args.external_manifest).resolve())
+            # M2c PR-M2c-1 review（Codex 第 1 巡 P1）: manifest 自体だけでなく、
+            # manifest が指す全 member（音声/注釈の解決済みパス）も保護する。
+            protected.update(
+                _external_manifest_protected_paths(args.external_manifest, args.external_fixtures)
+            )
         # provenance のために hash する first-party ソースも保護する。これを許すと
         # 「hash してから同じファイルを JSON で潰す」ことになり、artifact が自分が
         # 記録した bytes を破壊し次回実行も壊れる（Codex P2）。
@@ -6546,9 +6946,9 @@ def main() -> int:
         protected.update(_runtime_input_paths())
         if Path(args.out).resolve() in protected:
             raise SystemExit(
-                f"--out {args.out} は評価入力（report / bars / specs / 外部素材 manifest / "
-                "provenance 対象のソース）と同じパスを指している; 入力を verdict で上書き "
-                "しない (fail-closed)"
+                f"--out {args.out} は評価入力（report / bars / specs / 外部素材 "
+                "manifest+fixtures+member / provenance 対象のソース）と同じパスを指している; "
+                "入力を verdict で上書きしない (fail-closed)"
             )
 
         # read → hash → parse を `load_report` の 1 操作にまとめる（read と hash の間に
@@ -6567,6 +6967,7 @@ def main() -> int:
             # 事前登録の git 立証（Codex P2 第 28 巡）は供給された bars の実パスに対して行う。
             bars_path=args.bars,
             external_manifest_path=args.external_manifest,
+            external_fixtures_path=args.external_fixtures,
         )
         _atomic_write_text(args.out, json.dumps(verdict, indent=2, sort_keys=True))
         print(f"wrote verdict to {args.out}")
@@ -6574,23 +6975,39 @@ def main() -> int:
             print(f"  {category}: {result['status']}")
         return 0
 
-    run_protected = {Path(args.bars).resolve(), Path(args.specs).resolve()}
+    run_protected = {
+        Path(args.bars).resolve(),
+        Path(args.specs).resolve(),
+        Path(args.external_fixtures).resolve(),
+    }
     if args.external_manifest is not None:
-        run_protected.add(Path(args.external_manifest).resolve())
+        run_protected.update(
+            _external_manifest_protected_paths(args.external_manifest, args.external_fixtures)
+        )
     run_protected.update(_generator_code_paths())
     run_protected.update(_mir_eval_paths())
     run_protected.update(_runtime_input_paths())
     if Path(args.out).resolve() in run_protected:
         raise SystemExit(
-            f"--out {args.out} は凍結入力（bars / specs / 外部素材 manifest）または "
-            "provenance 対象のソースと同じパスを指している; これらを run report で上書き "
-            "しない (fail-closed)"
+            f"--out {args.out} は凍結入力（bars / specs / 外部素材 manifest+fixtures+member）"
+            "または provenance 対象のソースと同じパスを指している; これらを run report で "
+            "上書きしない (fail-closed)"
         )
     run_kwargs: Dict[str, Any] = {}
     if args.categories:
         run_kwargs["categories"] = tuple(args.categories)
+    elif args.external_manifest is not None:
+        # M2c PR-M2c-1（Codex 第 4 巡 P2）: `--categories` 省略時の既定は「事前登録
+        # された全カテゴリ」という help の意味論どおりにする。`--external-manifest` が
+        # 供給されていれば V_direct の実行可能条件（manifest 必須）を満たすため、
+        # 省略時の既定集合にも含める。manifest 無しの省略時は従来どおり
+        # `run_accuracy` 自身の既定（S_direct/S_fullstack のみ）に委ねる——V_direct は
+        # manifest 必須で fail-closed（`run_accuracy` の要件チェック）のため、manifest
+        # が無い状態で既定に含めると省略呼び出しが即座に落ちてしまう。
+        run_kwargs["categories"] = tuple(sorted(_CATEGORY_SPECS))
     if args.external_manifest is not None:
         run_kwargs["external_manifest_path"] = args.external_manifest
+    run_kwargs["external_fixtures_path"] = args.external_fixtures
     result = run_accuracy(specs_path=args.specs, bars_path=args.bars, **run_kwargs)
     _atomic_write_text(args.out, json.dumps(result, indent=2, sort_keys=True))
     print(f"wrote run report to {args.out}")
