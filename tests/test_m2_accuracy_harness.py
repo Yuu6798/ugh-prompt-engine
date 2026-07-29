@@ -1802,6 +1802,8 @@ def test_generator_code_paths_imports_nothing(monkeypatch) -> None:
     )
 
 
+@pytest.mark.real_forensics
+@pytest.mark.slow
 def test_scorer_pins_rehash_bypasses_cache() -> None:
     """post-run 検証は再 hash する（size/mtime 据え置きの差し替えを見逃さない）。"""
     cached = harness._scorer_pins()
@@ -1810,6 +1812,8 @@ def test_scorer_pins_rehash_bypasses_cache() -> None:
     assert harness._is_sha256(fresh["mir_eval_code_sha256"])
 
 
+@pytest.mark.real_forensics
+@pytest.mark.slow
 def test_scorer_pins_do_not_import_mir_eval(monkeypatch) -> None:
     """スコアラー pin は import を起こさずに取れる（load-time 束縛の前提）。"""
     monkeypatch.delitem(sys.modules, "mir_eval", raising=False)

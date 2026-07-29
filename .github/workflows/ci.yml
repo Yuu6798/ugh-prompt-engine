@@ -8,10 +8,12 @@ on:
 
 # test-m2-harness + test-rest の和が全件（--ignore は tests/test_m2_accuracy_harness.py
 # のみを除外）= カバレッジ不変、壁時計を 30 分枠に収めるためのシャーディングのみ。
+# timeout-minutes: 35 = テスト予算 30 分 + checkout/pip セットアップ許容 5 分。テスト
+# 実測が 30 分を超えたらこの backstop の枠を広げるのではなく、シャードを再分割して対処する。
 jobs:
   test-m2-harness:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 35
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
@@ -36,7 +38,7 @@ jobs:
 
   test-rest:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 35
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
