@@ -105,3 +105,14 @@ pin 整合は `tests/test_m2c_committed_record.py` が CI で強制する
 （verdict bytes の凍結 digest・report_pins ↔ committed run1.json/run2.json の
 sha256 照合・凍結 external fixtures/bars の digest 照合・判定固定・
 external_manifest_sha256 の相互一致）。
+
+## マージ方式の要件（事前登録 ancestry の保存）
+
+本記録の事前登録証跡は「fixtures 登録 commit `1cbd448` が実測記録 commit より先に
+HEAD ancestry に存在する」という **2 commit 構造**に依存する（verdict の
+`registration_attestation.first_commit` がこれを指す）。**本 PR を squash マージすると
+この構造が崩れ、attestation の主張が main 履歴上で検証不能になる**ため、マージは
+merge commit 方式（リポジトリ従来方式）で行うこと。検証コマンド:
+`git merge-base --is-ancestor 1cbd448 <merge後のHEAD>`（exit 0 が正）。
+squash された場合は計器の再検証（evaluate の git 履歴 attestation）が fail-closed で
+検出する — 静かに受理されることはない。
