@@ -150,6 +150,20 @@ def _clean_evaluator_preload(monkeypatch: pytest.MonkeyPatch):
             "source": "test_fixture_stub",
         },
     )
+    # M2c PR-M2c-1 review（Codex 第 1 巡 P1）: 外部素材 fixtures の事前登録 git 立証も
+    # 同じ理由で正規化する（機構テストは tmp の fixtures yaml を多用するため、素の
+    # ままだと V_direct を含む全 evaluate テストが立証不能拒否になる・正しい挙動。
+    # 専用テスト群 `test_external_fixtures_registration_attestation_*` が実 gate を
+    # 固定する）。
+    monkeypatch.setattr(
+        harness,
+        "_require_attested_external_fixtures_registration",
+        lambda *args, **kwargs: {
+            "first_commit": "0" * 40,
+            "committed_utc": "2026-07-25T00:00:00+00:00",
+            "source": "test_fixture_stub",
+        },
+    )
 
 
 @pytest.fixture(scope="session")
@@ -228,6 +242,8 @@ def _stub_scorer_pins_unless_real_forensics(
 
 _ORIG_REVERIFY = harness._reverify_category_measurement
 _ORIG_ATTEST = harness._require_attested_registration
+# 外部素材 fixtures の事前登録 attestation（bars 側 `_ORIG_ATTEST` と対称、M2c）。
+_ORIG_EXTERNAL_ATTEST = harness._require_attested_external_fixtures_registration
 # autouse fixture が `[]` へ正規化する前の実体（H16 の機構そのものをテストする際に
 # 明示的に復元して使う）。
 _ORIG_SCORER_COMPILE_EXPECTED_PATHS = harness._scorer_compile_expected_paths
@@ -6955,3 +6971,1172 @@ def test_cli_evaluate_rejects_categories_flag(
     )
     with pytest.raises(SystemExit, match="run phase 専用"):
         harness.main()
+
+
+# ---------------------------------------------------------------------------
+# M2c: カテゴリ V_direct（外部素材）。fake external fixture 方式（実データ・実推論
+# なし・CI 安全）。design memo M2c PR-M2c-1 §テスト参照。
+# ---------------------------------------------------------------------------
+
+import numpy as _np  # noqa: E402
+
+_EXTERNAL_WAVEFORM = harness._serialize_wav_float32(
+    (_np.sin(_np.linspace(0.0, 40.0, 4410)) * 0.3).astype(_np.float32), 22050
+)
+_EXTERNAL_AUDIO_SHA256 = hashlib.sha256(_EXTERNAL_WAVEFORM).hexdigest()
+
+
+def _external_annotation_csv(times: "List[float]", freqs: "List[float]") -> bytes:
+    lines = [f"{t:.6f},{f:.6f}" for t, f in zip(times, freqs)]
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def _write_external_fixture_set(
+    tmp_path: Path, clip_specs: "Dict[str, Tuple[List[float], List[float]]]"
+) -> Tuple[Path, Path]:
+    """clip_specs = {clip_id: (times, freqs)}. manifest + 事前登録 fixtures yaml を書き、
+    (manifest_path, fixtures_path) を返す。全 clip は同じ（内容無関係な）音声 bytes を
+    共有する——fake runner は音声を読まず、annotation 由来の (times, freqs) だけを
+    使う（`_make_fake_external_runner` 参照）。
+    """
+    external_dir = tmp_path / "external"
+    external_dir.mkdir(exist_ok=True)
+    manifest_entries: List[Dict[str, str]] = []
+    fixture_lines = [
+        'schema_version: "m2c-external-fixtures/0.1"',
+        'registered_utc: "2026-07-29"',
+        "fixtures:",
+    ]
+    for clip_id, (times, freqs) in clip_specs.items():
+        audio_path = external_dir / f"{clip_id}.wav"
+        audio_path.write_bytes(_EXTERNAL_WAVEFORM)
+        annotation_bytes = _external_annotation_csv(times, freqs)
+        annotation_path = external_dir / f"{clip_id}.csv"
+        annotation_path.write_bytes(annotation_bytes)
+        annotation_sha256 = hashlib.sha256(annotation_bytes).hexdigest()
+        manifest_entries.append(
+            {
+                "id": clip_id,
+                "audio_path": f"external/{clip_id}.wav",
+                "annotation_path": f"external/{clip_id}.csv",
+            }
+        )
+        fixture_lines.append(f"  {clip_id}:")
+        fixture_lines.append(f'    expected_audio_sha256: "{_EXTERNAL_AUDIO_SHA256}"')
+        fixture_lines.append(f'    expected_annotation_sha256: "{annotation_sha256}"')
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest_entries), encoding="utf-8")
+    fixtures_path = tmp_path / "m2c_external_fixtures.yaml"
+    fixtures_path.write_text("\n".join(fixture_lines) + "\n", encoding="utf-8")
+    return manifest_path, fixtures_path
+
+
+def _write_empty_external_fixtures(tmp_path: Path) -> Path:
+    fixtures_path = tmp_path / "m2c_external_fixtures_empty.yaml"
+    fixtures_path.write_text(
+        'schema_version: "m2c-external-fixtures/0.1"\n'
+        'registered_utc: "2026-07-29"\n'
+        "fixtures: {}\n",
+        encoding="utf-8",
+    )
+    return fixtures_path
+
+
+def _make_fake_external_runner(
+    clip_refs: "Dict[str, Tuple[Tuple[float, ...], Tuple[float, ...]]]",
+    shift_cents: float = 0.0,
+):
+    """外部素材向けフェイク抽出器: 注釈由来の (times, freqs) を +shift_cents ずらして返す。
+
+    clip_id は `_build_external_clip_row` が凍結 WAV へ書く `<clip_id><suffix>` の
+    ファイル名（stem）から復元する。
+    """
+
+    def _runner(audio_path: str, route) -> Tuple[MelodyObservation, Dict[str, Any]]:
+        clip_id = Path(audio_path).stem
+        times, freqs = clip_refs[clip_id]
+        shifted = tuple(
+            (0.0 if hz == 0.0 else hz * (2.0 ** (shift_cents / 1200.0))) for hz in freqs
+        )
+        observation = MelodyObservation(
+            route=route.name,
+            source_model="fake:deterministic",
+            frame_times=times,
+            frame_hz=shifted,
+            frame_confidence=tuple(1.0 if hz > 0.0 else 0.0 for hz in shifted),
+            total_duration_sec=times[-1] if times else 0.0,
+        )
+        provenance: Dict[str, Any] = {
+            "extractor_weights_sha256": FAKE_WEIGHTS_SHA256,
+            "extractor_code_sha256": FAKE_CODE_SHA256,
+        }
+        return observation, provenance
+
+    return _runner
+
+
+_CLIP001_TIMES = [0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07]
+_CLIP001_FREQS = [220.0, 220.0, 220.0, 0.0, 0.0, 440.0, 440.0, 440.0]
+_CLIP002_TIMES = [0.0, 0.01, 0.02, 0.03, 0.04, 0.05]
+_CLIP002_FREQS = [330.0, 330.0, 330.0, 330.0, 0.0, 0.0]
+
+
+def test_run_accuracy_external_category_measured_with_per_clip_and_average(
+    tmp_path: Path,
+) -> None:
+    """(a) V_direct が fake route_runner で measured になり per-clip metrics + 平均集計が出る。"""
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path,
+        {
+            "clip001": (_CLIP001_TIMES, _CLIP001_FREQS),
+            "clip002": (_CLIP002_TIMES, _CLIP002_FREQS),
+        },
+    )
+    report = _fake_run(
+        categories=("V_direct",),
+        route_runner=_make_fake_external_runner(
+            {
+                "clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS)),
+                "clip002": (tuple(_CLIP002_TIMES), tuple(_CLIP002_FREQS)),
+            },
+            shift_cents=0.0,
+        ),
+        external_manifest_path=manifest_path,
+        external_fixtures_path=fixtures_path,
+    )
+    row = report["categories"]["V_direct"]
+    assert row["outcome"] == "measured"
+    assert [c["clip_id"] for c in row["clips"]] == ["clip001", "clip002"]  # clip_id ソート
+    for clip in row["clips"]:
+        assert clip["metrics"]["raw_pitch_accuracy"] == pytest.approx(1.0)
+    # カテゴリ metrics = clip ごとの算術平均（両 clip とも RPA=1.0 なので平均も 1.0）。
+    assert row["metrics"]["raw_pitch_accuracy"] == pytest.approx(1.0)
+    expected_avg_rpa = sum(c["metrics"]["raw_pitch_accuracy"] for c in row["clips"]) / 2
+    assert row["metrics"]["raw_pitch_accuracy"] == pytest.approx(expected_avg_rpa)
+    assert row["provenance_extractor_weights_sha256"] == FAKE_WEIGHTS_SHA256
+    assert row["provenance_extractor_code_sha256"] == FAKE_CODE_SHA256
+    assert row["external_manifest_sha256"] == hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    _, expected_fixtures_sha256 = harness.load_external_fixtures(fixtures_path)
+    assert row["external_fixtures_sha256"] == expected_fixtures_sha256
+
+
+def test_run_accuracy_external_category_average_is_arithmetic_mean_of_clips(
+    tmp_path: Path,
+) -> None:
+    """カテゴリ metrics の平均が、異なる精度の 2 clip で真の算術平均になること。"""
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path,
+        {
+            "clip001": (_CLIP001_TIMES, _CLIP001_FREQS),
+            "clip002": (_CLIP002_TIMES, _CLIP002_FREQS),
+        },
+    )
+
+    def _runner(audio_path: str, route) -> Tuple[MelodyObservation, Dict[str, Any]]:
+        clip_id = Path(audio_path).stem
+        # clip001 は無シフト（高精度）、clip002 は 500 cent ずらす（低精度）。
+        shift = 0.0 if clip_id == "clip001" else 500.0
+        return _make_fake_external_runner(
+            {
+                "clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS)),
+                "clip002": (tuple(_CLIP002_TIMES), tuple(_CLIP002_FREQS)),
+            },
+            shift_cents=shift,
+        )(audio_path, route)
+
+    report = _fake_run(
+        categories=("V_direct",),
+        route_runner=_runner,
+        external_manifest_path=manifest_path,
+        external_fixtures_path=fixtures_path,
+    )
+    row = report["categories"]["V_direct"]
+    clip_rpas = [c["metrics"]["raw_pitch_accuracy"] for c in row["clips"]]
+    assert row["metrics"]["raw_pitch_accuracy"] == pytest.approx(sum(clip_rpas) / len(clip_rpas))
+    assert clip_rpas[0] > clip_rpas[1]  # clip001（無シフト）> clip002（500 cent ずれ）
+
+
+def test_evaluate_m2_bars_applies_v_direct_bar_pass(tmp_path: Path) -> None:
+    """(b) evaluate で V_direct バーが機械適用される（pass 側: 無シフトで min_rpa を満たす）。"""
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    runner = _make_fake_external_runner(
+        {"clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS))}, shift_cents=0.0
+    )
+    reports = [
+        _fake_run(
+            categories=("V_direct",),
+            route_runner=runner,
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+        )
+        for _ in range(2)
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    verdict = harness.evaluate_m2_bars(
+        [_as_report_artifact(r) for r in reports],
+        bars,
+        bars_sha256=bars_sha256,
+        external_fixtures_path=fixtures_path,
+    )
+    v_direct = verdict["categories"]["V_direct"]
+    assert v_direct["status"] == "pass", v_direct
+    assert v_direct["repeats_bit_identical"] is True
+    assert v_direct["clip_ids"] == ["clip001"]
+
+
+def test_evaluate_m2_bars_applies_v_direct_bar_fail(tmp_path: Path) -> None:
+    """(b) evaluate で V_direct バーが機械適用される（fail 側: 500 cent ずれで min_rpa 割れ）。"""
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    runner = _make_fake_external_runner(
+        {"clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS))}, shift_cents=500.0
+    )
+    reports = [
+        _fake_run(
+            categories=("V_direct",),
+            route_runner=runner,
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+        )
+        for _ in range(2)
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    verdict = harness.evaluate_m2_bars(
+        [_as_report_artifact(r) for r in reports],
+        bars,
+        bars_sha256=bars_sha256,
+        external_fixtures_path=fixtures_path,
+    )
+    v_direct = verdict["categories"]["V_direct"]
+    assert v_direct["status"] == "fail", v_direct
+    assert v_direct["failures"]
+
+
+def test_evaluate_m2_bars_v_direct_clips_bit_identical_across_repeats(tmp_path: Path) -> None:
+    """(d) clips の repeats bit 一致判定。"""
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    runner = _make_fake_external_runner(
+        {"clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS))}, shift_cents=0.0
+    )
+    reports = [
+        _fake_run(
+            categories=("V_direct",),
+            route_runner=runner,
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+        )
+        for _ in range(2)
+    ]
+    assert reports[0]["categories"]["V_direct"]["clips"] == reports[1]["categories"]["V_direct"]["clips"]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    verdict = harness.evaluate_m2_bars(
+        [_as_report_artifact(r) for r in reports],
+        bars,
+        bars_sha256=bars_sha256,
+        external_fixtures_path=fixtures_path,
+    )
+    assert verdict["categories"]["V_direct"]["repeats_bit_identical"] is True
+
+
+def test_evaluate_m2_bars_v_direct_clips_not_bit_identical_fails(tmp_path: Path) -> None:
+    """clips が repeats 間で bit 一致しなければ fail（平均化で相殺されうる乖離も検出する）。"""
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    refs = {"clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS))}
+    report1 = _fake_run(
+        categories=("V_direct",),
+        route_runner=_make_fake_external_runner(refs, shift_cents=0.0),
+        external_manifest_path=manifest_path,
+        external_fixtures_path=fixtures_path,
+    )
+    report2 = _fake_run(
+        categories=("V_direct",),
+        route_runner=_make_fake_external_runner(refs, shift_cents=5.0),
+        external_manifest_path=manifest_path,
+        external_fixtures_path=fixtures_path,
+    )
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    verdict = harness.evaluate_m2_bars(
+        [_as_report_artifact(report1), _as_report_artifact(report2)],
+        bars,
+        bars_sha256=bars_sha256,
+        external_fixtures_path=fixtures_path,
+    )
+    v_direct = verdict["categories"]["V_direct"]
+    assert v_direct["repeats_bit_identical"] is False
+    assert v_direct["status"] == "fail"
+    assert any("diverge" in f for f in v_direct["failures"])
+
+
+def test_run_accuracy_external_category_requires_manifest() -> None:
+    """(c) fail-closed: manifest 欠落。"""
+    with pytest.raises(ValueError, match="external_manifest_path"):
+        harness.run_accuracy(categories=("V_direct",))
+
+
+def test_run_accuracy_external_category_rejects_empty_fixtures(tmp_path: Path) -> None:
+    """(c) fail-closed: fixtures 空。"""
+    manifest_path, _unused_fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    empty_fixtures_path = _write_empty_external_fixtures(tmp_path)
+    with pytest.raises(ValueError, match="fixtures が空"):
+        harness.run_accuracy(
+            categories=("V_direct",),
+            route_runner=_make_fake_external_runner(
+                {"clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS))}
+            ),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=empty_fixtures_path,
+        )
+
+
+def test_run_accuracy_external_category_rejects_unregistered_clip_id(tmp_path: Path) -> None:
+    """(c) fail-closed: manifest の clip id が fixtures 未登録。
+
+    cohort 完全一致チェック（`_require_exact_cohort_match`、M2c PR-M2c-1 review 項2）
+    が per-clip の未登録チェックより先に発火する——manifest の id 集合が fixtures の
+    登録 id 集合と一致しない時点で拒否するため、こちらのほうが早く・より広く
+    「部分/不整合 cohort」を捕まえる（`_build_external_clip_row` の per-clip
+    未登録チェックはこの関所を通過した後の防御的な二重化として残る）。
+    """
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    # manifest を書き換え、fixtures に無い id を参照させる（ファイル自体は既存のまま）。
+    entries = json.loads(manifest_path.read_text(encoding="utf-8"))
+    entries[0]["id"] = "unregistered_clip"
+    manifest_path.write_text(json.dumps(entries), encoding="utf-8")
+    with pytest.raises(ValueError, match="cohort と完全一致しない"):
+        harness.run_accuracy(
+            categories=("V_direct",),
+            route_runner=_make_fake_external_runner(
+                {"unregistered_clip": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS))}
+            ),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+        )
+
+
+def test_run_accuracy_external_category_rejects_audio_sha_mismatch(tmp_path: Path) -> None:
+    """(c) fail-closed: audio sha256 不一致。"""
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    # 登録済み expected_audio_sha256 を書き換えて不一致を起こす。
+    corrupted = fixtures_path.read_text(encoding="utf-8").replace(
+        _EXTERNAL_AUDIO_SHA256, "0" * 64
+    )
+    fixtures_path.write_text(corrupted, encoding="utf-8")
+    with pytest.raises(ValueError, match="audio sha256 mismatch"):
+        harness.run_accuracy(
+            categories=("V_direct",),
+            route_runner=_make_fake_external_runner(
+                {"clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS))}
+            ),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+        )
+
+
+def test_run_accuracy_external_category_rejects_annotation_sha_mismatch(tmp_path: Path) -> None:
+    """(c) fail-closed: annotation sha256 不一致。"""
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    expected_fixtures, _ = harness.load_external_fixtures(fixtures_path)
+    real_annotation_sha256 = expected_fixtures["fixtures"]["clip001"]["expected_annotation_sha256"]
+    corrupted = fixtures_path.read_text(encoding="utf-8").replace(
+        real_annotation_sha256, "1" * 64
+    )
+    fixtures_path.write_text(corrupted, encoding="utf-8")
+    with pytest.raises(ValueError, match="annotation sha256 mismatch"):
+        harness.run_accuracy(
+            categories=("V_direct",),
+            route_runner=_make_fake_external_runner(
+                {"clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS))}
+            ),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+        )
+
+
+def test_run_accuracy_external_category_rejects_path_escape(tmp_path: Path) -> None:
+    """(c) fail-closed: manifest entry のパスが manifest ディレクトリ外を指す。"""
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    entries = json.loads(manifest_path.read_text(encoding="utf-8"))
+    entries[0]["audio_path"] = "../outside.wav"
+    manifest_path.write_text(json.dumps(entries), encoding="utf-8")
+    with pytest.raises(ValueError, match="manifest 位置基準で解決できない"):
+        harness.run_accuracy(
+            categories=("V_direct",),
+            route_runner=_make_fake_external_runner(
+                {"clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS))}
+            ),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+        )
+
+
+def test_run_accuracy_external_category_rejects_absolute_manifest_path(tmp_path: Path) -> None:
+    """(c) fail-closed: manifest entry のパスが絶対パス。"""
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    entries = json.loads(manifest_path.read_text(encoding="utf-8"))
+    entries[0]["audio_path"] = str((tmp_path / "external" / "clip001.wav").resolve())
+    manifest_path.write_text(json.dumps(entries), encoding="utf-8")
+    with pytest.raises(ValueError, match="manifest 位置基準で解決できない"):
+        harness.run_accuracy(
+            categories=("V_direct",),
+            route_runner=_make_fake_external_runner(
+                {"clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS))}
+            ),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+        )
+
+
+def test_s_categories_still_default_and_unaffected_by_v_direct_addition() -> None:
+    """(e) S カテゴリの既定動作・row 形状は V_direct 追加の影響を受けない（回帰確認）。"""
+    report = _fake_run(route_runner=_make_fake_runner(shift_cents=10.0))
+    assert set(report["categories"]) == {"S_direct", "S_fullstack"}
+    for category, row in report["categories"].items():
+        assert "clips" not in row
+        assert row["outcome"] == "measured"
+
+
+# ---------------------------------------------------------------------------
+# M2c PR-M2c-1 review（Codex 第 1 巡 P1×4 + P2×1）。PR #229。
+# ---------------------------------------------------------------------------
+
+
+def test_load_external_fixtures_rejects_unsafe_clip_id(tmp_path: Path) -> None:
+    """(1) fail-closed: fixtures yaml の clip id が安全な文字集合（英数字・`.`・`_`・`-`）の外。"""
+    bad_path = tmp_path / "bad_fixtures.yaml"
+    bad_path.write_text(
+        'schema_version: "m2c-external-fixtures/0.1"\n'
+        'registered_utc: "2026-07-29"\n'
+        "fixtures:\n"
+        "  ../escape:\n"
+        f'    expected_audio_sha256: "{"0" * 64}"\n'
+        f'    expected_annotation_sha256: "{"1" * 64}"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="安全な文字集合"):
+        harness.load_external_fixtures(bad_path)
+
+
+def test_load_external_fixtures_rejects_dotdot_clip_id(tmp_path: Path) -> None:
+    """(1) `..` 単体は文字集合には合致するが、明示的に拒否する。"""
+    bad_path = tmp_path / "bad_fixtures2.yaml"
+    bad_path.write_text(
+        'schema_version: "m2c-external-fixtures/0.1"\n'
+        'registered_utc: "2026-07-29"\n'
+        "fixtures:\n"
+        "  '..':\n"
+        f'    expected_audio_sha256: "{"0" * 64}"\n'
+        f'    expected_annotation_sha256: "{"1" * 64}"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="安全な文字集合"):
+        harness.load_external_fixtures(bad_path)
+
+
+def test_load_external_manifest_rejects_unsafe_entry_id(tmp_path: Path) -> None:
+    """(1) fail-closed: manifest entry の id が安全な文字集合の外（パス区切り含む）。"""
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps([{"id": "../escape", "audio_path": "a.wav", "annotation_path": "a.csv"}]),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="安全な文字集合"):
+        harness._load_external_manifest(manifest_path)
+
+
+def test_build_external_clip_row_confines_frozen_copy_to_tmp_dir(tmp_path: Path) -> None:
+    """(1) `_build_external_clip_row` の凍結コピー先も tmp_dir 配下へ物理的に確認される。
+
+    clip_id は字句検証済みの前提だが、`resolve_confined` による二重防御自体を直接
+    固定する（安全な id では例外を投げず、通常どおり tmp_dir 直下へ書けること）。
+    """
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    entries, _sha256, manifest_dir_path = harness._load_external_manifest(manifest_path)
+    fixtures_doc, _fx_sha256 = harness.load_external_fixtures(fixtures_path)
+    frozen_tmp = tmp_path / "frozen"
+    frozen_tmp.mkdir()
+    route = harness._select_named_route("clear_lead", "crepe_direct")
+    row = harness._build_external_clip_row(
+        "clip001",
+        entries[0],
+        manifest_dir=manifest_dir_path.parent,
+        fixtures=fixtures_doc["fixtures"],
+        tolerance_cents=50.0,
+        est_voiced_floor=0.30,
+        route=route,
+        runner=_make_fake_external_runner(
+            {"clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS))}
+        ),
+        tmp_dir=frozen_tmp,
+    )
+    assert row["outcome"] == "measured"
+    written = list(frozen_tmp.iterdir())
+    assert len(written) == 1
+    assert written[0].resolve().parent == frozen_tmp.resolve()
+
+
+def test_run_accuracy_external_category_rejects_partial_cohort_missing_in_manifest(
+    tmp_path: Path,
+) -> None:
+    """(2) fail-closed: manifest が登録 cohort の一部しか持ち込まない（部分集合）。"""
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path,
+        {
+            "clip001": (_CLIP001_TIMES, _CLIP001_FREQS),
+            "clip002": (_CLIP002_TIMES, _CLIP002_FREQS),
+        },
+    )
+    entries = json.loads(manifest_path.read_text(encoding="utf-8"))
+    entries = [e for e in entries if e["id"] == "clip001"]
+    manifest_path.write_text(json.dumps(entries), encoding="utf-8")
+    with pytest.raises(ValueError, match=r"cohort と完全一致しない.*missing_in_manifest=\['clip002'\]"):
+        harness.run_accuracy(
+            categories=("V_direct",),
+            route_runner=_make_fake_external_runner(
+                {"clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS))}
+            ),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+        )
+
+
+def test_evaluate_m2_bars_rejects_partial_cohort_row(tmp_path: Path) -> None:
+    """(2) evaluate 側でも cohort 完全一致を要求する（手組み/編集済み report 対策）。"""
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path,
+        {
+            "clip001": (_CLIP001_TIMES, _CLIP001_FREQS),
+            "clip002": (_CLIP002_TIMES, _CLIP002_FREQS),
+        },
+    )
+    runner = _make_fake_external_runner(
+        {
+            "clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS)),
+            "clip002": (tuple(_CLIP002_TIMES), tuple(_CLIP002_FREQS)),
+        }
+    )
+    reports = [
+        _fake_run(
+            categories=("V_direct",),
+            route_runner=runner,
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+        )
+        for _ in range(2)
+    ]
+    # 提出 report の一方だけ clips を欠落させる（部分 cohort の編集済み report を模す）。
+    reports[1]["categories"]["V_direct"]["clips"] = reports[1]["categories"]["V_direct"]["clips"][:1]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="cohort と完全一致しない"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports],
+            bars,
+            bars_sha256=bars_sha256,
+            external_fixtures_path=fixtures_path,
+        )
+
+
+def test_external_fixtures_registration_attestation_finds_committed_blob() -> None:
+    """(3) commit 済み凍結 fixtures は git 履歴で立証でき、登録時点が得られる。
+
+    `test_bars_registration_attestation_finds_committed_blob` と同型（bars 側テストの
+    流儀に倣う）。
+    """
+    attestation, committed = harness._external_fixtures_registration_attestation(
+        harness.EXTERNAL_FIXTURES_PATH, harness.EXTERNAL_FIXTURES_PATH.read_bytes()
+    )
+    assert re.fullmatch(r"[0-9a-f]{40}", attestation["first_commit"])
+    assert committed.tzinfo is not None
+    assert attestation["committed_utc"] == committed.isoformat()
+    assert attestation["content_evidence"] == "blob_in_head_ancestry"
+    assert attestation["ordering_evidence"] == "committer_date"
+    assert attestation["ordering_is_proof"] is False
+
+
+def test_external_fixtures_registration_attestation_rejects_uncommitted_bytes(
+    tmp_path: Path,
+) -> None:
+    """(3) 履歴に無い blob（事後選択した fixtures）は自己申告 registered_utc では立証できない。"""
+    tampered = harness.EXTERNAL_FIXTURES_PATH.read_bytes() + b"# post-selected\n"
+    path = tmp_path / "m2c_external_fixtures.yaml"
+    path.write_bytes(tampered)
+    with pytest.raises(RuntimeError, match="リポジトリ外"):
+        harness._external_fixtures_registration_attestation(path, tampered)
+    with pytest.raises(RuntimeError, match="どの commit にも"):
+        harness._external_fixtures_registration_attestation(
+            harness.EXTERNAL_FIXTURES_PATH, tampered
+        )
+
+
+def test_evaluate_m2_bars_records_external_fixtures_attestation_when_v_direct_present(
+    tmp_path: Path,
+) -> None:
+    """(3) V_direct を含む evaluate は verdict へ `external_fixtures_registration_attestation`
+    を記録する（autouse fixture のスタブ値。実 gate は上記 2 テストが直接固定する）。
+    """
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    runner = _make_fake_external_runner(
+        {"clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS))}
+    )
+    reports = [
+        _fake_run(
+            categories=("V_direct",),
+            route_runner=runner,
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+        )
+        for _ in range(2)
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    verdict = harness.evaluate_m2_bars(
+        [_as_report_artifact(r) for r in reports],
+        bars,
+        bars_sha256=bars_sha256,
+        external_fixtures_path=fixtures_path,
+    )
+    assert verdict["external_fixtures_registration_attestation"] is not None
+    assert verdict["external_fixtures_registration_attestation"]["source"] == "test_fixture_stub"
+
+
+def test_evaluate_m2_bars_omits_external_fixtures_attestation_when_no_external_category() -> None:
+    """(3) S オンリーの evaluate では外部素材 attestation を要求・記録しない（None のまま）。"""
+    reports = [_fake_run(route_runner=_make_fake_runner(shift_cents=10.0)) for _ in range(2)]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    verdict = harness.evaluate_m2_bars(
+        [_as_report_artifact(r) for r in reports], bars, bars_sha256=bars_sha256
+    )
+    assert verdict["external_fixtures_registration_attestation"] is None
+
+
+def test_cli_out_protection_covers_external_manifest_members(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """(4) --out が manifest の指す音声/注釈ファイルと同じパスなら run phase で拒否する。"""
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    collide = tmp_path / "external" / "clip001.wav"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--out",
+            str(collide),
+            "--categories",
+            "V_direct",
+            "--external-manifest",
+            str(manifest_path),
+            "--external-fixtures",
+            str(fixtures_path),
+        ],
+    )
+    with pytest.raises(SystemExit, match="凍結入力"):
+        harness.main()
+
+
+def test_cli_out_protection_covers_external_fixtures_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """(4) --out が --external-fixtures と同じパスなら run phase で拒否する（manifest 無指定でも）。"""
+    fixtures_path = _write_empty_external_fixtures(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--out",
+            str(fixtures_path),
+            "--external-fixtures",
+            str(fixtures_path),
+        ],
+    )
+    with pytest.raises(SystemExit, match="凍結入力"):
+        harness.main()
+
+
+def test_external_manifest_protected_paths_enumerates_manifest_and_members(
+    tmp_path: Path,
+) -> None:
+    """(4) ヘルパー単体: fixtures + manifest + 全 member の解決済みパスを列挙する。"""
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path,
+        {
+            "clip001": (_CLIP001_TIMES, _CLIP001_FREQS),
+            "clip002": (_CLIP002_TIMES, _CLIP002_FREQS),
+        },
+    )
+    protected = harness._external_manifest_protected_paths(manifest_path, fixtures_path)
+    assert fixtures_path.resolve() in protected
+    assert manifest_path.resolve() in protected
+    assert (tmp_path / "external" / "clip001.wav").resolve() in protected
+    assert (tmp_path / "external" / "clip001.csv").resolve() in protected
+    assert (tmp_path / "external" / "clip002.wav").resolve() in protected
+    assert (tmp_path / "external" / "clip002.csv").resolve() in protected
+
+
+def test_run_external_verification_in_fresh_process_passes_specs_bars_fixtures_explicitly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """(5) 測り直し子コマンドへ --specs/--bars/--external-fixtures/--external-manifest が
+    評価器の実際に受けたパスとして明示的に渡ること（S 経路の `_run_verification_in_
+    fresh_process` が既に `--specs`/`--bars` を明示転送しているのと対称・M2c PR-M2c-1
+    review 項5）。
+    """
+    captured: Dict[str, Any] = {}
+
+    class _FakeCompletedProcess:
+        returncode = 1
+        stdout = ""
+        stderr = "boom (deliberately induced failure to avoid a real subprocess)"
+
+    def _fake_subprocess_run(command, **kwargs):
+        captured["command"] = command
+        return _FakeCompletedProcess()
+
+    monkeypatch.setattr(harness.subprocess, "run", _fake_subprocess_run)
+
+    specs_path = tmp_path / "specs.yaml"
+    bars_path = tmp_path / "bars.yaml"
+    fixtures_path = tmp_path / "fixtures.yaml"
+    manifest_path = tmp_path / "manifest.json"
+    for p in (specs_path, bars_path, fixtures_path, manifest_path):
+        p.write_text("placeholder", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="測り直しプロセスが失敗した"):
+        harness._run_external_verification_in_fresh_process(
+            "V_direct",
+            0,
+            tmp_dir=tmp_path,
+            external_manifest_path=manifest_path,
+            specs_path=specs_path,
+            bars_path=bars_path,
+            external_fixtures_path=fixtures_path,
+            expected_specs_sha256="0" * 64,
+        )
+
+    command = captured["command"]
+    assert "--specs" in command
+    assert command[command.index("--specs") + 1] == str(specs_path.resolve())
+    assert "--bars" in command
+    assert command[command.index("--bars") + 1] == str(bars_path.resolve())
+    assert "--external-fixtures" in command
+    assert command[command.index("--external-fixtures") + 1] == str(fixtures_path.resolve())
+    assert "--external-manifest" in command
+    assert command[command.index("--external-manifest") + 1] == str(manifest_path.resolve())
+
+
+def test_reverify_external_category_measurement_writes_frozen_copies_not_real_paths(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """(5) in-process 検証（`verification_runner` 経由）でも、評価器が読んだ bars/specs/
+    fixtures の**凍結複製**（tmp 配下）が使われ、供給された実パスがそのまま子へ渡ら
+    ないこと（`_reverify_direct_or_fullstack_category_measurement` の bars/specs
+    凍結複製と対称）。
+    """
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    runner = _make_fake_external_runner(
+        {"clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS))}
+    )
+    report = _fake_run(
+        categories=("V_direct",),
+        route_runner=runner,
+        external_manifest_path=manifest_path,
+        external_fixtures_path=fixtures_path,
+    )
+    row = report["categories"]["V_direct"]
+
+    captured_paths: List[Any] = []
+    real_run_accuracy = harness.run_accuracy
+
+    def _spy_run_accuracy(*args: Any, **kwargs: Any) -> Dict[str, Any]:
+        specs_path_used = kwargs.get("specs_path")
+        bars_path_used = kwargs.get("bars_path")
+        fixtures_path_used = kwargs.get("external_fixtures_path")
+        # tmp dir はこの呼び出しの間しか存在しない（`with tempfile.TemporaryDirectory`
+        # の生存期間）ため、bytes 一致は呼び出し内で先に確認しておく。
+        captured_paths.append(
+            {
+                "specs_path": specs_path_used,
+                "bars_path": bars_path_used,
+                "fixtures_path": fixtures_path_used,
+                "specs_bytes_match": specs_path_used.read_bytes() == specs_raw,
+                "bars_bytes_match": bars_path_used.read_bytes() == bars_artifact.raw,
+                "fixtures_bytes_match": fixtures_path_used.read_bytes() == fixtures_raw,
+            }
+        )
+        return real_run_accuracy(*args, **kwargs)
+
+    monkeypatch.setattr(harness, "run_accuracy", _spy_run_accuracy)
+
+    bars_artifact, bars_sha256 = harness.load_bars(BARS_PATH)
+    _specs, _specs_sha256, specs_raw = harness.load_specs_with_raw(SPECS_PATH)
+    _fixtures_doc, _fx_sha256, fixtures_raw = harness.load_external_fixtures_with_raw(fixtures_path)
+
+    harness._reverify_external_category_measurement(
+        "V_direct",
+        [row],
+        bars=bars_artifact,
+        specs_raw=specs_raw,
+        external_fixtures_raw=fixtures_raw,
+        repeats=2,
+        verification_runner=runner,
+        external_manifest_path=manifest_path,
+        external_fixtures_path=fixtures_path,
+    )
+
+    assert len(captured_paths) == 2
+    for captured in captured_paths:
+        assert captured["specs_path"] != SPECS_PATH
+        assert captured["bars_path"] != BARS_PATH
+        assert captured["fixtures_path"] != fixtures_path
+        assert captured["specs_bytes_match"] is True
+        assert captured["bars_bytes_match"] is True
+        assert captured["fixtures_bytes_match"] is True
+
+
+# ---------------------------------------------------------------------------
+# M2c WIP e3810b0 review（Codex 第 2 巡 P1×1 + P2×1）。
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_m2_bars_rejects_tampered_aggregate_metrics(tmp_path: Path) -> None:
+    """(第2巡 P1) row["metrics"]（カテゴリ集計値）が row["clips"] からの再計算平均と
+    不一致なら fail-closed（clips はそのままに集計値だけを書き換えた改竄を検出）。
+    """
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    runner = _make_fake_external_runner(
+        {"clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS))}
+    )
+    reports = [
+        _fake_run(
+            categories=("V_direct",),
+            route_runner=runner,
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+        )
+        for _ in range(2)
+    ]
+    # 提出 report の一方だけ、集計値（metrics）を改竄する（clips はそのまま）。
+    reports[1]["categories"]["V_direct"]["metrics"]["raw_pitch_accuracy"] = 0.999999
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="ソース clips から導出されなければならない"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in reports],
+            bars,
+            bars_sha256=bars_sha256,
+            external_fixtures_path=fixtures_path,
+        )
+
+
+def test_average_external_clip_metrics_recomputation_matches_original_bit_for_bit(
+    tmp_path: Path,
+) -> None:
+    """(第2巡 P1 の前提) 改竄が無ければ再計算平均は元の row["metrics"] と bit 一致する
+    （2 clip・非対称精度で合計/件数の商の再現性を確認）。
+    """
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path,
+        {
+            "clip001": (_CLIP001_TIMES, _CLIP001_FREQS),
+            "clip002": (_CLIP002_TIMES, _CLIP002_FREQS),
+        },
+    )
+
+    def _runner(audio_path: str, route: Any) -> Tuple[MelodyObservation, Dict[str, Any]]:
+        clip_id = Path(audio_path).stem
+        shift = 0.0 if clip_id == "clip001" else 137.0
+        return _make_fake_external_runner(
+            {
+                "clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS)),
+                "clip002": (tuple(_CLIP002_TIMES), tuple(_CLIP002_FREQS)),
+            },
+            shift_cents=shift,
+        )(audio_path, route)
+
+    report = _fake_run(
+        categories=("V_direct",),
+        route_runner=_runner,
+        external_manifest_path=manifest_path,
+        external_fixtures_path=fixtures_path,
+    )
+    row = report["categories"]["V_direct"]
+    assert harness._average_external_clip_metrics(row["clips"]) == row["metrics"]
+
+
+def test_reverify_external_category_measurement_rejects_manifest_sha_mismatch(
+    tmp_path: Path,
+) -> None:
+    """(第2巡 P2) 測り直しが束縛すべき manifest sha（提出 rows の共通値）と、実際に
+    測った manifest の sha が食い違えば fail-closed（別 manifest を測った検証 run を
+    同じ測定の再現と数えない）。
+    """
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    runner = _make_fake_external_runner(
+        {"clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS))}
+    )
+    report = _fake_run(
+        categories=("V_direct",),
+        route_runner=runner,
+        external_manifest_path=manifest_path,
+        external_fixtures_path=fixtures_path,
+    )
+    row = dict(report["categories"]["V_direct"])
+    # 提出側が（誤って、または改竄で）別の manifest sha を申告したことにする——
+    # 実際に測り直しが読む manifest（`external_manifest_path`）は変えない。
+    row["external_manifest_sha256"] = "f" * 64
+
+    bars_artifact, bars_sha256 = harness.load_bars(BARS_PATH)
+    _specs, _specs_sha256, specs_raw = harness.load_specs_with_raw(SPECS_PATH)
+    _fixtures_doc, _fx_sha256, fixtures_raw = harness.load_external_fixtures_with_raw(fixtures_path)
+
+    with pytest.raises(RuntimeError, match="external_manifest_sha256.*不一致"):
+        harness._reverify_external_category_measurement(
+            "V_direct",
+            [row],
+            bars=bars_artifact,
+            specs_raw=specs_raw,
+            external_fixtures_raw=fixtures_raw,
+            repeats=2,
+            verification_runner=runner,
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+        )
+
+
+# ---------------------------------------------------------------------------
+# M2c e32f264 review（Codex 第 3 巡 P1 + P2）。
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_external_member_path_rejects_traversal_before_touching_filesystem(
+    tmp_path: Path,
+) -> None:
+    """(第3巡 P1) `resolve_confined`（物理）の前に `validate_relative_locator`（字句）が
+    先に発火する（二層防御の順序固定）。`..` を含む値は net-upward 判定で即座に拒否。
+    """
+    manifest_dir = tmp_path / "external"
+    manifest_dir.mkdir()
+    with pytest.raises(ValueError, match="manifest 位置基準で解決できない"):
+        harness._resolve_external_member_path(manifest_dir, "../outside.wav", what="audio_path")
+
+
+def test_evaluate_m2_bars_allows_mixed_batch_with_s_only_report_predating_external_fixtures(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """(第3巡 P2) S-only report が external fixtures の登録時点より前の started_utc を
+    持っていても、その report は外部カテゴリを一切測っていないので誤って fail-closed
+    拒否しない（external attestation の順序照合対象を「実際に外部カテゴリの row を
+    含む report」だけに絞ったことの確認・混在評価の許容テスト）。
+    """
+    fixed_committed = datetime(2026, 7, 27, 0, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        harness,
+        "_external_fixtures_registration_attestation",
+        lambda *a, **k: (
+            {
+                "first_commit": "e" * 40,
+                "committed_utc": fixed_committed.isoformat(),
+                "source": "test_fixed_committed",
+                "content_evidence": "blob_in_head_ancestry",
+                "ordering_evidence": "committer_date",
+                "ordering_is_proof": False,
+            },
+            fixed_committed,
+        ),
+    )
+    # autouse fixture の無条件スタブを外し、実 gate（`_ORIG_EXTERNAL_ATTEST`）で照合する。
+    monkeypatch.setattr(
+        harness, "_require_attested_external_fixtures_registration", _ORIG_EXTERNAL_ATTEST
+    )
+
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    v_runner = _make_fake_external_runner(
+        {"clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS))}
+    )
+    v_reports = [
+        _fake_run(
+            categories=("V_direct",),
+            route_runner=v_runner,
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+        )
+        for _ in range(2)
+    ]
+    # S-only report: started_utc を bars 登録（m2_accuracy_bars.yaml の 2026-07-25）
+    # より後・external fixtures のモック登録時点（2026-07-27）より前に固定する。
+    s_only_report = _fake_run(categories=("S_direct",), route_runner=_make_fake_runner())
+    s_only_report["started_utc"] = "2026-07-26T00:00:00+00:00"
+
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    # 修正前ならここで「external fixtures 登録時点より前」を理由に fail-closed 拒否
+    # されていた（S-only report は V_direct を一切測っていないにもかかわらず、集合
+    # レベルの判定に巻き込まれて拒否されていた）。
+    verdict = harness.evaluate_m2_bars(
+        [_as_report_artifact(r) for r in ([s_only_report] + v_reports)],
+        bars,
+        bars_sha256=bars_sha256,
+        external_fixtures_path=fixtures_path,
+    )
+    assert verdict["external_fixtures_registration_attestation"]["source"] == "test_fixed_committed"
+    assert verdict["categories"]["S_direct"]["status"] == "insufficient_repeats"  # 1 report のみ
+    assert "V_direct" in verdict["categories"]
+
+
+def test_evaluate_m2_bars_rejects_v_direct_report_predating_external_fixtures(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """(第3巡 P2 の裏取り) 外部カテゴリを実際に含む report の started_utc が external
+    fixtures の登録時点より前なら、絞り込み後も正しく fail-closed 拒否され続ける
+    （フィルタが緩めすぎて本来の gate を無効化していないことの確認）。
+    """
+    fixed_committed = datetime(2026, 7, 30, 0, 0, 0, tzinfo=timezone.utc)  # 未来寄りに固定
+    monkeypatch.setattr(
+        harness,
+        "_external_fixtures_registration_attestation",
+        lambda *a, **k: (
+            {
+                "first_commit": "e" * 40,
+                "committed_utc": fixed_committed.isoformat(),
+                "source": "test_fixed_committed",
+                "content_evidence": "blob_in_head_ancestry",
+                "ordering_evidence": "committer_date",
+                "ordering_is_proof": False,
+            },
+            fixed_committed,
+        ),
+    )
+    monkeypatch.setattr(
+        harness, "_require_attested_external_fixtures_registration", _ORIG_EXTERNAL_ATTEST
+    )
+
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    v_runner = _make_fake_external_runner(
+        {"clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS))}
+    )
+    v_reports = [
+        _fake_run(
+            categories=("V_direct",),
+            route_runner=v_runner,
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+        )
+        for _ in range(2)
+    ]
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    with pytest.raises(ValueError, match="external fixtures が git 履歴に現れた登録時点"):
+        harness.evaluate_m2_bars(
+            [_as_report_artifact(r) for r in v_reports],
+            bars,
+            bars_sha256=bars_sha256,
+            external_fixtures_path=fixtures_path,
+        )
+
+
+def test_parse_external_annotation_csv_rejects_malformed_frequency_cell_as_nan() -> None:
+    """(§8 self-audit で発見・修正) `frequency_hz` 列のパース不能セル（genfromtxt が
+    例外を投げず NaN で黙って埋める）を「無声の慣例（有限の 0/負値）」と混同せず、
+    fail-closed で拒否する。
+    """
+    csv_bytes = b"0.00,220.0\n0.01,not-a-number\n0.02,440.0\n"
+    with pytest.raises(ValueError, match="frequency_hz に非有限値"):
+        harness._parse_external_annotation_csv(csv_bytes, clip_id="clip001")
+
+
+def test_parse_external_annotation_csv_still_treats_finite_nonpositive_freq_as_unvoiced() -> None:
+    """負値・0.0（有限）は引き続き無声の慣例として 0.0 に正規化される（回帰確認）。"""
+    csv_bytes = b"0.00,220.0\n0.01,-1.0\n0.02,0.0\n0.03,440.0\n"
+    times, freqs = harness._parse_external_annotation_csv(csv_bytes, clip_id="clip001")
+    assert freqs == (220.0, 0.0, 0.0, 440.0)
+    assert times == (0.0, 0.01, 0.02, 0.03)
+
+
+def test_parse_external_annotation_csv_rejects_duplicate_timestamps() -> None:
+    """(Codex 第 5 巡 P2) time_sec に重複があれば厳密増加でないとして fail-closed。"""
+    csv_bytes = b"0.00,220.0\n0.01,330.0\n0.01,440.0\n0.02,550.0\n"
+    with pytest.raises(ValueError, match="time_sec が厳密増加でない"):
+        harness._parse_external_annotation_csv(csv_bytes, clip_id="clip001")
+
+
+# ---------------------------------------------------------------------------
+# M2c 52db2f7 review（Codex 第 4 巡 P2）。
+# ---------------------------------------------------------------------------
+
+
+def test_cli_run_default_categories_includes_v_direct_when_manifest_supplied(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """(第4巡 P2) --external-manifest 指定 + --categories 省略で V_direct が既定選択に
+    含まれる（help 文言「省略 = 事前登録された全カテゴリ」との整合。実抽出器の
+    outcome（measured/unavailable）は環境依存なので問わず、report の categories
+    キー集合に V_direct が現れること自体を既定選択に入ったことの直接証拠とする）。
+    """
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    out_path = tmp_path / "report.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--out",
+            str(out_path),
+            "--external-manifest",
+            str(manifest_path),
+            "--external-fixtures",
+            str(fixtures_path),
+        ],
+    )
+    exit_code = harness.main()
+    assert exit_code == 0
+    report = json.loads(out_path.read_text(encoding="utf-8"))
+    assert set(report["categories"]) == {"S_direct", "S_fullstack", "V_direct"}
+
+
+def test_cli_run_default_categories_omits_v_direct_without_manifest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """(第4巡 P2 の回帰確認) manifest 無指定の省略時は従来どおり S のみ（V_direct は
+    manifest 必須の fail-closed のため、既定に含めると即座に落ちてしまう）。
+    """
+    out_path = tmp_path / "report.json"
+    monkeypatch.setattr(
+        sys, "argv", ["run_melody_accuracy.py", "--out", str(out_path)]
+    )
+    exit_code = harness.main()
+    assert exit_code == 0
+    report = json.loads(out_path.read_text(encoding="utf-8"))
+    assert set(report["categories"]) == {"S_direct", "S_fullstack"}

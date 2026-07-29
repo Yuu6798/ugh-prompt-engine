@@ -1,0 +1,35 @@
+# melody_bench/m2c_external_fixtures.yaml — M2c カテゴリ V（実声・外部素材）の
+# 事前登録 content pin（設計: docs/DESIGN_M2_extraction_accuracy.md、
+# Design Memo M2c PR-M2c-1）。
+#
+# `registry.yaml` / `m2_accuracy_bars.yaml` / `m2_accuracy_specs.yaml` /
+# `synthesis_specs.yaml` とは意図的に**別ファイル**にしている。これらは既存の
+# 凍結チェーン（`docs/measurements/m1real_2026-07/m1real_verdict.json` の
+# `registry_sha256` → `registry.yaml` bytes、`m2_accuracy_bars.yaml` の
+# `provenance.specs_sha256` → `m2_accuracy_specs.yaml` bytes）に組み込まれており、
+# `tests/test_m1real_committed_record.py` / `tests/test_m2b_committed_record.py` が
+# CI でその pin を強制する。ここへ V_direct 用の外部素材 hash を追記すると当該
+# ファイルの sha256 が変わり、上記の commit 済み verdict の pin が壊れる——
+# 「pin を足すなら再実測して verdict を作り直す」という運用コストを、外部素材の
+# 事前登録という無関係な変更のために払わせないのが本ファイル分離の目的
+# （`m2_accuracy_bars.yaml` / `m2_accuracy_specs.yaml` 冒頭コメントと同じ流儀）。
+#
+# よって `m1_real_go_bar`（registry.yaml 内）/ `m2_accuracy_bars.yaml` と**同じ
+# 一方向規律**（registered_utc つき・実測前凍結・実測後に緩めない）を、この独立
+# ファイルへ適用する。自身の sha256 は `scripts/run_melody_accuracy.py` が V カテゴリ
+# の run report / verdict の provenance（`external_fixtures_sha256`）へ pin する。
+#
+# schema: fixtures は `{<clip_id>: {expected_audio_sha256, expected_annotation_sha256}}`。
+# 各 hash は sha256(bytes) の 64 桁 lowercase hex（`--external-manifest` が指す
+# audio_path / annotation_path の bytes 全体に対して算出）。
+#
+# **M2c-1 時点では実データ未取得のため fixtures は空 dict**。M2c-2 の実測前に
+# vocadito 等由来の 40 clip（実声・分離なし・V_direct）の hash をここへ事前登録で
+# 追記する。fixtures が空のままカテゴリ V_direct を要求する run/evaluate は
+# fail-closed で拒否される（`scripts/run_melody_accuracy.py` 側の規律。実測を見てから
+# 都合よく登録する経路を作らない）。
+
+schema_version: "m2c-external-fixtures/0.1"
+registered_utc: "2026-07-29"
+
+fixtures: {}
