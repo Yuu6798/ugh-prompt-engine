@@ -36,7 +36,9 @@ jobs:
   test-extras:
     name: core extras
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # extra 導入で全件がさらに重くなるため 45→90（nightly は push をブロックしないため
+    # ci.yml の壁時計 30 分要件の対象外・シャーディングはしない）。
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
