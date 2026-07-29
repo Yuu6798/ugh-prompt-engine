@@ -53,7 +53,10 @@ pin 整合は `tests/test_m2c_committed_record.py` が CI で強制する
 
 - V_direct に VFA バーは設定されていない（M2b S-direct のみが対象）。
 - 各 run 内 repeats n=2 は bit 一致（`repeats_bit_identical: true`）。
-- 40 clip 集計値（上表）は per-clip 40 件の重み付き集計（フレーム数加重）。
+- 40 clip 集計値（上表）は per-clip 40 件の**算術平均**（clip 等重・MIREX 慣行。
+  `_average_external_clip_metrics` 実装どおり。フレーム数加重ではない — 参考:
+  フレーム加重にすると RPA 0.98875 / VFA 全域比 0.4163 とわずかに異なる。M2d は
+  per-clip 分布を一次入力とするためこのラベル区別が重要）。
 
 ## per-clip 分布（40 clips・M2d 誤差モデルの一次入力）
 
