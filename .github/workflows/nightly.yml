@@ -36,6 +36,9 @@ jobs:
   test-extras:
     name: core extras
     runs-on: ubuntu-latest
+    # extra 導入で全件がさらに重くなるため 45→90（nightly は push をブロックしないため
+    # ci.yml の壁時計 30 分要件の対象外・シャーディングはしない）。
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -61,11 +64,12 @@ jobs:
 
       # 通常 CI と同一コマンド（slow 含む全件）を、extra 導入環境で回す。
       - name: Test (core extras installed)
-        run: pytest -q --tb=short
+        run: pytest -q --tb=short --durations=25
 
   test-clap-extra:
     name: clap extra
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -90,7 +94,7 @@ jobs:
       # 本物の laion_clap を入れた状態で CLAP adapter 経路を回す（#138 の回帰クラス）。
       - name: Test CLAP adapter paths (real laion_clap installed)
         run: >-
-          pytest -q --tb=short
+          pytest -q --tb=short --durations=25
           tests/test_clap_adapter.py
           tests/test_clap_similarity.py
           tests/test_collect_clap_fixture.py

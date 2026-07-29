@@ -113,6 +113,7 @@ testpaths = ["tests"]
 pythonpath = ["src", "."]
 markers = [
     "slow: 重い統合 / コーパス / property テスト（音声合成 + 抽出が長い）。日常の反復では `pytest -m \"not slow\"` で除外できる（CI は全件実行）",
+    "real_forensics: `_scorer_pins()` 等の実 forensics 実装（rglob+sha256 / import 閉包 / /proc/self/maps 実スキャン / 実測り直し）に接続することを検証するテスト。session 凍結 pin への差し替え対象から除外される（TB-30 PR-T1）",
 ]
 
 [tool.ruff]

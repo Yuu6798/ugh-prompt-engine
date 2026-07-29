@@ -7,9 +7,20 @@ CI 安全性: 実抽出器（crepe / demucs）を一切必要としない。run/
 「実抽出器が未導入なら unavailable として fail-closed に落ちる」経路のみ
 既定 runner（`observe_via_route_with_provenance`）を使った軽量スモークで確認する
 （設計 §8 M2a 行: 「crepe が CI 不可なら…ハーネス単体テスト」）。
+
+テスト実行時間について（TB-30 PR-T1 + フォローアップ）: `harness._scorer_pins()`
+（scorer 閉包の rglob+sha256、1 回 ≈13 秒）と `harness.bind_inference_code_pins()`
+（推論パッケージ閉包の rglob+sha256、1 回 ≈5-6 秒・独立した別の forensics 面）は
+それぞれ session で 1 回だけ実測し（`_session_real_scorer_pins` /
+`_session_real_bind_inference_code_pins`、合成値ではなく実測値）、同一の autouse
+fixture（`_stub_scorer_pins_unless_real_forensics`）がその凍結値の deepcopy を返す
+同シグネチャ stub へ両方差し替えて全テストで共有する。「pin/forensics が実際に
+実行された実装へ接続しているか」自体の検証責務は `@pytest.mark.real_forensics` を
+付けたテスト群が個別に担う（両方の stub 対象から除外）。
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import importlib
 import json
@@ -21,7 +32,7 @@ import sysconfig
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 
@@ -139,6 +150,80 @@ def _clean_evaluator_preload(monkeypatch: pytest.MonkeyPatch):
             "source": "test_fixture_stub",
         },
     )
+
+
+@pytest.fixture(scope="session")
+def _session_real_scorer_pins() -> Dict[str, Any]:
+    """`harness._scorer_pins()` の実測値をセッションで 1 回だけ計算し凍結する（TB-30 PR-T1）。
+
+    合成値ではなく実測値: この fixture は他のどの fixture/テストよりも先に
+    `_scorer_pins` を patch する前の実体を呼ぶ（session スコープなのでセッション
+    最初の要求時に 1 度だけ実行され、以降はキャッシュされた戻り値を再利用する）。
+    `_stub_scorer_pins_unless_real_forensics` がこの値の `copy.deepcopy` を返す
+    stub へ差し替えることで、ほぼ全テストが共有する。
+    """
+    return harness._scorer_pins()
+
+
+@pytest.fixture(scope="session")
+def _session_real_bind_inference_code_pins() -> Dict[str, Any]:
+    """`harness.bind_inference_code_pins()` の実測値をセッションで 1 回だけ計算し凍結する
+    （TB-30 フォローアップ: scorer pin stub と同型の第二 seam）。
+
+    `run_accuracy()` は毎回無条件に `bind_inference_code_pins()` を呼ぶ（推論パッケージ
+    ——crepe/tensorflow/librosa 等——の code pin を、`_scorer_pins()` と同じ
+    `package_code_sha256` 系の rglob+sha256 で確定する）。`_scorer_pins()` とは独立した
+    別の forensics 呼び出し面であり、この環境では TensorFlow 同梱のため 1 回 ≈5-6 秒
+    かかる。合成値ではなく実測値。
+    """
+    return harness.bind_inference_code_pins()
+
+
+@pytest.fixture(autouse=True)
+def _stub_scorer_pins_unless_real_forensics(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+    _session_real_scorer_pins: Dict[str, Any],
+    _session_real_bind_inference_code_pins: Dict[str, Any],
+) -> None:
+    """`_scorer_pins()` / `bind_inference_code_pins()` をセッション凍結値の deepcopy stub
+    へ差し替える（TB-30 PR-T1 + フォローアップ）。
+
+    `harness._scorer_pins` / `harness.bind_inference_code_pins` は
+    `run_accuracy`/`evaluate_m2_bars` 内部からも裸名（モジュールグローバル）で呼ばれる
+    ため、ここで `harness` モジュール属性を monkeypatch すれば、テストからの直接呼び
+    出しだけでなく本体コード内部の呼び出しも同じ stub に差し替わる——rglob+sha256 の
+    実 forensics（scorer 側 ≈13 秒/回・inference 側 ≈5-6 秒/回）を毎テストで払わずに
+    済む。両者は独立した forensics 呼び出し面（scorer 閉包 vs 推論パッケージ閉包）だが
+    seam の形は同一なので 1 つの autouse fixture にまとめる。
+
+    `@pytest.mark.real_forensics` が付いたテストは両方とも対象外にする（`request.node.
+    get_closest_marker` で判定）: forensics 実装そのものの正しさ（import 閉包の
+    完全性・`/proc/self/maps` の実スキャン・実測り直し・環境摂動への追従）を
+    検証するテストは実体を呼ぶ必要があるため。
+
+    個別テストが自前で `harness._scorer_pins`/`harness.bind_inference_code_pins` を
+    monkeypatch している場合は、この fixture の後（=テスト本体の中）で setattr が
+    呼ばれる分だけ後勝ちでそのまま機能する（monkeypatch のスタック順序どおり）。
+    """
+    if request.node.get_closest_marker("real_forensics") is not None:
+        return
+
+    frozen_scorer = _session_real_scorer_pins
+
+    def _stub_scorer_pins(
+        *, use_cache: bool = True, treat_anonymous_as_recorded: "Optional[bool]" = None
+    ) -> Dict[str, Any]:
+        return copy.deepcopy(frozen_scorer)
+
+    monkeypatch.setattr(harness, "_scorer_pins", _stub_scorer_pins)
+
+    frozen_inference = _session_real_bind_inference_code_pins
+
+    def _stub_bind_inference_code_pins() -> Dict[str, Any]:
+        return copy.deepcopy(frozen_inference)
+
+    monkeypatch.setattr(harness, "bind_inference_code_pins", _stub_bind_inference_code_pins)
 
 
 _ORIG_REVERIFY = harness._reverify_category_measurement
@@ -720,6 +805,8 @@ def test_evaluate_m2_bars_rejects_report_without_injection_flag() -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.real_forensics
+@pytest.mark.slow
 def test_evaluate_m2_bars_full_cycle_pass_and_diagnostic_only() -> None:
     report1 = _fake_run(route_runner=_make_fake_runner(shift_cents=10.0))
     report2 = _fake_run(route_runner=_make_fake_runner(shift_cents=10.0))
@@ -737,6 +824,95 @@ def test_evaluate_m2_bars_full_cycle_pass_and_diagnostic_only() -> None:
     assert s_direct["status"] == "pass", s_direct
     s_fullstack = verdict["categories"]["S_fullstack"]
     assert s_fullstack["status"] == "diagnostic_only", s_fullstack
+
+
+def test_stubbed_scorer_pins_never_triggers_rglob_forensics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """通常テスト条件（`real_forensics` 無し）で `_scorer_pins` / `bind_inference_code_pins`
+    の stub が有効な間、重い rglob+sha256 forensics が一切呼ばれないことを monkeypatch
+    カウンタで機械保証する（TB-30 PR-T1 §3 + フォローアップ）。
+
+    2 つの独立した forensics 呼び出し面をそれぞれ正しい束縛位置で spy する:
+
+    - **scorer 側**（`_scorer_pins()` が呼ぶ `package_code_sha256`）: `run_melody_
+      accuracy.py` は `from svp_rpe.melody.provenance import package_code_sha256` で
+      名前を自モジュール名前空間へ束縛するため、実際に触れるのは
+      `harness.package_code_sha256`（この裸名参照）であり、
+      `svp_rpe.melody.provenance.package_code_sha256` を直接 patch してもこの経路は
+      観測できない。
+    - **inference 側**（`bind_inference_code_pins()` が内部で呼ぶ
+      `packages_code_sha256`）: `bind_inference_code_pins` 自身は `run_accuracy` が
+      無条件に**毎回呼ぶ**（stub 化されていてもこの呼び出し自体は起きる——stub は
+      body を軽くするだけで呼ばれなくなるわけではない）ので、これを 0 呼び出しと
+      assert するのは誤り。重い実体は `bind_inference_code_pins` が**内部で**呼ぶ
+      `packages_code_sha256` 側であり、`bind_inference_code_pins` は `svp_rpe.melody.
+      provenance` モジュール内で定義されて同モジュールのグローバルから
+      `packages_code_sha256` を裸名で呼ぶため、`svp_rpe.melody.provenance.
+      packages_code_sha256` を直接 patch すれば正しく観測できる（scorer 側と違い、
+      呼び出し元・被呼び出し関数が同一モジュールにあるのでこの binding で正しい）。
+      stub の body が一切実行されなければ、この呼び出しは 0 のはず。
+
+    `_require_scorer_native_unchanged_since_bind`（各カテゴリ処理直後の別の
+    軽量チェックポイント、`docs/DESIGN_M2_extraction_accuracy.md` 参照）は
+    `_scorer_pins` を経由せず同じ `package_code_sha256` を独立に（安価に）呼ぶ
+    正当な別経路であり、本テストの対象（stub の有効性）とは無関係なので、ここでは
+    no-op へ差し替えて計測対象から除外する。
+    """
+    import svp_rpe.melody.provenance as provenance
+
+    calls: Dict[str, int] = {
+        "package_code_sha256": 0,
+        "packages_code_sha256": 0,
+    }
+    bind_inference_calls: Dict[str, int] = {"n": 0}
+    real_package_code_sha256 = harness.package_code_sha256
+    real_bind_inference_code_pins = harness.bind_inference_code_pins
+    real_packages_code_sha256 = provenance.packages_code_sha256
+
+    def _counting_package_code_sha256(*args: Any, **kwargs: Any) -> Any:
+        calls["package_code_sha256"] += 1
+        return real_package_code_sha256(*args, **kwargs)
+
+    def _counting_bind_inference_code_pins(*args: Any, **kwargs: Any) -> Any:
+        # `bind_inference_code_pins` そのものは run_accuracy が毎回呼ぶ（stub でも
+        # 呼び出し自体は起きる）ので、ここは「stub が本当に使われているか」の
+        # sanity カウンタに留め、0 を要求しない（下の assert 参照）。
+        bind_inference_calls["n"] += 1
+        return real_bind_inference_code_pins(*args, **kwargs)
+
+    def _counting_packages_code_sha256(*args: Any, **kwargs: Any) -> Any:
+        calls["packages_code_sha256"] += 1
+        return real_packages_code_sha256(*args, **kwargs)
+
+    monkeypatch.setattr(harness, "package_code_sha256", _counting_package_code_sha256)
+    monkeypatch.setattr(
+        harness, "bind_inference_code_pins", _counting_bind_inference_code_pins
+    )
+    monkeypatch.setattr(provenance, "packages_code_sha256", _counting_packages_code_sha256)
+    monkeypatch.setattr(harness, "_require_scorer_native_unchanged_since_bind", lambda: None)
+
+    report1 = _fake_run(
+        categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+    )
+    report2 = _fake_run(
+        categories=("S_direct",), route_runner=_make_fake_runner(shift_cents=10.0)
+    )
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    verdict = harness.evaluate_m2_bars(
+        [_as_report_artifact(report1), _as_report_artifact(report2)],
+        bars,
+        bars_sha256=bars_sha256,
+    )
+
+    assert verdict["categories"]["S_direct"]["status"] == "pass", verdict
+    # run_accuracy は report1/report2 の 2 回とも bind_inference_code_pins を呼ぶ
+    # はず——stub 自体は呼ばれる契約（0 だと逆に seam が外れている疑い）。
+    assert bind_inference_calls["n"] == 2, bind_inference_calls
+    assert calls == {"package_code_sha256": 0, "packages_code_sha256": 0}, (
+        f"forensics 呼び出しが検出された: {calls}; scorer/inference いずれかの stub が "
+        "漏れて実 forensics に接続している"
+    )
 
 
 def test_evaluate_m2_bars_fails_when_rpa_bar_not_met() -> None:
@@ -1172,6 +1348,8 @@ def test_verdict_carries_the_full_scorer_pin_closure() -> None:
         )
 
 
+@pytest.mark.real_forensics
+@pytest.mark.slow
 def test_scorer_pins_records_absent_optional_closure_member(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1210,6 +1388,8 @@ def test_scorer_pins_records_absent_optional_closure_member(
     assert pins["numpy_version"]
 
 
+@pytest.mark.real_forensics
+@pytest.mark.slow
 def test_scorer_pins_fails_closed_when_participated_but_metadata_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1261,6 +1441,8 @@ def test_scorer_optional_participated_reflects_sys_modules_membership(
     assert harness._scorer_optional_participated("threadpoolctl") is True
 
 
+@pytest.mark.real_forensics
+@pytest.mark.slow
 def test_scorer_pins_records_absent_when_optional_installed_but_not_participated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1295,6 +1477,8 @@ def test_scorer_pins_records_absent_when_optional_installed_but_not_participated
     assert pins["numpy_version"]
 
 
+@pytest.mark.real_forensics
+@pytest.mark.slow
 def test_scorer_pins_records_present_when_optional_actually_imported() -> None:
     """実際に import され `sys.modules` へ participate した optional は present で厳密 pin
     される（Codex 15 巡目 P2）。installed だけでは足りず、observed import closure への
@@ -1314,6 +1498,8 @@ def test_scorer_pins_records_present_when_optional_actually_imported() -> None:
     assert harness._is_sha256(pins["charset_normalizer_dist_native_sha256"])
 
 
+@pytest.mark.real_forensics
+@pytest.mark.slow
 def test_run_accuracy_report_records_final_optional_presence_from_observed_closure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1344,6 +1530,8 @@ def test_run_accuracy_report_records_final_optional_presence_from_observed_closu
     assert harness._is_sha256(report["threadpoolctl_dist_native_sha256"])
 
 
+@pytest.mark.real_forensics
+@pytest.mark.slow
 def test_homogeneous_scorer_gate_accepts_installed_but_unused_optional_matching_genuinely_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1614,6 +1802,8 @@ def test_generator_code_paths_imports_nothing(monkeypatch) -> None:
     )
 
 
+@pytest.mark.real_forensics
+@pytest.mark.slow
 def test_scorer_pins_rehash_bypasses_cache() -> None:
     """post-run 検証は再 hash する（size/mtime 据え置きの差し替えを見逃さない）。"""
     cached = harness._scorer_pins()
@@ -1622,6 +1812,8 @@ def test_scorer_pins_rehash_bypasses_cache() -> None:
     assert harness._is_sha256(fresh["mir_eval_code_sha256"])
 
 
+@pytest.mark.real_forensics
+@pytest.mark.slow
 def test_scorer_pins_do_not_import_mir_eval(monkeypatch) -> None:
     """スコアラー pin は import を起こさずに取れる（load-time 束縛の前提）。"""
     monkeypatch.delitem(sys.modules, "mir_eval", raising=False)
@@ -1648,6 +1840,8 @@ def test_scorer_pins_cover_scipy_and_numpy_execution_closure() -> None:
         )
 
 
+@pytest.mark.real_forensics
+@pytest.mark.slow
 def test_scorer_runtime_packages_cover_observed_mir_eval_import_closure() -> None:
     """H1 完全性テスト: 実測した `mir_eval.melody` の import 閉包が宣言済み集合に収まる。
 
@@ -1804,6 +1998,8 @@ def test_scorer_dist_native_sha256_fails_closed_when_record_unavailable(
         harness._scorer_dist_native_sha256("numpy")
 
 
+@pytest.mark.real_forensics
+@pytest.mark.slow
 def test_scorer_pins_are_unchanged_by_ownership_verification() -> None:
     """所有権検証（Codex P1 4 巡目）を追加しても、正常環境の 3 パッケージ pins は不変（回帰）。
 
@@ -2477,6 +2673,8 @@ def test_verify_scorer_dt_needed_closure_revisits_shared_native_under_new_rpath_
     assert (external_rpath_marker,) in backend_contexts
 
 
+@pytest.mark.real_forensics
+@pytest.mark.slow
 def test_reject_ld_preload_before_scorer_bind_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3282,6 +3480,8 @@ def test_reject_pre_bound_native_mappings_records_anonymous_mapping_when_post_ex
         )
 
 
+@pytest.mark.real_forensics
+@pytest.mark.slow
 def test_require_unchanged_since_load_survives_post_execution_anonymous_mapping(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -6155,6 +6355,8 @@ def test_fresh_process_verification_gets_fresh_bytecode_env(
     assert captured["env"]["PYTHONPYCACHEPREFIX"].startswith(str(tmp_path))
 
 
+@pytest.mark.real_forensics
+@pytest.mark.slow
 def test_fresh_process_report_provenance_gates() -> None:
     """測り直し子プロセスの report は「素の CLI・現行コード・現行スコアラー」を要求。
 
@@ -6421,6 +6623,8 @@ def test_evaluate_m2_bars_has_no_verification_runner_seam() -> None:
         )
 
 
+@pytest.mark.real_forensics
+@pytest.mark.slow
 def test_reverification_refuses_when_stack_cannot_rerun(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -6452,6 +6656,8 @@ def test_reverification_refuses_when_stack_cannot_rerun(
         )
 
 
+@pytest.mark.real_forensics
+@pytest.mark.slow
 def test_reverification_surfaces_cannot_rerun_when_prebound_mappings_are_clean(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
