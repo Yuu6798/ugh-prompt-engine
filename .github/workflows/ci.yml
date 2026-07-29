@@ -9,6 +9,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
@@ -29,4 +30,4 @@ jobs:
         run: ruff check .
 
       - name: Test
-        run: pytest -q --tb=short
+        run: pytest -q --tb=short --durations=25
