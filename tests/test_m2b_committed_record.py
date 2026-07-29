@@ -36,6 +36,10 @@ VERDICT = RECORD_DIR / "m2b_verdict.json"
 BARS = REPO / "tests" / "fixtures" / "melody_bench" / "m2_accuracy_bars.yaml"
 SPECS = REPO / "tests" / "fixtures" / "melody_bench" / "m2_accuracy_specs.yaml"
 
+# 確定実測 run7 の verdict bytes の凍結 digest。dated 凍結記録なので、これが
+# 変わる正当な事象は「新しい dated 記録の作成」のみ（一方向規則）。
+VERDICT_SHA256 = "7f0e314df07a2f14e0cb8c6deb059134ba3ce8bd35aaeaf02dffb06a55bf5c51"
+
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -43,6 +47,21 @@ def _sha256(path: Path) -> str:
 
 def _pinned_report_paths(verdict: dict) -> list[Path]:
     return [RECORD_DIR / pin["path_name"] for pin in verdict["report_pins"]]
+
+
+def test_verdict_bytes_are_frozen() -> None:
+    """verdict ファイル全体を bytes 単位で凍結する。
+
+    フィールド単位の読み戻し照合（下記テスト群）は「どこが壊れたか」の診断
+    粒度を与えるが、verdict 側の任意フィールドの事後編集（provenance・
+    scorer pin・数値・構成の別なく）を漏れなく検出する終端はこの 1 本が担う。
+    evaluator のコピー意味論をテスト側へ複製する field-by-field 照合の
+    際限ない拡張はしない。
+    """
+    assert _sha256(VERDICT) == VERDICT_SHA256, (
+        "m2b_verdict.json の bytes が凍結 digest と不一致。dated 記録の編集は"
+        "禁止 — 正当な再実測なら新しい dated 記録ディレクトリを作ること"
+    )
 
 
 def test_verdict_report_pins_match_committed_reports() -> None:
@@ -147,10 +166,13 @@ def test_verdict_derived_fields_match_pinned_reports() -> None:
                 f"{category}: verdict.reference_frame_counts.ref_voiced_frame_count が "
                 f"{report['run_id']} の ref_voiced_frame_count と不一致"
             )
-            assert report_cat["outcome"] in verdict_cat["outcomes"], (
-                f"{category}: {report['run_id']} の outcome "
-                f"{report_cat['outcome']!r} が verdict.outcomes に含まれない"
-            )
+
+        assert sorted(verdict_cat["outcomes"]) == sorted(
+            {report["categories"][category]["outcome"] for report in reports}
+        ), f"{category}: verdict.outcomes が pinned reports の outcome 集合と不一致"
+        assert verdict_cat["n_rows"] == len(reports), (
+            f"{category}: verdict.n_rows が pinned report 数と不一致"
+        )
 
 
 def test_verdict_is_the_committed_fail_and_diagnostic() -> None:
