@@ -395,6 +395,13 @@ def test_run_accuracy_real_extractor_falls_back_to_unavailable_when_uninstalled(
     """既定 runner（実抽出器）は crepe/demucs 未導入環境で fail-closed に unavailable を返す。
 
     実推論は一切行わない（CI 安全）。M2b の slow-lane でのみ real crepe を通す。
+
+    前例注記: この skip ガードは crepe 導入済みの環境ではこの経路の回帰を検出でき
+    ない——PR #225 9 巡目 (commit 2ff56cf) では skip されない素の CI で
+    `libpython3.12.so.1.0` の pre-bind default-deny 混入が本来のこのテストより
+    先に別ゲートで露見した。skip に隠れない形の固定は
+    `test_reverification_surfaces_cannot_rerun_when_prebound_mappings_are_clean`
+    が fake subprocess で担う。
     """
     try:
         import crepe  # noqa: F401
@@ -2725,12 +2732,27 @@ def test_reject_ld_so_preload_file_fails_closed(
 
 
 def test_reject_ld_so_preload_absent_file_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`/etc/ld.so.preload` が存在しない（大半の環境）なら束縛前チェックは何もしない。"""
+    """`/etc/ld.so.preload` が存在しない（大半の環境）なら束縛前チェックは何もしない。
+
+    旧実装は実行ホストの実際の `/etc/ld.so.preload` 不在を前提に固定 assert して
+    いた——大半の環境では成立するが、この環境非依存条件は本番コード側で保証されて
+    おらず、ホストに（空でも）同ファイルが実在するだけで無関係のテストが割れる
+    （型1/型3と同型のホスト依存 hazard）。`test_reject_ld_so_preload_file_fails_closed`
+    と対称に `Path.read_bytes` を差し替え、FileNotFoundError を模擬してホストの実際の
+    ファイル有無から独立に「不在」分岐を固定する。
+    """
+    import pathlib
+
     for name in harness._LD_PRELOAD_SIBLING_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
-    assert not Path("/etc/ld.so.preload").exists(), (
-        "この実行環境には /etc/ld.so.preload が実在する（テスト前提の drift）"
-    )
+    real_read_bytes = pathlib.Path.read_bytes
+
+    def _fake_read_bytes(self: Path, *args: Any, **kwargs: Any) -> bytes:
+        if str(self) == "/etc/ld.so.preload":
+            raise FileNotFoundError(str(self))
+        return real_read_bytes(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "read_bytes", _fake_read_bytes)
     harness._reject_ld_preload_before_scorer_bind()  # 例外が出ないことが期待値
 
 
@@ -6634,6 +6656,13 @@ def test_reverification_refuses_when_stack_cannot_rerun(
     と同じ理由で skip する: crepe が（手動導入や slow-lane 作業の副産物として）
     実際にこの環境へ入っていると、`_ORIG_REVERIFY` は実抽出器で測り直しに成功して
     しまい、この unavailable-path smoke test の前提が成立しない。
+
+    前例注記: この skip ガードは crepe 導入済みの環境ではこの経路の回帰を検出でき
+    ない——PR #225 9 巡目 (commit 2ff56cf) では skip されない素の CI で
+    `libpython3.12.so.1.0` の pre-bind default-deny 混入が本来のこのテストより
+    先に別ゲートで露見した。skip に隠れない形の固定は直後の
+    `test_reverification_surfaces_cannot_rerun_when_prebound_mappings_are_clean`
+    が fake subprocess で担う。
     """
     try:
         import crepe  # noqa: F401
