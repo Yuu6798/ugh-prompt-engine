@@ -3480,6 +3480,8 @@ def test_reject_pre_bound_native_mappings_records_anonymous_mapping_when_post_ex
         )
 
 
+@pytest.mark.real_forensics
+@pytest.mark.slow
 def test_require_unchanged_since_load_survives_post_execution_anonymous_mapping(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -6353,6 +6355,8 @@ def test_fresh_process_verification_gets_fresh_bytecode_env(
     assert captured["env"]["PYTHONPYCACHEPREFIX"].startswith(str(tmp_path))
 
 
+@pytest.mark.real_forensics
+@pytest.mark.slow
 def test_fresh_process_report_provenance_gates() -> None:
     """測り直し子プロセスの report は「素の CLI・現行コード・現行スコアラー」を要求。
 
