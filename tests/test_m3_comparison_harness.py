@@ -1581,6 +1581,50 @@ def test_cli_default_route_is_crepe_direct(
 
 
 # --------------------------------------------------------------------------- #
+# evaluate phase での経路制限（レビュー対応 2026-07-30 第 9 ラウンド・run 側と対称）
+# --------------------------------------------------------------------------- #
+def test_evaluate_rejects_publishable_report_with_non_crepe_route(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """publishable（route_runner_injected: false）な report は evaluate phase でも
+    crepe 系経路限定——route_runner 注入時のみ許される pyin_direct を publishable
+    へ偽装しても、report を直接書き換えて run phase のガードをすり抜ける経路を
+    evaluate 側が独立に塞ぐ。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report = harness.run_comparison(
+        manifest_path=manifest_path, route_name="pyin_direct", route_runner=runner
+    )
+    assert report["route"] == "pyin_direct"
+    report["route_runner_injected"] = False  # 「実測」相当（publishable）へ偽装。
+
+    with pytest.raises(ValueError, match="crepe 系経路"):
+        harness.evaluate_comparison([report])
+
+
+def test_evaluate_rejects_melodia_route_even_when_route_runner_injected(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """melodia 系経路は route_runner_injected（テスト用フェイク抽出器）であっても
+    evaluate phase で拒否する——run phase の `_validate_route_for_run` は melodia
+    系経路の report をそもそも生成させないが、report を直接書き換えて `route` を
+    melodia 系へ差し替える改ざんは run 側のガードをすり抜けるため、evaluate 側で
+    独立に enforce する（run 側の既存規則と対称）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    assert report["route_runner_injected"] is True
+    report["route"] = "melodia_direct"
+
+    with pytest.raises(ValueError, match="melodia"):
+        harness.evaluate_comparison([report])
+
+
+# --------------------------------------------------------------------------- #
 # pair ラベルの manifest 束縛（レビュー対応 2026-07-30 第 7 ラウンド）
 # --------------------------------------------------------------------------- #
 def test_evaluate_rejects_tampered_split_holdout_to_tuning(tmp_path: Path, audio_paths: Dict[str, str]):
@@ -1749,6 +1793,26 @@ def test_evaluate_rejects_null_crepe_required_pin_in_route_provenance(
     report["pairs"]["p_pos_tuning"]["route_provenance_b"]["extractor_code_sha256"] = None
 
     with pytest.raises(ValueError, match="extractor_code_sha256"):
+        harness.evaluate_comparison([report])
+
+
+def test_evaluate_rejects_non_hex_crepe_required_pin_in_route_provenance(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """crepe 系経路の必須 pin（`extractor_weights_sha256`）が非空文字列であっても
+    64 桁小文字 hex（sha256 digest の書式）でなければ fail-closed 拒否する
+    （レビュー対応 2026-07-30 第 9 ラウンド: 従来は非空文字列であることしか見て
+    おらず `"x"` のような非 hex 値でも素通りしていた）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+
+    assert report["route"] == "crepe_direct"
+    report["pairs"]["p_pos_tuning"]["route_provenance_a"]["extractor_weights_sha256"] = "x"
+
+    with pytest.raises(ValueError, match="extractor_weights_sha256"):
         harness.evaluate_comparison([report])
 
 

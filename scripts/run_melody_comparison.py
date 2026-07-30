@@ -25,7 +25,12 @@ route_runner を注入して run/evaluate の二相メカニズムのみを検�
 route_runner 非注入（実測・publishable）の run は **crepe 系経路限定**（設計 §6.1
 「対の両側とも実 crepe 抽出を通す」）——pyin_direct 等の非 crepe 経路を指定すると
 fail-closed で拒否する。melodia 系経路は注入の有無に関わらず常に拒否する（#222
-裁定前の混入禁止・設計 §8）。
+裁定前の混入禁止・設計 §8）。この規律は evaluate phase でも report 自身の
+`route` フィールドに対して独立に enforce する（レビュー対応 2026-07-30 第 9
+ラウンド）——run phase のチェックは生成時点の一度きりであり、report を直接
+書き換えて `route` を差し替えれば run 側のガードをすり抜けられるため、
+publishable report が crepe 系経路であること・melodia 系経路が injected でも
+拒否されることを evaluate 側でも独立に検証する。
 
 使い方::
 
@@ -810,7 +815,11 @@ def _validate_pin_formats(reports: List[Dict[str, Any]]) -> None:
     (c) 各 pair の `route_provenance_a` / `route_provenance_b`（存在する場合）が
         mapping であること、かつ report の `route` が crepe 系経路の場合は
         crepe 固有の必須 pin（`extractor_weights_sha256` / `extractor_code_sha256`）
-        が非空文字列であることを検証する
+        が既存の `_is_sha256_hex` と同じ書式（64 桁小文字 hex）であることを検証
+        する（レビュー対応 2026-07-30 第 9 ラウンド: 従来は非空文字列であること
+        しか見ておらず、`"x"` のような非 hex 文字列でも素通りしていた——これらは
+        名前どおり sha256 digest を名乗る pin であり、他の sha256 系 pin と同じ
+        整形要求を課す）
 
     `route_runner_injected` な report にも同様に適用する（整形検証は
     injected/publishable を問わない——fake 抽出器であっても記録する pin 値は
@@ -849,11 +858,11 @@ def _validate_pin_formats(reports: List[Dict[str, Any]]) -> None:
                     continue
                 for req_key in _CREPE_ROUTE_PROVENANCE_REQUIRED_PINS:
                     req_value = provenance.get(req_key)
-                    if not isinstance(req_value, str) or not req_value:
+                    if not _is_sha256_hex(req_value):
                         raise ValueError(
                             f"evaluate_comparison: reports[{idx}] の pair {pair_id!r} の "
-                            f"{prov_key}.{req_key}={req_value!r} は非空文字列でなければならない "
-                            "(crepe 経路の必須 pin, fail-closed)"
+                            f"{prov_key}.{req_key}={req_value!r} は 64 桁小文字 hex（sha256 "
+                            "digest）の書式でなければならない (crepe 経路の必須 pin, fail-closed)"
                         )
 
 
@@ -1021,6 +1030,59 @@ def _validate_route_runner_injected_field(reports: List[Dict[str, Any]]) -> None
             )
 
 
+def _validate_route_for_evaluate(reports: List[Dict[str, Any]]) -> None:
+    """report の `route` が evaluate phase でも実測制約を満たすか検証する（fail-closed）。
+
+    レビュー対応 2026-07-30（第 9 ラウンド）: run phase の `_validate_route_for_run`
+    （設計 §6.1 / §8）は report 生成時点の一度きりの検証——report を直接書き換えて
+    `route` を差し替えれば run 側のガードは既にすり抜けられているため、evaluate
+    phase でも独立に同じ規律を enforce する:
+
+    - melodia 系経路は `route_runner_injected` の有無に関わらず常に拒否する
+      （#222 裁定前の混入禁止・設計 §8。run 側と対称）。
+    - publishable（`route_runner_injected` が False）な report は crepe 系経路
+      （`extractor == "crepe"`）限定。非 crepe・未知 route は理由つきで拒否する
+      （設計 §6.1「対の両側とも実 crepe 抽出を通す」）。
+    - `route_runner_injected` な report（テスト用フェイク抽出器）は crepe 限定を
+      課さない（現行どおり — calibration verdict はどのみち
+      `_validate_route_runner_injected_field` 後の判定で発行されない）。
+
+    `_validate_route_runner_injected_field` が既に bool 型であることを確認済み
+    という前提で呼ぶ（evaluate_comparison 内の呼び出し順序で保証する）。
+    """
+    for idx, report in enumerate(reports):
+        route_name = report.get("route")
+        if not isinstance(route_name, str) or not route_name:
+            raise ValueError(
+                f"evaluate_comparison: reports[{idx}] に route が記録されていない、または"
+                "非文字列/空文字列 (fail-closed)"
+            )
+        if "melodia" in route_name.lower():
+            raise ValueError(
+                f"evaluate_comparison: reports[{idx}] の route={route_name!r} は melodia 系"
+                "経路; route_runner_injected の有無に関わらず #222 裁定前は禁止 (fail-closed; "
+                "run phase の _validate_route_for_run と対称)"
+            )
+        if report["route_runner_injected"]:
+            # injected report（テスト用フェイク抽出器）は crepe 限定を課さない。
+            continue
+        try:
+            route = _resolve_route(route_name)
+        except ValueError as exc:
+            raise ValueError(
+                f"evaluate_comparison: reports[{idx}] の route={route_name!r} を解決できない; "
+                f"publishable report は crepe 系経路限定 (fail-closed): {exc}"
+            ) from exc
+        if getattr(route, "extractor", "") != "crepe":
+            raise ValueError(
+                f"evaluate_comparison: reports[{idx}] の route={route_name!r} "
+                f"(extractor={getattr(route, 'extractor', None)!r}) は crepe 系経路でない; "
+                "publishable（route_runner_injected: false）な report は crepe 系経路限定 "
+                "(fail-closed; 設計 §6.1「対の両側とも実 crepe 抽出を通す」・run phase の "
+                "_validate_route_for_run と対称)"
+            )
+
+
 def _validate_run_ids_distinct(reports: List[Dict[str, Any]]) -> None:
     """全 report の `run_id` が存在・非空・相互に distinct であることを要求する。
 
@@ -1170,29 +1232,35 @@ def evaluate_comparison(
        ことを、registry pin とは独立に検証する。第 8 ラウンド: 各 report の
        pair_id 集合が manifest の pair_id 完全集合と一致することも同時に要求
        する — 部分集合（pair の削除）・過剰集合のどちらも fail-closed）
-    2. registry sha256 pin の整合検証（report 間 + 現在ロードした registry）
-    3. pair 単位 pin（`audio_sha256_a/b` / `route_provenance_a/b`）の欠落検証 —
+    2. report の `route` が実測制約を満たすかの検証（レビュー対応 2026-07-30
+       第 9 ラウンド）: melodia 系経路は injected の有無に関わらず常に拒否、
+       publishable（route_runner_injected: false）な report は crepe 系経路
+       （extractor == "crepe"）限定——report を直接書き換えて run phase の
+       ガードをすり抜ける経路を evaluate 側でも独立に塞ぐ
+    3. registry sha256 pin の整合検証（report 間 + 現在ロードした registry）
+    4. pair 単位 pin（`audio_sha256_a/b` / `route_provenance_a/b`）の欠落検証 —
        publishable report は全 pair（holdout ロック pair を除く）で必須
        （レビュー対応 2026-07-30 第 6 ラウンド: 全欠落は repeats 整合性チェック
        だけでは検出できないバイパスを閉じる）
-    4. pin 値そのものの整形検証（レビュー対応 2026-07-30 第 8 ラウンド）: sha256
+    5. pin 値そのものの整形検証（レビュー対応 2026-07-30 第 8/9 ラウンド）: sha256
        系 pin（`manifest_sha256` / `m3_registry_sha256` / `m1_registry_sha256` /
        `audio_sha256_a/b`）が 64 桁小文字 hex であること、`route_provenance_a/b`
-       が mapping であり crepe 系経路の必須 pin が非空文字列であることを検証する
+       が mapping であり crepe 系経路の必須 pin（`extractor_weights_sha256` /
+       `extractor_code_sha256`）も同様に 64 桁小文字 hex であることを検証する
        （injected/publishable を問わず適用）
-    5. repeats（sequence hash / axes / audio_sha256 含む pair 単位 pin）の bit 一致検証
-    6. 全 report の `run_id` が存在・非空・相互に distinct であることの検証
+    6. repeats（sequence hash / axes / audio_sha256 含む pair 単位 pin）の bit 一致検証
+    7. 全 report の `run_id` が存在・非空・相互に distinct であることの検証
        （レビュー対応 2026-07-30 第 4 ラウンド: 同一 run の二重指定を検出する）
-    7. route_runner_injected な report があれば calibration verdict 発行を拒否
-    8. repeats が n>=2 でなければ calibration verdict 発行を拒否（n=1 は「決定論
+    8. route_runner_injected な report があれば calibration verdict 発行を拒否
+    9. repeats が n>=2 でなければ calibration verdict 発行を拒否（n=1 は「決定論
        repeats 未検証」であり校正証拠にしない）
-    9. tuning split のみで軸別マージン表を算出（`separation_margin` 閾値）。
-       tuning positive pair に 1 件でも `not_comparable` があれば freeze
-       proposal を発行しない（レビュー対応 2026-07-30 第 5 ラウンド。negative の
-       `not_comparable` は除外 + カウント記録のみで発行を妨げない）
-    10. holdout は `_holdout_unlocked` の全条件（status=frozen + 1 軸以上の整形済み
+    10. tuning split のみで軸別マージン表を算出（`separation_margin` 閾値）。
+        tuning positive pair に 1 件でも `not_comparable` があれば freeze
+        proposal を発行しない（レビュー対応 2026-07-30 第 5 ラウンド。negative の
+        `not_comparable` は除外 + カウント記録のみで発行を妨げない）
+    11. holdout は `_holdout_unlocked` の全条件（status=frozen + 1 軸以上の整形済み
         凍結軸 + coverage.floor_status=frozen）を満たすまで開かない
-    11. tuning positive pair の被覆分布から coverage floor 候補を emit
+    12. tuning positive pair の被覆分布から coverage floor 候補を emit
     """
     if not reports:
         raise ValueError("evaluate_comparison: reports が空 (fail-closed)")
@@ -1205,6 +1273,7 @@ def evaluate_comparison(
             )
     _validate_pair_labels_bound_to_manifest(reports)
     _validate_route_runner_injected_field(reports)
+    _validate_route_for_evaluate(reports)
     _require_pair_pins_present_for_publishable_reports(reports)
     _validate_pin_formats(reports)
 
