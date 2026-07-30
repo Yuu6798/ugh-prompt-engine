@@ -146,6 +146,87 @@ def _registry_mapping() -> Dict[str, Any]:
     return yaml.safe_load(M3_REGISTRY_PATH.read_text(encoding="utf-8"))
 
 
+def _m1_registry_mapping() -> Dict[str, Any]:
+    return yaml.safe_load(M1_REGISTRY_PATH.read_text(encoding="utf-8"))
+
+
+def _write_m3_registry_variant(tmp_path: Path, *, margin_value: Any) -> Path:
+    """`separation_margin.min_same_minus_cross_margin` を `margin_value` に差し替えた
+    一時 M3 registry ファイルを書き出す（レビュー対応 2026-07-30 第 15 ラウンド）。
+    """
+    mapping = _registry_mapping()
+    mapping["separation_margin"] = {"min_same_minus_cross_margin": margin_value}
+    path = tmp_path / "m3_registry_variant.yaml"
+    path.write_text(yaml.safe_dump(mapping, sort_keys=False), encoding="utf-8")
+    return path
+
+
+# --------------------------------------------------------------------------- #
+# separation_margin の M0/M1 継承検証（レビュー対応 2026-07-30 第 15 ラウンド）
+# --------------------------------------------------------------------------- #
+def test_validate_separation_margin_accepts_value_synced_with_m1_registry():
+    """既定の 2 fixture（同期済み: いずれも 0.15）は例外を投げない。"""
+    config, _ = harness.load_m3_registry(M3_REGISTRY_PATH)
+    m1_mapping = _m1_registry_mapping()
+    harness._validate_separation_margin_inherited_from_m1(config, m1_mapping)  # 例外なし
+
+
+@pytest.mark.parametrize("bad_margin", [-1, 2.0, True], ids=["negative", "above_one", "bool"])
+def test_validate_separation_margin_rejects_invalid_value(tmp_path: Path, bad_margin: Any):
+    """一時 M3 registry の separation_margin を -1/2.0/True に改変すると fail-closed
+    （非 bool の有限数値かつ 0 < margin <= 1 でなければならない）。
+    """
+    registry_path = _write_m3_registry_variant(tmp_path, margin_value=bad_margin)
+    config, _ = harness.load_m3_registry(registry_path)
+    m1_mapping = _m1_registry_mapping()
+
+    with pytest.raises(ValueError, match="separation_margin"):
+        harness._validate_separation_margin_inherited_from_m1(config, m1_mapping)
+
+
+def test_validate_separation_margin_rejects_mismatch_with_m1_registry(tmp_path: Path):
+    """M3 registry の separation_margin(0.2) が M1 registry の値(0.15)と不一致なら
+    fail-closed（M3 は M0/M1 の値を継承しなければならず新値を発明してはならない）。
+    """
+    registry_path = _write_m3_registry_variant(tmp_path, margin_value=0.2)
+    config, _ = harness.load_m3_registry(registry_path)
+    m1_mapping = _m1_registry_mapping()
+    assert m1_mapping["separation_gate"]["min_same_minus_cross_margin"] != 0.2
+
+    with pytest.raises(ValueError, match="不一致"):
+        harness._validate_separation_margin_inherited_from_m1(config, m1_mapping)
+
+
+def test_run_comparison_preflight_rejects_invalid_separation_margin(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """run phase の preflight でも同じ検証を独立に enforce する（設計の「run 側でも
+    可能なら」を満たす配線確認）。"""
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    registry_path = _write_m3_registry_variant(tmp_path, margin_value=2.0)
+
+    with pytest.raises(ValueError, match="separation_margin"):
+        harness.run_comparison(
+            manifest_path=manifest_path, route_runner=runner, registry_path=registry_path
+        )
+
+
+def test_run_comparison_preflight_rejects_separation_margin_mismatch_with_m1(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    registry_path = _write_m3_registry_variant(tmp_path, margin_value=0.2)
+
+    with pytest.raises(ValueError, match="不一致"):
+        harness.run_comparison(
+            manifest_path=manifest_path, route_runner=runner, registry_path=registry_path
+        )
+
+
 def _partially_frozen_registry_text() -> str:
     """`evidence_thresholds.status` のみ frozen にした registry(axes なし・
     coverage.floor_status は provisional のまま)。holdout が開いてはならない
@@ -653,6 +734,45 @@ def test_margin_table_records_not_comparable_positive_and_negative_counts():
     assert result["calibrated_axes"] == ["contour", "interval", "rhythm"]
 
 
+# --------------------------------------------------------------------------- #
+# freeze proposal 前の coverage 完全性検証（レビュー対応 2026-07-30 第 15 ラウンド）
+# --------------------------------------------------------------------------- #
+def test_validate_tuning_coverage_completeness_accepts_full_distribution():
+    """`_synthetic_pairs_for_margin` の coverage は全て整形済み — 違反なし。"""
+    pairs = _synthetic_pairs_for_margin()
+    assert harness._validate_tuning_coverage_completeness(pairs) == []
+
+
+def test_validate_tuning_coverage_completeness_flags_missing_field():
+    pairs = _synthetic_pairs_for_margin()
+    del pairs["pos1"]["comparison"]["coverage"]["phrase_coverage_b"]
+    assert harness._validate_tuning_coverage_completeness(pairs) == ["pos1"]
+
+
+def test_validate_tuning_coverage_completeness_flags_out_of_range_value():
+    pairs = _synthetic_pairs_for_margin()
+    pairs["neg1"]["comparison"]["coverage"]["aligned_note_fraction_a"] = 1.5
+    assert harness._validate_tuning_coverage_completeness(pairs) == ["neg1"]
+
+
+def test_validate_tuning_coverage_completeness_flags_bool_value():
+    pairs = _synthetic_pairs_for_margin()
+    pairs["pos2"]["comparison"]["coverage"]["phrase_coverage_a"] = True
+    assert harness._validate_tuning_coverage_completeness(pairs) == ["pos2"]
+
+
+def test_validate_tuning_coverage_completeness_ignores_not_comparable_and_holdout():
+    """not_comparable pair・holdout split pair の壊れた coverage は対象外。"""
+    pairs = _synthetic_pairs_for_margin()
+    pairs["nc1"] = {
+        "split": "tuning",
+        "expected": "same",
+        "comparison": {"evidence": "not_comparable", "axes": {}, "coverage": {}},
+    }
+    pairs["pos_holdout"]["comparison"]["coverage"] = {}
+    assert harness._validate_tuning_coverage_completeness(pairs) == []
+
+
 def test_evaluate_rejects_freeze_proposal_when_tuning_positive_not_comparable(
     tmp_path: Path, audio_paths: Dict[str, str]
 ):
@@ -718,6 +838,50 @@ def test_evaluate_rejects_freeze_proposal_when_tuning_positive_not_comparable(
     assert verdict["calibrated_axes"]
     assert verdict["freeze_proposal"] == {}
     assert verdict["freeze_proposal_rejected_reason"] == "rejected_positive_not_comparable"
+
+
+def test_evaluate_rejects_freeze_proposal_when_tuning_coverage_field_missing(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """比較可能な tuning pair の `comparison.coverage` にフィールド欠落があれば、
+    freeze proposal と coverage floor 候補の双方を発行しない（レビュー対応
+    2026-07-30 第 15 ラウンド）。margin_table 自体は emit される。
+    """
+    reports = _two_reports_for_calibration_verdict(tmp_path, audio_paths)
+    for report in reports:
+        del report["pairs"]["p_pos_tuning"]["comparison"]["coverage"]["phrase_coverage_b"]
+
+    verdict = harness.evaluate_comparison(reports)
+
+    assert "margin_table" in verdict
+    assert verdict["freeze_proposal"] == {}
+    assert verdict["freeze_proposal_rejected_reason"] == "coverage_incomplete(p_pos_tuning)"
+    assert "coverage_floor_candidate" not in verdict
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [2.0, -1.0, True],
+    ids=["out_of_range_high", "out_of_range_low", "bool_value"],
+)
+def test_evaluate_rejects_freeze_proposal_when_tuning_coverage_value_invalid(
+    tmp_path: Path, audio_paths: Dict[str, str], bad_value: Any
+):
+    """`comparison.coverage` の値が域外(2.0/-1.0)・bool(True)のいずれかなら、
+    freeze proposal と coverage floor 候補の双方を発行しない。
+    """
+    reports = _two_reports_for_calibration_verdict(tmp_path, audio_paths)
+    for report in reports:
+        report["pairs"]["p_pos_tuning"]["comparison"]["coverage"][
+            "aligned_note_fraction_a"
+        ] = bad_value
+
+    verdict = harness.evaluate_comparison(reports)
+
+    assert "margin_table" in verdict
+    assert verdict["freeze_proposal"] == {}
+    assert verdict["freeze_proposal_rejected_reason"] == "coverage_incomplete(p_pos_tuning)"
+    assert "coverage_floor_candidate" not in verdict
 
 
 # --------------------------------------------------------------------------- #

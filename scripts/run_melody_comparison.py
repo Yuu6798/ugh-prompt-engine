@@ -99,6 +99,15 @@ _VALID_SPLITS = {"tuning", "holdout"}
 _VALID_EXPECTED = {"same", "different"}
 _REQUIRED_PAIR_KEYS = {"pair_id", "kind", "split", "audio_a", "audio_b", "expected"}
 _AXES: Tuple[str, ...] = ("contour", "interval", "rhythm")
+# `comparison.coverage`（`AlignmentCoverage.to_dict`。`alignment.py`）が持つ 4
+# フィールド。freeze proposal 発行前の完全性検証（`_validate_tuning_coverage_
+# completeness`）が対象にする（レビュー対応 2026-07-30 第 15 ラウンド）。
+_COVERAGE_FIELDS: Tuple[str, ...] = (
+    "aligned_note_fraction_a",
+    "aligned_note_fraction_b",
+    "phrase_coverage_a",
+    "phrase_coverage_b",
+)
 
 # route_runner: (audio_path) -> (MelodyObservation, provenance dict)。
 RouteRunner = Callable[[str], Tuple[MelodyObservation, Dict[str, Any]]]
@@ -436,6 +445,65 @@ def _holdout_unlocked(config: Any) -> bool:
     return True
 
 
+def _validate_separation_margin_inherited_from_m1(
+    config: Any, m1_mapping: Dict[str, Any]
+) -> None:
+    """M3 registry の `separation_margin.min_same_minus_cross_margin` が M0/M1
+    registry（`registry.yaml` の `separation_gate.min_same_minus_cross_margin`）
+    から継承された値であることを検証する（run/evaluate 両 phase 共有、fail-closed）。
+
+    レビュー対応 2026-07-30（第 15 ラウンド）: `M3ComparisonConfig.from_registry`
+    （`representation.py` の `_build_section`）は `separation_margin` セクションを
+    known-key 集合としてしか検証しておらず、`dc(**mapping)` で dataclass を構築する
+    だけのため値そのもの（型・値域・M1 側との一致）は実行時無検査で通ってしまう。
+    `tests/test_melody_representation.py::test_separation_margin_synced_with_m0_registry`
+    は fixture 2 ファイルの静的な等値を確認する pytest テストに過ぎず、registry
+    ファイルが実行時に直接改変された場合（本ハーネス自身の `--registry`/
+    `--m1-registry` 引数で別ファイルを指した場合を含む）にこの不変条件を独立に
+    enforce するものではない。ここで:
+
+    (a) `config.separation_margin.min_same_minus_cross_margin` が非 bool の有限
+        数値であり、かつ `0 < margin <= 1` であること
+    (b) 上記の値が、既にロードした M1 registry（`registry.yaml`）の
+        `separation_gate.min_same_minus_cross_margin` と等値であること
+
+    を要求する。比較対象は常に呼び出し側がロードした M1 registry の実測値——
+    0.15 のようなハードコード値は本関数にも導入しない（M0/M1 registry が source of
+    truth）。
+    """
+    margin = config.separation_margin.min_same_minus_cross_margin
+    if isinstance(margin, bool) or not isinstance(margin, (int, float)):
+        raise ValueError(
+            "separation_margin.min_same_minus_cross_margin="
+            f"{margin!r} は非 bool の数値でなければならない (fail-closed)"
+        )
+    fmargin = float(margin)
+    if not math.isfinite(fmargin) or not (0.0 < fmargin <= 1.0):
+        raise ValueError(
+            "separation_margin.min_same_minus_cross_margin="
+            f"{margin!r} は有限かつ 0 より大きく 1.0 以下でなければならない (fail-closed)"
+        )
+    separation_gate = m1_mapping.get("separation_gate")
+    if not isinstance(separation_gate, dict):
+        raise ValueError(
+            "M1 registry (registry.yaml) に separation_gate セクションがない (fail-closed)"
+        )
+    m1_margin = separation_gate.get("min_same_minus_cross_margin")
+    if isinstance(m1_margin, bool) or not isinstance(m1_margin, (int, float)):
+        raise ValueError(
+            "M1 registry の separation_gate.min_same_minus_cross_margin="
+            f"{m1_margin!r} は非 bool の数値でなければならない (fail-closed)"
+        )
+    if float(m1_margin) != fmargin:
+        raise ValueError(
+            "M3 registry の separation_margin.min_same_minus_cross_margin="
+            f"{fmargin!r} が M1 registry (registry.yaml) の "
+            f"separation_gate.min_same_minus_cross_margin={m1_margin!r} と不一致; M3 の "
+            "separation_margin は M0/M1 registry の値を継承しなければならず、新値を発明しては "
+            "ならない (fail-closed)"
+        )
+
+
 # --------------------------------------------------------------------------- #
 # run phase
 # --------------------------------------------------------------------------- #
@@ -695,6 +763,10 @@ def run_comparison(
 
     config, m3_registry_sha256 = load_m3_registry(registry_path)
     m1_mapping, m1_registry_sha256 = _load_m1_registry(m1_registry_path)
+    # レビュー対応 2026-07-30（第 15 ラウンド）: registry を読み込んだ直後、
+    # holdout ロック判定や pair 処理へ進む前に separation_margin の M0/M1 継承を
+    # 検証する（fail-closed。run phase preflight でも evaluate と対称に enforce）。
+    _validate_separation_margin_inherited_from_m1(config, m1_mapping)
     thresholds = ObservabilityThresholds.from_registry(m1_mapping["observation_gate"])
 
     manifest_bytes = Path(manifest_path).read_bytes()
@@ -1587,6 +1659,63 @@ def _margin_table(
     }
 
 
+def _validate_tuning_coverage_completeness(pairs: Dict[str, Dict[str, Any]]) -> List[str]:
+    """freeze proposal 発行前に、比較可能な tuning pair 全ての `comparison.coverage`
+    4 フィールドの完全性を検証し、違反した pair_id のリスト（sorted・重複なし）を
+    返す（空リストは違反なし）。例外は投げない——呼び出し側 `evaluate_comparison`
+    が freeze proposal / coverage floor 候補の発行可否として扱う（fail-closed の
+    最終判断は呼び出し側）。
+
+    レビュー対応 2026-07-30（第 15 ラウンド）: `_coverage_floor_candidate` は
+    tuning split の positive pair から `aligned_note_fraction_a/b` の値を読むだけで、
+    値の型・値域を無検査で `min()`/`max()`/`sum()` へ積んでいた——`comparison.coverage`
+    が report 直接改ざんや比較器側の不具合で欠落・bool・域外値を持っていても、
+    coverage floor 候補が黙って壊れたまま算出される穴があった。`_margin_table` の
+    `not_comparable_positive_count` 会計（第 5 ラウンド）と同種の「正直会計」を
+    coverage 側にも課す。
+
+    対象は比較可能（`comparison` が存在し `evidence != "not_comparable"`）な
+    **tuning split** の pair 全て（positive/negative 問わない——4 フィールドの
+    整形は kind に関係なく計器が保証すべき値のため。positive pair の欠落は
+    coverage floor 候補の分布不完全に直結し、negative pair の欠落も同じ
+    `comparison.coverage` 構造の壊れを示すため区別しない）。各 pair について:
+
+    (a) `comparison.coverage` が mapping であること
+    (b) 4 フィールド（aligned_note_fraction_a/b・phrase_coverage_a/b）が存在し、
+        非 bool の有限数値（`math.isfinite`）かつ 0.0〜1.0 の範囲内であること
+
+    のいずれかが破れたら、その pair_id を違反として集める。holdout split の
+    pair・`comparison` を持たない pair（holdout ロック行）・`not_comparable` な
+    pair は対象外（floor 候補にも margin にも寄与しないため検証不要）。
+    """
+    violations: set = set()
+    for pair_id, pair in pairs.items():
+        if pair["split"] != "tuning":
+            continue
+        comparison = pair.get("comparison")
+        if comparison is None:
+            continue
+        if comparison.get("evidence") == "not_comparable":
+            continue
+        coverage = comparison.get("coverage")
+        if not isinstance(coverage, dict):
+            violations.add(pair_id)
+            continue
+        for field in _COVERAGE_FIELDS:
+            if field not in coverage:
+                violations.add(pair_id)
+                break
+            value = coverage[field]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                violations.add(pair_id)
+                break
+            fvalue = float(value)
+            if not math.isfinite(fvalue) or not (0.0 <= fvalue <= 1.0):
+                violations.add(pair_id)
+                break
+    return sorted(violations)
+
+
 def _coverage_floor_candidate(pairs: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     """tuning split の positive pair の被覆分布から floor 候補を出す（設計 §4.2 / §6.2）。
 
@@ -1745,6 +1874,11 @@ def evaluate_comparison(
        との一致。レビュー対応 2026-07-30 第 12 ラウンド、第 13 ラウンドで遅延
        再計算から import 時 bind へ変更）: registry sha256 pin と対称に、report
        が指す軌跡・holdout 判定がどのコード版で作られたものかを追跡する
+    4.5. `separation_margin.min_same_minus_cross_margin`（`_validate_separation_
+        margin_inherited_from_m1`。レビュー対応 2026-07-30 第 15 ラウンド）が
+        非 bool の有限数値かつ 0 < margin <= 1 であり、かつ現在ロードした M1
+        registry（`registry.yaml`）の `separation_gate.min_same_minus_cross_margin`
+        と等値であることを検証する（run phase preflight とも対称に enforce）
     5. pair 単位 pin（`audio_sha256_a/b` / `route_provenance_a/b`）の欠落検証 —
        publishable report は全 pair（holdout ロック pair を除く）で必須
        （レビュー対応 2026-07-30 第 6 ラウンド: 全欠落は repeats 整合性チェック
@@ -1771,6 +1905,14 @@ def evaluate_comparison(
         tuning positive pair に 1 件でも `not_comparable` があれば freeze
         proposal を発行しない（レビュー対応 2026-07-30 第 5 ラウンド。negative の
         `not_comparable` は除外 + カウント記録のみで発行を妨げない）
+    11.5. freeze proposal 発行前に、比較可能（`comparison` あり・`not_comparable`
+        でない）な tuning pair 全ての `comparison.coverage` 4 フィールド
+        （aligned_note_fraction_a/b・phrase_coverage_a/b）の完全性を検証する
+        （`_validate_tuning_coverage_completeness`。レビュー対応 2026-07-30 第 15
+        ラウンド）: 存在し非 bool の有限数値かつ 0.0〜1.0 であることを要求し、
+        違反 pair_id が 1 件でもあれば freeze proposal と coverage floor 候補の
+        双方を emit しない（理由 `coverage_incomplete(<pair_id>...)` を
+        `freeze_proposal_rejected_reason` に記録。margin_table 自体は出す）
     12. holdout は `_holdout_unlocked` の全条件（status=frozen + 1 軸以上の整形済み
         凍結軸 + coverage.floor_status=frozen + coverage.floor 値が有効）を満たす
         まで開かない
@@ -1810,13 +1952,16 @@ def evaluate_comparison(
     _validate_pin_formats(reports)
 
     config, m3_registry_sha256 = load_m3_registry(registry_path)
-    _, m1_registry_sha256 = _load_m1_registry(m1_registry_path)
+    m1_mapping, m1_registry_sha256 = _load_m1_registry(m1_registry_path)
     _validate_registry_pins(
         reports,
         current_m3_sha256=m3_registry_sha256,
         current_m1_sha256=m1_registry_sha256,
     )
     _validate_m3_code_sha256(reports, current_m3_code_sha256=_M3_CODE_SHA256_AT_IMPORT)
+    # レビュー対応 2026-07-30（第 15 ラウンド）: separation_margin の M0/M1 継承を
+    # run phase preflight と対称に evaluate 側でも独立に enforce する（fail-closed）。
+    _validate_separation_margin_inherited_from_m1(config, m1_mapping)
 
     _check_repeats_consistency(reports)
     _validate_run_ids_distinct(reports)
@@ -1894,15 +2039,28 @@ def evaluate_comparison(
         # 扱う。
         verdict["freeze_proposal"] = {}
         verdict["freeze_proposal_rejected_reason"] = "rejected_positive_not_comparable"
+        verdict["coverage_floor_candidate"] = _coverage_floor_candidate(reference_pairs)
     else:
-        verdict["freeze_proposal"] = {
-            axis: {
-                "strong_min": margin["axes"][axis]["positive_min"],
-                "none_max": margin["axes"][axis]["negative_max"],
+        # レビュー対応 2026-07-30（第 15 ラウンド）: 上の not_comparable 会計とは
+        # 独立に、比較可能な tuning pair 全ての `comparison.coverage` 4 フィールド
+        # の完全性を freeze proposal 発行前に検証する。1 件でも違反があれば
+        # freeze proposal と coverage floor 候補の**双方**を emit しない
+        # （margin_table 自体は出す — 発行判断のみを止める）。
+        coverage_violations = _validate_tuning_coverage_completeness(reference_pairs)
+        if coverage_violations:
+            verdict["freeze_proposal"] = {}
+            verdict["freeze_proposal_rejected_reason"] = (
+                f"coverage_incomplete({', '.join(coverage_violations)})"
+            )
+        else:
+            verdict["freeze_proposal"] = {
+                axis: {
+                    "strong_min": margin["axes"][axis]["positive_min"],
+                    "none_max": margin["axes"][axis]["negative_max"],
+                }
+                for axis in margin["calibrated_axes"]
             }
-            for axis in margin["calibrated_axes"]
-        }
-    verdict["coverage_floor_candidate"] = _coverage_floor_candidate(reference_pairs)
+            verdict["coverage_floor_candidate"] = _coverage_floor_candidate(reference_pairs)
 
     if not holdout_locked:
         # レビュー対応 2026-07-30（第 10 ラウンド）: registry が完全凍結
