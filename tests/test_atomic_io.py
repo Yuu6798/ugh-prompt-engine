@@ -200,14 +200,15 @@ def test_atomic_publish_bundle_removes_stale_filenames_not_in_contents(tmp_path:
 
 
 @pytest.mark.parametrize(
-    "bad_name", ["../victim", "/etc/passwd", "a/b", "..", ""], ids=repr
+    "bad_name", ["../victim", "/etc/passwd", "a/b", "..", "", "C:foo"], ids=repr
 )
 def test_atomic_publish_bundle_rejects_unsafe_content_name(
     tmp_path: Path, bad_name: str
 ) -> None:
     """`contents` のキーが `output_dir` を脱出しうる名前（相対トラバーサル /
-    絶対パス / ネストしたパス区切り / 空文字 / `".."`）だと、staging への
-    書き込みより前に `ValueError` で拒否する（Codex P2 review 指摘: 従来は
+    絶対パス / ネストしたパス区切り / 空文字 / `".."` / Windows drive-relative
+    `"C:foo"`）だと、staging への書き込みより前に `ValueError` で拒否する
+    （Codex P2 review 指摘: 従来は
     `output_dir / name` の join がそのまま外部ファイルへ届き、rename 前に
     上書き・失敗時 rollback が上書き後のバイト列を復元してしまっていた）。
     外部の被害候補ファイルは無傷のまま残ることを確認する。"""

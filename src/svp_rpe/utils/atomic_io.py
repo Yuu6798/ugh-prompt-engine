@@ -78,16 +78,36 @@ def _validate_bundle_name(name: str) -> None:
     十分・字句検証のみで足りる）。
 
     空文字 / `"."` / `".."` / 絶対パス / パス区切り文字（`/`, `\\`, `os.sep`,
-    `os.altsep`）を含む名前は `output_dir / name` の join が staging/出力
-    ルートの外へ脱出しうるため `ValueError` で拒否する（Codex P2 review 指摘:
-    `"../victim"` や絶対パスを渡すと rename 前に外部ファイルを上書きし、失敗時
-    rollback が「上書き後のバイト列」を復元してしまっていた）。
+    `os.altsep`）/ `":"` を含む名前は `output_dir / name` の join が
+    staging/出力ルートの外へ脱出しうるため `ValueError` で拒否する（Codex P2
+    review 指摘: `"../victim"` や絶対パスを渡すと rename 前に外部ファイルを
+    上書きし、失敗時 rollback が「上書き後のバイト列」を復元してしまって
+    いた）。
+
+    `":"` 拒否（Codex P2 review round 5 指摘）: Windows の drive-relative
+    形式 `"C:foo"` は `os.path.isabs()` が `False` を返しパス区切り文字も
+    含まないため、上記の絶対パス/区切り文字チェックをすり抜けるが、Windows
+    上では `output_dir / "C:foo"` の join が `output_dir` の外（別ドライブの
+    カレントディレクトリ相対）へ脱出しうる。`":"` は Windows のファイル名で
+    そもそも不正な文字であり POSIX の正当なフラット名にも通常現れないため、
+    これを拒否しても正当な名前を排除しない。drive-relative（`"C:foo"`）に
+    加え drive-absolute（`"C:\\..."` — バックスラッシュ拒否と重畳）や NTFS
+    ADS（`"name:stream"`）も含め、`":"` を含む名前のクラス全体を両 OS で
+    字句的に終端する。resolve 後の containment 検証は追加しない（到達可能な
+    呼び出し元ケースが存在しないための一般化見送り — `_validate_bundle_name`
+    冒頭の契約どおり）。
     """
     if not name or name in (".", ".."):
         raise ValueError(f"invalid bundle entry name: {name!r}")
     if os.path.isabs(name):
         raise ValueError(f"invalid bundle entry name (absolute path not allowed): {name!r}")
-    if "/" in name or "\\" in name or os.sep in name or (os.altsep and os.altsep in name):
+    if (
+        "/" in name
+        or "\\" in name
+        or os.sep in name
+        or (os.altsep and os.altsep in name)
+        or ":" in name
+    ):
         raise ValueError(f"invalid bundle entry name (must be a flat filename): {name!r}")
 
 
@@ -138,8 +158,8 @@ def atomic_publish_bundle(
 
     `contents` のキーおよび `stale_filenames` の各名前は `output_dir` 直下の
     フラットなファイル名のみを契約とする（`_validate_bundle_name` 参照）。
-    空文字 / `"."` / `".."` / 絶対パス / パス区切り文字を含む名前は、書き込み・
-    削除を一切行う前に `ValueError` で拒否する。
+    空文字 / `"."` / `".."` / 絶対パス / パス区切り文字 / `":"` を含む名前は、
+    書き込み・削除を一切行う前に `ValueError` で拒否する。
 
     衝突検査（`protected_inputs` があれば、または `always_check_collision=True`
     のとき）: `contents`（+ `stale_filenames` のうち `contents` に含まれない
