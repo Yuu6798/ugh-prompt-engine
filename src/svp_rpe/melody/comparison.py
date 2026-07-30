@@ -303,6 +303,24 @@ def compare_melodies(
         axes["rhythm"] = None
         reasons.append("rhythm_not_computable")
 
+    # 5.5) 全軸算出不能の縮退ガード: 被覆下限は通ったが整列 interval カラムが
+    # 0（例: 全フレーズが単ノートで interval 列が空）だと 3 軸すべてが None に
+    # なる。この場合 evidence="none"（軸の生値が全て欠落したまま「証拠なし」を
+    # named）ではなく、「そもそも測れない」ことを正直に `not_comparable` として
+    # 返す（設計 §8「測れない対には正直に沈黙」・レビュー対応 2026-07-30 第 21
+    # ラウンド。evaluate 側の `_validate_evidence_values_and_axes_consistency`
+    # （第 16 ラウンド）が課す「not_comparable 以外で axes 全 None は不整合」との
+    # round-trip 整合を回復する）。
+    if interval_total == 0:
+        reasons.append("no_computable_axes")
+        return _not_comparable(
+            route_a=observation_a.route,
+            route_b=observation_b.route,
+            reasons=reasons,
+            coverage=coverage,
+            provenance_extra=provenance_extra,
+        )
+
     # 7) オクターブ折返しガード: 折返し類似と生類似の乖離を隠さず記録する
     # （判定自体は折返し側=interval 軸を用いる）。
     octave_artifact_suspected = False

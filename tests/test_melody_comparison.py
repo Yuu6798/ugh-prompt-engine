@@ -85,6 +85,21 @@ def _observation_from_notes(notes: List[MelodyNote], route: str = "test_route") 
     return MelodyObservation(route=route, source_model="test:fake", notes=tuple(notes))
 
 
+# 全フレーズが単ノート(interval 列が全フレーズで空になる縮退 fixture)。M1 観測
+# ゲート(min_note_count=8 / min_phrase_count=2)は通すが、フレーズ内ノート数が
+# 常に 1 のため `intervals_folded` が全フレーズで空タプルになり、整列 interval
+# カラム自体が生成されない——「計算可能な軸が 1 つも無い」縮退を再現する。
+def _single_note_phrases() -> List[MelodyNote]:
+    notes: List[MelodyNote] = []
+    t = 0.0
+    duration = 1.0
+    gap = 0.65  # phrase_gap_sec(0.6)超のギャップ → 毎ノートが新フレーズになる
+    for _ in range(8):
+        notes.append(_note(60, t, t + duration))
+        t += duration + gap
+    return notes
+
+
 def _sparse_notes(count: int, route_gap: float = 0.05) -> List[MelodyNote]:
     """観測ゲートを通さない（note_count 不足の）旋律。"""
     notes: List[MelodyNote] = []
@@ -146,6 +161,36 @@ def test_compare_melodies_rejects_insufficient_overlap():
     assert any(r.startswith("insufficient_overlap(") for r in report.reasons)
     # 被覆自体は観測事実として出す(空にしない)。
     assert report.coverage["aligned_note_fraction_a"] < config.coverage.floor
+
+
+# --------------------------------------------------------------------------- #
+# 全軸算出不能の縮退: not_comparable へ（レビュー対応 2026-07-30 第 21 ラウンド）
+# --------------------------------------------------------------------------- #
+def test_compare_melodies_returns_not_comparable_when_no_axis_is_computable():
+    """全フレーズが単ノートで interval 列が全フレーズで空(=整列 interval カラム
+    0)の縮退ケース: M1 ゲート・被覆下限ゲートはともに通過するが、計算可能な軸が
+    1 つも無いため、以前の `evidence="none"` + axes 全 `None` ではなく
+    `evidence="not_comparable"` + `no_computable_axes` を返す（設計 §8「測れない
+    対には正直に沈黙」・evaluate 側の第 16 ラウンド整合検証との round-trip 回復）。
+    """
+    config = _default_config()
+    thresholds = _default_thresholds()
+    notes = _single_note_phrases()
+
+    report = compare_melodies(
+        _observation_from_notes(notes, route="a"),
+        _observation_from_notes(notes, route="b"),
+        observability_thresholds=thresholds,
+        config=config,
+    )
+
+    assert report.evidence == "not_comparable"
+    assert report.axes == {"contour": None, "interval": None, "rhythm": None}
+    assert report.axis_evidence == {}
+    assert "no_computable_axes" in report.reasons
+    # 被覆自体は観測事実として出す(not_comparable でも空にしない)。
+    assert report.coverage["aligned_note_fraction_a"] == pytest.approx(1.0)
+    assert report.coverage["aligned_note_fraction_b"] == pytest.approx(1.0)
 
 
 # --------------------------------------------------------------------------- #
