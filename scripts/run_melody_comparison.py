@@ -38,6 +38,13 @@ publishable report が crepe 系経路であること・melodia 系経路が inj
     python scripts/run_melody_comparison.py --pairs pairs.yaml --out run2.json
     python scripts/run_melody_comparison.py --evaluate run1.json run2.json --out verdict.json
 
+    # 別チェックアウト（run 時と evaluate 時で manifest の絶対パスが変わる環境）
+    # では、report 記録の manifest_path が存在しない場合に --pairs を併用する
+    # （sha256 が report 記録の manifest_sha256 と一致すれば採用。レビュー対応
+    # 2026-07-30 第 20 ラウンド）:
+    python scripts/run_melody_comparison.py --evaluate run1.json run2.json \\
+        --pairs pairs.yaml --out verdict.json
+
 pairs manifest（YAML）の形:
 
     schema: m3-comparison-pairs/0.1
@@ -868,6 +875,13 @@ def run_comparison(
         "m1_registry_sha256": m1_registry_sha256,
         "m3_code_sha256": _M3_CODE_SHA256_AT_IMPORT,
         "manifest_path": str(Path(manifest_path).resolve()),
+        # レビュー対応 2026-07-30（第 20 ラウンド）: manifest 参照の権威は
+        # `manifest_sha256`（content pin）——`manifest_path`（絶対パス）は別
+        # チェックアウトでは存在しない前提を置けないため、ファイル名のみの
+        # advisory な参照も併記する（絶対パスを消すより既存スキーマへの影響が
+        # 小さい）。evaluate 側の解決はどちらの値も権威として扱わず、常に
+        # sha256 一致でのみ manifest を受理する。
+        "manifest_filename": Path(manifest_path).name,
         "manifest_sha256": manifest_sha256,
         "pairs": {},
     }
@@ -984,7 +998,9 @@ _PAIR_LABEL_FIELDS: Tuple[str, ...] = ("split", "expected", "kind")
 _PAIR_AUDIO_PATH_FIELDS: Tuple[str, ...] = ("audio_a", "audio_b")
 
 
-def _validate_pair_labels_bound_to_manifest(reports: List[Dict[str, Any]]) -> None:
+def _validate_pair_labels_bound_to_manifest(
+    reports: List[Dict[str, Any]], *, supplied_manifest_path: Optional[Path] = None
+) -> None:
     """report の pair ラベル（split/expected/kind/audio パス）が manifest の
     content pin に束縛されていることを検証する（fail-closed）。
 
@@ -998,8 +1014,8 @@ def _validate_pair_labels_bound_to_manifest(reports: List[Dict[str, Any]]) -> No
 
     (a) 各 report が記録している `manifest_path` から manifest ファイルを読み、
         その生バイトの sha256 が report 記録の `manifest_sha256` と一致する
-        ことを検証する（`manifest_path` の欠落・evaluate 時点でのファイル不在
-        も、ラベルを content pin に束縛できないため fail-closed）
+        ことを検証する（`manifest_path` の欠落は、ラベルを content pin に
+        束縛できないため常に fail-closed）
     (b) 各 report の各 pair について、row に記録されている
         `split`/`expected`/`kind`/`audio_a`/`audio_b` が、manifest 上の同一
         `pair_id` の値と一致することを検証する（pair_id が manifest に存在
@@ -1007,8 +1023,28 @@ def _validate_pair_labels_bound_to_manifest(reports: List[Dict[str, Any]]) -> No
     (c) 複数 report にまたがる同一 `pair_id` についても、上記フィールドが
         report 間で一致することを検証する（manifest 経由の (a)+(b) と独立の
         直接比較として、defense-in-depth で行う）
+
+    レビュー対応 2026-07-30（第 20 ラウンド・manifest 参照のチェックアウト
+    非依存化）: 従来は `manifest_path`（run 時に記録した絶対パス）が evaluate
+    時点のファイルシステム上に存在することを必須としていたが、これは
+    「別チェックアウト（別マシン・別ディレクトリ配置）で run した report を
+    evaluate する」運用を構造的に妨げていた——`manifest_sha256`（content pin）
+    こそが本来の束縛の権威であり、絶対パスはあくまで「同じ環境で動かした場合の
+    近道」に過ぎない。ここで解決順を以下へ変更する:
+
+    1. `manifest_path` が指すファイルが evaluate 時点で存在すればそれを読む
+       （従来どおりの高速経路。チェックアウトが run 時と同じなら `--pairs` は
+       不要）
+    2. 存在しない場合、呼び出し側が `--pairs` で供給した
+       `supplied_manifest_path` があればそれを読み、その sha256 が report の
+       `manifest_sha256` と一致することを要求する（不一致は manifest の差し
+       替え疑いとして fail-closed）
+    3. どちらも得られない（記録パスが読めず、`supplied_manifest_path` も
+       未供給）場合のみ fail-closed で拒否する（manifest 実体を伴う (b)/(c)
+       の検証にはバイト列そのものが必要なため、sha256 の記録だけでは代替
+       できない）
     """
-    manifest_cache: Dict[str, "Tuple[Dict[str, Dict[str, Any]], str]"] = {}
+    manifest_cache: Dict[Any, "Tuple[Dict[str, Dict[str, Any]], str]"] = {}
     cross_report_labels: Dict[str, Dict[str, Any]] = {}
 
     for idx, report in enumerate(reports):
@@ -1018,34 +1054,49 @@ def _validate_pair_labels_bound_to_manifest(reports: List[Dict[str, Any]]) -> No
                 f"evaluate_comparison: reports[{idx}] に manifest_path が記録されていない; "
                 "pair ラベルを content pin に束縛できない (fail-closed)"
             )
-        path = Path(manifest_path)
-        if not path.is_file():
-            raise ValueError(
-                f"evaluate_comparison: reports[{idx}] の manifest_path={manifest_path!r} が "
-                "evaluate 時点のファイルシステム上に存在しない; pair ラベルを content pin に "
-                "束縛できない (fail-closed)"
-            )
-        if manifest_path not in manifest_cache:
-            data = path.read_bytes()
-            actual_sha256 = hashlib.sha256(data).hexdigest()
-            manifest = _yaml_load_no_dup_keys(data, what="pairs manifest")
-            pairs_spec = _validate_manifest(manifest)
-            pairs_by_id = {pair["pair_id"]: pair for pair in pairs_spec}
-            manifest_cache[manifest_path] = (pairs_by_id, actual_sha256)
-        pairs_by_id, actual_sha256 = manifest_cache[manifest_path]
-
         recorded_sha256 = report.get("manifest_sha256")
         if not recorded_sha256:
             raise ValueError(
                 f"evaluate_comparison: reports[{idx}] に manifest_sha256 が記録されていない "
                 "(fail-closed)"
             )
+
+        recorded_path = Path(manifest_path)
+        if recorded_path.is_file():
+            cache_key: Any = ("recorded", manifest_path)
+            resolved_path = recorded_path
+            source_desc = f"manifest_path={manifest_path!r}"
+        elif supplied_manifest_path is not None:
+            supplied_path = Path(supplied_manifest_path)
+            if not supplied_path.is_file():
+                raise ValueError(
+                    f"evaluate_comparison: --pairs で指定された manifest "
+                    f"{supplied_path} が存在しない (fail-closed)"
+                )
+            cache_key = ("supplied", str(supplied_path.resolve()))
+            resolved_path = supplied_path
+            source_desc = f"--pairs supplied manifest ({supplied_path})"
+        else:
+            raise ValueError(
+                f"evaluate_comparison: reports[{idx}] の manifest_path={manifest_path!r} が "
+                "evaluate 時点のファイルシステム上に存在せず、--pairs で代替 manifest も "
+                "供給されていない; pair ラベルを content pin に束縛できない (fail-closed)"
+            )
+
+        if cache_key not in manifest_cache:
+            data = resolved_path.read_bytes()
+            actual_sha256 = hashlib.sha256(data).hexdigest()
+            manifest = _yaml_load_no_dup_keys(data, what="pairs manifest")
+            pairs_spec = _validate_manifest(manifest)
+            pairs_by_id = {pair["pair_id"]: pair for pair in pairs_spec}
+            manifest_cache[cache_key] = (pairs_by_id, actual_sha256)
+        pairs_by_id, actual_sha256 = manifest_cache[cache_key]
+
         if recorded_sha256 != actual_sha256:
             raise ValueError(
                 f"evaluate_comparison: reports[{idx}] の manifest_sha256={recorded_sha256!r} が "
-                f"manifest_path={manifest_path!r} の evaluate 時点の実バイト sha256="
-                f"{actual_sha256!r} と不一致; manifest が run 後に差し替えられている疑い "
-                "(fail-closed)"
+                f"{source_desc} の evaluate 時点の実バイト sha256={actual_sha256!r} と不一致; "
+                "manifest が run 後に差し替えられている疑い (fail-closed)"
             )
 
         # レビュー対応 2026-07-30（第 8 ラウンド・manifest 完全集合の要求）: 従来は
@@ -2161,13 +2212,91 @@ def _validate_holdout_coverage_and_floor(
     return sorted(coverage_invalid), sorted(below_floor)
 
 
+# 凍結値=tuning 提案の等値検証（レビュー対応 2026-07-30 第 20 ラウンド）の比較丸め桁。
+# freeze proposal（`_margin_table` の `positive_min`/`negative_max`）は丸めなしの
+# 生 float を返すため、比較そのものにのみこの正規化を適用する（emit 値は変えない）。
+_FREEZE_PROPOSAL_COMPARISON_DECIMALS = 4
+
+
+def _validate_frozen_thresholds_derived_from_tuning(
+    tuning_margin_axes: Dict[str, Dict[str, Any]], frozen_axes: Dict[str, Dict[str, Any]]
+) -> List[str]:
+    """凍結済み各軸について、registry 記載の凍結値（`strong_min`/`none_max`）が
+    同じ report の tuning split から再計算した freeze proposal（`_margin_table`
+    が返す `positive_min`/`negative_max`）と一致するか検証する（レビュー対応
+    2026-07-30 第 20 ラウンド）。
+
+    holdout 検証（`_holdout_validation_table`）は「凍結された閾値が holdout でも
+    成立するか」を見るものだが、その凍結値自体が実際に tuning split の観測から
+    機械導出されたものである保証はこれまで無かった——registry.yaml を人手で
+    編集する際の転記ミスや、tuning 実測を無視した恣意的な差し替えがあっても、
+    holdout の positive/negative がたまたまその凍結値を満たせば `confirmed` に
+    なり得た。ここで tuning split の生分布から freeze proposal を独立に再計算し、
+    registry の凍結値と一致することを要求する——不一致（転記ミス・恣意的差し
+    替え）はもちろん、tuning 側で該当軸の提案がそもそも導出できない
+    （`_margin_table` が `reason: "negative_empty"` /
+    `"insufficient_positive_or_negative_samples"` を返す——positive/negative の
+    いずれかの標本が無い）のにその軸を凍結している場合も、tuning 由来でない
+    差し替えとして不一致に含める。
+
+    比較は `_FREEZE_PROPOSAL_COMPARISON_DECIMALS` 桁への丸め（`round(value, n)`）
+    を両辺に適用してから行う——`_margin_table` の freeze proposal は丸めなしの
+    生 float（`comparison.axes` の実測値そのもの）を返すため、比較そのものにのみ
+    正規化を適用し、float 演算誤差による偽陽性（例: 0.7999999999999998 vs 0.8）
+    を避ける。転記ミスや恣意的な差し替えのような実質的な不一致（丸め桁を超える
+    差）は正しく検出する。
+
+    戻り値は `frozen_thresholds_not_derived_from_tuning(<axis>, frozen=…,
+    proposed=…)` 形式の理由文字列のリスト（不一致なしなら空リスト）。例外は
+    投げない——呼び出し側 `evaluate_comparison` が他の holdout 検証 reason と
+    同じ「材料のみ返す」規律で `holdout_validation_status` の材料として扱う。
+    """
+    reasons: List[str] = []
+    for axis, thresholds in frozen_axes.items():
+        proposal = tuning_margin_axes.get(axis, {})
+        proposed_strong_min = proposal.get("positive_min")
+        proposed_none_max = proposal.get("negative_max")
+        frozen_strong_min = thresholds.get("strong_min")
+        frozen_none_max = thresholds.get("none_max")
+        if proposed_strong_min is None or proposed_none_max is None:
+            reasons.append(
+                "frozen_thresholds_not_derived_from_tuning("
+                f"{axis}, frozen=(strong_min={frozen_strong_min!r}, none_max="
+                f"{frozen_none_max!r}), proposed=None, tuning_reason="
+                f"{proposal.get('reason')!r})"
+            )
+            continue
+        strong_min_matches = round(
+            float(proposed_strong_min), _FREEZE_PROPOSAL_COMPARISON_DECIMALS
+        ) == round(float(frozen_strong_min), _FREEZE_PROPOSAL_COMPARISON_DECIMALS)
+        none_max_matches = round(
+            float(proposed_none_max), _FREEZE_PROPOSAL_COMPARISON_DECIMALS
+        ) == round(float(frozen_none_max), _FREEZE_PROPOSAL_COMPARISON_DECIMALS)
+        if not (strong_min_matches and none_max_matches):
+            reasons.append(
+                "frozen_thresholds_not_derived_from_tuning("
+                f"{axis}, frozen=(strong_min={frozen_strong_min!r}, none_max="
+                f"{frozen_none_max!r}), proposed=(strong_min="
+                f"{proposed_strong_min!r}, none_max={proposed_none_max!r}))"
+            )
+    return reasons
+
+
 def evaluate_comparison(
     reports: List[Dict[str, Any]],
     *,
     registry_path: Path = M3_REGISTRY_PATH,
     m1_registry_path: Path = M1_REGISTRY_PATH,
+    supplied_manifest_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """n>=1 の run report から校正 verdict（マージン表 + holdout ロック）を導出する。
+
+    `supplied_manifest_path`（CLI `--pairs`、レビュー対応 2026-07-30 第 20
+    ラウンド）: report が記録する `manifest_path`（run 時点の絶対パス）が
+    evaluate 時点のファイルシステム上に存在しない場合（別チェックアウト・別
+    マシンでの evaluate）のフォールバック manifest。sha256 が report 記録の
+    `manifest_sha256` と一致する場合にのみ採用する（`_validate_pair_labels_
+    bound_to_manifest` 参照）。
 
     処理順（M3 実装 memo「## M3d」節）:
     1. pair ラベル（split/expected/kind/audio パス）の manifest 束縛検証
@@ -2237,6 +2366,18 @@ def evaluate_comparison(
         凍結軸 + coverage.floor_status=frozen + coverage.floor 値が有効）を満たす
         まで開かない
     13. tuning positive pair の被覆分布から coverage floor 候補を emit
+    13.9. holdout 検証（次項）の前に、凍結済み各軸について registry 記載の
+        `strong_min`/`none_max` が同じ report の tuning split から再計算した
+        freeze proposal（`_margin_table` の `positive_min`/`negative_max`）と
+        一致するかを検証する（`_validate_frozen_thresholds_derived_from_tuning`。
+        レビュー対応 2026-07-30 第 20 ラウンド）。丸め誤差は
+        `_FREEZE_PROPOSAL_COMPARISON_DECIMALS` 桁への丸め後の比較で吸収するが、
+        実質的な不一致（転記ミス・恣意的差し替え・tuning 側で提案自体が
+        導出できない軸を凍結している）は
+        `frozen_thresholds_not_derived_from_tuning(<axis>, frozen=…,
+        proposed=…)` を `holdout_validation_reasons` に積み、軸別 verdict が
+        全て `confirmed` でも `holdout_validation_status` を
+        `calibration_not_confirmed_on_holdout` に倒す
     14. holdout unlock 済み（registry 完全凍結）かつ report に holdout 行（比較結果
         つき）が存在する場合、凍結済み軸ごとに holdout の positive 最小類似・
         negative 最大類似を凍結値（`strong_min`/`none_max`）とだけ比較し
@@ -2277,7 +2418,7 @@ def evaluate_comparison(
                 f"evaluate_comparison: reports[{idx}] の schema_version {schema!r} が "
                 f"未知; 期待値は {_EXPECTED_RUN_SCHEMA!r} (fail-closed)"
             )
-    _validate_pair_labels_bound_to_manifest(reports)
+    _validate_pair_labels_bound_to_manifest(reports, supplied_manifest_path=supplied_manifest_path)
     _validate_route_runner_injected_field(reports)
     _validate_route_for_evaluate(reports)
     _require_pair_pins_present_for_publishable_reports(reports)
@@ -2420,6 +2561,15 @@ def evaluate_comparison(
         )
         if holdout_has_comparison or missing_comparison_pair_ids:
             frozen_axes = config.evidence_thresholds.axes or {}
+            # レビュー対応 2026-07-30（第 20 ラウンド・凍結値=tuning 提案の
+            # 等値検証）: holdout 検証（`_holdout_validation_table`）そのものの
+            # 前に、凍結済み各軸の registry 記載値が同じ report の tuning
+            # split から機械導出できる値と一致するかを検証する——`margin` は
+            # 上で計算済みの tuning-only マージン表（freeze_proposal 発行の
+            # 可否に関わらず常に算出されている）をそのまま再利用する。
+            freeze_consistency_reasons = _validate_frozen_thresholds_derived_from_tuning(
+                margin["axes"], frozen_axes
+            )
             holdout_result = _holdout_validation_table(reference_pairs, frozen_axes=frozen_axes)
             verdict["holdout_table"] = holdout_result["axes"]
             verdict["holdout_validation"] = {
@@ -2442,7 +2592,8 @@ def evaluate_comparison(
                 _validate_holdout_coverage_and_floor(reference_pairs, floor=config.coverage.floor)
             )
             reasons: List[str] = (
-                [f"holdout_pair_not_measurable({pid})" for pid in not_comparable_pair_ids]
+                freeze_consistency_reasons
+                + [f"holdout_pair_not_measurable({pid})" for pid in not_comparable_pair_ids]
                 + [
                     f"holdout_pair_missing_comparison({pid})"
                     for pid in missing_comparison_pair_ids
@@ -2474,7 +2625,17 @@ def evaluate_comparison(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True, help="出力 JSON の書き出し先")
-    parser.add_argument("--pairs", type=Path, help="pairs manifest（YAML）— run phase")
+    parser.add_argument(
+        "--pairs",
+        type=Path,
+        help=(
+            "pairs manifest（YAML）— run phase では必須。--evaluate と併用時は "
+            "任意のフォールバック: report 記録の manifest_path が evaluate 時点の "
+            "ファイルシステム上に存在しない場合（別チェックアウトでの evaluate）に、"
+            "sha256 が report 記録の manifest_sha256 と一致すればこの manifest を "
+            "採用する（不一致は fail-closed）"
+        ),
+    )
     parser.add_argument(
         "--route",
         default="crepe_direct",
@@ -2496,19 +2657,28 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.evaluate:
-        if args.pairs:
-            raise SystemExit("--pairs は run phase 専用（evaluate は report 側を評価する）")
         protected = {Path(p).resolve() for p in args.evaluate}
         protected.add(Path(args.registry).resolve())
         protected.add(Path(args.m1_registry).resolve())
+        # レビュー対応 2026-07-30（第 20 ラウンド）: `--pairs` は evaluate phase でも
+        # 併用できる——report が記録する manifest_path が evaluate 時点のファイル
+        # システム上に存在しない（別チェックアウトでの evaluate）場合のフォール
+        # バック manifest として使う（`evaluate_comparison` の
+        # `supplied_manifest_path` 参照）。指定された場合は --out の protected-path
+        # にも含める（run phase の manifest と同様に上書きを禁止する）。
+        if args.pairs:
+            protected.add(Path(args.pairs).resolve())
         if Path(args.out).resolve() in protected:
             raise SystemExit(
-                f"--out {args.out} は評価入力（report / registry）と同じパスを指している; "
-                "入力を verdict で上書きしない (fail-closed)"
+                f"--out {args.out} は評価入力（report / registry / --pairs manifest）と "
+                "同じパスを指している; 入力を verdict で上書きしない (fail-closed)"
             )
         reports = [_load_report(p) for p in args.evaluate]
         verdict = evaluate_comparison(
-            reports, registry_path=args.registry, m1_registry_path=args.m1_registry
+            reports,
+            registry_path=args.registry,
+            m1_registry_path=args.m1_registry,
+            supplied_manifest_path=args.pairs,
         )
         _atomic_write_text(args.out, json.dumps(verdict, indent=2, sort_keys=True))
         print(f"wrote verdict to {args.out}")

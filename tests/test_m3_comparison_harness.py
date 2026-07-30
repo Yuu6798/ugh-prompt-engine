@@ -2416,6 +2416,50 @@ _HOLDOUT_TEST_COVERAGE: Dict[str, float] = {
     "phrase_coverage_b": 1.0,
 }
 
+# `_fully_frozen_registry_text()` の凍結値そのもの（contour/interval
+# strong_min=0.8/none_max=0.2, rhythm strong_min=0.7/none_max=0.3）——凍結値=
+# tuning 提案の等値検証（レビュー対応 2026-07-30 第 20 ラウンド）で「tuning
+# split から再計算した提案と一致する」状態を作るためのテスト用既定値。
+_TUNING_FREEZE_MATCH_POSITIVE_AXES: Dict[str, float] = {
+    "contour": 0.8,
+    "interval": 0.8,
+    "rhythm": 0.7,
+}
+_TUNING_FREEZE_MATCH_NEGATIVE_AXES: Dict[str, float] = {
+    "contour": 0.2,
+    "interval": 0.2,
+    "rhythm": 0.3,
+}
+
+
+def _override_tuning_axes_to_match_fully_frozen_registry(
+    report: Dict[str, Any],
+    *,
+    positive_axes: Dict[str, float] = _TUNING_FREEZE_MATCH_POSITIVE_AXES,
+    negative_axes: Dict[str, float] = _TUNING_FREEZE_MATCH_NEGATIVE_AXES,
+) -> None:
+    """tuning split の pair の axes/evidence/coverage を明示値へ上書きし、凍結
+    registry（既定: `_fully_frozen_registry_text()`）の値と tuning split から
+    再計算した freeze proposal が一致する状態を作る（レビュー対応 2026-07-30
+    第 20 ラウンド用テストヘルパー）。
+
+    `_default_pairs` の tuning negative（`p_neg_tuning`/`p_neg_rhythm_tuning`/
+    `p_neg_interval_tuning`）はいずれも song_a×song_b の組み合わせで、観測
+    ゲート不通過により実測では `not_comparable` になる（既存挙動・
+    `_reports_for_holdout_validation` の holdout pair と同型の制約）——
+    `_margin_table` の tuning-only 集計へ寄与させるには、これらを比較可能な値へ
+    明示的に上書きする必要がある。3 pair 全てに同一の `negative_axes` を
+    与えても軸別の会計は壊れない——`_NEGATIVE_KIND_AXIS_SCOPE` が pair の
+    `kind` に応じてスコープ外の軸値を読み飛ばすため（例: `negative_rhythm` は
+    `rhythm` 以外の値を無視する）。
+    """
+    report["pairs"]["p_pos_tuning"]["comparison"]["evidence"] = "strong"
+    report["pairs"]["p_pos_tuning"]["comparison"]["axes"] = dict(positive_axes)
+    for pair_id in ("p_neg_tuning", "p_neg_rhythm_tuning", "p_neg_interval_tuning"):
+        report["pairs"][pair_id]["comparison"]["evidence"] = "none"
+        report["pairs"][pair_id]["comparison"]["axes"] = dict(negative_axes)
+        report["pairs"][pair_id]["comparison"]["coverage"] = dict(_HOLDOUT_TEST_COVERAGE)
+
 
 def _reports_for_holdout_validation(
     tmp_path: Path,
@@ -2436,6 +2480,12 @@ def _reports_for_holdout_validation(
     ——`evidence`/`axes` の上書きと矛盾しない一貫した被覆値にするため（レビュー
     対応 2026-07-30 第 18 ラウンド）。両 report で同一の上書き値を与えることで
     repeats 決定論（bit 一致）は保つ。
+
+    レビュー対応 2026-07-30（第 20 ラウンド）: 凍結値=tuning 提案の等値検証が
+    追加されたため、tuning pair も `_override_tuning_axes_to_match_fully_
+    frozen_registry`（既定の凍結値と一致する値）へ揃える——本ヘルパーが返す
+    report は「holdout 検証の対象を単離しつつ、tuning 側の新設検証も自動的に
+    通す」状態になる。
     """
     manifest_path = tmp_path / "pairs.yaml"
     _write_manifest(manifest_path, _default_pairs(audio_paths))
@@ -2449,6 +2499,7 @@ def _reports_for_holdout_validation(
             manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
         )
         report["route_runner_injected"] = False
+        _override_tuning_axes_to_match_fully_frozen_registry(report)
         report["pairs"]["p_pos_holdout"]["comparison"]["evidence"] = "strong"
         report["pairs"]["p_pos_holdout"]["comparison"]["axes"] = dict(positive_axes_override)
         report["pairs"]["p_neg_holdout"]["comparison"]["evidence"] = "none"
@@ -2549,6 +2600,12 @@ def test_evaluate_holdout_validation_not_confirmed_when_holdout_pair_not_compara
             manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
         )
         report["route_runner_injected"] = False
+        # レビュー対応 2026-07-30（第 20 ラウンド）: 凍結値=tuning 提案の等値
+        # 検証が追加されたため、tuning pair も凍結値と一致する値へ揃える——
+        # この上書きが無いと本テストの主眼（holdout 側の not_comparable pair
+        # 検出）とは独立の `frozen_thresholds_not_derived_from_tuning` 理由が
+        # 混入し、下の厳密な reasons リスト比較が崩れる。
+        _override_tuning_axes_to_match_fully_frozen_registry(report)
         report["pairs"]["p_pos_holdout"]["comparison"]["evidence"] = "strong"
         report["pairs"]["p_pos_holdout"]["comparison"]["axes"] = {
             "contour": 0.95,
@@ -2692,6 +2749,268 @@ def test_evaluate_holdout_validation_absent_while_holdout_locked(
     assert "holdout_table" not in verdict
     assert "holdout_validation" not in verdict
     assert "holdout_validation_status" not in verdict
+
+
+# --------------------------------------------------------------------------- #
+# 凍結値=tuning 提案の等値検証（レビュー対応 2026-07-30 第 20 ラウンド）
+# --------------------------------------------------------------------------- #
+def _fully_frozen_registry_text_with_shifted_contour_strong_min() -> str:
+    """`_fully_frozen_registry_text()` を土台に、contour の `strong_min` だけを
+    tuning 実測（0.8）と異なる値（0.9）へ差し替えた registry（転記ミス・恣意的
+    差し替えを模す）。interval/rhythm は tuning 実測と一致させたまま残す——
+    不一致検出が軸単位であることを確認するため。
+    """
+    mapping = _registry_mapping()
+    mapping["evidence_thresholds"] = {
+        "status": "frozen",
+        "axes": {
+            "contour": {"strong_min": 0.9, "none_max": 0.2},
+            "interval": {"strong_min": 0.8, "none_max": 0.2},
+            "rhythm": {"strong_min": 0.7, "none_max": 0.3},
+        },
+    }
+    mapping["coverage"] = dict(mapping["coverage"])
+    mapping["coverage"]["floor_status"] = "frozen"
+    return yaml.safe_dump(mapping, sort_keys=False)
+
+
+def test_evaluate_holdout_validation_not_confirmed_when_frozen_threshold_mismatches_tuning_proposal(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """凍結 registry の contour `strong_min`（0.9）が、同じ report の tuning
+    split から再計算した freeze proposal（実測 0.8）と一致しないと、holdout
+    positive/negative が凍結値をどちらも満たし軸別 verdict が全て `confirmed`
+    でも、`holdout_validation_status` は `calibration_not_confirmed_on_holdout`
+    に倒れ、`frozen_thresholds_not_derived_from_tuning(contour, ...)` が理由に
+    記録される（レビュー対応 2026-07-30 第 20 ラウンド）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    frozen_registry = tmp_path / "frozen_registry_shifted.yaml"
+    frozen_registry.write_text(
+        _fully_frozen_registry_text_with_shifted_contour_strong_min(), encoding="utf-8"
+    )
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    reports = []
+    for _ in range(2):
+        report = harness.run_comparison(
+            manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
+        )
+        report["route_runner_injected"] = False
+        # tuning 側は「真の」凍結値（0.8/0.8/0.7 と 0.2/0.2/0.3）と一致させる
+        # ——registry の contour だけが 0.9 に差し替えられているため、tuning
+        # 提案（0.8）との不一致がここで初めて生じる。
+        _override_tuning_axes_to_match_fully_frozen_registry(report)
+        # holdout 側は差し替え後の contour strong_min（0.9）も満たす値にして、
+        # 軸別 verdict は confirmed のまま不一致だけを単離する。
+        report["pairs"]["p_pos_holdout"]["comparison"]["evidence"] = "strong"
+        report["pairs"]["p_pos_holdout"]["comparison"]["axes"] = {
+            "contour": 0.95,
+            "interval": 1.0,
+            "rhythm": 0.9,
+        }
+        report["pairs"]["p_neg_holdout"]["comparison"]["evidence"] = "none"
+        report["pairs"]["p_neg_holdout"]["comparison"]["axes"] = {
+            "contour": 0.1,
+            "interval": 0.05,
+            "rhythm": 0.2,
+        }
+        report["pairs"]["p_neg_holdout"]["comparison"]["coverage"] = dict(_HOLDOUT_TEST_COVERAGE)
+        reports.append(report)
+
+    verdict = harness.evaluate_comparison(reports, registry_path=frozen_registry)
+
+    assert verdict["holdout_validation"] == {
+        "contour": "confirmed",
+        "interval": "confirmed",
+        "rhythm": "confirmed",
+    }
+    assert verdict["holdout_validation_status"] == "calibration_not_confirmed_on_holdout"
+    reasons = verdict["holdout_validation_reasons"]
+    assert any(
+        reason.startswith("frozen_thresholds_not_derived_from_tuning(contour") for reason in reasons
+    )
+    # interval/rhythm は tuning 提案と一致するため理由に現れない。
+    assert not any(reason.startswith("frozen_thresholds_not_derived_from_tuning(interval") for reason in reasons)
+    assert not any(reason.startswith("frozen_thresholds_not_derived_from_tuning(rhythm") for reason in reasons)
+
+
+def test_evaluate_holdout_validation_not_confirmed_when_frozen_axis_has_no_tuning_proposal(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """tuning split で提案そのものが導出できない軸（`_default_pairs` の tuning
+    negative は全て song_a×song_b の組み合わせで観測ゲート不通過により
+    `not_comparable` になる既存挙動——`_margin_table` は全軸で
+    `reason: "negative_empty"` を返す）を凍結している registry では、holdout
+    側の軸別 verdict が全て `confirmed` でも、`frozen_thresholds_not_derived_
+    from_tuning(<axis>, ..., proposed=None, ...)` が全軸分理由に記録され、
+    `holdout_validation_status` は `calibration_not_confirmed_on_holdout` に
+    なる（レビュー対応 2026-07-30 第 20 ラウンド）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    frozen_registry = tmp_path / "frozen_registry.yaml"
+    frozen_registry.write_text(_fully_frozen_registry_text(), encoding="utf-8")
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    reports = []
+    for _ in range(2):
+        report = harness.run_comparison(
+            manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
+        )
+        report["route_runner_injected"] = False
+        # tuning pair は一切上書きしない — song_a×song_b の tuning negative は
+        # 実測どおり not_comparable のまま残し、`_margin_table` が全軸で
+        # `reason: "negative_empty"`（tuning 提案が導出できない）を返す状態を
+        # 保つ。
+        assert report["pairs"]["p_neg_tuning"]["comparison"]["evidence"] == "not_comparable"
+        report["pairs"]["p_pos_holdout"]["comparison"]["evidence"] = "strong"
+        report["pairs"]["p_pos_holdout"]["comparison"]["axes"] = {
+            "contour": 0.95,
+            "interval": 1.0,
+            "rhythm": 0.9,
+        }
+        report["pairs"]["p_neg_holdout"]["comparison"]["evidence"] = "none"
+        report["pairs"]["p_neg_holdout"]["comparison"]["axes"] = {
+            "contour": 0.1,
+            "interval": 0.05,
+            "rhythm": 0.2,
+        }
+        report["pairs"]["p_neg_holdout"]["comparison"]["coverage"] = dict(_HOLDOUT_TEST_COVERAGE)
+        reports.append(report)
+
+    verdict = harness.evaluate_comparison(reports, registry_path=frozen_registry)
+
+    assert verdict["holdout_validation"] == {
+        "contour": "confirmed",
+        "interval": "confirmed",
+        "rhythm": "confirmed",
+    }
+    assert verdict["holdout_validation_status"] == "calibration_not_confirmed_on_holdout"
+    reasons = verdict["holdout_validation_reasons"]
+    for axis in ("contour", "interval", "rhythm"):
+        assert any(
+            reason.startswith(f"frozen_thresholds_not_derived_from_tuning({axis}")
+            and "proposed=None" in reason
+            for reason in reasons
+        )
+
+
+# --------------------------------------------------------------------------- #
+# manifest 参照のチェックアウト非依存化（レビュー対応 2026-07-30 第 20 ラウンド）
+# --------------------------------------------------------------------------- #
+def test_evaluate_falls_back_to_supplied_pairs_when_recorded_manifest_path_missing(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """report 記録の `manifest_path`（run 時点の絶対パス）が evaluate 時点の
+    ファイルシステム上に存在しない（別チェックアウトを模す）場合でも、`--pairs`
+    （`supplied_manifest_path`）で供給した manifest の sha256 が report 記録の
+    `manifest_sha256` と一致すれば採用される。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+
+    original_bytes = manifest_path.read_bytes()
+    manifest_path.unlink()
+    assert not Path(report["manifest_path"]).exists()
+
+    # 「別チェックアウト」を模す: 同一バイト列を別ディレクトリへコピーする。
+    supplied_copy = tmp_path / "checkout2" / "pairs.yaml"
+    supplied_copy.parent.mkdir(parents=True)
+    supplied_copy.write_bytes(original_bytes)
+
+    # `_validate_pair_labels_bound_to_manifest` を通過し評価が最後まで進む
+    # ことをもって解決成功を確認する（report は route_runner_injected=True の
+    # ままのため、他の全チェックが通っても calibration verdict は「フェイク
+    # 抽出器」を理由に拒否される——ラベル束縛チェック自体が通ったことの証明に
+    # なる）。
+    verdict = harness.evaluate_comparison([report], supplied_manifest_path=supplied_copy)
+    assert verdict["calibration_verdict_status"] == "rejected_route_runner_injected"
+
+
+def test_evaluate_rejects_supplied_pairs_sha_mismatch_when_recorded_manifest_path_missing(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """記録済み `manifest_path` が存在せず、`--pairs` で供給した manifest の
+    sha256 が report 記録の `manifest_sha256` と一致しない場合は fail-closed
+    で拒否する。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+
+    manifest_path.unlink()
+
+    supplied_different = tmp_path / "checkout2" / "pairs.yaml"
+    supplied_different.parent.mkdir(parents=True)
+    _write_manifest(supplied_different, _default_pairs(audio_paths))
+    # 中身のバイト列を変える（sha256 を変える）ため末尾にコメントを追記する。
+    supplied_different.write_text(
+        supplied_different.read_text(encoding="utf-8") + "\n# different content\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="と不一致"):
+        harness.evaluate_comparison([report], supplied_manifest_path=supplied_different)
+
+
+def test_evaluate_rejects_when_manifest_path_missing_and_no_pairs_supplied(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """記録済み `manifest_path` が存在せず、`--pairs`（`supplied_manifest_path`）
+    も供給されていない場合のみ fail-closed で拒否する。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+
+    manifest_path.unlink()
+
+    with pytest.raises(ValueError, match="--pairs"):
+        harness.evaluate_comparison([report])
+
+
+def test_cli_evaluate_accepts_pairs_fallback_when_manifest_path_missing(
+    tmp_path: Path, monkeypatch, audio_paths: Dict[str, str]
+):
+    """CLI: `--evaluate` と `--pairs` の併用配線を確認する——report 記録の
+    `manifest_path` が evaluate 時点で存在しない場合に `--pairs` で供給した
+    manifest（sha256 一致）へフォールバックし、正常終了する。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    original_bytes = manifest_path.read_bytes()
+    manifest_path.unlink()
+
+    supplied_copy = tmp_path / "checkout2" / "pairs.yaml"
+    supplied_copy.parent.mkdir(parents=True)
+    supplied_copy.write_bytes(original_bytes)
+
+    out_path = tmp_path / "verdict.json"
+    argv = [
+        "run_melody_comparison.py",
+        "--evaluate",
+        str(report_path),
+        "--pairs",
+        str(supplied_copy),
+        "--out",
+        str(out_path),
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    assert harness.main() == 0
+    verdict = json.loads(out_path.read_text(encoding="utf-8"))
+    assert verdict["calibration_verdict_status"] == "rejected_route_runner_injected"
 
 
 # --------------------------------------------------------------------------- #
