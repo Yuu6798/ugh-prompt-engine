@@ -43,8 +43,12 @@ per-clip median 2.33–6.91 cent（中央 3.65）。**注意（打ち切り統�
 （僅かな重複残存での過大類似を防ぐ）。
 
 **4. 素材別ばらつき** — 実声 40 clip で RPA min 0.9507（バー割れゼロ）と音高は
-一様に高い。ばらつきは VFA に集中（録音デバイス・歌唱密度依存と推定・M3 では
-clip 単位の信頼重みに使える）。集計は per-clip 算術平均（clip 等重・MIREX 慣行）。
+一様に高い。ばらつきは VFA に集中（録音デバイス・歌唱密度依存と推定）。
+**注意**: per-clip VFA は正解 voicing ラベルとの照合で定義される**校正コーパス限定の
+統計**であり、正解なしの M3 入力では計算できない — これを推論時の信頼重みには
+使えない。推論時に使える proxy（例: 抽出器 confidence の統計量）を重み付けに使う
+場合は、その proxy の定義と校正（本コーパスの VFA との対応付け実測）を M3 側の
+先行作業とする。集計は per-clip 算術平均（clip 等重・MIREX 慣行）。
 
 **計器ノイズ床**: 同一バッチ内 repeats は bit 一致、バッチ間は median cent に
 ~1e-3 cent の双安定（crepe TF CPU 推論由来・M2b 記録）。誤差モデルの cent スケール
@@ -52,8 +56,10 @@ clip 単位の信頼重みに使える）。集計は per-clip 算術平均（cl
 
 ## 帯域地図と §7 分岐判定
 
-- **crepe_direct（clean lead / vocals stem 入力帯）**: **誤差モデル付きで校正済み**。
-  音高系は合成・実声とも高精度、voicing は上記の既知バイアスとして扱う
+- **crepe_direct（clean lead / vocals stem 入力帯）**: **実測済み・誤差特性付き**
+  （音高系は合成・実声とも高精度、voicing は上記の既知バイアス）。**「calibrated」
+  認定は下記 §7 決裁の結果に従属し、本 doc は認定しない**（S-direct fail が
+  記録されている限り、決裁前の calibrated 表記は §7 文言と矛盾するため）
 - **demucs_vocals_then_crepe（フルミックス入力帯）**: **未校正**。S-fullstack は
   合成音色が demucs の分布外のため診断参考のみ（RPA 0.640 を経路の欠陥と読まない）。
   V-fullstack は MedleyDB 確保後に dated 再入
