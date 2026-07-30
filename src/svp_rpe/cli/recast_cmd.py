@@ -109,20 +109,13 @@ def _write_recast_plan_atomically(path: Path, content: bytes) -> None:
     から計算していたため、記録した hash と実際にディスクへ書かれた bytes が
     乖離し、publish 直後の `recast status` が偽 stale を報告しうる欠陥が
     あった。呼び出し側が 1 回だけ encode した bytes をそのまま書き込み、
-    同じ bytes から hash も計算する single-source 設計に統一する）。"""
-    output_dir = path.parent
-    output_dir.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=output_dir, prefix=f"{path.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(content)
-        os.replace(tmp_name, path)
-    except BaseException:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
+    同じ bytes から hash も計算する single-source 設計に統一する）。
+
+    薄いラッパー — 実体は `svp_rpe.utils.atomic_io.atomic_write_bytes` へ集約済み。
+    """
+    from svp_rpe.utils.atomic_io import atomic_write_bytes
+
+    atomic_write_bytes(path, content)
 
 
 def _plan_state_note(result: Any) -> Optional[str]:

@@ -24,6 +24,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from svp_rpe.utils.clamp import clamp
+
 __all__ = [
     "MelodyNote",
     "MelodyObservation",
@@ -528,7 +530,7 @@ def _voiced_coverage(
     covered = _union_length(
         [(max(0.0, n.start_sec), min(span_end, n.end_sec)) for n in notes]
     )
-    return max(0.0, min(1.0, covered / span_end))
+    return clamp(covered / span_end)
 
 
 def _union_length(intervals: Sequence[Tuple[float, float]]) -> float:

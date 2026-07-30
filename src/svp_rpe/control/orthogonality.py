@@ -13,6 +13,8 @@ from typing import Literal, Sequence
 
 import numpy as np
 
+from svp_rpe.utils.clamp import clamp
+
 from .grip import GRIP_EPSILON, GRIP_LOOSE_MIN, GRIP_TIGHT_MIN
 
 INTERFERENCE_WEAK_MIN = GRIP_LOOSE_MIN
@@ -57,7 +59,7 @@ def normalized_entropy(weights: Sequence[float]) -> float | None:
             entropy -= float(p) * math.log(float(p))
     # 一様分布で H/ln(n) が浮動小数点誤差により 1 を僅かに超え、
     # 1 - H_norm が -0.0 になるのを防ぐ（値クランプ規約）
-    return float(max(0.0, min(1.0, entropy / math.log(arr.size))))
+    return clamp(entropy / math.log(arr.size))
 
 
 def importance_matrix(
