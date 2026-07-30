@@ -27,6 +27,34 @@ Audio (WAV/MP3) → RPE Extraction → SVP Generation → Evaluation
 
 ## Modules
 
+以下は主要ディレクトリ/ファイルの責務を 1–2 行で要約する overview。設計思想・
+計算式・検証結果などの詳細は各 `docs/<topic>.md` が一次資料であり、ここでは
+複製しない（各エントリの doc ポインタを参照）。
+
+### cli/
+- `svprpe` エントリポイント（typer + rich）。コマンド別モジュール
+  （`extract_cmd.py` / `compose_cmd.py` / `eval_cmd.py` / `roundtrip_cmd.py` /
+  `transcribe_cmd.py` / `arrange_cmd.py` / `package_cmd.py` / `recast_cmd.py` /
+  `observe_cmd.py` / `verify_cmd.py` / `corpus_cmd.py` / `builds_audit.py`）+
+  `builds_root.py`（builds-root 発行の共有ヘルパー、`atomic_publish_bundle`
+  委譲ラッパーを含む）
+- コマンドリファレンスは [`cli.md`](cli.md) が一次資料
+
+### utils/
+- `clamp.py` / `hashing.py` / `atomic_io.py` / `config_loader.py`: 全レイヤーが
+  依存できるリーフユーティリティ（循環依存を避けるための集約先）
+- `atomic_io.py`: atomic write（`atomic_write_bytes` / `atomic_write_text`）と
+  bundle publish（`atomic_publish_bundle` — snapshot + rollback 付き、
+  fail-closed な `protected_inputs` 契約とフラットファイル名の字句検証を持つ）
+  の共通実装。元々 7 箇所に独立実装されていたロジックの集約先（モジュール
+  docstring 参照）
+
+### keys.py / sentinels.py
+- `keys.py`: 調ラベル一致度（`weighted_key_score` = grip 用連続値 /
+  `keys_enharmonically_equal` = roundtrip 用二値）
+- `sentinels.py`: `transcribe` TODO センチネル（`` TODO(transcribe): `` ）の
+  single source of truth
+
 ### io/audio_loader.py
 - WAV/MP3/FLAC loading via librosa + soundfile
 - Mono/stereo support, resampling
@@ -149,15 +177,63 @@ Composition Score を "楽譜"、外部生成器を "演奏者" とみなす往�
 - `observe.py`: `ObservationReport`（生成後 anchor 観測の計器、verdict なし、AR4）
 - `package.py`: 生成器へのハンドオフパッケージを決定論的に compile
 - `pathsafe.py`: sidecar loader 共有のパス閉じ込めプリミティブ
+- `section_map.py` / `verify.py`: セクション対応マップ + パッケージ検証
+  （`svprpe verify`）
+
+## Modules — Melody Track (M 系列)
+
+主旋律の観測（M0/M1）・抽出精度検証（M2）・比較（M3）を担うモジュール群。
+詳細は [`melody_observability.md`](melody_observability.md) /
+[`DESIGN_M2_extraction_accuracy.md`](DESIGN_M2_extraction_accuracy.md) /
+[`m2_error_model.md`](m2_error_model.md) /
+[`DESIGN_M3_melody_comparator.md`](DESIGN_M3_melody_comparator.md) /
+[`melody_comparator.md`](melody_comparator.md) を参照。
+
+### melody/
+- `observability.py`: `MelodyObservation` → `MelodyObservabilityReport`
+  （比較を呼ばない観測ゲート。note/phrase/被覆/信頼/オクターブ誤り）
+- `routing.py`: 入力種別 → 抽出経路のルーティング
+- `extractors.py`: 波形 → `MelodyObservation`（optional 抽出器: CREPE /
+  Melodia / Demucs vocals ラッパ、未導入時は `LearnedModelUnavailable`）
+- `provenance.py`: 抽出器が読んだ重み artifact の content pin
+- `accuracy.py`: M2 抽出精度検証（RPA/RCA、`mir_eval` 指標、誤差モデル）
+- `representation.py` / `alignment.py` / `comparison.py`: M3 旋律比較器
+  （正規化 → NW 対応付け → 多軸類似度、`MelodyComparisonReport`）
+
+## Modules — Recast Track
+
+`RecastProject`（既存 sidecar（`CompositionScore`/`IdentityManifest`/
+`ArrangementSpec`/`InputCapabilityProfile`）への参照 + 実行方針のみの
+ワークスペース定義、`recast-project/0.1`）を実装するモジュール群。詳細は
+[`recast_workspace.md`](recast_workspace.md) /
+[`recast_phase0_melody_spike.md`](recast_phase0_melody_spike.md) を参照。
+
+### recast/
+- `models.py` / `loader.py`: `RecastProject` スキーマ + fail-fast loader
+- `plan.py`: `svprpe recast plan`/`status` の状態機械（`recast-state/0.1`）+
+  `mode_overrides`（`invocation_mode` 軸、`mode-overrides/0.1`）
+- `backend.py` / `backends/`: `BackendInvoker` 抽象 + `manual`（注文書）/
+  `deterministic`（in-process 演奏者）/ `musicgen` バックエンド
+- `report.py`: `svprpe recast ingest` の observe → report 拡張
+  （`recast-report/0.1`。単一同一性スコアなし）
+- `state.py` / `run_paths.py`: 実行状態の永続化 + 出力パス解決
 
 ## Config Files
 
 | File | Purpose |
 |------|---------|
 | config/pro_baseline.yaml | Pro reference values for RPE scoring |
+| config/acoustic_baseline.yaml / edm_baseline.yaml / loud_pop_baseline.yaml | ドメイン別 baseline |
 | config/semantic_rules.yaml | Physical → semantic mapping rules |
-| config/svp_templates.yaml | SVP generation templates |
 | config/synonym_map.yaml | Synonym groups for semantic similarity |
+| config/semantic_probe_axes.yaml | CLAP 意味軸バッテリー（`docs/semantic_sensor_clap.md`） |
+| config/domain_profiles/ | ドメインプロファイル（music 等） |
+| config/device_profiles/ | 生成器別 `control_profile` 初期値（`docs/control_profile.md`） |
+| config/capability_profiles/ / config/mode_overrides/ | recast/arrange 側の capability・invocation_mode override |
+
+（`config/*.yaml` はリポジトリ直下 + `src/svp_rpe/config/` に同梱コピーを同期
+——変更時は両方を更新する契約。`config.md` に相当する独立 doc はなく、
+CLAUDE.md の Architecture 節ファイル一覧が並行の参照先）
 
 ## Known Limitations (v0.2)
 
