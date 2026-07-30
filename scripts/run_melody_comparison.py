@@ -610,7 +610,7 @@ _M3_CODE_MODULES: Tuple[Any, ...] = (
 )
 
 
-def _m3_code_sha256() -> str:
+def _m3_code_sha256(*, use_cache: bool = True) -> str:
     """実行された第一者 M3 実装コードの合成 content pin。
 
     対象は `representation.py` / `alignment.py` / `comparison.py` /
@@ -620,14 +620,28 @@ def _m3_code_sha256() -> str:
     `__file__`（本スクリプトは `__file__` 自身）から解決し、ハードコードしない
     ——モジュールの実体が動けば pin もそれに追従する。
 
-    run phase は生成時にこの digest を report へ `m3_code_sha256` として記録し、
-    evaluate phase は report 間の一致に加え、evaluate 実行中の環境で同じ方法で
-    再計算した値との一致も要求する（`_validate_m3_code_sha256`）——registry
-    sha256 pin（`m3_registry_sha256`/`m1_registry_sha256`）と対称の検証。
+    レビュー対応 2026-07-30（第 13 ラウンド・import 時 bind）: 従来は run/evaluate
+    の各呼び出しごとにこの関数を遅延計算していたが、`_M3_CODE_SHA256_AT_IMPORT`
+    （本関数直後でモジュールロード完了直後に一度だけ `use_cache=False` で計算し
+    bind するモジュール定数）を run/evaluate 双方が参照する方式へ変更した——
+    import 時 bind により実行コードと digest の対応を固定する。実行中の能動的
+    ファイル差し替えへの事後再検証は本ハーネスの検証スコープ外（report 間 +
+    import 時定数とのレコード整合性まで・M2 の 7000 行級 anti-tamper 要塞の複製
+    はしない）。本関数自体はテスト（現在値の直接検証）向けに残す——既定
+    （`use_cache=True`）で呼べば通常の memoized 計算、import 時 bind だけは
+    `use_cache=False` で明示的にキャッシュを経由しない。
     """
     paths = [Path(module.__file__).resolve() for module in _M3_CODE_MODULES]
     paths.append(Path(__file__).resolve())
-    return sha256_of_files(paths)
+    return sha256_of_files(paths, use_cache=use_cache)
+
+
+# import 完了直後に一度だけ計算してモジュール定数へ bind する（`use_cache=False`）。
+# run/evaluate 双方はこの定数を参照し、呼び出しごとの遅延再計算はしない——import
+# 時 bind により実行コードと digest の対応を固定する。実行中の能動的ファイル差し
+# 替えへの事後再検証は本ハーネスの検証スコープ外（レコード整合性まで・M2 要塞の
+# 複製はしない）。
+_M3_CODE_SHA256_AT_IMPORT: str = _m3_code_sha256(use_cache=False)
 
 
 def run_comparison(
@@ -677,7 +691,7 @@ def run_comparison(
         "route_runner_injected": runner_injected,
         "m3_registry_sha256": m3_registry_sha256,
         "m1_registry_sha256": m1_registry_sha256,
-        "m3_code_sha256": _m3_code_sha256(),
+        "m3_code_sha256": _M3_CODE_SHA256_AT_IMPORT,
         "manifest_path": str(Path(manifest_path).resolve()),
         "manifest_sha256": manifest_sha256,
         "pairs": {},
@@ -1206,15 +1220,22 @@ def _validate_m3_code_sha256(
 
     (a) 各 report に `m3_code_sha256` が記録されていること（欠落は拒否）
     (b) report 間で一致すること（レポート間不一致は拒否）
-    (c) 現在（evaluate 実行中の環境）で `_m3_code_sha256()` を再計算した値と
-        一致すること（report を直接書き換えて値を差し替えても、evaluate 側の
-        独立再計算との不一致で検出する）
+    (c) `current_m3_code_sha256`（呼び出し側が渡す現在値）と一致すること
+        （report を直接書き換えて値を差し替えても不一致で検出する）
 
     レビュー対応 2026-07-30（第 12 ラウンド）: 従来 M3 実装コード
     （representation/alignment/comparison/observability + 本スクリプト自身）に
     対する content pin が一切なく、report が指す軌跡・holdout 判定がどのコード
     版で作られたものかを追跡できなかった。registry sha256 pin と対称の検証を
     課す。
+
+    レビュー対応 2026-07-30（第 13 ラウンド・import 時 bind）: `current_m3_code_sha256`
+    は呼び出し側（`evaluate_comparison`）が `_m3_code_sha256()` を都度再計算して
+    渡すのではなく、import 完了直後にモジュール定数として一度だけ bind した
+    `_M3_CODE_SHA256_AT_IMPORT` を渡す——import 時 bind により実行コードと digest
+    の対応を固定する。実行中の能動的ファイル差し替えへの事後再検証は本ハーネスの
+    検証スコープ外（report 間 + import 時定数とのレコード整合性まで・M2 要塞の
+    複製はしない）。
     """
     for idx, report in enumerate(reports):
         m3_code_sha = report.get("m3_code_sha256")
@@ -1350,8 +1371,10 @@ def _holdout_pair_ids(pairs: Dict[str, Dict[str, Any]]) -> List[str]:
     return sorted(pair_id for pair_id, pair in pairs.items() if pair["split"] == "holdout")
 
 
-def _holdout_missing_comparison_pair_ids(pairs: Dict[str, Dict[str, Any]]) -> List[str]:
-    """holdout split のうち `comparison` を持たず、かつロック状態でもない pair_id を返す。
+def _holdout_missing_comparison_pair_ids(
+    pairs: Dict[str, Dict[str, Any]], *, unlocked: bool
+) -> List[str]:
+    """holdout split のうち `comparison` を持たない pair_id を返す（fail-closed 対象）。
 
     レビュー対応 2026-07-30（第 12 ラウンド・holdout 行 comparison 必須化）: holdout
     が凍結解除された評価（呼び出し側で `_holdout_unlocked(config)` が True）では、
@@ -1367,6 +1390,22 @@ def _holdout_missing_comparison_pair_ids(pairs: Dict[str, Dict[str, Any]]) -> Li
     pair_id を fail-closed の理由として返す——呼び出し側（`evaluate_comparison`）
     はこれが非空なら `holdout_validation_status` を
     `calibration_not_confirmed_on_holdout` に倒す。
+
+    レビュー対応 2026-07-30（第 13 ラウンド・unlocked 評価での locked 偽装行拒否）:
+    第 12 ラウンドの実装は `status == "holdout_locked_until_frozen"` を申告する
+    行を常に免除していたが、本関数の唯一の呼び出し元（`evaluate_comparison` の
+    `if not holdout_locked:` 節）は評価が **unlocked**（`_holdout_unlocked(config)`
+    が True）の場合にしか呼ばれない——run phase は holdout unlock 済みなら該当
+    pair の音声を必ず読み `comparison` を書くため、unlocked 評価に
+    `holdout_locked_until_frozen` を申告する行が現れること自体が「正当なロック
+    行」ではなく「report が改ざんされ、comparison 欠落を locked 偽装で隠して
+    いる」疑いを示す。免除をそのまま適用すると、この偽装行が fail-closed 検出を
+    すり抜けてしまう。ここで `unlocked` 引数を追加し、`unlocked=True`（unlocked
+    評価から呼ばれる現行の唯一の呼び出し）では locked status 申告による免除を
+    適用しない——`comparison` を持たない holdout 行は申告 status に関わらず一律
+    missing として fail 対象にする。`unlocked=False`（locked 評価コンテキストで
+    呼ばれる場合に備えた分岐）は従来どおり `holdout_locked_until_frozen` 申告を
+    免除する——locked 評価での locked 行の扱いは本ラウンドで変えない。
     """
     missing: List[str] = []
     for pair_id, pair in pairs.items():
@@ -1374,7 +1413,7 @@ def _holdout_missing_comparison_pair_ids(pairs: Dict[str, Dict[str, Any]]) -> Li
             continue
         if "comparison" in pair:
             continue
-        if pair.get("status") == "holdout_locked_until_frozen":
+        if not unlocked and pair.get("status") == "holdout_locked_until_frozen":
             continue
         missing.append(pair_id)
     return sorted(missing)
@@ -1609,9 +1648,10 @@ def evaluate_comparison(
        ガードをすり抜ける経路を evaluate 側でも独立に塞ぐ
     3. registry sha256 pin の整合検証（report 間 + 現在ロードした registry）
     4. `m3_code_sha256`（第一者 M3 実装コードの content pin）の整合検証（report 間 +
-       現在実行中の evaluate 環境で再計算した値。レビュー対応 2026-07-30 第 12
-       ラウンド）: registry sha256 pin と対称に、report が指す軌跡・holdout 判定が
-       どのコード版で作られたものかを追跡する
+       import 完了直後にモジュール定数として bind した `_M3_CODE_SHA256_AT_IMPORT`
+       との一致。レビュー対応 2026-07-30 第 12 ラウンド、第 13 ラウンドで遅延
+       再計算から import 時 bind へ変更）: registry sha256 pin と対称に、report
+       が指す軌跡・holdout 判定がどのコード版で作られたものかを追跡する
     5. pair 単位 pin（`audio_sha256_a/b` / `route_provenance_a/b`）の欠落検証 —
        publishable report は全 pair（holdout ロック pair を除く）で必須
        （レビュー対応 2026-07-30 第 6 ラウンド: 全欠落は repeats 整合性チェック
@@ -1677,7 +1717,7 @@ def evaluate_comparison(
         current_m3_sha256=m3_registry_sha256,
         current_m1_sha256=m1_registry_sha256,
     )
-    _validate_m3_code_sha256(reports, current_m3_code_sha256=_m3_code_sha256())
+    _validate_m3_code_sha256(reports, current_m3_code_sha256=_M3_CODE_SHA256_AT_IMPORT)
 
     _check_repeats_consistency(reports)
     _validate_run_ids_distinct(reports)
@@ -1763,10 +1803,16 @@ def evaluate_comparison(
         # 存在する場合のみ holdout 検証を行う——holdout ロック中（uncalibrated）
         # は holdout pair に `comparison` 自体が無いため、この節は自然に
         # スキップされる（既存動作を変えない）。
-        # 第 12 ラウンド: unlock 済みなのに `comparison` を持たず、かつロック
-        # 状態でもない欠落行が 1 件でもあれば（`holdout_has_comparison` が
-        # False でも）この節に入り、欠落を fail-closed で報告する。
-        missing_comparison_pair_ids = _holdout_missing_comparison_pair_ids(reference_pairs)
+        # 第 12 ラウンド: unlock 済みなのに `comparison` を持たない欠落行が 1 件
+        # でもあれば（`holdout_has_comparison` が False でも）この節に入り、
+        # 欠落を fail-closed で報告する。第 13 ラウンド: この呼び出しは
+        # unlocked 評価（この `if not holdout_locked:` 節）からのみ行われる
+        # ため `unlocked=True` を渡す——`holdout_locked_until_frozen` を申告
+        # する行があっても免除せず、comparison 欠落を一律 missing 扱いにする
+        # （unlocked 評価での locked 偽装行の拒否）。
+        missing_comparison_pair_ids = _holdout_missing_comparison_pair_ids(
+            reference_pairs, unlocked=True
+        )
         holdout_has_comparison = any(
             pair["split"] == "holdout" and "comparison" in pair
             for pair in reference_pairs.values()

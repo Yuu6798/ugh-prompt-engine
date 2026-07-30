@@ -1821,6 +1821,47 @@ def test_evaluate_holdout_validation_not_confirmed_when_comparison_missing_and_n
     assert "holdout_pair_missing_comparison(p_neg_holdout)" in verdict["holdout_validation_reasons"]
 
 
+def test_evaluate_holdout_validation_rejects_locked_status_disguise_when_unlocked(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """holdout unlock 済み（registry 完全凍結）の評価で、holdout pair 行を
+    `comparison` を持たず `status: holdout_locked_until_frozen` だけを申告する
+    構造（本来 holdout ロック中にのみ現れる形）に書き換えた「locked 偽装」行は、
+    unlocked 評価では申告 status に関わらず `comparison` 欠落として fail 対象に
+    なる（レビュー対応 2026-07-30 第 13 ラウンド: `_holdout_missing_comparison_
+    pair_ids` の locked 免除は unlocked 評価では適用しない——unlocked 評価に
+    `holdout_locked_until_frozen` を申告する行が現れること自体、run phase の
+    意図どおりに動いていれば起こり得ないため、額面どおり信用せず一律 missing
+    扱いにする）。第 12 ラウンドの実装ではこの偽装行が免除され見逃されていた。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    frozen_registry = tmp_path / "frozen_registry.yaml"
+    frozen_registry.write_text(_fully_frozen_registry_text(), encoding="utf-8")
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    reports = []
+    for _ in range(2):
+        report = harness.run_comparison(
+            manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
+        )
+        report["route_runner_injected"] = False
+        # p_neg_holdout の行を「holdout ロック中にのみ現れる」構造（"split" と
+        # "status" のみ）へ書き換える——manifest 束縛検証は row に存在する
+        # フィールドのみ照合するため、"split" を残せば pass する。
+        report["pairs"]["p_neg_holdout"] = {
+            "split": "holdout",
+            "status": "holdout_locked_until_frozen",
+        }
+        reports.append(report)
+
+    verdict = harness.evaluate_comparison(reports, registry_path=frozen_registry)
+
+    assert verdict["holdout_locked_until_frozen"] is False
+    assert verdict["holdout_validation_status"] == "calibration_not_confirmed_on_holdout"
+    assert "holdout_pair_missing_comparison(p_neg_holdout)" in verdict["holdout_validation_reasons"]
+
+
 def test_evaluate_holdout_validation_absent_while_holdout_locked(
     tmp_path: Path, audio_paths: Dict[str, str]
 ):
@@ -2137,6 +2178,29 @@ def test_run_comparison_records_m3_code_sha256(tmp_path: Path, audio_paths: Dict
 
     assert harness._is_sha256_hex(report["m3_code_sha256"])
     assert report["m3_code_sha256"] == harness._m3_code_sha256()
+
+
+def test_m3_code_sha256_bound_at_import_time(tmp_path: Path, audio_paths: Dict[str, str]):
+    """レビュー対応 2026-07-30（第 13 ラウンド・import 時 bind）: `run_comparison`
+    が report へ記録する `m3_code_sha256` と `evaluate_comparison` が検証に使う
+    現在値は、いずれも import 完了直後に一度だけ bind したモジュール定数
+    `_M3_CODE_SHA256_AT_IMPORT` であり、`_m3_code_sha256()` の遅延（呼び出し
+    ごとの）再計算値と一致する。
+    """
+    assert harness._is_sha256_hex(harness._M3_CODE_SHA256_AT_IMPORT)
+    assert harness._M3_CODE_SHA256_AT_IMPORT == harness._m3_code_sha256()
+
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    report2 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+
+    assert report1["m3_code_sha256"] == harness._M3_CODE_SHA256_AT_IMPORT
+    assert report2["m3_code_sha256"] == harness._M3_CODE_SHA256_AT_IMPORT
+
+    verdict = harness.evaluate_comparison([report1, report2])
+    assert verdict["repeats_verified"] is True
 
 
 def test_evaluate_rejects_missing_m3_code_sha256(tmp_path: Path, audio_paths: Dict[str, str]):
