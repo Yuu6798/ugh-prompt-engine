@@ -794,200 +794,24 @@ def _load_existing_take_for_reobserve(loaded: Any, variant: str, backend: str, s
     )
 
 
-@recast_app.command("ingest")
-def recast_ingest_cmd(
-    project_yaml: str = typer.Argument(..., help="Path to RecastProject YAML"),
-    variant: str = typer.Option(..., "--variant", help="Variant name declared in the project"),
-    backend: str = typer.Option(..., "--backend", help="Backend name declared in the project"),
-    audio: str = typer.Option(
-        ..., "--audio", help="Path to the externally generated audio (.wav/.mp3)"
-    ),
+def _ingest_prechecks(
+    loaded: Any,
+    variant: str,
+    backend: str,
+    run: Any,
+    is_reobserve: bool,
 ) -> None:
-    """Ingest an externally generated take for a manual backend run.
-
-    Requires `(variant, backend)` to currently be at `awaiting_generation`
-    (per `recast_state.json`). Before trusting that recorded state, applies
-    the exact same fail-closed staleness checks as `recast status`
-    (Codex P2 review round 2 indicated this command is where PR2's own
-    forward-looking `plan_sha256` note applies): the recorded `inputs_digest`
-    must match the current inputs, the recorded `plan_sha256` must match the
-    current `recast_plan.json` bytes, and the recorded `orders_digest` must
-    match the current 6 order files on disk (Codex P2 review round 13, PR3
-    #208 指摘28 — `recast/backends/manual.py:compute_orders_digest`; missing/
-    unreadable counts as a mismatch in every case) — any mismatch is reported
-    and exits 1 without touching any file. A `None` `inputs_digest`/
-    `plan_sha256`/`orders_digest` (e.g. an old-schema or hand-copied state) is
-    *not* trusted as "unknown, skip the check" — it is treated as stale too
-    (Codex P2 review round 4, PR3 #208 指摘 9: a missing pin is exactly the
-    case a stale/forged state most plausibly has). Only then does it rebuild
-    the plan context via the same `build_recast_plan_artifacts` path
-    `recast run` uses — with `publish=False` (Codex P2 review round 13, PR3
-    #208 指摘27: publishing `builds/packages/<variant>@<backend>/` before the
-    rebuild's own freshly recomputed `inputs_digest` is re-compared against
-    the recorded pin let a swapped-input rebuild overwrite `packages/` even
-    when the digest re-check below was about to reject the run). Before that
-    rebuild's result is trusted (published to `packages/`, re-published as
-    `recast_plan.json`, or used to `collect` the take), its freshly
-    recomputed `inputs_digest` is re-compared against the same recorded pin
-    (Codex P2 eighth round #207 指摘16: the precheck above and this rebuild
-    are not atomic — inputs could be swapped in the gap between them, letting
-    an old order's externally generated audio get recorded as the `generated`
-    take for a *new* plan built from the swapped inputs). A mismatch here
-    exits 1 without publishing `packages/`, the plan, collecting the audio, or
-    touching `recast_state.json` — the old packages/plan/state are left
-    untouched. Only once that re-check passes does it publish `packages/`
-    (from the same in-memory compile the `publish=False` rebuild already
-    produced — no recompile), re-publish `recast_plan.json` (same
-    `_publish_recast_plan` single source), resolve the `ManualInvoker`, and
-    call `collect(audio)` to atomically ingest the audio into
-    `<builds_root>/takes/<variant>@<backend>/`. Records `generated` (with the
-    freshly (re)computed `inputs_digest`/`plan_sha256`) only after that
-    publish succeeds — this is the command `next_command.txt`/`order_sheet.md`
-    (`ManualInvoker`) advertise.
-
-    Order files are never re-published by this command (Codex P2 review
-    round 13, PR3 #208 指摘28): `ManualInvoker.prepare()` unconditionally
-    re-publishes all 6 order files, which would silently erase any manual
-    edit made to them after `recast run` — an edited `prompt.json` (say) that
-    the externally generated audio was actually produced from would be
-    overwritten back to the rebuilt "canonical" content right before
-    `collect`, letting tampered-order audio get accepted as if it came from
-    the pristine, originally published order. This command instead calls
-    `base_prepared_invocation` (the same field assembly `prepare()` uses
-    internally, minus the publish side effect) once the `orders_digest`
-    precheck above has confirmed the 6 files on disk are byte-identical to
-    what was pinned at `recast run` time.
-
-    Scope (PR5): once the take is collected and `generated` is recorded, if
-    `project.yaml`'s `observation.enabled` is true this command continues on
-    to observe the take (`svp_rpe.arrange.observe.observe_generated_artifact`,
-    the same provenance-checked path `svprpe observe` uses) against the
-    published `performance_package.json` + `--manifest` identity manifest,
-    records `observed`, builds + publishes a `recast_report.json` +
-    `recast_summary.md` pair (`svp_rpe.recast.report`) under
-    `<builds_root>/reports/<variant>@<backend>/`, and records `reported`. A
-    failure anywhere in the observe/report stage (extraction error, publish
-    I/O failure, ...) is recorded as `observation_incomplete` and exits 1 —
-    no partial `recast_report.json`/`recast_summary.md` is ever left behind
-    (the pair publishes atomically as one bundle, `atomic_publish_bytes_bundle`).
-    When `observation.enabled` is false this command stops at `generated`,
-    unchanged from PR3/PR4 behavior — `svprpe observe` remains available as a
-    manual fallback either way.
-
-    Scope (PR6): `observation.anchors`（非空リスト）を宣言した project は
-    `recast_report.json`/`recast_summary.md`（coverage 集計も含む）をその
-    anchor 集合へ絞り込む（`recast.report.build_recast_report` の
-    `observation_anchors` 引数）。空リスト（既定）は絞り込みなし＝全 anchor。
-    未知 anchor id（identity manifest に存在しない id）を宣言した project は、
-    本コマンド冒頭の他 precheck 群（inputs_digest/plan_sha256/orders_digest、
-    下記参照）と同じ「collect/publish/record_state より前・何も書かず exit」
-    位置で設定エラーとして拒否される（Codex P2, #210 round 9 指摘11 → round
-    10 指摘13 でこの位置へ前倒し — 旧位置（collect 後）だと typo 修正後に
-    `awaiting_generation` から同じ take で再 ingest できなくなっていた）。
-    `recast plan`/`recast run` の plan 段はこの検証を行わない — manual
-    backend が注文書公開・`awaiting_generation` まで進めることを優先し、
-    観測スコープの妥当性は ingest 冒頭でのみ判定する設計。plain な Error +
-    exit 1 とし、state は `awaiting_generation` のまま変更しない
-    （`observation_incomplete`— 観測実行時の実測失敗用の state — は記録
-    しない。設定ミスと実行時失敗を state レベルで区別する）。
-    `observe_generated_artifact` 自身にも同型の防御的ガードがある
-    （`svprpe observe` 単体実行など他呼び出し元向け）。
-
-    Scope（再観測、Codex P2 review, PR #212 指摘）: `(variant, backend)` が
-    `generated`/`observed`/`reported`（`_REOBSERVABLE_STATES`）のいずれかの
-    場合、本コマンドは take を再 collect せず「同一 take での再観測」経路
-    として動作する（`is_reobserve`）。`inputs_digest`/`plan_sha256` の
-    precheck は従来どおり通過が必須だが、`orders_digest` 突合はスキップ
-    する（take を再 collect しないため注文書とは無関係。local backend の
-    run は元々 `orders_digest` を持たないため、この経路が無ければ local
-    backend は再観測できなかった）。代わりに、供給された `--audio` の
-    sha256 が disk 上の既存 take（`take.json` 経由で検証）と一致すること
-    を要求する（`_load_existing_take_for_reobserve`）— 別音源をこの経路
-    経由で忍び込ませることはできない。一致すれば `packages/`/正典
-    `recast_plan.json` を再公開し（入力の drift を検出する既存の TOCTOU
-    再チェックも維持）、observe→report を実行し直して `observed`/
-    `reported` を `observation_digest`（現在の `observation` 節の digest）
-    付きで再記録する。動機: `_project_identity_digest_component` が
-    `inputs_digest` から `observation` 節を意図的に除外しているため
-    （前指摘の回復フローを壊さないため）、`observation.enabled`/
-    `observation.anchors` の変更だけでは `inputs_digest` は変化しない —
-    しかし report は observation 節を直接反映するため、この再観測経路が
-    無いと `recast status` の stale 表示（`observation_digest` 不一致）が
-    行き止まりになってしまう。
+    """precheck①②③（`recast_ingest_cmd` C4+C5+C6 抽出）: `recast status` と
+    同じ fail-closed な staleness チェック（inputs_digest → plan_sha256 →
+    orders_digest の順）を、collect/publish/record_state より前に行う。
+    いずれかの不一致は `typer.Exit(1)` を送出し、ファイルには一切触れない。
     """
-    import yaml
-    from pydantic import ValidationError
-
-    from svp_rpe.arrange.identity import IdentityManifestError
-    from svp_rpe.arrange.observe import observe_generated_artifact
-    from svp_rpe.arrange.package import (
-        COMPILATION_REPORT_FILENAME,
-        PERFORMANCE_PACKAGE_FILENAME,
-    )
-    from svp_rpe.arrange.resolver import ArrangementError
-    from svp_rpe.recast import RecastError, load_recast_project
-    from svp_rpe.recast.backend import (
-        atomic_publish_bytes_bundle,
-        base_prepared_invocation,
-        resolve_invoker,
-        run_context_from_plan_artifacts,
-    )
+    from svp_rpe.recast import RecastError
     from svp_rpe.recast.backends.manual import compute_orders_digest
-    from svp_rpe.recast.plan import (
-        RECAST_PLAN_FILENAME,
-        _atomic_publish_text_bundle,
-        _normalize_diagnostic,
-        build_recast_plan_artifacts,
-        compute_observation_digest,
-        compute_recast_inputs_digest,
-    )
-    from svp_rpe.recast.report import (
-        RECAST_REPORT_FILENAME,
-        RECAST_SUMMARY_FILENAME,
-        build_recast_report,
-        render_recast_summary_markdown,
-    )
-    from svp_rpe.recast.run_paths import (
-        resolve_orders_dir,
-        resolve_packages_dir,
-        resolve_plans_dir,
-        resolve_reports_dir,
-    )
-    from svp_rpe.recast.state import load_recast_state, record_state
-
-    try:
-        loaded = load_recast_project(project_yaml)
-        # `--variant`/`--backend` の宣言確認（Codex P2 review round 14,
-        # PR5 #210 指摘19 — `recast plan` 側の同型コメント参照）。
-        _validate_variant_backend_declared(loaded, variant, backend)
-        # packages/ への公開（指摘27 対応で `publish=False` 再ビルド後の
-        # 直接 `_atomic_publish_text_bundle` 呼び出し）前の preflight
-        # （Codex P2 review round 15, PR3 #208 指摘30 — `recast plan` 側の
-        # 同型コメント参照）。
-        _preflight_reject_plan_state_output_collision(loaded, variant, backend)
-        state_file = load_recast_state(loaded.project_dir)
-    except (OSError, ValueError, RecastError) as exc:
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
+    from svp_rpe.recast.plan import RECAST_PLAN_FILENAME, compute_recast_inputs_digest
+    from svp_rpe.recast.run_paths import resolve_orders_dir, resolve_plans_dir
 
     run_key = f"{variant}@{backend}"
-    run = state_file.runs.get(run_key)
-    # 再観測（Codex P2 review, PR #212 指摘）: `generated`/`observed`/
-    # `reported` の run は、収蔵済みの take を collect し直さず observation
-    # 設定だけを再評価して report を更新する経路として ingest を再利用できる
-    # （下記 `--audio` 一致検査を通過した場合のみ — `_REOBSERVABLE_STATES`
-    # docstring 参照）。
-    is_reobserve = run is not None and run.state in _REOBSERVABLE_STATES
-    if run is None or (run.state != "awaiting_generation" and not is_reobserve):
-        current_state = run.state if run is not None else "draft"
-        typer.echo(
-            f"Error: {run_key} is at state {current_state!r}, not 'awaiting_generation' "
-            f"(or one of {sorted(_REOBSERVABLE_STATES)} for re-observation with the same "
-            "take). Run 'svprpe recast run' first to publish order files for a manual "
-            "backend.",
-            err=True,
-        )
-        raise typer.Exit(code=1)
 
     # 状態を信用する前の突合（`recast status` と同じ fail-closed 意味論、
     # Codex P2 review round 2 指摘 4 / PR2 の申し送り「run コマンド追加時は
@@ -1077,6 +901,16 @@ def recast_ingest_cmd(
             )
             raise typer.Exit(code=1)
 
+
+def _precheck_observation_anchors(loaded: Any) -> tuple[Optional[set[str]], str]:
+    """C7 抽出: `observation_digest` 計算 + `observation.anchors` 未知 id
+    事前検査（`observation.enabled` 時のみ）。未知 anchor id があれば
+    `typer.Exit(1)`（何も書かない、collect/publish/record_state より前）。
+    """
+    import yaml
+
+    from svp_rpe.recast.plan import compute_observation_digest
+
     # `observation` 節全体の pin（Codex P2 review, PR #212 指摘）:
     # `observed`/`reported` を記録する際にこの digest を併せて永続化する —
     # `inputs_digest` は生成系の同一性判定であり `observation` 節を意図的に
@@ -1143,6 +977,30 @@ def recast_ingest_cmd(
                         err=True,
                     )
                     raise typer.Exit(code=1)
+
+    return anchor_scope, current_observation_digest
+
+
+def _rebuild_and_publish_plan(
+    loaded: Any,
+    variant: str,
+    backend: str,
+    run: Any,
+) -> tuple[Any, str]:
+    """C8+C9+C10+C11 抽出: plan 再構築（`publish=False`）→ TOCTOU 再突合 →
+    packages 公開 → 正典 `recast_plan.json` 公開を 1 関数に温存する
+    （fail-closed 連鎖: 突合を通過するまで packages/plan いずれも公開しない
+    — `recast_ingest_cmd` docstring 参照）。"""
+    import yaml
+    from pydantic import ValidationError
+
+    from svp_rpe.arrange.package import COMPILATION_REPORT_FILENAME, PERFORMANCE_PACKAGE_FILENAME
+    from svp_rpe.arrange.resolver import ArrangementError
+    from svp_rpe.recast import RecastError
+    from svp_rpe.recast.plan import _atomic_publish_text_bundle, build_recast_plan_artifacts
+    from svp_rpe.recast.run_paths import resolve_packages_dir
+
+    run_key = f"{variant}@{backend}"
 
     # `publish=False`（Codex P2 review round 13, PR3 #208 指摘27; pr5 #210
     # round 3 指摘4 の同型修正 127891c と実装形を寄せてある）: 突合前に
@@ -1220,6 +1078,29 @@ def recast_ingest_cmd(
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
+    return artifacts, plan_sha256
+
+
+def _resolve_and_collect_take(
+    loaded: Any,
+    variant: str,
+    backend: str,
+    artifacts: Any,
+    is_reobserve: bool,
+    audio: str,
+) -> tuple[Any, Any]:
+    """C12 抽出: invoker 解決 + `base_prepared_invocation` + take collect
+    （`is_reobserve` なら既存 take を再利用）。"""
+    import yaml
+    from pydantic import ValidationError
+
+    from svp_rpe.recast import RecastError
+    from svp_rpe.recast.backend import (
+        base_prepared_invocation,
+        resolve_invoker,
+        run_context_from_plan_artifacts,
+    )
+
     try:
         # `profile` は plan 段が single-read 束で既に parse・validate 済みの
         # `artifacts.profile` をそのまま使う（Codex P2 review round 12, PR3
@@ -1249,87 +1130,41 @@ def recast_ingest_cmd(
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
-    if is_reobserve:
-        console.print(
-            f"[cyan]Re-observing existing take: {take.audio_path} "
-            f"(sha256={take.sha256})[/cyan]"
-        )
-    else:
-        note = f"{os.path.relpath(take.audio_path, loaded.project_dir)} sha256={take.sha256}"
-        try:
-            record_state(
-                loaded.project_dir,
-                variant,
-                backend,
-                "generated",
-                note=note,
-                inputs_digest=artifacts.result.inputs_digest,
-                plan_sha256=plan_sha256,
-                protected_inputs=prepared.protected_input_paths,
-            )
-        except (OSError, ValueError) as exc:
-            typer.echo(f"Error: {exc}", err=True)
-            raise typer.Exit(code=1) from exc
-        console.print(f"[green]Ingested take: {take.audio_path} (sha256={take.sha256})[/green]")
+    return take, prepared
 
-    if not loaded.project.observation.enabled:
-        # 観測無効化時の再観測（Codex P2 review 4 巡目, PR #212 指摘）:
-        # `is_reobserve` かつ `observation.enabled: false` の場合、ここで
-        # 単に案内を出して exit するだけだと、state が `observed`/
-        # `reported` のまま（古い `observation_digest` pin を抱えたまま）
-        # 残り続ける。`recast status` は observed/reported の run にだけ
-        # `observation_digest` 突合を課すため、state が変わらない限り
-        # 恒久的に stale 表示 → ingest 再実行 → この early-exit → 何も
-        # 変わらない、という無限ループになる。observation を無効化した
-        # 時点で「この report はもう現在の観測方針を反映していない」と
-        # みなし、state を `generated` へ撤回する（`_REOBSERVABLE_STATES`
-        # に generated が含まれるため、以降 observation.enabled を true へ
-        # 戻せば同じ take でそのまま再観測できる）。既存の report/summary
-        # ファイル自体は disk から削除しない（証跡保全 — 他の recast 公開
-        # サイトと同じ「無条件削除しない」規律）。
-        if is_reobserve:
-            revert_note = "観測が無効化されたため report を撤回（generated へ復帰）"
-            try:
-                record_state(
-                    loaded.project_dir,
-                    variant,
-                    backend,
-                    "generated",
-                    note=revert_note,
-                    inputs_digest=artifacts.result.inputs_digest,
-                    plan_sha256=plan_sha256,
-                    observation_digest=current_observation_digest,
-                    protected_inputs=prepared.protected_input_paths,
-                )
-            except (OSError, ValueError) as exc:
-                typer.echo(f"Error: {exc}", err=True)
-                raise typer.Exit(code=1) from exc
-            console.print(
-                f"[yellow]{revert_note}。"
-                f"{resolve_reports_dir(loaded, variant, backend)} 配下の既存 "
-                "report/summary は削除されていません（証跡として残ります）が、"
-                "この run の現在の状態はもう表しません。[/yellow]"
-            )
-        console.print(
-            "Next step: project.yaml の observation.enabled が無効です。"
-            "svprpe observe <package.json> <audio> --manifest <identity.yaml> "
-            "-o <report.json> で手動観測してください。"
-        )
-        raise typer.Exit(code=0)
 
-    # PR5: observation.enabled=true の manual backend はここから observe→report
-    # まで自動で継続する。`take.audio_path` は上の `atomic_publish_bytes_bundle`
-    # 経由の publish が成功した後の実ファイルパスであり、`prepared.package` は
-    # `PerformancePackage` オブジェクトそのものだが `observe_generated_artifact`
-    # は provenance chain を自分自身で再検証する必要があるため、公開済みの
-    # `performance_package.json` bytes を改めて読む（in-memory オブジェクトを
-    # 信用しない — `svprpe observe` の D-3 契約と同じ posture）。
-    package_path = resolve_packages_dir(loaded, variant, backend) / PERFORMANCE_PACKAGE_FILENAME
-    take_relative = os.path.relpath(take.audio_path, loaded.project_dir)
-    # `run_context_from_plan_artifacts`（上で `ctx` を組み立てる際）が既に
-    # `artifacts.compiled is not None` を要求している（さもなくば RecastError
-    # で既に exit 1 済み）ため、ここへ到達する時点で常に non-None。
-    assert artifacts.compiled is not None
+def _observe_and_report(
+    loaded: Any,
+    variant: str,
+    backend: str,
+    artifacts: Any,
+    take: Any,
+    prepared: Any,
+    package_path: Path,
+    take_relative: str,
+    anchor_scope: Optional[set[str]],
+    plan_sha256: str,
+    current_observation_digest: str,
+) -> None:
+    """C16+C17+C18+C19 抽出: `observe_generated_artifact` 呼び出し →
+    `observed` state 記録 → `recast_report`/`recast_summary.md` 構築+公開 →
+    `reported` state 記録。`observation_incomplete` 記録の重複 2 箇所
+    （observe 失敗時 / report publish 失敗時）はそのまま重複を保存する
+    （共通化しない）。"""
+    from pydantic import ValidationError
+
+    from svp_rpe.arrange.identity import IdentityManifestError
+    from svp_rpe.arrange.observe import observe_generated_artifact
+    from svp_rpe.recast.backend import atomic_publish_bytes_bundle
+    from svp_rpe.recast.plan import _normalize_diagnostic
+    from svp_rpe.recast.report import (
+        RECAST_REPORT_FILENAME,
+        RECAST_SUMMARY_FILENAME,
+        build_recast_report,
+        render_recast_summary_markdown,
+    )
+    from svp_rpe.recast.run_paths import resolve_reports_dir
+    from svp_rpe.recast.state import record_state
 
     try:
         # `expected_audio_sha256=take.sha256`（Codex P2, #210 round 2 指摘2）:
@@ -1468,6 +1303,273 @@ def recast_ingest_cmd(
         f"not_observed={recast_report.coverage.not_observed})[/green]"
     )
     console.print(f"Next step: {reports_dir / RECAST_SUMMARY_FILENAME} を確認してください。")
+
+
+@recast_app.command("ingest")
+def recast_ingest_cmd(
+    project_yaml: str = typer.Argument(..., help="Path to RecastProject YAML"),
+    variant: str = typer.Option(..., "--variant", help="Variant name declared in the project"),
+    backend: str = typer.Option(..., "--backend", help="Backend name declared in the project"),
+    audio: str = typer.Option(
+        ..., "--audio", help="Path to the externally generated audio (.wav/.mp3)"
+    ),
+) -> None:
+    """Ingest an externally generated take for a manual backend run.
+
+    Requires `(variant, backend)` to currently be at `awaiting_generation`
+    (per `recast_state.json`). Before trusting that recorded state, applies
+    the exact same fail-closed staleness checks as `recast status`
+    (Codex P2 review round 2 indicated this command is where PR2's own
+    forward-looking `plan_sha256` note applies): the recorded `inputs_digest`
+    must match the current inputs, the recorded `plan_sha256` must match the
+    current `recast_plan.json` bytes, and the recorded `orders_digest` must
+    match the current 6 order files on disk (Codex P2 review round 13, PR3
+    #208 指摘28 — `recast/backends/manual.py:compute_orders_digest`; missing/
+    unreadable counts as a mismatch in every case) — any mismatch is reported
+    and exits 1 without touching any file. A `None` `inputs_digest`/
+    `plan_sha256`/`orders_digest` (e.g. an old-schema or hand-copied state) is
+    *not* trusted as "unknown, skip the check" — it is treated as stale too
+    (Codex P2 review round 4, PR3 #208 指摘 9: a missing pin is exactly the
+    case a stale/forged state most plausibly has). Only then does it rebuild
+    the plan context via the same `build_recast_plan_artifacts` path
+    `recast run` uses — with `publish=False` (Codex P2 review round 13, PR3
+    #208 指摘27: publishing `builds/packages/<variant>@<backend>/` before the
+    rebuild's own freshly recomputed `inputs_digest` is re-compared against
+    the recorded pin let a swapped-input rebuild overwrite `packages/` even
+    when the digest re-check below was about to reject the run). Before that
+    rebuild's result is trusted (published to `packages/`, re-published as
+    `recast_plan.json`, or used to `collect` the take), its freshly
+    recomputed `inputs_digest` is re-compared against the same recorded pin
+    (Codex P2 eighth round #207 指摘16: the precheck above and this rebuild
+    are not atomic — inputs could be swapped in the gap between them, letting
+    an old order's externally generated audio get recorded as the `generated`
+    take for a *new* plan built from the swapped inputs). A mismatch here
+    exits 1 without publishing `packages/`, the plan, collecting the audio, or
+    touching `recast_state.json` — the old packages/plan/state are left
+    untouched. Only once that re-check passes does it publish `packages/`
+    (from the same in-memory compile the `publish=False` rebuild already
+    produced — no recompile), re-publish `recast_plan.json` (same
+    `_publish_recast_plan` single source), resolve the `ManualInvoker`, and
+    call `collect(audio)` to atomically ingest the audio into
+    `<builds_root>/takes/<variant>@<backend>/`. Records `generated` (with the
+    freshly (re)computed `inputs_digest`/`plan_sha256`) only after that
+    publish succeeds — this is the command `next_command.txt`/`order_sheet.md`
+    (`ManualInvoker`) advertise.
+
+    Order files are never re-published by this command (Codex P2 review
+    round 13, PR3 #208 指摘28): `ManualInvoker.prepare()` unconditionally
+    re-publishes all 6 order files, which would silently erase any manual
+    edit made to them after `recast run` — an edited `prompt.json` (say) that
+    the externally generated audio was actually produced from would be
+    overwritten back to the rebuilt "canonical" content right before
+    `collect`, letting tampered-order audio get accepted as if it came from
+    the pristine, originally published order. This command instead calls
+    `base_prepared_invocation` (the same field assembly `prepare()` uses
+    internally, minus the publish side effect) once the `orders_digest`
+    precheck above has confirmed the 6 files on disk are byte-identical to
+    what was pinned at `recast run` time.
+
+    Scope (PR5): once the take is collected and `generated` is recorded, if
+    `project.yaml`'s `observation.enabled` is true this command continues on
+    to observe the take (`svp_rpe.arrange.observe.observe_generated_artifact`,
+    the same provenance-checked path `svprpe observe` uses) against the
+    published `performance_package.json` + `--manifest` identity manifest,
+    records `observed`, builds + publishes a `recast_report.json` +
+    `recast_summary.md` pair (`svp_rpe.recast.report`) under
+    `<builds_root>/reports/<variant>@<backend>/`, and records `reported`. A
+    failure anywhere in the observe/report stage (extraction error, publish
+    I/O failure, ...) is recorded as `observation_incomplete` and exits 1 —
+    no partial `recast_report.json`/`recast_summary.md` is ever left behind
+    (the pair publishes atomically as one bundle, `atomic_publish_bytes_bundle`).
+    When `observation.enabled` is false this command stops at `generated`,
+    unchanged from PR3/PR4 behavior — `svprpe observe` remains available as a
+    manual fallback either way.
+
+    Scope (PR6): `observation.anchors`（非空リスト）を宣言した project は
+    `recast_report.json`/`recast_summary.md`（coverage 集計も含む）をその
+    anchor 集合へ絞り込む（`recast.report.build_recast_report` の
+    `observation_anchors` 引数）。空リスト（既定）は絞り込みなし＝全 anchor。
+    未知 anchor id（identity manifest に存在しない id）を宣言した project は、
+    本コマンド冒頭の他 precheck 群（inputs_digest/plan_sha256/orders_digest、
+    下記参照）と同じ「collect/publish/record_state より前・何も書かず exit」
+    位置で設定エラーとして拒否される（Codex P2, #210 round 9 指摘11 → round
+    10 指摘13 でこの位置へ前倒し — 旧位置（collect 後）だと typo 修正後に
+    `awaiting_generation` から同じ take で再 ingest できなくなっていた）。
+    `recast plan`/`recast run` の plan 段はこの検証を行わない — manual
+    backend が注文書公開・`awaiting_generation` まで進めることを優先し、
+    観測スコープの妥当性は ingest 冒頭でのみ判定する設計。plain な Error +
+    exit 1 とし、state は `awaiting_generation` のまま変更しない
+    （`observation_incomplete`— 観測実行時の実測失敗用の state — は記録
+    しない。設定ミスと実行時失敗を state レベルで区別する）。
+    `observe_generated_artifact` 自身にも同型の防御的ガードがある
+    （`svprpe observe` 単体実行など他呼び出し元向け）。
+
+    Scope（再観測、Codex P2 review, PR #212 指摘）: `(variant, backend)` が
+    `generated`/`observed`/`reported`（`_REOBSERVABLE_STATES`）のいずれかの
+    場合、本コマンドは take を再 collect せず「同一 take での再観測」経路
+    として動作する（`is_reobserve`）。`inputs_digest`/`plan_sha256` の
+    precheck は従来どおり通過が必須だが、`orders_digest` 突合はスキップ
+    する（take を再 collect しないため注文書とは無関係。local backend の
+    run は元々 `orders_digest` を持たないため、この経路が無ければ local
+    backend は再観測できなかった）。代わりに、供給された `--audio` の
+    sha256 が disk 上の既存 take（`take.json` 経由で検証）と一致すること
+    を要求する（`_load_existing_take_for_reobserve`）— 別音源をこの経路
+    経由で忍び込ませることはできない。一致すれば `packages/`/正典
+    `recast_plan.json` を再公開し（入力の drift を検出する既存の TOCTOU
+    再チェックも維持）、observe→report を実行し直して `observed`/
+    `reported` を `observation_digest`（現在の `observation` 節の digest）
+    付きで再記録する。動機: `_project_identity_digest_component` が
+    `inputs_digest` から `observation` 節を意図的に除外しているため
+    （前指摘の回復フローを壊さないため）、`observation.enabled`/
+    `observation.anchors` の変更だけでは `inputs_digest` は変化しない —
+    しかし report は observation 節を直接反映するため、この再観測経路が
+    無いと `recast status` の stale 表示（`observation_digest` 不一致）が
+    行き止まりになってしまう。
+    """
+    from svp_rpe.arrange.package import PERFORMANCE_PACKAGE_FILENAME
+    from svp_rpe.recast import RecastError, load_recast_project
+    from svp_rpe.recast.run_paths import resolve_packages_dir, resolve_reports_dir
+    from svp_rpe.recast.state import load_recast_state, record_state
+
+    try:
+        loaded = load_recast_project(project_yaml)
+        # `--variant`/`--backend` の宣言確認（Codex P2 review round 14,
+        # PR5 #210 指摘19 — `recast plan` 側の同型コメント参照）。
+        _validate_variant_backend_declared(loaded, variant, backend)
+        # packages/ への公開（指摘27 対応で `publish=False` 再ビルド後の
+        # 直接 `_atomic_publish_text_bundle` 呼び出し）前の preflight
+        # （Codex P2 review round 15, PR3 #208 指摘30 — `recast plan` 側の
+        # 同型コメント参照）。
+        _preflight_reject_plan_state_output_collision(loaded, variant, backend)
+        state_file = load_recast_state(loaded.project_dir)
+    except (OSError, ValueError, RecastError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    run_key = f"{variant}@{backend}"
+    run = state_file.runs.get(run_key)
+    # 再観測（Codex P2 review, PR #212 指摘）: `generated`/`observed`/
+    # `reported` の run は、収蔵済みの take を collect し直さず observation
+    # 設定だけを再評価して report を更新する経路として ingest を再利用できる
+    # （下記 `--audio` 一致検査を通過した場合のみ — `_REOBSERVABLE_STATES`
+    # docstring 参照）。
+    is_reobserve = run is not None and run.state in _REOBSERVABLE_STATES
+    if run is None or (run.state != "awaiting_generation" and not is_reobserve):
+        current_state = run.state if run is not None else "draft"
+        typer.echo(
+            f"Error: {run_key} is at state {current_state!r}, not 'awaiting_generation' "
+            f"(or one of {sorted(_REOBSERVABLE_STATES)} for re-observation with the same "
+            "take). Run 'svprpe recast run' first to publish order files for a manual "
+            "backend.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    _ingest_prechecks(loaded, variant, backend, run, is_reobserve)
+
+    anchor_scope, current_observation_digest = _precheck_observation_anchors(loaded)
+
+    artifacts, plan_sha256 = _rebuild_and_publish_plan(loaded, variant, backend, run)
+
+    take, prepared = _resolve_and_collect_take(
+        loaded, variant, backend, artifacts, is_reobserve, audio
+    )
+
+    if is_reobserve:
+        console.print(
+            f"[cyan]Re-observing existing take: {take.audio_path} "
+            f"(sha256={take.sha256})[/cyan]"
+        )
+    else:
+        note = f"{os.path.relpath(take.audio_path, loaded.project_dir)} sha256={take.sha256}"
+        try:
+            record_state(
+                loaded.project_dir,
+                variant,
+                backend,
+                "generated",
+                note=note,
+                inputs_digest=artifacts.result.inputs_digest,
+                plan_sha256=plan_sha256,
+                protected_inputs=prepared.protected_input_paths,
+            )
+        except (OSError, ValueError) as exc:
+            typer.echo(f"Error: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        console.print(f"[green]Ingested take: {take.audio_path} (sha256={take.sha256})[/green]")
+
+    if not loaded.project.observation.enabled:
+        # 観測無効化時の再観測（Codex P2 review 4 巡目, PR #212 指摘）:
+        # `is_reobserve` かつ `observation.enabled: false` の場合、ここで
+        # 単に案内を出して exit するだけだと、state が `observed`/
+        # `reported` のまま（古い `observation_digest` pin を抱えたまま）
+        # 残り続ける。`recast status` は observed/reported の run にだけ
+        # `observation_digest` 突合を課すため、state が変わらない限り
+        # 恒久的に stale 表示 → ingest 再実行 → この early-exit → 何も
+        # 変わらない、という無限ループになる。observation を無効化した
+        # 時点で「この report はもう現在の観測方針を反映していない」と
+        # みなし、state を `generated` へ撤回する（`_REOBSERVABLE_STATES`
+        # に generated が含まれるため、以降 observation.enabled を true へ
+        # 戻せば同じ take でそのまま再観測できる）。既存の report/summary
+        # ファイル自体は disk から削除しない（証跡保全 — 他の recast 公開
+        # サイトと同じ「無条件削除しない」規律）。
+        if is_reobserve:
+            revert_note = "観測が無効化されたため report を撤回（generated へ復帰）"
+            try:
+                record_state(
+                    loaded.project_dir,
+                    variant,
+                    backend,
+                    "generated",
+                    note=revert_note,
+                    inputs_digest=artifacts.result.inputs_digest,
+                    plan_sha256=plan_sha256,
+                    observation_digest=current_observation_digest,
+                    protected_inputs=prepared.protected_input_paths,
+                )
+            except (OSError, ValueError) as exc:
+                typer.echo(f"Error: {exc}", err=True)
+                raise typer.Exit(code=1) from exc
+            console.print(
+                f"[yellow]{revert_note}。"
+                f"{resolve_reports_dir(loaded, variant, backend)} 配下の既存 "
+                "report/summary は削除されていません（証跡として残ります）が、"
+                "この run の現在の状態はもう表しません。[/yellow]"
+            )
+        console.print(
+            "Next step: project.yaml の observation.enabled が無効です。"
+            "svprpe observe <package.json> <audio> --manifest <identity.yaml> "
+            "-o <report.json> で手動観測してください。"
+        )
+        raise typer.Exit(code=0)
+
+    # PR5: observation.enabled=true の manual backend はここから observe→report
+    # まで自動で継続する。`take.audio_path` は上の `atomic_publish_bytes_bundle`
+    # 経由の publish が成功した後の実ファイルパスであり、`prepared.package` は
+    # `PerformancePackage` オブジェクトそのものだが `observe_generated_artifact`
+    # は provenance chain を自分自身で再検証する必要があるため、公開済みの
+    # `performance_package.json` bytes を改めて読む（in-memory オブジェクトを
+    # 信用しない — `svprpe observe` の D-3 契約と同じ posture）。
+    package_path = resolve_packages_dir(loaded, variant, backend) / PERFORMANCE_PACKAGE_FILENAME
+    take_relative = os.path.relpath(take.audio_path, loaded.project_dir)
+    # `run_context_from_plan_artifacts`（上で `ctx` を組み立てる際）が既に
+    # `artifacts.compiled is not None` を要求している（さもなくば RecastError
+    # で既に exit 1 済み）ため、ここへ到達する時点で常に non-None。
+    assert artifacts.compiled is not None
+
+    _observe_and_report(
+        loaded,
+        variant,
+        backend,
+        artifacts,
+        take,
+        prepared,
+        package_path,
+        take_relative,
+        anchor_scope,
+        plan_sha256,
+        current_observation_digest,
+    )
 
 
 @recast_app.command("status")
