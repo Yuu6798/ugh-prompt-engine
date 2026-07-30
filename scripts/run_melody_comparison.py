@@ -118,6 +118,28 @@ _COVERAGE_FIELDS: Tuple[str, ...] = (
     "phrase_coverage_b",
 )
 
+# レビュー対応 2026-07-30（第 19 ラウンド・狙い撃ち negative の軸スコープ化）:
+# `expected == "different"` の pair は従来 kind を問わず全軸の negative 分布へ
+# 投入していたが、狙い撃ち negative（`negative_rhythm`/`negative_interval`。
+# 設計 §6.1「同リズム別音程列・同音程列別リズムの合成対 = 各軸の弁別を単独
+# 検証」）は意図的に他軸を保存した合成対であり、保存された軸まで negative
+# として数えると保存軸の negative_max ≈ 1.0 に張り付き、当該軸の校正が構造的に
+# 不可能になる:
+# - `negative_rhythm`（同音程列・別リズム）: interval/contour は音程由来で
+#   保存されている → negative として妥当なのは rhythm のみ
+# - `negative_interval`（同リズム・別音程列）: rhythm は保存されている →
+#   negative として妥当なのは音程由来の interval/contour（音程摂動対は
+#   contour の弁別対でもある）。rhythm は除外
+# - `negative_cross`（異なる clip 同士）: 軸を限定する理由がないため従来どおり
+#   全軸
+# tuning の `_margin_table` と holdout の `_holdout_validation_table` の両方が
+# このマッピングを参照する（二重定義を避ける単一 source of truth）。
+_NEGATIVE_KIND_AXIS_SCOPE: Dict[str, Tuple[str, ...]] = {
+    "negative_cross": _AXES,
+    "negative_rhythm": ("rhythm",),
+    "negative_interval": ("interval", "contour"),
+}
+
 # route_runner: (audio_path) -> (MelodyObservation, provenance dict)。
 RouteRunner = Callable[[str], Tuple[MelodyObservation, Dict[str, Any]]]
 
@@ -1752,6 +1774,25 @@ def _margin_table(
     positive pair が測れなかった（=同一の証拠を出すべきペアで計器が沈黙した）ことは
     「negative が測れなかった」こととは意味が異なり、呼び出し側（`evaluate_comparison`）
     はこの区別を見て freeze proposal の発行可否を決める。
+
+    レビュー対応 2026-07-30（第 19 ラウンド・狙い撃ち negative の軸スコープ化）:
+    positive（``expected == "same"``）は従来どおり全軸の positive バケットへ投入する。
+    negative（``expected == "different"``）は pair の `kind` に応じて
+    `_NEGATIVE_KIND_AXIS_SCOPE` が定めるスコープ軸のみへ投入する——`negative_rhythm`/
+    `negative_interval`（狙い撃ち negative）は他軸を意図的に保存した合成対のため、
+    保存軸まで negative として数えると当該軸の校正が構造的に不可能になる（詳細は
+    `_NEGATIVE_KIND_AXIS_SCOPE` のコメント）。スコープ外の値は単に読み飛ばす（除外は
+    `skipped_pairs`/`not_comparable_*` の会計対象ではない——pair 自体は比較可能で
+    あり、特定軸への寄与を意図的に持たないだけのため）。
+
+    軸スコープ化の結果、ある軸の negative バケットが空になり得る（例:
+    `negative_cross` が manifest に無く狙い撃ち negative のみの構成で、
+    `negative_rhythm` だけが存在する場合、interval/contour の negative は空になる）。
+    negative バケットが空の軸は `reason: "negative_empty"` として margin 計算不能・
+    calibrated 候補対象外にする（positive バケットが空の場合の従来理由
+    `insufficient_positive_or_negative_samples` とは区別する——負例材料が単に
+    軸スコープの外側にしかない状態と、そもそも標本が足りない状態は異なる診断
+    情報のため）。
     """
     axis_positive: Dict[str, List[float]] = {axis: [] for axis in _AXES}
     axis_negative: Dict[str, List[float]] = {axis: [] for axis in _AXES}
@@ -1770,18 +1811,33 @@ def _margin_table(
             else:
                 not_comparable_negative_count += 1
             continue
-        bucket = axis_positive if pair["expected"] == "same" else axis_negative
-        for axis, value in comparison["axes"].items():
-            if value is None:
-                continue
-            bucket.setdefault(axis, []).append(value)
+        if pair["expected"] == "same":
+            for axis, value in comparison["axes"].items():
+                if value is None:
+                    continue
+                axis_positive.setdefault(axis, []).append(value)
+        else:
+            negative_scope = _NEGATIVE_KIND_AXIS_SCOPE.get(pair["kind"], _AXES)
+            for axis, value in comparison["axes"].items():
+                if value is None or axis not in negative_scope:
+                    continue
+                axis_negative.setdefault(axis, []).append(value)
 
     axes_table: Dict[str, Any] = {}
     calibrated_axes: List[str] = []
     for axis in _AXES:
         positives = axis_positive.get(axis, [])
         negatives = axis_negative.get(axis, [])
-        if not positives or not negatives:
+        if not negatives:
+            axes_table[axis] = {
+                "positive_min": None,
+                "negative_max": None,
+                "margin": None,
+                "calibrated_candidate": False,
+                "reason": "negative_empty",
+            }
+            continue
+        if not positives:
             axes_table[axis] = {
                 "positive_min": None,
                 "negative_max": None,
@@ -1927,6 +1983,15 @@ def _holdout_validation_table(
     `holdout_failed`）に関わらず `holdout_validation_status` を
     `calibration_not_confirmed_on_holdout` に倒す（測れなかった pair が 1 件でも
     あれば「holdout で確認できた」とは主張しない）。
+
+    レビュー対応 2026-07-30（第 19 ラウンド・狙い撃ち negative の軸スコープ化）:
+    `_margin_table` と同じ `_NEGATIVE_KIND_AXIS_SCOPE` を参照し、negative
+    （``expected == "different"``）の pair は `kind` に応じたスコープ軸のみへ
+    投入する（positive は従来どおり全軸）。スコープ化の結果、凍結済み軸の
+    negative バケットが空になり得る——空の軸は `reason: "negative_empty"` を
+    伴う `holdout_failed`（判定不能を confirmed 側へ倒さない fail-closed は
+    従来どおり）として記録し、positive バケットが空の場合の従来理由
+    `insufficient_holdout_positive_or_negative_samples` とは区別する。
     """
     axis_positive: Dict[str, List[float]] = {axis: [] for axis in frozen_axes}
     axis_negative: Dict[str, List[float]] = {axis: [] for axis in frozen_axes}
@@ -1944,11 +2009,17 @@ def _holdout_validation_table(
             skipped.append(f"{pair_id}:not_comparable")
             not_comparable_pair_ids.append(pair_id)
             continue
-        bucket = axis_positive if pair["expected"] == "same" else axis_negative
-        for axis, value in comparison.get("axes", {}).items():
-            if axis not in frozen_axes or value is None:
-                continue
-            bucket[axis].append(value)
+        if pair["expected"] == "same":
+            for axis, value in comparison.get("axes", {}).items():
+                if axis not in frozen_axes or value is None:
+                    continue
+                axis_positive[axis].append(value)
+        else:
+            negative_scope = _NEGATIVE_KIND_AXIS_SCOPE.get(pair["kind"], _AXES)
+            for axis, value in comparison.get("axes", {}).items():
+                if axis not in frozen_axes or axis not in negative_scope or value is None:
+                    continue
+                axis_negative[axis].append(value)
 
     table: Dict[str, Any] = {}
     for axis, thresholds in frozen_axes.items():
@@ -1956,7 +2027,17 @@ def _holdout_validation_table(
         negatives = axis_negative.get(axis, [])
         strong_min = float(thresholds["strong_min"])
         none_max = float(thresholds["none_max"])
-        if not positives or not negatives:
+        if not negatives:
+            table[axis] = {
+                "holdout_positive_min": None,
+                "holdout_negative_max": None,
+                "frozen_strong_min": strong_min,
+                "frozen_none_max": none_max,
+                "verdict": "holdout_failed",
+                "reason": "negative_empty",
+            }
+            continue
+        if not positives:
             table[axis] = {
                 "holdout_positive_min": None,
                 "holdout_negative_max": None,

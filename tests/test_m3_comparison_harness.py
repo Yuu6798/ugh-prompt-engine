@@ -619,10 +619,19 @@ def test_observation_content_sha256_distinguishes_1e_minus_5_difference():
 # マージン計算の手計算一致
 # --------------------------------------------------------------------------- #
 def _synthetic_pairs_for_margin() -> Dict[str, Dict[str, Any]]:
-    def _row(evidence: str, contour: Any, interval: Any, rhythm: Any, split: str, expected: str) -> Dict[str, Any]:
+    def _row(
+        evidence: str,
+        contour: Any,
+        interval: Any,
+        rhythm: Any,
+        split: str,
+        expected: str,
+        kind: str = "negative_cross",
+    ) -> Dict[str, Any]:
         return {
             "split": split,
             "expected": expected,
+            "kind": kind,
             "comparison": {
                 "evidence": evidence,
                 "axes": {"contour": contour, "interval": interval, "rhythm": rhythm},
@@ -636,12 +645,15 @@ def _synthetic_pairs_for_margin() -> Dict[str, Dict[str, Any]]:
         }
 
     return {
-        "pos1": _row("none", 0.9, 0.8, 0.7, "tuning", "same"),
-        "pos2": _row("none", 0.95, 0.85, 0.75, "tuning", "same"),
-        "neg1": _row("none", 0.2, 0.1, 0.3, "tuning", "different"),
-        "neg2": _row("none", 0.3, 0.2, 0.25, "tuning", "different"),
+        "pos1": _row("none", 0.9, 0.8, 0.7, "tuning", "same", kind="positive_transform"),
+        "pos2": _row("none", 0.95, 0.85, 0.75, "tuning", "same", kind="positive_transform"),
+        # negative_cross（軸を限定しない狙い撃ちでない negative）— 従来どおり全軸に寄与。
+        "neg1": _row("none", 0.2, 0.1, 0.3, "tuning", "different", kind="negative_cross"),
+        "neg2": _row("none", 0.3, 0.2, 0.25, "tuning", "different", kind="negative_cross"),
         # holdout split は除外されるべき(margin 計算に混ぜない)。
-        "pos_holdout": _row("none", 0.99, 0.99, 0.99, "holdout", "same"),
+        "pos_holdout": _row(
+            "none", 0.99, 0.99, 0.99, "holdout", "same", kind="positive_transform"
+        ),
     }
 
 
@@ -673,11 +685,13 @@ def test_margin_table_below_threshold_is_not_calibrated():
         "pos1": {
             "split": "tuning",
             "expected": "same",
+            "kind": "positive_transform",
             "comparison": {"evidence": "none", "axes": {"contour": 0.5, "interval": 0.5, "rhythm": 0.5}},
         },
         "neg1": {
             "split": "tuning",
             "expected": "different",
+            "kind": "negative_cross",
             "comparison": {"evidence": "none", "axes": {"contour": 0.45, "interval": 0.2, "rhythm": 0.5}},
         },
     }
@@ -688,6 +702,219 @@ def test_margin_table_below_threshold_is_not_calibrated():
     assert result["axes"]["interval"]["calibrated_candidate"] is True
     assert result["axes"]["rhythm"]["calibrated_candidate"] is False
     assert result["calibrated_axes"] == ["interval"]
+
+
+# --------------------------------------------------------------------------- #
+# 狙い撃ち negative の軸スコープ化（レビュー対応 2026-07-30 第 19 ラウンド）
+# --------------------------------------------------------------------------- #
+def test_margin_table_negative_kind_axis_scope_hand_calc():
+    """`negative_rhythm`/`negative_interval` は `_NEGATIVE_KIND_AXIS_SCOPE` の
+    スコープ軸のみへ寄与し、保存軸（狙い撃ちで意図的に保存されている軸）の高い
+    類似値は当該軸の negative バケットに混入しない。
+
+    - `negative_rhythm`（同音程列・別リズム）: contour/interval は保存 ≈ 1.0 —
+      rhythm のみが弁別対象。ここでの `interval=1.0`/`contour=1.0` は interval/
+      contour の negative_max に**入ってはならない**（入れば margin が壊れ、
+      当該軸の校正が構造的に不可能になる——本テストの受け入れ条件）。
+    - `negative_interval`（同リズム・別音程列）: rhythm は保存 ≈ 1.0 — interval/
+      contour が弁別対象。`rhythm=1.0` は rhythm の negative_max に入らない。
+    """
+    pairs: Dict[str, Dict[str, Any]] = {
+        "pos1": {
+            "split": "tuning",
+            "expected": "same",
+            "kind": "positive_transform",
+            "comparison": {
+                "evidence": "none",
+                "axes": {"contour": 0.9, "interval": 0.85, "rhythm": 0.8},
+            },
+        },
+        "neg_rhythm": {
+            "split": "tuning",
+            "expected": "different",
+            "kind": "negative_rhythm",
+            "comparison": {
+                "evidence": "none",
+                # interval/contour は保存 ≈ 1.0(=高)・rhythm のみ低い(=弁別対象)。
+                "axes": {"contour": 1.0, "interval": 1.0, "rhythm": 0.3},
+            },
+        },
+        "neg_interval": {
+            "split": "tuning",
+            "expected": "different",
+            "kind": "negative_interval",
+            "comparison": {
+                "evidence": "none",
+                # rhythm は保存 ≈ 1.0(=高)・interval/contour のみ低い(=弁別対象)。
+                "axes": {"contour": 0.25, "interval": 0.2, "rhythm": 1.0},
+            },
+        },
+    }
+
+    result = harness._margin_table(pairs, split="tuning", min_margin=0.15)
+
+    # contour: negative は neg_interval の 0.25 のみ(neg_rhythm の 1.0 は非混入)。
+    assert result["axes"]["contour"]["positive_min"] == pytest.approx(0.9)
+    assert result["axes"]["contour"]["negative_max"] == pytest.approx(0.25)
+    assert result["axes"]["contour"]["margin"] == pytest.approx(0.65)
+    assert result["axes"]["contour"]["calibrated_candidate"] is True
+
+    # interval: negative は neg_interval の 0.2 のみ(neg_rhythm の 1.0 は非混入
+    # ——ここが本レビュー対応の核心。旧実装なら negative_max=1.0 になり margin
+    # が負値になっていた)。
+    assert result["axes"]["interval"]["positive_min"] == pytest.approx(0.85)
+    assert result["axes"]["interval"]["negative_max"] == pytest.approx(0.2)
+    assert result["axes"]["interval"]["margin"] == pytest.approx(0.65)
+    assert result["axes"]["interval"]["calibrated_candidate"] is True
+
+    # rhythm: negative は neg_rhythm の 0.3 のみ(neg_interval の 1.0 は非混入)。
+    assert result["axes"]["rhythm"]["positive_min"] == pytest.approx(0.8)
+    assert result["axes"]["rhythm"]["negative_max"] == pytest.approx(0.3)
+    assert result["axes"]["rhythm"]["margin"] == pytest.approx(0.5)
+    assert result["axes"]["rhythm"]["calibrated_candidate"] is True
+
+    assert set(result["calibrated_axes"]) == {"contour", "interval", "rhythm"}
+
+
+def test_margin_table_negative_empty_axis_reports_negative_empty_reason():
+    """狙い撃ち negative のみの構成で、あるスコープ外の軸の negative バケットが
+    空になった場合、`reason: "negative_empty"` を記録し calibrated 候補にしない
+    （`insufficient_positive_or_negative_samples` とは区別する）。
+    """
+    pairs: Dict[str, Dict[str, Any]] = {
+        "pos1": {
+            "split": "tuning",
+            "expected": "same",
+            "kind": "positive_transform",
+            "comparison": {
+                "evidence": "none",
+                "axes": {"contour": 0.9, "interval": 0.85, "rhythm": 0.8},
+            },
+        },
+        # negative_rhythm のみ(negative_cross/negative_interval 無し) — interval/
+        # contour の negative バケットはどの pair からも供給されず空になる。
+        "neg_rhythm": {
+            "split": "tuning",
+            "expected": "different",
+            "kind": "negative_rhythm",
+            "comparison": {
+                "evidence": "none",
+                "axes": {"contour": 1.0, "interval": 1.0, "rhythm": 0.3},
+            },
+        },
+    }
+
+    result = harness._margin_table(pairs, split="tuning", min_margin=0.15)
+
+    assert result["axes"]["rhythm"]["calibrated_candidate"] is True
+
+    for axis in ("contour", "interval"):
+        assert result["axes"][axis]["calibrated_candidate"] is False
+        assert result["axes"][axis]["reason"] == "negative_empty"
+        assert result["axes"][axis]["positive_min"] is None
+        assert result["axes"][axis]["negative_max"] is None
+
+    assert result["calibrated_axes"] == ["rhythm"]
+
+
+def test_holdout_validation_table_negative_kind_axis_scope_hand_calc():
+    """`_holdout_validation_table` も `_margin_table` と同じ
+    `_NEGATIVE_KIND_AXIS_SCOPE` を適用し、狙い撃ち negative の保存軸の高い
+    類似値が当該軸の negative バケットへ混入しないことを手計算で確認する。
+    """
+    frozen_axes = {
+        "contour": {"strong_min": 0.8, "none_max": 0.2},
+        "interval": {"strong_min": 0.8, "none_max": 0.2},
+        "rhythm": {"strong_min": 0.7, "none_max": 0.3},
+    }
+    pairs: Dict[str, Dict[str, Any]] = {
+        "h_pos": {
+            "split": "holdout",
+            "expected": "same",
+            "kind": "positive_transform",
+            "comparison": {
+                "evidence": "none",
+                "axes": {"contour": 0.95, "interval": 0.9, "rhythm": 0.85},
+            },
+        },
+        "h_neg_rhythm": {
+            "split": "holdout",
+            "expected": "different",
+            "kind": "negative_rhythm",
+            "comparison": {
+                "evidence": "none",
+                # interval/contour は保存 ≈ 1.0 — もし interval の negative バケットへ
+                # 混入すれば negative_max=1.0 > none_max=0.2 で holdout_failed になる。
+                "axes": {"contour": 1.0, "interval": 1.0, "rhythm": 0.25},
+            },
+        },
+        "h_neg_interval": {
+            "split": "holdout",
+            "expected": "different",
+            "kind": "negative_interval",
+            "comparison": {
+                "evidence": "none",
+                # rhythm は保存 ≈ 1.0 — もし rhythm の negative バケットへ混入すれば
+                # negative_max=1.0 > none_max=0.3 で holdout_failed になる。
+                "axes": {"contour": 0.2, "interval": 0.15, "rhythm": 1.0},
+            },
+        },
+    }
+
+    result = harness._holdout_validation_table(pairs, frozen_axes=frozen_axes)
+
+    assert result["axes"]["contour"]["holdout_positive_min"] == pytest.approx(0.95)
+    assert result["axes"]["contour"]["holdout_negative_max"] == pytest.approx(0.2)
+    assert result["axes"]["contour"]["verdict"] == "confirmed"
+
+    assert result["axes"]["interval"]["holdout_positive_min"] == pytest.approx(0.9)
+    assert result["axes"]["interval"]["holdout_negative_max"] == pytest.approx(0.15)
+    assert result["axes"]["interval"]["verdict"] == "confirmed"
+
+    assert result["axes"]["rhythm"]["holdout_positive_min"] == pytest.approx(0.85)
+    assert result["axes"]["rhythm"]["holdout_negative_max"] == pytest.approx(0.25)
+    assert result["axes"]["rhythm"]["verdict"] == "confirmed"
+
+
+def test_holdout_validation_table_negative_empty_axis_reports_negative_empty_reason():
+    """狙い撃ち negative のみ(negative_rhythm のみ)の holdout 構成で、スコープ外の
+    軸の negative バケットが空になれば `reason: "negative_empty"` を伴う
+    `holdout_failed` として記録する(判定不能を confirmed 側に倒さない)。
+    """
+    frozen_axes = {
+        "contour": {"strong_min": 0.8, "none_max": 0.2},
+        "interval": {"strong_min": 0.8, "none_max": 0.2},
+        "rhythm": {"strong_min": 0.7, "none_max": 0.3},
+    }
+    pairs: Dict[str, Dict[str, Any]] = {
+        "h_pos": {
+            "split": "holdout",
+            "expected": "same",
+            "kind": "positive_transform",
+            "comparison": {
+                "evidence": "none",
+                "axes": {"contour": 0.95, "interval": 0.9, "rhythm": 0.85},
+            },
+        },
+        "h_neg_rhythm": {
+            "split": "holdout",
+            "expected": "different",
+            "kind": "negative_rhythm",
+            "comparison": {
+                "evidence": "none",
+                "axes": {"contour": 1.0, "interval": 1.0, "rhythm": 0.25},
+            },
+        },
+    }
+
+    result = harness._holdout_validation_table(pairs, frozen_axes=frozen_axes)
+
+    assert result["axes"]["rhythm"]["verdict"] == "confirmed"
+    for axis in ("contour", "interval"):
+        assert result["axes"][axis]["verdict"] == "holdout_failed"
+        assert result["axes"][axis]["reason"] == "negative_empty"
+        assert result["axes"][axis]["holdout_positive_min"] is None
+        assert result["axes"][axis]["holdout_negative_max"] is None
 
 
 # --------------------------------------------------------------------------- #
@@ -714,6 +941,7 @@ def test_margin_table_records_not_comparable_positive_and_negative_counts():
         "neg_ok": {
             "split": "tuning",
             "expected": "different",
+            "kind": "negative_cross",
             "comparison": {"evidence": "none", "axes": {"contour": 0.1, "interval": 0.05, "rhythm": 0.2}},
         },
         "neg_nc1": {
