@@ -418,6 +418,38 @@ def test_route_runner_injected_rejects_calibration_verdict(tmp_path: Path):
     assert "freeze_proposal" not in verdict
 
 
+def test_evaluate_rejects_missing_route_runner_injected_field(tmp_path: Path):
+    """`route_runner_injected` キー自体が欠落した report は理由つきで拒否する
+    (レビュー対応 2026-07-30 第 3 ラウンド: 欠落を `bool(None)` で False 扱いに
+    フォールバックさせない)。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs())
+    runner = _fake_route_runner(_notes_by_path())
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    del report["route_runner_injected"]
+
+    with pytest.raises(ValueError, match="route_runner_injected"):
+        harness.evaluate_comparison([report])
+
+
+def test_evaluate_rejects_non_bool_route_runner_injected_field(tmp_path: Path):
+    """`route_runner_injected` が bool でない(文字列/整数)場合は拒否する。"""
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs())
+    runner = _fake_route_runner(_notes_by_path())
+
+    report_str = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    report_str["route_runner_injected"] = "true"
+    with pytest.raises(ValueError, match="route_runner_injected"):
+        harness.evaluate_comparison([report_str])
+
+    report_int = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    report_int["route_runner_injected"] = 1
+    with pytest.raises(ValueError, match="route_runner_injected"):
+        harness.evaluate_comparison([report_int])
+
+
 # --------------------------------------------------------------------------- #
 # --out の protected-path
 # --------------------------------------------------------------------------- #
@@ -726,6 +758,106 @@ def test_holdout_unlocked_requires_all_three_conditions():
     assert harness._holdout_unlocked(full_config) is True
 
 
+def test_holdout_unlocked_rejects_empty_axes_mapping():
+    """axes の 3 キー自体は揃っているが値が空 mapping(`{}`)——holdout は開かない。"""
+    from svp_rpe.melody.representation import M3ComparisonConfig
+
+    base_mapping = _registry_mapping()
+    mapping = dict(base_mapping)
+    mapping["evidence_thresholds"] = {
+        "status": "frozen",
+        "axes": {"contour": {}, "interval": {}, "rhythm": {}},
+    }
+    mapping["coverage"] = dict(base_mapping["coverage"])
+    mapping["coverage"]["floor_status"] = "frozen"
+    config = M3ComparisonConfig.from_registry(mapping)
+
+    assert harness._validate_frozen_axes(config.evidence_thresholds.axes) is False
+    assert harness._holdout_unlocked(config) is False
+
+
+def test_holdout_unlocked_rejects_strong_min_below_none_max():
+    """`strong_min < none_max`(大小関係逆転)は holdout を開かない。"""
+    from svp_rpe.melody.representation import M3ComparisonConfig
+
+    base_mapping = _registry_mapping()
+    mapping = dict(base_mapping)
+    mapping["evidence_thresholds"] = {
+        "status": "frozen",
+        "axes": {
+            "contour": {"strong_min": 0.1, "none_max": 0.8},
+            "interval": {"strong_min": 0.8, "none_max": 0.2},
+            "rhythm": {"strong_min": 0.7, "none_max": 0.3},
+        },
+    }
+    mapping["coverage"] = dict(base_mapping["coverage"])
+    mapping["coverage"]["floor_status"] = "frozen"
+    config = M3ComparisonConfig.from_registry(mapping)
+
+    assert harness._validate_frozen_axes(config.evidence_thresholds.axes) is False
+    assert harness._holdout_unlocked(config) is False
+
+
+def test_holdout_unlocked_rejects_out_of_range_axis_values():
+    """`strong_min`/`none_max` が 0.0〜1.0 域外なら holdout を開かない。"""
+    from svp_rpe.melody.representation import M3ComparisonConfig
+
+    base_mapping = _registry_mapping()
+    mapping = dict(base_mapping)
+    mapping["evidence_thresholds"] = {
+        "status": "frozen",
+        "axes": {
+            "contour": {"strong_min": 1.5, "none_max": 0.2},
+            "interval": {"strong_min": 0.8, "none_max": 0.2},
+            "rhythm": {"strong_min": 0.7, "none_max": 0.3},
+        },
+    }
+    mapping["coverage"] = dict(base_mapping["coverage"])
+    mapping["coverage"]["floor_status"] = "frozen"
+    config = M3ComparisonConfig.from_registry(mapping)
+
+    assert harness._validate_frozen_axes(config.evidence_thresholds.axes) is False
+    assert harness._holdout_unlocked(config) is False
+
+
+def test_holdout_unlocked_rejects_non_numeric_axis_values():
+    """`strong_min`/`none_max` が非数値(bool 含む)なら holdout を開かない。"""
+    from svp_rpe.melody.representation import M3ComparisonConfig
+
+    base_mapping = _registry_mapping()
+    mapping = dict(base_mapping)
+    mapping["evidence_thresholds"] = {
+        "status": "frozen",
+        "axes": {
+            "contour": {"strong_min": True, "none_max": 0.2},
+            "interval": {"strong_min": 0.8, "none_max": 0.2},
+            "rhythm": {"strong_min": 0.7, "none_max": 0.3},
+        },
+    }
+    mapping["coverage"] = dict(base_mapping["coverage"])
+    mapping["coverage"]["floor_status"] = "frozen"
+    config = M3ComparisonConfig.from_registry(mapping)
+
+    assert harness._validate_frozen_axes(config.evidence_thresholds.axes) is False
+    assert harness._holdout_unlocked(config) is False
+
+    mapping_str = dict(base_mapping)
+    mapping_str["evidence_thresholds"] = {
+        "status": "frozen",
+        "axes": {
+            "contour": {"strong_min": 0.8, "none_max": "0.2"},
+            "interval": {"strong_min": 0.8, "none_max": 0.2},
+            "rhythm": {"strong_min": 0.7, "none_max": 0.3},
+        },
+    }
+    mapping_str["coverage"] = dict(base_mapping["coverage"])
+    mapping_str["coverage"]["floor_status"] = "frozen"
+    config_str = M3ComparisonConfig.from_registry(mapping_str)
+
+    assert harness._validate_frozen_axes(config_str.evidence_thresholds.axes) is False
+    assert harness._holdout_unlocked(config_str) is False
+
+
 def test_check_repeats_consistency_rejects_mixed_holdout_lock_state(tmp_path: Path):
     """同一 manifest でも registry の凍結状態が変われば holdout ロック状態が変わる
     — repeats 間でロック状態が食い違ったら fail-closed で拒否する。
@@ -867,6 +999,24 @@ def test_injected_run_allows_non_crepe_route(tmp_path: Path):
         manifest_path=manifest_path, route_name="pyin_direct", route_runner=runner
     )
     assert report["route"] == "pyin_direct"
+
+
+def test_run_comparison_default_route_is_crepe_direct(tmp_path: Path):
+    """callable API `run_comparison` の `route_name` 既定値は `crepe_direct`
+    (CLI `--route` 既定値との整合・レビュー対応 2026-07-30 第 3 ラウンド)。
+    """
+    import inspect
+
+    assert inspect.signature(harness.run_comparison).parameters["route_name"].default == (
+        "crepe_direct"
+    )
+
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs())
+    runner = _fake_route_runner(_notes_by_path())
+
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    assert report["route"] == "crepe_direct"
 
 
 def test_cli_default_route_is_crepe_direct(tmp_path: Path, monkeypatch):

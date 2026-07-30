@@ -250,6 +250,40 @@ def _manifest_audio_paths(manifest_path: Path) -> "set[Path]":
     return paths
 
 
+def _validate_frozen_axes(axes: Dict[str, Any]) -> bool:
+    """凍結 axes（`evidence_thresholds.axes`）の内容が有効か判定する。
+
+    レビュー対応 2026-07-30（第 3 ラウンド）: `M3ComparisonConfig.from_registry` /
+    `_build_section` は `evidence_thresholds` の型注釈（`Optional[Dict[str,
+    Dict[str, float]]]`）を実行時には検証しない——dataclass の known/required
+    キー集合しか見ないため、`axes` の中身自体（各軸の mapping 構造・値の型・
+    値域・大小関係）は無検査で通ってしまう。3 軸（contour/interval/rhythm）
+    それぞれについて以下を要求し、1 つでも欠けたら False を返す（holdout は
+    ロックのまま——run/evaluate どちらの呼び出し元も fail はせず既存の locked
+    記録経路に乗る）:
+
+    (a) 軸の値が mapping であり `strong_min`/`none_max` キーを持つ
+    (b) 両値が数値（bool は除外）かつ 0.0〜1.0 の範囲内
+    (c) `strong_min >= none_max`
+    """
+    for axis in _AXES:
+        axis_mapping = axes.get(axis)
+        if not isinstance(axis_mapping, dict):
+            return False
+        if "strong_min" not in axis_mapping or "none_max" not in axis_mapping:
+            return False
+        strong_min = axis_mapping["strong_min"]
+        none_max = axis_mapping["none_max"]
+        for value in (strong_min, none_max):
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return False
+            if not (0.0 <= float(value) <= 1.0):
+                return False
+        if not (float(strong_min) >= float(none_max)):
+            return False
+    return True
+
+
 def _holdout_unlocked(config: Any) -> bool:
     """holdout を開いてよいか判定する（run/evaluate 両 phase 共有の cross-field 不変条件）。
 
@@ -259,7 +293,9 @@ def _holdout_unlocked(config: Any) -> bool:
     ロックのまま）:
 
     (a) `evidence_thresholds.status == "frozen"`
-    (b) `evidence_thresholds.axes` に contour/interval/rhythm の閾値が揃っている
+    (b) `evidence_thresholds.axes` に contour/interval/rhythm の閾値が揃っており、
+        かつ各軸の内容が有効（`_validate_frozen_axes`。レビュー対応 2026-07-30
+        第 3 ラウンド: キーが揃っているだけの「内容が壊れた」凍結軸を弾く）
     (c) `coverage.floor_status == "frozen"`
 
     `M3ComparisonConfig`（`load_m3_registry` の戻り値）だけで判定に必要な値は
@@ -270,6 +306,8 @@ def _holdout_unlocked(config: Any) -> bool:
         return False
     axes = thresholds.axes
     if not axes or not set(_AXES).issubset(axes):
+        return False
+    if not _validate_frozen_axes(axes):
         return False
     if config.coverage.floor_status != "frozen":
         return False
@@ -332,7 +370,7 @@ def _default_route_runner(route_name: str) -> RouteRunner:
 def run_comparison(
     *,
     manifest_path: Path,
-    route_name: str = "pyin_direct",
+    route_name: str = "crepe_direct",
     route_runner: Optional[RouteRunner] = None,
     registry_path: Path = M3_REGISTRY_PATH,
     m1_registry_path: Path = M1_REGISTRY_PATH,
@@ -564,6 +602,30 @@ def _validate_registry_pins(
         )
 
 
+def _validate_route_runner_injected_field(reports: List[Dict[str, Any]]) -> None:
+    """各 report に `route_runner_injected` が bool として記録されていることを要求する。
+
+    レビュー対応 2026-07-30（第 3 ラウンド）: 従来は `any(bool(r.get(
+    "route_runner_injected")) for r in reports)` で読んでいたため、キー欠落や
+    非 bool 値（例: 文字列 `"false"` や整数 `0`）が `bool(None)`/`bool(...)` の
+    暗黙変換で握りつぶされ、注入事実を隠した report が calibration verdict を
+    素通りできる穴があった（M2 `_require_publishable_runs` と同じ規律の逆流）。
+    欠落・非 bool は理由つきで fail-closed 拒否する。
+    """
+    for idx, report in enumerate(reports):
+        if "route_runner_injected" not in report:
+            raise ValueError(
+                f"evaluate_comparison: reports[{idx}] に route_runner_injected が"
+                "記録されていない (fail-closed)"
+            )
+        value = report["route_runner_injected"]
+        if not isinstance(value, bool):
+            raise ValueError(
+                f"evaluate_comparison: reports[{idx}] の route_runner_injected="
+                f"{value!r} は bool でなければならない (fail-closed)"
+            )
+
+
 def _holdout_pair_ids(pairs: Dict[str, Dict[str, Any]]) -> List[str]:
     return sorted(pair_id for pair_id, pair in pairs.items() if pair["split"] == "holdout")
 
@@ -677,6 +739,7 @@ def evaluate_comparison(
                 f"evaluate_comparison: reports[{idx}] の schema_version {schema!r} が "
                 f"未知; 期待値は {_EXPECTED_RUN_SCHEMA!r} (fail-closed)"
             )
+    _validate_route_runner_injected_field(reports)
 
     config, m3_registry_sha256 = load_m3_registry(registry_path)
     _, m1_registry_sha256 = _load_m1_registry(m1_registry_path)
@@ -690,7 +753,8 @@ def evaluate_comparison(
 
     reference_pairs = reports[0]["pairs"]
 
-    route_runner_injected_any = any(bool(r.get("route_runner_injected")) for r in reports)
+    # `_validate_route_runner_injected_field` が既に bool 型であることを確認済み。
+    route_runner_injected_any = any(r["route_runner_injected"] for r in reports)
     repeats_verified = len(reports) >= 2
 
     verdict: Dict[str, Any] = {
