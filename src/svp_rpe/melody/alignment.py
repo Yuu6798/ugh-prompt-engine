@@ -284,8 +284,23 @@ def align_melodies(
     `phrases_a` / `phrases_b` は `representation.split_phrases` の出力（各要素が
     1 フレーズのノート列）で、両者は同じノート列から分割されたものでなければ
     ならない（呼び出し側の責務）。
+
+    両側のフレーズ数がともに 1 の場合はフレーズ層 NW を経由せず常に対応させる
+    （レビュー対応 2026-07-30 第 5 ラウンド）: 1×1 は「何と何を比べるか」に
+    曖昧さがなく、`phrase_gap_score`（加点）が低い類似度を上回って対応不成立
+    ・両側未対応になり得た旧挙動を防ぐ——類似の低さはノート層整列と被覆・軸
+    類似がそのまま測る。
     """
-    pairs, gaps_a_idx, gaps_b_idx, cache = _phrase_layer_nw(phrases_a, phrases_b, config)
+    if len(phrases_a) == 1 and len(phrases_b) == 1:
+        similarity, note_alignment = _phrase_similarity_and_alignment(
+            phrases_a[0], phrases_b[0], config
+        )
+        pairs = [(0, 0)]
+        gaps_a_idx: List[int] = []
+        gaps_b_idx: List[int] = []
+        cache = {(0, 0): (similarity, note_alignment)}
+    else:
+        pairs, gaps_a_idx, gaps_b_idx, cache = _phrase_layer_nw(phrases_a, phrases_b, config)
 
     correspondences = tuple(
         PhraseCorrespondence(

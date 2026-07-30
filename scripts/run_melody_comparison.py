@@ -71,7 +71,6 @@ from svp_rpe.melody.observability import (  # noqa: E402
 )
 from svp_rpe.melody.representation import load_m3_registry  # noqa: E402
 from svp_rpe.melody.routing import select_routes  # noqa: E402
-from svp_rpe.utils.hashing import file_sha256  # noqa: E402
 
 M3_REGISTRY_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m3_comparison_registry.yaml"
 M1_REGISTRY_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "registry.yaml"
@@ -379,6 +378,28 @@ def _default_route_runner(route_name: str) -> RouteRunner:
     return _runner
 
 
+def _freeze_audio_copy(audio_path: "str | Path", staging_dir: str) -> "Tuple[str, str]":
+    """`audio_path` の bytes を一度だけ読み、sha256 と同一 bytes の凍結コピーパスを返す。
+
+    レビュー対応 2026-07-30（第 5 ラウンド・TOCTOU 解消）: 従来は `file_sha256(pair[...])`
+    と `runner(pair[...])` が別々に同じ path を読んでいたため、pin した bytes と
+    実際に抽出器が消費した bytes が同一である保証がなかった（2 回の読み取りの間に
+    path の中身が差し替えられれば、pin は実消費バイトを追跡できない）。ここで読んだ
+    1 回分の bytes をそのまま sha256 し、**同じ bytes** を `staging_dir`
+    （呼び出し側が管理する一時ディレクトリ。system tempdir 配下で manifest / registry /
+    音声入力の protected-path とは無関係）へ書き出す——抽出器にはその凍結コピーの
+    パスだけを渡すことで、pin と実消費バイトを構造的に一致させる。呼び出し側が
+    使用後に削除する（凍結コピーの寿命は 1 pair の抽出呼び出し限り）。
+    """
+    raw_bytes = Path(audio_path).read_bytes()
+    sha256_digest = hashlib.sha256(raw_bytes).hexdigest()
+    suffix = Path(audio_path).suffix
+    fd, tmp_name = tempfile.mkstemp(prefix="m3freeze_", suffix=suffix, dir=staging_dir)
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(raw_bytes)
+    return sha256_digest, tmp_name
+
+
 def run_comparison(
     *,
     manifest_path: Path,
@@ -430,49 +451,58 @@ def run_comparison(
         "manifest_sha256": manifest_sha256,
         "pairs": {},
     }
-    for pair in pairs_spec:
-        if pair["split"] == "holdout" and holdout_locked:
-            # 音声も読まず比較も実行しない。split は tuning/holdout フィルタ
-            # （`_holdout_pair_ids` / `_margin_table` / `_coverage_floor_candidate`）
-            # のために残すが、axes/hash（`comparison`）は一切書かない。
-            results["pairs"][pair["pair_id"]] = {
+    with tempfile.TemporaryDirectory(prefix="m3_comparison_freeze_") as staging_dir:
+        for pair in pairs_spec:
+            if pair["split"] == "holdout" and holdout_locked:
+                # 音声も読まず比較も実行しない。split は tuning/holdout フィルタ
+                # （`_holdout_pair_ids` / `_margin_table` / `_coverage_floor_candidate`）
+                # のために残すが、axes/hash（`comparison`）は一切書かない。
+                results["pairs"][pair["pair_id"]] = {
+                    "split": pair["split"],
+                    "status": "holdout_locked_until_frozen",
+                }
+                continue
+            # content pin + TOCTOU 解消（レビュー対応 2026-07-30 第 4/5 ラウンド）:
+            # 音声 bytes を一度だけ読み、その bytes を sha256 で pin すると同時に
+            # 同じ bytes の凍結コピーを staging へ書き、抽出（runner）にはその
+            # コピーのパスを渡す——pin した bytes と実際に抽出器が消費した bytes を
+            # 構造的に一致させる（従来は `file_sha256` と `runner()` が別々に同じ
+            # 入力 path を読んでおり、読み取りの間の差し替えを検出できなかった）。
+            # holdout ロック pair は上の continue で既に弾かれているため、ここに
+            # 到達する pair は必ず音声を読む（開封回避の設計は崩さない）。
+            audio_sha256_a, frozen_a = _freeze_audio_copy(pair["audio_a"], staging_dir)
+            audio_sha256_b, frozen_b = _freeze_audio_copy(pair["audio_b"], staging_dir)
+            try:
+                obs_a, prov_a = runner(frozen_a)
+                obs_b, prov_b = runner(frozen_b)
+            finally:
+                Path(frozen_a).unlink(missing_ok=True)
+                Path(frozen_b).unlink(missing_ok=True)
+            comparison = compare_melodies(
+                obs_a,
+                obs_b,
+                observability_thresholds=thresholds,
+                config=config,
+                provenance_extra={
+                    "m3_registry_sha256": m3_registry_sha256,
+                    "m1_registry_sha256": m1_registry_sha256,
+                },
+            )
+            row: Dict[str, Any] = {
+                "kind": pair["kind"],
                 "split": pair["split"],
-                "status": "holdout_locked_until_frozen",
+                "expected": pair["expected"],
+                "audio_a": pair["audio_a"],
+                "audio_b": pair["audio_b"],
+                "audio_sha256_a": audio_sha256_a,
+                "audio_sha256_b": audio_sha256_b,
+                "comparison": comparison.to_dict(),
             }
-            continue
-        # content pin（レビュー対応 2026-07-30 第 4 ラウンド）: 実際に読む音声
-        # bytes を runner 呼び出し前に sha256 で pin する。holdout ロック pair
-        # は上の continue で既に弾かれているため、ここに到達する pair は必ず
-        # 音声を読む（開封回避の設計は崩さない）。
-        audio_sha256_a = file_sha256(pair["audio_a"])
-        audio_sha256_b = file_sha256(pair["audio_b"])
-        obs_a, prov_a = runner(pair["audio_a"])
-        obs_b, prov_b = runner(pair["audio_b"])
-        comparison = compare_melodies(
-            obs_a,
-            obs_b,
-            observability_thresholds=thresholds,
-            config=config,
-            provenance_extra={
-                "m3_registry_sha256": m3_registry_sha256,
-                "m1_registry_sha256": m1_registry_sha256,
-            },
-        )
-        row: Dict[str, Any] = {
-            "kind": pair["kind"],
-            "split": pair["split"],
-            "expected": pair["expected"],
-            "audio_a": pair["audio_a"],
-            "audio_b": pair["audio_b"],
-            "audio_sha256_a": audio_sha256_a,
-            "audio_sha256_b": audio_sha256_b,
-            "comparison": comparison.to_dict(),
-        }
-        if prov_a:
-            row["route_provenance_a"] = prov_a
-        if prov_b:
-            row["route_provenance_b"] = prov_b
-        results["pairs"][pair["pair_id"]] = row
+            if prov_a:
+                row["route_provenance_a"] = prov_a
+            if prov_b:
+                row["route_provenance_b"] = prov_b
+            results["pairs"][pair["pair_id"]] = row
 
     results["recorded_utc"] = _utc_now()
     return results
@@ -697,10 +727,20 @@ def _margin_table(
 
     `evidence_thresholds` を一切見ない——校正候補は生の axes 値の分布のみから導出し、
     holdout ロックは呼び出し側（`evaluate_comparison`）が別途課す。
+
+    `not_comparable` で除外した pair は `skipped_pairs` に理由付きで積むだけでなく、
+    positive（``expected == "same"``）/negative（``expected == "different"``）の
+    内訳を `not_comparable_positive_count` / `not_comparable_negative_count` として
+    別途会計する（レビュー対応 2026-07-30 第 5 ラウンド・正直会計）。tuning split の
+    positive pair が測れなかった（=同一の証拠を出すべきペアで計器が沈黙した）ことは
+    「negative が測れなかった」こととは意味が異なり、呼び出し側（`evaluate_comparison`）
+    はこの区別を見て freeze proposal の発行可否を決める。
     """
     axis_positive: Dict[str, List[float]] = {axis: [] for axis in _AXES}
     axis_negative: Dict[str, List[float]] = {axis: [] for axis in _AXES}
     skipped: List[str] = []
+    not_comparable_positive_count = 0
+    not_comparable_negative_count = 0
 
     for pair_id, pair in pairs.items():
         if split is not None and pair["split"] != split:
@@ -708,6 +748,10 @@ def _margin_table(
         comparison = pair["comparison"]
         if comparison["evidence"] == "not_comparable":
             skipped.append(f"{pair_id}:not_comparable")
+            if pair["expected"] == "same":
+                not_comparable_positive_count += 1
+            else:
+                not_comparable_negative_count += 1
             continue
         bucket = axis_positive if pair["expected"] == "same" else axis_negative
         for axis, value in comparison["axes"].items():
@@ -742,7 +786,13 @@ def _margin_table(
         if calibrated:
             calibrated_axes.append(axis)
 
-    return {"axes": axes_table, "calibrated_axes": calibrated_axes, "skipped_pairs": skipped}
+    return {
+        "axes": axes_table,
+        "calibrated_axes": calibrated_axes,
+        "skipped_pairs": skipped,
+        "not_comparable_positive_count": not_comparable_positive_count,
+        "not_comparable_negative_count": not_comparable_negative_count,
+    }
 
 
 def _coverage_floor_candidate(pairs: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
@@ -787,7 +837,10 @@ def evaluate_comparison(
     4. route_runner_injected な report があれば calibration verdict 発行を拒否
     5. repeats が n>=2 でなければ calibration verdict 発行を拒否（n=1 は「決定論
        repeats 未検証」であり校正証拠にしない）
-    6. tuning split のみで軸別マージン表を算出（`separation_margin` 閾値）
+    6. tuning split のみで軸別マージン表を算出（`separation_margin` 閾値）。
+       tuning positive pair に 1 件でも `not_comparable` があれば freeze
+       proposal を発行しない（レビュー対応 2026-07-30 第 5 ラウンド。negative の
+       `not_comparable` は除外 + カウント記録のみで発行を妨げない）
     7. holdout は `_holdout_unlocked` の全条件（status=frozen + 1 軸以上の整形済み
        凍結軸 + coverage.floor_status=frozen）を満たすまで開かない
     8. tuning positive pair の被覆分布から coverage floor 候補を emit
@@ -867,13 +920,26 @@ def evaluate_comparison(
     verdict["margin_table"] = margin["axes"]
     verdict["calibrated_axes"] = margin["calibrated_axes"]
     verdict["skipped_pairs"] = margin["skipped_pairs"]
-    verdict["freeze_proposal"] = {
-        axis: {
-            "strong_min": margin["axes"][axis]["positive_min"],
-            "none_max": margin["axes"][axis]["negative_max"],
+    verdict["not_comparable_positive_count"] = margin["not_comparable_positive_count"]
+    verdict["not_comparable_negative_count"] = margin["not_comparable_negative_count"]
+
+    if margin["not_comparable_positive_count"] > 0:
+        # tuning split の positive pair（expected="same"）が 1 件でも
+        # not_comparable なら freeze proposal を発行しない（レビュー対応
+        # 2026-07-30 第 5 ラウンド・正直会計）: 同一の証拠を出すべきペアで
+        # 計器が沈黙したことは、校正候補の分布そのものが偏っている疑いを示す
+        # ——negative の not_comparable（除外 + カウント記録のみ）とは非対称に
+        # 扱う。
+        verdict["freeze_proposal"] = {}
+        verdict["freeze_proposal_rejected_reason"] = "rejected_positive_not_comparable"
+    else:
+        verdict["freeze_proposal"] = {
+            axis: {
+                "strong_min": margin["axes"][axis]["positive_min"],
+                "none_max": margin["axes"][axis]["negative_max"],
+            }
+            for axis in margin["calibrated_axes"]
         }
-        for axis in margin["calibrated_axes"]
-    }
     verdict["coverage_floor_candidate"] = _coverage_floor_candidate(reference_pairs)
     return verdict
 

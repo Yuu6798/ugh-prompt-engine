@@ -97,8 +97,24 @@ def audio_paths(tmp_path: Path) -> Dict[str, str]:
 
 
 def _fake_route_runner(notes_by_path: Dict[str, List[MelodyNote]]) -> "harness.RouteRunner":
+    """`notes_by_path` を **bytes 内容** で引く runner を返す。
+
+    レビュー対応 2026-07-30（第 5 ラウンド）: `run_comparison` は音声 bytes を
+    一度だけ読み、その bytes を凍結コピー（一時パス）へ書いてから runner へ渡す
+    ため、runner が受け取る `audio_path` はもう manifest の元パスと一致しない。
+    元パスの bytes を起動時に一度だけ読んで内容→notes の対応表を作り、以後は
+    `audio_path` の中身（凍結コピーでも元ファイルでも同じ bytes）で引く——TOCTOU
+    解消後もテスト側の対応関係を保つ。未知の内容（意図的な改ざんテスト）は
+    `_different_notes()` へフォールバックする（そのテストは notes の中身でなく
+    `audio_sha256_*` の食い違いだけを見るため）。
+    """
+    notes_by_content = {
+        Path(path).read_bytes(): notes for path, notes in notes_by_path.items()
+    }
+
     def _runner(audio_path: str) -> "Tuple[MelodyObservation, Dict[str, Any]]":
-        notes = notes_by_path[audio_path]
+        content = Path(audio_path).read_bytes()
+        notes = notes_by_content.get(content, _different_notes())
         return (
             MelodyObservation(route="fake", source_model="test:fake", notes=tuple(notes)),
             {"fake_provenance": True},
@@ -382,6 +398,124 @@ def test_margin_table_below_threshold_is_not_calibrated():
     assert result["axes"]["interval"]["calibrated_candidate"] is True
     assert result["axes"]["rhythm"]["calibrated_candidate"] is False
     assert result["calibrated_axes"] == ["interval"]
+
+
+# --------------------------------------------------------------------------- #
+# not_comparable の正直会計（レビュー対応 2026-07-30 第 5 ラウンド）
+# --------------------------------------------------------------------------- #
+def test_margin_table_records_not_comparable_positive_and_negative_counts():
+    """`not_comparable` で除外した pair は `skipped_pairs` だけでなく、positive/negative
+    の内訳もカウントする。カウントは `skipped_pairs` の件数と一致しなければならない。
+    """
+    pairs = {
+        "pos_ok": {
+            "split": "tuning",
+            "expected": "same",
+            "comparison": {"evidence": "none", "axes": {"contour": 0.9, "interval": 0.85, "rhythm": 0.8}},
+        },
+        "pos_nc": {
+            "split": "tuning",
+            "expected": "same",
+            "comparison": {
+                "evidence": "not_comparable",
+                "axes": {"contour": None, "interval": None, "rhythm": None},
+            },
+        },
+        "neg_ok": {
+            "split": "tuning",
+            "expected": "different",
+            "comparison": {"evidence": "none", "axes": {"contour": 0.1, "interval": 0.05, "rhythm": 0.2}},
+        },
+        "neg_nc1": {
+            "split": "tuning",
+            "expected": "different",
+            "comparison": {
+                "evidence": "not_comparable",
+                "axes": {"contour": None, "interval": None, "rhythm": None},
+            },
+        },
+        "neg_nc2": {
+            "split": "tuning",
+            "expected": "different",
+            "comparison": {
+                "evidence": "not_comparable",
+                "axes": {"contour": None, "interval": None, "rhythm": None},
+            },
+        },
+    }
+    result = harness._margin_table(pairs, split="tuning", min_margin=0.15)
+
+    assert result["not_comparable_positive_count"] == 1
+    assert result["not_comparable_negative_count"] == 2
+    assert set(result["skipped_pairs"]) == {
+        "pos_nc:not_comparable",
+        "neg_nc1:not_comparable",
+        "neg_nc2:not_comparable",
+    }
+    # not_comparable を除いても pos_ok/neg_ok の実値だけで各軸マージンは算出される
+    # (not_comparable の除外自体は従来どおり計算に影響しない)。
+    assert result["calibrated_axes"] == ["contour", "interval", "rhythm"]
+
+
+def test_evaluate_rejects_freeze_proposal_when_tuning_positive_not_comparable(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """tuning split の positive pair が 1 件でも not_comparable なら freeze proposal
+    を発行しない(`rejected_positive_not_comparable` を理由として記録)。negative の
+    not_comparable は除外 + カウント記録のみで発行を妨げないことも併せて確認する
+    (レビュー対応 2026-07-30 第 5 ラウンド・正直会計)。
+    """
+    pairs = _default_pairs(audio_paths) + [
+        {
+            "pair_id": "p_pos_tuning2",
+            "kind": "positive_transform",
+            "split": "tuning",
+            "audio_a": audio_paths["song_a"],
+            "audio_b": audio_paths["song_a_transposed"],
+            "expected": "same",
+        },
+    ]
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, pairs)
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    reports = []
+    for _ in range(2):
+        report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+        report["route_runner_injected"] = False
+        # p_neg_tuning は実データでは observation/coverage の都合で既に
+        # not_comparable になる(本レビュー対象外の既存挙動)——ここでは margin
+        # 計算に real な負例信号を与えるため、テスト用に軸値を上書きする(テスト
+        # 対象は「positive の not_comparable が freeze_proposal を止めること」で
+        # あって negative 側の生成過程ではない)。
+        report["pairs"]["p_neg_tuning"]["comparison"]["evidence"] = "none"
+        report["pairs"]["p_neg_tuning"]["comparison"]["axes"] = {
+            "contour": 0.1,
+            "interval": 0.05,
+            "rhythm": 0.2,
+        }
+        # p_pos_tuning を not_comparable へ上書き(p_pos_tuning2 は実データのまま
+        # 高い一致率を保つ——tuning positive pair が他にも存在する状況で、1 件の
+        # not_comparable だけで freeze proposal 全体が止まることを確認する)。
+        report["pairs"]["p_pos_tuning"]["comparison"]["evidence"] = "not_comparable"
+        report["pairs"]["p_pos_tuning"]["comparison"]["axes"] = {
+            "contour": None,
+            "interval": None,
+            "rhythm": None,
+        }
+        reports.append(report)
+
+    verdict = harness.evaluate_comparison(reports)
+
+    assert verdict["repeats_verified"] is True
+    assert verdict["not_comparable_positive_count"] == 1
+    assert verdict["not_comparable_negative_count"] == 0
+    # p_pos_tuning2(実データ)と上書き済み p_neg_tuning だけを見れば各軸マージンは
+    # 十分確保されている(=freeze_proposal が非空になり得る状況)ことを確認した
+    # うえで、tuning positive の not_comparable がそれを上書きすることを見る。
+    assert verdict["calibrated_axes"]
+    assert verdict["freeze_proposal"] == {}
+    assert verdict["freeze_proposal_rejected_reason"] == "rejected_positive_not_comparable"
 
 
 # --------------------------------------------------------------------------- #
@@ -713,10 +847,13 @@ def test_holdout_pair_not_opened_at_run_time_when_uncalibrated(tmp_path: Path, a
     manifest_path = tmp_path / "pairs.yaml"
     _write_manifest(manifest_path, _default_pairs(audio_paths))
     base_runner = _fake_route_runner(_notes_by_path(audio_paths))
-    calls: List[str] = []
+    calls: List[bytes] = []
 
     def _tracking_runner(audio_path: str):
-        calls.append(audio_path)
+        # レビュー対応 2026-07-30（第 5 ラウンド）: runner に渡るのは音声 bytes の
+        # 凍結コピー（一時パス）であって元パスではないため、渡された bytes 自体で
+        # 呼び出し順序を検証する（一時パス文字列は毎回変わるので比較対象にしない）。
+        calls.append(Path(audio_path).read_bytes())
         return base_runner(audio_path)
 
     mapping = yaml.safe_load(M3_REGISTRY_PATH.read_text(encoding="utf-8"))
@@ -726,10 +863,10 @@ def test_holdout_pair_not_opened_at_run_time_when_uncalibrated(tmp_path: Path, a
 
     # holdout pair (p_pos_holdout) の音声は一度も runner に渡されていない。
     assert calls == [
-        audio_paths["song_a"],
-        audio_paths["song_a_transposed"],
-        audio_paths["song_a"],
-        audio_paths["song_b"],
+        Path(audio_paths["song_a"]).read_bytes(),
+        Path(audio_paths["song_a_transposed"]).read_bytes(),
+        Path(audio_paths["song_a"]).read_bytes(),
+        Path(audio_paths["song_b"]).read_bytes(),
     ]
 
     holdout_row = report["pairs"]["p_pos_holdout"]

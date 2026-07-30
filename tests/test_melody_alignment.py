@@ -250,3 +250,87 @@ def test_align_intervals_both_empty_is_trivial():
     assert alignment.gaps_a == ()
     assert alignment.gaps_b == ()
     assert alignment.score == pytest.approx(0.0)
+
+
+# --------------------------------------------------------------------------- #
+# 単一フレーズ対応の自明化（レビュー対応 2026-07-30 第 5 ラウンド）
+# --------------------------------------------------------------------------- #
+def test_align_melodies_single_phrase_pair_always_corresponds_despite_low_similarity():
+    """両側とも単一フレーズ（na=nb=1）の場合、フレーズ層 NW の gap ボーナス
+    （`phrase_gap_score`×2 = 0.5）が低い音程一致率を上回ってしまい、対応不成立
+    （両側とも未対応フレーズ扱い→被覆 0）になり得た旧挙動の回帰テスト。1×1 は
+    「何と何を比べるか」に曖昧さがないため、フレーズ層 NW を経由せず必ず対応
+    させる——音程が完全に別方向へ動く(同リズム別音程の negative 相当)ケースでも、
+    ノート層自体は総ざらい整列できる（装飾・欠落なしの 1 対 1）ため被覆は満杯
+    (=comparison.py の被覆ゲートに弾かれない)まま、低い一致率はそのまま
+    similarity に現れる。
+    """
+    config = _default_config()
+    notes_a = [
+        _note(60, 0.0, 0.25),
+        _note(62, 0.3, 0.55),
+        _note(64, 0.6, 0.85),
+        _note(65, 0.9, 1.15),
+        _note(67, 1.2, 1.45),
+    ]
+    notes_b = [
+        _note(60, 0.0, 0.25),
+        _note(55, 0.3, 0.55),
+        _note(50, 0.6, 0.85),
+        _note(45, 0.9, 1.15),
+        _note(40, 1.2, 1.45),
+    ]
+    seqs_a = build_sequences(notes_a, config)
+    seqs_b = build_sequences(notes_b, config)
+    phrases_a = (tuple(notes_a),)
+    phrases_b = (tuple(notes_b),)
+
+    result = align_melodies(seqs_a, seqs_b, phrases_a, phrases_b, config)
+
+    assert len(result.phrase_correspondences) == 1
+    assert result.unmatched_phrase_indices_a == ()
+    assert result.unmatched_phrase_indices_b == ()
+    corr = result.phrase_correspondences[0]
+    # 音程が完全に別方向(+2,+2,+1,+2 系 vs -5,-5,-5,-5 系)なので一致率は 0——
+    # 2*phrase_gap_score(=0.5)を下回り、旧挙動ならフレーズ対応不成立だった水準。
+    assert corr.similarity == pytest.approx(0.0)
+    # それでもノート層は全カラムが整列済み(装飾なし・欠落なしの 1 対 1)——被覆は
+    # 満杯で floor(0.5, `m3_comparison_registry.yaml` の `coverage.floor`)を
+    # 優に上回るため、comparison.py の被覆ゲートは弾かない
+    # (「観測不可」ではなく「低い値」として正直に見える、というのが本修正の趣旨)。
+    assert result.coverage.aligned_note_fraction_a == pytest.approx(1.0)
+    assert result.coverage.aligned_note_fraction_b == pytest.approx(1.0)
+
+
+def test_align_melodies_single_phrase_one_note_vs_many_reports_honest_low_coverage():
+    """単一フレーズ同士の強制対応でも、実際の重なりが乏しければ被覆信号は正直に
+    低い値のまま——強制対応が被覆ゲート（`comparison.py` の floor 判定）の正直さを
+    壊さないことの確認（レビュー対応 2026-07-30 第 5 ラウンド）。A 側は単一フレーズ
+    1 ノート（intervals_folded が空）、B 側は単一フレーズ 5 ノート——対応自体は
+    1×1 の自明性で成立するが、A 側に音程列が無いためノート層整列は空になり、
+    被覆は両側とも 0 のまま報告される。
+    """
+    config = _default_config()
+    notes_a = [_note(60, 0.0, 0.3)]
+    notes_b = [
+        _note(60, 0.0, 0.25),
+        _note(62, 0.3, 0.55),
+        _note(64, 0.6, 0.85),
+        _note(65, 0.9, 1.15),
+        _note(67, 1.2, 1.45),
+    ]
+    seqs_a = build_sequences(notes_a, config)
+    seqs_b = build_sequences(notes_b, config)
+    phrases_a = (tuple(notes_a),)
+    phrases_b = (tuple(notes_b),)
+
+    result = align_melodies(seqs_a, seqs_b, phrases_a, phrases_b, config)
+
+    # 1×1 の自明対応は成立する(未対応フレーズ扱いにはならない)。
+    assert len(result.phrase_correspondences) == 1
+    assert result.unmatched_phrase_indices_a == ()
+    assert result.unmatched_phrase_indices_b == ()
+    # だが A 側は 1 ノートで intervals_folded が空のため整列カラムは 0 —
+    # 被覆は正直に 0 のまま(強制対応が被覆の水増しを招かない)。
+    assert result.coverage.aligned_note_fraction_a == pytest.approx(0.0)
+    assert result.coverage.aligned_note_fraction_b == pytest.approx(0.0)
