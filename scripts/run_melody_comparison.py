@@ -380,7 +380,7 @@ def _default_route_runner(route_name: str) -> RouteRunner:
 
 def _redact_unfrozen_axes_for_holdout(
     comparison_dict: Dict[str, Any], frozen_axes: "set"
-) -> "Tuple[Dict[str, Any], List[str]]":
+) -> "Tuple[Dict[str, Any], List[str], List[str]]":
     """holdout pair の `comparison` dict から未凍結軸の値を serialize 前に間引く。
 
     レビュー対応 2026-07-30（第 6 ラウンド・正直会計）: `_holdout_unlocked` は
@@ -396,10 +396,20 @@ def _redact_unfrozen_axes_for_holdout(
     かった」既存の意味と区別が付かなくなるため）、除外した軸名を返す——呼び出し
     側が pair 結果へ `unfrozen_axes_redacted` として明示記録する。tuning pair
     には適用しない（呼び出し側で `split == "holdout"` の場合のみ呼ぶ）。
+
+    レビュー対応 2026-07-30（第 7 ラウンド・redaction の完全化）: `interval` が
+    未凍結軸に含まれる場合、`octave_artifact_suspected`（`comparison.py` §7
+    「オクターブ折返しガード」）は interval 軸の folded/raw 類似の乖離から機械
+    導出される**派生診断**であり、`axes["interval"]` を隠しても
+    `octave_artifact_suspected` フィールドと reasons 内の
+    `octave_artifact_suspected(folded=…, raw=…)` 文字列（乖離の生数値を含む）を
+    残すと、未校正の interval 軸の性質を間接的に覗き見できてしまう。ここで
+    `interval` が redacted 対象なら両方とも取り除き、取り除いた事実を
+    `redacted_diagnostics` として返す（呼び出し側が pair 結果へ明示記録する）。
     """
     redacted = sorted(axis for axis in _AXES if axis not in frozen_axes)
     if not redacted:
-        return comparison_dict, redacted
+        return comparison_dict, redacted, []
     comparison_dict = dict(comparison_dict)
     comparison_dict["axes"] = {
         axis: value for axis, value in comparison_dict.get("axes", {}).items() if axis not in redacted
@@ -409,7 +419,16 @@ def _redact_unfrozen_axes_for_holdout(
         for axis, value in comparison_dict.get("axis_evidence", {}).items()
         if axis not in redacted
     }
-    return comparison_dict, redacted
+    redacted_diagnostics: List[str] = []
+    if "interval" in redacted:
+        comparison_dict.pop("octave_artifact_suspected", None)
+        comparison_dict["reasons"] = [
+            reason
+            for reason in comparison_dict.get("reasons", [])
+            if not reason.startswith("octave_artifact_suspected(")
+        ]
+        redacted_diagnostics.append("octave_artifact_suspected")
+    return comparison_dict, redacted, redacted_diagnostics
 
 
 def _freeze_audio_copy(audio_path: "str | Path", staging_dir: str) -> "Tuple[str, str]":
@@ -528,11 +547,14 @@ def run_comparison(
             # continue で既に弾かれている）は、凍結済み軸のみを残し未凍結軸の
             # 値を serialize しない。tuning pair は対象外（redacted は None の
             # まま = pair 結果に `unfrozen_axes_redacted` を追加しない）。
+            # 第 7 ラウンド: interval 未凍結の場合は `octave_artifact_suspected`
+            # 派生診断も同様に除去し、事実を `redacted_diagnostics` として記録する。
             unfrozen_axes_redacted: Optional[List[str]] = None
+            redacted_diagnostics: Optional[List[str]] = None
             if pair["split"] == "holdout":
                 frozen_axes = set((config.evidence_thresholds.axes or {}).keys())
-                comparison_dict, unfrozen_axes_redacted = _redact_unfrozen_axes_for_holdout(
-                    comparison_dict, frozen_axes
+                comparison_dict, unfrozen_axes_redacted, redacted_diagnostics = (
+                    _redact_unfrozen_axes_for_holdout(comparison_dict, frozen_axes)
                 )
             row: Dict[str, Any] = {
                 "kind": pair["kind"],
@@ -546,6 +568,8 @@ def run_comparison(
             }
             if unfrozen_axes_redacted is not None:
                 row["unfrozen_axes_redacted"] = unfrozen_axes_redacted
+            if redacted_diagnostics is not None:
+                row["redacted_diagnostics"] = redacted_diagnostics
             if prov_a:
                 row["route_provenance_a"] = prov_a
             if prov_b:
@@ -569,6 +593,110 @@ _PAIR_LEVEL_PROVENANCE_PINS: Tuple[str, ...] = (
     "audio_sha256_a",
     "audio_sha256_b",
 )
+# pair ラベルの manifest 束縛（レビュー対応 2026-07-30 第 7 ラウンド）が検査する
+# フィールド群。row に記録されている項目のみ検査する（holdout ロック pair は
+# `split` しか記録しない既存構造をそのまま尊重し、欠落しているフィールドの
+# 検査は単に skip する——なりすまし検知は「記録されている値が manifest と
+# 食い違う」ことを見るためのもので、「本来記録すべきだったのに欠落した」こと
+# 自体を fail 条件にはしない）。
+_PAIR_LABEL_FIELDS: Tuple[str, ...] = ("split", "expected", "kind")
+_PAIR_AUDIO_PATH_FIELDS: Tuple[str, ...] = ("audio_a", "audio_b")
+
+
+def _validate_pair_labels_bound_to_manifest(reports: List[Dict[str, Any]]) -> None:
+    """report の pair ラベル（split/expected/kind/audio パス）が manifest の
+    content pin に束縛されていることを検証する（fail-closed）。
+
+    レビュー対応 2026-07-30（第 7 ラウンド）: 従来の registry sha256 pin
+    （`_validate_registry_pins`）は registry の同一性しか見ておらず、report
+    自身の pair dict（`split`/`expected`/`kind`/`audio_a`/`audio_b`）は無検査
+    だった——report をそのまま書き換えれば（例: 未校正の holdout pair の
+    `split` を `tuning` に書き換えて margin 計算へ混入させる、`expected` を
+    `different`→`same` に書き換えて陽性証拠を捏造する）検出できない穴が
+    残っていた。ここで:
+
+    (a) 各 report が記録している `manifest_path` から manifest ファイルを読み、
+        その生バイトの sha256 が report 記録の `manifest_sha256` と一致する
+        ことを検証する（`manifest_path` の欠落・evaluate 時点でのファイル不在
+        も、ラベルを content pin に束縛できないため fail-closed）
+    (b) 各 report の各 pair について、row に記録されている
+        `split`/`expected`/`kind`/`audio_a`/`audio_b` が、manifest 上の同一
+        `pair_id` の値と一致することを検証する（pair_id が manifest に存在
+        しない場合も fail-closed）
+    (c) 複数 report にまたがる同一 `pair_id` についても、上記フィールドが
+        report 間で一致することを検証する（manifest 経由の (a)+(b) と独立の
+        直接比較として、defense-in-depth で行う）
+    """
+    manifest_cache: Dict[str, "Tuple[Dict[str, Dict[str, Any]], str]"] = {}
+    cross_report_labels: Dict[str, Dict[str, Any]] = {}
+
+    for idx, report in enumerate(reports):
+        manifest_path = report.get("manifest_path")
+        if not manifest_path or not isinstance(manifest_path, str):
+            raise ValueError(
+                f"evaluate_comparison: reports[{idx}] に manifest_path が記録されていない; "
+                "pair ラベルを content pin に束縛できない (fail-closed)"
+            )
+        path = Path(manifest_path)
+        if not path.is_file():
+            raise ValueError(
+                f"evaluate_comparison: reports[{idx}] の manifest_path={manifest_path!r} が "
+                "evaluate 時点のファイルシステム上に存在しない; pair ラベルを content pin に "
+                "束縛できない (fail-closed)"
+            )
+        if manifest_path not in manifest_cache:
+            data = path.read_bytes()
+            actual_sha256 = hashlib.sha256(data).hexdigest()
+            manifest = _yaml_load_no_dup_keys(data, what="pairs manifest")
+            pairs_spec = _validate_manifest(manifest)
+            pairs_by_id = {pair["pair_id"]: pair for pair in pairs_spec}
+            manifest_cache[manifest_path] = (pairs_by_id, actual_sha256)
+        pairs_by_id, actual_sha256 = manifest_cache[manifest_path]
+
+        recorded_sha256 = report.get("manifest_sha256")
+        if not recorded_sha256:
+            raise ValueError(
+                f"evaluate_comparison: reports[{idx}] に manifest_sha256 が記録されていない "
+                "(fail-closed)"
+            )
+        if recorded_sha256 != actual_sha256:
+            raise ValueError(
+                f"evaluate_comparison: reports[{idx}] の manifest_sha256={recorded_sha256!r} が "
+                f"manifest_path={manifest_path!r} の evaluate 時点の実バイト sha256="
+                f"{actual_sha256!r} と不一致; manifest が run 後に差し替えられている疑い "
+                "(fail-closed)"
+            )
+
+        for pair_id, row in report["pairs"].items():
+            manifest_pair = pairs_by_id.get(pair_id)
+            if manifest_pair is None:
+                raise ValueError(
+                    f"evaluate_comparison: reports[{idx}] の pair {pair_id!r} が "
+                    f"manifest_path={manifest_path!r} に存在しない (fail-closed)"
+                )
+            observed: Dict[str, Any] = {}
+            for key in (*_PAIR_LABEL_FIELDS, *_PAIR_AUDIO_PATH_FIELDS):
+                if key not in row:
+                    # holdout ロック pair は `split` 以外を記録しない既存構造——
+                    # 記録されていない項目は検査対象外(欠落は改ざんの痕跡ではない)。
+                    continue
+                if row[key] != manifest_pair[key]:
+                    raise ValueError(
+                        f"evaluate_comparison: reports[{idx}] の pair {pair_id!r} の "
+                        f"{key}={row[key]!r} が manifest 記録値={manifest_pair[key]!r} と "
+                        "不一致; pair ラベルが改ざんされている疑い (fail-closed)"
+                    )
+                observed[key] = row[key]
+
+            previous = cross_report_labels.setdefault(pair_id, {})
+            for key, value in observed.items():
+                if key in previous and previous[key] != value:
+                    raise ValueError(
+                        f"evaluate_comparison: pair {pair_id!r} の {key} が report 間で不一致 "
+                        f"(reports[{idx}]={value!r} != 既知値={previous[key]!r}); 同一 pair は "
+                        "全 report で同一ラベルでなければならない (fail-closed)"
+                    )
+                previous[key] = value
 
 
 def _require_pair_pins_present_for_publishable_reports(reports: List[Dict[str, Any]]) -> None:
@@ -910,24 +1038,28 @@ def evaluate_comparison(
     """n>=1 の run report から校正 verdict（マージン表 + holdout ロック）を導出する。
 
     処理順（M3 実装 memo「## M3d」節）:
-    1. registry sha256 pin の整合検証（report 間 + 現在ロードした registry）
-    2. pair 単位 pin（`audio_sha256_a/b` / `route_provenance_a/b`）の欠落検証 —
+    1. pair ラベル（split/expected/kind/audio パス）の manifest 束縛検証
+       （レビュー対応 2026-07-30 第 7 ラウンド: manifest の content pin =
+       `manifest_sha256` に対して report 自身の pair dict が改ざんされていない
+       ことを、registry pin とは独立に検証する）
+    2. registry sha256 pin の整合検証（report 間 + 現在ロードした registry）
+    3. pair 単位 pin（`audio_sha256_a/b` / `route_provenance_a/b`）の欠落検証 —
        publishable report は全 pair（holdout ロック pair を除く）で必須
        （レビュー対応 2026-07-30 第 6 ラウンド: 全欠落は repeats 整合性チェック
        だけでは検出できないバイパスを閉じる）
-    3. repeats（sequence hash / axes / audio_sha256 含む pair 単位 pin）の bit 一致検証
-    4. 全 report の `run_id` が存在・非空・相互に distinct であることの検証
+    4. repeats（sequence hash / axes / audio_sha256 含む pair 単位 pin）の bit 一致検証
+    5. 全 report の `run_id` が存在・非空・相互に distinct であることの検証
        （レビュー対応 2026-07-30 第 4 ラウンド: 同一 run の二重指定を検出する）
-    5. route_runner_injected な report があれば calibration verdict 発行を拒否
-    6. repeats が n>=2 でなければ calibration verdict 発行を拒否（n=1 は「決定論
+    6. route_runner_injected な report があれば calibration verdict 発行を拒否
+    7. repeats が n>=2 でなければ calibration verdict 発行を拒否（n=1 は「決定論
        repeats 未検証」であり校正証拠にしない）
-    7. tuning split のみで軸別マージン表を算出（`separation_margin` 閾値）。
+    8. tuning split のみで軸別マージン表を算出（`separation_margin` 閾値）。
        tuning positive pair に 1 件でも `not_comparable` があれば freeze
        proposal を発行しない（レビュー対応 2026-07-30 第 5 ラウンド。negative の
        `not_comparable` は除外 + カウント記録のみで発行を妨げない）
-    8. holdout は `_holdout_unlocked` の全条件（status=frozen + 1 軸以上の整形済み
+    9. holdout は `_holdout_unlocked` の全条件（status=frozen + 1 軸以上の整形済み
        凍結軸 + coverage.floor_status=frozen）を満たすまで開かない
-    9. tuning positive pair の被覆分布から coverage floor 候補を emit
+    10. tuning positive pair の被覆分布から coverage floor 候補を emit
     """
     if not reports:
         raise ValueError("evaluate_comparison: reports が空 (fail-closed)")
@@ -938,6 +1070,7 @@ def evaluate_comparison(
                 f"evaluate_comparison: reports[{idx}] の schema_version {schema!r} が "
                 f"未知; 期待値は {_EXPECTED_RUN_SCHEMA!r} (fail-closed)"
             )
+    _validate_pair_labels_bound_to_manifest(reports)
     _validate_route_runner_injected_field(reports)
     _require_pair_pins_present_for_publishable_reports(reports)
 

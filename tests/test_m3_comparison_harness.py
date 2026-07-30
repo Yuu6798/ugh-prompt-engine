@@ -1209,6 +1209,76 @@ def test_holdout_full_freeze_records_empty_redacted_list(tmp_path: Path, audio_p
 
 
 # --------------------------------------------------------------------------- #
+# 部分凍結 holdout の octave 派生診断 redaction（レビュー対応 2026-07-30 第 7 ラウンド）
+# --------------------------------------------------------------------------- #
+def test_holdout_partial_freeze_redacts_octave_diagnostic(tmp_path: Path):
+    """`interval` 軸が未凍結の holdout run では、interval 軸の folded/raw 類似の
+    乖離から機械導出される派生診断（`octave_artifact_suspected` フィールドと
+    reasons 内の `octave_artifact_suspected(folded=…, raw=…)` 文字列）も
+    serialize されない。contour のみ凍結した registry
+    （`_partially_one_axis_frozen_registry_text`）を使い、
+    `test_melody_comparison.py::test_octave_error_injection_flags_artifact` と
+    同型のオクターブ誤り注入（1 ノートを +12 半音）で実際に
+    `octave_artifact_suspected=True` が発生する状況を作った上で、redaction 後の
+    report に痕跡が一切残らないことを確認する。
+    """
+    audio_c = tmp_path / "song_c.audio"
+    audio_c.write_bytes(b"fake-audio-bytes:song_c")
+    audio_c_octave = tmp_path / "song_c_octave.audio"
+    audio_c_octave.write_bytes(b"fake-audio-bytes:song_c_octave")
+
+    notes_c = _good_notes()
+    notes_c_octave = list(notes_c)
+    injected = notes_c_octave[2]
+    notes_c_octave[2] = _note(injected.pitch_midi + 12, injected.start_sec, injected.end_sec)
+
+    notes_by_content = {
+        audio_c.read_bytes(): notes_c,
+        audio_c_octave.read_bytes(): notes_c_octave,
+    }
+
+    def _runner(audio_path: str) -> "Tuple[MelodyObservation, Dict[str, Any]]":
+        content = Path(audio_path).read_bytes()
+        notes = notes_by_content[content]
+        return (
+            MelodyObservation(route="fake", source_model="test:fake", notes=tuple(notes)),
+            {"fake_provenance": True},
+        )
+
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(
+        manifest_path,
+        [
+            {
+                "pair_id": "p_octave_holdout",
+                "kind": "positive_transform",
+                "split": "holdout",
+                "audio_a": str(audio_c),
+                "audio_b": str(audio_c_octave),
+                "expected": "same",
+            }
+        ],
+    )
+    one_axis_registry = tmp_path / "one_axis_registry.yaml"
+    one_axis_registry.write_text(_partially_one_axis_frozen_registry_text(), encoding="utf-8")
+
+    report = harness.run_comparison(
+        manifest_path=manifest_path, route_runner=_runner, registry_path=one_axis_registry
+    )
+
+    holdout_row = report["pairs"]["p_octave_holdout"]
+    assert holdout_row["split"] == "holdout"
+    comparison = holdout_row["comparison"]
+
+    assert "octave_artifact_suspected" not in comparison
+    assert not any(
+        reason.startswith("octave_artifact_suspected(") for reason in comparison["reasons"]
+    )
+    assert holdout_row["unfrozen_axes_redacted"] == ["interval", "rhythm"]
+    assert holdout_row["redacted_diagnostics"] == ["octave_artifact_suspected"]
+
+
+# --------------------------------------------------------------------------- #
 # pair 単位 pin の全欠落バイパス拒否（レビュー対応 2026-07-30 第 6 ラウンド）
 # --------------------------------------------------------------------------- #
 def test_evaluate_rejects_reports_with_all_pair_pins_missing(tmp_path: Path, audio_paths: Dict[str, str]):
@@ -1494,3 +1564,61 @@ def test_cli_default_route_is_crepe_direct(
     harness.main()
 
     assert captured["route_name"] == "crepe_direct"
+
+
+# --------------------------------------------------------------------------- #
+# pair ラベルの manifest 束縛（レビュー対応 2026-07-30 第 7 ラウンド）
+# --------------------------------------------------------------------------- #
+def test_evaluate_rejects_tampered_split_holdout_to_tuning(tmp_path: Path, audio_paths: Dict[str, str]):
+    """report 側で holdout pair の `split` を `tuning` へ書き換える改ざん
+    （未校正の holdout 証拠を tuning のマージン計算へ混入させる攻撃）は、
+    manifest 記録値との不一致として fail-closed で拒否する。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    frozen_registry = tmp_path / "frozen_registry.yaml"
+    frozen_registry.write_text(_fully_frozen_registry_text(), encoding="utf-8")
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    report = harness.run_comparison(
+        manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
+    )
+    assert report["pairs"]["p_pos_holdout"]["split"] == "holdout"
+    report["pairs"]["p_pos_holdout"]["split"] = "tuning"
+
+    with pytest.raises(ValueError, match="split"):
+        harness.evaluate_comparison([report])
+
+
+def test_evaluate_rejects_tampered_expected_field(tmp_path: Path, audio_paths: Dict[str, str]):
+    """report 側で negative pair の `expected` を `different`→`same` へ書き換える
+    改ざんは、manifest 記録値との不一致として fail-closed で拒否する。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+
+    assert report["pairs"]["p_neg_tuning"]["expected"] == "different"
+    report["pairs"]["p_neg_tuning"]["expected"] = "same"
+
+    with pytest.raises(ValueError, match="expected"):
+        harness.evaluate_comparison([report])
+
+
+def test_evaluate_rejects_manifest_content_swap_after_run(tmp_path: Path, audio_paths: Dict[str, str]):
+    """run 後に manifest ファイルの中身を書き換える（pair 構造は壊さずバイト列だけ
+    変える）と、report 記録の `manifest_sha256` と evaluate 時点の実バイト sha256
+    が不一致になり fail-closed で拒否する。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+
+    manifest_path.write_text(
+        manifest_path.read_text(encoding="utf-8") + "\n# tampered after run\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="manifest_sha256"):
+        harness.evaluate_comparison([report])
