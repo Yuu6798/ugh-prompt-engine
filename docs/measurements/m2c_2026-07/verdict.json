@@ -1,0 +1,198 @@
+{
+  "bars_sha256": "50c83e6524a35c7080622c20715c0c2cc68d8d8e695d2766958d795eedec0085",
+  "categories": {
+    "V_direct": {
+      "clip_ids": [
+        "vocadito_1",
+        "vocadito_10",
+        "vocadito_11",
+        "vocadito_12",
+        "vocadito_13",
+        "vocadito_14",
+        "vocadito_15",
+        "vocadito_16",
+        "vocadito_17",
+        "vocadito_18",
+        "vocadito_19",
+        "vocadito_2",
+        "vocadito_20",
+        "vocadito_21",
+        "vocadito_22",
+        "vocadito_23",
+        "vocadito_24",
+        "vocadito_25",
+        "vocadito_26",
+        "vocadito_27",
+        "vocadito_28",
+        "vocadito_29",
+        "vocadito_3",
+        "vocadito_30",
+        "vocadito_31",
+        "vocadito_32",
+        "vocadito_33",
+        "vocadito_34",
+        "vocadito_35",
+        "vocadito_36",
+        "vocadito_37",
+        "vocadito_38",
+        "vocadito_39",
+        "vocadito_4",
+        "vocadito_40",
+        "vocadito_5",
+        "vocadito_6",
+        "vocadito_7",
+        "vocadito_8",
+        "vocadito_9"
+      ],
+      "external_fixtures_sha256": "91b08852dabe3584de289c5ad5d9aafd7a40c8d3c2e14b2dbd8f599acc03b92f",
+      "external_manifest_sha256": "9afb5f4e030a0ffd11f113247177690c7e225c054fd0acf5c0d0765b08a7151c",
+      "failures": [],
+      "metrics": [
+        {
+          "median_cent_error": 3.8427525689946718,
+          "octave_gap": 0.001537713483383979,
+          "overall_accuracy": 0.8448026252068809,
+          "raw_chroma_accuracy": 0.9901045876584427,
+          "raw_pitch_accuracy": 0.9885668741750585,
+          "tolerance_cents": 50.0,
+          "voiced_chroma_correct_frame_count": 2302.5,
+          "voicing_false_alarm": 0.4400187063933596,
+          "voicing_recall": 0.9980305102976977
+        },
+        {
+          "median_cent_error": 3.8427525689946718,
+          "octave_gap": 0.001537713483383979,
+          "overall_accuracy": 0.8448026252068809,
+          "raw_chroma_accuracy": 0.9901045876584427,
+          "raw_pitch_accuracy": 0.9885668741750585,
+          "tolerance_cents": 50.0,
+          "voiced_chroma_correct_frame_count": 2302.5,
+          "voicing_false_alarm": 0.4400187063933596,
+          "voicing_recall": 0.9980305102976977
+        }
+      ],
+      "n_rows": 2,
+      "outcomes": [
+        "measured"
+      ],
+      "repeats_bit_identical": true,
+      "status": "pass"
+    }
+  },
+  "charset_normalizer_closure_state": "present",
+  "charset_normalizer_code_sha256": "5409273d9f79112c8fadfbd886898056227f98a8076377d5fb477face38aa06e",
+  "charset_normalizer_dist_native_sha256": "3af1c1df93113ef54b5614b6e28373349c3ac95f431fe527d39dbdd47d1672ae",
+  "charset_normalizer_version": "3.4.6",
+  "decorator_code_sha256": "cfb55780cdc2e6c09ea44938cec712ce2236dca07938bc35cf3c9d612cf62abb",
+  "decorator_dist_native_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "decorator_version": "5.3.1",
+  "est_voiced_confidence_floor": 0.3,
+  "evaluator_code_sha256": "022e93107b5d6677773502e307f337fa1983dff8f58b08d6d05d751ce6b49f88",
+  "external_fixtures_registration_attestation": {
+    "committed_utc": "2026-07-29T21:33:28+00:00",
+    "content_evidence": "blob_in_head_ancestry",
+    "first_commit": "1cbd448255c5eeda28ce666392ccee6c2c2743cf",
+    "ordering_evidence": "committer_date",
+    "ordering_is_proof": false,
+    "source": "git_history_first_blob_occurrence"
+  },
+  "external_fixtures_sha256": "91b08852dabe3584de289c5ad5d9aafd7a40c8d3c2e14b2dbd8f599acc03b92f",
+  "generator_code_sha256": "022e93107b5d6677773502e307f337fa1983dff8f58b08d6d05d751ce6b49f88",
+  "mir_eval_code_sha256": "ba8d61f4457c56d5248c11f5e912ebf36ec94c794450075998269715dcb6e8e4",
+  "mir_eval_dist_native_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "mir_eval_version": "0.8.2",
+  "n_reports": 2,
+  "numeric_runtime_config": {
+    "cpu_count": 4,
+    "env": {},
+    "numpy_simd_dispatch": {
+      "baseline": [
+        "X86_V2"
+      ],
+      "found": [
+        "AVX512_ICL",
+        "AVX512_SPR",
+        "X86_V3",
+        "X86_V4"
+      ],
+      "not_found": []
+    },
+    "sched_affinity_count": 4,
+    "threadpool_info": [
+      {
+        "architecture": "SkylakeX",
+        "filepath": "/usr/local/lib/python3.11/dist-packages/numpy.libs/libscipy_openblas64_-32a4b2a6.so",
+        "internal_api": "openblas",
+        "num_threads": 4,
+        "prefix": "libscipy_openblas",
+        "threading_layer": "pthreads",
+        "user_api": "blas",
+        "version": "0.3.31.188.0"
+      },
+      {
+        "architecture": "SkylakeX",
+        "filepath": "/usr/local/lib/python3.11/dist-packages/scipy.libs/libscipy_openblas-6cdc3b4a.so",
+        "internal_api": "openblas",
+        "num_threads": 4,
+        "prefix": "libscipy_openblas",
+        "threading_layer": "pthreads",
+        "user_api": "blas",
+        "version": "0.3.30"
+      },
+      {
+        "filepath": "/usr/local/lib/python3.11/dist-packages/torch/lib/libgomp.so.1",
+        "internal_api": "openmp",
+        "num_threads": 4,
+        "prefix": "libgomp",
+        "user_api": "openmp",
+        "version": null
+      },
+      {
+        "filepath": "/usr/local/lib/python3.11/dist-packages/scikit_learn.libs/libgomp-e985bcbb.so.1.0.0",
+        "internal_api": "openmp",
+        "num_threads": 4,
+        "prefix": "libgomp",
+        "user_api": "openmp",
+        "version": null
+      }
+    ]
+  },
+  "numpy_code_sha256": "083113f3fcb038f11fe373b090e69ec535b69fecd90275f4c374fafaf9db271a",
+  "numpy_dist_native_sha256": "b82638aabb2487f6f8ae88d9b24865a8f2be73fafd0341d6570be14bf3347185",
+  "numpy_version": "2.4.6",
+  "registration_attestation": {
+    "committed_utc": "2026-07-26T06:22:54+00:00",
+    "content_evidence": "blob_in_head_ancestry",
+    "first_commit": "ce683f845c5ab54d143dbcd4ae11b71cf1ee65e9",
+    "ordering_evidence": "committer_date",
+    "ordering_is_proof": false,
+    "source": "git_history_first_blob_occurrence"
+  },
+  "repeats_min": 2,
+  "report_pins": [
+    {
+      "path_name": "run1.json",
+      "path_relative": null,
+      "sha256": "3a2def469b285b03664a2d3a87de7bd349c5c7de732d161cdc4ab3b7f389c08b"
+    },
+    {
+      "path_name": "run2.json",
+      "path_relative": null,
+      "sha256": "c40ae0b7dbc447f16c3b228e390108f22e2454763217921e41bfb450e6154689"
+    }
+  ],
+  "run_ids": [
+    "09dd94554ee847ce9971c316e7be81d2",
+    "2ec604c2ecb24096b46357c2d84c4f06"
+  ],
+  "schema_version": "m2-accuracy-verdict/0.1",
+  "scipy_code_sha256": "b180f6a6d3a723058e69aaf343a9be81301e600f9e270d5e6e19934af380bf92",
+  "scipy_dist_native_sha256": "a2e78745cf34fe1839c06747f5ee0d59b1c1c3fb122a30797e8a563d6ffc4a21",
+  "scipy_version": "1.17.1",
+  "threadpoolctl_closure_state": "present",
+  "threadpoolctl_code_sha256": "1ae1e64207a867ed8de3be66026e7047363c3db80407c4093fcfb6ad24c91461",
+  "threadpoolctl_dist_native_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "threadpoolctl_version": "3.6.0",
+  "tolerance_cents": 50.0,
+  "verdict_recorded_utc": "2026-07-29T22:24:22+00:00"
+}
