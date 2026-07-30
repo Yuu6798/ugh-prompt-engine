@@ -128,6 +128,30 @@ def test_atomic_publish_bundle_overwrites_existing_files(tmp_path: Path) -> None
     assert (output_dir / "b.json").read_bytes() == b"new-b"
 
 
+def test_atomic_publish_bundle_publishes_fresh_payload_when_name_and_dot_prev_collide(
+    tmp_path: Path,
+) -> None:
+    """`contents` に `foo` と `foo.prev` を両方含めても、両方とも新しい
+    payload で publish される（Codex P2 review 指摘: snapshot を旧
+    `staging_dir / f"{filename}.prev"` に置いていた実装では、`foo.prev` の
+    snapshot 書き込みが同名の staged payload を旧 `foo` のバイト列で上書きし、
+    publish 自体は成功したのに `foo.prev` だけ古い内容が公開される事故が
+    あった。snapshot を専用 `prev/` サブディレクトリへ隔離したことで、
+    staged payload の名前空間と衝突しなくなったことを確認する）。"""
+    output_dir = tmp_path / "bundle"
+    output_dir.mkdir()
+    (output_dir / "foo").write_bytes(b"old-foo")
+
+    atomic_publish_bundle(
+        output_dir,
+        {"foo": b"new-foo", "foo.prev": b"new-foo-prev"},
+        protected_inputs=(),
+    )
+
+    assert (output_dir / "foo").read_bytes() == b"new-foo"
+    assert (output_dir / "foo.prev").read_bytes() == b"new-foo-prev"
+
+
 def test_atomic_publish_bundle_removes_stale_filenames_not_in_contents(tmp_path: Path) -> None:
     output_dir = tmp_path / "takes"
     output_dir.mkdir()

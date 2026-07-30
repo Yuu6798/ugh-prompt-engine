@@ -166,9 +166,10 @@ def atomic_publish_bundle(
 
     publish 本体: staging（`output_dir` 配下の `TemporaryDirectory`）へ
     `contents` を書き切ってから、`contents` + 除去対象の `stale_filenames`
-    それぞれについて既存ターゲットを `.prev` として staging 側へ snapshot し、
+    それぞれについて既存ターゲットを staging 側の専用 `prev/` サブディレクトリ
+    （staged payload とは別区画 — 詳細は実装コメント参照）へ snapshot し、
     その後 `contents` の各ファイルを最終位置へ `os.replace` する。この過程で
-    `catch` に一致する例外が飛べば、rename 済み分を削除し `.prev` snapshot を
+    `catch` に一致する例外が飛べば、rename 済み分を削除し `prev/` snapshot を
     元位置へ復元して `output_dir` を呼び出し前と同じ状態に戻してから re-raise
     する。
     """
@@ -195,13 +196,25 @@ def atomic_publish_bundle(
         for filename, data in contents.items():
             (staging_dir / filename).write_bytes(data)
 
+        # snapshot は staged payload と同じ `staging_dir` 直下ではなく専用の
+        # `prev/` サブディレクトリへ隔離する（Codex P2 review 指摘: 従来は
+        # `staging_dir / f"{filename}.prev"` を使っており、bundle が `foo` と
+        # `foo.prev` を両方含む場合、`foo.prev` の snapshot 書き込みが `foo.prev`
+        # という名前の staged payload を旧 `foo` のバイト列で上書きしてしまい、
+        # publish 自体は成功したのに古い内容が公開される事故があった）。
+        # bundle 名は既に `_validate_bundle_name` でパス区切り文字を拒否済み
+        # （フラット名のみ）のため、`snapshot_dir / filename` は
+        # `staging_dir / filename`（staged payload）と構造的に衝突し得ない。
+        snapshot_dir = staging_dir / "prev"
+        snapshot_dir.mkdir()
+
         snapshots: Dict[str, Path] = {}
         published: List[str] = []
         try:
             for filename in list(contents) + stale_only:
                 target = output_dir / filename
                 if target.exists():
-                    previous = staging_dir / f"{filename}.prev"
+                    previous = snapshot_dir / filename
                     os.replace(target, previous)
                     snapshots[filename] = previous
             for filename in contents:
