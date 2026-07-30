@@ -255,8 +255,10 @@ def atomic_publish_bytes_bundle(
     より前に保証する）。
 
     薄いラッパー — 実体は `svp_rpe.utils.atomic_io.atomic_publish_bundle`
-    へ集約済み（`except BaseException` での rollback・`protected_inputs` が
-    truthy のときのみ検査する意味論はそちらのデフォルト挙動のまま）。
+    へ集約済み（`except BaseException` での rollback は全呼び出し元共通の
+    固定挙動（Codex P2 review round 4 で `catch` パラメータ自体を撤去）・
+    `protected_inputs` が truthy のときのみ検査する意味論はそちらの
+    デフォルト挙動のまま）。
     """
     from svp_rpe.utils.atomic_io import atomic_publish_bundle
 

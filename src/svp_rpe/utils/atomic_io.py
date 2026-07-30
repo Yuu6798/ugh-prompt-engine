@@ -32,20 +32,19 @@ docstring で「層依存回避のため意図的に複製」と明言されて�
 ## 複数ファイル bundle publish
 
 `atomic_publish_bundle`: 「全部揃って初めて意味を持つ 1 組」を snapshot +
-rollback 付きで publish する。既存ターゲットは一旦 staging 側 `.prev` へ
-退避（`os.replace`）してから新ファイル一式を rename する。途中失敗時は
-rename 済み分を削除し、退避した `.prev` を元位置へ復元して呼び出し前と
-同じ状態に戻す。
+rollback 付きで publish する。既存ターゲットは一旦 staging 側の専用
+`prev/` サブディレクトリへ退避（`os.replace`）してから、staged payload
+（`payload/` サブディレクトリ側）を新ファイル一式として rename する。途中
+失敗時は rename 済み分を削除し、`prev/` へ退避した snapshot を元位置へ
+復元して呼び出し前と同じ状態に戻す。rollback は常に `BaseException` を
+拾う（Codex P2 review round 7, PR3 #208 指摘 14 → 本 review round で全
+呼び出し元に統一 — `catch` パラメータは撤去済み。詳細は
+`atomic_publish_bundle` の docstring 参照）。
 
 3 実装（`_publish_artifacts_atomically` / `atomic_publish_bytes_bundle` /
-`_atomic_publish_text_bundle`）はこの骨格を共有するが、2 点で正直に異なる
+`_atomic_publish_text_bundle`）はこの骨格を共有するが、1 点で正直に異なる
 ため、無理に 1 通りの固定挙動へ寄せずパラメータで吸収する:
 
-- `catch`: rollback の対象例外。`cli/builds_root.py:_publish_artifacts_atomically`
-  は `OSError` のみを拾う。`recast/backend.py:atomic_publish_bytes_bundle` /
-  `recast/plan.py:_atomic_publish_text_bundle` は `BaseException` を拾う
-  （Codex P2 review round 7, PR3 #208 指摘 14 — 中断シグナルでも rollback を
-  必ず通すため、単一ファイル atomic writer 群に合わせて後から広げられた）。
 - `always_check_collision`: `_publish_artifacts_atomically` は
   `input_paths` が空でも `contents` 各ファイルの `is_dir()` チェックを
   常に行う。`atomic_publish_bytes_bundle` / `_atomic_publish_text_bundle`
@@ -68,7 +67,7 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple, Type
+from typing import Dict, Iterable, List, Tuple
 
 
 def _validate_bundle_name(name: str) -> None:
@@ -127,7 +126,6 @@ def atomic_publish_bundle(
     protected_inputs: Iterable[Path],
     stale_filenames: Tuple[str, ...] = (),
     always_check_collision: bool = False,
-    catch: Type[BaseException] = BaseException,
     collision_message: str = "output path collides with a protected input path",
 ) -> Path:
     """複数ファイルを「全部揃って初めて意味を持つ 1 組」として atomic publish
@@ -164,14 +162,28 @@ def atomic_publish_bundle(
     寄せない）。`is_dir` エラー文言（`"output path is an existing directory"`）
     は 3 実装とも元から同一だったため据え置き。
 
-    publish 本体: staging（`output_dir` 配下の `TemporaryDirectory`）へ
-    `contents` を書き切ってから、`contents` + 除去対象の `stale_filenames`
-    それぞれについて既存ターゲットを staging 側の専用 `prev/` サブディレクトリ
-    （staged payload とは別区画 — 詳細は実装コメント参照）へ snapshot し、
-    その後 `contents` の各ファイルを最終位置へ `os.replace` する。この過程で
-    `catch` に一致する例外が飛べば、rename 済み分を削除し `prev/` snapshot を
-    元位置へ復元して `output_dir` を呼び出し前と同じ状態に戻してから re-raise
-    する。
+    publish 本体: staging（`output_dir` 配下の `TemporaryDirectory`）内に
+    `payload/`（staged payload）と `prev/`（snapshot）の 2 つの専用
+    サブディレクトリを、いかなる書き込みより前に mkdir する（Codex P2
+    review 指摘: `payload/` を用意せず `staging_dir` 直下へ直接
+    payload を書いていた旧実装では、`contents = {"prev": ...}` のような
+    正当なフラット名が `snapshot_dir = staging_dir / "prev"` の `mkdir()`
+    と衝突し `FileExistsError` で publish 不能になっていた。bundle 名は
+    `_validate_bundle_name` でパス区切り文字を拒否済み・フラット名のみの
+    ため、`payload/` / `prev/` という固定名の予約語であっても
+    `payload_dir / name` / `snapshot_dir / name` はそれぞれの区画の直下に
+    閉じ、bundle 名自身（`"prev"` や `"payload"` を含む）と構造的に衝突
+    しない）。`contents` を `payload/` へ書き切ってから、`contents` +
+    除去対象の `stale_filenames` それぞれについて既存ターゲットを `prev/`
+    へ snapshot し、その後 `payload/` の各ファイルを最終位置へ
+    `os.replace` する。この過程で例外（`BaseException` — 常にこれを拾う。
+    `KeyboardInterrupt`/`SystemExit` 系の中断シグナルで rollback をスキップ
+    すると、`TemporaryDirectory` の unwind で snapshot ごと消え、旧
+    artifact が失われた mixed bundle が `output_dir` に残ってしまうため、
+    `catch` パラメータで例外型を選ばせる余地を撤去し全呼び出し元をこの
+    挙動へ統一した）が飛べば、rename 済み分を削除し `prev/` snapshot を
+    元位置へ復元して `output_dir` を呼び出し前と同じ状態に戻してから
+    re-raise する。
     """
     for filename in list(contents) + list(stale_filenames):
         _validate_bundle_name(filename)
@@ -193,20 +205,18 @@ def atomic_publish_bundle(
 
     with tempfile.TemporaryDirectory(dir=output_dir) as staging:
         staging_dir = Path(staging)
-        for filename, data in contents.items():
-            (staging_dir / filename).write_bytes(data)
-
-        # snapshot は staged payload と同じ `staging_dir` 直下ではなく専用の
-        # `prev/` サブディレクトリへ隔離する（Codex P2 review 指摘: 従来は
-        # `staging_dir / f"{filename}.prev"` を使っており、bundle が `foo` と
-        # `foo.prev` を両方含む場合、`foo.prev` の snapshot 書き込みが `foo.prev`
-        # という名前の staged payload を旧 `foo` のバイト列で上書きしてしまい、
-        # publish 自体は成功したのに古い内容が公開される事故があった）。
-        # bundle 名は既に `_validate_bundle_name` でパス区切り文字を拒否済み
-        # （フラット名のみ）のため、`snapshot_dir / filename` は
-        # `staging_dir / filename`（staged payload）と構造的に衝突し得ない。
+        # `payload/`（staged payload）と `prev/`（snapshot）を、いかなる
+        # 書き込みより前に両方 mkdir する。bundle 名はフラット名検証済み
+        # のため `staging_dir` 直下を占有せず、"prev"/"payload" を含む任意
+        # のフラット名が両ディレクトリの固定名と衝突せず publish できる
+        # （docstring 参照）。
+        payload_dir = staging_dir / "payload"
+        payload_dir.mkdir()
         snapshot_dir = staging_dir / "prev"
         snapshot_dir.mkdir()
+
+        for filename, data in contents.items():
+            (payload_dir / filename).write_bytes(data)
 
         snapshots: Dict[str, Path] = {}
         published: List[str] = []
@@ -218,9 +228,9 @@ def atomic_publish_bundle(
                     os.replace(target, previous)
                     snapshots[filename] = previous
             for filename in contents:
-                os.replace(staging_dir / filename, output_dir / filename)
+                os.replace(payload_dir / filename, output_dir / filename)
                 published.append(filename)
-        except catch:
+        except BaseException:
             for filename in published:
                 try:
                     os.unlink(output_dir / filename)

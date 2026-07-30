@@ -152,6 +152,32 @@ def test_atomic_publish_bundle_publishes_fresh_payload_when_name_and_dot_prev_co
     assert (output_dir / "foo.prev").read_bytes() == b"new-foo-prev"
 
 
+def test_atomic_publish_bundle_publishes_names_matching_staging_subdir_reserved_names(
+    tmp_path: Path,
+) -> None:
+    """bundle 名が staging 内の予約サブディレクトリ名 `"prev"` / `"payload"`
+    と一致していても publish できる（Codex P2 review 指摘: 旧実装は staged
+    payload を `staging_dir` 直下へ直接書いており、`contents = {"prev": ...}`
+    を渡すと `snapshot_dir = staging_dir / "prev"` の `mkdir()` が staged
+    payload と同名ディレクトリ作成で `FileExistsError` になり、正当な
+    フラット名 `"prev"` が publish 不能になっていた。`payload/` サブ
+    ディレクトリへ payload を隔離したことで、bundle 名が `"prev"` /
+    `"payload"` であっても衝突しないことを確認する）。既存 `"prev"` の
+    snapshot も正しく退避されることを併せて確認する。"""
+    output_dir = tmp_path / "bundle"
+    output_dir.mkdir()
+    (output_dir / "prev").write_bytes(b"old-prev")
+
+    atomic_publish_bundle(
+        output_dir,
+        {"prev": b"new-prev", "payload": b"new-payload"},
+        protected_inputs=(),
+    )
+
+    assert (output_dir / "prev").read_bytes() == b"new-prev"
+    assert (output_dir / "payload").read_bytes() == b"new-payload"
+
+
 def test_atomic_publish_bundle_removes_stale_filenames_not_in_contents(tmp_path: Path) -> None:
     output_dir = tmp_path / "takes"
     output_dir.mkdir()
@@ -354,34 +380,3 @@ def test_atomic_publish_bundle_base_exception_during_rename_still_rolls_back(
     assert (output_dir / "b.json").read_bytes() == b"old-b"
 
 
-def test_atomic_publish_bundle_catch_oserror_only_lets_base_exception_propagate_without_rollback(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """`catch=OSError`（`cli/builds_root.py:_publish_artifacts_atomically` の
-    契約）は非 `OSError` の中断は rollback せずそのまま伝播させる — つまり
-    `catch` パラメータが実際に呼び出し元ごとの拾う例外型を切り替えている
-    ことを検証する。"""
-    output_dir = tmp_path / "bundle"
-    output_dir.mkdir()
-    (output_dir / "a.json").write_bytes(b"old-a")
-    (output_dir / "b.json").write_bytes(b"old-b")
-
-    real_replace = os.replace
-
-    def flaky_replace(src: object, dst: object) -> None:
-        if str(dst) == str(output_dir / "b.json"):
-            raise _InjectedBaseException("simulated interruption not caught by catch=OSError")
-        real_replace(src, dst)
-
-    monkeypatch.setattr(os, "replace", flaky_replace)
-
-    with pytest.raises(_InjectedBaseException):
-        atomic_publish_bundle(
-            output_dir,
-            {"a.json": b"new-a", "b.json": b"new-b"},
-            protected_inputs=(),
-            catch=OSError,
-        )
-
-    # rollback しない契約なので a.json は new 側へ publish 済みのまま残る。
-    assert (output_dir / "a.json").read_bytes() == b"new-a"

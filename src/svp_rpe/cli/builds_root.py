@@ -18,10 +18,14 @@ def _publish_artifacts_atomically(
 
     Thin wrapper — the rollback/snapshot mechanics are consolidated in
     `svp_rpe.utils.atomic_io.atomic_publish_bundle`. This call site keeps its
-    historical `dict[str, str]` (text) contents and its `OSError`-only
-    rollback + unconditional collision/`is_dir` check (`always_check_collision`),
-    both preserved via that function's parameters rather than folded into a
-    single fixed behavior.
+    historical `dict[str, str]` (text) contents and its unconditional
+    collision/`is_dir` check (`always_check_collision`), preserved via that
+    function's parameters rather than folded into a single fixed behavior.
+    Rollback always catches `BaseException` (Codex P2 review round 4 —
+    `atomic_publish_bundle` no longer accepts a `catch` override: an
+    `OSError`-only rollback would skip on `KeyboardInterrupt`/`SystemExit`
+    and let the `TemporaryDirectory` unwind discard the snapshot, leaving a
+    mixed bundle with the old artifact lost).
     """
     from svp_rpe.utils.atomic_io import atomic_publish_bundle
 
@@ -31,7 +35,6 @@ def _publish_artifacts_atomically(
         byte_contents,
         protected_inputs=[Path(path) for path in input_paths],
         always_check_collision=True,
-        catch=OSError,
         collision_message="input path collides with output artifact path",
     )
 
