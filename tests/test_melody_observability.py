@@ -1109,6 +1109,7 @@ def test_waveform_pin_matches_generated_samples():
         )
 
 
+@pytest.mark.slow
 def test_synthetic_report_pins_and_verifies_waveform_bytes(monkeypatch):
     """synthetic report は各 fixture の waveform_sha256 を pin し、drift を fail-closed。
 
@@ -1407,6 +1408,7 @@ def test_report_pins_registry_hash_and_gate_snapshot(tmp_path):
     assert results["thresholds_source"] == "registry"
 
 
+@pytest.mark.slow
 def test_report_pins_actual_thresholds_not_registry_when_overridden(tmp_path):
     """thresholds override 時、report は registry snapshot でなく**実際に使った**閾値を載せる。
 

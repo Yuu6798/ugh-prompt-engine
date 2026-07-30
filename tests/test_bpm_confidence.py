@@ -44,6 +44,7 @@ REQUIRED_Q1_3_FIXTURES: tuple[tuple[str, float], ...] = (
 )
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(
     ("filename", "gt_bpm"),
     REQUIRED_Q1_3_FIXTURES,
@@ -71,6 +72,7 @@ def test_in_range_song_has_confidence_above_0_7(filename: str, gt_bpm: float) ->
     )
 
 
+@pytest.mark.slow
 def test_start_bpm_default_preserves_behavior() -> None:
     """`start_bpm=120.0` is librosa's own default, so passing it explicitly must
     return exactly what omitting it does — the high-prior recovery check (R2,
@@ -81,6 +83,7 @@ def test_start_bpm_default_preserves_behavior() -> None:
     assert explicit == default
 
 
+@pytest.mark.slow
 def test_high_start_bpm_is_accepted_and_returns_a_tempo() -> None:
     """A high prior (180) is forwarded to beat_track without error and yields a
     usable estimate. The actual collapse→recovery flip only manifests on the
@@ -104,6 +107,7 @@ def test_silence_returns_zero_confidence() -> None:
         assert confidence == 0.0
 
 
+@pytest.mark.slow
 def test_confidence_is_rounded_to_4_decimals() -> None:
     """Schema invariant: confidence is rounded to 4 decimal places."""
     audio = load_audio(str(SAMPLE_DIR / "synth_03_mid_groove_g_major.wav"))
@@ -167,6 +171,7 @@ def test_production_constant_matches_q1_3_ac() -> None:
     )
 
 
+@pytest.mark.slow
 def test_legacy_distance_from_120_formula_is_gone() -> None:
     """Regression: synth_03 (BPM ~123) should NOT yield ~0.975 from the
     legacy `1 - abs(bpm-120)/120` formula. The new formula gives ~0.88."""
