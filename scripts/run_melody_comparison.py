@@ -237,7 +237,66 @@ def _validate_manifest(manifest: Any) -> List[Dict[str, Any]]:
                 f"{expected!r} (fail-closed; kind×expected 矛盾)"
             )
         validated.append(dict(pair))
+    _validate_manifest_composition(validated)
     return validated
+
+
+def _validate_manifest_composition(pairs: List[Dict[str, Any]]) -> None:
+    """M3d 校正素材構成の事前登録検査（設計 §6.1 準拠、fail-closed）。
+
+    レビュー対応 2026-07-30（第 10 ラウンド）: 従来の per-pair 検証（kind/split/
+    expected の整形・kind×expected 矛盾）は個々の pair の妥当性しか見ておらず、
+    manifest 全体としての素材構成（校正に足る組み合わせが揃っているか）は無検査
+    だった——例えば positive pair が 1 件もない・holdout に negative が無い・
+    狙い撃ち negative（軸別の単独弁別検証）が欠けている manifest でも run/evaluate
+    が素通りしてしまう。設計 §6.1 の必須要件を以下として課す（新規チューナブル
+    値は導入しない——全て "組み合わせごとに >= 1 件" の固定要求）:
+
+    (a) tuning split に `positive_transform` が 1 件以上、かつ negative
+        （`negative_cross`/`negative_rhythm`/`negative_interval` のいずれか）が
+        1 件以上
+    (b) 狙い撃ち negative（`negative_rhythm` と `negative_interval`）が各 1 件
+        以上（split は問わない——各軸の弁別を単独検証する趣旨上、tuning/holdout
+        どちらに属していても資格を満たす）
+    (c) holdout split に positive（`positive_transform`）が 1 件以上、かつ
+        negative が 1 件以上
+
+    欠落は欠けている要件を全て列挙して fail-closed で拒否する。
+    """
+    tuning_positive = sum(
+        1 for p in pairs if p["split"] == "tuning" and p["kind"] == "positive_transform"
+    )
+    tuning_negative = sum(
+        1 for p in pairs if p["split"] == "tuning" and p["kind"].startswith("negative_")
+    )
+    holdout_positive = sum(
+        1 for p in pairs if p["split"] == "holdout" and p["kind"] == "positive_transform"
+    )
+    holdout_negative = sum(
+        1 for p in pairs if p["split"] == "holdout" and p["kind"].startswith("negative_")
+    )
+    negative_rhythm = sum(1 for p in pairs if p["kind"] == "negative_rhythm")
+    negative_interval = sum(1 for p in pairs if p["kind"] == "negative_interval")
+
+    missing: List[str] = []
+    if tuning_positive < 1:
+        missing.append("tuning split に positive_transform が 0 件 (>= 1 必須)")
+    if tuning_negative < 1:
+        missing.append("tuning split に negative (いずれかの kind) が 0 件 (>= 1 必須)")
+    if negative_rhythm < 1:
+        missing.append("negative_rhythm (狙い撃ち negative) が 0 件 (>= 1 必須、split 不問)")
+    if negative_interval < 1:
+        missing.append("negative_interval (狙い撃ち negative) が 0 件 (>= 1 必須、split 不問)")
+    if holdout_positive < 1:
+        missing.append("holdout split に positive (positive_transform) が 0 件 (>= 1 必須)")
+    if holdout_negative < 1:
+        missing.append("holdout split に negative (いずれかの kind) が 0 件 (>= 1 必須)")
+
+    if missing:
+        raise ValueError(
+            "pairs manifest の素材構成が事前登録要件 (設計 §6.1) を満たさない (fail-closed): "
+            + "; ".join(missing)
+        )
 
 
 def _manifest_audio_paths(manifest_path: Path) -> "set[Path]":
@@ -1217,6 +1276,98 @@ def _coverage_floor_candidate(pairs: Dict[str, Dict[str, Any]]) -> Dict[str, Any
     }
 
 
+def _holdout_validation_table(
+    pairs: Dict[str, Dict[str, Any]], *, frozen_axes: Dict[str, Dict[str, Any]]
+) -> Dict[str, Any]:
+    """凍結済み軸ごとに holdout split の positive 最小類似・negative 最大類似を集計し、
+    凍結値（`strong_min`/`none_max`）からのみ機械判定する（新規チューナブル禁止）。
+
+    レビュー対応 2026-07-30（第 10 ラウンド）: `_margin_table` は tuning split の
+    生分布から校正候補（マージン閾値 `separation_margin`）を導出するもので、
+    holdout の役目（凍結済み閾値が本当に holdout でも成立するかの事後検証）とは
+    別物——ここでは `_margin_table` と異なり閾値を一切発明せず、registry に
+    既に刻まれた凍結値 (`evidence_thresholds.axes[axis].strong_min`/`none_max`)
+    とだけ比較する。
+
+    軸ごとの判定:
+    - `confirmed`: holdout positive 最小 >= 凍結 `strong_min` かつ
+      holdout negative 最大 <= 凍結 `none_max`
+    - `holdout_failed`: 上記のいずれかが破れた場合（破れた側の値を
+      `violations` に記録）。positive/negative のどちらかの標本が 0 件の場合も
+      判定不能として `holdout_failed`（fail-closed — 判定できないことを
+      confirmed の側に倒さない）
+
+    `pairs` の holdout 行は `_redact_unfrozen_axes_for_holdout` により未凍結軸の
+    値が既に間引かれているため、`frozen_axes` に絞って集計すれば十分——未凍結軸
+    はそもそも `comparison["axes"]` に存在しない。
+    """
+    axis_positive: Dict[str, List[float]] = {axis: [] for axis in frozen_axes}
+    axis_negative: Dict[str, List[float]] = {axis: [] for axis in frozen_axes}
+    skipped: List[str] = []
+
+    for pair_id, pair in pairs.items():
+        if pair["split"] != "holdout":
+            continue
+        comparison = pair.get("comparison")
+        if comparison is None:
+            # holdout ロック pair（音声未読・比較未実行）— 対象外。
+            continue
+        if comparison.get("evidence") == "not_comparable":
+            skipped.append(f"{pair_id}:not_comparable")
+            continue
+        bucket = axis_positive if pair["expected"] == "same" else axis_negative
+        for axis, value in comparison.get("axes", {}).items():
+            if axis not in frozen_axes or value is None:
+                continue
+            bucket[axis].append(value)
+
+    table: Dict[str, Any] = {}
+    for axis, thresholds in frozen_axes.items():
+        positives = axis_positive.get(axis, [])
+        negatives = axis_negative.get(axis, [])
+        strong_min = float(thresholds["strong_min"])
+        none_max = float(thresholds["none_max"])
+        if not positives or not negatives:
+            table[axis] = {
+                "holdout_positive_min": None,
+                "holdout_negative_max": None,
+                "frozen_strong_min": strong_min,
+                "frozen_none_max": none_max,
+                "verdict": "holdout_failed",
+                "reason": "insufficient_holdout_positive_or_negative_samples",
+            }
+            continue
+        holdout_positive_min = min(positives)
+        holdout_negative_max = max(negatives)
+        positive_ok = holdout_positive_min >= strong_min
+        negative_ok = holdout_negative_max <= none_max
+        entry: Dict[str, Any] = {
+            "holdout_positive_min": holdout_positive_min,
+            "holdout_negative_max": holdout_negative_max,
+            "frozen_strong_min": strong_min,
+            "frozen_none_max": none_max,
+        }
+        if positive_ok and negative_ok:
+            entry["verdict"] = "confirmed"
+        else:
+            entry["verdict"] = "holdout_failed"
+            violations: List[str] = []
+            if not positive_ok:
+                violations.append(
+                    f"holdout_positive_min={holdout_positive_min!r} < "
+                    f"frozen_strong_min={strong_min!r}"
+                )
+            if not negative_ok:
+                violations.append(
+                    f"holdout_negative_max={holdout_negative_max!r} > "
+                    f"frozen_none_max={none_max!r}"
+                )
+            entry["violations"] = violations
+        table[axis] = entry
+
+    return {"axes": table, "skipped_pairs": skipped}
+
+
 def evaluate_comparison(
     reports: List[Dict[str, Any]],
     *,
@@ -1261,6 +1412,14 @@ def evaluate_comparison(
     11. holdout は `_holdout_unlocked` の全条件（status=frozen + 1 軸以上の整形済み
         凍結軸 + coverage.floor_status=frozen）を満たすまで開かない
     12. tuning positive pair の被覆分布から coverage floor 候補を emit
+    13. holdout unlock 済み（registry 完全凍結）かつ report に holdout 行（比較結果
+        つき）が存在する場合、凍結済み軸ごとに holdout の positive 最小類似・
+        negative 最大類似を凍結値（`strong_min`/`none_max`）とだけ比較し
+        `holdout_table` / `holdout_validation` を emit する（レビュー対応
+        2026-07-30 第 10 ラウンド）。`holdout_failed` の軸が 1 つでもあれば
+        `holdout_validation_status` に `calibration_not_confirmed_on_holdout` を
+        記録し、校正確定を主張しない。uncalibrated 時（holdout ロック中）は
+        この節を一切 emit しない（既存動作を変えない）
     """
     if not reports:
         raise ValueError("evaluate_comparison: reports が空 (fail-closed)")
@@ -1362,6 +1521,34 @@ def evaluate_comparison(
             for axis in margin["calibrated_axes"]
         }
     verdict["coverage_floor_candidate"] = _coverage_floor_candidate(reference_pairs)
+
+    if not holdout_locked:
+        # レビュー対応 2026-07-30（第 10 ラウンド）: registry が完全凍結
+        # （`_holdout_unlocked`）かつ report に holdout 行（比較結果つき）が
+        # 存在する場合のみ holdout 検証を行う——holdout ロック中（uncalibrated）
+        # は holdout pair に `comparison` 自体が無いため、この節は自然に
+        # スキップされる（既存動作を変えない）。
+        holdout_has_comparison = any(
+            pair["split"] == "holdout" and "comparison" in pair
+            for pair in reference_pairs.values()
+        )
+        if holdout_has_comparison:
+            frozen_axes = config.evidence_thresholds.axes or {}
+            holdout_result = _holdout_validation_table(reference_pairs, frozen_axes=frozen_axes)
+            verdict["holdout_table"] = holdout_result["axes"]
+            verdict["holdout_validation"] = {
+                axis: entry["verdict"] for axis, entry in holdout_result["axes"].items()
+            }
+            if holdout_result["skipped_pairs"]:
+                verdict["holdout_skipped_pairs"] = holdout_result["skipped_pairs"]
+            if any(
+                verdict_value == "holdout_failed"
+                for verdict_value in verdict["holdout_validation"].values()
+            ):
+                verdict["holdout_validation_status"] = "calibration_not_confirmed_on_holdout"
+            else:
+                verdict["holdout_validation_status"] = "confirmed"
+
     return verdict
 
 

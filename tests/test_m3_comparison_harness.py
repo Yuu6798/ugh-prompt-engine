@@ -177,6 +177,15 @@ def _fully_frozen_registry_text() -> str:
 
 
 def _default_pairs(audio_paths: Dict[str, str]) -> List[Dict[str, Any]]:
+    """校正 manifest の最小構成（レビュー対応 2026-07-30 第 10 ラウンド:
+    `_validate_manifest_composition`（設計 §6.1）を満たすよう構成: tuning に
+    positive_transform + negative、狙い撃ち negative（negative_rhythm/
+    negative_interval、split 不問のためどちらも tuning に置く）、holdout に
+    positive + negative を各 1 件以上）。狙い撃ち negative / holdout negative は
+    既存の song_a/song_b（`negative_cross` と同じ音声ペア）を再利用する——
+    manifest 構成検査は kind/split/expected の組み合わせのみを見るため、
+    音声内容の意味的な使い分けはテストの主眼ではない。
+    """
     return [
         {
             "pair_id": "p_pos_tuning",
@@ -202,6 +211,30 @@ def _default_pairs(audio_paths: Dict[str, str]) -> List[Dict[str, Any]]:
             "audio_b": audio_paths["song_a_transposed"],
             "expected": "same",
         },
+        {
+            "pair_id": "p_neg_rhythm_tuning",
+            "kind": "negative_rhythm",
+            "split": "tuning",
+            "audio_a": audio_paths["song_a"],
+            "audio_b": audio_paths["song_b"],
+            "expected": "different",
+        },
+        {
+            "pair_id": "p_neg_interval_tuning",
+            "kind": "negative_interval",
+            "split": "tuning",
+            "audio_a": audio_paths["song_a"],
+            "audio_b": audio_paths["song_b"],
+            "expected": "different",
+        },
+        {
+            "pair_id": "p_neg_holdout",
+            "kind": "negative_cross",
+            "split": "holdout",
+            "audio_a": audio_paths["song_a"],
+            "audio_b": audio_paths["song_b"],
+            "expected": "different",
+        },
     ]
 
 
@@ -217,7 +250,14 @@ def test_run_then_evaluate_mechanism(tmp_path: Path, audio_paths: Dict[str, str]
 
     assert report["schema_version"] == harness._EXPECTED_RUN_SCHEMA
     assert report["route_runner_injected"] is True
-    assert set(report["pairs"]) == {"p_pos_tuning", "p_neg_tuning", "p_pos_holdout"}
+    assert set(report["pairs"]) == {
+        "p_pos_tuning",
+        "p_neg_tuning",
+        "p_pos_holdout",
+        "p_neg_rhythm_tuning",
+        "p_neg_interval_tuning",
+        "p_neg_holdout",
+    }
     assert report["pairs"]["p_pos_tuning"]["comparison"]["axes"]["interval"] == pytest.approx(1.0)
     assert report["pairs"]["p_neg_tuning"]["comparison"]["evidence"] == "not_comparable"
 
@@ -502,12 +542,18 @@ def test_evaluate_rejects_freeze_proposal_when_tuning_positive_not_comparable(
         # 計算に real な負例信号を与えるため、テスト用に軸値を上書きする(テスト
         # 対象は「positive の not_comparable が freeze_proposal を止めること」で
         # あって negative 側の生成過程ではない)。
-        report["pairs"]["p_neg_tuning"]["comparison"]["evidence"] = "none"
-        report["pairs"]["p_neg_tuning"]["comparison"]["axes"] = {
-            "contour": 0.1,
-            "interval": 0.05,
-            "rhythm": 0.2,
-        }
+        # p_neg_rhythm_tuning/p_neg_interval_tuning も song_a/song_b の同一ペア
+        # （レビュー対応 2026-07-30 第 10 ラウンド・manifest 構成要件で追加された
+        # 狙い撃ち negative）で、同じ理由でデフォルトでは not_comparable になる
+        # ——not_comparable_negative_count を 0 に保つため p_neg_tuning と同様に
+        # 上書きする（この 3 pair の生成過程はテスト対象ではない）。
+        for neg_pair_id in ("p_neg_tuning", "p_neg_rhythm_tuning", "p_neg_interval_tuning"):
+            report["pairs"][neg_pair_id]["comparison"]["evidence"] = "none"
+            report["pairs"][neg_pair_id]["comparison"]["axes"] = {
+                "contour": 0.1,
+                "interval": 0.05,
+                "rhythm": 0.2,
+            }
         # p_pos_tuning を not_comparable へ上書き(p_pos_tuning2 は実データのまま
         # 高い一致率を保つ——tuning positive pair が他にも存在する状況で、1 件の
         # not_comparable だけで freeze proposal 全体が止まることを確認する)。
@@ -544,7 +590,10 @@ def test_holdout_locked_until_frozen(tmp_path: Path, audio_paths: Dict[str, str]
     # route_runner_injected だと calibration verdict 自体を発行しないため、holdout
     # ロック機構だけを単体で検証するには内部の margin/holdout ヘルパーを直接使う。
     holdout_ids = harness._holdout_pair_ids(report["pairs"])
-    assert holdout_ids == ["p_pos_holdout"]
+    # `_default_pairs` は holdout split に positive (p_pos_holdout) と negative
+    # (p_neg_holdout) を各 1 件以上持つ(manifest 構成要件・レビュー対応
+    # 2026-07-30 第 10 ラウンド)。`_holdout_pair_ids` はソート済みで返す。
+    assert holdout_ids == ["p_neg_holdout", "p_pos_holdout"]
 
     mapping = yaml.safe_load(M3_REGISTRY_PATH.read_text(encoding="utf-8"))
     assert mapping["evidence_thresholds"]["status"] == "uncalibrated"
@@ -552,6 +601,7 @@ def test_holdout_locked_until_frozen(tmp_path: Path, audio_paths: Dict[str, str]
     # uncalibrated の間は margin 計算からも holdout pair を除外する(tuning のみ)。
     margin = harness._margin_table(report["pairs"], split="tuning", min_margin=0.15)
     assert "p_pos_holdout" not in str(margin)  # tuning フィルタで holdout 行が混入していない
+    assert "p_neg_holdout" not in str(margin)
 
 
 def test_evaluate_comparison_records_holdout_lock_when_not_route_runner_injected(tmp_path: Path, audio_paths: Dict[str, str]):
@@ -576,10 +626,15 @@ def test_evaluate_comparison_records_holdout_lock_when_not_route_runner_injected
     assert verdict["repeats_verified"] is True
     assert verdict["repeats_consistent"] is True
     assert verdict["holdout_locked_until_frozen"] is True
-    assert verdict["holdout_pair_ids_skipped"] == ["p_pos_holdout"]
+    assert verdict["holdout_pair_ids_skipped"] == ["p_neg_holdout", "p_pos_holdout"]
     assert "calibration_verdict_status" not in verdict
     assert "margin_table" in verdict
     assert "coverage_floor_candidate" in verdict
+    # holdout ロック中（uncalibrated）は holdout 検証節を一切 emit しない
+    # （既存動作は不変・レビュー対応 2026-07-30 第 10 ラウンド）。
+    assert "holdout_table" not in verdict
+    assert "holdout_validation" not in verdict
+    assert "holdout_validation_status" not in verdict
 
 
 def test_evaluate_rejects_single_report_for_calibration_verdict(tmp_path: Path, audio_paths: Dict[str, str]):
@@ -785,27 +840,203 @@ def test_manifest_rejects_negative_kind_with_expected_same():
 
 
 # --------------------------------------------------------------------------- #
+# manifest 素材構成の事前登録検査（設計 §6.1・レビュー対応 2026-07-30 第 10 ラウンド）
+# --------------------------------------------------------------------------- #
+def _composition_compliant_manifest_pairs() -> List[Dict[str, Any]]:
+    """`_validate_manifest_composition` の全要件を満たす最小 pair 集合（audio
+    path はダミー文字列 — `_validate_manifest` はファイルシステムを読まない）。
+    """
+    return [
+        {
+            "pair_id": "t_pos",
+            "kind": "positive_transform",
+            "split": "tuning",
+            "audio_a": "a",
+            "audio_b": "b",
+            "expected": "same",
+        },
+        {
+            "pair_id": "t_neg",
+            "kind": "negative_cross",
+            "split": "tuning",
+            "audio_a": "a",
+            "audio_b": "b",
+            "expected": "different",
+        },
+        {
+            "pair_id": "t_neg_rhythm",
+            "kind": "negative_rhythm",
+            "split": "tuning",
+            "audio_a": "a",
+            "audio_b": "b",
+            "expected": "different",
+        },
+        {
+            "pair_id": "t_neg_interval",
+            "kind": "negative_interval",
+            "split": "tuning",
+            "audio_a": "a",
+            "audio_b": "b",
+            "expected": "different",
+        },
+        {
+            "pair_id": "h_pos",
+            "kind": "positive_transform",
+            "split": "holdout",
+            "audio_a": "a",
+            "audio_b": "b",
+            "expected": "same",
+        },
+        {
+            "pair_id": "h_neg",
+            "kind": "negative_cross",
+            "split": "holdout",
+            "audio_a": "a",
+            "audio_b": "b",
+            "expected": "different",
+        },
+    ]
+
+
+def test_manifest_composition_accepts_fully_compliant_pairs():
+    """設計 §6.1 の全要件（tuning positive/negative・狙い撃ち negative 各軸・
+    holdout positive/negative）を満たす manifest は composition 検査を通過する
+    （以降の欠落系テストの baseline が有効であることの確認を兼ねる）。
+    """
+    manifest = {
+        "schema": "m3-comparison-pairs/0.1",
+        "pairs": _composition_compliant_manifest_pairs(),
+    }
+    validated = harness._validate_manifest(manifest)
+    assert len(validated) == 6
+
+
+def test_manifest_composition_rejects_missing_targeted_negative():
+    """狙い撃ち negative（`negative_rhythm`）が manifest に 1 件も無ければ、
+    欠けている要件を理由に列挙して fail-closed 拒否する。"""
+    pairs = [
+        p for p in _composition_compliant_manifest_pairs() if p["kind"] != "negative_rhythm"
+    ]
+    manifest = {"schema": "m3-comparison-pairs/0.1", "pairs": pairs}
+    with pytest.raises(ValueError, match="negative_rhythm"):
+        harness._validate_manifest(manifest)
+
+
+def test_manifest_composition_rejects_missing_negative_interval():
+    """狙い撃ち negative（`negative_interval`）が manifest に 1 件も無ければ、
+    欠けている要件を理由に列挙して fail-closed 拒否する。"""
+    pairs = [
+        p for p in _composition_compliant_manifest_pairs() if p["kind"] != "negative_interval"
+    ]
+    manifest = {"schema": "m3-comparison-pairs/0.1", "pairs": pairs}
+    with pytest.raises(ValueError, match="negative_interval"):
+        harness._validate_manifest(manifest)
+
+
+def test_manifest_composition_rejects_empty_holdout_split():
+    """holdout split が manifest に 1 件も無ければ（positive/negative とも 0 件）、
+    欠けている要件を理由に列挙して fail-closed 拒否する。"""
+    pairs = [p for p in _composition_compliant_manifest_pairs() if p["split"] != "holdout"]
+    manifest = {"schema": "m3-comparison-pairs/0.1", "pairs": pairs}
+    with pytest.raises(ValueError, match="holdout"):
+        harness._validate_manifest(manifest)
+
+
+def test_manifest_composition_rejects_holdout_missing_negative_only():
+    """holdout split に positive はあるが negative が 0 件の場合も fail-closed 拒否する
+    （positive のみの holdout は「未校正証拠を漏らさない」検証にならない）。
+    """
+    pairs = [
+        p
+        for p in _composition_compliant_manifest_pairs()
+        if not (p["split"] == "holdout" and p["kind"].startswith("negative_"))
+    ]
+    manifest = {"schema": "m3-comparison-pairs/0.1", "pairs": pairs}
+    with pytest.raises(ValueError, match="holdout split に negative"):
+        harness._validate_manifest(manifest)
+
+
+def test_manifest_composition_rejects_tuning_missing_positive_transform():
+    """tuning split に positive_transform が 0 件の場合も fail-closed 拒否する。"""
+    pairs = [
+        p
+        for p in _composition_compliant_manifest_pairs()
+        if not (p["split"] == "tuning" and p["kind"] == "positive_transform")
+    ]
+    manifest = {"schema": "m3-comparison-pairs/0.1", "pairs": pairs}
+    with pytest.raises(ValueError, match="tuning split に positive_transform"):
+        harness._validate_manifest(manifest)
+
+
+# --------------------------------------------------------------------------- #
 # --out の protected-path（manifest が指す音声入力）
 # --------------------------------------------------------------------------- #
+def _manifest_composition_compliant_pairs(audio_a: Path, audio_b: Path) -> List[Dict[str, Any]]:
+    """`_validate_manifest_composition`（設計 §6.1・レビュー対応 2026-07-30 第 10
+    ラウンド）を満たす最小 pair 集合を、単一の音声ペア（`audio_a`/`audio_b`）だけを
+    使い回して構成する。manifest 構成検査は kind/split/expected の組み合わせしか
+    見ないため、`--out` protected-path テストのような audio path 自体が主眼の
+    テストでは、音声内容の意味的な使い分けをする必要はない。
+    """
+    return [
+        {
+            "pair_id": "p1",
+            "kind": "positive_transform",
+            "split": "tuning",
+            "audio_a": str(audio_a),
+            "audio_b": str(audio_b),
+            "expected": "same",
+        },
+        {
+            "pair_id": "p2_neg_tuning",
+            "kind": "negative_cross",
+            "split": "tuning",
+            "audio_a": str(audio_a),
+            "audio_b": str(audio_b),
+            "expected": "different",
+        },
+        {
+            "pair_id": "p3_neg_rhythm",
+            "kind": "negative_rhythm",
+            "split": "tuning",
+            "audio_a": str(audio_a),
+            "audio_b": str(audio_b),
+            "expected": "different",
+        },
+        {
+            "pair_id": "p4_neg_interval",
+            "kind": "negative_interval",
+            "split": "tuning",
+            "audio_a": str(audio_a),
+            "audio_b": str(audio_b),
+            "expected": "different",
+        },
+        {
+            "pair_id": "p5_pos_holdout",
+            "kind": "positive_transform",
+            "split": "holdout",
+            "audio_a": str(audio_a),
+            "audio_b": str(audio_b),
+            "expected": "same",
+        },
+        {
+            "pair_id": "p6_neg_holdout",
+            "kind": "negative_cross",
+            "split": "holdout",
+            "audio_a": str(audio_a),
+            "audio_b": str(audio_b),
+            "expected": "different",
+        },
+    ]
+
+
 def test_out_cannot_overwrite_manifest_audio_input(tmp_path: Path, monkeypatch):
     audio_a = tmp_path / "a.wav"
     audio_a.write_bytes(b"fake-audio-a")
     audio_b = tmp_path / "b.wav"
     audio_b.write_bytes(b"fake-audio-b")
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(
-        manifest_path,
-        [
-            {
-                "pair_id": "p1",
-                "kind": "positive_transform",
-                "split": "tuning",
-                "audio_a": str(audio_a),
-                "audio_b": str(audio_b),
-                "expected": "same",
-            }
-        ],
-    )
+    _write_manifest(manifest_path, _manifest_composition_compliant_pairs(audio_a, audio_b))
 
     argv = [
         "run_melody_comparison.py",
@@ -825,19 +1056,7 @@ def test_out_cannot_overwrite_manifest_audio_b_input(tmp_path: Path, monkeypatch
     audio_b = tmp_path / "b.wav"
     audio_b.write_bytes(b"fake-audio-b")
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(
-        manifest_path,
-        [
-            {
-                "pair_id": "p1",
-                "kind": "positive_transform",
-                "split": "tuning",
-                "audio_a": str(audio_a),
-                "audio_b": str(audio_b),
-                "expected": "same",
-            }
-        ],
-    )
+    _write_manifest(manifest_path, _manifest_composition_compliant_pairs(audio_a, audio_b))
 
     argv = [
         "run_melody_comparison.py",
@@ -875,19 +1094,27 @@ def test_holdout_pair_not_opened_at_run_time_when_uncalibrated(tmp_path: Path, a
 
     report = harness.run_comparison(manifest_path=manifest_path, route_runner=_tracking_runner)
 
-    # holdout pair (p_pos_holdout) の音声は一度も runner に渡されていない。
+    # holdout pair (p_pos_holdout / p_neg_holdout) の音声は一度も runner に
+    # 渡されていない——tuning pair (p_pos_tuning/p_neg_tuning/
+    # p_neg_rhythm_tuning/p_neg_interval_tuning) の音声のみが manifest 記載順に
+    # 読まれる。
     assert calls == [
         Path(audio_paths["song_a"]).read_bytes(),
         Path(audio_paths["song_a_transposed"]).read_bytes(),
         Path(audio_paths["song_a"]).read_bytes(),
         Path(audio_paths["song_b"]).read_bytes(),
+        Path(audio_paths["song_a"]).read_bytes(),
+        Path(audio_paths["song_b"]).read_bytes(),
+        Path(audio_paths["song_a"]).read_bytes(),
+        Path(audio_paths["song_b"]).read_bytes(),
     ]
 
-    holdout_row = report["pairs"]["p_pos_holdout"]
-    assert holdout_row == {"split": "holdout", "status": "holdout_locked_until_frozen"}
-    assert "comparison" not in holdout_row
-    assert "audio_a" not in holdout_row
-    assert "audio_b" not in holdout_row
+    for holdout_pair_id in ("p_pos_holdout", "p_neg_holdout"):
+        holdout_row = report["pairs"][holdout_pair_id]
+        assert holdout_row == {"split": "holdout", "status": "holdout_locked_until_frozen"}
+        assert "comparison" not in holdout_row
+        assert "audio_a" not in holdout_row
+        assert "audio_b" not in holdout_row
 
     # tuning pair は通常通り比較済み。
     assert "comparison" in report["pairs"]["p_pos_tuning"]
@@ -1223,6 +1450,130 @@ def test_holdout_full_freeze_records_empty_redacted_list(tmp_path: Path, audio_p
 
 
 # --------------------------------------------------------------------------- #
+# 凍結後の holdout 検証表（レビュー対応 2026-07-30 第 10 ラウンド）
+# --------------------------------------------------------------------------- #
+def _reports_for_holdout_validation(
+    tmp_path: Path,
+    audio_paths: Dict[str, str],
+    *,
+    positive_axes_override: Dict[str, Any],
+    negative_axes_override: Dict[str, Any],
+) -> "Tuple[List[Dict[str, Any]], Path]":
+    """全 3 軸凍結済み registry で repeats n=2 の report を作り、holdout pair
+    （`p_pos_holdout`/`p_neg_holdout`）の axes を明示値へ上書きする。
+
+    `song_a`/`song_b` の fake note ペアは compare_melodies 上で
+    `not_comparable`（観測ゲート不通過）になる組み合わせのため、holdout
+    負例の実測値を得られない——`test_evaluate_rejects_freeze_proposal_when_
+    tuning_positive_not_comparable` と同じ流儀で、テスト対象（凍結値との比較
+    判定そのもの）に必要な軸値だけを直接上書きする。両 report で同一の上書き値を
+    与えることで repeats 決定論（bit 一致）は保つ。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    frozen_registry = tmp_path / "frozen_registry.yaml"
+    frozen_registry.write_text(_fully_frozen_registry_text(), encoding="utf-8")
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    reports = []
+    for _ in range(2):
+        report = harness.run_comparison(
+            manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
+        )
+        report["route_runner_injected"] = False
+        report["pairs"]["p_pos_holdout"]["comparison"]["evidence"] = "strong"
+        report["pairs"]["p_pos_holdout"]["comparison"]["axes"] = dict(positive_axes_override)
+        report["pairs"]["p_neg_holdout"]["comparison"]["evidence"] = "none"
+        report["pairs"]["p_neg_holdout"]["comparison"]["axes"] = dict(negative_axes_override)
+        reports.append(report)
+    return reports, frozen_registry
+
+
+def test_evaluate_holdout_validation_confirmed_when_within_frozen_thresholds(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """凍結済み全軸（contour/interval/rhythm）で holdout positive 最小 >=
+    strong_min かつ holdout negative 最大 <= none_max を満たせば、軸ごとに
+    `confirmed` が記録され、`holdout_validation_status` も `confirmed` になる。
+    """
+    reports, frozen_registry = _reports_for_holdout_validation(
+        tmp_path,
+        audio_paths,
+        positive_axes_override={"contour": 0.95, "interval": 1.0, "rhythm": 0.9},
+        negative_axes_override={"contour": 0.1, "interval": 0.05, "rhythm": 0.2},
+    )
+
+    verdict = harness.evaluate_comparison(reports, registry_path=frozen_registry)
+
+    assert verdict["holdout_locked_until_frozen"] is False
+    assert verdict["holdout_validation"] == {
+        "contour": "confirmed",
+        "interval": "confirmed",
+        "rhythm": "confirmed",
+    }
+    assert verdict["holdout_validation_status"] == "confirmed"
+    for axis in ("contour", "interval", "rhythm"):
+        entry = verdict["holdout_table"][axis]
+        assert entry["verdict"] == "confirmed"
+        assert entry["holdout_positive_min"] is not None
+        assert entry["holdout_negative_max"] is not None
+
+
+def test_evaluate_holdout_validation_marks_axis_failed_when_positive_below_strong_min(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """1 軸（contour）だけ holdout positive 最小が凍結 `strong_min` 未達なら、
+    その軸は `holdout_failed`（違反した側の値を `violations` に記録）となり、
+    他の軸が confirmed でも verdict 全体は `calibration_not_confirmed_on_holdout`
+    を主張する。
+    """
+    reports, frozen_registry = _reports_for_holdout_validation(
+        tmp_path,
+        audio_paths,
+        # contour の凍結 strong_min=0.8 に対し 0.5 で未達（interval/rhythm は
+        # 凍結値を満たす）。
+        positive_axes_override={"contour": 0.5, "interval": 1.0, "rhythm": 0.9},
+        negative_axes_override={"contour": 0.1, "interval": 0.05, "rhythm": 0.2},
+    )
+
+    verdict = harness.evaluate_comparison(reports, registry_path=frozen_registry)
+
+    assert verdict["holdout_validation"]["contour"] == "holdout_failed"
+    assert verdict["holdout_validation"]["interval"] == "confirmed"
+    assert verdict["holdout_validation"]["rhythm"] == "confirmed"
+    assert verdict["holdout_validation_status"] == "calibration_not_confirmed_on_holdout"
+
+    contour_entry = verdict["holdout_table"]["contour"]
+    assert contour_entry["holdout_positive_min"] == pytest.approx(0.5)
+    assert contour_entry["frozen_strong_min"] == pytest.approx(0.8)
+    assert any("frozen_strong_min" in violation for violation in contour_entry["violations"])
+
+
+def test_evaluate_holdout_validation_absent_while_holdout_locked(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """holdout がロックされたまま（uncalibrated registry）の既定 fixture では、
+    holdout 行に `comparison` が存在しないため holdout 検証節を一切 emit しない
+    （既存動作は不変）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    reports = []
+    for _ in range(2):
+        report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+        report["route_runner_injected"] = False
+        reports.append(report)
+
+    verdict = harness.evaluate_comparison(reports)
+
+    assert verdict["holdout_locked_until_frozen"] is True
+    assert "holdout_table" not in verdict
+    assert "holdout_validation" not in verdict
+    assert "holdout_validation_status" not in verdict
+
+
+# --------------------------------------------------------------------------- #
 # 部分凍結 holdout の octave 派生診断 redaction（レビュー対応 2026-07-30 第 7 ラウンド）
 # --------------------------------------------------------------------------- #
 def test_holdout_partial_freeze_redacts_octave_diagnostic(tmp_path: Path):
@@ -1270,7 +1621,51 @@ def test_holdout_partial_freeze_redacts_octave_diagnostic(tmp_path: Path):
                 "audio_a": str(audio_c),
                 "audio_b": str(audio_c_octave),
                 "expected": "same",
-            }
+            },
+            # 以下は manifest 構成要件（設計 §6.1・レビュー対応 2026-07-30 第 10
+            # ラウンド）を満たすための埋め合わせ pair — 同じ audio_c/audio_c_octave
+            # を使い回す（このテストの主眼は holdout redaction であって、これらの
+            # 埋め合わせ pair の比較結果は検証対象ではない）。
+            {
+                "pair_id": "p_fill_pos_tuning",
+                "kind": "positive_transform",
+                "split": "tuning",
+                "audio_a": str(audio_c),
+                "audio_b": str(audio_c_octave),
+                "expected": "same",
+            },
+            {
+                "pair_id": "p_fill_neg_tuning",
+                "kind": "negative_cross",
+                "split": "tuning",
+                "audio_a": str(audio_c),
+                "audio_b": str(audio_c_octave),
+                "expected": "different",
+            },
+            {
+                "pair_id": "p_fill_neg_rhythm",
+                "kind": "negative_rhythm",
+                "split": "tuning",
+                "audio_a": str(audio_c),
+                "audio_b": str(audio_c_octave),
+                "expected": "different",
+            },
+            {
+                "pair_id": "p_fill_neg_interval",
+                "kind": "negative_interval",
+                "split": "tuning",
+                "audio_a": str(audio_c),
+                "audio_b": str(audio_c_octave),
+                "expected": "different",
+            },
+            {
+                "pair_id": "p_fill_neg_holdout",
+                "kind": "negative_cross",
+                "split": "holdout",
+                "audio_a": str(audio_c),
+                "audio_b": str(audio_c_octave),
+                "expected": "different",
+            },
         ],
     )
     one_axis_registry = tmp_path / "one_axis_registry.yaml"
