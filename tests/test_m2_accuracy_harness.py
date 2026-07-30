@@ -7588,6 +7588,80 @@ def test_external_fixtures_registration_attestation_rejects_uncommitted_bytes(
         )
 
 
+def test_external_fixtures_registration_attestation_pins_shallow_checkout_degradation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """(CI hotfix・claude/fix-m2c-attestation-test-ci) `actions/checkout@v4` の既定
+    depth-1 checkout では `git rev-list HEAD -- <path>` がローカルに存在する唯一の
+    commit（HEAD 自身）しか返さない——真に最初にその blob が現れた commit が history
+    の奥にあっても、shallow 環境からはそこへ到達できない。
+
+    この関数の docstring は既にこの限界を明記している（`ordering_is_proof: False` =
+    「blob が HEAD の祖先に存在する」ことの証明であって、committer date による順序の
+    証明ではない）。したがって shallow 環境が「本当の最初の commit」より新しい HEAD の
+    committer date を報告すること自体は設計契約の範囲内の劣化であり、プロダクト変更は
+    不要——ただし劣化が「例外」でも「None の握り潰し」でもなく、必ず HEAD 自身を
+    `first_commit` として一貫して採用することは意図した縮退先として固定する価値がある
+    （§1 診断: 当初 CI fail の疑われた原因だったが、実際の fail 原因は別のテストの
+    time-bomb 化であり、shallow checkout 自体は本テストの通り安全に縮退することを
+    ここで実証・pin する）。
+
+    `git rev-list` の実行結果を「HEAD だけ返す」形へ加工することで、実際に depth-1
+    clone を作らずに shallow checkout の見え方を再現する（`_git` は module 全体で
+    共有される `subprocess.run` 経由で呼ばれるため、そこだけ差し替えれば他の git
+    呼び出し（hash-object / rev-parse / show）は本物の履歴に対してそのまま動く）。
+
+    素朴に「本物の `rev-list` 出力の 1 行目だけ残す」加工では偽装として不十分:
+    `git rev-list HEAD -- <path>` は経路によって（当該 blob を変えない merge commit
+    が TREESAME で history simplification により省かれる等）1 行目が既に「真の最初の
+    commit」であることがあり、実 shallow clone（`git clone --depth 1`）による実証
+    （下記コメント）と食い違う。実測: `git clone --depth 1` した複製では、shallow
+    boundary に唯一存在する commit（= HEAD 自身）以外はそもそも git オブジェクトが
+    無く、`rev-list HEAD -- <path>` は無条件に HEAD 1 行だけを返す。ここでは
+    「HEAD 以外の行を落とす」のではなく「常に HEAD 自身の行に固定置換する」ことで
+    その実測済みの縮退を忠実に再現する。
+    """
+    real_run = harness.subprocess.run
+    head_sha = (
+        real_run(["git", "-C", str(harness.ROOT), "rev-parse", "HEAD"], capture_output=True)
+        .stdout.decode("ascii")
+        .strip()
+    )
+
+    def _fake_run(args: List[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        if "rev-list" in args:
+            # depth-1 checkout 実測: 履歴には HEAD 自身しか存在しない（1 行だけ返す）。
+            return subprocess.CompletedProcess(
+                args=args, returncode=0, stdout=(head_sha + "\n").encode("ascii"), stderr=b""
+            )
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr(harness.subprocess, "run", _fake_run)
+
+    raw = harness.EXTERNAL_FIXTURES_PATH.read_bytes()
+    attestation, committed = harness._external_fixtures_registration_attestation(
+        harness.EXTERNAL_FIXTURES_PATH, raw
+    )
+
+    head_committer_iso = (
+        real_run(
+            ["git", "-C", str(harness.ROOT), "show", "-s", "--format=%cI", "HEAD"],
+            capture_output=True,
+        )
+        .stdout.decode("ascii")
+        .strip()
+    )
+    expected_committed = datetime.fromisoformat(head_committer_iso).astimezone(timezone.utc)
+
+    # 縮退先は常に HEAD: 例外にもならず、None も返さず、契約どおり非空の attestation
+    # を返す（縮退が「立証不能」でなく「HEAD を最初の commit として扱う」に落ちる）。
+    assert attestation["first_commit"] == head_sha
+    assert committed == expected_committed
+    assert attestation["committed_utc"] == committed.isoformat()
+    assert attestation["ordering_is_proof"] is False
+    assert attestation["source"] == "git_history_first_blob_occurrence"
+
+
 def test_evaluate_m2_bars_records_external_fixtures_attestation_when_v_direct_present(
     tmp_path: Path,
 ) -> None:
@@ -8019,8 +8093,17 @@ def test_evaluate_m2_bars_rejects_v_direct_report_predating_external_fixtures(
     """(第3巡 P2 の裏取り) 外部カテゴリを実際に含む report の started_utc が external
     fixtures の登録時点より前なら、絞り込み後も正しく fail-closed 拒否され続ける
     （フィルタが緩めすぎて本来の gate を無効化していないことの確認）。
+
+    CI hotfix（shallow checkout 誤診断からの訂正・claude/fix-m2c-attestation-test-ci）:
+    旧実装は `fixed_committed` だけを「未来寄りに固定」し、report 側の `started_utc`
+    は `run_accuracy` が `_utc_now()`（実時刻）で刻んだ値に任せていた。これは「壁時計
+    が `fixed_committed` を追い越すまでの間だけ predates が成立する」time-bomb で、
+    2026-07-30T00:00:00Z を境に実時刻がその固定値を追い越し、`started <= committed`
+    が常に偽になって `DID NOT RAISE ValueError` を起こした（shallow checkout・full
+    checkout どちらでも再現し、checkout depth とは無関係）。attestation の git 時刻源
+    だけでなく report 側の測定開始時刻も明示的に固定し、実時刻から完全に独立させる。
     """
-    fixed_committed = datetime(2026, 7, 30, 0, 0, 0, tzinfo=timezone.utc)  # 未来寄りに固定
+    fixed_committed = datetime(2026, 7, 30, 0, 0, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(
         harness,
         "_external_fixtures_registration_attestation",
@@ -8055,6 +8138,10 @@ def test_evaluate_m2_bars_rejects_v_direct_report_predating_external_fixtures(
         )
         for _ in range(2)
     ]
+    # started_utc を fixed_committed より前へ明示的に固定する（実時刻 `_utc_now()`
+    # 依存を排除し、実行される暦日に関わらず「predates」が成立し続けるようにする）。
+    for report in v_reports:
+        report["started_utc"] = "2026-07-29T12:00:00+00:00"
     bars, bars_sha256 = harness.load_bars(BARS_PATH)
     with pytest.raises(ValueError, match="external fixtures が git 履歴に現れた登録時点"):
         harness.evaluate_m2_bars(
