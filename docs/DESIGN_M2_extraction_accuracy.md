@@ -171,6 +171,24 @@ wheel 外 BLAS、事前ロード、ビルド差、非決定的構成など「測
   外し（一方向）、代替抽出器（melodia 裁定後・将来のライセンス適合 SOTA）の M1 再入を待つ。
 - いずれでも: 数値の**外挿**（正解なし素材への適用）は M3 で誤差モデル明示つきでのみ許可。
 
+### §7 改訂（2026-07-30・User 決裁による撤回範囲の軸分離）
+
+**User 決裁 2026-07-30**（M2d [`m2_error_model.md`](m2_error_model.md) の分岐 2 択のうち
+選択肢 (b) を採択）: 「§7 の撤回範囲を音高系と voicing 系で分離し、単離済み clean lead
+入力帯限定で M3 先行を許可」。本改訂は文言の遡及書き換えではなく dated 追記であり、
+凍結値（registry / bars）の変更はない。
+
+- **撤回範囲の分離**: 実測（M2b/M2c）の帰属は「音高系は健全（S-direct RPA 1.000 /
+  median cent 1.35・V-direct RPA 0.9886）・fail 因子は voicing 単独（VFA）」。
+  したがって上記「S-direct 不通過 = 経路自体の信頼撤回」の原文言を、
+  **voicing 系の信頼撤回**（M3 は抽出器 voicing を判定に使わない・VFA を推論時重みに
+  使わない）と**音高系（cent/octave）の限定信頼**（単離済み clean lead 入力帯 =
+  合成単旋律・単独歌唱に限る）へ分離する。
+- **M3 先行の許可帯域**: 単離済み clean lead 限定。demucs vocals stem 帯は
+  V-fullstack（または stem 対象の dated 実測）まで適用外、フルミックス直は禁止のまま。
+- 「calibrated 昇格 = V_fullstack 通過」（§4 の位置づけ）が未達である事実は本改訂で
+  変わらない。
+
 ---
 
 ## 8. PR 分割
