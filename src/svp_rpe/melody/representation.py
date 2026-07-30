@@ -290,15 +290,30 @@ def _fold_interval(interval: int, fold_semitones: int) -> int:
     return ((interval + half) % fold_semitones) - half
 
 
+def _round_half_up_semitone(pitch_midi: float) -> int:
+    """半音丸め: `floor(pitch_midi + 0.5)`（一側タイブレーク・移調同変）。
+
+    レビュー対応 2026-07-30（第 11 ラウンド）: Python 組み込み `round()` は
+    偶数丸め（banker's rounding）——タイブレークの向きが値の偶奇で変わるため、
+    整数移調をかけても量子化結果が同量シフトしない（例: `round(60.5)=60` だが
+    `round(61.5)=62` で、+1 移調のはずが +2 になる）。`floor(x + 0.5)` は常に
+    「.5 は繰り上げ」で片側に倒すため、任意の整数 `n` について
+    `floor((x+n) + 0.5) == floor(x + 0.5) + n` が恒等的に成り立ち、移調同変性
+    （intervals_raw が移調で不変であるという `MelodySequences` の契約）を
+    タイブレーク境界でも保つ。
+    """
+    return int(math.floor(pitch_midi + 0.5))
+
+
 def build_sequences(
     notes: Sequence[MelodyNote], config: M3ComparisonConfig
 ) -> MelodySequences:
-    """ノート列 → 正規化系列。半音丸めは `int(round(pitch_midi))`（既存流儀と同一）。
+    """ノート列 → 正規化系列。半音丸めは `_round_half_up_semitone`（`floor(x+0.5)`）。
 
     IOI（隣接ノート onset 間隔）と音長比は event-driven（テンポ不変）で計算し、
     IOI<=0 / 音長<=0 の対は防御的に ``None`` を返す。
     """
-    pitch_semitones = tuple(int(round(note.pitch_midi)) for note in notes)
+    pitch_semitones = tuple(_round_half_up_semitone(note.pitch_midi) for note in notes)
     note_count = len(pitch_semitones)
 
     intervals_raw = tuple(

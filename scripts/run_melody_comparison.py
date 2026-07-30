@@ -255,9 +255,13 @@ def _validate_manifest_composition(pairs: List[Dict[str, Any]]) -> None:
     (a) tuning split に `positive_transform` が 1 件以上、かつ negative
         （`negative_cross`/`negative_rhythm`/`negative_interval` のいずれか）が
         1 件以上
-    (b) 狙い撃ち negative（`negative_rhythm` と `negative_interval`）が各 1 件
-        以上（split は問わない——各軸の弁別を単独検証する趣旨上、tuning/holdout
-        どちらに属していても資格を満たす）
+    (b) 狙い撃ち negative（`negative_rhythm` と `negative_interval`）が
+        **tuning split 内に** 各 1 件以上（レビュー対応 2026-07-30 第 11
+        ラウンド: 従来は split 不問（holdout のみに置いても要件を満たせた）
+        だったが、各軸の弁別を単独検証する趣旨上、校正そのものに使う tuning
+        split に無ければ意味がない——holdout のみに置かれた場合は fail。
+        holdout に**追加で**置くのは妨げない（tuning に必須本数を満たした上での
+        holdout 追加は許可）)
     (c) holdout split に positive（`positive_transform`）が 1 件以上、かつ
         negative が 1 件以上
 
@@ -275,18 +279,28 @@ def _validate_manifest_composition(pairs: List[Dict[str, Any]]) -> None:
     holdout_negative = sum(
         1 for p in pairs if p["split"] == "holdout" and p["kind"].startswith("negative_")
     )
-    negative_rhythm = sum(1 for p in pairs if p["kind"] == "negative_rhythm")
-    negative_interval = sum(1 for p in pairs if p["kind"] == "negative_interval")
+    tuning_negative_rhythm = sum(
+        1 for p in pairs if p["split"] == "tuning" and p["kind"] == "negative_rhythm"
+    )
+    tuning_negative_interval = sum(
+        1 for p in pairs if p["split"] == "tuning" and p["kind"] == "negative_interval"
+    )
 
     missing: List[str] = []
     if tuning_positive < 1:
         missing.append("tuning split に positive_transform が 0 件 (>= 1 必須)")
     if tuning_negative < 1:
         missing.append("tuning split に negative (いずれかの kind) が 0 件 (>= 1 必須)")
-    if negative_rhythm < 1:
-        missing.append("negative_rhythm (狙い撃ち negative) が 0 件 (>= 1 必須、split 不問)")
-    if negative_interval < 1:
-        missing.append("negative_interval (狙い撃ち negative) が 0 件 (>= 1 必須、split 不問)")
+    if tuning_negative_rhythm < 1:
+        missing.append(
+            "tuning split に negative_rhythm (狙い撃ち negative) が 0 件 (>= 1 必須; "
+            "holdout のみに置くのは不可、holdout への追加配置は可)"
+        )
+    if tuning_negative_interval < 1:
+        missing.append(
+            "tuning split に negative_interval (狙い撃ち negative) が 0 件 (>= 1 必須; "
+            "holdout のみに置くのは不可、holdout への追加配置は可)"
+        )
     if holdout_positive < 1:
         missing.append("holdout split に positive (positive_transform) が 0 件 (>= 1 必須)")
     if holdout_negative < 1:
@@ -496,6 +510,56 @@ def _redact_unfrozen_axes_for_holdout(
     return comparison_dict, redacted, redacted_diagnostics
 
 
+def _normalize_float_for_observation_hash(value: Optional[float]) -> Optional[str]:
+    """float を固定表記（小数点 4 桁）へ正規化する（`representation.py` の
+    `sequence_sha256` が使う `_normalize_float_for_hash` と同じ流儀。src/ は
+    変更しない方針のため、ハーネス内で同型の正規化を独自実装する）。
+    """
+    if value is None:
+        return None
+    return format(value, ".4f")
+
+
+def _observation_content_sha256(observation: MelodyObservation) -> str:
+    """`MelodyObservation` の正規化前軌跡の content hash（レビュー対応 2026-07-30
+    第 11 ラウンド・生観測軌跡の hash pin）。
+
+    `sequence_sha256`（`representation.py`）は `build_sequences` 後の正規化系列
+    （移調・変速不変な表現）を pin するのに対し、本関数は抽出器が返した
+    **正規化前**の生軌跡（`frame_times`/`frame_hz`/`frame_confidence` と、
+    `observation.notes` が非空ならその `(start_sec, end_sec, pitch_midi,
+    confidence)` 列）を pin する——正規化系列の一致だけでは、正規化の過程で
+    捨象される情報（例: フレーム confidence そのものの変動、note 系抽出器が
+    直接供給した notes の生値）が repeats 間でぶれていても検出できない穴が
+    残るため、両者は独立した pin として扱う。
+
+    直列化は既存の `sequence_sha256` の正規化流儀（固定小数表記 + `json.dumps(
+    sort_keys=True, separators=(",", ":"))`）に合わせる（決定論・環境依存の
+    repr ブレを避ける）。
+    """
+    payload: Dict[str, Any] = {
+        "frame_times": [
+            _normalize_float_for_observation_hash(v) for v in observation.frame_times
+        ],
+        "frame_hz": [_normalize_float_for_observation_hash(v) for v in observation.frame_hz],
+        "frame_confidence": [
+            _normalize_float_for_observation_hash(v) for v in observation.frame_confidence
+        ],
+    }
+    if observation.notes:
+        payload["notes"] = [
+            [
+                _normalize_float_for_observation_hash(note.start_sec),
+                _normalize_float_for_observation_hash(note.end_sec),
+                _normalize_float_for_observation_hash(note.pitch_midi),
+                _normalize_float_for_observation_hash(note.confidence),
+            ]
+            for note in observation.notes
+        ]
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
 def _freeze_audio_copy(audio_path: "str | Path", staging_dir: str) -> "Tuple[str, str]":
     """`audio_path` の bytes を一度だけ読み、sha256 と同一 bytes の凍結コピーパスを返す。
 
@@ -596,6 +660,12 @@ def run_comparison(
             finally:
                 Path(frozen_a).unlink(missing_ok=True)
                 Path(frozen_b).unlink(missing_ok=True)
+            # 生観測軌跡の content hash（レビュー対応 2026-07-30 第 11 ラウンド）:
+            # 正規化前（`build_sequences` を通す前）の軌跡を pin する。redaction
+            # 対象ではない（axes の値そのものではなく hash であり、holdout の
+            # 未凍結軸を覗き見る経路にならない）。
+            observation_sha256_a = _observation_content_sha256(obs_a)
+            observation_sha256_b = _observation_content_sha256(obs_b)
             comparison = compare_melodies(
                 obs_a,
                 obs_b,
@@ -629,6 +699,8 @@ def run_comparison(
                 "audio_b": pair["audio_b"],
                 "audio_sha256_a": audio_sha256_a,
                 "audio_sha256_b": audio_sha256_b,
+                "observation_sha256_a": observation_sha256_a,
+                "observation_sha256_b": observation_sha256_b,
                 "comparison": comparison_dict,
             }
             if unfrozen_axes_redacted is not None:
@@ -657,6 +729,12 @@ _PAIR_LEVEL_PROVENANCE_PINS: Tuple[str, ...] = (
     # 要求する pin 群」——route 由来 provenance と同じ汎用ループで検査できる。
     "audio_sha256_a",
     "audio_sha256_b",
+    # レビュー対応 2026-07-30（第 11 ラウンド）: 生観測軌跡（正規化前）の
+    # content hash。既存の汎用ループ（有無の一致 + 値の一致を要求）にそのまま
+    # 乗せる——欠落・不一致は理由つきで fail、holdout ロック pair（"comparison"
+    # を持たない）はこのループより前の分岐で対象外になる。
+    "observation_sha256_a",
+    "observation_sha256_b",
 )
 # pair ラベルの manifest 束縛（レビュー対応 2026-07-30 第 7 ラウンド）が検査する
 # フィールド群。row に記録されている項目のみ検査する（holdout ロック pair は
@@ -932,11 +1010,12 @@ def _check_repeats_consistency(reports: List[Dict[str, Any]]) -> None:
     と `axes` を repeats 間で突き合わせるだけでは、repeats が本当に「同一 manifest ×
     同一 route」に対する実行であることまでは保証できない（レビュー対応 2026-07-30）。
     report 自身が記録している repeat 定義的 pin（`manifest_sha256` / `route` / pair
-    単位の `route_provenance_a/b` / `audio_sha256_a/b`）も突き合わせ、1 箇所でも
-    食い違えば fail-closed で拒否する。`audio_sha256_a/b`（レビュー対応 2026-07-30
-    第 4 ラウンド）は holdout ロック pair では記録されない（`comparison` 自体が無い）
-    ため、`ref_has_comparison` が False の pair は既存どおりこのループより前で
-    スキップされる——開封回避の設計は崩さない。
+    単位の `route_provenance_a/b` / `audio_sha256_a/b` / `observation_sha256_a/b`）
+    も突き合わせ、1 箇所でも食い違えば fail-closed で拒否する。`audio_sha256_a/b`
+    （レビュー対応 2026-07-30 第 4 ラウンド）・`observation_sha256_a/b`（同第 11
+    ラウンド・生観測軌跡の content hash）は holdout ロック pair では記録されない
+    （`comparison` 自体が無い）ため、`ref_has_comparison` が False の pair は
+    既存どおりこのループより前でスキップされる——開封回避の設計は崩さない。
     """
     if len(reports) < 2:
         return
@@ -1300,10 +1379,19 @@ def _holdout_validation_table(
     `pairs` の holdout 行は `_redact_unfrozen_axes_for_holdout` により未凍結軸の
     値が既に間引かれているため、`frozen_axes` に絞って集計すれば十分——未凍結軸
     はそもそも `comparison["axes"]` に存在しない。
+
+    レビュー対応 2026-07-30（第 11 ラウンド）: holdout split の pair に 1 件でも
+    `not_comparable`（観測ゲート不通過・被覆不足等でスキップされた比較）があれば、
+    その pair_id を `not_comparable_pair_ids` として別途返す——呼び出し側
+    （`evaluate_comparison`）はこの非空性だけで、軸別 verdict（`confirmed`/
+    `holdout_failed`）に関わらず `holdout_validation_status` を
+    `calibration_not_confirmed_on_holdout` に倒す（測れなかった pair が 1 件でも
+    あれば「holdout で確認できた」とは主張しない）。
     """
     axis_positive: Dict[str, List[float]] = {axis: [] for axis in frozen_axes}
     axis_negative: Dict[str, List[float]] = {axis: [] for axis in frozen_axes}
     skipped: List[str] = []
+    not_comparable_pair_ids: List[str] = []
 
     for pair_id, pair in pairs.items():
         if pair["split"] != "holdout":
@@ -1314,6 +1402,7 @@ def _holdout_validation_table(
             continue
         if comparison.get("evidence") == "not_comparable":
             skipped.append(f"{pair_id}:not_comparable")
+            not_comparable_pair_ids.append(pair_id)
             continue
         bucket = axis_positive if pair["expected"] == "same" else axis_negative
         for axis, value in comparison.get("axes", {}).items():
@@ -1365,7 +1454,11 @@ def _holdout_validation_table(
             entry["violations"] = violations
         table[axis] = entry
 
-    return {"axes": table, "skipped_pairs": skipped}
+    return {
+        "axes": table,
+        "skipped_pairs": skipped,
+        "not_comparable_pair_ids": sorted(not_comparable_pair_ids),
+    }
 
 
 def evaluate_comparison(
@@ -1399,7 +1492,8 @@ def evaluate_comparison(
        が mapping であり crepe 系経路の必須 pin（`extractor_weights_sha256` /
        `extractor_code_sha256`）も同様に 64 桁小文字 hex であることを検証する
        （injected/publishable を問わず適用）
-    6. repeats（sequence hash / axes / audio_sha256 含む pair 単位 pin）の bit 一致検証
+    6. repeats（sequence hash / axes / audio_sha256 / observation_sha256 含む pair
+       単位 pin）の bit 一致検証
     7. 全 report の `run_id` が存在・非空・相互に distinct であることの検証
        （レビュー対応 2026-07-30 第 4 ラウンド: 同一 run の二重指定を検出する）
     8. route_runner_injected な report があれば calibration verdict 発行を拒否
@@ -1419,7 +1513,12 @@ def evaluate_comparison(
         2026-07-30 第 10 ラウンド）。`holdout_failed` の軸が 1 つでもあれば
         `holdout_validation_status` に `calibration_not_confirmed_on_holdout` を
         記録し、校正確定を主張しない。uncalibrated 時（holdout ロック中）は
-        この節を一切 emit しない（既存動作を変えない）
+        この節を一切 emit しない（既存動作を変えない）。holdout split の pair
+        に 1 件でも `not_comparable`（観測ゲート不通過等でスキップ）があれば、
+        軸別 verdict が全て `confirmed` でも `holdout_validation_status` を
+        `calibration_not_confirmed_on_holdout` に倒し、`holdout_validation_reasons`
+        に `holdout_pair_not_measurable(<pair_id>)` を列挙する（レビュー対応
+        2026-07-30 第 11 ラウンド・全対測定の要求）
     """
     if not reports:
         raise ValueError("evaluate_comparison: reports が空 (fail-closed)")
@@ -1541,13 +1640,24 @@ def evaluate_comparison(
             }
             if holdout_result["skipped_pairs"]:
                 verdict["holdout_skipped_pairs"] = holdout_result["skipped_pairs"]
-            if any(
+            not_comparable_pair_ids = holdout_result.get("not_comparable_pair_ids", [])
+            axis_failed = any(
                 verdict_value == "holdout_failed"
                 for verdict_value in verdict["holdout_validation"].values()
-            ):
+            )
+            if not_comparable_pair_ids or axis_failed:
+                # レビュー対応 2026-07-30（第 11 ラウンド）: holdout split に 1 件
+                # でも not_comparable pair があれば、軸別 verdict が全て
+                # confirmed でも holdout_validation_status を「未確認」に倒す
+                # (fail-closed — 測れなかった pair の存在を confirmed の側に
+                # 倒さない)。
                 verdict["holdout_validation_status"] = "calibration_not_confirmed_on_holdout"
             else:
                 verdict["holdout_validation_status"] = "confirmed"
+            if not_comparable_pair_ids:
+                verdict["holdout_validation_reasons"] = [
+                    f"holdout_pair_not_measurable({pid})" for pid in not_comparable_pair_ids
+                ]
 
     return verdict
 

@@ -153,6 +153,28 @@ def test_build_sequences_empty_and_single_note_degenerate():
 
 
 # --------------------------------------------------------------------------- #
+# 半音丸めの移調同変性（レビュー対応 2026-07-30 第 11 ラウンド）
+# --------------------------------------------------------------------------- #
+def test_pitch_quantization_translation_equivariant_at_half_semitone_boundary():
+    """`round()`（偶数丸め）は `60.5→60` / `61.5→62` のように .5 境界でタイブレーク
+    の向きが値の偶奇で変わるため、+1 移調しても量子化後の音程が同量シフトしない
+    反例が存在した——`floor(x + 0.5)` への変更後は、半音境界に乗るピッチ列
+    ``(60.5, 61.5)`` とその +1 移調 ``(61.5, 62.5)`` で `intervals_raw` が一致する
+    ことを確認する（移調同変性の回帰）。
+    """
+    config = _default_config()
+    base_notes = [_note(60.5, 0.0, 0.3), _note(61.5, 0.5, 0.8)]
+    shifted_notes = [_note(61.5, 0.0, 0.3), _note(62.5, 0.5, 0.8)]
+
+    base = build_sequences(base_notes, config)
+    shifted = build_sequences(shifted_notes, config)
+
+    assert base.pitch_semitones == (61, 62)
+    assert shifted.pitch_semitones == (62, 63)
+    assert base.intervals_raw == shifted.intervals_raw == (1,)
+
+
+# --------------------------------------------------------------------------- #
 # 移調 / 変速不変性
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("shift", [-5, -2, 2, 5])

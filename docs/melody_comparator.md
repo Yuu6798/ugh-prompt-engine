@@ -34,7 +34,7 @@ M1「聞こえるか」→ M2「聞き間違えていないか」→ **M3「同�
 
 | フィールド | 定義 | 不変性 |
 |---|---|---|
-| `pitch_semitones` | `round(pitch_midi)` | なし（移調で変わる） |
+| `pitch_semitones` | `floor(pitch_midi + 0.5)`（一側タイブレーク・移調同変。レビュー対応 2026-07-30 第 11 ラウンド: 偶数丸め `round()` はタイブレークが移調で不変でなかったため変更） | なし（移調で変わる） |
 | `intervals_raw` | 隣接ノートの半音差 | 移調不変 |
 | `intervals_folded` | `((d + 6) mod 12) - 6` | 移調不変・オクターブ折返し |
 | `contour` | raw 音程の粗ビン（`flat`/`up_small`/`up_large`/`down_small`/`down_large`、境界は `contour_small_max_semitones`） | 移調不変 |

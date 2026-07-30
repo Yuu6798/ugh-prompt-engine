@@ -380,6 +380,78 @@ def test_repeats_rejects_audio_content_pin_mismatch_same_path(
 
 
 # --------------------------------------------------------------------------- #
+# 生観測軌跡の content hash（レビュー対応 2026-07-30 第 11 ラウンド）
+# --------------------------------------------------------------------------- #
+def test_run_comparison_records_observation_sha256_for_each_side(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """`run_comparison` は各 pair の両側について `observation_sha256_a/b`
+    （正規化前の生観測軌跡の content hash）を記録し、repeats 間で bit 一致する。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    report2 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+
+    row1 = report1["pairs"]["p_pos_tuning"]
+    row2 = report2["pairs"]["p_pos_tuning"]
+    assert harness._is_sha256_hex(row1["observation_sha256_a"])
+    assert harness._is_sha256_hex(row1["observation_sha256_b"])
+    # song_a と song_a_transposed は notes が異なる(移調)ため両側の hash も異なる。
+    assert row1["observation_sha256_a"] != row1["observation_sha256_b"]
+    # 同一 manifest × 同一 route_runner の repeats は bit 一致する。
+    assert row1["observation_sha256_a"] == row2["observation_sha256_a"]
+    assert row1["observation_sha256_b"] == row2["observation_sha256_b"]
+
+    # holdout ロック pair には記録されない(音声未読・比較未実行)。
+    holdout_row = report1["pairs"]["p_pos_holdout"]
+    assert "observation_sha256_a" not in holdout_row
+    assert "observation_sha256_b" not in holdout_row
+
+
+def test_repeats_rejects_observation_sha256_pin_mismatch(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """pair 単位の `observation_sha256_a`（生観測軌跡の content hash）が repeats 間
+    で食い違えば、sequence_sha256/axes や audio_sha256 が一致していても
+    fail-closed で拒否する（レビュー対応 2026-07-30 第 11 ラウンド）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    report2 = copy.deepcopy(report1)
+    report2["pairs"]["p_pos_tuning"]["observation_sha256_a"] = "0" * 64
+
+    with pytest.raises(ValueError, match="observation_sha256_a"):
+        harness._check_repeats_consistency([report1, report2])
+
+    with pytest.raises(ValueError, match="observation_sha256_a"):
+        harness.evaluate_comparison([report1, report2])
+
+
+def test_repeats_rejects_observation_sha256_missing_in_one_repeat(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """`observation_sha256_b` が一方の repeat にだけ欠落していれば、値が
+    同一かどうかを問わず有無の不一致として fail-closed で拒否する。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    report2 = copy.deepcopy(report1)
+    del report2["pairs"]["p_pos_tuning"]["observation_sha256_b"]
+
+    with pytest.raises(ValueError, match="observation_sha256_b"):
+        harness._check_repeats_consistency([report1, report2])
+
+
+# --------------------------------------------------------------------------- #
 # マージン計算の手計算一致
 # --------------------------------------------------------------------------- #
 def _synthetic_pairs_for_margin() -> Dict[str, Dict[str, Any]]:
@@ -969,6 +1041,72 @@ def test_manifest_composition_rejects_tuning_missing_positive_transform():
 
 
 # --------------------------------------------------------------------------- #
+# 狙い撃ち negative の tuning split 必須化（レビュー対応 2026-07-30 第 11 ラウンド）
+# --------------------------------------------------------------------------- #
+def test_manifest_composition_rejects_targeted_negative_rhythm_only_in_holdout():
+    """`negative_rhythm`（狙い撃ち negative）が manifest 中に存在しても、tuning
+    split ではなく holdout split にしか無ければ fail-closed 拒否する——狙い撃ち
+    negative は各軸の弁別を tuning で単独検証する趣旨のため、holdout のみへの
+    配置では要件を満たさない（従来は split 不問だったため通っていたケース）。
+    """
+    pairs = [p for p in _composition_compliant_manifest_pairs() if p["kind"] != "negative_rhythm"]
+    pairs.append(
+        {
+            "pair_id": "h_neg_rhythm_only",
+            "kind": "negative_rhythm",
+            "split": "holdout",
+            "audio_a": "a",
+            "audio_b": "b",
+            "expected": "different",
+        }
+    )
+    manifest = {"schema": "m3-comparison-pairs/0.1", "pairs": pairs}
+    with pytest.raises(ValueError, match="tuning split に negative_rhythm"):
+        harness._validate_manifest(manifest)
+
+
+def test_manifest_composition_rejects_targeted_negative_interval_only_in_holdout():
+    """`negative_interval`（狙い撃ち negative）が holdout split にしか無ければ
+    fail-closed 拒否する（`negative_rhythm` と対称のケース）。
+    """
+    pairs = [
+        p for p in _composition_compliant_manifest_pairs() if p["kind"] != "negative_interval"
+    ]
+    pairs.append(
+        {
+            "pair_id": "h_neg_interval_only",
+            "kind": "negative_interval",
+            "split": "holdout",
+            "audio_a": "a",
+            "audio_b": "b",
+            "expected": "different",
+        }
+    )
+    manifest = {"schema": "m3-comparison-pairs/0.1", "pairs": pairs}
+    with pytest.raises(ValueError, match="tuning split に negative_interval"):
+        harness._validate_manifest(manifest)
+
+
+def test_manifest_composition_accepts_targeted_negative_in_both_tuning_and_holdout():
+    """狙い撃ち negative が tuning split の必須本数を満たした上で、holdout に
+    **追加で**同じ kind を置くのは妨げない（tuning 必須 + holdout 追加は許可）。
+    """
+    pairs = _composition_compliant_manifest_pairs() + [
+        {
+            "pair_id": "h_neg_rhythm_extra",
+            "kind": "negative_rhythm",
+            "split": "holdout",
+            "audio_a": "a",
+            "audio_b": "b",
+            "expected": "different",
+        },
+    ]
+    manifest = {"schema": "m3-comparison-pairs/0.1", "pairs": pairs}
+    validated = harness._validate_manifest(manifest)
+    assert len(validated) == 7
+
+
+# --------------------------------------------------------------------------- #
 # --out の protected-path（manifest が指す音声入力）
 # --------------------------------------------------------------------------- #
 def _manifest_composition_compliant_pairs(audio_a: Path, audio_b: Path) -> List[Dict[str, Any]]:
@@ -1547,6 +1685,75 @@ def test_evaluate_holdout_validation_marks_axis_failed_when_positive_below_stron
     assert contour_entry["holdout_positive_min"] == pytest.approx(0.5)
     assert contour_entry["frozen_strong_min"] == pytest.approx(0.8)
     assert any("frozen_strong_min" in violation for violation in contour_entry["violations"])
+
+
+def test_evaluate_holdout_validation_not_confirmed_when_holdout_pair_not_comparable(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """holdout split に 1 件でも `not_comparable` pair があれば、他の軸別 verdict
+    が全て `confirmed` でも `holdout_validation_status` は
+    `calibration_not_confirmed_on_holdout` に倒れ、`holdout_validation_reasons`
+    に `holdout_pair_not_measurable(<pair_id>)` が記録される（レビュー対応
+    2026-07-30 第 11 ラウンド・holdout 全対測定の要求）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    pairs = _default_pairs(audio_paths) + [
+        {
+            "pair_id": "p_extra_holdout_nc",
+            "kind": "negative_cross",
+            "split": "holdout",
+            "audio_a": audio_paths["song_a"],
+            "audio_b": audio_paths["song_b"],
+            "expected": "different",
+        },
+    ]
+    _write_manifest(manifest_path, pairs)
+    frozen_registry = tmp_path / "frozen_registry.yaml"
+    frozen_registry.write_text(_fully_frozen_registry_text(), encoding="utf-8")
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    reports = []
+    for _ in range(2):
+        report = harness.run_comparison(
+            manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
+        )
+        report["route_runner_injected"] = False
+        report["pairs"]["p_pos_holdout"]["comparison"]["evidence"] = "strong"
+        report["pairs"]["p_pos_holdout"]["comparison"]["axes"] = {
+            "contour": 0.95,
+            "interval": 1.0,
+            "rhythm": 0.9,
+        }
+        report["pairs"]["p_neg_holdout"]["comparison"]["evidence"] = "none"
+        report["pairs"]["p_neg_holdout"]["comparison"]["axes"] = {
+            "contour": 0.1,
+            "interval": 0.05,
+            "rhythm": 0.2,
+        }
+        reports.append(report)
+
+    # p_extra_holdout_nc（song_a×song_b）は観測ゲート不通過で not_comparable に
+    # なる既存挙動（`test_run_then_evaluate_mechanism` の p_neg_tuning と同型）
+    # ——本テストはこの not_comparable pair の存在が holdout_validation_status を
+    # 倒すことが対象であって、not_comparable になる過程自体は対象外。
+    assert reports[0]["pairs"]["p_extra_holdout_nc"]["comparison"]["evidence"] == "not_comparable"
+
+    verdict = harness.evaluate_comparison(reports, registry_path=frozen_registry)
+
+    # 軸別 verdict は全て confirmed（p_pos_holdout/p_neg_holdout の上書き値のみで
+    # 判定される——not_comparable pair は axis 集計から素通りに除外されるだけ）。
+    assert verdict["holdout_validation"] == {
+        "contour": "confirmed",
+        "interval": "confirmed",
+        "rhythm": "confirmed",
+    }
+    # しかし not_comparable pair が 1 件存在する事実が、軸別 verdict に関わらず
+    # 全体 status を「未確認」に倒す。
+    assert verdict["holdout_validation_status"] == "calibration_not_confirmed_on_holdout"
+    assert verdict["holdout_validation_reasons"] == [
+        "holdout_pair_not_measurable(p_extra_holdout_nc)"
+    ]
+    assert "p_extra_holdout_nc:not_comparable" in verdict["holdout_skipped_pairs"]
 
 
 def test_evaluate_holdout_validation_absent_while_holdout_locked(
