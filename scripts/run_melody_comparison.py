@@ -71,6 +71,7 @@ from svp_rpe.melody.observability import (  # noqa: E402
 )
 from svp_rpe.melody.representation import load_m3_registry  # noqa: E402
 from svp_rpe.melody.routing import select_routes  # noqa: E402
+from svp_rpe.utils.hashing import file_sha256  # noqa: E402
 
 M3_REGISTRY_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m3_comparison_registry.yaml"
 M1_REGISTRY_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "registry.yaml"
@@ -257,17 +258,30 @@ def _validate_frozen_axes(axes: Dict[str, Any]) -> bool:
     `_build_section` は `evidence_thresholds` の型注釈（`Optional[Dict[str,
     Dict[str, float]]]`）を実行時には検証しない——dataclass の known/required
     キー集合しか見ないため、`axes` の中身自体（各軸の mapping 構造・値の型・
-    値域・大小関係）は無検査で通ってしまう。3 軸（contour/interval/rhythm）
-    それぞれについて以下を要求し、1 つでも欠けたら False を返す（holdout は
-    ロックのまま——run/evaluate どちらの呼び出し元も fail はせず既存の locked
-    記録経路に乗る）:
+    値域・大小関係）は無検査で通ってしまう。
 
-    (a) 軸の値が mapping であり `strong_min`/`none_max` キーを持つ
-    (b) 両値が数値（bool は除外）かつ 0.0〜1.0 の範囲内
-    (c) `strong_min >= none_max`
+    レビュー対応 2026-07-30（第 4 ラウンド）: 第 3 ラウンドは「3 軸
+    （contour/interval/rhythm）全てが揃わないと holdout を開かない」まで要求
+    していたが、これは過剰だった——`compare_melodies` 側の `_derive_evidence`
+    （`src/svp_rpe/melody/comparison.py`）はもともと軸別 threshold の欠落を
+    許容し、閾値が無い軸は `axis_thresholds_missing:<axis>` という reason を
+    積んで `axis_evidence` から単に除外するだけで fail はしない設計だった。
+    M3d の校正は軸ごとに独立に進むため、1 軸だけ先にマージンが確保できても
+    holdout を開けない設計は実測の足を引っ張る。以下へ緩和する:
+
+    (a) `axes` が非空 mapping であること
+    (b) 軸名は {contour, interval, rhythm} の**部分集合**であること（未知軸名は
+        fail-closed で拒否——タイプミスや registry の書式崩れを見逃さない）
+    (c) **存在する各軸**について以下が整形済みであること:
+        - 値が mapping であり `strong_min`/`none_max` キーを持つ
+        - 両値が数値（bool は除外）かつ 0.0〜1.0 の範囲内
+        - `strong_min >= none_max`
     """
-    for axis in _AXES:
-        axis_mapping = axes.get(axis)
+    if not isinstance(axes, dict) or not axes:
+        return False
+    if not set(axes).issubset(_AXES):
+        return False
+    for axis_mapping in axes.values():
         if not isinstance(axis_mapping, dict):
             return False
         if "strong_min" not in axis_mapping or "none_max" not in axis_mapping:
@@ -293,9 +307,10 @@ def _holdout_unlocked(config: Any) -> bool:
     ロックのまま）:
 
     (a) `evidence_thresholds.status == "frozen"`
-    (b) `evidence_thresholds.axes` に contour/interval/rhythm の閾値が揃っており、
-        かつ各軸の内容が有効（`_validate_frozen_axes`。レビュー対応 2026-07-30
-        第 3 ラウンド: キーが揃っているだけの「内容が壊れた」凍結軸を弾く）
+    (b) `evidence_thresholds.axes` が非空で、かつ**存在する各軸**の内容が有効
+        （`_validate_frozen_axes`。レビュー対応 2026-07-30 第 3 ラウンド: キーが
+        揃っているだけの「内容が壊れた」凍結軸を弾く。第 4 ラウンド: 3 軸全てが
+        揃っている必要はなくなった——1 軸以上の整形済み凍結軸があれば足りる）
     (c) `coverage.floor_status == "frozen"`
 
     `M3ComparisonConfig`（`load_m3_registry` の戻り値）だけで判定に必要な値は
@@ -304,10 +319,7 @@ def _holdout_unlocked(config: Any) -> bool:
     thresholds = config.evidence_thresholds
     if thresholds.status != "frozen":
         return False
-    axes = thresholds.axes
-    if not axes or not set(_AXES).issubset(axes):
-        return False
-    if not _validate_frozen_axes(axes):
+    if not _validate_frozen_axes(thresholds.axes or {}):
         return False
     if config.coverage.floor_status != "frozen":
         return False
@@ -428,6 +440,12 @@ def run_comparison(
                 "status": "holdout_locked_until_frozen",
             }
             continue
+        # content pin（レビュー対応 2026-07-30 第 4 ラウンド）: 実際に読む音声
+        # bytes を runner 呼び出し前に sha256 で pin する。holdout ロック pair
+        # は上の continue で既に弾かれているため、ここに到達する pair は必ず
+        # 音声を読む（開封回避の設計は崩さない）。
+        audio_sha256_a = file_sha256(pair["audio_a"])
+        audio_sha256_b = file_sha256(pair["audio_b"])
         obs_a, prov_a = runner(pair["audio_a"])
         obs_b, prov_b = runner(pair["audio_b"])
         comparison = compare_melodies(
@@ -446,6 +464,8 @@ def run_comparison(
             "expected": pair["expected"],
             "audio_a": pair["audio_a"],
             "audio_b": pair["audio_b"],
+            "audio_sha256_a": audio_sha256_a,
+            "audio_sha256_b": audio_sha256_b,
             "comparison": comparison.to_dict(),
         }
         if prov_a:
@@ -462,7 +482,15 @@ def run_comparison(
 # evaluate phase
 # --------------------------------------------------------------------------- #
 _REPORT_LEVEL_REPEAT_PINS: Tuple[str, ...] = ("manifest_sha256", "route")
-_PAIR_LEVEL_PROVENANCE_PINS: Tuple[str, ...] = ("route_provenance_a", "route_provenance_b")
+_PAIR_LEVEL_PROVENANCE_PINS: Tuple[str, ...] = (
+    "route_provenance_a",
+    "route_provenance_b",
+    # レビュー対応 2026-07-30（第 4 ラウンド）: 音声バイトの content pin。
+    # 名前は "PROVENANCE" のままだが実体は「pair 単位で repeats 間一致を
+    # 要求する pin 群」——route 由来 provenance と同じ汎用ループで検査できる。
+    "audio_sha256_a",
+    "audio_sha256_b",
+)
 
 
 def _check_repeats_consistency(reports: List[Dict[str, Any]]) -> None:
@@ -472,8 +500,11 @@ def _check_repeats_consistency(reports: List[Dict[str, Any]]) -> None:
     と `axes` を repeats 間で突き合わせるだけでは、repeats が本当に「同一 manifest ×
     同一 route」に対する実行であることまでは保証できない（レビュー対応 2026-07-30）。
     report 自身が記録している repeat 定義的 pin（`manifest_sha256` / `route` / pair
-    単位の `route_provenance_a/b`）も突き合わせ、1 箇所でも食い違えば fail-closed で
-    拒否する。
+    単位の `route_provenance_a/b` / `audio_sha256_a/b`）も突き合わせ、1 箇所でも
+    食い違えば fail-closed で拒否する。`audio_sha256_a/b`（レビュー対応 2026-07-30
+    第 4 ラウンド）は holdout ロック pair では記録されない（`comparison` 自体が無い）
+    ため、`ref_has_comparison` が False の pair は既存どおりこのループより前で
+    スキップされる——開封回避の設計は崩さない。
     """
     if len(reports) < 2:
         return
@@ -626,6 +657,35 @@ def _validate_route_runner_injected_field(reports: List[Dict[str, Any]]) -> None
             )
 
 
+def _validate_run_ids_distinct(reports: List[Dict[str, Any]]) -> None:
+    """全 report の `run_id` が存在・非空・相互に distinct であることを要求する。
+
+    レビュー対応 2026-07-30（第 4 ラウンド）: repeats（n>=2）は「別々の実行」で
+    あることが前提——同一 report を誤って 2 度 `--evaluate` に渡す（同一 run の
+    二重指定）と、`_check_repeats_consistency` の bit 一致検査は当然 pass して
+    しまい、決定論の実測確立を偽装できてしまう。`run_id`（run phase で
+    `uuid.uuid4().hex` として記録）の相互 distinct 性を、他の構造検査
+    （registry pin / repeats consistency）が通った後に別途要求する（fail-closed）。
+    欠落・空・非文字列も同様に拒否する。
+    """
+    seen: Dict[str, int] = {}
+    for idx, report in enumerate(reports):
+        run_id = report.get("run_id")
+        if not run_id or not isinstance(run_id, str):
+            raise ValueError(
+                f"evaluate_comparison: reports[{idx}] の run_id が欠落または空/非文字列 "
+                f"(run_id={run_id!r}); repeats は run_id を持つ report でなければならない "
+                "(fail-closed)"
+            )
+        if run_id in seen:
+            raise ValueError(
+                f"evaluate_comparison: reports[{idx}] の run_id={run_id!r} が "
+                f"reports[{seen[run_id]}] と重複している; 同一 run の二重指定は repeats "
+                "として扱えない (fail-closed)"
+            )
+        seen[run_id] = idx
+
+
 def _holdout_pair_ids(pairs: Dict[str, Dict[str, Any]]) -> List[str]:
     return sorted(pair_id for pair_id, pair in pairs.items() if pair["split"] == "holdout")
 
@@ -721,14 +781,16 @@ def evaluate_comparison(
 
     処理順（M3 実装 memo「## M3d」節）:
     1. registry sha256 pin の整合検証（report 間 + 現在ロードした registry）
-    2. repeats（sequence hash / axes）の bit 一致検証
-    3. route_runner_injected な report があれば calibration verdict 発行を拒否
-    4. repeats が n>=2 でなければ calibration verdict 発行を拒否（n=1 は「決定論
+    2. repeats（sequence hash / axes / audio_sha256 含む pair 単位 pin）の bit 一致検証
+    3. 全 report の `run_id` が存在・非空・相互に distinct であることの検証
+       （レビュー対応 2026-07-30 第 4 ラウンド: 同一 run の二重指定を検出する）
+    4. route_runner_injected な report があれば calibration verdict 発行を拒否
+    5. repeats が n>=2 でなければ calibration verdict 発行を拒否（n=1 は「決定論
        repeats 未検証」であり校正証拠にしない）
-    5. tuning split のみで軸別マージン表を算出（`separation_margin` 閾値）
-    6. holdout は `_holdout_unlocked` の全条件（status=frozen + axes 揃い +
-       coverage.floor_status=frozen）を満たすまで開かない
-    7. tuning positive pair の被覆分布から coverage floor 候補を emit
+    6. tuning split のみで軸別マージン表を算出（`separation_margin` 閾値）
+    7. holdout は `_holdout_unlocked` の全条件（status=frozen + 1 軸以上の整形済み
+       凍結軸 + coverage.floor_status=frozen）を満たすまで開かない
+    8. tuning positive pair の被覆分布から coverage floor 候補を emit
     """
     if not reports:
         raise ValueError("evaluate_comparison: reports が空 (fail-closed)")
@@ -750,6 +812,7 @@ def evaluate_comparison(
     )
 
     _check_repeats_consistency(reports)
+    _validate_run_ids_distinct(reports)
 
     reference_pairs = reports[0]["pairs"]
 

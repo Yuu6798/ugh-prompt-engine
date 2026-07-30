@@ -64,12 +64,36 @@ def _different_notes() -> List[MelodyNote]:
     return notes
 
 
-def _notes_by_path() -> Dict[str, List[MelodyNote]]:
+def _notes_by_path(audio_paths: Dict[str, str]) -> Dict[str, List[MelodyNote]]:
     return {
-        "song_a": _good_notes(),
-        "song_a_transposed": _good_notes(shift=3),
-        "song_b": _different_notes(),
+        audio_paths["song_a"]: _good_notes(),
+        audio_paths["song_a_transposed"]: _good_notes(shift=3),
+        audio_paths["song_b"]: _different_notes(),
     }
+
+
+def _write_audio_fixture_files(tmp_path: Path) -> Dict[str, str]:
+    """`song_a`/`song_a_transposed`/`song_b` に対応する実ファイルを書き出す。
+
+    レビュー対応 2026-07-30（第 4 ラウンド）: `file_sha256`（音声バイトの content
+    pin）は実在ファイルの bytes を読むため、manifest の `audio_a`/`audio_b` は
+    もう「fake route_runner に渡す識別子文字列」だけでは済まない——実パスで
+    なければならない。3 素材それぞれ別内容の bytes を書き、str パスの辞書を返す。
+    """
+    paths = {
+        "song_a": tmp_path / "song_a.audio",
+        "song_a_transposed": tmp_path / "song_a_transposed.audio",
+        "song_b": tmp_path / "song_b.audio",
+    }
+    for label, path in paths.items():
+        path.write_bytes(f"fake-audio-bytes:{label}".encode("utf-8"))
+    return {label: str(path) for label, path in paths.items()}
+
+
+@pytest.fixture()
+def audio_paths(tmp_path: Path) -> Dict[str, str]:
+    """`_write_audio_fixture_files` を pytest fixture 化したもの（テスト間で使い回す）。"""
+    return _write_audio_fixture_files(tmp_path)
 
 
 def _fake_route_runner(notes_by_path: Dict[str, List[MelodyNote]]) -> "harness.RouteRunner":
@@ -122,30 +146,30 @@ def _fully_frozen_registry_text() -> str:
     return yaml.safe_dump(mapping, sort_keys=False)
 
 
-def _default_pairs() -> List[Dict[str, Any]]:
+def _default_pairs(audio_paths: Dict[str, str]) -> List[Dict[str, Any]]:
     return [
         {
             "pair_id": "p_pos_tuning",
             "kind": "positive_transform",
             "split": "tuning",
-            "audio_a": "song_a",
-            "audio_b": "song_a_transposed",
+            "audio_a": audio_paths["song_a"],
+            "audio_b": audio_paths["song_a_transposed"],
             "expected": "same",
         },
         {
             "pair_id": "p_neg_tuning",
             "kind": "negative_cross",
             "split": "tuning",
-            "audio_a": "song_a",
-            "audio_b": "song_b",
+            "audio_a": audio_paths["song_a"],
+            "audio_b": audio_paths["song_b"],
             "expected": "different",
         },
         {
             "pair_id": "p_pos_holdout",
             "kind": "positive_transform",
             "split": "holdout",
-            "audio_a": "song_a",
-            "audio_b": "song_a_transposed",
+            "audio_a": audio_paths["song_a"],
+            "audio_b": audio_paths["song_a_transposed"],
             "expected": "same",
         },
     ]
@@ -154,10 +178,10 @@ def _default_pairs() -> List[Dict[str, Any]]:
 # --------------------------------------------------------------------------- #
 # run → evaluate の機構
 # --------------------------------------------------------------------------- #
-def test_run_then_evaluate_mechanism(tmp_path: Path):
+def test_run_then_evaluate_mechanism(tmp_path: Path, audio_paths: Dict[str, str]):
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
-    runner = _fake_route_runner(_notes_by_path())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
 
     report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
 
@@ -180,10 +204,10 @@ def test_run_then_evaluate_mechanism(tmp_path: Path):
 # --------------------------------------------------------------------------- #
 # sequence hash pin（軌跡レベル決定論）
 # --------------------------------------------------------------------------- #
-def test_repeats_hash_pin_bit_identical(tmp_path: Path):
+def test_repeats_hash_pin_bit_identical(tmp_path: Path, audio_paths: Dict[str, str]):
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
-    runner = _fake_route_runner(_notes_by_path())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
 
     report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
     report2 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
@@ -196,10 +220,10 @@ def test_repeats_hash_pin_bit_identical(tmp_path: Path):
     assert verdict["repeats_consistent"] is True
 
 
-def test_repeats_hash_pin_rejects_tampered_report(tmp_path: Path):
+def test_repeats_hash_pin_rejects_tampered_report(tmp_path: Path, audio_paths: Dict[str, str]):
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
-    runner = _fake_route_runner(_notes_by_path())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
 
     report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
     report2 = copy.deepcopy(report1)
@@ -210,13 +234,13 @@ def test_repeats_hash_pin_rejects_tampered_report(tmp_path: Path):
         harness.evaluate_comparison([report1, report2])
 
 
-def test_repeats_rejects_manifest_sha256_pin_mismatch(tmp_path: Path):
+def test_repeats_rejects_manifest_sha256_pin_mismatch(tmp_path: Path, audio_paths: Dict[str, str]):
     """repeats 間で `manifest_sha256`（report 全体の repeat 定義的 pin）が食い違えば
     たとえ pair 集合/axes が一致していても fail-closed で拒否する(レビュー対応 2026-07-30)。
     """
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
-    runner = _fake_route_runner(_notes_by_path())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
 
     report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
     report2 = copy.deepcopy(report1)
@@ -226,11 +250,11 @@ def test_repeats_rejects_manifest_sha256_pin_mismatch(tmp_path: Path):
         harness._check_repeats_consistency([report1, report2])
 
 
-def test_repeats_rejects_route_pin_mismatch(tmp_path: Path):
+def test_repeats_rejects_route_pin_mismatch(tmp_path: Path, audio_paths: Dict[str, str]):
     """repeats 間で report 全体の `route` pin が食い違えば拒否する。"""
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
-    runner = _fake_route_runner(_notes_by_path())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
 
     report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
     report2 = copy.deepcopy(report1)
@@ -240,13 +264,13 @@ def test_repeats_rejects_route_pin_mismatch(tmp_path: Path):
         harness._check_repeats_consistency([report1, report2])
 
 
-def test_repeats_rejects_route_provenance_pin_mismatch(tmp_path: Path):
+def test_repeats_rejects_route_provenance_pin_mismatch(tmp_path: Path, audio_paths: Dict[str, str]):
     """pair 単位の `route_provenance_a/b`(route 由来の provenance pin)が repeats 間で
     食い違えば、sequence_sha256/axes が一致していても拒否する。
     """
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
-    runner = _fake_route_runner(_notes_by_path())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
 
     report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
     report2 = copy.deepcopy(report1)
@@ -255,6 +279,34 @@ def test_repeats_rejects_route_provenance_pin_mismatch(tmp_path: Path):
 
     with pytest.raises(ValueError, match="route_provenance_a"):
         harness._check_repeats_consistency([report1, report2])
+
+
+def test_repeats_rejects_audio_content_pin_mismatch_same_path(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """`audio_a`/`audio_b` のパス自体は repeats 間で同一でも、そのファイルの中身
+    （bytes）が差し替わっていれば `audio_sha256_a`（音声バイトの content pin・
+    レビュー対応 2026-07-30 第 4 ラウンド）が食い違い fail-closed で拒否する。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    assert "audio_sha256_a" in report1["pairs"]["p_pos_tuning"]
+
+    # 同じパスのまま bytes だけ差し替える(サイズも変えてキャッシュ key の衝突を回避)。
+    song_a_path = Path(audio_paths["song_a"])
+    song_a_path.write_bytes(b"tampered-audio-bytes-of-a-very-different-length-than-original")
+
+    report2 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+
+    assert (
+        report1["pairs"]["p_pos_tuning"]["audio_sha256_a"]
+        != report2["pairs"]["p_pos_tuning"]["audio_sha256_a"]
+    )
+    with pytest.raises(ValueError, match="audio_sha256_a"):
+        harness.evaluate_comparison([report1, report2])
 
 
 # --------------------------------------------------------------------------- #
@@ -335,10 +387,10 @@ def test_margin_table_below_threshold_is_not_calibrated():
 # --------------------------------------------------------------------------- #
 # holdout ロック
 # --------------------------------------------------------------------------- #
-def test_holdout_locked_until_frozen(tmp_path: Path):
+def test_holdout_locked_until_frozen(tmp_path: Path, audio_paths: Dict[str, str]):
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
-    runner = _fake_route_runner(_notes_by_path())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
     report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
 
     # route_runner_injected だと calibration verdict 自体を発行しないため、holdout
@@ -354,7 +406,7 @@ def test_holdout_locked_until_frozen(tmp_path: Path):
     assert "p_pos_holdout" not in str(margin)  # tuning フィルタで holdout 行が混入していない
 
 
-def test_evaluate_comparison_records_holdout_lock_when_not_route_runner_injected(tmp_path: Path):
+def test_evaluate_comparison_records_holdout_lock_when_not_route_runner_injected(tmp_path: Path, audio_paths: Dict[str, str]):
     """calibration verdict が発行されるケース(route_runner 非注入相当・repeats n=2)での
     holdout ロック記録。
 
@@ -364,8 +416,8 @@ def test_evaluate_comparison_records_holdout_lock_when_not_route_runner_injected
     ロックの記録を確認する。
     """
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
-    runner = _fake_route_runner(_notes_by_path())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
     reports_for_verdict = []
     for _ in range(2):
         report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
@@ -382,11 +434,11 @@ def test_evaluate_comparison_records_holdout_lock_when_not_route_runner_injected
     assert "coverage_floor_candidate" in verdict
 
 
-def test_evaluate_rejects_single_report_for_calibration_verdict(tmp_path: Path):
+def test_evaluate_rejects_single_report_for_calibration_verdict(tmp_path: Path, audio_paths: Dict[str, str]):
     """repeats n>=2 の事前登録要求（設計 §6.2）: n=1 は校正証拠として発行しない。"""
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
-    runner = _fake_route_runner(_notes_by_path())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
     report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
     report["route_runner_injected"] = False  # 「実測」相当だが repeats が 1 本しかない。
 
@@ -405,10 +457,10 @@ def test_evaluate_rejects_single_report_for_calibration_verdict(tmp_path: Path):
 # --------------------------------------------------------------------------- #
 # route_runner_injected による calibration verdict 発行拒否
 # --------------------------------------------------------------------------- #
-def test_route_runner_injected_rejects_calibration_verdict(tmp_path: Path):
+def test_route_runner_injected_rejects_calibration_verdict(tmp_path: Path, audio_paths: Dict[str, str]):
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
-    runner = _fake_route_runner(_notes_by_path())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
     report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
 
     assert report["route_runner_injected"] is True
@@ -418,14 +470,14 @@ def test_route_runner_injected_rejects_calibration_verdict(tmp_path: Path):
     assert "freeze_proposal" not in verdict
 
 
-def test_evaluate_rejects_missing_route_runner_injected_field(tmp_path: Path):
+def test_evaluate_rejects_missing_route_runner_injected_field(tmp_path: Path, audio_paths: Dict[str, str]):
     """`route_runner_injected` キー自体が欠落した report は理由つきで拒否する
     (レビュー対応 2026-07-30 第 3 ラウンド: 欠落を `bool(None)` で False 扱いに
     フォールバックさせない)。
     """
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
-    runner = _fake_route_runner(_notes_by_path())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
     report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
     del report["route_runner_injected"]
 
@@ -433,11 +485,11 @@ def test_evaluate_rejects_missing_route_runner_injected_field(tmp_path: Path):
         harness.evaluate_comparison([report])
 
 
-def test_evaluate_rejects_non_bool_route_runner_injected_field(tmp_path: Path):
+def test_evaluate_rejects_non_bool_route_runner_injected_field(tmp_path: Path, audio_paths: Dict[str, str]):
     """`route_runner_injected` が bool でない(文字列/整数)場合は拒否する。"""
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
-    runner = _fake_route_runner(_notes_by_path())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
 
     report_str = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
     report_str["route_runner_injected"] = "true"
@@ -453,9 +505,9 @@ def test_evaluate_rejects_non_bool_route_runner_injected_field(tmp_path: Path):
 # --------------------------------------------------------------------------- #
 # --out の protected-path
 # --------------------------------------------------------------------------- #
-def test_out_cannot_overwrite_pairs_manifest(tmp_path: Path, monkeypatch, capsys):
+def test_out_cannot_overwrite_pairs_manifest(tmp_path: Path, monkeypatch, capsys, audio_paths: Dict[str, str]):
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
 
     argv = [
         "run_melody_comparison.py",
@@ -469,9 +521,9 @@ def test_out_cannot_overwrite_pairs_manifest(tmp_path: Path, monkeypatch, capsys
         harness.main()
 
 
-def test_out_cannot_overwrite_registry(tmp_path: Path, monkeypatch):
+def test_out_cannot_overwrite_registry(tmp_path: Path, monkeypatch, audio_paths: Dict[str, str]):
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
 
     argv = [
         "run_melody_comparison.py",
@@ -485,10 +537,10 @@ def test_out_cannot_overwrite_registry(tmp_path: Path, monkeypatch):
         harness.main()
 
 
-def test_out_cannot_overwrite_evaluate_input(tmp_path: Path, monkeypatch):
+def test_out_cannot_overwrite_evaluate_input(tmp_path: Path, monkeypatch, audio_paths: Dict[str, str]):
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
-    runner = _fake_route_runner(_notes_by_path())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
     report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
     report_path = tmp_path / "report.json"
     report_path.write_text(json.dumps(report), encoding="utf-8")
@@ -508,22 +560,22 @@ def test_out_cannot_overwrite_evaluate_input(tmp_path: Path, monkeypatch):
 # --------------------------------------------------------------------------- #
 # manifest 検証（fail-closed）
 # --------------------------------------------------------------------------- #
-def test_manifest_rejects_unknown_schema(tmp_path: Path):
+def test_manifest_rejects_unknown_schema(tmp_path: Path, audio_paths: Dict[str, str]):
     manifest_path = tmp_path / "pairs.yaml"
     manifest_path.write_text(
-        yaml.safe_dump({"schema": "bogus/9.9", "pairs": _default_pairs()}), encoding="utf-8"
+        yaml.safe_dump({"schema": "bogus/9.9", "pairs": _default_pairs(audio_paths)}), encoding="utf-8"
     )
-    runner = _fake_route_runner(_notes_by_path())
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
     with pytest.raises(ValueError, match="unsupported pairs manifest schema"):
         harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
 
 
-def test_manifest_rejects_duplicate_pair_id(tmp_path: Path):
-    pairs = _default_pairs()
+def test_manifest_rejects_duplicate_pair_id(tmp_path: Path, audio_paths: Dict[str, str]):
+    pairs = _default_pairs(audio_paths)
     pairs.append(dict(pairs[0]))
     manifest_path = tmp_path / "pairs.yaml"
     _write_manifest(manifest_path, pairs)
-    runner = _fake_route_runner(_notes_by_path())
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
     with pytest.raises(ValueError, match="duplicate pair_id"):
         harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
 
@@ -654,13 +706,13 @@ def test_out_cannot_overwrite_manifest_audio_b_input(tmp_path: Path, monkeypatch
 # --------------------------------------------------------------------------- #
 # holdout を run 時点で開かない
 # --------------------------------------------------------------------------- #
-def test_holdout_pair_not_opened_at_run_time_when_uncalibrated(tmp_path: Path):
+def test_holdout_pair_not_opened_at_run_time_when_uncalibrated(tmp_path: Path, audio_paths: Dict[str, str]):
     """既定 fixture registry(status=uncalibrated)では holdout pair の音声を run
     phase で一切読まず、report にも axes/hash を書かない。
     """
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
-    base_runner = _fake_route_runner(_notes_by_path())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    base_runner = _fake_route_runner(_notes_by_path(audio_paths))
     calls: List[str] = []
 
     def _tracking_runner(audio_path: str):
@@ -673,7 +725,12 @@ def test_holdout_pair_not_opened_at_run_time_when_uncalibrated(tmp_path: Path):
     report = harness.run_comparison(manifest_path=manifest_path, route_runner=_tracking_runner)
 
     # holdout pair (p_pos_holdout) の音声は一度も runner に渡されていない。
-    assert calls == ["song_a", "song_a_transposed", "song_a", "song_b"]
+    assert calls == [
+        audio_paths["song_a"],
+        audio_paths["song_a_transposed"],
+        audio_paths["song_a"],
+        audio_paths["song_b"],
+    ]
 
     holdout_row = report["pairs"]["p_pos_holdout"]
     assert holdout_row == {"split": "holdout", "status": "holdout_locked_until_frozen"}
@@ -685,15 +742,15 @@ def test_holdout_pair_not_opened_at_run_time_when_uncalibrated(tmp_path: Path):
     assert "comparison" in report["pairs"]["p_pos_tuning"]
 
 
-def test_holdout_pair_compared_when_registry_frozen(tmp_path: Path):
+def test_holdout_pair_compared_when_registry_frozen(tmp_path: Path, audio_paths: Dict[str, str]):
     """holdout unlock の全条件(status=frozen + axes 揃い + coverage.floor_status=frozen)
     を満たした registry なら holdout pair も通常通り比較される。
     """
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
     frozen_registry = tmp_path / "frozen_registry.yaml"
     frozen_registry.write_text(_fully_frozen_registry_text(), encoding="utf-8")
-    runner = _fake_route_runner(_notes_by_path())
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
 
     report = harness.run_comparison(
         manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
@@ -705,17 +762,17 @@ def test_holdout_pair_compared_when_registry_frozen(tmp_path: Path):
     assert holdout_row["comparison"]["axes"]["interval"] == pytest.approx(1.0)
 
 
-def test_holdout_pair_not_opened_when_partially_frozen(tmp_path: Path):
+def test_holdout_pair_not_opened_when_partially_frozen(tmp_path: Path, audio_paths: Dict[str, str]):
     """`evidence_thresholds.status == "frozen"` だけでは holdout は開かない —
     axes が未凍結（`_holdout_unlocked` の cross-field 不変条件 (b)）または
     `coverage.floor_status` が provisional のまま（同条件 (c)）の「部分凍結」状態は
     ロック継続が正しい。
     """
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
     partial_registry = tmp_path / "partial_registry.yaml"
     partial_registry.write_text(_partially_frozen_registry_text(), encoding="utf-8")
-    runner = _fake_route_runner(_notes_by_path())
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
 
     config, _ = harness.load_m3_registry(partial_registry)
     assert config.evidence_thresholds.status == "frozen"
@@ -858,13 +915,88 @@ def test_holdout_unlocked_rejects_non_numeric_axis_values():
     assert harness._holdout_unlocked(config_str) is False
 
 
-def test_check_repeats_consistency_rejects_mixed_holdout_lock_state(tmp_path: Path):
+# --------------------------------------------------------------------------- #
+# 凍結 axes の部分成立（レビュー対応 2026-07-30 第 4 ラウンド: 3 軸全て必須の緩和）
+# --------------------------------------------------------------------------- #
+def test_validate_frozen_axes_rejects_empty_axes_mapping():
+    """`axes` 自体が空 mapping（`{}`）なら fail-closed で拒否する（軸が 1 つも無い）。"""
+    assert harness._validate_frozen_axes({}) is False
+
+
+def test_validate_frozen_axes_rejects_unknown_axis_name():
+    """軸名が {contour, interval, rhythm} の部分集合でなければ fail-closed で拒否する
+    (タイプミス・registry の書式崩れを見逃さない)。
+    """
+    axes = {
+        "contour": {"strong_min": 0.8, "none_max": 0.2},
+        "timbre": {"strong_min": 0.8, "none_max": 0.2},  # 未知軸名
+    }
+    assert harness._validate_frozen_axes(axes) is False
+
+
+def test_validate_frozen_axes_accepts_partial_two_axes():
+    """3 軸全てではなく 2 軸（contour/interval）のみでも、整形済みなら有効と判定する。"""
+    axes = {
+        "contour": {"strong_min": 0.8, "none_max": 0.2},
+        "interval": {"strong_min": 0.8, "none_max": 0.2},
+    }
+    assert harness._validate_frozen_axes(axes) is True
+
+
+def _partially_two_axes_frozen_registry_text() -> str:
+    """axes が contour/interval の 2 軸のみ凍結（rhythm は未凍結のまま欠落)。
+    coverage.floor_status も frozen —— 3 軸全てが揃わなくても holdout が開く
+    ケース(レビュー対応 2026-07-30 第 4 ラウンド)。
+    """
+    mapping = _registry_mapping()
+    mapping["evidence_thresholds"] = {
+        "status": "frozen",
+        "axes": {
+            "contour": {"strong_min": 0.8, "none_max": 0.2},
+            "interval": {"strong_min": 0.8, "none_max": 0.2},
+        },
+    }
+    mapping["coverage"] = dict(mapping["coverage"])
+    mapping["coverage"]["floor_status"] = "frozen"
+    return yaml.safe_dump(mapping, sort_keys=False)
+
+
+def test_holdout_opens_with_only_two_axes_frozen(tmp_path: Path, audio_paths: Dict[str, str]):
+    """レビュー対応 2026-07-30 第 4 ラウンド: 3 軸全てが揃わなくても、1 軸以上の
+    整形済み凍結軸 + coverage.floor_status=frozen + evidence_thresholds.status=frozen
+    が揃えば holdout が開く。M3c 側の `_derive_evidence`（src/ 不変）は未凍結の
+    rhythm 軸を `axis_evidence` から除外するだけで fail はしない既存挙動のまま
+    であることも併せて確認する。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    two_axes_registry = tmp_path / "two_axes_registry.yaml"
+    two_axes_registry.write_text(_partially_two_axes_frozen_registry_text(), encoding="utf-8")
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    config, _ = harness.load_m3_registry(two_axes_registry)
+    assert set(config.evidence_thresholds.axes) == {"contour", "interval"}
+    assert harness._holdout_unlocked(config) is True
+
+    report = harness.run_comparison(
+        manifest_path=manifest_path, route_runner=runner, registry_path=two_axes_registry
+    )
+
+    holdout_row = report["pairs"]["p_pos_holdout"]
+    assert holdout_row["split"] == "holdout"
+    assert "comparison" in holdout_row
+    axis_evidence = holdout_row["comparison"]["axis_evidence"]
+    assert set(axis_evidence) == {"contour", "interval"}
+    assert "rhythm" not in axis_evidence
+
+
+def test_check_repeats_consistency_rejects_mixed_holdout_lock_state(tmp_path: Path, audio_paths: Dict[str, str]):
     """同一 manifest でも registry の凍結状態が変われば holdout ロック状態が変わる
     — repeats 間でロック状態が食い違ったら fail-closed で拒否する。
     """
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
-    runner = _fake_route_runner(_notes_by_path())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
 
     report_locked = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
 
@@ -881,10 +1013,10 @@ def test_check_repeats_consistency_rejects_mixed_holdout_lock_state(tmp_path: Pa
 # --------------------------------------------------------------------------- #
 # registry pin（sha256）の整合検証
 # --------------------------------------------------------------------------- #
-def test_evaluate_rejects_missing_m3_registry_sha(tmp_path: Path):
+def test_evaluate_rejects_missing_m3_registry_sha(tmp_path: Path, audio_paths: Dict[str, str]):
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
-    runner = _fake_route_runner(_notes_by_path())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
     report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
     report2 = copy.deepcopy(report1)
     del report2["m3_registry_sha256"]
@@ -893,10 +1025,10 @@ def test_evaluate_rejects_missing_m3_registry_sha(tmp_path: Path):
         harness.evaluate_comparison([report1, report2])
 
 
-def test_evaluate_rejects_m3_registry_sha_mismatch_across_reports(tmp_path: Path):
+def test_evaluate_rejects_m3_registry_sha_mismatch_across_reports(tmp_path: Path, audio_paths: Dict[str, str]):
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
-    runner = _fake_route_runner(_notes_by_path())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
     report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
     report2 = copy.deepcopy(report1)
     report2["m3_registry_sha256"] = "0" * 64
@@ -905,10 +1037,10 @@ def test_evaluate_rejects_m3_registry_sha_mismatch_across_reports(tmp_path: Path
         harness.evaluate_comparison([report1, report2])
 
 
-def test_evaluate_rejects_m3_registry_sha_mismatch_with_current_registry(tmp_path: Path):
+def test_evaluate_rejects_m3_registry_sha_mismatch_with_current_registry(tmp_path: Path, audio_paths: Dict[str, str]):
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
-    runner = _fake_route_runner(_notes_by_path())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
     report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
     report1["m3_registry_sha256"] = "0" * 64
     report2 = copy.deepcopy(report1)  # report 間は一致させ、現在ロード registry との不一致のみ踏む。
@@ -917,10 +1049,10 @@ def test_evaluate_rejects_m3_registry_sha_mismatch_with_current_registry(tmp_pat
         harness.evaluate_comparison([report1, report2])
 
 
-def test_evaluate_rejects_missing_m1_registry_sha_when_other_report_has_it(tmp_path: Path):
+def test_evaluate_rejects_missing_m1_registry_sha_when_other_report_has_it(tmp_path: Path, audio_paths: Dict[str, str]):
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
-    runner = _fake_route_runner(_notes_by_path())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
     report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
     report2 = copy.deepcopy(report1)
     del report2["m1_registry_sha256"]
@@ -929,13 +1061,13 @@ def test_evaluate_rejects_missing_m1_registry_sha_when_other_report_has_it(tmp_p
         harness.evaluate_comparison([report1, report2])
 
 
-def test_evaluate_rejects_m1_registry_sha_missing_from_all_reports(tmp_path: Path):
+def test_evaluate_rejects_m1_registry_sha_missing_from_all_reports(tmp_path: Path, audio_paths: Dict[str, str]):
     """レビュー対応 2026-07-30: 全 report が m1_registry_sha256 を欠いていても
     `any()` バイパスで検査自体をスキップしていた穴を閉じる — 全欠落でも fail-closed。
     """
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
-    runner = _fake_route_runner(_notes_by_path())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
     report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
     del report1["m1_registry_sha256"]
     report2 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
@@ -945,10 +1077,10 @@ def test_evaluate_rejects_m1_registry_sha_missing_from_all_reports(tmp_path: Pat
         harness.evaluate_comparison([report1, report2])
 
 
-def test_evaluate_rejects_m1_registry_sha_mismatch_with_current_registry(tmp_path: Path):
+def test_evaluate_rejects_m1_registry_sha_mismatch_with_current_registry(tmp_path: Path, audio_paths: Dict[str, str]):
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
-    runner = _fake_route_runner(_notes_by_path())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
     report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
     report1["m1_registry_sha256"] = "0" * 64
     report2 = copy.deepcopy(report1)
@@ -958,20 +1090,51 @@ def test_evaluate_rejects_m1_registry_sha_mismatch_with_current_registry(tmp_pat
 
 
 # --------------------------------------------------------------------------- #
+# run_id の重複拒否（同一 run の二重指定検出）
+# --------------------------------------------------------------------------- #
+def test_evaluate_rejects_duplicate_run_id_same_report_specified_twice(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """同一 report を誤って 2 度 `--evaluate` に渡す(同一 run の二重指定)は、他の
+    全構造検査(registry pin / repeats consistency)を通過してもなお `run_id` の
+    相互 distinct 性検査で拒否する(レビュー対応 2026-07-30 第 4 ラウンド)。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+
+    with pytest.raises(ValueError, match="run_id"):
+        harness.evaluate_comparison([report, report])
+
+
+def test_evaluate_rejects_missing_run_id_field(tmp_path: Path, audio_paths: Dict[str, str]):
+    """`run_id` キー自体が欠落した report は理由つきで拒否する。"""
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    del report["run_id"]
+
+    with pytest.raises(ValueError, match="run_id"):
+        harness.evaluate_comparison([report])
+
+
+# --------------------------------------------------------------------------- #
 # 校正 run の経路制限（crepe 系限定 / melodia 常時禁止）
 # --------------------------------------------------------------------------- #
-def test_real_run_rejects_non_crepe_route(tmp_path: Path):
+def test_real_run_rejects_non_crepe_route(tmp_path: Path, audio_paths: Dict[str, str]):
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
 
     with pytest.raises(ValueError, match="crepe 系経路"):
         harness.run_comparison(manifest_path=manifest_path, route_name="pyin_direct")
 
 
-def test_melodia_route_rejected_even_when_route_runner_injected(tmp_path: Path):
+def test_melodia_route_rejected_even_when_route_runner_injected(tmp_path: Path, audio_paths: Dict[str, str]):
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
-    runner = _fake_route_runner(_notes_by_path())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
 
     with pytest.raises(ValueError, match="melodia"):
         harness.run_comparison(
@@ -979,21 +1142,21 @@ def test_melodia_route_rejected_even_when_route_runner_injected(tmp_path: Path):
         )
 
 
-def test_melodia_route_rejected_for_real_run(tmp_path: Path):
+def test_melodia_route_rejected_for_real_run(tmp_path: Path, audio_paths: Dict[str, str]):
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
 
     with pytest.raises(ValueError, match="melodia"):
         harness.run_comparison(manifest_path=manifest_path, route_name="melodia_direct")
 
 
-def test_injected_run_allows_non_crepe_route(tmp_path: Path):
+def test_injected_run_allows_non_crepe_route(tmp_path: Path, audio_paths: Dict[str, str]):
     """route_runner 注入時(テスト)は crepe 限定を課さない — pyin_direct のような
     既存デフォルトが引き続き動くことを確認する。
     """
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
-    runner = _fake_route_runner(_notes_by_path())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
 
     report = harness.run_comparison(
         manifest_path=manifest_path, route_name="pyin_direct", route_runner=runner
@@ -1001,7 +1164,7 @@ def test_injected_run_allows_non_crepe_route(tmp_path: Path):
     assert report["route"] == "pyin_direct"
 
 
-def test_run_comparison_default_route_is_crepe_direct(tmp_path: Path):
+def test_run_comparison_default_route_is_crepe_direct(tmp_path: Path, audio_paths: Dict[str, str]):
     """callable API `run_comparison` の `route_name` 既定値は `crepe_direct`
     (CLI `--route` 既定値との整合・レビュー対応 2026-07-30 第 3 ラウンド)。
     """
@@ -1012,20 +1175,22 @@ def test_run_comparison_default_route_is_crepe_direct(tmp_path: Path):
     )
 
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
-    runner = _fake_route_runner(_notes_by_path())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
 
     report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
     assert report["route"] == "crepe_direct"
 
 
-def test_cli_default_route_is_crepe_direct(tmp_path: Path, monkeypatch):
+def test_cli_default_route_is_crepe_direct(
+    tmp_path: Path, monkeypatch, audio_paths: Dict[str, str]
+):
     """CLI `--route` 未指定時の既定値は crepe_direct(正規の校正 run が既定で通る
     整合性回復・レビュー対応 2026-07-30)。`run_comparison` を差し替えて実際に main()
     へ渡る `route_name` を捕捉する(実抽出器を呼ばせない)。
     """
     manifest_path = tmp_path / "pairs.yaml"
-    _write_manifest(manifest_path, _default_pairs())
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
     out_path = tmp_path / "report.json"
     captured: Dict[str, Any] = {}
 
