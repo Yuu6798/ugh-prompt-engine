@@ -1734,6 +1734,72 @@ def test_validate_frozen_axes_accepts_partial_two_axes():
     assert harness._validate_frozen_axes(axes) is True
 
 
+# --------------------------------------------------------------------------- #
+# 凍結 axes のマージン検証（レビュー対応 2026-07-30 第 16 ラウンド）
+# --------------------------------------------------------------------------- #
+def test_holdout_unlocked_rejects_axis_margin_below_min_separation_margin():
+    """凍結 axes の `strong_min - none_max` が 0（`separation_margin` の 0.15 未満）
+    なら、大小関係（`strong_min >= none_max`）自体は満たしていても holdout は
+    開かない（`strong_min: 0.50`/`none_max: 0.50` の凍結 registry）。
+    """
+    from svp_rpe.melody.representation import M3ComparisonConfig
+
+    base_mapping = _registry_mapping()
+    assert base_mapping["separation_margin"]["min_same_minus_cross_margin"] == pytest.approx(0.15)
+    mapping = dict(base_mapping)
+    mapping["evidence_thresholds"] = {
+        "status": "frozen",
+        "axes": {
+            "contour": {"strong_min": 0.50, "none_max": 0.50},
+            "interval": {"strong_min": 0.50, "none_max": 0.50},
+            "rhythm": {"strong_min": 0.50, "none_max": 0.50},
+        },
+    }
+    mapping["coverage"] = dict(base_mapping["coverage"])
+    mapping["coverage"]["floor_status"] = "frozen"
+    config = M3ComparisonConfig.from_registry(mapping)
+
+    assert (
+        harness._validate_frozen_axes(
+            config.evidence_thresholds.axes,
+            min_separation_margin=config.separation_margin.min_same_minus_cross_margin,
+        )
+        is False
+    )
+    assert harness._holdout_unlocked(config) is False
+
+
+def test_holdout_unlocked_opens_when_axis_margin_exactly_meets_min_separation_margin():
+    """`strong_min - none_max` がちょうど `separation_margin`（0.15）に一致すれば
+    （`>=` 判定の境界値）、他条件が揃っていれば holdout が開く。
+    """
+    from svp_rpe.melody.representation import M3ComparisonConfig
+
+    base_mapping = _registry_mapping()
+    assert base_mapping["separation_margin"]["min_same_minus_cross_margin"] == pytest.approx(0.15)
+    mapping = dict(base_mapping)
+    mapping["evidence_thresholds"] = {
+        "status": "frozen",
+        "axes": {
+            "contour": {"strong_min": 0.65, "none_max": 0.50},
+            "interval": {"strong_min": 0.65, "none_max": 0.50},
+            "rhythm": {"strong_min": 0.65, "none_max": 0.50},
+        },
+    }
+    mapping["coverage"] = dict(base_mapping["coverage"])
+    mapping["coverage"]["floor_status"] = "frozen"
+    config = M3ComparisonConfig.from_registry(mapping)
+
+    assert (
+        harness._validate_frozen_axes(
+            config.evidence_thresholds.axes,
+            min_separation_margin=config.separation_margin.min_same_minus_cross_margin,
+        )
+        is True
+    )
+    assert harness._holdout_unlocked(config) is True
+
+
 def _partially_two_axes_frozen_registry_text() -> str:
     """axes が contour/interval の 2 軸のみ凍結（rhythm は未凍結のまま欠落)。
     coverage.floor_status も frozen —— 3 軸全てが揃わなくても holdout が開く
@@ -2782,6 +2848,25 @@ def test_evaluate_rejects_malformed_audio_sha256(
         harness.evaluate_comparison([report])
 
 
+def test_evaluate_rejects_malformed_observation_sha256(tmp_path: Path, audio_paths: Dict[str, str]):
+    """`observation_sha256_a`（生観測軌跡の content hash、第 11 ラウンドで追加された
+    pair 単位 pin）が非 hex 文字列（`"x"`）なら、`audio_sha256_a/b` と同じ 64 桁
+    小文字 hex の整形検証で fail-closed 拒否する（レビュー対応 2026-07-30 第 16
+    ラウンド: 従来はキー存在・repeats 間一致しか見ておらず、単一 report 内の
+    観測軌跡 pin の書式そのものは無検査だった）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+
+    assert harness._is_sha256_hex(report["pairs"]["p_pos_tuning"]["observation_sha256_a"])
+    report["pairs"]["p_pos_tuning"]["observation_sha256_a"] = "x"
+
+    with pytest.raises(ValueError, match="observation_sha256_a"):
+        harness.evaluate_comparison([report])
+
+
 def test_evaluate_rejects_non_mapping_route_provenance(tmp_path: Path, audio_paths: Dict[str, str]):
     """`route_provenance_a` が mapping でない（例: 文字列）場合は fail-closed 拒否する。"""
     manifest_path = tmp_path / "pairs.yaml"
@@ -2938,3 +3023,39 @@ def test_evaluate_accepts_none_axes_value(tmp_path: Path, audio_paths: Dict[str,
     verdict = harness.evaluate_comparison(reports)
     assert "calibration_verdict_status" not in verdict
     assert "margin_table" in verdict
+
+
+# --------------------------------------------------------------------------- #
+# evidence の列挙値検証 + axes との整合検証（レビュー対応 2026-07-30 第 16 ラウンド）
+# --------------------------------------------------------------------------- #
+def test_evaluate_rejects_unknown_evidence_value(tmp_path: Path, audio_paths: Dict[str, str]):
+    """`comparison.evidence` が既知の列挙値（strong/weak/none/not_comparable）以外
+    （例: `"maybe"`）なら fail-closed で拒否する。
+    """
+    reports = _two_reports_for_calibration_verdict(tmp_path, audio_paths)
+    for report in reports:
+        report["pairs"]["p_pos_tuning"]["comparison"]["evidence"] = "maybe"
+
+    with pytest.raises(ValueError, match="evidence"):
+        harness.evaluate_comparison(reports)
+
+
+def test_evaluate_rejects_not_comparable_relabeled_to_none_with_axes_all_none(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """`p_neg_tuning`（観測ゲート不通過で自然に `not_comparable` になる既存挙動の
+    pair）の `evidence` だけを `not_comparable` → `none` へ改変し、`axes`
+    （3 軸とも `None` — `_not_comparable` の既存契約どおり）はそのまま残すと、
+    `evidence != not_comparable` なのに axes が全 `None` という不整合として
+    fail-closed で拒否する——`not_comparable`（測れなかった）を `none`（測った
+    上で証拠なし）に偽装する改ざんの検出。
+    """
+    reports = _two_reports_for_calibration_verdict(tmp_path, audio_paths)
+    for report in reports:
+        comparison = report["pairs"]["p_neg_tuning"]["comparison"]
+        assert comparison["evidence"] == "not_comparable"
+        assert all(value is None for value in comparison["axes"].values())
+        comparison["evidence"] = "none"
+
+    with pytest.raises(ValueError, match="全て None"):
+        harness.evaluate_comparison(reports)

@@ -344,7 +344,9 @@ def _manifest_audio_paths(manifest_path: Path) -> "set[Path]":
     return paths
 
 
-def _validate_frozen_axes(axes: Dict[str, Any]) -> bool:
+def _validate_frozen_axes(
+    axes: Dict[str, Any], *, min_separation_margin: Optional[float] = None
+) -> bool:
     """凍結 axes（`evidence_thresholds.axes`）の内容が有効か判定する。
 
     レビュー対応 2026-07-30（第 3 ラウンド）: `M3ComparisonConfig.from_registry` /
@@ -369,6 +371,21 @@ def _validate_frozen_axes(axes: Dict[str, Any]) -> bool:
         - 値が mapping であり `strong_min`/`none_max` キーを持つ
         - 両値が数値（bool は除外）かつ 0.0〜1.0 の範囲内
         - `strong_min >= none_max`
+        - `min_separation_margin` が指定された場合、
+          `strong_min - none_max >= min_separation_margin`（レビュー対応
+          2026-07-30 第 16 ラウンド。次項参照）
+
+    レビュー対応 2026-07-30（第 16 ラウンド・マージン検証）: 上記 (c) の
+    `strong_min >= none_max` は大小関係しか見ておらず、両者が僅差（例:
+    0.50/0.50 のように差 0）でも通ってしまう——strong/none の判定境界が
+    実質的に重なりかねない狭いマージンのまま holdout を開ける穴があった。
+    `min_separation_margin`（呼び出し元 `_holdout_unlocked` が
+    `config.separation_margin.min_same_minus_cross_margin`——M0/M1 registry
+    から継承済みの値、`_validate_separation_margin_inherited_from_m1` で別途
+    検証済み——を渡す）が指定された場合、各軸の `strong_min - none_max` が
+    その値以上であることも要求する。`min_separation_margin` を渡さない
+    直接呼び出し（既存テストの単体呼び出し）は従来どおり大小関係のみを検証し、
+    この追加要求を課さない（後方互換）。
     """
     if not isinstance(axes, dict) or not axes:
         return False
@@ -388,6 +405,9 @@ def _validate_frozen_axes(axes: Dict[str, Any]) -> bool:
                 return False
         if not (float(strong_min) >= float(none_max)):
             return False
+        if min_separation_margin is not None:
+            if float(strong_min) - float(none_max) < float(min_separation_margin):
+                return False
     return True
 
 
@@ -424,7 +444,10 @@ def _holdout_unlocked(config: Any) -> bool:
     (b) `evidence_thresholds.axes` が非空で、かつ**存在する各軸**の内容が有効
         （`_validate_frozen_axes`。レビュー対応 2026-07-30 第 3 ラウンド: キーが
         揃っているだけの「内容が壊れた」凍結軸を弾く。第 4 ラウンド: 3 軸全てが
-        揃っている必要はなくなった——1 軸以上の整形済み凍結軸があれば足りる）
+        揃っている必要はなくなった——1 軸以上の整形済み凍結軸があれば足りる。
+        第 16 ラウンド: 各軸の `strong_min - none_max` が
+        `separation_margin.min_same_minus_cross_margin`（M0/M1 registry 継承値）
+        以上であることも同関数内で追加要求する)
     (c) `coverage.floor_status == "frozen"`
     (d) `coverage.floor` の値そのものが有効（`_validate_coverage_floor`。レビュー
         対応 2026-07-30 第 14 ラウンド: (c) はステータス文字列しか見ておらず、
@@ -436,7 +459,10 @@ def _holdout_unlocked(config: Any) -> bool:
     thresholds = config.evidence_thresholds
     if thresholds.status != "frozen":
         return False
-    if not _validate_frozen_axes(thresholds.axes or {}):
+    min_separation_margin = config.separation_margin.min_same_minus_cross_margin
+    if not _validate_frozen_axes(
+        thresholds.axes or {}, min_separation_margin=min_separation_margin
+    ):
         return False
     if config.coverage.floor_status != "frozen":
         return False
@@ -1112,7 +1138,13 @@ def _validate_pin_formats(reports: List[Dict[str, Any]]) -> None:
         `m1_registry_sha256`）が存在する場合、64 桁小文字 hex（sha256 digest の
         書式）であることを検証する
     (b) 各 pair の `audio_sha256_a` / `audio_sha256_b`（存在する場合）が同様に
-        64 桁小文字 hex であることを検証する
+        64 桁小文字 hex であることを検証する（レビュー対応 2026-07-30 第 16
+        ラウンド: `observation_sha256_a` / `observation_sha256_b`——生観測軌跡の
+        content hash、第 11 ラウンドで追加された pair 単位 pin——にも同じ書式
+        検証を適用する。従来はキー存在（`_require_pair_pins_present_for_
+        publishable_reports` は対象外）や repeats 間一致（`_check_repeats_
+        consistency`）しか見ておらず、単一 report 内で観測軌跡 pin が `"x"` の
+        ような非 hex 文字列でも単体では検出できない穴があった）
     (c) 各 pair の `route_provenance_a` / `route_provenance_b`（存在する場合）が
         mapping であること、かつ report の `route` が crepe 系経路の場合は
         crepe 固有の必須 pin（`extractor_weights_sha256` / `extractor_code_sha256`）
@@ -1139,7 +1171,12 @@ def _validate_pin_formats(reports: List[Dict[str, Any]]) -> None:
 
         route_requires_crepe_pins = _route_requires_crepe_pins(report.get("route"))
         for pair_id, pair in report["pairs"].items():
-            for key in ("audio_sha256_a", "audio_sha256_b"):
+            for key in (
+                "audio_sha256_a",
+                "audio_sha256_b",
+                "observation_sha256_a",
+                "observation_sha256_b",
+            ):
                 if key in pair and not _is_sha256_hex(pair[key]):
                     raise ValueError(
                         f"evaluate_comparison: reports[{idx}] の pair {pair_id!r} の "
@@ -1584,6 +1621,94 @@ def _validate_pair_axes_values(pairs: Dict[str, Dict[str, Any]]) -> None:
                 )
 
 
+_VALID_EVIDENCE_VALUES: "set[str]" = {"strong", "weak", "none", "not_comparable"}
+
+
+def _validate_evidence_values_and_axes_consistency(pairs: Dict[str, Dict[str, Any]]) -> None:
+    """各 pair の `comparison.evidence` が既知の列挙値であること、かつ `axes` との
+    整合を検証する（レビュー対応 2026-07-30 第 16 ラウンド、fail-closed）。
+
+    `_validate_pair_axes_values` は `axes` 各値の型・値域しか見ておらず、
+    `evidence` フィールド自体（列挙値かどうか）や、`evidence` と `axes` の
+    組み合わせが自己矛盾していないか（例: report を直接書き換えて `evidence`
+    だけを差し替える・`not_comparable` を別の値へ改名しつつ `axes` は
+    `not_comparable` の痕跡である全 None のまま残す）は無検査だった。ここで
+    以下を要求する:
+
+    (a) `comparison.evidence` は `{"strong", "weak", "none", "not_comparable"}`
+        のいずれかであること。未知値は pair_id・値つきで fail-closed 拒否する
+        （`compare_melodies`/`_derive_evidence` が返し得る値はこの 4 つのみ
+        ——`MelodyComparisonReport.evidence` の型注釈どおり）。
+    (b) `evidence == "not_comparable"` の行は、`axes` に残る値が全て `None`
+        であること（`_not_comparable` が `axes={axis: None for axis in _AXES}`
+        を返す既存契約——非 None 値が残っていれば改ざんの疑いとして拒否する）。
+    (c) `evidence != "not_comparable"` の行は、期待される軸キー（holdout の
+        `unfrozen_axes_redacted` により意図的に間引かれた軸を除く——`_redact_
+        unfrozen_axes_for_holdout` は未凍結軸のキー自体を `axes` から削除する
+        正当な機構であり、これを「欠落」として誤検出しない）が全て存在すること
+        （値は `None` を許容——`rhythm_not_computable` 等、計算不能を正直に
+        記録する正当なケース）。
+    (d) (c) の期待される軸キーのうち **1 つでも present** な状況で、それらが
+        全て `None` であるにもかかわらず `evidence` が `"not_comparable"` で
+        ない行は不整合として拒否する。`_derive_evidence` の設計上、`axes` が
+        （redaction 対象外の範囲で）全て計算不能なら `computed` は空集合になり
+        `evidence` は必ず `"none"`（`no_axes_evidence_computable`）に倒れる
+        ——`strong`/`weak` は最低 1 軸の実測 sim 値なしには成立し得ない。加えて
+        `axes` が全 None であること自体が `not_comparable` の唯一の生成経路
+        （`_not_comparable`）の署名であるため、`"none"` も含めて
+        `not_comparable` 以外の値と組み合わさっていること自体が改ざんの疑いを
+        示す（coverage floor gate 通過後の正当な計算では発生し得ない）。
+    """
+    for pair_id, pair in pairs.items():
+        comparison = pair.get("comparison")
+        if comparison is None:
+            # holdout ロック pair（音声未読・比較未実行）は対象外。
+            continue
+        evidence = comparison.get("evidence")
+        if evidence not in _VALID_EVIDENCE_VALUES:
+            raise ValueError(
+                f"evaluate_comparison: pair {pair_id!r} の comparison.evidence={evidence!r} は "
+                f"既知の列挙値でない (期待値: {sorted(_VALID_EVIDENCE_VALUES)}) (fail-closed)"
+            )
+        axes = comparison.get("axes", {})
+        if not isinstance(axes, dict):
+            # 型・mapping であることは `_validate_pair_axes_values` が既に検証済み
+            # （呼び出し順序でそちらを先に通す前提）——ここでは isinstance を
+            # 信頼して進む安全側の防御のみ残す。
+            raise ValueError(
+                f"evaluate_comparison: pair {pair_id!r} の comparison.axes が mapping でない "
+                f"(axes={axes!r}) (fail-closed)"
+            )
+
+        if evidence == "not_comparable":
+            non_none = {axis: value for axis, value in axes.items() if value is not None}
+            if non_none:
+                raise ValueError(
+                    f"evaluate_comparison: pair {pair_id!r} は evidence=not_comparable だが "
+                    f"axes に非 None 値が残っている ({non_none!r}); not_comparable の行は axes "
+                    "全 None でなければならない (fail-closed; evidence 改ざんの疑い)"
+                )
+            continue
+
+        redacted = set(pair.get("unfrozen_axes_redacted") or ())
+        expected_axes = set(_AXES) - redacted
+        missing_axes = sorted(axis for axis in expected_axes if axis not in axes)
+        if missing_axes:
+            raise ValueError(
+                f"evaluate_comparison: pair {pair_id!r} は evidence={evidence!r} だが axes に "
+                f"欠落軸がある: {missing_axes} (fail-closed; evidence != not_comparable の行は "
+                "3 軸キー全て（holdout の unfrozen_axes_redacted で間引かれた軸を除く）が "
+                "存在しなければならない)"
+            )
+        present_values = [axes.get(axis) for axis in expected_axes]
+        if present_values and all(value is None for value in present_values):
+            raise ValueError(
+                f"evaluate_comparison: pair {pair_id!r} は evidence={evidence!r} だが axes "
+                f"（{sorted(expected_axes)}）が全て None; not_comparable 以外の値は axes 全 None "
+                "とは両立しない (fail-closed; evidence/axes 整合性違反の疑い)"
+            )
+
+
 def _margin_table(
     pairs: Dict[str, Dict[str, Any]], *, split: Optional[str], min_margin: float
 ) -> Dict[str, Any]:
@@ -1901,6 +2026,13 @@ def evaluate_comparison(
         対応 2026-07-30 第 14 ラウンド）: 既知軸名（contour/interval/rhythm）
         のみ・値は None または非 bool の有限数値かつ 0.0〜1.0 であることを要求し、
         違反は pair_id・軸名・値を理由に fail-closed（`ValueError`）
+    10.6. 続けて `comparison.evidence` の列挙値検証 + `axes` との整合検証を行う
+        （`_validate_evidence_values_and_axes_consistency`。レビュー対応
+        2026-07-30 第 16 ラウンド）: `evidence` が既知 4 値（strong/weak/none/
+        not_comparable）のいずれかであること、`not_comparable` の行は axes 全
+        None であること、それ以外の行は（holdout redaction を除く）3 軸キーが
+        存在すること（値 None は許容）かつ全軸 None のまま not_comparable 以外
+        を名乗るのは不整合として fail-closed
     11. tuning split のみで軸別マージン表を算出（`separation_margin` 閾値）。
         tuning positive pair に 1 件でも `not_comparable` があれば freeze
         proposal を発行しない（レビュー対応 2026-07-30 第 5 ラウンド。negative の
@@ -2011,13 +2143,17 @@ def evaluate_comparison(
     verdict["holdout_locked_until_frozen"] = holdout_locked
     verdict["holdout_pair_ids_skipped"] = _holdout_pair_ids(reference_pairs) if holdout_locked else []
 
-    # レビュー対応 2026-07-30（第 14 ラウンド）: margin/holdout 集計（`_margin_table` /
-    # 後段の `_holdout_validation_table`）が axes 値をそのまま消費する前に、値の
-    # 型・値域を検証する（fail-closed）。`_check_repeats_consistency` が既に
+    # レビュー対応 2026-07-30(第 14 ラウンド): margin/holdout 集計(`_margin_table` /
+    # 後段の `_holdout_validation_table`)が axes 値をそのまま消費する前に、値の
+    # 型・値域を検証する(fail-closed)。`_check_repeats_consistency` が既に
     # comparison 全体の repeats 間一致を確認済みのため、reference report
-    # （`reports[0]`）の pairs だけを検証すれば他 report も同じ値であることは
+    # (`reports[0]`)の pairs だけを検証すれば他 report も同じ値であることは
     # 保証されている。
     _validate_pair_axes_values(reference_pairs)
+    # レビュー対応 2026-07-30(第 16 ラウンド): 上の型・値域検証に続けて、
+    # `evidence` 列挙値の検証 + `evidence`/`axes` 整合検証を行う(fail-closed)。
+    # 同じ reference-report-only の前提(repeats 間一致は既に保証済み)で足りる。
+    _validate_evidence_values_and_axes_consistency(reference_pairs)
 
     margin = _margin_table(
         reference_pairs,
