@@ -378,6 +378,40 @@ def _default_route_runner(route_name: str) -> RouteRunner:
     return _runner
 
 
+def _redact_unfrozen_axes_for_holdout(
+    comparison_dict: Dict[str, Any], frozen_axes: "set"
+) -> "Tuple[Dict[str, Any], List[str]]":
+    """holdout pair の `comparison` dict から未凍結軸の値を serialize 前に間引く。
+
+    レビュー対応 2026-07-30（第 6 ラウンド・正直会計）: `_holdout_unlocked` は
+    第 4 ラウンド以降「1 軸以上の整形済み凍結軸」があれば holdout を開ける
+    （3 軸全て揃う必要はない）。しかし `compare_melodies` の `axes`（軸別生 sim
+    値）は凍結状態に関係なく全 3 軸を無条件で計算するため、部分凍結
+    （例: contour のみ凍結）の holdout run では**未凍結の** interval/rhythm の
+    生 sim 値まで report に書かれてしまう——校正が済んでいない軸の holdout 証拠を
+    覗き見できる穴になる（`axis_evidence` は `_derive_evidence` が
+    `axis_thresholds_missing:<axis>` として自然に除外するが、`axes` 自体は
+    無条件で残る）。ここで凍結済み軸（`frozen_axes`）以外を `axes` /
+    `axis_evidence` から削除し（キー自体を消す。`None` で残すと「計測できな
+    かった」既存の意味と区別が付かなくなるため）、除外した軸名を返す——呼び出し
+    側が pair 結果へ `unfrozen_axes_redacted` として明示記録する。tuning pair
+    には適用しない（呼び出し側で `split == "holdout"` の場合のみ呼ぶ）。
+    """
+    redacted = sorted(axis for axis in _AXES if axis not in frozen_axes)
+    if not redacted:
+        return comparison_dict, redacted
+    comparison_dict = dict(comparison_dict)
+    comparison_dict["axes"] = {
+        axis: value for axis, value in comparison_dict.get("axes", {}).items() if axis not in redacted
+    }
+    comparison_dict["axis_evidence"] = {
+        axis: value
+        for axis, value in comparison_dict.get("axis_evidence", {}).items()
+        if axis not in redacted
+    }
+    return comparison_dict, redacted
+
+
 def _freeze_audio_copy(audio_path: "str | Path", staging_dir: str) -> "Tuple[str, str]":
     """`audio_path` の bytes を一度だけ読み、sha256 と同一 bytes の凍結コピーパスを返す。
 
@@ -488,6 +522,18 @@ def run_comparison(
                     "m1_registry_sha256": m1_registry_sha256,
                 },
             )
+            comparison_dict = comparison.to_dict()
+            # レビュー対応 2026-07-30（第 6 ラウンド）: holdout pair（この時点で
+            # 到達しているのは holdout unlock 済みのもののみ——ロック中は上の
+            # continue で既に弾かれている）は、凍結済み軸のみを残し未凍結軸の
+            # 値を serialize しない。tuning pair は対象外（redacted は None の
+            # まま = pair 結果に `unfrozen_axes_redacted` を追加しない）。
+            unfrozen_axes_redacted: Optional[List[str]] = None
+            if pair["split"] == "holdout":
+                frozen_axes = set((config.evidence_thresholds.axes or {}).keys())
+                comparison_dict, unfrozen_axes_redacted = _redact_unfrozen_axes_for_holdout(
+                    comparison_dict, frozen_axes
+                )
             row: Dict[str, Any] = {
                 "kind": pair["kind"],
                 "split": pair["split"],
@@ -496,8 +542,10 @@ def run_comparison(
                 "audio_b": pair["audio_b"],
                 "audio_sha256_a": audio_sha256_a,
                 "audio_sha256_b": audio_sha256_b,
-                "comparison": comparison.to_dict(),
+                "comparison": comparison_dict,
             }
+            if unfrozen_axes_redacted is not None:
+                row["unfrozen_axes_redacted"] = unfrozen_axes_redacted
             if prov_a:
                 row["route_provenance_a"] = prov_a
             if prov_b:
@@ -521,6 +569,38 @@ _PAIR_LEVEL_PROVENANCE_PINS: Tuple[str, ...] = (
     "audio_sha256_a",
     "audio_sha256_b",
 )
+
+
+def _require_pair_pins_present_for_publishable_reports(reports: List[Dict[str, Any]]) -> None:
+    """publishable（`route_runner_injected` でない）report の全 pair（holdout ロック
+    pair を除く）に pair 単位 pin（`_PAIR_LEVEL_PROVENANCE_PINS`:
+    `audio_sha256_a/b` / `route_provenance_a/b`）が存在することを要求する。
+
+    レビュー対応 2026-07-30（第 6 ラウンド）: `_check_repeats_consistency` は
+    repeats 間の**整合性**（有無が repeats 間で揃っているか・値が repeats 間で
+    一致するか）しか見ていない——全 report が同じキーを揃って欠落させれば
+    「有無が揃っている」ため素通りしてしまい、pin を全欠落させることで repeats
+    決定論の見かけを偽装できるバイパスが残っていた。ここで report 単体の欠落
+    （全欠落・部分欠落を問わない）を publishable report について理由つきで
+    fail-closed 拒否する。`route_runner_injected` な report（テスト用フェイク
+    抽出器）はこの要求から除外する（現行の扱いを維持——校正 verdict はどのみち
+    `_validate_route_runner_injected_field` 後の判定で発行されない）。
+    """
+    for idx, report in enumerate(reports):
+        if report.get("route_runner_injected"):
+            continue
+        for pair_id, pair in report["pairs"].items():
+            if "comparison" not in pair:
+                # holdout ロック pair（音声未読・比較未実行）は対象外。
+                continue
+            missing = [key for key in _PAIR_LEVEL_PROVENANCE_PINS if key not in pair]
+            if missing:
+                raise ValueError(
+                    f"evaluate_comparison: reports[{idx}] の pair {pair_id!r} に pair 単位 "
+                    f"pin が欠落している: {missing}; publishable な report は全 pair "
+                    "（holdout ロック pair を除く）で audio_sha256_a/b と "
+                    "route_provenance_a/b を必須とする (fail-closed)"
+                )
 
 
 def _check_repeats_consistency(reports: List[Dict[str, Any]]) -> None:
@@ -831,19 +911,23 @@ def evaluate_comparison(
 
     処理順（M3 実装 memo「## M3d」節）:
     1. registry sha256 pin の整合検証（report 間 + 現在ロードした registry）
-    2. repeats（sequence hash / axes / audio_sha256 含む pair 単位 pin）の bit 一致検証
-    3. 全 report の `run_id` が存在・非空・相互に distinct であることの検証
+    2. pair 単位 pin（`audio_sha256_a/b` / `route_provenance_a/b`）の欠落検証 —
+       publishable report は全 pair（holdout ロック pair を除く）で必須
+       （レビュー対応 2026-07-30 第 6 ラウンド: 全欠落は repeats 整合性チェック
+       だけでは検出できないバイパスを閉じる）
+    3. repeats（sequence hash / axes / audio_sha256 含む pair 単位 pin）の bit 一致検証
+    4. 全 report の `run_id` が存在・非空・相互に distinct であることの検証
        （レビュー対応 2026-07-30 第 4 ラウンド: 同一 run の二重指定を検出する）
-    4. route_runner_injected な report があれば calibration verdict 発行を拒否
-    5. repeats が n>=2 でなければ calibration verdict 発行を拒否（n=1 は「決定論
+    5. route_runner_injected な report があれば calibration verdict 発行を拒否
+    6. repeats が n>=2 でなければ calibration verdict 発行を拒否（n=1 は「決定論
        repeats 未検証」であり校正証拠にしない）
-    6. tuning split のみで軸別マージン表を算出（`separation_margin` 閾値）。
+    7. tuning split のみで軸別マージン表を算出（`separation_margin` 閾値）。
        tuning positive pair に 1 件でも `not_comparable` があれば freeze
        proposal を発行しない（レビュー対応 2026-07-30 第 5 ラウンド。negative の
        `not_comparable` は除外 + カウント記録のみで発行を妨げない）
-    7. holdout は `_holdout_unlocked` の全条件（status=frozen + 1 軸以上の整形済み
+    8. holdout は `_holdout_unlocked` の全条件（status=frozen + 1 軸以上の整形済み
        凍結軸 + coverage.floor_status=frozen）を満たすまで開かない
-    8. tuning positive pair の被覆分布から coverage floor 候補を emit
+    9. tuning positive pair の被覆分布から coverage floor 候補を emit
     """
     if not reports:
         raise ValueError("evaluate_comparison: reports が空 (fail-closed)")
@@ -855,6 +939,7 @@ def evaluate_comparison(
                 f"未知; 期待値は {_EXPECTED_RUN_SCHEMA!r} (fail-closed)"
             )
     _validate_route_runner_injected_field(reports)
+    _require_pair_pins_present_for_publishable_reports(reports)
 
     config, m3_registry_sha256 = load_m3_registry(registry_path)
     _, m1_registry_sha256 = _load_m1_registry(m1_registry_path)

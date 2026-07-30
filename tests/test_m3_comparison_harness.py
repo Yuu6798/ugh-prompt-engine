@@ -1127,6 +1127,152 @@ def test_holdout_opens_with_only_two_axes_frozen(tmp_path: Path, audio_paths: Di
     assert "rhythm" not in axis_evidence
 
 
+# --------------------------------------------------------------------------- #
+# 部分凍結 holdout の未凍結軸 redaction（レビュー対応 2026-07-30 第 6 ラウンド）
+# --------------------------------------------------------------------------- #
+def _partially_one_axis_frozen_registry_text() -> str:
+    """axes が contour のみ凍結（interval/rhythm は未凍結）。coverage.floor_status
+    も frozen —— holdout は開くが interval/rhythm は redaction 対象になるケース。
+    """
+    mapping = _registry_mapping()
+    mapping["evidence_thresholds"] = {
+        "status": "frozen",
+        "axes": {
+            "contour": {"strong_min": 0.8, "none_max": 0.2},
+        },
+    }
+    mapping["coverage"] = dict(mapping["coverage"])
+    mapping["coverage"]["floor_status"] = "frozen"
+    return yaml.safe_dump(mapping, sort_keys=False)
+
+
+def test_holdout_partial_freeze_redacts_unfrozen_axes(tmp_path: Path, audio_paths: Dict[str, str]):
+    """`evidence_thresholds.axes` が contour のみ凍結された holdout run では、
+    未凍結の interval/rhythm は `comparison.axes` / `axis_evidence` に serialize
+    されず、`unfrozen_axes_redacted` にその軸名が明示記録される。tuning pair は
+    redaction 対象外（全軸のまま）であることも併せて確認する。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    one_axis_registry = tmp_path / "one_axis_registry.yaml"
+    one_axis_registry.write_text(_partially_one_axis_frozen_registry_text(), encoding="utf-8")
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    config, _ = harness.load_m3_registry(one_axis_registry)
+    assert set(config.evidence_thresholds.axes) == {"contour"}
+    assert harness._holdout_unlocked(config) is True
+
+    report = harness.run_comparison(
+        manifest_path=manifest_path, route_runner=runner, registry_path=one_axis_registry
+    )
+
+    holdout_row = report["pairs"]["p_pos_holdout"]
+    assert holdout_row["split"] == "holdout"
+    assert "comparison" in holdout_row
+
+    axes = holdout_row["comparison"]["axes"]
+    assert set(axes) == {"contour"}
+    assert "interval" not in axes
+    assert "rhythm" not in axes
+
+    axis_evidence = holdout_row["comparison"]["axis_evidence"]
+    assert "interval" not in axis_evidence
+    assert "rhythm" not in axis_evidence
+
+    assert holdout_row["unfrozen_axes_redacted"] == ["interval", "rhythm"]
+
+    # tuning pair は redaction 対象外 — 全軸がそのまま残り、
+    # `unfrozen_axes_redacted` キー自体が付与されない。
+    tuning_row = report["pairs"]["p_pos_tuning"]
+    assert set(tuning_row["comparison"]["axes"]) == {"contour", "interval", "rhythm"}
+    assert "unfrozen_axes_redacted" not in tuning_row
+
+
+def test_holdout_full_freeze_records_empty_redacted_list(tmp_path: Path, audio_paths: Dict[str, str]):
+    """3 軸全て凍結済みの holdout run では、redaction 対象がないため
+    `unfrozen_axes_redacted` は空リストとして記録される（正直会計 — 「redaction
+    は起きなかった」ことも明示する）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    frozen_registry = tmp_path / "frozen_registry.yaml"
+    frozen_registry.write_text(_fully_frozen_registry_text(), encoding="utf-8")
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    report = harness.run_comparison(
+        manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
+    )
+
+    holdout_row = report["pairs"]["p_pos_holdout"]
+    assert holdout_row["unfrozen_axes_redacted"] == []
+    assert set(holdout_row["comparison"]["axes"]) == {"contour", "interval", "rhythm"}
+
+
+# --------------------------------------------------------------------------- #
+# pair 単位 pin の全欠落バイパス拒否（レビュー対応 2026-07-30 第 6 ラウンド）
+# --------------------------------------------------------------------------- #
+def test_evaluate_rejects_reports_with_all_pair_pins_missing(tmp_path: Path, audio_paths: Dict[str, str]):
+    """全 repeat が同じ pair 単位 pin（`audio_sha256_a/b` / `route_provenance_a/b`）
+    を揃って欠落させた場合、`_check_repeats_consistency` の整合性チェック
+    （有無が repeats 間で揃っているか）だけでは「揃っている」ため通過してしまう
+    ——publishable report 全体への必須化でこのバイパスを閉じる。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    reports = []
+    for _ in range(2):
+        report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+        report["route_runner_injected"] = False  # 「実測」相当（publishable）にする。
+        for pair in report["pairs"].values():
+            if "comparison" not in pair:
+                continue
+            for key in (
+                "audio_sha256_a",
+                "audio_sha256_b",
+                "route_provenance_a",
+                "route_provenance_b",
+            ):
+                pair.pop(key, None)
+        reports.append(report)
+
+    with pytest.raises(ValueError, match="pair 単位 pin"):
+        harness.evaluate_comparison(reports)
+
+
+def test_evaluate_rejects_reports_with_partial_pair_pin_missing(tmp_path: Path, audio_paths: Dict[str, str]):
+    """全欠落だけでなく部分欠落（`audio_sha256_a` のみ 1 pair から削除）も
+    publishable report については fail-closed で拒否する。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    report["route_runner_injected"] = False
+    del report["pairs"]["p_pos_tuning"]["audio_sha256_a"]
+
+    with pytest.raises(ValueError, match="pair 単位 pin"):
+        harness.evaluate_comparison([report])
+
+
+def test_evaluate_allows_injected_reports_with_missing_pair_pins(tmp_path: Path, audio_paths: Dict[str, str]):
+    """`route_runner_injected` な report（テスト用フェイク抽出器）は pair 単位 pin
+    の必須化から除外される（現行の扱いを維持）。calibration verdict はどのみち
+    `rejected_route_runner_injected` で拒否されるが、それ以前の pin 検証で
+    落ちないことを確認する。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    del report["pairs"]["p_pos_tuning"]["audio_sha256_a"]
+    assert report["route_runner_injected"] is True
+
+    verdict = harness.evaluate_comparison([report])
+    assert verdict["calibration_verdict_status"] == "rejected_route_runner_injected"
+
+
 def test_check_repeats_consistency_rejects_mixed_holdout_lock_state(tmp_path: Path, audio_paths: Dict[str, str]):
     """同一 manifest でも registry の凍結状態が変われば holdout ロック状態が変わる
     — repeats 間でロック状態が食い違ったら fail-closed で拒否する。
