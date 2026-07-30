@@ -146,6 +146,55 @@ def test_atomic_publish_bundle_removes_stale_filenames_not_in_contents(tmp_path:
     assert (output_dir / "take.json").read_bytes() == b"new-provenance"
 
 
+# --- atomic_publish_bundle: path traversal guard ------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad_name", ["../victim", "/etc/passwd", "a/b", "..", ""], ids=repr
+)
+def test_atomic_publish_bundle_rejects_unsafe_content_name(
+    tmp_path: Path, bad_name: str
+) -> None:
+    """`contents` のキーが `output_dir` を脱出しうる名前（相対トラバーサル /
+    絶対パス / ネストしたパス区切り / 空文字 / `".."`）だと、staging への
+    書き込みより前に `ValueError` で拒否する（Codex P2 review 指摘: 従来は
+    `output_dir / name` の join がそのまま外部ファイルへ届き、rename 前に
+    上書き・失敗時 rollback が上書き後のバイト列を復元してしまっていた）。
+    外部の被害候補ファイルは無傷のまま残ることを確認する。"""
+    output_dir = tmp_path / "bundle"
+    victim = tmp_path / "victim"
+    victim.write_bytes(b"original-victim-content")
+
+    with pytest.raises(ValueError):
+        atomic_publish_bundle(
+            output_dir,
+            {bad_name: b"malicious-overwrite"},
+            protected_inputs=(),
+        )
+
+    assert victim.read_bytes() == b"original-victim-content"
+
+
+def test_atomic_publish_bundle_rejects_unsafe_stale_filename(tmp_path: Path) -> None:
+    """`stale_filenames`（削除対象）側も同じ字句検証を通す — トラバーサル名を
+    渡しても、削除処理より前に `ValueError` で拒否され、外部ファイルは消えない。"""
+    output_dir = tmp_path / "bundle"
+    output_dir.mkdir()
+    victim = tmp_path / "victim"
+    victim.write_bytes(b"original-victim-content")
+
+    with pytest.raises(ValueError):
+        atomic_publish_bundle(
+            output_dir,
+            {"a.json": b"content"},
+            protected_inputs=(),
+            stale_filenames=("../victim",),
+        )
+
+    assert victim.read_bytes() == b"original-victim-content"
+    assert not (output_dir / "a.json").exists()
+
+
 def test_atomic_publish_bundle_requires_protected_inputs_keyword(tmp_path: Path) -> None:
     """`protected_inputs` は既定値なしの keyword-only 必須引数（Codex P2
     review 指摘: 渡し忘れで衝突検出が黙って無効化されるのを fail-closed に

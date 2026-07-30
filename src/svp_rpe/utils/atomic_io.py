@@ -71,6 +71,27 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Tuple, Type
 
 
+def _validate_bundle_name(name: str) -> None:
+    """`atomic_publish_bundle` の `contents` キー / `stale_filenames` は
+    フラットなファイル名のみを許す契約（ネストした相対パスは対象外 — 呼び出し
+    元 3 ラッパ（`cli/builds_root.py` / `recast/backend.py` / `recast/plan.py`）
+    は全て `output_dir` 直下のリテラルファイル名しか渡さないため、この契約で
+    十分・字句検証のみで足りる）。
+
+    空文字 / `"."` / `".."` / 絶対パス / パス区切り文字（`/`, `\\`, `os.sep`,
+    `os.altsep`）を含む名前は `output_dir / name` の join が staging/出力
+    ルートの外へ脱出しうるため `ValueError` で拒否する（Codex P2 review 指摘:
+    `"../victim"` や絶対パスを渡すと rename 前に外部ファイルを上書きし、失敗時
+    rollback が「上書き後のバイト列」を復元してしまっていた）。
+    """
+    if not name or name in (".", ".."):
+        raise ValueError(f"invalid bundle entry name: {name!r}")
+    if os.path.isabs(name):
+        raise ValueError(f"invalid bundle entry name (absolute path not allowed): {name!r}")
+    if "/" in name or "\\" in name or os.sep in name or (os.altsep and os.altsep in name):
+        raise ValueError(f"invalid bundle entry name (must be a flat filename): {name!r}")
+
+
 def atomic_write_bytes(path: Path, data: bytes) -> None:
     """`path` と同一ディレクトリの tempfile へ `data` を書き、`os.replace` で
     atomic に publish する（親ディレクトリは `mkdir(parents=True, exist_ok=True)`
@@ -117,6 +138,11 @@ def atomic_publish_bundle(
     常に明示的に渡す必要がある — 意図的に検査しない場合も空タプル `()` を
     明示的に渡すこと。
 
+    `contents` のキーおよび `stale_filenames` の各名前は `output_dir` 直下の
+    フラットなファイル名のみを契約とする（`_validate_bundle_name` 参照）。
+    空文字 / `"."` / `".."` / 絶対パス / パス区切り文字を含む名前は、書き込み・
+    削除を一切行う前に `ValueError` で拒否する。
+
     衝突検査（`protected_inputs` があれば、または `always_check_collision=True`
     のとき）: `contents`（+ `stale_filenames` のうち `contents` に含まれない
     もの）の各ファイル名について、解決済みパスが `protected_inputs` のいずれか
@@ -146,6 +172,9 @@ def atomic_publish_bundle(
     元位置へ復元して `output_dir` を呼び出し前と同じ状態に戻してから re-raise
     する。
     """
+    for filename in list(contents) + list(stale_filenames):
+        _validate_bundle_name(filename)
+
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
