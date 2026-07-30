@@ -96,6 +96,16 @@ def audio_paths(tmp_path: Path) -> Dict[str, str]:
     return _write_audio_fixture_files(tmp_path)
 
 
+# レビュー対応 2026-07-30（第 8 ラウンド・pin 値の整形検証）: `_validate_pin_formats`
+# は `route_provenance_a/b` が mapping であることに加え、crepe 系経路
+# （既定 route の crepe_direct を含む）では `extractor_weights_sha256` /
+# `extractor_code_sha256` が非空文字列であることを要求する。fake route_runner の
+# provenance も実測 crepe 観測（`extractors.observe_via_route_with_provenance`）
+# と同型の 64 桁 hex 文字列を刻んでおく——fake であっても整形は本物と揃える。
+_FAKE_EXTRACTOR_WEIGHTS_SHA256 = "a" * 64
+_FAKE_EXTRACTOR_CODE_SHA256 = "b" * 64
+
+
 def _fake_route_runner(notes_by_path: Dict[str, List[MelodyNote]]) -> "harness.RouteRunner":
     """`notes_by_path` を **bytes 内容** で引く runner を返す。
 
@@ -117,7 +127,11 @@ def _fake_route_runner(notes_by_path: Dict[str, List[MelodyNote]]) -> "harness.R
         notes = notes_by_content.get(content, _different_notes())
         return (
             MelodyObservation(route="fake", source_model="test:fake", notes=tuple(notes)),
-            {"fake_provenance": True},
+            {
+                "fake_provenance": True,
+                "extractor_weights_sha256": _FAKE_EXTRACTOR_WEIGHTS_SHA256,
+                "extractor_code_sha256": _FAKE_EXTRACTOR_CODE_SHA256,
+            },
         )
 
     return _runner
@@ -1622,3 +1636,138 @@ def test_evaluate_rejects_manifest_content_swap_after_run(tmp_path: Path, audio_
 
     with pytest.raises(ValueError, match="manifest_sha256"):
         harness.evaluate_comparison([report])
+
+
+# --------------------------------------------------------------------------- #
+# manifest 完全集合の要求（レビュー対応 2026-07-30 第 8 ラウンド）
+# --------------------------------------------------------------------------- #
+def test_evaluate_rejects_report_missing_manifest_pair(tmp_path: Path, audio_paths: Dict[str, str]):
+    """report から manifest の pair を 1 件削除する（部分集合化）と、欠落 pair_id
+    を列挙した理由付きで fail-closed 拒否する。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+
+    del report["pairs"]["p_neg_tuning"]
+
+    with pytest.raises(ValueError) as excinfo:
+        harness.evaluate_comparison([report])
+    assert "欠落 pair_id" in str(excinfo.value)
+    assert "p_neg_tuning" in str(excinfo.value)
+
+
+def test_evaluate_rejects_report_with_excess_pair_not_in_manifest(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """manifest に存在しない pair_id を report へ追加する（過剰集合化）と
+    fail-closed 拒否する（欠落チェックとは独立に、既存の per-pair ループが
+    検出する）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+
+    report["pairs"]["p_extra_not_in_manifest"] = copy.deepcopy(report["pairs"]["p_neg_tuning"])
+
+    with pytest.raises(ValueError) as excinfo:
+        harness.evaluate_comparison([report])
+    assert "p_extra_not_in_manifest" in str(excinfo.value)
+    assert "に存在しない" in str(excinfo.value)
+
+
+# --------------------------------------------------------------------------- #
+# pin 値の整形検証（レビュー対応 2026-07-30 第 8 ラウンド）
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "bad_value",
+    [None, "", "z" * 64, "a" * 63, "A" * 64],
+    ids=["null", "empty", "non_hex_char", "too_short", "uppercase"],
+)
+def test_evaluate_rejects_malformed_audio_sha256(
+    tmp_path: Path, audio_paths: Dict[str, str], bad_value: Any
+):
+    """`audio_sha256_a` が null・空文字列・非 hex 文字・桁数不足・大文字混じりの
+    いずれかなら、64 桁小文字 hex の整形検証で fail-closed 拒否する。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+
+    report["pairs"]["p_pos_tuning"]["audio_sha256_a"] = bad_value
+
+    with pytest.raises(ValueError, match="audio_sha256_a"):
+        harness.evaluate_comparison([report])
+
+
+def test_evaluate_rejects_non_mapping_route_provenance(tmp_path: Path, audio_paths: Dict[str, str]):
+    """`route_provenance_a` が mapping でない（例: 文字列）場合は fail-closed 拒否する。"""
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+
+    report["pairs"]["p_pos_tuning"]["route_provenance_a"] = "not-a-mapping"
+
+    with pytest.raises(ValueError, match="mapping"):
+        harness.evaluate_comparison([report])
+
+
+def test_evaluate_rejects_empty_crepe_required_pin_in_route_provenance(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """crepe 系経路（既定 route_name=crepe_direct）の `route_provenance_a` から
+    必須 pin（`extractor_weights_sha256`）を空文字列にすると、非空文字列の
+    整形検証で fail-closed 拒否する。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+
+    assert report["route"] == "crepe_direct"
+    report["pairs"]["p_pos_tuning"]["route_provenance_a"]["extractor_weights_sha256"] = ""
+
+    with pytest.raises(ValueError, match="extractor_weights_sha256"):
+        harness.evaluate_comparison([report])
+
+
+def test_evaluate_rejects_null_crepe_required_pin_in_route_provenance(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """crepe 系経路の `route_provenance_b` の必須 pin（`extractor_code_sha256`）が
+    null なら fail-closed 拒否する。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+
+    report["pairs"]["p_pos_tuning"]["route_provenance_b"]["extractor_code_sha256"] = None
+
+    with pytest.raises(ValueError, match="extractor_code_sha256"):
+        harness.evaluate_comparison([report])
+
+
+def test_evaluate_allows_non_crepe_route_without_crepe_required_pins(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """crepe 系でない経路（例: pyin_direct・route_runner 注入時のみ許容）は
+    crepe 固有の必須 pin 要求を課されない — `route_provenance` が mapping で
+    あることだけが検証される。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report = harness.run_comparison(
+        manifest_path=manifest_path, route_name="pyin_direct", route_runner=runner
+    )
+    # pyin には重み/コード pin が無い運用を模してテスト側で明示的に外す。
+    del report["pairs"]["p_pos_tuning"]["route_provenance_a"]["extractor_weights_sha256"]
+    del report["pairs"]["p_pos_tuning"]["route_provenance_a"]["extractor_code_sha256"]
+
+    verdict = harness.evaluate_comparison([report])
+    assert verdict["calibration_verdict_status"] == "rejected_route_runner_injected"

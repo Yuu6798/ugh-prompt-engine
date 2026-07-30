@@ -50,6 +50,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 import tempfile
 import uuid
@@ -667,12 +668,32 @@ def _validate_pair_labels_bound_to_manifest(reports: List[Dict[str, Any]]) -> No
                 "(fail-closed)"
             )
 
+        # レビュー対応 2026-07-30（第 8 ラウンド・manifest 完全集合の要求）: 従来は
+        # 「report の各 pair が manifest に存在するか」(過剰不可)しか見ておらず、
+        # 「manifest の各 pair が report に存在するか」(欠落不可)は無検査だった——
+        # report から都合の悪い pair（例: not_comparable になった negative pair）を
+        # 単に削除すれば、manifest 完全集合を装わずに margin 計算をすり抜けられる
+        # 穴が残っていた。ここで report の pair_id 集合と manifest の pair_id 完全
+        # 集合の**一致**（部分集合・過剰集合のどちらも不可）を要求する——欠落は
+        # ここで理由つき（欠落 pair_id を列挙して）fail、過剰は後続のループが
+        # 個別 pair_id 単位で検出する。
+        missing_pair_ids = sorted(set(pairs_by_id) - set(report["pairs"]))
+        if missing_pair_ids:
+            raise ValueError(
+                f"evaluate_comparison: reports[{idx}] は manifest_path={manifest_path!r} の "
+                f"pair_id 完全集合を欠いている; 欠落 pair_id={missing_pair_ids} (fail-closed; "
+                "report の pair 集合は manifest の pair_id 完全集合と一致しなければならず、"
+                "部分集合は許可しない)"
+            )
+
         for pair_id, row in report["pairs"].items():
             manifest_pair = pairs_by_id.get(pair_id)
             if manifest_pair is None:
                 raise ValueError(
                     f"evaluate_comparison: reports[{idx}] の pair {pair_id!r} が "
-                    f"manifest_path={manifest_path!r} に存在しない (fail-closed)"
+                    f"manifest_path={manifest_path!r} に存在しない (fail-closed; report の "
+                    "pair 集合は manifest の pair_id 完全集合と一致しなければならず、過剰は "
+                    "許可しない)"
                 )
             observed: Dict[str, Any] = {}
             for key in (*_PAIR_LABEL_FIELDS, *_PAIR_AUDIO_PATH_FIELDS):
@@ -729,6 +750,111 @@ def _require_pair_pins_present_for_publishable_reports(reports: List[Dict[str, A
                     "（holdout ロック pair を除く）で audio_sha256_a/b と "
                     "route_provenance_a/b を必須とする (fail-closed)"
                 )
+
+
+_SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _is_sha256_hex(value: Any) -> bool:
+    """`value` が 64 桁小文字 hex（sha256 digest の書式）であるかを判定する。"""
+    return isinstance(value, str) and bool(_SHA256_HEX_RE.fullmatch(value))
+
+
+_REPORT_LEVEL_SHA256_FIELDS: Tuple[str, ...] = (
+    "manifest_sha256",
+    "m3_registry_sha256",
+    "m1_registry_sha256",
+)
+# route_provenance_a/b の crepe 経路固有必須 pin（`extractors.py
+# observe_via_route_with_provenance` が実測 crepe 観測に対して必ず記録するキー。
+# extractor_weights_kind/files や extractor_code_packages は補助メタデータで
+# あって hash pin ではないため、ここでは digest 系の 2 キーのみを必須とする）。
+_CREPE_ROUTE_PROVENANCE_REQUIRED_PINS: Tuple[str, ...] = (
+    "extractor_weights_sha256",
+    "extractor_code_sha256",
+)
+
+
+def _route_requires_crepe_pins(route_name: Any) -> bool:
+    """`route_name` が crepe 系経路（extractor == "crepe"）かを判定する。
+
+    未知/非文字列の route_name は判定不能として False を返す（他の検証
+    — `_validate_registry_pins` 等の repeats 整合チェックや `_resolve_route`
+    を経由する run phase 側の fail-closed — が既に route の妥当性を担保して
+    いるため、ここでは crepe 固有の追加要求を課すかどうかの判定に留める）。
+    """
+    if not isinstance(route_name, str):
+        return False
+    try:
+        route = _resolve_route(route_name)
+    except ValueError:
+        return False
+    return route.extractor == "crepe"
+
+
+def _validate_pin_formats(reports: List[Dict[str, Any]]) -> None:
+    """pin 値そのものの整形を検証する（レビュー対応 2026-07-30 第 8 ラウンド）。
+
+    従来のキー存在検証（`_validate_pair_labels_bound_to_manifest` の
+    manifest_sha256 有無 / `_validate_registry_pins` の registry sha256 有無 /
+    `_require_pair_pins_present_for_publishable_reports` の pair 単位 pin 有無）
+    は、キーが存在しさえすれば値そのもの（null・空文字列・型不正）を無検査で
+    通していた——例えば `audio_sha256_a` が空文字列や非 hex 文字列でも「キーは
+    存在する」ため従来の検査は素通りしてしまう。ここで:
+
+    (a) report 単位の sha256 pin（`manifest_sha256` / `m3_registry_sha256` /
+        `m1_registry_sha256`）が存在する場合、64 桁小文字 hex（sha256 digest の
+        書式）であることを検証する
+    (b) 各 pair の `audio_sha256_a` / `audio_sha256_b`（存在する場合）が同様に
+        64 桁小文字 hex であることを検証する
+    (c) 各 pair の `route_provenance_a` / `route_provenance_b`（存在する場合）が
+        mapping であること、かつ report の `route` が crepe 系経路の場合は
+        crepe 固有の必須 pin（`extractor_weights_sha256` / `extractor_code_sha256`）
+        が非空文字列であることを検証する
+
+    `route_runner_injected` な report にも同様に適用する（整形検証は
+    injected/publishable を問わない——fake 抽出器であっても記録する pin 値は
+    整形済みでなければならない。存在必須化のみ publishable report に限定する
+    現行の扱い（`_require_pair_pins_present_for_publishable_reports`）とは
+    直交する）。
+    """
+    for idx, report in enumerate(reports):
+        for field in _REPORT_LEVEL_SHA256_FIELDS:
+            value = report.get(field)
+            if value is not None and not _is_sha256_hex(value):
+                raise ValueError(
+                    f"evaluate_comparison: reports[{idx}] の {field}={value!r} は 64 桁"
+                    "小文字 hex（sha256 digest）の書式でない (fail-closed)"
+                )
+
+        route_requires_crepe_pins = _route_requires_crepe_pins(report.get("route"))
+        for pair_id, pair in report["pairs"].items():
+            for key in ("audio_sha256_a", "audio_sha256_b"):
+                if key in pair and not _is_sha256_hex(pair[key]):
+                    raise ValueError(
+                        f"evaluate_comparison: reports[{idx}] の pair {pair_id!r} の "
+                        f"{key}={pair[key]!r} は 64 桁小文字 hex（sha256 digest）の書式でない "
+                        "(fail-closed)"
+                    )
+            for prov_key in ("route_provenance_a", "route_provenance_b"):
+                if prov_key not in pair:
+                    continue
+                provenance = pair[prov_key]
+                if not isinstance(provenance, dict):
+                    raise ValueError(
+                        f"evaluate_comparison: reports[{idx}] の pair {pair_id!r} の "
+                        f"{prov_key}={provenance!r} は mapping でなければならない (fail-closed)"
+                    )
+                if not route_requires_crepe_pins:
+                    continue
+                for req_key in _CREPE_ROUTE_PROVENANCE_REQUIRED_PINS:
+                    req_value = provenance.get(req_key)
+                    if not isinstance(req_value, str) or not req_value:
+                        raise ValueError(
+                            f"evaluate_comparison: reports[{idx}] の pair {pair_id!r} の "
+                            f"{prov_key}.{req_key}={req_value!r} は非空文字列でなければならない "
+                            "(crepe 経路の必須 pin, fail-closed)"
+                        )
 
 
 def _check_repeats_consistency(reports: List[Dict[str, Any]]) -> None:
@@ -1041,25 +1167,32 @@ def evaluate_comparison(
     1. pair ラベル（split/expected/kind/audio パス）の manifest 束縛検証
        （レビュー対応 2026-07-30 第 7 ラウンド: manifest の content pin =
        `manifest_sha256` に対して report 自身の pair dict が改ざんされていない
-       ことを、registry pin とは独立に検証する）
+       ことを、registry pin とは独立に検証する。第 8 ラウンド: 各 report の
+       pair_id 集合が manifest の pair_id 完全集合と一致することも同時に要求
+       する — 部分集合（pair の削除）・過剰集合のどちらも fail-closed）
     2. registry sha256 pin の整合検証（report 間 + 現在ロードした registry）
     3. pair 単位 pin（`audio_sha256_a/b` / `route_provenance_a/b`）の欠落検証 —
        publishable report は全 pair（holdout ロック pair を除く）で必須
        （レビュー対応 2026-07-30 第 6 ラウンド: 全欠落は repeats 整合性チェック
        だけでは検出できないバイパスを閉じる）
-    4. repeats（sequence hash / axes / audio_sha256 含む pair 単位 pin）の bit 一致検証
-    5. 全 report の `run_id` が存在・非空・相互に distinct であることの検証
+    4. pin 値そのものの整形検証（レビュー対応 2026-07-30 第 8 ラウンド）: sha256
+       系 pin（`manifest_sha256` / `m3_registry_sha256` / `m1_registry_sha256` /
+       `audio_sha256_a/b`）が 64 桁小文字 hex であること、`route_provenance_a/b`
+       が mapping であり crepe 系経路の必須 pin が非空文字列であることを検証する
+       （injected/publishable を問わず適用）
+    5. repeats（sequence hash / axes / audio_sha256 含む pair 単位 pin）の bit 一致検証
+    6. 全 report の `run_id` が存在・非空・相互に distinct であることの検証
        （レビュー対応 2026-07-30 第 4 ラウンド: 同一 run の二重指定を検出する）
-    6. route_runner_injected な report があれば calibration verdict 発行を拒否
-    7. repeats が n>=2 でなければ calibration verdict 発行を拒否（n=1 は「決定論
+    7. route_runner_injected な report があれば calibration verdict 発行を拒否
+    8. repeats が n>=2 でなければ calibration verdict 発行を拒否（n=1 は「決定論
        repeats 未検証」であり校正証拠にしない）
-    8. tuning split のみで軸別マージン表を算出（`separation_margin` 閾値）。
+    9. tuning split のみで軸別マージン表を算出（`separation_margin` 閾値）。
        tuning positive pair に 1 件でも `not_comparable` があれば freeze
        proposal を発行しない（レビュー対応 2026-07-30 第 5 ラウンド。negative の
        `not_comparable` は除外 + カウント記録のみで発行を妨げない）
-    9. holdout は `_holdout_unlocked` の全条件（status=frozen + 1 軸以上の整形済み
-       凍結軸 + coverage.floor_status=frozen）を満たすまで開かない
-    10. tuning positive pair の被覆分布から coverage floor 候補を emit
+    10. holdout は `_holdout_unlocked` の全条件（status=frozen + 1 軸以上の整形済み
+        凍結軸 + coverage.floor_status=frozen）を満たすまで開かない
+    11. tuning positive pair の被覆分布から coverage floor 候補を emit
     """
     if not reports:
         raise ValueError("evaluate_comparison: reports が空 (fail-closed)")
@@ -1073,6 +1206,7 @@ def evaluate_comparison(
     _validate_pair_labels_bound_to_manifest(reports)
     _validate_route_runner_injected_field(reports)
     _require_pair_pins_present_for_publishable_reports(reports)
+    _validate_pin_formats(reports)
 
     config, m3_registry_sha256 = load_m3_registry(registry_path)
     _, m1_registry_sha256 = _load_m1_registry(m1_registry_path)
