@@ -451,6 +451,36 @@ def test_repeats_rejects_observation_sha256_missing_in_one_repeat(
         harness._check_repeats_consistency([report1, report2])
 
 
+def test_observation_content_sha256_distinguishes_1e_minus_5_difference():
+    """`_observation_content_sha256` は丸めなし（`float(x).hex()`）で直列化する
+    ため、1e-5 差の軌跡でも別 hash になる（レビュー対応 2026-07-30 第 12 ラウンド）。
+
+    旧実装（`.4f` への丸め）では `100.00000` と `100.00001` は共に `"100.0000"`
+    へ収束し、同一 hash になっていた——4 桁未満の差異が repeats 間でぶれていても
+    pin 一致として見逃す穴があった。
+    """
+    obs_a = MelodyObservation(
+        route="fake",
+        source_model="test:fake",
+        frame_times=(0.0, 0.1),
+        frame_hz=(220.0, 100.00000),
+        frame_confidence=(0.9, 0.9),
+    )
+    obs_b = MelodyObservation(
+        route="fake",
+        source_model="test:fake",
+        frame_times=(0.0, 0.1),
+        frame_hz=(220.0, 100.00001),
+        frame_confidence=(0.9, 0.9),
+    )
+
+    # 前提: 差は確かに 1e-5 であり、旧 `.4f` 丸めでは区別できない値であること。
+    assert obs_b.frame_hz[1] - obs_a.frame_hz[1] == pytest.approx(1e-5)
+    assert format(obs_a.frame_hz[1], ".4f") == format(obs_b.frame_hz[1], ".4f")
+
+    assert harness._observation_content_sha256(obs_a) != harness._observation_content_sha256(obs_b)
+
+
 # --------------------------------------------------------------------------- #
 # マージン計算の手計算一致
 # --------------------------------------------------------------------------- #
@@ -1756,6 +1786,41 @@ def test_evaluate_holdout_validation_not_confirmed_when_holdout_pair_not_compara
     assert "p_extra_holdout_nc:not_comparable" in verdict["holdout_skipped_pairs"]
 
 
+def test_evaluate_holdout_validation_not_confirmed_when_comparison_missing_and_not_locked(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """holdout unlock 済み（registry 完全凍結）の下で、holdout pair 行から
+    `comparison` だけを削除し `status` は `holdout_locked_until_frozen` に
+    書き換えない（=ロック状態ではないのに comparison が欠落した不整合行）と、
+    軸別 verdict に関わらず `holdout_validation_status` は
+    `calibration_not_confirmed_on_holdout` に倒れ、`holdout_validation_reasons`
+    に `holdout_pair_missing_comparison(<pair_id>)` が記録される
+    （レビュー対応 2026-07-30 第 12 ラウンド・holdout 行 comparison 必須化）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    frozen_registry = tmp_path / "frozen_registry.yaml"
+    frozen_registry.write_text(_fully_frozen_registry_text(), encoding="utf-8")
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    reports = []
+    for _ in range(2):
+        report = harness.run_comparison(
+            manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
+        )
+        report["route_runner_injected"] = False
+        # p_neg_holdout の comparison だけを削除する——「split」等の他フィールド
+        # は残るため、locked pair の既存構造（"status" キーのみ）とは異なる。
+        del report["pairs"]["p_neg_holdout"]["comparison"]
+        reports.append(report)
+
+    verdict = harness.evaluate_comparison(reports, registry_path=frozen_registry)
+
+    assert verdict["holdout_locked_until_frozen"] is False
+    assert verdict["holdout_validation_status"] == "calibration_not_confirmed_on_holdout"
+    assert "holdout_pair_missing_comparison(p_neg_holdout)" in verdict["holdout_validation_reasons"]
+
+
 def test_evaluate_holdout_validation_absent_while_holdout_locked(
     tmp_path: Path, audio_paths: Dict[str, str]
 ):
@@ -2055,6 +2120,53 @@ def test_evaluate_rejects_m1_registry_sha_mismatch_with_current_registry(tmp_pat
     report2 = copy.deepcopy(report1)
 
     with pytest.raises(ValueError, match="m1 registry"):
+        harness.evaluate_comparison([report1, report2])
+
+
+# --------------------------------------------------------------------------- #
+# 第一者 M3 実装コードの content pin（レビュー対応 2026-07-30 第 12 ラウンド）
+# --------------------------------------------------------------------------- #
+def test_run_comparison_records_m3_code_sha256(tmp_path: Path, audio_paths: Dict[str, str]):
+    """`run_comparison` は `m3_code_sha256`（第一者 M3 実装コードの content pin）を
+    記録し、`_m3_code_sha256()` の現在値と一致する。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+
+    assert harness._is_sha256_hex(report["m3_code_sha256"])
+    assert report["m3_code_sha256"] == harness._m3_code_sha256()
+
+
+def test_evaluate_rejects_missing_m3_code_sha256(tmp_path: Path, audio_paths: Dict[str, str]):
+    """`m3_code_sha256` が report から欠落していれば理由つきで拒否する。"""
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    report2 = copy.deepcopy(report1)
+    del report2["m3_code_sha256"]
+
+    with pytest.raises(ValueError, match="m3_code_sha256 が記録されていない"):
+        harness.evaluate_comparison([report1, report2])
+
+
+def test_evaluate_rejects_m3_code_sha256_mismatch_with_current_code(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """report の `m3_code_sha256` が（report 間では一致していても）evaluate 実行中
+    の環境で再計算した値と食い違えば拒否する（report の値を書き換えて注入する
+    ケース——M3 実装コードが run 後に変更された疑いを検出する）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    report1["m3_code_sha256"] = "0" * 64
+    report2 = copy.deepcopy(report1)  # report 間は一致させ、現在計算値との不一致のみ踏む。
+
+    with pytest.raises(ValueError, match="現在実行中の evaluate 環境"):
         harness.evaluate_comparison([report1, report2])
 
 

@@ -70,6 +70,10 @@ if str(SRC) not in sys.path:
 
 import yaml  # noqa: E402
 
+import svp_rpe.melody.alignment as _m3_alignment_module  # noqa: E402
+import svp_rpe.melody.comparison as _m3_comparison_module  # noqa: E402
+import svp_rpe.melody.observability as _m3_observability_module  # noqa: E402
+import svp_rpe.melody.representation as _m3_representation_module  # noqa: E402
 from svp_rpe.melody.comparison import compare_melodies  # noqa: E402
 from svp_rpe.melody.observability import (  # noqa: E402
     MelodyObservation,
@@ -77,6 +81,7 @@ from svp_rpe.melody.observability import (  # noqa: E402
 )
 from svp_rpe.melody.representation import load_m3_registry  # noqa: E402
 from svp_rpe.melody.routing import select_routes  # noqa: E402
+from svp_rpe.utils.hashing import sha256_of_files  # noqa: E402
 
 M3_REGISTRY_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m3_comparison_registry.yaml"
 M1_REGISTRY_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "registry.yaml"
@@ -511,13 +516,22 @@ def _redact_unfrozen_axes_for_holdout(
 
 
 def _normalize_float_for_observation_hash(value: Optional[float]) -> Optional[str]:
-    """float を固定表記（小数点 4 桁）へ正規化する（`representation.py` の
-    `sequence_sha256` が使う `_normalize_float_for_hash` と同じ流儀。src/ は
-    変更しない方針のため、ハーネス内で同型の正規化を独自実装する）。
+    """float を厳密表現（`float(x).hex()`）へ正規化する。
+
+    決定論 pin のため丸めなし（表示用の系列 hash とは目的が異なる）。
+
+    レビュー対応 2026-07-30（第 12 ラウンド）: 従来は `representation.py` の
+    `sequence_sha256` が使う `_normalize_float_for_hash` と同じ固定小数表記
+    （`.4f`、小数点 4 桁への丸め）を踏襲していたが、これは軌跡レベル決定論の pin
+    としては粗すぎる——1e-5 のような 4 桁未満の差異が丸めで消え、抽出器出力が
+    実際には repeats 間でぶれていても pin 一致として見逃してしまう。`.hex()` は
+    IEEE754 の bit 表現をそのまま文字列化するため、丸めによる情報損失なしに
+    厳密な一致/不一致を判定できる。numpy スカラー型（`np.float32`/`np.float64`
+    等）は `.hex()` を持たないため、Python の `float` へ変換してから呼ぶ。
     """
     if value is None:
         return None
-    return format(value, ".4f")
+    return float(value).hex()
 
 
 def _observation_content_sha256(observation: MelodyObservation) -> str:
@@ -533,9 +547,12 @@ def _observation_content_sha256(observation: MelodyObservation) -> str:
     直接供給した notes の生値）が repeats 間でぶれていても検出できない穴が
     残るため、両者は独立した pin として扱う。
 
-    直列化は既存の `sequence_sha256` の正規化流儀（固定小数表記 + `json.dumps(
-    sort_keys=True, separators=(",", ":"))`）に合わせる（決定論・環境依存の
-    repr ブレを避ける）。
+    直列化は `json.dumps(sort_keys=True, separators=(",", ":"))`（決定論・環境
+    依存の repr ブレを避ける）を使うが、各 float 値そのものは
+    `_normalize_float_for_observation_hash`（丸めなしの厳密表現・`.hex()`）で
+    正規化する——`sequence_sha256`（`representation.py`）の固定小数表記
+    （`.4f`）とは異なり、本関数は丸めによる情報損失を許さない（軌跡レベル決定論
+    の pin という目的上、丸めで潰れる差異こそ検出したい）。
     """
     payload: Dict[str, Any] = {
         "frame_times": [
@@ -580,6 +597,37 @@ def _freeze_audio_copy(audio_path: "str | Path", staging_dir: str) -> "Tuple[str
     with os.fdopen(fd, "wb") as handle:
         handle.write(raw_bytes)
     return sha256_digest, tmp_name
+
+
+# --------------------------------------------------------------------------- #
+# 第一者 M3 実装コードの content pin（レビュー対応 2026-07-30 第 12 ラウンド）
+# --------------------------------------------------------------------------- #
+_M3_CODE_MODULES: Tuple[Any, ...] = (
+    _m3_representation_module,
+    _m3_alignment_module,
+    _m3_comparison_module,
+    _m3_observability_module,
+)
+
+
+def _m3_code_sha256() -> str:
+    """実行された第一者 M3 実装コードの合成 content pin。
+
+    対象は `representation.py` / `alignment.py` / `comparison.py` /
+    `observability.py`（M3 実装本体）と本スクリプト自身
+    （`scripts/run_melody_comparison.py`）。`svp_rpe.utils.hashing.sha256_of_files`
+    （既存ヘルパー、再実装しない）で 1 本の digest に畳む。パスは各モジュールの
+    `__file__`（本スクリプトは `__file__` 自身）から解決し、ハードコードしない
+    ——モジュールの実体が動けば pin もそれに追従する。
+
+    run phase は生成時にこの digest を report へ `m3_code_sha256` として記録し、
+    evaluate phase は report 間の一致に加え、evaluate 実行中の環境で同じ方法で
+    再計算した値との一致も要求する（`_validate_m3_code_sha256`）——registry
+    sha256 pin（`m3_registry_sha256`/`m1_registry_sha256`）と対称の検証。
+    """
+    paths = [Path(module.__file__).resolve() for module in _M3_CODE_MODULES]
+    paths.append(Path(__file__).resolve())
+    return sha256_of_files(paths)
 
 
 def run_comparison(
@@ -629,6 +677,7 @@ def run_comparison(
         "route_runner_injected": runner_injected,
         "m3_registry_sha256": m3_registry_sha256,
         "m1_registry_sha256": m1_registry_sha256,
+        "m3_code_sha256": _m3_code_sha256(),
         "manifest_path": str(Path(manifest_path).resolve()),
         "manifest_sha256": manifest_sha256,
         "pairs": {},
@@ -906,6 +955,8 @@ _REPORT_LEVEL_SHA256_FIELDS: Tuple[str, ...] = (
     "manifest_sha256",
     "m3_registry_sha256",
     "m1_registry_sha256",
+    # レビュー対応 2026-07-30（第 12 ラウンド）: 第一者 M3 実装コードの content pin。
+    "m3_code_sha256",
 )
 # route_provenance_a/b の crepe 経路固有必須 pin（`extractors.py
 # observe_via_route_with_provenance` が実測 crepe 観測に対して必ず記録するキー。
@@ -1144,6 +1195,51 @@ def _validate_registry_pins(
         )
 
 
+def _validate_m3_code_sha256(
+    reports: List[Dict[str, Any]],
+    *,
+    current_m3_code_sha256: str,
+) -> None:
+    """`m3_code_sha256`（第一者 M3 実装コードの content pin）の整合を検証する
+    (fail-closed)。`_validate_registry_pins` の m3/m1 registry sha256 検証と同型の
+    3 条件を課す:
+
+    (a) 各 report に `m3_code_sha256` が記録されていること（欠落は拒否）
+    (b) report 間で一致すること（レポート間不一致は拒否）
+    (c) 現在（evaluate 実行中の環境）で `_m3_code_sha256()` を再計算した値と
+        一致すること（report を直接書き換えて値を差し替えても、evaluate 側の
+        独立再計算との不一致で検出する）
+
+    レビュー対応 2026-07-30（第 12 ラウンド）: 従来 M3 実装コード
+    （representation/alignment/comparison/observability + 本スクリプト自身）に
+    対する content pin が一切なく、report が指す軌跡・holdout 判定がどのコード
+    版で作られたものかを追跡できなかった。registry sha256 pin と対称の検証を
+    課す。
+    """
+    for idx, report in enumerate(reports):
+        m3_code_sha = report.get("m3_code_sha256")
+        if not m3_code_sha:
+            raise ValueError(
+                f"evaluate_comparison: reports[{idx}] に m3_code_sha256 が記録されていない "
+                "(fail-closed)"
+            )
+    reference_m3_code_sha = reports[0]["m3_code_sha256"]
+    for idx, report in enumerate(reports[1:], start=1):
+        m3_code_sha = report["m3_code_sha256"]
+        if m3_code_sha != reference_m3_code_sha:
+            raise ValueError(
+                f"evaluate_comparison: reports[{idx}] の m3_code_sha256={m3_code_sha!r} が "
+                f"reports[0]={reference_m3_code_sha!r} と不一致 (fail-closed)"
+            )
+    if reference_m3_code_sha != current_m3_code_sha256:
+        raise ValueError(
+            f"evaluate_comparison: reports の m3_code_sha256={reference_m3_code_sha!r} が "
+            f"現在実行中の evaluate 環境で計算した M3 実装コードの sha256="
+            f"{current_m3_code_sha256!r} と不一致; M3 実装コードが run 後に変更されている疑い "
+            "(fail-closed)"
+        )
+
+
 def _validate_route_runner_injected_field(reports: List[Dict[str, Any]]) -> None:
     """各 report に `route_runner_injected` が bool として記録されていることを要求する。
 
@@ -1252,6 +1348,36 @@ def _validate_run_ids_distinct(reports: List[Dict[str, Any]]) -> None:
 
 def _holdout_pair_ids(pairs: Dict[str, Dict[str, Any]]) -> List[str]:
     return sorted(pair_id for pair_id, pair in pairs.items() if pair["split"] == "holdout")
+
+
+def _holdout_missing_comparison_pair_ids(pairs: Dict[str, Dict[str, Any]]) -> List[str]:
+    """holdout split のうち `comparison` を持たず、かつロック状態でもない pair_id を返す。
+
+    レビュー対応 2026-07-30（第 12 ラウンド・holdout 行 comparison 必須化）: holdout
+    が凍結解除された評価（呼び出し側で `_holdout_unlocked(config)` が True）では、
+    run phase の意図どおりに動いていれば holdout split の各 pair 行は必ず
+    `comparison` を持つ（`holdout_locked_until_frozen` 状態の行は unlock 前にのみ
+    現れる——`run_comparison` は holdout ロック中の pair に `{"split": ...,
+    "status": "holdout_locked_until_frozen"}` だけを書き、音声すら読まない）。
+    report が直接書き換えられて `comparison` が削除された（かつ `status` も
+    `holdout_locked_until_frozen` に書き換えられていない）行は、この不整合を
+    検出できないままだと holdout 検証が静かにスキップしてしまう
+    （`_holdout_validation_table` は `comparison is None` の行を単に continue
+    するため、正当なロック行と欠落行を区別しない）。ここで両者を区別し、欠落行の
+    pair_id を fail-closed の理由として返す——呼び出し側（`evaluate_comparison`）
+    はこれが非空なら `holdout_validation_status` を
+    `calibration_not_confirmed_on_holdout` に倒す。
+    """
+    missing: List[str] = []
+    for pair_id, pair in pairs.items():
+        if pair["split"] != "holdout":
+            continue
+        if "comparison" in pair:
+            continue
+        if pair.get("status") == "holdout_locked_until_frozen":
+            continue
+        missing.append(pair_id)
+    return sorted(missing)
 
 
 def _margin_table(
@@ -1482,31 +1608,35 @@ def evaluate_comparison(
        （extractor == "crepe"）限定——report を直接書き換えて run phase の
        ガードをすり抜ける経路を evaluate 側でも独立に塞ぐ
     3. registry sha256 pin の整合検証（report 間 + 現在ロードした registry）
-    4. pair 単位 pin（`audio_sha256_a/b` / `route_provenance_a/b`）の欠落検証 —
+    4. `m3_code_sha256`（第一者 M3 実装コードの content pin）の整合検証（report 間 +
+       現在実行中の evaluate 環境で再計算した値。レビュー対応 2026-07-30 第 12
+       ラウンド）: registry sha256 pin と対称に、report が指す軌跡・holdout 判定が
+       どのコード版で作られたものかを追跡する
+    5. pair 単位 pin（`audio_sha256_a/b` / `route_provenance_a/b`）の欠落検証 —
        publishable report は全 pair（holdout ロック pair を除く）で必須
        （レビュー対応 2026-07-30 第 6 ラウンド: 全欠落は repeats 整合性チェック
        だけでは検出できないバイパスを閉じる）
-    5. pin 値そのものの整形検証（レビュー対応 2026-07-30 第 8/9 ラウンド）: sha256
+    6. pin 値そのものの整形検証（レビュー対応 2026-07-30 第 8/9 ラウンド）: sha256
        系 pin（`manifest_sha256` / `m3_registry_sha256` / `m1_registry_sha256` /
-       `audio_sha256_a/b`）が 64 桁小文字 hex であること、`route_provenance_a/b`
-       が mapping であり crepe 系経路の必須 pin（`extractor_weights_sha256` /
-       `extractor_code_sha256`）も同様に 64 桁小文字 hex であることを検証する
-       （injected/publishable を問わず適用）
-    6. repeats（sequence hash / axes / audio_sha256 / observation_sha256 含む pair
+       `m3_code_sha256` / `audio_sha256_a/b`）が 64 桁小文字 hex であること、
+       `route_provenance_a/b` が mapping であり crepe 系経路の必須 pin
+       （`extractor_weights_sha256` / `extractor_code_sha256`）も同様に 64 桁
+       小文字 hex であることを検証する（injected/publishable を問わず適用）
+    7. repeats（sequence hash / axes / audio_sha256 / observation_sha256 含む pair
        単位 pin）の bit 一致検証
-    7. 全 report の `run_id` が存在・非空・相互に distinct であることの検証
+    8. 全 report の `run_id` が存在・非空・相互に distinct であることの検証
        （レビュー対応 2026-07-30 第 4 ラウンド: 同一 run の二重指定を検出する）
-    8. route_runner_injected な report があれば calibration verdict 発行を拒否
-    9. repeats が n>=2 でなければ calibration verdict 発行を拒否（n=1 は「決定論
-       repeats 未検証」であり校正証拠にしない）
-    10. tuning split のみで軸別マージン表を算出（`separation_margin` 閾値）。
+    9. route_runner_injected な report があれば calibration verdict 発行を拒否
+    10. repeats が n>=2 でなければ calibration verdict 発行を拒否（n=1 は「決定論
+        repeats 未検証」であり校正証拠にしない）
+    11. tuning split のみで軸別マージン表を算出（`separation_margin` 閾値）。
         tuning positive pair に 1 件でも `not_comparable` があれば freeze
         proposal を発行しない（レビュー対応 2026-07-30 第 5 ラウンド。negative の
         `not_comparable` は除外 + カウント記録のみで発行を妨げない）
-    11. holdout は `_holdout_unlocked` の全条件（status=frozen + 1 軸以上の整形済み
+    12. holdout は `_holdout_unlocked` の全条件（status=frozen + 1 軸以上の整形済み
         凍結軸 + coverage.floor_status=frozen）を満たすまで開かない
-    12. tuning positive pair の被覆分布から coverage floor 候補を emit
-    13. holdout unlock 済み（registry 完全凍結）かつ report に holdout 行（比較結果
+    13. tuning positive pair の被覆分布から coverage floor 候補を emit
+    14. holdout unlock 済み（registry 完全凍結）かつ report に holdout 行（比較結果
         つき）が存在する場合、凍結済み軸ごとに holdout の positive 最小類似・
         negative 最大類似を凍結値（`strong_min`/`none_max`）とだけ比較し
         `holdout_table` / `holdout_validation` を emit する（レビュー対応
@@ -1518,7 +1648,12 @@ def evaluate_comparison(
         軸別 verdict が全て `confirmed` でも `holdout_validation_status` を
         `calibration_not_confirmed_on_holdout` に倒し、`holdout_validation_reasons`
         に `holdout_pair_not_measurable(<pair_id>)` を列挙する（レビュー対応
-        2026-07-30 第 11 ラウンド・全対測定の要求）
+        2026-07-30 第 11 ラウンド・全対測定の要求）。holdout unlock 済みなのに
+        holdout split の pair 行が `comparison` を持たず、かつ
+        `holdout_locked_until_frozen` 状態でもない（欠落行）場合も同様に
+        `calibration_not_confirmed_on_holdout` へ倒し、`holdout_validation_reasons`
+        に `holdout_pair_missing_comparison(<pair_id>)` を列挙する（レビュー対応
+        2026-07-30 第 12 ラウンド・holdout 行 comparison 必須化）
     """
     if not reports:
         raise ValueError("evaluate_comparison: reports が空 (fail-closed)")
@@ -1542,6 +1677,7 @@ def evaluate_comparison(
         current_m3_sha256=m3_registry_sha256,
         current_m1_sha256=m1_registry_sha256,
     )
+    _validate_m3_code_sha256(reports, current_m3_code_sha256=_m3_code_sha256())
 
     _check_repeats_consistency(reports)
     _validate_run_ids_distinct(reports)
@@ -1627,11 +1763,15 @@ def evaluate_comparison(
         # 存在する場合のみ holdout 検証を行う——holdout ロック中（uncalibrated）
         # は holdout pair に `comparison` 自体が無いため、この節は自然に
         # スキップされる（既存動作を変えない）。
+        # 第 12 ラウンド: unlock 済みなのに `comparison` を持たず、かつロック
+        # 状態でもない欠落行が 1 件でもあれば（`holdout_has_comparison` が
+        # False でも）この節に入り、欠落を fail-closed で報告する。
+        missing_comparison_pair_ids = _holdout_missing_comparison_pair_ids(reference_pairs)
         holdout_has_comparison = any(
             pair["split"] == "holdout" and "comparison" in pair
             for pair in reference_pairs.values()
         )
-        if holdout_has_comparison:
+        if holdout_has_comparison or missing_comparison_pair_ids:
             frozen_axes = config.evidence_thresholds.axes or {}
             holdout_result = _holdout_validation_table(reference_pairs, frozen_axes=frozen_axes)
             verdict["holdout_table"] = holdout_result["axes"]
@@ -1645,19 +1785,22 @@ def evaluate_comparison(
                 verdict_value == "holdout_failed"
                 for verdict_value in verdict["holdout_validation"].values()
             )
-            if not_comparable_pair_ids or axis_failed:
-                # レビュー対応 2026-07-30（第 11 ラウンド）: holdout split に 1 件
-                # でも not_comparable pair があれば、軸別 verdict が全て
-                # confirmed でも holdout_validation_status を「未確認」に倒す
-                # (fail-closed — 測れなかった pair の存在を confirmed の側に
-                # 倒さない)。
+            reasons: List[str] = [
+                f"holdout_pair_not_measurable({pid})" for pid in not_comparable_pair_ids
+            ] + [
+                f"holdout_pair_missing_comparison({pid})" for pid in missing_comparison_pair_ids
+            ]
+            if reasons or axis_failed:
+                # レビュー対応 2026-07-30（第 11/12 ラウンド）: holdout split に
+                # 1 件でも not_comparable pair または comparison 欠落行があれば、
+                # 軸別 verdict が全て confirmed でも holdout_validation_status を
+                # 「未確認」に倒す (fail-closed — 測れなかった/記録されなかった
+                # pair の存在を confirmed の側に倒さない)。
                 verdict["holdout_validation_status"] = "calibration_not_confirmed_on_holdout"
             else:
                 verdict["holdout_validation_status"] = "confirmed"
-            if not_comparable_pair_ids:
-                verdict["holdout_validation_reasons"] = [
-                    f"holdout_pair_not_measurable({pid})" for pid in not_comparable_pair_ids
-                ]
+            if reasons:
+                verdict["holdout_validation_reasons"] = reasons
 
     return verdict
 
