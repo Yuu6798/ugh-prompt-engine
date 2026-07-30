@@ -159,24 +159,40 @@ class M3ComparisonConfig:
                 alignment_mapping["traceback_preference"]
             )
 
+        representation = _build_section(
+            RepresentationConfig, mapping["representation"], what="representation"
+        )
+        alignment = _build_section(AlignmentConfig, alignment_mapping, what="alignment")
+        coverage = _build_section(CoverageConfig, mapping["coverage"], what="coverage")
+        evidence_thresholds = _build_section(
+            EvidenceThresholdsConfig,
+            mapping["evidence_thresholds"],
+            what="evidence_thresholds",
+        )
+        separation_margin = _build_section(
+            SeparationMarginConfig,
+            mapping["separation_margin"],
+            what="separation_margin",
+        )
+        # レビュー対応 2026-07-30（第 17 ラウンド）: `_build_section` は known/
+        # required キー集合の構造検証しか行わず、値そのもの（型・値域・大小関係）
+        # は `dc(**mapping)` で無検査のまま通っていた——`floor: .nan` / `status:
+        # "bogus"` 等の壊れた値でも registry ロードが素通りしてしまう穴を、値
+        # 不変条件の fail-fast 検証で塞ぐ（構造検証と独立・追加）。
+        _validate_representation_values(representation)
+        _validate_alignment_values(alignment)
+        _validate_coverage_values(coverage)
+        _validate_evidence_thresholds_values(evidence_thresholds)
+        _validate_separation_margin_values(separation_margin)
+
         return cls(
             schema=schema,
             registered_utc=registered_utc,
-            representation=_build_section(
-                RepresentationConfig, mapping["representation"], what="representation"
-            ),
-            alignment=_build_section(AlignmentConfig, alignment_mapping, what="alignment"),
-            coverage=_build_section(CoverageConfig, mapping["coverage"], what="coverage"),
-            evidence_thresholds=_build_section(
-                EvidenceThresholdsConfig,
-                mapping["evidence_thresholds"],
-                what="evidence_thresholds",
-            ),
-            separation_margin=_build_section(
-                SeparationMarginConfig,
-                mapping["separation_margin"],
-                what="separation_margin",
-            ),
+            representation=representation,
+            alignment=alignment,
+            coverage=coverage,
+            evidence_thresholds=evidence_thresholds,
+            separation_margin=separation_margin,
         )
 
 
@@ -209,6 +225,181 @@ def _build_section(dc: type, mapping: Any, *, what: str) -> Any:
             f"m3_comparison_registry.{what} missing required keys: {sorted(missing)}"
         )
     return dc(**mapping)
+
+
+# --------------------------------------------------------------------------- #
+# 値不変条件のロード時検証（レビュー対応 2026-07-30 第 17 ラウンド）
+# --------------------------------------------------------------------------- #
+# `_build_section` の構造検証（未知/欠落キー）は値そのものの妥当性を保証しない
+# ——registry.yaml に `floor: .nan` や `status: "bogus"` を書いても
+# `dc(**mapping)` はそのまま dataclass を構築してしまう。以下は各節の値不変
+# 条件を fail-fast（`ValueError`）で enforce する。凍結レジストリ
+# （`m3_comparison_registry.yaml`）の現行値は全て通ることをテストで確認する
+# （`tests/test_melody_representation.py`）——値そのものの変更はしない。
+
+
+def _reject_bool(value: Any, *, what: str) -> None:
+    if isinstance(value, bool):
+        raise ValueError(
+            f"m3_comparison_registry.{what}={value!r} は bool であってはならない (fail-closed)"
+        )
+
+
+def _require_finite_number(value: Any, *, what: str) -> float:
+    _reject_bool(value, what=what)
+    if not isinstance(value, (int, float)):
+        raise ValueError(
+            f"m3_comparison_registry.{what}={value!r} は非 bool の数値でなければならない (fail-closed)"
+        )
+    fvalue = float(value)
+    if not math.isfinite(fvalue):
+        raise ValueError(
+            f"m3_comparison_registry.{what}={value!r} は有限数値でなければならない (fail-closed)"
+        )
+    return fvalue
+
+
+def _require_positive_int(value: Any, *, what: str) -> int:
+    _reject_bool(value, what=what)
+    if not isinstance(value, int):
+        raise ValueError(
+            f"m3_comparison_registry.{what}={value!r} は非 bool の整数でなければならない (fail-closed)"
+        )
+    if value <= 0:
+        raise ValueError(
+            f"m3_comparison_registry.{what}={value!r} は正の整数でなければならない (fail-closed)"
+        )
+    return value
+
+
+def _validate_representation_values(config: "RepresentationConfig") -> None:
+    """`representation` 節の値不変条件を検証する（設計固定値・型・値域）。"""
+    _reject_bool(
+        config.pitch_quantization_semitones, what="representation.pitch_quantization_semitones"
+    )
+    if config.pitch_quantization_semitones != 1:
+        raise ValueError(
+            "m3_comparison_registry.representation.pitch_quantization_semitones="
+            f"{config.pitch_quantization_semitones!r} は 1 でなければならない (M2d 打ち切り"
+            "統計拘束による設計固定値; 1 未満への変更は禁止・1 超は設計外, fail-closed)"
+        )
+    _require_positive_int(
+        config.contour_small_max_semitones, what="representation.contour_small_max_semitones"
+    )
+    ioi_step = _require_finite_number(
+        config.ioi_ratio_log2_step, what="representation.ioi_ratio_log2_step"
+    )
+    if not ioi_step > 0:
+        raise ValueError(
+            "m3_comparison_registry.representation.ioi_ratio_log2_step="
+            f"{config.ioi_ratio_log2_step!r} は 0 より大きくなければならない (fail-closed)"
+        )
+    duration_step = _require_finite_number(
+        config.duration_ratio_log2_step, what="representation.duration_ratio_log2_step"
+    )
+    if not duration_step > 0:
+        raise ValueError(
+            "m3_comparison_registry.representation.duration_ratio_log2_step="
+            f"{config.duration_ratio_log2_step!r} は 0 より大きくなければならない (fail-closed)"
+        )
+    _require_positive_int(
+        config.chroma_fold_semitones, what="representation.chroma_fold_semitones"
+    )
+    divergence = _require_finite_number(
+        config.octave_artifact_divergence, what="representation.octave_artifact_divergence"
+    )
+    if not (0.0 <= divergence <= 1.0):
+        raise ValueError(
+            "m3_comparison_registry.representation.octave_artifact_divergence="
+            f"{config.octave_artifact_divergence!r} は 0.0〜1.0 の範囲でなければならない "
+            "(fail-closed)"
+        )
+
+
+_TRACEBACK_PREFERENCE_VALUES = ("diag", "up", "left")
+
+
+def _validate_alignment_values(config: "AlignmentConfig") -> None:
+    """`alignment` 節の値不変条件を検証する。"""
+    match_score = _require_finite_number(config.match_score, what="alignment.match_score")
+    mismatch_score = _require_finite_number(
+        config.mismatch_score, what="alignment.mismatch_score"
+    )
+    _require_finite_number(config.gap_open, what="alignment.gap_open")
+    _require_finite_number(config.gap_extend, what="alignment.gap_extend")
+    _require_finite_number(config.phrase_gap_score, what="alignment.phrase_gap_score")
+    if not (match_score > mismatch_score):
+        raise ValueError(
+            f"m3_comparison_registry.alignment.match_score={config.match_score!r} は "
+            f"mismatch_score={config.mismatch_score!r} より大きくなければならない (fail-closed)"
+        )
+    phrase_gap_sec = _require_finite_number(
+        config.phrase_gap_sec, what="alignment.phrase_gap_sec"
+    )
+    if not phrase_gap_sec > 0:
+        raise ValueError(
+            f"m3_comparison_registry.alignment.phrase_gap_sec={config.phrase_gap_sec!r} は 0 "
+            "より大きくなければならない (fail-closed)"
+        )
+    preference = config.traceback_preference
+    if (
+        not isinstance(preference, tuple)
+        or len(preference) != len(_TRACEBACK_PREFERENCE_VALUES)
+        or set(preference) != set(_TRACEBACK_PREFERENCE_VALUES)
+    ):
+        raise ValueError(
+            f"m3_comparison_registry.alignment.traceback_preference={preference!r} は "
+            f"{list(_TRACEBACK_PREFERENCE_VALUES)} の順列でなければならない (要素過不足・重複・"
+            "不明値は fail-closed)"
+        )
+
+
+_COVERAGE_FLOOR_STATUS_VALUES = {"provisional_until_m3d", "frozen"}
+
+
+def _validate_coverage_values(config: "CoverageConfig") -> None:
+    """`coverage` 節の値不変条件を検証する。"""
+    floor = _require_finite_number(config.floor, what="coverage.floor")
+    if not (0.0 <= floor <= 1.0):
+        raise ValueError(
+            f"m3_comparison_registry.coverage.floor={config.floor!r} は 0.0〜1.0 の範囲で"
+            "なければならない (fail-closed)"
+        )
+    if config.floor_status not in _COVERAGE_FLOOR_STATUS_VALUES:
+        raise ValueError(
+            f"m3_comparison_registry.coverage.floor_status={config.floor_status!r} は "
+            f"{sorted(_COVERAGE_FLOOR_STATUS_VALUES)} のいずれかでなければならない (fail-closed)"
+        )
+
+
+_EVIDENCE_THRESHOLDS_STATUS_VALUES = {"uncalibrated", "frozen"}
+
+
+def _validate_evidence_thresholds_values(config: "EvidenceThresholdsConfig") -> None:
+    """`evidence_thresholds` 節の値不変条件を検証する（`status` のみ。`axes` の内容
+    検証は `scripts/run_melody_comparison.py` の `_validate_frozen_axes`（holdout
+    解錠の cross-field 判定）に既に存在し、ここでの重複導入はしない）。
+    """
+    if config.status not in _EVIDENCE_THRESHOLDS_STATUS_VALUES:
+        raise ValueError(
+            f"m3_comparison_registry.evidence_thresholds.status={config.status!r} は "
+            f"{sorted(_EVIDENCE_THRESHOLDS_STATUS_VALUES)} のいずれかでなければならない "
+            "(fail-closed)"
+        )
+
+
+def _validate_separation_margin_values(config: "SeparationMarginConfig") -> None:
+    """`separation_margin` 節の値不変条件を検証する。"""
+    margin = _require_finite_number(
+        config.min_same_minus_cross_margin,
+        what="separation_margin.min_same_minus_cross_margin",
+    )
+    if not (0.0 < margin <= 1.0):
+        raise ValueError(
+            "m3_comparison_registry.separation_margin.min_same_minus_cross_margin="
+            f"{config.min_same_minus_cross_margin!r} は 0 より大きく 1.0 以下でなければならない "
+            "(fail-closed)"
+        )
 
 
 class _NoDupSafeLoader(yaml.SafeLoader):

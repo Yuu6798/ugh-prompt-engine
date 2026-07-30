@@ -95,6 +95,95 @@ def test_from_registry_rejects_wrong_schema():
         M3ComparisonConfig.from_registry(mapping)
 
 
+# --------------------------------------------------------------------------- #
+# 値不変条件のロード時検証（レビュー対応 2026-07-30 第 17 ラウンド）
+# --------------------------------------------------------------------------- #
+def test_from_registry_accepts_frozen_registry_values():
+    """凍結レジストリ（`m3_comparison_registry.yaml`）の現行値は全て新検証を通る
+    （回帰）。値そのものは変更しない。
+    """
+    config = M3ComparisonConfig.from_registry(_load_m3_mapping())
+    assert config.representation.pitch_quantization_semitones == 1
+    assert config.alignment.match_score > config.alignment.mismatch_score
+    assert config.coverage.floor_status in {"provisional_until_m3d", "frozen"}
+    assert config.evidence_thresholds.status in {"uncalibrated", "frozen"}
+    assert 0.0 < config.separation_margin.min_same_minus_cross_margin <= 1.0
+
+
+def test_from_registry_rejects_pitch_quantization_not_equal_one():
+    """`pitch_quantization_semitones` は M2d 拘束の設計固定値=1。2 への変更は拒否。"""
+    mapping = _load_m3_mapping()
+    mapping["representation"] = dict(mapping["representation"], pitch_quantization_semitones=2)
+    with pytest.raises(ValueError, match="pitch_quantization_semitones"):
+        M3ComparisonConfig.from_registry(mapping)
+
+
+def test_from_registry_rejects_octave_artifact_divergence_out_of_range():
+    """`octave_artifact_divergence` は 0.0〜1.0 域外なら fail-closed。"""
+    mapping = _load_m3_mapping()
+    mapping["representation"] = dict(
+        mapping["representation"], octave_artifact_divergence=1.5
+    )
+    with pytest.raises(ValueError, match="octave_artifact_divergence"):
+        M3ComparisonConfig.from_registry(mapping)
+
+
+def test_from_registry_rejects_match_score_not_greater_than_mismatch_score():
+    """`match_score` は `mismatch_score` より大きくなければならない。"""
+    mapping = _load_m3_mapping()
+    mapping["alignment"] = dict(mapping["alignment"], match_score=-2.0)
+    with pytest.raises(ValueError, match="match_score"):
+        M3ComparisonConfig.from_registry(mapping)
+
+
+def test_from_registry_rejects_traceback_preference_not_a_permutation():
+    """`traceback_preference` は [diag, up, left] の順列でなければならない
+    （重複・不明値・要素過不足は fail-closed）。
+    """
+    mapping = _load_m3_mapping()
+    mapping["alignment"] = dict(mapping["alignment"], traceback_preference=["diag", "diag", "left"])
+    with pytest.raises(ValueError, match="traceback_preference"):
+        M3ComparisonConfig.from_registry(mapping)
+
+
+def test_from_registry_rejects_coverage_floor_out_of_range():
+    """`coverage.floor` は 0.0〜1.0 域外なら fail-closed。"""
+    mapping = _load_m3_mapping()
+    mapping["coverage"] = dict(mapping["coverage"], floor=1.5)
+    with pytest.raises(ValueError, match="coverage.floor"):
+        M3ComparisonConfig.from_registry(mapping)
+
+
+def test_from_registry_rejects_unknown_coverage_floor_status():
+    """`coverage.floor_status` は {provisional_until_m3d, frozen} のいずれかでなければ
+    ならない。
+    """
+    mapping = _load_m3_mapping()
+    mapping["coverage"] = dict(mapping["coverage"], floor_status="bogus")
+    with pytest.raises(ValueError, match="floor_status"):
+        M3ComparisonConfig.from_registry(mapping)
+
+
+def test_from_registry_rejects_unknown_evidence_thresholds_status():
+    """`evidence_thresholds.status` は {uncalibrated, frozen} のいずれかでなければ
+    ならない。
+    """
+    mapping = _load_m3_mapping()
+    mapping["evidence_thresholds"] = {"status": "bogus"}
+    with pytest.raises(ValueError, match="evidence_thresholds.status"):
+        M3ComparisonConfig.from_registry(mapping)
+
+
+def test_from_registry_rejects_separation_margin_out_of_range():
+    """`separation_margin.min_same_minus_cross_margin` は 0 より大きく 1.0 以下
+    でなければならない。
+    """
+    mapping = _load_m3_mapping()
+    mapping["separation_margin"] = {"min_same_minus_cross_margin": 0.0}
+    with pytest.raises(ValueError, match="separation_margin"):
+        M3ComparisonConfig.from_registry(mapping)
+
+
 def test_phrase_gap_sec_synced_with_m1_registry():
     """M3 alignment.phrase_gap_sec は M1 registry.yaml の observation_gate.phrase_gap_sec と同値。"""
     m1 = yaml.safe_load(M1_REGISTRY_PATH.read_text(encoding="utf-8"))

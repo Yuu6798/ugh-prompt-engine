@@ -18,7 +18,7 @@ M1「聞こえるか」→ M2「聞き間違えていないか」→ **M3「同�
 
 | 資産 | 場所 | 役割 |
 |---|---|---|
-| 表現(M3a) | `src/svp_rpe/melody/representation.py` | `MelodyNote` 列 → 正規化系列（`MelodySequences`: 音程列・輪郭列・IOI 比列・音長比列）+ `m3_comparison_registry.yaml` のロード（未知/欠落キー fail-fast） |
+| 表現(M3a) | `src/svp_rpe/melody/representation.py` | `MelodyNote` 列 → 正規化系列（`MelodySequences`: 音程列・輪郭列・IOI 比列・音長比列）+ `m3_comparison_registry.yaml` のロード（未知/欠落キー fail-fast、かつ値不変条件のロード時検証——レビュー対応 2026-07-30 第 17 ラウンド。§5 参照） |
 | 整列(M3b) | `src/svp_rpe/melody/alignment.py` | ノート層アフィンギャップ NW（Gotoh・`align_intervals`）+ フレーズ層 NW（`align_melodies`）+ 被覆信号（`AlignmentCoverage`） |
 | 比較器(M3c) | `src/svp_rpe/melody/comparison.py` | `compare_melodies`: M1 観測ゲート → 表現 → 整列 → 被覆下限ゲート → 軸類似 → オクターブ折返しガード → evidence 導出 → `MelodyComparisonReport` |
 | 校正ハーネス(M3d) | `scripts/run_melody_comparison.py` | pairs manifest から run report を作る（run phase）+ 複数 report からマージン表 / holdout ロックを導出する（evaluate phase） |
@@ -126,6 +126,17 @@ config, provenance_extra=None)` の処理順:
 
 これらの値は M3a/M3b/M3c いずれのモジュールからも変更しない。値の変更は M3d の
 tuning→凍結手続き（本ドキュメントの校正状態節）でのみ許される。
+
+`M3ComparisonConfig.from_registry`（`representation.py`）は上記の値そのものに
+ついても不変条件をロード時に fail-fast 検証する（レビュー対応 2026-07-30 第 17
+ラウンド）: `pitch_quantization_semitones == 1` / 各種丸め刻み・折返し周期が
+非 bool の正数・0 より大きいこと / `match_score > mismatch_score` /
+`traceback_preference` が `[diag, up, left]` の順列であること /
+`coverage.floor` と `separation_margin.min_same_minus_cross_margin` が
+それぞれの値域に収まること / `coverage.floor_status` と
+`evidence_thresholds.status` が既定の enum 値のいずれかであること。従来の
+構造検証（未知/欠落キー）とは独立に、値そのもの（型・値域・大小関係）を
+enforce する。
 
 ## 6. 校正ハーネス（M3d・`scripts/run_melody_comparison.py`）
 

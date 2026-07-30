@@ -73,8 +73,10 @@ import yaml  # noqa: E402
 
 import svp_rpe.melody.alignment as _m3_alignment_module  # noqa: E402
 import svp_rpe.melody.comparison as _m3_comparison_module  # noqa: E402
+import svp_rpe.melody.extractors as _m3_extractors_module  # noqa: E402
 import svp_rpe.melody.observability as _m3_observability_module  # noqa: E402
 import svp_rpe.melody.representation as _m3_representation_module  # noqa: E402
+import svp_rpe.melody.routing as _m3_routing_module  # noqa: E402
 from svp_rpe.melody.comparison import compare_melodies  # noqa: E402
 from svp_rpe.melody.observability import (  # noqa: E402
     MelodyObservation,
@@ -728,6 +730,12 @@ _M3_CODE_MODULES: Tuple[Any, ...] = (
     _m3_alignment_module,
     _m3_comparison_module,
     _m3_observability_module,
+    # レビュー対応 2026-07-30（第 17 ラウンド）: route 実行モジュール（入力種別→
+    # 抽出経路の候補列挙 `routing.py` / 波形→`MelodyObservation` 変換 `extractors.py`）
+    # は run phase で実際に呼ばれる第一者コードであるにもかかわらず pin 対象から
+    # 漏れていた——両モジュールが変わっても `m3_code_sha256` は追従しないままだった。
+    _m3_extractors_module,
+    _m3_routing_module,
 )
 
 
@@ -735,7 +743,9 @@ def _m3_code_sha256(*, use_cache: bool = True) -> str:
     """実行された第一者 M3 実装コードの合成 content pin。
 
     対象は `representation.py` / `alignment.py` / `comparison.py` /
-    `observability.py`（M3 実装本体）と本スクリプト自身
+    `observability.py`（M3 実装本体）/ `routing.py`（入力種別→抽出経路の候補列挙）/
+    `extractors.py`（波形→`MelodyObservation` 変換。既定 route_runner が呼ぶ
+    実抽出器本体、レビュー対応 2026-07-30 第 17 ラウンドで追加）と本スクリプト自身
     （`scripts/run_melody_comparison.py`）。`svp_rpe.utils.hashing.sha256_of_files`
     （既存ヘルパー、再実装しない）で 1 本の digest に畳む。パスは各モジュールの
     `__file__`（本スクリプトは `__file__` 自身）から解決し、ハードコードしない

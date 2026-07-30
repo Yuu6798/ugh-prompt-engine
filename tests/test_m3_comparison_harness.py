@@ -175,13 +175,17 @@ def test_validate_separation_margin_accepts_value_synced_with_m1_registry():
 def test_validate_separation_margin_rejects_invalid_value(tmp_path: Path, bad_margin: Any):
     """一時 M3 registry の separation_margin を -1/2.0/True に改変すると fail-closed
     （非 bool の有限数値かつ 0 < margin <= 1 でなければならない）。
+
+    レビュー対応 2026-07-30（第 17 ラウンド）: この値不変条件は
+    `M3ComparisonConfig.from_registry`（`representation.py`）がロード時に enforce
+    するようになったため、`harness.load_m3_registry` の呼び出し自体がここで
+    fail-closed する——`_validate_separation_margin_inherited_from_m1`（M0/M1
+    継承の一致検証、別の独立した検証）まで到達する前に拒否される。
     """
     registry_path = _write_m3_registry_variant(tmp_path, margin_value=bad_margin)
-    config, _ = harness.load_m3_registry(registry_path)
-    m1_mapping = _m1_registry_mapping()
 
     with pytest.raises(ValueError, match="separation_margin"):
-        harness._validate_separation_margin_inherited_from_m1(config, m1_mapping)
+        harness.load_m3_registry(registry_path)
 
 
 def test_validate_separation_margin_rejects_mismatch_with_m1_registry(tmp_path: Path):
@@ -1684,23 +1688,38 @@ def test_holdout_unlocked_rejects_invalid_coverage_floor(bad_floor: Any):
     frozen かつ axes も揃っていても holdout を開かない（レビュー対応 2026-07-30
     第 14 ラウンド: 従来は `floor_status` という文字列しか見ておらず、値自体の
     破損を検出できなかった）。
-    """
-    from svp_rpe.melody.representation import M3ComparisonConfig
 
-    base_mapping = _registry_mapping()
-    mapping = dict(base_mapping)
-    mapping["evidence_thresholds"] = {
-        "status": "frozen",
-        "axes": {
-            "contour": {"strong_min": 0.8, "none_max": 0.2},
-            "interval": {"strong_min": 0.8, "none_max": 0.2},
-            "rhythm": {"strong_min": 0.7, "none_max": 0.3},
-        },
-    }
-    mapping["coverage"] = dict(base_mapping["coverage"])
-    mapping["coverage"]["floor_status"] = "frozen"
-    mapping["coverage"]["floor"] = bad_floor
-    config = M3ComparisonConfig.from_registry(mapping)
+    レビュー対応 2026-07-30（第 17 ラウンド）: `coverage.floor` の値不変条件は
+    `M3ComparisonConfig.from_registry`（`representation.py`）がロード時に fail-fast
+    enforce するようになった——`from_registry` 経由ではもう壊れた floor 値の
+    config を作れないため、ここでは（`from_registry` を経由しない）直接
+    dataclass 構築で壊れた config を組み、`_validate_coverage_floor` /
+    `_holdout_unlocked`（from_registry を経由しない config にも安全側に倒す
+    defense-in-depth）が引き続き機能することを確認する。
+    """
+    from svp_rpe.melody.representation import (
+        CoverageConfig,
+        EvidenceThresholdsConfig,
+        M3ComparisonConfig,
+    )
+
+    base_config, _ = harness.load_m3_registry(M3_REGISTRY_PATH)
+    config = M3ComparisonConfig(
+        schema=base_config.schema,
+        registered_utc=base_config.registered_utc,
+        representation=base_config.representation,
+        alignment=base_config.alignment,
+        coverage=CoverageConfig(floor=bad_floor, floor_status="frozen"),
+        evidence_thresholds=EvidenceThresholdsConfig(
+            status="frozen",
+            axes={
+                "contour": {"strong_min": 0.8, "none_max": 0.2},
+                "interval": {"strong_min": 0.8, "none_max": 0.2},
+                "rhythm": {"strong_min": 0.7, "none_max": 0.3},
+            },
+        ),
+        separation_margin=base_config.separation_margin,
+    )
 
     assert harness._validate_coverage_floor(config.coverage.floor) is False
     assert harness._holdout_unlocked(config) is False
