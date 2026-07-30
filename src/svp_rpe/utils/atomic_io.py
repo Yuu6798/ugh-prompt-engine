@@ -203,7 +203,16 @@ def atomic_publish_bundle(
     `catch` パラメータで例外型を選ばせる余地を撤去し全呼び出し元をこの
     挙動へ統一した）が飛べば、rename 済み分を削除し `prev/` snapshot を
     元位置へ復元して `output_dir` を呼び出し前と同じ状態に戻してから
-    re-raise する。
+    re-raise する。各 `os.replace` に先立って対応する追跡登録
+    （`snapshots[filename] = previous` / `published.append(filename)`）を
+    行う（Codex P2 review round 6 指摘: syscall 完了直後〜登録実行前に
+    非同期シグナルが割り込むと、実際には rename 済みなのに rollback がそれを
+    知らず追跡漏れの partial bundle が残り得た）。
+
+    境界宣言: 非同期例外下の rollback は best-effort である。publish syscall
+    と追跡登録の順序を入れ替えたことで単一 syscall 幅の窓は閉じているが、
+    rollback 処理自身（`except BaseException` ブロック内の `os.unlink` /
+    `os.replace` 呼び出し）への割り込みまでは契約外。
     """
     for filename in list(contents) + list(stale_filenames):
         _validate_bundle_name(filename)
@@ -245,11 +254,21 @@ def atomic_publish_bundle(
                 target = output_dir / filename
                 if target.exists():
                     previous = snapshot_dir / filename
-                    os.replace(target, previous)
+                    # 追跡登録（`snapshots[filename] = previous`）を
+                    # `os.replace` の**前**に行う（Codex P2 review round 6
+                    # 指摘: 従来は `os.replace` の後で登録していたため、
+                    # replace 完了直後〜登録実行前に非同期シグナルが割り込むと
+                    # `target` の中身が `prev/` へ移動済みなのに `snapshots`
+                    # が知らないまま `staging_dir` の `TemporaryDirectory`
+                    # cleanup で失われ、既存ファイルが復元不能になり得た）。
                     snapshots[filename] = previous
+                    os.replace(target, previous)
             for filename in contents:
-                os.replace(payload_dir / filename, output_dir / filename)
+                # 同じ理由で `published.append` を `os.replace` の前に行う
+                # （publish 前に登録済みなので、replace 完了直後〜登録実行前
+                # の窓が存在しない）。
                 published.append(filename)
+                os.replace(payload_dir / filename, output_dir / filename)
         except BaseException:
             for filename in published:
                 try:

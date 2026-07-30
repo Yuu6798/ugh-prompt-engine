@@ -381,3 +381,47 @@ def test_atomic_publish_bundle_base_exception_during_rename_still_rolls_back(
     assert (output_dir / "b.json").read_bytes() == b"old-b"
 
 
+def test_atomic_publish_bundle_interrupted_right_after_replace_leaves_no_new_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`os.replace` が実際に完了した**直後**に非同期シグナル（`BaseException`）
+    が割り込んでも、新規ターゲット（publish 前は存在しなかったファイル）が
+    rollback で追跡漏れのまま残置されない（Codex P2 review round 6 指摘: 旧
+    実装は `os.replace` の後で `published.append` していたため、この窓に
+    割り込まれると新規ターゲットが `published` に載らず unlink されない
+    partial bundle が残り得た。追跡登録を `os.replace` の前へ移動したことで、
+    この race を実 replace 完了後に注入した例外で再現しても安全であることを
+    検証する）。"""
+    output_dir = tmp_path / "bundle"
+    output_dir.mkdir()
+    (output_dir / "a.json").write_bytes(b"old-a")
+    # "b.json" は publish 前は存在しない新規ターゲット。
+
+    real_replace = os.replace
+    calls = {"failed_once": False}
+
+    def flaky_replace(src: object, dst: object) -> None:
+        # 実際の replace を先に完了させてから例外を注入する（「syscall は
+        # 完了しているが後続の Python 側処理はまだ」という最も厳しい窓を
+        # 再現する）。rollback 内の `os.replace` 呼び出し（`b.json` 以外の
+        # dst）は素通しして壊さない。
+        real_replace(src, dst)
+        if str(dst) == str(output_dir / "b.json") and not calls["failed_once"]:
+            calls["failed_once"] = True
+            raise _InjectedBaseException(
+                "simulated async signal delivered right after replace completes"
+            )
+
+    monkeypatch.setattr(os, "replace", flaky_replace)
+
+    with pytest.raises(_InjectedBaseException):
+        atomic_publish_bundle(
+            output_dir,
+            {"a.json": b"new-a", "b.json": b"new-b"},
+            protected_inputs=(),
+        )
+
+    assert not (output_dir / "b.json").exists()
+    assert (output_dir / "a.json").read_bytes() == b"old-a"
+
+
