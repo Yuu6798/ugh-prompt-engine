@@ -1,0 +1,404 @@
+"""tests/test_m3_comparison_harness.py — `scripts/run_melody_comparison.py`（M3d）のテスト。
+
+CI 安全（fake route_runner のみ・実音声/実 crepe 不要）: run→evaluate の二相
+メカニズム、sequence hash pin（repeats 決定論）、tuning-only マージン計算、
+holdout ロック、route_runner_injected による calibration verdict 発行拒否、
+`--out` の protected-path を検証する。
+"""
+from __future__ import annotations
+
+import copy
+import json
+import sys
+from pathlib import Path
+from typing import Any, Dict, List, Tuple
+
+import pytest
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+import run_melody_comparison as harness  # noqa: E402
+from svp_rpe.melody.observability import MelodyNote, MelodyObservation  # noqa: E402
+
+M3_REGISTRY_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m3_comparison_registry.yaml"
+M1_REGISTRY_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "registry.yaml"
+
+
+def _note(pitch_midi: float, start_sec: float, end_sec: float, confidence: float = 0.9) -> MelodyNote:
+    return MelodyNote(
+        start_sec=start_sec, end_sec=end_sec, pitch_midi=pitch_midi, confidence=confidence
+    )
+
+
+def _good_notes(shift: int = 0) -> List[MelodyNote]:
+    """観測ゲートを通す 2 フレーズ・10 ノートの旋律（`test_melody_comparison.py` と同型）。"""
+    phrase1 = [60, 62, 64, 65, 67]
+    phrase2 = [69, 67, 65, 64, 62]
+    notes: List[MelodyNote] = []
+    t = 0.0
+    for p in phrase1 + [None] + phrase2:  # type: ignore[list-item]
+        if p is None:
+            t += 1.0
+            continue
+        notes.append(_note(p + shift, t, t + 0.25))
+        t += 0.3
+    return notes
+
+
+def _different_notes() -> List[MelodyNote]:
+    """`_good_notes()` と折返し音程が一切重ならない旋律（negative 用）。"""
+    phrase1 = [60, 65, 62, 56, 52]  # intervals +5,-3,-6,-4
+    phrase2 = [57, 65, 60, 68, 62]  # intervals +8,-5,+8,-6 (boundary 57-52=5)
+    notes: List[MelodyNote] = []
+    t = 0.0
+    for p in phrase1 + [None] + phrase2:  # type: ignore[list-item]
+        if p is None:
+            t += 1.0
+            continue
+        notes.append(_note(p, t, t + 0.25))
+        t += 0.3
+    return notes
+
+
+def _notes_by_path() -> Dict[str, List[MelodyNote]]:
+    return {
+        "song_a": _good_notes(),
+        "song_a_transposed": _good_notes(shift=3),
+        "song_b": _different_notes(),
+    }
+
+
+def _fake_route_runner(notes_by_path: Dict[str, List[MelodyNote]]) -> "harness.RouteRunner":
+    def _runner(audio_path: str) -> "Tuple[MelodyObservation, Dict[str, Any]]":
+        notes = notes_by_path[audio_path]
+        return (
+            MelodyObservation(route="fake", source_model="test:fake", notes=tuple(notes)),
+            {"fake_provenance": True},
+        )
+
+    return _runner
+
+
+def _write_manifest(path: Path, pairs: List[Dict[str, Any]]) -> None:
+    manifest = {"schema": "m3-comparison-pairs/0.1", "pairs": pairs}
+    path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+
+def _default_pairs() -> List[Dict[str, Any]]:
+    return [
+        {
+            "pair_id": "p_pos_tuning",
+            "kind": "positive_transform",
+            "split": "tuning",
+            "audio_a": "song_a",
+            "audio_b": "song_a_transposed",
+            "expected": "same",
+        },
+        {
+            "pair_id": "p_neg_tuning",
+            "kind": "negative_cross",
+            "split": "tuning",
+            "audio_a": "song_a",
+            "audio_b": "song_b",
+            "expected": "different",
+        },
+        {
+            "pair_id": "p_pos_holdout",
+            "kind": "positive_transform",
+            "split": "holdout",
+            "audio_a": "song_a",
+            "audio_b": "song_a_transposed",
+            "expected": "same",
+        },
+    ]
+
+
+# --------------------------------------------------------------------------- #
+# run → evaluate の機構
+# --------------------------------------------------------------------------- #
+def test_run_then_evaluate_mechanism(tmp_path: Path):
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs())
+    runner = _fake_route_runner(_notes_by_path())
+
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+
+    assert report["schema_version"] == harness._EXPECTED_RUN_SCHEMA
+    assert report["route_runner_injected"] is True
+    assert set(report["pairs"]) == {"p_pos_tuning", "p_neg_tuning", "p_pos_holdout"}
+    assert report["pairs"]["p_pos_tuning"]["comparison"]["axes"]["interval"] == pytest.approx(1.0)
+    assert report["pairs"]["p_neg_tuning"]["comparison"]["evidence"] == "not_comparable"
+
+    verdict = harness.evaluate_comparison([report])
+    assert verdict["repeats_count"] == 1
+    assert verdict["repeats_consistent"] is True
+    # フェイク runner で作った report は calibration verdict を発行しない。
+    assert verdict["calibration_verdict_status"] == "rejected_route_runner_injected"
+
+
+# --------------------------------------------------------------------------- #
+# sequence hash pin（軌跡レベル決定論）
+# --------------------------------------------------------------------------- #
+def test_repeats_hash_pin_bit_identical(tmp_path: Path):
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs())
+    runner = _fake_route_runner(_notes_by_path())
+
+    report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    report2 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+
+    # 決定論の bit 一致を確認するだけの内部ヘルパー呼び出し(例外が出なければ pass)。
+    harness._check_repeats_consistency([report1, report2])
+
+    verdict = harness.evaluate_comparison([report1, report2])
+    assert verdict["repeats_count"] == 2
+    assert verdict["repeats_consistent"] is True
+
+
+def test_repeats_hash_pin_rejects_tampered_report(tmp_path: Path):
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs())
+    runner = _fake_route_runner(_notes_by_path())
+
+    report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    report2 = copy.deepcopy(report1)
+    # 故意に sequence_sha256 を改変する(反復間の軌跡レベル決定論を壊す)。
+    report2["pairs"]["p_pos_tuning"]["comparison"]["provenance"]["sequence_sha256_a"] = "tampered"
+
+    with pytest.raises(ValueError, match="sequence_sha256/axes"):
+        harness.evaluate_comparison([report1, report2])
+
+
+# --------------------------------------------------------------------------- #
+# マージン計算の手計算一致
+# --------------------------------------------------------------------------- #
+def _synthetic_pairs_for_margin() -> Dict[str, Dict[str, Any]]:
+    def _row(evidence: str, contour: Any, interval: Any, rhythm: Any, split: str, expected: str) -> Dict[str, Any]:
+        return {
+            "split": split,
+            "expected": expected,
+            "comparison": {
+                "evidence": evidence,
+                "axes": {"contour": contour, "interval": interval, "rhythm": rhythm},
+                "coverage": {
+                    "aligned_note_fraction_a": 0.9,
+                    "aligned_note_fraction_b": 0.85,
+                    "phrase_coverage_a": 1.0,
+                    "phrase_coverage_b": 1.0,
+                },
+            },
+        }
+
+    return {
+        "pos1": _row("none", 0.9, 0.8, 0.7, "tuning", "same"),
+        "pos2": _row("none", 0.95, 0.85, 0.75, "tuning", "same"),
+        "neg1": _row("none", 0.2, 0.1, 0.3, "tuning", "different"),
+        "neg2": _row("none", 0.3, 0.2, 0.25, "tuning", "different"),
+        # holdout split は除外されるべき(margin 計算に混ぜない)。
+        "pos_holdout": _row("none", 0.99, 0.99, 0.99, "holdout", "same"),
+    }
+
+
+def test_margin_table_hand_calc():
+    pairs = _synthetic_pairs_for_margin()
+    result = harness._margin_table(pairs, split="tuning", min_margin=0.15)
+
+    # positive_min / negative_max は tuning split の positive/negative のみで手計算。
+    assert result["axes"]["contour"]["positive_min"] == pytest.approx(0.9)
+    assert result["axes"]["contour"]["negative_max"] == pytest.approx(0.3)
+    assert result["axes"]["contour"]["margin"] == pytest.approx(0.6)
+    assert result["axes"]["contour"]["calibrated_candidate"] is True
+
+    assert result["axes"]["interval"]["positive_min"] == pytest.approx(0.8)
+    assert result["axes"]["interval"]["negative_max"] == pytest.approx(0.2)
+    assert result["axes"]["interval"]["margin"] == pytest.approx(0.6)
+    assert result["axes"]["interval"]["calibrated_candidate"] is True
+
+    assert result["axes"]["rhythm"]["positive_min"] == pytest.approx(0.7)
+    assert result["axes"]["rhythm"]["negative_max"] == pytest.approx(0.3)
+    assert result["axes"]["rhythm"]["margin"] == pytest.approx(0.4)
+    assert result["axes"]["rhythm"]["calibrated_candidate"] is True
+
+    assert set(result["calibrated_axes"]) == {"contour", "interval", "rhythm"}
+
+
+def test_margin_table_below_threshold_is_not_calibrated():
+    pairs = {
+        "pos1": {
+            "split": "tuning",
+            "expected": "same",
+            "comparison": {"evidence": "none", "axes": {"contour": 0.5, "interval": 0.5, "rhythm": 0.5}},
+        },
+        "neg1": {
+            "split": "tuning",
+            "expected": "different",
+            "comparison": {"evidence": "none", "axes": {"contour": 0.45, "interval": 0.2, "rhythm": 0.5}},
+        },
+    }
+    result = harness._margin_table(pairs, split="tuning", min_margin=0.15)
+    # contour: margin = 0.05 < 0.15 → not calibrated。interval: margin=0.3 >= 0.15 → calibrated。
+    # rhythm: margin = 0.0 < 0.15 → not calibrated。
+    assert result["axes"]["contour"]["calibrated_candidate"] is False
+    assert result["axes"]["interval"]["calibrated_candidate"] is True
+    assert result["axes"]["rhythm"]["calibrated_candidate"] is False
+    assert result["calibrated_axes"] == ["interval"]
+
+
+# --------------------------------------------------------------------------- #
+# holdout ロック
+# --------------------------------------------------------------------------- #
+def test_holdout_locked_until_frozen(tmp_path: Path):
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs())
+    runner = _fake_route_runner(_notes_by_path())
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+
+    # route_runner_injected だと calibration verdict 自体を発行しないため、holdout
+    # ロック機構だけを単体で検証するには内部の margin/holdout ヘルパーを直接使う。
+    holdout_ids = harness._holdout_pair_ids(report["pairs"])
+    assert holdout_ids == ["p_pos_holdout"]
+
+    mapping = yaml.safe_load(M3_REGISTRY_PATH.read_text(encoding="utf-8"))
+    assert mapping["evidence_thresholds"]["status"] == "uncalibrated"
+
+    # uncalibrated の間は margin 計算からも holdout pair を除外する(tuning のみ)。
+    margin = harness._margin_table(report["pairs"], split="tuning", min_margin=0.15)
+    assert "p_pos_holdout" not in str(margin)  # tuning フィルタで holdout 行が混入していない
+
+
+def test_evaluate_comparison_records_holdout_lock_when_not_route_runner_injected(tmp_path: Path):
+    """calibration verdict が発行されるケース(route_runner 非注入相当)での holdout ロック記録。
+
+    `evaluate_comparison` は report 自身の `route_runner_injected` フラグだけを見て
+    拒否判定するため、フラグを手動で False に落とした report（値の出所を偽装しない
+    範囲でのメカニズムテスト）で holdout ロックの記録を確認する。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs())
+    runner = _fake_route_runner(_notes_by_path())
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    report_for_verdict = copy.deepcopy(report)
+    report_for_verdict["route_runner_injected"] = False
+
+    verdict = harness.evaluate_comparison([report_for_verdict])
+    assert verdict["holdout_locked_until_frozen"] is True
+    assert verdict["holdout_pair_ids_skipped"] == ["p_pos_holdout"]
+    assert "calibration_verdict_status" not in verdict
+    assert "margin_table" in verdict
+    assert "coverage_floor_candidate" in verdict
+
+
+# --------------------------------------------------------------------------- #
+# route_runner_injected による calibration verdict 発行拒否
+# --------------------------------------------------------------------------- #
+def test_route_runner_injected_rejects_calibration_verdict(tmp_path: Path):
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs())
+    runner = _fake_route_runner(_notes_by_path())
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+
+    assert report["route_runner_injected"] is True
+    verdict = harness.evaluate_comparison([report])
+    assert verdict["calibration_verdict_status"] == "rejected_route_runner_injected"
+    assert "margin_table" not in verdict
+    assert "freeze_proposal" not in verdict
+
+
+# --------------------------------------------------------------------------- #
+# --out の protected-path
+# --------------------------------------------------------------------------- #
+def test_out_cannot_overwrite_pairs_manifest(tmp_path: Path, monkeypatch, capsys):
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs())
+
+    argv = [
+        "run_melody_comparison.py",
+        "--pairs",
+        str(manifest_path),
+        "--out",
+        str(manifest_path),
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit, match="fail-closed"):
+        harness.main()
+
+
+def test_out_cannot_overwrite_registry(tmp_path: Path, monkeypatch):
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs())
+
+    argv = [
+        "run_melody_comparison.py",
+        "--pairs",
+        str(manifest_path),
+        "--out",
+        str(M3_REGISTRY_PATH),
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit, match="fail-closed"):
+        harness.main()
+
+
+def test_out_cannot_overwrite_evaluate_input(tmp_path: Path, monkeypatch):
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs())
+    runner = _fake_route_runner(_notes_by_path())
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    argv = [
+        "run_melody_comparison.py",
+        "--evaluate",
+        str(report_path),
+        "--out",
+        str(report_path),
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit, match="fail-closed"):
+        harness.main()
+
+
+# --------------------------------------------------------------------------- #
+# manifest 検証（fail-closed）
+# --------------------------------------------------------------------------- #
+def test_manifest_rejects_unknown_schema(tmp_path: Path):
+    manifest_path = tmp_path / "pairs.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump({"schema": "bogus/9.9", "pairs": _default_pairs()}), encoding="utf-8"
+    )
+    runner = _fake_route_runner(_notes_by_path())
+    with pytest.raises(ValueError, match="unsupported pairs manifest schema"):
+        harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+
+
+def test_manifest_rejects_duplicate_pair_id(tmp_path: Path):
+    pairs = _default_pairs()
+    pairs.append(dict(pairs[0]))
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, pairs)
+    runner = _fake_route_runner(_notes_by_path())
+    with pytest.raises(ValueError, match="duplicate pair_id"):
+        harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+
+
+def test_manifest_rejects_invalid_kind():
+    manifest = {
+        "schema": "m3-comparison-pairs/0.1",
+        "pairs": [
+            {
+                "pair_id": "p1",
+                "kind": "bogus_kind",
+                "split": "tuning",
+                "audio_a": "a",
+                "audio_b": "b",
+                "expected": "same",
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="invalid kind"):
+        harness._validate_manifest(manifest)

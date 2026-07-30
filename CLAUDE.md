@@ -42,8 +42,7 @@ API キー不要、LLM 不要、同一入力 → 同一出力の完全決定論�
 
 - **メインエージェント**: Fable 5 — **設計・設計判断のみ**（Design Memo 起草、
   レビュー指摘の採否判定と対応方針の設計、結果解釈・数値判読、メモリ管理）。
-  **実装・実行・検証など実際に手を動かす作業はサブエージェントに委譲し、
-  Fable 自身は行わない**。Fable 非稼働セッションでは Opus が代行
+  **実装・実行・検証など実際に手を動かす作業はサブエージェントに委譲し、Fable 自身は行わない**。Fable 非稼働セッションでは Opus が代行
 - **実装・探索サブエージェント**: Sonnet 固定（実装、探索・読み取り中心の調査タスク）
 - **実行・検証・非設計分析サブエージェント**: Opus または Sonnet（実測検証・
   E2E/スモーク実行、設計判断を伴わないレビュー指摘の分析・トリアージ）
@@ -62,8 +61,7 @@ API キー不要、LLM 不要、同一入力 → 同一出力の完全決定論�
   `timeout` ラッパ代用不可 ③run_in_background / `&` / nohup 禁止）は維持するが、
   ハーネスが長時間 Bash を自動バックグラウンド化する実観測（07-09）により文言遵守を
   完了保証と見なさない。完了判定は報告文でなく成果物（結果ファイル・exit code）で行う
-- **孤児化の回復手順**: 委譲した検証が停止・環境再起動等で孤児化したら、SendMessage で
-  当該エージェントに同期再実行を指示して回復する（新規 spawn より文脈を温存できる）。停滞判定と分割同期の詳細レシピ = AGENTS.md §8
+- **孤児化の回復手順**: 委譲した検証が停止・環境再起動等で孤児化したら、SendMessage で当該エージェントに同期再実行を指示して回復する（新規 spawn より文脈を温存できる）。停滞判定と分割同期の詳細レシピ = AGENTS.md §8
 
 Agent ツールで spawn する際は必ず `model` を明示する（省略 NG: メインと同モデルで
 動きコスト効率が下がる。実装・探索は Sonnet 固定）。
@@ -151,7 +149,7 @@ src/svp_rpe/
 │   ├── section_features.py    # セクション粒度特徴
 │   ├── valley.py              # valley 検出 (--valley-method)
 │   └── learned/               # 学習モデルアダプタ (basic_pitch / beat_this / panns / lyrics_adapter / crepe / melodia / source_separation)
-├── melody/                    # 主旋律観測センサー M0/M1 (observability=観測ゲート・比較を呼ばない / routing=入力種別→抽出経路 / extractors=波形→MelodyObservation / provenance=抽出器が読んだ重み artifact の content pin。docs/melody_observability.md)
+├── melody/                    # 主旋律観測センサー M0/M1 (observability=観測ゲート・比較を呼ばない / routing=入力種別→抽出経路 / extractors=波形→MelodyObservation / provenance=抽出器が読んだ重み artifact の content pin。docs/melody_observability.md) + 比較器 M3（representation/alignment/comparison、docs/melody_comparator.md）
 ├── svp/                       # SVP 生成層
 │   ├── models.py              # SVPBundle, MinimalSVP
 │   ├── generator.py           # RPE → SVP 変換
@@ -241,6 +239,7 @@ tests/ / docs/ / examples/     # pytest / design documents / sample_input/ + exp
 | [`docs/recast_phase0_melody_spike.md`](docs/recast_phase0_melody_spike.md) / [`docs/recast_workspace.md`](docs/recast_workspace.md) | Recast Phase 0 メロディ類似度スパイク（決定論 pyin ノート抽出が縮退し同曲/異曲分布が重複でゲート不成立→ PR4 hard anchor は chords+structure、melody は `not_observed`）と recast トラック総括（PR0–PR6: recast-project/0.1 スキーマ・状態機械・CLI フロー init→plan→run→ingest→status、invocation_mode 軸、「約束するのは測定できるものだけ」D-1 準拠、golden path の回し方） |
 | [`docs/melody_observability.md`](docs/melody_observability.md) | 主旋律観測センサー M0/M1（成立帯域の発見）: 比較の前に観測を問う観測ゲート（`melody/observability.py`: `MelodyObservation`→`MelodyObservabilityReport`・note/phrase/被覆/信頼/オクターブ誤り、比較を呼ばない）+ 入力種別→抽出経路 routing（`melody/routing.py`）+ optional 抽出器（CREPE=コード MIT だが同梱重み未 inspect/未 pin のため manual・extra 非公開/Melodia=**AGPL** essentia も manual/Demucs vocals ラッパ=`separate` extra、未導入時 `LearnedModelUnavailable`）。M0=事前登録 registry+合成 fixture+ペア生成。M1c Go/No-Go=pyin 経路のゲート機構を実測確立（正=sufficient/和音パッド=insufficient）、実利用入力帯（Suno vocals stem）は machine-dependent で slow-lane 繰延・M2 非自動進行。M1-real 実測配線=重みプロビジョニング・ゲート（可用性は 3 値: 未導入/取得済/**導入済だが重み未取得**→ unavailable・実行時 DL 禁止）+ stem/weights hash emit（評価器の #54/#59 要求に噛み合う pin を実測時に刻む）。Melodia 経路が全ゼロを返した原因の診断（凍結床 × アダプタ設定 × Melodia 値域の三者関係。`magnitudeCompression` 掃引で値域が設定の関数と判明）= [`docs/melodia_confidence_scale.md`](docs/melodia_confidence_scale.md)。M2 設計書（抽出精度の検証: RPA/RCA・生き残り経路 `demucs_vocals_then_crepe` の校正。mir_eval 指標採用・正解 3 カテゴリ S/V/X・事前登録バー・M2a–M2d 分割・成果物は誤差モデル）= [`docs/DESIGN_M2_extraction_accuracy.md`](docs/DESIGN_M2_extraction_accuracy.md)。実装 = `melody/accuracy.py` + `scripts/run_melody_accuracy.py` + `m2_accuracy_{specs,bars}.yaml`。誤差モデル（M2d・M3 の第 1 入力）= [`docs/m2_error_model.md`](docs/m2_error_model.md) |
 | [`docs/DESIGN_M3_melody_comparator.md`](docs/DESIGN_M3_melody_comparator.md) | M3 旋律比較器設計書: 正規化・NW 対応付け・多軸類似（contour/interval/rhythm）・M3d 校正計画。User 決裁 2026-07-30（clean lead 帯限定の M3 先行）を M3-0 で dated 記録 |
+| [`docs/melody_comparator.md`](docs/melody_comparator.md) | M3 実装（representation/alignment/comparison + `run_melody_comparison.py` 校正ハーネス）: `MelodySequences`・NW 整列・被覆信号・`MelodyComparisonReport` スキーマ・evidence 意味論（uncalibrated→none / 校正後の軸別導出 / 総合スコア恒久禁止）・凍結値表・run/evaluate 二相（hash pin・holdout ロック・route_runner_injected 拒否）。M3d slow-lane 実測は未実施 |
 
 ## ドキュメント管理ポリシー
 
