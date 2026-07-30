@@ -131,42 +131,18 @@ discipline ゲート: `.claude/memory/` の直 main push の前に必ず
 
 ## Architecture
 
+モジュール単位の責務詳細（ファイル粒度）は [`docs/architecture.md`](docs/architecture.md)
+Modules 節が正。以下はディレクトリ 1 行のトップレベル索引のみ。
+
 ```
 src/svp_rpe/
-├── cli/                       # typer CLI (svprpe command。コマンド別モジュール + builds_root ヘルパー)
-├── keys.py                     # 調ラベル一致度: weighted_key_score (grip 用連続値) / keys_enharmonically_equal (roundtrip 用二値)
-├── sentinels.py                 # transcribe TODO センチネル (`TODO(transcribe):`) の single source of truth
-├── io/
-│   └── audio_loader.py        # WAV/MP3 loading + AudioMetadata
-├── rpe/                       # RPE 抽出層
-│   ├── models.py              # PhysicalRPE, SemanticRPE, RPEBundle
-│   ├── extractor.py           # 統合パイプライン
-│   ├── physical_features.py   # librosa-based 物理特徴量
-│   ├── semantic_rules.py      # ルールベース意味層
-│   ├── structure.py           # セグメント分割
-│   ├── structure_labels.py    # セクションラベル付与
-│   ├── structure_novelty.py   # novelty 検出
-│   ├── section_features.py    # セクション粒度特徴
-│   ├── valley.py              # valley 検出 (--valley-method)
-│   └── learned/               # 学習モデルアダプタ (basic_pitch / beat_this / panns / lyrics_adapter / crepe / melodia / source_separation)
-├── melody/                    # 主旋律観測センサー M0/M1 (observability=観測ゲート・比較を呼ばない / routing=入力種別→抽出経路 / extractors=波形→MelodyObservation / provenance=抽出器が読んだ重み artifact の content pin。docs/melody_observability.md) + 比較器 M3（representation/alignment/comparison、docs/melody_comparator.md）
-├── svp/                       # SVP 生成層
-│   ├── models.py              # SVPBundle, MinimalSVP
-│   ├── generator.py           # RPE → SVP 変換
-│   ├── parser.py              # 既存 SVP の読み込み (compare 用)
-│   ├── render_yaml.py         # YAML 出力
-│   └── render_text.py         # Markdown/TXT 出力
-├── eval/                      # 評価層
-│   ├── models.py              # RPEScore, UGHerScore, IntegratedScore
-│   ├── scorer_rpe.py          # RPE 物理スコア
-│   ├── scorer_ugher.py        # UGHer 意味スコア
-│   ├── scorer_integrated.py   # 重み付き統合
-│   ├── anchor_matcher.py      # アンカーマッチング
-│   ├── comparison.py          # compare コマンド本体
-│   ├── delta_e_alignment.py   # ΔE 整列
-│   ├── diff_models.py         # diff データ構造
-│   ├── semantic_similarity.py # 意味類似度
-│   └── lyrics_match.py        # 歌詞転写照合計器 (lyrics-adherence, verdict なし)
+├── cli/                       # typer CLI (svprpe command)
+├── keys.py / sentinels.py     # 調ラベル一致度 / transcribe TODO センチネル
+├── io/                        # WAV/MP3 loading + AudioMetadata
+├── rpe/                       # RPE 抽出層 (physical/semantic/structure/valley/learned)
+├── melody/                    # 主旋律観測センサー M0/M1 + 比較器 M3 (docs/melody_observability.md / docs/melody_comparator.md)
+├── svp/                       # SVP 生成層 (RPE → SVPBundle)
+├── eval/                      # 評価層 (RPE/UGHer score・comparison・lyrics-adherence)
 ├── compose/                   # CompositionScore: models/loader/convert/fixity/renderer
 ├── semantic_ci/                # Target SVP → Expected RPE → Diff → Repair SVP
 ├── transcribe/                 # CompositionScore physical field measurement
@@ -174,31 +150,20 @@ src/svp_rpe/
 ├── roundtrip/                  # R0 往復保存性診断 (harness / compare / corpus_batch)
 ├── control/                    # grip 効果量 (制御トラック K 系列)
 ├── calibration/                # ジャンル/楽器語彙コーパス校正 (genre-calibrate / genre-audit)
-├── arrange/                    # ArrangementSpec: 決定論的 override/resolve/compile + identity/capability/observation sidecar (AR 系列。models/resolver/bundle/contract/identity/capabilities/observe/package/verify/pathsafe/loader)
-├── recast/                    # RecastProject: 既存 sidecar (CompositionScore/IdentityManifest/ArrangementSpec/InputCapabilityProfile) への参照+実行方針のみのワークスペース定義 (recast-project/0.1。models/loader/plan/state/backend/report + backends/(manual/deterministic/musicgen)。PR1 = schema+loader+fixture、PR2 = `svprpe recast plan`/`status` CLI + 状態機械 (recast-state/0.1) + mode_overrides (★invocation_mode 軸、mode-overrides/0.1)、PR3 = BackendInvoker 抽象 + manual 注文書(6ファイル) + deterministic backend(in-process 演奏者) + `svprpe recast run` CLI、PR5 = `svprpe recast ingest` の observe→report 拡張 (recast-report/0.1。単一同一性スコアなし・identity_assessment は enabled:false 予約) + `svprpe recast init` (音源からの project 雛形生成、対話式 semantic.core/avoid)、PR6 = golden path fixture (`examples/recast/golden_project/`: 1作品×1編曲×2backend×2take の CI 全経路回帰) + `observation.anchors` 配線 (非空なら観測/レポートを列挙 anchor に絞り込み・未知 id は観測経路 (`observe_generated_artifact`) + `recast ingest` の設定エラーとして fail-closed))
-├── batch/                     # バッチ処理
-│   ├── runner.py              # batch コマンド本体
-│   └── discovery.py           # 入力ファイル発見
-└── utils/
-    ├── config_loader.py       # YAML config loading
-    └── clamp.py / hashing.py    # float クランプ共通化 (max(lo,min(hi,v)); 旧 8 重複 _clamp の集約先) / content pin 共通化 (波形の float32 生サンプル hash・複数ファイル→1 digest の weights hash)
+├── arrange/                    # ArrangementSpec: override/resolve/compile + identity/capability/observation sidecar (AR 系列)
+├── recast/                    # RecastProject: 既存 sidecar への参照+実行方針ワークスペース定義 (recast-project/0.1)。PR 履歴・golden path = docs/recast_workspace.md
+├── batch/                     # バッチ処理 (runner / discovery)
+├── config/                    # config/*.yaml のパッケージ同梱コピー
+└── utils/                     # config loader / clamp・hashing (content pin) / atomic_io (atomic write 集約)
 
-config/                        # リポジトリ直下 + src/svp_rpe/config/ に同梱コピー (同期)
-├── pro_baseline.yaml          # RPE Pro baseline values
-├── acoustic_baseline.yaml     # ドメイン別 baseline (acoustic)
-├── edm_baseline.yaml          # ドメイン別 baseline (EDM)
-├── loud_pop_baseline.yaml     # ドメイン別 baseline (loud pop)
-├── semantic_rules.yaml        # physical → semantic mapping rules
-├── synonym_map.yaml           # 同義語マップ (UGHer scorer 用)
-├── domain_profiles/music.yaml # ドメインプロファイル (music)
-└── device_profiles/           # 生成器別 control_profile 初期値 (suno.yaml / musicgen.yaml)
-
-tests/ / docs/ / examples/     # pytest / design documents / sample_input/ + expected_output/
+config/                        # リポジトリ直下 + src/svp_rpe/config/ に同梱コピー (同期)。baseline / semantic_rules / synonym_map / domain_profiles / device_profiles
+tests/ / docs/ / examples/     # pytest / design documents (index: docs/README.md) / sample_input・expected_output・fixtures
 ```
 
 ### 設計ドキュメント索引
 
-新規 `docs/<topic>.md` を作成したらこの表に 1 行追加する（README の同様の表も同期）。
+新規 `docs/<topic>.md` を作成したらこの表に 1 行追加する（`docs/README.md` の
+カテゴリ別索引も同期。README.md 本体は核心 doc のみのため通常は更新不要）。
 
 | ドキュメント | 内容 |
 |---|---|
@@ -217,29 +182,33 @@ tests/ / docs/ / examples/     # pytest / design documents / sample_input/ + exp
 | [`docs/composition_score_product_brief.md`](docs/composition_score_product_brief.md) | Composition Score プロダクト定義: 三層作曲言語の思想、正規スキーマ、MVP 範囲、PoC 1–5 ロードマップ |
 | [`docs/composition_poc_planning.md`](docs/composition_poc_planning.md) | Composition PoC 実装計画: C1–C6 フェーズ、ブリーフ下流の実装詳細・設計判断ログ |
 | [`docs/composition_poc_report.md`](docs/composition_poc_report.md) | C4 E2E デモ結果: 決定論的シンセ演奏者による 2 テイク針比較、センサー帯域の発見、PoC 5 の決定論パス実証 |
-| [`docs/controllability_poc.md`](docs/controllability_poc.md) | 制御トラック PoC 計画 (K 系列): パラメータ=効くツマミの読み替え、grip 効果量の定義、K0〜K2 Suno 転移、K3 直交性行列（DCI/MIG 効果量再定式化・実 Suno ミニ行列・機種結合の符号反転発見・MusicGen フル行列=ノイズ天井初稼働） |
-| [`docs/score_centric_planning.md`](docs/score_centric_planning.md) | 楽譜中心の再編成: 双方向再現性の通底原理、採譜トラック (T 系列) T0–T2、Q 系列の計器校正への再定義、意味層センサーの将来枠 |
-| [`docs/event_roundtrip.md`](docs/event_roundtrip.md) | R4 事象レベル欄（コード進行）の往復入場計画: `chord_progression` × `compute_chord_events` × コード系列一致率、fixity/4値診断への適用 |
-| [`docs/roundtrip_case_studies.md`](docs/roundtrip_case_studies.md) | Suno 往復テストケース結果 (個別ログ) と R1 corpus manifest の入口: 計器の有効帯域、物理固定・意味差替の制御性 A/B、双方向性成功 (BPM 留保)、BPM 89.1 アトラクタ疑い |
+| [`docs/controllability_poc.md`](docs/controllability_poc.md) | 制御トラック PoC (K 系列): grip 効果量の定義、K0〜K3 Suno/MusicGen 直交性行列 |
+| [`docs/score_centric_planning.md`](docs/score_centric_planning.md) | 楽譜中心の再編成: 双方向再現性の原理、採譜トラック T 系列、Q 系列の校正への再定義 |
+| [`docs/event_roundtrip.md`](docs/event_roundtrip.md) | R4 コード進行の往復入場計画: `chord_progression` × `compute_chord_events` 一致率 |
+| [`docs/roundtrip_case_studies.md`](docs/roundtrip_case_studies.md) | Suno 往復テストケース個別ログ + R1 corpus manifest の入口。計器有効帯域と BPM アトラクタ疑い |
 | [`docs/roundtrip_preservation.md`](docs/roundtrip_preservation.md) | R0 deterministic roundtrip preservation: Score -> perform -> extract -> draft Score diagnostics and K1 cross-check |
-| [`docs/metamorphic_probe.md`](docs/metamorphic_probe.md) | メタモルフィック計器: render_sample×実extract を掃引し grip/校正/直交性/決定論を Hypothesis で自動検証。centroid=tight grip / 高域 brightness=センサー盲 / bpm オクターブ誤検出が R2-2a 未フラグ を計測 |
-| [`docs/roundtrip_corpus_screen.md`](docs/roundtrip_corpus_screen.md) | R1 corpus screen + 対照実験 A/B/C: 高速曲の低 BPM は **Suno 不忠実でなく抽出器 halving**(start_bpm=180 で 172.3 回復)。「アトラクタ」の正体は prior×BPM グリッド選択。breakbeat 仮説は反証。R2-2a は 2×固定 lag でグリッド量子化(1.93×)を外す。データ: examples/roundtrip/screen_2026-06-16.yaml |
-| [`docs/genre_calibration_planning.md`](docs/genre_calibration_planning.md) | 意味層のジャンル/楽器語彙拡張計画: `cultural_context` ハードコード誤判定(管弦→bass-music)を config 化で是正する Tier 2、Suno 生成のラベル自動付きコーパスで licensing 律速を回避(生成器バイアスは本物アンカーで補正)、Phase A(config 化)/B(コーパス)/C(検証)分割 |
-| [`docs/ai_performer_score_roadmap.md`](docs/ai_performer_score_roadmap.md) | 「AI が演奏者として使う楽譜」マージロードマップ(PR 4 本, 2026-06-29 壁打ちで PR1.5 新設): 既存研究(MIR/CLAP/DCI-MIG/制御性評価/EPR)と蓄積知見(K 系列 grip/roundtrip fixity/genre bias)をマージ。PR1=control_profile スキーマ(楽譜が効くチャネルを知る・fixity 前例踏襲・K2 初期データ)、PR1.5=control_profile-aware compile(既存 ExternalPromptAdapter 配線で楽譜→演奏ループを Suno で閉じる・実用物の核)、PR2=楽譜準拠テスト+CLAP(意味層読解器)、PR3=K3 直交性(DCI/MIG)+機種デバイスプロファイル。決定論=物理層保証/非決定論=意味層助言の層分離、多生成器は Suno ルート確立後 |
-| [`docs/control_profile.md`](docs/control_profile.md) | PR1/PR1.5 実装: `CompositionScore.control_profile`(生成器→物理フィールド→grip_class の自己記述)スキーマ・検証(未知キー fail-fast だが fixity と違い疎を許容)・K2(#117)由来の Suno 初期データ(bpm/brightness tight)。PR1.5=control_profile-aware compile(backend selector external→suno・フィールド粒度 drop accounting・grip_class 駆動の3ティア優先度で tight 先頭昇格/drop最後・priority エイリアス・backend descriptor 隔離)。PR2=楽譜準拠テスト(`svprpe score-adherence`: tight 宣言フィールドのコンパイル保持+roundtrip 保存をフィールド単位で判定・計器であって verdict なし・path 非依存・CLAP=PR2b は依存律速) |
-| [`docs/lyrics_semantic_anchor.md`](docs/lyrics_semantic_anchor.md) | 2026-07-01 アレンジ・デモ発見: ボーカル/歌詞が key/BPM 読みを揺らす(交絡は実在するが方向不定＝n=1「ボーカル＝主音の錨」を n=2 で棄却・halving も非法則化)。歌詞が付与する「メリハリ(曲らしさ)」は物理 dynamic_range に写らない(むしろ逆)＝歌詞は**意味層**のアンカーで現状は耳が唯一のセンサー。**n=3 追試(07-01 S2/#124)で `dynamic_range`=歌詞アンカー説は棄却**(EDM 限定・Rock で反転かつ再生成ノイズ未満)、`mid_ratio` は最有力だが noise 超えは Rock のみ・EDM は directional(instrumental alt 未取得)＝昇格は n≥2×2 セル要件。BPM grip=確度×精度2軸・調号は grip/進行は非再現。genre pop 帯欠落/低sub EDM 誤判定も付随記録 |
-| [`docs/musicgen_backend.md`](docs/musicgen_backend.md) | MusicGen ローカル生成トラック: PR A(runbook+`musicgen` extra・実推論なし・CI 安全) / PR B(実バッチ→K2 型 fixture+`device_profiles/musicgen.yaml`+R3 初実測) / PR C(R3 ハーネス)。DD-A 決定論契約(fixture→grip のみ CI 対象)、annotation 隔離原則は対象外(生成側)、weights ライセンスは CC-BY-NC-4.0 実確認済(研究計器限定・重み非同梱) |
-| [`docs/semantic_sensor_clap.md`](docs/semantic_sensor_clap.md) | CLAP を抽出段階の意味層センサーとして配線(`svprpe extract --clap-semantic`): SOURCE 音声を固定の意味軸バッテリー(`config/semantic_probe_axes.yaml`)に対し A/B `contrast_fit` で計測、`LearnedAudioAnnotations.semantic_axes`(schema_version 1.1)に隔離、post-hoc fixture 比較(生成物対象)からの拡張として抽出時 SOURCE 音声を読む真の意味層センシングを実現。軸校正(2026-07-04 実推論・`scripts/calibrate_semantic_axes.py`): vocal/energy 実証・brightness は bpm 交絡・acousticness/warmth 探索扱い、有効帯域=実制作音楽 |
-| [`docs/lyrics_transcription_sensor.md`](docs/lyrics_transcription_sensor.md) | 歌詞転写センサー: faster-whisper + 既存 Demucs vocals stem で歌詞を機械化(CLAP の連続値 grip と相補的な記号列センサー)。入力側`svprpe extract --lyrics`→`LearnedAudioAnnotations.lyrics_transcription`(schema_version 1.2)、出力側`svprpe lyrics-adherence`(`eval/lyrics_match.py`, learned import なし・計器であって verdict なし)。fake-backend のみ、実推論は未計測 |
-| [`docs/arrangement_identity_planning.md`](docs/arrangement_identity_planning.md) | Arrangement Identity Track 計画: AR0–AR4、sidecar-first（D1）、M1=意味核とキーの Score-level identity preservation、artifact 配送と生成後観測への段階分離 |
-| [`docs/work_identity_roadmap.md`](docs/work_identity_roadmap.md) | 同一性判定トラック（WI0–WI4）: 作品同一性を宣言的契約×弁別判定×人間校正×被覆正直会計で実測定義する計画。melody/lyrics センサー→D-1 閾値→弁別ハーネス→identity proxy v0→制度化 |
-| [`docs/wi1_d1_thresholds.md`](docs/wi1_d1_thresholds.md) | WI1 逸脱分布と D-1 閾値 Design Memo: MusicGen 無人 n=20 の structure/harmony 逸脱分布、§4 編集分解アルゴリズム、§5 D-1 分類規約 v0（within 14/outside 6）、harmony は v0 未分類 |
-| [`docs/wi2_discrimination_harness.md`](docs/wi2_discrimination_harness.md) | WI2 弁別判定ハーネス: 4 セル 13 clips の MusicGen 弁別バッチ、identity-rank 5 軸判定、cell P のチャネル死 byte 証明、順位表決定論再現 12/12、弁別成立は bpm のみ（structure/harmony/brightness は非弁別、key は不安定） |
-| [`docs/wi3_human_calibration.md`](docs/wi3_human_calibration.md) | WI3 人間校正 v0: 事前登録 12 ペア判定（基準器 n=1・ブラインド seed 8400）、identity proxy v0 は空集合（採用 0/5 軸）、同一スコア再生成ペアすら「別の曲」判定、誤り 3 件は P3 same 誤予測（機構は bpm アトラクタ/長さバイアス/平行調流れの軸別）、実 Suno ペア(P5)は第 2 トランシェへ繰延 |
-| [`docs/recast_phase0_melody_spike.md`](docs/recast_phase0_melody_spike.md) / [`docs/recast_workspace.md`](docs/recast_workspace.md) | Recast Phase 0 メロディ類似度スパイク（決定論 pyin ノート抽出が縮退し同曲/異曲分布が重複でゲート不成立→ PR4 hard anchor は chords+structure、melody は `not_observed`）と recast トラック総括（PR0–PR6: recast-project/0.1 スキーマ・状態機械・CLI フロー init→plan→run→ingest→status、invocation_mode 軸、「約束するのは測定できるものだけ」D-1 準拠、golden path の回し方） |
-| [`docs/melody_observability.md`](docs/melody_observability.md) | 主旋律観測センサー M0/M1（成立帯域の発見）: 比較の前に観測を問う観測ゲート（`melody/observability.py`: `MelodyObservation`→`MelodyObservabilityReport`・note/phrase/被覆/信頼/オクターブ誤り、比較を呼ばない）+ 入力種別→抽出経路 routing（`melody/routing.py`）+ optional 抽出器（CREPE=コード MIT だが同梱重み未 inspect/未 pin のため manual・extra 非公開/Melodia=**AGPL** essentia も manual/Demucs vocals ラッパ=`separate` extra、未導入時 `LearnedModelUnavailable`）。M0=事前登録 registry+合成 fixture+ペア生成。M1c Go/No-Go=pyin 経路のゲート機構を実測確立（正=sufficient/和音パッド=insufficient）、実利用入力帯（Suno vocals stem）は machine-dependent で slow-lane 繰延・M2 非自動進行。M1-real 実測配線=重みプロビジョニング・ゲート（可用性は 3 値: 未導入/取得済/**導入済だが重み未取得**→ unavailable・実行時 DL 禁止）+ stem/weights hash emit（評価器の #54/#59 要求に噛み合う pin を実測時に刻む）。Melodia 経路が全ゼロを返した原因の診断（凍結床 × アダプタ設定 × Melodia 値域の三者関係。`magnitudeCompression` 掃引で値域が設定の関数と判明）= [`docs/melodia_confidence_scale.md`](docs/melodia_confidence_scale.md)。M2 設計書（抽出精度の検証: RPA/RCA・生き残り経路 `demucs_vocals_then_crepe` の校正。mir_eval 指標採用・正解 3 カテゴリ S/V/X・事前登録バー・M2a–M2d 分割・成果物は誤差モデル）= [`docs/DESIGN_M2_extraction_accuracy.md`](docs/DESIGN_M2_extraction_accuracy.md)。実装 = `melody/accuracy.py` + `scripts/run_melody_accuracy.py` + `m2_accuracy_{specs,bars}.yaml`。誤差モデル（M2d・M3 の第 1 入力）= [`docs/m2_error_model.md`](docs/m2_error_model.md) |
-| [`docs/DESIGN_M3_melody_comparator.md`](docs/DESIGN_M3_melody_comparator.md) | M3 旋律比較器設計書: 正規化・NW 対応付け・多軸類似（contour/interval/rhythm）・M3d 校正計画。User 決裁 2026-07-30（clean lead 帯限定の M3 先行）を M3-0 で dated 記録 |
-| [`docs/melody_comparator.md`](docs/melody_comparator.md) | M3 実装（representation/alignment/comparison + `run_melody_comparison.py` 校正ハーネス）: `MelodySequences`・NW 整列・被覆信号・`MelodyComparisonReport` スキーマ・evidence 意味論（uncalibrated→none / 校正後の軸別導出 / 総合スコア恒久禁止）・凍結値表・run/evaluate 二相（hash pin・holdout ロック・route_runner_injected 拒否）。M3d slow-lane 実測は未実施 |
+| [`docs/metamorphic_probe.md`](docs/metamorphic_probe.md) | メタモルフィック計器: Hypothesis で grip/校正/直交性/決定論を自動検証（センサー盲・BPM オクターブ誤検出を計測） |
+| [`docs/roundtrip_corpus_screen.md`](docs/roundtrip_corpus_screen.md) | R1 corpus screen + A/B/C 対照実験: 低 BPM は Suno 不忠実でなく抽出器 halving と判明、breakbeat 仮説は反証 |
+| [`docs/genre_calibration_planning.md`](docs/genre_calibration_planning.md) | ジャンル/楽器語彙拡張計画: `cultural_context` 誤判定の config 化是正、Suno 自動ラベルコーパスで licensing 律速回避 |
+| [`docs/ai_performer_score_roadmap.md`](docs/ai_performer_score_roadmap.md) | 「AI 演奏者用楽譜」マージロードマップ (PR1 control_profile → PR1.5 compile → PR2 score-adherence+CLAP → PR3 K3 直交性)。決定論=物理層/非決定論=意味層助言の層分離 |
+| [`docs/control_profile.md`](docs/control_profile.md) | PR1/PR1.5 実装: `control_profile` スキーマ（生成器→フィールド→grip_class 自己記述、疎を許容）+ compile 配線。PR2=`score-adherence` |
+| [`docs/lyrics_semantic_anchor.md`](docs/lyrics_semantic_anchor.md) | 歌詞/ボーカルは key/BPM を揺らす意味層アンカー（n=3 追試で `dynamic_range` 説は棄却、`mid_ratio` は Rock 限定で有望） |
+| [`docs/musicgen_backend.md`](docs/musicgen_backend.md) | MusicGen ローカル生成トラック: PR A(runbook)/B(実バッチ R3)/C(ハーネス)。DD-A 決定論契約、weights は CC-BY-NC-4.0（重み非同梱） |
+| [`docs/semantic_sensor_clap.md`](docs/semantic_sensor_clap.md) | CLAP を抽出時意味層センサーとして配線 (`--clap-semantic`)。軸校正で vocal/energy 実証、brightness は bpm 交絡 |
+| [`docs/lyrics_transcription_sensor.md`](docs/lyrics_transcription_sensor.md) | 歌詞転写センサー: faster-whisper + Demucs vocals stem。`extract --lyrics` / `lyrics-adherence`（fake-backend のみ、実推論未計測） |
+| [`docs/arrangement_identity_planning.md`](docs/arrangement_identity_planning.md) | Arrangement Identity Track (AR0–AR4): sidecar-first、M1=意味核とキーの Score-level identity preservation |
+| [`docs/work_identity_roadmap.md`](docs/work_identity_roadmap.md) | 同一性判定トラック (WI0–WI4): 宣言的契約×弁別判定×人間校正×被覆正直会計で作品同一性を実測定義 |
+| [`docs/wi1_d1_thresholds.md`](docs/wi1_d1_thresholds.md) | WI1 逸脱分布 + D-1 閾値: MusicGen n=20 の structure/harmony 逸脱分布、D-1 分類規約 v0 |
+| [`docs/wi2_discrimination_harness.md`](docs/wi2_discrimination_harness.md) | WI2 弁別判定ハーネス: 4 セル 13 clips、identity-rank 5 軸判定。弁別成立は bpm のみ |
+| [`docs/wi3_human_calibration.md`](docs/wi3_human_calibration.md) | WI3 人間校正 v0: 事前登録 12 ペア判定、identity proxy v0 は空集合（採用 0/5 軸） |
+| [`docs/recast_phase0_melody_spike.md`](docs/recast_phase0_melody_spike.md) | Recast Phase 0 メロディスパイク: pyin ノート抽出が縮退しゲート不成立 → melody は `not_observed` |
+| [`docs/recast_workspace.md`](docs/recast_workspace.md) | Recast トラック総括 (PR0–PR6): recast-project/0.1 スキーマ・状態機械・CLI フロー・golden path の回し方 |
+| [`docs/melody_observability.md`](docs/melody_observability.md) | 主旋律観測センサー M0/M1: 観測ゲート（比較を呼ばない）+ 経路 routing。M1c Go/No-Go = pyin 経路のゲート機構を実測確立。関連診断・後続設計は下記 3 件 |
+| [`docs/melodia_confidence_scale.md`](docs/melodia_confidence_scale.md) | Melodia が全ゼロ被覆を返した原因診断: 凍結床×アダプタ設定×Melodia 値域の三者関係（`magnitudeCompression` 掃引で判明） |
+| [`docs/DESIGN_M2_extraction_accuracy.md`](docs/DESIGN_M2_extraction_accuracy.md) | M2 設計書: 抽出精度検証 (RPA/RCA)、mir_eval 採用、正解 3 カテゴリ S/V/X、M2a–M2d 分割 |
+| [`docs/m2_error_model.md`](docs/m2_error_model.md) | M2d crepe ルート誤差モデル（M3 の第 1 入力）: pitch 中心誤差/octave error rate/voicing false-alarm/材質別分散 |
+| [`docs/DESIGN_M3_melody_comparator.md`](docs/DESIGN_M3_melody_comparator.md) | M3 旋律比較器設計書: 正規化・NW 対応付け・多軸類似（contour/interval/rhythm）・M3d 校正計画 |
+| [`docs/melody_comparator.md`](docs/melody_comparator.md) | M3 実装: `MelodySequences`・NW 整列・`MelodyComparisonReport`。総合スコアは恒久禁止、軸別 evidence のみ |
 
 ## ドキュメント管理ポリシー
 
@@ -272,8 +241,10 @@ README の運用ルール:
 1. **単一 section が 30 行を超えたら `docs/<topic>.md` へ抽出する**
    - README にはリンク + 2-3 行の要約のみ残す
 2. **新規 docs を作成したら索引を 2 箇所更新する**
-   - README の「設計ドキュメント」表に 1 行追加
+   - `docs/README.md`（docs/ 全件の入口索引）にカテゴリ別で 1 行追加
    - CLAUDE.md の設計ドキュメント索引表に 1 行追加
+   - README.md 本体は核心 doc（architecture / cli / metrics / roadmap 系）
+     のみを残す一覧のため、通常は更新不要（該当する場合のみ追加）
 3. **README と docs の責務を混ぜない**
    - README: 5 分で全体像を掴む入口情報、コンセプト図、クイックスタート、
      主要指標の一行定義、設計 docs への索引

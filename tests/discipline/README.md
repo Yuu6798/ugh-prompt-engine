@@ -12,6 +12,8 @@ AGENTS.md §8）を CI 失敗に変換する実行可能チェック群。semant
   エントリは 500 文字以内（詳細は dated session log へ）。
 - `test_claude_md_line_cap.py`: `CLAUDE.md` は 400 行以内（always-loaded
   policy のため。reference detail は docs/ / skill にポインタ化）。
+- `test_readme_line_cap.py`: `README.md` は 350 行以内（hard limit。入口情報に
+  限定し、詳細は docs/README.md 索引経由の docs/*.md へ）。
 
 各テストは実ファイル検査に加えて `fixtures/` の違反サンプルに対する
 self-test を持ち、パーサ自体の劣化（違反を検出できなくなる drift）を防ぐ。

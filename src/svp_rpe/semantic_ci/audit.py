@@ -19,6 +19,7 @@ from svp_rpe.semantic_ci.core import neutral_band_bounds
 from svp_rpe.semantic_ci.models import ObservedRPE
 from svp_rpe.semantic_ci.observed_adapter import rpe_bundle_to_observed
 from svp_rpe.sentinels import is_todo_sentinel
+from svp_rpe.utils.clamp import clamp
 from svp_rpe.utils.config_loader import load_config
 
 if TYPE_CHECKING:
@@ -643,7 +644,7 @@ def _round_float(value: Optional[float]) -> Optional[float]:
 
 
 def _round_score(value: float) -> float:
-    return round(max(0.0, min(1.0, float(value))), 4)
+    return round(clamp(float(value)), 4)
 
 
 def _display(value: Any) -> str:

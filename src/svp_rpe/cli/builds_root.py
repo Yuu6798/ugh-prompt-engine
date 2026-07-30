@@ -14,50 +14,29 @@ def _publish_artifacts_atomically(
     output_dir: str | Path,
     input_paths: list[str | Path],
 ) -> Path:
-    """Publish a complete artifact set with rollback on an interrupted rename."""
-    import os
-    import tempfile
+    """Publish a complete artifact set with rollback on an interrupted rename.
 
-    out_dir = Path(output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    resolved_inputs = {Path(path).resolve() for path in input_paths}
-    for filename in contents:
-        target = out_dir / filename
-        if target.resolve() in resolved_inputs:
-            raise ValueError(f"input path collides with output artifact path: {target}")
-        if target.is_dir():
-            raise ValueError(f"output path is an existing directory: {target}")
+    Thin wrapper — the rollback/snapshot mechanics are consolidated in
+    `svp_rpe.utils.atomic_io.atomic_publish_bundle`. This call site keeps its
+    historical `dict[str, str]` (text) contents and its unconditional
+    collision/`is_dir` check (`always_check_collision`), preserved via that
+    function's parameters rather than folded into a single fixed behavior.
+    Rollback always catches `BaseException` (Codex P2 review round 4 —
+    `atomic_publish_bundle` no longer accepts a `catch` override: an
+    `OSError`-only rollback would skip on `KeyboardInterrupt`/`SystemExit`
+    and let the `TemporaryDirectory` unwind discard the snapshot, leaving a
+    mixed bundle with the old artifact lost).
+    """
+    from svp_rpe.utils.atomic_io import atomic_publish_bundle
 
-    with tempfile.TemporaryDirectory(dir=out_dir) as staging:
-        staging_dir = Path(staging)
-        for filename, content in contents.items():
-            (staging_dir / filename).write_bytes(content.encode("utf-8"))
-
-        snapshots: dict[str, Path] = {}
-        published: list[str] = []
-        try:
-            for filename in contents:
-                target = out_dir / filename
-                if target.exists():
-                    previous = staging_dir / f"{filename}.prev"
-                    os.replace(target, previous)
-                    snapshots[filename] = previous
-            for filename in contents:
-                os.replace(staging_dir / filename, out_dir / filename)
-                published.append(filename)
-        except OSError:
-            for filename in published:
-                try:
-                    os.unlink(out_dir / filename)
-                except OSError:
-                    pass
-            for filename, previous in snapshots.items():
-                try:
-                    os.replace(previous, out_dir / filename)
-                except OSError:
-                    pass
-            raise
-    return out_dir
+    byte_contents = {name: content.encode("utf-8") for name, content in contents.items()}
+    return atomic_publish_bundle(
+        Path(output_dir),
+        byte_contents,
+        protected_inputs=[Path(path) for path in input_paths],
+        always_check_collision=True,
+        collision_message="input path collides with output artifact path",
+    )
 
 
 BUILDS_LATEST_SCHEMA_VERSION = "builds-latest/0.1"

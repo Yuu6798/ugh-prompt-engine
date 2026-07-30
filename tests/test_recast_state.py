@@ -128,16 +128,16 @@ def test_record_state_timestamps_are_not_used_for_identity(tmp_path: Path) -> No
 def test_record_state_atomic_write_leaves_no_partial_file_on_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import os
-
-    from svp_rpe.recast import state as state_module
-
-    original_replace = os.replace
-
+    # `record_state` delegates its atomic write to
+    # `svp_rpe.utils.atomic_io.atomic_write_bytes` (consolidated from a
+    # `recast/state.py`-local implementation) — patch the `os` module itself
+    # (a process-wide singleton) rather than a module-local `os` attribute,
+    # so the failure injection reaches `atomic_io`'s `os.replace` call
+    # regardless of which module actually imports `os`.
     def _boom(*args: object, **kwargs: object) -> None:
         raise OSError("simulated failure during publish")
 
-    monkeypatch.setattr(state_module.os, "replace", _boom)
+    monkeypatch.setattr("os.replace", _boom)
 
     with pytest.raises(OSError):
         record_state(tmp_path, "edm", "suno", "authored", protected_inputs=[])
@@ -147,8 +147,6 @@ def test_record_state_atomic_write_leaves_no_partial_file_on_failure(
     # ...and the staging tempfile was cleaned up (no `.tmp` litter left behind).
     leftovers = list(tmp_path.glob(f"{RECAST_STATE_FILENAME}.*.tmp"))
     assert leftovers == []
-
-    monkeypatch.setattr(state_module.os, "replace", original_replace)
 
 
 def test_record_state_publishes_valid_json(tmp_path: Path) -> None:

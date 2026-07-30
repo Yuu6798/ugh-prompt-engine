@@ -16,8 +16,6 @@ state + note の組のみで行う）。
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Literal, Optional
@@ -165,20 +163,13 @@ def _write_recast_state_atomically(path: Path, content: bytes) -> None:
     `recast_plan.json` 書き込みと同じ理由で text モードを避ける —
     `recast_state.json` 自体は現状バイト単位の hash 突合対象ではないが、
     single-source of truth 原則で recast モジュール内の atomic 書き込みを
-    統一する）。"""
-    output_dir = path.parent
-    output_dir.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=output_dir, prefix=f"{path.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(content)
-        os.replace(tmp_name, path)
-    except BaseException:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
+    統一する）。
+
+    薄いラッパー — 実体は `svp_rpe.utils.atomic_io.atomic_write_bytes` へ集約済み。
+    """
+    from svp_rpe.utils.atomic_io import atomic_write_bytes
+
+    atomic_write_bytes(path, content)
 
 
 def record_state(

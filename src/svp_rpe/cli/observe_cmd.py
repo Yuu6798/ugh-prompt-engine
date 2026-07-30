@@ -86,23 +86,13 @@ def _write_observation_report_atomically(output_path: Path, content: str) -> Non
     own instrument still needs its own output to be trustworthy). Any
     failure cleans up the staging file on a best-effort basis (its own
     unlink failure is swallowed) before re-raising.
-    """
-    import os
-    import tempfile
 
-    output_dir = output_path.parent
-    output_dir.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=output_dir, prefix=f"{output_path.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(content)
-        os.replace(tmp_name, output_path)
-    except BaseException:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
+    Thin wrapper — the implementation is consolidated in
+    `svp_rpe.utils.atomic_io.atomic_write_text`.
+    """
+    from svp_rpe.utils.atomic_io import atomic_write_text
+
+    atomic_write_text(output_path, content)
 
 
 @app.command("observe")

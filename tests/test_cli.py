@@ -63,6 +63,7 @@ def test_non_windows_cli_streams_are_not_reconfigured() -> None:
     assert stream.called is False
 
 
+@pytest.mark.slow
 def test_extract_with_real_audio(sine_wave_mono):
     result = runner.invoke(app, ["extract", sine_wave_mono])
     assert result.exit_code == 0

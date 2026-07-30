@@ -203,22 +203,12 @@ def atomic_write_bytes(path: Path, data: bytes) -> None:
     `atomic_publish_bytes_bundle` を使うこと（Codex P2 review, PR3 #208
     指摘 1: 個別 publish だと 1 本目成功・2 本目失敗で provenance を伴わない
     半端な成果物が残り得る）。
-    """
-    import os
-    import tempfile
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(data)
-        os.replace(tmp_name, path)
-    except BaseException:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
+    薄いラッパー — 実体は `svp_rpe.utils.atomic_io.atomic_write_bytes` へ集約済み。
+    """
+    from svp_rpe.utils import atomic_io
+
+    atomic_io.atomic_write_bytes(path, data)
 
 
 def atomic_publish_bytes_bundle(
@@ -263,62 +253,21 @@ def atomic_publish_bytes_bundle(
     と同じ atomic 操作で除去する用途 — 除去前に `takes_dir` が「新
     take-01.<ext> + take.json のみ」の整合状態になることを、record_state
     より前に保証する）。
+
+    薄いラッパー — 実体は `svp_rpe.utils.atomic_io.atomic_publish_bundle`
+    へ集約済み（`except BaseException` での rollback は全呼び出し元共通の
+    固定挙動（Codex P2 review round 4 で `catch` パラメータ自体を撤去）・
+    `protected_inputs` が truthy のときのみ検査する意味論はそちらの
+    デフォルト挙動のまま）。
     """
-    import os
-    import tempfile
+    from svp_rpe.utils.atomic_io import atomic_publish_bundle
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    stale_only = [name for name in stale_filenames if name not in contents]
-
-    if protected_inputs:
-        resolved_inputs = {path.resolve() for path in protected_inputs}
-        for filename in list(contents) + stale_only:
-            target = output_dir / filename
-            if target.resolve() in resolved_inputs:
-                raise ValueError(f"output path collides with a protected input path: {target}")
-            if filename in contents and target.is_dir():
-                raise ValueError(f"output path is an existing directory: {target}")
-
-    with tempfile.TemporaryDirectory(dir=output_dir) as staging:
-        staging_dir = Path(staging)
-        for filename, data in contents.items():
-            (staging_dir / filename).write_bytes(data)
-
-        snapshots: dict[str, Path] = {}
-        published: list[str] = []
-        try:
-            for filename in list(contents) + stale_only:
-                target = output_dir / filename
-                if target.exists():
-                    previous = staging_dir / f"{filename}.prev"
-                    os.replace(target, previous)
-                    snapshots[filename] = previous
-            for filename in contents:
-                os.replace(staging_dir / filename, output_dir / filename)
-                published.append(filename)
-        except BaseException:
-            # `except BaseException`（`except OSError` ではなく）: rename 中に
-            # `KeyboardInterrupt`/`SystemExit` が飛んでも rollback を必ず通す
-            # （Codex P2 review round 7, PR3 #208 指摘 14: 単一ファイル atomic
-            # writer 群 — `_write_recast_plan_atomically` / `_write_recast_state_
-            # atomically` 等 — は元から `except BaseException` で統一されており、
-            # 複数ファイル bundle publisher だけが `except OSError` に留まって
-            # いた。`OSError` のみだと非 `OSError` の中断シグナルで rollback を
-            # 素通りし、snapshot ごと失われた「半端に publish 済み」の状態が
-            # 残り得た）。`stale_filenames` の snapshot もここで一律に復元される
-            # （`snapshots` は `contents` 由来か `stale_only` 由来かを区別しない）。
-            for filename in published:
-                try:
-                    os.unlink(output_dir / filename)
-                except OSError:
-                    pass
-            for filename, previous in snapshots.items():
-                try:
-                    os.replace(previous, output_dir / filename)
-                except OSError:
-                    pass
-            raise
+    atomic_publish_bundle(
+        output_dir,
+        contents,
+        protected_inputs=protected_inputs,
+        stale_filenames=stale_filenames,
+    )
 
 
 @dataclass(frozen=True)

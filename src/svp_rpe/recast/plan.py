@@ -310,51 +310,16 @@ def _atomic_publish_text_bundle(
     `protected_inputs` は必須（デフォルト値なし — PR3 #208 指摘 7 と同じ理由）。
     衝突検査は staging へ書く**前**に全ターゲット分まとめて行う（一部だけ
     staging 済みのまま検査で弾かれる状態を避ける）。
+
+    薄いラッパー — 実体は `svp_rpe.utils.atomic_io.atomic_publish_bundle`
+    へ集約済み（`except BaseException` での rollback は全呼び出し元共通の
+    固定挙動（Codex P2 review round 4 で `catch` パラメータ自体を撤去）・
+    `protected_inputs` が truthy のときのみ検査する意味論はそちらの
+    デフォルト挙動のまま）。
     """
-    output_dir.mkdir(parents=True, exist_ok=True)
+    from svp_rpe.utils.atomic_io import atomic_publish_bundle
 
-    if protected_inputs:
-        resolved_inputs = {candidate.resolve() for candidate in protected_inputs}
-        for filename in contents:
-            target = output_dir / filename
-            if target.resolve() in resolved_inputs:
-                raise ValueError(f"output path collides with a protected input path: {target}")
-            if target.is_dir():
-                raise ValueError(f"output path is an existing directory: {target}")
-
-    with tempfile.TemporaryDirectory(dir=output_dir) as staging:
-        staging_dir = Path(staging)
-        for filename, content in contents.items():
-            (staging_dir / filename).write_bytes(content)
-
-        snapshots: Dict[str, Path] = {}
-        published: List[str] = []
-        try:
-            for filename in contents:
-                target = output_dir / filename
-                if target.exists():
-                    previous = staging_dir / f"{filename}.prev"
-                    os.replace(target, previous)
-                    snapshots[filename] = previous
-            for filename in contents:
-                os.replace(staging_dir / filename, output_dir / filename)
-                published.append(filename)
-        except BaseException:
-            # `except BaseException`（`except OSError` ではなく）: rename 中に
-            # `KeyboardInterrupt`/`SystemExit` が飛んでも rollback を必ず通す
-            # （Codex P2 review round 7, PR3 #208 指摘 14 — `backend.py:
-            # atomic_publish_bytes_bundle` と同じ理由・同じ統一）。
-            for filename in published:
-                try:
-                    os.unlink(output_dir / filename)
-                except OSError:
-                    pass
-            for filename, previous in snapshots.items():
-                try:
-                    os.replace(previous, output_dir / filename)
-                except OSError:
-                    pass
-            raise
+    atomic_publish_bundle(output_dir, contents, protected_inputs=protected_inputs)
 
 
 # 診断文字列に残る絶対パスの残骸を検出する（`(?<![\w./-])` は "0/4" や
