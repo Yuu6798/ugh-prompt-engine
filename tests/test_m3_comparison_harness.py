@@ -380,6 +380,46 @@ def test_repeats_rejects_audio_content_pin_mismatch_same_path(
 
 
 # --------------------------------------------------------------------------- #
+# comparison 全体の等値比較（レビュー対応 2026-07-30 第 14 ラウンド）
+# --------------------------------------------------------------------------- #
+def test_repeats_rejects_evidence_only_tamper(tmp_path: Path, audio_paths: Dict[str, str]):
+    """`comparison.evidence` だけを改変した repeat は、`sequence_sha256`/`axes` の
+    個別フィールド比較（`ref_sig`/`cur_sig`）を素通りしても、`comparison` 全体の
+    等値比較（レビュー対応 2026-07-30 第 14 ラウンド）で拒否される。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    report2 = copy.deepcopy(report1)
+    original_evidence = report2["pairs"]["p_pos_tuning"]["comparison"]["evidence"]
+    tampered_evidence = "weak" if original_evidence != "weak" else "strong"
+    report2["pairs"]["p_pos_tuning"]["comparison"]["evidence"] = tampered_evidence
+
+    with pytest.raises(ValueError, match="comparison"):
+        harness._check_repeats_consistency([report1, report2])
+
+
+def test_repeats_rejects_coverage_only_tamper(tmp_path: Path, audio_paths: Dict[str, str]):
+    """`comparison.coverage` だけを改変した repeat は、`sequence_sha256`/`axes` の
+    個別フィールド比較を素通りしても、`comparison` 全体の等値比較で拒否される。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+
+    report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    report2 = copy.deepcopy(report1)
+    coverage = report2["pairs"]["p_pos_tuning"]["comparison"]["coverage"]
+    assert "aligned_note_fraction_a" in coverage
+    coverage["aligned_note_fraction_a"] = -1.0
+
+    with pytest.raises(ValueError, match="comparison"):
+        harness._check_repeats_consistency([report1, report2])
+
+
+# --------------------------------------------------------------------------- #
 # 生観測軌跡の content hash（レビュー対応 2026-07-30 第 11 ラウンド）
 # --------------------------------------------------------------------------- #
 def test_run_comparison_records_observation_sha256_for_each_side(
@@ -1462,6 +1502,47 @@ def test_holdout_unlocked_rejects_non_numeric_axis_values():
 
 
 # --------------------------------------------------------------------------- #
+# coverage.floor 値の検証（レビュー対応 2026-07-30 第 14 ラウンド）
+# --------------------------------------------------------------------------- #
+def test_validate_coverage_floor_accepts_in_range_values():
+    assert harness._validate_coverage_floor(0.5) is True
+    assert harness._validate_coverage_floor(0.0) is True
+    assert harness._validate_coverage_floor(1.0) is True
+
+
+@pytest.mark.parametrize(
+    "bad_floor",
+    [float("nan"), -1.0, True],
+    ids=["nan", "negative", "bool"],
+)
+def test_holdout_unlocked_rejects_invalid_coverage_floor(bad_floor: Any):
+    """`coverage.floor` の値そのものが NaN/負値/bool なら、`floor_status` が
+    frozen かつ axes も揃っていても holdout を開かない（レビュー対応 2026-07-30
+    第 14 ラウンド: 従来は `floor_status` という文字列しか見ておらず、値自体の
+    破損を検出できなかった）。
+    """
+    from svp_rpe.melody.representation import M3ComparisonConfig
+
+    base_mapping = _registry_mapping()
+    mapping = dict(base_mapping)
+    mapping["evidence_thresholds"] = {
+        "status": "frozen",
+        "axes": {
+            "contour": {"strong_min": 0.8, "none_max": 0.2},
+            "interval": {"strong_min": 0.8, "none_max": 0.2},
+            "rhythm": {"strong_min": 0.7, "none_max": 0.3},
+        },
+    }
+    mapping["coverage"] = dict(base_mapping["coverage"])
+    mapping["coverage"]["floor_status"] = "frozen"
+    mapping["coverage"]["floor"] = bad_floor
+    config = M3ComparisonConfig.from_registry(mapping)
+
+    assert harness._validate_coverage_floor(config.coverage.floor) is False
+    assert harness._holdout_unlocked(config) is False
+
+
+# --------------------------------------------------------------------------- #
 # 凍結 axes の部分成立（レビュー対応 2026-07-30 第 4 ラウンド: 3 軸全て必須の緩和）
 # --------------------------------------------------------------------------- #
 def test_validate_frozen_axes_rejects_empty_axes_mapping():
@@ -2068,6 +2149,12 @@ def test_evaluate_allows_injected_reports_with_missing_pair_pins(tmp_path: Path,
 def test_check_repeats_consistency_rejects_mixed_holdout_lock_state(tmp_path: Path, audio_paths: Dict[str, str]):
     """同一 manifest でも registry の凍結状態が変われば holdout ロック状態が変わる
     — repeats 間でロック状態が食い違ったら fail-closed で拒否する。
+
+    レビュー対応 2026-07-30（第 14 ラウンド）: `evidence_thresholds`/registry sha256
+    が report 間で異なると tuning pair の `comparison`（`evidence`/`axis_evidence`/
+    `provenance` 等）も併せて変わり、新設した comparison 全体の等値比較がそちらを
+    先に検出してしまう——本テストの主眼（holdout 行の比較有無の食い違い）を単離
+    するため、tuning pair の行は report_locked 側へ揃えてから比較する。
     """
     manifest_path = tmp_path / "pairs.yaml"
     _write_manifest(manifest_path, _default_pairs(audio_paths))
@@ -2080,6 +2167,12 @@ def test_check_repeats_consistency_rejects_mixed_holdout_lock_state(tmp_path: Pa
     report_unlocked = harness.run_comparison(
         manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
     )
+
+    # tuning pair の行は本テストの主眼でない差異(registry 変更に伴う evidence
+    # 分類・provenance の registry sha256 の変化)を含むため、比較対象から単離する。
+    for pair_id, pair in report_locked["pairs"].items():
+        if pair["split"] == "tuning":
+            report_unlocked["pairs"][pair_id] = copy.deepcopy(pair)
 
     with pytest.raises(ValueError, match="holdout ロック状態"):
         harness._check_repeats_consistency([report_locked, report_unlocked])
@@ -2613,3 +2706,71 @@ def test_evaluate_allows_non_crepe_route_without_crepe_required_pins(
 
     verdict = harness.evaluate_comparison([report])
     assert verdict["calibration_verdict_status"] == "rejected_route_runner_injected"
+
+
+# --------------------------------------------------------------------------- #
+# axes 値の検証（レビュー対応 2026-07-30 第 14 ラウンド）
+# --------------------------------------------------------------------------- #
+def _two_reports_for_calibration_verdict(
+    tmp_path: Path, audio_paths: Dict[str, str]
+) -> List[Dict[str, Any]]:
+    """`route_runner_injected` を False に落とした 2 本の report を返す。
+
+    calibration verdict の発行に必要な前提（route_runner 非注入相当 ×
+    repeats n>=2）を満たし、margin/holdout 集計まで到達させるための共通ヘルパー
+    （`test_evaluate_comparison_records_holdout_lock_when_not_route_runner_injected`
+    の inline パターンを共通化）。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs(audio_paths))
+    runner = _fake_route_runner(_notes_by_path(audio_paths))
+    reports: List[Dict[str, Any]] = []
+    for _ in range(2):
+        report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+        report["route_runner_injected"] = False
+        reports.append(report)
+    return reports
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [2.0, -1.0, True, "0.5"],
+    ids=["out_of_range_high", "out_of_range_low", "bool_value", "string_value"],
+)
+def test_evaluate_rejects_invalid_axes_value(
+    tmp_path: Path, audio_paths: Dict[str, str], bad_value: Any
+):
+    """`comparison.axes` の値が域外(2.0/-1.0)・bool(True)・文字列("0.5")のいずれか
+    なら、margin/holdout 集計より前に `_validate_pair_axes_values` が fail-closed
+    で拒否する。両 report に同一の壊れた値を注入する(repeats 間の整合性チェック
+    自体は通し、axes 値検証で拒否されることを見る)。
+    """
+    reports = _two_reports_for_calibration_verdict(tmp_path, audio_paths)
+    for report in reports:
+        report["pairs"]["p_pos_tuning"]["comparison"]["axes"]["contour"] = bad_value
+
+    with pytest.raises(ValueError, match="contour"):
+        harness.evaluate_comparison(reports)
+
+
+def test_evaluate_rejects_unknown_axis_name(tmp_path: Path, audio_paths: Dict[str, str]):
+    """`comparison.axes` に既知軸名（contour/interval/rhythm）以外のキーが
+    あれば fail-closed で拒否する。
+    """
+    reports = _two_reports_for_calibration_verdict(tmp_path, audio_paths)
+    for report in reports:
+        report["pairs"]["p_pos_tuning"]["comparison"]["axes"]["bogus_axis"] = 0.5
+
+    with pytest.raises(ValueError, match="bogus_axis"):
+        harness.evaluate_comparison(reports)
+
+
+def test_evaluate_accepts_none_axes_value(tmp_path: Path, audio_paths: Dict[str, str]):
+    """axes 値の `None`（計測不能の既存の意味論）は axes 値検証を通過する。"""
+    reports = _two_reports_for_calibration_verdict(tmp_path, audio_paths)
+    for report in reports:
+        report["pairs"]["p_pos_tuning"]["comparison"]["axes"]["contour"] = None
+
+    verdict = harness.evaluate_comparison(reports)
+    assert "calibration_verdict_status" not in verdict
+    assert "margin_table" in verdict

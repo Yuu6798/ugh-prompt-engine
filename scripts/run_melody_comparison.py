@@ -54,6 +54,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -381,12 +382,33 @@ def _validate_frozen_axes(axes: Dict[str, Any]) -> bool:
     return True
 
 
+def _validate_coverage_floor(floor: Any) -> bool:
+    """凍結 `coverage.floor`（`CoverageConfig.floor`）の値そのものが有効か判定する。
+
+    レビュー対応 2026-07-30（第 14 ラウンド）: `CoverageConfig` は frozen dataclass
+    であり `floor: float` という型注釈を持つが、`representation.py` の
+    `_build_section` は `dc(**mapping)` で構築するだけで実行時の型検証は行わない
+    ——registry.yaml に `floor: .nan` / `floor: -1` / `floor: true` を書いても
+    `_holdout_unlocked` はこれまで `coverage.floor_status == "frozen"` という
+    ステータス文字列しか見ていなかったため、被覆下限ゲート（`comparison.py` の
+    `min_fraction < floor` 判定）が壊れた値のまま holdout を開けてしまう穴が
+    あった。`_validate_frozen_axes` の値検証（非 bool の有限数値かつ 0.0〜1.0）と
+    同型の検証をここで課す。
+    """
+    if isinstance(floor, bool) or not isinstance(floor, (int, float)):
+        return False
+    fvalue = float(floor)
+    if not math.isfinite(fvalue):
+        return False
+    return 0.0 <= fvalue <= 1.0
+
+
 def _holdout_unlocked(config: Any) -> bool:
     """holdout を開いてよいか判定する（run/evaluate 両 phase 共有の cross-field 不変条件）。
 
     レビュー対応 2026-07-30: `evidence_thresholds.status == "frozen"` だけでは
     「部分凍結」（軸別閾値がまだ無い・被覆下限がまだ provisional）状態でも holdout
-    が開いてしまう穴があった。以下 3 条件の **全て** を要求する（1 つでも欠けたら
+    が開いてしまう穴があった。以下 4 条件の **全て** を要求する（1 つでも欠けたら
     ロックのまま）:
 
     (a) `evidence_thresholds.status == "frozen"`
@@ -395,6 +417,9 @@ def _holdout_unlocked(config: Any) -> bool:
         揃っているだけの「内容が壊れた」凍結軸を弾く。第 4 ラウンド: 3 軸全てが
         揃っている必要はなくなった——1 軸以上の整形済み凍結軸があれば足りる）
     (c) `coverage.floor_status == "frozen"`
+    (d) `coverage.floor` の値そのものが有効（`_validate_coverage_floor`。レビュー
+        対応 2026-07-30 第 14 ラウンド: (c) はステータス文字列しか見ておらず、
+        floor の値自体が NaN・負値・bool 等でも凍結扱いになってしまう穴を塞ぐ）
 
     `M3ComparisonConfig`（`load_m3_registry` の戻り値）だけで判定に必要な値は
     全て読めるため、registry の生 mapping を別途読み直す必要はない。
@@ -405,6 +430,8 @@ def _holdout_unlocked(config: Any) -> bool:
     if not _validate_frozen_axes(thresholds.axes or {}):
         return False
     if config.coverage.floor_status != "frozen":
+        return False
+    if not _validate_coverage_floor(config.coverage.floor):
         return False
     return True
 
@@ -676,10 +703,10 @@ def run_comparison(
     pairs_spec = _validate_manifest(manifest)
 
     # holdout は `_holdout_unlocked` の全条件（status=frozen + axes 揃い +
-    # coverage.floor_status=frozen）を満たすまで run 時点でも開かない（evaluate
-    # 側のロックだけでは、report に holdout の axes/hash が既に書かれてしまい
-    # 閲覧可能になる穴が残るため。設計 §6.3「holdout は閾値凍結後に一度だけ開く」
-    # を run phase でも enforce する）。
+    # coverage.floor_status=frozen + coverage.floor 値が有効）を満たすまで run
+    # 時点でも開かない（evaluate 側のロックだけでは、report に holdout の
+    # axes/hash が既に書かれてしまい閲覧可能になる穴が残るため。設計 §6.3
+    # 「holdout は閾値凍結後に一度だけ開く」を run phase でも enforce する）。
     holdout_locked = not _holdout_unlocked(config)
 
     results: Dict[str, Any] = {
@@ -1150,6 +1177,25 @@ def _check_repeats_consistency(reports: List[Dict[str, Any]]) -> None:
                     f"sequence_sha256/axes 不一致 (reports[0]={ref_sig!r} != "
                     f"reports[{idx}]={cur_sig!r}); 軌跡レベル決定論が崩れている (fail-closed)"
                 )
+            # レビュー対応 2026-07-30（第 14 ラウンド・comparison 全体の等値比較）:
+            # 上の `ref_sig`/`cur_sig` は sequence_sha256/axes という個別フィールド
+            # の列挙に過ぎず、`comparison` dict のうちそれ以外のキー（`evidence` /
+            # `coverage` 等）が repeats 間で食い違っても検出できない穴が残って
+            # いた。設計 §6.2 の repeats bit 一致要求は「comparison 全体」の一致
+            # であるため、ここで dict 全体の等値（`==`）比較を追加する——個別
+            # フィールドの pin チェックは診断メッセージが具体的で有用なため残し、
+            # 最後にこの全体比較で締める。
+            if ref_comp != cur_comp:
+                diff_keys = sorted(
+                    (set(ref_comp) ^ set(cur_comp))
+                    | {key for key in set(ref_comp) & set(cur_comp) if ref_comp[key] != cur_comp[key]}
+                )
+                raise ValueError(
+                    f"evaluate_comparison: pair {pair_id!r} の comparison が repeats 間で "
+                    f"全体として不一致 (差分キー={diff_keys}); repeats は同一 manifest × "
+                    "同一 route に対する決定論的実行でなければならない (fail-closed; 設計 "
+                    "§6.2「repeats n≥2 + comparison 全体の bit 一致」)"
+                )
 
 
 def _validate_registry_pins(
@@ -1419,6 +1465,53 @@ def _holdout_missing_comparison_pair_ids(
     return sorted(missing)
 
 
+def _validate_pair_axes_values(pairs: Dict[str, Dict[str, Any]]) -> None:
+    """各 pair の `comparison.axes` 値が margin/holdout 集計に足る整形か検証する。
+
+    レビュー対応 2026-07-30（第 14 ラウンド）: `_margin_table` / `_holdout_validation_table`
+    は `comparison["axes"]` の値をそのまま `min()`/`max()` へ積むだけで、値そのもの
+    （型・値域）を無検査で通していた——`comparison` dict が report 直接改ざんや
+    比較器側の不具合で `axes` に `2.0`（域外）・`-1.0`（域外）・`True`（bool）・
+    `"0.5"`（文字列）を持っていても、集計結果（マージン表・holdout 判定）が黙って
+    壊れたまま fail しない穴があった。`evaluate_comparison` は margin/holdout 集計の
+    **前** に、全 pair（tuning/holdout 問わず。`comparison` を持たない holdout
+    ロック pair は対象外）について以下を要求する（fail-closed）:
+
+    (a) 軸名は既知軸（`_AXES` = contour/interval/rhythm）のみであること
+    (b) 各軸の値は `None`、または非 bool の有限数値（`math.isfinite`）かつ
+        0.0〜1.0 の範囲内であること
+    """
+    for pair_id, pair in pairs.items():
+        comparison = pair.get("comparison")
+        if comparison is None:
+            continue
+        axes = comparison.get("axes", {})
+        if not isinstance(axes, dict):
+            raise ValueError(
+                f"evaluate_comparison: pair {pair_id!r} の comparison.axes が mapping で"
+                f"ない (axes={axes!r}) (fail-closed)"
+            )
+        for axis_name, value in axes.items():
+            if axis_name not in _AXES:
+                raise ValueError(
+                    f"evaluate_comparison: pair {pair_id!r} の comparison.axes に未知軸名 "
+                    f"{axis_name!r} (既知軸: {sorted(_AXES)}) (fail-closed)"
+                )
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(
+                    f"evaluate_comparison: pair {pair_id!r} の axis {axis_name!r} の値 "
+                    f"{value!r} は None または非 bool の数値でなければならない (fail-closed)"
+                )
+            fvalue = float(value)
+            if not math.isfinite(fvalue) or not (0.0 <= fvalue <= 1.0):
+                raise ValueError(
+                    f"evaluate_comparison: pair {pair_id!r} の axis {axis_name!r} の値 "
+                    f"{value!r} は有限かつ 0.0〜1.0 の範囲内でなければならない (fail-closed)"
+                )
+
+
 def _margin_table(
     pairs: Dict[str, Dict[str, Any]], *, split: Optional[str], min_margin: float
 ) -> Dict[str, Any]:
@@ -1669,12 +1762,18 @@ def evaluate_comparison(
     9. route_runner_injected な report があれば calibration verdict 発行を拒否
     10. repeats が n>=2 でなければ calibration verdict 発行を拒否（n=1 は「決定論
         repeats 未検証」であり校正証拠にしない）
+    10.5. margin/holdout 集計より前に、reference report の各 pair の
+        `comparison.axes` 値を検証する（`_validate_pair_axes_values`。レビュー
+        対応 2026-07-30 第 14 ラウンド）: 既知軸名（contour/interval/rhythm）
+        のみ・値は None または非 bool の有限数値かつ 0.0〜1.0 であることを要求し、
+        違反は pair_id・軸名・値を理由に fail-closed（`ValueError`）
     11. tuning split のみで軸別マージン表を算出（`separation_margin` 閾値）。
         tuning positive pair に 1 件でも `not_comparable` があれば freeze
         proposal を発行しない（レビュー対応 2026-07-30 第 5 ラウンド。negative の
         `not_comparable` は除外 + カウント記録のみで発行を妨げない）
     12. holdout は `_holdout_unlocked` の全条件（status=frozen + 1 軸以上の整形済み
-        凍結軸 + coverage.floor_status=frozen）を満たすまで開かない
+        凍結軸 + coverage.floor_status=frozen + coverage.floor 値が有効）を満たす
+        まで開かない
     13. tuning positive pair の被覆分布から coverage floor 候補を emit
     14. holdout unlock 済み（registry 完全凍結）かつ report に holdout 行（比較結果
         つき）が存在する場合、凍結済み軸ごとに holdout の positive 最小類似・
@@ -1766,6 +1865,14 @@ def evaluate_comparison(
     holdout_locked = not _holdout_unlocked(config)
     verdict["holdout_locked_until_frozen"] = holdout_locked
     verdict["holdout_pair_ids_skipped"] = _holdout_pair_ids(reference_pairs) if holdout_locked else []
+
+    # レビュー対応 2026-07-30（第 14 ラウンド）: margin/holdout 集計（`_margin_table` /
+    # 後段の `_holdout_validation_table`）が axes 値をそのまま消費する前に、値の
+    # 型・値域を検証する（fail-closed）。`_check_repeats_consistency` が既に
+    # comparison 全体の repeats 間一致を確認済みのため、reference report
+    # （`reports[0]`）の pairs だけを検証すれば他 report も同じ値であることは
+    # 保証されている。
+    _validate_pair_axes_values(reference_pairs)
 
     margin = _margin_table(
         reference_pairs,
