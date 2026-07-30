@@ -62,7 +62,7 @@ import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Literal, Optional
+from typing import Any, Callable, Dict, Iterator, List, Literal, Optional
 
 import yaml
 from pydantic import ValidationError
@@ -938,81 +938,61 @@ def build_recast_plan(
     ).result
 
 
-def build_recast_plan_artifacts(
-    loaded: LoadedRecastProject, *, variant: str, backend: str, publish: bool
-) -> RecastPlanArtifacts:
-    """`build_recast_plan` の完全版: `RecastPlanResult`（`inputs_digest` 込み）に
-    加え、到達状態が `compiled`/`verified` のときの compile 済み成果物一式
-    （`RecastPlanArtifacts`）を返す。診断構築のロジックは `build_recast_plan`
-    と完全に同一。
+@dataclass
+class _SingleReadBundle:
+    """`build_recast_plan_artifacts` の single-read 束（B2 抽出）。
 
-    `publish`（必須引数 — デフォルト値なし、Codex P2 review round 10, PR3
-    #208 指摘19: 呼び出し側が意図せず永続公開/非公開のどちらかへ倒れるのを
-    signature で防ぐ）:
+    score / identity manifest / arrangement spec / capability profile /
+    mode_overrides / device profile の各ファイルを 1 回だけ `read_bytes()`
+    した結果（成功時オブジェクト or 失敗時例外）と `digest_components` を
+    保持する（`_read_single_read_bundle` 参照。single-read 束の思想自体は
+    モジュール docstring 冒頭 L6–L22、関数 docstring 参照）。判定・報告順序
+    は変えない — この束はあくまで read 結果の入れ物で、実際に `blocked_*`
+    を返す判定は元のステップ位置のまま各 `_step_check_*`/
+    `_compile_verify_publish` で行う（module-private、可変で可）。
 
-    - `publish=True`（`recast plan`/`run`/`ingest` の 3 CLI コマンドのみが
-      使う経路）: 到達状態が `compiled`/`verified` のとき package/report を
-      `<builds_root>/packages/<variant>@<backend>/` へ永続公開する（この
-      公開自体は本関数が意図して持つ副作用 — `recast_plan.json` の publish・
-      `record_state` はあくまで別途 CLI 側の責務のまま、PR2 P2 対応の範囲は
-      変えない）。
-    - `publish=False`（`build_recast_plan` 経由の読み取り専用診断、および
-      `recast ingest` の precheck rebuild — Codex P2 review round 13, PR3
-      #208 指摘27 で追加された経路）: `<builds_root>/packages/<variant>@
-      <backend>/` 自体へは書き込まない。verify（`policy.require_verified_
-      package` が真の場合）用の一時ファイルは、実公開先 `resolve_packages_
-      dir(...)` の**兄弟**（`.parent` 配下の tempdir、`_staging_directory_
-      at_packages_depth` 参照）を使う — `publish=True` と同一の sibling-
-      staging（Codex P2 review round 11, PR3 #208 指摘21 導入）を round 14
-      指摘29 で `publish=False` にも一本化した。従来（指摘29 対応前）は
-      project_dir 直下の ephemeral tempdir を使っており、返る
-      `RecastPlanArtifacts.compiled` の `artifact_base.locator` が実公開先
-      とは異なる深さで焼き込まれていた — `build_recast_plan`（薄いラッパー）
-      経由では `.result` だけが呼び出し元へ渡るため無害だったが、`recast
-      ingest`（指摘27 対応で `publish=False` 再ビルド → 突合通過後に
-      `artifacts.compiled` をそのまま実公開先へ publish する経路になった）
-      では、この深さの食い違いが公開後の `verify_package`/`observe` の
-      anchor 解決を壊し得る実害だった。sibling-staging の一本化によりこの
-      食い違いは解消される。`builds_root/packages/`（さらには `builds_root`
-      自体）が呼び出し前に存在しなければ一時的に作成が必要になるが、
-      `_staging_directory_at_packages_depth(cleanup_created_ancestors=True)`
-      が新規作成した祖先だけを `with` を抜ける際に完全に rmdir で復元する
-      ため、`build_recast_plan()` の「`builds_root` に一切触れない」読み取り
-      専用契約（`policy.require_verified_package` が偽なら加えてディスクへ
-      全く書き込まない — こちらは変更なし・真の意味での純粋関数のまま）は
-      維持される。
-
-    single-read 束（Codex P2 sixth round #207）: score / identity manifest /
-    arrangement spec / capability profile / mode_overrides / device profile の
-    各ファイルはこの関数内で `read_bytes()` を 1 回ずつしか呼ばない —
-    `inputs_digest` の hash 計算も、実際の parse/resolve/compile も同じ bytes
-    から行う。以前は `compute_recast_inputs_digest` を関数冒頭で別途呼び、
-    実パイプラインの読み取りと独立に再読込していたため、実行中の入力差し替え
-    A→B→A で「B で compile した plan を A の digest で pin」してしまう TOCTOU
-    があった（`compute_recast_inputs_digest` 自体は `recast status` が独立の
-    時点で鮮度チェックする際の標準経路として引き続き公開する — そちらは
-    意図的な別時点での再読込であり stale 検出の本質そのもの）。
-
-    各ファイルの read はここで前倒しするが、失敗の**報告順序**（どの段の
-    エラーが優先して `blocked_*` になるか）は変えない — 読み取り/parse の
-    成功時オブジェクトまたは失敗時例外を一旦保持するだけに留め、実際に
-    `_finalize` を呼ぶ/例外を送出する判定は元のステップ位置のまま行う。
+    `manifest_by_id` / `contract` / `contract_sha256` / `derived_score_sha256`
+    は後続ステップ（`_step_check_identity_manifest` / `_step_check_
+    arrangement_contract` / `_step_check_device_profile`）が確定させて
+    この束へ書き戻す値 — 読み取り段階ではまだ未確定のため既定値 None。
     """
-    project: RecastProject = loaded.project
 
-    if variant not in project.variants:
-        raise RecastError(
-            f"recast project '{project.project.id}': unknown variant {variant!r} "
-            f"(declared: {sorted(project.variants)})"
-        )
-    if backend not in project.backends:
-        raise RecastError(
-            f"recast project '{project.project.id}': unknown backend {backend!r} "
-            f"(declared: {sorted(project.backends)})"
-        )
+    digest_components: Dict[str, str]
+    score: Optional[CompositionScore]
+    score_parse_error: Optional[Exception]
+    manifest_path: Path
+    manifest_read_error: Optional[OSError]
+    manifest_parse_error: Optional[Exception]
+    manifest_sha256: str
+    manifest: Any
+    channel_artifact_bytes: Dict[str, bytes]
+    spec: Optional[ArrangementSpec]
+    spec_sha256: str
+    resolution: Any
+    spec_read_error: Optional[OSError]
+    resolve_error: Optional[Exception]
+    profile: Optional[InputCapabilityProfile]
+    profile_sha256: str
+    profile_error: Optional[Exception]
+    mode_overrides_config: Optional[ModeOverridesConfig]
+    mode_overrides_error: Optional[Exception]
+    mode_override_path: Optional[Path]
+    mode_overrides_declared: bool
+    device_profile: Optional[DeviceProfile]
+    device_profile_error: Optional[Exception]
+    manifest_by_id: Optional[Dict[str, IdentityAnchor]] = None
+    contract: Any = None
+    contract_sha256: Optional[str] = None
+    derived_score_sha256: Optional[str] = None
 
-    backend_ref: BackendRef = project.backends[backend]
 
+def _read_single_read_bundle(
+    loaded: LoadedRecastProject, project: RecastProject, variant: str, backend: str
+) -> _SingleReadBundle:
+    """single-read 束: 全入力ファイルをここで 1 回ずつ read_bytes する
+    （`build_recast_plan_artifacts` B2 の逐字抽出。read の実行順序は不変 —
+    モジュール docstring 冒頭 L6–L22、`build_recast_plan_artifacts`
+    docstring の single-read 束の節を参照）。"""
     # ======================================================================
     # single-read bundle: 全入力ファイルをここで 1 回ずつ read_bytes する。
     # ======================================================================
@@ -1188,29 +1168,545 @@ def build_recast_plan_artifacts(
             f"{type(resolution_error).__name__}: {resolution_error}"
         )
 
-    inputs_digest = compute_content_digest(digest_components)
+    return _SingleReadBundle(
+        digest_components=digest_components,
+        score=score,
+        score_parse_error=score_parse_error,
+        manifest_path=manifest_path,
+        manifest_read_error=manifest_read_error,
+        manifest_parse_error=manifest_parse_error,
+        manifest_sha256=manifest_sha256,
+        manifest=manifest,
+        channel_artifact_bytes=channel_artifact_bytes,
+        spec=spec,
+        spec_sha256=spec_sha256,
+        resolution=resolution,
+        spec_read_error=spec_read_error,
+        resolve_error=resolve_error,
+        profile=profile,
+        profile_sha256=profile_sha256,
+        profile_error=profile_error,
+        mode_overrides_config=mode_overrides_config,
+        mode_overrides_error=mode_overrides_error,
+        mode_override_path=mode_override_path,
+        mode_overrides_declared=mode_overrides_declared,
+        device_profile=device_profile,
+        device_profile_error=device_profile_error,
+    )
+
+
+def _step_check_score_authoring(
+    bundle: _SingleReadBundle,
+    project: RecastProject,
+    finalize: Callable[..., RecastPlanArtifacts],
+) -> Optional[RecastPlanArtifacts]:
+    """step 2a + step 2 (B5+B6 抽出): score の YAML 破損・schema 不正チェック、
+    および author field (TODO sentinel) 未解決チェック。"""
+    # --- step 2a: score の YAML 破損・schema 不正チェック --------------------
+    # score は著者成果物 (author field / preservation 契約と同じ層) のため、
+    # parse/validate 失敗は identity manifest / capability profile と違う
+    # blocked_authoring として finalize する（Codex P2 eleventh round #207:
+    # 以前は score parse を bundle 先頭で無条件に呼んでおり、失敗時は捕捉
+    # されない例外として関数外へ伝播し CLI が top-level Error で落ちていた
+    # ため recast_plan.json も state も残らなかった）。他の bundle 読み取り
+    # より先に発生していた元の失敗順序を保つため、step 2 のチェックより先に
+    # 判定する。
+    if bundle.score_parse_error is not None:
+        return finalize(
+            state_reached="blocked_authoring",
+            blocked=BlockedInfo(
+                state="blocked_authoring", reasons=[str(bundle.score_parse_error)]
+            ),
+        )
+    assert bundle.score is not None
+
+    # --- step 2: author field (TODO sentinel) 未解決チェック -----------------
+    if project.policy.require_author_fields_resolved:
+        unresolved = _unresolved_author_field_paths(bundle.score)
+        if unresolved:
+            return finalize(
+                state_reached="blocked_authoring",
+                blocked=BlockedInfo(
+                    state="blocked_authoring",
+                    reasons=[
+                        f"unresolved TODO(transcribe) sentinel at {path}" for path in unresolved
+                    ],
+                ),
+            )
+    return None
+
+
+def _step_check_identity_manifest(
+    bundle: _SingleReadBundle,
+    finalize: Callable[..., RecastPlanArtifacts],
+) -> Optional[RecastPlanArtifacts]:
+    """step 3 (B7 抽出): identity manifest の read/parse エラー判定 +
+    `manifest_by_id` 構築（束へ書き戻す）。"""
+    # --- step 3: identity manifest -----------------------------------------
+    if bundle.manifest_read_error is not None:
+        return finalize(
+            state_reached="blocked_verification",
+            blocked=BlockedInfo(
+                state="blocked_verification", reasons=[str(bundle.manifest_read_error)]
+            ),
+        )
+    if bundle.manifest_parse_error is not None:
+        return finalize(
+            state_reached="blocked_verification",
+            blocked=BlockedInfo(
+                state="blocked_verification", reasons=[str(bundle.manifest_parse_error)]
+            ),
+        )
+    assert bundle.manifest is not None  # 上の 2 ガードで None のケースは既に return 済み
+    bundle.manifest_by_id = {anchor.id: anchor for anchor in bundle.manifest.anchors}
+
+    # 注: `observation.anchors` の未知 anchor id 検証は本 plan 段では行わない
+    # （PR6 当初実装はここで即時 `RecastError` を送出していたが、その後の
+    # `svp_rpe.arrange.observe.observe_generated_artifact` +
+    # `cli.recast_cmd.recast_ingest_cmd`（Codex P2, #210 round 9 指摘11）へ
+    # 一本化した — plan 段で fail すると manual backend が `awaiting_generation`
+    # /`generated` にすら到達できず、「注文書は出したが観測設定が誤っている」
+    # という状態を state として残せなくなる。ingest 側は `generated` を記録
+    # した直後・observe 呼び出しの手前でこの検証を行い、設定ミスとして
+    # plain error + exit 1（state は `generated` のまま、`observation_incomplete`
+    # とは区別）とする。plan/run はこの anchor id 検証を行わず観測スコープの
+    # 妥当性に関知しない）。
+    return None
+
+
+def _step_check_arrangement_contract(
+    bundle: _SingleReadBundle,
+    finalize: Callable[..., RecastPlanArtifacts],
+) -> Optional[RecastPlanArtifacts]:
+    """step 4+5 (B8 抽出): arrangement resolve 結果の判定 +
+    `build_preservation_contract`（`contract` を束へ書き戻す）。"""
+    # --- step 4+5: arrangement resolve + preservation contract -------------
+    if bundle.spec_read_error is not None:
+        return finalize(
+            state_reached="blocked_authoring",
+            blocked=BlockedInfo(
+                state="blocked_authoring", reasons=[str(bundle.spec_read_error)]
+            ),
+        )
+    if bundle.resolve_error is not None:
+        return finalize(
+            state_reached="blocked_authoring",
+            blocked=BlockedInfo(
+                state="blocked_authoring", reasons=[str(bundle.resolve_error)]
+            ),
+        )
+    assert (
+        bundle.spec is not None and bundle.resolution is not None
+    )  # 上の 2 ガードで既に return 済み
+    try:
+        bundle.contract = build_preservation_contract(
+            bundle.manifest,
+            bundle.spec,
+            manifest_sha256=bundle.manifest_sha256,
+            spec_sha256=bundle.spec_sha256,
+        )
+    except PreservationContractError as exc:
+        return finalize(
+            state_reached="blocked_authoring",
+            blocked=BlockedInfo(state="blocked_authoring", reasons=[str(exc)]),
+        )
+    return None
+
+
+def _step_check_capability_mode(
+    bundle: _SingleReadBundle,
+    backend: str,
+    finalize: Callable[..., RecastPlanArtifacts],
+) -> Optional[RecastPlanArtifacts]:
+    """step 6 (B9 抽出): capability profile / mode_overrides の parse エラー、
+    および mode_overrides.generator と capability profile.generator の
+    不一致判定。"""
+    # --- step 6: capability profile + mode overrides ------------------------
+    # capability_profile / mode_overrides の YAML 破損・schema 不正は、
+    # identity manifest / arrangement spec の同種の失敗（blocked_verification /
+    # blocked_authoring）と一貫させ blocked_capability として finalize する
+    # （Codex P2 eighth round #207: 以前は保存済み例外を re-raise していたため
+    # CLI が top-level Error で落ち、recast_plan.json も state も残らなかった
+    # — 他の parse 失敗系と非一貫だった）。
+    if bundle.profile_error is not None:
+        return finalize(
+            state_reached="blocked_capability",
+            blocked=BlockedInfo(
+                state="blocked_capability", reasons=[str(bundle.profile_error)]
+            ),
+        )
+    assert bundle.profile is not None
+    if bundle.mode_overrides_error is not None:
+        return finalize(
+            state_reached="blocked_capability",
+            blocked=BlockedInfo(
+                state="blocked_capability", reasons=[str(bundle.mode_overrides_error)]
+            ),
+        )
+    # mode_overrides.generator と capability profile.generator の不一致も、
+    # 他の capability 層の不整合と同じ blocked_capability として finalize する
+    # （Codex P2 twelfth round #207: eighth round で一度スコープ外にした箇所の
+    # 再指摘 — 以前は raise していたため CLI が top-level Error で落ち、
+    # recast_plan.json も state も残らなかった）。reasons に両 generator 名と
+    # 是正の示唆（mode_overrides を差し替えるか宣言を外す）を含める。
+    if (
+        bundle.mode_overrides_config is not None
+        and bundle.mode_overrides_config.generator != bundle.profile.generator
+    ):
+        return finalize(
+            state_reached="blocked_capability",
+            blocked=BlockedInfo(
+                state="blocked_capability",
+                reasons=[
+                    f"backend {backend!r} mode_overrides generator "
+                    f"{bundle.mode_overrides_config.generator!r} does not match capability profile "
+                    f"generator {bundle.profile.generator!r} — mode_overrides を "
+                    f"{bundle.profile.generator!r} 用に差し替えるか、backend の mode_overrides 宣言"
+                    "を外してください"
+                ],
+            ),
+        )
+    return None
+
+
+def _step_check_device_profile(
+    bundle: _SingleReadBundle,
+    finalize: Callable[..., RecastPlanArtifacts],
+) -> Optional[RecastPlanArtifacts]:
+    """step 7 前段 (B10 抽出): device profile のエラー判定 +
+    `contract_sha256`/`derived_score_sha256` 計算（束へ書き戻す）。"""
+    # --- step 7: build performance package ----------------------------------
+    # device profile の YAML 破損・schema 不正も capability_profile/mode_overrides
+    # と同じ blocked_capability として finalize する（Codex P2 tenth round #207:
+    # 以前は保存済み例外を re-raise していたため CLI が top-level Error で落ち、
+    # recast_plan.json も state も残らなかった — eighth round で対応した
+    # capability_profile/mode_overrides と同クラスの非一貫だった）。
+    if bundle.device_profile_error is not None:
+        return finalize(
+            state_reached="blocked_capability",
+            blocked=BlockedInfo(
+                state="blocked_capability", reasons=[str(bundle.device_profile_error)]
+            ),
+        )
+    bundle.contract_sha256 = compute_preservation_contract_sha256(bundle.contract)
+    bundle.derived_score_sha256 = compute_derived_score_sha256(bundle.resolution.derived_score)
+    return None
+
+
+def _compile_verify_publish(
+    loaded: LoadedRecastProject,
+    project: RecastProject,
+    *,
+    variant: str,
+    backend: str,
+    backend_ref: BackendRef,
+    publish: bool,
+    bundle: _SingleReadBundle,
+    protected_inputs: List[Path],
+    mode_gate_reasons: List[str],
+    finalize: Callable[..., RecastPlanArtifacts],
+) -> RecastPlanArtifacts:
+    """step 7 (compile) → step 8 (verify) → step 9 (mode gate) → 永続公開 →
+    成功 finalize までを 1 関数に温存する（B11–B16 抽出。`staging_dir` の
+    `with` スコープを関数境界で分割しない）。
+
+    `mode_gate_reasons` はオーケストレータ側の `_finalize` closure が
+    自由変数として読む同一 list オブジェクトをそのまま受け取り、step 9 で
+    in-place 更新する（`mode_gate_reasons[:] = ...`）— `_finalize` は
+    クロージャのままオーケストレータに残す設計のため、単純な rebind
+    （`mode_gate_reasons = ...`）ではこの関数のローカル変数が更新される
+    だけで closure 側の cell には反映されない。in-place mutation は元の
+    rebind と最終的な内容が同一になるため外部から見た挙動は変えない。
+    """
+    # 検証（`require_verified_package` 時）はここで staging_dir（後述）へ
+    # package/report を書いて `verify_package`（ファイルベースの V1-V4
+    # 検証器）に読ませる。**永続公開（`publish=True` 時の `real_package_dir`
+    # への書き込み）は verification と mode gate（下記 step 9）の両方を
+    # 通過した後まで遅延する**（Codex P2 review round 11, PR3 #208 指摘21:
+    # 従来は verification の**前**に永続公開していたため、strict で mode
+    # gate により blocked_capability へ降格するケースや blocked_verification
+    # になるケースでも、「使えそうな成果物」が builds_root に残ってしまって
+    # いた — blocked な plan なのに generator が誤ってそれを拾える状態だった）。
+    #
+    # staging_dir の配置: `publish` の真偽に関わらず、常に実公開先
+    # `resolve_packages_dir(...)` の**兄弟**（`.parent` 配下の tempdir）に
+    # 置く — 兄弟同士は project_dir から見た深さが常に同一のため、
+    # `os.path.relpath` で計算する `artifact_base_locator` は staging_dir に
+    # 対しても実公開先に対しても同一の文字列になる（`verify_package` は
+    # `package_dir / locator` で manifest ディレクトリを解決するため、
+    # verify 時点の実ディレクトリと最終公開時の実ディレクトリとで locator の
+    # 意味が変わってはいけない — 深さを揃えることでこれを両立する）。
+    #
+    # `publish=False`（`build_recast_plan` の読み取り専用 API・`recast
+    # ingest` の precheck rebuild）でも同じ sibling-staging を使う（Codex P2
+    # review round 14, PR3 #208 指摘29: 従来 `publish=False` は project_dir
+    # 直下の ephemeral tempdir を使っており、実公開先とは深さが食い違う
+    # locator を焼き込んでいた — `recast ingest` が rebuild 後にこの
+    # locator を持つ bytes をそのまま実公開先へ publish すると、
+    # `verify_package`/`observe` の anchor 解決が実際の公開位置では壊れる
+    # 不整合を生む）。`build_recast_plan()` の「`builds_root` に一切触れない」
+    # 読み取り専用契約は `_staging_directory_at_packages_depth` 側の
+    # `cleanup_created_ancestors=True`（新規作成した祖先だけを事後 rmdir で
+    # 完全復元する）で維持する — 詳細は同関数の docstring 参照。
+    packages_dir = resolve_packages_dir(loaded, variant, backend)
+    real_package_dir = packages_dir if publish else None
+    staging_parent_dir = packages_dir.parent
+
+    with _staging_directory_at_packages_depth(
+        staging_parent_dir, cleanup_created_ancestors=not publish
+    ) as staging_dir:
+        try:
+            artifact_base_locator = Path(
+                os.path.relpath(bundle.manifest_path.resolve().parent, staging_dir.resolve())
+            ).as_posix()
+        except ValueError as exc:
+            return finalize(
+                state_reached="blocked_capability",
+                blocked=BlockedInfo(state="blocked_capability", reasons=[str(exc)]),
+            )
+
+        try:
+            compiled = build_performance_package(
+                bundle.manifest,
+                bundle.contract,
+                bundle.profile,
+                bundle.resolution.derived_score,
+                device_profile=bundle.device_profile,
+                artifact_base_locator=artifact_base_locator,
+                manifest_sha256=bundle.manifest_sha256,
+                contract_sha256=bundle.contract_sha256,
+                profile_sha256=bundle.profile_sha256,
+                derived_score_sha256=bundle.derived_score_sha256,
+                strict=(project.policy.capability_mode == "strict"),
+                compiler_package_version=detect_compiler_package_version(),
+                compiler_git_commit=detect_compiler_git_commit(),
+            )
+        except (PackageCompilationError, ValidationError) as exc:
+            return finalize(
+                state_reached="blocked_capability",
+                blocked=BlockedInfo(state="blocked_capability", reasons=[str(exc)]),
+            )
+
+        warnings = list(compiled.report.warnings)
+
+        # --- step 8: optional verification (staging_dir only — 未公開) ---------
+        if project.policy.require_verified_package:
+            (staging_dir / PERFORMANCE_PACKAGE_FILENAME).write_bytes(
+                compiled.package_json.encode("utf-8")
+            )
+            (staging_dir / COMPILATION_REPORT_FILENAME).write_bytes(
+                compiled.report_json.encode("utf-8")
+            )
+            verify_report = verify_package(
+                staging_dir / PERFORMANCE_PACKAGE_FILENAME, bundle.manifest_path
+            )
+            if not verify_report.ok:
+                reasons = [
+                    f"{check.group} {check.label}: {check.detail}"
+                    for check in verify_report.failures
+                ]
+                return finalize(
+                    state_reached="blocked_verification",
+                    blocked=BlockedInfo(state="blocked_verification", reasons=reasons),
+                )
+            state_reached: RecastState = "verified"
+        else:
+            state_reached = "compiled"
+
+        # --- step 9: diagnostics tables (staging_dir を使わない — compiled は
+        # in-memory のまま。mode gate が strict で降格する場合、real_package_dir
+        # には一切触れずに blocked_capability を返す) --------------------------
+        anchors = _build_anchor_entries(compiled.package, bundle.manifest_by_id)
+        changed_fields = _build_changed_field_entries(
+            bundle.resolution.changes, backend_ref.invocation_mode, bundle.mode_overrides_config
+        )
+
+        # anchor 配送と同じ strict/advisory 意味論を changed_fields にも適用する:
+        # mode_overrides が「この invocation_mode では届かない」（unsupported）と
+        # 実測している変更、および backend が mode_overrides を宣言している場合の
+        # 「未実測」（unknown）な変更が 1 件でもあれば、strict は blocked_capability
+        # へ降格（生成しても届くか不明な変更を verified/exit 0 で推奨しない）、
+        # advisory は到達状態を維持しつつ warnings へ積む（`_mode_gate_reasons`
+        # docstring に opt-in 計器としての線引きの根拠を記載）。
+        mode_gate_reasons[:] = _mode_gate_reasons(
+            changed_fields,
+            backend_ref.invocation_mode,
+            mode_overrides_declared=bundle.mode_overrides_declared,
+        )
+        if mode_gate_reasons:
+            if project.policy.capability_mode == "strict":
+                return finalize(
+                    state_reached="blocked_capability",
+                    blocked=BlockedInfo(state="blocked_capability", reasons=mode_gate_reasons),
+                    anchors=anchors,
+                    changed_fields=changed_fields,
+                    warnings=warnings,
+                )
+            warnings = warnings + mode_gate_reasons
+
+    # staging_dir はここで cleanup 済み（verify 専用の一時コピーは跡形も
+    # 残らない）。verification（該当時）・mode gate の両方を通過したので、
+    # `publish=True` ならここで初めて real_package_dir へ永続公開する
+    # （PR3 #208 指摘21）。staging 時と同じ bytes をそのまま使う — 再 compile
+    # しない（locator は staging_dir/real_package_dir で同一文字列になる
+    # よう深さを揃え済み、上記コメント参照）。束の読み取り結果から再構成済みの
+    # `protected_inputs`（closure 変数、上記参照）を全公開サイト共通の衝突
+    # ガードとして渡す（Codex P2 review, PR3 #208 指摘 7: 従来 packages 公開は
+    # 一切ガードなしで、capability_profile/mode_overrides/manifest anchor
+    # artifact 等が偶然 `packages/<variant>@<backend>/` 配下と衝突する project
+    # 構成では入力を無警告で上書き破壊し得た。指摘 13 対応でここでの再計算は
+    # 廃止 — この時点は manifest parse が既に成功しているケースのみ到達する
+    # ため、束から再構成した完全な集合をそのまま使い回せる）。
+    if publish:
+        try:
+            _atomic_publish_text_bundle(
+                real_package_dir,
+                {
+                    PERFORMANCE_PACKAGE_FILENAME: compiled.package_json.encode("utf-8"),
+                    COMPILATION_REPORT_FILENAME: compiled.report_json.encode("utf-8"),
+                },
+                protected_inputs=protected_inputs,
+            )
+        except ValueError as exc:
+            return finalize(
+                state_reached="blocked_capability",
+                blocked=BlockedInfo(state="blocked_capability", reasons=[str(exc)]),
+                anchors=anchors,
+                changed_fields=changed_fields,
+                warnings=warnings,
+            )
+
+    return finalize(
+        state_reached=state_reached,
+        blocked=None,
+        anchors=anchors,
+        changed_fields=changed_fields,
+        warnings=warnings,
+        compiled=compiled,
+        derived_score=bundle.resolution.derived_score,
+        manifest_sha256=bundle.manifest_sha256,
+        contract_sha256=bundle.contract_sha256,
+        profile_sha256=bundle.profile_sha256,
+        derived_score_sha256=bundle.derived_score_sha256,
+        channel_artifact_bytes=bundle.channel_artifact_bytes,
+        profile=bundle.profile,
+        identity_source_locator=bundle.manifest.source.locator,
+        identity_source_sha256=bundle.manifest.source.sha256,
+    )
+
+
+def build_recast_plan_artifacts(
+    loaded: LoadedRecastProject, *, variant: str, backend: str, publish: bool
+) -> RecastPlanArtifacts:
+    """`build_recast_plan` の完全版: `RecastPlanResult`（`inputs_digest` 込み）に
+    加え、到達状態が `compiled`/`verified` のときの compile 済み成果物一式
+    （`RecastPlanArtifacts`）を返す。診断構築のロジックは `build_recast_plan`
+    と完全に同一。
+
+    `publish`（必須引数 — デフォルト値なし、Codex P2 review round 10, PR3
+    #208 指摘19: 呼び出し側が意図せず永続公開/非公開のどちらかへ倒れるのを
+    signature で防ぐ）:
+
+    - `publish=True`（`recast plan`/`run`/`ingest` の 3 CLI コマンドのみが
+      使う経路）: 到達状態が `compiled`/`verified` のとき package/report を
+      `<builds_root>/packages/<variant>@<backend>/` へ永続公開する（この
+      公開自体は本関数が意図して持つ副作用 — `recast_plan.json` の publish・
+      `record_state` はあくまで別途 CLI 側の責務のまま、PR2 P2 対応の範囲は
+      変えない）。
+    - `publish=False`（`build_recast_plan` 経由の読み取り専用診断、および
+      `recast ingest` の precheck rebuild — Codex P2 review round 13, PR3
+      #208 指摘27 で追加された経路）: `<builds_root>/packages/<variant>@
+      <backend>/` 自体へは書き込まない。verify（`policy.require_verified_
+      package` が真の場合）用の一時ファイルは、実公開先 `resolve_packages_
+      dir(...)` の**兄弟**（`.parent` 配下の tempdir、`_staging_directory_
+      at_packages_depth` 参照）を使う — `publish=True` と同一の sibling-
+      staging（Codex P2 review round 11, PR3 #208 指摘21 導入）を round 14
+      指摘29 で `publish=False` にも一本化した。従来（指摘29 対応前）は
+      project_dir 直下の ephemeral tempdir を使っており、返る
+      `RecastPlanArtifacts.compiled` の `artifact_base.locator` が実公開先
+      とは異なる深さで焼き込まれていた — `build_recast_plan`（薄いラッパー）
+      経由では `.result` だけが呼び出し元へ渡るため無害だったが、`recast
+      ingest`（指摘27 対応で `publish=False` 再ビルド → 突合通過後に
+      `artifacts.compiled` をそのまま実公開先へ publish する経路になった）
+      では、この深さの食い違いが公開後の `verify_package`/`observe` の
+      anchor 解決を壊し得る実害だった。sibling-staging の一本化によりこの
+      食い違いは解消される。`builds_root/packages/`（さらには `builds_root`
+      自体）が呼び出し前に存在しなければ一時的に作成が必要になるが、
+      `_staging_directory_at_packages_depth(cleanup_created_ancestors=True)`
+      が新規作成した祖先だけを `with` を抜ける際に完全に rmdir で復元する
+      ため、`build_recast_plan()` の「`builds_root` に一切触れない」読み取り
+      専用契約（`policy.require_verified_package` が偽なら加えてディスクへ
+      全く書き込まない — こちらは変更なし・真の意味での純粋関数のまま）は
+      維持される。
+
+    single-read 束（Codex P2 sixth round #207）: score / identity manifest /
+    arrangement spec / capability profile / mode_overrides / device profile の
+    各ファイルはこの関数内で `read_bytes()` を 1 回ずつしか呼ばない —
+    `inputs_digest` の hash 計算も、実際の parse/resolve/compile も同じ bytes
+    から行う。以前は `compute_recast_inputs_digest` を関数冒頭で別途呼び、
+    実パイプラインの読み取りと独立に再読込していたため、実行中の入力差し替え
+    A→B→A で「B で compile した plan を A の digest で pin」してしまう TOCTOU
+    があった（`compute_recast_inputs_digest` 自体は `recast status` が独立の
+    時点で鮮度チェックする際の標準経路として引き続き公開する — そちらは
+    意図的な別時点での再読込であり stale 検出の本質そのもの）。
+
+    各ファイルの read はここで前倒しするが、失敗の**報告順序**（どの段の
+    エラーが優先して `blocked_*` になるか）は変えない — 読み取り/parse の
+    成功時オブジェクトまたは失敗時例外を一旦保持するだけに留め、実際に
+    `_finalize` を呼ぶ/例外を送出する判定は元のステップ位置のまま行う。
+
+    本体は「bundle 読取 → digest 確定 → `_finalize` 定義 → step 判定関数群
+    （`_step_check_*`）を元の判定順で呼ぶ列 → `_compile_verify_publish`」の
+    逐次列（PR: 挙動保存分割。ブロック区分は各ヘルパーの docstring/コメント
+    参照）。
+    """
+    project: RecastProject = loaded.project
+
+    if variant not in project.variants:
+        raise RecastError(
+            f"recast project '{project.project.id}': unknown variant {variant!r} "
+            f"(declared: {sorted(project.variants)})"
+        )
+    if backend not in project.backends:
+        raise RecastError(
+            f"recast project '{project.project.id}': unknown backend {backend!r} "
+            f"(declared: {sorted(project.backends)})"
+        )
+
+    backend_ref: BackendRef = project.backends[backend]
+
+    bundle = _read_single_read_bundle(loaded, project, variant, backend)
+
+    inputs_digest = compute_content_digest(bundle.digest_components)
     # step 9 で確定する（strict/advisory ゲート対象の changed_field 診断一式）。
     mode_gate_reasons: List[str] = []
+    mode_overrides_declared = bundle.mode_overrides_declared
 
     # `collect_protected_input_paths` と同じ集合を、束が既に読んだ/保持している
     # オブジェクトから副作用なく再構成する（Codex P2 review round 7, PR3 #208
     # 指摘 13: `RecastPlanResult.protected_inputs` の docstring 参照 — 再 read/
     # re-parse を一切行わない。manifest parse が失敗している場合は
     # source/anchor artifact の解決を諦める degrade を束の失敗許容と合わせる）。
+    # `arrangement_path`/`profile_path` はここで再取得する（`_read_single_
+    # read_bundle` へ single-read の実処理を抽出したことで、この時点の
+    # オーケストレータ側スコープには残っていないため — `loaded` が既に保持
+    # している dict の参照であり、ファイルの再読込ではない）。
+    arrangement_path = loaded.arrangement_paths[variant]
+    profile_path = loaded.capability_profile_paths[backend]
     protected_inputs: List[Path] = [
         loaded.path,
         loaded.score_path,
-        manifest_path,
+        bundle.manifest_path,
         arrangement_path,
         profile_path,
     ]
-    if mode_override_path is not None:
-        protected_inputs.append(mode_override_path)
-    if manifest is not None:
-        manifest_dir = manifest_path.resolve().parent
+    if bundle.mode_override_path is not None:
+        protected_inputs.append(bundle.mode_override_path)
+    if bundle.manifest is not None:
+        manifest_dir = bundle.manifest_path.resolve().parent
         try:
-            protected_inputs.append(resolve_confined(manifest.source.locator, manifest_dir))
-            for anchor in manifest.anchors:
+            protected_inputs.append(resolve_confined(bundle.manifest.source.locator, manifest_dir))
+            for anchor in bundle.manifest.anchors:
                 protected_inputs.append(resolve_confined(anchor.artifact, manifest_dir))
         except ValueError:
             pass
@@ -1291,311 +1787,35 @@ def build_recast_plan_artifacts(
             identity_source_sha256=identity_source_sha256,
         )
 
-    # --- step 2a: score の YAML 破損・schema 不正チェック --------------------
-    # score は著者成果物 (author field / preservation 契約と同じ層) のため、
-    # parse/validate 失敗は identity manifest / capability profile と違う
-    # blocked_authoring として finalize する（Codex P2 eleventh round #207:
-    # 以前は score parse を bundle 先頭で無条件に呼んでおり、失敗時は捕捉
-    # されない例外として関数外へ伝播し CLI が top-level Error で落ちていた
-    # ため recast_plan.json も state も残らなかった）。他の bundle 読み取り
-    # より先に発生していた元の失敗順序を保つため、step 2 のチェックより先に
-    # 判定する。
-    if score_parse_error is not None:
-        return _finalize(
-            state_reached="blocked_authoring",
-            blocked=BlockedInfo(state="blocked_authoring", reasons=[str(score_parse_error)]),
-        )
-    assert score is not None
+    result = _step_check_score_authoring(bundle, project, _finalize)
+    if result is not None:
+        return result
 
-    # --- step 2: author field (TODO sentinel) 未解決チェック -----------------
-    if project.policy.require_author_fields_resolved:
-        unresolved = _unresolved_author_field_paths(score)
-        if unresolved:
-            return _finalize(
-                state_reached="blocked_authoring",
-                blocked=BlockedInfo(
-                    state="blocked_authoring",
-                    reasons=[
-                        f"unresolved TODO(transcribe) sentinel at {path}" for path in unresolved
-                    ],
-                ),
-            )
+    result = _step_check_identity_manifest(bundle, _finalize)
+    if result is not None:
+        return result
 
-    # --- step 3: identity manifest -----------------------------------------
-    if manifest_read_error is not None:
-        return _finalize(
-            state_reached="blocked_verification",
-            blocked=BlockedInfo(state="blocked_verification", reasons=[str(manifest_read_error)]),
-        )
-    if manifest_parse_error is not None:
-        return _finalize(
-            state_reached="blocked_verification",
-            blocked=BlockedInfo(
-                state="blocked_verification", reasons=[str(manifest_parse_error)]
-            ),
-        )
-    assert manifest is not None  # 上の 2 ガードで None のケースは既に return 済み
-    manifest_by_id = {anchor.id: anchor for anchor in manifest.anchors}
+    result = _step_check_arrangement_contract(bundle, _finalize)
+    if result is not None:
+        return result
 
-    # 注: `observation.anchors` の未知 anchor id 検証は本 plan 段では行わない
-    # （PR6 当初実装はここで即時 `RecastError` を送出していたが、その後の
-    # `svp_rpe.arrange.observe.observe_generated_artifact` +
-    # `cli.recast_cmd.recast_ingest_cmd`（Codex P2, #210 round 9 指摘11）へ
-    # 一本化した — plan 段で fail すると manual backend が `awaiting_generation`
-    # /`generated` にすら到達できず、「注文書は出したが観測設定が誤っている」
-    # という状態を state として残せなくなる。ingest 側は `generated` を記録
-    # した直後・observe 呼び出しの手前でこの検証を行い、設定ミスとして
-    # plain error + exit 1（state は `generated` のまま、`observation_incomplete`
-    # とは区別）とする。plan/run はこの anchor id 検証を行わず観測スコープの
-    # 妥当性に関知しない）。
+    result = _step_check_capability_mode(bundle, backend, _finalize)
+    if result is not None:
+        return result
 
-    # --- step 4+5: arrangement resolve + preservation contract -------------
-    if spec_read_error is not None:
-        return _finalize(
-            state_reached="blocked_authoring",
-            blocked=BlockedInfo(state="blocked_authoring", reasons=[str(spec_read_error)]),
-        )
-    if resolve_error is not None:
-        return _finalize(
-            state_reached="blocked_authoring",
-            blocked=BlockedInfo(state="blocked_authoring", reasons=[str(resolve_error)]),
-        )
-    assert spec is not None and resolution is not None  # 上の 2 ガードで既に return 済み
-    try:
-        contract = build_preservation_contract(
-            manifest, spec, manifest_sha256=manifest_sha256, spec_sha256=spec_sha256
-        )
-    except PreservationContractError as exc:
-        return _finalize(
-            state_reached="blocked_authoring",
-            blocked=BlockedInfo(state="blocked_authoring", reasons=[str(exc)]),
-        )
+    result = _step_check_device_profile(bundle, _finalize)
+    if result is not None:
+        return result
 
-    # --- step 6: capability profile + mode overrides ------------------------
-    # capability_profile / mode_overrides の YAML 破損・schema 不正は、
-    # identity manifest / arrangement spec の同種の失敗（blocked_verification /
-    # blocked_authoring）と一貫させ blocked_capability として finalize する
-    # （Codex P2 eighth round #207: 以前は保存済み例外を re-raise していたため
-    # CLI が top-level Error で落ち、recast_plan.json も state も残らなかった
-    # — 他の parse 失敗系と非一貫だった）。
-    if profile_error is not None:
-        return _finalize(
-            state_reached="blocked_capability",
-            blocked=BlockedInfo(state="blocked_capability", reasons=[str(profile_error)]),
-        )
-    assert profile is not None
-    if mode_overrides_error is not None:
-        return _finalize(
-            state_reached="blocked_capability",
-            blocked=BlockedInfo(state="blocked_capability", reasons=[str(mode_overrides_error)]),
-        )
-    # mode_overrides.generator と capability profile.generator の不一致も、
-    # 他の capability 層の不整合と同じ blocked_capability として finalize する
-    # （Codex P2 twelfth round #207: eighth round で一度スコープ外にした箇所の
-    # 再指摘 — 以前は raise していたため CLI が top-level Error で落ち、
-    # recast_plan.json も state も残らなかった）。reasons に両 generator 名と
-    # 是正の示唆（mode_overrides を差し替えるか宣言を外す）を含める。
-    if mode_overrides_config is not None and mode_overrides_config.generator != profile.generator:
-        return _finalize(
-            state_reached="blocked_capability",
-            blocked=BlockedInfo(
-                state="blocked_capability",
-                reasons=[
-                    f"backend {backend!r} mode_overrides generator "
-                    f"{mode_overrides_config.generator!r} does not match capability profile "
-                    f"generator {profile.generator!r} — mode_overrides を "
-                    f"{profile.generator!r} 用に差し替えるか、backend の mode_overrides 宣言"
-                    "を外してください"
-                ],
-            ),
-        )
-
-    # --- step 7: build performance package ----------------------------------
-    # device profile の YAML 破損・schema 不正も capability_profile/mode_overrides
-    # と同じ blocked_capability として finalize する（Codex P2 tenth round #207:
-    # 以前は保存済み例外を re-raise していたため CLI が top-level Error で落ち、
-    # recast_plan.json も state も残らなかった — eighth round で対応した
-    # capability_profile/mode_overrides と同クラスの非一貫だった）。
-    if device_profile_error is not None:
-        return _finalize(
-            state_reached="blocked_capability",
-            blocked=BlockedInfo(state="blocked_capability", reasons=[str(device_profile_error)]),
-        )
-    contract_sha256 = compute_preservation_contract_sha256(contract)
-    derived_score_sha256 = compute_derived_score_sha256(resolution.derived_score)
-
-    # 検証（`require_verified_package` 時）はここで staging_dir（後述）へ
-    # package/report を書いて `verify_package`（ファイルベースの V1-V4
-    # 検証器）に読ませる。**永続公開（`publish=True` 時の `real_package_dir`
-    # への書き込み）は verification と mode gate（下記 step 9）の両方を
-    # 通過した後まで遅延する**（Codex P2 review round 11, PR3 #208 指摘21:
-    # 従来は verification の**前**に永続公開していたため、strict で mode
-    # gate により blocked_capability へ降格するケースや blocked_verification
-    # になるケースでも、「使えそうな成果物」が builds_root に残ってしまって
-    # いた — blocked な plan なのに generator が誤ってそれを拾える状態だった）。
-    #
-    # staging_dir の配置: `publish` の真偽に関わらず、常に実公開先
-    # `resolve_packages_dir(...)` の**兄弟**（`.parent` 配下の tempdir）に
-    # 置く — 兄弟同士は project_dir から見た深さが常に同一のため、
-    # `os.path.relpath` で計算する `artifact_base_locator` は staging_dir に
-    # 対しても実公開先に対しても同一の文字列になる（`verify_package` は
-    # `package_dir / locator` で manifest ディレクトリを解決するため、
-    # verify 時点の実ディレクトリと最終公開時の実ディレクトリとで locator の
-    # 意味が変わってはいけない — 深さを揃えることでこれを両立する）。
-    #
-    # `publish=False`（`build_recast_plan` の読み取り専用 API・`recast
-    # ingest` の precheck rebuild）でも同じ sibling-staging を使う（Codex P2
-    # review round 14, PR3 #208 指摘29: 従来 `publish=False` は project_dir
-    # 直下の ephemeral tempdir を使っており、実公開先とは深さが食い違う
-    # locator を焼き込んでいた — `recast ingest` が rebuild 後にこの
-    # locator を持つ bytes をそのまま実公開先へ publish すると、
-    # `verify_package`/`observe` の anchor 解決が実際の公開位置では壊れる
-    # 不整合を生む）。`build_recast_plan()` の「`builds_root` に一切触れない」
-    # 読み取り専用契約は `_staging_directory_at_packages_depth` 側の
-    # `cleanup_created_ancestors=True`（新規作成した祖先だけを事後 rmdir で
-    # 完全復元する）で維持する — 詳細は同関数の docstring 参照。
-    packages_dir = resolve_packages_dir(loaded, variant, backend)
-    real_package_dir = packages_dir if publish else None
-    staging_parent_dir = packages_dir.parent
-
-    with _staging_directory_at_packages_depth(
-        staging_parent_dir, cleanup_created_ancestors=not publish
-    ) as staging_dir:
-        try:
-            artifact_base_locator = Path(
-                os.path.relpath(manifest_path.resolve().parent, staging_dir.resolve())
-            ).as_posix()
-        except ValueError as exc:
-            return _finalize(
-                state_reached="blocked_capability",
-                blocked=BlockedInfo(state="blocked_capability", reasons=[str(exc)]),
-            )
-
-        try:
-            compiled = build_performance_package(
-                manifest,
-                contract,
-                profile,
-                resolution.derived_score,
-                device_profile=device_profile,
-                artifact_base_locator=artifact_base_locator,
-                manifest_sha256=manifest_sha256,
-                contract_sha256=contract_sha256,
-                profile_sha256=profile_sha256,
-                derived_score_sha256=derived_score_sha256,
-                strict=(project.policy.capability_mode == "strict"),
-                compiler_package_version=detect_compiler_package_version(),
-                compiler_git_commit=detect_compiler_git_commit(),
-            )
-        except (PackageCompilationError, ValidationError) as exc:
-            return _finalize(
-                state_reached="blocked_capability",
-                blocked=BlockedInfo(state="blocked_capability", reasons=[str(exc)]),
-            )
-
-        warnings = list(compiled.report.warnings)
-
-        # --- step 8: optional verification (staging_dir only — 未公開) ---------
-        if project.policy.require_verified_package:
-            (staging_dir / PERFORMANCE_PACKAGE_FILENAME).write_bytes(
-                compiled.package_json.encode("utf-8")
-            )
-            (staging_dir / COMPILATION_REPORT_FILENAME).write_bytes(
-                compiled.report_json.encode("utf-8")
-            )
-            verify_report = verify_package(
-                staging_dir / PERFORMANCE_PACKAGE_FILENAME, manifest_path
-            )
-            if not verify_report.ok:
-                reasons = [
-                    f"{check.group} {check.label}: {check.detail}"
-                    for check in verify_report.failures
-                ]
-                return _finalize(
-                    state_reached="blocked_verification",
-                    blocked=BlockedInfo(state="blocked_verification", reasons=reasons),
-                )
-            state_reached: RecastState = "verified"
-        else:
-            state_reached = "compiled"
-
-        # --- step 9: diagnostics tables (staging_dir を使わない — compiled は
-        # in-memory のまま。mode gate が strict で降格する場合、real_package_dir
-        # には一切触れずに blocked_capability を返す) --------------------------
-        anchors = _build_anchor_entries(compiled.package, manifest_by_id)
-        changed_fields = _build_changed_field_entries(
-            resolution.changes, backend_ref.invocation_mode, mode_overrides_config
-        )
-
-        # anchor 配送と同じ strict/advisory 意味論を changed_fields にも適用する:
-        # mode_overrides が「この invocation_mode では届かない」（unsupported）と
-        # 実測している変更、および backend が mode_overrides を宣言している場合の
-        # 「未実測」（unknown）な変更が 1 件でもあれば、strict は blocked_capability
-        # へ降格（生成しても届くか不明な変更を verified/exit 0 で推奨しない）、
-        # advisory は到達状態を維持しつつ warnings へ積む（`_mode_gate_reasons`
-        # docstring に opt-in 計器としての線引きの根拠を記載）。
-        mode_gate_reasons = _mode_gate_reasons(
-            changed_fields,
-            backend_ref.invocation_mode,
-            mode_overrides_declared=mode_overrides_declared,
-        )
-        if mode_gate_reasons:
-            if project.policy.capability_mode == "strict":
-                return _finalize(
-                    state_reached="blocked_capability",
-                    blocked=BlockedInfo(state="blocked_capability", reasons=mode_gate_reasons),
-                    anchors=anchors,
-                    changed_fields=changed_fields,
-                    warnings=warnings,
-                )
-            warnings = warnings + mode_gate_reasons
-
-    # staging_dir はここで cleanup 済み（verify 専用の一時コピーは跡形も
-    # 残らない）。verification（該当時）・mode gate の両方を通過したので、
-    # `publish=True` ならここで初めて real_package_dir へ永続公開する
-    # （PR3 #208 指摘21）。staging 時と同じ bytes をそのまま使う — 再 compile
-    # しない（locator は staging_dir/real_package_dir で同一文字列になる
-    # よう深さを揃え済み、上記コメント参照）。束の読み取り結果から再構成済みの
-    # `protected_inputs`（closure 変数、上記参照）を全公開サイト共通の衝突
-    # ガードとして渡す（Codex P2 review, PR3 #208 指摘 7: 従来 packages 公開は
-    # 一切ガードなしで、capability_profile/mode_overrides/manifest anchor
-    # artifact 等が偶然 `packages/<variant>@<backend>/` 配下と衝突する project
-    # 構成では入力を無警告で上書き破壊し得た。指摘 13 対応でここでの再計算は
-    # 廃止 — この時点は manifest parse が既に成功しているケースのみ到達する
-    # ため、束から再構成した完全な集合をそのまま使い回せる）。
-    if publish:
-        try:
-            _atomic_publish_text_bundle(
-                real_package_dir,
-                {
-                    PERFORMANCE_PACKAGE_FILENAME: compiled.package_json.encode("utf-8"),
-                    COMPILATION_REPORT_FILENAME: compiled.report_json.encode("utf-8"),
-                },
-                protected_inputs=protected_inputs,
-            )
-        except ValueError as exc:
-            return _finalize(
-                state_reached="blocked_capability",
-                blocked=BlockedInfo(state="blocked_capability", reasons=[str(exc)]),
-                anchors=anchors,
-                changed_fields=changed_fields,
-                warnings=warnings,
-            )
-
-    return _finalize(
-        state_reached=state_reached,
-        blocked=None,
-        anchors=anchors,
-        changed_fields=changed_fields,
-        warnings=warnings,
-        compiled=compiled,
-        derived_score=resolution.derived_score,
-        manifest_sha256=manifest_sha256,
-        contract_sha256=contract_sha256,
-        profile_sha256=profile_sha256,
-        derived_score_sha256=derived_score_sha256,
-        channel_artifact_bytes=channel_artifact_bytes,
-        profile=profile,
-        identity_source_locator=manifest.source.locator,
-        identity_source_sha256=manifest.source.sha256,
+    return _compile_verify_publish(
+        loaded,
+        project,
+        variant=variant,
+        backend=backend,
+        backend_ref=backend_ref,
+        publish=publish,
+        bundle=bundle,
+        protected_inputs=protected_inputs,
+        mode_gate_reasons=mode_gate_reasons,
+        finalize=_finalize,
     )
