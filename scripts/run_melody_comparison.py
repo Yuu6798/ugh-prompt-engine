@@ -218,6 +218,18 @@ def _validate_manifest(manifest: Any) -> List[Dict[str, Any]]:
                 f"pairs[{idx}] ({pair_id!r}) has invalid expected {pair['expected']!r}; "
                 f"expected one of {sorted(_VALID_EXPECTED)}"
             )
+        kind = pair["kind"]
+        expected = pair["expected"]
+        if kind == "positive_transform" and expected != "same":
+            raise ValueError(
+                f"pairs[{idx}] ({pair_id!r}): kind={kind!r} requires expected='same', got "
+                f"{expected!r} (fail-closed; kind×expected 矛盾)"
+            )
+        if kind.startswith("negative_") and expected != "different":
+            raise ValueError(
+                f"pairs[{idx}] ({pair_id!r}): kind={kind!r} requires expected='different', got "
+                f"{expected!r} (fail-closed; kind×expected 矛盾)"
+            )
         validated.append(dict(pair))
     return validated
 
@@ -236,6 +248,32 @@ def _manifest_audio_paths(manifest_path: Path) -> "set[Path]":
         paths.add(Path(pair["audio_a"]).resolve())
         paths.add(Path(pair["audio_b"]).resolve())
     return paths
+
+
+def _holdout_unlocked(config: Any) -> bool:
+    """holdout を開いてよいか判定する（run/evaluate 両 phase 共有の cross-field 不変条件）。
+
+    レビュー対応 2026-07-30: `evidence_thresholds.status == "frozen"` だけでは
+    「部分凍結」（軸別閾値がまだ無い・被覆下限がまだ provisional）状態でも holdout
+    が開いてしまう穴があった。以下 3 条件の **全て** を要求する（1 つでも欠けたら
+    ロックのまま）:
+
+    (a) `evidence_thresholds.status == "frozen"`
+    (b) `evidence_thresholds.axes` に contour/interval/rhythm の閾値が揃っている
+    (c) `coverage.floor_status == "frozen"`
+
+    `M3ComparisonConfig`（`load_m3_registry` の戻り値）だけで判定に必要な値は
+    全て読めるため、registry の生 mapping を別途読み直す必要はない。
+    """
+    thresholds = config.evidence_thresholds
+    if thresholds.status != "frozen":
+        return False
+    axes = thresholds.axes
+    if not axes or not set(_AXES).issubset(axes):
+        return False
+    if config.coverage.floor_status != "frozen":
+        return False
+    return True
 
 
 # --------------------------------------------------------------------------- #
@@ -322,11 +360,12 @@ def run_comparison(
     manifest = _yaml_load_no_dup_keys(manifest_bytes, what="pairs manifest")
     pairs_spec = _validate_manifest(manifest)
 
-    # holdout は evidence_thresholds.status が "frozen" になるまで run 時点でも
-    # 開かない（evaluate 側のロックだけでは、report に holdout の axes/hash が既に
-    # 書かれてしまい閲覧可能になる穴が残るため。設計 §6.3「holdout は閾値凍結後に
-    # 一度だけ開く」を run phase でも enforce する）。
-    holdout_locked = config.evidence_thresholds.status != "frozen"
+    # holdout は `_holdout_unlocked` の全条件（status=frozen + axes 揃い +
+    # coverage.floor_status=frozen）を満たすまで run 時点でも開かない（evaluate
+    # 側のロックだけでは、report に holdout の axes/hash が既に書かれてしまい
+    # 閲覧可能になる穴が残るため。設計 §6.3「holdout は閾値凍結後に一度だけ開く」
+    # を run phase でも enforce する）。
+    holdout_locked = not _holdout_unlocked(config)
 
     results: Dict[str, Any] = {
         "schema_version": _EXPECTED_RUN_SCHEMA,
@@ -384,16 +423,34 @@ def run_comparison(
 # --------------------------------------------------------------------------- #
 # evaluate phase
 # --------------------------------------------------------------------------- #
+_REPORT_LEVEL_REPEAT_PINS: Tuple[str, ...] = ("manifest_sha256", "route")
+_PAIR_LEVEL_PROVENANCE_PINS: Tuple[str, ...] = ("route_provenance_a", "route_provenance_b")
+
+
 def _check_repeats_consistency(reports: List[Dict[str, Any]]) -> None:
     """repeats（n>=2 の run report）が同一 pair 集合について bit 一致することを確認する。
 
     軌跡レベル決定論の実測確立（M2d 残課題を閉じる測定・設計 §1）。`sequence_sha256_a/b`
-    と `axes` を repeats 間で突き合わせ、1 箇所でも食い違えば fail-closed で拒否する。
+    と `axes` を repeats 間で突き合わせるだけでは、repeats が本当に「同一 manifest ×
+    同一 route」に対する実行であることまでは保証できない（レビュー対応 2026-07-30）。
+    report 自身が記録している repeat 定義的 pin（`manifest_sha256` / `route` / pair
+    単位の `route_provenance_a/b`）も突き合わせ、1 箇所でも食い違えば fail-closed で
+    拒否する。
     """
     if len(reports) < 2:
         return
-    reference = reports[0]["pairs"]
+    reference_report = reports[0]
+    reference = reference_report["pairs"]
     for idx, report in enumerate(reports[1:], start=1):
+        for pin_key in _REPORT_LEVEL_REPEAT_PINS:
+            ref_val = reference_report.get(pin_key)
+            cur_val = report.get(pin_key)
+            if cur_val != ref_val:
+                raise ValueError(
+                    f"evaluate_comparison: reports[{idx}] の {pin_key}={cur_val!r} が "
+                    f"reports[0]={ref_val!r} と不一致; repeats は同一 manifest × 同一 route "
+                    "に対する実行でなければならない (fail-closed)"
+                )
         pairs = report["pairs"]
         if set(pairs) != set(reference):
             raise ValueError(
@@ -414,6 +471,22 @@ def _check_repeats_consistency(reports: List[Dict[str, Any]]) -> None:
             if not ref_has_comparison:
                 # holdout ロック済みペア同士 — axes/hash が存在しないため比較不要。
                 continue
+            for prov_key in _PAIR_LEVEL_PROVENANCE_PINS:
+                ref_has_prov = prov_key in ref_pair
+                cur_has_prov = prov_key in cur_pair
+                if ref_has_prov != cur_has_prov:
+                    raise ValueError(
+                        f"evaluate_comparison: pair {pair_id!r} の {prov_key} 記録有無が "
+                        f"repeats 間で異なる (reports[0]={ref_has_prov} != "
+                        f"reports[{idx}]={cur_has_prov}) (fail-closed)"
+                    )
+                if ref_has_prov and ref_pair[prov_key] != cur_pair[prov_key]:
+                    raise ValueError(
+                        f"evaluate_comparison: pair {pair_id!r} の {prov_key} が repeats 間で"
+                        f"不一致 (reports[0]={ref_pair[prov_key]!r} != "
+                        f"reports[{idx}]={cur_pair[prov_key]!r}); route 由来の provenance pin "
+                        "が実行間で変化している (fail-closed)"
+                    )
             ref_comp = ref_pair["comparison"]
             cur_comp = cur_pair["comparison"]
             ref_sig = (
@@ -444,8 +517,9 @@ def _validate_registry_pins(
 
     (a) report に m3_registry_sha256 が欠落、(b) report 間で不一致、(c) 現在
     ロードした registry の sha256 と不一致 — のいずれかを検出したら拒否する。
-    m1_registry_sha256 は「記録されていれば同様に」検査する（1 件でも記録が
-    あれば全件で欠落なく一致 + 現在ロードした m1 registry と一致を要求する）。
+    m1_registry_sha256 も同様に **全 report 必須**として検査する（レビュー対応
+    2026-07-30: 「1 件も記録がなければ検査自体をスキップする」バイパスは、m1
+    registry pin 不整合を全 report 揃って握りつぶすケースを見逃すため廃止した）。
     """
     for idx, report in enumerate(reports):
         m3_sha = report.get("m3_registry_sha256")
@@ -469,26 +543,25 @@ def _validate_registry_pins(
         )
 
     m1_shas = [report.get("m1_registry_sha256") for report in reports]
-    if any(m1_shas):
-        for idx, sha in enumerate(m1_shas):
-            if not sha:
-                raise ValueError(
-                    f"evaluate_comparison: reports[{idx}] に m1_registry_sha256 が記録されて"
-                    "いない (fail-closed; 他の report は記録している)"
-                )
-        reference_m1_sha = m1_shas[0]
-        for idx, sha in enumerate(m1_shas[1:], start=1):
-            if sha != reference_m1_sha:
-                raise ValueError(
-                    f"evaluate_comparison: reports[{idx}] の m1_registry_sha256={sha!r} が "
-                    f"reports[0]={reference_m1_sha!r} と不一致 (fail-closed)"
-                )
-        if reference_m1_sha != current_m1_sha256:
+    for idx, sha in enumerate(m1_shas):
+        if not sha:
             raise ValueError(
-                f"evaluate_comparison: reports の m1_registry_sha256={reference_m1_sha!r} が"
-                f"現在ロードした m1 registry の sha256={current_m1_sha256!r} と不一致 "
-                "(fail-closed)"
+                f"evaluate_comparison: reports[{idx}] に m1_registry_sha256 が記録されて"
+                "いない (fail-closed)"
             )
+    reference_m1_sha = m1_shas[0]
+    for idx, sha in enumerate(m1_shas[1:], start=1):
+        if sha != reference_m1_sha:
+            raise ValueError(
+                f"evaluate_comparison: reports[{idx}] の m1_registry_sha256={sha!r} が "
+                f"reports[0]={reference_m1_sha!r} と不一致 (fail-closed)"
+            )
+    if reference_m1_sha != current_m1_sha256:
+        raise ValueError(
+            f"evaluate_comparison: reports の m1_registry_sha256={reference_m1_sha!r} が"
+            f"現在ロードした m1 registry の sha256={current_m1_sha256!r} と不一致 "
+            "(fail-closed)"
+        )
 
 
 def _holdout_pair_ids(pairs: Dict[str, Dict[str, Any]]) -> List[str]:
@@ -591,7 +664,8 @@ def evaluate_comparison(
     4. repeats が n>=2 でなければ calibration verdict 発行を拒否（n=1 は「決定論
        repeats 未検証」であり校正証拠にしない）
     5. tuning split のみで軸別マージン表を算出（`separation_margin` 閾値）
-    6. holdout は `evidence_thresholds.status == "frozen"` になるまで開かない
+    6. holdout は `_holdout_unlocked` の全条件（status=frozen + axes 揃い +
+       coverage.floor_status=frozen）を満たすまで開かない
     7. tuning positive pair の被覆分布から coverage floor 候補を emit
     """
     if not reports:
@@ -654,7 +728,7 @@ def evaluate_comparison(
         verdict["reason"] = f"insufficient_repeats(n={len(reports)}, required>=2)"
         return verdict
 
-    holdout_locked = config.evidence_thresholds.status != "frozen"
+    holdout_locked = not _holdout_unlocked(config)
     verdict["holdout_locked_until_frozen"] = holdout_locked
     verdict["holdout_pair_ids_skipped"] = _holdout_pair_ids(reference_pairs) if holdout_locked else []
 
@@ -686,11 +760,11 @@ def main() -> int:
     parser.add_argument("--pairs", type=Path, help="pairs manifest（YAML）— run phase")
     parser.add_argument(
         "--route",
-        default="pyin_direct",
+        default="crepe_direct",
         help=(
-            "既定 route_runner が使う clear_lead 経路名（既定: pyin_direct）。"
+            "既定 route_runner が使う clear_lead 経路名（既定: crepe_direct）。"
             "実測 run（--pairs 経由・route_runner 非注入）は crepe 系経路限定"
-            "（例: crepe_direct）。melodia 系経路は常に拒否"
+            "（既定の crepe_direct はこの制約を満たす）。melodia 系経路は常に拒否"
         ),
     )
     parser.add_argument("--registry", type=Path, default=M3_REGISTRY_PATH)
