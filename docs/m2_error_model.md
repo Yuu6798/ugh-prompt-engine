@@ -85,7 +85,11 @@ cent の ~1e-3 cent 双安定（TF CPU 推論由来と推定）の観察があ�
 
 ## 帯域地図と §7 分岐判定
 
-- **crepe_direct（clean lead / vocals stem 入力帯）**: **実測済み・誤差特性付き**
+- **crepe_direct（単離済み clean lead 入力帯 = 合成単旋律・単独歌唱）**:
+  **実測済み・誤差特性付き**。**分離産物（demucs 等の vocals stem）は本誤差モデルの
+  被覆外** — 実測入力（S-direct 合成 / V-direct vocadito 単独歌唱）はいずれも分離
+  アーティファクトを含まず、分離込みの実測は分布外診断（S-fullstack）のみのため、
+  stem 入力への適用は V-fullstack（または stem 対象の dated 実測）まで未測定扱い
   （音高系は合成・実声とも高精度、voicing は上記の既知バイアス）。**「calibrated」
   認定は下記 §7 決裁の結果に従属し、本 doc は認定しない**（S-direct fail が
   記録されている限り、決裁前の calibrated 表記は §7 文言と矛盾するため）
@@ -102,7 +106,8 @@ cent の ~1e-3 cent 双安定（TF CPU 推論由来と推定）の観察があ�
   one_way_rule の許す「経路/実装の変更」に該当するかの**解釈自体が User 決裁事項** —
   無承認では失格経路の事後救済に当たりうるため本 doc は選択肢に含めない）/
   (b) §7 を「音高系と voicing 系の撤回範囲を分離する」
-  形へ **User 承認の上で改訂**し、stem/clean lead 入力限定の M3 先行を許可 — の 2 択で、
+  形へ **User 承認の上で改訂**し、**単離済み clean lead 入力限定**の M3 先行を許可
+  （vocals stem への拡張は上記のとおり別途実測が前提）— の 2 択で、
   **M3 Brief 起草前に User が決める**。§4 の「calibrated 昇格 = V_fullstack 通過」が
   未達である事実はどちらの選択肢でも不変（フルミックス帯への外挿は禁止のまま）
 
