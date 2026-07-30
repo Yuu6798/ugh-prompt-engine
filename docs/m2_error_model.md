@@ -113,6 +113,10 @@ cent の ~1e-3 cent 双安定（TF CPU 推論由来と推定）の観察があ�
   （vocals stem への拡張は上記のとおり別途実測が前提）— の 2 択で、
   **M3 Brief 起草前に User が決める**。§4 の「calibrated 昇格 = V_fullstack 通過」が
   未達である事実はどちらの選択肢でも不変（フルミックス帯への外挿は禁止のまま）
+- **決裁記録（2026-07-30）**: User は選択肢 (b) を採択（`DESIGN_M2_extraction_accuracy.md`
+  §7 改訂を参照）。M3 は単離済み clean lead 帯限定で先行する。本記録により上記 2 択は
+  解消済み（文面は履歴として保持）。設計書は
+  [`DESIGN_M3_melody_comparator.md`](DESIGN_M3_melody_comparator.md)
 
 ## データ出所（すべて commit 済み・pin 整合は committed-record テストが CI 強制）
 

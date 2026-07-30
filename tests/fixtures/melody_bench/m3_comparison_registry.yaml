@@ -1,0 +1,28 @@
+# M3 旋律比較器の事前登録定数（m3-comparison/0.1）
+# 一方向ルール: 実測（M3d）後の緩和禁止。provisional 明記の項のみ M3d tuning で
+# 導出→holdout 前に凍結できる（凍結後は一方向）。
+schema: m3-comparison/0.1
+registered_utc: "2026-07-30T03:14:00Z"
+representation:
+  pitch_quantization_semitones: 1      # ±50 cent。M2d 打ち切り統計拘束によりこれ未満へ狭めない
+  contour_small_max_semitones: 2       # interval==0 → "flat" / 1..2 → "up_small" / >=3 → "up_large"（下降対称）
+  ioi_ratio_log2_step: 0.25            # log2(IOI_i/IOI_{i-1}) の丸め刻み
+  duration_ratio_log2_step: 0.25       # log2(dur_{i+1}/dur_i) の丸め刻み
+  chroma_fold_semitones: 12            # 折返し: ((d + 6) mod 12) - 6 → [-6, 5]
+  octave_artifact_divergence: 0.10     # sim_folded - sim_raw がこれを超えたら疑いフラグ（判定でなく理由記録）
+alignment:
+  match_score: 1.0                     # 折返し量子化音程の一致
+  mismatch_score: -1.0
+  gap_open: -1.0                       # アフィンギャップ
+  gap_extend: -0.5
+  traceback_preference: [diag, up, left]  # スコア同点時の決定論的 tie-break（up = A 側消費）
+  phrase_gap_sec: 0.6                  # M1 registry observation_gate.phrase_gap_sec と同値（同期テストで enforce・値の独自変更禁止）
+  phrase_gap_score: 0.25               # フレーズ層 NW のギャップスコア（対応成立はノート層類似 > 2*0.25）
+coverage:
+  floor: 0.5                           # 被覆下限ゲート
+  floor_status: provisional_until_m3d  # M3d tuning split で導出し holdout 前に凍結（凍結時に status を frozen へ）
+evidence_thresholds:
+  status: uncalibrated                 # M3d で軸別に凍結。uncalibrated の間、evidence は "none" + 理由を返す
+  # 凍結時に axes: {contour: {strong_min: .., none_max: ..}, interval: {...}, rhythm: {...}} を追加
+separation_margin:
+  min_same_minus_cross_margin: 0.15    # M0 registry separation_gate から継承（新値を発明しない・同期テストで enforce）
