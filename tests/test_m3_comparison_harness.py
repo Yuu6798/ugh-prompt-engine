@@ -232,15 +232,24 @@ def test_run_comparison_preflight_rejects_separation_margin_mismatch_with_m1(
 
 
 def _partially_frozen_registry_text() -> str:
-    """`evidence_thresholds.status` のみ frozen にした registry(axes なし・
-    coverage.floor_status は provisional のまま)。holdout が開いてはならない
-    「部分凍結」ケース。
+    """`evidence_thresholds.status` を frozen にし contour 軸のみ整形済みで凍結する
+    一方、`coverage.floor_status` は provisional のまま残す registry(holdout が
+    開いてはならない「部分凍結」ケース: 条件 (b) は満たすが条件 (c) が満たされない)。
+
+    レビュー対応 2026-07-30(第 18 ラウンド): axes 境界の値不変条件検証が
+    `M3ComparisonConfig.from_registry`(`representation.py`)へ追加され、
+    `status == "frozen"` の registry は axes が非空 mapping でなければロード
+    自体が拒否されるようになった——旧来のように `status: frozen` のみを文字列
+    置換で挿入し axes を一切持たない registry は、もはやロード可能な状態を
+    表現できない(loader-level 不変条件違反)。1 軸(contour)のみ整形済みで
+    凍結した最小の部分凍結状態を用いる。
     """
-    text = M3_REGISTRY_PATH.read_text(encoding="utf-8").replace(
-        "status: uncalibrated", "status: frozen", 1
-    )
-    assert text != M3_REGISTRY_PATH.read_text(encoding="utf-8")  # replace が効いたこと確認
-    return text
+    mapping = _registry_mapping()
+    mapping["evidence_thresholds"] = {
+        "status": "frozen",
+        "axes": {"contour": {"strong_min": 0.8, "none_max": 0.2}},
+    }
+    return yaml.safe_dump(mapping, sort_keys=False)
 
 
 def _fully_frozen_registry_text() -> str:
@@ -775,6 +784,185 @@ def test_validate_tuning_coverage_completeness_ignores_not_comparable_and_holdou
     }
     pairs["pos_holdout"]["comparison"]["coverage"] = {}
     assert harness._validate_tuning_coverage_completeness(pairs) == []
+
+
+# --------------------------------------------------------------------------- #
+# holdout 行の coverage 完全性 + floor 充足（レビュー対応 2026-07-30 第 18 ラウンド）
+# --------------------------------------------------------------------------- #
+def _synthetic_holdout_pairs(*, floor: float = 0.5) -> Dict[str, Dict[str, Any]]:
+    """`_synthetic_pairs_for_margin` と同型・holdout split のみの合成 pairs。"""
+
+    def _row(coverage: Dict[str, Any], *, split: str = "holdout") -> Dict[str, Any]:
+        return {
+            "split": split,
+            "expected": "same",
+            "comparison": {
+                "evidence": "strong",
+                "axes": {"contour": 0.9, "interval": 0.85, "rhythm": 0.8},
+                "coverage": coverage,
+            },
+        }
+
+    return {
+        "h_ok": _row(
+            {
+                "aligned_note_fraction_a": 0.9,
+                "aligned_note_fraction_b": 0.85,
+                "phrase_coverage_a": 1.0,
+                "phrase_coverage_b": 1.0,
+            }
+        ),
+    }
+
+
+def test_validate_holdout_coverage_and_floor_accepts_well_formed_above_floor():
+    pairs = _synthetic_holdout_pairs()
+    coverage_invalid, below_floor = harness._validate_holdout_coverage_and_floor(pairs, floor=0.5)
+    assert coverage_invalid == []
+    assert below_floor == []
+
+
+def test_validate_holdout_coverage_and_floor_flags_missing_field():
+    pairs = _synthetic_holdout_pairs()
+    del pairs["h_ok"]["comparison"]["coverage"]["phrase_coverage_b"]
+    coverage_invalid, below_floor = harness._validate_holdout_coverage_and_floor(pairs, floor=0.5)
+    assert coverage_invalid == ["h_ok"]
+    assert below_floor == []
+
+
+def test_validate_holdout_coverage_and_floor_flags_non_mapping_coverage():
+    pairs = _synthetic_holdout_pairs()
+    pairs["h_ok"]["comparison"]["coverage"] = None
+    coverage_invalid, below_floor = harness._validate_holdout_coverage_and_floor(pairs, floor=0.5)
+    assert coverage_invalid == ["h_ok"]
+    assert below_floor == []
+
+
+def test_validate_holdout_coverage_and_floor_flags_out_of_range_value():
+    pairs = _synthetic_holdout_pairs()
+    pairs["h_ok"]["comparison"]["coverage"]["aligned_note_fraction_a"] = 1.5
+    coverage_invalid, below_floor = harness._validate_holdout_coverage_and_floor(pairs, floor=0.5)
+    assert coverage_invalid == ["h_ok"]
+    assert below_floor == []
+
+
+def test_validate_holdout_coverage_and_floor_flags_bool_value():
+    pairs = _synthetic_holdout_pairs()
+    pairs["h_ok"]["comparison"]["coverage"]["phrase_coverage_a"] = True
+    coverage_invalid, below_floor = harness._validate_holdout_coverage_and_floor(pairs, floor=0.5)
+    assert coverage_invalid == ["h_ok"]
+    assert below_floor == []
+
+
+def test_validate_holdout_coverage_and_floor_flags_below_floor():
+    """`min(aligned_note_fraction_a, b) < floor` なら `below_floor` に積む
+    （coverage 自体は整形済みのため `coverage_invalid` には積まない）。
+    """
+    pairs = _synthetic_holdout_pairs()
+    pairs["h_ok"]["comparison"]["coverage"]["aligned_note_fraction_b"] = 0.4
+    coverage_invalid, below_floor = harness._validate_holdout_coverage_and_floor(pairs, floor=0.5)
+    assert coverage_invalid == []
+    assert below_floor == ["h_ok"]
+
+
+def test_validate_holdout_coverage_and_floor_accepts_exactly_at_floor():
+    """`min(...) == floor`（境界値）は floor 未満ではないため below_floor に積まない。"""
+    pairs = _synthetic_holdout_pairs()
+    pairs["h_ok"]["comparison"]["coverage"]["aligned_note_fraction_b"] = 0.5
+    coverage_invalid, below_floor = harness._validate_holdout_coverage_and_floor(pairs, floor=0.5)
+    assert coverage_invalid == []
+    assert below_floor == []
+
+
+def test_validate_holdout_coverage_and_floor_ignores_tuning_and_missing_comparison():
+    """tuning split の pair・`comparison` を持たない(holdout ロック)行は対象外。"""
+    pairs = _synthetic_holdout_pairs()
+    pairs["h_ok"]["comparison"]["coverage"]["aligned_note_fraction_b"] = 0.1  # 本来なら below_floor
+    pairs["h_ok"]["split"] = "tuning"  # tuning へ変えると対象外になる
+    pairs["h_locked"] = {"split": "holdout", "status": "holdout_locked_until_frozen"}
+    coverage_invalid, below_floor = harness._validate_holdout_coverage_and_floor(pairs, floor=0.5)
+    assert coverage_invalid == []
+    assert below_floor == []
+
+
+def test_evaluate_holdout_validation_not_confirmed_when_coverage_invalid(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """holdout 行の `comparison.coverage` が壊れていれば(欠落フィールド)、軸別
+    verdict が全て confirmed でも `holdout_validation_status` は
+    `calibration_not_confirmed_on_holdout` に倒れ、`holdout_validation_reasons` に
+    `holdout_pair_coverage_invalid(<pair_id>)` が記録される。
+    """
+    reports, frozen_registry = _reports_for_holdout_validation(
+        tmp_path,
+        audio_paths,
+        positive_axes_override={"contour": 0.95, "interval": 1.0, "rhythm": 0.9},
+        negative_axes_override={"contour": 0.1, "interval": 0.05, "rhythm": 0.2},
+    )
+    for report in reports:
+        del report["pairs"]["p_pos_holdout"]["comparison"]["coverage"]["phrase_coverage_b"]
+
+    verdict = harness.evaluate_comparison(reports, registry_path=frozen_registry)
+
+    assert verdict["holdout_validation"] == {
+        "contour": "confirmed",
+        "interval": "confirmed",
+        "rhythm": "confirmed",
+    }
+    assert verdict["holdout_validation_status"] == "calibration_not_confirmed_on_holdout"
+    assert "holdout_pair_coverage_invalid(p_pos_holdout)" in verdict["holdout_validation_reasons"]
+
+
+def test_evaluate_holdout_validation_not_confirmed_when_below_coverage_floor(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """holdout 行の被覆が凍結 `coverage.floor` 未満なら、軸別 verdict が全て
+    confirmed でも `holdout_validation_status` は
+    `calibration_not_confirmed_on_holdout` に倒れ、`holdout_validation_reasons` に
+    `holdout_pair_below_floor(<pair_id>)` が記録される（floor 未満なのに
+    favorable axes を持つ行は、run 時の coverage floor gate が本来
+    not_comparable へ倒すはずの内部不整合に対する防御）。
+    """
+    reports, frozen_registry = _reports_for_holdout_validation(
+        tmp_path,
+        audio_paths,
+        positive_axes_override={"contour": 0.95, "interval": 1.0, "rhythm": 0.9},
+        negative_axes_override={"contour": 0.1, "interval": 0.05, "rhythm": 0.2},
+    )
+    config, _ = harness.load_m3_registry(frozen_registry)
+    floor = config.coverage.floor
+    for report in reports:
+        coverage = report["pairs"]["p_pos_holdout"]["comparison"]["coverage"]
+        coverage["aligned_note_fraction_a"] = max(0.0, floor - 0.05)
+
+    verdict = harness.evaluate_comparison(reports, registry_path=frozen_registry)
+
+    assert verdict["holdout_validation"] == {
+        "contour": "confirmed",
+        "interval": "confirmed",
+        "rhythm": "confirmed",
+    }
+    assert verdict["holdout_validation_status"] == "calibration_not_confirmed_on_holdout"
+    assert "holdout_pair_below_floor(p_pos_holdout)" in verdict["holdout_validation_reasons"]
+
+
+def test_evaluate_holdout_validation_confirmed_stays_confirmed_with_valid_coverage(
+    tmp_path: Path, audio_paths: Dict[str, str]
+):
+    """holdout 行の coverage が整形済み・floor 以上であれば、新検証を追加しても
+    既存の `confirmed` 判定（回帰）は崩れない。
+    """
+    reports, frozen_registry = _reports_for_holdout_validation(
+        tmp_path,
+        audio_paths,
+        positive_axes_override={"contour": 0.95, "interval": 1.0, "rhythm": 0.9},
+        negative_axes_override={"contour": 0.1, "interval": 0.05, "rhythm": 0.2},
+    )
+
+    verdict = harness.evaluate_comparison(reports, registry_path=frozen_registry)
+
+    assert verdict["holdout_validation_status"] == "confirmed"
+    assert "holdout_validation_reasons" not in verdict
 
 
 def test_evaluate_rejects_freeze_proposal_when_tuning_positive_not_comparable(
@@ -1517,10 +1705,16 @@ def test_holdout_pair_compared_when_registry_frozen(tmp_path: Path, audio_paths:
 
 
 def test_holdout_pair_not_opened_when_partially_frozen(tmp_path: Path, audio_paths: Dict[str, str]):
-    """`evidence_thresholds.status == "frozen"` だけでは holdout は開かない —
-    axes が未凍結（`_holdout_unlocked` の cross-field 不変条件 (b)）または
-    `coverage.floor_status` が provisional のまま（同条件 (c)）の「部分凍結」状態は
-    ロック継続が正しい。
+    """`evidence_thresholds.status == "frozen"` + 整形済み axes（1 軸）だけでは
+    holdout は開かない — `coverage.floor_status` が provisional のまま
+    （`_holdout_unlocked` の cross-field 不変条件 (c)）の「部分凍結」状態は
+    ロック継続が正しい（条件 (b) は満たすが (c) が満たされない）。
+
+    レビュー対応 2026-07-30（第 18 ラウンド）: axes 皆無（`axes is None`）の
+    「status のみ frozen」という組み合わせは、ローダ側の axes 境界検証
+    （`M3ComparisonConfig.from_registry`）が導入されたことでロード自体が
+    拒否されるようになった——本テストは axes 皆無ではなく floor_status
+    provisional のみを単離するケースへ更新した。
     """
     manifest_path = tmp_path / "pairs.yaml"
     _write_manifest(manifest_path, _default_pairs(audio_paths))
@@ -1530,7 +1724,7 @@ def test_holdout_pair_not_opened_when_partially_frozen(tmp_path: Path, audio_pat
 
     config, _ = harness.load_m3_registry(partial_registry)
     assert config.evidence_thresholds.status == "frozen"
-    assert config.evidence_thresholds.axes is None
+    assert set(config.evidence_thresholds.axes) == {"contour"}
     assert config.coverage.floor_status != "frozen"
     assert harness._holdout_unlocked(config) is False
 
@@ -1544,14 +1738,26 @@ def test_holdout_pair_not_opened_when_partially_frozen(tmp_path: Path, audio_pat
 
 
 def test_holdout_unlocked_requires_all_three_conditions():
-    """`_holdout_unlocked` は status=frozen だけでは真にならない(axes/floor_status も必須)。"""
+    """`_holdout_unlocked` は status=frozen + 整形済み axes だけでは真にならない
+    (coverage.floor_status も frozen である必要がある)。
+
+    レビュー対応 2026-07-30（第 18 ラウンド）: axes 皆無（`{"status": "frozen"}`
+    のみ）はローダ側の axes 境界検証（`M3ComparisonConfig.from_registry`）が
+    導入されたことでロード自体が拒否されるようになったため、1 軸のみ整形済みの
+    axes を与えた上で coverage.floor_status を provisional のまま残す（条件 (c)
+    のみを単離）。
+    """
     from svp_rpe.melody.representation import M3ComparisonConfig
 
     base_mapping = _registry_mapping()
 
     partial_mapping = dict(base_mapping)
-    partial_mapping["evidence_thresholds"] = {"status": "frozen"}
+    partial_mapping["evidence_thresholds"] = {
+        "status": "frozen",
+        "axes": {"contour": {"strong_min": 0.8, "none_max": 0.2}},
+    }
     partial_config = M3ComparisonConfig.from_registry(partial_mapping)
+    assert partial_config.coverage.floor_status != "frozen"
     assert harness._holdout_unlocked(partial_config) is False
 
     full_mapping = dict(base_mapping)
@@ -1569,19 +1775,46 @@ def test_holdout_unlocked_requires_all_three_conditions():
     assert harness._holdout_unlocked(full_config) is True
 
 
+# レビュー対応 2026-07-30（第 18 ラウンド）: axes 境界の値不変条件検証が
+# `M3ComparisonConfig.from_registry`（`representation.py`）へ追加されたため、
+# 以下 4 テストが従来のように壊れた axes（空 mapping・大小関係逆転・域外値・
+# 非数値）を `from_registry` 経由で作ろうとすると、そこで即座に `ValueError`
+# が飛ぶようになった——`_validate_frozen_axes`/`_holdout_unlocked`（ローダを
+# 経由しない config にも安全側に倒す defense-in-depth）を単体で確認する目的は
+# もう `from_registry` では達成できない。round 17 の `test_holdout_unlocked_
+# rejects_invalid_coverage_floor` と同型の回避策（`from_registry` を経由しない
+# 直接 dataclass 構築）を、繰り返しが多いため共通ヘルパーへ切り出す。
+def _config_with_raw_evidence_thresholds(evidence_thresholds: Any) -> Any:
+    """`from_registry` を経由せず、`evidence_thresholds` だけ差し替えた
+    `M3ComparisonConfig` を直接構築する。`coverage.floor_status` は "frozen" に
+    固定する（axes 検証のみを単離するため——floor_status 自体の検証は別の
+    テスト群（`test_holdout_unlocked_rejects_invalid_coverage_floor` 等）が
+    担当する）。
+    """
+    from svp_rpe.melody.representation import CoverageConfig, M3ComparisonConfig
+
+    base_config, _ = harness.load_m3_registry(M3_REGISTRY_PATH)
+    return M3ComparisonConfig(
+        schema=base_config.schema,
+        registered_utc=base_config.registered_utc,
+        representation=base_config.representation,
+        alignment=base_config.alignment,
+        coverage=CoverageConfig(floor=base_config.coverage.floor, floor_status="frozen"),
+        evidence_thresholds=evidence_thresholds,
+        separation_margin=base_config.separation_margin,
+    )
+
+
 def test_holdout_unlocked_rejects_empty_axes_mapping():
     """axes の 3 キー自体は揃っているが値が空 mapping(`{}`)——holdout は開かない。"""
-    from svp_rpe.melody.representation import M3ComparisonConfig
+    from svp_rpe.melody.representation import EvidenceThresholdsConfig
 
-    base_mapping = _registry_mapping()
-    mapping = dict(base_mapping)
-    mapping["evidence_thresholds"] = {
-        "status": "frozen",
-        "axes": {"contour": {}, "interval": {}, "rhythm": {}},
-    }
-    mapping["coverage"] = dict(base_mapping["coverage"])
-    mapping["coverage"]["floor_status"] = "frozen"
-    config = M3ComparisonConfig.from_registry(mapping)
+    config = _config_with_raw_evidence_thresholds(
+        EvidenceThresholdsConfig(
+            status="frozen",
+            axes={"contour": {}, "interval": {}, "rhythm": {}},
+        )
+    )
 
     assert harness._validate_frozen_axes(config.evidence_thresholds.axes) is False
     assert harness._holdout_unlocked(config) is False
@@ -1589,21 +1822,18 @@ def test_holdout_unlocked_rejects_empty_axes_mapping():
 
 def test_holdout_unlocked_rejects_strong_min_below_none_max():
     """`strong_min < none_max`(大小関係逆転)は holdout を開かない。"""
-    from svp_rpe.melody.representation import M3ComparisonConfig
+    from svp_rpe.melody.representation import EvidenceThresholdsConfig
 
-    base_mapping = _registry_mapping()
-    mapping = dict(base_mapping)
-    mapping["evidence_thresholds"] = {
-        "status": "frozen",
-        "axes": {
-            "contour": {"strong_min": 0.1, "none_max": 0.8},
-            "interval": {"strong_min": 0.8, "none_max": 0.2},
-            "rhythm": {"strong_min": 0.7, "none_max": 0.3},
-        },
-    }
-    mapping["coverage"] = dict(base_mapping["coverage"])
-    mapping["coverage"]["floor_status"] = "frozen"
-    config = M3ComparisonConfig.from_registry(mapping)
+    config = _config_with_raw_evidence_thresholds(
+        EvidenceThresholdsConfig(
+            status="frozen",
+            axes={
+                "contour": {"strong_min": 0.1, "none_max": 0.8},
+                "interval": {"strong_min": 0.8, "none_max": 0.2},
+                "rhythm": {"strong_min": 0.7, "none_max": 0.3},
+            },
+        )
+    )
 
     assert harness._validate_frozen_axes(config.evidence_thresholds.axes) is False
     assert harness._holdout_unlocked(config) is False
@@ -1611,21 +1841,18 @@ def test_holdout_unlocked_rejects_strong_min_below_none_max():
 
 def test_holdout_unlocked_rejects_out_of_range_axis_values():
     """`strong_min`/`none_max` が 0.0〜1.0 域外なら holdout を開かない。"""
-    from svp_rpe.melody.representation import M3ComparisonConfig
+    from svp_rpe.melody.representation import EvidenceThresholdsConfig
 
-    base_mapping = _registry_mapping()
-    mapping = dict(base_mapping)
-    mapping["evidence_thresholds"] = {
-        "status": "frozen",
-        "axes": {
-            "contour": {"strong_min": 1.5, "none_max": 0.2},
-            "interval": {"strong_min": 0.8, "none_max": 0.2},
-            "rhythm": {"strong_min": 0.7, "none_max": 0.3},
-        },
-    }
-    mapping["coverage"] = dict(base_mapping["coverage"])
-    mapping["coverage"]["floor_status"] = "frozen"
-    config = M3ComparisonConfig.from_registry(mapping)
+    config = _config_with_raw_evidence_thresholds(
+        EvidenceThresholdsConfig(
+            status="frozen",
+            axes={
+                "contour": {"strong_min": 1.5, "none_max": 0.2},
+                "interval": {"strong_min": 0.8, "none_max": 0.2},
+                "rhythm": {"strong_min": 0.7, "none_max": 0.3},
+            },
+        )
+    )
 
     assert harness._validate_frozen_axes(config.evidence_thresholds.axes) is False
     assert harness._holdout_unlocked(config) is False
@@ -1633,37 +1860,32 @@ def test_holdout_unlocked_rejects_out_of_range_axis_values():
 
 def test_holdout_unlocked_rejects_non_numeric_axis_values():
     """`strong_min`/`none_max` が非数値(bool 含む)なら holdout を開かない。"""
-    from svp_rpe.melody.representation import M3ComparisonConfig
+    from svp_rpe.melody.representation import EvidenceThresholdsConfig
 
-    base_mapping = _registry_mapping()
-    mapping = dict(base_mapping)
-    mapping["evidence_thresholds"] = {
-        "status": "frozen",
-        "axes": {
-            "contour": {"strong_min": True, "none_max": 0.2},
-            "interval": {"strong_min": 0.8, "none_max": 0.2},
-            "rhythm": {"strong_min": 0.7, "none_max": 0.3},
-        },
-    }
-    mapping["coverage"] = dict(base_mapping["coverage"])
-    mapping["coverage"]["floor_status"] = "frozen"
-    config = M3ComparisonConfig.from_registry(mapping)
+    config = _config_with_raw_evidence_thresholds(
+        EvidenceThresholdsConfig(
+            status="frozen",
+            axes={
+                "contour": {"strong_min": True, "none_max": 0.2},
+                "interval": {"strong_min": 0.8, "none_max": 0.2},
+                "rhythm": {"strong_min": 0.7, "none_max": 0.3},
+            },
+        )
+    )
 
     assert harness._validate_frozen_axes(config.evidence_thresholds.axes) is False
     assert harness._holdout_unlocked(config) is False
 
-    mapping_str = dict(base_mapping)
-    mapping_str["evidence_thresholds"] = {
-        "status": "frozen",
-        "axes": {
-            "contour": {"strong_min": 0.8, "none_max": "0.2"},
-            "interval": {"strong_min": 0.8, "none_max": 0.2},
-            "rhythm": {"strong_min": 0.7, "none_max": 0.3},
-        },
-    }
-    mapping_str["coverage"] = dict(base_mapping["coverage"])
-    mapping_str["coverage"]["floor_status"] = "frozen"
-    config_str = M3ComparisonConfig.from_registry(mapping_str)
+    config_str = _config_with_raw_evidence_thresholds(
+        EvidenceThresholdsConfig(
+            status="frozen",
+            axes={
+                "contour": {"strong_min": 0.8, "none_max": "0.2"},
+                "interval": {"strong_min": 0.8, "none_max": 0.2},
+                "rhythm": {"strong_min": 0.7, "none_max": 0.3},
+            },
+        )
+    )
 
     assert harness._validate_frozen_axes(config_str.evidence_thresholds.axes) is False
     assert harness._holdout_unlocked(config_str) is False
@@ -1950,6 +2172,23 @@ def test_holdout_full_freeze_records_empty_redacted_list(tmp_path: Path, audio_p
 # --------------------------------------------------------------------------- #
 # 凍結後の holdout 検証表（レビュー対応 2026-07-30 第 10 ラウンド）
 # --------------------------------------------------------------------------- #
+# holdout テスト用の被覆値（floor=0.5 を上回る整形済み値。レビュー対応 2026-07-30
+# 第 18 ラウンド）: `p_neg_holdout`（song_a×song_b）は実測では被覆下限ゲート
+# （`comparison.py` の `min_fraction < floor`）で `not_comparable` になり、
+# 実測 `coverage` は全て 0.0（`_validate_holdout_coverage_and_floor` から見れば
+# floor 未満）——`evidence`/`axes` だけを "none"/明示値へ上書きして
+# not_comparable でない行を装う以上、`coverage` も一貫した（floor 以上の）
+# 整形済み値へ上書きしないと、新設の holdout coverage/floor 検証が「favorable
+# なのに floor 未満」という(この場合は上書きに起因する見かけ上の)内部不整合を
+# 正しく検出してしまう。
+_HOLDOUT_TEST_COVERAGE: Dict[str, float] = {
+    "aligned_note_fraction_a": 0.9,
+    "aligned_note_fraction_b": 0.9,
+    "phrase_coverage_a": 1.0,
+    "phrase_coverage_b": 1.0,
+}
+
+
 def _reports_for_holdout_validation(
     tmp_path: Path,
     audio_paths: Dict[str, str],
@@ -1961,11 +2200,14 @@ def _reports_for_holdout_validation(
     （`p_pos_holdout`/`p_neg_holdout`）の axes を明示値へ上書きする。
 
     `song_a`/`song_b` の fake note ペアは compare_melodies 上で
-    `not_comparable`（観測ゲート不通過）になる組み合わせのため、holdout
+    `not_comparable`（被覆下限ゲート不通過）になる組み合わせのため、holdout
     負例の実測値を得られない——`test_evaluate_rejects_freeze_proposal_when_
     tuning_positive_not_comparable` と同じ流儀で、テスト対象（凍結値との比較
-    判定そのもの）に必要な軸値だけを直接上書きする。両 report で同一の上書き値を
-    与えることで repeats 決定論（bit 一致）は保つ。
+    判定そのもの）に必要な軸値だけを直接上書きする。`coverage` も
+    `_HOLDOUT_TEST_COVERAGE`（floor=0.5 を上回る整形済み値）へ揃えて上書きする
+    ——`evidence`/`axes` の上書きと矛盾しない一貫した被覆値にするため（レビュー
+    対応 2026-07-30 第 18 ラウンド）。両 report で同一の上書き値を与えることで
+    repeats 決定論（bit 一致）は保つ。
     """
     manifest_path = tmp_path / "pairs.yaml"
     _write_manifest(manifest_path, _default_pairs(audio_paths))
@@ -1983,6 +2225,7 @@ def _reports_for_holdout_validation(
         report["pairs"]["p_pos_holdout"]["comparison"]["axes"] = dict(positive_axes_override)
         report["pairs"]["p_neg_holdout"]["comparison"]["evidence"] = "none"
         report["pairs"]["p_neg_holdout"]["comparison"]["axes"] = dict(negative_axes_override)
+        report["pairs"]["p_neg_holdout"]["comparison"]["coverage"] = dict(_HOLDOUT_TEST_COVERAGE)
         reports.append(report)
     return reports, frozen_registry
 
@@ -2090,6 +2333,13 @@ def test_evaluate_holdout_validation_not_confirmed_when_holdout_pair_not_compara
             "interval": 0.05,
             "rhythm": 0.2,
         }
+        # レビュー対応 2026-07-30（第 18 ラウンド）: p_neg_holdout の実測 coverage
+        # は被覆下限ゲートで 0.0（floor=0.5 未満）——evidence/axes を
+        # not_comparable でない値へ上書きする以上、coverage も一貫した floor
+        # 以上の値へ揃える（`_reports_for_holdout_validation` と同じ理由）。
+        report["pairs"]["p_neg_holdout"]["comparison"]["coverage"] = dict(
+            _HOLDOUT_TEST_COVERAGE
+        )
         reports.append(report)
 
     # p_extra_holdout_nc（song_a×song_b）は観測ゲート不通過で not_comparable に

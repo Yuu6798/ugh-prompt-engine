@@ -138,6 +138,17 @@ tuning→凍結手続き（本ドキュメントの校正状態節）でのみ�
 構造検証（未知/欠落キー）とは独立に、値そのもの（型・値域・大小関係）を
 enforce する。
 
+レビュー対応 2026-07-30（第 18 ラウンド）: `evidence_thresholds` の値不変条件は
+`status` の enum 検証に加え、`axes` の境界もロード時に検証するようになった:
+`status == "frozen"` なら `axes` は非空 mapping・軸名は {contour, interval,
+rhythm} の部分集合・各軸は `{strong_min, none_max}` の完全一致キー集合を持つ
+mapping・両値は非 bool の有限数値かつ 0.0〜1.0・`strong_min >= none_max` を
+要求する。`status == "uncalibrated"` なら `axes` の存在自体を不整合として拒否
+する。ハーネス側 `_validate_frozen_axes`（次節）は holdout unlock の cross-field
+判定（`min_separation_margin` を含むマージン検査）として引き続き独立に存在する
+——ローダの検証はそれとは別に「壊れた axes を持つ registry を読み込めてしまう」
+穴を塞ぐものである。
+
 ## 6. 校正ハーネス（M3d・`scripts/run_melody_comparison.py`）
 
 standalone script（`svprpe` サブコマンド化しない）。`run_melody_accuracy.py`

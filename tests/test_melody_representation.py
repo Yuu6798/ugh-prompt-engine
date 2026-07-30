@@ -174,6 +174,128 @@ def test_from_registry_rejects_unknown_evidence_thresholds_status():
         M3ComparisonConfig.from_registry(mapping)
 
 
+# --------------------------------------------------------------------------- #
+# 凍結 axes 境界のロード時検証（レビュー対応 2026-07-30 第 18 ラウンド）
+# --------------------------------------------------------------------------- #
+# 凍結レジストリ（m3_comparison_registry.yaml）の現行 status は "uncalibrated"
+# （axes 節を持たない）ため、以下は全て mapping を直接組み立てて
+# `status: frozen` + axes 節を検証する。ハーネス側 `_validate_frozen_axes`
+# （`scripts/run_melody_comparison.py`）の同種テストと対をなす——ここではロード
+# 時（`M3ComparisonConfig.from_registry`）の fail-fast を検証する。
+_VALID_FROZEN_AXES = {
+    "contour": {"strong_min": 0.8, "none_max": 0.2},
+    "interval": {"strong_min": 0.8, "none_max": 0.2},
+    "rhythm": {"strong_min": 0.7, "none_max": 0.3},
+}
+
+
+def _frozen_mapping(axes: object) -> dict:
+    mapping = _load_m3_mapping()
+    mapping["evidence_thresholds"] = {"status": "frozen", "axes": axes}
+    return mapping
+
+
+def test_from_registry_accepts_frozen_status_with_full_axes():
+    """3 軸全て整形済みの frozen registry はそのまま通る（回帰）。"""
+    config = M3ComparisonConfig.from_registry(_frozen_mapping(_VALID_FROZEN_AXES))
+    assert config.evidence_thresholds.status == "frozen"
+    assert set(config.evidence_thresholds.axes) == {"contour", "interval", "rhythm"}
+
+
+def test_from_registry_accepts_frozen_status_with_partial_axes():
+    """1 軸のみ整形済みの frozen registry も通る（3 軸全て必須ではない・
+    ハーネス `_validate_frozen_axes` 第 4 ラウンド緩和と同じ扱い）。
+    """
+    axes = {"contour": {"strong_min": 0.8, "none_max": 0.2}}
+    config = M3ComparisonConfig.from_registry(_frozen_mapping(axes))
+    assert set(config.evidence_thresholds.axes) == {"contour"}
+
+
+def test_from_registry_rejects_frozen_status_without_axes_key():
+    """`status == "frozen"` だが `axes` キー自体が無い(既定 None)場合は拒否する。"""
+    mapping = _load_m3_mapping()
+    mapping["evidence_thresholds"] = {"status": "frozen"}
+    with pytest.raises(ValueError, match="evidence_thresholds.axes"):
+        M3ComparisonConfig.from_registry(mapping)
+
+
+def test_from_registry_rejects_frozen_status_with_none_axes():
+    """`status == "frozen"` だが `axes: null` (明示的に None) も拒否する。"""
+    with pytest.raises(ValueError, match="evidence_thresholds.axes"):
+        M3ComparisonConfig.from_registry(_frozen_mapping(None))
+
+
+def test_from_registry_rejects_frozen_status_with_empty_axes_mapping():
+    """`status == "frozen"` だが `axes: {}` (空 mapping) も拒否する。"""
+    with pytest.raises(ValueError, match="evidence_thresholds.axes"):
+        M3ComparisonConfig.from_registry(_frozen_mapping({}))
+
+
+def test_from_registry_rejects_frozen_axes_unknown_axis_name():
+    """軸名が {contour, interval, rhythm} の部分集合でなければ拒否する。"""
+    axes = dict(_VALID_FROZEN_AXES)
+    axes["timbre"] = {"strong_min": 0.8, "none_max": 0.2}
+    with pytest.raises(ValueError, match="未知軸名"):
+        M3ComparisonConfig.from_registry(_frozen_mapping(axes))
+
+
+def test_from_registry_rejects_frozen_axis_missing_key():
+    """各軸は `strong_min`/`none_max` の両キーを持たなければならない(欠落は拒否)。"""
+    axes = {"contour": {"strong_min": 0.8}}
+    with pytest.raises(ValueError, match="evidence_thresholds.axes.contour"):
+        M3ComparisonConfig.from_registry(_frozen_mapping(axes))
+
+
+def test_from_registry_rejects_frozen_axis_extra_key():
+    """各軸は `strong_min`/`none_max` の**完全一致**キー集合でなければならない
+    (余剰キーも拒否——ハーネス `_validate_frozen_axes` は存在チェックのみで
+    過不足を見ないため、ここが唯一過不足を検出する)。
+    """
+    axes = {"contour": {"strong_min": 0.8, "none_max": 0.2, "bogus_extra": 1.0}}
+    with pytest.raises(ValueError, match="evidence_thresholds.axes.contour"):
+        M3ComparisonConfig.from_registry(_frozen_mapping(axes))
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [1.5, -0.1],
+    ids=["above_one", "below_zero"],
+)
+def test_from_registry_rejects_frozen_axis_value_out_of_range(bad_value: float):
+    """`strong_min`/`none_max` は 0.0〜1.0 の範囲外なら拒否する。"""
+    axes = {"contour": {"strong_min": bad_value, "none_max": 0.2}}
+    with pytest.raises(ValueError, match="evidence_thresholds.axes.contour.strong_min"):
+        M3ComparisonConfig.from_registry(_frozen_mapping(axes))
+
+
+def test_from_registry_rejects_frozen_axis_non_numeric_value():
+    """`strong_min`/`none_max` が非数値(bool 含む)なら拒否する。"""
+    axes_bool = {"contour": {"strong_min": True, "none_max": 0.2}}
+    with pytest.raises(ValueError, match="evidence_thresholds.axes.contour.strong_min"):
+        M3ComparisonConfig.from_registry(_frozen_mapping(axes_bool))
+
+    axes_str = {"contour": {"strong_min": 0.8, "none_max": "0.2"}}
+    with pytest.raises(ValueError, match="evidence_thresholds.axes.contour.none_max"):
+        M3ComparisonConfig.from_registry(_frozen_mapping(axes_str))
+
+
+def test_from_registry_rejects_frozen_axis_strong_min_below_none_max():
+    """`strong_min < none_max`(大小関係逆転)は拒否する。"""
+    axes = {"contour": {"strong_min": 0.1, "none_max": 0.8}}
+    with pytest.raises(ValueError, match="strong_min"):
+        M3ComparisonConfig.from_registry(_frozen_mapping(axes))
+
+
+def test_from_registry_rejects_uncalibrated_status_with_axes_present():
+    """`status == "uncalibrated"` なのに `axes` が存在するのは不整合として拒否する
+    (未校正なのに閾値がある)。
+    """
+    mapping = _load_m3_mapping()
+    mapping["evidence_thresholds"] = {"status": "uncalibrated", "axes": _VALID_FROZEN_AXES}
+    with pytest.raises(ValueError, match="uncalibrated"):
+        M3ComparisonConfig.from_registry(mapping)
+
+
 def test_from_registry_rejects_separation_margin_out_of_range():
     """`separation_margin.min_same_minus_cross_margin` は 0 より大きく 1.0 以下
     でなければならない。

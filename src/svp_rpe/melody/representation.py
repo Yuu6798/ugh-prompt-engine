@@ -373,12 +373,34 @@ def _validate_coverage_values(config: "CoverageConfig") -> None:
 
 
 _EVIDENCE_THRESHOLDS_STATUS_VALUES = {"uncalibrated", "frozen"}
+_EVIDENCE_THRESHOLDS_KNOWN_AXES = {"contour", "interval", "rhythm"}
+_EVIDENCE_THRESHOLDS_AXIS_KEYS = {"strong_min", "none_max"}
 
 
 def _validate_evidence_thresholds_values(config: "EvidenceThresholdsConfig") -> None:
-    """`evidence_thresholds` 節の値不変条件を検証する（`status` のみ。`axes` の内容
-    検証は `scripts/run_melody_comparison.py` の `_validate_frozen_axes`（holdout
-    解錠の cross-field 判定）に既に存在し、ここでの重複導入はしない）。
+    """`evidence_thresholds` 節の値不変条件を検証する。
+
+    レビュー対応 2026-07-30（第 18 ラウンド）: 従来は `status` の列挙値のみを
+    検証し、`axes` の内容検証は `scripts/run_melody_comparison.py` の
+    `_validate_frozen_axes`（holdout 解錠の cross-field 判定、run/evaluate 両
+    phase から呼ばれる）にしか存在しなかった——registry ロード自体
+    （`M3ComparisonConfig.from_registry`）は `axes` の中身（型・値域・大小関係）
+    を無検査で通していたため、ハーネスを経由しない直接ロード（例: 将来の別
+    呼び出し元）では壊れた凍結軸がそのまま素通りしてしまう穴があった。ここで
+    ロード時にも同型の検証を課す（ハーネス側 `_validate_frozen_axes` は
+    defense-in-depth として残す——マージン `min_separation_margin` 検査は
+    holdout unlock の cross-field 判定でしか出せない値のため、引き続きハーネス
+    側だけの責務とする）:
+
+    - `status == "frozen"`: `axes` は非空 mapping であること。軸名は
+      {contour, interval, rhythm} の部分集合であること。各軸は
+      `{strong_min, none_max}` の**完全一致**キー集合を持つ mapping であること
+      （ハーネス側 `_validate_frozen_axes` は存在チェックのみで過不足を見ない
+      ——ここでは registry の書式そのものとして過不足も fail-closed で拒否
+      する）。両値は非 bool の有限数値かつ 0.0〜1.0、かつ
+      `strong_min >= none_max` であること。
+    - `status == "uncalibrated"`: `axes` が存在する（非 None）こと自体が
+      不整合（未校正なのに閾値を持つ）として拒否する。
     """
     if config.status not in _EVIDENCE_THRESHOLDS_STATUS_VALUES:
         raise ValueError(
@@ -386,6 +408,60 @@ def _validate_evidence_thresholds_values(config: "EvidenceThresholdsConfig") -> 
             f"{sorted(_EVIDENCE_THRESHOLDS_STATUS_VALUES)} のいずれかでなければならない "
             "(fail-closed)"
         )
+
+    axes = config.axes
+    if config.status == "uncalibrated":
+        if axes is not None:
+            raise ValueError(
+                "m3_comparison_registry.evidence_thresholds.status='uncalibrated' だが "
+                f"axes={axes!r} が存在する; 未校正のまま軸別閾値を持つのは不整合 (fail-closed)"
+            )
+        return
+
+    # ここに到達するのは status == "frozen" のみ（列挙値検証済み）。
+    if not isinstance(axes, dict) or not axes:
+        raise ValueError(
+            "m3_comparison_registry.evidence_thresholds.axes="
+            f"{axes!r} は status='frozen' の場合、非空 mapping でなければならない (fail-closed)"
+        )
+    unknown_axes = set(axes) - _EVIDENCE_THRESHOLDS_KNOWN_AXES
+    if unknown_axes:
+        raise ValueError(
+            "m3_comparison_registry.evidence_thresholds.axes に未知軸名 "
+            f"{sorted(unknown_axes)} (既知軸: {sorted(_EVIDENCE_THRESHOLDS_KNOWN_AXES)}) "
+            "(fail-closed)"
+        )
+    for axis_name, axis_mapping in axes.items():
+        if not isinstance(axis_mapping, dict) or set(axis_mapping) != _EVIDENCE_THRESHOLDS_AXIS_KEYS:
+            raise ValueError(
+                f"m3_comparison_registry.evidence_thresholds.axes.{axis_name}={axis_mapping!r} "
+                f"は {sorted(_EVIDENCE_THRESHOLDS_AXIS_KEYS)} キーちょうどを持つ mapping で"
+                "なければならない (fail-closed)"
+            )
+        strong_min = _require_finite_number(
+            axis_mapping["strong_min"],
+            what=f"evidence_thresholds.axes.{axis_name}.strong_min",
+        )
+        none_max = _require_finite_number(
+            axis_mapping["none_max"],
+            what=f"evidence_thresholds.axes.{axis_name}.none_max",
+        )
+        if not (0.0 <= strong_min <= 1.0):
+            raise ValueError(
+                f"m3_comparison_registry.evidence_thresholds.axes.{axis_name}.strong_min="
+                f"{axis_mapping['strong_min']!r} は 0.0〜1.0 の範囲でなければならない (fail-closed)"
+            )
+        if not (0.0 <= none_max <= 1.0):
+            raise ValueError(
+                f"m3_comparison_registry.evidence_thresholds.axes.{axis_name}.none_max="
+                f"{axis_mapping['none_max']!r} は 0.0〜1.0 の範囲でなければならない (fail-closed)"
+            )
+        if not (strong_min >= none_max):
+            raise ValueError(
+                f"m3_comparison_registry.evidence_thresholds.axes.{axis_name}: strong_min="
+                f"{axis_mapping['strong_min']!r} は none_max={axis_mapping['none_max']!r} 以上で"
+                "なければならない (fail-closed)"
+            )
 
 
 def _validate_separation_margin_values(config: "SeparationMarginConfig") -> None:

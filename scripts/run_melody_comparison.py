@@ -77,6 +77,13 @@ import svp_rpe.melody.extractors as _m3_extractors_module  # noqa: E402
 import svp_rpe.melody.observability as _m3_observability_module  # noqa: E402
 import svp_rpe.melody.representation as _m3_representation_module  # noqa: E402
 import svp_rpe.melody.routing as _m3_routing_module  # noqa: E402
+# レビュー対応 2026-07-30（第 18 ラウンド）: `svp_rpe.rpe.learned.crepe_adapter` の
+# トップレベル import は軽量（numpy + stdlib + 兄弟パッケージのみ）——`crepe`
+# 本体は `importlib.import_module("crepe")` で関数内遅延 import されるため、
+# crepe/tensorflow 未導入環境でもここでの直 import は重依存を発火しない（確認
+# 済み）。よって他の M3 実装モジュールと同型の直 import で content pin 対象に
+# 加える（`__path__`/`__file__` 経由のパス解決に迂回する必要はない）。
+import svp_rpe.rpe.learned.crepe_adapter as _m3_crepe_adapter_module  # noqa: E402
 from svp_rpe.melody.comparison import compare_melodies  # noqa: E402
 from svp_rpe.melody.observability import (  # noqa: E402
     MelodyObservation,
@@ -736,6 +743,14 @@ _M3_CODE_MODULES: Tuple[Any, ...] = (
     # 漏れていた——両モジュールが変わっても `m3_code_sha256` は追従しないままだった。
     _m3_extractors_module,
     _m3_routing_module,
+    # レビュー対応 2026-07-30（第 18 ラウンド）: `extractors.py` の `crepe_direct`
+    # 経路は `svp_rpe.rpe.learned.crepe_adapter.extract_crepe_f0` を関数内遅延
+    # import で呼ぶ（`extractors.py` 冒頭 import 一覧には現れない）——publishable
+    # な実測 run（既定 route）が実際に実行する第一者コードでありながら pin 対象
+    # から漏れていた。`crepe_adapter` モジュール自身のトップレベル import は
+    # 軽量（crepe/tensorflow は関数内遅延 import）と確認済みのため、他モジュール
+    # と同型の直 import で pin 対象に加える。
+    _m3_crepe_adapter_module,
 )
 
 
@@ -745,8 +760,11 @@ def _m3_code_sha256(*, use_cache: bool = True) -> str:
     対象は `representation.py` / `alignment.py` / `comparison.py` /
     `observability.py`（M3 実装本体）/ `routing.py`（入力種別→抽出経路の候補列挙）/
     `extractors.py`（波形→`MelodyObservation` 変換。既定 route_runner が呼ぶ
-    実抽出器本体、レビュー対応 2026-07-30 第 17 ラウンドで追加）と本スクリプト自身
-    （`scripts/run_melody_comparison.py`）。`svp_rpe.utils.hashing.sha256_of_files`
+    実抽出器本体、レビュー対応 2026-07-30 第 17 ラウンドで追加）/
+    `rpe/learned/crepe_adapter.py`（`extractors.py` の crepe_direct 経路が関数内
+    遅延 import で呼ぶ F0 抽出本体、レビュー対応 2026-07-30 第 18 ラウンドで追加）
+    と本スクリプト自身（`scripts/run_melody_comparison.py`）。
+    `svp_rpe.utils.hashing.sha256_of_files`
     （既存ヘルパー、再実装しない）で 1 本の digest に畳む。パスは各モジュールの
     `__file__`（本スクリプトは `__file__` 自身）から解決し、ハードコードしない
     ——モジュールの実体が動けば pin もそれに追従する。
@@ -1983,6 +2001,85 @@ def _holdout_validation_table(
     }
 
 
+def _validate_holdout_coverage_and_floor(
+    pairs: Dict[str, Dict[str, Any]], *, floor: float
+) -> "Tuple[List[str], List[str]]":
+    """holdout split の comparison を持つ各 pair について `comparison.coverage`
+    の整形と凍結 `coverage.floor` 充足を検証する（レビュー対応 2026-07-30 第 18
+    ラウンド、fail-closed の材料のみ返す・例外は投げない）。
+
+    `_validate_tuning_coverage_completeness`（第 15 ラウンド）は tuning split の
+    coverage 完全性しか見ておらず、holdout 側は無検査のまま
+    `_holdout_validation_table` の axes 集計に混入していた——`comparison.coverage`
+    が壊れている（型不正・欠落・域外値）行や、被覆下限（`coverage.floor`）未満の
+    行が holdout 校正確認（`holdout_validation_status: confirmed`）に紛れ込む
+    穴を塞ぐ。floor 未満なのに（改ざん等で）favorable な axes/evidence を持つ
+    holdout 行が存在すること自体、run 時の coverage floor gate
+    （`comparison.py` の被覆下限判定）が本来 `not_comparable` へ倒すはずの
+    内部不整合であり、ここでの検出は report 改ざん/run 側ゲート不具合に対する
+    防御である。
+
+    検証内容（`_COVERAGE_FIELDS` の 4 フィールド）:
+    (a) `comparison.coverage` が mapping であり、4 フィールドが存在し、非 bool
+        の有限数値かつ 0.0〜1.0 の範囲内であること
+        （`_validate_tuning_coverage_completeness` と同基準）
+    (b) `min(aligned_note_fraction_a, aligned_note_fraction_b) >= floor`
+        （凍結 `coverage.floor`）
+
+    `evidence == "not_comparable"` な pair は対象外（`_holdout_validation_table`
+    の `not_comparable_pair_ids` 経由で別途 `holdout_pair_not_measurable(<pair_id>)`
+    として報告済み・正当な理由）——`comparison.py` の被覆下限ゲート自身が
+    `min_fraction < floor` を検出した結果として `not_comparable` を返している
+    正常系であり、floor 未満であること自体は「壊れている」のではなく
+    `not_comparable` の**根拠**そのものである。ここで検出したいのは、floor 未満
+    でありながら `not_comparable` **でない**（favorable な evidence/axes を
+    伴う）行——これは run 側のゲートが正しく機能していれば発生し得ない内部
+    不整合である。
+
+    戻り値は `(coverage_invalid_pair_ids, below_floor_pair_ids)`
+    （いずれも sorted・重複なし）。(a) に違反した pair は (b) の判定対象から
+    除外する（壊れた値で floor 比較しても意味がないため）。holdout split
+    でない pair・`comparison` を持たない pair（holdout ロック行）・
+    `not_comparable` な pair は対象外。
+    """
+    coverage_invalid: "set[str]" = set()
+    below_floor: "set[str]" = set()
+    for pair_id, pair in pairs.items():
+        if pair["split"] != "holdout":
+            continue
+        comparison = pair.get("comparison")
+        if comparison is None:
+            continue
+        if comparison.get("evidence") == "not_comparable":
+            continue
+        coverage = comparison.get("coverage")
+        values: Dict[str, float] = {}
+        invalid = not isinstance(coverage, dict)
+        if not invalid:
+            for field in _COVERAGE_FIELDS:
+                if field not in coverage:
+                    invalid = True
+                    break
+                value = coverage[field]
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    invalid = True
+                    break
+                fvalue = float(value)
+                if not math.isfinite(fvalue) or not (0.0 <= fvalue <= 1.0):
+                    invalid = True
+                    break
+                values[field] = fvalue
+        if invalid:
+            coverage_invalid.add(pair_id)
+            continue
+        min_fraction = min(
+            values["aligned_note_fraction_a"], values["aligned_note_fraction_b"]
+        )
+        if min_fraction < floor:
+            below_floor.add(pair_id)
+    return sorted(coverage_invalid), sorted(below_floor)
+
+
 def evaluate_comparison(
     reports: List[Dict[str, Any]],
     *,
@@ -2077,6 +2174,18 @@ def evaluate_comparison(
         `calibration_not_confirmed_on_holdout` へ倒し、`holdout_validation_reasons`
         に `holdout_pair_missing_comparison(<pair_id>)` を列挙する（レビュー対応
         2026-07-30 第 12 ラウンド・holdout 行 comparison 必須化）
+    14.5. 続けて、`comparison` を持つ各 holdout 行の `comparison.coverage` の
+        整形（4 フィールドの存在・非 bool 有限数値・0.0〜1.0。tuning 側の
+        `_validate_tuning_coverage_completeness` と同基準）と、
+        `min(aligned_note_fraction_a, aligned_note_fraction_b) >= coverage.floor`
+        （凍結 floor）を `_validate_holdout_coverage_and_floor` で検証する
+        （レビュー対応 2026-07-30 第 18 ラウンド）。違反行は理由つき
+        （`holdout_pair_coverage_invalid(<pair_id>)` / `holdout_pair_below_floor
+        (<pair_id>)`）で `holdout_validation_reasons` に追加され、軸別 verdict
+        が全て `confirmed` でも `holdout_validation_status` を
+        `calibration_not_confirmed_on_holdout` に倒す（floor 未満なのに
+        favorable な axes を持つ行は、run 時の coverage floor gate が本来
+        `not_comparable` へ倒すはずの内部不整合であるため）
     """
     if not reports:
         raise ValueError("evaluate_comparison: reports が空 (fail-closed)")
@@ -2242,11 +2351,27 @@ def evaluate_comparison(
                 verdict_value == "holdout_failed"
                 for verdict_value in verdict["holdout_validation"].values()
             )
-            reasons: List[str] = [
-                f"holdout_pair_not_measurable({pid})" for pid in not_comparable_pair_ids
-            ] + [
-                f"holdout_pair_missing_comparison({pid})" for pid in missing_comparison_pair_ids
-            ]
+            # レビュー対応 2026-07-30（第 18 ラウンド）: 軸別 axes 集計とは独立に、
+            # holdout 行の `comparison.coverage` 整形（tuning 側 `_validate_
+            # tuning_coverage_completeness` と同基準）と凍結 `coverage.floor`
+            # 充足を検証する。floor 未満なのに favorable な axes を持つ行が
+            # あれば、run 時の coverage floor gate が本来 not_comparable へ
+            # 倒すはずの内部不整合として fail-closed 側に倒す。
+            coverage_invalid_pair_ids, below_floor_pair_ids = (
+                _validate_holdout_coverage_and_floor(reference_pairs, floor=config.coverage.floor)
+            )
+            reasons: List[str] = (
+                [f"holdout_pair_not_measurable({pid})" for pid in not_comparable_pair_ids]
+                + [
+                    f"holdout_pair_missing_comparison({pid})"
+                    for pid in missing_comparison_pair_ids
+                ]
+                + [
+                    f"holdout_pair_coverage_invalid({pid})"
+                    for pid in coverage_invalid_pair_ids
+                ]
+                + [f"holdout_pair_below_floor({pid})" for pid in below_floor_pair_ids]
+            )
             if reasons or axis_failed:
                 # レビュー対応 2026-07-30（第 11/12 ラウンド）: holdout split に
                 # 1 件でも not_comparable pair または comparison 欠落行があれば、
