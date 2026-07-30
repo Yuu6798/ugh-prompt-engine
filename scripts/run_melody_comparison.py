@@ -14,12 +14,18 @@ standalone script（`svprpe` サブコマンド化しない・sys.path 注入は
 2. レジストリ sha256 pin（`load_m3_registry` / `_load_m1_registry`）
 3. route_runner 注入 seam（既定は実抽出器・注入時は `route_runner_injected: true` を
    記録し、evaluate は calibration verdict の発行を拒否する — M2 と同じ流儀）
-4. protected-path（`--out` が manifest / registry / report 入力を上書きしない）
+4. protected-path（`--out` が manifest / registry / report / manifest が指す音声入力を
+   上書きしない）
 
 適用帯域: 本ハーネスの既定 route は **clear_lead 経路限定**（User 決裁 2026-07-30・
 単離済み clean lead 帯）。実音声・実 crepe による slow-lane 実測は本セッションでは
 実行しない——run phase の既定 route_runner は実抽出器を呼ぶが、テストは fake
 route_runner を注入して run/evaluate の二相メカニズムのみを検証する。
+
+route_runner 非注入（実測・publishable）の run は **crepe 系経路限定**（設計 §6.1
+「対の両側とも実 crepe 抽出を通す」）——pyin_direct 等の非 crepe 経路を指定すると
+fail-closed で拒否する。melodia 系経路は注入の有無に関わらず常に拒否する（#222
+裁定前の混入禁止・設計 §8）。
 
 使い方::
 
@@ -216,6 +222,22 @@ def _validate_manifest(manifest: Any) -> List[Dict[str, Any]]:
     return validated
 
 
+def _manifest_audio_paths(manifest_path: Path) -> "set[Path]":
+    """pairs manifest 全 pair の audio_a/audio_b を絶対パスへ解決した集合を返す。
+
+    `--out` protected-path チェック用（run phase preflight）: manifest 自体だけ
+    でなく、manifest が指す音声入力を `--out` で上書きすることも防ぐ。
+    """
+    manifest_bytes = Path(manifest_path).read_bytes()
+    manifest = _yaml_load_no_dup_keys(manifest_bytes, what="pairs manifest")
+    pairs_spec = _validate_manifest(manifest)
+    paths: "set[Path]" = set()
+    for pair in pairs_spec:
+        paths.add(Path(pair["audio_a"]).resolve())
+        paths.add(Path(pair["audio_b"]).resolve())
+    return paths
+
+
 # --------------------------------------------------------------------------- #
 # run phase
 # --------------------------------------------------------------------------- #
@@ -228,6 +250,29 @@ def _resolve_route(route_name: str) -> Any:
         f"unknown --route {route_name!r}; M3 の許可帯域は clear_lead 限定 "
         f"(候補: {[r.name for r in select_routes('clear_lead')]})"
     )
+
+
+def _validate_route_for_run(route_name: str, route: Any, *, runner_injected: bool) -> None:
+    """route が実測制約を満たすか検証する（設計 §6.1 / §8, fail-closed）。
+
+    - melodia 系経路は route_runner 注入の有無に関わらず常に拒否（#222 裁定前の
+      混入禁止・設計 §8「melodia の混入」）。
+    - route_runner 非注入（実測・publishable な run）は crepe 系経路限定（設計
+      §6.1「対の両側とも実 crepe 抽出を通す」）。route_runner 注入時（テスト）は
+      任意経路可 — その事実は report 側 `route_runner_injected` に刻まれ、
+      evaluate は calibration verdict 発行を別途拒否する。
+    """
+    if "melodia" in route_name.lower() or getattr(route, "extractor", "") == "melodia":
+        raise ValueError(
+            f"--route {route_name!r} は melodia 系経路; #222 裁定前は route_runner 注入の "
+            "有無に関わらず禁止 (fail-closed, 設計 §8)"
+        )
+    if not runner_injected and getattr(route, "extractor", "") != "crepe":
+        raise ValueError(
+            f"--route {route_name!r} は実測 (route_runner 非注入) の run では crepe 系経路 "
+            f"限定 (extractor={getattr(route, 'extractor', None)!r}); 設計 §6.1 "
+            "「対の両側とも実 crepe 抽出を通す」要求 (fail-closed)"
+        )
 
 
 def _default_route_runner(route_name: str) -> RouteRunner:
@@ -264,6 +309,8 @@ def run_comparison(
     verdict 発行の拒否条件にする（M2 `run_melody_accuracy.py` と同じ規律）。
     """
     runner_injected = route_runner is not None
+    route = _resolve_route(route_name)
+    _validate_route_for_run(route_name, route, runner_injected=runner_injected)
     runner: RouteRunner = route_runner or _default_route_runner(route_name)
 
     config, m3_registry_sha256 = load_m3_registry(registry_path)
@@ -274,6 +321,12 @@ def run_comparison(
     manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
     manifest = _yaml_load_no_dup_keys(manifest_bytes, what="pairs manifest")
     pairs_spec = _validate_manifest(manifest)
+
+    # holdout は evidence_thresholds.status が "frozen" になるまで run 時点でも
+    # 開かない（evaluate 側のロックだけでは、report に holdout の axes/hash が既に
+    # 書かれてしまい閲覧可能になる穴が残るため。設計 §6.3「holdout は閾値凍結後に
+    # 一度だけ開く」を run phase でも enforce する）。
+    holdout_locked = config.evidence_thresholds.status != "frozen"
 
     results: Dict[str, Any] = {
         "schema_version": _EXPECTED_RUN_SCHEMA,
@@ -289,6 +342,15 @@ def run_comparison(
         "pairs": {},
     }
     for pair in pairs_spec:
+        if pair["split"] == "holdout" and holdout_locked:
+            # 音声も読まず比較も実行しない。split は tuning/holdout フィルタ
+            # （`_holdout_pair_ids` / `_margin_table` / `_coverage_floor_candidate`）
+            # のために残すが、axes/hash（`comparison`）は一切書かない。
+            results["pairs"][pair["pair_id"]] = {
+                "split": pair["split"],
+                "status": "holdout_locked_until_frozen",
+            }
+            continue
         obs_a, prov_a = runner(pair["audio_a"])
         obs_b, prov_b = runner(pair["audio_b"])
         comparison = compare_melodies(
@@ -340,6 +402,18 @@ def _check_repeats_consistency(reports: List[Dict[str, Any]]) -> None:
             )
         for pair_id, ref_pair in reference.items():
             cur_pair = pairs[pair_id]
+            ref_has_comparison = "comparison" in ref_pair
+            cur_has_comparison = "comparison" in cur_pair
+            if ref_has_comparison != cur_has_comparison:
+                raise ValueError(
+                    f"evaluate_comparison: pair {pair_id!r} の holdout ロック状態が repeats 間で"
+                    f"異なる (reports[0] comparison_present={ref_has_comparison} != "
+                    f"reports[{idx}] comparison_present={cur_has_comparison}); registry の "
+                    "evidence_thresholds.status が実行間で変化した可能性 (fail-closed)"
+                )
+            if not ref_has_comparison:
+                # holdout ロック済みペア同士 — axes/hash が存在しないため比較不要。
+                continue
             ref_comp = ref_pair["comparison"]
             cur_comp = cur_pair["comparison"]
             ref_sig = (
@@ -358,6 +432,63 @@ def _check_repeats_consistency(reports: List[Dict[str, Any]]) -> None:
                     f"sequence_sha256/axes 不一致 (reports[0]={ref_sig!r} != "
                     f"reports[{idx}]={cur_sig!r}); 軌跡レベル決定論が崩れている (fail-closed)"
                 )
+
+
+def _validate_registry_pins(
+    reports: List[Dict[str, Any]],
+    *,
+    current_m3_sha256: str,
+    current_m1_sha256: str,
+) -> None:
+    """report 間 + 現在ロードした registry との sha256 pin 整合を検証する (fail-closed)。
+
+    (a) report に m3_registry_sha256 が欠落、(b) report 間で不一致、(c) 現在
+    ロードした registry の sha256 と不一致 — のいずれかを検出したら拒否する。
+    m1_registry_sha256 は「記録されていれば同様に」検査する（1 件でも記録が
+    あれば全件で欠落なく一致 + 現在ロードした m1 registry と一致を要求する）。
+    """
+    for idx, report in enumerate(reports):
+        m3_sha = report.get("m3_registry_sha256")
+        if not m3_sha:
+            raise ValueError(
+                f"evaluate_comparison: reports[{idx}] に m3_registry_sha256 が記録されていない "
+                "(fail-closed)"
+            )
+    reference_m3_sha = reports[0]["m3_registry_sha256"]
+    for idx, report in enumerate(reports[1:], start=1):
+        m3_sha = report["m3_registry_sha256"]
+        if m3_sha != reference_m3_sha:
+            raise ValueError(
+                f"evaluate_comparison: reports[{idx}] の m3_registry_sha256={m3_sha!r} が "
+                f"reports[0]={reference_m3_sha!r} と不一致 (fail-closed)"
+            )
+    if reference_m3_sha != current_m3_sha256:
+        raise ValueError(
+            f"evaluate_comparison: reports の m3_registry_sha256={reference_m3_sha!r} が現在"
+            f"ロードした registry の sha256={current_m3_sha256!r} と不一致 (fail-closed)"
+        )
+
+    m1_shas = [report.get("m1_registry_sha256") for report in reports]
+    if any(m1_shas):
+        for idx, sha in enumerate(m1_shas):
+            if not sha:
+                raise ValueError(
+                    f"evaluate_comparison: reports[{idx}] に m1_registry_sha256 が記録されて"
+                    "いない (fail-closed; 他の report は記録している)"
+                )
+        reference_m1_sha = m1_shas[0]
+        for idx, sha in enumerate(m1_shas[1:], start=1):
+            if sha != reference_m1_sha:
+                raise ValueError(
+                    f"evaluate_comparison: reports[{idx}] の m1_registry_sha256={sha!r} が "
+                    f"reports[0]={reference_m1_sha!r} と不一致 (fail-closed)"
+                )
+        if reference_m1_sha != current_m1_sha256:
+            raise ValueError(
+                f"evaluate_comparison: reports の m1_registry_sha256={reference_m1_sha!r} が"
+                f"現在ロードした m1 registry の sha256={current_m1_sha256!r} と不一致 "
+                "(fail-closed)"
+            )
 
 
 def _holdout_pair_ids(pairs: Dict[str, Dict[str, Any]]) -> List[str]:
@@ -446,16 +577,22 @@ def _coverage_floor_candidate(pairs: Dict[str, Dict[str, Any]]) -> Dict[str, Any
 
 
 def evaluate_comparison(
-    reports: List[Dict[str, Any]], *, registry_path: Path = M3_REGISTRY_PATH
+    reports: List[Dict[str, Any]],
+    *,
+    registry_path: Path = M3_REGISTRY_PATH,
+    m1_registry_path: Path = M1_REGISTRY_PATH,
 ) -> Dict[str, Any]:
     """n>=1 の run report から校正 verdict（マージン表 + holdout ロック）を導出する。
 
     処理順（M3 実装 memo「## M3d」節）:
-    1. repeats（sequence hash / axes）の bit 一致検証
-    2. route_runner_injected な report があれば calibration verdict 発行を拒否
-    3. tuning split のみで軸別マージン表を算出（`separation_margin` 閾値）
-    4. holdout は `evidence_thresholds.status == "frozen"` になるまで開かない
-    5. tuning positive pair の被覆分布から coverage floor 候補を emit
+    1. registry sha256 pin の整合検証（report 間 + 現在ロードした registry）
+    2. repeats（sequence hash / axes）の bit 一致検証
+    3. route_runner_injected な report があれば calibration verdict 発行を拒否
+    4. repeats が n>=2 でなければ calibration verdict 発行を拒否（n=1 は「決定論
+       repeats 未検証」であり校正証拠にしない）
+    5. tuning split のみで軸別マージン表を算出（`separation_margin` 閾値）
+    6. holdout は `evidence_thresholds.status == "frozen"` になるまで開かない
+    7. tuning positive pair の被覆分布から coverage floor 候補を emit
     """
     if not reports:
         raise ValueError("evaluate_comparison: reports が空 (fail-closed)")
@@ -467,22 +604,37 @@ def evaluate_comparison(
                 f"未知; 期待値は {_EXPECTED_RUN_SCHEMA!r} (fail-closed)"
             )
 
+    config, m3_registry_sha256 = load_m3_registry(registry_path)
+    _, m1_registry_sha256 = _load_m1_registry(m1_registry_path)
+    _validate_registry_pins(
+        reports,
+        current_m3_sha256=m3_registry_sha256,
+        current_m1_sha256=m1_registry_sha256,
+    )
+
     _check_repeats_consistency(reports)
 
-    config, m3_registry_sha256 = load_m3_registry(registry_path)
     reference_pairs = reports[0]["pairs"]
 
     route_runner_injected_any = any(bool(r.get("route_runner_injected")) for r in reports)
+    repeats_verified = len(reports) >= 2
 
     verdict: Dict[str, Any] = {
         "schema_version": "m3-comparison-verdict/0.1",
         "recorded_utc": _utc_now(),
         "m3_registry_sha256": m3_registry_sha256,
         "repeats_count": len(reports),
-        "repeats_consistent": True,
+        "repeats_verified": repeats_verified,
         "route_runner_injected": route_runner_injected_any,
         "evidence_thresholds_status": config.evidence_thresholds.status,
     }
+    if repeats_verified:
+        # `_check_repeats_consistency` が食い違いを検知したら既に例外で fail
+        # しているため、ここに到達した時点で bit 一致は確認済み。
+        verdict["repeats_consistent"] = True
+    else:
+        # n=1 は「決定論 repeats」を測っていない——true と書かない(正直な表現)。
+        verdict["repeats_consistent"] = False
 
     if route_runner_injected_any:
         # フェイク抽出器の出力は「実測」ではない——他の全チェックが通っても
@@ -493,6 +645,13 @@ def evaluate_comparison(
             "1 件以上の report が route_runner 注入で作られている; フェイク抽出器の "
             "出力を calibration 証拠として publish しない (fail-closed)"
         )
+        return verdict
+
+    if not repeats_verified:
+        # repeats n>=2 が事前登録の要求（設計 §6.2「repeats n≥2 + 系列 hash pin」）。
+        # n=1 ではマージン表・凍結提案・coverage floor 候補を一切 emit しない。
+        verdict["calibration_verdict_status"] = "rejected_insufficient_repeats"
+        verdict["reason"] = f"insufficient_repeats(n={len(reports)}, required>=2)"
         return verdict
 
     holdout_locked = config.evidence_thresholds.status != "frozen"
@@ -528,7 +687,11 @@ def main() -> int:
     parser.add_argument(
         "--route",
         default="pyin_direct",
-        help="既定 route_runner が使う clear_lead 経路名（既定: pyin_direct）",
+        help=(
+            "既定 route_runner が使う clear_lead 経路名（既定: pyin_direct）。"
+            "実測 run（--pairs 経由・route_runner 非注入）は crepe 系経路限定"
+            "（例: crepe_direct）。melodia 系経路は常に拒否"
+        ),
     )
     parser.add_argument("--registry", type=Path, default=M3_REGISTRY_PATH)
     parser.add_argument("--m1-registry", type=Path, default=M1_REGISTRY_PATH)
@@ -553,7 +716,9 @@ def main() -> int:
                 "入力を verdict で上書きしない (fail-closed)"
             )
         reports = [_load_report(p) for p in args.evaluate]
-        verdict = evaluate_comparison(reports, registry_path=args.registry)
+        verdict = evaluate_comparison(
+            reports, registry_path=args.registry, m1_registry_path=args.m1_registry
+        )
         _atomic_write_text(args.out, json.dumps(verdict, indent=2, sort_keys=True))
         print(f"wrote verdict to {args.out}")
         print(f"  holdout_locked_until_frozen: {verdict.get('holdout_locked_until_frozen')}")
@@ -567,10 +732,13 @@ def main() -> int:
         Path(args.registry).resolve(),
         Path(args.m1_registry).resolve(),
     }
+    # manifest が指す音声入力（audio_a/audio_b）も protected-path に含める——
+    # --out がそのいずれかと一致したら書き込み前に fail する。
+    protected |= _manifest_audio_paths(args.pairs)
     if Path(args.out).resolve() in protected:
         raise SystemExit(
-            f"--out {args.out} は入力（pairs manifest / registry）と同じパスを指している; "
-            "これらを run report で上書きしない (fail-closed)"
+            f"--out {args.out} は入力（pairs manifest / registry / manifest の音声入力）と "
+            "同じパスを指している; これらを run report で上書きしない (fail-closed)"
         )
     result = run_comparison(
         manifest_path=args.pairs,

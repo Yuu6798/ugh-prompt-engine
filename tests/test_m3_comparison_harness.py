@@ -135,8 +135,11 @@ def test_run_then_evaluate_mechanism(tmp_path: Path):
 
     verdict = harness.evaluate_comparison([report])
     assert verdict["repeats_count"] == 1
-    assert verdict["repeats_consistent"] is True
-    # フェイク runner で作った report は calibration verdict を発行しない。
+    # n=1 は決定論 repeats 未検証 — true と書かない(正直な表現)。
+    assert verdict["repeats_verified"] is False
+    assert verdict["repeats_consistent"] is False
+    # フェイク runner で作った report は calibration verdict を発行しない
+    # (route_runner_injected の拒否が insufficient_repeats より優先される)。
     assert verdict["calibration_verdict_status"] == "rejected_route_runner_injected"
 
 
@@ -271,25 +274,51 @@ def test_holdout_locked_until_frozen(tmp_path: Path):
 
 
 def test_evaluate_comparison_records_holdout_lock_when_not_route_runner_injected(tmp_path: Path):
-    """calibration verdict が発行されるケース(route_runner 非注入相当)での holdout ロック記録。
+    """calibration verdict が発行されるケース(route_runner 非注入相当・repeats n=2)での
+    holdout ロック記録。
 
     `evaluate_comparison` は report 自身の `route_runner_injected` フラグだけを見て
     拒否判定するため、フラグを手動で False に落とした report（値の出所を偽装しない
-    範囲でのメカニズムテスト）で holdout ロックの記録を確認する。
+    範囲でのメカニズムテスト）を 2 本（repeats n>=2 要件を満たす）用意し、holdout
+    ロックの記録を確認する。
     """
     manifest_path = tmp_path / "pairs.yaml"
     _write_manifest(manifest_path, _default_pairs())
     runner = _fake_route_runner(_notes_by_path())
-    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
-    report_for_verdict = copy.deepcopy(report)
-    report_for_verdict["route_runner_injected"] = False
+    reports_for_verdict = []
+    for _ in range(2):
+        report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+        report["route_runner_injected"] = False
+        reports_for_verdict.append(report)
 
-    verdict = harness.evaluate_comparison([report_for_verdict])
+    verdict = harness.evaluate_comparison(reports_for_verdict)
+    assert verdict["repeats_verified"] is True
+    assert verdict["repeats_consistent"] is True
     assert verdict["holdout_locked_until_frozen"] is True
     assert verdict["holdout_pair_ids_skipped"] == ["p_pos_holdout"]
     assert "calibration_verdict_status" not in verdict
     assert "margin_table" in verdict
     assert "coverage_floor_candidate" in verdict
+
+
+def test_evaluate_rejects_single_report_for_calibration_verdict(tmp_path: Path):
+    """repeats n>=2 の事前登録要求（設計 §6.2）: n=1 は校正証拠として発行しない。"""
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs())
+    runner = _fake_route_runner(_notes_by_path())
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    report["route_runner_injected"] = False  # 「実測」相当だが repeats が 1 本しかない。
+
+    verdict = harness.evaluate_comparison([report])
+
+    assert verdict["repeats_count"] == 1
+    assert verdict["repeats_verified"] is False
+    assert verdict["repeats_consistent"] is False
+    assert verdict["calibration_verdict_status"] == "rejected_insufficient_repeats"
+    assert verdict["reason"] == "insufficient_repeats(n=1, required>=2)"
+    assert "margin_table" not in verdict
+    assert "freeze_proposal" not in verdict
+    assert "coverage_floor_candidate" not in verdict
 
 
 # --------------------------------------------------------------------------- #
@@ -402,3 +431,256 @@ def test_manifest_rejects_invalid_kind():
     }
     with pytest.raises(ValueError, match="invalid kind"):
         harness._validate_manifest(manifest)
+
+
+# --------------------------------------------------------------------------- #
+# --out の protected-path（manifest が指す音声入力）
+# --------------------------------------------------------------------------- #
+def test_out_cannot_overwrite_manifest_audio_input(tmp_path: Path, monkeypatch):
+    audio_a = tmp_path / "a.wav"
+    audio_a.write_bytes(b"fake-audio-a")
+    audio_b = tmp_path / "b.wav"
+    audio_b.write_bytes(b"fake-audio-b")
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(
+        manifest_path,
+        [
+            {
+                "pair_id": "p1",
+                "kind": "positive_transform",
+                "split": "tuning",
+                "audio_a": str(audio_a),
+                "audio_b": str(audio_b),
+                "expected": "same",
+            }
+        ],
+    )
+
+    argv = [
+        "run_melody_comparison.py",
+        "--pairs",
+        str(manifest_path),
+        "--out",
+        str(audio_a),
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit, match="fail-closed"):
+        harness.main()
+
+
+def test_out_cannot_overwrite_manifest_audio_b_input(tmp_path: Path, monkeypatch):
+    audio_a = tmp_path / "a.wav"
+    audio_a.write_bytes(b"fake-audio-a")
+    audio_b = tmp_path / "b.wav"
+    audio_b.write_bytes(b"fake-audio-b")
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(
+        manifest_path,
+        [
+            {
+                "pair_id": "p1",
+                "kind": "positive_transform",
+                "split": "tuning",
+                "audio_a": str(audio_a),
+                "audio_b": str(audio_b),
+                "expected": "same",
+            }
+        ],
+    )
+
+    argv = [
+        "run_melody_comparison.py",
+        "--pairs",
+        str(manifest_path),
+        "--out",
+        str(audio_b),
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit, match="fail-closed"):
+        harness.main()
+
+
+# --------------------------------------------------------------------------- #
+# holdout を run 時点で開かない
+# --------------------------------------------------------------------------- #
+def test_holdout_pair_not_opened_at_run_time_when_uncalibrated(tmp_path: Path):
+    """既定 fixture registry(status=uncalibrated)では holdout pair の音声を run
+    phase で一切読まず、report にも axes/hash を書かない。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs())
+    base_runner = _fake_route_runner(_notes_by_path())
+    calls: List[str] = []
+
+    def _tracking_runner(audio_path: str):
+        calls.append(audio_path)
+        return base_runner(audio_path)
+
+    mapping = yaml.safe_load(M3_REGISTRY_PATH.read_text(encoding="utf-8"))
+    assert mapping["evidence_thresholds"]["status"] == "uncalibrated"
+
+    report = harness.run_comparison(manifest_path=manifest_path, route_runner=_tracking_runner)
+
+    # holdout pair (p_pos_holdout) の音声は一度も runner に渡されていない。
+    assert calls == ["song_a", "song_a_transposed", "song_a", "song_b"]
+
+    holdout_row = report["pairs"]["p_pos_holdout"]
+    assert holdout_row == {"split": "holdout", "status": "holdout_locked_until_frozen"}
+    assert "comparison" not in holdout_row
+    assert "audio_a" not in holdout_row
+    assert "audio_b" not in holdout_row
+
+    # tuning pair は通常通り比較済み。
+    assert "comparison" in report["pairs"]["p_pos_tuning"]
+
+
+def test_holdout_pair_compared_when_registry_frozen(tmp_path: Path):
+    """evidence_thresholds.status が frozen なら holdout pair も通常通り比較される。"""
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs())
+    frozen_registry = tmp_path / "frozen_registry.yaml"
+    frozen_text = M3_REGISTRY_PATH.read_text(encoding="utf-8").replace(
+        "status: uncalibrated", "status: frozen", 1
+    )
+    assert frozen_text != M3_REGISTRY_PATH.read_text(encoding="utf-8")  # replace が効いたこと確認
+    frozen_registry.write_text(frozen_text, encoding="utf-8")
+    runner = _fake_route_runner(_notes_by_path())
+
+    report = harness.run_comparison(
+        manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
+    )
+
+    holdout_row = report["pairs"]["p_pos_holdout"]
+    assert holdout_row["split"] == "holdout"
+    assert "comparison" in holdout_row
+    assert holdout_row["comparison"]["axes"]["interval"] == pytest.approx(1.0)
+
+
+def test_check_repeats_consistency_rejects_mixed_holdout_lock_state(tmp_path: Path):
+    """同一 manifest でも registry の status が変われば holdout ロック状態が変わる
+    — repeats 間でロック状態が食い違ったら fail-closed で拒否する。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs())
+    runner = _fake_route_runner(_notes_by_path())
+
+    report_locked = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+
+    frozen_registry = tmp_path / "frozen_registry.yaml"
+    frozen_text = M3_REGISTRY_PATH.read_text(encoding="utf-8").replace(
+        "status: uncalibrated", "status: frozen", 1
+    )
+    frozen_registry.write_text(frozen_text, encoding="utf-8")
+    report_unlocked = harness.run_comparison(
+        manifest_path=manifest_path, route_runner=runner, registry_path=frozen_registry
+    )
+
+    with pytest.raises(ValueError, match="holdout ロック状態"):
+        harness._check_repeats_consistency([report_locked, report_unlocked])
+
+
+# --------------------------------------------------------------------------- #
+# registry pin（sha256）の整合検証
+# --------------------------------------------------------------------------- #
+def test_evaluate_rejects_missing_m3_registry_sha(tmp_path: Path):
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs())
+    runner = _fake_route_runner(_notes_by_path())
+    report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    report2 = copy.deepcopy(report1)
+    del report2["m3_registry_sha256"]
+
+    with pytest.raises(ValueError, match="m3_registry_sha256 が記録されていない"):
+        harness.evaluate_comparison([report1, report2])
+
+
+def test_evaluate_rejects_m3_registry_sha_mismatch_across_reports(tmp_path: Path):
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs())
+    runner = _fake_route_runner(_notes_by_path())
+    report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    report2 = copy.deepcopy(report1)
+    report2["m3_registry_sha256"] = "0" * 64
+
+    with pytest.raises(ValueError, match=r"reports\[1\] の m3_registry_sha256"):
+        harness.evaluate_comparison([report1, report2])
+
+
+def test_evaluate_rejects_m3_registry_sha_mismatch_with_current_registry(tmp_path: Path):
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs())
+    runner = _fake_route_runner(_notes_by_path())
+    report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    report1["m3_registry_sha256"] = "0" * 64
+    report2 = copy.deepcopy(report1)  # report 間は一致させ、現在ロード registry との不一致のみ踏む。
+
+    with pytest.raises(ValueError, match="現在ロードした registry"):
+        harness.evaluate_comparison([report1, report2])
+
+
+def test_evaluate_rejects_missing_m1_registry_sha_when_other_report_has_it(tmp_path: Path):
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs())
+    runner = _fake_route_runner(_notes_by_path())
+    report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    report2 = copy.deepcopy(report1)
+    del report2["m1_registry_sha256"]
+
+    with pytest.raises(ValueError, match="m1_registry_sha256 が記録されて"):
+        harness.evaluate_comparison([report1, report2])
+
+
+def test_evaluate_rejects_m1_registry_sha_mismatch_with_current_registry(tmp_path: Path):
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs())
+    runner = _fake_route_runner(_notes_by_path())
+    report1 = harness.run_comparison(manifest_path=manifest_path, route_runner=runner)
+    report1["m1_registry_sha256"] = "0" * 64
+    report2 = copy.deepcopy(report1)
+
+    with pytest.raises(ValueError, match="m1 registry"):
+        harness.evaluate_comparison([report1, report2])
+
+
+# --------------------------------------------------------------------------- #
+# 校正 run の経路制限（crepe 系限定 / melodia 常時禁止）
+# --------------------------------------------------------------------------- #
+def test_real_run_rejects_non_crepe_route(tmp_path: Path):
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs())
+
+    with pytest.raises(ValueError, match="crepe 系経路"):
+        harness.run_comparison(manifest_path=manifest_path, route_name="pyin_direct")
+
+
+def test_melodia_route_rejected_even_when_route_runner_injected(tmp_path: Path):
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs())
+    runner = _fake_route_runner(_notes_by_path())
+
+    with pytest.raises(ValueError, match="melodia"):
+        harness.run_comparison(
+            manifest_path=manifest_path, route_name="melodia_direct", route_runner=runner
+        )
+
+
+def test_melodia_route_rejected_for_real_run(tmp_path: Path):
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs())
+
+    with pytest.raises(ValueError, match="melodia"):
+        harness.run_comparison(manifest_path=manifest_path, route_name="melodia_direct")
+
+
+def test_injected_run_allows_non_crepe_route(tmp_path: Path):
+    """route_runner 注入時(テスト)は crepe 限定を課さない — pyin_direct のような
+    既存デフォルトが引き続き動くことを確認する。
+    """
+    manifest_path = tmp_path / "pairs.yaml"
+    _write_manifest(manifest_path, _default_pairs())
+    runner = _fake_route_runner(_notes_by_path())
+
+    report = harness.run_comparison(
+        manifest_path=manifest_path, route_name="pyin_direct", route_runner=runner
+    )
+    assert report["route"] == "pyin_direct"
