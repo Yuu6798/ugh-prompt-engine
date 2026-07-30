@@ -106,6 +106,7 @@ def test_atomic_publish_bundle_writes_all_files(tmp_path: Path) -> None:
     result = atomic_publish_bundle(
         output_dir,
         {"a.json": b"a-content", "b.json": b"b-content"},
+        protected_inputs=(),
     )
 
     assert result == output_dir
@@ -119,7 +120,9 @@ def test_atomic_publish_bundle_overwrites_existing_files(tmp_path: Path) -> None
     (output_dir / "a.json").write_bytes(b"old-a")
     (output_dir / "b.json").write_bytes(b"old-b")
 
-    atomic_publish_bundle(output_dir, {"a.json": b"new-a", "b.json": b"new-b"})
+    atomic_publish_bundle(
+        output_dir, {"a.json": b"new-a", "b.json": b"new-b"}, protected_inputs=()
+    )
 
     assert (output_dir / "a.json").read_bytes() == b"new-a"
     assert (output_dir / "b.json").read_bytes() == b"new-b"
@@ -134,12 +137,23 @@ def test_atomic_publish_bundle_removes_stale_filenames_not_in_contents(tmp_path:
     atomic_publish_bundle(
         output_dir,
         {"take-01.mp3": b"new-mp3", "take.json": b"new-provenance"},
+        protected_inputs=(),
         stale_filenames=("take-01.wav", "take-01.mp3"),
     )
 
     assert not (output_dir / "take-01.wav").exists()
     assert (output_dir / "take-01.mp3").read_bytes() == b"new-mp3"
     assert (output_dir / "take.json").read_bytes() == b"new-provenance"
+
+
+def test_atomic_publish_bundle_requires_protected_inputs_keyword(tmp_path: Path) -> None:
+    """`protected_inputs` は既定値なしの keyword-only 必須引数（Codex P2
+    review 指摘: 渡し忘れで衝突検出が黙って無効化されるのを fail-closed に
+    防ぐ）。省略すると呼び出し時点で `TypeError` になる。"""
+    output_dir = tmp_path / "bundle"
+
+    with pytest.raises(TypeError):
+        atomic_publish_bundle(output_dir, {"a.json": b"content"})  # type: ignore[call-arg]
 
 
 # --- atomic_publish_bundle: collision guard -----------------------------------
@@ -178,7 +192,7 @@ def test_atomic_publish_bundle_skips_collision_check_when_protected_inputs_empty
     output_dir.mkdir()
     (output_dir / "a.json").mkdir()
 
-    atomic_publish_bundle(output_dir, {"a.json": b"content"})
+    atomic_publish_bundle(output_dir, {"a.json": b"content"}, protected_inputs=())
 
     assert (output_dir / "a.json").is_file()
     assert (output_dir / "a.json").read_bytes() == b"content"
@@ -197,6 +211,7 @@ def test_atomic_publish_bundle_always_check_collision_rejects_existing_directory
         atomic_publish_bundle(
             output_dir,
             {"a.json": b"content"},
+            protected_inputs=(),
             always_check_collision=True,
         )
 
@@ -291,6 +306,7 @@ def test_atomic_publish_bundle_catch_oserror_only_lets_base_exception_propagate_
         atomic_publish_bundle(
             output_dir,
             {"a.json": b"new-a", "b.json": b"new-b"},
+            protected_inputs=(),
             catch=OSError,
         )
 

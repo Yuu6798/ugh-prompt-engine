@@ -103,7 +103,7 @@ def atomic_publish_bundle(
     output_dir: Path,
     contents: Dict[str, bytes],
     *,
-    protected_inputs: Iterable[Path] = (),
+    protected_inputs: Iterable[Path],
     stale_filenames: Tuple[str, ...] = (),
     always_check_collision: bool = False,
     catch: Type[BaseException] = BaseException,
@@ -111,6 +111,11 @@ def atomic_publish_bundle(
 ) -> Path:
     """複数ファイルを「全部揃って初めて意味を持つ 1 組」として atomic publish
     する（snapshot + rollback 付き）。`output_dir` を返す。
+
+    `protected_inputs` は keyword-only の必須引数（既定値なし）。省略すると
+    衝突検出が黙って無効化されてしまう fail-closed 契約のため、呼び出し側は
+    常に明示的に渡す必要がある — 意図的に検査しない場合も空タプル `()` を
+    明示的に渡すこと。
 
     衝突検査（`protected_inputs` があれば、または `always_check_collision=True`
     のとき）: `contents`（+ `stale_filenames` のうち `contents` に含まれない
