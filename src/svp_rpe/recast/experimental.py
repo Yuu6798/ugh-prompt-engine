@@ -89,7 +89,11 @@ from svp_rpe.melody.observability import (
     MelodyObservation,
     ObservabilityThresholds,
 )
-from svp_rpe.melody.representation import M3ComparisonConfig, load_m3_registry
+from svp_rpe.melody.representation import (
+    M3ComparisonConfig,
+    _NoDupSafeLoader,
+    load_m3_registry,
+)
 from svp_rpe.melody.routing import MelodyRoute, select_routes
 from svp_rpe.recast.models import (
     CALIBRATION_BOUND_ROUTES,
@@ -442,8 +446,26 @@ def _load_m3_registry_with_gate(
     """`load_m3_registry` + G1 判定。戻り値は ``(config_or_none, sha256,
     reason_or_none)`` —— G1 不成立時は ``config`` に ``None``、``reason`` に
     ``"comparator_uncalibrated"`` を返す（sha256 は常に返す。短絡時も
-    provenance に registry sha256 を載せるため）。"""
-    config, sha256_hex = load_m3_registry(path)
+    provenance に registry sha256 を載せるため）。
+
+    R7-1 (Codex round7 P2 対応): `load_m3_registry`（`melody/representation.py`
+    ・凍結対象・本モジュールからは import のみ）は ``alignment`` 等の節が非
+    mapping（``null``・スカラー等）だと `M3ComparisonConfig.from_registry` 内部
+    の ``dict(mapping["alignment"])`` が `TypeError` を送出し、そのまま
+    呼び出し側（`evaluate_melody_experimental_anchor`）まで未捕捉で伝播して
+    CLI ハンドラ（``except (..., RecastError, ...)``）を素通りし traceback 付き
+    で落ちていた。R3-4 の M1 側翻訳（`_load_m1_registry`）と同型で、ここも
+    `load_m3_registry` 呼び出しだけを try/except で包み、元の例外メッセージを
+    保持したまま actionable な `RecastError` へ翻訳する（melody/ 側の検証ロジック
+    を再実装せず、既にある例外を翻訳するだけ——知識の重複を避ける）。
+    """
+    try:
+        config, sha256_hex = load_m3_registry(path)
+    except (TypeError, ValueError, KeyError) as exc:
+        raise RecastError(
+            f"M3 comparison registry at {path} failed to load: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
     thresholds = config.evidence_thresholds
     if thresholds.status != "frozen" or not thresholds.axes:
         return None, sha256_hex, "comparator_uncalibrated"
@@ -553,7 +575,23 @@ def _load_m1_registry(path: "str | Path") -> Tuple[ObservabilityThresholds, str]
         raise RecastError(
             f"M1 registry at {path} could not be read: {type(exc).__name__}: {exc}"
         ) from exc
-    mapping = yaml.safe_load(data)
+    # R7-2 (Codex round7 P2 対応): 素の `yaml.safe_load` は重複 mapping キーを
+    # 「最後の値が勝つ」形で静かに受理してしまい、矛盾バイトが正当な sha256
+    # つきでゲート（`observation_gate` の閾値群）を変え得る——M3 側
+    # （`melody.representation.load_m3_registry` の `_NoDupSafeLoader`）・
+    # canonical M1 loader（`scripts/run_melody_observability.py`）は既に重複
+    # キーを拒否済みで、ここだけ緩いのは不整合だった。`melody.representation.
+    # _NoDupSafeLoader`（import のみ・重複実装禁止）へ差し替える——重複キー
+    # 検出時は `ValueError` を送出するため（`_no_dup_construct_mapping`）、
+    # 直下の R3-4 翻訳経路と同型の try/except でここでも actionable な
+    # `RecastError` へ翻訳する（元の YAML parse error/重複キー理由メッセージ
+    # を保持）。
+    try:
+        mapping = yaml.load(data, Loader=_NoDupSafeLoader)  # noqa: S506 (dup-key 拒否付き SafeLoader)
+    except (yaml.YAMLError, ValueError) as exc:
+        raise RecastError(
+            f"M1 registry at {path} failed to parse: {type(exc).__name__}: {exc}"
+        ) from exc
     if not isinstance(mapping, dict):
         raise RecastError(
             f"M1 registry at {path} must be a YAML mapping at the top level "

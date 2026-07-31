@@ -479,6 +479,79 @@ def test_uncalibrated_registry_is_not_observed_g1(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# R7-1 (Codex round7 P2 対応) — M3 loader 失敗の RecastError 翻訳
+# --------------------------------------------------------------------------- #
+def _broken_m3_registry_path(tmp_path: Path, *, alignment_value: Any, name: str) -> Path:
+    """``alignment`` 節を壊した m3_comparison_registry.yaml を生成する
+    （R7-1）。`M3ComparisonConfig.from_registry` 内部の
+    ``dict(mapping["alignment"])`` が非 mapping 値で `TypeError` を送出する
+    経路を再現する（他の節は `_frozen_m3_registry_path` と同じ有効な frozen
+    形にしておく——``alignment`` の破損だけを単離する）。"""
+    mapping = dict(_REGISTRY_BASE)
+    mapping["alignment"] = alignment_value
+    mapping["evidence_thresholds"] = {
+        "status": "frozen",
+        "axes": {axis: {"strong_min": 0.8, "none_max": 0.3} for axis in ("contour", "interval", "rhythm")},
+    }
+    path = tmp_path / name
+    path.write_text(yaml.safe_dump(mapping, sort_keys=False), encoding="utf-8")
+    return path
+
+
+def test_m3_registry_alignment_null_raises_recast_error(tmp_path: Path) -> None:
+    """R7-1: ``alignment: null`` は `M3ComparisonConfig.from_registry` 内部の
+    ``dict(mapping["alignment"])`` で `TypeError` を送出していた——旧実装は
+    `_load_m3_registry_with_gate` がこれをそのまま逃がし、CLI ハンドラ
+    （ValueError/RecastError 捕捉）を素通りして traceback していた。
+    actionable な `RecastError` に翻訳されることを確認する。"""
+    m3_path = _broken_m3_registry_path(
+        tmp_path, alignment_value=None, name="alignment_null_registry.yaml"
+    )
+    anchor = _anchor({"contour": "hard"})
+    with pytest.raises(RecastError, match="failed to load"):
+        evaluate_melody_experimental_anchor(
+            anchor=anchor,
+            melody_config=_melody_config(),
+            score=_score(),
+            m3_registry_path=m3_path,
+            m1_registry_path=REAL_M1_REGISTRY,
+        )
+
+
+def test_m3_registry_alignment_scalar_raises_recast_error(tmp_path: Path) -> None:
+    """R7-1: ``alignment: 1``（スカラー）も同様に `TypeError` → `RecastError`。"""
+    m3_path = _broken_m3_registry_path(
+        tmp_path, alignment_value=1, name="alignment_scalar_registry.yaml"
+    )
+    anchor = _anchor({"contour": "hard"})
+    with pytest.raises(RecastError, match="failed to load"):
+        evaluate_melody_experimental_anchor(
+            anchor=anchor,
+            melody_config=_melody_config(),
+            score=_score(),
+            m3_registry_path=m3_path,
+            m1_registry_path=REAL_M1_REGISTRY,
+        )
+
+
+def test_m3_registry_non_mapping_section_raises_recast_error(tmp_path: Path) -> None:
+    """R7-1: 節が非 mapping（リスト）でも同様に `TypeError` → `RecastError`
+    （``alignment`` に限らず「非 mapping 節」一般の経路を確認する）。"""
+    m3_path = _broken_m3_registry_path(
+        tmp_path, alignment_value=[1, 2, 3], name="alignment_list_registry.yaml"
+    )
+    anchor = _anchor({"contour": "hard"})
+    with pytest.raises(RecastError, match="failed to load"):
+        evaluate_melody_experimental_anchor(
+            anchor=anchor,
+            melody_config=_melody_config(),
+            score=_score(),
+            m3_registry_path=m3_path,
+            m1_registry_path=REAL_M1_REGISTRY,
+        )
+
+
+# --------------------------------------------------------------------------- #
 # R5-1 (Codex round5 P2 対応) — パス解決も G1 短絡に従わせる
 # --------------------------------------------------------------------------- #
 def test_g1_short_circuit_precedes_missing_m1_registry(tmp_path: Path) -> None:
@@ -847,6 +920,52 @@ def test_m1_registry_out_of_semantic_range_value_is_not_rejected_by_type_validat
     thresholds, sha256_hex = experimental_module._load_m1_registry(m1_path)
     assert thresholds.min_voiced_coverage == -1.0
     assert isinstance(sha256_hex, str) and len(sha256_hex) == 64
+
+
+# --------------------------------------------------------------------------- #
+# R7-2 (Codex round7 P2 対応) — M1 YAML の重複キー拒否
+# --------------------------------------------------------------------------- #
+def test_m1_registry_observation_gate_duplicate_key_raises_recast_error(
+    tmp_path: Path,
+) -> None:
+    """R7-2: 素の `yaml.safe_load` は重複 mapping キーを「最後の値が勝つ」形で
+    静かに受理してしまい、矛盾バイトが正当な sha256 つきでゲート
+    （``observation_gate`` の閾値群）を変え得ていた——M3 側
+    （`melody.representation._NoDupSafeLoader`・import のみ・重複実装禁止）を
+    使うようになったことで、``observation_gate`` 節内の重複閾値キーが
+    `RecastError` として拒否されることを確認する。"""
+    m3_path = _frozen_m3_registry_path(tmp_path)
+    m1_path = tmp_path / "duplicate_threshold_key_registry.yaml"
+    m1_path.write_text(
+        "observation_gate:\n"
+        "  min_voiced_coverage: 0.5\n"
+        "  min_voiced_coverage: 0.9\n"
+        "  min_note_count: 4\n"
+        "  min_phrase_count: 1\n"
+        "  min_confidence_mean: 0.5\n"
+        "  max_low_confidence_rate: 0.5\n"
+        "  max_octave_jump_rate: 0.5\n"
+        "  voiced_confidence_floor: 0.3\n"
+        "  low_confidence_floor: 0.1\n",
+        encoding="utf-8",
+    )
+    anchor = _anchor({"contour": "hard"})
+    with pytest.raises(RecastError, match="duplicate YAML mapping key"):
+        _evaluate_with_m1_registry(anchor, m3_path, m1_path)
+
+
+def test_m1_registry_top_level_duplicate_key_raises_recast_error(tmp_path: Path) -> None:
+    """R7-2: トップレベルで ``observation_gate`` 節そのものが重複していても
+    同様に拒否される（last-wins で先行節が静かに隠れる穴を弾く）。"""
+    m3_path = _frozen_m3_registry_path(tmp_path)
+    m1_path = tmp_path / "duplicate_top_level_key_registry.yaml"
+    gate_yaml = yaml.safe_dump(
+        {"observation_gate": _valid_observation_gate()}, sort_keys=False
+    )
+    m1_path.write_text(gate_yaml + gate_yaml, encoding="utf-8")
+    anchor = _anchor({"contour": "hard"})
+    with pytest.raises(RecastError, match="duplicate YAML mapping key"):
+        _evaluate_with_m1_registry(anchor, m3_path, m1_path)
 
 
 def test_band_out_of_validation_when_take_band_none(tmp_path: Path) -> None:
