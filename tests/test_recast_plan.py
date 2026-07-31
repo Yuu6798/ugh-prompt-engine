@@ -5,6 +5,7 @@ import hashlib
 import json
 import shutil
 from pathlib import Path
+from typing import Optional
 
 import pytest
 import yaml
@@ -25,6 +26,10 @@ from svp_rpe.recast.state import load_recast_state, record_state
 
 DEMO_PROJECT = Path("examples/recast/demo_project")
 EXPECTED_PLAN = DEMO_PROJECT / "expected" / "recast_plan_edm_suno.json"
+# R8-2 (Codex round8 P2 対応): 凍結済みの実 M1 registry（`tests/fixtures/
+# melody_bench/registry.yaml`）をコピーのみで再利用する（バイト不変・
+# tests/fixtures/melody_bench/*.yaml は変更禁止のためコピー元として読むだけ）。
+REAL_M1_REGISTRY = Path("tests/fixtures/melody_bench/registry.yaml")
 
 
 def _persist_state(
@@ -965,15 +970,22 @@ def test_compute_observation_digest_melody_confinement_violation_still_raises(
 # --- R1-5 (Codex round1 P2): melody resolved paths join protected-input set --
 
 
-def _add_melody_observation(project_path: Path, *, route: str = "crepe_direct") -> None:
+def _add_melody_observation(
+    project_path: Path, *, route: str = "crepe_direct", observation_enabled: bool = True
+) -> None:
     """demo_project の project.yaml に `observation.melody` を追加し、参照先
     レジストリのプレースホルダファイルを project_dir 直下へ用意する
     （`resolve_melody_observation_paths` は存在チェックのみ・内容は検証
-    しないため中身は任意バイトでよい）。"""
+    しないため中身は任意バイトでよい）。``observation_enabled``（既定 True。
+    R8-1・Codex round8 P2 対応）: demo_project の既定は `observation.enabled:
+    false` のため、protected-input 収集を検証するテストはここで明示的に
+    True へ上書きする必要がある——False にすると `observation.enabled: false`
+    の generated-only 運用（disabled 対称性ガードの対象）を再現する。"""
     project_dir = project_path.parent
     (project_dir / "m3_comparison_registry.yaml").write_bytes(b"m3-placeholder")
     (project_dir / "registry.yaml").write_bytes(b"m1-placeholder")
     project_data = yaml.safe_load(project_path.read_text(encoding="utf-8"))
+    project_data["observation"]["enabled"] = observation_enabled
     project_data["observation"]["melody"] = {
         "reference": "score",
         "comparison_registry": "m3_comparison_registry.yaml",
@@ -1031,15 +1043,23 @@ def test_build_recast_plan_protected_inputs_include_melody_registries(
 
 
 def _add_melody_observation_audio_reference(
-    project_path: Path, *, reference_audio: str, reference_band: str = "clear_lead"
+    project_path: Path,
+    *,
+    reference_audio: str,
+    reference_band: str = "clear_lead",
+    observation_enabled: bool = True,
 ) -> None:
     """demo_project に ``reference: audio`` の `observation.melody` を足す。
     `reference_audio` はあえて実ファイルを作らない呼び出しにも使えるよう、
-    存在有無は呼び出し側の判断に委ねる（M3/M1 registry は常に用意する）。"""
+    存在有無は呼び出し側の判断に委ねる（M3/M1 registry は常に用意する）。
+    ``observation_enabled``（既定 True。R8-1）: `_add_melody_observation` と
+    同じ理由——demo_project の既定 `observation.enabled: false` を検証用に
+    明示的へ上書きする seam。"""
     project_dir = project_path.parent
     (project_dir / "m3_comparison_registry.yaml").write_bytes(b"m3-placeholder")
     (project_dir / "registry.yaml").write_bytes(b"m1-placeholder")
     project_data = yaml.safe_load(project_path.read_text(encoding="utf-8"))
+    project_data["observation"]["enabled"] = observation_enabled
     project_data["observation"]["melody"] = {
         "reference": "audio",
         "reference_audio": reference_audio,
@@ -1109,11 +1129,120 @@ def test_build_recast_plan_protected_inputs_include_registries_despite_missing_r
     assert (loaded.project_dir / "registry.yaml").resolve() in resolved
 
 
+# --- R8-1 (Codex round8 P2 対応): observation.enabled=False では melody 保護 --
+# --- パスも収集しない（R3-2/R4-1 の disabled 対称性の完成） ------------------
+
+
+def test_collect_protected_input_paths_skips_melody_when_observation_disabled(
+    tmp_path: Path,
+) -> None:
+    """`observation.enabled: false` では `collect_protected_input_paths`
+    （`recast/run_paths.py`）が melody の resolved パスを protected_inputs へ
+    編入しない——観測無効時 melody locator は入力として読まれないため保護
+    不要（従来は enabled を見ずに常に編入していた）。"""
+    project_path = _copy_demo_project(tmp_path)
+    _add_melody_observation(project_path, observation_enabled=False)
+    loaded = load_recast_project(project_path)
+
+    paths = collect_protected_input_paths(loaded, "edm", "suno")
+
+    assert not any(p.name in ("m3_comparison_registry.yaml", "registry.yaml") for p in paths)
+
+
+def test_build_recast_plan_protected_inputs_skip_melody_when_observation_disabled(
+    tmp_path: Path,
+) -> None:
+    """R8-1: `build_recast_plan_artifacts`（`recast/plan.py`）側の鏡像ブロック
+    でも同じガードが効く——plan 由来の `protected_inputs` にも melody の
+    resolved パスが編入されない。"""
+    project_path = _copy_demo_project(tmp_path)
+    _add_melody_observation(project_path, observation_enabled=False)
+    loaded = load_recast_project(project_path)
+
+    result = build_recast_plan(loaded, variant="edm", backend="suno")
+
+    resolved = {p.resolve() for p in result.protected_inputs}
+    assert (loaded.project_dir / "m3_comparison_registry.yaml").resolve() not in resolved
+    assert (loaded.project_dir / "registry.yaml").resolve() not in resolved
+
+
+def _add_melody_observation_aliasing_package_output(
+    project_path: Path, *, observation_enabled: bool
+) -> None:
+    """`observation.melody.comparison_registry` を「これから公開される
+    package 出力ファイル」（`builds/packages/edm@suno/performance_package.
+    json`、demo project の `project.builds_root: "builds"` 前提）へ alias
+    させる——dormant な melody locator が生成物パスを指す設定ミスの再現
+    （R8-1 が修正する具体的シナリオ）。参照先ファイルは publish 前には
+    存在しないが、`resolve_melody_observation_paths_for_protection` は
+    封じ込め検証のみ（`require_exists=False`）で解決するため実在は不要。"""
+    project_data = yaml.safe_load(project_path.read_text(encoding="utf-8"))
+    project_data["observation"]["enabled"] = observation_enabled
+    project_data["observation"]["melody"] = {
+        "reference": "score",
+        "comparison_registry": "builds/packages/edm@suno/performance_package.json",
+        "m1_registry": "builds/packages/edm@suno/performance_package.json",
+        "route": "crepe_direct",
+    }
+    project_path.write_text(yaml.safe_dump(project_data, sort_keys=False), encoding="utf-8")
+
+
+def test_disabled_observation_allows_publish_when_melody_locator_aliases_package_output(
+    tmp_path: Path,
+) -> None:
+    """R8-1: `observation.enabled: false` なら、melody locator が publish 先
+    package 出力（`performance_package.json`）を alias していても衝突ガードの
+    対象に入らないため、publish が拒否されず成功する——観測を一切行わない
+    project でも無関係な衝突で生成がブロックされていた不具合の再現終了確認。"""
+    project_path = _copy_demo_project(tmp_path)
+    _add_melody_observation_aliasing_package_output(project_path, observation_enabled=False)
+    loaded = load_recast_project(project_path)
+    package_dir = loaded.builds_root / "packages" / "edm@suno"
+
+    artifacts = build_recast_plan_artifacts(loaded, variant="edm", backend="suno", publish=True)
+
+    assert artifacts.result.plan.state_reached == "verified"
+    assert (package_dir / "performance_package.json").exists()
+    assert (package_dir / "compilation_report.json").exists()
+
+
+def test_enabled_observation_still_rejects_publish_when_melody_locator_aliases_package_output(
+    tmp_path: Path,
+) -> None:
+    """対称確認: `observation.enabled: true` では同じ alias 設定が従来どおり
+    衝突として publish を拒否する（R8-1 が disabled 側だけを緩め、enabled
+    側の保護を弱めていないことの回帰確認）。package 公開サイトの衝突検出
+    （`_atomic_publish_text_bundle` が送出する `ValueError`）はここでは
+    `except ValueError` により `blocked_capability` へ変換される
+    （raise を伝播させる `_preflight_reject_plan_state_output_collision` の
+    経路とは別サイト——`build_recast_plan_artifacts` の package 公開 try/except
+    参照）ため、raise ではなく blocked 状態と reasons への反映で確認する。"""
+    project_path = _copy_demo_project(tmp_path)
+    _add_melody_observation_aliasing_package_output(project_path, observation_enabled=True)
+    loaded = load_recast_project(project_path)
+    package_dir = loaded.builds_root / "packages" / "edm@suno"
+
+    artifacts = build_recast_plan_artifacts(loaded, variant="edm", backend="suno", publish=True)
+
+    assert artifacts.result.plan.state_reached == "blocked_capability"
+    assert artifacts.result.plan.blocked is not None
+    assert any(
+        "collides with a protected input path" in reason
+        for reason in artifacts.result.plan.blocked.reasons
+    )
+    assert not (package_dir / "performance_package.json").exists()
+    assert not (package_dir / "compilation_report.json").exists()
+
+
 # --- R3-3 (Codex round3 P2): melody 診断は package 公開前に完了させる ---------
 
 
 def _add_melody_axis_policy_project(
-    tmp_path: Path, *, m3_registry_bytes: bytes, observation_enabled: bool = True
+    tmp_path: Path,
+    *,
+    m3_registry_bytes: bytes,
+    observation_enabled: bool = True,
+    m1_registry_bytes: Optional[bytes] = None,
 ) -> Path:
     """demo_project (variant edm/backend suno) に axis_policy 付き melody
     anchor + `observation.melody` 配線を足した作業コピーを組み立てる
@@ -1124,12 +1253,23 @@ def _add_melody_axis_policy_project(
     起動させる）。``m3_registry_bytes`` は呼び出し側が用意する
     `m3_comparison_registry.yaml` の生 bytes（破損/欠落の再現に使う）。
     ``observation_enabled``（既定 True・R4-1）: False にすると
-    `observation.enabled: false` の generated-only 運用を再現する。"""
+    `observation.enabled: false` の generated-only 運用を再現する。
+    ``m1_registry_bytes``（既定 None・R8-2・Codex round8 P2 対応）: 省略時は
+    `REAL_M1_REGISTRY`（凍結済みの実 M1 registry）のバイトをそのまま使う
+    ——旧来の `b"m1-placeholder"` は `observation_gate` を持たない不正な
+    registry であり、G1 通過後に `_load_m1_registry` を呼ぶ R8-2 の下では
+    常に `m1_registry_unavailable` になってしまうため、「M1 は正常」を前提と
+    する既存の "ok" 系テストが壊れないよう既定値を正規の registry へ差し替える
+    （M1 の欠落/破損を再現したい呼び出し側は明示的に ``m1_registry_bytes`` を
+    渡す）。"""
     project_path = _copy_demo_project(tmp_path)
     project_dir = project_path.parent
 
     (project_dir / "m3_comparison_registry.yaml").write_bytes(m3_registry_bytes)
-    (project_dir / "registry.yaml").write_bytes(b"m1-placeholder")
+    if m1_registry_bytes is None:
+        shutil.copy(REAL_M1_REGISTRY, project_dir / "registry.yaml")
+    else:
+        (project_dir / "registry.yaml").write_bytes(m1_registry_bytes)
 
     arrangement_path = project_dir / "arrangements" / "edm.yaml"
     arrangement_data = yaml.safe_load(arrangement_path.read_text(encoding="utf-8"))
@@ -1178,11 +1318,11 @@ def test_corrupted_melody_registry_does_not_publish_package(tmp_path: Path) -> N
     assert not (package_dir / "compilation_report.json").exists()
 
 
-def test_uncorrupted_melody_registry_still_publishes_package(tmp_path: Path) -> None:
-    """回帰確認: axis_policy 付き melody anchor があっても registry が校正済み
-    かつ正常なら、従来どおり package/report が公開される（R3-3 対応が
-    正常系の publish を妨げないことの確認）。"""
-    valid_m3_bytes = yaml.safe_dump(
+def _valid_calibrated_m3_registry_bytes() -> bytes:
+    """校正済み（``evidence_thresholds.status == "frozen"``）な最小 M3
+    comparison registry の生 bytes を組み立てる（G1 を通過させる目的専用の
+    テスト fixture・M3 凍結スキーマ実体とは無関係）。"""
+    return yaml.safe_dump(
         {
             "schema": "m3-comparison/0.1",
             "registered_utc": "2026-07-31T00:00:00Z",
@@ -1214,7 +1354,16 @@ def test_uncorrupted_melody_registry_still_publishes_package(tmp_path: Path) -> 
             "separation_margin": {"min_same_minus_cross_margin": 0.15},
         }
     ).encode("utf-8")
-    project_path = _add_melody_axis_policy_project(tmp_path, m3_registry_bytes=valid_m3_bytes)
+
+
+def test_uncorrupted_melody_registry_still_publishes_package(tmp_path: Path) -> None:
+    """回帰確認: axis_policy 付き melody anchor があっても registry が校正済み
+    かつ正常なら、従来どおり package/report が公開される（R3-3 対応が
+    正常系の publish を妨げないことの確認）。M1 registry も正常（既定の
+    `REAL_M1_REGISTRY`）なので R8-2 の可用性診断も "ok" のまま。"""
+    project_path = _add_melody_axis_policy_project(
+        tmp_path, m3_registry_bytes=_valid_calibrated_m3_registry_bytes()
+    )
     loaded = load_recast_project(project_path)
     package_dir = loaded.builds_root / "packages" / "edm@suno"
 

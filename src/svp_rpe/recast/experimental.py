@@ -1348,11 +1348,26 @@ def melody_experimental_plan_warnings(
 
     R5-1 (Codex round5 P2 対応): `resolve_melody_observation_paths` は
     ``collect_melody_experimental_anchors`` と同じく M1/reference_audio を
-    ``require_exists=False`` で解決する——本関数はそもそも M1/
-    reference_audio ファイルの中身を読まない（G1/G2 診断は m3 registry と
-    config 宣言だけで完結する）ため、これらの欠落だけで plan 診断自体が
-    ``RecastError`` になるのを避ける（実行時と同じ「G1 短絡を最優先」の
-    ゲート順序に診断も揃える）。
+    ``require_exists=False`` で解決する——G1/G2 診断自体は m3 registry と
+    config 宣言だけで完結し M1/reference_audio の中身を要さないため、
+    これらの欠落だけで plan 診断自体が ``RecastError`` になるのを避ける
+    （実行時と同じ「G1 短絡を最優先」のゲート順序に診断も揃える）。
+    reference_audio の中身は本関数では読まないままだが、M1 registry は
+    R8-2（下記）で G1 通過後に読む。
+
+    R8-2 (Codex round8 P2 対応・存在検証遅延との整合): R5-1 で M1 registry の
+    実在検証を `_load_m1_registry`（実行時ゲート）まで遅延させた結果、plan
+    診断は G1 通過後も resolved M1 パスの可用性を一切見ておらず、校正済み
+    M3 + M1 欠落/破損（構造不正・型不正・重複キー）の組でも
+    ``experimental observability — ok`` を返し、ingest では
+    `evaluate_melody_experimental_anchor` が同じ `_load_m1_registry` 呼び出しで
+    `RecastError` → 決定論的 ``observation_incomplete`` に落ちる不一致が
+    あった。G1（コメント参照）通過後、axis_policy 突合の**前**に
+    `_load_m1_registry(m1_registry_path)` を try/except ``RecastError`` で
+    呼んで検査する——loader を再利用するため M1 の必須構造/型検証知識を
+    ここへ再実装せず、欠落・構造不正・型不正・重複キーの全 failure を
+    一括で ``not expected (m1_registry_unavailable: <元メッセージ>)`` に
+    翻訳する。plan は診断層のため raise しない。
 
     R5-3 (Codex round5 P2 対応): frozen registry が部分軸（例 ``contour``
     のみ）しか校正していない場合、G1（全体の校正状態）自体は "frozen" で
@@ -1392,7 +1407,7 @@ def melody_experimental_plan_warnings(
             for anchor in melody_anchors
         ]
 
-    m3_registry_path, _m1_registry_path, _reference_audio_path = resolve_melody_observation_paths(
+    m3_registry_path, m1_registry_path, _reference_audio_path = resolve_melody_observation_paths(
         project_dir=project_dir,
         melody_config=melody_config,
         m1_require_exists=False,
@@ -1418,6 +1433,30 @@ def melody_experimental_plan_warnings(
         return [
             f"melody anchor '{anchor.anchor_id}': experimental observability — "
             "not expected (band_out_of_validation)"
+            for anchor in melody_anchors
+        ]
+
+    # R8-2 (Codex round8 P2 対応): G1（M3 校正状態）通過後も、resolved M1
+    # registry パスの可用性（実在/構造/型/重複キー）を検査する——R5-1 が
+    # 存在検証を `_load_m1_registry`（G1 通過後の実行時ゲート）まで意図的に
+    # 遅延させた結果、plan 診断はここまで M1 の中身を一切見ておらず、
+    # 校正済み M3 + M1 欠落/破損の組でも `experimental observability — ok`
+    # を返していた——実行時 `evaluate_melody_experimental_anchor` は
+    # `_load_m1_registry` 呼び出しで同じ入力を検証し `RecastError` →
+    # `observation_incomplete` に落ちるため、plan の ok と ingest の
+    # 決定論的失敗が食い違う（plan は「実行時に何が起きるか」の事前診断
+    # という役割上、この不一致は plan の診断価値を損なう）。
+    # ここで `_load_m1_registry` を try/except (RecastError) で呼んで検査する
+    # ことで、M1 側の必須構造・型検証知識をこのモジュールへ再実装せず
+    # loader を再利用しつつ（欠落・構造不正・型不正・重複キーの全 failure を
+    # 一括捕捉）、plan 診断を実行時ゲートと同じ判定に揃える。plan は診断層
+    # なので raise はしない——警告 1 行として全 melody anchor に一律出す。
+    try:
+        _load_m1_registry(m1_registry_path)
+    except RecastError as exc:
+        return [
+            f"melody anchor '{anchor.anchor_id}': experimental observability — "
+            f"not expected (m1_registry_unavailable: {exc})"
             for anchor in melody_anchors
         ]
 

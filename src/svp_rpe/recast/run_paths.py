@@ -158,8 +158,16 @@ def collect_protected_input_paths(
     # non-None のパスだけを足すため、1 パスの違反が他パスの保護を道連れに
     # しない（実際の melody エラー報告は `recast/experimental.py` の評価
     # 経路が正規の位置で行う）。
+    #
+    # R8-1 (Codex round8 P2 対応・disabled 対称性の完成、`recast/plan.py`
+    # `build_recast_plan_artifacts` の鏡像ブロックと同一対応): `observation.
+    # enabled is False` のときはこのブロック自体をスキップする。観測無効時
+    # melody locator は入力として読まれないため保護不要——従来は
+    # `observation.enabled` を見ずに常に解決・追加していたため、dormant な
+    # locator が生成物パス（例: `performance_package.json`）を alias して
+    # いると、観測を一切行わない project でも publish が拒否されていた。
     melody_config = loaded.project.observation.melody
-    if melody_config is not None:
+    if loaded.project.observation.enabled and melody_config is not None:
         m3_path, m1_path, reference_audio_path = resolve_melody_observation_paths_for_protection(
             project_dir=loaded.project_dir, melody_config=melody_config
         )

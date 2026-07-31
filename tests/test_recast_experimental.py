@@ -2078,6 +2078,91 @@ def test_plan_warnings_ok_when_calibrated_and_band_declared(tmp_path: Path) -> N
     assert warnings == ["melody anchor 'melody-1': experimental observability — ok"]
 
 
+# --------------------------------------------------------------------------- #
+# R8-2 (Codex round8 P2) — G1 通過後の M1 registry 可用性診断
+# --------------------------------------------------------------------------- #
+def test_plan_warnings_flags_m1_registry_missing_after_g1_pass(tmp_path: Path) -> None:
+    """校正済み M3（G1 通過）+ M1 registry ファイル欠落の組では、旧実装は
+    存在検証を実行時ゲートまで遅延させていたため plan は "ok" を返し、ingest
+    は決定論的に `observation_incomplete` に落ちる不一致があった——plan も
+    `not expected (m1_registry_unavailable: ...)` を先出しする。"""
+    project_dir = _project_dir_with_registries(tmp_path, calibrated=True)
+    (project_dir / "registry.yaml").unlink()
+    contract = _contract([_anchor({"contour": "hard"}, anchor_id="melody-1")])
+    warnings = melody_experimental_plan_warnings(
+        contract=contract,
+        melody_config=_melody_config(),
+        project_dir=project_dir,
+        backend_ref=_backend_ref(melody_take_band="clear_lead"),
+    )
+    assert len(warnings) == 1
+    assert warnings[0].startswith(
+        "melody anchor 'melody-1': experimental observability — "
+        "not expected (m1_registry_unavailable:"
+    )
+
+
+def test_plan_warnings_flags_m1_registry_missing_observation_gate_section(
+    tmp_path: Path,
+) -> None:
+    """M1 registry が実在しても構造破損（`observation_gate` 節欠落）なら同様に
+    `m1_registry_unavailable` を先出しする（`_load_m1_registry` の構造検証を
+    そのまま再利用——知識の重複なし）。"""
+    project_dir = _project_dir_with_registries(tmp_path, calibrated=True)
+    (project_dir / "registry.yaml").write_bytes(
+        yaml.safe_dump({"schema_version": "melody-bench/0.1"}).encode("utf-8")
+    )
+    contract = _contract([_anchor({"contour": "hard"}, anchor_id="melody-1")])
+    warnings = melody_experimental_plan_warnings(
+        contract=contract,
+        melody_config=_melody_config(),
+        project_dir=project_dir,
+        backend_ref=_backend_ref(melody_take_band="clear_lead"),
+    )
+    assert len(warnings) == 1
+    assert warnings[0].startswith(
+        "melody anchor 'melody-1': experimental observability — "
+        "not expected (m1_registry_unavailable:"
+    )
+    assert "observation_gate" in warnings[0]
+
+
+def test_plan_warnings_flags_m1_registry_duplicate_key(tmp_path: Path) -> None:
+    """M1 registry の `observation_gate` 節が重複キーを持つ（R7-2 の重複キー
+    拒否ロジックが送出する `RecastError`）場合も同様に先出しする。"""
+    project_dir = _project_dir_with_registries(tmp_path, calibrated=True)
+    duplicate_key_yaml = (
+        "observation_gate:\n"
+        "  min_voiced_coverage: 0.30\n"
+        "  min_note_count: 8\n"
+        "  min_phrase_count: 2\n"
+        "  min_confidence_mean: 0.45\n"
+        "  max_low_confidence_rate: 0.55\n"
+        "  max_octave_jump_rate: 0.35\n"
+        "  voiced_confidence_floor: 0.30\n"
+        "  low_confidence_floor: 0.50\n"
+        "  min_cross_extractor_agreement: null\n"
+        "  note_min_run_frames: 3\n"
+        "  median_filter_frames: 5\n"
+        "  phrase_gap_sec: 0.6\n"
+        "  octave_jump_semitones: 11.0\n"
+        "  octave_jump_semitones: 12.0\n"  # 重複キー
+    )
+    (project_dir / "registry.yaml").write_text(duplicate_key_yaml, encoding="utf-8")
+    contract = _contract([_anchor({"contour": "hard"}, anchor_id="melody-1")])
+    warnings = melody_experimental_plan_warnings(
+        contract=contract,
+        melody_config=_melody_config(),
+        project_dir=project_dir,
+        backend_ref=_backend_ref(melody_take_band="clear_lead"),
+    )
+    assert len(warnings) == 1
+    assert warnings[0].startswith(
+        "melody anchor 'melody-1': experimental observability — "
+        "not expected (m1_registry_unavailable:"
+    )
+
+
 def test_plan_warnings_one_line_per_melody_anchor(tmp_path: Path) -> None:
     project_dir = _project_dir_with_registries(tmp_path, calibrated=True)
     contract = _contract(

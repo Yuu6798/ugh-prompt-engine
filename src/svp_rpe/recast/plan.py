@@ -1864,7 +1864,15 @@ def build_recast_plan_artifacts(
     # 全ての保護を諦めていた）。実際のエラーは `melody_experimental_plan_
     # warnings`（後続ステップ）が正規の報告順序で診断するため、ここでは
     # non-None のパスだけを足す。
-    if project.observation.melody is not None:
+    #
+    # R8-1 (Codex round8 P2 対応・disabled 対称性の完成): `observation.enabled
+    # is False` のときはこのブロック自体を呼ばない（R3-2/R4-1 と対称のガード）。
+    # 観測無効時 melody locator は「入力として読まれない」ため保護対象ではなく
+    # ——従来はここが `observation.enabled` を見ずに常に解決・追加していたため、
+    # dormant な locator が生成物パス（例: `performance_package.json`）を
+    # alias していると、観測を一切行わない project でも publish が
+    # （無関係な）衝突ガードで拒否されていた。
+    if project.observation.enabled and project.observation.melody is not None:
         m3_path, m1_path, reference_audio_path = resolve_melody_observation_paths_for_protection(
             project_dir=loaded.project_dir, melody_config=project.observation.melody
         )
