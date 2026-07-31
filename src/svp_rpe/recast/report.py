@@ -29,7 +29,13 @@ from __future__ import annotations
 
 from typing import Dict, List, Literal, Optional, Sequence
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from svp_rpe.arrange.identity import AnchorDomain
 from svp_rpe.arrange.models import JsonValue, PreservationMode
@@ -41,6 +47,8 @@ from svp_rpe.arrange.observe import (
 )
 from svp_rpe.arrange.package import PerformancePackage
 from svp_rpe.arrange.pathsafe import PathConfinementError, validate_relative_locator
+from svp_rpe.recast.experimental import ExperimentalAnchorEntry
+from svp_rpe.recast.report_base import RecastReportModel
 
 RECAST_REPORT_SCHEMA_VERSION = "recast-report/0.1"
 RECAST_REPORT_FILENAME = "recast_report.json"
@@ -69,12 +77,6 @@ def _coverage_for(adherence_status: str) -> CoverageStatus:
             f"unknown adherence_status for recast report coverage mapping: "
             f"{adherence_status!r} (expected one of {sorted(_ADHERENCE_TO_COVERAGE)})"
         ) from None
-
-
-class RecastReportModel(BaseModel):
-    """recast-report 側スキーマの共通基底。未知 key を拒否する。"""
-
-    model_config = ConfigDict(extra="forbid")
 
 
 class RecastReportTake(RecastReportModel):
@@ -191,6 +193,26 @@ class RecastReport(RecastReportModel):
     anchors: List[RecastReportAnchor]
     coverage: RecastReportCoverage
     identity_assessment: IdentityAssessment = Field(default_factory=IdentityAssessment)
+    # M4c (Design Memo M4 §5, additive): melody 等の experimental anchor
+    # 翻訳結果。**本会計（`coverage` の verified/violated/not_observed 分母）
+    # には一切算入しない**——`_tally_anchor_coverage`/
+    # `_validate_coverage_matches_anchors` は `self.anchors`（main）のみを
+    # 見る。旧レポート（このフィールドを持たない JSON）は default（空リスト）
+    # で読み戻せる。DD-8: 空のときは serialize に現れない（下記
+    # `_omit_empty_experimental_anchors` 参照）——既存 golden fixture の
+    # バイト不変を壊さない。
+    experimental_anchors: List[ExperimentalAnchorEntry] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_experimental_anchors(self, handler: SerializerFunctionWrapHandler) -> Dict:
+        """DD-8: `experimental_anchors` が空のときは出力 dict に現れない
+        （`model_dump`/`model_dump_json` いずれの呼び出し経路でも一貫させる
+        単一箇所——呼び出し側で個別に pop する必要がない）。melody anchor が
+        1 件でもあれば通常どおりリストとして出力する。"""
+        data = handler(self)
+        if not self.experimental_anchors:
+            data.pop("experimental_anchors", None)
+        return data
 
     @model_validator(mode="after")
     def _validate_coverage_matches_anchors(self) -> "RecastReport":
@@ -237,6 +259,60 @@ class RecastReport(RecastReportModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_unique_experimental_anchor_ids(self) -> "RecastReport":
+        """R2-4 (Codex round2 P2): `experimental_anchors`（M4c、本会計とは別集合
+        ——会計分離）内の `anchor_id` にも一意性を強制する。`_validate_unique_
+        anchor_ids`（本会計 `anchors` 側）と同型の読み戻し安全網——複製行が
+        虚偽の被覆・虚偽の重複観測を作りうるという同じ不変条件が experimental
+        側にも当てはまる（こちらは coverage 集計の対象外だが、同一 anchor_id
+        の複製行がそのまま `recast_summary.md` の Experimental anchors 節に
+        並ぶこと自体が誤った観測記録になる）。`build_recast_report` は
+        `collect_melody_experimental_anchors` が manifest anchor 宣言順で
+        重複なく組んだ entry 列をそのまま転記するため、正常な発行経路は
+        自然にこの validator を通過する（builder→dump→validate の読み戻し
+        規律）。"""
+        seen: set[str] = set()
+        duplicates: set[str] = set()
+        for entry in self.experimental_anchors:
+            if entry.anchor_id in seen:
+                duplicates.add(entry.anchor_id)
+            seen.add(entry.anchor_id)
+        if duplicates:
+            raise ValueError(
+                "duplicate anchor_id(s) in recast report experimental_anchors: "
+                f"{', '.join(sorted(duplicates))}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_no_cross_list_anchor_id_overlap(self) -> "RecastReport":
+        """R4-5 (Codex round4 P2): `anchors`（本会計）と `experimental_anchors`
+        （M4c、会計分離された別集合）の間でも anchor_id が重複してはならない
+        （読み戻し安全網の完成形——`_validate_unique_anchor_ids`/
+        `_validate_unique_experimental_anchor_ids` はそれぞれのリスト**内**の
+        一意性しか見ないため、同じ anchor_id が両方のリストに 1 件ずつ現れる
+        ケースはどちらの validator も検出できない）。同じ anchor が本会計と
+        experimental の両方に載ると、`recast_summary.md` が同一 anchor を
+        Coverage 集計対象/対象外の両方として二重に報告し、会計分離の趣旨
+        （`ExperimentalAnchorEntry` docstring 参照）そのものが崩れる。
+
+        正常な発行経路（`build_recast_report`）は、experimental 側
+        （`collect_melody_experimental_anchors`、axis_policy opt-in — DD-3）
+        と本会計側（`resolve_main_observation_anchor_scope` が axis_policy
+        付き melody anchor を観測スコープから除外する）が互いに素な集合に
+        なるよう既に配線されているため、正常発行はこの validator を自然に
+        通過する（builder→dump→validate の読み戻し規律）。"""
+        main_ids = {anchor.anchor_id for anchor in self.anchors}
+        experimental_ids = {entry.anchor_id for entry in self.experimental_anchors}
+        overlap = main_ids & experimental_ids
+        if overlap:
+            raise ValueError(
+                "anchor_id(s) present in both recast report anchors (main accounting) "
+                f"and experimental_anchors: {', '.join(sorted(overlap))}"
+            )
+        return self
+
 
 def build_recast_report(
     *,
@@ -248,6 +324,7 @@ def build_recast_report(
     take_path_relative: str,
     take_sha256: str,
     observation_anchors: Sequence[str] = (),
+    experimental_anchors: Sequence[ExperimentalAnchorEntry] = (),
 ) -> RecastReport:
     """`ObservationReport`（`observe_generated_artifact` が組み立てた計器出力）+
     `package`（`anchor_statuses[].requested_mode` 由来の policy_mode）から
@@ -265,6 +342,11 @@ def build_recast_report(
     場合の fail-closed 検証は呼び出し側の責務（`recast/plan.py` の
     `build_recast_plan_artifacts` が manifest ロード直後に行う — 本関数は
     純粋なフィルタリングのみで、ここでは検証しない）。
+
+    `experimental_anchors`（M4c、additive）は呼び出し側が別途
+    `recast/experimental.py:collect_melody_experimental_anchors` で組み立てた
+    entry 列をそのまま転記するだけ——`report.anchors`/`coverage`（本会計）とは
+    完全に独立で、ここでのフィルタリング・集計の対象にならない（会計分離）。
     """
     policy_by_anchor: Dict[str, Optional[PreservationMode]] = {
         status.anchor_id: status.requested_mode for status in package.anchor_statuses
@@ -300,6 +382,7 @@ def build_recast_report(
         anchors=anchors,
         coverage=_tally_anchor_coverage(anchors),
         identity_assessment=IdentityAssessment(enabled=False),
+        experimental_anchors=list(experimental_anchors),
     )
 
 
@@ -323,6 +406,32 @@ def render_recast_summary_markdown(report: RecastReport) -> str:
             f"| {anchor.anchor_id} | {anchor.domain} | {anchor.policy_mode or '-'} | "
             f"{anchor.adherence_status} | {anchor.determination} | {anchor.coverage} |"
         )
+    if report.experimental_anchors:
+        # M4c (DD-8): melody anchor が 1 件以上あるときだけ節を出す（空のときは
+        # 何も描画しない — バイト不変契約）。会計分離を明文化: この節は
+        # 上の Coverage 集計に一切寄与しない。
+        lines += [
+            "",
+            "## Experimental anchors (melody)",
+            "",
+            "比較器の evidence を契約の axis_policy へ機械的に写した実験的な観測です"
+            "（本レポートの Coverage 集計には含まれません — 単一の同一性スコアは"
+            "出しません）。",
+            "",
+            "| anchor_id | domain | adherence_status | axes | axis_policy | reasons |",
+            "|---|---|---|---|---|---|",
+        ]
+        for entry in report.experimental_anchors:
+            axes_text = ", ".join(
+                f"{axis}={value:.3f}" if value is not None else f"{axis}=-"
+                for axis, value in sorted(entry.axes.items())
+            )
+            policy_text = ", ".join(f"{axis}={mode}" for axis, mode in sorted(entry.axis_policy.items()))
+            reasons_text = "; ".join(entry.reasons) if entry.reasons else "-"
+            lines.append(
+                f"| {entry.anchor_id} | {entry.domain} | {entry.adherence_status} | "
+                f"{axes_text or '-'} | {policy_text or '-'} | {reasons_text} |"
+            )
     lines += [
         "",
         "## Coverage",

@@ -909,6 +909,7 @@ def _precheck_observation_anchors(loaded: Any) -> tuple[Optional[set[str]], str]
     """
     import yaml
 
+    from svp_rpe.recast import RecastError
     from svp_rpe.recast.plan import compute_observation_digest
 
     # `observation` 節全体の pin（Codex P2 review, PR #212 指摘）:
@@ -916,8 +917,16 @@ def _precheck_observation_anchors(loaded: Any) -> tuple[Optional[set[str]], str]
     # `inputs_digest` は生成系の同一性判定であり `observation` 節を意図的に
     # 除外しているため、report にとっての直接の入力である `observation` 節
     # 自体は別の pin（`RecastRunState.observation_digest`）で追跡する
-    # （single source: `recast/plan.py:compute_observation_digest`）。
-    current_observation_digest = compute_observation_digest(loaded.project.observation)
+    # （single source: `recast/plan.py:compute_observation_digest`）。R1-3:
+    # `observation.melody` が設定されていれば参照先レジストリの content hash
+    # も編入するため `project_dir` を渡す（melody 未設定なら無視される）。
+    try:
+        current_observation_digest = compute_observation_digest(
+            loaded.project.observation, project_dir=loaded.project_dir
+        )
+    except (OSError, RecastError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
 
     # `observation.anchors`（Codex P2, #211）: 非空なら観測対象を絞る。空
     # （既定）は「絞り込みなし」— 従来どおり全 manifest anchor を観測する。
@@ -1155,7 +1164,12 @@ def _observe_and_report(
 
     from svp_rpe.arrange.identity import IdentityManifestError
     from svp_rpe.arrange.observe import observe_generated_artifact
+    from svp_rpe.recast import RecastError
     from svp_rpe.recast.backend import atomic_publish_bytes_bundle
+    from svp_rpe.recast.experimental import (
+        collect_melody_experimental_anchors,
+        resolve_main_observation_anchor_scope,
+    )
     from svp_rpe.recast.plan import _normalize_diagnostic
     from svp_rpe.recast.report import (
         RECAST_REPORT_FILENAME,
@@ -1179,6 +1193,25 @@ def _observe_and_report(
         # `observe_generated_artifact` が `package_path` を読んだ直後に
         # 突き合わせ、公開後に自己整合な別 package へ差し替えられていても
         # 観測前に fail-closed する。
+        #
+        # R2-1 (Codex round2 P1・会計分離の実装漏れ対応): axis_policy 付き
+        # melody anchor は下の `collect_melody_experimental_anchors` が
+        # `RecastReport.experimental_anchors` として独立に翻訳・報告する。
+        # legacy の `_observe_melody`（LCS）が本会計（`anchor_scope` 未除外の
+        # まま `observe_generated_artifact` を呼ぶと）その anchor 行を main の
+        # `anchors`/`coverage` にも残してしまい、二重報告 + legacy 行が
+        # coverage 分母を動かす（設計書 §4 会計分離違反）。ここで main の
+        # 観測スコープから axis_policy 付き melody anchor の anchor_id を
+        # 除外する（`resolve_main_observation_anchor_scope` docstring
+        # 参照——`arrange/observe.py` は変更しない。スコープ除外により
+        # LCS センサーの実行自体もスキップされる）。axis_policy の無い
+        # melody anchor は対象外——現行の LCS・本会計挙動を完全維持する
+        # （DD-3）。
+        main_anchor_scope = resolve_main_observation_anchor_scope(
+            manifest_path=loaded.identity_manifest_path,
+            contract=artifacts.contract,
+            observation_anchor_scope=anchor_scope,
+        )
         observation = observe_generated_artifact(
             package_path=package_path,
             manifest_path=loaded.identity_manifest_path,
@@ -1186,7 +1219,7 @@ def _observe_and_report(
             generated_artifact_path=take_relative,
             expected_audio_sha256=take.sha256,
             expected_package_sha256=artifacts.compiled.report.package_sha256,
-            anchor_scope=anchor_scope,
+            anchor_scope=main_anchor_scope,
         )
     except (OSError, ValueError, ValidationError, IdentityManifestError) as exc:
         obs_note = _normalize_diagnostic(f"observation failed: {exc}", loaded.project_dir)
@@ -1206,6 +1239,66 @@ def _observe_and_report(
             typer.echo(f"Error: {record_exc}", err=True)
             raise typer.Exit(code=1) from record_exc
         typer.echo(f"Error: observation failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    # M4c (Design Memo M4 §5): axis_policy 付き melody anchor があれば
+    # experimental 節を組み立てる。main の anchors/coverage（上の
+    # `observation.report`/`build_recast_report` 呼び出し）には一切触れない
+    # ——会計分離。抽出器注入 seam（`route_runner`）は library 関数のみが
+    # 露出し、CLI からは常に既定（実抽出器）を使う。
+    #
+    # R10-1 (Codex round10 P2 対応): この収集（CREPE 抽出を含みうる）は
+    # 「durable な `observed` 状態を記録する**前**」に実行する
+    # （all-build-then-publish、R3-3 で確立した規律）。旧実装は `observed` を
+    # 先に記録してからここへ来ていたため、CREPE 抽出中に
+    # KeyboardInterrupt/SystemExit（BaseException・既存の
+    # `except (OSError, ValueError, RecastError)` は通常例外のみ捕捉し
+    # BaseException は素通しする）で中断すると、experimental
+    # 節・recast_report・summary が一切生成されていないのに `recast_state.json`
+    # には「観測完了 (`observed`)」が残ってしまっていた。呼び出し引数は
+    # いずれも上の `observe_generated_artifact` 呼び出し結果（`observation`）に
+    # 依存しない（`anchor_scope` は `main_anchor_scope` 算出前の raw scope を
+    # そのまま使う）ため、素直に呼び出し位置を前倒しするだけで解決する
+    # （ロールバック方式は使わない）。既存の「失敗時は
+    # `observation_incomplete` を記録して exit」という経路自体は維持する。
+    try:
+        # R3-1 (Codex round3 P2 対応): main と同じ `anchor_scope`（非空
+        # `observation.anchors` 集合、`resolve_main_observation_anchor_scope`
+        # に渡したのと同一の raw scope）を collector にも渡す——main が
+        # スコープ外の anchor を観測しないのに experimental だけが契約の
+        # 全 axis_policy melody anchor を評価（CREPE 抽出まで実行）する
+        # 非対称を防ぐ。空/``None``（既定・絞り込みなし）は現行どおり全件。
+        experimental_anchors = collect_melody_experimental_anchors(
+            contract=artifacts.contract,
+            melody_config=loaded.project.observation.melody,
+            project_dir=loaded.project_dir,
+            backend_ref=artifacts.backend_ref,
+            score=artifacts.derived_score,
+            channel_artifact_bytes=artifacts.channel_artifact_bytes,
+            take_audio_path=take.audio_path,
+            take_sha256=take.sha256,
+            observation_anchor_scope=anchor_scope,
+        )
+    except (OSError, ValueError, RecastError) as exc:
+        obs_note = _normalize_diagnostic(
+            f"melody experimental observation failed: {exc}", loaded.project_dir
+        )
+        try:
+            record_state(
+                loaded.project_dir,
+                variant,
+                backend,
+                "observation_incomplete",
+                note=obs_note,
+                inputs_digest=artifacts.result.inputs_digest,
+                plan_sha256=plan_sha256,
+                observation_digest=current_observation_digest,
+                protected_inputs=prepared.protected_input_paths,
+            )
+        except (OSError, ValueError) as record_exc:
+            typer.echo(f"Error: {record_exc}", err=True)
+            raise typer.Exit(code=1) from record_exc
+        typer.echo(f"Error: melody experimental observation failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
     observed_note = (
@@ -1237,6 +1330,7 @@ def _observe_and_report(
         take_path_relative=take_relative,
         take_sha256=take.sha256,
         observation_anchors=loaded.project.observation.anchors,
+        experimental_anchors=experimental_anchors,
     )
     summary_markdown = render_recast_summary_markdown(recast_report)
     report_json_bytes = (
@@ -1650,8 +1744,16 @@ def recast_status_cmd(
     # project 全体で単一の observation 節（variant/backend に依存しない）
     # のためループ外で 1 回だけ計算する（`current_digest`/
     # `current_plan_sha256` は (variant, backend) ごとに異なるためループ
-    # 内で計算する既存規約とは対照的）。
-    current_observation_digest = compute_observation_digest(loaded.project.observation)
+    # 内で計算する既存規約とは対照的）。R1-3: `observation.melody` が設定
+    # されていれば参照先レジストリの content hash も編入するため
+    # `project_dir` を渡す（melody 未設定なら無視される）。
+    try:
+        current_observation_digest = compute_observation_digest(
+            loaded.project.observation, project_dir=loaded.project_dir
+        )
+    except (OSError, RecastError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
     reobserve_step = (
         "svprpe recast ingest <project.yaml> --variant <variant> --backend <backend> "
         "--audio <builds_root>/takes/<variant>@<backend>/take-01.* "

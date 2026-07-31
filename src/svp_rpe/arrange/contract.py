@@ -15,7 +15,7 @@ CLI 統合・capability・adherence 観測は本モジュールのスコープ�
 """
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional, Type
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -53,6 +53,65 @@ DOMAIN_ALLOWED_TRANSFORMS: dict[AnchorDomain, frozenset[str]] = {
     "rhythm": frozenset(),
     "motif": frozenset(),
 }
+
+# M4 (Design Memo M4, DD-7): 軸単位の保持方針（`axis_policy`）が指定できる
+# domain とその軸語彙。`DOMAIN_ALLOWED_TRANSFORMS` と異なり、軸語彙がまだ
+# 定義されていない domain はキー自体を持たない（`dict.get(domain)` が
+# `None` を返す＝「この domain には axis_policy を宣言できない」を意味する。
+# `DOMAIN_ALLOWED_TRANSFORMS` の「空集合で明示」流儀とあえて非対称にしている
+# のは、axis_policy が M4 で新設されたばかりの experimental 機構であり、
+# 将来の domain 追加が「新しい軸語彙を定義した Design Memo が来たときだけ
+# キーを足す」という積極的な opt-in であるべきため（空集合を先回りで
+# 埋めると「この domain は検討済みで axis_policy 非対応と確定した」という
+# 誤った既定値を意味してしまう）。M4 は melody のみを配線する
+# （`docs/DESIGN_M4_recast_melody_anchor.md` §6: 歌詞/和声 anchor への拡張は
+# 本設計のスコープ外だが、配線パターンは melody 専用にハードコードしない）。
+DOMAIN_AXIS_VOCAB: dict[AnchorDomain, frozenset[str]] = {
+    "melody": frozenset({"contour", "interval", "rhythm"}),
+}
+
+
+def _validate_axis_policy(
+    axis_policy: Dict[str, str],
+    *,
+    domain: AnchorDomain,
+    anchor_id: str,
+    error_cls: Type[Exception],
+) -> None:
+    """`axis_policy` の 3 条件（Design Memo M4 DD-7）を検証する。共有ヘルパー:
+    `ContractAnchor._validate_invariants`（読み戻し経路の safety net、
+    `ValueError`）と `build_preservation_contract`（build 経路、文脈の濃い
+    `PreservationContractError`）の両方から同じ判定ロジックを呼ぶ
+    （`DOMAIN_ALLOWED_TRANSFORMS` の elastic-vocab チェックと同型の二重化）。
+
+    (a) domain が `DOMAIN_AXIS_VOCAB` に語彙を持たない、または軸名が
+        その語彙の部分集合でない → 拒否（無語彙 domain への指定は fail-closed）。
+    (b) 非空であること。
+    (c) hard または elastic が最低 1 軸あること（全 free は「何も約束しない
+        anchor」であり契約として空洞化するため拒否する）。
+    """
+    if not axis_policy:
+        raise error_cls(
+            f"ContractAnchor '{anchor_id}': axis_policy must not be empty "
+            "(omit the field entirely to declare no axis_policy)"
+        )
+    axis_vocab = DOMAIN_AXIS_VOCAB.get(domain)
+    if not axis_vocab:
+        raise error_cls(
+            f"ContractAnchor '{anchor_id}' (domain={domain!r}): axis_policy is not "
+            "supported for this domain (no axis vocabulary registered in DOMAIN_AXIS_VOCAB)"
+        )
+    unknown_axes = sorted(set(axis_policy) - axis_vocab)
+    if unknown_axes:
+        raise error_cls(
+            f"ContractAnchor '{anchor_id}' (domain={domain!r}): axis_policy references "
+            f"axis(es) outside the domain's vocabulary {sorted(axis_vocab)}: {unknown_axes}"
+        )
+    if not any(mode in ("hard", "elastic") for mode in axis_policy.values()):
+        raise error_cls(
+            f"ContractAnchor '{anchor_id}': axis_policy must declare at least one 'hard' or "
+            "'elastic' axis (an all-'free' policy would promise nothing)"
+        )
 
 
 class PreservationContractError(ArrangementError):
@@ -93,6 +152,10 @@ class ContractAnchor(ContractModel):
     tolerance_profile: Optional[str] = None
     artifact: str
     artifact_sha256: str = Field(pattern=_SHA256_PATTERN)
+    # M4 (DD-7): additive・opt-in の軸単位保持方針。`None`（既定）は
+    # 「axis_policy 宣言なし」= 現行挙動（`_observe_melody` LCS・本会計）を
+    # 完全維持する（M4 experimental 経路への opt-in を一切トリガーしない）。
+    axis_policy: Optional[Dict[str, PreservationMode]] = None
 
     @model_validator(mode="after")
     def _validate_invariants(self) -> "ContractAnchor":
@@ -118,6 +181,13 @@ class ContractAnchor(ContractModel):
                 f"ContractAnchor '{self.anchor_id}' (domain={self.domain!r}): "
                 f"transformation(s) outside the domain's allowed vocabulary "
                 f"{sorted(allowed_vocab)}: {disallowed}"
+            )
+        if self.axis_policy is not None:
+            _validate_axis_policy(
+                self.axis_policy,
+                domain=self.domain,
+                anchor_id=self.anchor_id,
+                error_cls=ValueError,
             )
         return self
 
@@ -216,6 +286,20 @@ def build_preservation_contract(
                     f"{disallowed}"
                 )
 
+        # M4 (DD-7): axis_policy は domain 語彙の cross-validation のみここで
+        # 行う（非空・hard/elastic 最低 1 軸は `AnchorPreservation` 自身の
+        # validator が authoring 時点で既に強制済み）。`_validate_axis_policy`
+        # は 3 条件を一括判定するが、ここに到達する時点で (b)/(c) は既に真
+        # なので実質 (a) のみが効く — 判定ロジックを 1 箇所に保つため関数は
+        # 分割せずそのまま呼ぶ。
+        if policy.axis_policy is not None:
+            _validate_axis_policy(
+                policy.axis_policy,
+                domain=anchor.domain,
+                anchor_id=anchor.id,
+                error_cls=PreservationContractError,
+            )
+
         contract_anchors.append(
             ContractAnchor(
                 anchor_id=anchor.id,
@@ -225,6 +309,7 @@ def build_preservation_contract(
                 tolerance_profile=policy.tolerance_profile,
                 artifact=anchor.artifact,
                 artifact_sha256=anchor.sha256,
+                axis_policy=dict(policy.axis_policy) if policy.axis_policy is not None else None,
             )
         )
 

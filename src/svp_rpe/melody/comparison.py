@@ -163,6 +163,7 @@ def compare_melodies(
     observability_thresholds: ObservabilityThresholds,
     config: M3ComparisonConfig,
     provenance_extra: Optional[Dict[str, Any]] = None,
+    observability_gate_sides: Tuple[str, ...] = ("a", "b"),
 ) -> MelodyComparisonReport:
     """2 つの旋律観測を比較し、軸別類似 + 根拠つきの `MelodyComparisonReport` を返す。
 
@@ -170,24 +171,36 @@ def compare_melodies(
     1. M1 観測ゲート（insufficient なら `not_comparable`）
     2. ノート導出 3. 表現(M3a) 4. 整列(M3b) 5. 被覆下限ゲート
     6. 軸類似 7. オクターブ折返しガード 8. evidence 導出 9. provenance
+
+    ``observability_gate_sides``: M4 の score_reference 免除のための additive
+    seam（既定値 ``("a", "b")`` = 凍結挙動と完全一致・M0-M3 凍結境界内）。
+    M1 観測ゲート（per-input の抽出信頼性ゲート）を課す側だけを選べる——
+    記号旋律側（``reference="score"``）には抽出誤差の概念が無く M1 ゲートが
+    構造的に無意味なため（Design Memo M4 §2 の層分離裁定）。``observation_gate_
+    insufficient_<side>`` の理由文字列書式は既存のまま変えない。skip された側は
+    `assess_observability` を呼ばない。M3 被覆下限（``config.coverage.floor``・
+    pair-level 比較整合性）は本引数の影響を受けず常に両側で評価する
+    （sided 化しない）。
     """
-    # 1) M1 観測ゲート。
-    report_a = assess_observability(observation_a, observability_thresholds)
-    report_b = assess_observability(observation_b, observability_thresholds)
-    if report_a.status == "insufficient" or report_b.status == "insufficient":
-        reasons: List[str] = []
+    # 1) M1 観測ゲート（`observability_gate_sides` で選択された側のみ）。
+    gate_reasons: List[str] = []
+    if "a" in observability_gate_sides:
+        report_a = assess_observability(observation_a, observability_thresholds)
         if report_a.status == "insufficient":
-            reasons.append(
+            gate_reasons.append(
                 f"observation_gate_insufficient_a: {'; '.join(report_a.reasons)}"
             )
+    if "b" in observability_gate_sides:
+        report_b = assess_observability(observation_b, observability_thresholds)
         if report_b.status == "insufficient":
-            reasons.append(
+            gate_reasons.append(
                 f"observation_gate_insufficient_b: {'; '.join(report_b.reasons)}"
             )
+    if gate_reasons:
         return _not_comparable(
             route_a=observation_a.route,
             route_b=observation_b.route,
-            reasons=reasons,
+            reasons=gate_reasons,
             coverage={},
             provenance_extra=provenance_extra,
         )

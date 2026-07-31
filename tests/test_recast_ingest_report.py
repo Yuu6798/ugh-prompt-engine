@@ -733,6 +733,137 @@ def test_observe_generated_artifact_anchor_scope_skips_excluded_anchors(
     assert observation.report.anchors[0].sensor.available is True
 
 
+# --- R10-1 (Codex round10 P2 対応) — BaseException 中断は `observed` を残さない ---
+
+
+def test_ingest_keyboard_interrupt_during_melody_collection_does_not_record_observed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R10-1 (Codex round10 P2 対応) の回帰テスト。
+
+    `_observe_and_report`（cli/recast_cmd.py）は `collect_melody_experimental_
+    anchors`（CREPE 抽出を含みうる）呼び出しを、durable な `observed` state
+    記録より**前**に実行するよう順序変更された（all-build-then-publish）。
+    旧実装は `observed` を先に記録していたため、この収集中に BaseException
+    （KeyboardInterrupt/SystemExit——既存の `except (OSError, ValueError,
+    RecastError)` は通常例外のみ捕捉し、BaseException は素通しする）で中断
+    すると、experimental 節・recast_report・summary が一切生成されていない
+    のに `recast_state.json` には「観測完了 (`observed`)」が残ってしまって
+    いた。ここでは KeyboardInterrupt を実際に送出させ、中断後も run の state
+    が `observed`（あるいはそれ以降の `reported`）へ進んでいないことを CLI
+    経路（`svprpe recast ingest`）で直接検証する。
+
+    注入 seam: `_observe_and_report` は `collect_melody_experimental_anchors`
+    を呼び出しのたびに `from svp_rpe.recast.experimental import
+    collect_melody_experimental_anchors` で束縛し直す（関数内 local import）
+    ため、`svp_rpe.recast.experimental` モジュール属性を monkeypatch すれば
+    CLI 経路から到達できる——`route_runner`（library 関数のみが露出する抽出器
+    注入 seam）自体は CLI から一切届かないため、これが CLI 経路での最小の
+    到達可能な注入点（設計裁定どおり、届かない場合の代替として明記された
+    「collect 呼び出しの順序を検証する形」を、実際に届く本 seam で直接実施
+    する）。
+
+    `demo_project`（`edm@suno`）は音源を持たない合成 fixture のため、実際の
+    audio decode（`extract_rpe_from_file`）を `_empty_chord_bundle`（既存
+    `test_observe_generated_artifact_anchor_scope_skips_excluded_anchors` と
+    同じ stub）に差し替え、`observation.anchors: [harmony]` で main 観測を
+    harmony のみに絞る——lyrics/melody は anchor_scope 外のため learned 系
+    provider（transcribe/melody 抽出）はそもそも呼ばれない（上記テストが
+    別途担保済み）。demo_project の melody anchor は axis_policy 未宣言
+    （M4 experimental の対象外）なので `collect_melody_experimental_anchors`
+    は本来 `[]` を返すだけだが、ここでは呼び出し順序そのものを検証したいため
+    契約の中身に関わらず常に BaseException を送出する差し替え関数を使う。"""
+    import svp_rpe.arrange.observe as observe_module
+    import svp_rpe.recast.experimental as experimental_module
+
+    project_path = _copy_demo_project(tmp_path, label="r10-1-interrupt")
+    text = project_path.read_text(encoding="utf-8")
+    assert _OBSERVATION_DISABLED_BLOCK in text  # sanity: fixture との drift 検出
+    text = text.replace(_OBSERVATION_DISABLED_BLOCK, _OBSERVATION_ENABLED_HARMONY_ONLY_BLOCK, 1)
+    project_path.write_text(text, encoding="utf-8")
+
+    plan_result = runner.invoke(
+        app, ["recast", "plan", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert plan_result.exit_code == 0, plan_result.output
+
+    run_result = runner.invoke(
+        app, ["recast", "run", str(project_path), "--variant", "edm", "--backend", "suno"]
+    )
+    assert run_result.exit_code == 0, run_result.output
+
+    audio_path = tmp_path / "fake-take-r10-1.wav"
+    audio_path.write_bytes(b"RIFF....WAVEfake-audio-bytes-for-r10-1-test")
+
+    monkeypatch.setattr(
+        observe_module, "extract_rpe_from_file", lambda *_a, **_k: _empty_chord_bundle()
+    )
+
+    original_collect = experimental_module.collect_melody_experimental_anchors
+
+    def _raise_keyboard_interrupt(*_args: Any, **_kwargs: Any) -> Any:
+        raise KeyboardInterrupt("simulated interrupt during melody experimental collection")
+
+    monkeypatch.setattr(
+        experimental_module, "collect_melody_experimental_anchors", _raise_keyboard_interrupt
+    )
+
+    interrupted_result = runner.invoke(
+        app,
+        [
+            "recast", "ingest", str(project_path),
+            "--variant", "edm", "--backend", "suno",
+            "--audio", str(audio_path),
+        ],
+    )
+    # typer 自身のコマンド呼び出しラッパー（`typer/core.py`
+    # `TyperCommand.main`）が `except KeyboardInterrupt as e: raise
+    # click.exceptions.Exit(130) from e` で捕捉し、標準の SIGINT exit code
+    # 130 に変換する（生の KeyboardInterrupt が CliRunner の外側へ伝播する
+    # ことはない——typer 自身の仕様。実測: `result.exception` は
+    # `SystemExit(130)`）。exit code 130 そのものが BaseException 経路を
+    # 通過したことの機械的な証拠——通常の `typer.Exit(code=1)`/`Error:` 経路
+    # （既存の `except (OSError, ValueError, RecastError)` ハンドラ）とは
+    # exit code で判別できる。
+    assert interrupted_result.exit_code == 130
+    assert isinstance(interrupted_result.exception, SystemExit)
+
+    state_after_interrupt = load_recast_state(project_path.parent)
+    run_after_interrupt = state_after_interrupt.runs["edm@suno"]
+    # take の collect + `generated` 記録は `_observe_and_report` 呼び出しより
+    # 前（`recast_ingest_cmd` 本体）で完了しているため `generated` までは
+    # 進むが、`observed`（experimental 収集より後段だった旧実装なら記録済み
+    # のはず）は一切記録されていない——これが R10-1 の主張そのもの。
+    assert run_after_interrupt.state == "generated"
+
+    reports_dir = project_path.parent / "builds" / "reports" / "edm@suno"
+    assert not reports_dir.exists()  # report/summary も一切公開されていない
+
+    # 正常系の状態遷移は不変であることの確認: collector を復元して同じ
+    # take で再度 ingest（`generated` は `_REOBSERVABLE_STATES` に含まれる
+    # ため再観測経路になる）すると、順序変更後も従来どおり `reported` まで
+    # 正しく進む——BaseException 経路の追加が通常成功経路を壊していない。
+    monkeypatch.setattr(
+        experimental_module, "collect_melody_experimental_anchors", original_collect
+    )
+
+    recovered_result = runner.invoke(
+        app,
+        [
+            "recast", "ingest", str(project_path),
+            "--variant", "edm", "--backend", "suno",
+            "--audio", str(audio_path),
+        ],
+    )
+    assert recovered_result.exit_code == 0, recovered_result.output
+    assert "Re-observing existing take" in recovered_result.output
+
+    state_after_recovery = load_recast_state(project_path.parent)
+    assert state_after_recovery.runs["edm@suno"].state == "reported"
+    assert (reports_dir / "recast_report.json").is_file()
+    assert (reports_dir / "recast_summary.md").is_file()
+
+
 def test_observe_generated_artifact_rejects_unknown_anchor_scope_id(tmp_path: Path) -> None:
     """Codex P2（#210 round 9 指摘11）: `anchor_scope` に typo/削除済み id
     （manifest に存在しない id）が含まれる場合、フィルタへそのまま通すと

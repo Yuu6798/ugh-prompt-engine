@@ -14,6 +14,7 @@ from svp_rpe.arrange import (
     ArrangementTarget,
     ContractAnchor,
     DOMAIN_ALLOWED_TRANSFORMS,
+    DOMAIN_AXIS_VOCAB,
     IdentityAnchor,
     IdentityManifest,
     PreservationContract,
@@ -162,6 +163,135 @@ def test_hard_and_free_with_empty_allow_are_valid() -> None:
     free = AnchorPreservation(mode="free")
     assert hard.allow == []
     assert free.allow == []
+
+
+# --- schema: axis_policy (M4 DD-7) --------------------------------------------
+
+
+def test_axis_policy_defaults_to_none() -> None:
+    assert AnchorPreservation(mode="hard").axis_policy is None
+
+
+def test_axis_policy_empty_dict_raises_validation_error() -> None:
+    with pytest.raises(ValidationError, match="axis_policy must not be empty"):
+        AnchorPreservation(mode="free", axis_policy={})
+
+
+def test_axis_policy_all_free_raises_validation_error() -> None:
+    with pytest.raises(ValidationError, match="at least one 'hard' or 'elastic' axis"):
+        AnchorPreservation(mode="free", axis_policy={"contour": "free", "rhythm": "free"})
+
+
+def test_axis_policy_with_hard_axis_is_valid() -> None:
+    policy = AnchorPreservation(mode="free", axis_policy={"contour": "hard", "rhythm": "free"})
+    assert policy.axis_policy == {"contour": "hard", "rhythm": "free"}
+
+
+def test_axis_policy_with_elastic_axis_is_valid() -> None:
+    policy = AnchorPreservation(mode="free", axis_policy={"interval": "elastic"})
+    assert policy.axis_policy == {"interval": "elastic"}
+
+
+def test_domain_axis_vocab_has_only_melody_registered() -> None:
+    """M4 が配線するのは melody のみ（他 domain は将来の Design Memo で追加）。"""
+    assert set(DOMAIN_AXIS_VOCAB) == {"melody"}
+    assert DOMAIN_AXIS_VOCAB["melody"] == frozenset({"contour", "interval", "rhythm"})
+
+
+def test_contract_anchor_read_back_rejects_unknown_axis_name() -> None:
+    """`ContractAnchor` 自身の safety net（読み戻し経路の domain 語彙検証）。"""
+    with pytest.raises(ValidationError, match="outside the domain's vocabulary"):
+        ContractAnchor(
+            anchor_id="a",
+            domain="melody",
+            mode="free",
+            artifact="a.json",
+            artifact_sha256=VALID_SHA256,
+            axis_policy={"timbre": "hard"},
+        )
+
+
+def test_contract_anchor_read_back_rejects_vocabless_domain() -> None:
+    with pytest.raises(ValidationError, match="no axis vocabulary registered"):
+        ContractAnchor(
+            anchor_id="a",
+            domain="harmony",
+            mode="free",
+            artifact="a.json",
+            artifact_sha256=VALID_SHA256,
+            axis_policy={"contour": "hard"},
+        )
+
+
+def test_contract_anchor_axis_policy_omitted_by_default() -> None:
+    anchor = ContractAnchor(
+        anchor_id="a",
+        domain="melody",
+        mode="free",
+        artifact="a.json",
+        artifact_sha256=VALID_SHA256,
+    )
+    assert anchor.axis_policy is None
+
+
+# --- build: axis_policy cross-validation (M4 DD-7) ----------------------------
+
+
+def test_build_preservation_contract_passes_through_axis_policy() -> None:
+    manifest = _manifest([_identity_anchor("anchor-melody", "melody", required=True)])
+    spec = _spec(
+        {
+            "anchor-melody": AnchorPreservation(
+                mode="free",
+                axis_policy={"contour": "hard", "interval": "elastic", "rhythm": "free"},
+            )
+        }
+    )
+    contract = build_preservation_contract(
+        manifest, spec, manifest_sha256=MANIFEST_SHA256, spec_sha256=SPEC_SHA256
+    )
+    assert contract.anchors[0].axis_policy == {
+        "contour": "hard",
+        "interval": "elastic",
+        "rhythm": "free",
+    }
+
+
+def test_build_preservation_contract_omits_axis_policy_when_absent() -> None:
+    manifest = _planning_manifest()
+    spec = _spec(_planning_policies())
+    contract = build_preservation_contract(
+        manifest, spec, manifest_sha256=MANIFEST_SHA256, spec_sha256=SPEC_SHA256
+    )
+    assert all(anchor.axis_policy is None for anchor in contract.anchors)
+    dumped = contract.model_dump(mode="json", exclude_none=True)
+    assert all("axis_policy" not in anchor_dict for anchor_dict in dumped["anchors"])
+
+
+def test_build_preservation_contract_rejects_axis_policy_for_vocabless_domain() -> None:
+    manifest = _manifest([_identity_anchor("anchor-harmony", "harmony", required=True)])
+    spec = _spec(
+        {"anchor-harmony": AnchorPreservation(mode="free", axis_policy={"contour": "hard"})}
+    )
+    with pytest.raises(PreservationContractError, match="no axis vocabulary registered"):
+        build_preservation_contract(
+            manifest, spec, manifest_sha256=MANIFEST_SHA256, spec_sha256=SPEC_SHA256
+        )
+
+
+def test_build_preservation_contract_rejects_unknown_axis_name() -> None:
+    manifest = _manifest([_identity_anchor("anchor-melody", "melody", required=True)])
+    spec = _spec(
+        {
+            "anchor-melody": AnchorPreservation(
+                mode="free", axis_policy={"contour": "hard", "timbre": "elastic"}
+            )
+        }
+    )
+    with pytest.raises(PreservationContractError, match="outside the domain's vocabulary"):
+        build_preservation_contract(
+            manifest, spec, manifest_sha256=MANIFEST_SHA256, spec_sha256=SPEC_SHA256
+        )
 
 
 # --- build: happy path --------------------------------------------------------

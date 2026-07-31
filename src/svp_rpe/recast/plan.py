@@ -75,6 +75,7 @@ from svp_rpe.arrange.capabilities import (
     _validate_evidence_form,
 )
 from svp_rpe.arrange.contract import (
+    PreservationContract,
     PreservationContractError,
     build_preservation_contract,
 )
@@ -115,6 +116,11 @@ from svp_rpe.arrange.verify import verify_package
 from svp_rpe.compose.device_profile import DeviceProfile
 from svp_rpe.compose.models import CompositionScore
 from svp_rpe.compose.prompt_renderer import resolve_backend_descriptor
+from svp_rpe.recast.experimental import (
+    melody_experimental_plan_warnings,
+    resolve_melody_observation_paths,
+    resolve_melody_observation_paths_for_protection,
+)
 from svp_rpe.recast.loader import LoadedRecastProject
 from svp_rpe.recast.models import (
     BackendRef,
@@ -243,6 +249,15 @@ class RecastPlanArtifacts:
     derived_score: Optional[CompositionScore] = None
     manifest_sha256: Optional[str] = None
     contract_sha256: Optional[str] = None
+    # M4c (additive): 到達状態が compiled/verified のときのみ非 None —
+    # plan 段の single-read 束が既に構築済みの `PreservationContract`
+    # （`bundle.contract`）をそのまま流用する。`recast_cmd.py` の ingest/
+    # observe 経路が `axis_policy` 付き melody anchor を
+    # `recast/experimental.py:collect_melody_experimental_anchors` へ渡す際、
+    # manifest/arrangement を再 parse せずこの契約オブジェクトをそのまま使う
+    # （既存 single-read 規律の継承 — plan_sha256/contract_sha256 と同じ
+    # 「plan 段が既に読んだものを再利用する」パターン）。
+    contract: Optional[PreservationContract] = None
     profile_sha256: Optional[str] = None
     derived_score_sha256: Optional[str] = None
     # `lyrics_text`/`section_map` anchor の hash 照合済み bytes（anchor_id
@@ -446,6 +461,17 @@ def _is_manual_order_channel_anchor(anchor: IdentityAnchor) -> bool:
     plan 段の hash 検証と描画時の中身が同一 bytes であることを構造的に
     保証し、両者の間にファイルが差し替わる TOCTOU を潰す。"""
     return anchor.artifact_type in ("lyrics_text", "section_map")
+
+
+def _is_channel_artifact_bytes_anchor(anchor: IdentityAnchor) -> bool:
+    """`channel_artifact_bytes` へ hash 照合済み bytes を保持する anchor 全体の
+    `collect` 述語: `_is_manual_order_channel_anchor`（注文書描画用途、既存）
+    に加え、M4c は `note_events_json`（melody）artifact も同じ single-read で
+    pin する——`recast/experimental.py:collect_melody_experimental_anchors` の
+    score_reference 導出（DD-1）が identity sidecar の melody artifact bytes を
+    要るため、ingest/observe 時点で manifest を再 parse せずに済むようにする
+    （既存の TOCTOU 回避規律をそのまま踏襲）。"""
+    return _is_manual_order_channel_anchor(anchor) or anchor.artifact_type == "note_events_json"
 
 
 def _build_anchor_entries(
@@ -781,7 +807,27 @@ def _project_identity_digest_component(project: RecastProject, *, variant: str, 
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def compute_observation_digest(observation: ObservationConfig) -> str:
+# R4-4 (Codex round4 P2・lenient-missing): melody 参照ファイルが存在しない
+# ときに fold する決定論的センチネル——実 sha256 hex（64 桁 lowercase hex）と
+# 衝突しない固定文字列（`compute_observation_digest` docstring 参照）。
+_MELODY_REFERENCE_MISSING_SENTINEL = "missing"
+
+
+def _sha256_file_or_missing_sentinel(path: Path) -> str:
+    """R4-4: ``path`` が存在すれば content sha256 を、存在しなければ
+    ``_MELODY_REFERENCE_MISSING_SENTINEL`` を返す（raise しない — lenient-
+    missing digest 用）。封じ込め違反は呼び出し側（`resolve_melody_
+    observation_paths`）が既に fail-closed で弾いているため、ここで扱うのは
+    「封じ込め済みパスの実在有無」のみ。"""
+    try:
+        return sha256_file(path)
+    except FileNotFoundError:
+        return _MELODY_REFERENCE_MISSING_SENTINEL
+
+
+def compute_observation_digest(
+    observation: ObservationConfig, *, project_dir: Optional[Path] = None
+) -> str:
     """`project.yaml` の `observation` 節（`ObservationConfig`）の canonical
     projection の sha256 — `observed`/`reported` を記録する際に
     `recast/state.py:RecastRunState.observation_digest` へ pin する値の
@@ -801,10 +847,74 @@ def compute_observation_digest(observation: ObservationConfig) -> str:
     設定が変わっても `inputs_digest` は不変のままのため、この digest なしでは
     report が古い設定を反映したまま fresh 表示され続けてしまう。この digest
     は `inputs_digest` とは独立の第二の pin として `observed`/`reported` の
-    run にのみ意味を持つ。"""
+    run にのみ意味を持つ。
+
+    R1-3 (Codex round1 P2 対応): `observation.melody` が設定されている場合、
+    参照先の 3 ファイル（`comparison_registry` / `m1_registry` /
+    `reference_audio` — audio 参照時のみ）を in-place で書き換えても
+    `ObservationConfig` 自体（project.yaml 上の文字列参照）は不変のため、
+    従来の実装は `recast status` に古い report を fresh のまま表示させて
+    いた。`observation.melody` が設定されているときだけ、これら参照先の
+    content hash を digest へ編入する（決定論的順序 = `compute_content_
+    digest` の canonical JSON 経由）。``project_dir`` はこのときのみ必須
+    （melody 未設定なら無視してよい・省略可）。
+
+    melody 未設定のプロジェクトでは戻り値は本 R1-3 対応**前**の実装と
+    バイト単位で完全に不変（``base_digest`` をそのまま返す——既存 golden
+    project fixture の digest へ一切影響しない、CLAUDE.md の後方互換規約
+    に従う）。
+
+    R3-2 (Codex round3 P2 対応): ``observation.enabled is False`` のときは
+    ``observation.melody`` が設定されていても melody 参照先ファイルを一切
+    dereference（resolve + hash）せず、設定のみの ``base_digest`` を返す。
+    従来はこのガードが呼び出し側（`_precheck_observation_anchors`）にしか
+    無く、`compute_observation_digest` 自身は ``observation.enabled`` を
+    見ずに常に melody 参照を resolve+hash していたため、observation 無効な
+    project でも melody 参照ファイル欠落だけで（本来 `collect` 止まりで
+    済むはずが）参照エラーになり得た。この分岐を呼び出し側のガード順に
+    依存させず本関数内で完結させることで、`compute_observation_digest` を
+    直接呼ぶ将来の呼び出し元（ガード順を誤り得る）に対しても同じ安全性を
+    保証する。``observation.enabled is True`` のときは従来どおり content
+    hash を編入する（挙動不変、ただし下記 R4-4 の lenient-missing 化を含む）。
+
+    R4-4 (Codex round4 P2・lenient-missing): ``observation.enabled is True``
+    でも、契約に axis_policy 付き melody anchor が無い（= melody 参照が
+    未使用の）段階では、参照先 3 ファイルが存在しないだけで通常観測全体を
+    失敗させたくない（axis_policy 撤去後・活性化前の準備段階の運用を塞がない
+    ため）。よって各参照パスは ``resolve_melody_observation_paths(...,
+    require_exists=False)`` で**封じ込め検証のみ**行い（project 外脱出は
+    従来どおり ``RecastError`` で fail-closed — それは設定エラー）、実在
+    チェックはここで個別に行う: 存在すれば content hash を、``FileNotFound``
+    なら決定論的センチネル（``_MELODY_REFERENCE_MISSING_SENTINEL``）を
+    fold する（raise しない）。この方式により: 未使用+欠落 → 通常観測が
+    進む / 使用時の欠落 → 評価段（`evaluate_melody_experimental_anchor`）が
+    正直な理由により not_observed に落ちる（fail-closed のまま、`observe`
+    自体は成功する）/ 欠落→出現の遷移も sentinel と実 sha256 が異なる値に
+    なるため digest が変わり staleness 検出が正しく働く。"""
     payload = observation.model_dump(mode="json", exclude_none=True)
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    base_digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    if observation.enabled is False:
+        return base_digest
+    if observation.melody is None:
+        return base_digest
+    if project_dir is None:
+        raise ValueError(
+            "compute_observation_digest: project_dir is required when "
+            "observation.melody is set (R1-3: melody 参照先ファイルの content "
+            "hash を digest へ編入するため project_dir からの相対パス解決が要る)"
+        )
+    m3_path, m1_path, reference_audio_path = resolve_melody_observation_paths(
+        project_dir=project_dir, melody_config=observation.melody, require_exists=False
+    )
+    components: Dict[str, str] = {
+        "observation": base_digest,
+        "melody_comparison_registry": _sha256_file_or_missing_sentinel(m3_path),
+        "melody_m1_registry": _sha256_file_or_missing_sentinel(m1_path),
+    }
+    if reference_audio_path is not None:
+        components["melody_reference_audio"] = _sha256_file_or_missing_sentinel(reference_audio_path)
+    return compute_content_digest(components)
 
 
 def compute_recast_inputs_digest(
@@ -1037,7 +1147,7 @@ def _read_single_read_bundle(
         digest_components["identity_manifest"] = manifest_sha256
         try:
             manifest, channel_artifact_bytes = parse_identity_manifest_with_artifacts(
-                manifest_bytes, manifest_path, collect=_is_manual_order_channel_anchor
+                manifest_bytes, manifest_path, collect=_is_channel_artifact_bytes_anchor
             )
         except (IdentityManifestError, ValueError, ValidationError, yaml.YAMLError) as exc:
             manifest_parse_error = exc
@@ -1544,6 +1654,41 @@ def _compile_verify_publish(
                 )
             warnings = warnings + mode_gate_reasons
 
+    # R3-3 (Codex round3 P2 対応・all-build-then-publish の回復): melody 診断
+    # （registry 欠落/破損で `RecastError` を raise しうる計算）を永続公開
+    # （`_atomic_publish_text_bundle`）より**前**に完了させる——従来はこの
+    # 呼び出しが publish の**後**にあったため、diagnosis が raise すると
+    # 「package は既に公開済みだが呼び出しは例外で失敗する」半端な状態が
+    # 残った（失敗した invocation の package が builds_root に残置される）。
+    # ここで先に計算しておけば、raise 時点で publish 自体にまだ到達していない
+    # ——all-build-then-publish（先に全て構築してから公開する）を回復する。
+    # M4c (Design Memo M4 §5): axis_policy 付き melody anchor があるときだけ
+    # 「observability 見込み」1 行を warnings へ足す（抽出は行わない — G1/G2/
+    # config 不在のみを判定する診断）。melody anchor が無い project は
+    # `melody_warnings == []` のためバイト不変（既存 golden/demo/e2e project
+    # の `recast_plan.json` は一切影響を受けない）。
+    # R3-1 (Codex round3 P2 対応): 非空 `observation.anchors` は main の
+    # 観測スコープと同じ意味論で experimental 診断もフィルタする（診断
+    # パリティ維持——`or None` は空リスト（既定・絞り込みなし）を
+    # `melody_experimental_plan_warnings` の「全件」既定値へ正規化する）。
+    # R4-1 (Codex round4 P2 対応): `observation.enabled is False` のときは
+    # melody 診断自体を呼ばない（R3-2 と対称のガード）。従来はここが
+    # `observation.enabled` を見ずに常に呼んでいたため、registry 参照が
+    # 欠落/破損した project で `observation.enabled: false`（generated-only
+    # 運用）にしても `recast plan` が `RecastError` で失敗していた——
+    # 観測しないのだから observability 見込みの診断も無意味であり、
+    # 警告行も一切出さない。
+    if project.observation.enabled:
+        melody_warnings = melody_experimental_plan_warnings(
+            contract=bundle.contract,
+            melody_config=project.observation.melody,
+            project_dir=loaded.project_dir,
+            backend_ref=backend_ref,
+            observation_anchor_scope=project.observation.anchors or None,
+        )
+        if melody_warnings:
+            warnings = warnings + melody_warnings
+
     # staging_dir はここで cleanup 済み（verify 専用の一時コピーは跡形も
     # 残らない）。verification（該当時）・mode gate の両方を通過したので、
     # `publish=True` ならここで初めて real_package_dir へ永続公開する
@@ -1586,6 +1731,7 @@ def _compile_verify_publish(
         derived_score=bundle.resolution.derived_score,
         manifest_sha256=bundle.manifest_sha256,
         contract_sha256=bundle.contract_sha256,
+        contract=bundle.contract,
         profile_sha256=bundle.profile_sha256,
         derived_score_sha256=bundle.derived_score_sha256,
         channel_artifact_bytes=bundle.channel_artifact_bytes,
@@ -1702,6 +1848,40 @@ def build_recast_plan_artifacts(
     ]
     if bundle.mode_override_path is not None:
         protected_inputs.append(bundle.mode_override_path)
+    # R1-5 (Codex round1 P2 対応): `observation.melody` の resolved パス 3 種
+    # （comparison_registry/m1_registry/reference_audio）を protected-input
+    # set へ編入する——これらが recast 出力（state/report 等）と alias して
+    # いても、従来はここに含まれず publish が入力を上書きしうった。
+    # `collect_protected_input_paths`（`recast/run_paths.py`）と同じ集合を
+    # 束が既に読んだ `project.observation.melody` から副作用なく再構成する。
+    #
+    # R6-1 (Codex round6 P2 対応・all-or-nothing 排除): 3 パスは
+    # `resolve_melody_observation_paths_for_protection` で**それぞれ独立に**
+    # 「封じ込め検証のみ」で解決する（`run_paths.py:collect_protected_input_
+    # paths` と同じ対応・同じ理由——旧実装は 1 回の `resolve_melody_
+    # observation_paths` 呼び出しが 1 パスの封じ込め違反/未存在で
+    # ``RecastError`` を送出すると、`except RecastError: pass` が 3 パス
+    # 全ての保護を諦めていた）。実際のエラーは `melody_experimental_plan_
+    # warnings`（後続ステップ）が正規の報告順序で診断するため、ここでは
+    # non-None のパスだけを足す。
+    #
+    # R8-1 (Codex round8 P2 対応・disabled 対称性の完成): `observation.enabled
+    # is False` のときはこのブロック自体を呼ばない（R3-2/R4-1 と対称のガード）。
+    # 観測無効時 melody locator は「入力として読まれない」ため保護対象ではなく
+    # ——従来はここが `observation.enabled` を見ずに常に解決・追加していたため、
+    # dormant な locator が生成物パス（例: `performance_package.json`）を
+    # alias していると、観測を一切行わない project でも publish が
+    # （無関係な）衝突ガードで拒否されていた。
+    if project.observation.enabled and project.observation.melody is not None:
+        m3_path, m1_path, reference_audio_path = resolve_melody_observation_paths_for_protection(
+            project_dir=loaded.project_dir, melody_config=project.observation.melody
+        )
+        if m3_path is not None:
+            protected_inputs.append(m3_path)
+        if m1_path is not None:
+            protected_inputs.append(m1_path)
+        if reference_audio_path is not None:
+            protected_inputs.append(reference_audio_path)
     if bundle.manifest is not None:
         manifest_dir = bundle.manifest_path.resolve().parent
         try:
@@ -1722,6 +1902,7 @@ def build_recast_plan_artifacts(
         derived_score: Optional[CompositionScore] = None,
         manifest_sha256: Optional[str] = None,
         contract_sha256: Optional[str] = None,
+        contract: Optional[PreservationContract] = None,
         profile_sha256: Optional[str] = None,
         derived_score_sha256: Optional[str] = None,
         channel_artifact_bytes: Optional[Dict[str, bytes]] = None,
@@ -1779,6 +1960,7 @@ def build_recast_plan_artifacts(
             derived_score=derived_score,
             manifest_sha256=manifest_sha256,
             contract_sha256=contract_sha256,
+            contract=contract,
             profile_sha256=profile_sha256,
             derived_score_sha256=derived_score_sha256,
             channel_artifact_bytes=channel_artifact_bytes or {},

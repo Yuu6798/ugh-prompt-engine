@@ -30,15 +30,17 @@ schema_version: "recast-project/0.1"
 project: { id: "...", builds_root: "builds" }
 work: { score: "...", identity_manifest: "..." }        # CompositionScore / IdentityManifest への参照
 variants: { <name>: { arrangement: "..." } }              # ArrangementSpec への参照（1 つ以上）
-backends: { <name>: { capability_profile, invocation, invocation_mode, mode_overrides? } }
+backends: { <name>: { capability_profile, invocation, invocation_mode, mode_overrides?, melody_take_band? } }
 policy: { capability_mode, require_author_fields_resolved, require_verified_package }
-observation: { enabled, anchors }                          # PR5/PR6: 観測スコープ（§4）
+observation: { enabled, anchors, melody? }                 # PR5/PR6: 観測スコープ（§4）+ M4: melody experimental（§8）
 ```
 
 `invocation` は `manual`（外部生成器へ注文書を渡す）/ `local`（in-process
 演奏者を直接呼ぶ）の二択。`invocation_mode` は `cover`（参照音声からのカバー
 生成）/ `prompt_only`（テキストのみ）の二択で、`backends.<name>.mode_overrides`
 （`mode-overrides/0.1`、任意）と組み合わせて §4 の invocation_mode 軸を計測する。
+`backends.<name>.melody_take_band` / `observation.melody` は M4（additive、既定
+省略）——melody anchor を experimental として観測する場合のみ宣言する（§8）。
 
 ## 3. 状態機械
 
@@ -112,7 +114,7 @@ D-1（`docs/wi1_d1_thresholds.md` 系列の裁定）を継承する:
   の 3 状態のみを報告する（`recast/report.py`）。「保存されている」と
   偽って報告しない — 計測できない anchor は正直に `not_observed`
 
-### Phase 0 ゲート帰結（melody 除外）
+### Phase 0 ゲート帰結（melody 除外・M4 で experimental 再導入）
 
 PR4 の縦切り hard anchor は **melody を採用せず**、`harmony`
 （`chord_progression` + chord-sequence センサー）+ `structure`
@@ -126,9 +128,11 @@ PR4 の縦切り hard anchor は **melody を採用せず**、`harmony`
   WI2（弁別非成立）の既往実測で不成立
 
 melody は recast 初版において D-1 既存語彙の `not_observed`
-（determination `no_sensor`）として扱う。新語彙は導入しない。再入条件
-（ボーカル分離 + 単旋律ソースでの再スパイク）は将来の melody sensor 検討の
-前提として残す。
+（determination `no_sensor`）として扱う。新語彙は導入しない。この現行挙動
+（`_observe_melody` LCS・本会計）は **今も変わらず既定** ——除外の歴史は
+維持される。**M4**（`docs/DESIGN_M4_recast_melody_anchor.md`）はこれとは別の
+**experimental 会計**を additive に足す（§8）。melody を main の縦切りへ
+昇格させる決定ではない。
 
 ### invocation_mode 軸（cover vs prompt_only の実測差）
 
@@ -207,3 +211,39 @@ typo 修正後に `awaiting_generation` から同じ take で ingest をやり�
 なかった — この前倒しで解消）。**`recast plan`/`run` はこの検証を行わない**
 — manual backend が注文書公開・`awaiting_generation` まで進めることを
 優先し、観測スコープの妥当性は ingest 冒頭でのみ判定する。
+
+## 8. melody anchor 配線（M4・experimental）
+
+上位設計書: [`docs/DESIGN_M4_recast_melody_anchor.md`](DESIGN_M4_recast_melody_anchor.md)
+（起動ゲート G1–G3・写像規則・PR 分割の正）。実装は `src/svp_rpe/recast/experimental.py`
+（`recast/` 配下・`melody/` の凍結境界の外）。要点のみ、詳細は上位設計書参照:
+
+- **スキーマ（additive・既定は現行維持）**: `arrange/contract.py:ContractAnchor.
+  axis_policy`（軸単位の保持方針、`DOMAIN_AXIS_VOCAB` で melody={contour,
+  interval,rhythm}）が opt-in トリガー——無ければ現行 `_observe_melody`
+  （LCS・本会計）のまま。`recast/models.py:MelodyObservationConfig`
+  （`ObservationConfig.melody`）が観測設定（reference=score|audio・比較
+  registry 参照・route）、`BackendRef.melody_take_band` が backend 単位の
+  帯域自己記述。
+- **ゲート（機械判定・G1–G3）**: G1 校正（M3 registry が frozen）→ G2 帯域
+  （校正済み集合 `{"clear_lead"}` のみ）→ G3 観測（M1 gate + M3 coverage）。
+  いずれか不成立は `not_observed(reason)` へ正直に落ちる（G1 未成立を
+  エラーにしない — M3d 校正実測は未完了のため現状は常に `not_observed
+  (comparator_uncalibrated)`）。axis_policy が frozen 軸の外を指す場合のみ
+  fail-closed error（load/実行時）。
+- **写像（純関数・翻訳のみ）**: M3 の軸別 evidence（strong/weak/none/
+  uncalibrated）を axis_policy（hard/elastic/free）へ照らし、D-1 語彙
+  4 値（preserved/changed_within_policy/changed_outside_policy/
+  not_observed）へ機械的に写す。新しい閾値・重み・単一スコアは一切作らない。
+- **会計分離**: `RecastReport.experimental_anchors`（additive、空なら
+  serialize に現れない）は melody 翻訳結果を載せるが、`coverage`
+  （verified/violated/not_observed の分母）には一切算入しない——main の
+  anchors/coverage は完全に無関係のまま。`recast plan` は生成前に
+  「observability 見込み」を `warnings` へ 1 行足す（抽出はしない・G1/G2/
+  config 不在のみ判定）。
+- **golden E2E**: `tests/test_recast_m4d_melody_e2e.py`
+  （`examples/recast/demo_project` を tmp_path へコピー+パッチ、既存
+  `examples/recast/golden_project/` は無変更）が校正済み分岐（extractor
+  注入で preserved/changed_within_policy/changed_outside_policy の 3 判定）
+  + G1 不成立分岐（抽出が呼ばれないことも確認）+ 決定論を検証する。実 pyin
+  抽出は Phase 0 縮退既知のためスコープ外（route_runner 注入で代替）。
