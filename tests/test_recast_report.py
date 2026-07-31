@@ -17,6 +17,7 @@ from svp_rpe.arrange.observe import (
     ObservationReport,
 )
 from svp_rpe.arrange.package import PackageAnchorStatus, PerformancePackage
+from svp_rpe.recast.experimental import ExperimentalAnchorEntry
 from svp_rpe.recast.report import (
     RECAST_REPORT_SCHEMA_VERSION,
     RecastReport,
@@ -519,6 +520,169 @@ def test_recast_report_take_accepts_project_relative_path() -> None:
         path="builds/takes/../takes/edm@suno/take-01.wav", sha256="0" * 64
     )
     assert canceling.path == "builds/takes/../takes/edm@suno/take-01.wav"
+
+
+# --- M4c: experimental_anchors (Design Memo M4 §5, DD-8) -----------------------
+
+
+def _melody_experimental_entry(
+    *, adherence_status: str = "preserved", anchor_id: str = "melody"
+) -> ExperimentalAnchorEntry:
+    return ExperimentalAnchorEntry(
+        adherence_status=adherence_status,
+        anchor_id=anchor_id,
+        domain="melody",
+        axis_policy={"contour": "hard", "interval": "elastic"},
+        axes={"contour": 0.9, "interval": 0.8},
+        axis_evidence={"contour": "strong", "interval": "strong"},
+        coverage={
+            "aligned_note_fraction_a": 1.0,
+            "aligned_note_fraction_b": 1.0,
+            "phrase_coverage_a": 1.0,
+            "phrase_coverage_b": 1.0,
+        },
+        octave_artifact_suspected=False,
+        reasons=[],
+        provenance={"reference": "score"},
+    )
+
+
+def _minimal_recast_report() -> RecastReport:
+    report = _observation_report(
+        [_anchor_observation("harmony", "harmony", "preserved", "exact_match")]
+    )
+    package = _package(
+        [PackageAnchorStatus.model_construct(anchor_id="harmony", requested_mode="hard")]
+    )
+    return build_recast_report(
+        project_id="p",
+        variant="v",
+        backend="b",
+        package=package,
+        report=report,
+        take_path_relative="take.wav",
+        take_sha256="a" * 64,
+    )
+
+
+def test_build_recast_report_defaults_experimental_anchors_to_empty() -> None:
+    recast_report = _minimal_recast_report()
+    assert recast_report.experimental_anchors == []
+
+
+def test_recast_report_dump_omits_experimental_anchors_key_when_empty() -> None:
+    """DD-8: 空のときは serialize に一切現れない — 既存 golden fixture の
+    バイト不変契約（`experimental_anchors: []` すら出力に混ぜない）。"""
+    recast_report = _minimal_recast_report()
+    dumped = recast_report.model_dump(mode="json", exclude_none=True)
+    assert "experimental_anchors" not in dumped
+    assert "experimental_anchors" not in recast_report.model_dump_json()
+
+
+def test_recast_report_dump_includes_experimental_anchors_when_present() -> None:
+    report = _observation_report(
+        [_anchor_observation("harmony", "harmony", "preserved", "exact_match")]
+    )
+    package = _package(
+        [PackageAnchorStatus.model_construct(anchor_id="harmony", requested_mode="hard")]
+    )
+    entry = _melody_experimental_entry()
+    recast_report = build_recast_report(
+        project_id="p",
+        variant="v",
+        backend="b",
+        package=package,
+        report=report,
+        take_path_relative="take.wav",
+        take_sha256="a" * 64,
+        experimental_anchors=[entry],
+    )
+    dumped = recast_report.model_dump(mode="json", exclude_none=True)
+    assert dumped["experimental_anchors"] == [entry.model_dump(mode="json")]
+    # main の coverage/anchors は experimental の存在と無関係（会計分離）。
+    assert recast_report.coverage == RecastReportCoverage(verified=1, violated=0, not_observed=0)
+    assert [a.anchor_id for a in recast_report.anchors] == ["harmony"]
+
+
+def test_recast_report_round_trip_preserves_experimental_anchors() -> None:
+    report = _observation_report(
+        [_anchor_observation("harmony", "harmony", "preserved", "exact_match")]
+    )
+    package = _package(
+        [PackageAnchorStatus.model_construct(anchor_id="harmony", requested_mode="hard")]
+    )
+    entry = _melody_experimental_entry()
+    recast_report = build_recast_report(
+        project_id="p",
+        variant="v",
+        backend="b",
+        package=package,
+        report=report,
+        take_path_relative="take.wav",
+        take_sha256="a" * 64,
+        experimental_anchors=[entry],
+    )
+    round_tripped = RecastReport.model_validate(recast_report.model_dump(mode="json"))
+    assert round_tripped == recast_report
+    assert round_tripped.experimental_anchors == [entry]
+
+
+def test_recast_report_reads_back_old_report_without_experimental_anchors_field() -> None:
+    """旧レポート（このフィールドを持たない JSON）は default（空リスト）で
+    読み戻せる — 後方互換。"""
+    payload = {
+        "schema_version": RECAST_REPORT_SCHEMA_VERSION,
+        "project_id": "p",
+        "variant": "v",
+        "backend": "b",
+        "work_id": "w",
+        "take": {"path": "take.wav", "sha256": "0" * 64},
+        "package_sha256": "0" * 64,
+        "anchors": [],
+        "coverage": {"verified": 0, "violated": 0, "not_observed": 0},
+        "identity_assessment": {"enabled": False},
+    }
+    report = RecastReport.model_validate(payload)
+    assert report.experimental_anchors == []
+
+
+def test_render_recast_summary_markdown_omits_experimental_section_when_empty() -> None:
+    recast_report = _minimal_recast_report()
+    md = render_recast_summary_markdown(recast_report)
+    assert "Experimental anchors" not in md
+
+
+def test_render_recast_summary_markdown_includes_experimental_section_when_present() -> None:
+    report = _observation_report(
+        [_anchor_observation("harmony", "harmony", "preserved", "exact_match")]
+    )
+    package = _package(
+        [PackageAnchorStatus.model_construct(anchor_id="harmony", requested_mode="hard")]
+    )
+    entry = _melody_experimental_entry()
+    recast_report = build_recast_report(
+        project_id="p",
+        variant="v",
+        backend="b",
+        package=package,
+        report=report,
+        take_path_relative="take.wav",
+        take_sha256="a" * 64,
+        experimental_anchors=[entry],
+    )
+    md = render_recast_summary_markdown(recast_report)
+    assert "## Experimental anchors (melody)" in md
+    assert "melody" in md
+    assert "preserved" in md
+    # Coverage 集計自体はこの節を反映していない（会計分離を要求どおり明文化）。
+    assert "verified: 1" in md
+    assert "not_observed: 0" in md
+
+
+def test_recast_report_take_requires_64_hex_sha256_still_works_with_experimental() -> None:
+    """既存の take.sha256 validator（本テストファイル前段）と
+    experimental_anchors フィールド追加が独立に動作することの sanity。"""
+    RecastReportTake(path="take.wav", sha256="0" * 64)
 
 
 def test_recast_report_round_trip_preserves_relative_take_path() -> None:

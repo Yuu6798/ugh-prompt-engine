@@ -68,9 +68,10 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
 import yaml
 from pydantic import Field
 
-from svp_rpe.arrange.contract import ContractAnchor
+from svp_rpe.arrange.contract import ContractAnchor, PreservationContract
 from svp_rpe.arrange.identity import AnchorDomain
 from svp_rpe.arrange.observe import NOTE_EVENTS_ARTIFACT_SCHEMA, _note_name_to_midi
+from svp_rpe.arrange.pathsafe import PathConfinementError, resolve_confined, validate_relative_locator
 from svp_rpe.compose.models import CompositionScore
 from svp_rpe.melody.comparison import MelodyComparisonReport, compare_melodies
 from svp_rpe.melody.extractors import observe_via_route_with_provenance
@@ -81,8 +82,8 @@ from svp_rpe.melody.observability import (
 )
 from svp_rpe.melody.representation import M3ComparisonConfig, load_m3_registry
 from svp_rpe.melody.routing import MelodyRoute, select_routes
-from svp_rpe.recast.models import MelodyObservationConfig, RecastError
-from svp_rpe.recast.report import RecastReportModel
+from svp_rpe.recast.models import BackendRef, MelodyObservationConfig, RecastError
+from svp_rpe.recast.report_base import RecastReportModel
 from svp_rpe.sentinels import is_todo_sentinel
 
 __all__ = [
@@ -93,6 +94,9 @@ __all__ = [
     "derive_score_reference_observation",
     "map_axis_policy_to_adherence",
     "evaluate_melody_experimental_anchor",
+    "resolve_melody_observation_paths",
+    "collect_melody_experimental_anchors",
+    "melody_experimental_plan_warnings",
 ]
 
 # M4 DD-4: 校正済み帯域は現状「単離済み clean lead」のみ。stem 帯（vocal_track/
@@ -427,13 +431,12 @@ def evaluate_melody_experimental_anchor(
 
     ``melody_take_band`` は ``BackendRef.melody_take_band``（G2、テイク側）。
     ``reference_melody_band`` は ``reference == "audio"`` のときの原曲側帯域
-    宣言だが、`MelodyObservationConfig`（DD-10）に対応するスキーマ欄が存在
-    しないため常に ``None`` になる——結果として audio_reference は現状 G2 を
-    通過できない（band_out_of_validation(declared=none)）。これは
-    audio_reference が「score_reference の後備」（上位設計書 §2）である以上、
-    帯域を宣言する手段が用意されるまで安全側に倒れるという、スキーマの字面
-    どおりの帰結であり、本フェーズで新しい判断を加えたものではない
-    （最終報告に明記）。
+    宣言——`MelodyObservationConfig.reference_band`（DD-10b、additive）から
+    呼び出し側が配線する。既定 ``None``（宣言なし）は現行どおり G2 不成立
+    （``band_out_of_validation(declared=none)``）に倒れる。``reference ==
+    "score"`` では `MelodyObservationConfig` 自身の validator が
+    `reference_band` の宣言そのものを拒否するため、呼び出し側は本引数を
+    渡さない（score_reference には帯域の概念が無い）。
 
     ``route_runner`` / ``reference_route_runner`` は抽出器非依存の注入 seam
     （`scripts/run_melody_comparison.py` の route_runner パターンと同型・
@@ -563,3 +566,170 @@ def evaluate_melody_experimental_anchor(
         reasons=reasons,
         provenance=dict(report.provenance),
     )
+
+
+# --------------------------------------------------------------------------- #
+# M4c — ingest/observe/report・plan への配線（orchestration・純関数中心）
+# --------------------------------------------------------------------------- #
+def _melody_anchors_with_axis_policy(
+    contract: Optional[PreservationContract],
+) -> List[ContractAnchor]:
+    """`contract` から domain=="melody" かつ axis_policy 宣言済みの anchor だけを
+    宣言順に抽出する（DD-3 opt-in の判定そのもの — axis_policy の無い melody
+    anchor は M4 経路を一切トリガーしない）。``contract`` が ``None``（plan が
+    未到達等）なら空リスト。"""
+    if contract is None:
+        return []
+    return [
+        anchor
+        for anchor in contract.anchors
+        if anchor.domain == "melody" and anchor.axis_policy is not None
+    ]
+
+
+def _resolve_project_relative_melody_reference(
+    value: str, project_dir: Path, *, target: str
+) -> Path:
+    """`observation.melody` 配下の project 相対パス参照を解決する
+    （`recast/loader.py:_resolve_sidecar_reference` の封じ込めパターン踏襲:
+    絶対パス/`../` traversal/symlink 脱出を拒否し、実在も検証する）。"""
+    try:
+        validate_relative_locator(value)
+        resolved = resolve_confined(value, project_dir)
+    except PathConfinementError as exc:
+        raise RecastError(f"{target} reference {value!r} is invalid: {exc}") from exc
+    if not resolved.is_file():
+        raise RecastError(f"{target} reference {value!r} does not exist at {resolved}")
+    return resolved
+
+
+def resolve_melody_observation_paths(
+    *, project_dir: Path, melody_config: MelodyObservationConfig
+) -> Tuple[Path, Path, Optional[Path]]:
+    """``melody_config`` の project 相対パス群（`comparison_registry` /
+    `m1_registry` / `reference_audio`）を実パスへ解決する
+    （``(m3_registry_path, m1_registry_path, reference_audio_path)``、
+    `reference_audio_path` は `reference == "score"` のとき常に ``None``）。
+    不在/封じ込め違反は ``RecastError`` で fail-closed（他の recast 参照解決と
+    同じ posture — 誤設定を no-op の not_observed に握りつぶさない）。"""
+    m3_path = _resolve_project_relative_melody_reference(
+        melody_config.comparison_registry, project_dir, target="observation.melody.comparison_registry"
+    )
+    m1_path = _resolve_project_relative_melody_reference(
+        melody_config.m1_registry, project_dir, target="observation.melody.m1_registry"
+    )
+    reference_audio_path: Optional[Path] = None
+    if melody_config.reference_audio is not None:
+        reference_audio_path = _resolve_project_relative_melody_reference(
+            melody_config.reference_audio, project_dir, target="observation.melody.reference_audio"
+        )
+    return m3_path, m1_path, reference_audio_path
+
+
+def collect_melody_experimental_anchors(
+    *,
+    contract: Optional[PreservationContract],
+    melody_config: Optional[MelodyObservationConfig],
+    project_dir: Path,
+    backend_ref: BackendRef,
+    score: Optional[CompositionScore],
+    channel_artifact_bytes: Dict[str, bytes],
+    take_audio_path: Optional[Path],
+    route_runner: Optional[RouteRunner] = None,
+    reference_route_runner: Optional[RouteRunner] = None,
+) -> List[ExperimentalAnchorEntry]:
+    """`RecastReport.experimental_anchors` を組み立てる M4c の ingest/observe
+    経路 orchestration（Design Memo M4 §5）。axis_policy 付き melody anchor が
+    契約に無ければ即座に空リスト（``main`` の anchors/coverage には一切
+    触れない・呼び出し側が別途 `build_recast_report` を通常どおり呼ぶ）。
+
+    ``route_runner`` / ``reference_route_runner``（DD-5 の抽出器注入 seam）は
+    本関数のパラメータとしてのみ露出する——CLI からは非公開（呼び出し側の
+    `recast_cmd.py` はこれを渡さず、常に実抽出器を使う）。
+
+    anchor の順序は ``contract.anchors``（= manifest anchor 宣言順）をそのまま
+    保つ（決定論契約）。
+    """
+    melody_anchors = _melody_anchors_with_axis_policy(contract)
+    if not melody_anchors:
+        return []
+
+    m3_registry_path: Optional[Path] = None
+    m1_registry_path: Optional[Path] = None
+    reference_audio_path: Optional[Path] = None
+    if melody_config is not None:
+        m3_registry_path, m1_registry_path, reference_audio_path = resolve_melody_observation_paths(
+            project_dir=project_dir, melody_config=melody_config
+        )
+
+    entries: List[ExperimentalAnchorEntry] = []
+    for anchor in melody_anchors:
+        if melody_config is None:
+            entries.append(
+                _not_observed_entry(anchor=anchor, reason="melody_config_missing", provenance={})
+            )
+            continue
+        assert m3_registry_path is not None and m1_registry_path is not None  # set above
+        assert score is not None  # compiled/verified plan always resolves a derived score
+        entries.append(
+            evaluate_melody_experimental_anchor(
+                anchor=anchor,
+                melody_config=melody_config,
+                score=score,
+                melody_artifact_bytes=channel_artifact_bytes.get(anchor.anchor_id),
+                melody_artifact_sha256=anchor.artifact_sha256,
+                melody_take_band=backend_ref.melody_take_band,
+                take_audio_path=str(take_audio_path) if take_audio_path is not None else None,
+                m3_registry_path=m3_registry_path,
+                m1_registry_path=m1_registry_path,
+                reference_audio_path=(
+                    str(reference_audio_path) if reference_audio_path is not None else None
+                ),
+                reference_melody_band=melody_config.reference_band,
+                route_runner=route_runner,
+                reference_route_runner=reference_route_runner,
+            )
+        )
+    return entries
+
+
+def melody_experimental_plan_warnings(
+    *,
+    contract: Optional[PreservationContract],
+    melody_config: Optional[MelodyObservationConfig],
+    project_dir: Path,
+    backend_ref: BackendRef,
+) -> List[str]:
+    """`recast plan` の warnings へ積む「observability 見込み」1 行を anchor
+    ごとに組み立てる（Design Memo M4 §5）。抽出は行わない——plan 時点で
+    機械判定できる 3 条件（config 不在 / G1 校正 / G2 帯域）のみを診断する。
+
+    axis_policy 付き melody anchor が契約に無ければ空リスト（既存 project は
+    バイト不変のまま — `RecastPlan` スキーマは変更しない、既存 `warnings`
+    リストへ足すだけ）。
+    """
+    melody_anchors = _melody_anchors_with_axis_policy(contract)
+    if not melody_anchors:
+        return []
+
+    diagnosis: Optional[str] = None
+    if melody_config is not None:
+        m3_registry_path, _m1_registry_path, _reference_audio_path = resolve_melody_observation_paths(
+            project_dir=project_dir, melody_config=melody_config
+        )
+        _config, _sha256, g1_reason = _load_m3_registry_with_gate(m3_registry_path)
+        if g1_reason is not None:
+            diagnosis = "not expected (comparator_uncalibrated)"
+        else:
+            band_reason = _check_melody_take_band(backend_ref.melody_take_band)
+            if band_reason is not None:
+                diagnosis = "not expected (band_out_of_validation)"
+            else:
+                diagnosis = "ok"
+    else:
+        diagnosis = "not expected (melody_config_missing)"
+
+    return [
+        f"melody anchor '{anchor.anchor_id}': experimental observability — {diagnosis}"
+        for anchor in melody_anchors
+    ]

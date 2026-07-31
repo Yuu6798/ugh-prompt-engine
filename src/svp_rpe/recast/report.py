@@ -29,7 +29,13 @@ from __future__ import annotations
 
 from typing import Dict, List, Literal, Optional, Sequence
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from svp_rpe.arrange.identity import AnchorDomain
 from svp_rpe.arrange.models import JsonValue, PreservationMode
@@ -41,6 +47,8 @@ from svp_rpe.arrange.observe import (
 )
 from svp_rpe.arrange.package import PerformancePackage
 from svp_rpe.arrange.pathsafe import PathConfinementError, validate_relative_locator
+from svp_rpe.recast.experimental import ExperimentalAnchorEntry
+from svp_rpe.recast.report_base import RecastReportModel
 
 RECAST_REPORT_SCHEMA_VERSION = "recast-report/0.1"
 RECAST_REPORT_FILENAME = "recast_report.json"
@@ -69,12 +77,6 @@ def _coverage_for(adherence_status: str) -> CoverageStatus:
             f"unknown adherence_status for recast report coverage mapping: "
             f"{adherence_status!r} (expected one of {sorted(_ADHERENCE_TO_COVERAGE)})"
         ) from None
-
-
-class RecastReportModel(BaseModel):
-    """recast-report 側スキーマの共通基底。未知 key を拒否する。"""
-
-    model_config = ConfigDict(extra="forbid")
 
 
 class RecastReportTake(RecastReportModel):
@@ -191,6 +193,26 @@ class RecastReport(RecastReportModel):
     anchors: List[RecastReportAnchor]
     coverage: RecastReportCoverage
     identity_assessment: IdentityAssessment = Field(default_factory=IdentityAssessment)
+    # M4c (Design Memo M4 §5, additive): melody 等の experimental anchor
+    # 翻訳結果。**本会計（`coverage` の verified/violated/not_observed 分母）
+    # には一切算入しない**——`_tally_anchor_coverage`/
+    # `_validate_coverage_matches_anchors` は `self.anchors`（main）のみを
+    # 見る。旧レポート（このフィールドを持たない JSON）は default（空リスト）
+    # で読み戻せる。DD-8: 空のときは serialize に現れない（下記
+    # `_omit_empty_experimental_anchors` 参照）——既存 golden fixture の
+    # バイト不変を壊さない。
+    experimental_anchors: List[ExperimentalAnchorEntry] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_experimental_anchors(self, handler: SerializerFunctionWrapHandler) -> Dict:
+        """DD-8: `experimental_anchors` が空のときは出力 dict に現れない
+        （`model_dump`/`model_dump_json` いずれの呼び出し経路でも一貫させる
+        単一箇所——呼び出し側で個別に pop する必要がない）。melody anchor が
+        1 件でもあれば通常どおりリストとして出力する。"""
+        data = handler(self)
+        if not self.experimental_anchors:
+            data.pop("experimental_anchors", None)
+        return data
 
     @model_validator(mode="after")
     def _validate_coverage_matches_anchors(self) -> "RecastReport":
@@ -248,6 +270,7 @@ def build_recast_report(
     take_path_relative: str,
     take_sha256: str,
     observation_anchors: Sequence[str] = (),
+    experimental_anchors: Sequence[ExperimentalAnchorEntry] = (),
 ) -> RecastReport:
     """`ObservationReport`（`observe_generated_artifact` が組み立てた計器出力）+
     `package`（`anchor_statuses[].requested_mode` 由来の policy_mode）から
@@ -265,6 +288,11 @@ def build_recast_report(
     場合の fail-closed 検証は呼び出し側の責務（`recast/plan.py` の
     `build_recast_plan_artifacts` が manifest ロード直後に行う — 本関数は
     純粋なフィルタリングのみで、ここでは検証しない）。
+
+    `experimental_anchors`（M4c、additive）は呼び出し側が別途
+    `recast/experimental.py:collect_melody_experimental_anchors` で組み立てた
+    entry 列をそのまま転記するだけ——`report.anchors`/`coverage`（本会計）とは
+    完全に独立で、ここでのフィルタリング・集計の対象にならない（会計分離）。
     """
     policy_by_anchor: Dict[str, Optional[PreservationMode]] = {
         status.anchor_id: status.requested_mode for status in package.anchor_statuses
@@ -300,6 +328,7 @@ def build_recast_report(
         anchors=anchors,
         coverage=_tally_anchor_coverage(anchors),
         identity_assessment=IdentityAssessment(enabled=False),
+        experimental_anchors=list(experimental_anchors),
     )
 
 
@@ -323,6 +352,32 @@ def render_recast_summary_markdown(report: RecastReport) -> str:
             f"| {anchor.anchor_id} | {anchor.domain} | {anchor.policy_mode or '-'} | "
             f"{anchor.adherence_status} | {anchor.determination} | {anchor.coverage} |"
         )
+    if report.experimental_anchors:
+        # M4c (DD-8): melody anchor が 1 件以上あるときだけ節を出す（空のときは
+        # 何も描画しない — バイト不変契約）。会計分離を明文化: この節は
+        # 上の Coverage 集計に一切寄与しない。
+        lines += [
+            "",
+            "## Experimental anchors (melody)",
+            "",
+            "比較器の evidence を契約の axis_policy へ機械的に写した実験的な観測です"
+            "（本レポートの Coverage 集計には含まれません — 単一の同一性スコアは"
+            "出しません）。",
+            "",
+            "| anchor_id | domain | adherence_status | axes | axis_policy | reasons |",
+            "|---|---|---|---|---|---|",
+        ]
+        for entry in report.experimental_anchors:
+            axes_text = ", ".join(
+                f"{axis}={value:.3f}" if value is not None else f"{axis}=-"
+                for axis, value in sorted(entry.axes.items())
+            )
+            policy_text = ", ".join(f"{axis}={mode}" for axis, mode in sorted(entry.axis_policy.items()))
+            reasons_text = "; ".join(entry.reasons) if entry.reasons else "-"
+            lines.append(
+                f"| {entry.anchor_id} | {entry.domain} | {entry.adherence_status} | "
+                f"{axes_text or '-'} | {policy_text or '-'} | {reasons_text} |"
+            )
     lines += [
         "",
         "## Coverage",

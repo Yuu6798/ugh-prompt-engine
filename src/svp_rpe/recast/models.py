@@ -111,6 +111,15 @@ class MelodyObservationConfig(RecastModel):
     reference: Literal["score", "audio"] = "score"
     # `reference == "audio"` のときのみ必須（project 相対パス）。
     reference_audio: Optional[str] = None
+    # M4 (DD-10b, additive): `reference == "audio"` のときの原曲側帯域宣言
+    # （G2、`BackendRef.melody_take_band` と同じ語彙）。既定 `None` は
+    # 「宣言なし」= G2 fail-closed（現行維持 — `recast/experimental.py` の
+    # `evaluate_melody_experimental_anchor` が `reference_melody_band=None` を
+    # 校正済み集合外として `not_observed(reason: band_out_of_validation(...))`
+    # へ落とす）。`reference == "score"` では宣言そのものを禁止する
+    # （score_reference は記号から決定論導出するため帯域の概念が無い —
+    # 下記 validator）。
+    reference_band: Optional[MelodyTakeBand] = None
     comparison_registry: str
     m1_registry: str
     route: str = "pyin_direct"
@@ -127,6 +136,19 @@ class MelodyObservationConfig(RecastModel):
                 "MelodyObservationConfig: reference='score' forbids reference_audio "
                 f"(got {self.reference_audio!r}) — score_reference derives the reference "
                 "melody from the identity sidecar's note-events artifact, not audio"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_reference_band_pairing(self) -> "MelodyObservationConfig":
+        # M4 (DD-10b): `reference == "score"` のとき `reference_band` の宣言は
+        # 禁止（fail-closed）——記号旋律に「帯域」は存在しない概念であり、
+        # 誤って宣言すると G2 の意味が曖昧になる。`reference == "audio"` は
+        # 宣言してもしなくてもよい（`None` のままなら現行どおり G2 不成立）。
+        if self.reference == "score" and self.reference_band is not None:
+            raise ValueError(
+                "MelodyObservationConfig: reference='score' forbids reference_band "
+                f"(got {self.reference_band!r}) — score_reference has no audio band"
             )
         return self
 

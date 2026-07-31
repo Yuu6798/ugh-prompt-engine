@@ -178,3 +178,67 @@ def test_invalid_capability_mode_rejected() -> None:
 
     with pytest.raises(ValidationError):
         RecastProject.model_validate(payload)
+
+
+# --- M4 (DD-10b): MelodyObservationConfig.reference_band ------------------------
+
+
+def _melody_config_payload(**overrides: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "reference": "score",
+        "comparison_registry": "m3_comparison_registry.yaml",
+        "m1_registry": "registry.yaml",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_melody_observation_config_reference_band_defaults_to_none() -> None:
+    from svp_rpe.recast.models import MelodyObservationConfig
+
+    config = MelodyObservationConfig.model_validate(_melody_config_payload())
+    assert config.reference_band is None
+
+
+def test_melody_observation_config_score_reference_forbids_reference_band() -> None:
+    """DD-10b: `reference == 'score'` のとき `reference_band` の宣言は
+    fail-closed で拒否する（記号旋律に帯域の概念は無い）。"""
+    from svp_rpe.recast.models import MelodyObservationConfig
+
+    with pytest.raises(ValidationError, match="forbids reference_band"):
+        MelodyObservationConfig.model_validate(
+            _melody_config_payload(reference="score", reference_band="clear_lead")
+        )
+
+
+def test_melody_observation_config_audio_reference_accepts_reference_band() -> None:
+    from svp_rpe.recast.models import MelodyObservationConfig
+
+    config = MelodyObservationConfig.model_validate(
+        _melody_config_payload(
+            reference="audio", reference_audio="ref.wav", reference_band="clear_lead"
+        )
+    )
+    assert config.reference_band == "clear_lead"
+
+
+def test_melody_observation_config_audio_reference_allows_omitted_reference_band() -> None:
+    """`reference == 'audio'` は `reference_band` を宣言してもしなくてもよい
+    （既定 `None` は現行どおり G2 fail-closed のまま — DD-10b は additive）。"""
+    from svp_rpe.recast.models import MelodyObservationConfig
+
+    config = MelodyObservationConfig.model_validate(
+        _melody_config_payload(reference="audio", reference_audio="ref.wav")
+    )
+    assert config.reference_band is None
+
+
+def test_melody_observation_config_rejects_unknown_reference_band_value() -> None:
+    from svp_rpe.recast.models import MelodyObservationConfig
+
+    with pytest.raises(ValidationError):
+        MelodyObservationConfig.model_validate(
+            _melody_config_payload(
+                reference="audio", reference_audio="ref.wav", reference_band="stereo_mix"
+            )
+        )

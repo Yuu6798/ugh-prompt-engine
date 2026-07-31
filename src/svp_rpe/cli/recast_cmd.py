@@ -1155,7 +1155,9 @@ def _observe_and_report(
 
     from svp_rpe.arrange.identity import IdentityManifestError
     from svp_rpe.arrange.observe import observe_generated_artifact
+    from svp_rpe.recast import RecastError
     from svp_rpe.recast.backend import atomic_publish_bytes_bundle
+    from svp_rpe.recast.experimental import collect_melody_experimental_anchors
     from svp_rpe.recast.plan import _normalize_diagnostic
     from svp_rpe.recast.report import (
         RECAST_REPORT_FILENAME,
@@ -1228,6 +1230,43 @@ def _observe_and_report(
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
+    # M4c (Design Memo M4 §5): axis_policy 付き melody anchor があれば
+    # experimental 節を組み立てる。main の anchors/coverage（上の
+    # `observation.report`/`build_recast_report` 呼び出し）には一切触れない
+    # ——会計分離。抽出器注入 seam（`route_runner`）は library 関数のみが
+    # 露出し、CLI からは常に既定（実抽出器）を使う。
+    try:
+        experimental_anchors = collect_melody_experimental_anchors(
+            contract=artifacts.contract,
+            melody_config=loaded.project.observation.melody,
+            project_dir=loaded.project_dir,
+            backend_ref=artifacts.backend_ref,
+            score=artifacts.derived_score,
+            channel_artifact_bytes=artifacts.channel_artifact_bytes,
+            take_audio_path=take.audio_path,
+        )
+    except (OSError, ValueError, RecastError) as exc:
+        obs_note = _normalize_diagnostic(
+            f"melody experimental observation failed: {exc}", loaded.project_dir
+        )
+        try:
+            record_state(
+                loaded.project_dir,
+                variant,
+                backend,
+                "observation_incomplete",
+                note=obs_note,
+                inputs_digest=artifacts.result.inputs_digest,
+                plan_sha256=plan_sha256,
+                observation_digest=current_observation_digest,
+                protected_inputs=prepared.protected_input_paths,
+            )
+        except (OSError, ValueError) as record_exc:
+            typer.echo(f"Error: {record_exc}", err=True)
+            raise typer.Exit(code=1) from record_exc
+        typer.echo(f"Error: melody experimental observation failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
     recast_report = build_recast_report(
         project_id=loaded.project.project.id,
         variant=variant,
@@ -1237,6 +1276,7 @@ def _observe_and_report(
         take_path_relative=take_relative,
         take_sha256=take.sha256,
         observation_anchors=loaded.project.observation.anchors,
+        experimental_anchors=experimental_anchors,
     )
     summary_markdown = render_recast_summary_markdown(recast_report)
     report_json_bytes = (

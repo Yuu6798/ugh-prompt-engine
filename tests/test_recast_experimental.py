@@ -1,8 +1,11 @@
-"""tests/test_recast_experimental.py — recast/experimental.py (M4a/M4b) のテスト。
+"""tests/test_recast_experimental.py — recast/experimental.py (M4a/M4b/M4c) のテスト。
 
 Design Memo M4 §7 の受け入れ条件（表駆動）に対応する:
 - M4a: 写像規則の全分岐 + axis_policy 検証 fail-closed + ゲート順序（G1〜G3）
 - M4b: score_reference の決定論導出（手計算一致・TODO bpm・artifact 不在）
+- M4c: DD-10b (`reference_band` 配線) + ingest/plan orchestration
+  （`collect_melody_experimental_anchors` / `melody_experimental_plan_warnings` /
+  `resolve_melody_observation_paths`）
 
 CI 安全（重依存なし・実抽出器を一切呼ばない）: `evaluate_melody_experimental_anchor`
 のテイク側抽出は常に `route_runner` 注入（fake extractor）で置き換える
@@ -11,23 +14,27 @@ CI 安全（重依存なし・実抽出器を一切呼ばない）: `evaluate_me
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 import yaml
 
-from svp_rpe.arrange.contract import ContractAnchor
+from svp_rpe.arrange.contract import ContractAnchor, ContractInputs, InputHash, PreservationContract
 from svp_rpe.compose.models import CompositionScore
 from svp_rpe.melody.comparison import MelodyComparisonReport
 from svp_rpe.melody.observability import MelodyNote, MelodyObservation
 from svp_rpe.recast.experimental import (
     ExperimentalAnchorEntry,
+    collect_melody_experimental_anchors,
     derive_score_reference_observation,
     evaluate_melody_experimental_anchor,
     map_axis_policy_to_adherence,
+    melody_experimental_plan_warnings,
+    resolve_melody_observation_paths,
 )
-from svp_rpe.recast.models import MelodyObservationConfig, RecastError
+from svp_rpe.recast.models import BackendRef, MelodyObservationConfig, RecastError
 
 ROOT = Path(__file__).resolve().parents[1]
 BENCH_DIR = ROOT / "tests" / "fixtures" / "melody_bench"
@@ -395,6 +402,57 @@ def test_audio_reference_without_reference_audio_is_author_input_missing(
 
 
 # --------------------------------------------------------------------------- #
+# M4c (DD-10b) — audio_reference の reference_melody_band 配線
+# --------------------------------------------------------------------------- #
+def test_audio_reference_without_reference_band_is_band_out_of_validation(
+    tmp_path: Path,
+) -> None:
+    """`reference_melody_band` 未指定（既定 None）は audio_reference の原曲側
+    G2 を通過できない——DD-10b 追加前と同じ安全側の帰結（回帰確認）。"""
+    m3_path = _frozen_m3_registry_path(tmp_path)
+    anchor = _anchor({"contour": "hard"})
+    entry = evaluate_melody_experimental_anchor(
+        anchor=anchor,
+        melody_config=_melody_config(reference="audio", reference_audio="ref.wav"),
+        score=_score(),
+        m3_registry_path=m3_path,
+        m1_registry_path=REAL_M1_REGISTRY,
+        melody_take_band="clear_lead",
+        reference_audio_path="ref.wav",
+        take_audio_path="take.wav",
+        route_runner=_make_route_runner(_take_notes(_REFERENCE_PITCHES)),
+    )
+    assert entry.adherence_status == "not_observed"
+    assert entry.reasons == ["band_out_of_validation(declared=none)"]
+
+
+def test_audio_reference_with_calibrated_reference_band_passes_g2(tmp_path: Path) -> None:
+    """DD-10b: `reference_melody_band="clear_lead"` を渡すと audio_reference の
+    原曲側 G2 が通過し、両側抽出（route_runner/reference_route_runner 注入）を
+    経て写像規則まで到達する。"""
+    m3_path = _frozen_m3_registry_path(tmp_path)
+    anchor = _anchor({"contour": "hard", "interval": "elastic", "rhythm": "elastic"})
+    take = _take_notes(_REFERENCE_PITCHES)
+    reference_take = _take_notes(_REFERENCE_PITCHES)
+    entry = evaluate_melody_experimental_anchor(
+        anchor=anchor,
+        melody_config=_melody_config(reference="audio", reference_audio="ref.wav"),
+        score=_score(),
+        m3_registry_path=m3_path,
+        m1_registry_path=REAL_M1_REGISTRY,
+        melody_take_band="clear_lead",
+        reference_audio_path="ref.wav",
+        reference_melody_band="clear_lead",
+        take_audio_path="take.wav",
+        route_runner=_make_route_runner(take),
+        reference_route_runner=_make_route_runner(reference_take),
+    )
+    assert entry.adherence_status == "preserved"
+    assert entry.provenance.get("reference") == "audio"
+    assert entry.provenance.get("extractor_injected") is True
+
+
+# --------------------------------------------------------------------------- #
 # M4b — score_reference 決定論導出
 # --------------------------------------------------------------------------- #
 def test_score_reference_hand_calc_matches() -> None:
@@ -609,3 +667,266 @@ def test_evaluate_requires_axis_policy_opt_in() -> None:
             m3_registry_path=REAL_M3_UNCALIBRATED_REGISTRY,
             m1_registry_path=REAL_M1_REGISTRY,
         )
+
+
+# --------------------------------------------------------------------------- #
+# M4c — orchestration ヘルパー
+# --------------------------------------------------------------------------- #
+def _harmony_anchor(*, anchor_id: str = "harmony-1") -> ContractAnchor:
+    """axis_policy 語彙の無い domain の anchor（melody フィルタリングの対照）。"""
+    return ContractAnchor(
+        anchor_id=anchor_id,
+        domain="harmony",
+        mode="free",
+        allow=[],
+        artifact="chord_progression.json",
+        artifact_sha256=VALID_SHA256,
+        axis_policy=None,
+    )
+
+
+def _contract(anchors: List[ContractAnchor]) -> PreservationContract:
+    return PreservationContract(
+        work_id="w",
+        inputs=ContractInputs(
+            identity_manifest=InputHash(sha256=VALID_SHA256),
+            arrangement_spec=InputHash(sha256=VALID_SHA256),
+        ),
+        anchors=anchors,
+    )
+
+
+def _backend_ref(*, melody_take_band: Optional[str] = None) -> BackendRef:
+    return BackendRef(
+        capability_profile="deterministic",
+        invocation="local",
+        invocation_mode="prompt_only",
+        melody_take_band=melody_take_band,
+    )
+
+
+def _project_dir_with_registries(tmp_path: Path, *, calibrated: bool) -> Path:
+    """`_melody_config()` の既定パス（`m3_comparison_registry.yaml` /
+    `registry.yaml`、いずれも project_dir 直下）に一致するレジストリ一式を
+    tmp_path 配下へ用意する（凍結 registry 実ファイルはコピーのみ・不改変）。"""
+    project_dir = tmp_path / f"project_{'calibrated' if calibrated else 'uncalibrated'}"
+    project_dir.mkdir()
+    shutil.copy(REAL_M1_REGISTRY, project_dir / "registry.yaml")
+    if calibrated:
+        _frozen_m3_registry_path(project_dir)
+    else:
+        shutil.copy(REAL_M3_UNCALIBRATED_REGISTRY, project_dir / "m3_comparison_registry.yaml")
+    return project_dir
+
+
+# --------------------------------------------------------------------------- #
+# M4c — resolve_melody_observation_paths
+# --------------------------------------------------------------------------- #
+def test_resolve_melody_observation_paths_score_reference(tmp_path: Path) -> None:
+    project_dir = _project_dir_with_registries(tmp_path, calibrated=True)
+    m3_path, m1_path, reference_audio_path = resolve_melody_observation_paths(
+        project_dir=project_dir, melody_config=_melody_config()
+    )
+    assert m3_path == project_dir / "m3_comparison_registry.yaml"
+    assert m1_path == project_dir / "registry.yaml"
+    assert reference_audio_path is None
+
+
+def test_resolve_melody_observation_paths_resolves_reference_audio(tmp_path: Path) -> None:
+    project_dir = _project_dir_with_registries(tmp_path, calibrated=True)
+    (project_dir / "ref.wav").write_bytes(b"fake-audio")
+    _m3, _m1, reference_audio_path = resolve_melody_observation_paths(
+        project_dir=project_dir,
+        melody_config=_melody_config(reference="audio", reference_audio="ref.wav"),
+    )
+    assert reference_audio_path == project_dir / "ref.wav"
+
+
+def test_resolve_melody_observation_paths_rejects_missing_registry(tmp_path: Path) -> None:
+    project_dir = tmp_path / "empty_project"
+    project_dir.mkdir()
+    with pytest.raises(RecastError):
+        resolve_melody_observation_paths(project_dir=project_dir, melody_config=_melody_config())
+
+
+def test_resolve_melody_observation_paths_rejects_traversal(tmp_path: Path) -> None:
+    project_dir = _project_dir_with_registries(tmp_path, calibrated=True)
+    config = MelodyObservationConfig(
+        reference="score",
+        comparison_registry="../outside.yaml",
+        m1_registry="registry.yaml",
+    )
+    with pytest.raises(RecastError):
+        resolve_melody_observation_paths(project_dir=project_dir, melody_config=config)
+
+
+# --------------------------------------------------------------------------- #
+# M4c — collect_melody_experimental_anchors
+# --------------------------------------------------------------------------- #
+def test_collect_returns_empty_when_contract_is_none() -> None:
+    assert (
+        collect_melody_experimental_anchors(
+            contract=None,
+            melody_config=None,
+            project_dir=Path("."),
+            backend_ref=_backend_ref(),
+            score=None,
+            channel_artifact_bytes={},
+            take_audio_path=None,
+        )
+        == []
+    )
+
+
+def test_collect_returns_empty_when_no_melody_axis_policy_anchor() -> None:
+    contract = _contract([_harmony_anchor(), _anchor(None, anchor_id="melody-nopolicy")])
+    assert (
+        collect_melody_experimental_anchors(
+            contract=contract,
+            melody_config=None,
+            project_dir=Path("."),
+            backend_ref=_backend_ref(),
+            score=None,
+            channel_artifact_bytes={},
+            take_audio_path=None,
+        )
+        == []
+    )
+
+
+def test_collect_returns_melody_config_missing_entry_when_config_absent() -> None:
+    contract = _contract([_anchor({"contour": "hard"})])
+    entries = collect_melody_experimental_anchors(
+        contract=contract,
+        melody_config=None,
+        project_dir=Path("."),
+        backend_ref=_backend_ref(),
+        score=_score(),
+        channel_artifact_bytes={},
+        take_audio_path=None,
+    )
+    assert len(entries) == 1
+    assert entries[0].adherence_status == "not_observed"
+    assert entries[0].reasons == ["melody_config_missing"]
+
+
+def test_collect_evaluates_melody_anchor_end_to_end_and_ignores_non_melody_anchors(
+    tmp_path: Path,
+) -> None:
+    project_dir = _project_dir_with_registries(tmp_path, calibrated=True)
+    contract = _contract(
+        [_harmony_anchor(), _anchor({"contour": "hard", "interval": "elastic", "rhythm": "elastic"})]
+    )
+    take = _take_notes(_REFERENCE_PITCHES)
+    entries = collect_melody_experimental_anchors(
+        contract=contract,
+        melody_config=_melody_config(),
+        project_dir=project_dir,
+        backend_ref=_backend_ref(melody_take_band="clear_lead"),
+        score=_score(bpm=60),
+        channel_artifact_bytes={"melody-1": _reference_artifact_bytes()},
+        take_audio_path=Path("take.wav"),
+        route_runner=_make_route_runner(take),
+    )
+    # harmony anchor は無視され、melody anchor 1 件だけが翻訳される。
+    assert len(entries) == 1
+    assert entries[0].anchor_id == "melody-1"
+    assert entries[0].adherence_status == "preserved"
+    assert entries[0].provenance.get("melody_artifact_sha256") == VALID_SHA256
+
+
+# --------------------------------------------------------------------------- #
+# M4c — melody_experimental_plan_warnings
+# --------------------------------------------------------------------------- #
+def test_plan_warnings_empty_when_contract_is_none() -> None:
+    assert (
+        melody_experimental_plan_warnings(
+            contract=None, melody_config=None, project_dir=Path("."), backend_ref=_backend_ref()
+        )
+        == []
+    )
+
+
+def test_plan_warnings_empty_when_no_melody_axis_policy_anchor() -> None:
+    contract = _contract([_harmony_anchor()])
+    assert (
+        melody_experimental_plan_warnings(
+            contract=contract,
+            melody_config=None,
+            project_dir=Path("."),
+            backend_ref=_backend_ref(),
+        )
+        == []
+    )
+
+
+def test_plan_warnings_melody_config_missing() -> None:
+    contract = _contract([_anchor({"contour": "hard"}, anchor_id="melody-1")])
+    warnings = melody_experimental_plan_warnings(
+        contract=contract,
+        melody_config=None,
+        project_dir=Path("."),
+        backend_ref=_backend_ref(),
+    )
+    assert warnings == [
+        "melody anchor 'melody-1': experimental observability — not expected (melody_config_missing)"
+    ]
+
+
+def test_plan_warnings_comparator_uncalibrated(tmp_path: Path) -> None:
+    project_dir = _project_dir_with_registries(tmp_path, calibrated=False)
+    contract = _contract([_anchor({"contour": "hard"}, anchor_id="melody-1")])
+    warnings = melody_experimental_plan_warnings(
+        contract=contract,
+        melody_config=_melody_config(),
+        project_dir=project_dir,
+        backend_ref=_backend_ref(),
+    )
+    assert warnings == [
+        "melody anchor 'melody-1': experimental observability — not expected (comparator_uncalibrated)"
+    ]
+
+
+def test_plan_warnings_band_out_of_validation(tmp_path: Path) -> None:
+    project_dir = _project_dir_with_registries(tmp_path, calibrated=True)
+    contract = _contract([_anchor({"contour": "hard"}, anchor_id="melody-1")])
+    warnings = melody_experimental_plan_warnings(
+        contract=contract,
+        melody_config=_melody_config(),
+        project_dir=project_dir,
+        backend_ref=_backend_ref(),  # melody_take_band 未宣言
+    )
+    assert warnings == [
+        "melody anchor 'melody-1': experimental observability — not expected (band_out_of_validation)"
+    ]
+
+
+def test_plan_warnings_ok_when_calibrated_and_band_declared(tmp_path: Path) -> None:
+    project_dir = _project_dir_with_registries(tmp_path, calibrated=True)
+    contract = _contract([_anchor({"contour": "hard"}, anchor_id="melody-1")])
+    warnings = melody_experimental_plan_warnings(
+        contract=contract,
+        melody_config=_melody_config(),
+        project_dir=project_dir,
+        backend_ref=_backend_ref(melody_take_band="clear_lead"),
+    )
+    assert warnings == ["melody anchor 'melody-1': experimental observability — ok"]
+
+
+def test_plan_warnings_one_line_per_melody_anchor(tmp_path: Path) -> None:
+    project_dir = _project_dir_with_registries(tmp_path, calibrated=True)
+    contract = _contract(
+        [
+            _anchor({"contour": "hard"}, anchor_id="melody-a"),
+            _anchor({"interval": "hard"}, anchor_id="melody-b"),
+        ]
+    )
+    warnings = melody_experimental_plan_warnings(
+        contract=contract,
+        melody_config=_melody_config(),
+        project_dir=project_dir,
+        backend_ref=_backend_ref(melody_take_band="clear_lead"),
+    )
+    assert len(warnings) == 2
+    assert all(w.endswith("experimental observability — ok") for w in warnings)
+    assert {w.split("'")[1] for w in warnings} == {"melody-a", "melody-b"}

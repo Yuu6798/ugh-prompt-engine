@@ -75,6 +75,7 @@ from svp_rpe.arrange.capabilities import (
     _validate_evidence_form,
 )
 from svp_rpe.arrange.contract import (
+    PreservationContract,
     PreservationContractError,
     build_preservation_contract,
 )
@@ -115,6 +116,7 @@ from svp_rpe.arrange.verify import verify_package
 from svp_rpe.compose.device_profile import DeviceProfile
 from svp_rpe.compose.models import CompositionScore
 from svp_rpe.compose.prompt_renderer import resolve_backend_descriptor
+from svp_rpe.recast.experimental import melody_experimental_plan_warnings
 from svp_rpe.recast.loader import LoadedRecastProject
 from svp_rpe.recast.models import (
     BackendRef,
@@ -243,6 +245,15 @@ class RecastPlanArtifacts:
     derived_score: Optional[CompositionScore] = None
     manifest_sha256: Optional[str] = None
     contract_sha256: Optional[str] = None
+    # M4c (additive): 到達状態が compiled/verified のときのみ非 None —
+    # plan 段の single-read 束が既に構築済みの `PreservationContract`
+    # （`bundle.contract`）をそのまま流用する。`recast_cmd.py` の ingest/
+    # observe 経路が `axis_policy` 付き melody anchor を
+    # `recast/experimental.py:collect_melody_experimental_anchors` へ渡す際、
+    # manifest/arrangement を再 parse せずこの契約オブジェクトをそのまま使う
+    # （既存 single-read 規律の継承 — plan_sha256/contract_sha256 と同じ
+    # 「plan 段が既に読んだものを再利用する」パターン）。
+    contract: Optional[PreservationContract] = None
     profile_sha256: Optional[str] = None
     derived_score_sha256: Optional[str] = None
     # `lyrics_text`/`section_map` anchor の hash 照合済み bytes（anchor_id
@@ -446,6 +457,17 @@ def _is_manual_order_channel_anchor(anchor: IdentityAnchor) -> bool:
     plan 段の hash 検証と描画時の中身が同一 bytes であることを構造的に
     保証し、両者の間にファイルが差し替わる TOCTOU を潰す。"""
     return anchor.artifact_type in ("lyrics_text", "section_map")
+
+
+def _is_channel_artifact_bytes_anchor(anchor: IdentityAnchor) -> bool:
+    """`channel_artifact_bytes` へ hash 照合済み bytes を保持する anchor 全体の
+    `collect` 述語: `_is_manual_order_channel_anchor`（注文書描画用途、既存）
+    に加え、M4c は `note_events_json`（melody）artifact も同じ single-read で
+    pin する——`recast/experimental.py:collect_melody_experimental_anchors` の
+    score_reference 導出（DD-1）が identity sidecar の melody artifact bytes を
+    要るため、ingest/observe 時点で manifest を再 parse せずに済むようにする
+    （既存の TOCTOU 回避規律をそのまま踏襲）。"""
+    return _is_manual_order_channel_anchor(anchor) or anchor.artifact_type == "note_events_json"
 
 
 def _build_anchor_entries(
@@ -1037,7 +1059,7 @@ def _read_single_read_bundle(
         digest_components["identity_manifest"] = manifest_sha256
         try:
             manifest, channel_artifact_bytes = parse_identity_manifest_with_artifacts(
-                manifest_bytes, manifest_path, collect=_is_manual_order_channel_anchor
+                manifest_bytes, manifest_path, collect=_is_channel_artifact_bytes_anchor
             )
         except (IdentityManifestError, ValueError, ValidationError, yaml.YAMLError) as exc:
             manifest_parse_error = exc
@@ -1576,6 +1598,20 @@ def _compile_verify_publish(
                 warnings=warnings,
             )
 
+    # M4c (Design Memo M4 §5): axis_policy 付き melody anchor があるときだけ
+    # 「observability 見込み」1 行を warnings へ足す（抽出は行わない — G1/G2/
+    # config 不在のみを判定する診断）。melody anchor が無い project は
+    # `melody_warnings == []` のためバイト不変（既存 golden/demo/e2e project
+    # の `recast_plan.json` は一切影響を受けない）。
+    melody_warnings = melody_experimental_plan_warnings(
+        contract=bundle.contract,
+        melody_config=project.observation.melody,
+        project_dir=loaded.project_dir,
+        backend_ref=backend_ref,
+    )
+    if melody_warnings:
+        warnings = warnings + melody_warnings
+
     return finalize(
         state_reached=state_reached,
         blocked=None,
@@ -1586,6 +1622,7 @@ def _compile_verify_publish(
         derived_score=bundle.resolution.derived_score,
         manifest_sha256=bundle.manifest_sha256,
         contract_sha256=bundle.contract_sha256,
+        contract=bundle.contract,
         profile_sha256=bundle.profile_sha256,
         derived_score_sha256=bundle.derived_score_sha256,
         channel_artifact_bytes=bundle.channel_artifact_bytes,
@@ -1722,6 +1759,7 @@ def build_recast_plan_artifacts(
         derived_score: Optional[CompositionScore] = None,
         manifest_sha256: Optional[str] = None,
         contract_sha256: Optional[str] = None,
+        contract: Optional[PreservationContract] = None,
         profile_sha256: Optional[str] = None,
         derived_score_sha256: Optional[str] = None,
         channel_artifact_bytes: Optional[Dict[str, bytes]] = None,
@@ -1779,6 +1817,7 @@ def build_recast_plan_artifacts(
             derived_score=derived_score,
             manifest_sha256=manifest_sha256,
             contract_sha256=contract_sha256,
+            contract=contract,
             profile_sha256=profile_sha256,
             derived_score_sha256=derived_score_sha256,
             channel_artifact_bytes=channel_artifact_bytes or {},
