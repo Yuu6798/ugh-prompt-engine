@@ -20,11 +20,16 @@ from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from svp_rpe.arrange.resolver import CANONICAL_PATHS
+from svp_rpe.melody.routing import select_routes
 
 InvocationKind = Literal["manual", "local"]
 InvocationMode = Literal["prompt_only", "cover"]
 CapabilityMode = Literal["strict", "advisory"]
 OverrideSupport = Literal["supported", "experimental", "unsupported", "unknown"]
+# M4 (Design Memo M4, DD-4): backend が宣言する旋律テイクの帯域自己記述。
+# `melody.routing.INPUT_KINDS` と同じ語彙（校正済み集合はこのうち
+# `{"clear_lead"}` のみ — M4 実装契約 §1 DD-4 / G2）。
+MelodyTakeBand = Literal["vocal_track", "clear_lead", "full_mix", "chord_pad_no_melody"]
 
 # project.id / variants キー / backends キーに共通する slug 規約。
 _SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -76,6 +81,14 @@ class BackendRef(RecastModel):
     invocation: InvocationKind
     invocation_mode: InvocationMode
     mode_overrides: Optional[str] = None
+    # M4 (DD-4, additive): この backend が生成するテイクの旋律帯域の自己記述。
+    # 機械検出不能なので宣言 + fail-closed 既定でゲート化する（G2）:
+    # `None` または校正済み集合 `{"clear_lead"}` 外は
+    # `recast/experimental.py` の G2 が `not_observed(reason:
+    # band_out_of_validation(...))` に落とす。既存 backend 定義への影響は
+    # ゼロ（省略時 `None` は「宣言なし」であり M4 experimental 経路の
+    # opt-in を一切変えない）。
+    melody_take_band: Optional[MelodyTakeBand] = None
 
 
 class RecastPolicy(RecastModel):
@@ -86,11 +99,64 @@ class RecastPolicy(RecastModel):
     require_verified_package: bool = True
 
 
+class MelodyObservationConfig(RecastModel):
+    """M4 (DD-10): melody anchor の experimental 観測に要る project 側設定。
+
+    axis_policy を宣言した melody anchor があっても本 config が無ければ
+    `recast/experimental.py` は `not_observed(reason: melody_config_missing)`
+    へ落とす（エラーにしない・正直会計 — `ObservationConfig.melody` docstring
+    参照）。
+    """
+
+    reference: Literal["score", "audio"] = "score"
+    # `reference == "audio"` のときのみ必須（project 相対パス）。
+    reference_audio: Optional[str] = None
+    comparison_registry: str
+    m1_registry: str
+    route: str = "pyin_direct"
+
+    @model_validator(mode="after")
+    def _validate_reference_audio_pairing(self) -> "MelodyObservationConfig":
+        if self.reference == "audio" and self.reference_audio is None:
+            raise ValueError(
+                "MelodyObservationConfig: reference='audio' requires reference_audio "
+                "to be set"
+            )
+        if self.reference == "score" and self.reference_audio is not None:
+            raise ValueError(
+                "MelodyObservationConfig: reference='score' forbids reference_audio "
+                f"(got {self.reference_audio!r}) — score_reference derives the reference "
+                "melody from the identity sidecar's note-events artifact, not audio"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_route(self) -> "MelodyObservationConfig":
+        # M4 DD-5: 既定 route は pyin_direct（重み不要・M1c 確立経路）。route
+        # は「clear_lead」帯の候補経路名集合内のみ許可する（load 時
+        # fail-closed）——校正済み帯域が clear_lead のみ（G2）である以上、
+        # テイク側の抽出経路もその帯域で試すべき経路に限る。
+        allowed_routes = {route.name for route in select_routes("clear_lead")}
+        if self.route not in allowed_routes:
+            raise ValueError(
+                f"MelodyObservationConfig: route={self.route!r} is not a 'clear_lead' "
+                f"route (expected one of {sorted(allowed_routes)})"
+            )
+        return self
+
+
 class ObservationConfig(RecastModel):
     """生成後観測（`arrange/observe.py` 系列）への anchor 参照集合。"""
 
     enabled: bool
     anchors: List[str]
+    # M4 (DD-10, additive): melody anchor の experimental 観測設定。省略時
+    # `None` は「melody 観測設定なし」——axis_policy 付き melody anchor が
+    # 契約に存在しても、これが無ければ M4 は起動せず
+    # `not_observed(reason: melody_config_missing)` になる（`recast/
+    # experimental.py` 参照）。既存プロジェクト定義（この欄を持たない）は
+    # 完全後方互換。
+    melody: Optional[MelodyObservationConfig] = None
 
     @model_validator(mode="after")
     def _validate_unique_anchors(self) -> "ObservationConfig":

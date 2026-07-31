@@ -10,7 +10,7 @@
 """
 from __future__ import annotations
 
-from typing import Any, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -118,11 +118,23 @@ class AnchorPreservation(ArrangementModel):
 
     `tolerance_profile` は AR4 が意味論を定義するまで opaque な文字列として
     保持するのみで、本モデルは値を検証・解釈しない。
+
+    `axis_policy`（M4 DD-7、additive）は軸単位の保持方針を宣言する
+    opt-in 欄: 契約 anchor にこのフィールドが存在すること自体が
+    `recast/experimental.py` の M4 experimental 経路への opt-in になる
+    （`None` の既定は「axis_policy 宣言なし」＝現行の `_observe_melody`
+    LCS・本会計をそのまま維持する）。domain 別にどの軸名が許容されるか
+    （`arrange/contract.py` の `DOMAIN_AXIS_VOCAB`）は本モデルでは検証しない
+    — anchor の domain を知らないため、`mode`/`allow` の domain 語彙検証と
+    同じ理由で `build_preservation_contract` の cross-validation の責務と
+    する。本モデルは domain 非依存の 2 条件（非空・hard/elastic 最低 1 軸）
+    のみを検証する。
     """
 
     mode: PreservationMode
     allow: List[AllowedTransformation] = []
     tolerance_profile: Optional[str] = None
+    axis_policy: Optional[Dict[str, PreservationMode]] = None
 
     @model_validator(mode="after")
     def _validate_mode_allow_consistency(self) -> "AnchorPreservation":
@@ -141,6 +153,24 @@ class AnchorPreservation(ArrangementModel):
                 "AnchorPreservation: mode='elastic' requires at least one entry in "
                 "'allow' (an empty allow list would make the contract vacuous)"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_axis_policy_shape(self) -> "AnchorPreservation":
+        """domain 非依存の 2 条件のみ（domain 語彙検証は
+        `build_preservation_contract` / `ContractAnchor` の責務。docstring
+        参照）。"""
+        if self.axis_policy is not None:
+            if not self.axis_policy:
+                raise ValueError(
+                    "AnchorPreservation: axis_policy must not be empty (omit the field "
+                    "entirely to declare no axis_policy)"
+                )
+            if not any(mode in ("hard", "elastic") for mode in self.axis_policy.values()):
+                raise ValueError(
+                    "AnchorPreservation: axis_policy must declare at least one 'hard' or "
+                    "'elastic' axis (an all-'free' policy would promise nothing)"
+                )
         return self
 
 

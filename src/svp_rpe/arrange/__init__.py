@@ -25,6 +25,7 @@ from svp_rpe.arrange.capabilities import (
 from svp_rpe.arrange.contract import (
     ContractAnchor,
     DOMAIN_ALLOWED_TRANSFORMS,
+    DOMAIN_AXIS_VOCAB,
     PreservationContract,
     PreservationContractError,
     build_preservation_contract,
@@ -108,6 +109,7 @@ __all__ = [
     "DERIVED_SCORE_FILENAME",
     "DIFF_FILENAME",
     "DOMAIN_ALLOWED_TRANSFORMS",
+    "DOMAIN_AXIS_VOCAB",
     "DeltaEOverride",
     "EventOverride",
     "GeneratedArtifactRef",
