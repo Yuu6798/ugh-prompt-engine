@@ -1166,7 +1166,10 @@ def _observe_and_report(
     from svp_rpe.arrange.observe import observe_generated_artifact
     from svp_rpe.recast import RecastError
     from svp_rpe.recast.backend import atomic_publish_bytes_bundle
-    from svp_rpe.recast.experimental import collect_melody_experimental_anchors
+    from svp_rpe.recast.experimental import (
+        collect_melody_experimental_anchors,
+        resolve_main_observation_anchor_scope,
+    )
     from svp_rpe.recast.plan import _normalize_diagnostic
     from svp_rpe.recast.report import (
         RECAST_REPORT_FILENAME,
@@ -1190,6 +1193,25 @@ def _observe_and_report(
         # `observe_generated_artifact` が `package_path` を読んだ直後に
         # 突き合わせ、公開後に自己整合な別 package へ差し替えられていても
         # 観測前に fail-closed する。
+        #
+        # R2-1 (Codex round2 P1・会計分離の実装漏れ対応): axis_policy 付き
+        # melody anchor は下の `collect_melody_experimental_anchors` が
+        # `RecastReport.experimental_anchors` として独立に翻訳・報告する。
+        # legacy の `_observe_melody`（LCS）が本会計（`anchor_scope` 未除外の
+        # まま `observe_generated_artifact` を呼ぶと）その anchor 行を main の
+        # `anchors`/`coverage` にも残してしまい、二重報告 + legacy 行が
+        # coverage 分母を動かす（設計書 §4 会計分離違反）。ここで main の
+        # 観測スコープから axis_policy 付き melody anchor の anchor_id を
+        # 除外する（`resolve_main_observation_anchor_scope` docstring
+        # 参照——`arrange/observe.py` は変更しない。スコープ除外により
+        # LCS センサーの実行自体もスキップされる）。axis_policy の無い
+        # melody anchor は対象外——現行の LCS・本会計挙動を完全維持する
+        # （DD-3）。
+        main_anchor_scope = resolve_main_observation_anchor_scope(
+            manifest_path=loaded.identity_manifest_path,
+            contract=artifacts.contract,
+            observation_anchor_scope=anchor_scope,
+        )
         observation = observe_generated_artifact(
             package_path=package_path,
             manifest_path=loaded.identity_manifest_path,
@@ -1197,7 +1219,7 @@ def _observe_and_report(
             generated_artifact_path=take_relative,
             expected_audio_sha256=take.sha256,
             expected_package_sha256=artifacts.compiled.report.package_sha256,
-            anchor_scope=anchor_scope,
+            anchor_scope=main_anchor_scope,
         )
     except (OSError, ValueError, ValidationError, IdentityManifestError) as exc:
         obs_note = _normalize_diagnostic(f"observation failed: {exc}", loaded.project_dir)
@@ -1253,6 +1275,7 @@ def _observe_and_report(
             score=artifacts.derived_score,
             channel_artifact_bytes=artifacts.channel_artifact_bytes,
             take_audio_path=take.audio_path,
+            take_sha256=take.sha256,
         )
     except (OSError, ValueError, RecastError) as exc:
         obs_note = _normalize_diagnostic(

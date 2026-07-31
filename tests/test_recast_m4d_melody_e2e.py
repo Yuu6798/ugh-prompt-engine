@@ -39,7 +39,11 @@ from svp_rpe.arrange.package import PERFORMANCE_PACKAGE_FILENAME
 from svp_rpe.cli import app
 from svp_rpe.melody.observability import MelodyNote, MelodyObservation
 from svp_rpe.recast import load_recast_project
-from svp_rpe.recast.experimental import ExperimentalAnchorEntry, collect_melody_experimental_anchors
+from svp_rpe.recast.experimental import (
+    ExperimentalAnchorEntry,
+    collect_melody_experimental_anchors,
+    resolve_main_observation_anchor_scope,
+)
 from svp_rpe.recast.plan import build_recast_plan_artifacts
 from svp_rpe.recast.report import (
     RECAST_REPORT_FILENAME,
@@ -299,6 +303,7 @@ def _collect(run: _RunResult, *, route_runner) -> List[ExperimentalAnchorEntry]:
         score=run.derived_score,
         channel_artifact_bytes=run.channel_artifact_bytes,
         take_audio_path=run.take_path,
+        take_sha256=hashlib.sha256(run.take_path.read_bytes()).hexdigest(),
         route_runner=route_runner,
     )
 
@@ -307,12 +312,25 @@ def _build_report_bytes(run: _RunResult, entries: List[ExperimentalAnchorEntry])
     take_sha256 = hashlib.sha256(run.take_path.read_bytes()).hexdigest()
     take_relative = str(run.take_path.relative_to(run.project_dir))
     loaded = load_recast_project(run.project_dir / "project.yaml")
+    # R2-1 (Codex round2 P1・会計分離の実装漏れ対応): `cli/recast_cmd.py:
+    # _observe_and_report` と同じく、axis_policy 付き melody anchor を本会計
+    # （main の `observation.report.anchors`/`RecastReport.coverage`）の観測
+    # スコープから除外する——除外しないと legacy `_observe_melody`（LCS）の
+    # 行が main にも experimental 節にも二重に載る（設計書 §4 会計分離違反）。
+    main_anchor_scope = resolve_main_observation_anchor_scope(
+        manifest_path=loaded.identity_manifest_path,
+        contract=run.contract,
+        observation_anchor_scope=(
+            set(loaded.project.observation.anchors) if loaded.project.observation.anchors else None
+        ),
+    )
     observation = observe_generated_artifact(
         package_path=run.package_path,
         manifest_path=loaded.identity_manifest_path,
         audio_path=run.take_path,
         generated_artifact_path=take_relative,
         expected_audio_sha256=take_sha256,
+        anchor_scope=main_anchor_scope,
     )
     recast_report = build_recast_report(
         project_id=loaded.project.project.id,
@@ -369,6 +387,12 @@ def test_m4d_calibrated_branch_reaches_all_three_adherence_statuses(tmp_path: Pa
     # report/summary 統合 + 会計分離（coverage 分母不変）を preserved 分岐で確認。
     report_bytes, recast_report = _build_report_bytes(run, preserved_entries)
     assert recast_report.experimental_anchors == preserved_entries
+    # R2-1 (Codex round2 P1): axis_policy 付き melody anchor は本会計（main
+    # の anchors/coverage）から除外され、experimental_anchors 側にのみ現れる
+    # ——legacy `_observe_melody`（LCS）行との二重報告が解消されたことの直接
+    # 確認（修正前は main にも "melody" 行が残り、コンテンツが二重計上されていた）。
+    main_anchor_ids = {a.anchor_id for a in recast_report.anchors}
+    assert "melody" not in main_anchor_ids
     main_anchor_count = len(recast_report.anchors)
     main_coverage_total = (
         recast_report.coverage.verified

@@ -259,6 +259,32 @@ class RecastReport(RecastReportModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_unique_experimental_anchor_ids(self) -> "RecastReport":
+        """R2-4 (Codex round2 P2): `experimental_anchors`（M4c、本会計とは別集合
+        ——会計分離）内の `anchor_id` にも一意性を強制する。`_validate_unique_
+        anchor_ids`（本会計 `anchors` 側）と同型の読み戻し安全網——複製行が
+        虚偽の被覆・虚偽の重複観測を作りうるという同じ不変条件が experimental
+        側にも当てはまる（こちらは coverage 集計の対象外だが、同一 anchor_id
+        の複製行がそのまま `recast_summary.md` の Experimental anchors 節に
+        並ぶこと自体が誤った観測記録になる）。`build_recast_report` は
+        `collect_melody_experimental_anchors` が manifest anchor 宣言順で
+        重複なく組んだ entry 列をそのまま転記するため、正常な発行経路は
+        自然にこの validator を通過する（builder→dump→validate の読み戻し
+        規律）。"""
+        seen: set[str] = set()
+        duplicates: set[str] = set()
+        for entry in self.experimental_anchors:
+            if entry.anchor_id in seen:
+                duplicates.add(entry.anchor_id)
+            seen.add(entry.anchor_id)
+        if duplicates:
+            raise ValueError(
+                "duplicate anchor_id(s) in recast report experimental_anchors: "
+                f"{', '.join(sorted(duplicates))}"
+            )
+        return self
+
 
 def build_recast_report(
     *,

@@ -627,6 +627,31 @@ def test_recast_report_round_trip_preserves_experimental_anchors() -> None:
     assert round_tripped.experimental_anchors == [entry]
 
 
+def test_recast_report_rejects_duplicate_experimental_anchor_id() -> None:
+    """R2-4 (Codex round2 P2): `experimental_anchors` 内の anchor_id にも
+    一意性を強制する（本会計 `anchors` 側の round 11 対応と同型の読み戻し
+    安全網）。"""
+    report = _observation_report(
+        [_anchor_observation("harmony", "harmony", "preserved", "exact_match")]
+    )
+    package = _package(
+        [PackageAnchorStatus.model_construct(anchor_id="harmony", requested_mode="hard")]
+    )
+    entry_a = _melody_experimental_entry(anchor_id="melody")
+    entry_b = _melody_experimental_entry(anchor_id="melody")
+    with pytest.raises(ValidationError, match="duplicate anchor_id"):
+        build_recast_report(
+            project_id="p",
+            variant="v",
+            backend="b",
+            package=package,
+            report=report,
+            take_path_relative="take.wav",
+            take_sha256="a" * 64,
+            experimental_anchors=[entry_a, entry_b],
+        )
+
+
 def test_recast_report_reads_back_old_report_without_experimental_anchors_field() -> None:
     """旧レポート（このフィールドを持たない JSON）は default（空リスト）で
     読み戻せる — 後方互換。"""

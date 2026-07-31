@@ -13,6 +13,7 @@ CI 安全（重依存なし・実抽出器を一切呼ばない）: `evaluate_me
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -31,7 +32,9 @@ from svp_rpe.recast.experimental import (
     derive_score_reference_observation,
     evaluate_melody_experimental_anchor,
     map_axis_policy_to_adherence,
+    melody_experimental_anchor_ids,
     melody_experimental_plan_warnings,
+    resolve_main_observation_anchor_scope,
     resolve_melody_observation_paths,
 )
 from svp_rpe.recast.models import BackendRef, MelodyObservationConfig, RecastError
@@ -72,11 +75,13 @@ def _melody_config(
     *,
     reference: str = "score",
     reference_audio: Optional[str] = None,
+    reference_band: Optional[str] = None,
     route: str = "crepe_direct",
 ) -> MelodyObservationConfig:
     return MelodyObservationConfig(
         reference=reference,
         reference_audio=reference_audio,
+        reference_band=reference_band,
         comparison_registry="m3_comparison_registry.yaml",
         m1_registry="registry.yaml",
         route=route,
@@ -182,6 +187,17 @@ def _make_route_runner(observation: MelodyObservation):
     return _runner
 
 
+def _write_audio_file(path: Path, content: bytes = b"fake-audio-bytes") -> str:
+    """R2-3 (Codex round2 P2・TOCTOU 封鎖) 対応後、`evaluate_melody_experimental_
+    anchor` は抽出直前に take/reference 音声を実際に読んで凍結コピーする
+    （`route_runner` 注入時も含む——凍結コピーのパスが注入 runner にも渡る）
+    ため、``take_audio_path``/``reference_audio_path`` は実在するファイルで
+    なければならない（プレースホルダ文字列は使えなくなった）。このヘルパーは
+    ``path`` に最小のダミー音声バイト列を書き、``str(path)`` を返す。"""
+    path.write_bytes(content)
+    return str(path)
+
+
 # --------------------------------------------------------------------------- #
 # M4a — 写像規則（§3・純関数）: 表駆動
 # --------------------------------------------------------------------------- #
@@ -255,12 +271,15 @@ def test_mapping_defensive_uncalibrated_axis_value_is_not_observed() -> None:
 
 def test_mapping_defensive_missing_axis_evidence_is_not_observed() -> None:
     """axis_evidence dict に該当軸が丸ごと欠落（status='frozen' で bounds 欠落等）
-    しているケースも「uncalibrated」と同一視して防御分岐へ落ちる。"""
-    policy = {"contour": "hard", "rhythm": "free"}
-    report = _report({"contour": "strong"})  # rhythm 欠落
+    しているケースも「uncalibrated」と同一視して防御分岐へ落ちる——判定参加軸
+    （hard/elastic）限定（R2-5・Codex round2 P2 で free 軸はこの対象から
+    除外された。free 軸の欠落は `test_mapping_free_axis_missing_evidence_
+    does_not_block_judgment` 参照）。"""
+    policy = {"contour": "hard", "interval": "elastic"}
+    report = _report({"contour": "strong"})  # interval 欠落
     status, reasons = map_axis_policy_to_adherence(policy, report)
     assert status == "not_observed"
-    assert "comparator_uncalibrated(axis=rhythm)" in reasons
+    assert "comparator_uncalibrated(axis=interval)" in reasons
 
 
 def test_mapping_free_axis_does_not_participate() -> None:
@@ -269,6 +288,20 @@ def test_mapping_free_axis_does_not_participate() -> None:
     report = _report({"contour": "strong", "interval": "strong", "rhythm": "none"})
     status, _reasons = map_axis_policy_to_adherence(policy, report)
     assert status == "preserved"
+
+
+def test_mapping_free_axis_missing_evidence_does_not_block_judgment() -> None:
+    """R2-5 (Codex round2 P2): free 軸の evidence が report に丸ごと欠落して
+    いても、hard/elastic 軸が strong なら判定をブロックしない
+    （設計書 §3「free 軸は判定に不参加」）。回帰前は defensive uncalibrated
+    分岐（`test_mapping_defensive_missing_axis_evidence_is_not_observed` と
+    同型のガード）が free 軸にも誤って適用され、この欠落だけで
+    `not_observed(comparator_uncalibrated(axis=rhythm))` に落ちていた。"""
+    policy = {"contour": "hard", "interval": "elastic", "rhythm": "free"}
+    report = _report({"contour": "strong", "interval": "strong"})  # rhythm 丸ごと欠落
+    status, reasons = map_axis_policy_to_adherence(policy, report)
+    assert status == "preserved"
+    assert not any("rhythm" in reason for reason in reasons)
 
 
 def test_mapping_transcribes_octave_artifact_reason() -> None:
@@ -350,6 +383,61 @@ def test_uncalibrated_registry_is_not_observed_g1(tmp_path: Path) -> None:
     # 短絡時も判明済みの registry sha256 は provenance に載る。
     assert "m3_registry_sha256" in entry.provenance
     assert "m1_registry_sha256" in entry.provenance
+
+
+# --------------------------------------------------------------------------- #
+# R2-2 (Codex round2 P2) — M1 registry の構造検証 fail-closed
+# --------------------------------------------------------------------------- #
+def test_m1_registry_empty_yaml_raises_recast_error(tmp_path: Path) -> None:
+    """空 YAML（`yaml.safe_load` は `None` を返す）を素通しすると直後の
+    `mapping["observation_gate"]` が `TypeError` を未捕捉のまま送出していた
+    ——actionable な `RecastError` に変換されることを確認する。"""
+    m3_path = _frozen_m3_registry_path(tmp_path)
+    m1_path = tmp_path / "empty_registry.yaml"
+    m1_path.write_text("", encoding="utf-8")
+    anchor = _anchor({"contour": "hard"})
+    with pytest.raises(RecastError, match="must be a YAML mapping"):
+        evaluate_melody_experimental_anchor(
+            anchor=anchor,
+            melody_config=_melody_config(),
+            score=_score(),
+            m3_registry_path=m3_path,
+            m1_registry_path=m1_path,
+        )
+
+
+def test_m1_registry_scalar_yaml_raises_recast_error(tmp_path: Path) -> None:
+    """トップレベルがスカラー（マッピングでない）YAML も同様に fail-closed。"""
+    m3_path = _frozen_m3_registry_path(tmp_path)
+    m1_path = tmp_path / "scalar_registry.yaml"
+    m1_path.write_text("just-a-string\n", encoding="utf-8")
+    anchor = _anchor({"contour": "hard"})
+    with pytest.raises(RecastError, match="must be a YAML mapping"):
+        evaluate_melody_experimental_anchor(
+            anchor=anchor,
+            melody_config=_melody_config(),
+            score=_score(),
+            m3_registry_path=m3_path,
+            m1_registry_path=m1_path,
+        )
+
+
+def test_m1_registry_missing_observation_gate_section_raises_recast_error(
+    tmp_path: Path,
+) -> None:
+    """`observation_gate` 節が丸ごと欠落した YAML も fail-closed。"""
+    m3_path = _frozen_m3_registry_path(tmp_path)
+    m1_path = tmp_path / "no_gate_registry.yaml"
+    m1_path.write_text(yaml.safe_dump({"unrelated": {"a": 1}}), encoding="utf-8")
+    anchor = _anchor({"contour": "hard"})
+    with pytest.raises(RecastError, match="observation_gate"):
+        evaluate_melody_experimental_anchor(
+            anchor=anchor,
+            melody_config=_melody_config(),
+            score=_score(),
+            m3_registry_path=m3_path,
+            m1_registry_path=m1_path,
+        )
 
 
 def test_band_out_of_validation_when_take_band_none(tmp_path: Path) -> None:
@@ -441,15 +529,18 @@ def test_audio_reference_with_calibrated_reference_band_passes_g2(tmp_path: Path
         m3_registry_path=m3_path,
         m1_registry_path=REAL_M1_REGISTRY,
         melody_take_band="clear_lead",
-        reference_audio_path="ref.wav",
+        reference_audio_path=_write_audio_file(tmp_path / "ref.wav", b"reference-bytes"),
         reference_melody_band="clear_lead",
-        take_audio_path="take.wav",
+        take_audio_path=_write_audio_file(tmp_path / "take.wav", b"take-bytes"),
         route_runner=_make_route_runner(take),
         reference_route_runner=_make_route_runner(reference_take),
     )
     assert entry.adherence_status == "preserved"
     assert entry.provenance.get("reference") == "audio"
     assert entry.provenance.get("extractor_injected") is True
+    assert entry.provenance.get("reference_audio_sha256") == hashlib.sha256(
+        b"reference-bytes"
+    ).hexdigest()
 
 
 # --------------------------------------------------------------------------- #
@@ -475,7 +566,7 @@ def test_injected_route_runner_extra_provenance_is_not_merged_into_namespace(
         m3_registry_path=m3_path,
         m1_registry_path=REAL_M1_REGISTRY,
         melody_take_band="clear_lead",
-        take_audio_path="take.wav",
+        take_audio_path=_write_audio_file(tmp_path / "take.wav"),
         route_runner=_runner,
     )
     assert "take_extractor" not in entry.provenance
@@ -510,7 +601,7 @@ def test_non_injected_take_extraction_merges_provenance_under_take_extractor(
         m3_registry_path=m3_path,
         m1_registry_path=REAL_M1_REGISTRY,
         melody_take_band="clear_lead",
-        take_audio_path="take.wav",
+        take_audio_path=_write_audio_file(tmp_path / "take.wav"),
     )
     assert entry.provenance.get("take_extractor") == fake_extra
     assert "extractor_injected" not in entry.provenance
@@ -526,11 +617,19 @@ def test_non_injected_reference_extraction_merges_provenance_under_reference_ext
 
     take_extra = {"extractor_weights_sha256": "take-pin"}
     reference_extra = {"extractor_weights_sha256": "ref-pin"}
+    take_content = b"take-audio-bytes"
+    reference_content = b"reference-audio-bytes"
 
     def _fake_observe(audio_path: str, route):
         assert route.name == "crepe_direct"
-        if audio_path == "take.wav":
+        # R2-3 (Codex round2 P2・TOCTOU 封鎖) 対応後、`audio_path` は凍結コピー
+        # の一時パスであり元の "take.wav"/"ref.wav" 文字列とは一致しなくなった
+        # ——bytes 内容で take/reference を判別する（`test_m3_comparison_
+        # harness.py:_fake_route_runner` の `notes_by_content` 方式と同型）。
+        content = Path(audio_path).read_bytes()
+        if content == take_content:
             return _take_notes(_REFERENCE_PITCHES), dict(take_extra)
+        assert content == reference_content
         return _take_notes(_REFERENCE_PITCHES), dict(reference_extra)
 
     monkeypatch.setattr(experimental_module, "observe_via_route_with_provenance", _fake_observe)
@@ -544,9 +643,9 @@ def test_non_injected_reference_extraction_merges_provenance_under_reference_ext
         m3_registry_path=m3_path,
         m1_registry_path=REAL_M1_REGISTRY,
         melody_take_band="clear_lead",
-        reference_audio_path="ref.wav",
+        reference_audio_path=_write_audio_file(tmp_path / "ref.wav", reference_content),
         reference_melody_band="clear_lead",
-        take_audio_path="take.wav",
+        take_audio_path=_write_audio_file(tmp_path / "take.wav", take_content),
     )
     assert entry.provenance.get("take_extractor") == take_extra
     assert entry.provenance.get("reference_extractor") == reference_extra
@@ -576,9 +675,118 @@ def test_non_injected_extraction_with_empty_extra_provenance_omits_namespace_key
         m3_registry_path=m3_path,
         m1_registry_path=REAL_M1_REGISTRY,
         melody_take_band="clear_lead",
-        take_audio_path="take.wav",
+        take_audio_path=_write_audio_file(tmp_path / "take.wav"),
     )
     assert "take_extractor" not in entry.provenance
+
+
+# --------------------------------------------------------------------------- #
+# R2-3 (Codex round2 P2) — 抽出を pin 済み take バイトへ束縛（TOCTOU 封鎖）
+# --------------------------------------------------------------------------- #
+def test_take_audio_toctou_mismatch_raises_recast_error(tmp_path: Path) -> None:
+    """`expected_take_sha256`（collect() 確定済みの外部 pin）とディスク上の
+    take の実 sha256 が食い違う場合、`RecastError` を送出する（不一致は
+    観測前に検出——呼び出し側は observation_incomplete 経路へ倒す）。"""
+    take_path = tmp_path / "take.wav"
+    take_path.write_bytes(b"actual-take-bytes")
+    wrong_sha256 = hashlib.sha256(b"different-bytes-entirely").hexdigest()
+    m3_path = _frozen_m3_registry_path(tmp_path)
+    anchor = _anchor({"contour": "hard"})
+    with pytest.raises(RecastError, match="does not match its pinned sha256"):
+        evaluate_melody_experimental_anchor(
+            anchor=anchor,
+            melody_config=_melody_config(),
+            score=_score(bpm=60),
+            melody_artifact_bytes=_reference_artifact_bytes(),
+            m3_registry_path=m3_path,
+            m1_registry_path=REAL_M1_REGISTRY,
+            melody_take_band="clear_lead",
+            take_audio_path=str(take_path),
+            expected_take_sha256=wrong_sha256,
+            route_runner=_make_route_runner(_take_notes(_REFERENCE_PITCHES)),
+        )
+
+
+def test_take_audio_matching_pin_passes_through(tmp_path: Path) -> None:
+    """`expected_take_sha256` がディスク上の実 sha256 と一致すれば通常どおり
+    評価が進む（正常経路が誤って弾かれないことの機械 assert）。"""
+    take_path = tmp_path / "take.wav"
+    take_path.write_bytes(b"actual-take-bytes")
+    correct_sha256 = hashlib.sha256(b"actual-take-bytes").hexdigest()
+    m3_path = _frozen_m3_registry_path(tmp_path)
+    anchor = _anchor({"contour": "hard", "interval": "elastic", "rhythm": "elastic"})
+    entry = evaluate_melody_experimental_anchor(
+        anchor=anchor,
+        melody_config=_melody_config(),
+        score=_score(bpm=60),
+        melody_artifact_bytes=_reference_artifact_bytes(),
+        m3_registry_path=m3_path,
+        m1_registry_path=REAL_M1_REGISTRY,
+        melody_take_band="clear_lead",
+        take_audio_path=str(take_path),
+        expected_take_sha256=correct_sha256,
+        route_runner=_make_route_runner(_take_notes(_REFERENCE_PITCHES)),
+    )
+    assert entry.adherence_status == "preserved"
+
+
+def test_route_runner_receives_frozen_copy_path_not_original(tmp_path: Path) -> None:
+    """`route_runner`（注入 seam）に渡される ``audio_path`` は元の
+    ``take_audio_path`` そのものではなく、run 出力ディレクトリ外の凍結
+    コピーである（同じ bytes を持つが別パス）——抽出直前の TOCTOU 窓を
+    実際に塞いでいることの直接確認。"""
+    take_path = tmp_path / "take.wav"
+    take_path.write_bytes(b"actual-take-bytes")
+    seen_paths: List[str] = []
+
+    def _runner(audio_path: str) -> Tuple[MelodyObservation, Dict[str, Any]]:
+        seen_paths.append(audio_path)
+        return _take_notes(_REFERENCE_PITCHES), {}
+
+    m3_path = _frozen_m3_registry_path(tmp_path)
+    anchor = _anchor({"contour": "hard", "interval": "elastic", "rhythm": "elastic"})
+    evaluate_melody_experimental_anchor(
+        anchor=anchor,
+        melody_config=_melody_config(),
+        score=_score(bpm=60),
+        melody_artifact_bytes=_reference_artifact_bytes(),
+        m3_registry_path=m3_path,
+        m1_registry_path=REAL_M1_REGISTRY,
+        melody_take_band="clear_lead",
+        take_audio_path=str(take_path),
+        route_runner=_runner,
+    )
+    assert len(seen_paths) == 1
+    frozen_path = Path(seen_paths[0])
+    assert frozen_path != take_path
+    assert not frozen_path.exists()  # 呼び出し完了後に後始末（tempdir 解体）済み
+
+
+def test_audio_reference_freezes_reference_audio_and_records_sha256(tmp_path: Path) -> None:
+    """audio_reference 側も凍結コピーされ、resolved 時点の bytes の sha256 が
+    provenance の ``reference_audio_sha256`` として記録される（R2-3）。"""
+    take_path = tmp_path / "take.wav"
+    take_path.write_bytes(b"take-bytes")
+    ref_path = tmp_path / "ref.wav"
+    ref_path.write_bytes(b"reference-bytes")
+    m3_path = _frozen_m3_registry_path(tmp_path)
+    anchor = _anchor({"contour": "hard", "interval": "elastic", "rhythm": "elastic"})
+    entry = evaluate_melody_experimental_anchor(
+        anchor=anchor,
+        melody_config=_melody_config(reference="audio", reference_audio="ref.wav"),
+        score=_score(),
+        m3_registry_path=m3_path,
+        m1_registry_path=REAL_M1_REGISTRY,
+        melody_take_band="clear_lead",
+        reference_audio_path=str(ref_path),
+        reference_melody_band="clear_lead",
+        take_audio_path=str(take_path),
+        route_runner=_make_route_runner(_take_notes(_REFERENCE_PITCHES)),
+        reference_route_runner=_make_route_runner(_take_notes(_REFERENCE_PITCHES)),
+    )
+    assert entry.provenance.get("reference_audio_sha256") == hashlib.sha256(
+        b"reference-bytes"
+    ).hexdigest()
 
 
 # --------------------------------------------------------------------------- #
@@ -630,7 +838,7 @@ def test_score_reference_gate_only_take_side_allows_sparse_symbolic_reference(
         m3_registry_path=m3_path,
         m1_registry_path=REAL_M1_REGISTRY,
         melody_take_band="clear_lead",
-        take_audio_path="take.wav",
+        take_audio_path=_write_audio_file(tmp_path / "take.wav"),
         route_runner=_make_route_runner(take),
     )
 
@@ -682,6 +890,26 @@ def test_score_reference_missing_artifact_is_author_input_missing() -> None:
     observation, reason = derive_score_reference_observation(_score(), None)
     assert observation is None
     assert reason == "author_input_missing"
+
+
+# --------------------------------------------------------------------------- #
+# R2-7 (Codex round2 P2) — 非正 bpm の fail-closed
+# --------------------------------------------------------------------------- #
+def test_score_reference_zero_bpm_is_author_input_invalid() -> None:
+    """bpm=0 は beat→秒変換（60/bpm）の前に検証され、`ZeroDivisionError` では
+    なく `author_input_invalid(bpm=...)` の not_observed 理由へ落ちる。"""
+    artifact = _reference_artifact_bytes()
+    observation, reason = derive_score_reference_observation(_score(bpm=0), artifact)
+    assert observation is None
+    assert reason == "author_input_invalid(bpm=0.000)"
+
+
+def test_score_reference_negative_bpm_is_author_input_invalid() -> None:
+    """負の bpm も同様に fail-closed（負タイムスタンプが整列へ流れるのを防ぐ）。"""
+    artifact = _reference_artifact_bytes()
+    observation, reason = derive_score_reference_observation(_score(bpm=-60), artifact)
+    assert observation is None
+    assert reason == "author_input_invalid(bpm=-60.000)"
 
 
 def test_score_reference_malformed_schema_raises_value_error() -> None:
@@ -740,7 +968,7 @@ def test_full_pipeline_identical_take_is_preserved(tmp_path: Path) -> None:
         m3_registry_path=m3_path,
         m1_registry_path=REAL_M1_REGISTRY,
         melody_take_band="clear_lead",
-        take_audio_path="take.wav",
+        take_audio_path=_write_audio_file(tmp_path / "take.wav"),
         route_runner=_make_route_runner(take),
     )
     assert entry.adherence_status == "preserved"
@@ -789,7 +1017,7 @@ def test_full_pipeline_octave_scaled_take_is_changed_outside_policy(tmp_path: Pa
         m3_registry_path=m3_path,
         m1_registry_path=REAL_M1_REGISTRY,
         melody_take_band="clear_lead",
-        take_audio_path="take.wav",
+        take_audio_path=_write_audio_file(tmp_path / "take.wav"),
         route_runner=_make_route_runner(take),
     )
     assert entry.adherence_status == "changed_outside_policy"
@@ -813,7 +1041,7 @@ def test_full_pipeline_sparse_take_is_not_observed_not_comparable(tmp_path: Path
         m3_registry_path=m3_path,
         m1_registry_path=REAL_M1_REGISTRY,
         melody_take_band="clear_lead",
-        take_audio_path="take.wav",
+        take_audio_path=_write_audio_file(tmp_path / "take.wav"),
         route_runner=_make_route_runner(take),
     )
     assert entry.adherence_status == "not_observed"
@@ -823,6 +1051,7 @@ def test_full_pipeline_sparse_take_is_not_observed_not_comparable(tmp_path: Path
 def test_full_pipeline_is_deterministic(tmp_path: Path) -> None:
     m3_path = _frozen_m3_registry_path(tmp_path)
     anchor = _anchor({"contour": "hard", "interval": "elastic", "rhythm": "elastic"})
+    take_audio_path = _write_audio_file(tmp_path / "take.wav")
 
     def _run() -> ExperimentalAnchorEntry:
         take = _take_notes(_REFERENCE_PITCHES)
@@ -834,7 +1063,7 @@ def test_full_pipeline_is_deterministic(tmp_path: Path) -> None:
             m3_registry_path=m3_path,
             m1_registry_path=REAL_M1_REGISTRY,
             melody_take_band="clear_lead",
-            take_audio_path="take.wav",
+            take_audio_path=take_audio_path,
             route_runner=_make_route_runner(take),
         )
 
@@ -1004,6 +1233,8 @@ def test_collect_evaluates_melody_anchor_end_to_end_and_ignores_non_melody_ancho
         [_harmony_anchor(), _anchor({"contour": "hard", "interval": "elastic", "rhythm": "elastic"})]
     )
     take = _take_notes(_REFERENCE_PITCHES)
+    take_audio_path = Path(_write_audio_file(tmp_path / "take.wav"))
+    take_sha256 = hashlib.sha256(take_audio_path.read_bytes()).hexdigest()
     entries = collect_melody_experimental_anchors(
         contract=contract,
         melody_config=_melody_config(),
@@ -1011,7 +1242,8 @@ def test_collect_evaluates_melody_anchor_end_to_end_and_ignores_non_melody_ancho
         backend_ref=_backend_ref(melody_take_band="clear_lead"),
         score=_score(bpm=60),
         channel_artifact_bytes={"melody-1": _reference_artifact_bytes()},
-        take_audio_path=Path("take.wav"),
+        take_audio_path=take_audio_path,
+        take_sha256=take_sha256,
         route_runner=_make_route_runner(take),
     )
     # harmony anchor は無視され、melody anchor 1 件だけが翻訳される。
@@ -1087,6 +1319,48 @@ def test_plan_warnings_band_out_of_validation(tmp_path: Path) -> None:
     ]
 
 
+# --------------------------------------------------------------------------- #
+# R2-6 (Codex round2 P2) — plan warnings に audio 参照側の G2 を含める
+# --------------------------------------------------------------------------- #
+def test_plan_warnings_band_out_of_validation_for_unset_reference_band(
+    tmp_path: Path,
+) -> None:
+    """reference == "audio" でテイク側は校正済みでも原曲側 reference_band が
+    未宣言なら band_out_of_validation を先出しする（実行時ゲート G2 の主因と
+    一致させる——`test_audio_reference_without_reference_band_is_band_out_of_
+    validation` の実行時挙動と対になる plan 時点の診断）。"""
+    project_dir = _project_dir_with_registries(tmp_path, calibrated=True)
+    (project_dir / "ref.wav").write_bytes(b"fake-audio")
+    contract = _contract([_anchor({"contour": "hard"}, anchor_id="melody-1")])
+    warnings = melody_experimental_plan_warnings(
+        contract=contract,
+        melody_config=_melody_config(reference="audio", reference_audio="ref.wav"),
+        project_dir=project_dir,
+        backend_ref=_backend_ref(melody_take_band="clear_lead"),
+    )
+    assert warnings == [
+        "melody anchor 'melody-1': experimental observability — not expected (band_out_of_validation)"
+    ]
+
+
+def test_plan_warnings_ok_for_audio_reference_when_both_bands_calibrated(
+    tmp_path: Path,
+) -> None:
+    """reference == "audio" でテイク側・原曲側の両方が校正済み帯域なら "ok"。"""
+    project_dir = _project_dir_with_registries(tmp_path, calibrated=True)
+    (project_dir / "ref.wav").write_bytes(b"fake-audio")
+    contract = _contract([_anchor({"contour": "hard"}, anchor_id="melody-1")])
+    warnings = melody_experimental_plan_warnings(
+        contract=contract,
+        melody_config=_melody_config(
+            reference="audio", reference_audio="ref.wav", reference_band="clear_lead"
+        ),
+        project_dir=project_dir,
+        backend_ref=_backend_ref(melody_take_band="clear_lead"),
+    )
+    assert warnings == ["melody anchor 'melody-1': experimental observability — ok"]
+
+
 def test_plan_warnings_ok_when_calibrated_and_band_declared(tmp_path: Path) -> None:
     project_dir = _project_dir_with_registries(tmp_path, calibrated=True)
     contract = _contract([_anchor({"contour": "hard"}, anchor_id="melody-1")])
@@ -1116,3 +1390,101 @@ def test_plan_warnings_one_line_per_melody_anchor(tmp_path: Path) -> None:
     assert len(warnings) == 2
     assert all(w.endswith("experimental observability — ok") for w in warnings)
     assert {w.split("'")[1] for w in warnings} == {"melody-a", "melody-b"}
+
+
+# --------------------------------------------------------------------------- #
+# R2-1 (Codex round2 P1・会計分離の実装漏れ) — melody_experimental_anchor_ids /
+# resolve_main_observation_anchor_scope
+# --------------------------------------------------------------------------- #
+def test_melody_experimental_anchor_ids_empty_when_contract_is_none() -> None:
+    assert melody_experimental_anchor_ids(None) == frozenset()
+
+
+def test_melody_experimental_anchor_ids_only_axis_policy_melody_anchors() -> None:
+    """domain!=melody・axis_policy 無しの melody anchor は集合に入らない
+    ——DD-3 opt-in 判定そのもの。"""
+    contract = _contract(
+        [
+            _harmony_anchor(),
+            _anchor({"contour": "hard"}, anchor_id="melody-with-policy"),
+            _anchor(None, anchor_id="melody-without-policy"),
+        ]
+    )
+    assert melody_experimental_anchor_ids(contract) == frozenset({"melody-with-policy"})
+
+
+def test_resolve_main_observation_anchor_scope_unchanged_when_no_melody_axis_policy() -> None:
+    """除外対象が無ければ ``observation_anchor_scope`` をそのまま返す
+    （``None`` は絞り込みなしの既存契約を保つ）。"""
+    contract = _contract([_harmony_anchor()])
+    assert (
+        resolve_main_observation_anchor_scope(
+            manifest_path=Path("/nonexistent/manifest.yaml"),
+            contract=contract,
+            observation_anchor_scope=None,
+        )
+        is None
+    )
+    assert resolve_main_observation_anchor_scope(
+        manifest_path=Path("/nonexistent/manifest.yaml"),
+        contract=contract,
+        observation_anchor_scope={"harmony"},
+    ) == frozenset({"harmony"})
+
+
+def test_resolve_main_observation_anchor_scope_subtracts_from_explicit_scope() -> None:
+    """既存の `observation.anchors` 絞り込み（非 None）がある場合は単純な集合差分。"""
+    contract = _contract([_anchor({"contour": "hard"}, anchor_id="melody")])
+    result = resolve_main_observation_anchor_scope(
+        manifest_path=Path("/nonexistent/manifest.yaml"),
+        contract=contract,
+        observation_anchor_scope={"melody", "harmony"},
+    )
+    assert result == frozenset({"harmony"})
+
+
+def test_resolve_main_observation_anchor_scope_reads_manifest_when_scope_none(
+    tmp_path: Path,
+) -> None:
+    """絞り込みなし（``observation_anchor_scope=None``）で除外対象がある場合は、
+    manifest の生 anchor id 集合を読み取り、除外差分を明示的な inclusion set
+    へ変換する（`arrange/observe.py` の `anchor_scope` は inclusion-only の
+    ため）。"""
+    manifest_path = tmp_path / "identity.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(
+            {
+                "schema": "identity-manifest/0.1",
+                "anchors": [
+                    {"id": "melody"},
+                    {"id": "harmony"},
+                    {"id": "structure"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    contract = _contract([_anchor({"contour": "hard"}, anchor_id="melody")])
+    result = resolve_main_observation_anchor_scope(
+        manifest_path=manifest_path,
+        contract=contract,
+        observation_anchor_scope=None,
+    )
+    assert result == frozenset({"harmony", "structure"})
+
+
+def test_resolve_main_observation_anchor_scope_defers_to_caller_on_malformed_manifest(
+    tmp_path: Path,
+) -> None:
+    """manifest 構造が壊れている場合はここで判定せず、
+    `observe_generated_artifact` 自身の fail-closed 検証へ委ねるため素通しする
+    （``observation_anchor_scope`` をそのまま返す——ここでは ``None``）。"""
+    manifest_path = tmp_path / "broken.yaml"
+    manifest_path.write_text("not-a-mapping-just-a-string\n", encoding="utf-8")
+    contract = _contract([_anchor({"contour": "hard"}, anchor_id="melody")])
+    result = resolve_main_observation_anchor_scope(
+        manifest_path=manifest_path,
+        contract=contract,
+        observation_anchor_scope=None,
+    )
+    assert result is None

@@ -62,8 +62,10 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
+import tempfile
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
+from typing import Any, Callable, Collection, Dict, List, Literal, Optional, Tuple
 
 import yaml
 from pydantic import Field
@@ -102,6 +104,8 @@ __all__ = [
     "resolve_melody_observation_paths",
     "collect_melody_experimental_anchors",
     "melody_experimental_plan_warnings",
+    "melody_experimental_anchor_ids",
+    "resolve_main_observation_anchor_scope",
 ]
 
 # M4 DD-4: 校正済み帯域は現状「単離済み clean lead」のみ。stem 帯（vocal_track/
@@ -243,7 +247,10 @@ def derive_score_reference_observation(
     author-side input is missing (`melody_artifact_bytes` が ``None`` ——
     artifact 不在、または ``score.physical.bpm`` が転写 TODO センチネル
     （`sentinels.is_todo_sentinel`）) —— `reason` は常に ``"author_input_missing"``
-    （DD-1）。artifact が存在するのに内容が壊れている（schema 不一致・型不正等）
+    （DD-1）。``bpm`` が数値として解決できても非正（``<= 0``）の場合は
+    ``"author_input_invalid(bpm=<値>)"``（R2-7・Codex round2 P2）——author 入力は
+    存在するが値として使えないという別の事実を、欠落と混同せず正直に報告する。
+    artifact が存在するのに内容が壊れている（schema 不一致・型不正等）
     場合は not_observed へ落とさず ``ValueError`` を fail-closed で送出する
     （「入力が無い」と「入力が壊れている」は別の事実であり、後者を正直会計の
     ``not_observed`` で握りつぶさない——`arrange/observe.py` の既存 sensor 群と
@@ -259,6 +266,15 @@ def derive_score_reference_observation(
         return None, "author_input_missing"
 
     bpm_value = float(bpm)
+    # R2-7 (Codex round2 P2): beat→秒変換（60/bpm）の前に bpm > 0 を検証する。
+    # bpm=0 は ZeroDivisionError、負値は負タイムスタンプがそのまま整列へ
+    # 流れ込む（`compare_melodies` 側で意味不明な挙動になる）——author_input_
+    # missing（入力が無い）とは別の事実（入力はあるが値が壊れている）なので、
+    # 専用の理由語彙 `author_input_invalid` で not_observed へ落とす（捏造せず
+    # 保守側へ倒す。例外で fail-fast もしない——bpm は author 入力であり、
+    # 「入力が無い」と同じ「測れない」事実の一種として扱う）。
+    if not bpm_value > 0:
+        return None, f"author_input_invalid(bpm={bpm_value:.3f})"
     entries = _parse_note_events_with_timing(melody_artifact_bytes, artifact_path=artifact_path)
     seconds_per_beat = 60.0 / bpm_value
     notes = tuple(
@@ -292,9 +308,11 @@ def map_axis_policy_to_adherence(
 
     分岐（優先順）:
 
-    1. policy 内の軸に evidence が判定不能（"uncalibrated"、または欠落——後者は
-       `_derive_evidence` が `status=="frozen"` のとき軸を丸ごと省略しうるため
-       防御的に同一視する）→ ``not_observed(comparator_uncalibrated(axis=X))``
+    1. 判定参加軸（hard/elastic のみ——R2-5・Codex round2 P2）に evidence が
+       判定不能（"uncalibrated"、または欠落——後者は `_derive_evidence` が
+       `status=="frozen"` のとき軸を丸ごと省略しうるため防御的に同一視する）
+       → ``not_observed(comparator_uncalibrated(axis=X))``。free 軸は評価対象
+       外（欠落していてもこの分岐を起動しない）
     2. hard 軸のどれかが evidence "none" → ``changed_outside_policy``
     3. hard 軸のどれかが evidence "weak" → ``not_observed(insufficient_evidence)``
        （weak evidence から preserved を主張しない・保守側へ倒す）
@@ -309,7 +327,12 @@ def map_axis_policy_to_adherence(
     hard_axes = [axis for axis, mode in axis_policy.items() if mode == "hard"]
     elastic_axes = [axis for axis, mode in axis_policy.items() if mode == "elastic"]
 
-    for axis in sorted(axis_policy):
+    # R2-5 (Codex round2 P2): uncalibrated 前置チェックは判定参加軸
+    # （hard/elastic）のみを対象にする——free 軸は設計書 §3 により判定に
+    # 不参加のため、free 軸の evidence 欠落だけで not_observed に落としては
+    # ならない（free 軸は呼び出し側が axes/axis_evidence へ転記するだけで、
+    # 欠落していればそのまま欠落を報告する——捏造しない）。
+    for axis in sorted(hard_axes + elastic_axes):
         verdict = report.axis_evidence.get(axis, "uncalibrated")
         if verdict == "uncalibrated":
             reasons.append(f"comparator_uncalibrated(axis={axis})")
@@ -344,10 +367,32 @@ def _load_m3_registry_with_gate(
 
 def _load_m1_registry(path: "str | Path") -> Tuple[ObservabilityThresholds, str]:
     """M1 `registry.yaml` の ``observation_gate`` 節をロードする（sha256 込み・
-    single read）。`tests/test_melody_comparison.py` の loader パターンと同型。"""
+    single read）。`tests/test_melody_comparison.py` の loader パターンと同型。
+
+    R2-2 (Codex round2 P2): 構造検証を fail-closed で行う——空/スカラー YAML
+    や `observation_gate` 節欠落を素通しすると、直後の dict 添字/`from_registry`
+    の `set(mapping)` が `TypeError`/`KeyError` を未捕捉のまま送出し、CLI が
+    traceback 付きで落ちる。ここで actionable な `RecastError` に変換して
+    既存の捕捉経路（呼び出し側の `except (..., RecastError, ...)`）に乗せる。
+    """
     data = Path(path).read_bytes()
     mapping = yaml.safe_load(data)
-    thresholds = ObservabilityThresholds.from_registry(mapping["observation_gate"])
+    if not isinstance(mapping, dict):
+        raise RecastError(
+            f"M1 registry at {path} must be a YAML mapping at the top level "
+            f"(got {type(mapping).__name__})"
+        )
+    if "observation_gate" not in mapping:
+        raise RecastError(
+            f"M1 registry at {path} is missing the required top-level key 'observation_gate'"
+        )
+    observation_gate = mapping["observation_gate"]
+    if not isinstance(observation_gate, dict):
+        raise RecastError(
+            f"M1 registry at {path}: 'observation_gate' must be a mapping "
+            f"(got {type(observation_gate).__name__})"
+        )
+    thresholds = ObservabilityThresholds.from_registry(observation_gate)
     return thresholds, hashlib.sha256(data).hexdigest()
 
 
@@ -417,6 +462,28 @@ def _not_observed_entry(
     )
 
 
+def _freeze_audio_copy(audio_path: "str | Path", staging_dir: str) -> Tuple[str, str]:
+    """R2-3 (Codex round2 P2・TOCTOU 封鎖): ``audio_path`` の bytes を一度だけ
+    読み、sha256 と同一 bytes の凍結コピーパスを返す（``(sha256_digest,
+    frozen_path)``）。
+
+    `scripts/run_melody_comparison.py:_freeze_audio_copy` と同型パターン
+    （既存の確立済みリポジトリ規約をそのまま踏襲——重複実装ではなく同じ
+    設計の 2 箇所目の適用）: sha256 検証後〜再 open までの間に ``audio_path``
+    が差し替えられても、抽出器が実際に読むのは「検証した bytes と同一の」
+    凍結コピーであることを構造的に保証する。``staging_dir`` は呼び出し側が
+    `tempfile.TemporaryDirectory` で管理する run 出力ディレクトリ外の一時
+    領域（呼び出し側の `with` ブロック終了時に自動で後始末される）。
+    """
+    raw_bytes = Path(audio_path).read_bytes()
+    sha256_digest = hashlib.sha256(raw_bytes).hexdigest()
+    suffix = Path(audio_path).suffix
+    fd, tmp_name = tempfile.mkstemp(prefix="recast_melody_freeze_", suffix=suffix, dir=staging_dir)
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(raw_bytes)
+    return sha256_digest, tmp_name
+
+
 def evaluate_melody_experimental_anchor(
     *,
     anchor: ContractAnchor,
@@ -426,6 +493,7 @@ def evaluate_melody_experimental_anchor(
     melody_artifact_sha256: Optional[str] = None,
     melody_take_band: Optional[str] = None,
     take_audio_path: Optional[str] = None,
+    expected_take_sha256: Optional[str] = None,
     m3_registry_path: "str | Path",
     m1_registry_path: "str | Path",
     reference_audio_path: Optional[str] = None,
@@ -454,6 +522,19 @@ def evaluate_melody_experimental_anchor(
     （`scripts/run_melody_comparison.py` の route_runner パターンと同型・
     DD-5）: 既定は実抽出器、注入時は provenance に ``extractor_injected: true``
     を刻む。
+
+    ``expected_take_sha256``（R2-3・Codex round2 P2・TOCTOU 封鎖）: 呼び出し側
+    が別時点で既に確定させた ``take_audio_path`` の sha256（`recast ingest`
+    では `collect()`/`invoke()` が返す `GeneratedTake.sha256`）。抽出直前に
+    take を run 出力ディレクトリ外の一時コピーへ凍結し、そのコピーの sha256
+    と突き合わせる——不一致は `RecastError`（呼び出し側は
+    ``observation_incomplete`` 経路へ倒す）。省略時（``None``）は突合を行わない
+    （凍結コピー自体は行う——抽出器が実際に読む bytes を固定する目的は変わらない）。
+    原曲側（``reference == "audio"``）の ``reference_audio_path`` にも同様の
+    凍結コピーを適用するが、こちらは事前の外部 pin が無いため、凍結時に読んだ
+    bytes の sha256 をそのまま provenance の ``reference_audio_sha256`` として
+    記録する（それ自体が以降の pin になる）。M3 extractors（`route_runner`
+    契約）は無変更——凍結コピーのパスを渡すだけ。
     """
     if anchor.axis_policy is None:
         raise ValueError(
@@ -532,19 +613,38 @@ def evaluate_melody_experimental_anchor(
     # test 値であり、偽の pin として report に刻まない。
     take_injected = route_runner is not None
     take_runner = route_runner or _default_route_runner(melody_config.route)
-    take_observation, take_extra_provenance = take_runner(take_audio_path)
-    if not take_injected and take_extra_provenance:
-        provenance["take_extractor"] = dict(take_extra_provenance)
 
     reference_injected = False
-    if melody_config.reference == "audio":
-        if reference_audio_path is None:  # pragma: no cover - guarded above
-            raise ValueError("reference_audio_path is required for reference='audio'")
-        reference_injected = reference_route_runner is not None
-        ref_runner = reference_route_runner or _default_route_runner(melody_config.route)
-        reference_observation, reference_extra_provenance = ref_runner(reference_audio_path)
-        if not reference_injected and reference_extra_provenance:
-            provenance["reference_extractor"] = dict(reference_extra_provenance)
+    # R2-3 (Codex round2 P2・TOCTOU 封鎖): sha256 検証後〜再 open までの窓を
+    # 塞ぐため、抽出対象の音声は run 出力ディレクトリ外の一時コピーへ凍結して
+    # から読む（`_freeze_audio_copy` docstring 参照）。`route_runner` 注入
+    # （テスト seam）にもこの凍結コピーのパスが渡る——既存 fake pattern は
+    # bytes 内容で引く方式なら耐性がある（`test_m3_comparison_harness.py`
+    # の `notes_by_content` と同型）。
+    with tempfile.TemporaryDirectory(prefix="recast_melody_freeze_") as staging_dir:
+        take_actual_sha256, frozen_take_path = _freeze_audio_copy(take_audio_path, staging_dir)
+        if expected_take_sha256 is not None and take_actual_sha256 != expected_take_sha256:
+            raise RecastError(
+                f"melody anchor '{anchor.anchor_id}': take audio at {take_audio_path} does "
+                "not match its pinned sha256 (TOCTOU): expected "
+                f"{expected_take_sha256}, got {take_actual_sha256}"
+            )
+        take_observation, take_extra_provenance = take_runner(frozen_take_path)
+        if not take_injected and take_extra_provenance:
+            provenance["take_extractor"] = dict(take_extra_provenance)
+
+        if melody_config.reference == "audio":
+            if reference_audio_path is None:  # pragma: no cover - guarded above
+                raise ValueError("reference_audio_path is required for reference='audio'")
+            reference_actual_sha256, frozen_reference_path = _freeze_audio_copy(
+                reference_audio_path, staging_dir
+            )
+            provenance["reference_audio_sha256"] = reference_actual_sha256
+            reference_injected = reference_route_runner is not None
+            ref_runner = reference_route_runner or _default_route_runner(melody_config.route)
+            reference_observation, reference_extra_provenance = ref_runner(frozen_reference_path)
+            if not reference_injected and reference_extra_provenance:
+                provenance["reference_extractor"] = dict(reference_extra_provenance)
 
     assert reference_observation is not None  # both branches set it before reaching here
     if take_injected or reference_injected:
@@ -616,6 +716,76 @@ def _melody_anchors_with_axis_policy(
     ]
 
 
+def melody_experimental_anchor_ids(contract: Optional[PreservationContract]) -> frozenset[str]:
+    """R2-1 (Codex round2 P1・会計分離): axis_policy 付き melody anchor の
+    anchor_id 集合を公開する——`_melody_anchors_with_axis_policy` と同じ
+    opt-in 判定（DD-3）の結果を、呼び出し側（`cli/recast_cmd.py:
+    _observe_and_report`/`resolve_main_observation_anchor_scope`）が本会計
+    （`ObservationReport`/`RecastReport.anchors` の観測・coverage 集計）の
+    観測スコープから除外するために使う。axis_policy の**無い** melody anchor
+    は対象外（DD-3・現行の LCS・本会計挙動を完全維持）。"""
+    return frozenset(anchor.anchor_id for anchor in _melody_anchors_with_axis_policy(contract))
+
+
+def resolve_main_observation_anchor_scope(
+    *,
+    manifest_path: "str | Path",
+    contract: Optional[PreservationContract],
+    observation_anchor_scope: Optional[Collection[str]] = None,
+) -> Optional[frozenset[str]]:
+    """R2-1 (Codex round2 P1・会計分離の実装漏れ対応): axis_policy 付き melody
+    anchor を本会計（``ObservationReport``/``RecastReport.anchors`` の観測・
+    coverage 集計）の観測スコープから除外した ``anchor_scope`` を組み立てる
+    ——`arrange/observe.py::observe_generated_artifact(anchor_scope=...)` に
+    そのまま渡せる形（`arrange/observe.py` 自体は変更しない）。
+
+    axis_policy 付き melody anchor は `recast/experimental.py:
+    collect_melody_experimental_anchors` が独立に評価・報告する
+    （`RecastReport.experimental_anchors`）——legacy の `_observe_melody`
+    （LCS）による本会計行を同時に残すと、同じ anchor が二重に報告され、
+    かつ legacy 行が coverage 分母を動かしてしまう（設計書 §4 会計分離
+    違反）。本関数はそれを「main の観測スコープから該当 anchor_id を除外する」
+    形で解決する——`observe_generated_artifact` は `anchor_scope` を manifest
+    の生 bytes を parse する前に適用するため、除外された anchor は
+    `is_melody_sensor_anchor` の判定にすら到達せず、LCS センサー自体が
+    一切実行されない（無駄な basic_pitch 実行の回避）。
+
+    axis_policy の**無い** melody anchor は対象外（DD-3・現行の LCS・本会計
+    挙動を完全維持）——除外対象が無ければ ``observation_anchor_scope`` を
+    そのまま返す（``None`` は「絞り込みなし」の既存契約を保つ。manifest を
+    読みに行かない——既存 golden path のバイト不変を壊さない）。
+
+    ``observation_anchor_scope``（`project.yaml` の `observation.anchors`
+    宣言由来、非 `None` なら inclusion のみの既存絞り込み）が非 `None` の
+    場合は単純な集合差分で足りる。``None``（絞り込みなし=全 anchor）で除外
+    対象がある場合は、`arrange/observe.py` の ``anchor_scope`` が
+    inclusion-only（除外を直接表現できない）契約のため、manifest の生
+    anchor id 集合を読み取り、除外差分を明示的な inclusion set へ変換する。
+    manifest 構造が壊れている場合はここで判定せず、`observe_generated_
+    artifact` 自身の fail-closed 検証へ委ねるため素通しする
+    （``observation_anchor_scope`` をそのまま返す）。
+    """
+    excluded = melody_experimental_anchor_ids(contract)
+    if not excluded:
+        return frozenset(observation_anchor_scope) if observation_anchor_scope is not None else None
+
+    if observation_anchor_scope is not None:
+        return frozenset(observation_anchor_scope) - excluded
+
+    try:
+        raw_manifest = yaml.safe_load(Path(manifest_path).read_bytes())
+    except yaml.YAMLError:
+        return None
+    if not (isinstance(raw_manifest, dict) and isinstance(raw_manifest.get("anchors"), list)):
+        return None
+    all_ids = {
+        entry.get("id")
+        for entry in raw_manifest["anchors"]
+        if isinstance(entry, dict) and isinstance(entry.get("id"), str)
+    }
+    return frozenset(all_ids) - excluded
+
+
 def _resolve_project_relative_melody_reference(
     value: str, project_dir: Path, *, target: str
 ) -> Path:
@@ -664,6 +834,7 @@ def collect_melody_experimental_anchors(
     score: Optional[CompositionScore],
     channel_artifact_bytes: Dict[str, bytes],
     take_audio_path: Optional[Path],
+    take_sha256: Optional[str] = None,
     route_runner: Optional[RouteRunner] = None,
     reference_route_runner: Optional[RouteRunner] = None,
 ) -> List[ExperimentalAnchorEntry]:
@@ -675,6 +846,13 @@ def collect_melody_experimental_anchors(
     ``route_runner`` / ``reference_route_runner``（DD-5 の抽出器注入 seam）は
     本関数のパラメータとしてのみ露出する——CLI からは非公開（呼び出し側の
     `recast_cmd.py` はこれを渡さず、常に実抽出器を使う）。
+
+    ``take_sha256``（R2-3・Codex round2 P2）: 呼び出し側が別時点で既に確定
+    させた ``take_audio_path`` の sha256（`recast ingest` では
+    `GeneratedTake.sha256`）——`evaluate_melody_experimental_anchor` の
+    ``expected_take_sha256`` へそのまま転送し、抽出直前の凍結コピー検証
+    （TOCTOU 封鎖）の pin として使う。省略時（``None``）は突合を行わない
+    （凍結コピー自体は行う）。
 
     anchor の順序は ``contract.anchors``（= manifest anchor 宣言順）をそのまま
     保つ（決定論契約）。
@@ -709,6 +887,7 @@ def collect_melody_experimental_anchors(
                 melody_artifact_sha256=anchor.artifact_sha256,
                 melody_take_band=backend_ref.melody_take_band,
                 take_audio_path=str(take_audio_path) if take_audio_path is not None else None,
+                expected_take_sha256=take_sha256,
                 m3_registry_path=m3_registry_path,
                 m1_registry_path=m1_registry_path,
                 reference_audio_path=(
@@ -732,6 +911,10 @@ def melody_experimental_plan_warnings(
     """`recast plan` の warnings へ積む「observability 見込み」1 行を anchor
     ごとに組み立てる（Design Memo M4 §5）。抽出は行わない——plan 時点で
     機械判定できる 3 条件（config 不在 / G1 校正 / G2 帯域）のみを診断する。
+    ``reference == "audio"`` の場合は原曲側の G2（``reference_band``）も
+    診断に含める（R2-6・Codex round2 P2）——テイク側が校正済みでも原曲側が
+    未校正なら実行時 ``not_observed(band_out_of_validation)`` に落ちるため、
+    plan 時点でも同じ主因を先出しする。
 
     axis_policy 付き melody anchor が契約に無ければ空リスト（既存 project は
     バイト不変のまま — `RecastPlan` スキーマは変更しない、既存 `warnings`
@@ -751,7 +934,14 @@ def melody_experimental_plan_warnings(
             diagnosis = "not expected (comparator_uncalibrated)"
         else:
             band_reason = _check_melody_take_band(backend_ref.melody_take_band)
-            if band_reason is not None:
+            # R2-6: audio_reference は原曲側 G2 も先出しする（テイク側が
+            # 先に不成立なら主因はテイク側のまま — band_reason を優先評価）。
+            reference_band_reason = (
+                _check_melody_take_band(melody_config.reference_band)
+                if melody_config.reference == "audio"
+                else None
+            )
+            if band_reason is not None or reference_band_reason is not None:
                 diagnosis = "not expected (band_out_of_validation)"
             else:
                 diagnosis = "ok"
