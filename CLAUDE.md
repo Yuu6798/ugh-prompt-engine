@@ -209,6 +209,7 @@ tests/ / docs/ / examples/     # pytest / design documents (index: docs/README.m
 | [`docs/m2_error_model.md`](docs/m2_error_model.md) | M2d crepe ルート誤差モデル（M3 の第 1 入力）: pitch 中心誤差/octave error rate/voicing false-alarm/材質別分散 |
 | [`docs/DESIGN_M3_melody_comparator.md`](docs/DESIGN_M3_melody_comparator.md) | M3 旋律比較器設計書: 正規化・NW 対応付け・多軸類似（contour/interval/rhythm）・M3d 校正計画 |
 | [`docs/melody_comparator.md`](docs/melody_comparator.md) | M3 実装: `MelodySequences`・NW 整列・`MelodyComparisonReport`。総合スコアは恒久禁止、軸別 evidence のみ |
+| [`docs/DESIGN_M4_recast_melody_anchor.md`](docs/DESIGN_M4_recast_melody_anchor.md) | M4 設計書: M3 evidence を Recast の `experimental` anchor へ翻訳（axis_policy opt-in・G1–G3 ゲート・会計分離）。実装 = `recast/experimental.py`、golden E2E = `tests/test_recast_m4d_melody_e2e.py` |
 
 ## ドキュメント管理ポリシー
 
