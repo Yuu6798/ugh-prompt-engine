@@ -392,7 +392,25 @@ def _load_m1_registry(path: "str | Path") -> Tuple[ObservabilityThresholds, str]
             f"M1 registry at {path}: 'observation_gate' must be a mapping "
             f"(got {type(observation_gate).__name__})"
         )
-    thresholds = ObservabilityThresholds.from_registry(observation_gate)
+    # R3-4 (Codex round3 P2 対応): 構造検証（top-level / `observation_gate`
+    # 節の存在）は上で fail-closed 済みだが、フィールドレベルの検証
+    # （必須キー欠落・型不正等）は `ObservabilityThresholds.from_registry`
+    # 自身に委ねている——例えば `observation_gate: {}` は上の 2 検査を
+    # 通過してしまい、`from_registry` の必須引数欠落 `TypeError` が未捕捉の
+    # まま呼び出し側（observed 記録後）まで伝播し traceback 付きで CLI が
+    # 落ちていた。ここで `from_registry` 呼び出しだけを try/except で包み、
+    # 元の例外メッセージを含む actionable な `RecastError` へ翻訳する——
+    # M1 側の必須フィールド一覧をここへ再実装するのではなく、
+    # `from_registry` が既に持つ検証結果をそのまま翻訳するだけ（知識の重複
+    # を避ける）。既存の捕捉経路（呼び出し側の
+    # `except (..., RecastError, ...)`）にそのまま乗る。
+    try:
+        thresholds = ObservabilityThresholds.from_registry(observation_gate)
+    except (TypeError, ValueError, KeyError) as exc:
+        raise RecastError(
+            f"M1 registry at {path}: 'observation_gate' failed validation: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
     return thresholds, hashlib.sha256(data).hexdigest()
 
 
@@ -716,6 +734,28 @@ def _melody_anchors_with_axis_policy(
     ]
 
 
+def _filter_melody_anchors_by_observation_scope(
+    anchors: List[ContractAnchor], observation_anchor_scope: Optional[Collection[str]]
+) -> List[ContractAnchor]:
+    """R3-1 (Codex round3 P2 対応): experimental 経路も main 観測
+    （`arrange/observe.py::observe_generated_artifact(anchor_scope=...)`）と
+    同じスコープ意味論に揃える——`observation_anchor_scope`（`observation.
+    anchors` 宣言由来の非空集合）が渡されたときだけ、その集合外の melody
+    anchor をスキップする。空/``None``（絞り込みなし）は現行どおり全件を
+    通す。
+
+    従来は `collect_melody_experimental_anchors`/`melody_experimental_
+    plan_warnings` のどちらもこのスコープを一切見ておらず、非空
+    `observation.anchors` が特定の melody anchor を含まない場合でも契約の
+    全 axis_policy melody anchor を評価（CREPE 抽出まで実行）し、未要求の
+    experimental 行を公開してしまっていた——main は `anchor_scope` を尊重
+    するのに experimental だけスコープを無視する非対称を解消する。"""
+    if not observation_anchor_scope:
+        return anchors
+    scope = set(observation_anchor_scope)
+    return [anchor for anchor in anchors if anchor.anchor_id in scope]
+
+
 def melody_experimental_anchor_ids(contract: Optional[PreservationContract]) -> frozenset[str]:
     """R2-1 (Codex round2 P1・会計分離): axis_policy 付き melody anchor の
     anchor_id 集合を公開する——`_melody_anchors_with_axis_policy` と同じ
@@ -837,6 +877,7 @@ def collect_melody_experimental_anchors(
     take_sha256: Optional[str] = None,
     route_runner: Optional[RouteRunner] = None,
     reference_route_runner: Optional[RouteRunner] = None,
+    observation_anchor_scope: Optional[Collection[str]] = None,
 ) -> List[ExperimentalAnchorEntry]:
     """`RecastReport.experimental_anchors` を組み立てる M4c の ingest/observe
     経路 orchestration（Design Memo M4 §5）。axis_policy 付き melody anchor が
@@ -854,10 +895,23 @@ def collect_melody_experimental_anchors(
     （TOCTOU 封鎖）の pin として使う。省略時（``None``）は突合を行わない
     （凍結コピー自体は行う）。
 
+    ``observation_anchor_scope``（R3-1・Codex round3 P2 対応）: `project.yaml`
+    の `observation.anchors` 宣言由来の非空集合（呼び出し側 `recast_cmd.py:
+    _observe_and_report` の `anchor_scope`、main の `observe_generated_
+    artifact(anchor_scope=...)` と同一 single source）。非空のとき、この
+    集合外の melody anchor は評価せず（CREPE 抽出も一切実行しない）、
+    experimental 節から丸ごと省略する——main が `anchor_scope` を尊重する
+    のに experimental だけが未要求の行を評価・公開してしまう非対称を防ぐ
+    （`_filter_melody_anchors_by_observation_scope` 参照）。空/``None``
+    （既定・絞り込みなし）は現行どおり契約の全 axis_policy melody anchor を
+    評価する——既存 project の挙動はバイト不変。
+
     anchor の順序は ``contract.anchors``（= manifest anchor 宣言順）をそのまま
     保つ（決定論契約）。
     """
-    melody_anchors = _melody_anchors_with_axis_policy(contract)
+    melody_anchors = _filter_melody_anchors_by_observation_scope(
+        _melody_anchors_with_axis_policy(contract), observation_anchor_scope
+    )
     if not melody_anchors:
         return []
 
@@ -907,6 +961,7 @@ def melody_experimental_plan_warnings(
     melody_config: Optional[MelodyObservationConfig],
     project_dir: Path,
     backend_ref: BackendRef,
+    observation_anchor_scope: Optional[Collection[str]] = None,
 ) -> List[str]:
     """`recast plan` の warnings へ積む「observability 見込み」1 行を anchor
     ごとに組み立てる（Design Memo M4 §5）。抽出は行わない——plan 時点で
@@ -919,8 +974,18 @@ def melody_experimental_plan_warnings(
     axis_policy 付き melody anchor が契約に無ければ空リスト（既存 project は
     バイト不変のまま — `RecastPlan` スキーマは変更しない、既存 `warnings`
     リストへ足すだけ）。
+
+    ``observation_anchor_scope``（R3-1・Codex round3 P2 対応）: `collect_
+    melody_experimental_anchors` と同じスコープ規則（`_filter_melody_
+    anchors_by_observation_scope`）を適用する——診断パリティ維持のため、
+    非空スコープ外の melody anchor は plan の warnings にも出さない（実行時
+    に experimental 節から省略される anchor について、plan 時点で無関係な
+    「observability 見込み」行を出さない）。空/``None``（既定）は現行どおり
+    全 axis_policy melody anchor を診断する。
     """
-    melody_anchors = _melody_anchors_with_axis_policy(contract)
+    melody_anchors = _filter_melody_anchors_by_observation_scope(
+        _melody_anchors_with_axis_policy(contract), observation_anchor_scope
+    )
     if not melody_anchors:
         return []
 

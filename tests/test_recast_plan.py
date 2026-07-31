@@ -758,8 +758,8 @@ def test_collect_protected_input_paths_rejects_unknown_backend(tmp_path: Path) -
 # --- R1-3 (Codex round1 P2): compute_observation_digest melody content hash --
 
 
-def _observation_config(*, melody: dict | None = None) -> ObservationConfig:
-    payload: dict = {"enabled": False, "anchors": []}
+def _observation_config(*, melody: dict | None = None, enabled: bool = True) -> ObservationConfig:
+    payload: dict = {"enabled": enabled, "anchors": []}
     if melody is not None:
         payload["melody"] = melody
     return ObservationConfig.model_validate(payload)
@@ -853,6 +853,53 @@ def test_compute_observation_digest_includes_reference_audio_only_for_audio_refe
     assert digest_before != digest_after
 
 
+# --- R3-2 (Codex round3 P2): observation.enabled=False skips melody dereference --
+
+
+def test_compute_observation_digest_skips_melody_dereference_when_disabled() -> None:
+    """`observation.enabled is False` のときは melody 参照先ファイルを一切
+    dereference しない——参照先が存在しない project_dir を渡しても（ひいては
+    project_dir を渡さなくても）エラーにならず、設定のみの base_digest が
+    得られる。従来は呼び出し側のガード順（`_precheck_observation_anchors`
+    が `observation.enabled` を見てから呼ぶ）に依存しており、本関数自身は
+    `observation.enabled` を見ずに常に melody 参照を resolve+hash していた
+    ため、observation 無効な project でも melody 参照ファイル欠落だけで
+    参照エラーになり得た。"""
+    observation = _observation_config(melody=_melody_observation_payload(), enabled=False)
+    payload = observation.model_dump(mode="json", exclude_none=True)
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    expected = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    # project_dir 省略でもエラーにならない（melody 未設定時と同じ経路）。
+    assert compute_observation_digest(observation) == expected
+    # melody 参照先が存在しない project_dir を渡してもエラーにならず、同じ
+    # base_digest のまま（dereference 自体が発生しない）。
+    assert (
+        compute_observation_digest(observation, project_dir=Path("/does/not/exist"))
+        == expected
+    )
+
+
+def test_compute_observation_digest_enabled_true_still_dereferences_melody(
+    tmp_path: Path,
+) -> None:
+    """`observation.enabled is True` では R3-2 対応後も従来どおり melody 参照
+    先の content hash が digest へ編入される（enabled=False ガードが
+    enabled=True 経路の挙動を変えないことの確認 — R1-3 の既存テスト群
+    （`test_compute_observation_digest_changes_when_melody_registry_bytes_
+    change` 等）と対になる直接確認）。"""
+    (tmp_path / "m3_comparison_registry.yaml").write_bytes(b"m3")
+    (tmp_path / "registry.yaml").write_bytes(b"m1")
+    observation = _observation_config(melody=_melody_observation_payload(), enabled=True)
+
+    payload = observation.model_dump(mode="json", exclude_none=True)
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    base_digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    digest = compute_observation_digest(observation, project_dir=tmp_path)
+    assert digest != base_digest
+
+
 # --- R1-5 (Codex round1 P2): melody resolved paths join protected-input set --
 
 
@@ -916,3 +963,119 @@ def test_build_recast_plan_protected_inputs_include_melody_registries(
     assert (loaded.project_dir / "registry.yaml").resolve() in resolved
     # melody 設定を追加しても plan 到達状態そのものには影響しない（additive）。
     assert result.plan.state_reached == "verified"
+
+
+# --- R3-3 (Codex round3 P2): melody 診断は package 公開前に完了させる ---------
+
+
+def _add_melody_axis_policy_project(tmp_path: Path, *, m3_registry_bytes: bytes) -> Path:
+    """demo_project (variant edm/backend suno) に axis_policy 付き melody
+    anchor + `observation.melody` 配線を足した作業コピーを組み立てる
+    （`_add_melody_observation` は axis_policy を宣言しないため
+    `melody_experimental_plan_warnings` が起動しない——本ヘルパーはそれに
+    加えて `arrangements/edm.yaml` の melody identity anchor へ axis_policy
+    を足し、`backends.suno.melody_take_band` も宣言して M4c 経路を実際に
+    起動させる）。``m3_registry_bytes`` は呼び出し側が用意する
+    `m3_comparison_registry.yaml` の生 bytes（破損/欠落の再現に使う）。"""
+    project_path = _copy_demo_project(tmp_path)
+    project_dir = project_path.parent
+
+    (project_dir / "m3_comparison_registry.yaml").write_bytes(m3_registry_bytes)
+    (project_dir / "registry.yaml").write_bytes(b"m1-placeholder")
+
+    arrangement_path = project_dir / "arrangements" / "edm.yaml"
+    arrangement_data = yaml.safe_load(arrangement_path.read_text(encoding="utf-8"))
+    arrangement_data["preservation"]["identity_anchors"]["melody"]["axis_policy"] = {
+        "contour": "hard",
+        "interval": "elastic",
+        "rhythm": "free",
+    }
+    arrangement_path.write_text(yaml.safe_dump(arrangement_data, sort_keys=False), encoding="utf-8")
+
+    project_data = yaml.safe_load(project_path.read_text(encoding="utf-8"))
+    project_data["backends"]["suno"]["melody_take_band"] = "clear_lead"
+    project_data["observation"]["enabled"] = True
+    project_data["observation"]["melody"] = {
+        "reference": "score",
+        "comparison_registry": "m3_comparison_registry.yaml",
+        "m1_registry": "registry.yaml",
+        "route": "crepe_direct",
+    }
+    project_path.write_text(yaml.safe_dump(project_data, sort_keys=False), encoding="utf-8")
+    return project_path
+
+
+def test_corrupted_melody_registry_does_not_publish_package(tmp_path: Path) -> None:
+    """R3-3 (Codex round3 P2 対応・all-build-then-publish の回復):
+    `melody_experimental_plan_warnings`（呼び出し先 `load_m3_registry` 経由の
+    `M3ComparisonConfig.from_registry`）が破損 registry で raise するとき、
+    その raise は永続公開（`_atomic_publish_text_bundle`）より前に起きる
+    ——failed invocation の package が builds_root に残置されないことを、
+    公開先ディレクトリの不存在で直接証明する。"""
+    # schema フィールドが不正な m3_comparison_registry.yaml（構造的に破損）
+    # ——`M3ComparisonConfig.from_registry` が即座に `ValueError` を送出する。
+    corrupted_m3_bytes = yaml.safe_dump({"schema": "not-a-real-schema"}).encode("utf-8")
+    project_path = _add_melody_axis_policy_project(tmp_path, m3_registry_bytes=corrupted_m3_bytes)
+    loaded = load_recast_project(project_path)
+    package_dir = loaded.builds_root / "packages" / "edm@suno"
+    assert not loaded.builds_root.exists()  # デモ fixture は builds/ を同梱しない
+
+    with pytest.raises(ValueError):
+        build_recast_plan_artifacts(loaded, variant="edm", backend="suno", publish=True)
+
+    # melody 診断の raise が publish より前に起きたので、package/report は
+    # 一切公開されていない（半端な公開が残置されない）。
+    assert not package_dir.exists()
+    assert not (package_dir / "performance_package.json").exists()
+    assert not (package_dir / "compilation_report.json").exists()
+
+
+def test_uncorrupted_melody_registry_still_publishes_package(tmp_path: Path) -> None:
+    """回帰確認: axis_policy 付き melody anchor があっても registry が校正済み
+    かつ正常なら、従来どおり package/report が公開される（R3-3 対応が
+    正常系の publish を妨げないことの確認）。"""
+    valid_m3_bytes = yaml.safe_dump(
+        {
+            "schema": "m3-comparison/0.1",
+            "registered_utc": "2026-07-31T00:00:00Z",
+            "representation": {
+                "pitch_quantization_semitones": 1,
+                "contour_small_max_semitones": 2,
+                "ioi_ratio_log2_step": 0.25,
+                "duration_ratio_log2_step": 0.25,
+                "chroma_fold_semitones": 12,
+                "octave_artifact_divergence": 0.10,
+            },
+            "alignment": {
+                "match_score": 1.0,
+                "mismatch_score": -1.0,
+                "gap_open": -1.0,
+                "gap_extend": -0.5,
+                "traceback_preference": ["diag", "up", "left"],
+                "phrase_gap_sec": 0.6,
+                "phrase_gap_score": 0.25,
+            },
+            "coverage": {"floor": 0.5, "floor_status": "frozen"},
+            "evidence_thresholds": {
+                "status": "frozen",
+                "axes": {
+                    axis: {"strong_min": 0.8, "none_max": 0.3}
+                    for axis in ("contour", "interval", "rhythm")
+                },
+            },
+            "separation_margin": {"min_same_minus_cross_margin": 0.15},
+        }
+    ).encode("utf-8")
+    project_path = _add_melody_axis_policy_project(tmp_path, m3_registry_bytes=valid_m3_bytes)
+    loaded = load_recast_project(project_path)
+    package_dir = loaded.builds_root / "packages" / "edm@suno"
+
+    artifacts = build_recast_plan_artifacts(loaded, variant="edm", backend="suno", publish=True)
+
+    assert artifacts.result.plan.state_reached == "verified"
+    assert (package_dir / "performance_package.json").exists()
+    assert (package_dir / "compilation_report.json").exists()
+    assert any(
+        "melody anchor 'melody': experimental observability — ok" == w
+        for w in artifacts.result.plan.warnings
+    )

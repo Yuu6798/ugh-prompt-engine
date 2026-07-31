@@ -1267,6 +1267,12 @@ def _observe_and_report(
     # ——会計分離。抽出器注入 seam（`route_runner`）は library 関数のみが
     # 露出し、CLI からは常に既定（実抽出器）を使う。
     try:
+        # R3-1 (Codex round3 P2 対応): main と同じ `anchor_scope`（非空
+        # `observation.anchors` 集合、`resolve_main_observation_anchor_scope`
+        # に渡したのと同一の raw scope）を collector にも渡す——main が
+        # スコープ外の anchor を観測しないのに experimental だけが契約の
+        # 全 axis_policy melody anchor を評価（CREPE 抽出まで実行）する
+        # 非対称を防ぐ。空/``None``（既定・絞り込みなし）は現行どおり全件。
         experimental_anchors = collect_melody_experimental_anchors(
             contract=artifacts.contract,
             melody_config=loaded.project.observation.melody,
@@ -1276,6 +1282,7 @@ def _observe_and_report(
             channel_artifact_bytes=artifacts.channel_artifact_bytes,
             take_audio_path=take.audio_path,
             take_sha256=take.sha256,
+            observation_anchor_scope=anchor_scope,
         )
     except (OSError, ValueError, RecastError) as exc:
         obs_note = _normalize_diagnostic(

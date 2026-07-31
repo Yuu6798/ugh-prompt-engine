@@ -440,6 +440,62 @@ def test_m1_registry_missing_observation_gate_section_raises_recast_error(
         )
 
 
+# --------------------------------------------------------------------------- #
+# R3-4 (Codex round3 P2) — M1 registry フィールドレベル検証も RecastError へ翻訳
+# --------------------------------------------------------------------------- #
+def test_m1_registry_empty_observation_gate_mapping_raises_recast_error(
+    tmp_path: Path,
+) -> None:
+    """R2-2 の構造検証（top-level / `observation_gate` 節の存在）は
+    `observation_gate: {}` を通過させてしまい、直後の
+    `ObservabilityThresholds.from_registry` の必須引数欠落 `TypeError` が
+    未捕捉のまま observed 記録後に traceback していた——ここで actionable な
+    `RecastError` に翻訳されることを確認する。"""
+    m3_path = _frozen_m3_registry_path(tmp_path)
+    m1_path = tmp_path / "empty_gate_registry.yaml"
+    m1_path.write_text(yaml.safe_dump({"observation_gate": {}}), encoding="utf-8")
+    anchor = _anchor({"contour": "hard"})
+    with pytest.raises(RecastError, match="observation_gate"):
+        evaluate_melody_experimental_anchor(
+            anchor=anchor,
+            melody_config=_melody_config(),
+            score=_score(),
+            m3_registry_path=m3_path,
+            m1_registry_path=m1_path,
+        )
+
+
+def test_m1_registry_unknown_field_in_observation_gate_raises_recast_error(
+    tmp_path: Path,
+) -> None:
+    """`observation_gate` に事前登録外のキー（型不正な設定値）があると
+    `ObservabilityThresholds.from_registry` 自身が `ValueError` を送出する
+    ——これも同じ try/except で `RecastError` へ翻訳されることを確認する。"""
+    m3_path = _frozen_m3_registry_path(tmp_path)
+    m1_path = tmp_path / "unknown_field_registry.yaml"
+    gate = {
+        "min_voiced_coverage": 0.5,
+        "min_note_count": 4,
+        "min_phrase_count": 1,
+        "min_confidence_mean": 0.5,
+        "max_low_confidence_rate": 0.5,
+        "max_octave_jump_rate": 0.5,
+        "voiced_confidence_floor": 0.3,
+        "low_confidence_floor": 0.1,
+        "not_a_real_field": "oops",
+    }
+    m1_path.write_text(yaml.safe_dump({"observation_gate": gate}), encoding="utf-8")
+    anchor = _anchor({"contour": "hard"})
+    with pytest.raises(RecastError, match="observation_gate"):
+        evaluate_melody_experimental_anchor(
+            anchor=anchor,
+            melody_config=_melody_config(),
+            score=_score(),
+            m3_registry_path=m3_path,
+            m1_registry_path=m1_path,
+        )
+
+
 def test_band_out_of_validation_when_take_band_none(tmp_path: Path) -> None:
     m3_path = _frozen_m3_registry_path(tmp_path)
     anchor = _anchor({"contour": "hard"})
@@ -1254,6 +1310,80 @@ def test_collect_evaluates_melody_anchor_end_to_end_and_ignores_non_melody_ancho
 
 
 # --------------------------------------------------------------------------- #
+# R3-1 (Codex round3 P2) — collect_melody_experimental_anchors のスコープ整合
+# --------------------------------------------------------------------------- #
+def test_collect_skips_melody_anchor_outside_non_empty_scope(tmp_path: Path) -> None:
+    """非空 `observation_anchor_scope` が melody anchor を含まない場合、
+    experimental 節は空（節ごと省略）で、CREPE 抽出（route_runner）も一切
+    呼ばれない——main が `anchor_scope` を尊重するのに experimental だけが
+    未要求の行を評価・公開してしまう非対称を防ぐ。"""
+    project_dir = _project_dir_with_registries(tmp_path, calibrated=True)
+    contract = _contract(
+        [_anchor({"contour": "hard", "interval": "elastic", "rhythm": "elastic"})]
+    )
+
+    def _unexpected_runner(_path: str) -> Any:
+        raise AssertionError("route_runner must not be called when anchor is out of scope")
+
+    entries = collect_melody_experimental_anchors(
+        contract=contract,
+        melody_config=_melody_config(),
+        project_dir=project_dir,
+        backend_ref=_backend_ref(melody_take_band="clear_lead"),
+        score=_score(bpm=60),
+        channel_artifact_bytes={"melody-1": _reference_artifact_bytes()},
+        take_audio_path=Path(_write_audio_file(tmp_path / "take.wav")),
+        route_runner=_unexpected_runner,
+        observation_anchor_scope={"harmony-1"},
+    )
+    assert entries == []
+
+
+def test_collect_evaluates_melody_anchor_within_non_empty_scope(tmp_path: Path) -> None:
+    """非空スコープに melody anchor id が含まれていれば従来どおり評価する。"""
+    project_dir = _project_dir_with_registries(tmp_path, calibrated=True)
+    contract = _contract(
+        [_anchor({"contour": "hard", "interval": "elastic", "rhythm": "elastic"})]
+    )
+    take = _take_notes(_REFERENCE_PITCHES)
+    entries = collect_melody_experimental_anchors(
+        contract=contract,
+        melody_config=_melody_config(),
+        project_dir=project_dir,
+        backend_ref=_backend_ref(melody_take_band="clear_lead"),
+        score=_score(bpm=60),
+        channel_artifact_bytes={"melody-1": _reference_artifact_bytes()},
+        take_audio_path=Path(_write_audio_file(tmp_path / "take.wav")),
+        route_runner=_make_route_runner(take),
+        observation_anchor_scope={"melody-1"},
+    )
+    assert len(entries) == 1
+    assert entries[0].adherence_status == "preserved"
+
+
+def test_collect_empty_scope_means_unrestricted_like_main(tmp_path: Path) -> None:
+    """空集合スコープは main と同じ「絞り込みなし」の意味論——全 axis_policy
+    melody anchor を評価する（既定 `None` と同じ挙動）。"""
+    project_dir = _project_dir_with_registries(tmp_path, calibrated=True)
+    contract = _contract(
+        [_anchor({"contour": "hard", "interval": "elastic", "rhythm": "elastic"})]
+    )
+    take = _take_notes(_REFERENCE_PITCHES)
+    entries = collect_melody_experimental_anchors(
+        contract=contract,
+        melody_config=_melody_config(),
+        project_dir=project_dir,
+        backend_ref=_backend_ref(melody_take_band="clear_lead"),
+        score=_score(bpm=60),
+        channel_artifact_bytes={"melody-1": _reference_artifact_bytes()},
+        take_audio_path=Path(_write_audio_file(tmp_path / "take.wav")),
+        route_runner=_make_route_runner(take),
+        observation_anchor_scope=set(),
+    )
+    assert len(entries) == 1
+
+
+# --------------------------------------------------------------------------- #
 # M4c — melody_experimental_plan_warnings
 # --------------------------------------------------------------------------- #
 def test_plan_warnings_empty_when_contract_is_none() -> None:
@@ -1317,6 +1447,41 @@ def test_plan_warnings_band_out_of_validation(tmp_path: Path) -> None:
     assert warnings == [
         "melody anchor 'melody-1': experimental observability — not expected (band_out_of_validation)"
     ]
+
+
+# --------------------------------------------------------------------------- #
+# R3-1 (Codex round3 P2) — plan warnings のスコープ整合（診断パリティ）
+# --------------------------------------------------------------------------- #
+def test_plan_warnings_skips_melody_anchor_outside_non_empty_scope(tmp_path: Path) -> None:
+    """`collect_melody_experimental_anchors` と同じスコープ規則を warnings 側
+    にも適用する——非空スコープ外の melody anchor は plan 診断にも出さない
+    （実行時に experimental 節から省略される anchor について、plan 時点で
+    無関係な「observability 見込み」行を出さない・診断パリティ維持）。"""
+    project_dir = _project_dir_with_registries(tmp_path, calibrated=True)
+    contract = _contract([_anchor({"contour": "hard"}, anchor_id="melody-1")])
+    warnings = melody_experimental_plan_warnings(
+        contract=contract,
+        melody_config=_melody_config(),
+        project_dir=project_dir,
+        backend_ref=_backend_ref(melody_take_band="clear_lead"),
+        observation_anchor_scope={"harmony-1"},
+    )
+    assert warnings == []
+
+
+def test_plan_warnings_empty_scope_means_unrestricted_like_main(tmp_path: Path) -> None:
+    """空集合スコープは「絞り込みなし」——既定 `None` と同じく全 melody
+    anchor を診断する。"""
+    project_dir = _project_dir_with_registries(tmp_path, calibrated=True)
+    contract = _contract([_anchor({"contour": "hard"}, anchor_id="melody-1")])
+    warnings = melody_experimental_plan_warnings(
+        contract=contract,
+        melody_config=_melody_config(),
+        project_dir=project_dir,
+        backend_ref=_backend_ref(melody_take_band="clear_lead"),
+        observation_anchor_scope=set(),
+    )
+    assert warnings == ["melody anchor 'melody-1': experimental observability — ok"]
 
 
 # --------------------------------------------------------------------------- #

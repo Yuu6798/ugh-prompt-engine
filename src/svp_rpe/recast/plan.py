@@ -843,10 +843,25 @@ def compute_observation_digest(
     melody 未設定のプロジェクトでは戻り値は本 R1-3 対応**前**の実装と
     バイト単位で完全に不変（``base_digest`` をそのまま返す——既存 golden
     project fixture の digest へ一切影響しない、CLAUDE.md の後方互換規約
-    に従う）。"""
+    に従う）。
+
+    R3-2 (Codex round3 P2 対応): ``observation.enabled is False`` のときは
+    ``observation.melody`` が設定されていても melody 参照先ファイルを一切
+    dereference（resolve + hash）せず、設定のみの ``base_digest`` を返す。
+    従来はこのガードが呼び出し側（`_precheck_observation_anchors`）にしか
+    無く、`compute_observation_digest` 自身は ``observation.enabled`` を
+    見ずに常に melody 参照を resolve+hash していたため、observation 無効な
+    project でも melody 参照ファイル欠落だけで（本来 `collect` 止まりで
+    済むはずが）参照エラーになり得た。この分岐を呼び出し側のガード順に
+    依存させず本関数内で完結させることで、`compute_observation_digest` を
+    直接呼ぶ将来の呼び出し元（ガード順を誤り得る）に対しても同じ安全性を
+    保証する。``observation.enabled is True`` のときは従来どおり content
+    hash を編入する（挙動不変）。"""
     payload = observation.model_dump(mode="json", exclude_none=True)
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     base_digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    if observation.enabled is False:
+        return base_digest
     if observation.melody is None:
         return base_digest
     if project_dir is None:
@@ -1605,6 +1620,33 @@ def _compile_verify_publish(
                 )
             warnings = warnings + mode_gate_reasons
 
+    # R3-3 (Codex round3 P2 対応・all-build-then-publish の回復): melody 診断
+    # （registry 欠落/破損で `RecastError` を raise しうる計算）を永続公開
+    # （`_atomic_publish_text_bundle`）より**前**に完了させる——従来はこの
+    # 呼び出しが publish の**後**にあったため、diagnosis が raise すると
+    # 「package は既に公開済みだが呼び出しは例外で失敗する」半端な状態が
+    # 残った（失敗した invocation の package が builds_root に残置される）。
+    # ここで先に計算しておけば、raise 時点で publish 自体にまだ到達していない
+    # ——all-build-then-publish（先に全て構築してから公開する）を回復する。
+    # M4c (Design Memo M4 §5): axis_policy 付き melody anchor があるときだけ
+    # 「observability 見込み」1 行を warnings へ足す（抽出は行わない — G1/G2/
+    # config 不在のみを判定する診断）。melody anchor が無い project は
+    # `melody_warnings == []` のためバイト不変（既存 golden/demo/e2e project
+    # の `recast_plan.json` は一切影響を受けない）。
+    # R3-1 (Codex round3 P2 対応): 非空 `observation.anchors` は main の
+    # 観測スコープと同じ意味論で experimental 診断もフィルタする（診断
+    # パリティ維持——`or None` は空リスト（既定・絞り込みなし）を
+    # `melody_experimental_plan_warnings` の「全件」既定値へ正規化する）。
+    melody_warnings = melody_experimental_plan_warnings(
+        contract=bundle.contract,
+        melody_config=project.observation.melody,
+        project_dir=loaded.project_dir,
+        backend_ref=backend_ref,
+        observation_anchor_scope=project.observation.anchors or None,
+    )
+    if melody_warnings:
+        warnings = warnings + melody_warnings
+
     # staging_dir はここで cleanup 済み（verify 専用の一時コピーは跡形も
     # 残らない）。verification（該当時）・mode gate の両方を通過したので、
     # `publish=True` ならここで初めて real_package_dir へ永続公開する
@@ -1636,20 +1678,6 @@ def _compile_verify_publish(
                 changed_fields=changed_fields,
                 warnings=warnings,
             )
-
-    # M4c (Design Memo M4 §5): axis_policy 付き melody anchor があるときだけ
-    # 「observability 見込み」1 行を warnings へ足す（抽出は行わない — G1/G2/
-    # config 不在のみを判定する診断）。melody anchor が無い project は
-    # `melody_warnings == []` のためバイト不変（既存 golden/demo/e2e project
-    # の `recast_plan.json` は一切影響を受けない）。
-    melody_warnings = melody_experimental_plan_warnings(
-        contract=bundle.contract,
-        melody_config=project.observation.melody,
-        project_dir=loaded.project_dir,
-        backend_ref=backend_ref,
-    )
-    if melody_warnings:
-        warnings = warnings + melody_warnings
 
     return finalize(
         state_reached=state_reached,
