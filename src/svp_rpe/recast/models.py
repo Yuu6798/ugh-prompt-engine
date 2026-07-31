@@ -34,6 +34,16 @@ MelodyTakeBand = Literal["vocal_track", "clear_lead", "full_mix", "chord_pad_no_
 # project.id / variants キー / backends キーに共通する slug 規約。
 _SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
+# Codex round1 P1 (R1-1) 対応: M3d の evidence 閾値は crepe_direct ペアで校正
+# 予定（`docs/DESIGN_M3_melody_comparator.md:91-92`）——他の clear_lead 経路
+# （pyin_direct/melodia_direct）の出力分布に凍結閾値を適用すると誤って
+# preserved / 違反を発しうるため、活性化を許す route をこの経路 1 本へ縛る。
+# `recast/experimental.py` はこの frozenset を single source として参照する
+# （`MelodyObservationConfig` 側で定義するのは `recast/experimental.py` が
+# 本モジュールを import するため——逆方向 import は循環になる）。per-route
+# 校正が将来入ったらこの集合を広げる。
+CALIBRATION_BOUND_ROUTES: frozenset[str] = frozenset({"crepe_direct"})
+
 
 def _validate_slug(value: str, *, field: str) -> str:
     if not _SLUG_PATTERN.match(value):
@@ -122,7 +132,7 @@ class MelodyObservationConfig(RecastModel):
     reference_band: Optional[MelodyTakeBand] = None
     comparison_registry: str
     m1_registry: str
-    route: str = "pyin_direct"
+    route: str = "crepe_direct"
 
     @model_validator(mode="after")
     def _validate_reference_audio_pairing(self) -> "MelodyObservationConfig":
@@ -154,15 +164,18 @@ class MelodyObservationConfig(RecastModel):
 
     @model_validator(mode="after")
     def _validate_route(self) -> "MelodyObservationConfig":
-        # M4 DD-5: 既定 route は pyin_direct（重み不要・M1c 確立経路）。route
-        # は「clear_lead」帯の候補経路名集合内のみ許可する（load 時
-        # fail-closed）——校正済み帯域が clear_lead のみ（G2）である以上、
-        # テイク側の抽出経路もその帯域で試すべき経路に限る。
-        allowed_routes = {route.name for route in select_routes("clear_lead")}
+        # M4 DD-5 → R1-1 (Codex round1 P1 対応): 既定 route は crepe_direct
+        # （M3d の evidence 閾値校正が crepe_direct ペアで行われる予定
+        # ——`docs/DESIGN_M3_melody_comparator.md:91-92`）。route は
+        # 「clear_lead」帯 かつ `CALIBRATION_BOUND_ROUTES` 内のみ許可する
+        # （load 時 fail-closed）——凍結閾値を未校正の別 route 出力分布へ
+        # 適用すると誤って preserved / 違反を発しうるため、活性化を校正済み
+        # route のみへ縛る（旧: clear_lead 帯全体を許容していた）。
+        allowed_routes = {route.name for route in select_routes("clear_lead")} & CALIBRATION_BOUND_ROUTES
         if self.route not in allowed_routes:
             raise ValueError(
-                f"MelodyObservationConfig: route={self.route!r} is not a 'clear_lead' "
-                f"route (expected one of {sorted(allowed_routes)})"
+                f"MelodyObservationConfig: route={self.route!r} is not a calibration-bound "
+                f"'clear_lead' route (expected one of {sorted(allowed_routes)})"
             )
         return self
 

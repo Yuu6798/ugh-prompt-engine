@@ -72,7 +72,7 @@ def _melody_config(
     *,
     reference: str = "score",
     reference_audio: Optional[str] = None,
-    route: str = "pyin_direct",
+    route: str = "crepe_direct",
 ) -> MelodyObservationConfig:
     return MelodyObservationConfig(
         reference=reference,
@@ -450,6 +450,192 @@ def test_audio_reference_with_calibrated_reference_band_passes_g2(tmp_path: Path
     assert entry.adherence_status == "preserved"
     assert entry.provenance.get("reference") == "audio"
     assert entry.provenance.get("extractor_injected") is True
+
+
+# --------------------------------------------------------------------------- #
+# R1-2 (Codex round1 P2) — 抽出器 provenance の名前空間統合
+# --------------------------------------------------------------------------- #
+def test_injected_route_runner_extra_provenance_is_not_merged_into_namespace(
+    tmp_path: Path,
+) -> None:
+    """注入 runner（テスト用 fake extractor）が extra provenance を返しても
+    take_extractor/reference_extractor 名前空間へは載せない——偽の pin を
+    刻まない（`extractor_injected` フラグのみで判別可能な既存契約の確認）。"""
+
+    def _runner(audio_path: str):
+        return _take_notes(_REFERENCE_PITCHES), {"fake_pin": "should-not-be-recorded"}
+
+    m3_path = _frozen_m3_registry_path(tmp_path)
+    anchor = _anchor({"contour": "hard", "interval": "elastic", "rhythm": "elastic"})
+    entry = evaluate_melody_experimental_anchor(
+        anchor=anchor,
+        melody_config=_melody_config(),
+        score=_score(bpm=60),
+        melody_artifact_bytes=_reference_artifact_bytes(),
+        m3_registry_path=m3_path,
+        m1_registry_path=REAL_M1_REGISTRY,
+        melody_take_band="clear_lead",
+        take_audio_path="take.wav",
+        route_runner=_runner,
+    )
+    assert "take_extractor" not in entry.provenance
+    assert entry.provenance.get("extractor_injected") is True
+
+
+def test_non_injected_take_extraction_merges_provenance_under_take_extractor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R1-2: `route_runner` 非注入（既定の実抽出器経路）時は
+    `observe_via_route_with_provenance` の第 2 戻り値（code/weights pin 等）を
+    `provenance["take_extractor"]` へ保存する（従来は破棄していた）。実抽出器を
+    呼ばないよう `svp_rpe.recast.experimental.observe_via_route_with_provenance`
+    を monkeypatch する。"""
+    import svp_rpe.recast.experimental as experimental_module
+
+    fake_extra = {"extractor_weights_sha256": "take-pin-0000"}
+
+    def _fake_observe(audio_path: str, route):
+        assert route.name == "crepe_direct"
+        return _take_notes(_REFERENCE_PITCHES), dict(fake_extra)
+
+    monkeypatch.setattr(experimental_module, "observe_via_route_with_provenance", _fake_observe)
+
+    m3_path = _frozen_m3_registry_path(tmp_path)
+    anchor = _anchor({"contour": "hard", "interval": "elastic", "rhythm": "elastic"})
+    entry = evaluate_melody_experimental_anchor(
+        anchor=anchor,
+        melody_config=_melody_config(),
+        score=_score(bpm=60),
+        melody_artifact_bytes=_reference_artifact_bytes(),
+        m3_registry_path=m3_path,
+        m1_registry_path=REAL_M1_REGISTRY,
+        melody_take_band="clear_lead",
+        take_audio_path="take.wav",
+    )
+    assert entry.provenance.get("take_extractor") == fake_extra
+    assert "extractor_injected" not in entry.provenance
+    assert entry.adherence_status == "preserved"
+
+
+def test_non_injected_reference_extraction_merges_provenance_under_reference_extractor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R1-2: audio_reference の原曲側も非注入時は
+    `provenance["reference_extractor"]` へ保存する（take 側と別名前空間）。"""
+    import svp_rpe.recast.experimental as experimental_module
+
+    take_extra = {"extractor_weights_sha256": "take-pin"}
+    reference_extra = {"extractor_weights_sha256": "ref-pin"}
+
+    def _fake_observe(audio_path: str, route):
+        assert route.name == "crepe_direct"
+        if audio_path == "take.wav":
+            return _take_notes(_REFERENCE_PITCHES), dict(take_extra)
+        return _take_notes(_REFERENCE_PITCHES), dict(reference_extra)
+
+    monkeypatch.setattr(experimental_module, "observe_via_route_with_provenance", _fake_observe)
+
+    m3_path = _frozen_m3_registry_path(tmp_path)
+    anchor = _anchor({"contour": "hard", "interval": "elastic", "rhythm": "elastic"})
+    entry = evaluate_melody_experimental_anchor(
+        anchor=anchor,
+        melody_config=_melody_config(reference="audio", reference_audio="ref.wav"),
+        score=_score(),
+        m3_registry_path=m3_path,
+        m1_registry_path=REAL_M1_REGISTRY,
+        melody_take_band="clear_lead",
+        reference_audio_path="ref.wav",
+        reference_melody_band="clear_lead",
+        take_audio_path="take.wav",
+    )
+    assert entry.provenance.get("take_extractor") == take_extra
+    assert entry.provenance.get("reference_extractor") == reference_extra
+    assert "extractor_injected" not in entry.provenance
+
+
+def test_non_injected_extraction_with_empty_extra_provenance_omits_namespace_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """抽出器が空の provenance dict を返す場合（例: pyin は重みなし）、
+    `take_extractor`/`reference_extractor` キー自体を作らない（空 dict を
+    report へ刻まない）。"""
+    import svp_rpe.recast.experimental as experimental_module
+
+    def _fake_observe(audio_path: str, route):
+        return _take_notes(_REFERENCE_PITCHES), {}
+
+    monkeypatch.setattr(experimental_module, "observe_via_route_with_provenance", _fake_observe)
+
+    m3_path = _frozen_m3_registry_path(tmp_path)
+    anchor = _anchor({"contour": "hard"})
+    entry = evaluate_melody_experimental_anchor(
+        anchor=anchor,
+        melody_config=_melody_config(),
+        score=_score(bpm=60),
+        melody_artifact_bytes=_reference_artifact_bytes(),
+        m3_registry_path=m3_path,
+        m1_registry_path=REAL_M1_REGISTRY,
+        melody_take_band="clear_lead",
+        take_audio_path="take.wav",
+    )
+    assert "take_extractor" not in entry.provenance
+
+
+# --------------------------------------------------------------------------- #
+# R1-4 (Codex round1 P2・層分離裁定) — score_reference は参照側の M1 ゲート免除
+# --------------------------------------------------------------------------- #
+def test_score_reference_gate_only_take_side_allows_sparse_symbolic_reference(
+    tmp_path: Path,
+) -> None:
+    """記号旋律側（参照）が M1 の `min_note_count`/`min_phrase_count` を満たさない
+    短い旋律でも、テイク側が十分観測可能なら `not_observed` へ落ちない
+    ——`docs/DESIGN_M4_recast_melody_anchor.md` §2 の G2/G3 テイク限定裁定の
+    end-to-end 確認（`melody/comparison.py` 単体は
+    `tests/test_melody_comparison_gate_sides.py` が別途確認する）。"""
+    m3_path = _frozen_m3_registry_path(tmp_path)
+    anchor = _anchor({"contour": "hard", "interval": "elastic", "rhythm": "elastic"})
+
+    # 参照側（記号旋律）: 4 ノート・単一フレーズ（bpm=60 なので beat==秒 —
+    # registry.yaml の min_note_count=8/min_phrase_count=2 を満たさない）。
+    reference_notes = [
+        (0.0, "C4", 0.25),
+        (0.3, "D4", 0.25),
+        (0.6, "E4", 0.25),
+        (0.9, "F4", 0.25),
+    ]
+    # テイク側: 参照側と同じ 4 ノート（フレーズ1）+ 追加 4 ノート（フレーズ2）
+    # ——2 フレーズ・8 ノートで M1 ゲートを通す。
+    take_pitches_phase1 = [60.0, 62.0, 64.0, 65.0]
+    take_pitches_phase2 = [67.0, 69.0, 67.0, 65.0]
+    take_notes = tuple(
+        MelodyNote(start_sec=start, end_sec=start + duration, pitch_midi=pitch, confidence=0.9)
+        for (start, _pitch, duration), pitch in zip(reference_notes, take_pitches_phase1)
+    ) + tuple(
+        MelodyNote(
+            start_sec=1.9 + i * 0.3,
+            end_sec=1.9 + i * 0.3 + 0.25,
+            pitch_midi=pitch,
+            confidence=0.9,
+        )
+        for i, pitch in enumerate(take_pitches_phase2)
+    )
+    take = MelodyObservation(route="fake_take", source_model="test:fake", notes=take_notes)
+
+    # 対照: 参照側が短くても、比較まで到達し `not_observed` にならないこと。
+    entry = evaluate_melody_experimental_anchor(
+        anchor=anchor,
+        melody_config=_melody_config(),
+        score=_score(bpm=60),
+        melody_artifact_bytes=_note_events_bytes(reference_notes),
+        m3_registry_path=m3_path,
+        m1_registry_path=REAL_M1_REGISTRY,
+        melody_take_band="clear_lead",
+        take_audio_path="take.wav",
+        route_runner=_make_route_runner(take),
+    )
+
+    assert entry.adherence_status != "not_observed"
+    assert not any("observation_gate_insufficient_a" in r for r in entry.reasons)
 
 
 # --------------------------------------------------------------------------- #

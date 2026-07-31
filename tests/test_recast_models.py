@@ -242,3 +242,57 @@ def test_melody_observation_config_rejects_unknown_reference_band_value() -> Non
                 reference="audio", reference_audio="ref.wav", reference_band="stereo_mix"
             )
         )
+
+
+# --- R1-1 (Codex round1 P1): route の校正済み集合バインド --------------------
+
+
+def test_calibration_bound_routes_is_crepe_direct_only() -> None:
+    """M3d の evidence 閾値は crepe_direct ペアで校正予定（DESIGN_M3 §該当行）
+    ——活性化を許す route 集合はこの 1 本のみ（single source）。"""
+    from svp_rpe.recast.models import CALIBRATION_BOUND_ROUTES
+
+    assert CALIBRATION_BOUND_ROUTES == frozenset({"crepe_direct"})
+
+
+def test_melody_observation_config_route_defaults_to_crepe_direct() -> None:
+    from svp_rpe.recast.models import MelodyObservationConfig
+
+    config = MelodyObservationConfig.model_validate(_melody_config_payload())
+    assert config.route == "crepe_direct"
+
+
+def test_melody_observation_config_accepts_crepe_direct_route_explicitly() -> None:
+    from svp_rpe.recast.models import MelodyObservationConfig
+
+    config = MelodyObservationConfig.model_validate(
+        _melody_config_payload(route="crepe_direct")
+    )
+    assert config.route == "crepe_direct"
+
+
+def test_melody_observation_config_rejects_pyin_direct_route() -> None:
+    """R1-1: pyin_direct は clear_lead 帯だが校正済み集合外——凍結閾値を
+    未校正の別 route 出力分布へ適用すると誤って preserved / 違反を発しうる
+    ため fail-closed で拒否する（旧仕様からの破壊的変更・意図的）。"""
+    from svp_rpe.recast.models import MelodyObservationConfig
+
+    with pytest.raises(ValidationError, match="calibration-bound"):
+        MelodyObservationConfig.model_validate(_melody_config_payload(route="pyin_direct"))
+
+
+def test_melody_observation_config_rejects_melodia_direct_route() -> None:
+    from svp_rpe.recast.models import MelodyObservationConfig
+
+    with pytest.raises(ValidationError, match="calibration-bound"):
+        MelodyObservationConfig.model_validate(_melody_config_payload(route="melodia_direct"))
+
+
+def test_melody_observation_config_rejects_non_clear_lead_route() -> None:
+    """clear_lead 帯にすら無い route 名は従来どおり拒否する（回帰確認）。"""
+    from svp_rpe.recast.models import MelodyObservationConfig
+
+    with pytest.raises(ValidationError):
+        MelodyObservationConfig.model_validate(
+            _melody_config_payload(route="demucs_vocals_then_crepe")
+        )

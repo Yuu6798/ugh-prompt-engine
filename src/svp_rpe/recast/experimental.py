@@ -82,7 +82,12 @@ from svp_rpe.melody.observability import (
 )
 from svp_rpe.melody.representation import M3ComparisonConfig, load_m3_registry
 from svp_rpe.melody.routing import MelodyRoute, select_routes
-from svp_rpe.recast.models import BackendRef, MelodyObservationConfig, RecastError
+from svp_rpe.recast.models import (
+    CALIBRATION_BOUND_ROUTES,
+    BackendRef,
+    MelodyObservationConfig,
+    RecastError,
+)
 from svp_rpe.recast.report_base import RecastReportModel
 from svp_rpe.sentinels import is_todo_sentinel
 
@@ -350,10 +355,17 @@ def _resolve_clear_lead_route(route_name: str) -> MelodyRoute:
     """``route_name`` に対応する ``clear_lead`` 帯の `MelodyRoute` を返す。
 
     `MelodyObservationConfig` 自身の validator が既に route 名を
-    ``select_routes("clear_lead")`` の名前集合に限定しているため、ここへ来て
-    見つからないのは呼び出し契約違反（プログラミングエラー）——
-    `RecastError` ではなく `ValueError` で fail-fast する。
+    ``select_routes("clear_lead") ∩ CALIBRATION_BOUND_ROUTES``（R1-1）に
+    限定しているため、ここへ来て見つからない/校正済み集合外なのは
+    呼び出し契約違反（プログラミングエラー）—— `RecastError` ではなく
+    `ValueError` で fail-fast する（defense in depth）。
     """
+    if route_name not in CALIBRATION_BOUND_ROUTES:
+        raise ValueError(
+            f"route {route_name!r} is not calibration-bound "
+            "(MelodyObservationConfig.route validation should have rejected this earlier; "
+            f"expected one of {sorted(CALIBRATION_BOUND_ROUTES)})"
+        )
     for route in select_routes("clear_lead"):
         if route.name == route_name:
             return route
@@ -513,27 +525,44 @@ def evaluate_melody_experimental_anchor(
             "evaluate_melody_experimental_anchor: take_audio_path is required once "
             "gates G1/axis_policy/author_input/G2 have passed"
         )
+    # R1-2 (Codex round1 P2 対応): 非注入（実抽出器）時のみ、抽出器 provenance
+    # （code/weights pin 等 — `observe_via_route_with_provenance` の第 2 戻り値）
+    # を take/reference それぞれの名前空間へ保存する。注入時（テスト等）は
+    # 従来どおり `extractor_injected: true` のみ——注入 runner が返す extra は
+    # test 値であり、偽の pin として report に刻まない。
+    take_injected = route_runner is not None
     take_runner = route_runner or _default_route_runner(melody_config.route)
-    take_observation, _take_extra_provenance = take_runner(take_audio_path)
-    extractor_injected = route_runner is not None
+    take_observation, take_extra_provenance = take_runner(take_audio_path)
+    if not take_injected and take_extra_provenance:
+        provenance["take_extractor"] = dict(take_extra_provenance)
 
+    reference_injected = False
     if melody_config.reference == "audio":
         if reference_audio_path is None:  # pragma: no cover - guarded above
             raise ValueError("reference_audio_path is required for reference='audio'")
+        reference_injected = reference_route_runner is not None
         ref_runner = reference_route_runner or _default_route_runner(melody_config.route)
-        reference_observation, _ref_extra_provenance = ref_runner(reference_audio_path)
-        extractor_injected = extractor_injected or reference_route_runner is not None
+        reference_observation, reference_extra_provenance = ref_runner(reference_audio_path)
+        if not reference_injected and reference_extra_provenance:
+            provenance["reference_extractor"] = dict(reference_extra_provenance)
 
     assert reference_observation is not None  # both branches set it before reaching here
-    if extractor_injected:
+    if take_injected or reference_injected:
         provenance["extractor_injected"] = True
 
+    # R1-4 (Codex round1 P2・層分離裁定): score_reference は記号旋律の抽出誤差
+    # 概念が無いため、M1 観測ゲート（`compare_melodies` 内 `assess_observability`）
+    # を参照側（"a"）へ課さない——テイク側（"b"）には引き続き課す。M3 被覆下限
+    # （coverage.floor・pair-level 比較整合性）は両側のまま維持（sided 化しない
+    # ——additive seam、既定値 ("a","b") は audio_reference で凍結挙動と一致）。
+    gate_sides: Tuple[str, ...] = ("b",) if melody_config.reference == "score" else ("a", "b")
     report = compare_melodies(
         reference_observation,
         take_observation,
         observability_thresholds=m1_thresholds,
         config=m3_config,
         provenance_extra=dict(provenance),
+        observability_gate_sides=gate_sides,
     )
 
     # 7) G3: not_comparable。

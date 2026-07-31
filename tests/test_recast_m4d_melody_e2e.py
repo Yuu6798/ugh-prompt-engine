@@ -224,7 +224,7 @@ def _build_fixture_project(tmp_path: Path, *, label: str, calibrated: bool) -> P
         "reference": "score",
         "comparison_registry": "m3_comparison_registry.yaml",
         "m1_registry": "registry.yaml",
-        "route": "pyin_direct",
+        "route": "crepe_direct",
     }
     (dest / "project.yaml").write_text(yaml.safe_dump(project_data, sort_keys=False), encoding="utf-8")
 

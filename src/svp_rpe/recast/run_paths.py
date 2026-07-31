@@ -22,6 +22,7 @@ from pydantic import ValidationError
 
 from svp_rpe.arrange.identity import IdentityManifest, IdentityManifestError
 from svp_rpe.arrange.pathsafe import resolve_confined
+from svp_rpe.recast.experimental import resolve_melody_observation_paths
 from svp_rpe.recast.loader import LoadedRecastProject
 from svp_rpe.recast.models import RecastError
 
@@ -139,6 +140,28 @@ def collect_protected_input_paths(
     mode_override_path = loaded.mode_override_paths.get(backend)
     if mode_override_path is not None:
         paths.append(mode_override_path)
+
+    # R1-5 (Codex round1 P2 対応): `observation.melody` の resolved パス 3 種
+    # （comparison_registry/m1_registry/reference_audio）を protected-input
+    # set へ編入する——これらが recast 出力（`recast_state.json`/`recast_
+    # plan.json`/report 等）と alias していても、従来はここに含まれず publish
+    # が入力を上書きしうった。解決失敗（未設定/ファイル不在/封じ込め違反）は
+    # 下の identity manifest ブロックと同じ degrade 契約——本関数は
+    # publish 直前の衝突ガードとして再解決する呼ばれ方をするため、ここで
+    # 新たな失敗点を作らない（実際の melody エラー報告は `recast/
+    # experimental.py` の評価経路が正規の位置で行う）。
+    melody_config = loaded.project.observation.melody
+    if melody_config is not None:
+        try:
+            m3_path, m1_path, reference_audio_path = resolve_melody_observation_paths(
+                project_dir=loaded.project_dir, melody_config=melody_config
+            )
+            paths.append(m3_path)
+            paths.append(m1_path)
+            if reference_audio_path is not None:
+                paths.append(reference_audio_path)
+        except RecastError:
+            pass
 
     manifest_dir = loaded.identity_manifest_path.resolve().parent
     try:

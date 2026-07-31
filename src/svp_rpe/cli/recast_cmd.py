@@ -909,6 +909,7 @@ def _precheck_observation_anchors(loaded: Any) -> tuple[Optional[set[str]], str]
     """
     import yaml
 
+    from svp_rpe.recast import RecastError
     from svp_rpe.recast.plan import compute_observation_digest
 
     # `observation` 節全体の pin（Codex P2 review, PR #212 指摘）:
@@ -916,8 +917,16 @@ def _precheck_observation_anchors(loaded: Any) -> tuple[Optional[set[str]], str]
     # `inputs_digest` は生成系の同一性判定であり `observation` 節を意図的に
     # 除外しているため、report にとっての直接の入力である `observation` 節
     # 自体は別の pin（`RecastRunState.observation_digest`）で追跡する
-    # （single source: `recast/plan.py:compute_observation_digest`）。
-    current_observation_digest = compute_observation_digest(loaded.project.observation)
+    # （single source: `recast/plan.py:compute_observation_digest`）。R1-3:
+    # `observation.melody` が設定されていれば参照先レジストリの content hash
+    # も編入するため `project_dir` を渡す（melody 未設定なら無視される）。
+    try:
+        current_observation_digest = compute_observation_digest(
+            loaded.project.observation, project_dir=loaded.project_dir
+        )
+    except (OSError, RecastError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
 
     # `observation.anchors`（Codex P2, #211）: 非空なら観測対象を絞る。空
     # （既定）は「絞り込みなし」— 従来どおり全 manifest anchor を観測する。
@@ -1690,8 +1699,16 @@ def recast_status_cmd(
     # project 全体で単一の observation 節（variant/backend に依存しない）
     # のためループ外で 1 回だけ計算する（`current_digest`/
     # `current_plan_sha256` は (variant, backend) ごとに異なるためループ
-    # 内で計算する既存規約とは対照的）。
-    current_observation_digest = compute_observation_digest(loaded.project.observation)
+    # 内で計算する既存規約とは対照的）。R1-3: `observation.melody` が設定
+    # されていれば参照先レジストリの content hash も編入するため
+    # `project_dir` を渡す（melody 未設定なら無視される）。
+    try:
+        current_observation_digest = compute_observation_digest(
+            loaded.project.observation, project_dir=loaded.project_dir
+        )
+    except (OSError, RecastError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
     reobserve_step = (
         "svprpe recast ingest <project.yaml> --variant <variant> --backend <backend> "
         "--audio <builds_root>/takes/<variant>@<backend>/take-01.* "

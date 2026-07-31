@@ -116,7 +116,10 @@ from svp_rpe.arrange.verify import verify_package
 from svp_rpe.compose.device_profile import DeviceProfile
 from svp_rpe.compose.models import CompositionScore
 from svp_rpe.compose.prompt_renderer import resolve_backend_descriptor
-from svp_rpe.recast.experimental import melody_experimental_plan_warnings
+from svp_rpe.recast.experimental import (
+    melody_experimental_plan_warnings,
+    resolve_melody_observation_paths,
+)
 from svp_rpe.recast.loader import LoadedRecastProject
 from svp_rpe.recast.models import (
     BackendRef,
@@ -803,7 +806,9 @@ def _project_identity_digest_component(project: RecastProject, *, variant: str, 
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def compute_observation_digest(observation: ObservationConfig) -> str:
+def compute_observation_digest(
+    observation: ObservationConfig, *, project_dir: Optional[Path] = None
+) -> str:
     """`project.yaml` の `observation` 節（`ObservationConfig`）の canonical
     projection の sha256 — `observed`/`reported` を記録する際に
     `recast/state.py:RecastRunState.observation_digest` へ pin する値の
@@ -823,10 +828,44 @@ def compute_observation_digest(observation: ObservationConfig) -> str:
     設定が変わっても `inputs_digest` は不変のままのため、この digest なしでは
     report が古い設定を反映したまま fresh 表示され続けてしまう。この digest
     は `inputs_digest` とは独立の第二の pin として `observed`/`reported` の
-    run にのみ意味を持つ。"""
+    run にのみ意味を持つ。
+
+    R1-3 (Codex round1 P2 対応): `observation.melody` が設定されている場合、
+    参照先の 3 ファイル（`comparison_registry` / `m1_registry` /
+    `reference_audio` — audio 参照時のみ）を in-place で書き換えても
+    `ObservationConfig` 自体（project.yaml 上の文字列参照）は不変のため、
+    従来の実装は `recast status` に古い report を fresh のまま表示させて
+    いた。`observation.melody` が設定されているときだけ、これら参照先の
+    content hash を digest へ編入する（決定論的順序 = `compute_content_
+    digest` の canonical JSON 経由）。``project_dir`` はこのときのみ必須
+    （melody 未設定なら無視してよい・省略可）。
+
+    melody 未設定のプロジェクトでは戻り値は本 R1-3 対応**前**の実装と
+    バイト単位で完全に不変（``base_digest`` をそのまま返す——既存 golden
+    project fixture の digest へ一切影響しない、CLAUDE.md の後方互換規約
+    に従う）。"""
     payload = observation.model_dump(mode="json", exclude_none=True)
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    base_digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    if observation.melody is None:
+        return base_digest
+    if project_dir is None:
+        raise ValueError(
+            "compute_observation_digest: project_dir is required when "
+            "observation.melody is set (R1-3: melody 参照先ファイルの content "
+            "hash を digest へ編入するため project_dir からの相対パス解決が要る)"
+        )
+    m3_path, m1_path, reference_audio_path = resolve_melody_observation_paths(
+        project_dir=project_dir, melody_config=observation.melody
+    )
+    components: Dict[str, str] = {
+        "observation": base_digest,
+        "melody_comparison_registry": sha256_file(m3_path),
+        "melody_m1_registry": sha256_file(m1_path),
+    }
+    if reference_audio_path is not None:
+        components["melody_reference_audio"] = sha256_file(reference_audio_path)
+    return compute_content_digest(components)
 
 
 def compute_recast_inputs_digest(
@@ -1739,6 +1778,27 @@ def build_recast_plan_artifacts(
     ]
     if bundle.mode_override_path is not None:
         protected_inputs.append(bundle.mode_override_path)
+    # R1-5 (Codex round1 P2 対応): `observation.melody` の resolved パス 3 種
+    # （comparison_registry/m1_registry/reference_audio）を protected-input
+    # set へ編入する——これらが recast 出力（state/report 等）と alias して
+    # いても、従来はここに含まれず publish が入力を上書きしうった。
+    # `collect_protected_input_paths`（`recast/run_paths.py`）と同じ集合を
+    # 束が既に読んだ `project.observation.melody` から副作用なく再構成する。
+    # 解決失敗（未設定/ファイル不在/封じ込め違反）は既存の manifest source/
+    # anchor パターン（直下）と同様に degrade する——この時点でのエラーは
+    # `melody_experimental_plan_warnings`（後続ステップ）が正規の報告順序で
+    # 診断するため、ここで先取りして例外化しない。
+    if project.observation.melody is not None:
+        try:
+            m3_path, m1_path, reference_audio_path = resolve_melody_observation_paths(
+                project_dir=loaded.project_dir, melody_config=project.observation.melody
+            )
+            protected_inputs.append(m3_path)
+            protected_inputs.append(m1_path)
+            if reference_audio_path is not None:
+                protected_inputs.append(reference_audio_path)
+        except RecastError:
+            pass
     if bundle.manifest is not None:
         manifest_dir = bundle.manifest_path.resolve().parent
         try:

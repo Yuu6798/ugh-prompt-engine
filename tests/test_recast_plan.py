@@ -1,20 +1,23 @@
 """`recast/plan.py` の build_recast_plan テスト（PR2）。"""
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from pathlib import Path
 
 import pytest
+import yaml
 
 from svp_rpe.recast import RecastError, load_recast_project
 from svp_rpe.recast.loader import LoadedRecastProject, load_mode_overrides
-from svp_rpe.recast.models import ModeOverridesConfig
+from svp_rpe.recast.models import ModeOverridesConfig, ObservationConfig
 from svp_rpe.recast.plan import (
     RecastPlanResult,
     _normalize_diagnostic,
     build_recast_plan,
     build_recast_plan_artifacts,
+    compute_observation_digest,
     mode_support_for_path,
 )
 from svp_rpe.recast.run_paths import collect_protected_input_paths
@@ -750,3 +753,166 @@ def test_collect_protected_input_paths_rejects_unknown_backend(tmp_path: Path) -
 
     with pytest.raises(RecastError, match="unknown backend 'does-not-exist'"):
         collect_protected_input_paths(loaded, "edm", "does-not-exist")
+
+
+# --- R1-3 (Codex round1 P2): compute_observation_digest melody content hash --
+
+
+def _observation_config(*, melody: dict | None = None) -> ObservationConfig:
+    payload: dict = {"enabled": False, "anchors": []}
+    if melody is not None:
+        payload["melody"] = melody
+    return ObservationConfig.model_validate(payload)
+
+
+def _melody_observation_payload(*, reference: str = "score", **overrides: str) -> dict:
+    payload = {
+        "reference": reference,
+        "comparison_registry": "m3_comparison_registry.yaml",
+        "m1_registry": "registry.yaml",
+        "route": "crepe_direct",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_compute_observation_digest_without_melody_matches_pre_r1_3_formula() -> None:
+    """R1-3: `observation.melody` 未設定のプロジェクトでは、digest は本対応
+    **前**の実装（``sha256(canonical_json(observation))``）とバイト単位で
+    完全に不変——既存 golden project fixture の digest への影響ゼロを直接
+    証明する（golden project 自体には observation.melody が無い —
+    `examples/recast/*/project.yaml` 参照）。"""
+    observation = _observation_config()
+    payload = observation.model_dump(mode="json", exclude_none=True)
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    expected = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    assert compute_observation_digest(observation) == expected
+    # project_dir を渡しても（melody 未設定なら）無視されて同じ値のまま。
+    assert (
+        compute_observation_digest(observation, project_dir=Path("/does/not/exist"))
+        == expected
+    )
+
+
+def test_compute_observation_digest_requires_project_dir_when_melody_set(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "m3_comparison_registry.yaml").write_bytes(b"m3")
+    (tmp_path / "registry.yaml").write_bytes(b"m1")
+    observation = _observation_config(melody=_melody_observation_payload())
+
+    with pytest.raises(ValueError, match="project_dir is required"):
+        compute_observation_digest(observation)
+
+
+def test_compute_observation_digest_changes_when_melody_registry_bytes_change(
+    tmp_path: Path,
+) -> None:
+    """`observation` 節自体（project.yaml 上の文字列参照）は無変更のまま、
+    参照先レジストリだけを in-place で書き換える——Codex 指摘の再現条件その
+    ものが digest を変化させる。"""
+    (tmp_path / "m3_comparison_registry.yaml").write_bytes(b"m3-v1")
+    (tmp_path / "registry.yaml").write_bytes(b"m1-v1")
+    observation = _observation_config(melody=_melody_observation_payload())
+    digest_before = compute_observation_digest(observation, project_dir=tmp_path)
+
+    (tmp_path / "m3_comparison_registry.yaml").write_bytes(b"m3-v2")
+    digest_after = compute_observation_digest(observation, project_dir=tmp_path)
+
+    assert digest_before != digest_after
+
+
+def test_compute_observation_digest_stable_when_melody_files_unchanged(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "m3_comparison_registry.yaml").write_bytes(b"m3")
+    (tmp_path / "registry.yaml").write_bytes(b"m1")
+    observation = _observation_config(melody=_melody_observation_payload())
+
+    first = compute_observation_digest(observation, project_dir=tmp_path)
+    second = compute_observation_digest(observation, project_dir=tmp_path)
+
+    assert first == second
+
+
+def test_compute_observation_digest_includes_reference_audio_only_for_audio_reference(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "m3_comparison_registry.yaml").write_bytes(b"m3")
+    (tmp_path / "registry.yaml").write_bytes(b"m1")
+    (tmp_path / "ref.wav").write_bytes(b"audio-v1")
+    observation = _observation_config(
+        melody=_melody_observation_payload(reference="audio", reference_audio="ref.wav")
+    )
+    digest_before = compute_observation_digest(observation, project_dir=tmp_path)
+
+    (tmp_path / "ref.wav").write_bytes(b"audio-v2")
+    digest_after = compute_observation_digest(observation, project_dir=tmp_path)
+
+    assert digest_before != digest_after
+
+
+# --- R1-5 (Codex round1 P2): melody resolved paths join protected-input set --
+
+
+def _add_melody_observation(project_path: Path, *, route: str = "crepe_direct") -> None:
+    """demo_project の project.yaml に `observation.melody` を追加し、参照先
+    レジストリのプレースホルダファイルを project_dir 直下へ用意する
+    （`resolve_melody_observation_paths` は存在チェックのみ・内容は検証
+    しないため中身は任意バイトでよい）。"""
+    project_dir = project_path.parent
+    (project_dir / "m3_comparison_registry.yaml").write_bytes(b"m3-placeholder")
+    (project_dir / "registry.yaml").write_bytes(b"m1-placeholder")
+    project_data = yaml.safe_load(project_path.read_text(encoding="utf-8"))
+    project_data["observation"]["melody"] = {
+        "reference": "score",
+        "comparison_registry": "m3_comparison_registry.yaml",
+        "m1_registry": "registry.yaml",
+        "route": route,
+    }
+    project_path.write_text(yaml.safe_dump(project_data, sort_keys=False), encoding="utf-8")
+
+
+def test_collect_protected_input_paths_includes_melody_resolved_paths(tmp_path: Path) -> None:
+    project_path = _copy_demo_project(tmp_path)
+    _add_melody_observation(project_path)
+    loaded = load_recast_project(project_path)
+
+    resolved = {p.resolve() for p in collect_protected_input_paths(loaded, "edm", "suno")}
+
+    assert (loaded.project_dir / "m3_comparison_registry.yaml").resolve() in resolved
+    assert (loaded.project_dir / "registry.yaml").resolve() in resolved
+
+
+def test_collect_protected_input_paths_without_melody_config_is_unaffected(
+    tmp_path: Path,
+) -> None:
+    """melody 未設定のプロジェクトは従来どおり（R1-5 は additive）。"""
+    project_path = _copy_demo_project(tmp_path)
+    loaded = load_recast_project(project_path)
+
+    paths = collect_protected_input_paths(loaded, "edm", "suno")
+
+    assert not any(
+        p.name in ("m3_comparison_registry.yaml", "registry.yaml") for p in paths
+    )
+
+
+def test_build_recast_plan_protected_inputs_include_melody_registries(
+    tmp_path: Path,
+) -> None:
+    """R1-5: `RecastPlanResult.protected_inputs`（plan 由来の protected set。
+    `build_recast_plan_artifacts` 内で束から再構成される集合）にも
+    `observation.melody` の resolved パスが編入される。"""
+    project_path = _copy_demo_project(tmp_path)
+    _add_melody_observation(project_path)
+    loaded = load_recast_project(project_path)
+
+    result = build_recast_plan(loaded, variant="edm", backend="suno")
+
+    resolved = {p.resolve() for p in result.protected_inputs}
+    assert (loaded.project_dir / "m3_comparison_registry.yaml").resolve() in resolved
+    assert (loaded.project_dir / "registry.yaml").resolve() in resolved
+    # melody 設定を追加しても plan 到達状態そのものには影響しない（additive）。
+    assert result.plan.state_reached == "verified"
