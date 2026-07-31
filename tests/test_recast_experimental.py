@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
 from svp_rpe.arrange.contract import ContractAnchor, ContractInputs, InputHash, PreservationContract
 from svp_rpe.compose.models import CompositionScore
@@ -329,6 +330,93 @@ def test_mapping_transcribes_report_reasons_regardless_of_branch() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# R5-2 (Codex round5 P2 対応) — ExperimentalAnchorEntry の読み戻し不変条件
+# --------------------------------------------------------------------------- #
+def _entry_kwargs(**overrides: Any) -> Dict[str, Any]:
+    base: Dict[str, Any] = dict(
+        adherence_status="preserved",
+        anchor_id="melody-1",
+        domain="melody",
+        axis_policy={"contour": "hard", "interval": "elastic"},
+        axes={"contour": 0.9, "interval": 0.9},
+        axis_evidence={"contour": "strong", "interval": "strong"},
+        coverage={
+            "aligned_note_fraction_a": 1.0,
+            "aligned_note_fraction_b": 1.0,
+            "phrase_coverage_a": 1.0,
+            "phrase_coverage_b": 1.0,
+        },
+        octave_artifact_suspected=False,
+        reasons=[],
+        provenance={},
+    )
+    base.update(overrides)
+    return base
+
+
+def test_entry_readback_accepts_consistent_preserved_entry() -> None:
+    """builder（`map_axis_policy_to_adherence`）が実際に出す組み合わせ
+    （全 hard/elastic 軸 strong → preserved）は読み戻し validator を素通しする
+    ——builder/validator が同じ純関数 `_axis_policy_status` を共有する
+    single source であることの直接確認。"""
+    entry = ExperimentalAnchorEntry(**_entry_kwargs())
+    assert entry.adherence_status == "preserved"
+
+
+def test_entry_readback_rejects_preserved_with_weak_hard_axis() -> None:
+    """矛盾 entry（``adherence_status="preserved"`` なのに hard 軸が
+    ``weak`` evidence）は model_validate 時に拒否される——手編集/別経路の
+    report がこの矛盾を valid として通すのを防ぐ（R5-2 裁定）。"""
+    with pytest.raises(ValidationError, match="does not match the status recomputed"):
+        ExperimentalAnchorEntry(
+            **_entry_kwargs(
+                adherence_status="preserved",
+                axis_evidence={"contour": "weak", "interval": "strong"},
+            )
+        )
+
+
+def test_entry_readback_rejects_changed_outside_policy_when_all_axes_strong() -> None:
+    """逆方向の矛盾（axis_evidence 的には preserved のはずが
+    ``changed_outside_policy`` を主張）も同様に拒否される。"""
+    with pytest.raises(ValidationError, match="does not match the status recomputed"):
+        ExperimentalAnchorEntry(**_entry_kwargs(adherence_status="changed_outside_policy"))
+
+
+def test_entry_readback_accepts_changed_within_policy_when_elastic_axis_weak() -> None:
+    entry = ExperimentalAnchorEntry(
+        **_entry_kwargs(
+            adherence_status="changed_within_policy",
+            axis_evidence={"contour": "strong", "interval": "weak"},
+        )
+    )
+    assert entry.adherence_status == "changed_within_policy"
+
+
+def test_entry_readback_exempts_not_observed_from_recomputation() -> None:
+    """``not_observed`` は再計算免除——短絡 entry は axis_evidence が空でも
+    （`_not_observed_entry` の実際の出力どおり）読み戻しが拒否されない。"""
+    entry = ExperimentalAnchorEntry(
+        **_entry_kwargs(adherence_status="not_observed", axis_evidence={}, reasons=["melody_config_missing"])
+    )
+    assert entry.adherence_status == "not_observed"
+
+
+def test_entry_axis_policy_rejects_unknown_mode_literal() -> None:
+    """axis_policy の値は ``hard``/``elastic``/``free`` の Literal 語彙に限定
+    される——未知の値は pydantic の型検証で拒否される（R5-2 の型面）。"""
+    with pytest.raises(ValidationError):
+        ExperimentalAnchorEntry(**_entry_kwargs(axis_policy={"contour": "bogus"}))
+
+
+def test_entry_axis_evidence_rejects_unknown_verdict_literal() -> None:
+    """axis_evidence の値は ``strong``/``weak``/``none``/``uncalibrated`` の
+    Literal 語彙に限定される（R5-2 の型面）。"""
+    with pytest.raises(ValidationError):
+        ExperimentalAnchorEntry(**_entry_kwargs(axis_evidence={"contour": "bogus", "interval": "strong"}))
+
+
+# --------------------------------------------------------------------------- #
 # M4a — axis_policy 検証 fail-closed（ContractAnchor 層は test_preservation_contract.py
 # 側で網羅済み。ここでは G1/G3 と絡む「frozen 部分集合」との突合のみ扱う）。
 # --------------------------------------------------------------------------- #
@@ -387,6 +475,96 @@ def test_uncalibrated_registry_is_not_observed_g1(tmp_path: Path) -> None:
     # provenance に m1_registry_sha256 は載らない（旧仕様は G1 判定前に M1 を
     # 読んでいたため常に載っていた）。
     assert "m1_registry_sha256" not in entry.provenance
+
+
+# --------------------------------------------------------------------------- #
+# R5-1 (Codex round5 P2 対応) — パス解決も G1 短絡に従わせる
+# --------------------------------------------------------------------------- #
+def test_g1_short_circuit_precedes_missing_m1_registry(tmp_path: Path) -> None:
+    """M3 未校正（G1 不成立）+ M1 registry パス欠落の組み合わせでも、G1 が
+    最優先短絡するため raise せず ``not_observed(comparator_uncalibrated)`` へ
+    落ちる（旧実装は `resolve_melody_observation_paths` が M1 の実在まで
+    先行検証していたため、ここで `RecastError` になっていた）。"""
+    anchor = _anchor({"contour": "hard"})
+    entry = evaluate_melody_experimental_anchor(
+        anchor=anchor,
+        melody_config=_melody_config(),
+        score=_score(),
+        m3_registry_path=REAL_M3_UNCALIBRATED_REGISTRY,
+        m1_registry_path=tmp_path / "missing_registry.yaml",
+    )
+    assert entry.adherence_status == "not_observed"
+    assert entry.reasons == ["comparator_uncalibrated"]
+    assert "m1_registry_sha256" not in entry.provenance
+
+
+def test_calibrated_registry_with_missing_m1_registry_raises_recast_error(
+    tmp_path: Path,
+) -> None:
+    """M3 校正済み（G1 成立）+ M1 registry パス欠落は、G1 通過後の
+    `_load_m1_registry`（step 6）で `RecastError` になる——設定/インフラ欠陥は
+    ここまで到達して初めて大声で失敗するのが正しい（R4-2 裁定と同線）。"""
+    m3_path = _frozen_m3_registry_path(tmp_path)
+    anchor = _anchor({"contour": "hard"})
+    with pytest.raises(RecastError, match="could not be read"):
+        evaluate_melody_experimental_anchor(
+            anchor=anchor,
+            melody_config=_melody_config(),
+            score=_score(),
+            melody_artifact_bytes=_reference_artifact_bytes(),
+            m3_registry_path=m3_path,
+            m1_registry_path=tmp_path / "missing_registry.yaml",
+            melody_take_band="clear_lead",
+            take_audio_path="take.wav",
+        )
+
+
+def test_audio_reference_with_nonexistent_reference_audio_file_is_author_input_missing(
+    tmp_path: Path,
+) -> None:
+    """R5-1: `reference_audio_path` が（require_exists=False 解決後などで）
+    実在しないファイルを指していても、``author_input_missing`` へ倒れる
+    （raise しない）——実在検証は step 4 のこの一箇所に集約する。"""
+    m3_path = _frozen_m3_registry_path(tmp_path)
+    anchor = _anchor({"contour": "hard"})
+    entry = evaluate_melody_experimental_anchor(
+        anchor=anchor,
+        melody_config=_melody_config(reference="audio", reference_audio="ref.wav"),
+        score=_score(),
+        m3_registry_path=m3_path,
+        m1_registry_path=REAL_M1_REGISTRY,
+        reference_audio_path=str(tmp_path / "does_not_exist.wav"),
+    )
+    assert entry.adherence_status == "not_observed"
+    assert entry.reasons == ["author_input_missing"]
+
+
+def test_collect_g1_short_circuit_when_m1_and_reference_audio_files_missing(
+    tmp_path: Path,
+) -> None:
+    """R5-1: `collect_melody_experimental_anchors` 経由でも、m3 registry が
+    未校正 + m1_registry/reference_audio の実ファイルが project 内に存在しない
+    という組み合わせで raise せず、G1 短絡の not_observed へ落ちる（旧実装は
+    `resolve_melody_observation_paths` の先行解決で `RecastError` になって
+    いた）。project_dir には comparison_registry のみ用意し、m1_registry/
+    reference_audio は意図的に欠落させる（`_project_dir_with_registries` は
+    使わず、config が指す 3 参照のうち m3 のみ実ファイルを置く）。"""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    shutil.copy(REAL_M3_UNCALIBRATED_REGISTRY, project_dir / "m3_comparison_registry.yaml")
+    contract = _contract([_anchor({"contour": "hard"}, anchor_id="melody-1")])
+    entries = collect_melody_experimental_anchors(
+        contract=contract,
+        melody_config=_melody_config(reference="audio", reference_audio="ref.wav"),
+        project_dir=project_dir,
+        backend_ref=_backend_ref(melody_take_band="clear_lead"),
+        score=_score(),
+        channel_artifact_bytes={},
+        take_audio_path=None,
+    )
+    assert len(entries) == 1
+    assert entries[0].adherence_status == "not_observed"
+    assert entries[0].reasons == ["comparator_uncalibrated"]
 
 
 # --------------------------------------------------------------------------- #
@@ -726,7 +904,13 @@ def test_audio_reference_without_reference_band_is_band_out_of_validation(
     tmp_path: Path,
 ) -> None:
     """`reference_melody_band` 未指定（既定 None）は audio_reference の原曲側
-    G2 を通過できない——DD-10b 追加前と同じ安全側の帰結（回帰確認）。"""
+    G2 を通過できない——DD-10b 追加前と同じ安全側の帰結（回帰確認）。
+
+    R5-1 (Codex round5 P2 対応): step 4 の author-input チェックが
+    ``reference_audio_path`` の実在を検証するようになったため、G2（本テストの
+    対象）まで到達させるには実在するファイルを渡す必要がある（`_write_audio_
+    file` — 実在検証そのものは `test_audio_reference_with_nonexistent_
+    reference_audio_file_is_author_input_missing` が別途担保する）。"""
     m3_path = _frozen_m3_registry_path(tmp_path)
     anchor = _anchor({"contour": "hard"})
     entry = evaluate_melody_experimental_anchor(
@@ -736,7 +920,7 @@ def test_audio_reference_without_reference_band_is_band_out_of_validation(
         m3_registry_path=m3_path,
         m1_registry_path=REAL_M1_REGISTRY,
         melody_take_band="clear_lead",
-        reference_audio_path="ref.wav",
+        reference_audio_path=_write_audio_file(tmp_path / "ref.wav"),
         take_audio_path="take.wav",
         route_runner=_make_route_runner(_take_notes(_REFERENCE_PITCHES)),
     )
@@ -1729,6 +1913,80 @@ def test_plan_warnings_one_line_per_melody_anchor(tmp_path: Path) -> None:
     assert len(warnings) == 2
     assert all(w.endswith("experimental observability — ok") for w in warnings)
     assert {w.split("'")[1] for w in warnings} == {"melody-a", "melody-b"}
+
+
+# --------------------------------------------------------------------------- #
+# R5-3 (Codex round5 P2 対応) — plan 診断で未校正軸指定を検出
+# --------------------------------------------------------------------------- #
+def test_plan_warnings_flags_axis_policy_uncalibrated_axes_for_partial_frozen_registry(
+    tmp_path: Path,
+) -> None:
+    """frozen registry が部分軸（``contour`` のみ）しか校正していないとき、
+    anchor の axis_policy が ``interval`` を hard/elastic で指定していれば、
+    G1（全体としては "frozen"）自体は通過しても plan 診断がその軸差分を
+    検出して警告する——旧実装は ``ok`` を返し、実行時 `evaluate_melody_
+    experimental_anchor` の axis_policy 検証（fail-closed・``RecastError``）で
+    初めて判明していた。"""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    shutil.copy(REAL_M1_REGISTRY, project_dir / "registry.yaml")
+    _frozen_m3_registry_path(project_dir, axes=("contour",))
+    contract = _contract(
+        [_anchor({"contour": "hard", "interval": "elastic"}, anchor_id="melody-1")]
+    )
+    warnings = melody_experimental_plan_warnings(
+        contract=contract,
+        melody_config=_melody_config(),
+        project_dir=project_dir,
+        backend_ref=_backend_ref(melody_take_band="clear_lead"),
+    )
+    assert warnings == [
+        "melody anchor 'melody-1': experimental observability — "
+        "not expected (axis_policy_uncalibrated_axes: ['interval'])"
+    ]
+
+
+def test_plan_warnings_ok_when_axis_policy_is_subset_of_partial_frozen_axes(
+    tmp_path: Path,
+) -> None:
+    """anchor の axis_policy（hard/elastic 軸）が frozen axes の部分集合に
+    収まっていれば、frozen registry が部分軸のみでも従来どおり "ok"。"""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    shutil.copy(REAL_M1_REGISTRY, project_dir / "registry.yaml")
+    _frozen_m3_registry_path(project_dir, axes=("contour", "interval"))
+    contract = _contract([_anchor({"contour": "hard"}, anchor_id="melody-1")])
+    warnings = melody_experimental_plan_warnings(
+        contract=contract,
+        melody_config=_melody_config(),
+        project_dir=project_dir,
+        backend_ref=_backend_ref(melody_take_band="clear_lead"),
+    )
+    assert warnings == ["melody anchor 'melody-1': experimental observability — ok"]
+
+
+def test_plan_warnings_axis_policy_uncalibrated_axes_per_anchor(tmp_path: Path) -> None:
+    """複数 anchor がいる場合、軸差分の診断は anchor ごとに独立する
+    （一方が uncalibrated 軸を指しても、他方の診断には影響しない）。"""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    shutil.copy(REAL_M1_REGISTRY, project_dir / "registry.yaml")
+    _frozen_m3_registry_path(project_dir, axes=("contour",))
+    contract = _contract(
+        [
+            _anchor({"contour": "hard"}, anchor_id="melody-ok"),
+            _anchor({"interval": "hard"}, anchor_id="melody-bad"),
+        ]
+    )
+    warnings = melody_experimental_plan_warnings(
+        contract=contract,
+        melody_config=_melody_config(),
+        project_dir=project_dir,
+        backend_ref=_backend_ref(melody_take_band="clear_lead"),
+    )
+    by_anchor = {w.split("'")[1]: w for w in warnings}
+    assert by_anchor["melody-ok"].endswith("— ok")
+    assert by_anchor["melody-bad"].endswith("axis_policy_uncalibrated_axes: ['interval'])")
 
 
 # --------------------------------------------------------------------------- #
