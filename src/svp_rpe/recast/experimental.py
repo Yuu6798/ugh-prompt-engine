@@ -21,8 +21,10 @@ MelodyNote` / `MelodyObservation` / `ObservabilityThresholds`）。melody 専用
 ゲート評価順序（決定論・短絡、Design Memo M4 §2）:
 
 1. ``observation.melody`` 設定不在 → ``not_observed(melody_config_missing)``
-2. registry ロード（sha256 取得）。G1: ``evidence_thresholds.status != "frozen"``
-   または axes 空 → ``not_observed(comparator_uncalibrated)``
+2. M3 comparison registry ロード（sha256 取得）。G1: ``evidence_thresholds.
+   status != "frozen"`` または axes 空 → ``not_observed(comparator_uncalibrated)``
+   （M1 registry はまだ読まない — R4-2・Codex round4 P2 対応。G1 を最優先
+   短絡にするため、M1 のロードは 6 まで遅延する）
 3. axis_policy 検証: frozen axes に無い軸の指定 → ``RecastError``（fail-closed・
    実行停止。エラーにするのはここだけ — G1〜G3 は「測れない」を正直に
    not_observed へ落とす）
@@ -32,14 +34,18 @@ MelodyNote` / `MelodyObservation` / `ObservabilityThresholds`）。melody 専用
 5. G2: 帯域宣言が校正済み集合（``{"clear_lead"}``）外 →
    ``not_observed(band_out_of_validation(declared=...))``（audio_reference は
    両側に課す）
-6. 抽出（テイク側。audio_reference は両側）→ ``compare_melodies(...)`` 実行
+6. M1 registry ロード（sha256 取得。実際に `observability_thresholds` として
+   必要になる直前）→ 抽出（テイク側。audio_reference は両側）→
+   ``compare_melodies(...)`` 実行
 7. G3: ``report.evidence == "not_comparable"`` → ``not_observed``
    （``report.reasons`` を転記）
 8. 写像規則適用（本モジュール `map_axis_policy_to_adherence`）
 
 ゲート不成立の短絡時も、判明している provenance（registry sha256 等）は entry
 へ載せる（``_not_observed_entry`` が積み上げ済みの ``provenance`` dict をそのまま
-使う）。
+使う）。ただし M1 registry sha256（``provenance["m1_registry_sha256"]``）は
+6 に到達した run にしか載らない — 1〜5 の短絡（G1 短絡を含む）は M1 を読んで
+いないため、その事実を捏造せず provenance から単純に省く（R4-2）。
 
 score_reference の導出（Design Memo DD-1）: CompositionScore に旋律フィールドは
 無いため、記号旋律の正典は identity sidecar の melody anchor artifact
@@ -365,6 +371,78 @@ def _load_m3_registry_with_gate(
     return config, sha256_hex, None
 
 
+# R4-3 (Codex round4 P2・部分採用+境界宣言): `_load_m1_registry` が構築前の
+# mapping 段階で検証する「型 + 有限性」の対象フィールド一覧。
+# `ObservabilityThresholds` の dataclass フィールド定義（`melody/observability.py`）
+# と同期させる single source（int 系フィールドの一覧はここが正）。
+_M1_INT_FIELDS: frozenset[str] = frozenset(
+    {"min_note_count", "min_phrase_count", "note_min_run_frames", "median_filter_frames"}
+)
+# Optional フィールド（``None`` を許容する）。現状 `min_cross_extractor_agreement`
+# の 1 件のみ（`ObservabilityThresholds` で唯一の `Optional[float]`）。
+_M1_OPTIONAL_FIELDS: frozenset[str] = frozenset({"min_cross_extractor_agreement"})
+
+
+def _validate_observation_gate_field_types(mapping: Dict[str, Any], *, path: "str | Path") -> None:
+    """R4-3 (Codex round4 P2・部分採用+境界宣言): ``observation_gate`` の各値に
+    ついて「型 + 有限性」の汎用検証だけを行う——`ObservabilityThresholds.
+    from_registry` は素の dataclass 構築で値検証をしないため、文字列値は
+    後段 `assess_observability` で未捕捉 `TypeError` になり、負値/NaN は
+    ゲートを静かに弱めていた。
+
+    検証内容: int 系フィールド（`_M1_INT_FIELDS` — ``note_min_run_frames`` /
+    ``median_filter_frames`` 等）は「bool でない int」、それ以外の既知
+    フィールドは「bool でない実数値（int/float）かつ ``math.isfinite``」を
+    要求する。``bool`` を明示的に除外するのは Python の ``bool`` が ``int``
+    のサブクラスであるため（``isinstance(True, int) is True``）。Optional
+    フィールド（`_M1_OPTIONAL_FIELDS`）の ``None`` は許容する。
+
+    **意図的に行わない検証（境界宣言）**: フィールド別の値域・意味論検証
+    （例: ``min_voiced_coverage`` ∈ [0, 1] のような rate 制約）はここでは
+    行わない——それは M1 registry の統治（凍結・事前登録、
+    `docs/melody_observability.md`）側の責務であり、M4（本 loader）が M1 の
+    意味論を再実装すると知識の重複と乖離リスクを生む。ここで検証するのは
+    「値が計算可能な形をしているか」という M4 自身の実行安全性の話に限定する
+    （文字列値の未捕捉 TypeError・NaN/inf によるゲート無力化の防止）。
+
+    未知キー（`ObservabilityThresholds` のフィールドに無いキー）はここでは
+    判定しない——`from_registry` 自身の「未知キーは pre-registration
+    violation」検査に委ねる（知識の重複を避ける・R3-4 と同じ分業）。
+    """
+    known_fields = _M1_INT_FIELDS | _M1_OPTIONAL_FIELDS | {
+        "min_voiced_coverage",
+        "min_confidence_mean",
+        "max_low_confidence_rate",
+        "max_octave_jump_rate",
+        "voiced_confidence_floor",
+        "low_confidence_floor",
+        "phrase_gap_sec",
+        "octave_jump_semitones",
+    }
+    for key, value in mapping.items():
+        if key not in known_fields:
+            continue  # 未知キーは from_registry の pre-registration 検査に委ねる。
+        if value is None and key in _M1_OPTIONAL_FIELDS:
+            continue
+        if key in _M1_INT_FIELDS:
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise RecastError(
+                    f"M1 registry at {path}: 'observation_gate.{key}' must be a "
+                    f"non-bool int, got {value!r} ({type(value).__name__})"
+                )
+            continue
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise RecastError(
+                f"M1 registry at {path}: 'observation_gate.{key}' must be a "
+                f"non-bool real number (int/float), got {value!r} ({type(value).__name__})"
+            )
+        if not math.isfinite(value):
+            raise RecastError(
+                f"M1 registry at {path}: 'observation_gate.{key}' must be finite "
+                f"(not NaN/Infinity), got {value!r}"
+            )
+
+
 def _load_m1_registry(path: "str | Path") -> Tuple[ObservabilityThresholds, str]:
     """M1 `registry.yaml` の ``observation_gate`` 節をロードする（sha256 込み・
     single read）。`tests/test_melody_comparison.py` の loader パターンと同型。
@@ -374,6 +452,10 @@ def _load_m1_registry(path: "str | Path") -> Tuple[ObservabilityThresholds, str]
     の `set(mapping)` が `TypeError`/`KeyError` を未捕捉のまま送出し、CLI が
     traceback 付きで落ちる。ここで actionable な `RecastError` に変換して
     既存の捕捉経路（呼び出し側の `except (..., RecastError, ...)`）に乗せる。
+
+    R4-3 (Codex round4 P2・部分採用+境界宣言): `from_registry` 呼び出しの
+    **前**に `_validate_observation_gate_field_types` で型 + 有限性を検証する
+    （境界宣言はそちらの docstring 参照）。
     """
     data = Path(path).read_bytes()
     mapping = yaml.safe_load(data)
@@ -404,6 +486,13 @@ def _load_m1_registry(path: "str | Path") -> Tuple[ObservabilityThresholds, str]
     # `from_registry` が既に持つ検証結果をそのまま翻訳するだけ（知識の重複
     # を避ける）。既存の捕捉経路（呼び出し側の
     # `except (..., RecastError, ...)`）にそのまま乗る。
+    #
+    # R4-3 (Codex round4 P2・部分採用+境界宣言): `from_registry` は素の
+    # dataclass 構築で値検証をしないため、文字列値は後段 `assess_
+    # observability` で未捕捉 `TypeError`、負値/NaN はゲートを静かに弱める
+    # ——ここで型 + 有限性だけを先に検証する（値域・意味論検証は不採用、
+    # `_validate_observation_gate_field_types` docstring の境界宣言を参照）。
+    _validate_observation_gate_field_types(observation_gate, path=path)
     try:
         thresholds = ObservabilityThresholds.from_registry(observation_gate)
     except (TypeError, ValueError, KeyError) as exc:
@@ -570,10 +659,16 @@ def evaluate_melody_experimental_anchor(
         )
 
     # 2) registry ロード + G1。
+    # R4-2 (Codex round4 P2 対応): M1 registry のロードはここでは行わない
+    # ——G1（M3 校正判定）を最優先短絡にするため。旧実装は G1 判定より前に
+    # M1 registry を読んでいたため、M3 未校正（本来 dormant not_observed）+
+    # M1 破損の組み合わせで ingest が fail していた（設計のゲート順序違反）。
+    # M1 ロードは実際に必要になる直前（下記 6 の抽出/compare 直前）へ遅延する
+    # ——G1 短絡時は M1 を読まないため、その短絡 entry の provenance に
+    # `m1_registry_sha256` は載らない（「判明分のみ・捏造禁止」の原則どおり
+    # 正直な帰結）。
     m3_config, m3_sha256, g1_reason = _load_m3_registry_with_gate(m3_registry_path)
     provenance["m3_registry_sha256"] = m3_sha256
-    m1_thresholds, m1_sha256 = _load_m1_registry(m1_registry_path)
-    provenance["m1_registry_sha256"] = m1_sha256
     if g1_reason is not None or m3_config is None:
         return _not_observed_entry(anchor=anchor, reason=g1_reason or "comparator_uncalibrated", provenance=provenance)
 
@@ -624,6 +719,13 @@ def evaluate_melody_experimental_anchor(
             "evaluate_melody_experimental_anchor: take_audio_path is required once "
             "gates G1/axis_policy/author_input/G2 have passed"
         )
+    # R4-2 (Codex round4 P2 対応): M1 registry のロードはここまで遅延する
+    # ——実際に必要になる直前（`compare_melodies` の `observability_thresholds`
+    # 引数）。G1〜G2/axis_policy/author_input を全て通過した run だけが M1 を
+    # 読む（`_load_m1_registry` の fail-closed 検証・RecastError もこの時点で
+    # 初めて発生しうる）。
+    m1_thresholds, m1_sha256 = _load_m1_registry(m1_registry_path)
+    provenance["m1_registry_sha256"] = m1_sha256
     # R1-2 (Codex round1 P2 対応): 非注入（実抽出器）時のみ、抽出器 provenance
     # （code/weights pin 等 — `observe_via_route_with_provenance` の第 2 戻り値）
     # を take/reference それぞれの名前空間へ保存する。注入時（テスト等）は
@@ -827,40 +929,66 @@ def resolve_main_observation_anchor_scope(
 
 
 def _resolve_project_relative_melody_reference(
-    value: str, project_dir: Path, *, target: str
+    value: str, project_dir: Path, *, target: str, require_exists: bool = True
 ) -> Path:
     """`observation.melody` 配下の project 相対パス参照を解決する
     （`recast/loader.py:_resolve_sidecar_reference` の封じ込めパターン踏襲:
-    絶対パス/`../` traversal/symlink 脱出を拒否し、実在も検証する）。"""
+    絶対パス/`../` traversal/symlink 脱出を拒否し、既定では実在も検証する）。
+
+    ``require_exists=False``（R4-4・Codex round4 P2・lenient-missing digest 用）:
+    封じ込め検証（絶対パス/traversal/symlink 脱出の拒否）は常に行うが、実在
+    チェック（``is_file()``）はスキップする——`compute_observation_digest` が
+    「未使用の melody 参照ファイルの欠落だけで digest 計算を失敗させない」
+    ための seam（`resolve_melody_observation_paths` docstring 参照）。設定
+    エラー（封じ込め違反）自体は従来どおり fail-closed のまま。"""
     try:
         validate_relative_locator(value)
         resolved = resolve_confined(value, project_dir)
     except PathConfinementError as exc:
         raise RecastError(f"{target} reference {value!r} is invalid: {exc}") from exc
-    if not resolved.is_file():
+    if require_exists and not resolved.is_file():
         raise RecastError(f"{target} reference {value!r} does not exist at {resolved}")
     return resolved
 
 
 def resolve_melody_observation_paths(
-    *, project_dir: Path, melody_config: MelodyObservationConfig
+    *, project_dir: Path, melody_config: MelodyObservationConfig, require_exists: bool = True
 ) -> Tuple[Path, Path, Optional[Path]]:
     """``melody_config`` の project 相対パス群（`comparison_registry` /
     `m1_registry` / `reference_audio`）を実パスへ解決する
     （``(m3_registry_path, m1_registry_path, reference_audio_path)``、
     `reference_audio_path` は `reference == "score"` のとき常に ``None``）。
-    不在/封じ込め違反は ``RecastError`` で fail-closed（他の recast 参照解決と
-    同じ posture — 誤設定を no-op の not_observed に握りつぶさない）。"""
+    封じ込め違反は常に ``RecastError`` で fail-closed（設定エラーは握り
+    つぶさない）。
+
+    ``require_exists``（既定 ``True``）: ``True`` のときは不在も
+    ``RecastError`` にする（他の recast 参照解決と同じ posture — 誤設定を
+    no-op の not_observed に握りつぶさない）。``require_exists=False``
+    （R4-4・Codex round4 P2）: 実在チェックをスキップし、解決済みパスを
+    そのまま返す——`compute_observation_digest` の lenient-missing 方式
+    専用（呼び出し側が個別ファイルの存在を確認し、無ければ決定論的
+    センチネルを fold する）。既存の呼び出し元（`collect_melody_
+    experimental_anchors` / `melody_experimental_plan_warnings` /
+    `recast/run_paths.py`）は既定値のまま fail-closed 挙動を維持する。"""
     m3_path = _resolve_project_relative_melody_reference(
-        melody_config.comparison_registry, project_dir, target="observation.melody.comparison_registry"
+        melody_config.comparison_registry,
+        project_dir,
+        target="observation.melody.comparison_registry",
+        require_exists=require_exists,
     )
     m1_path = _resolve_project_relative_melody_reference(
-        melody_config.m1_registry, project_dir, target="observation.melody.m1_registry"
+        melody_config.m1_registry,
+        project_dir,
+        target="observation.melody.m1_registry",
+        require_exists=require_exists,
     )
     reference_audio_path: Optional[Path] = None
     if melody_config.reference_audio is not None:
         reference_audio_path = _resolve_project_relative_melody_reference(
-            melody_config.reference_audio, project_dir, target="observation.melody.reference_audio"
+            melody_config.reference_audio,
+            project_dir,
+            target="observation.melody.reference_audio",
+            require_exists=require_exists,
         )
     return m3_path, m1_path, reference_audio_path
 

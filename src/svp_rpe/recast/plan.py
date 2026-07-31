@@ -806,6 +806,24 @@ def _project_identity_digest_component(project: RecastProject, *, variant: str, 
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+# R4-4 (Codex round4 P2・lenient-missing): melody 参照ファイルが存在しない
+# ときに fold する決定論的センチネル——実 sha256 hex（64 桁 lowercase hex）と
+# 衝突しない固定文字列（`compute_observation_digest` docstring 参照）。
+_MELODY_REFERENCE_MISSING_SENTINEL = "missing"
+
+
+def _sha256_file_or_missing_sentinel(path: Path) -> str:
+    """R4-4: ``path`` が存在すれば content sha256 を、存在しなければ
+    ``_MELODY_REFERENCE_MISSING_SENTINEL`` を返す（raise しない — lenient-
+    missing digest 用）。封じ込め違反は呼び出し側（`resolve_melody_
+    observation_paths`）が既に fail-closed で弾いているため、ここで扱うのは
+    「封じ込め済みパスの実在有無」のみ。"""
+    try:
+        return sha256_file(path)
+    except FileNotFoundError:
+        return _MELODY_REFERENCE_MISSING_SENTINEL
+
+
 def compute_observation_digest(
     observation: ObservationConfig, *, project_dir: Optional[Path] = None
 ) -> str:
@@ -856,7 +874,22 @@ def compute_observation_digest(
     依存させず本関数内で完結させることで、`compute_observation_digest` を
     直接呼ぶ将来の呼び出し元（ガード順を誤り得る）に対しても同じ安全性を
     保証する。``observation.enabled is True`` のときは従来どおり content
-    hash を編入する（挙動不変）。"""
+    hash を編入する（挙動不変、ただし下記 R4-4 の lenient-missing 化を含む）。
+
+    R4-4 (Codex round4 P2・lenient-missing): ``observation.enabled is True``
+    でも、契約に axis_policy 付き melody anchor が無い（= melody 参照が
+    未使用の）段階では、参照先 3 ファイルが存在しないだけで通常観測全体を
+    失敗させたくない（axis_policy 撤去後・活性化前の準備段階の運用を塞がない
+    ため）。よって各参照パスは ``resolve_melody_observation_paths(...,
+    require_exists=False)`` で**封じ込め検証のみ**行い（project 外脱出は
+    従来どおり ``RecastError`` で fail-closed — それは設定エラー）、実在
+    チェックはここで個別に行う: 存在すれば content hash を、``FileNotFound``
+    なら決定論的センチネル（``_MELODY_REFERENCE_MISSING_SENTINEL``）を
+    fold する（raise しない）。この方式により: 未使用+欠落 → 通常観測が
+    進む / 使用時の欠落 → 評価段（`evaluate_melody_experimental_anchor`）が
+    正直な理由により not_observed に落ちる（fail-closed のまま、`observe`
+    自体は成功する）/ 欠落→出現の遷移も sentinel と実 sha256 が異なる値に
+    なるため digest が変わり staleness 検出が正しく働く。"""
     payload = observation.model_dump(mode="json", exclude_none=True)
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     base_digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -871,15 +904,15 @@ def compute_observation_digest(
             "hash を digest へ編入するため project_dir からの相対パス解決が要る)"
         )
     m3_path, m1_path, reference_audio_path = resolve_melody_observation_paths(
-        project_dir=project_dir, melody_config=observation.melody
+        project_dir=project_dir, melody_config=observation.melody, require_exists=False
     )
     components: Dict[str, str] = {
         "observation": base_digest,
-        "melody_comparison_registry": sha256_file(m3_path),
-        "melody_m1_registry": sha256_file(m1_path),
+        "melody_comparison_registry": _sha256_file_or_missing_sentinel(m3_path),
+        "melody_m1_registry": _sha256_file_or_missing_sentinel(m1_path),
     }
     if reference_audio_path is not None:
-        components["melody_reference_audio"] = sha256_file(reference_audio_path)
+        components["melody_reference_audio"] = _sha256_file_or_missing_sentinel(reference_audio_path)
     return compute_content_digest(components)
 
 
@@ -1637,15 +1670,23 @@ def _compile_verify_publish(
     # 観測スコープと同じ意味論で experimental 診断もフィルタする（診断
     # パリティ維持——`or None` は空リスト（既定・絞り込みなし）を
     # `melody_experimental_plan_warnings` の「全件」既定値へ正規化する）。
-    melody_warnings = melody_experimental_plan_warnings(
-        contract=bundle.contract,
-        melody_config=project.observation.melody,
-        project_dir=loaded.project_dir,
-        backend_ref=backend_ref,
-        observation_anchor_scope=project.observation.anchors or None,
-    )
-    if melody_warnings:
-        warnings = warnings + melody_warnings
+    # R4-1 (Codex round4 P2 対応): `observation.enabled is False` のときは
+    # melody 診断自体を呼ばない（R3-2 と対称のガード）。従来はここが
+    # `observation.enabled` を見ずに常に呼んでいたため、registry 参照が
+    # 欠落/破損した project で `observation.enabled: false`（generated-only
+    # 運用）にしても `recast plan` が `RecastError` で失敗していた——
+    # 観測しないのだから observability 見込みの診断も無意味であり、
+    # 警告行も一切出さない。
+    if project.observation.enabled:
+        melody_warnings = melody_experimental_plan_warnings(
+            contract=bundle.contract,
+            melody_config=project.observation.melody,
+            project_dir=loaded.project_dir,
+            backend_ref=backend_ref,
+            observation_anchor_scope=project.observation.anchors or None,
+        )
+        if melody_warnings:
+            warnings = warnings + melody_warnings
 
     # staging_dir はここで cleanup 済み（verify 専用の一時コピーは跡形も
     # 残らない）。verification（該当時）・mode gate の両方を通過したので、

@@ -382,7 +382,11 @@ def test_uncalibrated_registry_is_not_observed_g1(tmp_path: Path) -> None:
     assert entry.reasons == ["comparator_uncalibrated"]
     # 短絡時も判明済みの registry sha256 は provenance に載る。
     assert "m3_registry_sha256" in entry.provenance
-    assert "m1_registry_sha256" in entry.provenance
+    # R4-2 (Codex round4 P2 対応): G1 短絡は M1 registry ロードより前に短絡する
+    # ため、M1 は一切読まれない——「判明分のみ・捏造禁止」の原則どおり
+    # provenance に m1_registry_sha256 は載らない（旧仕様は G1 判定前に M1 を
+    # 読んでいたため常に載っていた）。
+    assert "m1_registry_sha256" not in entry.provenance
 
 
 # --------------------------------------------------------------------------- #
@@ -391,7 +395,14 @@ def test_uncalibrated_registry_is_not_observed_g1(tmp_path: Path) -> None:
 def test_m1_registry_empty_yaml_raises_recast_error(tmp_path: Path) -> None:
     """空 YAML（`yaml.safe_load` は `None` を返す）を素通しすると直後の
     `mapping["observation_gate"]` が `TypeError` を未捕捉のまま送出していた
-    ——actionable な `RecastError` に変換されることを確認する。"""
+    ——actionable な `RecastError` に変換されることを確認する。
+
+    R4-2 (Codex round4 P2 対応): M1 ロードは G1〜G2/axis_policy/author_input
+    を通過した run のみが到達する（6 の抽出直前）ため、これらのゲートを
+    実際に通す最小限の引数（melody_artifact_bytes/melody_take_band/
+    take_audio_path）を渡す——M1 registry の RecastError は抽出（route_runner
+    呼び出し）より前で送出されるため、``take_audio_path`` はファイルとして
+    実在しなくてよい（ダミー文字列で足りる）。"""
     m3_path = _frozen_m3_registry_path(tmp_path)
     m1_path = tmp_path / "empty_registry.yaml"
     m1_path.write_text("", encoding="utf-8")
@@ -401,13 +412,18 @@ def test_m1_registry_empty_yaml_raises_recast_error(tmp_path: Path) -> None:
             anchor=anchor,
             melody_config=_melody_config(),
             score=_score(),
+            melody_artifact_bytes=_reference_artifact_bytes(),
             m3_registry_path=m3_path,
             m1_registry_path=m1_path,
+            melody_take_band="clear_lead",
+            take_audio_path="take.wav",
         )
 
 
 def test_m1_registry_scalar_yaml_raises_recast_error(tmp_path: Path) -> None:
-    """トップレベルがスカラー（マッピングでない）YAML も同様に fail-closed。"""
+    """トップレベルがスカラー（マッピングでない）YAML も同様に fail-closed。
+    （R4-2: M1 ロードは 6 まで遅延するため G1〜G2 を通す引数が必要——上記
+    `test_m1_registry_empty_yaml_raises_recast_error` docstring 参照）。"""
     m3_path = _frozen_m3_registry_path(tmp_path)
     m1_path = tmp_path / "scalar_registry.yaml"
     m1_path.write_text("just-a-string\n", encoding="utf-8")
@@ -417,15 +433,20 @@ def test_m1_registry_scalar_yaml_raises_recast_error(tmp_path: Path) -> None:
             anchor=anchor,
             melody_config=_melody_config(),
             score=_score(),
+            melody_artifact_bytes=_reference_artifact_bytes(),
             m3_registry_path=m3_path,
             m1_registry_path=m1_path,
+            melody_take_band="clear_lead",
+            take_audio_path="take.wav",
         )
 
 
 def test_m1_registry_missing_observation_gate_section_raises_recast_error(
     tmp_path: Path,
 ) -> None:
-    """`observation_gate` 節が丸ごと欠落した YAML も fail-closed。"""
+    """`observation_gate` 節が丸ごと欠落した YAML も fail-closed。
+    （R4-2: M1 ロードは 6 まで遅延するため G1〜G2 を通す引数が必要——
+    `test_m1_registry_empty_yaml_raises_recast_error` docstring 参照）。"""
     m3_path = _frozen_m3_registry_path(tmp_path)
     m1_path = tmp_path / "no_gate_registry.yaml"
     m1_path.write_text(yaml.safe_dump({"unrelated": {"a": 1}}), encoding="utf-8")
@@ -435,8 +456,11 @@ def test_m1_registry_missing_observation_gate_section_raises_recast_error(
             anchor=anchor,
             melody_config=_melody_config(),
             score=_score(),
+            melody_artifact_bytes=_reference_artifact_bytes(),
             m3_registry_path=m3_path,
             m1_registry_path=m1_path,
+            melody_take_band="clear_lead",
+            take_audio_path="take.wav",
         )
 
 
@@ -450,7 +474,9 @@ def test_m1_registry_empty_observation_gate_mapping_raises_recast_error(
     `observation_gate: {}` を通過させてしまい、直後の
     `ObservabilityThresholds.from_registry` の必須引数欠落 `TypeError` が
     未捕捉のまま observed 記録後に traceback していた——ここで actionable な
-    `RecastError` に翻訳されることを確認する。"""
+    `RecastError` に翻訳されることを確認する。（R4-2: M1 ロードは 6 まで
+    遅延するため G1〜G2 を通す引数が必要——
+    `test_m1_registry_empty_yaml_raises_recast_error` docstring 参照）"""
     m3_path = _frozen_m3_registry_path(tmp_path)
     m1_path = tmp_path / "empty_gate_registry.yaml"
     m1_path.write_text(yaml.safe_dump({"observation_gate": {}}), encoding="utf-8")
@@ -460,8 +486,11 @@ def test_m1_registry_empty_observation_gate_mapping_raises_recast_error(
             anchor=anchor,
             melody_config=_melody_config(),
             score=_score(),
+            melody_artifact_bytes=_reference_artifact_bytes(),
             m3_registry_path=m3_path,
             m1_registry_path=m1_path,
+            melody_take_band="clear_lead",
+            take_audio_path="take.wav",
         )
 
 
@@ -470,7 +499,12 @@ def test_m1_registry_unknown_field_in_observation_gate_raises_recast_error(
 ) -> None:
     """`observation_gate` に事前登録外のキー（型不正な設定値）があると
     `ObservabilityThresholds.from_registry` 自身が `ValueError` を送出する
-    ——これも同じ try/except で `RecastError` へ翻訳されることを確認する。"""
+    ——これも同じ try/except で `RecastError` へ翻訳されることを確認する。
+    （R4-2: M1 ロードは 6 まで遅延するため G1〜G2 を通す引数が必要——
+    `test_m1_registry_empty_yaml_raises_recast_error` docstring 参照。未知
+    キー `not_a_real_field` は R4-3 の型検証（既知フィールドのみ対象）では
+    捕捉されず、`from_registry` 自身の pre-registration 検査が引き続き
+    捕捉する——R4-3 の境界宣言どおり分業を維持）。"""
     m3_path = _frozen_m3_registry_path(tmp_path)
     m1_path = tmp_path / "unknown_field_registry.yaml"
     gate = {
@@ -491,9 +525,149 @@ def test_m1_registry_unknown_field_in_observation_gate_raises_recast_error(
             anchor=anchor,
             melody_config=_melody_config(),
             score=_score(),
+            melody_artifact_bytes=_reference_artifact_bytes(),
             m3_registry_path=m3_path,
             m1_registry_path=m1_path,
+            melody_take_band="clear_lead",
+            take_audio_path="take.wav",
         )
+
+
+# --------------------------------------------------------------------------- #
+# R4-3 (Codex round4 P2・部分採用+境界宣言) — M1 registry の型/有限性検証
+# --------------------------------------------------------------------------- #
+def _valid_observation_gate() -> Dict[str, Any]:
+    """`ObservabilityThresholds` の必須フィールドのみを満たす、他は既定値の
+    最小 valid `observation_gate` マッピング。テストが 1 フィールドだけを
+    不正値へ差し替えるためのベース。"""
+    return {
+        "min_voiced_coverage": 0.5,
+        "min_note_count": 4,
+        "min_phrase_count": 1,
+        "min_confidence_mean": 0.5,
+        "max_low_confidence_rate": 0.5,
+        "max_octave_jump_rate": 0.5,
+        "voiced_confidence_floor": 0.3,
+        "low_confidence_floor": 0.1,
+    }
+
+
+def _write_m1_registry(tmp_path: Path, name: str, gate: Dict[str, Any]) -> Path:
+    path = tmp_path / name
+    path.write_text(yaml.safe_dump({"observation_gate": gate}), encoding="utf-8")
+    return path
+
+
+def _evaluate_with_m1_registry(anchor: ContractAnchor, m3_path: Path, m1_path: Path) -> ExperimentalAnchorEntry:
+    """R4-2 対応後、M1 ロードは 6（抽出直前）まで遅延する——G1〜G2/axis_policy/
+    author_input を通す最小限の引数を渡す（`take_audio_path` は M1 の
+    RecastError が抽出より前に送出されるためファイル実在不要）。"""
+    return evaluate_melody_experimental_anchor(
+        anchor=anchor,
+        melody_config=_melody_config(),
+        score=_score(),
+        melody_artifact_bytes=_reference_artifact_bytes(),
+        m3_registry_path=m3_path,
+        m1_registry_path=m1_path,
+        melody_take_band="clear_lead",
+        take_audio_path="take.wav",
+    )
+
+
+def test_m1_registry_string_value_raises_recast_error(tmp_path: Path) -> None:
+    """文字列値は後段 `assess_observability` で未捕捉 `TypeError` になって
+    いた——ここで actionable な `RecastError` に変換されることを確認する。"""
+    m3_path = _frozen_m3_registry_path(tmp_path)
+    gate = _valid_observation_gate()
+    gate["min_voiced_coverage"] = "not-a-number"
+    m1_path = _write_m1_registry(tmp_path, "string_value_registry.yaml", gate)
+    anchor = _anchor({"contour": "hard"})
+    with pytest.raises(RecastError, match="min_voiced_coverage"):
+        _evaluate_with_m1_registry(anchor, m3_path, m1_path)
+
+
+def test_m1_registry_nan_value_raises_recast_error(tmp_path: Path) -> None:
+    """NaN はゲートを静かに弱める（比較が常に False になる）——`math.isfinite`
+    検証で `RecastError` として拒否されることを確認する。"""
+    m3_path = _frozen_m3_registry_path(tmp_path)
+    gate = _valid_observation_gate()
+    gate["min_confidence_mean"] = float("nan")
+    m1_path = _write_m1_registry(tmp_path, "nan_value_registry.yaml", gate)
+    anchor = _anchor({"contour": "hard"})
+    with pytest.raises(RecastError, match="min_confidence_mean"):
+        _evaluate_with_m1_registry(anchor, m3_path, m1_path)
+
+
+def test_m1_registry_inf_value_raises_recast_error(tmp_path: Path) -> None:
+    """Infinity も同じ有限性検証で拒否される。"""
+    m3_path = _frozen_m3_registry_path(tmp_path)
+    gate = _valid_observation_gate()
+    gate["max_low_confidence_rate"] = float("inf")
+    m1_path = _write_m1_registry(tmp_path, "inf_value_registry.yaml", gate)
+    anchor = _anchor({"contour": "hard"})
+    with pytest.raises(RecastError, match="max_low_confidence_rate"):
+        _evaluate_with_m1_registry(anchor, m3_path, m1_path)
+
+
+def test_m1_registry_float_value_for_int_field_raises_recast_error(tmp_path: Path) -> None:
+    """int 系フィールド（`note_min_run_frames` 等）は float を許容しない
+    （「bool でない int」を要求する——float は型違反）。"""
+    m3_path = _frozen_m3_registry_path(tmp_path)
+    gate = _valid_observation_gate()
+    gate["min_note_count"] = 4.5
+    m1_path = _write_m1_registry(tmp_path, "float_int_field_registry.yaml", gate)
+    anchor = _anchor({"contour": "hard"})
+    with pytest.raises(RecastError, match="min_note_count"):
+        _evaluate_with_m1_registry(anchor, m3_path, m1_path)
+
+
+def test_m1_registry_bool_value_for_int_field_raises_recast_error(tmp_path: Path) -> None:
+    """``bool`` は Python では ``int`` のサブクラス（``isinstance(True, int)
+    is True``）——素の ``isinstance`` 判定だけでは ``True``/``False`` を
+    フレーム数として受理してしまう。明示的に bool を除外していることを
+    確認する。"""
+    m3_path = _frozen_m3_registry_path(tmp_path)
+    gate = _valid_observation_gate()
+    gate["note_min_run_frames"] = True
+    m1_path = _write_m1_registry(tmp_path, "bool_int_field_registry.yaml", gate)
+    anchor = _anchor({"contour": "hard"})
+    with pytest.raises(RecastError, match="note_min_run_frames"):
+        _evaluate_with_m1_registry(anchor, m3_path, m1_path)
+
+
+def test_m1_registry_optional_field_none_is_accepted(tmp_path: Path) -> None:
+    """`min_cross_extractor_agreement`（唯一の Optional フィールド）に
+    明示的な ``None``（YAML の ``null``）を宣言しても型検証で拒否されない
+    ——`_load_m1_registry` を直接呼び、例外なくロードできることを確認する
+    （`evaluate_melody_experimental_anchor` 経由だと抽出器 seam まで進んで
+    しまい、型検証だけを独立に確認できないため）。"""
+    gate = _valid_observation_gate()
+    gate["min_cross_extractor_agreement"] = None
+    m1_path = _write_m1_registry(tmp_path, "optional_none_registry.yaml", gate)
+
+    from svp_rpe.recast import experimental as experimental_module
+
+    thresholds, sha256_hex = experimental_module._load_m1_registry(m1_path)
+    assert thresholds.min_cross_extractor_agreement is None
+    assert isinstance(sha256_hex, str) and len(sha256_hex) == 64
+
+
+def test_m1_registry_out_of_semantic_range_value_is_not_rejected_by_type_validation(
+    tmp_path: Path,
+) -> None:
+    """R4-3 の境界宣言: フィールド別の値域・意味論検証（例: rate ∈ [0, 1]）は
+    本 loader の対象外——型として妥当な負値は `_load_m1_registry` の型検証を
+    通過する（M1 registry の統治側の責務であり、ここで再実装しない）。"""
+    gate = _valid_observation_gate()
+    gate["min_voiced_coverage"] = -1.0  # 型としては妥当な float、意味論的には範囲外。
+    m1_path = _write_m1_registry(tmp_path, "negative_value_registry.yaml", gate)
+    # `_load_m1_registry` 自体は RecastError を送出しない——`_load_m1_registry`
+    # を直接呼んで型検証のみを確認する（G3/extractor 挙動には立ち入らない）。
+    from svp_rpe.recast import experimental as experimental_module
+
+    thresholds, sha256_hex = experimental_module._load_m1_registry(m1_path)
+    assert thresholds.min_voiced_coverage == -1.0
+    assert isinstance(sha256_hex, str) and len(sha256_hex) == 64
 
 
 def test_band_out_of_validation_when_take_band_none(tmp_path: Path) -> None:

@@ -652,6 +652,58 @@ def test_recast_report_rejects_duplicate_experimental_anchor_id() -> None:
         )
 
 
+def test_recast_report_rejects_anchor_id_shared_between_main_and_experimental() -> None:
+    """R4-5 (Codex round4 P2): `anchors`（本会計）と `experimental_anchors`
+    （会計分離された別集合）の間で同じ anchor_id が使われることも拒否する
+    ——`_validate_unique_anchor_ids`/`_validate_unique_experimental_anchor_ids`
+    はそれぞれのリスト内の重複しか見ないため、両リストに 1 件ずつ現れる
+    ケース（読み戻し安全網の抜け穴）を検出できていなかった。"""
+    report = _observation_report(
+        [_anchor_observation("harmony", "harmony", "preserved", "exact_match")]
+    )
+    package = _package(
+        [PackageAnchorStatus.model_construct(anchor_id="harmony", requested_mode="hard")]
+    )
+    entry = _melody_experimental_entry(anchor_id="harmony")
+    with pytest.raises(ValidationError, match="both"):
+        build_recast_report(
+            project_id="p",
+            variant="v",
+            backend="b",
+            package=package,
+            report=report,
+            take_path_relative="take.wav",
+            take_sha256="a" * 64,
+            experimental_anchors=[entry],
+        )
+
+
+def test_recast_report_allows_disjoint_main_and_experimental_anchor_ids() -> None:
+    """回帰確認: 本会計と experimental が互いに素な anchor_id 集合であれば
+    R4-5 の新 validator は正常発行を妨げない（`recast/experimental.py:
+    resolve_main_observation_anchor_scope` が axis_policy 付き melody anchor
+    を本会計スコープから除外する既存配線どおり）。"""
+    report = _observation_report(
+        [_anchor_observation("harmony", "harmony", "preserved", "exact_match")]
+    )
+    package = _package(
+        [PackageAnchorStatus.model_construct(anchor_id="harmony", requested_mode="hard")]
+    )
+    entry = _melody_experimental_entry(anchor_id="melody")
+    recast_report = build_recast_report(
+        project_id="p",
+        variant="v",
+        backend="b",
+        package=package,
+        report=report,
+        take_path_relative="take.wav",
+        take_sha256="a" * 64,
+        experimental_anchors=[entry],
+    )
+    assert [a.anchor_id for a in recast_report.anchors] == ["harmony"]
+    assert [e.anchor_id for e in recast_report.experimental_anchors] == ["melody"]
+
+
 def test_recast_report_reads_back_old_report_without_experimental_anchors_field() -> None:
     """旧レポート（このフィールドを持たない JSON）は default（空リスト）で
     読み戻せる — 後方互換。"""

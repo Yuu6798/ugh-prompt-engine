@@ -285,6 +285,34 @@ class RecastReport(RecastReportModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_no_cross_list_anchor_id_overlap(self) -> "RecastReport":
+        """R4-5 (Codex round4 P2): `anchors`（本会計）と `experimental_anchors`
+        （M4c、会計分離された別集合）の間でも anchor_id が重複してはならない
+        （読み戻し安全網の完成形——`_validate_unique_anchor_ids`/
+        `_validate_unique_experimental_anchor_ids` はそれぞれのリスト**内**の
+        一意性しか見ないため、同じ anchor_id が両方のリストに 1 件ずつ現れる
+        ケースはどちらの validator も検出できない）。同じ anchor が本会計と
+        experimental の両方に載ると、`recast_summary.md` が同一 anchor を
+        Coverage 集計対象/対象外の両方として二重に報告し、会計分離の趣旨
+        （`ExperimentalAnchorEntry` docstring 参照）そのものが崩れる。
+
+        正常な発行経路（`build_recast_report`）は、experimental 側
+        （`collect_melody_experimental_anchors`、axis_policy opt-in — DD-3）
+        と本会計側（`resolve_main_observation_anchor_scope` が axis_policy
+        付き melody anchor を観測スコープから除外する）が互いに素な集合に
+        なるよう既に配線されているため、正常発行はこの validator を自然に
+        通過する（builder→dump→validate の読み戻し規律）。"""
+        main_ids = {anchor.anchor_id for anchor in self.anchors}
+        experimental_ids = {entry.anchor_id for entry in self.experimental_anchors}
+        overlap = main_ids & experimental_ids
+        if overlap:
+            raise ValueError(
+                "anchor_id(s) present in both recast report anchors (main accounting) "
+                f"and experimental_anchors: {', '.join(sorted(overlap))}"
+            )
+        return self
+
 
 def build_recast_report(
     *,

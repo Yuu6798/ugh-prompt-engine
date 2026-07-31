@@ -900,6 +900,68 @@ def test_compute_observation_digest_enabled_true_still_dereferences_melody(
     assert digest != base_digest
 
 
+# --- R4-4 (Codex round4 P2・lenient-missing): 未使用 melody 参照の欠落で digest --
+# --- 計算を落とさない --------------------------------------------------------
+
+
+def test_compute_observation_digest_missing_melody_registry_does_not_raise(
+    tmp_path: Path,
+) -> None:
+    """enabled=True でも、参照先の m3/m1 registry ファイルが存在しなければ
+    （axis_policy 撤去後・活性化前の準備段階を想定）、digest は raise せず
+    決定論的センチネルを fold して得られる——`resolve_melody_observation_
+    paths(..., require_exists=False)` + `_sha256_file_or_missing_sentinel`
+    の lenient-missing 方式（旧仕様は `RecastError` で fail-closed だった）。"""
+    observation = _observation_config(melody=_melody_observation_payload())
+    # tmp_path 配下に m3_comparison_registry.yaml / registry.yaml を意図的に
+    # 用意しない（欠落を再現）。
+    digest = compute_observation_digest(observation, project_dir=tmp_path)
+    assert isinstance(digest, str) and len(digest) == 64
+
+
+def test_compute_observation_digest_missing_to_present_melody_registry_changes_digest(
+    tmp_path: Path,
+) -> None:
+    """R4-4: 欠落→出現の遷移で digest が変わる（staleness 検出が正しく働く
+    ——sentinel と実 sha256 は異なる値になる）。"""
+    observation = _observation_config(melody=_melody_observation_payload())
+    digest_missing = compute_observation_digest(observation, project_dir=tmp_path)
+
+    (tmp_path / "m3_comparison_registry.yaml").write_bytes(b"m3")
+    (tmp_path / "registry.yaml").write_bytes(b"m1")
+    digest_present = compute_observation_digest(observation, project_dir=tmp_path)
+
+    assert digest_missing != digest_present
+
+
+def test_compute_observation_digest_missing_reference_audio_does_not_raise(
+    tmp_path: Path,
+) -> None:
+    """R4-4: `reference == "audio"` の `reference_audio` 参照が欠落していても
+    digest は raise しない（m3/m1 と同じ lenient-missing 方式を reference_audio
+    にも一貫して適用する）。"""
+    (tmp_path / "m3_comparison_registry.yaml").write_bytes(b"m3")
+    (tmp_path / "registry.yaml").write_bytes(b"m1")
+    observation = _observation_config(
+        melody=_melody_observation_payload(reference="audio", reference_audio="ref.wav")
+    )
+    digest = compute_observation_digest(observation, project_dir=tmp_path)
+    assert isinstance(digest, str) and len(digest) == 64
+
+
+def test_compute_observation_digest_melody_confinement_violation_still_raises(
+    tmp_path: Path,
+) -> None:
+    """R4-4: lenient-missing は「実在チェック」だけを緩める——封じ込め違反
+    （project 外脱出、それ自体は設定エラー）は従来どおり fail-closed のまま
+    `RecastError` を送出する。"""
+    observation = _observation_config(
+        melody=_melody_observation_payload(comparison_registry="../outside.yaml")
+    )
+    with pytest.raises(RecastError, match="invalid"):
+        compute_observation_digest(observation, project_dir=tmp_path)
+
+
 # --- R1-5 (Codex round1 P2): melody resolved paths join protected-input set --
 
 
@@ -968,7 +1030,9 @@ def test_build_recast_plan_protected_inputs_include_melody_registries(
 # --- R3-3 (Codex round3 P2): melody 診断は package 公開前に完了させる ---------
 
 
-def _add_melody_axis_policy_project(tmp_path: Path, *, m3_registry_bytes: bytes) -> Path:
+def _add_melody_axis_policy_project(
+    tmp_path: Path, *, m3_registry_bytes: bytes, observation_enabled: bool = True
+) -> Path:
     """demo_project (variant edm/backend suno) に axis_policy 付き melody
     anchor + `observation.melody` 配線を足した作業コピーを組み立てる
     （`_add_melody_observation` は axis_policy を宣言しないため
@@ -976,7 +1040,9 @@ def _add_melody_axis_policy_project(tmp_path: Path, *, m3_registry_bytes: bytes)
     加えて `arrangements/edm.yaml` の melody identity anchor へ axis_policy
     を足し、`backends.suno.melody_take_band` も宣言して M4c 経路を実際に
     起動させる）。``m3_registry_bytes`` は呼び出し側が用意する
-    `m3_comparison_registry.yaml` の生 bytes（破損/欠落の再現に使う）。"""
+    `m3_comparison_registry.yaml` の生 bytes（破損/欠落の再現に使う）。
+    ``observation_enabled``（既定 True・R4-1）: False にすると
+    `observation.enabled: false` の generated-only 運用を再現する。"""
     project_path = _copy_demo_project(tmp_path)
     project_dir = project_path.parent
 
@@ -994,7 +1060,7 @@ def _add_melody_axis_policy_project(tmp_path: Path, *, m3_registry_bytes: bytes)
 
     project_data = yaml.safe_load(project_path.read_text(encoding="utf-8"))
     project_data["backends"]["suno"]["melody_take_band"] = "clear_lead"
-    project_data["observation"]["enabled"] = True
+    project_data["observation"]["enabled"] = observation_enabled
     project_data["observation"]["melody"] = {
         "reference": "score",
         "comparison_registry": "m3_comparison_registry.yaml",
@@ -1077,5 +1143,57 @@ def test_uncorrupted_melody_registry_still_publishes_package(tmp_path: Path) -> 
     assert (package_dir / "compilation_report.json").exists()
     assert any(
         "melody anchor 'melody': experimental observability — ok" == w
+        for w in artifacts.result.plan.warnings
+    )
+
+
+# --- R4-1 (Codex round4 P2): observation.enabled=False skips melody plan diagnosis --
+
+
+def test_disabled_observation_skips_melody_plan_diagnosis_with_corrupted_registry(
+    tmp_path: Path,
+) -> None:
+    """`observation.enabled: false`（generated-only 運用）では、破損した
+    m3_comparison_registry.yaml があっても `recast plan` は melody 診断
+    （`melody_experimental_plan_warnings`）を一切呼ばない——R3-2 の digest
+    ガードと対称。従来は `observation.enabled` を見ずに常に呼んでいたため、
+    generated-only 運用でも registry 破損だけで `recast plan` が
+    `RecastError`/`ValueError` で失敗していた。"""
+    corrupted_m3_bytes = yaml.safe_dump({"schema": "not-a-real-schema"}).encode("utf-8")
+    project_path = _add_melody_axis_policy_project(
+        tmp_path, m3_registry_bytes=corrupted_m3_bytes, observation_enabled=False
+    )
+    loaded = load_recast_project(project_path)
+    package_dir = loaded.builds_root / "packages" / "edm@suno"
+
+    artifacts = build_recast_plan_artifacts(loaded, variant="edm", backend="suno", publish=True)
+
+    assert artifacts.result.plan.state_reached == "verified"
+    assert (package_dir / "performance_package.json").exists()
+    assert (package_dir / "compilation_report.json").exists()
+    assert not any(
+        w.startswith("melody anchor 'melody': experimental observability")
+        for w in artifacts.result.plan.warnings
+    )
+
+
+def test_disabled_observation_skips_melody_plan_diagnosis_with_missing_registry(
+    tmp_path: Path,
+) -> None:
+    """R4-1: registry ファイル自体が存在しない（`resolve_melody_observation_
+    paths` が `RecastError` を送出する）ケースでも、`observation.enabled:
+    false` なら melody 診断は呼ばれず plan は成功する。"""
+    project_path = _add_melody_axis_policy_project(
+        tmp_path, m3_registry_bytes=b"placeholder", observation_enabled=False
+    )
+    project_dir = project_path.parent
+    (project_dir / "m3_comparison_registry.yaml").unlink()
+
+    loaded = load_recast_project(project_path)
+    artifacts = build_recast_plan_artifacts(loaded, variant="edm", backend="suno", publish=True)
+
+    assert artifacts.result.plan.state_reached == "verified"
+    assert not any(
+        w.startswith("melody anchor 'melody': experimental observability")
         for w in artifacts.result.plan.warnings
     )
