@@ -403,6 +403,91 @@ def test_entry_readback_exempts_not_observed_from_recomputation() -> None:
     assert entry.adherence_status == "not_observed"
 
 
+# --------------------------------------------------------------------------- #
+# R9-1 (Codex round9 P2 対応) — 読み戻し時の axis_policy shape 再検証
+# --------------------------------------------------------------------------- #
+def test_entry_readback_rejects_empty_axis_policy_even_when_not_observed() -> None:
+    """旧実装は ``not_observed`` を丸ごと再計算免除していたため、
+    ``axis_policy={}``（契約として空洞化した shape）+ ``axis_evidence={}`` の
+    組み合わせが `_axis_policy_status` に到達する前に何の shape 検証も受けず
+    valid として通ってしまっていた——`arrange/contract.py::_validate_axis_policy`
+    の共有ヘルパーで shape を再適用し、``not_observed`` でも拒否する。"""
+    with pytest.raises(ValidationError, match="axis_policy must not be empty"):
+        ExperimentalAnchorEntry(
+            **_entry_kwargs(
+                adherence_status="not_observed",
+                axis_policy={},
+                axes={},
+                axis_evidence={},
+                reasons=["melody_config_missing"],
+            )
+        )
+
+
+def test_entry_readback_rejects_all_free_axis_policy_even_when_not_observed() -> None:
+    """全軸 ``free`` は「何も約束しない anchor」であり契約として空洞化する
+    ——``not_observed`` entry でも拒否する（R9-1）。"""
+    with pytest.raises(
+        ValidationError, match="must declare at least one 'hard' or 'elastic'"
+    ):
+        ExperimentalAnchorEntry(
+            **_entry_kwargs(
+                adherence_status="not_observed",
+                axis_policy={"contour": "free", "interval": "free"},
+                axes={"contour": None, "interval": None},
+                axis_evidence={},
+                reasons=["melody_config_missing"],
+            )
+        )
+
+
+def test_entry_readback_rejects_axis_policy_referencing_unknown_axis() -> None:
+    """domain の軸語彙（``DOMAIN_AXIS_VOCAB["melody"]``）外の軸名を持つ
+    axis_policy は shape 検証で拒否する（R9-1）。"""
+    with pytest.raises(ValidationError, match="outside the domain's vocabulary"):
+        ExperimentalAnchorEntry(
+            **_entry_kwargs(
+                adherence_status="not_observed",
+                axis_policy={"not_a_real_axis": "hard"},
+                axes={"not_a_real_axis": None},
+                axis_evidence={},
+                reasons=["melody_config_missing"],
+            )
+        )
+
+
+def test_entry_readback_rejects_axis_policy_for_domain_without_vocab() -> None:
+    """`DOMAIN_AXIS_VOCAB` に軸語彙が登録されていない domain（例: ``harmony``）
+    への axis_policy 指定は shape 検証で拒否する（R9-1）。"""
+    with pytest.raises(ValidationError, match="no axis vocabulary registered"):
+        ExperimentalAnchorEntry(
+            **_entry_kwargs(
+                adherence_status="not_observed",
+                domain="harmony",
+                axis_policy={"contour": "hard"},
+                axes={"contour": None},
+                axis_evidence={},
+                reasons=["melody_config_missing"],
+            )
+        )
+
+
+def test_entry_readback_accepts_builder_produced_not_observed_entry() -> None:
+    """`_not_observed_entry` が実際に組む shape（axis_policy は anchor 由来で
+    非空・hard/elastic ≥1・語彙内）は shape 検証後も引き続き読み戻しに成功する
+    ——R9-1 は builder 産 entry の読み戻しを壊さない。"""
+    entry = ExperimentalAnchorEntry(
+        **_entry_kwargs(
+            adherence_status="not_observed",
+            axis_policy={"contour": "hard", "interval": "elastic"},
+            axes={"contour": None, "interval": None},
+            axis_evidence={},
+            reasons=["melody_config_missing"],
+        )
+    )
+    assert entry.adherence_status == "not_observed"
+
+
 def test_entry_axis_policy_rejects_unknown_mode_literal() -> None:
     """axis_policy の値は ``hard``/``elastic``/``free`` の Literal 語彙に限定
     される——未知の値は pydantic の型検証で拒否される（R5-2 の型面）。"""
@@ -2067,6 +2152,67 @@ def test_plan_warnings_ok_for_audio_reference_when_both_bands_calibrated(
 
 
 def test_plan_warnings_ok_when_calibrated_and_band_declared(tmp_path: Path) -> None:
+    project_dir = _project_dir_with_registries(tmp_path, calibrated=True)
+    contract = _contract([_anchor({"contour": "hard"}, anchor_id="melody-1")])
+    warnings = melody_experimental_plan_warnings(
+        contract=contract,
+        melody_config=_melody_config(),
+        project_dir=project_dir,
+        backend_ref=_backend_ref(melody_take_band="clear_lead"),
+    )
+    assert warnings == ["melody anchor 'melody-1': experimental observability — ok"]
+
+
+# --------------------------------------------------------------------------- #
+# R9-2 (Codex round9 P2 対応) — plan 診断で audio 参照の実在を検査
+# --------------------------------------------------------------------------- #
+def test_plan_warnings_flags_author_input_missing_when_reference_audio_file_absent(
+    tmp_path: Path,
+) -> None:
+    """G1/G2（+M1 可用性）を通過しても、``reference == "audio"`` の参照ファイル
+    が実在しなければ plan は ``not expected (author_input_missing)`` を先出し
+    する——旧実装はここで参照ファイルの実在を一切見ておらず ``ok`` を返して
+    いた一方、実行時 (`evaluate_melody_experimental_anchor` step 4) は同じ
+    入力から決定論的に ``not_observed(author_input_missing)`` に落ちていた
+    （runtime パリティの欠落）。"""
+    project_dir = _project_dir_with_registries(tmp_path, calibrated=True)
+    # 意図的に project_dir 配下へ ref.wav を用意しない。
+    contract = _contract([_anchor({"contour": "hard"}, anchor_id="melody-1")])
+    warnings = melody_experimental_plan_warnings(
+        contract=contract,
+        melody_config=_melody_config(
+            reference="audio", reference_audio="ref.wav", reference_band="clear_lead"
+        ),
+        project_dir=project_dir,
+        backend_ref=_backend_ref(melody_take_band="clear_lead"),
+    )
+    assert warnings == [
+        "melody anchor 'melody-1': experimental observability — "
+        "not expected (author_input_missing)"
+    ]
+
+
+def test_plan_warnings_ok_when_reference_audio_file_present(tmp_path: Path) -> None:
+    """参照ファイルが実在すれば（他ゲートも通過する前提で）"ok" のまま——回帰
+    確認（`test_plan_warnings_ok_for_audio_reference_when_both_bands_calibrated`
+    と同型だが、本テストは R9-2 の実在検査を明示的な観点として持つ）。"""
+    project_dir = _project_dir_with_registries(tmp_path, calibrated=True)
+    (project_dir / "ref.wav").write_bytes(b"fake-audio")
+    contract = _contract([_anchor({"contour": "hard"}, anchor_id="melody-1")])
+    warnings = melody_experimental_plan_warnings(
+        contract=contract,
+        melody_config=_melody_config(
+            reference="audio", reference_audio="ref.wav", reference_band="clear_lead"
+        ),
+        project_dir=project_dir,
+        backend_ref=_backend_ref(melody_take_band="clear_lead"),
+    )
+    assert warnings == ["melody anchor 'melody-1': experimental observability — ok"]
+
+
+def test_plan_warnings_score_reference_unaffected_by_audio_check(tmp_path: Path) -> None:
+    """``reference == "score"``（既定）は R9-2 の audio 参照実在検査の対象外
+    ——回帰確認（既存 ok 挙動を壊さない）。"""
     project_dir = _project_dir_with_registries(tmp_path, calibrated=True)
     contract = _contract([_anchor({"contour": "hard"}, anchor_id="melody-1")])
     warnings = melody_experimental_plan_warnings(

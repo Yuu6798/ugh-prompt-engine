@@ -76,7 +76,7 @@ from typing import Any, Callable, Collection, Dict, List, Literal, Optional, Tup
 import yaml
 from pydantic import Field, model_validator
 
-from svp_rpe.arrange.contract import ContractAnchor, PreservationContract
+from svp_rpe.arrange.contract import ContractAnchor, PreservationContract, _validate_axis_policy
 from svp_rpe.arrange.identity import AnchorDomain
 from svp_rpe.arrange.models import PreservationMode
 from svp_rpe.arrange.observe import NOTE_EVENTS_ARTIFACT_SCHEMA, _note_name_to_midi
@@ -215,7 +215,25 @@ class ExperimentalAnchorEntry(RecastReportModel):
         = `RecastReportAnchor._validate_coverage_matches_adherence_status` と
         同型）。
 
-        **``not_observed`` は再計算免除する**: 短絡 entry（config 不在・
+        R9-1 (Codex round9 P2 対応): ``adherence_status`` の再計算より**前**に、
+        ``axis_policy`` の shape そのもの（非空・domain の語彙に収まる・
+        hard/elastic を最低 1 軸持つ）を `arrange/contract.py` の共有ヘルパー
+        `_validate_axis_policy`（`ContractAnchor._validate_invariants` が
+        build/読み戻し両経路で使うのと同じ判定ロジック、二重実装禁止）で
+        再検証する。旧実装は ``not_observed`` を丸ごと再計算免除していたため、
+        ``axis_policy={}`` / 全 ``free`` のような「契約として空洞化した」
+        entry が ``axis_evidence={}`` と組み合わさると
+        ``_axis_policy_status`` 呼び出しに到達する前に何のチェックも受けず、
+        ``adherence_status="not_observed"`` の entry として素通りしてしまって
+        いた（`ContractAnchor` 経由で構築される entry の axis_policy は既に
+        この shape 検証を通過済みだが、手編集/別経路の readback はそれを
+        再現しない）。shape 違反は ``not_observed`` かどうかに関わらず一律
+        拒否する——これは「``axis_evidence`` から ``adherence_status`` を
+        再現できるか」という下記の別の不変条件とは独立した契約 shape の
+        話のため、``not_observed`` 免除の対象外とする。
+
+        **``not_observed`` は（shape 検証を通過した上で）``adherence_status``
+        再計算のみ免除する**: 短絡 entry（config 不在・
         G1/axis_policy/author_input/G2 不成立・G3 not_comparable 等）は
         axis_evidence を持たない場合がある（`_not_observed_entry` は
         ``axis_evidence={}`` のまま entry を組む）——`_axis_policy_status` を
@@ -231,6 +249,12 @@ class ExperimentalAnchorEntry(RecastReportModel):
         を含むため `_axis_policy_status` の純粋な出力だけでは再現できない。
         本 validator は ``adherence_status`` の整合性のみを不変条件とする。
         """
+        _validate_axis_policy(
+            self.axis_policy,
+            domain=self.domain,
+            anchor_id=self.anchor_id,
+            error_cls=ValueError,
+        )
         if self.adherence_status == "not_observed":
             return self
         expected_status, _extra_reasons = _axis_policy_status(self.axis_policy, self.axis_evidence)
@@ -1327,12 +1351,13 @@ def melody_experimental_plan_warnings(
 ) -> List[str]:
     """`recast plan` の warnings へ積む「observability 見込み」1 行を anchor
     ごとに組み立てる（Design Memo M4 §5）。抽出は行わない——plan 時点で
-    機械判定できる条件（config 不在 / G1 校正 / G2 帯域 / axis_policy と
-    frozen axes の突合——R5-3）のみを診断する。``reference == "audio"`` の
-    場合は原曲側の G2（``reference_band``）も診断に含める
-    （R2-6・Codex round2 P2）——テイク側が校正済みでも原曲側が未校正なら
-    実行時 ``not_observed(band_out_of_validation)`` に落ちるため、plan 時点
-    でも同じ主因を先出しする。
+    機械判定できる条件（config 不在 / G1 校正 / G2 帯域 / M1 可用性
+    （R8-2）/ ``reference == "audio"`` の参照ファイル実在（R9-2）/
+    axis_policy と frozen axes の突合——R5-3）のみを診断する。
+    ``reference == "audio"`` の場合は原曲側の G2（``reference_band``）も
+    診断に含める（R2-6・Codex round2 P2）——テイク側が校正済みでも原曲側が
+    未校正なら実行時 ``not_observed(band_out_of_validation)`` に落ちるため、
+    plan 時点でも同じ主因を先出しする。
 
     axis_policy 付き melody anchor が契約に無ければ空リスト（既存 project は
     バイト不変のまま — `RecastPlan` スキーマは変更しない、既存 `warnings`
@@ -1407,7 +1432,7 @@ def melody_experimental_plan_warnings(
             for anchor in melody_anchors
         ]
 
-    m3_registry_path, m1_registry_path, _reference_audio_path = resolve_melody_observation_paths(
+    m3_registry_path, m1_registry_path, reference_audio_path = resolve_melody_observation_paths(
         project_dir=project_dir,
         melody_config=melody_config,
         m1_require_exists=False,
@@ -1457,6 +1482,34 @@ def melody_experimental_plan_warnings(
         return [
             f"melody anchor '{anchor.anchor_id}': experimental observability — "
             f"not expected (m1_registry_unavailable: {exc})"
+            for anchor in melody_anchors
+        ]
+
+    # R9-2 (Codex round9 P2 対応・runtime とのパリティ): G1/G2/M1 可用性を
+    # 通過した後、``reference == "audio"`` の resolved 参照ファイルが実在する
+    # かを診断する。旧実装はここで参照ファイルの実在を一切見ておらず、M3/M1
+    # が正常で両帯域が校正済み（clear_lead）でも、参照ファイル欠落時に plan
+    # が ``experimental observability — ok`` を返していた——実行時
+    # （`evaluate_melody_experimental_anchor` step 4・author-input チェック）
+    # は同じ入力から決定論的に ``not_observed(author_input_missing)`` に落ちる
+    # ため、plan の ok と ingest の not_observed が食い違っていた（R8-2 と
+    # 同型の runtime パリティ問題）。`resolve_melody_observation_paths` が
+    # 既に ``reference_audio_require_exists=False`` で解決済みの
+    # ``reference_audio_path`` の実在（``Path.is_file()``）だけを検査し
+    # （封じ込め検証・パス解決ロジック自体は再実装せず再利用する）、欠落
+    # なら runtime と同じ理由語彙 ``author_input_missing`` を先出しする——
+    # plan は診断層のため raise しない。``reference == "score"`` は
+    # `reference_audio_path` が常に ``None``（`resolve_melody_observation_
+    # paths` docstring 参照）でありこの分岐に入らないため対象外——
+    # score_reference 側の author-input 診断（melody artifact 不在・bpm TODO）
+    # は anchor 個別の artifact 内容/score 側の話であり plan 時点では機械
+    # 判定できないため、本ラウンドのスコープ外のまま据え置く。
+    if melody_config.reference == "audio" and (
+        reference_audio_path is None or not reference_audio_path.is_file()
+    ):
+        return [
+            f"melody anchor '{anchor.anchor_id}': experimental observability — "
+            "not expected (author_input_missing)"
             for anchor in melody_anchors
         ]
 
