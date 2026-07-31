@@ -1,0 +1,565 @@
+"""recast/experimental.py — M4: melody anchor の Recast 配線（experimental）。
+
+上位設計書 `docs/DESIGN_M4_recast_melody_anchor.md` と実装契約
+（Design Memo M4）の実装。**M4 は翻訳器である**——M3 比較器（`melody/comparison.py`）
+の出力（軸別 evidence）を、契約の `axis_policy`（`arrange/contract.py` の
+`ContractAnchor.axis_policy`）に照らして D-1 語彙
+（``preserved`` / ``changed_within_policy`` / ``changed_outside_policy`` /
+``not_observed``）へ機械的に写す。新しい数値・閾値・重み・スコア合成は一切
+作らない。単一同一性スコアは恒久禁止（報告層含む）。
+
+M0〜M3 の凍結値・既存スキーマは変更しない: 本モジュールは ``melody/`` 配下を
+**import のみ**で使う（`melody.representation.load_m3_registry` /
+`melody.comparison.compare_melodies` / `melody.routing.select_routes` /
+`melody.extractors.observe_via_route_with_provenance` / `melody.observability.
+MelodyNote` / `MelodyObservation` / `ObservabilityThresholds`）。melody 専用の
+判断ロジックをここへ足すことも禁止 — 写像関数は axis_policy と evidence 辞書を
+受ける汎用シグネチャで、melody にハードコードしない（帯域集合・軸語彙は
+ドメイン別データ定数として分離する。歌詞/和声 anchor への拡張は本 M4 実装の
+スコープ外だが、配線パターンは踏襲できる形にしておく——上位設計書 §6）。
+
+ゲート評価順序（決定論・短絡、Design Memo M4 §2）:
+
+1. ``observation.melody`` 設定不在 → ``not_observed(melody_config_missing)``
+2. registry ロード（sha256 取得）。G1: ``evidence_thresholds.status != "frozen"``
+   または axes 空 → ``not_observed(comparator_uncalibrated)``
+3. axis_policy 検証: frozen axes に無い軸の指定 → ``RecastError``（fail-closed・
+   実行停止。エラーにするのはここだけ — G1〜G3 は「測れない」を正直に
+   not_observed へ落とす）
+4. 参照側入力: score_reference で artifact 不在 / bpm TODO →
+   ``not_observed(author_input_missing)``。audio_reference で
+   reference_audio 不在も同上。
+5. G2: 帯域宣言が校正済み集合（``{"clear_lead"}``）外 →
+   ``not_observed(band_out_of_validation(declared=...))``（audio_reference は
+   両側に課す）
+6. 抽出（テイク側。audio_reference は両側）→ ``compare_melodies(...)`` 実行
+7. G3: ``report.evidence == "not_comparable"`` → ``not_observed``
+   （``report.reasons`` を転記）
+8. 写像規則適用（本モジュール `map_axis_policy_to_adherence`）
+
+ゲート不成立の短絡時も、判明している provenance（registry sha256 等）は entry
+へ載せる（``_not_observed_entry`` が積み上げ済みの ``provenance`` dict をそのまま
+使う）。
+
+score_reference の導出（Design Memo DD-1）: CompositionScore に旋律フィールドは
+無いため、記号旋律の正典は identity sidecar の melody anchor artifact
+（``artifact_type == "note_events_json"``, schema ``note-events/0.1``）とする。
+``sec = start_beat * 60 / bpm``（``bpm = score.physical.bpm``）で `MelodyNote`
+列を決定論導出する。pitch 文字列→MIDI 変換は `arrange/observe.py` の既存純関数
+``_note_name_to_midi`` をそのまま再利用する（重複実装禁止・DD-1/DD-9）。
+artifact 自体の JSON 構造検証（schema 一致・notes リスト・start_beat/
+duration_beats の数値/有限性チェック）は本モジュールに独立実装を持つ——
+`arrange/observe.py::_load_note_events_artifact` は pitch のみを返し
+（v0 の恒等判定が pitch 系列限定のため beat/duration を意図的に捨てる）、M4 の
+score_reference は beat→秒変換に beat/duration の値そのものを要るため、その値を
+保持したまま返す別実装が必要になる（両実装とも "note events artifact に含まれる
+値" という同じ入力を検証しているが、pitch 文字列→MIDI という「複製すると
+ドリフトしうるロジック」自体は import で共有し重複させない、という DD-1/DD-9 の
+要求を満たす）。
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
+
+import yaml
+from pydantic import Field
+
+from svp_rpe.arrange.contract import ContractAnchor
+from svp_rpe.arrange.identity import AnchorDomain
+from svp_rpe.arrange.observe import NOTE_EVENTS_ARTIFACT_SCHEMA, _note_name_to_midi
+from svp_rpe.compose.models import CompositionScore
+from svp_rpe.melody.comparison import MelodyComparisonReport, compare_melodies
+from svp_rpe.melody.extractors import observe_via_route_with_provenance
+from svp_rpe.melody.observability import (
+    MelodyNote,
+    MelodyObservation,
+    ObservabilityThresholds,
+)
+from svp_rpe.melody.representation import M3ComparisonConfig, load_m3_registry
+from svp_rpe.melody.routing import MelodyRoute, select_routes
+from svp_rpe.recast.models import MelodyObservationConfig, RecastError
+from svp_rpe.recast.report import RecastReportModel
+from svp_rpe.sentinels import is_todo_sentinel
+
+__all__ = [
+    "CALIBRATED_MELODY_TAKE_BANDS",
+    "RouteRunner",
+    "ExperimentalAdherenceStatus",
+    "ExperimentalAnchorEntry",
+    "derive_score_reference_observation",
+    "map_axis_policy_to_adherence",
+    "evaluate_melody_experimental_anchor",
+]
+
+# M4 DD-4: 校正済み帯域は現状「単離済み clean lead」のみ。stem 帯（vocal_track/
+# full_mix）解禁は別の一頁実測設計（M2e）で行う——ここで先取りして緩めない
+# （上位設計書 §1 G2 の含意）。
+CALIBRATED_MELODY_TAKE_BANDS: frozenset[str] = frozenset({"clear_lead"})
+
+RouteRunner = Callable[[str], Tuple[MelodyObservation, Dict[str, Any]]]
+
+ExperimentalAdherenceStatus = Literal[
+    "preserved", "changed_within_policy", "changed_outside_policy", "not_observed"
+]
+
+
+class ExperimentalAnchorEntry(RecastReportModel):
+    """1 melody（将来他ドメインも）experimental anchor 分の翻訳結果（Design Memo M4 §4）。
+
+    本会計（`RecastReport.coverage` の verified/violated/not_observed 分母）には
+    一切算入しない——`RecastReport` への統合（`experimental_anchors` 節への
+    追加・会計分離の徹底）は M4c（本フェーズの担当外）で行う。
+    """
+
+    adherence_status: ExperimentalAdherenceStatus
+    anchor_id: str
+    domain: AnchorDomain
+    axis_policy: Dict[str, str]
+    axes: Dict[str, Optional[float]]
+    axis_evidence: Dict[str, str]
+    coverage: Dict[str, float]
+    octave_artifact_suspected: bool
+    reasons: List[str] = Field(default_factory=list)
+    provenance: Dict[str, Any] = Field(default_factory=dict)
+
+
+# --------------------------------------------------------------------------- #
+# score_reference 導出（M4b, DD-1）
+# --------------------------------------------------------------------------- #
+def _parse_note_events_with_timing(
+    raw_bytes: bytes, *, artifact_path: "str | Path" = "<melody artifact>"
+) -> List[Tuple[float, float, str]]:
+    """``note-events/0.1`` artifact (JSON) を onset 順の ``(start_beat,
+    duration_beats, pitch)`` 列へ変換する。
+
+    `arrange/observe.py::_load_note_events_artifact` と同じ構造検証（schema 一致
+    ・notes 非空リスト・各エントリの pitch/start_beat/duration_beats 必須・数値/
+    有限性/非負チェック）を行うが、pitch 文字列を MIDI へは変換せず beat 値も
+    保持したまま返す——score_reference の beat→秒変換に beat/duration の値
+    そのものが要るため（`_load_note_events_artifact` は v0 の pitch-only 比較の
+    ために意図的にこれらを捨てている）。onset 順の並べ替え規則（``(start_beat,
+    元の artifact 内 index)`` によるタイブレーク）も同一に保つ。
+    """
+    try:
+        payload = json.loads(raw_bytes.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ValueError(
+            f"note events artifact is not valid JSON: {artifact_path}: {exc}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise ValueError(
+            f"note events artifact must be a mapping with a 'notes' key: {artifact_path}"
+        )
+    schema = payload.get("schema")
+    if schema != NOTE_EVENTS_ARTIFACT_SCHEMA:
+        raise ValueError(
+            f"note events artifact has unsupported schema {schema!r} "
+            f"(expected {NOTE_EVENTS_ARTIFACT_SCHEMA!r}): {artifact_path}"
+        )
+    if "notes" not in payload:
+        raise ValueError(
+            f"note events artifact must be a mapping with a 'notes' key: {artifact_path}"
+        )
+    notes_field = payload["notes"]
+    if not isinstance(notes_field, list):
+        raise ValueError(f"note events artifact 'notes' must be a list: {artifact_path}")
+    if not notes_field:
+        raise ValueError(f"note events artifact 'notes' must not be empty: {artifact_path}")
+
+    entries: List[Tuple[float, int, float, str]] = []
+    for index, item in enumerate(notes_field):
+        if (
+            not isinstance(item, dict)
+            or "pitch" not in item
+            or "start_beat" not in item
+            or "duration_beats" not in item
+        ):
+            raise ValueError(
+                "note events artifact note entry missing "
+                "'pitch'/'start_beat'/'duration_beats': "
+                f"{item!r} ({artifact_path})"
+            )
+        pitch = item["pitch"]
+        start_beat = item["start_beat"]
+        duration_beats = item["duration_beats"]
+        if not isinstance(pitch, str):
+            raise ValueError(
+                f"note events artifact note 'pitch' must be a string: {item!r} ({artifact_path})"
+            )
+        if not isinstance(start_beat, (int, float)) or isinstance(start_beat, bool):
+            raise ValueError(
+                "note events artifact note 'start_beat' must be numeric: "
+                f"{item!r} ({artifact_path})"
+            )
+        if not math.isfinite(start_beat):
+            raise ValueError(
+                "note events artifact note 'start_beat' must be finite "
+                f"(not NaN/Infinity): {item!r} ({artifact_path})"
+            )
+        if not isinstance(duration_beats, (int, float)) or isinstance(duration_beats, bool):
+            raise ValueError(
+                "note events artifact note 'duration_beats' must be numeric: "
+                f"{item!r} ({artifact_path})"
+            )
+        if not math.isfinite(duration_beats):
+            raise ValueError(
+                "note events artifact note 'duration_beats' must be finite "
+                f"(not NaN/Infinity): {item!r} ({artifact_path})"
+            )
+        if duration_beats < 0:
+            raise ValueError(
+                "note events artifact note 'duration_beats' must be non-negative: "
+                f"{item!r} ({artifact_path})"
+            )
+        entries.append((float(start_beat), index, float(duration_beats), pitch))
+    entries.sort(key=lambda entry: (entry[0], entry[1]))
+    return [(start_beat, duration_beats, pitch) for start_beat, _, duration_beats, pitch in entries]
+
+
+def derive_score_reference_observation(
+    score: CompositionScore,
+    melody_artifact_bytes: Optional[bytes],
+    *,
+    artifact_path: "str | Path" = "<melody artifact>",
+    route: str = "score_reference",
+) -> Tuple[Optional[MelodyObservation], Optional[str]]:
+    """記号旋律（note-events/0.1 artifact）+ bpm → `MelodyObservation` を決定論導出する
+    （Design Memo M4 DD-1・M4b）。
+
+    Returns ``(observation, None)`` on success, or ``(None, reason)`` when the
+    author-side input is missing (`melody_artifact_bytes` が ``None`` ——
+    artifact 不在、または ``score.physical.bpm`` が転写 TODO センチネル
+    （`sentinels.is_todo_sentinel`）) —— `reason` は常に ``"author_input_missing"``
+    （DD-1）。artifact が存在するのに内容が壊れている（schema 不一致・型不正等）
+    場合は not_observed へ落とさず ``ValueError`` を fail-closed で送出する
+    （「入力が無い」と「入力が壊れている」は別の事実であり、後者を正直会計の
+    ``not_observed`` で握りつぶさない——`arrange/observe.py` の既存 sensor 群と
+    同じ posture）。
+
+    ``sec = start_beat * 60 / bpm``。confidence は記号由来のため常に 1.0
+    （抽出誤差の概念が無い＝原曲側の抽出誤差ゼロ、上位設計書 §2）。
+    """
+    bpm = score.physical.bpm
+    if is_todo_sentinel(bpm):
+        return None, "author_input_missing"
+    if melody_artifact_bytes is None:
+        return None, "author_input_missing"
+
+    bpm_value = float(bpm)
+    entries = _parse_note_events_with_timing(melody_artifact_bytes, artifact_path=artifact_path)
+    seconds_per_beat = 60.0 / bpm_value
+    notes = tuple(
+        MelodyNote(
+            start_sec=start_beat * seconds_per_beat,
+            end_sec=(start_beat + duration_beats) * seconds_per_beat,
+            pitch_midi=float(_note_name_to_midi(pitch)),
+            confidence=1.0,
+        )
+        for start_beat, duration_beats, pitch in entries
+    )
+    total_duration_sec = max((note.end_sec for note in notes), default=0.0)
+    observation = MelodyObservation(
+        route=route,
+        source_model="symbolic:note-events/0.1",
+        notes=notes,
+        total_duration_sec=total_duration_sec,
+    )
+    return observation, None
+
+
+# --------------------------------------------------------------------------- #
+# 写像規則（M4a §3・純関数）
+# --------------------------------------------------------------------------- #
+def map_axis_policy_to_adherence(
+    axis_policy: Dict[str, str], report: MelodyComparisonReport
+) -> Tuple[ExperimentalAdherenceStatus, List[str]]:
+    """M3 evidence（`report.axis_evidence`）を `axis_policy` に照らして D-1
+    語彙へ写像する（Design Memo M4 §3・純関数）。G1–G3 通過済み前提
+    （``report.evidence != "not_comparable"``）。
+
+    分岐（優先順）:
+
+    1. policy 内の軸に evidence が判定不能（"uncalibrated"、または欠落——後者は
+       `_derive_evidence` が `status=="frozen"` のとき軸を丸ごと省略しうるため
+       防御的に同一視する）→ ``not_observed(comparator_uncalibrated(axis=X))``
+    2. hard 軸のどれかが evidence "none" → ``changed_outside_policy``
+    3. hard 軸のどれかが evidence "weak" → ``not_observed(insufficient_evidence)``
+       （weak evidence から preserved を主張しない・保守側へ倒す）
+    4. elastic 軸に "none"/"weak" があれば → ``changed_within_policy``
+    5. それ以外（全 hard/elastic 軸 strong）→ ``preserved``
+
+    free 軸は判定に不参加（呼び出し側が `axes`/`axis_evidence` へ全軸を転記する
+    ——本関数は判定にのみ関与する）。``report.reasons``（``axes_disagree(...)``・
+    octave artifact 理由等）は常に戻り値の reasons へ転記する（隠さない）。
+    """
+    reasons: List[str] = list(report.reasons)
+    hard_axes = [axis for axis, mode in axis_policy.items() if mode == "hard"]
+    elastic_axes = [axis for axis, mode in axis_policy.items() if mode == "elastic"]
+
+    for axis in sorted(axis_policy):
+        verdict = report.axis_evidence.get(axis, "uncalibrated")
+        if verdict == "uncalibrated":
+            reasons.append(f"comparator_uncalibrated(axis={axis})")
+            return "not_observed", reasons
+
+    if any(report.axis_evidence[axis] == "none" for axis in hard_axes):
+        return "changed_outside_policy", reasons
+    if any(report.axis_evidence[axis] == "weak" for axis in hard_axes):
+        reasons.append("insufficient_evidence")
+        return "not_observed", reasons
+    if any(report.axis_evidence[axis] in ("none", "weak") for axis in elastic_axes):
+        return "changed_within_policy", reasons
+    return "preserved", reasons
+
+
+# --------------------------------------------------------------------------- #
+# 起動ゲート G1–G3 + orchestration（M4a・score_reference 配線は M4b）
+# --------------------------------------------------------------------------- #
+def _load_m3_registry_with_gate(
+    path: "str | Path",
+) -> Tuple[Optional[M3ComparisonConfig], str, Optional[str]]:
+    """`load_m3_registry` + G1 判定。戻り値は ``(config_or_none, sha256,
+    reason_or_none)`` —— G1 不成立時は ``config`` に ``None``、``reason`` に
+    ``"comparator_uncalibrated"`` を返す（sha256 は常に返す。短絡時も
+    provenance に registry sha256 を載せるため）。"""
+    config, sha256_hex = load_m3_registry(path)
+    thresholds = config.evidence_thresholds
+    if thresholds.status != "frozen" or not thresholds.axes:
+        return None, sha256_hex, "comparator_uncalibrated"
+    return config, sha256_hex, None
+
+
+def _load_m1_registry(path: "str | Path") -> Tuple[ObservabilityThresholds, str]:
+    """M1 `registry.yaml` の ``observation_gate`` 節をロードする（sha256 込み・
+    single read）。`tests/test_melody_comparison.py` の loader パターンと同型。"""
+    data = Path(path).read_bytes()
+    mapping = yaml.safe_load(data)
+    thresholds = ObservabilityThresholds.from_registry(mapping["observation_gate"])
+    return thresholds, hashlib.sha256(data).hexdigest()
+
+
+def _resolve_clear_lead_route(route_name: str) -> MelodyRoute:
+    """``route_name`` に対応する ``clear_lead`` 帯の `MelodyRoute` を返す。
+
+    `MelodyObservationConfig` 自身の validator が既に route 名を
+    ``select_routes("clear_lead")`` の名前集合に限定しているため、ここへ来て
+    見つからないのは呼び出し契約違反（プログラミングエラー）——
+    `RecastError` ではなく `ValueError` で fail-fast する。
+    """
+    for route in select_routes("clear_lead"):
+        if route.name == route_name:
+            return route
+    raise ValueError(
+        f"route {route_name!r} is not a 'clear_lead' route "
+        "(MelodyObservationConfig.route validation should have rejected this earlier)"
+    )
+
+
+def _default_route_runner(route_name: str) -> RouteRunner:
+    """既定の route_runner: 実抽出器（`melody.extractors.
+    observe_via_route_with_provenance`）。`scripts/run_melody_comparison.py`
+    の ``_default_route_runner`` と同型（route_runner 注入 seam のパターン継承・
+    Design Memo DD-5）。"""
+    route = _resolve_clear_lead_route(route_name)
+
+    def _runner(audio_path: str) -> Tuple[MelodyObservation, Dict[str, Any]]:
+        return observe_via_route_with_provenance(audio_path, route)
+
+    return _runner
+
+
+def _check_melody_take_band(declared: Optional[str]) -> Optional[str]:
+    """G2: 校正済み帯域集合外なら reason 文字列を返す（合格なら ``None``）。"""
+    if declared not in CALIBRATED_MELODY_TAKE_BANDS:
+        shown = declared if declared is not None else "none"
+        return f"band_out_of_validation(declared={shown})"
+    return None
+
+
+def _not_observed_entry(
+    *, anchor: ContractAnchor, reason: str, provenance: Dict[str, Any]
+) -> ExperimentalAnchorEntry:
+    """短絡時の `not_observed` entry を組む。判明済みの axis_policy の軸名は
+    ``axes``/``axis_evidence`` の骨組みとして載せるが値は ``None``/欠落のまま
+    ——「測れない」を正直に空で表す（捏造しない）。"""
+    assert anchor.axis_policy is not None  # opt-in 前提（呼び出し側契約）
+    return ExperimentalAnchorEntry(
+        adherence_status="not_observed",
+        anchor_id=anchor.anchor_id,
+        domain=anchor.domain,
+        axis_policy=dict(anchor.axis_policy),
+        axes={axis: None for axis in anchor.axis_policy},
+        axis_evidence={},
+        coverage={},
+        octave_artifact_suspected=False,
+        reasons=[reason],
+        provenance=dict(provenance),
+    )
+
+
+def evaluate_melody_experimental_anchor(
+    *,
+    anchor: ContractAnchor,
+    melody_config: Optional[MelodyObservationConfig],
+    score: CompositionScore,
+    melody_artifact_bytes: Optional[bytes] = None,
+    melody_artifact_sha256: Optional[str] = None,
+    melody_take_band: Optional[str] = None,
+    take_audio_path: Optional[str] = None,
+    m3_registry_path: "str | Path",
+    m1_registry_path: "str | Path",
+    reference_audio_path: Optional[str] = None,
+    reference_melody_band: Optional[str] = None,
+    route_runner: Optional[RouteRunner] = None,
+    reference_route_runner: Optional[RouteRunner] = None,
+) -> ExperimentalAnchorEntry:
+    """melody experimental anchor 1 件を評価する（Design Memo M4 §2 の 8 段ゲート
+    + §3 写像の orchestration）。
+
+    呼び出し前提: ``anchor.axis_policy is not None``（opt-in・DD-3。契約に
+    axis_policy が無い melody anchor は本関数を呼ばず、`_observe_melody`（LCS・
+    本会計）の現行挙動をそのまま使う——呼び出し側 [M4c、本フェーズ担当外] の
+    責務）。
+
+    ``melody_take_band`` は ``BackendRef.melody_take_band``（G2、テイク側）。
+    ``reference_melody_band`` は ``reference == "audio"`` のときの原曲側帯域
+    宣言だが、`MelodyObservationConfig`（DD-10）に対応するスキーマ欄が存在
+    しないため常に ``None`` になる——結果として audio_reference は現状 G2 を
+    通過できない（band_out_of_validation(declared=none)）。これは
+    audio_reference が「score_reference の後備」（上位設計書 §2）である以上、
+    帯域を宣言する手段が用意されるまで安全側に倒れるという、スキーマの字面
+    どおりの帰結であり、本フェーズで新しい判断を加えたものではない
+    （最終報告に明記）。
+
+    ``route_runner`` / ``reference_route_runner`` は抽出器非依存の注入 seam
+    （`scripts/run_melody_comparison.py` の route_runner パターンと同型・
+    DD-5）: 既定は実抽出器、注入時は provenance に ``extractor_injected: true``
+    を刻む。
+    """
+    if anchor.axis_policy is None:
+        raise ValueError(
+            f"evaluate_melody_experimental_anchor: anchor '{anchor.anchor_id}' has no "
+            "axis_policy (M4 experimental evaluation is opt-in; the caller must not "
+            "invoke this function for anchors without axis_policy)"
+        )
+    axis_policy = anchor.axis_policy
+    provenance: Dict[str, Any] = {}
+
+    # 1) observation.melody 設定不在。
+    if melody_config is None:
+        return _not_observed_entry(
+            anchor=anchor, reason="melody_config_missing", provenance=provenance
+        )
+
+    # 2) registry ロード + G1。
+    m3_config, m3_sha256, g1_reason = _load_m3_registry_with_gate(m3_registry_path)
+    provenance["m3_registry_sha256"] = m3_sha256
+    m1_thresholds, m1_sha256 = _load_m1_registry(m1_registry_path)
+    provenance["m1_registry_sha256"] = m1_sha256
+    if g1_reason is not None or m3_config is None:
+        return _not_observed_entry(anchor=anchor, reason=g1_reason or "comparator_uncalibrated", provenance=provenance)
+
+    # 3) axis_policy vs frozen axes（fail-closed・RecastError）。
+    frozen_axes = set((m3_config.evidence_thresholds.axes or {}).keys())
+    uncalibrated_axes = sorted(set(axis_policy) - frozen_axes)
+    if uncalibrated_axes:
+        raise RecastError(
+            f"melody anchor '{anchor.anchor_id}': axis_policy declares axis(es) not "
+            f"calibrated in the frozen m3 comparison registry: {uncalibrated_axes} "
+            f"(frozen axes: {sorted(frozen_axes)})"
+        )
+
+    # 4) 参照側入力。
+    reference_observation: Optional[MelodyObservation] = None
+    if melody_config.reference == "score":
+        provenance["reference"] = "score"
+        reference_observation, reason = derive_score_reference_observation(
+            score, melody_artifact_bytes
+        )
+        if reference_observation is None:
+            return _not_observed_entry(
+                anchor=anchor, reason=reason or "author_input_missing", provenance=provenance
+            )
+        if melody_artifact_sha256 is not None:
+            provenance["melody_artifact_sha256"] = melody_artifact_sha256
+    else:  # "audio"
+        provenance["reference"] = "audio"
+        if reference_audio_path is None:
+            return _not_observed_entry(
+                anchor=anchor, reason="author_input_missing", provenance=provenance
+            )
+
+    # 5) G2 帯域宣言。
+    take_band_reason = _check_melody_take_band(melody_take_band)
+    if take_band_reason is not None:
+        return _not_observed_entry(anchor=anchor, reason=take_band_reason, provenance=provenance)
+    if melody_config.reference == "audio":
+        reference_band_reason = _check_melody_take_band(reference_melody_band)
+        if reference_band_reason is not None:
+            return _not_observed_entry(
+                anchor=anchor, reason=reference_band_reason, provenance=provenance
+            )
+
+    # 6) 抽出 + compare_melodies。
+    if take_audio_path is None:
+        raise ValueError(
+            "evaluate_melody_experimental_anchor: take_audio_path is required once "
+            "gates G1/axis_policy/author_input/G2 have passed"
+        )
+    take_runner = route_runner or _default_route_runner(melody_config.route)
+    take_observation, _take_extra_provenance = take_runner(take_audio_path)
+    extractor_injected = route_runner is not None
+
+    if melody_config.reference == "audio":
+        if reference_audio_path is None:  # pragma: no cover - guarded above
+            raise ValueError("reference_audio_path is required for reference='audio'")
+        ref_runner = reference_route_runner or _default_route_runner(melody_config.route)
+        reference_observation, _ref_extra_provenance = ref_runner(reference_audio_path)
+        extractor_injected = extractor_injected or reference_route_runner is not None
+
+    assert reference_observation is not None  # both branches set it before reaching here
+    if extractor_injected:
+        provenance["extractor_injected"] = True
+
+    report = compare_melodies(
+        reference_observation,
+        take_observation,
+        observability_thresholds=m1_thresholds,
+        config=m3_config,
+        provenance_extra=dict(provenance),
+    )
+
+    # 7) G3: not_comparable。
+    if report.evidence == "not_comparable":
+        merged_provenance = dict(report.provenance)
+        return ExperimentalAnchorEntry(
+            adherence_status="not_observed",
+            anchor_id=anchor.anchor_id,
+            domain=anchor.domain,
+            axis_policy=dict(axis_policy),
+            axes={axis: None for axis in axis_policy},
+            axis_evidence={},
+            coverage=dict(report.coverage),
+            octave_artifact_suspected=False,
+            reasons=list(report.reasons),
+            provenance=merged_provenance,
+        )
+
+    # 8) 写像規則。
+    status, reasons = map_axis_policy_to_adherence(axis_policy, report)
+    return ExperimentalAnchorEntry(
+        adherence_status=status,
+        anchor_id=anchor.anchor_id,
+        domain=anchor.domain,
+        axis_policy=dict(axis_policy),
+        axes=dict(report.axes),
+        axis_evidence=dict(report.axis_evidence),
+        coverage=dict(report.coverage),
+        octave_artifact_suspected=report.octave_artifact_suspected,
+        reasons=reasons,
+        provenance=dict(report.provenance),
+    )
