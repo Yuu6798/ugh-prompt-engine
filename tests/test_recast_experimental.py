@@ -37,6 +37,7 @@ from svp_rpe.recast.experimental import (
     melody_experimental_plan_warnings,
     resolve_main_observation_anchor_scope,
     resolve_melody_observation_paths,
+    resolve_melody_observation_paths_for_protection,
 )
 from svp_rpe.recast.models import BackendRef, MelodyObservationConfig, RecastError
 
@@ -1590,6 +1591,68 @@ def test_resolve_melody_observation_paths_rejects_traversal(tmp_path: Path) -> N
 
 
 # --------------------------------------------------------------------------- #
+# R6-1 (Codex round6 P2 対応) — resolve_melody_observation_paths_for_protection
+# --------------------------------------------------------------------------- #
+def test_resolve_for_protection_does_not_raise_on_missing_registry(tmp_path: Path) -> None:
+    """未存在パスでも例外を送出しない（require_exists=False・封じ込め検証の
+    みが働く）——protected-input 収集は未存在パスを保護対象に含めても無害。"""
+    project_dir = tmp_path / "empty_project"
+    project_dir.mkdir()
+
+    m3_path, m1_path, reference_audio_path = resolve_melody_observation_paths_for_protection(
+        project_dir=project_dir, melody_config=_melody_config()
+    )
+
+    assert m3_path == project_dir / "m3_comparison_registry.yaml"
+    assert m1_path == project_dir / "registry.yaml"
+    assert reference_audio_path is None
+
+
+def test_resolve_for_protection_returns_none_for_containment_violation_without_raising(
+    tmp_path: Path,
+) -> None:
+    """1 パス（``comparison_registry``）が封じ込め違反（traversal）でも、例外を
+    送出せず当該パスだけ ``None`` を返す——他パス（``m1_registry``）の解決は
+    道連れにしない（R6-1 の独立解決保証）。"""
+    project_dir = _project_dir_with_registries(tmp_path, calibrated=True)
+    config = MelodyObservationConfig(
+        reference="score",
+        comparison_registry="../outside.yaml",
+        m1_registry="registry.yaml",
+    )
+
+    m3_path, m1_path, reference_audio_path = resolve_melody_observation_paths_for_protection(
+        project_dir=project_dir, melody_config=config
+    )
+
+    assert m3_path is None
+    assert m1_path == project_dir / "registry.yaml"
+    assert reference_audio_path is None
+
+
+def test_resolve_for_protection_returns_none_for_missing_audio_reference_containment_violation(
+    tmp_path: Path,
+) -> None:
+    """``reference_audio`` が封じ込め違反でも m3/m1 の解決は影響を受けない。"""
+    project_dir = _project_dir_with_registries(tmp_path, calibrated=True)
+    config = MelodyObservationConfig(
+        reference="audio",
+        reference_audio="/etc/passwd",
+        reference_band="clear_lead",
+        comparison_registry="m3_comparison_registry.yaml",
+        m1_registry="registry.yaml",
+    )
+
+    m3_path, m1_path, reference_audio_path = resolve_melody_observation_paths_for_protection(
+        project_dir=project_dir, melody_config=config
+    )
+
+    assert m3_path == project_dir / "m3_comparison_registry.yaml"
+    assert m1_path == project_dir / "registry.yaml"
+    assert reference_audio_path is None
+
+
+# --------------------------------------------------------------------------- #
 # M4c — collect_melody_experimental_anchors
 # --------------------------------------------------------------------------- #
 def test_collect_returns_empty_when_contract_is_none() -> None:
@@ -1987,6 +2050,56 @@ def test_plan_warnings_axis_policy_uncalibrated_axes_per_anchor(tmp_path: Path) 
     by_anchor = {w.split("'")[1]: w for w in warnings}
     assert by_anchor["melody-ok"].endswith("— ok")
     assert by_anchor["melody-bad"].endswith("axis_policy_uncalibrated_axes: ['interval'])")
+
+
+# --------------------------------------------------------------------------- #
+# R6-2 (Codex round6 P2 対応) — plan 軸突合を全軸キー集合に（runtime とのパリティ）
+# --------------------------------------------------------------------------- #
+def test_plan_warnings_flags_uncalibrated_free_axis_for_runtime_parity(tmp_path: Path) -> None:
+    """R6-2: axis_policy が ``rhythm: free`` のみ frozen axes 集合外を指すとき、
+    plan 診断は（R5-3 の hard/elastic 限定突合と異なり）``rhythm`` も対象に
+    含め ``not expected`` を出す——runtime `evaluate_melody_experimental_anchor`
+    の axis_policy 検証は hard/elastic/free を問わず axis_policy の全キーを
+    frozen axes と突合して ``RecastError`` にするため、plan が hard/elastic
+    のみ突合していると ``contour: hard`` は frozen で ``ok`` を返す一方、
+    ingest は ``rhythm`` の未校正で fail する不一致が生じていた。"""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    shutil.copy(REAL_M1_REGISTRY, project_dir / "registry.yaml")
+    _frozen_m3_registry_path(project_dir, axes=("contour",))
+    contract = _contract(
+        [_anchor({"contour": "hard", "rhythm": "free"}, anchor_id="melody-1")]
+    )
+    warnings = melody_experimental_plan_warnings(
+        contract=contract,
+        melody_config=_melody_config(),
+        project_dir=project_dir,
+        backend_ref=_backend_ref(melody_take_band="clear_lead"),
+    )
+    assert warnings == [
+        "melody anchor 'melody-1': experimental observability — "
+        "not expected (axis_policy_uncalibrated_axes: ['rhythm'])"
+    ]
+
+
+def test_plan_warnings_ok_when_free_axis_is_also_calibrated(tmp_path: Path) -> None:
+    """R6-2: free 軸も frozen axes 集合に含まれていれば従来どおり ``ok``
+    （全軸突合への変更が既存の "全 axis が frozen" ケースを壊さないことの
+    回帰確認）。"""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    shutil.copy(REAL_M1_REGISTRY, project_dir / "registry.yaml")
+    _frozen_m3_registry_path(project_dir, axes=("contour", "rhythm"))
+    contract = _contract(
+        [_anchor({"contour": "hard", "rhythm": "free"}, anchor_id="melody-1")]
+    )
+    warnings = melody_experimental_plan_warnings(
+        contract=contract,
+        melody_config=_melody_config(),
+        project_dir=project_dir,
+        backend_ref=_backend_ref(melody_take_band="clear_lead"),
+    )
+    assert warnings == ["melody anchor 'melody-1': experimental observability — ok"]
 
 
 # --------------------------------------------------------------------------- #

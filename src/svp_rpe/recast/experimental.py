@@ -109,6 +109,7 @@ __all__ = [
     "map_axis_policy_to_adherence",
     "evaluate_melody_experimental_anchor",
     "resolve_melody_observation_paths",
+    "resolve_melody_observation_paths_for_protection",
     "collect_melody_experimental_anchors",
     "melody_experimental_plan_warnings",
     "melody_experimental_anchor_ids",
@@ -1093,10 +1094,14 @@ def resolve_melody_observation_paths(
     step 4 author-input チェック）へ移す——旧実装は本関数がここで全パスの
     実在を先行検証していたため、M3 未校正 + M1/reference_audio 欠落の組で
     G1 短絡より前に `RecastError` を送出していた（設計のゲート順序違反）。
-    `recast/run_paths.py`（protected-input 集合の再構成）は既定値のまま
-    fail-closed 挙動を維持する（この呼び出し元は R5-1 の対象外——publish
-    直前の衝突ガード再解決であり、失敗時は degrade して呼び出し側で無視する
-    契約のまま）。"""
+    `recast/run_paths.py`（protected-input 集合の再構成）と
+    `recast/plan.py:build_recast_plan_artifacts` の protected_inputs 再構成は
+    本関数ではなく `resolve_melody_observation_paths_for_protection`（下記）を
+    使う（R6-1・Codex round6 P2 対応: 従来はこの関数を既定値のまま呼んでいた
+    ため、3 パスのうち 1 つでも封じ込め違反/未設定で本関数が例外を送出すると、
+    残り 2 パスの保護すら得られない all-or-nothing になっていた——protected-
+    input 収集の目的では存在検証は不要で、1 パスの違反が他パスの保護を
+    道連れにしてはならない）。"""
     m3_path = _resolve_project_relative_melody_reference(
         melody_config.comparison_registry,
         project_dir,
@@ -1120,6 +1125,55 @@ def resolve_melody_observation_paths(
                 if reference_audio_require_exists is None
                 else reference_audio_require_exists
             ),
+        )
+    return m3_path, m1_path, reference_audio_path
+
+
+def resolve_melody_observation_paths_for_protection(
+    *, project_dir: Path, melody_config: MelodyObservationConfig
+) -> Tuple[Optional[Path], Optional[Path], Optional[Path]]:
+    """R6-1 (Codex round6 P2 対応): protected-input 収集専用の resolve。
+
+    `collect_protected_input_paths`（`recast/run_paths.py`）と
+    `build_recast_plan_artifacts`（`recast/plan.py`）の protected_inputs 再構成
+    が呼ぶ——両者とも publish 直前の衝突ガードとして「``observation.melody``
+    の resolved パス 3 種を保護対象に含めたいだけで、実在検証もエラー報告も
+    要らない」という protected-input 収集固有の要求を持つ。
+
+    従来は `resolve_melody_observation_paths(...)` を既定値（``require_exists``
+    実質 True 相当）のまま呼んでいたため、3 パスのいずれか 1 つ（典型的には
+    ``reference_audio`` 未生成）が原因で ``RecastError`` を送出すると、呼び
+    出し側の ``except RecastError: pass`` が **3 パス全て**の保護を諦めていた
+    ——有効な M3 registry が recast 出力（report 等）と alias していても
+    protected_inputs に入らず publish に上書きされ得た（Codex round6 review
+    指摘: 評価自体は ``author_input_missing`` として正しく進むのに、保護だけ
+    が全滅する不整合）。
+
+    本関数は 3 パスをそれぞれ独立に「封じ込め検証のみ」
+    （``require_exists=False``）で解決し、封じ込め違反（絶対パス/traversal/
+    symlink 脱出等の設定ミス）が起きたパスは例外を送出せず ``None`` を返す
+    ——呼び出し側は non-None のパスだけを protected_inputs へ足すことで、
+    1 パスの違反が他パスの保護を道連れにしない。未存在パスを保護対象に
+    含めても無害なため実在検証は行わない。実際の melody 評価・エラー報告は
+    正規の位置（`evaluate_melody_experimental_anchor`/`melody_experimental_
+    plan_warnings`）が行う——本関数はここで新たな失敗点を作らない。"""
+
+    def _resolve_or_none(value: str, *, target: str) -> Optional[Path]:
+        try:
+            return _resolve_project_relative_melody_reference(
+                value, project_dir, target=target, require_exists=False
+            )
+        except RecastError:
+            return None
+
+    m3_path = _resolve_or_none(
+        melody_config.comparison_registry, target="observation.melody.comparison_registry"
+    )
+    m1_path = _resolve_or_none(melody_config.m1_registry, target="observation.melody.m1_registry")
+    reference_audio_path: Optional[Path] = None
+    if melody_config.reference_audio is not None:
+        reference_audio_path = _resolve_or_none(
+            melody_config.reference_audio, target="observation.melody.reference_audio"
         )
     return m3_path, m1_path, reference_audio_path
 
@@ -1265,12 +1319,27 @@ def melody_experimental_plan_warnings(
     R5-3 (Codex round5 P2 対応): frozen registry が部分軸（例 ``contour``
     のみ）しか校正していない場合、G1（全体の校正状態）自体は "frozen" で
     通過しても、anchor 個別の axis_policy が frozen axes 集合外の軸を
-    hard/elastic で指定していれば、実行時 `evaluate_melody_experimental_
-    anchor` の axis_policy 検証（fail-closed・``RecastError``）で初めて
-    判明していた——plan 時点でも anchor ごとに frozen axes との集合差分を
-    診断し、``not expected (axis_policy_uncalibrated_axes: [...])`` として
-    先出しする（plan は診断層のため raise しない——ingest の fail-closed は
-    そのまま維持する）。
+    指定していれば、実行時 `evaluate_melody_experimental_anchor` の
+    axis_policy 検証（fail-closed・``RecastError``）で初めて判明していた
+    ——plan 時点でも anchor ごとに frozen axes との集合差分を診断し、
+    ``not expected (axis_policy_uncalibrated_axes: [...])`` として先出しする
+    （plan は診断層のため raise しない——ingest の fail-closed はそのまま
+    維持する）。
+
+    R6-2 (Codex round6 P2 対応・runtime とのパリティ): 突合対象は
+    axis_policy の**全キー集合**（hard/elastic/free 問わず）とする——
+    実行時 `evaluate_melody_experimental_anchor` の axis_policy 検証は
+    ``set(axis_policy) - frozen_axes``（全軸）を見て ``RecastError`` にする
+    のに対し、R5-3 導入時の plan 診断は hard/elastic のみを突合していた
+    （free 軸は判定不参加という `map_axis_policy_to_adherence` の意味論を
+    誤って診断側の集合差分にも適用してしまっていた）。この不一致により
+    ``contour: hard, rhythm: free`` のような契約で ``rhythm`` が frozen axes
+    集合外だと、plan は contour のみ突合して ``ok`` を返す一方、実行時は
+    axis_policy 全体を突合して ``RecastError`` になり、plan ok のまま
+    ingest が落ちる非対称が生じていた。plan の突合を axis_policy の全キー
+    集合に揃えることで、plan の診断結果が実行時の fail-closed 判定と常に
+    一致するようにする（runtime 側 `evaluate_melody_experimental_anchor` は
+    変更しない）。
     """
     melody_anchors = _filter_melody_anchors_by_observation_scope(
         _melody_anchors_with_axis_policy(contract), observation_anchor_scope
@@ -1314,18 +1383,21 @@ def melody_experimental_plan_warnings(
             for anchor in melody_anchors
         ]
 
-    # R5-3: G1（全体の校正状態）通過後も、anchor ごとの axis_policy が
-    # frozen axes 集合に含まれない軸を hard/elastic で指定していないか
-    # 個別に突合する（free 軸は判定不参加——`map_axis_policy_to_adherence`
-    # の意味論と同じ絞り込みを診断側でも踏襲する）。
+    # R5-3/R6-2: G1（全体の校正状態）通過後も、anchor ごとの axis_policy が
+    # frozen axes 集合に含まれない軸を指定していないか個別に突合する。
+    # R6-2 (Codex round6 P2 対応): 突合対象は axis_policy の全キー集合
+    # （hard/elastic/free 問わず）——runtime `evaluate_melody_experimental_
+    # anchor` の axis_policy 検証（``set(axis_policy) - frozen_axes``）と
+    # 揃える（`melody_experimental_plan_warnings` docstring の R6-2 節参照。
+    # free 軸は判定（`map_axis_policy_to_adherence`）には不参加のままだが、
+    # 「frozen registry で校正されているか」という plan の事前診断は全軸を
+    # 対象にしないと runtime の fail-closed と食い違う）。
     assert m3_config is not None  # g1_reason is None means config resolved
     frozen_axes = set((m3_config.evidence_thresholds.axes or {}).keys())
     warnings: List[str] = []
     for anchor in melody_anchors:
         assert anchor.axis_policy is not None  # opt-in filter guarantees this
-        judged_axes = {
-            axis for axis, mode in anchor.axis_policy.items() if mode in ("hard", "elastic")
-        }
+        judged_axes = set(anchor.axis_policy)
         uncalibrated_axes = sorted(judged_axes - frozen_axes)
         if uncalibrated_axes:
             diagnosis = f"not expected (axis_policy_uncalibrated_axes: {uncalibrated_axes})"

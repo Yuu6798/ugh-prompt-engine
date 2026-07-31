@@ -119,6 +119,7 @@ from svp_rpe.compose.prompt_renderer import resolve_backend_descriptor
 from svp_rpe.recast.experimental import (
     melody_experimental_plan_warnings,
     resolve_melody_observation_paths,
+    resolve_melody_observation_paths_for_protection,
 )
 from svp_rpe.recast.loader import LoadedRecastProject
 from svp_rpe.recast.models import (
@@ -1853,21 +1854,26 @@ def build_recast_plan_artifacts(
     # いても、従来はここに含まれず publish が入力を上書きしうった。
     # `collect_protected_input_paths`（`recast/run_paths.py`）と同じ集合を
     # 束が既に読んだ `project.observation.melody` から副作用なく再構成する。
-    # 解決失敗（未設定/ファイル不在/封じ込め違反）は既存の manifest source/
-    # anchor パターン（直下）と同様に degrade する——この時点でのエラーは
-    # `melody_experimental_plan_warnings`（後続ステップ）が正規の報告順序で
-    # 診断するため、ここで先取りして例外化しない。
+    #
+    # R6-1 (Codex round6 P2 対応・all-or-nothing 排除): 3 パスは
+    # `resolve_melody_observation_paths_for_protection` で**それぞれ独立に**
+    # 「封じ込め検証のみ」で解決する（`run_paths.py:collect_protected_input_
+    # paths` と同じ対応・同じ理由——旧実装は 1 回の `resolve_melody_
+    # observation_paths` 呼び出しが 1 パスの封じ込め違反/未存在で
+    # ``RecastError`` を送出すると、`except RecastError: pass` が 3 パス
+    # 全ての保護を諦めていた）。実際のエラーは `melody_experimental_plan_
+    # warnings`（後続ステップ）が正規の報告順序で診断するため、ここでは
+    # non-None のパスだけを足す。
     if project.observation.melody is not None:
-        try:
-            m3_path, m1_path, reference_audio_path = resolve_melody_observation_paths(
-                project_dir=loaded.project_dir, melody_config=project.observation.melody
-            )
+        m3_path, m1_path, reference_audio_path = resolve_melody_observation_paths_for_protection(
+            project_dir=loaded.project_dir, melody_config=project.observation.melody
+        )
+        if m3_path is not None:
             protected_inputs.append(m3_path)
+        if m1_path is not None:
             protected_inputs.append(m1_path)
-            if reference_audio_path is not None:
-                protected_inputs.append(reference_audio_path)
-        except RecastError:
-            pass
+        if reference_audio_path is not None:
+            protected_inputs.append(reference_audio_path)
     if bundle.manifest is not None:
         manifest_dir = bundle.manifest_path.resolve().parent
         try:

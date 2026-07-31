@@ -22,7 +22,7 @@ from pydantic import ValidationError
 
 from svp_rpe.arrange.identity import IdentityManifest, IdentityManifestError
 from svp_rpe.arrange.pathsafe import resolve_confined
-from svp_rpe.recast.experimental import resolve_melody_observation_paths
+from svp_rpe.recast.experimental import resolve_melody_observation_paths_for_protection
 from svp_rpe.recast.loader import LoadedRecastProject
 from svp_rpe.recast.models import RecastError
 
@@ -145,23 +145,30 @@ def collect_protected_input_paths(
     # （comparison_registry/m1_registry/reference_audio）を protected-input
     # set へ編入する——これらが recast 出力（`recast_state.json`/`recast_
     # plan.json`/report 等）と alias していても、従来はここに含まれず publish
-    # が入力を上書きしうった。解決失敗（未設定/ファイル不在/封じ込め違反）は
-    # 下の identity manifest ブロックと同じ degrade 契約——本関数は
-    # publish 直前の衝突ガードとして再解決する呼ばれ方をするため、ここで
-    # 新たな失敗点を作らない（実際の melody エラー報告は `recast/
-    # experimental.py` の評価経路が正規の位置で行う）。
+    # が入力を上書きしうった。
+    #
+    # R6-1 (Codex round6 P2 対応・all-or-nothing 排除): 3 パスは
+    # `resolve_melody_observation_paths_for_protection` で**それぞれ独立に**
+    # 「封じ込め検証のみ」で解決する——旧実装は 1 回の `resolve_melody_
+    # observation_paths` 呼び出しが 1 パスの封じ込め違反/未存在で
+    # ``RecastError`` を送出すると、`except RecastError: pass` が 3 パス
+    # 全ての保護を諦めていた（例: 有効な M3 registry が report と alias +
+    # audio 欠落 → 評価は `author_input_missing` で正しく進むのに registry が
+    # protected_inputs に入らず publish に上書きされ得た）。本関数は
+    # non-None のパスだけを足すため、1 パスの違反が他パスの保護を道連れに
+    # しない（実際の melody エラー報告は `recast/experimental.py` の評価
+    # 経路が正規の位置で行う）。
     melody_config = loaded.project.observation.melody
     if melody_config is not None:
-        try:
-            m3_path, m1_path, reference_audio_path = resolve_melody_observation_paths(
-                project_dir=loaded.project_dir, melody_config=melody_config
-            )
+        m3_path, m1_path, reference_audio_path = resolve_melody_observation_paths_for_protection(
+            project_dir=loaded.project_dir, melody_config=melody_config
+        )
+        if m3_path is not None:
             paths.append(m3_path)
+        if m1_path is not None:
             paths.append(m1_path)
-            if reference_audio_path is not None:
-                paths.append(reference_audio_path)
-        except RecastError:
-            pass
+        if reference_audio_path is not None:
+            paths.append(reference_audio_path)
 
     manifest_dir = loaded.identity_manifest_path.resolve().parent
     try:

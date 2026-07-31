@@ -1027,6 +1027,88 @@ def test_build_recast_plan_protected_inputs_include_melody_registries(
     assert result.plan.state_reached == "verified"
 
 
+# --- R6-1 (Codex round6 P2 対応): melody 保護パスの独立収集 (all-or-nothing 排除) --
+
+
+def _add_melody_observation_audio_reference(
+    project_path: Path, *, reference_audio: str, reference_band: str = "clear_lead"
+) -> None:
+    """demo_project に ``reference: audio`` の `observation.melody` を足す。
+    `reference_audio` はあえて実ファイルを作らない呼び出しにも使えるよう、
+    存在有無は呼び出し側の判断に委ねる（M3/M1 registry は常に用意する）。"""
+    project_dir = project_path.parent
+    (project_dir / "m3_comparison_registry.yaml").write_bytes(b"m3-placeholder")
+    (project_dir / "registry.yaml").write_bytes(b"m1-placeholder")
+    project_data = yaml.safe_load(project_path.read_text(encoding="utf-8"))
+    project_data["observation"]["melody"] = {
+        "reference": "audio",
+        "reference_audio": reference_audio,
+        "reference_band": reference_band,
+        "comparison_registry": "m3_comparison_registry.yaml",
+        "m1_registry": "registry.yaml",
+        "route": "crepe_direct",
+    }
+    project_path.write_text(yaml.safe_dump(project_data, sort_keys=False), encoding="utf-8")
+
+
+def test_collect_protected_input_paths_includes_registries_despite_missing_reference_audio(
+    tmp_path: Path,
+) -> None:
+    """R6-1: `reference_audio` が未生成（実ファイル不在）でも、M3/M1 registry の
+    保護は道連れにならない——旧実装は 1 回の `resolve_melody_observation_paths`
+    呼び出しが reference_audio の実在検証（既定 require_exists=True）で
+    ``RecastError`` を送出し、`except RecastError: pass` が 3 パス全ての保護を
+    諦めていた（有効な M3 registry が report と alias していても
+    protected_inputs に入らず publish に上書きされ得た）。"""
+    project_path = _copy_demo_project(tmp_path)
+    _add_melody_observation_audio_reference(
+        project_path, reference_audio="reference_take.wav"
+    )
+    loaded = load_recast_project(project_path)
+
+    resolved = {p.resolve() for p in collect_protected_input_paths(loaded, "edm", "suno")}
+
+    assert (loaded.project_dir / "m3_comparison_registry.yaml").resolve() in resolved
+    assert (loaded.project_dir / "registry.yaml").resolve() in resolved
+
+
+def test_collect_protected_input_paths_containment_violation_does_not_drop_other_melody_paths(
+    tmp_path: Path,
+) -> None:
+    """R6-1: `reference_audio` が封じ込め違反（project 外への絶対パス）でも、
+    M3/M1 registry は独立に保護され続ける（1 パスの違反が他パスの保護を
+    道連れにしない——パス単位の独立 append）。"""
+    project_path = _copy_demo_project(tmp_path)
+    _add_melody_observation_audio_reference(
+        project_path, reference_audio="/etc/passwd"
+    )
+    loaded = load_recast_project(project_path)
+
+    resolved = {p.resolve() for p in collect_protected_input_paths(loaded, "edm", "suno")}
+
+    assert (loaded.project_dir / "m3_comparison_registry.yaml").resolve() in resolved
+    assert (loaded.project_dir / "registry.yaml").resolve() in resolved
+    assert Path("/etc/passwd") not in resolved
+
+
+def test_build_recast_plan_protected_inputs_include_registries_despite_missing_reference_audio(
+    tmp_path: Path,
+) -> None:
+    """R6-1: plan 由来の `protected_inputs`（`build_recast_plan_artifacts` が
+    束から再構成する集合）でも同じ all-or-nothing 排除が効く。"""
+    project_path = _copy_demo_project(tmp_path)
+    _add_melody_observation_audio_reference(
+        project_path, reference_audio="reference_take.wav"
+    )
+    loaded = load_recast_project(project_path)
+
+    result = build_recast_plan(loaded, variant="edm", backend="suno")
+
+    resolved = {p.resolve() for p in result.protected_inputs}
+    assert (loaded.project_dir / "m3_comparison_registry.yaml").resolve() in resolved
+    assert (loaded.project_dir / "registry.yaml").resolve() in resolved
+
+
 # --- R3-3 (Codex round3 P2): melody 診断は package 公開前に完了させる ---------
 
 
