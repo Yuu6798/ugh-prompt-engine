@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -2548,3 +2549,208 @@ def test_resolve_main_observation_anchor_scope_defers_to_caller_on_malformed_man
         observation_anchor_scope=None,
     )
     assert result is None
+
+
+# --------------------------------------------------------------------------- #
+# R10-2 (Codex round10 P2 対応) — plan 診断順序 = runtime のゲート順（表駆動）
+#
+# runtime `evaluate_melody_experimental_anchor` の実際のゲート順（1 設定不在
+# → 2 G1 → 3 axis_policy vs frozen axes → 4 参照入力 → 5 G2 帯域 → 6 M1
+# ロード → ... → 8 写像）に plan 診断の順序を揃えたことを、複数要因を同時に
+# 破壊した組み合わせで確認する——1 要因ずつのケースは R5-3/R8-2/R9-2 が既に
+# 個別に担保しているが、本テーブルは「どちらが先に報告されるか」という順序
+# そのものを検証する（旧実装は M1 可用性/参照入力を axis_policy より先に
+# 見ていたため、(a)/(b) のような組み合わせで誤った診断を先出ししていた）。
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    ("label", "anchor_axis_policy", "reference", "reference_audio_present", "m1_present", "expected"),
+    [
+        pytest.param(
+            "uncalibrated_axis_and_broken_m1",
+            {"contour": "hard", "interval": "elastic"},
+            "score",
+            None,
+            False,
+            "not expected (axis_policy_uncalibrated_axes: ['interval'])",
+            id="a-uncalibrated-axis-precedes-m1",
+        ),
+        pytest.param(
+            "audio_missing_and_broken_m1",
+            {"contour": "hard"},
+            "audio",
+            False,
+            False,
+            "not expected (author_input_missing)",
+            id="b-audio-missing-precedes-m1",
+        ),
+        pytest.param(
+            "only_m1_broken",
+            {"contour": "hard"},
+            "score",
+            None,
+            False,
+            "not expected (m1_registry_unavailable:",
+            id="c-m1-only-broken",
+        ),
+        pytest.param(
+            "all_gates_pass",
+            {"contour": "hard"},
+            "score",
+            None,
+            True,
+            "ok",
+            id="d-all-ok",
+        ),
+    ],
+)
+def test_plan_diagnosis_order_matches_runtime_gate_order(
+    tmp_path: Path,
+    label: str,
+    anchor_axis_policy: Dict[str, str],
+    reference: str,
+    reference_audio_present: Optional[bool],
+    m1_present: bool,
+    expected: str,
+) -> None:
+    """(a) 未校正軸（``interval`` が frozen 対象外）+ M1 破損の組では、旧実装は
+    M1 可用性を先に見て ``m1_registry_unavailable`` を報告していた（ユーザーを
+    M1 側の誤った修正へ誘導する）が、runtime は axis_policy 検証（M1 を読む前）
+    で先に ``RecastError`` になるため、plan も
+    ``axis_policy_uncalibrated_axes`` を報告すべき（M1 側の理由を報告しない）。
+
+    (b) audio 参照欠落 + M1 破損の組では、axis_policy が通過した後、runtime は
+    参照入力チェック（M1 ロードより前）で ``author_input_missing`` に落ちる
+    ため、plan も同じ理由を報告すべき（M1 側の理由を報告しない）。
+
+    (c) M1 のみ破損（他ゲートは全通過）では、M1 可用性チェックまで到達し
+    ``m1_registry_unavailable`` を報告する（R8-2 の回帰確認）。
+
+    (d) 全ゲート通過では ``ok``。"""
+    project_dir = tmp_path / f"project_{label}"
+    project_dir.mkdir()
+    _frozen_m3_registry_path(project_dir, axes=("contour",))
+    if m1_present:
+        shutil.copy(REAL_M1_REGISTRY, project_dir / "registry.yaml")
+    # m1_present=False の場合、registry.yaml を意図的に用意しない
+    # （`_load_m1_registry` が実在検証で `RecastError` を送出する経路）。
+
+    if reference == "audio":
+        if reference_audio_present:
+            (project_dir / "ref.wav").write_bytes(b"fake-audio")
+        melody_config = _melody_config(
+            reference="audio", reference_audio="ref.wav", reference_band="clear_lead"
+        )
+    else:
+        melody_config = _melody_config()
+
+    contract = _contract([_anchor(anchor_axis_policy, anchor_id="melody-1")])
+    warnings = melody_experimental_plan_warnings(
+        contract=contract,
+        melody_config=melody_config,
+        project_dir=project_dir,
+        backend_ref=_backend_ref(melody_take_band="clear_lead"),
+    )
+    assert len(warnings) == 1
+    assert warnings[0].startswith(
+        f"melody anchor 'melody-1': experimental observability — {expected}"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# R10-3 (Codex round10 P2 対応) — readback validator: 確定 status では判定
+# 参加軸（hard/elastic）に有限数値を要求する
+# --------------------------------------------------------------------------- #
+def test_entry_readback_rejects_preserved_with_none_value_for_judged_axis() -> None:
+    """(a) ``preserved`` + judged 軸（``contour``）の ``axes[axis] is None`` は
+    ``axis_evidence`` の再計算一致（R5-2）だけを見ていた旧 validator を素通り
+    していた矛盾 entry——``contour=-`` と描画されつつ保存を主張する report を
+    拒否する。"""
+    with pytest.raises(ValidationError, match="must carry a finite numeric value"):
+        ExperimentalAnchorEntry(
+            **_entry_kwargs(
+                adherence_status="preserved",
+                axes={"contour": None, "interval": 0.9},
+            )
+        )
+
+
+def test_entry_readback_rejects_preserved_with_nan_value_for_judged_axis() -> None:
+    """(b) judged 軸の値が NaN でも同様に拒否される
+    （``None`` と同じ「有限数値でない」不変条件違反）。"""
+    with pytest.raises(ValidationError, match="must carry a finite numeric value"):
+        ExperimentalAnchorEntry(
+            **_entry_kwargs(
+                adherence_status="preserved",
+                axes={"contour": float("nan"), "interval": 0.9},
+            )
+        )
+
+
+def test_entry_readback_rejects_preserved_with_inf_value_for_judged_axis() -> None:
+    """(b) judged 軸の値が +inf でも同様に拒否される。"""
+    with pytest.raises(ValidationError, match="must carry a finite numeric value"):
+        ExperimentalAnchorEntry(
+            **_entry_kwargs(
+                adherence_status="changed_within_policy",
+                axis_evidence={"contour": "strong", "interval": "weak"},
+                axes={"contour": 0.9, "interval": float("inf")},
+            )
+        )
+
+
+def test_entry_readback_accepts_confirmed_status_with_missing_free_axis_value() -> None:
+    """(c) free 軸（判定不参加）の値欠落は確定 status でも許容される——
+    judged 軸（hard/elastic）のみが対象で free 軸には本チェックが適用され
+    ない。"""
+    entry = ExperimentalAnchorEntry(
+        **_entry_kwargs(
+            adherence_status="preserved",
+            axis_policy={"contour": "hard", "interval": "elastic", "rhythm": "free"},
+            axes={"contour": 0.9, "interval": 0.9},  # rhythm は丸ごと欠落
+            axis_evidence={"contour": "strong", "interval": "strong"},
+        )
+    )
+    assert entry.adherence_status == "preserved"
+
+
+def test_entry_readback_accepts_confirmed_status_with_none_free_axis_value() -> None:
+    """(c) free 軸の値が明示的に ``None`` でも同様に許容される
+    （欠落だけでなく明示 ``None`` も本チェック対象外）。"""
+    entry = ExperimentalAnchorEntry(
+        **_entry_kwargs(
+            adherence_status="preserved",
+            axis_policy={"contour": "hard", "interval": "elastic", "rhythm": "free"},
+            axes={"contour": 0.9, "interval": 0.9, "rhythm": None},
+            axis_evidence={"contour": "strong", "interval": "strong"},
+        )
+    )
+    assert entry.adherence_status == "preserved"
+
+
+def test_entry_readback_exempts_not_observed_from_judged_axis_finite_check() -> None:
+    """(d) ``not_observed`` は本チェックからも免除される——judged 軸の値が
+    軒並み ``None`` でも読み戻しが拒否されない（R9-1 の
+    `test_entry_readback_accepts_builder_produced_not_observed_entry` と同型の
+    確認だが、本テストは R10-3 チェックの免除を明示的な観点として持つ）。"""
+    entry = ExperimentalAnchorEntry(
+        **_entry_kwargs(
+            adherence_status="not_observed",
+            axis_policy={"contour": "hard", "interval": "elastic"},
+            axes={"contour": None, "interval": None},
+            axis_evidence={},
+            reasons=["melody_config_missing"],
+        )
+    )
+    assert entry.adherence_status == "not_observed"
+
+
+def test_entry_readback_accepts_builder_produced_preserved_entry_with_finite_axes() -> None:
+    """(e) builder（`map_axis_policy_to_adherence` 経路）が実際に組む
+    preserved entry（全 judged 軸が有限数値を持つ）は読み戻しを引き続き通過
+    する——R10-3 が正規経路の entry を拒否しないことの回帰確認
+    （`test_entry_readback_accepts_consistent_preserved_entry` と同型だが、
+    本テストは新チェック導入後も正常系が壊れていないことを明示する）。"""
+    entry = ExperimentalAnchorEntry(**_entry_kwargs())
+    assert entry.adherence_status == "preserved"
+    assert entry.axes["contour"] is not None and math.isfinite(entry.axes["contour"])
+    assert entry.axes["interval"] is not None and math.isfinite(entry.axes["interval"])

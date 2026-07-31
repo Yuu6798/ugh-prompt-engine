@@ -248,6 +248,44 @@ class ExperimentalAnchorEntry(RecastReportModel):
         octave artifact 理由等）を含み、決定論的だが provenance 的な自由文字列
         を含むため `_axis_policy_status` の純粋な出力だけでは再現できない。
         本 validator は ``adherence_status`` の整合性のみを不変条件とする。
+
+        R10-3 (Codex round10 P2 対応・判定参加軸の有限数値要求): 確定
+        status（``preserved`` / ``changed_within_policy`` /
+        ``changed_outside_policy``）のとき、上の再計算一致に加え、判定参加軸
+        （hard/elastic のみ——free 軸は R2-5 裁定どおり判定不参加のため
+        `axes` 欠落/``None`` を許容する）の各軸について ``axes[axis]`` が
+        存在し、``None`` でなく ``math.isfinite`` を満たすことを要求する。
+        旧実装は ``adherence_status="preserved"`` + ``axis_evidence=
+        {"contour": "strong"}`` + ``axes={"contour": None}`` のような矛盾
+        entry を素通ししていた——``axis_evidence`` の再計算一致だけを見ており
+        ``axes`` 自体の値は一切検証していなかったため、``contour=-`` と
+        描画されつつ保存（preserved）を主張する report が読み戻しを通って
+        いた。builder 側（`evaluate_melody_experimental_anchor` の
+        `_axis_policy_status`/`map_axis_policy_to_adherence` 経路）は
+        judged 軸の evidence が確定するとき常に対応する数値軸を伴う
+        （`melody/comparison.py::_derive_evidence` は ``axes.get(axis) is
+        None`` の軸を verdict 計算から除外し、結果として axis_evidence が
+        欠落/``uncalibrated`` になり ``not_observed`` に落ちるため、確定
+        status に到達する judged 軸は必ず数値を持つ）——本チェックは
+        builder が保証済みの不変条件を読み戻し時にも強制するだけで、正規
+        経路の entry を拒否しない。``not_observed`` は本チェックからも免除
+        する（元々「測れない」という保守側方向の結論であり、上の
+        ``adherence_status`` 再計算免除と同じ理由）。
+
+        **境界宣言（この validator のラチェット終端）**: 本 validator が
+        保証するのは (a) axis_policy の shape（非空・domain 語彙内・
+        hard/elastic ≥1、R9-1）、(b) ``adherence_status`` と
+        ``axis_evidence`` の写像整合（R5-2）、(c) 確定 status における
+        judged 軸の有限数値の存在（本 R10-3）、の 3 点に限る。**M3 の閾値
+        （`evidence_thresholds`/registry）から数値→verdict を再導出する
+        ことはしない**——それには registry を readback 時にも要求すること
+        になり、M3 比較器（`melody/comparison.py::_derive_evidence`）が
+        既に持つ意味論（``strong_min``/``none_max`` 境界判定）を報告層へ
+        二重実装することになる。数値と verdict の対応そのものの正しさは
+        producer 側（M3 比較器）と provenance（``m3_registry_sha256``・
+        ``m1_registry_sha256``・sequence hash 等）が担保する——readback
+        validator の責務ではない。以後この 3 点の外側への readback 強化は
+        本 PR（#237）では扱わない。
         """
         _validate_axis_policy(
             self.axis_policy,
@@ -265,6 +303,18 @@ class ExperimentalAnchorEntry(RecastReportModel):
                 f"axis_policy + axis_evidence via the D-1 mapping ({expected_status!r}) "
                 "(R5-2 readback invariant)"
             )
+        judged_axes = sorted(
+            axis for axis, mode in self.axis_policy.items() if mode in ("hard", "elastic")
+        )
+        for axis in judged_axes:
+            value = self.axes.get(axis)
+            if value is None or not math.isfinite(value):
+                raise ValueError(
+                    f"ExperimentalAnchorEntry '{self.anchor_id}': adherence_status "
+                    f"{self.adherence_status!r} is a confirmed status but axes[{axis!r}] is "
+                    f"{value!r} — judged (hard/elastic) axes must carry a finite numeric "
+                    "value once adherence_status is confirmed (R10-3 readback invariant)"
+                )
         return self
 
 
@@ -1418,6 +1468,28 @@ def melody_experimental_plan_warnings(
     集合に揃えることで、plan の診断結果が実行時の fail-closed 判定と常に
     一致するようにする（runtime 側 `evaluate_melody_experimental_anchor` は
     変更しない）。
+
+    R10-2 (Codex round10 P2 対応・診断順序を runtime のゲート順に一致):
+    旧実装の診断順は 設定不在 → G1 → G2 帯域 → M1 可用性 → 参照入力
+    （audio 実在） → axis_policy（anchor 別、最後に一括）だったが、これは
+    runtime `evaluate_melody_experimental_anchor` の実際のゲート順
+    （モジュール冒頭 docstring・当該関数 docstring の 8 段リストが single
+    source: 1 設定不在 → 2 G1 → 3 axis_policy vs frozen axes
+    （``RecastError``・anchor 別） → 4 参照入力 → 5 G2 帯域 → 6 M1 ロード＋
+    抽出＋compare → 7 G3 → 8 写像）と食い違っていた——例えば「未校正軸
+    宣言 + M1 破損」の組では、旧 plan は M1 可用性を先に見て
+    ``m1_registry_unavailable`` を報告し、ユーザーを M1 側の誤った修正へ
+    誘導していたが、runtime は axis_policy 検証（M1 を読む前）で先に
+    ``RecastError`` になる。診断順を runtime と同じ
+    設定不在 → G1 → axis_policy → 参照入力 → G2 帯域 → M1 可用性 → ok に
+    揃える（runtime 側は変更しない・R6-2 と同方針）。
+
+    axis_policy は anchor 別に異なりうるため、G1 通過後は anchor ごとに
+    ``axis_policy vs frozen_axes`` を最初に判定し、そこを通過した anchor
+    に限って（config 全体で共有する）参照入力 → G2 → M1 の診断を評価する
+    （複数 anchor が axis_policy を通過した場合、その診断結果は
+    anchor 間で共有され重複計算しない——`_melody_plan_downstream_diagnosis`
+    が最初の呼び出しでのみ計算する）。
     """
     melody_anchors = _filter_melody_anchors_by_observation_scope(
         _melody_anchors_with_axis_policy(contract), observation_anchor_scope
@@ -1446,84 +1518,58 @@ def melody_experimental_plan_warnings(
             for anchor in melody_anchors
         ]
 
-    band_reason = _check_melody_take_band(backend_ref.melody_take_band)
-    # R2-6: audio_reference は原曲側 G2 も先出しする（テイク側が
-    # 先に不成立なら主因はテイク側のまま — band_reason を優先評価）。
-    reference_band_reason = (
-        _check_melody_take_band(melody_config.reference_band)
-        if melody_config.reference == "audio"
-        else None
-    )
-    if band_reason is not None or reference_band_reason is not None:
-        return [
-            f"melody anchor '{anchor.anchor_id}': experimental observability — "
-            "not expected (band_out_of_validation)"
-            for anchor in melody_anchors
-        ]
-
-    # R8-2 (Codex round8 P2 対応): G1（M3 校正状態）通過後も、resolved M1
-    # registry パスの可用性（実在/構造/型/重複キー）を検査する——R5-1 が
-    # 存在検証を `_load_m1_registry`（G1 通過後の実行時ゲート）まで意図的に
-    # 遅延させた結果、plan 診断はここまで M1 の中身を一切見ておらず、
-    # 校正済み M3 + M1 欠落/破損の組でも `experimental observability — ok`
-    # を返していた——実行時 `evaluate_melody_experimental_anchor` は
-    # `_load_m1_registry` 呼び出しで同じ入力を検証し `RecastError` →
-    # `observation_incomplete` に落ちるため、plan の ok と ingest の
-    # 決定論的失敗が食い違う（plan は「実行時に何が起きるか」の事前診断
-    # という役割上、この不一致は plan の診断価値を損なう）。
-    # ここで `_load_m1_registry` を try/except (RecastError) で呼んで検査する
-    # ことで、M1 側の必須構造・型検証知識をこのモジュールへ再実装せず
-    # loader を再利用しつつ（欠落・構造不正・型不正・重複キーの全 failure を
-    # 一括捕捉）、plan 診断を実行時ゲートと同じ判定に揃える。plan は診断層
-    # なので raise はしない——警告 1 行として全 melody anchor に一律出す。
-    try:
-        _load_m1_registry(m1_registry_path)
-    except RecastError as exc:
-        return [
-            f"melody anchor '{anchor.anchor_id}': experimental observability — "
-            f"not expected (m1_registry_unavailable: {exc})"
-            for anchor in melody_anchors
-        ]
-
-    # R9-2 (Codex round9 P2 対応・runtime とのパリティ): G1/G2/M1 可用性を
-    # 通過した後、``reference == "audio"`` の resolved 参照ファイルが実在する
-    # かを診断する。旧実装はここで参照ファイルの実在を一切見ておらず、M3/M1
-    # が正常で両帯域が校正済み（clear_lead）でも、参照ファイル欠落時に plan
-    # が ``experimental observability — ok`` を返していた——実行時
-    # （`evaluate_melody_experimental_anchor` step 4・author-input チェック）
-    # は同じ入力から決定論的に ``not_observed(author_input_missing)`` に落ちる
-    # ため、plan の ok と ingest の not_observed が食い違っていた（R8-2 と
-    # 同型の runtime パリティ問題）。`resolve_melody_observation_paths` が
-    # 既に ``reference_audio_require_exists=False`` で解決済みの
-    # ``reference_audio_path`` の実在（``Path.is_file()``）だけを検査し
-    # （封じ込め検証・パス解決ロジック自体は再実装せず再利用する）、欠落
-    # なら runtime と同じ理由語彙 ``author_input_missing`` を先出しする——
-    # plan は診断層のため raise しない。``reference == "score"`` は
-    # `reference_audio_path` が常に ``None``（`resolve_melody_observation_
-    # paths` docstring 参照）でありこの分岐に入らないため対象外——
-    # score_reference 側の author-input 診断（melody artifact 不在・bpm TODO）
-    # は anchor 個別の artifact 内容/score 側の話であり plan 時点では機械
-    # 判定できないため、本ラウンドのスコープ外のまま据え置く。
-    if melody_config.reference == "audio" and (
-        reference_audio_path is None or not reference_audio_path.is_file()
-    ):
-        return [
-            f"melody anchor '{anchor.anchor_id}': experimental observability — "
-            "not expected (author_input_missing)"
-            for anchor in melody_anchors
-        ]
-
-    # R5-3/R6-2: G1（全体の校正状態）通過後も、anchor ごとの axis_policy が
-    # frozen axes 集合に含まれない軸を指定していないか個別に突合する。
-    # R6-2 (Codex round6 P2 対応): 突合対象は axis_policy の全キー集合
-    # （hard/elastic/free 問わず）——runtime `evaluate_melody_experimental_
-    # anchor` の axis_policy 検証（``set(axis_policy) - frozen_axes``）と
-    # 揃える（`melody_experimental_plan_warnings` docstring の R6-2 節参照。
-    # free 軸は判定（`map_axis_policy_to_adherence`）には不参加のままだが、
-    # 「frozen registry で校正されているか」という plan の事前診断は全軸を
-    # 対象にしないと runtime の fail-closed と食い違う）。
+    # R10-2: G1 通過後、axis_policy vs frozen axes（anchor 別・runtime step 3）
+    # を最初に突合する。R5-3/R6-2 のとおり突合対象は axis_policy の全キー
+    # 集合（hard/elastic/free 問わず）——runtime `evaluate_melody_
+    # experimental_anchor` の axis_policy 検証（``set(axis_policy) -
+    # frozen_axes``）と揃える。
     assert m3_config is not None  # g1_reason is None means config resolved
     frozen_axes = set((m3_config.evidence_thresholds.axes or {}).keys())
+
+    # R10-2: 参照入力（4）→ G2 帯域（5）→ M1 可用性（6・runtime では抽出直前に
+    # 読む）の診断は axis_policy 通過後の全 anchor で共有される（melody_config
+    # は plan 呼び出し全体で単一）ため、必要になった時点で一度だけ計算する。
+    downstream_diagnosis: Optional[str] = None
+
+    def _resolve_downstream_diagnosis() -> str:
+        # R9-2 (Codex round9 P2 対応・runtime とのパリティ): axis_policy を
+        # 通過した後、``reference == "audio"`` の resolved 参照ファイルが
+        # 実在するかを診断する（runtime step 4・author-input チェックと同じ
+        # 理由語彙 ``author_input_missing``）。``reference == "score"`` は
+        # `reference_audio_path` が常に ``None``（`resolve_melody_
+        # observation_paths` docstring 参照）でこの分岐に入らないため対象外
+        # ——score_reference 側の author-input 診断（melody artifact 不在・
+        # bpm TODO）は anchor 個別の artifact 内容/score 側の話であり plan
+        # 時点では機械判定できないため、本ラウンドのスコープ外のまま据え置く。
+        if melody_config.reference == "audio" and (
+            reference_audio_path is None or not reference_audio_path.is_file()
+        ):
+            return "not expected (author_input_missing)"
+
+        # G2 帯域（runtime step 5）。R2-6: audio_reference は原曲側 G2 も
+        # 先出しする（テイク側が先に不成立なら主因はテイク側のまま —
+        # band_reason を優先評価）。
+        band_reason = _check_melody_take_band(backend_ref.melody_take_band)
+        reference_band_reason = (
+            _check_melody_take_band(melody_config.reference_band)
+            if melody_config.reference == "audio"
+            else None
+        )
+        if band_reason is not None or reference_band_reason is not None:
+            return "not expected (band_out_of_validation)"
+
+        # R8-2 (Codex round8 P2 対応): G1/axis_policy/参照入力/G2 通過後も、
+        # resolved M1 registry パスの可用性（実在/構造/型/重複キー）を検査
+        # する（runtime step 6 の `_load_m1_registry` 呼び出しと同じ loader
+        # を再利用——M1 側の必須構造・型検証知識をこのモジュールへ
+        # 再実装しない）。plan は診断層のため raise しない。
+        try:
+            _load_m1_registry(m1_registry_path)
+        except RecastError as exc:
+            return f"not expected (m1_registry_unavailable: {exc})"
+
+        return "ok"
+
     warnings: List[str] = []
     for anchor in melody_anchors:
         assert anchor.axis_policy is not None  # opt-in filter guarantees this
@@ -1532,7 +1578,9 @@ def melody_experimental_plan_warnings(
         if uncalibrated_axes:
             diagnosis = f"not expected (axis_policy_uncalibrated_axes: {uncalibrated_axes})"
         else:
-            diagnosis = "ok"
+            if downstream_diagnosis is None:
+                downstream_diagnosis = _resolve_downstream_diagnosis()
+            diagnosis = downstream_diagnosis
         warnings.append(
             f"melody anchor '{anchor.anchor_id}': experimental observability — {diagnosis}"
         )

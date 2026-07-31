@@ -1241,31 +1241,26 @@ def _observe_and_report(
         typer.echo(f"Error: observation failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
-    observed_note = (
-        f"anchors={len(observation.report.anchors)} "
-        f"package_sha256={observation.report.package_sha256[:12]}"
-    )
-    try:
-        record_state(
-            loaded.project_dir,
-            variant,
-            backend,
-            "observed",
-            note=observed_note,
-            inputs_digest=artifacts.result.inputs_digest,
-            plan_sha256=plan_sha256,
-            observation_digest=current_observation_digest,
-            protected_inputs=prepared.protected_input_paths,
-        )
-    except (OSError, ValueError) as exc:
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
-
     # M4c (Design Memo M4 §5): axis_policy 付き melody anchor があれば
     # experimental 節を組み立てる。main の anchors/coverage（上の
     # `observation.report`/`build_recast_report` 呼び出し）には一切触れない
     # ——会計分離。抽出器注入 seam（`route_runner`）は library 関数のみが
     # 露出し、CLI からは常に既定（実抽出器）を使う。
+    #
+    # R10-1 (Codex round10 P2 対応): この収集（CREPE 抽出を含みうる）は
+    # 「durable な `observed` 状態を記録する**前**」に実行する
+    # （all-build-then-publish、R3-3 で確立した規律）。旧実装は `observed` を
+    # 先に記録してからここへ来ていたため、CREPE 抽出中に
+    # KeyboardInterrupt/SystemExit（BaseException・既存の
+    # `except (OSError, ValueError, RecastError)` は通常例外のみ捕捉し
+    # BaseException は素通しする）で中断すると、experimental
+    # 節・recast_report・summary が一切生成されていないのに `recast_state.json`
+    # には「観測完了 (`observed`)」が残ってしまっていた。呼び出し引数は
+    # いずれも上の `observe_generated_artifact` 呼び出し結果（`observation`）に
+    # 依存しない（`anchor_scope` は `main_anchor_scope` 算出前の raw scope を
+    # そのまま使う）ため、素直に呼び出し位置を前倒しするだけで解決する
+    # （ロールバック方式は使わない）。既存の「失敗時は
+    # `observation_incomplete` を記録して exit」という経路自体は維持する。
     try:
         # R3-1 (Codex round3 P2 対応): main と同じ `anchor_scope`（非空
         # `observation.anchors` 集合、`resolve_main_observation_anchor_scope`
@@ -1304,6 +1299,26 @@ def _observe_and_report(
             typer.echo(f"Error: {record_exc}", err=True)
             raise typer.Exit(code=1) from record_exc
         typer.echo(f"Error: melody experimental observation failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    observed_note = (
+        f"anchors={len(observation.report.anchors)} "
+        f"package_sha256={observation.report.package_sha256[:12]}"
+    )
+    try:
+        record_state(
+            loaded.project_dir,
+            variant,
+            backend,
+            "observed",
+            note=observed_note,
+            inputs_digest=artifacts.result.inputs_digest,
+            plan_sha256=plan_sha256,
+            observation_digest=current_observation_digest,
+            protected_inputs=prepared.protected_input_paths,
+        )
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
     recast_report = build_recast_report(
