@@ -8629,6 +8629,12 @@ _VREMIX_CLIPS = {
 }
 
 
+def _vremix_ids(level: str) -> "List[str]":
+    """当該水準での entry id 群（§6.2: `vremix_{clip_id}_{bed_id}_{level_tag}`）。"""
+    tag = harness._M2E_LEVEL_TAGS[level]
+    return [f"{clip_id.rsplit('_', 1)[0]}_{tag}" for clip_id in _VREMIX_CLIPS]
+
+
 def _m2e_fake_runner(shift_cents: float = 0.0):
     # entry id の `level_tag` は水準ごとに変わる（§6.2 の id 規約）。参照表は
     # 全水準ぶんの id を持たせておく——runner は id からしか正解を引けないため。
@@ -9189,7 +9195,8 @@ def test_cell_store_never_reuses_a_record_across_level(tmp_path: Path) -> None:
     _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
     report2 = _m2e_run(tmp_path, level="0dB", cell_store=cell_store, repeat_index=0)
     assert report2["cells_resumed"] == []
-    assert sorted(report2["cells_measured"]) == sorted(_VREMIX_CLIPS)
+    # entry id は水準ごとに `level_tag` が変わる（§6.2 の id 規約）。
+    assert sorted(report2["cells_measured"]) == sorted(_vremix_ids("0dB"))
 
 
 def test_cell_store_never_reuses_a_record_across_category(tmp_path: Path) -> None:
