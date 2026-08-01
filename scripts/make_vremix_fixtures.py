@@ -95,6 +95,19 @@ def read_audio(path: Path) -> Tuple[np.ndarray, int]:
     return np.asarray(data, dtype=np.float64), int(sample_rate)
 
 
+def read_vocals_stem_for_screening(path: Path) -> Tuple[np.ndarray, int]:
+    """**スクリーニング専用**に分離済み vocals stem を読む（`_forbid_vocals` を通さない）。
+
+    `--vocals-stem` は §3.4 の `residual_db` を測るための入口であり、渡されるのは
+    Demucs/MUSDB の慣例名 `vocals.wav` である。ここで読む信号は**測る対象**であって
+    ミックスへ入る素材ではない——`load_bed_mono` / `read_stem_pinned` /
+    `read_audio` の門は据え置きなので、ベッド構成が vocals を吸い込む経路は無い。
+    """
+    path = Path(path)
+    data, sample_rate = sf.read(str(path), dtype="float64", always_2d=False)
+    return np.asarray(data, dtype=np.float64), int(sample_rate)
+
+
 # ---------------------------------------------------------------------------
 # §9.2 canonical decode（ソース stem 専用・native 整数のまま hash する）
 # ---------------------------------------------------------------------------
@@ -375,15 +388,23 @@ def load_bed_mono(
     return bed_mono, sample_rate
 
 
-def load_voice(path: Path) -> Tuple[np.ndarray, int]:
-    """vocadito clip をモノ float64 で読む（**再エンコードしない**）。"""
-    data, rate = read_audio(path)
+def load_voice(payload: bytes, *, where: str) -> Tuple[np.ndarray, int]:
+    """**pin 照合済みの bytes そのもの**から vocadito clip をモノ float64 で復号する。
+
+    パスを渡して開き直すと、照合したファイルと混ぜたファイルが別物になりうる
+    （照合と読み出しの間に差し替えられるケース）。生成物は内部整合するので下流から
+    検出できない。`resolve_clip_bytes` が読んだスナップショットを唯一の入力とする。
+    """
+    import io
+
+    data, rate = sf.read(io.BytesIO(payload), dtype="float64", always_2d=False)
+    data = np.asarray(data, dtype=np.float64)
     if data.ndim != 1:
         raise GenerationError(
-            f"{path}: vocadito clip はモノでなければならない（shape={data.shape}） "
+            f"{where}: vocadito clip はモノでなければならない（shape={data.shape}） "
             "(fail-closed)"
         )
-    return data, rate
+    return data, int(rate)
 
 
 # ---------------------------------------------------------------------------
@@ -533,23 +554,32 @@ def _sha256_file(path: Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def resolve_clip_paths(
+def resolve_clip_bytes(
     vocadito_root: Path, clip_id: str, pin: Dict[str, str]
-) -> Tuple[Path, Path]:
-    """clip の音声/注釈パスを解決し、**既存 pin と bytes 一致**することを要求する。"""
+) -> Tuple[bytes, bytes]:
+    """clip の音声/注釈を **1 回だけ読み**、その bytes が既存 pin と一致することを要求する。
+
+    返すのはパスではなく **bytes スナップショット**である。照合したファイルを後から
+    開き直すと、その間に差し替えられた場合に「pin は通ったが混ぜた/複製したのは別の
+    bytes」が成立し、生成物は内部整合するので下流から検出できない（ベッド stem 側の
+    `read_stem_pinned` と同じ規律）。
+    """
     audio = Path(vocadito_root) / "Audio" / f"{clip_id}.wav"
     annotation = Path(vocadito_root) / "Annotations" / "F0" / f"{clip_id}_f0.csv"
+    payloads: List[bytes] = []
     for path, key in ((audio, "expected_audio_sha256"), (annotation, "expected_annotation_sha256")):
         if not path.is_file():
             raise GenerationError(f"{path} が無い (fail-closed)")
-        actual = _sha256_file(path)
+        data = path.read_bytes()
+        actual = hashlib.sha256(data).hexdigest()
         if actual != pin[key]:
             raise GenerationError(
                 f"{path}: sha256 {actual} が既存 pin {pin[key]} と不一致; vocadito の "
                 "再取得・再エンコードは禁止であり、pin 側を実体へ合わせることもしない "
                 "(fail-closed)"
             )
-    return audio, annotation
+        payloads.append(data)
+    return payloads[0], payloads[1]
 
 
 def compute_n_max(vocadito_root: Path, clips: Dict[str, Dict[str, str]]) -> Tuple[int, float]:
@@ -640,9 +670,9 @@ def build(
     # 解決できる必要があるので out_dir 配下へ **bytes 複製**する（再エンコードしない）。
     annotation_pins: Dict[str, str] = {}
     for clip_id in sorted(clips):
-        _audio, annotation = resolve_clip_paths(vocadito_root, clip_id, clips[clip_id])
+        _audio, annotation = resolve_clip_bytes(vocadito_root, clip_id, clips[clip_id])
         destination = annotation_dir / f"{clip_id}_f0.csv"
-        destination.write_bytes(annotation.read_bytes())
+        destination.write_bytes(annotation)   # 照合した bytes をそのまま複製する
         annotation_pins[clip_id] = clips[clip_id]["expected_annotation_sha256"]
 
     summary: Dict[str, Any] = {"levels": {}, "beds": slugs}
@@ -655,10 +685,10 @@ def build(
             bed_mono, bed_rate = beds[track]
             bed_id = slugs[track]
             for clip_id in sorted(clips):
-                audio_path, _annotation = resolve_clip_paths(
+                audio_payload, _annotation = resolve_clip_bytes(
                     vocadito_root, clip_id, clips[clip_id]
                 )
-                voice, voice_rate = load_voice(audio_path)
+                voice, voice_rate = load_voice(audio_payload, where=f"clip {clip_id!r}")
                 if bed_rate != voice_rate:
                     raise GenerationError(
                         f"sample rate 不一致（bed {bed_rate} != clip {voice_rate}）; "
@@ -744,7 +774,17 @@ def _cmd_screen(args: argparse.Namespace) -> int:
     if args.n_max is not None:
         window = tile_to_length(bed_mono, int(args.n_max), bed_rate)
     if args.vocals_stem is not None:
-        stem, stem_rate = read_audio(Path(args.vocals_stem))
+        stem, stem_rate = read_vocals_stem_for_screening(Path(args.vocals_stem))
+        if stem.ndim == 2:
+            # 分離器の stem はステレオで出る。bed 側と同じ規約でモノ化する
+            # （`load_bed_mono` の `0.5 * (L + R)`）——両者を別規約でモノ化すると
+            # `residual_db` の分子分母が別の前処理を受ける。
+            if stem.shape[1] != 2:
+                raise GenerationError(
+                    f"{args.vocals_stem}: 1ch/2ch 以外の stem（shape={stem.shape}） "
+                    "(fail-closed)"
+                )
+            stem = 0.5 * (stem[:, 0] + stem[:, 1])
         if stem_rate != bed_rate:
             raise GenerationError(
                 f"分離 stem の rate {stem_rate} が bed の {bed_rate} と違う (fail-closed)"

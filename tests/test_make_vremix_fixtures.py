@@ -274,6 +274,52 @@ def test_read_audio_refuses_vocals_stem(tmp_path: Path) -> None:
         mk.read_audio(path)
 
 
+def test_screening_reads_a_conventional_vocals_stem(tmp_path: Path) -> None:
+    """`--vocals-stem vocals.wav` は §3.4 の測定対象であって混ぜる素材ではない。
+
+    ベッド構成側の門（`read_audio`）は据え置きであることも同時に固定する。
+    """
+    path = tmp_path / "vocals.wav"
+    sf.write(str(path), np.stack([_tone(512, 0.1), _tone(512, 0.1, 7)], axis=1), 44100)
+    data, rate = mk.read_vocals_stem_for_screening(path)
+    assert rate == 44100 and data.shape == (512, 2)
+    with pytest.raises(mk.GenerationError, match="vocals stem"):
+        mk.read_audio(path)
+
+
+def _write_clip(root: Path, clip_id: str) -> dict:
+    (root / "Audio").mkdir(parents=True, exist_ok=True)
+    (root / "Annotations" / "F0").mkdir(parents=True, exist_ok=True)
+    audio = root / "Audio" / f"{clip_id}.wav"
+    sf.write(str(audio), _tone(4096, 0.2).astype(np.float32), 44100, subtype="FLOAT")
+    annotation = root / "Annotations" / "F0" / f"{clip_id}_f0.csv"
+    annotation.write_text("0.000,220.0\n", encoding="utf-8")
+    return {
+        "expected_audio_sha256": hashlib.sha256(audio.read_bytes()).hexdigest(),
+        "expected_annotation_sha256": hashlib.sha256(annotation.read_bytes()).hexdigest(),
+    }
+
+
+def test_resolve_clip_bytes_returns_the_snapshot_it_verified(tmp_path: Path) -> None:
+    """P2 (TOCTOU): 照合した bytes をそのまま返す（後から開き直さない）。"""
+    root = tmp_path / "vocadito"
+    pin = _write_clip(root, "vocadito_1")
+    audio, annotation = mk.resolve_clip_bytes(root, "vocadito_1", pin)
+    assert hashlib.sha256(audio).hexdigest() == pin["expected_audio_sha256"]
+    assert hashlib.sha256(annotation).hexdigest() == pin["expected_annotation_sha256"]
+    # 返った bytes から直接復号できる（ミックスはこのスナップショットだけを使う）。
+    voice, rate = mk.load_voice(audio, where="vocadito_1")
+    assert rate == 44100 and voice.ndim == 1
+
+
+def test_resolve_clip_bytes_rejects_a_pin_mismatch(tmp_path: Path) -> None:
+    root = tmp_path / "vocadito"
+    pin = _write_clip(root, "vocadito_1")
+    pin["expected_audio_sha256"] = "0" * 64
+    with pytest.raises(mk.GenerationError, match="既存 pin"):
+        mk.resolve_clip_bytes(root, "vocadito_1", pin)
+
+
 def _write_bed(bed_dir: Path, *, sample_rate: int = 44100, n: int = 8192, rates=None) -> None:
     """合成ベッドを **PCM_16** で書く（実素材 MUSDB18-HQ と同じ整数 PCM）。
 

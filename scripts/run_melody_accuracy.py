@@ -3736,6 +3736,43 @@ def load_external_fixtures_with_raw(
     return fixtures_doc, sha256, data
 
 
+def _require_external_fixtures_level_match(
+    fixtures_doc: Dict[str, Any], *, level: Optional[str], where: str
+) -> None:
+    """M2e pin ファイルが名乗る水準と、run が要求した `--level` を束縛する（fail-closed）。
+
+    `fixtures_*.yaml` は水準ごとに 1 本あり、top-level `level` に自分がどの水準の
+    ミックスを pin しているかを書いている。run 側が `--level` をラダー所属だけで
+    検証すると、`fixtures_m06.yaml` を `--level +12dB` で回した場合に **−6 dB の音を
+    測って +12 dB のゲートとして row を刻む**ことが成立する。row は内部整合するので
+    後段からは見えず、ゲート判定と破断曲線の両方が汚染される。
+
+    束縛はここ 1 箇所で足りる: manifest の音声 bytes は `expected_audio_sha256` で
+    fixtures の各 entry へ既に縛られているため、`level` を fixtures 側で確定すれば
+    「どの水準の音を測っているか」は一意に決まる。
+    """
+    if fixtures_doc.get("schema_version") != _EXPECTED_M2E_EXTERNAL_FIXTURES_SCHEMA:
+        return
+    declared = fixtures_doc.get("level")
+    if declared not in _M2E_LEVEL_LADDER:
+        raise ValueError(
+            f"{where}: {_EXPECTED_M2E_EXTERNAL_FIXTURES_SCHEMA} の 'level' {declared!r} が "
+            f"凍結ラダー {list(_M2E_LEVEL_LADDER)} に無い; どの水準を pin したのか宣言の "
+            "無い fixtures で測らない (fail-closed)"
+        )
+    if level is None:
+        raise ValueError(
+            f"{where}: fixtures が水準 {declared!r} を宣言しているのに run 側の level が "
+            "無い (fail-closed)"
+        )
+    if declared != level:
+        raise ValueError(
+            f"{where}: fixtures が pin した水準 {declared!r} と run が要求した水準 "
+            f"{level!r} が食い違う; 別水準の音を測って要求水準の row として刻むと、"
+            "ゲート判定と破断曲線の両方が汚染される (fail-closed)"
+        )
+
+
 def load_external_fixtures(path: Path = EXTERNAL_FIXTURES_PATH) -> Tuple[Dict[str, Any], str]:
     """`m2c_external_fixtures.yaml` を single read で (parsed dict, sha256) として返す。
 
@@ -4583,6 +4620,12 @@ def _measure_or_resume_external_clip_row(
             "audio_sha256": inputs.audio_sha256,
             "annotation_sha256": inputs.annotation_sha256,
             "env_digest": env_digest,
+            # `env_digest` は third-party の版しか畳まない——**自前コードを変えても
+            # 動かない**。生成器コード pin をセル同一性へ入れておかないと、抽出・
+            # 前処理・採点を書き換えた次のセッションが旧セルを resume し、report は
+            # 新しい `generator_code_sha256` を名乗る（= 古い測定を現行コードの結果と
+            # して報告する）。evaluate の再測定まで検出が遅れるのも高くつく。
+            "generator_code_sha256": _LOADED_GENERATOR_CODE_SHA256,
             "clip_row": row,
             "elapsed_seconds": elapsed_seconds,
             "workers": workers,
@@ -4618,6 +4661,9 @@ def _run_external_category(
     ならこれらのキーは一切現れない（挙動無変更の契約）。
     """
     fixtures_doc, fixtures_sha256 = load_external_fixtures(external_fixtures_path)
+    _require_external_fixtures_level_match(
+        fixtures_doc, level=level, where=f"run_accuracy: category {category!r}"
+    )
     fixtures = fixtures_doc["fixtures"]
     if not fixtures:
         raise ValueError(
@@ -5103,6 +5149,11 @@ def _cell_record_mismatches(
         "audio_sha256": audio_sha256,
         "annotation_sha256": annotation_sha256,
         "env_digest": env_digest,
+        # 生成器コードが変われば同一セルでも別の測定である（`env_digest` は
+        # third-party の版しか見ないため、自前コードの変更を捕まえられない）。
+        # 旧世代のレコードにはこのキーが無く `None` として不一致になる——それが
+        # 正しい: 素性の分からないセルを黙って resume しない。
+        "generator_code_sha256": _LOADED_GENERATOR_CODE_SHA256,
     }
     mismatches: "List[Dict[str, Any]]" = []
     for field, expected in current.items():

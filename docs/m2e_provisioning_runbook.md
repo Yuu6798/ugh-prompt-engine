@@ -415,17 +415,34 @@ python scripts/make_vremix_fixtures.py build \
 ```bash
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
 python scripts/run_melody_accuracy.py \
-    --out <out>/m2e_run_<shard>_<repeat>.json \
+    --out <out>/m2e_run_<level_tag>_<repeat>.json \
     --categories V_remix_real_direct V_remix_real_stem \
     --level <+12dB|+6dB|0dB|-6dB> \
     --external-manifest  <out>/manifest_<level_tag>.json \
     --external-fixtures  <out>/fixtures_<level_tag>.yaml \
-    --m2e-bars tests/fixtures/melody_bench/m2e_accuracy_bars.yaml
+    --m2e-bars tests/fixtures/melody_bench/m2e_accuracy_bars.yaml \
+    --cell-store   <out>/cell_store \
+    --repeat-index <0|1>
 ```
 
-- **1 回 = 1 シャード**、壁時計上限 `B_session = 2.0 時間`。**延長しない。**
-  超過は異常ではなく設計に織り込まれた通常状態（§8.6）。
-- 未完セルは「未完」として記録し（失敗値を書かない）、次回 `env_digest` 一致で再開。
+**`--cell-store` / `--repeat-index` は本測定では必須である**（片方だけ渡すと
+fail-closed で停止する）。これを省いた 1 回の呼び出しは 1 セルも保存せず、
+`B_session` 到達時に**その回の測定が丸ごと失われる**。
+
+**現時点の「1 回」の粒度**（実装の実態を、あるべき姿で上書きしない）:
+
+- 呼び出しの粒度は **(1 水準 × 2 アーム) = 160 セル**である。**シャード選択子は
+  まだ無い**（`--categories` と `--level` より細かく切る引数が存在しない）。
+  `--workers` は記録専用で、run を並列化しない。
+- したがって `m2e_r2_shard_map.yaml`（§8.5）の 1 シャードは、**同じ
+  `--cell-store` を渡した再呼び出しの連なり**として実現する。`B_session` で
+  打ち切っても完了セルはストアに残り、次回は `env_digest` 一致セルを飛ばして
+  続きから走る。**未完セルを「失敗値」で埋めない。**
+- 呼び出し 1 回が `B_session = 2.0 時間`。**延長しない。** 超過は異常ではなく
+  設計に織り込まれた通常状態（§8.6）。
+- 細粒度シャード・evaluate 並列化は **C2 / C3**（rev.6 §8.9.2）で入る。それらが
+  landing するまでは上の粒度が実態であり、**r6 は code change を禁じるため
+  C2 / C3 は r6 開始前に済ませておく**（§8.9.4）。
 - `env_digest` 不一致のセルを**スキップ扱いにしない**。複数環境のセルを 1 帯として
   合算しない（§8.7）。
 - **P-d（実測 PR）に code change を 1 行でも入れたら、その実測は無効**（§10）。

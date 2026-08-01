@@ -8543,15 +8543,24 @@ def test_level_ladder_and_tags_are_frozen_in_declaration_order() -> None:
 
 
 def _write_m2e_external_fixture_set(
-    tmp_path: Path, clip_specs: "Dict[str, Tuple[List[float], List[float]]]"
+    tmp_path: Path,
+    clip_specs: "Dict[str, Tuple[List[float], List[float]]]",
+    *,
+    level: str = "+12dB",
 ) -> Tuple[Path, Path]:
-    """M2e 用の manifest + `m2e-external-fixtures/0.1` の pin ファイルを書く。"""
+    """M2e 用の manifest + `m2e-external-fixtures/0.1` の pin ファイルを書く。
+
+    実生成物と同じく **top-level `level`** を持つ（`make_vremix_fixtures.build` は
+    水準ごとに 1 本書き、そこに自分がどの水準を pin したかを宣言する）。run 側は
+    これを `--level` と突き合わせる。
+    """
     external_dir = tmp_path / "external_m2e"
     external_dir.mkdir(exist_ok=True)
     manifest_entries: List[Dict[str, str]] = []
     fixture_lines = [
         'schema_version: "m2e-external-fixtures/0.1"',
         'registered_utc: "2026-08-01"',
+        f'level: "{level}"',
         "fixtures:",
     ]
     for clip_id, (times, freqs) in clip_specs.items():
@@ -8592,7 +8601,9 @@ def _m2e_fake_runner(shift_cents: float = 0.0):
 
 
 def _m2e_run(tmp_path: Path, *, level: str, shift_cents: float = 0.0, **kwargs) -> Dict[str, Any]:
-    manifest_path, fixtures_path = _write_m2e_external_fixture_set(tmp_path, _VREMIX_CLIPS)
+    manifest_path, fixtures_path = _write_m2e_external_fixture_set(
+        tmp_path, _VREMIX_CLIPS, level=level
+    )
     return _fake_run(
         categories=("V_remix_real_direct",),
         route_runner=_m2e_fake_runner(shift_cents),
@@ -8825,6 +8836,71 @@ def test_cell_store_round_trip_resumes_and_reuses_stale_results(tmp_path: Path) 
     assert report2["cells_measured"] == []
     assert report2["cell_store_mismatches"] == []
     assert row1["clips"] == row2["clips"]
+
+
+def test_cell_store_generator_code_mismatch_forces_remeasurement(tmp_path: Path) -> None:
+    """自前コードが変わったセルは resume しない（`env_digest` は third-party しか見ない）。"""
+    cell_store = tmp_path / "cell_store"
+    _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+
+    target_clip = "vremix_vocadito_1_BedOne_p12"
+    record_path = harness._cell_store_record_path(
+        cell_store,
+        category="V_remix_real_direct",
+        level="+12dB",
+        entry_id=target_clip,
+        repeat_index=0,
+    )
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    assert record["generator_code_sha256"] == harness._LOADED_GENERATOR_CODE_SHA256
+    record["generator_code_sha256"] = "e" * 64
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    report2 = _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+    assert target_clip in report2["cells_measured"]
+    assert target_clip not in report2["cells_resumed"]
+    mismatch_fields = {
+        m["field"] for m in report2["cell_store_mismatches"] if m["entry_id"] == target_clip
+    }
+    assert "generator_code_sha256" in mismatch_fields
+
+
+def test_run_accuracy_rejects_a_fixture_level_that_differs_from_the_run_level(
+    tmp_path: Path,
+) -> None:
+    """`fixtures_m06.yaml` を `--level +12dB` で回せない（別水準の音を測って別水準の
+    ゲートとして刻むと、ゲート判定と破断曲線の両方が汚染される）。"""
+    manifest_path, fixtures_path = _write_m2e_external_fixture_set(
+        tmp_path, _VREMIX_CLIPS, level="-6dB"
+    )
+    with pytest.raises(ValueError, match="食い違う"):
+        harness.run_accuracy(
+            categories=("V_remix_real_direct",),
+            route_runner=_m2e_fake_runner(),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+            m2e_bars_path=_write_m2e_bars(tmp_path),
+            level="+12dB",
+        )
+
+
+def test_run_accuracy_rejects_m2e_fixtures_without_a_declared_level(tmp_path: Path) -> None:
+    """水準宣言の無い M2e pin ファイルでは測らない（何を測ったか宣言できない）。"""
+    manifest_path, fixtures_path = _write_m2e_external_fixture_set(tmp_path, _VREMIX_CLIPS)
+    text = fixtures_path.read_text(encoding="utf-8")
+    fixtures_path.write_text(
+        "\n".join(line for line in text.splitlines() if not line.startswith("level:")) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="凍結ラダー"):
+        harness.run_accuracy(
+            categories=("V_remix_real_direct",),
+            route_runner=_m2e_fake_runner(),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+            m2e_bars_path=_write_m2e_bars(tmp_path),
+            level="+12dB",
+        )
 
 
 def test_cell_store_env_digest_mismatch_forces_remeasurement(tmp_path: Path) -> None:
