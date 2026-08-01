@@ -292,6 +292,30 @@ def test_load_registered_beds_accepts_the_committed_pin_file() -> None:
     assert len(beds) == 50
 
 
+def test_load_registered_clips_rejects_an_unknown_schema(tmp_path: Path, monkeypatch) -> None:
+    """clip registry 側も schema を検証する（bed registry と同じ規律）。"""
+    path = tmp_path / "m2c_external_fixtures.yaml"
+    path.write_text(
+        yaml.safe_dump({"schema_version": "m2c-external-fixtures/9.9", "fixtures": {"x": {}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mk, "M2C_FIXTURES_PATH", path)
+    with pytest.raises(mk.GenerationError, match="schema_version"):
+        mk.load_registered_clips()
+
+
+def test_load_registered_clips_accepts_the_committed_registry() -> None:
+    assert len(mk.load_registered_clips()) == 40
+
+
+def test_readme_reports_the_corrected_accepted_bed_dropouts() -> None:
+    """README の採用 2 件の `N_drop` が登録 pin と一致する（訂正の掃き残し防止）。"""
+    text = (ROOT / "docs/measurements/m2e_2026-08/README.md").read_text(encoding="utf-8")
+    beds = mk.load_registered_beds()
+    for track in ("Angels In Amplifiers - I'm Alright", "Arise - Run Run Run"):
+        assert f"| {beds[track]['n_drop_frames']} |" in text, track
+
+
 def test_registered_dropout_fields_match_the_corrected_artifact() -> None:
     """事前登録の (d) フィールドが訂正後の生データと一致する（§4.8）。
 

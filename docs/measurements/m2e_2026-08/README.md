@@ -221,8 +221,11 @@ r2 で改めて全 50 曲を測って記録する（§3.3-2 の「全件の実�
 
 | rank | track | `residual_db` | `N_drop` |
 |---|---|---|---|
-| 1 | Angels In Amplifiers - I'm Alright | −48.288419 | 72 |
-| 2 | Arise - Run Run Run | −52.255730 | 51 |
+| 1 | Angels In Amplifiers - I'm Alright | −48.288419 | 36 |
+| 2 | Arise - Run Run Run | −52.255730 | 48 |
+
+> `N_drop` は **2026-08-01 の実装訂正後**の値（`r2_screening.md` §4.8）。訂正前は
+> それぞれ 72 / 51 だった。**採否は不変**（訂正は `N_drop` を減らす方向にしか効かない）。
 
 ### 5.2 `m2e_accuracy_bars.yaml`（§5.1 / §5.3）
 

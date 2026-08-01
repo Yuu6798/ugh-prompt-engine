@@ -65,6 +65,7 @@ M2E_BED_FIXTURES_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2e_bed_
 M2E_EXTERNAL_FIXTURES_SCHEMA = "m2e-external-fixtures/0.1"
 # 読み込む側の schema discriminator（r3 で登録済み）。未知の schema は fail-closed。
 M2E_BED_FIXTURES_SCHEMA = "m2e-bed-fixtures/0.1"
+M2C_FIXTURES_SCHEMA = "m2c-external-fixtures/0.1"
 
 
 class GenerationError(RuntimeError):
@@ -550,6 +551,13 @@ def load_registered_beds() -> Dict[str, Dict[str, Any]]:
 def load_registered_clips() -> Dict[str, Dict[str, str]]:
     """`m2c_external_fixtures.yaml` の 40 clip pin を読む（**唯一の真**）。"""
     doc = yaml.safe_load(M2C_FIXTURES_PATH.read_text(encoding="utf-8"))
+    version = doc.get("schema_version")
+    if version != M2C_FIXTURES_SCHEMA:
+        raise GenerationError(
+            f"{M2C_FIXTURES_PATH}: schema_version {version!r} が "
+            f"{M2C_FIXTURES_SCHEMA!r} でない; 意味の分からない registry から "
+            "ミックスを publish しない (fail-closed)"
+        )
     fixtures = doc.get("fixtures")
     if not isinstance(fixtures, dict) or not fixtures:
         raise GenerationError(
