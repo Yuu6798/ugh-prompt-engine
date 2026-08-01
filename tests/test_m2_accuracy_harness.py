@@ -8762,3 +8762,423 @@ def test_cli_run_default_categories_excludes_m2e(
     )
     with pytest.raises(SystemExit, match="--level は run phase 専用"):
         harness.main()
+
+
+# --- セルチェックポイント（設計 §8.7・opt-in）------------------------------
+#
+# 実行単位は 1 セル = `(clip_id, bed_id, level, arm, repeat_idx)`。本ハーネスの
+# 内部表現では `entry_id`（manifest の id。`vremix_{clip_id}_{bed_id}_{level_tag}`
+# が clip/bed/level を既に畳む）と `category`（= arm）でこれを表すため、セル鍵は
+# `(category, level, entry_id, repeat_index)`。fail-closed の要点は「レコードが
+# あっても入力/環境 digest が 1 つでも食い違えばスキップしない」——バーを緩める
+# ときと同じ「見なかったことにしない」規律をそのままここへ適用する。
+
+
+def test_cell_store_absent_leaves_report_shape_unchanged(tmp_path: Path) -> None:
+    """`--cell-store` 未指定なら report / row に新フィールドが 1 つも増えない
+
+    （挙動無変更の契約）。既存の committed record・既存テストが本機能の追加で
+    影響を受けないことの根拠。
+    """
+    report = _m2e_run(tmp_path, level="+12dB")
+    for key in (
+        "cell_store_relative",
+        "env_digest",
+        "repeat_index",
+        "workers",
+        "cells_resumed",
+        "cells_measured",
+        "cell_store_mismatches",
+    ):
+        assert key not in report
+    row = report["categories"]["V_remix_real_direct"]
+    for key in ("_cell_store_resumed", "_cell_store_measured", "_cell_store_mismatches"):
+        assert key not in row
+
+
+def test_cell_store_round_trip_resumes_and_reuses_stale_results(tmp_path: Path) -> None:
+    """(a) 同じ入力/環境なら 2 回目は測り直さず resume し、clip row が bit 一致する。
+
+    2 回目は `shift_cents` を変えて呼ぶ——**実際に再測定していれば**別の観測値に
+    なるはずの入力を与えたうえで、resume されたセルが 1 回目の cached row を
+    そのまま返す（= 決定論による偶然の一致ではなく、本当に再測定を skip した
+    ことの直接証拠）。
+    """
+    cell_store = tmp_path / "cell_store"
+    report1 = _m2e_run(
+        tmp_path, level="+12dB", shift_cents=0.0, cell_store=cell_store, repeat_index=0
+    )
+    row1 = report1["categories"]["V_remix_real_direct"]
+    assert report1["cells_resumed"] == []
+    assert sorted(report1["cells_measured"]) == sorted(_VREMIX_CLIPS)
+    assert report1["cell_store_mismatches"] == []
+    assert report1["cell_store_relative"] == harness._repo_relative_path(cell_store)
+    assert report1["repeat_index"] == 0
+    assert report1["workers"] == 1
+    assert re.fullmatch(r"[0-9a-f]{64}", report1["env_digest"])
+
+    report2 = _m2e_run(
+        tmp_path, level="+12dB", shift_cents=999.0, cell_store=cell_store, repeat_index=0
+    )
+    row2 = report2["categories"]["V_remix_real_direct"]
+    assert sorted(report2["cells_resumed"]) == sorted(_VREMIX_CLIPS)
+    assert report2["cells_measured"] == []
+    assert report2["cell_store_mismatches"] == []
+    assert row1["clips"] == row2["clips"]
+
+
+def test_cell_store_env_digest_mismatch_forces_remeasurement(tmp_path: Path) -> None:
+    """(b) `env_digest` 不一致セルは resume せず再測定し、不一致を報告する。"""
+    cell_store = tmp_path / "cell_store"
+    _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+
+    target_clip = "vremix_vocadito_1_BedOne_p12"
+    record_path = harness._cell_store_record_path(
+        cell_store,
+        category="V_remix_real_direct",
+        level="+12dB",
+        entry_id=target_clip,
+        repeat_index=0,
+    )
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["env_digest"] = "0" * 64
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    report2 = _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+    assert target_clip in report2["cells_measured"]
+    assert target_clip not in report2["cells_resumed"]
+    other_clip = next(c for c in _VREMIX_CLIPS if c != target_clip)
+    assert other_clip in report2["cells_resumed"]
+    mismatch_fields = {
+        m["field"] for m in report2["cell_store_mismatches"] if m["entry_id"] == target_clip
+    }
+    assert "env_digest" in mismatch_fields
+
+
+def test_cell_store_input_digest_mismatch_forces_remeasurement(tmp_path: Path) -> None:
+    """(b') 入力 digest（`audio_sha256`）不一致セルも同様に resume せず再測定する。"""
+    cell_store = tmp_path / "cell_store"
+    _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+
+    target_clip = "vremix_vocadito_2_BedOne_p12"
+    record_path = harness._cell_store_record_path(
+        cell_store,
+        category="V_remix_real_direct",
+        level="+12dB",
+        entry_id=target_clip,
+        repeat_index=0,
+    )
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["audio_sha256"] = "f" * 64
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    report2 = _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+    assert target_clip in report2["cells_measured"]
+    assert target_clip not in report2["cells_resumed"]
+    mismatch_fields = {
+        m["field"] for m in report2["cell_store_mismatches"] if m["entry_id"] == target_clip
+    }
+    assert "audio_sha256" in mismatch_fields
+
+
+def test_cell_store_never_reuses_a_record_across_repeat_index(tmp_path: Path) -> None:
+    """(c) 別 `repeat_index` はキャッシュミス —— n>=2 の bit 一致契約を守るための核心。
+
+    鍵→パスの写像自体が `repeat_index` を折り込むため、別 repeat の記録を誤って
+    再生することは if 分岐の有無に関係なく**構造的に**起こり得ない（2 回目の
+    repeat_index=1 実行が別ファイルへ書くことを直接確認する）。
+    """
+    cell_store = tmp_path / "cell_store"
+    _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+    report2 = _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=1)
+    assert report2["cells_resumed"] == []
+    assert sorted(report2["cells_measured"]) == sorted(_VREMIX_CLIPS)
+
+    clip_id = next(iter(_VREMIX_CLIPS))
+    path0 = harness._cell_store_record_path(
+        cell_store, category="V_remix_real_direct", level="+12dB", entry_id=clip_id, repeat_index=0
+    )
+    path1 = harness._cell_store_record_path(
+        cell_store, category="V_remix_real_direct", level="+12dB", entry_id=clip_id, repeat_index=1
+    )
+    assert path0 != path1
+    assert path0.is_file()
+    assert path1.is_file()
+
+
+def test_cell_store_never_reuses_a_record_across_level(tmp_path: Path) -> None:
+    """(c') 別 `level` もキャッシュミス（水準ごとに別セル）。"""
+    cell_store = tmp_path / "cell_store"
+    _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+    report2 = _m2e_run(tmp_path, level="0dB", cell_store=cell_store, repeat_index=0)
+    assert report2["cells_resumed"] == []
+    assert sorted(report2["cells_measured"]) == sorted(_VREMIX_CLIPS)
+
+
+def test_cell_store_never_reuses_a_record_across_category(tmp_path: Path) -> None:
+    """(c'') 別 `category`（= arm）もキャッシュミス（direct/stem を取り違えない）。"""
+    cell_store = tmp_path / "cell_store"
+    manifest_path, fixtures_path = _write_m2e_external_fixture_set(tmp_path, _VREMIX_CLIPS)
+    common_kwargs: Dict[str, Any] = dict(
+        route_runner=_m2e_fake_runner(),
+        external_manifest_path=manifest_path,
+        external_fixtures_path=fixtures_path,
+        m2e_bars_path=_write_m2e_bars(tmp_path),
+        level="+12dB",
+        cell_store=cell_store,
+        repeat_index=0,
+    )
+    _fake_run(categories=("V_remix_real_direct",), **common_kwargs)
+    report2 = _fake_run(categories=("V_remix_real_stem",), **common_kwargs)
+    assert report2["cells_resumed"] == []
+    assert sorted(report2["cells_measured"]) == sorted(_VREMIX_CLIPS)
+
+
+def test_cell_store_records_workers_verbatim(tmp_path: Path) -> None:
+    """`--workers`（設計 §8.3 の `P`）は実行を変えず、report とセルレコードへ verbatim
+    に記録されるだけであること。"""
+    cell_store = tmp_path / "cell_store"
+    report = _m2e_run(
+        tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0, workers=4
+    )
+    assert report["workers"] == 4
+    record_path = harness._cell_store_record_path(
+        cell_store,
+        category="V_remix_real_direct",
+        level="+12dB",
+        entry_id=next(iter(_VREMIX_CLIPS)),
+        repeat_index=0,
+    )
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    assert record["workers"] == 4
+    assert record["repeat_index"] == 0
+    assert record["category"] == "V_remix_real_direct"
+    assert record["level"] == "+12dB"
+
+
+def test_run_accuracy_rejects_cell_store_without_repeat_index(tmp_path: Path) -> None:
+    manifest_path, fixtures_path = _write_m2e_external_fixture_set(tmp_path, _VREMIX_CLIPS)
+    with pytest.raises(ValueError, match="repeat_index"):
+        harness.run_accuracy(
+            categories=("V_remix_real_direct",),
+            route_runner=_m2e_fake_runner(),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+            m2e_bars_path=_write_m2e_bars(tmp_path),
+            level="+12dB",
+            cell_store=tmp_path / "cell_store",
+        )
+
+
+def test_run_accuracy_rejects_repeat_index_without_cell_store(tmp_path: Path) -> None:
+    manifest_path, fixtures_path = _write_m2e_external_fixture_set(tmp_path, _VREMIX_CLIPS)
+    with pytest.raises(ValueError, match="cell_store が無い"):
+        harness.run_accuracy(
+            categories=("V_remix_real_direct",),
+            route_runner=_m2e_fake_runner(),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+            m2e_bars_path=_write_m2e_bars(tmp_path),
+            level="+12dB",
+            repeat_index=0,
+        )
+
+
+def test_run_accuracy_rejects_a_negative_repeat_index(tmp_path: Path) -> None:
+    manifest_path, fixtures_path = _write_m2e_external_fixture_set(tmp_path, _VREMIX_CLIPS)
+    with pytest.raises(ValueError, match="repeat_index -1"):
+        harness.run_accuracy(
+            categories=("V_remix_real_direct",),
+            route_runner=_m2e_fake_runner(),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+            m2e_bars_path=_write_m2e_bars(tmp_path),
+            level="+12dB",
+            cell_store=tmp_path / "cell_store",
+            repeat_index=-1,
+        )
+
+
+def test_cli_cell_store_requires_repeat_index(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    out_path = tmp_path / "report.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--out",
+            str(out_path),
+            "--cell-store",
+            str(tmp_path / "cell_store"),
+        ],
+    )
+    with pytest.raises(SystemExit, match="--repeat-index は --cell-store 指定時に必須"):
+        harness.main()
+
+
+def test_cli_repeat_index_requires_cell_store(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    out_path = tmp_path / "report.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_melody_accuracy.py", "--out", str(out_path), "--repeat-index", "0"],
+    )
+    with pytest.raises(SystemExit, match="--repeat-index は --cell-store と併用"):
+        harness.main()
+
+
+def test_cli_repeat_index_rejects_negative_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    out_path = tmp_path / "report.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--out",
+            str(out_path),
+            "--cell-store",
+            str(tmp_path / "cell_store"),
+            "--repeat-index",
+            "-1",
+        ],
+    )
+    with pytest.raises(SystemExit, match="0 以上の整数のみ"):
+        harness.main()
+
+
+def test_cli_cell_store_is_rejected_in_evaluate_phase(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    out_path = tmp_path / "report.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--out",
+            str(out_path),
+            "--evaluate",
+            str(out_path),
+            "--cell-store",
+            str(tmp_path / "cell_store"),
+        ],
+    )
+    with pytest.raises(SystemExit, match="--cell-store は run phase 専用"):
+        harness.main()
+
+
+def test_cli_repeat_index_is_rejected_in_evaluate_phase(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    out_path = tmp_path / "report.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--out",
+            str(out_path),
+            "--evaluate",
+            str(out_path),
+            "--repeat-index",
+            "0",
+        ],
+    )
+    with pytest.raises(SystemExit, match="--repeat-index は run phase 専用"):
+        harness.main()
+
+
+def test_reverification_child_never_receives_cell_store(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """設計 §8.7: 測り直し子プロセスは `--cell-store` / `--repeat-index` / `--workers`
+
+    を絶対に受け取らない——受け取ればチェックポイントから resume でき、評価器の
+    「独立に測り直して bit 一致を確認する」publish 条件が「セルレコードを自分自身と
+    比較するだけ」の空虚な成功になる（本機能で最も危険な穴）。
+    `_run_external_verification_in_fresh_process` の command 組み立てには
+    そもそも `--cell-store` を積む分岐が無い——本テストはその不在を固定する。
+    """
+    captured: Dict[str, Any] = {}
+
+    class _FakeCompletedProcess:
+        returncode = 1
+        stdout = ""
+        stderr = "boom (deliberately induced failure to avoid a real subprocess)"
+
+    def _fake_subprocess_run(command, **kwargs):
+        captured["command"] = command
+        return _FakeCompletedProcess()
+
+    monkeypatch.setattr(harness.subprocess, "run", _fake_subprocess_run)
+
+    specs_path = tmp_path / "specs.yaml"
+    bars_path = tmp_path / "bars.yaml"
+    fixtures_path = tmp_path / "fixtures.yaml"
+    manifest_path = tmp_path / "manifest.json"
+    m2e_bars_path = tmp_path / "m2e_bars.yaml"
+    for p in (specs_path, bars_path, fixtures_path, manifest_path, m2e_bars_path):
+        p.write_text("placeholder", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="測り直しプロセスが失敗した"):
+        harness._run_external_verification_in_fresh_process(
+            "V_remix_real_direct",
+            0,
+            tmp_dir=tmp_path,
+            external_manifest_path=manifest_path,
+            specs_path=specs_path,
+            bars_path=bars_path,
+            external_fixtures_path=fixtures_path,
+            expected_specs_sha256="0" * 64,
+            m2e_bars_path=m2e_bars_path,
+            level="+12dB",
+        )
+
+    command = captured["command"]
+    assert "--cell-store" not in command
+    assert "--repeat-index" not in command
+    assert "--workers" not in command
+
+
+def test_env_digest_is_a_64_hex_sha256_and_reacts_to_thread_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_env_digest()` はスレッド設定を折り込む（設計 §8.7）: `OMP_NUM_THREADS` が
+    変われば digest も変わる。未導入パッケージ（本テスト環境では `crepe`）は明示
+    マーカーで記録され、黙ってフィールドが消えたりしない。
+    """
+    monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
+    monkeypatch.delenv("MKL_NUM_THREADS", raising=False)
+    baseline = harness._env_digest()
+    assert re.fullmatch(r"[0-9a-f]{64}", baseline)
+
+    monkeypatch.setenv("OMP_NUM_THREADS", "3")
+    changed = harness._env_digest()
+    assert changed != baseline
+
+    versions = harness._env_digest_package_versions()
+    assert set(versions) == set(harness._ENV_DIGEST_PACKAGES)
+    for name, value in versions.items():
+        assert value == harness._ENV_DIGEST_ABSENT_MARKER or isinstance(value, str)
+
+
+def test_cell_store_record_path_depends_on_the_full_key(tmp_path: Path) -> None:
+    """鍵→パス写像が `category`/`level`/`entry_id`/`repeat_index` の全 4 要素に
+    依存すること（1 つでも変えれば別ファイルになる）。"""
+    base = dict(category="V_remix_real_direct", level="+12dB", entry_id="clip001", repeat_index=0)
+    reference = harness._cell_store_record_path(tmp_path, **base)
+    for changed_field, changed_value in (
+        ("category", "V_remix_real_stem"),
+        ("level", "0dB"),
+        ("entry_id", "clip002"),
+        ("repeat_index", 1),
+    ):
+        variant = dict(base)
+        variant[changed_field] = changed_value
+        assert harness._cell_store_record_path(tmp_path, **variant) != reference

@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import copy
 import hashlib
 import json
 import math
@@ -46,7 +47,9 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -2548,6 +2551,12 @@ from svp_rpe.melody.extractors import observe_via_route_with_provenance  # noqa:
 from svp_rpe.melody.observability import MelodyObservation  # noqa: E402
 from svp_rpe.melody.routing import MelodyRoute, select_routes  # noqa: E402
 from svp_rpe.rpe.learned import LearnedModelUnavailable  # noqa: E402
+# M2e §8.7: セルレコードの atomic write は既存の共通実装を再利用する（新しい書き込み
+# 機構を作らない、と設計が明示している）。`_atomic_write_text`（本ファイル既存）とは
+# 別物 —— あちらは `--out` の verdict/report 専用に育った独自実装で、fsync まで含めて
+# 意図的に厚い。セルレコードは大量（最大 1280 件）に書くため、utils 側の薄い実装を
+# そのまま使う。
+from svp_rpe.utils.atomic_io import atomic_write_text as _cell_store_atomic_write_text  # noqa: E402
 
 
 def _runtime_input_paths() -> "set[Path]":
@@ -2757,6 +2766,34 @@ _M2E_LEVEL_TAGS: Dict[str, str] = {
 def _m2e_ladder_index(level: str) -> int:
     """水準ラダーの宣言順添字（設計 §3.3.1 の `ladder_index`）。"""
     return _M2E_LEVEL_LADDER.index(level)
+
+
+# ---------------------------------------------------------------------------
+# M2e §8.7 — セルチェックポイント（opt-in・既定 off で挙動無変更）
+# ---------------------------------------------------------------------------
+#
+# 実行単位は 1 セル = (clip_id, bed_id, level, arm, repeat_idx)。本ハーネスの
+# 内部表現では `entry_id`（= manifest の id。M2e では `vremix_{clip_id}_{bed_id}_
+# {level_tag}` が clip/bed/level を既に畳んでいる）と `category`（= arm。
+# `V_remix_real_direct` / `V_remix_real_stem`）でこれを表す。よってセル鍵は
+# `(category, level, entry_id, repeat_index)` の 4 要素タプルになる
+# （`_cell_store_record_path` / `_measure_or_resume_external_clip_row` 参照）。
+
+# `env_digest` に折り込む third-party パッケージ（設計 §8.7）。torch は demucs の
+# 依存で明示列挙が要る（demucs 自体は動作しても torch のマイナーバージョン差で
+# BLAS/カーネル選択が変わりうるため独立に記録する）。
+_ENV_DIGEST_PACKAGES: Tuple[str, ...] = (
+    "torch",
+    "demucs",
+    "crepe",
+    "librosa",
+    "soundfile",
+    "numpy",
+)
+# 未導入パッケージ・未解決の重みを「黙って省く」のではなく明示マーカーで記録する
+# （設計 §8.7 実装ノート: 欠落自体が環境の一部であり、記録から落とすと
+# 「重みが再取得され別 digest になった」と「単に記録されなかった」が区別できない）。
+_ENV_DIGEST_ABSENT_MARKER = "absent"
 
 
 # ---------------------------------------------------------------------------
@@ -4234,19 +4271,33 @@ def _parse_external_annotation_csv(raw: bytes, *, clip_id: str) -> Tuple[Tuple[f
     )
 
 
-def _build_external_clip_row(
+@dataclass(frozen=True)
+class _ExternalClipInputs:
+    """1 clip の音声/注釈を読み、登録済み sha256 と照合済みの中間結果（設計 §8.7）。
+
+    `_build_external_clip_row` の入力読み込み部分を抽出した値オブジェクト。§8.7 の
+    セルチェックポイントは「抽出器を走らせる前に」入力 digest を確定させる必要が
+    あるため（resume 可否をそこで判定する）、読み込み+照合だけを独立に呼べるように
+    切り出した。`_build_external_clip_row` 自身もこれを受け取れるようにし、
+    ハッシュ計算ロジックを複製しない。
+    """
+
+    audio_path: Path
+    audio_bytes: bytes
+    audio_sha256: str
+    annotation_sha256: str
+    ref_times: Tuple[float, ...]
+    ref_freqs: Tuple[float, ...]
+
+
+def _read_external_clip_inputs(
     clip_id: str,
     entry: Dict[str, Any],
     *,
     manifest_dir: Path,
     fixtures: Dict[str, Any],
-    tolerance_cents: float,
-    est_voiced_floor: float,
-    route: MelodyRoute,
-    runner: RouteRunner,
-    tmp_dir: Path,
-) -> Dict[str, Any]:
-    """1 clip の外部素材を測り、per-clip row（設計 Memo M2c）を返す。"""
+) -> _ExternalClipInputs:
+    """clip_id の音声/注釈を読み、登録済み sha256 と fail-closed で照合する（設計 Memo M2c）。"""
     if clip_id not in fixtures:
         raise ValueError(
             f"external manifest: clip id {clip_id!r} が m2c_external_fixtures.yaml に "
@@ -4276,6 +4327,46 @@ def _build_external_clip_row(
         )
 
     ref_times, ref_freqs = _parse_external_annotation_csv(annotation_bytes, clip_id=clip_id)
+    return _ExternalClipInputs(
+        audio_path=audio_path,
+        audio_bytes=audio_bytes,
+        audio_sha256=audio_sha256,
+        annotation_sha256=annotation_sha256,
+        ref_times=ref_times,
+        ref_freqs=ref_freqs,
+    )
+
+
+def _build_external_clip_row(
+    clip_id: str,
+    entry: Dict[str, Any],
+    *,
+    manifest_dir: Path,
+    fixtures: Dict[str, Any],
+    tolerance_cents: float,
+    est_voiced_floor: float,
+    route: MelodyRoute,
+    runner: RouteRunner,
+    tmp_dir: Path,
+    inputs: "Optional[_ExternalClipInputs]" = None,
+) -> Dict[str, Any]:
+    """1 clip の外部素材を測り、per-clip row（設計 Memo M2c）を返す。
+
+    `inputs` を渡すと音声/注釈の read + hash + 照合を再実行しない（設計 §8.7 の
+    セルチェックポイントが resume 可否判定のために先に読んでいる場合。
+    `_read_external_clip_inputs` 参照）。省略時は従来どおりここで読む
+    （挙動無変更 —— `--cell-store` 未使用の呼び出し経路は本引数を渡さない）。
+    """
+    if inputs is None:
+        inputs = _read_external_clip_inputs(
+            clip_id, entry, manifest_dir=manifest_dir, fixtures=fixtures
+        )
+
+    audio_path = inputs.audio_path
+    audio_bytes = inputs.audio_bytes
+    audio_sha256 = inputs.audio_sha256
+    annotation_sha256 = inputs.annotation_sha256
+    ref_times, ref_freqs = inputs.ref_times, inputs.ref_freqs
 
     row: Dict[str, Any] = {
         "clip_id": clip_id,
@@ -4392,6 +4483,113 @@ def _average_external_clip_metrics(clip_rows: List[Dict[str, Any]]) -> Dict[str,
     return averaged
 
 
+def _measure_or_resume_external_clip_row(
+    clip_id: str,
+    entry: Dict[str, Any],
+    *,
+    manifest_dir: Path,
+    fixtures: Dict[str, Any],
+    tolerance_cents: float,
+    est_voiced_floor: float,
+    route: MelodyRoute,
+    runner: RouteRunner,
+    tmp_dir: Path,
+    category: str,
+    level: Optional[str],
+    cell_store: Optional[Path],
+    repeat_index: Optional[int],
+    env_digest: Optional[str],
+    workers: int,
+    cells_resumed: List[str],
+    cells_measured: List[str],
+    cell_store_mismatches: "List[Dict[str, Any]]",
+) -> Dict[str, Any]:
+    """1 clip を測るか、設計 §8.7 のセル台帳から resume する。
+
+    `cell_store` が `None` なら `_build_external_clip_row` へそのまま素通しする
+    ——**挙動無変更の契約**（`--cell-store` 未指定時は既存 report に 1 バイトも
+    フィールドが増えない）。
+    """
+    if cell_store is None:
+        return _build_external_clip_row(
+            clip_id,
+            entry,
+            manifest_dir=manifest_dir,
+            fixtures=fixtures,
+            tolerance_cents=tolerance_cents,
+            est_voiced_floor=est_voiced_floor,
+            route=route,
+            runner=runner,
+            tmp_dir=tmp_dir,
+        )
+
+    assert repeat_index is not None and env_digest is not None  # run_accuracy が保証済み
+
+    # 設計 §8.7 の順序制約: 抽出器を走らせる**前**に入力 digest を確定させる
+    # （resume 可否をここで判定するため）。ハッシュ計算ロジックは
+    # `_read_external_clip_inputs` に集約し複製しない。
+    inputs = _read_external_clip_inputs(
+        clip_id, entry, manifest_dir=manifest_dir, fixtures=fixtures
+    )
+    record_path = _cell_store_record_path(
+        cell_store, category=category, level=level, entry_id=clip_id, repeat_index=repeat_index
+    )
+    if record_path.is_file():
+        record = _json_loads_no_dup_keys(
+            record_path.read_bytes(), what=f"cell record {record_path}"
+        )
+        mismatches = _cell_record_mismatches(
+            record,
+            category=category,
+            level=level,
+            entry_id=clip_id,
+            repeat_index=repeat_index,
+            audio_sha256=inputs.audio_sha256,
+            annotation_sha256=inputs.annotation_sha256,
+            env_digest=env_digest,
+        )
+        if not mismatches:
+            cells_resumed.append(clip_id)
+            # 呼び出し元がこの dict を（`row.pop` 等で）変異させても、他セルの
+            # record 内容へ波及しないよう deep copy を返す。
+            return copy.deepcopy(record["clip_row"])
+        cell_store_mismatches.extend(mismatches)
+
+    started = time.monotonic()
+    row = _build_external_clip_row(
+        clip_id,
+        entry,
+        manifest_dir=manifest_dir,
+        fixtures=fixtures,
+        tolerance_cents=tolerance_cents,
+        est_voiced_floor=est_voiced_floor,
+        route=route,
+        runner=runner,
+        tmp_dir=tmp_dir,
+        inputs=inputs,
+    )
+    elapsed_seconds = time.monotonic() - started
+    cells_measured.append(clip_id)
+    if row.get("outcome") == "measured":
+        # `outcome == "unavailable"`（抽出器スタック未導入）はセルレコードに残さない
+        # ——設計 §8.6 の「打ち切ったら『未完』として記録する（失敗値を書かない）」
+        # と同じ精神。次回実行時は provisioning が整っていれば普通に再測定される。
+        record = {
+            "category": category,
+            "level": level,
+            "entry_id": clip_id,
+            "repeat_index": repeat_index,
+            "audio_sha256": inputs.audio_sha256,
+            "annotation_sha256": inputs.annotation_sha256,
+            "env_digest": env_digest,
+            "clip_row": row,
+            "elapsed_seconds": elapsed_seconds,
+            "workers": workers,
+        }
+        _cell_store_atomic_write_text(record_path, json.dumps(record, indent=2, sort_keys=True))
+    return row
+
+
 def _run_external_category(
     category: str,
     category_spec: Dict[str, str],
@@ -4403,8 +4601,21 @@ def _run_external_category(
     route: MelodyRoute,
     runner: RouteRunner,
     tmp_dir: Path,
+    level: Optional[str] = None,
+    cell_store: Optional[Path] = None,
+    repeat_index: Optional[int] = None,
+    env_digest: Optional[str] = None,
+    workers: int = 1,
 ) -> Dict[str, Any]:
-    """カテゴリ V（外部素材）1 本の run report row を作る（設計 Memo M2c）。"""
+    """カテゴリ V（外部素材）1 本の run report row を作る（設計 Memo M2c）。
+
+    `cell_store` が与えられれば設計 §8.7 のセルチェックポイントを使う。row には
+    内部専用キー `_cell_store_resumed` / `_cell_store_measured` /
+    `_cell_store_mismatches` を積んで返す —— 呼び出し元 `run_accuracy` がこれを
+    pop して run 全体の bookkeeping へ畳み込む（複数 external カテゴリを 1 run で
+    測る場合の集約点はカテゴリ単位でなく run 単位のため）。`cell_store` が `None`
+    ならこれらのキーは一切現れない（挙動無変更の契約）。
+    """
     fixtures_doc, fixtures_sha256 = load_external_fixtures(external_fixtures_path)
     fixtures = fixtures_doc["fixtures"]
     if not fixtures:
@@ -4422,9 +4633,13 @@ def _run_external_category(
         where=f"run_accuracy: category {category!r}",
     )
 
+    cells_resumed: List[str] = []
+    cells_measured: List[str] = []
+    cell_store_mismatches: "List[Dict[str, Any]]" = []
+
     clip_rows: List[Dict[str, Any]] = []
     for entry in sorted(entries, key=lambda e: e["id"]):
-        clip_row = _build_external_clip_row(
+        clip_row = _measure_or_resume_external_clip_row(
             entry["id"],
             entry,
             manifest_dir=manifest_dir,
@@ -4434,6 +4649,15 @@ def _run_external_category(
             route=route,
             runner=runner,
             tmp_dir=tmp_dir,
+            category=category,
+            level=level,
+            cell_store=cell_store,
+            repeat_index=repeat_index,
+            env_digest=env_digest,
+            workers=workers,
+            cells_resumed=cells_resumed,
+            cells_measured=cells_measured,
+            cell_store_mismatches=cell_store_mismatches,
         )
         clip_rows.append(clip_row)
 
@@ -4445,6 +4669,10 @@ def _run_external_category(
         "external_manifest_path_relative": _repo_relative_path(manifest_path),
         "external_fixtures_sha256": fixtures_sha256,
     }
+    if cell_store is not None:
+        row["_cell_store_resumed"] = cells_resumed
+        row["_cell_store_measured"] = cells_measured
+        row["_cell_store_mismatches"] = cell_store_mismatches
 
     unavailable = [c for c in clip_rows if c.get("outcome") == "unavailable"]
     if unavailable:
@@ -4677,6 +4905,172 @@ def _execution_paths() -> Dict[str, Any]:
     }
 
 
+def _env_digest_package_versions() -> Dict[str, str]:
+    """`_ENV_DIGEST_PACKAGES` の配布バージョンを引く（未導入は明示マーカー）。"""
+    import importlib.metadata
+
+    versions: Dict[str, str] = {}
+    for name in _ENV_DIGEST_PACKAGES:
+        try:
+            versions[name] = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            versions[name] = _ENV_DIGEST_ABSENT_MARKER
+    return versions
+
+
+def _env_digest_demucs_weights() -> Dict[str, Any]:
+    """demucs 重み digest（設計 §8.7）。`resolve_separation_weights` を再利用する。
+
+    未導入/未取得は `LearnedModelUnavailable` で解決失敗するので、それを拾って
+    「解決できなかった事実」を記録する（例外を上へ伝播させて run 全体を落とさない）。
+    理由文字列を含めるため、解決できた場合と解決できない場合とで payload の形が
+    構造的に異なり、`env_digest` は必ず変わる。
+    """
+    try:
+        from svp_rpe.rpe.learned.source_separation_adapter import (
+            resolve_separation_weights,
+        )
+
+        weights = resolve_separation_weights()
+    except Exception as exc:  # LearnedModelUnavailable 含む fail-closed でない記録
+        return {"resolved": False, "reason": f"{type(exc).__name__}: {exc}"}
+    return {"resolved": True, "sha256": weights.sha256}
+
+
+def _env_digest_crepe_weights() -> Dict[str, Any]:
+    """crepe 重み digest（設計 §8.7）。推論は行わず artifact 解決のみ
+
+    （`extractor_weights_fingerprint` は解決失敗を `None` に畳んで返す非送出 API
+    — `melody/provenance.py` docstring 参照）。これにより「セルを resume すべきか」
+    を抽出器を実際に走らせずに判定できる（§8.7 の順序制約）。
+    """
+    try:
+        from svp_rpe.melody.provenance import extractor_weights_fingerprint
+
+        fingerprint = extractor_weights_fingerprint("crepe")
+    except Exception as exc:  # import 失敗等も同じ形で記録する
+        return {"resolved": False, "reason": f"{type(exc).__name__}: {exc}"}
+    if fingerprint is None:
+        return {"resolved": False, "reason": "crepe weights not provisioned"}
+    return {"resolved": True, "sha256": fingerprint.sha256}
+
+
+def _env_digest_thread_settings() -> Dict[str, Any]:
+    """スレッド設定（設計 §8.7・§8.3 の並列不変性前提）。"""
+    settings: Dict[str, Any] = {
+        "OMP_NUM_THREADS": os.environ.get("OMP_NUM_THREADS", _ENV_DIGEST_ABSENT_MARKER),
+        "MKL_NUM_THREADS": os.environ.get("MKL_NUM_THREADS", _ENV_DIGEST_ABSENT_MARKER),
+    }
+    try:
+        import torch
+
+        settings["torch_num_threads"] = torch.get_num_threads()
+    except Exception:
+        settings["torch_num_threads"] = _ENV_DIGEST_ABSENT_MARKER
+    return settings
+
+
+def _env_digest() -> str:
+    """設計 §8.7 の `env_digest`: 環境同一性を畳んだ 64-hex sha256。
+
+    折り込む要素: Python 版・{torch, demucs, crepe, librosa, soundfile, numpy} の
+    版・demucs 重み digest・crepe 重み digest・スレッド設定
+    （`OMP_NUM_THREADS`/`MKL_NUM_THREADS`/`torch.get_num_threads()`）。
+
+    **重い import はしない**（呼び出し元が `--cell-store` 使用時にのみ本関数を呼ぶ
+    ことで、モジュール import 時の重い依存 import を避ける契約 — 各ヘルパーは
+    torch/demucs/crepe を関数内 import で遅延させる）。未導入パッケージ・未解決の
+    重みは明示マーカーで記録し、黙って省かない（§8.7 実装ノート）。
+    """
+    payload: Dict[str, Any] = {
+        "python_version": sys.version,
+        "packages": _env_digest_package_versions(),
+        "demucs_weights": _env_digest_demucs_weights(),
+        "crepe_weights": _env_digest_crepe_weights(),
+        "thread_settings": _env_digest_thread_settings(),
+    }
+    canonical = json.dumps(payload, sort_keys=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _cell_store_record_path(
+    cell_store: Path,
+    *,
+    category: str,
+    level: Optional[str],
+    entry_id: str,
+    repeat_index: int,
+) -> Path:
+    """セル鍵 `(category, level, entry_id, repeat_index)` からレコードパスを導く。
+
+    ファイル名は生の `entry_id`（manifest 由来のユーザ供給文字列）から直接組み立て
+    ない —— sha256 digest だけをファイル名にすることで、衝突・パス脱出の懸念を
+    構造的に消す（`_require_safe_external_id` の字句検証済みとはいえ二重防御）。
+
+    **これは同時に「別 repeat の記録を誤って再生できない」ことの実装でもある**
+    （設計 §8.7 の指示: if 分岐による回避ではなく、鍵→パスの写像自体が
+    `repeat_index` / `level` / `category` の 1 つでも違えば別ファイルになることを
+    保証する。呼び出し元がこの写像を経由する限り、異なる repeat の記録を同じパスで
+    読み書きすることは構造的に起こり得ない）。
+    """
+    key_json = json.dumps(
+        {
+            "category": category,
+            "level": level,
+            "entry_id": entry_id,
+            "repeat_index": repeat_index,
+        },
+        sort_keys=True,
+    )
+    digest = hashlib.sha256(key_json.encode("utf-8")).hexdigest()
+    return Path(cell_store) / f"cell_{digest}.json"
+
+
+def _cell_record_mismatches(
+    record: Any,
+    *,
+    category: str,
+    level: Optional[str],
+    entry_id: str,
+    repeat_index: int,
+    audio_sha256: str,
+    annotation_sha256: str,
+    env_digest: str,
+) -> "List[Dict[str, Any]]":
+    """既存セルレコードと現在の入力/環境の不一致を列挙する（設計 §8.7 再開規則）。
+
+    空リストなら resume 可（=スキップ）。1 件でもあれば **スキップしない** ——
+    再測定したうえで不一致の事実だけを report の `cell_store_mismatches` へ記録する
+    （バーを緩めず「見なかったことにしない」という本リポジトリ全体の fail-closed
+    規律をそのまま適用する）。
+
+    鍵フィールド（category/level/entry_id/repeat_index）も比較対象に含める。通常
+    この関数へ来るのは `_cell_store_record_path` が鍵の sha256 から一意に決めた
+    ファイルを読んだ後なので鍵は一致しているはずだが、レコードが手で書き換え/破損
+    したケースを黙って resume しないための多重防御（§8.7「複数環境のセルを1つの
+    帯として合算することは禁止」と同じ精神）。
+    """
+    if not isinstance(record, dict):
+        raise ValueError(f"cell record が JSON object でない (fail-closed): {record!r}")
+    current: Dict[str, Any] = {
+        "category": category,
+        "level": level,
+        "entry_id": entry_id,
+        "repeat_index": repeat_index,
+        "audio_sha256": audio_sha256,
+        "annotation_sha256": annotation_sha256,
+        "env_digest": env_digest,
+    }
+    mismatches: "List[Dict[str, Any]]" = []
+    for field, expected in current.items():
+        actual = record.get(field)
+        if actual != expected:
+            mismatches.append(
+                {"entry_id": entry_id, "field": field, "expected": expected, "actual": actual}
+            )
+    return mismatches
+
+
 # ---------------------------------------------------------------------------
 # run phase
 # ---------------------------------------------------------------------------
@@ -4726,6 +5120,9 @@ def run_accuracy(
     tolerance_cents: Optional[float] = None,
     external_manifest_path: Optional[Path] = None,
     external_fixtures_path: Path = EXTERNAL_FIXTURES_PATH,
+    cell_store: Optional[Path] = None,
+    repeat_index: Optional[int] = None,
+    workers: int = 1,
 ) -> Dict[str, Any]:
     """カテゴリ S（合成正解つき）+ カテゴリ V（外部素材、M2c）の精度 run を実行し report dict を返す。
 
@@ -4740,7 +5137,36 @@ def run_accuracy(
     未知の `categories` 値は `_CATEGORY_SPECS` に無ければ fail-fast。`categories` に
     `kind: "external"` のカテゴリ（M2c 現在は V_direct のみ）が含まれる場合、
     `external_manifest_path` の指定が必須（未指定は fail-closed）。
+
+    `cell_store`（設計 §8.7・opt-in）: 与えると外部素材カテゴリの各 clip を
+    1 セル = `(category, level, entry_id, repeat_index)` として
+    `_cell_store` 配下へ atomic write でチェックポイントし、既存レコードが
+    入力/環境 digest と一致すれば再測定をスキップする（詳細は
+    `_measure_or_resume_external_clip_row` / `_cell_record_mismatches`）。
+    **既定 `None` では report に新フィールドが一切増えない**——`--cell-store`
+    未使用の既存呼び出しはこの実装が入る前と bit 一致の report を返す契約。
+    `repeat_index` は `cell_store` 指定時のみ必須（未指定・負値は fail-closed）。
+    `workers` はセルレコードへ記録するだけで実行そのものは変えない（本ハーネスは
+    単一プロセスのまま。設計 §8.3 の cost 再現性のための記録専用フィールド）。
     """
+    if cell_store is not None and repeat_index is None:
+        raise ValueError(
+            "run_accuracy: cell_store が指定されたが repeat_index が無い; セル鍵 "
+            "(category, level, entry_id, repeat_index) の repeat_index を欠いたまま "
+            "チェックポイントを書かない (fail-closed)"
+        )
+    if cell_store is None and repeat_index is not None:
+        raise ValueError(
+            "run_accuracy: repeat_index が指定されたが cell_store が無い; セル "
+            "チェックポイントを使わない run に測っていない次元を持たせない "
+            "(fail-closed)"
+        )
+    if repeat_index is not None and repeat_index < 0:
+        raise ValueError(
+            f"run_accuracy: repeat_index {repeat_index!r} が負; セル鍵の "
+            "repeat_index は 0 以上の整数を要求する (fail-closed)"
+        )
+
     bind_inference_code_pins()
     # 注入された runner は正解 F0 と「それらしい」hash を自由に返せる（テストの
     # フェイク抽出器がまさにそれ）。実抽出器を一切走らせずにバーを満たす row を
@@ -4860,6 +5286,15 @@ def run_accuracy(
     }
     results.update(_LOADED_SCORER_PINS)
 
+    # 設計 §8.7: `env_digest` は `--cell-store` 使用時にのみ計算する（モジュール
+    # import 時は元より、`cell_store is None` の通常 run でも一切呼ばない —— 重い
+    # optional import を避ける契約・挙動無変更の契約の両方を満たす）。
+    effective_cell_store = Path(cell_store) if cell_store is not None else None
+    env_digest_value: Optional[str] = _env_digest() if effective_cell_store is not None else None
+    run_cells_resumed: List[str] = []
+    run_cells_measured: List[str] = []
+    run_cell_store_mismatches: "List[Dict[str, Any]]" = []
+
     with tempfile.TemporaryDirectory(prefix="melody-accuracy-") as tmp:
         for category in categories:
             category_spec = _CATEGORY_SPECS[category]
@@ -4881,7 +5316,21 @@ def run_accuracy(
                     route=route,
                     runner=runner,
                     tmp_dir=Path(tmp),
+                    level=level,
+                    cell_store=effective_cell_store,
+                    repeat_index=repeat_index,
+                    env_digest=env_digest_value,
+                    workers=workers,
                 )
+                if effective_cell_store is not None:
+                    # `_run_external_category` は run 単位の bookkeeping をカテゴリ
+                    # row の内部専用キーとして積んで返す（複数 external カテゴリを
+                    # 1 run で測る場合の集約点は categories dict でなく run 単位の
+                    # ため）。ここで pop して run 側リストへ畳み込み、
+                    # `results["categories"][category]` には残さない。
+                    run_cells_resumed.extend(row.pop("_cell_store_resumed"))
+                    run_cells_measured.extend(row.pop("_cell_store_measured"))
+                    run_cell_store_mismatches.extend(row.pop("_cell_store_mismatches"))
                 _annotate_row_bars_pin(
                     row,
                     category,
@@ -5073,6 +5522,17 @@ def run_accuracy(
     # 無改変を区別するための coverage 検証に使う。
     results["scorer_compile_observed_paths"] = sorted(_SCORER_COMPILE_OBSERVED_PATHS)
     results["scorer_compile_expected_paths"] = _scorer_compile_expected_paths()
+    # 設計 §8.7: `--cell-store` 使用時のみ report へ追加フィールドを積む。
+    # `cell_store is None` の run にはこのブロックの副作用が一切無いため、
+    # 既存呼び出しは 1 バイトも変わらない report を返す（挙動無変更の契約）。
+    if effective_cell_store is not None:
+        results["cell_store_relative"] = _repo_relative_path(effective_cell_store)
+        results["env_digest"] = env_digest_value
+        results["repeat_index"] = repeat_index
+        results["workers"] = workers
+        results["cells_resumed"] = run_cells_resumed
+        results["cells_measured"] = run_cells_measured
+        results["cell_store_mismatches"] = run_cell_store_mismatches
     results["recorded_utc"] = _utc_now()
     return results
 
@@ -5865,6 +6325,15 @@ def _run_external_verification_in_fresh_process(
         command += ["--m2e-bars", str(Path(m2e_bars_path).resolve())]
     if level is not None:
         command += ["--level", level]
+    # M2e §8.7 セルチェックポイント: この子プロセスへは **`--cell-store` を絶対に
+    # 渡さない**（意図的な省略・本機能で最も危険な穴）。ここは評価器が「report の
+    # metrics が実測結果であること」を独立に確かめるための測り直しであり、子が
+    # チェックポイントから resume すると、測り直しは「セルレコード（=提出 report を
+    # 生んだのと同じ測定）を自分自身と比較する」だけになり、bit 一致の検証が
+    # 恒常的に空虚な成功を返す publish 条件になる（fail-closed の意味が消える）。
+    # `command` に `--cell-store` を積む分岐は存在せず、`--workers` /
+    # `--repeat-index` も同様に渡さない——`test_reverification_child_never_receives_cell_store`
+    # がこの不在を固定する。
     env = dict(os.environ)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["PYTHONPYCACHEPREFIX"] = str(tmp_dir / f"pyc-fresh-ext-{index}")
@@ -5960,6 +6429,12 @@ def _reverify_external_category_measurement(
             extra_run_kwargs["m2e_bars_path"] = m2e_bars_copy
         if level is not None:
             extra_run_kwargs["level"] = level
+        # M2e §8.7: `cell_store` / `repeat_index` は意図的に `extra_run_kwargs` へ
+        # 積まない（in-process 版 `verification_runner is not None` 経路。fresh
+        # process 経路の同じ規律は `_run_external_verification_in_fresh_process`
+        # docstring 参照）。測り直しは提出 report と独立に測定した bit 一致を
+        # publish 条件にするための機構であり、チェックポイントから resume すると
+        # 「レコードを自分自身と比較する」だけになって検証が空虚になる。
         for index in range(repeats):
             if verification_runner is not None:
                 verification = run_accuracy(
@@ -7552,6 +8027,33 @@ def main() -> int:
         help="外部素材カテゴリの事前登録 pin ファイル（既定: 凍結 committed ファイル）。"
         "測り直し子プロセスへの明示転送・`--out` 保護のためテストでの差し替えを想定",
     )
+    parser.add_argument(
+        "--cell-store",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="設計 §8.7 のセルチェックポイント用ディレクトリ（opt-in・既定 None）。"
+        "指定すると外部素材カテゴリの各 clip を 1 セルとして記録し、既存レコードが "
+        "入力/環境 digest と一致すれば再測定をスキップする。未指定時は report に "
+        "新フィールドが一切増えない（挙動無変更）。指定時は --repeat-index が必須",
+    )
+    parser.add_argument(
+        "--repeat-index",
+        type=int,
+        default=None,
+        metavar="N",
+        help="このプロセスが担う repeat の番号（0 始まり）。--cell-store 指定時は "
+        "必須・0 以上の整数のみ（セル鍵 (category, level, entry_id, repeat_index) "
+        "の一部）。--cell-store 未指定時に渡すのは fail-closed で拒否する",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        metavar="P",
+        help="設計 §8.3 の並列度 P。実行そのものは変えない（本ハーネスは単一プロセス "
+        "のまま）——--cell-store 使用時にセルレコードへコスト再現用に記録するだけ",
+    )
     args = parser.parse_args()
     _require_out_outside_git_metadata(args.out)
 
@@ -7565,6 +8067,14 @@ def main() -> int:
         if args.level is not None:
             raise SystemExit(
                 "--level は run phase 専用（evaluate は report が記録した level を読む）"
+            )
+        if args.cell_store is not None:
+            raise SystemExit(
+                "--cell-store は run phase 専用（evaluate は report が記録した値を読む）"
+            )
+        if args.repeat_index is not None:
+            raise SystemExit(
+                "--repeat-index は run phase 専用（evaluate は report が記録した値を読む）"
             )
         protected = {Path(p).resolve() for p in args.evaluate}
         protected.add(Path(args.bars).resolve())
@@ -7654,11 +8164,32 @@ def main() -> int:
     if args.external_manifest is not None:
         run_kwargs["external_manifest_path"] = args.external_manifest
     run_kwargs["external_fixtures_path"] = args.external_fixtures
+    # 設計 §8.7: --repeat-index は --cell-store 指定時のみ必須・かつそのときのみ
+    # 許可する（どちらか片方だけの指定は「測っていない次元を report に名乗らせない」
+    # という repo 全体の規律に反するので CLI レベルで早期に落とす。`run_accuracy`
+    # 自身も同じ検査を ValueError で持つ——直接呼び出すテスト経路のための多重防御）。
+    if args.cell_store is not None and args.repeat_index is None:
+        raise SystemExit(
+            "--repeat-index は --cell-store 指定時に必須（セル鍵 "
+            "(category, level, entry_id, repeat_index) の repeat_index を欠いたまま "
+            "チェックポイントを書かない）"
+        )
+    if args.cell_store is None and args.repeat_index is not None:
+        raise SystemExit(
+            "--repeat-index は --cell-store と併用したときのみ有効（測っていない次元を "
+            "report に名乗らせない）"
+        )
+    if args.repeat_index is not None and args.repeat_index < 0:
+        raise SystemExit(f"--repeat-index {args.repeat_index} は 0 以上の整数のみ許可する")
+    if args.cell_store is not None:
+        run_kwargs["cell_store"] = args.cell_store
+        run_kwargs["repeat_index"] = args.repeat_index
     result = run_accuracy(
         specs_path=args.specs,
         bars_path=args.bars,
         m2e_bars_path=args.m2e_bars,
         level=args.level,
+        workers=args.workers,
         **run_kwargs,
     )
     _atomic_write_text(args.out, json.dumps(result, indent=2, sort_keys=True))
