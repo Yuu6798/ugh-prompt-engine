@@ -251,5 +251,27 @@
   "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
   "stem_sha256": "ff338d5ab29801df01547c3706288e3c27c2d0641dbfb33a6a8359f16aab05ff",
   "elapsed_seconds": 301.98
+ },
+ "Moosmusic - Big Dummy Shake": {
+  "index": 23,
+  "residual_db": -21.40840889202453,
+  "numeric_pass": false,
+  "bed_rms": 0.1100715829187367,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "566a80d0af56909b32dbb70b8d9d117a38e8b6a5959c4117d9c545bae83fbd39",
+  "elapsed_seconds": 273.52
+ },
+ "Motor Tapes - Shore": {
+  "index": 24,
+  "residual_db": -71.0541998299894,
+  "numeric_pass": true,
+  "bed_rms": 0.08104732893001174,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "f68b7a9058be01dfab4a3e0a0ccdea6d48f2bdf7b430cb821376cd6b4bfd6700",
+  "elapsed_seconds": 265.73
  }
 }
