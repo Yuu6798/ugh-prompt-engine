@@ -489,36 +489,59 @@ def test_load_bed_mono_stops_on_sample_rate_mismatch(tmp_path: Path) -> None:
         mk.load_bed_mono(bed_dir)
 
 
-def test_read_stem_pinned_opens_the_stem_exactly_once(tmp_path: Path, monkeypatch) -> None:
-    """P2 (TOCTOU): pin 照合と混合サンプルを**同一 file handle** から取る。
+def test_read_stem_pinned_reads_the_stem_from_disk_exactly_once(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """P2 (TOCTOU): pin 照合と混合サンプルを**同一 bytes snapshot** から取る。
 
-    別々に open すると、その 2 回の read の間に stem を差し替えられたとき
-    「pin は通ったが混ぜたのは別の音」が成立し、生成物は内部整合するので
-    下流から検出できない。
+    file handle を握り続けるだけでは足りない（初版はそう書いていた）。fd が防ぐのは
+    パスの差し替えだけで、**同じ inode へ in-place 上書き**されれば 2 回目の read は
+    書き換わった bytes を読む。ここでは 1 回目の decode 直後に in-place 上書きを
+    仕掛け、返ってくるサンプルが**上書き前**のものであることを確認する。
     """
     bed_dir = tmp_path / "track"
     _write_bed(bed_dir)
     path = bed_dir / "drums.wav"
     expected = mk.stem_sha256(path)  # 監視を張る前に取る
+    original_samples, _ = mk.sf.read(str(path), dtype="float64", always_2d=False)
 
-    opens: list[str] = []
-    original = mk.sf.SoundFile
+    disk_reads: list[str] = []
+    original_read_bytes = Path.read_bytes
 
-    def _counting(*args, **kwargs):
-        opens.append(str(args[0]))
-        return original(*args, **kwargs)
+    def _counting_read_bytes(self: Path) -> bytes:
+        disk_reads.append(str(self))
+        return original_read_bytes(self)
 
-    monkeypatch.setattr(mk.sf, "SoundFile", _counting)
-    monkeypatch.setattr(
-        mk.sf, "read", lambda *a, **k: pytest.fail("pin と混合で別の open をしている")
-    )
-    monkeypatch.setattr(
-        mk.sf, "info", lambda *a, **k: pytest.fail("pin と混合で別の open をしている")
-    )
+    monkeypatch.setattr(Path, "read_bytes", _counting_read_bytes)
+
+    original_soundfile = mk.sf.SoundFile
+    opened: list[object] = []
+    overwriting = False
+
+    def _overwriting_soundfile(target, *args, **kwargs):
+        nonlocal overwriting
+        if overwriting:   # 下の sf.write 自身の open は監視対象ではない
+            return original_soundfile(target, *args, **kwargs)
+        opened.append(target)
+        if len(opened) == 1:
+            # decode の合間に「同じ inode を別の音で上書き」する攻撃を再現する。
+            overwriting = True
+            try:
+                sf.write(
+                    str(path), np.zeros((4096, 2), dtype=np.float64), 44100, subtype="PCM_16"
+                )
+            finally:
+                overwriting = False
+        return original_soundfile(target, *args, **kwargs)
+
+    monkeypatch.setattr(mk.sf, "SoundFile", _overwriting_soundfile)
     data, rate = mk.read_stem_pinned(path, expected)
-    assert opens == [str(path)]
+
+    assert disk_reads == [str(path)]                    # disk からの read は 1 回だけ
+    assert all(not isinstance(t, (str, Path)) for t in opened)  # decode は memory 上
     assert rate == 44100
     assert data.ndim == 2 and data.shape[1] == 2
+    assert np.array_equal(data, original_samples)       # 上書き後の音を混ぜていない
 
 
 def test_read_stem_pinned_rejects_a_digest_mismatch(tmp_path: Path) -> None:

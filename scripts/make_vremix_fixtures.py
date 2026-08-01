@@ -33,8 +33,8 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -197,17 +197,25 @@ def stem_sha256(path: Path) -> str:
 def read_stem_pinned(
     path: Path, expected_sha256: Optional[str] = None
 ) -> Tuple[np.ndarray, int]:
-    """**1 つの file handle** から pin 用の整数 decode と混合用の float 読みを行う。
+    """**bytes を 1 回だけ読み**、その snapshot から pin 用の整数 decode と混合用の
+    float 読みを行う。
 
-    pin 照合と実際に混ぜるサンプルを別々の `open` で取ると、その 2 回の read の間に
-    stem が差し替えられた場合、**pin は通ったのに混ぜたのは別の音**という状態が
-    成立する（生成物は内部整合するので下流から検出できない）。同一ハンドルから
-    読めば、途中でパスが差し替えられても開いている inode は変わらないため、
-    この窓が閉じる。
+    pin 照合と実際に混ぜるサンプルを別々に読むと、その間に stem が差し替えられた
+    場合に **pin は通ったのに混ぜたのは別の音**という状態が成立する（生成物は内部
+    整合するので下流から検出できない）。
+
+    **同一 file handle を保持するだけでは足りない**（初版はそう書いていたが誤り）:
+    fd を握っていても防げるのはパスの差し替え（rename/unlink→再作成）だけで、
+    **同じ inode へ in-place 上書き**されれば `seek(0)` 後の 2 回目の read は
+    書き換わった bytes を読む。メモリ上の snapshot を唯一の入力にすれば、
+    どちらの経路でも 2 つの read が同じ bytes を見ることが保証される。
     """
+    import io
+
     path = Path(path)
     _forbid_vocals(path)
-    with sf.SoundFile(str(path)) as handle:
+    payload = path.read_bytes()          # ← 唯一の read。以降はこの snapshot だけを見る
+    with sf.SoundFile(io.BytesIO(payload)) as handle:
         dtype = _CANONICAL_DTYPES.get(handle.subtype)
         if dtype is None:
             raise GenerationError(
@@ -220,18 +228,19 @@ def read_stem_pinned(
                 "canonical decode は resample を禁じる (fail-closed)"
             )
         native = np.ascontiguousarray(handle.read(dtype=dtype, always_2d=True))
-        if expected_sha256 is not None:
-            actual = hashlib.sha256(native.tobytes()).hexdigest()
-            if actual != expected_sha256:
-                raise GenerationError(
-                    f"{path}: canonical decode 後 sha256 {actual} が事前登録 pin "
-                    f"{expected_sha256} と不一致; 破損・差し替え・再取得ミスの可能性が "
-                    "あり、間違ったベッドで内部整合した manifest を作らない (fail-closed)"
-                )
-        handle.seek(0)
-        # float 変換は soundfile に委ねる（除数の規約を自前で選ばない・§9.2）。
+        sample_rate = int(handle.samplerate)
+    if expected_sha256 is not None:
+        actual = hashlib.sha256(native.tobytes()).hexdigest()
+        if actual != expected_sha256:
+            raise GenerationError(
+                f"{path}: canonical decode 後 sha256 {actual} が事前登録 pin "
+                f"{expected_sha256} と不一致; 破損・差し替え・再取得ミスの可能性が "
+                "あり、間違ったベッドで内部整合した manifest を作らない (fail-closed)"
+            )
+    # float 変換は soundfile に委ねる（除数の規約を自前で選ばない・§9.2）。
+    with sf.SoundFile(io.BytesIO(payload)) as handle:
         data = np.asarray(handle.read(dtype="float64", always_2d=False), dtype=np.float64)
-        return data, int(handle.samplerate)
+    return data, sample_rate
 
 
 def waveform_sha256(y: np.ndarray) -> str:
@@ -736,10 +745,14 @@ def build(
     # 残さない（消費側は out_dir を「1 つの fixture bundle」として扱う）。加えて
     # 「空でない出力先は拒否」と噛み合うと、中断が次回実行を塞いでしまう——
     # staging に閉じ込めておけば再実行がそのまま通る。
-    # rename を atomic にするため staging は**同一親ディレクトリ**へ置く。
-    staging = published.parent / f".{published.name}.staging"
-    if staging.exists():
-        shutil.rmtree(staging)
+    # rename を atomic にするため staging は**同一親ディレクトリ**へ置く。名前は
+    # `mkdtemp` で**この実行が所有する一意な名前**にする——固定名にすると、同じ
+    # 出力先を狙う 2 本目が 1 本目の生きた staging を消してしまう（かつ、たまたま
+    # 同名で存在していた無関係のディレクトリを再帰削除しうる）。
+    published.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(
+        tempfile.mkdtemp(dir=str(published.parent), prefix=f".{published.name}.staging-")
+    )
     out_dir = staging
     mix_dir = out_dir / "mix"
     annotation_dir = out_dir / "annotations"
