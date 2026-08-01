@@ -7562,37 +7562,84 @@ def test_evaluate_m2_bars_rejects_partial_cohort_row(tmp_path: Path) -> None:
         )
 
 
-def _m2e_cohort_ids(beds: int, clips_per_bed: int, tag: str = "p12") -> "Dict[str, Any]":
-    return {
-        f"vremix_vocadito_{c}_Bed{b}_{tag}": {}
-        for b in range(beds)
-        for c in range(clips_per_bed)
-    }
+def _registered_clip_ids() -> "List[str]":
+    return sorted(harness.load_external_fixtures(harness.EXTERNAL_FIXTURES_PATH)[0]["fixtures"])
+
+
+def _m2e_cohort_doc(
+    beds: int,
+    clips: "Optional[List[str]]" = None,
+    *,
+    tag: str = "p12",
+    builder: Any = None,
+    per_bed_clips: "Optional[Dict[int, List[str]]]" = None,
+) -> "Dict[str, Any]":
+    """凍結コホート gate 用の合成 fixtures doc（clip id は**実登録簿**から採る）。"""
+    if builder is None:
+        builder = {
+            "generator_code_sha256": "0" * 64,
+            "m2c_fixtures_sha256": hashlib.sha256(
+                Path(harness.EXTERNAL_FIXTURES_PATH).read_bytes()
+            ).hexdigest(),
+            "m2e_bed_fixtures_sha256": "1" * 64,
+        }
+    base = _registered_clip_ids() if clips is None else clips
+    fixtures: "Dict[str, Any]" = {}
+    for b in range(beds):
+        bed_clips = (per_bed_clips or {}).get(b, base)
+        for clip in bed_clips:
+            fixtures[f"vremix_{clip}_Bed{b}_{tag}"] = {}
+    return {"builder": builder, "fixtures": fixtures}
 
 
 def test_registered_m2e_cohort_accepts_the_frozen_shape() -> None:
     """2 bed × 40 clip = 80 entry ちょうどなら通る。"""
-    _ORIG_M2E_COHORT(_m2e_cohort_ids(2, 40), where="t")
+    _ORIG_M2E_COHORT(_m2e_cohort_doc(2), where="t")
 
 
 @pytest.mark.parametrize(
-    ("beds", "clips"),
+    ("beds", "delta"),
     [
-        (2, 39),   # 同じ clip を両 bed から落とす（矩形は保たれる = 78 entry）
-        (1, 40),   # bed を丸ごと落とす（矩形は保たれる = 40 entry）
-        (3, 40),   # 余分な bed
-        (2, 41),   # 余分な clip
+        (2, -1),   # 同じ clip を両 bed から落とす（矩形は保たれる = 78 entry）
+        (1, 0),    # bed を丸ごと落とす（矩形は保たれる = 40 entry）
+        (3, 0),    # 余分な bed
+        (2, +1),   # 未登録 clip を 1 件足す（81 entry）
     ],
 )
-def test_registered_m2e_cohort_rejects_a_resized_cohort(beds: int, clips: int) -> None:
+def test_registered_m2e_cohort_rejects_a_resized_cohort(beds: int, delta: int) -> None:
     """P2: 矩形性だけでは縮んだ帯を捕まえられない——絶対量を要求する。"""
-    with pytest.raises(ValueError, match="凍結値"):
-        _ORIG_M2E_COHORT(_m2e_cohort_ids(beds, clips), where="t")
+    clips = _registered_clip_ids()
+    clips = clips[:delta] if delta < 0 else clips + ["vocadito_unregistered"] * delta
+    with pytest.raises(ValueError, match="凍結値|clip 集合が事前登録"):
+        _ORIG_M2E_COHORT(_m2e_cohort_doc(beds, clips), where="t")
+
+
+def test_registered_m2e_cohort_rejects_divergent_clip_sets_per_bed() -> None:
+    """P2: 両 bed が 40 件でも中身がずれていれば直積の 1 セルが欠ける。"""
+    registered = _registered_clip_ids()
+    swapped = registered[:-1] + ["vocadito_unregistered"]   # 件数は 40 のまま中身がずれる
+    doc = _m2e_cohort_doc(2, per_bed_clips={0: registered, 1: swapped})
+    with pytest.raises(ValueError, match="clip 集合が事前登録"):
+        _ORIG_M2E_COHORT(doc, where="t")
+
+
+def test_registered_m2e_cohort_requires_builder_provenance() -> None:
+    """P2: 混合式・入力登録簿を名乗らない pin ファイルでは測らない。"""
+    with pytest.raises(ValueError, match="builder provenance"):
+        _ORIG_M2E_COHORT(_m2e_cohort_doc(2, builder={}), where="t")
+
+
+def test_registered_m2e_cohort_rejects_a_foreign_clip_registry_digest() -> None:
+    """P2: 別の clip 登録簿から作られたミックスを測らない。"""
+    doc = _m2e_cohort_doc(2)
+    doc["builder"]["m2c_fixtures_sha256"] = "9" * 64
+    with pytest.raises(ValueError, match="m2c registry digest"):
+        _ORIG_M2E_COHORT(doc, where="t")
 
 
 def test_registered_m2e_cohort_rejects_a_foreign_id_convention() -> None:
-    ids = _m2e_cohort_ids(2, 40)
-    ids["not_a_vremix_id"] = {}
+    ids = _m2e_cohort_doc(2)
+    ids["fixtures"]["not_a_vremix_id"] = {}
     with pytest.raises(ValueError, match="§6.2 の規約"):
         _ORIG_M2E_COHORT(ids, where="t")
 

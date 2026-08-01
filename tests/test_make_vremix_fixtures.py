@@ -785,7 +785,14 @@ def test_build_emits_manifest_fixtures_and_generation_record(tmp_path, monkeypat
         fixtures = yaml.safe_load((out_dir / f"fixtures_{tag}.yaml").read_text())
         assert fixtures["schema_version"] == "m2e-external-fixtures/0.1"
         assert set(fixtures["fixtures"]) == set(ids)
-        record = json.loads((out_dir / f"generation_record_{tag}.json").read_text())
+        record_doc = json.loads((out_dir / f"generation_record_{tag}.json").read_text())
+        # 生成記録は `{builder: …, entries: …}`（builder = 混合式・入力登録簿の pin）。
+        assert len(record_doc["builder"]["generator_code_sha256"]) == 64
+        assert record_doc["builder"]["m2c_fixtures_sha256"] == mk._sha256_file(
+            mk.M2C_FIXTURES_PATH
+        )
+        assert fixtures["builder"] == record_doc["builder"]
+        record = record_doc["entries"]
         for eid in ids:
             assert record[eid]["level"] == level
             assert 0.0 < record[eid]["factor"] <= 1.0
@@ -825,7 +832,7 @@ def test_build_is_deterministic(tmp_path, monkeypatch) -> None:
             out_dir=out_dir,
             registered_utc="2026-08-01",
         )
-        record = json.loads((out_dir / "generation_record_p00.json").read_text())
+        record = json.loads((out_dir / "generation_record_p00.json").read_text())["entries"]
         digests.append({k: v["waveform_sha256"] for k, v in record.items()})
         digests.append(
             {

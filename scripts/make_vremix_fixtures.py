@@ -964,7 +964,15 @@ def _build_into_staging(
         destination.write_bytes(annotation)   # 照合した bytes をそのまま複製する
         annotation_pins[clip_id] = clips[clip_id]["expected_annotation_sha256"]
 
-    summary: Dict[str, Any] = {"levels": {}, "beds": slugs}
+    # 生成側 provenance（混合式 = 本スクリプトの bytes と、入力登録簿 2 本の digest）。
+    # 全水準で同一なのでループ外で 1 度だけ作る。
+    builder_provenance = {
+        "generator_code_sha256": _sha256_file(Path(__file__).resolve()),
+        "m2c_fixtures_sha256": _sha256_file(M2C_FIXTURES_PATH),
+        "m2e_bed_fixtures_sha256": _sha256_file(M2E_BED_FIXTURES_PATH),
+    }
+
+    summary: Dict[str, Any] = {"levels": {}, "beds": slugs, "builder": builder_provenance}
     for level in levels:
         tag = LEVEL_TAGS[level]
         manifest: List[Dict[str, str]] = []
@@ -1019,6 +1027,13 @@ def _build_into_staging(
             "schema_version": M2E_EXTERNAL_FIXTURES_SCHEMA,
             "registered_utc": registered_utc,
             "level": level,
+            # **生成側の provenance**（Codex 22 巡目 P2）。report の
+            # `generator_code_sha256` が畳むのは測定ハーネスであって、この
+            # オフライン混合器ではない。混合式（本スクリプト）と入力登録簿の
+            # bytes を pin ファイル自身へ刻んでおかないと、「どの式・どの登録簿から
+            # 出た WAV か」を後から立証できない（WAV の hash は自分自身としか
+            # 一致しない）。
+            "builder": builder_provenance,
             "fixtures": {k: fixtures[k] for k in sorted(fixtures)},
         }
         fixtures_path = out_dir / f"fixtures_{tag}.yaml"
@@ -1027,7 +1042,10 @@ def _build_into_staging(
         )
         record_path = out_dir / f"generation_record_{tag}.json"
         record_path.write_text(
-            json.dumps(records, indent=2, sort_keys=True), encoding="utf-8"
+            json.dumps(
+                {"builder": builder_provenance, "entries": records}, indent=2, sort_keys=True
+            ),
+            encoding="utf-8",
         )
         summary["levels"][level] = {
             "n_entries": len(manifest),

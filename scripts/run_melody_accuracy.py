@@ -3808,7 +3808,7 @@ _M2E_EXPECTED_CLIPS_PER_BED = 40
 _M2E_EXPECTED_ENTRIES_PER_LEVEL = _M2E_EXPECTED_BED_COUNT * _M2E_EXPECTED_CLIPS_PER_BED
 
 
-def _require_registered_m2e_cohort(fixtures: Dict[str, Any], *, where: str) -> None:
+def _require_registered_m2e_cohort(fixtures_doc: Dict[str, Any], *, where: str) -> None:
     """M2e fixtures が**凍結コホートそのもの**であることを要求する（fail-closed）。
 
     fixtures と manifest を同じだけ切り詰めると両者は一致するので、cohort 完全一致の
@@ -3816,10 +3816,38 @@ def _require_registered_m2e_cohort(fixtures: Dict[str, Any], *, where: str) -> N
     落とす」は矩形性すら壊さない。**生成器側の保証は生成物と一緒に旅をしない**ので、
     測る側が絶対量を独立に要求する: 2 bed × 40 clip = 80 entry（§6.2）。
 
+    件数だけでは足りない。**各 bed の clip 集合を登録簿の 40 ID 集合そのもの**へ
+    束縛する——両 bed が 40 件ずつでも中身がずれていれば（片方が `vocadito_1..40`、
+    もう片方が `vocadito_2..41`）直積の 1 セルが欠け、登録されていない clip が
+    紛れ込んだ帯になる。manifest を同じようにずらせば下流の cohort 比較も通る。
+
     テストは合成 fixtures（数 entry）を多用するため、本 gate は
     `_require_attested_external_fixtures_registration` と同じ流儀で autouse fixture が
     無効化し、**専用テスト群が実 gate を固定する**。
     """
+    fixtures = fixtures_doc.get("fixtures")
+    if not isinstance(fixtures, dict) or not fixtures:
+        raise ValueError(f"{where}: M2e fixtures が空 (fail-closed)")
+    # 生成側 provenance（`make_vremix_fixtures.build` が刻む混合式・入力登録簿の
+    # digest）を、**測る側が持っている登録簿**と突き合わせる。ミックスが committed
+    # pin と hash 一致していても、それが「登録済み 40 clip から凍結式で作られた」
+    # ことは WAV 自身からは分からない。
+    builder = fixtures_doc.get("builder")
+    if not isinstance(builder, dict) or not builder.get("generator_code_sha256"):
+        raise ValueError(
+            f"{where}: M2e fixtures に builder provenance（generator_code_sha256 / "
+            "入力登録簿 digest）が無い; どの混合式・どの登録簿から出た音か立証できない "
+            "pin ファイルで測らない (fail-closed)"
+        )
+    declared_m2c = builder.get("m2c_fixtures_sha256")
+    actual_m2c = hashlib.sha256(Path(EXTERNAL_FIXTURES_PATH).read_bytes()).hexdigest()
+    if declared_m2c != actual_m2c:
+        raise ValueError(
+            f"{where}: fixtures が名乗る m2c registry digest {declared_m2c!r} が、測る側の "
+            f"{_repo_relative_path(EXTERNAL_FIXTURES_PATH)} の実体 {actual_m2c!r} と不一致; "
+            "別の clip 登録簿から作られたミックスを測らない (fail-closed)"
+        )
+    registered_clips = set(load_external_fixtures(EXTERNAL_FIXTURES_PATH)[0]["fixtures"])
     by_bed: Dict[str, set] = {}
     for key in fixtures:
         parts = str(key).split("_")
@@ -3830,17 +3858,22 @@ def _require_registered_m2e_cohort(fixtures: Dict[str, Any], *, where: str) -> N
             )
         by_bed.setdefault(parts[-2], set()).add("_".join(parts[1:-2]))
     detail = {bed: len(clips) for bed, clips in sorted(by_bed.items())}
-    if (
-        len(by_bed) != _M2E_EXPECTED_BED_COUNT
-        or any(len(clips) != _M2E_EXPECTED_CLIPS_PER_BED for clips in by_bed.values())
-        or len(fixtures) != _M2E_EXPECTED_ENTRIES_PER_LEVEL
-    ):
+    if len(by_bed) != _M2E_EXPECTED_BED_COUNT or len(fixtures) != _M2E_EXPECTED_ENTRIES_PER_LEVEL:
         raise ValueError(
             f"{where}: M2e コホートが凍結値（{_M2E_EXPECTED_BED_COUNT} bed × "
             f"{_M2E_EXPECTED_CLIPS_PER_BED} clip = {_M2E_EXPECTED_ENTRIES_PER_LEVEL} entry）"
             f"と一致しない（bed 別 clip 数={detail} / 総数={len(fixtures)}）; 部分コホートを "
             "水準の証拠として測らない (fail-closed)"
         )
+    for bed, clips in sorted(by_bed.items()):
+        if clips != registered_clips:
+            missing = sorted(registered_clips - clips)
+            extra = sorted(clips - registered_clips)
+            raise ValueError(
+                f"{where}: bed {bed!r} の clip 集合が事前登録の "
+                f"{len(registered_clips)} clip と一致しない（欠落={missing[:5]} / "
+                f"余分={extra[:5]}）; 登録されていない clip を含む帯を測らない (fail-closed)"
+            )
 
 
 def _require_external_fixtures_level_match(
@@ -3894,7 +3927,7 @@ def _require_external_fixtures_level_match(
             f"entry がある（{mislabeled[:5]}{' …' if len(mislabeled) > 5 else ''}）; "
             "宣言だけ書き換えた pin ファイルで別水準の音を測らない (fail-closed)"
         )
-    _require_registered_m2e_cohort(fixtures, where=where)
+    _require_registered_m2e_cohort(fixtures_doc, where=where)
 
 
 def load_external_fixtures(path: Path = EXTERNAL_FIXTURES_PATH) -> Tuple[Dict[str, Any], str]:
