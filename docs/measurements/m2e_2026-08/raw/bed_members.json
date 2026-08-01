@@ -2253,5 +2253,500 @@
    "bed_window_sha256": "22040ad0d447e8d8242ec10cb45dfbb55eff0778b8a057d76dacf0672089418b"
   },
   "fetch_seconds": 78.61
+ },
+ "The Easton Ellises - Falcon 69": {
+  "index": 41,
+  "track": "The Easton Ellises - Falcon 69",
+  "members": {
+   "test/The Easton Ellises - Falcon 69/drums.wav": {
+    "uncompressed_size": 43569196,
+    "crc32_central_directory": "d9f1c856",
+    "member_sha256": "8da7c63d6e9b3014dc08eac01e3702f8d8dc29f048e7677284cda02598b0bad7",
+    "compression_method": 8
+   },
+   "test/The Easton Ellises - Falcon 69/bass.wav": {
+    "uncompressed_size": 43569196,
+    "crc32_central_directory": "9b2d6c79",
+    "member_sha256": "4e2fff28350baf07a87d5e1861d35abf856eb7706f2ce8e5254274aa225ba1cc",
+    "compression_method": 8
+   },
+   "test/The Easton Ellises - Falcon 69/other.wav": {
+    "uncompressed_size": 43569196,
+    "crc32_central_directory": "edb41b8d",
+    "member_sha256": "9f3ce870c3368d53f9452b805c0636157afc4c430a07d78dee18133238f474f8",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "3bed8eeead81b580a87bad11a33d88874f922cc1431e91fb6239d159d5ba997b",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 10892288,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "516808a2eba1d417b5c78b81e32389c1ab4817117f1d7e2c19a414b13ddb1b47",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 10892288,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "6544fa0aa64f282d51d42997ab2fb05c52962ce4aa115f3d534e8fb93c5ce80e",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 10892288,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 10892288,
+   "tiled": false,
+   "bed_window_sha256": "4e0c8ae0af986859c58a650a26e836662453e53c5a7526f005e182ab26d9209b"
+  },
+  "fetch_seconds": 109.85
+ },
+ "The Long Wait - Dark Horses": {
+  "index": 42,
+  "track": "The Long Wait - Dark Horses",
+  "members": {
+   "test/The Long Wait - Dark Horses/drums.wav": {
+    "uncompressed_size": 53929216,
+    "crc32_central_directory": "4748a5f6",
+    "member_sha256": "81e0285af3a777fb315af6f7aa252c9e7c1e2b6844d3b20df9feea6f7333dd98",
+    "compression_method": 8
+   },
+   "test/The Long Wait - Dark Horses/bass.wav": {
+    "uncompressed_size": 53929216,
+    "crc32_central_directory": "b87a5133",
+    "member_sha256": "54aed4171888e1470b4a84ca6819bd63136d66668918a48c3c74f522f40e6275",
+    "compression_method": 8
+   },
+   "test/The Long Wait - Dark Horses/other.wav": {
+    "uncompressed_size": 53929216,
+    "crc32_central_directory": "07a7f75e",
+    "member_sha256": "b2a404496d64c2a39bc1b6c45a22a5ec796f3ad41a9d0a56a1c46ac2de213661",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "354fa176738473453dd67593267fb55e9fcd877e8bf548a119381d91fcb93005",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 13482293,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "aa0c8826b346f34b8e5233b032e178ccddb9e8eb5a355cc58aab86f2bc0bebb4",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 13482293,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "9e0c09efe98ed7090a723a2e5bce1675de717b6b770073cc54d3046a386c41db",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 13482293,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 13482293,
+   "tiled": false,
+   "bed_window_sha256": "2ca7010253900e064e6ebf61395eb72e3a82b4d4baac034a42e75e7296fceac5"
+  },
+  "fetch_seconds": 27.93
+ },
+ "The Mountaineering Club - Mallory": {
+  "index": 43,
+  "track": "The Mountaineering Club - Mallory",
+  "members": {
+   "test/The Mountaineering Club - Mallory/drums.wav": {
+    "uncompressed_size": 43122756,
+    "crc32_central_directory": "b69f6a31",
+    "member_sha256": "a2f5c83c5615811b4ae0f74c32ba65c1375b4c595230591197bb89195ef5239b",
+    "compression_method": 8
+   },
+   "test/The Mountaineering Club - Mallory/bass.wav": {
+    "uncompressed_size": 43122756,
+    "crc32_central_directory": "13883aaa",
+    "member_sha256": "35169cf1dea496a7a9aa4aa77d6ee27fb4806f40a2fc710797c2fc30f338c1d4",
+    "compression_method": 8
+   },
+   "test/The Mountaineering Club - Mallory/other.wav": {
+    "uncompressed_size": 43122756,
+    "crc32_central_directory": "5addc68e",
+    "member_sha256": "ef224eba6d699ce12b7c2492443a7301ea13d508e19adc7d4773b88ed58aebbc",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "563fffc783fc7b7715d9489f58de3235e5f33a245db1947a8c21667e989851f4",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 10780678,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "227bd5fecc3809587b2c72815c44c588a21fd60cd647a6b008f56be00b2cff71",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 10780678,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "8b980fbfa881dfe6fd3e1613c7b49dc486c4f9eabbed14304fe41683a1d5ba38",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 10780678,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 10780678,
+   "tiled": false,
+   "bed_window_sha256": "8af37ae9850baf39e73c8855df180501afa4fbba9ce2c6f1f9ebea0a31343e8a"
+  },
+  "fetch_seconds": 61.76
+ },
+ "The Sunshine Garcia Band - For I Am The Moon": {
+  "index": 44,
+  "track": "The Sunshine Garcia Band - For I Am The Moon",
+  "members": {
+   "test/The Sunshine Garcia Band - For I Am The Moon/drums.wav": {
+    "uncompressed_size": 56500376,
+    "crc32_central_directory": "c2f0fbd5",
+    "member_sha256": "7e632ed5dc3ea1d189fb3a974a49e5b6a23fe924ffe511fa231c22a61b428b04",
+    "compression_method": 8
+   },
+   "test/The Sunshine Garcia Band - For I Am The Moon/bass.wav": {
+    "uncompressed_size": 56500376,
+    "crc32_central_directory": "b48d8044",
+    "member_sha256": "399ee72ca7c097f428a05b5223fcf76228f7cb151c068d164c2b37a53b79bac4",
+    "compression_method": 8
+   },
+   "test/The Sunshine Garcia Band - For I Am The Moon/other.wav": {
+    "uncompressed_size": 56500376,
+    "crc32_central_directory": "7547d5cc",
+    "member_sha256": "588ef538c59cf08d3883b9947b8a97deff5655c260c3537dff7fef995c4d83a2",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "dcda2b29d397f9d6783ab3d7413a95276c66a588a54171197a201410b673e134",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 14125083,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "d92d2136fb9fded1b2c1cf9469b6982d3663d10450a324f549a6e9e77d7065a7",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 14125083,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "43c8544de71db2ea91333b0e53d934e68f0869c294c224d3dc80eeb9d3704e94",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 14125083,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 14125083,
+   "tiled": false,
+   "bed_window_sha256": "a77fc74d0097216841d08b536376f38ba58b91ea35c174ecb385ea89d5b54c28"
+  },
+  "fetch_seconds": 61.78
+ },
+ "Timboz - Pony": {
+  "index": 45,
+  "track": "Timboz - Pony",
+  "members": {
+   "test/Timboz - Pony/drums.wav": {
+    "uncompressed_size": 44637840,
+    "crc32_central_directory": "95d20608",
+    "member_sha256": "881c0480809370f214c4274bc4332b6742b6b4e002e42b977fbdc9d790475c23",
+    "compression_method": 8
+   },
+   "test/Timboz - Pony/bass.wav": {
+    "uncompressed_size": 44637840,
+    "crc32_central_directory": "12145151",
+    "member_sha256": "d0d5202159697aec991142a05be36039c66112aa09a4fed72a71c16e8b6232c8",
+    "compression_method": 8
+   },
+   "test/Timboz - Pony/other.wav": {
+    "uncompressed_size": 44637840,
+    "crc32_central_directory": "bdda5e87",
+    "member_sha256": "4ee5369d1e7d95fc5ec3a91d2fdb85de90493879ab6a62f4cf2099ded8b91957",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "2924a7f7606164efb1e8a581aa8b6f829025c2f3404290d089bd9a6a3165995f",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 11159449,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "2c6bc035524188e741622236c46a8523459eddaefbc8b937d080b71c16c67800",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 11159449,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "f83e86e038643cffad75c406ca50eab22b1e631b6e071074027c8c1f233e51ab",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 11159449,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 11159449,
+   "tiled": false,
+   "bed_window_sha256": "ccb9eb2009e7cedc93883afc7a5f3f571605a2ceb038af926503408e857c3e0b"
+  },
+  "fetch_seconds": 86.79
+ },
+ "Tom McKenzie - Directions": {
+  "index": 46,
+  "track": "Tom McKenzie - Directions",
+  "members": {
+   "test/Tom McKenzie - Directions/drums.wav": {
+    "uncompressed_size": 31020456,
+    "crc32_central_directory": "834fbc61",
+    "member_sha256": "e6ad76b331d7f4c8e13c4b4a5896f81e8b3b4f08796a08cfed7f23d1f39a1af1",
+    "compression_method": 8
+   },
+   "test/Tom McKenzie - Directions/bass.wav": {
+    "uncompressed_size": 31020456,
+    "crc32_central_directory": "c8ab5202",
+    "member_sha256": "b6988c2558a2aca370518d7ca10e6c2b6d57fc7b62abf4f2579665ea0ee17d7c",
+    "compression_method": 8
+   },
+   "test/Tom McKenzie - Directions/other.wav": {
+    "uncompressed_size": 31020456,
+    "crc32_central_directory": "7189da61",
+    "member_sha256": "60e45df51993886a06d70d03f9c847f91a960a4f0cd0ddf2755f31d44be35846",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "f50dd23791f337701ddc4c5098c221062f68d1a4200908724c41c3f860ca7bca",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 7755103,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "e22432e94380b664ade463e6e2c9d70479e9bda4ba652f731d1af0ec077f0a1f",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 7755103,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "36b127e86fe9f18c1fde095b6af21e26acf9b2af3c4542fa37ded05a3cf27e9f",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 7755103,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 7755103,
+   "tiled": false,
+   "bed_window_sha256": "118b1ed39bf85e491c527ed1698c02d2f54ef9dfb604c957edffb9acd500fa39"
+  },
+  "fetch_seconds": 47.65
+ },
+ "Triviul feat. The Fiend - Widow": {
+  "index": 47,
+  "track": "Triviul feat. The Fiend - Widow",
+  "members": {
+   "test/Triviul feat. The Fiend - Widow/drums.wav": {
+    "uncompressed_size": 41473392,
+    "crc32_central_directory": "9c5f60c7",
+    "member_sha256": "6b557fbe20c5a4094e5ca313f7e3e9b86ff38098b7213a364f9cfa7860a44aa8",
+    "compression_method": 8
+   },
+   "test/Triviul feat. The Fiend - Widow/bass.wav": {
+    "uncompressed_size": 41473392,
+    "crc32_central_directory": "44b743c2",
+    "member_sha256": "45c030fff97726dc55ffa8bcfb5e40cc9f6ca914f50c6598426e322b2e08bd59",
+    "compression_method": 8
+   },
+   "test/Triviul feat. The Fiend - Widow/other.wav": {
+    "uncompressed_size": 41473392,
+    "crc32_central_directory": "b72337ff",
+    "member_sha256": "ce7bd02024aa63e80aacdb3cbee1ebac133ce15d9023ab2b2c910e6048612702",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "3ce4d08f3a5573674f736f61cf6052f3253b461afb05c8feaa20fe8e66c5f43c",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 10368337,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "6c7321016c718db0b3bc297563cc2e341ad49e94a6c135fe5a24361877f8e999",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 10368337,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "66e2a7ef93ec9363f771b1a1456d14e667156539384e70b80d4c3d79606b6ed0",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 10368337,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 10368337,
+   "tiled": false,
+   "bed_window_sha256": "a394712b3cb1f9f97830a1c6af20d04d88b2d012ad6e58ce9043de563807a484"
+  },
+  "fetch_seconds": 49.36
+ },
+ "We Fell From The Sky - Not You": {
+  "index": 48,
+  "track": "We Fell From The Sky - Not You",
+  "members": {
+   "test/We Fell From The Sky - Not You/drums.wav": {
+    "uncompressed_size": 36673132,
+    "crc32_central_directory": "3e95d5f9",
+    "member_sha256": "d63de567fc869da26533c9c368935a5c08a1db0c2f479c58fdea98d4a796f017",
+    "compression_method": 8
+   },
+   "test/We Fell From The Sky - Not You/bass.wav": {
+    "uncompressed_size": 36673132,
+    "crc32_central_directory": "29ec3cf7",
+    "member_sha256": "63d1daa71d306783d2d5a8a209c6aeea29d09e9b61e9408a414b5956599fe14a",
+    "compression_method": 8
+   },
+   "test/We Fell From The Sky - Not You/other.wav": {
+    "uncompressed_size": 36673132,
+    "crc32_central_directory": "42495015",
+    "member_sha256": "dfa964da28f68ee8fd688adb9d45fc7b6536e6d4a0488e87eccae04fc88cab1c",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "b0787373c8264bbbe586117eda75873ebe10012a568b936a29a4b9f5021ec75b",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 9168272,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "964561d5d537f929dcdc6277887384b44315672a6d8ed147ddecda249771cbfa",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 9168272,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "4ad7c28e9f980c74cf5403151dbf4bf4a4ebe0f5f082c457edc78cd43cad98eb",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 9168272,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 9168272,
+   "tiled": false,
+   "bed_window_sha256": "e07fabb01dbf8d6760b302cea5c40416cb626fc426ab3778736be831f6d3a4c3"
+  },
+  "fetch_seconds": 81.18
+ },
+ "Zeno - Signs": {
+  "index": 49,
+  "track": "Zeno - Signs",
+  "members": {
+   "test/Zeno - Signs/drums.wav": {
+    "uncompressed_size": 41345368,
+    "crc32_central_directory": "ebd66349",
+    "member_sha256": "c0397385b7533a4fc1f48ffa5e7002989f23a94b7f116249ceffe9a0c39956f9",
+    "compression_method": 8
+   },
+   "test/Zeno - Signs/bass.wav": {
+    "uncompressed_size": 41345368,
+    "crc32_central_directory": "91fb025c",
+    "member_sha256": "cc77cfe9932e7c4b3ac27b8a40e60159944750e7255635e8c954148dfd6b135e",
+    "compression_method": 8
+   },
+   "test/Zeno - Signs/other.wav": {
+    "uncompressed_size": 41345368,
+    "crc32_central_directory": "dd317c9e",
+    "member_sha256": "660750d3544bc18e7eb710da9c88950f4e8f24533ed4528da3bd40a304ce6d02",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "90dcae4ff85982b8a5343ec7bcf5afdfe673ceb01484160de30c44ece20d2652",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 10336331,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "c2b3403f50c7c6c956c2ce09ef0d6df99065189ef32e53acd3bdd3ee666b29f1",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 10336331,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "41344ef8cdb361ce73d906d155e2f8fec24dad51930803b780a9d4b3e48dbcc8",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 10336331,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 10336331,
+   "tiled": false,
+   "bed_window_sha256": "b7e03529589a944770f22fd9d6e4b66b0a5bf8583cca1eca87c8817f7ca3a803"
+  },
+  "fetch_seconds": 65.18
  }
 }

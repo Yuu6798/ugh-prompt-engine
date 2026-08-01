@@ -394,5 +394,27 @@
   "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
   "stem_sha256": "65e993dfe11234202c19369b3d04e57d4f771cccf9cd794da6fc854bebb9e0aa",
   "elapsed_seconds": 300.58
+ },
+ "Skelpolu - Resurrection": {
+  "index": 36,
+  "residual_db": -50.831832412779015,
+  "numeric_pass": true,
+  "bed_rms": 0.02939040926438135,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "08567a879b88450c2bdc30c174a16f7676cb69d46ee53c8bf8a6d140050d2f82",
+  "elapsed_seconds": 316.85
+ },
+ "Speak Softly - Broken Man": {
+  "index": 37,
+  "residual_db": -32.04446966515424,
+  "numeric_pass": true,
+  "bed_rms": 0.054524159417711736,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "e59b8b04e0417ca320875750e989e3d405bd4b30e38649694f7aee55b56e36f8",
+  "elapsed_seconds": 285.64
  }
 }
