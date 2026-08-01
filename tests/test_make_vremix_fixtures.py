@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import argparse
 import hashlib
 import importlib.util
 import json
@@ -625,6 +626,43 @@ def _fake_bed_pins(bed_root: Path, tracks) -> dict:
             },
         }
     return pins
+
+
+def test_cli_build_requires_the_complete_level_ladder(tmp_path: Path, monkeypatch) -> None:
+    """P2: `--level` を 1 点落とすと 960 セルの帯が 1280 セルの帯と見分けられない。"""
+    args = argparse.Namespace(
+        vocadito_root=str(tmp_path), bed_root=str(tmp_path), bed=["A"],
+        level=["+12dB", "+6dB", "0dB"], out_dir=str(tmp_path / "out"),
+        registered_utc="2026-08-01",
+    )
+    with pytest.raises(mk.GenerationError, match="凍結ラダー"):
+        mk._cmd_build(args)
+    args.level = ["+6dB", "+12dB", "0dB", "-6dB"]        # 順序違いも拒否する
+    with pytest.raises(mk.GenerationError, match="凍結ラダー"):
+        mk._cmd_build(args)
+
+
+def test_cli_screen_binds_the_bed_to_its_registered_stem_pins(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """P2: 登録後に `screen` を回し直すとき、素材が pin と一致することを要求する。"""
+    bed_root = tmp_path / "beds"
+    _write_bed(bed_root / "Artist A - Track One")
+    pins = _fake_bed_pins(bed_root, ["Artist A - Track One"])
+    pins["Artist A - Track One"]["expected_stem_sha256"]["drums"] = "0" * 64
+    monkeypatch.setattr(mk, "load_registered_beds", lambda: pins)
+    monkeypatch.setattr(mk, "registered_n_max_samples", lambda: mk.FRAME_LEN * 4)
+    args = argparse.Namespace(
+        bed_root=str(bed_root), track="Artist A - Track One",
+        n_max=mk.FRAME_LEN * 4, vocals_stem=None,
+    )
+    with pytest.raises(mk.GenerationError, match="事前登録 pin .* と不一致"):
+        mk._cmd_screen(args)
+
+    # 未登録トラックも停止する（pin の無い素材で canonical な screening を出さない）。
+    args.track = "Artist Z - Unregistered"
+    with pytest.raises(mk.GenerationError, match="事前登録されていない"):
+        mk._cmd_screen(args)
 
 
 def _fake_vocadito(tmp_path: Path, clip_ids) -> tuple[Path, dict]:

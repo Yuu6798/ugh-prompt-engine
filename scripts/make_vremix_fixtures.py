@@ -967,7 +967,19 @@ def _cmd_n_max(args: argparse.Namespace) -> int:
 
 
 def _cmd_screen(args: argparse.Namespace) -> int:
-    bed_mono, bed_rate = load_bed_mono(Path(args.bed_root) / args.track)
+    # 登録後に `screen` を回し直す場合、素材が古い/差し替わっていても `residual_db` は
+    # もっともらしい値で出る（窓長の照合は素材を同定しない）。50 曲すべてに
+    # `expected_stem_sha256` が登録済みなので、ここでも pin へ束縛する。
+    registered_beds = load_registered_beds()
+    pin = registered_beds.get(args.track)
+    if pin is None:
+        raise GenerationError(
+            f"track {args.track!r} が {M2E_BED_FIXTURES_PATH.name} に事前登録されていない "
+            "(fail-closed)"
+        )
+    bed_mono, bed_rate = load_bed_mono(
+        Path(args.bed_root) / args.track, expected_stem_sha256=pin.get("expected_stem_sha256")
+    )
     # CLI の値をそのまま信じない——古い値や打ち間違いでも「成功して」別区間の
     # `residual_db` を出し、採用コホートが変わりうる。登録値との一致を要求する
     # （明示させたうえで照合する: 宣言と実体の両方を残すため）。
@@ -1030,9 +1042,14 @@ def _cmd_screen(args: argparse.Namespace) -> int:
 
 
 def _cmd_build(args: argparse.Namespace) -> int:
-    unknown = [level for level in args.level if level not in LEVEL_DB]
-    if unknown:
-        raise GenerationError(f"未登録の水準 {unknown}; 既知は {list(LEVELS)} (fail-closed)")
+    # 水準ラダーは §3.6 で 4 点・順序込みで凍結されている。1 点落としても manifest /
+    # fixtures / 以降の run・evaluate はすべて level-local なので、**960 セルで
+    # 完走した帯が 1280 セルの帯と見分けられない**。CLI で全点を要求する。
+    if list(args.level) != list(LEVELS):
+        raise GenerationError(
+            f"--level {list(args.level)} が凍結ラダー {list(LEVELS)} と（順序込みで）"
+            "一致しない; 部分ラダーで内部整合した帯を publish しない (fail-closed)"
+        )
     summary = build(
         vocadito_root=Path(args.vocadito_root),
         bed_root=Path(args.bed_root),
@@ -1075,7 +1092,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_build.add_argument("--vocadito-root", required=True)
     p_build.add_argument("--bed-root", required=True)
     p_build.add_argument("--bed", action="append", required=True, help="MUSDB トラック名")
-    p_build.add_argument("--level", action="append", required=True, choices=list(LEVELS))
+    p_build.add_argument(
+        "--level", action="append", required=True, choices=list(LEVELS),
+        help=f"§3.6 の凍結ラダー。**4 点すべてを凍結順で**指定する: {' '.join(LEVELS)}",
+    )
     p_build.add_argument("--out-dir", required=True, help="**空**のディレクトリ（残骸混入を防ぐ）")
     p_build.add_argument(
         "--registered-utc", required=True, metavar="YYYY-MM-DD",

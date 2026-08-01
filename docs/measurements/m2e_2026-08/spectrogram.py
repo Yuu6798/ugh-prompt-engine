@@ -25,6 +25,9 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
+import shutil
+import tempfile
 from pathlib import Path
 
 import matplotlib
@@ -111,35 +114,59 @@ def main() -> int:
 
     beds = Path(args.beds)
     out = Path(args.out)
-    out.mkdir(parents=True, exist_ok=True)
+    if out.exists() and any(out.iterdir()):
+        # 50 枚描いた**あと**で気づくのでは遅い（rename 直前にも同じ検査をする）。
+        raise ValueError(
+            f"{out} が空でない; 前回の目視記録と世代が混ざるのを避けるため、"
+            "空の出力先を指定するか既存を退避すること (fail-closed)"
+        )
     tracks = json.loads(Path(args.tracks).read_text(encoding="utf-8"))
 
     # コホートそのものを登録簿へ束縛する（一覧が 49 件でも「正常終了」しないように）。
     mk.require_registered_track_list(tracks)
     registered = mk.load_registered_beds()
-    digests: dict[str, str] = {}
-    for index, track in enumerate(tracks):
-        src = beds / f"bed_{index:02d}.wav"
-        if not src.is_file():
-            # 取得・配置が途中でも「短い digest map を出して成功終了」してしまうと、
-            # 部分出力が完了コホートと見分けられなくなる（§3.4.5 は 50 件全部の
-            # 視覚的会計を要求する）。欠落は停止であってスキップではない。
-            raise FileNotFoundError(
-                f"{src} が無い（[{index:02d}] {track}）; 全 50 件が揃わないまま "
-                "部分的な digest map を出さない (fail-closed)"
-            )
-        pin = registered.get(track, {}).get("bed_window_sha256")
-        if not pin:
-            raise ValueError(f"{track!r}: bed_window_sha256 が事前登録に無い (fail-closed)")
-        png = out / f"bed_{index:02d}.png"
-        render(src, png, f"[{index:02d}] {track}  —  bed window [0, n_max]",
-               expected_sha256=pin)
-        digests[f"bed_{index:02d}.png"] = hashlib.sha256(png.read_bytes()).hexdigest()
-        print(f"[{index:02d}] {track}", flush=True)
 
-    (out / "spectrogram_sha256.json").write_text(
-        json.dumps(digests, indent=1, sort_keys=True), encoding="utf-8"
-    )
+    # **staging → rename** で一式を公開する。既存の `--out` へ描き直して途中で落ちると、
+    # 前半だけ新しい PNG・後半と `spectrogram_sha256.json` は前回のもの、という
+    # **世代混在の目視記録**が外から見える状態で残る（前回の完全な一式と区別できない）。
+    # 一意名なので後片付けもこの実行が持つ（`BaseException` で掃除して再送出）。
+    out.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(dir=str(out.parent), prefix=f".{out.name}.staging-"))
+    try:
+        digests: dict[str, str] = {}
+        for index, track in enumerate(tracks):
+            src = beds / f"bed_{index:02d}.wav"
+            if not src.is_file():
+                # 取得・配置が途中でも「短い digest map を出して成功終了」してしまうと、
+                # 部分出力が完了コホートと見分けられなくなる（§3.4.5 は 50 件全部の
+                # 視覚的会計を要求する）。欠落は停止であってスキップではない。
+                raise FileNotFoundError(
+                    f"{src} が無い（[{index:02d}] {track}）; 全 50 件が揃わないまま "
+                    "部分的な digest map を出さない (fail-closed)"
+                )
+            pin = registered.get(track, {}).get("bed_window_sha256")
+            if not pin:
+                raise ValueError(f"{track!r}: bed_window_sha256 が事前登録に無い (fail-closed)")
+            png = staging / f"bed_{index:02d}.png"
+            render(src, png, f"[{index:02d}] {track}  —  bed window [0, n_max]",
+                   expected_sha256=pin)
+            digests[f"bed_{index:02d}.png"] = hashlib.sha256(png.read_bytes()).hexdigest()
+            print(f"[{index:02d}] {track}", flush=True)
+
+        (staging / "spectrogram_sha256.json").write_text(
+            json.dumps(digests, indent=1, sort_keys=True), encoding="utf-8"
+        )
+        if out.exists():
+            if any(out.iterdir()):
+                raise ValueError(
+                    f"{out} が空でない; 前回の目視記録と世代が混ざるのを避けるため、"
+                    "空の出力先を指定するか既存を退避すること (fail-closed)"
+                )
+            out.rmdir()
+        os.rename(staging, out)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
     print(f"rendered {len(digests)} images")
     return 0
 
