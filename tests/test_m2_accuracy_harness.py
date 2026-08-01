@@ -9182,3 +9182,61 @@ def test_cell_store_record_path_depends_on_the_full_key(tmp_path: Path) -> None:
         variant = dict(base)
         variant[changed_field] = changed_value
         assert harness._cell_store_record_path(tmp_path, **variant) != reference
+
+
+# ---------------------------------------------------------------------------
+# C4（設計 rev.6 §8.9.3）: `env_digest` に CPU 同一性を含める
+# ---------------------------------------------------------------------------
+
+
+def test_env_digest_includes_cpu_identity() -> None:
+    """CPU を畳まない `env_digest` は「合算してよいか」の判定として壊れている。
+
+    命令セットの異なる CPU（AVX2 / AVX-512 等）で走った 2 つのセルが同一 digest を
+    持つと、数値経路が分岐してもそれを検出できない。実測でも同一セッション中に
+    コンテナ実体が `Xeon @ 2.80GHz` → `Xeon @ 2.10GHz`（AVX-512 あり）へ入れ替わり、
+    壁時計が 2.2 倍変動した——旧実装ではこの 2 つが同じ digest になる。
+    """
+    identity = harness._env_digest_cpu_identity()
+    assert set(identity) == {"model_name", "flags", "logical_cpus", "platform_machine"}
+    # Linux の CI/実測機では実値が取れる。取れない環境でも黙って省かず明示マーカー。
+    assert identity["model_name"]
+    if isinstance(identity["flags"], list):
+        # 完全集合をソートして畳む（抜粋にすると対象外フラグの変化を取りこぼす）。
+        assert identity["flags"] == sorted(identity["flags"])
+        assert len(identity["flags"]) > 0
+
+
+def test_env_digest_changes_when_cpu_identity_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CPU 同一性が変われば `env_digest` が動くこと（畳み込まれている証明）。"""
+    baseline = harness._env_digest()
+    monkeypatch.setattr(
+        harness,
+        "_env_digest_cpu_identity",
+        lambda: {
+            "model_name": "Some Other CPU @ 9.99GHz",
+            "flags": ["avx", "avx2"],
+            "logical_cpus": 64,
+            "platform_machine": "x86_64",
+        },
+    )
+    assert harness._env_digest() != baseline
+
+
+def test_env_digest_cpu_identity_absent_marker_when_unreadable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`/proc/cpuinfo` が読めない環境でも黙って省かず、明示マーカーを残す。"""
+    original_read_text = Path.read_text
+
+    def _fail_cpuinfo(self, *args, **kwargs):
+        if str(self) == "/proc/cpuinfo":
+            raise OSError("unreadable")
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", _fail_cpuinfo)
+    identity = harness._env_digest_cpu_identity()
+    assert identity["model_name"] == harness._ENV_DIGEST_ABSENT_MARKER
+    assert identity["flags"] == harness._ENV_DIGEST_ABSENT_MARKER

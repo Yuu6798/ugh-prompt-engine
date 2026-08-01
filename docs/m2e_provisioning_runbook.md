@@ -55,6 +55,12 @@ MUSDB18-HQ・生成済みミックスが消えているのを見ても、「素�
    最終更新時刻）を見る。プロセスが生きていても進んでいないことがある。
 3. **進捗は揮発領域だけに置かない。** 生データを定期的に repo へ同期 commit する
    （§9.3: 失われるのは入力資産であって測定結果ではない、を実装で保証する）。
+4. **長時間待機を伴う下請け（サブエージェント）は、commit まで到達したかを外形で
+   確認する。** 実測 2026-08-01: 実装を委譲した下請けが自分のテスト完了を待つ
+   ポーリングループから抜けられず、**作業ツリーに未コミットの変更を残したまま
+   「完了」通知だけを返した**。報告文を完了の証拠と見なさないこと（§9.3 の
+   「完了判定は報告文でなく成果物で行う」と同じ規律）。確認は
+   `git log --oneline -1` と `git status --short` の 2 つで足りる。
 
 再取得の重さの実態（**重いのは取得であって計算ではない**）:
 
@@ -83,8 +89,19 @@ MUSDB18-HQ・生成済みミックスが消えているのを見ても、「素�
 ```bash
 python -V                      # 3.11 系（既存 M2b/M2c 実測は 3.11.15）
 pip install -e ".[dev,separate]"
+pip install "setuptools<81"    # ← crepe の導入前に必須。理由は下記
 pip install crepe              # manual/external 統合（published extra なし）
 ```
+
+**crepe 導入の落とし穴（2026-08-01 実測・3 回失敗した）**: `pip install crepe` が
+`ModuleNotFoundError: No module named 'pkg_resources'` → `metadata-generation-failed`
+で落ちる。crepe の `setup.py` が `pkg_resources` を使う一方、**setuptools 81 以降は
+`pkg_resources` を削除している**（本環境の既定は 83.0.0）。`--no-build-isolation` でも
+解決しない（ビルド分離ではなく実行環境側の欠落のため）。`setuptools<81` を先に入れる
+（実測: 80.10.2 で `import pkg_resources` が通る）。
+
+3 回失敗した事実ごと残す——同じ環境で同じ手順を踏めば同じ壁に当たるので、
+「なぜ失敗するか」が次の実行者にとっての情報である。
 
 - **Melodia / essentia は入れない。** 設計 §2 ③ で deferred へ棚上げ済み。
 - 設計 §8.7 の `env_digest` は **M2e-r4（r2-0）で確定**し、同時に lockfile を commit
@@ -96,7 +113,13 @@ pip freeze > docs/measurements/m2e_2026-08/requirements.lock.txt
 
 `env_digest` に入れるもの（設計 §8.7・**この一覧を減らさない**）:
 Python 版 / torch / demucs / crepe / librosa / soundfile / numpy の版 /
-demucs 重み digest / crepe 重み digest / スレッド設定。
+demucs 重み digest / crepe 重み digest / スレッド設定 /
+**CPU 同一性（モデル名 + 命令セットフラグ）**（rev.6 §8.9.3）。
+
+> CPU を含める理由は再現性である。実測 2026-08-01: 同一セッション中にコンテナ実体が
+> `Xeon @ 2.80GHz` → `Xeon @ 2.10GHz`（AVX-512 あり）へ入れ替わり、同一セルの壁時計が
+> 2.2 倍変動した。**旧実装ではこの 2 つが同一 `env_digest` を持つ**ため、数値経路が
+> 分岐しても「同一環境として合算してよい」と誤判定する。
 
 スレッド設定は決定論の前提条件であって性能設定ではない（設計 §8.3）。全ワーカーで:
 

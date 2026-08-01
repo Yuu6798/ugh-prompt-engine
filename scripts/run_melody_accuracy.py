@@ -43,6 +43,7 @@ import hashlib
 import json
 import math
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -4970,12 +4971,51 @@ def _env_digest_thread_settings() -> Dict[str, Any]:
     return settings
 
 
+def _env_digest_cpu_identity() -> Dict[str, Any]:
+    """CPU 同一性（設計 §8.9.3・rev.6 — `env_digest` に含める）。
+
+    2.2 倍のインスタンス間分散は**スケジューリングの問題として現れたが、再現性の
+    問題でもある**。版とスレッド設定だけを畳んだ digest では、命令セットの異なる
+    CPU（AVX2 / AVX-512 等）で走った 2 つのセルが同一の `env_digest` を持ちうる。
+    数値経路が分岐してもそれを検出する手段が無く、**合算の可否判定そのものが壊れる**。
+
+    畳むもの: CPU モデル名と命令セットフラグ。フラグは**ソート済みの完全集合**を使う
+    （抜粋にすると、抜粋対象外のフラグが変わったときに digest が動かない）。
+    読めない環境では明示マーカーを入れ、黙って省かない。
+    """
+    identity: Dict[str, Any] = {
+        "model_name": _ENV_DIGEST_ABSENT_MARKER,
+        "flags": _ENV_DIGEST_ABSENT_MARKER,
+        "logical_cpus": _ENV_DIGEST_ABSENT_MARKER,
+        "platform_machine": platform.machine() or _ENV_DIGEST_ABSENT_MARKER,
+    }
+    try:
+        identity["logical_cpus"] = len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        pass
+    try:
+        raw = Path("/proc/cpuinfo").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return identity
+    for line in raw.splitlines():
+        key, _, value = line.partition(":")
+        key = key.strip()
+        value = value.strip()
+        if key == "model name" and identity["model_name"] == _ENV_DIGEST_ABSENT_MARKER:
+            identity["model_name"] = value
+        elif key == "flags" and identity["flags"] == _ENV_DIGEST_ABSENT_MARKER:
+            # 完全集合をソートして畳む（順序は BIOS/カーネルで揺れうるため）。
+            identity["flags"] = sorted(value.split())
+    return identity
+
+
 def _env_digest() -> str:
     """設計 §8.7 の `env_digest`: 環境同一性を畳んだ 64-hex sha256。
 
     折り込む要素: Python 版・{torch, demucs, crepe, librosa, soundfile, numpy} の
     版・demucs 重み digest・crepe 重み digest・スレッド設定
-    （`OMP_NUM_THREADS`/`MKL_NUM_THREADS`/`torch.get_num_threads()`）。
+    （`OMP_NUM_THREADS`/`MKL_NUM_THREADS`/`torch.get_num_threads()`）・
+    **CPU 同一性（モデル名 + 命令セットフラグ。rev.6 §8.9.3）**。
 
     **重い import はしない**（呼び出し元が `--cell-store` 使用時にのみ本関数を呼ぶ
     ことで、モジュール import 時の重い依存 import を避ける契約 — 各ヘルパーは
@@ -4988,6 +5028,9 @@ def _env_digest() -> str:
         "demucs_weights": _env_digest_demucs_weights(),
         "crepe_weights": _env_digest_crepe_weights(),
         "thread_settings": _env_digest_thread_settings(),
+        # rev.6 §8.9.3: CPU を畳まない env_digest は「合算してよいか」の判定として
+        # 壊れている。命令セットが違えば数値経路が分かれうるため。
+        "cpu_identity": _env_digest_cpu_identity(),
     }
     canonical = json.dumps(payload, sort_keys=True)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
