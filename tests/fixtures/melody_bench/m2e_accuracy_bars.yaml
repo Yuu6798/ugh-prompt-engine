@@ -1,0 +1,118 @@
+# melody_bench/m2e_accuracy_bars.yaml — M2e V-remix 実ベッド帯の事前登録バー
+# （設計: docs/DESIGN_M2e_vremix_real_bed.md §5.1 / §5.3 / §5.4）。
+#
+# ---------------------------------------------------------------------------
+# なぜ `m2_accuracy_bars.yaml` と別ファイルなのか（§5.1）
+# ---------------------------------------------------------------------------
+# `bars_sha256` は「この帯の判定がどのバーの下で出されたか」を固定する pin である。
+# M2e の帯を `m2_accuracy_bars.yaml` へ追記すると同ファイルの bytes が変わり、
+# commit 済みの M2b / M2c verdict の pin が壊れる——それはこの機構の**偽陽性**である
+# （M2b / M2c が使ったバーの中身は 1 バイトも変わらないため）。pin を帯単位 digest へ
+# 変える案は既存の全 pin を無効化する code change であり、避けたい事態（dated 再実測）を
+# 自ら引き起こす。リポジトリは同じ理由で既に 2 回この分離をしている
+# （registry.yaml → m2_accuracy_bars.yaml → m2c_external_fixtures.yaml）。3 例目として
+# 同じ流儀に従う。**M2b / M2c の再実測は行わない。**
+#
+# ---------------------------------------------------------------------------
+# 一方向規律の**明示的継承**（§5.1-1・暗黙の継承にしない）
+# ---------------------------------------------------------------------------
+# `m2_accuracy_bars.yaml` と同じ規律をこのファイルへ適用する:
+#   - registered_utc つき
+#   - **実測前に凍結**する
+#   - **実測後に緩めない**（落ちた帯の再挑戦は経路/実装の変更 + dated 再実測のみ）
+# 機械可読な宣言として下の `one_way_rule` を置く（loader が非空文字列を要求する）。
+#
+# **この時点で M2e の実測（帯のセル）は 0 件である。** 1280 セルのうち完了は 0。
+# 本ファイルは「実測値を見た後に、落ちた pin を回避する目的でファイルを分けた」もの
+# ではない（§5.1-6 が禁じる行為）。分離の正当性はこの 0 件という事実に依存する。
+#
+# ---------------------------------------------------------------------------
+# 共有スカラーを再宣言しない（§5.1-4）
+# ---------------------------------------------------------------------------
+# `tolerance_cents` / `est_voiced_confidence_floor` / `repeats_min` は
+# **`m2_accuracy_bars.yaml` の値を参照する**。二重定義は必ず食い違うので、このファイルへ
+# 書かない（`scripts/run_melody_accuracy.py` の loader が再宣言を fail-closed で拒否する）。
+#
+# ---------------------------------------------------------------------------
+# バーの意味論（§5.4・取り違えると設計が壊れる）
+# ---------------------------------------------------------------------------
+# - **両アームとも非昇格帯である。** 通過しても `demucs_vocals_then_crepe` は calibrated
+#   へ昇格せず、**M4 の G2 も解錠しない**（歌声と伴奏が別の曲であるため・§7.2）。
+# - `gate_level: "+12dB"` に限ってバーを当てる。+12dB は事実上 `clear_lead` 相当で、
+#   ここで `min_rpa 0.65` すら割るなら通過済みの `V_direct`（実声・分離なし・
+#   `min_rpa 0.80`）と整合しない。**帯の合否ゲートではなく V_direct との整合
+#   トリップワイヤ**である。割れたら crepe を責める前にミックス式・水準算出・注釈整列・
+#   モノ化を疑う。
+# - **それ以外の水準（+6/0/−6dB）はバーを持たない**（`gate_level` 以外の run に
+#   バーを適用することは loader/judge が拒否する）。主生産物は合否ではなく破断曲線。
+# - **VFA / VR はバー外・診断記録のみ**。M2d が voicing 非信頼を確定済みで、下流の
+#   M3 / M4 は抽出器 voicing を消費しない。消費されない軸で帯全体を fail させると
+#   S_direct の再演になる。
+# - stem アームは `_DIAGNOSTIC_ONLY_CATEGORIES` に**入れない**（ベッドが実プロ音源に
+#   なった以上「Demucs は合成音色に対し分布外」という根拠が成立しないため）。これは
+#   **締める方向**の変更であり一方向規律に反しない。
+#   ただし stem アームでは水準軸に沿った単調性を仮定しないので、**「+12dB で割れたら
+#   下の水準も割れる」という下方伝播を主張しない。**
+
+schema_version: "m2e-accuracy-bars/0.1"
+registered_utc: "2026-08-01"
+
+m2e_accuracy_bars:
+  # 新値を発明していない。`m2_accuracy_bars.yaml` の `V_fullstack` 凍結値
+  # （min_rpa 0.65 / max_octave_gap 0.10）をそのまま転用した。出所は
+  # provenance.derived_from に記録する（ファイルを跨いだ時点で出所が追えなくなるため）。
+  # 意味は「昇格要件」ではなく**反証床**である。
+  V_remix_real_direct:
+    min_rpa: 0.65
+    max_octave_gap: 0.10
+  V_remix_real_stem:
+    min_rpa: 0.65
+    max_octave_gap: 0.10
+  one_way_rule: >
+    m2_accuracy_bars.yaml と同じ一方向規律をこのファイルへ明示的に継承する:
+    registered_utc つき・実測前凍結・実測後に緩めない。バーを実測後に変更しない。
+    水準の追加、gate_level の移動、ラダーの +12 dB より上への延長による救済を禁じる。
+    落ちた帯の再挑戦は経路/実装の変更 + dated 再実測のみ。
+
+# 条件 block は**バー block の兄弟**である（§5.3）。バー block の中へ入れると loader が
+# dict 値をカテゴリと誤認し、`_BAR_THRESHOLD_RANGES`（有限数値・値域つき）が文字列と
+# リストを拒否する。バーは judge が数値比較する閾値、gate_level / levels は「何を測ったか」
+# の宣言であって別種の対象である（設計 附録A-4 の是正）。
+m2e_measurement_conditions:
+  # §3.4.1 の 20 dB 不変量。**実験全体で唯一の宣言**であり、
+  # `m2e_bed_fixtures.yaml` の `screening.threshold_db: -26.0` は
+  # `-(hardest_level_db) - level_margin_db` の**導出値**として導出元を併記している。
+  # 2 箇所で独立に書き換えられる状態にしない。
+  level_margin_db: 20.0
+  V_remix_real_direct:
+    gate_level: "+12dB"
+    levels: ["+12dB", "+6dB", "0dB", "-6dB"]
+  V_remix_real_stem:
+    gate_level: "+12dB"
+    levels: ["+12dB", "+6dB", "0dB", "-6dB"]
+
+# ---------------------------------------------------------------------------
+# provenance（§5.1-3: 転用値の出所を記録する）
+# ---------------------------------------------------------------------------
+provenance:
+  # min_rpa 0.65 / max_octave_gap 0.10 の出所。転用時点の bytes を pin する。
+  derived_from:
+    file: "m2_accuracy_bars.yaml"
+    sha256: "50c83e6524a35c7080622c20715c0c2cc68d8d8e695d2766958d795eedec0085"
+    category: "V_fullstack"
+  # 素材の事前登録（別ファイル）。バーの導出はこの値に**依存していない**——
+  # 下の bars_independent_of_screening を参照。
+  bed_fixtures: "m2e_bed_fixtures.yaml"
+  # **バーの導出は r2 の screening 実測値に一切依存していない**という宣言。
+  # min_rpa / max_octave_gap は V_fullstack からの転用であり、その V_fullstack 値は
+  # 2026-07-25 に凍結された（M2e の素材が存在するより前）。gate_level と levels は
+  # 設計 §3.6 / §5.3 が素材選定より前に定めたラダーである。level_margin_db 20.0 は
+  # §3.4.1 の不変量で、これも素材に依存しない。
+  # 「依存していないはずだが書かれていない」ことを欠陥と見なす規律（§3.3.1 と同型）に
+  # 従い、明示する。
+  bars_independent_of_screening: true
+  bars_independent_of_screening_note: >
+    r2 で全 50 曲の residual_db と dropout を観測した後に本ファイルを作成しているが、
+    バーの値（min_rpa / max_octave_gap）・gate_level・levels・level_margin_db の
+    いずれも r2 の観測値から導出していない。すべて素材選定より前に凍結された値の
+    転用または設計上の定義である。M2e の帯セル実測は本登録時点で 0 件。

@@ -94,8 +94,8 @@ runbook: [`docs/m2e_provisioning_runbook.md`](../../m2e_provisioning_runbook.md)
 |---|---|---|
 | r0 | 設計正本 + 索引 2 行 + 本記録 + runbook | **完了** |
 | r1 | ハーネス配線・条件 block 検証・`make_vremix_fixtures.py` + テスト | **完了**（下記 §3.1） |
-| r2 | 全 50 曲スクリーニング（棄却事由の事前登録 → 生成 → 1 行判定まで r2 の内側で閉じる） | **未実施**（素材未取得） |
-| r3 | `m2e_bed_fixtures.yaml` / `m2e_accuracy_bars.yaml` 登録 | 未実施 |
+| r2 | 全 50 曲スクリーニング（棄却事由の事前登録 → 生成 → 1 行判定まで r2 の内側で閉じる） | **完了**（[`r2_screening.md`](r2_screening.md)） |
+| r3 | `m2e_bed_fixtures.yaml` / `m2e_accuracy_bars.yaml` 登録 | **完了**（下記 §3.3） |
 | r4 | r2-0（`P` 決定・並列不変性ゲート・単位コスト校正・`env_digest`・lockfile） | 未実施 |
 | r5 | `m2e_r2_shard_map.yaml` | 未実施 |
 | r6 | 本測定（code change 厳禁） | 未実施 |
@@ -186,3 +186,95 @@ r2 で改めて全 50 曲を測って記録する（§3.3-2 の「全件の実�
   のいずれも主張しない（§5.4・§7.2・§13）。
 - MUSDB18-HQ test split 先頭 2 曲というベッド構成について、**ジャンル・編成の代表性を
   主張しない**（§7.2）。
+
+
+---
+
+## 5. M2e-r3（P-c・code change なし）— 事前登録の pin
+
+**この時点で M2e の実測（帯のセル）は依然 0 件である。** 1280 セルのうち完了は **0**。
+
+| ファイル | schema | sha256 |
+|---|---|---|
+| `tests/fixtures/melody_bench/m2e_bed_fixtures.yaml` | `m2e-bed-fixtures/0.1` | `2ad8830959e55b0f82c3295d92e80c0d2ac2ab19fd279fecd648c3a1acc9dc53` |
+| `tests/fixtures/melody_bench/m2e_accuracy_bars.yaml` | `m2e-accuracy-bars/0.1` | `7e8c068fabc4bc8167d822beeaa8806b39f6d2929b08551da8280b4389780f39` |
+
+### 5.1 `m2e_bed_fixtures.yaml`（§9 / §9.1 / §9.2）
+
+- **全 50 曲**の帰属証拠を完備した（採用 2 件だけではない）。選定の監査可能性は
+  「通過 2 件」ではなく「全 50 件の記録」に載っている（§3.3-2）。
+  - `expected_stem_sha256`: **150 件**（50 曲 × drums/bass/other・§9.2 canonical decode）
+  - `members`: **150 件**（member path / 非圧縮サイズ / 中央ディレクトリ CRC-32 /
+    `member_sha256`）
+  - 各曲の `residual_db` / `n_drop_frames` / `dropout_sec` / `reason_d_hit` / `accepted`
+- **`archive_sha256_local: null`** + dated 理由（§9.1 レイヤ(2) の**宣言された穴**）。
+  上流 md5 の転記で埋めていない。推定値も書いていない。
+- `vocals_stem_fetched: false` — `vocals.wav` は 1 バイトも取得していない。
+- `screening.threshold_db: -26.0` は `derived_from: {level_margin_db: 20.0,
+  hardest_level_db: -6.0}` を併記した**導出値**であり、独立した自由パラメータではない。
+- **§9 の様式にない追加フィールド**として `reason_d`（(d) の凍結パラメータ）と
+  各曲の `n_drop_frames` を入れた。理由: **(d) が選定に参加した**ため、これが無いと
+  「`residual_db` を通った lexical 先頭 2 件がなぜ不採用か」を本ファイル単体で
+  説明できない。
+
+採用 2 件:
+
+| rank | track | `residual_db` | `N_drop` |
+|---|---|---|---|
+| 1 | Angels In Amplifiers - I'm Alright | −48.288419 | 72 |
+| 2 | Arise - Run Run Run | −52.255730 | 51 |
+
+### 5.2 `m2e_accuracy_bars.yaml`（§5.1 / §5.3）
+
+- 別ファイル分離の理由（`bars_sha256` pin の偽陽性回避）と、**一方向規律の明示的継承**を
+  冒頭コメントに書いた（§5.1-1: 暗黙の継承にしない）。機械可読な宣言として
+  `one_way_rule` を置き、loader が非空文字列を要求する。
+- **共有スカラーを再宣言していない**（§5.1-4）。`tolerance_cents` /
+  `est_voiced_confidence_floor` / `repeats_min` は M2 側を参照する。loader が再宣言を
+  fail-closed で拒否することも確認済み。
+- 条件 block（`m2e_measurement_conditions`）は**バー block の兄弟**（§5.3・附録A-4）。
+  `gate_level: "+12dB"` / `levels: ["+12dB","+6dB","0dB","-6dB"]` / `level_margin_db: 20.0`。
+- `provenance.derived_from` に転用元
+  （`m2_accuracy_bars.yaml` @ `50c83e65…` の `V_fullstack`）を記録した（§5.1-3）。
+
+### 5.3 **バーの導出が r2 の screening 値に依存していないこと**（明示）
+
+r2 で全 50 曲の実測値を見た後に本登録を行っている。よって「見てから決めたのではないか」
+という疑いは構造的に生じうる。**依存していないはずだが書かれていない、を欠陥と見なす
+規律**（§3.3.1 のときと同じ理屈）に従い、機械可読な宣言
+（`provenance.bars_independent_of_screening: true` + note）と併せてここに明記する。
+
+| バーの構成要素 | 由来 | r2 の観測値への依存 |
+|---|---|---|
+| `min_rpa: 0.65` | `m2_accuracy_bars.yaml` の `V_fullstack`（**2026-07-25 凍結**） | **なし**（M2e の素材が存在するより前に凍結） |
+| `max_octave_gap: 0.10` | 同上 | **なし** |
+| `gate_level: "+12dB"` | 設計 §5.3（素材選定より前に定義） | **なし** |
+| `levels`（4 点ラダー） | 設計 §3.6（素材選定より前に定義） | **なし** |
+| `level_margin_db: 20.0` | 設計 §3.4.1 の不変量 | **なし** |
+
+**r2 の観測値から導出した閾値は 1 つも無い。** 逆向きの依存（r2 が設計値を使う）は
+存在する——`screening.threshold_db: -26.0` は `level_margin_db` と `hardest_level_db`
+の導出値であり、これは設計 → 実測の向きなので順序が逆転していない。
+
+### 5.4 r3 で code change を入れていないこと
+
+r3 は設計 §10 の表で **code change: なし**と定められている。よって:
+
+- ハーネス（`scripts/run_melody_accuracy.py`）・routing・生成器のいずれも変更していない。
+- **commit 済み記録を pin するテストも追加していない**（テストはコードであるため）。
+  新ファイルの schema・所有権・条件 block・共有スカラー再宣言拒否は、**r1 で追加済みの
+  テスト群がすでに機械検証している**（`load_bars` 経由）。
+- 実ロード確認は行った: `load_bars(M2E_BARS_PATH)` が
+  `m2e_accuracy_bars.yaml` として同一性解決に成功し、条件 block・provenance 検証を
+  通過すること、および `m2_accuracy_bars.yaml` 側が無傷であることを実測した。
+
+### 5.5 次段
+
+**r4（M2e-r2-0）**: `P` の決定・**並列不変性ゲート**・`S` / `T_direct` / `T_stem` の校正・
+`env_digest` 確定・lockfile commit。
+
+r2 で得た申し送り（`r2_screening.md` §4.6.4）を必ず適用すること——
+**`OMP_NUM_THREADS=1` / `MKL_NUM_THREADS=1` / `torch.set_num_threads(1)` の 3 点すべて**を
+設定しないと demucs の stem が run 間で bit 一致せず、stem アームの repeats が
+「別 model stack」として fail-closed になる。合格条件は「出力ピッチ軌跡の sha256 が
+完全一致」であり、精度値の一致では不十分（§8.3）。
