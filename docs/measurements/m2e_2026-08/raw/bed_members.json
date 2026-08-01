@@ -2088,5 +2088,170 @@
    "bed_window_sha256": "f9dbaeb4fede46146c830f33376e8926570f2850bfd42756ff97ab91562cd5bc"
   },
   "fetch_seconds": 27.77
+ },
+ "Speak Softly - Like Horses": {
+  "index": 38,
+  "track": "Speak Softly - Like Horses",
+  "members": {
+   "test/Speak Softly - Like Horses/drums.wav": {
+    "uncompressed_size": 55154444,
+    "crc32_central_directory": "d647875e",
+    "member_sha256": "23bbca04838e54b90a5417ab9ff9415807243e041ac6d7f8d0796fb049db48e9",
+    "compression_method": 8
+   },
+   "test/Speak Softly - Like Horses/bass.wav": {
+    "uncompressed_size": 55154444,
+    "crc32_central_directory": "383cd08b",
+    "member_sha256": "2c9ce07a89b6a6778de73331306a2ec4e03916cbd393550b63ca89dabfc053a6",
+    "compression_method": 8
+   },
+   "test/Speak Softly - Like Horses/other.wav": {
+    "uncompressed_size": 55154444,
+    "crc32_central_directory": "e8ae329c",
+    "member_sha256": "f187f616bb960815c0ffdcaaaeb4e57c786da7bc7ad4b13459ecc48e1c4ecdf9",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "30f47466df73ba6b122acf15f9fd14728ba77415ee6ab0a15195b03f01579b6c",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 13788600,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "cb7fe21a167c049c6c678c387da64c969ce4781a64475407891131dbf53576e8",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 13788600,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "5d0782181b4417c35c7b5fd06348f037205d9005903e1fb88fe07d86d5688b90",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 13788600,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 13788600,
+   "tiled": false,
+   "bed_window_sha256": "4e51dc5361196f0452937f127e29f36f2fa61da9f69451509ea7b0e826d41abe"
+  },
+  "fetch_seconds": 89.09
+ },
+ "The Doppler Shift - Atrophy": {
+  "index": 39,
+  "track": "The Doppler Shift - Atrophy",
+  "members": {
+   "test/The Doppler Shift - Atrophy/drums.wav": {
+    "uncompressed_size": 58466408,
+    "crc32_central_directory": "fa316e1b",
+    "member_sha256": "aa5009292ead0888169781a0d03ce1ba29749db4c23ca52ded887deed4e01789",
+    "compression_method": 8
+   },
+   "test/The Doppler Shift - Atrophy/bass.wav": {
+    "uncompressed_size": 58466408,
+    "crc32_central_directory": "572a6a7d",
+    "member_sha256": "60ff473e30c1a92fcf8d5e01131cee9b14c34b4a0d983d5596493e2e0bddd43a",
+    "compression_method": 8
+   },
+   "test/The Doppler Shift - Atrophy/other.wav": {
+    "uncompressed_size": 58466408,
+    "crc32_central_directory": "c6b77411",
+    "member_sha256": "4529c1e6b2d26db81974384671731f9fff787ecc46d8e3a0d06790b7012f931d",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "8e39c9f503a99509d8490d626dacce9a62acc002dffc8a18ab6e7c3e7299dc0d",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 14616591,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "f3922b5d99445b13e3ca63fd0fdcf75b62be04bddc6b1a2249402a1ec185357e",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 14616591,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "66546d7b19a4d2d14476fbb92e40372aee1cfc309b4edede3df9db528678b598",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 14616591,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 14616591,
+   "tiled": false,
+   "bed_window_sha256": "3ca9e99939633fc2403426ecea84f5dd365e0893ddcfc0cdf6b6d7016bc2a817"
+  },
+  "fetch_seconds": 82.06
+ },
+ "The Easton Ellises (Baumi) - SDRNR": {
+  "index": 40,
+  "track": "The Easton Ellises (Baumi) - SDRNR",
+  "members": {
+   "test/The Easton Ellises (Baumi) - SDRNR/drums.wav": {
+    "uncompressed_size": 41398316,
+    "crc32_central_directory": "85946a9c",
+    "member_sha256": "bd7b1e3783ee9310564a2d76e6b87e15958e0f4b333274b39391378fe42539a3",
+    "compression_method": 8
+   },
+   "test/The Easton Ellises (Baumi) - SDRNR/bass.wav": {
+    "uncompressed_size": 41398316,
+    "crc32_central_directory": "ed8a42b8",
+    "member_sha256": "e794024e1c0dcaa92c77fe4ac031e7fe742c147730ee3071a02e14c955c7918b",
+    "compression_method": 8
+   },
+   "test/The Easton Ellises (Baumi) - SDRNR/other.wav": {
+    "uncompressed_size": 41398316,
+    "crc32_central_directory": "f4cf2538",
+    "member_sha256": "97f54f7fa7eb81c9a67cc24f227a5e29b2f0caaa6fc6ba08a1101bb6dbb47084",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "252cfbe4cf0bbe001f67e285112afdd783790ca206fa0f27ba565606baf40677",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 10349568,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "c5acf6358a26e6b912225441b86acde3d67a960de19397b836e8fc81f7663309",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 10349568,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "e58d9859327c5556afa70154ddd15eb0b79fa266ff6a14811bc7a621bea89787",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 10349568,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 10349568,
+   "tiled": false,
+   "bed_window_sha256": "22040ad0d447e8d8242ec10cb45dfbb55eff0778b8a057d76dacf0672089418b"
+  },
+  "fetch_seconds": 78.61
  }
 }

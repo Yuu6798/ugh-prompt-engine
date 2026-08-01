@@ -372,5 +372,27 @@
   "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
   "stem_sha256": "d21d16d844e1490508173e66f34ffb761470c4a032ea848ce1ce3808009141bd",
   "elapsed_seconds": 271.22
+ },
+ "Side Effects Project - Sing With Me": {
+  "index": 34,
+  "residual_db": -31.9646437346077,
+  "numeric_pass": true,
+  "bed_rms": 0.08249550649111659,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "5d991322deb7a0f9d788e521acaf8acaed90b5dcc778f3fedd5236f532e939fd",
+  "elapsed_seconds": 289.75
+ },
+ "Signe Jakobsen - What Have You Done To Me": {
+  "index": 35,
+  "residual_db": -67.88612212015404,
+  "numeric_pass": true,
+  "bed_rms": 0.05832737463855886,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "65e993dfe11234202c19369b3d04e57d4f771cccf9cd794da6fc854bebb9e0aa",
+  "elapsed_seconds": 300.58
  }
 }
