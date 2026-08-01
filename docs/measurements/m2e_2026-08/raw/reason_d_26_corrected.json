@@ -1,0 +1,463 @@
+{
+ "frozen": {
+  "dropout_db": -26.0,
+  "frame_len": 2048,
+  "hop": 512,
+  "min_seconds": 1.0,
+  "n_drop_threshold": 87,
+  "effective_bound_sec": 1.0100680272108844,
+  "largest_non_hit_sec": 0.9984580498866213
+ },
+ "rows": [
+  {
+   "index": 0,
+   "track": "AM Contra - Heart Peripheral",
+   "n_drop_frames": 294,
+   "dropout_sec": 3.4133333333333336,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.08532691722618127,
+   "d_hit": true
+  },
+  {
+   "index": 1,
+   "track": "Al James - Schoolboy Facination",
+   "n_drop_frames": 138,
+   "dropout_sec": 1.6021768707482993,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.07148399581961556,
+   "d_hit": true
+  },
+  {
+   "index": 2,
+   "track": "Angels In Amplifiers - I'm Alright",
+   "n_drop_frames": 36,
+   "dropout_sec": 0.4179591836734694,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.07890494423544613,
+   "d_hit": false
+  },
+  {
+   "index": 3,
+   "track": "Arise - Run Run Run",
+   "n_drop_frames": 48,
+   "dropout_sec": 0.5572789115646258,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.13755634001996098,
+   "d_hit": false
+  },
+  {
+   "index": 4,
+   "track": "BKS - Bulldozer",
+   "n_drop_frames": 224,
+   "dropout_sec": 2.6006349206349206,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.08441756402179011,
+   "d_hit": true
+  },
+  {
+   "index": 5,
+   "track": "BKS - Too Much",
+   "n_drop_frames": 34,
+   "dropout_sec": 0.3947392290249433,
+   "dropout_start_sec": 37.477006802721085,
+   "bed_active_rms": 0.07737544942252006,
+   "d_hit": false
+  },
+  {
+   "index": 6,
+   "track": "Ben Carrigan - We'll Talk About It All Tonight",
+   "n_drop_frames": 347,
+   "dropout_sec": 4.028662131519274,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.058958229863351704,
+   "d_hit": true
+  },
+  {
+   "index": 7,
+   "track": "Bobby Nobody - Stitch Up",
+   "n_drop_frames": 536,
+   "dropout_sec": 6.222947845804988,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.08042108627232415,
+   "d_hit": true
+  },
+  {
+   "index": 8,
+   "track": "Buitraker - Revo X",
+   "n_drop_frames": 163,
+   "dropout_sec": 1.8924263038548752,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.07521669111004622,
+   "d_hit": true
+  },
+  {
+   "index": 9,
+   "track": "Carlos Gonzalez - A Place For Us",
+   "n_drop_frames": 200,
+   "dropout_sec": 2.3219954648526078,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.022422056756419544,
+   "d_hit": true
+  },
+  {
+   "index": 10,
+   "track": "Cristina Vane - So Easy",
+   "n_drop_frames": 298,
+   "dropout_sec": 3.4597732426303853,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.09700706291209282,
+   "d_hit": true
+  },
+  {
+   "index": 11,
+   "track": "Detsky Sad - Walkie Talkie",
+   "n_drop_frames": 101,
+   "dropout_sec": 1.172607709750567,
+   "dropout_start_sec": 27.68979591836735,
+   "bed_active_rms": 0.09811039010074463,
+   "d_hit": true
+  },
+  {
+   "index": 12,
+   "track": "Enda Reilly - Cur An Long Ag Seol",
+   "n_drop_frames": 29,
+   "dropout_sec": 0.33668934240362813,
+   "dropout_start_sec": 1.1261678004535147,
+   "bed_active_rms": 0.07328226656174673,
+   "d_hit": false
+  },
+  {
+   "index": 13,
+   "track": "Forkupines - Semantics",
+   "n_drop_frames": 269,
+   "dropout_sec": 3.1230839002267574,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.1210176302925424,
+   "d_hit": true
+  },
+  {
+   "index": 14,
+   "track": "Georgia Wonder - Siren",
+   "n_drop_frames": 336,
+   "dropout_sec": 3.900952380952381,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.09286029787342025,
+   "d_hit": true
+  },
+  {
+   "index": 15,
+   "track": "Girls Under Glass - We Feel Alright",
+   "n_drop_frames": 163,
+   "dropout_sec": 1.8924263038548752,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.1029669064672035,
+   "d_hit": true
+  },
+  {
+   "index": 16,
+   "track": "Hollow Ground - Ill Fate",
+   "n_drop_frames": 72,
+   "dropout_sec": 0.8359183673469388,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.11983984800592094,
+   "d_hit": false
+  },
+  {
+   "index": 17,
+   "track": "James Elder & Mark M Thompson - The English Actor",
+   "n_drop_frames": 0,
+   "dropout_sec": 0.0,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.05376762039472849,
+   "d_hit": false
+  },
+  {
+   "index": 18,
+   "track": "Juliet's Rescue - Heartbeats",
+   "n_drop_frames": 147,
+   "dropout_sec": 1.7066666666666668,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.11254793067373217,
+   "d_hit": true
+  },
+  {
+   "index": 19,
+   "track": "Little Chicago's Finest - My Own",
+   "n_drop_frames": 8,
+   "dropout_sec": 0.09287981859410431,
+   "dropout_start_sec": 3.7384126984126986,
+   "bed_active_rms": 0.04741324894543052,
+   "d_hit": false
+  },
+  {
+   "index": 20,
+   "track": "Louis Cressy Band - Good Time",
+   "n_drop_frames": 21,
+   "dropout_sec": 0.2438095238095238,
+   "dropout_start_sec": 4.249251700680272,
+   "bed_active_rms": 0.059162349591165474,
+   "d_hit": false
+  },
+  {
+   "index": 21,
+   "track": "Lyndsey Ollard - Catching Up",
+   "n_drop_frames": 96,
+   "dropout_sec": 1.1145578231292517,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.015302244500499518,
+   "d_hit": true
+  },
+  {
+   "index": 22,
+   "track": "M.E.R.C. Music - Knockout",
+   "n_drop_frames": 253,
+   "dropout_sec": 2.9373242630385485,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.05735039448347311,
+   "d_hit": true
+  },
+  {
+   "index": 23,
+   "track": "Moosmusic - Big Dummy Shake",
+   "n_drop_frames": 145,
+   "dropout_sec": 1.6834467120181407,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.1100715829187367,
+   "d_hit": true
+  },
+  {
+   "index": 24,
+   "track": "Motor Tapes - Shore",
+   "n_drop_frames": 177,
+   "dropout_sec": 2.0549659863945577,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.08104732893001174,
+   "d_hit": true
+  },
+  {
+   "index": 25,
+   "track": "Mu - Too Bright",
+   "n_drop_frames": 44,
+   "dropout_sec": 0.5108390022675737,
+   "dropout_start_sec": 9.32281179138322,
+   "bed_active_rms": 0.08968291979501161,
+   "d_hit": false
+  },
+  {
+   "index": 26,
+   "track": "Nerve 9 - Pray For The Rain",
+   "n_drop_frames": 12,
+   "dropout_sec": 0.13931972789115646,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.05935085710897043,
+   "d_hit": false
+  },
+  {
+   "index": 27,
+   "track": "PR - Happy Daze",
+   "n_drop_frames": 26,
+   "dropout_sec": 0.301859410430839,
+   "dropout_start_sec": 1.6950566893424037,
+   "bed_active_rms": 0.17420948386170626,
+   "d_hit": false
+  },
+  {
+   "index": 28,
+   "track": "PR - Oh No",
+   "n_drop_frames": 37,
+   "dropout_sec": 0.4295691609977324,
+   "dropout_start_sec": 1.4280272108843537,
+   "bed_active_rms": 0.15158453970987867,
+   "d_hit": false
+  },
+  {
+   "index": 29,
+   "track": "Punkdisco - Oral Hygiene",
+   "n_drop_frames": 170,
+   "dropout_sec": 1.9736961451247166,
+   "dropout_start_sec": 8.475283446712018,
+   "bed_active_rms": 0.11533956186087532,
+   "d_hit": true
+  },
+  {
+   "index": 30,
+   "track": "Raft Monk - Tiring",
+   "n_drop_frames": 565,
+   "dropout_sec": 6.559637188208617,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.08195362741595949,
+   "d_hit": true
+  },
+  {
+   "index": 31,
+   "track": "Sambasevam Shanmugam - Kaathaadi",
+   "n_drop_frames": 138,
+   "dropout_sec": 1.6021768707482993,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.05534691626195923,
+   "d_hit": true
+  },
+  {
+   "index": 32,
+   "track": "Secretariat - Borderline",
+   "n_drop_frames": 0,
+   "dropout_sec": 0.0,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.10128707623772902,
+   "d_hit": false
+  },
+  {
+   "index": 33,
+   "track": "Secretariat - Over The Top",
+   "n_drop_frames": 57,
+   "dropout_sec": 0.6617687074829932,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.12644053445431677,
+   "d_hit": false
+  },
+  {
+   "index": 34,
+   "track": "Side Effects Project - Sing With Me",
+   "n_drop_frames": 11,
+   "dropout_sec": 0.12770975056689343,
+   "dropout_start_sec": 5.352199546485261,
+   "bed_active_rms": 0.08249550649111659,
+   "d_hit": false
+  },
+  {
+   "index": 35,
+   "track": "Signe Jakobsen - What Have You Done To Me",
+   "n_drop_frames": 781,
+   "dropout_sec": 9.067392290249433,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.05832737463855886,
+   "d_hit": true
+  },
+  {
+   "index": 36,
+   "track": "Skelpolu - Resurrection",
+   "n_drop_frames": 0,
+   "dropout_sec": 0.0,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.02939040926438135,
+   "d_hit": false
+  },
+  {
+   "index": 37,
+   "track": "Speak Softly - Broken Man",
+   "n_drop_frames": 43,
+   "dropout_sec": 0.4992290249433107,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.054524159417711736,
+   "d_hit": false
+  },
+  {
+   "index": 38,
+   "track": "Speak Softly - Like Horses",
+   "n_drop_frames": 17,
+   "dropout_sec": 0.19736961451247165,
+   "dropout_start_sec": 3.0998639455782313,
+   "bed_active_rms": 0.07838424134635784,
+   "d_hit": false
+  },
+  {
+   "index": 39,
+   "track": "The Doppler Shift - Atrophy",
+   "n_drop_frames": 387,
+   "dropout_sec": 4.493061224489796,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.05347745343761848,
+   "d_hit": true
+  },
+  {
+   "index": 40,
+   "track": "The Easton Ellises (Baumi) - SDRNR",
+   "n_drop_frames": 88,
+   "dropout_sec": 1.0216780045351475,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.0866603221526241,
+   "d_hit": true
+  },
+  {
+   "index": 41,
+   "track": "The Easton Ellises - Falcon 69",
+   "n_drop_frames": 177,
+   "dropout_sec": 2.0549659863945577,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.1122675022259558,
+   "d_hit": true
+  },
+  {
+   "index": 42,
+   "track": "The Long Wait - Dark Horses",
+   "n_drop_frames": 241,
+   "dropout_sec": 2.7980045351473923,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.07436925140253194,
+   "d_hit": true
+  },
+  {
+   "index": 43,
+   "track": "The Mountaineering Club - Mallory",
+   "n_drop_frames": 549,
+   "dropout_sec": 6.373877551020408,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.04892576981861836,
+   "d_hit": true
+  },
+  {
+   "index": 44,
+   "track": "The Sunshine Garcia Band - For I Am The Moon",
+   "n_drop_frames": 25,
+   "dropout_sec": 0.29024943310657597,
+   "dropout_start_sec": 0.19736961451247165,
+   "bed_active_rms": 0.09019986901849252,
+   "d_hit": false
+  },
+  {
+   "index": 45,
+   "track": "Timboz - Pony",
+   "n_drop_frames": 226,
+   "dropout_sec": 2.6238548752834467,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.0943426749537367,
+   "d_hit": true
+  },
+  {
+   "index": 46,
+   "track": "Tom McKenzie - Directions",
+   "n_drop_frames": 19,
+   "dropout_sec": 0.22058956916099773,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.03484387943445646,
+   "d_hit": false
+  },
+  {
+   "index": 47,
+   "track": "Triviul feat. The Fiend - Widow",
+   "n_drop_frames": 7,
+   "dropout_sec": 0.08126984126984127,
+   "dropout_start_sec": 10.983038548752834,
+   "bed_active_rms": 0.06934818412307853,
+   "d_hit": false
+  },
+  {
+   "index": 48,
+   "track": "We Fell From The Sky - Not You",
+   "n_drop_frames": 253,
+   "dropout_sec": 2.9373242630385485,
+   "dropout_start_sec": 0.0,
+   "bed_active_rms": 0.0922250644469163,
+   "d_hit": true
+  },
+  {
+   "index": 49,
+   "track": "Zeno - Signs",
+   "n_drop_frames": 131,
+   "dropout_sec": 1.5209070294784581,
+   "dropout_start_sec": 0.46439909297052157,
+   "bed_active_rms": 0.08062150337266207,
+   "d_hit": true
+  }
+ ]
+}

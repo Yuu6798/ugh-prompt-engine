@@ -95,7 +95,13 @@ def main() -> int:
     for index, track in enumerate(tracks):
         src = beds / f"bed_{index:02d}.wav"
         if not src.is_file():
-            continue
+            # 取得・配置が途中でも「短い digest map を出して成功終了」してしまうと、
+            # 部分出力が完了コホートと見分けられなくなる（§3.4.5 は 50 件全部の
+            # 視覚的会計を要求する）。欠落は停止であってスキップではない。
+            raise FileNotFoundError(
+                f"{src} が無い（[{index:02d}] {track}）; 全 50 件が揃わないまま "
+                "部分的な digest map を出さない (fail-closed)"
+            )
         png = out / f"bed_{index:02d}.png"
         render(src, png, f"[{index:02d}] {track}  —  bed window [0, n_max]")
         digests[f"bed_{index:02d}.png"] = hashlib.sha256(png.read_bytes()).hexdigest()

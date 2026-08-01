@@ -243,13 +243,20 @@ vocadito 40 clip の実測から:
 
 ## 4. 全 50 曲の実測（**完了**・2026-08-01）
 
-数値通過 **44/50**、(d) 該当 **29/50**、最終採用 **2 件**。
+数値通過 **44/50**、(d) 該当 **29/50**（**2026-08-01 の実装訂正後**の値・§4.8）、
+最終採用 **2 件**。
+
+> **数字の一致は偶然である。** 退役した −40 dB 版も 29/50 だったが、**該当する曲の
+> 集合は違う**（§4.8 の差分表）。29 という数だけを見て「何も変わらなかった」と
+> 読まないこと。
 
 判定列の読み方:
 
 - `residual_db` / 数値: §3.4.2 の指標と閾値 −26.0 dB（導出値）
 - **`N_drop` / dropout(s)**: 「無音」ではなく **`frame_db(t) ≤ −26.0 dB` の最長連続長**
-  （frame 2048 / hop 512、`frame_db = 20log10(frame_rms / peak_frame_rms)`）。
+  （frame 2048 / hop 512、`frame_db = 20log10(frame_rms / bed_active_rms)`。
+  分母は §4.3 の非無音フレーム RMS であり **peak ではない**——§3.4.6 は peak を
+  分母に置く案を明示的に棄却している。旧実装は peak を使っていた・§4.8）。
   **デジタル無音ではない**——列名を `無音最長` から `dropout` へ改めた
   （別の量を指す列名は第三者に誤読される）。`N_drop` は hop 単位のフレーム数で、
   区間長 = `N_drop × hop` サンプル。**閾値 −26.0 dB は User 決裁 2026-08-01 で確定**
@@ -260,56 +267,56 @@ vocadito 40 clip の実測から:
 
 | # | track（lexical order） | `residual_db` | 数値 | `N_drop` | dropout(s) | (d) | 目視 | 採否 |
 |---|---|---|---|---|---|---|---|---|
-| 00 | AM Contra - Heart Peripheral | -32.867 | PASS | 297 | 3.4482 | 該当 | (d) | — |
-| 01 | Al James - Schoolboy Facination | -43.186 | PASS | 141 | 1.6370 | 該当 | (d) | — |
-| 02 | Angels In Amplifiers - I'm Alright | -48.288 | PASS | 72 | 0.8359 | — | なし | **採用** |
-| 03 | Arise - Run Run Run | -52.256 | PASS | 51 | 0.5921 | — | なし | **採用** |
-| 04 | BKS - Bulldozer | -55.264 | PASS | 238 | 2.7632 | 該当 | 未実施(判定不変) | — |
-| 05 | BKS - Too Much | -53.928 | PASS | 106 | 1.2307 | 該当 | なし | — |
-| 06 | Ben Carrigan - We'll Talk About It All Tonight | -49.593 | PASS | 351 | 4.0751 | 該当 | 未実施(判定不変) | — |
-| 07 | Bobby Nobody - Stitch Up | -63.976 | PASS | 553 | 6.4203 | 該当 | 未実施(判定不変) | — |
-| 08 | Buitraker - Revo X | -51.652 | PASS | 720 | 8.3592 | 該当 | 未実施(判定不変) | — |
-| 09 | Carlos Gonzalez - A Place For Us | -58.675 | PASS | 203 | 2.3568 | 該当 | 未実施(判定不変) | — |
-| 10 | Cristina Vane - So Easy | -22.069 | reject | 301 | 3.4946 | 該当 | 未実施(判定不変) | — |
-| 11 | Detsky Sad - Walkie Talkie | -11.170 | reject | 104 | 1.2074 | 該当 | 未実施(判定不変) | — |
-| 12 | Enda Reilly - Cur An Long Ag Seol | -33.509 | PASS | 87 | 1.0101 | 該当 | 未実施(判定不変) | — |
-| 13 | Forkupines - Semantics | -56.699 | PASS | 273 | 3.1695 | 該当 | 未実施(判定不変) | — |
-| 14 | Georgia Wonder - Siren | -33.216 | PASS | 339 | 3.9358 | 該当 | 未実施(判定不変) | — |
-| 15 | Girls Under Glass - We Feel Alright | -38.153 | PASS | 168 | 1.9505 | 該当 | 未実施(判定不変) | — |
-| 16 | Hollow Ground - Ill Fate | -63.926 | PASS | 76 | 0.8824 | — | 未実施(上位確定) | — |
-| 17 | James Elder & Mark M Thompson - The English Actor | -39.808 | PASS | 9 | 0.1045 | — | 未実施(上位確定) | — |
-| 18 | Juliet's Rescue - Heartbeats | -67.067 | PASS | 150 | 1.7415 | 該当 | 未実施(判定不変) | — |
-| 19 | Little Chicago's Finest - My Own | -40.820 | PASS | 20 | 0.2322 | — | 未実施(上位確定) | — |
-| 20 | Louis Cressy Band - Good Time | -23.257 | reject | 74 | 0.8591 | — | 未実施(判定不変) | — |
-| 21 | Lyndsey Ollard - Catching Up | -56.168 | PASS | 99 | 1.1494 | 該当 | 未実施(判定不変) | — |
-| 22 | M.E.R.C. Music - Knockout | -40.328 | PASS | 256 | 2.9722 | 該当 | 未実施(判定不変) | — |
-| 23 | Moosmusic - Big Dummy Shake | -21.408 | reject | 149 | 1.7299 | 該当 | 未実施(判定不変) | — |
-| 24 | Motor Tapes - Shore | -71.054 | PASS | 180 | 2.0898 | 該当 | 未実施(判定不変) | — |
-| 25 | Mu - Too Bright | -50.263 | PASS | 135 | 1.5673 | 該当 | 未実施(判定不変) | — |
-| 26 | Nerve 9 - Pray For The Rain | -54.209 | PASS | 22 | 0.2554 | — | 未実施(上位確定) | — |
-| 27 | PR - Happy Daze | -59.747 | PASS | 30 | 0.3483 | — | 未実施(上位確定) | — |
-| 28 | PR - Oh No | -66.429 | PASS | 46 | 0.5341 | — | 未実施(上位確定) | — |
-| 29 | Punkdisco - Oral Hygiene | -25.084 | reject | 195 | 2.2639 | 該当 | 未実施(判定不変) | — |
-| 30 | Raft Monk - Tiring | -58.782 | PASS | 570 | 6.6177 | 該当 | 未実施(判定不変) | — |
-| 31 | Sambasevam Shanmugam - Kaathaadi | -31.571 | PASS | 143 | 1.6602 | 該当 | 未実施(判定不変) | — |
+| 00 | AM Contra - Heart Peripheral | -32.867 | PASS | 294 | 3.4133 | 該当 | (d) | — |
+| 01 | Al James - Schoolboy Facination | -43.186 | PASS | 138 | 1.6022 | 該当 | (d) | — |
+| 02 | Angels In Amplifiers - I'm Alright | -48.288 | PASS | 36 | 0.4180 | — | なし | **採用** |
+| 03 | Arise - Run Run Run | -52.256 | PASS | 48 | 0.5573 | — | なし | **採用** |
+| 04 | BKS - Bulldozer | -55.264 | PASS | 224 | 2.6006 | 該当 | 未実施(判定不変) | — |
+| 05 | BKS - Too Much | -53.928 | PASS | 34 | 0.3947 | — | なし | — |
+| 06 | Ben Carrigan - We'll Talk About It All Tonight | -49.593 | PASS | 347 | 4.0287 | 該当 | 未実施(判定不変) | — |
+| 07 | Bobby Nobody - Stitch Up | -63.976 | PASS | 536 | 6.2229 | 該当 | 未実施(判定不変) | — |
+| 08 | Buitraker - Revo X | -51.652 | PASS | 163 | 1.8924 | 該当 | 未実施(判定不変) | — |
+| 09 | Carlos Gonzalez - A Place For Us | -58.675 | PASS | 200 | 2.3220 | 該当 | 未実施(判定不変) | — |
+| 10 | Cristina Vane - So Easy | -22.069 | reject | 298 | 3.4598 | 該当 | 未実施(判定不変) | — |
+| 11 | Detsky Sad - Walkie Talkie | -11.170 | reject | 101 | 1.1726 | 該当 | 未実施(判定不変) | — |
+| 12 | Enda Reilly - Cur An Long Ag Seol | -33.509 | PASS | 29 | 0.3367 | — | 未実施(上位確定) | — |
+| 13 | Forkupines - Semantics | -56.699 | PASS | 269 | 3.1231 | 該当 | 未実施(判定不変) | — |
+| 14 | Georgia Wonder - Siren | -33.216 | PASS | 336 | 3.9010 | 該当 | 未実施(判定不変) | — |
+| 15 | Girls Under Glass - We Feel Alright | -38.153 | PASS | 163 | 1.8924 | 該当 | 未実施(判定不変) | — |
+| 16 | Hollow Ground - Ill Fate | -63.926 | PASS | 72 | 0.8359 | — | 未実施(上位確定) | — |
+| 17 | James Elder & Mark M Thompson - The English Actor | -39.808 | PASS | 0 | 0.0000 | — | 未実施(上位確定) | — |
+| 18 | Juliet's Rescue - Heartbeats | -67.067 | PASS | 147 | 1.7067 | 該当 | 未実施(判定不変) | — |
+| 19 | Little Chicago's Finest - My Own | -40.820 | PASS | 8 | 0.0929 | — | 未実施(上位確定) | — |
+| 20 | Louis Cressy Band - Good Time | -23.257 | reject | 21 | 0.2438 | — | 未実施(上位確定) | — |
+| 21 | Lyndsey Ollard - Catching Up | -56.168 | PASS | 96 | 1.1146 | 該当 | 未実施(判定不変) | — |
+| 22 | M.E.R.C. Music - Knockout | -40.328 | PASS | 253 | 2.9373 | 該当 | 未実施(判定不変) | — |
+| 23 | Moosmusic - Big Dummy Shake | -21.408 | reject | 145 | 1.6834 | 該当 | 未実施(判定不変) | — |
+| 24 | Motor Tapes - Shore | -71.054 | PASS | 177 | 2.0550 | 該当 | 未実施(判定不変) | — |
+| 25 | Mu - Too Bright | -50.263 | PASS | 44 | 0.5108 | — | 未実施(上位確定) | — |
+| 26 | Nerve 9 - Pray For The Rain | -54.209 | PASS | 12 | 0.1393 | — | 未実施(上位確定) | — |
+| 27 | PR - Happy Daze | -59.747 | PASS | 26 | 0.3019 | — | 未実施(上位確定) | — |
+| 28 | PR - Oh No | -66.429 | PASS | 37 | 0.4296 | — | 未実施(上位確定) | — |
+| 29 | Punkdisco - Oral Hygiene | -25.084 | reject | 170 | 1.9737 | 該当 | 未実施(判定不変) | — |
+| 30 | Raft Monk - Tiring | -58.782 | PASS | 565 | 6.5596 | 該当 | 未実施(判定不変) | — |
+| 31 | Sambasevam Shanmugam - Kaathaadi | -31.571 | PASS | 138 | 1.6022 | 該当 | 未実施(判定不変) | — |
 | 32 | Secretariat - Borderline | -64.951 | PASS | 0 | 0.0000 | — | 未実施(上位確定) | — |
-| 33 | Secretariat - Over The Top | -68.253 | PASS | 60 | 0.6966 | — | 未実施(上位確定) | — |
-| 34 | Side Effects Project - Sing With Me | -31.965 | PASS | 40 | 0.4644 | — | 未実施(上位確定) | — |
-| 35 | Signe Jakobsen - What Have You Done To Me | -67.886 | PASS | 784 | 9.1022 | 該当 | 未実施(判定不変) | — |
+| 33 | Secretariat - Over The Top | -68.253 | PASS | 57 | 0.6618 | — | 未実施(上位確定) | — |
+| 34 | Side Effects Project - Sing With Me | -31.965 | PASS | 11 | 0.1277 | — | 未実施(上位確定) | — |
+| 35 | Signe Jakobsen - What Have You Done To Me | -67.886 | PASS | 781 | 9.0674 | 該当 | 未実施(判定不変) | — |
 | 36 | Skelpolu - Resurrection | -50.832 | PASS | 0 | 0.0000 | — | 未実施(上位確定) | — |
-| 37 | Speak Softly - Broken Man | -32.044 | PASS | 46 | 0.5341 | — | 未実施(上位確定) | — |
-| 38 | Speak Softly - Like Horses | -31.591 | PASS | 27 | 0.3135 | — | 未実施(上位確定) | — |
-| 39 | The Doppler Shift - Atrophy | -42.742 | PASS | 468 | 5.4335 | 該当 | 未実施(判定不変) | — |
-| 40 | The Easton Ellises (Baumi) - SDRNR | -28.045 | PASS | 149 | 1.7299 | 該当 | 未実施(判定不変) | — |
-| 41 | The Easton Ellises - Falcon 69 | -26.270 | PASS | 180 | 2.0898 | 該当 | 未実施(判定不変) | — |
-| 42 | The Long Wait - Dark Horses | -58.639 | PASS | 245 | 2.8444 | 該当 | 未実施(判定不変) | — |
-| 43 | The Mountaineering Club - Mallory | -60.194 | PASS | 553 | 6.4203 | 該当 | 未実施(判定不変) | — |
-| 44 | The Sunshine Garcia Band - For I Am The Moon | -46.643 | PASS | 28 | 0.3251 | — | 未実施(上位確定) | — |
-| 45 | Timboz - Pony | -51.060 | PASS | 230 | 2.6703 | 該当 | 未実施(判定不変) | — |
-| 46 | Tom McKenzie - Directions | -63.149 | PASS | 22 | 0.2554 | — | 未実施(上位確定) | — |
-| 47 | Triviul feat. The Fiend - Widow | -17.839 | reject | 25 | 0.2902 | — | 未実施(判定不変) | — |
-| 48 | We Fell From The Sky - Not You | -57.233 | PASS | 257 | 2.9838 | 該当 | 未実施(判定不変) | — |
-| 49 | Zeno - Signs | -27.858 | PASS | 159 | 1.8460 | 該当 | 未実施(判定不変) | — |
+| 37 | Speak Softly - Broken Man | -32.044 | PASS | 43 | 0.4992 | — | 未実施(上位確定) | — |
+| 38 | Speak Softly - Like Horses | -31.591 | PASS | 17 | 0.1974 | — | 未実施(上位確定) | — |
+| 39 | The Doppler Shift - Atrophy | -42.742 | PASS | 387 | 4.4931 | 該当 | 未実施(判定不変) | — |
+| 40 | The Easton Ellises (Baumi) - SDRNR | -28.045 | PASS | 88 | 1.0217 | 該当 | 未実施(判定不変) | — |
+| 41 | The Easton Ellises - Falcon 69 | -26.270 | PASS | 177 | 2.0550 | 該当 | 未実施(判定不変) | — |
+| 42 | The Long Wait - Dark Horses | -58.639 | PASS | 241 | 2.7980 | 該当 | 未実施(判定不変) | — |
+| 43 | The Mountaineering Club - Mallory | -60.194 | PASS | 549 | 6.3739 | 該当 | 未実施(判定不変) | — |
+| 44 | The Sunshine Garcia Band - For I Am The Moon | -46.643 | PASS | 25 | 0.2902 | — | 未実施(上位確定) | — |
+| 45 | Timboz - Pony | -51.060 | PASS | 226 | 2.6239 | 該当 | 未実施(判定不変) | — |
+| 46 | Tom McKenzie - Directions | -63.149 | PASS | 19 | 0.2206 | — | 未実施(上位確定) | — |
+| 47 | Triviul feat. The Fiend - Widow | -17.839 | reject | 7 | 0.0813 | — | 未実施(上位確定) | — |
+| 48 | We Fell From The Sky - Not You | -57.233 | PASS | 253 | 2.9373 | 該当 | 未実施(判定不変) | — |
+| 49 | Zeno - Signs | -27.858 | PASS | 131 | 1.5209 | 該当 | 未実施(判定不変) | — |
 
 ### 4.1 目視の実施範囲（**宣言**）
 
@@ -381,34 +388,33 @@ vocadito 40 clip の実測から:
 `residual_db` について分布監査を出しながら **(d) について同じ監査を出していなかった**。
 閾値がどこに落ちたかを問うべき量は 2 つあり、片方しか監査していなかった。以下で埋める。
 **フレーム単位**で報告する（秒は従属表示）。算出器 = `reason_d.py`（閾値凍結）、
-生データ = `raw/reason_d_26.json`。
+生データ = `raw/reason_d_26_corrected.json`（訂正後・§4.8。`raw/reason_d_26.json` は無効化された旧算出）。
 
 凍結値: `frame_db(t) ≤ −26.0 dB` / frame 2048 / hop 512 / 該当は区間長 ≥ 1.0 s。
 **実効境界 `N_drop = 87`**（44,544 サンプル = 1.010068 s）。`N_drop = 86` = 0.998458 s。
 
 | §3.4.7 の報告項目 | 値 |
 |---|---|
-| **非該当 max** | **`N_drop = 76`**（0.8824 s）— Hollow Ground - Ill Fate |
-| **該当 min** | **`N_drop = 87`**（1.0101 s）— Enda Reilly - Cur An Long Ag Seol |
-| **gap** | **11 frames**（0.1277 s） |
-| **閾値 → 非該当側** | **11 frames**（0.1277 s） |
-| **該当 min が閾値上か** | **YES** — `N_drop == 87 ==` 閾値ちょうど |
+| **非該当 max** | **`N_drop = 72`**（0.8359 s）— Hollow Ground - Ill Fate |
+| **該当 min** | **`N_drop = 88`**（1.0217 s）— The Easton Ellises (Baumi) - SDRNR |
+| **gap** | **16 frames**（0.1857 s） |
+| **閾値 → 非該当側** | **15 frames**（0.1741 s） |
+| **該当 min が閾値上か** | **NO** — `N_drop = 88 > 87` |
 
-該当 **32/50**、非該当 **18/50**。dropout 長の分布は `N_drop = 0 〜 783`。
+該当 **29/50**、非該当 **21/50**。dropout 長の分布は `N_drop = 0 〜 781`。
 
-**この監査の結論は `residual_db` のそれとは形が違う。** `residual_db` では閾値が
-gap の**内側**に落ちた（両側に余裕があった）。(d) では **該当側の余裕がゼロ**である
-——最小の該当値が実効境界そのものに載っており、Enda Reilly - Cur An Long Ag Seol
-1 件が境界上に居る。**閾値は gap の内側ではなく、gap の該当側の端に接している。**
+**この監査は `residual_db` のそれと同じ形になった。** 閾値 87 は gap
+`[72, 88]` の**内側**にあり、非該当側に 15 フレーム（0.174 s）、該当側に
+1 フレームの余裕がある。**(v) は偽**——最小の該当値が実効境界そのものには載って
+いない。
 
-境界近傍（`N_drop` 80–95）に居るのはこの 1 件だけで、次に近い非該当は `N_drop = 76`
-（11 フレーム下）である。つまり **(d) は「1 フレームでも短ければ非該当」という
-量子化の目の上に立っている**。これは緩和理由でも厳格化理由でもなく、記録すべき所見
-である（レビューの「(d) は residual_db より薄い刃で立っているなら、それは記録されねば
-ならない」に対する回答）。
+> **旧実装（peak 分母・+3 フレーム）の監査ではここが違っていた**（該当 min = 87 で
+> (v) が真、gap 11 frames）。訂正で消えたのは「閾値ちょうどに 1 件載っている」という
+> 所見そのものであり、**閾値を動かしたからではなく、量の計算が定義と違っていたから**
+> である。旧監査は §4.8 に日付つきで残す。
 
-**採用 2 件への影響はない**: [02] は `N_drop = 72`、[03] は `N_drop = 51` で、
-どちらも境界から 15 / 36 フレーム離れている。
+**採用 2 件への影響はない**: [02] は `N_drop = 36`、[03] は `N_drop = 48` で、
+どちらも境界から 51 / 39 フレーム離れている。
 
 ### 4.3 事由 (d) の定義に関する User 決裁（2026-08-01）
 
@@ -470,7 +476,7 @@ gap の**内側**に落ちた（両側に余裕があった）。(d) では **�
 | 全 50 曲の `residual_db` 実数値 | **完了**（`raw/screening.json`） |
 | member 帰属証拠 + `stem_sha256`（150 member） | **完了**（`raw/bed_members.json`） |
 | `bed_window_sha256` の照合 | **50/50 一致** |
-| 事由 (d) の全 50 曲測定 | **完了**（現行 −26.0 dB: `raw/reason_d_26.json` / 退役 −40 dB: `raw/reason_d.json` / 併記: `raw/reason_d_both.json` / 参考の無音水準走査: `raw/silence.json`） |
+| 事由 (d) の全 50 曲測定 | **完了**（現行 −26.0 dB・訂正後: `raw/reason_d_26_corrected.json` / 無効化された旧算出: `raw/reason_d_26.json` / 退役 −40 dB: `raw/reason_d.json` / 併記: `raw/reason_d_both.json` / 参考の無音水準走査: `raw/silence.json`） |
 | スペクトログラム 50 枚 + sha256 | **完了**（`raw/spectrogram_sha256.json`・画像本体は非 commit） |
 | §3.4.3 の監査 | **完了**（内側・余裕 0.270 dB） |
 | 通過 2 件の確定 | **完了**（[02] Angels In Amplifiers / [03] Arise） |
@@ -583,3 +589,65 @@ screening 実行時は `OMP_NUM_THREADS=1` / `MKL_NUM_THREADS=1` は設定して
 **区間長の式について**: 本実装は非 active フレーム `n` 本の和集合を
 `(n−1)*hop + frame_len` サンプルとする。`frame_len = 4*hop` なので、これは
 `N_drop = n+3` として `N_drop * hop` に等しい。表とレポートは `N_drop` 表記に統一した。
+
+> **§4.7 の表と本文は「訂正前」の記録である**（2026-08-01 の実装訂正より前）。
+> ここに出てくる `−26.0 dB（現行）` 列の数値は §4.8 で無効化された。**消さずに
+> 残すのは、なぜ 3 通りの数値が存在するのかを後から説明できるようにするため**である。
+
+### 4.8 実装が凍結定義と食い違っていた件の訂正（**2026-08-01**・Codex 4 巡目 P1/P2）
+
+**(d) の閾値は動かしていない。動いたのは「実装が凍結定義どおりでなかった」ことの
+訂正である。** §3.4.6 が凍結している量と、`reason_d.py` が計算していた量が 2 点で
+食い違っていた:
+
+| # | §3.4.6 の凍結定義 | 旧実装 | 効果 |
+|---|---|---|---|
+| 1 | `frame_db(t) = 20log10(frame_rms(t) / **bed_active_rms**)` | 分母に `peak_frame_rms` を使用 | `peak ≥ active_rms` なのでカットオフが持ち上がり、**dropout を過剰に数える** |
+| 2 | dropout フレームが **87 フレーム以上連続** | `N_drop = 連続数 + 3` を閾値と比較 | 実効ゲートが **84 連続**へ緩み、**該当を過剰に出す** |
+
+**1 は単なる取り違えではない。** §3.4.6 は peak を分母に置く案（−60/−80 dBFS_peak）を
+**明示的に棄却しており**、その理由まで書いてある（「peak は本設計のどこにも宣言されて
+いない基準量であり、たった 1 サンプルで決まる」）。棄却された基準量が実装に入っていた。
+
+**どちらの誤りも (d) 該当を過剰に出す方向**であり、訂正は**厳格化ではなく是正**である
+（緩める方向の訂正には見えるが、緩めたのは実装の誤りであって閾値ではない）。
+
+#### 訂正の実施
+
+- 素材: `/home/user/m2e_assets/beds/bed_XX.wav` 全 50 本が **`bed_members.json` の
+  `bed_window_sha256` と 50/50 一致**することを確認した上で再計算した
+  （**新規取得ゼロ・新規測定ゼロ**。分離器も CREPE も走らせていない）。
+- 生データ: `raw/reason_d_26_corrected.json`（現行）。
+  `raw/reason_d_26.json`（無効・peak 分母 + 3 フレーム加算）は**消さずに残す**。
+- 算出器: `reason_d.py`（訂正済み。改訂履歴を docstring に記載）。
+
+#### 判定の差分（訂正前 → 訂正後）
+
+| 項目 | 訂正前（無効） | 訂正後（現行） |
+|---|---|---|
+| (d) 該当 / 非該当 | 32 / 18 | **29 / 21** |
+| 非該当 max | `N_drop = 76`（Hollow Ground） | **`N_drop = 72`（Hollow Ground）** |
+| 該当 min | `N_drop = 87`（Enda Reilly） | **`N_drop = 88`（The Easton Ellises (Baumi) - SDRNR）** |
+| gap | 11 frames | **16 frames** |
+| 閾値 → 非該当側 | 11 frames | **15 frames** |
+| 該当 min が閾値上か | YES | **NO** |
+| 採用 2 件 | [02] Angels + [03] Arise | **[02] Angels + [03] Arise（不変）** |
+
+**該当 → 非該当へ反転した 3 件**（いずれも lexical order で採用 2 件より下＝
+**decision-inert**）:
+
+| # | track | 訂正前 | 訂正後 |
+|---|---|---|---|
+| 05 | BKS - Too Much | 106（該当） | **34（非該当）** |
+| 12 | Enda Reilly - Cur An Long Ag Seol | 87（該当） | **29（非該当）** |
+| 25 | Mu - Too Bright | 135（該当） | **44（非該当）** |
+
+#### 採用 2 件が変わらない理由（**偶然ではない**）
+
+訂正はカットオフを下げるので **`N_drop` は減る方向にしか動かない**。したがって
+非該当は非該当のまま。選定に効きうるのは「該当 → 非該当へ反転した曲が、採用 2 件
+より lexical order で**上**にある」場合だけである。上位 2 件（[00] 294 / [01] 138）は
+訂正後も該当のままなので、[02] / [03] が繰り上がる構図は動かない。
+**r3 の pin（`m2e_bed_fixtures.yaml`）はそのまま有効である。**
+
+**閾値 −26.0 と `N_drop = 87` は動かしていない**（§3.4.6 の「1 回きり」条項・§13）。

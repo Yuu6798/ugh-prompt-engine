@@ -63,6 +63,8 @@ M2E_BED_FIXTURES_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2e_bed_
 
 # 生成した pin ファイルが名乗る schema（ハーネス側 `load_external_fixtures` が受理する）。
 M2E_EXTERNAL_FIXTURES_SCHEMA = "m2e-external-fixtures/0.1"
+# 読み込む側の schema discriminator（r3 で登録済み）。未知の schema は fail-closed。
+M2E_BED_FIXTURES_SCHEMA = "m2e-bed-fixtures/0.1"
 
 
 class GenerationError(RuntimeError):
@@ -532,6 +534,13 @@ def load_registered_beds() -> Dict[str, Dict[str, Any]]:
             "生成しない (fail-closed)"
         )
     doc = yaml.safe_load(M2E_BED_FIXTURES_PATH.read_text(encoding="utf-8"))
+    version = doc.get("schema_version")
+    if version != M2E_BED_FIXTURES_SCHEMA:
+        raise GenerationError(
+            f"{M2E_BED_FIXTURES_PATH}: schema_version {version!r} が "
+            f"{M2E_BED_FIXTURES_SCHEMA!r} でない; 意味の分からない pin から "
+            "ミックスを publish しない (fail-closed)"
+        )
     beds = doc.get("beds")
     if not isinstance(beds, dict) or not beds:
         raise GenerationError(f"{M2E_BED_FIXTURES_PATH}: beds が空 (fail-closed)")

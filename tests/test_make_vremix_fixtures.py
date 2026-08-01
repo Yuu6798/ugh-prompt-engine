@@ -274,6 +274,24 @@ def test_read_audio_refuses_vocals_stem(tmp_path: Path) -> None:
         mk.read_audio(path)
 
 
+def test_load_registered_beds_rejects_an_unknown_schema(tmp_path: Path, monkeypatch) -> None:
+    """未知 schema の pin から publish しない（意味の分からない規約を読まない）。"""
+    path = tmp_path / "m2e_bed_fixtures.yaml"
+    path.write_text(
+        yaml.safe_dump({"schema_version": "m2e-bed-fixtures/9.9", "beds": {"x": {}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mk, "M2E_BED_FIXTURES_PATH", path)
+    with pytest.raises(mk.GenerationError, match="schema_version"):
+        mk.load_registered_beds()
+
+
+def test_load_registered_beds_accepts_the_committed_pin_file() -> None:
+    """commit 済み pin は現行 schema を名乗り、そのまま読める。"""
+    beds = mk.load_registered_beds()
+    assert len(beds) == 50
+
+
 def test_screening_reads_a_conventional_vocals_stem(tmp_path: Path) -> None:
     """`--vocals-stem vocals.wav` は §3.4 の測定対象であって混ぜる素材ではない。
 
