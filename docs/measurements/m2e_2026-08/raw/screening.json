@@ -9,5 +9,38 @@
   "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
   "stem_sha256": "a37f5559908ca3884c386d22e63ba066bc1d0d227252060aaddcbcbd42404228",
   "elapsed_seconds": 291.86
+ },
+ "Al James - Schoolboy Facination": {
+  "index": 1,
+  "residual_db": -43.185731321938306,
+  "numeric_pass": true,
+  "bed_rms": 0.07148399581961556,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "b10de8a4b9add59a927e10a3b2513fe6ad6c690a0a5b2987e6becfbc9717a359",
+  "elapsed_seconds": 267.51
+ },
+ "Angels In Amplifiers - I'm Alright": {
+  "index": 2,
+  "residual_db": -48.28841904380705,
+  "numeric_pass": true,
+  "bed_rms": 0.07890494423544613,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "9d092c86dab6aad196023690c1d8951c5640ccba69d98db7caaa95a72f078cad",
+  "elapsed_seconds": 281.45
+ },
+ "Arise - Run Run Run": {
+  "index": 3,
+  "residual_db": -52.2557304239377,
+  "numeric_pass": true,
+  "bed_rms": 0.13755634001996098,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "31747c04702da225a4d560f6281bbe8c5649ef4cf309ed099ee18585b3b8dffa",
+  "elapsed_seconds": 269.62
  }
 }
