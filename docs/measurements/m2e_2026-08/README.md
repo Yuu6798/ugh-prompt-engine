@@ -196,8 +196,13 @@ r2 で改めて全 50 曲を測って記録する（§3.3-2 の「全件の実�
 
 | ファイル | schema | sha256 |
 |---|---|---|
-| `tests/fixtures/melody_bench/m2e_bed_fixtures.yaml` | `m2e-bed-fixtures/0.1` | `2ad8830959e55b0f82c3295d92e80c0d2ac2ab19fd279fecd648c3a1acc9dc53` |
+| `tests/fixtures/melody_bench/m2e_bed_fixtures.yaml` | `m2e-bed-fixtures/0.1` | `96958d68fd83d5d5b718620b930a72acd88795e1cfaa394b60c8cfc9ddd394f3` |
 | `tests/fixtures/melody_bench/m2e_accuracy_bars.yaml` | `m2e-accuracy-bars/0.1` | `7e8c068fabc4bc8167d822beeaa8806b39f6d2929b08551da8280b4389780f39` |
+
+> `m2e_bed_fixtures.yaml` の digest は **2026-08-01 の (d) 実装訂正**（`r2_screening.md`
+> §4.8）で再生成した後の値である。**バー・閾値・採用 2 件はいずれも変わっていない**
+> （訂正したのは各曲の `n_drop_frames` / `dropout_sec` / `reason_d_hit`）。
+> `m2e_accuracy_bars.yaml` は 1 バイトも変わっていない。
 
 ### 5.1 `m2e_bed_fixtures.yaml`（§9 / §9.1 / §9.2）
 

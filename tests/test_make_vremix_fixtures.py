@@ -308,6 +308,14 @@ def test_load_registered_clips_accepts_the_committed_registry() -> None:
     assert len(mk.load_registered_clips()) == 40
 
 
+def test_readme_records_the_current_bed_fixture_digest() -> None:
+    """README の pin 表が commit 済み fixture の実 digest と一致する。"""
+    fixture = ROOT / "tests/fixtures/melody_bench/m2e_bed_fixtures.yaml"
+    digest = hashlib.sha256(fixture.read_bytes()).hexdigest()
+    text = (ROOT / "docs/measurements/m2e_2026-08/README.md").read_text(encoding="utf-8")
+    assert digest in text
+
+
 def test_readme_reports_the_corrected_accepted_bed_dropouts() -> None:
     """README の採用 2 件の `N_drop` が登録 pin と一致する（訂正の掃き残し防止）。"""
     text = (ROOT / "docs/measurements/m2e_2026-08/README.md").read_text(encoding="utf-8")

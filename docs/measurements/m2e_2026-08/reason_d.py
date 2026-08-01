@@ -107,7 +107,15 @@ def main() -> int:
     rows = []
     for index, track in enumerate(tracks):
         path = Path(args.beds) / f"bed_{index:02d}.wav"
-        y = sf.read(str(path), dtype="float64", always_2d=False)[0]
+        y, sample_rate = sf.read(str(path), dtype="float64", always_2d=False)
+        if int(sample_rate) != SAMPLE_RATE:
+            # `N_DROP_THRESHOLD` も秒換算も 44100 で凍結してある。別レートの入力を
+            # 黙って受けると、87 hop が 1.0 s 未満でもゲートを通る（48 kHz なら
+            # 0.928 s を 1.010 s として報告する）。
+            raise ValueError(
+                f"{path}: sample rate {sample_rate} != {SAMPLE_RATE}; "
+                "凍結ゲートは 44100 前提であり、別レートで (d) を数えない (fail-closed)"
+            )
         n_drop, seconds, start, bed_active_rms = longest_dropout(y)
         rows.append({
             "index": index, "track": track,
