@@ -8893,6 +8893,43 @@ def test_cell_store_generator_code_mismatch_forces_remeasurement(tmp_path: Path)
     assert "generator_code_sha256" in mismatch_fields
 
 
+def test_cell_store_record_without_the_expected_schema_is_not_resumed(tmp_path: Path) -> None:
+    """P2: レコード形式そのものに版を要求する（同一性フィールドが揃っていても）。
+
+    版が違えば「別の意味論で書かれた測定」を現行の解釈で読むことになる。版無し
+    （旧世代）・未知版のどちらも resume 対象にしない。
+    """
+    cell_store = tmp_path / "cell_store"
+    _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+
+    target_clip = "vremix_vocadito_1_BedOne_p12"
+    record_path = harness._cell_store_record_path(
+        cell_store,
+        category="V_remix_real_direct",
+        level="+12dB",
+        entry_id=target_clip,
+        repeat_index=0,
+    )
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    assert record["schema_version"] == harness._EXPECTED_CELL_RECORD_SCHEMA
+    record["schema_version"] = "m2-cell-record/9.9"
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    report2 = _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+    assert target_clip in report2["cells_measured"]
+    assert target_clip not in report2["cells_resumed"]
+    mismatch_fields = {
+        m["field"] for m in report2["cell_store_mismatches"] if m["entry_id"] == target_clip
+    }
+    assert "schema_version" in mismatch_fields
+
+    # 版キーを丸ごと落とした旧世代レコードも同じく resume しない。
+    record.pop("schema_version")
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    report3 = _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+    assert target_clip in report3["cells_measured"]
+
+
 def test_cell_store_tolerance_change_forces_remeasurement(tmp_path: Path) -> None:
     """採点閾値が変われば同じセルでも別の測定（bars 改訂で旧採点値を resume しない）。"""
     cell_store = tmp_path / "cell_store"

@@ -44,6 +44,18 @@ def _load_module():
 
 mk = _load_module()
 
+# 合成ベッドは数千サンプルしかない。凍結窓（1,708,258 サンプル）へタイル展開すると
+# 1 呼び出し約 1.7 s かかり、窓長そのものはここでの検査対象でもない——**窓長だけ**
+# 小さくして規約の検査に集中する。実物の登録値を見るテストは
+# `_REAL_REGISTERED_N_MAX` を直接呼ぶ。
+_FAKE_N_MAX = mk.FRAME_LEN * 4
+_REAL_REGISTERED_N_MAX = mk.registered_n_max_samples
+
+
+@pytest.fixture(autouse=True)
+def _small_measurement_window(monkeypatch):
+    monkeypatch.setattr(mk, "registered_n_max_samples", lambda: _FAKE_N_MAX)
+
 
 def _harness_check(body: str) -> str:
     """ハーネスを **新規プロセス** で import して照合する（stdout を返す）。
@@ -320,7 +332,7 @@ def test_registered_n_max_samples_rejects_an_unknown_schema(tmp_path: Path, monk
     )
     monkeypatch.setattr(mk, "M2E_BED_FIXTURES_PATH", path)
     with pytest.raises(mk.GenerationError, match="schema_version"):
-        mk.registered_n_max_samples()
+        _REAL_REGISTERED_N_MAX()     # 実物（窓長 fixture で差し替えていない方）を見る
 
 
 def test_load_registered_clips_rejects_an_unknown_schema(tmp_path: Path, monkeypatch) -> None:
@@ -617,15 +629,22 @@ def test_level_ladder_order_is_frozen() -> None:
 
 
 def _fake_bed_pins(bed_root: Path, tracks) -> dict:
-    """`m2e_bed_fixtures.yaml` 相当の pin を、合成ベッドの実 digest から組む。"""
+    """`m2e_bed_fixtures.yaml` 相当の pin を、合成ベッドの実 digest から組む。
+
+    窓 digest（`bed_window_sha256`）も同じ素材から作る——`build` は screening 時に
+    登録した窓と再構成した窓の一致を要求するため。
+    """
     pins = {}
     for track in tracks:
+        bed_mono, rate = mk.load_bed_mono(bed_root / track)
+        window = mk.tile_to_length(bed_mono, mk.registered_n_max_samples(), rate)
         pins[track] = {
             "accepted": True,
             "expected_stem_sha256": {
                 stem: mk.stem_sha256(bed_root / track / f"{stem}.wav")
                 for stem in mk.BED_STEMS
             },
+            "bed_window_sha256": mk.waveform_sha256(window),
         }
     return pins
 
@@ -889,6 +908,35 @@ def test_build_rejects_a_bed_whose_stem_digest_differs(tmp_path, monkeypatch) ->
             vocadito_root=vocadito_root, bed_root=bed_root,
             tracks=["Artist A - Track One"], levels=["0dB"],
             out_dir=tmp_path / "out", registered_utc="2026-08-01",
+        )
+
+
+def test_build_rejects_a_bed_window_that_differs_from_the_screened_one(
+    tmp_path, monkeypatch
+) -> None:
+    """P2: stem pin は素材を同定するが、そこから作る窓は実装を通って出てくる。"""
+    vocadito_root, pins = _fake_vocadito(tmp_path, ["vocadito_1"])
+    monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
+    bed_root = tmp_path / "beds"
+    _write_bed(bed_root / "Artist A - Track One")
+    drifted = _fake_bed_pins(bed_root, ["Artist A - Track One"])
+    drifted["Artist A - Track One"]["bed_window_sha256"] = "0" * 64
+    monkeypatch.setattr(mk, "load_registered_beds", lambda: drifted)
+    with pytest.raises(mk.GenerationError, match="ベッド窓の sha256"):
+        mk.build(
+            vocadito_root=vocadito_root, bed_root=bed_root,
+            tracks=["Artist A - Track One"], levels=["0dB"],
+            out_dir=tmp_path / "out", registered_utc="2026-08-01",
+        )
+
+
+def test_build_refuses_to_publish_inside_the_repository(tmp_path, monkeypatch) -> None:
+    """P2: 生成物は非コミット素材（MUSDB18-HQ 由来）を含むためリポジトリ外へ出す。"""
+    with pytest.raises(mk.GenerationError, match="リポジトリ"):
+        mk.build(
+            vocadito_root=tmp_path, bed_root=tmp_path,
+            tracks=["Artist A - Track One"], levels=["0dB"],
+            out_dir=mk.ROOT / "m2e_out", registered_utc="2026-08-01",
         )
 
 

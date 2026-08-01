@@ -163,23 +163,31 @@ def canonical_decode(path: Path) -> Tuple[np.ndarray, int, str]:
     ファイル固有の PCM 整数幅のまま読み、resample 禁止（native rate != 44100 は
     fail-closed で停止）、downmix・チャンネル並べ替え禁止、C 連続・
     shape (n_frames, n_channels)・little endian。
+
+    **bytes は 1 回だけ読む**（`read_stem_pinned` と同じ規律）。header 検証と
+    サンプル読み出しを別々に open すると、その間に差し替えられた場合に
+    「片方の header を検証して別の bytes の digest を出す」pin ができてしまう。
     """
+    import io
+
     path = Path(path)
     _forbid_vocals(path)
-    info = sf.info(str(path))
-    dtype = _CANONICAL_DTYPES.get(info.subtype)
-    if dtype is None:
-        raise GenerationError(
-            f"{path}: subtype {info.subtype!r} は canonical decode の対象外; "
-            "整数 PCM でない入力を pin しない (fail-closed)"
-        )
-    if int(info.samplerate) != CANONICAL_SAMPLE_RATE:
-        raise GenerationError(
-            f"{path}: native rate {info.samplerate} != {CANONICAL_SAMPLE_RATE}; "
-            "canonical decode は resample を禁じる (fail-closed)"
-        )
-    data = sf.read(str(path), dtype=dtype, always_2d=True)[0]
-    return np.ascontiguousarray(data), int(info.samplerate), str(info.subtype)
+    payload = path.read_bytes()          # ← 唯一の read。以降はこの snapshot だけを見る
+    with sf.SoundFile(io.BytesIO(payload)) as handle:
+        subtype, samplerate = str(handle.subtype), int(handle.samplerate)
+        dtype = _CANONICAL_DTYPES.get(subtype)
+        if dtype is None:
+            raise GenerationError(
+                f"{path}: subtype {subtype!r} は canonical decode の対象外; "
+                "整数 PCM でない入力を pin しない (fail-closed)"
+            )
+        if samplerate != CANONICAL_SAMPLE_RATE:
+            raise GenerationError(
+                f"{path}: native rate {samplerate} != {CANONICAL_SAMPLE_RATE}; "
+                "canonical decode は resample を禁じる (fail-closed)"
+            )
+        data = handle.read(dtype=dtype, always_2d=True)
+    return np.ascontiguousarray(data), samplerate, subtype
 
 
 def stem_sha256(path: Path) -> str:
@@ -800,6 +808,15 @@ def build(
     # ハーネス側の `_parse_registered_utc` で落ちる。同じ意味論で先に検証する。
     require_valid_registered_utc(registered_utc)
     published = Path(out_dir)
+    # 生成物（320 本の WAV）は **リポジトリ外**に置く規律（runbook §5）。ミックスは
+    # MUSDB18-HQ 由来の非コミット素材を含み、WAV の一括 ignore も無いので、
+    # checkout 内へ出すと通常の `git add` で licensed audio が入りうる。
+    resolved = published.resolve()
+    if resolved == ROOT or ROOT in resolved.parents:
+        raise GenerationError(
+            f"--out-dir {resolved} がリポジトリ（{ROOT}）配下; 生成物は非コミット素材を "
+            "含むためリポジトリ外へ出す (fail-closed)"
+        )
     if published.exists() and any(published.iterdir()):
         raise GenerationError(
             f"{published} が空でない; 前回実行の残骸と混ざるのを避けるため、空の出力先を "
@@ -880,9 +897,28 @@ def _build_into_staging(
                 f"track {track!r} は事前登録上 accepted ではない; スクリーニングを通って "
                 "いないベッドでミックスを作らない (fail-closed)"
             )
-        beds[track] = load_bed_mono(
+        bed_mono, bed_rate = load_bed_mono(
             Path(bed_root) / track, expected_stem_sha256=pin.get("expected_stem_sha256")
         )
+        # stem pin は**素材**を同定するが、そこから作る `[0, n_max]` の窓は
+        # decode → downmix → tile の実装を通って出てくる。実装（や復号依存）が
+        # 変われば、すべての stem pin を通したまま**screening を通した窓とは別の
+        # 波形**でミックスを作りうる。screening 時に登録した窓 digest へ結び付ける。
+        window_pin = pin.get("bed_window_sha256")
+        if not window_pin:
+            raise GenerationError(
+                f"track {track!r}: bed_window_sha256 が事前登録に無い (fail-closed)"
+            )
+        actual_window = waveform_sha256(
+            tile_to_length(bed_mono, registered_n_max_samples(), bed_rate)
+        )
+        if actual_window != window_pin:
+            raise GenerationError(
+                f"track {track!r}: 再構成したベッド窓の sha256 {actual_window} が事前登録 "
+                f"pin {window_pin} と不一致; screening を通した窓と別の波形でミックスを "
+                "作らない (fail-closed)"
+            )
+        beds[track] = (bed_mono, bed_rate)
 
     # 注釈はミックスで変わらない（加算ミックスは f0 を変えない）。manifest 位置基準で
     # 解決できる必要があるので out_dir 配下へ **bytes 複製**する（再エンコードしない）。

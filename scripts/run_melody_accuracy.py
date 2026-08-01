@@ -2710,6 +2710,12 @@ _EXPECTED_EXTERNAL_FIXTURES_SCHEMAS: Tuple[str, ...] = (
     _EXPECTED_EXTERNAL_FIXTURES_SCHEMA,
     _EXPECTED_M2E_EXTERNAL_FIXTURES_SCHEMA,
 )
+# §8.7 セル台帳レコードの schema discriminator。**持続する成果物**なので、他の
+# 登録簿と同じく版を名乗らせる——同一性フィールドが揃っていても、レコードの
+# 意味論（どのフィールドが何を指すか）が変われば別物である。版が無い/未知の
+# レコードは resume 対象にしない（`_cell_record_mismatches` が不一致として扱い、
+# そのセルは再測定される）。
+_EXPECTED_CELL_RECORD_SCHEMA = "m2-cell-record/0.1"
 
 # バーを持たず「診断記録のみ」で良いカテゴリ（設計 §3/§8: Demucs は合成音色に対し
 # 分布外なので S_fullstack の低値を理由に crepe を責めない）。**この集合の外の
@@ -4674,6 +4680,7 @@ def _measure_or_resume_external_clip_row(
         # ——設計 §8.6 の「打ち切ったら『未完』として記録する（失敗値を書かない）」
         # と同じ精神。次回実行時は provisioning が整っていれば普通に再測定される。
         record = {
+            "schema_version": _EXPECTED_CELL_RECORD_SCHEMA,
             "category": category,
             "level": level,
             "entry_id": clip_id,
@@ -5221,6 +5228,10 @@ def _cell_record_mismatches(
     if not isinstance(record, dict):
         raise ValueError(f"cell record が JSON object でない (fail-closed): {record!r}")
     current: Dict[str, Any] = {
+        # レコード形式そのものの discriminator。同一性フィールドが全部揃っていても、
+        # 版が違えば「別の意味論で書かれた測定」を現行の解釈で読むことになる。
+        # 版の無い旧レコードは `None` として不一致になる——それが正しい。
+        "schema_version": _EXPECTED_CELL_RECORD_SCHEMA,
         "category": category,
         "level": level,
         "entry_id": entry_id,
