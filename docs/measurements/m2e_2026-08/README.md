@@ -165,8 +165,12 @@ r2 で改めて全 50 曲を測って記録する（§3.3-2 の「全件の実�
   （`src/svp_rpe/melody/extractors.py` の `_prepare_waveform`: `requires_separation` の
   分岐が `isolate_vocals_with_provenance` へ委譲し、stem/weights の digest を刻む）。
 - `make_vremix_fixtures.py screen` も同じ入口
-  （`svp_rpe.rpe.learned.source_separation_adapter.isolate_vocals`）を使う。返り値が
-  2 次元のときのみモノ化する。
+  （`svp_rpe.rpe.learned.source_separation_adapter.isolate_vocals_with_provenance`）を
+  使う。返り値が 2 次元のときのみモノ化する。**2026-08-01 改訂**（Codex 15/16 巡目）:
+  provenance を捨てる `isolate_vocals` から切り替え、分離器の model / version /
+  weights digest を `m2e_bed_fixtures.yaml` の `screening` block と照合するようにした。
+  同時に、外部 stem を受け取る `--vocals-stem` は**撤去**（渡された WAV を事前登録の
+  何とも結び付けられず、素材 pin も窓 pin も通ったまま採用コホートだけが変わりうる）。
 
 **r1 で意図的にやっていないこと**:
 

@@ -133,17 +133,10 @@ def read_audio(path: Path) -> Tuple[np.ndarray, int]:
     return np.asarray(data, dtype=np.float64), int(sample_rate)
 
 
-def read_vocals_stem_for_screening(path: Path) -> Tuple[np.ndarray, int]:
-    """**スクリーニング専用**に分離済み vocals stem を読む（`_forbid_vocals` を通さない）。
-
-    `--vocals-stem` は §3.4 の `residual_db` を測るための入口であり、渡されるのは
-    Demucs/MUSDB の慣例名 `vocals.wav` である。ここで読む信号は**測る対象**であって
-    ミックスへ入る素材ではない——`load_bed_mono` / `read_stem_pinned` /
-    `read_audio` の門は据え置きなので、ベッド構成が vocals を吸い込む経路は無い。
-    """
-    path = Path(path)
-    data, sample_rate = sf.read(str(path), dtype="float64", always_2d=False)
-    return np.asarray(data, dtype=np.float64), int(sample_rate)
+# 2026-08-01 撤去: `read_vocals_stem_for_screening` / `--vocals-stem`（Codex 16 巡目 P2）。
+# 外部から渡された vocals stem は**事前登録の何とも結び付けられない**——素材 pin も
+# 窓 pin も通ったまま、別の分離器・古い stem から出た `residual_db` で採用コホートが
+# 変わりうる。読める経路を残さない（`_forbid_vocals` を迂回する関数を置かない）。
 
 
 # ---------------------------------------------------------------------------
@@ -1023,46 +1016,32 @@ def _cmd_screen(args: argparse.Namespace) -> int:
             "測定窓は凍結量であり、呼び出し側の値で上書きしない (fail-closed)"
         )
     window = tile_to_length(bed_mono, registered, bed_rate)
-    if args.vocals_stem is not None:
-        stem, stem_rate = read_vocals_stem_for_screening(Path(args.vocals_stem))
-        if stem.ndim == 2:
-            # 分離器の stem はステレオで出る。bed 側と同じ規約でモノ化する
-            # （`load_bed_mono` の `0.5 * (L + R)`）——両者を別規約でモノ化すると
-            # `residual_db` の分子分母が別の前処理を受ける。
-            if stem.shape[1] != 2:
-                raise GenerationError(
-                    f"{args.vocals_stem}: 1ch/2ch 以外の stem（shape={stem.shape}） "
-                    "(fail-closed)"
-                )
-            stem = 0.5 * (stem[:, 0] + stem[:, 1])
-        if stem_rate != bed_rate:
-            raise GenerationError(
-                f"分離 stem の rate {stem_rate} が bed の {bed_rate} と違う (fail-closed)"
-            )
-    else:
-        # §4.7: 分離器の投入は既存 `demucs_vocals_then_crepe` 経路の実装を流用する
-        # （新しい規約を発明しない）。未導入・重み未取得なら fail-closed で停止する。
-        # **provenance を捨てる `isolate_vocals` は使わない**——ソース stem を pin へ
-        # 束縛しても、分離器そのものが drift すれば `residual_db` は変わりうる
-        # （もっともらしい値が出るので下流から見えない）。登録された model / version /
-        # weights digest と照合する。
-        from svp_rpe.rpe.learned.source_separation_adapter import (
-            isolate_vocals_with_provenance,
-        )
+    # §4.7: 分離器の投入は既存 `demucs_vocals_then_crepe` 経路の実装を流用する
+    # （新しい規約を発明しない）。未導入・重み未取得なら fail-closed で停止する。
+    # **provenance を捨てる `isolate_vocals` は使わない**——ソース stem を pin へ
+    # 束縛しても、分離器そのものが drift すれば `residual_db` は変わりうる
+    # （もっともらしい値が出るので下流から見えない）。登録された model / version /
+    # weights digest と照合する。
+    #
+    # **外部 stem を受け取る経路は持たない**（旧 `--vocals-stem` は撤去した）。
+    # 渡された WAV を pin へ結び付ける手段が無い以上、それは「登録されていない
+    # 信号から canonical な screening 値を出す」入口にしかならない——素材 pin も
+    # 窓 pin も通ったまま、採用コホートだけが変わりうる。
+    from svp_rpe.rpe.learned.source_separation_adapter import isolate_vocals_with_provenance
 
-        with tempfile.TemporaryDirectory(prefix="m2e-screen-") as tmp:
-            probe = Path(tmp) / "bed.wav"
-            sf.write(str(probe), np.asarray(window, dtype=np.float32), bed_rate, subtype="FLOAT")
-            separation = isolate_vocals_with_provenance(probe, model=screening["separation_model"])
-        require_registered_separator(separation, screening)
-        stem = np.asarray(separation.waveform, dtype=np.float64)
-        stem_rate = int(separation.sample_rate)
-        if stem.ndim == 2:
-            stem = stem.mean(axis=0) if stem.shape[0] < stem.shape[1] else stem.mean(axis=1)
-        if stem_rate != bed_rate:
-            raise GenerationError(
-                f"分離 stem の rate {stem_rate} が bed の {bed_rate} と違う (fail-closed)"
-            )
+    with tempfile.TemporaryDirectory(prefix="m2e-screen-") as tmp:
+        probe = Path(tmp) / "bed.wav"
+        sf.write(str(probe), np.asarray(window, dtype=np.float32), bed_rate, subtype="FLOAT")
+        separation = isolate_vocals_with_provenance(probe, model=screening["separation_model"])
+    require_registered_separator(separation, screening)
+    stem = np.asarray(separation.waveform, dtype=np.float64)
+    stem_rate = int(separation.sample_rate)
+    if stem.ndim == 2:
+        stem = stem.mean(axis=0) if stem.shape[0] < stem.shape[1] else stem.mean(axis=1)
+    if stem_rate != bed_rate:
+        raise GenerationError(
+            f"分離 stem の rate {stem_rate} が bed の {bed_rate} と違う (fail-closed)"
+        )
     stem = np.asarray(stem, dtype=np.float64)[: len(window)]
     value = residual_db(window, stem)
     print(
@@ -1120,11 +1099,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     # も凍結窓 `[0, n_max]` の外の音を含んでしまう——同じ曲の判定が変わり、採用コホート
     # が変わりうる（§3.5 の測定窓は凍結量であって既定値ではない）。
     p_screen.add_argument("--n-max", type=int, required=True)
-    p_screen.add_argument(
-        "--vocals-stem",
-        default=None,
-        help="事前に分離した vocals stem（省略時は既存 demucs 経路を流用する）",
-    )
     p_screen.set_defaults(func=_cmd_screen)
 
     p_build = sub.add_parser("build", help="§4 ミックス生成 + manifest/fixtures/生成記録")

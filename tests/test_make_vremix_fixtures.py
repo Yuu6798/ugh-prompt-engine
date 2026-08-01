@@ -408,17 +408,19 @@ def test_registered_dropout_fields_match_the_corrected_artifact() -> None:
         assert entry["dropout_sec"] == pytest.approx(row["dropout_sec"], abs=1e-6), track
 
 
-def test_screening_reads_a_conventional_vocals_stem(tmp_path: Path) -> None:
-    """`--vocals-stem vocals.wav` は §3.4 の測定対象であって混ぜる素材ではない。
+def test_screening_has_no_external_vocals_stem_bypass() -> None:
+    """P2: 外部 stem を受け取る経路（旧 `--vocals-stem`）を**持たない**。
 
-    ベッド構成側の門（`read_audio`）は据え置きであることも同時に固定する。
+    渡された WAV を事前登録の何かへ結び付ける手段が無いので、その経路は
+    「登録されていない信号から canonical な screening 値を出す」入口にしかならない。
+    読める関数を残さないこと（`_forbid_vocals` を迂回する helper を置かない）ごと固定する。
     """
-    path = tmp_path / "vocals.wav"
-    sf.write(str(path), np.stack([_tone(512, 0.1), _tone(512, 0.1, 7)], axis=1), 44100)
-    data, rate = mk.read_vocals_stem_for_screening(path)
-    assert rate == 44100 and data.shape == (512, 2)
-    with pytest.raises(mk.GenerationError, match="vocals stem"):
-        mk.read_audio(path)
+    assert not hasattr(mk, "read_vocals_stem_for_screening")
+    parser_help = mk.main.__doc__ or ""
+    assert "--vocals-stem" not in parser_help
+    with pytest.raises(SystemExit):
+        mk.main(["screen", "--bed-root", ".", "--track", "x", "--n-max", "1",
+                 "--vocals-stem", "vocals.wav"])
 
 
 def _write_clip(root: Path, clip_id: str) -> dict:
@@ -654,7 +656,7 @@ def test_cli_screen_binds_the_bed_to_its_registered_stem_pins(
     monkeypatch.setattr(mk, "registered_n_max_samples", lambda: mk.FRAME_LEN * 4)
     args = argparse.Namespace(
         bed_root=str(bed_root), track="Artist A - Track One",
-        n_max=mk.FRAME_LEN * 4, vocals_stem=None,
+        n_max=mk.FRAME_LEN * 4,
     )
     with pytest.raises(mk.GenerationError, match="事前登録 pin .* と不一致"):
         mk._cmd_screen(args)

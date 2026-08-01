@@ -108,6 +108,19 @@ def main() -> int:
     tracks = json.loads(Path(args.tracks).read_text(encoding="utf-8"))
     # コホートそのものを登録簿へ束縛する（切り詰められた一覧で「正常終了」しない）。
     mk.require_registered_track_list(tracks)
+    # **出力が入力を指していないことを先に確かめる**。atomic replace は部分書き込みを
+    # 防ぐが、`--out` が `--tracks` やベッド WAV を指していれば、測定が終わった後に
+    # その入力を census で上書きして破壊する（素材は再取得コストが高く、tracks は
+    # コホートの順序そのもの）。計測前に弾く。
+    out_resolved = Path(args.out).resolve()
+    inputs = {Path(args.tracks).resolve()} | {
+        (Path(args.beds) / f"bed_{index:02d}.wav").resolve() for index in range(len(tracks))
+    }
+    if out_resolved in inputs:
+        raise ValueError(
+            f"--out {out_resolved} が入力（--tracks / ベッド WAV）と同一; "
+            "census で入力素材を上書きしない (fail-closed)"
+        )
     # **入力を事前登録の bed window pin へ結び付ける**（§9）。古い/差し替えられた
     # `bed_XX.wav` を受けても、出てくる census は内部整合するので下流から見えない。
     registered = mk.load_registered_beds()
