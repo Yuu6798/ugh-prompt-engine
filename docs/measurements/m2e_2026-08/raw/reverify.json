@@ -1,0 +1,36 @@
+{
+ "regeneration": {
+  "Angels In Amplifiers - I'm Alright": {
+   "index": 2,
+   "recorded": "af76b9618f21b9cc1ee465d74ce1cca6e6204ce2c3177039adaca1b7b01b9ece",
+   "regenerated": "af76b9618f21b9cc1ee465d74ce1cca6e6204ce2c3177039adaca1b7b01b9ece",
+   "identical": true
+  },
+  "Arise - Run Run Run": {
+   "index": 3,
+   "recorded": "9bbe2f0b3af20306f6ae90b9dbd3d9112fbdacc178748a5216a8ec9d9d453ce6",
+   "regenerated": "9bbe2f0b3af20306f6ae90b9dbd3d9112fbdacc178748a5216a8ec9d9d453ce6",
+   "identical": true
+  }
+ },
+ "residual_rerun": {
+  "The Easton Ellises - Falcon 69": {
+   "index": 41,
+   "first_run": -26.27042714552593,
+   "rerun": -26.270426846152155,
+   "delta_db": 2.993737737710944e-07,
+   "stem_sha256_first": "9a39f6692fcc77ff2779ab1454c7c356062c59e11a8377c61ec89e7a2ddd78a9",
+   "stem_sha256_rerun": "e75fed65687d4cc81471acfc9d3ce8109200a201bd2108982f1ead73328555ea",
+   "stem_identical": false
+  },
+  "Punkdisco - Oral Hygiene": {
+   "index": 29,
+   "first_run": -25.08441655207687,
+   "rerun": -25.08441810569389,
+   "delta_db": -1.5536170181462694e-06,
+   "stem_sha256_first": "4220601b015931b228f48f486c2392b021b709d904dee9e8da1887a9007ee101",
+   "stem_sha256_rerun": "b9c3e1ea40409358edee6a86a075d94cb316ae529a6bf015afa72cd8d3933167",
+   "stem_identical": false
+  }
+ }
+}
