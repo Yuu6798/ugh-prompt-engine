@@ -3736,6 +3736,32 @@ def load_external_fixtures_with_raw(
     return fixtures_doc, sha256, data
 
 
+def _require_external_fixtures_schema_for_category(
+    fixtures_doc: Dict[str, Any], *, category: str, where: str
+) -> None:
+    """カテゴリと pin ファイルの schema を束縛する（fail-closed）。
+
+    水準軸を持つカテゴリ（M2e）を **M2c の pin ファイル**で回せてはならない。
+    `--external-fixtures` は既定値を持つため、M2e カテゴリと M2c manifest を
+    組み合わせると **ベッドの入っていない 40 clip のきれいな歌声**が cohort 一致も
+    hash 照合も通り、要求水準（例 +12 dB）のゲートとして row が刻まれる。
+    schema が M2e でなければ、水準の一致を見る以前に測ってはいけない。
+    """
+    version = fixtures_doc.get("schema_version")
+    if category in _REQUIRED_CONDITION_KEYS_BY_CATEGORY:
+        if version != _EXPECTED_M2E_EXTERNAL_FIXTURES_SCHEMA:
+            raise ValueError(
+                f"{where}: 水準軸を持つカテゴリに schema_version {version!r} の pin "
+                f"ファイルが渡された（要求: {_EXPECTED_M2E_EXTERNAL_FIXTURES_SCHEMA!r}）; "
+                "ベッドの入っていない素材を帯の水準として測らない (fail-closed)"
+            )
+    elif version == _EXPECTED_M2E_EXTERNAL_FIXTURES_SCHEMA:
+        raise ValueError(
+            f"{where}: 水準軸を持たないカテゴリに M2e の pin ファイルが渡された; "
+            "帯のミックスを水準の宣言なしに測らない (fail-closed)"
+        )
+
+
 def _require_external_fixtures_level_match(
     fixtures_doc: Dict[str, Any], *, level: Optional[str], where: str
 ) -> None:
@@ -4667,6 +4693,9 @@ def _run_external_category(
     ならこれらのキーは一切現れない（挙動無変更の契約）。
     """
     fixtures_doc, fixtures_sha256 = load_external_fixtures(external_fixtures_path)
+    _require_external_fixtures_schema_for_category(
+        fixtures_doc, category=category, where=f"run_accuracy: category {category!r}"
+    )
     _require_external_fixtures_level_match(
         fixtures_doc, level=level, where=f"run_accuracy: category {category!r}"
     )

@@ -8941,6 +8941,39 @@ def test_run_accuracy_rejects_a_fixture_level_that_differs_from_the_run_level(
         )
 
 
+def test_run_accuracy_rejects_m2c_fixtures_for_an_m2e_category(tmp_path: Path) -> None:
+    """M2e カテゴリを M2c の pin ファイルで回せない。
+
+    `--external-fixtures` は既定値を持つので、M2e カテゴリ + M2c manifest は
+    **ベッドの入っていないきれいな歌声**で cohort も hash も通り、要求水準の
+    ゲートとして row が刻まれてしまう。
+    """
+    manifest_path, fixtures_path = _write_external_fixture_set(tmp_path, _VREMIX_CLIPS)
+    with pytest.raises(ValueError, match="水準軸を持つカテゴリに schema_version"):
+        harness.run_accuracy(
+            categories=("V_remix_real_direct",),
+            route_runner=_m2e_fake_runner(),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+            m2e_bars_path=_write_m2e_bars(tmp_path),
+            level="+12dB",
+        )
+
+
+def test_run_accuracy_rejects_m2e_fixtures_for_an_m2c_category(tmp_path: Path) -> None:
+    """逆向きも塞ぐ（帯のミックスを水準宣言なしのカテゴリで測らない）。"""
+    manifest_path, fixtures_path = _write_m2e_external_fixture_set(
+        tmp_path, _VREMIX_CLIPS, level="+12dB"
+    )
+    with pytest.raises(ValueError, match="水準軸を持たないカテゴリに M2e"):
+        harness.run_accuracy(
+            categories=("V_direct",),
+            route_runner=_m2e_fake_runner(),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+        )
+
+
 def test_run_accuracy_rejects_m2e_fixtures_without_a_declared_level(tmp_path: Path) -> None:
     """水準宣言の無い M2e pin ファイルでは測らない（何を測ったか宣言できない）。"""
     manifest_path, fixtures_path = _write_m2e_external_fixture_set(tmp_path, _VREMIX_CLIPS)
