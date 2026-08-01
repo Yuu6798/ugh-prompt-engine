@@ -144,6 +144,46 @@ def stem_sha256(path: Path) -> str:
     return hashlib.sha256(np.ascontiguousarray(data).tobytes()).hexdigest()
 
 
+def read_stem_pinned(
+    path: Path, expected_sha256: Optional[str] = None
+) -> Tuple[np.ndarray, int]:
+    """**1 つの file handle** から pin 用の整数 decode と混合用の float 読みを行う。
+
+    pin 照合と実際に混ぜるサンプルを別々の `open` で取ると、その 2 回の read の間に
+    stem が差し替えられた場合、**pin は通ったのに混ぜたのは別の音**という状態が
+    成立する（生成物は内部整合するので下流から検出できない）。同一ハンドルから
+    読めば、途中でパスが差し替えられても開いている inode は変わらないため、
+    この窓が閉じる。
+    """
+    path = Path(path)
+    _forbid_vocals(path)
+    with sf.SoundFile(str(path)) as handle:
+        dtype = _CANONICAL_DTYPES.get(handle.subtype)
+        if dtype is None:
+            raise GenerationError(
+                f"{path}: subtype {handle.subtype!r} は canonical decode の対象外; "
+                "整数 PCM でない入力を pin しない (fail-closed)"
+            )
+        if int(handle.samplerate) != CANONICAL_SAMPLE_RATE:
+            raise GenerationError(
+                f"{path}: native rate {handle.samplerate} != {CANONICAL_SAMPLE_RATE}; "
+                "canonical decode は resample を禁じる (fail-closed)"
+            )
+        native = np.ascontiguousarray(handle.read(dtype=dtype, always_2d=True))
+        if expected_sha256 is not None:
+            actual = hashlib.sha256(native.tobytes()).hexdigest()
+            if actual != expected_sha256:
+                raise GenerationError(
+                    f"{path}: canonical decode 後 sha256 {actual} が事前登録 pin "
+                    f"{expected_sha256} と不一致; 破損・差し替え・再取得ミスの可能性が "
+                    "あり、間違ったベッドで内部整合した manifest を作らない (fail-closed)"
+                )
+        handle.seek(0)
+        # float 変換は soundfile に委ねる（除数の規約を自前で選ばない・§9.2）。
+        data = np.asarray(handle.read(dtype="float64", always_2d=False), dtype=np.float64)
+        return data, int(handle.samplerate)
+
+
 def waveform_sha256(y: np.ndarray) -> str:
     """§4.6 の `waveform_sha256`（既存 `m2_accuracy_bars.yaml` の規約と同一）。"""
     return hashlib.sha256(np.asarray(y, dtype=np.float32).tobytes()).hexdigest()
@@ -301,6 +341,7 @@ def load_bed_mono(
     accumulated: Optional[np.ndarray] = None
     sample_rate: Optional[int] = None
     for name in BED_STEMS:
+        expected: Optional[str] = None
         if expected_stem_sha256 is not None:
             expected = expected_stem_sha256.get(name)
             if not expected:
@@ -308,14 +349,8 @@ def load_bed_mono(
                     f"{bed_dir}: stem {name!r} の expected_stem_sha256 が事前登録に無い "
                     "(fail-closed)"
                 )
-            actual = stem_sha256(bed_dir / f"{name}.wav")
-            if actual != expected:
-                raise GenerationError(
-                    f"{bed_dir / (name + '.wav')}: canonical decode 後 sha256 {actual} が "
-                    f"事前登録 pin {expected} と不一致; 破損・差し替え・再取得ミスの可能性が "
-                    "あり、間違ったベッドで内部整合した manifest を作らない (fail-closed)"
-                )
-        data, rate = read_audio(bed_dir / f"{name}.wav")
+        # pin 照合と混合サンプルは**同一 file handle**から取る（TOCTOU 除去）。
+        data, rate = read_stem_pinned(bed_dir / f"{name}.wav", expected)
         if data.ndim != 2 or data.shape[1] != 2:
             raise GenerationError(
                 f"{bed_dir / (name + '.wav')}: ステレオ 2ch でない（shape={data.shape}） "
@@ -432,6 +467,42 @@ def entry_id(clip_id: str, bed_id: str, level: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def require_valid_registered_utc(value: str) -> None:
+    """`registered_utc` をハーネスと**同じ意味論**で検証する（fail-closed）。
+
+    受理する形（`run_melody_accuracy._parse_registered_utc` と同一）:
+    `YYYY-MM-DD`（UTC 深夜と解釈）または **UTC offset 0** の ISO 8601 timestamp。
+    未来日は拒否する（まだ到来していない時点の「事前登録」を主張させない）。
+    """
+    from datetime import date as _date
+    from datetime import datetime, timezone
+
+    if not isinstance(value, str) or not value:
+        raise GenerationError("registered_utc が非空文字列でない (fail-closed)")
+    try:
+        parsed = datetime.combine(_date.fromisoformat(value), datetime.min.time(), timezone.utc)
+    except ValueError:
+        try:
+            candidate = datetime.fromisoformat(value)
+        except ValueError as exc:
+            raise GenerationError(
+                f"registered_utc {value!r} は日付 (YYYY-MM-DD) でも ISO 8601 timestamp "
+                f"でもない (fail-closed): {exc}"
+            ) from exc
+        offset = candidate.utcoffset()
+        if offset is None or offset.total_seconds() != 0:
+            raise GenerationError(
+                f"registered_utc {value!r} は UTC でない（tz 無しまたは offset≠0）"
+                " (fail-closed)"
+            )
+        parsed = candidate
+    if parsed > datetime.now(timezone.utc):
+        raise GenerationError(
+            f"registered_utc {value!r} が未来; まだ到来していない時点の「事前登録」を "
+            "主張させない (fail-closed)"
+        )
+
+
 def load_registered_beds() -> Dict[str, Dict[str, Any]]:
     """`m2e_bed_fixtures.yaml` の採用ベッド pin を読む（§9・r3 で登録済み）。"""
     if not M2E_BED_FIXTURES_PATH.is_file():
@@ -518,8 +589,9 @@ def build(
     # P1-2: `registered_utc: null` は `load_external_fixtures_with_raw` の
     # `_parse_registered_utc` を通らない——生成した fixtures をそのまま
     # `--external-fixtures` へ渡す documented flow が必ず落ちていた。実値を要求する。
-    if not isinstance(registered_utc, str) or not registered_utc.strip():
-        raise GenerationError("registered_utc が非空文字列でない (fail-closed)")
+    # 非空チェックだけでは `garbage` や未来日が通り、**数百本の WAV を生成した後**に
+    # ハーネス側の `_parse_registered_utc` で落ちる。同じ意味論で先に検証する。
+    require_valid_registered_utc(registered_utc)
     clips = load_registered_clips()
     registered_beds = load_registered_beds()
     out_dir = Path(out_dir)

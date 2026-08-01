@@ -12,6 +12,8 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -40,6 +42,28 @@ def _load_module():
 
 
 mk = _load_module()
+
+
+def _harness_check(body: str) -> str:
+    """ハーネスを **新規プロセス** で import して照合する（stdout を返す）。
+
+    `run_melody_accuracy` は import 時に `_scorer_pins()` を走らせ、pin 束縛前の
+    匿名実行マッピングを fail-closed で拒む。pytest セッションの**途中**で import
+    すると、先行テストの numba/librosa JIT が張った匿名領域に当たって必ず落ちる
+    （CI `test-rest` shard で実証。この shard は `--ignore` により harness を
+    collection 時に import しない）。ハーネスが前提とする文脈＝クリーンな
+    プロセス冒頭で走らせる。
+    """
+    script = (
+        f"import sys\nsys.path.insert(0, {str(ROOT / 'scripts')!r})\n"
+        "import run_melody_accuracy as harness\n"
+        "import make_vremix_fixtures as mk\n" + body
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, cwd=str(ROOT)
+    )
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -280,13 +304,13 @@ def test_load_bed_mono_never_reads_the_vocals_stem(tmp_path: Path, monkeypatch) 
     bed_dir = tmp_path / "Some Artist - Some Track"
     _write_bed(bed_dir)
     opened: list[str] = []
-    original = mk.read_audio
+    original = mk.read_stem_pinned
 
-    def _tracking(path):
+    def _tracking(path, expected_sha256=None):
         opened.append(Path(path).name)
-        return original(path)
+        return original(path, expected_sha256)
 
-    monkeypatch.setattr(mk, "read_audio", _tracking)
+    monkeypatch.setattr(mk, "read_stem_pinned", _tracking)
     bed_mono, rate = mk.load_bed_mono(bed_dir)
     assert rate == 44100
     assert sorted(opened) == sorted(f"{name}.wav" for name in mk.BED_STEMS)
@@ -304,11 +328,55 @@ def test_load_bed_mono_requires_the_vocals_stem_to_exist(tmp_path: Path) -> None
 
 
 def test_load_bed_mono_stops_on_sample_rate_mismatch(tmp_path: Path) -> None:
-    """暗黙のリサンプルは禁止 —— 不一致は**例外で停止**する。"""
+    """暗黙のリサンプルは禁止 —— 不一致は**例外で停止**する。
+
+    stem を canonical decode と同じハンドルで読むようになったため、停止するのは
+    stem 間の比較ではなく canonical rate (44100) との照合になった。**止まる**という
+    性質は同じで、止まる位置が 1 段早い。
+    """
     bed_dir = tmp_path / "track"
     _write_bed(bed_dir, rates=(44100, 48000, 44100))
-    with pytest.raises(mk.GenerationError, match="リサンプル"):
+    with pytest.raises(mk.GenerationError, match="resample|リサンプル"):
         mk.load_bed_mono(bed_dir)
+
+
+def test_read_stem_pinned_opens_the_stem_exactly_once(tmp_path: Path, monkeypatch) -> None:
+    """P2 (TOCTOU): pin 照合と混合サンプルを**同一 file handle** から取る。
+
+    別々に open すると、その 2 回の read の間に stem を差し替えられたとき
+    「pin は通ったが混ぜたのは別の音」が成立し、生成物は内部整合するので
+    下流から検出できない。
+    """
+    bed_dir = tmp_path / "track"
+    _write_bed(bed_dir)
+    path = bed_dir / "drums.wav"
+    expected = mk.stem_sha256(path)  # 監視を張る前に取る
+
+    opens: list[str] = []
+    original = mk.sf.SoundFile
+
+    def _counting(*args, **kwargs):
+        opens.append(str(args[0]))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(mk.sf, "SoundFile", _counting)
+    monkeypatch.setattr(
+        mk.sf, "read", lambda *a, **k: pytest.fail("pin と混合で別の open をしている")
+    )
+    monkeypatch.setattr(
+        mk.sf, "info", lambda *a, **k: pytest.fail("pin と混合で別の open をしている")
+    )
+    data, rate = mk.read_stem_pinned(path, expected)
+    assert opens == [str(path)]
+    assert rate == 44100
+    assert data.ndim == 2 and data.shape[1] == 2
+
+
+def test_read_stem_pinned_rejects_a_digest_mismatch(tmp_path: Path) -> None:
+    bed_dir = tmp_path / "track"
+    _write_bed(bed_dir)
+    with pytest.raises(mk.GenerationError, match="事前登録 pin .* と不一致"):
+        mk.read_stem_pinned(bed_dir / "drums.wav", "0" * 64)
 
 
 # ---------------------------------------------------------------------------
@@ -514,15 +582,13 @@ def test_serialize_wav_float32_is_timestamp_free(tmp_path: Path) -> None:
 
 def test_serialize_wav_float32_matches_the_harness_serializer() -> None:
     """ハーネス側の直列化と **bytes 完全一致**であること（規約が 2 つに割れない）。"""
-    import sys
-
-    scripts = str(ROOT / "scripts")
-    if scripts not in sys.path:
-        sys.path.insert(0, scripts)
-    import run_melody_accuracy as harness
-
-    y = (np.sin(np.linspace(0.0, 12.0, 2048)) * 0.4).astype(np.float32)
-    assert mk.serialize_wav_float32(y, 44100) == harness._serialize_wav_float32(y, 44100)
+    out = _harness_check(
+        "import numpy as np\n"
+        "y = (np.sin(np.linspace(0.0, 12.0, 2048)) * 0.4).astype(np.float32)\n"
+        "assert mk.serialize_wav_float32(y, 44100) == harness._serialize_wav_float32(y, 44100)\n"
+        "print('identical')\n"
+    )
+    assert out.strip().splitlines()[-1] == "identical"
 
 
 def test_serialize_wav_float32_round_trips_through_libsndfile(tmp_path: Path) -> None:
@@ -588,16 +654,59 @@ def test_build_emits_a_dated_registered_utc(tmp_path, monkeypatch) -> None:
     doc = yaml.safe_load((out_dir / "fixtures_p00.yaml").read_text())
     assert doc["registered_utc"] == "2026-08-01"
     # ハーネスの loader が実際に受理すること（documented flow が通る証明）。
-    import sys
+    out = _harness_check(
+        "import json\n"
+        f"loaded, sha256 = harness.load_external_fixtures({str(out_dir / 'fixtures_p00.yaml')!r})\n"
+        "assert len(sha256) == 64\n"
+        "print(json.dumps(sorted(loaded['fixtures'])))\n"
+    )
+    assert json.loads(out.strip().splitlines()[-1]) == sorted(doc["fixtures"])
 
-    scripts = str(ROOT / "scripts")
-    if scripts not in sys.path:
-        sys.path.insert(0, scripts)
-    import run_melody_accuracy as harness
 
-    loaded, sha256 = harness.load_external_fixtures(out_dir / "fixtures_p00.yaml")
-    assert len(sha256) == 64
-    assert set(loaded["fixtures"]) == set(doc["fixtures"])
+@pytest.mark.parametrize(
+    "value",
+    ["2026-08-01", "2026-08-01T00:00:00+00:00", "2026-08-01T00:00:00Z"],
+)
+def test_require_valid_registered_utc_accepts_dates_and_utc_timestamps(value: str) -> None:
+    mk.require_valid_registered_utc(value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "garbage",
+        "2026-13-01",
+        "2026-08-01T00:00:00+09:00",  # UTC ではない
+        "2026-08-01T00:00:00",  # tz 無し
+        "2999-01-01",  # 未来（まだ到来していない「事前登録」）
+    ],
+)
+def test_require_valid_registered_utc_rejects_what_the_harness_rejects(value: str) -> None:
+    """P2: ハーネス `_parse_registered_utc` と**同じ意味論**で先に落とす。"""
+    with pytest.raises(mk.GenerationError, match="registered_utc"):
+        mk.require_valid_registered_utc(value)
+
+
+def test_build_rejects_an_invalid_registered_utc_before_writing_anything(
+    tmp_path, monkeypatch
+) -> None:
+    """非空チェックだけでは数百本の WAV を書いた後に下流で落ちる。生成前に止める。"""
+    vocadito_root, pins = _fake_vocadito(tmp_path, ["vocadito_1"])
+    monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
+    bed_root = tmp_path / "beds"
+    _write_bed(bed_root / "Artist A - Track One")
+    monkeypatch.setattr(
+        mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, ["Artist A - Track One"])
+    )
+    out_dir = tmp_path / "out"
+    with pytest.raises(mk.GenerationError, match="registered_utc"):
+        mk.build(
+            vocadito_root=vocadito_root, bed_root=bed_root,
+            tracks=["Artist A - Track One"], levels=["0dB"],
+            out_dir=out_dir, registered_utc="garbage",
+        )
+    assert not list(out_dir.glob("**/*.wav"))
 
 
 def test_build_refuses_a_non_empty_out_dir(tmp_path, monkeypatch) -> None:
