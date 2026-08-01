@@ -350,5 +350,27 @@
   "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
   "stem_sha256": "2c038e0a3632de7cfbef0d1a04214ec9892a53acc140a14a7ab4fc74e07f9e41",
   "elapsed_seconds": 268.85
+ },
+ "Secretariat - Borderline": {
+  "index": 32,
+  "residual_db": -64.95112653929228,
+  "numeric_pass": true,
+  "bed_rms": 0.10128707623772902,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "e73a8ac39272c7464f95ab18b32676fc42c161930aa7e1bc635543d72fec5c09",
+  "elapsed_seconds": 272.72
+ },
+ "Secretariat - Over The Top": {
+  "index": 33,
+  "residual_db": -68.2531964531125,
+  "numeric_pass": true,
+  "bed_rms": 0.12644053445431677,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "d21d16d844e1490508173e66f34ffb761470c4a032ea848ce1ce3808009141bd",
+  "elapsed_seconds": 271.22
  }
 }
