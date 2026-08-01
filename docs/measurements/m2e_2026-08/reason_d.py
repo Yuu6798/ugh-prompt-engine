@@ -44,6 +44,8 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -151,16 +153,32 @@ def main() -> int:
         print(f"[{index:02d}] N_drop={n_drop:4d} ({seconds:6.4f}s) "
               f"{'該当' if n_drop >= N_DROP_THRESHOLD else '—':4s} {track}", flush=True)
 
-    Path(args.out).write_text(
-        json.dumps({
-            "frozen": {
-                "dropout_db": DROPOUT_DB, "frame_len": mk.FRAME_LEN, "hop": mk.HOP,
-                "min_seconds": MIN_SECONDS, "n_drop_threshold": N_DROP_THRESHOLD,
-                "effective_bound_sec": EFFECTIVE_BOUND_SEC,
-                "largest_non_hit_sec": LARGEST_NON_HIT_SEC,
-            },
-            "rows": rows,
-        }, indent=1, ensure_ascii=False), encoding="utf-8")
+    payload = json.dumps({
+        "frozen": {
+            "dropout_db": DROPOUT_DB, "frame_len": mk.FRAME_LEN, "hop": mk.HOP,
+            "min_seconds": MIN_SECONDS, "n_drop_threshold": N_DROP_THRESHOLD,
+            "effective_bound_sec": EFFECTIVE_BOUND_SEC,
+            "largest_non_hit_sec": LARGEST_NON_HIT_SEC,
+        },
+        "rows": rows,
+    }, indent=1, ensure_ascii=False)
+    # **atomic に差し替える**。この JSON は登録 pin（`m2e_bed_fixtures.yaml` の
+    # dropout フィールド）を再生成する元データなので、中断や容量枯渇で既存の
+    # canonical な census が切り詰められた状態で残ると、内部整合しない登録簿を
+    # そこから作りうる。完全に書けた一時ファイルだけを rename で公開する。
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(out.parent), prefix=f".{out.name}.", suffix=".tmp")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, out)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     return 0
 
 

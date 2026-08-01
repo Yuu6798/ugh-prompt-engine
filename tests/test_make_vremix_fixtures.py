@@ -665,6 +665,37 @@ def test_cli_screen_binds_the_bed_to_its_registered_stem_pins(
         mk._cmd_screen(args)
 
 
+def test_require_registered_separator_rejects_a_drifted_model_stack() -> None:
+    """P2: ソース pin を通っても、分離器が drift すれば `residual_db` は変わる。"""
+    screening = {
+        "separation_model": "htdemucs_ft",
+        "separation_version": "4.1.0",
+        "separation_weights_sha256": "a" * 64,
+    }
+
+    class _Separation:
+        model = "htdemucs_ft"
+        version = "4.1.0"
+        weights_sha256 = "a" * 64
+
+    mk.require_registered_separator(_Separation(), screening)   # 一致すれば通る
+
+    for field, value in (
+        ("model", "htdemucs"), ("version", "4.0.0"), ("weights_sha256", "b" * 64)
+    ):
+        drifted = type("D", (), dict(vars(_Separation)))
+        setattr(drifted, field, value)
+        with pytest.raises(mk.GenerationError, match="分離器が事前登録と一致しない"):
+            mk.require_registered_separator(drifted(), screening)
+
+
+def test_registered_screening_exposes_the_frozen_separator_pins() -> None:
+    """commit 済み登録簿には分離器の三点（model/version/weights）が揃っている。"""
+    screening = mk.registered_screening()
+    assert screening["separation_model"] == "htdemucs_ft"
+    assert len(screening["separation_weights_sha256"]) == 64
+
+
 def _fake_vocadito(tmp_path: Path, clip_ids) -> tuple[Path, dict]:
     root = tmp_path / "vocadito"
     (root / "Audio").mkdir(parents=True)

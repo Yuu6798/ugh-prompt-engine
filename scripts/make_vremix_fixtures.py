@@ -681,6 +681,38 @@ def registered_n_max_samples() -> int:
     return int(window["n_max_samples"])
 
 
+def registered_screening() -> Dict[str, Any]:
+    """`m2e_bed_fixtures.yaml` の `screening` block（凍結された screening 条件）。"""
+    screening = load_bed_fixtures_doc().get("screening")
+    required = ("separation_model", "separation_version", "separation_weights_sha256")
+    if not isinstance(screening, dict) or any(not screening.get(k) for k in required):
+        raise GenerationError(
+            f"{M2E_BED_FIXTURES_PATH}: screening に {required} が揃っていない (fail-closed)"
+        )
+    return screening
+
+
+def require_registered_separator(separation: Any, screening: Dict[str, Any]) -> None:
+    """分離器の実体（model / version / weights digest）を登録値へ束縛する。
+
+    ソース stem を pin へ束縛しても、**分離器が drift すれば `residual_db` は変わる**
+    ——チェックポイントや demucs のバージョンが入れ替わった環境で回し直すと、
+    すべての pin を通過したままもっともらしい別の値が出て、採用コホートが変わりうる。
+    """
+    actual = {
+        "separation_model": separation.model,
+        "separation_version": separation.version,
+        "separation_weights_sha256": separation.weights_sha256,
+    }
+    mismatched = {k: (v, screening.get(k)) for k, v in actual.items() if v != screening.get(k)}
+    if mismatched:
+        detail = "; ".join(f"{k}: 実体 {a!r} != 登録 {e!r}" for k, (a, e) in sorted(mismatched.items()))
+        raise GenerationError(
+            f"分離器が事前登録と一致しない（{detail}）; 別の分離器から canonical な "
+            "screening 値を出さない (fail-closed)"
+        )
+
+
 def require_registered_track_list(tracks: List[str]) -> None:
     """トラック一覧が**事前登録の全 50 曲**と（順序込みで）一致することを要求する。
 
@@ -971,6 +1003,7 @@ def _cmd_screen(args: argparse.Namespace) -> int:
     # もっともらしい値で出る（窓長の照合は素材を同定しない）。50 曲すべてに
     # `expected_stem_sha256` が登録済みなので、ここでも pin へ束縛する。
     registered_beds = load_registered_beds()
+    screening = registered_screening()
     pin = registered_beds.get(args.track)
     if pin is None:
         raise GenerationError(
@@ -1009,15 +1042,21 @@ def _cmd_screen(args: argparse.Namespace) -> int:
     else:
         # §4.7: 分離器の投入は既存 `demucs_vocals_then_crepe` 経路の実装を流用する
         # （新しい規約を発明しない）。未導入・重み未取得なら fail-closed で停止する。
-        import tempfile
-
-        from svp_rpe.rpe.learned.source_separation_adapter import isolate_vocals
+        # **provenance を捨てる `isolate_vocals` は使わない**——ソース stem を pin へ
+        # 束縛しても、分離器そのものが drift すれば `residual_db` は変わりうる
+        # （もっともらしい値が出るので下流から見えない）。登録された model / version /
+        # weights digest と照合する。
+        from svp_rpe.rpe.learned.source_separation_adapter import (
+            isolate_vocals_with_provenance,
+        )
 
         with tempfile.TemporaryDirectory(prefix="m2e-screen-") as tmp:
             probe = Path(tmp) / "bed.wav"
             sf.write(str(probe), np.asarray(window, dtype=np.float32), bed_rate, subtype="FLOAT")
-            stem, stem_rate = isolate_vocals(probe)
-        stem = np.asarray(stem, dtype=np.float64)
+            separation = isolate_vocals_with_provenance(probe, model=screening["separation_model"])
+        require_registered_separator(separation, screening)
+        stem = np.asarray(separation.waveform, dtype=np.float64)
+        stem_rate = int(separation.sample_rate)
         if stem.ndim == 2:
             stem = stem.mean(axis=0) if stem.shape[0] < stem.shape[1] else stem.mean(axis=1)
         if stem_rate != bed_rate:
