@@ -33,6 +33,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -570,8 +571,13 @@ def require_valid_registered_utc(value: str) -> None:
         )
 
 
-def load_registered_beds() -> Dict[str, Dict[str, Any]]:
-    """`m2e_bed_fixtures.yaml` の採用ベッド pin を読む（§9・r3 で登録済み）。"""
+def load_bed_fixtures_doc() -> Dict[str, Any]:
+    """`m2e_bed_fixtures.yaml` を schema 検証つきで読む（**この登録簿の唯一の入口**）。
+
+    schema discriminator の照合をここに集約する。読む側ごとに素の
+    `load_registry_yaml` を呼ぶと、片方（`load_registered_beds`）は未知 schema を
+    拒否するのに片方（窓の読み出し）は素通しする、という不揃いが生まれる。
+    """
     if not M2E_BED_FIXTURES_PATH.is_file():
         raise GenerationError(
             f"{M2E_BED_FIXTURES_PATH} が無い; ベッドの事前登録 pin なしにミックスを "
@@ -585,9 +591,32 @@ def load_registered_beds() -> Dict[str, Dict[str, Any]]:
             f"{M2E_BED_FIXTURES_SCHEMA!r} でない; 意味の分からない pin から "
             "ミックスを publish しない (fail-closed)"
         )
-    beds = doc.get("beds")
+    return doc
+
+
+def load_registered_beds() -> Dict[str, Dict[str, Any]]:
+    """`m2e_bed_fixtures.yaml` の採用ベッド pin を読む（§9・r3 で登録済み）。"""
+    beds = load_bed_fixtures_doc().get("beds")
     if not isinstance(beds, dict) or not beds:
         raise GenerationError(f"{M2E_BED_FIXTURES_PATH}: beds が空 (fail-closed)")
+    for track, pin in beds.items():
+        # `accepted` は採用コホートの境界そのものである。`"false"` のような
+        # 非 bool が入ると truthiness で**採用側へ倒れ**、生成器は登録より広い
+        # コホートを内部整合したまま publish してしまう。型で止める。
+        if not isinstance(pin, dict):
+            raise GenerationError(
+                f"{M2E_BED_FIXTURES_PATH}: {track!r} の登録が mapping でない (fail-closed)"
+            )
+        if not isinstance(pin.get("accepted"), bool):
+            raise GenerationError(
+                f"{M2E_BED_FIXTURES_PATH}: {track!r} の accepted が bool でない "
+                f"({pin.get('accepted')!r}); 採否を truthiness で解釈しない (fail-closed)"
+            )
+        if not isinstance(pin.get("lexical_index"), int):
+            raise GenerationError(
+                f"{M2E_BED_FIXTURES_PATH}: {track!r} の lexical_index が整数でない "
+                "(fail-closed)"
+            )
     return beds
 
 
@@ -644,8 +673,7 @@ def resolve_clip_bytes(
 
 def registered_n_max_samples() -> int:
     """`m2e_bed_fixtures.yaml` に登録された測定窓 `n_max`（§3.5・凍結量）。"""
-    doc = load_registry_yaml(M2E_BED_FIXTURES_PATH)
-    window = doc.get("window")
+    window = load_bed_fixtures_doc().get("window")
     if not isinstance(window, dict) or not isinstance(window.get("n_max_samples"), int):
         raise GenerationError(
             f"{M2E_BED_FIXTURES_PATH}: window.n_max_samples が無い/整数でない (fail-closed)"
@@ -726,33 +754,64 @@ def build(
     out_dir: Path,
     registered_utc: str,
 ) -> Dict[str, Any]:
-    """全 (clip × bed × level) のミックスと manifest / fixtures / 生成記録を書く。"""
+    """全 (clip × bed × level) のミックスと manifest / fixtures / 生成記録を書く。
+
+    生成は **staging → atomic rename**。途中で失敗しても外から見える場所に部分
+    bundle を残さない（消費側は out_dir を「1 つの fixture bundle」として扱う）。
+    加えて「空でない出力先は拒否」と噛み合うと、中断が次回実行を塞いでしまう——
+    staging に閉じ込めておけば再実行がそのまま通る。
+
+    rename を atomic にするため staging は**同一親ディレクトリ**へ置く。名前は
+    `mkdtemp` で**この実行が所有する一意な名前**にする——固定名にすると、同じ
+    出力先を狙う 2 本目が 1 本目の生きた staging を消してしまう（かつ、たまたま
+    同名で存在していた無関係のディレクトリを再帰削除しうる）。一意名にした以上、
+    **後片付けはこの実行が自分でやる**（`BaseException` を捕まえるのは
+    `KeyboardInterrupt` で数百本の WAV を置き去りにしないため。再送出はする）。
+    """
     # P1-2: `registered_utc: null` は `load_external_fixtures_with_raw` の
     # `_parse_registered_utc` を通らない——生成した fixtures をそのまま
     # `--external-fixtures` へ渡す documented flow が必ず落ちていた。実値を要求する。
     # 非空チェックだけでは `garbage` や未来日が通り、**数百本の WAV を生成した後**に
     # ハーネス側の `_parse_registered_utc` で落ちる。同じ意味論で先に検証する。
     require_valid_registered_utc(registered_utc)
-    clips = load_registered_clips()
-    registered_beds = load_registered_beds()
     published = Path(out_dir)
     if published.exists() and any(published.iterdir()):
         raise GenerationError(
             f"{published} が空でない; 前回実行の残骸と混ざるのを避けるため、空の出力先を "
             "指定するか既存を削除すること (fail-closed)"
         )
-    # **staging → atomic rename**。途中で失敗しても外から見える場所に部分 bundle を
-    # 残さない（消費側は out_dir を「1 つの fixture bundle」として扱う）。加えて
-    # 「空でない出力先は拒否」と噛み合うと、中断が次回実行を塞いでしまう——
-    # staging に閉じ込めておけば再実行がそのまま通る。
-    # rename を atomic にするため staging は**同一親ディレクトリ**へ置く。名前は
-    # `mkdtemp` で**この実行が所有する一意な名前**にする——固定名にすると、同じ
-    # 出力先を狙う 2 本目が 1 本目の生きた staging を消してしまう（かつ、たまたま
-    # 同名で存在していた無関係のディレクトリを再帰削除しうる）。
     published.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(
         tempfile.mkdtemp(dir=str(published.parent), prefix=f".{published.name}.staging-")
     )
+    try:
+        return _build_into_staging(
+            staging=staging,
+            published=published,
+            vocadito_root=Path(vocadito_root),
+            bed_root=Path(bed_root),
+            tracks=tracks,
+            levels=levels,
+            registered_utc=registered_utc,
+        )
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+
+def _build_into_staging(
+    *,
+    staging: Path,
+    published: Path,
+    vocadito_root: Path,
+    bed_root: Path,
+    tracks: List[str],
+    levels: List[str],
+    registered_utc: str,
+) -> Dict[str, Any]:
+    """`build` の本体（この実行が所有する `staging` の中だけで完結する）。"""
+    clips = load_registered_clips()
+    registered_beds = load_registered_beds()
     out_dir = staging
     mix_dir = out_dir / "mix"
     annotation_dir = out_dir / "annotations"

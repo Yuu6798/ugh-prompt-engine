@@ -292,6 +292,36 @@ def test_load_registered_beds_accepts_the_committed_pin_file() -> None:
     assert len(beds) == 50
 
 
+def test_load_registered_beds_rejects_a_non_boolean_accepted(tmp_path: Path, monkeypatch) -> None:
+    """`accepted: "false"` を truthiness で採用側へ倒さない（採否は境界そのもの）。"""
+    path = tmp_path / "m2e_bed_fixtures.yaml"
+    path.write_text(
+        yaml.safe_dump({
+            "schema_version": mk.M2E_BED_FIXTURES_SCHEMA,
+            "beds": {"A": {"lexical_index": 0, "accepted": "false"}},
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mk, "M2E_BED_FIXTURES_PATH", path)
+    with pytest.raises(mk.GenerationError, match="accepted が bool でない"):
+        mk.load_registered_beds()
+
+
+def test_registered_n_max_samples_rejects_an_unknown_schema(tmp_path: Path, monkeypatch) -> None:
+    """窓の読み出しも同じ discriminator を要求する（読む側で規律が割れない）。"""
+    path = tmp_path / "m2e_bed_fixtures.yaml"
+    path.write_text(
+        yaml.safe_dump({
+            "schema_version": "m2e-bed-fixtures/9.9",
+            "window": {"n_max_samples": 123},
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mk, "M2E_BED_FIXTURES_PATH", path)
+    with pytest.raises(mk.GenerationError, match="schema_version"):
+        mk.registered_n_max_samples()
+
+
 def test_load_registered_clips_rejects_an_unknown_schema(tmp_path: Path, monkeypatch) -> None:
     """clip registry 側も schema を検証する（bed registry と同じ規律）。"""
     path = tmp_path / "m2c_external_fixtures.yaml"
@@ -838,8 +868,11 @@ def test_build_leaves_no_partial_bundle_when_generation_fails(tmp_path, monkeypa
             out_dir=out_dir, registered_utc="2026-08-01",
         )
     assert not out_dir.exists(), "公開先に部分 bundle が見えている"
+    # staging は一意名なので、**この実行が自分で消す**（消さないと失敗のたびに
+    # 数百本の WAV を抱えた `.out.staging-*` が積み上がり、ボリュームを食い潰す）。
+    assert _staging_dirs(out_dir) == [], "失敗した実行の staging が残っている"
 
-    # staging を掃除したうえで同じ出力先へ再実行できる（中断が次回を塞がない）。
+    # 中断が次回実行を塞がない（同じ出力先へそのまま再実行できる）。
     monkeypatch.setattr(mk, "apply_level", original)
     summary = mk.build(
         vocadito_root=vocadito_root, bed_root=bed_root,
@@ -848,7 +881,37 @@ def test_build_leaves_no_partial_bundle_when_generation_fails(tmp_path, monkeypa
     )
     assert summary["levels"]["0dB"]["n_entries"] == 2
     assert (out_dir / "fixtures_p00.yaml").is_file()
-    assert not (out_dir.parent / f".{out_dir.name}.staging").exists()
+    assert _staging_dirs(out_dir) == []
+
+
+def _staging_dirs(out_dir: Path) -> list[Path]:
+    """`out_dir` の親に残っている staging ディレクトリ（一意名なので glob で拾う）。"""
+    return sorted(out_dir.parent.glob(f".{out_dir.name}.staging*"))
+
+
+def test_build_removes_its_staging_on_keyboard_interrupt(tmp_path, monkeypatch) -> None:
+    """`KeyboardInterrupt` でも staging を置き去りにしない（`BaseException` 経路）。"""
+    vocadito_root, pins = _fake_vocadito(tmp_path, ["vocadito_1"])
+    monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
+    bed_root = tmp_path / "beds"
+    _write_bed(bed_root / "Artist A - Track One")
+    monkeypatch.setattr(
+        mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, ["Artist A - Track One"])
+    )
+
+    def _interrupt(voice, bed, level):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(mk, "apply_level", _interrupt)
+    out_dir = tmp_path / "out"
+    with pytest.raises(KeyboardInterrupt):
+        mk.build(
+            vocadito_root=vocadito_root, bed_root=bed_root,
+            tracks=["Artist A - Track One"], levels=["0dB"],
+            out_dir=out_dir, registered_utc="2026-08-01",
+        )
+    assert not out_dir.exists()
+    assert _staging_dirs(out_dir) == []
 
 
 def test_build_requires_every_accepted_bed(tmp_path, monkeypatch) -> None:
