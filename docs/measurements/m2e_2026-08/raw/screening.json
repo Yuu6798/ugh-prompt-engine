@@ -42,5 +42,27 @@
   "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
   "stem_sha256": "31747c04702da225a4d560f6281bbe8c5649ef4cf309ed099ee18585b3b8dffa",
   "elapsed_seconds": 269.62
+ },
+ "BKS - Bulldozer": {
+  "index": 4,
+  "residual_db": -55.26438093552383,
+  "numeric_pass": true,
+  "bed_rms": 0.08441756402179011,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "19ea6eb092269d76fb04f664de476b570ca64f193d6421b3a53273290b7d3895",
+  "elapsed_seconds": 273.93
+ },
+ "BKS - Too Much": {
+  "index": 5,
+  "residual_db": -53.92756145712009,
+  "numeric_pass": true,
+  "bed_rms": 0.07737544942252006,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "c0cf1f3f271b33e19b4e7d6abecf5c703ab257e436e1bd94eda225156918e1e0",
+  "elapsed_seconds": 283.87
  }
 }

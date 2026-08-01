@@ -1263,5 +1263,500 @@
    "bed_window_sha256": "01c3d93e4d8cda74cf15c1a9888e05b5a87a5eb37f0f9eb6bb3710cf1c8e9ca5"
   },
   "fetch_seconds": 69.12
+ },
+ "Moosmusic - Big Dummy Shake": {
+  "index": 23,
+  "track": "Moosmusic - Big Dummy Shake",
+  "members": {
+   "test/Moosmusic - Big Dummy Shake/drums.wav": {
+    "uncompressed_size": 35078444,
+    "crc32_central_directory": "825b8d95",
+    "member_sha256": "e4dc2c39bf08f3320bd8d4037b519ce198ea951748d8e54effe708a31d100873",
+    "compression_method": 8
+   },
+   "test/Moosmusic - Big Dummy Shake/bass.wav": {
+    "uncompressed_size": 35078444,
+    "crc32_central_directory": "aa250737",
+    "member_sha256": "54736b6ab3bdb9b2b9b33a939227f9ed0caaae1f89e5747a164fc75cc3514c38",
+    "compression_method": 8
+   },
+   "test/Moosmusic - Big Dummy Shake/other.wav": {
+    "uncompressed_size": 35078444,
+    "crc32_central_directory": "555ec486",
+    "member_sha256": "fd40d1b2ff86fed3aa44bb02ac30faf77f23b1ee5db06a339a28c4c4636bb46d",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "b2cc3555b222428d0187735397fd58f67681f5c12696dd1360b1417a3d9e9c2f",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 8769600,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "28b9b9128378009b0c72a906641a26ae67574bacc5a8a0840a8b2244ab5605d6",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 8769600,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "a98825b82198eb3e3db855bfe69484e159820726a130dbf3615e04f7306f9001",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 8769600,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 8769600,
+   "tiled": false,
+   "bed_window_sha256": "a529abffa48160d30f5aed209bf6e58b967de85c8b924e8d8ba1cd29527a5fe0"
+  },
+  "fetch_seconds": 69.91
+ },
+ "Motor Tapes - Shore": {
+  "index": 24,
+  "track": "Motor Tapes - Shore",
+  "members": {
+   "test/Motor Tapes - Shore/drums.wav": {
+    "uncompressed_size": 43522020,
+    "crc32_central_directory": "9ed596f6",
+    "member_sha256": "e59c4b90931747ae2d03e15a07c79964cb27cba2a85884c346ccaf5c52bb0974",
+    "compression_method": 8
+   },
+   "test/Motor Tapes - Shore/bass.wav": {
+    "uncompressed_size": 43522020,
+    "crc32_central_directory": "408f0ad5",
+    "member_sha256": "63d46f8c791cf07959584e07951a752f50a0125eed9e256748eb88be2dcc6a11",
+    "compression_method": 8
+   },
+   "test/Motor Tapes - Shore/other.wav": {
+    "uncompressed_size": 43522020,
+    "crc32_central_directory": "7d22281e",
+    "member_sha256": "7e526c144c4915863ac35c6b52c55c09ad6741e2aa249270f3a3fc413b8ba679",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "cdc526521a0fe4bbca8096a7684f3d9d00a02f1561f7e77879369874d7db0ad9",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 10880494,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "04912403bf1e840288fef036d7e7d00d55242a1b984afcb5135f379e154141cf",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 10880494,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "50461a7b4bd1b7923fbf3cb5c67eabe295f271cf5c402fda9a87d95f5b7954b9",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 10880494,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 10880494,
+   "tiled": false,
+   "bed_window_sha256": "a3ae9d9261c1ee152fdb7d028426d4733145a695b68ea99c6cb61e26c35db6e1"
+  },
+  "fetch_seconds": 89.29
+ },
+ "Mu - Too Bright": {
+  "index": 25,
+  "track": "Mu - Too Bright",
+  "members": {
+   "test/Mu - Too Bright/drums.wav": {
+    "uncompressed_size": 48009980,
+    "crc32_central_directory": "2d1856a2",
+    "member_sha256": "ccf5d386c549fd80e669c18942798e95cbb5e06a4860e225c4c3b59202fbb2d1",
+    "compression_method": 8
+   },
+   "test/Mu - Too Bright/bass.wav": {
+    "uncompressed_size": 48009980,
+    "crc32_central_directory": "cd8ba9cb",
+    "member_sha256": "5c880e21d3037f837ecb598d171a3dd092eb510b92b3570643e3fb55238a00bd",
+    "compression_method": 8
+   },
+   "test/Mu - Too Bright/other.wav": {
+    "uncompressed_size": 48009980,
+    "crc32_central_directory": "d0d3f9c3",
+    "member_sha256": "10f0433ffc807b6898694f7eb3c62341117abebeda886941e090ec960598c4cb",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "ba5c7353850495f603c8f836c0e98094ad02b99da10f54337189343d56577ee0",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 12002484,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "23ae141b54aae01f19b3c9d926f9f555b0df048740d31de6985700ea945a2fd4",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 12002484,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "fe48e7d3951638997d4eb666d771459b39301ba24b8459b0e8edc65beb6b57d0",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 12002484,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 12002484,
+   "tiled": false,
+   "bed_window_sha256": "bc33f09b82e7d8e48b1c17f3e5a339824f4a2be4107353852d146daed7b813b2"
+  },
+  "fetch_seconds": 50.46
+ },
+ "Nerve 9 - Pray For The Rain": {
+  "index": 26,
+  "track": "Nerve 9 - Pray For The Rain",
+  "members": {
+   "test/Nerve 9 - Pray For The Rain/drums.wav": {
+    "uncompressed_size": 60631244,
+    "crc32_central_directory": "a55bb5a0",
+    "member_sha256": "04524d41528cf4d336de53520eb1b1da282f2d312c777ebdc96fce12c8423766",
+    "compression_method": 8
+   },
+   "test/Nerve 9 - Pray For The Rain/bass.wav": {
+    "uncompressed_size": 60631244,
+    "crc32_central_directory": "7ebf168c",
+    "member_sha256": "bed8b907bab21cf4a627026bae69b21a2829928d37273551dab14d640008d36f",
+    "compression_method": 8
+   },
+   "test/Nerve 9 - Pray For The Rain/other.wav": {
+    "uncompressed_size": 60631244,
+    "crc32_central_directory": "51315b69",
+    "member_sha256": "67ef35ecdbc54fa1e4d719d211540fbc0b410d8503710b0107ebcf87d48c6459",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "9ac1a50f872a0bd02934742b16486a377965b67ea20e382ad9888a3b83bfd095",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 15157800,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "3274b302100650c0079174cc4c5e3120b5e8c92fb1fa4980e35c6d8eeff66214",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 15157800,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "ffccd6144755e91745734fbada431258e0333b85740331b858c7ddcabf539b84",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 15157800,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 15157800,
+   "tiled": false,
+   "bed_window_sha256": "844d4ce06fa26f7b0638774ad3bafe448575cfb2593199c74299dcc97ec0d1d1"
+  },
+  "fetch_seconds": 120.11
+ },
+ "PR - Happy Daze": {
+  "index": 27,
+  "track": "PR - Happy Daze",
+  "members": {
+   "test/PR - Happy Daze/drums.wav": {
+    "uncompressed_size": 28700934,
+    "crc32_central_directory": "674ca28d",
+    "member_sha256": "de0f25526af9333f493008ba8251ec552db6c94b02a9dcfd9ee2bdbe71cf8620",
+    "compression_method": 8
+   },
+   "test/PR - Happy Daze/bass.wav": {
+    "uncompressed_size": 28700932,
+    "crc32_central_directory": "d15f4d6e",
+    "member_sha256": "8ddd4829236a56e1b679cb0c8044f68b35540e18d98df37e11766e561963b708",
+    "compression_method": 8
+   },
+   "test/PR - Happy Daze/other.wav": {
+    "uncompressed_size": 28700934,
+    "crc32_central_directory": "0247e4d6",
+    "member_sha256": "a1365910a3e941de720d56d5feb910c9c16420a13926413644e4afa33b76b79e",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "b01d8be5947e253fc97c8855b90bac46aae0bd8e467001959b7e0b73e3407abe",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 7175168,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "ffec0a7cee7c1d45fe678587fe53ecc4bc1e6fb200e2e50d29cbc66c5be4e9f6",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 7175168,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "dd615482414a78eef10d0bce076f3b2c2de2e38718ff8a4f3bb74910377b8b43",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 7175168,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 7175168,
+   "tiled": false,
+   "bed_window_sha256": "a85c6404e07cee1f61c07467617b177ad281420a7cfdc5809f20bfa6d9f4c29a"
+  },
+  "fetch_seconds": 55.83
+ },
+ "PR - Oh No": {
+  "index": 28,
+  "track": "PR - Oh No",
+  "members": {
+   "test/PR - Oh No/drums.wav": {
+    "uncompressed_size": 13440970,
+    "crc32_central_directory": "12009f02",
+    "member_sha256": "9d49a1037d2293647ceaa3311a818ad881291686ed4ca724da693b8af6d1c350",
+    "compression_method": 8
+   },
+   "test/PR - Oh No/bass.wav": {
+    "uncompressed_size": 13440968,
+    "crc32_central_directory": "2ed1ef39",
+    "member_sha256": "ab9f862bf971d2df7110c168376362387c6fc20c320d68670592f794067afeee",
+    "compression_method": 8
+   },
+   "test/PR - Oh No/other.wav": {
+    "uncompressed_size": 13440970,
+    "crc32_central_directory": "e7359d80",
+    "member_sha256": "136fc33bf429a158015a6fd1a488eda1712fe79e24de769605a64cce76e96a27",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "614223d05fe086fa0f7b006f8c98fb6fec6a1d236fa314bb0cf3cb6b85df7aeb",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 3360177,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "bae841dd4fff28d401f64371ce1fad660de35166071d2a875fb5eb5dba9ff384",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 3360177,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "a3d2a5f6cf344ccc13c4d37755a9b73df224bab83cd946fe8352abd5695d5f06",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 3360177,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 3360177,
+   "tiled": false,
+   "bed_window_sha256": "d49097becd59a82ade2d9401f1618b0cbca302d8755b6e0e5bd03eff2a57dccd"
+  },
+  "fetch_seconds": 21.25
+ },
+ "Punkdisco - Oral Hygiene": {
+  "index": 29,
+  "track": "Punkdisco - Oral Hygiene",
+  "members": {
+   "test/Punkdisco - Oral Hygiene/drums.wav": {
+    "uncompressed_size": 39089968,
+    "crc32_central_directory": "bc86cc56",
+    "member_sha256": "d68b32a9f2187543cea9bff85e1c37fa82e3b382e7972b3ae5240520a9701859",
+    "compression_method": 8
+   },
+   "test/Punkdisco - Oral Hygiene/bass.wav": {
+    "uncompressed_size": 39089968,
+    "crc32_central_directory": "adaa6af4",
+    "member_sha256": "09d6a00acf3716f56517af89f01c2d3a26c00ffd21eb7136b7635e8853d21d6f",
+    "compression_method": 8
+   },
+   "test/Punkdisco - Oral Hygiene/other.wav": {
+    "uncompressed_size": 39089968,
+    "crc32_central_directory": "e1fb78d3",
+    "member_sha256": "ebc8fc28d5f6c7a15db614c07cedc7bb91148689d6635ef90d16ef31b1917dfa",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "3a41ae208c8662e5e87b776e6246d34accc4441c6433c2be757114f2f539da9c",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 9772481,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "355fdcfa8a19daf552586d62bc42f5b9bcf0cd415717e8ac4027213e0892db4b",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 9772481,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "06d9718a449eb456f0c60e3119ff77e4217509e24de9a4f74a75b0c0b933cdcd",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 9772481,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 9772481,
+   "tiled": false,
+   "bed_window_sha256": "940adf64f12443893680a8ad98579cf6c52b87cb96912fad53589c9496a718a0"
+  },
+  "fetch_seconds": 41.13
+ },
+ "Raft Monk - Tiring": {
+  "index": 30,
+  "track": "Raft Monk - Tiring",
+  "members": {
+   "test/Raft Monk - Tiring/drums.wav": {
+    "uncompressed_size": 37440156,
+    "crc32_central_directory": "11b4a584",
+    "member_sha256": "dbf192aa8b153a41e58ca30578242a2cdde50c0a9b2aee59acccb8353446159c",
+    "compression_method": 8
+   },
+   "test/Raft Monk - Tiring/bass.wav": {
+    "uncompressed_size": 37440156,
+    "crc32_central_directory": "6a2f12e4",
+    "member_sha256": "450e66058e19e0ef1a84caf2ceefaa86c6771117ab6951fb82f51a7412019427",
+    "compression_method": 8
+   },
+   "test/Raft Monk - Tiring/other.wav": {
+    "uncompressed_size": 37440156,
+    "crc32_central_directory": "9052cfb3",
+    "member_sha256": "3f6cf3573a1b57c5c960c14c2f54079b0b97a69e4285650b96acd42245c0ea74",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "8a80093fe9a2b282bfb4d31bbb46c0ef64c013fe6cc141499592581322a45551",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 9360028,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "017f104e3be49a93ac17991fef354289975eb7b5297870307476787444bf7895",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 9360028,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "65eea0b64be5acdeb3bdb4e38c866cfb86878fbeb0cd79058f9ce4d50d78bde5",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 9360028,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 9360028,
+   "tiled": false,
+   "bed_window_sha256": "695cf0a835d762e6738b2a196c337320600807a48264ed3a23d2af9e737bbcf9"
+  },
+  "fetch_seconds": 46.63
+ },
+ "Sambasevam Shanmugam - Kaathaadi": {
+  "index": 31,
+  "track": "Sambasevam Shanmugam - Kaathaadi",
+  "members": {
+   "test/Sambasevam Shanmugam - Kaathaadi/drums.wav": {
+    "uncompressed_size": 56073980,
+    "crc32_central_directory": "3d27dfe2",
+    "member_sha256": "dff256f4bc988dc8c6e1f84785fad4856eedc896da812cf9f8dd97085dd84baa",
+    "compression_method": 8
+   },
+   "test/Sambasevam Shanmugam - Kaathaadi/bass.wav": {
+    "uncompressed_size": 56073980,
+    "crc32_central_directory": "e9c91135",
+    "member_sha256": "58d12e453524c0f4e1d47e2f406f31fc8fa96653df2f0e5ba7167d2c175d9f8b",
+    "compression_method": 8
+   },
+   "test/Sambasevam Shanmugam - Kaathaadi/other.wav": {
+    "uncompressed_size": 56073980,
+    "crc32_central_directory": "6e3651b2",
+    "member_sha256": "b53856e1ceaf26cb033b067f580c756cdeb75524a10944680a78c8ac15aa7f59",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "4ecaa1e7d27ccd7d70eed41ef4faaf0c2d3ee282eaeeb8a7d4165d6c1e8993d7",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 14018484,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "7cd1610b12770b7f36dc4de0ebf69cdbe45e7fc41640b54fbd8ff33a73e9503f",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 14018484,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "4f3cf7be4e9301fd5926eafafce2172dd8264a7978e1f8c75800d3da18257872",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 14018484,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 14018484,
+   "tiled": false,
+   "bed_window_sha256": "e85a8b51c4bb8041fd845784bcdfeb963438c65efd91cfcc745af815329c0229"
+  },
+  "fetch_seconds": 66.92
  }
 }
