@@ -120,6 +120,15 @@ demucs の vocals stem の `stem_sha256` が run 間で変わる（`residual_db`
 「完了」通知だけ返した**（2 回）。報告文を完了の証拠と見なさない。
 `git log --oneline -1` と `git status --short` の 2 つで足りる。runbook §0'.1 に記載済み。
 
+### 3.4' 凍結定義と実装の照合は「読み合わせ」でしか捕まらない
+
+(d) の算出器は、**凍結定義が明示的に棄却した基準量（peak）を分母に使っていた**
+（Codex 4 巡目・`r2_screening.md` §4.8）。テストは通り、数値は出て、監査表まで
+書けていた——**内部整合しているので下流からは見えない**。閾値を触っていないから
+一方向規律にも触れない。捕まえる手段は、凍結文と実装を 1 行ずつ突き合わせること
+だけである。M2e の残りの凍結量（`residual_db` / `n_max` / 水準式 / `factor`）にも
+同じ照合を一度かけること。
+
 ### 3.5 プロビジョニングの 2 つの罠
 
 - **demucs**: `get_model("htdemucs_ft")` は HF Hub から safetensors を取るが、
@@ -134,8 +143,8 @@ demucs の vocals stem の `stem_sha256` が run 間で変わる（`residual_db`
 
 | 項目 | 値 |
 |---|---|
-| 採用ベッド 1 | **Angels In Amplifiers - I'm Alright**（`residual_db` −48.288419 / `N_drop` 72） |
-| 採用ベッド 2 | **Arise - Run Run Run**（−52.255730 / `N_drop` 51） |
+| 採用ベッド 1 | **Angels In Amplifiers - I'm Alright**（`residual_db` −48.288419 / `N_drop` 36） |
+| 採用ベッド 2 | **Arise - Run Run Run**（−52.255730 / `N_drop` 48） |
 | `n_max` | **1,708,258 samples = 38.736009 s** @44100（40 clip 基準で固定） |
 | vocadito | 40 clip 全部が `m2c_external_fixtures.yaml` の pin と一致（mismatch 0） |
 | ラダー | 4 点（+12 / +6 / 0 / −6 dB）。**縮退なし**（§3.6.1 は発動せず） |
