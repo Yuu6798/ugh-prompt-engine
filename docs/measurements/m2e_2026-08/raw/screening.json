@@ -328,5 +328,27 @@
   "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
   "stem_sha256": "4220601b015931b228f48f486c2392b021b709d904dee9e8da1887a9007ee101",
   "elapsed_seconds": 273.86
+ },
+ "Raft Monk - Tiring": {
+  "index": 30,
+  "residual_db": -58.78249763611087,
+  "numeric_pass": true,
+  "bed_rms": 0.08195362741595949,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "43c2d4452cbcd315fea9a17e1645e037c375ada7dee163f0ae2f0fd1cc3ce94e",
+  "elapsed_seconds": 274.51
+ },
+ "Sambasevam Shanmugam - Kaathaadi": {
+  "index": 31,
+  "residual_db": -31.571172263223804,
+  "numeric_pass": true,
+  "bed_rms": 0.05534691626195923,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "2c038e0a3632de7cfbef0d1a04214ec9892a53acc140a14a7ab4fc74e07f9e41",
+  "elapsed_seconds": 268.85
  }
 }
