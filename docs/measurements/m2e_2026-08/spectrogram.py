@@ -114,6 +114,15 @@ def main() -> int:
 
     beds = Path(args.beds)
     out = Path(args.out)
+    # 画像は**リポジトリ外**へ出す規律（本モジュール docstring）。MUSDB18-HQ 由来で
+    # 非商用研究ライセンス、かつ高分解能スペクトログラムは近似復元を許すため、
+    # checkout 内へ出すと通常の `git add` で入りうる。
+    resolved = out.resolve()
+    if resolved == REPO or REPO in resolved.parents:
+        raise ValueError(
+            f"--out {resolved} がリポジトリ（{REPO}）配下; 目視記録の画像は commit "
+            "しない規律なのでリポジトリ外へ出す (fail-closed)"
+        )
     if out.exists() and any(out.iterdir()):
         # 50 枚描いた**あと**で気づくのでは遅い（rename 直前にも同じ検査をする）。
         raise ValueError(

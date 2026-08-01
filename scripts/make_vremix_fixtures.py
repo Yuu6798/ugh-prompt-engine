@@ -69,6 +69,10 @@ M2E_EXTERNAL_FIXTURES_SCHEMA = "m2e-external-fixtures/0.1"
 # 読み込む側の schema discriminator（r3 で登録済み）。未知の schema は fail-closed。
 M2E_BED_FIXTURES_SCHEMA = "m2e-bed-fixtures/0.1"
 M2C_FIXTURES_SCHEMA = "m2c-external-fixtures/0.1"
+# 事前登録された vocadito コホートの件数（設計 §3.1）。§6.2 の総セル数
+# `40 clip × 2 bed × 4 水準 × 2 アーム × n=2 = 1280` を決める凍結量なので、
+# registry がこの件数でなければ帯そのものが別物になる。
+M2C_EXPECTED_CLIP_COUNT = 40
 
 
 class GenerationError(RuntimeError):
@@ -635,6 +639,17 @@ def load_registered_clips() -> Dict[str, Dict[str, str]]:
     if not isinstance(fixtures, dict) or not fixtures:
         raise GenerationError(
             f"{M2C_FIXTURES_PATH}: fixtures が空; 事前登録済み clip なしに生成しない "
+            "(fail-closed)"
+        )
+    # 非空だけでは足りない。切り詰められた registry を受けると `n-max` も `build` も
+    # **残った clip だけ**で内部整合した成果物を出し、manifest と fixtures は互いに
+    # 一致するのでコホート完全一致チェックも通ってしまう——凍結した 40 clip の帯が
+    # 黙って小さくなる。件数を凍結量として要求する（設計 §3.1・§6.2 の
+    # `40 clip × 2 bed × 4 水準 × 2 アーム × n=2 = 1280`）。
+    if len(fixtures) != M2C_EXPECTED_CLIP_COUNT:
+        raise GenerationError(
+            f"{M2C_FIXTURES_PATH}: 登録 clip が {len(fixtures)} 件で凍結値 "
+            f"{M2C_EXPECTED_CLIP_COUNT} 件と一致しない; 部分コホートで帯を生成しない "
             "(fail-closed)"
         )
     return fixtures

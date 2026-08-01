@@ -348,7 +348,21 @@ def test_load_registered_clips_rejects_an_unknown_schema(tmp_path: Path, monkeyp
 
 
 def test_load_registered_clips_accepts_the_committed_registry() -> None:
-    assert len(mk.load_registered_clips()) == 40
+    assert len(mk.load_registered_clips()) == mk.M2C_EXPECTED_CLIP_COUNT == 40
+
+
+def test_load_registered_clips_rejects_a_truncated_registry(tmp_path: Path, monkeypatch) -> None:
+    """P2: 非空だけでは足りない——切り詰めた registry から小さい帯を作らない。"""
+    full = mk.load_registered_clips()
+    truncated = {k: full[k] for k in sorted(full)[:5]}
+    path = tmp_path / "m2c_external_fixtures.yaml"
+    path.write_text(
+        yaml.safe_dump({"schema_version": mk.M2C_FIXTURES_SCHEMA, "fixtures": truncated}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mk, "M2C_FIXTURES_PATH", path)
+    with pytest.raises(mk.GenerationError, match="凍結値 40 件と一致しない"):
+        mk.load_registered_clips()
 
 
 def test_require_registered_track_list_rejects_a_truncated_cohort() -> None:
