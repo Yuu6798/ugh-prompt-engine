@@ -185,5 +185,27 @@
   "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
   "stem_sha256": "b26cd61b30dd5f003e31ff97a12805de12bd294488a82ec6abf3cc5915f9f580",
   "elapsed_seconds": 270.47
+ },
+ "James Elder & Mark M Thompson - The English Actor": {
+  "index": 17,
+  "residual_db": -39.80849972172638,
+  "numeric_pass": true,
+  "bed_rms": 0.05376762039472849,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "3e687f77bbf134a3185f773359fc6ccf4c853c6a30b7de674457d0c9db348c63",
+  "elapsed_seconds": 267.91
+ },
+ "Juliet's Rescue - Heartbeats": {
+  "index": 18,
+  "residual_db": -67.06722185689932,
+  "numeric_pass": true,
+  "bed_rms": 0.11254793067373217,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "e4ab329c0e0a9bdc24317191a2f913555252a6288605f8b3d09e0e440e26146f",
+  "elapsed_seconds": 268.03
  }
 }
