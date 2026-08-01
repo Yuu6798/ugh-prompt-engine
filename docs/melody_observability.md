@@ -29,7 +29,7 @@ pYIN で旋律系列を復元できない」**を測っていた（pYIN が 1–
 | 抽出層 | `src/svp_rpe/melody/extractors.py` | 波形 → `MelodyObservation`。pyin（core librosa）+ optional 抽出器へ遅延ディスパッチ |
 | Demucs 分離 | `rpe/learned/source_separation_adapter.py` | 既存 `io.source_separator` の vocals stem ラッパ（`SeparatorNotAvailableError`→`LearnedModelUnavailable`） |
 | CREPE | `rpe/learned/crepe_adapter.py` | 単旋律 F0（**published extra なし**＝手動 `pip install crepe` の manual/external 統合。コードは MIT だが同梱重みのライセンス未 inspect/未 pin のため extra 非公開。§5） |
-| Melodia | `rpe/learned/melodia_adapter.py` | 支配的旋律 F0（**AGPL-3.0**・published extra なし＝手動 `pip install essentia` の manual/external 統合。§5） |
+| Melodia | `rpe/learned/melodia_adapter.py` | 支配的旋律 F0（**AGPL-3.0**・published extra なし＝手動 `pip install essentia` の manual/external 統合。§5）。**状態: deferred（2026-08-01 User 決裁）** — M 系列の完了条件から除外。#222 の confidence 正規化裁定（診断: [`melodia_confidence_scale.md`](melodia_confidence_scale.md)）は将来必要になった時点で再開する。棚上げの解除は User 決裁のみ |
 | basic-pitch | `rpe/learned/basic_pitch_adapter.py`（既存） | ノート系抽出器。full_mix 経路の補助 |
 | ベンチ基盤 | `tests/fixtures/melody_bench/` | 事前登録レジストリ + 合成仕様 |
 | ハーネス | `scripts/run_melody_observability.py` | 全 fixture × 全経路のゲート表を出力 |
