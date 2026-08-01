@@ -108,5 +108,27 @@
   "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
   "stem_sha256": "66c142fde27bd6f29cb5064f2462b4be0e49c30d364cd9272528d3acfff56cfb",
   "elapsed_seconds": 292.5
+ },
+ "Cristina Vane - So Easy": {
+  "index": 10,
+  "residual_db": -22.06897395978643,
+  "numeric_pass": false,
+  "bed_rms": 0.09700706291209282,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "2d2f6099e5464679e428ef57ddbd8ec5eefaaad7c36da1a55499f76702d24948",
+  "elapsed_seconds": 269.82
+ },
+ "Detsky Sad - Walkie Talkie": {
+  "index": 11,
+  "residual_db": -11.169566993258798,
+  "numeric_pass": false,
+  "bed_rms": 0.09811039010074463,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "db873c0acb42128134c64e2ab55e3416380f725ccbce95c52997a435bd223665",
+  "elapsed_seconds": 279.95
  }
 }
