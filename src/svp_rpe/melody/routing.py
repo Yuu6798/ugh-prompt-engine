@@ -27,6 +27,9 @@ INPUT_KINDS: tuple[str, ...] = (
     "clear_lead",
     "full_mix",
     "chord_pad_no_melody",
+    # M2e §6.3（加算的な新キー）: フルミックスを分離を通さず直接抽出器に当てる帯。
+    # 既存 4 キーの route 列は 1 本も変えない（下記 `_ROUTES` のコメント参照）。
+    "full_mix_direct_probe",
 )
 
 # 前処理・抽出器の語彙（provenance ラベルにそのまま使う）。
@@ -101,6 +104,18 @@ _ROUTES: Dict[str, List[MelodyRoute]] = {
         # （設計 §4.1 / Codex 指摘）。実運用の旋律不在入力でもゲートで弾かれる
         # ことを示す belt-and-suspenders でもある。
         MelodyRoute("pyin_negative_control", _PRE_NONE, _EXT_PYIN),
+    ],
+    # M2e（`docs/DESIGN_M2e_vremix_real_bed.md` §6.3）: V-remix 帯の direct アーム。
+    # `_ROUTES["full_mix"]` に `crepe_direct` は入っていないため direct アームを
+    # `input_kind: "full_mix"` では表現できず、`"clear_lead"` を名乗らせると**素材の
+    # 宣言が虚偽になる**（入力は明白にフルミックスである。`V_direct` が clear_lead を
+    # 名乗れたのは実際に clear lead だったから）。よって「フルミックスを、分離を
+    # 通さず直接抽出器に当てる」という測定対象そのものを表す**新キーを加算**する。
+    #
+    # **既存キーへの route 追加は引き続き禁止**（`full_mix` に `crepe_direct` を足す案は
+    # M1 / M4 の選択挙動を変えうるため却下・設計 §6.3）。加算的な新キーのみ許す。
+    "full_mix_direct_probe": [
+        MelodyRoute("crepe_direct", _PRE_NONE, _EXT_CREPE),
     ],
 }
 

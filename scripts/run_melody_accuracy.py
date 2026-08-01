@@ -2668,8 +2668,17 @@ BARS_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2_accuracy_bars.yam
 EXTERNAL_FIXTURES_PATH = (
     ROOT / "tests" / "fixtures" / "melody_bench" / "m2c_external_fixtures.yaml"
 )
+# M2e（`docs/DESIGN_M2e_vremix_real_bed.md` §5.1）: M2e の帯は **別ファイル**に置く。
+# `m2_accuracy_bars.yaml` へ追記すると `bars_sha256` が変わり、commit 済みの
+# M2b / M2c verdict の pin が壊れる——それはこの機構の**偽陽性**である（M2b / M2c が
+# 使ったバーの中身は 1 バイトも変わらないため）。リポジトリは同じ理由で既に 2 回
+# この分離をしている（registry.yaml → m2_accuracy_bars.yaml → m2c_external_fixtures.yaml）。
+# 3 例目として同じ流儀に従う。**M2b / M2c の再実測は行わない。**
+M2E_BARS_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2e_accuracy_bars.yaml"
 
 _EXPECTED_BARS_SCHEMA = "m2-accuracy-bars/0.1"
+# M2e のバーは `m2-accuracy-bars/0.1` を名乗らせない（設計 §5.1-2）。
+_EXPECTED_M2E_BARS_SCHEMA = "m2e-accuracy-bars/0.1"
 # run report 自身のスキーマ discriminator。report の形が変わっても現在検査している
 # フィールドが残っていると、evaluate が新旧を区別せず旧セマンティクスで解釈しうる
 # （Codex P2）。bars と同じ規律を report にも適用し、未知/欠落は評価前に弾く。
@@ -2681,6 +2690,16 @@ _EXPECTED_SPECS_SCHEMA = "m2-accuracy-specs/0.1"
 _EXPECTED_VERDICT_SCHEMA = "m2-accuracy-verdict/0.1"
 # 外部素材の事前登録 pin ファイルのスキーマ discriminator（M2c、同じ規律）。
 _EXPECTED_EXTERNAL_FIXTURES_SCHEMA = "m2c-external-fixtures/0.1"
+# M2e（設計 §10）: 帯ごとに pin ファイルを分ける（M2c の登録集合へ V-remix ミックスの
+# hash を追記すると `external_fixtures_sha256` が変わり、commit 済み M2c verdict の pin が
+# 壊れる）。**受理する schema の集合を r1 の時点で開けておく**——r3（`P-c`）と r6（`P-d`）は
+# いずれも「code change なし」の段階なので、そこで新 schema を通すためのコード変更が
+# 必要になると段階の契約が壊れる。未知の schema は従来どおり fail-closed で拒否する。
+_EXPECTED_M2E_EXTERNAL_FIXTURES_SCHEMA = "m2e-external-fixtures/0.1"
+_EXPECTED_EXTERNAL_FIXTURES_SCHEMAS: Tuple[str, ...] = (
+    _EXPECTED_EXTERNAL_FIXTURES_SCHEMA,
+    _EXPECTED_M2E_EXTERNAL_FIXTURES_SCHEMA,
+)
 
 # バーを持たず「診断記録のみ」で良いカテゴリ（設計 §3/§8: Demucs は合成音色に対し
 # 分布外なので S_fullstack の低値を理由に crepe を責めない）。**この集合の外の
@@ -2697,7 +2716,90 @@ _REQUIRED_BAR_KEYS_BY_CATEGORY: Dict[str, Tuple[str, ...]] = {
     # 精神だが、正解が外部注釈（自動生成ではない）なので max_vfa は事前登録しない
     # （設計 Memo M2c・m2_accuracy_bars.yaml の V_direct 節参照）。
     "V_direct": ("min_rpa", "max_octave_gap"),
+    # M2e（設計 §5.3）: 両アームとも `("min_rpa", "max_octave_gap")`。**VFA / VR は
+    # バー外・診断記録のみ** —— M2d が voicing 非信頼を確定済みで、下流の M3 / M4 は
+    # 抽出器 voicing を消費しない（M3 は共有有声整列のみ・M4 は axis_evidence のみ）。
+    # 消費されない軸で帯全体を fail させると S_direct の再演になる。
+    "V_remix_real_direct": ("min_rpa", "max_octave_gap"),
+    "V_remix_real_stem": ("min_rpa", "max_octave_gap"),
 }
+
+# バーを持つカテゴリが宣言しなければならない**測定条件**キー（設計 §5.3）。
+# `gate_level` / `levels` は judge が数値比較する閾値ではなく「何を測ったか」の宣言
+# であり、`_BAR_THRESHOLD_RANGES`（有限数値・値域つき）を通せない。通すために検査を
+# 緩めることは禁止（設計 附録A-4）。よって**バー block の兄弟**として独立の条件
+# block に置き、専用の必須キー表で fail-closed 検証する。
+_REQUIRED_CONDITION_KEYS_BY_CATEGORY: Dict[str, Tuple[str, ...]] = {
+    "V_remix_real_direct": ("gate_level", "levels"),
+    "V_remix_real_stem": ("gate_level", "levels"),
+}
+
+# M2e §3.4.1 の 20 dB 不変量。**実験全体で唯一の宣言**であり、`m2e_bed_fixtures.yaml`
+# の `residual_db <= -26.0` は導出値。ここで凍結値として持つのは「条件 block が
+# 宣言した値がこの不変量と一致すること」を機械検証するため（緩める方向の書き換えを
+# 設計文書の目視レビューに委ねない）。
+_M2E_LEVEL_MARGIN_DB = 20.0
+
+# M2e §3.6 の水準ラダー（4 点・**順序込みで**凍結）。文字列としては並べない
+# （§3.3.1: `"+12dB" / "+6dB" / "0dB" / "-6dB"` をバイト辞書順に並べると
+# `+12dB, +6dB, -6dB, 0dB` となり物理量と無関係な順序になる）。整列にはこの宣言順の
+# 添字 `ladder_index` を使う。
+_M2E_LEVEL_LADDER: Tuple[str, ...] = ("+12dB", "+6dB", "0dB", "-6dB")
+# entry id 規約（設計 §6.2）: `vremix_{clip_id}_{bed_id}_{level_tag}`。
+_M2E_LEVEL_TAGS: Dict[str, str] = {
+    "+12dB": "p12",
+    "+6dB": "p06",
+    "0dB": "p00",
+    "-6dB": "m06",
+}
+
+
+def _m2e_ladder_index(level: str) -> int:
+    """水準ラダーの宣言順添字（設計 §3.3.1 の `ladder_index`）。"""
+    return _M2E_LEVEL_LADDER.index(level)
+
+
+# ---------------------------------------------------------------------------
+# bars ファイルの同一性とカテゴリ所有権（設計 §5.2）
+# ---------------------------------------------------------------------------
+# 各カテゴリは **ちょうど 1 つの bars ファイルに所有される**。所有権は
+# `_CATEGORY_SPECS` の各行が持つ `bars_file` で表現し、バー検証は**所有カテゴリのみ**
+# を対象に行う（他ファイルのカテゴリの不在を欠落と見なさない）。この分離がなければ、
+# `_CATEGORY_SPECS` に M2e カテゴリを足した瞬間 `m2_accuracy_bars.yaml` の検証が
+# 「M2e のバーが空だ」と誤爆する。
+#
+# ファイル同一性は **パス名ではなく `schema_version`** から決める。テストや測り直し
+# 子プロセスは bytes を tmp へ凍結複製して別名で渡すため、ファイル名に依存した判定は
+# その経路で崩れる。
+_BARS_FILES: Dict[str, Dict[str, Any]] = {
+    "m2_accuracy_bars.yaml": {
+        "schema": _EXPECTED_BARS_SCHEMA,
+        "block_key": "m2_accuracy_bars",
+        "conditions_key": None,
+        # 共有スカラー（tolerance_cents / est_voiced_confidence_floor / repeats_min）を
+        # 宣言するのはこのファイルだけ（設計 §5.1-4: 二重定義は必ず食い違う）。
+        "declares_shared_scalars": True,
+        "default_path": BARS_PATH,
+    },
+    "m2e_accuracy_bars.yaml": {
+        "schema": _EXPECTED_M2E_BARS_SCHEMA,
+        "block_key": "m2e_accuracy_bars",
+        "conditions_key": "m2e_measurement_conditions",
+        "declares_shared_scalars": False,
+        "default_path": M2E_BARS_PATH,
+    },
+}
+
+_BARS_FILE_BY_SCHEMA: Dict[str, str] = {
+    spec["schema"]: name for name, spec in _BARS_FILES.items()
+}
+
+# 共有スカラー: M2 側の値を使い、M2e 側で**再宣言しない**（設計 §5.1-4）。
+_SHARED_BAR_SCALARS: Tuple[str, ...] = (
+    "tolerance_cents",
+    "est_voiced_confidence_floor",
+    "repeats_min",
+)
 
 # カテゴリ → (fixture/composite id, select_routes 用 input_kind, 期待する route 名)。
 # route 名は `svp_rpe.melody.routing._ROUTES` の既存表から**そのまま**選ぶ
@@ -2711,12 +2813,14 @@ _CATEGORY_SPECS: Dict[str, Dict[str, str]] = {
         "fixture_id": "m2_s_direct_melody",
         "input_kind": "clear_lead",
         "route_name": "crepe_direct",
+        "bars_file": "m2_accuracy_bars.yaml",
     },
     "S_fullstack": {
         "kind": "fullstack",
         "composite_id": "m2_s_fullstack_mix",
         "input_kind": "full_mix",
         "route_name": "demucs_vocals_then_crepe",
+        "bars_file": "m2_accuracy_bars.yaml",
     },
     # M2c: V_direct（実声・分離なし）は合成 spec ではなく `--external-manifest` が
     # 指す外部素材（音声 + 注釈 CSV）に対して測る。`kind: "external"` の row は
@@ -2728,8 +2832,71 @@ _CATEGORY_SPECS: Dict[str, Dict[str, str]] = {
         "kind": "external",
         "input_kind": "clear_lead",
         "route_name": "crepe_direct",
+        "bars_file": "m2_accuracy_bars.yaml",
+    },
+    # M2e（設計 §6.1）: V-remix 実ベッド帯の 2 アーム。`kind: "external"` なので
+    # `fixture_id` / `composite_id` は持たない（`V_direct` と同じ）。入力は実声
+    # （vocadito）と実伴奏（MUSDB18-HQ stem）をオフラインの
+    # `scripts/make_vremix_fixtures.py` が混ぜた**実ファイル**であり、正解はミックスで
+    # 変化しない vocadito の注釈——`kind: "external"` の定義そのもの。ハーネスに
+    # 新しい合成経路（`kind: "fullstack"`）を足さず、音声波形はリポジトリに入らない。
+    "V_remix_real_direct": {
+        "kind": "external",
+        # §6.3 で新設した加算的キー。フルミックスを `clear_lead` と宣言すると素材の
+        # 宣言が虚偽になるため、`full_mix_direct_probe` でしか表現できない。
+        "input_kind": "full_mix_direct_probe",
+        "route_name": "crepe_direct",
+        "bars_file": "m2e_accuracy_bars.yaml",
+    },
+    "V_remix_real_stem": {
+        "kind": "external",
+        "input_kind": "full_mix",  # 既存のまま（route も既存メニューから選ぶ）
+        "route_name": "demucs_vocals_then_crepe",
+        "bars_file": "m2e_accuracy_bars.yaml",
     },
 }
+
+
+def _categories_owned_by(bars_file: str) -> "Tuple[str, ...]":
+    """`bars_file` が所有するカテゴリ（設計 §5.2）。"""
+    return tuple(
+        sorted(
+            category
+            for category, spec in _CATEGORY_SPECS.items()
+            if spec.get("bars_file") == bars_file
+        )
+    )
+
+
+def _require_category_bars_ownership() -> None:
+    """カテゴリ所有権の fail-closed 検証（設計 §5.2・import 時に 1 回）。
+
+    - 所有ファイルが未指定のカテゴリがあれば拒否する。「どこにも属さない」カテゴリは
+      検証を素通りする——**分離が開ける唯一の穴なのでここで塞ぐ**。
+    - 未知の bars ファイル名を所有者に指名することも拒否する（typo で穴が開く）。
+
+    「2 ファイルに同名カテゴリが現れたら拒否」は、`_CATEGORY_SPECS` が category →
+    単一 `bars_file` の写像である以上ここでは構成上起こりえない。実ファイル側の同名
+    block は `_require_well_formed_bars` が「そのファイルが所有しないカテゴリの block」
+    として拒否する。
+    """
+    for category, spec in _CATEGORY_SPECS.items():
+        bars_file = spec.get("bars_file")
+        if not isinstance(bars_file, str) or not bars_file:
+            raise RuntimeError(
+                f"_CATEGORY_SPECS: category {category!r} が bars_file を宣言していない; "
+                "どの bars ファイルにも所有されないカテゴリは検証を素通りする "
+                "(fail-closed)"
+            )
+        if bars_file not in _BARS_FILES:
+            raise RuntimeError(
+                f"_CATEGORY_SPECS: category {category!r} の bars_file {bars_file!r} が "
+                f"未登録; 既知は {sorted(_BARS_FILES)} (fail-closed)"
+            )
+
+
+_require_category_bars_ownership()
+
 
 RouteRunner = Callable[[str, MelodyRoute], Tuple[MelodyObservation, Dict[str, Any]]]
 
@@ -3317,25 +3484,170 @@ def load_report(path: "str | Path") -> ReportArtifact:
     return ReportArtifact.from_bytes(raw, path=path)
 
 
+def bars_file_identity(doc: Dict[str, Any]) -> str:
+    """bars ドキュメントの `schema_version` から**所有ファイル同一性**を決める。
+
+    パス名ではなく schema で決める理由（設計 §5.2 の実装上の要請）: 測り直し子
+    プロセスやテストは bars bytes を tmp へ凍結複製して別名で渡すため、ファイル名に
+    依存した判定はその経路で崩れる。schema_version は artifact 自身が名乗る
+    discriminator なので複製しても付いて回る。
+    """
+    version = doc.get("schema_version")
+    bars_file = _BARS_FILE_BY_SCHEMA.get(version)
+    if bars_file is None:
+        raise ValueError(
+            f"unsupported m2_accuracy_bars schema_version {version!r}; "
+            f"expected one of {sorted(_BARS_FILE_BY_SCHEMA)} (fail-closed)"
+        )
+    return bars_file
+
+
+def _require_measurement_conditions(doc: Dict[str, Any], *, bars_file: str) -> None:
+    """条件 block（`gate_level` / `levels` / `level_margin_db`）を検証する（設計 §5.3）。
+
+    条件 block は **バー block の兄弟**でなければならない——バー block の中へ入れると
+    loader が dict 値をカテゴリと誤認する（そして `_BAR_THRESHOLD_RANGES` が非数値の
+    閾値キーとして拒否する）。バーは judge が数値比較する閾値、`gate_level` / `levels`
+    は「何を測ったか」の宣言であり、別の種類の対象である（附録A-4 の是正）。
+
+    fail-closed:
+
+    - **バーを持つカテゴリが条件 block を欠いたら拒否**
+    - `gate_level ∈ levels` でなければ拒否
+    - `levels` が凍結ラダーと完全一致（**順序込み**）でなければ拒否
+    - `level_margin_db` が §3.4.1 の 20 dB 不変量と一致しなければ拒否
+    - そのファイルが所有しないカテゴリの条件 block があれば拒否
+    """
+    import math
+
+    conditions_key = _BARS_FILES[bars_file]["conditions_key"]
+    owned = _categories_owned_by(bars_file)
+    if conditions_key is None:
+        # 条件 block を持たないファイル（M2）で、所有カテゴリが条件を要求しないこと。
+        needs = [c for c in owned if c in _REQUIRED_CONDITION_KEYS_BY_CATEGORY]
+        if needs:
+            raise RuntimeError(
+                f"{bars_file}: category {needs} が測定条件を要求するのに、このファイルは "
+                "条件 block を持たない (fail-closed)"
+            )
+        return
+
+    conditions = doc.get(conditions_key)
+    if not isinstance(conditions, dict) or not conditions:
+        raise ValueError(
+            f"{bars_file}: 条件 block {conditions_key!r} が無い/空; 水準宣言なしに帯を "
+            "登録しない (fail-closed)"
+        )
+
+    margin = conditions.get("level_margin_db")
+    if isinstance(margin, bool) or not isinstance(margin, (int, float)):
+        raise ValueError(
+            f"{bars_file}: {conditions_key}.level_margin_db {margin!r} が数値でない "
+            "(fail-closed)"
+        )
+    if not math.isfinite(float(margin)) or float(margin) != _M2E_LEVEL_MARGIN_DB:
+        raise ValueError(
+            f"{bars_file}: {conditions_key}.level_margin_db {margin!r} が凍結された "
+            f"20 dB 不変量 {_M2E_LEVEL_MARGIN_DB} と不一致; 余裕は実験全体で 1 つの宣言で "
+            "あり、素材に合わせて動かさない (fail-closed)"
+        )
+
+    declared = {k: v for k, v in conditions.items() if isinstance(v, dict)}
+    unowned = sorted(set(declared) - set(owned))
+    if unowned:
+        raise ValueError(
+            f"{bars_file}: 条件 block に、このファイルが所有しないカテゴリ {unowned} が "
+            "ある (fail-closed)"
+        )
+
+    for category in owned:
+        required = _REQUIRED_CONDITION_KEYS_BY_CATEGORY.get(category)
+        if required is None:
+            continue
+        entry = declared.get(category)
+        if not entry:
+            raise ValueError(
+                f"{bars_file}: category {category!r} がバーを持つのに条件 block を欠く; "
+                "何を測ったかの宣言なしに合否を出さない (fail-closed)"
+            )
+        missing = [key for key in required if key not in entry]
+        if missing:
+            raise ValueError(
+                f"{bars_file}: category {category!r} の条件 block が必須キー {missing} を "
+                "欠く (fail-closed)"
+            )
+        levels = entry["levels"]
+        if not isinstance(levels, list) or tuple(levels) != _M2E_LEVEL_LADDER:
+            raise ValueError(
+                f"{bars_file}: category {category!r} の levels {levels!r} が凍結ラダー "
+                f"{list(_M2E_LEVEL_LADDER)} と（順序込みで）一致しない; 水準を足す/減らす/"
+                "並べ替えることは破断曲線の定義を変える (fail-closed)"
+            )
+        gate_level = entry["gate_level"]
+        if gate_level not in levels:
+            raise ValueError(
+                f"{bars_file}: category {category!r} の gate_level {gate_level!r} が "
+                f"levels {levels!r} に含まれない (fail-closed)"
+            )
+
+
+def _require_m2e_bars_provenance(doc: Dict[str, Any], *, bars_file: str) -> None:
+    """分離した bars ファイルが要求する provenance を検証する（設計 §5.1-1/-3）。
+
+    - **一方向規律の明示的継承**（`one_way_rule` を非空文字列で持つこと）。暗黙の
+      継承にしない。
+    - **転用値の出所の記録**（`provenance.derived_from`）。ファイルを跨いだ時点で
+      出所が追えなくなるため、転用元のファイル・その時点の sha256・カテゴリを残す。
+    """
+    if _BARS_FILES[bars_file]["declares_shared_scalars"]:
+        return  # M2 本体は既存の provenance 契約（specs_sha256 等）のまま
+    block = doc[_BARS_FILES[bars_file]["block_key"]]
+    one_way = block.get("one_way_rule")
+    if not isinstance(one_way, str) or not one_way.strip():
+        raise ValueError(
+            f"{bars_file}: バー block が one_way_rule を非空文字列で持たない; 分離した "
+            "ファイルへの一方向規律の継承を暗黙にしない (fail-closed)"
+        )
+    derived = doc.get("provenance", {}).get("derived_from")
+    if not isinstance(derived, dict):
+        raise ValueError(
+            f"{bars_file}: provenance.derived_from が無い; 転用値の出所はファイルを跨いだ "
+            "時点で追えなくなる (fail-closed)"
+        )
+    for key in ("file", "sha256", "category"):
+        value = derived.get(key)
+        if not isinstance(value, str) or not value:
+            raise ValueError(
+                f"{bars_file}: provenance.derived_from.{key} が非空文字列でない "
+                "(fail-closed)"
+            )
+    if not _is_sha256(derived["sha256"]):
+        raise ValueError(
+            f"{bars_file}: provenance.derived_from.sha256 {derived['sha256']!r} が "
+            "64 桁 lowercase hex でない (fail-closed)"
+        )
+
+
 def load_bars(path: Path = BARS_PATH) -> Tuple[BarsArtifact, str]:
-    """m2_accuracy_bars.yaml を single read で (BarsArtifact, sha256) として返す。
+    """bars YAML を single read で (BarsArtifact, sha256) として返す。
 
     read → hash → parse を 1 操作にまとめ、その 3 つを `BarsArtifact` に束ねる
     （digest と parsed data が切り離されないようにする。Codex P2）。
+
+    M2e（設計 §5.2）: 対象ファイルの同一性を `schema_version` から決め、**そのファイルが
+    所有するカテゴリのみ**を検証する。既定は従来どおり `m2_accuracy_bars.yaml`。
     """
     data = Path(path).read_bytes()
     bars = _yaml_load_no_dup_keys(data, what="m2_accuracy_bars.yaml")
-    version = bars.get("schema_version")
-    if version != _EXPECTED_BARS_SCHEMA:
-        raise ValueError(
-            f"unsupported m2_accuracy_bars schema_version {version!r}; "
-            f"expected {_EXPECTED_BARS_SCHEMA} (fail-closed)"
-        )
-    if "m2_accuracy_bars" not in bars:
-        raise ValueError("m2_accuracy_bars.yaml is missing the 'm2_accuracy_bars' block")
+    bars_file = bars_file_identity(bars)
+    block_key = _BARS_FILES[bars_file]["block_key"]
+    if block_key not in bars:
+        raise ValueError(f"{bars_file} is missing the {block_key!r} block")
     # 「実測前に凍結した」という主張の土台なので、閾値そのものより前に登録日を検証する。
     _require_dated_registration(bars)
-    _require_well_formed_bars(bars["m2_accuracy_bars"])
+    _require_well_formed_bars(bars[block_key], bars_file=bars_file)
+    _require_measurement_conditions(bars, bars_file=bars_file)
+    _require_m2e_bars_provenance(bars, bars_file=bars_file)
     sha256 = hashlib.sha256(data).hexdigest()
     return BarsArtifact(bars, sha256, data), sha256
 
@@ -3367,10 +3679,10 @@ def load_external_fixtures_with_raw(
     data = Path(path).read_bytes()
     fixtures_doc = _yaml_load_no_dup_keys(data, what="m2c_external_fixtures.yaml")
     version = fixtures_doc.get("schema_version")
-    if version != _EXPECTED_EXTERNAL_FIXTURES_SCHEMA:
+    if version not in _EXPECTED_EXTERNAL_FIXTURES_SCHEMAS:
         raise ValueError(
             f"unsupported m2c_external_fixtures schema_version {version!r}; "
-            f"expected {_EXPECTED_EXTERNAL_FIXTURES_SCHEMA!r} (fail-closed)"
+            f"expected one of {list(_EXPECTED_EXTERNAL_FIXTURES_SCHEMAS)} (fail-closed)"
         )
     _parse_registered_utc(fixtures_doc.get("registered_utc"), where="m2c_external_fixtures.yaml")
     fixtures = fixtures_doc.get("fixtures")
@@ -3406,15 +3718,37 @@ _BAR_THRESHOLD_RANGES: Dict[str, Tuple[float, float]] = {
 }
 
 
-def _require_well_formed_bars(bar_block: Dict[str, Any]) -> None:
+def _require_well_formed_bars(
+    bar_block: Dict[str, Any], *, bars_file: str = "m2_accuracy_bars.yaml"
+) -> None:
     """凍結バー自身の型・有限性・定義域を検証する（fail-closed）。
 
     metrics 側の NaN は塞いだが、**バー側**にも同じ穴がある: `min_rpa: .nan` を
     書いた bars を `--bars` で渡すと `raw_pitch_accuracy < NaN` が常に False になり、
     「未定義のバー」の下で pass が publish できてしまう（Codex P1）。閾値は判定の
     基準そのものなので、読み込み時点で弾く。
+
+    M2e（設計 §5.2）: 検証は **`bars_file` が所有するカテゴリのみ**を対象とする。
+    他ファイルのカテゴリの不在を欠落と見なさない（見なすと分離した瞬間に既存
+    ファイルの検証が「新帯のバーが空だ」と誤爆する）。共有スカラーを宣言できるのも
+    所有権を持つ 1 ファイルだけ（§5.1-4: 二重定義は必ず食い違う）。
     """
     import math
+
+    file_spec = _BARS_FILES[bars_file]
+    if not file_spec["declares_shared_scalars"]:
+        # 共有スカラーは再宣言せず参照する（設計 §5.1-4）。書けてしまうと、
+        # M2 側と食い違う値が静かに効く経路が開く。
+        redeclared = [key for key in _SHARED_BAR_SCALARS if key in bar_block]
+        if redeclared:
+            raise ValueError(
+                f"{bars_file}: 共有スカラー {redeclared} を再宣言している; "
+                f"{', '.join(_SHARED_BAR_SCALARS)} は m2_accuracy_bars.yaml の値を参照し、"
+                "帯ごとに別値を持たせない（二重定義は必ず食い違う・fail-closed）"
+            )
+        _require_owned_categories_well_formed(bar_block, bars_file=bars_file)
+        _require_bar_threshold_domains(bar_block, bars_file=bars_file)
+        return
 
     tolerance = bar_block.get("tolerance_cents", DEFAULT_TOLERANCE_CENTS)
     if isinstance(tolerance, bool) or not isinstance(tolerance, (int, float)):
@@ -3455,10 +3789,18 @@ def _require_well_formed_bars(bar_block: Dict[str, Any]) -> None:
             "[0, 1] の外 (fail-closed)"
         )
 
+    _require_owned_categories_well_formed(bar_block, bars_file=bars_file)
+    _require_bar_threshold_domains(bar_block, bars_file=bars_file)
+
+
+def _require_owned_categories_well_formed(
+    bar_block: Dict[str, Any], *, bars_file: str
+) -> None:
+    """`bars_file` が所有するカテゴリのバー存在・必須キーを検証する（fail-closed）。"""
     # 受け入れゲートを持つべきカテゴリのバーが空/欠落だと、`evaluate_m2_bars` の
     # 「バーなし → diagnostic_only」分岐に落ちて RPA/VFA 判定が黙って消える。
     # 事前登録されたカテゴリのうち診断専用でないものは、閾値の存在を要求する。
-    for category in sorted(_CATEGORY_SPECS):
+    for category in _categories_owned_by(bars_file):
         if category in _DIAGNOSTIC_ONLY_CATEGORIES:
             if bar_block.get(category):
                 raise ValueError(
@@ -3486,9 +3828,28 @@ def _require_well_formed_bars(bar_block: Dict[str, Any]) -> None:
                 "部分的なバーは事前登録されたゲートの一部を黙って無効化する (fail-closed)"
             )
 
+
+def _require_bar_threshold_domains(bar_block: Dict[str, Any], *, bars_file: str) -> None:
+    """バー block の各閾値の型・有限性・定義域と、block の所有権を検証する。
+
+    所有権（設計 §5.2）: **そのファイルが所有しないカテゴリの block があれば拒否**する。
+    ただし `_CATEGORY_SPECS` に行を持たない名前（例: `V_fullstack` = 事前登録済み・
+    未配線）は従来どおり許す——「帯の登録はハーネス配線を前提にしない」という既存の
+    先例を、分離を理由に壊さないため。塞ぐべきは「他ファイルが所有するカテゴリの
+    バーを、こちらのファイルにも書く」という二重定義の穴である。
+    """
+    import math
+
     for category, bar in bar_block.items():
         if not isinstance(bar, dict):
             continue
+        owner = _CATEGORY_SPECS.get(category, {}).get("bars_file")
+        if owner is not None and owner != bars_file:
+            raise ValueError(
+                f"{bars_file}: category {category!r} の block を持っているが、その所有者は "
+                f"{owner!r}; 同名カテゴリのバーが 2 ファイルに現れる状態を作らない "
+                "(fail-closed)"
+            )
         for key, value in bar.items():
             if key not in _BAR_THRESHOLD_RANGES:
                 raise ValueError(
@@ -4321,12 +4682,47 @@ def _execution_paths() -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _annotate_row_bars_pin(
+    row: Dict[str, Any],
+    category: str,
+    *,
+    level: Optional[str],
+    bars_path: Path,
+    bars_sha256: str,
+    extra_bars: Dict[str, Tuple["BarsArtifact", str, Path]],
+) -> None:
+    """row へ「どの bars ファイルの下で測ったか」の pin を刻む（設計 §5.2）。
+
+    bars ファイルを分離した以上、report の top-level `bars_sha256`（= 共有スカラーを
+    供給する `m2_accuracy_bars.yaml`）だけでは、M2e カテゴリがどの世代のバーの下で
+    測られたかを表現できない。カテゴリ単位で**相対パスと sha256 の両方**を記録する。
+
+    水準軸を持つカテゴリには `level` も刻む——「何を測ったか」の宣言は row 側に
+    無ければ、後から別水準の row と混ぜたことを検出できない。
+    """
+    bars_file = _CATEGORY_SPECS[category]["bars_file"]
+    if bars_file in extra_bars:
+        _artifact, artifact_sha256, artifact_path = extra_bars[bars_file]
+        row["bars_file"] = bars_file
+        row["bars_file_relative"] = _repo_relative_path(artifact_path)
+        row["bars_file_sha256"] = artifact_sha256
+    else:
+        row["bars_file"] = bars_file
+        row["bars_file_relative"] = _repo_relative_path(bars_path)
+        row["bars_file_sha256"] = bars_sha256
+    if category in _REQUIRED_CONDITION_KEYS_BY_CATEGORY:
+        row["level"] = level
+        row["ladder_index"] = _m2e_ladder_index(level) if level is not None else None
+
+
 def run_accuracy(
     *,
     categories: "tuple[str, ...]" = ("S_direct", "S_fullstack"),
     route_runner: Optional[RouteRunner] = None,
     specs_path: Path = SPECS_PATH,
     bars_path: Path = BARS_PATH,
+    m2e_bars_path: Path = M2E_BARS_PATH,
+    level: Optional[str] = None,
     tolerance_cents: Optional[float] = None,
     external_manifest_path: Optional[Path] = None,
     external_fixtures_path: Path = EXTERNAL_FIXTURES_PATH,
@@ -4377,6 +4773,52 @@ def run_accuracy(
             "(fail-closed)"
         )
 
+    # M2e（設計 §6.2）: `level` は**カテゴリではなく run の次元**である。
+    # `_CATEGORY_SPECS` には持ち込まず、run report の各 row と cat_result に記録する。
+    bars_files_needed = sorted({_CATEGORY_SPECS[c]["bars_file"] for c in categories})
+    extra_bars: Dict[str, Tuple["BarsArtifact", str, Path]] = {}
+    for bars_file in bars_files_needed:
+        if bars_file == "m2_accuracy_bars.yaml":
+            continue  # 共有スカラーの供給元として上で既にロード済み
+        if bars_file != "m2e_accuracy_bars.yaml":
+            raise RuntimeError(
+                f"run_accuracy: 未対応の bars_file {bars_file!r} (fail-closed)"
+            )
+        artifact, artifact_sha256 = load_bars(m2e_bars_path)
+        if bars_file_identity(artifact.data) != bars_file:
+            raise ValueError(
+                f"run_accuracy: --m2e-bars {m2e_bars_path} が {bars_file!r} の "
+                "schema_version を名乗っていない (fail-closed)"
+            )
+        extra_bars[bars_file] = (artifact, artifact_sha256, Path(m2e_bars_path))
+
+    level_categories = [
+        c for c in categories if c in _REQUIRED_CONDITION_KEYS_BY_CATEGORY
+    ]
+    if level_categories:
+        if level is None:
+            raise ValueError(
+                f"run_accuracy: category(s) {level_categories} は水準軸を持つため level の "
+                "指定が必須（CLI: --level）; どの水準を測ったか不明な row を作らない "
+                "(fail-closed)"
+            )
+        for category in level_categories:
+            artifact = extra_bars[_CATEGORY_SPECS[category]["bars_file"]][0]
+            conditions_key = _BARS_FILES[_CATEGORY_SPECS[category]["bars_file"]][
+                "conditions_key"
+            ]
+            declared_levels = artifact.data[conditions_key][category]["levels"]
+            if level not in declared_levels:
+                raise ValueError(
+                    f"run_accuracy: level {level!r} が category {category!r} の事前登録 "
+                    f"levels {declared_levels!r} にない (fail-closed)"
+                )
+    elif level is not None:
+        raise ValueError(
+            f"run_accuracy: level {level!r} が指定されたが、水準軸を持つカテゴリを 1 つも "
+            "測っていない; 測っていない次元を report に名乗らせない (fail-closed)"
+        )
+
     effective_tolerance = (
         tolerance_cents
         if tolerance_cents is not None
@@ -4397,6 +4839,8 @@ def run_accuracy(
         "specs_sha256": specs_sha256,
         "specs_path_relative": _repo_relative_path(specs_path),
         "bars_path_relative": _repo_relative_path(bars_path),
+        # M2e §6.2: run の水準次元（水準軸を持つカテゴリを測らない run では None）。
+        "level": level,
         "tolerance_cents": effective_tolerance,
         "est_voiced_confidence_floor": est_voiced_floor,
         "generator_code_sha256": _LOADED_GENERATOR_CODE_SHA256,
@@ -4437,6 +4881,14 @@ def run_accuracy(
                     route=route,
                     runner=runner,
                     tmp_dir=Path(tmp),
+                )
+                _annotate_row_bars_pin(
+                    row,
+                    category,
+                    level=level,
+                    bars_path=bars_path,
+                    bars_sha256=bars_sha256,
+                    extra_bars=extra_bars,
                 )
                 results["categories"][category] = row
                 if row.get("outcome") == "measured":
@@ -4499,6 +4951,14 @@ def run_accuracy(
                     "ref_frame_count": len(ref_times),
                     "ref_voiced_frame_count": sum(1 for f in ref_freqs if f > 0.0),
                 }
+                _annotate_row_bars_pin(
+                    row,
+                    category,
+                    level=level,
+                    bars_path=bars_path,
+                    bars_sha256=bars_sha256,
+                    extra_bars=extra_bars,
+                )
                 os.chmod(tmp, 0o500)
                 try:
                     try:
@@ -5171,6 +5631,8 @@ def _reverify_category_measurement(
     external_manifest_path: Optional[Path] = None,
     external_fixtures_path: Path = EXTERNAL_FIXTURES_PATH,
     external_fixtures_raw: Optional[bytes] = None,
+    m2e_bars_raw: Optional[bytes] = None,
+    level: Optional[str] = None,
 ) -> None:
     """`category` の kind に応じて S（specs 由来合成）/ V（外部素材、M2c）の測り直しへ振り分ける。
 
@@ -5186,6 +5648,12 @@ def _reverify_category_measurement(
                 f"evaluate_m2_bars: category {category!r} は外部素材カテゴリだが "
                 "external_fixtures_raw が渡されていない (fail-closed)"
             )
+        if category_spec["bars_file"] != "m2_accuracy_bars.yaml" and m2e_bars_raw is None:
+            raise RuntimeError(
+                f"evaluate_m2_bars: category {category!r} は別 bars ファイルに所有される "
+                "が m2e_bars_raw が渡されていない; 測り直し子へ帯登録を凍結転写できない "
+                "(fail-closed)"
+            )
         _reverify_external_category_measurement(
             category,
             rows,
@@ -5196,6 +5664,8 @@ def _reverify_category_measurement(
             verification_runner=verification_runner,
             external_manifest_path=external_manifest_path,
             external_fixtures_path=external_fixtures_path,
+            m2e_bars_raw=m2e_bars_raw,
+            level=level,
         )
         return
     _reverify_direct_or_fullstack_category_measurement(
@@ -5355,6 +5825,8 @@ def _run_external_verification_in_fresh_process(
     bars_path: Path,
     external_fixtures_path: Path,
     expected_specs_sha256: str,
+    m2e_bars_path: Optional[Path] = None,
+    level: Optional[str] = None,
 ) -> Dict[str, Any]:
     """外部素材カテゴリ（M2c）の測り直し 1 回分を新規プロセス（素の CLI run）で実行する。
 
@@ -5387,6 +5859,12 @@ def _run_external_verification_in_fresh_process(
         "--external-fixtures",
         str(Path(external_fixtures_path).resolve()),
     ]
+    # M2e: 分離した帯登録と run の水準次元も**明示的に**子へ引き渡す（CLI 既定へ
+    # 暗黙に頼ると、子が別世代の帯登録・別水準を測りうる）。
+    if m2e_bars_path is not None:
+        command += ["--m2e-bars", str(Path(m2e_bars_path).resolve())]
+    if level is not None:
+        command += ["--level", level]
     env = dict(os.environ)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["PYTHONPYCACHEPREFIX"] = str(tmp_dir / f"pyc-fresh-ext-{index}")
@@ -5422,6 +5900,8 @@ def _reverify_external_category_measurement(
     verification_runner: Optional[RouteRunner],
     external_manifest_path: Optional[Path],
     external_fixtures_path: Path,
+    m2e_bars_raw: Optional[bytes] = None,
+    level: Optional[str] = None,
 ) -> None:
     """外部素材カテゴリ（M2c）を評価器自身が `repeats` 回独立に測り直す。
 
@@ -5469,6 +5949,17 @@ def _reverify_external_category_measurement(
         specs_copy.write_bytes(specs_raw)
         fixtures_copy = Path(tmp) / "m2c_external_fixtures.yaml"
         fixtures_copy.write_bytes(external_fixtures_raw)
+        # M2e: 分離した帯登録も**評価器が実際に読んだ bytes**を凍結複製して子へ渡す
+        # （`bars`/`specs_raw`/`external_fixtures_raw` と同型の TOCTOU 回避）。
+        m2e_bars_copy: Optional[Path] = None
+        if m2e_bars_raw is not None:
+            m2e_bars_copy = Path(tmp) / "m2e_accuracy_bars.yaml"
+            m2e_bars_copy.write_bytes(m2e_bars_raw)
+        extra_run_kwargs: Dict[str, Any] = {}
+        if m2e_bars_copy is not None:
+            extra_run_kwargs["m2e_bars_path"] = m2e_bars_copy
+        if level is not None:
+            extra_run_kwargs["level"] = level
         for index in range(repeats):
             if verification_runner is not None:
                 verification = run_accuracy(
@@ -5478,6 +5969,7 @@ def _reverify_external_category_measurement(
                     bars_path=bars_path,
                     external_manifest_path=external_manifest_path,
                     external_fixtures_path=fixtures_copy,
+                    **extra_run_kwargs,
                 )
                 vrow = verification["categories"][category]
             else:
@@ -5490,6 +5982,8 @@ def _reverify_external_category_measurement(
                     bars_path=bars_path,
                     external_fixtures_path=fixtures_copy,
                     expected_specs_sha256=expected_specs_sha256,
+                    m2e_bars_path=m2e_bars_copy,
+                    level=level,
                 )
             if vrow.get("outcome") != "measured":
                 raise RuntimeError(
@@ -6327,6 +6821,7 @@ def evaluate_m2_bars(
     bars_sha256: str,
     specs_path: Path = SPECS_PATH,
     bars_path: Path = BARS_PATH,
+    m2e_bars_path: Path = M2E_BARS_PATH,
     external_manifest_path: Optional[Path] = None,
     external_fixtures_path: Path = EXTERNAL_FIXTURES_PATH,
 ) -> Dict[str, Any]:
@@ -6629,6 +7124,12 @@ def evaluate_m2_bars(
         "categories": {},
     }
     verdict["report_pins"] = report_pins
+    # M2e（§5.2 / §6.2）: 使った bars ファイルの相対パスと sha256、および run の水準
+    # 次元を verdict へ刻む。M2e カテゴリを含まない evaluate では None のまま残る。
+    verdict["m2e_bars_sha256"] = None
+    verdict["m2e_bars_path_relative"] = None
+    verdict["m2e_bars_registration_attestation"] = None
+    verdict["level"] = None
 
     all_categories = sorted({cat for report in reports for cat in report.get("categories", {})})
     if not all_categories:
@@ -6649,6 +7150,55 @@ def evaluate_m2_bars(
             f"事前登録された {sorted(_CATEGORY_SPECS)} 以外は insufficient_repeats としてすら "
             "verdict に記録しない (fail-closed)"
         )
+
+    # M2e（設計 §5.2）: 所有する bars ファイルが分かれたので、M2e カテゴリが 1 つでも
+    # 報告されていればその**別ファイル**を評価器自身が独立にロードし、事前登録の git
+    # 立証まで課す（`m2c_external_fixtures.yaml` と同じ「使う場合のみ課す」流儀）。
+    m2e_categories_in_reports = sorted(
+        cat
+        for cat in all_categories
+        if _CATEGORY_SPECS[cat]["bars_file"] == "m2e_accuracy_bars.yaml"
+    )
+    m2e_bars: Optional[BarsArtifact] = None
+    m2e_bars_sha256: Optional[str] = None
+    m2e_bars_data: Dict[str, Any] = {}
+    m2e_registration_attestation: Optional[Dict[str, Any]] = None
+    m2e_level: Optional[str] = None
+    if m2e_categories_in_reports:
+        m2e_bars, m2e_bars_sha256 = load_bars(m2e_bars_path)
+        if bars_file_identity(m2e_bars.data) != "m2e_accuracy_bars.yaml":
+            raise ValueError(
+                f"evaluate_m2_bars: {m2e_bars_path} が m2e_accuracy_bars.yaml の "
+                "schema_version を名乗っていない (fail-closed)"
+            )
+        m2e_bars_data = m2e_bars.verify(m2e_bars_sha256)
+        m2e_started_by_index = [
+            (idx, started)
+            for idx, started in started_by_index
+            if any(
+                cat in m2e_categories_in_reports for cat in reports[idx].get("categories", {})
+            )
+        ]
+        m2e_registration_attestation = _require_attested_registration(
+            m2e_bars_path, m2e_bars.raw, m2e_started_by_index
+        )
+        # 水準は run の次元（§6.2）。repeats 間で食い違う水準を「同じ測定の反復」と
+        # 数えない——別水準の row を混ぜた平均は破断曲線の点ですらない。
+        levels = {report.get("level") for report in reports if any(
+            cat in m2e_categories_in_reports for cat in report.get("categories", {})
+        )}
+        if len(levels) != 1 or None in levels:
+            raise ValueError(
+                f"evaluate_m2_bars: M2e カテゴリを含む report の level が単一でない "
+                f"（{sorted(str(v) for v in levels)}）; 別水準の run を同じ測定の反復として "
+                "評価しない (fail-closed)"
+            )
+        m2e_level = levels.pop()
+        verdict["m2e_bars_sha256"] = m2e_bars_sha256
+        verdict["m2e_bars_path_relative"] = _repo_relative_path(m2e_bars_path)
+        verdict["m2e_bars_registration_attestation"] = m2e_registration_attestation
+        verdict["level"] = m2e_level
+
     for category in all_categories:
         rows = [report["categories"][category] for report in reports if category in report["categories"]]
         outcomes = {row["outcome"] for row in rows}
@@ -6671,6 +7221,33 @@ def evaluate_m2_bars(
             continue
 
         category_kind = _CATEGORY_SPECS[category]["kind"]
+        category_bars_file = _CATEGORY_SPECS[category]["bars_file"]
+        is_m2e = category_bars_file == "m2e_accuracy_bars.yaml"
+
+        if is_m2e:
+            # 分離した bars ファイルの pin を row 単位で束縛する（設計 §5.2）。
+            # M2 / M2c カテゴリにこの要求を課さないのは、それらのバー世代が report の
+            # top-level `bars_sha256` で既に厳密に束縛されているため（commit 済み記録は
+            # このフィールド以前の世代であり、遡って要求しても pin は強くならない）。
+            for idx, row in enumerate(rows):
+                if row.get("bars_file_sha256") != m2e_bars_sha256:
+                    raise ValueError(
+                        f"evaluate_m2_bars: category {category!r} rows[{idx}] の "
+                        f"bars_file_sha256 {row.get('bars_file_sha256')!r} が評価器の読んだ "
+                        f"{m2e_bars_sha256!r} と不一致; 別世代の帯登録で測った row に "
+                        "凍結バーを適用しない (fail-closed)"
+                    )
+                if row.get("level") != m2e_level:
+                    raise ValueError(
+                        f"evaluate_m2_bars: category {category!r} rows[{idx}] の level "
+                        f"{row.get('level')!r} が report の level {m2e_level!r} と不一致 "
+                        "(fail-closed)"
+                    )
+            cat_result["bars_file"] = category_bars_file
+            cat_result["bars_file_sha256"] = m2e_bars_sha256
+            cat_result["bars_file_relative"] = _repo_relative_path(m2e_bars_path)
+            cat_result["level"] = m2e_level
+            cat_result["ladder_index"] = _m2e_ladder_index(m2e_level)
 
         # repeats として数える前に (a) row が本当にその事前登録 fixture・経路の観測か、
         # (b) 同一 model stack で測られたか を証明する（Codex P1×2）。
@@ -6708,9 +7285,25 @@ def evaluate_m2_bars(
             external_manifest_path=external_manifest_path,
             external_fixtures_path=external_fixtures_path,
             external_fixtures_raw=external_fixtures_raw,
+            m2e_bars_raw=m2e_bars.raw if is_m2e and m2e_bars is not None else None,
+            level=m2e_level if is_m2e else None,
         )
 
-        bar = bar_block.get(category, {})
+        # 判定規律（設計 §6.2・fail-closed）: **`level != gate_level` の run に
+        # バーを適用しない。** `gate_level` 以外の水準は**破断曲線の記録専用**であり
+        # 合否を出さない（§5.4 の「単点トリップワイヤ」の実装上の意味はこれ）。
+        gate_level: Optional[str] = None
+        if is_m2e:
+            conditions_key = _BARS_FILES[category_bars_file]["conditions_key"]
+            gate_level = m2e_bars_data[conditions_key][category]["gate_level"]
+            cat_result["gate_level"] = gate_level
+            bar = (
+                m2e_bars_data[_BARS_FILES[category_bars_file]["block_key"]].get(category, {})
+                if m2e_level == gate_level
+                else {}
+            )
+        else:
+            bar = bar_block.get(category, {})
 
         if category_kind == "external":
             # M2c: 母数の独立再計算は「凍結 spec」ではなく clip 単位の自己整合性
@@ -6765,6 +7358,13 @@ def evaluate_m2_bars(
         # bars.yaml の `repeats_min` は決定論確認（「shifts=0 後は bit 一致するはず」）
         # であって「たまたま両方バー内」ではない。乖離はバーの有無と独立に記録する。
         cat_result["repeats_bit_identical"] = bit_identical
+
+        if is_m2e and m2e_level != gate_level:
+            # 破断曲線の記録専用。合否は出さない（§5.4 / §6.2）。バーは存在するが
+            # 適用しないので `diagnostic_only`（＝バーがそもそも無い帯）とも区別する。
+            cat_result["status"] = "level_record_only"
+            verdict["categories"][category] = cat_result
+            continue
 
         if not bar:
             # S_fullstack: バーなし・診断記録のみ（設計 §3/§8）。
@@ -6907,6 +7507,24 @@ def main() -> int:
         help="run report(s) にバーを適用して verdict を出す（未指定なら run phase）",
     )
     parser.add_argument("--bars", type=Path, default=BARS_PATH)
+    parser.add_argument(
+        "--m2e-bars",
+        type=Path,
+        default=M2E_BARS_PATH,
+        metavar="m2e_accuracy_bars.yaml",
+        help="M2e 帯（V_remix_real_*）の事前登録バー。M2 のバーとは意図的に別ファイル "
+        "（設計 §5.1: 追記すると commit 済み M2b/M2c verdict の pin が壊れる）。"
+        "共有スカラー（tolerance_cents / est_voiced_confidence_floor / repeats_min）は "
+        "こちらに書かず --bars 側を参照する",
+    )
+    parser.add_argument(
+        "--level",
+        default=None,
+        metavar="LEVEL",
+        help="M2e の水準（歌声/ベッドの RMS 比。設計 §3.6 のラダー: "
+        f"{' / '.join(_M2E_LEVEL_LADDER)}）。水準軸を持つカテゴリを測る run では必須。"
+        "`gate_level` 以外の水準は破断曲線の記録専用で、evaluate はバーを適用しない",
+    )
     parser.add_argument("--specs", type=Path, default=SPECS_PATH)
     parser.add_argument(
         "--categories",
@@ -6944,8 +7562,13 @@ def main() -> int:
         # 指していないか **書く前に** 確認する。上書きすると verdict の証拠そのもの
         # （repeat evidence・凍結設定）が消え、report_pins の hash も実体と食い違う
         # （Codex P2 指摘）。
+        if args.level is not None:
+            raise SystemExit(
+                "--level は run phase 専用（evaluate は report が記録した level を読む）"
+            )
         protected = {Path(p).resolve() for p in args.evaluate}
         protected.add(Path(args.bars).resolve())
+        protected.add(Path(args.m2e_bars).resolve())
         protected.add(Path(args.specs).resolve())
         protected.add(Path(args.external_fixtures).resolve())
         if args.external_manifest is not None:
@@ -6982,6 +7605,7 @@ def main() -> int:
             specs_path=args.specs,
             # 事前登録の git 立証（Codex P2 第 28 巡）は供給された bars の実パスに対して行う。
             bars_path=args.bars,
+            m2e_bars_path=args.m2e_bars,
             external_manifest_path=args.external_manifest,
             external_fixtures_path=args.external_fixtures,
         )
@@ -6993,6 +7617,7 @@ def main() -> int:
 
     run_protected = {
         Path(args.bars).resolve(),
+        Path(args.m2e_bars).resolve(),
         Path(args.specs).resolve(),
         Path(args.external_fixtures).resolve(),
     }
@@ -7020,11 +7645,22 @@ def main() -> int:
         # `run_accuracy` 自身の既定（S_direct/S_fullstack のみ）に委ねる——V_direct は
         # manifest 必須で fail-closed（`run_accuracy` の要件チェック）のため、manifest
         # が無い状態で既定に含めると省略呼び出しが即座に落ちてしまう。
-        run_kwargs["categories"] = tuple(sorted(_CATEGORY_SPECS))
+        #
+        # M2e（設計 §5.2）: 既定集合は **`m2_accuracy_bars.yaml` が所有するカテゴリ**に
+        # 限る。M2e カテゴリ（別ファイル所有・水準軸あり・別 manifest）を暗黙の既定へ
+        # 混ぜると、既存の M2c 流儀の呼び出し（`--external-manifest` のみ）が `--level`
+        # 未指定で即座に落ちる。M2e は `--categories` で明示的に選ぶ。
+        run_kwargs["categories"] = _categories_owned_by("m2_accuracy_bars.yaml")
     if args.external_manifest is not None:
         run_kwargs["external_manifest_path"] = args.external_manifest
     run_kwargs["external_fixtures_path"] = args.external_fixtures
-    result = run_accuracy(specs_path=args.specs, bars_path=args.bars, **run_kwargs)
+    result = run_accuracy(
+        specs_path=args.specs,
+        bars_path=args.bars,
+        m2e_bars_path=args.m2e_bars,
+        level=args.level,
+        **run_kwargs,
+    )
     _atomic_write_text(args.out, json.dumps(result, indent=2, sort_keys=True))
     print(f"wrote run report to {args.out}")
     for category, row in result["categories"].items():

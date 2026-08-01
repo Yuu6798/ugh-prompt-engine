@@ -8227,3 +8227,538 @@ def test_cli_run_default_categories_omits_v_direct_without_manifest(
     assert exit_code == 0
     report = json.loads(out_path.read_text(encoding="utf-8"))
     assert set(report["categories"]) == {"S_direct", "S_fullstack"}
+
+
+# ---------------------------------------------------------------------------
+# M2e: V-remix 実ベッド帯の配線（`docs/DESIGN_M2e_vremix_real_bed.md`）
+#   §5.2 カテゴリ所有権 / §5.3 条件 block / §6.1 category specs / §6.2 水準規律 /
+#   §6.3 routing 追加
+# ---------------------------------------------------------------------------
+
+M2E_BARS_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2e_accuracy_bars.yaml"
+
+# 追加**前**の 4 キーの route 列（設計 §6.3 の必須テスト: 完全一致であること）。
+_ROUTES_BEFORE_M2E: Dict[str, List[Tuple[str, str, str, str, bool]]] = {
+    "vocal_track": [
+        ("pyin_direct", "none", "pyin", "", True),
+        ("demucs_vocals_then_pyin", "demucs_vocals", "pyin", "", True),
+        ("demucs_vocals_then_crepe", "demucs_vocals", "crepe", "", True),
+        ("demucs_vocals_then_melodia", "demucs_vocals", "melodia", "", True),
+    ],
+    "clear_lead": [
+        ("pyin_direct", "none", "pyin", "", True),
+        ("melodia_direct", "none", "melodia", "", True),
+        ("crepe_direct", "none", "crepe", "", True),
+    ],
+    "full_mix": [
+        ("demucs_vocals_then_crepe", "demucs_vocals", "crepe", "", True),
+        ("melodia_direct", "none", "melodia", "", True),
+        ("basic_pitch_direct", "none", "basic_pitch", "melodia", True),
+    ],
+    "chord_pad_no_melody": [
+        ("not_applicable", "none", "none", "", False),
+        ("pyin_negative_control", "none", "pyin", "", True),
+    ],
+}
+
+
+def _route_tuple(route: Any) -> Tuple[str, str, str, str, bool]:
+    return (route.name, route.preprocessing, route.extractor, route.assist, route.applies)
+
+
+def test_m2e_routing_leaves_the_existing_input_kinds_untouched() -> None:
+    """既存 4 キーの route 列が追加前と**完全一致**すること（設計 §6.3 の必須テスト）。
+
+    `_ROUTES` の既存キーへの route 追加は禁止（`full_mix` に `crepe_direct` を足す案は
+    M1 / M4 の選択挙動を変えうるので却下）。加算的な新キーのみ許す。
+    """
+    from svp_rpe.melody import routing
+
+    for input_kind, expected in _ROUTES_BEFORE_M2E.items():
+        actual = [_route_tuple(r) for r in routing.select_routes(input_kind)]
+        assert actual == expected, input_kind
+
+
+def test_m2e_full_mix_direct_probe_is_a_single_crepe_direct_route() -> None:
+    """「フルミックスを、分離を通さず直接抽出器に当てる」= direct アームの測定対象そのもの。"""
+    from svp_rpe.melody import routing
+
+    assert "full_mix_direct_probe" in routing.INPUT_KINDS
+    routes = routing.select_routes("full_mix_direct_probe")
+    assert [_route_tuple(r) for r in routes] == [("crepe_direct", "none", "crepe", "", True)]
+
+
+def test_m2e_full_mix_direct_probe_is_referenced_only_by_the_direct_arm() -> None:
+    """新キーを参照するのは `_CATEGORY_SPECS` の `V_remix_real_direct` 行のみ（§6.3）。"""
+    referencing = sorted(
+        category
+        for category, spec in harness._CATEGORY_SPECS.items()
+        if spec["input_kind"] == "full_mix_direct_probe"
+    )
+    assert referencing == ["V_remix_real_direct"]
+
+
+def test_m2e_categories_are_registered_as_external_without_fixture_ids() -> None:
+    """§6.1: `kind: "external"` なので fixture_id / composite_id は持たない。"""
+    for category, expected_route in (
+        ("V_remix_real_direct", "crepe_direct"),
+        ("V_remix_real_stem", "demucs_vocals_then_crepe"),
+    ):
+        spec = harness._CATEGORY_SPECS[category]
+        assert spec["kind"] == "external"
+        assert spec["route_name"] == expected_route
+        assert "fixture_id" not in spec and "composite_id" not in spec
+        assert spec["bars_file"] == "m2e_accuracy_bars.yaml"
+    # 命名規律（§5.5）: 帯名に `real` を含める。
+    assert all("real" in c for c in harness._categories_owned_by("m2e_accuracy_bars.yaml"))
+
+
+def test_m2e_stem_arm_is_not_diagnostic_only() -> None:
+    """ベッドが実プロ音源になった以上 `{}`（バーなし）の根拠は成立しない（§5.4）。
+
+    これは**締める方向**の変更であり、一方向規律に反しない（規律が禁じるのは緩和のみ）。
+    """
+    assert harness._DIAGNOSTIC_ONLY_CATEGORIES == frozenset({"S_fullstack"})
+
+
+def test_every_category_declares_a_bars_file_owner() -> None:
+    """§5.2: 所有ファイルが未指定のカテゴリがあれば拒否（分離が開ける唯一の穴）。"""
+    for category, spec in harness._CATEGORY_SPECS.items():
+        assert spec.get("bars_file") in harness._BARS_FILES, category
+    owned = {
+        name: set(harness._categories_owned_by(name)) for name in harness._BARS_FILES
+    }
+    assert owned["m2_accuracy_bars.yaml"] == {"S_direct", "S_fullstack", "V_direct"}
+    assert owned["m2e_accuracy_bars.yaml"] == {"V_remix_real_direct", "V_remix_real_stem"}
+    # 同名カテゴリが 2 ファイルに現れない（写像なので構成上そうなる、を明示的に固定）。
+    assert not (owned["m2_accuracy_bars.yaml"] & owned["m2e_accuracy_bars.yaml"])
+
+
+@pytest.mark.parametrize(
+    ("bars_file", "expect"),
+    [(None, "bars_file を宣言していない"), ("nope.yaml", "未登録")],
+)
+def test_category_bars_ownership_is_fail_closed(
+    monkeypatch: pytest.MonkeyPatch, bars_file, expect
+) -> None:
+    specs = copy.deepcopy(harness._CATEGORY_SPECS)
+    if bars_file is None:
+        specs["S_direct"].pop("bars_file")
+    else:
+        specs["S_direct"]["bars_file"] = bars_file
+    monkeypatch.setattr(harness, "_CATEGORY_SPECS", specs)
+    with pytest.raises(RuntimeError, match=expect):
+        harness._require_category_bars_ownership()
+
+
+def test_committed_m2_bars_still_load_after_m2e_categories_were_registered() -> None:
+    """回帰: `_CATEGORY_SPECS` に M2e を足しても `m2_accuracy_bars.yaml` の検証は誤爆しない。
+
+    検証は**所有カテゴリのみ**を対象にするので、M2e のバーがこのファイルに無いことを
+    「欠落」と見なさない（見なせば M2b / M2c の commit 済み記録が理由なく赤くなる）。
+    """
+    bars, _sha256 = harness.load_bars(BARS_PATH)
+    block = bars["m2_accuracy_bars"]
+    assert "V_remix_real_direct" not in block
+    assert harness.bars_file_identity(bars.data) == "m2_accuracy_bars.yaml"
+
+
+# --- M2e bars ファイルの合成（有効な最小形と、その 1 箇所だけを壊した変種）--------
+
+_M2E_BARS_TEMPLATE = {
+    "schema_version": "m2e-accuracy-bars/0.1",
+    "registered_utc": "2026-08-01",
+    "m2e_accuracy_bars": {
+        "V_remix_real_direct": {"min_rpa": 0.65, "max_octave_gap": 0.10},
+        "V_remix_real_stem": {"min_rpa": 0.65, "max_octave_gap": 0.10},
+        "one_way_rule": (
+            "m2_accuracy_bars.yaml と同じ一方向規律（registered_utc つき・実測前凍結・"
+            "実測後に緩めない）をこのファイルにも適用する。"
+        ),
+    },
+    "m2e_measurement_conditions": {
+        "level_margin_db": 20.0,
+        "V_remix_real_direct": {
+            "gate_level": "+12dB",
+            "levels": ["+12dB", "+6dB", "0dB", "-6dB"],
+        },
+        "V_remix_real_stem": {
+            "gate_level": "+12dB",
+            "levels": ["+12dB", "+6dB", "0dB", "-6dB"],
+        },
+    },
+    "provenance": {
+        "derived_from": {
+            "file": "m2_accuracy_bars.yaml",
+            "sha256": "0" * 64,
+            "category": "V_fullstack",
+        }
+    },
+}
+
+
+def _write_m2e_bars(tmp_path: Path, mutate=None, name: str = "m2e_accuracy_bars.yaml") -> Path:
+    import yaml as _yaml
+
+    doc = copy.deepcopy(_M2E_BARS_TEMPLATE)
+    if mutate is not None:
+        mutate(doc)
+    path = tmp_path / name
+    path.write_text(_yaml.safe_dump(doc, sort_keys=True), encoding="utf-8")
+    return path
+
+
+def test_m2e_bars_load_and_expose_the_frozen_conditions(tmp_path: Path) -> None:
+    bars, sha256 = harness.load_bars(_write_m2e_bars(tmp_path))
+    assert harness.bars_file_identity(bars.data) == "m2e_accuracy_bars.yaml"
+    assert len(sha256) == 64
+    conditions = bars["m2e_measurement_conditions"]
+    assert conditions["level_margin_db"] == 20.0
+    assert conditions["V_remix_real_direct"]["gate_level"] == "+12dB"
+    # 両アームとも `("min_rpa", "max_octave_gap")`。VFA はバー外（§5.3）。
+    for category in ("V_remix_real_direct", "V_remix_real_stem"):
+        assert set(bars["m2e_accuracy_bars"][category]) == {"min_rpa", "max_octave_gap"}
+        assert "max_vfa" not in bars["m2e_accuracy_bars"][category]
+
+
+def _drop_conditions(doc):
+    doc.pop("m2e_measurement_conditions")
+
+
+def _drop_one_category_conditions(doc):
+    doc["m2e_measurement_conditions"].pop("V_remix_real_stem")
+
+
+def _gate_level_outside_levels(doc):
+    doc["m2e_measurement_conditions"]["V_remix_real_direct"]["gate_level"] = "+24dB"
+
+
+def _reorder_levels(doc):
+    doc["m2e_measurement_conditions"]["V_remix_real_direct"]["levels"] = [
+        "+12dB",
+        "+6dB",
+        "-6dB",
+        "0dB",
+    ]
+
+
+def _extend_ladder_upward(doc):
+    doc["m2e_measurement_conditions"]["V_remix_real_direct"]["levels"] = [
+        "+18dB",
+        "+12dB",
+        "+6dB",
+        "0dB",
+        "-6dB",
+    ]
+
+
+def _loosen_margin(doc):
+    doc["m2e_measurement_conditions"]["level_margin_db"] = 10.0
+
+
+def _redeclare_shared_scalar(doc):
+    doc["m2e_accuracy_bars"]["tolerance_cents"] = 80
+
+
+def _gate_level_inside_bar_block(doc):
+    doc["m2e_accuracy_bars"]["V_remix_real_direct"]["gate_level"] = "+12dB"
+
+
+def _drop_one_way_rule(doc):
+    doc["m2e_accuracy_bars"].pop("one_way_rule")
+
+
+def _drop_derived_from(doc):
+    doc["provenance"].pop("derived_from")
+
+
+def _own_a_foreign_category(doc):
+    doc["m2e_accuracy_bars"]["V_direct"] = {"min_rpa": 0.10, "max_octave_gap": 0.90}
+
+
+def _drop_a_required_bar_key(doc):
+    doc["m2e_accuracy_bars"]["V_remix_real_stem"].pop("max_octave_gap")
+
+
+def _empty_a_bar(doc):
+    doc["m2e_accuracy_bars"]["V_remix_real_stem"] = {}
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expect"),
+    [
+        (_drop_conditions, "条件 block"),
+        (_drop_one_category_conditions, "条件 block を欠く"),
+        (_gate_level_outside_levels, "gate_level"),
+        (_reorder_levels, "凍結ラダー"),
+        (_extend_ladder_upward, "凍結ラダー"),
+        (_loosen_margin, "20 dB 不変量"),
+        (_redeclare_shared_scalar, "共有スカラー"),
+        (_gate_level_inside_bar_block, "未知の閾値キー"),
+        (_drop_one_way_rule, "one_way_rule"),
+        (_drop_derived_from, "derived_from"),
+        (_own_a_foreign_category, "所有者"),
+        (_drop_a_required_bar_key, "必須閾値"),
+        (_empty_a_bar, "空/欠落"),
+    ],
+)
+def test_m2e_bars_are_fail_closed(tmp_path: Path, mutate, expect) -> None:
+    """条件 block と所有権の検査は 1 箇所壊すだけで落ちる（緩められる余地を残さない）。"""
+    with pytest.raises(ValueError, match=expect):
+        harness.load_bars(_write_m2e_bars(tmp_path, mutate))
+
+
+def test_m2e_bars_cannot_claim_the_m2_schema(tmp_path: Path) -> None:
+    """§5.1-2: M2e のバーに `m2-accuracy-bars/0.1` を名乗らせない。"""
+
+    def _claim_m2_schema(doc):
+        doc["schema_version"] = "m2-accuracy-bars/0.1"
+
+    with pytest.raises(ValueError, match="m2_accuracy_bars"):
+        harness.load_bars(_write_m2e_bars(tmp_path, _claim_m2_schema))
+
+
+def test_unknown_bars_schema_is_rejected(tmp_path: Path) -> None:
+    def _unknown(doc):
+        doc["schema_version"] = "m2z-accuracy-bars/9.9"
+
+    with pytest.raises(ValueError, match="unsupported"):
+        harness.load_bars(_write_m2e_bars(tmp_path, _unknown))
+
+
+# --- 水準軸（§6.2）--------------------------------------------------------
+
+
+def test_level_ladder_and_tags_are_frozen_in_declaration_order() -> None:
+    """§3.3.1: `level` は文字列辞書順で並べない（物理量と無関係な順序になる）。"""
+    assert harness._M2E_LEVEL_LADDER == ("+12dB", "+6dB", "0dB", "-6dB")
+    assert [harness._m2e_ladder_index(x) for x in harness._M2E_LEVEL_LADDER] == [0, 1, 2, 3]
+    assert sorted(harness._M2E_LEVEL_LADDER) == ["+12dB", "+6dB", "-6dB", "0dB"]
+    assert harness._M2E_LEVEL_TAGS == {
+        "+12dB": "p12",
+        "+6dB": "p06",
+        "0dB": "p00",
+        "-6dB": "m06",
+    }
+
+
+def _write_m2e_external_fixture_set(
+    tmp_path: Path, clip_specs: "Dict[str, Tuple[List[float], List[float]]]"
+) -> Tuple[Path, Path]:
+    """M2e 用の manifest + `m2e-external-fixtures/0.1` の pin ファイルを書く。"""
+    external_dir = tmp_path / "external_m2e"
+    external_dir.mkdir(exist_ok=True)
+    manifest_entries: List[Dict[str, str]] = []
+    fixture_lines = [
+        'schema_version: "m2e-external-fixtures/0.1"',
+        'registered_utc: "2026-08-01"',
+        "fixtures:",
+    ]
+    for clip_id, (times, freqs) in clip_specs.items():
+        audio_path = external_dir / f"{clip_id}.wav"
+        audio_path.write_bytes(_EXTERNAL_WAVEFORM)
+        annotation_bytes = _external_annotation_csv(times, freqs)
+        (external_dir / f"{clip_id}.csv").write_bytes(annotation_bytes)
+        manifest_entries.append(
+            {
+                "id": clip_id,
+                "audio_path": f"external_m2e/{clip_id}.wav",
+                "annotation_path": f"external_m2e/{clip_id}.csv",
+            }
+        )
+        fixture_lines.append(f"  {clip_id}:")
+        fixture_lines.append(f'    expected_audio_sha256: "{_EXTERNAL_AUDIO_SHA256}"')
+        fixture_lines.append(
+            f'    expected_annotation_sha256: "{hashlib.sha256(annotation_bytes).hexdigest()}"'
+        )
+    manifest_path = tmp_path / "m2e_manifest.json"
+    manifest_path.write_text(json.dumps(manifest_entries), encoding="utf-8")
+    fixtures_path = tmp_path / "m2e_external_fixtures.yaml"
+    fixtures_path.write_text("\n".join(fixture_lines) + "\n", encoding="utf-8")
+    return manifest_path, fixtures_path
+
+
+_VREMIX_CLIPS = {
+    "vremix_vocadito_1_BedOne_p12": (_CLIP001_TIMES, _CLIP001_FREQS),
+    "vremix_vocadito_2_BedOne_p12": (_CLIP002_TIMES, _CLIP002_FREQS),
+}
+
+
+def _m2e_fake_runner(shift_cents: float = 0.0):
+    return _make_fake_external_runner(
+        {k: (tuple(v[0]), tuple(v[1])) for k, v in _VREMIX_CLIPS.items()},
+        shift_cents=shift_cents,
+    )
+
+
+def _m2e_run(tmp_path: Path, *, level: str, shift_cents: float = 0.0, **kwargs) -> Dict[str, Any]:
+    manifest_path, fixtures_path = _write_m2e_external_fixture_set(tmp_path, _VREMIX_CLIPS)
+    return _fake_run(
+        categories=("V_remix_real_direct",),
+        route_runner=_m2e_fake_runner(shift_cents),
+        external_manifest_path=manifest_path,
+        external_fixtures_path=fixtures_path,
+        m2e_bars_path=_write_m2e_bars(tmp_path),
+        level=level,
+        **kwargs,
+    )
+
+
+def test_run_accuracy_requires_a_level_for_level_bearing_categories(tmp_path: Path) -> None:
+    manifest_path, fixtures_path = _write_m2e_external_fixture_set(tmp_path, _VREMIX_CLIPS)
+    with pytest.raises(ValueError, match="水準軸を持つため level"):
+        harness.run_accuracy(
+            categories=("V_remix_real_direct",),
+            route_runner=_m2e_fake_runner(),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+            m2e_bars_path=_write_m2e_bars(tmp_path),
+        )
+
+
+def test_run_accuracy_rejects_an_unregistered_level(tmp_path: Path) -> None:
+    manifest_path, fixtures_path = _write_m2e_external_fixture_set(tmp_path, _VREMIX_CLIPS)
+    with pytest.raises(ValueError, match="事前登録"):
+        harness.run_accuracy(
+            categories=("V_remix_real_direct",),
+            route_runner=_m2e_fake_runner(),
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+            m2e_bars_path=_write_m2e_bars(tmp_path),
+            level="+24dB",
+        )
+
+
+def test_run_accuracy_rejects_a_level_on_a_run_without_a_level_axis() -> None:
+    """測っていない次元を report に名乗らせない。"""
+    with pytest.raises(ValueError, match="水準軸を持つカテゴリを 1 つも"):
+        harness.run_accuracy(
+            categories=("S_direct",),
+            route_runner=_make_fake_runner(shift_cents=0.0),
+            level="+12dB",
+        )
+
+
+def test_m2e_run_records_the_level_and_the_owning_bars_pin(tmp_path: Path) -> None:
+    report = _m2e_run(tmp_path, level="0dB")
+    row = report["categories"]["V_remix_real_direct"]
+    assert report["level"] == "0dB"
+    assert row["outcome"] == "measured"
+    assert row["level"] == "0dB"
+    assert row["ladder_index"] == 2
+    assert row["input_kind"] == "full_mix_direct_probe"
+    assert row["route"] == "crepe_direct"
+    assert row["bars_file"] == "m2e_accuracy_bars.yaml"
+    assert len(row["bars_file_sha256"]) == 64
+    # top-level の bars pin は共有スカラーの供給元（M2 側）のまま。
+    _bars, m2_sha256 = harness.load_bars(BARS_PATH)
+    assert report["bars_sha256"] == m2_sha256
+    assert row["bars_file_sha256"] != m2_sha256
+
+
+def test_m2_rows_keep_their_bars_pin_pointing_at_the_m2_file() -> None:
+    report = _fake_run(route_runner=_make_fake_runner(shift_cents=0.0))
+    _bars, m2_sha256 = harness.load_bars(BARS_PATH)
+    for category in ("S_direct", "S_fullstack"):
+        row = report["categories"][category]
+        assert row["bars_file"] == "m2_accuracy_bars.yaml"
+        assert row["bars_file_sha256"] == m2_sha256
+        assert "level" not in row       # 水準軸を持たないカテゴリには刻まない
+
+
+def _m2e_evaluate(tmp_path: Path, reports: List[Dict[str, Any]]) -> Dict[str, Any]:
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    return harness.evaluate_m2_bars(
+        [_as_report_artifact(r) for r in reports],
+        bars,
+        bars_sha256=bars_sha256,
+        m2e_bars_path=_write_m2e_bars(tmp_path),
+        external_manifest_path=tmp_path / "m2e_manifest.json",
+        external_fixtures_path=tmp_path / "m2e_external_fixtures.yaml",
+    )
+
+
+def test_m2e_gate_level_applies_the_bar(tmp_path: Path) -> None:
+    """`gate_level`（+12dB）では V_direct との整合トリップワイヤとしてバーが当たる。"""
+    reports = [_m2e_run(tmp_path, level="+12dB") for _ in range(2)]
+    verdict = _m2e_evaluate(tmp_path, reports)
+    result = verdict["categories"]["V_remix_real_direct"]
+    assert result["status"] == "pass"
+    assert result["level"] == "+12dB"
+    assert result["gate_level"] == "+12dB"
+    assert result["ladder_index"] == 0
+    assert verdict["level"] == "+12dB"
+    assert verdict["m2e_bars_sha256"] == result["bars_file_sha256"]
+
+
+def test_m2e_gate_level_can_fail_the_bar(tmp_path: Path) -> None:
+    reports = [_m2e_run(tmp_path, level="+12dB", shift_cents=500.0) for _ in range(2)]
+    verdict = _m2e_evaluate(tmp_path, reports)
+    result = verdict["categories"]["V_remix_real_direct"]
+    assert result["status"] == "fail"
+    assert any("min_rpa" in f for f in result["failures"])
+
+
+@pytest.mark.parametrize("level", ["+6dB", "0dB", "-6dB"])
+def test_m2e_non_gate_levels_are_record_only(tmp_path: Path, level: str) -> None:
+    """§6.2 fail-closed: `level != gate_level` の run にバーを適用しない。
+
+    500 cent ずらして RPA を大きく割った row でも **fail にならない**（そもそも判定を
+    出さない）ことで、「バーが当たっていない」ことを積極的に固定する。
+    """
+    reports = [_m2e_run(tmp_path, level=level, shift_cents=500.0) for _ in range(2)]
+    verdict = _m2e_evaluate(tmp_path, reports)
+    result = verdict["categories"]["V_remix_real_direct"]
+    assert result["status"] == "level_record_only"
+    assert result["level"] == level
+    assert result["gate_level"] == "+12dB"
+    assert "failures" not in result
+    # 破断曲線の記録専用なので、計測値そのものは残る。
+    assert result["metrics"]
+    assert result["status"] != "diagnostic_only"   # バーが無い帯とは区別する
+
+
+def test_m2e_evaluate_rejects_mixed_levels(tmp_path: Path) -> None:
+    """別水準の run を「同じ測定の反復」として評価しない。"""
+    reports = [_m2e_run(tmp_path, level="+12dB"), _m2e_run(tmp_path, level="0dB")]
+    with pytest.raises(ValueError, match="level が単一でない"):
+        _m2e_evaluate(tmp_path, reports)
+
+
+def test_m2e_evaluate_rejects_a_foreign_bars_generation(tmp_path: Path) -> None:
+    """row が名乗る帯登録が評価器の読んだものと違えば拒否する。"""
+    reports = [_m2e_run(tmp_path, level="+12dB") for _ in range(2)]
+    reports[0]["categories"]["V_remix_real_direct"]["bars_file_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="bars_file_sha256"):
+        _m2e_evaluate(tmp_path, reports)
+
+
+def test_cli_run_default_categories_excludes_m2e(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """既定集合は `m2_accuracy_bars.yaml` の所有カテゴリに限る（§5.2）。
+
+    M2e を暗黙の既定へ混ぜると、既存の M2c 流儀の呼び出しが `--level` 未指定で
+    即座に落ちる。M2e は `--categories` で明示的に選ぶ。
+    """
+    assert harness._categories_owned_by("m2_accuracy_bars.yaml") == (
+        "S_direct",
+        "S_fullstack",
+        "V_direct",
+    )
+    out_path = tmp_path / "report.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--out",
+            str(out_path),
+            "--evaluate",
+            str(out_path),
+            "--level",
+            "+12dB",
+        ],
+    )
+    with pytest.raises(SystemExit, match="--level は run phase 専用"):
+        harness.main()

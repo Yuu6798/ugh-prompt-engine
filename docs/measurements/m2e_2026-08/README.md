@@ -92,8 +92,8 @@ runbook: [`docs/m2e_provisioning_runbook.md`](../../m2e_provisioning_runbook.md)
 
 | 段階 | 成果物 | 状態 |
 |---|---|---|
-| r0 | 設計正本 + 索引 2 行 + 本記録 + runbook | **本 PR で完了** |
-| r1 | ハーネス配線・条件 block 検証・`make_vremix_fixtures.py` + テスト | 本ブランチの後続コミット |
+| r0 | 設計正本 + 索引 2 行 + 本記録 + runbook | **完了** |
+| r1 | ハーネス配線・条件 block 検証・`make_vremix_fixtures.py` + テスト | **完了**（下記 §3.1） |
 | r2 | 全 50 曲スクリーニング（棄却事由の事前登録 → 生成 → 1 行判定まで r2 の内側で閉じる） | **未実施**（素材未取得） |
 | r3 | `m2e_bed_fixtures.yaml` / `m2e_accuracy_bars.yaml` 登録 | 未実施 |
 | r4 | r2-0（`P` 決定・並列不変性ゲート・単位コスト校正・`env_digest`・lockfile） | 未実施 |
@@ -103,6 +103,43 @@ runbook: [`docs/m2e_provisioning_runbook.md`](../../m2e_provisioning_runbook.md)
 
 r2 以降が未実施である理由は素材・重みの未取得であり、設計上の障害ではない
 （runbook §2〜§4 の手順で解消する）。
+
+### 3.1 r1（P-b）で入った配線 — 何が code change 済みか
+
+**r6（P-d）に code change を 1 行でも入れたらその実測は無効**（§10）。よって
+実測に必要なコードは r1 で閉じる必要がある。入れたものを列挙する。
+
+| 設計 | 実装 |
+|---|---|
+| §6.3 routing 追加 | `src/svp_rpe/melody/routing.py`: `INPUT_KINDS` + `_ROUTES` に **`full_mix_direct_probe` を加算**（既存 4 キーの route 列は 1 本も変更していない。テストが完全一致を固定） |
+| §6.1 `_CATEGORY_SPECS` | `V_remix_real_direct`（`full_mix_direct_probe` × `crepe_direct`）と `V_remix_real_stem`（`full_mix` × `demucs_vocals_then_crepe`）を `kind: "external"` で登録 |
+| §5.2 カテゴリ所有権 | `_CATEGORY_SPECS` の各行が `bars_file` を持ち、バー検証は**所有カテゴリのみ**を対象にする。所有者未指定・未登録ファイル名は import 時に fail-closed。ファイル同一性は**パス名でなく `schema_version`** から決める（測り直し子は bytes を tmp へ凍結複製して別名で渡すため） |
+| §5.3 条件 block | `m2e_measurement_conditions` を**バー block の兄弟**として検証（`gate_level ∈ levels` / `levels` はラダーと順序込み完全一致 / `level_margin_db == 20.0` / 所有しないカテゴリの条件を拒否 / バーを持つカテゴリの条件欠落を拒否）。`gate_level` をバー block に入れると既存の `_BAR_THRESHOLD_RANGES` が未知キーとして拒否する（附録A-4 の是正がそのまま効く） |
+| §5.1-4 共有スカラー | M2e 側で `tolerance_cents` / `est_voiced_confidence_floor` / `repeats_min` を**再宣言できない**（宣言したら拒否）。M2 側の値を参照する |
+| §5.1-1/-3 | M2e バーに `one_way_rule`（明示的継承）と `provenance.derived_from`（転用元ファイル・sha256・カテゴリ）を要求 |
+| §6.2 水準規律 | `--level` を run の次元として導入。row と cat_result に `level` / `ladder_index` を記録。**`level != gate_level` の run にバーを適用しない**（`status: "level_record_only"`。バーが無い帯 `diagnostic_only` とは区別する）。repeats 間で水準が食い違えば拒否 |
+| §5.2 provenance | row / cat_result / verdict に、使った bars ファイルの**相対パスと sha256 の両方**を記録し、評価器が読んだ値との一致を fail-closed で要求 |
+| §4 生成仕様 | `scripts/make_vremix_fixtures.py`（`build` / `screen` / `stem-sha256` / `n-max`）。seed 不使用・自由変数ゼロ |
+| §9.2 canonical decode | 同スクリプトの `canonical_decode()` / `stem_sha256()`。CI 保証は commit した 64 サンプルの int16 wav に対する既知 sha256 照合 |
+| §10 の段階契約 | 外部素材 pin ファイルの受理 schema 集合に `m2e-external-fixtures/0.1` を**r1 の時点で**追加。r3（P-c）・r6（P-d）が「code change なし」でいられるようにするため。未知 schema は従来どおり拒否 |
+
+**§4.7（分離器へのチャンネル受け渡し）の流用元の明示**: 新規約は発明していない。
+
+- ハーネスの stem アームは既存 `demucs_vocals_then_crepe` 経路をそのまま通る
+  （`src/svp_rpe/melody/extractors.py` の `_prepare_waveform`: `requires_separation` の
+  分岐が `isolate_vocals_with_provenance` へ委譲し、stem/weights の digest を刻む）。
+- `make_vremix_fixtures.py screen` も同じ入口
+  （`svp_rpe.rpe.learned.source_separation_adapter.isolate_vocals`）を使う。返り値が
+  2 次元のときのみモノ化する。
+
+**r1 で意図的にやっていないこと**:
+
+- `m2e_accuracy_bars.yaml` / `m2e_bed_fixtures.yaml` は**作らない**（r3 の仕事。
+  帯の登録はベッド確定の後でなければ `levels` の意味が確定しない）。ハーネスは
+  ファイルが存在しなくても M2 側の検証に影響しない（所有カテゴリのみを見るため）。
+- `V_fullstack` の配線（`_CATEGORY_SPECS` への追加）は**しない**——別件・別 PR
+  （§5.2 末尾）。「事前登録済み・未配線」の帯が存在してよいという先例は維持する。
+- `_DIAGNOSTIC_ONLY_CATEGORIES` は `{"S_fullstack"}` のまま変更しない。
 
 ---
 

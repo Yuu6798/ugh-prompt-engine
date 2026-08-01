@@ -1,0 +1,445 @@
+"""M2e ミックス生成器の単体テスト（**音源不要**）。
+
+設計: `docs/DESIGN_M2e_vremix_real_bed.md` §4.8（CI は音源不要の単体テストのみ）と
+§9.2（canonical decode の CI 保証）。
+
+実素材（vocadito / MUSDB18-HQ）はリポジトリに無いので、ここで守るのは**規約**である
+——決定論・`n_target` 展開・クロスフェード境界・`factor` 算出・rate 不一致で例外・
+`vocals.wav` を読まないこと・native 整数のまま hash すること。
+"""
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+
+import numpy as np
+import pytest
+import soundfile as sf
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+FIXTURE_INT16_WAV = ROOT / "tests" / "fixtures" / "melody_bench" / "m2e_canonical_decode_int16.wav"
+
+# ライブラリ更新で復号が変わったらここが赤くなる（設計 §9.2 の CI 要求）。
+EXPECTED_CANONICAL_STEM_SHA256 = (
+    "8ae60c0031e5bcd43ebcc7674b1958486da2c9f323c2815b2988a34970009886"
+)
+
+
+def _load_module():
+    spec = importlib.util.spec_from_file_location(
+        "make_vremix_fixtures", ROOT / "scripts" / "make_vremix_fixtures.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+mk = _load_module()
+
+
+# ---------------------------------------------------------------------------
+# §9.2 canonical decode
+# ---------------------------------------------------------------------------
+
+
+def test_canonical_decode_hashes_native_integer_pcm() -> None:
+    """整数 PCM を float へ落とさずに hash する（除数の曖昧さを pin の外に置く）。"""
+    data, sample_rate, subtype = mk.canonical_decode(FIXTURE_INT16_WAV)
+    assert subtype == "PCM_16"
+    assert sample_rate == 44100
+    assert data.dtype == np.int16
+    assert data.ndim == 2 and data.shape[1] == 1   # (n_frames, n_channels)・downmix しない
+    assert data.flags["C_CONTIGUOUS"]
+    assert mk.stem_sha256(FIXTURE_INT16_WAV) == EXPECTED_CANONICAL_STEM_SHA256
+
+
+def test_canonical_decode_rejects_non_44100(tmp_path: Path) -> None:
+    """resample 禁止: native rate が 44100 でなければ停止する。"""
+    path = tmp_path / "wrong_rate.wav"
+    sf.write(str(path), np.zeros(128, dtype=np.int16), 22050, subtype="PCM_16")
+    with pytest.raises(mk.GenerationError, match="resample"):
+        mk.canonical_decode(path)
+
+
+def test_canonical_decode_rejects_float_sources(tmp_path: Path) -> None:
+    """float ソースは canonical decode の対象外（pin に除数の曖昧さを入れない）。"""
+    path = tmp_path / "float.wav"
+    sf.write(str(path), np.zeros(128, dtype=np.float32), 44100, subtype="FLOAT")
+    with pytest.raises(mk.GenerationError, match="canonical decode の対象外"):
+        mk.canonical_decode(path)
+
+
+def test_generated_mix_is_pinned_as_float32(tmp_path: Path) -> None:
+    """生成物は float32 で pin する（§4.6 の既存規約と同一）。
+
+    ソース stem は native 整数で pin、生成ミックスは float32 で pin —— 対象が違うので
+    どちらも変更しない、という §9.2 の分離をテストで固定する。
+    """
+    y = np.array([0.5, -0.25, 0.125], dtype=np.float64)
+    expected = hashlib.sha256(y.astype(np.float32).tobytes()).hexdigest()
+    assert mk.waveform_sha256(y) == expected
+
+
+# ---------------------------------------------------------------------------
+# §4.2 タイル連結（`n_target` 展開・クロスフェード境界）
+# ---------------------------------------------------------------------------
+
+
+def test_tile_to_length_expands_to_exactly_n_target() -> None:
+    sample_rate = 44100
+    source = np.linspace(-1.0, 1.0, 5000, dtype=np.float64)
+    for n_target in (1, 4999, 5000, 5001, 20000):
+        out = mk.tile_to_length(source, n_target, sample_rate)
+        assert len(out) == n_target
+
+
+def test_tile_to_length_is_identity_prefix_when_source_is_long_enough() -> None:
+    """区間は常に曲頭 0.0s 起点（「良い区間を探す」余地を残さない）。"""
+    sample_rate = 44100
+    source = np.linspace(-1.0, 1.0, 5000, dtype=np.float64)
+    out = mk.tile_to_length(source, 3000, sample_rate)
+    assert np.array_equal(out, source[:3000])
+
+
+def test_tile_to_length_rejects_source_shorter_than_crossfade() -> None:
+    """`len(s) <= xf` は停止（設計 §4.2 の擬似コード通り）。"""
+    sample_rate = 44100
+    xf = int(round(mk.XFADE_SEC * sample_rate))
+    with pytest.raises(mk.GenerationError, match="短すぎる"):
+        mk.tile_to_length(np.ones(xf, dtype=np.float64), 10 * xf, sample_rate)
+
+
+def test_tile_to_length_handles_the_crossfade_boundary_case() -> None:
+    """`len(s) == xf + 1` の端でも展開できる（境界のオフバイワン）。"""
+    sample_rate = 44100
+    xf = int(round(mk.XFADE_SEC * sample_rate))
+    source = np.ones(xf + 1, dtype=np.float64)
+    out = mk.tile_to_length(source, 4 * xf, sample_rate)
+    assert len(out) == 4 * xf
+    assert np.all(np.isfinite(out))
+
+
+def test_tile_to_length_crossfade_weights_exclude_the_right_edge() -> None:
+    """`w = arange(xf)/xf` は右端 1.0 を含まない（設計 §4.2 の明示的な規約）。"""
+    sample_rate = 100      # xf = 1 になるレートは使わない。ここでは xf = 1 を避ける
+    xf = int(round(mk.XFADE_SEC * sample_rate))
+    assert xf == 1
+    # xf=1 の縮退でも規約どおり動くこと（w = [0.0]）。
+    source = np.array([1.0, 2.0], dtype=np.float64)
+    out = mk.tile_to_length(source, 4, sample_rate)
+    assert len(out) == 4
+
+
+# ---------------------------------------------------------------------------
+# §4.3 RMS（非無音フレーム）
+# ---------------------------------------------------------------------------
+
+
+def test_frame_rms_drops_the_unfilled_tail_frame() -> None:
+    x = np.ones(mk.FRAME_LEN + mk.HOP + 1, dtype=np.float64)
+    frames = mk.frame_rms(x)
+    assert len(frames) == 2      # 3 つ目は埋まらないので破棄
+    assert np.allclose(frames, 1.0)
+
+
+def test_rms_ignores_silent_frames() -> None:
+    """末尾に無音を足しても RMS が変わらない（非無音フレームのみで算出する）。
+
+    境界をまたぐフレームは定義上どうしても部分的に無音を含むので「無音を足す前と
+    完全一致」にはならない。効いていることの証拠は**足す量に依存しないこと**である
+    ——ここが崩れると「長い無音を足すほど RMS が下がる」自己正規化の罠に戻る。
+    """
+    loud = np.ones(mk.FRAME_LEN * 4, dtype=np.float64)
+    short_pad = np.concatenate([loud, np.zeros(mk.FRAME_LEN * 2, dtype=np.float64)])
+    long_pad = np.concatenate([loud, np.zeros(mk.FRAME_LEN * 32, dtype=np.float64)])
+    assert mk.rms(short_pad) == pytest.approx(mk.rms(long_pad), rel=1e-12)
+    # 素朴な「全フレーム平均」なら長い無音で大きく下がる（罠の実在確認）。
+    naive = float(np.sqrt(np.mean(mk.frame_rms(long_pad) ** 2)))
+    assert naive < 0.5 * mk.rms(long_pad)
+
+
+def test_residual_db_uses_the_bed_active_frames_for_the_stem(monkeypatch) -> None:
+    """stem 側で active を選び直さない（自己正規化で漏れが持ち上がる罠を塞ぐ）。
+
+    ベッドが鳴っている区間では stem がほぼ無音、ベッドが無音の区間だけ stem が
+    大きい、という信号を作る。stem 自身で active を選び直すと `residual_db` は
+    0 dB 付近になるが、bed の active で評価すれば非常に小さい値になる。
+    """
+    n = mk.FRAME_LEN * 8
+    bed = np.concatenate([np.ones(n, dtype=np.float64), np.zeros(3 * n, dtype=np.float64)])
+    stem = np.concatenate([np.full(2 * n, 1e-4), np.ones(2 * n, dtype=np.float64)])
+    value = mk.residual_db(bed, stem)
+    assert value < -60.0
+    # 参考: stem 自身で選び直すと 0 dB 近辺になってしまう（罠の実在確認）。
+    assert mk.rms(stem) > 0.9
+
+
+# ---------------------------------------------------------------------------
+# §4.4 / §4.5 水準適用・クリップ回避
+# ---------------------------------------------------------------------------
+
+
+def _tone(n: int, amplitude: float, period: int = 64) -> np.ndarray:
+    k = np.arange(n, dtype=np.float64)
+    return amplitude * np.sin(2.0 * np.pi * k / period)
+
+
+@pytest.mark.parametrize("level", list(mk.LEVELS))
+def test_apply_level_realizes_the_declared_rms_ratio(level: str) -> None:
+    """検算（設計 §4.4）: `(V*g_v) / (B*g_b) = 10 ** (R_db/20)`。"""
+    n = mk.FRAME_LEN * 8
+    voice = _tone(n, 0.3)
+    bed = _tone(n, 0.11, period=37)
+    _mix, meta = mk.apply_level(voice, bed, level)
+    achieved = (meta["voice_rms"] * meta["g_v"]) / (meta["bed_rms"] * meta["g_b"])
+    assert achieved == pytest.approx(10.0 ** (mk.LEVEL_DB[level] / 20.0), rel=1e-9)
+
+
+def test_apply_level_factor_is_common_so_the_ratio_is_exactly_preserved() -> None:
+    """`factor` は両成分に共通 → RMS 比は厳密に不変（リミッタ・正規化は使わない）。"""
+    n = mk.FRAME_LEN * 8
+    voice = _tone(n, 0.9)
+    bed = _tone(n, 0.9, period=37)
+    mix, meta = mk.apply_level(voice, bed, "0dB")
+    assert meta["factor"] == pytest.approx(
+        min(1.0, mk.PEAK_TARGET / meta["peak_before_factor"]), rel=1e-12
+    )
+    assert meta["factor"] < 1.0                       # この入力では実際に効く
+    assert float(np.max(np.abs(mix))) == pytest.approx(mk.PEAK_TARGET, rel=1e-9)
+
+
+def test_apply_level_leaves_factor_at_one_when_there_is_headroom() -> None:
+    n = mk.FRAME_LEN * 8
+    mix, meta = mk.apply_level(_tone(n, 0.01), _tone(n, 0.01, period=37), "0dB")
+    assert meta["factor"] == 1.0
+    assert float(np.max(np.abs(mix))) < mk.PEAK_TARGET
+
+
+def test_apply_level_is_deterministic() -> None:
+    """seed 不使用・同一入力 → bit 一致（設計 §4.8）。"""
+    n = mk.FRAME_LEN * 8
+    voice = _tone(n, 0.3)
+    bed = _tone(n, 0.11, period=37)
+    first, _ = mk.apply_level(voice, bed, "+6dB")
+    second, _ = mk.apply_level(voice, bed, "+6dB")
+    assert mk.waveform_sha256(first) == mk.waveform_sha256(second)
+    assert np.array_equal(first, second)
+
+
+def test_apply_level_rejects_unknown_level() -> None:
+    n = mk.FRAME_LEN * 4
+    with pytest.raises(mk.GenerationError, match="未登録の水準"):
+        mk.apply_level(_tone(n, 0.3), _tone(n, 0.3, period=37), "+3dB")
+
+
+# ---------------------------------------------------------------------------
+# `vocals.wav` を読まないこと / rate 不一致で停止すること
+# ---------------------------------------------------------------------------
+
+
+def test_read_audio_refuses_vocals_stem(tmp_path: Path) -> None:
+    """読み込みの chokepoint が `vocals` を fail-closed で弾く。"""
+    path = tmp_path / "vocals.wav"
+    sf.write(str(path), np.zeros(128, dtype=np.float32), 44100, subtype="FLOAT")
+    with pytest.raises(mk.GenerationError, match="vocals stem"):
+        mk.read_audio(path)
+
+
+def _write_bed(bed_dir: Path, *, sample_rate: int = 44100, n: int = 8192, rates=None) -> None:
+    bed_dir.mkdir(parents=True, exist_ok=True)
+    for idx, name in enumerate(mk.BED_STEMS):
+        rate = sample_rate if rates is None else rates[idx]
+        stereo = np.stack([_tone(n, 0.05 * (idx + 1)), _tone(n, 0.04 * (idx + 1), 51)], axis=1)
+        sf.write(str(bed_dir / f"{name}.wav"), stereo.astype(np.float32), rate, subtype="FLOAT")
+    # `vocals.wav` は存在確認のみに使う（中身は読まれない）。
+    sf.write(
+        str(bed_dir / "vocals.wav"),
+        np.stack([_tone(n, 0.9), _tone(n, 0.9, 23)], axis=1).astype(np.float32),
+        sample_rate,
+        subtype="FLOAT",
+    )
+
+
+def test_load_bed_mono_never_reads_the_vocals_stem(tmp_path: Path, monkeypatch) -> None:
+    """ベッド合成が実際に開くのは drums/bass/other だけ（存在確認以外に vocals を触らない）。"""
+    bed_dir = tmp_path / "Some Artist - Some Track"
+    _write_bed(bed_dir)
+    opened: list[str] = []
+    original = mk.read_audio
+
+    def _tracking(path):
+        opened.append(Path(path).name)
+        return original(path)
+
+    monkeypatch.setattr(mk, "read_audio", _tracking)
+    bed_mono, rate = mk.load_bed_mono(bed_dir)
+    assert rate == 44100
+    assert sorted(opened) == sorted(f"{name}.wav" for name in mk.BED_STEMS)
+    assert "vocals.wav" not in opened
+    assert bed_mono.ndim == 1
+
+
+def test_load_bed_mono_requires_the_vocals_stem_to_exist(tmp_path: Path) -> None:
+    """存在確認は行う（配布物の構造が想定と違うなら止まる）。"""
+    bed_dir = tmp_path / "track"
+    _write_bed(bed_dir)
+    (bed_dir / "vocals.wav").unlink()
+    with pytest.raises(mk.GenerationError, match="想定構造"):
+        mk.load_bed_mono(bed_dir)
+
+
+def test_load_bed_mono_stops_on_sample_rate_mismatch(tmp_path: Path) -> None:
+    """暗黙のリサンプルは禁止 —— 不一致は**例外で停止**する。"""
+    bed_dir = tmp_path / "track"
+    _write_bed(bed_dir, rates=(44100, 48000, 44100))
+    with pytest.raises(mk.GenerationError, match="リサンプル"):
+        mk.load_bed_mono(bed_dir)
+
+
+# ---------------------------------------------------------------------------
+# §6.2 id 規約
+# ---------------------------------------------------------------------------
+
+
+def test_entry_id_follows_the_registered_convention() -> None:
+    assert mk.entry_id("vocadito_7", "Al-James-Schoolboy-Facination", "+12dB") == (
+        "vremix_vocadito_7_Al-James-Schoolboy-Facination_p12"
+    )
+    assert sorted(mk.LEVEL_TAGS.values()) == sorted(["p12", "p06", "p00", "m06"])
+
+
+def test_bed_slug_is_deterministic_and_id_safe() -> None:
+    assert mk.bed_slug("Al James - Schoolboy Facination") == "Al-James-Schoolboy-Facination"
+    assert mk.bed_slug("A B  C") == "A-B-C"
+    with pytest.raises(mk.GenerationError):
+        mk.bed_slug("---")
+
+
+def test_level_ladder_order_is_frozen() -> None:
+    """水準は物理量の順（易しい側 → 難しい側）。文字列辞書順で並べない（§3.3.1）。"""
+    assert mk.LEVELS == ("+12dB", "+6dB", "0dB", "-6dB")
+    assert [mk.LEVEL_DB[level] for level in mk.LEVELS] == [12.0, 6.0, 0.0, -6.0]
+    # バイト辞書順に並べると物理量と無関係な順序になることを明示的に固定する。
+    assert sorted(mk.LEVELS) == ["+12dB", "+6dB", "-6dB", "0dB"]
+
+
+# ---------------------------------------------------------------------------
+# build の end-to-end（合成素材・pin を差し替えたうえで規約だけを検証する）
+# ---------------------------------------------------------------------------
+
+
+def _fake_vocadito(tmp_path: Path, clip_ids) -> tuple[Path, dict]:
+    root = tmp_path / "vocadito"
+    (root / "Audio").mkdir(parents=True)
+    (root / "Annotations" / "F0").mkdir(parents=True)
+    pins = {}
+    for idx, clip_id in enumerate(clip_ids):
+        audio = root / "Audio" / f"{clip_id}.wav"
+        sf.write(
+            str(audio),
+            _tone(mk.FRAME_LEN * 6 + idx * 100, 0.2).astype(np.float32),
+            44100,
+            subtype="FLOAT",
+        )
+        annotation = root / "Annotations" / "F0" / f"{clip_id}_f0.csv"
+        annotation.write_text("0.000,220.0\n0.010,221.0\n", encoding="utf-8")
+        pins[clip_id] = {
+            "expected_audio_sha256": hashlib.sha256(audio.read_bytes()).hexdigest(),
+            "expected_annotation_sha256": hashlib.sha256(annotation.read_bytes()).hexdigest(),
+        }
+    return root, pins
+
+
+def test_build_emits_manifest_fixtures_and_generation_record(tmp_path, monkeypatch) -> None:
+    clip_ids = ["vocadito_1", "vocadito_2"]
+    vocadito_root, pins = _fake_vocadito(tmp_path, clip_ids)
+    monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
+    bed_root = tmp_path / "beds"
+    for track in ("Artist A - Track One", "Artist B - Track Two"):
+        _write_bed(bed_root / track)
+
+    out_dir = tmp_path / "out"
+    summary = mk.build(
+        vocadito_root=vocadito_root,
+        bed_root=bed_root,
+        tracks=["Artist A - Track One", "Artist B - Track Two"],
+        levels=["+12dB", "-6dB"],
+        out_dir=out_dir,
+    )
+    assert set(summary["levels"]) == {"+12dB", "-6dB"}
+    for level, tag in (("+12dB", "p12"), ("-6dB", "m06")):
+        manifest = json.loads((out_dir / f"manifest_{tag}.json").read_text())
+        # 水準ごとに 1 本・`clip × bed` 件（設計 §6.2）。アームでは分けない。
+        assert len(manifest) == len(clip_ids) * 2
+        ids = [entry["id"] for entry in manifest]
+        assert ids == sorted(ids)
+        assert all(entry["id"].endswith(f"_{tag}") for entry in manifest)
+        fixtures = yaml.safe_load((out_dir / f"fixtures_{tag}.yaml").read_text())
+        assert fixtures["schema_version"] == "m2e-external-fixtures/0.1"
+        assert set(fixtures["fixtures"]) == set(ids)
+        record = json.loads((out_dir / f"generation_record_{tag}.json").read_text())
+        for eid in ids:
+            assert record[eid]["level"] == level
+            assert 0.0 < record[eid]["factor"] <= 1.0
+            # 注釈はミックスで変わらない（加算ミックスは f0 を変えない）。
+            clip_id = record[eid]["clip_id"]
+            assert (
+                fixtures["fixtures"][eid]["expected_annotation_sha256"]
+                == pins[clip_id]["expected_annotation_sha256"]
+            )
+        # manifest が指す member は manifest 位置基準で解決できる（ハーネスの要求）。
+        for entry in manifest:
+            assert (out_dir / entry["audio_path"]).is_file()
+            assert (out_dir / entry["annotation_path"]).is_file()
+
+
+def test_build_is_deterministic(tmp_path, monkeypatch) -> None:
+    """同一入力 → 生成ミックスの bytes が完全一致（seed 不使用）。"""
+    clip_ids = ["vocadito_1"]
+    vocadito_root, pins = _fake_vocadito(tmp_path, clip_ids)
+    monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
+    bed_root = tmp_path / "beds"
+    _write_bed(bed_root / "Artist A - Track One")
+
+    digests = []
+    for run in ("a", "b"):
+        out_dir = tmp_path / f"out_{run}"
+        mk.build(
+            vocadito_root=vocadito_root,
+            bed_root=bed_root,
+            tracks=["Artist A - Track One"],
+            levels=["0dB"],
+            out_dir=out_dir,
+        )
+        record = json.loads((out_dir / "generation_record_p00.json").read_text())
+        digests.append({k: v["waveform_sha256"] for k, v in record.items()})
+        digests.append(
+            {
+                p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                for p in sorted((out_dir / "mix").iterdir())
+            }
+        )
+    assert digests[0] == digests[2]
+    assert digests[1] == digests[3]
+
+
+def test_build_refuses_when_vocadito_bytes_drifted(tmp_path, monkeypatch) -> None:
+    """vocadito の再取得・再エンコードは禁止 —— pin と実体が食い違えば停止する。"""
+    clip_ids = ["vocadito_1"]
+    vocadito_root, pins = _fake_vocadito(tmp_path, clip_ids)
+    pins["vocadito_1"]["expected_audio_sha256"] = "0" * 64
+    monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
+    bed_root = tmp_path / "beds"
+    _write_bed(bed_root / "Artist A - Track One")
+    with pytest.raises(mk.GenerationError, match="再取得・再エンコードは禁止"):
+        mk.build(
+            vocadito_root=vocadito_root,
+            bed_root=bed_root,
+            tracks=["Artist A - Track One"],
+            levels=["0dB"],
+            out_dir=tmp_path / "out",
+        )
