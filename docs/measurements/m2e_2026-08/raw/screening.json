@@ -163,5 +163,27 @@
   "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
   "stem_sha256": "b6190782e17fa80e3f229e4af11a3792957db631055c8583369e3d5fa0b0d77f",
   "elapsed_seconds": 272.2
+ },
+ "Girls Under Glass - We Feel Alright": {
+  "index": 15,
+  "residual_db": -38.153124588678665,
+  "numeric_pass": true,
+  "bed_rms": 0.1029669064672035,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "076f284f54035f1450b8249938c0e86a012f4e0d6065624ac41aaa4884a754b3",
+  "elapsed_seconds": 266.74
+ },
+ "Hollow Ground - Ill Fate": {
+  "index": 16,
+  "residual_db": -63.92581247092825,
+  "numeric_pass": true,
+  "bed_rms": 0.11983984800592094,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "b26cd61b30dd5f003e31ff97a12805de12bd294488a82ec6abf3cc5915f9f580",
+  "elapsed_seconds": 270.47
  }
 }
