@@ -207,5 +207,27 @@
   "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
   "stem_sha256": "e4ab329c0e0a9bdc24317191a2f913555252a6288605f8b3d09e0e440e26146f",
   "elapsed_seconds": 268.03
+ },
+ "Little Chicago's Finest - My Own": {
+  "index": 19,
+  "residual_db": -40.81988362153485,
+  "numeric_pass": true,
+  "bed_rms": 0.04741324894543052,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "8e68ec77c51861054112443f3e976237e89497df4b642aad1a7059c1a7de11c0",
+  "elapsed_seconds": 276.51
+ },
+ "Louis Cressy Band - Good Time": {
+  "index": 20,
+  "residual_db": -23.257352675150468,
+  "numeric_pass": false,
+  "bed_rms": 0.059162349591165474,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "37295a72af3a800bd06702936c77db0b7930baaada113600066ac55f29969fff",
+  "elapsed_seconds": 270.23
  }
 }
