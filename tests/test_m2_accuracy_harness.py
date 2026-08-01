@@ -8718,11 +8718,18 @@ def _m2e_evaluate(tmp_path: Path, reports: List[Dict[str, Any]]) -> Dict[str, An
 
 
 def test_m2e_gate_level_applies_the_bar(tmp_path: Path) -> None:
-    """`gate_level`（+12dB）では V_direct との整合トリップワイヤとしてバーが当たる。"""
+    """`gate_level`（+12dB）ではバーが当たる。**ただし合否は出さない。**
+
+    設計 §6.2/§11: 帯の判定は全 1280 セル（4 水準 × 2 アーム）の census が揃って
+    初めて出る。1 回の evaluate は 1 水準しか見ないので census を立証できない
+    ——バーの結果は `bar_satisfied` に残しつつ `status` は `census_pending`。
+    """
     reports = [_m2e_run(tmp_path, level="+12dB") for _ in range(2)]
     verdict = _m2e_evaluate(tmp_path, reports)
     result = verdict["categories"]["V_remix_real_direct"]
-    assert result["status"] == "pass"
+    assert result["status"] == "census_pending"
+    assert result["bar_satisfied"] is True
+    assert result["failures"] == []
     assert result["level"] == "+12dB"
     assert result["gate_level"] == "+12dB"
     assert result["ladder_index"] == 0
@@ -8730,12 +8737,25 @@ def test_m2e_gate_level_applies_the_bar(tmp_path: Path) -> None:
     assert verdict["m2e_bars_sha256"] == result["bars_file_sha256"]
 
 
-def test_m2e_gate_level_can_fail_the_bar(tmp_path: Path) -> None:
+def test_m2e_gate_level_records_bar_violations_without_a_verdict(tmp_path: Path) -> None:
+    """バー違反は `bar_satisfied=False` + `failures` に残る（が `fail` とは言わない）。"""
     reports = [_m2e_run(tmp_path, level="+12dB", shift_cents=500.0) for _ in range(2)]
     verdict = _m2e_evaluate(tmp_path, reports)
     result = verdict["categories"]["V_remix_real_direct"]
-    assert result["status"] == "fail"
+    assert result["status"] == "census_pending"
+    assert result["bar_satisfied"] is False
     assert any("min_rpa" in f for f in result["failures"])
+
+
+def test_m2e_never_emits_pass_or_fail_from_a_single_level(tmp_path: Path) -> None:
+    """P1: 部分 census（1 水準・片アーム）から publish 可能な判定を出さない。"""
+    for level in ("+12dB", "+6dB", "0dB", "-6dB"):
+        work = tmp_path / level.replace("+", "p")
+        work.mkdir(parents=True, exist_ok=True)
+        reports = [_m2e_run(work, level=level) for _ in range(2)]
+        verdict = _m2e_evaluate(work, reports)
+        statuses = {c["status"] for c in verdict["categories"].values() if "level" in c}
+        assert statuses <= {"census_pending", "level_record_only"}, (level, statuses)
 
 
 @pytest.mark.parametrize("level", ["+6dB", "0dB", "-6dB"])

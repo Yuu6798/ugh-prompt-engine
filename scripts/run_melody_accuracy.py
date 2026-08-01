@@ -7518,6 +7518,12 @@ def evaluate_m2_bars(
     - S_fullstack: バーが空（`{}`）なので判定せず、`status="diagnostic_only"`
       として計測値のみ記録する（設計 §8: S_fullstack の低値を理由に crepe を
       責めない）。
+    - **M2e（`V_remix_real_*`）は合否を出さない。** `gate_level` ではバーを当てて
+      `bar_satisfied` / `failures` に証拠を残すが `status="census_pending"` に留める
+      ——設計 §6.2/§11 が「全 1280 セル（4 水準 × 2 アーム）の census が揃うまで
+      帯の判定を出さない」を要求する一方、1 回の evaluate は構造上 1 水準しか
+      見ないため、このコールから census を立証できない（帯の判定は r6/r7 の
+      水準横断集計の仕事）。`gate_level` 以外は従来どおり `level_record_only`。
     """
     # digest と parsed data の束縛を検証してから閾値を読む。素の dict（手組み・load 後に
     # 変異させた mapping）は受理しない——閾値を書き換えたまま元の凍結 digest を名乗る
@@ -8065,8 +8071,20 @@ def evaluate_m2_bars(
                     f"repeat[{repeat_idx}] octave_gap {metrics['octave_gap']:.4f} "
                     f"> max_octave_gap {bar['max_octave_gap']}"
                 )
-        cat_result["status"] = "pass" if not failures else "fail"
         cat_result["failures"] = failures
+        if is_m2e:
+            # 設計 §6.2（「帯の判定は `gate_level` の run が §11 のセル census を
+            # 満たしたときにのみ出る」）と §11（全 1280 セルが揃うまで帯の判定を
+            # 出さない）。**1 回の evaluate は構造上 1 水準しか見ない**——
+            # 上流で「M2e カテゴリを含む report の level は単一」を要求しているので、
+            # このコールから 4 水準 × 2 アームの census を立証する術が無い。
+            # したがってバーは当てる（証拠は `bar_satisfied` / `failures` に残す）が、
+            # **合否という語は出さない**。帯の判定は r6/r7 の水準横断集計が census を
+            # 満たしたときに出す（その集計器は未実装・`HANDOFF.md` の残タスク）。
+            cat_result["bar_satisfied"] = not failures
+            cat_result["status"] = "census_pending"
+        else:
+            cat_result["status"] = "pass" if not failures else "fail"
         verdict["categories"][category] = cat_result
 
     # verdict を返す（= publish する）直前に、load 時に pin したコードが
