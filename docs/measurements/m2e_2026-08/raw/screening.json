@@ -130,5 +130,38 @@
   "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
   "stem_sha256": "db873c0acb42128134c64e2ab55e3416380f725ccbce95c52997a435bd223665",
   "elapsed_seconds": 279.95
+ },
+ "Enda Reilly - Cur An Long Ag Seol": {
+  "index": 12,
+  "residual_db": -33.50899848914287,
+  "numeric_pass": true,
+  "bed_rms": 0.07328226656174673,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "6b1409671f1df3b48b529499b647a1b98d85c717d8bb1bf22e1e1331da94abff",
+  "elapsed_seconds": 268.66
+ },
+ "Forkupines - Semantics": {
+  "index": 13,
+  "residual_db": -56.69943319183065,
+  "numeric_pass": true,
+  "bed_rms": 0.1210176302925424,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "ffc78607b6476a52064eae8e0b91d2baac3c37e5c111b8829e4c8fe9d5988c93",
+  "elapsed_seconds": 265.3
+ },
+ "Georgia Wonder - Siren": {
+  "index": 14,
+  "residual_db": -33.21594370541276,
+  "numeric_pass": true,
+  "bed_rms": 0.09286029787342025,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "b6190782e17fa80e3f229e4af11a3792957db631055c8583369e3d5fa0b0d77f",
+  "elapsed_seconds": 272.2
  }
 }
