@@ -228,18 +228,172 @@ vocadito 40 clip の実測から:
 
 ---
 
-## 4. 全 50 曲の実測（進行中）
+## 4. 全 50 曲の実測（**完了**・2026-08-01）
 
-| # | track（lexical order） | `residual_db` | 数値判定 | 目視判定 | 採否 |
+数値通過 **44/50**、(d) 該当 **29/50**、最終採用 **2 件**。
+
+判定列の読み方:
+
+- `residual_db` / 数値: §3.4.2 の指標と閾値 −26.0 dB（導出値）
+- 無音(s) / (d): §4.3 の**凍結済み**無音定義（frame 2048 / hop 512 / frame RMS < peak−40 dB）
+  による最長連続無音長。1.0 秒以上で (d) 該当（User 決裁 2026-08-01・§4.2 参照）
+- 目視: (a)(b)(c)(e) の判定。`未実施` の扱いは §4.1 に明記
+
+| # | track（lexical order） | `residual_db` | 数値 | 無音(s) | (d) | 目視 | 採否 |
+|---|---|---|---|---|---|---|---|
+| 00 | AM Contra - Heart Peripheral | -32.867 | PASS | 3.448 | 該当 | (d) | — |
+| 01 | Al James - Schoolboy Facination | -43.186 | PASS | 1.637 | 該当 | (d) | — |
+| 02 | Angels In Amplifiers - I'm Alright | -48.288 | PASS | 0.453 | — | なし | **採用** |
+| 03 | Arise - Run Run Run | -52.256 | PASS | 0.592 | — | なし | **採用** |
+| 04 | BKS - Bulldozer | -55.264 | PASS | 2.635 | 該当 | 未実施(判定不変) | — |
+| 05 | BKS - Too Much | -53.928 | PASS | 0.406 | — | なし | — |
+| 06 | Ben Carrigan - We'll Talk About It All Tonight | -49.593 | PASS | 4.063 | 該当 | 未実施(判定不変) | — |
+| 07 | Bobby Nobody - Stitch Up | -63.976 | PASS | 6.246 | 該当 | 未実施(判定不変) | — |
+| 08 | Buitraker - Revo X | -51.652 | PASS | 1.927 | 該当 | 未実施(判定不変) | — |
+| 09 | Carlos Gonzalez - A Place For Us | -58.675 | PASS | 2.357 | 該当 | 未実施(判定不変) | — |
+| 10 | Cristina Vane - So Easy | -22.069 | reject | 3.495 | 該当 | 未実施(判定不変) | — |
+| 11 | Detsky Sad - Walkie Talkie | -11.170 | reject | 1.207 | 該当 | 未実施(判定不変) | — |
+| 12 | Enda Reilly - Cur An Long Ag Seol | -33.509 | PASS | 0.337 | — | 未実施(上位確定) | — |
+| 13 | Forkupines - Semantics | -56.699 | PASS | 3.158 | 該当 | 未実施(判定不変) | — |
+| 14 | Georgia Wonder - Siren | -33.216 | PASS | 3.936 | 該当 | 未実施(判定不変) | — |
+| 15 | Girls Under Glass - We Feel Alright | -38.153 | PASS | 1.916 | 該当 | 未実施(判定不変) | — |
+| 16 | Hollow Ground - Ill Fate | -63.926 | PASS | 0.859 | — | 未実施(上位確定) | — |
+| 17 | James Elder & Mark M Thompson - The English Actor | -39.808 | PASS | 0.000 | — | 未実施(上位確定) | — |
+| 18 | Juliet's Rescue - Heartbeats | -67.067 | PASS | 1.741 | 該当 | 未実施(判定不変) | — |
+| 19 | Little Chicago's Finest - My Own | -40.820 | PASS | 0.000 | — | 未実施(上位確定) | — |
+| 20 | Louis Cressy Band - Good Time | -23.257 | reject | 0.279 | — | 未実施(判定不変) | — |
+| 21 | Lyndsey Ollard - Catching Up | -56.168 | PASS | 1.138 | 該当 | 未実施(判定不変) | — |
+| 22 | M.E.R.C. Music - Knockout | -40.328 | PASS | 2.972 | 該当 | 未実施(判定不変) | — |
+| 23 | Moosmusic - Big Dummy Shake | -21.408 | reject | 1.718 | 該当 | 未実施(判定不変) | — |
+| 24 | Motor Tapes - Shore | -71.054 | PASS | 2.090 | 該当 | 未実施(判定不変) | — |
+| 25 | Mu - Too Bright | -50.263 | PASS | 0.546 | — | 未実施(上位確定) | — |
+| 26 | Nerve 9 - Pray For The Rain | -54.209 | PASS | 0.174 | — | 未実施(上位確定) | — |
+| 27 | PR - Happy Daze | -59.747 | PASS | 0.337 | — | 未実施(上位確定) | — |
+| 28 | PR - Oh No | -66.429 | PASS | 0.418 | — | 未実施(上位確定) | — |
+| 29 | Punkdisco - Oral Hygiene | -25.084 | reject | 1.997 | 該当 | 未実施(判定不変) | — |
+| 30 | Raft Monk - Tiring | -58.782 | PASS | 6.594 | 該当 | 未実施(判定不変) | — |
+| 31 | Sambasevam Shanmugam - Kaathaadi | -31.571 | PASS | 1.637 | 該当 | 未実施(判定不変) | — |
+| 32 | Secretariat - Borderline | -64.951 | PASS | 0.000 | — | 未実施(上位確定) | — |
+| 33 | Secretariat - Over The Top | -68.253 | PASS | 0.697 | — | 未実施(上位確定) | — |
+| 34 | Side Effects Project - Sing With Me | -31.965 | PASS | 0.000 | — | 未実施(上位確定) | — |
+| 35 | Signe Jakobsen - What Have You Done To Me | -67.886 | PASS | 9.102 | 該当 | 未実施(判定不変) | — |
+| 36 | Skelpolu - Resurrection | -50.832 | PASS | 0.000 | — | 未実施(上位確定) | — |
+| 37 | Speak Softly - Broken Man | -32.044 | PASS | 0.534 | — | 未実施(上位確定) | — |
+| 38 | Speak Softly - Like Horses | -31.591 | PASS | 0.046 | — | 未実施(上位確定) | — |
+| 39 | The Doppler Shift - Atrophy | -42.742 | PASS | 4.516 | 該当 | 未実施(判定不変) | — |
+| 40 | The Easton Ellises (Baumi) - SDRNR | -28.045 | PASS | 1.057 | 該当 | 未実施(判定不変) | — |
+| 41 | The Easton Ellises - Falcon 69 | -26.270 | PASS | 2.090 | 該当 | 未実施(判定不変) | — |
+| 42 | The Long Wait - Dark Horses | -58.639 | PASS | 2.821 | 該当 | 未実施(判定不変) | — |
+| 43 | The Mountaineering Club - Mallory | -60.194 | PASS | 6.409 | 該当 | 未実施(判定不変) | — |
+| 44 | The Sunshine Garcia Band - For I Am The Moon | -46.643 | PASS | 0.093 | — | 未実施(上位確定) | — |
+| 45 | Timboz - Pony | -51.060 | PASS | 2.659 | 該当 | 未実施(判定不変) | — |
+| 46 | Tom McKenzie - Directions | -63.149 | PASS | 0.244 | — | 未実施(上位確定) | — |
+| 47 | Triviul feat. The Fiend - Widow | -17.839 | reject | 0.070 | — | 未実施(判定不変) | — |
+| 48 | We Fell From The Sky - Not You | -57.233 | PASS | 2.961 | 該当 | 未実施(判定不変) | — |
+| 49 | Zeno - Signs | -27.858 | PASS | 1.312 | 該当 | 未実施(判定不変) | — |
+
+### 4.1 目視の実施範囲（**宣言**）
+
+事前登録では「bed ごとに 1 行」と書いた。実施したのは **5 件**（index 00 / 01 / 02 /
+03 / 05）で、残り 45 件は**未実施**である。隠さずに宣言する。
+
+理由は目視の効力の非対称性にある。目視は**棄却方向にのみ効く一方向オーバーライド**
+なので、
+
+- **既に除外済みの bed**（数値棄却 6 件 + (d) 該当 29 件 = 31 件）は、目視で更に
+  棄却しても判定が変わらない。**構造上 decision-inert**。
+- **採用 2 件より下位の生存候補**（17 件）は、上位 2 件が確定した時点で選定に入らない。
+  上位が将来倒された場合の繰り上がり先として、直後の 1 件（index 05）だけ先に判定して
+  余裕を 1 段持たせた。
+
+第三者は生成スクリプト（`spectrogram.py`・条件凍結済み）と各画像の sha256
+（`raw/spectrogram_sha256.json`・50 件全部）から**任意の bed を再描画して自力で
+検証できる**。したがって未実施は監査可能性を損なわない。
+
+### 4.2 §3.4.3 の監査（フィッティングでないことの検証）— **確定**
+
+| 項目 | 値 |
+|---|---|
+| 分布の幅 | **−71.054 〜 −11.170 dB** |
+| 閾値に最も近い通過 | **−26.270 dB**（The Easton Ellises - Falcon 69） |
+| 閾値に最も近い棄却 | **−25.084 dB**（Punkdisco - Oral Hygiene） |
+| 観測 gap | **[−26.270, −25.084]**、幅 **1.186 dB** |
+| **閾値 −26.0 dB は gap の** | **内側**（通過側の余裕 0.270 dB / 棄却側 0.916 dB） |
+
+**報告義務の履行**: 設計 §3.4.3 は「−26 dB が観測 gap の内側に落ちたか外側かを報告」
+することと「外側でも閾値は動かさない」ことを求めていた。結果は**内側**である。
+ただし**余裕は 0.270 dB しかない**——初期 15 曲時点では gap 6.49 dB に見えたが、
+全件を測ると 1.186 dB まで縮んだ。**「快適な分離」ではない**ことを明記する。
+
+閾値は動かしていない。−26.0 は `hardest_level_db(−6) − level_margin_db(20)` の
+**導出値**であって自由パラメータではなく、gap が薄いことは所見であって緩和理由でも
+厳格化理由でもない。
+
+### 4.3 事由 (d) の定義に関する User 決裁（2026-08-01）
+
+**事前登録の穴が実測で露見した。** 事由 (d)「連続 1.0 秒以上の無音・欠落」には
+**数値定義が凍結されていなかった**。読み方で採用ベッドが変わることが判明した:
+
+| 無音の読み方 | (d) 該当 | 採用される 2 件 |
+|---|---|---|
+| 厳密ゼロのみ | 10/50 | [00] AM Contra + [02] Angels In Amplifiers |
+| < −80 dB | 12/50 | [00] AM Contra + [02] Angels In Amplifiers |
+| < −60 dB | 22/50 | [02] Angels In Amplifiers + [03] Arise |
+| **< −40 dB（§4.3 の凍結定義）** | **29/50** | **[02] Angels In Amplifiers + [03] Arise** |
+
+分岐点は index 00 単独である（index 01 は厳密ゼロ 1.637 秒でどの読み方でも該当）。
+
+**決裁（User・2026-08-01）: §4.3 が既に凍結している無音定義を流用する。**
+根拠は「これが設計中で唯一凍結された無音の定義であり、r1（画像生成より前）に commit
+済みだから」——**画像を見てから作った後付けパラメータではない**。実行側が独断で
+定義を決めれば、それは §3.4.5 が禁じる「気に入るまで見る」の変種になるため、
+決裁を経由させた。
+
+測定はサンプル単位ではなく **§4.3 のフレーム機構そのもの**（`frame_rms` /
+`active_frames`）で行い、非 active フレームの和集合区間長
+`(n−1)*hop + frame_len` を無音長とした。
+
+### 4.4 採用 2 件（**確定**）
+
+| 順位 | # | track | `residual_db` | 無音最長 | 目視 |
 |---|---|---|---|---|---|
-| — | （r2 実行後に全件を埋める） | — | — | — | — |
+| 1 | **02** | **Angels In Amplifiers - I'm Alright** | **−48.288 dB** | 0.453 s | 該当なし |
+| 2 | **03** | **Arise - Run Run Run** | **−52.256 dB** | 0.592 s | 該当なし |
 
----
+**順序のみで決めた。** lexical order（UTF-8 バイト列辞書順）の先頭から、数値通過かつ
+(d) 非該当の 2 件で停止した。密度・ジャンル・漏れの小ささ等の性質は選定に使っていない。
 
-## 5. 未確定（埋めるまで結論を出さない）
+**脱落した上位 2 件**（設計 §3.3-4 の「通過 2 件確定後に下位へ差し替えることは禁止」
+に抵触しない——これは差し替えではなく (d) による棄却と順序どおりの繰り上がりである）:
 
-- 全 50 曲の `residual_db` 実数値
-- 通過 2 件（lexical order 先頭から）
-- スペクトログラム各画像の sha256 と 1 行判定
-- §3.6.1 のラダー縮退が必要かどうか（通過が 2 件に満たない場合のみ発動）
-- 再取得に要した実時間（`S` へ計上する内訳）
+- **[00] AM Contra - Heart Peripheral**: 数値 −32.867 dB は通過。しかし冒頭
+  **3.448 秒**がベッドほぼ不在（(d) 該当）。この区間ではミックスが実質「歌声のみ」に
+  なり、**宣言した SNR ラダーが成立しない**——(d) が防ごうとしていた事態そのもの。
+- **[01] Al James - Schoolboy Facination**: 数値 −43.186 dB は通過。冒頭
+  **1.637 秒が厳密なデジタル無音**（閾値の選び方に依存しない）。
+
+### 4.5 ラダー縮退の要否
+
+§3.6.1 の縮退規則は**発動しない**。採用 2 件の `residual_db` は −48.288 / −52.256 dB
+で、要求余裕 20 dB を最難水準 −6 dB に対して満たす（必要条件 ≤ −26.0 dB）。
+ラダーは **+12 / +6 / 0 / −6 dB の 4 点**のまま、縮退なしで r3 へ渡す。
+
+## 5. r2 の完了状態
+
+| 項目 | 状態 |
+|---|---|
+| 全 50 曲の `residual_db` 実数値 | **完了**（`raw/screening.json`） |
+| member 帰属証拠 + `stem_sha256`（150 member） | **完了**（`raw/bed_members.json`） |
+| `bed_window_sha256` の照合 | **50/50 一致** |
+| 事由 (d) の全 50 曲測定 | **完了**（`raw/reason_d.json` / `raw/silence.json`） |
+| スペクトログラム 50 枚 + sha256 | **完了**（`raw/spectrogram_sha256.json`・画像本体は非 commit） |
+| §3.4.3 の監査 | **完了**（内側・余裕 0.270 dB） |
+| 通過 2 件の確定 | **完了**（[02] Angels In Amplifiers / [03] Arise） |
+| 目視 (a)(b)(c)(e) | **5/50 実施**（§4.1 に範囲を宣言） |
+| `archive_sha256_local` | **`null` のまま**（§9.1 の宣言された穴・埋めていない） |
+
+**生成と判定は r2 の内側で閉じた**（§3.4.5 の期限を満たす）。r3 へ持ち越さない。
+
+次段 r3（P-c）: `m2e_bed_fixtures.yaml` の作成・pin（採用 2 件の `expected_stem_sha256` /
+`residual_db` / `accepted` と、全 50 曲の member 帰属証拠）と `m2e_accuracy_bars.yaml`
+の登録。**code change なし**。
