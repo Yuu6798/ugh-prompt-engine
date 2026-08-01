@@ -471,5 +471,27 @@
   "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
   "stem_sha256": "e420a316dbafd8afba1347ccf63ca872bf64564ecb4b7e108b2134f1b34fa886",
   "elapsed_seconds": 261.45
+ },
+ "The Mountaineering Club - Mallory": {
+  "index": 43,
+  "residual_db": -60.19365961376566,
+  "numeric_pass": true,
+  "bed_rms": 0.04892576981861836,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "5e9de4f45af59750f7003d416e67812d59330e2420a6474b226991cc986a3510",
+  "elapsed_seconds": 249.4
+ },
+ "The Sunshine Garcia Band - For I Am The Moon": {
+  "index": 44,
+  "residual_db": -46.643062851183466,
+  "numeric_pass": true,
+  "bed_rms": 0.09019986901849252,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "ac609fb01c5942471862b437187515bfce0e47528b4c597e6984cd93096491dd",
+  "elapsed_seconds": 257.28
  }
 }
