@@ -98,12 +98,114 @@ RMS は非無音フレームのみ（§4.3）。**vocals stem の RMS も bed �
 
 | 資産 | 状態 | 記録 |
 |---|---|---|
-| vocadito | 進行中 | §3.1 |
-| demucs 重み | 進行中 | §3.2 |
-| MUSDB18-HQ | 進行中 | §3.3 |
-| `n_max` | 進行中 | §3.4 |
+| vocadito | **完了** | §3.1 |
+| demucs 重み | **完了** | §3.2 |
+| MUSDB18-HQ | **完了（部分取得）** | §3.3 |
+| `n_max` | **確定** | §3.4 |
 
-（各節は取得完了後に実数値で埋める。**空欄のまま黙って進めない**。）
+### 3.1 vocadito（再取得 + pin 照合・2026-08-01）
+
+- Zenodo record **5578807** / DOI `10.5281/zenodo.5578807` / `license.id: cc-by-4.0` /
+  `access_right: open`（API 応答をそのまま転記）
+- `vocadito.zip` **md5 `dea40fd18f14d899643c4ba221b33a46`** — Zenodo 掲載値と一致、かつ
+  M2c 記録（`docs/measurements/m2c_2026-07/README.md`）の値とも一致
+- `vocadito.zip` **sha256 `e0d6b99d3f9c594afe5ae5c4d7bdacebe569e53b809e90b89d1c771c4f9990e3`**
+  — M2c 記録の値と一致
+- **40 clip 全部**（音声 + F0 注釈 = 80 ファイル）を
+  `tests/fixtures/melody_bench/m2c_external_fixtures.yaml` の凍結 pin と照合:
+  **mismatch 0 件**
+- 再エンコードなし。pin 側を実体へ合わせる操作は一切していない
+
+### 3.2 demucs 重み（2026-08-01）
+
+- `demucs 4.1.0` / `torch 2.13.0+cu130`
+- モデル = `htdemucs_ft`（リポジトリの `DEFAULT_MODEL`）。bag of 4 checkpoints
+- 各 checkpoint（すべて 84,141,271 bytes・相互に distinct）:
+
+| ファイル | sha256 |
+|---|---|
+| `f7e0c4bc-ba3fe64a.th` | `ba3fe64ae8ef66ac9a4857222ce48efbdc5eb3ad375cb79dd13debee5aaa4066` |
+| `d12395a8-e57c48e6.th` | `e57c48e6b0e38af4f7118d7bd08c49f0a0c0edf7d09143bdd902ea0d237303e6` |
+| `92cfc3b6-ef3bcb9c.th` | `ef3bcb9c8b40d14ae5d51b6db2587339cc12c6b77c0be151ce6d69002e087bf2` |
+| `04573f0d-f3cf25b2.th` | `f3cf25b222c4eed7cd49dd8b2c9597d50c18bd154090f7b919cfa5f93cf22c49` |
+
+**各ファイルの sha256 先頭 8 バイトが、ファイル名の後半（demucs 自身の checksum 規約）と
+一致している** — 配布側の埋め込みチェックサムによる自己検証が通っている。
+
+- リポジトリの重みプロビジョニング・ゲート
+  （`source_separation_adapter.resolve_separation_weights`）**通過**。
+  合成 digest `weights_sha256 = bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86`
+  （4 checkpoint + `files.txt` + `htdemucs_ft.yaml` を畳んだ値）
+- **実行時 download は一切していない**（すべてプロビジョニング時に取得済み）
+
+#### 3.2.1 プロビジョニングの落とし穴（runbook へ反映済み）
+
+`pip install demucs==4.1.0` 後に `demucs.pretrained.get_model("htdemucs_ft")` を呼ぶと、
+この環境では **HuggingFace Hub から safetensors** を
+`~/.cache/huggingface/hub/models--adefossez--HTDemucs-ft/` へ取得する。
+一方リポジトリのゲートは **torch hub checkpoints の `.th`** を探すため、
+`LearnedModelUnavailable: demucs weights not provisioned` になる。
+
+**これはゲートの誤検出ではない**——ゲートが pin するのは「demucs が実際に読む場所の
+bytes」であり、別の場所に別形式で置かれた重みを「取得済み」と数えないのは正しい。
+是正は canonical な `.th` を取得すること:
+
+```bash
+for sig in f7e0c4bc-ba3fe64a d12395a8-e57c48e6 92cfc3b6-ef3bcb9c 04573f0d-f3cf25b2; do
+  curl -L -o "$HOME/.cache/torch/hub/checkpoints/$sig.th" \
+    "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/$sig.th"
+done
+```
+
+### 3.3 MUSDB18-HQ（**部分取得**・§9.1 の宣言された穴）
+
+- Zenodo record **3338373** / `license.id: other-nc`（**非商用研究利用**）/
+  `access_right: open`
+- `musdb18hq.zip`: **公開 md5 `12d4f2ecd55245a4688754dd76363103`**、
+  サイズ **22,656,664,047 bytes**（Zenodo API 応答の転記＝**公開者の主張**であり
+  我々の検証結果ではない・§9.1 レイヤ(1)）
+- **`archive_sha256_local: null`** — 部分取得のため算出不能（§9.1 レイヤ(2)）。
+  理由: `partial acquisition (2026-08-01); full-archive hash not computed`。
+  上流 md5 の転記で埋めていない。推定値も書いていない。**宣言された穴として残す。**
+- 取得方式: **HTTP Range**（`Accept-Ranges` 実測で 206 応答を確認）で zip の
+  ZIP64 中央ディレクトリだけを先に読み、必要 member のみを取得した。
+  中央ディレクトリ: offset `22656555420` / size `108529` / **902 members**、
+  うち `test/` 配下 **301 members** = **50 tracks**
+- 荷重を受けている層（§9.1 レイヤ(3)）は各 stem の `stem_sha256`（§9.2 canonical
+  decode）で、**全 50 曲 × 3 stem = 150 member** について収集する。
+  member 帰属証拠（path / 非圧縮サイズ / 中央ディレクトリ CRC-32 / `member_sha256`）も
+  同時に記録し、**取得した member はすべて CRC-32 照合を通した**（不一致は fail-closed）
+- **`vocals.wav` は 1 バイトも取得していない**（中央ディレクトリでの存在確認のみ）
+
+### 3.4 測定窓 `n_max`（§3.5・確定）
+
+vocadito 40 clip の実測から:
+
+| 項目 | 値 |
+|---|---|
+| `n_max_samples` | **1,708,258** |
+| `n_max_seconds` | **38.736009** |
+| sample_rate | 44100（40 clip 全部で一致） |
+| clip 長 min / median / max | 8.713 s / 19.467 s / 38.736 s |
+
+**設計 §3.5 の「参考（設計側の推定・要確認）: 約 34 秒前後」との差**: 実測は
+**38.736 秒**で、推定より約 4.7 秒長い。設計は当該値を「実測で確定すること」と
+していたので、これは推定の是正であって規準の変更ではない。**`n_max` は常に 40 clip
+基準で固定**し、実行規模には依存させない。
+
+### 3.5 再取得コスト（§9.3 の `S` へ計上する内訳）
+
+| 項目 | 実測 |
+|---|---|
+| vocadito 取得 + 40 clip 照合 | 約 1 分（58 MB） |
+| demucs + torch の pip 導入 | 約 9 分 |
+| demucs 重み `.th` × 4 取得 | 約 1 分（336 MB） |
+| MUSDB18-HQ member 取得（150 member・4.66 GB 圧縮 / 6.60 GB 非圧縮） | 約 50 秒/曲 × 50 曲 |
+| demucs 分離（screening・`htdemucs_ft` = bag of 4） | **約 292 秒/曲**（実測・4 コア CPU） |
+
+**本測定（§8）の `S` はこの表とは別に r2-0 で改めて実測する**（r2 の screening は
+`crepe` を使わず、セル単位のコストとも別物のため）。ここに残すのは「揮発したときに
+何をどれだけ払い直すか」の記録である。
 
 ---
 

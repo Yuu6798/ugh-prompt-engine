@@ -113,11 +113,40 @@ PY
 ### 2.2 Demucs
 
 ```bash
-pip install -e ".[separate]"
+pip install -e ".[separate]"      # または pip install demucs==4.1.0
 ```
 
-重みは初回に torch hub キャッシュへ落ちる。**本測定の前に取得を済ませ**、
-digest を記録する（実行時ダウンロードは禁止）。
+**重要（2026-08-01 実測で判明）: `demucs.pretrained.get_model("htdemucs_ft")` を
+呼んで重みを落としても、リポジトリのゲートは通らないことがある。**
+demucs 4.1.0 は環境によって **HuggingFace Hub から safetensors** を
+`~/.cache/huggingface/hub/models--adefossez--HTDemucs-ft/` へ取得するが、
+`source_separation_adapter` が探すのは **torch hub checkpoints の `.th`** であり、
+`LearnedModelUnavailable: demucs weights not provisioned` になる。
+
+**これはゲートの誤検出ではない。** ゲートが pin するのは「demucs が実際に読む場所の
+bytes」であり、別の場所に別形式で置かれた重みを「取得済み」と数えないのが正しい。
+canonical な `.th` を明示的に取得すること:
+
+```bash
+mkdir -p "$HOME/.cache/torch/hub/checkpoints"
+for sig in f7e0c4bc-ba3fe64a d12395a8-e57c48e6 92cfc3b6-ef3bcb9c 04573f0d-f3cf25b2; do
+  curl -L -o "$HOME/.cache/torch/hub/checkpoints/$sig.th" \
+    "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/$sig.th"
+done
+# 各ファイルの sha256 先頭 8 バイトがファイル名の後半と一致する（demucs 自身の
+# checksum 規約）。一致しなければ取得失敗として扱い、進めない。
+sha256sum "$HOME"/.cache/torch/hub/checkpoints/*.th
+```
+
+ゲート通過の確認（**ここが通ってから先へ進む**）:
+
+```bash
+python -c "
+from svp_rpe.rpe.learned.source_separation_adapter import resolve_separation_weights
+w = resolve_separation_weights(); print(w.version, w.sha256, list(w.filenames))"
+```
+
+**本測定の前に取得を済ませ**、digest を記録する（実行時ダウンロードは禁止）。
 
 ```bash
 python - <<'PY'
