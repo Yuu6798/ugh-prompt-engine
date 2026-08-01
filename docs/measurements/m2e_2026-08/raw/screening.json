@@ -273,5 +273,38 @@
   "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
   "stem_sha256": "f68b7a9058be01dfab4a3e0a0ccdea6d48f2bdf7b430cb821376cd6b4bfd6700",
   "elapsed_seconds": 265.73
+ },
+ "Mu - Too Bright": {
+  "index": 25,
+  "residual_db": -50.26283318309703,
+  "numeric_pass": true,
+  "bed_rms": 0.08968291979501161,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "897fb9e68878892982e5219e6c86ccbfdbb807800ca31861f1cfff12d84a19f3",
+  "elapsed_seconds": 266.04
+ },
+ "Nerve 9 - Pray For The Rain": {
+  "index": 26,
+  "residual_db": -54.20882035872538,
+  "numeric_pass": true,
+  "bed_rms": 0.05935085710897043,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "2e8cfb900d793bbfef6f9300340b3bdf694911796b8d403418a8b99a8ac39f92",
+  "elapsed_seconds": 272.47
+ },
+ "PR - Happy Daze": {
+  "index": 27,
+  "residual_db": -59.74656737309534,
+  "numeric_pass": true,
+  "bed_rms": 0.17420948386170626,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "efb191b07101fcb0afabf213e190418fd9229abd6ba5d6a3eba0a79749f8e5f3",
+  "elapsed_seconds": 268.84
  }
 }
