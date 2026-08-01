@@ -353,11 +353,13 @@ residual_db = 20 * log10( RMS(demucs vocals stem of bed) / RMS(bed) )
 
 ```bash
 python scripts/make_vremix_fixtures.py build \
-    --vocadito-root <展開した vocadito> \
-    --bed-root      <musdb18hq/test> \
-    --bed           <bed_id_1> --bed <bed_id_2> \
-    --level         +12dB --level +6dB --level 0dB --level -6dB \
-    --out-dir       <リポジトリ外の出力先>
+    --vocadito-root  <展開した vocadito> \
+    --bed-root       <musdb18hq/test> \
+    --bed            "Angels In Amplifiers - I'm Alright" \
+    --bed            "Arise - Run Run Run" \
+    --level          +12dB --level +6dB --level 0dB --level -6dB \
+    --registered-utc <YYYY-MM-DD> \
+    --out-dir        <リポジトリ外の**空**ディレクトリ>
 ```
 
 出力（すべて**リポジトリ外**。波形は commit しない）:
@@ -368,6 +370,21 @@ python scripts/make_vremix_fixtures.py build \
 | `manifest_<level_tag>.json` | 水準ごとに 1 本（40 clip × 2 bed = 80 件）。ハーネスの `--external-manifest` へ渡す |
 | `fixtures_<level_tag>.yaml` | 水準ごとの content pin（`m2e-external-fixtures/0.1`）。`--external-fixtures` へ渡す |
 | `generation_record_<level_tag>.json` | `waveform_sha256` / `factor` / `V` / `B` / `g_b` の記録（§4.5 の `factor` 偏り確認用） |
+
+**生成器が入口で確認すること**（すべて fail-closed）:
+
+- 各ベッド stem の §9.2 canonical decode 後 sha256 が
+  `tests/fixtures/melody_bench/m2e_bed_fixtures.yaml` の `expected_stem_sha256` と一致
+  すること、かつそのベッドが `accepted: true` であること。
+  **破損・差し替え・再取得ミスがあると manifest と fixtures は「間違ったベッド」に対して
+  内部整合してしまい、ハーネス側からは検出できない。**
+- vocadito の音声・注釈が `m2c_external_fixtures.yaml` の pin と一致すること。
+- 出力先が**空**であること（前回実行の残骸と混ざらないため）。
+
+**生成した `fixtures_<tag>.yaml` は測定前に repo へ commit すること。** evaluate の
+`_require_attested_external_fixtures_registration` が git 祖先を要求するため、
+リポジトリ外に置いたままでは検証段で必ず落ちる。**commit するのは pin ファイルだけで、
+波形はリポジトリ外のまま**（`m2c_external_fixtures.yaml` と vocadito 音声の関係と同じ）。
 
 規律（**破ったら測定は無効**）:
 

@@ -58,6 +58,8 @@ LEVEL_DB: Dict[str, float] = {"+12dB": 12.0, "+6dB": 6.0, "0dB": 0.0, "-6dB": -6
 
 # M2c の事前登録 pin（vocadito 40 clip）。**再取得禁止**なのでここを唯一の真とする。
 M2C_FIXTURES_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2c_external_fixtures.yaml"
+# M2e r3 の事前登録 pin（採用ベッドの canonical decode 後 stem sha256）。
+M2E_BED_FIXTURES_PATH = ROOT / "tests" / "fixtures" / "melody_bench" / "m2e_bed_fixtures.yaml"
 
 # 生成した pin ファイルが名乗る schema（ハーネス側 `load_external_fixtures` が受理する）。
 M2E_EXTERNAL_FIXTURES_SCHEMA = "m2e-external-fixtures/0.1"
@@ -145,6 +147,40 @@ def stem_sha256(path: Path) -> str:
 def waveform_sha256(y: np.ndarray) -> str:
     """§4.6 の `waveform_sha256`（既存 `m2_accuracy_bars.yaml` の規約と同一）。"""
     return hashlib.sha256(np.asarray(y, dtype=np.float32).tobytes()).hexdigest()
+
+
+def serialize_wav_float32(y: np.ndarray, sample_rate: int) -> bytes:
+    """モノラル float32 波形を**決定論的な** RIFF/WAVE bytes へ直列化する。
+
+    `sf.write(..., subtype="FLOAT")`（libsndfile）は float WAV に PEAK チャンクを書き、
+    そこに**壁時計タイムスタンプ**が入るため、**同一波形でも直列化 bytes が秒単位で
+    変わる**（実測 2026-08-01: 1 秒跨ぎで書いた 2 つの WAV は offset 60 の 1 バイトのみ
+    相違・PEAK チャンクは offset 48）。これを pin に使うと `expected_audio_sha256` が
+    再生成のたびに変わり、**「同一入力 → 同一 bytes」という帯の前提が壊れる**。
+
+    実装は `scripts/run_melody_accuracy.py::_serialize_wav_float32` と**同一構成**
+    （fmt(IEEE float) / fact / data のみの最小 RIFF）。両者の bytes 一致は
+    `tests/test_make_vremix_fixtures.py` が機械検証する——規約が 2 つに割れるより、
+    同じものを 2 箇所で作って一致を強制するほうが安全である。
+    """
+    import struct
+
+    samples = np.asarray(y, dtype=np.float32)
+    if samples.ndim != 1:
+        raise GenerationError(
+            f"serialize_wav_float32: モノラル 1-D 波形のみ対応（shape {samples.shape!r}）"
+        )
+    data = samples.tobytes()
+    rate = int(sample_rate)
+    fmt_body = struct.pack("<HHIIHH", 3, 1, rate, rate * 4, 4, 32)  # WAVE_FORMAT_IEEE_FLOAT
+    fact_body = struct.pack("<I", samples.size)
+    payload = (
+        b"WAVE"
+        + b"fmt " + struct.pack("<I", len(fmt_body)) + fmt_body
+        + b"fact" + struct.pack("<I", len(fact_body)) + fact_body
+        + b"data" + struct.pack("<I", len(data)) + data
+    )
+    return b"RIFF" + struct.pack("<I", len(payload)) + payload
 
 
 # ---------------------------------------------------------------------------
@@ -240,8 +276,16 @@ def residual_db(bed_mono: np.ndarray, vocals_mono: np.ndarray) -> float:
 # ---------------------------------------------------------------------------
 
 
-def load_bed_mono(bed_dir: Path) -> Tuple[np.ndarray, int]:
+def load_bed_mono(
+    bed_dir: Path, *, expected_stem_sha256: Optional[Dict[str, str]] = None
+) -> Tuple[np.ndarray, int]:
     """`drums + bass + other` を生サンプル加算し、`0.5 * (L + R)` でモノ化する。
+
+    `expected_stem_sha256` を渡すと、各 stem の §9.2 canonical decode 後 sha256 を
+    **事前登録 pin と照合**する（不一致は停止）。破損・差し替え・再取得ミスがあっても
+    manifest と fixtures は「間違ったベッド」に対して内部整合してしまうため、
+    ここで素材そのものを committed pin へ繋いでおかないと、ハーネス側は
+    「別の素材を測った」ことを検出できない。
 
     `vocals.wav` は**使わない**（存在確認のみ・設計 §3.2）。MUSDB18-HQ の stem は
     mixture へ厳密に加算合成されるので、`drums+bass+other` は当該曲の器楽のみの
@@ -257,6 +301,20 @@ def load_bed_mono(bed_dir: Path) -> Tuple[np.ndarray, int]:
     accumulated: Optional[np.ndarray] = None
     sample_rate: Optional[int] = None
     for name in BED_STEMS:
+        if expected_stem_sha256 is not None:
+            expected = expected_stem_sha256.get(name)
+            if not expected:
+                raise GenerationError(
+                    f"{bed_dir}: stem {name!r} の expected_stem_sha256 が事前登録に無い "
+                    "(fail-closed)"
+                )
+            actual = stem_sha256(bed_dir / f"{name}.wav")
+            if actual != expected:
+                raise GenerationError(
+                    f"{bed_dir / (name + '.wav')}: canonical decode 後 sha256 {actual} が "
+                    f"事前登録 pin {expected} と不一致; 破損・差し替え・再取得ミスの可能性が "
+                    "あり、間違ったベッドで内部整合した manifest を作らない (fail-closed)"
+                )
         data, rate = read_audio(bed_dir / f"{name}.wav")
         if data.ndim != 2 or data.shape[1] != 2:
             raise GenerationError(
@@ -374,6 +432,20 @@ def entry_id(clip_id: str, bed_id: str, level: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def load_registered_beds() -> Dict[str, Dict[str, Any]]:
+    """`m2e_bed_fixtures.yaml` の採用ベッド pin を読む（§9・r3 で登録済み）。"""
+    if not M2E_BED_FIXTURES_PATH.is_file():
+        raise GenerationError(
+            f"{M2E_BED_FIXTURES_PATH} が無い; ベッドの事前登録 pin なしにミックスを "
+            "生成しない (fail-closed)"
+        )
+    doc = yaml.safe_load(M2E_BED_FIXTURES_PATH.read_text(encoding="utf-8"))
+    beds = doc.get("beds")
+    if not isinstance(beds, dict) or not beds:
+        raise GenerationError(f"{M2E_BED_FIXTURES_PATH}: beds が空 (fail-closed)")
+    return beds
+
+
 def load_registered_clips() -> Dict[str, Dict[str, str]]:
     """`m2c_external_fixtures.yaml` の 40 clip pin を読む（**唯一の真**）。"""
     doc = yaml.safe_load(M2C_FIXTURES_PATH.read_text(encoding="utf-8"))
@@ -440,10 +512,26 @@ def build(
     tracks: List[str],
     levels: List[str],
     out_dir: Path,
+    registered_utc: str,
 ) -> Dict[str, Any]:
     """全 (clip × bed × level) のミックスと manifest / fixtures / 生成記録を書く。"""
+    # P1-2: `registered_utc: null` は `load_external_fixtures_with_raw` の
+    # `_parse_registered_utc` を通らない——生成した fixtures をそのまま
+    # `--external-fixtures` へ渡す documented flow が必ず落ちていた。実値を要求する。
+    if not isinstance(registered_utc, str) or not registered_utc.strip():
+        raise GenerationError("registered_utc が非空文字列でない (fail-closed)")
     clips = load_registered_clips()
+    registered_beds = load_registered_beds()
     out_dir = Path(out_dir)
+    # P2（最小対処）: 既存の出力先へ重ねて書かない。古い実行の残骸が混ざると
+    # 「1 つの fixture bundle」という消費側の前提が崩れる。**staging + atomic rename
+    # までは行わない**——下流に既に fail-closed がある（cohort 完全一致 +
+    # `expected_audio_sha256` 照合）ので、残骸が測定を汚す経路は塞がっている。
+    if out_dir.exists() and any(out_dir.iterdir()):
+        raise GenerationError(
+            f"{out_dir} が空でない; 前回実行の残骸と混ざるのを避けるため、空の出力先を "
+            "指定するか既存を削除すること (fail-closed)"
+        )
     mix_dir = out_dir / "mix"
     annotation_dir = out_dir / "annotations"
     mix_dir.mkdir(parents=True, exist_ok=True)
@@ -461,7 +549,20 @@ def build(
 
     beds: Dict[str, Tuple[np.ndarray, int]] = {}
     for track in tracks:
-        beds[track] = load_bed_mono(Path(bed_root) / track)
+        pin = registered_beds.get(track)
+        if pin is None:
+            raise GenerationError(
+                f"track {track!r} が {M2E_BED_FIXTURES_PATH.name} に事前登録されていない "
+                "(fail-closed)"
+            )
+        if not pin.get("accepted"):
+            raise GenerationError(
+                f"track {track!r} は事前登録上 accepted ではない; スクリーニングを通って "
+                "いないベッドでミックスを作らない (fail-closed)"
+            )
+        beds[track] = load_bed_mono(
+            Path(bed_root) / track, expected_stem_sha256=pin.get("expected_stem_sha256")
+        )
 
     # 注釈はミックスで変わらない（加算ミックスは f0 を変えない）。manifest 位置基準で
     # 解決できる必要があるので out_dir 配下へ **bytes 複製**する（再エンコードしない）。
@@ -495,12 +596,9 @@ def build(
                 mix_final, meta = apply_level(voice, bed_seg, level)
                 eid = entry_id(clip_id, bed_id, level)
                 mix_path = mix_dir / f"{eid}.wav"
-                sf.write(
-                    str(mix_path),
-                    np.asarray(mix_final, dtype=np.float32),
-                    voice_rate,
-                    subtype="FLOAT",
-                )
+                # P1-1: libsndfile の PEAK チャンクに壁時計が入り bytes が秒単位で
+                # 変わるため、`sf.write(subtype="FLOAT")` は pin 対象に使えない。
+                mix_path.write_bytes(serialize_wav_float32(mix_final, voice_rate))
                 manifest.append(
                     {
                         "id": eid,
@@ -528,7 +626,7 @@ def build(
         )
         fixtures_doc = {
             "schema_version": M2E_EXTERNAL_FIXTURES_SCHEMA,
-            "registered_utc": None,   # r3 で pin する時点の日付を記入する
+            "registered_utc": registered_utc,
             "level": level,
             "fixtures": {k: fixtures[k] for k in sorted(fixtures)},
         }
@@ -624,6 +722,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
         tracks=list(args.bed),
         levels=list(args.level),
         out_dir=Path(args.out_dir),
+        registered_utc=args.registered_utc,
     )
     print(json.dumps(summary, indent=2, ensure_ascii=False))
     return 0
@@ -657,7 +756,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_build.add_argument("--bed-root", required=True)
     p_build.add_argument("--bed", action="append", required=True, help="MUSDB トラック名")
     p_build.add_argument("--level", action="append", required=True, choices=list(LEVELS))
-    p_build.add_argument("--out-dir", required=True)
+    p_build.add_argument("--out-dir", required=True, help="**空**のディレクトリ（残骸混入を防ぐ）")
+    p_build.add_argument(
+        "--registered-utc", required=True, metavar="YYYY-MM-DD",
+        help="生成する fixtures の事前登録日。ハーネスは `registered_utc` を必須検証する。"
+        "**生成した fixtures yaml は測定前に repo へ commit すること**——evaluate の "
+        "`_require_attested_external_fixtures_registration` が git 祖先を要求する"
+        "（波形はリポジトリ外のまま。pin ファイルだけを commit する）",
+    )
     p_build.set_defaults(func=_cmd_build)
 
     args = parser.parse_args(argv)

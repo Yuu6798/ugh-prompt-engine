@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import time
 from pathlib import Path
 
 import numpy as np
@@ -250,17 +251,27 @@ def test_read_audio_refuses_vocals_stem(tmp_path: Path) -> None:
 
 
 def _write_bed(bed_dir: Path, *, sample_rate: int = 44100, n: int = 8192, rates=None) -> None:
+    """合成ベッドを **PCM_16** で書く（実素材 MUSDB18-HQ と同じ整数 PCM）。
+
+    §9.2 の canonical decode は整数 PCM のみを受け付けるので、float で書くと
+    `stem_sha256` が取れない——テスト素材も実素材の性質に合わせる。
+    """
     bed_dir.mkdir(parents=True, exist_ok=True)
     for idx, name in enumerate(mk.BED_STEMS):
         rate = sample_rate if rates is None else rates[idx]
         stereo = np.stack([_tone(n, 0.05 * (idx + 1)), _tone(n, 0.04 * (idx + 1), 51)], axis=1)
-        sf.write(str(bed_dir / f"{name}.wav"), stereo.astype(np.float32), rate, subtype="FLOAT")
+        sf.write(
+            str(bed_dir / f"{name}.wav"),
+            (stereo * 32767.0).astype(np.int16),
+            rate,
+            subtype="PCM_16",
+        )
     # `vocals.wav` は存在確認のみに使う（中身は読まれない）。
     sf.write(
         str(bed_dir / "vocals.wav"),
-        np.stack([_tone(n, 0.9), _tone(n, 0.9, 23)], axis=1).astype(np.float32),
+        (np.stack([_tone(n, 0.9), _tone(n, 0.9, 23)], axis=1) * 32767.0).astype(np.int16),
         sample_rate,
-        subtype="FLOAT",
+        subtype="PCM_16",
     )
 
 
@@ -332,6 +343,20 @@ def test_level_ladder_order_is_frozen() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _fake_bed_pins(bed_root: Path, tracks) -> dict:
+    """`m2e_bed_fixtures.yaml` 相当の pin を、合成ベッドの実 digest から組む。"""
+    pins = {}
+    for track in tracks:
+        pins[track] = {
+            "accepted": True,
+            "expected_stem_sha256": {
+                stem: mk.stem_sha256(bed_root / track / f"{stem}.wav")
+                for stem in mk.BED_STEMS
+            },
+        }
+    return pins
+
+
 def _fake_vocadito(tmp_path: Path, clip_ids) -> tuple[Path, dict]:
     root = tmp_path / "vocadito"
     (root / "Audio").mkdir(parents=True)
@@ -362,6 +387,10 @@ def test_build_emits_manifest_fixtures_and_generation_record(tmp_path, monkeypat
     for track in ("Artist A - Track One", "Artist B - Track Two"):
         _write_bed(bed_root / track)
 
+    monkeypatch.setattr(
+        mk, "load_registered_beds",
+        lambda: _fake_bed_pins(bed_root, ["Artist A - Track One", "Artist B - Track Two"]),
+    )
     out_dir = tmp_path / "out"
     summary = mk.build(
         vocadito_root=vocadito_root,
@@ -369,6 +398,7 @@ def test_build_emits_manifest_fixtures_and_generation_record(tmp_path, monkeypat
         tracks=["Artist A - Track One", "Artist B - Track Two"],
         levels=["+12dB", "-6dB"],
         out_dir=out_dir,
+        registered_utc="2026-08-01",
     )
     assert set(summary["levels"]) == {"+12dB", "-6dB"}
     for level, tag in (("+12dB", "p12"), ("-6dB", "m06")):
@@ -405,15 +435,21 @@ def test_build_is_deterministic(tmp_path, monkeypatch) -> None:
     bed_root = tmp_path / "beds"
     _write_bed(bed_root / "Artist A - Track One")
 
+    monkeypatch.setattr(
+        mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, ["Artist A - Track One"])
+    )
     digests = []
     for run in ("a", "b"):
         out_dir = tmp_path / f"out_{run}"
+        if run == "b":
+            time.sleep(1.2)     # **秒をまたぐ**（PEAK チャンクの壁時計を踏む条件）
         mk.build(
             vocadito_root=vocadito_root,
             bed_root=bed_root,
             tracks=["Artist A - Track One"],
             levels=["0dB"],
             out_dir=out_dir,
+            registered_utc="2026-08-01",
         )
         record = json.loads((out_dir / "generation_record_p00.json").read_text())
         digests.append({k: v["waveform_sha256"] for k, v in record.items()})
@@ -435,6 +471,9 @@ def test_build_refuses_when_vocadito_bytes_drifted(tmp_path, monkeypatch) -> Non
     monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
     bed_root = tmp_path / "beds"
     _write_bed(bed_root / "Artist A - Track One")
+    monkeypatch.setattr(
+        mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, ["Artist A - Track One"])
+    )
     with pytest.raises(mk.GenerationError, match="再取得・再エンコードは禁止"):
         mk.build(
             vocadito_root=vocadito_root,
@@ -442,4 +481,140 @@ def test_build_refuses_when_vocadito_bytes_drifted(tmp_path, monkeypatch) -> Non
             tracks=["Artist A - Track One"],
             levels=["0dB"],
             out_dir=tmp_path / "out",
+            registered_utc="2026-08-01",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Codex レビュー対応（PR #238）
+# ---------------------------------------------------------------------------
+
+
+def test_serialize_wav_float32_is_timestamp_free(tmp_path: Path) -> None:
+    """P1-1: 秒をまたいで書いても bytes が変わらないこと。
+
+    `sf.write(..., subtype="FLOAT")` は PEAK チャンク（offset 48）に**壁時計**を書き、
+    1 秒跨ぐと offset 60 の 1 バイトが変わる（本テストで実際に確認する）。それを pin に
+    使うと `expected_audio_sha256` が再生成のたびに変わり、帯の前提が壊れる。
+    """
+    y = (np.sin(np.linspace(0.0, 40.0, 4410)) * 0.3).astype(np.float32)
+    a = mk.serialize_wav_float32(y, 44100)
+    time.sleep(1.2)
+    b = mk.serialize_wav_float32(y, 44100)
+    assert a == b
+    assert b"PEAK" not in a
+
+    # libsndfile 経由は実際に揺れる（この欠陥が実在することの対照）。
+    p1, p2 = tmp_path / "s1.wav", tmp_path / "s2.wav"
+    sf.write(str(p1), y, 44100, subtype="FLOAT")
+    time.sleep(1.2)
+    sf.write(str(p2), y, 44100, subtype="FLOAT")
+    assert p1.read_bytes() != p2.read_bytes()
+
+
+def test_serialize_wav_float32_matches_the_harness_serializer() -> None:
+    """ハーネス側の直列化と **bytes 完全一致**であること（規約が 2 つに割れない）。"""
+    import sys
+
+    scripts = str(ROOT / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import run_melody_accuracy as harness
+
+    y = (np.sin(np.linspace(0.0, 12.0, 2048)) * 0.4).astype(np.float32)
+    assert mk.serialize_wav_float32(y, 44100) == harness._serialize_wav_float32(y, 44100)
+
+
+def test_serialize_wav_float32_round_trips_through_libsndfile(tmp_path: Path) -> None:
+    """自前 RIFF を libsndfile が読み戻せ、サンプルが bit 一致すること。"""
+    y = (np.sin(np.linspace(0.0, 20.0, 3000)) * 0.25).astype(np.float32)
+    path = tmp_path / "own.wav"
+    path.write_bytes(mk.serialize_wav_float32(y, 44100))
+    back, rate = sf.read(str(path), dtype="float32", always_2d=False)
+    assert rate == 44100
+    assert np.array_equal(back, y)
+
+
+def test_build_rejects_a_bed_whose_stem_digest_differs(tmp_path, monkeypatch) -> None:
+    """P1-3: ベッド stem を committed pin と照合する（破損・差し替えを通さない）。"""
+    clip_ids = ["vocadito_1"]
+    vocadito_root, pins = _fake_vocadito(tmp_path, clip_ids)
+    monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
+    bed_root = tmp_path / "beds"
+    _write_bed(bed_root / "Artist A - Track One")
+    bad = _fake_bed_pins(bed_root, ["Artist A - Track One"])
+    bad["Artist A - Track One"]["expected_stem_sha256"]["drums"] = "0" * 64
+    monkeypatch.setattr(mk, "load_registered_beds", lambda: bad)
+    with pytest.raises(mk.GenerationError, match="事前登録 pin .* と不一致"):
+        mk.build(
+            vocadito_root=vocadito_root, bed_root=bed_root,
+            tracks=["Artist A - Track One"], levels=["0dB"],
+            out_dir=tmp_path / "out", registered_utc="2026-08-01",
+        )
+
+
+def test_build_rejects_a_bed_that_is_not_accepted(tmp_path, monkeypatch) -> None:
+    """スクリーニングを通っていないベッドでミックスを作らない。"""
+    vocadito_root, pins = _fake_vocadito(tmp_path, ["vocadito_1"])
+    monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
+    bed_root = tmp_path / "beds"
+    _write_bed(bed_root / "Artist A - Track One")
+    not_accepted = _fake_bed_pins(bed_root, ["Artist A - Track One"])
+    not_accepted["Artist A - Track One"]["accepted"] = False
+    monkeypatch.setattr(mk, "load_registered_beds", lambda: not_accepted)
+    with pytest.raises(mk.GenerationError, match="accepted ではない"):
+        mk.build(
+            vocadito_root=vocadito_root, bed_root=bed_root,
+            tracks=["Artist A - Track One"], levels=["0dB"],
+            out_dir=tmp_path / "out", registered_utc="2026-08-01",
+        )
+
+
+def test_build_emits_a_dated_registered_utc(tmp_path, monkeypatch) -> None:
+    """P1-2: `registered_utc: null` はハーネスが読めない。実値を書くこと。"""
+    vocadito_root, pins = _fake_vocadito(tmp_path, ["vocadito_1"])
+    monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
+    bed_root = tmp_path / "beds"
+    _write_bed(bed_root / "Artist A - Track One")
+    monkeypatch.setattr(
+        mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, ["Artist A - Track One"])
+    )
+    out_dir = tmp_path / "out"
+    mk.build(
+        vocadito_root=vocadito_root, bed_root=bed_root,
+        tracks=["Artist A - Track One"], levels=["0dB"],
+        out_dir=out_dir, registered_utc="2026-08-01",
+    )
+    doc = yaml.safe_load((out_dir / "fixtures_p00.yaml").read_text())
+    assert doc["registered_utc"] == "2026-08-01"
+    # ハーネスの loader が実際に受理すること（documented flow が通る証明）。
+    import sys
+
+    scripts = str(ROOT / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import run_melody_accuracy as harness
+
+    loaded, sha256 = harness.load_external_fixtures(out_dir / "fixtures_p00.yaml")
+    assert len(sha256) == 64
+    assert set(loaded["fixtures"]) == set(doc["fixtures"])
+
+
+def test_build_refuses_a_non_empty_out_dir(tmp_path, monkeypatch) -> None:
+    """P2（最小対処）: 前回実行の残骸と混ざらないよう空の出力先を要求する。"""
+    vocadito_root, pins = _fake_vocadito(tmp_path, ["vocadito_1"])
+    monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
+    bed_root = tmp_path / "beds"
+    _write_bed(bed_root / "Artist A - Track One")
+    monkeypatch.setattr(
+        mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, ["Artist A - Track One"])
+    )
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / "stale.txt").write_text("leftover", encoding="utf-8")
+    with pytest.raises(mk.GenerationError, match="空でない"):
+        mk.build(
+            vocadito_root=vocadito_root, bed_root=bed_root,
+            tracks=["Artist A - Track One"], levels=["0dB"],
+            out_dir=out_dir, registered_utc="2026-08-01",
         )
