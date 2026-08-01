@@ -416,5 +416,38 @@
   "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
   "stem_sha256": "e59b8b04e0417ca320875750e989e3d405bd4b30e38649694f7aee55b56e36f8",
   "elapsed_seconds": 285.64
+ },
+ "Speak Softly - Like Horses": {
+  "index": 38,
+  "residual_db": -31.591129890134226,
+  "numeric_pass": true,
+  "bed_rms": 0.07838424134635784,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "9dbbe706f2b4655f42537240cec95fcf57c7a79760da2f29f86790680ed5ed87",
+  "elapsed_seconds": 298.46
+ },
+ "The Doppler Shift - Atrophy": {
+  "index": 39,
+  "residual_db": -42.742349576594464,
+  "numeric_pass": true,
+  "bed_rms": 0.05347745343761848,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "84cd5b1dbb087a15fc272dd3c95d4e58b070c17b2bc746340ea147faf5f5da09",
+  "elapsed_seconds": 259.9
+ },
+ "The Easton Ellises (Baumi) - SDRNR": {
+  "index": 40,
+  "residual_db": -28.045413687910376,
+  "numeric_pass": true,
+  "bed_rms": 0.0866603221526241,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "40ba8c91b85fe464242fd7eeb8a4a660da45b6714dd63a7f081b87cc330e9e3a",
+  "elapsed_seconds": 269.0
  }
 }
