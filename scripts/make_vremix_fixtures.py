@@ -73,6 +73,10 @@ M2C_FIXTURES_SCHEMA = "m2c-external-fixtures/0.1"
 # `40 clip × 2 bed × 4 水準 × 2 アーム × n=2 = 1280` を決める凍結量なので、
 # registry がこの件数でなければ帯そのものが別物になる。
 M2C_EXPECTED_CLIP_COUNT = 40
+# 事前登録された MUSDB18-HQ ベッドコホートの件数（設計 §3.3: test split 全 50 曲）。
+# `require_registered_track_list` は期待コホートをこの登録簿**自身**から導くので、
+# 登録簿が切り詰められると期待値ごと縮み、49 行/49 枚の成果物が「正常終了」する。
+M2E_EXPECTED_BED_COUNT = 50
 
 
 class GenerationError(RuntimeError):
@@ -622,6 +626,22 @@ def load_registered_beds() -> Dict[str, Dict[str, Any]]:
                 f"{M2E_BED_FIXTURES_PATH}: {track!r} の lexical_index が整数でない "
                 "(fail-closed)"
             )
+    # 件数と `lexical_index` の完全性を凍結量として要求する。`require_registered_track_list`
+    # は期待コホートをこの登録簿自身から導くため、切り詰められると**期待値ごと縮み**、
+    # 49 行の census / 49 枚の目視記録が「正常終了」してしまう。
+    if len(beds) != M2E_EXPECTED_BED_COUNT:
+        raise GenerationError(
+            f"{M2E_BED_FIXTURES_PATH}: 登録ベッドが {len(beds)} 件で凍結値 "
+            f"{M2E_EXPECTED_BED_COUNT} 件と一致しない; 部分コホートで成果物を出さない "
+            "(fail-closed)"
+        )
+    indices = sorted(int(pin["lexical_index"]) for pin in beds.values())
+    if indices != list(range(M2E_EXPECTED_BED_COUNT)):
+        raise GenerationError(
+            f"{M2E_BED_FIXTURES_PATH}: lexical_index が 0..{M2E_EXPECTED_BED_COUNT - 1} の "
+            f"完全な置換でない（{indices}）; 順序が壊れた登録簿から採用順を導かない "
+            "(fail-closed)"
+        )
     return beds
 
 
@@ -1067,6 +1087,21 @@ def _cmd_screen(args: argparse.Namespace) -> int:
             "測定窓は凍結量であり、呼び出し側の値で上書きしない (fail-closed)"
         )
     window = tile_to_length(bed_mono, registered, bed_rate)
+    # 再構成した窓を登録 pin へ束縛する（`build` と同じ理由・同じ検査）。stem hash と
+    # 窓長が通っても、float 復号やタイル連結の実装が変われば窓の中身は変わりうる
+    # ——そのとき `screen` は**登録されていない窓**の `residual_db` を出す。
+    window_pin = pin.get("bed_window_sha256")
+    if not window_pin:
+        raise GenerationError(
+            f"track {args.track!r}: bed_window_sha256 が事前登録に無い (fail-closed)"
+        )
+    actual_window = waveform_sha256(window)
+    if actual_window != window_pin:
+        raise GenerationError(
+            f"track {args.track!r}: 再構成したベッド窓の sha256 {actual_window} が事前登録 "
+            f"pin {window_pin} と不一致; 登録されていない窓から screening 値を出さない "
+            "(fail-closed)"
+        )
     # §4.7: 分離器の投入は既存 `demucs_vocals_then_crepe` 経路の実装を流用する
     # （新しい規約を発明しない）。未導入・重み未取得なら fail-closed で停止する。
     # **provenance を捨てる `isolate_vocals` は使わない**——ソース stem を pin へ

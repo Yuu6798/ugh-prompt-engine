@@ -69,6 +69,20 @@ def stft_db(y: np.ndarray, sample_rate: int) -> tuple[np.ndarray, np.ndarray, np
     return freqs, times, s_db
 
 
+def _renderer_stack() -> dict[str, str]:
+    """PNG bytes を決める実装スタックの版（digest map に同梱する）。"""
+    import platform
+    from importlib import metadata as _metadata
+
+    stack = {"python": platform.python_version(), "backend": matplotlib.get_backend()}
+    for package in ("matplotlib", "numpy", "pillow", "soundfile"):
+        try:
+            stack[package] = _metadata.version(package)
+        except Exception:                      # 未導入は「未導入」と書く（黙って省かない）
+            stack[package] = "absent"
+    return stack
+
+
 def render(path: Path, out_png: Path, title: str, *, expected_sha256: str) -> None:
     y, sample_rate = sf.read(str(path), dtype="float64", always_2d=False)
     # 目視の会計は「50 件揃っている」ことではなく「**登録されたコホートを見た**」
@@ -162,8 +176,17 @@ def main() -> int:
             digests[f"bed_{index:02d}.png"] = hashlib.sha256(png.read_bytes()).hexdigest()
             print(f"[{index:02d}] {track}", flush=True)
 
+        # 描画スタックを digest map に同梱する。凍結してあるのは**生成条件**であって
+        # ラスタライズ実装ではない——matplotlib / numpy / libpng の版が変われば、
+        # 同じ入力・同じ定数でも PNG bytes は変わりうる。版を書いておかないと、
+        # 第三者は digest 不一致が「別の素材を見た」のか「別の版で描いた」のかを
+        # 区別できない。**2026-08-01 に完了済みの r2 目視記録はこの記録を持たない**
+        # （宣言された穴。`README.md` の pin 表に明記）。
         (staging / "spectrogram_sha256.json").write_text(
-            json.dumps(digests, indent=1, sort_keys=True), encoding="utf-8"
+            json.dumps(
+                {"renderer": _renderer_stack(), "images": digests}, indent=1, sort_keys=True
+            ),
+            encoding="utf-8",
         )
         if out.exists():
             if any(out.iterdir()):

@@ -8581,7 +8581,15 @@ def _write_m2e_external_fixture_set(
     実生成物と同じく **top-level `level`** を持つ（`make_vremix_fixtures.build` は
     水準ごとに 1 本書き、そこに自分がどの水準を pin したかを宣言する）。run 側は
     これを `--level` と突き合わせる。
+
+    entry id の `level_tag` も宣言水準に追随させる（設計 §6.2 の id 規約
+    `vremix_{clip_id}_{bed_id}_{level_tag}`）。ハーネスは宣言と id 側の実体を
+    束縛するので、ここで `p12` 固定にすると規約違反の pin ファイルになる。
     """
+    tag = harness._M2E_LEVEL_TAGS[level]
+    clip_specs = {
+        f"{clip_id.rsplit('_', 1)[0]}_{tag}": spec for clip_id, spec in clip_specs.items()
+    }
     external_dir = tmp_path / "external_m2e"
     external_dir.mkdir(exist_ok=True)
     manifest_entries: List[Dict[str, str]] = []
@@ -8622,10 +8630,14 @@ _VREMIX_CLIPS = {
 
 
 def _m2e_fake_runner(shift_cents: float = 0.0):
-    return _make_fake_external_runner(
-        {k: (tuple(v[0]), tuple(v[1])) for k, v in _VREMIX_CLIPS.items()},
-        shift_cents=shift_cents,
-    )
+    # entry id の `level_tag` は水準ごとに変わる（§6.2 の id 規約）。参照表は
+    # 全水準ぶんの id を持たせておく——runner は id からしか正解を引けないため。
+    refs = {}
+    for clip_id, (times, freqs) in _VREMIX_CLIPS.items():
+        stem = clip_id.rsplit("_", 1)[0]
+        for tag in harness._M2E_LEVEL_TAGS.values():
+            refs[f"{stem}_{tag}"] = (tuple(times), tuple(freqs))
+    return _make_fake_external_runner(refs, shift_cents=shift_cents)
 
 
 def _m2e_run(tmp_path: Path, *, level: str, shift_cents: float = 0.0, **kwargs) -> Dict[str, Any]:
@@ -8781,6 +8793,20 @@ def test_m2e_evaluate_rejects_mixed_levels(tmp_path: Path) -> None:
     """別水準の run を「同じ測定の反復」として評価しない。"""
     reports = [_m2e_run(tmp_path, level="+12dB"), _m2e_run(tmp_path, level="0dB")]
     with pytest.raises(ValueError, match="level が単一でない"):
+        _m2e_evaluate(tmp_path, reports)
+
+
+def test_m2e_evaluate_rejects_mixed_env_digests(tmp_path: Path) -> None:
+    """P2: 別環境で採ったセルを同じ帯の反復として合算しない（§8.7）。"""
+    reports = [_m2e_run(tmp_path, level="+12dB") for _ in range(2)]
+    reports[0]["env_digest"] = "a" * 64
+    reports[1]["env_digest"] = "b" * 64
+    with pytest.raises(ValueError, match="env_digest が揃っていない"):
+        _m2e_evaluate(tmp_path, reports)
+
+    # 片方だけ記録がある場合も揃っていない（`--cell-store` 有無が混ざった反復）。
+    del reports[1]["env_digest"]
+    with pytest.raises(ValueError, match="env_digest が揃っていない"):
         _m2e_evaluate(tmp_path, reports)
 
 

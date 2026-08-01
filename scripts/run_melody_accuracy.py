@@ -3836,6 +3836,44 @@ def _require_external_fixtures_level_match(
             f"{level!r} が食い違う; 別水準の音を測って要求水準の row として刻むと、"
             "ゲート判定と破断曲線の両方が汚染される (fail-closed)"
         )
+    # top-level `level` は 1 行の宣言でしかない。`fixtures_m06.yaml` を複製して
+    # `level` だけ `+12dB` に書き換えると、entry id は全部 `_m06` のまま・pin された
+    # 音も −6 dB のミックスのまま**宣言だけ**が gate 水準になる。id 規約（§6.2:
+    # `vremix_{clip_id}_{bed_id}_{level_tag}`）は凍結されているので、宣言を id 側の
+    # 実体へ束縛できる。
+    fixtures = fixtures_doc.get("fixtures")
+    if not isinstance(fixtures, dict) or not fixtures:
+        raise ValueError(f"{where}: M2e fixtures が空 (fail-closed)")
+    expected_suffix = f"_{_M2E_LEVEL_TAGS[declared]}"
+    mislabeled = sorted(k for k in fixtures if not str(k).endswith(expected_suffix))
+    if mislabeled:
+        raise ValueError(
+            f"{where}: 宣言水準 {declared!r} に対し id が {expected_suffix!r} で終わらない "
+            f"entry がある（{mislabeled[:5]}{' …' if len(mislabeled) > 5 else ''}）; "
+            "宣言だけ書き換えた pin ファイルで別水準の音を測らない (fail-closed)"
+        )
+    # コホートの**構造的完全性**も manifest と独立に要求する。fixtures と manifest を
+    # 同じ 79 件へ切り詰めると両者は一致するので、cohort 完全一致の比較では縮んだ帯を
+    # 検出できない。id 規約が `clip × bed` の直積であることを使い、**全 bed が同一の
+    # clip 集合を持つ**ことを要求する（1 entry 落とせば矩形が壊れる）。
+    # 絶対件数（§6.2 の 80 = 40 clip × 2 bed）は生成器側で担保する
+    # （`make_vremix_fixtures` が 40 clip registry と accepted ベッド全件を要求する）。
+    by_bed: Dict[str, set] = {}
+    for key in fixtures:
+        parts = str(key).split("_")
+        if len(parts) < 4 or parts[0] != "vremix":
+            raise ValueError(
+                f"{where}: entry id {key!r} が §6.2 の規約 "
+                "`vremix_{clip_id}_{bed_id}_{level_tag}` に合わない (fail-closed)"
+            )
+        by_bed.setdefault(parts[-2], set()).add("_".join(parts[1:-2]))
+    clip_sets = {frozenset(clips) for clips in by_bed.values()}
+    if len(clip_sets) != 1:
+        detail = {bed: len(clips) for bed, clips in sorted(by_bed.items())}
+        raise ValueError(
+            f"{where}: bed ごとの clip 集合が揃っていない（{detail}）; 部分コホートを "
+            "水準の証拠として測らない (fail-closed)"
+        )
 
 
 def load_external_fixtures(path: Path = EXTERNAL_FIXTURES_PATH) -> Tuple[Dict[str, Any], str]:
@@ -7863,6 +7901,23 @@ def evaluate_m2_bars(
                 "評価しない (fail-closed)"
             )
         m2e_level = levels.pop()
+        # 同じ理由で **環境も run の次元**である（§8.7: `env_digest` を跨いだセルの
+        # 合算を禁止）。`--cell-store` を使った repeats が別環境（Python パッチ版・
+        # CPU 同一性の違い等）で採られていると `env_digest` が食い違うが、指標が
+        # bit 一致してしまえば下流からは見えない。**揃っていること**を要求する
+        # （両方とも未記録 = `--cell-store` 不使用の run は従来どおり通す。記録が
+        #  あるなら非 null かつ全 report で同一であること）。
+        env_digests = {
+            report.get("env_digest") for report in reports if any(
+                cat in m2e_categories_in_reports for cat in report.get("categories", {})
+            )
+        }
+        if len(env_digests) != 1 or (env_digests != {None} and None in env_digests):
+            raise ValueError(
+                f"evaluate_m2_bars: M2e カテゴリを含む report の env_digest が揃っていない "
+                f"（{sorted(str(v) for v in env_digests)}）; 別環境で採ったセルを同じ帯の "
+                "反復として合算しない (fail-closed)"
+            )
         verdict["m2e_bars_sha256"] = m2e_bars_sha256
         verdict["m2e_bars_path_relative"] = _repo_relative_path(m2e_bars_path)
         verdict["m2e_bars_registration_attestation"] = m2e_registration_attestation
