@@ -1758,5 +1758,335 @@
    "bed_window_sha256": "e85a8b51c4bb8041fd845784bcdfeb963438c65efd91cfcc745af815329c0229"
   },
   "fetch_seconds": 66.92
+ },
+ "Secretariat - Borderline": {
+  "index": 32,
+  "track": "Secretariat - Borderline",
+  "members": {
+   "test/Secretariat - Borderline/drums.wav": {
+    "uncompressed_size": 50599612,
+    "crc32_central_directory": "0820399d",
+    "member_sha256": "b34609ab8507a227f3d4477dc40f0c76030645b7238b0cb177bf40ace1668d5e",
+    "compression_method": 8
+   },
+   "test/Secretariat - Borderline/bass.wav": {
+    "uncompressed_size": 50599612,
+    "crc32_central_directory": "26c0304a",
+    "member_sha256": "9a966d4fb63a1307cada1e5d03049d21c821b388b52728a2fcd386ce82330878",
+    "compression_method": 8
+   },
+   "test/Secretariat - Borderline/other.wav": {
+    "uncompressed_size": 50599612,
+    "crc32_central_directory": "db095bc3",
+    "member_sha256": "343f827f1603fa10043c6e08be84b947ce8f2f13403ae5ae3deff84411ee9cfa",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "36f640506cf39a2f7ec403af52d30e03e8d4f87defbf535e9fc5476e762f65c2",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 12649892,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "c9e655fbcac467e012c74cf92056bc09a04195fa941c71c1420f8937f4ef7348",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 12649892,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "0350ea35dda4f55827fa8ec05eaedb0a9a049d8970e32a1614ea5178bbfc18bb",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 12649892,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 12649892,
+   "tiled": false,
+   "bed_window_sha256": "7af9f04bd3b02477861387a4d9bfa1c4a634693419d8e54b0c21f7df2e5ab171"
+  },
+  "fetch_seconds": 87.15
+ },
+ "Secretariat - Over The Top": {
+  "index": 33,
+  "track": "Secretariat - Over The Top",
+  "members": {
+   "test/Secretariat - Over The Top/drums.wav": {
+    "uncompressed_size": 44293356,
+    "crc32_central_directory": "d0851385",
+    "member_sha256": "442b7f7b59e5f3bdd47aa946a6a2afdc641f8f6d55360625be5d66d982427504",
+    "compression_method": 8
+   },
+   "test/Secretariat - Over The Top/bass.wav": {
+    "uncompressed_size": 44293356,
+    "crc32_central_directory": "c164a77b",
+    "member_sha256": "5fc54133cf05f8bcc9a74f9fe0059040061fd72c765790e43bdc5366f06a2167",
+    "compression_method": 8
+   },
+   "test/Secretariat - Over The Top/other.wav": {
+    "uncompressed_size": 44293356,
+    "crc32_central_directory": "9771a781",
+    "member_sha256": "d5926c8e0bc17c1e7153c8ea0e2aaddce5946812372c4032c445293d4c67d4b4",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "7226f77b8c6f16b9aa624f49fb91f672e2de22d5a6a4679c84c881ad4b6a1e4a",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 11073328,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "9eca5563d0f68c2458b230110bc523513e20a57165f5c9ed466efe3dcf56ce9c",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 11073328,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "c6f3de900fe4d623a13764d187a491a816ca75371e99c6696941ef6731dc1f45",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 11073328,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 11073328,
+   "tiled": false,
+   "bed_window_sha256": "40d3e734b88cc005761316d5d628a1a9eeeb32f200ddc86753c2765aa2cc4ce1"
+  },
+  "fetch_seconds": 96.0
+ },
+ "Side Effects Project - Sing With Me": {
+  "index": 34,
+  "track": "Side Effects Project - Sing With Me",
+  "members": {
+   "test/Side Effects Project - Sing With Me/drums.wav": {
+    "uncompressed_size": 42985732,
+    "crc32_central_directory": "14b879aa",
+    "member_sha256": "59be334d050c4d6cd890661d6abbfc67966891a145704bbad521468048feab62",
+    "compression_method": 8
+   },
+   "test/Side Effects Project - Sing With Me/bass.wav": {
+    "uncompressed_size": 42985732,
+    "crc32_central_directory": "e43ac77b",
+    "member_sha256": "9e11cba2d856be0adbd3e3cb9ba81cf724c0e0e2dc13e21f390b42d6765c7cfd",
+    "compression_method": 8
+   },
+   "test/Side Effects Project - Sing With Me/other.wav": {
+    "uncompressed_size": 42985732,
+    "crc32_central_directory": "950a3e6b",
+    "member_sha256": "dab0cad4d8c3baee00f5ddca58022e84d9e6cf921b37a3af0de92d7b5271a569",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "2c03878594374091baaa5eea8df9df30177ebd505556888ace2c64f4510c355e",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 10746422,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "3f2361304ae2ded394ecfccc0968a66d4b0326a2ec67117fe27ff6919fd1b44e",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 10746422,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "47b579d5ef987a739238c9fbe411b953a8a9b583a1e9ef1f9cf58b9dfbbbd8ac",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 10746422,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 10746422,
+   "tiled": false,
+   "bed_window_sha256": "429fa3227a4c4899aa988a0973e5c7c79db1e495a6619dfcc7d2c6fac3f02b62"
+  },
+  "fetch_seconds": 37.52
+ },
+ "Signe Jakobsen - What Have You Done To Me": {
+  "index": 35,
+  "track": "Signe Jakobsen - What Have You Done To Me",
+  "members": {
+   "test/Signe Jakobsen - What Have You Done To Me/drums.wav": {
+    "uncompressed_size": 31292932,
+    "crc32_central_directory": "b42a7169",
+    "member_sha256": "636b8808519ebbb422d2f487212e08742aeb93952645092ca9353407dc1c901c",
+    "compression_method": 8
+   },
+   "test/Signe Jakobsen - What Have You Done To Me/bass.wav": {
+    "uncompressed_size": 31292932,
+    "crc32_central_directory": "d6cfff02",
+    "member_sha256": "55393e5b35a28310fce0fb6f49645c2a4c1f3164f0c3c152b9d5adfe36afd1bc",
+    "compression_method": 8
+   },
+   "test/Signe Jakobsen - What Have You Done To Me/other.wav": {
+    "uncompressed_size": 31292932,
+    "crc32_central_directory": "504f159a",
+    "member_sha256": "3a02711b6ba773878b53a45f5390c52124c598a7b85e8eb59d857117a7d660a7",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "3a9f6f3964facadc6c005e81f0d5a25666463e299769fdb4066d2ed49ae2fa4a",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 7823222,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "13f7fceb5e371fea0af65d2b04a9d7bfe9a7ef69d36bc5be69e44c065f9825cc",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 7823222,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "989655a65ec3d23fb5f2f8e7de2a56f8a990ad11aaa7a0eb70dc16ef0a83f8dc",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 7823222,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 7823222,
+   "tiled": false,
+   "bed_window_sha256": "1cfa40e1366c0ad81849538be9730976d8d72c5dadef36b361af8ea4044e5dd6"
+  },
+  "fetch_seconds": 57.16
+ },
+ "Skelpolu - Resurrection": {
+  "index": 36,
+  "track": "Skelpolu - Resurrection",
+  "members": {
+   "test/Skelpolu - Resurrection/drums.wav": {
+    "uncompressed_size": 69794984,
+    "crc32_central_directory": "1a6bc47d",
+    "member_sha256": "730e08ca4f9c10623bb472a45cbb36f016b9d219b1dc25b0191be2f7e128a0b8",
+    "compression_method": 8
+   },
+   "test/Skelpolu - Resurrection/bass.wav": {
+    "uncompressed_size": 69794984,
+    "crc32_central_directory": "7a013440",
+    "member_sha256": "2aa578c4b1333d0da6de5d0c4ab4983fef0a441d0e4f4c1abbcb5d7ecfe6eea8",
+    "compression_method": 8
+   },
+   "test/Skelpolu - Resurrection/other.wav": {
+    "uncompressed_size": 69794984,
+    "crc32_central_directory": "0c3723ea",
+    "member_sha256": "582564d31a939ea5948f27075a0f9b98edb6dd1f62898e3f0cb6edf330919e30",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "d9e0a3dd3ae05db20d393cfabeae8fe22490ea72161c8bc37d609556fa037f9b",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 17448735,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "e50b59ec1065122725ec05de715866d8d1e5d2a17fd68f19bcd8af3fba3c1815",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 17448735,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "e08ec8394a550f4d8759335cb5dbfe7dfbc6b7026445744045ddd812fea8e680",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 17448735,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 17448735,
+   "tiled": false,
+   "bed_window_sha256": "849786a82347d3449bc184268f343423c496f806c4af29cb9b8bb6233b9b4587"
+  },
+  "fetch_seconds": 91.85
+ },
+ "Speak Softly - Broken Man": {
+  "index": 37,
+  "track": "Speak Softly - Broken Man",
+  "members": {
+   "test/Speak Softly - Broken Man/drums.wav": {
+    "uncompressed_size": 44657500,
+    "crc32_central_directory": "e5c5d2f4",
+    "member_sha256": "2f6abc9bca11aa304a93463e9f773d64bcf3e6661650cab35f3f970920327734",
+    "compression_method": 8
+   },
+   "test/Speak Softly - Broken Man/bass.wav": {
+    "uncompressed_size": 44657500,
+    "crc32_central_directory": "80e07297",
+    "member_sha256": "43a4a08d980e6c8c7e30b56fa972d12a058ca135aa6268d3c4b07ba775b4e097",
+    "compression_method": 8
+   },
+   "test/Speak Softly - Broken Man/other.wav": {
+    "uncompressed_size": 44657500,
+    "crc32_central_directory": "e43cf244",
+    "member_sha256": "3ff40b8a86751afd0456138ae00de55dc1f001658d3d2a1bbdb8919b7ea619f8",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "8c2c14aa1abca7d6f73f00dc4853e6b375a16e2f7a7ed3e546bfe03c81f6154f",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 11164364,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "1e1e64e39d66d22772401a3da3c2532298869fd9d970026a9b96fe7593bb1b2b",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 11164364,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "a144be0cf57a249d30adff5368fe6c288867ecd6837a6abd20af92aed01ce66b",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 11164364,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 11164364,
+   "tiled": false,
+   "bed_window_sha256": "f9dbaeb4fede46146c830f33376e8926570f2850bfd42756ff97ab91562cd5bc"
+  },
+  "fetch_seconds": 27.77
  }
 }

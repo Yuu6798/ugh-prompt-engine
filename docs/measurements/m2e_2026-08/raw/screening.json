@@ -64,5 +64,27 @@
   "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
   "stem_sha256": "c0cf1f3f271b33e19b4e7d6abecf5c703ab257e436e1bd94eda225156918e1e0",
   "elapsed_seconds": 283.87
+ },
+ "Ben Carrigan - We'll Talk About It All Tonight": {
+  "index": 6,
+  "residual_db": -49.59251401211853,
+  "numeric_pass": true,
+  "bed_rms": 0.058958229863351704,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "1fca283254c24a1338275e97b935f12038856658000d99ae4ac1eb6abade83af",
+  "elapsed_seconds": 275.18
+ },
+ "Bobby Nobody - Stitch Up": {
+  "index": 7,
+  "residual_db": -63.97561537912091,
+  "numeric_pass": true,
+  "bed_rms": 0.08042108627232415,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "65e91f70c626c6afa92ebcae6ab687c1a9d6e0547ad563248019d9d2f2339c34",
+  "elapsed_seconds": 278.56
  }
 }
