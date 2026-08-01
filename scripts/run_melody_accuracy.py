@@ -3801,6 +3801,48 @@ def _require_external_fixtures_schema_for_category(
         )
 
 
+# 1 水準あたりの凍結コホート（設計 §6.2: `40 clip × 2 bed = 80 entry`）。総セル数
+# 1280 = 80 × 4 水準 × 2 アーム × n=2 の内訳そのものなので、ここが縮めば帯が別物になる。
+_M2E_EXPECTED_BED_COUNT = 2
+_M2E_EXPECTED_CLIPS_PER_BED = 40
+_M2E_EXPECTED_ENTRIES_PER_LEVEL = _M2E_EXPECTED_BED_COUNT * _M2E_EXPECTED_CLIPS_PER_BED
+
+
+def _require_registered_m2e_cohort(fixtures: Dict[str, Any], *, where: str) -> None:
+    """M2e fixtures が**凍結コホートそのもの**であることを要求する（fail-closed）。
+
+    fixtures と manifest を同じだけ切り詰めると両者は一致するので、cohort 完全一致の
+    比較では縮んだ帯を検出できない——「同じ clip を両 bed から落とす」「bed を丸ごと
+    落とす」は矩形性すら壊さない。**生成器側の保証は生成物と一緒に旅をしない**ので、
+    測る側が絶対量を独立に要求する: 2 bed × 40 clip = 80 entry（§6.2）。
+
+    テストは合成 fixtures（数 entry）を多用するため、本 gate は
+    `_require_attested_external_fixtures_registration` と同じ流儀で autouse fixture が
+    無効化し、**専用テスト群が実 gate を固定する**。
+    """
+    by_bed: Dict[str, set] = {}
+    for key in fixtures:
+        parts = str(key).split("_")
+        if len(parts) < 4 or parts[0] != "vremix":
+            raise ValueError(
+                f"{where}: entry id {key!r} が §6.2 の規約 "
+                "`vremix_{clip_id}_{bed_id}_{level_tag}` に合わない (fail-closed)"
+            )
+        by_bed.setdefault(parts[-2], set()).add("_".join(parts[1:-2]))
+    detail = {bed: len(clips) for bed, clips in sorted(by_bed.items())}
+    if (
+        len(by_bed) != _M2E_EXPECTED_BED_COUNT
+        or any(len(clips) != _M2E_EXPECTED_CLIPS_PER_BED for clips in by_bed.values())
+        or len(fixtures) != _M2E_EXPECTED_ENTRIES_PER_LEVEL
+    ):
+        raise ValueError(
+            f"{where}: M2e コホートが凍結値（{_M2E_EXPECTED_BED_COUNT} bed × "
+            f"{_M2E_EXPECTED_CLIPS_PER_BED} clip = {_M2E_EXPECTED_ENTRIES_PER_LEVEL} entry）"
+            f"と一致しない（bed 別 clip 数={detail} / 総数={len(fixtures)}）; 部分コホートを "
+            "水準の証拠として測らない (fail-closed)"
+        )
+
+
 def _require_external_fixtures_level_match(
     fixtures_doc: Dict[str, Any], *, level: Optional[str], where: str
 ) -> None:
@@ -3852,28 +3894,7 @@ def _require_external_fixtures_level_match(
             f"entry がある（{mislabeled[:5]}{' …' if len(mislabeled) > 5 else ''}）; "
             "宣言だけ書き換えた pin ファイルで別水準の音を測らない (fail-closed)"
         )
-    # コホートの**構造的完全性**も manifest と独立に要求する。fixtures と manifest を
-    # 同じ 79 件へ切り詰めると両者は一致するので、cohort 完全一致の比較では縮んだ帯を
-    # 検出できない。id 規約が `clip × bed` の直積であることを使い、**全 bed が同一の
-    # clip 集合を持つ**ことを要求する（1 entry 落とせば矩形が壊れる）。
-    # 絶対件数（§6.2 の 80 = 40 clip × 2 bed）は生成器側で担保する
-    # （`make_vremix_fixtures` が 40 clip registry と accepted ベッド全件を要求する）。
-    by_bed: Dict[str, set] = {}
-    for key in fixtures:
-        parts = str(key).split("_")
-        if len(parts) < 4 or parts[0] != "vremix":
-            raise ValueError(
-                f"{where}: entry id {key!r} が §6.2 の規約 "
-                "`vremix_{clip_id}_{bed_id}_{level_tag}` に合わない (fail-closed)"
-            )
-        by_bed.setdefault(parts[-2], set()).add("_".join(parts[1:-2]))
-    clip_sets = {frozenset(clips) for clips in by_bed.values()}
-    if len(clip_sets) != 1:
-        detail = {bed: len(clips) for bed, clips in sorted(by_bed.items())}
-        raise ValueError(
-            f"{where}: bed ごとの clip 集合が揃っていない（{detail}）; 部分コホートを "
-            "水準の証拠として測らない (fail-closed)"
-        )
+    _require_registered_m2e_cohort(fixtures, where=where)
 
 
 def load_external_fixtures(path: Path = EXTERNAL_FIXTURES_PATH) -> Tuple[Dict[str, Any], str]:
@@ -5512,11 +5533,23 @@ def run_accuracy(
     }
     results.update(_LOADED_SCORER_PINS)
 
-    # 設計 §8.7: `env_digest` は `--cell-store` 使用時にのみ計算する（モジュール
-    # import 時は元より、`cell_store is None` の通常 run でも一切呼ばない —— 重い
-    # optional import を避ける契約・挙動無変更の契約の両方を満たす）。
+    # 設計 §8.7: `env_digest` は `--cell-store` 使用時に計算する（`cell_store is None`
+    # の通常 run では呼ばない —— 重い optional import を避ける契約・挙動無変更の
+    # 契約の両方を満たす）。
+    #
+    # **例外: M2e カテゴリを含む run では常に計算する**（Codex 21 巡目 P2）。帯は
+    # 「環境を跨いでセルを合算しない」を前提にしており（§8.7）、evaluate は report
+    # の `env_digest` でしかそれを検査できない。`--cell-store` 未使用の 2 本を別環境
+    # （別 CPU・別パッチ版）で採ると、どちらも digest を持たないまま「同じ測定の
+    # 反復」として通ってしまう。M2e にとって環境は run の次元なので、記録は
+    # チェックポイント機構の有無と独立に必要である。
     effective_cell_store = Path(cell_store) if cell_store is not None else None
-    env_digest_value: Optional[str] = _env_digest() if effective_cell_store is not None else None
+    m2e_in_run = any(
+        _CATEGORY_SPECS[cat]["bars_file"] == "m2e_accuracy_bars.yaml" for cat in categories
+    )
+    env_digest_value: Optional[str] = (
+        _env_digest() if (effective_cell_store is not None or m2e_in_run) else None
+    )
     run_cells_resumed: List[str] = []
     run_cells_measured: List[str] = []
     run_cell_store_mismatches: "List[Dict[str, Any]]" = []
@@ -5753,12 +5786,14 @@ def run_accuracy(
     # 既存呼び出しは 1 バイトも変わらない report を返す（挙動無変更の契約）。
     if effective_cell_store is not None:
         results["cell_store_relative"] = _repo_relative_path(effective_cell_store)
-        results["env_digest"] = env_digest_value
         results["repeat_index"] = repeat_index
         results["workers"] = workers
         results["cells_resumed"] = run_cells_resumed
         results["cells_measured"] = run_cells_measured
         results["cell_store_mismatches"] = run_cell_store_mismatches
+    # M2e run では `--cell-store` の有無に依らず記録する（上の算出コメント参照）。
+    if env_digest_value is not None:
+        results["env_digest"] = env_digest_value
     results["recorded_utc"] = _utc_now()
     return results
 
@@ -7902,21 +7937,21 @@ def evaluate_m2_bars(
             )
         m2e_level = levels.pop()
         # 同じ理由で **環境も run の次元**である（§8.7: `env_digest` を跨いだセルの
-        # 合算を禁止）。`--cell-store` を使った repeats が別環境（Python パッチ版・
-        # CPU 同一性の違い等）で採られていると `env_digest` が食い違うが、指標が
-        # bit 一致してしまえば下流からは見えない。**揃っていること**を要求する
-        # （両方とも未記録 = `--cell-store` 不使用の run は従来どおり通す。記録が
-        #  あるなら非 null かつ全 report で同一であること）。
+        # 合算を禁止）。repeats が別環境（別 CPU・別パッチ版）で採られていると
+        # `env_digest` が食い違うが、指標が bit 一致してしまえば下流からは見えない。
+        # **非 null で単一**であることを要求する——未記録同士を許すと「どちらも
+        # 環境を名乗らない 2 本」が反復として通り、CPU 同一性を後から復元できない
+        # （M2e run は `--cell-store` の有無に依らず必ず記録する。上の run 側参照）。
         env_digests = {
             report.get("env_digest") for report in reports if any(
                 cat in m2e_categories_in_reports for cat in report.get("categories", {})
             )
         }
-        if len(env_digests) != 1 or (env_digests != {None} and None in env_digests):
+        if len(env_digests) != 1 or not isinstance(next(iter(env_digests)), str):
             raise ValueError(
                 f"evaluate_m2_bars: M2e カテゴリを含む report の env_digest が揃っていない "
-                f"（{sorted(str(v) for v in env_digests)}）; 別環境で採ったセルを同じ帯の "
-                "反復として合算しない (fail-closed)"
+                f"（{sorted(str(v) for v in env_digests)}）; 環境を名乗らない report・別環境で "
+                "採ったセルを同じ帯の反復として合算しない (fail-closed)"
             )
         verdict["m2e_bars_sha256"] = m2e_bars_sha256
         verdict["m2e_bars_path_relative"] = _repo_relative_path(m2e_bars_path)

@@ -164,6 +164,10 @@ def _clean_evaluator_preload(monkeypatch: pytest.MonkeyPatch):
             "source": "test_fixture_stub",
         },
     )
+    # 同じ理由で M2e の凍結コホート gate（2 bed × 40 clip = 80 entry）も無効化する。
+    # 機構テストは数 entry の合成 fixtures を使う（80 entry を実抽出で回すのは非現実的）。
+    # 実 gate は専用テスト群 `test_registered_m2e_cohort_*` が固定する。
+    monkeypatch.setattr(harness, "_require_registered_m2e_cohort", lambda *a, **k: None)
 
 
 @pytest.fixture(scope="session")
@@ -244,6 +248,8 @@ _ORIG_REVERIFY = harness._reverify_category_measurement
 _ORIG_ATTEST = harness._require_attested_registration
 # 外部素材 fixtures の事前登録 attestation（bars 側 `_ORIG_ATTEST` と対称、M2c）。
 _ORIG_EXTERNAL_ATTEST = harness._require_attested_external_fixtures_registration
+# 同上（M2e の凍結コホート gate）。autouse fixture が no-op へ差し替える前の実体。
+_ORIG_M2E_COHORT = harness._require_registered_m2e_cohort
 # autouse fixture が `[]` へ正規化する前の実体（H16 の機構そのものをテストする際に
 # 明示的に復元して使う）。
 _ORIG_SCORER_COMPILE_EXPECTED_PATHS = harness._scorer_compile_expected_paths
@@ -7556,6 +7562,41 @@ def test_evaluate_m2_bars_rejects_partial_cohort_row(tmp_path: Path) -> None:
         )
 
 
+def _m2e_cohort_ids(beds: int, clips_per_bed: int, tag: str = "p12") -> "Dict[str, Any]":
+    return {
+        f"vremix_vocadito_{c}_Bed{b}_{tag}": {}
+        for b in range(beds)
+        for c in range(clips_per_bed)
+    }
+
+
+def test_registered_m2e_cohort_accepts_the_frozen_shape() -> None:
+    """2 bed × 40 clip = 80 entry ちょうどなら通る。"""
+    _ORIG_M2E_COHORT(_m2e_cohort_ids(2, 40), where="t")
+
+
+@pytest.mark.parametrize(
+    ("beds", "clips"),
+    [
+        (2, 39),   # 同じ clip を両 bed から落とす（矩形は保たれる = 78 entry）
+        (1, 40),   # bed を丸ごと落とす（矩形は保たれる = 40 entry）
+        (3, 40),   # 余分な bed
+        (2, 41),   # 余分な clip
+    ],
+)
+def test_registered_m2e_cohort_rejects_a_resized_cohort(beds: int, clips: int) -> None:
+    """P2: 矩形性だけでは縮んだ帯を捕まえられない——絶対量を要求する。"""
+    with pytest.raises(ValueError, match="凍結値"):
+        _ORIG_M2E_COHORT(_m2e_cohort_ids(beds, clips), where="t")
+
+
+def test_registered_m2e_cohort_rejects_a_foreign_id_convention() -> None:
+    ids = _m2e_cohort_ids(2, 40)
+    ids["not_a_vremix_id"] = {}
+    with pytest.raises(ValueError, match="§6.2 の規約"):
+        _ORIG_M2E_COHORT(ids, where="t")
+
+
 def test_external_fixtures_registration_attestation_finds_committed_blob() -> None:
     """(3) commit 済み凍結 fixtures は git 履歴で立証でき、登録時点が得られる。
 
@@ -8870,11 +8911,17 @@ def test_cell_store_absent_leaves_report_shape_unchanged(tmp_path: Path) -> None
 
     （挙動無変更の契約）。既存の committed record・既存テストが本機能の追加で
     影響を受けないことの根拠。
+
+    **例外は `env_digest`**（2026-08-01・Codex 21 巡目 P2）。M2e は「環境を跨いで
+    セルを合算しない」を前提にしており、evaluate は report の `env_digest` でしか
+    それを検査できない。よって M2e run はチェックポイント機構の有無に依らず
+    必ず環境を名乗る——記録の欠落を許すと、別環境の 2 本が「どちらも環境を
+    名乗らないまま」反復として通る。
     """
     report = _m2e_run(tmp_path, level="+12dB")
+    assert isinstance(report["env_digest"], str) and report["env_digest"]
     for key in (
         "cell_store_relative",
-        "env_digest",
         "repeat_index",
         "workers",
         "cells_resumed",
