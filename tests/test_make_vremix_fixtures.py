@@ -785,6 +785,49 @@ def test_build_rejects_a_bed_that_is_not_accepted(tmp_path, monkeypatch) -> None
         )
 
 
+def test_build_leaves_no_partial_bundle_when_generation_fails(tmp_path, monkeypatch) -> None:
+    """途中で失敗しても**公開先に部分 bundle を残さない**（staging → atomic rename）。
+
+    「空でない出力先は拒否」と噛み合うと、中断した実行が次回を塞いでしまう。
+    """
+    vocadito_root, pins = _fake_vocadito(tmp_path, ["vocadito_1", "vocadito_2"])
+    monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
+    bed_root = tmp_path / "beds"
+    _write_bed(bed_root / "Artist A - Track One")
+    monkeypatch.setattr(
+        mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, ["Artist A - Track One"])
+    )
+    calls = {"n": 0}
+    original = mk.apply_level
+
+    def _explode(voice, bed, level):
+        calls["n"] += 1
+        if calls["n"] > 1:                      # 1 本書けた後で落とす
+            raise RuntimeError("injected failure")
+        return original(voice, bed, level)
+
+    monkeypatch.setattr(mk, "apply_level", _explode)
+    out_dir = tmp_path / "out"
+    with pytest.raises(RuntimeError, match="injected failure"):
+        mk.build(
+            vocadito_root=vocadito_root, bed_root=bed_root,
+            tracks=["Artist A - Track One"], levels=["0dB"],
+            out_dir=out_dir, registered_utc="2026-08-01",
+        )
+    assert not out_dir.exists(), "公開先に部分 bundle が見えている"
+
+    # staging を掃除したうえで同じ出力先へ再実行できる（中断が次回を塞がない）。
+    monkeypatch.setattr(mk, "apply_level", original)
+    summary = mk.build(
+        vocadito_root=vocadito_root, bed_root=bed_root,
+        tracks=["Artist A - Track One"], levels=["0dB"],
+        out_dir=out_dir, registered_utc="2026-08-01",
+    )
+    assert summary["levels"]["0dB"]["n_entries"] == 2
+    assert (out_dir / "fixtures_p00.yaml").is_file()
+    assert not (out_dir.parent / f".{out_dir.name}.staging").exists()
+
+
 def test_build_requires_every_accepted_bed(tmp_path, monkeypatch) -> None:
     """P1: `--bed` を 1 本落とすと、内部整合した**部分コホート**が出てしまう。"""
     vocadito_root, pins = _fake_vocadito(tmp_path, ["vocadito_1"])

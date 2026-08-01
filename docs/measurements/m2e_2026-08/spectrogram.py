@@ -77,6 +77,14 @@ def render(path: Path, out_png: Path, title: str, *, expected_sha256: str) -> No
             f"{path}: bed window sha256 {actual} が事前登録 pin {expected_sha256} と "
             "不一致; 登録コホートでない素材の画像を目視記録にしない (fail-closed)"
         )
+    # `waveform_sha256` は**サンプル列しか**畳まない。同じ PCM を 48 kHz header で
+    # 包み直すと pin は通るが、時間軸・周波数軸と 0–4 kHz パネルに入る bin が変わる
+    # ——凍結していない幾何で目視記録を作ることになる。
+    if int(sample_rate) != mk.CANONICAL_SAMPLE_RATE:
+        raise ValueError(
+            f"{path}: sample rate {sample_rate} != {mk.CANONICAL_SAMPLE_RATE}; "
+            "描画条件は 44100 前提で凍結してある (fail-closed)"
+        )
     freqs, times, s_db = stft_db(np.asarray(y, dtype=np.float64), int(sample_rate))
     fig, axes = plt.subplots(2, 1, figsize=(FIG_W_IN, FIG_H_IN), dpi=DPI, sharex=True)
     low = freqs <= LOW_BAND_HZ

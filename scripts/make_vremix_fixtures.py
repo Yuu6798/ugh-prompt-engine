@@ -31,7 +31,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
+import shutil
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -631,6 +633,17 @@ def resolve_clip_bytes(
     return payloads[0], payloads[1]
 
 
+def registered_n_max_samples() -> int:
+    """`m2e_bed_fixtures.yaml` に登録された測定窓 `n_max`（§3.5・凍結量）。"""
+    doc = load_registry_yaml(M2E_BED_FIXTURES_PATH)
+    window = doc.get("window")
+    if not isinstance(window, dict) or not isinstance(window.get("n_max_samples"), int):
+        raise GenerationError(
+            f"{M2E_BED_FIXTURES_PATH}: window.n_max_samples が無い/整数でない (fail-closed)"
+        )
+    return int(window["n_max_samples"])
+
+
 def require_registered_track_list(tracks: List[str]) -> None:
     """トラック一覧が**事前登録の全 50 曲**と（順序込みで）一致することを要求する。
 
@@ -713,16 +726,21 @@ def build(
     require_valid_registered_utc(registered_utc)
     clips = load_registered_clips()
     registered_beds = load_registered_beds()
-    out_dir = Path(out_dir)
-    # P2（最小対処）: 既存の出力先へ重ねて書かない。古い実行の残骸が混ざると
-    # 「1 つの fixture bundle」という消費側の前提が崩れる。**staging + atomic rename
-    # までは行わない**——下流に既に fail-closed がある（cohort 完全一致 +
-    # `expected_audio_sha256` 照合）ので、残骸が測定を汚す経路は塞がっている。
-    if out_dir.exists() and any(out_dir.iterdir()):
+    published = Path(out_dir)
+    if published.exists() and any(published.iterdir()):
         raise GenerationError(
-            f"{out_dir} が空でない; 前回実行の残骸と混ざるのを避けるため、空の出力先を "
+            f"{published} が空でない; 前回実行の残骸と混ざるのを避けるため、空の出力先を "
             "指定するか既存を削除すること (fail-closed)"
         )
+    # **staging → atomic rename**。途中で失敗しても外から見える場所に部分 bundle を
+    # 残さない（消費側は out_dir を「1 つの fixture bundle」として扱う）。加えて
+    # 「空でない出力先は拒否」と噛み合うと、中断が次回実行を塞いでしまう——
+    # staging に閉じ込めておけば再実行がそのまま通る。
+    # rename を atomic にするため staging は**同一親ディレクトリ**へ置く。
+    staging = published.parent / f".{published.name}.staging"
+    if staging.exists():
+        shutil.rmtree(staging)
+    out_dir = staging
     mix_dir = out_dir / "mix"
     annotation_dir = out_dir / "annotations"
     mix_dir.mkdir(parents=True, exist_ok=True)
@@ -845,11 +863,16 @@ def build(
         )
         summary["levels"][level] = {
             "n_entries": len(manifest),
-            "manifest": str(manifest_path),
-            "fixtures": str(fixtures_path),
-            "generation_record": str(record_path),
+            "manifest": str(published / manifest_path.name),
+            "fixtures": str(published / fixtures_path.name),
+            "generation_record": str(published / record_path.name),
             "n_factor_below_one": sum(1 for r in records.values() if r["factor"] < 1.0),
         }
+    # 全水準を書き終えてから**一度だけ**公開する（ここまでは外から見えない）。
+    published.parent.mkdir(parents=True, exist_ok=True)
+    if published.exists():
+        published.rmdir()   # 空であることは入口で確認済み
+    os.rename(staging, published)
     return summary
 
 
@@ -873,7 +896,16 @@ def _cmd_n_max(args: argparse.Namespace) -> int:
 
 def _cmd_screen(args: argparse.Namespace) -> int:
     bed_mono, bed_rate = load_bed_mono(Path(args.bed_root) / args.track)
-    window = tile_to_length(bed_mono, int(args.n_max), bed_rate)
+    # CLI の値をそのまま信じない——古い値や打ち間違いでも「成功して」別区間の
+    # `residual_db` を出し、採用コホートが変わりうる。登録値との一致を要求する
+    # （明示させたうえで照合する: 宣言と実体の両方を残すため）。
+    registered = registered_n_max_samples()
+    if int(args.n_max) != registered:
+        raise GenerationError(
+            f"--n-max {args.n_max} が事前登録の n_max_samples {registered} と不一致; "
+            "測定窓は凍結量であり、呼び出し側の値で上書きしない (fail-closed)"
+        )
+    window = tile_to_length(bed_mono, registered, bed_rate)
     if args.vocals_stem is not None:
         stem, stem_rate = read_vocals_stem_for_screening(Path(args.vocals_stem))
         if stem.ndim == 2:
