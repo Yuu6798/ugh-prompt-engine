@@ -1,0 +1,772 @@
+{
+ "AM Contra - Heart Peripheral": {
+  "index": 0,
+  "track": "AM Contra - Heart Peripheral",
+  "members": {
+   "test/AM Contra - Heart Peripheral/drums.wav": {
+    "uncompressed_size": 37062700,
+    "crc32_central_directory": "b633dbc0",
+    "member_sha256": "9c0bd187963c7a2a3aa05f5b53958c0c0d674f108aba1297ac28db40ed459d3b",
+    "compression_method": 8
+   },
+   "test/AM Contra - Heart Peripheral/bass.wav": {
+    "uncompressed_size": 37062700,
+    "crc32_central_directory": "f04b5dbb",
+    "member_sha256": "e2718b2dc5c6be44a2931689747fb91dd616eb11c72489c0c009a7e53b8bef3b",
+    "compression_method": 8
+   },
+   "test/AM Contra - Heart Peripheral/other.wav": {
+    "uncompressed_size": 37062700,
+    "crc32_central_directory": "4616ea9d",
+    "member_sha256": "373257d1b86b8f92c494af6b9c88ac67ab40bbeb7e7e41f507d6353afc752a5f",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "67d3f9e852ba6c7d5849ac3749879fb766b4ce1c723b8f26738f1d883b728b64",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 9265664,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "4e49652f95c884adaad5043b5e9b13496ebfafbb358908c430faa737f00a787b",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 9265664,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "23c0d80d85b46fe8d50800a3d11701604fa64a4ac16bd8edb0a2c79c24715549",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 9265664,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 9265664,
+   "tiled": false,
+   "bed_window_sha256": "a0628f410f8ff7441c742b25acc42d14245f32c371b88770384e3e2f5e3bf5de"
+  },
+  "fetch_seconds": 54.79
+ },
+ "Al James - Schoolboy Facination": {
+  "index": 1,
+  "track": "Al James - Schoolboy Facination",
+  "members": {
+   "test/Al James - Schoolboy Facination/drums.wav": {
+    "uncompressed_size": 35372968,
+    "crc32_central_directory": "bab1fdc4",
+    "member_sha256": "413d90a9bf6467de1d041a78422eb8a232571a735e69d9fe68c52a1d2af2a096",
+    "compression_method": 8
+   },
+   "test/Al James - Schoolboy Facination/bass.wav": {
+    "uncompressed_size": 35372968,
+    "crc32_central_directory": "2039a824",
+    "member_sha256": "8b6fa70fe625df4de8565b1e91d29a5effc614d4d56a671f2c6d3addbf089bce",
+    "compression_method": 8
+   },
+   "test/Al James - Schoolboy Facination/other.wav": {
+    "uncompressed_size": 35372968,
+    "crc32_central_directory": "05b5b45c",
+    "member_sha256": "f03f5cae59e30a177e7ba12583f99adc009045ee92889bcb911b4021422b8d81",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "51b29d43786e62f6843af240e8111182241722cad08d471540cedc7e41bf7725",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 8843231,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "8bd85d5c56f3e94538a5bd47b03969e2a5257adec25058666d39364452bef05a",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 8843231,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "0fdad31167a065f5cd7b78293d124e27446a8ee6a517ca04912ac9142273fee4",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 8843231,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 8843231,
+   "tiled": false,
+   "bed_window_sha256": "1dc49f6da745cd7b0182caa78332bf1c784f1eacd6c19ec1e254f3f2936061e3"
+  },
+  "fetch_seconds": 65.09
+ },
+ "Angels In Amplifiers - I'm Alright": {
+  "index": 2,
+  "track": "Angels In Amplifiers - I'm Alright",
+  "members": {
+   "test/Angels In Amplifiers - I'm Alright/drums.wav": {
+    "uncompressed_size": 31680380,
+    "crc32_central_directory": "2652ef50",
+    "member_sha256": "5befaf49a26c006973ae5d59e35fca625b9a342ec191e72db9795ab46d9fa120",
+    "compression_method": 8
+   },
+   "test/Angels In Amplifiers - I'm Alright/bass.wav": {
+    "uncompressed_size": 31680380,
+    "crc32_central_directory": "1f736a5c",
+    "member_sha256": "67936e9f80c84afb4fb95c0970cb98590410098ece49c056a6bfecd18949dc6c",
+    "compression_method": 8
+   },
+   "test/Angels In Amplifiers - I'm Alright/other.wav": {
+    "uncompressed_size": 31680380,
+    "crc32_central_directory": "2f44bba6",
+    "member_sha256": "8c55d2e3e31bc255897e4a2811caeab2a2df8b08883ec16a1959535173f218e4",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "c784cb454708443b7245297755b3c1de04c9f4b86394df53dcc3cd75a1c25a07",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 7920084,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "66ab818b2851459e71d3060b9ac0150b93605ef374006b1988225afd20a2b6f8",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 7920084,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "b3d0defd2da8f23a2b2f0a8d4ddcc8596d66e577d911c44bea52fef6acab9ded",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 7920084,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 7920084,
+   "tiled": false,
+   "bed_window_sha256": "af76b9618f21b9cc1ee465d74ce1cca6e6204ce2c3177039adaca1b7b01b9ece"
+  },
+  "fetch_seconds": 50.81
+ },
+ "Arise - Run Run Run": {
+  "index": 3,
+  "track": "Arise - Run Run Run",
+  "members": {
+   "test/Arise - Run Run Run/drums.wav": {
+    "uncompressed_size": 38700944,
+    "crc32_central_directory": "e3c0e257",
+    "member_sha256": "f99ca8c31331ab0f497cac1cc54fcff5cc8182e22ffe612d038cfc7a092df467",
+    "compression_method": 8
+   },
+   "test/Arise - Run Run Run/bass.wav": {
+    "uncompressed_size": 38700944,
+    "crc32_central_directory": "f6da48b5",
+    "member_sha256": "b13d63d3347402d44203f7d530223272a331407ceb33e8e7ba6ff1e631db5ea6",
+    "compression_method": 8
+   },
+   "test/Arise - Run Run Run/other.wav": {
+    "uncompressed_size": 38700944,
+    "crc32_central_directory": "a4e4ccae",
+    "member_sha256": "fac17591140e8d31ed27d3abac67abf6cbae0cc55c5d01d35d9ed4420beefcdf",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "3e190cddc1b8a3bdebe6c38add97730da1e376e79eefbdb4855c2d8dc5502b60",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 9675225,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "3f993ec3dcb54ddcf3b80dd32bc0cea82535ef42854db4de01ce838e967bcfbc",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 9675225,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "72ca7b3608fa0a17995b6960c7b4be93000db76d1ea3a6254b45ea9f1973b03a",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 9675225,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 9675225,
+   "tiled": false,
+   "bed_window_sha256": "9bbe2f0b3af20306f6ae90b9dbd3d9112fbdacc178748a5216a8ec9d9d453ce6"
+  },
+  "fetch_seconds": 46.01
+ },
+ "BKS - Bulldozer": {
+  "index": 4,
+  "track": "BKS - Bulldozer",
+  "members": {
+   "test/BKS - Bulldozer/drums.wav": {
+    "uncompressed_size": 59453932,
+    "crc32_central_directory": "77e1fc68",
+    "member_sha256": "f9a63b428f714dd021f473e16cf4ff9c5e5ddf5d74db8e641199c327abcdcc74",
+    "compression_method": 8
+   },
+   "test/BKS - Bulldozer/bass.wav": {
+    "uncompressed_size": 59453932,
+    "crc32_central_directory": "8672bf88",
+    "member_sha256": "2205940b7c1c256291bac324f849600665941d7b54ae57dffa04330dbc6f2da9",
+    "compression_method": 8
+   },
+   "test/BKS - Bulldozer/other.wav": {
+    "uncompressed_size": 59453932,
+    "crc32_central_directory": "84690bfc",
+    "member_sha256": "24bb0f1cddf4e587e25f3b135da7bff3591b7ba0294a45e3f23c3b9eaf5525df",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "384e61ffbee415681de1e993936b33e8fb980a82b78353bd3551a7f408fa34d4",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 14863472,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "61c7c1d195f7a9fecd530ab9cd5bd253800095bf3fdd8f03f94edb4ba0d3d530",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 14863472,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "026c3c28c5b2a1d41522afb4c8f462e615b2dc7b446b01f9571047e7eca22410",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 14863472,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 14863472,
+   "tiled": false,
+   "bed_window_sha256": "7feee655c87f3463ecfe382e28dbb698e5441c689ecd4c1f5ab81b6e799ac93d"
+  },
+  "fetch_seconds": 98.47
+ },
+ "BKS - Too Much": {
+  "index": 5,
+  "track": "BKS - Too Much",
+  "members": {
+   "test/BKS - Too Much/drums.wav": {
+    "uncompressed_size": 38830092,
+    "crc32_central_directory": "a6b1f4cc",
+    "member_sha256": "11edccd972e024e342b7d808da72bce1ffa7a08f3c8d7e73a8ebefe564e6e85e",
+    "compression_method": 8
+   },
+   "test/BKS - Too Much/bass.wav": {
+    "uncompressed_size": 38830092,
+    "crc32_central_directory": "bd66b38a",
+    "member_sha256": "97573053cea48049d2dbd84a2f9a35fb75e34f11b54e7542f972ee8fda9282cd",
+    "compression_method": 8
+   },
+   "test/BKS - Too Much/other.wav": {
+    "uncompressed_size": 38830092,
+    "crc32_central_directory": "01e40fa8",
+    "member_sha256": "2270d0b02c727bc55f6b4c2ae7b8842014a0b4a42655fd5014ec244121e8f224",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "98bdaa4fbcf7655a11a5e57de5c0553d4fb7a19972f80aee92a4ea2570973179",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 9707512,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "f9b524efa9e9202db84ad6a84a804b3aca5a3c8057edb8ad66061b65166775c3",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 9707512,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "fa6833ef614466b7554edf207dd538481c3ba9dc8b3e1b54f38b650467fa243b",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 9707512,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 9707512,
+   "tiled": false,
+   "bed_window_sha256": "f4bc51d782002ef3a5e9d1f2f143e57ca6fc010f59612f8ae384f957965e7eaf"
+  },
+  "fetch_seconds": 63.66
+ },
+ "Ben Carrigan - We'll Talk About It All Tonight": {
+  "index": 6,
+  "track": "Ben Carrigan - We'll Talk About It All Tonight",
+  "members": {
+   "test/Ben Carrigan - We'll Talk About It All Tonight/drums.wav": {
+    "uncompressed_size": 44966292,
+    "crc32_central_directory": "03121697",
+    "member_sha256": "576f2ca86205caf139584063d77b271c2c7e94b798fe72454993cabde33609c8",
+    "compression_method": 8
+   },
+   "test/Ben Carrigan - We'll Talk About It All Tonight/bass.wav": {
+    "uncompressed_size": 44966292,
+    "crc32_central_directory": "37de1726",
+    "member_sha256": "06adfa989a71641fbd33dc58666a54e88fdc031d7cfc4bae25c3a3989b1840ad",
+    "compression_method": 8
+   },
+   "test/Ben Carrigan - We'll Talk About It All Tonight/other.wav": {
+    "uncompressed_size": 44966292,
+    "crc32_central_directory": "c0eb16e1",
+    "member_sha256": "30be41eb6ef68ebc99cdeb8cc5f42b114c7e9e1d29ab073a3de55047390b1e07",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "d38a762300fe283503cef5f65696c76b54e75f6655536a04e69f688203f027af",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 11241562,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "8c56f49dd721d528e418a5c330cf40a4fe96e939d04cbb65c3898f9c52e3269b",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 11241562,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "924aeec2f85a2436ca1371e9df1049620a37ab3906491a4e8cb76cc7fea4c76f",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 11241562,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 11241562,
+   "tiled": false,
+   "bed_window_sha256": "ab22bd1896cc1133b9b7ef0581324f560679b3c027d7094fa9c25bc822bd9374"
+  },
+  "fetch_seconds": 63.14
+ },
+ "Bobby Nobody - Stitch Up": {
+  "index": 7,
+  "track": "Bobby Nobody - Stitch Up",
+  "members": {
+   "test/Bobby Nobody - Stitch Up/drums.wav": {
+    "uncompressed_size": 39028544,
+    "crc32_central_directory": "8870f549",
+    "member_sha256": "bed61cc746a93108fc558159f6a565c240e05729c4e2a677ef075599d7d91b2e",
+    "compression_method": 8
+   },
+   "test/Bobby Nobody - Stitch Up/bass.wav": {
+    "uncompressed_size": 39028544,
+    "crc32_central_directory": "50246cf1",
+    "member_sha256": "5744dbd83205b261fdf31f72412af35168e4ba54f43596852ef646816271f8a5",
+    "compression_method": 8
+   },
+   "test/Bobby Nobody - Stitch Up/other.wav": {
+    "uncompressed_size": 39028544,
+    "crc32_central_directory": "aefdb554",
+    "member_sha256": "e22e84aebcceb6fe8bc5c0a515fc008640825ebd2e76b5c87cd3afb340ecd4c4",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "6cd281450c9f3fb7a58fc19e7b020c1b93ed5b1571ccadeb080a1f4846d10801",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 9757125,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "1d2fa9a71e27fed0deb22f99f8df666c2af66a524adfb6e0e72d29605ac8e4f7",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 9757125,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "af20b53caad35b143b8dec803574941bb25085290c2b61430756639926850e01",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 9757125,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 9757125,
+   "tiled": false,
+   "bed_window_sha256": "e8f9e086abd946321b99d6231a8ff6e02e165576425b71e54a74c63b566e7fb5"
+  },
+  "fetch_seconds": 73.29
+ },
+ "Buitraker - Revo X": {
+  "index": 8,
+  "track": "Buitraker - Revo X",
+  "members": {
+   "test/Buitraker - Revo X/drums.wav": {
+    "uncompressed_size": 48655732,
+    "crc32_central_directory": "6a0c44cb",
+    "member_sha256": "5a5d6a73009b3d327b4b4ea043e61114a88bcba7030cb9ad15cbbe91ab73ec94",
+    "compression_method": 8
+   },
+   "test/Buitraker - Revo X/bass.wav": {
+    "uncompressed_size": 48655732,
+    "crc32_central_directory": "7c21cdda",
+    "member_sha256": "e058d4d0ecd9f427621f42e1e2207bab66296f2ae48a77608039cda31d48396a",
+    "compression_method": 8
+   },
+   "test/Buitraker - Revo X/other.wav": {
+    "uncompressed_size": 48655732,
+    "crc32_central_directory": "1c1db7e3",
+    "member_sha256": "ace6376056ce82071250c89c24f2b5da01462ab97f634e960f5cdf3da94faf3f",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "c055277277b9b2d3766deaff26459afb56f7d4335babdc13752ef9870f508742",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 12163922,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "13955849618460716b1bca86d735526f72f6b23f1065a86b78173daf1b0fbc89",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 12163922,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "538087f7febb75851d9a75217a2c4d236a45370c512d71eb0fd14bb47f687c6a",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 12163922,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 12163922,
+   "tiled": false,
+   "bed_window_sha256": "348b5c70fbf9c96cf9d25d801f7ab0bd5f367030257b7f23c597bed0352a60f4"
+  },
+  "fetch_seconds": 88.95
+ },
+ "Carlos Gonzalez - A Place For Us": {
+  "index": 9,
+  "track": "Carlos Gonzalez - A Place For Us",
+  "members": {
+   "test/Carlos Gonzalez - A Place For Us/drums.wav": {
+    "uncompressed_size": 44138632,
+    "crc32_central_directory": "caf4a469",
+    "member_sha256": "8053bbc708e7cf3fd239af05a4e653688a22669fd8dc61231db8a052b1ad1cef",
+    "compression_method": 8
+   },
+   "test/Carlos Gonzalez - A Place For Us/bass.wav": {
+    "uncompressed_size": 44138632,
+    "crc32_central_directory": "cfcf7fe8",
+    "member_sha256": "73011059e9d140b45bc5f8d1aeb023c3ef5c4288c7f8936362b021e71ecf1302",
+    "compression_method": 8
+   },
+   "test/Carlos Gonzalez - A Place For Us/other.wav": {
+    "uncompressed_size": 44138632,
+    "crc32_central_directory": "6d4eb71c",
+    "member_sha256": "a91fd90c6f96e09fa36f2028d45514fff53caeed7ea96e53f2ff67a7eec3a544",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "8d410ce872d19e2da7711ba6e03f0559b811b11cafcdfd9c8bf20fe559eb2004",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 11034647,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "872c65ce1a4ed25a96620e4b8fef1b752763a38bedac65483f0f93323442737c",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 11034647,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "0e6cd362941e5ee11df7a83ab7574458b372a15b836cf97c91627ea421579ac6",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 11034647,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 11034647,
+   "tiled": false,
+   "bed_window_sha256": "076f6bbbefb65caad71ec7d5a742ecfa01a91e0d5ab565ed532af02082eddc51"
+  },
+  "fetch_seconds": 52.56
+ },
+ "Cristina Vane - So Easy": {
+  "index": 10,
+  "track": "Cristina Vane - So Easy",
+  "members": {
+   "test/Cristina Vane - So Easy/drums.wav": {
+    "uncompressed_size": 44829268,
+    "crc32_central_directory": "6f9af9b1",
+    "member_sha256": "5c4490ee29e7a12c12a1122ab55dab704c12e1df5a95c403d429f1ebf009f4bd",
+    "compression_method": 8
+   },
+   "test/Cristina Vane - So Easy/bass.wav": {
+    "uncompressed_size": 44829268,
+    "crc32_central_directory": "d90760b2",
+    "member_sha256": "5c906848db674ba7445c7e4fb07179f26cfa5a5f97d118cc490d727c4d2f7236",
+    "compression_method": 8
+   },
+   "test/Cristina Vane - So Easy/other.wav": {
+    "uncompressed_size": 44829268,
+    "crc32_central_directory": "13b435ae",
+    "member_sha256": "489ffef7e2b59fb3aa08a9bab2fa776e4fedb89dba3e8e662cb20885569d01c2",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "1ae0b0d07cd86259c86d3da6ae3f038c8a9eff544639de86ac9e24608c23b564",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 11207306,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "359cc20f9b88408ce800c4d01ba334c514fc1f9a8c005df7362de606675574a7",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 11207306,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "5cf896cf939ff7ac6a3ddcf5c1b06678cc36ace310c5588212e4ecf69c76a8c2",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 11207306,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 11207306,
+   "tiled": false,
+   "bed_window_sha256": "9e9069c0aa0c4d68668d099eb282c5997065223640609906996928b6b1070885"
+  },
+  "fetch_seconds": 79.88
+ },
+ "Detsky Sad - Walkie Talkie": {
+  "index": 11,
+  "track": "Detsky Sad - Walkie Talkie",
+  "members": {
+   "test/Detsky Sad - Walkie Talkie/drums.wav": {
+    "uncompressed_size": 33601092,
+    "crc32_central_directory": "e70bc5cb",
+    "member_sha256": "b09abaef02204723af80f9220b62cbf17ab6912d92189a73580a0f89c96e062d",
+    "compression_method": 8
+   },
+   "test/Detsky Sad - Walkie Talkie/bass.wav": {
+    "uncompressed_size": 33601092,
+    "crc32_central_directory": "0cb0eb57",
+    "member_sha256": "2e140d006f96d86e532e2041ad62cf82b83983998a00ac3fb8782aff21742fbb",
+    "compression_method": 8
+   },
+   "test/Detsky Sad - Walkie Talkie/other.wav": {
+    "uncompressed_size": 33601092,
+    "crc32_central_directory": "e17ab30c",
+    "member_sha256": "8c6d3505d9bd9a09378710ccca0c0be9cdd9a12e8196ef7bfca0fd49e4536893",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "f75e7c631cee32c30b7320089ef599fec1fb146a3cced0266337cc576c9805c0",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 8400262,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "0c1300bf62edb903f70c73e8688449587905bf272cc2bc1c2fb41b7d0f84b4f0",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 8400262,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "1b624d941efbff070ac9daa7c4b9ed0b4c1ace903b08d48c199c54f92c67899b",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 8400262,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 8400262,
+   "tiled": false,
+   "bed_window_sha256": "3d7dbdb4a22052dbc52abeee18762a2ff33a77e30449c4c7addb92cafc34c531"
+  },
+  "fetch_seconds": 53.49
+ },
+ "Enda Reilly - Cur An Long Ag Seol": {
+  "index": 12,
+  "track": "Enda Reilly - Cur An Long Ag Seol",
+  "members": {
+   "test/Enda Reilly - Cur An Long Ag Seol/drums.wav": {
+    "uncompressed_size": 32986056,
+    "crc32_central_directory": "1833ddcd",
+    "member_sha256": "ff2c8081508b1f045417ec627f0bfc89932f43b3419e9e5821cd16e5038d2137",
+    "compression_method": 8
+   },
+   "test/Enda Reilly - Cur An Long Ag Seol/bass.wav": {
+    "uncompressed_size": 32986056,
+    "crc32_central_directory": "bc1ad7cf",
+    "member_sha256": "e3fa4b680745a3412cb68d232e68bed56d02cee1d56ca169e423f03ab7556143",
+    "compression_method": 8
+   },
+   "test/Enda Reilly - Cur An Long Ag Seol/other.wav": {
+    "uncompressed_size": 32986056,
+    "crc32_central_directory": "dc1d4779",
+    "member_sha256": "bb136f0986d91b2b3e43f059fa8da7f7d40eeba74c8f967a73ee8e1624ca93c1",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "e9b4ac590cbf6d80f030031be143b723e371913c9c7b65f9d94aea0545fedd96",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 8246503,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "62d3fb2d6d6855db7897a5a482d40e2467f46ffb3025aa82f4e76fb2035215a1",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 8246503,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "109a33b3e754a56db3119cbf6ed3eda2a1c574dd1e602b198cd4218c627ab9f0",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 8246503,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 8246503,
+   "tiled": false,
+   "bed_window_sha256": "c28cca0f3ecb51ddfb85d2f0e69e19a5d42dc67210294eaada2cf1114f74c695"
+  },
+  "fetch_seconds": 31.04
+ },
+ "Forkupines - Semantics": {
+  "index": 13,
+  "track": "Forkupines - Semantics",
+  "members": {
+   "test/Forkupines - Semantics/drums.wav": {
+    "uncompressed_size": 48260408,
+    "crc32_central_directory": "2e5538f0",
+    "member_sha256": "1149ab5f5b5a8a677b4565ae2a0b377ee549709b7b4d15ba2727c379d7e47f27",
+    "compression_method": 8
+   },
+   "test/Forkupines - Semantics/bass.wav": {
+    "uncompressed_size": 48260408,
+    "crc32_central_directory": "13934e1f",
+    "member_sha256": "6126be64fb58503df61db9d684fdd8196bc3380f34fb13f9630c40e812df2cca",
+    "compression_method": 8
+   },
+   "test/Forkupines - Semantics/other.wav": {
+    "uncompressed_size": 48260408,
+    "crc32_central_directory": "19d3b8b6",
+    "member_sha256": "dfeaad29e50ab9ca94088c78edbf9143e779aa4cc5e028d0ae122ab293b74af0",
+    "compression_method": 8
+   }
+  },
+  "stems": {
+   "drums": {
+    "stem_sha256": "7ca9db83d9ef4daf021daaed160b9fcdce737c7ff50f98a0723e2d3f1db43e42",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 12065091,
+    "n_channels": 2
+   },
+   "bass": {
+    "stem_sha256": "75c92d7632fffad22385f838ee9bf6ef156cc0b7aef5f41dd379e4476c9d06df",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 12065091,
+    "n_channels": 2
+   },
+   "other": {
+    "stem_sha256": "67e497667ab76f995b4daff40e6ee6113cf5ef4323ea604a13b2e7566a14798c",
+    "subtype": "PCM_16",
+    "sample_rate": 44100,
+    "n_frames": 12065091,
+    "n_channels": 2
+   }
+  },
+  "window": {
+   "n_max_samples": 1708258,
+   "sample_rate": 44100,
+   "source_frames": 12065091,
+   "tiled": false,
+   "bed_window_sha256": "a9ac52a11e69a998b2076fba4fbeb9ea7c19cc0bbc03a86d44c8aa3d8a08d4f6"
+  },
+  "fetch_seconds": 56.02
+ }
+}

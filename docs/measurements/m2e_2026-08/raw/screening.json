@@ -1,0 +1,13 @@
+{
+ "AM Contra - Heart Peripheral": {
+  "index": 0,
+  "residual_db": -32.8670226909434,
+  "numeric_pass": true,
+  "bed_rms": 0.08532691722618127,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "a37f5559908ca3884c386d22e63ba066bc1d0d227252060aaddcbcbd42404228",
+  "elapsed_seconds": 291.86
+ }
+}
