@@ -72,6 +72,38 @@ class GenerationError(RuntimeError):
     """生成規約に反する入力・状態（すべて fail-closed で停止する）。"""
 
 
+class _NoDuplicateKeyLoader(yaml.SafeLoader):
+    """重複キーを **拒否する** YAML loader（ハーネス側 `_yaml_load_no_dup_keys` と同旨）。
+
+    `yaml.safe_load` は同じキーが 2 度現れると黙って後勝ちにする。登録簿で同じ
+    トラック/clip が矛盾する `accepted` や stem pin を持って 2 度書かれた場合、
+    生成器は**隠れた解釈**で走ってしまう。曖昧な登録簿は読まずに止める。
+    """
+
+
+def _no_dup_construct_mapping(loader: "_NoDuplicateKeyLoader", node: Any) -> Dict[Any, Any]:
+    mapping: Dict[Any, Any] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=True)
+        if key in mapping:
+            raise GenerationError(f"registry に重複キー {key!r} がある (fail-closed)")
+        mapping[key] = loader.construct_object(value_node, deep=True)
+    return mapping
+
+
+_NoDuplicateKeyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_dup_construct_mapping
+)
+
+
+def load_registry_yaml(path: Path) -> Dict[str, Any]:
+    """登録簿 YAML を重複キー拒否で読む（`load_registered_*` の唯一の入口）。"""
+    doc = yaml.load(Path(path).read_text(encoding="utf-8"), Loader=_NoDuplicateKeyLoader)
+    if not isinstance(doc, dict):
+        raise GenerationError(f"{path}: YAML mapping でない (fail-closed)")
+    return doc
+
+
 # ---------------------------------------------------------------------------
 # 読み込みの chokepoint（`vocals.wav` を読まない門）
 # ---------------------------------------------------------------------------
@@ -534,7 +566,7 @@ def load_registered_beds() -> Dict[str, Dict[str, Any]]:
             f"{M2E_BED_FIXTURES_PATH} が無い; ベッドの事前登録 pin なしにミックスを "
             "生成しない (fail-closed)"
         )
-    doc = yaml.safe_load(M2E_BED_FIXTURES_PATH.read_text(encoding="utf-8"))
+    doc = load_registry_yaml(M2E_BED_FIXTURES_PATH)
     version = doc.get("schema_version")
     if version != M2E_BED_FIXTURES_SCHEMA:
         raise GenerationError(
@@ -550,7 +582,7 @@ def load_registered_beds() -> Dict[str, Dict[str, Any]]:
 
 def load_registered_clips() -> Dict[str, Dict[str, str]]:
     """`m2c_external_fixtures.yaml` の 40 clip pin を読む（**唯一の真**）。"""
-    doc = yaml.safe_load(M2C_FIXTURES_PATH.read_text(encoding="utf-8"))
+    doc = load_registry_yaml(M2C_FIXTURES_PATH)
     version = doc.get("schema_version")
     if version != M2C_FIXTURES_SCHEMA:
         raise GenerationError(

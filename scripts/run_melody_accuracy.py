@@ -3664,6 +3664,39 @@ def _require_m2e_bars_provenance(doc: Dict[str, Any], *, bars_file: str) -> None
             f"{bars_file}: provenance.derived_from.sha256 {derived['sha256']!r} が "
             "64 桁 lowercase hex でない (fail-closed)"
         )
+    # 形だけ整った provenance は装飾にすぎない。**宣言した出所の実体へ結び付ける**:
+    # 宣言ファイルが既知の bars ファイルであり、その committed bytes の digest が
+    # 宣言値と一致し、宣言カテゴリが実際にそのファイルに在ることまで要求する。
+    # （一方向規律により bars ファイルは凍結後に変わらないので、この一致は安定する。
+    #   もし出所が変わったなら、それは「転用値がまだ出所を反映しているか」を
+    #   問い直すべき時であり、黙って通してよい変化ではない。）
+    source_name = derived["file"]
+    if source_name not in _BARS_FILES:
+        raise ValueError(
+            f"{bars_file}: provenance.derived_from.file {source_name!r} が既知の bars "
+            f"ファイル {sorted(_BARS_FILES)} でない (fail-closed)"
+        )
+    source_path = Path(_BARS_FILES[source_name]["default_path"])
+    if not source_path.is_file():
+        raise ValueError(
+            f"{bars_file}: provenance.derived_from.file {source_name!r} の実体 "
+            f"{source_path} が無い (fail-closed)"
+        )
+    source_bytes = source_path.read_bytes()
+    source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+    if source_sha256 != derived["sha256"]:
+        raise ValueError(
+            f"{bars_file}: provenance.derived_from.sha256 {derived['sha256']} が "
+            f"{source_name} の実 digest {source_sha256} と不一致; 転用元の bytes へ "
+            "結び付いていない provenance を受理しない (fail-closed)"
+        )
+    source_doc = _yaml_load_no_dup_keys(source_bytes, what=source_name)
+    source_block = source_doc.get(_BARS_FILES[source_name]["block_key"])
+    if not isinstance(source_block, dict) or derived["category"] not in source_block:
+        raise ValueError(
+            f"{bars_file}: provenance.derived_from.category {derived['category']!r} が "
+            f"{source_name} に存在しない (fail-closed)"
+        )
 
 
 def load_bars(path: Path = BARS_PATH) -> Tuple[BarsArtifact, str]:

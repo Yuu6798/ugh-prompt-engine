@@ -104,10 +104,24 @@ def main() -> int:
     args = parser.parse_args()
 
     tracks = json.loads(Path(args.tracks).read_text(encoding="utf-8"))
+    # **入力を事前登録の bed window pin へ結び付ける**（§9）。古い/差し替えられた
+    # `bed_XX.wav` を受けても、出てくる census は内部整合するので下流から見えない。
+    registered = mk.load_registered_beds()
     rows = []
     for index, track in enumerate(tracks):
         path = Path(args.beds) / f"bed_{index:02d}.wav"
         y, sample_rate = sf.read(str(path), dtype="float64", always_2d=False)
+        pin = registered.get(track, {}).get("bed_window_sha256")
+        if not pin:
+            raise ValueError(
+                f"{track!r}: bed_window_sha256 が事前登録に無い (fail-closed)"
+            )
+        actual = mk.waveform_sha256(y)
+        if actual != pin:
+            raise ValueError(
+                f"{path}: bed window sha256 {actual} が事前登録 pin {pin} と不一致; "
+                "別のコホートから canonical な census を作らない (fail-closed)"
+            )
         if int(sample_rate) != SAMPLE_RATE:
             # `N_DROP_THRESHOLD` も秒換算も 44100 で凍結してある。別レートの入力を
             # 黙って受けると、87 hop が 1.0 s 未満でもゲートを通る（48 kHz なら

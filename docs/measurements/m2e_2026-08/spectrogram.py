@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 
@@ -33,6 +34,11 @@ matplotlib.use("Agg")   # ヘッドレス（表示バックエンド差で絵が
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import soundfile as sf  # noqa: E402
+
+REPO = Path(__file__).resolve().parents[3]
+_spec = importlib.util.spec_from_file_location("mk", REPO / "scripts" / "make_vremix_fixtures.py")
+mk = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(mk)
 
 # --- 凍結パラメータ（設計 §3.4.5「生成条件はスクリプトに凍結」）-----------------
 N_FFT = 4096            # 周波数分解能 ≈ 10.8 Hz @44.1kHz（調波列の分離に足りる）
@@ -60,8 +66,17 @@ def stft_db(y: np.ndarray, sample_rate: int) -> tuple[np.ndarray, np.ndarray, np
     return freqs, times, s_db
 
 
-def render(path: Path, out_png: Path, title: str) -> None:
+def render(path: Path, out_png: Path, title: str, *, expected_sha256: str) -> None:
     y, sample_rate = sf.read(str(path), dtype="float64", always_2d=False)
+    # 目視の会計は「50 件揃っている」ことではなく「**登録されたコホートを見た**」
+    # ことを主張する。入力が drift していると、揃った digest map がその主張の
+    # 証拠にならない。描く前に事前登録の bed window pin へ結び付ける。
+    actual = mk.waveform_sha256(y)
+    if actual != expected_sha256:
+        raise ValueError(
+            f"{path}: bed window sha256 {actual} が事前登録 pin {expected_sha256} と "
+            "不一致; 登録コホートでない素材の画像を目視記録にしない (fail-closed)"
+        )
     freqs, times, s_db = stft_db(np.asarray(y, dtype=np.float64), int(sample_rate))
     fig, axes = plt.subplots(2, 1, figsize=(FIG_W_IN, FIG_H_IN), dpi=DPI, sharex=True)
     low = freqs <= LOW_BAND_HZ
@@ -91,6 +106,7 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
     tracks = json.loads(Path(args.tracks).read_text(encoding="utf-8"))
 
+    registered = mk.load_registered_beds()
     digests: dict[str, str] = {}
     for index, track in enumerate(tracks):
         src = beds / f"bed_{index:02d}.wav"
@@ -102,8 +118,12 @@ def main() -> int:
                 f"{src} が無い（[{index:02d}] {track}）; 全 50 件が揃わないまま "
                 "部分的な digest map を出さない (fail-closed)"
             )
+        pin = registered.get(track, {}).get("bed_window_sha256")
+        if not pin:
+            raise ValueError(f"{track!r}: bed_window_sha256 が事前登録に無い (fail-closed)")
         png = out / f"bed_{index:02d}.png"
-        render(src, png, f"[{index:02d}] {track}  —  bed window [0, n_max]")
+        render(src, png, f"[{index:02d}] {track}  —  bed window [0, n_max]",
+               expected_sha256=pin)
         digests[f"bed_{index:02d}.png"] = hashlib.sha256(png.read_bytes()).hexdigest()
         print(f"[{index:02d}] {track}", flush=True)
 

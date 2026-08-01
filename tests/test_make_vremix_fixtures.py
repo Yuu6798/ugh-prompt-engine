@@ -308,6 +308,17 @@ def test_load_registered_clips_accepts_the_committed_registry() -> None:
     assert len(mk.load_registered_clips()) == 40
 
 
+def test_registry_loader_rejects_duplicate_keys(tmp_path: Path) -> None:
+    """`yaml.safe_load` の後勝ちで、矛盾する登録を隠れた解釈で読まない。"""
+    path = tmp_path / "dup.yaml"
+    path.write_text(
+        'schema_version: "x"\nbeds:\n  "A":\n    accepted: true\n  "A":\n    accepted: false\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(mk.GenerationError, match="重複キー"):
+        mk.load_registry_yaml(path)
+
+
 def test_readme_records_the_current_bed_fixture_digest() -> None:
     """README の pin 表が commit 済み fixture の実 digest と一致する。"""
     fixture = ROOT / "tests/fixtures/melody_bench/m2e_bed_fixtures.yaml"

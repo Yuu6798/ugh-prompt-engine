@@ -8390,7 +8390,9 @@ _M2E_BARS_TEMPLATE = {
     "provenance": {
         "derived_from": {
             "file": "m2_accuracy_bars.yaml",
-            "sha256": "0" * 64,
+            # **実 digest**。loader は宣言した出所の bytes と一致することを要求する
+            # （形だけ整った provenance は出所へ結び付いていない・Codex 9 巡目 P2）。
+            "sha256": hashlib.sha256(BARS_PATH.read_bytes()).hexdigest(),
             "category": "V_fullstack",
         }
     },
@@ -8419,6 +8421,32 @@ def test_m2e_bars_load_and_expose_the_frozen_conditions(tmp_path: Path) -> None:
     for category in ("V_remix_real_direct", "V_remix_real_stem"):
         assert set(bars["m2e_accuracy_bars"][category]) == {"min_rpa", "max_octave_gap"}
         assert "max_vfa" not in bars["m2e_accuracy_bars"][category]
+
+
+def _wrong_provenance_digest(doc):
+    doc["provenance"]["derived_from"]["sha256"] = "0" * 64
+
+
+def _unknown_provenance_file(doc):
+    doc["provenance"]["derived_from"]["file"] = "not_a_bars_file.yaml"
+
+
+def _absent_provenance_category(doc):
+    doc["provenance"]["derived_from"]["category"] = "V_does_not_exist"
+
+
+@pytest.mark.parametrize(
+    "mutate, match",
+    [
+        (_wrong_provenance_digest, "実 digest"),
+        (_unknown_provenance_file, "既知の bars"),
+        (_absent_provenance_category, "に存在しない"),
+    ],
+)
+def test_m2e_bars_provenance_must_bind_to_the_declared_source(tmp_path, mutate, match) -> None:
+    """形だけ整った provenance は装飾でしかない——宣言した出所の実体へ結び付ける。"""
+    with pytest.raises(ValueError, match=match):
+        harness.load_bars(_write_m2e_bars(tmp_path, mutate))
 
 
 def _drop_conditions(doc):
