@@ -8865,6 +8865,63 @@ def test_cell_store_generator_code_mismatch_forces_remeasurement(tmp_path: Path)
     assert "generator_code_sha256" in mismatch_fields
 
 
+def test_cell_store_tolerance_change_forces_remeasurement(tmp_path: Path) -> None:
+    """採点閾値が変われば同じセルでも別の測定（bars 改訂で旧採点値を resume しない）。"""
+    cell_store = tmp_path / "cell_store"
+    _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+
+    target_clip = "vremix_vocadito_1_BedOne_p12"
+    record_path = harness._cell_store_record_path(
+        cell_store,
+        category="V_remix_real_direct",
+        level="+12dB",
+        entry_id=target_clip,
+        repeat_index=0,
+    )
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    assert "tolerance_cents" in record and "est_voiced_floor" in record
+    record["tolerance_cents"] = record["tolerance_cents"] + 7.0
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    report2 = _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+    assert target_clip in report2["cells_measured"]
+    mismatch_fields = {
+        m["field"] for m in report2["cell_store_mismatches"] if m["entry_id"] == target_clip
+    }
+    assert "tolerance_cents" in mismatch_fields
+
+
+def test_two_arm_run_does_not_collide_on_the_frozen_copy(tmp_path: Path) -> None:
+    """direct / stem を 1 run で測っても凍結コピーが衝突しない。
+
+    凍結コピーは書いた直後に `0400` になるので、2 本目のアームが同じパスへ
+    `write_bytes` すると非 root では `PermissionError` になる（root では再現しない）。
+    アームごとにディレクトリを分けて構造的に消してある。
+    """
+    manifest_path, fixtures_path = _write_m2e_external_fixture_set(
+        tmp_path, _VREMIX_CLIPS, level="+12dB"
+    )
+    seen: "List[str]" = []
+    runner = _m2e_fake_runner()
+
+    def _tracking_runner(path, route):
+        seen.append(path)
+        return runner(path, route)
+
+    report = _fake_run(
+        categories=("V_remix_real_direct", "V_remix_real_stem"),
+        route_runner=_tracking_runner,
+        external_manifest_path=manifest_path,
+        external_fixtures_path=fixtures_path,
+        m2e_bars_path=_write_m2e_bars(tmp_path),
+        level="+12dB",
+    )
+    assert set(report["categories"]) == {"V_remix_real_direct", "V_remix_real_stem"}
+    # 同一 clip の凍結コピーがアーム間で**別パス**になっている（上書きが起きない）。
+    assert len(seen) == 2 * len(_VREMIX_CLIPS)
+    assert len(set(seen)) == len(seen)
+
+
 def test_run_accuracy_rejects_a_fixture_level_that_differs_from_the_run_level(
     tmp_path: Path,
 ) -> None:

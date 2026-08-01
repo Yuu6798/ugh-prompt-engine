@@ -4585,6 +4585,8 @@ def _measure_or_resume_external_clip_row(
             audio_sha256=inputs.audio_sha256,
             annotation_sha256=inputs.annotation_sha256,
             env_digest=env_digest,
+            tolerance_cents=tolerance_cents,
+            est_voiced_floor=est_voiced_floor,
         )
         if not mismatches:
             cells_resumed.append(clip_id)
@@ -4626,6 +4628,10 @@ def _measure_or_resume_external_clip_row(
             # 新しい `generator_code_sha256` を名乗る（= 古い測定を現行コードの結果と
             # して報告する）。evaluate の再測定まで検出が遅れるのも高くつく。
             "generator_code_sha256": _LOADED_GENERATOR_CODE_SHA256,
+            # 採点に効く凍結値。bars を改訂して同じ store を再利用すると、旧 clip_row が
+            # 新しい bars digest を纏って resume される（採点値は旧閾値のまま）。
+            "tolerance_cents": tolerance_cents,
+            "est_voiced_floor": est_voiced_floor,
             "clip_row": row,
             "elapsed_seconds": elapsed_seconds,
             "workers": workers,
@@ -4680,6 +4686,15 @@ def _run_external_category(
         where=f"run_accuracy: category {category!r}",
     )
 
+    # 凍結コピーは **アーム（カテゴリ）ごとの専用ディレクトリ**へ置く。
+    # `_build_external_clip_row` は `tmp_dir/<clip_id>.wav` を書いた直後に 0400 を
+    # 立てるため、同一 run で 2 アーム（direct / stem）を測ると 2 本目の
+    # `write_bytes` が **PermissionError で落ちる**（root では再現しない・Codex P1）。
+    # 「消してから書き直す」ではなくパスを分けることで、衝突を構造的に消す
+    # （凍結コピーが上書きされうる経路自体を作らない）。
+    arm_tmp_dir = resolve_confined(f"arm-{category}", tmp_dir)
+    arm_tmp_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+
     cells_resumed: List[str] = []
     cells_measured: List[str] = []
     cell_store_mismatches: "List[Dict[str, Any]]" = []
@@ -4695,7 +4710,7 @@ def _run_external_category(
             est_voiced_floor=est_voiced_floor,
             route=route,
             runner=runner,
-            tmp_dir=tmp_dir,
+            tmp_dir=arm_tmp_dir,
             category=category,
             level=level,
             cell_store=cell_store,
@@ -5125,6 +5140,8 @@ def _cell_record_mismatches(
     audio_sha256: str,
     annotation_sha256: str,
     env_digest: str,
+    tolerance_cents: float,
+    est_voiced_floor: float,
 ) -> "List[Dict[str, Any]]":
     """既存セルレコードと現在の入力/環境の不一致を列挙する（設計 §8.7 再開規則）。
 
@@ -5154,6 +5171,10 @@ def _cell_record_mismatches(
         # 旧世代のレコードにはこのキーが無く `None` として不一致になる——それが
         # 正しい: 素性の分からないセルを黙って resume しない。
         "generator_code_sha256": _LOADED_GENERATOR_CODE_SHA256,
+        # 採点に効く凍結値（bars 改訂で動く）。`bars_sha256` は row へ後から刻まれる
+        # ので、閾値が変わったセルを resume すると**旧採点値に新 bars の pin が付く**。
+        "tolerance_cents": tolerance_cents,
+        "est_voiced_floor": est_voiced_floor,
     }
     mismatches: "List[Dict[str, Any]]" = []
     for field, expected in current.items():

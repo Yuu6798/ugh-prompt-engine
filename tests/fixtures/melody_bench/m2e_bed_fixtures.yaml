@@ -52,6 +52,14 @@ screening:
   # 参加したため、これが無いと「residual_db を通った先頭 2 件がなぜ不採用か」を
   # 本ファイル単体で説明できない。
   reason_d: {dropout_db: -26.0, frame_len: 2048, hop: 512, min_seconds: 1.0, n_drop_threshold: 87}
+  # 2026-08-01 実装訂正（Codex 4 巡目・r2_screening.md §4.8）: 下の各 bed の
+  # `n_drop_frames` / `dropout_sec` / `reason_d_hit` は **訂正後の算出**
+  # （docs/measurements/m2e_2026-08/raw/reason_d_26_corrected.json）から再生成した。
+  # 訂正点は分母（peak → bed_active_rms）と連続長（+3 の除去）の 2 点で、
+  # **閾値 -26.0 / n_drop_threshold 87 は動かしていない**。
+  # 訂正前の値は同 raw/reason_d_26.json に無効として保持。
+  # `accepted` は訂正前後で不変（訂正は N_drop を減らす方向にしか効かないため）。
+  reason_d_source: "docs/measurements/m2e_2026-08/raw/reason_d_26_corrected.json"
 
 # 全 50 曲の帰属証拠（§9.1 レイヤ(3)）。**採用 2 件だけでなく全件**を完備させる
 # ——選定の監査可能性は「通過 2 件」ではなく「全 50 件の記録」に載っている（§3.3-2）。
@@ -60,8 +68,8 @@ beds:
   "AM Contra - Heart Peripheral":
     lexical_index: 0
     residual_db: -32.867023
-    n_drop_frames: 297
-    dropout_sec: 3.448163
+    n_drop_frames: 294
+    dropout_sec: 3.413333
     reason_d_hit: true
     accepted: false
     expected_stem_sha256:
@@ -85,8 +93,8 @@ beds:
   "Al James - Schoolboy Facination":
     lexical_index: 1
     residual_db: -43.185731
-    n_drop_frames: 141
-    dropout_sec: 1.637007
+    n_drop_frames: 138
+    dropout_sec: 1.602177
     reason_d_hit: true
     accepted: false
     expected_stem_sha256:
@@ -110,8 +118,8 @@ beds:
   "Angels In Amplifiers - I'm Alright":
     lexical_index: 2
     residual_db: -48.288419
-    n_drop_frames: 72
-    dropout_sec: 0.835918
+    n_drop_frames: 36
+    dropout_sec: 0.417959
     reason_d_hit: false
     accepted: true
     accepted_rank: 1
@@ -136,8 +144,8 @@ beds:
   "Arise - Run Run Run":
     lexical_index: 3
     residual_db: -52.255730
-    n_drop_frames: 51
-    dropout_sec: 0.592109
+    n_drop_frames: 48
+    dropout_sec: 0.557279
     reason_d_hit: false
     accepted: true
     accepted_rank: 2
@@ -162,8 +170,8 @@ beds:
   "BKS - Bulldozer":
     lexical_index: 4
     residual_db: -55.264381
-    n_drop_frames: 238
-    dropout_sec: 2.763175
+    n_drop_frames: 224
+    dropout_sec: 2.600635
     reason_d_hit: true
     accepted: false
     expected_stem_sha256:
@@ -187,9 +195,9 @@ beds:
   "BKS - Too Much":
     lexical_index: 5
     residual_db: -53.927561
-    n_drop_frames: 106
-    dropout_sec: 1.230658
-    reason_d_hit: true
+    n_drop_frames: 34
+    dropout_sec: 0.394739
+    reason_d_hit: false
     accepted: false
     expected_stem_sha256:
       drums: "98bdaa4fbcf7655a11a5e57de5c0553d4fb7a19972f80aee92a4ea2570973179"
@@ -212,8 +220,8 @@ beds:
   "Ben Carrigan - We'll Talk About It All Tonight":
     lexical_index: 6
     residual_db: -49.592514
-    n_drop_frames: 351
-    dropout_sec: 4.075102
+    n_drop_frames: 347
+    dropout_sec: 4.028662
     reason_d_hit: true
     accepted: false
     expected_stem_sha256:
@@ -237,8 +245,8 @@ beds:
   "Bobby Nobody - Stitch Up":
     lexical_index: 7
     residual_db: -63.975615
-    n_drop_frames: 553
-    dropout_sec: 6.420317
+    n_drop_frames: 536
+    dropout_sec: 6.222948
     reason_d_hit: true
     accepted: false
     expected_stem_sha256:
@@ -262,8 +270,8 @@ beds:
   "Buitraker - Revo X":
     lexical_index: 8
     residual_db: -51.651655
-    n_drop_frames: 720
-    dropout_sec: 8.359184
+    n_drop_frames: 163
+    dropout_sec: 1.892426
     reason_d_hit: true
     accepted: false
     expected_stem_sha256:
@@ -287,8 +295,8 @@ beds:
   "Carlos Gonzalez - A Place For Us":
     lexical_index: 9
     residual_db: -58.674580
-    n_drop_frames: 203
-    dropout_sec: 2.356825
+    n_drop_frames: 200
+    dropout_sec: 2.321995
     reason_d_hit: true
     accepted: false
     expected_stem_sha256:
@@ -312,8 +320,8 @@ beds:
   "Cristina Vane - So Easy":
     lexical_index: 10
     residual_db: -22.068974
-    n_drop_frames: 301
-    dropout_sec: 3.494603
+    n_drop_frames: 298
+    dropout_sec: 3.459773
     reason_d_hit: true
     accepted: false
     expected_stem_sha256:
@@ -337,8 +345,8 @@ beds:
   "Detsky Sad - Walkie Talkie":
     lexical_index: 11
     residual_db: -11.169567
-    n_drop_frames: 104
-    dropout_sec: 1.207438
+    n_drop_frames: 101
+    dropout_sec: 1.172608
     reason_d_hit: true
     accepted: false
     expected_stem_sha256:
@@ -362,9 +370,9 @@ beds:
   "Enda Reilly - Cur An Long Ag Seol":
     lexical_index: 12
     residual_db: -33.508998
-    n_drop_frames: 87
-    dropout_sec: 1.010068
-    reason_d_hit: true
+    n_drop_frames: 29
+    dropout_sec: 0.336689
+    reason_d_hit: false
     accepted: false
     expected_stem_sha256:
       drums: "e9b4ac590cbf6d80f030031be143b723e371913c9c7b65f9d94aea0545fedd96"
@@ -387,8 +395,8 @@ beds:
   "Forkupines - Semantics":
     lexical_index: 13
     residual_db: -56.699433
-    n_drop_frames: 273
-    dropout_sec: 3.169524
+    n_drop_frames: 269
+    dropout_sec: 3.123084
     reason_d_hit: true
     accepted: false
     expected_stem_sha256:
@@ -412,8 +420,8 @@ beds:
   "Georgia Wonder - Siren":
     lexical_index: 14
     residual_db: -33.215944
-    n_drop_frames: 339
-    dropout_sec: 3.935782
+    n_drop_frames: 336
+    dropout_sec: 3.900952
     reason_d_hit: true
     accepted: false
     expected_stem_sha256:
@@ -437,8 +445,8 @@ beds:
   "Girls Under Glass - We Feel Alright":
     lexical_index: 15
     residual_db: -38.153125
-    n_drop_frames: 168
-    dropout_sec: 1.950476
+    n_drop_frames: 163
+    dropout_sec: 1.892426
     reason_d_hit: true
     accepted: false
     expected_stem_sha256:
@@ -462,8 +470,8 @@ beds:
   "Hollow Ground - Ill Fate":
     lexical_index: 16
     residual_db: -63.925812
-    n_drop_frames: 76
-    dropout_sec: 0.882358
+    n_drop_frames: 72
+    dropout_sec: 0.835918
     reason_d_hit: false
     accepted: false
     expected_stem_sha256:
@@ -487,8 +495,8 @@ beds:
   "James Elder & Mark M Thompson - The English Actor":
     lexical_index: 17
     residual_db: -39.808500
-    n_drop_frames: 9
-    dropout_sec: 0.104490
+    n_drop_frames: 0
+    dropout_sec: 0.000000
     reason_d_hit: false
     accepted: false
     expected_stem_sha256:
@@ -512,8 +520,8 @@ beds:
   "Juliet's Rescue - Heartbeats":
     lexical_index: 18
     residual_db: -67.067222
-    n_drop_frames: 150
-    dropout_sec: 1.741497
+    n_drop_frames: 147
+    dropout_sec: 1.706667
     reason_d_hit: true
     accepted: false
     expected_stem_sha256:
@@ -537,8 +545,8 @@ beds:
   "Little Chicago's Finest - My Own":
     lexical_index: 19
     residual_db: -40.819884
-    n_drop_frames: 20
-    dropout_sec: 0.232200
+    n_drop_frames: 8
+    dropout_sec: 0.092880
     reason_d_hit: false
     accepted: false
     expected_stem_sha256:
@@ -562,8 +570,8 @@ beds:
   "Louis Cressy Band - Good Time":
     lexical_index: 20
     residual_db: -23.257353
-    n_drop_frames: 74
-    dropout_sec: 0.859138
+    n_drop_frames: 21
+    dropout_sec: 0.243810
     reason_d_hit: false
     accepted: false
     expected_stem_sha256:
@@ -587,8 +595,8 @@ beds:
   "Lyndsey Ollard - Catching Up":
     lexical_index: 21
     residual_db: -56.167967
-    n_drop_frames: 99
-    dropout_sec: 1.149388
+    n_drop_frames: 96
+    dropout_sec: 1.114558
     reason_d_hit: true
     accepted: false
     expected_stem_sha256:
@@ -612,8 +620,8 @@ beds:
   "M.E.R.C. Music - Knockout":
     lexical_index: 22
     residual_db: -40.328285
-    n_drop_frames: 256
-    dropout_sec: 2.972154
+    n_drop_frames: 253
+    dropout_sec: 2.937324
     reason_d_hit: true
     accepted: false
     expected_stem_sha256:
@@ -637,8 +645,8 @@ beds:
   "Moosmusic - Big Dummy Shake":
     lexical_index: 23
     residual_db: -21.408409
-    n_drop_frames: 149
-    dropout_sec: 1.729887
+    n_drop_frames: 145
+    dropout_sec: 1.683447
     reason_d_hit: true
     accepted: false
     expected_stem_sha256:
@@ -662,8 +670,8 @@ beds:
   "Motor Tapes - Shore":
     lexical_index: 24
     residual_db: -71.054200
-    n_drop_frames: 180
-    dropout_sec: 2.089796
+    n_drop_frames: 177
+    dropout_sec: 2.054966
     reason_d_hit: true
     accepted: false
     expected_stem_sha256:
@@ -687,9 +695,9 @@ beds:
   "Mu - Too Bright":
     lexical_index: 25
     residual_db: -50.262833
-    n_drop_frames: 135
-    dropout_sec: 1.567347
-    reason_d_hit: true
+    n_drop_frames: 44
+    dropout_sec: 0.510839
+    reason_d_hit: false
     accepted: false
     expected_stem_sha256:
       drums: "ba5c7353850495f603c8f836c0e98094ad02b99da10f54337189343d56577ee0"
@@ -712,8 +720,8 @@ beds:
   "Nerve 9 - Pray For The Rain":
     lexical_index: 26
     residual_db: -54.208820
-    n_drop_frames: 22
-    dropout_sec: 0.255420
+    n_drop_frames: 12
+    dropout_sec: 0.139320
     reason_d_hit: false
     accepted: false
     expected_stem_sha256:
@@ -737,8 +745,8 @@ beds:
   "PR - Happy Daze":
     lexical_index: 27
     residual_db: -59.746567
-    n_drop_frames: 30
-    dropout_sec: 0.348299
+    n_drop_frames: 26
+    dropout_sec: 0.301859
     reason_d_hit: false
     accepted: false
     expected_stem_sha256:
@@ -762,8 +770,8 @@ beds:
   "PR - Oh No":
     lexical_index: 28
     residual_db: -66.428951
-    n_drop_frames: 46
-    dropout_sec: 0.534059
+    n_drop_frames: 37
+    dropout_sec: 0.429569
     reason_d_hit: false
     accepted: false
     expected_stem_sha256:
@@ -787,8 +795,8 @@ beds:
   "Punkdisco - Oral Hygiene":
     lexical_index: 29
     residual_db: -25.084417
-    n_drop_frames: 195
-    dropout_sec: 2.263946
+    n_drop_frames: 170
+    dropout_sec: 1.973696
     reason_d_hit: true
     accepted: false
     expected_stem_sha256:
@@ -812,8 +820,8 @@ beds:
   "Raft Monk - Tiring":
     lexical_index: 30
     residual_db: -58.782498
-    n_drop_frames: 570
-    dropout_sec: 6.617687
+    n_drop_frames: 565
+    dropout_sec: 6.559637
     reason_d_hit: true
     accepted: false
     expected_stem_sha256:
@@ -837,8 +845,8 @@ beds:
   "Sambasevam Shanmugam - Kaathaadi":
     lexical_index: 31
     residual_db: -31.571172
-    n_drop_frames: 143
-    dropout_sec: 1.660227
+    n_drop_frames: 138
+    dropout_sec: 1.602177
     reason_d_hit: true
     accepted: false
     expected_stem_sha256:
@@ -887,8 +895,8 @@ beds:
   "Secretariat - Over The Top":
     lexical_index: 33
     residual_db: -68.253196
-    n_drop_frames: 60
-    dropout_sec: 0.696599
+    n_drop_frames: 57
+    dropout_sec: 0.661769
     reason_d_hit: false
     accepted: false
     expected_stem_sha256:
@@ -912,8 +920,8 @@ beds:
   "Side Effects Project - Sing With Me":
     lexical_index: 34
     residual_db: -31.964644
-    n_drop_frames: 40
-    dropout_sec: 0.464399
+    n_drop_frames: 11
+    dropout_sec: 0.127710
     reason_d_hit: false
     accepted: false
     expected_stem_sha256:
@@ -937,8 +945,8 @@ beds:
   "Signe Jakobsen - What Have You Done To Me":
     lexical_index: 35
     residual_db: -67.886122
-    n_drop_frames: 784
-    dropout_sec: 9.102222
+    n_drop_frames: 781
+    dropout_sec: 9.067392
     reason_d_hit: true
     accepted: false
     expected_stem_sha256:
@@ -987,8 +995,8 @@ beds:
   "Speak Softly - Broken Man":
     lexical_index: 37
     residual_db: -32.044470
-    n_drop_frames: 46
-    dropout_sec: 0.534059
+    n_drop_frames: 43
+    dropout_sec: 0.499229
     reason_d_hit: false
     accepted: false
     expected_stem_sha256:
@@ -1012,8 +1020,8 @@ beds:
   "Speak Softly - Like Horses":
     lexical_index: 38
     residual_db: -31.591130
-    n_drop_frames: 27
-    dropout_sec: 0.313469
+    n_drop_frames: 17
+    dropout_sec: 0.197370
     reason_d_hit: false
     accepted: false
     expected_stem_sha256:
@@ -1037,8 +1045,8 @@ beds:
   "The Doppler Shift - Atrophy":
     lexical_index: 39
     residual_db: -42.742350
-    n_drop_frames: 468
-    dropout_sec: 5.433469
+    n_drop_frames: 387
+    dropout_sec: 4.493061
     reason_d_hit: true
     accepted: false
     expected_stem_sha256:
@@ -1062,8 +1070,8 @@ beds:
   "The Easton Ellises (Baumi) - SDRNR":
     lexical_index: 40
     residual_db: -28.045414
-    n_drop_frames: 149
-    dropout_sec: 1.729887
+    n_drop_frames: 88
+    dropout_sec: 1.021678
     reason_d_hit: true
     accepted: false
     expected_stem_sha256:
@@ -1087,8 +1095,8 @@ beds:
   "The Easton Ellises - Falcon 69":
     lexical_index: 41
     residual_db: -26.270427
-    n_drop_frames: 180
-    dropout_sec: 2.089796
+    n_drop_frames: 177
+    dropout_sec: 2.054966
     reason_d_hit: true
     accepted: false
     expected_stem_sha256:
@@ -1112,8 +1120,8 @@ beds:
   "The Long Wait - Dark Horses":
     lexical_index: 42
     residual_db: -58.638744
-    n_drop_frames: 245
-    dropout_sec: 2.844444
+    n_drop_frames: 241
+    dropout_sec: 2.798005
     reason_d_hit: true
     accepted: false
     expected_stem_sha256:
@@ -1137,8 +1145,8 @@ beds:
   "The Mountaineering Club - Mallory":
     lexical_index: 43
     residual_db: -60.193660
-    n_drop_frames: 553
-    dropout_sec: 6.420317
+    n_drop_frames: 549
+    dropout_sec: 6.373878
     reason_d_hit: true
     accepted: false
     expected_stem_sha256:
@@ -1162,8 +1170,8 @@ beds:
   "The Sunshine Garcia Band - For I Am The Moon":
     lexical_index: 44
     residual_db: -46.643063
-    n_drop_frames: 28
-    dropout_sec: 0.325079
+    n_drop_frames: 25
+    dropout_sec: 0.290249
     reason_d_hit: false
     accepted: false
     expected_stem_sha256:
@@ -1187,8 +1195,8 @@ beds:
   "Timboz - Pony":
     lexical_index: 45
     residual_db: -51.060397
-    n_drop_frames: 230
-    dropout_sec: 2.670295
+    n_drop_frames: 226
+    dropout_sec: 2.623855
     reason_d_hit: true
     accepted: false
     expected_stem_sha256:
@@ -1212,8 +1220,8 @@ beds:
   "Tom McKenzie - Directions":
     lexical_index: 46
     residual_db: -63.149220
-    n_drop_frames: 22
-    dropout_sec: 0.255420
+    n_drop_frames: 19
+    dropout_sec: 0.220590
     reason_d_hit: false
     accepted: false
     expected_stem_sha256:
@@ -1237,8 +1245,8 @@ beds:
   "Triviul feat. The Fiend - Widow":
     lexical_index: 47
     residual_db: -17.838716
-    n_drop_frames: 25
-    dropout_sec: 0.290249
+    n_drop_frames: 7
+    dropout_sec: 0.081270
     reason_d_hit: false
     accepted: false
     expected_stem_sha256:
@@ -1262,8 +1270,8 @@ beds:
   "We Fell From The Sky - Not You":
     lexical_index: 48
     residual_db: -57.232971
-    n_drop_frames: 257
-    dropout_sec: 2.983764
+    n_drop_frames: 253
+    dropout_sec: 2.937324
     reason_d_hit: true
     accepted: false
     expected_stem_sha256:
@@ -1287,8 +1295,8 @@ beds:
   "Zeno - Signs":
     lexical_index: 49
     residual_db: -27.858293
-    n_drop_frames: 159
-    dropout_sec: 1.845986
+    n_drop_frames: 131
+    dropout_sec: 1.520907
     reason_d_hit: true
     accepted: false
     expected_stem_sha256:

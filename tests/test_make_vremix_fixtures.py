@@ -292,6 +292,28 @@ def test_load_registered_beds_accepts_the_committed_pin_file() -> None:
     assert len(beds) == 50
 
 
+def test_registered_dropout_fields_match_the_corrected_artifact() -> None:
+    """事前登録の (d) フィールドが訂正後の生データと一致する（§4.8）。
+
+    登録側と記録側が割れると「登録された監査」と「報告された測定」が別物になる。
+    """
+    rows = {
+        r["track"]: r
+        for r in json.loads(
+            (
+                ROOT / "docs/measurements/m2e_2026-08/raw/reason_d_26_corrected.json"
+            ).read_text(encoding="utf-8")
+        )["rows"]
+    }
+    beds = mk.load_registered_beds()
+    assert set(beds) == set(rows)
+    for track, entry in beds.items():
+        row = rows[track]
+        assert entry["n_drop_frames"] == row["n_drop_frames"], track
+        assert entry["reason_d_hit"] is row["d_hit"], track
+        assert entry["dropout_sec"] == pytest.approx(row["dropout_sec"], abs=1e-6), track
+
+
 def test_screening_reads_a_conventional_vocals_stem(tmp_path: Path) -> None:
     """`--vocals-stem vocals.wav` は §3.4 の測定対象であって混ぜる素材ではない。
 
@@ -696,6 +718,23 @@ def test_build_rejects_a_bed_that_is_not_accepted(tmp_path, monkeypatch) -> None
         mk.build(
             vocadito_root=vocadito_root, bed_root=bed_root,
             tracks=["Artist A - Track One"], levels=["0dB"],
+            out_dir=tmp_path / "out", registered_utc="2026-08-01",
+        )
+
+
+def test_build_requires_every_accepted_bed(tmp_path, monkeypatch) -> None:
+    """P1: `--bed` を 1 本落とすと、内部整合した**部分コホート**が出てしまう。"""
+    vocadito_root, pins = _fake_vocadito(tmp_path, ["vocadito_1"])
+    monkeypatch.setattr(mk, "load_registered_clips", lambda: pins)
+    bed_root = tmp_path / "beds"
+    tracks = ["Artist A - Track One", "Artist B - Track Two"]
+    for track in tracks:
+        _write_bed(bed_root / track)
+    monkeypatch.setattr(mk, "load_registered_beds", lambda: _fake_bed_pins(bed_root, tracks))
+    with pytest.raises(mk.GenerationError, match="部分コホート"):
+        mk.build(
+            vocadito_root=vocadito_root, bed_root=bed_root,
+            tracks=tracks[:1], levels=["0dB"],
             out_dir=tmp_path / "out", registered_utc="2026-08-01",
         )
 

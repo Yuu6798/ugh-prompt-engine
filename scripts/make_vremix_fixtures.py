@@ -648,6 +648,20 @@ def build(
     mix_dir.mkdir(parents=True, exist_ok=True)
     annotation_dir.mkdir(parents=True, exist_ok=True)
 
+    # 採用ベッドは**全件揃っていること**を要求する（部分コホートを publish しない）。
+    # `--bed` を 1 本落としても、生成される manifest と fixtures は互いに整合するため、
+    # ハーネスの cohort 完全一致チェックは通ってしまう——40 entry の帯から
+    # 「1280 セルの判定」が出てしまい、欠けたことを誰も検出できない。
+    # （accepted でない track を渡した場合は下の per-track 検査が個別の理由で落とす。
+    #   ここで見るのは「accepted なのに渡されていない」= 欠落のみ。）
+    accepted = {name for name, pin in registered_beds.items() if pin.get("accepted")}
+    missing = sorted(accepted - set(tracks))
+    if missing:
+        raise GenerationError(
+            f"事前登録の accepted ベッド {missing} が --bed に無い; 部分コホートで "
+            "内部整合した fixture bundle を publish しない (fail-closed)"
+        )
+
     slugs: Dict[str, str] = {}
     for track in tracks:
         slug = bed_slug(track)
