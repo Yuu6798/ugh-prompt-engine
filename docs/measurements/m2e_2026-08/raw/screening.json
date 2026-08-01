@@ -86,5 +86,27 @@
   "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
   "stem_sha256": "65e91f70c626c6afa92ebcae6ab687c1a9d6e0547ad563248019d9d2f2339c34",
   "elapsed_seconds": 278.56
+ },
+ "Buitraker - Revo X": {
+  "index": 8,
+  "residual_db": -51.65165461715596,
+  "numeric_pass": true,
+  "bed_rms": 0.07521669111004622,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "e76b5defda59379f53133ef2193d522d2cd299ce65082005836cb00d6d4dd874",
+  "elapsed_seconds": 289.96
+ },
+ "Carlos Gonzalez - A Place For Us": {
+  "index": 9,
+  "residual_db": -58.674579597139356,
+  "numeric_pass": true,
+  "bed_rms": 0.022422056756419544,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "66c142fde27bd6f29cb5064f2462b4be0e49c30d364cd9272528d3acfff56cfb",
+  "elapsed_seconds": 292.5
  }
 }
