@@ -631,20 +631,60 @@ def resolve_clip_bytes(
     return payloads[0], payloads[1]
 
 
+def require_registered_track_list(tracks: List[str]) -> None:
+    """トラック一覧が**事前登録の全 50 曲**と（順序込みで）一致することを要求する。
+
+    呼び出し側が渡す JSON が 49 件へ切り詰められていても、ループはその 49 件しか
+    要求しないので「49 枚の digest map を出して正常終了」してしまう。**揃っている
+    ことが完了の証拠になる**成果物では、コホートそのものを登録簿へ結び付ける。
+    """
+    beds = load_registered_beds()
+    expected = [
+        name for name, _ in sorted(beds.items(), key=lambda kv: kv[1]["lexical_index"])
+    ]
+    if list(tracks) != expected:
+        missing = sorted(set(expected) - set(tracks))
+        extra = sorted(set(tracks) - set(expected))
+        raise GenerationError(
+            f"トラック一覧が事前登録コホート（{len(expected)} 件・lexical order）と一致 "
+            f"しない（欠落={missing} / 余分={extra} / 件数={len(tracks)}）; 部分コホートで "
+            "成果物を出さない (fail-closed)"
+        )
+
+
 def compute_n_max(vocadito_root: Path, clips: Dict[str, Dict[str, str]]) -> Tuple[int, float]:
-    """§3.5 の `n_max`（40 clip の最長サンプル数）。常に 40 clip 基準で固定する。"""
+    """§3.5 の `n_max`（40 clip の最長サンプル数）。常に 40 clip 基準で固定する。
+
+    `n_max` は測定窓そのもの（凍結量）なので、**pin 照合していない bytes から
+    算出しない**——差し替え/再エンコードされた clip でも header だけは読めてしまい、
+    別の窓長を「正規の 40 clip から出した」顔で凍結できる。
+    """
+    import io
+
     longest = 0
     rate: Optional[int] = None
     for clip_id in sorted(clips):
-        info = sf.info(str(Path(vocadito_root) / "Audio" / f"{clip_id}.wav"))
-        if rate is None:
-            rate = int(info.samplerate)
-        elif int(info.samplerate) != rate:
+        path = Path(vocadito_root) / "Audio" / f"{clip_id}.wav"
+        if not path.is_file():
+            raise GenerationError(f"{path} が無い (fail-closed)")
+        payload = path.read_bytes()
+        actual = hashlib.sha256(payload).hexdigest()
+        expected = clips[clip_id]["expected_audio_sha256"]
+        if actual != expected:
             raise GenerationError(
-                f"clip {clip_id!r} の sample rate {info.samplerate} が他の clip と食い違う "
+                f"{path}: sha256 {actual} が既存 pin {expected} と不一致; 事前登録して "
+                "いない bytes から n_max を凍結しない (fail-closed)"
+            )
+        with sf.SoundFile(io.BytesIO(payload)) as handle:
+            samplerate, frames = int(handle.samplerate), int(handle.frames)
+        if rate is None:
+            rate = samplerate
+        elif samplerate != rate:
+            raise GenerationError(
+                f"clip {clip_id!r} の sample rate {samplerate} が他の clip と食い違う "
                 "(fail-closed)"
             )
-        longest = max(longest, int(info.frames))
+        longest = max(longest, frames)
     if rate is None or longest <= 0:
         raise GenerationError("n_max を算出できない (fail-closed)")
     return longest, longest / float(rate)
@@ -833,9 +873,7 @@ def _cmd_n_max(args: argparse.Namespace) -> int:
 
 def _cmd_screen(args: argparse.Namespace) -> int:
     bed_mono, bed_rate = load_bed_mono(Path(args.bed_root) / args.track)
-    window = bed_mono
-    if args.n_max is not None:
-        window = tile_to_length(bed_mono, int(args.n_max), bed_rate)
+    window = tile_to_length(bed_mono, int(args.n_max), bed_rate)
     if args.vocals_stem is not None:
         stem, stem_rate = read_vocals_stem_for_screening(Path(args.vocals_stem))
         if stem.ndim == 2:
@@ -918,7 +956,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_screen = sub.add_parser("screen", help="§3.4 residual_db")
     p_screen.add_argument("--bed-root", required=True)
     p_screen.add_argument("--track", required=True)
-    p_screen.add_argument("--n-max", type=int, default=None)
+    # `--n-max` は**必須**。省略すると窓が曲全体になり、`active` 集合も `residual_db`
+    # も凍結窓 `[0, n_max]` の外の音を含んでしまう——同じ曲の判定が変わり、採用コホート
+    # が変わりうる（§3.5 の測定窓は凍結量であって既定値ではない）。
+    p_screen.add_argument("--n-max", type=int, required=True)
     p_screen.add_argument(
         "--vocals-stem",
         default=None,

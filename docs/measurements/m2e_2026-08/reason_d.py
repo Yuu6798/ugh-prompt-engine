@@ -104,6 +104,8 @@ def main() -> int:
     args = parser.parse_args()
 
     tracks = json.loads(Path(args.tracks).read_text(encoding="utf-8"))
+    # コホートそのものを登録簿へ束縛する（切り詰められた一覧で「正常終了」しない）。
+    mk.require_registered_track_list(tracks)
     # **入力を事前登録の bed window pin へ結び付ける**（§9）。古い/差し替えられた
     # `bed_XX.wav` を受けても、出てくる census は内部整合するので下流から見えない。
     registered = mk.load_registered_beds()
@@ -111,6 +113,15 @@ def main() -> int:
     for index, track in enumerate(tracks):
         path = Path(args.beds) / f"bed_{index:02d}.wav"
         y, sample_rate = sf.read(str(path), dtype="float64", always_2d=False)
+        if np.asarray(y).ndim != 1:
+            # `waveform_sha256` は平坦化して hash するので、同じサンプル列を
+            # ステレオ header で包み直すと **pin は通る**。一方 `frame_rms` は
+            # 2-D をフレーム化するため `N_drop` と (d) 判定が静かに変わる。
+            raise ValueError(
+                f"{path}: モノ 1-D でない（shape={np.asarray(y).shape}）; "
+                "凍結ゲートは mono hop 前提であり、多チャンネルで (d) を数えない "
+                "(fail-closed)"
+            )
         pin = registered.get(track, {}).get("bed_window_sha256")
         if not pin:
             raise ValueError(

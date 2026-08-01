@@ -106,6 +106,8 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
     tracks = json.loads(Path(args.tracks).read_text(encoding="utf-8"))
 
+    # コホートそのものを登録簿へ束縛する（一覧が 49 件でも「正常終了」しないように）。
+    mk.require_registered_track_list(tracks)
     registered = mk.load_registered_beds()
     digests: dict[str, str] = {}
     for index, track in enumerate(tracks):

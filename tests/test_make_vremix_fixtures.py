@@ -308,6 +308,26 @@ def test_load_registered_clips_accepts_the_committed_registry() -> None:
     assert len(mk.load_registered_clips()) == 40
 
 
+def test_require_registered_track_list_rejects_a_truncated_cohort() -> None:
+    """切り詰められた一覧で「正常終了」しない（揃っていることが完了の証拠になる）。"""
+    beds = mk.load_registered_beds()
+    full = [n for n, _ in sorted(beds.items(), key=lambda kv: kv[1]["lexical_index"])]
+    mk.require_registered_track_list(full)  # 全件なら通る
+    with pytest.raises(mk.GenerationError, match="事前登録コホート"):
+        mk.require_registered_track_list(full[:-1])
+
+
+def test_compute_n_max_rejects_unpinned_clip_bytes(tmp_path: Path) -> None:
+    """`n_max` は凍結量——pin 照合していない bytes から算出しない。"""
+    root = tmp_path / "vocadito"
+    pin = _write_clip(root, "vocadito_1")
+    clips = {"vocadito_1": pin}
+    assert mk.compute_n_max(root, clips)[0] > 0
+    clips["vocadito_1"] = {**pin, "expected_audio_sha256": "0" * 64}
+    with pytest.raises(mk.GenerationError, match="既存 pin"):
+        mk.compute_n_max(root, clips)
+
+
 def test_registry_loader_rejects_duplicate_keys(tmp_path: Path) -> None:
     """`yaml.safe_load` の後勝ちで、矛盾する登録を隠れた解釈で読まない。"""
     path = tmp_path / "dup.yaml"
