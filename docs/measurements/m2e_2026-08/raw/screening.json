@@ -449,5 +449,27 @@
   "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
   "stem_sha256": "40ba8c91b85fe464242fd7eeb8a4a660da45b6714dd63a7f081b87cc330e9e3a",
   "elapsed_seconds": 269.0
+ },
+ "The Easton Ellises - Falcon 69": {
+  "index": 41,
+  "residual_db": -26.27042714552593,
+  "numeric_pass": true,
+  "bed_rms": 0.1122675022259558,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "9a39f6692fcc77ff2779ab1454c7c356062c59e11a8377c61ec89e7a2ddd78a9",
+  "elapsed_seconds": 261.44
+ },
+ "The Long Wait - Dark Horses": {
+  "index": 42,
+  "residual_db": -58.63874396776497,
+  "numeric_pass": true,
+  "bed_rms": 0.07436925140253194,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "e420a316dbafd8afba1347ccf63ca872bf64564ecb4b7e108b2134f1b34fa886",
+  "elapsed_seconds": 261.45
  }
 }
