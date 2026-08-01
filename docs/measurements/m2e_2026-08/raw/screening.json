@@ -493,5 +493,38 @@
   "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
   "stem_sha256": "ac609fb01c5942471862b437187515bfce0e47528b4c597e6984cd93096491dd",
   "elapsed_seconds": 257.28
+ },
+ "Timboz - Pony": {
+  "index": 45,
+  "residual_db": -51.060397213658234,
+  "numeric_pass": true,
+  "bed_rms": 0.0943426749537367,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "5c0403ea1048e628a412c16241c7414343c24fee4dbfca36660f4e6cb1111660",
+  "elapsed_seconds": 263.7
+ },
+ "Tom McKenzie - Directions": {
+  "index": 46,
+  "residual_db": -63.14921989750144,
+  "numeric_pass": true,
+  "bed_rms": 0.03484387943445646,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "b7665b50a331acf1c00967c52e24eaf7dab7be9e03e0742819a5d6f345d723da",
+  "elapsed_seconds": 254.18
+ },
+ "Triviul feat. The Fiend - Widow": {
+  "index": 47,
+  "residual_db": -17.83871596730036,
+  "numeric_pass": false,
+  "bed_rms": 0.06934818412307853,
+  "separation_model": "htdemucs_ft",
+  "separation_version": "4.1.0",
+  "separation_weights_sha256": "bf1218da42cb354bb995fb41b0a1dc8fa3cd47d63ccdaefec12dad03f8377b86",
+  "stem_sha256": "3451be778f02415ed8cfe952f408f1a26a517158f8122ca4ad615170b24fb226",
+  "elapsed_seconds": 248.23
  }
 }
