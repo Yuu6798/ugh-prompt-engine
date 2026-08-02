@@ -4799,6 +4799,7 @@ def _measure_or_resume_external_clip_row(
     cells_resumed: List[str],
     cells_measured: List[str],
     cell_started_utc: List[str],
+    cell_written_paths: List[str],
     cell_store_mismatches: "List[Dict[str, Any]]",
 ) -> Dict[str, Any]:
     """1 clip を測るか、設計 §8.7 のセル台帳から resume する。
@@ -4926,6 +4927,7 @@ def _measure_or_resume_external_clip_row(
             "workers": workers,
         }
         _cell_store_atomic_write_text(record_path, json.dumps(record, indent=2, sort_keys=True))
+        cell_written_paths.append(str(record_path))
     return row
 
 
@@ -4990,6 +4992,7 @@ def _run_external_category(
     cells_resumed: List[str] = []
     cells_measured: List[str] = []
     cell_started_utc: List[str] = []
+    cell_written_paths: List[str] = []
     cell_store_mismatches: "List[Dict[str, Any]]" = []
 
     clip_rows: List[Dict[str, Any]] = []
@@ -5013,6 +5016,7 @@ def _run_external_category(
             cells_resumed=cells_resumed,
             cells_measured=cells_measured,
             cell_started_utc=cell_started_utc,
+            cell_written_paths=cell_written_paths,
             cell_store_mismatches=cell_store_mismatches,
         )
         clip_rows.append(clip_row)
@@ -5029,6 +5033,7 @@ def _run_external_category(
         row["_cell_store_resumed"] = cells_resumed
         row["_cell_store_measured"] = cells_measured
         row["_cell_store_started_utc"] = cell_started_utc
+        row["_cell_store_written_paths"] = cell_written_paths
         row["_cell_store_mismatches"] = cell_store_mismatches
 
     unavailable = [c for c in clip_rows if c.get("outcome") == "unavailable"]
@@ -5438,6 +5443,22 @@ def _bind_dist_native_pins(names: "Tuple[str, ...]") -> None:
         )
 
 
+def _quarantine_cell_records(paths: "List[str]") -> None:
+    """この run が書いたセルレコードを resume されない名前へ退避する。
+
+    削除しない——「何が起きたか」を後から読めるようにするため（`.quarantined-*` は
+    `_cell_store_record_path` が生成する名前と一致しないので resume 経路には乗らない）。
+    退避自体が失敗しても元の例外を握り潰さない（best-effort・失敗は stderr へ）。
+    """
+    for path in paths:
+        record = Path(path)
+        try:
+            if record.is_file():
+                record.rename(record.with_suffix(f".json.quarantined-{uuid.uuid4().hex[:8]}"))
+        except OSError as exc:   # 退避不能でも元の fail-closed を優先する
+            print(f"warning: セルレコードの隔離に失敗 {record}: {exc}", file=sys.stderr)
+
+
 def _require_dist_native_unchanged_since_bind() -> None:
     """束縛済み同梱ネイティブが run 中に差し替わっていないことを要求する（post-run）。
 
@@ -5478,11 +5499,6 @@ def _bind_all_dist_native_pins() -> "Tuple[Tuple[str, str], ...]":
         tuple(sorted(set(_ENV_DIGEST_PACKAGES) | set(_runtime_package_names())))
     )
     return _env_digest_dist_native()
-
-
-# 残りの推論スタックを**この時点で**束縛する。crepe / torch / demucs / librosa は
-# すべて関数内 import なので、module import が終わったここはまだ「import 前」である。
-_bind_all_dist_native_pins()
 
 
 def _require_runtime_code_unchanged_since_bind() -> None:
@@ -5590,6 +5606,16 @@ def _env_digest() -> str:
     torch/demucs/crepe を関数内 import で遅延させる）。未導入パッケージ・未解決の
     重みは明示マーカーで記録し、黙って省かない（§8.7 実装ノート）。
     """
+    # 束縛は**ここで**行う（module import 時ではない）。素の run（`env_digest` を
+    # 名乗らない M2a/M2c）は本関数を呼ばないので、選択されていない optional
+    # パッケージ（TensorFlow/Keras/Demucs 等）の配置不良で import 中に落ちることが
+    # 無くなる。crepe / torch / demucs / librosa はすべて関数内 import で、本関数は
+    # category loop の**前**に呼ばれるため「import 前束縛」は保たれる。
+    #
+    # 対象集合は**選択カテゴリで絞らない**——絞ると同じ環境でもカテゴリ選択が違う run
+    # 同士で `env_digest` が変わり、セルの合算可否判定が壊れる（環境同一性は run の
+    # 引数ではなく環境の性質でなければならない）。
+    _bind_all_dist_native_pins()
     _runtime_code = _env_digest_runtime_code()
     payload: Dict[str, Any] = {
         "python_version": sys.version,
@@ -5941,6 +5967,7 @@ def run_accuracy(
     run_cells_resumed: List[str] = []
     run_cells_measured: List[str] = []
     run_cell_started_utc: List[str] = []
+    run_cell_written_paths: List[str] = []
     run_cell_store_mismatches: "List[Dict[str, Any]]" = []
 
     with tempfile.TemporaryDirectory(prefix="melody-accuracy-") as tmp:
@@ -5979,6 +6006,7 @@ def run_accuracy(
                     run_cells_resumed.extend(row.pop("_cell_store_resumed"))
                     run_cells_measured.extend(row.pop("_cell_store_measured"))
                     run_cell_started_utc.extend(row.pop("_cell_store_started_utc"))
+                    run_cell_written_paths.extend(row.pop("_cell_store_written_paths"))
                     run_cell_store_mismatches.extend(row.pop("_cell_store_mismatches"))
                 _annotate_row_bars_pin(
                     row,
@@ -6143,10 +6171,19 @@ def run_accuracy(
     # 全ツリー走査を 2 本足しても drift 保護にならない上、hash 不能な optional
     # パッケージがあると従来通っていた M2a/M2c run を新たに落とす。
     if env_digest_value is not None:
-        _require_dist_native_unchanged_since_bind()
-        # 実装 hash も読み直す——遅延 import のパッケージは「束縛後・import 前」に
-        # 差し替えられうる（上 2 つの検査はどちらもその窓を覆わない）。
-        _require_runtime_code_unchanged_since_bind()
+        try:
+            _require_dist_native_unchanged_since_bind()
+            # 実装 hash も読み直す——遅延 import のパッケージは「束縛後・import 前」に
+            # 差し替えられうる（上 2 つの検査はどちらもその窓を覆わない）。
+            _require_runtime_code_unchanged_since_bind()
+        except RuntimeError:
+            # **この run が書いたセルを隔離してから落とす。** 検査は run の最後にしか
+            # 走らないので（毎セルで全ツリーを再走査するのは 80 セル × 数秒で非現実的）、
+            # 落ちた時点で既に書かれたセルがディスクに残る。実装を元へ戻せば次の run は
+            # 同じ `env_digest` を計算し、**差し替え中の実装が産んだ row を resume して
+            # しまう**。resume されない名前へ退避し、証拠としては残す。
+            _quarantine_cell_records(run_cell_written_paths)
+            raise
     # Codex 16 巡目 P2-B: `numeric_runtime_config` は category loop（scoring）完了後・
     # かつ上の `_require_unchanged_since_load()`（post-run スコアラー pin 再計算）の
     # **後**にここで確定させる（`_numeric_runtime_config` / `_scorer_optional_

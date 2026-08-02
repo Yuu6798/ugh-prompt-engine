@@ -893,6 +893,9 @@ def test_stubbed_scorer_pins_never_triggers_rglob_forensics(
     calls: Dict[str, int] = {
         "package_code_sha256": 0,
         "packages_code_sha256": 0,
+        # `env_digest` 系の束縛経路（`_bind_runtime_code_pins` → `package_code_state`）も
+        # 同じ重い rglob を踏む。名前が違うだけで守るべき性質は同じなので数える。
+        "package_code_state": 0,
     }
     bind_inference_calls: Dict[str, int] = {"n": 0}
     real_package_code_sha256 = harness.package_code_sha256
@@ -919,6 +922,14 @@ def test_stubbed_scorer_pins_never_triggers_rglob_forensics(
         harness, "bind_inference_code_pins", _counting_bind_inference_code_pins
     )
     monkeypatch.setattr(provenance, "packages_code_sha256", _counting_packages_code_sha256)
+
+    real_package_code_state = provenance.package_code_state
+
+    def _counting_package_code_state(*args: Any, **kwargs: Any) -> Any:
+        calls["package_code_state"] += 1
+        return real_package_code_state(*args, **kwargs)
+
+    monkeypatch.setattr(provenance, "package_code_state", _counting_package_code_state)
     monkeypatch.setattr(harness, "_require_scorer_native_unchanged_since_bind", lambda: None)
 
     report1 = _fake_run(
@@ -938,7 +949,11 @@ def test_stubbed_scorer_pins_never_triggers_rglob_forensics(
     # run_accuracy は report1/report2 の 2 回とも bind_inference_code_pins を呼ぶ
     # はず——stub 自体は呼ばれる契約（0 だと逆に seam が外れている疑い）。
     assert bind_inference_calls["n"] == 2, bind_inference_calls
-    assert calls == {"package_code_sha256": 0, "packages_code_sha256": 0}, (
+    assert calls == {
+        "package_code_sha256": 0,
+        "packages_code_sha256": 0,
+        "package_code_state": 0,
+    }, (
         f"forensics 呼び出しが検出された: {calls}; scorer/inference いずれかの stub が "
         "漏れて実 forensics に接続している"
     )
@@ -9741,6 +9756,33 @@ def test_env_digest_folds_the_distribution_native_pins(
     baseline = harness._env_digest()
     monkeypatch.setattr(harness, "_env_digest_dist_native", lambda: (("numpy", "9" * 64),))
     assert harness._env_digest() != baseline
+
+
+def test_cells_written_by_a_drifting_run_are_quarantined(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P1: post-run 検査で落ちた run が書いたセルを、resume 可能なまま残さない。
+
+    検査は run の最後にしか走らない（毎セルで全ツリー再走査は非現実的）ので、落ちた
+    時点で既に書かれたセルはディスクに残る。実装を元へ戻せば次の run は同じ
+    `env_digest` を計算し、差し替え中の実装が産んだ row を resume してしまう。
+    """
+    cell_store = tmp_path / "cell_store"
+    _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+    written = sorted(cell_store.glob("cell_*.json"))
+    assert written, "前提: 1 本目でセルが書かれている"
+    for path in written:      # 2 本目が再測定するよう、既存セルを無効化する
+        path.unlink()
+
+    def _boom() -> None:
+        raise RuntimeError("run_accuracy: 実装 hash が束縛時点の pin と不一致（試験）")
+
+    monkeypatch.setattr(harness, "_require_runtime_code_unchanged_since_bind", _boom)
+    with pytest.raises(RuntimeError, match="束縛時点の pin"):
+        _m2e_run(tmp_path, level="+12dB", cell_store=cell_store, repeat_index=0)
+
+    assert sorted(cell_store.glob("cell_*.json")) == []          # resume されない
+    assert sorted(cell_store.glob("cell_*.quarantined-*"))       # 証拠は残す
 
 
 def test_runtime_code_drift_since_bind_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
