@@ -9486,6 +9486,19 @@ def aggregate_m2e_census(
                     f"clip 数 {len(clip_ids) if isinstance(clip_ids, list) else clip_ids!r} が "
                     f"凍結コホート {_M2E_EXPECTED_ENTRIES_PER_LEVEL} と不一致"
                 )
+            elif len(set(clip_ids)) != len(clip_ids):
+                # **件数だけでは足りない**（PR #241 Codex P2）。80 要素あっても重複して
+                # いれば異なる測定は 80 未満であり、`observed_cells` は重複を数える。
+                # 全水準・全アームで同じように重複していれば下の等値検査も通るため、
+                # **1280 の異なる測定なしに「1280 セル完了」を報告できてしまう**。
+                # `load_verdict` は受け取った bytes を hash するだけで一意性は証明しない。
+                duplicated = sorted({cid for cid in clip_ids if clip_ids.count(cid) > 1})
+                problems.append(
+                    f"clip_ids に重複がある（{duplicated[:3]}"
+                    f"{' ほか' if len(duplicated) > 3 else ''}・"
+                    f"相異なるのは {len(set(clip_ids))} 件）; 重複を数えて census を "
+                    "満たしたことにしない"
+                )
             if cell["n_rows"] != repeats_min:
                 problems.append(f"n_rows {cell['n_rows']!r} が repeats_min {repeats_min} と不一致")
             if cell["outcomes"] != ["measured"]:

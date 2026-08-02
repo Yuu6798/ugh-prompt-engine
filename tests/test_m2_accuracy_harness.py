@@ -11204,3 +11204,25 @@ def test_census_reports_a_partially_measured_level_instead_of_raising(
     assert "V_remix_real_direct" not in [arm for _lvl, arm in gaps]
     # 欠けた 1 アームぶん（80 clip × 2 repeats）だけが不足している。
     assert census["observed_cells_total"] == census["expected_cells_total"] - 160
+
+
+def test_census_rejects_duplicated_clip_ids_within_a_cell(tmp_path: Path) -> None:
+    """PR #241 Codex P2: 件数だけでは足りない——80 要素でも重複すれば測定は 80 未満。
+
+    全水準・全アームで同じように重複していれば等値検査も通るため、**1280 の異なる
+    測定なしに「1280 セル完了」を報告できてしまう**。`load_verdict` は受け取った
+    bytes を hash するだけで一意性は証明しない。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for verdict in verdicts:
+        level = verdict["level"]
+        half = _expand_clip_ids(harness._M2E_EXPECTED_ENTRIES_PER_LEVEL // 2, level)
+        for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+            # 40 件を 2 回並べて「80 件」に見せる（水準・アームで一貫させる）。
+            verdict["categories"][arm]["clip_ids"] = half + half
+
+    census = _census(tmp_path, verdicts)
+    assert census["status"] == "census_incomplete"
+    assert census["band_verdict"] is None
+    assert census["observed_cells_total"] == 0
+    assert all("重複がある" in m["reason"] for m in census["missing"])
