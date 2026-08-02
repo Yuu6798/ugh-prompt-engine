@@ -5323,6 +5323,38 @@ def _env_digest_runtime_code() -> "Tuple[str, Tuple[str, ...]]":
     return digest, tuple(covered)
 
 
+@functools.lru_cache(maxsize=1)
+def _env_digest_dist_native() -> "Tuple[Tuple[str, str], ...]":
+    """wheel 同梱ネイティブ実体（パッケージ本体ディレクトリ **外**）の pin。
+
+    `packages_code_sha256` はパッケージ root 配下しか覆わないので、`numpy.libs/` /
+    `scipy.libs/` に置かれる OpenBLAS/LAPACK は**実装 hash に入らない**。配布版を
+    据え置いたまま BLAS バイナリが差し替え/再ビルドされると `env_digest` が動かず、
+    旧バックエンドで計算したセルが新バックエンドの run で resume される。ハーネスは
+    この pin を既に持っている（`_scorer_dist_native_sha256`。実行 pin 側と同じ関数）。
+
+    `verify_pre_bind_gates=False` で呼ぶ: pre-bind ゲート（`/proc/self/maps` 全域
+    スキャン）は**初回束縛専用**で、ここで再実行すると無関係な JIT マッピングを
+    「束縛前の先読み」と誤認して over-strict に落ちる（`_require_scorer_native_
+    unchanged_since_bind` が mid-run で同じ理由により無効化しているのと同じ）。
+
+    未導入は skip（実行されない）。**導入済みで pin を採れない場合は送出を伝播**
+    させる——失敗を安定した文字列へ畳むと、その後の差し替えでも digest が動かない。
+    """
+    import importlib.util
+
+    pins: "List[Tuple[str, str]]" = []
+    for name in sorted(set(_ENV_DIGEST_PACKAGES) | set(_runtime_package_names())):
+        try:
+            spec = importlib.util.find_spec(name)
+        except Exception:
+            spec = None
+        if spec is None:
+            continue    # 未導入 = 実行されない
+        pins.append((name, _scorer_dist_native_sha256(name, verify_pre_bind_gates=False)))
+    return tuple(pins)
+
+
 def _env_digest_numeric_runtime() -> Dict[str, Any]:
     """数値結果に効く実行時構成（`_numeric_runtime_config` と同じ env 集合）。
 
@@ -5418,6 +5450,9 @@ def _env_digest() -> str:
         # 実行スタックの**実装 hash**。版据え置きの in-place patch は版文字列では
         # 捕まらず、旧実装で採ったセルが新ランタイムの下で resume される。
         "runtime_code": {"sha256": _runtime_code[0], "covered": list(_runtime_code[1])},
+        # 本体ディレクトリ外の同梱ネイティブ（`numpy.libs/` の OpenBLAS 等）。
+        # 版据え置きの BLAS 差し替えは `runtime_code` では捕まらない。
+        "dist_native": dict(_env_digest_dist_native()),
         # rev.6 §8.9.3: CPU を畳まない env_digest は「合算してよいか」の判定として
         # 壊れている。命令セットが違えば数値経路が分かれうるため。
         "cpu_identity": _env_digest_cpu_identity(),

@@ -9719,6 +9719,23 @@ def test_env_digest_folds_the_runtime_implementation_hashes(
     assert harness._env_digest() != baseline
 
 
+def test_env_digest_folds_the_distribution_native_pins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P1: 本体ディレクトリ**外**の同梱ネイティブ（`numpy.libs/` の OpenBLAS 等）。
+
+    `packages_code_sha256` は package root 配下しか覆わないので、版据え置きの BLAS
+    差し替えは `runtime_code` では動かない。
+    """
+    pins = dict(harness._env_digest_dist_native())
+    assert {"numpy", "scipy"} <= set(pins)
+    assert all(re.fullmatch(r"[0-9a-f]{64}", v) for v in pins.values())
+
+    baseline = harness._env_digest()
+    monkeypatch.setattr(harness, "_env_digest_dist_native", lambda: (("numpy", "9" * 64),))
+    assert harness._env_digest() != baseline
+
+
 def test_env_digest_fails_closed_when_runtime_code_cannot_be_hashed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
