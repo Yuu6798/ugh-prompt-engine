@@ -9707,18 +9707,50 @@ def test_env_digest_folds_the_runtime_implementation_hashes(
 
     畳んでいなければ、rebuild された実装の下で旧実装のセルが resume される。
     """
-    covered = dict(harness._env_digest_runtime_code())
-    assert covered["resolved"] is True
+    digest, covered = harness._env_digest_runtime_code()
+    assert re.fullmatch(r"[0-9a-f]{64}", digest)
     # 実行スタックの主要どころが実際に覆われていること（空の pin で「揃った」にしない）。
-    assert {"numpy", "librosa", "soundfile", "mir_eval"} <= set(covered["covered"])
+    assert {"numpy", "librosa", "soundfile", "mir_eval"} <= set(covered)
 
     baseline = harness._env_digest()
     monkeypatch.setattr(
-        harness,
-        "_env_digest_runtime_code",
-        lambda: (("resolved", True), ("sha256", "9" * 64), ("covered", ("numpy",))),
+        harness, "_env_digest_runtime_code", lambda: ("9" * 64, ("numpy",))
     )
     assert harness._env_digest() != baseline
+
+
+def test_env_digest_fails_closed_when_runtime_code_cannot_be_hashed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P1: hash 不能を理由文字列へ畳まない（同じ理由 = 同じ digest で resume が通る）。
+
+    導入済みで hash できないパッケージは**実際に測定を実行する**ので、「解決できな
+    かった事実」を環境同一性として再利用してはならない。
+    """
+    harness._env_digest_runtime_code.cache_clear()
+
+    def _boom(names, **kwargs):
+        raise RuntimeError("namespace layout: cannot fingerprint")
+
+    import svp_rpe.melody.provenance as provenance
+
+    monkeypatch.setattr(provenance, "packages_code_sha256", _boom)
+    with pytest.raises(RuntimeError, match="cannot fingerprint"):
+        harness._env_digest_runtime_code()
+    harness._env_digest_runtime_code.cache_clear()
+
+
+def test_env_digest_fails_closed_when_nothing_is_covered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P1: 1 つも覆えなかった pin を環境同一性として使わない。"""
+    harness._env_digest_runtime_code.cache_clear()
+    import svp_rpe.melody.provenance as provenance
+
+    monkeypatch.setattr(provenance, "packages_code_sha256", lambda names, **kw: (None, ()))
+    with pytest.raises(RuntimeError, match="何も覆っていない"):
+        harness._env_digest_runtime_code()
+    harness._env_digest_runtime_code.cache_clear()
 
 
 def test_cell_store_record_path_depends_on_the_full_key(tmp_path: Path) -> None:

@@ -5292,7 +5292,7 @@ def _env_digest_thread_settings() -> Dict[str, Any]:
 
 
 @functools.lru_cache(maxsize=1)
-def _env_digest_runtime_code() -> "Tuple[Tuple[str, Any], ...]":
+def _env_digest_runtime_code() -> "Tuple[str, Tuple[str, ...]]":
     """route の実行スタックの**実装 hash**（版文字列だけでは足りない）。
 
     `importlib.metadata.version()` は、パッケージが版を据え置いたまま in-place で
@@ -5301,26 +5301,26 @@ def _env_digest_runtime_code() -> "Tuple[Tuple[str, Any], ...]":
     リポジトリは実装 hash を既に持っている（`provenance.packages_code_sha256`。
     実行 pin 側が使っているのと同じ関数）ので、それを畳む。
 
-    導入済みなのに hash できない（namespace/zip 配置等）場合、`packages_code_sha256`
-    は送出する——ここでは run を落とさず**失敗の事実を payload に載せる**
-    （`_env_digest_demucs_weights` と同じ流儀。形が変わるので digest は必ず変わる）。
+    **hash できなければ送出をそのまま伝播させる（fail-closed）。** 失敗を理由文字列へ
+    畳むと、その後にそのパッケージが in-place で patch されても理由は同じ文字列のまま
+    ——`env_digest` が動かず、旧実装のセルが resume され、別実装で走った 2 本の M2e
+    report が合算される（塞ごうとしている退行そのもの）。重みの未解決
+    （`_env_digest_demucs_weights`）とは違い、**導入済みで hash できないパッケージは
+    実際に測定を実行する**ので、「解決できなかった事実」を環境同一性として再利用しない。
 
     プロセス内で 1 度だけ計算する（初回 ~9 秒）。プロセス内でのコード差し替えは
-    `_require_unchanged_since_load()` の post-run 再計算が別途捕まえる。戻り値は
-    lru_cache のためタプル（`_env_digest` が dict へ戻す）。
+    `_require_unchanged_since_load()` の post-run 再計算が別途捕まえる。
     """
     from svp_rpe.melody.provenance import packages_code_sha256
 
     names = tuple(sorted(set(_ENV_DIGEST_PACKAGES) | set(_runtime_package_names())))
-    try:
-        digest, covered = packages_code_sha256(names)
-    except Exception as exc:
-        return (("resolved", False), ("reason", f"{type(exc).__name__}: {exc}"))
-    return (
-        ("resolved", True),
-        ("sha256", digest or _ENV_DIGEST_ABSENT_MARKER),
-        ("covered", tuple(covered)),
-    )
+    digest, covered = packages_code_sha256(names)   # 送出は伝播させる (fail-closed)
+    if not digest or not covered:
+        raise RuntimeError(
+            f"実行スタック {names} のうち 1 つも実装 hash を採れなかった; "
+            "何も覆っていない pin を環境同一性として使わない (fail-closed)"
+        )
+    return digest, tuple(covered)
 
 
 def _env_digest_numeric_runtime() -> Dict[str, Any]:
@@ -5406,6 +5406,7 @@ def _env_digest() -> str:
     torch/demucs/crepe を関数内 import で遅延させる）。未導入パッケージ・未解決の
     重みは明示マーカーで記録し、黙って省かない（§8.7 実装ノート）。
     """
+    _runtime_code = _env_digest_runtime_code()
     payload: Dict[str, Any] = {
         "python_version": sys.version,
         "packages": _env_digest_package_versions(),
@@ -5416,7 +5417,7 @@ def _env_digest() -> str:
         "numeric_runtime": _env_digest_numeric_runtime(),
         # 実行スタックの**実装 hash**。版据え置きの in-place patch は版文字列では
         # 捕まらず、旧実装で採ったセルが新ランタイムの下で resume される。
-        "runtime_code": dict(_env_digest_runtime_code()),
+        "runtime_code": {"sha256": _runtime_code[0], "covered": list(_runtime_code[1])},
         # rev.6 §8.9.3: CPU を畳まない env_digest は「合算してよいか」の判定として
         # 壊れている。命令セットが違えば数値経路が分かれうるため。
         "cpu_identity": _env_digest_cpu_identity(),
