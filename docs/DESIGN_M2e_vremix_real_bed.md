@@ -1159,6 +1159,18 @@ verdict 間 byte 等値 + 形（キー集合まで）+ 凍結ファイル・現 
 せず、sidecar ファイルの新設も本段階では過剰と判断した（裁定）。runbook 側でも stdout
 保存をコマンドに組み込んだ（E-29）。
 
+**E-40. stdout の保存先を per-run の日付つきファイル名にする**（一部採用・PR #241
+Codex P2 で是正）。**採用**: 固定名 `census_stdout.txt` は `tee` が truncate で開くため、
+再実行が census の fail-closed 拒否で落ちても、`census.json` は残るのに前回の正当な
+pin 記録だけが消えるという破壊経路があった。`census_stdout_$(date -u
++%Y%m%dT%H%M%SZ).txt` へ変更し、成功した実行の `census.json` と対で commit する運用に
+した。**見送り**: JSON と digest を 2 ファイルまとめて atomic に publish する staging
+機構。`census.json` 自体は既に atomic write で digest 行は書き込み後に出るため、
+「新 census が pin 無しで残る」のは `tee` 自体の書き込み失敗（コマンド全体が非ゼロで
+終わり操作者が再実行する状況）に限られる。per-run 命名で再実行が破壊なしに両方を
+再生成できる以上、2 ファイル横断の atomicity は runbook の 1 ステップに対して過剰
+（E-25/E-29 の sidecar 見送りと同じ判断）。
+
 **E-26. 共有スカラーを凍結バーの実値と束縛する**（PR #241 Codex P1 で是正）。E-19 の
 有限性検査だけでは、verdict が「50 cents で測った」と自己申告した metrics をそのまま
 publish できてしまう——E-7（`repeats_min`）で自分が適用した規律との非対称だった。
