@@ -1064,7 +1064,9 @@ resume しない**——素性の分からないセルを通さない。
   例外として扱う——ハング打ち切り（正常終了として記録）とは別の、環境不整合による
   fail-closed 停止。スレッド 3 点固定は env 2 点をプロセスプール起動前に親側で検証し、
   `torch.set_num_threads(1)` は各ワーカーの `initializer` 内で適用する（決定済み
-  設計判断 5 のとおり）。
+  設計判断 5 のとおり）。**モデル preload も同じ initializer 内で行う——E-50 参照
+  （2026-08-02 時点の初版実装ではここを「スレッド固定のみ」としていたが、その判断は
+  誤りとして撤回した）。**
 - **campaign ファイル**（`m2e-campaign/0.1`）はパスのみを持つ（各水準の external
   manifest / external fixtures の所在）。地図の読み込み・実行開始前に、campaign が
   指す fixtures を現在の committed 実体と再照合し（`_require_m2e_shard_map_matches_
@@ -1413,6 +1415,48 @@ CLI: `--census VERDICT.json...`（`--evaluate` とは排他。run/evaluate の�
 - **E-48（P2）**: 数時間かかりうるキュー完走後、shard 実行記録の構築・書き出し前に
   `_require_unchanged_since_load()` を呼んでいなかった（run/census 経路は呼ぶ）。
   同じ post-execution ガードを shard モードにも及ぼす。
+
+**E-50〜E-54（PR #242 Codex 第 2 巡・C6 シャード実行機のレビュー是正）。**
+
+- **E-50（P2・D-6 の判断撤回）**: 決定済み設計判断 5「initializer でモデルロード」
+  （§8.4 の `S` = プロセスプール起動〜モデルロード完了、という定義と一致させる）から
+  初版実装が逸脱していた（initializer はスレッド固定のみ行い、モデルは per-cell の
+  遅延ロードのままだった）。**その判断（D-6 の記載）を撤回する。** `_shard_pool_
+  initializer` で CREPE（`crepe.core.build_and_load_model` という既存の遅延ロード
+  singleton を実音声なしで直接呼ぶ）を eager load する。Demucs は
+  `demucs.api.Separator` の構築（＝重みロード）を initializer 内で行い `S` へ前倒し
+  するが、**per-call の `Separator` 再構築そのものを回避する配線（`src/svp_rpe/io/
+  source_separator.py` の変更を要する）は本ラウンドでは行わない**——`src/svp_rpe/**`
+  は Design Memo の Scope OUT であり、既存の `source_separator` 系テスト群が
+  「呼び出しごとに新しい `Separator` が構築される」契約に依存した fake を持つため、
+  変更すれば影響範囲が本ブリーフの検証対象を超える。重みロード（最もコストの高い
+  部分）の前倒しにより `S`/`T_*` の分離は実質的に改善するが、逐語一致ではない
+  ——**エスカレーション事項**として記録する（別ブリーフでの再検討に委ねる）。
+  preload は注入可能な callable（既定 `_default_m2e_model_preload`）とし、テストは
+  「initializer が preload を呼ぶ」ことだけを記録用 fake で検証する（テスト環境に
+  実モデルが無いため）。
+- **E-51（P2）**: shard 実行記録の `--out` に no-clobber が無く、リトライ時に既存の
+  dated record を黙って上書きできた。地図生成と同じ流儀（明示 `--force` は作らない
+  ——dated record は per-run 命名が前提）で、高価なキュー開始**前**に fail-closed で
+  拒否する。
+- **E-52（P2）**: `campaign_sha256` の計算（生成器）と `_load_m2e_campaign` の parse
+  （生成器・実行機の双方）が別々の `read_bytes()` 呼び出しだった——呼び出しの間に
+  ファイル（シンボリックリンク先を含む）が差し替わると、地図が pin する digest と
+  実際に registry を供給した bytes が食い違いうる。`_load_m2e_campaign_with_sha256`
+  へ一本化し、単一の bytes スナップショットから digest と parse の両方を導出する。
+- **E-53（P2）**: E-49 の再計算検証は鍵引き dict 比較だったため、`map_doc["cells"]`
+  **内の並び順**は見ていなかった——shard_id を保ったまま同一 shard 内でレコードを
+  並べ替えた地図も通ってしまい、動的キューが改変された順序で配布・実行しうる。
+  再生成した正準順序（§8.5 order でソート済みの `registry_cells`）と
+  `map_doc["cells"]` の**並び順を含めた完全一致**を要求する。
+- **E-54（P2）**: `pool.terminate()` は worker の atomic `os.replace()` 成功と
+  `AsyncResult` の ready 化との間の窓で発火しうる——その場合セルレコードは既に
+  書き上がっているのに、単純な「in-flight は全部打ち切り」では「未完」と誤って
+  記録してしまう。打ち切り後、in-flight だった各セルを既存の digest 一致 resume
+  判定（`_cell_store_record_path` / `_cell_record_mismatches`）で照合し
+  （`_reconcile_truncated_m2e_cell`）、書き上がっているレコードは completed として
+  計上する（`run_m2e_shard_queue` 自身は `reconcile_hung_cell` フックとして受け取り、
+  セルレコードの形式を知らないままキュー機構だけを担う）。
 
 ## 9. provenance と pin
 

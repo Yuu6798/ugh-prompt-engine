@@ -10059,19 +10059,14 @@ _M2E_HANG_GRACE_S = 600.0
 _M2E_SHARD_POLL_INTERVAL_S = 0.05
 
 
-def _load_m2e_campaign(path: "str | Path") -> "Dict[str, Dict[str, Path]]":
-    """M2e campaign ファイル（パスのみ）を読み、水準ごとの manifest/fixtures パスを返す。
+def _parse_m2e_campaign_bytes(
+    campaign_path: Path, data: bytes
+) -> "Dict[str, Dict[str, Path]]":
+    """既に読み込んだ campaign bytes を parse する（single-read 束縛の内部実装）。
 
-    設計判断 2（Memo M2E-C6）: campaign は**パスのみ**を持つ——各水準の external
-    manifest / external fixtures の所在。科学的パラメータ（`T_*`/`S`/`B_session`等）は
-    一切含めない（それは CLI 引数 / bars / fixtures / 地図側の責務）。凍結ラダー 4 水準
-    ちょうどを要求する (fail-closed)。パスは repo root（`ROOT`）基準で相対解決する
-    （絶対パスはそのまま通る）——campaign 自身は `docs/measurements/m2e_2026-08/`
-    配下に置く想定だが、参照先の `build/`・`tests/fixtures/` は repo root からの
-    相対パスとして書く HANDOFF §5 の既存規約に揃える。
+    `_load_m2e_campaign_with_sha256` からのみ呼ぶ——直接呼ぶと read と parse が別の
+    bytes に由来しうる（E-52 が塞ごうとしている穴そのもの）。
     """
-    campaign_path = Path(path).resolve()
-    data = campaign_path.read_bytes()
     doc = _yaml_load_no_dup_keys(data, what=campaign_path.name)
     if not isinstance(doc, dict) or doc.get("schema_version") != _EXPECTED_M2E_CAMPAIGN_SCHEMA:
         raise ValueError(
@@ -10109,6 +10104,39 @@ def _load_m2e_campaign(path: "str | Path") -> "Dict[str, Dict[str, Path]]":
             # ファイル位置基準だと `../../../build/...` のような脆いパスを強いる。
             resolved_level[key] = (ROOT / value).resolve()
         resolved[level] = resolved_level
+    return resolved
+
+
+def _load_m2e_campaign_with_sha256(
+    path: "str | Path",
+) -> "Tuple[Dict[str, Dict[str, Path]], str]":
+    """M2e campaign ファイル（パスのみ）を single read で (parsed, sha256) として返す。
+
+    設計判断 2（Memo M2E-C6）: campaign は**パスのみ**を持つ——各水準の external
+    manifest / external fixtures の所在。科学的パラメータ（`T_*`/`S`/`B_session`等）は
+    一切含めない（それは CLI 引数 / bars / fixtures / 地図側の責務）。凍結ラダー 4 水準
+    ちょうどを要求する (fail-closed)。パスは repo root（`ROOT`）基準で相対解決する。
+
+    E-52（PR #242 第2巡 Codex P2 是正）: `campaign_sha256` の計算と parse を**同一
+    bytes スナップショット**から導出する。別々に `read_bytes()` すると、呼び出しの
+    間にファイル（またはシンボリックリンク先）が差し替わった場合、digest と parse
+    結果が別 bytes に由来しうる——地図が「実際に registry を供給した bytes ではない
+    bytes」を pin することになる。
+    """
+    campaign_path = Path(path).resolve()
+    data = campaign_path.read_bytes()
+    resolved = _parse_m2e_campaign_bytes(campaign_path, data)
+    return resolved, hashlib.sha256(data).hexdigest()
+
+
+def _load_m2e_campaign(path: "str | Path") -> "Dict[str, Dict[str, Path]]":
+    """`_load_m2e_campaign_with_sha256` の doc のみを返す薄いラッパ。
+
+    sha256 を必要としない軽量な読み取り専用（protected-path 集合の構築等）向け。
+    digest とセットで必要な経路（地図生成・実行）は
+    `_load_m2e_campaign_with_sha256` を直接使うこと（E-52・単一読取束縛）。
+    """
+    resolved, _sha256 = _load_m2e_campaign_with_sha256(path)
     return resolved
 
 
@@ -10275,9 +10303,8 @@ def generate_m2e_shard_map(
         )
 
     campaign_path = Path(campaign_path).resolve()
-    campaign_bytes = campaign_path.read_bytes()
-    campaign_sha256 = hashlib.sha256(campaign_bytes).hexdigest()
-    campaign = _load_m2e_campaign(campaign_path)
+    # E-52: campaign_sha256 と parse を単一読取から導出する。
+    campaign, campaign_sha256 = _load_m2e_campaign_with_sha256(campaign_path)
 
     cells, fixtures_sha256_by_level, repeats_min, bars_sha256 = _m2e_full_cell_registry(
         campaign, bars_path=bars_path
@@ -10372,7 +10399,7 @@ def _require_m2e_shard_map_matches_registry(
     まま古い地図を消費すると、測っていないセルを完了扱いにしたり、存在しないセルへ
     `shard_id` を割り当てたりする。
 
-    E-49（PR #242 Codex P1 是正）: セル鍵の集合一致だけでは、鍵は保ったまま
+    E-49（PR #242 第1巡 Codex P1 是正）: セル鍵の集合一致だけでは、鍵は保ったまま
     `shard_id` の値や `n_shards` だけを書き換えた地図（例: 全セルを shard 0 に
     寄せて `n_shards: 1` を名乗る）を素通ししてしまう——凍結パッキングアルゴリズムと
     `R_max` 契約を丸ごとバイパスできることになる。**地図は科学ではなく
@@ -10380,8 +10407,16 @@ def _require_m2e_shard_map_matches_registry(
     （S/T_direct/T_stem/B_session）から `_assign_m2e_shard_ids` で割当を再計算し、
     全セルの `shard_id` と `n_shards` の完全一致を要求する。
 
-    `bars_path`（E-47・PR #242 Codex P2 是正）: `--bars` の指定を検証まで貫通させ、
-    地図が刻んだ `bars_sha256` と実効 bars の実体を照合する。
+    E-53（PR #242 第2巡 Codex P2 是正）: E-49 の再計算は鍵引き dict 比較のため、
+    `map_doc["cells"]` **内の並び順**は見ていなかった——shard_id を保ったまま
+    同一 shard 内でレコードを並べ替えた地図も通ってしまい、`_m2e_shard_cells_for` /
+    動的キューがその改変順序のまま配布・実行する（§8.5 の凍結 lexical 配布順に
+    違反する）。よって鍵集合・shard_id の一致に加え、`map_doc["cells"]` の**並び順を
+    含めた完全一致**を、再生成した正準順序（`registry_cells` そのもの——§8.5 order で
+    既にソート済み）と比較して要求する。
+
+    `bars_path`（E-47・PR #242 第1巡 Codex P2 是正）: `--bars` の指定を検証まで
+    貫通させ、地図が刻んだ `bars_sha256` と実効 bars の実体を照合する。
     """
     registry_cells, fixtures_sha256_by_level, repeats_min, bars_sha256 = _m2e_full_cell_registry(
         campaign, bars_path=bars_path
@@ -10426,6 +10461,33 @@ def _require_m2e_shard_map_matches_registry(
         raise ValueError(
             f"shard map: 台帳と一致しない (missing={len(missing)}, extra={len(extra)}); "
             "セル台帳は不可侵——地図は再生成すること (fail-closed)"
+        )
+
+    # E-53: 鍵集合が一致していても並び順が改変されていれば拒否する（正準順序の完全一致）。
+    declared_order = [
+        (
+            record["bed_id"],
+            record["level"],
+            record["clip_id"],
+            record["arm"],
+            record["repeat_index"],
+        )
+        for record in map_doc["cells"]
+    ]
+    if declared_order != registry_cells:
+        first_mismatch = next(
+            (
+                i
+                for i, (declared, expected) in enumerate(zip(declared_order, registry_cells))
+                if declared != expected
+            ),
+            min(len(declared_order), len(registry_cells)),
+        )
+        raise ValueError(
+            "shard map: cells の並び順が凍結 lexical order（§8.5 order）と一致しない "
+            f"(最初の不一致位置={first_mismatch}); 地図内でレコードを並べ替えると "
+            "`_m2e_shard_cells_for` / 動的キューが改変された順序で配布・実行してしまう "
+            "(fail-closed)"
         )
 
     inputs = map_doc["inputs"]
@@ -10625,15 +10687,78 @@ def _shard_measure_and_record_cell(
     }
 
 
-def _shard_pool_initializer() -> None:
-    """multiprocessing ワーカー起動時のスレッド 3 点固定（決定済み設計判断 5）。
+_M2E_CREPE_PRELOAD_CAPACITY = "full"  # crepe_adapter._DEFAULT_CAPACITY と同値（重複定義）。
+_M2E_DEMUCS_PRELOAD_MODEL = "htdemucs_ft"  # source_separator.DEFAULT_MODEL と同値。
+
+
+def _default_m2e_model_preload() -> None:
+    """CREPE / Demucs を実際に load する既定の preload 実装。
+
+    E-50（PR #242 第2巡 Codex P2 是正・**前回 D-6 の判断を撤回する**）: Design Memo
+    決定済み判断 5「ワーカーは multiprocessing + initializer でモデルロード」（§8.4 の
+    `S` = プロセスプール起動〜モデルロード完了、という定義と一致させる）から、前回の
+    実装は「スレッド固定のみ適用し、モデルロードは行わない」という形で逸脱していた
+    （その判断は誤りだったとして撤回する）。
+
+    **CREPE**: `crepe` 自身が持つ既存の遅延ロード singleton
+    （`crepe.core.build_and_load_model` — `crepe.predict()` が内部で参照するのと
+    同じ module-level キャッシュ）を、実音声なしで直接呼んで eager 化する。新しい
+    ロード機構は作らない。
+
+    **Demucs**: `demucs.api.Separator` の構築（＝重みロード）を initializer 内で
+    行う。**既知の限界**: `svp_rpe.io.source_separator._separate_stems_with_api` は
+    呼び出しのたびに新しい `Separator` を構築する契約になっており（既存テスト群
+    （`tests/test_source_separator.py` 等）がその契約に依存した fake で観測する）、
+    その per-call 構築を worker 内で恒久的に回避する配線は
+    `src/svp_rpe/io/source_separator.py` の変更を要する。`src/svp_rpe/**` は
+    Design Memo の Scope OUT であり、変更すれば影響範囲が本ブリーフの検証対象
+    （`tests/test_m2_accuracy_harness.py`）を超えて既存の `source_separator` 系
+    テスト群へ及ぶため、本セッションでは行わない。ここでは重みロード（最もコストの
+    高い部分）を initializer 内で 1 回実行し、OS のページキャッシュ・フレームワーク
+    初期化コストを前倒しするに留める——per-call の `Separator` オブジェクト再構築
+    自体は残るため、`S`/`T_*` の分離は実質的に改善されるが厳密な逐語一致ではない。
+    **エスカレーション事項**（設計判断が必要な場合は別ブリーフで再検討する）。
+    """
+    try:
+        from svp_rpe.rpe.learned.crepe_adapter import ensure_crepe_available
+
+        ensure_crepe_available()
+        import crepe.core as _crepe_core  # 未導入環境で本体 import を汚さないため関数内 import
+
+        _crepe_core.build_and_load_model(_M2E_CREPE_PRELOAD_CAPACITY)
+    except Exception:
+        pass  # crepe 未導入 / 旧版で build_and_load_model が無い等（direct のみの構成もある）
+    try:
+        from svp_rpe.io.source_separator import (
+            DEFAULT_SHIFTS,
+            _get_demucs_separator_class,
+        )
+
+        separator_cls = _get_demucs_separator_class()
+        separator_cls(model=_M2E_DEMUCS_PRELOAD_MODEL, device="cpu", shifts=DEFAULT_SHIFTS)
+    except Exception:
+        pass  # demucs 未導入 / direct のみの構成では不要
+
+
+def _shard_pool_initializer(
+    preload_fn: "Optional[Callable[[], None]]" = None,
+) -> None:
+    """multiprocessing ワーカー起動時のスレッド 3 点固定 + モデル preload（決定済み
+
+    設計判断 5・E-50 是正）。
 
     env 2 点（OMP/MKL）は**親プロセスが pool 起動前に**検証済み（`execute_m2e_shard`）
     ——spawn の子は親の環境変数をそのまま引き継ぐため、ここでの再検証は多重防御。
     `torch.set_num_threads(1)` はプロセスごとに効かせる必要があるため、initializer 内
     （＝各ワーカーで 1 回）で適用する。
+
+    `preload_fn`（テスト seam・E-50）: 省略時は `_default_m2e_model_preload`
+    （実ローダ）を呼ぶ。テストは記録用の picklable top-level fake を注入して
+    「initializer が preload を呼ぶ」ことだけを検証する（実モデルはテスト環境に
+    無いため）。
     """
     _apply_thread_pinning()
+    (preload_fn if preload_fn is not None else _default_m2e_model_preload)()
 
 
 def _shard_worker_measure_cell(task: "Dict[str, Any]") -> "Dict[str, Any]":
@@ -10655,6 +10780,73 @@ def _shard_worker_measure_cell(task: "Dict[str, Any]") -> "Dict[str, Any]":
     return _shard_measure_and_record_cell(task, runner=observe_via_route_with_provenance)
 
 
+def _reconcile_truncated_m2e_cell(cell: "Dict[str, Any]") -> "Optional[Dict[str, Any]]":
+    """打ち切り時点で in-flight だった M2e セルに、実は digest 一致で完了済みの
+
+    セルレコードが無いか確認する（E-54・PR #242 第2巡 Codex P2 是正）。
+
+    `pool.terminate()` は worker の atomic `os.replace()` 成功と `AsyncResult` の
+    ready 化との間の窓で発火しうる——その場合、既存の resume 判定
+    （`_cell_store_record_path` / `_cell_record_mismatches`）と同じ digest 一致
+    照合で「完全に書き上がっている」と確認できたセルは completed として扱う
+    （`run_m2e_shard_queue` の `reconcile_hung_cell` フック経由で呼ばれる）。
+
+    `cell` は `execute_m2e_shard` が組み立てた task dict（bed_id/level/clip_id/arm/
+    repeat_index/entry_id/entry/fixtures/manifest_dir/tolerance_cents/
+    est_voiced_floor/cell_store/env_digest を持つ）。レコードが無い・壊れている・
+    digest が食い違う場合は `None` を返し（= truncated のまま）、fail-closed に倒す。
+    """
+    cell_store = Path(cell["cell_store"])
+    record_path = _cell_store_record_path(
+        cell_store,
+        category=cell["arm"],
+        level=cell["level"],
+        entry_id=cell["entry_id"],
+        repeat_index=cell["repeat_index"],
+    )
+    if not record_path.is_file():
+        return None
+    try:
+        record = _json_loads_no_dup_keys(
+            record_path.read_bytes(), what=f"cell record {record_path}"
+        )
+        inputs = _read_external_clip_inputs(
+            cell["entry_id"],
+            cell["entry"],
+            manifest_dir=Path(cell["manifest_dir"]),
+            fixtures=cell["fixtures"],
+        )
+    except (ValueError, OSError):
+        # 壊れたレコード・読めない音声入力 = 「完了を立証できない」なので truncated
+        # のまま扱う（fail-closed。誤って completed と偽らない）。
+        return None
+    mismatches = _cell_record_mismatches(
+        record,
+        category=cell["arm"],
+        level=cell["level"],
+        entry_id=cell["entry_id"],
+        repeat_index=cell["repeat_index"],
+        audio_sha256=inputs.audio_sha256,
+        annotation_sha256=inputs.annotation_sha256,
+        env_digest=cell["env_digest"],
+        tolerance_cents=cell["tolerance_cents"],
+        est_voiced_floor=cell["est_voiced_floor"],
+        store_role=_CELL_STORE_ROLE_RUN,
+    )
+    if mismatches:
+        return None
+    clip_row = record.get("clip_row") if isinstance(record, dict) else None
+    outcome = clip_row.get("outcome") if isinstance(clip_row, dict) else None
+    detail = clip_row.get("detail") if isinstance(clip_row, dict) else None
+    return {
+        "resumed": False,
+        "measured": True,
+        "mismatches": [],
+        "outcome": outcome or "measured",
+        "detail": detail,
+    }
+
+
 def run_m2e_shard_queue(
     cells: "List[Dict[str, Any]]",
     *,
@@ -10665,6 +10857,7 @@ def run_m2e_shard_queue(
     initializer: "Optional[Callable[[], None]]" = _shard_pool_initializer,
     clock: "Callable[[], float]" = time.monotonic,
     poll_interval: float = _M2E_SHARD_POLL_INTERVAL_S,
+    reconcile_hung_cell: "Optional[Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]]" = None,
 ) -> "Dict[str, Any]":
     """§8.6 の動的キュー + 開始許可式 + 打ち切りを実装する（1 shard 分）。
 
@@ -10681,12 +10874,21 @@ def run_m2e_shard_queue(
     ため）。
 
     打ち切り: いずれかの in-flight セルの壁時計が `session_budget + hang_grace_seconds`
-    を超えたら pool を `terminate()` する。その時点で in-flight だった全セル（trigger
-    したセル自身を含む）は「打ち切り」として記録し、セルレコードは書かない
-    （`terminate()` が実プロセスを kill するため、書き込みが完了している保証がない
-    ——設計 §8.6「セルレコードを書かず、未完として記録する」の実装上の帰結）。
-    以降のセル（未着手）へは進まない（「超過は異常ではなく通常状態」であり、延長は
-    しない）。
+    を超えたら pool を `terminate()` する。以降のセル（未着手）へは進まない
+    （「超過は異常ではなく通常状態」であり、延長はしない）。
+
+    E-54（PR #242 第2巡 Codex P2 是正）: `pool.terminate()` は worker の atomic
+    `os.replace()` 成功と `AsyncResult` の ready 化との間の窓で発火しうる——その
+    場合セルレコードは既に完全に書き上がっているのに、単純な「in-flight は全部
+    打ち切り」では「未完」と誤って記録してしまう（次回実行がその実在するレコードを
+    resume するのに、実行記録は「レコードを書いていない」と主張する食い違いが
+    生じる）。よって `terminated_for_hang` になった in-flight セルは、
+    `reconcile_hung_cell`（既定 `None` = 照合しない）が非 `None` を返せば
+    **completed** として計上し、`None`（またはコールバック未指定）のときのみ
+    truncated として記録する。`run_m2e_shard_queue` 自身はセルレコードの形式を
+    知らない（テストは合成セルで機構を検証する）——実際の digest 一致照合
+    （`_cell_store_record_path` / `_cell_record_mismatches`）は
+    `execute_m2e_shard` 側の `_reconcile_truncated_m2e_cell` が担う。
     """
     if workers < 1:
         raise ValueError(f"run_m2e_shard_queue: workers {workers!r} は 1 以上のみ許可する")
@@ -10750,7 +10952,12 @@ def run_m2e_shard_queue(
         raise aborted_exception
 
     if terminated_for_hang:
-        truncated.extend(cell for _idx, (_ar, _started, cell) in in_flight.items())
+        for _idx, (_ar, _started, cell) in in_flight.items():
+            reconciled = reconcile_hung_cell(cell) if reconcile_hung_cell is not None else None
+            if reconciled is not None:
+                completed.append({"cell": cell, "result": reconciled})
+            else:
+                truncated.append(cell)
     not_started.extend(cells[next_index:])
 
     return {
@@ -10867,6 +11074,9 @@ def execute_m2e_shard(
         measure_fn=measure_fn,
         initializer=initializer,
         clock=clock,
+        # E-54: 打ち切り時点で in-flight だったセルを、既存の digest 一致 resume 判定で
+        # 照合してから truncated へ振り分ける（書き上がっていたレコードは completed）。
+        reconcile_hung_cell=_reconcile_truncated_m2e_cell,
     )
 
     def _cell_ref(entry: "Dict[str, Any]") -> "Dict[str, Any]":
@@ -11252,13 +11462,16 @@ def main() -> int:
         if workers < 1:
             raise SystemExit(f"--workers {workers} は 1 以上の整数のみ許可する")
         map_doc, map_sha256 = _load_m2e_shard_map(args.shard_map)
-        campaign_sha256 = hashlib.sha256(Path(args.campaign).read_bytes()).hexdigest()
+        # E-52: campaign_sha256 の照合と parse を単一読取から導出する（別々の
+        # read_bytes() だと、呼び出しの間にファイルが差し替わった場合に、地図と
+        # 突き合わせた digest と実際に消費する campaign の中身が別 bytes 由来に
+        # なりうる）。
+        campaign, campaign_sha256 = _load_m2e_campaign_with_sha256(args.campaign)
         if map_doc.get("campaign_sha256") != campaign_sha256:
             raise SystemExit(
                 f"--campaign {args.campaign} が地図の campaign_sha256 と不一致; 地図生成時 "
                 "と別の campaign を消費しない (fail-closed)"
             )
-        campaign = _load_m2e_campaign(args.campaign)
         # E-47: `--bars`（registry 検証・tolerance/est_voiced_floor の供給元）も保護する。
         protected = {
             Path(args.shard_map).resolve(),
@@ -11279,6 +11492,16 @@ def main() -> int:
             raise SystemExit(
                 f"--out {args.out} が --cell-store {args.cell_store} 配下にある; 実行記録で "
                 "セルチェックポイントを上書きしない (fail-closed)"
+            )
+        # E-51（PR #242 第2巡 Codex P2 是正）: 地図生成と同じ no-clobber 規律を shard
+        # 実行記録にも課す。上書きフラグは作らない——dated record は per-run 命名が
+        # 前提であり、再試行は別パスの --out を使う。高価なキューに入る**前**に
+        # fail-closed で拒否する。
+        if out_resolved.exists():
+            raise SystemExit(
+                f"--out {args.out} が既に存在する; shard 実行記録の黙示上書き禁止 "
+                "（dated record は per-run 命名が前提——別パスの --out を使う）"
+                "(fail-closed)"
             )
         shard_run = execute_m2e_shard(
             map_doc=map_doc,

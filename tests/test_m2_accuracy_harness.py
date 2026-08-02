@@ -13078,3 +13078,359 @@ def test_main_shard_id_requires_shard_map_and_campaign_and_cell_store(
     )
     with pytest.raises(SystemExit, match="--shard-map"):
         harness.main()
+
+
+# ---------------------------------------------------------------------------
+# PR #242 第2巡 Codex レビュー是正（E-50〜E-54）
+# ---------------------------------------------------------------------------
+
+
+def test_shard_pool_initializer_calls_the_injected_preload_hook(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """E-50: `_shard_pool_initializer` は注入された `preload_fn` を呼ぶ。"""
+    monkeypatch.setattr(harness, "_apply_thread_pinning", lambda: {"OMP_NUM_THREADS": "1"})
+    calls: List[str] = []
+    harness._shard_pool_initializer(preload_fn=lambda: calls.append("preloaded"))
+    assert calls == ["preloaded"]
+
+
+def test_shard_pool_initializer_falls_back_to_the_default_preload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """E-50: `preload_fn` 未指定時は `_default_m2e_model_preload`（実ローダ）を呼ぶ。"""
+    monkeypatch.setattr(harness, "_apply_thread_pinning", lambda: {"OMP_NUM_THREADS": "1"})
+    calls: List[str] = []
+    monkeypatch.setattr(harness, "_default_m2e_model_preload", lambda: calls.append("default"))
+    harness._shard_pool_initializer()
+    assert calls == ["default"]
+
+
+def test_shard_pool_initializer_applies_thread_pinning_before_preload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    order: List[str] = []
+    monkeypatch.setattr(
+        harness, "_apply_thread_pinning", lambda: order.append("pin") or {"OMP_NUM_THREADS": "1"}
+    )
+    harness._shard_pool_initializer(preload_fn=lambda: order.append("preload"))
+    assert order == ["pin", "preload"]
+
+
+def test_default_m2e_model_preload_does_not_raise_when_crepe_and_demucs_are_absent() -> None:
+    """テスト環境に crepe/demucs は無いが、preload は静かに no-op であるべき
+
+    （実行時にモデル未導入で shard 実行全体が壊れてはならない——direct のみの構成も
+    ありうる）。
+    """
+    harness._default_m2e_model_preload()  # 例外を投げない
+
+
+def test_main_shard_id_rejects_an_existing_out_before_running_the_queue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-51: `--out` が既存なら、高価なキューに入る前に fail-closed で拒否する。"""
+    import yaml as _yaml
+
+    map_doc, map_sha256, campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+    map_path = tmp_path / "shard_map.yaml"
+    map_path.write_text(
+        _yaml.safe_dump(map_doc, sort_keys=True, default_flow_style=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    out_path = tmp_path / "shard_run.json"
+    out_path.write_text("existing-record", encoding="utf-8")
+    cell_store = tmp_path / "store_A"
+    cell_store.mkdir()
+
+    def _must_not_be_called(**kwargs: Any) -> "Dict[str, Any]":
+        raise AssertionError("execute_m2e_shard must not run when --out already exists")
+
+    monkeypatch.setattr(harness, "execute_m2e_shard", _must_not_be_called)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--shard-id", "0",
+            "--shard-map", str(map_path),
+            "--campaign", str(campaign_path),
+            "--cell-store", str(cell_store),
+            "--out", str(out_path),
+        ],
+    )
+    with pytest.raises(SystemExit, match="黙示上書き禁止"):
+        harness.main()
+    assert out_path.read_text(encoding="utf-8") == "existing-record"
+
+
+def test_load_m2e_campaign_with_sha256_reads_the_campaign_file_exactly_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-52: digest と parse を同一 bytes スナップショットから導出する
+
+    （= campaign ファイルへの `read_bytes()` が 1 回だけであることの外形確認）。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    resolved = campaign_path.resolve()
+    real_read_bytes = Path.read_bytes
+    read_calls: List[bytes] = []
+
+    def _tracking_read_bytes(self: Path) -> bytes:
+        data = real_read_bytes(self)
+        if self == resolved:
+            read_calls.append(data)
+        return data
+
+    monkeypatch.setattr(Path, "read_bytes", _tracking_read_bytes)
+    campaign, sha256 = harness._load_m2e_campaign_with_sha256(campaign_path)
+    assert len(read_calls) == 1
+    assert sha256 == hashlib.sha256(read_calls[0]).hexdigest()
+    assert set(campaign) == set(harness._M2E_LEVEL_LADDER)
+
+
+def test_generate_m2e_shard_map_reads_campaign_bytes_exactly_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-52: `generate_m2e_shard_map` も campaign を単一読取で消費する。"""
+    campaign_path = _write_m2e_campaign(tmp_path)
+    resolved = campaign_path.resolve()
+    real_read_bytes = Path.read_bytes
+    read_calls: List[bytes] = []
+
+    def _tracking_read_bytes(self: Path) -> bytes:
+        if self == resolved:
+            read_calls.append(True)  # type: ignore[arg-type]
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", _tracking_read_bytes)
+    harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    assert len(read_calls) == 1
+
+
+def test_main_shard_id_reads_campaign_bytes_exactly_once_for_digest_and_parse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-52: 実行機の CLI 経路（campaign_sha256 照合 + parse）も単一読取であること。"""
+    import yaml as _yaml
+
+    map_doc, map_sha256, campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+    map_path = tmp_path / "shard_map.yaml"
+    map_path.write_text(
+        _yaml.safe_dump(map_doc, sort_keys=True, default_flow_style=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    cell_store = tmp_path / "store_A"
+    cell_store.mkdir()
+
+    resolved = campaign_path.resolve()
+    real_read_bytes = Path.read_bytes
+    read_calls: List[bool] = []
+
+    def _tracking_read_bytes(self: Path) -> bytes:
+        if self == resolved:
+            read_calls.append(True)
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", _tracking_read_bytes)
+    monkeypatch.setattr(
+        harness, "execute_m2e_shard", lambda **kwargs: (_ for _ in ()).throw(SystemExit("stop"))
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_melody_accuracy.py",
+            "--shard-id", "0",
+            "--shard-map", str(map_path),
+            "--campaign", str(campaign_path),
+            "--cell-store", str(cell_store),
+            "--out", str(tmp_path / "out.json"),
+        ],
+    )
+    with pytest.raises(SystemExit, match="stop"):
+        harness.main()
+    assert len(read_calls) == 1
+
+
+def test_require_m2e_shard_map_matches_registry_detects_reordered_cells_within_a_shard(
+    tmp_path: Path,
+) -> None:
+    """E-53: 鍵集合・shard_id は正しいまま、同一 shard 内でレコードを並べ替えた
+
+    地図を拒否する（正準順序の完全一致）。
+    """
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    mutated = copy.deepcopy(doc)
+    shard0_indices = [i for i, c in enumerate(mutated["cells"]) if c["shard_id"] == 0]
+    assert len(shard0_indices) >= 2
+    i, j = shard0_indices[0], shard0_indices[1]
+    mutated["cells"][i], mutated["cells"][j] = mutated["cells"][j], mutated["cells"][i]
+    with pytest.raises(ValueError, match="並び順"):
+        harness._require_m2e_shard_map_matches_registry(mutated, campaign)
+
+
+def test_reconcile_truncated_m2e_cell_finds_a_digest_valid_record(tmp_path: Path) -> None:
+    """E-54: 打ち切り時点で digest 一致の完了レコードが存在すれば非 `None` を返す。"""
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    cell_store = tmp_path / "store_A"
+    env_digest = harness._env_digest()
+    tolerance_cents, est_voiced_floor = _bars_tolerance_and_floor()
+    target = doc["cells"][0]
+    _record_cells_via_fake_runner(
+        [target],
+        campaign,
+        cell_store,
+        env_digest=env_digest,
+        tolerance_cents=tolerance_cents,
+        est_voiced_floor=est_voiced_floor,
+    )
+    level = target["level"]
+    fixtures_doc, _sha = harness.load_external_fixtures(campaign[level]["external_fixtures"])
+    entries, _msha, manifest_path = harness._load_external_manifest(
+        campaign[level]["external_manifest"]
+    )
+    entry = next(e for e in entries if e["id"] == target["entry_id"])
+    cell = {
+        "bed_id": target["bed_id"],
+        "level": level,
+        "clip_id": target["clip_id"],
+        "arm": target["arm"],
+        "repeat_index": target["repeat_index"],
+        "entry_id": target["entry_id"],
+        "entry": entry,
+        "fixtures": fixtures_doc["fixtures"],
+        "manifest_dir": str(manifest_path.parent),
+        "tolerance_cents": tolerance_cents,
+        "est_voiced_floor": est_voiced_floor,
+        "cell_store": str(cell_store),
+        "env_digest": env_digest,
+        "workers": 1,
+        "cost": 5.0,
+    }
+    result = harness._reconcile_truncated_m2e_cell(cell)
+    assert result is not None
+    assert result["measured"] is True
+    assert result["outcome"] == "measured"
+
+
+def test_reconcile_truncated_m2e_cell_returns_none_when_no_record_exists(
+    tmp_path: Path,
+) -> None:
+    """E-54: レコードが存在しなければ `None`（= truncated のまま）。"""
+    campaign_path = _write_m2e_campaign(tmp_path)
+    campaign = harness._load_m2e_campaign(campaign_path)
+    doc = harness.generate_m2e_shard_map(campaign_path=campaign_path, **_C6_TEST_SHARD_KWARGS)
+    cell_store = tmp_path / "store_A"  # 空のまま（何も測っていない）
+    tolerance_cents, est_voiced_floor = _bars_tolerance_and_floor()
+    target = doc["cells"][0]
+    level = target["level"]
+    fixtures_doc, _sha = harness.load_external_fixtures(campaign[level]["external_fixtures"])
+    entries, _msha, manifest_path = harness._load_external_manifest(
+        campaign[level]["external_manifest"]
+    )
+    entry = next(e for e in entries if e["id"] == target["entry_id"])
+    cell = {
+        "bed_id": target["bed_id"],
+        "level": level,
+        "clip_id": target["clip_id"],
+        "arm": target["arm"],
+        "repeat_index": target["repeat_index"],
+        "entry_id": target["entry_id"],
+        "entry": entry,
+        "fixtures": fixtures_doc["fixtures"],
+        "manifest_dir": str(manifest_path.parent),
+        "tolerance_cents": tolerance_cents,
+        "est_voiced_floor": est_voiced_floor,
+        "cell_store": str(cell_store),
+        "env_digest": harness._env_digest(),
+        "workers": 1,
+        "cost": 5.0,
+    }
+    assert harness._reconcile_truncated_m2e_cell(cell) is None
+
+
+def test_run_m2e_shard_queue_reconciles_a_written_record_before_marking_truncated() -> None:
+    """E-54（機構レベル）: `reconcile_hung_cell` が非 `None` を返せば completed へ
+
+    回す（truncated には積まない）。実際の digest 一致照合は `_reconcile_truncated_
+    m2e_cell` が担うため、ここでは注入したフックの配線だけを軽量セルで確認する。
+    """
+    import _shard_queue_fakes
+
+    def _reconcile(cell: "Dict[str, Any]") -> "Optional[Dict[str, Any]]":
+        if cell["id"] == "writes-then-hangs":
+            return {"resumed": False, "measured": True, "mismatches": [], "outcome": "measured"}
+        return None
+
+    cells = [{"id": "writes-then-hangs", "cost": 0.01, "actual_duration_s": 5.0}]
+    result = harness.run_m2e_shard_queue(
+        cells,
+        session_budget=0.05,
+        hang_grace_seconds=0.05,
+        workers=1,
+        measure_fn=_shard_queue_fakes.sleep,
+        initializer=None,
+        poll_interval=0.02,
+        reconcile_hung_cell=_reconcile,
+    )
+    assert result["truncated"] == []
+    assert [c["cell"]["id"] for c in result["completed"]] == ["writes-then-hangs"]
+    assert result["completed"][0]["result"]["measured"] is True
+
+
+def test_run_m2e_shard_queue_still_truncates_when_reconciliation_finds_nothing() -> None:
+    """E-54: `reconcile_hung_cell` が `None` を返せば従来どおり truncated。"""
+    import _shard_queue_fakes
+
+    cells = [{"id": "hangs", "cost": 0.01, "actual_duration_s": 5.0}]
+    result = harness.run_m2e_shard_queue(
+        cells,
+        session_budget=0.05,
+        hang_grace_seconds=0.05,
+        workers=1,
+        measure_fn=_shard_queue_fakes.sleep,
+        initializer=None,
+        poll_interval=0.02,
+        reconcile_hung_cell=lambda cell: None,
+    )
+    assert result["completed"] == []
+    assert [c["id"] for c in result["truncated"]] == ["hangs"]
+
+
+def test_execute_m2e_shard_wires_the_m2e_reconciler_into_the_queue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E-54: `execute_m2e_shard` は `_reconcile_truncated_m2e_cell` を
+
+    `run_m2e_shard_queue` へ渡す（配線の固定・実際の照合ロジックは上の単体テストが
+    別途固定する）。
+    """
+    import _shard_queue_fakes
+
+    map_doc, map_sha256, _campaign_path, campaign = _generate_and_load_shard_map(tmp_path)
+
+    captured: "Dict[str, Any]" = {}
+    real_queue = harness.run_m2e_shard_queue
+
+    def _capturing_queue(*args: Any, **kwargs: Any) -> "Dict[str, Any]":
+        captured["reconcile_hung_cell"] = kwargs.get("reconcile_hung_cell")
+        return real_queue(*args, **kwargs)
+
+    monkeypatch.setattr(harness, "run_m2e_shard_queue", _capturing_queue)
+    harness.execute_m2e_shard(
+        map_doc=map_doc,
+        map_sha256=map_sha256,
+        shard_id=0,
+        campaign=campaign,
+        cell_store=tmp_path / "store_A",
+        workers=1,
+        measure_fn=_shard_queue_fakes.ok,
+        initializer=None,
+        require_thread_pinning=False,
+    )
+    assert captured["reconcile_hung_cell"] is harness._reconcile_truncated_m2e_cell
