@@ -1,0 +1,34 @@
+# M2e campaign（`m2e-campaign/0.1`）— C6 地図生成器 / 実行機の共通入力テンプレート。
+#
+# 決定済み設計判断 2（`.claude/briefs/M2E-C6-shard-runner.md`）: campaign は**パスのみ**
+# を持つ。科学的パラメータ（T_direct/T_stem/S/B_session・repeats_min・水準ラダー等）は
+# 一切含めない——それは CLI 引数 / m2_accuracy_bars.yaml / m2e_accuracy_bars.yaml /
+# fixtures / シャード地図側の責務。
+#
+# `external_fixtures` は測定前に repo へ commit する pin ファイル（HANDOFF §2 C3
+# 節「生成した fixtures_<tag>.yaml は測定前に repo へ commit すること」）。
+# `external_manifest` は `make_vremix_fixtures.py build --out-dir build/m2e` が書く
+# 非 commit の作業成果物（`build/` は gitignored）。どちらも実体の存在検証は
+# 生成器/実行機の実行時に行う（このファイル自体はパスの宣言のみ）。
+#
+# 使い方:
+#   1. このファイルをコピーし、実パス（build/ 配下の実際の出力先）に合わせて調整する。
+#   2. 地図生成: `--make-shard-map --campaign <このファイル> --t-direct T_d --t-stem T_s
+#      --startup-cost S [--session-budget B]`（HANDOFF §5 r6 レシピ参照）。
+#   3. シャード実行: `--shard-id N --shard-map <地図> --campaign <このファイル>
+#      --cell-store build/m2e/store_A`。
+
+schema_version: "m2e-campaign/0.1"
+levels:
+  "+12dB":
+    external_manifest: build/m2e/manifest_p12.json
+    external_fixtures: tests/fixtures/melody_bench/m2e_vremix_fixtures_p12.yaml
+  "+6dB":
+    external_manifest: build/m2e/manifest_p06.json
+    external_fixtures: tests/fixtures/melody_bench/m2e_vremix_fixtures_p06.yaml
+  "0dB":
+    external_manifest: build/m2e/manifest_p00.json
+    external_fixtures: tests/fixtures/melody_bench/m2e_vremix_fixtures_p00.yaml
+  "-6dB":
+    external_manifest: build/m2e/manifest_m06.json
+    external_fixtures: tests/fixtures/melody_bench/m2e_vremix_fixtures_m06.yaml

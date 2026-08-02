@@ -12637,8 +12637,8 @@ def test_run_m2e_shard_queue_runs_cells_concurrently_when_workers_allow() -> Non
     import _shard_queue_fakes
 
     cells = [
-        {"id": "a", "cost": 0.2, "actual_duration_s": 0.2},
-        {"id": "b", "cost": 0.2, "actual_duration_s": 0.2},
+        {"id": "a", "cost": 0.4, "actual_duration_s": 0.4},
+        {"id": "b", "cost": 0.4, "actual_duration_s": 0.4},
     ]
     result = harness.run_m2e_shard_queue(
         cells,
@@ -12649,8 +12649,9 @@ def test_run_m2e_shard_queue_runs_cells_concurrently_when_workers_allow() -> Non
         initializer=None,
     )
     assert len(result["completed"]) == 2
-    # 逐次なら 0.4s 以上かかる。並列なら 0.2s + overhead に収まるはず。
-    assert result["elapsed_seconds"] < 0.35
+    # 逐次なら 0.8s 以上かかる。並列なら 0.4s + overhead に収まるはず。フル suite 並行
+    # 実行下のジッタを吸収するため、閾値は両者の中間に余裕を持たせて置く。
+    assert result["elapsed_seconds"] < 0.65
 
 
 # ---------------------------------------------------------------------------

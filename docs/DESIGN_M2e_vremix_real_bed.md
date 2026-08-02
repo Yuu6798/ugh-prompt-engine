@@ -1032,6 +1032,56 @@ resume しない**——素性の分からないセルを通さない。
 > (1) と (2) は「どこに置いたか」、(3) は「誰が計算したか」を問う。前者だけでは
 > コピーで抜けられる。
 
+**D-6. シャード実行機（C6・§8.6 の実行契約）は既存のセル測定・記録経路を「呼び出す」
+だけで、新しい書き込み経路を作らない。** 実装（`scripts/run_melody_accuracy.py`）は
+`generate_m2e_shard_map`（§8.5 の凍結擬似コードの逐語実装。地図 YAML に
+入力値・fixtures 4 本の sha256・`cell → shard_id` 全対応表・`N_shards`・生成時刻を
+記録し、同一入力からバイト一致で出る）と `execute_m2e_shard`（1 shard の実行機）に
+分かれる。5 点を記録する:
+
+- **セル測定は `_measure_or_resume_external_clip_row` の per-cell 呼び出しに一本化**
+  （`_shard_measure_and_record_cell`）。レコードパス・書き込みは
+  `_cell_store_record_path` / `svp_rpe.utils.atomic_io` をそのまま共有し、
+  `store_role` は常に `run`（D-5 の役割区分をそのまま踏襲）。これが resume 互換
+  AC（既存の「1 水準まるごと」run phase が shard 実行機の書いたセルを resume できる）
+  の根拠であり、セルレコード schema（`m2-cell-record/0.4`）へのフィールド追加は
+  ゼロ。
+- **動的キューは常に multiprocessing（spawn context）を経由する**（`P = 1` でも）。
+  §8.4 の `S`（プロセスプール起動〜モデルロード完了）という定義、および
+  「実行中セルが `B_session + 600s` を超えたら**実プロセスを `terminate()` して**
+  打ち切る」という契約の両方が、in-process 呼び出しでは実装できない（Python の
+  通常の関数呼び出しは安全に強制中断できない）ため。打ち切り時点で in-flight
+  だったセル（trigger したセル自身を含む）は「打ち切り」として shard 実行記録に
+  残し、セルレコードは書かない（`terminate()` が実プロセスを kill するため、
+  書き込み完了の保証がない——「セルレコードを書かず、未完として記録する」の
+  実装上の帰結）。
+- **開始許可式 `elapsed + cost(cell) <= B_session` の `elapsed` は親の単調クロック**
+  （`time.monotonic`）で測り、配布は §8.5 order を厳守する動的キュー（1 セルずつ）。
+  ある1セルが許可式を満たせず拒否されると、それ以降のセル（より安価でも）へは
+  進まない——bin-packing ではなく「配布順は §8.5 order に従う」の実装。
+- **ワーカーは env_digest を自分で再計算し、親の期待値と一致しなければそのセルを
+  開始しない**（`_shard_worker_measure_cell`）。不一致は shard 実行を即座に中断する
+  例外として扱う——ハング打ち切り（正常終了として記録）とは別の、環境不整合による
+  fail-closed 停止。スレッド 3 点固定は env 2 点をプロセスプール起動前に親側で検証し、
+  `torch.set_num_threads(1)` は各ワーカーの `initializer` 内で適用する（決定済み
+  設計判断 5 のとおり）。
+- **campaign ファイル**（`m2e-campaign/0.1`）はパスのみを持つ（各水準の external
+  manifest / external fixtures の所在）。地図の読み込み・実行開始前に、campaign が
+  指す fixtures を現在の committed 実体と再照合し（`_require_m2e_shard_map_matches_
+  registry`）、欠け・重複・余剰のいずれも fail-closed にする——セル台帳（fixtures が
+  決める 1280 セルの集合）は不可侵、シャード地図（どのセルをどの回に回すか）だけが
+  再計算可能という §8.5 の規律を実行時にも立証する。
+
+キュー/許可式/打ち切りの機構テストは picklable な top-level fake
+（`tests/_shard_queue_fakes.py`）を実 multiprocessing（spawn）へ注入して検証する
+——このモジュールは意図的に `run_melody_accuracy` を import しない。fake が
+`run_melody_accuracy` を import 済みのモジュール（本体・テストファイルとも）に
+居ると、spawn の子プロセスが pickle された callable の `__module__` を import し
+直すたびに同じ重い import 連鎖（本環境で実測 ≈24 秒/回）を再生し、テスト全体が
+実用的でなくなることを実測で確認した。resume 互換を確かめるテストは
+`_shard_measure_and_record_cell` を multiprocessing を経由せず直接呼ぶ（fake
+backend 統合テストは P=1 の in-process 経路で行うという Test Strategy どおり）。
+
 #### 8.9.5 実装ノート（2026-08-02・C5 水準横断 census 集計）
 
 §6.2 が「帯の判定は `gate_level` の run が §11 のセル census を満たしたときにのみ出る」と

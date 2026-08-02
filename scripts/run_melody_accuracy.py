@@ -10065,7 +10065,10 @@ def _load_m2e_campaign(path: "str | Path") -> "Dict[str, Dict[str, Path]]":
     設計判断 2（Memo M2E-C6）: campaign は**パスのみ**を持つ——各水準の external
     manifest / external fixtures の所在。科学的パラメータ（`T_*`/`S`/`B_session`等）は
     一切含めない（それは CLI 引数 / bars / fixtures / 地図側の責務）。凍結ラダー 4 水準
-    ちょうどを要求する (fail-closed)。パスは campaign ファイルの位置基準で相対解決する。
+    ちょうどを要求する (fail-closed)。パスは repo root（`ROOT`）基準で相対解決する
+    （絶対パスはそのまま通る）——campaign 自身は `docs/measurements/m2e_2026-08/`
+    配下に置く想定だが、参照先の `build/`・`tests/fixtures/` は repo root からの
+    相対パスとして書く HANDOFF §5 の既存規約に揃える。
     """
     campaign_path = Path(path).resolve()
     data = campaign_path.read_bytes()
@@ -10082,7 +10085,6 @@ def _load_m2e_campaign(path: "str | Path") -> "Dict[str, Dict[str, Path]]":
             f"{sorted(levels) if isinstance(levels, dict) else levels!r} が凍結ラダー "
             f"{list(_M2E_LEVEL_LADDER)} と一致しない (fail-closed)"
         )
-    campaign_dir = campaign_path.parent
     resolved: "Dict[str, Dict[str, Path]]" = {}
     for level, level_paths in levels.items():
         if not isinstance(level_paths, dict) or set(level_paths) != {
@@ -10100,7 +10102,12 @@ def _load_m2e_campaign(path: "str | Path") -> "Dict[str, Dict[str, Path]]":
                     f"{campaign_path}: levels[{level!r}].{key} が非空文字列でない "
                     "(fail-closed)"
                 )
-            resolved_level[key] = (campaign_dir / value).resolve()
+            # repo root 基準で解決する（campaign ファイル自身の位置基準ではない）。
+            # HANDOFF §5 のレシピは `build/m2e/...` / `tests/fixtures/...` を repo
+            # root からの相対パスとして書く規約なので、それとそのまま揃える——
+            # campaign 自身は `docs/measurements/m2e_2026-08/` に置く想定であり、
+            # ファイル位置基準だと `../../../build/...` のような脆いパスを強いる。
+            resolved_level[key] = (ROOT / value).resolve()
         resolved[level] = resolved_level
     return resolved
 

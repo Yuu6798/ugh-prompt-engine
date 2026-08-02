@@ -23,7 +23,7 @@
 | — | **C2** store 分離（rev.6 §8.9.2-(1)） | **完了**（2026-08-02・`--eval-cell-store`） |
 | — | **C3** evaluate の並列化（rev.6 §8.9.2-(2)） | **完了**（2026-08-02・`--workers` + `--pin-threads`） |
 | — | **C5** 水準横断 census 集計 | **完了**（2026-08-02・`--census`） |
-| — | **C6** シャード実行機（§8.6 の実行契約: shard_id 起動・地図の消費・時間許可・打ち切り） | **未着手** ← r6 前に必須（別ブリーフ） |
+| — | **C6** シャード実行機（§8.6 の実行契約: shard_id 起動・地図の消費・時間許可・打ち切り） | **完了**（2026-08-02・地図生成器 `--make-shard-map` + 実行機 `--shard-id`/`--shard-map`） |
 | r4 | r2-0（`P` / 並列不変性ゲート / `S`・`T_*` / `env_digest` / lockfile） | 未実施 |
 | r5 (P-c′) | `m2e_r2_shard_map.yaml` | 未実施 |
 | r6 (P-d) | 本測定（**code change 厳禁**） | 未実施 |
@@ -39,13 +39,13 @@ rev.6 §8.9.4 実装ノート。
 r6 の code freeze の制約下には無かったが、先に入れておくことで r6 以降に必要な
 code change を減らせる。
 
-**ただし C6（シャード実行機）が未着手であり、「r6 前に必要な code change はすべて
-完了している」という 2026-08-02 の記述は過大だった**（PR #241 レビューで顕在化）。
+**C6（シャード実行機）も landing した**（2026-08-02・`.claude/briefs/M2E-C6-shard-runner.md`）。
 設計 §8.6 の実行契約——`shard_id` を引数に取り当該 shard のセルのみを対象とする・
 `elapsed + cost(cell) <= B_session` の開始許可・`B_session + 600s` 打ち切り・
-shard_id 昇順実行——は現行ハーネスに存在しない。現行の run コマンドは水準まるごとを
-対象とし、セル台帳（§8.7・F2）の resume で中断復帰はできるが、§8.6 の時間管理・
-shard スコープは持たない。**C6 が landing するまで r6 は開始できない。**
+shard_id 昇順実行——を `scripts/run_melody_accuracy.py` の `--make-shard-map`
+（地図生成器）/ `--shard-id --shard-map`（実行機）として実装済み。実装ノートは
+rev.6 §8.9.4 D-6。**これで r6 前に必要な code change はすべて完了した**（r4/r5 の
+実測残タスクのみが残る）。
 
 ---
 
@@ -126,23 +126,39 @@ pin を残さない）。`pipefail` を欠くと
 **部分集合で平均 RPA や破断曲線を出さない**（§11）。集計器が無い間は判定が存在しない
 状態が正しい——その状態は解消されたが、**census が揃うまでは依然として判定は出ない。**
 
-### C6 — シャード実行機（rev.6 §8.6）— **未着手**
+### C6 — シャード実行機（rev.6 §8.6）— **完了（2026-08-02）**
 
-設計 §8.6「1回の実行の契約」が要求する実行機は、現行ハーネスに存在しない
-（PR #241 レビューで顕在化）。要求は:
+設計 §8.6「1回の実行の契約」が要求する実行機を
+`.claude/briefs/M2E-C6-shard-runner.md` に基づき実装した（実装ノート: rev.6
+§8.9.4 D-6）。要求だった 5 点はすべて満たす:
 
-- `--shard-id` 相当の引数で起動し、その shard のセルのみを対象とする（**1回 = 1シャード**）。
-- `m2e_r2_shard_map.yaml`（§8.5・`cell → shard_id` の全対応表）を読むリーダー。
-- **新しいセルを開始してよいのは `elapsed + cost(cell) <= B_session` のときのみ**という
-  開始許可式。
-- 実行中セルが `B_session + 600s` を超えたら打ち切り、失敗値でなく「未完」として記録。
-- `shard_id` の昇順で実行（飛ばせるのはその shard が全セル digest 一致で完了済みの場合のみ）。
+- `--shard-id N --shard-map PATH` で起動し、その shard のセルのみを対象とする
+  （**1回 = 1シャード**）。
+- 地図生成器 `--make-shard-map`（入力: `--campaign` / `--t-direct` / `--t-stem` /
+  `--startup-cost` / `--session-budget`）が §8.5 の凍結擬似コードを逐語実装し、
+  `cell → shard_id` の全対応表を持つ地図 YAML を生成する（同一入力からバイト一致）。
+- **新しいセルを開始してよいのは `elapsed + cost(cell) <= B_session` のときのみ**と
+  いう開始許可式を、親プロセスの単調クロックで動的キュー（1 セルずつ配布）として
+  実装した。
+- 実行中セルが `B_session + 600s` を超えたら、multiprocessing pool を
+  `terminate()` して打ち切り、失敗値でなく「未完」として shard 実行記録に残す
+  （セルレコードは書かない）。
+- `shard_id` の昇順で実行し、飛ばせるのはその shard が全セル digest 一致で
+  完了済みの場合のみ（`_require_prior_m2e_shards_complete` が既存の
+  `_cell_store_record_path` / `_cell_record_mismatches` をそのまま再利用——
+  resume 互換 AC の根拠）。
 
-現行の run コマンドは水準まるごとを対象とし、shard 単位にも時間予算にも対応しない。
-§8.5 の規律（**セル台帳は不可侵・シャード地図は再計算可能——「シャード地図は科学では
-なくスケジューリングである」**）を尊重した実装が要る。**r6 前に landing が必須**
-（r6 は code change 厳禁のため、C2/C3 と同じ論法）。**C5（census）とは混ぜない**
-——別ブリーフとして実装する（C5 を C2/C3 から分離したのと同じスコープ判断）。
+campaign ファイル（`m2e-campaign/0.1`。各水準の external manifest / external
+fixtures の所在のみを持つ）は
+[`docs/measurements/m2e_2026-08/m2e_campaign.example.yaml`](m2e_campaign.example.yaml)
+がテンプレート。実ファイルの manifest パスは `build/m2e/` 配下の想定パス（非
+commit の作業成果物）でよく、fixtures パスは committed pin ファイルを指す
+（存在検証は実行時）。
+
+shard モードは run report / verdict / census のいずれも出さない——成果物は
+(a) `--cell-store` 配下のセルレコード、(b) `--out` の shard 実行記録
+（dated JSON）のみ。per-level の run report は、全セル完了後に既存の「1 水準
+まるごと」run が store から 100% resume して生成する（下記 §5 r6 レシピ参照）。
 
 ### C3 — evaluate の並列化（rev.6 §8.9.2-(2)）— **完了（2026-08-02）**
 
@@ -214,9 +230,8 @@ commit される dated record であり（m2b/m2c の前例どおり）、上の
 として `build/m2e/` のままでよい。残り 3 水準（p06/p00/m06）も同じ形で繰り返して 4
 verdict を census へ渡す——この 4 行を 1 セッションで回すという意味ではない。
 **中断復帰はセル台帳（§8.7・F2）が機構として担う。** 分割・実行順は §8.6 の実行契約
-（`shard_id` 起動）によるが、**その実行機は未実装（C6・§2 参照）**。上の run コマンドは
-r4 の校正・スモーク用の「1 水準まるごと」の形であり、r6 本測定は C6 実装後に
-`shard_id` 起動で回す。
+（`shard_id` 起動）による。上の run コマンドは r4 の校正・スモーク用の「1 水準まるごと」
+の形であり、**r6 本測定は C6 実装済みの `shard_id` 起動（下記レシピ）で回す。**
 
 `--workers 2` なのは上記の頭打ち（`repeats_min = 2`）による。`--eval-cell-store` には
 **run が使った `store_A` を渡してはならない**——渡すと測り直しの子が run のセルを
@@ -231,6 +246,55 @@ resume し、独立検証が自分自身との比較に化ける。evaluate は�
 
 **`P` の効果は実測比で示すこと**（`総時間 / P` の外挿値を成果として書かない・§3.2）。
 C2/C3 の PR では fake backend の実測比を記載した。r4 では実スタックで測り直す。
+
+**r6 の起動形**（C6・§8.6 の実行契約。`shard_id` 昇順で 1 回 = 1 shard）:
+
+r4（r2-0）で確定した `S` / `T_direct` / `T_stem` を使って地図を生成し、**本測定開始前に
+commit する**（§8.5「確定した `cell → shard_id` の全対応表を `m2e_r2_shard_map.yaml`
+として本測定の開始前に commit する」）。campaign ファイルは
+[`m2e_campaign.example.yaml`](m2e_campaign.example.yaml) をコピーして実パスに
+合わせる（`build/m2e/` は非 commit の作業成果物、fixtures は committed pin）。
+
+```bash
+set -o pipefail  # tee が Python の非ゼロ exit（fail-closed 拒否）を隠さないようにする
+
+# 1. 地図生成（r2-0 で確定した S/T_direct/T_stem を渡す。同一入力ならバイト一致）。
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
+    --make-shard-map \
+    --campaign docs/measurements/m2e_2026-08/m2e_campaign.yaml \
+    --t-direct "$T_DIRECT" --t-stem "$T_STEM" --startup-cost "$S" \
+    --out docs/measurements/m2e_2026-08/m2e_r2_shard_map.yaml
+# → commit する（本測定開始前・§8.5）。N_shards > R_max(12) なら §8.8 の 3 択へ
+#   User 決裁（生成器がここで fail-closed に停止する）。
+
+# 2. shard を昇順に 1 回ずつ実行する（N は 0 から N_shards-1 まで）。
+for N in $(seq 0 $(( $(python -c "import yaml,sys; print(yaml.safe_load(open('docs/measurements/m2e_2026-08/m2e_r2_shard_map.yaml'))['n_shards'] - 1)") ))); do
+  OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python scripts/run_melody_accuracy.py \
+      --shard-id "$N" \
+      --shard-map docs/measurements/m2e_2026-08/m2e_r2_shard_map.yaml \
+      --campaign docs/measurements/m2e_2026-08/m2e_campaign.yaml \
+      --cell-store build/m2e/store_A --workers "$P" \
+      --out "$(mktemp "build/m2e/shard_run_${N}_$(date -u +%Y%m%dT%H%M%SZ)_XXXXXX.json")" \
+      | tee "$(mktemp "build/m2e/shard_run_${N}_stdout_$(date -u +%Y%m%dT%H%M%SZ)_XXXXXX.txt")"
+done
+```
+
+- shard 実行記録（`--out`）は run report ではない——run report / verdict / census の
+  いずれも出さない（成果物は `--cell-store` のセルレコードとこの実行記録のみ）。
+  `build/m2e/` は非 commit の作業成果物なので、実行記録は dated として残すだけでよい
+  （commit 対象ではない）。
+- 先行 shard（`shard_id < N`）に digest 一致で完了していないセルが 1 つでもあると
+  fail-closed で拒否する——**昇順を飛ばさない**こと。1 回の実行が
+  `B_session`（既定 7200s = 2.0h・§8.2）で終わらなくても延長しない
+  （超過は異常ではなく通常状態・§8.6）。未完セルは次回の実行でそのまま resume される。
+- **全 shard 完了後**、既存の「1 水準まるごと」run（上の r4/r6 起動形の `for r in 0 1`
+  ブロック）を同じ `--cell-store build/m2e/store_A` で回すと、shard 実行機が書いた
+  セルが digest 一致で 100% resume され、水準ごとの run report が生成される
+  （resume 互換 AC）。そこから先は上記 C5 census レシピと同じ形。
+- `T_*`/`S`/`B_session` を変更した場合は**未完セルについてのみ**地図を引き直す
+  （§8.5・完了済みセルのレコードは影響を受けない）。セル台帳（fixtures）自体を
+  変えてはならない——変えると地図生成器・実行機の両方が `_require_m2e_shard_map_
+  matches_registry` で fail-closed になる（意図どおり）。
 
 ---
 
@@ -331,18 +395,22 @@ demucs の vocals stem の `stem_sha256` が run 間で変わる（`residual_db`
 ## 5. 次にやる順序
 
 1. ~~**C2 / C3 を実装**。r6 前に landing。~~ **完了（2026-08-02）**
-   ~~残るのは C5~~ **C5 も完了（2026-08-02・`--census`）**。**C6（シャード実行機・
-   §2 参照）が未着手で残っている**——「以降の段階は code change を伴わない」は
-   2026-08-02 時点の過大な記述だった（PR #241 レビューで顕在化・撤回）。
+   ~~残るのは C5~~ **C5 も完了（2026-08-02・`--census`）**。
+   ~~C6（シャード実行機）が未着手~~ **C6 も完了（2026-08-02・`--make-shard-map` /
+   `--shard-id`）**——「以降の段階は code change を伴わない」は 2026-08-02 時点の
+   過大な記述だった（PR #241 レビューで顕在化・撤回）が、**今度こそ r6 前に必要な
+   code change はすべて完了した**。
 2. **ミックス生成**: `make_vremix_fixtures.py build` で 320 本
    （40 clip × 2 bed × 4 水準）+ manifest/fixtures/生成記録。runbook §5。
 3. **r4（r2-0）**: `P` 決定・並列不変性ゲート・`S`/`T_*` 校正・`env_digest` 確定・
    lockfile commit。**3 点スレッド固定を必ず適用**。
-4. **C6 を実装**（別ブリーフ）。r5 のシャード地図は §8.6 の実行契約を消費する前提の
-   成果物なので、C6 の landing を r5 の前提とする。
-5. **r5**: `m2e_r2_shard_map.yaml` を本測定開始前に commit。
-6. **r6**: 本測定（code change 厳禁）。`shard_id` 起動（C6）で回す。
-   `N_shards > R_max = 12` なら §8.8 で User 決裁へ。
+4. ~~**C6 を実装**（別ブリーフ）~~ **完了（2026-08-02）**。地図生成器
+   `--make-shard-map` と実行機 `--shard-id`/`--shard-map` は landing 済み
+   （§2 C6 節・§5 上記の r6 起動形レシピ参照）。
+5. **r5**: `m2e_r2_shard_map.yaml` を本測定開始前に commit（`--make-shard-map` で
+   r4 の `S`/`T_direct`/`T_stem` から生成する。上記 r6 起動形レシピの手順 1）。
+6. **r6**: 本測定（code change 厳禁）。`shard_id` 起動（C6・上記レシピの手順 2）で
+   回す。`N_shards > R_max = 12` なら §8.8 で User 決裁へ。
 7. **r7**: 破断曲線 + stem アーム 4 点。**昇格宣言をしない。M4 G2 は解錠しない。**
 
 報告規律（§11）: **1280 セルが揃うまで帯の判定を出さない。** 部分集合での平均 RPA・
