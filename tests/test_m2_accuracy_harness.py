@@ -26,10 +26,12 @@ import importlib
 import json
 import os
 import re
+import struct
 import subprocess
 import sys
 import sysconfig
 import tempfile
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -9618,16 +9620,13 @@ def test_cli_repeat_index_is_rejected_in_evaluate_phase(
         harness.main()
 
 
-def test_reverification_child_never_receives_cell_store(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """設計 §8.7: 測り直し子プロセスは `--cell-store` / `--repeat-index` / `--workers`
+def _capture_reverification_child_command(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **kwargs: Any
+) -> "Tuple[List[str], Dict[str, str]]":
+    """`_run_external_verification_in_fresh_process` が組み立てる子コマンドと env を捕捉する。
 
-    を絶対に受け取らない——受け取ればチェックポイントから resume でき、評価器の
-    「独立に測り直して bit 一致を確認する」publish 条件が「セルレコードを自分自身と
-    比較するだけ」の空虚な成功になる（本機能で最も危険な穴）。
-    `_run_external_verification_in_fresh_process` の command 組み立てには
-    そもそも `--cell-store` を積む分岐が無い——本テストはその不在を固定する。
+    実子プロセスを起こさずに command だけ見たいので、`subprocess.run` を
+    「必ず失敗する」フェイクへ差し替える（呼び出しは `RuntimeError` で終わる）。
     """
     captured: Dict[str, Any] = {}
 
@@ -9636,8 +9635,9 @@ def test_reverification_child_never_receives_cell_store(
         stdout = ""
         stderr = "boom (deliberately induced failure to avoid a real subprocess)"
 
-    def _fake_subprocess_run(command, **kwargs):
+    def _fake_subprocess_run(command, **inner):
         captured["command"] = command
+        captured["env"] = inner.get("env")
         return _FakeCompletedProcess()
 
     monkeypatch.setattr(harness.subprocess, "run", _fake_subprocess_run)
@@ -9648,12 +9648,13 @@ def test_reverification_child_never_receives_cell_store(
     manifest_path = tmp_path / "manifest.json"
     m2e_bars_path = tmp_path / "m2e_bars.yaml"
     for p in (specs_path, bars_path, fixtures_path, manifest_path, m2e_bars_path):
-        p.write_text("placeholder", encoding="utf-8")
+        if not p.exists():
+            p.write_text("placeholder", encoding="utf-8")
 
     with pytest.raises(RuntimeError, match="測り直しプロセスが失敗した"):
         harness._run_external_verification_in_fresh_process(
             "V_remix_real_direct",
-            0,
+            kwargs.pop("index", 0),
             tmp_dir=tmp_path,
             external_manifest_path=manifest_path,
             specs_path=specs_path,
@@ -9662,12 +9663,69 @@ def test_reverification_child_never_receives_cell_store(
             expected_specs_sha256="0" * 64,
             m2e_bars_path=m2e_bars_path,
             level="+12dB",
+            **kwargs,
         )
+    return captured["command"], captured["env"]
 
-    command = captured["command"]
+
+def test_reverification_child_never_receives_the_run_cell_store(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """C2（rev.6 §8.9.2-(1)）: 測り直し子は **run の `--cell-store`（store_A）を絶対に
+
+    受け取らない**——受け取れば run のチェックポイントから resume でき、評価器の
+    「独立に測り直して bit 一致を確認する」publish 条件が「セルレコード（= 提出
+    report を生んだのと同じ測定）を自分自身と比較するだけ」の空虚な成功になる
+    （本機能で最も危険な穴）。
+
+    C2 以前の版（`test_reverification_child_never_receives_cell_store`）は「`--cell-store`
+    がコマンドに現れないこと」だけを固定していた。**独立性は store を分けることで
+    保たれるのであって、復帰できないことで保たれるのではない**ので、ここでは
+    「`store_A` は渡らない / `store_B`（`--eval-cell-store`）は渡る」へ発展させる。
+    """
+    run_store = tmp_path / "store_A"
+    run_store.mkdir()
+    eval_store = tmp_path / "store_B"
+    eval_store.mkdir()
+
+    # (1) `eval_cell_store` を渡さない既定: セル系のフラグは一切現れない（従来の契約）。
+    command, _env = _capture_reverification_child_command(monkeypatch, tmp_path)
     assert "--cell-store" not in command
     assert "--repeat-index" not in command
     assert "--workers" not in command
+    assert "--pin-threads" not in command
+
+    # (2) `store_B` を渡したとき: `--cell-store store_B` + `--repeat-index` が積まれ、
+    #     **`store_A` のパスはコマンド文字列のどこにも現れない**（機械検証）。
+    command, _env = _capture_reverification_child_command(
+        monkeypatch, tmp_path, index=3, eval_cell_store=eval_store
+    )
+    assert command[command.index("--cell-store") + 1] == str(eval_store.resolve())
+    assert command[command.index("--repeat-index") + 1] == "3"
+    assert str(run_store.resolve()) not in " ".join(command)
+    assert str(run_store) not in " ".join(command)
+    # `--workers` は子へ渡さない（子は 1 セル系列を逐次に測る 1 プロセス）。
+    assert "--workers" not in command
+
+
+def test_reverification_child_receives_the_thread_pinning_env_and_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """C3/D-3: 並列に起こす子には 3 点固定を伝える（HANDOFF §3.1）。
+
+    env 2 点は**子の起動前**に置く（プロセス開始後の設定は OpenMP/MKL に効かない）。
+    3 点目は子自身が `--pin-threads` で適用する。
+    """
+    pinning = {"OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1", "torch_num_threads": 1}
+    command, env = _capture_reverification_child_command(
+        monkeypatch, tmp_path, thread_pinning=pinning
+    )
+    assert "--pin-threads" in command
+    assert env["OMP_NUM_THREADS"] == "1"
+    assert env["MKL_NUM_THREADS"] == "1"
+
+    command, env = _capture_reverification_child_command(monkeypatch, tmp_path)
+    assert "--pin-threads" not in command
 
 
 def test_env_digest_is_a_64_hex_sha256_and_reacts_to_thread_settings(
@@ -9921,3 +9979,575 @@ def test_env_digest_cpu_identity_absent_marker_when_unreadable(
     identity = harness._env_digest_cpu_identity()
     assert identity["model_name"] == harness._ENV_DIGEST_ABSENT_MARKER
     assert identity["flags"] == harness._ENV_DIGEST_ABSENT_MARKER
+
+
+# ---------------------------------------------------------------------------
+# M2e C2 / C3（rev.6 §8.9.2）: evaluate の store 分離 + evaluate の並列化。
+# 設計判断 D-1（軌跡 digest を M2e row 限定で追加）/ D-2（`--workers` の非対称な意味）/
+# D-3（スレッド固定は run と evaluate で同一）。
+# ---------------------------------------------------------------------------
+
+
+def _cli_argv(*args: str) -> "List[str]":
+    return ["run_melody_accuracy.py", *args]
+
+
+def test_cli_rejects_an_eval_cell_store_equal_to_the_run_cell_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C2: `store_A` と `store_B` が同一パスなら走る前に落とす。
+
+    **パス比較は resolve 後に行う**——`..` を挟んだ別表記で素通りできる形にしない。
+    """
+    store = tmp_path / "cells"
+    store.mkdir()
+    report_path = tmp_path / "run1.json"
+    report_path.write_text("{}", encoding="utf-8")
+    detour = tmp_path / "cells" / ".." / "cells"  # resolve すれば store と同一
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        _cli_argv(
+            "--out", str(tmp_path / "verdict.json"),
+            "--evaluate", str(report_path),
+            "--cell-store", str(store),
+            "--eval-cell-store", str(detour),
+        ),
+    )
+    with pytest.raises(SystemExit, match="publish の独立性が消える"):
+        harness.main()
+
+
+@pytest.mark.parametrize("nesting", ["eval_under_run", "run_under_eval"])
+def test_cli_rejects_nested_cell_stores(
+    nesting: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C2: 一方が他方の配下にある指定も拒否する（同一パスでなくても独立でない）。"""
+    outer = tmp_path / "outer"
+    inner = outer / "inner"
+    inner.mkdir(parents=True)
+    run_store, eval_store = (outer, inner) if nesting == "eval_under_run" else (inner, outer)
+    report_path = tmp_path / "run1.json"
+    report_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        _cli_argv(
+            "--out", str(tmp_path / "verdict.json"),
+            "--evaluate", str(report_path),
+            "--cell-store", str(run_store),
+            "--eval-cell-store", str(eval_store),
+        ),
+    )
+    with pytest.raises(SystemExit, match="配下にある"):
+        harness.main()
+
+
+def test_cli_rejects_an_eval_cell_store_in_the_run_phase(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C2: `--eval-cell-store` は evaluate phase 専用（run が evaluate 用 store へ書けると
+
+    測り直しが自分の検証対象と同じセルを読むことになり、store 分離の意味が消える）。
+    """
+    store = tmp_path / "store_B"
+    store.mkdir()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        _cli_argv("--out", str(tmp_path / "run.json"), "--eval-cell-store", str(store)),
+    )
+    with pytest.raises(SystemExit, match="evaluate phase 専用"):
+        harness.main()
+
+
+@pytest.mark.parametrize("out_rel", ["verdict.json", "nested/verdict.json", ""])
+def test_cli_rejects_out_path_inside_the_eval_cell_store(
+    out_rel: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C2: `--cell-store` 側と同型の保護——verdict でセルチェックポイントを潰さない。"""
+    store = tmp_path / "store_B"
+    store.mkdir()
+    out = store / out_rel if out_rel else store
+    report_path = tmp_path / "run1.json"
+    report_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        _cli_argv(
+            "--out", str(out),
+            "--evaluate", str(report_path),
+            "--eval-cell-store", str(store),
+        ),
+    )
+    with pytest.raises(SystemExit, match="--eval-cell-store"):
+        harness.main()
+
+
+def test_cli_rejects_a_non_positive_workers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        sys, "argv", _cli_argv("--out", str(tmp_path / "run.json"), "--workers", "0")
+    )
+    with pytest.raises(SystemExit, match="--workers 0"):
+        harness.main()
+
+
+# --- D-1: 推定ピッチ軌跡の digest（§8.3 の並列不変性ゲートの比較対象） ---------------
+
+
+def test_est_trajectory_sha256_matches_the_documented_serialization() -> None:
+    """直列化仕様を pin する（docstring の 3 ステップをテスト側で独立に組み直す）。
+
+    **float の repr / json 表現は使わない**——テキスト表現は Python 版・プラット
+    フォームで揺れうるため、同じ軌跡が別 digest を持ちうる。
+    """
+    times = (0.0, 0.01, 0.02)
+    freqs = (220.0, 0.0, 440.0)
+    expected = hashlib.sha256(
+        b"m2e-est-trajectory/1\n"
+        + struct.pack("<Q", 3)
+        + struct.pack("<dd", 0.0, 220.0)
+        + struct.pack("<dd", 0.01, 0.0)
+        + struct.pack("<dd", 0.02, 440.0)
+    ).hexdigest()
+    assert harness._EST_TRAJECTORY_DIGEST_MAGIC == b"m2e-est-trajectory/1\n"
+    assert harness._est_trajectory_sha256(times, freqs) == expected
+
+
+def test_est_trajectory_sha256_is_sensitive_to_the_trajectory_not_only_to_metrics() -> None:
+    """1 フレームだけ違う軌跡は別 digest になる（指標の一致で代替できない理由）。"""
+    base = harness._est_trajectory_sha256((0.0, 0.01), (220.0, 220.0))
+    assert base != harness._est_trajectory_sha256((0.0, 0.01), (220.0, 220.000001))
+    assert base != harness._est_trajectory_sha256((0.0, 0.011), (220.0, 220.0))
+
+
+def test_est_trajectory_sha256_normalizes_negative_zero() -> None:
+    """`-0.0` は `0.0` へ正規化する（無声フレームの符号ゆらぎで digest を割らない）。"""
+    assert harness._est_trajectory_sha256((0.0, -0.0), (-0.0, 0.0)) == (
+        harness._est_trajectory_sha256((0.0, 0.0), (0.0, 0.0))
+    )
+
+
+@pytest.mark.parametrize(
+    "times, freqs, match",
+    [
+        ((0.0, 0.01), (220.0,), "長さが不一致"),
+        ((0.0,), (float("nan"),), "非有限"),
+        ((float("inf"),), (220.0,), "非有限"),
+    ],
+)
+def test_est_trajectory_sha256_fails_closed(
+    times: "Tuple[float, ...]", freqs: "Tuple[float, ...]", match: str
+) -> None:
+    """NaN/inf・長さ不一致は digest にしない（黙って比較不能になるより落ちる）。"""
+    with pytest.raises(ValueError, match=match):
+        harness._est_trajectory_sha256(times, freqs)
+
+
+def test_est_trajectory_digest_is_recorded_only_for_m2e_rows(tmp_path: Path) -> None:
+    """D-1(b): 軌跡 digest は **M2e カテゴリの row にだけ**現れる。
+
+    全カテゴリへ足すと commit 済みの M2b/M2c 記録と突き合わせるテストが期待値差分で
+    割れ、そこで schema を広げて吸収する誘惑が生じる（PR #71 型の churn）。
+    """
+    assert harness._category_records_est_trajectory("V_remix_real_direct") is True
+    assert harness._category_records_est_trajectory("V_remix_real_stem") is True
+    assert harness._category_records_est_trajectory("V_direct") is False
+    assert harness._category_records_est_trajectory("S_direct") is False
+
+    m2e_row = _m2e_run(tmp_path, level="+12dB")["categories"]["V_remix_real_direct"]
+    for clip in m2e_row["clips"]:
+        assert re.fullmatch(r"[0-9a-f]{64}", clip["est_trajectory_sha256"])
+
+    manifest_path, fixtures_path = _write_external_fixture_set(
+        tmp_path, {"clip001": (_CLIP001_TIMES, _CLIP001_FREQS)}
+    )
+    v_direct_row = _fake_run(
+        categories=("V_direct",),
+        route_runner=_make_fake_external_runner(
+            {"clip001": (tuple(_CLIP001_TIMES), tuple(_CLIP001_FREQS))}
+        ),
+        external_manifest_path=manifest_path,
+        external_fixtures_path=fixtures_path,
+    )["categories"]["V_direct"]
+    for clip in v_direct_row["clips"]:
+        assert "est_trajectory_sha256" not in clip
+
+    s_report = _fake_run(route_runner=_make_fake_runner(shift_cents=0.0))
+    for category in ("S_direct", "S_fullstack"):
+        assert "est_trajectory_sha256" not in s_report["categories"][category]
+
+
+def test_est_trajectory_digest_is_absent_on_unavailable_rows(tmp_path: Path) -> None:
+    """`outcome == "unavailable"` の row には**キーごと置かない**（sentinel を作らない）。"""
+
+    def _unavailable(audio_path: str, route: Any) -> Any:
+        raise harness.LearnedModelUnavailable("crepe unavailable (deliberate)")
+
+    manifest_path, fixtures_path = _write_m2e_external_fixture_set(
+        tmp_path, _VREMIX_CLIPS, level="+12dB"
+    )
+    row = harness.run_accuracy(
+        categories=("V_remix_real_direct",),
+        route_runner=_unavailable,
+        external_manifest_path=manifest_path,
+        external_fixtures_path=fixtures_path,
+        m2e_bars_path=_write_m2e_bars(tmp_path),
+        level="+12dB",
+    )["categories"]["V_remix_real_direct"]
+    assert row["outcome"] == "unavailable"
+    for clip in row["clips"]:
+        assert "est_trajectory_sha256" not in clip
+
+
+# --- C3: evaluate の並列化と並列不変性ゲート ----------------------------------------
+
+
+def _m2e_reverify_inputs(tmp_path: Path) -> Dict[str, Any]:
+    """`_reverify_external_category_measurement` を直接呼ぶための凍結入力一式。"""
+    fixtures_path = tmp_path / "m2e_external_fixtures.yaml"
+    bars_artifact, _bars_sha256 = harness.load_bars(BARS_PATH)
+    _specs, _specs_sha256, specs_raw = harness.load_specs_with_raw(SPECS_PATH)
+    _doc, _fx_sha256, fixtures_raw = harness.load_external_fixtures_with_raw(fixtures_path)
+    return {
+        "bars": bars_artifact,
+        "specs_raw": specs_raw,
+        "external_fixtures_raw": fixtures_raw,
+        "external_manifest_path": tmp_path / "m2e_manifest.json",
+        "external_fixtures_path": fixtures_path,
+        "m2e_bars_raw": _write_m2e_bars(tmp_path).read_bytes(),
+        "level": "+12dB",
+    }
+
+
+def test_parallel_invariance_gate_pins_the_trajectory_digest_across_p(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """設計 §8.3 の並列不変性ゲート: `P=1` と `P=4` で**推定ピッチ軌跡の digest が完全一致**。
+
+    **精度値（RPA 等）の一致では不十分**——平均化・丸め・フレーム集計を経た指標は
+    軌跡が違っても偶然一致しうる（HANDOFF §2 C3 の明示要件）。
+    """
+    report = _m2e_run(tmp_path, level="+12dB")
+    row = report["categories"]["V_remix_real_direct"]
+    inputs = _m2e_reverify_inputs(tmp_path)
+    runner = _m2e_fake_runner()
+
+    seen: "List[List[str]]" = []
+    real_run_accuracy = harness.run_accuracy
+
+    def _spy_run_accuracy(*args: Any, **kwargs: Any) -> Dict[str, Any]:
+        result = real_run_accuracy(*args, **kwargs)
+        seen.append(
+            [
+                clip["est_trajectory_sha256"]
+                for clip in result["categories"]["V_remix_real_direct"]["clips"]
+            ]
+        )
+        return result
+
+    monkeypatch.setattr(harness, "run_accuracy", _spy_run_accuracy)
+
+    digests_by_workers: "Dict[int, List[List[str]]]" = {}
+    for workers in (1, 4):
+        seen.clear()
+        harness._reverify_external_category_measurement(
+            "V_remix_real_direct",
+            [row],
+            repeats=4,
+            verification_runner=runner,
+            workers=workers,
+            **inputs,
+        )
+        assert len(seen) == 4, workers
+        digests_by_workers[workers] = list(seen)
+
+    # 同一 P の中で 4 本すべてが一致し、かつ P=1 と P=4 が完全一致すること。
+    for workers, digests in digests_by_workers.items():
+        assert all(d == digests[0] for d in digests), workers
+        assert all(re.fullmatch(r"[0-9a-f]{64}", h) for h in digests[0])
+    assert digests_by_workers[1] == digests_by_workers[4]
+
+
+def test_evaluate_workers_is_the_effective_parallelism(tmp_path: Path) -> None:
+    """C3/AC-6: `--workers P` は evaluate phase で**実効並列度**になる。
+
+    `threading.Barrier(P)` で「本当に P 本が同時に走っている」ことを立証する
+    （逐次なら時間切れで `BrokenBarrierError` になり、テストは黙って通らない）。
+    同時に、executor の上限が `P` を超えないことを peak カウンタで固定する。
+    """
+    report = _m2e_run(tmp_path, level="+12dB")
+    row = report["categories"]["V_remix_real_direct"]
+    inputs = _m2e_reverify_inputs(tmp_path)
+    base_runner = _m2e_fake_runner()
+
+    for workers in (1, 2, 4):
+        barrier = threading.Barrier(workers, timeout=60)
+        lock = threading.Lock()
+        state = {"active": 0, "peak": 0}
+
+        def _runner(audio_path: str, route: Any) -> Any:
+            with lock:
+                state["active"] += 1
+                state["peak"] = max(state["peak"], state["active"])
+            try:
+                barrier.wait()
+            finally:
+                with lock:
+                    state["active"] -= 1
+            return base_runner(audio_path, route)
+
+        harness._reverify_external_category_measurement(
+            "V_remix_real_direct",
+            [row],
+            repeats=4,
+            verification_runner=_runner,
+            workers=workers,
+            **inputs,
+        )
+        assert state["peak"] == workers, workers
+
+
+def test_reverify_rejects_a_non_positive_workers(tmp_path: Path) -> None:
+    report = _m2e_run(tmp_path, level="+12dB")
+    inputs = _m2e_reverify_inputs(tmp_path)
+    with pytest.raises(ValueError, match="workers 0"):
+        harness._reverify_external_category_measurement(
+            "V_remix_real_direct",
+            [report["categories"]["V_remix_real_direct"]],
+            repeats=2,
+            verification_runner=_m2e_fake_runner(),
+            workers=0,
+            **inputs,
+        )
+
+
+def test_run_phase_clip_loop_stays_sequential_even_with_many_workers(tmp_path: Path) -> None:
+    """設計判断 D-2 の pin: `--workers` は **run phase では宣言値**で実行を変えない。
+
+    run 側のスケーリングは r5 のシャード地図が担う設計であり、run の実行形態を今
+    変えると r4 で校正する `T_*` の意味が変わる。`Barrier(2)` は逐次なら必ず時間切れに
+    なる——run の clip ループが並列化されたらこのテストは失敗する。
+    """
+    barrier = threading.Barrier(2, timeout=0.5)
+    base_runner = _m2e_fake_runner()
+
+    def _runner(audio_path: str, route: Any) -> Any:
+        barrier.wait()
+        return base_runner(audio_path, route)
+
+    manifest_path, fixtures_path = _write_m2e_external_fixture_set(
+        tmp_path, _VREMIX_CLIPS, level="+12dB"
+    )
+    with pytest.raises(threading.BrokenBarrierError):
+        harness.run_accuracy(
+            categories=("V_remix_real_direct",),
+            route_runner=_runner,
+            external_manifest_path=manifest_path,
+            external_fixtures_path=fixtures_path,
+            m2e_bars_path=_write_m2e_bars(tmp_path),
+            level="+12dB",
+            workers=8,
+        )
+
+
+# --- C2: evaluate 用 store（store_B）が測り直しの子へ届くこと ------------------------
+
+
+def test_eval_cell_store_reaches_the_in_process_verification_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C2: `store_B` は測り直し 1 本ごとに `(cell_store, repeat_index)` として渡る。
+
+    `repeat_index` が測り直しの通し番号になることで、鍵→パスの写像の段階で
+    「別 repeat の記録を誤って再生する」経路が消える（`_cell_store_record_path`）。
+    """
+    report = _m2e_run(tmp_path, level="+12dB")
+    row = report["categories"]["V_remix_real_direct"]
+    inputs = _m2e_reverify_inputs(tmp_path)
+    eval_store = tmp_path / "store_B"
+    eval_store.mkdir()
+
+    captured: "List[Tuple[Any, Any]]" = []
+    real_run_accuracy = harness.run_accuracy
+
+    def _spy_run_accuracy(*args: Any, **kwargs: Any) -> Dict[str, Any]:
+        captured.append((kwargs.get("cell_store"), kwargs.get("repeat_index")))
+        return real_run_accuracy(*args, **kwargs)
+
+    monkeypatch.setattr(harness, "run_accuracy", _spy_run_accuracy)
+    harness._reverify_external_category_measurement(
+        "V_remix_real_direct",
+        [row],
+        repeats=2,
+        verification_runner=_m2e_fake_runner(),
+        eval_cell_store=eval_store,
+        **inputs,
+    )
+    assert captured == [(eval_store, 0), (eval_store, 1)]
+    # store_B に実際にセルが積まれている（= 中断復帰できる状態になっている）。
+    assert sorted(p.name for p in eval_store.glob("cell_*.json"))
+
+
+# --- D-3: スレッド固定は run と evaluate で同一 --------------------------------------
+
+
+@pytest.fixture
+def _pinned_threads(monkeypatch: pytest.MonkeyPatch):
+    """`--pin-threads` 相当の 3 点固定を張り、テスト後に torch の設定を戻す。"""
+    monkeypatch.setenv("OMP_NUM_THREADS", "1")
+    monkeypatch.setenv("MKL_NUM_THREADS", "1")
+    try:
+        import torch
+    except Exception:
+        torch = None
+    before = torch.get_num_threads() if torch is not None else None
+    try:
+        yield harness._apply_thread_pinning()
+    finally:
+        if torch is not None and before is not None:
+            torch.set_num_threads(before)
+
+
+def test_apply_thread_pinning_fails_closed_when_the_env_is_not_pinned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """env は**設定せず検査する**。OpenMP/MKL のスレッド数はランタイムのロード時に
+
+    確定するため、プロセス開始後に `os.environ` を書いても効かない——「固定した」と
+    report に書きながら実際には未固定で測る、という最悪の形になる。
+    """
+    monkeypatch.setenv("OMP_NUM_THREADS", "4")
+    monkeypatch.setenv("MKL_NUM_THREADS", "1")
+    with pytest.raises(SystemExit, match="ロード時に確定"):
+        harness._apply_thread_pinning()
+
+    monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
+    monkeypatch.delenv("MKL_NUM_THREADS", raising=False)
+    with pytest.raises(SystemExit, match="OMP_NUM_THREADS"):
+        harness._apply_thread_pinning()
+
+
+def test_run_and_evaluate_agree_on_the_thread_pinning(tmp_path: Path, _pinned_threads) -> None:
+    """Risk 1 / D-3: **同じ**スレッド条件の下で run と測り直しが bit 一致すること。
+
+    検証の子だけを固定すると、固定していない run が産んだ row と bit 一致しなくなる
+    ——publish 条件は「独立に測り直して bit 一致」なので、ここが割れると r6 が丸ごと
+    通らない（HANDOFF §3.1 の裏返し）。
+    """
+    pinning = _pinned_threads
+    assert pinning["OMP_NUM_THREADS"] == "1"
+    assert pinning["MKL_NUM_THREADS"] == "1"
+
+    report = _m2e_run(tmp_path, level="+12dB", thread_pinning=pinning)
+    assert report["thread_pinning"] == pinning
+    row = report["categories"]["V_remix_real_direct"]
+
+    # 同じ固定を評価側にも与えれば、測り直しは clip 単位で bit 一致する（例外なし）。
+    harness._reverify_external_category_measurement(
+        "V_remix_real_direct",
+        [row],
+        repeats=2,
+        verification_runner=_m2e_fake_runner(),
+        workers=2,
+        thread_pinning=pinning,
+        **_m2e_reverify_inputs(tmp_path),
+    )
+
+
+def test_run_without_pinning_leaves_the_report_unchanged(tmp_path: Path) -> None:
+    """`thread_pinning=None`（既定）の run には新フィールドが 1 つも増えない。"""
+    report = _m2e_run(tmp_path, level="+12dB")
+    assert "thread_pinning" not in report
+
+
+def _m2e_evaluate_with(
+    tmp_path: Path, reports: "List[Dict[str, Any]]", **kwargs: Any
+) -> Dict[str, Any]:
+    bars, bars_sha256 = harness.load_bars(BARS_PATH)
+    return harness.evaluate_m2_bars(
+        [_as_report_artifact(r) for r in reports],
+        bars,
+        bars_sha256=bars_sha256,
+        m2e_bars_path=_write_m2e_bars(tmp_path),
+        external_manifest_path=tmp_path / "m2e_manifest.json",
+        external_fixtures_path=tmp_path / "m2e_external_fixtures.yaml",
+        **kwargs,
+    )
+
+
+def test_evaluate_derives_the_thread_pinning_contract_from_the_reports(
+    tmp_path: Path, _pinned_threads
+) -> None:
+    """D-3: 測り直しの契約は**評価対象 report から導く**（評価器の状態からではない）。
+
+    束縛時点と使用時点を一致させるため——子へ渡すべき条件は「提出 row を産んだ run の
+    条件」であって、評価器プロセスのたまたまの状態ではない。同時に、評価器は何も測らない
+    ので自プロセスには固定を適用しない（余計な import で自己ゲートを揺らさない）。
+    """
+    pinning = _pinned_threads
+    pinned_reports = [
+        _m2e_run(tmp_path, level="+12dB", thread_pinning=pinning) for _ in range(2)
+    ]
+    verdict = _m2e_evaluate_with(tmp_path, pinned_reports, pin_threads=True)
+    assert verdict["evaluate_execution"]["thread_pinning"] == pinning
+
+    unpinned = [_m2e_run(tmp_path, level="+12dB") for _ in range(2)]
+    with pytest.raises(ValueError, match="thread_pinning を名乗っていない"):
+        _m2e_evaluate_with(tmp_path, unpinned, pin_threads=True)
+
+    mixed = [
+        _m2e_run(tmp_path, level="+12dB", thread_pinning=pinning),
+        _m2e_run(tmp_path, level="+12dB", thread_pinning={**pinning, "torch_num_threads": 4}),
+    ]
+    with pytest.raises(ValueError, match="reports\\[0\\] の"):
+        _m2e_evaluate_with(tmp_path, mixed, pin_threads=True)
+
+
+def test_evaluate_rejects_a_thread_pinning_declaration_that_is_not_actually_pinned(
+    tmp_path: Path,
+) -> None:
+    """D-3: 「固定した」と名乗るだけの申告を契約として子へ配らない（形も要求する）。"""
+    liar = {"OMP_NUM_THREADS": "8", "MKL_NUM_THREADS": "1", "torch_num_threads": 1}
+    reports = [_m2e_run(tmp_path, level="+12dB", thread_pinning=liar) for _ in range(2)]
+    with pytest.raises(ValueError, match="3 点固定の形をしていない"):
+        _m2e_evaluate_with(tmp_path, reports, pin_threads=True)
+
+    bad_torch = {"OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1", "torch_num_threads": 8}
+    reports = [_m2e_run(tmp_path, level="+12dB", thread_pinning=bad_torch) for _ in range(2)]
+    with pytest.raises(ValueError, match="torch_num_threads"):
+        _m2e_evaluate_with(tmp_path, reports, pin_threads=True)
+
+
+# --- AC-5: 新フラグ未使用時の verdict バイト不変 ------------------------------------
+
+
+def test_verdict_is_unchanged_when_the_new_evaluate_flags_are_absent(tmp_path: Path) -> None:
+    """AC-5: `--eval-cell-store` 未指定・`--workers 1`・固定なしなら verdict は 1 バイトも
+
+    変わらない（新キー `evaluate_execution` すら現れない）。
+    """
+    reports = [_m2e_run(tmp_path, level="+12dB") for _ in range(2)]
+    baseline = _m2e_evaluate(tmp_path, reports)
+    explicit_defaults = _m2e_evaluate_with(
+        tmp_path, reports, eval_cell_store=None, workers=1, pin_threads=False
+    )
+
+    def _stable(verdict: Dict[str, Any]) -> str:
+        stripped = copy.deepcopy(verdict)
+        stripped.pop("verdict_recorded_utc")  # 実行時刻だけは当然動く
+        return json.dumps(stripped, sort_keys=True, indent=2)
+
+    assert "evaluate_execution" not in baseline
+    assert _stable(explicit_defaults) == _stable(baseline)
+
+    # フラグを使ったときだけ、**宣言した実行構成**が 1 キーで載る（`P` 依存の実測量は
+    # 載せない——効果は別途 `P` を振った実測比で示す）。
+    with_workers = _m2e_evaluate_with(tmp_path, reports, workers=2)
+    assert with_workers["evaluate_execution"] == {"workers": 2}
+    eval_store = tmp_path / "store_B_verdict"
+    with_store = _m2e_evaluate_with(tmp_path, reports, eval_cell_store=eval_store, workers=4)
+    assert with_store["evaluate_execution"]["workers"] == 4
+    assert "eval_cell_store_relative" in with_store["evaluate_execution"]
