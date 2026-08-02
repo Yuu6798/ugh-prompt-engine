@@ -9671,6 +9671,23 @@ def aggregate_m2e_census(
                 f"{cell['status']!r}）; バーが当たっていない水準から帯の判定を出さない "
                 "(fail-closed)"
             )
+        # **bool そのものを要求する**（PR #241 Codex P2）。`is None` を通っただけでは
+        # `"false"` のような非空文字列が残り、下の真偽評価は**真**になる——
+        # **fail が pass として publish される**、この機構で最悪の失敗形である。
+        # `load_verdict` は bytes 束縛と top-level schema しか見ないので、category
+        # フィールドの型は集計器が独立に要求する。
+        if not isinstance(cell["bar_satisfied"], bool):
+            raise ValueError(
+                f"aggregate_m2e_census: arm {arm!r} の bar_satisfied "
+                f"{cell['bar_satisfied']!r} が bool でない; 真偽でない値を真偽として "
+                "評価すると fail が pass に化ける (fail-closed)"
+            )
+        # 併記する `failures` も形を要求する（成果物へそのまま載せるため）。
+        if cell["failures"] is not None and not isinstance(cell["failures"], list):
+            raise ValueError(
+                f"aggregate_m2e_census: arm {arm!r} の failures {cell['failures']!r} が "
+                "list でない; 判定の根拠として成果物へ載せる値の形を確かめる (fail-closed)"
+            )
         band[arm] = {
             "gate_level": gate_level,
             "status": "pass" if cell["bar_satisfied"] else "fail",

@@ -11340,3 +11340,29 @@ def test_cli_census_rejects_pin_threads(
     )
     with pytest.raises(SystemExit, match="census phase では無効"):
         harness.main()
+
+
+@pytest.mark.parametrize("truthy_non_bool", ["false", "no", 0.0, 1, [], {}])
+def test_census_requires_an_actual_boolean_gate_result(
+    truthy_non_bool: Any, tmp_path: Path
+) -> None:
+    """PR #241 Codex P2: `is None` を通っただけでは `"false"` が残り、真偽評価は**真**になる。
+
+    **fail が pass として publish される**——帯の判定を出す唯一の場所で起こりうる
+    最悪の失敗形。`load_verdict` は bytes 束縛と top-level schema しか見ないので、
+    category フィールドの型は集計器が独立に要求する。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        verdicts[0]["categories"][arm]["bar_satisfied"] = truthy_non_bool
+    with pytest.raises(ValueError, match="bool でない"):
+        _census(tmp_path, verdicts)
+
+
+def test_census_requires_failures_to_be_a_list(tmp_path: Path) -> None:
+    """判定の根拠として成果物へそのまま載せる値なので、形を確かめる。"""
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        verdicts[0]["categories"][arm]["failures"] = "min_rpa を割った"
+    with pytest.raises(ValueError, match="failures .* list でない"):
+        _census(tmp_path, verdicts)
