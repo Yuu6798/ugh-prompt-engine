@@ -11804,3 +11804,29 @@ def test_census_incomplete_from_invalid_metrics_leaks_no_measurement_text(
     blob = json.dumps(census, sort_keys=True)
     for forbidden in ("raw_pitch_accuracy", "octave_gap", "voicing_recall", "metrics"):
         assert forbidden not in blob, forbidden
+
+
+def test_census_reports_oversized_metric_values_as_incomplete(tmp_path: Path) -> None:
+    """E-34: 400 桁級の JSON 整数が metrics に入ると、`_require_finite_metrics` 内の
+
+    `float()` 変換が **OverflowError** を投げ、`except ValueError` を素通りして
+    census 全体がクラッシュする（E-31/E-32 と同型: 本来出すべき `census_incomplete`
+    が出せない）。**raise させず** per-cell の `problems` として報告することを固定
+    し、E-33 の一般コード（計測データ非漏出）が維持されることもあわせて確認する。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        for metrics in verdicts[1]["categories"][arm]["metrics"]:
+            metrics["raw_pitch_accuracy"] = 10**400
+
+    census = _census(tmp_path, verdicts)
+    assert census["status"] == "census_incomplete"
+    assert census["band_verdict"] is None
+    level = harness._M2E_LEVEL_LADDER[1]
+    gaps = {(m["level"], m["arm"]): m["reason"] for m in census["missing"]}
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        assert "有限数値の契約を満たさない" in gaps[(level, arm)]
+    # E-33 の維持確認: 巨大整数であっても計測 field 名は成果物に現れない。
+    blob = json.dumps(census, sort_keys=True)
+    for forbidden in ("raw_pitch_accuracy", "octave_gap", "voicing_recall", "metrics"):
+        assert forbidden not in blob, forbidden

@@ -1213,6 +1213,16 @@ metric 系の `problems` 文言に validator 例外テキストをそのまま�
 が…契約を満たさない」等）だけで書き、詳細診断は census の仕事ではなく verdict 側を
 直接読めば得られる。E-3 の文字列不在テストを不正値セル経路にも拡張して固定した。
 
+**E-34. 巨大整数 metrics の OverflowError クラッシュを census_incomplete として報告する**
+（PR #241 Codex P2 で是正）。400 桁級の JSON 整数（`isinstance(value, int)` は真だが
+`float(value)` が表現できない）が metrics に入ると `float()` 変換が `OverflowError` を
+投げ、`except ValueError` を素通りして census 全体がクラッシュしていた（E-31/E-32 と
+同型）。`except` を `(ValueError, OverflowError)` へ拡大し、E-33 の一般コードで報告する。
+**E-31 とは except 拡大の裁定が異なる**: `TypeError` は呼び出し側の前提（要素が
+mapping であること）の検査漏れの信号で明示検査が正解だったが、`OverflowError` は
+「値が有限 float で表現できない」という validator が判定すべき値域違反そのものであり、
+事前検査で塞ぐには float 変換の意味論を複製することになる——だから except を広げる。
+
 **E-18. `bar_satisfied == not failures` を読み戻しで再検証する**（PR #241 Codex P2 で是正）。
 `evaluate_m2_bars` はこの不変条件を確立するが、集計器は読み戻し時に一度も検証して
 いなかった。型（E-16）が正しくても関係が壊れていれば、`true` + 非空 `failures` は

@@ -9715,17 +9715,30 @@ def aggregate_m2e_census(
                         f"計測記録に JSON object でない要素がある（{len(non_object_indices)} 件）"
                     )
                 else:
+                    # E-34: `except` は `(ValueError, OverflowError)` に広げる（PR #241
+                    # Codex P2）。400 桁級の JSON 整数（`isinstance(value, int)` は
+                    # 真だが `float(value)` が表現できない）が metrics に入ると、この
+                    # 呼び出し内の `float()` 変換が **OverflowError** を投げ、
+                    # `except ValueError` を素通りして census 全体がクラッシュする
+                    # （E-31/E-32 と同型: 本来出すべき `census_incomplete` が出せない）。
+                    # **E-31 とは except 拡大の裁定が異なる**: TypeError は「呼び出し側
+                    # の前提（要素が mapping であること）の検査漏れ」の信号であり、
+                    # 前提は明示検査で塞ぐのが正解だった。対して OverflowError は
+                    # 「値が有限 float で表現できない」という**この validator が判定
+                    # すべき値域違反そのもの**であり、事前検査で塞ぐには float 変換の
+                    # 意味論を複製することになる——だから except を広げる。
                     try:
                         _require_finite_metrics(arm, metrics_list)
-                    except ValueError:
+                    except (ValueError, OverflowError):
                         problems.append("計測記録が有限数値の契約を満たさない")
                     # E-27: 平均で保存される不変条件のみ再適用する（`_require_
                     # average_stable_metric_invariants` docstring に採否の経緯を記録）。
+                    # `float()` 変換を含むため E-34 と同じ理由で OverflowError も拾う。
                     try:
                         _require_average_stable_metric_invariants(
                             arm, metrics_list, frozen_tolerance_cents=frozen_tolerance_cents
                         )
-                    except ValueError:
+                    except (ValueError, OverflowError):
                         problems.append("計測記録が平均安定不変条件を満たさない")
                 # E-28: `repeats_bit_identical` の申告は評価器の独立測り直しが立証する
                 # が、census が**公開する** per-repeat metrics 自体が申告どおり相互
