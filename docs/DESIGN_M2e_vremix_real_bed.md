@@ -1188,6 +1188,20 @@ evaluator コメントに残っていた「その集計器は未実装」とい�
 実装済みの `aggregate_m2e_census`（CLI `--census`）への参照へ更新した（コメントのみ・
 挙動変更なし）。
 
+**E-44. category 値が object でない場合を census_incomplete として報告する**
+（PR #241 Codex P2 で是正）。E-32（clip_ids の非 str 要素）と同型の残り穴——収集段の
+`.get` 連鎖が `AttributeError` で census 全体をクラッシュさせていた。収集段で
+isinstance を検査し、malformed マーカー付きレコードを observed へ格納する。per-cell
+検査段はこのマーカーを見て他の検査を打ち切り、`problems` へ落とす（raise ではなく
+`census_incomplete`——E-11 の裁定どおり）。
+
+**E-45. publish する failures の要素形状を要求する**（PR #241 Codex P2 で是正）。
+E-30 が宣言した保証境界の内側（自分が publish するフィールドの形と相互整合）を補完
+する——`failures: [null]` は list 型検査・`bar_satisfied == not failures` 整合検査の
+両方を素通りし、非 str 要素がそのまま `band_verdict` へ publish されていた。
+E-16/E-18/E-22 と同じ層（帯 publish の fail-closed raise）に揃え、各要素が非空文字列
+であることを要求する。
+
 **E-26. 共有スカラーを凍結バーの実値と束縛する**（PR #241 Codex P1 で是正）。E-19 の
 有限性検査だけでは、verdict が「50 cents で測った」と自己申告した metrics をそのまま
 publish できてしまう——E-7（`repeats_min`）で自分が適用した規律との非対称だった。

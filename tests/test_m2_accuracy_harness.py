@@ -11830,3 +11830,42 @@ def test_census_reports_oversized_metric_values_as_incomplete(tmp_path: Path) ->
     blob = json.dumps(census, sort_keys=True)
     for forbidden in ("raw_pitch_accuracy", "octave_gap", "voicing_recall", "metrics"):
         assert forbidden not in blob, forbidden
+
+
+# ---------------------------------------------------------------------------
+# E-44 / E-45（PR #241 Codex 第 18 巡: P2×2）。非 object の category record を
+# クラッシュでなく census_incomplete として報告する（E-32 と同型）。publish する
+# failures の要素形状を要求する（E-16/E-18/E-22 と同じ帯 publish の fail-closed 層）。
+# ---------------------------------------------------------------------------
+
+
+def test_census_reports_a_non_object_category_record_as_incomplete(tmp_path: Path) -> None:
+    """E-44: category 値が object でない場合、収集段の `.get` 連鎖が
+
+    **AttributeError** で census 全体をクラッシュさせていた（E-32・clip_ids の非 str
+    要素と同型の残り穴）。**raise させず** per-cell の `problems`（= `census_incomplete`）
+    として報告することを固定する。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path)
+    verdicts[1]["categories"]["V_remix_real_direct"] = ["not", "an", "object"]
+
+    census = _census(tmp_path, verdicts)
+    assert census["status"] == "census_incomplete"
+    assert census["band_verdict"] is None
+    level = harness._M2E_LEVEL_LADDER[1]
+    gaps = {(m["level"], m["arm"]): m["reason"] for m in census["missing"]}
+    assert "category record が object でない" in gaps[(level, "V_remix_real_direct")]
+
+
+def test_census_rejects_a_non_string_failures_element(tmp_path: Path) -> None:
+    """E-45: `failures: [None]` は list 型検査・`bar_satisfied == not failures` 整合
+
+    検査の両方を通過してしまい、非 str 要素がそのまま `band_verdict` へ publish
+    される。E-16/E-18/E-22 と同じ層（帯 publish の fail-closed 検査）で各要素の形を
+    要求する。
+    """
+    verdicts = _m2e_census_verdicts(tmp_path, shift_cents=500.0)
+    for arm in ("V_remix_real_direct", "V_remix_real_stem"):
+        verdicts[0]["categories"][arm]["failures"] = [None]
+    with pytest.raises(ValueError, match="非空文字列でない"):
+        _census(tmp_path, verdicts)

@@ -9613,6 +9613,19 @@ def aggregate_m2e_census(
                     "複数ある; 同じ測定を二重に数えて census を満たしたことにしない "
                     "(fail-closed)"
                 )
+            # E-44: category 値が object でない場合、直後の `.get` 連鎖が
+            # **AttributeError** で census 全体をクラッシュさせる（PR #241 Codex P2・
+            # E-32「clip_ids の非 str 要素」と同型の残り穴）。ここで isinstance を
+            # 検査し、malformed マーカー付きレコードを observed へ格納する——値そのもの
+            # は埋め込まず type 名のみ記録する（E-33 の規律）。per-cell 検査段が
+            # このマーカーを見て他の検査をスキップし、census_incomplete として報告する。
+            if not isinstance(cat, dict):
+                observed.setdefault(level, {})[arm] = {
+                    "verdict_index": index,
+                    "malformed_category": True,
+                    "malformed_category_type": type(cat).__name__,
+                }
+                continue
             observed.setdefault(level, {})[arm] = {
                 "verdict_index": index,
                 "external_manifest_sha256": cat.get("external_manifest_sha256"),
@@ -9641,6 +9654,24 @@ def aggregate_m2e_census(
                 missing.append({"level": level, "arm": arm, "reason": "verdict_absent"})
                 continue
             problems: "List[str]" = []
+            # E-44: 収集段が malformed マーカーを積んだセル（category 値が object
+            # でなかった verdict）はここで打ち切る（PR #241 Codex P2・E-32 と同型の
+            # 残り穴）。以降の per-cell 検査は `cell["clip_ids"]` 等の直接キーアクセスを
+            # 前提にしており、malformed マーカーはそれらのキーを持たない——検査を続けると
+            # 別の KeyError で census 全体をクラッシュさせる。
+            if cell.get("malformed_category"):
+                problems.append(
+                    f"category record が object でない"
+                    f"（{cell.get('malformed_category_type')!r}）; 形の壊れた台帳を"
+                    "クラッシュではなく未完として報告する"
+                )
+                missing.append({"level": level, "arm": arm, "reason": "; ".join(problems)})
+                cells.setdefault(level, {})[arm] = {
+                    "cells": 0,
+                    "complete": False,
+                    "problems": problems,
+                }
+                continue
             clip_ids = cell["clip_ids"]
             clip_ids_all_str = isinstance(clip_ids, list) and all(
                 isinstance(c, str) for c in clip_ids
@@ -9922,6 +9953,21 @@ def aggregate_m2e_census(
                 f"aggregate_m2e_census: arm {arm!r} の failures {cell['failures']!r} が "
                 "list でない; 判定の根拠として成果物へ載せる値の形を確かめる (fail-closed)"
             )
+        # E-45: `failures` の各要素も非空文字列であることを要求する（PR #241 Codex P2）。
+        # `failures: [null]` は直前の list 型検査・下の `bar_satisfied == not failures`
+        # 整合検査の両方を通過してしまい、非 str 要素がそのまま band_verdict へ publish
+        # される。E-16/E-18/E-22 と同じ層（帯 publish の fail-closed 検査）に揃える。
+        # 値そのものは埋め込まない——非 str 要素の index のみ記載する。
+        if cell["failures"] is not None:
+            bad_failure_indices = [
+                i for i, f in enumerate(cell["failures"]) if not (isinstance(f, str) and f)
+            ]
+            if bad_failure_indices:
+                raise ValueError(
+                    f"aggregate_m2e_census: arm {arm!r} の failures の要素 index "
+                    f"{bad_failure_indices} が非空文字列でない; 判定の根拠として成果物へ "
+                    "載せる値の形を確かめる (fail-closed)"
+                )
         # **`evaluate_m2_bars` が確立した不変条件を読み戻しで再検証する**
         # （PR #241 Codex P2）: `bar_satisfied == not failures`。型が正しくても関係が
         # 壊れていれば、`bar_satisfied: true` + 非空 `failures` は**失敗の証拠を同梱
