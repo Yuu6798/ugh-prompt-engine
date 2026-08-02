@@ -2534,6 +2534,15 @@ import numpy as np  # noqa: E402
 # unchanged_since_bind` docstring 参照。境界の正直会計あり）。
 _require_scorer_native_unchanged_since_bind()
 
+# 束縛（bind）: **`import soundfile` より前**に libsndfile 実体を pin する。import 後に
+# 束縛すると、実体が差し替えられた場合にプロセスは dlopen 済みの旧 libsndfile で読み
+# 続けたまま新しい bytes の digest を名乗る（numpy/scipy は `_scorer_pins` が既に
+# import 前束縛済み。ここはその機構が覆っていない module scope の残り）。
+# 完全集合の束縛は定義が出揃った後に `_bind_all_dist_native_pins()` が追記する。
+_LOADED_DIST_NATIVE_PINS: Dict[str, str] = {
+    "soundfile": _scorer_dist_native_sha256("soundfile", verify_pre_bind_gates=False)
+}
+
 import soundfile as sf  # noqa: E402
 import yaml  # noqa: E402
 from build_melody_bench import build_signal  # noqa: E402
@@ -5323,9 +5332,69 @@ def _env_digest_runtime_code() -> "Tuple[str, Tuple[str, ...]]":
     return digest, tuple(covered)
 
 
-@functools.lru_cache(maxsize=1)
 def _env_digest_dist_native() -> "Tuple[Tuple[str, str], ...]":
-    """wheel 同梱ネイティブ実体（パッケージ本体ディレクトリ **外**）の pin。
+    """**束縛時点**の同梱ネイティブ pin（`_LOADED_DIST_NATIVE_PINS`）を返す。
+
+    ディスクを読み直さない——import 後に実体が差し替わると、プロセスは dlopen 済みの
+    旧実装で推論を続けたまま新しい bytes の digest を名乗る（`env_digest` が
+    「走っていない実装」を指す）。束縛は `_bind_dist_native_pins` が import より前に
+    行い、drift は `_require_dist_native_unchanged_since_bind()` が post-run に
+    uncached で検出する。
+    """
+    return tuple(sorted(_LOADED_DIST_NATIVE_PINS.items()))
+
+
+def _bind_dist_native_pins(names: "Tuple[str, ...]") -> None:
+    """`names` の同梱ネイティブ pin を**まだ束縛していないものだけ**確定させる。
+
+    呼び出しは 2 段階（どちらも import より前に置く）:
+
+    1. `import soundfile` の直前 — 本モジュールが module scope で import する
+       third-party のうち、scorer 機構（`_scorer_pins` が numpy/scipy を束縛済み）が
+       覆っていないもの。libsndfile はここで pin しないと「import 後に束縛」になる。
+    2. 定義が出揃った後（`_runtime_package_names` が使えるようになった時点）— 残りの
+       推論スタック。crepe/torch/demucs/librosa はすべて関数内 import なので、この
+       時点はまだ import 前である。
+
+    未導入は skip（実行されない）。導入済みで pin を採れない場合は送出を伝播させる。
+    """
+    import importlib.util
+
+    for name in names:
+        if name in _LOADED_DIST_NATIVE_PINS:
+            continue
+        try:
+            spec = importlib.util.find_spec(name)
+        except Exception:
+            spec = None
+        if spec is None:
+            continue    # 未導入 = 実行されない
+        _LOADED_DIST_NATIVE_PINS[name] = _scorer_dist_native_sha256(
+            name, verify_pre_bind_gates=False
+        )
+
+
+def _require_dist_native_unchanged_since_bind() -> None:
+    """束縛済み同梱ネイティブが run 中に差し替わっていないことを要求する（post-run）。
+
+    scorer 側の `_require_scorer_native_unchanged_since_bind` と同じ役割を、
+    非 scorer パッケージ（soundfile/librosa/soxr…）にも与える。**uncached で読み直す**
+    ——束縛値との純粋なディスク比較であり、memoize すると差し替えを見逃す。
+    """
+    for name, expected in sorted(_LOADED_DIST_NATIVE_PINS.items()):
+        current = _scorer_dist_native_sha256(
+            name, use_cache=False, verify_pre_bind_gates=False
+        )
+        if current != expected:
+            raise RuntimeError(
+                f"run_accuracy: {name!r} の同梱ネイティブ実体が束縛時点の pin "
+                f"（{expected!r}）と不一致（現在 {current!r}）; dlopen 済みの旧実装で "
+                "測った row に新しい実体の digest を名乗らせない (fail-closed)"
+            )
+
+
+def _bind_all_dist_native_pins() -> "Tuple[Tuple[str, str], ...]":
+    """推論スタック全体の同梱ネイティブ（パッケージ本体ディレクトリ **外**）を束縛する。
 
     `packages_code_sha256` はパッケージ root 配下しか覆わないので、`numpy.libs/` /
     `scipy.libs/` に置かれる OpenBLAS/LAPACK は**実装 hash に入らない**。配布版を
@@ -5341,18 +5410,15 @@ def _env_digest_dist_native() -> "Tuple[Tuple[str, str], ...]":
     未導入は skip（実行されない）。**導入済みで pin を採れない場合は送出を伝播**
     させる——失敗を安定した文字列へ畳むと、その後の差し替えでも digest が動かない。
     """
-    import importlib.util
+    _bind_dist_native_pins(
+        tuple(sorted(set(_ENV_DIGEST_PACKAGES) | set(_runtime_package_names())))
+    )
+    return _env_digest_dist_native()
 
-    pins: "List[Tuple[str, str]]" = []
-    for name in sorted(set(_ENV_DIGEST_PACKAGES) | set(_runtime_package_names())):
-        try:
-            spec = importlib.util.find_spec(name)
-        except Exception:
-            spec = None
-        if spec is None:
-            continue    # 未導入 = 実行されない
-        pins.append((name, _scorer_dist_native_sha256(name, verify_pre_bind_gates=False)))
-    return tuple(pins)
+
+# 残りの推論スタックを**この時点で**束縛する。crepe / torch / demucs / librosa は
+# すべて関数内 import なので、module import が終わったここはまだ「import 前」である。
+_bind_all_dist_native_pins()
 
 
 def _env_digest_numeric_runtime() -> Dict[str, Any]:
@@ -5983,6 +6049,10 @@ def run_accuracy(
     # 差し替わっていれば「report が pin した digest」と「次回 import されるコード」が
     # 食い違い、後続の evaluate が誤った provenance を受理しうる（Codex P1）。
     _post_run_scorer_pins = _require_unchanged_since_load()
+    # 同じ規律を非 scorer パッケージの同梱ネイティブにも課す（uncached でディスクを
+    # 読み直し、束縛時点の pin と比較する）。`env_digest` は束縛値を名乗るので、
+    # run 中に差し替えられていればここで落とす。
+    _require_dist_native_unchanged_since_bind()
     # Codex 16 巡目 P2-B: `numeric_runtime_config` は category loop（scoring）完了後・
     # かつ上の `_require_unchanged_since_load()`（post-run スコアラー pin 再計算）の
     # **後**にここで確定させる（`_numeric_runtime_config` / `_scorer_optional_

@@ -9731,9 +9731,21 @@ def test_env_digest_folds_the_distribution_native_pins(
     assert {"numpy", "scipy"} <= set(pins)
     assert all(re.fullmatch(r"[0-9a-f]{64}", v) for v in pins.values())
 
+    # 束縛時点の値を返す（ディスクを読み直さない）——import 後に実体が差し替わっても
+    # 「走っていない実装」の digest を名乗らせないため。
+    assert "soundfile" in harness._LOADED_DIST_NATIVE_PINS   # import 前に束縛済み
+
     baseline = harness._env_digest()
     monkeypatch.setattr(harness, "_env_digest_dist_native", lambda: (("numpy", "9" * 64),))
     assert harness._env_digest() != baseline
+
+
+def test_dist_native_drift_since_bind_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """P1: 束縛後に同梱ネイティブが差し替わったら post-run で落とす（uncached 比較）。"""
+    harness._require_dist_native_unchanged_since_bind()   # 現状は一致
+    monkeypatch.setitem(harness._LOADED_DIST_NATIVE_PINS, "numpy", "9" * 64)
+    with pytest.raises(RuntimeError, match="束縛時点の pin"):
+        harness._require_dist_native_unchanged_since_bind()
 
 
 def test_env_digest_fails_closed_when_runtime_code_cannot_be_hashed(
